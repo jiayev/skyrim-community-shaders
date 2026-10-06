@@ -5,7 +5,7 @@ namespace DCLF
 {
 	namespace Draws
 	{
-		void PlanZBuckets(const Resources& a_resources, const Lookups& a_lookups, const SceneStore::Tables& a_tables, const IndirectState& a_indirect, ZBucketPlan& a_out)
+		void PlanZBuckets(const MainSizing& a_resources, const Lookups& a_lookups, const SceneStore::Tables& a_tables, const IndirectState& a_indirect, ZBucketPlan& a_out)
 		{
 			const auto slots = static_cast<std::uint32_t>(a_resources.zBucketCapacity.size());
 			const auto& groups = a_indirect.zGroups;
@@ -102,14 +102,17 @@ namespace DCLF
 			a_block = std::make_shared<org::LatchBlock>("cs.dclf.latched-copies", static_cast<std::uint32_t>(std::bit_ceil(std::max<std::size_t>(2 * a_bytes, 4096))), a_slots);
 		}
 
-		MainShapeInputs MainShapeInputsOf(const Resources& a_resources, bool a_depthOnly, const SceneStore::Tables& a_tables, std::uint32_t a_drawBound)
+		// a_revision: a revision's (the rows' addresses it names: a ready growth's), else the commit's (the current versions').
+		MainShapeInputs MainShapeInputsOf(const Resources& a_resources, bool a_depthOnly, const SceneStore::Tables& a_tables, std::uint32_t a_drawBound,
+			bool a_revision)
 		{
 			MainShapeInputs in;
 			in.depthOnly = a_depthOnly;
-			in.sequenceDraws = a_resources.sequenceDraws;
-			in.sequenceDecals = a_resources.sequenceDecals;
-			in.materialRows = a_resources.materialRows.address;
-			in.pipelineRows = a_resources.pipelineRows.address;
+			const MainSizing& sizing = a_revision ? Growths::Get().RevisionSizing<MainSizing>(a_resources) : a_resources;
+			in.sequenceDraws = sizing.sequenceDraws;
+			in.sequenceDecals = sizing.sequenceDecals;
+			in.materialRows = a_revision ? a_resources.materialRows.RevisionAddress() : a_resources.materialRows.address;
+			in.pipelineRows = a_revision ? a_resources.pipelineRows.RevisionAddress() : a_resources.pipelineRows.address;
 			in.drawBound = a_drawBound;
 			// The depth segment is given no decals (BuildDrawsCS).
 			if (!a_depthOnly)
@@ -183,7 +186,7 @@ namespace DCLF
 			return out;
 		}
 
-		void PlanReflectionBuckets(const Resources& a_main, std::span<const rhi::PipelineHandle> a_slotPipelines, ReflectionPlan& a_out)
+		void PlanReflectionBuckets(const MainSizing& a_main, std::span<const rhi::PipelineHandle> a_slotPipelines, ReflectionPlan& a_out)
 		{
 			const auto slots = static_cast<std::uint32_t>(a_main.zBucketCapacity.size());
 			a_out.map.assign(slots, kNoBucket);
@@ -217,9 +220,9 @@ namespace DCLF
 			frame->zeros = a_resources.zeros;
 			frame->width = a_resources.width;
 			frame->height = a_resources.height;
-			frame->materialRows = main.materialRows.address;
-			frame->pipelineRows = main.pipelineRows.address;
-			frame->sequenceDraws = a_resources.sequenceDraws;
+			frame->materialRows = a_in.materialRows;
+			frame->pipelineRows = a_in.pipelineRows;
+			frame->sequenceDraws = (a_in.sizing ? *a_in.sizing : static_cast<const ReflectionSizing&>(a_resources)).sequenceDraws;
 			frame->buckets = a_in.buckets;
 			frame->latchLayout = a_resources.latchLayout;
 			frame->map = a_in.map;
@@ -257,6 +260,10 @@ namespace DCLF
 		// The capacities for the tables as the scene work left them: a growth here is one the frame's epochs would make.
 		impl->ReserveSceneTables(tables);
 		impl->ReserveMainSequences(tables);
+		impl->ReserveIndexPool(tables, store.GetTablesGeneration());
+		// The growths the graph finished (G2): what the revision made now names, its shapes' addresses included. One still pending
+		// keeps the revision from being sealed (AssembleRevision).
+		impl->revisions.growthPending = Growths::Get().Settle();
 		const auto indirect = GetIndirectState();
 		auto& parity = impl->shapeParity;
 		const std::uint32_t frameNumber = store.GetFrame();
@@ -271,14 +278,14 @@ namespace DCLF
 			if (!parity.known[shape] || !indirect.valid)
 				continue;
 			const bool depthOnly = shape == kDepthShape;
-			auto in = MainShapeInputsOf(r, depthOnly, tables, impl->drawBound.Draws());
+			auto in = MainShapeInputsOf(r, depthOnly, tables, impl->drawBound.Draws(), true);
 			in.viewport = parity.viewport[shape];
 			in.resourceHeap = parity.resourceHeap;
 			in.samplerHeap = parity.samplerHeap;
 			in.indirect = indirect;
 			ZBucketPlan plan;
 			if (depthOnly && r.pool)
-				PlanZBuckets(r, store.GetLookups(), tables, indirect, plan);
+				PlanZBuckets(Growths::Get().RevisionSizing<MainSizing>(r), store.GetLookups(), tables, indirect, plan);
 			in.zCalls = plan.calls;
 			in.zPlan = std::make_shared<const ZBucketPlan>(std::move(plan));
 			in.latched.copies = MainLatchedLayout(r, depthOnly, parity.blockSizes[shape], static_cast<std::uint32_t>(in.zCalls.size()));
@@ -319,8 +326,9 @@ namespace DCLF
 					if (!shape)
 						continue;
 					auto layouts = LayoutOf(*shape);
+					const ShadowSizing& sizing = Growths::Get().RevisionSizing<ShadowSizing>(*shadow);
 					if (std::find(seen.begin(), seen.end(), layouts) != seen.end() ||
-						std::any_of(layouts.begin(), layouts.end(), [&](const auto& a_view) { return a_view.slot >= shadow->sequenceDraws.size(); }))
+						std::any_of(layouts.begin(), layouts.end(), [&](const auto& a_view) { return a_view.slot >= shadow->sequences.size() || a_view.slot >= sizing.viewSlots; }))
 						continue;
 					ShadowShapeInputs in;
 					in.resourceHeap = sp.resourceHeap;
@@ -331,6 +339,9 @@ namespace DCLF
 					in.views = layouts;
 					in.payload = &payload;
 					in.bounds = &bounds;
+					in.sizing = &sizing;
+					in.materialRows = shadow->materialRows.RevisionAddress();
+					in.viewBlocks = shadow->viewBlocks.RevisionAddress();
 					in.previous = occlusion ? shadow->occlusionPublished : shadow->published;
 					if (!occlusion) {
 						in.latched.copies = ShadowLatchedLayout(*shadow, payload, payload.inputs);
@@ -351,10 +362,16 @@ namespace DCLF
 		rp.revisionFrames[1] = rp.revisionFrames[0];
 		rp.revisions[0] = nullptr;
 		rp.revisionFrames[0] = ~0u;
+		// The faces' buffers for the main sizing's newest change, at the join it is asked for: the two changes are adopted with the
+		// same revision (none is sealed while either is pending), so a commit's plan from the main sizing always fits them.
+		if (reflection.resources) {
+			ReflectionPlan latest;
+			PlanReflectionBuckets(Growths::Get().LatestSizing<MainSizing>(r), reflection.slotPipelines, latest);
+			impl->ReserveReflection(static_cast<std::uint32_t>(latest.map.size()), static_cast<std::uint32_t>(latest.buckets.size()), latest.draws);
+		}
 		if (rp.known && reflection.resources && indirect.valid) {
 			ReflectionPlan plan;
-			PlanReflectionBuckets(r, reflection.slotPipelines, plan);
-			impl->ReserveReflection(static_cast<std::uint32_t>(plan.map.size()), static_cast<std::uint32_t>(plan.buckets.size()), plan.draws);
+			PlanReflectionBuckets(Growths::Get().RevisionSizing<MainSizing>(r), reflection.slotPipelines, plan);
 			auto& scene = *impl->scene;
 			const auto treeLod = scene.treeLodPipelines.load(std::memory_order_acquire);
 			ReflectionShapeInputs in;
@@ -363,10 +380,16 @@ namespace DCLF
 			in.indirect = indirect;
 			in.buckets = std::move(plan.buckets);
 			in.map = std::make_shared<const std::vector<std::uint32_t>>(std::move(plan.map));
-			if (reflection.treePipeline.valid() && treeLod && scene.treeLodCull && reflection.resources->treeShapeCapacity == scene.treeLodShapeCapacity) {
+			in.materialRows = r.materialRows.RevisionAddress();
+			in.pipelineRows = r.pipelineRows.RevisionAddress();
+			// The revision's sizings: the faces' lists hold the scene's tree slots when the two it names agree.
+			const ReflectionSizing& sizing = Growths::Get().RevisionSizing<ReflectionSizing>(*reflection.resources);
+			const SceneSizing& sceneSizing = Growths::Get().RevisionSizing<SceneSizing>(scene);
+			in.sizing = &sizing;
+			if (reflection.treePipeline.valid() && treeLod && scene.treeLodCull && sizing.treeShapeCapacity == sceneSizing.treeLodShapeCapacity) {
 				in.tree = reflection.treePipeline;
 				in.treeSignature = treeLod->drawSignature;
-				in.treeShapes = scene.treeLodShapeCapacity;
+				in.treeShapes = sceneSizing.treeLodShapeCapacity;
 			}
 			rp.revisions[0] = MakeReflectionShape(*reflection.resources, in);
 			rp.revisionFrames[0] = frameNumber;

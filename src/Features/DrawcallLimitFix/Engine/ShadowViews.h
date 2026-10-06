@@ -174,9 +174,20 @@ namespace DCLF
 			 * 0 before its first draw. It is what attributes a registration to a mode's phase of the set.
 			 */
 			std::uint32_t renderMode = 0;
+			/**
+			 * @brief DCLF's this frame: a shadow mode's view (not a focus one, its mode known) within the view slots DCLF's
+			 * buffers hold now (SetViewCapacity), in the engine's order. Only these are withheld (the registration hook's renderers)
+			 * and captured; the rest the engine draws alone, while DCLF's slots grow (Growths) for them.
+			 */
+			bool covered = false;
 		};
 
 		static ShadowViews& Get();
+
+		/** @brief How many shadow views DCLF can draw this frame (its view slots' buffers now); UINT32_MAX: no bound. Before Rebuild. */
+		void SetViewCapacity(std::uint32_t a_views) { viewCapacity = a_views; }
+		/** @brief The frame's shadow-mode views DCLF would draw with slots enough (covered or not): what its slots grow to. */
+		std::uint32_t Candidates() const { return candidates; }
 
 		/** @brief Rebuilds the list from the shadow scene node; call at BeforeShadowMaps. */
 		void Rebuild();
@@ -196,5 +207,7 @@ namespace DCLF
 		ankerl::unordered_dense::map<const RE::BSBatchRenderer*, std::uint32_t> batchToView;
 		ankerl::unordered_dense::map<const void*, std::uint32_t> accumulatorToView;
 		bool valid = false;
+		std::uint32_t viewCapacity = UINT32_MAX;
+		std::uint32_t candidates = 0;
 	};
 }

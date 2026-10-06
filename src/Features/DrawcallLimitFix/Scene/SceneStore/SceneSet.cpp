@@ -97,7 +97,9 @@ namespace DCLF
 		setCommitFrame = frame;
 		// A slot whose phases or lacking phases this commit changed, for ApplySet, with the geometry it holds now (an earlier commit's
 		// entry not yet applied takes this one's geometry: the decision is now for it).
+		setGeometryNext.resize(objects, nullptr);
 		auto markApply = [&](std::uint32_t a_slot) {
+			setGeometryNext[a_slot] = tables.objectGeometry[a_slot];
 			if (const std::uint32_t at = setApplyMark[a_slot]) {
 				setApply[at - 1].second = tables.objectGeometry[a_slot];
 				return;
@@ -375,6 +377,20 @@ namespace DCLF
 		setLackingNext.resize(objects, 0);
 		setPhasesApplied.resize(objects, 0);
 		setGeometryApplied.resize(objects, nullptr);
+		// The structural changes since the join that made the selected revision (the last revocation), read before this
+		// application's own notes: the claims applied now were committed without them, and the join takes them back.
+		NoteStructureChanges();
+		// After a withdrawal, every slot the commits decided, whatever changed since: the withdrawal took every claim back.
+		if (std::exchange(setWithdrawn, false)) {
+			setApplyMark.resize(objects, 0);
+			setGeometryNext.resize(objects, nullptr);
+			for (std::uint32_t slot = 0; slot < objects; ++slot) {
+				if (setApplyMark[slot] || (!setPhasesNext[slot] && !setLackingNext[slot]))
+					continue;
+				setApply.emplace_back(slot, setGeometryNext[slot]);
+				setApplyMark[slot] = static_cast<std::uint32_t>(setApply.size());
+			}
+		}
 		// The geometries whose main claim this changes, for the stand-in's admission and walks (PrimaryCull::NoteSetChanges): from
 		// the claims as they were (a revoked one included) to the claims applied, whatever commits lie between.
 		std::vector<const RE::BSGeometry*> joined, left;
@@ -424,11 +440,57 @@ namespace DCLF
 		revokeCursor.Advance(tables.changeLog);
 	}
 
+	void SceneStore::WithdrawSet()
+	{
+		ZoneScopedN("CS.DCLF.Scene.WithdrawSet");
+		if (setWithdrawn)
+			return;
+		setWithdrawn = true;
+		std::vector<const RE::BSGeometry*> left;
+		for (std::uint32_t slot = 0; slot < setPhasesApplied.size(); ++slot) {
+			if ((setPhasesApplied[slot] & kSetMain) && slot < setGeometryApplied.size() && setGeometryApplied[slot])
+				left.push_back(setGeometryApplied[slot]);
+			setPhasesApplied[slot] = 0;
+		}
+		std::fill(setGeometryApplied.begin(), setGeometryApplied.end(), nullptr);
+		auto& applied = tables.setPhases;
+		for (std::uint32_t slot = 0; slot < applied.size(); ++slot) {
+			if (!std::exchange(applied[slot], std::uint8_t{ 0 }) || slot >= tables.objects.size())
+				continue;
+			if (auto& object = tables.objects[slot]; !(object.flags & kObjectFree) && (object.flags & kObjectMember)) {
+				object.flags &= ~kObjectMember;
+				tables.NoteChange(slot, kChangeBindings);
+			}
+		}
+		// No claims for the engine's hooks: every phase the engine's (drawn 0: the occlusion maps too); no sun exclusion (it names the
+		// casters the last shadow epoch drew).
+		auto none = std::make_shared<SetSnapshot>();
+		none->frame = frame;
+		PassCapture::Get().PublishSet(std::move(none));
+		SunAccumulation::Get().PublishExclusion(nullptr);
+		if (!left.empty())
+			PrimaryCull::Get().NoteSetChanges({}, left);
+		// What the frame's work changes from here is what RevokeUndrawnClaims checks (nothing is claimed).
+		structureChanged.clear();
+		revokeCursor.Restart(tablesGeneration);
+		revokeCursor.Advance(tables.changeLog);
+	}
+
+	void SceneStore::NoteStructureChanges()
+	{
+		if (!IndirectDraws::Get().RevisionClaims() || !revokeCursor.Continues(tables.changeLog, tablesGeneration))
+			return;
+		for (const auto& change : revokeCursor.Unread(tables.changeLog))
+			if (change.causes & kStructureCauses)
+				structureChanged.push_back(change.slot);
+		revokeCursor.Advance(tables.changeLog);
+	}
+
 	void SceneStore::RevokeUndrawnClaims()
 	{
 		ZoneScopedN("CS.DCLF.Scene.RevokeUndrawnClaims");
 		std::vector<std::pair<const RE::BSGeometry*, std::uint8_t>> revoked;
-		auto check = [&](std::uint32_t a_slot) {
+		auto check = [&](std::uint32_t a_slot, bool a_structure) {
 			if (a_slot >= setPhasesApplied.size() || a_slot >= setGeometryApplied.size())
 				return;
 			const std::uint8_t claimed = setPhasesApplied[a_slot];
@@ -442,9 +504,12 @@ namespace DCLF
 				const bool main = (flags & kObjectMember) && !(flags & kObjectNoBindings);
 				drawn = static_cast<std::uint8_t>((main ? (kSetMain | kSetReflection) : 0u) | (tables.setPhases[a_slot] & ~(kSetMain | kSetReflection)));
 			}
-			const std::uint8_t lost = claimed & ~drawn;
+			// A structural change since the selected revision's join (R3b): its shapes were made without it, so the claim goes whole.
+			const std::uint8_t lost = (same && a_structure) ? claimed : static_cast<std::uint8_t>(claimed & ~drawn);
 			if (!lost)
 				return;
+			if (same && a_structure && !(claimed & ~drawn))
+				++revokedStructureGeometries;
 			setPhasesApplied[a_slot] &= ~lost;
 			if (same) {
 				// Out of the frame's set in what it no longer draws: the accumulate phase must not make it a member again.
@@ -457,13 +522,21 @@ namespace DCLF
 			revoked.emplace_back(geometry, lost);
 		};
 		if (revokeCursor.Continues(tables.changeLog, tablesGeneration)) {
-			for (const auto& change : revokeCursor.Unread(tables.changeLog))
-				check(change.slot);
+			const bool stamps = IndirectDraws::Get().RevisionClaims();
+			for (const auto& change : revokeCursor.Unread(tables.changeLog)) {
+				check(change.slot, false);
+				if (stamps && (change.causes & kStructureCauses))
+					structureChanged.push_back(change.slot);
+			}
+			// Those structural changes, with every one read since the selected revision's join (ApplySet's, before its own notes).
+			for (const std::uint32_t slot : structureChanged)
+				check(slot, true);
 		} else {
 			// The log broke (new tables): every claim is checked.
 			for (std::uint32_t slot = 0; slot < setPhasesApplied.size(); ++slot)
-				check(slot);
+				check(slot, false);
 		}
+		structureChanged.clear();
 		revokeCursor.Restart(tablesGeneration);
 		revokeCursor.Advance(tables.changeLog);
 		if (revoked.empty())

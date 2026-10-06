@@ -140,6 +140,9 @@ public:
 	/** @brief Time the render thread spent waiting on a worker inside the current EpochBodyScope. */
 	static void AddEpochJoinWait(std::chrono::steady_clock::duration a_waited);
 
+	/** @brief Render thread: the segments submitted since the last call, one bit per Segment. */
+	std::uint32_t TakeSubmittedSegments();
+
 	/**
 	 * @brief The Vulkan resource behind a D3D11 buffer, texture or SRV (dxvkGetInteropResourceInfo).
 	 * Marks it stable in DXVK; keep a reference on the D3D11 object while using the result. Fails for

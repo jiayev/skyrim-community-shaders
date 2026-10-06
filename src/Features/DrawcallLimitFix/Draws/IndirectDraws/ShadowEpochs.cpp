@@ -23,6 +23,40 @@ namespace DCLF
 			return latch;
 		}
 
+		/**
+		 * @brief a_row within a_words buckets (ShadowSizing::bucketCountWords, a growth of them outstanding): the buckets a_draws
+		 * (the payload's own, by key slot: the claims) need, in their order, then as many of the others as fit. A pipeline left
+		 * out has no bucket, and no claimed draw: the sizing the claims were sealed with holds their pipelines. One that has is a
+		 * defect, counted (a_lost) and reported by the caller.
+		 */
+		RowBuckets TrimmedRow(const RowBuckets& a_row, std::uint32_t a_words, std::span<const std::uint32_t> a_draws, std::uint64_t& a_lost)
+		{
+			if (a_row.pipelines.size() <= a_words)
+				return a_row;
+			std::vector<std::uint64_t> need(a_row.pipelines.size(), 0);
+			for (std::size_t k = 0; k < a_row.bucketOfSlot.size() && k < a_draws.size(); ++k)
+				if (a_row.bucketOfSlot[k] != Lookups::kNone)
+					need[a_row.bucketOfSlot[k]] += a_draws[k];
+			std::vector<std::uint32_t> order(a_row.pipelines.size());
+			std::iota(order.begin(), order.end(), 0u);
+			std::stable_partition(order.begin(), order.end(), [&](std::uint32_t a_bucket) { return need[a_bucket] != 0; });
+			std::vector<std::uint32_t> newOf(a_row.pipelines.size(), Lookups::kNone);
+			RowBuckets out;
+			for (std::size_t n = 0; n < order.size(); ++n) {
+				if (n >= a_words) {
+					a_lost += need[order[n]];
+					continue;
+				}
+				newOf[order[n]] = static_cast<std::uint32_t>(out.pipelines.size());
+				out.pipelines.push_back(a_row.pipelines[order[n]]);
+			}
+			out.bucketOfSlot = a_row.bucketOfSlot;
+			for (auto& bucket : out.bucketOfSlot)
+				if (bucket != Lookups::kNone)
+					bucket = newOf[bucket];
+			return out;
+		}
+
 		RowBuckets BucketsOfRow(std::span<const std::uint32_t> a_row, const ShadowIndirectState& a_indirect)
 		{
 			RowBuckets out;
@@ -134,11 +168,23 @@ namespace DCLF
 			return pool;
 		}
 
+		/** @brief A geometry slot's indices in the pool: its index buffer's, rounded up to whole words (0: none). */
+		std::uint32_t PoolIndicesOf(const SceneStore::Tables& a_tables, std::uint32_t a_slot)
+		{
+			const auto& geometry = a_tables.geometries[a_slot];
+			if (!geometry.indexAddress || !geometry.indexBytes)
+				return 0;
+			return static_cast<std::uint32_t>(std::min<std::uint64_t>((geometry.indexBytes + 3) / 4 * 2, UINT32_MAX & ~1u));
+		}
+
 		void UpdateIndexPool(IndexPool& a_pool, const SceneStore::Tables& a_tables, std::uint32_t a_generation, const org::LatchBlock& a_latch,
 			std::uint32_t a_latchSlot, std::uint32_t a_poolOffset, CommitUploads& a_uploads)
 		{
 			auto& p = a_pool;
 			const auto count = static_cast<std::uint32_t>(a_tables.geometries.size());
+			// Revision mode: the pool grows at the join (Impl::ReserveIndexPool) and is adopted with the revision that names it; a
+			// range that does not fit until then waits (an unclaimed geometry's: the claims' were asked room for). Else it grows here.
+			const bool deferred = Growths::Deferred();
 			std::vector<std::array<std::uint32_t, 4>> copies;
 			std::vector<std::uint32_t> changed;
 			bool allFirsts = false;
@@ -185,9 +231,26 @@ namespace DCLF
 				copies.push_back({ static_cast<std::uint32_t>(a_range.address), static_cast<std::uint32_t>(a_range.address >> 32), a_range.first,
 					static_cast<std::uint32_t>((a_range.bytes + 3) / 4) });
 			};
-			// A full pool: twice what it must hold, every range laid out again from the start and copied again (a new backing,
-			// so frames in flight keep reading the old one). Only between the releases and the acquires below, so every range
+			// Every range laid out again from the start of the current indices version and copied into it: a new version (frames in
+			// flight keep reading the old one), adopted or grown. Only between the releases and the acquires below, so every range
 			// held is its slot's buffer as the tables have it now.
+			auto relayout = [&] {
+				++p.layout;
+				p.free.clear();
+				p.end = 0;
+				copies.clear();
+				for (auto& range : p.slots) {
+					if (range.first == IndexPool::kNoRange)
+						continue;
+					range.first = p.end;
+					p.end += range.count;
+					copyOf(range);
+				}
+				for (std::size_t g = 0; g < p.slots.size(); ++g)
+					p.slotFirst[g] = p.slots[g].first;
+				allFirsts = true;
+			};
+			// Without revisions: twice what it must hold, now.
 			auto grow = [&](std::uint32_t a_more) {
 				std::uint64_t needed = std::uint64_t(p.indicesHeld) + a_more;
 				std::uint64_t capacity = std::max<std::uint64_t>(p.capacity, 2);
@@ -195,48 +258,37 @@ namespace DCLF
 					capacity *= 2;
 				logger::info("[DCLF] index pool: {} indices grown to {} ({} MB)", p.capacity, capacity, capacity * 2 >> 20);
 				p.capacity = static_cast<std::uint32_t>(std::min<std::uint64_t>(capacity, UINT32_MAX & ~1u));
-				// The new version's layout: every range laid out again from its start, and copied into it.
-				Adopt(std::move(Growth{}.Structured(p.indices, p.capacity / 2)), [&] {
-					++p.layout;
-					p.free.clear();
-					p.end = 0;
-					copies.clear();
-					for (auto& range : p.slots) {
-						if (range.first == IndexPool::kNoRange)
-							continue;
-						range.first = p.end;
-						p.end += range.count;
-						copyOf(range);
-					}
-					for (std::size_t g = 0; g < p.slots.size(); ++g)
-						p.slotFirst[g] = p.slots[g].first;
-					allFirsts = true;
-				});
+				Adopt(std::move(Growth{}.Structured(p.indices, p.capacity / 2)), relayout);
+			};
+			auto reserveFor = [&](auto&& a_slots) {
+				if (deferred)
+					return;
+				std::uint64_t more = 0;
+				for (const std::uint32_t g : a_slots)
+					more += PoolIndicesOf(a_tables, g);
+				if (more && (std::uint64_t(p.indicesHeld) + more) * 2 > p.capacity)
+					grow(static_cast<std::uint32_t>(std::min<std::uint64_t>(more, UINT32_MAX)));
 			};
 			// A slot's own range of its index buffer, copied whenever the log names the slot: a range is never shared, because
 			// a buffer address is no identity - the device hands a freed buffer's address to the next buffer it creates, which a
 			// cell's load does while the unloaded cell's slots still hold theirs.
-			auto indicesOf = [&](std::uint32_t a_slot) -> std::uint32_t {
-				const auto& geometry = a_tables.geometries[a_slot];
-				if (!geometry.indexAddress || !geometry.indexBytes)
-					return 0;
-				return static_cast<std::uint32_t>(std::min<std::uint64_t>((geometry.indexBytes + 3) / 4 * 2, UINT32_MAX & ~1u));
-			};
-			// Before a batch of acquires: one growth for all of them (a cell's load names hundreds of slots), not one per doubling.
-			auto reserveFor = [&](auto&& a_slots) {
-				std::uint64_t more = 0;
-				for (const std::uint32_t g : a_slots)
-					more += indicesOf(g);
-				if (more && (std::uint64_t(p.indicesHeld) + more) * 2 > p.capacity)
-					grow(static_cast<std::uint32_t>(std::min<std::uint64_t>(more, UINT32_MAX)));
-			};
 			auto acquire = [&](std::uint32_t a_slot) {
 				const auto& geometry = a_tables.geometries[a_slot];
-				const std::uint32_t indices = indicesOf(a_slot);
+				const std::uint32_t indices = PoolIndicesOf(a_tables, a_slot);
 				if (!indices)
 					return;
+				// Revision mode: within the first-index table and this commit's copies, else it waits.
+				if (deferred && (a_slot >= p.firstsCapacity || copies.size() >= p.copiesCapacity)) {
+					p.waiting.push_back(a_slot);
+					return;
+				}
 				std::uint32_t first = allocate(indices);
 				if (first == IndexPool::kNoRange) {
+					if (deferred) {
+						p.fragmented = p.fragmented || (std::uint64_t(p.indicesHeld) + indices) * 2 <= p.capacity;
+						p.waiting.push_back(a_slot);
+						return;
+					}
 					grow(indices);
 					first = allocate(indices);
 				}
@@ -252,6 +304,8 @@ namespace DCLF
 				p.free.clear();
 				p.end = 0;
 				p.indicesHeld = 0;
+				p.relayout = false;
+				p.waiting.clear();
 				p.slots.assign(count, {});
 				p.slotFirst.assign(count, IndexPool::kNoRange);
 				reserveFor(std::views::iota(0u, count));
@@ -269,11 +323,18 @@ namespace DCLF
 				for (const std::uint32_t g : p.cursor.Unread(a_tables.geometryLog))
 					if (g < first)
 						changed.push_back(g);
+				// The slots that waited, again.
+				for (const std::uint32_t g : p.waiting)
+					if (g < count)
+						changed.push_back(g);
+				p.waiting.clear();
 				std::sort(changed.begin(), changed.end());
 				changed.erase(std::unique(changed.begin(), changed.end()), changed.end());
-				// Every release before any acquire.
+				// Every release before any acquire; a new indices version (adopted) laid out with what is left, before them.
 				for (const std::uint32_t g : changed)
 					release(g);
+				if (std::exchange(p.relayout, false))
+					relayout();
 				reserveFor(changed);
 				for (const std::uint32_t g : changed)
 					acquire(g);
@@ -297,13 +358,13 @@ namespace DCLF
 							firstStale = g;
 					}
 				}
-				logger::info("[DCLF] index pool parity: {} slots, {} ranges ({} indices held of {}), {} stale, {} without a range{}{}", count, held, p.indicesHeld,
-					p.capacity, stale, unheld, stale || unheld ? " <- INDEX POOL" : " <- OK",
+				logger::info("[DCLF] index pool parity: {} slots, {} ranges ({} indices held of {}), {} stale, {} without a range ({} waiting for the pool's growth){}{}",
+					count, held, p.indicesHeld, p.capacity, stale, unheld, p.waiting.size(), stale || unheld > p.waiting.size() ? " <- INDEX POOL" : " <- OK",
 					firstStale != IndexPool::kNoRange ? fmt::format("; first stale: slot {}", firstStale) : std::string());
 			}
 
-			// The slots' first indices: every one into a new backing, else the slots changed.
-			if (count > p.firstsCapacity) {
+			// The slots' first indices: every one into a new backing, else the slots changed - those the table holds.
+			if (count > p.firstsCapacity && !deferred) {
 				while (p.firstsCapacity < count)
 					p.firstsCapacity *= 2;
 				Adopt(std::move(Growth{}.Structured(p.firsts, p.firstsCapacity)), [&] {
@@ -311,27 +372,34 @@ namespace DCLF
 					allFirsts = true;
 				});
 			}
+			const std::uint32_t held = std::min(count, p.firstsCapacity);
 			if (allFirsts) {
-				if (count)
-					a_uploads(p.firsts, p.slotFirst.data(), std::size_t(count) * sizeof(std::uint32_t), 0);
+				if (held)
+					a_uploads(p.firsts, p.slotFirst.data(), std::size_t(held) * sizeof(std::uint32_t), 0);
 			} else {
-				for (std::size_t i = 0; i < changed.size();) {
+				for (std::size_t i = 0; i < changed.size() && changed[i] < held;) {
 					std::size_t j = i + 1;
-					while (j < changed.size() && changed[j] == changed[j - 1] + 1)
+					while (j < changed.size() && changed[j] == changed[j - 1] + 1 && changed[j] < held)
 						++j;
 					a_uploads(p.firsts, &p.slotFirst[changed[i]], (j - i) * sizeof(std::uint32_t), std::uint64_t(changed[i]) * sizeof(std::uint32_t));
 					i = j;
 				}
 			}
 			// The copies, and their dispatch.
-			const auto copyCount = static_cast<std::uint32_t>(copies.size());
+			auto copyCount = static_cast<std::uint32_t>(copies.size());
 			if (copyCount > p.copiesCapacity) {
-				while (p.copiesCapacity < copyCount)
-					p.copiesCapacity *= 2;
-				Adopt(std::move(Growth{}.Structured(p.copies, p.copiesCapacity)), [&] { ++p.layout; });
+				if (deferred) {
+					// A relayout's copies past the copies the join asked for with it: a defect of that request.
+					logger::error("[DCLF] index pool: {} copies past the {} its buffer holds", copyCount, p.copiesCapacity);
+					copyCount = p.copiesCapacity;
+				} else {
+					while (p.copiesCapacity < copyCount)
+						p.copiesCapacity *= 2;
+					Adopt(std::move(Growth{}.Structured(p.copies, p.copiesCapacity)), [&] { ++p.layout; });
+				}
 			}
 			if (copyCount)
-				a_uploads(p.copies, copies.data(), copies.size() * sizeof(copies[0]), 0);
+				a_uploads(p.copies, copies.data(), std::size_t(copyCount) * sizeof(copies[0]), 0);
 			const std::uint32_t dispatch[4] = { std::min(copyCount, kIndexPoolGroupsX), (copyCount + kIndexPoolGroupsX - 1) / kIndexPoolGroupsX, 1, copyCount };
 			a_latch.Write(a_latchSlot, a_poolOffset, std::as_bytes(std::span(dispatch)));
 		}
@@ -409,7 +477,8 @@ namespace DCLF
 		 * @brief Where a view draws: its slot's buffers, its viewport and depth range in its target's slice, and its push data
 		 * (DrawPipelines.h, kShadowPushWords): the frame record, its own blocks at its slot's row of the view blocks, and the build's.
 		 */
-		ShadowFrameView FrameViewOf(const ShadowViewLayout& a_view, std::uint32_t a_capacity, const ShadowResources& a_resources, const ShadowPayload& a_payload)
+		ShadowFrameView FrameViewOf(const ShadowViewLayout& a_view, std::uint32_t a_capacity, const ShadowResources& a_resources, const ShadowSizing& a_sizing,
+			std::uint64_t a_materialRows, std::uint64_t a_viewBlocks, const ShadowPayload& a_payload)
 		{
 			const std::uint32_t a_slot = a_view.slot;
 			ShadowFrameView out{};
@@ -426,10 +495,10 @@ namespace DCLF
 			out.target = a_view.target;
 			out.slice = a_view.slice;
 			out.rasterState = a_view.rasterState;
-			out.materialRows = a_resources.materialRows.address;
-			out.sequenceDraws = a_resources.sequenceDraws[a_slot];
+			out.materialRows = a_materialRows;
+			out.sequenceDraws = a_sizing.sequenceDraws;
 			const std::uint64_t base = a_resources.constantsAddress;
-			const std::uint64_t viewBlock = a_resources.viewBlocks.address + std::uint64_t(a_slot) * kShadowViewSlotBytes;
+			const std::uint64_t viewBlock = a_viewBlocks + std::uint64_t(a_slot) * kShadowViewSlotBytes;
 			auto push = [&](std::uint32_t a_word, std::uint64_t a_address) {
 				out.push[a_word] = static_cast<std::uint32_t>(a_address);
 				out.push[a_word + 1] = static_cast<std::uint32_t>(a_address >> 32);
@@ -531,7 +600,24 @@ namespace DCLF
 		frame->zeros = a_resources.zeros;
 		frame->latched = a_in.latched;
 		frame->latchLayout = a_resources.latchLayout;
-		frame->rows = std::make_shared<const std::vector<RowBuckets>>(a_in.rows);
+		const ShadowSizing& sizing = a_in.sizing ? *a_in.sizing : a_resources;
+		// Each view's row within the bucket counts the sizing has (TrimmedRow): what the shape draws and routes by.
+		std::vector<RowBuckets> rows;
+		rows.reserve(a_in.rows.size());
+		std::uint64_t lost = 0;
+		for (std::size_t v = 0; v < a_in.rows.size(); ++v) {
+			const auto m = v < a_in.views.size() ? a_in.views[v].modeIndex : 0u;
+			rows.push_back(TrimmedRow(a_in.rows[v], sizing.bucketCountWords, payload.keySlotDraws[m], lost));
+		}
+		if (lost) {
+			static std::uint32_t reported = 0;
+			if (reported++ < 8)
+				logger::error("[DCLF] {} claimed shadow draws past the bucket counts' {} words: a claim past the sizing it was sealed with", lost,
+					sizing.bucketCountWords);
+		}
+		frame->rows = std::make_shared<const std::vector<RowBuckets>>(rows);
+		const std::uint64_t materialRows = a_in.materialRows ? a_in.materialRows : a_resources.materialRows.address;
+		const std::uint64_t viewBlocks = a_in.viewBlocks ? a_in.viewBlocks : a_resources.viewBlocks.address;
 		std::vector<std::uint32_t> slotDraws;
 		for (std::size_t v = 0; v < a_in.views.size(); ++v) {
 			const auto& view = a_in.views[v];
@@ -542,17 +628,28 @@ namespace DCLF
 			const auto& own = payload.keySlotDraws[m];
 			slotDraws.assign(own.begin(), own.end());
 			std::uint32_t draws = payload.modeDraws[m];
+			// The scene's bound sizes ahead, within the slot's sequences. Past them (a growth outstanding, the bound ahead of the
+			// claims), the payload's own draws: its casters are the claims, which the sizing they were claimed by holds.
 			if (a_in.bounds) {
 				const auto& bound = a_in.bounds->keySlotDraws[m];
-				if (bound.size() > slotDraws.size())
-					slotDraws.resize(bound.size(), 0u);
-				for (std::size_t k = 0; k < bound.size(); ++k)
-					slotDraws[k] = std::max(slotDraws[k], bound[k]);
-				draws = std::max(draws, a_in.bounds->modeDraws[m]);
+				std::vector<std::uint32_t> merged(slotDraws);
+				if (bound.size() > merged.size())
+					merged.resize(bound.size(), 0u);
+				std::uint64_t total = 0;
+				for (std::size_t k = 0; k < merged.size(); ++k) {
+					if (k < bound.size())
+						merged[k] = std::max(merged[k], bound[k]);
+					total += merged[k];
+				}
+				const std::uint32_t boundDraws = std::max(draws, a_in.bounds->modeDraws[m]);
+				if (boundDraws <= sizing.sequenceDraws && total <= std::uint64_t(kShadowClasses) * sizing.sequenceDraws) {
+					slotDraws = std::move(merged);
+					draws = boundDraws;
+				}
 			}
-			const std::uint32_t capacity = ShadowViewCapacity(previous ? previous->capacity : 0, draws, a_resources.sequenceDraws[view.slot]);
-			auto& out = frame->views.emplace_back(FrameViewOf(view, capacity, a_resources, payload));
-			out.buckets = SizeShadowBuckets(a_in.rows[v], slotDraws, previous, std::uint64_t(kShadowClasses) * a_resources.sequenceDraws[view.slot]);
+			const std::uint32_t capacity = ShadowViewCapacity(previous ? previous->capacity : 0, draws, sizing.sequenceDraws);
+			auto& out = frame->views.emplace_back(FrameViewOf(view, capacity, a_resources, sizing, materialRows, viewBlocks, payload));
+			out.buckets = SizeShadowBuckets(rows[v], slotDraws, previous, std::uint64_t(kShadowClasses) * sizing.sequenceDraws);
 		}
 		return frame;
 	}
@@ -824,6 +921,31 @@ namespace DCLF
 		}
 	}
 
+	std::uint32_t IndirectDraws::ShadowViewCapacity()
+	{
+		// None when DCLF draws no shadows (failed, or not set up): the engine draws every view, and withholds nothing.
+		if (failed || !impl->SetupShadow())
+			return 0;
+		// Slots for the views DCLF would draw (the last Rebuild's candidates), asked for here whether or not any view was drawn:
+		// a frame whose views all stay the engine's has no epoch to ask.
+		const auto& layout = impl->shadow->latchLayout;
+		impl->ReserveShadowLatch(ShadowViews::Get().Candidates(), layout.keySlots, layout.rasterStates, layout.sunProcesses);
+		// The shadow maps the views draw into, imported before the engine draws them (a capture finds them imported): one imported now
+		// is built at the next build point.
+		if (auto* renderer = globals::game::renderer; renderer && RevisionClaims()) {
+			using T = RE::RENDER_TARGETS_DEPTHSTENCIL;
+			for (const auto [index, target] : { std::pair{ 0u, T::kSHADOWMAPS_ESRAM }, std::pair{ 1u, T::kSHADOWMAPS }, std::pair{ 2u, T::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM } })
+				if (renderer->GetDepthStencilData().depthStencils[target].texture)
+					(void)impl->ImportShadowDepth(index, target);
+		}
+		// Strict epochs: none while the graph as built lacks what the views would need (new slots, a new import: built at the next
+		// build point), or the frame has no claims.
+		if (auto* host = RenderGraphRuntime::Get().Host(); RevisionClaims() && (!host || host->RebuildRequested() || SceneStore::Get().SetWithdrawn()))
+			return 0;
+		const std::uint32_t slots = impl->shadow->viewSlots;
+		return slots > kFirstShadowViewSlot ? slots - kFirstShadowViewSlot : 0u;
+	}
+
 	void IndirectDraws::BeginShadowFrame()
 	{
 		impl->pendingViews.clear();
@@ -858,6 +980,11 @@ namespace DCLF
 		// A focus shadow holds one actor's casters, not the scene's, and DCLF has no caster set for it: it stays native.
 		if (shadowView->focus) {
 			++shadowStats.focusSkipped;
+			return;
+		}
+		// Not DCLF's this frame (past the view slots its buffers hold, or a mode not known at Rebuild): the engine drew it whole.
+		if (!shadowView->covered) {
+			++shadowStats.uncovered;
 			return;
 		}
 		// Where the engine has just drawn: the target and slice come from the renderer's state, because the
@@ -1009,6 +1136,9 @@ namespace DCLF
 		if (a_view >= kOcclusionViews || failed || !ActiveToggles().shadows || !SceneStore::OcclusionEnabled(a_view) || !impl->shadow)
 			return false;
 		const auto& occlusion = impl->occlusion[a_view];
+		// Strict epochs: not while the graph as built lacks the map's import or slots (built at the next build point).
+		if (auto* host = RenderGraphRuntime::Get().Host(); RevisionClaims() && (!host || host->RebuildRequested()))
+			return false;
 		return occlusion.rasterState && occlusion.committedFrame == SceneStore::Get().GetFrame() && impl->shadow->depth[OcclusionDepthTarget(a_view)];
 	}
 
@@ -1209,7 +1339,9 @@ namespace DCLF
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 				if (modeUsed[m])
 					keys += IsOcclusionMode(m) ? tables.occlusionKeysUsed[OcclusionOfMode(m)].size() : tables.shadowKeysUsed.size();
-			impl->ReserveShadowLatch(static_cast<std::uint32_t>(pending.size()), static_cast<std::uint32_t>(keys), DrawPipelines::Get().ShadowRasterStateCount(),
+			// Slots for every view DCLF would draw (ShadowViews::Candidates): those past its slots now stayed the engine's this frame.
+			const auto views = std::max<std::size_t>(pending.size(), ShadowViews::Get().Candidates());
+			impl->ReserveShadowLatch(static_cast<std::uint32_t>(views), static_cast<std::uint32_t>(keys), DrawPipelines::Get().ShadowRasterStateCount(),
 				static_cast<std::uint32_t>(in.sunEntryProcesses.size()));
 		}
 		// The epoch's views (ShadowViewLayout): the frame's, then the view slots the last shape had past them (a local light's
@@ -1334,14 +1466,16 @@ namespace DCLF
 			// The worker's build staged what does not depend on the views (StageShadowPayload): one submission,
 			// ahead of this commit's own uploads. A build made here, or staged against resources since recreated,
 			// is uploaded from its vectors.
-			staged = useAsync && payload.staged && payload.stagedFor == resources.get();
+			// Staged into the material rows' version since replaced (a growth adopted between): uploaded from its vectors, into the
+			// new version, which holds nothing yet (materialRowsHeld 0).
+			staged = useAsync && payload.staged && payload.stagedFor == resources.get() && payload.stagedRows == resources->materialRows.generation;
 			if (staged) {
 				SubmitWorkerBatch(std::move(payload.staged));
 			} else {
 				auto& scene = *resources->scene;
 				EmitGeometryDraws(payload.geometries, scene.held.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 					uploads(scene.geometries, a_data, a_bytes, a_offset);
-				});
+				}, scene.geometryRows);
 				payload.materialRows.Emit(resources->materialRowsHeld, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 					uploads(resources->materialRows.buffer, a_data, a_bytes, a_offset);
 				});
@@ -1354,10 +1488,10 @@ namespace DCLF
 			// Either path uploaded the geometry slots' draws the buffers did not hold. The object records and the bone rows are
 			// the streams, as the tables hold them now (CommitSceneStreams).
 			auto& scene = *resources->scene;
-			if (payload.geometries.Version())
+			if (payload.geometries.Version() && payload.geometries.Count() <= scene.geometryRows)
 				scene.held.geometries = payload.geometries.Version();
 			impl->CommitSceneStreams(scene, store.GetTables(), store.GetFrame(), store.GetTablesGeneration(), uploads);
-			shadowStats.faceUploads += UploadFaceStreams(payload.faceStreams, scene.facePositions, scene.faceUploaded, uploads);
+			shadowStats.faceUploads += UploadFaceStreams(payload.faceStreams, scene.facePositions, scene.faceUploaded, uploads, scene.faceVertices);
 			ZeroFrameAheadOutputs(scene, uploads);
 			UploadTrees(store.GetTables(), store.GetFrame(), scene, uploads, false);
 			shadowStats.records = static_cast<std::uint32_t>(payload.materialRows.Count());
@@ -1641,7 +1775,78 @@ namespace DCLF
 				if (need[b] > view.buckets[b].capacity)
 					return miss(R::kCapacity);
 		}
+		if (!a_recordings || !RecordingAdmitted(*a_recordings, a_variant))
+			return miss(R::kNotAdmitted);
 		return shape;
+	}
+
+	void IndirectDraws::Impl::ReserveIndexPool(const SceneStore::Tables& a_tables, std::uint32_t a_generation)
+	{
+		if (!scene || !scene->pool)
+			return;
+		auto& p = *scene->pool;
+		auto& b = p.bound;
+		// Every slot's indices as the tables have them, kept from the geometry log.
+		const auto count = static_cast<std::uint32_t>(a_tables.geometries.size());
+		auto take = [&](std::uint32_t a_slot) {
+			const std::uint32_t indices = PoolIndicesOf(a_tables, a_slot);
+			b.total = b.total + indices - b.indices[a_slot];
+			b.indices[a_slot] = indices;
+		};
+		if (!b.cursor.Continues(a_tables.geometryLog, a_generation) || b.indices.size() > count) {
+			b.indices.assign(count, 0u);
+			b.total = 0;
+			for (std::uint32_t g = 0; g < count; ++g)
+				take(g);
+			b.cursor.Restart(a_generation);
+		} else {
+			const auto first = static_cast<std::uint32_t>(b.indices.size());
+			b.indices.resize(count, 0u);
+			for (std::uint32_t g = first; g < count; ++g)
+				take(g);
+			for (const std::uint32_t g : b.cursor.Unread(a_tables.geometryLog))
+				if (g < first)
+					take(g);
+		}
+		b.cursor.Advance(a_tables.geometryLog);
+		// Room for them all, twice over (a range laid out again needs no more), a first index per slot and a copy per range (a
+		// relayout copies every one): one change, adopted with the revision that names it - so with the claims they hold.
+		auto& growths = Growths::Get();
+		const PoolSizing& base = growths.LatestSizing<PoolSizing>(p);
+		PoolSizing next = base;
+		std::vector<Growths::Part> parts;
+		bool indices = false;
+		if (b.total * 2 > base.capacity || std::exchange(p.fragmented, false)) {
+			std::uint64_t capacity = std::max<std::uint64_t>(base.capacity, 2);
+			while (capacity < b.total * 2)
+				capacity *= 2;
+			next.capacity = static_cast<std::uint32_t>(std::min<std::uint64_t>(capacity, UINT32_MAX & ~1u));
+			if (next.capacity == base.capacity)
+				++next.relayouts;  // fragmented: laid out again in a new version of the same size
+			parts.push_back({ p.indices, next.capacity / 2 });
+			indices = true;
+		}
+		const std::uint32_t slots = std::max(count, 1u);
+		if (slots > next.firstsCapacity) {
+			next.firstsCapacity = std::max(next.firstsCapacity, 1u);
+			while (next.firstsCapacity < slots)
+				next.firstsCapacity *= 2;
+			parts.push_back({ p.firsts, next.firstsCapacity });
+		}
+		if (slots > next.copiesCapacity) {
+			next.copiesCapacity = std::max(next.copiesCapacity, 1u);
+			while (next.copiesCapacity < slots)
+				next.copiesCapacity *= 2;
+			parts.push_back({ p.copies, next.copiesCapacity });
+		}
+		if (next == base)
+			return;
+		logger::info("[DCLF] index pool: {} indices, {} slots and {} copies grown to {}, {} and {} ({} MB){}", base.capacity, base.firstsCapacity, base.copiesCapacity,
+			next.capacity, next.firstsCapacity, next.copiesCapacity, std::uint64_t(next.capacity) * 2 >> 20, Growths::Deferred() ? ", as graph work" : "");
+		growths.Change<PoolSizing>(p, std::move(next), std::move(parts), [&p, indices] {
+			++p.layout;
+			p.relayout = p.relayout || indices;
+		});
 	}
 
 	void IndirectDraws::Impl::ReserveShadowRows()
@@ -1649,7 +1854,10 @@ namespace DCLF
 		// What the last build wanted, with a quarter more: the table grows ahead of the scene, not a frame behind it.
 		if (!shadow || !shadowRowsWanted)
 			return;
-		shadow->materialRows.Reserve(shadowRowsWanted + shadowRowsWanted / 4, [state = shadow.get()] { state->materialRowsHeld = 0; });  // a new version holds nothing
+		// Graph work in revision mode, with nothing to fill: a new version holds no row, and the commit after its adoption sends the
+		// table whole (materialRowsHeld 0). Until then the build leaves the rows past the current one waiting (rowsWanted).
+		const RowsCapture whole;
+		shadow->materialRows.Reserve(shadowRowsWanted + shadowRowsWanted / 4, [state = shadow.get()](std::uint64_t) { state->materialRowsHeld = 0; }, &whole);
 	}
 
 	ShadowInputs IndirectDraws::Impl::PrepareShadowInputs(const SceneStore& a_store, const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
@@ -1686,6 +1894,7 @@ namespace DCLF
 		in.addresses.treeWindIndex = a_resources.scene->TreeWindReadIndex(a_store.GetFrame());
 		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.scene->facePositionsAddress : 0;
 		in.addresses.recordCapacity = a_resources.materialRows.capacity;
+		in.addresses.fit = SceneFitOf(*a_resources.scene, a_resources.objectCapacity);
 		in.addresses.identity = &a_resources;
 		in.tablesGeneration = a_store.GetTablesGeneration();
 		in.lookupGeneration = a_store.GetLookups().shadowGeneration;

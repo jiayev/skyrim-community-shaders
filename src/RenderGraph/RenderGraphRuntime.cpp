@@ -240,6 +240,7 @@ struct RenderGraphRuntime::Impl
 	uint32_t epochCount = 0;
 	// Queue submissions the graph hands to the hook during the current epoch (each is one DXVK enqueue).
 	uint32_t epochHookCalls = 0;
+	std::uint32_t submittedSegments = 0;  // since TakeSubmittedSegments
 	// DXVK enqueues during the current epoch: one per hook call, or one for the whole epoch when batching.
 	uint32_t epochEnqueues = 0;
 
@@ -1116,6 +1117,11 @@ RenderGraphRuntime::EpochBodyScope::~EpochBodyScope()
 	stats.bodyJoinUs += state.bodyJoinUs;
 }
 
+std::uint32_t RenderGraphRuntime::TakeSubmittedSegments()
+{
+	return impl ? std::exchange(impl->submittedSegments, 0u) : 0u;
+}
+
 void RenderGraphRuntime::AddEpochJoinWait(std::chrono::steady_clock::duration a_waited)
 {
 	auto& runtime = RenderGraphRuntime::Get();
@@ -1225,6 +1231,7 @@ bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<voi
 				impl->bodyEpochUs += std::chrono::duration<double, std::micro>(elapsed).count();
 			}
 		}
+		impl->submittedSegments |= 1u << static_cast<std::uint32_t>(a_segment);
 		return true;
 	} catch (const std::exception& e) {
 		// What the graph did submit still goes to DXVK in order (it has committed it); then the graph stops.
@@ -1366,4 +1373,5 @@ const std::vector<std::filesystem::path>& RenderGraphRuntime::ShaderSourceFiles(
 }
 winrt::com_ptr<ID3D11Buffer> RenderGraphRuntime::WrapBuffer(org::Resource&, const D3D11_BUFFER_DESC&) { return nullptr; }
 void RenderGraphRuntime::ReportGpuTimings(std::uint32_t, bool) {}
+std::uint32_t RenderGraphRuntime::TakeSubmittedSegments() { return 0; }
 #endif

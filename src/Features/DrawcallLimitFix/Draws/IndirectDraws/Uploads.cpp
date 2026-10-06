@@ -14,10 +14,17 @@ namespace DCLF
 			{
 				ZoneScopedN("CS.DCLF.UploadRanges.Rows");
 				// The rows the tables do not hold, their headers' addresses made absolute (both segments share them).
-				EmitMainRows(a_payload.materialRows, a_payload.inputs.materialRowsHeld, a_resources.materialRows.address, [](MaterialRow& a_row, std::uint64_t a_address) {
+				// Into the current tables; rows past them wait for their growth's adoption (Growths). A table grown at once since the
+				// build's inputs were taken (live mode: the epoch's reserve) holds none of them: all are sent.
+				const auto& addresses = a_payload.inputs.addresses;
+				const auto& materials = a_resources.materialRows;
+				const auto& pipelines = a_resources.pipelineRows;
+				EmitMainRows(a_payload.materialRows, addresses.records == materials.address ? a_payload.inputs.materialRowsHeld : 0, materials.address, materials.capacity,
+					[](MaterialRow& a_row, std::uint64_t a_address) {
 					PatchRowAddresses(a_row, a_address);
 				}, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { a_emit(a_resources.materialRows.buffer, a_data, a_bytes, a_offset); });
-				EmitMainRows(a_payload.pipelineRows, a_payload.inputs.pipelineRowsHeld, a_resources.pipelineRows.address, [](PipelineRow& a_row, std::uint64_t a_address) {
+				EmitMainRows(a_payload.pipelineRows, addresses.pipelineRows == pipelines.address ? a_payload.inputs.pipelineRowsHeld : 0, pipelines.address, pipelines.capacity,
+					[](PipelineRow& a_row, std::uint64_t a_address) {
 					PatchRowAddresses(a_row, a_address);
 				}, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { a_emit(a_resources.pipelineRows.buffer, a_data, a_bytes, a_offset); });
 			}
@@ -36,7 +43,7 @@ namespace DCLF
 			TracyCZoneEnd(residentUploadZone);
 			EmitGeometryDraws(a_payload.geometryDraws, scene.held.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 				a_emit(scene.geometries->Get(), a_data, a_bytes, a_offset);
-			});
+			}, scene.geometryRows);
 		}
 
 		// Render thread: the payload through the commit's uploads, copied now.
@@ -87,7 +94,7 @@ namespace DCLF
 		const TablesHeld& held = a_payload.inputs.tablesHeld;
 		EmitGeometryDraws(a_payload.geometries, held.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 			batch->Stage(UploadTarget::FromShared(scene.geometries->Get()), a_offset, a_data, a_bytes);
-		});
+		}, scene.geometryRows);
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
 			if (!a_payload.inputs.modeUsed[m])
 				continue;
@@ -102,6 +109,7 @@ namespace DCLF
 		if (const auto& bytes = a_payload.arena.Bytes(); !bytes.empty())
 			batch->Stage(UploadTarget::FromShared(a_resources.constants), 0, bytes.data(), bytes.size());
 		a_payload.stagedFor = &a_resources;
+		a_payload.stagedRows = a_resources.materialRows.generation;
 		if (a_device)
 			batch->Record(a_device);
 		a_payload.staged = std::move(batch);
@@ -132,15 +140,16 @@ namespace DCLF
 		++job.kicked;
 		const rhi::Device device = RecordingDevice();
 		job.handle = AsyncWorker::Get().Submit("streams", [result = &job, batch = job.batch, objectsBuffer = sceneBuffers.objects->Get(), bonesBuffer = sceneBuffers.bones->Get(),
-															objectCapacity = sceneBuffers.objectCapacity, boneRows = sceneBuffers.boneRows, tables = &tables, objects = SceneObjects(),
+															objectCapacity = sceneBuffers.objectCapacity, boneRows = sceneBuffers.boneRows, boneRegion = sceneBuffers.boneRegion,
+															tables = &tables, objects = SceneObjects(),
 															bonesStore = SceneBones(), from = job.from, generation = job.tablesGeneration, frame = store.GetFrame(), device](std::stop_token) {
 			ZoneScopedN("CS.DCLF.StageSceneStreams");
 			using org::runtime::UploadTarget;
 			ObjectRecordsOut records;
-			UpdateObjectRecords(objects, from.objects, *tables, generation, frame, records);
+			UpdateObjectRecords(objects, from.objects, *tables, generation, frame, boneRegion, records);
 			BonesOut bones;
-			UpdateBones(bonesStore, from.bones, *tables, generation, bones);
-			// Past a buffer: the commit's own update reports it (CheckSceneCapacity).
+			UpdateBones(bonesStore, from.bones, *tables, generation, boneRegion, bones);
+			// Past a buffer (its growth outstanding): the commit's own update sends what fits.
 			if (records.Count() > objectCapacity || bones.Rows() > boneRows)
 				return;
 			records.Emit(from.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
@@ -196,25 +205,25 @@ namespace DCLF
 		}
 		SceneStreams sent;
 		ObjectRecordsOut objects;
-		UpdateObjectRecords(SceneObjects(), a_scene.held.objects, a_tables, a_generation, a_frame, objects);
+		UpdateObjectRecords(SceneObjects(), a_scene.held.objects, a_tables, a_generation, a_frame, a_scene.boneRegion, objects);
 		sent.objects = objects.Count();
-		CheckSceneCapacity(a_scene, objects.Count(), 0, 0, 0, ~0u, "the object records");
+		// Within the buffers: a record or a row past them waits for their growth (Growths), sent again until it is adopted (the
+		// version held moves only once all of them are sent). No build names an object past them (ObjectFits).
 		sent.objectBytes = objects.Emit(a_scene.held.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 			a_uploads(a_scene.objects, a_data, a_bytes, a_offset);
-		});
-		if (objects.Version())
+		}, a_scene.objectCapacity);
+		if (objects.Version() && objects.Count() <= a_scene.objectCapacity)
 			a_scene.held.objects = objects.Version();
 		BonesOut bones;
-		UpdateBones(SceneBones(), a_scene.held.bones, a_tables, a_generation, bones);
+		UpdateBones(SceneBones(), a_scene.held.bones, a_tables, a_generation, a_scene.boneRegion, bones);
 		sent.boneRows = bones.Rows();
-		CheckSceneCapacity(a_scene, 0, 0, bones.Rows(), 0, ~0u, "the bone rows");
 		BonesStore* bonesParity = PersistentParityEnabled() ? &boneStore : nullptr;
 		sent.boneRowsSent = EmitBones(bones, a_scene.held.bones, bonesParity, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 			a_uploads(a_scene.bones, a_data, a_bytes, a_offset);
-		});
-		if (bonesParity && ParityDue(a_frame))
+		}, a_scene.boneRows);
+		if (bonesParity && ParityDue(a_frame) && bones.Rows() <= a_scene.boneRows)
 			CheckBones(*bonesParity, bones);
-		if (bones.Version())
+		if (bones.Version() && bones.Rows() <= a_scene.boneRows)
 			a_scene.held.bones = bones.Version();
 		boneStore.rowsSent += sent.boneRowsSent;
 		return sent;
@@ -323,6 +332,8 @@ namespace DCLF
 					miss = R::kLatch;
 				else if (depthOnly && a_resources->pool && (!shape->zPlan || a_resources->zBucketCapacity.size() > shape->latchLayout.buckets))
 					miss = R::kLatch;
+				else if (!RecordingAdmitted(*revisionRecordings, 0))
+					miss = R::kNotAdmitted;
 				if (miss == R::kMisses)
 					revisionShape = std::move(shape);
 				else
@@ -491,20 +502,15 @@ namespace DCLF
 		// Upload (the graph's upload pass runs ahead of every pass of this epoch). The worker's build staged its
 		// payload itself: one submission, no copies here. A build made here, or staged against resources since
 		// recreated, is uploaded from its vectors.
-		// The rows' tables hold every slot the tables have (ReserveMainSequences, before the epoch): past them is a defect of
-		// that reserve, never a row to drop.
-		if (a_payload.materialRows.Count() > a_resources->materialRows.capacity || a_payload.pipelineRows.Count() > a_resources->pipelineRows.capacity)
-			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} material and {} pipeline rows past their tables' {} and {}", a_payload.materialRows.Count(),
-				a_payload.pipelineRows.Count(), a_resources->materialRows.capacity, a_resources->pipelineRows.capacity));
-		// Likewise the scene tables and the inputs (ReserveSceneTables, before the build's inputs were taken).
-		CheckSceneCapacity(*a_resources->scene, 0, a_payload.geometryDraws.Count(), 0, a_payload.resident.Count() + a_payload.inputList.size(), a_resources->objectCapacity,
-			"the main pass");
+		// Rows past the rows' tables wait for their growth (EmitMainRows; the build drew none of them).
+		// The inputs: one an object at most, and none for an object past the buffers (ObjectFits).
+		CheckSceneCapacity(*a_resources->scene, 0, 0, 0, a_payload.resident.Count() + a_payload.inputList.size(), a_resources->objectCapacity, "the main pass");
 		// A batch staged against these resources and these rows' backings (one grown since holds nothing it staged against).
 		const bool staged = a_payload.staged && a_payload.stagedFor == a_resources.get() && a_payload.stagedRowsGeneration == RowsGeneration(*a_resources) &&
 		                    a_payload.stagedSceneGeneration == a_resources->scene->generation;
 		if (staged)
 			SubmitWorkerBatch(std::move(a_payload.staged));
-		UploadFaceStreams(a_payload.faceStreams, a_resources->scene->facePositions, a_resources->scene->faceUploaded, uploads);
+		UploadFaceStreams(a_payload.faceStreams, a_resources->scene->facePositions, a_resources->scene->faceUploaded, uploads, a_resources->scene->faceVertices);
 		ZeroFrameAheadOutputs(*a_resources->scene, uploads);
 		UploadTrees(a_store.GetTables(), a_store.GetFrame(), *a_resources->scene, uploads, depthOnly);
 		// Tree LOD (dclf-lod.md, "Tree LOD: the draws"): the mirror's changes, the draw row and the list's arguments, for the depth
@@ -601,15 +607,20 @@ namespace DCLF
 		}
 		if (!staged)
 			UploadMainPayload(a_payload, *a_resources, uploads);
-		// Either path uploaded the rows the tables did not hold.
-		a_resources->materialRowsHeld = a_payload.materialRows.Version();
-		a_resources->pipelineRowsHeld = a_payload.pipelineRows.Version();
+		// Either path uploaded the rows the tables did not hold: all of them when they fit, else the ones that fit, sent again until
+		// the growth is adopted (it then holds the version it was filled with).
+		if (a_payload.materialRows.Count() <= a_resources->materialRows.capacity)
+			a_resources->materialRowsHeld = a_payload.materialRows.Version();
+		if (a_payload.pipelineRows.Count() <= a_resources->pipelineRows.capacity)
+			a_resources->pipelineRowsHeld = a_payload.pipelineRows.Version();
+		committedMaterialRows = a_payload.materialRows;
+		committedPipelineRows = a_payload.pipelineRows;
 		// Either path uploaded the resident region when the buffer held another version of it, and the object records.
 		a_resources->residentUploaded[depthOnly && a_resources->inputsDepth ? 0 : 1] = a_payload.resident.Version();
 		auto& held = a_resources->scene->held;
 		const std::size_t objectBytes = streams.objectBytes;
-		const std::size_t geometryBytes = EmitGeometryDraws(a_payload.geometryDraws, held.geometries, [](const void*, std::size_t, std::size_t) {});
-		if (a_payload.geometryDraws.Version())
+		const std::size_t geometryBytes = EmitGeometryDraws(a_payload.geometryDraws, held.geometries, [](const void*, std::size_t, std::size_t) {}, a_resources->scene->geometryRows);
+		if (a_payload.geometryDraws.Version() && a_payload.geometryDraws.Count() <= a_resources->scene->geometryRows)
 			held.geometries = a_payload.geometryDraws.Version();
 		a_stats.residentInputs = static_cast<std::uint32_t>(a_payload.resident.Count());
 		if (!depthOnly) {
@@ -665,9 +676,13 @@ namespace DCLF
 		// segment submits a cull-only input for every candidate it is not allowed to draw.
 		const std::uint32_t inputCount = static_cast<std::uint32_t>(a_payload.inputList.size() + (a_payload.resident.Count()));
 		// The sequence buffer's ranges hold every draw the scene can produce (ReserveMainSequences, before the epoch): a count past
-		// them is a defect of that bound, never a draw to drop.
-		if (drawCount > a_resources->sequenceDraws)
-			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} draws past the sequence buffer's {} (the scene's draw bound missed them)", drawCount, a_resources->sequenceDraws));
+		// them is a defect of that bound, never a draw to drop - unless their growth is outstanding (Growths), when the draws past
+		// them wait for it (BuildDrawsCS drops a slot past its range).
+		if (drawCount > a_resources->sequenceDraws) {
+			if (drawCount > Growths::Get().LatestSizing<MainSizing>(*a_resources).sequenceDraws)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} draws past the sequence buffer's {} (the scene's draw bound missed them)", drawCount, a_resources->sequenceDraws));
+			a_stats.drawsWaiting += drawCount - a_resources->sequenceDraws;
+		}
 		for (std::uint32_t group = 0; group < kDecalGroups; ++group)
 			if (decalCount[group] > a_resources->sequenceDecals)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} decals past the sequence buffer's {} per group", decalCount[group], a_resources->sequenceDecals));
@@ -864,9 +879,11 @@ namespace DCLF
 		if (depthOnly && a_resources->pool) {
 			const auto& layout = latchLayout;
 			UpdateIndexPool(*a_resources->pool, a_store.GetTables(), a_store.GetTablesGeneration(), latchBlock, latchSlot, layout.PoolOffset(), uploads);
-			// The plan's slots, and none for a pipeline slot the tables have gained since it was made (none of its draws is the frame's).
+			// The plan's slots, and none for every other pipeline slot the tables have: gained since the plan was made, or past the
+			// bucket layout while its growth is outstanding (Growths). None of their draws is the frame's.
 			const auto planned = static_cast<std::uint32_t>(writePlan.map.size());
-			const auto slots = std::max(planned, static_cast<std::uint32_t>(a_resources->zBucketCapacity.size()));
+			const auto slots = std::max({ planned, static_cast<std::uint32_t>(a_resources->zBucketCapacity.size()),
+				static_cast<std::uint32_t>(a_store.GetTables().pipelines.size()) });
 			if (slots > layout.buckets)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} Z-prepass pipeline slots past the latch's {}", slots, layout.buckets));
 			const std::uint32_t buckets = writePlan.Buckets();
@@ -935,7 +952,8 @@ namespace DCLF
 	{
 		bool owned = false;
 		auto* buffers = impl->scene.get();
-		if (buffers && buffers->treeLodCull && ActiveToggles().lodTrees && SceneStore::Get().TreeLodMirror().Size()) {
+		// A frame without claims (SceneStore::WithdrawSet) is the engine's whole: its tree LOD too.
+		if (buffers && buffers->treeLodCull && ActiveToggles().lodTrees && SceneStore::Get().TreeLodMirror().Size() && !SceneStore::Get().SetWithdrawn()) {
 			auto* shader = Engine::Global<RE::BSShader*>(0x33dcd10);  // the BSDistantTreeShader
 			const auto* program = shader ? ShaderPrograms::Get().FindTreeLod(*shader) : nullptr;
 			const auto* texture = Engine::Global<RE::NiSourceTexture*>(0x33dcd18);  // its tree LOD atlas (UploadTreeLod)

@@ -34,6 +34,7 @@
 #	include "Features/DrawcallLimitFix/Common/Toggles.h"
 #	include <ORGModuleServices/Async/RevisionAssembly.h>
 #	include "Features/DrawcallLimitFix/Common/Switches.h"
+#	include "Features/DrawcallLimitFix/Common/SceneScheduler.h"
 #	include "Features/DrawcallLimitFix/Scene/VertexInput.h"
 #	include "Deferred.h"
 #	include "Features/LinearLighting.h"
@@ -58,6 +59,7 @@
 #	include <RenderPasses/Base/TypedRenderGraphPass.h>
 #	include <Resources/Buffers/Buffer.h>
 #	include <Resources/Buffers/VersionedBuffer.h>
+#	include <ORGModuleServices/VersionedBufferGrowth.h>
 #	include <Resources/ExternalTextureResource.h>
 #	include <Resources/PixelBuffer.h>
 #	include <rhi_helpers.h>
@@ -504,7 +506,22 @@ namespace DCLF
 			static std::uint64_t BytesFor(std::uint32_t a_events) { return (kFadeEventHeaderWords + std::uint64_t(a_events) * 4) * sizeof(std::uint32_t); }
 		};
 
-		struct SceneBuffers
+		/**
+		 * @brief The scene tables' capacities (Impl::ReserveSceneTables), changed with their buffers' growth as one (Growths::Change):
+		 * what the commits send within and the builds bound their objects by (SceneFit). boneRegion is the bone rows' layout - the
+		 * current palettes in [0, boneRegion), the previous ones after, then the extras - which the object records address: it moves
+		 * only with an adoption, so a pending growth never moves a drawn record's rows.
+		 */
+		struct SceneSizing
+		{
+			std::uint32_t objectCapacity = 0, geometryRows = 0, boneRows = 0, faceVertices = 0;
+			std::uint32_t boneRegion = 0;
+			std::uint32_t treeCapacity = 0, fadeRootCapacity = 0, fadeEventCapacity = 0;
+			std::uint32_t treeLodShapeCapacity = 0, treeLodMeshCapacity = 0;
+			bool operator==(const SceneSizing&) const = default;
+		};
+
+		struct SceneBuffers : SceneSizing
 		{
 			Versioned objects, bones, geometries, facePositions;
 			// The index pool every plain indexed draw binds (IndexPool): the shadow views' and the Z-prepass's, made by whichever
@@ -514,9 +531,8 @@ namespace DCLF
 			// are retired once the GPU is done with them), so every build takes them from here, after ReserveSceneTables.
 			std::uint32_t objectsIndex = 0, bonesIndex = 0;
 			std::uint64_t facePositionsAddress = 0;
-			// What each holds (GpuLayouts.h, kInitialObjects), grown by ReserveSceneTables; `generation` counts the growths, so a
-			// batch staged before one is not submitted after it.
-			std::uint32_t objectCapacity = 0, geometryRows = 0, boneRows = 0, faceVertices = 0;
+			// What each holds (SceneSizing: GpuLayouts.h, kInitialObjects), grown by ReserveSceneTables; `generation` counts the
+			// growths, so a batch staged before one is not submitted after it.
 			std::uint64_t generation = 0;
 			// The same count, for the invocation revisions of the passes that bind these buffers (read on the graph host's thread,
 			// which prepares invocations ahead of the commits).
@@ -539,7 +555,6 @@ namespace DCLF
 			bool treeWindZeroed = false;
 			/** @brief The wind buffer a frame's draws read: the one the frame before wrote (TreeWindCS writes by the frame's parity). */
 			std::uint32_t TreeWindReadIndex(std::uint32_t a_frame) const { return treeWindIndex[(a_frame + 1) & 1]; }
-			std::uint32_t treeCapacity = 0;
 			std::uint64_t treesHeld = ~0ull;
 			std::uint32_t treeCount = 0;
 			std::uint32_t treeFrame = 0;  // the scene frame of treeInputs
@@ -570,7 +585,6 @@ namespace DCLF
 			bool fadeStatesOutZeroed = false;
 			/** @brief The published states a frame's builds read: the frame before's (FadeStateCS writes by the frame's parity). */
 			std::uint32_t FadeStatesReadIndex(std::uint32_t a_frame) const { return fadeStatesOutIndex[(a_frame + 1) & 1]; }
-			std::uint32_t fadeRootCapacity = 0;
 			std::uint64_t fadeRootsHeld = ~0ull;
 			std::uint32_t fadeRootCount = 0;
 			std::uint32_t fadeFrameNumber = 0;  // the scene frame of fadeFrame
@@ -580,7 +594,6 @@ namespace DCLF
 			// The fade write-back: the event list (a count word, then FadeEvents; the count zeroed by every depth commit), the
 			// events it holds, each root's last reported generation and milestone (zeroed once per backing), and the host side.
 			Versioned fadeEvents, fadeReported;
-			std::uint32_t fadeEventCapacity = 0;
 			bool fadeReportedZeroed = false;
 			std::shared_ptr<FadeWriteBack> fadeWriteBack;
 			// Tree LOD (dclf-lod.md, "Tree LOD: the draws"; Scene/TreeLod.h): the shape rows, the instance records (75 a shape
@@ -591,7 +604,6 @@ namespace DCLF
 			Versioned treeLodShapes, treeLodInstances, treeLodMeshes, treeLodVisible;
 			std::shared_ptr<org::Buffer> treeLodDraw;
 			std::uint64_t treeLodInstancesAddress = 0, treeLodShapesAddress = 0, treeLodMeshesAddress = 0, treeLodDrawAddress = 0, treeLodVisibleAddress = 0;
-			std::uint32_t treeLodShapeCapacity = 0, treeLodMeshCapacity = 0;
 			std::shared_ptr<const ComputeProgram> treeLodCull;
 			// The pipelines the passes record with, published by the depth commit once built (read on the graph host's thread).
 			std::atomic<std::shared_ptr<const TreeLodPipelines>> treeLodPipelines;
@@ -787,7 +799,29 @@ namespace DCLF
 			}
 		}
 
-		struct Resources
+		/**
+		 * @brief What the main epochs' writers and shapes index the sequences and the Z-prepass's bucket counts by (Impl::
+		 * ReserveMainSequences): changed with those buffers' growth, as one (Growths::Change; a revision's shapes take the change it
+		 * names, RevisionSizing).
+		 */
+		struct MainSizing
+		{
+			// The Z-prepass's plain draws (MainOpaquePass, DCLF_PULLED): per pipeline slot, its bucket's range of each phase's sequences
+			// - every draw the slot's objects can produce, held while they fit and grown to a power of two past it, so the recorded
+			// calls change only then (zBucketsLayout) - and each phase's count words, a word a slot, zeroed by the depth commit.
+			std::vector<std::uint32_t> zBucketCapacity, zBucketFirst;
+			std::uint64_t zBucketsLayout = 0;
+			std::uint32_t zBucketCountWords = 0;
+			// The sequence buffer's ranges (GpuLayouts.h, SequenceSlots): draws per draw range (phase 1 and colour, phase 2) and per
+			// decal group, holding every draw the scene can produce.
+			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
+			// The objects the per-object buffers hold (inputs, inputsDepth, visibility, frustum): the scene's object capacity, grown
+			// with it (ReserveObjectBuffers).
+			std::uint32_t objectCapacity = 0;
+			bool operator==(const MainSizing&) const = default;
+		};
+
+		struct Resources : MainSizing
 		{
 			std::vector<FrameBuffer> frameBuffers;
 			// The main pass's rows (DrawPipelines.h, kMaterialRowBytes / kPipelineRowBytes), one table each for both segments,
@@ -799,21 +833,9 @@ namespace DCLF
 			std::shared_ptr<SceneBuffers> scene;
 			Versioned inputs, sequences;  // BuildDraws: in, out (and the scene's geometries)
 			std::shared_ptr<org::Buffer> count;
-			// The Z-prepass's plain draws (MainOpaquePass, DCLF_PULLED): per pipeline slot, its bucket's range of each phase's sequences
-			// - every draw the slot's objects can produce (ReserveMainSequences), held while they fit and grown to a power of two past
-			// it, so the recorded calls change only then (zBucketsLayout) - and each phase's count words, a word a slot, zeroed by the
-			// depth commit. The index pool is the scene's.
-			std::vector<std::uint32_t> zBucketCapacity, zBucketFirst;
-			std::uint64_t zBucketsLayout = 0;
+			// The Z-prepass's bucket counts (MainSizing) and the index pool (the scene's).
 			std::array<Versioned, 2> zBucketCounts;
-			std::uint32_t zBucketCountWords = 0;
 			std::shared_ptr<IndexPool> pool;
-			// The objects the per-object buffers hold (inputs, inputsDepth, visibility, frustum): the scene's
-			// object capacity, grown with it (ReserveObjectBuffers).
-			std::uint32_t objectCapacity = 0;
-			// The sequence buffer's ranges (GpuLayouts.h, SequenceSlots): draws per draw range (phase 1 and colour, phase 2) and per
-			// decal group. Grown before an epoch to hold every draw the scene can produce (Impl::ReserveMainSequences).
-			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
 			// The Z-prepass segment's draw inputs: each main segment keeps its resident region at the head of its own buffer
 			// (the colour segment's is `inputs`), and the version of the region the buffer holds, per segment (0 Z-prepass,
 			// 1 colour), written by the commit that uploads it.
@@ -949,7 +971,7 @@ namespace DCLF
 			std::vector<PassFrame::ZCall> calls;
 			std::uint32_t Buckets() const { return static_cast<std::uint32_t>(calls.size()); }
 		};
-		void PlanZBuckets(const Resources& a_resources, const Lookups& a_lookups, const SceneStore::Tables& a_tables, const IndirectState& a_indirect, ZBucketPlan& a_out);
+		void PlanZBuckets(const MainSizing& a_resources, const Lookups& a_lookups, const SceneStore::Tables& a_tables, const IndirectState& a_indirect, ZBucketPlan& a_out);
 
 		/** @brief The sizes of a main epoch's frame blocks (FrameBlocks), per stage and register: what its latched copies of them take. */
 		struct FrameBlockSizes
@@ -1001,7 +1023,8 @@ namespace DCLF
 		 * @brief The segment's resources' part of its shape's inputs: the ranges, the rows, the bounds, the latch, the cull mode. Not the
 		 * descriptor heaps: the device's, read only inside an epoch (org::runtime::GetActiveSRVDescriptorHeap).
 		 */
-		MainShapeInputs MainShapeInputsOf(const Resources& a_resources, bool a_depthOnly, const SceneStore::Tables& a_tables, std::uint32_t a_drawBound);
+		MainShapeInputs MainShapeInputsOf(const Resources& a_resources, bool a_depthOnly, const SceneStore::Tables& a_tables, std::uint32_t a_drawBound,
+			bool a_revision = false);
 		std::shared_ptr<PassFrame> MakeMainShape(const MainShapeInputs& a_in);
 
 		/** @brief The parts of a main shape the shape parity tells apart (MainShapeDifferences). */
@@ -1150,10 +1173,20 @@ namespace DCLF
 			std::array<std::shared_ptr<const PassFrame>, 2> main;  // kDepthShape, kColourShape
 			std::shared_ptr<const ShadowFrame> shadow, occlusion;
 			std::shared_ptr<const ReflectionFrame> reflection;
+			// The scene's sizing the revision names (Growths::RevisionSizing): what its passes size their dispatches and lists by, for
+			// the versions it binds - never the live one, which moves only when the revision's growths are adopted.
+			std::shared_ptr<const SceneSizing> scene;
 		};
 		inline const RevisionShapes* RevisionShapesOf(const org::PassPrepareContext& a_preparation)
 		{
 			return a_preparation.preparationData ? a_preparation.preparationData->Get<RevisionShapes>() : nullptr;
+		}
+		/** @brief The scene sizing a_preparation's buffers have: its revision's, else the current one (a commit's own preparation). */
+		inline const SceneSizing& SceneSizingOf(const org::PassPrepareContext& a_preparation, const SceneBuffers& a_scene)
+		{
+			if (const auto* shapes = RevisionShapesOf(a_preparation); shapes && shapes->scene)
+				return *shapes->scene;
+			return a_scene;
 		}
 		/** @brief The shape a_preparation prepares the segment's passes for: its revision's, else the published one. */
 		inline std::shared_ptr<const PassFrame> CurrentFrame(const org::PassPrepareContext& a_preparation, const Resources& a_resources, RenderGraphRuntime::Segment a_segment)
@@ -1393,7 +1426,21 @@ namespace DCLF
 		 * copies run in that commit's epoch before its draws (IndexPoolCS). A pool that cannot fit a range doubles, and its
 		 * ranges are laid out and copied again. Render thread.
 		 */
-		struct IndexPool
+		/**
+		 * @brief What the index pool's buffers hold (Growths::Change at the join, Impl::ReserveIndexPool; adopted with the revision
+		 * that names it): its indices, the geometry slots its first-index table holds, and the copies a commit may make. relayouts
+		 * moves for a new indices version at the same size (a fragmented pool laid out again).
+		 */
+		struct PoolSizing
+		{
+			std::uint32_t capacity = 0;        // in indices
+			std::uint32_t firstsCapacity = 0;  // geometry slots
+			std::uint32_t copiesCapacity = 0;
+			std::uint32_t relayouts = 0;
+			bool operator==(const PoolSizing&) const = default;
+		};
+
+		struct IndexPool : PoolSizing
 		{
 			static constexpr std::uint32_t kNoRange = ~0u;
 			// A geometry slot's range: its first index and count (even: 4-byte aligned), and the buffer it was copied from.
@@ -1403,11 +1450,21 @@ namespace DCLF
 				std::uint64_t address = 0, bytes = 0;
 			};
 			Versioned indices;  // 16-bit
-			std::uint32_t capacity = 0;            // in indices
 			Versioned firsts;   // per geometry slot: its range's first index, kNoRange without one
-			std::uint32_t firstsCapacity = 0;
 			Versioned copies;   // this commit's copies: source address (low, high), first index, words
-			std::uint32_t copiesCapacity = 0;
+			// A new indices version adopted: every range laid out again from its start and copied (UpdateIndexPool, next).
+			bool relayout = false;
+			// Revision mode: the slots whose range waits for the pool's growth (no room, past the first-index table, or past this
+			// commit's copies) - the unclaimed geometry the join asked room for, tried again by every update.
+			std::vector<std::uint32_t> waiting;
+			bool fragmented = false;  // a range found no room though the pool has twice what it holds: a relayout is asked for
+			// The join's bound (ReserveIndexPool): every geometry slot's indices as the tables have them, kept from the log.
+			struct Bound
+			{
+				LogCursor cursor;
+				std::vector<std::uint32_t> indices;
+				std::uint64_t total = 0;
+			} bound;
 			std::shared_ptr<const ComputeProgram> program;
 			rhi::CommandSignaturePtr dispatchSignature;
 			std::uint64_t layout = 0;  // bumped whenever a buffer gets a new backing
@@ -1420,11 +1477,27 @@ namespace DCLF
 			std::uint32_t checks = 0;                                   // the updates, for the parity check
 		};
 
-		struct ShadowResources
+		/** @brief What the shadow epochs' writers index by, changed with those buffers' growth (Growths::Change). */
+		struct ShadowSizing
+		{
+			std::uint32_t objectCapacity = 0;  // what visibility and the inputs hold, as Resources::objectCapacity
+			// Every view slot's sequences, in draws (of each caster class): every draw the scene can produce, grown with its bound
+			// (Impl::ReserveShadowSequences). One size for all slots: a slot added while a growth is outstanding is made at the size
+			// asked for (LatestSizing), so it holds what the sizing says once that is adopted, and more before.
+			std::uint32_t sequenceDraws = 0;
+			// Every view slot's bucket counts, a word a bucket (ShadowBucket): the latch's key slots, which bound a view's buckets,
+			// grown with them. A shape's buckets stay within them (TrimmedRow): a pipeline past them waits for the growth.
+			std::uint32_t bucketCountWords = 0;
+			// The view slots whose view blocks the view-blocks buffer holds: what the epochs draw into (a frame's views past them stay
+			// the engine's: IndirectDraws::ShadowViewCapacity). A slot's own buffers are made with the latch's slots, ahead of it.
+			std::uint32_t viewSlots = 0;
+			bool operator==(const ShadowSizing&) const = default;
+		};
+
+		struct ShadowResources : ShadowSizing
 		{
 			std::shared_ptr<org::Buffer> constants;
 			Versioned visibility;
-			std::uint32_t objectCapacity = 0;  // what visibility and the inputs hold, as Resources::objectCapacity
 			// The material rows every view's draws name (ShadowMaterialRow), grown with the kept state.
 			GrowableRows materialRows;
 			// The scene's tables, every epoch's (SceneBuffers).
@@ -1435,11 +1508,8 @@ namespace DCLF
 			// every draw the scene can produce (Impl::ReserveShadowSequences) - and its counters' readback view. Render thread.
 			std::vector<Versioned> sequences;
 			std::vector<std::shared_ptr<org::Buffer>> count;
-			std::vector<std::uint32_t> sequenceDraws;
-			// Per view slot, its buckets' counts (ShadowBucket), a word a bucket: as many as the latch layout's key slots, which
-			// bound a view's buckets (bucketCountWords, grown with them).
+			// Per view slot, its buckets' counts (ShadowBucket), a word a bucket (ShadowSizing::bucketCountWords).
 			std::vector<Versioned> bucketCounts;
-			std::uint32_t bucketCountWords = 0;
 			std::shared_ptr<IndexPool> pool;
 			std::vector<winrt::com_ptr<ID3D11Buffer>> countD3D11;
 			// The view slots' blocks (kShadowViewSlotBytes a row: b0, b12), written by each epoch's commit.
@@ -1633,6 +1703,18 @@ namespace DCLF
 			std::uint32_t vsMask = 0, psMask = 0;  // the slots supplied
 		};
 
+		/**
+		 * @brief What the scene's buffers hold now (SceneSizing, the per-object buffers' objects): an object past them - its record,
+		 * a geometry row it draws, its palettes or extras, its face positions - waits for their growth (Growths), drawing nothing and
+		 * culling nothing (ObjectFits).
+		 */
+		struct SceneFit
+		{
+			std::uint32_t objects = ~0u, geometryRows = ~0u, boneRegion = ~0u, boneRows = ~0u, faceVertices = ~0u;
+			std::uint32_t trees = ~0u, fadeRoots = ~0u;  // the tree wind entries and fade root rows a draw reads by its slot (none: unbounded)
+			bool operator==(const SceneFit&) const = default;
+		};
+
 		// What a build addresses in an epoch's buffers; a change means the resources were recreated under it.
 		struct ResourceAddresses
 		{
@@ -1643,6 +1725,9 @@ namespace DCLF
 			std::uint32_t objectsIndex = 0, bonesIndex = 0;
 			std::uint32_t treeWindIndex = 0;  // the wind buffer the frame's draws read (SceneBuffers::TreeWindReadIndex)
 			std::uint32_t recordCapacity = 0;  // the material rows' table's rows (a row past it waits for the table to grow)
+			std::uint32_t pipelineCapacity = 0;  // the main pipeline rows' likewise
+			std::uint32_t sequenceDecals = 0;    // the sequences' decal range per group (MainSizing): a decal past it waits for their growth
+			SceneFit fit;                        // what the scene's buffers hold (an object past them waits)
 			const void* identity = nullptr;
 
 			bool operator==(const ResourceAddresses&) const = default;
@@ -1661,6 +1746,7 @@ namespace DCLF
 			LogCursor cursor;
 			MarkedList changedObjects;
 			KeptArray<BindlessObject> records;
+			std::uint32_t boneRegion = ~0u;  // the bone layout its records address (SceneSizing::boneRegion): a new one rebuilds them all
 			std::atomic<std::uint32_t> busy{ 0 };
 			// Since the last report.
 			std::uint64_t updates = 0, rewritten = 0, resyncs = 0, collisions = 0;
@@ -1749,45 +1835,63 @@ namespace DCLF
 			ParityCounter parity;
 		};
 
-		/** @brief A build's view of the rows: the tables' arrays, with the store's changes (version 0: sent whole). */
+		/**
+		 * @brief A build's view of the rows: the tables' arrays laid out by the buffer's region (SceneSizing::boneRegion: `capacity`),
+		 * with the store's changes (version 0: sent whole).
+		 */
 		struct BonesOut
 		{
 			const float* bones = nullptr;
 			const float* previous = nullptr;
 			const float* extras = nullptr;
 			std::uint32_t capacity = 0, extraRows = 0;
+			std::uint32_t tableRows = 0;  // the palette rows the tables hold (a region past them holds nothing anything names)
 			ChangeJournal::Snapshot changes;
 			std::uint64_t Version() const { return changes.version; }
 			std::uint32_t Rows() const { return 2 * capacity + extraRows; }
+			/** @brief The rows of a_row's section the tables hold, from its first: the section's palettes, or the extras. */
+			std::uint64_t SectionHeld(std::uint64_t a_row) const { return a_row < 2ull * capacity ? tableRows : extraRows; }
 			const float* Row(std::uint64_t a_row) const
 			{
+				static constexpr float kZero[4]{};
 				if (a_row < capacity)
-					return bones + std::size_t(a_row) * 4;
+					return a_row < tableRows ? bones + std::size_t(a_row) * 4 : kZero;
 				if (a_row < 2ull * capacity)
-					return previous + std::size_t(a_row - capacity) * 4;
+					return a_row - capacity < tableRows ? previous + std::size_t(a_row - capacity) * 4 : kZero;
 				return extras + std::size_t(a_row - 2ull * capacity) * 4;
 			}
 			void Reset() { *this = {}; }
 		};
 
-		void UpdateBones(BonesStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation, BonesOut& a_out);
+		/** @brief a_region: the buffer's layout (SceneSizing::boneRegion); a palette past it waits for the region's growth. */
+		void UpdateBones(BonesStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation, std::uint32_t a_region,
+			BonesOut& a_out);
 
 		/**
-		 * @brief The uploads of a build's rows a buffer at a_held lacks (the changed runs, else all of them), clipped to the buffer.
-		 * A run is sent a section at a time: the current palettes, the previous ones and the extras are separate arrays.
+		 * @brief The uploads of a build's rows a buffer at a_held lacks (the changed runs, else all of them), clipped to the buffer
+		 * (a_bufferRows: what is past it waits for its growth). A run is sent a section at a time: the current palettes, the previous
+		 * ones and the extras are separate arrays.
 		 */
 		template <class Emit>
-		std::size_t EmitBones(const BonesOut& a_out, std::uint64_t a_held, BonesStore* a_parity, Emit&& a_emit)
+		std::size_t EmitBones(const BonesOut& a_out, std::uint64_t a_held, BonesStore* a_parity, Emit&& a_emit, std::uint32_t a_bufferRows = ~0u)
 		{
-			const std::uint32_t rows = a_out.Rows();
+			const std::uint32_t rows = std::min(a_out.Rows(), a_bufferRows);
 			if (!rows || !a_out.bones)
 				return 0;
 			const std::uint64_t capacity = a_out.capacity;
 			std::size_t sent = 0;
 			a_out.changes.ForEachRun(a_held, rows, [&](std::uint64_t a_first, std::uint64_t a_count) {
 				for (std::uint64_t at = a_first, end = a_first + a_count; at < end;) {
+					const std::uint64_t sectionStart = at < capacity ? 0 : at < 2 * capacity ? capacity : 2 * capacity;
 					const std::uint64_t sectionEnd = at < capacity ? capacity : at < 2 * capacity ? 2 * capacity : end;
-					const std::uint64_t count = std::min(end, sectionEnd) - at;
+					const std::uint64_t stop = std::min(end, sectionEnd);
+					// Rows of the region the tables do not hold: nothing names them, nothing to send.
+					const std::uint64_t held = sectionStart + a_out.SectionHeld(at);
+					if (at >= held) {
+						at = stop;
+						continue;
+					}
+					const std::uint64_t count = std::min(stop, held) - at;
 					a_emit(a_out.Row(at), std::size_t(count) * 16, std::size_t(at) * 16);
 					if (a_parity) {
 						if (a_parity->uploaded.size() < std::size_t(rows) * 4)
@@ -1863,7 +1967,7 @@ namespace DCLF
 		 * the buffer holds, as the inputs saw it), or built whole without one.
 		 */
 		void UpdateObjectRecords(ObjectRecordStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation,
-			std::uint32_t a_frame, ObjectRecordsOut& a_out);
+			std::uint32_t a_frame, std::uint32_t a_boneRegion, ObjectRecordsOut& a_out);
 
 		/**
 		 * @brief A main-pass row's bytes (DrawPipelines.h: kMaterialRowBytes, kPipelineRowBytes). Its header's addresses hold the
@@ -1922,10 +2026,11 @@ namespace DCLF
 
 		/**
 		 * @brief Rows a table at a_held lacks, each with its header's addresses made absolute (a_base plus the row's offset):
-		 * a_emit(data, bytes, offset). a_patch(row, rowAddress) fixes one row's header.
+		 * a_emit(data, bytes, offset). a_patch(row, rowAddress) fixes one row's header. Rows past a_capacity wait for the table's
+		 * growth (Growths): its version is filled with them, and the table then holds what it was filled with.
 		 */
 		template <class Row, class Patch, class Emit>
-		std::size_t EmitMainRows(const KeptView<Row>& a_rows, std::uint64_t a_held, std::uint64_t a_base, Patch&& a_patch, Emit&& a_emit)
+		std::size_t EmitMainRows(const KeptView<Row>& a_rows, std::uint64_t a_held, std::uint64_t a_base, std::uint64_t a_capacity, Patch&& a_patch, Emit&& a_emit)
 		{
 			if (!a_rows.elements)
 				return 0;
@@ -1933,6 +2038,9 @@ namespace DCLF
 			std::vector<Row> run;
 			std::size_t sent = 0;
 			a_rows.changes.ForEachRun(a_held, rows.size(), [&](std::uint64_t a_first, std::uint64_t a_count) {
+				if (a_first >= a_capacity)
+					return;
+				a_count = std::min(a_count, a_capacity - a_first);
 				run.assign(rows.begin() + static_cast<std::ptrdiff_t>(a_first), rows.begin() + static_cast<std::ptrdiff_t>(a_first + a_count));
 				for (std::size_t i = 0; i < run.size(); ++i)
 					a_patch(run[i], a_base + (a_first + i) * sizeof(Row));
@@ -1965,6 +2073,22 @@ namespace DCLF
 			auto& header = HeaderOf(a_row);
 			for (auto* address : { &header.vsTechnique, &header.psTechnique, &header.vsGeometry, &header.psGeometry, &header.vsPermutation, &header.psPermutation })
 				*address += a_address;
+		}
+		/** @brief Every row of a_rows, laid out for a table at a_address (a growth's fill: Growths, GrowableRows::Reserve). */
+		template <class Row>
+		std::vector<std::byte> CapturedMainRows(const KeptView<Row>& a_rows, std::uint64_t a_address)
+		{
+			std::vector<std::byte> bytes;
+			if (!a_rows.elements)
+				return bytes;
+			const auto& rows = *a_rows.elements;
+			bytes.resize(rows.size() * sizeof(Row));
+			for (std::size_t i = 0; i < rows.size(); ++i) {
+				Row row = rows[i];
+				PatchRowAddresses(row, a_address + i * sizeof(Row));
+				std::memcpy(bytes.data() + i * sizeof(Row), &row, sizeof(Row));
+			}
+			return bytes;
 		}
 		/** @brief An input's rows (BuildDrawsCS.hlsl, RowsOf): the pipeline slot in the high 12 bits, the material slot in the low 20. */
 		constexpr std::uint32_t kRowPipelineShift = 20;
@@ -2199,9 +2323,11 @@ namespace DCLF
 			std::vector<SceneStore::Tables::FaceStream> faceStreams;  // the tables', for the commit's uploads
 			std::uint32_t skippedTexture = 0, skippedPipeline = 0, deferredTextures = 0, deferredPipelines = 0;
 			// The worker's build stages its uploads itself (StageShadowPayload): everything but the views' blocks and counters,
-			// which the epoch's latched copies write. For the resources it was staged against.
+			// which the epoch's latched copies write. For the resources it was staged against, and the material rows' version
+			// (GrowableRows::generation) it wrote into.
 			std::shared_ptr<org::runtime::StagedUploadBatch> staged;
 			const void* stagedFor = nullptr;
+			std::uint64_t stagedRows = 0;
 			// Set members a mode could not draw (waiting on a pipeline or a texture): a defect, the engine having withheld them.
 			std::uint32_t setWaiting = 0;
 			std::string setWaitingFirst;  // the first, and why
@@ -2214,6 +2340,7 @@ namespace DCLF
 			{
 				staged.reset();
 				stagedFor = nullptr;
+				stagedRows = 0;
 				setWaiting = 0;
 				setWaitingFirst.clear();
 				sunExclusion.reset();
@@ -2278,6 +2405,10 @@ namespace DCLF
 			const ShadowPayload* payload = nullptr;
 			// What the capacities are sized for, with the payload's draws: the scene's (the revision's draws stay within them).
 			const ShadowBounds* bounds = nullptr;
+			// The sizing, the material rows and the view blocks the shape is for: a revision's (Growths::RevisionSizing,
+			// GrowableRows::RevisionAddress), else the resources' own.
+			const ShadowSizing* sizing = nullptr;
+			std::uint64_t materialRows = 0, viewBlocks = 0;
 			std::shared_ptr<const ShadowFrame> previous;  // the last published shape: its slots' capacities only grow
 			LatchedList latched;
 		};
@@ -2293,6 +2424,64 @@ namespace DCLF
 		 * geometry, or for a skin of several partitions each partition its mask names, following the slots'
 		 * nextPartition links from the first.
 		 */
+		template <class F>
+		void ForEachDrawnGeometry(const SceneStore::Tables& a_tables, std::uint32_t a_firstSlot, std::uint32_t a_partitions, F&& a_draw);
+
+		/**
+		 * @brief What a_scene's buffers hold now, with per-object buffers of a_objectBuffers objects (an epoch's inputs). Without the
+		 * tree wind or fade programs no draw reads their rows (the records keep their own wind; no fade root is tested).
+		 */
+		inline SceneFit SceneFitOf(const SceneBuffers& a_scene, std::uint32_t a_objectBuffers)
+		{
+			return { std::min(a_scene.objectCapacity, a_objectBuffers), a_scene.geometryRows, a_scene.boneRegion, a_scene.boneRows, a_scene.faceVertices,
+				a_scene.treeWind && a_scene.trees ? a_scene.treeCapacity : ~0u, a_scene.fadeState && a_scene.fadeRoots ? a_scene.fadeRootCapacity : ~0u };
+		}
+
+		/** @brief Whether every object of a_tables fits a_fit (ObjectFits for all of them, without a scan). */
+		inline bool TablesFit(const SceneStore::Tables& a_tables, const SceneFit& a_fit)
+		{
+			return a_tables.objects.size() <= a_fit.objects && a_tables.geometries.size() + a_tables.faceStreams.size() <= a_fit.geometryRows &&
+			       a_tables.BoneCapacity() <= a_fit.boneRegion && 2ull * a_fit.boneRegion + a_tables.extraRows.size() / 4 <= a_fit.boneRows &&
+			       a_tables.trees.size() <= a_fit.trees && a_tables.fadeRoots.size() <= a_fit.fadeRoots;
+		}
+
+		/**
+		 * @brief Whether object a_object is within what the scene's buffers hold (SceneFit): its record, every geometry row its draws
+		 * read (its partitions', a face's positions' row), its palettes, its extras and its face positions. One past them waits for
+		 * their growth: no input names it, so no draw or culling test reads past a buffer.
+		 */
+		inline bool ObjectFits(const SceneStore::Tables& a_tables, std::uint32_t a_object, const SceneFit& a_fit)
+		{
+			if (a_object >= a_fit.objects)
+				return false;
+			const auto& object = a_tables.objects[a_object];
+			if (object.geometryIndex >= a_fit.geometryRows)
+				return false;
+			bool rows = true;
+			if (a_object < a_tables.skinPartitions.size() && a_tables.skinPartitions[a_object])
+				ForEachDrawnGeometry(a_tables, object.geometryIndex, a_tables.skinPartitions[a_object], [&](std::uint32_t a_slot) { rows = rows && a_slot < a_fit.geometryRows; });
+			if (!rows)
+				return false;
+			if ((object.flags & kObjectSkinned) && a_object < a_tables.boneRows.size() && a_tables.boneRows[a_object] &&
+				std::uint64_t(a_tables.boneOffset[a_object]) + a_tables.boneRows[a_object] > a_fit.boneRegion)
+				return false;
+			if (a_object < a_tables.extraOffset.size() && a_tables.extraOffset[a_object] != kNoExtraRows &&
+				2ull * a_fit.boneRegion + a_tables.extraOffset[a_object] + kExtraRows > a_fit.boneRows)
+				return false;
+			if (a_object < a_tables.objectTree.size() && a_tables.objectTree[a_object] < kNodelessTree && a_tables.objectTree[a_object] >= a_fit.trees)
+				return false;
+			if (a_object < a_tables.objectFadeRoot.size() && a_tables.objectFadeRoot[a_object] != kNoFadeRoot && a_tables.objectFadeRoot[a_object] >= a_fit.fadeRoots)
+				return false;
+			if (a_object < a_tables.faceStream.size() && a_tables.faceStream[a_object] != kNoFaceStream) {
+				const std::uint32_t stream = a_tables.faceStream[a_object];
+				if (a_tables.geometries.size() + stream >= a_fit.geometryRows)
+					return false;
+				if (stream < a_tables.faceStreams.size() && std::uint64_t(a_tables.faceStreams[stream].region) + a_tables.faceStreams[stream].vertexCount > a_fit.faceVertices)
+					return false;
+			}
+			return true;
+		}
+
 		template <class F>
 		void ForEachDrawnGeometry(const SceneStore::Tables& a_tables, std::uint32_t a_firstSlot, std::uint32_t a_partitions, F&& a_draw)
 		{
@@ -2385,12 +2574,14 @@ namespace DCLF
 		 * The bytes sent.
 		 */
 		template <class Emit>
-		std::size_t EmitGeometryDraws(const GeometryDrawsOut& a_out, std::uint64_t a_held, Emit&& a_emit)
+		std::size_t EmitGeometryDraws(const GeometryDrawsOut& a_out, std::uint64_t a_held, Emit&& a_emit, std::size_t a_rows = ~std::size_t(0))
 		{
-			std::size_t bytes = a_out.slots.Emit(a_held, a_emit);
-			if (!a_out.faces.empty()) {
-				a_emit(a_out.faces.data(), a_out.faces.size() * sizeof(GeometryDraw), a_out.SlotCount() * sizeof(GeometryDraw));
-				bytes += a_out.faces.size() * sizeof(GeometryDraw);
+			// Clipped to the buffer's rows (a_rows): what is past them waits for its growth (Growths).
+			std::size_t bytes = a_out.slots.Emit(a_held, a_emit, a_rows);
+			if (!a_out.faces.empty() && a_out.SlotCount() < a_rows) {
+				const std::size_t faces = std::min(a_out.faces.size(), a_rows - a_out.SlotCount());
+				a_emit(a_out.faces.data(), faces * sizeof(GeometryDraw), a_out.SlotCount() * sizeof(GeometryDraw));
+				bytes += faces * sizeof(GeometryDraw);
 			}
 			return bytes;
 		}
@@ -2448,14 +2639,15 @@ namespace DCLF
 		}
 
 		// A commit's face uploads (render thread): a region at a time, and only when the head's snapshot is not the
-		// one the epoch's buffer holds. The snapshot stays the walk's until its next walk, which is after the commit.
+		// one the epoch's buffer holds. The snapshot stays the walk's until its next walk, which is after the commit. A region
+		// past the buffer (a_vertices) waits for its growth.
 		template <class Uploads>
 		std::uint32_t UploadFaceStreams(const std::vector<SceneStore::Tables::FaceStream>& a_streams, const Versioned& a_positions,
-			ankerl::unordered_dense::map<std::uint32_t, std::uint64_t>& a_uploaded, Uploads& a_uploads)
+			ankerl::unordered_dense::map<std::uint32_t, std::uint64_t>& a_uploaded, Uploads& a_uploads, std::uint32_t a_vertices = ~0u)
 		{
 			std::uint32_t count = 0;
 			for (const auto& stream : a_streams) {
-				if (stream.object == SceneStore::Tables::kNoFaceObject)
+				if (stream.object == SceneStore::Tables::kNoFaceObject || std::uint64_t(stream.region) + stream.vertexCount > a_vertices)
 					continue;
 				auto& uploaded = a_uploaded[stream.region];
 				if (uploaded == stream.generation)
@@ -2624,6 +2816,8 @@ namespace DCLF
 			// What every face shape's stream index is relative to (the geometry slots' count; FaceStreamGeometry) and whether the
 			// positions buffer exists: when either moves, every face entry is taken again. ~0: not yet read.
 			std::size_t faceBase = ~std::size_t(0);
+			SceneFit fit;  // what the scene's buffers held at its last build: their growth reads every slot again
+			std::array<std::uint32_t, kDecalGroups> decalCount{};  // the decal ranges it was built for (MainBuild::decalCount)
 			std::vector<std::uint32_t> touched;  // this build: the slots whose entry it wrote or removed, or whose log entry it read
 			// The whole scene (Step 5): every object the loop would draw as one input with its pair's record, not only the residents,
 			// and the depth segment's cull-only candidates, decals (the colour segment's, with their ordinals) and face shapes (with
@@ -2813,6 +3007,7 @@ namespace DCLF
 			static constexpr std::uint32_t kNoRecord = ~0u;
 			LogCursor cursor;
 			const void* identity = nullptr;
+			SceneFit fit;  // what the scene's buffers held at its last build: their growth reads every object again
 			std::uint64_t build = 0;  // counts the builds: what ShadowKept::Mode::membership stamps
 			KeptArray<ShadowMaterialRow> rows;
 			ankerl::unordered_dense::map<const RE::BSShaderMaterial*, std::uint32_t> slotOf;
@@ -3301,7 +3496,20 @@ namespace DCLF
 			}
 		};
 
-		struct ReflectionResources
+		/**
+		 * @brief What the reflection's buffers hold (Growths::Change, adopted with the revision that names it; RevisionSizing for a
+		 * revision's shape): each face's range of the sequences, the faces' bucket counts in words, and the scene's tree LOD shape
+		 * slots its tree lists hold (the scene's, adopted with or after it).
+		 */
+		struct ReflectionSizing
+		{
+			std::uint32_t sequenceDraws = 0;  // per face
+			std::uint32_t bucketCountWords = 0;
+			std::uint32_t treeShapeCapacity = 0;
+			bool operator==(const ReflectionSizing&) const = default;
+		};
+
+		struct ReflectionResources : ReflectionSizing
 		{
 			// The main pass's (its depth inputs, rows, visibility, frame constants) and, through it, the scene's.
 			std::shared_ptr<Resources> main;
@@ -3309,9 +3517,7 @@ namespace DCLF
 			ReflectionLatchLayout latchLayout;
 			Versioned sequences;
 			std::shared_ptr<org::Buffer> count;
-			std::uint32_t sequenceDraws = 0;  // per face
 			std::array<Versioned, kReflectionFaces> bucketCounts;
-			std::uint32_t bucketCountWords = 0;
 			// Zeros, never written: what the latched copies zero the draw count and the faces' bucket counts from.
 			std::shared_ptr<org::LatchBlock> zeros;
 			std::shared_ptr<org::Buffer> faceBlocks;  // kReflectionFaceBlockBytes per face
@@ -3325,7 +3531,10 @@ namespace DCLF
 			std::array<std::shared_ptr<org::Buffer>, kReflectionFaces> treeRows;
 			std::array<Versioned, kReflectionFaces> treeVisible;
 			std::array<std::uint64_t, kReflectionFaces> treeRowsAddress{}, treeVisibleAddress{};
-			std::uint32_t treeShapeCapacity = 0;
+			// The passes are to be declared again (new main resources, new tree lists, their growth adopted): by the reflection epoch's
+			// own reserve (ReserveReflection's a_epoch), never mid-frame at the join, where another epoch may hold a recording of the
+			// graph as it is.
+			bool rebuildPending = false;
 			std::shared_ptr<const ComputeProgram> buildDraws;
 			rhi::CommandSignaturePtr dispatchSignature;
 			std::atomic<std::shared_ptr<const ReflectionFrame>> frame;
@@ -3346,7 +3555,7 @@ namespace DCLF
 			std::vector<ReflectionFrame::Bucket> buckets;
 			std::uint32_t draws = 0;  // a face's, all buckets
 		};
-		void PlanReflectionBuckets(const Resources& a_main, std::span<const rhi::PipelineHandle> a_slotPipelines, ReflectionPlan& a_out);
+		void PlanReflectionBuckets(const MainSizing& a_main, std::span<const rhi::PipelineHandle> a_slotPipelines, ReflectionPlan& a_out);
 
 		/** @brief What the reflection epoch's shape is made from (MakeReflectionShape): its resources, reserved for a_plan, and the main's. */
 		struct ReflectionShapeInputs
@@ -3359,6 +3568,10 @@ namespace DCLF
 			rhi::PipelineHandle tree{};
 			rhi::CommandSignatureHandle treeSignature{};
 			std::uint32_t treeShapes = 0;
+			// The main rows' tables (the commit's: their current versions; a revision's: the versions it names, RevisionAddress).
+			std::uint64_t materialRows = 0, pipelineRows = 0;
+			// The reflection's sizing the shape is for: a revision's (Growths::RevisionSizing), else the resources' own.
+			const ReflectionSizing* sizing = nullptr;
 		};
 		std::shared_ptr<ReflectionFrame> MakeReflectionShape(const ReflectionResources& a_resources, const ReflectionShapeInputs& a_in);
 
@@ -3371,8 +3584,13 @@ namespace DCLF
 			std::vector<std::pair<const void*, std::shared_ptr<const org::BufferVersion>>> versions;  // by VersionedBuffer::Key
 			std::uint64_t changes = 0;  // VersionRegistry::changes when it was taken: the versions are current while that holds
 			std::shared_ptr<const org::BufferVersion> Find(const org::VersionedBuffer& a_buffer) const noexcept override;
-			/** @brief Render thread: the registry's buffers' current versions. */
+			/**
+			 * @brief Render thread: the registry's buffers' current versions, but a ready growth's where it has one (Growths::Ready):
+			 * such a set is not current until its selection adopts them, so it takes a value of its own (VersionRegistry::next).
+			 */
 			static std::shared_ptr<const VersionSet> Snapshot();
+			/** @brief Whether these are the registry's buffers' current versions, every one. */
+			bool Current() const;
 		};
 
 		/** @brief A scene revision's recording of one epoch prepares for this (host data): the revision's versions and its epoch's shape. */
@@ -3415,6 +3633,9 @@ namespace DCLF
 	struct IndirectDraws::Impl
 	{
 		std::shared_ptr<Resources> resources;
+		// The main rows the last main commit sent (its payload's kept views): what a deferred growth of their tables is filled with.
+		KeptView<MaterialRow> committedMaterialRows;
+		KeptView<PipelineRow> committedPipelineRows;
 		// What the resources were created for; a change rebuilds them (and the graph).
 		TargetFormats formats{};
 		std::uint32_t width = 0, height = 0;
@@ -3518,6 +3739,8 @@ namespace DCLF
 		/** @brief drawBound brought up to date with a_tables' change log (render thread, the reserves). */
 		void UpdateDrawBound(const SceneStore::Tables& a_tables);
 		void ReserveMainSequences(const SceneStore::Tables& a_tables);
+		/** @brief At the join: the index pool's room for every geometry the tables have (a growth, Growths::Change). */
+		void ReserveIndexPool(const SceneStore::Tables& a_tables, std::uint32_t a_generation);
 		void ReserveShadowSequences(const SceneStore::Tables& a_tables, std::uint32_t a_slots, std::uint32_t a_first = 0);
 		/** @brief Grows the shadow material rows' table to what the last build wanted (render thread, before the inputs are taken). */
 		void ReserveShadowRows();
@@ -3569,6 +3792,9 @@ namespace DCLF
 		// The frame's tree LOD decision (DecideTreeLod), which the depth commit draws on; and the commits that could not.
 		bool treeLodOwned = false;
 		std::uint32_t treeLodMissed = 0;
+		// Strict epochs: the frame's reflection faces are DCLF's (DecideCoverage): its claims stand and the faces' cube is imported into
+		// the graph as built. Decided at BeginSceneFrame, before the engine renders the faces.
+		bool reflectionCovered = true;
 		// The water reflection's faces (Reflection.cpp; dclf-lod.md, "Water reflections"): their targets as the last face had them,
 		// and the forward programs and pipelines of the LOD they draw (PrepareReflection); faces captured since the last report.
 		struct ReflectionState
@@ -3598,7 +3824,7 @@ namespace DCLF
 			bool setupFailed = false;
 			// Since the last report: faces captured, updates, epochs and faces drawn, and the updates not drawn by cause.
 			std::uint32_t facesCaptured = 0, updates = 0, epochs = 0, facesDrawn = 0;
-			std::array<std::uint32_t, 6> skipped{};  // not drawable, unused, no faces, stale inputs, no resources, the epoch failed
+			std::array<std::uint32_t, 6> skipped{};  // not drawable, not covered (DecideCoverage), no faces, stale inputs, no resources, the epoch failed
 			// The scene frame of the last ExecuteReflection, and the faces captured after it in the same frame (none: every update
 			// of a frame runs before BeforeShadowMaps).
 			std::uint32_t executedFrame = ~0u, lateFaces = 0;
@@ -3611,7 +3837,7 @@ namespace DCLF
 		 * @brief The reflection's resources grown before its epoch: the latch for a_slots pipeline slots and a_buckets buckets, the
 		 * sequences for a_draws a face, the faces' tree LOD lists for the scene's shape slots.
 		 */
-		void ReserveReflection(std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws);
+		void ReserveReflection(std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws, bool a_epoch = false);
 		/** @brief The engine's cube target imported (again when it changes). */
 		bool ImportReflectionCube(ID3D11Texture2D* a_texture);
 		/** @brief The scene tables, created once (render thread). False when they have no device address. */
@@ -3896,6 +4122,11 @@ namespace DCLF
 			static constexpr std::array<const char*, kEpochs> kNames = { "Z-prepass", "colour", "shadow", "occlusion", "reflection" };
 			org::async::RevisionAssembler assembler{ kSlots };
 			std::uint64_t versionChanges = ~0ull;  // VersionRegistry::changes the versions fragment was made at
+			std::uint64_t graphBuilds = ~0ull;     // and the host's graph build (PersistentGraphHost::BuildGeneration)
+			std::uint64_t growthStamp = ~0ull;     // and Growths::stamp (the ready growths it names)
+			// G2: a growth still pending at this join (Growths::Settle): no revision is sealed, so the commit's claims wait (SetApplicable).
+			bool growthPending = false;
+			std::uint64_t growthWaits = 0;  // joins that sealed nothing for it, since the last report
 			// Per sequence (a ring), the scene frame whose join made it: the selected revision's age.
 			std::array<std::pair<std::uint64_t, std::uint32_t>, 64> madeAt{};
 			std::uint64_t selected = 0;
@@ -3928,10 +4159,13 @@ namespace DCLF
 				kViewport,
 				kCapacity,
 				kLatch,
+				kNotAdmitted,
+				kWithdrawn,
 				kMisses
 			};
 			static constexpr std::array<const char*, kMisses> kMissNames = { "no revision", "no recording", "versions moved", "shape differs", "pipelines moved",
-				"viewport moved", "draws past its capacity", "values past its latch" };
+				"viewport moved", "draws past its capacity", "values past its latch", "not its ticket's",
+				"a frame without claims" };
 			std::uint64_t latchedMisses = 0;  // values a commit writing into a revision's shape staged: its latched copies lacked them
 			struct Coverage
 			{
@@ -3939,6 +4173,13 @@ namespace DCLF
 				std::array<std::uint64_t, kMisses> missed{};
 			};
 			std::array<Coverage, kEpochs> coverage{};
+			// Strict epochs: the frame's coverage (DecideCoverage, BeginSceneFrame): per epoch, whether the selected revision has its
+			// recordings, of the graph as built now; the main epochs' decide the frame's claims (uncovered: withdrawn). And the graph
+			// builds made at the frame's build point (BuildPoint), and the frames withdrawn, since the last report.
+			std::array<bool, kEpochs> covered{};
+			bool explicitBuilds = false;
+			std::uint64_t builds = 0, withdrawn = 0, ticketsReleased = 0;
+			std::array<std::uint64_t, kEpochs> uncovered{};
 			// Per epoch, the inputs (versions, shape) whose recording failed: not asked for again until they change.
 			std::array<std::pair<std::shared_ptr<const org::async::RevisionFragment>, std::shared_ptr<const org::async::RevisionFragment>>, kEpochs> failedFor;
 		} revisions;
@@ -3958,7 +4199,20 @@ namespace DCLF
 		 * frame) submits a recording with SubmitRevisionRecording; one that does not counts why (NoteRevisionMiss).
 		 */
 		bool ActiveRevision(std::uint32_t a_epoch, std::shared_ptr<const org::async::RevisionFragment>& a_shape, std::shared_ptr<const RevisionRecordings>& a_recordings);
+		/**
+		 * @brief Inside an epoch's commit: whether the ticket being submitted takes the revision's recording a_index
+		 * (PersistentGraphHost::CanUseEpochRecording) - false for one recorded for the graph before a rebuild. Asked before the
+		 * commit writes into the revision's shape (else kNotAdmitted, and its own).
+		 */
+		bool RecordingAdmitted(const RevisionRecordings& a_recordings, std::size_t a_index) const;
 		void NoteRevisionMiss(std::uint32_t a_epoch, std::uint32_t a_miss) { ++revisions.coverage[a_epoch].missed[a_miss]; }
+		/**
+		 * @brief Strict epochs: whether the frame's selected revision covers epoch a_epoch (DecideCoverage) and the graph it was recorded
+		 * on still runs (no rebuild requested since: explicit builds keep the graph as built until the next frame's build point). An
+		 * epoch that is not covered is the engine's, decided before the engine draws its work, and is not submitted. True without
+		 * revisions.
+		 */
+		bool EpochCovered(std::uint32_t a_epoch) const;
 		void SubmitRevisionRecording(std::uint32_t a_epoch, const RevisionRecordings& a_recordings, std::size_t a_index);
 		/**
 		 * @brief R3c: the selected revision's variant of a shadow or occlusion epoch's shape (a_epoch 2 or 3) that covers the frame, or

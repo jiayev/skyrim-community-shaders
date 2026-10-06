@@ -26,15 +26,39 @@ namespace DCLF
 	std::shared_ptr<const Draws::VersionSet> Draws::VersionSet::Snapshot()
 	{
 		auto set = std::make_shared<VersionSet>();
-		auto& buffers = VersionRegistry::Get().buffers;
+		auto& registry = VersionRegistry::Get();
+		auto& buffers = registry.buffers;
 		std::erase_if(buffers, [](const auto& a_buffer) { return a_buffer.expired(); });
 		set->versions.reserve(buffers.size());
-		set->changes = VersionRegistry::Get().changes;
+		set->changes = registry.changes;
+		const auto& growths = Growths::Get();
+		bool pending = false;
 		for (const auto& weak : buffers)
-			if (const auto buffer = weak.lock())
-				set->versions.emplace_back(buffer->Key(), buffer->Current());
+			if (const auto buffer = weak.lock()) {
+				auto version = growths.Ready(buffer);
+				pending = pending || version;
+				set->versions.emplace_back(buffer->Key(), version ? std::move(version) : buffer->Current());
+			}
+		if (pending)
+			set->changes = ++registry.next;
 		std::sort(set->versions.begin(), set->versions.end(), [](const auto& a, const auto& b) { return std::less<const void*>{}(a.first, b.first); });
 		return set;
+	}
+
+	bool Draws::VersionSet::Current() const
+	{
+		// A buffer made after the set (not in it) is one no recording of its revision names: it moves nothing the set binds.
+		for (const auto& weak : VersionRegistry::Get().buffers)
+			if (const auto buffer = weak.lock())
+				if (const auto version = Find(*buffer); version && version != buffer->Current())
+					return false;
+		return true;
+	}
+
+	bool Draws::Growths::Deferred()
+	{
+		auto* host = RenderGraphRuntime::Get().Host();
+		return RevisionsEnabled() && host && host->AsyncEpochs() && host->Uploads();
 	}
 
 	namespace
@@ -77,11 +101,23 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.AssembleRevision");
 		using R = SceneRevisions;
 		auto& rv = revisions;
+		// A growth still pending (G2): the commit's claims may reach past the versions a revision made now could name, so none is
+		// made; the commit waits for the next join's (SetApplicable: a revision is owed for this frame).
+		if (rv.growthPending) {
+			rv.sealedFrame = a_frame;
+			++rv.growthWaits;
+			return;
+		}
 		auto draft = rv.assembler.Begin();
-		// The versions: again when a buffer was made or a growth adopted.
-		if (auto& registry = VersionRegistry::Get(); rv.versionChanges != registry.changes || !draft.Get(R::kVersionsSlot)) {
+		// The versions: again when a growth was adopted or became ready to name, or the graph was built again (with the buffers made
+		// since: a recording is of the build it was made on, so every epoch is recorded again for the new set).
+		const std::uint64_t builds = RenderGraphRuntime::Get().Host() ? RenderGraphRuntime::Get().Host()->BuildGeneration() : 0;
+		if (auto& registry = VersionRegistry::Get(); rv.versionChanges != registry.changes || rv.growthStamp != Growths::Get().stamp || rv.graphBuilds != builds ||
+			!draft.Get(R::kVersionsSlot)) {
 			draft.Set(R::kVersionsSlot, RevisionFragment::MakeReady(VersionSet::Snapshot()));
 			rv.versionChanges = registry.changes;
+			rv.growthStamp = Growths::Get().stamp;
+			rv.graphBuilds = builds;
 			++rv.versionSets;
 		}
 		const auto& versionsFragment = draft.Get(R::kVersionsSlot);
@@ -128,6 +164,8 @@ namespace DCLF
 		// one is dropped (the epoch has none in the revision) and not asked for again until its shape or the versions change.
 		auto* host = RenderGraphRuntime::Get().Host();
 		const bool recordable = host && host->AsyncEpochs();
+		// The scene's sizing its versions have (the growths it names): what its passes size by.
+		const auto sceneSizing = scene ? std::make_shared<const SceneSizing>(Growths::Get().RevisionSizing<SceneSizing>(*scene)) : nullptr;
 		for (std::uint32_t e = 0; e < R::kEpochs; ++e) {
 			const std::uint32_t slot = R::kRecordingSlot + e;
 			const auto& shapeFragment = draft.Get(R::kShapeSlot + e);
@@ -158,6 +196,7 @@ namespace DCLF
 				auto data = std::make_shared<EpochRevisionData>();
 				data->versions = versions;
 				a_fill(data->shapes);
+				data->shapes.scene = sceneSizing;
 				requests.push_back(std::move(data));
 			};
 			if (e < 2) {
@@ -223,6 +262,8 @@ namespace DCLF
 
 		try {
 			const auto sequence = rv.assembler.Seal(std::move(draft));
+			// The ready changes are this revision's (its versions and shapes were made from them): adopted with its selection.
+			Growths::Get().Sealed(sequence);
 			rv.madeAt[sequence % rv.madeAt.size()] = { sequence, a_frame };
 			rv.sealedFrame = a_frame;
 			++rv.sealed;
@@ -249,6 +290,10 @@ namespace DCLF
 			return;
 		++rv.selections;
 		rv.selected = active->Sequence();
+		// The growths it names become current (G2), before anything of the frame writes or builds: its versions are then the
+		// current ones (the registry takes the set's value).
+		if (const auto versions = active->Get<VersionSet>(Impl::SceneRevisions::kVersionsSlot); Growths::Get().AdoptSelected(rv.selected) && versions && versions->Current())
+			VersionRegistry::Get().changes = versions->changes;
 		rv.activeFrame = ~0u;
 		if (const auto& [sequence, frame] = rv.madeAt[rv.selected % rv.madeAt.size()]; sequence == rv.selected) {
 			rv.selectedAge += SceneStore::Get().GetFrame() - frame;
@@ -263,6 +308,11 @@ namespace DCLF
 		a_recordings = nullptr;
 		if (!RevisionsEnabled())
 			return false;
+		// A frame no revision covers draws nothing of DCLF's (SceneStore::WithdrawSet): its commits prepare an empty epoch.
+		if (SceneStore::Get().SetWithdrawn()) {
+			NoteRevisionMiss(a_epoch, R::kWithdrawn);
+			return false;
+		}
 		const auto& active = revisions.active;
 		if (!active || !RenderGraphRuntime::Get().Host()) {
 			NoteRevisionMiss(a_epoch, R::kNoRevision);
@@ -298,6 +348,79 @@ namespace DCLF
 		return applicable;
 	}
 
+	void IndirectDraws::BuildPoint()
+	{
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (!host)
+			return;
+		auto& rv = impl->revisions;
+		// Explicit while scene revisions draw: an extension added or removed during a frame waits for this point, so the graph a
+		// frame's revision was recorded on runs through that frame (a build invalidates every recording: the frame after one is the
+		// engine's, DecideCoverage). Without them (or failed), the graph builds at its next submission, as before.
+		const bool explicitBuilds = !failed && RevisionsEnabled();
+		if (rv.explicitBuilds != explicitBuilds) {
+			rv.explicitBuilds = explicitBuilds;
+			host->SetExplicitBuilds(explicitBuilds);
+		}
+		if (explicitBuilds && host->BuildIfRequested())
+			++rv.builds;
+		// A live epoch's recording waits for the slot its ready, unsubmitted ticket holds: an epoch the last frame did not submit (no
+		// water in view, a frame without claims) gives that ticket back while a revision waits for recordings, so none waits on it.
+		const std::uint32_t submitted = RenderGraphRuntime::Get().TakeSubmittedSegments();
+		if (explicitBuilds && rv.assembler.Pending())
+			for (std::uint32_t e = 0; e < Impl::SceneRevisions::kEpochs; ++e)
+				if (const auto segment = Impl::SceneRevisions::kSegments[e]; !(submitted & (1u << static_cast<std::uint32_t>(segment))))
+					rv.ticketsReleased += host->ReleaseEpochTicket(RenderGraphRuntime::EpochOf(segment)) ? 1 : 0;
+	}
+
+	bool IndirectDraws::DecideCoverage()
+	{
+		using R = Impl::SceneRevisions;
+		auto& rv = impl->revisions;
+		const auto& reflection = impl->reflection;
+		if (failed || !RevisionsEnabled()) {
+			rv.covered.fill(true);
+			impl->reflectionCovered = true;
+			PassCapture::Get().SetReflectionCovered(true);
+			return true;
+		}
+		// Each epoch's recordings in the selected revision, of the graph as built now (the build point just ran), and its versions the
+		// current ones.
+		rv.covered.fill(false);
+		auto* host = RenderGraphRuntime::Get().Host();
+		const auto& active = rv.active;
+		const auto& versionsFragment = active ? active->Fragment(R::kVersionsSlot) : nullptr;
+		const auto versions = versionsFragment ? versionsFragment->Value<VersionSet>() : nullptr;
+		if (host && versions && versions->changes == VersionRegistry::Get().changes)
+			for (std::uint32_t e = 0; e < R::kEpochs; ++e) {
+				const auto recordings = active->Get<RevisionRecordings>(R::kRecordingSlot + e);
+				bool current = recordings && !recordings->recordings.empty();
+				for (std::size_t i = 0; current && i < recordings->recordings.size(); ++i)
+					current = recordings->recordings[i] && host->EpochRecordingCurrent(*recordings->recordings[i]);
+				rv.covered[e] = current;
+			}
+		for (std::uint32_t e = 0; e < R::kEpochs; ++e)
+			rv.uncovered[e] += rv.covered[e] ? 0 : 1;
+		// The main epochs decide the frame's claims: without their recordings the frame is the engine's (SceneStore::WithdrawSet).
+		const bool main = rv.covered[kDepthShape] && rv.covered[kColourShape];
+		rv.withdrawn += main ? 0 : 1;
+		// The faces' withholding (PassCapture), before the engine renders them: the claims stand and the cube the epoch draws into is
+		// in the graph as built (its import, at the epoch, is built at the next build point).
+		impl->reflectionCovered = main && reflection.resources && reflection.resources->cube && !host->RebuildRequested();
+		PassCapture::Get().SetReflectionCovered(impl->reflectionCovered);
+		return main;
+	}
+
+	bool IndirectDraws::Impl::EpochCovered(std::uint32_t a_epoch) const
+	{
+		return !RevisionsEnabled() || (a_epoch < revisions.covered.size() && revisions.covered[a_epoch]);
+	}
+
+	bool IndirectDraws::RevisionClaims() const
+	{
+		return !failed && RevisionsEnabled();
+	}
+
 	void IndirectDraws::NoteSetApplied(std::uint32_t a_commitFrame)
 	{
 		impl->revisions.claimsFrame = a_commitFrame;
@@ -308,6 +431,20 @@ namespace DCLF
 		// The frame's claims (ApplySet) are the set a commit decided before its join made a revision (SetApplicable): a revision
 		// made then or later has every pipeline they draw with (the sets only append).
 		return revisions.activeFrame != ~0u && revisions.claimsFrame != ~0u && revisions.activeFrame >= revisions.claimsFrame;
+	}
+
+	bool IndirectDraws::Impl::RecordingAdmitted(const RevisionRecordings& a_recordings, std::size_t a_index) const
+	{
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (!host || a_index >= a_recordings.recordings.size() || !a_recordings.recordings[a_index])
+			return false;
+		std::string why;
+		if (host->CanUseEpochRecording(*a_recordings.recordings[a_index], &why))
+			return true;
+		static std::uint32_t logged = 0;
+		if (logged++ < 8)
+			logger::info("[DCLF] a revision's recording is not its epoch's ticket's: {}", why);
+		return false;
 	}
 
 	void IndirectDraws::Impl::SubmitRevisionRecording(std::uint32_t a_epoch, const RevisionRecordings& a_recordings, std::size_t a_index)
@@ -326,6 +463,10 @@ namespace DCLF
 		auto& coverage = revisions.coverage[a_epoch];
 		const auto& active = revisions.active;
 		auto* host = RenderGraphRuntime::Get().Host();
+		if (SceneStore::Get().SetWithdrawn()) {
+			++coverage.missed[R::kWithdrawn];
+			return;
+		}
 		if (!active || !host) {
 			++coverage.missed[R::kNoRevision];
 			return;
@@ -376,14 +517,25 @@ namespace DCLF
 				c = {};
 			}
 		const auto& assembled = rv.assembler.GetStats();
+		const auto growths = Growths::Get().Report();
 		std::string text = fmt::format("[DCLF] scene revisions (R3c): {} sealed ({} version sets), {} published, {} selected (made {:.2f} frames before on average), {} pending; "
 									   "assembler {} failed, {} superseded, {} abandoned; {}{}\n",
 			rv.sealed, rv.versionSets, rv.published, rv.selections, rv.selections ? double(rv.selectedAge) / rv.selections : 0.0, rv.assembler.Pending(), assembled.failed,
 			assembled.superseded, assembled.abandoned, epochs, rv.sealFailures ? fmt::format(" <- {} NOT SEALED", rv.sealFailures) : std::string());
 		rv.sealed = rv.versionSets = rv.published = rv.selections = rv.selectedAge = 0;
+		if (!growths.empty() || rv.growthWaits)
+			text += fmt::format("{}[DCLF] {} joins sealed no revision for a pending growth\n", growths, std::exchange(rv.growthWaits, 0));
 		if (!covered.empty())
 			text += fmt::format("[DCLF] epochs submitted (R3c): {}; {} values staged that a revision's latched copies lacked; {} frames kept the last claims for want of the commit's revision\n", covered,
 				std::exchange(rv.latchedMisses, 0), std::exchange(rv.setsHeld, 0));
+		if (RevisionsEnabled()) {
+			std::string uncovered;
+			for (std::uint32_t e = 0; e < SceneRevisions::kEpochs; ++e)
+				uncovered += fmt::format("{}{} {}", e ? ", " : "", SceneRevisions::kNames[e], std::exchange(rv.uncovered[e], 0));
+			text += fmt::format("[DCLF] strict epochs: {} frames without the selected revision's main recordings (claims withdrawn: the engine's), {} graph builds at the "
+								"build point, {} tickets of epochs not submitted given back for recordings; frames whose revision lacked an epoch's current recordings: {}\n",
+				std::exchange(rv.withdrawn, 0), std::exchange(rv.builds, 0), std::exchange(rv.ticketsReleased, 0), uncovered);
+		}
 		return text;
 	}
 }

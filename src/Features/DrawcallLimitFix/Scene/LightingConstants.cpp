@@ -232,7 +232,8 @@ namespace DCLF
 		StoreRelative(a_out, a_world, a_eye);
 	}
 
-	void BuildObjectRecord(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, std::uint32_t a_renderFlags, BindlessObject& a_out)
+	void BuildObjectRecord(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, std::uint32_t a_renderFlags, BindlessObject& a_out,
+		std::uint32_t a_boneRegion)
 	{
 		const auto& object = a_tables.objects[a_objectIndex];
 
@@ -272,10 +273,11 @@ namespace DCLF
 		const bool skinned = (object.flags & kObjectSkinned) && a_objectIndex < a_tables.boneOffset.size();
 		a_out.boneOffset = skinned ? a_tables.boneOffset[a_objectIndex] : 0u;
 		a_out.boneRows = skinned ? a_tables.boneRows[a_objectIndex] : 0u;
-		a_out.previousBoneOffset = skinned ? a_tables.boneOffset[a_objectIndex] + static_cast<std::uint32_t>(a_tables.bones.size() / 4) : 0u;
+		const std::uint32_t region = a_boneRegion != ~0u ? a_boneRegion : static_cast<std::uint32_t>(a_tables.bones.size() / 4);
+		a_out.previousBoneOffset = skinned ? a_tables.boneOffset[a_objectIndex] + region : 0u;
 		// The extras rows follow every palette (current then previous) in the row buffer.
 		const bool extras = a_objectIndex < a_tables.extraOffset.size() && a_tables.extraOffset[a_objectIndex] != kNoExtraRows;
-		a_out.extraOffset = extras ? static_cast<std::uint32_t>(a_tables.bones.size() / 4) * 2 + a_tables.extraOffset[a_objectIndex] : 0u;
+		a_out.extraOffset = extras ? region * 2 + a_tables.extraOffset[a_objectIndex] : 0u;
 		const auto wetness = a_objectIndex < a_tables.skinWetness.size() ? a_tables.skinWetness[a_objectIndex] : std::array<float, 4>{};
 		std::memcpy(a_out.skinPerGeometry, wetness.data(), sizeof(a_out.skinPerGeometry));
 		// The LOD fades the pass draws with (MakeShading's rule: MaterialData.x for the Envmap technique, .y and SSRParams.w

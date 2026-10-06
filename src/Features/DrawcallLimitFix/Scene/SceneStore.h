@@ -130,14 +130,21 @@ namespace DCLF
 		kChangeGeometry = 1u << 8,    // geometry slot, the draw's geometry half, face stream, the object's geometry
 		kChangeMembership = 1u << 9,  // residency
 		kChangePalette = 1u << 10,    // the bone palette's rows (current or previous), not where they are
+		// What a scene revision's shapes are made from (R3b, structural stamps), beside the cause it is also noted with: the
+		// pipelines (the record's and the draw's: buckets and their capacities), the geometry half and partitions (the draws), the
+		// shadow and occlusion techniques and rejection (the shadow keys).
+		kChangeStructure = 1u << 11,
 	};
-	inline constexpr std::uint32_t kChangeCauseCount = 11;
+	inline constexpr std::uint32_t kChangeCauseCount = 12;
 	// What a shadow input carries (IndirectDraws' shadow build): its caster state, bindings, geometry and partitions, residency.
 	// Not placements: a caster's bound and sun entry are its object record's.
 	inline constexpr std::uint32_t kShadowChangeCauses = kChangeShadow | kChangeBindings | kChangeGeometry | kChangeSkin | kChangeMembership;
 	inline constexpr std::array<const char*, kChangeCauseCount> kChangeCauseNames{ "placement", "bindings", "shading", "lights", "tree", "skin", "extras", "shadow",
-		"geometry", "membership", "palette" };
+		"geometry", "membership", "palette", "structure" };
 	inline constexpr std::uint32_t kChangeAll = (1u << kChangeCauseCount) - 1;
+	// What revokes a claim made before it (R3b, structural stamps): kChangeStructure. Residency is not (the accumulate phase makes
+	// every joiner resident), nor flags, materials or the fade distance (values the revision's shapes do not size by).
+	inline constexpr std::uint32_t kStructureCauses = kChangeStructure;
 
 	/** @brief The scene phase's flags the accumulate phase's patch keeps; the rest of an object's flags are the patch's. */
 	inline constexpr std::uint32_t kSceneKeptFlags = kObjectSkinned | kObjectNoShadow | kObjectVolumetricOnly | kObjectShadowOnly;
@@ -1104,6 +1111,15 @@ namespace DCLF
 		 * and the commits in between merge into one application (setApply, by slot, its geometry the latest commit's).
 		 */
 		void ApplySet();
+		/**
+		 * @brief Render thread, BeginSceneFrame, in place of ApplySet: a frame no scene revision covers (none selected yet, or its
+		 * recordings are of the graph before a build: IndirectDraws::DecideCoverage) has no claims - every one taken back, as if
+		 * every member left (the records, the engine's claims, PrimaryCull's admission, the sun exclusion), so the engine draws
+		 * everything and DCLF's epochs draw nothing. The commits go on deciding; the next ApplySet applies the whole set again.
+		 */
+		void WithdrawSet();
+		/** @brief Whether the frame's claims were withdrawn (WithdrawSet) and not applied since. */
+		bool SetWithdrawn() const { return setWithdrawn; }
 		/** @brief The frame of the last commit (CommitSet): what an ApplySet would apply. */
 		std::uint32_t SetCommitFrame() const { return setCommitFrame; }
 
@@ -1130,6 +1146,8 @@ namespace DCLF
 		std::uint32_t GetPublishedSunGeneration() const { return publishedSunGeneration; }
 		/** @brief Claims revoked mid-frame since the last call (RevokeUndrawnClaims): geometries, and the phases taken back. */
 		std::pair<std::uint64_t, std::uint64_t> TakeRevokedClaims() { return { std::exchange(revokedGeometries, 0), std::exchange(revokedMain, 0) }; }
+		/** @brief Of them, those taken back for a structural change after the selected revision's join (since the last call). */
+		std::uint64_t TakeStructureRevocations() { return std::exchange(revokedStructureGeometries, 0); }
 		/** @brief The set's phases of an object slot (SetPhase bits), 0 when it is not a member. Render thread, or any thread between commits. */
 		std::uint8_t SetPhasesOf(std::int32_t a_object) const
 		{
@@ -2282,6 +2300,10 @@ namespace DCLF
 		// with the geometry each held when the commit decided (a slot that holds another one at ApplySet takes nothing).
 		std::vector<std::uint8_t> setPhasesNext, setLackingNext;
 		std::vector<std::pair<std::uint32_t, const RE::BSGeometry*>> setApply;
+		// Parallel to objects: the geometry the last commit that decided a slot decided for (what a whole application after a
+		// withdrawal applies its setPhasesNext to); and whether the claims are withdrawn (WithdrawSet) until the next ApplySet.
+		std::vector<const RE::BSGeometry*> setGeometryNext;
+		bool setWithdrawn = false;
 		std::vector<std::uint32_t> setApplyMark;  // parallel to objects: its index in setApply plus one, 0 when not in it
 		std::uint32_t setCommitFrame = 0;
 		// The claims as applied (the frame's), kept apart from Tables::setPhases, which a freed slot clears: what RevokeUndrawnClaims
@@ -2290,6 +2312,13 @@ namespace DCLF
 		std::vector<const RE::BSGeometry*> setGeometryApplied;
 		LogCursor revokeCursor;
 		std::uint64_t revokedGeometries = 0, revokedMain = 0;
+		// R3b, structural stamps: the slots whose structure (kStructureCauses) changed since the selected revision's join, read
+		// off revokeCursor before ApplySet's own notes and at the join; a claim among them is taken back at the join (its shapes
+		// were made without the change), and is the engine's until a revision made after it is selected (the next ApplySet).
+		std::vector<std::uint32_t> structureChanged;
+		std::uint64_t revokedStructureGeometries = 0;
+		/** @brief The structural changes revokeCursor has not read, into structureChanged (its position advanced). */
+		void NoteStructureChanges();
 		/**
 		 * @brief After the frame's scene work: a claimed phase whose record the work stopped drawing (a slot freed, a main member
 		 * whose binding went) is taken back from the snapshot the engine's hooks read, so the engine draws it this frame. By the

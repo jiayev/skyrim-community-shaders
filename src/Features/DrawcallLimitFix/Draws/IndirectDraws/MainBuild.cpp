@@ -328,9 +328,19 @@ namespace DCLF::Draws
 		Mark(6);
 		if (!depthOnly) {
 			for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
-				decalCount[group] = tables.decalCount[group];  // the sequence buffer's decal ranges hold them all (ReserveMainSequences)
-				decalTemplates[group].resize(decalCount[group]);
+				// The sequence buffer's decal ranges hold them all (ReserveMainSequences), but while their growth is outstanding
+				// (Growths): the decals past them wait for it.
+				decalCount[group] = std::min(tables.decalCount[group], in.addresses.sequenceDecals);
 			}
+			// A decal past the scene's buffers (ObjectFits) has no input, so its group's range ends before it: every slot of the
+			// range is written each frame (its draw executes all of them).
+			if (!TablesFit(tables, in.addresses.fit))
+				for (std::uint32_t o = 0; o < tables.objects.size() && o < tables.decalOrdinal.size(); ++o)
+					if (const std::uint32_t group = ObjectDecalGroup(tables.objects[o].flags); group && !(tables.objects[o].flags & kObjectFree) &&
+																							tables.decalOrdinal[o] < decalCount[group - 1] && !ObjectFits(tables, o, in.addresses.fit))
+						decalCount[group - 1] = tables.decalOrdinal[o];
+			for (std::uint32_t group = 0; group < kDecalGroups; ++group)
+				decalTemplates[group].resize(decalCount[group]);
 		}
 	}
 
@@ -381,6 +391,9 @@ namespace DCLF::Draws
 		if (m > kRowMaterialMask || p >= (1u << (32 - kRowPipelineShift)))
 			stl::report_and_fail(fmt::format("Drawcall Limit Fix: material slot {} or pipeline slot {} past an input's row fields", m, p));
 		auto fail = [&](Skip a_reason) { resolved.skipReason = static_cast<std::uint32_t>(a_reason); };
+		// A row past its table waits for the table's growth (Growths): the version it is sent into is adopted with the revision that
+		// claims what draws with it. The row is still written below (it is kept), so the growth's fill holds it.
+		const bool rowsFit = m < in.addresses.recordCapacity && p < in.addresses.pipelineCapacity;
 		Mark(0);
 		WriteMaterialRow(m, p, blocks);
 		const auto& material = rows.materials[m];
@@ -450,6 +463,8 @@ namespace DCLF::Draws
 		}
 		if (!constantsOk)
 			return fail(Skip::Constants);
+		if (!rowsFit)
+			return fail(Skip::Capacity);
 		resolved.recordIndex = RowsOf(p, m);
 	}
 
@@ -565,7 +580,7 @@ namespace DCLF::Draws
 		PatchObjectGeometry(tables, o, renderFlags, eye, previousEye, geometryTemplate.offsets, parityVS, parityPS);
 		IndirectDraws::Stats parityStats{};
 		BindlessObject record;
-		BuildObjectRecord(tables, o, SceneStore::kMainPassRenderFlags, record);
+		BuildObjectRecord(tables, o, SceneStore::kMainPassRenderFlags, record, in.addresses.fit.boneRegion);
 		CheckBindlessRecord(tables, o, record, eye, previousEye, geometryTemplate.offsets, parityVS, parityPS, parityStats);
 		out.bindlessParityChecks += parityStats.bindlessParityChecks;
 		out.bindlessParityMismatches += parityStats.bindlessParityMismatches;
@@ -615,6 +630,8 @@ namespace DCLF::Draws
 		const auto& object = tables.objects[o];
 		if (object.flags & (kObjectFree | kObjectShadowOnly))
 			return false;
+		if (!ObjectFits(tables, o, in.addresses.fit))
+			return false;
 		if (object.flags & kObjectNoBindings)
 			return wholeScene && depthOnly && object.geometryIndex < tables.geometries.size();
 		if (object.pipelineIndex >= pipelineBlocks.size() || object.pipelineIndex >= tables.pipelines.size() || object.geometryIndex >= tables.geometries.size())
@@ -625,7 +642,7 @@ namespace DCLF::Draws
 		// A decal: the colour segment's alone, with its ordinal in its group's range (OrderDecals, which logs a change for every
 		// decal it moves). One of several partitions is an entry too, never drawable (RegionEntry).
 		if (const std::uint32_t group = ObjectDecalGroup(object.flags))
-			if (depthOnly || o >= tables.decalOrdinal.size() || tables.decalOrdinal[o] >= tables.decalCount[group - 1])
+			if (depthOnly || o >= tables.decalOrdinal.size() || tables.decalOrdinal[o] >= decalCount[group - 1])
 				return false;
 		// A face shape, or a pipeline reading its position from the second stream: only with its positions' stream.
 		const bool needsStream = IsFaceObject(tables, o) || (tables.pipelines[object.pipelineIndex].vertexLayout & kPositionInSecondStream);
@@ -785,10 +802,13 @@ namespace DCLF::Draws
 		// What the buffer holds is the version it was sent: what changes from here on is sent alone.
 		r.inputs.BeginBuild(in.residentUploaded);
 		const bool resync = !r.cursor.Continues(tables.changeLog, in.tablesGeneration) || r.depth != depthOnly || r.indexOf.size() > tables.objects.size() ||
-		                    r.wholeScene != wholeScene;
+		                    r.wholeScene != wholeScene || r.fit != in.addresses.fit || r.decalCount != decalCount;
 		if (resync) {
-			// Every slot read again: the first build, new tables, or a log this segment fell behind.
+			// Every slot read again: the first build, new tables, a log this segment fell behind, or the scene's buffers grown
+			// (what fits them moved: ObjectFits).
 			r.Reset();
+			r.fit = in.addresses.fit;
+			r.decalCount = decalCount;
 			r.cursor.Restart(in.tablesGeneration);
 			r.depth = depthOnly;
 			r.wholeScene = wholeScene;
@@ -824,6 +844,8 @@ namespace DCLF::Draws
 		auto mix = [&](std::uint64_t a_word) { value = (value ^ a_word) * 0x100000001b3ull; };
 		const auto& blocks = pipelineBlocks[p];
 		mix(lookups.sharedVersion);
+		// The rows' tables: a pair past them waits for their growth, and resolves again once it is adopted.
+		mix((std::uint64_t(in.addresses.recordCapacity) << 32) | in.addresses.pipelineCapacity);
 		mix(tables.TechniqueRowOf(p).bindingVersion);
 		mix((tables.pipelines[p].passDescriptor & 0x8000u) != 0 ? 1u : 0u);
 		mix(blocks.tables);
@@ -1137,6 +1159,12 @@ namespace DCLF::Draws
 		if (object.flags & kObjectShadowOnly) {
 			if (!region)
 				Skipped(Skip::CandidateOnly);
+			return;
+		}
+		// Past what the scene's buffers hold (their growth outstanding): no input names it, not even a culling one. A decal past
+		// them is past its group's range too (decalCount ends before it), so no slot of the range is left unwritten.
+		if (!ObjectFits(tables, o, in.addresses.fit)) {
+			Skipped(Skip::Capacity);
 			return;
 		}
 		if (object.flags & kObjectNoBindings) {

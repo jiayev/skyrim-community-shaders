@@ -207,7 +207,7 @@ namespace DCLF
 
 	bool PassCapture::WithholdReflection(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass)
 	{
-		if (!a_pass || !a_pass->geometry || ParityBoth() || !reflectionFace.load(std::memory_order_acquire))
+		if (!a_pass || !a_pass->geometry || ParityBoth() || !reflectionFace.load(std::memory_order_acquire) || !reflectionCovered.load(std::memory_order_acquire))
 			return false;
 		const auto renderers = std::atomic_load(&reflectionRenderers);
 		if (!renderers || !renderers->contains(a_batch))

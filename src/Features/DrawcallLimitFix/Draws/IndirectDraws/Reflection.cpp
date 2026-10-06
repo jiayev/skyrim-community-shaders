@@ -146,7 +146,7 @@ namespace DCLF
 		// The faces' tree LOD: DCLF's while the main view's is (DecideTreeLod, before this), the last depth commit uploaded the tables
 		// the faces draw from, and the faces are drawn.
 		const auto* scene = impl->scene.get();
-		reflection.treeOwned = ReflectionDrawable() && reflection.treeReady && impl->treeLodOwned && scene && scene->treeLodRow.shapeSlots &&
+		reflection.treeOwned = ReflectionDrawable() && impl->reflectionCovered && reflection.treeReady && impl->treeLodOwned && scene && scene->treeLodRow.shapeSlots &&
 		                       scene->treeLodPipelines.load(std::memory_order_acquire);
 		PassCapture::Get().SetReflectionTreeLodOwned(reflection.treeOwned);
 	}
@@ -193,15 +193,29 @@ namespace DCLF
 		const auto indirect = GetIndirectState();
 		if (!indirect.valid || !impl->SetupReflection() || !impl->ImportReflectionCube(reflection.cube.get()))
 			return skip(4);
+		// Not DCLF's this frame (no claims, or the cube was imported since the graph was built): the engine rendered the faces whole.
+		if (!impl->reflectionCovered)
+			return skip(1);
 
 		// The buckets (PlanReflectionBuckets), and the resources reserved for them.
 		ReflectionPlan plan;
 		PlanReflectionBuckets(*main, reflection.slotPipelines, plan);
-		const auto slots = static_cast<std::uint32_t>(plan.map.size());
+		// Every pipeline slot the tables have: the map's, and none for the rest (past the bucket layout while its growth is
+		// outstanding: Growths).
+		const auto slots = std::max(static_cast<std::uint32_t>(plan.map.size()), static_cast<std::uint32_t>(SceneStore::Get().GetTables().pipelines.size()));
 		const auto& map = plan.map;
 		const auto& buckets = plan.buckets;
-		impl->ReserveReflection(slots, static_cast<std::uint32_t>(buckets.size()), plan.draws);
+		impl->ReserveReflection(slots, static_cast<std::uint32_t>(buckets.size()), plan.draws, true);
 		auto resources = reflection.resources;
+		// Within the current versions: the plan comes from the main sizing, which is adopted with the reflection's growth for it
+		// (requested at the same join, named by the same revision). Past them is a defect of that order: reported, not drawn.
+		if (buckets.size() > resources->bucketCountWords || plan.draws > resources->sequenceDraws) {
+			static std::uint32_t reported = 0;
+			if (reported++ < 8)
+				logger::error("[DCLF] reflection: {} buckets and {} draws a face past its buffers' {} and {}", buckets.size(), plan.draws, resources->bucketCountWords,
+					resources->sequenceDraws);
+			return skip(4);
+		}
 		auto& scene = *impl->scene;
 		const auto treeLod = scene.treeLodPipelines.load(std::memory_order_acquire);
 		const bool trees = reflection.treePipeline.valid() && treeLod && scene.treeLodCull && resources->treeShapeCapacity == scene.treeLodShapeCapacity;
@@ -225,6 +239,8 @@ namespace DCLF
 			shapeIn.indirect = indirect;
 			shapeIn.buckets = buckets;
 			shapeIn.map = std::make_shared<const std::vector<std::uint32_t>>(map);
+			shapeIn.materialRows = resources->main->materialRows.address;
+			shapeIn.pipelineRows = resources->main->pipelineRows.address;
 			if (trees) {
 				shapeIn.tree = reflection.treePipeline;
 				shapeIn.treeSignature = treeLod->drawSignature;
@@ -252,6 +268,8 @@ namespace DCLF
 						miss = R::kViewport;
 					else if (!SameHandle(shape->tree, frame->tree) || shape->treeGroups != frame->treeGroups || slots > shape->latchLayout.slots)
 						miss = R::kShape;
+					else if (!impl->RecordingAdmitted(*revisionRecordings, 0))
+						miss = R::kNotAdmitted;
 					if (miss == R::kMisses)
 						revisionShape = std::move(shape);
 					else
@@ -338,8 +356,8 @@ namespace DCLF
 			reflection.facesCaptured, static_cast<int>(reflection.targets.colour), static_cast<int>(reflection.targets.depth), reflection.lodSlots, reflection.programsReady,
 			reflection.pipelinesReady, reflection.treeReady ? "ready" : "not ready", forward.requested, forward.ready, forward.failed, forward.failed ? " <- FAILED" : "");
 		text += fmt::format("[DCLF] reflection faces drawn: {} frames, {} epochs, {} faces drawn, {} captured after their frame's epoch{}; not drawn: {} not the set's, {} without faces, "
-							"{} stale inputs, {} without resources, {} failed{}; last frame's registrations: {} member passes and {} tree LOD passes withheld (faces' tree LOD {})\n",
-			reflection.updates, reflection.epochs, reflection.facesDrawn, reflection.lateFaces, reflection.lateFaces ? " <- LATE FACES" : "", s[0], s[2], s[3], s[4], s[5],
+							"{} the engine's (not covered), {} stale inputs, {} without resources, {} failed{}; last frame's registrations: {} member passes and {} tree LOD passes withheld (faces' tree LOD {})\n",
+			reflection.updates, reflection.epochs, reflection.facesDrawn, reflection.lateFaces, reflection.lateFaces ? " <- LATE FACES" : "", s[0], s[2], s[1], s[3], s[4], s[5],
 			s[5] ? " <- EPOCH FAILED" : "", capture.reflectionWithheld, capture.reflectionTreeLodWithheld, reflection.treeOwned ? "DCLF's" : "the engine's");
 		reflection.facesCaptured = reflection.updates = reflection.epochs = reflection.facesDrawn = reflection.lateFaces = 0;
 		reflection.skipped = {};
