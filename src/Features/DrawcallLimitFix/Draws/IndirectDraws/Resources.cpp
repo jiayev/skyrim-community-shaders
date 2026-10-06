@@ -54,12 +54,14 @@ namespace DCLF::Draws
 
 namespace DCLF::Draws
 {
-	std::optional<org::PersistentGraphHost::BackingMutation> MutateBackings()
+	void Adopt(Growth&& a_growth, const std::function<void()>& a_adopted)
 	{
-		std::optional<org::PersistentGraphHost::BackingMutation> scope;
+		for (const auto& [buffer, version] : a_growth.versions)
+			buffer->Adopt(version);
+		if (a_adopted)
+			a_adopted();
 		if (auto* host = RenderGraphRuntime::Get().Host())
-			scope.emplace(host->MutateBackings());
-		return scope;
+			host->NoteNewVersions();
 	}
 
 	bool GrowableRows::Create(std::uint32_t a_stride, std::uint32_t a_rows, const char* a_name)
@@ -70,13 +72,13 @@ namespace DCLF::Draws
 		stride = a_stride;
 		capacity = std::max(a_rows, 1u);
 		name = a_name;
-		buffer = DeviceBuffer(std::uint64_t(capacity) * stride, a_name);
-		address = AddressOf(host->GetDesc().device, *buffer);
+		buffer = MakeVersioned(DeviceBuffer(std::uint64_t(capacity) * stride, a_name));
+		address = AddressOf(host->GetDesc().device, *buffer->Get());
 		++generation;
 		return address != 0;
 	}
 
-	bool GrowableRows::Reserve(std::uint32_t a_rows)
+	bool GrowableRows::Reserve(std::uint32_t a_rows, const std::function<void()>& a_adopted)
 	{
 		if (!buffer || a_rows <= capacity)
 			return false;
@@ -87,18 +89,16 @@ namespace DCLF::Draws
 		std::uint32_t rows = capacity;
 		while (rows < a_rows)
 			rows *= 2;
-		// A new backing for the same graph resource: the old one is released through ORG's deletion queue, frames in flight
-		// after the GPU last used it.
-		{
-			const auto mutation = MutateBackings();
-			buffer->ResizeBytes(std::uint64_t(rows) * stride);
-		}
-		buffer->SetName(name.c_str());
-		address = AddressOf(host->GetDesc().device, *buffer);
+		// A new version: the old one stays as it was for whatever holds it, and is released through ORG's deletion queue after.
 		logger::info("[DCLF] {}: {} rows grown to {} ({} KB)", name, capacity, rows, std::uint64_t(rows) * stride / 1024);
 		capacity = rows;
-		++generation;
 		++growths;
+		Adopt(std::move(Growth{}.Bytes(buffer, std::uint64_t(rows) * stride)), [this, device = host->GetDesc().device, a_adopted] {
+			address = AddressOf(device, *buffer->Get());
+			++generation;
+			if (a_adopted)
+				a_adopted();
+		});
 		return true;
 	}
 
@@ -158,10 +158,10 @@ namespace DCLF::Draws
 		{
 			for (auto s = static_cast<std::uint32_t>(a_state.sequences.size()); s < a_slots; ++s) {
 				a_state.sequenceDraws.push_back(64u);
-				a_state.sequences.push_back(CreateWords(kShadowClasses * 64ull * sizeof(DrawSequence) / 4, true, fmt::format("cs.dclf.shadow.sequences{}", s).c_str()));
+				a_state.sequences.push_back(MakeVersioned(CreateWords(kShadowClasses * 64ull * sizeof(DrawSequence) / 4, true, fmt::format("cs.dclf.shadow.sequences{}", s).c_str())));
 				a_state.count.push_back(CreateWords(kCountWords, true, fmt::format("cs.dclf.shadow.draw-count{}", s).c_str()));
 				a_state.countD3D11.push_back(WrapWords(*a_state.count.back(), kCountWords * sizeof(std::uint32_t)));
-				a_state.bucketCounts.push_back(CreateWords(std::max(a_state.bucketCountWords, 64u), true, fmt::format("cs.dclf.shadow.bucket-counts{}", s).c_str()));
+				a_state.bucketCounts.push_back(MakeVersioned(CreateWords(std::max(a_state.bucketCountWords, 64u), true, fmt::format("cs.dclf.shadow.bucket-counts{}", s).c_str())));
 			}
 			a_state.bucketCountWords = std::max(a_state.bucketCountWords, 64u);
 		}
@@ -246,13 +246,13 @@ namespace DCLF
 		const bool smallTables = SwitchValue(Switch::TableStart) == "small";
 		state->sequenceDraws = smallTables ? 64u : kInitialSequenceDraws;
 		state->sequenceDecals = smallTables ? 16u : kInitialDecalDraws;
-		state->sequences = CreateWords(SequenceSlots(state->sequenceDraws, state->sequenceDecals) * sizeof(DrawSequence) / 4, true, "cs.dclf.sequences");
+		state->sequences = MakeVersioned(CreateWords(SequenceSlots(state->sequenceDraws, state->sequenceDecals) * sizeof(DrawSequence) / 4, true, "cs.dclf.sequences"));
 		state->count = CreateWords(kCountWords, true, "cs.dclf.draw-count");
 		// One word per object in the frame's tables: what the depth segment's culling decided, read by
 		// the colour segment so that it draws exactly the same set.
 		state->objectCapacity = scene->objectCapacity;
-		state->visibility = CreateWords(state->objectCapacity, true, "cs.dclf.visibility");
-		state->frustum = CreateWords(state->objectCapacity, true, "cs.dclf.frustum");
+		state->visibility = MakeVersioned(CreateWords(state->objectCapacity, true, "cs.dclf.visibility"));
+		state->frustum = MakeVersioned(CreateWords(state->objectCapacity, true, "cs.dclf.frustum"));
 		if (PassStats::Enabled()) {
 			auto passStats = std::make_shared<PassStats>();
 			const std::uint32_t slots = host->FrameSlots();
@@ -273,8 +273,8 @@ namespace DCLF
 			}
 		}
 		state->preprocessMain = PreprocessStates::Create(device, host->FrameSlots(), "the main segment");
-		state->inputs = CreateWords(std::uint64_t(state->objectCapacity) * sizeof(DrawInput) / 4, false, "cs.dclf.draw-inputs");
-		state->inputsDepth = CreateWords(std::uint64_t(state->objectCapacity) * sizeof(DrawInput) / 4, false, "cs.dclf.draw-inputs-depth");
+		state->inputs = MakeVersioned(CreateWords(std::uint64_t(state->objectCapacity) * sizeof(DrawInput) / 4, false, "cs.dclf.draw-inputs"));
+		state->inputsDepth = MakeVersioned(CreateWords(std::uint64_t(state->objectCapacity) * sizeof(DrawInput) / 4, false, "cs.dclf.draw-inputs-depth"));
 		state->buildDraws = ComputeProgram::Load(device, { .source = kBuildDrawsShader, .constantWords = kBuildDrawsConstantWords });
 		if (!state->buildDraws)
 			return NotReady(7, "the BuildDraws program could not be created");
@@ -290,13 +290,13 @@ namespace DCLF
 		// The Z-prepass's plain draws: their buckets' count words (grown with the pipeline slots, ReserveMainSequences) and the
 		// scene's index pool.
 		state->zBucketCountWords = 64;
-		state->zBucketCounts[0] = CreateWords(state->zBucketCountWords, true, "cs.dclf.z.bucket-counts");
-		state->zBucketCounts[1] = CreateWords(state->zBucketCountWords, true, "cs.dclf.z.bucket-counts2");
+		state->zBucketCounts[0] = MakeVersioned(CreateWords(state->zBucketCountWords, true, "cs.dclf.z.bucket-counts"));
+		state->zBucketCounts[1] = MakeVersioned(CreateWords(state->zBucketCountWords, true, "cs.dclf.z.bucket-counts2"));
 		state->pool = EnsureIndexPool(*scene, device, smallTables);
 		if (!state->pool)
 			return NotReady(7, "the index pool's copy program could not be created");
 		if (BuildParityEnabled())
-			state->sequencesD3D11 = WrapWords(*state->sequences, SequenceSlots(state->sequenceDraws, state->sequenceDecals) * sizeof(DrawSequence));
+			state->sequencesD3D11 = WrapWords(*state->sequences->Get(), SequenceSlots(state->sequenceDraws, state->sequenceDecals) * sizeof(DrawSequence));
 		if (!SwitchValue(Switch::GBufferProbe).empty()) {
 			state->probe = DeviceBuffer(std::uint64_t(kProbeSlots) * kProbeSlotBytes, "cs.dclf.gbuffer-probe");
 			state->probeD3D11 = WrapWords(*state->probe, std::uint64_t(kProbeSlots) * kProbeSlotBytes);
@@ -305,7 +305,7 @@ namespace DCLF
 		// counter that is always zero reads exactly like a clean result.
 		state->countD3D11 = WrapWords(*state->count, kCountWords * sizeof(std::uint32_t));
 		if (SetParityEnabled())
-			state->visibilityD3D11 = WrapWords(*state->visibility, std::uint64_t(state->objectCapacity) * sizeof(std::uint32_t));
+			state->visibilityD3D11 = WrapWords(*state->visibility->Get(), std::uint64_t(state->objectCapacity) * sizeof(std::uint32_t));
 		state->frameConstants = DeviceBuffer(kFrameConstantBytes, "cs.dclf.frame-constants");
 		state->frameConstantsAddress = AddressOf(device, *state->frameConstants);
 
@@ -543,9 +543,10 @@ namespace DCLF
 			const auto buckets = static_cast<std::uint32_t>(r.zBucketCapacity.size());
 			if (buckets > r.zBucketCountWords) {
 				r.zBucketCountWords = Doubled(std::max(r.zBucketCountWords, 64u), buckets);
-				const auto mutation = MutateBackings();
+				Growth growth;
 				for (auto& counts : r.zBucketCounts)
-					counts->ResizeStructured(r.zBucketCountWords);
+					growth.Structured(counts, r.zBucketCountWords);
+				Adopt(std::move(growth));
 			}
 			ReserveMainLatch(r, r.latchLayout.cascades, r.latchLayout.shadowVolumes, buckets);
 		}
@@ -556,24 +557,24 @@ namespace DCLF
 		CheckSequenceLimits("a decal group", decals, false);
 		// The rows: one per material and pipeline slot, with a quarter more so the tables grow ahead of the scene.
 		const auto materialSlots = static_cast<std::uint32_t>(a_tables.materials.size()), pipelineSlots = static_cast<std::uint32_t>(a_tables.pipelines.size());
-		if (r.materialRows.Reserve(materialSlots + materialSlots / 4))
-			r.materialRowsHeld = 0;  // a new backing holds nothing
-		if (r.pipelineRows.Reserve(pipelineSlots + pipelineSlots / 4))
-			r.pipelineRowsHeld = 0;
+		r.materialRows.Reserve(materialSlots + materialSlots / 4, [&r] { r.materialRowsHeld = 0; });  // a new version holds nothing
+		r.pipelineRows.Reserve(pipelineSlots + pipelineSlots / 4, [&r] { r.pipelineRowsHeld = 0; });
 		if (draws <= r.sequenceDraws && decals <= r.sequenceDecals)
 			return;
 		const std::uint32_t newDraws = Doubled(r.sequenceDraws, draws), newDecals = Doubled(r.sequenceDecals, decals);
 		const std::uint64_t slots = SequenceSlots(newDraws, newDecals);
 		// New backings for the same graph resources: the epochs rewrite them whole, and the old ones are released through ORG's
 		// deletion queue once the GPU is done with them.
-		const auto mutation = MutateBackings();
-		r.sequences->ResizeStructured(static_cast<std::uint32_t>(slots * sizeof(DrawSequence) / 4));
+		Growth growth;
+		growth.Structured(r.sequences, static_cast<std::uint32_t>(slots * sizeof(DrawSequence) / 4));
 		if (r.sort) {
-			r.sort->staging->ResizeStructured(static_cast<std::uint32_t>(std::uint64_t(newDraws) * sizeof(DrawSequence) / 4));
-			r.sort->ranks->ResizeStructured(newDraws);
+			growth.Structured(r.sort->staging, static_cast<std::uint32_t>(std::uint64_t(newDraws) * sizeof(DrawSequence) / 4));
+			growth.Structured(r.sort->ranks, newDraws);
 		}
-		if (r.sequencesD3D11)
-			r.sequencesD3D11 = WrapWords(*r.sequences, slots * sizeof(DrawSequence));
+		Adopt(std::move(growth), [&r, slots] {
+			if (r.sequencesD3D11)
+				r.sequencesD3D11 = WrapWords(*r.sequences->Get(), slots * sizeof(DrawSequence));
+		});
 		logger::info("[DCLF] main sequences: {} draws and {} per decal group grown to {} and {} ({} KB)", r.sequenceDraws, r.sequenceDecals, newDraws, newDecals,
 			slots * sizeof(DrawSequence) / 1024);
 		r.sequenceDraws = newDraws;
@@ -594,10 +595,7 @@ namespace DCLF
 			// Twice the bound: a view's buckets each hold every draw their key slots can produce, grown by doubling (ShadowBucket).
 			const std::uint32_t grown = Doubled(capacity, draws);
 			const std::uint64_t bytes = std::uint64_t(kShadowClasses) * grown * sizeof(DrawSequence);
-			{
-				const auto mutation = MutateBackings();
-				shadow->sequences[slot]->ResizeStructured(static_cast<std::uint32_t>(bytes / 4));
-			}
+			Adopt(std::move(Growth{}.Structured(shadow->sequences[slot], static_cast<std::uint32_t>(bytes / 4))));
 			logger::info("[DCLF] shadow view slot {} sequences: {} draws grown to {} ({} KB)", slot, capacity, grown, bytes / 1024);
 			capacity = grown;
 		}
@@ -615,11 +613,11 @@ namespace DCLF
 		buffers->faceVertices = smallStart ? 1024u : kInitialFaceVertices;
 		// Structured, because the shaders read the object records and the bone rows through SRVs (t127, t126); the geometry
 		// table is BuildDraws' (raw words), and the face positions are a vertex buffer.
-		buffers->objects = StructuredBuffer(buffers->objectCapacity, sizeof(BindlessObject), "cs.dclf.objects", buffers->objectsIndex);
-		buffers->bones = StructuredBuffer(buffers->boneRows, 16, "cs.dclf.bones", buffers->bonesIndex);
-		buffers->geometries = CreateWords(std::uint64_t(buffers->geometryRows) * sizeof(GeometryDraw) / 4, false, "cs.dclf.geometries");
-		buffers->facePositions = DeviceBuffer(std::uint64_t(buffers->faceVertices) * 16, "cs.dclf.face-positions");
-		buffers->facePositionsAddress = AddressOf(a_device, *buffers->facePositions);
+		buffers->objects = MakeVersioned(StructuredBuffer(buffers->objectCapacity, sizeof(BindlessObject), "cs.dclf.objects", buffers->objectsIndex));
+		buffers->bones = MakeVersioned(StructuredBuffer(buffers->boneRows, 16, "cs.dclf.bones", buffers->bonesIndex));
+		buffers->geometries = MakeVersioned(CreateWords(std::uint64_t(buffers->geometryRows) * sizeof(GeometryDraw) / 4, false, "cs.dclf.geometries"));
+		buffers->facePositions = MakeVersioned(DeviceBuffer(std::uint64_t(buffers->faceVertices) * 16, "cs.dclf.face-positions"));
+		buffers->facePositionsAddress = AddressOf(a_device, *buffers->facePositions->Get());
 		if (!buffers->facePositionsAddress)
 			return false;
 		// Tree wind (TreeWindCS): without its program the members' records keep the wind they joined with (the wind buffers, the
@@ -628,35 +626,35 @@ namespace DCLF
 		if (buffers->treeWind) {
 			std::uint32_t unused = 0;
 			buffers->treeCapacity = smallStart ? 4u : kInitialTrees;
-			buffers->trees = StructuredBuffer(buffers->treeCapacity, sizeof(TreeStatic), "cs.dclf.trees", unused);
-			buffers->treeClocks = StructuredBuffer(buffers->treeCapacity, sizeof(TreeClock), "cs.dclf.tree-clocks", unused, true);
+			buffers->trees = MakeVersioned(StructuredBuffer(buffers->treeCapacity, sizeof(TreeStatic), "cs.dclf.trees", unused));
+			buffers->treeClocks = MakeVersioned(StructuredBuffer(buffers->treeCapacity, sizeof(TreeClock), "cs.dclf.tree-clocks", unused, true));
 			buffers->treeFrameBuffer = StructuredBuffer(1, sizeof(TreeWindFrameRow), "cs.dclf.tree-frame", unused);
 		} else {
 			logger::warn("[DCLF] The tree wind program could not be created; trees keep the wind they joined with");
 		}
 		for (std::uint32_t h = 0; h < 2; ++h)
-			buffers->treeWindRows[h] = StructuredBuffer((buffers->treeCapacity + 1) * kTreeWindEntryRows, 16, h ? "cs.dclf.tree-wind1" : "cs.dclf.tree-wind0",
-				buffers->treeWindIndex[h], true);
+			buffers->treeWindRows[h] = MakeVersioned(StructuredBuffer((buffers->treeCapacity + 1) * kTreeWindEntryRows, 16, h ? "cs.dclf.tree-wind1" : "cs.dclf.tree-wind0",
+				buffers->treeWindIndex[h], true));
 		// Fade roots (FadeStateCS): without its program the fades stay the CPU's alone.
 		buffers->fadeState = ComputeProgram::Load(a_device, { .source = kFadeStateShader, .constantWords = kFadeStateConstantWords });
 		if (buffers->fadeState) {
 			std::uint32_t unused = 0;
 			buffers->fadeRootCapacity = smallStart ? 4u : kInitialFadeRoots;
-			buffers->fadeRoots = StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeRootStatic), "cs.dclf.fade-roots", unused);
-			buffers->fadeStates = StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), "cs.dclf.fade-states", unused, true);
+			buffers->fadeRoots = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeRootStatic), "cs.dclf.fade-roots", unused));
+			buffers->fadeStates = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), "cs.dclf.fade-states", unused, true));
 			for (std::uint32_t h = 0; h < 2; ++h)
-				buffers->fadeStatesOut[h] = StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), h ? "cs.dclf.fade-states-out1" : "cs.dclf.fade-states-out0",
-					buffers->fadeStatesOutIndex[h], true);
+				buffers->fadeStatesOut[h] = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), h ? "cs.dclf.fade-states-out1" : "cs.dclf.fade-states-out0",
+					buffers->fadeStatesOutIndex[h], true));
 			buffers->fadeFrameBuffer = StructuredBuffer(1, sizeof(FadeFrame), "cs.dclf.fade-frame", unused);
 			buffers->fadeVisibility = CreateWords(kFadeVisibilityLists * kFadeVisibilityBytes / 4, false, "cs.dclf.fade-visibility");
-			buffers->fadeRootLists = StructuredBuffer(buffers->fadeRootCapacity, sizeof(std::uint32_t), "cs.dclf.fade-root-lists", unused);
-			buffers->fadeAnimated = StructuredBuffer(buffers->fadeRootCapacity, sizeof(std::uint32_t), "cs.dclf.fade-animated", unused);
+			buffers->fadeRootLists = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, sizeof(std::uint32_t), "cs.dclf.fade-root-lists", unused));
+			buffers->fadeAnimated = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, sizeof(std::uint32_t), "cs.dclf.fade-animated", unused));
 			buffers->fadeLog = StructuredBuffer(kFadeLogEntries, sizeof(FadeLogEntry), "cs.dclf.fade-log", unused, true);
 			// The write-back (FadeWriteBack): the event list, the roots' reported milestones, a host buffer per frame slot.
 			if (auto* host = RenderGraphRuntime::Get().Host()) {
 				buffers->fadeEventCapacity = smallStart ? 4u : kInitialFadeEvents;
-				buffers->fadeEvents = CreateWords(FadeWriteBack::BytesFor(buffers->fadeEventCapacity) / 4, true, "cs.dclf.fade-events");
-				buffers->fadeReported = StructuredBuffer(buffers->fadeRootCapacity, 2 * sizeof(std::uint32_t), "cs.dclf.fade-reported", unused, true);
+				buffers->fadeEvents = MakeVersioned(CreateWords(FadeWriteBack::BytesFor(buffers->fadeEventCapacity) / 4, true, "cs.dclf.fade-events"));
+				buffers->fadeReported = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, 2 * sizeof(std::uint32_t), "cs.dclf.fade-reported", unused, true));
 				auto writeBack = std::make_shared<FadeWriteBack>();
 				const std::uint32_t slots = host->FrameSlots();
 				for (std::uint32_t i = 0; i < slots; ++i) {
@@ -676,16 +674,16 @@ namespace DCLF
 		if (buffers->treeLodCull) {
 			buffers->treeLodShapeCapacity = smallStart ? 4u : kInitialTreeLodShapes;
 			buffers->treeLodMeshCapacity = smallStart ? 4u : kInitialTreeLodMeshes;
-			buffers->treeLodShapes = CreateWords(TreeLodShapeWords(buffers->treeLodShapeCapacity), false, "cs.dclf.tree-lod-shapes");
-			buffers->treeLodInstances = CreateWords(TreeLodInstanceWords(buffers->treeLodShapeCapacity), false, "cs.dclf.tree-lod-instances");
-			buffers->treeLodMeshes = CreateWords(TreeLodMeshWords(buffers->treeLodMeshCapacity), false, "cs.dclf.tree-lod-meshes");
+			buffers->treeLodShapes = MakeVersioned(CreateWords(TreeLodShapeWords(buffers->treeLodShapeCapacity), false, "cs.dclf.tree-lod-shapes"));
+			buffers->treeLodInstances = MakeVersioned(CreateWords(TreeLodInstanceWords(buffers->treeLodShapeCapacity), false, "cs.dclf.tree-lod-instances"));
+			buffers->treeLodMeshes = MakeVersioned(CreateWords(TreeLodMeshWords(buffers->treeLodMeshCapacity), false, "cs.dclf.tree-lod-meshes"));
 			buffers->treeLodDraw = CreateWords(sizeof(TreeLod::DrawRow) / 4, false, "cs.dclf.tree-lod-draw");
-			buffers->treeLodVisible = CreateWords(TreeLodVisibleWords(buffers->treeLodShapeCapacity), true, "cs.dclf.tree-lod-visible");
-			buffers->treeLodShapesAddress = AddressOf(a_device, *buffers->treeLodShapes);
-			buffers->treeLodInstancesAddress = AddressOf(a_device, *buffers->treeLodInstances);
-			buffers->treeLodMeshesAddress = AddressOf(a_device, *buffers->treeLodMeshes);
+			buffers->treeLodVisible = MakeVersioned(CreateWords(TreeLodVisibleWords(buffers->treeLodShapeCapacity), true, "cs.dclf.tree-lod-visible"));
+			buffers->treeLodShapesAddress = AddressOf(a_device, *buffers->treeLodShapes->Get());
+			buffers->treeLodInstancesAddress = AddressOf(a_device, *buffers->treeLodInstances->Get());
+			buffers->treeLodMeshesAddress = AddressOf(a_device, *buffers->treeLodMeshes->Get());
 			buffers->treeLodDrawAddress = AddressOf(a_device, *buffers->treeLodDraw);
-			buffers->treeLodVisibleAddress = AddressOf(a_device, *buffers->treeLodVisible);
+			buffers->treeLodVisibleAddress = AddressOf(a_device, *buffers->treeLodVisible->Get());
 			if (!buffers->treeLodShapesAddress || !buffers->treeLodInstancesAddress || !buffers->treeLodMeshesAddress || !buffers->treeLodDrawAddress ||
 				!buffers->treeLodVisibleAddress) {
 				logger::warn("[DCLF] Tree LOD's tables have no device address; tree LOD stays native");
@@ -729,9 +727,10 @@ namespace DCLF
 		// A word per bucket, and a view has at most a bucket per key slot.
 		if (layout.keySlots > r.bucketCountWords) {
 			r.bucketCountWords = layout.keySlots;
-			const auto mutation = MutateBackings();
+			Growth growth;
 			for (auto& counts : r.bucketCounts)
-				counts->ResizeStructured(r.bucketCountWords);
+				growth.Structured(counts, r.bucketCountWords);
+			Adopt(std::move(growth));
 		}
 		// The latched copies' zeros (ShadowLatchedCopiesPass): a view's draw count and its bucket counts.
 		if (const std::uint32_t zeroBytes = std::max<std::uint32_t>(r.bucketCountWords * 4, sizeof(kZeroCounts)); !r.zeros || r.zeros->Stride() < zeroBytes)
@@ -787,38 +786,43 @@ namespace DCLF
 		if (!scene || !host)
 			return;
 		auto& s = *scene;
-		// Doubling, so a scene filling up grows a handful of times. A new backing holds nothing: the held version goes to 0, and
-		// the next commit sends the table whole.
-		auto grow = [&](const char* a_name, std::uint32_t& a_capacity, std::uint64_t a_needed, std::uint32_t a_rowBytes, auto&& a_resize) {
+		// Doubling, so a scene filling up grows a handful of times. A growth is a new version (Versioned): it holds nothing, so the
+		// held version goes to 0 and the next commit sends the table whole; the old version stays as it was for what holds it.
+		// a_make(rows, growth) makes the versions; a_adopted(rows) is what their adoption changes. A batch staged against the old
+		// versions is not submitted after it (generation), and the passes that bind them see a new layout.
+		auto grow = [&](const char* a_name, std::uint32_t& a_capacity, std::uint64_t a_needed, std::uint32_t a_rowBytes, auto&& a_make, auto&& a_adopted) {
 			if (a_needed <= a_capacity)
 				return false;
 			const std::uint32_t rows = Doubled(a_capacity, static_cast<std::uint32_t>(std::min<std::uint64_t>(a_needed, UINT32_MAX)));
-			{
-				const auto mutation = MutateBackings();
-				a_resize(rows);
-			}
+			Growth growth;
+			a_make(rows, growth);
 			logger::info("[DCLF] scene {}: {} grown to {} ({} KB)", a_name, a_capacity, rows, std::uint64_t(rows) * a_rowBytes / 1024);
 			a_capacity = rows;
-			++s.generation;
-			s.layout.fetch_add(1, std::memory_order_release);
 			++s.growths;
+			Adopt(std::move(growth), [&s, rows, adopted = std::function<void(std::uint32_t)>(a_adopted)] {
+				adopted(rows);
+				++s.generation;
+				s.layout.fetch_add(1, std::memory_order_release);
+			});
 			return true;
 		};
-		if (grow("object records", s.objectCapacity, a_tables.objects.size(), sizeof(BindlessObject), [&](std::uint32_t a_rows) {
-				s.objects->ResizeStructured(a_rows);
-				s.objectsIndex = s.objects->GetSRVInfo(0).slot.index;
-			}))
-			s.held.objects = 0;
+		grow("object records", s.objectCapacity, a_tables.objects.size(), sizeof(BindlessObject),
+			[&](std::uint32_t a_rows, Growth& a_growth) { a_growth.Structured(s.objects, a_rows); },
+			[&s](std::uint32_t) {
+				s.objectsIndex = s.objects->Get()->GetSRVInfo(0).slot.index;
+				s.held.objects = 0;
+			});
 		// The slots, then one row per face stream (AppendFaceStreams).
-		if (grow("geometry rows", s.geometryRows, a_tables.geometries.size() + a_tables.faceStreams.size(), sizeof(GeometryDraw),
-				[&](std::uint32_t a_rows) { s.geometries->ResizeStructured(static_cast<std::uint32_t>(std::uint64_t(a_rows) * sizeof(GeometryDraw) / 4)); }))
-			s.held.geometries = 0;
+		grow("geometry rows", s.geometryRows, a_tables.geometries.size() + a_tables.faceStreams.size(), sizeof(GeometryDraw),
+			[&](std::uint32_t a_rows, Growth& a_growth) { a_growth.Structured(s.geometries, static_cast<std::uint32_t>(std::uint64_t(a_rows) * sizeof(GeometryDraw) / 4)); },
+			[&s](std::uint32_t) { s.held.geometries = 0; });
 		// Every palette, current then previous, then the extras (BonesOut::Rows).
-		if (grow("bone rows", s.boneRows, 2ull * a_tables.BoneCapacity() + a_tables.extraRows.size() / 4, 16, [&](std::uint32_t a_rows) {
-				s.bones->ResizeStructured(a_rows);
-				s.bonesIndex = s.bones->GetSRVInfo(0).slot.index;
-			}))
-			s.held.bones = 0;
+		grow("bone rows", s.boneRows, 2ull * a_tables.BoneCapacity() + a_tables.extraRows.size() / 4, 16,
+			[&](std::uint32_t a_rows, Growth& a_growth) { a_growth.Structured(s.bones, a_rows); },
+			[&s](std::uint32_t) {
+				s.bonesIndex = s.bones->Get()->GetSRVInfo(0).slot.index;
+				s.held.bones = 0;
+			});
 		std::uint64_t faceVertices = 0;
 		for (const auto& stream : a_tables.faceStreams)
 			if (stream.object != SceneStore::Tables::kNoFaceObject)
@@ -826,73 +830,78 @@ namespace DCLF
 		// The tree rows, clocks and wind entries by tree slot. A new clock backing holds no clock: every tree starts again from
 		// the values it was listed with (its static row), once. New wind backings hold no entry until the next frame's compute.
 		if (s.trees) {
-			if (grow("tree rows", s.treeCapacity, a_tables.trees.size(), sizeof(TreeStatic) + sizeof(TreeClock) + 2 * kTreeWindEntryRows * 16, [&](std::uint32_t a_rows) {
-					s.trees->ResizeStructured(a_rows);
-					s.treeClocks->ResizeStructured(a_rows);
-					for (std::uint32_t h = 0; h < 2; ++h) {
-						s.treeWindRows[h]->ResizeStructured((a_rows + 1) * kTreeWindEntryRows);
-						s.treeWindIndex[h] = s.treeWindRows[h]->GetSRVInfo(0).slot.index;
-					}
-				})) {
-				s.treesHeld = ~0ull;
-				s.treeWindZeroed = false;
-			}
+			grow("tree rows", s.treeCapacity, a_tables.trees.size(), sizeof(TreeStatic) + sizeof(TreeClock) + 2 * kTreeWindEntryRows * 16,
+				[&](std::uint32_t a_rows, Growth& a_growth) {
+					a_growth.Structured(s.trees, a_rows).Structured(s.treeClocks, a_rows);
+					for (std::uint32_t h = 0; h < 2; ++h)
+						a_growth.Structured(s.treeWindRows[h], (a_rows + 1) * kTreeWindEntryRows);
+				},
+				[&s](std::uint32_t) {
+					for (std::uint32_t h = 0; h < 2; ++h)
+						s.treeWindIndex[h] = s.treeWindRows[h]->Get()->GetSRVInfo(0).slot.index;
+					s.treesHeld = ~0ull;
+					s.treeWindZeroed = false;
+				});
 		}
 		// The fade roots' static and state rows by root slot. A new state backing holds no state: every root is seeded again
 		// from its static row (a zero generation is never a listing's).
 		if (s.fadeRoots) {
-			if (grow("fade roots", s.fadeRootCapacity, a_tables.fadeRoots.size(), sizeof(FadeRootStatic) + sizeof(FadeNodeState), [&](std::uint32_t a_rows) {
-					s.fadeRoots->ResizeStructured(a_rows);
-					s.fadeRootLists->ResizeStructured(a_rows);
-					s.fadeAnimated->ResizeStructured(a_rows);
-					s.fadeStates->ResizeStructured(a_rows);
+			grow("fade roots", s.fadeRootCapacity, a_tables.fadeRoots.size(), sizeof(FadeRootStatic) + sizeof(FadeNodeState),
+				[&](std::uint32_t a_rows, Growth& a_growth) {
+					a_growth.Structured(s.fadeRoots, a_rows).Structured(s.fadeRootLists, a_rows).Structured(s.fadeAnimated, a_rows).Structured(s.fadeStates, a_rows);
 					if (s.fadeReported)
-						s.fadeReported->ResizeStructured(a_rows);
-					for (std::uint32_t h = 0; h < 2; ++h) {
-						s.fadeStatesOut[h]->ResizeStructured(a_rows);
-						s.fadeStatesOutIndex[h] = s.fadeStatesOut[h]->GetSRVInfo(0).slot.index;
-					}
-				})) {
-				s.fadeRootsHeld = ~0ull;
-				s.fadeRootListsHeld = ~0ull;
-				s.fadeStatesOutZeroed = false;
-				s.fadeReportedZeroed = false;
-			}
+						a_growth.Structured(s.fadeReported, a_rows);
+					for (std::uint32_t h = 0; h < 2; ++h)
+						a_growth.Structured(s.fadeStatesOut[h], a_rows);
+				},
+				[&s](std::uint32_t) {
+					for (std::uint32_t h = 0; h < 2; ++h)
+						s.fadeStatesOutIndex[h] = s.fadeStatesOut[h]->Get()->GetSRVInfo(0).slot.index;
+					s.fadeRootsHeld = ~0ull;
+					s.fadeRootListsHeld = ~0ull;
+					s.fadeStatesOutZeroed = false;
+					s.fadeReportedZeroed = false;
+				});
 		}
 		// The write-back's event list, to the most a frame appended past it; each slot's host buffer follows at its next recording.
 		if (s.fadeEvents && s.fadeWriteBack) {
 			auto& writeBack = *s.fadeWriteBack;
-			if (grow("fade events", s.fadeEventCapacity, writeBack.wanted.load(std::memory_order_acquire), sizeof(FadeEvent), [&](std::uint32_t a_rows) {
-					s.fadeEvents->ResizeStructured(static_cast<std::uint32_t>(FadeWriteBack::BytesFor(a_rows) / 4));
+			grow("fade events", s.fadeEventCapacity, writeBack.wanted.load(std::memory_order_acquire), sizeof(FadeEvent),
+				[&](std::uint32_t a_rows, Growth& a_growth) { a_growth.Structured(s.fadeEvents, static_cast<std::uint32_t>(FadeWriteBack::BytesFor(a_rows) / 4)); },
+				[&writeBack](std::uint32_t a_rows) {
 					for (std::size_t i = 0; i < writeBack.readback.size(); ++i)
 						writeBack.next[i].store(org::Buffer::CreateShared(rhi::HeapType::Readback, FadeWriteBack::BytesFor(a_rows)), std::memory_order_release);
-				})) {}
+				});
 		}
 		// Tree LOD's tables, by the mirror's shape and mesh slots. A new backing holds nothing: every slot and mesh again.
 		if (s.treeLodCull) {
 			auto& mirror = SceneStore::Get().TreeLodMirror();
 			const auto device = host->GetDesc().device;
-			const bool shapes = grow("tree LOD shape slots", s.treeLodShapeCapacity, mirror.ShapeSlots(),
-				sizeof(TreeLod::ShapeRow) + TreeLod::kMaxGroupInstances * (sizeof(TreeLod::Instance) + 4), [&](std::uint32_t a_rows) {
-					s.treeLodShapes->ResizeStructured(TreeLodShapeWords(a_rows));
-					s.treeLodInstances->ResizeStructured(TreeLodInstanceWords(a_rows));
-					s.treeLodVisible->ResizeStructured(TreeLodVisibleWords(a_rows));
-					s.treeLodShapesAddress = AddressOf(device, *s.treeLodShapes);
-					s.treeLodInstancesAddress = AddressOf(device, *s.treeLodInstances);
-					s.treeLodVisibleAddress = AddressOf(device, *s.treeLodVisible);
+			grow("tree LOD shape slots", s.treeLodShapeCapacity, mirror.ShapeSlots(), sizeof(TreeLod::ShapeRow) + TreeLod::kMaxGroupInstances * (sizeof(TreeLod::Instance) + 4),
+				[&](std::uint32_t a_rows, Growth& a_growth) {
+					a_growth.Structured(s.treeLodShapes, TreeLodShapeWords(a_rows))
+						.Structured(s.treeLodInstances, TreeLodInstanceWords(a_rows))
+						.Structured(s.treeLodVisible, TreeLodVisibleWords(a_rows));
+				},
+				[&s, &mirror, device](std::uint32_t) {
+					s.treeLodShapesAddress = AddressOf(device, *s.treeLodShapes->Get());
+					s.treeLodInstancesAddress = AddressOf(device, *s.treeLodInstances->Get());
+					s.treeLodVisibleAddress = AddressOf(device, *s.treeLodVisible->Get());
+					mirror.MarkAllChanged();
 				});
-			const bool meshes = grow("tree LOD mesh slots", s.treeLodMeshCapacity, mirror.MeshSlots(), sizeof(TreeLod::MeshRow), [&](std::uint32_t a_rows) {
-				s.treeLodMeshes->ResizeStructured(TreeLodMeshWords(a_rows));
-				s.treeLodMeshesAddress = AddressOf(device, *s.treeLodMeshes);
-			});
-			if (shapes || meshes)
-				mirror.MarkAllChanged();
+			grow("tree LOD mesh slots", s.treeLodMeshCapacity, mirror.MeshSlots(), sizeof(TreeLod::MeshRow),
+				[&](std::uint32_t a_rows, Growth& a_growth) { a_growth.Structured(s.treeLodMeshes, TreeLodMeshWords(a_rows)); },
+				[&s, &mirror, device](std::uint32_t) {
+					s.treeLodMeshesAddress = AddressOf(device, *s.treeLodMeshes->Get());
+					mirror.MarkAllChanged();
+				});
 		}
-		if (grow("face position vertices", s.faceVertices, faceVertices, 16, [&](std::uint32_t a_rows) {
-				s.facePositions->ResizeBytes(std::uint64_t(a_rows) * 16);
-				s.facePositionsAddress = AddressOf(host->GetDesc().device, *s.facePositions);
-			}))
-			s.faceUploaded.clear();  // every region again
+		grow("face position vertices", s.faceVertices, faceVertices, 16,
+			[&](std::uint32_t a_rows, Growth& a_growth) { a_growth.Bytes(s.facePositions, std::uint64_t(a_rows) * 16); },
+			[&s, device = host->GetDesc().device](std::uint32_t) {
+				s.facePositionsAddress = AddressOf(device, *s.facePositions->Get());
+				s.faceUploaded.clear();  // every region again
+			});
 		ReserveObjectBuffers();
 	}
 
@@ -904,26 +913,28 @@ namespace DCLF
 		const auto inputWords = [&] { return static_cast<std::uint32_t>(std::uint64_t(objects) * sizeof(DrawInput) / 4); };
 		if (resources && resources->objectCapacity < objects) {
 			auto& r = *resources;
-			const auto mutation = MutateBackings();
-			r.visibility->ResizeStructured(objects);
+			Growth growth;
+			growth.Structured(r.visibility, objects);
 			if (r.frustum)
-				r.frustum->ResizeStructured(objects);
-			r.inputs->ResizeStructured(inputWords());
+				growth.Structured(r.frustum, objects);
+			growth.Structured(r.inputs, inputWords());
 			if (r.inputsDepth)
-				r.inputsDepth->ResizeStructured(inputWords());
-			r.residentUploaded = {};  // the new input buffers hold no region
-			if (r.visibilityD3D11)
-				r.visibilityD3D11 = WrapWords(*r.visibility, std::uint64_t(objects) * sizeof(std::uint32_t));
+				growth.Structured(r.inputsDepth, inputWords());
 			r.objectCapacity = objects;
+			Adopt(std::move(growth), [&r, objects] {
+				r.residentUploaded = {};  // the new input buffers hold no region
+				if (r.visibilityD3D11)
+					r.visibilityD3D11 = WrapWords(*r.visibility->Get(), std::uint64_t(objects) * sizeof(std::uint32_t));
+			});
 		}
 		if (shadow && shadow->objectCapacity < objects) {
 			auto& r = *shadow;
-			const auto mutation = MutateBackings();
-			r.visibility->ResizeStructured(objects);
+			Growth growth;
+			growth.Structured(r.visibility, objects);
 			for (auto& inputs : r.inputs)
-				inputs->ResizeStructured(inputWords());
-			r.inputsUploaded = {};  // the new input buffers hold none of the kept state's inputs
+				growth.Structured(inputs, inputWords());
 			r.objectCapacity = objects;
+			Adopt(std::move(growth), [&r] { r.inputsUploaded = {}; });  // the new input buffers hold none of the kept state's inputs
 		}
 	}
 
@@ -960,9 +971,9 @@ namespace DCLF
 			return ShadowNotReady(2, "no device address for the shadow view blocks");
 		}
 		state->objectCapacity = scene->objectCapacity;
-		state->visibility = CreateWords(state->objectCapacity, true, "cs.dclf.shadow.visibility");
+		state->visibility = MakeVersioned(CreateWords(state->objectCapacity, true, "cs.dclf.shadow.visibility"));
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-			state->inputs[m] = CreateWords(std::uint64_t(state->objectCapacity) * sizeof(DrawInput) / 4, false, fmt::format("cs.dclf.shadow.draw-inputs{}", m).c_str());
+			state->inputs[m] = MakeVersioned(CreateWords(std::uint64_t(state->objectCapacity) * sizeof(DrawInput) / 4, false, fmt::format("cs.dclf.shadow.draw-inputs{}", m).c_str()));
 		state->buildDraws = ComputeProgram::Load(device, { .source = kBuildDrawsShader, .constantWords = kBuildDrawsConstantWords });
 		if (!state->buildDraws) {
 			shadowSetupFailed = true;
@@ -1015,12 +1026,12 @@ namespace DCLF
 		state->count = CreateWords(kCountWords, true, "cs.dclf.reflection.draw-count");
 		state->bucketCountWords = 16;
 		for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
-			state->bucketCounts[f] = CreateWords(state->bucketCountWords, true, fmt::format("cs.dclf.reflection.bucket-counts{}", f).c_str());
+			state->bucketCounts[f] = MakeVersioned(CreateWords(state->bucketCountWords, true, fmt::format("cs.dclf.reflection.bucket-counts{}", f).c_str()));
 			state->treeRows[f] = CreateWords(sizeof(TreeLod::DrawRow) / 4, false, fmt::format("cs.dclf.reflection.tree-row{}", f).c_str());
 			state->treeRowsAddress[f] = AddressOf(device, *state->treeRows[f]);
 		}
 		state->sequenceDraws = 64;
-		state->sequences = CreateWords(std::uint64_t(kReflectionFaces) * state->sequenceDraws * sizeof(DrawSequence) / 4, true, "cs.dclf.reflection.sequences");
+		state->sequences = MakeVersioned(CreateWords(std::uint64_t(kReflectionFaces) * state->sequenceDraws * sizeof(DrawSequence) / 4, true, "cs.dclf.reflection.sequences"));
 		state->faceBlocks = DeviceBuffer(std::uint64_t(kReflectionFaces) * kReflectionFaceBlockBytes, "cs.dclf.reflection.face-blocks");
 		state->faceBlocksAddress = AddressOf(device, *state->faceBlocks);
 		state->latchLayout = { 64, 4 };
@@ -1062,31 +1073,33 @@ namespace DCLF
 		}
 		if (layout.buckets > r.bucketCountWords) {
 			r.bucketCountWords = layout.buckets;
-			const auto mutation = MutateBackings();
+			Growth growth;
 			for (auto& counts : r.bucketCounts)
-				counts->ResizeStructured(r.bucketCountWords);
+				growth.Structured(counts, r.bucketCountWords);
+			Adopt(std::move(growth));
 		}
 		// The latched copies' zeros: the draw count and a face's bucket counts.
 		if (const std::uint32_t zeroBytes = std::max<std::uint32_t>(r.bucketCountWords * 4, sizeof(kZeroCounts)); !r.zeros || r.zeros->Stride() < zeroBytes)
 			r.zeros = std::make_shared<org::LatchBlock>("cs.dclf.reflection.zeros", zeroBytes, 1);
 		if (a_draws > r.sequenceDraws) {
 			r.sequenceDraws = Doubled(r.sequenceDraws, a_draws);
-			const auto mutation = MutateBackings();
-			r.sequences->ResizeStructured(static_cast<std::uint32_t>(std::uint64_t(kReflectionFaces) * r.sequenceDraws * sizeof(DrawSequence) / 4));
+			Adopt(std::move(Growth{}.Structured(r.sequences, static_cast<std::uint32_t>(std::uint64_t(kReflectionFaces) * r.sequenceDraws * sizeof(DrawSequence) / 4))));
 			logger::info("[DCLF] reflection sequences: {} draws a face", r.sequenceDraws);
 		}
 		// The faces' tree LOD lists hold every record of the scene's shape slots (the cull's phase 1 alone: no retest list).
 		if (scene && scene->treeLodCull && r.treeShapeCapacity != scene->treeLodShapeCapacity) {
 			const std::uint32_t words = TreeLod::kVisibleHeaderWords + scene->treeLodShapeCapacity * TreeLod::kMaxGroupInstances;
+			Growth growth;
 			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
-				if (r.treeVisible[f]) {
-					const auto mutation = MutateBackings();
-					r.treeVisible[f]->ResizeStructured(words);
-				}
+				if (r.treeVisible[f])
+					growth.Structured(r.treeVisible[f], words);
 				else
-					r.treeVisible[f] = CreateWords(words, true, fmt::format("cs.dclf.reflection.tree-visible{}", f).c_str());
-				r.treeVisibleAddress[f] = AddressOf(device, *r.treeVisible[f]);
+					r.treeVisible[f] = MakeVersioned(CreateWords(words, true, fmt::format("cs.dclf.reflection.tree-visible{}", f).c_str()));
 			}
+			Adopt(std::move(growth), [&r, device] {
+				for (std::uint32_t f = 0; f < kReflectionFaces; ++f)
+					r.treeVisibleAddress[f] = AddressOf(device, *r.treeVisible[f]->Get());
+			});
 			r.treeShapeCapacity = scene->treeLodShapeCapacity;
 			rebuild = true;
 		}

@@ -433,6 +433,103 @@ About 44 µs a frame. Copies the commits record: shadow 0–1 (face positions), 
 5 (the fade rows, the tree frame row, fade-animated). Every view and face drawn, no ticket prepared again for a changed list,
 screenshots unchanged.
 
+**Phase 6, step 4 (started): what makes a ticket stale.** Reserved submission (`TryReserveReadyEpochs`,
+`TrySubmitReservedEpoch`) never waits, and treats a ticket that turns stale after its reservation as a contract violation:
+an epoch can be submitted reserved only when its commit leaves its shape as the ticket was prepared for. Today a changed
+shape costs a re-preparation the render thread waits for: 300–400 µs each (up to 1.4 ms), 10–20 times in 15 s of a fast
+turn. Logged per change, at the bridge, after the pipelines settle (about 5 s):
+- **Shadow views that come and go** (a local light's paraboloid pair, 4 ↔ 6 views): two changes when the pair appears,
+  one when it goes. **Fixed:** a slot the previous shape had past this frame's views stays in the shape with no work
+  (a zero latch: no dispatch, no draw; counters zeroed by the latched copies; its render pass loads and stores), for
+  `Impl::kRetainedViewFrames` (600) frames after it last drew. The report counts them ("slots kept with no work").
+- **The engine alternating a view's depth range** (viewport max depth 1 ↔ 0.99997 or 0.999985). **Fixed:** the range is
+  a value. The view block carries it (`DCLFDepthRange`, PerTechnique c3, written by `WriteViewBlocks`); the pulled shadow
+  vertex stage applies it, z' = min·w + z·(max − min) under a [0, 1] viewport, which is the window depth the view's viewport
+  gives, with two clip distances (z, w − z) keeping its clipping. The views' states clip depth and never clamp it
+  (`ShadowRasterStateId` rejects the others), and depth bias applies after the transform either way, so it is exact.
+- **The view's rasterizer state alternating** between cull siblings: DCLF takes a view's state from the engine's last pass
+  in it, whose cull mode changes from frame to frame, and each state's pipelines are buckets of their own (50 ↔ 59). Tried
+  and reverted: every view drawing the buckets of every state its mode has used (the inactive ones with a count of 0) kept
+  the shape, but cost 0.2 ms of GPU a frame in the shadow views (0.574 → 0.770 ms), for a 0.35 ms wait every several
+  seconds. Open: choosing the pipeline per draw (an indirect execution set, as the main pass does) would make the state a
+  value too.
+- The Z-prepass's bucket calls (rare).
+
+Fast turn, 15 s: re-preparations 9 → 6, ticket waits 10 → 7 (one of them a ticket not yet ready). Shadow GPU time
+unchanged.
+
+**Recording reuse** (ORG, persistent-epochs.md, "Recording reuse"; `CS_ORG_REUSE_RECORDINGS`, default on). Rather than make
+every shape fixed, an epoch's recordings are kept per frame slot and submitted again while what they were recorded for holds;
+a ticket the commit made stale takes the kept recording of its new shape (a lock-free read on the render thread) instead of
+being prepared again. DCLF's `PublishShape` republishes one of the last four shapes (`RecentShapes`) when the frame is the
+same as it, generation and all, so a view state that comes back finds its recording again.
+- Bridge, steady: every ticket takes a kept recording (600 of 600 per report), none prepared again; a change makes a few new
+  recordings once (13, all kept).
+- Fast turn, 15 s: re-preparations 6 → 4, ticket waits 7 → 4; what remains is a variant first met in a slot (the host has
+  18 frame slots: 3 frames of 6 epochs).
+- The host thread's ticket preparation: median 186 → 43 µs (no recording), 1.34 → 0.42 s of CPU per 15 s.
+- Kept recordings have no Tracy GPU zones and no ORG pass timestamps (the first version resolved timestamps into readback
+  buffers the statistics service had since recreated: a GPU page fault at startup); turn reuse off to profile on the GPU.
+- **A regression the first validation missed, fixed.** With reuse the DCLF set fell from about 8,155 members (387 objects
+  waiting) to 7,787 (3,457 waiting), and members waiting for a pipeline never joined. `DrawPipelines` kept three versions of
+  each pipeline set and wrote new pipelines only into one nothing referenced. A frame shape holds the version it bound
+  (`IndirectState::version`, `ShadowIndirectState::version`), and kept recordings hold their shapes, so every version stayed
+  referenced and new pipelines waited forever. `Versions::owned` now grows: a version is made when none is free, and goes
+  when the last recording holding it does. Membership is back to 8,152 with 387 waiting. Shape and recording counts alone
+  did not show this; the set's report did (members, waiting).
+
+**Phase 6b, step 1: shapes that only change with the scene** (2026-10-05, p6r–p6t, q-cull2).
+
+- **A shadow view's cull state.** DCLF took the renderer's cull mode at the view's hook, which is its last pass's: the
+  Utility shader sets it per pass, 0 for a two-sided property and 1 otherwise (skyrim-engine-notes.md, shadow maps). It
+  changed from frame to frame with whatever drew last, and each change was a new shape. A view's state is now its table
+  entry at cull 1, or at 0 where the table has none (the volumetric copy), as the occlusion views already did. A two-sided
+  caster's key draws without culling (`kRasterTwoSided`) whatever the state, as the engine's pass does. This is also closer
+  to the engine: before, a view whose last pass was two-sided drew every caster without culling. The cull siblings
+  (`PendingView::cullStates`) are gone.
+- **The report.** "[DCLF] epoch shapes": per epoch, the frames that kept the published shape, came back to a recent one,
+  or made a new one.
+- **Results.** Bridge and fast turn: after the first report window (startup, pipelines arriving: about 25–30 new shapes
+  per epoch), no epoch's shape changed in any window, and nothing was prepared again. In the startup burst (285 recordings)
+  the host thread's work delayed a few tickets: 8 waits, up to 1.5 ms. Moving recording off the critical path is step 2.
+- **The viewport as a value** (planned) is not needed for now: with the cull fixed, no viewport change appeared.
+
+**Phase 6b, R3a: immutable inputs (resource versions)** (2026-10-05, r3as2–r3as6, r3an). A scene revision's recordings must
+name inputs that nothing changes in place, as BasicRenderer's published state does. Before this, every DCLF growth gave the
+same `org::Buffer` a new backing (`ResizeStructured`/`ResizeBytes` in a `MutateBackings` scope): it bumped the host's one
+backing version, which made every recording stale, and the mutation waited out the host thread's preparation.
+
+- **Versioned buffers.** Every DCLF buffer that grows is an `org::VersionedBuffer` (`Versioned`, `Versioned.h`): about 45 of
+  them, among them the scene tables, the per-object inputs and verdicts, the sequences, the bucket counts, the sort's staging
+  and ranks, the index pool's three buffers, the shadow and reflection buffers, and both `GrowableRows` tables. A growth
+  publishes a new version at the new size and leaves the old one as it was; DCLF's own "held" versions already sent a new
+  backing everything, and reseeded the GPU-written state, so nothing else changed. `NewVersions` (the scope that replaced
+  `MutateBackings`) tells the host (`NoteNewVersions`): tickets prepared before are stale, as before, but nothing waits.
+- **Declared as resolvers.** Passes declare the versioned buffer itself (`*buffer`): a preparation resolves the current
+  version, or the one its revision names (R3c). Writes go to the current version (`->Get()`, `Target`). Latched copies name
+  a versioned target by its key, and copy into whichever version their preparation resolved. Versioned buffers are not
+  registered under their identifiers: a registration would hold its version for the graph's life, and nothing looks the
+  identifiers up.
+- **ORG fixes found on the way.**
+  - Once a program has resolver groups, its direct hazards were derived in registration order, not the epoch-ranked
+    order, and a group phase edge could run against the epoch order: both made cycles. Fixed in `PersistentGraph.cpp`; a
+    cycle now names its passes and edges.
+  - A resolver use's resource token named the member it had at `Declare`, so after a membership change recording could
+    not find it. It now resolves by position, like the use's views.
+- **Results.** Tables started small (`CS_DCLF_TABLE_START=small`, r3as6): 36 growths at startup, none waited
+  ("0 backing changes"); then 8,152 members, every shadow view and reflection face drawn, shapes stable, nothing prepared
+  again, no errors, image normal. Default (r3an): 8,155 members, as before. The startup window still prepares about 137
+  tickets again: the live path's reaction to new versions and shapes, which R3c removes.
+
+**Phase 6b, R3b step 1: growths adopted through one point** (2026-10-05, r3bs). "The tables as of a revision" needs no copy of
+the tables: the live tables, for the revision's members whose structure has not changed since it, are exactly that, and the
+claim machinery (`ApplySet` a frame late, `MemberBindingStands`, `RevokeUndrawnClaims`) already keeps claims and what is drawn
+together. What a revision does need is that writes go to the versions its recordings read. So a growth is now a `Growth` (the
+next versions, made at the new sizes, `VersionedBuffer::MakeStructured`/`MakeBytes`) adopted through `Adopt`, which makes them
+current and then runs the growth's consequences: the held versions reset, the addresses and descriptor indices taken again, the
+index pool laid out and copied again. Live mode adopts at once, so nothing changed (small tables: the same 36 growths, members
+and draws); R3c adopts a revision's growths when it is selected.
+
 ## Implemented foundations
 
 - `ORGModuleServices::AsyncPrimitives` is a backend-independent header-only target.
@@ -527,7 +624,24 @@ screenshots unchanged.
   acquire a mutex, scan the scene, or release the exchange's old payload. A
   nonthrowing acceptance predicate must validate generation and reserve executable
   capacity; the exchange itself does not prove GPU readiness. Rejected candidates
-  and replaced active references are reclaimed by the producer.
+  and replaced active references are reclaimed by the producer. `TryReplace` lets
+  the producer take back a successor the owner has not selected yet (latest wins).
+- `RevisionAssembler` / `RevisionFragment` (`RevisionAssembly.h`, 2026-10-05, plan R2)
+  are the "same update" primitive. A revision names one exact fragment (artifact
+  version) per slot; unchanged slots inherit the newest sealed revision's fragments,
+  pending ones included, so a newer revision shares work in flight. `Seal` validates
+  closure: a fragment's requirements must be the exact fragments in their slots, so
+  an epoch's recording is never named beside a layout it was not recorded against.
+  A revision is handed to the frame only once every fragment it names is ready, and
+  selected whole through the exchange. The newest complete revision wins: older
+  pending ones are abandoned then (never cancelled before, so steady change cannot
+  starve publication), and older ones completing later are superseded. A failed
+  fragment fails every revision naming it; the active one stays and `Collect`
+  reports the failure. Fragments settle lock-free from any thread (one exchange of
+  their waiter list); revisions count down atomically onto a completion stack and
+  notify the coordinator, which collects and publishes. Tests: partial readiness,
+  inheritance, closure, stale drafts, supersession, abandonment, latest-wins,
+  failure, and a 4-resolver stress run (whole, in-order selections only).
 - `LeasedArraySlots<T, N>` permits an external triple-buffer exchange to retain
   immutable payload storage after returning a slot. Writers replace backing only
   when a reader still holds its version. This helper does not synchronize slot

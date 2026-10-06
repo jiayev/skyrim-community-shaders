@@ -226,10 +226,10 @@ namespace DCLF::Draws
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			const auto& scene = *resources->scene;
 			TreeLodCullBindings bindings{};
-			bindings.shapes = a_builder.ShaderResource(scene.treeLodShapes).View();
-			bindings.instances = a_builder.ShaderResource(scene.treeLodInstances).View();
+			bindings.shapes = a_builder.ShaderResource(*scene.treeLodShapes).View();
+			bindings.instances = a_builder.ShaderResource(*scene.treeLodInstances).View();
 			bindings.draw = a_builder.ShaderResource(scene.treeLodDraw).View();
-			bindings.visible = a_builder.UnorderedAccess(scene.treeLodVisible).View();
+			bindings.visible = a_builder.UnorderedAccess(*scene.treeLodVisible).View();
 			// As BuildDraws': phase 1 sees the HZB the previous frame left, phase 2 the one just rebuilt; their places around the
 			// build (GatherStructuralPasses) are what makes the difference.
 			if (resources->hzb)
@@ -316,7 +316,7 @@ namespace DCLF::Draws
 
 		TreeLodReadbackBindings Declare(org::PassBuilder& a_builder)
 		{
-			return { a_builder.CopySource(scene->treeLodVisible) };
+			return { a_builder.CopySource(*scene->treeLodVisible) };
 		}
 
 		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
@@ -376,23 +376,23 @@ namespace DCLF::Draws
 			for (std::uint32_t i = 0; i < resources->targetCount; ++i)
 				bindings.targets[i] = a_builder.RenderTarget(resources->native[i]).View();
 			bindings.depth = a_builder.DepthReadWrite(resources->nativeDepth).View();
-			bindings.sequences = a_builder.IndirectArguments(resources->sequences);
+			bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
 			bindings.count = a_builder.IndirectArguments(resources->count);
 			// Read through device addresses; declared so the graph orders them after their uploads.
-			bindings.materialRows = a_builder.ShaderResource(resources->materialRows.buffer, noViews).Resource();
-			bindings.pipelineRows = a_builder.ShaderResource(resources->pipelineRows.buffer, noViews).Resource();
-			bindings.objects = a_builder.ShaderResource(resources->scene->objects, noViews).Resource();
-			bindings.bones = a_builder.ShaderResource(resources->scene->bones, noViews).Resource();
+			bindings.materialRows = a_builder.ShaderResource(*resources->materialRows.buffer, noViews).Resource();
+			bindings.pipelineRows = a_builder.ShaderResource(*resources->pipelineRows.buffer, noViews).Resource();
+			bindings.objects = a_builder.ShaderResource(*resources->scene->objects, noViews).Resource();
+			bindings.bones = a_builder.ShaderResource(*resources->scene->bones, noViews).Resource();
 			if (segment == RenderGraphRuntime::Segment::ZPrepass) {
 				// The plain draws (DCLF_PULLED): the vertex stage reads the sequences and the face positions through their addresses,
 				// the draws index the pool, and each bucket's count word is its draw's count.
-				a_builder.ShaderResource(resources->sequences, noViews);
-				a_builder.ShaderResource(resources->scene->facePositions, noViews);
-				bindings.pool = a_builder.IndexBuffer(resources->pool->indices);
-				bindings.bucketCounts = a_builder.IndirectArguments(resources->zBucketCounts[phaseTwo ? 1 : 0]);
+				a_builder.ShaderResource(*resources->sequences, noViews);
+				a_builder.ShaderResource(*resources->scene->facePositions, noViews);
+				bindings.pool = a_builder.IndexBuffer(*resources->pool->indices);
+				bindings.bucketCounts = a_builder.IndirectArguments(*resources->zBucketCounts[phaseTwo ? 1 : 0]).Resource();
 			} else {
 				// Read by the input assembler (the face draws' second stream), after the commit's uploads into it.
-				a_builder.VertexBuffer(resources->scene->facePositions);
+				a_builder.VertexBuffer(*resources->scene->facePositions);
 				// CS_DCLF_FOLIAGE_PARITY: the alpha-tested draws write what each pixel shows, through the buffers' addresses.
 				if (const auto& foliage = resources->foliage) {
 					const std::span<const org::UavView> noUavs{};
@@ -407,9 +407,10 @@ namespace DCLF::Draws
 			a_builder.ShaderResource(resources->frameConstants, noViews);  // the frame record's slots, by address
 			// Tree LOD's draw: its arguments, and the tables its vertex stage reads through their addresses.
 			if (const auto& scene = *resources->scene; scene.treeLodCull) {
-				bindings.treeLodVisible = a_builder.IndirectArguments(scene.treeLodVisible);
-				for (const auto& table : { scene.treeLodShapes, scene.treeLodInstances, scene.treeLodMeshes, scene.treeLodDraw })
-					a_builder.ShaderResource(table, noViews);
+				bindings.treeLodVisible = a_builder.IndirectArguments(*scene.treeLodVisible).Resource();
+				for (const auto& table : { scene.treeLodShapes, scene.treeLodInstances, scene.treeLodMeshes })
+					a_builder.ShaderResource(*table, noViews);
+				a_builder.ShaderResource(scene.treeLodDraw, noViews);
 			}
 			if (resources->lightLimitFix) {
 				bindings.lights = a_builder.ShaderResource(org::ResourceIdentifier("cs.llf.lights"), noViews).Resource();
@@ -724,20 +725,20 @@ namespace DCLF::Draws
 		{
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			BuildDrawsBindings bindings{};
-			bindings.inputs = a_builder.ShaderResource(resources->inputs).View();
+			bindings.inputs = a_builder.ShaderResource(*resources->inputs).View();
 			if (resources->inputsDepth)
-				bindings.inputsDepth = a_builder.ShaderResource(resources->inputsDepth).View();
-			bindings.geometries = a_builder.ShaderResource(resources->scene->geometries).View();
-			bindings.objects = a_builder.ShaderResource(resources->scene->objects).View();
-			bindings.sequences = a_builder.UnorderedAccess(resources->sequences).View();
+				bindings.inputsDepth = a_builder.ShaderResource(*resources->inputsDepth).View();
+			bindings.geometries = a_builder.ShaderResource(*resources->scene->geometries).View();
+			bindings.objects = a_builder.ShaderResource(*resources->scene->objects).View();
+			bindings.sequences = a_builder.UnorderedAccess(*resources->sequences).View();
 			bindings.count = a_builder.UnorderedAccess(resources->count).View();
-			bindings.visibility = a_builder.UnorderedAccess(resources->visibility).View();
+			bindings.visibility = a_builder.UnorderedAccess(*resources->visibility).View();
 			if (resources->frustum)
-				bindings.frustum = a_builder.UnorderedAccess(resources->frustum).View();
+				bindings.frustum = a_builder.UnorderedAccess(*resources->frustum).View();
 			// The depth segment's first phase reads the fade roots' static rows, and the states FadeStateCS published the frame before
 			// (its latch's; undeclared, as nothing this frame writes them: SceneBuffers::fadeStatesOut).
 			if (segment == RenderGraphRuntime::Segment::ZPrepass && fixedPhase != 2 && resources->scene->fadeRoots)
-				bindings.fadeRoots = a_builder.ShaderResource(resources->scene->fadeRoots).View();
+				bindings.fadeRoots = a_builder.ShaderResource(*resources->scene->fadeRoots).View();
 			// Phase 1 sees the HZB the previous frame left, phase 2 the one just rebuilt from this
 			// frame's depth. Both read the same resource; what differs is where they sit relative to
 			// the build, which is why the ordering below is the whole design.
@@ -746,13 +747,13 @@ namespace DCLF::Draws
 			// The depth segment's phases write their draws into the pipeline slots' buckets (Resources::zBucketCounts), indexed
 			// from the pool (PoolFirstsIndex), for the Z-prepass's plain draws.
 			if (segment == RenderGraphRuntime::Segment::ZPrepass && resources->pool) {
-				bindings.bucketCounts = a_builder.UnorderedAccess(resources->zBucketCounts[fixedPhase == 2 ? 1 : 0]).View();
-				bindings.poolFirsts = a_builder.ShaderResource(resources->pool->firsts).View();
+				bindings.bucketCounts = a_builder.UnorderedAccess(*resources->zBucketCounts[fixedPhase == 2 ? 1 : 0]).View();
+				bindings.poolFirsts = a_builder.ShaderResource(*resources->pool->firsts).View();
 			}
 			if (Sorts()) {
 				bindings.sortCounts = a_builder.UnorderedAccess(resources->sort->counts).View();
-				bindings.sortStaging = a_builder.UnorderedAccess(resources->sort->staging).View();
-				bindings.sortRanks = a_builder.UnorderedAccess(resources->sort->ranks).View();
+				bindings.sortStaging = a_builder.UnorderedAccess(*resources->sort->staging).View();
+				bindings.sortRanks = a_builder.UnorderedAccess(*resources->sort->ranks).View();
 			}
 			return bindings;
 		}
@@ -880,11 +881,11 @@ namespace DCLF::Draws
 		{
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			SortSequencesBindings bindings{};
-			bindings.staging = a_builder.ShaderResource(resources->sort->staging).View();
-			bindings.ranks = a_builder.ShaderResource(resources->sort->ranks).View();
+			bindings.staging = a_builder.ShaderResource(*resources->sort->staging).View();
+			bindings.ranks = a_builder.ShaderResource(*resources->sort->ranks).View();
 			bindings.offsets = a_builder.ShaderResource(resources->sort->offsets).View();
 			bindings.count = a_builder.ShaderResource(resources->count).View();
-			bindings.sequences = a_builder.UnorderedAccess(resources->sequences).View();
+			bindings.sequences = a_builder.UnorderedAccess(*resources->sequences).View();
 			return bindings;
 		}
 
@@ -961,11 +962,11 @@ namespace DCLF::Draws
 		{
 			a_builder.PreferQueue(org::QueueKind::Compute);
 			TreeWindBindings bindings{};
-			bindings.trees = a_builder.ShaderResource(scene->trees).View();
+			bindings.trees = a_builder.ShaderResource(*scene->trees).View();
 			bindings.frame = a_builder.ShaderResource(scene->treeFrameBuffer).View();
-			bindings.clocks = a_builder.UnorderedAccess(scene->treeClocks).View();
+			bindings.clocks = a_builder.UnorderedAccess(*scene->treeClocks).View();
 			for (std::uint32_t h = 0; h < 2; ++h)
-				bindings.wind[h] = a_builder.UnorderedAccess(scene->treeWindRows[h]).View();
+				bindings.wind[h] = a_builder.UnorderedAccess(*scene->treeWindRows[h]).View();
 			return bindings;
 		}
 
@@ -1037,19 +1038,19 @@ namespace DCLF::Draws
 			a_builder.PreferQueue(org::QueueKind::Compute);
 			const auto& scene = *resources->scene;
 			FadeStateBindings bindings{};
-			bindings.roots = a_builder.ShaderResource(scene.fadeRoots).View();
-			bindings.states = a_builder.UnorderedAccess(scene.fadeStates).View();
+			bindings.roots = a_builder.ShaderResource(*scene.fadeRoots).View();
+			bindings.states = a_builder.UnorderedAccess(*scene.fadeStates).View();
 			for (std::uint32_t h = 0; h < 2; ++h)
-				bindings.published[h] = a_builder.UnorderedAccess(scene.fadeStatesOut[h]).View();
+				bindings.published[h] = a_builder.UnorderedAccess(*scene.fadeStatesOut[h]).View();
 			bindings.frame = a_builder.ShaderResource(scene.fadeFrameBuffer).View();
 			bindings.visibility = a_builder.ShaderResource(scene.fadeVisibility).View();
-			bindings.rootLists = a_builder.ShaderResource(scene.fadeRootLists).View();
-			bindings.animated = a_builder.ShaderResource(scene.fadeAnimated).View();
-			bindings.objects = a_builder.ShaderResource(scene.objects).View();
+			bindings.rootLists = a_builder.ShaderResource(*scene.fadeRootLists).View();
+			bindings.animated = a_builder.ShaderResource(*scene.fadeAnimated).View();
+			bindings.objects = a_builder.ShaderResource(*scene.objects).View();
 			bindings.log = a_builder.UnorderedAccess(scene.fadeLog).View();
 			if (scene.fadeEvents) {
-				bindings.events = a_builder.UnorderedAccess(scene.fadeEvents).View();
-				bindings.reported = a_builder.UnorderedAccess(scene.fadeReported).View();
+				bindings.events = a_builder.UnorderedAccess(*scene.fadeEvents).View();
+				bindings.reported = a_builder.UnorderedAccess(*scene.fadeReported).View();
 			}
 			return bindings;
 		}
@@ -1136,7 +1137,7 @@ namespace DCLF::Draws
 		FadeEventReadbackBindings Declare(org::PassBuilder& a_builder)
 		{
 			FadeEventReadbackBindings bindings{};
-			bindings.events = a_builder.CopySource(scene->fadeEvents);
+			bindings.events = a_builder.CopySource(*scene->fadeEvents);
 			return bindings;
 		}
 
@@ -1691,21 +1692,21 @@ namespace DCLF::Draws
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			ShadowBuildBindings bindings{};
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-				bindings.inputs[m] = a_builder.ShaderResource(resources->inputs[m]).View();
+				bindings.inputs[m] = a_builder.ShaderResource(*resources->inputs[m]).View();
 			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
-				bindings.sequences.push_back(a_builder.UnorderedAccess(resources->sequences[s]).View());
+				bindings.sequences.push_back(a_builder.UnorderedAccess(*resources->sequences[s]).View());
 				bindings.count.push_back(a_builder.UnorderedAccess(resources->count[s]).View());
-				bindings.bucketCounts.push_back(a_builder.UnorderedAccess(resources->bucketCounts[s]).View());
+				bindings.bucketCounts.push_back(a_builder.UnorderedAccess(*resources->bucketCounts[s]).View());
 			}
-			bindings.geometries = a_builder.ShaderResource(resources->scene->geometries).View();
-			bindings.objects = a_builder.ShaderResource(resources->scene->objects).View();
-			bindings.visibility = a_builder.UnorderedAccess(resources->visibility).View();
-			bindings.poolFirsts = a_builder.ShaderResource(resources->pool->firsts).View();
+			bindings.geometries = a_builder.ShaderResource(*resources->scene->geometries).View();
+			bindings.objects = a_builder.ShaderResource(*resources->scene->objects).View();
+			bindings.visibility = a_builder.UnorderedAccess(*resources->visibility).View();
+			bindings.poolFirsts = a_builder.ShaderResource(*resources->pool->firsts).View();
 			// The fade roots' rows: a shadow view's casters under stood-in roots follow FadeStateCS's state, and an occlusion view's
 			// occluders their roots' OnVisible (kCullFadeOnVisible); the states are the latch's (published the frame before, or a
 			// parity frame's node states), undeclared like the depth segment's.
 			if (resources->scene->fadeRoots)
-				bindings.fadeRoots = a_builder.ShaderResource(resources->scene->fadeRoots).View();
+				bindings.fadeRoots = a_builder.ShaderResource(*resources->scene->fadeRoots).View();
 			return bindings;
 		}
 
@@ -1808,13 +1809,13 @@ namespace DCLF::Draws
 		{
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			ShadowLatchedCopiesBindings bindings{};
-			bindings.viewBlocks = a_builder.CopyDestination(resources->viewBlocks.buffer);
+			bindings.viewBlocks = a_builder.CopyDestination(*resources->viewBlocks.buffer).Resource();
 			// The shadow commit's latched values (ShadowFrame::latched) go to the constants alone.
 			bindings.constants = a_builder.CopyDestination(resources->constants);
-			resources->latchedTargets.store(std::make_shared<const std::vector<const org::Buffer*>>(1, resources->constants.get()), std::memory_order_release);
+			resources->latchedTargets.store(std::make_shared<const std::vector<const void*>>(1, resources->constants.get()), std::memory_order_release);
 			for (std::size_t s = 0; s < resources->count.size(); ++s) {
 				bindings.count.push_back(a_builder.CopyDestination(resources->count[s]));
-				bindings.bucketCounts.push_back(a_builder.CopyDestination(resources->bucketCounts[s]));
+				bindings.bucketCounts.push_back(a_builder.CopyDestination(*resources->bucketCounts[s]).Resource());
 			}
 			return bindings;
 		}
@@ -1901,8 +1902,8 @@ namespace DCLF::Draws
 		{
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			IndexPoolBindings bindings{};
-			bindings.copies = a_builder.ShaderResource(pool->copies).View();
-			bindings.indices = a_builder.UnorderedAccess(pool->indices).View();
+			bindings.copies = a_builder.ShaderResource(*pool->copies).View();
+			bindings.indices = a_builder.UnorderedAccess(*pool->indices).View();
 			return bindings;
 		}
 
@@ -1992,19 +1993,19 @@ namespace DCLF::Draws
 			}
 			// A slot's sequences are both the draws' arguments and what their vertex stage reads by device address (DCLF_PULLED).
 			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
-				bindings.sequences.push_back(a_builder.IndirectArguments(resources->sequences[s]));
-				a_builder.ShaderResource(resources->sequences[s], noViews);
-				bindings.bucketCounts.push_back(a_builder.IndirectArguments(resources->bucketCounts[s]));
+				bindings.sequences.push_back(a_builder.IndirectArguments(*resources->sequences[s]).Resource());
+				a_builder.ShaderResource(*resources->sequences[s], noViews);
+				bindings.bucketCounts.push_back(a_builder.IndirectArguments(*resources->bucketCounts[s]).Resource());
 			}
-			bindings.materialRows = a_builder.ShaderResource(resources->materialRows.buffer, noViews).Resource();
+			bindings.materialRows = a_builder.ShaderResource(*resources->materialRows.buffer, noViews).Resource();
 			bindings.constants = a_builder.ShaderResource(resources->constants, noViews).Resource();
-			bindings.viewBlocks = a_builder.ShaderResource(resources->viewBlocks.buffer, noViews).Resource();
-			bindings.objects = a_builder.ShaderResource(resources->scene->objects, noViews).Resource();
-			bindings.bones = a_builder.ShaderResource(resources->scene->bones, noViews).Resource();
+			bindings.viewBlocks = a_builder.ShaderResource(*resources->viewBlocks.buffer, noViews).Resource();
+			bindings.objects = a_builder.ShaderResource(*resources->scene->objects, noViews).Resource();
+			bindings.bones = a_builder.ShaderResource(*resources->scene->bones, noViews).Resource();
 			// The face positions (a dynamic shape's second stream), and the geometries' vertices and indices, are read by the
 			// vertex stage through their addresses: the face positions after the commit's uploads into them.
-			a_builder.ShaderResource(resources->scene->facePositions, noViews);
-			bindings.pool = a_builder.IndexBuffer(resources->pool->indices);
+			a_builder.ShaderResource(*resources->scene->facePositions, noViews);
+			bindings.pool = a_builder.IndexBuffer(*resources->pool->indices);
 			return bindings;
 		}
 
@@ -2147,16 +2148,16 @@ namespace DCLF::Draws
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			const auto& main = *resources->main;
 			ReflectionBuildBindings bindings{};
-			bindings.inputs = a_builder.ShaderResource(main.inputsDepth).View();
-			bindings.geometries = a_builder.ShaderResource(main.scene->geometries).View();
-			bindings.objects = a_builder.ShaderResource(main.scene->objects).View();
-			bindings.sequences = a_builder.UnorderedAccess(resources->sequences).View();
+			bindings.inputs = a_builder.ShaderResource(*main.inputsDepth).View();
+			bindings.geometries = a_builder.ShaderResource(*main.scene->geometries).View();
+			bindings.objects = a_builder.ShaderResource(*main.scene->objects).View();
+			bindings.sequences = a_builder.UnorderedAccess(*resources->sequences).View();
 			bindings.count = a_builder.UnorderedAccess(resources->count).View();
 			// Read only in the single phase (an input's published verdict), never written.
-			bindings.visibility = a_builder.UnorderedAccess(main.visibility).View();
-			bindings.poolFirsts = a_builder.ShaderResource(main.scene->pool->firsts).View();
+			bindings.visibility = a_builder.UnorderedAccess(*main.visibility).View();
+			bindings.poolFirsts = a_builder.ShaderResource(*main.scene->pool->firsts).View();
 			for (std::uint32_t f = 0; f < kReflectionFaces; ++f)
-				bindings.bucketCounts[f] = a_builder.UnorderedAccess(resources->bucketCounts[f]).View();
+				bindings.bucketCounts[f] = a_builder.UnorderedAccess(*resources->bucketCounts[f]).View();
 			return bindings;
 		}
 
@@ -2248,11 +2249,11 @@ namespace DCLF::Draws
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			const auto& scene = *resources->main->scene;
 			ReflectionTreeBindings bindings{};
-			bindings.shapes = a_builder.ShaderResource(scene.treeLodShapes).View();
-			bindings.instances = a_builder.ShaderResource(scene.treeLodInstances).View();
+			bindings.shapes = a_builder.ShaderResource(*scene.treeLodShapes).View();
+			bindings.instances = a_builder.ShaderResource(*scene.treeLodInstances).View();
 			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
 				bindings.rows[f] = a_builder.ShaderResource(resources->treeRows[f]).View();
-				bindings.visible[f] = a_builder.UnorderedAccess(resources->treeVisible[f]).View();
+				bindings.visible[f] = a_builder.UnorderedAccess(*resources->treeVisible[f]).View();
 			}
 			return bindings;
 		}
@@ -2347,26 +2348,26 @@ namespace DCLF::Draws
 				bindings.faces[f] = a_builder.RenderTarget(resources->cube, org::RtvView{ UINT32_MAX, 0, f }).View();
 			bindings.depth = a_builder.DepthReadWrite(resources->depth).View();
 			// The sequences are the draws' arguments and what the vertex stage reads by device address (DCLF_PULLED).
-			bindings.sequences = a_builder.IndirectArguments(resources->sequences);
-			a_builder.ShaderResource(resources->sequences, noViews);
-			bindings.pool = a_builder.IndexBuffer(scene.pool->indices);
+			bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
+			a_builder.ShaderResource(*resources->sequences, noViews);
+			bindings.pool = a_builder.IndexBuffer(*scene.pool->indices);
 			for (std::uint32_t f = 0; f < kReflectionFaces; ++f)
-				bindings.bucketCounts[f] = a_builder.IndirectArguments(resources->bucketCounts[f]);
+				bindings.bucketCounts[f] = a_builder.IndirectArguments(*resources->bucketCounts[f]).Resource();
 			// Read through device addresses; declared so the graph orders them after their uploads.
-			a_builder.ShaderResource(main.materialRows.buffer, noViews);
+			a_builder.ShaderResource(*main.materialRows.buffer, noViews);
 			a_builder.ShaderResource(main.frameConstants, noViews);  // the colour segment's frame slots, by address
-			a_builder.ShaderResource(main.pipelineRows.buffer, noViews);
-			a_builder.ShaderResource(scene.objects, noViews);
-			a_builder.ShaderResource(scene.bones, noViews);
-			a_builder.ShaderResource(scene.facePositions, noViews);
+			a_builder.ShaderResource(*main.pipelineRows.buffer, noViews);
+			a_builder.ShaderResource(*scene.objects, noViews);
+			a_builder.ShaderResource(*scene.bones, noViews);
+			a_builder.ShaderResource(*scene.facePositions, noViews);
 			a_builder.ShaderResource(resources->faceBlocks, noViews);
 			if (scene.treeLodCull && resources->treeVisible[0]) {
 				for (const auto& table : { scene.treeLodShapes, scene.treeLodInstances, scene.treeLodMeshes })
-					a_builder.ShaderResource(table, noViews);
+					a_builder.ShaderResource(*table, noViews);
 				for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
 					a_builder.ShaderResource(resources->treeRows[f], noViews);
-					bindings.treeVisible[f] = a_builder.IndirectArguments(resources->treeVisible[f]);
-					a_builder.ShaderResource(resources->treeVisible[f], noViews);
+					bindings.treeVisible[f] = a_builder.IndirectArguments(*resources->treeVisible[f]).Resource();
+					a_builder.ShaderResource(*resources->treeVisible[f], noViews);
 				}
 			}
 			return bindings;
@@ -2463,44 +2464,56 @@ namespace DCLF::Draws
 		std::shared_ptr<ReflectionResources> resources;
 	};
 
+	/**
+	 * @brief Registers a graph resource under a_id. A versioned buffer is not registered: its passes declare it (its resolver),
+	 * and a registration would hold the version registered for as long as the graph, where a version should go when nothing uses
+	 * it. Nothing looks these identifiers up.
+	 */
+	template <class T>
+	void Register(org::RenderGraph& a_graph, org::ResourceIdentifier a_id, const std::shared_ptr<T>& a_resource)
+	{
+		if constexpr (!std::is_same_v<T, org::VersionedBuffer>)
+			a_graph.RegisterResource(std::move(a_id), a_resource);
+	}
+
 	/** @brief The scene tables, which both extensions register (the same identifiers: the second registration is an update). */
 	void RegisterSceneBuffers(org::RenderGraph& a_graph, const SceneBuffers& a_scene)
 	{
-		a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.objects"), a_scene.objects);
+		Register(a_graph, org::ResourceIdentifier("cs.dclf.objects"), a_scene.objects);
 		if (a_scene.pool) {
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.index-pool"), a_scene.pool->indices);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.pool-firsts"), a_scene.pool->firsts);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.pool-copies"), a_scene.pool->copies);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.index-pool"), a_scene.pool->indices);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.pool-firsts"), a_scene.pool->firsts);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.pool-copies"), a_scene.pool->copies);
 		}
-		a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.bones"), a_scene.bones);
-		a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.geometries"), a_scene.geometries);
-		a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.face-positions"), a_scene.facePositions);
+		Register(a_graph, org::ResourceIdentifier("cs.dclf.bones"), a_scene.bones);
+		Register(a_graph, org::ResourceIdentifier("cs.dclf.geometries"), a_scene.geometries);
+		Register(a_graph, org::ResourceIdentifier("cs.dclf.face-positions"), a_scene.facePositions);
 		if (a_scene.trees) {
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.trees"), a_scene.trees);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-clocks"), a_scene.treeClocks);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-wind0"), a_scene.treeWindRows[0]);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-wind1"), a_scene.treeWindRows[1]);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-frame"), a_scene.treeFrameBuffer);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.trees"), a_scene.trees);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-clocks"), a_scene.treeClocks);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-wind0"), a_scene.treeWindRows[0]);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-wind1"), a_scene.treeWindRows[1]);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-frame"), a_scene.treeFrameBuffer);
 		}
 		if (a_scene.fadeRoots) {
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-roots"), a_scene.fadeRoots);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-states"), a_scene.fadeStates);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-states-out0"), a_scene.fadeStatesOut[0]);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-states-out1"), a_scene.fadeStatesOut[1]);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-frame"), a_scene.fadeFrameBuffer);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-visibility"), a_scene.fadeVisibility);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-log"), a_scene.fadeLog);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-roots"), a_scene.fadeRoots);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-states"), a_scene.fadeStates);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-states-out0"), a_scene.fadeStatesOut[0]);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-states-out1"), a_scene.fadeStatesOut[1]);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-frame"), a_scene.fadeFrameBuffer);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-visibility"), a_scene.fadeVisibility);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-log"), a_scene.fadeLog);
 			if (a_scene.fadeEvents) {
-				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-events"), a_scene.fadeEvents);
-				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-reported"), a_scene.fadeReported);
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-events"), a_scene.fadeEvents);
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-reported"), a_scene.fadeReported);
 			}
 		}
 		if (a_scene.treeLodCull) {
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-lod-shapes"), a_scene.treeLodShapes);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-lod-instances"), a_scene.treeLodInstances);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-lod-meshes"), a_scene.treeLodMeshes);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-lod-draw"), a_scene.treeLodDraw);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-lod-visible"), a_scene.treeLodVisible);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-lod-shapes"), a_scene.treeLodShapes);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-lod-instances"), a_scene.treeLodInstances);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-lod-meshes"), a_scene.treeLodMeshes);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-lod-draw"), a_scene.treeLodDraw);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-lod-visible"), a_scene.treeLodVisible);
 		}
 	}
 
@@ -2512,21 +2525,21 @@ namespace DCLF::Draws
 
 		void PrepareForBuild(org::RenderGraph& a_graph) override
 		{
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.constants"), resources->constants);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.material-rows"), resources->materialRows.buffer);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.shadow.constants"), resources->constants);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.shadow.material-rows"), resources->materialRows.buffer);
 			RegisterSceneBuffers(a_graph, *resources->scene);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.visibility"), resources->visibility);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.shadow.visibility"), resources->visibility);
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.shadow.draw-inputs{}", m)), resources->inputs[m]);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.view-blocks"), resources->viewBlocks.buffer);
+				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.shadow.draw-inputs{}", m)), resources->inputs[m]);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.shadow.view-blocks"), resources->viewBlocks.buffer);
 			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
-				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.shadow.sequences{}", s)), resources->sequences[s]);
-				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.shadow.draw-count{}", s)), resources->count[s]);
-				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.shadow.bucket-counts{}", s)), resources->bucketCounts[s]);
+				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.shadow.sequences{}", s)), resources->sequences[s]);
+				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.shadow.draw-count{}", s)), resources->count[s]);
+				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.shadow.bucket-counts{}", s)), resources->bucketCounts[s]);
 			}
 			for (std::uint32_t i = 0; i < kShadowDepthTargets; ++i) {
 				if (resources->depth[i])
-					a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.shadow.depth{}", i)), resources->depth[i]);
+					Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.shadow.depth{}", i)), resources->depth[i]);
 			}
 		}
 
@@ -2571,23 +2584,37 @@ namespace DCLF::Draws
 	};
 
 	/** @brief The buffers a main commit's per-frame values go to through the latch (LatchedUploads), as the passes declare them. */
-	std::vector<std::shared_ptr<org::Buffer>> MainLatchedTargets(const Resources& a_resources)
+	/** @brief A target a commit may latch: a buffer, or a versioned buffer (copied into the version its preparation resolved). */
+	struct LatchedTarget
 	{
-		std::vector<std::shared_ptr<org::Buffer>> out{ a_resources.frameConstants, a_resources.count, a_resources.zBucketCounts[0], a_resources.zBucketCounts[1] };
+		std::shared_ptr<org::Buffer> buffer;
+		Versioned versioned;
+		const void* Key() const { return versioned ? versioned->Key() : buffer.get(); }
+	};
+
+	std::vector<LatchedTarget> MainLatchedTargets(const Resources& a_resources)
+	{
+		std::vector<LatchedTarget> out;
+		for (const auto& buffer : { a_resources.frameConstants, a_resources.count })
+			if (buffer)
+				out.push_back({ buffer, nullptr });
+		for (const auto& counts : a_resources.zBucketCounts)
+			if (counts)
+				out.push_back({ nullptr, counts });
 		for (const auto& frameBuffer : a_resources.frameBuffers)
-			out.push_back(frameBuffer.copy);
+			if (frameBuffer.copy)
+				out.push_back({ frameBuffer.copy, nullptr });
 		// Tree LOD's draw row and its list's header; not the trees' or the fades' frame rows, which the compute queue reads.
 		if (const auto& scene = *a_resources.scene; scene.treeLodCull) {
-			out.push_back(scene.treeLodDraw);
-			out.push_back(scene.treeLodVisible);
+			out.push_back({ scene.treeLodDraw, nullptr });
+			out.push_back({ nullptr, scene.treeLodVisible });
 		}
-		std::erase(out, nullptr);
 		return out;
 	}
 
 	struct MainLatchedCopiesBindings
 	{
-		std::vector<std::pair<const org::Buffer*, org::ResourceBindingToken>> targets;
+		std::vector<std::pair<const void*, org::ResourceBindingToken>> targets;  // LatchedTarget::Key
 	};
 
 	struct MainLatchedCopiesPrepared
@@ -2611,10 +2638,10 @@ namespace DCLF::Draws
 		{
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			MainLatchedCopiesBindings bindings{};
-			auto declared = std::make_shared<std::vector<const org::Buffer*>>();
+			auto declared = std::make_shared<std::vector<const void*>>();
 			for (const auto& target : MainLatchedTargets(*resources)) {
-				bindings.targets.emplace_back(target.get(), a_builder.CopyDestination(target));
-				declared->push_back(target.get());
+				bindings.targets.emplace_back(target.Key(), target.versioned ? a_builder.CopyDestination(*target.versioned).Resource() : a_builder.CopyDestination(target.buffer));
+				declared->push_back(target.Key());
 			}
 			resources->latchedTargets.store(std::move(declared), std::memory_order_release);
 			return bindings;
@@ -2663,39 +2690,39 @@ namespace DCLF::Draws
 
 		void PrepareForBuild(org::RenderGraph& a_graph) override
 		{
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.material-rows"), resources->materialRows.buffer);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.pipeline-rows"), resources->pipelineRows.buffer);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.sequences"), resources->sequences);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.draw-inputs"), resources->inputs);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.material-rows"), resources->materialRows.buffer);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.pipeline-rows"), resources->pipelineRows.buffer);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.sequences"), resources->sequences);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.draw-inputs"), resources->inputs);
 			if (resources->inputsDepth)
-				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.draw-inputs-depth"), resources->inputsDepth);
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.draw-inputs-depth"), resources->inputsDepth);
 			RegisterSceneBuffers(a_graph, *resources->scene);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.draw-count"), resources->count);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.draw-count"), resources->count);
 			// Read through device addresses (the frame record's slots), declared by their readers so the graph orders them after
 			// the epochs' latched copies.
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.frame-constants"), resources->frameConstants);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.z.bucket-counts"), resources->zBucketCounts[0]);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.z.bucket-counts2"), resources->zBucketCounts[1]);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.frame-constants"), resources->frameConstants);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.z.bucket-counts"), resources->zBucketCounts[0]);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.z.bucket-counts2"), resources->zBucketCounts[1]);
 			if (const auto& foliage = resources->foliage) {
 				for (std::uint32_t h = 0; h < 2; ++h) {
-					a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.foliage-ids{}", h)), foliage->ids[h]);
-					a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.foliage-colours{}", h)), foliage->colours[h]);
+					Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.foliage-ids{}", h)), foliage->ids[h]);
+					Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.foliage-colours{}", h)), foliage->colours[h]);
 				}
-				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.foliage-results"), foliage->results);
-				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.foliage-owners"), foliage->owners);
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.foliage-results"), foliage->results);
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.foliage-owners"), foliage->owners);
 			}
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.visibility"), resources->visibility);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.visibility"), resources->visibility);
 			if (resources->frustum)
-				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.frustum"), resources->frustum);
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.frustum"), resources->frustum);
 			for (const auto& frameBuffer : resources->frameBuffers)
-				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.frame-buffer.t{}", frameBuffer.textureRegister)), frameBuffer.copy);
+				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.frame-buffer.t{}", frameBuffer.textureRegister)), frameBuffer.copy);
 			for (std::uint32_t i = 0; i < resources->targetCount; ++i)
-				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.native-target{}", i)), resources->native[i]);
+				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.native-target{}", i)), resources->native[i]);
 			if (resources->nativeDepth)
-				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.native-depth"), resources->nativeDepth);
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.native-depth"), resources->nativeDepth);
 			if (resources->hzb) {
-				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.hzb"), resources->hzb);
-				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.hzb-counter"), resources->hzbCounter);
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.hzb"), resources->hzb);
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.hzb-counter"), resources->hzbCounter);
 			}
 			if (resources->sort)
 				resources->sort->Register(a_graph);
@@ -2889,10 +2916,10 @@ namespace DCLF::Draws
 			bindings.faceBlocks = a_builder.CopyDestination(resources->faceBlocks);
 			bindings.trees = resources->main->scene->treeLodCull && resources->treeVisible[0];
 			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
-				bindings.bucketCounts[f] = a_builder.CopyDestination(resources->bucketCounts[f]);
+				bindings.bucketCounts[f] = a_builder.CopyDestination(*resources->bucketCounts[f]).Resource();
 				if (bindings.trees) {
 					bindings.treeRows[f] = a_builder.CopyDestination(resources->treeRows[f]);
-					bindings.treeVisible[f] = a_builder.CopyDestination(resources->treeVisible[f]);
+					bindings.treeVisible[f] = a_builder.CopyDestination(*resources->treeVisible[f]).Resource();
 				}
 			}
 			return bindings;
@@ -2952,22 +2979,22 @@ namespace DCLF::Draws
 		{
 			// The main pass's, under the main extension's identifiers (the same registration again).
 			const auto& main = *resources->main;
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.material-rows"), main.materialRows.buffer);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.pipeline-rows"), main.pipelineRows.buffer);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.draw-inputs-depth"), main.inputsDepth);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.visibility"), main.visibility);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.material-rows"), main.materialRows.buffer);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.pipeline-rows"), main.pipelineRows.buffer);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.draw-inputs-depth"), main.inputsDepth);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.visibility"), main.visibility);
 			RegisterSceneBuffers(a_graph, *main.scene);
 			// Its own.
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.reflection.sequences"), resources->sequences);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.reflection.draw-count"), resources->count);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.reflection.face-blocks"), resources->faceBlocks);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.reflection.depth"), resources->depth);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.reflection.cube"), resources->cube);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.reflection.sequences"), resources->sequences);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.reflection.draw-count"), resources->count);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.reflection.face-blocks"), resources->faceBlocks);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.reflection.depth"), resources->depth);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.reflection.cube"), resources->cube);
 			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
-				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.reflection.bucket-counts{}", f)), resources->bucketCounts[f]);
-				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.reflection.tree-row{}", f)), resources->treeRows[f]);
+				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.reflection.bucket-counts{}", f)), resources->bucketCounts[f]);
+				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.reflection.tree-row{}", f)), resources->treeRows[f]);
 				if (resources->treeVisible[f])
-					a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.reflection.tree-visible{}", f)), resources->treeVisible[f]);
+					Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.reflection.tree-visible{}", f)), resources->treeVisible[f]);
 			}
 		}
 

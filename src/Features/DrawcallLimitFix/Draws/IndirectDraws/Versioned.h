@@ -1,0 +1,19 @@
+#pragma once
+
+// IndirectDraws' versioned buffers (immutable inputs). Included by Internal.h, after the headers these declarations use.
+
+namespace DCLF::Draws
+{
+	/**
+	 * @brief A buffer that grows by versions (immutable inputs, org::VersionedBuffer): a growth publishes a new buffer at the new
+	 * size and leaves the old one as it was, for whatever prepared or recorded against it; nothing changes in place, so nothing
+	 * waits (Growth, Adopt). Passes declare it (a resolver: a preparation resolves its revision's version, else the current one);
+	 * writes go to the current version's buffer (->Get()).
+	 */
+	using Versioned = std::shared_ptr<org::VersionedBuffer>;
+	/** @brief The first version of a buffer that grows. */
+	inline Versioned MakeVersioned(std::shared_ptr<org::Buffer> a_buffer) { return a_buffer ? org::VersionedBuffer::Create(std::move(a_buffer)) : nullptr; }
+	/** @brief Where a write goes: the buffer, or a versioned buffer's current version. */
+	inline const std::shared_ptr<org::Buffer>& Target(const std::shared_ptr<org::Buffer>& a_buffer) { return a_buffer; }
+	inline std::shared_ptr<org::Buffer> Target(const Versioned& a_buffer) { return a_buffer ? a_buffer->Get() : nullptr; }
+}

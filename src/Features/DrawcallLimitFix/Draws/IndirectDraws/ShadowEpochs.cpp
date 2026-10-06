@@ -123,13 +123,14 @@ namespace DCLF
 				return nullptr;
 			}
 			pool->capacity = a_small ? 4096u : kInitialPoolIndices;
-			pool->indices = CreateWords(pool->capacity / 2, true, "cs.dclf.index-pool");
+			pool->indices = MakeVersioned(CreateWords(pool->capacity / 2, true, "cs.dclf.index-pool"));
 			pool->firstsCapacity = a_small ? 64u : kInitialGeometries;
-			pool->firsts = CreateWords(pool->firstsCapacity, false, "cs.dclf.pool-firsts");
+			pool->firsts = MakeVersioned(CreateWords(pool->firstsCapacity, false, "cs.dclf.pool-firsts"));
 			pool->copiesCapacity = a_small ? 16u : 1024u;
-			pool->copies = org::Buffer::CreateUnmaterializedStructuredBuffer(pool->copiesCapacity, 4 * sizeof(std::uint32_t), false);
-			pool->copies->SetName("cs.dclf.pool-copies");
-			pool->copies->Materialize();
+			auto copies = org::Buffer::CreateUnmaterializedStructuredBuffer(pool->copiesCapacity, 4 * sizeof(std::uint32_t), false);
+			copies->SetName("cs.dclf.pool-copies");
+			copies->Materialize();
+			pool->copies = MakeVersioned(std::move(copies));
 			a_scene.pool = pool;
 			return pool;
 		}
@@ -195,24 +196,23 @@ namespace DCLF
 					capacity *= 2;
 				logger::info("[DCLF] index pool: {} indices grown to {} ({} MB)", p.capacity, capacity, capacity * 2 >> 20);
 				p.capacity = static_cast<std::uint32_t>(std::min<std::uint64_t>(capacity, UINT32_MAX & ~1u));
-				{
-					const auto mutation = MutateBackings();
-					p.indices->ResizeStructured(p.capacity / 2);
-				}
-				++p.layout;
-				p.free.clear();
-				p.end = 0;
-				copies.clear();
-				for (auto& range : p.slots) {
-					if (range.first == IndexPool::kNoRange)
-						continue;
-					range.first = p.end;
-					p.end += range.count;
-					copyOf(range);
-				}
-				for (std::size_t g = 0; g < p.slots.size(); ++g)
-					p.slotFirst[g] = p.slots[g].first;
-				allFirsts = true;
+				// The new version's layout: every range laid out again from its start, and copied into it.
+				Adopt(std::move(Growth{}.Structured(p.indices, p.capacity / 2)), [&] {
+					++p.layout;
+					p.free.clear();
+					p.end = 0;
+					copies.clear();
+					for (auto& range : p.slots) {
+						if (range.first == IndexPool::kNoRange)
+							continue;
+						range.first = p.end;
+						p.end += range.count;
+						copyOf(range);
+					}
+					for (std::size_t g = 0; g < p.slots.size(); ++g)
+						p.slotFirst[g] = p.slots[g].first;
+					allFirsts = true;
+				});
 			};
 			// A slot's own range of its index buffer, copied whenever the log names the slot: a range is never shared, because
 			// a buffer address is no identity - the device hands a freed buffer's address to the next buffer it creates, which a
@@ -291,12 +291,10 @@ namespace DCLF
 			if (count > p.firstsCapacity) {
 				while (p.firstsCapacity < count)
 					p.firstsCapacity *= 2;
-				{
-					const auto mutation = MutateBackings();
-					p.firsts->ResizeStructured(p.firstsCapacity);
-				}
-				++p.layout;
-				allFirsts = true;
+				Adopt(std::move(Growth{}.Structured(p.firsts, p.firstsCapacity)), [&] {
+					++p.layout;
+					allFirsts = true;
+				});
 			}
 			if (allFirsts) {
 				if (count)
@@ -315,11 +313,7 @@ namespace DCLF
 			if (copyCount > p.copiesCapacity) {
 				while (p.copiesCapacity < copyCount)
 					p.copiesCapacity *= 2;
-				{
-					const auto mutation = MutateBackings();
-					p.copies->ResizeStructured(p.copiesCapacity);
-				}
-				++p.layout;
+				Adopt(std::move(Growth{}.Structured(p.copies, p.copiesCapacity)), [&] { ++p.layout; });
 			}
 			if (copyCount)
 				a_uploads(p.copies, copies.data(), copies.size() * sizeof(copies[0]), 0);
@@ -387,6 +381,10 @@ namespace DCLF
 		{
 			const std::uint32_t offset = a_resources.latchLayout.ViewBlockOffset(a_slot);
 			a_resources.latch->Write(a_latchSlot, offset, std::as_bytes(std::span(a_view.viewBlock)));
+			// PerTechnique's c3, DCLFDepthRange (Utility.hlsl): the view's viewport depth range, which its draws apply under a [0, 1]
+			// viewport (FrameViewOf), so the engine changing it changes no recording.
+			const float depthRange[4] = { a_view.minDepth, a_view.maxDepth - a_view.minDepth, 0.0f, 0.0f };
+			a_resources.latch->Write(a_latchSlot, offset + static_cast<std::uint32_t>(sizeof(a_view.viewBlock)), std::as_bytes(std::span(depthRange)));
 			a_resources.latch->Write(a_latchSlot, offset + static_cast<std::uint32_t>(kShadowPerFrameOffset), std::span(a_view.perFrame.data(), a_view.perFrameBytes));
 			a_frame.viewBlocksOffset = a_resources.latchLayout.ViewBlockOffset(0);
 			a_frame.zeros = a_resources.zeros;
@@ -407,8 +405,9 @@ namespace DCLF
 			out.y = a_view.y;
 			out.width = a_view.width;
 			out.height = a_view.height;
-			out.minDepth = a_view.minDepth;
-			out.maxDepth = a_view.maxDepth;
+			// [0, 1]: the view's depth range is its draws' (DCLFDepthRange, WriteViewBlocks).
+			out.minDepth = 0.0f;
+			out.maxDepth = 1.0f;
 			out.target = a_target;
 			out.slice = a_view.slice;
 			out.materialRows = a_resources.materialRows.address;
@@ -745,9 +744,17 @@ namespace DCLF
 		// The rasterizer state the engine draws this view with: its table entry for the renderer's modes, read
 		// now, while the view is drawn - Community Shaders' ShadowmapCascadeRasterizerFix swaps per-cascade
 		// copies with their own depth bias into that table for exactly this window, and the volumetric copy
-		// draws with culling off. DCLF's pipelines for the view are built with it.
-		const std::uint32_t rasterState = EngineRasterStateId(shadowState.rasterStateFillMode, shadowState.rasterStateCullMode,
-			shadowState.rasterStateDepthBiasMode, shadowState.rasterStateScissorMode, a_renderMode);
+		// draws with culling off. DCLF's pipelines for the view are built with it. The cull mode is the entry's at 1, not the
+		// renderer's: the Utility shader sets it per pass (0 for a two-sided property, 1 otherwise; engine notes, shadow maps),
+		// so the renderer's is the view's last pass's, which changes from frame to frame with whatever drew last. A two-sided
+		// caster's key draws without culling (kRasterTwoSided) whatever the state, as the engine's pass does - and the view's
+		// state, and so its recording, only changes with the view. A view whose table has no entry at 1 (the volumetric copy,
+		// which draws with culling off) takes its entry at 0.
+		std::uint32_t rasterState = EngineRasterStateId(shadowState.rasterStateFillMode, 1, shadowState.rasterStateDepthBiasMode,
+			shadowState.rasterStateScissorMode, a_renderMode);
+		if (rasterState == 0)
+			rasterState = EngineRasterStateId(shadowState.rasterStateFillMode, 0, shadowState.rasterStateDepthBiasMode, shadowState.rasterStateScissorMode,
+				a_renderMode);
 		if (rasterState == 0)
 			return notReady(ShadowNotReady::Pipelines);
 
@@ -758,9 +765,6 @@ namespace DCLF
 		view.targetIndex = targetIndex;
 		view.slice = slice;
 		view.rasterState = rasterState;
-		for (std::uint32_t cull = 0; cull < view.cullStates.size(); ++cull)
-			view.cullStates[cull] = EngineRasterStateId(shadowState.rasterStateFillMode, cull, shadowState.rasterStateDepthBiasMode, shadowState.rasterStateScissorMode,
-				a_renderMode);
 		view.casterClass = volumetricCopy ? 1u : 0u;
 		view.sunView = shadowView->kind == ShadowViews::Kind::Directional;
 		CaptureViewTarget(view, target);
@@ -939,7 +943,7 @@ namespace DCLF
 				shadowStats.occlusionInputs[v] = inputCount;
 				++shadowStats.occlusionDrawn[v];
 			}
-			PublishShape(std::move(frame), resources->occlusionPublished, resources->occlusionFrame, resources->shapeGenerations);
+			PublishShape(std::move(frame), resources->occlusionPublished, resources->occlusionFrame, resources->shapeGenerations, resources->recentOcclusionShapes);
 		}, impl->shadowExecutionOwner);
 		shadowStats.occlusionMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		++shadowStats.occlusionEpochs;
@@ -993,17 +997,10 @@ namespace DCLF
 		// Per mode and caster class, every rasterizer state its views have drawn with (DrawPipelines' ids, which only
 		// grow): the build's inputs and the shadow pipelines are for all of them, so which of its views a frame draws -
 		// the sun's cascades alternate their depth-bias states frame by frame, a local light's culling-off view comes and
-		// goes - changes nothing the build reads. It grows when a state first appears, with its sibling under the other cull
-		// mode (PendingView::cullStates): a view's state is its last pass's cull mode, and the set withholds a phase's casters
-		// before the frame's views are seen, so a sibling first met mid-frame would leave them to nobody that frame. Each
-		// view's latch row is its own.
+		// goes - changes nothing the build reads. It grows when a state first appears. Each view's latch row is its own.
 		for (const auto& view : pending) {
 			modeUsed[view.modeIndex] = true;
-			auto& seen = impl->shadowStatesSeen[view.modeIndex];
-			seen.Add(view.rasterState, view.casterClass != 0);
-			for (const std::uint32_t state : view.cullStates)
-				if (state)
-					seen.Add(state, view.casterClass != 0);
+			impl->shadowStatesSeen[view.modeIndex].Add(view.rasterState, view.casterClass != 0);
 		}
 		std::array<ModeRasterStates, kShadowModeCount> modeRasterStates{};
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
@@ -1276,6 +1273,23 @@ namespace DCLF
 					ShadowViewCapacity(previous ? previous->capacity : 0, payload.modeDraws[view.modeIndex], resources->sequenceDraws[slot]),
 					*resources, payload));
 				frame->views.back().buckets = std::move(viewBuckets);
+				if (impl->shadowSlotDrawn.size() <= slot)
+					impl->shadowSlotDrawn.resize(std::size_t(slot) + 1, 0u);
+				impl->shadowSlotDrawn[slot] = frameNumber;
+			}
+			// The view slots the previous shape had past this frame's views (a local light's paraboloid pair, which comes and goes
+			// with the light): kept in the shape, as they were, with no work - a zero latch (no dispatch, no draw), their counters
+			// zeroed by the latched copies, and their render passes loading and storing what the engine left - so a view's
+			// coming and going changes no shape and the epoch's ticket stays current. One whose light comes back finds its
+			// capacity and buckets. A slot not drawn for kRetainedViewFrames frames leaves the shape.
+			for (std::uint32_t index = static_cast<std::uint32_t>(pending.size()); previousShape && index < previousShape->views.size(); ++index) {
+				const auto& retained = previousShape->views[index];
+				const std::uint32_t slot = kFirstShadowViewSlot + index;
+				if (retained.slot != slot || slot >= impl->shadowSlotDrawn.size() || frameNumber - impl->shadowSlotDrawn[slot] > Impl::kRetainedViewFrames)
+					break;
+				resources->latch->WriteValue(latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), BuildDrawsLatch{});
+				frame->views.push_back(retained);
+				++shadowStats.retainedViews;
 			}
 			// The arena (the frame record and the blocks), when the worker did not stage it.
 			if (const auto& bytes = arena.Bytes(); !staged && !bytes.empty())
@@ -1306,7 +1320,7 @@ namespace DCLF
 			}
 			{
 				ZoneScopedN("CS.DCLF.ShadowInputs.Publish");
-				PublishShape(std::move(frame), resources->published, resources->frame, resources->shapeGenerations);
+				PublishShape(std::move(frame), resources->published, resources->frame, resources->shapeGenerations, resources->recentShapes);
 			}
 			TracyCZoneEnd(shadowViewsZone);
 		}, frameOwners);
@@ -1378,8 +1392,7 @@ namespace DCLF
 		// What the last build wanted, with a quarter more: the table grows ahead of the scene, not a frame behind it.
 		if (!shadow || !shadowRowsWanted)
 			return;
-		if (shadow->materialRows.Reserve(shadowRowsWanted + shadowRowsWanted / 4))
-			shadow->materialRowsHeld = 0;  // a new backing holds nothing
+		shadow->materialRows.Reserve(shadowRowsWanted + shadowRowsWanted / 4, [state = shadow.get()] { state->materialRowsHeld = 0; });  // a new version holds nothing
 	}
 
 	ShadowInputs IndirectDraws::Impl::PrepareShadowInputs(const SceneStore& a_store, const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,

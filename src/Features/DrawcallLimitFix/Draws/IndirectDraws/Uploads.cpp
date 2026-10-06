@@ -35,7 +35,7 @@ namespace DCLF
 				a_emit(inputs, a_payload.inputList.data(), a_payload.inputList.size() * sizeof(DrawInput), regionCount * sizeof(DrawInput));
 			TracyCZoneEnd(residentUploadZone);
 			EmitGeometryDraws(a_payload.geometryDraws, scene.held.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-				a_emit(scene.geometries, a_data, a_bytes, a_offset);
+				a_emit(scene.geometries->Get(), a_data, a_bytes, a_offset);
 			});
 		}
 
@@ -62,7 +62,7 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.StageMainPayload");
 		auto batch = AcquireStagedBatch(a_pool);
 		ForEachMainPayloadUpload(a_payload, a_resources, [&](const auto& a_target, const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-			batch->Stage(org::runtime::UploadTarget::FromShared(a_target), a_offset, a_data, a_bytes);
+			batch->Stage(org::runtime::UploadTarget::FromShared(Target(a_target)), a_offset, a_data, a_bytes);
 		});
 		a_payload.stagedFor = &a_resources;
 		a_payload.stagedRowsGeneration = RowsGeneration(a_resources);
@@ -86,18 +86,18 @@ namespace DCLF
 		const auto& scene = *a_resources.scene;
 		const TablesHeld& held = a_payload.inputs.tablesHeld;
 		EmitGeometryDraws(a_payload.geometries, held.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-			batch->Stage(UploadTarget::FromShared(scene.geometries), a_offset, a_data, a_bytes);
+			batch->Stage(UploadTarget::FromShared(scene.geometries->Get()), a_offset, a_data, a_bytes);
 		});
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
 			if (!a_payload.inputs.modeUsed[m])
 				continue;
 			EmitShadowInputs(a_payload, m, a_payload.kept ? a_resources.inputsUploaded[m] : 0, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-				batch->Stage(UploadTarget::FromShared(a_resources.inputs[m]), a_offset, a_data, a_bytes);
+				batch->Stage(UploadTarget::FromShared(Target(a_resources.inputs[m])), a_offset, a_data, a_bytes);
 			});
 		}
 		// The material rows the table does not hold (all of them without the kept state, or in a new backing).
 		a_payload.materialRows.Emit(a_payload.kept ? a_payload.inputs.materialRowsHeld : 0, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-			batch->Stage(UploadTarget::FromShared(a_resources.materialRows.buffer), a_offset, a_data, a_bytes);
+			batch->Stage(UploadTarget::FromShared(Target(a_resources.materialRows.buffer)), a_offset, a_data, a_bytes);
 		});
 		if (const auto& bytes = a_payload.arena.Bytes(); !bytes.empty())
 			batch->Stage(UploadTarget::FromShared(a_resources.constants), 0, bytes.data(), bytes.size());
@@ -131,7 +131,7 @@ namespace DCLF
 		job.batch = AcquireStagedBatch(job.pool);
 		++job.kicked;
 		const rhi::Device device = RecordingDevice();
-		job.handle = AsyncWorker::Get().Submit("streams", [result = &job, batch = job.batch, objectsBuffer = sceneBuffers.objects, bonesBuffer = sceneBuffers.bones,
+		job.handle = AsyncWorker::Get().Submit("streams", [result = &job, batch = job.batch, objectsBuffer = sceneBuffers.objects->Get(), bonesBuffer = sceneBuffers.bones->Get(),
 															objectCapacity = sceneBuffers.objectCapacity, boneRows = sceneBuffers.boneRows, tables = &tables, objects = SceneObjects(),
 															bonesStore = SceneBones(), from = job.from, generation = job.tablesGeneration, frame = store.GetFrame(), device](std::stop_token) {
 			ZoneScopedN("CS.DCLF.StageSceneStreams");
@@ -871,7 +871,8 @@ namespace DCLF
 		a_resources->committed[shapeIndex] = { frameNumber, inputCount, a_resources->scene->generation, a_resources->objectCapacity };
 
 		frame->latched = latched.Finish();
-		PublishShape(std::move(frame), a_resources->published[shapeIndex], a_resources->frames[shapeIndex], a_resources->shapeGenerations);
+		PublishShape(std::move(frame), a_resources->published[shapeIndex], a_resources->frames[shapeIndex], a_resources->shapeGenerations,
+			a_resources->recentShapes[shapeIndex]);
 		lap(6);
 		return true;
 	}

@@ -305,12 +305,14 @@ namespace DCLF
 			std::vector<std::uint8_t> discards;
 			std::uint32_t applied = 0;
 		};
-		// Enough that one is normally free: the published one, and the one the frames still being recorded may hold.
-		static constexpr std::size_t kSetVersions = 3;
+		// As many versions as are held at once: the published one, the ones frames still being recorded hold, and the ones kept
+		// recordings hold (ORG's recording reuse keeps an epoch's recordings, and with them the version they bound, for as long
+		// as they may be submitted again). A new one is made when none is free, so a new pipeline never waits for a recording to
+		// let go of an older version.
 		template <class Version>
 		struct Versions
 		{
-			std::array<std::shared_ptr<Version>, kSetVersions> owned;
+			std::vector<std::shared_ptr<Version>> owned;
 			std::atomic<std::shared_ptr<Version>> published;
 			// Versions of a previous pipeline generation (a target or format change), dropped here once nothing holds them.
 			std::vector<std::shared_ptr<Version>> retired;
@@ -322,7 +324,7 @@ namespace DCLF
 				for (auto& version : owned)
 					if (version)
 						retired.push_back(std::move(version));
-				owned = {};
+				owned.clear();
 				published.store(nullptr);
 				handedOut = 0;
 			}
@@ -346,9 +348,14 @@ namespace DCLF
 				const auto current = published.load();
 				if (current && current->applied == a_admitted)
 					return PublishResult::Current;
-				for (auto& version : owned) {
-					if (version && (version == current || version.use_count() != 1))
-						continue;
+				// A free one (its last version is nobody's, and nobody can take it again until it is published), or a new one.
+				auto free = std::ranges::find_if(owned, [&](const std::shared_ptr<Version>& a_version) {
+					return !a_version || (a_version != current && a_version.use_count() == 1);
+				});
+				if (free == owned.end())
+					free = owned.insert(owned.end(), nullptr);
+				{
+					auto& version = *free;
 					// Every other owner has let go, and none can take it again until it is published: whatever a recording
 					// did with it happened before this.
 					std::atomic_thread_fence(std::memory_order_acquire);
@@ -363,7 +370,6 @@ namespace DCLF
 					published.store(version);
 					return PublishResult::Published;
 				}
-				return PublishResult::Waiting;
 			}
 		};
 

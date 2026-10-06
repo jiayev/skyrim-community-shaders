@@ -5,17 +5,32 @@
 namespace DCLF::Draws
 {
 	/**
-	 * @brief The scope in which the render thread may change a graph buffer's backing (ResizeBytes, ResizeStructured).
-	 *
-	 * ORG's host thread prepares the next tickets while the render thread commits an epoch's inputs, and each preparation
-	 * captures every slot's backing. A resize has no backing between releasing the old one and creating the new one: a
-	 * preparation in that window bound nothing, or materialized the buffer itself, and its ticket wrote through a null or
-	 * released buffer (crash-catalog.md, "the Z-prepass device loss"). The scope keeps the two apart
-	 * (PersistentGraphHost::MutateBackings: it waits out a preparation in progress), and the tickets prepared before it are
-	 * prepared again. Opened only where a backing does change, so a frame that grows nothing never waits; ORG throws on a
-	 * resize outside it while async epochs run.
+	 * @brief A growth of versioned buffers (Versioned): their next versions, made at the new sizes, and what their adoption changes
+	 * - the held versions reset (a new version holds nothing), the addresses and descriptor indices taken again, a layout made
+	 * for the new size. A consequence describes the new versions, so it runs when they become the ones written: at adoption.
 	 */
-	std::optional<org::PersistentGraphHost::BackingMutation> MutateBackings();
+	struct Growth
+	{
+		std::vector<std::pair<Versioned, std::shared_ptr<const org::BufferVersion>>> versions;
+		Growth& Structured(const Versioned& a_buffer, std::uint32_t a_elements)
+		{
+			versions.emplace_back(a_buffer, a_buffer->MakeStructured(a_elements));
+			return *this;
+		}
+		Growth& Bytes(const Versioned& a_buffer, std::uint64_t a_bytes)
+		{
+			versions.emplace_back(a_buffer, a_buffer->MakeBytes(a_bytes));
+			return *this;
+		}
+	};
+
+	/**
+	 * @brief Adopts a growth (render thread): its versions become current, then a_adopted runs, then the graph host is told
+	 * (PersistentGraphHost::NoteNewVersions: a ticket prepared against the old versions is prepared again or takes a kept recording).
+	 * Nothing changes in place, so nothing waits; the old versions stay as they were for whatever holds them. The live path adopts a
+	 * growth as it is made.
+	 */
+	void Adopt(Growth&& a_growth, const std::function<void()>& a_adopted = {});
 
 	/**
 	 * @brief A table of fixed-stride rows in one device buffer the shaders read by address, which grows instead of capping.
@@ -28,11 +43,11 @@ namespace DCLF::Draws
 	 * nothing, so after a growth (the generation changes) every row is sent again. A row past the capacity waits for the
 	 * next Reserve, as a caster waits for its texture: nothing is dropped and nothing falls back.
 	 *
-	 * Render thread, between epochs, inside MutateBackings (Reserve opens it when the backing changes).
+	 * Render thread, between epochs: a growth publishes a new version (PersistentGraphHost::NoteNewVersions), nothing waits.
 	 */
 	struct GrowableRows
 	{
-		std::shared_ptr<org::Buffer> buffer;
+		Versioned buffer;  // a growth is a new version (the old one stays as it was for what holds it)
 		std::uint64_t address = 0;
 		std::uint32_t stride = 0;
 		std::uint32_t capacity = 0;    // rows the backing holds
@@ -42,7 +57,7 @@ namespace DCLF::Draws
 
 		/** @brief The first backing: a_rows rows of a_stride bytes. False when it has no device address. */
 		bool Create(std::uint32_t a_stride, std::uint32_t a_rows, const char* a_name);
-		/** @brief Room for a_rows: true when the backing changed (every row must be sent again). */
-		bool Reserve(std::uint32_t a_rows);
+		/** @brief Room for a_rows: true when it grew; a_adopted runs when the new version is adopted (every row must be sent again). */
+		bool Reserve(std::uint32_t a_rows, const std::function<void()>& a_adopted = {});
 	};
 }

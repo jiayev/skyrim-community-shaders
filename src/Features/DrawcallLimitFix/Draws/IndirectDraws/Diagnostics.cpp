@@ -169,6 +169,27 @@ namespace DCLF
 			k.builds = k.entriesWritten = k.rowsWritten = k.resyncs = 0;
 			k.parity.Reset();
 		}
+		{
+			// The epochs' shapes (PublishShape): a new one, or one come back, is a recording the epoch may not hold yet.
+			std::string shapes;
+			auto shape = [&](const char* a_name, auto& a_recent) {
+				if (a_recent.same + a_recent.recent + a_recent.made)
+					shapes += fmt::format("{}{} {} same, {} came back, {} new", shapes.empty() ? "" : "; ", a_name, a_recent.same, a_recent.recent, a_recent.made);
+				a_recent.same = a_recent.recent = a_recent.made = 0;
+			};
+			if (impl->resources) {
+				shape("Z-prepass", impl->resources->recentShapes[kDepthShape]);
+				shape("colour", impl->resources->recentShapes[kColourShape]);
+			}
+			if (impl->shadow) {
+				shape("shadow", impl->shadow->recentShapes);
+				shape("occlusion", impl->shadow->recentOcclusionShapes);
+			}
+			if (impl->reflection.resources)
+				shape("reflection", impl->reflection.resources->recentShapes);
+			if (!shapes.empty())
+				text += fmt::format("[DCLF] epoch shapes: {}\n", shapes);
+		}
 		if (auto& bound = impl->drawBound; bound.updates) {
 			text += fmt::format("[DCLF] scene draw bound: {} updates, {:.1f} slots changed an update, {} draws over {} slots, {} resyncs; parity {} checked, {} differ{}\n",
 				bound.updates, static_cast<double>(bound.changes) / bound.updates, bound.draws, bound.produced.size(), bound.resyncs, bound.parity.checks,
@@ -756,7 +777,7 @@ namespace DCLF
 					sourceDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 					sourceDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 					sourceDesc.StructureByteStride = sizeof(std::uint32_t);
-					const auto source = buffers.treeWindRows[h] ? RenderGraphRuntime::Get().WrapBuffer(*buffers.treeWindRows[h], sourceDesc) : nullptr;
+					const auto source = buffers.treeWindRows[h] ? RenderGraphRuntime::Get().WrapBuffer(*buffers.treeWindRows[h]->Get(), sourceDesc) : nullptr;
 					D3D11_BUFFER_DESC desc{};
 					desc.ByteWidth = bytes;
 					desc.Usage = D3D11_USAGE_STAGING;
@@ -784,7 +805,7 @@ namespace DCLF
 		sourceDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 		sourceDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 		sourceDesc.StructureByteStride = sizeof(std::uint32_t);
-		const auto source = RenderGraphRuntime::Get().WrapBuffer(*buffers.treeWindRows[(buffers.treeFrame + 1) & 1], sourceDesc);
+		const auto source = RenderGraphRuntime::Get().WrapBuffer(*buffers.treeWindRows[(buffers.treeFrame + 1) & 1]->Get(), sourceDesc);
 		if (!source)
 			return;
 		D3D11_BUFFER_DESC desc{};
