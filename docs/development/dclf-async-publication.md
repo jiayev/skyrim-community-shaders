@@ -530,6 +530,26 @@ current and then runs the growth's consequences: the held versions reset, the ad
 index pool laid out and copied again. Live mode adopts at once, so nothing changed (small tables: the same 36 growths, members
 and draws); R3c adopts a revision's growths when it is selected.
 
+**Phase 6b, R3c (a): shape producers, main and reflection** (2026-10-05, r3ca2, r3ca3). A revision's shapes must be made from
+its own inputs, before the frame that draws with them. The main and reflection shapes now come from producers (`Shapes.cpp`):
+`MakeMainShape` from `MainShapeInputs`, with `PlanZBuckets` (the Z-prepass's buckets and calls) and `MainLatchedLayout` (the
+latched copies, in the commit's order and packing), and `MakeReflectionShape` with `PlanReflectionBuckets`. The commits make
+their shapes through them. At the scene work's join `MakeRevisionShapes` makes the same shapes again, from the revision's
+inputs and what each segment's last commit captured: the viewport, the frame blocks' sizes, the descriptor heaps (read only
+inside an epoch). The shape parity compares each commit with the revision made in its frame and the one made the frame
+before (the one `BeginSceneFrame` would select).
+
+- **Made revision-level.** The max counts come from the scene's draw bound, not the frame's draw count: a capacity never
+  depends on what a frame drew. The colour pass's cascades and local shadow volumes reserve the latch before the shape is
+  made. A frame buffer the mirror cannot fill is latched as zeros, so the latched list does not depend on it.
+- **Result** (small tables, r3ca2/r3ca3). In steady play the commits' shapes equal both revisions', every frame, for the
+  Z-prepass, colour and reflection. The predicted latched layout was never missed. The only differences are at startup:
+  the pipeline set growing (pipelines arriving) and the Z-prepass's calls following the lookups as they resolve, plus about
+  one frame in 3,000 where a pipeline resolves between the join and the Z-prepass. Both are R4's: a revision names its
+  pipeline set and lookups. Members, draws, growths and warnings are as in r3bs.
+- **Left: shadows and occlusion.** Their shape depends on the frame's views (which slots, rects and rasterizer states:
+  today a handful of recent variants), on the payload's per-key-slot draws and on its arena's addresses.
+
 ## Implemented foundations
 
 - `ORGModuleServices::AsyncPrimitives` is a backend-independent header-only target.

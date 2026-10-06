@@ -921,6 +921,102 @@ namespace DCLF
 			org::ResourceBindingToken treeLodVisible;      // tree LOD's draw's arguments (UploadTreeLod, TreeLodCullPass)
 		};
 
+		/*
+		 * The main epochs' shape producers (Shapes.cpp; dclf-async-publication.md, R3c). A segment's shape (PassFrame) is a function
+		 * of what a scene revision names - its resource versions, the scene's draw bound, the pipeline set and the lookups - and of
+		 * what changes only with the engine's setup (the main pass's viewport, the frame blocks' sizes); never of a frame's values,
+		 * which the commit writes into the latch and the latched copies' layout the shape names. A revision's shape is made from
+		 * these at the scene work's join (MakeRevisionShapes); a commit makes its own from the same producer (ShapeParity).
+		 */
+
+		/**
+		 * @brief The Z-prepass's plain draws (MainOpaquePass): a bucket per group of pipeline slots that share a depth pipeline
+		 * (IndirectState::zGroups), in the order the slots first name them, its range the slots' ranges together
+		 * (Resources::zBucketCapacity, which the sequences' phase ranges hold); each slot's bucket (kNoBucket: a slot without a
+		 * published pipeline, whose draws BuildDraws drops); each phase's table of (first, capacity) per bucket; a draw call per
+		 * bucket. The calls are the shape's; the map and the tables the commit's latch.
+		 */
+		struct ZBucketPlan
+		{
+			std::vector<std::uint32_t> map;    // per pipeline slot
+			std::vector<std::uint32_t> table;  // phase 1's (first, capacity) per bucket, then phase 2's
+			std::vector<PassFrame::ZCall> calls;
+			std::uint32_t Buckets() const { return static_cast<std::uint32_t>(calls.size()); }
+		};
+		void PlanZBuckets(const Resources& a_resources, const Lookups& a_lookups, const SceneStore::Tables& a_tables, const IndirectState& a_indirect, ZBucketPlan& a_out);
+
+		/** @brief The sizes of a main epoch's frame blocks (FrameBlocks), per stage and register: what its latched copies of them take. */
+		struct FrameBlockSizes
+		{
+			std::array<std::uint32_t, kConstantBufferRegisters> vs{}, ps{};
+			bool operator==(const FrameBlockSizes&) const = default;
+		};
+
+		/**
+		 * @brief A main commit's latched copies (LatchedUploads), in the order it writes them and packed as LatchedUploads packs
+		 * them: a function of its resources, its segment, its frame blocks' sizes and the Z-prepass's bucket count.
+		 */
+		std::vector<LatchedCopy> MainLatchedLayout(const Resources& a_resources, bool a_depthOnly, const FrameBlockSizes& a_blocks, std::uint32_t a_buckets);
+		/** @brief The bytes a layout takes of its latch block's slot. */
+		std::size_t LatchedBytes(const std::vector<LatchedCopy>& a_copies);
+		/** @brief A latched copies' block holding at least a_bytes a slot: a new, larger one when it does not (LatchedUploads' rule). */
+		void ReserveLatchedBlock(std::shared_ptr<org::LatchBlock>& a_block, std::size_t a_bytes, std::uint32_t a_slots);
+
+		/** @brief The main pass's render area and depth range, as a segment's last capture had them. */
+		struct MainViewport
+		{
+			std::uint32_t width = 0, height = 0;
+			float minDepth = 0.0f, maxDepth = 1.0f;
+			bool operator==(const MainViewport&) const = default;
+		};
+
+		/** @brief What a main segment's shape is made from (MakeMainShape). */
+		struct MainShapeInputs
+		{
+			bool depthOnly = false;
+			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // the sequence buffer's ranges (ReserveMainSequences)
+			std::uint64_t materialRows = 0, pipelineRows = 0;     // the rows' tables' addresses
+			// The draws the scene can produce (SceneDrawBound) and each decal group's, and the last shape's max counts, which only grow.
+			std::uint32_t drawBound = 0;
+			std::array<std::uint32_t, kDecalGroups> decalBound{};
+			std::uint32_t previousDraws = 0;
+			std::array<std::uint32_t, kDecalGroups> previousDecals{};
+			MainViewport viewport;
+			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
+			IndirectState indirect{};
+			std::uint32_t cullMode = 0;
+			std::shared_ptr<const org::LatchBlock> latch;  // the main latch (ReserveMainLatch)
+			std::vector<PassFrame::ZCall> zCalls;          // the depth segment's (PlanZBuckets)
+			LatchedList latched;                           // MainLatchedLayout, in its reserved block
+		};
+		/**
+		 * @brief The segment's resources' part of its shape's inputs: the ranges, the rows, the bounds, the latch, the cull mode. Not the
+		 * descriptor heaps: the device's, read only inside an epoch (org::runtime::GetActiveSRVDescriptorHeap).
+		 */
+		MainShapeInputs MainShapeInputsOf(const Resources& a_resources, bool a_depthOnly, const SceneStore::Tables& a_tables, std::uint32_t a_drawBound);
+		std::shared_ptr<PassFrame> MakeMainShape(const MainShapeInputs& a_in);
+
+		/** @brief The parts of a main shape the shape parity tells apart (MainShapeDifferences). */
+		enum MainShapeField : std::uint32_t
+		{
+			kShapeCapacity,
+			kShapeSequences,
+			kShapeRows,
+			kShapeViewport,
+			kShapeHeaps,
+			kShapePipelines,
+			kShapeCull,
+			kShapeLatch,
+			kShapeZCalls,
+			kShapeLatchedCopies,
+			kShapeLatchedBlock,
+			kMainShapeFields
+		};
+		inline constexpr std::array<const char*, kMainShapeFields> kMainShapeFieldNames = { "capacity", "sequences", "rows", "viewport", "heaps", "pipelines", "cull",
+			"latch", "z calls", "latched copies", "latched block" };
+		/** @brief The fields (MainShapeField bits) where two main shapes differ: 0 for shapes SameShape holds the same. */
+		std::uint32_t MainShapeDifferences(const PassFrame& a_a, const PassFrame& a_b);
+
 		/**
 		 * @brief CS_DCLF_PASS_STATS=1: pipeline statistics (input vertices and primitives, vertex and pixel shader
 		 * invocations) of the main epochs' draw passes, per frame slot, read back when the slot comes round again: the counter
@@ -1438,6 +1534,23 @@ namespace DCLF
 		constexpr std::uint64_t FrameSlotOffset(bool a_pixelStage, std::uint32_t a_register)
 		{
 			return (std::uint64_t(a_pixelStage ? kConstantBufferRegisters : 0u) + a_register) * kFrameSlotBytes;
+		}
+
+		/** @brief The frame push word of a stage's constant buffer register (FramePushWords' order), or ~0u when it is not pushed. */
+		inline std::uint32_t FramePushWord(bool a_pixel, std::uint32_t a_register)
+		{
+			std::uint32_t word = kFramePushRegisters;
+			for (const bool pixel : { false, true }) {
+				const std::uint32_t mask = pixel ? kFramePushPS : kFramePushVS;
+				for (std::uint32_t r = 0; r < kConstantBufferRegisters; ++r) {
+					if (!((mask >> r) & 1))
+						continue;
+					if (pixel == a_pixel && r == a_register)
+						return word;
+					word += 2;
+				}
+			}
+			return ~0u;
 		}
 
 		inline std::array<std::uint32_t, kFramePushWords> FramePushWords(std::uint64_t a_frameConstants)
@@ -3060,6 +3173,31 @@ namespace DCLF
 		};
 
 		std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeReflectionExtension(std::shared_ptr<ReflectionResources> a_resources);
+
+		/**
+		 * @brief The faces' buckets (ExecuteReflection): per distinct forward pipeline, the LOD slots that draw with it, each slot's
+		 * range what its objects can produce (the Z-prepass's bucket capacity); and each pipeline slot's bucket (kNoBucket: none).
+		 */
+		struct ReflectionPlan
+		{
+			std::vector<std::uint32_t> map;
+			std::vector<ReflectionFrame::Bucket> buckets;
+			std::uint32_t draws = 0;  // a face's, all buckets
+		};
+		void PlanReflectionBuckets(const Resources& a_main, std::span<const rhi::PipelineHandle> a_slotPipelines, ReflectionPlan& a_out);
+
+		/** @brief What the reflection epoch's shape is made from (MakeReflectionShape): its resources, reserved for a_plan, and the main's. */
+		struct ReflectionShapeInputs
+		{
+			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
+			IndirectState indirect{};
+			std::vector<ReflectionFrame::Bucket> buckets;
+			// Tree LOD in the faces: its forward pipeline and draw signature, and the scene's shape slots (none: invalid pipeline).
+			rhi::PipelineHandle tree{};
+			rhi::CommandSignatureHandle treeSignature{};
+			std::uint32_t treeShapes = 0;
+		};
+		std::shared_ptr<ReflectionFrame> MakeReflectionShape(const ReflectionResources& a_resources, const ReflectionShapeInputs& a_in);
 	}
 
 	// What was one translation unit's anonymous namespace: its names resolve here as they did there.
@@ -3453,8 +3591,55 @@ namespace DCLF
 		// The local shadow lights its BuildDraws selected against (LocalShadowLights), and their volumes as uploaded.
 		LocalShadowLights localShadows;
 		std::vector<GpuShadowVolume> shadowVolumes;
-		// The depth commit's scratch: its buckets' tables (both phases) and the zeros their count words take.
-		std::vector<std::uint32_t> zBucketTable, zBucketZeros, zBucketMap, zGroupBucket;
+		// The depth commit's scratch: its buckets (PlanZBuckets) and the zeros their count words take.
+		ZBucketPlan zBucketPlan;
+		std::vector<std::uint32_t> zBucketZeros;
+
+		/**
+		 * @brief R3c (a), the shape parity (live mode, counts only). At the scene work's join (MakeRevisionShapes) each main segment's
+		 * shape is made as a scene revision would make it, from the revision's inputs and what the segment's last commit captured
+		 * (its viewport, its frame blocks' sizes); each commit's own shape is then compared with the revision made in its frame
+		 * (an input the commit takes later than the join) and with the one made the frame before (the revision the frame would
+		 * select at BeginSceneFrame). Since the last report: per segment, comparisons, the same, no revision to compare with, and
+		 * per field (MainShapeField) the differences; and commits whose latched copies were not MainLatchedLayout's of their own
+		 * inputs (a commit writing what the layout does not name).
+		 */
+		struct ShapeParity
+		{
+			// Per segment, the revisions made at this frame's join and at the frame before's, and those frames.
+			std::array<std::array<std::shared_ptr<const PassFrame>, 2>, 2> revisions;
+			std::array<std::array<std::uint32_t, 2>, 2> revisionFrames{ { { ~0u, ~0u }, { ~0u, ~0u } } };
+			// What the segment's last commit captured, which the next revision's shape is made with.
+			std::array<bool, 2> known{};
+			std::array<MainViewport, 2> viewport{};
+			std::array<FrameBlockSizes, 2> blockSizes{};
+			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
+			struct Counts
+			{
+				std::uint64_t compared = 0, same = 0, missing = 0;
+				std::array<std::uint64_t, kMainShapeFields> differ{};
+			};
+			// Per segment: against the frame's own revision, and against the frame before's.
+			std::array<std::array<Counts, 2>, 2> counts{};
+			std::array<std::uint64_t, 2> layoutMisses{};
+			std::uint32_t logged = 0;
+		} shapeParity;
+		/** @brief A commit's shape against the revisions (ShapeParity); a_layout: MainLatchedLayout of its own inputs. */
+		void NoteShapeParity(std::size_t a_shape, const PassFrame& a_frame, const std::vector<LatchedCopy>& a_layout, std::uint32_t a_frameNumber);
+		/**
+		 * @brief The reflection epoch's (ShapeParity's): its shape as a revision at the join makes it (MakeRevisionShapes, once an
+		 * epoch has run: the heaps), against its commit's, made in the same frame or the frame before.
+		 */
+		struct ReflectionParity
+		{
+			std::array<std::shared_ptr<const ReflectionFrame>, 2> revisions;
+			std::array<std::uint32_t, 2> revisionFrames{ ~0u, ~0u };
+			bool known = false;
+			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
+			std::array<ShapeParity::Counts, 2> counts{};  // differ: kShapePipelines (anything)
+			std::uint32_t logged = 0;
+		} reflectionParity;
+		void NoteReflectionParity(const ReflectionFrame& a_frame, std::uint32_t a_frameNumber);
 
 		void ReadCullCounters(const std::shared_ptr<Resources>& a_resources, IndirectDraws::Stats& a_stats, const MainPayload& a_payload);
 		/**

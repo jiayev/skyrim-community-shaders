@@ -40,6 +40,7 @@ namespace DCLF
 	void IndirectDraws::JoinFadeWriteBack() {}
 	void IndirectDraws::KickShadowBuild() {}
 	void IndirectDraws::KickShadowBuildEarly() {}
+	void IndirectDraws::MakeRevisionShapes() {}
 	bool IndirectDraws::KeepEarlyShadowBuild() { return false; }
 	void IndirectDraws::BeforePlacementJoin() {}
 	void IndirectDraws::KickSceneStreams() {}

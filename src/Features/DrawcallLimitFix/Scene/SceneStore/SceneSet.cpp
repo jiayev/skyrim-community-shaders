@@ -530,9 +530,11 @@ namespace DCLF
 		if (std::exchange(allMembersLostHeld, false))
 			primary.NoteAllMembersLost();
 		RevokeUndrawnClaims();
+		auto& draws = IndirectDraws::Get();
+		// The shapes a scene revision made now would have (R3c), before the jobs below read the tables' buffers.
+		draws.MakeRevisionShapes();
 		// What the work's results start: the stood-in fade roots' write-back, and the shadow build kept at BeforeShadowMaps when
 		// nothing it read moves.
-		auto& draws = IndirectDraws::Get();
 		draws.KickFadeWriteBack();
 		if (ActiveToggles().shadows)
 			draws.KickShadowBuildEarly();

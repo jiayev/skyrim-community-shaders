@@ -190,6 +190,36 @@ namespace DCLF
 			if (!shapes.empty())
 				text += fmt::format("[DCLF] epoch shapes: {}\n", shapes);
 		}
+		{
+			// R3c (a): the main shapes a scene revision makes at the join, against the commits' (Impl::ShapeParity).
+			auto& p = impl->shapeParity;
+			std::string segments;
+			for (const std::size_t shape : { kDepthShape, kColourShape }) {
+				std::string lags;
+				for (std::size_t lag = 0; lag < 2; ++lag) {
+					auto& c = p.counts[shape][lag];
+					std::string fields;
+					for (std::uint32_t f = 0; f < kMainShapeFields; ++f)
+						if (c.differ[f])
+							fields += fmt::format("{}{} {}", fields.empty() ? "" : ", ", kMainShapeFieldNames[f], c.differ[f]);
+					lags += fmt::format("{}{}: {} compared, {} same, {} without one{}", lags.empty() ? "" : "; ", lag ? "the frame before's" : "the frame's own", c.compared,
+						c.same, c.missing, fields.empty() ? std::string() : " (differ: " + fields + ")");
+					c = {};
+				}
+				if (!lags.empty())
+					segments += fmt::format("{}{} against {}; layout misses {}", segments.empty() ? "" : " | ", shape == kDepthShape ? "Z-prepass" : "colour", lags,
+						p.layoutMisses[shape]);
+				p.layoutMisses[shape] = 0;
+			}
+			auto& rp = impl->reflectionParity;
+			for (std::size_t lag = 0; lag < 2; ++lag) {
+				auto& c = rp.counts[lag];
+				segments += fmt::format("{}reflection against {}: {} compared, {} same, {} without one, {} differ", lag ? "; " : " | ", lag ? "the frame before's" : "the frame's own",
+					c.compared, c.same, c.missing, c.differ[kShapePipelines]);
+				c = {};
+			}
+			text += fmt::format("[DCLF] shape parity (R3c): {}\n", segments);
+		}
 		if (auto& bound = impl->drawBound; bound.updates) {
 			text += fmt::format("[DCLF] scene draw bound: {} updates, {:.1f} slots changed an update, {} draws over {} slots, {} resyncs; parity {} checked, {} differ{}\n",
 				bound.updates, static_cast<double>(bound.changes) / bound.updates, bound.draws, bound.produced.size(), bound.resyncs, bound.parity.checks,
