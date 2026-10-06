@@ -1830,7 +1830,7 @@
     "feature.physical_sky.ndf_octaves": "倍频程",
     "feature.physical_sky.ndf_offset": "偏移",
     "feature.physical_sky.ndf_output_interval": "输出区间",
-    "feature.physical_sky.ndf_overlay_hint": "此叠加图随生成的全局场平铺。需要世界坐标放置时，请使用局部云实例。",
+    "feature.physical_sky.ndf_overlay_hint": "此覆盖层随生成的全局场重复。需要世界空间放置时，请使用局部云。",
     "feature.physical_sky.ndf_persistence": "持续度",
     "feature.physical_sky.ndf_preview": "NDF 分项预览",
     "feature.physical_sky.ndf_preview_bottom_height": "底部高度",
