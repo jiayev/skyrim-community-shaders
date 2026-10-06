@@ -161,6 +161,14 @@ namespace DCLF
 		void MakeRevisionShapes();
 		/** @brief Render thread, BeginSceneFrame: the newest complete scene revision selected (Impl::SceneRevisions; counts only). */
 		void SelectRevision();
+		/**
+		 * @brief Render thread, BeginSceneFrame, after SelectRevision: whether the set committed at a_commitFrame may become the
+		 * frame's claims (SceneStore::ApplySet) - the selected revision was made at or after it, so its shapes and pipelines hold
+		 * every claim. True without revisions, or when none was made for that commit (no resources yet).
+		 */
+		bool SetApplicable(std::uint32_t a_commitFrame) const;
+		/** @brief The set committed at a_commitFrame was applied: the frame's claims are its (RevisionHoldsClaims). */
+		void NoteSetApplied(std::uint32_t a_commitFrame);
 		/** @brief BeforeShadowMaps: whether the early shadow build stands (counted by cause when it does not). */
 		bool KeepEarlyShadowBuild();
 		/**

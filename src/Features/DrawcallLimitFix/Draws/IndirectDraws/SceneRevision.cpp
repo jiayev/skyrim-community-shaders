@@ -224,6 +224,7 @@ namespace DCLF
 		try {
 			const auto sequence = rv.assembler.Seal(std::move(draft));
 			rv.madeAt[sequence % rv.madeAt.size()] = { sequence, a_frame };
+			rv.sealedFrame = a_frame;
 			++rv.sealed;
 		} catch (const std::exception& error) {
 			if (rv.sealFailures++ < 4)
@@ -283,12 +284,30 @@ namespace DCLF
 		return true;
 	}
 
+	bool IndirectDraws::SetApplicable(std::uint32_t a_commitFrame) const
+	{
+		if (failed || !RevisionsEnabled())
+			return true;
+		auto& rv = impl->revisions;
+		// No revision was made for the commit (no resources yet, a load screen): the claims are not a revision's.
+		if (rv.sealedFrame == ~0u || rv.sealedFrame < a_commitFrame)
+			return true;
+		const bool applicable = rv.activeFrame != ~0u && rv.activeFrame >= a_commitFrame;
+		if (!applicable)
+			++rv.setsHeld;
+		return applicable;
+	}
+
+	void IndirectDraws::NoteSetApplied(std::uint32_t a_commitFrame)
+	{
+		impl->revisions.claimsFrame = a_commitFrame;
+	}
+
 	bool IndirectDraws::Impl::RevisionHoldsClaims() const
 	{
-		// The frame's claims (ApplySet) are the set the frame before's scene work committed, at its join, before its revision was
-		// made: a revision made then or later has every pipeline they draw with.
-		const auto frame = SceneStore::Get().GetFrame();
-		return revisions.activeFrame != ~0u && revisions.activeFrame + 1 >= frame;
+		// The frame's claims (ApplySet) are the set a commit decided before its join made a revision (SetApplicable): a revision
+		// made then or later has every pipeline they draw with (the sets only append).
+		return revisions.activeFrame != ~0u && revisions.claimsFrame != ~0u && revisions.activeFrame >= revisions.claimsFrame;
 	}
 
 	void IndirectDraws::Impl::SubmitRevisionRecording(std::uint32_t a_epoch, const RevisionRecordings& a_recordings, std::size_t a_index)
@@ -363,7 +382,8 @@ namespace DCLF
 			assembled.superseded, assembled.abandoned, epochs, rv.sealFailures ? fmt::format(" <- {} NOT SEALED", rv.sealFailures) : std::string());
 		rv.sealed = rv.versionSets = rv.published = rv.selections = rv.selectedAge = 0;
 		if (!covered.empty())
-			text += fmt::format("[DCLF] epochs submitted (R3c): {}; {} values staged that a revision's latched copies lacked\n", covered, std::exchange(rv.latchedMisses, 0));
+			text += fmt::format("[DCLF] epochs submitted (R3c): {}; {} values staged that a revision's latched copies lacked; {} frames kept the last claims for want of the commit's revision\n", covered,
+				std::exchange(rv.latchedMisses, 0), std::exchange(rv.setsHeld, 0));
 		return text;
 	}
 }
