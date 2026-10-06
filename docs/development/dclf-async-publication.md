@@ -638,6 +638,65 @@ decided from what the values must fit, at the start of the commit:
   making its own. Growths are adopted when their revision is selected. Structural stamps revoke a changed member's claim.
   What the revision does not cover is decided before the engine draws. Then the epochs' own preparations go.
 
+**Phase 6b, R3c (c), part 2b: shadow capacities from the scene, claims that follow the revision** (2026-10-05, r3cd1–r3cd4).
+- **Shadow capacities from a scene bound.** `DrawBoundStore` keeps, beside the draw bound, every draw an object of the
+  scene can cast per shadow or occlusion mode and caster key (`ShadowShare`, `modeKeyDraws`), from the same change log
+  (an object's share is taken out and put back only when it changed). `ShadowBoundsOf` turns it into per-mode and per-key-slot
+  draws through the lookups' key slots, and `MakeShadowShape` sizes a view's max count and buckets from it (and the payload,
+  which stays within it). The capacities therefore change with the scene's objects, not with the frame's casters. Parity
+  against a scan (`CS_DCLF_PERSISTENT_PARITY`, r3cd2): 79 checks, 0 differ.
+- **Claims gated on the selected revision.** `BeginSceneFrame` selects the revision first. The last commit's set becomes the
+  frame's claims (`ApplySet`) only once the selected revision was made at or after that commit
+  (`IndirectDraws::SetApplicable`); until then the last claims stand, and the commits in between merge into one application
+  (an entry's geometry is the latest commit's). The frame's claims are therefore always within the selected revision's set,
+  so its pipelines hold them (`RevisionHoldsClaims` compares the claims' commit with the revision). Needed with it:
+  - `ApplySet` derives the joined and left main claims from the claims it changes (merged join and leave lists were
+    ambiguous across held commits);
+  - the reflection's one-frame lag reads the claims in effect (`Tables::setPhases`), not the last commit's.
+  Without a revision ever sealed (no resources yet) the set applies as before.
+- **Shadow coverage by the key slots drawn.** The revision's map rows must route every key slot the frame's payload draws,
+  not equal the frame's rows: a state's row only gains pipelines while shadow pipelines arrive, and the commit writes the
+  revision's rows.
+- **Result** (r3cd4, small tables). Startup misses: Z-prepass, colour and reflection 7 (no revision 3, versions moved 4,
+  no "pipelines moved"); shadow and occlusion 7 (from 25). Startup re-preparations: 81 → 34. Steady play: every epoch 300 of 300,
+  but one interval with 4 shadow frames of a view layout seen for the first time. Up to 19 frames at startup and 2–4 an
+  interval kept the last claims while their commit's revision was recorded. The image is unchanged.
+- **Findings for the rest of part 2.**
+  - *Coverage cannot be released at the join for the main phase.* The frame's list filter is installed at frame begin; a
+    member released at the join whose root the filter left out is drawn by nobody that frame (`PrimaryCull`'s "lost while
+    out"). The main phase's coverage must be settled at frame begin, which the claims gate does; at the join only phases whose
+    engine registration comes later (shadow, occlusion, reflection) can still be released.
+  - *Deferred adoption needs every consumer bounded by the version it targets.* A growth made at the join is needed because
+    the frame's tables outgrew the current versions; deferring its adoption to the revision's selection leaves the frame's
+    tables larger than the buffers its uploads and per-object dispatches write. Each such writer (record, bone, geometry,
+    tree and fade rows, tree LOD tables, face positions, per-object visibility and inputs) must then write and dispatch within
+    the current version only, and the revision's shapes must take the pending versions' addresses and capacities. The
+    alternative is R4's: the revision's buffers are filled when the revision is made, not by the frame's commits.
+  - The remaining misses: "versions moved" (a growth, startup and cell loads only), "no revision" (the first frames), and a
+    shadow view layout seen for the first time.
+
+**Phase 6b, R3c (c), growth as graph work, G1: the shared groundwork** (2026-10-06, r3cg1). Decided: growth is handled as in
+SARP/BasicRenderer (`BuildVersionedGpuBuffer`): a graph producer makes the next version on a worker and fills it through a
+dedicated uploader for non-patch graph work; the version is ready once those copies complete, and its owner adopts it when the
+revision naming it is selected. The shared pieces:
+- **DXVK** (interop version 4): `DxvkOrgInteropDeviceInfo::uploadQueue`, a transfer-capable queue DXVK and the compute queue never
+  use (the next queue of the transfer-only family, else of the compute family). `enableQueue` keeps a family's largest count.
+- **BasicRHI**: `AdoptedVulkanDeviceInfo::spareQueues`, queues the host created and never uses; `Device::CreateQueue` hands them
+  out on an adopted device (one whose family supports the kind; offered again when destroyed), and their families join every
+  Concurrent resource's sharing list.
+- **CS**: the upload queue is offered as a spare queue, not as BasicRHI's copy queue, so the graph's own copy passes stay in
+  DXVK's stream. Its submissions come from the uploader's thread and go to the queue directly under DXVK's submission lock: what
+  they write is a version no queue has used, current only once its copies completed. The DXVK DLLs are staged with
+  `tools/stage-dxvk-dlls.ps1` (the CS build does not).
+- **ORG**: `UploadManager` gives `CopyQueueUploadService` a queue of its own (`CreateQueue(Copy)`, else the primary copy queue;
+  `IUploadService::HasDedicatedStreamingQueue`); `VersionedBuffer::Make*` may run on any thread (versions made without an ECS
+  entity, as pooled backings are); `WorkerOwnedDestination::PendingVersion`; `PersistentGraphHost::RetainUploads`. Test
+  (`PersistentVulkanHostTests revision`): a version made on another thread, filled through the uploader on the spare queue,
+  holds its contents once its ticket completes.
+- **ORGModuleServices**: `VersionedBufferGrowth.h`, `GrowVersion` (make, fill, readiness token) and `TokenForTickets`.
+- In game (r3cg1): `[ORG] Queues: graphics 0:0, compute 2:0, upload 1:1`; the graph's copy queue stays 0:0; every epoch from the
+  revision in steady play, no errors.
+
 ## Implemented foundations
 
 - `ORGModuleServices::AsyncPrimitives` is a backend-independent header-only target.

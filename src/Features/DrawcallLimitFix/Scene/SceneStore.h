@@ -1098,8 +1098,14 @@ namespace DCLF
 		 * @brief The last commit's set made the frame's: its phases into the records (kObjectMember, Tables::setPhases) and the
 		 * lacking counts, and its snapshot published as the engine's claims (PassCapture). Main::Draw (BeginSceneFrame), before the
 		 * frame's events. A slot freed or given to another geometry since the commit (an event at Present) takes no phase.
+		 *
+		 * With scene revisions (R3c) it is called only once the selected revision was made at or after the commit (IndirectDraws::
+		 * SetApplicable): the frame's claims are then always within the revision's set. Until then the last applied claims stand,
+		 * and the commits in between merge into one application (setApply, by slot, its geometry the latest commit's).
 		 */
 		void ApplySet();
+		/** @brief The frame of the last commit (CommitSet): what an ApplySet would apply. */
+		std::uint32_t SetCommitFrame() const { return setCommitFrame; }
 
 		/**
 		 * @brief The frame's scene work on DCLF's coordinator (dclf-async-publication.md, "Phase 3"): the walk (its placements
@@ -2276,9 +2282,8 @@ namespace DCLF
 		// with the geometry each held when the commit decided (a slot that holds another one at ApplySet takes nothing).
 		std::vector<std::uint8_t> setPhasesNext, setLackingNext;
 		std::vector<std::pair<std::uint32_t, const RE::BSGeometry*>> setApply;
-		std::vector<std::uint8_t> setApplyMark;  // parallel to objects: in setApply
-		// The last commit's main-phase changes, handed to PrimaryCull when they take effect (ApplySet).
-		std::vector<const RE::BSGeometry*> setJoinedApply, setLeftApply;
+		std::vector<std::uint32_t> setApplyMark;  // parallel to objects: its index in setApply plus one, 0 when not in it
+		std::uint32_t setCommitFrame = 0;
 		// The claims as applied (the frame's), kept apart from Tables::setPhases, which a freed slot clears: what RevokeUndrawnClaims
 		// checks the records against, with the geometry each base slot is claimed under.
 		std::vector<std::uint8_t> setPhasesApplied;

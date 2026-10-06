@@ -472,6 +472,44 @@ namespace DCLF
 		}
 	}
 
+	bool DrawBoundStore::ShadowShare::KeyOf(std::uint32_t a_mode, ShadowPipelineKey& a_key) const
+	{
+		// As the shadow build's inputs (BuildKeptShadow): an occlusion view's own technique, else the caster's with the mode's bits.
+		std::uint32_t modeTechnique;
+		if (IsOcclusionMode(a_mode)) {
+			modeTechnique = occlusion[OcclusionOfMode(a_mode)];
+			if (!modeTechnique)
+				return false;
+		} else {
+			if (!caster)
+				return false;
+			modeTechnique = technique | ModeBitsOf(a_mode);
+		}
+		a_key = { modeTechnique, rasterFlags, vertexLayout };
+		return true;
+	}
+
+	ShadowBounds Draws::ShadowBoundsOf(const DrawBoundStore& a_bound, const Lookups& a_lookups)
+	{
+		ShadowBounds out;
+		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+			std::uint64_t draws = 0;
+			auto& slots = out.keySlotDraws[m];
+			for (const auto& [key, keyDraws] : a_bound.modeKeyDraws[m]) {
+				// A key with no slot yet draws nothing (its casters wait): a slot for it is a new map row, so a new shape.
+				const auto it = a_lookups.shadowSlots.find(key);
+				if (it == a_lookups.shadowSlots.end())
+					continue;
+				if (it->second >= slots.size())
+					slots.resize(std::size_t(it->second) + 1, 0u);
+				slots[it->second] = static_cast<std::uint32_t>(std::min<std::uint64_t>(slots[it->second] + keyDraws, UINT32_MAX));
+				draws += keyDraws;
+			}
+			out.modeDraws[m] = static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX));
+		}
+		return out;
+	}
+
 	std::vector<ShadowViewLayout> Draws::LayoutOf(const ShadowFrame& a_frame)
 	{
 		std::vector<ShadowViewLayout> out;
@@ -494,13 +532,27 @@ namespace DCLF
 		frame->latched = a_in.latched;
 		frame->latchLayout = a_resources.latchLayout;
 		frame->rows = std::make_shared<const std::vector<RowBuckets>>(a_in.rows);
+		std::vector<std::uint32_t> slotDraws;
 		for (std::size_t v = 0; v < a_in.views.size(); ++v) {
 			const auto& view = a_in.views[v];
 			const auto* previous = PreviousView(a_in.previous, view.slot);
-			// The view's max count and its buckets: what its mode's inputs can produce, within its slot's sequences (reserved before).
-			const std::uint32_t capacity = ShadowViewCapacity(previous ? previous->capacity : 0, payload.modeDraws[view.modeIndex], a_resources.sequenceDraws[view.slot]);
+			// The view's max count and its buckets: what its mode's casters can produce - the scene's bound, and the payload's
+			// inputs (within it, but for an object changed since the bound was read) - within its slot's sequences (reserved before).
+			const std::uint32_t m = view.modeIndex;
+			const auto& own = payload.keySlotDraws[m];
+			slotDraws.assign(own.begin(), own.end());
+			std::uint32_t draws = payload.modeDraws[m];
+			if (a_in.bounds) {
+				const auto& bound = a_in.bounds->keySlotDraws[m];
+				if (bound.size() > slotDraws.size())
+					slotDraws.resize(bound.size(), 0u);
+				for (std::size_t k = 0; k < bound.size(); ++k)
+					slotDraws[k] = std::max(slotDraws[k], bound[k]);
+				draws = std::max(draws, a_in.bounds->modeDraws[m]);
+			}
+			const std::uint32_t capacity = ShadowViewCapacity(previous ? previous->capacity : 0, draws, a_resources.sequenceDraws[view.slot]);
 			auto& out = frame->views.emplace_back(FrameViewOf(view, capacity, a_resources, payload));
-			out.buckets = SizeShadowBuckets(a_in.rows[v], payload.keySlotDraws[view.modeIndex], previous, std::uint64_t(kShadowClasses) * a_resources.sequenceDraws[view.slot]);
+			out.buckets = SizeShadowBuckets(a_in.rows[v], slotDraws, previous, std::uint64_t(kShadowClasses) * a_resources.sequenceDraws[view.slot]);
 		}
 		return frame;
 	}
@@ -1008,6 +1060,8 @@ namespace DCLF
 				shapeIn.rows.push_back(impl->ShadowRowBuckets(view.rasterState, lookups, indirect));
 			}
 			shapeIn.payload = &payload;
+			const auto bounds = ShadowBoundsOf(impl->drawBound, lookups);
+			shapeIn.bounds = &bounds;
 			shapeIn.previous = resources->occlusionPublished;
 			auto frame = MakeShadowShape(*resources, shapeIn);
 			// R3c: the selected revision's variant when it covers the maps (ShadowRevisionFor): the values go into it.
@@ -1339,6 +1393,8 @@ namespace DCLF
 			for (const auto& layout : layouts)
 				shapeIn.rows.push_back(impl->ShadowRowBuckets(layout.rasterState, store.GetLookups(), indirect));
 			shapeIn.payload = &payload;
+			const auto bounds = ShadowBoundsOf(impl->drawBound, store.GetLookups());
+			shapeIn.bounds = &bounds;
 			shapeIn.previous = resources->published;
 			const auto latchedLayout = ShadowLatchedLayout(*resources, payload, in);
 			ReserveLatchedBlock(resources->latchedBlock, LatchedBytes(latchedLayout), RenderGraphRuntime::Get().Host()->FrameSlots());
@@ -1542,11 +1598,20 @@ namespace DCLF
 			}
 		if (!shape || !shape->latch || !shape->rows || !a_own.rows)
 			return miss(R::kShape);
-		// The pipelines its buckets bind and its map rows route the key slots to: its rows are the frame's, so every key slot draws
-		// where the frame's own shape would (a newer set only appends; the recording holds its own).
+		// The pipelines its buckets bind and its map rows route the key slots to: its rows route every key slot the payload draws (a
+		// state's row only gains pipelines, a key slot's never changes; the rows the commit writes are the revision's, so a key slot it
+		// has no pipeline for yet - no caster of the frame's claims - draws nothing).
 		if (!SameHandle(shape->resourceHeap, a_own.resourceHeap) || !SameHandle(shape->samplerHeap, a_own.samplerHeap) || !shape->indirect.valid ||
-			!SameHandle(shape->indirect.layout, a_indirect.layout) || !SameHandle(shape->indirect.drawSignature, a_indirect.drawSignature) || *shape->rows != *a_own.rows)
+			!SameHandle(shape->indirect.layout, a_indirect.layout) || !SameHandle(shape->indirect.drawSignature, a_indirect.drawSignature) ||
+			shape->rows->size() != a_own.views.size())
 			return miss(R::kPipelines);
+		for (std::size_t v = 0; v < a_own.views.size(); ++v) {
+			const auto& routes = (*shape->rows)[v].bucketOfSlot;
+			const auto& slotDraws = a_payload.keySlotDraws[a_own.views[v].modeIndex];
+			for (std::size_t k = 0; k < slotDraws.size(); ++k)
+				if (slotDraws[k] && (k >= routes.size() || routes[k] == Lookups::kNone))
+					return miss(R::kPipelines);
+		}
 		// The same blocks and buffers its push data and passes name.
 		for (std::size_t v = 0; v < a_own.views.size(); ++v) {
 			const auto& own = a_own.views[v];

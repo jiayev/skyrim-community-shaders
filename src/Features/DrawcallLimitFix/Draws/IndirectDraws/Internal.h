@@ -1698,6 +1698,26 @@ namespace DCLF
 			std::vector<std::uint32_t> pipeline;      // by object slot: the pipeline slot they count toward (kNoPipeline: a decal's)
 			std::vector<std::uint64_t> perPipeline;   // by pipeline slot
 			std::uint64_t draws = 0;
+			/**
+			 * @brief What an object casts with: its caster technique (the shadow modes add their bits) and the occlusion views', its
+			 * raster flags and vertex layout - a ShadowPipelineKey per mode - and its draws.
+			 */
+			struct ShadowShare
+			{
+				std::uint32_t produced = 0;  // 0: none (a free slot)
+				bool caster = false;         // not kObjectNoShadow
+				std::uint32_t technique = 0;
+				std::array<std::uint32_t, kOcclusionViews> occlusion{};
+				std::uint32_t rasterFlags = 0;
+				std::uint64_t vertexLayout = 0;
+				bool operator==(const ShadowShare&) const = default;
+				/** @brief Its key under a_mode (a key slot's, Lookups::shadowSlots), false when it does not draw in the mode. */
+				bool KeyOf(std::uint32_t a_mode, ShadowPipelineKey& a_key) const;
+			};
+			// The same per shadow and occlusion mode and caster key: every draw an object of the scene can cast in the mode, the set's
+			// or not. The shadow views' capacities are sized from it (ShadowBounds), so they change with the scene, not the frame's casters.
+			std::vector<ShadowShare> shadow;  // by object slot
+			std::array<ankerl::unordered_dense::map<ShadowPipelineKey, std::uint64_t, ShadowPipelineKeyHash>, kShadowModeCount> modeKeyDraws;
 			// Since the last report.
 			std::uint64_t updates = 0, changes = 0, resyncs = 0;
 			ParityCounter parity;
@@ -2237,6 +2257,18 @@ namespace DCLF
 		 * @brief What a shadow or occlusion epoch's shape is made from (MakeShadowShape): the views' layout, each view's map row's
 		 * buckets, and the revision's payload (its modes' and key slots' draws, the arena's blocks), with the slots' resources.
 		 */
+		/**
+		 * @brief Per mode, the draws the scene's objects can cast in it, in all and per key slot (DrawBoundStore::modeKeyDraws through
+		 * the lookups' key slots; ShadowBoundsOf): a bound on any frame's payload (ShadowPayload::modeDraws, keySlotDraws) while the
+		 * scene's objects stand.
+		 */
+		struct ShadowBounds
+		{
+			std::array<std::uint32_t, kShadowModeCount> modeDraws{};
+			std::array<std::vector<std::uint32_t>, kShadowModeCount> keySlotDraws;
+		};
+		ShadowBounds ShadowBoundsOf(const DrawBoundStore& a_bound, const Lookups& a_lookups);
+
 		struct ShadowShapeInputs
 		{
 			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
@@ -2244,6 +2276,8 @@ namespace DCLF
 			std::vector<ShadowViewLayout> views;
 			std::vector<RowBuckets> rows;  // per view
 			const ShadowPayload* payload = nullptr;
+			// What the capacities are sized for, with the payload's draws: the scene's (the revision's draws stay within them).
+			const ShadowBounds* bounds = nullptr;
 			std::shared_ptr<const ShadowFrame> previous;  // the last published shape: its slots' capacities only grow
 			LatchedList latched;
 		};
@@ -3879,6 +3913,9 @@ namespace DCLF
 			// The selected revision, for the frame's epochs (SelectRevision), and the scene frame whose join made it.
 			org::async::RevisionAssembler::Lease active;
 			std::uint32_t activeFrame = ~0u;
+			// The frame of the last revision sealed, and of the commit whose set the frame's claims are (SetApplicable, NoteSetApplied).
+			std::uint32_t sealedFrame = ~0u, claimsFrame = ~0u;
+			std::uint64_t setsHeld = 0;  // frames whose commit waited for its revision (since the last report)
 			// R3c (c), per epoch since the last report: commits that submitted the selected revision's recording (it covered the
 			// frame), and those that submitted their own preparation, by why (ChooseRevisionRecording).
 			enum Miss : std::uint32_t

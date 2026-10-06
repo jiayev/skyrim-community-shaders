@@ -42,6 +42,8 @@ namespace DCLF
 	void IndirectDraws::KickShadowBuildEarly() {}
 	void IndirectDraws::MakeRevisionShapes() {}
 	void IndirectDraws::SelectRevision() {}
+	bool IndirectDraws::SetApplicable(std::uint32_t) const { return true; }
+	void IndirectDraws::NoteSetApplied(std::uint32_t) {}
 	bool IndirectDraws::KeepEarlyShadowBuild() { return false; }
 	void IndirectDraws::BeforePlacementJoin() {}
 	void IndirectDraws::KickSceneStreams() {}

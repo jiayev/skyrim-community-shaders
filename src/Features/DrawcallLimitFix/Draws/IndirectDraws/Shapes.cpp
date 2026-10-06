@@ -310,6 +310,7 @@ namespace DCLF
 						for (const auto& view : shape->views)
 							slots = std::max(slots, view.slot + 1);
 			impl->ReserveShadowSequences(tables, slots, 0);
+			const auto bounds = ShadowBoundsOf(impl->drawBound, store.GetLookups());
 			for (std::size_t kind = 0; kind < 2; ++kind) {
 				const bool occlusion = kind == 1;
 				const auto& recent = occlusion ? shadow->recentOcclusionShapes : shadow->recentShapes;
@@ -329,6 +330,7 @@ namespace DCLF
 						in.rows.push_back(impl->ShadowRowBuckets(layout.rasterState, store.GetLookups(), shadowIndirect));
 					in.views = layouts;
 					in.payload = &payload;
+					in.bounds = &bounds;
 					in.previous = occlusion ? shadow->occlusionPublished : shadow->published;
 					if (!occlusion) {
 						in.latched.copies = ShadowLatchedLayout(*shadow, payload, payload.inputs);

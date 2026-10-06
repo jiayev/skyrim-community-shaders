@@ -94,12 +94,16 @@ namespace DCLF
 		setRebinding.resize(objects, 0);
 		setLackingNext.resize(objects, 0);
 		setApplyMark.resize(objects, 0);
-		// A slot whose phases or lacking phases this commit changed, for ApplySet, with the geometry it holds now.
+		setCommitFrame = frame;
+		// A slot whose phases or lacking phases this commit changed, for ApplySet, with the geometry it holds now (an earlier commit's
+		// entry not yet applied takes this one's geometry: the decision is now for it).
 		auto markApply = [&](std::uint32_t a_slot) {
-			if (setApplyMark[a_slot])
+			if (const std::uint32_t at = setApplyMark[a_slot]) {
+				setApply[at - 1].second = tables.objectGeometry[a_slot];
 				return;
-			setApplyMark[a_slot] = 1;
+			}
 			setApply.emplace_back(a_slot, tables.objectGeometry[a_slot]);
+			setApplyMark[a_slot] = static_cast<std::uint32_t>(setApply.size());
 		};
 		if (!setBuilding)
 			setBuilding = std::make_shared<SetSnapshot>();
@@ -254,9 +258,10 @@ namespace DCLF
 					phases &= ~kSetMain;
 			}
 			// The reflection's faces draw from the last frame's depth inputs (IndirectDraws::ExecuteReflection): a member of the main
-			// phase now and at the last commit, whose pipeline slot's forward pipeline is ready. A joiner is the engine's for a frame.
+			// phase now and in the claims in effect (an application can wait for its revision, so not the last commit's), whose
+			// pipeline slot's forward pipeline is ready. A joiner is the engine's for a frame.
 			if (phases & kSetReflection) {
-				const bool wasMain = (setPhases[a_slot] & kSetMain) != 0;
+				const bool wasMain = a_slot < tables.setPhases.size() && (tables.setPhases[a_slot] & kSetMain) != 0;
 				if (!(phases & kSetMain) || !wasMain || !IndirectDraws::Get().PhaseReady(a_slot, kSetReflection)) {
 					if (phases & kSetMain) {
 						waiting(8);
@@ -273,9 +278,10 @@ namespace DCLF
 				}
 			return phases;
 		};
-		// The geometries whose main phase changed, for the stand-in's admission and walks (PrimaryCull::NoteSetChanges).
-		std::vector<const RE::BSGeometry*> joined, left;
 		auto apply = [&](std::uint32_t a_slot, std::uint8_t a_phases, bool a_wait) {
+			// Waiting for its application: decided again, for the geometry it holds now.
+			if (setApplyMark[a_slot])
+				markApply(a_slot);
 			// The occluder phases it takes part in and misses (SetLacking).
 			const std::uint8_t lacking = live ? static_cast<std::uint8_t>(SetParticipation(a_slot, drawn) & ~a_phases & (kSetOccluderSky | kSetOccluderPrecipitation)) : 0;
 			if (lacking != setLackingNext[a_slot]) {
@@ -297,9 +303,6 @@ namespace DCLF
 			// The engine's copy is by geometry, a base's alone: a layer draws its base's geometry and is a member with it.
 			if (tables.IsLayer(a_slot))
 				return;
-			if ((before & kSetMain) != (a_phases & kSetMain))
-				if (const auto* geometry = (a_phases & kSetMain) ? tables.objectGeometry[a_slot] : setGeometry[a_slot])
-					((a_phases & kSetMain) ? joined : left).push_back(geometry);
 			if (const auto* old = setGeometry[a_slot]; old && !a_phases) {
 				if (const auto owner = setMemberSlot.find(old); owner != setMemberSlot.end() && owner->second == a_slot) {
 					setMemberSlot.erase(owner);
@@ -347,9 +350,6 @@ namespace DCLF
 		// Dropped once: a slot can be pushed again after it left and came back within one commit.
 		std::sort(setWaiting.begin(), setWaiting.end());
 		setWaiting.erase(std::unique(setWaiting.begin(), setWaiting.end()), setWaiting.end());
-		// PrimaryCull learns them when they take effect, with the claims (ApplySet).
-		setJoinedApply.insert(setJoinedApply.end(), joined.begin(), joined.end());
-		setLeftApply.insert(setLeftApply.end(), left.begin(), left.end());
 		setStats.members += setMemberSlot.size();
 		setStats.waiting += setWaiting.size();
 
@@ -375,6 +375,9 @@ namespace DCLF
 		setLackingNext.resize(objects, 0);
 		setPhasesApplied.resize(objects, 0);
 		setGeometryApplied.resize(objects, nullptr);
+		// The geometries whose main claim this changes, for the stand-in's admission and walks (PrimaryCull::NoteSetChanges): from
+		// the claims as they were (a revoked one included) to the claims applied, whatever commits lie between.
+		std::vector<const RE::BSGeometry*> joined, left;
 		for (const auto& [slot, geometry] : setApply) {
 			if (slot < setApplyMark.size())
 				setApplyMark[slot] = 0;
@@ -385,8 +388,16 @@ namespace DCLF
 			const std::uint8_t phases = same ? setPhasesNext[slot] : std::uint8_t{ 0 };
 			const std::uint8_t lacking = same ? setLackingNext[slot] : std::uint8_t{ 0 };
 			// The claim as the engine's hooks read it, by its base geometry (a layer is claimed with its base).
+			const auto* wasClaimed = (setPhasesApplied[slot] & kSetMain) ? setGeometryApplied[slot] : nullptr;
 			setPhasesApplied[slot] = phases;
 			setGeometryApplied[slot] = phases && !tables.IsLayer(slot) ? geometry : nullptr;
+			const auto* claimed = (phases & kSetMain) ? setGeometryApplied[slot] : nullptr;
+			if (wasClaimed != claimed) {
+				if (wasClaimed)
+					left.push_back(wasClaimed);
+				if (claimed)
+					joined.push_back(claimed);
+			}
 			if (lacking != setLacking[slot]) {
 				for (std::uint32_t v = 0; v < 2; ++v) {
 					const std::uint8_t bit = v ? kSetOccluderPrecipitation : kSetOccluderSky;
@@ -406,10 +417,8 @@ namespace DCLF
 		}
 		setApply.clear();
 		PassCapture::Get().PublishSet(setSnapshot);
-		if (!setJoinedApply.empty() || !setLeftApply.empty())
-			PrimaryCull::Get().NoteSetChanges(setJoinedApply, setLeftApply);
-		setJoinedApply.clear();
-		setLeftApply.clear();
+		if (!joined.empty() || !left.empty())
+			PrimaryCull::Get().NoteSetChanges(joined, left);
 		// What the frame's work changes from here is what RevokeUndrawnClaims checks.
 		revokeCursor.Restart(tablesGeneration);
 		revokeCursor.Advance(tables.changeLog);

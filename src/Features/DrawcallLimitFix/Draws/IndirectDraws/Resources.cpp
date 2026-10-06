@@ -138,6 +138,42 @@ namespace DCLF::Draws
 			return { produced, (object.flags & kObjectDecal) ? DrawBoundStore::kNoPipeline : object.pipelineIndex };
 		}
 
+		/** @brief What a_slot casts with (DrawBoundStore::ShadowShare), given its draws. */
+		DrawBoundStore::ShadowShare ShadowShareOf(const SceneStore::Tables& a_tables, std::size_t a_slot, std::uint32_t a_produced)
+		{
+			DrawBoundStore::ShadowShare out;
+			const auto& object = a_tables.objects[a_slot];
+			if ((object.flags & kObjectFree) || !a_produced)
+				return out;
+			out.produced = a_produced;
+			out.caster = !(object.flags & kObjectNoShadow);
+			out.technique = a_slot < a_tables.shadowTechnique.size() ? a_tables.shadowTechnique[a_slot] : 0u;
+			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+				out.occlusion[v] = a_slot < a_tables.occlusionTechnique[v].size() ? a_tables.occlusionTechnique[v][a_slot] : 0u;
+			out.rasterFlags = (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u;
+			out.vertexLayout = object.geometryIndex < a_tables.geometries.size() ? VertexLayoutOf(a_tables.geometries[object.geometryIndex].vertexDesc) : 0ull;
+			return out;
+		}
+
+		using ModeKeyDraws = std::array<ankerl::unordered_dense::map<ShadowPipelineKey, std::uint64_t, ShadowPipelineKeyHash>, kShadowModeCount>;
+
+		/** @brief Adds a_share's draws to its key in each mode it draws in, or takes them out. */
+		void CountShadowShare(ModeKeyDraws& a_out, const DrawBoundStore::ShadowShare& a_share, bool a_add)
+		{
+			if (!a_share.produced)
+				return;
+			for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+				ShadowPipelineKey key;
+				if (!a_share.KeyOf(m, key))
+					continue;
+				if (a_add) {
+					a_out[m][key] += a_share.produced;
+				} else if (const auto it = a_out[m].find(key); it != a_out[m].end() && (it->second -= a_share.produced) == 0) {
+					a_out[m].erase(it);
+				}
+			}
+		}
+
 		/** @brief SceneDrawBound by a scan of every slot: drawBound's parity reference. */
 		std::uint32_t SceneDrawBound(const SceneStore::Tables& a_tables, std::vector<std::uint32_t>* a_perPipeline = nullptr)
 		{
@@ -449,6 +485,12 @@ namespace DCLF
 		constexpr auto kNoPipeline = DrawBoundStore::kNoPipeline;
 		auto set = [&](std::size_t a_slot) {
 			const auto [produced, pipeline] = DrawShareOf(a_tables, a_slot, partitioned);
+			// Its casting share: unchanged for most changes the log names (a placement, shading).
+			if (auto share = ShadowShareOf(a_tables, a_slot, produced); !(share == s.shadow[a_slot])) {
+				CountShadowShare(s.modeKeyDraws, s.shadow[a_slot], false);
+				CountShadowShare(s.modeKeyDraws, share, true);
+				s.shadow[a_slot] = share;
+			}
 			s.draws -= s.produced[a_slot];
 			if (s.pipeline[a_slot] != kNoPipeline)
 				s.perPipeline[s.pipeline[a_slot]] -= s.produced[a_slot];
@@ -468,6 +510,9 @@ namespace DCLF
 			s.produced.assign(count, 0u);
 			s.pipeline.assign(count, kNoPipeline);
 			s.perPipeline.clear();
+			s.shadow.assign(count, {});
+			for (auto& keys : s.modeKeyDraws)
+				keys.clear();
 			s.draws = 0;
 			s.partitioned = partitioned;
 			for (std::size_t o = 0; o < count; ++o)
@@ -479,6 +524,7 @@ namespace DCLF
 			if (const std::size_t first = s.produced.size(); first < count) {
 				s.produced.resize(count, 0u);
 				s.pipeline.resize(count, kNoPipeline);
+				s.shadow.resize(count);
 				for (std::size_t o = first; o < count; ++o)
 					set(o);
 			}
@@ -503,9 +549,20 @@ namespace DCLF
 					same = false;
 					differs = p;
 				}
+			// And the casting draws per mode and key.
+			ModeKeyDraws modeKeys;
+			for (std::size_t o = 0; o < count; ++o)
+				CountShadowShare(modeKeys, ShadowShareOf(a_tables, o, DrawShareOf(a_tables, o, partitioned).first), true);
+			std::uint32_t modeDiffers = kShadowModeCount;
+			for (std::uint32_t m = 0; same && m < kShadowModeCount; ++m)
+				if (modeKeys[m] != s.modeKeyDraws[m]) {
+					same = false;
+					modeDiffers = m;
+				}
 			s.parity.Check(same, [&] {
-				return differs < perPipeline.size() ? fmt::format("pipeline slot {}: {} kept, {} scanned", differs, s.PipelineDraws(differs), perPipeline[differs]) :
-				                                      fmt::format("{} draws kept, {} scanned", s.Draws(), scanned);
+				return differs < perPipeline.size()     ? fmt::format("pipeline slot {}: {} kept, {} scanned", differs, s.PipelineDraws(differs), perPipeline[differs]) :
+				       modeDiffers < kShadowModeCount ? fmt::format("shadow mode {}: {} keys kept, {} scanned", modeDiffers, s.modeKeyDraws[modeDiffers].size(), modeKeys[modeDiffers].size()) :
+				                                        fmt::format("{} draws kept, {} scanned", s.Draws(), scanned);
 			});
 		}
 	}

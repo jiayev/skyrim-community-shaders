@@ -106,6 +106,12 @@ struct RenderGraphRuntime::Impl
 	// address 0 on the first frames that used the compute queue, no shader running), and none in 39 once serialized.
 	// Vulkan asks only that each queue be synchronized, so something below DXVK does not take two queues at once.
 	VkQueue computeQueue = VK_NULL_HANDLE;
+	// DXVK's upload queue for interop clients (DxvkOrgInteropDeviceInfo::uploadQueue), adopted as BasicRHI's copy queue: the
+	// dedicated uploader of graph work (ORG's CopyQueueUploadService - a new version's contents, made by a producer on a worker).
+	// Its submissions come from that service's thread and need no order against DXVK's stream: what they write is a resource no
+	// queue has used, which becomes current only once its copies have completed (the uploader's timeline, seen on the CPU). They
+	// are made under DXVK's submission lock, as every queue of its device.
+	VkQueue uploadQueue = VK_NULL_HANDLE;
 	// ORG orders an execution against DXVK's work on the queue they share with barriers (ExternalQueueBoundary); the
 	// compute queue is the host's to order. Before an epoch's first compute submission DXVK's stream signals streamPoint
 	// where it stands, after all the D3D11 work so far, and that submission waits for it; when the epoch ends the stream
@@ -716,6 +722,12 @@ struct RenderGraphRuntime::Impl
 			self->computeTail.assign(1, exit);
 			return VK_SUCCESS;
 		}
+		if (a_queue == self->uploadQueue) {
+			self->interop->LockSubmissionQueue();
+			const VkResult result = self->queueSubmit2(a_queue, 1, &a_submit, VK_NULL_HANDLE);
+			self->interop->ReleaseSubmissionQueue();
+			return result;
+		}
 		if (::GetCurrentThreadId() == self->streamThread.load(std::memory_order_relaxed)) {
 			if (self->batching) {
 				if (self->pendingCount == self->pendingSubmits.size())
@@ -894,8 +906,19 @@ bool RenderGraphRuntime::Initialize()
 			}
 		}
 	}
-	logger::info("[ORG] Queues: graphics {}:{}, compute {}", info.graphicsQueueFamily, info.graphicsQueueIndex,
-		state->computeQueue ? fmt::format("{}:{}", info.computeQueueFamily, info.computeQueueIndex) : std::string("shared with graphics"));
+	// The upload queue, offered to BasicRHI as a spare queue (CreateQueue hands it to ORG's copy-queue uploader), not as the graph's
+	// copy queue: the graph's own copy passes stay in DXVK's stream. Its submissions are direct, under the lock (Submit).
+	// CS_ORG_UPLOAD_QUEUE=0 offers none.
+	rhi::vulkan::AdoptedQueue uploadSpare{};
+	if (adopt.submissionHooks.submit && info.uploadQueue && !EnvEquals("CS_ORG_UPLOAD_QUEUE", "0")) {
+		state->uploadQueue = info.uploadQueue;
+		uploadSpare = { info.uploadQueue, info.uploadQueueFamily, info.uploadQueueIndex };
+		adopt.spareQueues = &uploadSpare;
+		adopt.spareQueueCount = 1;
+	}
+	logger::info("[ORG] Queues: graphics {}:{}, compute {}, upload {}", info.graphicsQueueFamily, info.graphicsQueueIndex,
+		state->computeQueue ? fmt::format("{}:{}", info.computeQueueFamily, info.computeQueueIndex) : std::string("shared with graphics"),
+		state->uploadQueue ? fmt::format("{}:{}", info.uploadQueueFamily, info.uploadQueueIndex) : std::string("none"));
 	if (rhi::vulkan::AdoptVulkanDevice(adopt, *state->device) != rhi::Result::Ok || !*state->device)
 		return disable("BasicRHI could not adopt DXVK's Vulkan device");
 
