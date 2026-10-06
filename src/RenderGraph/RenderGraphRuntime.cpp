@@ -535,9 +535,10 @@ struct RenderGraphRuntime::Impl
 		if (asyncEpochs) {
 			const auto async = host->TakeAsyncStats();
 			logger::info("[ORG] Async epochs: {} submitted, {} waited for their ticket, {} prepared again after the feature's inputs changed, {} carried uploads ({} lists recorded ahead by their producers); "
-						 "{} completions left to the host's next GPU wake-up instead of a signal; {} backing changes, {} of them waited out a ticket preparation, {} preparations held off for one, {} tickets stale only by a changed backing",
+						 "{} completions left to the host's next GPU wake-up instead of a signal; {} backing changes, {} of them waited out a ticket preparation, {} preparations held off for one, {} tickets stale only by a changed backing; "
+						 "recordings: {} made ({} kept), {} tickets took a kept one, {} stale tickets adopted one",
 				async.submitted, async.waited, async.stale, async.uploads, async.recordedUploadLists, async.wakesSkipped, async.backingMutations, async.backingWaits,
-				async.preparationWaits, async.staleBacking);
+				async.preparationWaits, async.staleBacking, async.recorded, async.kept, async.reused, async.adopted);
 		}
 		epochCount = 0;
 	}
@@ -911,6 +912,11 @@ bool RenderGraphRuntime::Initialize()
 		// CS_ORG_CLOSED (default on with epochs, =0 off): each epoch leaves every resource in its home state
 		// and starts with a full barrier, so its admission is independent of the epochs before it and cached.
 		desc.closedExecutions = EpochsEnabled() && !EnvEquals("CS_ORG_CLOSED", "0");
+		// CS_ORG_REUSE_RECORDINGS (default on, =0 off): each epoch's recordings are kept per frame slot and submitted again
+		// while what they were recorded for holds; a ticket an epoch's commit made stale takes the kept recording of its new
+		// shape instead of being prepared again (a render-thread wait). Kept recordings carry no Tracy GPU zones: turn it off
+		// to profile the epochs' passes on the GPU with Tracy.
+		desc.reuseRecordings = !EnvEquals("CS_ORG_REUSE_RECORDINGS", "0");
 		// The segments in the order a frame runs them: the water reflection's faces (TESWaterReflections::Update), the shadow views at AfterShadowMaps, the Z-prepass at
 		// the depth pass, Skylighting's map, Light Limit Fix's culling at Prepass, the colour pass where the main
 		// pass's opaque batches end.

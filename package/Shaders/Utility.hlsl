@@ -75,6 +75,8 @@ struct VS_OUTPUT
 #if defined(DCLF_PULLED)
 	// The draw's diffuse descriptor and object word, for the pixel stage of a pulled draw (DCLF_PULLED, below).
 	nointerpolation uint2 DCLFDraw: TEXCOORD7;
+	// The view's depth clipping, as its viewport's depth range would have it (DCLFDepthRange, below).
+	float2 DCLFClip: SV_ClipDistance0;
 #endif
 };
 
@@ -87,6 +89,11 @@ cbuffer PerTechnique : register(b0)
 	// Drawcall Limit Fix, per shadow view: the main camera's eye minus this view's, which turns the
 	// records' eye-relative transforms into this camera's (engine notes: shadow maps).
 	float4 DCLFEyeDelta : packoffset(c2);
+#	endif
+#	if defined(DCLF_PULLED)
+	// The view's viewport depth range (min, max - min): the engine's, which changes from frame to frame for some views. The
+	// pulled stage applies it, and the draw's viewport is [0, 1], so the view's recording does not change with it.
+	float4 DCLFDepthRange : packoffset(c3);
 #	endif
 };
 
@@ -352,6 +359,12 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 	TexcoordOffset = asfloat(vk::RawBufferLoad<uint4>(materialRow));
 
 	VS_OUTPUT vsout = DCLFShade(input);
+	// The viewport's depth transform, here: z' = min * w + z * (max - min) under a [0, 1] viewport is the window depth the view's
+	// own viewport gives (depth bias applies after it either way), and the clip distances keep its clipping, z in [0, w]
+	// before the transform (the views' rasterizer states clip depth, never clamp it: DrawPipelines::ShadowRasterStateId).
+	const float clipZ = vsout.PositionCS.z;
+	vsout.DCLFClip = float2(clipZ, vsout.PositionCS.w - clipZ);
+	vsout.PositionCS.z = DCLFDepthRange.x * vsout.PositionCS.w + clipZ * DCLFDepthRange.y;
 	// The pixel stage's: the diffuse's descriptor (the shadow material row's, kShadowRowDiffuseOffset) and the object word.
 	vsout.DCLFDraw = uint2(vk::RawBufferLoad<uint>(materialRow + 16), DCLFObjectWord);
 	return vsout;

@@ -328,7 +328,7 @@ namespace DCLF
 				frame->treeGroups = static_cast<std::uint32_t>((std::uint64_t(scene.treeLodShapeCapacity) * TreeLod::kMaxGroupInstances + kTreeLodCullGroup - 1) /
 																kTreeLodCullGroup);
 			}
-			PublishShape(std::move(frame), resources->published, resources->frame, resources->shapeGenerations);
+			PublishShape(std::move(frame), resources->published, resources->frame, resources->shapeGenerations, resources->recentShapes);
 		}, owners);
 		if (!ok) {
 			logger::error("[DCLF] the reflection faces' epoch failed");
