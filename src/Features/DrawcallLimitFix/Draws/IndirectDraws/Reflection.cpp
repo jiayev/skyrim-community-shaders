@@ -218,10 +218,59 @@ namespace DCLF
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::Reflection, [&](org::RenderGraph&) {
 			resources->frame.store(nullptr, std::memory_order_release);
 			const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
-			const auto& layout = resources->latchLayout;
-			const auto region = static_cast<std::uint32_t>(resources->latch->Offset(latchSlot));
-			if (slots)
-				resources->latch->Write(latchSlot, ReflectionLatchLayout::MapOffset(), std::as_bytes(std::span(map)));
+			// The commit's own shape (MakeReflectionShape), which the ticket's own preparation reads.
+			ReflectionShapeInputs shapeIn;
+			shapeIn.resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
+			shapeIn.samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
+			shapeIn.indirect = indirect;
+			shapeIn.buckets = buckets;
+			shapeIn.map = std::make_shared<const std::vector<std::uint32_t>>(map);
+			if (trees) {
+				shapeIn.tree = reflection.treePipeline;
+				shapeIn.treeSignature = treeLod->drawSignature;
+				shapeIn.treeShapes = scene.treeLodShapeCapacity;
+			}
+			auto frame = MakeReflectionShape(*resources, shapeIn);
+			// R3c: the selected revision's shape when it covers the faces - its versions current, the same heaps and pipeline layout,
+			// a pipeline set holding the frame's claims, the same targets, tree LOD and buckets' slots - which the values then go into
+			// (its latch and layout, its map and buckets), its recording submitted; else the commit's own.
+			std::shared_ptr<const ReflectionFrame> revisionShape;
+			std::shared_ptr<const RevisionRecordings> revisionRecordings;
+			{
+				std::shared_ptr<const org::async::RevisionFragment> fragment;
+				if (impl->ActiveRevision(4, fragment, revisionRecordings)) {
+					using R = IndirectDraws::Impl::SceneRevisions;
+					auto shape = fragment->Value<ReflectionFrame>();
+					std::uint32_t miss = R::kMisses;
+					if (!shape || !shape->latch || !shape->map)
+						miss = R::kNoRecording;
+					else if (!SameHandle(shape->resourceHeap, frame->resourceHeap) || !SameHandle(shape->samplerHeap, frame->samplerHeap) ||
+							 !SameHandle(shape->indirect.zLayout, indirect.zLayout) || !SameHandle(shape->indirect.zDrawSignature, indirect.zDrawSignature) ||
+							 (shape->indirect.version != indirect.version && !impl->RevisionHoldsClaims()))
+						miss = R::kPipelines;
+					else if (shape->width != frame->width || shape->height != frame->height)
+						miss = R::kViewport;
+					else if (!SameHandle(shape->tree, frame->tree) || shape->treeGroups != frame->treeGroups || slots > shape->latchLayout.slots)
+						miss = R::kShape;
+					if (miss == R::kMisses)
+						revisionShape = std::move(shape);
+					else
+						impl->NoteRevisionMiss(4, miss);
+				}
+			}
+			const auto& target = revisionShape ? *revisionShape : *frame;
+			const auto& latchBlock = *target.latch;
+			const auto& layout = target.latchLayout;
+			const auto& writeMap = *target.map;
+			const auto& writeBuckets = target.buckets;
+			const auto region = static_cast<std::uint32_t>(latchBlock.Offset(latchSlot));
+			if (!writeMap.empty())
+				latchBlock.Write(latchSlot, ReflectionLatchLayout::MapOffset(), std::as_bytes(std::span(writeMap)));
+			// A pipeline slot the tables have gained since the map was made has no bucket (none of its draws is the frame's).
+			if (slots > writeMap.size()) {
+				const std::vector<std::uint32_t> none(slots - writeMap.size(), kNoBucket);
+				latchBlock.Write(latchSlot, ReflectionLatchLayout::MapOffset() + static_cast<std::uint32_t>(writeMap.size() * sizeof(std::uint32_t)), std::as_bytes(std::span(none)));
+			}
 			// Every value the faces' buffers take goes into the latch; the epoch's latched copies (ReflectionLatchedCopiesPass) take
 			// them there and zero the counters, so this commit records no copy.
 			std::vector<std::uint32_t> table;
@@ -242,41 +291,32 @@ namespace DCLF
 				latch.bucketMapOffset = region + ReflectionLatchLayout::MapOffset();
 				latch.bucketTableOffset = region + layout.TableOffset(f);
 				table.clear();
-				for (const auto& bucket : buckets) {
-					table.push_back(f * resources->sequenceDraws + bucket.first);
+				for (const auto& bucket : writeBuckets) {
+					table.push_back(f * target.sequenceDraws + bucket.first);
 					table.push_back(bucket.capacity);
 				}
 				if (!table.empty())
-					resources->latch->Write(latchSlot, layout.TableOffset(f), std::as_bytes(std::span(table)));
-				resources->latch->WriteValue(latchSlot, f * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
+					latchBlock.Write(latchSlot, layout.TableOffset(f), std::as_bytes(std::span(table)));
+				latchBlock.WriteValue(latchSlot, f * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 				// A face not captured draws nothing (no inputs): its block is copied as the latch holds it.
 				if (face.captured)
-					resources->latch->Write(latchSlot, layout.FaceOffset(f), std::span(face.perFrame.data(), face.perFrameBytes));
+					latchBlock.Write(latchSlot, layout.FaceOffset(f), std::span(face.perFrame.data(), face.perFrameBytes));
 				if (trees) {
 					// The face's row (its own list), naming no slot when the face is not drawn or the faces' tree LOD is the engine's.
 					TreeLod::DrawRow row = treeRow;
 					row.visible = resources->treeVisibleAddress[f] + TreeLod::kVisibleHeaderWords * sizeof(std::uint32_t);
 					row.shapeSlots = face.captured && treeRowBound ? treeRow.shapeSlots : 0u;
-					resources->latch->WriteValue(latchSlot, layout.FaceOffset(f) + ReflectionLatchLayout::kTreeRowInFace, row);
+					latchBlock.WriteValue(latchSlot, layout.FaceOffset(f) + ReflectionLatchLayout::kTreeRowInFace, row);
 					TreeLod::VisibleHeader header{};
 					header.phaseOne[0] = header.phaseTwo[0] = header.colour[0] = std::max(row.maxIndices, 1u);
-					resources->latch->WriteValue(latchSlot, layout.FaceOffset(f) + ReflectionLatchLayout::kTreeHeaderInFace, header);
+					latchBlock.WriteValue(latchSlot, layout.FaceOffset(f) + ReflectionLatchLayout::kTreeHeaderInFace, header);
 				}
 				drawn += face.captured ? 1u : 0u;
 			}
 
-			ReflectionShapeInputs shapeIn;
-			shapeIn.resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
-			shapeIn.samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
-			shapeIn.indirect = indirect;
-			shapeIn.buckets = buckets;
-			if (trees) {
-				shapeIn.tree = reflection.treePipeline;
-				shapeIn.treeSignature = treeLod->drawSignature;
-				shapeIn.treeShapes = scene.treeLodShapeCapacity;
-			}
-			auto frame = MakeReflectionShape(*resources, shapeIn);
 			impl->NoteReflectionParity(*frame, frameNumber);
+			if (revisionShape)
+				impl->SubmitRevisionRecording(4, *revisionRecordings, 0);
 			PublishShape(std::move(frame), resources->published, resources->frame, resources->shapeGenerations, resources->recentShapes);
 		}, owners);
 		if (!ok) {

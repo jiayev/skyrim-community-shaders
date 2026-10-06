@@ -87,6 +87,7 @@ namespace DCLF
 			{ OrgAsyncEpochs, "CS_ORG_ASYNC_EPOCHS", F, Reduced::Zero, true, "0: epochs are recorded on the render thread" },
 			{ OrgClosed, "CS_ORG_CLOSED", F, Reduced::Zero, true, "0: epochs do not return their resources to their home states" },
 			{ OrgBatchSubmit, "CS_ORG_BATCH_SUBMIT", F, Reduced::Zero, true, "0: an epoch's submissions go to DXVK one at a time" },
+			{ Revisions, "CS_DCLF_REVISIONS", F, Reduced::Zero, true, "0: the epochs submit their own preparations; on: the selected scene revision's recordings wherever the revision covers the frame" },
 			{ OrgEarlyFlush, "CS_ORG_EARLY_FLUSH", F, Reduced::Zero, true, "0: DXVK's pending work is not flushed when an epoch starts" },
 
 			{ PersistentParity, "CS_DCLF_PERSISTENT_PARITY", P, N, false, "1: every kept store (records, bindings, slots, shading, geometry) against a rebuild, every 60 frames" },

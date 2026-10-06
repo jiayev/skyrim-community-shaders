@@ -120,6 +120,7 @@ namespace DCLF
 			}
 			in.cullMode = ActiveToggles().cullMode;
 			in.latch = a_resources.latch;
+			in.latchLayout = a_resources.latchLayout;
 			return in;
 		}
 
@@ -151,7 +152,9 @@ namespace DCLF
 				}
 			}
 			frame->latch = a_in.latch;
+			frame->latchLayout = a_in.latchLayout;
 			frame->zCalls = a_in.zCalls;
+			frame->zPlan = a_in.zPlan;
 			frame->latched = a_in.latched;
 			return frame;
 		}
@@ -218,6 +221,8 @@ namespace DCLF
 			frame->pipelineRows = main.pipelineRows.address;
 			frame->sequenceDraws = a_resources.sequenceDraws;
 			frame->buckets = a_in.buckets;
+			frame->latchLayout = a_resources.latchLayout;
+			frame->map = a_in.map;
 			// The colour segment's frame constants, VS and PS b12 the face's (its camera): the frame lighting (PS b13) is the main
 			// pass's, its sun a frame old (dclf-lod.md, "The constants").
 			const auto base = FramePushWords(main.frameConstantsAddress);
@@ -274,7 +279,8 @@ namespace DCLF
 			ZBucketPlan plan;
 			if (depthOnly && r.pool)
 				PlanZBuckets(r, store.GetLookups(), tables, indirect, plan);
-			in.zCalls = std::move(plan.calls);
+			in.zCalls = plan.calls;
+			in.zPlan = std::make_shared<const ZBucketPlan>(std::move(plan));
 			in.latched.copies = MainLatchedLayout(r, depthOnly, parity.blockSizes[shape], static_cast<std::uint32_t>(in.zCalls.size()));
 			ReserveLatchedBlock(r.latchedBlocks[shape], LatchedBytes(in.latched.copies), host->FrameSlots());
 			if (!in.latched.copies.empty())
@@ -354,6 +360,7 @@ namespace DCLF
 			in.samplerHeap = rp.samplerHeap;
 			in.indirect = indirect;
 			in.buckets = std::move(plan.buckets);
+			in.map = std::make_shared<const std::vector<std::uint32_t>>(std::move(plan.map));
 			if (reflection.treePipeline.valid() && treeLod && scene.treeLodCull && reflection.resources->treeShapeCapacity == scene.treeLodShapeCapacity) {
 				in.tree = reflection.treePipeline;
 				in.treeSignature = treeLod->drawSignature;

@@ -252,10 +252,91 @@ namespace DCLF
 		const auto latchedLayout = MainLatchedLayout(*a_resources, depthOnly, blockSizes, zPlan.Buckets());
 		ReserveLatchedBlock(a_resources->latchedBlocks[latchedShape], LatchedBytes(latchedLayout), RenderGraphRuntime::Get().Host()->FrameSlots());
 		shapeParity.blockSizes[latchedShape] = blockSizes;
+		// The colour pass's cascades and local shadow volumes (the sun's Accumulate has run, the shadow maps are drawn): the main
+		// latch grown to hold them before the shape names it.
+		if (!depthOnly) {
+			SunAccumulation::Get().GpuCascades(sunCascades);
+			{
+				// Frames whose sun test runs without cascades: every pass with the sun's bits draws unshadowed (right only when the
+				// sun did not accumulate).
+				static std::uint32_t commits = 0, empty = 0;
+				empty += sunCascades.empty() ? 1 : 0;
+				if (++commits == 300) {
+					logger::info("[DCLF] colour sun test: {} of 300 frames without the sun's cascades{}", empty, empty ? " <- NO CASCADES" : " <- OK");
+					commits = empty = 0;
+				}
+			}
+			// And the local shadow lights that accumulated this frame (LocalShadowLights), a volume per shadowmap descriptor, for
+			// each input's Light Limit Fix shadow mask. They have accumulated: the shadow maps are drawn.
+			localShadows = LocalShadowLights::Sample();
+			shadowVolumes.clear();
+			for (const auto& light : localShadows.lights) {
+				for (const auto& volume : light.volumes) {
+					auto& out = shadowVolumes.emplace_back();
+					out.masks[0] = volume.masks[0];
+					out.masks[1] = volume.masks[1];
+					out.maskBit = light.maskBit;
+					out.affectsLand = light.affectsLand ? 1u : 0u;
+					out.sphere[0] = light.center[0];
+					out.sphere[1] = light.center[1];
+					out.sphere[2] = light.center[2];
+					out.sphere[3] = light.radius;
+					std::memcpy(out.planes, volume.planes.data(), sizeof(out.planes));
+				}
+			}
+			ReserveMainLatch(*a_resources, static_cast<std::uint32_t>(sunCascades.size()), static_cast<std::uint32_t>(shadowVolumes.size()));
+		}
+		// R3c: the selected revision's shape, when it covers the frame - its versions current, the same pipeline set, heaps, viewport
+		// and cull mode, its max counts holding the frame's draws, its latch the cascades, volumes and bucket slots. The commit then
+		// writes its values into that shape (its latch block and layout, its bucket plan, its latched copies) and submits the
+		// revision's recording; else into its own shape, which the ticket's own preparation reads.
+		const auto revisionEpoch = static_cast<std::uint32_t>(latchedShape);
+		std::shared_ptr<const PassFrame> revisionShape;
+		std::shared_ptr<const RevisionRecordings> revisionRecordings;
+		{
+			std::shared_ptr<const org::async::RevisionFragment> fragment;
+			if (ActiveRevision(revisionEpoch, fragment, revisionRecordings)) {
+				using R = SceneRevisions;
+				auto shape = fragment->Value<PassFrame>();
+				const auto draws = static_cast<std::uint32_t>(a_payload.sequences.size() + a_payload.residentDraws);
+				const bool mainRange = mainMaxDepth > 0.0f;
+				const MainViewport viewport{ a_capture.viewportWidth, a_capture.viewportHeight, mainRange ? mainMinDepth : a_capture.minDepth,
+					mainRange ? mainMaxDepth : a_capture.maxDepth };
+				bool decalsFit = true;
+				for (std::uint32_t group = 0; group < kDecalGroups && !depthOnly; ++group)
+					decalsFit &= a_payload.decalCount[group] <= shape->decalCapacity[group];
+				std::uint32_t miss = R::kMisses;
+				if (!shape || !shape->latch)
+					miss = R::kNoRecording;
+				else if (!indirect.valid || !shape->indirect.valid || !SameHandle(shape->indirect.layout, indirect.layout) ||
+						 !SameHandle(shape->resourceHeap, org::runtime::GetActiveSRVDescriptorHeap().GetHandle()) ||
+						 !SameHandle(shape->samplerHeap, org::runtime::GetActiveSamplerDescriptorHeap().GetHandle()) ||
+						 (shape->indirect.version != indirect.version && !RevisionHoldsClaims()))
+					miss = R::kPipelines;
+				else if (!(MainViewport{ shape->width, shape->height, shape->minDepth, shape->maxDepth } == viewport))
+					miss = R::kViewport;
+				else if (shape->cullMode != ActiveToggles().cullMode)
+					miss = R::kShape;
+				else if (draws > shape->drawCapacity || !decalsFit)
+					miss = R::kCapacity;
+				else if (!depthOnly && (sunCascades.size() > shape->latchLayout.cascades || shadowVolumes.size() > shape->latchLayout.shadowVolumes))
+					miss = R::kLatch;
+				else if (depthOnly && a_resources->pool && (!shape->zPlan || a_resources->zBucketCapacity.size() > shape->latchLayout.buckets))
+					miss = R::kLatch;
+				if (miss == R::kMisses)
+					revisionShape = std::move(shape);
+				else
+					NoteRevisionMiss(revisionEpoch, miss);
+			}
+		}
+		const ZBucketPlan& writePlan = revisionShape && revisionShape->zPlan ? *revisionShape->zPlan : zPlan;
+		const org::LatchBlock& latchBlock = revisionShape ? *revisionShape->latch : *a_resources->latch;
+		const MainLatchLayout& latchLayout = revisionShape ? revisionShape->latchLayout : a_resources->latchLayout;
 		// The per-frame values (the frame constants, the counters, the frame buffers' copies, tree LOD's row): copied from the
 		// latch by the epoch's first pass, so this commit records no copy for them.
-		LatchedUploads latched(a_resources->latchedTargets, uploads, a_resources->latchedBlocks[latchedShape], RenderGraphRuntime::Get().Host()->CurrentFrameSlot(),
-			RenderGraphRuntime::Get().Host()->FrameSlots());
+		auto latched = revisionShape ? LatchedUploads(revisionShape->latched, uploads, RenderGraphRuntime::Get().Host()->CurrentFrameSlot()) :
+		                               LatchedUploads(a_resources->latchedTargets, uploads, a_resources->latchedBlocks[latchedShape],
+										   RenderGraphRuntime::Get().Host()->CurrentFrameSlot(), RenderGraphRuntime::Get().Host()->FrameSlots());
 		auto lap = [&, last = std::chrono::steady_clock::now()](std::size_t a_part) mutable {
 			const auto now = std::chrono::steady_clock::now();
 			a_stats.commitUs[a_part] += std::chrono::duration<double, std::micro>(now - last).count();
@@ -590,40 +671,6 @@ namespace DCLF
 		for (std::uint32_t group = 0; group < kDecalGroups; ++group)
 			if (decalCount[group] > a_resources->sequenceDecals)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} decals past the sequence buffer's {} per group", decalCount[group], a_resources->sequenceDecals));
-		// The colour pass's cascades and local shadow volumes (the sun's Accumulate has run, the shadow maps are drawn): the main
-		// latch grown to hold them before the shape names it.
-		if (!depthOnly) {
-			SunAccumulation::Get().GpuCascades(sunCascades);
-			{
-				// Frames whose sun test runs without cascades: every pass with the sun's bits draws unshadowed (right only when the
-				// sun did not accumulate).
-				static std::uint32_t commits = 0, empty = 0;
-				empty += sunCascades.empty() ? 1 : 0;
-				if (++commits == 300) {
-					logger::info("[DCLF] colour sun test: {} of 300 frames without the sun's cascades{}", empty, empty ? " <- NO CASCADES" : " <- OK");
-					commits = empty = 0;
-				}
-			}
-			// And the local shadow lights that accumulated this frame (LocalShadowLights), a volume per shadowmap descriptor, for
-			// each input's Light Limit Fix shadow mask. They have accumulated: the shadow maps are drawn.
-			localShadows = LocalShadowLights::Sample();
-			shadowVolumes.clear();
-			for (const auto& light : localShadows.lights) {
-				for (const auto& volume : light.volumes) {
-					auto& out = shadowVolumes.emplace_back();
-					out.masks[0] = volume.masks[0];
-					out.masks[1] = volume.masks[1];
-					out.maskBit = light.maskBit;
-					out.affectsLand = light.affectsLand ? 1u : 0u;
-					out.sphere[0] = light.center[0];
-					out.sphere[1] = light.center[1];
-					out.sphere[2] = light.center[2];
-					out.sphere[3] = light.radius;
-					std::memcpy(out.planes, volume.planes.data(), sizeof(out.planes));
-				}
-			}
-			ReserveMainLatch(*a_resources, static_cast<std::uint32_t>(sunCascades.size()), static_cast<std::uint32_t>(shadowVolumes.size()));
-		}
 		// The shape (MakeMainShape), from this commit's inputs; a scene revision makes it from its own (MakeRevisionShapes). Its max
 		// counts hold this frame's draws whatever the bound says (a draw past the bound is the bound's defect, the parity's to show).
 		auto shapeIn = MainShapeInputsOf(*a_resources, depthOnly, tables, std::max(drawBound.Draws(), drawCount));
@@ -637,6 +684,7 @@ namespace DCLF
 		shapeIn.samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
 		shapeIn.indirect = indirect;
 		shapeIn.zCalls = zPlan.calls;
+		shapeIn.zPlan = std::make_shared<const ZBucketPlan>(zPlan);
 		shapeIn.latched.copies = latchedLayout;
 		if (!latchedLayout.empty())
 			shapeIn.latched.latch = a_resources->latchedBlocks[latchedShape];
@@ -814,48 +862,64 @@ namespace DCLF
 		// earlier this frame); the buckets' map and each phase's table (PlanZBuckets, whose calls are the shape's) in the slot's
 		// region, and their count words zeroed. A slot without a published pipeline maps to none: BuildDraws drops its draws.
 		if (depthOnly && a_resources->pool) {
-			const auto& layout = a_resources->latchLayout;
-			UpdateIndexPool(*a_resources->pool, a_store.GetTables(), a_store.GetTablesGeneration(), *a_resources->latch, latchSlot, layout.PoolOffset(), uploads);
-			const auto slots = static_cast<std::uint32_t>(zPlan.map.size());
+			const auto& layout = latchLayout;
+			UpdateIndexPool(*a_resources->pool, a_store.GetTables(), a_store.GetTablesGeneration(), latchBlock, latchSlot, layout.PoolOffset(), uploads);
+			// The plan's slots, and none for a pipeline slot the tables have gained since it was made (none of its draws is the frame's).
+			const auto planned = static_cast<std::uint32_t>(writePlan.map.size());
+			const auto slots = std::max(planned, static_cast<std::uint32_t>(a_resources->zBucketCapacity.size()));
 			if (slots > layout.buckets)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} Z-prepass pipeline slots past the latch's {}", slots, layout.buckets));
-			const std::uint32_t buckets = zPlan.Buckets();
-			if (slots)
-				a_resources->latch->Write(latchSlot, layout.BucketMapOffset(), std::as_bytes(std::span(zPlan.map.data(), slots)));
+			const std::uint32_t buckets = writePlan.Buckets();
+			if (planned)
+				latchBlock.Write(latchSlot, layout.BucketMapOffset(), std::as_bytes(std::span(writePlan.map.data(), planned)));
+			if (slots > planned) {
+				zBucketZeros.assign(slots - planned, kNoBucket);
+				latchBlock.Write(latchSlot, layout.BucketMapOffset() + planned * static_cast<std::uint32_t>(sizeof(std::uint32_t)),
+					std::as_bytes(std::span(zBucketZeros.data(), slots - planned)));
+			}
 			if (buckets) {
 				const std::size_t words = std::size_t(buckets) * 2;
-				a_resources->latch->Write(latchSlot, layout.BucketTableOffset(), std::as_bytes(std::span(zPlan.table.data(), words)));
-				a_resources->latch->Write(latchSlot, layout.PhaseTwoBucketTableOffset(), std::as_bytes(std::span(zPlan.table.data() + words, words)));
-				zBucketZeros.resize(std::max<std::size_t>(zBucketZeros.size(), buckets), 0u);
+				latchBlock.Write(latchSlot, layout.BucketTableOffset(), std::as_bytes(std::span(writePlan.table.data(), words)));
+				latchBlock.Write(latchSlot, layout.PhaseTwoBucketTableOffset(), std::as_bytes(std::span(writePlan.table.data() + words, words)));
+				zBucketZeros.assign(std::max<std::size_t>(zBucketZeros.size(), buckets), 0u);
 				for (const auto& counts : a_resources->zBucketCounts)
 					latched(counts, zBucketZeros.data(), std::size_t(buckets) * sizeof(std::uint32_t), 0);
 			}
-			const auto region = static_cast<std::uint32_t>(a_resources->latch->Offset(latchSlot));
+			const auto region = static_cast<std::uint32_t>(latchBlock.Offset(latchSlot));
 			latch.bucketTableOffset = region + layout.BucketTableOffset();
 			latch.phaseTwoBucketTableOffset = region + layout.PhaseTwoBucketTableOffset();
 			latch.bucketMapOffset = region + layout.BucketMapOffset();
 		}
 		if (!depthOnly) {
-			const auto& layout = a_resources->latchLayout;
+			const auto& layout = latchLayout;
 			const std::uint32_t header[4] = { static_cast<std::uint32_t>(sunCascades.size()), 0, 0, 0 };
-			a_resources->latch->Write(latchSlot, MainLatchLayout::CascadeOffset(), std::as_bytes(std::span(header)));
+			latchBlock.Write(latchSlot, MainLatchLayout::CascadeOffset(), std::as_bytes(std::span(header)));
 			if (!sunCascades.empty())
-				a_resources->latch->Write(latchSlot, MainLatchLayout::CascadeOffset() + kSunRegionHeader, std::as_bytes(std::span(sunCascades)));
+				latchBlock.Write(latchSlot, MainLatchLayout::CascadeOffset() + kSunRegionHeader, std::as_bytes(std::span(sunCascades)));
 			const std::uint32_t volumeHeader[4] = { static_cast<std::uint32_t>(shadowVolumes.size()), 0, 0, 0 };
-			a_resources->latch->Write(latchSlot, layout.ShadowVolumeOffset(), std::as_bytes(std::span(volumeHeader)));
+			latchBlock.Write(latchSlot, layout.ShadowVolumeOffset(), std::as_bytes(std::span(volumeHeader)));
 			if (!shadowVolumes.empty())
-				a_resources->latch->Write(latchSlot, layout.ShadowVolumeOffset() + kSunRegionHeader, std::as_bytes(std::span(shadowVolumes)));
+				latchBlock.Write(latchSlot, layout.ShadowVolumeOffset() + kSunRegionHeader, std::as_bytes(std::span(shadowVolumes)));
 			latch.sunState = kSunTestOn;
-			latch.sunCascadeOffset = static_cast<std::uint32_t>(a_resources->latch->Offset(latchSlot)) + MainLatchLayout::CascadeOffset();
-			latch.localShadowOffset = static_cast<std::uint32_t>(a_resources->latch->Offset(latchSlot)) + layout.ShadowVolumeOffset();
+			latch.sunCascadeOffset = static_cast<std::uint32_t>(latchBlock.Offset(latchSlot)) + MainLatchLayout::CascadeOffset();
+			latch.localShadowOffset = static_cast<std::uint32_t>(latchBlock.Offset(latchSlot)) + layout.ShadowVolumeOffset();
 			sunUpload = latch;
 		}
-		a_resources->latch->WriteValue(latchSlot, 0, latch);
+		latchBlock.WriteValue(latchSlot, 0, latch);
 		// What the reflection's faces, early next frame, draw from (ExecuteReflection): this commit's inputs and the buffers' backings.
 		a_resources->committed[shapeIndex] = { frameNumber, inputCount, a_resources->scene->generation, a_resources->objectCapacity };
 
-		frame->latched = latched.Finish();
+		if (revisionShape) {
+			// The values went into the revision's shape; the commit's own shape is published as its producer laid it out.
+			(void)latched.Finish();
+			revisions.latchedMisses += latched.Misses();
+			frame->latched = shapeIn.latched;
+		} else {
+			frame->latched = latched.Finish();
+		}
 		NoteShapeParity(shapeIndex, *frame, latchedLayout, frameNumber);
+		if (revisionShape)
+			SubmitRevisionRecording(revisionEpoch, *revisionRecordings, 0);
 		PublishShape(std::move(frame), a_resources->published[shapeIndex], a_resources->frames[shapeIndex], a_resources->shapeGenerations,
 			a_resources->recentShapes[shapeIndex]);
 		lap(6);
