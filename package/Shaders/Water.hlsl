@@ -178,9 +178,9 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.HPosition.z = heightMult * 0.5 + worldViewPos.z;
 	vsout.HPosition.w = worldViewPos.w;
 
-#	if defined(HORIZON_FIX)
+#		if defined(HORIZON_FIX)
 	vsout.HPosition.z = min(vsout.HPosition.z, vsout.HPosition.w * HorizonFix::FoldedDepth);
-#	endif
+#		endif
 
 #		if defined(STENCIL)
 	vsout.WorldPosition = worldPos;
@@ -795,7 +795,7 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 	return result;
 }
 
-float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection, float distanceFactor, float skylightingSpecular)
+float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection, float skylightingSpecular)
 {
 	if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Reflections))
 		return ReflectionColor.xyz * VarAmounts.y;
@@ -836,7 +836,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 	float4 ssrReflectionColorRaw = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUvDR);
 	float4 ssrReflectionColor = lerp(ssrReflectionColorBlurred, ssrReflectionColorRaw, ssrAmount * 0.7);
 	float3 finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
-	float ssrFraction = saturate(ssrReflectionColor.w * distanceFactor * ssrAmount);
+	float ssrFraction = saturate(ssrReflectionColor.w * ssrAmount);
 	reflectionColor = lerp(reflectionColor, finalSsrReflectionColor, ssrFraction);
 #			endif
 
@@ -1092,9 +1092,9 @@ PS_OUTPUT main(PS_INPUT input)
 #			else
 
 #				if defined(SKYLIGHTING)
-	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceFactor, skylightingSpecular);
+	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, skylightingSpecular);
 #				else
-	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceFactor, 1.0);
+	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, 1.0);
 #				endif
 
 	DiffuseOutput diffuseOutput = GetWaterDiffuseColor(input, normal, viewDirection, distanceMul, depthControl.y, fresnel, viewPosition, depth);
