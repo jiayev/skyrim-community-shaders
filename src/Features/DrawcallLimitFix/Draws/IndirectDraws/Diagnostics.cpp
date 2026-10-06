@@ -233,6 +233,7 @@ namespace DCLF
 				c = {};
 			}
 			text += fmt::format("[DCLF] shape parity (R3c): {}\n", segments);
+			text += impl->RevisionReport();
 		}
 		if (auto& bound = impl->drawBound; bound.updates) {
 			text += fmt::format("[DCLF] scene draw bound: {} updates, {:.1f} slots changed an update, {} draws over {} slots, {} resyncs; parity {} checked, {} differ{}\n",

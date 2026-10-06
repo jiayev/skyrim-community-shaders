@@ -560,6 +560,31 @@ before (the one `BeginSceneFrame` would select).
   appears that no revision has seen only when retained views expire: the coverage case, whose views a revision's frame
   leaves to the engine.
 
+**Phase 6b, R3c (b): the scene revision, assembled, recorded and selected** (2026-10-05, r3cb1, r3cb2). The epochs still
+draw the commits' shapes; the revision is made and recorded beside them, counts only.
+
+- **Passes prepare for a revision.** Every DCLF pass reads its shape through its preparation (`CurrentFrame`,
+  `CurrentShadowFrame`, `CurrentReflectionFrame`, and the index pool's latch, all with the `PassPrepareContext`). A
+  preparation whose host data carries `RevisionShapes` gets the revision's shape; a live ticket gets the published one.
+- **Versions.** Every versioned buffer registers itself (`VersionRegistry`), and an adoption counts as a change. A
+  revision's `VersionSet` snapshots the current versions only when the count moved, and is the recordings'
+  `IResourceVersions`.
+- **Assembly** (`SceneRevision.cpp`, `AssembleRevision`, at the scene work's join). It uses an `org::async::RevisionAssembler`
+  with eleven slots: the versions, a shape per epoch (Z-prepass, colour, shadow variants, occlusion variants, reflection),
+  and a recording per epoch.
+  - A shape fragment is kept while `SameShape` holds.
+  - A recording fragment requires exactly its epoch's shape and the versions. While neither changes, the next revision
+    inherits it; otherwise it is requested on ORG's host thread, one recording per shape (each shadow variant has its own),
+    with `EpochRevisionData` (the versions and the epoch's shape) as host data.
+  - A recording that fails for some inputs is dropped from the revision and not requested again until they change.
+  - ORG: `RequestEpochRecording` now takes live async epochs as well, recorded only and never admitted (persistent-epochs.md).
+- **Selection.** `BeginSceneFrame` collects and selects the newest complete revision (`SelectRevision`).
+- **Result.** Startup: about 25–30 recordings per epoch over the first 300 frames, all made, none failed: every DCLF epoch's
+  recording for a revision is replayable. In steady play a recording is requested about once per 300–1,000 frames: a
+  Z-prepass bucket call after a lookup resolves, or a shadow variant. Each revision is sealed, published and selected one
+  frame after its join. The live epochs were unaffected: 0 ticket waits after startup (5–6 in the first interval, as
+  before), nothing prepared again, and the members, draws and warnings as in r3ca4.
+
 ## Implemented foundations
 
 - `ORGModuleServices::AsyncPrimitives` is a backend-independent header-only target.

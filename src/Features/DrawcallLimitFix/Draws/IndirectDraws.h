@@ -159,6 +159,8 @@ namespace DCLF
 		 * (Impl::ShapeParity). Counts only: nothing draws with them yet.
 		 */
 		void MakeRevisionShapes();
+		/** @brief Render thread, BeginSceneFrame: the newest complete scene revision selected (Impl::SceneRevisions; counts only). */
+		void SelectRevision();
 		/** @brief BeforeShadowMaps: whether the early shadow build stands (counted by cause when it does not). */
 		bool KeepEarlyShadowBuild();
 		/**

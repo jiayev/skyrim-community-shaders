@@ -239,18 +239,18 @@ namespace DCLF::Draws
 
 		// What the recording depends on: the tables' layout (a growth gives them new views and a larger dispatch) and the depth
 		// segment's shape (its latch).
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::ZPrepass);
+			const auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass);
 			a_out.push_back(resources->scene->layout.load(std::memory_order_acquire));
 			a_out.push_back(frame ? frame->generation : 0);
 		}
 
-		TreeLodCullPrepared Prepare(const TreeLodCullBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		TreeLodCullPrepared Prepare(const TreeLodCullBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			TreeLodCullPrepared prepared{};
 			const auto& scene = *resources->scene;
-			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::ZPrepass);
+			const auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass);
 			if (!scene.treeLodCull || !scene.treeLodShapeCapacity || !frame || !frame->latch)
 				return prepared;
 			prepared.program = scene.treeLodCull;
@@ -319,12 +319,12 @@ namespace DCLF::Draws
 			return { a_builder.CopySource(*scene->treeLodVisible) };
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
 			a_out.push_back(scene->layout.load(std::memory_order_acquire));
 		}
 
-		TreeLodReadbackPrepared Prepare(const TreeLodReadbackBindings&, const org::PassPrepareContext&) const
+		TreeLodReadbackPrepared Prepare(const TreeLodReadbackBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			return { scene->treeLodCounts };
 		}
@@ -420,10 +420,10 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
 			const auto now = segment;
-			const auto frame = CurrentFrame(*resources, now);
+			const auto frame = CurrentFrame(a_preparation, *resources, now);
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(static_cast<std::uint64_t>(now));
 			a_out.push_back(phaseTwo ? 1 : 0);
@@ -432,11 +432,11 @@ namespace DCLF::Draws
 			a_out.push_back(reinterpret_cast<std::uintptr_t>(resources->scene->treeLodPipelines.load(std::memory_order_acquire).get()));
 		}
 
-		PreparedDraws Prepare(const PassBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		PreparedDraws Prepare(const PassBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			PreparedDraws prepared{};
 			const auto now = segment;
-			auto frame = CurrentFrame(*resources, now);
+			auto frame = CurrentFrame(a_preparation, *resources, now);
 			if (!frame || (!frame->drawCapacity && !frame->decalCapacity[0] && !frame->decalCapacity[1] && !frame->decalCapacity[2]) || !frame->indirect.valid)
 				return prepared;
 			// The rescue draw belongs to the depth segment only.
@@ -758,21 +758,21 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
 			const auto now = segment;
-			const auto frame = CurrentFrame(*resources, now);
+			const auto frame = CurrentFrame(a_preparation, *resources, now);
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(static_cast<std::uint64_t>(now));
 			a_out.push_back(fixedPhase);
 			a_out.push_back(resources->pool ? resources->pool->layout : 0);
 		}
 
-		BuildDrawsFrame Prepare(const BuildDrawsBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		BuildDrawsFrame Prepare(const BuildDrawsBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			BuildDrawsFrame prepared{};
 			const auto now = segment;
-			const auto frame = CurrentFrame(*resources, now);
+			const auto frame = CurrentFrame(a_preparation, *resources, now);
 			if (!frame || !resources->buildDraws || !frame->latch || !resources->dispatchSignature)
 				return prepared;
 			const std::uint32_t phase = Phase(now);
@@ -889,18 +889,18 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
 			const auto now = segment;
-			const auto frame = CurrentFrame(*resources, now);
+			const auto frame = CurrentFrame(a_preparation, *resources, now);
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(static_cast<std::uint64_t>(now));
 		}
 
-		SortSequencesFrame Prepare(const SortSequencesBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		SortSequencesFrame Prepare(const SortSequencesBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			SortSequencesFrame prepared{};
-			if (!BuildsDraws(*resources, segment))
+			if (!BuildsDraws(a_preparation, *resources, segment))
 				return prepared;
 			prepared.program = resources->sort->scatter;
 			auto& constants = prepared.constants;
@@ -910,7 +910,7 @@ namespace DCLF::Draws
 			constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
 			constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
 			constants.sequenceStride = static_cast<std::uint32_t>(sizeof(DrawSequence));
-			const auto frame = CurrentFrame(*resources, segment);
+			const auto frame = CurrentFrame(a_preparation, *resources, segment);
 			constants.drawLimit = frame ? frame->sequenceDraws : 0;
 			prepared.groups = (constants.drawLimit + kSortSequencesGroup - 1) / kSortSequencesGroup;
 			return prepared;
@@ -972,12 +972,12 @@ namespace DCLF::Draws
 
 		// What the recording depends on: the buffers' layout (a growth gives them new views). The count and the frame's inputs
 		// are the frame row, which every commit uploads.
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
 			a_out.push_back(scene->layout.load(std::memory_order_acquire));
 		}
 
-		TreeWindFramePrepared Prepare(const TreeWindBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		TreeWindFramePrepared Prepare(const TreeWindBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			TreeWindFramePrepared prepared{};
 			if (!scene->treeWind || !scene->treeFrameBuffer)
@@ -1057,19 +1057,19 @@ namespace DCLF::Draws
 
 		// What the recording depends on: the buffers' layout and the depth segment's shape (its latch). The root count, the frame
 		// and the log are the frame row (Records.h, FadeFrame), which the depth commit uploads.
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::ZPrepass);
+			const auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass);
 			a_out.push_back(resources->scene->layout.load(std::memory_order_acquire));
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(resources->scene->fadeWriteBack ? resources->scene->fadeWriteBack->capacity.load(std::memory_order_acquire) : 0u);
 		}
 
-		FadeStatePrepared Prepare(const FadeStateBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		FadeStatePrepared Prepare(const FadeStateBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			FadeStatePrepared prepared{};
 			const auto& scene = *resources->scene;
-			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::ZPrepass);
+			const auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass);
 			if (!scene.fadeState || !scene.fadeRootCapacity || !frame || !frame->latch)
 				return prepared;
 			prepared.program = scene.fadeState;
@@ -1141,12 +1141,12 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
 			a_out.push_back(scene->layout.load(std::memory_order_acquire));
 		}
 
-		FadeEventReadbackPrepared Prepare(const FadeEventReadbackBindings&, const org::PassPrepareContext&) const
+		FadeEventReadbackPrepared Prepare(const FadeEventReadbackBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			return { scene->fadeWriteBack };
 		}
@@ -1249,15 +1249,15 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
 			const auto now = segment;
-			const auto frame = CurrentFrame(*resources, now);
+			const auto frame = CurrentFrame(a_preparation, *resources, now);
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(static_cast<std::uint64_t>(now));
 		}
 
-		HzbFrame Prepare(const HzbBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		HzbFrame Prepare(const HzbBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			HzbFrame prepared{};
 			// Only in the Z-prepass segment: anywhere else the depth is not the world's final depth.
@@ -1267,7 +1267,7 @@ namespace DCLF::Draws
 			if (!resources->hzb || !resources->hzbProgram || !resources->hzbCounter)
 				return prepared;
 			// A published depth frame: its commit zeroed the group counter (hzbCounterZeroed) before this first dispatch.
-			const auto frame = CurrentFrame(*resources, now);
+			const auto frame = CurrentFrame(a_preparation, *resources, now);
 			if (!frame)
 				return prepared;
 			const std::uint32_t renderWidth = frame->width ? frame->width : resources->width;
@@ -1381,13 +1381,13 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::MainOpaque);
+			const auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::MainOpaque);
 			a_out.push_back(frame ? frame->generation : 0);
 		}
 
-		FoliageParityPrepared Prepare(const FoliageParityBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		FoliageParityPrepared Prepare(const FoliageParityBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			FoliageParityPrepared prepared{};
 			const auto& foliage = *resources->foliage;
@@ -1450,16 +1450,16 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::MainOpaque);
+			const auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::MainOpaque);
 			a_out.push_back(frame ? frame->generation : 0);
 		}
 
-		FoliageReadbackPrepared Prepare(const FoliageReadbackBindings&, const org::PassPrepareContext&) const
+		FoliageReadbackPrepared Prepare(const FoliageReadbackBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			FoliageReadbackPrepared prepared{};
-			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::MainOpaque);
+			const auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::MainOpaque);
 			if (!frame)
 				return prepared;
 			prepared.foliage = resources->foliage;
@@ -1528,16 +1528,16 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
 			const auto now = segment;
-			const auto frame = CurrentFrame(*resources,
+			const auto frame = CurrentFrame(a_preparation, *resources,
 				now == RenderGraphRuntime::Segment::SkyOcclusion || now == RenderGraphRuntime::Segment::LightCulling ? RenderGraphRuntime::Segment::ZPrepass : now);
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(static_cast<std::uint64_t>(now));
 		}
 
-		ProbeFrame Prepare(const ProbeBindings&, const org::PassPrepareContext&) const
+		ProbeFrame Prepare(const ProbeBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			ProbeFrame prepared{};
 			const auto now = segment;
@@ -1545,7 +1545,7 @@ namespace DCLF::Draws
 			const bool gapProbe = now == RenderGraphRuntime::Segment::SkyOcclusion || now == RenderGraphRuntime::Segment::LightCulling;
 			if (now != RenderGraphRuntime::Segment::MainOpaque && !(zPrepass && after) && !gapProbe)
 				return prepared;
-			const auto frame = CurrentFrame(*resources, gapProbe ? RenderGraphRuntime::Segment::ZPrepass : now);
+			const auto frame = CurrentFrame(a_preparation, *resources, gapProbe ? RenderGraphRuntime::Segment::ZPrepass : now);
 			if (!frame || !frame->probePixel)
 				return prepared;
 			prepared.x = frame->probeX;
@@ -1658,6 +1658,13 @@ namespace DCLF::Draws
 	{
 		return (a_sky ? a_resources.occlusionFrame : a_resources.frame).load(std::memory_order_acquire);
 	}
+	/** @brief The shadow shape a_preparation prepares for: its revision's, else the published one. */
+	std::shared_ptr<const ShadowFrame> CurrentShadowFrame([[maybe_unused]] const org::PassPrepareContext& a_preparation, const ShadowResources& a_resources, bool a_sky)
+	{
+		if (const auto* shapes = RevisionShapesOf(a_preparation))
+			return a_sky ? shapes->occlusion : shapes->shadow;
+		return CurrentShadowFrame(a_resources, a_sky);
+	}
 
 	struct ShadowBuildBindings
 	{
@@ -1710,18 +1717,18 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentShadowFrame(*resources, sky);
+			const auto frame = CurrentShadowFrame(a_preparation, *resources, sky);
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(FadeRows() ? 1u : 0u);
 			a_out.push_back(resources->pool->layout);
 		}
 
-		ShadowBuildPrepared Prepare(const ShadowBuildBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		ShadowBuildPrepared Prepare(const ShadowBuildBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			ShadowBuildPrepared prepared{};
-			const auto frame = CurrentShadowFrame(*resources, sky);
+			const auto frame = CurrentShadowFrame(a_preparation, *resources, sky);
 			if (!frame || frame->views.empty() || !resources->buildDraws || !frame->latch || !resources->dispatchSignature)
 				return prepared;
 			prepared.program = resources->buildDraws;
@@ -1820,16 +1827,16 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentShadowFrame(*resources, sky);
+			const auto frame = CurrentShadowFrame(a_preparation, *resources, sky);
 			a_out.push_back(frame ? frame->generation : 0);
 		}
 
-		ShadowLatchedCopiesPrepared Prepare(const ShadowLatchedCopiesBindings&, const org::PassPrepareContext&) const
+		ShadowLatchedCopiesPrepared Prepare(const ShadowLatchedCopiesBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			ShadowLatchedCopiesPrepared prepared{};
-			if (auto frame = CurrentShadowFrame(*resources, sky); frame && frame->latch && frame->zeros && (!frame->views.empty() || !frame->latched.copies.empty()))
+			if (auto frame = CurrentShadowFrame(a_preparation, *resources, sky); frame && frame->latch && frame->zeros && (!frame->views.empty() || !frame->latched.copies.empty()))
 				prepared.frame = std::move(frame);
 			return prepared;
 		}
@@ -1895,7 +1902,7 @@ namespace DCLF::Draws
 			std::shared_ptr<const org::LatchBlock> latch;
 			std::uint32_t poolOffset = 0;
 		};
-		IndexPoolPass(std::shared_ptr<IndexPool> a_pool, std::function<LatchOf()> a_latch) :
+		IndexPoolPass(std::shared_ptr<IndexPool> a_pool, std::function<LatchOf(const org::PassPrepareContext&)> a_latch) :
 			pool(std::move(a_pool)), latchOf(std::move(a_latch)) {}
 
 		IndexPoolBindings Declare(org::PassBuilder& a_builder)
@@ -1907,18 +1914,18 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto latch = latchOf();
+			const auto latch = latchOf(a_preparation);
 			a_out.push_back(latch.generation);
 			a_out.push_back(latch.poolOffset);
 			a_out.push_back(pool->layout);
 		}
 
-		IndexPoolPrepared Prepare(const IndexPoolBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		IndexPoolPrepared Prepare(const IndexPoolBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			IndexPoolPrepared prepared{};
-			const auto latch = latchOf();
+			const auto latch = latchOf(a_preparation);
 			if (!latch.latch)
 				return prepared;
 			prepared.pool = pool;
@@ -1948,7 +1955,7 @@ namespace DCLF::Draws
 
 	private:
 		std::shared_ptr<IndexPool> pool;
-		std::function<LatchOf()> latchOf;
+		std::function<LatchOf(const org::PassPrepareContext&)> latchOf;
 	};
 
 	struct ShadowPassBindings
@@ -2009,17 +2016,17 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentShadowFrame(*resources, sky);
+			const auto frame = CurrentShadowFrame(a_preparation, *resources, sky);
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(resources->pool->layout);
 		}
 
-		ShadowPrepared Prepare(const ShadowPassBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		ShadowPrepared Prepare(const ShadowPassBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			ShadowPrepared prepared{};
-			auto frame = CurrentShadowFrame(*resources, sky);
+			auto frame = CurrentShadowFrame(a_preparation, *resources, sky);
 			if (!frame || frame->views.empty() || !frame->indirect.valid)
 				return prepared;
 			for (std::uint32_t i = 0; i < frame->views.size(); ++i) {
@@ -2116,6 +2123,13 @@ namespace DCLF::Draws
 	{
 		return a_resources.frame.load(std::memory_order_acquire);
 	}
+	/** @brief The reflection shape a_preparation prepares for: its revision's, else the published one. */
+	std::shared_ptr<const ReflectionFrame> CurrentReflectionFrame([[maybe_unused]] const org::PassPrepareContext& a_preparation, const ReflectionResources& a_resources)
+	{
+		if (const auto* shapes = RevisionShapesOf(a_preparation))
+			return shapes->reflection;
+		return CurrentReflectionFrame(a_resources);
+	}
 
 	struct ReflectionBuildBindings
 	{
@@ -2161,17 +2175,17 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentReflectionFrame(*resources);
+			const auto frame = CurrentReflectionFrame(a_preparation, *resources);
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(resources->main->scene->pool->layout);
 		}
 
-		ReflectionBuildPrepared Prepare(const ReflectionBuildBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		ReflectionBuildPrepared Prepare(const ReflectionBuildBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			ReflectionBuildPrepared prepared{};
-			const auto frame = CurrentReflectionFrame(*resources);
+			const auto frame = CurrentReflectionFrame(a_preparation, *resources);
 			if (!frame || !frame->latch || !resources->buildDraws || !resources->dispatchSignature)
 				return prepared;
 			prepared.program = resources->buildDraws;
@@ -2258,18 +2272,18 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentReflectionFrame(*resources);
+			const auto frame = CurrentReflectionFrame(a_preparation, *resources);
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(resources->main->scene->layout.load(std::memory_order_acquire));
 		}
 
-		ReflectionTreePrepared Prepare(const ReflectionTreeBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		ReflectionTreePrepared Prepare(const ReflectionTreeBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			ReflectionTreePrepared prepared{};
 			const auto& scene = *resources->main->scene;
-			const auto frame = CurrentReflectionFrame(*resources);
+			const auto frame = CurrentReflectionFrame(a_preparation, *resources);
 			if (!frame || !frame->latch || !frame->treeGroups || !scene.treeLodCull)
 				return prepared;
 			prepared.program = scene.treeLodCull;
@@ -2373,17 +2387,17 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentReflectionFrame(*resources);
+			const auto frame = CurrentReflectionFrame(a_preparation, *resources);
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(resources->main->scene->pool->layout);
 		}
 
-		ReflectionDrawPrepared Prepare(const ReflectionDrawBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		ReflectionDrawPrepared Prepare(const ReflectionDrawBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			ReflectionDrawPrepared prepared{};
-			auto frame = CurrentReflectionFrame(*resources);
+			auto frame = CurrentReflectionFrame(a_preparation, *resources);
 			if (!frame || !frame->indirect.valid || !frame->width || !frame->height)
 				return prepared;
 			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
@@ -2551,8 +2565,8 @@ namespace DCLF::Draws
 					.PreferQueue(org::QueueKind::Graphics)
 					.Epoch(epoch));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.shadow.index-pool",
-				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources->pool, [shadow = resources] {
-					const auto frame = CurrentShadowFrame(*shadow, false);
+				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources->pool, [shadow = resources](const org::PassPrepareContext& a_preparation) {
+					const auto frame = CurrentShadowFrame(a_preparation, *shadow, false);
 					return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, shadow->latchLayout.PoolOffset() };
 				})))
 					.PreferQueue(org::QueueKind::Graphics)
@@ -2647,16 +2661,16 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentFrame(*resources, segment);
+			const auto frame = CurrentFrame(a_preparation, *resources, segment);
 			a_out.push_back(frame ? frame->generation : 0);
 		}
 
-		MainLatchedCopiesPrepared Prepare(const MainLatchedCopiesBindings&, const org::PassPrepareContext&) const
+		MainLatchedCopiesPrepared Prepare(const MainLatchedCopiesBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			MainLatchedCopiesPrepared prepared{};
-			if (auto frame = CurrentFrame(*resources, segment); frame && frame->latched.latch && !frame->latched.copies.empty())
+			if (auto frame = CurrentFrame(a_preparation, *resources, segment); frame && frame->latched.latch && !frame->latched.copies.empty())
 				prepared.frame = std::move(frame);
 			return prepared;
 		}
@@ -2783,8 +2797,8 @@ namespace DCLF::Draws
 			// The pool's copies the depth commit gave out (in a frame whose shadow epoch has not already), before the builds name
 			// the ranges and the draws read them.
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.index-pool",
-				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources->pool, [main = resources] {
-					const auto frame = CurrentFrame(*main, RenderGraphRuntime::Segment::ZPrepass);
+				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources->pool, [main = resources](const org::PassPrepareContext& a_preparation) {
+					const auto frame = CurrentFrame(a_preparation, *main, RenderGraphRuntime::Segment::ZPrepass);
 					return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, main->latchLayout.PoolOffset() };
 				})))
 					.PreferQueue(org::QueueKind::Graphics)
@@ -2925,16 +2939,16 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentReflectionFrame(*resources);
+			const auto frame = CurrentReflectionFrame(a_preparation, *resources);
 			a_out.push_back(frame ? frame->generation : 0);
 		}
 
-		ReflectionLatchedCopiesPrepared Prepare(const ReflectionLatchedCopiesBindings&, const org::PassPrepareContext&) const
+		ReflectionLatchedCopiesPrepared Prepare(const ReflectionLatchedCopiesBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			ReflectionLatchedCopiesPrepared prepared{};
-			if (auto frame = CurrentReflectionFrame(*resources); frame && frame->latch && frame->zeros)
+			if (auto frame = CurrentReflectionFrame(a_preparation, *resources); frame && frame->latch && frame->zeros)
 				prepared.frame = std::move(frame);
 			return prepared;
 		}
