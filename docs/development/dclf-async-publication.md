@@ -1328,9 +1328,17 @@ resident-draw, set and fade parity; motion m28/m29).
     the samplers were still created only inside an epoch (fixed). y17: 7,440 sequences, set parity 0. m46: the early colour build
     kept 100%; waits 0.03-0.24 ms/frame, the colour join 0.01-0.10 (the build overrunning its window behind the Z-prepass
     build) and the Present join 0.01-0.13.
-  - *Next (E)*: the builds made ahead by the coordinator. Their kept stores (object records, extras, geometry draws, rows, the
-    build caches; the first three shared with the shadow build) are mutated in place and read by the commits, so a build for the
-    next frame cannot run beside this frame's commits without per-publication versions of them.
+  - *E* (plan amendment "step E, the main payloads published as GPU versions", E1-E5): a payload ring filled on the upload queue
+    from immutable captures, the builds made ahead on the scene lane, the joins deleted.
+  - *E1: the stream views* (y18, m47). The kept stores' arrays are already immutable captures (`KeptView`: copy-on-write elements
+    and a journal snapshot, replayable against any holder). The object records, the extras rows and the geometry slots' draws are
+    now brought up to date once a frame, by the streams' job kicked at the frame's start once the set is written (nothing writes
+    the frame's tables after it), as `StreamViews` holding the frame's snapshot; every build (Z-prepass, colour, shadow) takes them
+    from it (`StreamsForBuild`: the job runs first on the same FIFO lane) instead of updating the geometry store itself, and the
+    commits emit them. The shared stores are then written by one job alone. `KeptHolders` (the versions a ring of buffers holds,
+    the journal trimmed to the oldest) is tested against whole copies (`TestRingHolders`). y18: 7,446 sequences, every parity 0
+    (but the known fade-visibility windows), set parity 0. m47: streams 300 of 300 staged batches taken; waits 0.13 ms/frame
+    (the colour join 0.04).
 
 ## Implemented foundations
 

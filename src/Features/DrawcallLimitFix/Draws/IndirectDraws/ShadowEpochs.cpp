@@ -1598,7 +1598,7 @@ namespace DCLF
 					refresh();
 					in.lookupGeneration = lookups.shadowGeneration;
 				}
-				BuildShadowPayload(in, tables, lookups, payload, impl->SceneObjects(), impl->SceneExtras(), impl->ShadowKeptState(), impl->SceneGeometries());
+				BuildShadowPayload(in, tables, lookups, payload, impl->StreamsNow(), impl->ShadowKeptState());
 			}
 			*frameOwners = std::move(payload.bindingOwners);
 			// The cleared geometry slots' buffers, held until this execution retires (SceneStore::TakeRetiredImports).
@@ -2146,18 +2146,16 @@ namespace DCLF
 		const auto* lookups = &store.GetLookups();
 		auto* payload = &impl->shadowPayload;
 		auto* pool = &job.stagedPool;
-		auto* objects = impl->SceneObjects();
-		auto* extrasStore = impl->SceneExtras();
-		auto* geometriesStore = impl->SceneGeometries();
+		auto streams = impl->StreamsForBuild();
 		auto* exclusionCache = &impl->sunExclusionCache;
 		auto* parabolicCache = &impl->parabolicExclusionCache;
 		auto* kept = impl->ShadowKeptState();
 		const ShadowInputs inputs = job.inputs;
 		const bool exclusions = PassCapture::ShadowWithholdingEnabled();
 		const rhi::Device device = RecordingDevice();
-		job.handle = AsyncWorker::Get().Submit("shadow", [inputs, tablesPtr, lookups, payload, pool, objects, extrasStore, kept, geometriesStore, exclusionCache, parabolicCache, target = impl->shadow,
+		job.handle = AsyncWorker::Get().Submit("shadow", [inputs, tablesPtr, lookups, payload, pool, streams, kept, exclusionCache, parabolicCache, target = impl->shadow,
 																exclusions, device](std::stop_token) {
-			BuildShadowPayload(inputs, *tablesPtr, *lookups, *payload, objects, extrasStore, kept, geometriesStore);
+			BuildShadowPayload(inputs, *tablesPtr, *lookups, *payload, *streams, kept);
 			StageShadowPayload(*payload, *target, *pool, device);
 			if (exclusions) {
 				ZoneScopedN("CS.DCLF.BuildShadow.Exclusions");

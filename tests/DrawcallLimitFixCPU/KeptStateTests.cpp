@@ -80,6 +80,57 @@ namespace
             assert(index.Update([&](auto slot) { return inputs[groups[slot]]; }, apply).visited == 0);
         }
     }
+    // A ring of buffers (step 6e E): each brought up to date from its own held version, the journal trimmed to the oldest; every
+    // holder's mirror equals the array after its replay, whatever the order and gaps of the replays.
+    void TestRingHolders()
+    {
+        constexpr std::size_t kRing = 4;
+        DCLF::KeptArray<std::uint32_t> values;
+        DCLF::KeptHolders<kRing> holders;
+        std::array<std::vector<std::uint32_t>, kRing> mirrors;
+        std::mt19937 random(911);
+        std::vector<DCLF::KeptView<std::uint32_t>> outstanding;  // views a producer still replays
+        for (unsigned frame = 0; frame < 4000; ++frame) {
+            values.BeginBuild(holders.Oldest());
+            auto& elements = values.Mutable();
+            if (frame % 97 == 0) {
+                elements.resize(64 + random() % 900);
+                values.Resync();
+            } else if (frame % 151 == 0) {
+                values.Clear();
+                values.Mutable().resize(32 + random() % 300);
+                values.Resync();
+            } else {
+                const std::size_t grow = random() % 3 == 0 ? random() % 20 : 0;
+                if (grow) {
+                    const std::size_t first = elements.size();
+                    elements.resize(first + grow);
+                    values.MarkRange(first, grow);
+                }
+                for (unsigned n = random() % 40; n > 0 && !values.Get().empty(); --n)
+                    values.Set(random() % values.Get().size(), static_cast<std::uint32_t>(random()));
+            }
+            auto view = values.View();
+            outstanding.push_back(view);
+            if (outstanding.size() > 3)
+                outstanding.erase(outstanding.begin());
+            // The frame's holder replays the newest view; now and then a frame skips (its holder falls further behind).
+            if (random() % 5 == 0)
+                continue;
+            const std::size_t r = frame % kRing;
+            auto& mirror = mirrors[r];
+            mirror.resize(view.Count());
+            view.Emit(holders.Get(r), [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+                std::memcpy(reinterpret_cast<std::byte*>(mirror.data()) + a_offset, a_data, a_bytes);
+            });
+            holders.Set(r, view.Version());
+            assert(mirror == *view.elements);
+        }
+        // Views a producer holds stay what they were while later builds write.
+        for (const auto& view : outstanding)
+            assert(view.elements && view.Count() == view.elements->size());
+    }
+
     void TestReferenceDrivenMaterialRetirement()
     {
         DCLF::SlotTable slots;
@@ -156,6 +207,7 @@ int main()
     assert(values.Get()[0] == 0x12345678);
     TestReferenceDrivenMaterialRetirement();
     TestActorValueMembership();
+    TestRingHolders();
     for (unsigned trial = 0; trial < 1000; ++trial) {
         DCLF::ChangeJournal::Snapshot changes{10, 1, {}};
         const std::uint64_t count = 1 + random() % 8192;
