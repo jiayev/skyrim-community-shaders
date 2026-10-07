@@ -1990,6 +1990,37 @@ namespace DCLF
 		};
 
 		/**
+		 * @brief The scene streams of one frame's tables (step 6e E1): the object records, the extras rows and the geometry slots'
+		 * draws, brought up to date once (Impl::KickSceneStreams), after the frame's start wrote its set - nothing writes the frame's
+		 * tables after it - and read by every build and commit of the frame as immutable views. The tables are held: the extras'
+		 * view reads their array.
+		 */
+		struct StreamViews
+		{
+			std::shared_ptr<const SceneStore::Tables> tables;
+			std::uint32_t generation = 0;
+			ObjectRecordsOut objects;
+			ExtrasOut extras;
+			KeptView<GeometryDraw> geometries;
+		};
+		/** @brief What a set of stream views was made from: the frame's tables as they stood (their logs' ends) and their generation. */
+		struct StreamsKey
+		{
+			const void* tables = nullptr;
+			std::uint64_t log = 0, geometryLog = 0;
+			std::uint32_t generation = 0;
+			bool operator==(const StreamsKey&) const = default;
+		};
+		/** @brief Where a build kicked behind the streams' job finds its views (the job fills it before the build runs: one FIFO lane). */
+		using StreamsSlot = std::shared_ptr<std::shared_ptr<const StreamViews>>;
+		/**
+		 * @brief A build's geometry slots: the frame's stream views', or packed whole from the tables without them (a probe's
+		 * build, or no scene buffers yet).
+		 */
+		void TakeGeometryDraws(const StreamViews* a_streams, const SceneStore::Tables& a_tables, std::uint32_t a_generation, std::uint32_t a_frame,
+			GeometryDrawsOut& a_out);
+
+		/**
 		 * @brief The geometry slots' draws one geometry buffer holds, kept across builds (Step 7): repacked from the tables'
 		 * geometry log (Tables::geometryLog), and sent as the slots changed since the version the buffer holds. One, for every
 		 * epoch's builds (SceneBuffers); in frame order like ObjectRecordStore.
@@ -2184,6 +2215,8 @@ namespace DCLF
 			KeptView<MaterialRow> materialRows;
 			KeptView<PipelineRow> pipelineRows;
 			std::uint64_t materialRowsWritten = 0, pipelineRowsWritten = 0;
+			// The frame's stream views the build read (its geometry slots), held with the payload (step 6e E1).
+			std::shared_ptr<const StreamViews> streams;
 			// The frame's textures (t16 and up) the drawn pipelines read, which only the commit can resolve (into the frame
 			// record): the commit counts the ones it could not.
 			std::array<std::uint64_t, 2> frameRegisters{};
@@ -2234,6 +2267,7 @@ namespace DCLF
 				sequences.clear();
 				inputList.clear();
 				geometryDraws.Reset();
+				streams.reset();
 				faceStreams.clear();
 				frameRegisters = {};
 				objectState.clear();
@@ -2328,6 +2362,7 @@ namespace DCLF
 		{
 			ShadowInputs inputs;
 			std::vector<std::shared_ptr<const void>> bindingOwners;
+			std::shared_ptr<const StreamViews> streams;  // the frame's stream views the build read (step 6e E1)
 			ConstantArena arena;  // the view slots' head and the frame record are reserved; the commit writes the views into it
 			DrawBindings frameRecord{};  // every view's textures and samplers but the diffuse (kShadowFrameRecordOffset)
 			// The rows the inputs name: the kept state's (journalled), or the build's own (version 0: sent whole).
@@ -2408,6 +2443,7 @@ namespace DCLF
 				regionInputs = {};
 				membership = {};
 				geometries.Reset();
+				streams.reset();
 				faceStreams.clear();
 				skippedTexture = skippedPipeline = deferredTextures = deferredPipelines = 0;
 			}
@@ -2974,7 +3010,7 @@ namespace DCLF
 		 * their fixed slots (FrameSlotOffset) for the slots the inputs say the commit supplies.
 		 */
 		void BuildMainPayload(const MainInputs& a_in, const SceneStore::Tables& a_tables, const FrameTables& a_frame, const Lookups& a_lookups, MainPayload& a_out, MainRows& a_rows,
-			BuildCache* a_cache = nullptr, ObjectRecordStore* a_objects = nullptr, ExtrasStore* a_bones = nullptr, GeometryStore* a_geometries = nullptr);
+			BuildCache* a_cache = nullptr, std::shared_ptr<const StreamViews> a_streams = nullptr);
 
 		// The objects a mode's inputs draw, as the geometry the native shadow loop withholds (PassCapture).
 
@@ -3172,7 +3208,7 @@ namespace DCLF
 		 * them, after the build may have started.
 		 */
 		void BuildShadowPayload(const ShadowInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out,
-			ObjectRecordStore* a_objects = nullptr, ExtrasStore* a_bones = nullptr, ShadowKept* a_kept = nullptr, GeometryStore* a_geometries = nullptr);
+			std::shared_ptr<const StreamViews> a_streams = nullptr, ShadowKept* a_kept = nullptr);
 
 		/**
 		 * @brief CS_DCLF_PERSISTENT_PARITY: a kept shadow build against the same build made the per-frame way. Per used mode, the
@@ -3970,15 +4006,19 @@ namespace DCLF
 			std::size_t objects = 0, extraRows = 0, objectBytes = 0, extraRowsSent = 0;
 		};
 		/**
-		 * @brief The streams' job (KickSceneStreams): the object records and extras rows the tables hold, updated and staged on the
-		 * worker - with the copies recorded there too - while nothing writes the tables (after the placements' join, while the
-		 * engine draws the shadow maps; after RefreshFrameConstants). The next CommitSceneStreams submits its batch when the buffers
-		 * still hold what it started from, takes its versions as held, and sends only what changed since. Otherwise the batch is
-		 * dropped and the commit sends everything since the held versions, the job's changes included (the stores keep them).
+		 * @brief The streams' job (KickSceneStreams): the frame's stream views (StreamViews) made on the worker at the frame's start,
+		 * once its set is written (nothing writes the frame's tables after it), ahead of every build of the frame on the same lane,
+		 * and the object records' and extras rows' uploads staged with them - with the copies recorded there too. The next
+		 * CommitSceneStreams submits its batch when the buffers still hold what it started from, takes its versions as held, and
+		 * sends only what changed since. Otherwise the batch is dropped and the commit sends everything since the held versions, the
+		 * job's changes included (the views keep them).
 		 */
 		struct StreamsJob
 		{
 			AsyncWorker::JobHandle handle;
+			StreamsKey key;                           // the tables it makes views of
+			StreamsSlot slot;                         // where it puts them
+			bool joinedDone = false;                  // its last join found it done
 			const SceneBuffers* scene = nullptr;
 			TablesHeld from;                          // what the buffers held at the kick
 			std::uint32_t tablesGeneration = 0;
@@ -3991,10 +4031,19 @@ namespace DCLF
 			// Since the last report: kicks, batches submitted, batches dropped.
 			std::uint64_t kicked = 0, used = 0, dropped = 0;
 		} streamsJob;
-		/** @brief Render thread, where nothing writes the tables until the next commit: the streams' job (StreamsJob). */
+		/** @brief Render thread, once the frame's start wrote its set: the streams' job (StreamsJob), unless one is out for these tables. */
 		void KickSceneStreams();
-		/** @brief Render thread: the streams' job, waited for or cancelled, and its result dropped. */
+		/** @brief Render thread: the streams' job waited for (it is every build's dependency: never cancelled), and its batch dropped. */
 		void DropSceneStreams();
+		/** @brief Render thread: the streams' job waited for, its views the current ones. */
+		void JoinSceneStreams();
+		/** @brief Render thread: the frame's stream views (the job's, joined; made now without one). Null without scene buffers. */
+		std::shared_ptr<const StreamViews> StreamsNow();
+		/** @brief Render thread, kicking a build: where it finds the frame's stream views when it runs. */
+		StreamsSlot StreamsForBuild();
+		std::shared_ptr<const StreamViews> streamViews;  // the frame's, once joined
+		StreamsKey streamViewsKey;
+		std::uint32_t streamsFailed = 0;
 		SceneStreams CommitSceneStreams(SceneBuffers& a_scene, const SceneStore::Tables& a_tables, std::uint32_t a_frame, std::uint32_t a_generation,
 			CommitUploads& a_uploads);
 		GeometryStore* SceneGeometries() { return &geometryStore; }

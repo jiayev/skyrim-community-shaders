@@ -54,9 +54,8 @@ namespace DCLF::Draws
 		{
 		public:
 			MainBuild(const MainInputs& a_in, const SceneStore::Tables& a_tables, const FrameTables& a_frame, const Lookups& a_lookups, MainPayload& a_out, MainRows& a_rows,
-				BuildCache* a_cache, ObjectRecordStore* a_objects, ExtrasStore* a_bones, GeometryStore* a_geometries) :
-				in(a_in), tables(a_tables), frame(a_frame), lookups(a_lookups), out(a_out), rows(a_rows), cache(a_cache), objectStore(a_objects), extrasStore(a_bones),
-				geometryStore(a_geometries)
+				BuildCache* a_cache, std::shared_ptr<const StreamViews> a_streams) :
+				in(a_in), tables(a_tables), frame(a_frame), lookups(a_lookups), out(a_out), rows(a_rows), cache(a_cache), streams(std::move(a_streams))
 			{}
 
 			void Run();
@@ -69,9 +68,7 @@ namespace DCLF::Draws
 			MainPayload& out;
 			MainRows& rows;
 			BuildCache* cache;
-			ObjectRecordStore* objectStore;
-			ExtrasStore* extrasStore;
-			GeometryStore* geometryStore;
+			std::shared_ptr<const StreamViews> streams;  // the frame's (StreamViews), or none: the build packs its own geometry slots
 
 			decltype(MainPayload::sequences)& sequences = out.sequences;
 			decltype(MainPayload::inputList)& drawInputs = out.inputList;
@@ -1324,7 +1321,8 @@ namespace DCLF::Draws
 
 	void MainBuild::Finish()
 	{
-		UpdateGeometryDraws(geometryStore, in.tablesHeld.geometries, tables, in.tablesGeneration, frameNumber, out.geometryDraws);
+		TakeGeometryDraws(streams.get(), tables, in.tablesGeneration, frameNumber, out.geometryDraws);
+		out.streams = streams;
 		AppendFaceStreams(tables, in.addresses.facePositions, out.geometryDraws);
 		if (in.addresses.facePositions)
 			out.faceStreams = tables.faceStreams;
@@ -1334,9 +1332,9 @@ namespace DCLF::Draws
 	}
 
 	void BuildMainPayload(const MainInputs& a_in, const SceneStore::Tables& a_tables, const FrameTables& a_frame, const Lookups& a_lookups, MainPayload& a_out,
-		MainRows& a_rows, BuildCache* a_cache, ObjectRecordStore* a_objects, ExtrasStore* a_bones, GeometryStore* a_geometries)
+		MainRows& a_rows, BuildCache* a_cache, std::shared_ptr<const StreamViews> a_streams)
 	{
-		MainBuild(a_in, a_tables, a_frame, a_lookups, a_out, a_rows, a_cache, a_objects, a_bones, a_geometries).Run();
+		MainBuild(a_in, a_tables, a_frame, a_lookups, a_out, a_rows, a_cache, std::move(a_streams)).Run();
 	}
 }
 

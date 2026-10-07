@@ -304,6 +304,9 @@ bool DrawcallLimitFix::BeginSceneFrame()
 		// selected revision's join), taken back before the engine registers anything (step 6c).
 		store.RevokeClaims();
 	}
+	// The frame's scene streams (step 6e E1): the object records, extras rows and geometry slots of the frame's tables, brought up to
+	// date once on the worker, ahead of every build of the frame, now that nothing writes those tables any more.
+	DCLF::IndirectDraws::Get().KickSceneStreams();
 	// The stood-in fade roots' write-back (engine writes under the read window's leases) and the shadow build kept from the last
 	// frame when nothing it reads moved: both read the frame's snapshot.
 	DCLF::IndirectDraws::Get().KickFadeWriteBack();
@@ -368,8 +371,6 @@ void DrawcallLimitFix::BeforeShadowMaps()
 	if (auto& store = DCLF::SceneStore::Get(); DCLF::SwitchEnabled(DCLF::Switch::PersistentParity) && DCLF::ParityDue(store.GetFrame()))
 		DCLF::FrameValues::Get().CheckParity(store.GetTables(), store.PeekPlacementPlan());
 	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
-	// The tables hold still from here to the accumulate phase: the streams the shadow commit uploads, staged on the worker meanwhile.
-	DCLF::IndirectDraws::Get().KickSceneStreams();
 	// The frame's shadow views, in the order the engine is about to render them. Everything downstream -
 	// the capture's attribution, the withholding, the epochs - identifies a view by this list.
 	DCLF::ShadowViews::Get().SetViewCapacity(DCLF::ActiveToggles().shadows ? DCLF::IndirectDraws::Get().ShadowViewCapacity() : UINT32_MAX);
@@ -782,9 +783,6 @@ void DrawcallLimitFix::Prepass()
 	// The camera-dependent half of the per-frame constants, now that the main camera's shadow state is
 	// current (BuildFrame ran at EarlyPrepass, where it still belonged to the shadow-map camera).
 	store.RefreshFrameConstants();
-	// RefreshFrameConstants was the tables' last writer before the colour commit: the streams it changed, staged meanwhile. Before
-	// the colour build, whose staging is against the capacities this reserves.
-	DCLF::IndirectDraws::Get().KickSceneStreams();
 	// The colour epoch's build, on the worker, from here to the epoch (CS_DCLF_ASYNC).
 	DCLF::IndirectDraws::Get().KickColourBuild();
 

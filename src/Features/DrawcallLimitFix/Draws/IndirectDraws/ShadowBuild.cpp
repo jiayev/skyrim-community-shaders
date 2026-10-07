@@ -560,7 +560,7 @@ namespace DCLF::Draws
 	}
 
 	void BuildShadowPayload(const ShadowInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out,
-		ObjectRecordStore* a_objects, ExtrasStore* a_bones, ShadowKept* a_kept, GeometryStore* a_geometries)
+		std::shared_ptr<const StreamViews> a_streams, ShadowKept* a_kept)
 	{
 		ZoneScopedN("CS.DCLF.BuildShadowPayload");
 		a_out.Reset();
@@ -578,11 +578,10 @@ namespace DCLF::Draws
 			return base + offset;
 		};
 
-		// ---- What every view shares: the geometry table, binding records. The object records and the bone rows are the
-		// commit's (CommitSceneStreams).
-		(void)a_objects;
-		(void)a_bones;
-		UpdateGeometryDraws(a_geometries, a_in.tablesHeld.geometries, a_tables, a_in.tablesGeneration, a_in.frameNumber, a_out.geometries);
+		// ---- What every view shares: the geometry table (the frame's stream views'), binding records. The object records and the
+		// bone rows are the commit's (CommitSceneStreams).
+		TakeGeometryDraws(a_streams.get(), a_tables, a_in.tablesGeneration, a_in.frameNumber, a_out.geometries);
+		a_out.streams = std::move(a_streams);
 		AppendFaceStreams(a_tables, a_in.addresses.facePositions, a_out.geometries);
 		if (a_in.addresses.facePositions)
 			a_out.faceStreams = a_tables.faceStreams;

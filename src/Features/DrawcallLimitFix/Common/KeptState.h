@@ -1,6 +1,8 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <bit>
 #include <cstdint>
 #include <cstring>
@@ -365,6 +367,31 @@ namespace DCLF
 		std::vector<std::shared_ptr<std::vector<T>>> spare;
 		ChangeJournal journal;
 		bool copied = false;
+	};
+
+	/**
+	 * @brief The versions several buffers mirroring one kept array hold (a ring of them, one per frame in flight: step 6e E), each
+	 * set by the uploader that fills it, read by the array's builds for the oldest (ChangeJournal::BeginBuild). Lock-free: an
+	 * uploader raises its entry once its upload is queued; a build that reads an older value only keeps more of the journal.
+	 */
+	template <std::size_t N>
+	class KeptHolders
+	{
+	public:
+		void Set(std::size_t a_holder, std::uint64_t a_version) { held[a_holder].store(a_version, std::memory_order_release); }
+		std::uint64_t Get(std::size_t a_holder) const { return held[a_holder].load(std::memory_order_acquire); }
+		/** @brief The oldest version any holder has (0 while one holds nothing: the journal is kept whole). */
+		std::uint64_t Oldest() const
+		{
+			std::uint64_t oldest = ~std::uint64_t{ 0 };
+			for (const auto& version : held)
+				oldest = std::min(oldest, version.load(std::memory_order_acquire));
+			return oldest;
+		}
+		static constexpr std::size_t Size() { return N; }
+
+	private:
+		std::array<std::atomic<std::uint64_t>, N> held{};
 	};
 
 	/**

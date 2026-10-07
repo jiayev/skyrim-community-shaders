@@ -269,7 +269,7 @@ namespace DCLF
 					});
 			} else {
 				++async.builtInline;
-				BuildMainPayload(in, tables, store.GetFrameTables(), lookups, payload, impl->mainRows, impl->CacheFor(jobIndex), impl->SceneObjects(), impl->SceneExtras(), impl->SceneGeometries());
+				BuildMainPayload(in, tables, store.GetFrameTables(), lookups, payload, impl->mainRows, impl->CacheFor(jobIndex), impl->StreamsNow());
 			}
 			*frameOwners = std::move(payload.bindingOwners);
 			impl->CommitMainPayload(capture, blocks, payload, resources, store, stats, *frameOwners);
@@ -408,16 +408,14 @@ namespace DCLF
 		const auto* lookups = &store.GetLookups();
 		auto* payload = &mainPayload[index];
 		auto* cache = CacheFor(index);
-		auto* objects = SceneObjects();
-		auto* extras = SceneExtras();
-		auto* geometriesStore = SceneGeometries();
+		auto streams = StreamsForBuild();
 		auto* rows = &mainRows;
 		auto* pool = &stagedPools[index];
 		const MainInputs inputs = job.inputs;
 		const rhi::Device device = RecordingDevice();
-		job.handle = AsyncWorker::Get().Submit(a_depthOnly ? "zprepass" : "colour", [inputs, tables, frameTables, lookups, payload, rows, cache, objects, extras, geometriesStore, pool,
+		job.handle = AsyncWorker::Get().Submit(a_depthOnly ? "zprepass" : "colour", [inputs, tables, frameTables, lookups, payload, rows, cache, streams, pool,
 																							target = resources, device](std::stop_token) {
-			BuildMainPayload(inputs, *tables, *frameTables, *lookups, *payload, *rows, cache, objects, extras, geometriesStore);
+			BuildMainPayload(inputs, *tables, *frameTables, *lookups, *payload, *rows, cache, *streams);
 			if (target)
 				StageMainPayload(*payload, *target, *pool, device);
 		});

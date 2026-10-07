@@ -109,6 +109,17 @@ namespace DCLF::Draws
 		s.busy.store(0, std::memory_order_release);
 	}
 
+	void TakeGeometryDraws(const StreamViews* a_streams, const SceneStore::Tables& a_tables, std::uint32_t a_generation, std::uint32_t a_frame,
+		GeometryDrawsOut& a_out)
+	{
+		if (!a_streams) {
+			UpdateGeometryDraws(nullptr, 0, a_tables, a_generation, a_frame, a_out);
+			return;
+		}
+		a_out = {};
+		a_out.slots = a_streams->geometries;
+	}
+
 	void UpdateGeometryDraws(GeometryStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation,
 		std::uint32_t a_frame, GeometryDrawsOut& a_out)
 	{

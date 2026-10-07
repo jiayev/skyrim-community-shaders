@@ -115,81 +115,149 @@ namespace DCLF
 		a_payload.staged = std::move(batch);
 	}
 
+	namespace
+	{
+		StreamsKey StreamsKeyOf(const SceneStore::Tables& a_tables, std::uint32_t a_generation)
+		{
+			return { &a_tables, a_tables.changeLog.End(), a_tables.geometryLog.End(), a_generation };
+		}
+
+		/** @brief The stores brought up to the tables (from what the buffers hold), as views (StreamViews). */
+		std::shared_ptr<const StreamViews> MakeStreamViews(ObjectRecordStore& a_objects, ExtrasStore& a_extras, GeometryStore& a_geometries, const TablesHeld& a_from,
+			std::shared_ptr<const SceneStore::Tables> a_hold, const SceneStore::Tables& a_tables, std::uint32_t a_generation, std::uint32_t a_frame)
+		{
+			ZoneScopedN("CS.DCLF.MakeStreamViews");
+			auto views = std::make_shared<StreamViews>();
+			views->tables = std::move(a_hold);
+			views->generation = a_generation;
+			UpdateObjectRecords(&a_objects, a_from.objects, a_tables, a_generation, a_frame, views->objects);
+			UpdateExtras(&a_extras, a_from.extras, a_tables, a_generation, views->extras);
+			GeometryDrawsOut geometries;
+			UpdateGeometryDraws(&a_geometries, a_from.geometries, a_tables, a_generation, a_frame, geometries);
+			views->geometries = std::move(geometries.slots);
+			return views;
+		}
+	}
+
 	void IndirectDraws::Impl::KickSceneStreams()
 	{
 		ZoneScopedN("CS.DCLF.KickSceneStreams");
-		DropSceneStreams();
-		// The persistent parity checks what this thread uploads; the job's batch would bypass it.
-		if (!AsyncEnabled() || PersistentParityEnabled() || !resources || !resources->scene)
-			return;
 		auto& store = SceneStore::Get();
 		const auto& tables = store.GetTables();
-		if (tables.objects.empty())
+		const auto key = StreamsKeyOf(tables, store.GetTablesGeneration());
+		auto& job = streamsJob;
+		// Out for these tables, or made for them already.
+		if (job.handle ? job.key == key : (streamViews && streamViewsKey == key))
+			return;
+		DropSceneStreams();
+		if (!resources || !resources->scene || tables.objects.empty())
 			return;
 		// The capacities the job stages against, grown now (the first reserve of the frame does the growing).
 		ReserveSceneTables(tables);
-		auto& job = streamsJob;
 		const auto& sceneBuffers = *resources->scene;
+		job.key = key;
+		job.slot = std::make_shared<std::shared_ptr<const StreamViews>>();
 		job.scene = &sceneBuffers;
 		job.from = sceneBuffers.held;
 		job.tablesGeneration = store.GetTablesGeneration();
 		job.sceneGeneration = sceneBuffers.generation;
 		job.objects = job.extras = 0;
 		job.staged = false;
-		job.batch = AcquireStagedBatch(job.pool);
+		std::shared_ptr<const SceneStore::Tables> hold = store.AcceptedTables();
+		if (!AsyncEnabled()) {
+			// No worker: made here, nothing staged (the commits send the changes).
+			streamViews = MakeStreamViews(objectStore, extrasStore, geometryStore, job.from, std::move(hold), tables, job.tablesGeneration, store.GetFrame());
+			streamViewsKey = key;
+			*job.slot = streamViews;
+			return;
+		}
+		// The persistent parity checks what the render thread uploads; the job's batch would bypass it.
+		const bool stage = !PersistentParityEnabled();
+		job.batch = stage ? AcquireStagedBatch(job.pool) : nullptr;
 		++job.kicked;
 		const rhi::Device device = RecordingDevice();
-		job.handle = AsyncWorker::Get().Submit("streams", [result = &job, batch = job.batch, objectsBuffer = sceneBuffers.objects->Get(), extrasBuffer = sceneBuffers.extras->Get(),
-															objectCapacity = sceneBuffers.objectCapacity, extraRows = sceneBuffers.extraRows,
-															tables = &tables, objects = SceneObjects(),
-															extrasStore = SceneExtras(), from = job.from, generation = job.tablesGeneration, frame = store.GetFrame(), device](std::stop_token) {
+		job.handle = AsyncWorker::Get().Submit("streams", [result = &job, slot = job.slot, batch = job.batch, objectsBuffer = sceneBuffers.objects->Get(),
+															extrasBuffer = sceneBuffers.extras->Get(), objectCapacity = sceneBuffers.objectCapacity, extraRows = sceneBuffers.extraRows,
+															tables = &tables, hold = std::move(hold), objects = SceneObjects(), extrasStore = SceneExtras(), geometries = SceneGeometries(),
+															from = job.from, generation = job.tablesGeneration, frame = store.GetFrame(), device](std::stop_token) mutable {
 			ZoneScopedN("CS.DCLF.StageSceneStreams");
 			using org::runtime::UploadTarget;
-			ObjectRecordsOut records;
-			UpdateObjectRecords(objects, from.objects, *tables, generation, frame, records);
-			ExtrasOut extras;
-			UpdateExtras(extrasStore, from.extras, *tables, generation, extras);
-			// Past a buffer (its growth outstanding): the commit's own update sends what fits.
-			if (records.Count() > objectCapacity || extras.Rows() > extraRows)
+			auto views = MakeStreamViews(*objects, *extrasStore, *geometries, from, std::move(hold), *tables, generation, frame);
+			*slot = views;
+			// Past a buffer (its growth outstanding), or the parity on: the commit sends what fits.
+			if (!batch || views->objects.Count() > objectCapacity || views->extras.Rows() > extraRows)
 				return;
-			records.Emit(from.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+			views->objects.Emit(from.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 				batch->Stage(UploadTarget::FromShared(objectsBuffer), a_offset, a_data, a_bytes);
 			});
-			EmitExtras(extras, from.extras, nullptr, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+			EmitExtras(views->extras, from.extras, nullptr, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 				batch->Stage(UploadTarget::FromShared(extrasBuffer), a_offset, a_data, a_bytes);
 			});
 			if (device && !batch->Entries().empty())
 				batch->Record(device);
-			result->objects = records.Version();
-			result->extras = extras.Version();
+			result->objects = views->objects.Version();
+			result->extras = views->extras.Version();
 			result->staged = true;
 		});
+	}
+
+	void IndirectDraws::Impl::JoinSceneStreams()
+	{
+		auto& job = streamsJob;
+		if (!job.handle)
+			return;
+		ZoneScopedN("CS.DCLF.JoinSceneStreams");
+		// Every build of the frame reads its views: waited for whole, never cancelled.
+		const auto joined = AsyncWorker::Get().Wait(job.handle, std::chrono::hours(1));
+		job.handle = {};
+		job.joinedDone = joined == AsyncWorker::WaitResult::Done && job.slot && *job.slot;
+		if (job.joinedDone) {
+			streamViews = *job.slot;
+			streamViewsKey = job.key;
+		} else if (streamsFailed++ == 0) {
+			logger::error("[DCLF] the scene streams' job did not finish; the frame's builds pack their own geometry and the commits send nothing of the streams");
+		}
 	}
 
 	void IndirectDraws::Impl::DropSceneStreams()
 	{
 		auto& job = streamsJob;
-		if (job.handle) {
-			AsyncWorker::Get().Cancel(job.handle);
-			job.handle = {};
+		JoinSceneStreams();
+		if (job.batch) {
 			++job.dropped;
+			job.batch.reset();
 		}
-		job.batch.reset();
 		job.staged = false;
+	}
+
+	std::shared_ptr<const StreamViews> IndirectDraws::Impl::StreamsNow()
+	{
+		KickSceneStreams();
+		JoinSceneStreams();
+		const auto& store = SceneStore::Get();
+		return streamViews && streamViewsKey == StreamsKeyOf(store.GetTables(), store.GetTablesGeneration()) ? streamViews : nullptr;
+	}
+
+	StreamsSlot IndirectDraws::Impl::StreamsForBuild()
+	{
+		KickSceneStreams();
+		if (streamsJob.handle)
+			return streamsJob.slot;
+		const auto& store = SceneStore::Get();
+		const bool current = streamViews && streamViewsKey == StreamsKeyOf(store.GetTables(), store.GetTablesGeneration());
+		return std::make_shared<std::shared_ptr<const StreamViews>>(current ? streamViews : nullptr);
 	}
 
 	IndirectDraws::Impl::SceneStreams IndirectDraws::Impl::CommitSceneStreams(SceneBuffers& a_scene, const SceneStore::Tables& a_tables, std::uint32_t a_frame,
 		std::uint32_t a_generation, CommitUploads& a_uploads)
 	{
 		ZoneScopedN("CS.DCLF.CommitSceneStreams");
-		// The streams' job, if one is out: its batch first (ahead of this commit's own, submitted when it ends), when the buffers
-		// still hold what it started from.
-		if (auto& job = streamsJob; job.handle) {
-			ZoneScopedN("CS.DCLF.CommitSceneStreams.JoinJob");
-			const auto joined = JoinJob(job.handle);
-			job.handle = {};
-			if (joined == AsyncWorker::WaitResult::Done && job.staged && job.scene == &a_scene && a_scene.held.objects == job.from.objects &&
-				a_scene.held.extras == job.from.extras && job.tablesGeneration == a_generation && job.sceneGeneration == a_scene.generation) {
+		// The frame's views (the streams' job joined, or made now), then the job's batch first (ahead of this commit's own, submitted
+		// when it ends), when the buffers still hold what it started from.
+		const auto views = StreamsNow();
+		if (auto& job = streamsJob; job.batch) {
+			if (job.joinedDone && job.staged && job.scene == &a_scene && a_scene.held.objects == job.from.objects && a_scene.held.extras == job.from.extras &&
+				job.tablesGeneration == a_generation && job.sceneGeneration == a_scene.generation) {
 				if (!job.batch->Entries().empty())
 					SubmitWorkerBatch(std::move(job.batch));
 				if (job.objects)
@@ -204,8 +272,10 @@ namespace DCLF
 			job.staged = false;
 		}
 		SceneStreams sent;
-		ObjectRecordsOut objects;
-		UpdateObjectRecords(SceneObjects(), a_scene.held.objects, a_tables, a_generation, a_frame, objects);
+		if (!views)
+			return sent;
+		(void)a_tables;
+		const ObjectRecordsOut& objects = views->objects;
 		sent.objects = objects.Count();
 		// Within the buffers: a record or a row past them waits for their growth (Growths), sent again until it is adopted (the
 		// version held moves only once all of them are sent). No build names an object past them (ObjectFits).
@@ -214,8 +284,7 @@ namespace DCLF
 		}, a_scene.objectCapacity);
 		if (objects.Version() && objects.Count() <= a_scene.objectCapacity)
 			a_scene.held.objects = objects.Version();
-		ExtrasOut extras;
-		UpdateExtras(SceneExtras(), a_scene.held.extras, a_tables, a_generation, extras);
+		const ExtrasOut& extras = views->extras;
 		sent.extraRows = extras.Rows();
 		ExtrasStore* extrasParity = PersistentParityEnabled() ? &extrasStore : nullptr;
 		sent.extraRowsSent = EmitExtras(extras, a_scene.held.extras, extrasParity, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
