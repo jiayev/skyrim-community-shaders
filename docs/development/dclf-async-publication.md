@@ -1232,10 +1232,25 @@ resident-draw, set and fade parity; motion m28/m29).
   EarlyPrepass: the Z-prepass kick and the lookups read the live tables. y3: set parity 0 in every window, 7,436-7,442
   sequences; steady membership as x15; the startup's first window bound 7,905 objects a frame (x15 7,946): 8,162 joins waited
   a frame for their material, all served.
-- *Next* (6b, the rest): the frame-side writers left (frame constants and the material tail's per-frame parts, lookups, the
-  fade-root journal's bookkeeping, LOD technique ranges, projected textures, imports, the `Take*` hand-overs). The accepted
-  snapshot is the frame's alone, so they write into it; what the coordinator's tables must keep (the journal's sent version, the
-  retired slots taken, evaluated constants) is applied to them at Present, with the coordinator idle.
+- *6b, second part: the frame's engine values out of the tables* (y4, y6). Writing them into the frame's snapshot copy was
+  rejected: the coordinator bumps the same version counters in its own tables, so versions would collide and the upload caches
+  that compare them would miss changes. Instead `FrameTables` (Scene/FrameTables.h) holds them, written by the render thread only,
+  versioned by its own counter, indexed by the tables' slots and keyed to them (a slot whose key, binding or record version moved
+  is taken afresh): the pipelines' PerGeometry blocks; the technique rows' constants (the tables keep each row's key; the shadow
+  mask is the key's low bit); the material records as the frame draws them (the coordinator's record with the writer events'
+  re-evaluations, the frame-sourced components and the texture transforms on it), their versions and a material log the builds
+  follow, with the per-signature application and the transform watch. Readers (the main build, the material lookups, the capture
+  parity) read it. The joins no longer evaluate techniques (EvaluateTechnique was engine code on the coordinator); new pipelines'
+  blocks and new technique rows are evaluated at EarlyPrepass (`RefreshNewPipelineConstants`). A written material's unreferenced
+  slots are dropped by the coordinator (`DropWrittenMaterials`: the references are its), released at Present.
+  Found on the way (y3-y5: 15 of ~500 frame lightings differed): the frame lighting's AmbientSpecularTintAndFresnelPower.w was
+  only ever seeded by the first frame's full evaluations; pipelines made later never published theirs. With the joins waiting a
+  frame for their materials no such pipeline existed at the first frame, so the component stayed 0. The new pipelines'
+  evaluations are now merged where nothing else wrote a component (`lightingSeeds`). y6: 0 of ~490 frame lightings, 0 geometry
+  variables, 0 technique blocks, 0 material frame components and transforms differ; set parity 0; 7,420-7,443 sequences.
+- *Next* (6b, the rest): the fade-root journal's sent version (the depth commit writes it, the coordinator too), the retired-slot
+  and texture-change hand-overs (the render thread swaps the coordinator's lists), the lookups (the set's commit reads them while
+  the frame writes them), projected textures and imports; then 6c.
 
 ## Implemented foundations
 

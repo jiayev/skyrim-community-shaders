@@ -286,11 +286,6 @@ namespace DCLF
 		retiredMaterialSlots.clear();
 		retiredPipelineSlots.clear();
 		shadowTextureChanges.clear();
-		frameSignatures.clear();
-		materialSignatureListed.clear();
-		materialFramePending.clear();
-		transformWatch.clear();
-		transformWatchFrame.clear();
 		objects.clear();
 		setPhases.clear();
 		objectGeometry.clear();
@@ -301,8 +296,6 @@ namespace DCLF
 		pipelines.clear();
 		materials.clear();
 		materialVersion.clear();
-		materialFrameVersion.clear();
-		pipelineConstantsVersion.clear();
 		pipelineBindingVersion.clear();
 		lights.clear();
 		treeAnim.clear();
@@ -325,10 +318,8 @@ namespace DCLF
 		fadeRootsJournal.Resync();
 		actorObjects.clear();
 		skinPartitions.clear();
-		geometryConstants.clear();
-		geometryConstantsValid.clear();
 		geometryTemplate.clear();
-		techniques.clear();
+		techniqueKeys.clear();
 		techniqueRow.clear();
 		permutations.clear();
 		draws.clear();

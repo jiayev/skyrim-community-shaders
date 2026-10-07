@@ -200,11 +200,11 @@ namespace DCLF
 		std::memcpy(a_out + (kExtraRowProjectedParams + 2) * 4, a_frame.projectedGlobals, sizeof(a_frame.projectedGlobals));
 	}
 
-	GeometryConstants ObjectGeometryConstants(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, const BindlessPlacement& a_placement,
+	GeometryConstants ObjectGeometryConstants(const SceneStore::Tables& a_tables, const FrameTables& a_frame, std::uint32_t a_objectIndex, const BindlessPlacement& a_placement,
 		const BindlessShading& a_shading, const ExtrasFrame& a_extrasFrame, const RE::NiPoint3& a_eye, const RE::NiPoint3& a_previousEye)
 	{
 		const auto& object = a_tables.objects[a_objectIndex];
-		GeometryConstants constants = a_tables.geometryConstants[object.pipelineIndex];
+		GeometryConstants constants = a_frame.geometryConstants[object.pipelineIndex];
 		const auto& vsLayout = LightingVSLayout();
 		const auto& psLayout = LightingPSLayout();
 		// The placement row's (render flag 0x10 already applied: the previous transform is the current one).

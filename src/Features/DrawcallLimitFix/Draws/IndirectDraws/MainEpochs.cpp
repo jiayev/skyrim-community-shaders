@@ -273,7 +273,7 @@ namespace DCLF
 					[&](MainPayload& a_probe) {
 						// Its own rows, written from scratch (the worker's are the scene's, kept across frames).
 						MainRows probeRows;
-						BuildMainPayload(job.inputs, tables, lookups, a_probe, probeRows);
+						BuildMainPayload(job.inputs, tables, store.GetFrameTables(), lookups, a_probe, probeRows);
 					});
 			} else {
 				++async.builtInline;
@@ -283,7 +283,7 @@ namespace DCLF
 				}
 				refresh();
 				in.lookupGeneration = lookups.generation;
-				BuildMainPayload(in, tables, lookups, payload, impl->mainRows, impl->CacheFor(jobIndex), impl->SceneObjects(), impl->SceneExtras(), impl->SceneGeometries());
+				BuildMainPayload(in, tables, store.GetFrameTables(), lookups, payload, impl->mainRows, impl->CacheFor(jobIndex), impl->SceneObjects(), impl->SceneExtras(), impl->SceneGeometries());
 			}
 			*frameOwners = std::move(payload.bindingOwners);
 			impl->CommitMainPayload(capture, blocks, payload, resources, store, stats, *frameOwners);
@@ -430,6 +430,7 @@ namespace DCLF
 			job.inputs.previousEye = *a_previousEye;
 		++async.kicked;
 		const auto* tables = &store.GetTables();
+		const auto* frameTables = &store.GetFrameTables();
 		const auto* lookups = &store.GetLookups();
 		auto* payload = &mainPayload[index];
 		auto* cache = CacheFor(index);
@@ -440,9 +441,9 @@ namespace DCLF
 		auto* pool = &stagedPools[index];
 		const MainInputs inputs = job.inputs;
 		const rhi::Device device = RecordingDevice();
-		job.handle = AsyncWorker::Get().Submit(a_depthOnly ? "zprepass" : "colour", [inputs, tables, lookups, payload, rows, cache, objects, extras, geometriesStore, pool,
+		job.handle = AsyncWorker::Get().Submit(a_depthOnly ? "zprepass" : "colour", [inputs, tables, frameTables, lookups, payload, rows, cache, objects, extras, geometriesStore, pool,
 																							target = resources, device](std::stop_token) {
-			BuildMainPayload(inputs, *tables, *lookups, *payload, *rows, cache, objects, extras, geometriesStore);
+			BuildMainPayload(inputs, *tables, *frameTables, *lookups, *payload, *rows, cache, objects, extras, geometriesStore);
 			if (target)
 				StageMainPayload(*payload, *target, *pool, device);
 		});

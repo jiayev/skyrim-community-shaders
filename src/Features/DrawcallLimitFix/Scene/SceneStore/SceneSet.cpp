@@ -49,7 +49,7 @@ namespace DCLF
 			return a_why = 0, false;
 		if (m >= lookups.materials.size() || m >= tables.materialSlotKey.size() || !lookups.materials[m].resolved || lookups.materials[m].key != tables.materialSlotKey[m])
 			return a_why = 1, false;
-		if (tables.TechniqueOf(p).shadowMask && lookups.pipelines[p].shadowMaskIndex == Lookups::kNone)
+		if (tables.TechniqueShadowMask(p) && lookups.pipelines[p].shadowMaskIndex == Lookups::kNone)
 			return a_why = 2, false;
 		if (!lookups.samplersResolved || lookups.nullTexture == Lookups::kNone)
 			return a_why = 3, false;

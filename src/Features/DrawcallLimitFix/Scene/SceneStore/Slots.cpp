@@ -208,7 +208,8 @@ namespace DCLF
 		const auto key = tables.materialSlotKey[a_slot];
 		materialIndex.erase(key);
 		UnlistMaterialDependent(key.first, a_slot);
-		materialOwners[a_slot].reset();
+		// Released at Present (the last reference deletes the engine's material).
+		materialsHandedBack.push_back(std::move(materialOwners[a_slot]));
 		tables.materialSlotKey[a_slot] = { nullptr, 0u };
 		tables.UnmarkMaterial(a_slot);
 		tables.retiredMaterialSlots.push_back(a_slot);
@@ -281,7 +282,6 @@ namespace DCLF
 		freed += tables.pipelineSlots.DrainUnreferenced([&](std::uint32_t a_slot) {
 			pipelineIndex.erase(tables.pipelines[a_slot]);
 			tables.geometryTemplate[a_slot] = nullptr;
-			tables.geometryConstantsValid[a_slot] = 0;
 			tables.UnmarkPipeline(a_slot);
 			tables.retiredPipelineSlots.push_back(a_slot);
 		});

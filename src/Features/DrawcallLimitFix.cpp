@@ -274,6 +274,7 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	store.BeginFrame();
 	// The tables the last scene work published, for the frame (step 6: a pointer swap; the frame's readers move onto it).
 	store.AcceptTables();
+	store.SyncFrameTables();
 	// A write-back job no join reached, before anything changes the tables it reads.
 	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
 	// The newest complete scene revision (R3c), then the last commit's set as the frame's claims once that revision was made at or

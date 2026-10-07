@@ -21,6 +21,7 @@
 #include "LightingDescriptors.h"
 #include "LocalShadows.h"
 #include "ConstantEvaluator.h"
+#include "Features/DrawcallLimitFix/Scene/FrameTables.h"
 #include "Lookups.h"
 #include "Records.h"
 #include "SceneSet.h"
@@ -186,31 +187,8 @@ namespace DCLF
 			// read of it (the key, the permutation), the technique's being its row's (TechniqueRow); per
 			// material slot the frame's floats (RefreshFrameMaterials, RefreshTextureTransforms). materialVersion covers the
 			// rest of a material.
-			std::vector<std::uint32_t> pipelineConstantsVersion;  // parallel to pipelines
 			std::vector<std::uint32_t> pipelineBindingVersion;    // parallel to pipelines
-			std::vector<std::uint32_t> materialFrameVersion;      // parallel to materials
-			// The frame components (MaterialSources: engine globals and the character light's t11), by signature: each
-			// signature's material slots (listed when keyed, dropped as the list is walked once freed or keyed under another
-			// signature), and the live sample they were last given. RefreshFrameMaterials takes one sample a signature and
-			// applies it to the list only when it differs from the last; the slots keyed or rewritten since
-			// (materialFramePending) take it regardless.
-			struct FrameSignature
-			{
-				std::vector<std::uint32_t> slots;
-				std::uint32_t representative = ~0u;
-				MaterialRecord applied;
-				bool appliedValid = false;
-			};
-			ankerl::unordered_dense::map<std::uint32_t, FrameSignature> frameSignatures;
-			std::vector<std::uint32_t> materialSignatureListed;  // parallel to materials (grown on demand): signature + 1, 0 when unlisted
-			std::vector<std::uint32_t> materialFramePending;
-			// TexcoordOffset's watch (RefreshTextureTransforms): a material's two texture-transform buffers change only by
-			// a write (MaterialSources' controller and rewrite events), and the frame reads the one the engine flips to. A
-			// slot is watched from its keying or its material's write until two frames have passed and both buffers
-			// agree. transformWatchFrame: the frame it was keyed or written, 0 when unwatched.
-			std::vector<std::uint32_t> transformWatch;
-			std::vector<std::uint32_t> transformWatchFrame;  // parallel to materials (grown on demand)
-			void ListMaterialSlot(std::uint32_t a_slot, std::uint32_t a_frame);
+			// The frame-sourced components, texture transforms and writer re-evaluations are the frame's (FrameTables).
 			std::uint32_t versionCounter = 0;
 			std::uint32_t NextVersion() { return ++versionCounter; }
 			// No shading (MaterialData, EmitColor, SSRParams.w, the emissive multiplier, the wetness): FrameValues' rows
@@ -258,8 +236,6 @@ namespace DCLF
 			// phase sets it from the fade node's LOD level, the row GetRenderPasses gives the main pass and the shadow views
 			// alike, and rewrites it when the level changes (the fade watch: FUN_14147a430 writes the level).
 			std::vector<std::uint16_t> skinPartitions;            // parallel to objects
-			std::vector<GeometryConstants> geometryConstants;     // parallel to pipelines (per-frame PerGeometry values)
-			std::vector<std::uint8_t> geometryConstantsValid;     // parallel to pipelines
 			// No frame globals (the lighting, the fog, the character light's noise): the frame's capture (FrameCapture).
 			// The property whose lighting pass supplied each pipeline's per-frame constants, kept so
 			// RefreshFrameConstants can re-evaluate them once the main camera's state is current.
@@ -268,18 +244,12 @@ namespace DCLF
 			// EvaluateTechnique reads of a pass descriptor - which every pipeline of the key shares (pipelineTechnique).
 			// RefreshFrameConstants evaluates each used row once a frame and writes it only when it differs, versioning its
 			// floats (constantsVersion) and its bindings (bindingVersion) apart. Rows are never freed: there are a few dozen.
-			struct TechniqueRow
-			{
-				std::uint32_t key = 0;
-				TechniqueConstants value;
-				std::uint32_t constantsVersion = 0, bindingVersion = 0;
-				std::uint32_t evaluated = ~0u;  // the frame
-			};
-			std::vector<TechniqueRow> techniques;
+			// The rows' keys (TechniqueKey); their constants are the frame's (FrameTables::techniques, by row).
+			std::vector<std::uint32_t> techniqueKeys;
 			ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> techniqueRow;  // TechniqueKey -> row
 			std::vector<std::uint32_t> pipelineTechnique;  // parallel to pipelines: its row
-			const TechniqueRow& TechniqueRowOf(std::size_t a_pipeline) const { return techniques[pipelineTechnique[a_pipeline]]; }
-			const TechniqueConstants& TechniqueOf(std::size_t a_pipeline) const { return TechniqueRowOf(a_pipeline).value; }
+			/** @brief Whether the pipeline's technique binds the shadow mask (TechniqueKey's low bit, as its evaluation finds). */
+			bool TechniqueShadowMask(std::size_t a_pipeline) const { return (techniqueKeys[pipelineTechnique[a_pipeline]] & 1u) != 0; }
 			std::vector<PipelinePermutation> permutations;        // parallel to pipelines
 			std::vector<DrawSequence> draws;  // one per object (templates: pipelineIndex is the table index)
 			// Decals (CS_DCLF_DECALS): each decal object's slot in its group's draw range, in the engine's
@@ -550,12 +520,9 @@ namespace DCLF
 			void PipelineColumns(F&& a_column)
 			{
 				a_column(pipelines);
-				a_column(geometryConstants);
-				a_column(geometryConstantsValid);
 				a_column(geometryTemplate);
 				a_column(pipelineTechnique);
 				a_column(permutations);
-				a_column(pipelineConstantsVersion);
 				a_column(pipelineBindingVersion);
 			}
 			template <class F>
@@ -563,7 +530,6 @@ namespace DCLF
 			{
 				a_column(materials);
 				a_column(materialVersion);
-				a_column(materialFrameVersion);
 				a_column(materialSlotKey);
 			}
 
@@ -934,6 +900,17 @@ namespace DCLF
 		void Clear();
 
 		const Tables& GetTables() const { return tables; }
+		/** @brief The frame's per-frame engine values (FrameTables): render thread, and the frame's builds kicked after its writes. */
+		const FrameTables& GetFrameTables() const { return frameTables; }
+		/** @brief Render thread, the coordinator idle (the frame's start): the frame's values sized and keyed to the tables, before any build. */
+		void SyncFrameTables()
+		{
+			frameTables.SyncPipelines(tables.pipelines, tables.pipelineBindingVersion, tablesGeneration);
+			frameTables.SyncTechniques(tables.techniqueKeys.size());
+			SyncFrameMaterials();
+		}
+		/** @brief Render thread, the accumulate work joined: the PerGeometry blocks of pipelines that have none (new, or a slot reused). */
+		void RefreshNewPipelineConstants();
 		/**
 		 * @brief Render thread, BeginSceneFrame (the scene work joined): the newest published tables snapshot accepted for the frame
 		 * (dclf-async-publication.md, "Step 6"). Immutable while held. Null before the first publication.
@@ -1404,6 +1381,7 @@ namespace DCLF
 		// start (TakeShadingItems). Every slot when the shading events are not installed.
 		std::vector<ShadingItem> shadingNamed;
 		FrameCapture frameCapture;  // GetFrameCapture
+		FrameTables frameTables;    // GetFrameTables: the frame's values, out of the tables (render thread)
 		/** @brief A slot's ShadingItem into shadingNamed (none for a free, unbound or propertyless slot). */
 		void NameShading(std::uint32_t a_slot, bool a_member);
 		/**
@@ -1910,8 +1888,16 @@ namespace DCLF
 		 */
 		void ProcessMaterialWrites();
 		ankerl::unordered_dense::set<const RE::BSShaderMaterial*> writtenMaterials;
-		// Referenced material slots whose last write could not be evaluated yet (ProcessMaterialWrites asks again next frame).
-		std::vector<std::uint32_t> materialEvaluationsPending;
+		// The materials written since the coordinator last looked (ProcessMaterialWrites, the render thread): their slots no object
+		// references are dropped by the coordinator (DropWrittenMaterials), whose the references are. All of them after an overflow.
+		std::vector<const RE::BSShaderMaterial*> materialWritesPosted;
+		bool materialWritesAll = false;
+		void DropWrittenMaterials();
+		// The frame's material copies (FrameTables::materials): kept in step with the tables, each listed for the frame's work, and
+		// held (the frame evaluates their materials on the render thread).
+		void SyncFrameMaterials();
+		void ListFrameMaterial(std::uint32_t a_slot);
+		std::vector<MaterialReference> frameMaterialOwners;
 
 	public:
 		/** @brief The materials this frame's accumulate phase drained as written (diagnostics). */
@@ -2214,7 +2200,7 @@ namespace DCLF
 			std::array<std::array<std::uint64_t, 64>, 2> differ{};
 			std::string first;
 		} geometryStats;
-		/** @brief The technique row of a pass descriptor's TechniqueKey (Tables::techniques), made and evaluated when new. */
+		/** @brief The technique row of a pass descriptor's TechniqueKey (Tables::techniqueKeys), made when new (the frame evaluates it). */
 		std::uint32_t TechniqueRowFor(std::uint32_t a_passDescriptor);
 		void CheckFrameGeometry(std::uint32_t a_pipeline, const GeometryConstants& a_reference, const GeometryConstants& a_held);
 		// The first RefreshFrameConstants evaluates every pipeline in full and resamples every slot's shading. The full
@@ -2222,6 +2208,9 @@ namespace DCLF
 		// pipeline does not write, such as AmbientSpecularTintAndFresnelPower: pipelines made later are evaluated where
 		// they are written (WriteObject), which does not publish lighting.
 		bool constantsRefreshed = false;
+		// The new pipelines' full evaluations since the last RefreshFrameConstants (RefreshNewPipelineConstants): merged into the
+		// frame lighting where nothing else wrote it, so a component only a later pipeline writes is published too.
+		std::vector<ConstantBlock> lightingSeeds;
 		bool shadingNamedAll = false;  // NameShadingEvents named every slot once
 		// CS_DCLF_PERSISTENT_PARITY: every 60 frames every drawn slot's shading as the engine has it now against the frame's rows
 		// (FrameValues), at Prepass: a difference is named for the next frame (an event the walk took), its event is queued (taken
@@ -2506,8 +2495,6 @@ namespace DCLF
 		bool accumulateWorkPending = false;  // RunAccumulateWork ran; FinishAccumulateWork has not
 		bool holdLostMembers = false;        // RunAccumulateWork: the members it drops are held for PrimaryCull (lostMembersHeld)
 		std::vector<const RE::BSGeometry*> lostMembersHeld;
-		// The new pipelines of the joins (their PerGeometry block is the engine's SetupGeometry): evaluated at the join.
-		std::vector<std::uint32_t> pipelinesToEvaluate;
 		// A join whose material record the engine has not evaluated yet asks for it and waits a frame (bindRetry). Requests
 		// hold the material; a served record is taken by the next join (its reference moves into the slot's owner).
 		struct MaterialRequest

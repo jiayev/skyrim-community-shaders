@@ -161,13 +161,11 @@ namespace DCLF
 		DrainCapture();
 		if (!sceneBuilt)
 			return;  // a load screen, or the feature installed mid-frame: nothing to patch
+		SyncFrameMaterials();
 		PrimaryCull::Get().CheckLightMasks();
 		// What only the render thread may run, ahead of the joins: the engine's SetupMaterial for the materials the last joins
 		// asked for, and the material tail (writer events, texture transforms, the validation slice), which evaluate materials too.
 		ServeMaterialRequests();
-		ProcessMaterialWrites();
-		RefreshTextureTransforms();
-		ValidateMaterialSlice();
 	}
 
 	void SceneStore::ServeMaterialRequests()
@@ -200,6 +198,7 @@ namespace DCLF
 		inSceneTask = a_task;
 		holdPrimaryNotes = true;
 		holdLostMembers = true;
+		DropWrittenMaterials();
 		BuildAccumulatePhase();
 		PublishTables();
 		holdLostMembers = false;
@@ -216,17 +215,47 @@ namespace DCLF
 		for (const auto* geometry : lostMembersHeld)
 			primary.NoteMemberLost(geometry);
 		lostMembersHeld.clear();
-		// The joins' new pipelines: their PerGeometry block from the template object's lighting pass (RefreshFrameConstants keeps it).
-		auto& evaluator = ConstantEvaluator::Get();
-		for (const std::uint32_t slot : std::exchange(pipelinesToEvaluate, {})) {
-			if (slot >= tables.pipelines.size() || !tables.pipelineSlots.Alive(slot))
-				continue;
-			GeometryConstants constants{};
-			const auto* templatePass = TemplatePassOf(tables.geometryTemplate[slot]);
-			const bool valid = templatePass && evaluator.EvaluateGeometry(*templatePass, tables.pipelines[slot].passDescriptor, kMainPassRenderFlags, constants);
-			tables.geometryConstants[slot] = constants;
-			tables.geometryConstantsValid[slot] = valid ? 1 : 0;
+		// The joins' new pipelines' PerGeometry blocks, before the Z-prepass's build reads them.
+		RefreshNewPipelineConstants();
+		// The material tail, after the joins as before the split (its evaluations leave the evaluator's state as the frame's
+		// constants find it).
+		if (sceneBuilt) {
+			SyncFrameMaterials();
+			ProcessMaterialWrites();
+			RefreshTextureTransforms();
+			ValidateMaterialSlice();
 		}
+	}
+
+	void SceneStore::RefreshNewPipelineConstants()
+	{
+		frameTables.SyncPipelines(tables.pipelines, tables.pipelineBindingVersion, tablesGeneration);
+		frameTables.SyncTechniques(tables.techniqueKeys.size());
+		auto& evaluator = ConstantEvaluator::Get();
+		for (std::size_t word = 0; word < tables.usedPipelineBits.size(); ++word)
+			for (std::uint64_t remaining = tables.usedPipelineBits[word]; remaining; remaining &= remaining - 1) {
+				const std::uint32_t slot = static_cast<std::uint32_t>(word * 64 + std::countr_zero(remaining));
+				if (slot >= tables.pipelines.size())
+					continue;
+				// Its technique row, new: evaluated once (RefreshFrameConstants keeps it a frame's).
+				if (auto& row = frameTables.techniques[tables.pipelineTechnique[slot]]; !row.valid) {
+					EvaluateTechnique(tables.pipelines[slot].passDescriptor, row.value);
+					row.evaluated = frame;
+					row.constantsVersion = frameTables.NextVersion();
+					row.bindingVersion = frameTables.NextVersion();
+					row.valid = true;
+				}
+				if (frameTables.geometryConstantsValid[slot])
+					continue;
+				GeometryConstants constants{};
+				const auto* templatePass = TemplatePassOf(tables.geometryTemplate[slot]);
+				if (!templatePass || !evaluator.EvaluateGeometry(*templatePass, tables.pipelines[slot].passDescriptor, kMainPassRenderFlags, constants))
+					continue;
+				frameTables.geometryConstants[slot] = constants;
+				frameTables.geometryConstantsValid[slot] = 1;
+				lightingSeeds.push_back(constants.ps);
+				frameTables.pipelineConstantsVersion[slot] = frameTables.NextVersion();
+			}
 	}
 
 	void SceneStore::BuildAccumulatePhase()
@@ -466,15 +495,12 @@ namespace DCLF
 					timer.Add(BuildPart::Dedup);
 					const std::uint32_t slot = AllocatePipelineSlot();
 					tables.pipelines[slot] = key;
-					// Per-frame PerGeometry values for this pass descriptor, from any object's lighting pass (it supplies the scene light
-					// list the engine reads the sun from): the engine's SetupGeometry, which the render thread runs at the join.
-					tables.geometryConstants[slot] = {};
-					tables.geometryConstantsValid[slot] = 0;
-					pipelinesToEvaluate.push_back(slot);
+					// Its PerGeometry values (the engine's SetupGeometry from the template's lighting pass) are the frame's
+					// (FrameTables): evaluated by the render thread for a slot whose key or binding is new.
 					tables.geometryTemplate[slot] = property;
 
 					tables.pipelineTechnique[slot] = TechniqueRowFor(descriptors.pass);
-					stats.shadowMaskPipelines += tables.TechniqueOf(slot).shadowMask ? 1 : 0;
+					stats.shadowMaskPipelines += tables.TechniqueShadowMask(slot) ? 1 : 0;
 
 					PipelinePermutation permutation;
 					permutation.vertexShaderDescriptor = descriptors.rawVertex;
@@ -492,7 +518,6 @@ namespace DCLF
 					                                             << ExtendedTranslucency::ExtraFeatureDescriptorShift :
 					                                         0u;
 					tables.permutations[slot] = permutation;
-					tables.pipelineConstantsVersion[slot] = tables.NextVersion();
 					tables.pipelineBindingVersion[slot] = tables.NextVersion();
 					pipelineIt = pipelineIndex.emplace(key, slot).first;
 					timer.Add(BuildPart::PipelineEval);
@@ -536,7 +561,6 @@ namespace DCLF
 					tables.materialVersion[slot] = ++materialVersions;
 					tables.NoteMaterial(slot);
 					tables.materialSlotKey[slot] = std::pair{ material, descriptors.pass };
-					tables.ListMaterialSlot(slot, frame);
 					materialIt = materialIndex.emplace(std::pair{ material, descriptors.pass }, slot).first;
 					ListMaterialDependent(material, slot);
 					timer.Add(BuildPart::MaterialEval);
