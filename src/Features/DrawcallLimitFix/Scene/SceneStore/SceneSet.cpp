@@ -565,7 +565,7 @@ namespace DCLF
 
 	void SceneStore::BeginFrame()
 	{
-		// Switch events are taken on the render thread only (PushSwitch); ProcessEvents may run on the coordinator.
+		// Switch events are taken on the render thread only (PushSwitch); ApplyEvents runs on the coordinator.
 		switchEventThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 		++frame;
 		publishedSunGeneration = sunCandidatesGeneration;
@@ -573,9 +573,11 @@ namespace DCLF
 
 	void SceneStore::RunSceneWork(bool a_task)
 	{
-		// The frame's events were processed on the render thread before the kick (BeginSceneFrame).
+		// The frame's events, which the render thread ingested before the kick (BeginSceneFrame): what they drop of PrimaryCull's is
+		// held for the join, and the references they let go of are released at Present.
 		inSceneTask = a_task;
 		holdPrimaryNotes = true;
+		ApplyEvents();
 		BuildFrame(Phase::Scene);
 		CommitSet();
 		EndSceneFrame();

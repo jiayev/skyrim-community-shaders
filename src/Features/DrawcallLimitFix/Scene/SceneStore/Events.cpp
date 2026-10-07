@@ -492,22 +492,21 @@ namespace DCLF
 		return ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
 	}
 
-	void SceneStore::ProcessEvents()
+	void SceneStore::IngestEvents()
 	{
-		DCLF_FRAME_TRACE("ProcessEvents");  // TEMP frame trace
-		// The render thread's: the scene task runs this on the coordinator, and BeginFrame records it then.
-		if (!inSceneTask)
-			switchEventThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
-		// Nothing here may walk the scene graph while a load screen is up. A load tears down and rebuilds
+		DCLF_FRAME_TRACE("IngestEvents");  // TEMP frame trace
+		// Switch events are taken on the render thread only (PushSwitch): this is it.
+		switchEventThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
+		// Nothing may walk the scene graph while a load screen is up. A load tears down and rebuilds
 		// TES::objRoot and the cell 3D under it, and the attach events queued across it name subtrees that
 		// are still being assembled; walking either gives a pointer that is stale or simply garbage. That
 		// is what crashed in RefreshCategoryNodes' objRoot walk (a child that read back as
 		// 0x0001000000020001) and, the day before, in AddSubtree.
 		//
-		// The queue is still drained, because it holds references to attached subtrees and the comment on
-		// the caller is right that it must not grow while the world is not rendered - but the events are
-		// discarded rather than applied, and the first frame after the load rebuilds the tracked set from
-		// scratch. A load invalidates all of it anyway, so nothing is lost by not trying to track across it.
+		// The queues are still drained, because they hold references to attached subtrees and must not grow
+		// while the world is not rendered - but the events are discarded rather than applied, and the first
+		// frame after the load rebuilds the tracked set from scratch. A load invalidates all of it anyway, so
+		// nothing is lost by not trying to track across it.
 		auto& tracker = SceneTracker::Get();
 		if (SceneStore::IsLoadingScreenUp()) {
 			// Only the walking stops. The tracked set is deliberately left alone until the load is over:
@@ -515,11 +514,12 @@ namespace DCLF
 			// epoch is still in flight, and a draw then reads a freed device address. That is a
 			// VK_ERROR_DEVICE_LOST on the teleport, which is exactly what happened when this branch cleared
 			// eagerly. The entries hold NiPointers, so holding them across the load is the safe direction,
-			// and the rescan below replaces them on a normal frame.
+			// and the rescan replaces them on a normal frame.
 			rescanPending = true;
 			// The set does not survive a load: it names geometry from the cell being torn down, and withholds its passes from the
 			// engine. Nothing is withheld until the next commit publishes the set again.
 			PassCapture::Get().PublishSet(nullptr);
+			ingested.reset();
 			SceneTracker::FreeEvents(tracker.Drain());
 			DrainFadeEvents(fadeChanged);
 			fadeChanged.clear();
@@ -532,6 +532,7 @@ namespace DCLF
 			propertyChanged.clear();
 			DrainNodeEvents(nodeChanged);
 			nodeChanged.clear();
+			lodSegmentEvents.Drain([](const void*) {});
 			moveEvents.Discard();
 			movedFrame.clear();
 			hiddenEvents.Discard();
@@ -542,18 +543,60 @@ namespace DCLF
 			switchResync = true;
 			return;
 		}
+		// The drain alone: pointer moves into the batch, in push order. Everything that walks or evaluates is ApplyEvents'.
+		if (!ingested)
+			ingested = std::make_shared<EventBatch>();
+		auto& batch = *ingested;
+		batch.Append(tracker.Drain());
+		fadeSnapEvents.Drain([&](const void* a_node) { batch.fadeSnaps.push_back(a_node); });
+		DrainFadeEvents(batch.fades);
+		DrainPropertyEvents(batch.properties);
+		DrainNodeEvents(batch.nodes);
+		switchEvents.Drain([&](SwitchEvent&& a_event) { batch.switches.push_back(std::move(a_event)); });
+		lodSegmentEvents.Drain([&](const void* a_key) { batch.lodSegments.push_back(a_key); });
+		// Tree LOD's mirror is the render thread's (DecideTreeLod reads it at the frame's start).
+		treeLod.Drain(frame);
+	}
+
+	void SceneStore::NoteEventsPresent()
+	{
+		if (ingested)
+			++ingested->presents;
+	}
+
+	bool SceneStore::EventsUnapplied() const
+	{
+		return ingested && ingested->presents > 1;
+	}
+
+	void SceneStore::ReleaseHandedBack()
+	{
+		handedBack.clear();
+		spentBatches.clear();
+	}
+
+	void SceneStore::ApplyEvents()
+	{
+		DCLF_FRAME_TRACE("ApplyEvents");  // TEMP frame trace
+		auto batch = std::exchange(ingested, nullptr);
+		if (!batch)
+			batch = std::make_shared<EventBatch>();
 		const bool rescanned = rescanPending;
 		if (rescanPending) {
 			// RefreshCategoryNodes treats every category node as newly appeared and walks it, which is
 			// exactly the full rescan wanted here.
 			rescanPending = false;
-			for (auto& [geometry, entry] : tracked)
+			for (auto& [geometry, entry] : tracked) {
 				ReleaseObjectSlot(entry);
+				HandBack(std::move(entry.geometry));
+			}
 			tracked.clear();
 			ClearFaceShapes();
 			++trackedLayout;
 			sceneIdentity.Reset();
 			categoryNodes.clear();
+			for (auto& [root, entry] : alwaysRenderRoots)
+				HandBack(std::move(entry.root));
 			alwaysRenderRoots.clear();
 			validationCursor = 0;
 			fullEvaluation = true;
@@ -571,14 +614,12 @@ namespace DCLF
 			buckets = {};
 		}
 
-		// Drained before the category refresh, so a detach this frame can force it: a detach can take a
+		// The detaches are seen before the category refresh, so one this frame can force it: a detach can take a
 		// category node with it, and the signature cannot see that until the cell itself goes.
-		SceneTracker::Event* events = nullptr;
 		{
 			DCLF_SCENE_PART(CategoryNodes, "CS.DCLF.Scene.CategoryNodes");
-			events = tracker.Drain();
 			bool sawDetach = false;
-			for (const auto* event = events; event && !sawDetach; event = event->next)
+			for (const auto* event = batch->head; event && !sawDetach; event = event->next)
 				sawDetach = event->type == SceneTracker::EventType::Detached;
 			addSource = rescanned ? TrackSource::Rescan : TrackSource::AttachEvent;
 			RefreshCategoryNodes(sawDetach || rescanned);
@@ -591,7 +632,7 @@ namespace DCLF
 			// objects between containers (a cell's dynamic and static nodes, as their physics wakes and sleeps) with a detach and
 			// an attach, which is a move. Its entry, slot and binding stay; the attach has evaluated it again (AddGeometry).
 			std::vector<RE::BSGeometry*> detached;
-			for (auto* event = events; event; event = event->next) {
+			for (auto* event = batch->head; event; event = event->next) {
 				if (event->type == SceneTracker::EventType::Attached) {
 					++stats.attachedEvents;
 					if (!categoryNodes.empty())
@@ -609,48 +650,50 @@ namespace DCLF
 				}
 				EraseTracked(geometry);
 			}
-			SceneTracker::FreeEvents(events);
 		}
 
 		{
-			// Once a frame: ProcessEvents runs at the present and again at the scene's start.
 			DCLF_SCENE_PART(Validate, "CS.DCLF.Scene.Validate");
 			if (std::exchange(validatedFrame, frame) != frame)
 				ValidateSlice();
 		}
 		DCLF_SCENE_PART(StructuralEvents, "CS.DCLF.Scene.StructuralEvents");
 		// Fade roots placed since their listing: their rows again from the node.
-		fadeSnapEvents.Drain([&](const void* a_node) { ReseedFadeRoot(a_node); });
-		// The fade nodes whose currentFade changed since the last drain (the delta walk re-evaluates their dependents).
-		DrainFadeEvents(fadeChanged);
+		for (const void* node : batch->fadeSnaps)
+			ReseedFadeRoot(node);
+		// The fade nodes whose currentFade changed since the last apply (the delta walk re-evaluates their dependents).
+		fadeChanged.insert(fadeChanged.end(), batch->fades.begin(), batch->fades.end());
 		if (fadeChanged.size() > kMaxFadeChanges) {
 			fadeChanged.clear();
 			fullEvaluation = true;
 		}
 		// The structural events (SceneEvents): properties whose flags, material or controllers changed, and nodes Havok
 		// moved or gave a controller.
-		DrainPropertyEvents(propertyChanged);
-		DrainNodeEvents(nodeChanged);
+		propertyChanged.insert(propertyChanged.end(), batch->properties.begin(), batch->properties.end());
+		for (auto& node : batch->nodes)
+			nodeChanged.push_back(std::move(node));
+		batch->nodes.clear();
 		// The switch events, oldest first, one pending entry per switch: its index before the oldest event decides
 		// whether the selection changed (ApplySwitchEvents).
-		switchEvents.Drain([&](SwitchEvent&& a_event) {
+		for (auto& event : batch->switches) {
 			++delta.switchEvents;
-			const auto [at, inserted] = switchPendingIndex.try_emplace(a_event.node.get(), static_cast<std::uint32_t>(switchPending.size()));
+			const auto [at, inserted] = switchPendingIndex.try_emplace(event.node.get(), static_cast<std::uint32_t>(switchPending.size()));
 			if (inserted)
-				switchPending.push_back({ std::move(a_event.node), a_event.before, a_event.structural });
+				switchPending.push_back({ std::move(event.node), event.before, event.structural });
 			else
-				switchPending[at->second].structural |= a_event.structural;
-		});
-		ApplyLodSegmentEvents();
-		treeLod.Drain(frame);
+				switchPending[at->second].structural |= event.structural;
+		}
+		ApplyLodSegmentEvents(batch->lodSegments);
 		if (propertyChanged.size() > kMaxStructuralEvents || nodeChanged.size() > kMaxStructuralEvents) {
 			propertyChanged.clear();
-			nodeChanged.clear();
+			HandBack(nodeChanged);
 			fullEvaluation = true;
 		}
 
 		stats.tracked = static_cast<std::uint32_t>(tracked.size());
 		stats.categoryNodes = static_cast<std::uint32_t>(categoryNodes.size());
+		// Its tracker events (and the switch events folded into a pending entry) hold engine references.
+		spentBatches.push_back(std::move(batch));
 	}
 
 	namespace
@@ -731,15 +774,15 @@ namespace DCLF
 		ranges = std::move(next);
 	}
 
-	void SceneStore::ApplyLodSegmentEvents()
+	void SceneStore::ApplyLodSegmentEvents(const std::vector<const void*>& a_shapes)
 	{
-		lodSegmentEvents.Drain([&](const void* a_key) {
+		for (const void* key : a_shapes) {
 			++lodSegmentStats.events;
 			// Only a tracked shape is known to be alive (its entry holds it).
-			if (const auto it = lodRanges.find(static_cast<const RE::BSGeometry*>(a_key)); it != lodRanges.end())
+			if (const auto it = lodRanges.find(static_cast<const RE::BSGeometry*>(key)); it != lodRanges.end())
 				SampleLodRanges(*it->first, true);
-		});
-		// CS_DCLF_PERSISTENT_PARITY: every tracked shape's ranges against its live state (once a frame: ProcessEvents runs twice).
+		}
+		// CS_DCLF_PERSISTENT_PARITY: every tracked shape's ranges against its live state (once a frame: Present may apply too).
 		if (lodRanges.empty() || !SwitchEnabled(Switch::PersistentParity) || !ParityDue(frame) || std::exchange(lodParityFrame, frame) == frame)
 			return;
 		++lodSegmentStats.checks;
@@ -910,6 +953,9 @@ namespace DCLF
 				return true;
 			});
 		}
+		// The walk runs on the coordinator: the switches' references are the render thread's to drop.
+		for (auto& pending : switchPending)
+			HandBack(std::move(pending.node));
 		switchPending.clear();
 		switchPendingIndex.clear();
 	}

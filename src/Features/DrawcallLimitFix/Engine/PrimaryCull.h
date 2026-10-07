@@ -368,6 +368,7 @@ namespace DCLF
 			std::uint64_t frames = 0, published = 0, built = 0, dryRuns = 0;
 			std::uint64_t notToggled = 0, notCurrent = 0, noExclusion = 0, noOcclusion = 0, decalOrder = 0;
 			std::uint64_t restored = 0;           // frames an occlusion map the engine drew put the left-out roots back
+			std::uint64_t restoreDetached = 0;    // roots of those the engine had detached since the snapshot, left out
 			std::uint64_t unexcluded = 0;         // must be 0: filtered lists, and the full-frustum cull applied no exclusion
 			std::uint64_t lostWhileOut = 0;       // a member's binding lost while its root was out of the lists
 			std::uint64_t engineFrames = 0, notKeepable = 0;  // the engine built them, and of those for want of the exterior branch

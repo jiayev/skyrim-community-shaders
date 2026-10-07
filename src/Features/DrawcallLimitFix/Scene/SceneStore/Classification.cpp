@@ -243,6 +243,8 @@ namespace DCLF
 				added.push_back(node);
 		}
 		categoryNodes = std::move(current);
+		for (auto& [root, entry] : alwaysRenderRoots)
+			HandBack(std::move(entry.root));
 		alwaysRenderRoots = std::move(currentRoots);
 		std::erase_if(categoryFound, [&](const auto& a_entry) { return !categoryNodes.contains(const_cast<RE::NiNode*>(a_entry.first)); });
 		const TrackSource previousSource = addSource;

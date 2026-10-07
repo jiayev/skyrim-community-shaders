@@ -128,10 +128,12 @@ namespace DCLF
 		snapshot->generation = lightCandidatesGeneration;
 		snapshot->entries.reserve(lightCandidateSet.size());
 		snapshot->entryNodes.reserve(lightCandidateSet.size());
+		snapshot->held.reserve(lightCandidateSet.size());
 		std::uint32_t index = 0;
 		for (const auto* root : lightCandidateSet) {
 			snapshot->entries.emplace(root, index);
 			snapshot->entryNodes.push_back(root);
+			snapshot->held.emplace_back(const_cast<RE::NiAVObject*>(root));
 			if (const auto* dependents = LightDependentsOf(root))
 				for (auto* geometry : *dependents)
 					if (snapshot->geometries.emplace(geometry, static_cast<std::uint32_t>(snapshot->geometryEntry.size())).second)
@@ -336,10 +338,12 @@ namespace DCLF
 		snapshot->generation = sunCandidatesGeneration;
 		snapshot->entries.reserve(sunCandidateSet.size());
 		snapshot->entryNodes.reserve(sunCandidateSet.size());
+		snapshot->held.reserve(sunCandidateSet.size());
 		std::uint32_t index = 0;
 		for (const auto* root : sunCandidateSet) {
 			snapshot->entries.emplace(root, index);
 			snapshot->entryNodes.push_back(root);
+			snapshot->held.emplace_back(const_cast<RE::NiAVObject*>(root));
 			if (const auto it = rootDependents.find(root); it != rootDependents.end())
 				for (auto* geometry : it->second)
 					if (snapshot->geometries.emplace(geometry, static_cast<std::uint32_t>(snapshot->geometryEntry.size())).second) {

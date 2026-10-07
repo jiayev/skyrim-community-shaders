@@ -6,32 +6,6 @@ ID in brackets. Newest first.
 
 ## Open
 
-### `PrimaryCull::EndFrame`: a freed root in the scene lists' graveyard (event order)
-
-| | |
-| --- | --- |
-| Seen | 2026-10-04, every run of the phase 3 scene-task build whose list filter (`PrimaryCull::PublishListFilter`) ran before the frame's events (`SceneStore::ProcessEvents`). Fixed by the order. |
-| Thread | The render thread, at Present (`DrawcallLimitFix::Reset`, `PrimaryCull::EndFrame`, `listGraveyard.clear()`). |
-| Fault | Execute at 0x0 or 0x1: a `NiPointer` release whose object's memory was back on the heap's free list (its first word a free-list link, the rest zero). |
-| When | The first 40 frames after the load, at the first frames that published a list filter (Rebuild with a filter, then without). |
-
-**The bisect** (inline, `CS_DCLF_ASYNC=off`, so not a threading race):
-
-| List filter published | Runs that crashed |
-|---|---|
-| before the events | 5 of 5 |
-| after the events, before the walk | 0 of 1 |
-| after the walk | 0 of 3 |
-
-The scene lists' per-frame decisions were logged in both orders: Keep and Rebuild, the filter, the kept sizes, and an empty
-graveyard at the job. They matched. Every root the instrumentation saw go into the graveyard (removals, attach events,
-dropped events) had a reference count of 6.
-
-**Attribution: unknown.** The freed root entered the graveyard by `BuryLists` (a whole list buried on a Rebuild), which
-was logged only by count. The events drain the scene tracker's queue, whose events hold references to attached and
-detached subtrees. That is the likeliest link, but it is not shown. The order (events first) is kept and documented in
-`DrawcallLimitFix::BeginSceneFrame`.
-
 ### GPU device loss: a page fault at address 0 on the first DCLF frame
 
 | | |
@@ -206,6 +180,39 @@ set to on, or unset.
     the faulting entry.
 
 ## Fixed
+
+### `PrimaryCull::EndFrame`: a freed root in the scene lists' graveyard (event order; 2026-10-07)
+
+| | |
+| --- | --- |
+| Seen | 2026-10-04, every run of the phase 3 scene-task build whose list filter (`PrimaryCull::PublishListFilter`) ran before the frame's events (`SceneStore::ProcessEvents`). Worked around by the order, then fixed (below). Reproduced on 2026-10-07 by step 5's ingestion (m30: the first cell loads in motion). |
+| Thread | The render thread, at Present (`DrawcallLimitFix::Reset`, `PrimaryCull::EndFrame`, `listGraveyard.clear()`). |
+| Fault | Execute at 0x0 or 0x1: a `NiPointer` release whose object's memory was back on the heap's free list (its first word a free-list link, the rest zero). |
+| When | The first 40 frames after the load, at the first frames that published a list filter (Rebuild with a filter, then without). |
+
+**The bisect** (inline, `CS_DCLF_ASYNC=off`, so not a threading race):
+
+| List filter published | Runs that crashed |
+|---|---|
+| before the events | 5 of 5 |
+| after the events, before the walk | 0 of 1 |
+| after the walk | 0 of 3 |
+
+The scene lists' per-frame decisions were logged in both orders: Keep and Rebuild, the filter, the kept sizes, and an empty
+graveyard at the job. They matched. Every root the instrumentation saw go into the graveyard (removals, attach events,
+dropped events) had a reference count of 6.
+
+**Cause (2026-10-07).** `PrimaryCull::RestoreSceneLists`, which puts the filter's roots back into the lists when the engine
+draws an occlusion map itself (most frames in motion), took a reference to every root of the published list filter: "the
+snapshot is current this frame, so its roots are alive". They are raw pointers from the sun candidates, and nothing held them.
+A root the update detached is freed before the frame starts; a filter made before the frame's events still names it (the
+events take its lost member's root out of the filter), so the restore took a reference to freed memory, `BuryLists` moved it
+into the graveyard, and Present released it. The events-first order only hid it.
+
+**Fix.** `SunCandidates` hold their entry nodes (`held`), so whatever is keyed by them (PrimaryCull's cut and list filter, the
+exclusions) can dereference one; the last owner may be a worker, so the references are released at Present through
+`EngineReleases`. The restore leaves out a root no longer under the scene node. m32: 7,700 frames of cell loads, 360-1,435
+detached roots left out per 300 frames, no crash.
 
 ### `CommunityShaders.dll`: `NativeProbe::OnNativeLightingDraw` (2026-09-22 22:36)
 

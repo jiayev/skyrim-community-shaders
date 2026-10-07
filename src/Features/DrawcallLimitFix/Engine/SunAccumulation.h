@@ -9,6 +9,8 @@
 
 #include <ankerl/unordered_dense.h>
 
+#include "Features/DrawcallLimitFix/Common/EngineReleases.h"
+
 namespace DCLF
 {
 	/**
@@ -22,9 +24,22 @@ namespace DCLF
 	 */
 	struct SunCandidates
 	{
+		SunCandidates() = default;
+		SunCandidates(const SunCandidates&) = delete;
+		SunCandidates& operator=(const SunCandidates&) = delete;
+		// The last owner may be any thread (a shadow build's exclusion): the entry nodes are released on the render thread.
+		~SunCandidates()
+		{
+			for (auto& node : held)
+				EngineReleases::Push(std::move(node));
+		}
+
 		std::uint32_t generation = 0;
 		ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> entries;     // entry node -> entry index
 		std::vector<const RE::NiAVObject*> entryNodes;                                  // entry index -> entry node
+		// The entry nodes, held as long as the snapshot is: every reader keyed by them (PrimaryCull's cut and list filter, the
+		// exclusions) may dereference one, and the engine may detach and drop it before the next snapshot replaces this one.
+		std::vector<RE::NiPointer<RE::NiAVObject>> held;
 		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> geometries;  // every tracked geometry under one -> geometry index
 		std::vector<std::uint32_t> geometryEntry;                                       // geometry index -> entry index
 		// Per geometry index: a main-pass table object PrimaryCull can give a synthetic pass (SceneStore::PrimaryEntryAllows);

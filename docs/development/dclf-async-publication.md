@@ -237,7 +237,8 @@ freed. The bisect, inline (`CS_DCLF_ASYNC=off`):
 The list decisions logged per frame were the same in both orders, and no root the instrumentation saw buried had a
 reference count below 6, so the mechanism is not identified (crash catalog). The events also walk newly attached subtrees
 and drop the last reference to detached ones, which runs the engine's destructors: main-thread work either way. They cost
-about 0.05 ms a frame.
+about 0.05 ms a frame. (Step 5 moved them to the coordinator, with the releases handed back, and found the crash's cause:
+"Step 5: ingestion".)
 
 **Results** (`CS_DCLF_PROFILE` on):
 
@@ -1167,6 +1168,41 @@ resident-draw, set and fade parity; motion m28/m29).
 - *Measured* (m29 against m27): the phase 136 -> 70 us a frame mean, p90 508 -> 155 us; decal order mean 74 -> 17, p90 351 ->
   52; resident keeping mean 15 -> 6.5, p90 57 -> 10. What is left in its p99 (480 us) is the joins themselves on cell loads
   (classification, slots, the engine evaluations of new pipelines and materials).
+
+**Step 5: ingestion** (2026-10-07; motion m32, bridge y2 with persistent, resident-draw, set and fade parity).
+- *The split.* `ProcessEvents` ran twice a frame on the render thread (Present and the frame's start): it drained the
+  engine's queues and applied them (the category refresh, the attached subtrees walked and evaluated, the detached entries
+  erased, the validation slice, the structural events). Now:
+  - `IngestEvents` (render thread, Present and the frame's start, the coordinator idle) only drains: the tracker's attach and
+    detach events, fade snaps, fades, property and node events, switch events and object LOD's segment writes move into the
+    pending `EventBatch`, in push order; tree LOD's mirror is drained there too (DecideTreeLod reads it next). The load-screen
+    discard stays there.
+  - `ApplyEvents` is the scene work's first part (`RunSceneWork`, on the coordinator), once a frame. What it drops of
+    PrimaryCull's is held for the join like the walk's. A batch that no scene work took for a whole frame (menus, DCLF switched
+    off) is applied by Present (`EventsUnapplied`), so the queues never wait longer.
+- *Releases handed back.* The scene work no longer drops engine references: the erased entries' geometry, the replaced
+  always-render roots, the applied batches (their tracker events hold subtrees), the walk's node events and applied switch
+  events go to `SceneStore::HandBack` and are released at Present (`ReleaseHandedBack`), on the engine's main thread, with
+  nothing reading them. The walk had been dropping node and switch references on the coordinator since phase 3 step 2.
+- *The graveyard crash, explained and fixed* (crash-catalog.md). Moving the events behind the list filter reproduced it (m30:
+  `PrimaryCull::EndFrame`, a freed root released from the graveyard, in the first cell loads). Cause:
+  `PrimaryCull::RestoreSceneLists` (an occlusion map the engine draws, most frames in motion) took a reference to every root of
+  the published filter, trusting "the snapshot is current, so its roots are alive". The filter's roots are raw pointers from the
+  sun candidates; a root the update detached is freed before the frame starts, and a filter made before the frame's events
+  still names it. The events-first order had only hidden it (the lost member took the root out of the filter first). Fixed in
+  the shared contract: `SunCandidates` hold their entry nodes (`held`), so every reader keyed by them (the cut, the list filter,
+  the exclusions) may dereference one; their last owner may be any thread, so the references go through
+  `EngineReleases` (a lock-free queue released at Present). The restore leaves out roots no longer under the scene node: m32 left
+  out 360-1,435 detached roots per 300 frames that it used to reference from freed memory, with no crash in 7,700 frames of
+  cell loads.
+- *Measured* (m32 against m29, motion): the render thread's event time 0.08-0.14 -> 0.03-0.10 ms a frame, its scene-frame hook
+  0.13-0.23 -> 0.07-0.13 ms. The apply's own cost is unchanged (about 74 us a frame, now once on the coordinator rather than
+  twice on the render thread), and it now lies inside the scene task: the scene join's wait is unchanged (0.27-1.33 ms a frame,
+  m29 0.27-1.19). The join goes with step 6.
+- *Accepted difference.* The frame-start readers before the kick (the point lights' category filter, the list filter) see the
+  scene as the last apply left it, one ingestion behind: a category node that appeared this frame is judged next frame (fewer
+  empty children cut for a frame), and a member lost to a detach is taken out of the list filter at the join instead of before
+  it. Neither can reach freed memory now (the candidates hold their roots, the geometry is held until Present).
 
 ## Implemented foundations
 

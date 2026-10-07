@@ -2,6 +2,7 @@
 
 #include "Deferred.h"
 #include "DrawcallLimitFix/Common/AsyncWorker.h"
+#include "DrawcallLimitFix/Common/EngineReleases.h"
 #include "DrawcallLimitFix/Common/RenderThreadBudget.h"
 #include "DrawcallLimitFix/Common/SceneScheduler.h"
 #include "DrawcallLimitFix/Common/FrameTrace.h"
@@ -172,7 +173,16 @@ void DrawcallLimitFix::Reset()
 		// What the frame submitted: the GPU point its frame values' buffer is free again after.
 		DCLF::FrameValues::Get().EndFrame();
 		DCLF::FrameData::EndFrame();
-		DCLF::SceneStore::Get().ProcessEvents();
+		// The frame's ingestion (the scene work applies it); a batch no scene work took in a whole frame (menus, switched off) is
+		// applied here, so the queues never wait longer. Then what the scene work let go of: the engine's references, dropped on its
+		// main thread with nothing reading them any more.
+		auto& store = DCLF::SceneStore::Get();
+		store.IngestEvents();
+		store.NoteEventsPresent();
+		if (store.EventsUnapplied())
+			store.ApplyEvents();
+		store.ReleaseHandedBack();
+		DCLF::EngineReleases::Release();
 		timing.eventsMs += MillisecondsSince(start);
 		// The menu's toggle, between frames. Scene events keep flowing above while off, so the tracked set is
 		// current the moment it comes back on.
@@ -276,13 +286,12 @@ bool DrawcallLimitFix::BeginSceneFrame()
 		store.ApplySet();
 		draws.NoteSetApplied(commitFrame);
 	}
-	// The frame's events, here on the render thread: they walk the subtrees attached since the last frame, and dropping the last
-	// reference to a detached one runs the engine's destructors, which belong on the engine's main thread. They also come before
-	// the list filter: published ahead of them, the kept scene lists released a freed root at Present on every run (dclf-async-
-	// publication.md, "Phase 3, step 2").
+	// The frame's ingestion: the engine's queues drained into the batch the scene work applies first (ApplyEvents, on the
+	// coordinator). The references it lets go of - detached subtrees among them, whose last drop runs the engine's destructors - are
+	// handed back and released at Present (dclf-async-publication.md, "Step 5: ingestion").
 	{
 		const auto eventsStart = std::chrono::steady_clock::now();
-		store.ProcessEvents();
+		store.IngestEvents();
 		timing.eventsMs += MillisecondsSince(eventsStart);
 	}
 	DCLF::LocalLightCull::SelectFrame(store.GetFrame());
