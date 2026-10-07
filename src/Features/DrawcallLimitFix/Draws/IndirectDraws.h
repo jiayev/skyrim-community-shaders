@@ -197,12 +197,6 @@ namespace DCLF
 		/** @brief BeforeShadowMaps: whether the early shadow build stands (counted by cause when it does not). */
 		bool KeepEarlyShadowBuild();
 		/**
-		 * @brief Before a placement join writes the tables (BeforeShadowMaps, or EarlyPrepass in a frame without shadow maps):
-		 * the early shadow build, which reads them, is done first. Usually it is (kicked ~4.6 ms earlier); one still running
-		 * is waited for up to the async budget, or dropped.
-		 */
-		void BeforePlacementJoin();
-		/**
 		 * @brief Render thread, where nothing writes the tables until the next epoch's commit (after the placements' join; after
 		 * RefreshFrameConstants): the object records and bone rows staged and recorded on the worker, which that commit submits
 		 * instead of uploading them itself (Impl::StreamsJob). CS_DCLF_ASYNC.

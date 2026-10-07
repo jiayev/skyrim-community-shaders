@@ -12,6 +12,8 @@
 #include "DrawcallLimitFix/Diagnostics/OpenDefectProbes.h"
 #include "DrawcallLimitFix/Diagnostics/TestHarness.h"
 #include "DrawcallLimitFix/Draws/DrawPipelines.h"
+#include "DrawcallLimitFix/Draws/FrameData.h"
+#include "DrawcallLimitFix/Draws/FrameValues.h"
 #include "DrawcallLimitFix/Engine/EngineAccess.h"
 #include "DrawcallLimitFix/Engine/FaceSnapshots.h"
 #include "DrawcallLimitFix/Engine/SunAccumulation.h"
@@ -167,6 +169,9 @@ void DrawcallLimitFix::Reset()
 		const auto start = std::chrono::steady_clock::now();
 		DCLF::PrimaryCull::Get().EndFrame();
 		DCLF::IndirectDraws::Get().EndFrame();
+		// What the frame submitted: the GPU point its frame values' buffer is free again after.
+		DCLF::FrameValues::Get().EndFrame();
+		DCLF::FrameData::EndFrame();
 		DCLF::SceneStore::Get().ProcessEvents();
 		timing.eventsMs += MillisecondsSince(start);
 		// The menu's toggle, between frames. Scene events keep flowing above while off, so the tracked set is
@@ -230,8 +235,11 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// The graph's build point, every frame (loaded or not): an extension added or removed during the last frame is built here, before
 	// anything decides what the frame's recordings cover.
 	DCLF::IndirectDraws::Get().BuildPoint();
-	if (!Running())
+	if (!Running()) {
+		// No frame values: nothing this frame submits waits for them.
+		DCLF::FrameValues::Get().Skip();
 		return false;
+	}
 	// The engine's update is done: workers may read its scene graph until Present (EngineReadWindow).
 	DCLF::EngineReadWindow::Open();
 	// The scene half of the tables, before the main camera's cull: everything the walk reads is final from
@@ -284,6 +292,10 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// The water reflection's forward programs and pipelines (dclf-lod.md, "Water reflections").
 	DCLF::IndirectDraws::Get().PrepareReflection();
 	DCLF::PrimaryCull::Get().PublishListFilter();
+	// The frame's values (FrameValues): the placements and the shading the frame draws with, made on the pool from the last walk's
+	// plan and named slots while the frame runs, and waited for by the GPU; the wetness captured here (Skin's cache is the render
+	// thread's). Before the scene work, which makes the next plan.
+	DCLF::FrameValues::Get().Kick(store.TakePlacementPlan(), store.TakeShadingItems(), store.CaptureWetness());
 	// The frame's scene work: the walk and the set's commit, for the next frame's claims. On DCLF's coordinator while
 	// the engine culls (SceneStore::KickSceneTask), joined by the first reader that needs it: everything the walk reads is final
 	// from Main::Draw on (the world update is done, and the palette update's frame counter moves only at Renderer::End), except
@@ -317,14 +329,13 @@ void DrawcallLimitFix::BeforeShadowMaps()
 	if (!Running())
 		return;
 	// The frame's reflection faces (every TESWaterReflections::Update of the frame has run: two a frame, a face each), drawn by DCLF
-	// in one epoch, before the placement join writes the tables and before the water reads the cube (dclf-lod.md, "Water reflections").
+	// in one epoch, before the water reads the cube (dclf-lod.md, "Water reflections").
 	DCLF::IndirectDraws::Get().ExecuteReflection();
 	ScopedPerfEvent event("CS DCLF: shadow views");
 	const auto start = std::chrono::steady_clock::now();
-	// The kept records' placements and palettes (the scene placement job), before the shadow views read them; the early
-	// shadow build, which reads the tables the join writes, is done first.
-	DCLF::IndirectDraws::Get().BeforePlacementJoin();
-	DCLF::SceneStore::Get().JoinPlacements();
+	// CS_DCLF_PERSISTENT_PARITY: the frame values' rows and palettes against the engine's now.
+	if (auto& store = DCLF::SceneStore::Get(); DCLF::SwitchEnabled(DCLF::Switch::PersistentParity) && DCLF::ParityDue(store.GetFrame()))
+		DCLF::FrameValues::Get().CheckParity(store.GetTables(), store.PeekPlacementPlan());
 	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
 	// The tables hold still from here to the accumulate phase: the streams the shadow commit uploads, staged on the worker meanwhile.
 	DCLF::IndirectDraws::Get().KickSceneStreams();
@@ -370,9 +381,6 @@ void DrawcallLimitFix::EarlyPrepass()
 	// before the shadow maps (Main::Draw) - and because the tables read the latched accumulator rather
 	// than `currentAccumulator`, which is not set this early.
 	auto& store = DCLF::SceneStore::Get();
-	// A frame without shadow maps: the early shadow build is still out, and reads the tables the join writes.
-	DCLF::IndirectDraws::Get().BeforePlacementJoin();
-	store.JoinPlacements();
 	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
 	ScopedPerfEvent event("CS DCLF: accumulator tables and pipelines");
 	const auto start = std::chrono::steady_clock::now();

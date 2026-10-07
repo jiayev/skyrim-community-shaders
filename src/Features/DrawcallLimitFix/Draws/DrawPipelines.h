@@ -131,8 +131,8 @@ namespace DCLF
 	 * because the engine binds nothing there, so nothing the frame capture resolves is displaced.
 	 */
 	inline constexpr std::uint32_t kObjectBufferRegister = kTextureRegisters - 1;
-	/** @brief t126: the epoch's bone palette rows (DCLFBones), the other vertex-stage register. */
-	inline constexpr std::uint32_t kBonesBufferRegister = kTextureRegisters - 2;
+	/** @brief t126: the objects' extras rows (DCLFExtras: land blend, TextureProj, ProjectedUV), read by both stages. */
+	inline constexpr std::uint32_t kExtrasBufferRegister = kTextureRegisters - 2;
 	/**
 	 * @brief t125: the character light's noise (DCLFCharacterLightNoise in Lighting.hlsl), which the engine binds at t11. It is a
 	 * render target that alternates every frame, the frame's and not a material's: the frame record gives it, so a material row
@@ -149,6 +149,18 @@ namespace DCLF
 	 * a move changes, apart from the records (t127). The frame record gives it, like the records.
 	 */
 	inline constexpr std::uint32_t kPlacementBufferRegister = kTextureRegisters - 5;
+	/**
+	 * @brief t122: the frame's bone palettes (DCLFPalettes, Common/DCLFObjects.hlsli; FrameValues), the vertex stage's: a skinned
+	 * object's current and previous palette (BindlessObject::boneOffset). The frame record gives it, like the placements; the lowest
+	 * of the vertex stage's registers.
+	 */
+	inline constexpr std::uint32_t kPaletteBufferRegister = kTextureRegisters - 6;
+	/**
+	 * @brief t121: the objects' shading rows (DCLFShading, Common/DCLFObjects.hlsli; BindlessShading; FrameValues), the pixel stage's:
+	 * MaterialData, EmitColor, SSRParams.w, the emissive multiplier and the wetness, by object slot. The frame record gives it, like
+	 * the placements.
+	 */
+	inline constexpr std::uint32_t kShadingBufferRegister = kTextureRegisters - 7;
 
 	/**
 	 * @brief Everything one indirect draw binds, in GPU memory: its address is the draw's only push data,

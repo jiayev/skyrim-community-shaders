@@ -118,8 +118,11 @@ namespace DCLF
 	 * pack their constants after the main pass has drawn, by when the engine has moved the camera on: a
 	 * world transform made relative to the wrong eye shifts the object by the camera's movement.
 	 */
-	GeometryConstants ObjectGeometryConstants(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, std::uint32_t a_renderFlags, const RE::NiPoint3& a_eye,
-		const RE::NiPoint3& a_previousEye);
+	struct BindlessPlacement;
+	struct BindlessShading;
+	struct ExtrasFrame;
+	GeometryConstants ObjectGeometryConstants(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, const BindlessPlacement& a_placement,
+		const BindlessShading& a_shading, const ExtrasFrame& a_extrasFrame, const RE::NiPoint3& a_eye, const RE::NiPoint3& a_previousEye);
 
 	/**
 	 * @brief Writes a constant group into the byte layout of a shader's cbuffer, using the shader's constant
@@ -154,6 +157,40 @@ namespace DCLF
 	/** @brief The object's kExtraRows rows in Tables::extraRows, or null when it has none. */
 	const float* ExtraRowsOf(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex);
 
+	/**
+	 * @brief The extras rows' per-frame inputs (dclf-async-publication.md, "Step 3"): the tables hold only an object's static extras
+	 * (SceneStore::WriteObjectExtras), and the draw completes them from these and its placement row (DCLFTextureProjOf and the land
+	 * blend in Lighting.hlsl; CompleteExtras on the CPU). Sampled by each main commit (render thread) into its frame blocks: the vertex
+	 * part after the fog (VS b13, c3-c7), the pixel part after the foliage parity's rows (PS b13, c16).
+	 */
+	struct ExtrasFrame
+	{
+		// VS b13 c3: the land blend's position (BSShaderManager::State, its clock's blend between two positions) in xy.
+		float landBlend[4]{};
+		// VS b13 c4-c7: the ProjectedUV projection (a fixed rotation about Z placed at posAdjust) as the engine's NiTransform-to-
+		// matrix routine makes it (row-major, row vectors; its translation is zero). TextureProj's rows are the columns of
+		// World x this (World as a row-vector matrix, absolute), of this alone for the Envmap technique.
+		float projection[16]{};
+		// PS b13 c16: ProjectedUVParams3 (FUN_1414e00c0's globals): the diffuse and detail tiling, 0, the projected-normals switch.
+		float projectedGlobals[4]{};
+	};
+	static_assert(sizeof(ExtrasFrame) == 96);
+	inline constexpr std::size_t kExtrasFrameVertexBytes = offsetof(ExtrasFrame, projectedGlobals);
+	/** @brief This frame's, from the engine's globals (render thread). */
+	ExtrasFrame SampleExtrasFrame();
+	/**
+	 * @brief How an object's TextureProj is made (its static land-blend row's x, which only ProjectedUV objects use: the two
+	 * permutations are exclusive): World x the projection; the projection alone (the Envmap technique); the shape's own
+	 * (a multi-index shape's materialProjection, in the static rows 1-3).
+	 */
+	inline constexpr float kTextureProjWorld = 0.0f, kTextureProjProjection = 1.0f, kTextureProjShape = 2.0f;
+	/**
+	 * @brief An object's extras rows as its draw completes them (Lighting.hlsl: LandBlendParams, DCLFTextureProjOf, ProjectedUVParams3):
+	 * a_static the tables' rows, a_world its placement (row-major 3x4, absolute), a_objectFlags its record's (kObjectLandBlend,
+	 * kObjectProjectedUV).
+	 */
+	void CompleteExtras(const float* a_static, std::uint32_t a_objectFlags, const float (&a_world)[12], const ExtrasFrame& a_frame, float* a_out);
+
 	/** @brief Resolves those offsets for one pipeline's shader pair. */
 	GeometryPatchOffsets GeometryPatchOffsetsOf(std::span<const std::uint8_t> a_vsTable, std::span<const std::uint8_t> a_psTable);
 
@@ -163,52 +200,73 @@ namespace DCLF
 	 * Equivalent to ObjectGeometryConstants followed by PackConstantGroup, without walking the whole
 	 * variable table per object: everything else in the group comes from the pipeline's template. A
 	 * component the object leaves unwritten packs as zero, which is what PackConstantGroup's initial
-	 * memset produces for it.
+	 * memset produces for it. The extras are the static rows (the layout's check: no frame inputs).
 	 */
-	void PatchObjectGeometry(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, std::uint32_t a_renderFlags,
-		const RE::NiPoint3& a_eye, const RE::NiPoint3& a_previousEye, const GeometryPatchOffsets& a_offsets,
+	void PatchObjectGeometry(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, const BindlessPlacement& a_placement,
+		const BindlessShading& a_shading, const RE::NiPoint3& a_eye, const RE::NiPoint3& a_previousEye, const GeometryPatchOffsets& a_offsets,
 		std::span<std::byte> a_vsOut, std::span<std::byte> a_psOut);
 
 	/**
 	 * @brief One object's entry in the per-object record table the DCLF_BINDLESS builds read
-	 * (DCLFObjectRecord in Common/DCLFObjects.hlsli): what is the object's and changes with its structure (shading, bindings,
-	 * skin, tree), not with its placement. The placement is the frame's, in a row of its own (BindlessPlacement), so a move
-	 * rewrites no record. The shading half is ObjectShading unchanged, which is why it can be copied straight through.
+	 * (DCLFObjectRecord in Common/DCLFObjects.hlsli): what is the object's and changes with its structure (bindings, skin, tree,
+	 * extras), not with its placement or its shading. Those are the frame's, in rows of their own (BindlessPlacement,
+	 * BindlessShading; FrameValues), so neither a move nor a flicker rewrites a record.
 	 */
 	struct BindlessObject
 	{
-		ObjectShading shading;  // MaterialData, EmitColor, and SSRParams.w in the last float
 		// The values the native shaders read from constant buffers of their own, which would make the binding
-		// record per-object: Light Limit Fix's room index (PS b3; its shadow bit mask is the draw's object word), the alpha
-		// test reference (PS b11) and Linear Lighting's emissive multiplier (PS b8). Deliberately a row of
-		// their own rather than packed into the spare ObjectShading::materialData[3]: that struct is shared
-		// with ObjectGeometryConstants and PatchObjectGeometry, so anything parked there would leak into
-		// the non-bindless build's MaterialData.w and into the parity comparison of that group.
+		// record per-object: Light Limit Fix's room index (PS b3; its shadow bit mask is the draw's object word) and the alpha
+		// test reference (PS b11).
 		std::int32_t roomIndex;
 		std::uint32_t recordFlags;  // kRecordBeastRace
 		float alphaTestRef;
-		float emissiveMult;
+		// The specular and envmap LOD fades the pass applies (kLodFadeSpecular, kLodFadeEnvmap, kLodFadeSsr): its pipeline's.
+		// The draw applies them, from the frame's camera (LodFadeFrame), only while the placement's fade node has them apply
+		// (BindlessPlacement::lodFadeNode, LodFadesApply), with that node's LOD type; else MaterialData's fades are the shading row's.
+		std::uint32_t lodFades;
 		// Tree animation, per object (technique 12). Under bindless the PerGeometry block is one pair for
 		// the whole pipeline, so these cannot stay in it the way they can on the constant-buffer path.
 		ObjectTreeAnim tree;
-		// Skinning (kObjectSkinned): where this object's bone palette rows start in the epoch's bones
-		// buffer (VS t126, DCLFBones), current then previous, and how many rows (three a bone). The rows
-		// are packed eye-relative by the epoch, like World, so the shader's pivot is zero. 0/0/0 otherwise.
+		// Skinning (kObjectSkinned): where this object's bone palette rows start in the frame's palettes (VS t122, DCLFPalettes;
+		// FrameValues), current then previous, and how many rows (three a bone): its block (Tables::boneOffset) at twice its
+		// offset, the current palette then the previous one (PaletteRowsOf). Absolute, like World. 0/0/0 otherwise.
 		std::uint32_t boneOffset;
 		std::uint32_t previousBoneOffset;
 		std::uint32_t boneRows;
-		// The object's kExtraRows rows in the same buffer (after every palette), or 0 when it has none.
+		// The object's kExtraRows rows in the extras buffer (VS and PS t126, DCLFExtras), or 0 when it has none.
 		std::uint32_t extraOffset;
-		// Advanced Skin's SkinPerGeometry (PS b7): the owning actor's wetness (SceneStore::Tables::skinWetness),
-		// zero for everything else. Per object like the rest, so the binding record stays per (material, pipeline).
-		float skinPerGeometry[4];
-		// The specular and envmap LOD fades the pass applies (kLodFadeSpecular, kLodFadeEnvmap, kLodFadeSsr): its pipeline's.
-		// The draw applies them, from the frame's camera (LodFadeFrame), only while the placement's fade node has them apply
-		// (BindlessPlacement::lodFadeNode, LodFadesApply), with that node's LOD type; else MaterialData's fades are the property's.
-		std::uint32_t lodFades;
-		std::uint32_t padding[3];
 	};
-	static_assert(sizeof(BindlessObject) == 128);
+	static_assert(sizeof(BindlessObject) == 64);
+
+	/**
+	 * @brief One object's shading (DCLFShading in Common/DCLFObjects.hlsli, PS t121): the values its property's controllers and
+	 * fades animate, and its actor's wetness, by object slot like the records. FrameValues' rows, sampled at the frame's start:
+	 * the slots the walk named by their shading events (SceneStore::ShadingItem) and the wetness the frame's start captured
+	 * (SceneStore::CaptureWetness).
+	 */
+	struct BindlessShading
+	{
+		// MaterialData, EmitColor, and SSRParams.w in the last float; a component the pass leaves unwritten is zero (as
+		// PackConstantGroup packs it; written names them).
+		ObjectShading shading;
+		// Advanced Skin's SkinPerGeometry (PS b7): the owning actor's wetness (Skin::GetWetness), zero for everything else.
+		float skinPerGeometry[4];
+		// Linear Lighting's emissive multiplier (PS b8): the same sample emitColor folds in (the shader divides it out again).
+		float emissiveMult;
+		// A bit per ObjectShading float SetupGeometry writes for the pass (kShadingWritten*), for the CPU's comparisons with the
+		// engine's constants (ObjectGeometryConstants); the shader reads none.
+		std::uint32_t written;
+		std::uint32_t padding[2];
+	};
+	static_assert(sizeof(BindlessShading) == 64);
+
+	/**
+	 * @brief An object's shading from its Lighting property now (BSLightingShader::SetupGeometry's MaterialData, EmitColor and
+	 * SSRParams.w for a_pass, and Linear Lighting's multiplier), unwritten components zero; its wetness left as it is. a_member: a
+	 * scene member's (SceneStore's resident records), whose fades are DCLF's (FadeStateCS) and so not in its alpha. Any thread
+	 * inside the engine-read window (plain reads of the property).
+	 */
+	void SampleShading(const RE::BSLightingShaderProperty& a_property, std::uint32_t a_pass, bool a_member, BindlessShading& a_out);
 	// BindlessObject::recordFlags (DCLFObjects.hlsli, DCLFRecordFlags): Subsurface Scattering's IsBeastRace (kObjectBeastRace).
 	inline constexpr std::uint32_t kRecordBeastRace = 1u << 0;
 	// ... and an alpha-tested object whose alpha property blends (kObjectAlphaBlended): the depth pass's reference (Utility.hlsl).
@@ -223,8 +281,8 @@ namespace DCLF
 	{
 		float world[12];
 		float previousWorld[12];
-		// The culling's (BuildDrawsCS): the world bound (centre, radius) and the sun entry's sphere (SceneStore::Tables::sunEntry;
-		// radius +max when it has none, inside every process).
+		// The culling's (BuildDrawsCS): the world bound (centre, radius) and the sun entry's sphere (SceneStore::ResolveSunEntry's
+		// node; radius +max when it has none, inside every process).
 		float bound[4];
 		float sunEntry[4];
 		// The fade node (LodFadeNodeOf): its world bound centre, and in w its LOD type plus kLodFadeHeld when the LOD fades do not
@@ -237,14 +295,18 @@ namespace DCLF
 	static_assert(offsetof(BindlessPlacement, bound) == 6 * 16 && offsetof(BindlessPlacement, sunEntry) == 7 * 16 && offsetof(BindlessPlacement, lodFadeNode) == 8 * 16);
 
 	/**
-	 * @brief Fills one, from the same inputs PatchObjectGeometry writes into a packed group.
-	 * a_boneRegion: the bone rows' layout the record addresses (the buffer's: SceneSizing::boneRegion), its previous palette and
-	 * extras past it; ~0u: the tables' own capacity.
+	 * @brief Where a palette block's rows are in the frame's palettes (FrameValues): the block at a_offset (Tables::boneOffset, in
+	 * rows) of a_rows rows holds its current palette at twice the offset, then the previous one. Blocks never overlap, so neither do
+	 * these, and nothing else moves them.
 	 */
-	void BuildObjectRecord(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, std::uint32_t a_renderFlags, BindlessObject& a_out,
-		std::uint32_t a_boneRegion = ~0u);
-	/** @brief Fills an object's placement row from the tables (render flag 0x10: the previous transform is the current one). */
-	void BuildPlacementRow(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, std::uint32_t a_renderFlags, BindlessPlacement& a_out);
+	struct PaletteRows
+	{
+		std::uint32_t current = 0, previous = 0;
+	};
+	constexpr PaletteRows PaletteRowsOf(std::uint32_t a_offset, std::uint32_t a_rows) { return { 2 * a_offset, 2 * a_offset + a_rows }; }
+
+	/** @brief Fills one, from the same inputs PatchObjectGeometry writes into a packed group (its shading is a BindlessShading). */
+	void BuildObjectRecord(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, std::uint32_t a_renderFlags, BindlessObject& a_out);
 
 	/** @brief World made relative to an eye the way the engine does it (and the shaders do for a record). */
 	void StoreRelativeTo(float* a_out, const float (&a_world)[12], const RE::NiPoint3& a_eye);

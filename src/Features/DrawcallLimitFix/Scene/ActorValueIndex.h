@@ -21,6 +21,8 @@ namespace DCLF
 		{
 			return group && slot < slots.size() && slots[slot].group == group && slots[slot].identity == identity;
 		}
+		/** @brief Whether the slot is an actor's (in a group). */
+		bool Grouped(std::uint32_t slot) const { return slot < slots.size() && slots[slot].group; }
 		void Clear() { groups.clear(); groupIndex.clear(); slots.clear(); }
 		void Set(std::uint32_t slot, std::uint64_t group, std::uint64_t identity, bool resetValue = false)
 		{

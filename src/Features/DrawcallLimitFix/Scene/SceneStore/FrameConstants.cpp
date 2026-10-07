@@ -1,5 +1,9 @@
 #include "Internal.h"
 
+#include "Features/DrawcallLimitFix/Draws/FrameValues.h"
+
+#include <cmath>
+
 namespace DCLF
 {
 	void SceneStore::Tables::ListMaterialSlot(std::uint32_t a_slot, std::uint32_t a_frame)
@@ -63,7 +67,7 @@ namespace DCLF
 			++stats.frameMaterialSamples;
 			++m.samples;
 			if (auto* view = MaterialSources::CharacterLightView(live, key.second))
-				tables.characterLightView = view;
+				frameCapture.characterLightView = view;
 			if (entry.appliedValid) {
 				MaterialRecord probe = entry.applied;
 				bool floatsChanged = false;
@@ -297,7 +301,9 @@ namespace DCLF
 
 	void SceneStore::RefreshFrameConstants()
 	{
+		ZoneNamedN(frameConstantsZone, "CS.DCLF.FrameConstants", true);
 		{
+			ZoneScopedN("CS.DCLF.FrameConstants.Materials");
 			RefreshFrameMaterials();
 		}
 		CheckMaterialFrame();
@@ -313,20 +319,23 @@ namespace DCLF
 		// component none of them writes keeps its value) and published after them; versioned only when it differs. On a
 		// parity frame each pipeline's reference is kept to compare with what was published.
 		FrameLighting frameLighting;
-		std::memcpy(frameLighting.data(), tables.frameLighting.data(), sizeof(frameLighting));
+		std::memcpy(frameLighting.data(), frameCapture.lighting.data(), sizeof(frameLighting));
 		std::uint32_t lightingWritten = 0;
-		FrameFog frameFog = tables.frameFog;
+		FrameFog frameFog = frameCapture.fog;
 		std::uint32_t fogWritten = 0;
 		auto publishLighting = [&](const GeometryConstants& a_constants) { MergeFrameLighting(a_constants.ps, frameLighting, lightingWritten); };
 		std::vector<std::pair<std::uint32_t, GeometryConstants>> lightingReferences;
 		const bool geometryParityEnabled = SwitchEnabled(Switch::PersistentParity);
 		const bool geometryParityFrame = geometryParityEnabled && ParityDue(frame, 30);
 		geometryStats.checks += geometryParityFrame ? 1u : 0u;
+		TracyCZoneN(pipelinesZone, "CS.DCLF.FrameConstants.Pipelines", true);
+		std::int64_t pipelinesVisited = 0, techniquesEvaluated = 0;
 		for (std::size_t word = 0; word < tables.usedPipelineBits.size(); ++word) {
 			for (std::uint64_t remaining = tables.usedPipelineBits[word]; remaining; remaining &= remaining - 1) {
 				const std::uint32_t i = static_cast<std::uint32_t>(word * 64 + std::countr_zero(remaining));
 				if (i >= tables.pipelines.size() || i >= tables.geometryTemplate.size())
 					continue;
+				++pipelinesVisited;
 				// The technique constants are the frame's (fog, settings, and the shadow mask's view), so a
 				// pipeline slot that outlives the frame takes them fresh here, as it did when the pipeline
 				// table was rebuilt every frame. Serving the slot's first evaluation instead was both a parity
@@ -337,6 +346,7 @@ namespace DCLF
 				auto& row = tables.techniques[tables.pipelineTechnique[i]];
 				if (row.evaluated != frame) {
 					row.evaluated = frame;
+					++techniquesEvaluated;
 					TechniqueConstants now;
 					EvaluateTechnique(tables.pipelines[i].passDescriptor, now);
 					// The fog is the frame's (FrameFog): taken for the frame, and the row keeps its own, so the time of
@@ -427,11 +437,13 @@ namespace DCLF
 				}
 			}
 		}
+		TracyCZoneEnd(pipelinesZone);
+		TracyPlot("CS.DCLF.FrameConstants.Pipelines", pipelinesVisited);
+		TracyPlot("CS.DCLF.FrameConstants.Techniques", techniquesEvaluated);
 		if (fogWritten)
-			tables.frameFog = frameFog;
-		if (lightingWritten && std::memcmp(frameLighting.data(), tables.frameLighting.data(), sizeof(frameLighting)) != 0) {
-			std::memcpy(tables.frameLighting.data(), frameLighting.data(), sizeof(frameLighting));
-			tables.frameLightingVersion = ++tables.frameLightingCounter;
+			frameCapture.fog = frameFog;
+		if (lightingWritten && std::memcmp(frameLighting.data(), frameCapture.lighting.data(), sizeof(frameLighting)) != 0) {
+			std::memcpy(frameCapture.lighting.data(), frameLighting.data(), sizeof(frameLighting));
 			++geometryStats.lightingVersions;
 		}
 		for (const auto& [pipeline, reference] : lightingReferences) {
@@ -445,160 +457,46 @@ namespace DCLF
 		}
 		++geometryStats.frames;
 
-		// Per-object shading is resampled here by event, at the last point before the draw: candle and chandelier emissives
-		// flicker, and sampling them at EarlyPrepass instead of here put them far enough from the draw that capture parity's
-		// 0.1% tolerance on EmitColor stopped covering the difference. The events: the controllers' writes of the emissive
-		// colour and multiplier and of material fields (MaterialSources), the LOD fades and the alpha GetRenderPasses leaves
-		// on the property (an actor's fade among them; lodFadeEvents), and external emittance's shared colour
-		// (emittanceEvents). ProjectedUV's and land blend's extras rows follow the eye and a clock (Tables::watched).
-		auto refreshExtras = [&](std::uint32_t o) {
-			if (tables.objects[o].flags & (kObjectProjectedUV | kObjectLandBlend)) {
-				const auto* geometry = tables.objectGeometry[o];
-				auto* property = SlotProperty(o);
-				if (property && !(tables.objects[o].flags & kObjectNoBindings))
-					RefreshObjectExtras(o, *static_cast<RE::BSLightingShaderProperty*>(property), *geometry);
-			}
-		};
-		std::uint64_t resampled = 0;
-		// The dependents of the event keys (properties, emittance colours), resampled; their slots into a_slots when given.
-		auto resampleKeys = [&](const std::vector<const void*>& a_keys, std::vector<std::uint32_t>* a_slots) {
-			for (const void* key : a_keys) {
-				const auto dependents = propertyDependents.find(key);
-				if (dependents == propertyDependents.end())
-					continue;
-				for (auto* geometry : dependents->second) {
-					const auto it = tracked.find(geometry);
-					if (it == tracked.end() || it->second.slot == kNoObjectSlot || it->second.objectStamp != objectStamp)
-						continue;
-					for (const std::uint32_t slot : { it->second.slot, it->second.layerSlot }) {
-						if (slot == kNoObjectSlot)
-							continue;
-						ResampleShading(slot, true);
-						++resampled;
-						if (a_slots)
-							a_slots->push_back(slot);
-					}
-				}
-			}
-		};
-		if (!constantsRefreshed || !lodFadeEventsInstalled) {
-			constantsRefreshed = true;
+		// The objects' shading is FrameValues' (BindlessShading), sampled at the frame's start for the slots the walk names by their
+		// events (NameShadingEvents), and their extras' static rows are written by the same events: nothing of either is sampled here.
+		// Every pipeline was evaluated in full once: from the next frame, the frame's one sample.
+		constantsRefreshed = true;
+		++shadingParity.frames;
+		if (SwitchEnabled(Switch::PersistentParity) && ParityDue(frame) && lodFadeEventsInstalled) {
+			auto& ep = extrasParity;
+			const auto frameInputs = SampleExtrasFrame();
+			std::array<float, kExtraRows * 4> reference{}, completed{};
 			for (std::uint32_t o = 0; o < tables.objects.size() && o < tables.objectGeometry.size(); ++o) {
-				ResampleShading(o, true);
-				refreshExtras(o);
-			}
-			resampled += tables.objects.size();
-		} else {
-			auto& watched = tables.watched;
-			for (std::size_t i = 0; i < watched.Size();) {
-				const std::uint32_t o = watched.list[i];
-				auto& bits = tables.shadingWatch[o];
-				if (o >= tables.objects.size() || (tables.objects[o].flags & kObjectFree) || !bits) {
-					bits = 0;
-					watched.RemoveAt(i);
+				if ((tables.objects[o].flags & (kObjectFree | kObjectNoBindings)) || !(tables.objects[o].flags & (kObjectProjectedUV | kObjectLandBlend)) ||
+					!tables.objectGeometry[o] || o >= tables.extraOffset.size() || tables.extraOffset[o] == kNoExtraRows)
 					continue;
+				float* held = &tables.extraRows[std::size_t(tables.extraOffset[o]) * 4];
+				const std::array<float, kExtraRows * 4> before = [&] { std::array<float, kExtraRows * 4> copy; std::memcpy(copy.data(), held, sizeof(copy)); return copy; }();
+				if (WriteObjectExtras(o)) {
+					++ep.staleStatic;
+					std::memcpy(held, before.data(), sizeof(before));
 				}
-				if (bits & Tables::kWatchExtras)
-					refreshExtras(o);
-				++resampled;
-				++i;
-			}
-			lodFadeChanged.clear();
-			DrainLodFadeEvents(lodFadeChanged);
-			const std::size_t lodFades = lodFadeChanged.size();
-			DrainEmittanceEvents(lodFadeChanged);
-			shadingParity.emittanceEvents += lodFadeChanged.size() - lodFades;
-			MaterialSources::DrainShadingChanges(lodFadeChanged);
-			std::sort(lodFadeChanged.begin(), lodFadeChanged.end());
-			lodFadeChanged.erase(std::unique(lodFadeChanged.begin(), lodFadeChanged.end()), lodFadeChanged.end());
-			shadingParity.lodFadeEvents += lodFadeChanged.size();
-			resampleKeys(lodFadeChanged, nullptr);
-		}
-		// The watch's completeness: every slot sampled against what the tables hold now.
-		const bool shadingParityEnabled = SwitchEnabled(Switch::PersistentParity);
-		auto& sp = shadingParity;
-		++sp.frames;
-		sp.watched += tables.watched.Size();
-		sp.resampled += resampled;
-		if (shadingParityEnabled && ParityDue(frame) && lodFadeEventsInstalled) {
-			++sp.checks;
-			std::vector<std::uint32_t> changed;
-			for (std::uint32_t o = 0; o < tables.objects.size() && o < tables.objectGeometry.size(); ++o) {
-				if ((tables.objects[o].flags & (kObjectFree | kObjectNoBindings)) || !tables.objectGeometry[o])
+				if (!ReferenceExtras(o, reference.data()))
 					continue;
-				++sp.slots;
-				if (ResampleShading(o, false))
-					changed.push_back(o);
-			}
-			// A write after the drain above (the animation job runs the controllers alongside the render thread) is not missed:
-			// its event is queued. Those events are taken now, and their dependents resampled, so each changed slot is either one.
-			std::vector<const void*> late;
-			DrainLodFadeEvents(late);
-			DrainEmittanceEvents(late);
-			MaterialSources::DrainShadingChanges(late);
-			std::sort(late.begin(), late.end());
-			late.erase(std::unique(late.begin(), late.end()), late.end());
-			std::vector<std::uint32_t> covered;
-			resampleKeys(late, &covered);
-			std::sort(covered.begin(), covered.end());
-			for (const std::uint32_t o : changed) {
-				if (std::binary_search(covered.begin(), covered.end(), o)) {
-					++sp.late;
+				BindlessPlacement placement;
+				if (!FrameValues::SampleSlot(tables, o, placement))
 					continue;
-				}
-				if (sp.missing++ == 0) {
+				CompleteExtras(held, tables.objects[o].flags, placement.world, frameInputs, completed.data());
+				++ep.objects;
+				float worst = 0.0f;
+				for (std::size_t c = 0; c < completed.size(); ++c)
+					worst = std::max(worst, std::abs(completed[c] - reference[c]));
+				ep.maxDifference = std::max(ep.maxDifference, worst);
+				// TextureProj's translation column: the engine subtracts the eye and adds it back, the draw does not (an ulp of the
+				// world position).
+				if (worst > 0.05f && ep.differ++ == 0) {
 					const auto* geometry = tables.objectGeometry[o];
-					const auto& held = tables.shading[o];
-					float emissiveMult = 0.0f;
-					LightingDescriptors descriptors;
-					descriptors.pass = tables.pipelines[tables.objects[o].pipelineIndex].passDescriptor;
-					descriptors.technique = (descriptors.pass >> 24) & 0x3f;
-					const auto& lighting = *static_cast<RE::BSLightingShaderProperty*>(SlotProperty(o));
-					descriptors.specularLODFade = lighting.specularLODFade;
-					descriptors.envmapLODFade = lighting.envmapLODFade;
-					const auto now = MakeShading(lighting, descriptors, kMainPassRenderFlags, emissiveMult, IsResidentSlot(o));
-					sp.first = fmt::format("slot {} '{}' (watch {:#x}, flags {:#x}): material data ({} {} {}) against ({} {} {}), emit ({} {} {}) against ({} {} {}), mult {} against {}",
-						o, geometry->name.c_str() ? geometry->name.c_str() : "", o < tables.shadingWatch.size() ? tables.shadingWatch[o] : 0, tables.objects[o].flags,
-						now.materialData[0], now.materialData[1], now.materialData[2], held.materialData[0],
-						held.materialData[1], held.materialData[2], now.emitColor[0], now.emitColor[1], now.emitColor[2], held.emitColor[0], held.emitColor[1],
-						held.emitColor[2], emissiveMult, tables.emissiveMult[o]);
+					ep.first = fmt::format("slot {} '{}' (flags {:#x}): differs by {}", o, geometry->name.c_str() ? geometry->name.c_str() : "?", tables.objects[o].flags, worst);
 				}
 			}
 		}
-
-		// Advanced Skin's wetness, per actor-owned object. Skin::GetWetness keeps each actor's fading state and
-		// computes it once a frame (the first call; later ones, including its own SetupGeometry hook for the draws
-		// the engine still makes this frame, return the same value), so calling it here for every actor in the
-		// tables advances every actor's fade once a frame, whether or not the engine draws it.
-		ZoneScopedN("CS.DCLF.Capture.Wetness");
-		auto& skin = globals::features::skin;
-		const bool wetness = skin.loaded && skin.settings.EnableSkin;
-		const auto wetnessStats = tables.actorWetness.Update([&](std::uint32_t o) {
-			auto* geometry = tables.objectGeometry[o];
-			const float4 value = wetness && geometry ? skin.GetWetness(geometry) : float4{};
-			return ActorValueIndex::Value{ value.x, value.y, value.z, value.w };
-		}, [&](std::uint32_t o, const auto& row) {
-			if (std::memcmp(row.data(), tables.skinWetness[o].data(), sizeof(row)) != 0) {
-				tables.skinWetness[o] = row;
-				tables.NoteChange(o, kChangeShading);
-			}
-		});
-		TracyPlot("CS.DCLF.Wetness.Actors", static_cast<std::int64_t>(wetnessStats.actors));
-		TracyPlot("CS.DCLF.Wetness.ChangedActors", static_cast<std::int64_t>(wetnessStats.changed));
-		TracyPlot("CS.DCLF.Wetness.VisitedMeshes", static_cast<std::int64_t>(wetnessStats.visited));
-		if (shadingParityEnabled && ParityDue(frame)) {
-			// Same-frame cached Skin outputs: this neither advances fade twice nor
-			// compares against a later engine update.
-			std::uint32_t mismatches = wetnessStats.members != tables.actorObjects.size();
-			for (const auto o : tables.actorObjects) {
-				mismatches += !tables.actorWetness.Contains(o, tables.objectGroup[o], tables.objectIdentity[o]);
-				const float4 value = wetness && tables.objectGeometry[o] ? skin.GetWetness(tables.objectGeometry[o]) : float4{};
-				const ActorValueIndex::Value reference{ value.x, value.y, value.z, value.w };
-				mismatches += std::memcmp(reference.data(), tables.skinWetness[o].data(), sizeof(reference)) != 0;
-			}
-			logger::info("[DCLF] actor wetness index parity: {} meshes, {} actors, {} propagated, {} differ",
-				tables.actorObjects.size(), wetnessStats.actors, wetnessStats.visited, mismatches);
-		}
+		if (SwitchEnabled(Switch::PersistentParity) && ParityDue(frame))
+			CheckShadingParity();
 	}
 
 	void SceneStore::CheckFrameGeometry(std::uint32_t a_pipeline, const GeometryConstants& a_reference, const GeometryConstants& a_held)
@@ -625,127 +523,199 @@ namespace DCLF
 		}
 	}
 
-	bool SceneStore::ResampleShading(std::uint32_t a_slot, bool a_write)
+	void SceneStore::NameShading(std::uint32_t a_slot, bool a_member)
 	{
-		if (a_slot >= tables.objects.size() || a_slot >= tables.objectGeometry.size())
-			return false;
+		if (a_slot >= tables.objects.size() || a_slot >= tables.objectGeometry.size() || (tables.objects[a_slot].flags & (kObjectNoBindings | kObjectFree)))
+			return;
 		auto* property = SlotProperty(a_slot);
-		if (!property || (tables.objects[a_slot].flags & (kObjectNoBindings | kObjectFree)))
-			return false;
-		const std::uint32_t passDescriptor = tables.pipelines[tables.objects[a_slot].pipelineIndex].passDescriptor;
-		LightingDescriptors descriptors;
-		descriptors.pass = passDescriptor;
-		descriptors.technique = (passDescriptor >> 24) & 0x3f;
-		const auto& lighting = *static_cast<RE::BSLightingShaderProperty*>(property);
-		descriptors.specularLODFade = lighting.specularLODFade;
-		descriptors.envmapLODFade = lighting.envmapLODFade;
-		float emissiveMult = tables.emissiveMult[a_slot];
-		const auto shading = MakeShading(lighting, descriptors, kMainPassRenderFlags, emissiveMult, IsResidentSlot(a_slot));
-		if (std::memcmp(&shading, &tables.shading[a_slot], sizeof(shading)) == 0 && std::bit_cast<std::uint32_t>(emissiveMult) == std::bit_cast<std::uint32_t>(tables.emissiveMult[a_slot]))
-			return false;
-		if (a_write) {
-			tables.shading[a_slot] = shading;
-			tables.emissiveMult[a_slot] = emissiveMult;
-			tables.NoteChange(a_slot, kChangeShading);
-		}
-		return true;
+		if (!property)
+			return;
+		auto& item = shadingNamed.emplace_back();
+		item.property.reset(property);
+		item.slot = a_slot;
+		item.pass = tables.pipelines[tables.objects[a_slot].pipelineIndex].passDescriptor;
+		item.member = a_member;
+		item.actor = tables.actorWetness.Grouped(a_slot);
 	}
 
-	void SceneStore::RefreshObjectExtras(std::size_t a_object, const RE::BSLightingShaderProperty& a_property, const RE::BSGeometry& a_geometry)
+	void SceneStore::NameShadingKeys(const std::vector<const void*>& a_keys, std::vector<std::uint32_t>* a_slots)
 	{
-		if (a_object >= tables.extraOffset.size() || tables.extraOffset[a_object] == kNoExtraRows)
-			return;
-		float* rows = &tables.extraRows[std::size_t(tables.extraOffset[a_object]) * 4];
-		std::array<float, kExtraRows * 4> before;
-		std::memcpy(before.data(), rows, sizeof(before));
-		// Noted when the rows come out different (on every return below).
-		struct Note
-		{
-			Tables& tables;
-			std::uint32_t slot;
-			const float* rows;
-			const std::array<float, kExtraRows * 4>& before;
-			~Note()
-			{
-				if (std::memcmp(before.data(), rows, sizeof(before)) != 0)
-					tables.NoteChange(slot, kChangeExtras);
+		for (const void* key : a_keys) {
+			const auto dependents = propertyDependents.find(key);
+			if (dependents == propertyDependents.end())
+				continue;
+			for (auto* geometry : dependents->second) {
+				const auto it = tracked.find(geometry);
+				if (it == tracked.end() || it->second.slot == kNoObjectSlot || it->second.objectStamp != objectStamp)
+					continue;
+				for (const std::uint32_t slot : { it->second.slot, it->second.layerSlot }) {
+					if (slot == kNoObjectSlot || slot >= tables.objects.size())
+						continue;
+					NameShading(slot, IsResidentSlot(slot));
+					// The extras' static rows read the same property fields (ProjectedUV's parameters and colour).
+					if ((tables.objects[slot].flags & (kObjectProjectedUV | kObjectLandBlend)) && WriteObjectExtras(slot))
+						tables.NoteChange(slot, kChangeExtras);
+					++shadingParity.resampled;
+					if (a_slots)
+						a_slots->push_back(slot);
+				}
 			}
-		} note{ tables, static_cast<std::uint32_t>(a_object), rows, before };
-		const auto& object = tables.objects[a_object];
-		auto& state = globals::game::shadowState->GetRuntimeData();
-		const auto eye = state.posAdjust.getEye();
-
-		if (object.flags & kObjectLandBlend) {
-			// BSLightingShader::SetupGeometry, techniques 8 and 19 (engine notes: per-object constants):
-			// xy from the landscape material, zw a blend between two BSShaderManager::State positions by
-			// a clock the same state holds, minus the geometry's world translation. Module-relative reads.
-			static const REL::Relocation<std::uintptr_t> blendClock{ REL::Offset(0x2033080) };
-			static const REL::Relocation<std::uintptr_t> blendClockStart{ REL::Offset(0x2033118) };
-			static const REL::Relocation<std::uintptr_t> blendDuration{ REL::Offset(0x20330f8) };
-			static const REL::Relocation<std::uintptr_t> blendRate{ REL::Offset(0x1ad2840) };
-			static const REL::Relocation<std::uintptr_t> blendFromX{ REL::Offset(0x2033108) };
-			static const REL::Relocation<std::uintptr_t> blendFromY{ REL::Offset(0x203310c) };
-			static const REL::Relocation<std::uintptr_t> blendToX{ REL::Offset(0x2033110) };
-			static const REL::Relocation<std::uintptr_t> blendToY{ REL::Offset(0x2033114) };
-			float t = (GlobalFloatAt(blendClock) - GlobalFloatAt(blendClockStart)) * (GlobalFloatAt(blendRate) / GlobalFloatAt(blendDuration));
-			if (t <= 0.0f)
-				t = 0.0f;
-			if (1.0f <= t)
-				t = 1.0f;
-			const float x = (GlobalFloatAt(blendToX) - GlobalFloatAt(blendFromX)) * t + GlobalFloatAt(blendFromX);
-			const float y = (GlobalFloatAt(blendToY) - GlobalFloatAt(blendFromY)) * t + GlobalFloatAt(blendFromY);
-			const auto* material = static_cast<const RE::BSLightingShaderMaterialLandscape*>(a_property.material);
-			float* land = rows + kExtraRowLandBlend * 4;
-			land[0] = material ? material->landBlendParams.red : 0.0f;
-			land[1] = material ? material->landBlendParams.green : 0.0f;
-			land[2] = x - a_geometry.world.translate.x;
-			land[3] = y - a_geometry.world.translate.y;
 		}
+	}
 
-		if (object.flags & kObjectProjectedUV) {
-			// The texture matrix, as SetupGeometry builds it for a ProjectedUV pass (engine notes): the
-			// projection is a fixed rotation about Z placed at posAdjust, converted with the engine's own
-			// NiTransform-to-matrix routine (which subtracts posAdjust, so its translation is zero); for
-			// every technique but Envmap it is multiplied onto the geometry's world matrix, converted the
-			// same way and with posAdjust added back. The engine's two routines are called so that the
-			// result is the native one to the bit, and this runs at Prepass so posAdjust is the main
-			// camera's. TextureProj's rows are the product's columns.
-			using ToMatrix = void (*)(float*, const RE::NiTransform*);
-			using Multiply = void* (*)(float*, const float*, const float*);
-			static const REL::Relocation<ToMatrix> toMatrix{ REL::Offset(0x14aaf10) };
-			static const REL::Relocation<Multiply> multiply{ REL::Offset(0x153d3c8) };
-			RE::NiTransform projection;
-			projection.rotate.entry[0][0] = 0.0f;
-			projection.rotate.entry[0][1] = 1.0f;
-			projection.rotate.entry[0][2] = 0.0f;
-			projection.rotate.entry[1][0] = -1.0f;
-			projection.rotate.entry[1][1] = 0.0f;
-			projection.rotate.entry[1][2] = 0.0f;
-			projection.rotate.entry[2][0] = 0.0f;
-			projection.rotate.entry[2][1] = 0.0f;
-			projection.rotate.entry[2][2] = 1.0f;
-			projection.translate = eye;
-			projection.scale = 1.0f;
-			float p[16], m[16];
-			toMatrix(p, &projection);
-			const std::uint32_t technique = (tables.pipelines[object.pipelineIndex].passDescriptor >> 24) & 0x3f;
-			if (technique == 1) {
-				std::memcpy(m, p, sizeof(m));
-			} else {
-				float w[16];
-				toMatrix(w, &a_geometry.world);
-				w[12] += eye.x;
-				w[13] += eye.y;
-				w[14] += eye.z;
-				multiply(m, w, p);
+	void SceneStore::NameShadingEvents(std::vector<std::uint32_t>* a_slots)
+	{
+		// The events: the controllers' writes of the emissive colour and multiplier and of material fields (MaterialSources), the
+		// LOD fades and the alpha GetRenderPasses leaves on the property (an actor's fade among them; lodFadeEvents), and external
+		// emittance's shared colour (emittanceEvents). Their dependents are sampled at the next frame's start: a value that changes
+		// during this frame (a controller on the animation job, a cull's GetRenderPasses) is drawn from the next frame on, a frame
+		// after the engine's own draw would show it (dclf-async-publication.md, "Accepted differences").
+		lodFadeChanged.clear();
+		DrainLodFadeEvents(lodFadeChanged);
+		const std::size_t lodFades = lodFadeChanged.size();
+		DrainEmittanceEvents(lodFadeChanged);
+		shadingParity.emittanceEvents += lodFadeChanged.size() - lodFades;
+		MaterialSources::DrainShadingChanges(lodFadeChanged);
+		if (!shadingNamedAll || !lodFadeEventsInstalled) {
+			// Every slot (the events are not installed: every walk).
+			shadingNamedAll = true;
+			for (std::uint32_t o = 0; o < tables.objects.size() && o < tables.objectGeometry.size(); ++o) {
+				NameShading(o, IsResidentSlot(o));
+				if ((tables.objects[o].flags & (kObjectProjectedUV | kObjectLandBlend)) && WriteObjectExtras(o))
+					tables.NoteChange(o, kChangeExtras);
 			}
-			float* proj = rows + kExtraRowTextureProj * 4;
+			shadingParity.resampled += tables.objects.size();
+			return;
+		}
+		std::sort(lodFadeChanged.begin(), lodFadeChanged.end());
+		lodFadeChanged.erase(std::unique(lodFadeChanged.begin(), lodFadeChanged.end()), lodFadeChanged.end());
+		shadingParity.lodFadeEvents += lodFadeChanged.size();
+		NameShadingKeys(lodFadeChanged, a_slots);
+	}
+
+	std::vector<SceneStore::WetnessValue> SceneStore::CaptureWetness()
+	{
+		// Advanced Skin's wetness, per actor-owned object. Skin::GetWetness keeps each actor's fading state and computes it once a
+		// frame (the first call; later ones, including its own SetupGeometry hook for the draws the engine still makes this frame,
+		// return the same value), so calling it here for every actor in the tables advances every actor's fade once a frame,
+		// whether or not the engine draws it. Its cache is not thread-safe: the render thread's, at the frame's start.
+		ZoneScopedN("CS.DCLF.Capture.Wetness");
+		std::vector<WetnessValue> values;
+		auto& skin = globals::features::skin;
+		const bool wetness = skin.loaded && skin.settings.EnableSkin;
+		const auto wetnessStats = tables.actorWetness.Update([&](std::uint32_t o) {
+			auto* geometry = o < tables.objectGeometry.size() ? tables.objectGeometry[o] : nullptr;
+			const float4 value = wetness && geometry ? skin.GetWetness(geometry) : float4{};
+			return ActorValueIndex::Value{ value.x, value.y, value.z, value.w };
+		}, [&](std::uint32_t o, const auto& row) { values.push_back({ o, row }); });
+		TracyPlot("CS.DCLF.Wetness.Actors", static_cast<std::int64_t>(wetnessStats.actors));
+		TracyPlot("CS.DCLF.Wetness.ChangedActors", static_cast<std::int64_t>(wetnessStats.changed));
+		TracyPlot("CS.DCLF.Wetness.VisitedMeshes", static_cast<std::int64_t>(wetnessStats.visited));
+		return values;
+	}
+
+	void SceneStore::CheckShadingParity()
+	{
+		auto& sp = shadingParity;
+		// A diagnostics frame: waits for the frame's values.
+		const auto* rows = FrameValues::Get().ShadingIfDone(true);
+		if (!rows || !lodFadeEventsInstalled)
+			return;
+		++sp.checks;
+		// Named for the next frame: by the walk (its events) and the accumulate phase, this frame.
+		std::vector<std::uint8_t> named(tables.objects.size(), 0);
+		for (const auto& item : shadingNamed)
+			if (item.slot < named.size())
+				named[item.slot] = 1;
+		std::vector<std::uint32_t> changed;
+		for (std::uint32_t o = 0; o < tables.objects.size() && o < tables.objectGeometry.size() && o < rows->size(); ++o) {
+			if ((tables.objects[o].flags & (kObjectFree | kObjectNoBindings)) || !tables.objectGeometry[o])
+				continue;
+			const auto* property = static_cast<const RE::BSLightingShaderProperty*>(SlotProperty(o));
+			if (!property)
+				continue;
+			++sp.slots;
+			BindlessShading now = (*rows)[o];
+			SampleShading(*property, tables.pipelines[tables.objects[o].pipelineIndex].passDescriptor, IsResidentSlot(o), now);
+			if (std::memcmp(&now, &(*rows)[o], sizeof(now)) != 0)
+				changed.push_back(o);
+		}
+		// A write after the walk took the events (the animation job runs the controllers alongside the render thread; the culls'
+		// GetRenderPasses) is not missed: its event is queued. Those events are taken now and their dependents named for the next
+		// frame, so each changed slot is named, queued or missed.
+		std::vector<const void*> late;
+		DrainLodFadeEvents(late);
+		DrainEmittanceEvents(late);
+		MaterialSources::DrainShadingChanges(late);
+		std::sort(late.begin(), late.end());
+		late.erase(std::unique(late.begin(), late.end()), late.end());
+		std::vector<std::uint32_t> covered;
+		NameShadingKeys(late, &covered);
+		std::sort(covered.begin(), covered.end());
+		for (const std::uint32_t o : changed) {
+			if (named[o]) {
+				++sp.named;
+				continue;
+			}
+			if (std::binary_search(covered.begin(), covered.end(), o)) {
+				++sp.late;
+				continue;
+			}
+			if (sp.missing++ == 0) {
+				const auto* geometry = tables.objectGeometry[o];
+				const auto& held = (*rows)[o];
+				BindlessShading now = held;
+				SampleShading(*static_cast<const RE::BSLightingShaderProperty*>(SlotProperty(o)), tables.pipelines[tables.objects[o].pipelineIndex].passDescriptor,
+					IsResidentSlot(o), now);
+				sp.first = fmt::format("slot {} '{}' (flags {:#x}): material data ({} {} {}) against ({} {} {}), emit ({} {} {}) against ({} {} {}), mult {} against {}",
+					o, geometry->name.c_str() ? geometry->name.c_str() : "", tables.objects[o].flags, now.shading.materialData[0], now.shading.materialData[1],
+					now.shading.materialData[2], held.shading.materialData[0], held.shading.materialData[1], held.shading.materialData[2], now.shading.emitColor[0],
+					now.shading.emitColor[1], now.shading.emitColor[2], held.shading.emitColor[0], held.shading.emitColor[1], held.shading.emitColor[2], now.emissiveMult,
+					held.emissiveMult);
+			}
+		}
+		// The wetness, as the frame's start captured it (Skin::GetWetness's same-frame value: no second advance): a mesh named this
+		// frame (joined, or its record rewritten) takes its value with the next frame's capture.
+		auto& skin = globals::features::skin;
+		const bool wetness = skin.loaded && skin.settings.EnableSkin;
+		for (const auto o : tables.actorObjects) {
+			if (o >= rows->size() || o >= named.size() || named[o] || !tables.objectGeometry[o])
+				continue;
+			++sp.wetness;
+			const float4 value = wetness ? skin.GetWetness(tables.objectGeometry[o]) : float4{};
+			const float expected[4] = { value.x, value.y, value.z, value.w };
+			sp.wetnessDiffer += std::memcmp(expected, (*rows)[o].skinPerGeometry, sizeof(expected)) != 0;
+		}
+	}
+
+	bool SceneStore::WriteObjectExtras(std::uint32_t a_object)
+	{
+		if (a_object >= tables.extraOffset.size() || tables.extraOffset[a_object] == kNoExtraRows || a_object >= tables.objectGeometry.size())
+			return false;
+		const auto& object = tables.objects[a_object];
+		const auto* geometry = tables.objectGeometry[a_object];
+		const auto* property = static_cast<const RE::BSLightingShaderProperty*>(SlotProperty(a_object));
+		if (!geometry || !property || (object.flags & kObjectNoBindings))
+			return false;
+		// What of the rows is the object's alone (CompleteExtras adds the frame's): the land blend's material offset; how its
+		// TextureProj is made, and a multi-index shape's own; the ProjectedUV parameters.
+		std::array<float, kExtraRows * 4> rows{};
+		if (object.flags & kObjectLandBlend) {
+			const auto* material = static_cast<const RE::BSLightingShaderMaterialLandscape*>(property->material);
+			rows[kExtraRowLandBlend * 4 + 0] = material ? material->landBlendParams.red : 0.0f;
+			rows[kExtraRowLandBlend * 4 + 1] = material ? material->landBlendParams.green : 0.0f;
+		}
+		if (object.flags & kObjectProjectedUV) {
+			const auto* multiIndex = const_cast<RE::BSGeometry*>(geometry)->GetType().get() == RE::BSGeometry::Type::kMultiIndexTriShape ?
+			                             &static_cast<const RE::BSMultiIndexTriShape*>(geometry)->GetMultiIndexTrishapeRuntimeData() :
+			                             nullptr;
+			const std::uint32_t technique = (tables.pipelines[object.pipelineIndex].passDescriptor >> 24) & 0x3f;
+			if (!(object.flags & kObjectLandBlend))
+				rows[kExtraRowLandBlend * 4] = multiIndex ? kTextureProjShape : technique == 1 ? kTextureProjProjection : kTextureProjWorld;
 			// A multi-index shape's passes take the shape's own projection (SetupGeometry's ProjectedUV block, engine notes):
 			// materialProjection's columns, as stored.
-			const auto* multiIndex = const_cast<RE::BSGeometry&>(a_geometry).GetType().get() == RE::BSGeometry::Type::kMultiIndexTriShape ?
-			                             &static_cast<const RE::BSMultiIndexTriShape&>(a_geometry).GetMultiIndexTrishapeRuntimeData() :
-			                             nullptr;
 			if (multiIndex) {
+				float* proj = rows.data() + kExtraRowTextureProj * 4;
 				const auto& shapeProjection = multiIndex->materialProjection;
 				for (std::uint32_t r = 0; r < 3; ++r) {
 					proj[r * 4 + 0] = shapeProjection.m[0][r];
@@ -753,24 +723,12 @@ namespace DCLF
 					proj[r * 4 + 2] = shapeProjection.m[2][r];
 					proj[r * 4 + 3] = shapeProjection.m[3][r];
 				}
-			} else {
-				for (std::uint32_t r = 0; r < 3; ++r) {
-					proj[r * 4 + 0] = m[0 + r];
-					proj[r * 4 + 1] = m[4 + r];
-					proj[r * 4 + 2] = m[8 + r];
-					proj[r * 4 + 3] = m[12 + r];
-				}
 			}
-			// The pixel parameters (FUN_1414e00c0): the property's projectedUVParams folded by its w, its
-			// projectedUVColor, and the two tiling globals with the projected-normals switch.
-			static const REL::Relocation<std::uintptr_t> tilingDiffuse{ REL::Offset(0x2035560) };
-			static const REL::Relocation<std::uintptr_t> tilingDetail{ REL::Offset(0x2035578) };
-			static const REL::Relocation<std::uintptr_t> projectedNormals{ REL::Offset(0x2035518) };
-			// A multi-index shape's: its materialParams for the first, its normalDampener and materialScale for the second's xy
-			// (zw unwritten by the engine).
-			const auto& params = multiIndex ? multiIndex->materialParams : a_property.projectedUVParams;
-			const auto& colour = a_property.projectedUVColor;
-			float* out = rows + kExtraRowProjectedParams * 4;
+			// The pixel parameters (FUN_1414e00c0): the property's projectedUVParams folded by its w, its projectedUVColor (a
+			// multi-index shape's materialParams, normalDampener and materialScale); the globals are the frame's (ExtrasFrame).
+			const auto& params = multiIndex ? multiIndex->materialParams : property->projectedUVParams;
+			const auto& colour = property->projectedUVColor;
+			float* out = rows.data() + kExtraRowProjectedParams * 4;
 			const float fade = 1.0f - params.alpha;
 			out[0] = fade * params.red;
 			out[1] = 0.0f;  // never written by the engine
@@ -779,19 +737,85 @@ namespace DCLF
 			if (multiIndex) {
 				out[4] = multiIndex->normalDampener;
 				out[5] = multiIndex->materialScale;
-				out[6] = 0.0f;
-				out[7] = 0.0f;
 			} else {
 				out[4] = colour.red;
 				out[5] = colour.green;
 				out[6] = colour.blue;
 				out[7] = colour.alpha;
 			}
-			out[8] = GlobalFloatAt(tilingDiffuse);
-			out[9] = GlobalFloatAt(tilingDetail);
-			out[10] = 0.0f;
-			out[11] = *reinterpret_cast<const std::uint8_t*>(projectedNormals.address()) ? 1.0f : 0.0f;
 		}
+		float* held = &tables.extraRows[std::size_t(tables.extraOffset[a_object]) * 4];
+		if (std::memcmp(held, rows.data(), sizeof(rows)) == 0)
+			return false;
+		std::memcpy(held, rows.data(), sizeof(rows));
+		return true;
+	}
+
+	bool SceneStore::ReferenceExtras(std::uint32_t a_object, float* a_out)
+	{
+		const auto& object = tables.objects[a_object];
+		const auto* geometry = a_object < tables.objectGeometry.size() ? tables.objectGeometry[a_object] : nullptr;
+		const auto* property = static_cast<const RE::BSLightingShaderProperty*>(SlotProperty(a_object));
+		if (!geometry || !property || (object.flags & kObjectNoBindings))
+			return false;
+		std::fill_n(a_out, kExtraRows * 4, 0.0f);
+		const auto eye = globals::game::shadowState->GetRuntimeData().posAdjust.getEye();
+		const auto frameInputs = SampleExtrasFrame();
+		if (object.flags & kObjectLandBlend) {
+			const auto* material = static_cast<const RE::BSLightingShaderMaterialLandscape*>(property->material);
+			float* land = a_out + kExtraRowLandBlend * 4;
+			land[0] = material ? material->landBlendParams.red : 0.0f;
+			land[1] = material ? material->landBlendParams.green : 0.0f;
+			land[2] = frameInputs.landBlend[0] - geometry->world.translate.x;
+			land[3] = frameInputs.landBlend[1] - geometry->world.translate.y;
+		}
+		if (object.flags & kObjectProjectedUV) {
+			// The texture matrix as SetupGeometry builds it for a ProjectedUV pass (engine notes), through the engine's own routines:
+			// for every technique but Envmap the projection multiplied onto the geometry's world matrix, converted the same way and with
+			// posAdjust added back.
+			using ToMatrix = void (*)(float*, const RE::NiTransform*);
+			using Multiply = void* (*)(float*, const float*, const float*);
+			static const REL::Relocation<ToMatrix> toMatrix{ REL::Offset(0x14aaf10) };
+			static const REL::Relocation<Multiply> multiply{ REL::Offset(0x153d3c8) };
+			const float* p = frameInputs.projection;
+			float m[16];
+			const std::uint32_t technique = (tables.pipelines[object.pipelineIndex].passDescriptor >> 24) & 0x3f;
+			if (technique == 1) {
+				std::memcpy(m, p, sizeof(m));
+			} else {
+				float w[16];
+				toMatrix(w, &geometry->world);
+				w[12] += eye.x;
+				w[13] += eye.y;
+				w[14] += eye.z;
+				multiply(m, w, p);
+			}
+			float* proj = a_out + kExtraRowTextureProj * 4;
+			const auto* multiIndex = const_cast<RE::BSGeometry*>(geometry)->GetType().get() == RE::BSGeometry::Type::kMultiIndexTriShape ?
+			                             &static_cast<const RE::BSMultiIndexTriShape*>(geometry)->GetMultiIndexTrishapeRuntimeData() :
+			                             nullptr;
+			for (std::uint32_t r = 0; r < 3; ++r)
+				for (std::uint32_t c = 0; c < 4; ++c)
+					proj[r * 4 + c] = multiIndex ? multiIndex->materialProjection.m[c][r] : m[c * 4 + r];
+			const auto& params = multiIndex ? multiIndex->materialParams : property->projectedUVParams;
+			const auto& colour = property->projectedUVColor;
+			float* out = a_out + kExtraRowProjectedParams * 4;
+			const float fade = 1.0f - params.alpha;
+			out[0] = fade * params.red;
+			out[2] = params.blue;
+			out[3] = fade * params.green + params.alpha;
+			if (multiIndex) {
+				out[4] = multiIndex->normalDampener;
+				out[5] = multiIndex->materialScale;
+			} else {
+				out[4] = colour.red;
+				out[5] = colour.green;
+				out[6] = colour.blue;
+				out[7] = colour.alpha;
+			}
+			std::memcpy(out + 8, frameInputs.projectedGlobals, sizeof(frameInputs.projectedGlobals));
+		}
+		return true;
 	}
 
 	void SceneStore::NoteProjectedTextures()

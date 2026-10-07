@@ -80,7 +80,7 @@ namespace DCLF
 		std::uint64_t residentVersions = 0, residentResyncs = 0, residentParityChecks = 0, residentParityMismatches = 0, residentMissing = 0;
 		std::uint64_t residentPairsChecked = 0, residentPairsStale = 0;
 		std::array<std::uint64_t, 2> residentLastVersion{};
-		std::uint32_t boneRows = 0;  // bone palette rows uploaded by the last epoch (current and previous)
+		std::uint32_t extraRows = 0;  // extras rows uploaded by the last epoch
 		// What the HZB held under the tested objects: all-near or all-far means the build is wrong.
 		std::uint32_t hzbNear = 0, hzbFar = 0, hzbSampled = 0;
 		// One rejection in full, so an implausible count can be read instead of guessed at.

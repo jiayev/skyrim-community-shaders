@@ -81,7 +81,7 @@ namespace DCLF
 		++tablesGeneration;
 		fullEvaluation = true;
 		memberDecals.clear();
-		memberDecalsChanged = true;
+		NoteDecalsCleared();
 	}
 
 	void SceneStore::CheckObjectSlots(bool a_resolveBuffers)

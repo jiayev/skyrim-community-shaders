@@ -1,6 +1,7 @@
 #include "CaptureParity.h"
 
 #include "Features/DrawcallLimitFix/Common/Switches.h"
+#include "Features/DrawcallLimitFix/Draws/FrameValues.h"
 #include "Features/DrawcallLimitFix/Scene/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Engine/PassCapture.h"
 
@@ -57,7 +58,11 @@ namespace DCLF
 				bits.pixel |= kShadowBits & ~0x1c0u;  // the pixel stage drops the count
 				bits.vertex |= kShadowBits & 0x48007u;  // DefShadow (VertexDescriptorFromPass)
 			}
-			if (a_object < a_tables.lodFade.size() && LodFadesApply(a_tables.lodFade[a_object])) {
+			// The fade node as the engine has it now (a layer's is its layer property's).
+			const auto* geometry = a_object < a_tables.objectGeometry.size() ? a_tables.objectGeometry[a_object] : nullptr;
+			const RE::BSShaderProperty* fadeProperty = !geometry ? nullptr : a_tables.IsLayer(a_object) ? LayerPropertyOf(*geometry) :
+			                                                                                            geometry->GetGeometryRuntimeData().shaderProperty.get();
+			if (geometry && LodFadesApply(LodFadeNodeOf(fadeProperty))) {
 				if (a_pass & 0x200u) {
 					bits.pass |= 0x200u;
 					bits.pixel |= 0x200u;
@@ -287,7 +292,7 @@ namespace DCLF
 			const auto* native = reinterpret_cast<const ID3D11ShaderResourceView*>(state.PSTexture[slot]);
 			const auto nativeMode = static_cast<std::uint32_t>(state.PSTextureAddressMode[slot].underlying());
 			// A character-light pass's t11 is the frame's view (the frame record's kCharacterLightRegister).
-			const auto* view = frameCharacterLight && slot == 11 ? tables.characterLightView : record.textures[slot];
+			const auto* view = frameCharacterLight && slot == 11 ? SceneStore::Get().GetFrameCapture().characterLightView : record.textures[slot];
 			if (native != view || nativeMode != record.addressModes[slot]) {
 				ok = false;
 				NoteMismatch(fmt::format("{} texture slot {}: DCLF {} mode {}, native {} mode {}", Describe(a_geometry), slot,
@@ -306,7 +311,27 @@ namespace DCLF
 
 		// Expected values: the per-frame block for this pass descriptor with the per-object values on top.
 		auto& shadowState = globals::game::shadowState->GetRuntimeData();
-		GeometryConstants expected = ObjectGeometryConstants(tables, a_objectIndex, a_renderFlags, shadowState.posAdjust.getEye(), shadowState.previousPosAdjust.getEye());
+		// The placement the native draw binds: the engine's now (render flag 0x10: the previous transform is the current one).
+		BindlessPlacement placement{};
+		if (!FrameValues::SampleSlot(tables, a_objectIndex, placement))
+			return true;
+		if (a_renderFlags & 0x10)
+			std::memcpy(placement.previousWorld, placement.world, sizeof(placement.world));
+		// The shading the frame draws with (FrameValues, sampled at the frame's start); the engine's now when the property changed
+		// since (the accepted difference: counted, and the sample itself checked).
+		const auto* shadingRows = FrameValues::Get().ShadingIfDone(true);
+		const auto* property = static_cast<const RE::BSLightingShaderProperty*>(SceneStore::Get().SlotPropertyOf(a_objectIndex));
+		if (!shadingRows || a_objectIndex >= shadingRows->size() || !property)
+			return true;
+		BindlessShading shading = (*shadingRows)[a_objectIndex];
+		BindlessShading now = shading;
+		SampleShading(*property, tables.pipelines[object.pipelineIndex].passDescriptor, SceneStore::Get().IsMember(static_cast<std::int32_t>(a_objectIndex)), now);
+		if (std::memcmp(&now, &shading, sizeof(now)) != 0) {
+			++shadingSinceStart;
+			shading = now;
+		}
+		GeometryConstants expected = ObjectGeometryConstants(tables, a_objectIndex, placement, shading, SampleExtrasFrame(), shadowState.posAdjust.getEye(),
+			shadowState.previousPosAdjust.getEye());
 		const auto& vsLayout = LightingVSLayout();
 		const auto& psLayout = LightingPSLayout();
 		// WindTimers.y, the previous wind timer, is not compared. SetupGeometry (AE 1414dd040, case 0xc) copies
@@ -489,8 +514,9 @@ namespace DCLF
 		}
 
 		// b7: what the SetupGeometry hook uploaded for this draw (it binds its buffer only while enabled).
-		if (skin.settings.EnableSkin && a_objectIndex < tables.skinWetness.size()) {
-			const auto& expected = tables.skinWetness[a_objectIndex];
+		const auto* shadingRows = FrameValues::Get().ShadingIfDone(true);
+		if (skin.settings.EnableSkin && shadingRows && a_objectIndex < shadingRows->size()) {
+			const auto& expected = (*shadingRows)[a_objectIndex].skinPerGeometry;
 			const auto& native = skin.currentWetness;
 			++skinWetnessChecks;
 			if (native.x != 0.0f || native.y != 0.0f)
@@ -622,30 +648,32 @@ namespace DCLF
 		if (partition == 0)
 			ComparePermutation(geometry, static_cast<std::uint32_t>(index));
 
-		// Skinned: the palettes the bone setter bound at b10 (current) and b9 (previous), against the rows
-		// BuildFrame copied out of the skin instance after running the same update the setter runs.
-		if ((object.flags & kObjectSkinned) && static_cast<std::size_t>(index) < tables.boneOffset.size() && tables.boneRows[index]) {
+		// Skinned: the palettes the bone setter bound at b10 (current) and b9 (previous), against the frame's palettes (FrameValues,
+		// sampled after the same update the setter runs); not compared while the frame's producer runs.
+		const auto* framePalettes = FrameValues::Get().PalettesIfDone();
+		if ((object.flags & kObjectSkinned) && static_cast<std::size_t>(index) < tables.boneOffset.size() && tables.boneRows[index] && framePalettes) {
 			ID3D11Buffer* boneBuffers[2] = {};
 			a_context->VSGetConstantBuffers(9, 2, boneBuffers);
 			const std::uint32_t rows = tables.boneRows[index];
-			const std::size_t offset = std::size_t(tables.boneOffset[index]) * 4;
-			auto check = [&](ID3D11Buffer* a_buffer, const std::vector<float>& a_rows, const char* a_what) {
+			const auto palette = PaletteRowsOf(tables.boneOffset[index], rows);
+			auto check = [&](ID3D11Buffer* a_buffer, std::uint32_t a_first, const char* a_what) {
 				++boneChecks;
 				const auto mapped = a_buffer ? lastMappedAny.find(a_buffer) : lastMappedAny.end();
-				if (mapped == lastMappedAny.end() || !mapped->second || offset + std::size_t(rows) * 4 > a_rows.size()) {
+				if (mapped == lastMappedAny.end() || !mapped->second || std::size_t(a_first) + rows > framePalettes->size()) {
 					++boneMismatches;
 					NoteMismatch(fmt::format("{} {}: no mapped palette to compare (buffer {}, {} rows)", Describe(geometry), a_what, fmt::ptr(a_buffer), rows));
 					return;
 				}
-				if (std::memcmp(mapped->second, &a_rows[offset], std::size_t(rows) * 16) != 0) {
+				const auto* ours = (*framePalettes)[a_first].v;
+				if (std::memcmp(mapped->second, ours, std::size_t(rows) * 16) != 0) {
 					++boneMismatches;
 					const auto* native = static_cast<const float*>(mapped->second);
 					NoteMismatch(fmt::format("{} {}: row 0 DCLF ({} {} {} {}), native ({} {} {} {}), {} rows", Describe(geometry), a_what,
-						a_rows[offset], a_rows[offset + 1], a_rows[offset + 2], a_rows[offset + 3], native[0], native[1], native[2], native[3], rows));
+						ours[0], ours[1], ours[2], ours[3], native[0], native[1], native[2], native[3], rows));
 				}
 			};
-			check(boneBuffers[1], tables.bones, "Bones (b10)");
-			check(boneBuffers[0], tables.previousBones, "PreviousBones (b9)");
+			check(boneBuffers[1], palette.current, "Bones (b10)");
+			check(boneBuffers[0], palette.previous, "PreviousBones (b9)");
 			for (auto* buffer : boneBuffers) {
 				if (buffer)
 					buffer->Release();
@@ -879,9 +907,11 @@ namespace DCLF
 				Describe(geometry), key.vertexDescriptor, key.pixelDescriptor, state->modifiedVertexDescriptor, state->modifiedPixelDescriptor,
 				a_pass->passEnum, a_pass->shaderProperty ? a_pass->shaderProperty->flags.underlying() : 0ull));
 		}
-		if (!SameTransform(object.world, geometry->world)) {
+		// The frame's placement row (FrameValues), once its producer is done.
+		if (const auto* frameRows = FrameValues::Get().RowsIfDone(); frameRows && static_cast<std::size_t>(index) < frameRows->size() &&
+																	 !SameTransform((*frameRows)[index].world, geometry->world)) {
 			mismatch = true;
-			NoteMismatch(fmt::format("{} world transform changed after the tables were built", Describe(geometry)));
+			NoteMismatch(fmt::format("{} world transform differs from the frame's placement row", Describe(geometry)));
 		}
 		if (!mismatch && !otherTechnique && !CompareMaterial(geometry, object.materialIndex)) {
 			mismatch = true;
@@ -1128,6 +1158,10 @@ namespace DCLF
 		for (const auto& sample : samples)
 			logger::info("[DCLF]   {}", sample);
 
+		if (shadingSinceStart)
+			logger::info("[DCLF] capture parity: {} draws' shading changed since the frame's start sampled it (accepted: DCLF draws it a frame later); "
+						 "compared with the engine's now", shadingSinceStart);
+		shadingSinceStart = 0;
 		nativeDraws = checkedDraws = mismatchedDraws = untrackedEligible = notInTables = nativeOnlyPasses = perDrawNormalised = materialMismatches = geometryMismatches = 0;
 		drawMismatches = drawsChecked = 0;
 		techniqueMismatches = inheritedFilters = permutationChecks = permutationMismatches = lightChecks = lightMismatches = 0;

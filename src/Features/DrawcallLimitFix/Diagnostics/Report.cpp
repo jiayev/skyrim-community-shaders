@@ -220,8 +220,8 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				stats.projectedUV, stats.landBlend, store.GetProjectedTextures().valid ? "captured" : "not seen yet");
 		if (const auto [fading, fadingFrames] = store.TakeFadingDrawn(); fading)
 			logger::info("[DCLF] fading: {} screen-door fading objects drawn by DCLF over {} frames", fading, fadingFrames);
-		if (stats.skinned || draws.boneRows)
-			logger::info("[DCLF] skinned (last frame): {} candidates, {} palette rows in the tables, {} rows uploaded by the epoch", stats.skinned, stats.boneRows, draws.boneRows);
+		if (stats.skinned)
+			logger::info("[DCLF] skinned (last frame): {} candidates, {} palette rows (FrameValues')", stats.skinned, stats.boneRows);
 		if (stats.decals[0] || stats.decals[1] || stats.decals[2] || draws.decalsDrawn)
 			logger::info("[DCLF] decals (last frame): {} candidates ({} in the opaque group, {} multi-index layers, {} in the blended group), {} submitted to the second pass, {} of {} tested were culled",
 				stats.decals[0] + stats.decals[1] + stats.decals[2], stats.decals[0], stats.decals[2], stats.decals[1], draws.decalsDrawn, draws.decalsCulled, draws.decalsTested);
@@ -328,8 +328,7 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			std::string sceneParts;
 			double covered = 0.0;
 			for (std::size_t i = 0; i < stats.scenePartMs.size(); ++i) {
-				if (i != static_cast<std::size_t>(DCLF::ScenePart::PlacementJoin))
-					covered += stats.scenePartMs[i];
+				covered += stats.scenePartMs[i];
 				if (stats.scenePartMs[i] > 0.0)
 					sceneParts += fmt::format("{}{} {:.3f} (max {:.2f})", sceneParts.empty() ? "" : ", ", DCLF::kScenePartNames[i], stats.scenePartMs[i] / tablesFrames,
 						stats.scenePartMaxMs[i]);
@@ -342,19 +341,10 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				for (std::size_t i = 0; i < stats.lightByTrait.size(); ++i)
 					if (stats.lightByTrait[i])
 						traits += fmt::format("{}{} {:.0f}", traits.empty() ? "" : ", ", kTraitNames[i], stats.lightByTrait[i] / tablesFrames);
-				logger::info("[DCLF] scene tables' light path per frame: kept by trait: {}; placed {:.0f} ({:.0f} changed), not placed for want of a move event {:.0f} "
-							 "({:.0f} move events{}), kept skins {:.0f} ({:.0f} changed their palette)",
-					traits.empty() ? "-" : traits, stats.lightPlaced / tablesFrames, stats.lightPlacedChanged / tablesFrames, stats.lightGated / tablesFrames,
-					stats.moveEvents / tablesFrames, DCLF::SceneStore::MoveEventsLive() ? "" : ", not installed", stats.lightSkins / tablesFrames,
-					stats.lightSkinsChanged / tablesFrames);
-				std::string placedBy;
-				for (std::size_t i = 0; i < stats.lightPlacedBy.size(); ++i)
-					if (stats.lightPlacedBy[i])
-						placedBy += fmt::format("{}{} {:.0f} ({:.0f} changed)", placedBy.empty() ? "" : ", ", DCLF::SceneStore::kMoveReasonNames[i],
-							stats.lightPlacedBy[i] / tablesFrames, stats.lightChangedBy[i] / tablesFrames);
-				if (!placedBy.empty())
-					logger::info("[DCLF] scene tables' light path placed per frame, by why: {}; the per-frame set looked up again on {} of {} frames", placedBy,
-						stats.perFrameRelookups, timing.sceneTablesFrames);
+				logger::info("[DCLF] scene tables' light path per frame: kept by trait: {}; movers listed for the frame values {:.0f} ({:.0f} move events{}), kept skins {:.0f}; "
+							 "the per-frame set looked up again on {} of {} frames",
+					traits.empty() ? "-" : traits, stats.lightPlaced / tablesFrames, stats.moveEvents / tablesFrames, DCLF::SceneStore::MoveEventsLive() ? "" : ", not installed",
+					stats.lightSkins / tablesFrames, stats.perFrameRelookups, timing.sceneTablesFrames);
 				if (stats.verdictsChecked || stats.verdictsSkipped)
 					logger::info("[DCLF] actor frame verdicts per frame: {:.0f} taken again, {:.0f} left for want of a hidden event ({:.0f} hidden events{}); {} changed with no event{}{}",
 						stats.verdictsChecked / tablesFrames, stats.verdictsSkipped / tablesFrames, stats.hiddenEvents / tablesFrames,

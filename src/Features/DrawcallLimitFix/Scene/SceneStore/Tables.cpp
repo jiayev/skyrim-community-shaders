@@ -13,11 +13,8 @@ namespace DCLF
 		objectGeometry.resize(a_count, nullptr);
 		objectIdentity.resize(a_count, 0);
 		objectGroup.resize(a_count, 0);
-		shading.resize(a_count, ObjectShading{});
-		emissiveMult.resize(a_count, 1.0f);
 		lights.resize(a_count, ObjectLights{});
 		treeAnim.resize(a_count, ObjectTreeAnim{});
-		skinWetness.resize(a_count, std::array<float, 4>{});
 		skinPartitions.resize(a_count, 0);
 		draws.resize(a_count, DrawSequence{});
 		boneOffset.resize(a_count, 0);
@@ -27,8 +24,8 @@ namespace DCLF
 		shadowReject.resize(a_count, 0);
 		for (auto& column : occlusionTechnique)
 			column.resize(a_count, 0);
-		sunEntry.resize(a_count, std::array<float, 4>{});
-		lodFade.resize(a_count, std::array<float, 4>{ 0.0f, 0.0f, 0.0f, -1.0f });
+		sunEntryNode.resize(a_count, nullptr);
+		hasFadeNode.resize(a_count, 0);
 		fadeDistance.resize(a_count, 0.0f);
 		residentSlot.resize(a_count, 0);
 		faceStream.resize(a_count, kNoFaceStream);
@@ -47,12 +44,10 @@ namespace DCLF
 			return columns;
 		columns.object = objects[a_slot];
 		columns.draw = draws[a_slot];
-		columns.shading = shading[a_slot];
 		columns.lights = lights[a_slot];
 		columns.tree = treeAnim[a_slot];
-		columns.wetness = skinWetness[a_slot];
-		columns.sunEntry = sunEntry[a_slot];
-		columns.lodFade = lodFade[a_slot];
+		columns.sunEntryNode = sunEntryNode[a_slot];
+		columns.hasFadeNode = hasFadeNode[a_slot];
 		columns.extraOffset = extraOffset[a_slot];
 		if (columns.extraOffset != kNoExtraRows && (std::size_t(columns.extraOffset) + kExtraRows) * 4 <= extraRows.size())
 			std::memcpy(columns.extras.data(), &extraRows[std::size_t(columns.extraOffset) * 4], sizeof(columns.extras));
@@ -61,7 +56,6 @@ namespace DCLF
 		columns.groupIdentity = objectGroup[a_slot];
 		columns.shadowDiffuse = shadowDiffuse[a_slot];
 		columns.shadowMaterial = shadowMaterial[a_slot];
-		columns.emissiveMult = emissiveMult[a_slot];
 		columns.fadeDistance = fadeDistance[a_slot];
 		columns.boneOffset = boneOffset[a_slot];
 		columns.boneRows = boneRows[a_slot];
@@ -69,7 +63,6 @@ namespace DCLF
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
 			columns.occlusionTechnique[v] = occlusionTechnique[v][a_slot];
 		columns.faceStream = faceStream[a_slot];
-		columns.boneCapacity = (columns.boneRows || columns.extraOffset != kNoExtraRows) ? BoneCapacity() : 0u;
 		columns.sceneFlags = sceneFlags[a_slot];
 		columns.skinPartitions = skinPartitions[a_slot];
 		columns.shadowReject = shadowReject[a_slot];
@@ -83,22 +76,16 @@ namespace DCLF
 		std::uint32_t causes = 0;
 		const auto& x = a.object;
 		const auto& y = b.object;
-		if (!same(x.world, y.world) || !same(x.previousWorld, y.previousWorld) || !same(x.boundCenter, y.boundCenter) || !same(x.boundRadius, y.boundRadius) ||
-			!same(a.sunEntry, b.sunEntry) || !same(a.lodFade, b.lodFade))
-			causes |= kChangePlacement;
+		// The placement (and the sun entry node's bound, the fade node's centre) is FrameValues': no column of the tables.
 		if (x.flags != y.flags || x.materialIndex != y.materialIndex || x.pipelineIndex != y.pipelineIndex || a.draw.pipelineIndex != b.draw.pipelineIndex ||
-			!same(a.fadeDistance, b.fadeDistance) || a.sceneFlags != b.sceneFlags)
+			!same(a.fadeDistance, b.fadeDistance) || a.sceneFlags != b.sceneFlags || a.hasFadeNode != b.hasFadeNode)
 			causes |= kChangeBindings;
-		if (!same(a.shading, b.shading) || !same(a.emissiveMult, b.emissiveMult) || !same(a.wetness, b.wetness))
-			causes |= kChangeShading;
 		if (!same(a.lights, b.lights))
 			causes |= kChangeLights;
 		if (!same(a.tree, b.tree))
 			causes |= kChangeTree;
 		if (a.skinPartitions != b.skinPartitions || a.boneOffset != b.boneOffset || a.boneRows != b.boneRows)
 			causes |= kChangeSkin;
-		if (a.boneCapacity != b.boneCapacity)
-			causes |= (a.boneRows || b.boneRows ? kChangeSkin : 0u) | (a.extraOffset != kNoExtraRows || b.extraOffset != kNoExtraRows ? kChangeExtras : 0u);
 		if (a.extraOffset != b.extraOffset || !same(a.extras, b.extras))
 			causes |= kChangeExtras;
 		if (a.shadowTechnique != b.shadowTechnique || a.shadowReject != b.shadowReject || a.occlusionTechnique != b.occlusionTechnique || a.shadowDiffuse != b.shadowDiffuse ||
@@ -137,14 +124,9 @@ namespace DCLF
 		} else {
 			offset = boneTop;
 			boneTop += a_rows;
-			if (boneTop > BoneCapacity()) {
-				const std::size_t grown = (std::size_t(boneTop) + kBoneGrowRows - 1) / kBoneGrowRows * kBoneGrowRows;
-				bones.resize(grown * 4, 0.0f);
-				previousBones.resize(grown * 4, 0.0f);
-				// Every record's previous palette and extras are addressed past the capacity: all of them moved.
-				for (std::uint32_t slot = 0; slot < objects.size(); ++slot)
-					NoteChange(slot, (boneRows[slot] ? kChangeSkin : 0u) | (extraOffset[slot] != kNoExtraRows ? kChangeExtras : 0u));
-			}
+			// FrameValues' palettes grow with it; no block moves.
+			if (boneTop > boneCapacity)
+				boneCapacity = (boneTop + kBoneGrowRows - 1) / kBoneGrowRows * kBoneGrowRows;
 		}
 		boneOffset[a_slot] = offset;
 		boneRows[a_slot] = a_rows;
@@ -175,19 +157,16 @@ namespace DCLF
 			setPhases[a_slot] = 0;
 		objectIdentity[a_slot] = 0;
 		objectGroup[a_slot] = 0;
-		shading[a_slot] = ObjectShading{};
-		emissiveMult[a_slot] = 1.0f;
 		lights[a_slot] = ObjectLights{};
 		treeAnim[a_slot] = ObjectTreeAnim{};
-		skinWetness[a_slot] = {};
 		skinPartitions[a_slot] = 0;
 		draws[a_slot] = DrawSequence{};
 		shadowTechnique[a_slot] = 0;
 		shadowReject[a_slot] = 0;
 		for (auto& column : occlusionTechnique)
 			column[a_slot] = 0;
-		sunEntry[a_slot] = {};
-		lodFade[a_slot] = { 0.0f, 0.0f, 0.0f, -1.0f };
+		sunEntryNode[a_slot] = nullptr;
+		hasFadeNode[a_slot] = 0;
 		fadeDistance[a_slot] = 0.0f;
 		residentSlot[a_slot] = 0;
 		ClearFaceStream(a_slot);
@@ -243,21 +222,15 @@ namespace DCLF
 			objectGeometry.clear();
 			objectIdentity.clear();
 			objectGroup.clear();
-			shading.clear();
-			emissiveMult.clear();
 			lights.clear();
 			treeAnim.clear();
-			skinWetness.clear();
 			skinPartitions.clear();
-			shadingWatch.clear();
-			watched.Clear();
 			draws.clear();
 			boneOffset.clear();
 			boneRows.clear();
-			bones.clear();
-			previousBones.clear();
 			boneFree = {};
 			boneTop = 0;
+			boneCapacity = 0;
 			extraOffset.clear();
 			extraRows.clear();
 			extraFree.clear();
@@ -265,8 +238,8 @@ namespace DCLF
 			shadowReject.clear();
 			for (auto& column : occlusionTechnique)
 				column.clear();
-			sunEntry.clear();
-		lodFade.clear();
+			sunEntryNode.clear();
+			hasFadeNode.clear();
 			fadeDistance.clear();
 			residentSlot.clear();
 			// Every slot is gone: the log's readers read them all again.
@@ -331,8 +304,6 @@ namespace DCLF
 		materialFrameVersion.clear();
 		pipelineConstantsVersion.clear();
 		pipelineBindingVersion.clear();
-		shading.clear();
-		emissiveMult.clear();
 		lights.clear();
 		treeAnim.clear();
 		trees.clear();
@@ -351,12 +322,9 @@ namespace DCLF
 		fadeRootIndex.clear();
 		fadeRootSwitch.clear();
 		objectFadeRoot.clear();
-		++fadeRootsVersion;
-		skinWetness.clear();
+		fadeRootsJournal.Resync();
 		actorObjects.clear();
 		skinPartitions.clear();
-		shadingWatch.clear();
-		watched.Clear();
 		geometryConstants.clear();
 		geometryConstantsValid.clear();
 		geometryTemplate.clear();
@@ -366,12 +334,11 @@ namespace DCLF
 		draws.clear();
 		decalOrdinal.clear();
 		decalCount = {};
-		bones.clear();
-		previousBones.clear();
 		boneOffset.clear();
 		boneRows.clear();
 		boneFree = {};
 		boneTop = 0;
+		boneCapacity = 0;
 		extraRows.clear();
 		extraOffset.clear();
 		extraFree.clear();
@@ -379,8 +346,8 @@ namespace DCLF
 		shadowReject.clear();
 		for (auto& column : occlusionTechnique)
 			column.clear();
-		sunEntry.clear();
-		lodFade.clear();
+		sunEntryNode.clear();
+		hasFadeNode.clear();
 		fadeDistance.clear();
 		residentSlot.clear();
 		InvalidateChangeLog();

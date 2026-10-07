@@ -68,10 +68,11 @@ namespace DCLF
 				add(constants, a_blocks.vs[slot], FrameSlotOffset(false, slot));
 				add(constants, a_blocks.ps[slot], FrameSlotOffset(true, slot));
 			}
-			add(constants, kStrictLightDataBytes, std::uint64_t(kFrameSlotSharedLight) * kFrameSlotBytes);
-			add(constants, sizeof(SceneStore::Tables::frameLighting), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes);
+			add(constants, sizeof(SceneStore::FrameCapture::lighting), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes);
 			add(constants, sizeof(LodFadeFrame), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting));
 			add(constants, sizeof(FrameFog), FrameSlotOffset(false, kFrameFogRegister));
+			add(constants, kExtrasFrameVertexBytes, FrameSlotOffset(false, kFrameFogRegister) + sizeof(FrameFog));
+			add(constants, sizeof(ExtrasFrame::projectedGlobals), kExtrasPixelFrameOffset);
 			if (!a_depthOnly && a_resources.foliage)
 				add(constants, 8 * sizeof(std::uint32_t), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting) + sizeof(LodFadeFrame));
 			if (const auto& scene = *a_resources.scene; a_depthOnly && scene.treeLodCull && scene.treeLodShapes) {

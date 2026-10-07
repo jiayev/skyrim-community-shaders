@@ -151,6 +151,10 @@ cbuffer DCLFFrameFog : register(b13)
 	float4 FogParam : packoffset(c0);
 	float4 FogNearColor : packoffset(c1);
 	float4 FogFarColor : packoffset(c2);
+	// The extras' frame inputs (LightingConstants.h, ExtrasFrame): the land blend's position in xy, and the ProjectedUV projection
+	// (row vectors; TextureProj is World x this, DCLFTextureProjOf). An object's extras rows hold only its static parts.
+	float4 DCLFExtrasLandBlend : packoffset(c3);
+	row_major float4x4 DCLFExtrasProjection : packoffset(c4);
 };
 #	endif  // DCLF_BINDLESS
 
@@ -206,11 +210,34 @@ cbuffer VS_PerFrame : register(b12)
 		DCLFPlacements[DCLFObjectIndex].PreviousWorld[2] - float4(0, 0, 0, PreviousBonesPivot.z))
 // Tree animation is per object for the same reason World is: with DCLF_BINDLESS the PerGeometry
 // buffer is one block for the whole pipeline, and a tree's wind amplitude and clock are its own.
-// Likewise the landscape blend parameters (MTLand) and the ProjectedUV texture matrix, from the object's
-// extras rows in the row buffer. An object without extras points at row 0, which nothing reads for it.
-#	define DCLF_VS_LAND_BLEND_PARAMS DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 0]
-#	define DCLF_VS_TEXTURE_PROJ float3x4(DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 1], \
-		DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 2], DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 3])
+// Likewise the landscape blend parameters (MTLand) and the ProjectedUV texture matrix: the object's extras rows (its static parts)
+// completed from the frame's inputs (DCLFFrameFog c3-c7) and its placement, as the engine's SetupGeometry makes them (CPU:
+// LightingConstants.cpp, CompleteExtras). An object without extras points at row 0, which nothing reads for it.
+float4 DCLFLandBlendParamsOf(uint a_object)
+{
+	const float4 own = DCLFExtras[DCLFObjects[a_object].DCLFExtraOffset];
+	// The blend position less the object's translation (absolute).
+	return float4(own.xy, DCLFExtrasLandBlend.xy - float2(DCLFPlacements[a_object].World[0].w, DCLFPlacements[a_object].World[1].w));
+}
+float3x4 DCLFTextureProjOf(uint a_object)
+{
+	const uint extras = DCLFObjects[a_object].DCLFExtraOffset;
+	// How it is made, in the static land-blend row's x (kTextureProj*): the shape's own rows (2), the projection alone (1, the
+	// Envmap technique), or World x the projection (0); TextureProj's rows are the product's columns.
+	const float mode = DCLFExtras[extras].x;
+	if (mode == 2)
+		return float3x4(DCLFExtras[extras + 1], DCLFExtras[extras + 2], DCLFExtras[extras + 3]);
+	float4x4 product = DCLFExtrasProjection;
+	if (mode == 0) {
+		const float4 w0 = DCLFPlacements[a_object].World[0], w1 = DCLFPlacements[a_object].World[1], w2 = DCLFPlacements[a_object].World[2];
+		const float4x4 world = float4x4(float4(w0.x, w1.x, w2.x, 0), float4(w0.y, w1.y, w2.y, 0), float4(w0.z, w1.z, w2.z, 0), float4(w0.w, w1.w, w2.w, 1));
+		product = mul(world, DCLFExtrasProjection);
+	}
+	const float4x4 columns = transpose(product);
+	return float3x4(columns[0], columns[1], columns[2]);
+}
+#	define DCLF_VS_LAND_BLEND_PARAMS DCLFLandBlendParamsOf(DCLFObjectIndex)
+#	define DCLF_VS_TEXTURE_PROJ DCLFTextureProjOf(DCLFObjectIndex)
 #	if defined(DCLF_PULLED)
 // A pulled draw's object word is its sequence's, which main reads first: these are assigned there (DCLFVertexObjectStatics).
 static precise float3x4 World;
@@ -844,6 +871,9 @@ cbuffer DCLFFrameLighting : register(b13)
 	uint4 DCLFFoliageParityBuffers : packoffset(c14);
 	uint4 DCLFFoliageParityFrame : packoffset(c15);
 #	endif
+	// The extras' pixel input (LightingConstants.h, ExtrasFrame): ProjectedUVParams3, the frame's (the two tilings, 0, the
+	// projected-normals switch).
+	float4 DCLFExtrasProjectedGlobals : packoffset(c16);
 };
 #endif  // DCLF_BINDLESS
 
@@ -871,11 +901,11 @@ float DCLFLodFadeAt(float a_metric, float a_start, float a_end)
 #	define DCLF_PS_LOD_METRIC (DCLFLodFades ? DCLFLodMetric(DCLFPlacements[DCLFObjectIndex].LodFadeNode.xyz, DCLFLodFades & 0xF) : 0)
 #	define DCLF_PS_SPECULAR_LOD_FADE DCLFLodFadeAt(DCLFLodMetricValue, DCLFLodFadeThresholds.x, DCLFLodFadeThresholds.y)
 #	define DCLF_PS_MATERIAL_DATA float4(                                                                                                                 \
-		(DCLFLodFades & (1u << 5)) ? DCLFLodFadeAt(DCLFLodMetricValue, DCLFLodFadeThresholds.z, DCLFLodFadeThresholds.w) : DCLFObjects[DCLFObjectIndex].MaterialData.x, \
-		(DCLFLodFades & (1u << 4)) ? DCLFSpecularLodFade : DCLFObjects[DCLFObjectIndex].MaterialData.y,                                                             \
-		DCLFObjects[DCLFObjectIndex].MaterialData.zw)
+		(DCLFLodFades & (1u << 5)) ? DCLFLodFadeAt(DCLFLodMetricValue, DCLFLodFadeThresholds.z, DCLFLodFadeThresholds.w) : DCLFShading[DCLFObjectIndex].MaterialData.x, \
+		(DCLFLodFades & (1u << 4)) ? DCLFSpecularLodFade : DCLFShading[DCLFObjectIndex].MaterialData.y,                                                             \
+		DCLFShading[DCLFObjectIndex].MaterialData.zw)
 // Only the w of SSRParams is per-object; x, y and z stay in the per-pipeline buffer above.
-#	define DCLF_PS_SSR_SPECULAR ((DCLFLodFades & (1u << 4)) ? ((DCLFLodFades & (1u << 6)) ? DCLFSpecularLodFade : 0) : DCLFObjects[DCLFObjectIndex].EmitColor.w)
+#	define DCLF_PS_SSR_SPECULAR ((DCLFLodFades & (1u << 4)) ? ((DCLFLodFades & (1u << 6)) ? DCLFSpecularLodFade : 0) : DCLFShading[DCLFObjectIndex].EmitColor.w)
 // ProjectedUV's three pixel parameters are per object too (the property's, plus two globals).
 #	if defined(DCLF_PULLED)
 // A pulled draw's object word is its vertex stage's, which main reads first: these are assigned there (DCLFPixelObjectStatics).
@@ -893,11 +923,11 @@ static const uint DCLFLodFades = DCLF_PS_LOD_FADES;
 static const float DCLFLodMetricValue = DCLF_PS_LOD_METRIC;
 static const float DCLFSpecularLodFade = DCLF_PS_SPECULAR_LOD_FADE;
 static float4 MaterialData = DCLF_PS_MATERIAL_DATA;
-static float3 EmitColor = DCLFObjects[DCLFObjectIndex].EmitColor.xyz;
+static float3 EmitColor = DCLFShading[DCLFObjectIndex].EmitColor.xyz;
 static float DCLFSSRSpecular = DCLF_PS_SSR_SPECULAR;
-static float4 ProjectedUVParams = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 4];
-static float4 ProjectedUVParams2 = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 5];
-static float4 ProjectedUVParams3 = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 6];
+static float4 ProjectedUVParams = DCLFExtras[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 4];
+static float4 ProjectedUVParams2 = DCLFExtras[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 5];
+static float4 ProjectedUVParams3 = DCLFExtrasProjectedGlobals;
 #	endif
 #	define DCLF_SSR_SPECULAR DCLFSSRSpecular
 #else
@@ -3834,11 +3864,11 @@ void DCLFPixelObjectStatics()
 	DCLFLodMetricValue = DCLF_PS_LOD_METRIC;
 	DCLFSpecularLodFade = DCLF_PS_SPECULAR_LOD_FADE;
 	MaterialData = DCLF_PS_MATERIAL_DATA;
-	EmitColor = DCLFObjects[DCLFObjectIndex].EmitColor.xyz;
+	EmitColor = DCLFShading[DCLFObjectIndex].EmitColor.xyz;
 	DCLFSSRSpecular = DCLF_PS_SSR_SPECULAR;
-	ProjectedUVParams = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 4];
-	ProjectedUVParams2 = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 5];
-	ProjectedUVParams3 = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 6];
+	ProjectedUVParams = DCLFExtras[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 4];
+	ProjectedUVParams2 = DCLFExtras[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 5];
+	ProjectedUVParams3 = DCLFExtrasProjectedGlobals;
 #		endif
 #		if defined(DCLF_BINDLESS_DRAW)
 	AlphaTestRefRS = DCLFObjects[DCLFObjectIndex].AlphaTestRef;

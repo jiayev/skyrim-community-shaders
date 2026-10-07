@@ -54,8 +54,8 @@ namespace DCLF::Draws
 		{
 		public:
 			MainBuild(const MainInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, MainPayload& a_out, MainRows& a_rows, BuildCache* a_cache,
-				ObjectRecordStore* a_objects, BonesStore* a_bones, GeometryStore* a_geometries) :
-				in(a_in), tables(a_tables), lookups(a_lookups), out(a_out), rows(a_rows), cache(a_cache), objectStore(a_objects), boneStore(a_bones),
+				ObjectRecordStore* a_objects, ExtrasStore* a_bones, GeometryStore* a_geometries) :
+				in(a_in), tables(a_tables), lookups(a_lookups), out(a_out), rows(a_rows), cache(a_cache), objectStore(a_objects), extrasStore(a_bones),
 				geometryStore(a_geometries)
 			{}
 
@@ -69,7 +69,7 @@ namespace DCLF::Draws
 			MainRows& rows;
 			BuildCache* cache;
 			ObjectRecordStore* objectStore;
-			BonesStore* boneStore;
+			ExtrasStore* extrasStore;
 			GeometryStore* geometryStore;
 
 			decltype(MainPayload::sequences)& sequences = out.sequences;
@@ -422,7 +422,8 @@ namespace DCLF::Draws
 				given = (material.textures >> t) & 1;
 			else if (const int f = FeatureMaterialSlot(t); f >= 0)
 				given = (material.features >> f) & 1;
-			else if (t == kObjectBufferRegister || t == kBonesBufferRegister || t == kTreeWindRegister || t == kPlacementBufferRegister)
+			else if (t == kObjectBufferRegister || t == kExtrasBufferRegister || t == kTreeWindRegister || t == kPlacementBufferRegister || t == kPaletteBufferRegister ||
+					 t == kShadingBufferRegister)
 				given = true;
 			else if (depthOnly)
 				// The Z-prepass has no frame textures bound yet (its frame record binds the null texture), but for the character
@@ -577,13 +578,23 @@ namespace DCLF::Draws
 			PackGeometryTemplate(tables.geometryConstants[object.pipelineIndex], blocks.vsTable, blocks.psTable, true, geometryTemplate);
 		parityVS.assign(geometryTemplate.vs.begin(), geometryTemplate.vs.end());
 		parityPS.assign(geometryTemplate.ps.begin(), geometryTemplate.ps.end());
-		PatchObjectGeometry(tables, o, renderFlags, eye, previousEye, geometryTemplate.offsets, parityVS, parityPS);
+		// The placement and the shading are FrameValues' (the frame's rows): the layout's check takes made-up ones, the same on both
+		// sides, every component distinct.
+		BindlessPlacement placement{};
+		for (std::uint32_t c = 0; c < 12; ++c) {
+			placement.world[c] = 1.0f + static_cast<float>(c) + static_cast<float>(o & 0xFF) * 0.125f;
+			placement.previousWorld[c] = (renderFlags & 0x10) ? placement.world[c] : placement.world[c] + 0.5f;
+		}
+		BindlessShading shading{};
+		float* const shadingFloats = reinterpret_cast<float*>(&shading.shading);
+		for (std::uint32_t c = 0; c < sizeof(ObjectShading) / sizeof(float); ++c)
+			shadingFloats[c] = 0.25f + static_cast<float>(c) + static_cast<float>(o & 0xFF) * 0.0625f;
+		shading.written = 0xFFu;
+		PatchObjectGeometry(tables, o, placement, shading, eye, previousEye, geometryTemplate.offsets, parityVS, parityPS);
 		IndirectDraws::Stats parityStats{};
 		BindlessObject record;
-		BuildObjectRecord(tables, o, SceneStore::kMainPassRenderFlags, record, in.addresses.fit.boneRegion);
-		BindlessPlacement placement;
-		BuildPlacementRow(tables, o, SceneStore::kMainPassRenderFlags, placement);
-		CheckBindlessRecord(tables, o, record, placement, eye, previousEye, geometryTemplate.offsets, parityVS, parityPS, parityStats);
+		BuildObjectRecord(tables, o, SceneStore::kMainPassRenderFlags, record);
+		CheckBindlessRecord(tables, o, record, placement, shading, eye, previousEye, geometryTemplate.offsets, parityVS, parityPS, parityStats);
 		out.bindlessParityChecks += parityStats.bindlessParityChecks;
 		out.bindlessParityMismatches += parityStats.bindlessParityMismatches;
 	}
@@ -1319,7 +1330,7 @@ namespace DCLF::Draws
 	}
 
 	void BuildMainPayload(const MainInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, MainPayload& a_out, MainRows& a_rows,
-		BuildCache* a_cache, ObjectRecordStore* a_objects, BonesStore* a_bones, GeometryStore* a_geometries)
+		BuildCache* a_cache, ObjectRecordStore* a_objects, ExtrasStore* a_bones, GeometryStore* a_geometries)
 	{
 		MainBuild(a_in, a_tables, a_lookups, a_out, a_rows, a_cache, a_objects, a_bones, a_geometries).Run();
 	}

@@ -146,13 +146,10 @@ namespace DCLF
 			store->updates = store->rewritten = store->resyncs = store->collisions = 0;
 			store->parity.Reset();
 		}
-		if (auto* store = &impl->placementStore; store->updates) {
-			text += fmt::format("[DCLF] placement rows: {} updates, {:.1f} rows rewritten an update, {} rows held, {} resyncs; parity {} checked, {} differ{}\n",
-				store->updates, static_cast<double>(store->rewritten) / store->updates, store->rows.Size(), store->resyncs, store->parity.checks, store->parity.mismatches,
-				store->parity.Verdict(true));
-			store->updates = store->rewritten = store->resyncs = 0;
-			store->parity.Reset();
-		}
+		if (auto line = FrameValues::Get().Report(); !line.empty())
+			text += line + "\n";
+		if (auto line = FrameData::Report(); !line.empty())
+			text += line + "\n";
 		if (auto& k = impl->shadowKept; k.builds) {
 			std::size_t entries = 0;
 			for (const auto& mode : k.modes)
@@ -249,9 +246,9 @@ namespace DCLF
 			bound.updates = bound.changes = bound.resyncs = 0;
 			bound.parity.Reset();
 		}
-		if (auto* store = &impl->boneStore; store->updates) {
-			text += fmt::format("[DCLF] persistent bone rows: {} updates, {} resyncs, {} capacity rows; parity {} checked, {} differ{}\n", store->updates, store->resyncs,
-				store->capacity, store->parity.checks, store->parity.mismatches, store->parity.Verdict());
+		if (auto* store = &impl->extrasStore; store->updates) {
+			text += fmt::format("[DCLF] persistent extras rows: {} updates, {} resyncs; parity {} checked, {} differ{}\n", store->updates, store->resyncs,
+				store->parity.checks, store->parity.mismatches, store->parity.Verdict());
 			store->updates = store->resyncs = 0;
 			store->parity.Reset();
 		}
@@ -614,8 +611,14 @@ namespace DCLF
 				return;
 			++readback.sunCpuTested;
 			bool inside = false;
+			const auto& tablesNow = SceneStore::Get().GetTables();
+			const auto* geometry = input.objectIndex < tablesNow.objectGeometry.size() ? tablesNow.objectGeometry[input.objectIndex] : nullptr;
+			if (!geometry)
+				return;
+			const auto& bound = geometry->worldBound;
+			const float center[3]{ bound.center.x, bound.center.y, bound.center.z };
 			for (std::size_t c = 0; c < sunCascades.size() && !inside; ++c)
-				inside = InSunCascade(sunCascades[c], SceneStore::Get().GetTables().objects[input.objectIndex].boundCenter, SceneStore::Get().GetTables().objects[input.objectIndex].boundRadius);
+				inside = InSunCascade(sunCascades[c], center, bound.radius);
 			readback.sunCpuMissed += inside ? 0 : 1;
 		};
 		if (a_payload.resident.elements)
@@ -906,7 +909,8 @@ namespace DCLF
 			for (std::size_t i = 0; i < readback.roots.size(); ++i) {
 				readback.lists[i] = base + i < lists.size() ? lists[base + i] : kFadeRootNoList;
 				const auto object = readback.roots[i].object;
-				const float entry = object < a_tables.sunEntry.size() ? a_tables.sunEntry[object][3] : -1.0f;
+				const auto* entryNode = object < a_tables.sunEntryNode.size() ? a_tables.sunEntryNode[object] : nullptr;
+				const float entry = entryNode ? entryNode->worldBound.radius : -1.0f;
 				readback.radii[i] = entry >= 0.0f && entry < 1e30f ? entry : readback.roots[i].radius;
 				if (const auto* node = static_cast<const RE::NiAVObject*>(a_tables.fadeRootNode[base + i])) {
 					readback.nodeRadii[i] = node->worldBound.radius;
@@ -1269,8 +1273,10 @@ namespace DCLF
 					continue;
 				const auto* geometry = tables.objectGeometry[input.objectIndex];
 				const auto* property = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
-				const auto& object = tables.objects[input.objectIndex];
-				readback.expectedLocalShadows[input.objectIndex] = localShadows.MaskOf(property, object.boundCenter, object.boundRadius) & 0xFu;
+				if (!geometry)
+					continue;
+				const float center[3]{ geometry->worldBound.center.x, geometry->worldBound.center.y, geometry->worldBound.center.z };
+				readback.expectedLocalShadows[input.objectIndex] = localShadows.MaskOf(property, center, geometry->worldBound.radius) & 0xFu;
 			}
 		}
 		readback.framesLeft = 3;

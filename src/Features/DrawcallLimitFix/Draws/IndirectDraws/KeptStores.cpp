@@ -3,37 +3,26 @@
 
 namespace DCLF::Draws
 {
-	void UpdateBones(BonesStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation, std::uint32_t a_region,
-		BonesOut& a_out)
+	void UpdateExtras(ExtrasStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation, ExtrasOut& a_out)
 	{
-		ZoneScopedN("CS.DCLF.Build.UpdateBones");
+		ZoneScopedN("CS.DCLF.Build.UpdateExtras");
 		a_out = {};
-		// Laid out by the buffer's region, not the tables' capacity: the tables' growth moves nothing until the buffer's is adopted.
-		a_out.capacity = a_region;
-		a_out.tableRows = a_tables.BoneCapacity();
 		a_out.extraRows = static_cast<std::uint32_t>(a_tables.extraRows.size() / 4);
-		a_out.bones = a_tables.bones.data();
-		a_out.previous = a_tables.previousBones.data();
 		a_out.extras = a_tables.extraRows.data();
 		if (!a_store)
 			return;
 		auto& s = *a_store;
 		++s.updates;
 		s.rows.BeginBuild(a_uploaded);
-		if (!s.cursor.Continues(a_tables.changeLog, a_generation) || s.capacity != a_out.capacity) {
+		if (!s.cursor.Continues(a_tables.changeLog, a_generation)) {
 			s.cursor.Restart(a_generation);
-			s.capacity = a_out.capacity;
 			s.rows.Resync();
 			++s.resyncs;
 		} else {
 			for (const auto& change : s.cursor.Unread(a_tables.changeLog)) {
 				const std::uint32_t o = change.slot;
-				if ((change.causes & (kChangePalette | kChangeSkin)) && o < a_tables.boneRows.size() && a_tables.boneRows[o]) {
-					s.rows.MarkRange(a_tables.boneOffset[o], a_tables.boneRows[o]);
-					s.rows.MarkRange(std::uint64_t(a_out.capacity) + a_tables.boneOffset[o], a_tables.boneRows[o]);
-				}
 				if ((change.causes & kChangeExtras) && o < a_tables.extraOffset.size() && a_tables.extraOffset[o] != kNoExtraRows)
-					s.rows.MarkRange(2ull * a_out.capacity + a_tables.extraOffset[o], kExtraRows);
+					s.rows.MarkRange(a_tables.extraOffset[o], kExtraRows);
 			}
 		}
 		s.cursor.Advance(a_tables.changeLog);
@@ -41,14 +30,14 @@ namespace DCLF::Draws
 	}
 
 	void UpdateObjectRecords(ObjectRecordStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation,
-		std::uint32_t a_frame, std::uint32_t a_boneRegion, ObjectRecordsOut& a_out)
+		std::uint32_t a_frame, ObjectRecordsOut& a_out)
 	{
 		ZoneScopedN("CS.DCLF.Build.UpdateObjectRecords");
 		const std::size_t count = a_tables.objects.size();
 		if (!a_store) {
 			auto records = std::make_shared<std::vector<BindlessObject>>(count);
 			for (std::size_t r = 0; r < count; ++r)
-				BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, (*records)[r], a_boneRegion);
+				BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, (*records)[r]);
 			a_out = {};
 			a_out.elements = std::move(records);
 			return;
@@ -59,13 +48,12 @@ namespace DCLF::Draws
 		++s.updates;
 		s.records.BeginBuild(a_uploaded);
 		TracyCZoneN(updateRecordsZone, "CS.DCLF.Build.Objects.ApplyChanges", true);
-		if (!s.cursor.Continues(a_tables.changeLog, a_generation) || s.records.Size() > count || s.boneRegion != a_boneRegion) {
-			s.boneRegion = a_boneRegion;
+		if (!s.cursor.Continues(a_tables.changeLog, a_generation) || s.records.Size() > count) {
 			// Every record again: the first build, new tables, or a log this store fell behind.
 			auto& records = s.records.Mutable();
 			records.resize(count);
 			for (std::size_t r = 0; r < count; ++r)
-				BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, records[r], a_boneRegion);
+				BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, records[r]);
 			s.records.Resync();
 			s.cursor.Restart(a_generation);
 			++s.resyncs;
@@ -76,7 +64,7 @@ namespace DCLF::Draws
 				const auto first = records.size();
 				records.resize(count);
 				for (std::size_t r = first; r < count; ++r) {
-					BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, records[r], a_boneRegion);
+					BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, records[r]);
 					s.records.Mark(r);
 				}
 			}
@@ -85,7 +73,7 @@ namespace DCLF::Draws
 			std::uint32_t causes = 0;
 			for (const auto& change : s.cursor.Unread(a_tables.changeLog))
 				causes |= change.causes;
-			if (causes & ~(kChangePlacement | kChangePalette)) {
+			if (causes) {
 				++s.structural;
 				for (std::uint32_t c = 0; c < kChangeCauseCount; ++c)
 					s.byCause[c] += (causes >> c) & 1u;
@@ -96,7 +84,7 @@ namespace DCLF::Draws
 				// Every event reads the final immutable table row, not an intermediate value.
 				if (!(change.causes & kObjectRecordCauses) || change.slot >= count || (reuseKeptStorage && !s.changedObjects.Add(change.slot)))
 					continue;
-				BuildObjectRecord(a_tables, change.slot, SceneStore::kMainPassRenderFlags, fresh, a_boneRegion);
+				BuildObjectRecord(a_tables, change.slot, SceneStore::kMainPassRenderFlags, fresh);
 				s.rewritten += s.records.Set(change.slot, fresh) ? 1u : 0u;
 			}
 		}
@@ -107,7 +95,7 @@ namespace DCLF::Draws
 			BindlessObject fresh;
 			const auto& records = s.records.Get();
 			for (std::size_t r = 0; r < count; ++r) {
-				BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, fresh, a_boneRegion);
+				BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, fresh);
 				s.parity.Check(std::memcmp(&fresh, &records[r], sizeof(fresh)) == 0, [&] {
 					const auto* geometry = r < a_tables.objectGeometry.size() ? a_tables.objectGeometry[r] : nullptr;
 					return fmt::format("record {} '{}'", r, geometry && geometry->name.c_str() ? geometry->name.c_str() : "?");
@@ -119,68 +107,6 @@ namespace DCLF::Draws
 			a_out = s.records.View();
 		}
 		s.busy.store(0, std::memory_order_release);
-	}
-
-	void UpdatePlacements(PlacementStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation,
-		std::uint32_t a_frame, PlacementRowsOut& a_out)
-	{
-		ZoneScopedN("CS.DCLF.Build.UpdatePlacements");
-		const std::size_t count = a_tables.objects.size();
-		auto build = [&](std::size_t a_slot, BindlessPlacement& a_row) { BuildPlacementRow(a_tables, static_cast<std::uint32_t>(a_slot), SceneStore::kMainPassRenderFlags, a_row); };
-		if (!a_store) {
-			auto rows = std::make_shared<std::vector<BindlessPlacement>>(count);
-			for (std::size_t r = 0; r < count; ++r)
-				build(r, (*rows)[r]);
-			a_out = {};
-			a_out.elements = std::move(rows);
-			return;
-		}
-		auto& s = *a_store;
-		++s.updates;
-		s.rows.BeginBuild(a_uploaded);
-		if (!s.cursor.Continues(a_tables.changeLog, a_generation) || s.rows.Size() > count) {
-			// Every row again: the first build, new tables, or a log this store fell behind.
-			auto& rows = s.rows.Mutable();
-			rows.resize(count);
-			for (std::size_t r = 0; r < count; ++r)
-				build(r, rows[r]);
-			s.rows.Resync();
-			s.cursor.Restart(a_generation);
-			++s.resyncs;
-		} else {
-			// Slots the tables grew by since: rows of their own (the log names them too).
-			if (s.rows.Size() < count) {
-				auto& rows = s.rows.Mutable();
-				const auto first = rows.size();
-				rows.resize(count);
-				for (std::size_t r = first; r < count; ++r) {
-					build(r, rows[r]);
-					s.rows.Mark(r);
-				}
-			}
-			BindlessPlacement fresh;
-			s.changedObjects.Clear();
-			for (const auto& change : s.cursor.Unread(a_tables.changeLog)) {
-				if (!(change.causes & kPlacementRowCauses) || change.slot >= count || (reuseKeptStorage && !s.changedObjects.Add(change.slot)))
-					continue;
-				build(change.slot, fresh);
-				s.rewritten += s.rows.Set(change.slot, fresh) ? 1u : 0u;
-			}
-		}
-		s.cursor.Advance(a_tables.changeLog);
-		// CS_DCLF_PERSISTENT_PARITY: every row against one built from the tables now.
-		if (PersistentParityEnabled() && ParityDue(a_frame)) {
-			BindlessPlacement fresh;
-			const auto& rows = s.rows.Get();
-			for (std::size_t r = 0; r < count; ++r) {
-				build(r, fresh);
-				s.parity.Check(std::memcmp(&fresh, &rows[r], sizeof(fresh)) == 0, [&] {
-					const auto* geometry = r < a_tables.objectGeometry.size() ? a_tables.objectGeometry[r] : nullptr;
-					return fmt::format("placement {} '{}'", r, geometry && geometry->name.c_str() ? geometry->name.c_str() : "?");
-				});
-			}
-		}
-		a_out = s.rows.View();
 	}
 
 	void UpdateGeometryDraws(GeometryStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation,

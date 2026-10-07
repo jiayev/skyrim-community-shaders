@@ -495,9 +495,6 @@ namespace DCLF
 	void SceneStore::ProcessEvents()
 	{
 		DCLF_FRAME_TRACE("ProcessEvents");  // TEMP frame trace
-		// A scene placement job no BeforeShadowMaps joined (a frame without shadow maps): its items name tracked
-		// entries, which the events below may erase.
-		JoinPlacements();
 		// The render thread's: the scene task runs this on the coordinator, and BeginFrame records it then.
 		if (!inSceneTask)
 			switchEventThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);

@@ -14,18 +14,13 @@ namespace DCLF
 	 */
 	struct ObjectRecord
 	{
-		float world[12];          // row-major 3x4, as Lighting.hlsl's World (translation in column 3)
-		float previousWorld[12];  // same layout, from NiAVObject::previousWorld
-		float boundCenter[3];     // world-space bounding sphere
-		float boundRadius;
+		// The placement (world, previous world, bound) is not the record's: FrameValues samples it into the frame's rows.
 		std::uint32_t geometryIndex;
 		std::uint32_t materialIndex;
 		std::uint32_t pipelineIndex;
 		std::uint32_t flags;  // ObjectFlags, alpha-test threshold in bits 8-15
 	};
-	static_assert(sizeof(ObjectRecord) == 128);
-	static_assert(offsetof(ObjectRecord, boundCenter) == 96);
-	static_assert(offsetof(ObjectRecord, geometryIndex) == 112);
+	static_assert(sizeof(ObjectRecord) == 16);
 
 	enum ObjectFlags : std::uint32_t
 	{
@@ -90,8 +85,8 @@ namespace DCLF
 		// GetRenderPasses would have left them off. Set per frame by the accumulate phase.
 		kObjectSunTest = 1u << 26,
 		// A resident object under a fade root (PrimaryCull, dclf-cull-job-elimination.md "Phase 4 in detail"): the depth
-		// segment's first phase tests its entry root's distance against the fade-out distance (Tables::fadeDistance,
-		// Tables::sunEntry) and drops it, as a final verdict, where BSFadeNode::OnVisible would snap its fade to 0: past
+		// segment's first phase tests its entry root's distance against the fade-out distance (Tables::fadeDistance, its
+		// placement row's fade node) and drops it, as a final verdict, where BSFadeNode::OnVisible would snap its fade to 0: past
 		// the distance and not in view last frame. Set by the accumulate phase with the resident patch.
 		kObjectFadeTest = 1u << 27,
 		// A resident tree (PrimaryCull): the depth segment's first phase drops it, as a final verdict, where

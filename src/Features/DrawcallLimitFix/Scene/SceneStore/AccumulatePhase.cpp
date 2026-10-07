@@ -119,10 +119,7 @@ namespace DCLF
 		object.pipelineIndex = a_patch.pipeline;
 		object.flags = a_patch.flags;
 		tables.fadeDistance[objectId] = a_patch.fadeDistance;
-		tables.SetWatch(objectId, Tables::kWatchExtras, a_patch.projectedUV || a_patch.landBlend);
 		tables.draws[objectId].pipelineIndex = a_patch.pipeline;
-		tables.shading[objectId] = a_patch.shading;
-		tables.emissiveMult[objectId] = a_patch.emissiveMult;
 		tables.lights[objectId] = a_patch.lights;
 		tables.treeAnim[objectId] = a_patch.tree;
 		if (a_patch.projectedUV || a_patch.landBlend) {
@@ -130,16 +127,20 @@ namespace DCLF
 			stats.landBlend += a_patch.landBlend ? 1 : 0;
 			if (tables.extraOffset[objectId] == kNoExtraRows)
 				tables.extraOffset[objectId] = tables.AllocateExtras();
+			// Its static parts (the frame's are the draw's: ExtrasFrame), noted with the patch's other columns.
+			WriteObjectExtras(objectId);
 		} else {
 			tables.FreeExtras(objectId);
 		}
 		// A membership join: the column goes into the same before/after journal as the other value-only writes.
 		tables.residentSlot[objectId] = 1;
 		before.NoteWrite(tables, objectId);
+		// Its shading, sampled by the next frame's values (the record joins the set then at the earliest).
+		NameShading(objectId, true);
 		if (a_patch.decalKey) {
 			++stats.decals[static_cast<std::uint32_t>(a_patch.decalKey >> 60) - 1];
 			memberDecals[objectId] = a_patch.decalKey;
-			memberDecalsChanged = true;
+			NoteDecalChanged(objectId);
 		}
 	}
 
@@ -358,11 +359,13 @@ namespace DCLF
 				staticFlags = derived.staticFlags;
 				key = derived.key;
 				tables.MarkMaterialUsed(materialSlot);
+				joinMarkedMaterials.push_back(materialSlot);
 				// A pipeline's template is always a member's property (the joiner's while the slot has no member; KeepResidentsAlive
 				// takes a resident's every frame), so a persistent slot never points at a property the game has since freed. The
 				// constants are evaluated from it at Prepass (RefreshFrameConstants).
 				if (!tables.PipelineUsed(pipelineSlot)) {
 					tables.MarkPipelineUsed(pipelineSlot);
+					joinMarkedPipelines.push_back(pipelineSlot);
 					tables.geometryTemplate[pipelineSlot] = property;
 				}
 				timer.Add(BuildPart::DedupHit);
@@ -387,6 +390,7 @@ namespace DCLF
 				if (!newPipeline && !tables.PipelineUsed(pipelineIt->second)) {
 					// The slot's first member: this object's property is the template (see the cached path).
 					tables.MarkPipelineUsed(pipelineIt->second);
+					joinMarkedPipelines.push_back(pipelineIt->second);
 					tables.geometryTemplate[pipelineIt->second] = property;
 				}
 				if (newPipeline) {
@@ -428,6 +432,7 @@ namespace DCLF
 				}
 				pipelineSlot = pipelineIt->second;
 				tables.MarkPipelineUsed(pipelineSlot);
+				joinMarkedPipelines.push_back(pipelineSlot);
 
 				// Material state as the engine's SetupMaterial produces it for this pass descriptor.
 				const auto* material = property->material;
@@ -454,6 +459,7 @@ namespace DCLF
 				}
 				materialSlot = materialIt->second;
 				tables.MarkMaterialUsed(materialSlot);
+				joinMarkedMaterials.push_back(materialSlot);
 				timer.Add(BuildPart::DedupHit);
 
 				staticFlags = (alphaTest ? kObjectAlphaTest : 0u) | (twoSided ? kObjectTwoSided : 0u) |
@@ -498,8 +504,8 @@ namespace DCLF
 
 			// The patch. Everything above decided what this object draws with; here it goes into the
 			// record the scene phase appended, at the index that phase fixed.
-			// A member's pass is patched once and kept; its extras rows (projected UV, land blend) follow the eye and a clock
-			// through the watch (kWatchExtras, RefreshFrameConstants).
+			// A member's pass is patched once and kept; its extras rows (projected UV, land blend) are its static parts, which the
+			// draw completes from the frame's (ExtrasFrame).
 			const bool landBlendRecord = descriptors.technique == 8 || descriptors.technique == 19;
 			AccumulatePatch patch;
 			patch.object = objectId;
@@ -517,9 +523,6 @@ namespace DCLF
 				++setStats.patchedMember;
 			patch.fadeDistance = accumulated->fadeDistance;
 			timer.Add(BuildPart::Record);
-			float emissiveMult = 1.0f;
-			patch.shading = MakeShading(*static_cast<RE::BSLightingShaderProperty*>(property), descriptors, kMainPassRenderFlags, emissiveMult, true);
-			patch.emissiveMult = emissiveMult;
 			if (lightLimitFixLoaded) {
 				auto& lightFix = globals::features::lightLimitFix;
 				if (trackedEntry->roomMapGeneration != lightFix.GetRoomMapGeneration()) {
@@ -699,8 +702,6 @@ namespace DCLF
 		object.materialIndex = 0;
 		object.pipelineIndex = 0;
 		tables.draws[a_slot].pipelineIndex = 0;
-		tables.shading[a_slot] = ObjectShading{};
-		tables.emissiveMult[a_slot] = 1.0f;
 		tables.lights[a_slot] = ObjectLights{};
 		tables.treeAnim[a_slot] = ObjectTreeAnim{};
 		tables.FreeExtras(a_slot);

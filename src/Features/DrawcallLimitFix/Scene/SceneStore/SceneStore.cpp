@@ -10,7 +10,8 @@ namespace DCLF
 
 	void SceneStore::Clear()
 	{
-		JoinPlacements();
+		placementPlan.reset();
+		placementPlanReady.reset();
 		tracked.clear();
 		ClearFaceShapes();
 		++trackedLayout;
@@ -30,7 +31,7 @@ namespace DCLF
 		pendingEvaluation.clear();
 		memberDecals.clear();
 		materialEvaluationsPending.clear();
-		memberDecalsChanged = true;
+		NoteDecalsCleared();
 		fadeChanged.clear();
 		fadeDependents.clear();
 		fadeRootOwned.clear();

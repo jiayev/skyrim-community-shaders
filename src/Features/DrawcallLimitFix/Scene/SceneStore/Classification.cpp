@@ -265,16 +265,6 @@ namespace DCLF
 		addSource = previousSource;
 	}
 
-	std::array<float, 4> SceneStore::SunEntryOf(Tracked& a_tracked, const RE::BSGeometry& a_geometry)
-	{
-		constexpr std::array<float, 4> kNeverTested{ 0.0f, 0.0f, 0.0f, -1.0f };
-		ResolveSunEntry(a_tracked, a_geometry);
-		if (!a_tracked.sunEntryNode)
-			return kNeverTested;
-		const auto& bound = a_tracked.sunEntryNode->worldBound;
-		return { bound.center.x, bound.center.y, bound.center.z, bound.radius };
-	}
-
 	void SceneStore::ResolveSunEntry(Tracked& a_tracked, const RE::BSGeometry& a_geometry)
 	{
 		if (!a_tracked.sunEntryResolved) {

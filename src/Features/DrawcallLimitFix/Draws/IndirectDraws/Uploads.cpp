@@ -134,41 +134,34 @@ namespace DCLF
 		job.from = sceneBuffers.held;
 		job.tablesGeneration = store.GetTablesGeneration();
 		job.sceneGeneration = sceneBuffers.generation;
-		job.objects = job.bones = job.placements = 0;
+		job.objects = job.extras = 0;
 		job.staged = false;
 		job.batch = AcquireStagedBatch(job.pool);
 		++job.kicked;
 		const rhi::Device device = RecordingDevice();
-		job.handle = AsyncWorker::Get().Submit("streams", [result = &job, batch = job.batch, objectsBuffer = sceneBuffers.objects->Get(), bonesBuffer = sceneBuffers.bones->Get(),
-															placementsBuffer = sceneBuffers.placements->Get(), placementStore = ScenePlacements(),
-															objectCapacity = sceneBuffers.objectCapacity, boneRows = sceneBuffers.boneRows, boneRegion = sceneBuffers.boneRegion,
+		job.handle = AsyncWorker::Get().Submit("streams", [result = &job, batch = job.batch, objectsBuffer = sceneBuffers.objects->Get(), extrasBuffer = sceneBuffers.extras->Get(),
+															objectCapacity = sceneBuffers.objectCapacity, extraRows = sceneBuffers.extraRows,
 															tables = &tables, objects = SceneObjects(),
-															bonesStore = SceneBones(), from = job.from, generation = job.tablesGeneration, frame = store.GetFrame(), device](std::stop_token) {
+															extrasStore = SceneExtras(), from = job.from, generation = job.tablesGeneration, frame = store.GetFrame(), device](std::stop_token) {
 			ZoneScopedN("CS.DCLF.StageSceneStreams");
 			using org::runtime::UploadTarget;
 			ObjectRecordsOut records;
-			UpdateObjectRecords(objects, from.objects, *tables, generation, frame, boneRegion, records);
-			PlacementRowsOut placements;
-			UpdatePlacements(placementStore, from.placements, *tables, generation, frame, placements);
-			BonesOut bones;
-			UpdateBones(bonesStore, from.bones, *tables, generation, boneRegion, bones);
+			UpdateObjectRecords(objects, from.objects, *tables, generation, frame, records);
+			ExtrasOut extras;
+			UpdateExtras(extrasStore, from.extras, *tables, generation, extras);
 			// Past a buffer (its growth outstanding): the commit's own update sends what fits.
-			if (records.Count() > objectCapacity || placements.Count() > objectCapacity || bones.Rows() > boneRows)
+			if (records.Count() > objectCapacity || extras.Rows() > extraRows)
 				return;
 			records.Emit(from.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 				batch->Stage(UploadTarget::FromShared(objectsBuffer), a_offset, a_data, a_bytes);
 			});
-			placements.Emit(from.placements, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-				batch->Stage(UploadTarget::FromShared(placementsBuffer), a_offset, a_data, a_bytes);
-			});
-			EmitBones(bones, from.bones, nullptr, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-				batch->Stage(UploadTarget::FromShared(bonesBuffer), a_offset, a_data, a_bytes);
+			EmitExtras(extras, from.extras, nullptr, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+				batch->Stage(UploadTarget::FromShared(extrasBuffer), a_offset, a_data, a_bytes);
 			});
 			if (device && !batch->Entries().empty())
 				batch->Record(device);
 			result->objects = records.Version();
-			result->placements = placements.Version();
-			result->bones = bones.Version();
+			result->extras = extras.Version();
 			result->staged = true;
 		});
 	}
@@ -196,16 +189,13 @@ namespace DCLF
 			const auto joined = JoinJob(job.handle);
 			job.handle = {};
 			if (joined == AsyncWorker::WaitResult::Done && job.staged && job.scene == &a_scene && a_scene.held.objects == job.from.objects &&
-				a_scene.held.bones == job.from.bones && a_scene.held.placements == job.from.placements && job.tablesGeneration == a_generation &&
-				job.sceneGeneration == a_scene.generation) {
+				a_scene.held.extras == job.from.extras && job.tablesGeneration == a_generation && job.sceneGeneration == a_scene.generation) {
 				if (!job.batch->Entries().empty())
 					SubmitWorkerBatch(std::move(job.batch));
 				if (job.objects)
 					a_scene.held.objects = job.objects;
-				if (job.bones)
-					a_scene.held.bones = job.bones;
-				if (job.placements)
-					a_scene.held.placements = job.placements;
+				if (job.extras)
+					a_scene.held.extras = job.extras;
 				++job.used;
 			} else {
 				++job.dropped;
@@ -215,7 +205,7 @@ namespace DCLF
 		}
 		SceneStreams sent;
 		ObjectRecordsOut objects;
-		UpdateObjectRecords(SceneObjects(), a_scene.held.objects, a_tables, a_generation, a_frame, a_scene.boneRegion, objects);
+		UpdateObjectRecords(SceneObjects(), a_scene.held.objects, a_tables, a_generation, a_frame, objects);
 		sent.objects = objects.Count();
 		// Within the buffers: a record or a row past them waits for their growth (Growths), sent again until it is adopted (the
 		// version held moves only once all of them are sent). No build names an object past them (ObjectFits).
@@ -224,25 +214,18 @@ namespace DCLF
 		}, a_scene.objectCapacity);
 		if (objects.Version() && objects.Count() <= a_scene.objectCapacity)
 			a_scene.held.objects = objects.Version();
-		PlacementRowsOut placements;
-		UpdatePlacements(ScenePlacements(), a_scene.held.placements, a_tables, a_generation, a_frame, placements);
-		sent.placementBytes = placements.Emit(a_scene.held.placements, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-			a_uploads(a_scene.placements, a_data, a_bytes, a_offset);
-		}, a_scene.objectCapacity);
-		if (placements.Version() && placements.Count() <= a_scene.objectCapacity)
-			a_scene.held.placements = placements.Version();
-		BonesOut bones;
-		UpdateBones(SceneBones(), a_scene.held.bones, a_tables, a_generation, a_scene.boneRegion, bones);
-		sent.boneRows = bones.Rows();
-		BonesStore* bonesParity = PersistentParityEnabled() ? &boneStore : nullptr;
-		sent.boneRowsSent = EmitBones(bones, a_scene.held.bones, bonesParity, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-			a_uploads(a_scene.bones, a_data, a_bytes, a_offset);
-		}, a_scene.boneRows);
-		if (bonesParity && ParityDue(a_frame) && bones.Rows() <= a_scene.boneRows)
-			CheckBones(*bonesParity, bones);
-		if (bones.Version() && bones.Rows() <= a_scene.boneRows)
-			a_scene.held.bones = bones.Version();
-		boneStore.rowsSent += sent.boneRowsSent;
+		ExtrasOut extras;
+		UpdateExtras(SceneExtras(), a_scene.held.extras, a_tables, a_generation, extras);
+		sent.extraRows = extras.Rows();
+		ExtrasStore* extrasParity = PersistentParityEnabled() ? &extrasStore : nullptr;
+		sent.extraRowsSent = EmitExtras(extras, a_scene.held.extras, extrasParity, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+			a_uploads(a_scene.extras, a_data, a_bytes, a_offset);
+		}, a_scene.extraRows);
+		if (extrasParity && ParityDue(a_frame) && extras.Rows() <= a_scene.extraRows)
+			CheckExtras(*extrasParity, extras);
+		if (extras.Version() && extras.Rows() <= a_scene.extraRows)
+			a_scene.held.extras = extras.Version();
+		extrasStore.rowsSent += sent.extraRowsSent;
 		return sent;
 	}
 
@@ -382,8 +365,8 @@ namespace DCLF
 		}
 		for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters && !depthOnly; ++t) {
 			auto& held = frameTextureBindings[t];
-			// The character light's noise is the frame's view (Tables::characterLightView), not a captured register.
-			auto* const view = t == kCharacterLightRegister ? tables.characterLightView : a_capture.psViews[t];
+			// The character light's noise is the frame's view (FrameCapture::characterLightView), not a captured register.
+			auto* const view = t == kCharacterLightRegister ? a_store.GetFrameCapture().characterLightView : a_capture.psViews[t];
 			if (!view) {
 				if (held.view)
 					held = {};
@@ -473,8 +456,10 @@ namespace DCLF
 			for (std::uint32_t t = 0; t < kTextureRegisters; ++t)
 				frameRecord.textures[t] = frameTextures[t] == kInvalidIndex ? nullIndex : frameTextures[t];
 			frameRecord.textures[kObjectBufferRegister] = in.addresses.objectsIndex;
-			frameRecord.textures[kBonesBufferRegister] = in.addresses.bonesIndex;
+			frameRecord.textures[kExtrasBufferRegister] = in.addresses.extrasIndex;
 			frameRecord.textures[kPlacementBufferRegister] = in.addresses.placementsIndex;
+			frameRecord.textures[kPaletteBufferRegister] = in.addresses.palettesIndex;
+			frameRecord.textures[kShadingBufferRegister] = in.addresses.shadingIndex;
 			frameRecord.textures[kTreeWindRegister] = in.addresses.treeWindIndex;
 			latched(a_resources->frameConstants, &frameRecord, sizeof(frameRecord), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
 		}
@@ -487,22 +472,25 @@ namespace DCLF
 			if (!a_blocks.ps[slot].empty())
 				latched(a_resources->frameConstants, a_blocks.ps[slot].data(), a_blocks.ps[slot].size(), FrameSlotOffset(true, slot));
 		}
-		{
+		if (!a_resources->sharedLightZeroed) {
 			static const std::array<std::uint32_t, kStrictLightDataBytes / 4> zeroLight{};
-			latched(a_resources->frameConstants, zeroLight.data(), sizeof(zeroLight), std::uint64_t(kFrameSlotSharedLight) * kFrameSlotBytes);
+			uploads(a_resources->frameConstants, zeroLight.data(), sizeof(zeroLight), std::uint64_t(kFrameSlotSharedLight) * kFrameSlotBytes);
+			a_resources->sharedLightZeroed = true;
 		}
 		// The frame lighting, every commit: a latched copy written only when it changed would change the frame's shape with it.
-		{
-			const auto& lightingTables = a_store.GetTables();
-			latched(a_resources->frameConstants, lightingTables.frameLighting.data(), sizeof(lightingTables.frameLighting), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes);
-			a_resources->frameLightingUploaded = lightingTables.frameLightingVersion;
-		}
+		const auto& frameCapture = a_store.GetFrameCapture();
+		latched(a_resources->frameConstants, frameCapture.lighting.data(), sizeof(frameCapture.lighting), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes);
 		// The LOD fades' frame inputs, after the frame lighting in the same block (PS b13, c6): this frame's camera, every
 		// epoch (the draw fades specular and envmap by distance, LodFadeFrame).
 		const LodFadeFrame lodFadeFrame = SampleLodFadeFrame();
 		latched(a_resources->frameConstants, &lodFadeFrame, sizeof(lodFadeFrame), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting));
 		// The frame's fog, into the vertex stage's b13 slot (DCLFFrameFog), every epoch: the technique rows keep theirs.
-		latched(a_resources->frameConstants, a_store.GetTables().frameFog.data(), sizeof(FrameFog), FrameSlotOffset(false, kFrameFogRegister));
+		latched(a_resources->frameConstants, frameCapture.fog.data(), sizeof(FrameFog), FrameSlotOffset(false, kFrameFogRegister));
+		// The extras' frame inputs (ExtrasFrame): the vertex part after the fog (c3-c7), the pixel part after the foliage parity's rows
+		// (PS b13, c16). The draw completes each object's static rows from them and its placement.
+		const ExtrasFrame extrasFrame = SampleExtrasFrame();
+		latched(a_resources->frameConstants, &extrasFrame, kExtrasFrameVertexBytes, FrameSlotOffset(false, kFrameFogRegister) + sizeof(FrameFog));
+		latched(a_resources->frameConstants, extrasFrame.projectedGlobals, sizeof(extrasFrame.projectedGlobals), kExtrasPixelFrameOffset);
 		// CS_DCLF_FOLIAGE_PARITY: the colour epoch's buffers (by its parity) and its tag, after the LOD fades in the same block (PS
 		// b13, c14: DCLFFoliageParity), and the compare pass's counters zeroed.
 		// The Z-prepass's stages read the owners' index and the size from it too, as the colour commit before them left it.
@@ -571,15 +559,16 @@ namespace DCLF
 				auto& animatedWords = buffers.fadeAnimatedMirror;
 				if (animatedWords.size() < buffers.fadeRootCapacity)
 					animatedWords.resize(buffers.fadeRootCapacity, 0u);
-				std::uint32_t lowest = ~0u, highest = 0;
+				std::vector<std::uint32_t> stamped;
+				stamped.reserve(counts.size());
 				for (const auto& [root, count] : counts) {
 					animatedWords[root] = FadeAnimatedWord(a_store.GetFrame(), count);
-					lowest = (std::min)(lowest, root);
-					highest = (std::max)(highest, root);
+					stamped.push_back(root);
 				}
-				if (lowest <= highest)
-					uploads(buffers.fadeAnimated, animatedWords.data() + lowest, std::size_t(highest - lowest + 1) * sizeof(std::uint32_t),
-						std::uint64_t(lowest) * sizeof(std::uint32_t));
+				std::sort(stamped.begin(), stamped.end());
+				SendWordRuns(stamped, [&](std::uint32_t a_first, std::uint32_t a_count) {
+					uploads(buffers.fadeAnimated, animatedWords.data() + a_first, std::size_t(a_count) * sizeof(std::uint32_t), std::uint64_t(a_first) * sizeof(std::uint32_t));
+				});
 				if (anim.varied) {
 					static std::uint32_t reported = 0;
 					if (reported++ < 5)
@@ -589,14 +578,25 @@ namespace DCLF
 			}
 			auto& cull = PrimaryCull::Get();
 			UploadFadeRoots(a_store.GetTables(), a_store.GetFrame(), inputs, logBase, buffers, uploads, cull.FadeVisibility(), cull.FadeVisibilityBlocks());
+			a_store.FadeRootsSent(buffers.fadeRootsHeld);
 			// Each root's list block, when the roots or an entry's list changed (rarely: a new snapshot, a cell's lists).
 			const auto& rootTables = a_store.GetTables();
-			const std::uint64_t listsKey = rootTables.fadeRootsVersion * 0x9E3779B97F4A7C15ull ^ cull.FadeRootListsVersion();
+			const std::uint64_t listsKey = rootTables.FadeRootsVersion() * 0x9E3779B97F4A7C15ull ^ cull.FadeRootListsVersion();
 			if (buffers.fadeRootLists && buffers.fadeRootListsHeld != listsKey && rootTables.fadeRootNode.size() <= buffers.fadeRootCapacity) {
 				std::vector<std::uint32_t> lists;
 				cull.FadeRootLists(rootTables.fadeRootNode, lists);
-				if (!lists.empty())
-					uploads(buffers.fadeRootLists, lists.data(), lists.size() * sizeof(std::uint32_t), 0);
+				// The words that differ from what the buffer holds (all of them for a new buffer: fadeRootListsHeld reset).
+				auto& sent = buffers.fadeRootListsMirror;
+				if (buffers.fadeRootListsHeld == ~0ull)
+					sent.clear();
+				std::vector<std::uint32_t> differing;
+				for (std::uint32_t r = 0; r < lists.size(); ++r)
+					if (r >= sent.size() || sent[r] != lists[r])
+						differing.push_back(r);
+				SendWordRuns(differing, [&](std::uint32_t a_first, std::uint32_t a_count) {
+					uploads(buffers.fadeRootLists, lists.data() + a_first, std::size_t(a_count) * sizeof(std::uint32_t), std::uint64_t(a_first) * sizeof(std::uint32_t));
+				});
+				sent = std::move(lists);
 				buffers.fadeRootListsHeld = listsKey;
 			}
 		}
@@ -655,7 +655,7 @@ namespace DCLF
 		a_stats.residentMissing += a_payload.residentMissing;
 		a_stats.residentPairsChecked += a_payload.residentPairsChecked;
 		a_stats.residentPairsStale += a_payload.residentPairsStale;
-		a_stats.boneRows = static_cast<std::uint32_t>(streams.boneRowsSent);
+		a_stats.extraRows = static_cast<std::uint32_t>(streams.extraRowsSent);
 
 		lap(4);
 		// The build's stats.
@@ -820,6 +820,7 @@ namespace DCLF
 		// The execution's values, into its slot of the latch (this runs inside the epoch, after the host
 		// waited for the slot): what the BuildDraws dispatches of the segment read instead of push constants.
 		BuildDrawsLatch latch{};
+		latch.placementsIndex = FrameValues::Get().PlacementsIndex();
 		latch.dispatch[0] = (inputCount + 63) / 64;
 		latch.dispatch[1] = 1;
 		latch.dispatch[2] = 1;
@@ -846,19 +847,21 @@ namespace DCLF
 				const float nx = px / frame->width * 2.0f - 1.0f, ny = 1.0f - py / frame->height * 2.0f;
 				struct Hit { float w; std::uint32_t object; };
 				std::vector<Hit> hits;
-				for (std::uint32_t o = 0; o < tables.objects.size(); ++o) {
-					const auto& r = tables.objects[o];
-					if (r.boundRadius <= 0.0f)
+				for (std::uint32_t o = 0; o < tables.objects.size() && o < tables.objectGeometry.size(); ++o) {
+					// The bound now, from the engine (render thread).
+					const auto* geometry = tables.objectGeometry[o];
+					if (!geometry || geometry->worldBound.radius <= 0.0f)
 						continue;
+					const auto& bound = geometry->worldBound;
 					float clip[4];
 					for (std::uint32_t row = 0; row < 4; ++row)
-						clip[row] = latch.viewProj[row * 4] * r.boundCenter[0] + latch.viewProj[row * 4 + 1] * r.boundCenter[1] + latch.viewProj[row * 4 + 2] * r.boundCenter[2] +
+						clip[row] = latch.viewProj[row * 4] * bound.center.x + latch.viewProj[row * 4 + 1] * bound.center.y + latch.viewProj[row * 4 + 2] * bound.center.z +
 						            latch.viewProj[row * 4 + 3];
 					if (clip[3] <= 1.0f)
 						continue;
 					// The sphere's screen radius, roughly (the projection's x scale over the distance).
 					const float scale = std::sqrt(latch.viewProj[0] * latch.viewProj[0] + latch.viewProj[1] * latch.viewProj[1] + latch.viewProj[2] * latch.viewProj[2]);
-					const float radius = r.boundRadius * scale / clip[3];
+					const float radius = bound.radius * scale / clip[3];
 					const float dx = clip[0] / clip[3] - nx, dy = clip[1] / clip[3] - ny;
 					if (dx * dx + dy * dy <= radius * radius)
 						hits.push_back({ clip[3], o });
@@ -903,16 +906,16 @@ namespace DCLF
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} Z-prepass pipeline slots past the latch's {}", slots, layout.buckets));
 			const std::uint32_t buckets = writePlan.Buckets();
 			if (planned)
-				latchBlock.Write(latchSlot, layout.BucketMapOffset(), std::as_bytes(std::span(writePlan.map.data(), planned)));
+				LatchWrite(latchBlock, "main bucket map", latchSlot, layout.BucketMapOffset(), std::as_bytes(std::span(writePlan.map.data(), planned)));
 			if (slots > planned) {
 				zBucketZeros.assign(slots - planned, kNoBucket);
-				latchBlock.Write(latchSlot, layout.BucketMapOffset() + planned * static_cast<std::uint32_t>(sizeof(std::uint32_t)),
+				LatchWrite(latchBlock, "main bucket map", latchSlot, layout.BucketMapOffset() + planned * static_cast<std::uint32_t>(sizeof(std::uint32_t)),
 					std::as_bytes(std::span(zBucketZeros.data(), slots - planned)));
 			}
 			if (buckets) {
 				const std::size_t words = std::size_t(buckets) * 2;
-				latchBlock.Write(latchSlot, layout.BucketTableOffset(), std::as_bytes(std::span(writePlan.table.data(), words)));
-				latchBlock.Write(latchSlot, layout.PhaseTwoBucketTableOffset(), std::as_bytes(std::span(writePlan.table.data() + words, words)));
+				LatchWrite(latchBlock, "main bucket tables", latchSlot, layout.BucketTableOffset(), std::as_bytes(std::span(writePlan.table.data(), words)));
+				LatchWrite(latchBlock, "main bucket tables", latchSlot, layout.PhaseTwoBucketTableOffset(), std::as_bytes(std::span(writePlan.table.data() + words, words)));
 				zBucketZeros.assign(std::max<std::size_t>(zBucketZeros.size(), buckets), 0u);
 				for (const auto& counts : a_resources->zBucketCounts)
 					latched(counts, zBucketZeros.data(), std::size_t(buckets) * sizeof(std::uint32_t), 0);
@@ -925,19 +928,19 @@ namespace DCLF
 		if (!depthOnly) {
 			const auto& layout = latchLayout;
 			const std::uint32_t header[4] = { static_cast<std::uint32_t>(sunCascades.size()), 0, 0, 0 };
-			latchBlock.Write(latchSlot, MainLatchLayout::CascadeOffset(), std::as_bytes(std::span(header)));
+			LatchWrite(latchBlock, "main sun cascades", latchSlot, MainLatchLayout::CascadeOffset(), std::as_bytes(std::span(header)));
 			if (!sunCascades.empty())
-				latchBlock.Write(latchSlot, MainLatchLayout::CascadeOffset() + kSunRegionHeader, std::as_bytes(std::span(sunCascades)));
+				LatchWrite(latchBlock, "main sun cascades", latchSlot, MainLatchLayout::CascadeOffset() + kSunRegionHeader, std::as_bytes(std::span(sunCascades)));
 			const std::uint32_t volumeHeader[4] = { static_cast<std::uint32_t>(shadowVolumes.size()), 0, 0, 0 };
-			latchBlock.Write(latchSlot, layout.ShadowVolumeOffset(), std::as_bytes(std::span(volumeHeader)));
+			LatchWrite(latchBlock, "main shadow volumes", latchSlot, layout.ShadowVolumeOffset(), std::as_bytes(std::span(volumeHeader)));
 			if (!shadowVolumes.empty())
-				latchBlock.Write(latchSlot, layout.ShadowVolumeOffset() + kSunRegionHeader, std::as_bytes(std::span(shadowVolumes)));
+				LatchWrite(latchBlock, "main shadow volumes", latchSlot, layout.ShadowVolumeOffset() + kSunRegionHeader, std::as_bytes(std::span(shadowVolumes)));
 			latch.sunState = kSunTestOn;
 			latch.sunCascadeOffset = static_cast<std::uint32_t>(latchBlock.Offset(latchSlot)) + MainLatchLayout::CascadeOffset();
 			latch.localShadowOffset = static_cast<std::uint32_t>(latchBlock.Offset(latchSlot)) + layout.ShadowVolumeOffset();
 			sunUpload = latch;
 		}
-		latchBlock.WriteValue(latchSlot, 0, latch);
+		LatchWriteValue(latchBlock, "main culling latch", latchSlot, 0, latch);
 		// What the reflection's faces, early next frame, draw from (ExecuteReflection): this commit's inputs and the buffers' backings.
 		a_resources->committed[shapeIndex] = { frameNumber, inputCount, a_resources->scene->generation, a_resources->objectCapacity, a_resources->MainRowsGeneration() };
 
