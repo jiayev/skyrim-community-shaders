@@ -91,6 +91,33 @@ texels, DCLF always nearer.
 
 **What would remove it.** A parity check that skips roots whose milestone changed within the write-back's latency.
 
+### Shading that changes during a frame is drawn from the next frame
+
+**What.** An object's shading (MaterialData, EmitColor, SSRParams.w, Linear Lighting's emissive multiplier) is FrameValues'
+(`BindlessShading`, PS t121), sampled at the frame's start for the slots the walk named by their shading events
+(dclf-async-publication.md, "Step 3, second part"). The engine's own draw reads the property when it sets the draw up. A
+value written after the frame's start, while the frame renders, therefore reaches DCLF's draws a frame later than the
+engine's:
+-   a controller on the animation job, which runs alongside the render thread: a candle's or a chandelier's flickering
+    emissive colour and multiplier;
+-   a cull's `GetRenderPasses`: the alpha it leaves on a non-member's property, and the LOD fades a held fade node keeps
+    on the property (a member's LOD fades are the draw's own, LodFadeFrame).
+
+Before, these were resampled at Prepass, the last point before the colour draw. The reflection faces already draw a frame
+behind for membership (dclf-lod.md, "The one-frame lag, accepted"); this is the same kind of difference for values.
+
+**Measured** (2026-10-06, x4, the Riverwood bridge, the camera turning). The persistent parity's shading line, at Prepass
+against the frame's rows: about 25 of 40,000 slots a check changed after the frame's start, all of them named by an
+event for the next frame; 0 queued, 0 missed. Wetness: 0 differ (Advanced Skin's value is computed once a frame, at the
+frame's start, before any draw). Capture parity counts the draws it affects on a separate line ("shading changed since the
+frame's start sampled it"), and compares those draws with the engine's value now, which checks the sample.
+
+**Why it is accepted.** The user's decision (2026-10-06): a frame's delay on an animated emissive or fade is not
+visible. It keeps the render thread out of the shading entirely; the sample runs on the pool, and the GPU waits for it.
+
+**What would remove it.** Sampling the named slots again just before the colour epoch, on the pool, into the same ring
+entry (a second upload against the frame's timeline). That puts a pool job back on the colour epoch's critical path.
+
 ### Tree LOD instances the engine leaves hidden after `allVisible`
 
 **What.** The terrain manager's node update (`FUN_140510730`) sets a tree LOD block's `allVisible` (`+0x82`) when the block
@@ -262,6 +289,32 @@ Runs: `CS_DCLF_PERSISTENT_PARITY`, `WALK_PARITY`, `CHANGE_LOG_PARITY`, `RESIDENT
 `RESIDENT_DRAW_PARITY`, `BUILD_PARITY`, `SKYLIGHT_PARITY` and `CS_DCLF_ASYNC=probe` together; and
 `CS_DCLF_CAPTURE_PARITY=1` with `CS_DCLF_OWNERSHIP=off` on its own. 60 seconds each; counts are per report
 interval (300 frames). Every check not listed reports 0.
+
+### Fade visibility parity differs in single windows
+
+**Evidence.** `CS_DCLF_FADE_PARITY`'s "fade visibility parity" line, which compares the engine's cull of entries with
+engine-drawn parts against FadeStateCS's test, is 0 in almost every 300-frame window. Occasionally one window differs:
+-   2026-10-07, x7, at the Riverwood bridge with the camera turning: the last window had 4,815 of 34,040 checks differ. The
+    first was `'FXAmbWaterFishBucket01A.nif' slot 0: the engine culled, the port visible (compound accepted at op 63)`.
+    The other 16 windows of that run, and every window of x5 and x6 (the same build except the fade uploads' runs), had 0.
+-   Earlier sessions show the same class, in single windows, at other places: 3-37 differ, with "the engine visible, the
+    port culled (compound rejected at op 22-110)" (`AkaviriKatana`, `BearTrap01`, `SpitPotClosed01`; logs junk-landOwn*,
+    junk-trav15).
+
+**What it is not.** The check runs on the CPU, in the list jobs' stand-in calls (`PrimaryCull.cpp`, `VisibilityPort` on the
+job's sampled block in `fadeVisibility`). It reads no uploaded data, so it says nothing about the GPU's copy of the blocks or
+the fade uploads; the GPU-side fade parities (port, state, roots with engine-drawn parts) were 0 in the same windows.
+
+**Suspected causes, not yet tested.**
+-   The engine's verdict is inferred: the node's LOD metric (+0x144) or last-visible frame (+0x13C) changed across its
+    `Process1`. A node that another process already updated this frame, or whose OnVisible returns early without writing
+    either field, reads as "culled" even when the engine kept it. The run of 4,815 differences in one window, all one way,
+    fits a node class that the inference misreads, rather than a test that is wrong for single nodes.
+-   The block is sampled at the job's first stand-in call. If the compound frustum's operators or plane sets change after that
+    point within the job (63 operators here, near the block's sampled count), the port tests a stale program.
+
+**To investigate.** Log the first differing node's class, the frame's two process calls on it, and its +0x13C/+0x144 before
+and after; and compare the block sampled at the first stand-in call with one sampled at the differing call.
 
 ### The async probes compare two different builds
 

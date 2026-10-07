@@ -223,6 +223,7 @@ struct RenderGraphRuntime::Impl
 	PFN_vkWaitSemaphores waitSemaphores = nullptr;
 	std::shared_ptr<rhi::DevicePtr> device = std::make_shared<rhi::DevicePtr>();
 	std::unique_ptr<org::PersistentGraphHost> host;
+	std::shared_ptr<rhi::TimelinePtr> frameWaitTimeline;  // FrameWaitTimeline
 	std::atomic<bool> faulted = false;
 
 	// The thread that drives the D3D11 immediate context (the one running epochs).
@@ -951,6 +952,17 @@ bool RenderGraphRuntime::Initialize()
 				EpochOf(Segment::MainOpaque) };
 		const bool closed = desc.closedExecutions;
 		state->host = std::make_unique<org::PersistentGraphHost>(std::move(desc));
+		// The frame-wait timeline, before anything builds the graph (its packets bind it when prepared): only with a queue of the
+		// uploader's own to signal it from.
+		if (state->uploadQueue) {
+			auto timeline = std::make_shared<rhi::TimelinePtr>();
+			if ((*state->device)->CreateTimeline(*timeline, 0, "CS frame values") == rhi::Result::Ok && *timeline) {
+				state->frameWaitTimeline = timeline;
+				state->host->SetFrameWaitTimeline(std::move(timeline));
+			} else {
+				logger::warn("[ORG] The frame-wait timeline could not be created: per-frame values have no GPU wait");
+			}
+		}
 		// CS_ORG_ASYNC_EPOCHS (default on, =0 off): each epoch's work is prepared, admitted and recorded ahead of
 		// its epoch point on the host's own thread; at the point the render thread only writes the epoch's
 		// latches, records the queued uploads and submits. Needs epochs and closed executions.
@@ -1083,6 +1095,11 @@ const std::string& RenderGraphRuntime::GetDisabledReason() const
 org::PersistentGraphHost* RenderGraphRuntime::Host()
 {
 	return IsActive() ? impl->host.get() : nullptr;
+}
+
+std::shared_ptr<rhi::TimelinePtr> RenderGraphRuntime::FrameWaitTimeline() const
+{
+	return IsActive() ? impl->frameWaitTimeline : nullptr;
 }
 
 std::shared_ptr<const void> RenderGraphRuntime::DeviceOwner() const
@@ -1374,6 +1391,7 @@ RenderGraphRuntime::~RenderGraphRuntime() = default;
 bool RenderGraphRuntime::IsActive() const { return false; }
 const std::string& RenderGraphRuntime::GetDisabledReason() const { return disabledReason; }
 org::PersistentGraphHost* RenderGraphRuntime::Host() { return nullptr; }
+std::shared_ptr<rhi::TimelinePtr> RenderGraphRuntime::FrameWaitTimeline() const { return nullptr; }
 std::shared_ptr<const void> RenderGraphRuntime::DeviceOwner() const { return {}; }
 bool RenderGraphRuntime::ExecuteEpoch(Segment, const std::function<void(org::RenderGraph&)>&,
 	std::shared_ptr<const void>) { return false; }

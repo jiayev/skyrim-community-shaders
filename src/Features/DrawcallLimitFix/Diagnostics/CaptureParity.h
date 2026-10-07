@@ -139,12 +139,16 @@ namespace DCLF
 		ankerl::unordered_dense::map<const RE::BSShaderMaterial*, MaterialMismatch> materialMismatchFollow;
 		std::map<std::string, std::uint32_t> materialMismatchResolved;
 		std::uint64_t geometryMismatches = 0;  // ... in PerGeometry constants
+		// Draws whose shading (MaterialData, EmitColor, SSRParams.w, the emissive multiplier) changed between the frame's start, when
+		// FrameValues sampled the row DCLF draws with, and the native draw: an accepted difference (dclf-async-publication.md,
+		// "Accepted differences"). Those draws' PerGeometry is compared with the engine's shading now, which checks the sampling.
+		std::uint64_t shadingSinceStart = 0;
 		std::uint64_t techniqueMismatches = 0; // ... in PerTechnique constants or filter modes
 		std::uint64_t inheritedFilters = 0;    // bound material textures whose filter mode neither SetupTechnique nor SetupMaterial sets
 		std::uint64_t lightChecks = 0;
 		std::uint64_t lightMismatches = 0;  // StrictLightData (LLF, PS b3) differs
 		// Advanced Skin: its per-material textures (PS t71, t74) against the material record, its wetness (PS b7)
-		// against the tables, and whether the object's actor ownership (SceneStore::Tracked::actorOwned) still holds.
+		// against the frame's shading row, and whether the object's actor ownership (SceneStore::Tracked::actorOwned) still holds.
 		std::uint64_t skinTextureChecks = 0;
 		std::uint64_t skinTextureMismatches = 0;
 		std::uint64_t skinWetnessChecks = 0;

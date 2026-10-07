@@ -11,39 +11,46 @@
 // multiplier and is included before the point where the block used to sit.
 #if defined(DCLF_BINDLESS)
 
-// The object's structure (LightingConstants.h, BindlessObject); its placement is a row of its own (DCLFPlacement, below).
+// The object's structure (LightingConstants.h, BindlessObject); its placement and its shading are rows of their own
+// (DCLFPlacement, DCLFShadingRow, below).
 struct DCLFObjectRecord
 {
-	float4 MaterialData;
-	float4 EmitColor;         // emissive in xyz, the per-object w of SSRParams in w
 	// The values that used to reach the shader as constant buffers of their own: Light Limit Fix's room
-	// index and shadow bit mask (b3), the alpha test reference (b11) and Linear Lighting's emissive
-	// multiplier (b8). Only read when DCLF_BINDLESS_DRAW is also defined; the record carries them either
-	// way so that the two builds share one layout.
+	// index and shadow bit mask (b3) and the alpha test reference (b11). Only read when DCLF_BINDLESS_DRAW is also defined;
+	// the record carries them either way so that the two builds share one layout.
 	int RoomIndex;
 	uint DCLFRecordFlags;  // bit 0: Subsurface Scattering's IsBeastRace, per actor; bit 1: alpha blended (LightingConstants.h, kRecord*)
 	float AlphaTestRef;
-	float EmissiveMult;
-	// Tree animation (technique 12). Per object: under DCLF_BINDLESS the PerGeometry buffer is one
-	// block for the whole pipeline, and a tree's wind amplitude and clock are its own.
-	float4 DCLFTreeParams;
-	float4 DCLFWindTimers;  // xy used; zw the tree slot and its listing's generation (DCLFTreeWind)
-	// Skinning: this object's bone palette rows in DCLFBones (three float4 rows a bone, current palette
-	// at DCLFBoneOffset, the previous frame's at DCLFPreviousBoneOffset), absolute like World.
-	uint DCLFBoneOffset;
-	uint DCLFPreviousBoneOffset;
-	uint DCLFBoneRows;
-	// The object's rows of further per-object PerGeometry values in the same buffer, after every
-	// palette: LandBlendParams, the three rows of TextureProj, then ProjectedUVParams, 2 and 3.
-	uint DCLFExtraOffset;
-	// Advanced Skin's SkinPerGeometry (b7): the owning actor's wetness, zero for everything else. Only read
-	// when DCLF_BINDLESS_DRAW is also defined (Skin.hlsli).
-	float4 DCLFSkinPerGeometry;
 	// The specular and envmap LOD fades the pass applies (bit 4 specular, 5 envmap, 6 SSRParams.w with specular), made by the
 	// draw from the frame's camera (Lighting.hlsl, DCLFFrameLighting c6-c12) while the placement's fade node has them apply
 	// (DCLFLodFadeFlagsOf).
 	uint DCLFLodFades;
-	uint3 DCLFRecordPadding;
+	// Tree animation (technique 12). Per object: under DCLF_BINDLESS the PerGeometry buffer is one
+	// block for the whole pipeline, and a tree's wind amplitude and clock are its own.
+	float4 DCLFTreeParams;
+	float4 DCLFWindTimers;  // xy used; zw the tree slot and its listing's generation (DCLFTreeWind)
+	// Skinning: this object's bone palette rows in DCLFPalettes (three float4 rows a bone, current palette
+	// at DCLFBoneOffset, the previous frame's at DCLFPreviousBoneOffset), absolute like World.
+	uint DCLFBoneOffset;
+	uint DCLFPreviousBoneOffset;
+	uint DCLFBoneRows;
+	// The object's rows of further per-object PerGeometry values in DCLFExtras: LandBlendParams, the three rows of
+	// TextureProj, then ProjectedUVParams, 2 and 3.
+	uint DCLFExtraOffset;
+};
+
+// The object's shading (LightingConstants.h, BindlessShading), by the same index: the frame's (FrameValues, sampled at its start).
+struct DCLFShadingRow
+{
+	float4 MaterialData;
+	float4 EmitColor;  // emissive in xyz, the per-object w of SSRParams in w
+	// Advanced Skin's SkinPerGeometry (b7): the owning actor's wetness, zero for everything else. Only read when
+	// DCLF_BINDLESS_DRAW is also defined (Skin.hlsli).
+	float4 SkinPerGeometry;
+	// Linear Lighting's emissive multiplier (b8), the sample EmitColor folds in (Color.hlsli).
+	float EmissiveMult;
+	uint DCLFShadingWritten;  // the CPU's (which components the pass writes)
+	uint2 DCLFShadingPadding;
 };
 
 // The object's placement (LightingConstants.h, BindlessPlacement), by the same index: what a move changes.
@@ -101,9 +108,16 @@ static const bool DCLFSunMiss = (DCLFObjectWord & 0x80000000u) != 0;
 StructuredBuffer<DCLFObjectRecord> DCLFObjects : register(t127);
 // The placement rows, by the same index (IndirectDraws: kPlacementBufferRegister).
 StructuredBuffer<DCLFPlacement> DCLFPlacements : register(t123);
-// The epoch's row buffer (IndirectDraws: kBonesBufferRegister): every skinned object's bone palette
-// rows end to end, current then previous, and after them the per-object extras rows (DCLFExtraOffset).
-StructuredBuffer<float4> DCLFBones : register(t126);
+// The frame's bone palettes (IndirectDraws: kPaletteBufferRegister; FrameValues): a skinned object's block holds its
+// current palette, then the previous frame's (DCLFBoneOffset, DCLFPreviousBoneOffset).
+StructuredBuffer<float4> DCLFPalettes : register(t122);
+// The per-object extras rows (IndirectDraws: kExtrasBufferRegister), at DCLFExtraOffset.
+StructuredBuffer<float4> DCLFExtras : register(t126);
+#	if defined(PSHADER)
+// The frame's shading rows (IndirectDraws: kShadingBufferRegister; FrameValues), by the object index: the pixel stage's alone
+// (the vertex stage's layout does not map t121).
+StructuredBuffer<DCLFShadingRow> DCLFShading : register(t121);
+#	endif
 // The trees' wind (IndirectDraws: kTreeWindRegister; TreeWindCS.hlsl): three rows an entry, TreeParams, WindTimers and the
 // listing's generation (x), the
 // nodeless entry first and tree slot s at entry s + 1, as the compute queue made them the frame before (it writes this

@@ -50,7 +50,6 @@ namespace DCLF
 	bool IndirectDraws::RevisionClaims() const { return false; }
 	void IndirectDraws::NoteSetApplied(std::uint32_t) {}
 	bool IndirectDraws::KeepEarlyShadowBuild() { return false; }
-	void IndirectDraws::BeforePlacementJoin() {}
 	void IndirectDraws::KickSceneStreams() {}
 	std::array<std::uint64_t, 3> IndirectDraws::TakeStreamsStats() { return {}; }
 	void IndirectDraws::EndFrame() {}

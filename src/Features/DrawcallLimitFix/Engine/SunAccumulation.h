@@ -15,7 +15,7 @@ namespace DCLF
 	 * @brief The sun entries DCLF could take out of the engine's cascade culls, as the scene store last found them
 	 * (SceneStore::UpdateSunCandidates): immutable, and replaced whole when any entry's status changes.
 	 *
-	 * An entry (a static reference's root, or a terrain block's multibound node: SceneStore::SunEntryOf) is a
+	 * An entry (a static reference's root, or a terrain block's multibound node: SceneStore::ResolveSunEntry) is a
 	 * candidate when every tracked geometry under it is either a table object, whose shadow the shadow epoch draws or
 	 * the caster rule rejects, or one the engine never draws into a shadow map (not a Lighting geometry, hidden,
 	 * alpha-blended, fading, or an unselected switch child).

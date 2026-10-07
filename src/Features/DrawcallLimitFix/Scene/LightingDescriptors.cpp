@@ -36,7 +36,7 @@ namespace DCLF
 			case Technique::MultilayerParallax:
 				return true;
 			// A multi-index shape's ice or snow layer (kMultiIndexSnow with kProjectedUV): SparkleParams is SetupMaterial's, the
-			// projected values the shape's own (RefreshObjectExtras), and the slot-10 texture SetupTechnique binds is replaced by
+			// projected values the shape's own (SceneStore::WriteObjectExtras), and the slot-10 texture SetupTechnique binds is replaced by
 			// SetupGeometry's projected textures.
 			case Technique::MultiIndexSparkle:
 				return ActiveToggles().layers;

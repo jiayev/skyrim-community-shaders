@@ -80,32 +80,6 @@ namespace DCLF
 			return nullptr;
 		}
 
-		// a_member: a scene member's (SceneStore's resident records), whose fades are DCLF's (FadeStateCS) and so not in its alpha.
-		inline ObjectShading MakeShading(const RE::BSLightingShaderProperty& a_property, const LightingDescriptors& a_descriptors, std::uint32_t a_renderFlags,
-			float& a_emissiveMult, bool a_member)
-		{
-			// BSLightingShader::SetupGeometry (engine notes): which components it writes depends on the pass.
-			const float unwritten = std::bit_cast<float>(kUnwrittenBits);
-			const bool specular = (a_descriptors.pass & kSpecularBit) != 0;
-			ObjectShading shading{};
-			shading.materialData[0] = a_descriptors.technique == kTechniqueEnvmap ? a_descriptors.envmapLODFade : unwritten;
-			shading.materialData[1] = specular ? a_descriptors.specularLODFade : unwritten;
-			// GetRenderPasses leaves materialAlpha * the fade node's currentFade on the property, for whichever camera called it last.
-			const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_property.material);
-			shading.materialData[2] = a_member && material ? material->materialAlpha : a_property.alpha;
-			shading.materialData[3] = unwritten;
-			const float mult = a_property.emissiveMult;
-			// The same sample the emissive colour below folds in: the shader divides it out again, so the
-			// two must never come from different reads of an animated value.
-			a_emissiveMult = mult;
-			const auto* emissive = a_property.emissiveColor;
-			shading.emitColor[0] = emissive ? emissive->red * mult : unwritten;
-			shading.emitColor[1] = emissive ? emissive->green * mult : unwritten;
-			shading.emitColor[2] = emissive ? emissive->blue * mult : unwritten;
-			shading.ssrSpecular = ((a_renderFlags & 2) ? 0.0f : 1.0f) * (specular ? a_descriptors.specularLODFade : 0.0f);
-			return shading;
-		}
-
 		inline void StoreTransform(const RE::NiTransform& a_transform, float (&a_out)[12])
 		{
 			// Row-major 3x4: rotation scaled, translation in the last column.
@@ -214,8 +188,8 @@ namespace DCLF
 		 * GetRenderPasses (BSLightingShaderProperty vtable slot 0x2A) writes them from the fade node's LOD metric
 		 * (skyrim-engine-notes.md, "LOD fades in GetRenderPasses") whenever any view registers the object, which can be
 		 * after the accumulate phase sampled its patch or while it is a resident. The detour compares the two floats
-		 * around the call and pushes the property when either moved; RefreshFrameConstants resamples its dependents'
-		 * shading. Cull and accumulation job threads push, the render thread drains.
+		 * around the call and pushes the property when either moved; the walk names its dependents for the next frame's
+		 * shading sample (NameShadingEvents). Cull and accumulation job threads push, the walk drains.
 		 */
 		inline EventQueue<const void*> lodFadeEvents;
 		inline bool lodFadeEventsInstalled = false;
@@ -232,8 +206,8 @@ namespace DCLF
 		 * (TESRegion +0x40, which the cell's emittance update FUN_1402b4390 blends from the region's weather) or the sky's
 		 * colour for sky-lit movable statics (Sky +0x9c of its colours, from Sky's colour update FUN_14040ba70). Both
 		 * updates write through Sky::SetColor (0x14040d970), whose detour pushes the colour when it moved; the colour is a
-		 * key in propertyDependents (ListDependents), and RefreshFrameConstants resamples its dependents' shading as it does
-		 * for a LOD fade event. The main thread and the cell update jobs push, the render thread drains.
+		 * key in propertyDependents (ListDependents), and the walk names its dependents as it does for a LOD fade event.
+		 * The main thread and the cell update jobs push, the walk drains.
 		 */
 		inline EventQueue<const void*> emittanceEvents;
 
@@ -441,8 +415,8 @@ namespace DCLF
 		// The frame's globals (kPSFrameGeometry, kVSEyePosition: LightingConstants.h). EyePosition is written only for some
 		// passes (WritesEyePosition); every other pass leaves whatever the constant buffer last held there, which no draw
 		// of it reads.
-		static_assert(std::tuple_size_v<decltype(SceneStore::Tables::frameLighting)> == std::tuple_size_v<FrameLighting>);
-		static_assert(std::is_same_v<decltype(SceneStore::Tables::frameFog), FrameFog>);
+		static_assert(std::tuple_size_v<decltype(SceneStore::FrameCapture::lighting)> == std::tuple_size_v<FrameLighting>);
+		static_assert(std::is_same_v<decltype(SceneStore::FrameCapture::fog), FrameFog>);
 		// What ObjectGeometryConstants writes over the pipeline's block for every object (or every object of the pipeline's
 		// kind): World, PreviousWorld, LandBlendParams, TreeParams, WindTimers, TextureProj; the light assignment Light
 		// Limit Fix never reads, MaterialData, EmitColor, ShadowLightMaskSelect, ProjectedUVParams 1-3, SSRParams.
@@ -526,17 +500,15 @@ namespace DCLF
 		struct AccumulateSnapshot
 		{
 			std::uint32_t flags, material, pipeline, drawPipeline, extras;
-			ObjectShading shading;
 			ObjectLights lights;
 			ObjectTreeAnim tree;
-			float emissive, fade;
+			float fade;
 			std::uint8_t resident;
 
 			AccumulateSnapshot(const SceneStore::Tables& a_tables, std::uint32_t a_slot) :
 				flags(a_tables.objects[a_slot].flags), material(a_tables.objects[a_slot].materialIndex),
 				pipeline(a_tables.objects[a_slot].pipelineIndex), drawPipeline(a_tables.draws[a_slot].pipelineIndex),
-				extras(a_tables.extraOffset[a_slot]), shading(a_tables.shading[a_slot]), lights(a_tables.lights[a_slot]),
-				tree(a_tables.treeAnim[a_slot]), emissive(a_tables.emissiveMult[a_slot]), fade(a_tables.fadeDistance[a_slot]),
+				extras(a_tables.extraOffset[a_slot]), lights(a_tables.lights[a_slot]), tree(a_tables.treeAnim[a_slot]), fade(a_tables.fadeDistance[a_slot]),
 				resident(a_tables.residentSlot[a_slot])
 			{}
 
@@ -548,8 +520,6 @@ namespace DCLF
 				if (flags != object.flags || material != object.materialIndex || pipeline != object.pipelineIndex ||
 					drawPipeline != a_tables.draws[a_slot].pipelineIndex || differs(fade, a_tables.fadeDistance[a_slot]))
 					causes |= kChangeBindings;
-				if (differs(shading, a_tables.shading[a_slot]) || differs(emissive, a_tables.emissiveMult[a_slot]))
-					causes |= kChangeShading;
 				if (differs(lights, a_tables.lights[a_slot]))
 					causes |= kChangeLights;
 				if (differs(tree, a_tables.treeAnim[a_slot]))

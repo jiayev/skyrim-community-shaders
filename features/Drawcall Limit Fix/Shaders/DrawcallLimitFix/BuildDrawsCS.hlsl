@@ -56,9 +56,6 @@ cbuffer BuildDrawsConstants : register(b0)
 	uint PipelineRowStride;
 	uint PipelineRowsAddressLo;
 	uint PipelineRowsAddressHi;
-	// StructuredBuffer of the 144-byte placement rows (DCLFObjects.hlsli, BindlessPlacement): an input's bound, sun entry and
-	// fade node are its object's row (a move rewrites the row, never the inputs).
-	uint PlacementsIndex;
 	// The depth segment's first phase and the shadow views: StructuredBuffer<FadeRootStatic> and StructuredBuffer<FadeNodeState>
 	// (FadeStateCS.hlsl; Records.h). The first phase drops an input under an owned root (kFadeRootOwned) while its root's
 	// OnVisible stops; a shadow view drops a caster under a stood-in root (kFadeRootStoodIn) while it fades. 0 elsewhere.
@@ -209,6 +206,9 @@ struct PlacementRows
 static const uint kObjectBoundRow = 6;
 static const uint kObjectSunEntryRow = 7;
 static const uint kObjectFadeNodeRow = 8;
+// StructuredBuffer of the 144-byte placement rows (DCLFObjects.hlsli, BindlessPlacement), the frame's (the latch's placementsIndex,
+// read at LoadLatch): an input's bound, sun entry and fade node are its object's row (a move rewrites the row, never the inputs).
+static uint PlacementsIndex;
 float4 ObjectRow(uint a_object, uint a_row)
 {
 	StructuredBuffer<PlacementRows> placements = ResourceDescriptorHeap[PlacementsIndex];
@@ -241,6 +241,7 @@ void LoadLatch()
 	BucketTableOffset = latch.Load(LatchOffset + (((PhaseBits >> 4) & 0xFu) == 2 ? 244 : 236));
 	BucketMapOffset = latch.Load(LatchOffset + 248);
 	FadeStatesIndex = latch.Load(LatchOffset + 240);
+	PlacementsIndex = latch.Load(LatchOffset + 252);
 }
 
 // Light Limit Fix's shadow mask of an input, as the main pass's light selection gives it (LocalShadowLights): the local

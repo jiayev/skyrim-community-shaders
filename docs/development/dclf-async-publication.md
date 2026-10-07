@@ -969,10 +969,204 @@ walk parity).
 - *Measured* (pl1): 7,457 sequences, no constants skips, set parity clean, resident draws 0 differ; records 0 differ (8.8
   rewritten an update), placement rows 0 differ (84.4 rewritten an update: the movers, now 144 B each instead of 256 B records);
   walk parity as in par1 (the 665 stale verdicts and 10 records noted there).
-- *Next* (2b): the rows from a FrameValues producer on the pool, into a ring of per-frame buffers sent on the dedicated copy
-  queue, which signals frame N's value of a FrameValues timeline that every epoch of frame N waits on at submission (ORG:
-  signal entries on `CopyQueueUploadService`, a host frame-wait timeline in `SubmitPersistentTicket`); the walk stops writing
-  placement columns and the placement join goes.
+
+**FrameValues, step 2b: the placements made on the pool, waited for by the GPU** (2026-10-06; bridge fv2 with set, resident-draw
+and persistent parity; motion m18 with persistent parity, m19 without).
+- *ORG.*
+  - `CopyQueueUploadService::QueueSignal` (`IUploadService::QueueStreamingSignal`, only from a dedicated queue): a signal entry
+    that FIFO-follows the producer's copies; the batch carrying it signals the external timeline (empty batches too).
+  - A host frame-wait timeline (`PersistentGraphHost::SetFrameWaitTimeline`, set before the graph is built: every packet binds
+    it as `RenderGraph::kFrameWaitTimelineIdentity`) and a submit-time value (`SetFrameWaitValue`): `SubmitPersistentTicket`
+    adds it to every batch's waits, the synchronous path to the admission's incoming waits. A value fixed at ticket preparation
+    could not work: an epoch's next submission is not known to be the next frame's.
+  - `PersistentGraphHost::SubmittedPoint` (a `GpuPoint` any thread can test or wait on; the queue registry's fences are shared
+    so a waiter outlives a rebuild).
+  - Tests: CopyQueueUploadServiceTests (a consumer submitted before the copies waits for the signal), PersistentVulkanHostTests
+    (sync, async, reuse: a frame waits on the GPU until its value is signalled from the dedicated uploader). The hardware run of
+    CopyQueueUploadServiceTests fails in its first test before and after these changes (WARP, what ctest runs, passes).
+- *DCLF* (`Draws/FrameValues`).
+  - The walk publishes a `PlacementPlan` (per-frame movers, gated or not; the roots it takes; the slots it wrote in full),
+    holding its engine objects, taken at the next frame's start and released on the render thread once no producer reads it.
+  - `BeginSceneFrame` kicks one producer a frame on the preparation pool and sets the frame wait to its sequence number; the
+    producers chain in order. Each samples the plan across the pool under read leases (the written slots once, plans kept until
+    sampled: a startup's first frames precede the upload queue), waits on the worker for the GPU point of the frame that last
+    read its ring buffer, sends that buffer the journal's runs it lacks, then always signals.
+  - Four ring buffers of every row (`kRing`); frame n reads buffer n % 4 through the frame record (t123) and the culling's latch
+    (`BuildDrawsLatch::placementsIndex`). The 2a store and scene buffer are gone. Placements stay in the tables for now (the
+    placement job also takes palettes): the persistent parity compares the rows with them after the placement join.
+- *Measured.*
+  - Bridge (fv2): set parity clean, resident draws 0 differ, 7,470 sequences. Frame values about 85 us sampling and 45 us
+    sending a frame on the pool, 0 buffer waits, 0 refused leases. Parity 2 rows of ~8,170 differ, the RuinsLever the walk
+    parity already finds stale in the tables.
+  - Motion (m18): 0 differ in most reports, 52-65 when a moved static (`PotOpen`) is written in full by the walk: its row is the
+    next frame's. Event-fed sampling (amendment A/B) removes that lag.
+  - Motion (m19): render-thread waits 0.3-1.4 ms/frame, nearly all the scene join (m17 0.5-1.3): unchanged, as expected. Epochs
+    cheaper: shadow views 76-84 us (m17 112-126), Z-prepass 142 (181).
+- *Next.* Palettes (bones) into FrameValues the same way, then the placement half of the job, the tables' placement columns and
+  the placement join go (2c). After that, the scene join's remaining readers (steps 3-6).
+
+**FrameValues, step 2c: palettes made on the pool; no placement in the tables, no placement job, no join** (2026-10-06; bridge
+fv3 with set, resident-draw and persistent parity; motion m20 with persistent parity, m21 without).
+- *Palettes.* A second ring of buffers (`FrameValues::PaletteRow`, t122 `DCLFPalettes`, vertex stage, from the frame record).
+  A skin's block (`Tables::boneOffset`, `boneRows`; placement only, `PlaceBones`) holds its current palette at twice its offset
+  and the previous one after it (`PaletteRowsOf`), so the layout never moves: no bone region, nothing rebuilt when the blocks'
+  capacity grows. The producer runs the engine's palette update (thread-safe: the skin's critical section and frame counter) for
+  every plan item with a block, then copies both palettes into the kept rows; a size that is not the block's is counted (the walk
+  writes it again: `KeepSkin`). An older plan's item naming a block a newer one names again leaves it to the newer.
+- *The extras buffer.* t126 holds the extras alone (`ExtrasStore`, `UpdateExtras`, `kInitialExtraRows`); the records address
+  them directly.
+- *Deleted.* The scene placement job (`TakePlacement`, `TakeRoot`, `RunPlacements`, `ApplyPlacements`, `JoinPlacements`, the probe
+  and the movers' witness), its joins at BeforeShadowMaps, EarlyPrepass, ProcessEvents and the walk, and
+  `IndirectDraws::BeforePlacementJoin` (which waited for the early shadow build because the join wrote the tables). The tables'
+  placement and palette columns (`ObjectRecord` is 16 B: geometry, material, pipeline, flags; `sunEntry`, `lodFade`, `bones`,
+  `previousBones`) and their change causes (`kChangePlacement`, `kChangePalette`). The walk lists every recorded mover for the
+  frame values (no gating: event-fed sampling is amendment A/B) and publishes the plan (`PublishPlacementPlan`: the roots, the
+  palette capacity).
+- *Kept as structure.* `Tables::sunEntryNode` (the node; its bound is the row's) and `hasFadeNode` (the fade-out test's input;
+  a `kChangeBindings` cause). Diagnostics that read bounds read the engine's now (render thread) or the frame's rows.
+- *Parity.* `FrameValues::CheckParity` compares every slot's row with the engine's now (`SampleSlot`), and every skin's palettes
+  with the skin's after the frame's update; the bindless record parity takes a made-up placement on both sides (it checks the
+  layout); capture parity compares the native draw's palettes with the frame's.
+- *Measured.*
+  - Bridge (fv3): set parity clean, resident draws 0 differ, 7,454 sequences. Frame values ~100 us sampling (638 items, 254
+    skins) and ~60 us sending, 0 buffer waits, 0 refused leases, 0 size defects. Parity against the engine: 40,795 rows and
+    1,270 palettes a check, 0 differ.
+  - Motion (m20, persistent parity): 0 differ in nearly every report; 26-65 rows when the walk writes moved statics
+    (`FireSptiCookingBase`, `PotOpen`, `RuinsLever`: their previous world), the known one-frame lag; palettes always 0 differ.
+    Note: persistent parity runs the scene work inline (`SceneWorkInline`), so its waits are not the async path's.
+  - Motion (m21): render-thread waits 0.25-1.25 ms/frame (m19 0.3-1.4), still the scene join; frame values 80-130 us sampling,
+    46-374 us sending a frame (up to ~300 KB of palettes while many actors are in view).
+- *Next.* Step 3: frame constants and captures out of the tables; then the accumulate phase, the lookups and ingestion (4-5) and
+  the chain (6), which remove the scene join. Event-fed sampling (amendment A/B) removes the moved statics' lag.
+
+**Step 3, first part: the frame data through the render thread traced; the extras rows' frame parts out of the tables**
+(2026-10-06; motion m22 before, m23 after; bridge x3 with set, resident-draw and persistent parity).
+- *Frame data through the render thread* (`Draws/FrameData`): every byte a commit writes for the GPU, counted at the three
+  ways it can: a latched copy (`LatchedUploads`, "latched: <buffer>", the frame-constants buffer by slot and part), a staged
+  upload (`CommitUploads`, "staged: <buffer>") and a latch block's write (`LatchWrite`, "latch: <what>"). What a worker or the
+  pool sends (the streams job, FrameValues) is not counted. Reported every 300 frames, largest first. Motion (m22/m23):
+  | Where | KB a frame |
+  |---|---|
+  | staged `cs.dclf.fade-roots` (the whole static table, re-sent when its version moves, every ~3 frames) | 98-112 |
+  | staged `cs.dclf.fade-visibility` (PrimaryCull's visibility blocks, whole, every frame) | 67 |
+  | staged `cs.dclf.fade-animated`, `fade-root-lists` | 9-16, 6-7 |
+  | latch: shadow per-frame view data, bucket tables, culling latches; shadow constants | ~4, ~2, ~1.5, ~1.9 |
+  | latched frame constants: PS b6 2.5, zeroed light block 2.4 (constant zeros, every commit), frame record 1.6, VS/PS b12 1.4 each, PS b5 1.3; lighting, LOD fades, fog, extras frame < 0.3 each | ~11 |
+  | latch: reflection (culling latches, face per-frame data, tree rows, buckets) | ~4.4 |
+  | everything else (main latch, counters, tree LOD, records and extras the commit sends itself) | ~5 |
+  | **total** | **~175-232** |
+  About 85% is fade: its static table should be sent by the journal's runs (or published with the revision), and its visibility
+  by changed blocks. The extras were never the render thread's bytes (the streams job stages them on the worker): their cost was
+  the watch's CPU.
+- *Zones* in `RefreshFrameConstants` (m22): 86 us a frame: shading and extras 63 (the watch re-deriving every watched slot's
+  extras), pipelines and techniques 14, material frame components 9, texture transforms 2, wetness 0.5.
+- *Extras.* An object's extras rows hold only its static parts (`SceneStore::WriteObjectExtras`: the land blend's material
+  offset; how TextureProj is made, in row 0's x for ProjectedUV objects - World x projection, the projection alone for Envmap, a
+  multi-index shape's own rows; the ProjectedUV parameters), written with the record's accumulate patch and on the shading
+  events. The frame's parts are an `ExtrasFrame` each main commit latches: VS b13 c3-c7 after the fog (the land blend position, the
+  ProjectedUV projection from the engine's own routine: 80 B), PS b13 c16 (the tilings and the projected-normals switch: 16 B).
+  The shader completes them from the placement row (`DCLFLandBlendParamsOf`, `DCLFTextureProjOf`; CPU `CompleteExtras`). The
+  per-frame watch (`shadingWatch`, `watched`, `kWatchExtras`) is gone. Reflection reads the colour commit's blocks, as before.
+- *Parity* (persistent): the completion against the engine's routines (`ReferenceExtras`) for every object with extras, and the
+  static rows against a write now. x3: 5,045 objects, 0 differ, largest difference 0.0078 (TextureProj's translation: the engine
+  subtracts the eye and adds it back, an ulp of the world position), 0 static rows stale with no event. Set parity clean, resident
+  draws 0 differ, 7,459 sequences, frame values 0 differ.
+- *Measured* (m23): `RefreshFrameConstants` 86 -> 25 us a frame (shading and extras 63 -> 2.4). Prepass 0.09-0.26 ms (m22
+  0.16-0.18; it also carries the colour build's kick and the reports).
+- *Found on the way:* a full shader recompile crashed twice inside Mod Organizer's usvfs (`hook_MoveFileExW`), from
+  ORGModuleServices' shader cache publishing on many compile threads at once, with one temporary name per key (two compiles of a
+  key wrote and renamed the same file). `ShaderCompiler::Store` now writes a temporary of its own and publishes one rename at a
+  time.
+- *Left in step 3:* the shading resample and wetness (now ~3 us) as FrameValues rows, which moves their sampling to the frame's
+  start (a frame's flicker off native on candle emissives, against capture parity's 0.1%: a decision); frame lighting and fog
+  out of `Tables` into a frame capture; technique rows and material frame components are lookup inputs (step 4). The fade data
+  above is the largest render-thread payload and is not in step 3's list.
+
+**Step 3, second part: the shading as FrameValues rows; the frame's globals a capture** (2026-10-06/07; bridge x4 with set,
+resident-draw and persistent parity; motion m25).
+- *The shading row* (`BindlessShading`, 64 B, PS t121 `DCLFShading`, `kShadingBufferRegister`): MaterialData, EmitColor with
+  SSRParams.w, the wetness (SkinPerGeometry), Linear Lighting's emissive multiplier, and a mask of the components the pass writes
+  (for the CPU's comparisons with the engine's constants, which keep the unwritten sentinel). A third FrameValues ring beside the
+  placements and the palettes. The record (`BindlessObject`) loses all of it: 128 -> 64 B (room index, record flags, alpha test,
+  LOD fades; tree; palette and extras offsets). `kChangeShading` is gone (`kChangeCauseCount` 9), and with it the tables'
+  `shading`, `emissiveMult` and `skinWetness` columns and the accumulate patch's shading.
+- *Which slots, when:* the walk names a slot (`SceneStore::ShadingItem`: its property held, its pass, member, actor) for its
+  shading events (`NameShadingEvents`: LOD fades, emittance, the controllers' MaterialSources writes; every slot the first time),
+  and writes its extras' static rows on the same events; the accumulate phase names a patched record (`ApplyAccumulatePatch`).
+  `BeginSceneFrame` hands them to the frame's producer (`TakeShadingItems`), which samples them across the pool
+  (`SampleShading`, under leases; each slot once, the newest naming wins). The render thread does no shading work.
+- *The wetness* stays a render-thread capture: `Skin::GetWetness` advances an actor's fade on its first call a frame and its
+  cache is not thread-safe (Skin's own SetupGeometry hook calls it on the render thread). `CaptureWetness` runs it at
+  `BeginSceneFrame` (0.7 us), fanned out by `ActorValueIndex` to the meshes whose value changed or joined; the producer writes
+  those after the items (a non-actor's item zeroes it).
+- *Accepted difference:* a value written while the frame renders (a controller on the animation job, a cull's
+  `GetRenderPasses`) is drawn from the next frame (dclf-open-defects.md, "Shading that changes during a frame is drawn from the
+  next frame"). Capture parity compares such draws with the engine's value now and counts them on their own line.
+- *Parity* (persistent, at Prepass, against the frame's rows): x4 39,810 slots a check, ~25 changed since the frame's start, all
+  named for the next frame; 0 queued, 0 missed; wetness 1,070 meshes, 0 differ. Extras 5,045 objects 0 differ; set parity clean;
+  resident draws 0 differ; 7,455 sequences; frame values rows and palettes 0 differ.
+- *The frame's globals* (`SceneStore::FrameCapture`): the frame lighting, the fog and the character light's noise view are no
+  longer columns of the tables; `RefreshFrameConstants` writes the capture, every commit latches it. The unread lighting
+  versions (`frameLightingVersion`, `frameLightingUploaded`) are gone.
+- *Measured* (m25, motion): `RefreshFrameConstants` 22.6 us (m23 24.6: shading and extras 2.4 -> 0); the walk's naming 3.0 us
+  (coordinator); the producer's shading 3.0 us (38 items, 26 rows changed a frame); FrameValues sends 182 KB a frame on the
+  upload queue. The render thread's own record writes halve (`cs.dclf.objects` 1.41 -> 0.69 KB a frame). Waits unchanged
+  (the scene join, 0.9-1.2 ms a frame in motion).
+- *Found on the way:* `constantsRefreshed` was set only by the old resample's first pass; without it every pipeline was
+  evaluated in full every frame (m24: Pipelines 13 -> 60 us). Set after the pipelines' loop again.
+- *Left:* technique rows and material frame components (step 4, with the lookups); the fade data (its own step: fade-roots'
+  whole-table resends, fade-visibility whole every frame); the zeroed light block latched every commit.
+
+**The fade data through the render thread: what changed, not whole tables** (2026-10-07; bridge x5/x7 with set, persistent and
+fade parity; motion m26/m27). The depth commit's fade uploads were ~85% of what the render thread sent the GPU. Each is now the
+part that changed:
+- *Fade roots* (`FadeRootStatic`, 80 B a root, ~1,350-4,000 roots): every write marks its row in a journal
+  (`Tables::fadeRootsJournal`, `NoteFadeRoot`; a table clear resyncs); the commit sends the runs since the version the buffer
+  holds (all of them for a new backing) and trims the journal (`SceneStore::FadeRootsSent`). 98-138 KB a frame in motion (the
+  whole table every ~3 frames) -> ~1.5 KB in ~14 runs.
+- *Visibility blocks* (11,392 B each, one per list process): of each block, the header, the operators and plane sets its counts
+  use and the view planes, each part only where it differs from what the buffer holds (`SceneBuffers::fadeVisibilitySent`).
+  FadeStateCS reads nothing past the counts. 67 KB every frame -> 0 with the camera still, 8-24 KB moving.
+- *Animated stamps* (`fadeAnimated`): the stamped roots' words in runs, gaps under 32 words merged (`SendWordRuns`), not the span
+  from the lowest root to the highest. 15-16 KB -> 2-3.5 KB (~35 copies).
+- *Root lists* (`fadeRootLists`): the words that differ from a mirror of the buffer, in runs. 6-10 KB every other frame -> out
+  of the report's top.
+- *The zeroed light block* (PS b3, 2.4 KB): constant, so sent once per frame-constants buffer by the first commit
+  (`Resources::sharedLightZeroed`), and out of the latched layout.
+- *Measured.* Bridge (x7): 61 KB a frame (x4 111). Motion (m27): 44-69 KB a frame (m23 175-232, m25 ~270). Fade parity: port,
+  state (640 updates, 0 differ) and roots with engine-drawn parts all OK; set parity clean.
+- *Seen, not from this* (dclf-open-defects.md, "Fade visibility parity differs in single windows"): fade visibility parity's CPU check (the engine's cull against the port's compound test on the sampled
+  block, in the list jobs) differed in one window of x7 (4,815 of 34,040, "the engine culled, the port visible, compound accepted
+  at op 63"). It reads no uploaded data; earlier sessions' runs show the same class (junk-landOwn*, junk-trav15).
+- *What remains* in motion: fade-visibility (camera-dependent), the trees' rows (5 KB, whole on a version change), the shadow
+  latches (~10 KB), the frame constants (~11 KB), face positions when faces animate in view (up to 78 KB at the bridge).
+
+**Step 4 reordered behind steps 5-6; the accumulate phase's spikes removed in place** (2026-10-07; bridge x14/x15 with persistent,
+resident-draw, set and fade parity; motion m28/m29).
+- *Why not a posted task yet.* The accumulate phase (EarlyPrepass) cost a median 26 us but a p90 508 us in motion (m27), and 490
+  us lie between EarlyPrepass and the Z-prepass. Posted to the coordinator it would run after the main cull's writes (properties'
+  alpha and LOD fades from GetRenderPasses, currentFade), but the Z-prepass and colour builds (the same FIFO worker) and the
+  Z-prepass commit read the live tables, and `KickZPrepassBuild` reads them on the render thread (material lookups, reserves,
+  `PrepareMainInputs`, the witness). Ahead of the builds, the kick would join it; behind them, the Z hook would wait for both
+  builds and the phase. It becomes possible once builds and commits read the publication (step 6). Not into the walk's task:
+  that runs beside the main cull, and the walk is to be replaced by events (plan, "eliminate the scene walk").
+- *Decal order kept* (`SceneStore::KeptDecalOrder`, DecalOrder.cpp). A decal's key (its child-slot path up the scene graph) is
+  taken when it joins, is patched again or is written again by the walk (an actor's parts every frame: their 3D is
+  re-parented without a patch), not for every decal on every change; the changed ones are merged into the kept order and the
+  ordinals counted again in one pass. A BGSDecalNode's decals are keyed from the end of its decal array, which any added or
+  removed decal (the engine's own too) shifts for all of them, so they are keyed again together. Parity
+  (`CS_DCLF_PERSISTENT_PARITY`: the kept order against one made whole): 0 differ, 0 stale keys (x14, x15). The first two
+  versions differed (20 stale keys a check: the decal node's shift, then the re-parented actor parts), which the parity's stale
+  key report named.
+- *Resident maintenance by changes* (Residents.cpp, `KeepResidentsAlive`). The used pipeline and material sets, the pipelines'
+  template members, the trees' members and the fade roots' centres were recounted from every resident (~7,500) on any join or
+  drop (a quarter of the frames in motion, 53 us); now a join, patch, drop or tree listing names its slot, and only those are
+  counted out and in again (`SlotMembers`, `ResidentCounted`); the joins' marks of a failed join are cleared by count. Whole
+  again only when every residency ends or the tables reset. The used-set parity (bound records against the sets): 0
+  differences.
+- *Measured* (m29 against m27): the phase 136 -> 70 us a frame mean, p90 508 -> 155 us; decal order mean 74 -> 17, p90 351 ->
+  52; resident keeping mean 15 -> 6.5, p90 57 -> 10. What is left in its p99 (480 us) is the joins themselves on cell loads
+  (classification, slots, the engine evaluations of new pipelines and materials).
 
 ## Implemented foundations
 

@@ -74,12 +74,12 @@ namespace DCLF::Draws
 	// (CS_DCLF_TABLE_START=small: a few rows each). The object capacity sizes every per-object buffer too: the object records,
 	// the visibility and frustum words (indexed by the object's table index), and the draw inputs - a segment or a shadow mode
 	// has at most one input per object (a cull-only one for a candidate it may not draw), so an input buffer the size of the
-	// object table holds any build's. The geometry rows are the slots' then one per face stream; the bone rows every palette,
-	// current then previous, then the extras; the face vertices every face shape's region.
+	// object table holds any build's. The geometry rows are the slots' then one per face stream; the extras rows every object's
+	// extras block (the palettes are FrameValues'); the face vertices every face shape's region.
 	constexpr std::uint32_t kInitialObjects = 32768;
 	constexpr std::uint32_t kInitialGeometries = 16384;
 	constexpr std::uint32_t kInitialPoolIndices = 1u << 23;  // the shadow views' index pool (IndexPool): 16 MB
-	constexpr std::uint32_t kInitialBoneRows = 131072;
+	constexpr std::uint32_t kInitialExtraRows = 16384;
 	constexpr std::uint32_t kInitialFaceVertices = 1u << 18;
 	constexpr std::uint32_t kNoRecord = ~0u;
 	constexpr std::uint32_t kNoSkip = ~0u;
@@ -222,7 +222,7 @@ namespace DCLF::Draws
 	// scene frame, and the parity log's first root (~0u: no log). The frame's inputs are a buffer (Records.h, FadeFrame).
 	struct FadeStateConstants
 	{
-		std::uint32_t rootsIndex = 0, statesIndex = 0, frameIndex = 0, placementsIndex = 0;
+		std::uint32_t rootsIndex = 0, statesIndex = 0, frameIndex = 0;
 		std::uint32_t latchIndex = 0, latchOffset = 0, logIndex = 0;
 		std::uint32_t outIndices[2]{};  // the published states, by the scene frame's parity
 		std::uint32_t visibilityIndex = 0;  // ByteAddressBuffer: the list processes' cull tests (Records.h, kFadeVisibilityLists blocks)
@@ -231,7 +231,7 @@ namespace DCLF::Draws
 		std::uint32_t eventsIndex = 0;      // RWStructuredBuffer<uint>: the write-back's events (Records.h, FadeEvent)
 		std::uint32_t reportedIndex = 0;    // RWStructuredBuffer<uint2>: per root, the generation and milestone last reported
 		std::uint32_t eventCapacity = 0;    // the events the list and every frame slot's readback hold
-		std::uint32_t padding = 0;
+		std::uint32_t padding[2]{};
 	};
 	static_assert(sizeof(FadeStateConstants) == 64);
 	constexpr std::uint32_t kFadeStateConstantWords = sizeof(FadeStateConstants) / 4;
@@ -342,8 +342,6 @@ namespace DCLF::Draws
 		std::uint32_t pipelineRowStride;
 		std::uint32_t pipelineRowsAddressLo;
 		std::uint32_t pipelineRowsAddressHi;
-		// The placement rows (BindlessPlacement): an input's bound, sun entry and fade node are its object's row, not its own.
-		std::uint32_t placementsIndex;
 		// The depth segment's first phase and the shadow views: the fade roots' static rows (an owned root's members follow its
 		// OnVisible verdict; the states are the latch's, BuildDrawsLatch::fadeStatesIndex). 0 elsewhere.
 		std::uint32_t fadeRootsIndex;
@@ -354,7 +352,7 @@ namespace DCLF::Draws
 		// A shadow view and the depth segment: each geometry slot's first index in the index pool (IndexPool::firsts). 0 elsewhere.
 		std::uint32_t poolFirstsIndex;
 	};
-	static_assert(sizeof(BuildDrawsConstants) == 116);
+	static_assert(sizeof(BuildDrawsConstants) == 112);
 	constexpr std::uint32_t kBuildDrawsConstantWords = sizeof(BuildDrawsConstants) / 4;
 
 	/**
@@ -414,7 +412,10 @@ namespace DCLF::Draws
 		// frame's tables, kNoBucket for a slot with none (no published pipeline); a reflection face's, each LOD slot's forward pipeline's bucket
 		// (IndirectDraws::ExecuteReflection). 0 elsewhere.
 		std::uint32_t bucketMapOffset;
-		std::uint32_t reserved;
+		// The frame's placement rows (FrameValues::PlacementsIndex: StructuredBuffer<BindlessPlacement>): an input's bound, sun entry
+		// and fade node are its object's row, which the frame's values wrote; the descriptor is the frame's (a ring buffer), so the
+		// latch's.
+		std::uint32_t placementsIndex;
 	};
 	static_assert(sizeof(BuildDrawsLatch) == 256 && offsetof(BuildDrawsLatch, viewProj) == 32 && offsetof(BuildDrawsLatch, cullPlanes) == 96 &&
 				  offsetof(BuildDrawsLatch, pipelineMapOffset) == 192 && offsetof(BuildDrawsLatch, sunState) == 196 &&
@@ -422,7 +423,7 @@ namespace DCLF::Draws
 				  offsetof(BuildDrawsLatch, sunCascadeOffset) == 224 && offsetof(BuildDrawsLatch, sunEntryOffset) == 228 &&
 				  offsetof(BuildDrawsLatch, localShadowOffset) == 232 && offsetof(BuildDrawsLatch, bucketTableOffset) == 236 &&
 				  offsetof(BuildDrawsLatch, fadeStatesIndex) == 240 && offsetof(BuildDrawsLatch, phaseTwoBucketTableOffset) == 244 &&
-				  offsetof(BuildDrawsLatch, bucketMapOffset) == 248);
+				  offsetof(BuildDrawsLatch, bucketMapOffset) == 248 && offsetof(BuildDrawsLatch, placementsIndex) == 252);
 	// BuildDrawsLatch::bucketMapOffset: a pipeline slot without a bucket (BuildDrawsCS's kNoPipeline).
 	constexpr std::uint32_t kNoBucket = 0xFFFFFFFFu;
 	constexpr std::uint32_t kSunTestOn = 1u << 31;

@@ -28,8 +28,6 @@ namespace DCLF
 	void SceneStore::BuildScenePhase()
 	{
 		DCLF_FRAME_TRACE("BuildScenePhase");  // TEMP frame trace
-		// Normally joined at BeforeShadowMaps already; a frame that did not get there joins before the walk.
-		JoinPlacements();
 		{
 			DCLF_SCENE_PART(Prologue, "CS.DCLF.Scene.Prologue");
 			// The frame number moved at BeginFrame, before the work was kicked: what the engine's hooks read in the window.
@@ -101,8 +99,13 @@ namespace DCLF
 		// Only what can have changed (DeltaWalk). CS_DCLF_WALK_PARITY=1: every 60 frames a dense rebuild, classifying
 		// every object from scratch, is compared with the slot tables object by object.
 		DeltaWalk();
-		// The kept records' placements and palettes, on the worker until BeforeShadowMaps (inline on a parity frame).
-		KickPlacements();
+		// What the next frame's values sample (FrameValues): the slots the shading events name, the walk's movers, the slots it wrote,
+		// the roots it takes.
+		{
+			DCLF_SCENE_PART(Shading, "CS.DCLF.Scene.Shading");
+			NameShadingEvents();
+		}
+		PublishPlacementPlan();
 		const bool walkParityOn = SwitchEnabled(Switch::WalkParity);
 		if (walkParityOn && ParityDue(frame)) {
 			DCLF_SCENE_PART(WalkParity, "CS.DCLF.Scene.WalkParity");
@@ -353,8 +356,6 @@ namespace DCLF
 			tables.objects.reserve(tracked.size());
 			tables.objectGeometry.reserve(tracked.size());
 			tables.draws.reserve(tracked.size());
-			tables.shading.reserve(tracked.size());
-			tables.emissiveMult.reserve(tracked.size());
 			tables.lights.reserve(tracked.size());
 			tables.treeAnim.reserve(tracked.size());
 			tables.skinPartitions.reserve(tracked.size());
@@ -620,12 +621,6 @@ namespace DCLF
 		}
 
 		ObjectRecord object{};
-		StoreTransform(geometry->world, object.world);
-		StoreTransform(DrawnPreviousWorld(*geometry), object.previousWorld);
-		object.boundCenter[0] = geometry->worldBound.center.x;
-		object.boundCenter[1] = geometry->worldBound.center.y;
-		object.boundCenter[2] = geometry->worldBound.center.z;
-		object.boundRadius = geometry->worldBound.radius;
 		object.geometryIndex = geometrySlot;
 		// The accumulator's half is not known yet: no bindings, and not native-visible. Both are
 		// patched by BuildAccumulatePhase, and nothing between the two phases reads them -
@@ -643,14 +638,10 @@ namespace DCLF
 			object.flags |= kObjectAlphaTest | (static_cast<std::uint32_t>(sceneAlpha->alphaThreshold) << kObjectAlphaThresholdShift) |
 			                (sceneAlpha->GetAlphaBlending() ? kObjectAlphaBlended : 0u);
 
-		// Skinning: the engine's own palette. Its per-frame update (AE FUN_140e4ff90) is what the bone
-		// setter runs from the native draw this object no longer gets; it is idempotent within a frame
-		// (frameID), copies the current palette to the previous one first, and writes three float4 rows
-		// a bone in absolute world space - which is what the shader indexes, so the rows are copied as
-		// they are and made eye-relative by the epoch, like World.
+		// Skinning: the engine's own palette, whose rows FrameValues samples. Its per-frame update (AE FUN_140e4ff90) is what the
+		// bone setter runs from the native draw this object no longer gets; it is idempotent within a frame (frameID, under the
+		// skin's critical section) and sizes the palette, which the block is placed by.
 		std::uint32_t objectBoneRows = 0;
-		const float* boneCurrent = nullptr;
-		const float* bonePrevious = nullptr;
 		if (auto* skin = data.skinInstance.get(); skin && ActiveToggles().skinned) {
 			timer.Add(BuildPart::Record);
 			if (trackedEntry->skinUpdatedFrame != frame) {
@@ -661,8 +652,6 @@ namespace DCLF
 			const std::uint32_t rows = skin->numMatrices * 3;
 			if (rows && skin->boneMatrices && skin->prevBoneMatrices && rows <= 240) {
 				objectBoneRows = rows;
-				boneCurrent = static_cast<const float*>(skin->boneMatrices);
-				bonePrevious = static_cast<const float*>(skin->prevBoneMatrices);
 				object.flags |= kObjectSkinned;
 				++stats.skinned;
 				stats.boneRows += rows;
@@ -681,18 +670,10 @@ namespace DCLF
 			DropResidentSlot(slotBefore, false);
 		const bool keepHalf = keepMember;
 		tables.objectSeen[objectId] = walkSerial;
-		if (objectBoneRows) {
-			const std::size_t at = std::size_t(tables.PlaceBones(objectId, objectBoneRows)) * 4;
-			const std::size_t bytes = std::size_t(objectBoneRows) * 4 * sizeof(float);
-			// Noted only when the rows differ (a skin that stands still uploads nothing).
-			if (std::memcmp(&tables.bones[at], boneCurrent, bytes) != 0 || std::memcmp(&tables.previousBones[at], bonePrevious, bytes) != 0) {
-				std::memcpy(&tables.bones[at], boneCurrent, bytes);
-				std::memcpy(&tables.previousBones[at], bonePrevious, bytes);
-				tables.NoteChange(objectId, kChangePalette);
-			}
-		} else {
+		if (objectBoneRows)
+			tables.PlaceBones(objectId, objectBoneRows);
+		else
 			tables.FreeBones(objectId);
-		}
 		// Whether the engine would draw this object into a shadow map, and with which Utility
 		// technique. It belongs here and nowhere else: every shadow view is rendered between this
 		// phase and the next, so a verdict taken later would arrive after the views that need it.
@@ -759,8 +740,9 @@ namespace DCLF
 				useKey(tables.occlusionKeysUsed[v], occlusion);
 			}
 		}
-		tables.sunEntry[objectId] = SunEntryOf(*trackedEntry, *geometry);
-		tables.lodFade[objectId] = LodFadeNodeOf(data.shaderProperty.get());
+		ResolveSunEntry(*trackedEntry, *geometry);
+		tables.sunEntryNode[objectId] = trackedEntry->sunEntryNode;
+		tables.hasFadeNode[objectId] = data.shaderProperty && data.shaderProperty->fadeNode ? 1 : 0;
 		if (face.positions)
 			PushFaceStream(*geometry, objectId, face, faceRegion);
 		else
@@ -771,8 +753,10 @@ namespace DCLF
 		tables.objectGeometry[objectId] = geometry;
 		tables.objectIdentity[objectId] = trackedEntry->identity;
 		tables.objectGroup[objectId] = trackedEntry->groupIdentity;
-		const bool retainWetness = trackedEntry->actorOwned &&
-			tables.actorWetness.Contains(objectId, trackedEntry->groupIdentity, trackedEntry->identity);
+		// A member decal written again (an actor's part every frame, a subtree attached again) may have moved in the scene graph:
+		// its place in the decal order is taken again (OrderDecals).
+		if (memberDecals.contains(objectId))
+			NoteDecalChanged(objectId);
 		const std::uint32_t keptPipeline = tables.draws[objectId].pipelineIndex;
 		if (keepHalf) {
 			// The scene bits the accumulate phase keeps are this write's; everything else is the patch's.
@@ -786,14 +770,8 @@ namespace DCLF
 			// decide whether an object needs them are derived.
 			tables.FreeExtras(objectId);
 			tables.objects[objectId] = object;
-			tables.shading[objectId] = ObjectShading{};
-			tables.emissiveMult[objectId] = 1.0f;
 			tables.lights[objectId] = ObjectLights{};
 			tables.treeAnim[objectId] = ObjectTreeAnim{};
-			// Wetness is actor-owned frame state, not an output of scene-record
-			// construction. Keep it across rewrites of the same member incarnation.
-			if (!retainWetness)
-				tables.skinWetness[objectId] = {};
 			tables.fadeDistance[objectId] = 0.0f;
 		}
 		tables.actorWetness.Set(objectId, trackedEntry->actorOwned ? trackedEntry->groupIdentity : 0,
@@ -832,12 +810,7 @@ namespace DCLF
 		const bool keepMember = same && a_keepMember && IsResidentSlot(slot) && !(tables.objects[slot].flags & kObjectFree);
 		if (!denseWalk && !keepMember && IsResidentSlot(slot))
 			DropResidentSlot(slot, false);
-		const auto& base = tables.objects[a_base];
 		ObjectRecord object{};
-		std::memcpy(object.world, base.world, sizeof(object.world));
-		std::memcpy(object.previousWorld, base.previousWorld, sizeof(object.previousWorld));
-		std::memcpy(object.boundCenter, base.boundCenter, sizeof(object.boundCenter));
-		object.boundRadius = base.boundRadius;
 		object.geometryIndex = geometrySlot;
 		// The layer's draws apply no alpha property (render flags 0x41) and cast no shadow; two-sidedness is its property's.
 		object.flags = kObjectNoBindings | kObjectNoShadow |
@@ -848,8 +821,8 @@ namespace DCLF
 		tables.shadowReject[slot] = static_cast<std::uint8_t>(ShadowReject::Layer);
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
 			tables.occlusionTechnique[v][slot] = 0;
-		tables.sunEntry[slot] = tables.sunEntry[a_base];
-		tables.lodFade[slot] = LodFadeNodeOf(property);
+		tables.sunEntryNode[slot] = tables.sunEntryNode[a_base];
+		tables.hasFadeNode[slot] = property->fadeNode ? 1 : 0;
 		tables.ClearFaceStream(slot);
 		tables.shadowDiffuse[slot] = nullptr;
 		tables.shadowMaterial[slot] = nullptr;
@@ -857,6 +830,8 @@ namespace DCLF
 		tables.objectGeometry[slot] = a_geometry;
 		tables.objectIdentity[slot] = a_tracked.identity;
 		tables.objectGroup[slot] = a_tracked.groupIdentity;
+		if (memberDecals.contains(slot))
+			NoteDecalChanged(slot);
 		tables.layerBase[slot] = a_base;
 		tables.layerOf[a_base] = slot;
 		const std::uint32_t keptPipeline = tables.draws[slot].pipelineIndex;
@@ -869,11 +844,8 @@ namespace DCLF
 		} else {
 			tables.FreeExtras(slot);
 			tables.objects[slot] = object;
-			tables.shading[slot] = ObjectShading{};
-			tables.emissiveMult[slot] = 1.0f;
 			tables.lights[slot] = ObjectLights{};
 			tables.treeAnim[slot] = ObjectTreeAnim{};
-			tables.skinWetness[slot] = {};
 			tables.fadeDistance[slot] = 0.0f;
 		}
 		tables.actorWetness.Set(slot, 0, a_tracked.identity);
@@ -1604,26 +1576,16 @@ namespace DCLF
 					// Every walk lists the actors' records anew (Tables::actorObjects: wetness and capture parity read it).
 					if (recorded && entry.actorOwned)
 						tables.actorObjects.push_back(entry.slot);
-					// An actor's skeleton moves without a controller or a body on its chain (Havok's behaviour graph). A mover
-					// nothing moved this frame or the last keeps its placement and palette (MoveGated).
+					// An actor's skeleton moves without a controller or a body on its chain (Havok's behaviour graph). Every
+					// recorded mover is FrameValues' each frame (its placement and palette).
 					if (recorded && (entry.lightTraits & (kTraitMoves | kTraitRootMoves | kTraitSkin | kTraitActor))) {
-						std::uint8_t take = kTakePlacement | (keptSkin ? kTakePalette : 0);
-						const MoveReason reason = MoveReasonOf(entry);
-						if (reason == kMoveGated) {
-							if (!moveWitness) {
-								++stats.lightGated;
-								entry.movedWalk = walkSerial;
-								++delta.kept;
-								continue;
-							}
-							take |= kTakeWitness;
-						}
+						WalkPlan().movers.push_back(PlanItemOf(geometry, entry));
 						++stats.lightPlaced;
-						QueuePlacement(geometry, entry, take, reason);
+						++delta.moved;
 					} else {
-						entry.movedWalk = walkSerial;  // not written in full: a later round may still write it
 						++delta.kept;
 					}
+					entry.movedWalk = walkSerial;  // not written in full: a later round may still write it
 					continue;
 				}
 			}
@@ -1639,8 +1601,9 @@ namespace DCLF
 			MoveBucket(entry, bucket);
 			if (!written && entry.slot != kNoObjectSlot)
 				ReleaseObjectSlot(entry);
-			// What the write changed (Tables::changeLog); a slot taken anew is new in everything.
+			// What the write changed (Tables::changeLog); a slot taken anew is new in everything. Its row is FrameValues' next frame.
 			if (written && entry.slot != kNoObjectSlot) {
+				WalkPlan().written.push_back(PlanItemOf(geometry, entry));
 				if (entry.slot == slotBefore)
 					tables.NoteWrite(entry.slot, columnsBefore);
 				else

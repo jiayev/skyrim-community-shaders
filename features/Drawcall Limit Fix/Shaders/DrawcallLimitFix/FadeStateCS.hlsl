@@ -15,7 +15,6 @@ cbuffer FadeStateConstants : register(b0)
 	uint RootsIndex;    // StructuredBuffer<FadeRootStatic>
 	uint StatesIndex;   // RWStructuredBuffer<FadeNodeState>
 	uint FrameIndex;    // StructuredBuffer<FadeFrame>, one row
-	uint PlacementsIndex;  // StructuredBuffer of the placement rows (a root's centre: its member's fade node row)
 	uint LatchIndex;    // ByteAddressBuffer: the depth segment's BuildDrawsLatch (its view-projection)
 	uint LatchOffset;
 	uint LogIndex;      // RWStructuredBuffer<FadeLogEntry> (CS_DCLF_FADE_PARITY)
@@ -568,7 +567,9 @@ void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
 		return;
 	}
 	const FadeNodeState before = state;
-	StructuredBuffer<PlacementRows> placements = ResourceDescriptorHeap[PlacementsIndex];
+	// The frame's placement rows (the latch's BuildDrawsLatch::placementsIndex): a root's centre is its member's fade node row.
+	ByteAddressBuffer frameLatch = ResourceDescriptorHeap[LatchIndex];
+	StructuredBuffer<PlacementRows> placements = ResourceDescriptorHeap[frameLatch.Load(LatchOffset + 252)];
 	const float3 centre = placements[root.Object].Rows[kObjectFadeNodeRow].xyz;
 	// The bound's radius as the engine reads it now: the member's sun entry node is its reference root, which is the fade
 	// root (the placement row's sun entry, kept by the placements; a negative or unbounded radius: none, the listed radius instead).

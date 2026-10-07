@@ -3,8 +3,30 @@
 
 namespace DCLF::Draws
 {
+	std::string FrameConstantsPart(std::uint64_t a_offset)
+	{
+		const auto slot = static_cast<std::uint32_t>(a_offset / kFrameSlotBytes);
+		const std::uint64_t within = a_offset % kFrameSlotBytes;
+		if (slot == kFrameFogRegister)
+			return within < sizeof(FrameFog) ? "frame constants VS b13 (fog)" : "frame constants VS b13 (extras frame)";
+		if (slot < kConstantBufferRegisters)
+			return fmt::format("frame constants VS b{}", slot);
+		if (slot < 2 * kConstantBufferRegisters)
+			return fmt::format("frame constants PS b{}", slot - kConstantBufferRegisters);
+		if (slot == kFrameSlotSharedLight)
+			return "frame constants: zeroed light block";
+		if (slot == kFrameSlotLighting)
+			return within < sizeof(FrameLighting)                                   ? "frame constants: frame lighting" :
+			       within < sizeof(FrameLighting) + sizeof(LodFadeFrame)           ? "frame constants: LOD fade frame" :
+			       within < kExtrasPixelFrameOffset % kFrameSlotBytes               ? "frame constants: foliage parity" :
+			                                                                         "frame constants PS b13 (extras frame)";
+		if (slot == kFrameSlotRecord)
+			return "frame constants: frame record";
+		return "frame constants: ?";
+	}
+
 	void CheckBindlessRecord(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, const BindlessObject& a_record,
-		const BindlessPlacement& a_placement, const RE::NiPoint3& a_eye,
+		const BindlessPlacement& a_placement, const BindlessShading& a_shading, const RE::NiPoint3& a_eye,
 		const RE::NiPoint3& a_previousEye, const GeometryPatchOffsets& a_offsets, std::span<const std::byte> a_vs, std::span<const std::byte> a_ps,
 		IndirectDraws::Stats& a_stats)
 	{
@@ -30,10 +52,10 @@ namespace DCLF::Draws
 		compare(a_vs, a_offsets.vsWorld, std::min(a_offsets.vsWorldSize, 12u), relative, "World");
 		StoreRelativeTo(relative, a_placement.previousWorld, a_previousEye);
 		compare(a_vs, a_offsets.vsPreviousWorld, std::min(a_offsets.vsPreviousWorldSize, 12u), relative, "PreviousWorld");
-		compare(a_ps, a_offsets.psMaterialData, std::min(a_offsets.psMaterialDataSize, 4u), a_record.shading.materialData, "MaterialData");
-		compare(a_ps, a_offsets.psEmitColor, std::min(a_offsets.psEmitColorSize, 3u), a_record.shading.emitColor, "EmitColor");
+		compare(a_ps, a_offsets.psMaterialData, std::min(a_offsets.psMaterialDataSize, 4u), a_shading.shading.materialData, "MaterialData");
+		compare(a_ps, a_offsets.psEmitColor, std::min(a_offsets.psEmitColorSize, 3u), a_shading.shading.emitColor, "EmitColor");
 		if (a_offsets.psSSRParams != ~0u && a_offsets.psSSRParamsSize > 3)
-			compare(a_ps, a_offsets.psSSRParams + 3, 1, &a_record.shading.ssrSpecular, "SSRParams.w");
+			compare(a_ps, a_offsets.psSSRParams + 3, 1, &a_shading.shading.ssrSpecular, "SSRParams.w");
 
 		// The tail has no constant group of its own to compare against (it is the record's alone), so it is checked
 		// against the values the engine's buffers would hold, derived from the tables.
@@ -50,28 +72,12 @@ namespace DCLF::Draws
 		const float threshold = (object.flags & kObjectAlphaTest) ? ((object.flags >> kObjectAlphaThresholdShift) & 0xFF) / 255.0f : 0.0f;
 		expect(std::bit_cast<std::uint32_t>(a_record.alphaTestRef) == std::bit_cast<std::uint32_t>(threshold), "AlphaTestRef");
 		const bool skinned = (object.flags & kObjectSkinned) && a_objectIndex < a_tables.boneOffset.size();
-		expect(a_record.boneOffset == (skinned ? a_tables.boneOffset[a_objectIndex] : 0u), "BoneOffset");
+		const auto palette = skinned ? PaletteRowsOf(a_tables.boneOffset[a_objectIndex], a_tables.boneRows[a_objectIndex]) : PaletteRows{};
+		expect(a_record.boneOffset == palette.current, "BoneOffset");
 		expect(a_record.boneRows == (skinned ? a_tables.boneRows[a_objectIndex] : 0u), "BoneRows");
-		expect(a_record.previousBoneOffset == (skinned ? a_tables.boneOffset[a_objectIndex] + static_cast<std::uint32_t>(a_tables.bones.size() / 4) : 0u), "PreviousBoneOffset");
+		expect(a_record.previousBoneOffset == palette.previous, "PreviousBoneOffset");
 		const bool extras = a_objectIndex < a_tables.extraOffset.size() && a_tables.extraOffset[a_objectIndex] != kNoExtraRows;
-		expect(a_record.extraOffset == (extras ? static_cast<std::uint32_t>(a_tables.bones.size() / 4) * 2 + a_tables.extraOffset[a_objectIndex] : 0u), "ExtraOffset");
-		// EmissiveMult is the only one of the four whose SOURCE changes, from the scene graph to the
-		// tables, so it was tempting to check it against a live read of the property here. That check
-		// was built, and it fired: ~100 components in half a billion, always on flickering emissives.
-		// It was the check that was wrong. The multiplier is animated, and the shader divides it back
-		// out of the emissive colour before re-applying it - so the record's multiplier has to be the
-		// same SAMPLE that produced this object's emitColor, which is why MakeShading hands both back
-		// together. A live read at epoch time is a strictly later sample, and matching it would break
-		// the cancellation rather than prove anything.
-		//
-		// What is worth checking is the plumbing, because emissiveMult is a new parallel array and a
-		// gap in one of those shifts every later object's index. Whether it is sampled at the right
-		// point in the frame is already covered, and better, by capture parity's EmitColor comparison
-		// against the engine's own draw - which is the check RefreshFrameConstants exists to satisfy.
-		expect(a_tables.emissiveMult.size() == a_tables.objects.size(), "emissiveMult table length");
-		expect(a_tables.skinWetness.size() == a_tables.objects.size() &&
-				   std::memcmp(a_record.skinPerGeometry, a_tables.skinWetness[a_objectIndex].data(), sizeof(a_record.skinPerGeometry)) == 0,
-			"SkinPerGeometry");
+		expect(a_record.extraOffset == (extras ? a_tables.extraOffset[a_objectIndex] : 0u), "ExtraOffset");
 	}
 
 	Capture CaptureBindings()

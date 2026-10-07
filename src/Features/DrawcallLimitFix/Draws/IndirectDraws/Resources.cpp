@@ -919,13 +919,12 @@ namespace DCLF
 		const bool smallStart = SwitchValue(Switch::TableStart) == "small";
 		buffers->objectCapacity = smallStart ? 64u : kInitialObjects;
 		buffers->geometryRows = smallStart ? 64u : kInitialGeometries;
-		buffers->boneRows = smallStart ? 256u : kInitialBoneRows;
+		buffers->extraRows = smallStart ? 256u : kInitialExtraRows;
 		buffers->faceVertices = smallStart ? 1024u : kInitialFaceVertices;
-		// Structured, because the shaders read the object records and the bone rows through SRVs (t127, t126); the geometry
+		// Structured, because the shaders read the object records and the extras rows through SRVs (t127, t126); the geometry
 		// table is BuildDraws' (raw words), and the face positions are a vertex buffer.
 		buffers->objects = MakeVersioned(StructuredBuffer(buffers->objectCapacity, sizeof(BindlessObject), "cs.dclf.objects", buffers->objectsIndex));
-		buffers->bones = MakeVersioned(StructuredBuffer(buffers->boneRows, 16, "cs.dclf.bones", buffers->bonesIndex));
-		buffers->placements = MakeVersioned(StructuredBuffer(buffers->objectCapacity, sizeof(BindlessPlacement), "cs.dclf.placements", buffers->placementsIndex));
+		buffers->extras = MakeVersioned(StructuredBuffer(buffers->extraRows, 16, "cs.dclf.extras", buffers->extrasIndex));
 		buffers->geometries = MakeVersioned(CreateWords(std::uint64_t(buffers->geometryRows) * sizeof(GeometryDraw) / 4, false, "cs.dclf.geometries"));
 		buffers->facePositions = MakeVersioned(DeviceBuffer(std::uint64_t(buffers->faceVertices) * 16, "cs.dclf.face-positions"));
 		buffers->facePositionsAddress = AddressOf(a_device, *buffers->facePositions->Get());
@@ -1140,36 +1139,23 @@ namespace DCLF
 			if (a_adopted)
 				consequences.push_back(std::move(a_adopted));
 		};
-		// The records and the placement rows, by object slot.
-		grow("object records", next.objectCapacity, a_tables.objects.size(), sizeof(BindlessObject) + sizeof(BindlessPlacement),
-			[&](std::uint32_t a_rows, auto& a_parts) {
-				a_parts.push_back({ s.objects, a_rows });
-				a_parts.push_back({ s.placements, a_rows });
-			},
+		grow("object records", next.objectCapacity, a_tables.objects.size(), sizeof(BindlessObject),
+			[&](std::uint32_t a_rows, auto& a_parts) { a_parts.push_back({ s.objects, a_rows }); },
 			[&s] {
 				s.objectsIndex = s.objects->Get()->GetSRVInfo(0).slot.index;
-				s.placementsIndex = s.placements->Get()->GetSRVInfo(0).slot.index;
 				s.held.objects = 0;
-				s.held.placements = 0;
 			});
 		// The slots, then one row per face stream (AppendFaceStreams).
 		grow("geometry rows", next.geometryRows, a_tables.geometries.size() + a_tables.faceStreams.size(), sizeof(GeometryDraw),
 			[&](std::uint32_t a_rows, auto& a_parts) { a_parts.push_back({ s.geometries, static_cast<std::uint32_t>(std::uint64_t(a_rows) * sizeof(GeometryDraw) / 4) }); },
 			[&s] { s.held.geometries = 0; });
-		// Every palette, current then previous, then the extras (BonesOut::Rows), laid out by the region: the tables' palettes now.
-		// A new region moves every record's previous palette and extras (UpdateObjectRecords rebuilds them) and every row.
-		const bool newRegion = a_tables.BoneCapacity() > next.boneRegion;
-		if (newRegion)
-			next.boneRegion = a_tables.BoneCapacity();
-		const std::uint32_t boneRows = next.boneRows;
-		grow("bone rows", next.boneRows, 2ull * next.boneRegion + a_tables.extraRows.size() / 4, 16,
-			[&](std::uint32_t a_rows, auto& a_parts) { a_parts.push_back({ s.bones, a_rows }); },
+		// The extras' rows (ExtrasOut::Rows).
+		grow("extras rows", next.extraRows, a_tables.extraRows.size() / 4, 16,
+			[&](std::uint32_t a_rows, auto& a_parts) { a_parts.push_back({ s.extras, a_rows }); },
 			[&s] {
-				s.bonesIndex = s.bones->Get()->GetSRVInfo(0).slot.index;
-				s.held.bones = 0;
+				s.extrasIndex = s.extras->Get()->GetSRVInfo(0).slot.index;
+				s.held.extras = 0;
 			});
-		if (newRegion && next.boneRows == boneRows)
-			consequences.push_back([&s] { s.held.bones = 0; });
 		std::uint64_t faceVertices = 0;
 		for (const auto& stream : a_tables.faceStreams)
 			if (stream.object != SceneStore::Tables::kNoFaceObject)

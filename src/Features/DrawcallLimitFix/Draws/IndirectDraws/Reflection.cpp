@@ -284,11 +284,11 @@ namespace DCLF
 			const auto& writeBuckets = target.buckets;
 			const auto region = static_cast<std::uint32_t>(latchBlock.Offset(latchSlot));
 			if (!writeMap.empty())
-				latchBlock.Write(latchSlot, ReflectionLatchLayout::MapOffset(), std::as_bytes(std::span(writeMap)));
+				LatchWrite(latchBlock, "reflection bucket map", latchSlot, ReflectionLatchLayout::MapOffset(), std::as_bytes(std::span(writeMap)));
 			// A pipeline slot the tables have gained since the map was made has no bucket (none of its draws is the frame's).
 			if (slots > writeMap.size()) {
 				const std::vector<std::uint32_t> none(slots - writeMap.size(), kNoBucket);
-				latchBlock.Write(latchSlot, ReflectionLatchLayout::MapOffset() + static_cast<std::uint32_t>(writeMap.size() * sizeof(std::uint32_t)), std::as_bytes(std::span(none)));
+				LatchWrite(latchBlock, "reflection bucket map", latchSlot, ReflectionLatchLayout::MapOffset() + static_cast<std::uint32_t>(writeMap.size() * sizeof(std::uint32_t)), std::as_bytes(std::span(none)));
 			}
 			// Every value the faces' buffers take goes into the latch; the epoch's latched copies (ReflectionLatchedCopiesPass) take
 			// them there and zero the counters, so this commit records no copy.
@@ -306,6 +306,7 @@ namespace DCLF
 				latch.drawCount = inputs;
 				latch.cullFlags = 1;  // the frustum alone, near plane included
 				latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;
+				latch.placementsIndex = FrameValues::Get().PlacementsIndex();
 				FoldEyeIntoViewProj(face.viewProj, face.eye, latch.viewProj);
 				latch.bucketMapOffset = region + ReflectionLatchLayout::MapOffset();
 				latch.bucketTableOffset = region + layout.TableOffset(f);
@@ -315,20 +316,20 @@ namespace DCLF
 					table.push_back(bucket.capacity);
 				}
 				if (!table.empty())
-					latchBlock.Write(latchSlot, layout.TableOffset(f), std::as_bytes(std::span(table)));
-				latchBlock.WriteValue(latchSlot, f * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
+					LatchWrite(latchBlock, "reflection bucket tables", latchSlot, layout.TableOffset(f), std::as_bytes(std::span(table)));
+				LatchWriteValue(latchBlock, "reflection culling latches", latchSlot, f * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 				// A face not captured draws nothing (no inputs): its block is copied as the latch holds it.
 				if (face.captured)
-					latchBlock.Write(latchSlot, layout.FaceOffset(f), std::span(face.perFrame.data(), face.perFrameBytes));
+					LatchWrite(latchBlock, "reflection face per-frame data", latchSlot, layout.FaceOffset(f), std::span(face.perFrame.data(), face.perFrameBytes));
 				if (trees) {
 					// The face's row (its own list), naming no slot when the face is not drawn or the faces' tree LOD is the engine's.
 					TreeLod::DrawRow row = treeRow;
 					row.visible = resources->treeVisibleAddress[f] + TreeLod::kVisibleHeaderWords * sizeof(std::uint32_t);
 					row.shapeSlots = face.captured && treeRowBound ? treeRow.shapeSlots : 0u;
-					latchBlock.WriteValue(latchSlot, layout.FaceOffset(f) + ReflectionLatchLayout::kTreeRowInFace, row);
+					LatchWriteValue(latchBlock, "reflection tree rows", latchSlot, layout.FaceOffset(f) + ReflectionLatchLayout::kTreeRowInFace, row);
 					TreeLod::VisibleHeader header{};
 					header.phaseOne[0] = header.phaseTwo[0] = header.colour[0] = std::max(row.maxIndices, 1u);
-					latchBlock.WriteValue(latchSlot, layout.FaceOffset(f) + ReflectionLatchLayout::kTreeHeaderInFace, header);
+					LatchWriteValue(latchBlock, "reflection tree rows", latchSlot, layout.FaceOffset(f) + ReflectionLatchLayout::kTreeHeaderInFace, header);
 				}
 				drawn += face.captured ? 1u : 0u;
 			}

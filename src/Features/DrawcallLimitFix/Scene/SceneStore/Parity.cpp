@@ -72,10 +72,26 @@ namespace DCLF
 			g = {};
 		}
 		if (auto& sp = shadingParity; sp.frames) {
-			text += fmt::format("[DCLF] shading resample: {:.1f} slots watched, {:.1f} LOD fade events, {:.1f} emittance events, {:.1f} resampled a frame; parity {} checks, {} slots compared, {} changed after the events were taken (queued), {} changed unsampled{}{}\n",
-				static_cast<double>(sp.watched) / sp.frames, static_cast<double>(sp.lodFadeEvents) / sp.frames, static_cast<double>(sp.emittanceEvents) / sp.frames, static_cast<double>(sp.resampled) / sp.frames, sp.checks, sp.slots, sp.late, sp.missing,
-				sp.checks ? (sp.missing ? " <- MISSED; first: " : " <- OK") : "", sp.first);
+			text += fmt::format("[DCLF] shading (sampled at the frame's start for the slots its events name): {:.1f} LOD fade events, {:.1f} emittance events, {:.1f} "
+								"named a frame; parity at Prepass against the frame's rows: {} checks, {} slots compared, changed since the frame's start: {} named for "
+								"the next frame, {} queued, {} missed{}{}; wetness {} meshes, {} differ{}\n",
+				static_cast<double>(sp.lodFadeEvents) / sp.frames, static_cast<double>(sp.emittanceEvents) / sp.frames, static_cast<double>(sp.resampled) / sp.frames, sp.checks,
+				sp.slots, sp.named, sp.late, sp.missing, sp.checks ? (sp.missing ? " <- MISSED; first: " : " <- OK") : "", sp.first, sp.wetness, sp.wetnessDiffer,
+				sp.wetness ? (sp.wetnessDiffer ? " <- DIFFER" : " <- OK") : "");
 			sp = {};
+		}
+		if (auto& dp = decalOrderParity; dp.checks) {
+			text += fmt::format("[DCLF] decal order parity (the kept order against one made whole): {} checks, {} decals, {} differ{}{}; {} kept keys stale, "
+								"{} neighbours the whole order does not hold{}{}\n",
+				dp.checks, dp.decals, dp.differ, dp.differ ? " <- DIFFER; first: " : " <- OK", dp.first, dp.staleKeys, dp.unordered,
+				dp.staleKeys ? "; first stale: " : "", dp.staleFirst);
+			dp = {};
+		}
+		if (auto& ep = extrasParity; ep.objects) {
+			text += fmt::format("[DCLF] extras parity (the draw's completion against the engine's routines): {} objects, {} differ, largest difference {}, {} static rows "
+								"stale with no event{}{}\n",
+				ep.objects, ep.differ, ep.maxDifference, ep.staleStatic, ep.differ || ep.staleStatic ? " <- DIFFER" : " <- OK", ep.differ ? "; first: " + ep.first : std::string());
+			ep = {};
 		}
 		if (auto& l = lodSegmentStats; l.events || l.checks || !lodRanges.empty()) {
 			std::size_t partial = 0;
@@ -161,18 +177,6 @@ namespace DCLF
 				walkParity.first = fmt::format("{} on '{}'", a_what, a_geometry && a_geometry->name.c_str() ? a_geometry->name.c_str() : "?");
 		};
 		auto same = [](const auto& a_left, const auto& a_right) { return std::memcmp(&a_left, &a_right, sizeof(a_left)) == 0; };
-		// A skinned object's rows, by content: the two walks lay the palettes out in their own visiting orders.
-		auto sameRows = [&](std::uint32_t a_slot, std::uint32_t a_dense) {
-			const std::size_t rows = slots.boneRows[a_slot];
-			if (!rows)
-				return true;
-			const std::size_t at = std::size_t(slots.boneOffset[a_slot]) * 4, denseAt = std::size_t(dense.boneOffset[a_dense]) * 4, floats = rows * 4;
-			if (at + floats > slots.bones.size() || denseAt + floats > dense.bones.size() || at + floats > slots.previousBones.size() ||
-				denseAt + floats > dense.previousBones.size())
-				return false;
-			return std::memcmp(&slots.bones[at], &dense.bones[denseAt], floats * sizeof(float)) == 0 &&
-			       std::memcmp(&slots.previousBones[at], &dense.previousBones[denseAt], floats * sizeof(float)) == 0;
-		};
 		std::uint32_t liveSeen = 0;
 		for (std::uint32_t s = 0; s < slots.objects.size(); ++s) {
 			const auto* geometry = slots.objectGeometry[s];
@@ -207,69 +211,21 @@ namespace DCLF
 					const auto entryIt = tracked.find(const_cast<RE::BSGeometry*>(geometry));
 					const auto& a = slots.objects[s];
 					const auto& b = dense.objects[d];
-					walkParity.first = fmt::format("the object record on '{}' (per-frame {}): flags {:X}/{:X} scene {:X}/{:X} geometry {}/{} world {} previous {} bound {}",
+					walkParity.first = fmt::format("the object record on '{}' (per-frame {}): flags {:X}/{:X} scene {:X}/{:X} geometry {}/{}",
 						geometry->name.c_str() ? geometry->name.c_str() : "?", entryIt != tracked.end() && entryIt->second.perFrame, a.flags, b.flags, slots.sceneFlags[s], dense.sceneFlags[d],
-						a.geometryIndex, b.geometryIndex, std::memcmp(a.world, b.world, sizeof(a.world)) == 0, std::memcmp(a.previousWorld, b.previousWorld, sizeof(a.previousWorld)) == 0,
-						a.boundRadius == b.boundRadius && std::memcmp(a.boundCenter, b.boundCenter, sizeof(a.boundCenter)) == 0);
+						a.geometryIndex, b.geometryIndex);
 				}
 			}
 			else if (!same(drawRecord, dense.draws[d]))
 				what = "the draw";
-			else if (slots.skinPartitions[s] != dense.skinPartitions[d] || slots.boneRows[s] != dense.boneRows[d] || !sameRows(s, d))
-				what = "the skin rows";
+			else if (slots.skinPartitions[s] != dense.skinPartitions[d] || slots.boneRows[s] != dense.boneRows[d])
+				what = "the skin";
 			else if (slots.shadowTechnique[s] != dense.shadowTechnique[d] || slots.shadowReject[s] != dense.shadowReject[d])
 				what = "the shadow verdict";
-			else if (slots.sunEntry[s] != dense.sunEntry[d]) {
-				what = "the sun entry";
-				if (walkParity.first.empty()) {
-					const auto entryIt = tracked.find(const_cast<RE::BSGeometry*>(geometry));
-					const auto& a = slots.sunEntry[s];
-					const auto& b = dense.sunEntry[d];
-					walkParity.first = fmt::format("the sun entry on '{}' (per-frame {}, traits {:X}, entry node '{}'): kept ({:.2f} {:.2f} {:.2f} r {:.2f}) now ({:.2f} {:.2f} {:.2f} r {:.2f})",
-						geometry->name.c_str() ? geometry->name.c_str() : "?", entryIt != tracked.end() && entryIt->second.perFrame, entryIt != tracked.end() ? PerFrameTraits(entryIt->second, *geometry) : 999u,
-						entryIt != tracked.end() && entryIt->second.sunEntryNode && entryIt->second.sunEntryNode->name.c_str() ? entryIt->second.sunEntryNode->name.c_str() : "?",
-						a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]);
-					// What under the root could move its bound with no mover's trait (RootMovesNow): its subtree, briefly.
-					if (entryIt != tracked.end() && entryIt->second.sunEntryNode) {
-						std::string subtree;
-						std::uint32_t listed = 0;
-						VisitSubtree(const_cast<RE::NiAVObject*>(entryIt->second.sunEntryNode), [&](RE::NiAVObject& a_object) {
-							++listed;
-							// Only what could move: controllers, a collision object (with its body's motion type), a skin.
-							auto* collision = a_object.collisionObject.get();
-							auto* ni = collision ? collision->AsBhkNiCollisionObject() : nullptr;
-							const auto* bodyRtti = ni && ni->body ? ni->body->GetRTTI() : nullptr;
-							int motion = -1;
-							if (bodyRtti && bodyRtti->GetName() && std::strstr(bodyRtti->GetName(), "RigidBody"))
-								if (auto* entity = static_cast<RE::hkpEntity*>(static_cast<RE::hkReferencedObject*>(ni->body->referencedObject.get())))
-									motion = static_cast<int>(entity->motion.type.get());
-							const auto* geometry = a_object.AsGeometry();
-							const bool skin = geometry && geometry->GetGeometryRuntimeData().skinInstance;
-							if (a_object.GetControllers() || collision || skin) {
-								const auto* rtti = a_object.GetRTTI();
-								subtree += fmt::format(" ['{}' {}{}{}{}]", a_object.name.c_str() ? a_object.name.c_str() : "", rtti && rtti->name ? rtti->name : "?",
-									a_object.GetControllers() ? " controllers" : "", collision ? fmt::format(" collision {} motion {}", bodyRtti && bodyRtti->GetName() ? bodyRtti->GetName() : "no body", motion) : std::string(),
-									skin ? " skin" : "");
-							}
-							return true;
-						});
-						walkParity.first += fmt::format("; root subtree ({} objects):{}", listed, subtree);
-					}
-				}
-			} else if (slots.lodFade[s] != dense.lodFade[d]) {
-				what = "the LOD fade node";
-				if (walkParity.firstLodFade.empty()) {
-					const auto entryIt = tracked.find(const_cast<RE::BSGeometry*>(geometry));
-					const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
-					const auto* fadeNode = property ? property->fadeNode : nullptr;
-					const auto& a = slots.lodFade[s];
-					const auto& b = dense.lodFade[d];
-					walkParity.firstLodFade = fmt::format("'{}' (per-frame {}, fade node '{}' {} the sun entry node): kept ({:.2f} {:.2f} {:.2f} type {}) now ({:.2f} {:.2f} {:.2f} type {})",
-						geometry->name.c_str() ? geometry->name.c_str() : "?", entryIt != tracked.end() && entryIt->second.perFrame,
-						fadeNode && fadeNode->name.c_str() ? fadeNode->name.c_str() : "?",
-						entryIt != tracked.end() && entryIt->second.sunEntryNode == fadeNode ? "is" : "is not", a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]);
-				}
-			}
+			else if (slots.sunEntryNode[s] != dense.sunEntryNode[d])
+				what = "the sun entry node";
+			else if (slots.hasFadeNode[s] != dense.hasFadeNode[d])
+				what = "the fade node";
 			else if (slots.shadowDiffuse[s] != dense.shadowDiffuse[d] || slots.shadowMaterial[s] != dense.shadowMaterial[d])
 				what = "the shadow material";
 			else if ((slots.faceStream[s] == kNoFaceStream) != (dense.faceStream[d] == kNoFaceStream))
@@ -370,8 +326,7 @@ namespace DCLF
 			for (const auto& [what, count] : walkParity.byWhat)
 				byWhat += fmt::format("{}{} {}", byWhat.empty() ? "" : ", ", what, count);
 			if (!byWhat.empty())
-				logger::info("[DCLF] walk parity differences by what: {}{}{}", byWhat, walkParity.firstLodFade.empty() ? "" : "; first LOD fade node: ",
-					walkParity.firstLodFade);
+				logger::info("[DCLF] walk parity differences by what: {}", byWhat);
 			logger::info("[DCLF] walk parity: {} checks, {} objects compared, {} differ, {} missing, {} extra, {} stale verdicts, {} stale traits ({} slots, {} free){}{}{}{}{}{}",
 				walkParity.checks, walkParity.objects, walkParity.differ, walkParity.missing, walkParity.extra, walkParity.staleVerdicts, walkParity.staleTraits,
 				tables.objects.size(), tables.objectFree.size(), ok ? " <- OK" : "; first: ", ok ? "" : walkParity.first,

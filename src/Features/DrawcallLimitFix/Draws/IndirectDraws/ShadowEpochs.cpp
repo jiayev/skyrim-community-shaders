@@ -19,6 +19,7 @@ namespace DCLF
 			latch.dispatch[2] = 1;
 			latch.drawCount = a_inputs;
 			latch.visibilityStamp = a_frame & 0x0FFFFFFFu;  // 28 bits: BuildDrawsCS keeps flags below it
+			latch.placementsIndex = FrameValues::Get().PlacementsIndex();
 			FoldEyeIntoViewProj(a_view.viewProj, a_view.eye, latch.viewProj);
 			return latch;
 		}
@@ -133,7 +134,7 @@ namespace DCLF
 			}
 			const std::uint32_t offset = a_layout.BucketOffset(a_slot);
 			if (!table.empty())
-				a_latchBlock.Write(a_latchSlot, offset, std::as_bytes(std::span(table)));
+				LatchWrite(a_latchBlock, "shadow bucket tables", a_latchSlot, offset, std::as_bytes(std::span(table)));
 			a_latch.bucketTableOffset = static_cast<std::uint32_t>(a_latchBlock.Offset(a_latchSlot)) + offset;
 		}
 
@@ -401,7 +402,7 @@ namespace DCLF
 			if (copyCount)
 				a_uploads(p.copies, copies.data(), std::size_t(copyCount) * sizeof(copies[0]), 0);
 			const std::uint32_t dispatch[4] = { std::min(copyCount, kIndexPoolGroupsX), (copyCount + kIndexPoolGroupsX - 1) / kIndexPoolGroupsX, 1, copyCount };
-			a_latch.Write(a_latchSlot, a_poolOffset, std::as_bytes(std::span(dispatch)));
+			LatchWrite(a_latch, "shadow index-pool dispatch", a_latchSlot, a_poolOffset, std::as_bytes(std::span(dispatch)));
 		}
 
 		/** @brief The previous shape's view of a slot, if it had one. */
@@ -436,7 +437,7 @@ namespace DCLF
 			if (row.size() > layout.keySlots)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} shadow key slots past the latch's {}", row.size(), layout.keySlots));
 			if (!row.empty())
-				a_latchBlock.Write(a_latchSlot, mapRowOffset, std::as_bytes(std::span(row)));
+				LatchWrite(a_latchBlock, "shadow map rows", a_latchSlot, mapRowOffset, std::as_bytes(std::span(row)));
 		}
 
 		/**
@@ -451,9 +452,9 @@ namespace DCLF
 			if (a_processes.size() > layout.sunProcesses)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} sun full-frustum processes past the latch's {}", a_processes.size(), layout.sunProcesses));
 			const std::uint32_t header[4] = { static_cast<std::uint32_t>(a_processes.size()), 0, 0, 0 };
-			a_latchBlock.Write(a_latchSlot, layout.SunEntryOffset(), std::as_bytes(std::span(header)));
+			LatchWrite(a_latchBlock, "shadow sun processes", a_latchSlot, layout.SunEntryOffset(), std::as_bytes(std::span(header)));
 			if (!a_processes.empty())
-				a_latchBlock.Write(a_latchSlot, layout.SunEntryOffset() + kSunRegionHeader, std::as_bytes(a_processes));
+				LatchWrite(a_latchBlock, "shadow sun processes", a_latchSlot, layout.SunEntryOffset() + kSunRegionHeader, std::as_bytes(a_processes));
 			return static_cast<std::uint32_t>(a_latchBlock.Offset(a_latchSlot)) + layout.SunEntryOffset();
 		}
 
@@ -465,12 +466,12 @@ namespace DCLF
 			const PendingView& a_view)
 		{
 			const std::uint32_t offset = a_layout.ViewBlockOffset(a_slot);
-			a_latchBlock.Write(a_latchSlot, offset, std::as_bytes(std::span(a_view.viewBlock)));
+			LatchWrite(a_latchBlock, "shadow view blocks", a_latchSlot, offset, std::as_bytes(std::span(a_view.viewBlock)));
 			// PerTechnique's c3, DCLFDepthRange (Utility.hlsl): the view's viewport depth range, which its draws apply under a [0, 1]
 			// viewport (FrameViewOf), so the engine changing it changes no recording.
 			const float depthRange[4] = { a_view.minDepth, a_view.maxDepth - a_view.minDepth, 0.0f, 0.0f };
-			a_latchBlock.Write(a_latchSlot, offset + static_cast<std::uint32_t>(sizeof(a_view.viewBlock)), std::as_bytes(std::span(depthRange)));
-			a_latchBlock.Write(a_latchSlot, offset + static_cast<std::uint32_t>(kShadowPerFrameOffset), std::span(a_view.perFrame.data(), a_view.perFrameBytes));
+			LatchWrite(a_latchBlock, "shadow view blocks", a_latchSlot, offset + static_cast<std::uint32_t>(sizeof(a_view.viewBlock)), std::as_bytes(std::span(depthRange)));
+			LatchWrite(a_latchBlock, "shadow per-frame view data", a_latchSlot, offset + static_cast<std::uint32_t>(kShadowPerFrameOffset), std::span(a_view.perFrame.data(), a_view.perFrameBytes));
 		}
 
 		/**
@@ -842,7 +843,9 @@ namespace DCLF
 		// everything), and anything drawn whose world transform is far from its own bound. From the rows the GPU reads.
 		{
 			const auto& records = objectStore.records.Get();
-			const auto& placements = placementStore.rows.Get();
+			static const std::vector<BindlessPlacement> kNone;
+			const auto* frameRows = FrameValues::Get().RowsIfDone();
+			const auto& placements = frameRows ? *frameRows : kNone;
 			const auto& tablesNow = SceneStore::Get().GetTables();
 			ankerl::unordered_dense::set<const RE::BSGeometry*> reached;
 			for (const auto& registration : registrations)
@@ -1364,7 +1367,7 @@ namespace DCLF
 				latch.fadeStatesIndex = scene.FadeStatesReadIndex(frameNumber);
 				UseShadowMapRow(latchBlock, latchLayout, buckets, latchSlot, view.rasterState, true, latch);
 				WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, shapeView.buckets, latch);
-				latchBlock.WriteValue(latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
+				LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 				shadowStats.occlusionInputs[v] = inputCount;
 				++shadowStats.occlusionDrawn[v];
 			}
@@ -1596,7 +1599,7 @@ namespace DCLF
 					refresh();
 					in.lookupGeneration = lookups.shadowGeneration;
 				}
-				BuildShadowPayload(in, tables, lookups, payload, impl->SceneObjects(), impl->SceneBones(), impl->ShadowKeptState(), impl->SceneGeometries());
+				BuildShadowPayload(in, tables, lookups, payload, impl->SceneObjects(), impl->SceneExtras(), impl->ShadowKeptState(), impl->SceneGeometries());
 			}
 			*frameOwners = std::move(payload.bindingOwners);
 			// The cleared geometry slots' buffers, held until this execution retires (SceneStore::TakeRetiredImports).
@@ -1730,7 +1733,9 @@ namespace DCLF
 					// epoch uploads), against the CPU's verdict from the tables' entry, per input.
 					if (PersistentParityEnabled() && ParityDue(frameNumber)) {
 						const auto& tablesNow = store.GetTables();
-						const auto& placements = impl->placementStore.rows.Get();
+						static const std::vector<BindlessPlacement> kNone;
+						const auto* frameRows = FrameValues::Get().RowsIfDone();
+						const auto& placements = frameRows ? *frameRows : kNone;
 						for (const auto& input : payload.Flat(view.modeIndex)) {
 							if (input.objectIndex >= placements.size())
 								continue;
@@ -1745,7 +1750,7 @@ namespace DCLF
 					mapRowsWritten[view.rasterState] = true;
 				UseShadowMapRow(latchBlock, latchLayout, (*target.rows)[index], latchSlot, view.rasterState, !rowWritten, latch);
 				WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, target.views[index].buckets, latch);
-				latchBlock.WriteValue(latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
+				LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 				impl->CheckCascadeCulling(view, latch, frameNumber, payload);
 				resources->labels.push_back({ view.viewId, view.renderMode, slot });
 				if (impl->shadowSlotDrawn.size() <= slot)
@@ -1754,7 +1759,7 @@ namespace DCLF
 			}
 			// The retained views (the layouts past the frame's): a zero latch, no work.
 			for (std::size_t index = pending.size(); index < layouts.size(); ++index) {
-				latchBlock.WriteValue(latchSlot, layouts[index].slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), BuildDrawsLatch{});
+				LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, layouts[index].slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), BuildDrawsLatch{});
 				++shadowStats.retainedViews;
 			}
 			// The arena (the frame record and the blocks), when the worker did not stage it.
@@ -2048,8 +2053,9 @@ namespace DCLF
 		in.addresses.constants = a_resources.constantsAddress;
 		in.addresses.records = a_resources.materialRows.address;
 		in.addresses.objectsIndex = a_resources.scene->objectsIndex;
-		in.addresses.bonesIndex = a_resources.scene->bonesIndex;
-		in.addresses.placementsIndex = a_resources.scene->placementsIndex;
+		in.addresses.extrasIndex = a_resources.scene->extrasIndex;
+		in.addresses.placementsIndex = FrameValues::Get().PlacementsIndex();
+		in.addresses.palettesIndex = FrameValues::Get().PalettesIndex();
 		in.addresses.treeWindIndex = a_resources.scene->TreeWindReadIndex(a_store.GetFrame());
 		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.scene->facePositionsAddress : 0;
 		in.addresses.recordCapacity = a_resources.materialRows.capacity;
@@ -2083,19 +2089,6 @@ namespace DCLF
 			impl->shadowEarly = true;
 			impl->shadowWitness = SceneStore::Get().ShadowInputsWitness();
 			++stats.async[kAsyncShadow].earlyKicked;
-		}
-	}
-
-	void IndirectDraws::BeforePlacementJoin()
-	{
-		auto& job = impl->shadowJob;
-		if (!impl->shadowEarly || !job.handle)
-			return;
-		if (AsyncWorker::Get().Wait(job.handle, AsyncWaitBudget()) != AsyncWorker::WaitResult::Done) {
-			impl->DropShadowJob(stats);
-			impl->shadowEarly = false;
-			++stats.async[kAsyncShadow].earlyRekicked;
-			++stats.async[kAsyncShadow].earlyRekickedBy[2];
 		}
 	}
 
@@ -2155,7 +2148,7 @@ namespace DCLF
 		auto* payload = &impl->shadowPayload;
 		auto* pool = &job.stagedPool;
 		auto* objects = impl->SceneObjects();
-		auto* bonesStore = impl->SceneBones();
+		auto* extrasStore = impl->SceneExtras();
 		auto* geometriesStore = impl->SceneGeometries();
 		auto* exclusionCache = &impl->sunExclusionCache;
 		auto* parabolicCache = &impl->parabolicExclusionCache;
@@ -2163,9 +2156,9 @@ namespace DCLF
 		const ShadowInputs inputs = job.inputs;
 		const bool exclusions = PassCapture::ShadowWithholdingEnabled();
 		const rhi::Device device = RecordingDevice();
-		job.handle = AsyncWorker::Get().Submit("shadow", [inputs, tablesPtr, lookups, payload, pool, objects, bonesStore, kept, geometriesStore, exclusionCache, parabolicCache, target = impl->shadow,
+		job.handle = AsyncWorker::Get().Submit("shadow", [inputs, tablesPtr, lookups, payload, pool, objects, extrasStore, kept, geometriesStore, exclusionCache, parabolicCache, target = impl->shadow,
 																exclusions, device](std::stop_token) {
-			BuildShadowPayload(inputs, *tablesPtr, *lookups, *payload, objects, bonesStore, kept, geometriesStore);
+			BuildShadowPayload(inputs, *tablesPtr, *lookups, *payload, objects, extrasStore, kept, geometriesStore);
 			StageShadowPayload(*payload, *target, *pool, device);
 			if (exclusions) {
 				ZoneScopedN("CS.DCLF.BuildShadow.Exclusions");

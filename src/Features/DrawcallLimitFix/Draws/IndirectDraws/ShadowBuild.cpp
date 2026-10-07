@@ -560,7 +560,7 @@ namespace DCLF::Draws
 	}
 
 	void BuildShadowPayload(const ShadowInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out,
-		ObjectRecordStore* a_objects, BonesStore* a_bones, ShadowKept* a_kept, GeometryStore* a_geometries)
+		ObjectRecordStore* a_objects, ExtrasStore* a_bones, ShadowKept* a_kept, GeometryStore* a_geometries)
 	{
 		ZoneScopedN("CS.DCLF.BuildShadowPayload");
 		a_out.Reset();
@@ -606,8 +606,9 @@ namespace DCLF::Draws
 		for (auto& index : frameRecord.textures)
 			index = nullIndex;
 		frameRecord.textures[kObjectBufferRegister] = a_in.addresses.objectsIndex;
-		frameRecord.textures[kBonesBufferRegister] = a_in.addresses.bonesIndex;
+		frameRecord.textures[kExtrasBufferRegister] = a_in.addresses.extrasIndex;
 		frameRecord.textures[kPlacementBufferRegister] = a_in.addresses.placementsIndex;
+		frameRecord.textures[kPaletteBufferRegister] = a_in.addresses.palettesIndex;
 		frameRecord.textures[kTreeWindRegister] = a_in.addresses.treeWindIndex;
 		const std::uint32_t wrapAnisotropic = a_lookups.Sampler(static_cast<std::uint32_t>(RE::BSGraphics::TextureAddressMode::kWrapSWrapT),
 			static_cast<std::uint32_t>(RE::BSGraphics::TextureFilterMode::kAnisotropic));

@@ -239,28 +239,67 @@ namespace DCLF
 		std::swap(p.positions, p.lastPositions);
 	}
 
+	namespace
+	{
+		struct OrderedDecal
+		{
+			std::uint64_t chain;
+			OrderKey key;
+			std::uint32_t object;
+			// The BGSDecalNode on its chain, if any: its decals' places count from the end of the node's decal array
+			// (VisitIndex), which an added or removed decal shifts for all of them, so they are keyed again together.
+			const RE::NiAVObject* decalNode = nullptr;
+		};
+
+		std::string PathText(const std::vector<std::uint32_t>& a_path)
+		{
+			std::string text;
+			for (const auto at : a_path)
+				text += fmt::format("{}{}", text.empty() ? "" : " ", at);
+			return text;
+		}
+
+		const RE::NiAVObject* DecalNodeOf(const RE::NiAVObject* a_object)
+		{
+			static const REL::Relocation<const RE::NiRTTI*> decalNode{ RE::BGSDecalNode::Ni_RTTI };
+			for (const auto* node = a_object ? a_object->parent : nullptr; node; node = node->parent)
+				if (node->GetRTTI() == decalNode.get())
+					return node;
+			return nullptr;
+		}
+		// Draw order within a chain: registered later is drawn earlier (RegisterPass prepends); the object last, for stability.
+		bool DrawnBefore(const OrderedDecal& a_a, const OrderedDecal& a_b)
+		{
+			if (a_a.chain != a_b.chain)
+				return a_a.chain < a_b.chain;
+			if (Before(a_b.key, a_a.key))
+				return true;
+			if (Before(a_a.key, a_b.key))
+				return false;
+			return a_a.object < a_b.object;
+		}
+	}
+
+	struct SceneStore::KeptDecalOrder
+	{
+		std::vector<OrderedDecal> entries;  // in draw order
+	};
+
 	void SceneStore::OrderDecals()
 	{
 		// The engine draws a decal chain (a group's technique bucket and sub-pass list) in reverse registration order, and
 		// registers in the order of its scene lists (DecalOrder.cpp's key, which the order probe measures). Stable: the
-		// scene's order, taken again only when the decals change. Engine: the frame's lists, every frame.
+		// scene's order, kept: a decal's key is taken when it joins (or is patched again), and a change re-keys only the
+		// decals it names; the ordinals are counted again in one pass. Engine: the frame's lists, every frame, whole.
 		const bool engineOrder = SwitchValue(Switch::DecalOrder) == "engine";
-		if (!engineOrder && !memberDecalsChanged)
+		if (!keptDecals)
+			keptDecals = std::make_shared<KeptDecalOrder>();
+		auto& kept = keptDecals->entries;
+		const bool parity = !engineOrder && SwitchEnabled(Switch::PersistentParity) && ParityDue(frame);
+		if (!engineOrder && !decalsRebuild && decalsChanged.empty() && !parity)
 			return;
-		memberDecalsChanged = false;
 		if (tables.decalOrdinal.size() != tables.objects.size())
 			tables.decalOrdinal.resize(tables.objects.size(), ~0u);
-		// The ordinals before, for the change log: a decal's ordinal is its draw input's (the resident region's entries follow
-		// the log), so every decal whose ordinal moves is a change.
-		std::vector<std::pair<std::uint32_t, std::uint32_t>> before;
-		before.reserve(decalOrdered.size());
-		for (const std::uint32_t o : decalOrdered)
-			if (o < tables.decalOrdinal.size()) {
-				before.emplace_back(o, tables.decalOrdinal[o]);
-				tables.decalOrdinal[o] = ~0u;
-			}
-		decalOrdered.clear();
-		tables.decalCount = {};
 
 		auto& probe = decalOrderProbe;
 		if (engineOrder) {
@@ -280,43 +319,122 @@ namespace DCLF
 							probe.positions.emplace(root, std::pair{ 0u, lists[0].size() + i });
 				}
 		}
-		struct Ordered
-		{
-			std::uint64_t chain;
-			OrderKey key;
-			std::uint32_t object;
-		};
-		std::vector<Ordered> ordered;
-		ordered.reserve(memberDecals.size());
-		auto add = [&](std::uint32_t a_object, std::uint64_t a_chain) {
+		// A decal's place in the order: its chain and key (none for an object with no geometry).
+		auto keyed = [&](std::uint32_t a_object, std::uint64_t a_chain, OrderedDecal& a_out) {
 			const auto* geometry = a_object < tables.objectGeometry.size() ? tables.objectGeometry[a_object] : nullptr;
 			if (!geometry)
-				return;
-			Ordered entry{ a_chain, {}, a_object };
-			const RE::NiAVObject* root = nullptr;
+				return false;
+			a_out = { a_chain, {}, a_object, DecalNodeOf(geometry) };
 			if (engineOrder) {
-				if (KeyOf(geometry, probe, entry.key, root) != Miss::None) {
-					SceneKeyOf(geometry, entry.key);
-					entry.key.list = ~0u;  // under no list root: after every list, in the scene's order
+				const RE::NiAVObject* root = nullptr;
+				if (KeyOf(geometry, probe, a_out.key, root) != Miss::None) {
+					SceneKeyOf(geometry, a_out.key);
+					a_out.key.list = ~0u;  // under no list root: after every list, in the scene's order
 				}
 			} else {
-				SceneKeyOf(geometry, entry.key);
+				SceneKeyOf(geometry, a_out.key);
 			}
-			ordered.push_back(std::move(entry));
+			return true;
 		};
-		for (const auto& [object, chain] : memberDecals)
-			add(object, chain);
-		std::sort(ordered.begin(), ordered.end(), [](const Ordered& a_a, const Ordered& a_b) {
-			if (a_a.chain != a_b.chain)
-				return a_a.chain < a_b.chain;
-			if (Before(a_b.key, a_a.key))
-				return true;  // registered later: drawn earlier (RegisterPass prepends)
-			if (Before(a_a.key, a_b.key))
-				return false;
-			return a_a.object < a_b.object;
-		});
+		auto whole = [&] {
+			std::vector<OrderedDecal> ordered;
+			ordered.reserve(memberDecals.size());
+			for (const auto& [object, chain] : memberDecals)
+				if (OrderedDecal entry; keyed(object, chain, entry))
+					ordered.push_back(std::move(entry));
+			std::sort(ordered.begin(), ordered.end(), DrawnBefore);
+			return ordered;
+		};
+
+		if (engineOrder || decalsRebuild) {
+			kept = whole();
+		} else if (!decalsChanged.empty()) {
+			// The changed decals out, and those still members in again with their keys taken now; with them every kept decal under
+			// a decal node one of them is (or was) under, whose places the node's decal array gives now.
+			std::sort(decalsChanged.begin(), decalsChanged.end());
+			decalsChanged.erase(std::unique(decalsChanged.begin(), decalsChanged.end()), decalsChanged.end());
+			auto isChanged = [&](std::uint32_t a_object) { return std::binary_search(decalsChanged.begin(), decalsChanged.end(), a_object); };
+			ankerl::unordered_dense::set<const RE::NiAVObject*> touched;
+			for (const auto& entry : kept)
+				if (entry.decalNode && isChanged(entry.object))
+					touched.insert(entry.decalNode);
+			std::vector<OrderedDecal> joined;
+			for (const std::uint32_t object : decalsChanged)
+				if (const auto it = memberDecals.find(object); it != memberDecals.end())
+					if (OrderedDecal entry; keyed(object, it->second, entry)) {
+						if (entry.decalNode)
+							touched.insert(entry.decalNode);
+						joined.push_back(std::move(entry));
+					}
+			std::vector<std::uint32_t> rekeyed;
+			std::erase_if(kept, [&](const OrderedDecal& a_entry) {
+				if (isChanged(a_entry.object))
+					return true;
+				if (!a_entry.decalNode || !touched.contains(a_entry.decalNode))
+					return false;
+				rekeyed.push_back(a_entry.object);
+				return true;
+			});
+			for (const std::uint32_t object : rekeyed)
+				if (const auto it = memberDecals.find(object); it != memberDecals.end())
+					if (OrderedDecal entry; keyed(object, it->second, entry))
+						joined.push_back(std::move(entry));
+			std::sort(joined.begin(), joined.end(), DrawnBefore);
+			const std::size_t middle = kept.size();
+			kept.insert(kept.end(), std::make_move_iterator(joined.begin()), std::make_move_iterator(joined.end()));
+			std::inplace_merge(kept.begin(), kept.begin() + middle, kept.end(), DrawnBefore);
+		}
+		const bool changed = engineOrder || decalsRebuild || !decalsChanged.empty();
+		decalsChanged.clear();
+		decalsRebuild = false;
+
+		// CS_DCLF_PERSISTENT_PARITY: the kept order against one made whole now (a key that went stale: a parent's children
+		// re-indexed under a kept decal).
+		if (parity) {
+			auto& dp = decalOrderParity;
+			++dp.checks;
+			const auto reference = whole();
+			dp.decals += reference.size();
+			bool same = reference.size() == kept.size();
+			for (std::size_t i = 0; same && i < kept.size(); ++i)
+				same = reference[i].object == kept[i].object && reference[i].chain == kept[i].chain;
+			// Why: a kept key no longer the decal's now (a decal node's places shift together, which keeps their order: counted, not a
+			// difference), or an order the comparator does not hold (not a strict weak order).
+			for (const auto& entry : kept) {
+				OrderedDecal now;
+				if (keyed(entry.object, entry.chain, now) && (Before(now.key, entry.key) || Before(entry.key, now.key)) && dp.staleKeys++ == 0) {
+					const auto* geometry = tables.objectGeometry[entry.object];
+					dp.staleFirst = fmt::format("object {} '{}' (decal node {}, now {}): kept ordered {} path [{}], now ordered {} path [{}]", entry.object,
+						geometry && geometry->name.c_str() ? geometry->name.c_str() : "?", fmt::ptr(entry.decalNode), fmt::ptr(now.decalNode), entry.key.ordered,
+						PathText(entry.key.path), now.key.ordered, PathText(now.key.path));
+				}
+			}
+			for (std::size_t i = 1; i < reference.size(); ++i)
+				dp.unordered += DrawnBefore(reference[i], reference[i - 1]) ? 1u : 0u;
+			if (!same && dp.differ++ == 0) {
+				std::size_t at = 0;
+				while (at < kept.size() && at < reference.size() && reference[at].object == kept[at].object)
+					++at;
+				dp.first = fmt::format("{} kept, {} whole; first difference at {}: kept object {}, whole object {}", kept.size(), reference.size(), at,
+					at < kept.size() ? kept[at].object : ~0u, at < reference.size() ? reference[at].object : ~0u);
+			}
+		}
+		if (!changed)
+			return;
+
+		// The ordinals, counted again in draw order: a decal whose ordinal moved is a change (its draw input's), and so is one no
+		// longer ordered.
+		std::vector<std::pair<std::uint32_t, std::uint32_t>> before;
+		before.reserve(decalOrdered.size());
+		for (const std::uint32_t o : decalOrdered)
+			if (o < tables.decalOrdinal.size()) {
+				before.emplace_back(o, tables.decalOrdinal[o]);
+				tables.decalOrdinal[o] = ~0u;
+			}
+		decalOrdered.clear();
+		tables.decalCount = {};
 		ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> previous(before.begin(), before.end());
-		for (const auto& entry : ordered) {
+		for (const auto& entry : kept) {
 			const std::uint32_t group = static_cast<std::uint32_t>(entry.chain >> 60) - 1;
 			const std::uint32_t ordinal = tables.decalCount[group]++;
 			tables.decalOrdinal[entry.object] = ordinal;

@@ -283,7 +283,7 @@ namespace DCLF
 				}
 				refresh();
 				in.lookupGeneration = lookups.generation;
-				BuildMainPayload(in, tables, lookups, payload, impl->mainRows, impl->CacheFor(jobIndex), impl->SceneObjects(), impl->SceneBones(), impl->SceneGeometries());
+				BuildMainPayload(in, tables, lookups, payload, impl->mainRows, impl->CacheFor(jobIndex), impl->SceneObjects(), impl->SceneExtras(), impl->SceneGeometries());
 			}
 			*frameOwners = std::move(payload.bindingOwners);
 			impl->CommitMainPayload(capture, blocks, payload, resources, store, stats, *frameOwners);
@@ -434,15 +434,15 @@ namespace DCLF
 		auto* payload = &mainPayload[index];
 		auto* cache = CacheFor(index);
 		auto* objects = SceneObjects();
-		auto* bonesStore = SceneBones();
+		auto* extras = SceneExtras();
 		auto* geometriesStore = SceneGeometries();
 		auto* rows = &mainRows;
 		auto* pool = &stagedPools[index];
 		const MainInputs inputs = job.inputs;
 		const rhi::Device device = RecordingDevice();
-		job.handle = AsyncWorker::Get().Submit(a_depthOnly ? "zprepass" : "colour", [inputs, tables, lookups, payload, rows, cache, objects, bonesStore, geometriesStore, pool,
+		job.handle = AsyncWorker::Get().Submit(a_depthOnly ? "zprepass" : "colour", [inputs, tables, lookups, payload, rows, cache, objects, extras, geometriesStore, pool,
 																							target = resources, device](std::stop_token) {
-			BuildMainPayload(inputs, *tables, *lookups, *payload, *rows, cache, objects, bonesStore, geometriesStore);
+			BuildMainPayload(inputs, *tables, *lookups, *payload, *rows, cache, objects, extras, geometriesStore);
 			if (target)
 				StageMainPayload(*payload, *target, *pool, device);
 		});
@@ -646,8 +646,10 @@ namespace DCLF
 		in.pipelineRowsHeld = a_resources.pipelineRowsHeld;
 		in.addresses.frameConstants = a_resources.frameConstantsAddress;
 		in.addresses.objectsIndex = a_resources.scene->objectsIndex;
-		in.addresses.bonesIndex = a_resources.scene->bonesIndex;
-		in.addresses.placementsIndex = a_resources.scene->placementsIndex;
+		in.addresses.extrasIndex = a_resources.scene->extrasIndex;
+		in.addresses.placementsIndex = FrameValues::Get().PlacementsIndex();
+		in.addresses.palettesIndex = FrameValues::Get().PalettesIndex();
+		in.addresses.shadingIndex = FrameValues::Get().ShadingIndex();
 		in.addresses.treeWindIndex = a_resources.scene->TreeWindReadIndex(a_store.GetFrame());
 		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.scene->facePositionsAddress : 0;
 		in.addresses.fit = SceneFitOf(*a_resources.scene, a_resources.objectCapacity);
