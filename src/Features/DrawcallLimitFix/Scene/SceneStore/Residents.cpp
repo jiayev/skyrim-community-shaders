@@ -332,7 +332,7 @@ namespace DCLF
 			tables.fadeRootIndex.erase(node);
 			tables.fadeRootNode[current] = nullptr;
 			tables.fadeRoots[current] = FadeRootStatic{};
-			tables.fadeRootFree.push_back(current);
+			tables.Retire(Tables::kRetiredFadeRoot, current);
 			tables.NoteFadeRoot(current);
 		}
 		current = kNoFadeRoot;
@@ -420,7 +420,7 @@ namespace DCLF
 		if (current < tables.treeRefs.size() && --tables.treeRefs[current] == 0) {
 			tables.treeIndex.erase(tables.treeNode[current]);
 			tables.treeNode[current] = nullptr;
-			tables.treeFree.push_back(current);
+			tables.Retire(Tables::kRetiredTree, current);
 		}
 		if (current != kNoTree)
 			NoteResidentTouched(a_slot);

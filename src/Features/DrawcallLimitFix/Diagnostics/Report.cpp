@@ -343,6 +343,10 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				publication.parityChecks, publication.parityObjects, publication.parityObjectsDiffer, publication.parityGeometries, publication.parityGeometriesDiffer,
 				publication.parityMaterials, publication.parityDiffer, publication.parityLogsDiffer, publication.parityFamiliesDiffer,
 				publication.parityChecks ? (differ ? " <- REPLAY DIFFERS" : " <- OK") : "");
+			logger::info("[DCLF] retirement (6e E3: nothing freed while a publication names it): {}", store.TakeRetirementReport());
+			const auto installs = store.TakePublicationStats();
+			logger::info("[DCLF] scene publications (6e E3): {} installed ({} skipped past), {} frames kept the installed one whole, {:.2f} waiting a frame", installs.installed,
+				installs.skipped, installs.kept, installs.pending / std::max(1.0, double(installs.installed + installs.kept)));
 		}
 		{
 			// The "scene tables" zone by sub-zone (ScenePart). The four event parts are the scene work's (ApplyEvents), except

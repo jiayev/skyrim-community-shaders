@@ -138,7 +138,7 @@ namespace DCLF
 		if (a_slot >= boneRows.size())
 			return;
 		if (boneRows[a_slot])
-			boneFree[std::min<std::size_t>(boneRows[a_slot] / 3, boneFree.size() - 1)].push_back(boneOffset[a_slot]);
+			Retire(kRetiredBones, boneOffset[a_slot], boneRows[a_slot]);
 		boneOffset[a_slot] = 0;
 		boneRows[a_slot] = 0;
 	}
@@ -210,7 +210,7 @@ namespace DCLF
 		auto& stream = faceStreams[index];
 		faceStreamsReleased.emplace_back(stream.geometry, stream.region);
 		stream = {};
-		faceStreamFree.push_back(index);
+		Retire(kRetiredFaceStream, index);
 		index = kNoFaceStream;
 	}
 
@@ -258,6 +258,9 @@ namespace DCLF
 			layerOf.clear();
 			objectFree.clear();
 			liveObjects = 0;
+			retiring.clear();
+			objectsRetiring = 0;
+			++slotEpoch;
 			// The decals' ordinals are the member decals' (SceneStore::OrderDecals), kept with the objects.
 			decalOrdinal.clear();
 			decalCount = {};
@@ -363,6 +366,9 @@ namespace DCLF
 		layerOf.clear();
 		objectFree.clear();
 		liveObjects = 0;
+		retiring.clear();
+		objectsRetiring = 0;
+		++slotEpoch;
 	}
 
 	void SceneStore::Tables::MarkMaterialUsed(std::uint32_t a_slot)

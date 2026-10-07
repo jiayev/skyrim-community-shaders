@@ -1339,6 +1339,21 @@ resident-draw, set and fade parity; motion m28/m29).
     the journal trimmed to the oldest) is tested against whole copies (`TestRingHolders`). y18: 7,446 sequences, every parity 0
     (but the known fade-visibility windows), set parity 0. m47: streams 300 of 300 staged batches taken; waits 0.13 ms/frame
     (the colour join 0.04).
+  - *Order changed*: the ring (E2) needs its fill on the upload queue (undeclared buffers have no barriers on the graphics queue), and
+    the upload queue's producer needs the payload at the frame's start, so the builds move ahead first (E3), then E2 and E4 together.
+  - *E3a: publications installed whole* (y19, y20, m48, m49). Builds made ahead need the set in the tables they read, so the set's
+    application and revocation (ApplySet, RevokeUndrawnClaims) are the coordinator's, on its tables alone, at the end of its work
+    (PublishScene: the tables published with the set applied, the claims, the main claims' changes since the publication before).
+    The frame's start writes nothing (WriteBoth gone): it installs the newest publication the selected revision covers
+    (SelectPublication, IndirectDraws::SetApplicable) - its tables, claims and PrimaryCull notes together - or keeps the installed
+    one whole (13-29% of frames in motion: the revision's recordings a frame late). Withdrawal is the frame's alone.
+    Keeping an older publication needs what it names to stay valid: BasicRenderer's rule, nothing logically freed while a version
+    that names it lives. `RetirementChain` (Common/Retirement.h): each publication holds the chain node opened with it, a node
+    holds the newer one, and a node's batch - object, tree, fade-root, extras, bone, face-stream slots, the SlotTables' slots, the
+    material/pipeline lookups' retirements, the geometry buffers' owners, the material references, every engine reference handed
+    back - returns to the coordinator's free lists (RecycleRetired) once no publication up to it lives. CPU test
+    (TestRetirementChain). m48: ~10,000 slots retired and recycled a 300-frame window, balanced; m49: 32-87 frames of 300 kept the
+    installed publication, 0 crashes, lost-while-out 0; y20: set parity 0, every parity 0. Left: face regions (faceRegionFree).
 
 ## Implemented foundations
 

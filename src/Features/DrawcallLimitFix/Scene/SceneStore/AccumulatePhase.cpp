@@ -210,9 +210,11 @@ namespace DCLF
 		inSceneTask = a_task;
 		holdPrimaryNotes = true;
 		holdLostMembers = true;
+		RecycleRetired();
 		DropWrittenMaterials();
 		BuildAccumulatePhase();
-		PublishTables();
+		// The set applied and the tables published with it (step 6e E3), for the next frame's start to install.
+		PublishScene();
 		holdLostMembers = false;
 		holdPrimaryNotes = false;
 		inSceneTask = false;

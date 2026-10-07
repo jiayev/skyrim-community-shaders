@@ -1,7 +1,9 @@
 #include "Features/DrawcallLimitFix/Common/KeptState.h"
+#include "Features/DrawcallLimitFix/Common/Retirement.h"
 #include "Features/DrawcallLimitFix/Common/SlotTable.h"
 #include "Features/DrawcallLimitFix/Scene/ActorValueIndex.h"
 #include <cassert>
+#include <map>
 #include <random>
 #include <set>
 
@@ -131,6 +133,53 @@ namespace
             assert(view.elements && view.Count() == view.elements->size());
     }
 
+    // Deferred reclamation by ownership: an item retired after publication p comes back only once every publication up to p is
+    // gone, whatever order they are dropped in, exactly once.
+    struct Retired
+    {
+        std::vector<std::pair<unsigned, unsigned>> items;  // (item, the newest publication made before it was retired)
+        bool Empty() const { return items.empty(); }
+    };
+    void TestRetirementChain()
+    {
+        std::mt19937 random(1201);
+        DCLF::RetirementChain<Retired> chain;
+        std::map<unsigned, std::shared_ptr<const void>> held;  // publication -> its hold
+        unsigned publications = 0, next = 0, returnedCount = 0;
+        std::set<unsigned> outstanding;
+        auto check = [&](const Retired& a_batch) {
+            for (const auto& [item, after] : a_batch.items) {
+                for (const auto& [p, hold] : held)
+                    assert(p > after || after == 0);  // nothing up to 'after' still held (0: retired before any publication)
+                assert(outstanding.erase(item) == 1);
+                ++returnedCount;
+            }
+        };
+        for (unsigned step = 0; step < 20000; ++step) {
+            switch (random() % 4) {
+            case 0:
+                chain.Open().items.emplace_back(next, publications);
+                outstanding.insert(next++);
+                break;
+            case 1:
+                held.emplace(++publications, chain.Publish());
+                break;
+            default:
+                if (!held.empty() && random() % 2) {
+                    auto it = held.begin();
+                    std::advance(it, random() % held.size());
+                    held.erase(it);
+                }
+                break;
+            }
+            chain.Drain(check);
+        }
+        held.clear();
+        chain.Publish();  // the open node closed, nothing holding the one before it
+        chain.Drain(check);
+        assert(outstanding.empty() && returnedCount == next);
+    }
+
     void TestReferenceDrivenMaterialRetirement()
     {
         DCLF::SlotTable slots;
@@ -208,6 +257,7 @@ int main()
     TestReferenceDrivenMaterialRetirement();
     TestActorValueMembership();
     TestRingHolders();
+    TestRetirementChain();
     for (unsigned trial = 0; trial < 1000; ++trial) {
         DCLF::ChangeJournal::Snapshot changes{10, 1, {}};
         const std::uint64_t count = 1 + random() % 8192;
