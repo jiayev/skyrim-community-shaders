@@ -483,6 +483,10 @@ namespace DCLF::Draws
 			tables.TechniqueOf(p).bindingVersion, projected ? 1u : 0u, static_cast<std::uint32_t>(blocks.tables), static_cast<std::uint32_t>(blocks.tables >> 32) };
 		if (state.written && state.key == key)
 			return;
+		// Which of the key's parts moved (the report's).
+		if (state.written)
+			for (std::size_t k = 0; k < key.size(); ++k)
+				rows.keyMoved[k] += state.key[k] != key[k] ? 1u : 0u;
 		const auto& material = tables.materials[m];
 		const auto& technique = tables.TechniqueOf(p).value;
 		MaterialRow row;

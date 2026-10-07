@@ -165,7 +165,6 @@ namespace DCLF
 		 * @brief Render thread, before anything reads the nodes or changes the tables (BeforeShadowMaps, the accumulate phase, the
 		 * next scene frame's events): the job joined, or stopped; what it did not reach goes to the next one.
 		 */
-		void JoinFadeWriteBack();
 
 		/**
 		 * @brief Render thread, at the scene work's join (SceneStore::FinishSceneWork): the main segments' shapes as a scene revision
@@ -197,14 +196,8 @@ namespace DCLF
 		bool RevisionClaims() const;
 		/** @brief The set committed at a_commitFrame was applied: the frame's claims are its (RevisionHoldsClaims). */
 		void NoteSetApplied(std::uint32_t a_commitFrame);
-		/**
-		 * @brief Render thread, where nothing writes the tables until the next epoch's commit (after the placements' join; after
-		 * RefreshFrameConstants): the object records and bone rows staged and recorded on the worker, which that commit submits
-		 * instead of uploading them itself (Impl::StreamsJob). CS_DCLF_ASYNC.
-		 */
-		void KickSceneStreams();
-		/** @brief Since the last call: the streams' jobs kicked, taken by a commit, and dropped. */
-		std::array<std::uint64_t, 3> TakeStreamsStats();
+		/** @brief Since the last call: the stream views a fallback wanted while the coordinator or the builds task ran (none made). */
+		std::uint64_t TakeStreamsRefused();
 
 		/** @brief At Present: a job the frame never joined is dropped and counted (Stats::Async::leaked). */
 		void EndFrame();

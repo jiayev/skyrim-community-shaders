@@ -316,7 +316,9 @@ namespace DCLF
 	{
 		// Built for these resources, this segment and these frame slots (a change of them shows a frame late: built here meanwhile).
 		const auto& built = a_payload.inputs;
-		return built.addresses.identity == &a_resources && built.depthOnly == a_frame.depthOnly && built.vsFrameMask == a_frame.vsFrameMask &&
+		// And the face positions its geometry rows name (a growth of them moves the address).
+		return built.addresses.identity == &a_resources && built.addresses.facePositions == a_frame.addresses.facePositions && built.depthOnly == a_frame.depthOnly &&
+		       built.vsFrameMask == a_frame.vsFrameMask &&
 		       built.psFrameMask == a_frame.psFrameMask && !a_frame.bindlessParity;
 	}
 
@@ -363,7 +365,7 @@ namespace DCLF
 		s.ringFrame = {};
 		auto draws = s.installedDraws;
 		auto* host = RenderGraphRuntime::Get().Host();
-		if (failed || !draws || !draws->streams || !host || (!draws->payloads[kAsyncZPrepass] && !draws->payloads[kAsyncColour]))
+		if (failed || !draws || !draws->streams || !host || (!draws->payloads[kAsyncZPrepass] && !draws->payloads[kAsyncColour] && !draws->shadow))
 			return {};
 		auto device = host->GetDesc().device;
 		const std::uint32_t r = static_cast<std::uint32_t>(s.payloadRingSeq++ % Impl::kPayloadRing);
@@ -371,7 +373,9 @@ namespace DCLF
 		const auto& views = *draws->streams;
 		// What the publication's payloads need of each buffer (the colour build's rows are the newest: it ran after the Z-prepass's).
 		const MainPayload* newest = draws->payloads[kAsyncColour] ? draws->payloads[kAsyncColour].get() : draws->payloads[kAsyncZPrepass].get();
-		std::uint64_t geometryRows = 0;
+		const ShadowPayload* shadow = draws->shadow.get();
+		// The geometry table: the main payloads' and the shadow payload's are the same (the publication's stream views and face streams).
+		std::uint64_t geometryRows = shadow ? shadow->geometries.Count() : 0;
 		std::array<std::uint64_t, 2> inputs{};
 		for (const std::size_t j : { kAsyncColour, kAsyncZPrepass })
 			if (const auto& payload = draws->payloads[j]) {
@@ -401,10 +405,18 @@ namespace DCLF
 		ensure(entry.objects, views.objects.Count(), sizeof(BindlessObject), "objects", false);
 		ensure(entry.extras, views.extras.Rows(), 16, "extras", false);
 		ensure(entry.geometries, geometryRows * sizeof(GeometryDraw) / 4, 4, "geometries", false);
-		ensure(entry.materialRows, newest->materialRows.Count(), kMaterialRowBytes, "material-rows", true);
-		ensure(entry.pipelineRows, newest->pipelineRows.Count(), kPipelineRowBytes, "pipeline-rows", true);
+		if (newest) {
+			ensure(entry.materialRows, newest->materialRows.Count(), kMaterialRowBytes, "material-rows", true);
+			ensure(entry.pipelineRows, newest->pipelineRows.Count(), kPipelineRowBytes, "pipeline-rows", true);
+		}
 		for (const std::size_t j : { kAsyncColour, kAsyncZPrepass })
 			ensure(entry.inputs[j], inputs[j] * sizeof(DrawInput) / 4, 4, j == kAsyncZPrepass ? "inputs-depth" : "inputs", false);
+		if (shadow) {
+			ensure(entry.shadowRows, shadow->materialRows.Count(), sizeof(ShadowMaterialRow), "shadow-rows", true);
+			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
+				if (shadow->inputs.modeUsed[m])
+					ensure(entry.shadowInputs[m], shadow->ModeInputs(m) * sizeof(DrawInput) / 4, 4, fmt::format("shadow-inputs-{}", m).c_str(), false);
+		}
 		s.ringStats.grown += grown ? 1 : 0;
 		++s.ringStats.frames;
 		auto& frame = s.ringFrame;
@@ -416,6 +428,12 @@ namespace DCLF
 		frame.geometriesIndex = entry.geometries.srvIndex;
 		for (const std::size_t j : { kAsyncColour, kAsyncZPrepass })
 			frame.inputsIndex[j] = entry.inputs[j].srvIndex;
+		if (shadow) {
+			frame.shadow = true;
+			frame.shadowRows = entry.shadowRows.address;
+			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
+				frame.shadowInputsIndex[m] = entry.shadowInputs[m].srvIndex;
+		}
 		frame.materialRows = entry.materialRows.address;
 		frame.pipelineRows = entry.pipelineRows.address;
 		// The producer's part: the entry brought up to the publication, once the frame that last read it is done on the GPU.
@@ -446,9 +464,32 @@ namespace DCLF
 			entry.extras.held = views.extras.Version();
 			holders.extras.Set(r, entry.extras.held);
 			const MainPayload* newest = draws->payloads[kAsyncColour] ? draws->payloads[kAsyncColour].get() : draws->payloads[kAsyncZPrepass].get();
-			EmitGeometryDraws(newest->geometryDraws, entry.geometries.held, sender(entry.geometries, Impl::kRingGeometries));
-			entry.geometries.held = newest->geometryDraws.Version();
+			const ShadowPayload* shadow = draws->shadow.get();
+			const auto& geometries = newest ? newest->geometryDraws : shadow->geometries;
+			EmitGeometryDraws(geometries, entry.geometries.held, sender(entry.geometries, Impl::kRingGeometries));
+			entry.geometries.held = geometries.Version();
 			holders.geometries.Set(r, entry.geometries.held);
+			// The shadow payload's rows and each used mode's inputs (step 6e S2).
+			if (shadow) {
+				shadow->materialRows.Emit(entry.shadowRows.held, sender(entry.shadowRows, Impl::kRingShadowRows));
+				entry.shadowRows.held = shadow->materialRows.Version();
+				holders.shadowRows.Set(r, entry.shadowRows.held);
+				for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+					if (!shadow->inputs.modeUsed[m])
+						continue;
+					auto& part = entry.shadowInputs[m];
+					EmitShadowInputs(*shadow, m, part.held, sender(part, Impl::kRingShadowInputs));
+					part.held = shadow->regionInputs[m].Version();
+					holders.shadowInputs[m].Set(r, part.held);
+				}
+			}
+			if (!newest) {
+				s.ringRuns += runs;
+				s.ringBytes += bytes;
+				for (std::size_t k = 0; k < partBytes.size(); ++k)
+					s.ringPartBytes[k] += partBytes[k];
+				return;
+			}
 			// The rows' headers made absolute for this entry's tables.
 			EmitMainRows(newest->materialRows, entry.materialRows.held, entry.materialRows.address, entry.materialRows.capacity,
 				[](MaterialRow& a_row, std::uint64_t a_address) { PatchRowAddresses(a_row, a_address); }, sender(entry.materialRows, Impl::kRingMaterialRows));
@@ -548,6 +589,9 @@ namespace DCLF
 		// what the oldest ring entry lacks.
 		const TablesHeld from{ holders.objects.Oldest(), holders.extras.Oldest(), holders.geometries.Oldest() };
 		out->streams = MakeStreamViews(objectStore, extrasStore, geometryStore, from, a_tables, *a_tables, a_generation, a_frame);
+		// CS_DCLF_PERSISTENT_PARITY: the extras rows against the tables' (the commits that read the ring send none, step 6e S3).
+		if (PersistentParityEnabled() && ParityDue(a_frame))
+			CheckExtras(extrasStore, out->streams->extras);
 		const auto& c = a_context;
 		if (!c.valid || !c.target || !c.target->scene)
 			return out;
@@ -578,18 +622,14 @@ namespace DCLF
 			in.sunCandidates = a_sunCandidates;
 			in.lightCandidates = a_lightCandidates;
 			in.tablesHeld = from;
-			in.materialRowsHeld = shadowAheadHeld.materialRows;
-			in.inputsHeld = shadowAheadHeld.inputs;
+			// The oldest versions the ring's entries hold: what the shadow journals keep changes back to (step 6e S2).
+			in.materialRowsHeld = ringHolders.shadowRows.Oldest();
+			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
+				in.inputsHeld[m] = ringHolders.shadowInputs[m].Oldest();
 			auto payload = AcquireShadowPayload();
 			BuildShadowPayload(in, *a_tables, a_lookups, *payload, out->streams, ShadowKeptState());
 			// The publication holds the views; the payload, which the epochs may hold past it, does not.
 			payload->streams.reset();
-			if (payload->kept) {
-				shadowAheadHeld.materialRows = payload->materialRows.Version();
-				for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-					if (in.modeUsed[m])
-						shadowAheadHeld.inputs[m] = payload->regionInputs[m].Version();
-			}
 			if (PassCapture::ShadowWithholdingEnabled()) {
 				ZoneScopedN("CS.DCLF.BuildShadow.Exclusions");
 				if (in.modeUsed[kSunShadowMode])
@@ -602,18 +642,9 @@ namespace DCLF
 		return out;
 	}
 
-	void IndirectDraws::KickSceneStreams()
+	std::uint64_t IndirectDraws::TakeStreamsRefused()
 	{
-		if (impl && !failed)
-			impl->KickSceneStreams();
-	}
-
-	std::array<std::uint64_t, 3> IndirectDraws::TakeStreamsStats()
-	{
-		if (!impl)
-			return {};
-		auto& job = impl->streamsJob;
-		return { std::exchange(job.kicked, 0), std::exchange(job.used, 0), std::exchange(job.dropped, 0) };
+		return impl ? std::exchange(impl->streamsRefused, 0) : 0;
 	}
 
 	void IndirectDraws::EndFrame()
@@ -626,16 +657,18 @@ namespace DCLF
 			if (auto* host = RenderGraphRuntime::Get().Host())
 				impl->payloadRing[impl->ringFrame.entry].reuse = host->SubmittedPoint();
 		impl->ringFrame.draws.reset();
+		impl->ringShadow = {};
 		impl->shadowFallback.streams.reset();
 		AsyncWorker::Get().NoteFrame();
-		// Never taken this frame (no commit ran after it): its inputs name this frame's tables.
-		impl->DropSceneStreams();
+		// Views made for the frame's tables hold its publication: let go.
+		impl->streamViews.reset();
 	}
 
 	void IndirectDraws::DrainAsync()
 	{
 		impl->WaitAhead();
-		impl->DropSceneStreams();
+		impl->WaitFadeWriteBack();
+		impl->streamViews.reset();
 		AsyncWorker::Get().Drain();
 	}
 

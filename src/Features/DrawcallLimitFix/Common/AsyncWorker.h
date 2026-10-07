@@ -39,8 +39,6 @@ namespace DCLF
 	 * its kicks and joins go in phase 6.
 	 *
 	 * The jobs, in frame order, each with where it is kicked and joined:
-	 * - "fade write-back": FadeStateCS's milestones of the stood-in roots onto their nodes (IndirectDraws::KickFadeWriteBack at
-	 *   the end of the scene tables; BeforeShadowMaps, the accumulate phase, or the next scene frame);
 	 * - "zprepass": the Z-prepass epoch's build (EarlyPrepass; Main_RenderDepth);
 	 * - "colour": the colour epoch's build (Prepass; the end of the opaque batches).
 	 *

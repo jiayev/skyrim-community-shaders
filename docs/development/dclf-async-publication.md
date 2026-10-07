@@ -1425,6 +1425,31 @@ resident-draw, set and fade parity; motion m28/m29).
     play (fallbacks at startup and once when a view's mode and state first appeared, a frame late), persistent shadow parity 0 differ
     (105k inputs), cascade-culling and sun parity OK, set parity 0, 7,446 sequences. m61: 0 crashes, the render-thread waits' only
     site the accumulate join at Present (m60: shadow join and cancel in 23 windows), occlusion maps all drawn.
+  - *S2: the shadow payload in the ring* (y28, m62). The ring entry holds the installed shadow payload's material rows and each used
+    mode's inputs (occlusion maps' included), filled by the producer with the main parts; the geometry table is the entry's (the main
+    and shadow payloads build it from the same stream views and face streams). The shadow journals keep what the oldest entry lacks
+    (RingHolders::shadowRows, shadowInputs). The shadow and occlusion views' latches carry the payload block (ShadowRingLatch: the
+    mode's inputs, the geometry table, the shadow rows' address; no pipeline rows) and the arena's frame record names the entry's
+    objects and extras; the occlusion epoch reads the entry the shadow commit read (ringShadow, cleared at the frame's end). Shadow
+    rows hold no addresses: no patching, no shader change. A shadow commit that reads the entry uploads only the arena. y28: 300 of
+    300 shadow commits read the ring, persistent shadow parity 0 differ, set parity 0. (The bridge's main material rows, 27 KB a frame,
+    are 13.5 materials a build whose frame floats move: so since y17; the main rows report now names the key part that moved.)
+  - *S3: the streams job out* (y31, m63). Nothing that reads the ring reads the scene buffers' object records or extras (the reflection
+    draws with the colour commit's frame record, the entry's), so only a commit that reads no entry - a fallback build's - sends them,
+    from the stream views (StreamsNow: the installed publication's, or made at once while the coordinator and the builds task are
+    idle; refused and counted otherwise). Deleted: the streams job (KickSceneStreams, its AsyncWorker staging, JoinSceneStreams,
+    DropSceneStreams, StreamsForBuild, its report). The extras parity runs in the builds task, which owns the store.
+  - *S4: the fade write-back a task* (y32, y33, m64, m65). The write-back of the stood-in roots' fade milestones onto their nodes is a
+    task on DCLF's executor, posted at the frame's start when none runs, never joined: it drains the batches itself, writes under the
+    read window's leases (what the window's close leaves goes to the next task), and holds the frame's tables snapshot - so its
+    publication's retirement node, and the root nodes it names - while it runs. Its three joins (the frame's start, BeforeShadowMaps,
+    the accumulate phase) are deleted; DrainAsync waits for it. m64: ~1,300 milestones written, 0 stale, 0 frames found a task running.
+    On the way: ShadowAheadUsable no longer compares the capacities a payload was built within (a ring entry is sized from the
+    payload, the buffers only grow: those were the remaining shadow fallbacks), AheadUsable compares the face positions' address the
+    geometry rows name, and the builds ahead are made for every shadow mode and state drawn so far (lastShadow, sticky: a point
+    light's paraboloids or an occlusion map that come and go find their inputs built). y33, m65: in-frame builds only in the first
+    frames (none built yet), set parity 0, every parity 0 but FrameValues' known 2 rows, the render-thread waits' one site the
+    accumulate join at Present (0.001-0.12 ms/frame). AsyncWorker now runs only the scene lane (F).
 
 ## Implemented foundations
 

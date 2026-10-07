@@ -169,8 +169,8 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			for (std::size_t i = 0; i < kCommitParts.size(); ++i)
 				commitParts += fmt::format("{}{} {:.1f}", commitParts.empty() ? "" : ", ", kCommitParts[i], draws.commitUs[i] / draws.commitEpochs);
 			logger::info("[DCLF] main epoch commit on the render thread, us per epoch over {} epochs: {}", draws.commitEpochs, commitParts);
-			if (const auto streams = DCLF::IndirectDraws::Get().TakeStreamsStats(); streams[0])
-				logger::info("[DCLF] scene streams staged on the worker: {} jobs, {} taken by a commit, {} dropped", streams[0], streams[1], streams[2]);
+			if (const auto refused = DCLF::IndirectDraws::Get().TakeStreamsRefused())
+				logger::info("[DCLF] scene stream views a fallback wanted while the coordinator or the builds task ran (none made): {}", refused);
 			DCLF::IndirectDraws::Get().ResetCommitTimings();
 		}
 		std::istringstream reportLines((DCLF::AsyncModeSetting() != DCLF::AsyncMode::Off ? DCLF::IndirectDraws::Get().AsyncReport() : std::string()) +
