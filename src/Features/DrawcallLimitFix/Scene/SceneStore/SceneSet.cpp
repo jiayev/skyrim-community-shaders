@@ -586,10 +586,35 @@ namespace DCLF
 		sceneWorkPending = true;
 	}
 
-	void SceneStore::KickSceneTask(std::function<void()> a_work)
+	void SceneStore::PublishTables()
+	{
+		ZoneScopedN("CS.DCLF.Scene.PublishTables");
+		const auto start = std::chrono::steady_clock::now();
+		// A snapshot only the pool holds (no frame accepted it, or every holder let go): written again, reusing its storage.
+		std::shared_ptr<Tables> target;
+		for (auto& pooled : tablesPool)
+			if (pooled.use_count() == 1 && pooled != publishedTables) {
+				target = pooled;
+				break;
+			}
+		if (target) {
+			++tablesPublication.reused;
+		} else {
+			target = tablesPool.emplace_back(std::make_shared<Tables>());
+			++tablesPublication.made;
+		}
+		*target = tables;
+		publishedTables = target;
+		++tablesPublication.published;
+		const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+		tablesPublication.ms += ms;
+		tablesPublication.maxMs = std::max(tablesPublication.maxMs, ms);
+	}
+
+	void SceneStore::KickSceneTask(std::function<void()> a_work, const char* a_name)
 	{
 		sceneTask = std::static_pointer_cast<void>(std::make_shared<AsyncWorker::JobHandle>(
-			AsyncWorker::Get().Submit("scene", [work = std::move(a_work)](std::stop_token) { work(); })));
+			AsyncWorker::Get().Submit(a_name, [work = std::move(a_work)](std::stop_token) { work(); })));
 	}
 
 	void SceneStore::JoinSceneTask()
@@ -605,6 +630,8 @@ namespace DCLF
 
 	void SceneStore::FinishSceneWork()
 	{
+		if (std::exchange(accumulateWorkPending, false))
+			FinishAccumulateWork();
 		if (!std::exchange(sceneWorkPending, false))
 			return;
 		auto& primary = PrimaryCull::Get();

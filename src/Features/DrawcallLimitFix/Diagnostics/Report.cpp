@@ -320,6 +320,9 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			stats.attachedEvents, stats.detachedEvents, stats.detachMoves, stats.validationDrops, timing.eventsMs / frames,
 			(timing.sceneMs + timing.buildMs) / frames, timing.sceneMs / frames, timing.sceneMaxMs, timing.buildMs / frames, timing.buildMaxMs,
 			parts);
+		if (const auto publication = store.TakeTablesPublication(); publication.published)
+			logger::info("[DCLF] tables published (step 6): {} snapshots ({} written again, {} made, pool {}), {:.3f} ms each on the coordinator (max {:.3f})",
+				publication.published, publication.reused, publication.made, publication.pool, publication.ms / publication.published, publication.maxMs);
 		{
 			// The "scene tables" zone by sub-zone (ScenePart). The four event parts are the scene work's (ApplyEvents), except
 			// a frame without scene work, whose batch Present applies outside the zone.

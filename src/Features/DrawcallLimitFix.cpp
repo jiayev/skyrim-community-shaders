@@ -272,6 +272,8 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// frame draws), the point lights' filter, the main renderers, tree LOD's and the reflection's preparation, and the roots
 	// this frame's scene lists leave out (before Main::Draw queues their build).
 	store.BeginFrame();
+	// The tables the last scene work published, for the frame (step 6: a pointer swap; the frame's readers move onto it).
+	store.AcceptTables();
 	// A write-back job no join reached, before anything changes the tables it reads.
 	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
 	// The newest complete scene revision (R3c), then the last commit's set as the frame's claims once that revision was made at or
@@ -393,7 +395,16 @@ void DrawcallLimitFix::EarlyPrepass()
 	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
 	ScopedPerfEvent event("CS DCLF: accumulator tables and pipelines");
 	const auto start = std::chrono::steady_clock::now();
-	store.BuildFrame(DCLF::SceneStore::Phase::Accumulate);
+	// The accumulate phase (step 6b): what only the render thread may run (the registrations drained, the engine's material
+	// evaluations), then the joins on the coordinator, which publish the tables. Joined here for now: the Z-prepass kick and the
+	// lookups below still read the live tables (step 6c moves them onto the published snapshot).
+	store.PrepareAccumulatePhase();
+	if (SceneWorkInline()) {
+		store.RunAccumulateWork(false);
+	} else {
+		store.KickSceneTask([&store] { store.RunAccumulateWork(true); }, "accumulate");
+	}
+	store.JoinSceneTask();
 	const double buildMs = MillisecondsSince(start);
 	timing.buildMs += buildMs;
 	timing.buildMaxMs = std::max(timing.buildMaxMs, buildMs);

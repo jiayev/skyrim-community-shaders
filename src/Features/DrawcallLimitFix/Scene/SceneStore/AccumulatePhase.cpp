@@ -152,25 +152,95 @@ namespace DCLF
 	 * per-frame lighting template, the shading and light lists and the decal order. It patches the records
 	 * BuildScenePhase appended, in place and by object index.
 	 */
+	void SceneStore::PrepareAccumulatePhase()
+	{
+		DCLF_FRAME_TRACE("PrepareAccumulatePhase");  // TEMP frame trace
+		ZoneScopedN("CS.DCLF.Accumulate.Prepare");
+		// The engine's registrations are drained for the diagnostics (and the frame's lighting pass, TemplatePassOf's fallback).
+		RefreshMainBatchRenderers();
+		DrainCapture();
+		if (!sceneBuilt)
+			return;  // a load screen, or the feature installed mid-frame: nothing to patch
+		PrimaryCull::Get().CheckLightMasks();
+		// What only the render thread may run, ahead of the joins: the engine's SetupMaterial for the materials the last joins
+		// asked for, and the material tail (writer events, texture transforms, the validation slice), which evaluate materials too.
+		ServeMaterialRequests();
+		ProcessMaterialWrites();
+		RefreshTextureTransforms();
+		ValidateMaterialSlice();
+	}
+
+	void SceneStore::ServeMaterialRequests()
+	{
+		// A served record no join took within two frames (its object left, or bound another way): let go.
+		for (auto it = materialsServed.begin(); it != materialsServed.end();) {
+			if (frame - it->second.frame > 2) {
+				materialsHandedBack.push_back(std::move(it->second.owner));
+				it = materialsServed.erase(it);
+			} else {
+				++it;
+			}
+		}
+		for (auto& request : std::exchange(materialRequests, {})) {
+			const auto key = std::pair{ request.material, request.pass };
+			materialRequested.erase(key);
+			MaterialServed served;
+			served.valid = EvaluateMaterialForSlot(request.material, request.pass, served.record);
+			served.owner = std::move(request.owner);
+			served.frame = frame;
+			++residentStats.materialsServed;
+			if (const auto it = materialsServed.find(key); it != materialsServed.end())
+				materialsHandedBack.push_back(std::move(it->second.owner));
+			materialsServed.insert_or_assign(key, std::move(served));
+		}
+	}
+
+	void SceneStore::RunAccumulateWork(bool a_task)
+	{
+		inSceneTask = a_task;
+		holdPrimaryNotes = true;
+		holdLostMembers = true;
+		BuildAccumulatePhase();
+		PublishTables();
+		holdLostMembers = false;
+		holdPrimaryNotes = false;
+		inSceneTask = false;
+		accumulateWorkPending = true;
+	}
+
+	void SceneStore::FinishAccumulateWork()
+	{
+		auto& primary = PrimaryCull::Get();
+		if (std::exchange(allMembersLostHeld, false))
+			primary.NoteAllMembersLost();
+		for (const auto* geometry : lostMembersHeld)
+			primary.NoteMemberLost(geometry);
+		lostMembersHeld.clear();
+		// The joins' new pipelines: their PerGeometry block from the template object's lighting pass (RefreshFrameConstants keeps it).
+		auto& evaluator = ConstantEvaluator::Get();
+		for (const std::uint32_t slot : std::exchange(pipelinesToEvaluate, {})) {
+			if (slot >= tables.pipelines.size() || !tables.pipelineSlots.Alive(slot))
+				continue;
+			GeometryConstants constants{};
+			const auto* templatePass = TemplatePassOf(tables.geometryTemplate[slot]);
+			const bool valid = templatePass && evaluator.EvaluateGeometry(*templatePass, tables.pipelines[slot].passDescriptor, kMainPassRenderFlags, constants);
+			tables.geometryConstants[slot] = constants;
+			tables.geometryConstantsValid[slot] = valid ? 1 : 0;
+		}
+	}
+
 	void SceneStore::BuildAccumulatePhase()
 	{
 		DCLF_FRAME_TRACE("BuildAccumulatePhase");  // TEMP frame trace
 		ZoneScopedN("CS.DCLF.Accumulate.Tables");
-		if (!sceneBuilt) {
-			// A load screen, or the feature installed mid-frame: nothing to patch.
-			DrainCapture();
-			return;
-		}
+		if (!sceneBuilt)
+			return;  // a load screen, or the feature installed mid-frame: nothing to patch
 		PartTimer timer(stats.partMs, &stats.accumulatePartMs);
 		std::uint32_t fadingThisFrame = 0;
 		TracyCZoneN(captureZone, "CS.DCLF.Accumulate.Capture", true);
-		// The pass table holds the frame's membership joins alone (BindByMembership); the engine's registrations are drained
-		// for the diagnostics.
-		RefreshMainBatchRenderers();
+		// The pass table holds the frame's membership joins alone (BindByMembership).
 		accumulatedPasses.clear();
 		accumulatedLayerPasses.clear();
-		DrainCapture();
-		PrimaryCull::Get().CheckLightMasks();
 		// Scene membership: the records written since, bound (patched once below, then kept).
 		residentJoining.clear();
 		residentLayerJoining.clear();
@@ -179,7 +249,6 @@ namespace DCLF
 
 		TracyCZoneEnd(captureZone);
 
-		auto& evaluator = ConstantEvaluator::Get();
 		const bool interior = frameInterior;
 		const auto& decalBiasMode = frameDecalBias;
 		const std::uint32_t biasWitness = decalBiasMode[1] | (decalBiasMode[2] << 8) | (decalBiasMode[3] << 16);
@@ -397,13 +466,11 @@ namespace DCLF
 					timer.Add(BuildPart::Dedup);
 					const std::uint32_t slot = AllocatePipelineSlot();
 					tables.pipelines[slot] = key;
-					// Per-frame PerGeometry values for this pass descriptor, from any object's lighting pass
-					// (it supplies the scene light list the engine reads the sun from).
-					GeometryConstants constants{};
-					const auto* templatePass = TemplatePassOf(property);
-					const bool valid = templatePass && evaluator.EvaluateGeometry(*templatePass, descriptors.pass, kMainPassRenderFlags, constants);
-					tables.geometryConstants[slot] = constants;
-					tables.geometryConstantsValid[slot] = valid ? 1 : 0;
+					// Per-frame PerGeometry values for this pass descriptor, from any object's lighting pass (it supplies the scene light
+					// list the engine reads the sun from): the engine's SetupGeometry, which the render thread runs at the join.
+					tables.geometryConstants[slot] = {};
+					tables.geometryConstantsValid[slot] = 0;
+					pipelinesToEvaluate.push_back(slot);
 					tables.geometryTemplate[slot] = property;
 
 					tables.pipelineTechnique[slot] = TechniqueRowFor(descriptors.pass);
@@ -439,15 +506,32 @@ namespace DCLF
 				auto materialIt = materialIndex.find(std::pair{ material, descriptors.pass });
 				if (materialIt == materialIndex.end()) {
 					timer.Add(BuildPart::Dedup);
-					MaterialRecord record;
-					if (!EvaluateMaterialForSlot(material, descriptors.pass, record)) {
-						// No shader instance yet (nothing drawn so far): stay native this frame.
+					// The record is the engine's SetupMaterial, which only the render thread runs (ServeMaterialRequests): asked for, and
+					// the join waits for it, staying native meanwhile. No shader instance yet (nothing drawn so far) asks again.
+					const auto materialKey = std::pair{ material, descriptors.pass };
+					const auto served = materialsServed.find(materialKey);
+					if (served == materialsServed.end() || !served->second.valid) {
+						if (served != materialsServed.end()) {
+							materialsHandedBack.push_back(std::move(served->second.owner));
+							materialsServed.erase(served);
+						}
+						if (materialRequested.insert(materialKey).second) {
+							MaterialRequest request;
+							request.owner.reset(const_cast<RE::BSShaderMaterial*>(material));
+							request.material = material;
+							request.pass = descriptors.pass;
+							materialRequests.push_back(std::move(request));
+						}
+						bindRetry.push_back(objectId);
+						++residentStats.materialWaits;
 						derived.valid = false;
 						return;
 					}
+					MaterialRecord record = served->second.record;
 					const std::uint32_t slot = AllocateMaterialSlot();
 					materialOwners.resize(tables.materials.size());
-					materialOwners[slot].reset(const_cast<RE::BSShaderMaterial*>(material));
+					materialOwners[slot] = std::move(served->second.owner);
+					materialsServed.erase(served);
 					tables.materials[slot] = record;
 					tables.materialVersion[slot] = ++materialVersions;
 					tables.NoteMaterial(slot);
@@ -622,10 +706,6 @@ namespace DCLF
 		stats.materialsAlive = static_cast<std::uint32_t>(tables.materialSlots.AliveCount());
 		stats.materialCacheEntries = static_cast<std::uint32_t>(tables.materialSlots.AliveCount());
 		TracyCZoneEnd(statsZone);
-		ZoneNamedN(materialTailZone, "CS.DCLF.Accumulate.MaterialTail", true);
-		ProcessMaterialWrites();
-		RefreshTextureTransforms();
-		ValidateMaterialSlice();
 	}
 
 	void SceneStore::BindByMembership()
@@ -643,6 +723,9 @@ namespace DCLF
 		if (!ConstantEvaluator::Get().HasLightingShader())
 			return;
 		auto& primary = PrimaryCull::Get();
+		// The joins that waited for a material record, again.
+		bindQueue.insert(bindQueue.end(), bindRetry.begin(), bindRetry.end());
+		bindRetry.clear();
 		for (const std::uint32_t slot : std::exchange(bindQueue, {})) {
 			if (slot >= tables.objects.size() || (tables.objects[slot].flags & (kObjectFree | kObjectShadowOnly)))
 				continue;

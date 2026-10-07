@@ -1204,6 +1204,39 @@ resident-draw, set and fade parity; motion m28/m29).
   empty children cut for a frame), and a member lost to a detach is taken out of the list filter at the join instead of before
   it. Neither can reach freed memory now (the candidates hold their roots, the geometry is held until Present).
 
+**Step 6: the tables as a publication** (2026-10-07; motion m32, m33).
+- *Why not the frame's tail.* The tail after the colour epoch (its end to Present) is 0.64 ms (p50; p90 0.97) against the
+  scene task's 0.27 ms (p50; p90 2.1, p99 4.1, m32): run there, the work's wait only moves to Present. The walk needs the whole
+  read window (Main::Draw to Present) with the frame's readers on a copy that holds still.
+- *Decided* (user: long-term scalability first, rewrites fine; the main thread is eventually to only accept a scene revision):
+  BasicRenderer's journal model. The coordinator owns the working tables and is their only writer; at the end of its work it
+  publishes an immutable, pooled snapshot, made from a pooled set no frame holds by replaying the changes since that set's
+  version; BeginSceneFrame accepts the newest by pointer swap. Nothing is copied or replayed on the main thread, and readers keep
+  contiguous columns. Copy-on-write chunked columns (O(1) publication) were rejected: they break contiguous uploads and every
+  reader, for no gain on the accept. Stages: 6a the snapshot (a whole copy first); 6b the frame-side writers out of the tables
+  (the accumulate phase as a captured intent, frame constants, lookups, fade-root bookkeeping); 6c the readers on the accepted
+  snapshot and every in-frame join deleted; 6d the whole copy replaced by journal replay, family by family, each with a parity.
+- *6a* (m33). `SceneStore::PublishTables` (the coordinator, after the set's commit) copies the tables into a pooled snapshot no
+  one holds; `AcceptTables` (BeginSceneFrame) takes the newest. The tables copy as they are (logs, journals, slot tables, maps,
+  import leases). Cost: 0.32 ms p50 (p90 0.40, max 0.90) a frame on the coordinator, pool of 2. Unread so far, and inside the
+  joined scene task: the render thread's waits rise by that much (0.67 -> 0.98 ms a frame mean) until 6c removes the join, and
+  6d replaces the whole copy.
+- *6b, first part: the accumulate phase on the coordinator* (y3). The joins no longer read the engine's registrations (scene
+  membership, `BindByMembership`), so the phase splits: `PrepareAccumulatePhase` (render thread, EarlyPrepass) drains the
+  registrations (diagnostics, the frame's lighting pass), serves the material evaluations the last joins asked for
+  (`ServeMaterialRequests`: SetupMaterial is the engine's) and runs the material tail (writer events, texture transforms, the
+  validation slice); `RunAccumulateWork` (the coordinator, "accumulate") makes the joins, keeps the residents, orders the decals
+  and publishes the tables (6a's snapshot now includes the frame's joins). At its join (`FinishAccumulateWork`) the render thread
+  evaluates the new pipelines' PerGeometry blocks (SetupGeometry) and hands PrimaryCull the members the joins dropped. A join
+  whose material record is not evaluated yet asks for it and waits a frame, native meanwhile (`bindRetry`). Still joined at
+  EarlyPrepass: the Z-prepass kick and the lookups read the live tables. y3: set parity 0 in every window, 7,436-7,442
+  sequences; steady membership as x15; the startup's first window bound 7,905 objects a frame (x15 7,946): 8,162 joins waited
+  a frame for their material, all served.
+- *Next* (6b, the rest): the frame-side writers left (frame constants and the material tail's per-frame parts, lookups, the
+  fade-root journal's bookkeeping, LOD technique ranges, projected textures, imports, the `Take*` hand-overs). The accepted
+  snapshot is the frame's alone, so they write into it; what the coordinator's tables must keep (the journal's sent version, the
+  retired slots taken, evaluated constants) is applied to them at Present, with the coordinator idle.
+
 ## Implemented foundations
 
 - `ORGModuleServices::AsyncPrimitives` is a backend-independent header-only target.

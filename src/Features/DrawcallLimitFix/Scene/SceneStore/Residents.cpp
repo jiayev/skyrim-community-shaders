@@ -46,8 +46,12 @@ namespace DCLF
 		UnlistFadeRoot(a_slot);
 		// The scene work's drops reach PrimaryCull as set changes (ApplySet) or as revoked claims (RevokeUndrawnClaims); the
 		// accumulate phase's, at once.
-		if (!holdPrimaryNotes && a_slot < tables.objectGeometry.size() && tables.objectGeometry[a_slot])
-			PrimaryCull::Get().NoteMemberLost(tables.objectGeometry[a_slot]);
+		if (a_slot < tables.objectGeometry.size() && tables.objectGeometry[a_slot]) {
+			if (!holdPrimaryNotes)
+				PrimaryCull::Get().NoteMemberLost(tables.objectGeometry[a_slot]);
+			else if (holdLostMembers)
+				lostMembersHeld.push_back(tables.objectGeometry[a_slot]);
+		}
 		if (a_slot < tables.residentSlot.size()) {
 			tables.residentSlot[a_slot] = 0;
 			tables.NoteChange(a_slot, kChangeMembership);
