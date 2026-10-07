@@ -70,7 +70,8 @@ namespace DCLF
 		++m.frames;
 		auto apply = [&](std::uint32_t a_slot, const MaterialRecord& a_live) {
 			bool floatsChanged = false;
-			if (MaterialSources::ApplyFrameComponents(a_live, f.materials[a_slot], f.materialKeys[a_slot].second, &floatsChanged)) {
+			const bool recordChanged = MaterialSources::ApplyFrameComponents(a_live, f.materials[a_slot], f.materialKeys[a_slot].second, &floatsChanged);
+			if (recordChanged) {
 				f.materialVersion[a_slot] = f.NextVersion();
 				f.materialLog.Push(a_slot);
 			}
@@ -78,6 +79,8 @@ namespace DCLF
 				f.materialFrameVersion[a_slot] = f.NextVersion();
 				f.materialLog.Push(a_slot);
 			}
+			if (recordChanged || floatsChanged)
+				NoteFrameFloats(a_slot);
 		};
 		auto keyed = [&](std::uint32_t a_slot, std::uint32_t a_signature) {
 			return a_slot < f.materials.size() && view.materialSlots.Alive(a_slot) && f.materialKeys[a_slot].first &&
@@ -168,6 +171,7 @@ namespace DCLF
 				if (MaterialSources::ApplyTextureTransform(material, f.materials[slot])) {
 					f.materialFrameVersion[slot] = f.NextVersion();
 					f.materialLog.Push(slot);
+					NoteFrameFloats(slot);
 				}
 				const auto* base = static_cast<const RE::BSLightingShaderMaterialBase*>(material);
 				keep = frame - f.transformWatchFrame[slot] <= 2 || base->texCoordOffset[0] != base->texCoordOffset[1] ||
@@ -326,6 +330,7 @@ namespace DCLF
 					f.materialVersion[slot] = f.NextVersion();
 					f.materialLog.Push(slot);
 					++stats.materialsRewritten;
+					PostMaterialRecord(slot);
 				}
 			} else if (std::find(f.materialEvaluationsPending.begin(), f.materialEvaluationsPending.end(), slot) == f.materialEvaluationsPending.end()) {
 				f.materialEvaluationsPending.push_back(slot);
@@ -435,6 +440,8 @@ namespace DCLF
 						row.constantsVersion = frameTables.NextVersion();
 					if (binding || !row.valid)
 						row.bindingVersion = frameTables.NextVersion();
+					if (floats || binding || !row.valid)
+						PostTechniqueConstants(view.pipelineTechnique[i]);
 					row.valid = true;
 					// CS_DCLF_PERSISTENT_PARITY: the row against a second evaluation, once a frame.
 					if (geometryParityFrame) {
@@ -497,6 +504,7 @@ namespace DCLF
 				if (ownChanged) {
 					frameTables.pipelineConstantsVersion[i] = frameTables.NextVersion();
 					++geometryStats.changed;
+					PostPipelineConstants(i);
 				}
 				frameTables.geometryConstantsValid[i] = 1;
 				// CS_DCLF_PERSISTENT_PARITY: the block against a full evaluation, in what no object overrides; the frame
@@ -826,6 +834,7 @@ namespace DCLF
 		if (std::memcmp(held, rows.data(), sizeof(rows)) == 0)
 			return false;
 		std::memcpy(held, rows.data(), sizeof(rows));
+		tables.NoteExtrasBlock(tables.extraOffset[a_object]);
 		return true;
 	}
 
@@ -998,6 +1007,7 @@ namespace DCLF
 				continue;
 			std::memcpy(out, range, sizeof(range));
 			row.constantsVersion = frameTables.NextVersion();
+			PostTechniqueConstants(static_cast<std::uint32_t>(r));
 		}
 	}
 
@@ -1005,9 +1015,152 @@ namespace DCLF
 	{
 		const std::uint32_t key = TechniqueKey(a_passDescriptor);
 		const auto [it, fresh] = tables.techniqueRow.try_emplace(key, static_cast<std::uint32_t>(tables.techniqueKeys.size()));
-		if (fresh)
+		if (fresh) {
 			tables.techniqueKeys.push_back(key);
+			tables.techniqueConstants.emplace_back();
+			tables.NoteConstantsWrite();
+		}
 		return it->second;
+	}
+
+	void SceneStore::PostPipelineConstants(std::uint32_t a_slot)
+	{
+		auto& post = pipelineConstantsPosted.emplace_back();
+		post.slot = a_slot;
+		post.key = frameTables.pipelineKeys[a_slot];
+		post.binding = frameTables.pipelineBindings[a_slot];
+		post.generation = frameTables.tablesGeneration;
+		post.constants = frameTables.geometryConstants[a_slot];
+		++constantsPostStats.pipelinesPosted;
+	}
+
+	void SceneStore::PostTechniqueConstants(std::uint32_t a_row)
+	{
+		const Tables& view = FrameView();
+		if (a_row >= view.techniqueKeys.size())
+			return;
+		auto& post = techniqueConstantsPosted.emplace_back();
+		post.row = a_row;
+		post.key = view.techniqueKeys[a_row];
+		post.generation = frameTables.tablesGeneration;
+		post.value = frameTables.techniques[a_row].value;
+		++constantsPostStats.techniquesPosted;
+	}
+
+	void SceneStore::PostMaterialRecord(std::uint32_t a_slot)
+	{
+		auto& post = materialPosted.emplace_back();
+		post.slot = a_slot;
+		post.generation = tablesGeneration;
+		post.key = frameTables.materialKeys[a_slot];
+		post.record = frameTables.materials[a_slot];
+		++constantsPostStats.recordsPosted;
+	}
+
+	void SceneStore::NoteFrameFloats(std::uint32_t a_slot)
+	{
+		if (frameFloatsDirtyMark.size() <= a_slot)
+			frameFloatsDirtyMark.resize(std::size_t(a_slot) + 1, 0);
+		if (!std::exchange(frameFloatsDirtyMark[a_slot], std::uint8_t{ 1 }))
+			frameFloatsDirty.push_back(a_slot);
+	}
+
+	void SceneStore::PostFrameFloats()
+	{
+		// The frame floats as the frame left them, once a slot: what the coordinator's record takes (CopyFrameComponents).
+		auto& f = frameTables;
+		for (const std::uint32_t slot : frameFloatsDirty) {
+			frameFloatsDirtyMark[slot] = 0;
+			if (slot >= f.materials.size() || !f.materialKeys[slot].first)
+				continue;
+			auto& post = materialPosted.emplace_back();
+			post.slot = slot;
+			post.generation = tablesGeneration;
+			post.frameFloats = true;
+			post.key = f.materialKeys[slot];
+			post.record = f.materials[slot];
+			++constantsPostStats.framesPosted;
+		}
+		frameFloatsDirty.clear();
+	}
+
+	void SceneStore::ApplyMaterialPosts()
+	{
+		// The coordinator's records (step 6e B), in the frame's order: a writer event's record whole, a slot's frame floats onto its
+		// record. A slot that holds another key now (freed, keyed again) takes nothing: its new tenant's record is evaluated afresh.
+		for (auto& post : materialInbox) {
+			const std::uint32_t slot = post.slot;
+			if (post.generation != tablesGeneration || slot >= tables.materials.size() || !tables.materialSlots.Alive(slot) || tables.materialSlotKey[slot] != post.key) {
+				++constantsPostStats.materialsStale;
+				continue;
+			}
+			auto& record = tables.materials[slot];
+			if (post.frameFloats) {
+				const MaterialRecord before = record;
+				MaterialSources::CopyFrameComponents(post.record, record, post.key.second);
+				if (record == before)
+					continue;
+				tables.materialFrameVersion[slot] = ++materialVersions;
+				++constantsPostStats.framesApplied;
+			} else {
+				if (record == post.record)
+					continue;
+				record = post.record;
+				tables.materialVersion[slot] = ++materialVersions;
+				++constantsPostStats.recordsApplied;
+			}
+			tables.NoteMaterial(slot);
+		}
+		materialInbox.clear();
+	}
+
+	void SceneStore::ApplyConstantsPosts()
+	{
+		// The coordinator's tables: a post whose slot holds another key now (a slot reused, the tables made again) is dropped; the
+		// render thread evaluates the new tenant when the frame's snapshot shows it.
+		bool wrote = false;
+		for (auto& post : pipelineConstantsInbox) {
+			const std::uint32_t p = post.slot;
+			if (post.generation != tablesGeneration || p >= tables.pipelines.size() || p >= tables.pipelineConstants.size() || !(tables.pipelines[p] == post.key) ||
+				tables.pipelineBindingVersion[p] != post.binding) {
+				++constantsPostStats.stale;
+				continue;
+			}
+			auto& row = tables.pipelineConstants[p];
+			row.constants = post.constants;
+			row.key = post.key;
+			row.binding = post.binding;
+			row.version = tables.NextVersion();
+			row.valid = true;
+			wrote = true;
+			++constantsPostStats.pipelinesApplied;
+		}
+		pipelineConstantsInbox.clear();
+		auto sameFloats = [](const ConstantBlock& a, const ConstantBlock& b) { return std::memcmp(a.floats.data(), b.floats.data(), sizeof(a.floats)) == 0; };
+		for (auto& post : techniqueConstantsInbox) {
+			if (post.generation != tablesGeneration || post.row >= tables.techniqueKeys.size() || post.row >= tables.techniqueConstants.size() ||
+				tables.techniqueKeys[post.row] != post.key) {
+				++constantsPostStats.stale;
+				continue;
+			}
+			auto& row = tables.techniqueConstants[post.row];
+			const bool floats = !row.valid || !sameFloats(post.value.vs, row.value.vs) || !sameFloats(post.value.ps, row.value.ps);
+			const bool binding = !row.valid || post.value.filterModes != row.value.filterModes || post.value.shadowMask != row.value.shadowMask ||
+			                     post.value.shadowMaskTexture != row.value.shadowMaskTexture;
+			if (!floats && !binding)
+				continue;
+			row.value = post.value;
+			if (floats)
+				row.constantsVersion = tables.NextVersion();
+			if (binding)
+				row.bindingVersion = tables.NextVersion();
+			row.valid = true;
+			wrote = true;
+			++constantsPostStats.techniquesApplied;
+		}
+		techniqueConstantsInbox.clear();
+		if (wrote)
+			tables.NoteConstantsWrite();
 	}
 
 	void SceneStore::ValidateMaterialSlice()

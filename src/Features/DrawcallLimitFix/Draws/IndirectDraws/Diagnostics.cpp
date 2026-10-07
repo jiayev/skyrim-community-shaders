@@ -278,7 +278,7 @@ namespace DCLF
 				text += fmt::format("[DCLF] async shadow early: {} kicked at the end of the scene phase, {} kept at BeforeShadowMaps, {} kicked again ({} change logs, {} shared or feature data, {} other inputs)\n",
 					a.earlyKicked, a.earlyKept, a.earlyRekicked, a.earlyRekickedBy[0], a.earlyRekickedBy[1], a.earlyRekickedBy[2]);
 			if (i == kAsyncColour && a.earlyKicked)
-				text += fmt::format("[DCLF] async colour early: {} kicked at EarlyPrepass, {} kept at Prepass, {} kicked again (tables' versions {}, material records {}, lookups {})\n",
+				text += fmt::format("[DCLF] async colour early: {} kicked at EarlyPrepass, {} kept at Prepass, {} kicked again (the frame's tables {}, the frame's values {}, lookups {})\n",
 					a.earlyKicked, a.earlyKept, a.earlyRekicked, a.earlyRekickedBy[0], a.earlyRekickedBy[1], a.earlyRekickedBy[2]);
 			if (i == kAsyncZPrepass && a.kicked)
 				text += fmt::format("[DCLF] async zprepass eye: the predicted eye pair missed the captured one {} times ({} the previous eye only)\n", a.eyeMismatches, a.previousEyeMismatches);

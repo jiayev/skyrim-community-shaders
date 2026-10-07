@@ -262,15 +262,28 @@ namespace DCLF
 			}
 		}
 
-		// What an import needs, from the epoch the render thread is in; false outside one (the caller asks again in one).
+		// The descriptor service: the epoch's while one prepares, else the graph's own, retained (its heap allocation is locked), as
+		// the import thread makes its imports outside any epoch. The lookups are refreshed at the frame's start (step 6e C).
+		static org::runtime::IDescriptorService* ServiceNow(std::shared_ptr<org::runtime::IDescriptorService>& a_retained)
+		{
+			if (auto* active = org::runtime::GetActiveDescriptorService())
+				return active;
+			auto* host = RenderGraphRuntime::Get().Host();
+			if (!host || !host->Graph())
+				return nullptr;
+			a_retained = host->Graph()->RetainDescriptorService();
+			return a_retained.get();
+		}
+
+		// What an import needs: the graph's descriptor service and cleanup queue (the descriptor heap manager's, the epoch's too).
 		static bool MakeContext(ImportContext& a_context)
 		{
 			auto* host = RenderGraphRuntime::Get().Host();
-			auto* service = org::runtime::GetActiveDescriptorService();
-			if (!host || !service || !host->Graph())
+			if (!host || !host->Graph())
 				return false;
 			a_context.service = host->Graph()->RetainDescriptorService();
-			a_context.cleanup = service->GetResourceCleanupQueue();
+			auto* active = org::runtime::GetActiveDescriptorService();
+			a_context.cleanup = active ? active->GetResourceCleanupQueue() : host->ResourceCleanup();
 			a_context.device = host->GetDesc().device;
 			a_context.deviceOwner = RenderGraphRuntime::Get().DeviceOwner();
 			return a_context.service && a_context.cleanup && a_context.deviceOwner;
@@ -515,7 +528,6 @@ namespace DCLF
 			if (impl->Find(*registry, a_view, binding) != Impl::Found::Unknown)
 				return binding;
 		}
-		// Outside an epoch nothing is queued; the caller asks again inside one.
 		Impl::ImportContext context;
 		if (!Impl::MakeContext(context))
 			return { kInvalid, {}, true };
@@ -546,9 +558,9 @@ namespace DCLF
 	{
 		if (impl->nullIndex != kInvalid)
 			return impl->nullIndex;
-		auto* service = org::runtime::GetActiveDescriptorService();
-		auto* host = RenderGraphRuntime::Get().Host();
-		if (!service || !host)
+		std::shared_ptr<org::runtime::IDescriptorService> retained;
+		auto* service = Impl::ServiceNow(retained);
+		if (!service)
 			return kInvalid;
 		rhi::SrvDesc srv{};
 		srv.dimension = rhi::SrvDim::Texture2D;
@@ -575,7 +587,8 @@ namespace DCLF
 		auto& index = impl->samplers[a_addressMode * kFilterModes + a_filterMode];
 		if (index != kInvalid)
 			return index;
-		auto* service = org::runtime::GetActiveDescriptorService();
+		std::shared_ptr<org::runtime::IDescriptorService> retained;
+		auto* service = Impl::ServiceNow(retained);
 		const auto* table = reinterpret_cast<ID3D11SamplerState* const*>(REL::Offset(kSamplerTableAE).address());
 		auto* state = table[a_addressMode * kFilterModes + a_filterMode];
 		if (!service || !state)

@@ -31,6 +31,7 @@ namespace DCLF
 	bool IndirectDraws::OcclusionReady(std::uint32_t) const { return false; }
 	std::uint32_t IndirectDraws::ExecuteOcclusion(std::uint32_t) { return 0; }
 	void IndirectDraws::KickColourBuild() {}
+	void IndirectDraws::RefreshMainLookups() {}
 	void IndirectDraws::KickZPrepassBuild() {}
 	void IndirectDraws::KickFadeWriteBack() {}
 	bool IndirectDraws::DecideTreeLod() { return false; }

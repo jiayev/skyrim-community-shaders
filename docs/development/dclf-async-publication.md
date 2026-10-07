@@ -1277,9 +1277,60 @@ resident-draw, set and fade parity; motion m28/m29).
   - y10 (bridge, parities): set parity 0 in every window, 7,446 sequences, 0 constants skips; persistent records, extras,
     geometry, decal order, fade port/visibility, tree LOD, sun exclusion, material frame components, pipeline constants all
     0 differ.
-- *Next*: 6d (the whole copy becomes journal replay, family by family, each with a parity); the colour build's join (the
-  last in-frame wait); the Present join goes with the walk (events instead of the walk, so the scene work is short or done on
-  events alone).
+- *6d: the publication by replay* (m38-m44, y11-y13). A pooled snapshot equals the tables as they stood at its change log's end
+  (its last publication, plus the frame's start's writes if a frame accepted it: `WriteBoth` writes both alike), so
+  `PublishTables` brings it up to date with what changed since, family by family, and copies the rest whole with those held out
+  of the copy (swapped aside, put back by a scope guard):
+  - *Material records* (2.3 KB each, most of the whole copy) by their versions: every write gives a session-unique version, so an
+    equal version is an equal record.
+  - *Per-object columns* the change log covers (`ColumnsOf`/`CausesBetween`: records, draws, lights, tree animation, skin, shadow,
+    identity, bindings), by the slots the log names since the snapshot's end; new slots grown with `GrowObjects`' defaults.
+  - *Geometry columns* (records, imports, slot and layer keys) by the geometry log, which now also names a cleared slot
+    (`ClearGeometrySlot`); `geometryLastUsed` (the walk's, unlogged) stays in the whole copy.
+  - *Extras rows* by a new block log (`extrasBlockLog`: every block written, allocated or freed). Copying only the logged slots'
+    blocks left freed blocks stale (y11: the persistent extras parity, which compares every row, differed in all 18 windows; no
+    drawn row differed: the per-slot parity was 0).
+  - *The logs* (change, geometry, material, extras block) by appending what they gained and dropping the head the tables trimmed.
+  - *Trees and fade roots* (rows, refs, free lists, nodes, index maps, the per-object slot columns) copied only when their write
+    stamp moved (`treesStamp`, `fadeRootsStamp`; every write bumps them: a fade row's through `NoteFadeRoot`, the structural writes
+    in List/Unlist past their early returns, `KeepResidentsAlive`'s member-list and centre writes). Stamps at function entry kept
+    nothing (bumped every frame); the fade-root journal is the depth commit's hand-over every frame, so it is copied with the rest.
+  - A snapshot just made, or one the logs no longer reach (trimmed past, invalidated by a clear), is copied whole.
+  Parity (`CS_DCLF_PERSISTENT_PARITY`, every 60 publications): every material record, every object slot's columns, every geometry
+  slot, the logs and the extras rows byte for byte, and a kept family against the tables'. 0 differ in every window of m39-m43
+  and y12-y13.
+  Cost (coordinator, per publication): 0.41 ms (m37, the whole copy) -> 0.20 (m38, records) -> 0.13 (m39, objects and logs) ->
+  0.10 (m40, geometry) -> 0.06-0.10 (m44, families kept: trees ~75%, fade roots ~50% of publications in motion, all on the
+  bridge). Per publication in motion: ~150 of 8,700 object slots, ~4 of 2,500 geometry slots, ~2 of 1,600 records written; the
+  remaining whole copy 0.03-0.05 ms (small members and the index maps). y13: set parity 0, 7,444 sequences, 0 constants skips;
+  m44: 7,730 sequences, waits as m37 (the publication is the coordinator's).
+- *6e: the main payloads in the publication* (user: a render-thread wait comes out entirely, never made rarer; BasicRenderer's
+  draws depend on material tables published asynchronously). Found (m45): the colour build was waited for twice a frame
+  (BeforeFrameConstants, the epoch's join) because it baked the frame's values into the rows it wrote (WriteMaterialRow and
+  WritePipelineRow read FrameTables), which RefreshFrameConstants writes at Prepass; and its staleness witness read the
+  coordinator's counters (rekicks 10-14% -> 1-9% fixed). *Decided (user):* records, bindings, technique and pipeline constants are
+  scene state the coordinator publishes (a change a frame late, as joins); the per-frame floats (frame components, texture
+  transforms) either posted too (CS_DCLF_FRAME_FLOATS=published) or patched into the rows' upload by the render thread (patch);
+  both built, the switch following publication latency.
+  - *A, constants* (y14): Tables::pipelineConstants and techniqueConstants, posted by the render thread's evaluations (keyed by
+    the slot's key and binding version), handed over at the frame's start, applied by the scene work (ApplyConstantsPosts),
+    published (a stamped family). MainReady waits for them ("constants"); the builds and the lookups read them. 103 blocks, 16 rows,
+    0 dropped; no member waited.
+  - *B, material records, published mode* (y15): a writer event's re-evaluation and a slot's changed frame floats posted
+    (MaterialPost), applied by the coordinator (records; frame floats onto the record under Tables::materialFrameVersion); the
+    builds and lookups read the snapshot's records, versions and log. ~27 slots' frame floats a frame at the bridge (the river's
+    transforms). The build witness is the snapshot's version alone: 0 rekicks.
+  - *C, lookups at the frame's start* (y16-y17, m46): GpuTextures resolves bindings, the null view and the samplers outside an
+    epoch (the graph's retained descriptor service and the host's cleanup queue, as its import thread); the Lighting programs and
+    pipelines, the pipeline entries and the material and shared lookups are refreshed once, at the frame's start
+    (DrawcallLimitFix::RefreshFrameLookups), and the coordinator's copy taken after; the kicks', the main epochs' and the shadow
+    epochs' material refreshes are gone (the shadow epochs keep their own), and BeforeFrameConstants with them. y16 drew nothing:
+    the samplers were still created only inside an epoch (fixed). y17: 7,440 sequences, set parity 0. m46: the early colour build
+    kept 100%; waits 0.03-0.24 ms/frame, the colour join 0.01-0.10 (the build overrunning its window behind the Z-prepass
+    build) and the Present join 0.01-0.13.
+  - *Next (E)*: the builds made ahead by the coordinator. Their kept stores (object records, extras, geometry draws, rows, the
+    build caches; the first three shared with the shadow build) are mutated in place and read by the commits, so a build for the
+    next frame cannot run beside this frame's commits without per-publication versions of them.
 
 ## Implemented foundations
 

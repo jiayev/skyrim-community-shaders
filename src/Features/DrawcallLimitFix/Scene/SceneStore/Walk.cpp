@@ -36,6 +36,7 @@ namespace DCLF
 			tables.changeLog.Trim(1u << 17);
 			tables.materialLog.Trim(1u << 16);
 			tables.geometryLog.Trim(1u << 16);
+			tables.extrasBlockLog.Trim(1u << 16);
 			CheckChangeLog();
 		}
 		// Nothing is drawn while a load screen is up, and nothing here may touch the tracked geometry

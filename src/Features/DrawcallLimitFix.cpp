@@ -284,6 +284,7 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	store.HandOverAtFrameStart();
 	store.AcceptTables();
 	store.SyncFrameTables();
+	RefreshFrameLookups();
 	// A write-back job no join reached, before anything changes the tables it reads.
 	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
 	// The newest complete scene revision (R3c), then the last commit's set as the frame's claims once that revision was made at or
@@ -395,39 +396,13 @@ void DrawcallLimitFix::AfterShadowMaps()
 	DCLF::IndirectDraws::Get().ExecuteShadowFrame();
 }
 
-void DrawcallLimitFix::EarlyPrepass()
+void DrawcallLimitFix::RefreshFrameLookups()
 {
-	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::EarlyPrepass);
-	if (!Running())
-		return;
-
-	// The tables are built here, from Main_RenderShadowMaps, rather than in Prepass from StartDeferred.
-	// Both DCLF epochs then read the same generation: the Z-prepass runs inside Main_RenderDepth, after this and
-	// before Prepass, and the per-object visibility verdicts it writes are applied by index in the colour epoch.
-	//
-	// This is only possible because the accumulator is already complete here - the cull job finishes
-	// before the shadow maps (Main::Draw) - and because the tables read the latched accumulator rather
-	// than `currentAccumulator`, which is not set this early.
+	// The frame's start (step 6e C), with the scene work joined and the tables accepted: the main lookups - the Lighting programs and
+	// pipelines (requested, admitted), the pipeline entries, the material and shared bindings - are refreshed here alone, so they hold
+	// still for the whole frame: the frame's builds and the coordinator's work read them as they are. A texture an epoch imports is
+	// taken at the next frame's start (its members wait for it, as they did).
 	auto& store = DCLF::SceneStore::Get();
-	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
-	ScopedPerfEvent event("CS DCLF: accumulator tables and pipelines");
-	const auto start = std::chrono::steady_clock::now();
-	// The accumulate phase (step 6b): what only the render thread may run (the registrations drained, the engine's material
-	// evaluations), then the joins on the coordinator, which publish the tables. Joined here for now: the Z-prepass kick and the
-	// lookups below still read the live tables (step 6c moves them onto the published snapshot).
-	store.PrepareAccumulatePhase();
-	if (SceneWorkInline()) {
-		store.RunAccumulateWork(false);
-		store.JoinSceneTask();
-	} else {
-		// Behind the frame's walk on the scene's lane; joined at Present. Its tables are published for the next frame.
-		store.KickSceneTask([&store] { store.RunAccumulateWork(true); }, "accumulate");
-	}
-	const double buildMs = MillisecondsSince(start);
-	timing.buildMs += buildMs;
-	timing.buildMaxMs = std::max(timing.buildMaxMs, buildMs);
-	++timing.frames;
-	// SPIR-V programs and indirect pipelines for the pipelines drawn this frame (built once, asynchronously).
 	auto& programs = DCLF::ShaderPrograms::Get();
 	auto& pipelines = DCLF::DrawPipelines::Get();
 	if (auto* lighting = DCLF::ConstantEvaluator::Get().GetLightingShader(); lighting && programs.Enabled()) {
@@ -444,9 +419,8 @@ void DrawcallLimitFix::EarlyPrepass()
 		pipelines.Update();
 		TracyCZoneEnd(updateZone);
 		TracyCZoneN(lookupZone, "CS.DCLF.Accumulate.PipelineLookups", true);
-		// The pipeline lookups an epoch's build reads (Lookups.h): the set index of every pipeline used this
-		// frame, its shaders' constant tables and its register usage, after Update has admitted this frame's
-		// finished builds. Resolved here, where the GPU is busy with the shadow maps, rather than in the epoch.
+		// The pipeline lookups a build reads (Lookups.h): the set index of every pipeline the frame's tables use, its shaders'
+		// constant tables and its register usage, after Update has admitted the finished builds.
 		auto& lookups = store.MutableLookups();
 		if (lookups.pipelineSetGeneration != pipelines.Generation()) {
 			// The set was recreated (a target change): every index a build may hold is stale.
@@ -508,6 +482,46 @@ void DrawcallLimitFix::EarlyPrepass()
 		TracyCZoneEnd(lookupZone);
 	}
 
+	DCLF::IndirectDraws::Get().RefreshMainLookups();
+	store.TakeLookupsView();
+}
+
+void DrawcallLimitFix::EarlyPrepass()
+{
+	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::EarlyPrepass);
+	if (!Running())
+		return;
+
+	// The tables are built here, from Main_RenderShadowMaps, rather than in Prepass from StartDeferred.
+	// Both DCLF epochs then read the same generation: the Z-prepass runs inside Main_RenderDepth, after this and
+	// before Prepass, and the per-object visibility verdicts it writes are applied by index in the colour epoch.
+	//
+	// This is only possible because the accumulator is already complete here - the cull job finishes
+	// before the shadow maps (Main::Draw) - and because the tables read the latched accumulator rather
+	// than `currentAccumulator`, which is not set this early.
+	auto& store = DCLF::SceneStore::Get();
+	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
+	ScopedPerfEvent event("CS DCLF: accumulator tables and pipelines");
+	const auto start = std::chrono::steady_clock::now();
+	// The accumulate phase (step 6b): what only the render thread may run (the registrations drained, the engine's material
+	// evaluations), then the joins on the coordinator, which publish the tables. Joined here for now: the Z-prepass kick and the
+	// lookups below still read the live tables (step 6c moves them onto the published snapshot).
+	store.PrepareAccumulatePhase();
+	if (SceneWorkInline()) {
+		store.RunAccumulateWork(false);
+		store.JoinSceneTask();
+	} else {
+		// Behind the frame's walk on the scene's lane; joined at Present. Its tables are published for the next frame.
+		store.KickSceneTask([&store] { store.RunAccumulateWork(true); }, "accumulate");
+	}
+	const double buildMs = MillisecondsSince(start);
+	timing.buildMs += buildMs;
+	timing.buildMaxMs = std::max(timing.buildMaxMs, buildMs);
+	++timing.frames;
+	// The Lighting programs and pipelines, and the main lookups, are the frame's start's (RefreshFrameLookups): the shadow views'
+	// requested here are admitted there.
+	auto& programs = DCLF::ShaderPrograms::Get();
+	auto& pipelines = DCLF::DrawPipelines::Get();
 	// The shadow views' programs: one Utility build per technique of the frame's casters, per render mode
 	// among the views the engine drew. Requested here, beside the Lighting builds, so they are compiled
 	// long before a shadow epoch would draw with them.
@@ -765,8 +779,6 @@ void DrawcallLimitFix::Prepass()
 	// The one point in the frame where `currentAccumulator` is the main camera's accumulator. The accumulate phase
 	// (EarlyPrepass) runs before it is set, and reads this latch.
 	store.LatchAccumulator();
-	// The early colour build reads what RefreshFrameConstants writes: done first.
-	DCLF::IndirectDraws::Get().BeforeFrameConstants();
 	// The camera-dependent half of the per-frame constants, now that the main camera's shadow state is
 	// current (BuildFrame ran at EarlyPrepass, where it still belonged to the shadow-map camera).
 	store.RefreshFrameConstants();

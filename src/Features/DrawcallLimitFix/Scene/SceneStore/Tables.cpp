@@ -299,6 +299,8 @@ namespace DCLF
 		pipelineBindingVersion.clear();
 		lights.clear();
 		treeAnim.clear();
+		NoteTreesWrite();
+		NoteFadeRootsWrite();
 		trees.clear();
 		treeRefs.clear();
 		treeFree.clear();
@@ -321,6 +323,8 @@ namespace DCLF
 		geometryTemplate.clear();
 		techniqueKeys.clear();
 		techniqueRow.clear();
+		techniqueConstants.clear();
+		NoteConstantsWrite();
 		permutations.clear();
 		draws.clear();
 		decalOrdinal.clear();

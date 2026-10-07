@@ -49,6 +49,9 @@ namespace DCLF
 			return a_why = 0, false;
 		if (m >= lookupsView.materials.size() || m >= tables.materialSlotKey.size() || !lookupsView.materials[m].resolved || lookupsView.materials[m].key != tables.materialSlotKey[m])
 			return a_why = 1, false;
+		// Its pipeline's and technique's constants, as the coordinator holds them (posted by the frame's evaluations).
+		if (!tables.PipelineConstantsCurrent(p) || !tables.TechniqueConstantsValid(p))
+			return a_why = 9, false;
 		if (tables.TechniqueShadowMask(p) && lookupsView.pipelines[p].shadowMaskIndex == Lookups::kNone)
 			return a_why = 2, false;
 		if (!lookupsView.samplersResolved || lookupsView.nullTexture == Lookups::kNone)
@@ -152,7 +155,8 @@ namespace DCLF
 		setLagged.clear();
 		// Readiness moved: anything the lookups resolve is a new version of them (Lookups::NextVersion), the shadow lookups
 		// have their own generation.
-		const std::uint64_t readiness = (std::uint64_t(lookupsView.versionCounter) << 32) ^ (std::uint64_t(lookupsView.shadowGeneration) << 1) ^ lookupsView.generation;
+		const std::uint64_t readiness = ((std::uint64_t(lookupsView.versionCounter) << 32) ^ (std::uint64_t(lookupsView.shadowGeneration) << 1) ^ lookupsView.generation) +
+		                                tables.constantsStamp * 0x9e3779b97f4a7c15ull;
 		if (readiness != setReadiness) {
 			setReadiness = readiness;
 			++setStats.readinessEvents;
@@ -593,12 +597,27 @@ namespace DCLF
 		inSceneTask = a_task;
 		holdPrimaryNotes = true;
 		ApplyEvents();
+		ApplyConstantsPosts();
+		ApplyMaterialPosts();
 		BuildFrame(Phase::Scene);
 		CommitSet();
 		EndSceneFrame();
 		holdPrimaryNotes = false;
 		inSceneTask = false;
 		sceneWorkPending = true;
+	}
+
+	void SceneStore::TakeLookupsView()
+	{
+		// The coordinator's copy of the lookups (its set judges readiness by them), as the frame's start refreshed them.
+		if (const std::array<std::uint64_t, 3> key{ lookups.versionCounter, lookups.generation, lookups.shadowGeneration }; key != lookupsViewKey) {
+			lookupsView = lookups;
+			lookupsViewKey = key;
+		} else {
+			lookupsView.samplersResolved = lookups.samplersResolved;
+			lookupsView.nullTexture = lookups.nullTexture;
+			lookupsView.projectedTextures = lookups.projectedTextures;
+		}
 	}
 
 	void SceneStore::HandOverAtFrameStart()
@@ -610,6 +629,14 @@ namespace DCLF
 			ApplyFadeRootsOwned(*std::exchange(pendingFadeOwned, std::nullopt));
 		if (std::exchange(pendingFadeReseed, false))
 			ApplyReseedOwnedFadeRoots();
+		auto take = [](auto& a_to, auto& a_from) {
+			a_to.insert(a_to.end(), std::make_move_iterator(a_from.begin()), std::make_move_iterator(a_from.end()));
+			a_from.clear();
+		};
+		take(pipelineConstantsInbox, pipelineConstantsPosted);
+		take(techniqueConstantsInbox, techniqueConstantsPosted);
+		PostFrameFloats();
+		take(materialInbox, materialPosted);
 		if (std::exchange(lookupsResetPending, false)) {
 			const auto lookupGeneration = lookups.generation;
 			const auto shadowGeneration = lookups.shadowGeneration;
@@ -618,14 +645,6 @@ namespace DCLF
 			lookups.generation = lookupGeneration + 1;
 			lookups.shadowGeneration = shadowGeneration + 1;
 			lookups.versionCounter = lookupVersion;
-		}
-		if (const std::array<std::uint64_t, 3> key{ lookups.versionCounter, lookups.generation, lookups.shadowGeneration }; key != lookupsViewKey) {
-			lookupsView = lookups;
-			lookupsViewKey = key;
-		} else {
-			lookupsView.samplersResolved = lookups.samplersResolved;
-			lookupsView.nullTexture = lookups.nullTexture;
-			lookupsView.projectedTextures = lookups.projectedTextures;
 		}
 		// To the frame.
 		auto append = [](auto& a_to, auto& a_from) {
@@ -668,25 +687,308 @@ namespace DCLF
 	{
 		ZoneScopedN("CS.DCLF.Scene.PublishTables");
 		const auto start = std::chrono::steady_clock::now();
+		auto& publication = tablesPublication;
 		// A snapshot only the pool holds (no frame accepted it, or every holder let go): written again, reusing its storage.
-		std::shared_ptr<Tables> target;
-		for (auto& pooled : tablesPool)
-			if (pooled.use_count() == 1 && pooled != publishedTables) {
-				target = pooled;
+		std::size_t index = tablesPool.size();
+		for (std::size_t i = 0; i < tablesPool.size(); ++i)
+			if (tablesPool[i].use_count() == 1 && tablesPool[i] != publishedTables) {
+				index = i;
 				break;
 			}
-		if (target) {
-			++tablesPublication.reused;
+		if (index < tablesPool.size()) {
+			++publication.reused;
 		} else {
-			target = tablesPool.emplace_back(std::make_shared<Tables>());
-			++tablesPublication.made;
+			tablesPool.emplace_back(std::make_shared<Tables>());
+			tablesPoolReplayable.push_back(0);
+			++publication.made;
 		}
-		*target = tables;
+		const std::shared_ptr<Tables> target = tablesPool[index];
+		Tables& snapshot = *target;
+
+		// Step 6d: the snapshot equals the tables as they stood at its change log's end (its last publication, and the frame's start's
+		// writes if a frame accepted it: WriteBoth writes both alike). What changed since is written again:
+		// - the per-object columns the change log covers (ColumnsOf, CausesBetween), by the slots it names since that end;
+		// - the logs themselves, by appending what they gained (they only append, trim their head and invalidate);
+		// - the material records by their versions (session-unique per write: an equal version is an equal record).
+		// Everything else is copied whole, with those held out of the copy. A snapshot the log no longer reaches (trimmed past,
+		// invalidated: the tables were cleared) or just made is copied whole.
+		auto loggedColumns = [](Tables& a_left, Tables& a_right, auto&& a_column) {
+			a_column(a_left.objects, a_right.objects);
+			a_column(a_left.draws, a_right.draws);
+			a_column(a_left.lights, a_right.lights);
+			a_column(a_left.treeAnim, a_right.treeAnim);
+			a_column(a_left.sunEntryNode, a_right.sunEntryNode);
+			a_column(a_left.hasFadeNode, a_right.hasFadeNode);
+			a_column(a_left.extraOffset, a_right.extraOffset);
+			a_column(a_left.objectGeometry, a_right.objectGeometry);
+			a_column(a_left.objectIdentity, a_right.objectIdentity);
+			a_column(a_left.objectGroup, a_right.objectGroup);
+			a_column(a_left.shadowDiffuse, a_right.shadowDiffuse);
+			a_column(a_left.shadowMaterial, a_right.shadowMaterial);
+			a_column(a_left.fadeDistance, a_right.fadeDistance);
+			a_column(a_left.boneOffset, a_right.boneOffset);
+			a_column(a_left.boneRows, a_right.boneRows);
+			a_column(a_left.shadowTechnique, a_right.shadowTechnique);
+			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+				a_column(a_left.occlusionTechnique[v], a_right.occlusionTechnique[v]);
+			a_column(a_left.faceStream, a_right.faceStream);
+			a_column(a_left.sceneFlags, a_right.sceneFlags);
+			a_column(a_left.skinPartitions, a_right.skinPartitions);
+			a_column(a_left.shadowReject, a_right.shadowReject);
+			a_column(a_left.residentSlot, a_right.residentSlot);
+		};
+		// The geometry columns the geometry log covers (geometryLastUsed, the walk's, is copied whole).
+		auto geometryColumns = [](Tables& a_left, Tables& a_right, auto&& a_column) {
+			a_column(a_left.geometries, a_right.geometries);
+			a_column(a_left.geometryImports, a_right.geometryImports);
+			a_column(a_left.geometrySlotKey, a_right.geometrySlotKey);
+			a_column(a_left.geometryLayerKey, a_right.geometryLayerKey);
+		};
+		// The families copied only when their write stamp moved.
+		auto treeFamily = [](Tables& a_left, Tables& a_right, auto&& a_member) {
+			a_member(a_left.trees, a_right.trees);
+			a_member(a_left.treeRefs, a_right.treeRefs);
+			a_member(a_left.treeFree, a_right.treeFree);
+			a_member(a_left.treeNode, a_right.treeNode);
+			a_member(a_left.treeIndex, a_right.treeIndex);
+			a_member(a_left.treeObjects, a_right.treeObjects);
+			a_member(a_left.objectTree, a_right.objectTree);
+		};
+		auto fadeRootFamily = [](Tables& a_left, Tables& a_right, auto&& a_member) {
+			a_member(a_left.fadeRoots, a_right.fadeRoots);
+			a_member(a_left.fadeRootRefs, a_right.fadeRootRefs);
+			a_member(a_left.fadeRootFree, a_right.fadeRootFree);
+			a_member(a_left.fadeRootNode, a_right.fadeRootNode);
+			a_member(a_left.fadeRootIndex, a_right.fadeRootIndex);
+			a_member(a_left.fadeRootSwitch, a_right.fadeRootSwitch);
+			a_member(a_left.objectFadeRoot, a_right.objectFadeRoot);
+		};
+		auto constantsFamily = [](Tables& a_left, Tables& a_right, auto&& a_member) {
+			a_member(a_left.pipelineConstants, a_right.pipelineConstants);
+			a_member(a_left.techniqueConstants, a_right.techniqueConstants);
+		};
+		auto heldOut = [&](Tables& a_left, Tables& a_right) {
+			loggedColumns(a_left, a_right, [](auto& a_x, auto& a_y) { a_x.swap(a_y); });
+			constantsFamily(a_left, a_right, [](auto& a_x, auto& a_y) { std::swap(a_x, a_y); });
+			treeFamily(a_left, a_right, [](auto& a_x, auto& a_y) { std::swap(a_x, a_y); });
+			fadeRootFamily(a_left, a_right, [](auto& a_x, auto& a_y) { std::swap(a_x, a_y); });
+			geometryColumns(a_left, a_right, [](auto& a_x, auto& a_y) { a_x.swap(a_y); });
+			a_left.extraRows.swap(a_right.extraRows);
+			a_left.materials.swap(a_right.materials);
+			std::swap(a_left.changeLog, a_right.changeLog);
+			std::swap(a_left.geometryLog, a_right.geometryLog);
+			std::swap(a_left.materialLog, a_right.materialLog);
+			std::swap(a_left.extrasBlockLog, a_right.extrasBlockLog);
+		};
+		const std::uint64_t position = snapshot.changeLog.End();
+		const std::uint64_t geometryPosition = snapshot.geometryLog.End();
+		const std::uint64_t extrasPosition = snapshot.extrasBlockLog.End();
+		const bool replayExtras = tablesPoolReplayable[index] && tables.extrasBlockLog.Readable(extrasPosition) &&
+		                          snapshot.extrasBlockLog.base <= tables.extrasBlockLog.base && snapshot.extraRows.size() <= tables.extraRows.size();
+		const bool replayGeometry = tablesPoolReplayable[index] && tables.geometryLog.Readable(geometryPosition) &&
+		                            snapshot.geometryLog.base <= tables.geometryLog.base && snapshot.geometries.size() <= tables.geometries.size();
+		const bool replay = tablesPoolReplayable[index] && tables.changeLog.Readable(position) && snapshot.changeLog.base <= tables.changeLog.base &&
+		                    snapshot.objects.size() <= tables.objects.size();
+		// Read before the copy writes the snapshot's stamps.
+		const bool keepTrees = tablesPoolReplayable[index] && snapshot.treesStamp == tables.treesStamp;
+		const bool keepFadeRoots = tablesPoolReplayable[index] && snapshot.fadeRootsStamp == tables.fadeRootsStamp;
+		const bool keepConstants = tablesPoolReplayable[index] && snapshot.constantsStamp == tables.constantsStamp;
+		std::vector<std::uint32_t> recordVersions, recordFrameVersions;
+		recordVersions.swap(snapshot.materialVersion);
+		recordFrameVersions.swap(snapshot.materialFrameVersion);
+		{
+			// The snapshot's held-out members aside, the tables' aside (put back however the copy ends), the rest copied whole.
+			Tables snapshotHeld, tablesHeld;
+			heldOut(snapshot, snapshotHeld);
+			heldOut(tables, tablesHeld);
+			struct Restore
+			{
+				std::function<void()> undo;
+				~Restore() { undo(); }
+			} restore{ [&] { heldOut(tables, tablesHeld); } };
+			snapshot = tables;
+			heldOut(snapshot, snapshotHeld);
+		}
+		const auto restEnd = std::chrono::steady_clock::now();
+		publication.restMs += std::chrono::duration<double, std::milli>(restEnd - start).count();
+
+		const std::size_t objectSlots = tables.objects.size();
+		publication.objectSlots += objectSlots;
+		if (replay) {
+			snapshot.GrowObjects(objectSlots);
+			replaySlotMarks.resize(std::max(replaySlotMarks.size(), objectSlots), 0);
+			std::vector<std::uint32_t> copied;
+			for (const auto& change : tables.changeLog.From(position)) {
+				const std::uint32_t slot = change.slot;
+				if (slot >= objectSlots || std::exchange(replaySlotMarks[slot], std::uint8_t{ 1 }))
+					continue;
+				copied.push_back(slot);
+				loggedColumns(snapshot, tables, [slot](auto& a_to, auto& a_from) { a_to[slot] = a_from[slot]; });
+			}
+			for (const std::uint32_t slot : copied)
+				replaySlotMarks[slot] = 0;
+			publication.objectsReplayed += copied.size();
+			// The logs: the head the tables trimmed dropped, what they gained appended.
+			auto replayLog = [](auto& a_to, const auto& a_from) {
+				const std::uint64_t end = a_to.End();
+				if (!a_from.Readable(end) || a_to.base > a_from.base) {
+					a_to = a_from;
+					return;
+				}
+				const std::size_t dropped = static_cast<std::size_t>(std::min<std::uint64_t>(a_from.base - a_to.base, a_to.entries.size()));
+				a_to.entries.erase(a_to.entries.begin(), a_to.entries.begin() + std::ptrdiff_t(dropped));
+				a_to.base = a_from.base;
+				const auto gained = a_from.From(end);
+				a_to.entries.insert(a_to.entries.end(), gained.begin(), gained.end());
+			};
+			replayLog(snapshot.changeLog, tables.changeLog);
+			replayLog(snapshot.geometryLog, tables.geometryLog);
+			replayLog(snapshot.materialLog, tables.materialLog);
+		} else {
+			++publication.wholeCopies;
+			loggedColumns(snapshot, tables, [](auto& a_to, auto& a_from) { a_to = a_from; });
+			snapshot.changeLog = tables.changeLog;
+			snapshot.geometryLog = tables.geometryLog;
+			snapshot.materialLog = tables.materialLog;
+			recordVersions.clear();
+			recordFrameVersions.clear();
+		}
+		// The extras rows by the blocks the block log names (written, allocated, freed); the log itself as the others.
+		if (replayExtras) {
+			snapshot.extraRows.resize(tables.extraRows.size(), 0.0f);
+			for (const std::uint32_t offset : tables.extrasBlockLog.From(extrasPosition))
+				if ((std::size_t(offset) + kExtraRows) * 4 <= tables.extraRows.size())
+					std::copy_n(tables.extraRows.begin() + std::ptrdiff_t(offset) * 4, std::size_t(kExtraRows) * 4, snapshot.extraRows.begin() + std::ptrdiff_t(offset) * 4);
+			const auto gained = tables.extrasBlockLog.From(extrasPosition);
+			const std::size_t dropped = static_cast<std::size_t>(std::min<std::uint64_t>(tables.extrasBlockLog.base - snapshot.extrasBlockLog.base, snapshot.extrasBlockLog.entries.size()));
+			snapshot.extrasBlockLog.entries.erase(snapshot.extrasBlockLog.entries.begin(), snapshot.extrasBlockLog.entries.begin() + std::ptrdiff_t(dropped));
+			snapshot.extrasBlockLog.base = tables.extrasBlockLog.base;
+			snapshot.extrasBlockLog.entries.insert(snapshot.extrasBlockLog.entries.end(), gained.begin(), gained.end());
+		} else {
+			snapshot.extraRows = tables.extraRows;
+			snapshot.extrasBlockLog = tables.extrasBlockLog;
+		}
+		auto assign = [](auto& a_to, auto& a_from) { a_to = a_from; };
+		if (keepTrees)
+			++publication.treesKept;
+		else
+			treeFamily(snapshot, tables, assign);
+		if (keepFadeRoots)
+			++publication.fadeRootsKept;
+		else
+			fadeRootFamily(snapshot, tables, assign);
+		if (!keepConstants)
+			constantsFamily(snapshot, tables, assign);
+		// The geometry columns by the geometry log (the logs above are replayed after their positions were taken).
+		const std::size_t geometrySlots = tables.geometries.size();
+		publication.geometrySlots += geometrySlots;
+		if (replayGeometry) {
+			snapshot.GeometryColumns([geometrySlots](auto& a_column, auto&&... a_initial) { a_column.resize(geometrySlots, a_initial...); });
+			std::vector<std::uint8_t> marks(geometrySlots, 0);
+			for (const std::uint32_t slot : tables.geometryLog.From(geometryPosition)) {
+				if (slot >= geometrySlots || std::exchange(marks[slot], std::uint8_t{ 1 }))
+					continue;
+				geometryColumns(snapshot, tables, [slot](auto& a_to, auto& a_from) { a_to[slot] = a_from[slot]; });
+				++publication.geometriesReplayed;
+			}
+		} else {
+			++publication.geometryWholeCopies;
+			geometryColumns(snapshot, tables, [](auto& a_to, auto& a_from) { a_to = a_from; });
+		}
+		tablesPoolReplayable[index] = 1;
+
+		const std::size_t slots = tables.materials.size();
+		snapshot.materials.resize(slots);
+		for (std::size_t slot = 0; slot < slots; ++slot) {
+			if (slot < recordVersions.size() && recordVersions[slot] == tables.materialVersion[slot] && slot < recordFrameVersions.size() &&
+				recordFrameVersions[slot] == tables.materialFrameVersion[slot])
+				continue;
+			snapshot.materials[slot] = tables.materials[slot];
+			++publication.materialsReplayed;
+		}
+		publication.materialSlots += slots;
+
+		if (SwitchEnabled(Switch::PersistentParity) && publication.published % 60 == 0) {
+			++publication.parityChecks;
+			publication.parityMaterials += slots;
+			for (std::size_t slot = 0; slot < slots; ++slot)
+				if (!(snapshot.materials[slot] == tables.materials[slot]) && publication.parityDiffer++ == 0)
+					logger::error("[DCLF] tables replay (6d): material slot {} differs from the tables (version {})", slot, tables.materialVersion[slot]);
+			publication.parityObjects += objectSlots;
+			if (snapshot.objects.size() != objectSlots) {
+				if (publication.parityObjectsDiffer++ == 0)
+					logger::error("[DCLF] tables replay (6d): {} object slots against the tables' {}", snapshot.objects.size(), objectSlots);
+			} else {
+				for (std::uint32_t slot = 0; slot < objectSlots; ++slot)
+					if (const auto causes = Tables::CausesBetween(snapshot.ColumnsOf(slot), tables.ColumnsOf(slot)); causes && publication.parityObjectsDiffer++ == 0)
+						logger::error("[DCLF] tables replay (6d): object slot {} differs from the tables (causes {:#x}; replayed from log {}, now {})", slot, causes,
+							position, tables.changeLog.End());
+			}
+			publication.parityGeometries += geometrySlots;
+			if (snapshot.geometries.size() != geometrySlots) {
+				++publication.parityGeometriesDiffer;
+			} else {
+				for (std::uint32_t slot = 0; slot < geometrySlots; ++slot) {
+					const auto& a = snapshot.geometryImports[slot];
+					const auto& b = tables.geometryImports[slot];
+					if ((std::memcmp(&snapshot.geometries[slot], &tables.geometries[slot], sizeof(GeometryRecord)) != 0 || a.vertexGeneration != b.vertexGeneration ||
+							a.indexGeneration != b.indexGeneration || a.vertexOwner != b.vertexOwner || a.indexOwner != b.indexOwner ||
+							snapshot.geometrySlotKey[slot] != tables.geometrySlotKey[slot] || snapshot.geometryLayerKey[slot] != tables.geometryLayerKey[slot]) &&
+						publication.parityGeometriesDiffer++ == 0)
+						logger::error("[DCLF] tables replay (6d): geometry slot {} differs from the tables (replayed from log {}, now {})", slot, geometryPosition,
+							tables.geometryLog.End());
+				}
+			}
+			// The kept families against the tables' (vectors by their bytes, maps by their entries, the journal by its version).
+			auto sameMember = [](const auto& a_left, const auto& a_right) {
+				using T = std::decay_t<decltype(a_left)>;
+				if constexpr (requires { a_left.find(a_left.begin()->first); }) {
+					if (a_left.size() != a_right.size())
+						return false;
+					for (const auto& [key, value] : a_left)
+						if (const auto it = a_right.find(key); it == a_right.end() || !(it->second == value))
+							return false;
+					return true;
+				} else {
+					static_assert(std::is_trivially_copyable_v<typename T::value_type>);
+					return a_left.size() == a_right.size() &&
+					       (a_left.empty() || std::memcmp(a_left.data(), a_right.data(), a_left.size() * sizeof(a_left[0])) == 0);
+				}
+			};
+			auto sameFamily = [&](auto&& a_family) {
+				bool same = true;
+				a_family(snapshot, tables, [&](auto& a_x, auto& a_y) { same = same && sameMember(a_x, a_y); });
+				return same;
+			};
+			if (keepTrees && !sameFamily(treeFamily) && publication.parityFamiliesDiffer++ == 0)
+				logger::error("[DCLF] tables replay (6d): the trees were kept (stamp {}) but differ from the tables'", tables.treesStamp);
+			if (keepConstants) {
+				bool same = snapshot.pipelineConstants.size() == tables.pipelineConstants.size() && snapshot.techniqueConstants.size() == tables.techniqueConstants.size();
+				for (std::size_t p = 0; same && p < tables.pipelineConstants.size(); ++p)
+					same = snapshot.pipelineConstants[p].version == tables.pipelineConstants[p].version && snapshot.pipelineConstants[p].valid == tables.pipelineConstants[p].valid;
+				for (std::size_t r = 0; same && r < tables.techniqueConstants.size(); ++r)
+					same = snapshot.techniqueConstants[r].constantsVersion == tables.techniqueConstants[r].constantsVersion &&
+					       snapshot.techniqueConstants[r].bindingVersion == tables.techniqueConstants[r].bindingVersion && snapshot.techniqueConstants[r].valid == tables.techniqueConstants[r].valid;
+				if (!same && publication.parityFamiliesDiffer++ == 0)
+					logger::error("[DCLF] tables replay (6d): the constants were kept (stamp {}) but differ from the tables'", tables.constantsStamp);
+			}
+			if (keepFadeRoots && !sameFamily(fadeRootFamily) && publication.parityFamiliesDiffer++ == 0)
+				logger::error("[DCLF] tables replay (6d): the fade roots were kept (stamp {}) but differ from the tables'", tables.fadeRootsStamp);
+			auto sameLog = [](const auto& a_left, const auto& a_right) {
+				return a_left.base == a_right.base && a_left.entries.size() == a_right.entries.size() &&
+				       (a_left.entries.empty() || std::memcmp(a_left.entries.data(), a_right.entries.data(), a_left.entries.size() * sizeof(a_left.entries[0])) == 0);
+			};
+			if (!sameLog(snapshot.changeLog, tables.changeLog) || !sameLog(snapshot.geometryLog, tables.geometryLog) || !sameLog(snapshot.materialLog, tables.materialLog) ||
+				!sameLog(snapshot.extrasBlockLog, tables.extrasBlockLog) || snapshot.extraRows.size() != tables.extraRows.size() ||
+				(!tables.extraRows.empty() && std::memcmp(snapshot.extraRows.data(), tables.extraRows.data(), tables.extraRows.size() * sizeof(float)) != 0))
+				if (publication.parityLogsDiffer++ == 0)
+					logger::error("[DCLF] tables replay (6d): a log or the extras rows differ from the tables'");
+		}
 		publishedTables = target;
-		++tablesPublication.published;
+		++publication.published;
 		const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-		tablesPublication.ms += ms;
-		tablesPublication.maxMs = std::max(tablesPublication.maxMs, ms);
+		publication.ms += ms;
+		publication.maxMs = std::max(publication.maxMs, ms);
 	}
 
 	void SceneStore::KickSceneTask(std::function<void()> a_work, const char* a_name)
