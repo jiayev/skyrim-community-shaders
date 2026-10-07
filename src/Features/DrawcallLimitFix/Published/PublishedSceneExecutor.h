@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string_view>
 
 namespace DCLF
 {
@@ -41,6 +42,14 @@ namespace DCLF
 			std::string_view, Task, org::async::TaskTraceMetadata = {}) override;
 		bool DispatchAfter(const org::async::Scope&, std::chrono::steady_clock::duration,
 			org::async::TaskClass, std::string_view, Task) override;
+		/**
+		 * @brief Runs a_body(begin, end) over [0, a_count) in chunks of a_grain, on the calling thread and on the preparation
+		 * workers, and returns once every chunk ran (BasicRenderer's TaskSchedulerManager::ParallelFor). The caller takes chunks
+		 * itself and waits only for chunks a worker is running, never for queued work: a helper that starts once the chunks are
+		 * gone does nothing, and a helper that never starts leaves its chunks to the others. The first exception a chunk throws is
+		 * rethrown here once every claimed chunk finished. For worker threads: it waits, so never on the render thread.
+		 */
+		void ParallelFor(std::string_view a_name, std::size_t a_count, std::size_t a_grain, const std::function<void(std::size_t, std::size_t)>& a_body);
 		Statistics GetStatistics() const;
 		// Owner must outlive its callbacks. Calling Shutdown/Wait on its workers is an error.
 		void Shutdown();
@@ -51,5 +60,6 @@ namespace DCLF
 		struct Threads;
 		std::shared_ptr<State> state;
 		std::unique_ptr<Threads> threads;
+		org::async::Scope parallelScope;  // ParallelFor's helpers
 	};
 }

@@ -483,6 +483,8 @@ namespace DCLF
 		// epoch (the draw fades specular and envmap by distance, LodFadeFrame).
 		const LodFadeFrame lodFadeFrame = SampleLodFadeFrame();
 		latched(a_resources->frameConstants, &lodFadeFrame, sizeof(lodFadeFrame), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting));
+		// The frame's fog, into the vertex stage's b13 slot (DCLFFrameFog), every epoch: the technique rows keep theirs.
+		latched(a_resources->frameConstants, a_store.GetTables().frameFog.data(), sizeof(FrameFog), FrameSlotOffset(false, kFrameFogRegister));
 		// CS_DCLF_FOLIAGE_PARITY: the colour epoch's buffers (by its parity) and its tag, after the LOD fades in the same block (PS
 		// b13, c14: DCLFFoliageParity), and the compare pass's counters zeroed.
 		// The Z-prepass's stages read the owners' index and the size from it too, as the colour commit before them left it.

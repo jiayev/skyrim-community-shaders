@@ -136,10 +136,23 @@ struct VS_OUTPUT
 cbuffer PerTechnique : register(b0)
 {
 	float4 HighDetailRange : packoffset(c0);  // loaded cells center in xy, size in zw
+#	if !defined(DCLF_BINDLESS)
 	float4 FogParam : packoffset(c1);
 	float4 FogNearColor : packoffset(c2);
 	float4 FogFarColor : packoffset(c3);
+#	endif  // !DCLF_BINDLESS
 };
+
+#	if defined(DCLF_BINDLESS)
+// The fog: the frame's, the same in every technique and drifting with the time of day, so Drawcall Limit Fix keeps it in a block
+// of its own for the whole frame (SceneStore::Tables::frameFog) and no technique row changes with it. No other shader uses VS b13.
+cbuffer DCLFFrameFog : register(b13)
+{
+	float4 FogParam : packoffset(c0);
+	float4 FogNearColor : packoffset(c1);
+	float4 FogFarColor : packoffset(c2);
+};
+#	endif  // DCLF_BINDLESS
 
 cbuffer PerMaterial : register(b1)
 {

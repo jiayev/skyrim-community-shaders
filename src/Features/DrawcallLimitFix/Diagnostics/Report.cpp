@@ -143,6 +143,11 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			draws.drawn, draws.records, skipped, draws.uploadBytes / 1048576.0,
 			draws.cpuMs, draws.epochs, draws.notReady, textures.cached, textures.registrySlots, textures.cleanupPending,
 			textures.rejected[1], textures.rejected[2], textures.rejected[3], textures.samplers, textures.importedAsync, textures.importsPending);
+		// A register a pipeline reads that the commit does not supply rejects every pair of that pipeline: its members are
+		// withheld from the engine and drawn by nobody.
+		if (const auto constants = draws.skipped[static_cast<std::size_t>(DCLF::DrawSkip::Constants)])
+			logger::warn("[DCLF] {} pairs read constant registers no frame slot supplies (VS b{:04X} PS b{:04X}): their members are not drawn",
+				constants, draws.missingVertexConstants, draws.missingPixelConstants);
 		if (draws.frameTexturesMissing) {
 			std::string registers;
 			for (std::uint32_t t = 0; t < 128; ++t) {

@@ -96,6 +96,7 @@ struct RenderGraphRuntime::Impl
 	// Optional (newer DXVK): an epoch's submissions go to DXVK as one enqueue (CS_ORG_BATCH_SUBMIT=0 turns it off).
 	PFN_dxvkEnqueueInteropSubmissions enqueueSubmissions = nullptr;
 	PFN_dxvkGetInteropResourceInfo getResourceInfo = nullptr;
+	PFN_dxvkGetInteropResourceInfos getResourceInfos = nullptr;
 #if defined(CS_HAS_ORG_MODULE_SERVICES) && defined(ORG_MODULE_SERVICES_HAS_DXC)
 	std::unique_ptr<org::services::ShaderCompiler> shaderCompiler;
 #endif
@@ -837,6 +838,7 @@ bool RenderGraphRuntime::Initialize()
 		return disable("the DXVK build lacks the render graph interop exports");
 	// Optional: game resources for the graph (Drawcall Limit Fix).
 	state->getResourceInfo = ResolveExport<PFN_dxvkGetInteropResourceInfo>(d3d11, "dxvkGetInteropResourceInfo");
+	state->getResourceInfos = ResolveExport<PFN_dxvkGetInteropResourceInfos>(d3d11, "dxvkGetInteropResourceInfos");
 	// Optional: without it, each epoch flushes and waits for DXVK's command stream instead.
 	state->enqueueSubmission = ResolveExport<PFN_dxvkEnqueueInteropSubmission>(d3d11, "dxvkEnqueueInteropSubmission");
 	if (EnvEquals("CS_ORG_SUBMIT", "flush"))
@@ -999,9 +1001,9 @@ bool RenderGraphRuntime::Initialize()
 #endif
 	IndirectCommandsFeatureInfo indirect{};
 	if ((*impl->device)->QueryFeatureInfo(&indirect.header) == rhi::Result::Ok) {
-		logger::info("[ORG] Indirect commands: generated commands {}, index buffer arguments {}, pipeline sets {} (up to {} pipelines); game resource export {}",
+		logger::info("[ORG] Indirect commands: generated commands {}, index buffer arguments {}, pipeline sets {} (up to {} pipelines); game resource export {}{}",
 			indirect.constantArguments, indirect.indexBufferArguments, indirect.pipelineSets, indirect.maxPipelineSetCount,
-			impl->getResourceInfo ? "available" : "missing");
+			impl->getResourceInfo ? "available" : "missing", impl->getResourceInfos ? " (batched)" : " (not batched)");
 	}
 	return true;
 }
@@ -1314,6 +1316,17 @@ bool RenderGraphRuntime::DescribeResource(IUnknown* a_object, DxvkOrgInteropReso
 	return SUCCEEDED(impl->getResourceInfo(globals::d3d::device, a_object, &a_info));
 }
 
+bool RenderGraphRuntime::DescribeResources(std::span<IUnknown* const> a_objects, std::span<DxvkOrgInteropResourceInfo> a_infos, std::span<HRESULT> a_results)
+{
+	if (!impl || !impl->getResourceInfos || a_infos.size() != a_objects.size() || a_results.size() != a_objects.size())
+		return false;
+	for (auto& info : a_infos) {
+		info = {};
+		info.version = DXVK_ORG_INTEROP_VERSION;
+	}
+	return SUCCEEDED(impl->getResourceInfos(globals::d3d::device, static_cast<UINT>(a_objects.size()), a_objects.data(), a_infos.data(), a_results.data()));
+}
+
 winrt::com_ptr<ID3D11Buffer> RenderGraphRuntime::WrapBuffer(org::Resource& a_buffer, const D3D11_BUFFER_DESC& a_desc)
 {
 	winrt::com_ptr<ID3D11Buffer> result;
@@ -1365,6 +1378,7 @@ std::shared_ptr<const void> RenderGraphRuntime::DeviceOwner() const { return {};
 bool RenderGraphRuntime::ExecuteEpoch(Segment, const std::function<void(org::RenderGraph&)>&,
 	std::shared_ptr<const void>) { return false; }
 bool RenderGraphRuntime::DescribeResource(IUnknown*, DxvkOrgInteropResourceInfo&) { return false; }
+bool RenderGraphRuntime::DescribeResources(std::span<IUnknown* const>, std::span<DxvkOrgInteropResourceInfo>, std::span<HRESULT>) { return false; }
 org::services::ShaderCompiler* RenderGraphRuntime::ShaderCompiler() { return nullptr; }
 const std::vector<std::filesystem::path>& RenderGraphRuntime::ShaderSourceFiles()
 {

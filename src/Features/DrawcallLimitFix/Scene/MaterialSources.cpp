@@ -28,14 +28,15 @@ namespace DCLF::MaterialSources
 		constexpr std::uint32_t kCharacterLight = 1u << 22;
 
 		// PS PerMaterial variables whose values come from the shader object or engine globals
-		// (BSLightingShader::SetupMaterial, AE 1414dc310), with the components that do.
+		// (BSLightingShader::SetupMaterial, AE 1414dc310), with the components that do. Not IBLParams (this+0xcc, then
+		// this+0xd0.. or this+0xe0.. by this+0xf0): no Lighting stage reads it, and its colour drifts with the time of day
+		// almost every frame, which re-versioned every record of every signature (the motion run m1: ~1,030 a frame).
 		struct FrameVariable
 		{
 			std::uint32_t variable;
 			std::uint32_t components;  // bit c: component c
 		};
-		constexpr std::array<FrameVariable, 6> kFrameVariables{ {
-			{ 29, 0xF },  // IBLParams: this+0xcc, then this+0xd0.. or this+0xe0.. by this+0xf0
+		constexpr std::array<FrameVariable, 5> kFrameVariables{ {
 			{ 6, 0xF },   // AmbientSpecularTintAndFresnelPower (AmbientSpecular): 0x14203315c..
 			{ 34, 0xF },  // SnowRimLightParameters (Snow): 0x142035590, 0x1420355a8, 0x1420355c0, 0x1420355d8
 			{ 35, 0xF },  // CharacterLightParams (CharacterLight): 0x14203316c.., or smState (TruePBR)

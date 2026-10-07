@@ -2,6 +2,7 @@
 #include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "Features/DrawcallLimitFix/Common/AsyncWorker.h"
+#include "Features/DrawcallLimitFix/Common/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Engine/EngineReadWindow.h"
 
 namespace DCLF
@@ -143,7 +144,7 @@ namespace DCLF
 		return changed;
 	}
 
-	std::uint8_t SceneStore::TakeRoot(const RootPlacement& a_item, bool a_noteAll)
+	std::uint8_t SceneStore::TakeRoot(const RootPlacement& a_item, bool a_noteAll, std::vector<std::uint32_t>& a_changed)
 	{
 		// SunEntryOf for every dependent that has a record: they all read this root's bound. So does a dependent's LOD fade
 		// node when the root is its fade node (LodFadeNodeOf), which it usually is.
@@ -162,12 +163,12 @@ namespace DCLF
 			if (tables.sunEntry[slot] != entry || tables.lodFade[slot] != lodFade || a_noteAll) {
 				tables.sunEntry[slot] = entry;
 				tables.lodFade[slot] = lodFade;
-				rootChangedSlots.push_back(slot);
+				a_changed.push_back(slot);
 				changed = kTakePlacement;
 				if (const std::uint32_t layer = it->second.layerSlot; layer != kNoObjectSlot && tables.IsLayer(layer)) {
 					tables.sunEntry[layer] = entry;
 					tables.lodFade[layer] = LodFadeNodeOf(LayerPropertyOf(*geometry));
-					rootChangedSlots.push_back(layer);
+					a_changed.push_back(layer);
 				}
 			}
 		}
@@ -176,17 +177,54 @@ namespace DCLF
 
 	void SceneStore::RunPlacements(bool a_worker)
 	{
-		// The items, then the roots, in one sequence the join resumes.
+		// The items, then the roots: a root's sun entries are taken after its dependents' own (TakePlacement writes them too).
 		const auto items = static_cast<std::uint32_t>(placements.size());
-		const auto count = items + static_cast<std::uint32_t>(rootPlacements.size());
-		for (std::uint32_t i = placementsDone.load(std::memory_order_acquire); i < count; ++i) {
-			// A worker reads the engine's nodes only inside the window; the join takes what it left.
+		const auto roots = static_cast<std::uint32_t>(rootPlacements.size());
+		// One item under a lease: a worker reads the engine's nodes only inside the window, and the join takes what it left.
+		auto takeItem = [&](std::uint32_t a_item) {
 			std::optional<EngineReadWindow::Lease> lease;
 			if (a_worker && !lease.emplace())
-				return;
-			placementChanges[i] = i < items ? TakePlacement(placements[i]) : TakeRoot(rootPlacements[i - items], false);
-			placementsDone.store(i + 1, std::memory_order_release);
+				return false;
+			placementChanges[a_item] = TakePlacement(placements[a_item]) | kTaken;
+			return true;
+		};
+		auto takeRoot = [&](std::uint32_t a_root, std::vector<std::uint32_t>& a_changed) {
+			std::optional<EngineReadWindow::Lease> lease;
+			if (a_worker && !lease.emplace())
+				return false;
+			placementChanges[items + a_root] = TakeRoot(rootPlacements[a_root], false, a_changed) | kTaken;
+			return true;
+		};
+		if (a_worker && inSceneTask) {
+			auto& executor = SceneScheduler::Executor();
+			executor.ParallelFor("CS.DCLF.Scene.Placements.Items", items, 32, [&](std::size_t a_begin, std::size_t a_end) {
+				ZoneScopedN("CS.DCLF.Scene.Placements.Items");
+				for (auto i = static_cast<std::uint32_t>(a_begin); i < a_end; ++i)
+					if (!(placementChanges[i] & kTaken) && !takeItem(i))
+						return;
+			});
+			std::vector<std::vector<std::uint32_t>> changed(roots);
+			executor.ParallelFor("CS.DCLF.Scene.Placements.Roots", roots, 32, [&](std::size_t a_begin, std::size_t a_end) {
+				ZoneScopedN("CS.DCLF.Scene.Placements.Roots");
+				for (auto r = static_cast<std::uint32_t>(a_begin); r < a_end; ++r)
+					if (!(placementChanges[items + r] & kTaken) && !takeRoot(r, changed[r]))
+						return;
+			});
+			for (const auto& slots : changed)
+				rootChangedSlots.insert(rootChangedSlots.end(), slots.begin(), slots.end());
+			return;
 		}
+		for (std::uint32_t i = 0; i < items; ++i)
+			if (!(placementChanges[i] & kTaken) && !takeItem(i))
+				return;
+		for (std::uint32_t r = 0; r < roots; ++r)
+			if (!(placementChanges[items + r] & kTaken) && !takeRoot(r, rootChangedSlots))
+				return;
+	}
+
+	bool SceneStore::PlacementsTaken() const
+	{
+		return std::all_of(placementChanges.begin(), placementChanges.end(), [](std::uint8_t a_changes) { return (a_changes & kTaken) != 0; });
 	}
 
 	void SceneStore::QueueRoots()
@@ -217,19 +255,23 @@ namespace DCLF
 	void SceneStore::KickPlacements()
 	{
 		DCLF_SCENE_PART(Placements, "CS.DCLF.Scene.Placements");
-		// An entry a later round wrote in full (or released) took its placement and palette there.
-		std::erase_if(placements, [&](const Placement& a_item) { return a_item.tracked->movedWalk != walkSerial || a_item.tracked->slot != a_item.slot; });
-		QueueRoots();
+		{
+			ZoneScopedN("CS.DCLF.Scene.Placements.Queue");
+			// An entry a later round wrote in full (or released) took its placement and palette there.
+			std::erase_if(placements, [&](const Placement& a_item) { return a_item.tracked->movedWalk != walkSerial || a_item.tracked->slot != a_item.slot; });
+			QueueRoots();
+		}
 		placementChanges.assign(placements.size() + rootPlacements.size(), 0);
-		placementsDone.store(0, std::memory_order_relaxed);
 		if (placements.empty() && rootPlacements.empty())
 			return;
 		// The walk parity reads every record right after the walk, so its frames take them here.
-		// The scene task takes them itself, on the coordinator, under read leases (it is a worker).
+		// The scene task takes them itself, from the coordinator across the preparation pool, under read leases. What a refused
+		// lease left is taken and applied by the join.
 		const bool inline_ = inSceneTask || !AsyncEnabled() || (SwitchEnabled(Switch::WalkParity) && ParityDue(frame));
 		if (inline_) {
 			RunPlacements(inSceneTask);
-			ApplyPlacements(false);
+			if (PlacementsTaken())
+				ApplyPlacements(false);
 			return;
 		}
 		placementJob = std::static_pointer_cast<void>(std::make_shared<AsyncWorker::JobHandle>(
@@ -252,15 +294,20 @@ namespace DCLF
 			failed = result == AsyncWorker::WaitResult::Failed;
 			placementStats.late += result == AsyncWorker::WaitResult::Late ? 1 : 0;
 		}
-		const std::uint32_t resumeAt = placementsDone.load(std::memory_order_acquire);
-		placementStats.inlineItems += placementChanges.size() - resumeAt;
+		// What the job did not take (a refused lease, a late or failed job), taken here; an item the job threw in may be half
+		// taken, so on a failure those are noted in full.
+		std::vector<std::uint8_t> untaken(placementChanges.size(), 0);
+		for (std::size_t i = 0; i < placementChanges.size(); ++i)
+			untaken[i] = (placementChanges[i] & kTaken) ? 0 : 1;
+		placementStats.inlineItems += std::count(untaken.begin(), untaken.end(), std::uint8_t(1));
 		RunPlacements();
-		// An item the job threw in may be half taken, so it and the rest are noted in full.
 		if (failed) {
-			for (std::size_t i = resumeAt; i < placements.size(); ++i)
-				placementChanges[i] |= kTakePlacement | kTakePalette;
-			for (std::size_t i = std::max<std::size_t>(resumeAt, placements.size()); i < placementChanges.size(); ++i)
-				placementChanges[i] = TakeRoot(rootPlacements[i - placements.size()], true);
+			for (std::size_t i = 0; i < placements.size(); ++i)
+				if (untaken[i])
+					placementChanges[i] |= kTakePlacement | kTakePalette;
+			for (std::size_t i = placements.size(); i < placementChanges.size(); ++i)
+				if (untaken[i])
+					placementChanges[i] = TakeRoot(rootPlacements[i - placements.size()], true, rootChangedSlots) | kTaken;
 		}
 		ApplyPlacements(AsyncModeSetting() == AsyncMode::Probe);
 	}
@@ -327,7 +374,7 @@ namespace DCLF
 			}
 		}
 		for (std::size_t i = 0; i < rootPlacements.size(); ++i) {
-			const bool changed = placementChanges[placements.size() + i] != 0;
+			const bool changed = (placementChanges[placements.size() + i] & ~kTaken) != 0;
 			if (rootPlacements[i].witness) {
 				++placementStats.witnessed;
 				if (changed && !placementStats.missed++) {
@@ -357,7 +404,7 @@ namespace DCLF
 			}
 			rootChangedSlots.clear();
 			for (const auto& root : rootPlacements) {
-				if (!TakeRoot(root, false))
+				if (!TakeRoot(root, false, rootChangedSlots))
 					continue;
 				for (const std::uint32_t slot : rootChangedSlots)
 					tables.NoteChange(slot, kChangePlacement);
@@ -371,6 +418,5 @@ namespace DCLF
 		rootPlacements.clear();
 		rootChangedSlots.clear();
 		placementChanges.clear();
-		placementsDone.store(0, std::memory_order_relaxed);
 	}
 }

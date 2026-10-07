@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 #include <winrt/base.h>
@@ -149,6 +150,11 @@ public:
 	 * buffers the game can map. Synchronizes with DXVK's worker thread: resolve once and cache.
 	 */
 	bool DescribeResource(IUnknown* a_object, DxvkOrgInteropResourceInfo& a_info);
+	/**
+	 * @brief DescribeResource for many objects, synchronizing with DXVK's worker thread once in all (the buffers it pins go in one
+	 * chunk). a_results[i] is object i's result. False when the DXVK build lacks the batched export (nothing was described).
+	 */
+	bool DescribeResources(std::span<IUnknown* const> a_objects, std::span<DxvkOrgInteropResourceInfo> a_infos, std::span<HRESULT> a_results);
 
 	/**
 	 * @brief Runtime DXC compilation to SPIR-V with BasicRHI's ABI (ORGModuleServices), content-addressed

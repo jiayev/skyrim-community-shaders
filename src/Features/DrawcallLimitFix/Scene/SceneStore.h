@@ -288,6 +288,9 @@ namespace DCLF
 			// (NextVersion), only when it differs; geometryConstants still hold the values, for the constant-buffer path
 			// and the parity checks, but a change of them alone no longer versions a pipeline.
 			std::array<float, 24> frameLighting{};
+			// The frame's fog (FrameFog, LightingConstants.h): what the DCLF_BINDLESS vertex stage reads (VS b13) instead of each
+			// technique row's, which keep the fog they were made with. Written by RefreshFrameConstants, latched by every commit.
+			std::array<float, 12> frameFog{};
 			std::uint32_t frameLightingVersion = 0;
 			// Its own counter, not NextVersion: the frame lighting changes every frame and no build reads it (BuildInputsWitness).
 			std::uint32_t frameLightingCounter = 0;
@@ -1762,10 +1765,10 @@ namespace DCLF
 		std::vector<MaterialReference> materialOwners;
 		/**
 		 * @brief The frame-sourced components of every record drawn this frame (MaterialSources): one live
-		 * evaluation per signature at Prepass - the shader object's IBLParams, the engine globals, the
-		 * character light's t11 - copied into every record of that signature. At Prepass, not EarlyPrepass:
-		 * they are the frame's lighting state, and sampling them earlier left IBLParams a fraction of a frame
-		 * behind the native draws during a fast lighting transition. Nothing depth-only reads them.
+		 * evaluation per signature at Prepass - the engine globals, the character light's t11 - copied into every
+		 * record of that signature (MaterialSources: not IBLParams, which no stage reads). At Prepass, not
+		 * EarlyPrepass: they are the frame's lighting state, and sampling them earlier left them a fraction of a
+		 * frame behind the native draws during a fast lighting transition. Nothing depth-only reads them.
 		 */
 		void RefreshFrameMaterials();
 		/** @brief End of the accumulate phase: this frame's TexcoordOffset into every record drawn this frame. */
@@ -1952,6 +1955,8 @@ namespace DCLF
 		};
 		// kTakeWitness: a mover MoveGated would have skipped, taken on a parity frame to count what the events missed.
 		static constexpr std::uint8_t kTakePlacement = 1, kTakePalette = 2, kTakeDefect = 4, kTakeWitness = 8;
+		// placementChanges only: the item was taken (RunPlacements takes those without it).
+		static constexpr std::uint8_t kTaken = 0x80;
 		std::vector<Placement> placements;
 		/**
 		 * @brief A moving reference root whose bound the job takes into its dependents' sun entries (TakeRoot). An
@@ -1974,9 +1979,9 @@ namespace DCLF
 		std::vector<RootPlacement> rootPlacements;
 		std::vector<std::uint32_t> rootChangedSlots;  // the job's: the slots whose sun entry a root changed
 		void QueueRoots();
-		std::uint8_t TakeRoot(const RootPlacement& a_item, bool a_noteAll);
-		std::vector<std::uint8_t> placementChanges;  // per item: what taking it changed (kTake*)
-		std::atomic<std::uint32_t> placementsDone{ 0 };
+		/** @brief The root's bound into its dependents' sun entries; the slots it changed go to a_changed. */
+		std::uint8_t TakeRoot(const RootPlacement& a_item, bool a_noteAll, std::vector<std::uint32_t>& a_changed);
+		std::vector<std::uint8_t> placementChanges;  // per item (the items, then the roots): what taking it changed (kTake*), and kTaken
 		std::shared_ptr<void> placementJob;  // AsyncWorker::JobHandle
 		struct PlacementStats
 		{
@@ -1986,8 +1991,14 @@ namespace DCLF
 		} placementStats;
 		void QueuePlacement(RE::BSGeometry* a_geometry, Tracked& a_tracked, std::uint8_t a_take, MoveReason a_reason);
 		std::uint8_t TakePlacement(const Placement& a_item);
-		/** @brief The placements not yet taken, resumably. a_worker: each item under an EngineReadWindow lease (stops at a refused one). */
+		/**
+		 * @brief The placements not yet taken (no kTaken), resumably. a_worker: each item under an EngineReadWindow lease (a refused one
+		 * stops it). On the coordinator (the scene task), the items and then the roots across the preparation pool (ParallelFor): an item
+		 * writes its own slot's columns and palette rows, a root its dependents' sun entries, so no two touch the same row.
+		 */
 		void RunPlacements(bool a_worker = false);
+		/** @brief Whether every item and root was taken (kTaken). */
+		bool PlacementsTaken() const;
 		void KickPlacements();
 		void ApplyPlacements(bool a_probe);
 		/**
@@ -2414,6 +2425,8 @@ namespace DCLF
 			std::uint32_t firstIndex = 0;  // a range of the index list (object LOD's visible ranges); 0 for the whole
 			bool layer = false;            // a layer's second index list (Tables::geometryLayerKey)
 		};
+		/** @brief The buffers order[a_first...]'s geometry slots will resolve, prefetched in one batch (GpuResources::Prefetch). */
+		void PrefetchGeometryBuffers(std::size_t a_first);
 		std::uint32_t ResolveGeometrySource(const GeometrySource& a_source, PartTimer& a_timer);
 		/** @brief The geometry slot of a multi-index shape's second index list (its layer's draw), or Tables::kSlotFree. */
 		std::uint32_t ResolveLayerGeometrySlot(RE::BSGeometry& a_geometry, PartTimer& a_timer);

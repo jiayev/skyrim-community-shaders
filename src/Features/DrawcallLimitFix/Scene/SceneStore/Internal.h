@@ -442,6 +442,7 @@ namespace DCLF
 		// passes (WritesEyePosition); every other pass leaves whatever the constant buffer last held there, which no draw
 		// of it reads.
 		static_assert(std::tuple_size_v<decltype(SceneStore::Tables::frameLighting)> == std::tuple_size_v<FrameLighting>);
+		static_assert(std::is_same_v<decltype(SceneStore::Tables::frameFog), FrameFog>);
 		// What ObjectGeometryConstants writes over the pipeline's block for every object (or every object of the pipeline's
 		// kind): World, PreviousWorld, LandBlendParams, TreeParams, WindTimers, TextureProj; the light assignment Light
 		// Limit Fix never reads, MaterialData, EmitColor, ShadowLightMaskSelect, ProjectedUVParams 1-3, SSRParams.
