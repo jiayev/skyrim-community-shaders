@@ -1,4 +1,5 @@
 #include "ShadowViews.h"
+#include "Features/DrawcallLimitFix/Scene/FrameGlobals.h"
 
 #include <cstring>
 
@@ -17,10 +18,10 @@ namespace DCLF
 		}
 
 		/** @brief The byte GetRenderPasses_ShadowMapOrMask tests when kCastShadows is clear (0x142033498). */
+		// GetRenderPasses_ShadowMapOrMask's global (0x2033498), as the frame captured it (FrameGlobals).
 		std::uint8_t ShadowGlobal()
 		{
-			static const REL::Relocation<std::uint8_t*> global{ REL::Offset(0x2033498) };
-			return *global.get();
+			return FrameGlobals::Current().shadowGlobal;
 		}
 	}
 

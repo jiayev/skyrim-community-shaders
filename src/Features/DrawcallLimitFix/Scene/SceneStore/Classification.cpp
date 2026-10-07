@@ -119,18 +119,22 @@ namespace DCLF
 		return hash.value;
 	}
 
-	void SceneStore::RefreshCategoryNodes(bool a_force)
+	void SceneStore::CaptureCategories(bool a_force)
 	{
-		// The set's content changes only when a cell attaches or detaches, so it is rebuilt when the signature says
-		// something moved or when a detach was seen (walk parity finds anything both miss).
+		// The set's content changes only when a cell attaches or detaches, so it is made again when the signature says something
+		// moved or when a detach was seen (walk parity finds anything both miss).
+		ZoneScopedN("CS.DCLF.Ingest.CaptureCategories");
+		const auto start = std::chrono::steady_clock::now();
+		const auto timed = [&] { categoryCaptureNs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()); };
 		const std::uint64_t signature = CategorySignature();
-		if (!a_force && signature == categorySignature)
-			return;
-		const std::uint8_t cause = a_force ? 1 : 0;
-		categorySignature = signature;
-
-		ankerl::unordered_dense::set<RE::NiNode*> current;
-		ankerl::unordered_dense::map<const RE::NiAVObject*, AlwaysRenderRoot> currentRoots;
+		if (!a_force && categoryCapture && signature == categoryCapture->signature)
+			return timed();
+		++categoryCapturesMade;
+		auto capture = std::make_shared<CategoryCapture>();
+		capture->generation = ++categoryCaptures;
+		capture->signature = signature;
+		auto& current = capture->nodes;
+		auto& currentRoots = capture->roots;
 
 		auto addCell = [&](RE::TESObjectCELL* a_cell) {
 			if (!a_cell || !a_cell->IsAttached())
@@ -162,7 +166,7 @@ namespace DCLF
 					// walk when what was tracked under it is dropped.
 					for (const auto& child : graph->alwaysRenderChildren) {
 						if (child && !child->parent)
-							currentRoots.try_emplace(child.get(), AlwaysRenderRoot{ child, shared });
+							currentRoots.try_emplace(child.get(), CategoryCapture::Root{ child, shared });
 					}
 				}
 			}
@@ -192,6 +196,24 @@ namespace DCLF
 					addCell(grid->cells[i]);
 			}
 		}
+		capture->held.reserve(current.size());
+		for (auto* node : current)
+			capture->held.emplace_back(node);
+		categoryCapture = std::move(capture);
+		timed();
+	}
+
+	void SceneStore::RefreshCategoryNodes(bool a_force)
+	{
+		// The render thread's capture (CaptureCategories): diffed again when it is new, or forced (the rescan after a load).
+		const auto* capture = categoryCapture.get();
+		if (!capture || (!a_force && capture->generation == categoryAppliedGeneration))
+			return;
+		const std::uint8_t cause = a_force ? 1 : 0;
+		categoryAppliedGeneration = capture->generation;
+		categorySignature = capture->signature;
+		const auto& current = capture->nodes;
+		const auto& currentRoots = capture->roots;
 
 		// Cells that went away, and parentless roots the portal graph no longer lists: drop what was tracked under them.
 		bool removedAny = false;
@@ -242,10 +264,13 @@ namespace DCLF
 			if (!categoryNodes.contains(node))
 				added.push_back(node);
 		}
-		categoryNodes = std::move(current);
+		categoryNodes = current;
 		for (auto& [root, entry] : alwaysRenderRoots)
 			HandBack(std::move(entry.root));
-		alwaysRenderRoots = std::move(currentRoots);
+		// Copies of the capture's references (the scene work never makes one from a key).
+		alwaysRenderRoots.clear();
+		for (const auto& [root, entry] : currentRoots)
+			alwaysRenderRoots.emplace(root, AlwaysRenderRoot{ entry.root, entry.category });
 		std::erase_if(categoryFound, [&](const auto& a_entry) { return !categoryNodes.contains(const_cast<RE::NiNode*>(a_entry.first)); });
 		const TrackSource previousSource = addSource;
 		if (addSource != TrackSource::Rescan)
@@ -393,22 +418,6 @@ namespace DCLF
 				for (auto& child : node->GetChildren()) {
 					if (child)
 						stack.emplace_back(child.get(), below);
-				}
-			}
-		}
-	}
-
-	void SceneStore::FindLightingShader()
-	{
-		// Any lighting render pass carries the BSLightingShader instance.
-		for (auto& [geometry, entry] : tracked) {
-			auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
-			if (!property)
-				continue;
-			for (auto* pass = property->renderPassList.head; pass; pass = pass->next) {
-				if (pass->shader && pass->shader->shaderType.get() == RE::BSShader::Type::Lighting) {
-					ConstantEvaluator::Get().SetLightingShader(pass->shader);
-					return;
 				}
 			}
 		}
@@ -601,40 +610,12 @@ namespace DCLF
 		return selection.child && selection.child == a_child && selection.current;
 	}
 
-	void SceneStore::CaptureCullHiddenBits()
-	{
-		cullHiddenBits.clear();
-		for (auto* sceneNode : RE::BSShaderManager::State::GetSingleton().shadowSceneNode) {
-			const auto* graph = sceneNode ? sceneNode->GetRuntimeData().portalGraph : nullptr;
-			if (!graph)
-				continue;
-			for (const auto& child : graph->alwaysRenderChildren)
-				if (child)
-					cullHiddenBits.emplace_back(child.get(), IsHidden(child.get()));
-			if (graph->portalSharedNode)
-				cullHiddenBits.emplace_back(graph->portalSharedNode.get(), IsHidden(graph->portalSharedNode.get()));
-		}
-		if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-			// The third-person skeleton as it is now. TESWaterReflections::Update (AE 0x140520570), on the frames a
-			// cube-map reflection updates, hides the player's 3D while it renders the faces and then restores it.
-			// Main::Draw calls it between the main cull jobs' Begin and Finish, so it runs alongside the walk.
-			const RE::NiAVObject* thirdPerson = player->Get3D(false);
-			if (thirdPerson)
-				cullHiddenBits.emplace_back(thirdPerson, IsHidden(thirdPerson));
-			// The first-person skeleton: Main::Draw (AE 0x1406444b0) hides it right after the call the walk is
-			// kicked from, keeps it hidden through the main camera's cull and the sun's shadow casters, and shows it
-			// only to draw the first-person view with its own camera. For every view the walk serves it is hidden.
-			const RE::NiAVObject* firstPerson = player->Get3D(true);
-			if (firstPerson && firstPerson != thirdPerson)
-				cullHiddenBits.emplace_back(firstPerson, true);
-		}
-		std::sort(cullHiddenBits.begin(), cullHiddenBits.end());
-	}
-
 	bool SceneStore::HiddenForWalk(const RE::NiAVObject* a_object) const
 	{
-		const auto it = std::lower_bound(cullHiddenBits.begin(), cullHiddenBits.end(), a_object, [](const auto& a_entry, const RE::NiAVObject* a_key) { return a_entry.first < a_key; });
-		if (it != cullHiddenBits.end() && it->first == a_object)
+		// The frame's capture (FrameGlobals::cullHidden, taken by the render thread when the scene work is kicked).
+		const auto& cullHidden = FrameGlobals::Current().cullHidden;
+		const auto it = std::lower_bound(cullHidden.begin(), cullHidden.end(), a_object, [](const auto& a_entry, const RE::NiAVObject* a_key) { return a_entry.first < a_key; });
+		if (it != cullHidden.end() && it->first == a_object)
 			return it->second;
 		return IsHidden(a_object);
 	}

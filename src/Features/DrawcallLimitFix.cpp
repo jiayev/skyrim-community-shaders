@@ -312,7 +312,7 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// handed back and released at Present (dclf-async-publication.md, "Step 5: ingestion").
 	{
 		const auto eventsStart = std::chrono::steady_clock::now();
-		store.IngestEvents();
+		store.IngestEvents(true);
 		timing.eventsMs += MillisecondsSince(eventsStart);
 	}
 	DCLF::LocalLightCull::SelectFrame(store.GetFrame());

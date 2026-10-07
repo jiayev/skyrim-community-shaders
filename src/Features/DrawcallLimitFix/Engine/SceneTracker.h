@@ -1,6 +1,9 @@
 #pragma once
 
+#include "Features/DrawcallLimitFix/Engine/SceneCapture.h"
+
 #include <atomic>
+#include <memory>
 #include <vector>
 
 namespace DCLF
@@ -29,6 +32,11 @@ namespace DCLF
 			EventType type = EventType::Attached;
 			RE::NiPointer<RE::NiAVObject> node;    // Attached: the subtree root
 			std::vector<RE::BSGeometry*> removed;  // Detached: geometry leaves (identity only, never dereferenced)
+			// Step 6e F3, the mirror's: an attach in the world, its subtree's and ancestors' records (SceneCapture::CaptureAttached);
+			// a detach in the world, its root and its other nodes (keys).
+			std::unique_ptr<SceneCapture::Records> captured;
+			const void* detachedRoot = nullptr;
+			std::vector<const void*> removedNodes;
 		};
 
 		static SceneTracker& Get();
@@ -49,7 +57,7 @@ namespace DCLF
 		void PushAttached(RE::NiAVObject* a_child);
 		void PushDetached(RE::NiAVObject* a_child);
 
-		static void CollectGeometry(RE::NiAVObject* a_root, std::vector<RE::BSGeometry*>& a_out);
+		static void CollectGeometry(RE::NiAVObject* a_root, std::vector<RE::BSGeometry*>& a_out, std::vector<const void*>* a_nodes = nullptr);
 
 	private:
 		void Push(Event* a_event);

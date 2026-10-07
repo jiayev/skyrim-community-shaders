@@ -1481,6 +1481,47 @@ resident-draw, set and fade parity; motion m28/m29).
     the actor's race and keywords, the property and material owners the accumulate phase takes. y34/y35: sequences 7,404-7,445, set
     parity 0, every parity as y33 (y34's three fade visibility windows are the intermittent seen in y18-y26; y35 0 in all); m66:
     waits at the accumulate join only (0.07-0.19 ms/frame), 0 errors.
+  - *F2: the frame capture* (y36, y37, m67-m70). The engine globals the scene reads are one immutable capture the render thread takes
+    at the frame's start (Scene/FrameGlobals: the loading screen, the interior test, decal bias, the [LightingShader] LOD fade
+    settings, SetupTechniqueDescriptor's bytes, the shadow global, StaticShadowBits' accumulator byte and switches, the fade update's
+    constants, the main camera for SampleLodFadeFrame, the tree wind, the cull-hidden roots, and the membership witness made from
+    them). The scene work's tasks bind their frame's capture (FrameGlobals::Scope, KickSceneTask); a helper shared with the render
+    thread reads the render thread's latest; any other thread reading it unbound is counted and logged (0 in every run). The
+    Lighting shader is found by the render thread among the frame's registrations (DrainCapture), not by the walk.
+    The category nodes and the portal graphs' parentless roots are a CategoryCapture the render thread makes at the frame's
+    ingestion when CategorySignature moved, a detach was ingested (at Present too) or a load ended; it holds every node it names, and
+    RefreshCategoryNodes diffs its set against the newest (the always-render roots are copies of its references). A capture taken at
+    Present (the first version) is the update's to change before the scene work diffs it: m69 crashed in AddSubtree walking a new
+    category's children on the lane (a dangling child, the m59 class F4 removes), so captures are taken at the frame's start only.
+    Cost on the render thread: 6.9-8.1 us/frame for the globals (24 us before the INI settings were looked up once), 1.3-6.3 us/frame
+    for the categories (8-116 captures in 300 frames, most while moving). Tracked sets as before (127 category nodes; m67 against m66
+    at the same points); y37 every parity OK; m70 waits at the accumulate join only.
+  - *F3a: the mirror and its parity* (y38-y41, m71; the scene work still reads live). Engine/SceneCapture: node, geometry, property
+    and alpha records of what the classification reads and holds still between writers (per-frame values - transforms, bounds,
+    currentFade, the LOD level, the flag bits the culls and fade updates write: kTopFadeNode, kIgnoreFade, kRenderUse, kAccumulated,
+    27 - are FrameValues' and the events', not records). Records hold no references: keys are addresses. SceneTracker's attach hook
+    captures, after the engine's call on the attaching thread, an attach that lands in the world (Main::WorldRootNode up the parent
+    chain): the subtree and the ancestors; a subtree still being assembled is captured whole when it is attached to the world. A
+    detach in the world lists its nodes too, and the mirror (Scene/SceneMirror, the scene work's) drops them; properties and alphas
+    are counted by the geometries naming them. A load screen's attach and detach events are carried to the next batch for the mirror
+    (the tracking still discards them), so the mirror continues across loads.
+    CS_DCLF_MIRROR_PARITY: the render thread captures a slice of the tracked set (256 geometries and their ancestors) live at the
+    frame's start; the scene work compares it with the mirror after the frame's events. A field that differs is evented (an event
+    named the object since its capture: a hook without its value, F3b), late (named by the next batch) or missed (no event: a writer
+    no hook sees, F3c); the report names the field and the first object.
+    Measured: world attaches come from loader and job threads, never the main thread in these runs: at the bridge a few a window, in
+    motion up to 2,700 a window at cell changes (43k records, 17 ms of capture on those threads in 300 frames, ~0.4 us a record). The
+    mirror follows the tracked set through the cell changes (m71: 12.4k geometries against 11.9k tracked, 6.5k against 5.8k, ...);
+    absent from it ~1,300 of ~320k records compared a window (properties and alphas a swap installed). Probe 0.22 ms/frame on the
+    render thread and check 0.17 ms on the lane, parity only; applying the captures 0.06 ms/frame. Standard parities unchanged.
+    Found (y41 bridge, m71 motion; probe observations, each stale object counted every pass):
+    - evented, F3b: hidden bits, controllers and bodies (node events), fade near/far and the LOD type (fade events), the alpha
+      property's flags, property flags, material and fade node (property events).
+    - fade near/far: one setter, FUN_14147a9b0 (near clamped to a minimum, far to twice it), called by the model and reference attach
+      (FUN_14021f200, from the node's radius) and an FX/projectile path (FUN_1407cfba0): hooked with values in F3b.
+    - missed, F3c: geometry property and alpha pointer swaps (LOD terrain blocks: 'Block (3, 0)', 'objHD-LargeRef'), property flags
+      and material changes with no SetFlags/SetMaterial, hidden bits on objects no patched store names (the water's 'CurrentPlane'),
+      the LOD type on the sky's clouds, rigid body motion, dismember editorVisible, flag bits 11/12/20.
 
 ## Implemented foundations
 

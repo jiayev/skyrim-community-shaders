@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 #include "Features/DrawcallLimitFix/Common/AsyncWorker.h"
 #include "EngineAccess.h"
+#include "Features/DrawcallLimitFix/Scene/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #include "SunAccumulation.h"
 #include "TreeAnimation.h"
@@ -167,41 +168,42 @@ namespace DCLF
 
 	float PrimaryCull::FadeDistanceOf(const RE::NiAVObject* a_root)
 	{
+		// The frame's globals (step 6e F2: the scene work reads the frame's capture, never the engine's).
+		const auto& g = FrameGlobals::Current();
 		// No fade update at all, or no distance term in the fade value (FUN_14147b110 returns 1).
-		if (!Global<std::uint8_t>(kFadesOn) || !Global<std::uint8_t>(kFadeLodUpdates))
+		if (!g.fadesOn || !g.fadeLodUpdates)
 			return 0.0f;
 		const std::uint32_t type = At<std::uint8_t>(a_root, 0x153) & 0xF;
 		// Type 8 fades gradually even from out of view (FUN_14147a160), and OnVisible's type-6 branch never fades out
 		// (ServiceFade): the engine draws either on the frame it comes into view, as the member is.
-		if (type == 8 || (type == 6 && Global<float>(kFadeSpecialA) == Global<float>(kFadeSpecialB)))
+		if (type == 8 || (type == 6 && g.fadeSpecialA == g.fadeSpecialB))
 			return 0.0f;
-		const float mult = Global<float>(kFadeDistanceMult);
+		const float mult = g.fadeDistanceMult;
 		const float nearDistance = mult * At<float>(a_root, kFadeNear);
 		const float farDistance = mult * At<float>(a_root, kFadeFar);
 		if (!(farDistance > nearDistance))
 			return 0.0f;  // the fade value never falls below 1
 		// The fade value 1 - (x - near) / (far - near), x the scaled distance, reaches the threshold at x = limit.
-		const float limit = nearDistance + (1.0f - Global<float>(kFadeOutThreshold)) * (farDistance - nearDistance);
-		const float divisor = Global<float>(kFadeTypeDivisors + type * 4);
+		const float limit = nearDistance + (1.0f - g.fadeOutThreshold) * (farDistance - nearDistance);
+		const float divisor = g.fadeTypeDivisors[type];
 		// x = distance * lodFactor / divisor, or distance * the default scale when the divisor is not positive.
-		const float distance = divisor > 0.0f ? limit * divisor : -(limit / Global<float>(kFadeDefaultScale));
+		const float distance = divisor > 0.0f ? limit * divisor : -(limit / g.fadeDefaultScale);
 		return std::isfinite(distance) ? distance : 0.0f;
 	}
 
-	std::uint32_t PrimaryCull::MembershipWitness()
+	std::uint32_t PrimaryCull::MembershipWitness(const FrameGlobals& a_g)
 	{
-		const auto* accumulator = Global<std::uint8_t*>(kMainAccumulator);
 		std::uint32_t witness = 2166136261u;
 		const auto mix = [&](std::uint32_t a_value) { witness = (witness ^ a_value) * 16777619u; };
 		// The static sun bits (SunShadowStatic).
-		mix(Global<std::uint8_t>(kNoSunShadowDir) | (accumulator && accumulator[kAccumulatorDeferredShadow] ? 2u : 0u) | (Global<std::uint8_t>(kScreenDoorFades) ? 4u : 0u));
+		mix(a_g.noSunShadowDir | (a_g.accumulator && a_g.accumulatorDeferredShadow ? 2u : 0u) | (a_g.screenDoorFades ? 4u : 0u));
 		// The fade distances (FadeDistanceOf).
-		mix(Global<std::uint8_t>(kFadesOn) | (Global<std::uint8_t>(kFadeLodUpdates) << 8) | (Global<float>(kFadeSpecialA) == Global<float>(kFadeSpecialB) ? 0x10000u : 0u));
-		mix(std::bit_cast<std::uint32_t>(Global<float>(kFadeDistanceMult)));
-		mix(std::bit_cast<std::uint32_t>(Global<float>(kFadeOutThreshold)));
-		mix(std::bit_cast<std::uint32_t>(Global<float>(kFadeDefaultScale)));
+		mix(a_g.fadesOn | (a_g.fadeLodUpdates << 8) | (a_g.fadeSpecialA == a_g.fadeSpecialB ? 0x10000u : 0u));
+		mix(std::bit_cast<std::uint32_t>(a_g.fadeDistanceMult));
+		mix(std::bit_cast<std::uint32_t>(a_g.fadeOutThreshold));
+		mix(std::bit_cast<std::uint32_t>(a_g.fadeDefaultScale));
 		for (std::uint32_t type = 0; type < 13; ++type)
-			mix(std::bit_cast<std::uint32_t>(Global<float>(kFadeTypeDivisors + type * 4)));
+			mix(std::bit_cast<std::uint32_t>(a_g.fadeTypeDivisors[type]));
 		return witness;
 	}
 
@@ -745,14 +747,14 @@ namespace DCLF
 
 	std::uint32_t PrimaryCull::SampleMembershipWitness()
 	{
-		sampledWitness = MembershipWitness();
+		sampledWitness = FrameGlobals::Current().membershipWitness;
 		sampledWitnessFrame = SceneStore::Get().GetFrame();
 		return sampledWitness;
 	}
 
 	std::uint32_t PrimaryCull::FrameMembershipWitness() const
 	{
-		return sampledWitnessFrame == SceneStore::Get().GetFrame() ? sampledWitness : MembershipWitness();
+		return sampledWitnessFrame == SceneStore::Get().GetFrame() ? sampledWitness : FrameGlobals::Current().membershipWitness;
 	}
 
 	void PrimaryCull::NoteAllMembersLost()

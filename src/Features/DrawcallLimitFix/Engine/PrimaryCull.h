@@ -22,6 +22,7 @@
 namespace DCLF
 {
 	struct SunCandidates;
+	struct FrameGlobals;
 
 	/**
 	 * @brief The primary view's cull, and taking DCLF's objects out of it (docs/development/dclf-gpu-driven-frame.md;
@@ -98,7 +99,7 @@ namespace DCLF
 		/** @brief A fade root's fade-out distance for BuildDraws' fade test (kObjectFadeTest), 0 when it has none. */
 		static float MembershipFadeDistance(const RE::NiAVObject* a_root) { return FadeDistanceOf(a_root); }
 		/** @brief The frame globals a membership pass reads (the static sun bits, the fade distances): a change rebinds them all. */
-		static std::uint32_t MembershipWitness();
+		static std::uint32_t MembershipWitness(const FrameGlobals& a_globals);
 		/**
 		 * @brief This frame's main camera as BSFadeNode::OnVisible measures from it: its position and its LOD factor
 		 * (NiCamera +0x184), for BuildDraws' fade test (kObjectFadeTest). Zero when the cut did not see a camera.

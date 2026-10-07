@@ -2,6 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/PrimaryCull.h"
+#include "Features/DrawcallLimitFix/Scene/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 
 #include <cmath>
@@ -413,8 +414,10 @@ namespace DCLF::FadeState
 		// FUN_14147a430's scale, with the engine's own CRT, in its order.
 		row.lodScale = 1.0f;
 		if (flags109 & 2) {
-			const float exponent = reinterpret_cast<Logf>(base + kLogf)(row.radius / Global<float>(0x2032e40)) * Global<float>(0x2032e54);
-			row.lodScale = reinterpret_cast<Powf>(base + kPowf)(Global<float>(0x2032e44), exponent);
+			// The globals as the frame captured them (FrameGlobals: 0x2032e40, 0x2032e54, 0x2032e44).
+			const auto& g = FrameGlobals::Current();
+			const float exponent = reinterpret_cast<Logf>(base + kLogf)(row.radius / g.lodRadiusBase) * g.lodExponentScale;
+			row.lodScale = reinterpret_cast<Powf>(base + kPowf)(g.lodPowBase, exponent);
 		}
 		return row;
 	}

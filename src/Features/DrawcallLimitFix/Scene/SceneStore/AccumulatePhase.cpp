@@ -71,6 +71,13 @@ namespace DCLF
 		// Always drained: the capture buffer is fixed-capacity and a frame that does not drain it overflows. The main
 		// camera's registrations are no source of bindings (scene membership is); the diagnostics read them.
 		const auto entries = capture.Drain();
+		// The BSLightingShader instance, from any Lighting pass the frame registered (step 6e F2: the render thread's, not the walk's).
+		if (auto& evaluator = ConstantEvaluator::Get(); !evaluator.HasLightingShader())
+			for (const auto& entry : entries)
+				if (entry.pass && entry.pass->shader && entry.pass->shader->shaderType.get() == RE::BSShader::Type::Lighting) {
+					evaluator.SetLightingShader(entry.pass->shader);
+					break;
+				}
 		frameLightingPass = nullptr;
 		for (const auto& entry : entries)
 			if (entry.pass && mainBatchRenderers.contains(entry.batch) && entry.pass->shader &&

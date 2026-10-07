@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "Features/DrawcallLimitFix/Common/AsyncWorker.h"
+#include "Features/DrawcallLimitFix/Scene/SceneMirror.h"
 #include "Features/DrawcallLimitFix/Scene/LodSegments.h"
 #include "Features/DrawcallLimitFix/Scene/TreeLod.h"
 #include "ActorValueIndex.h"
@@ -34,6 +35,7 @@ namespace DCLF
 		struct SwitchEvent;
 	}
 	/** @brief Attributes the time since the last call to one BuildPart (SceneStore/Internal.h; CS_DCLF_PROFILE). */
+	struct FrameGlobals;
 	struct PartTimer;
 	struct SunCandidates;
 
@@ -845,7 +847,7 @@ namespace DCLF
 		 * LOD's mirror (DecideTreeLod reads it next). Nothing is walked or evaluated. While a load screen is up the queues and
 		 * the batch are discarded instead, and the first frame after the load rescans.
 		 */
-		void IngestEvents();
+		void IngestEvents(bool a_frameStart = false);
 		/**
 		 * @brief The pending batch applied to the scene state: the category refresh, the attached subtrees walked and the detached
 		 * entries erased, the validation slice, the structural events. The scene work's first part (RunSceneWork, on the
@@ -1873,13 +1875,39 @@ namespace DCLF
 		std::uint32_t sunCandidatesBuilt = 0;  // the generation the snapshot was built for
 
 		void RefreshCategoryNodes(bool a_force = false);
+		/**
+		 * @brief The category nodes and the portal graphs' parentless roots, as the render thread found them (step 6e F2: the scene
+		 * work reads no TES, cell or portal graph). Immutable; it holds every node it names. Made again only when CategorySignature
+		 * moved, a detach was ingested (a detach can take a category node with it before the signature sees the cell go) or a load
+		 * ended; RefreshCategoryNodes diffs its own set against the newest.
+		 */
+		struct CategoryCapture
+		{
+			std::uint64_t generation = 0;
+			std::uint64_t signature = 0;
+			ankerl::unordered_dense::set<RE::NiNode*> nodes;
+			std::vector<RE::NiPointer<RE::NiNode>> held;
+			struct Root
+			{
+				RE::NiPointer<RE::NiAVObject> root;
+				RE::NiNode* category = nullptr;
+			};
+			ankerl::unordered_dense::map<const RE::NiAVObject*, Root> roots;
+		};
+		/** @brief Render thread, at ingestion (not while a load screen is up): the newest CategoryCapture, made when a_force or the signature moved. */
+		void CaptureCategories(bool a_force);
+		std::shared_ptr<const CategoryCapture> categoryCapture;
+		std::uint64_t categoryCaptures = 0;       // render thread: the last capture's generation
+		std::uint64_t categoryAppliedGeneration = 0;  // the scene work: the capture RefreshCategoryNodes last diffed against
+		// Render thread, since the last report: the frame captures' time (FrameGlobals, CaptureCategories), the category captures
+		// made, and the frames.
+		std::uint64_t captureNs = 0, categoryCaptureNs = 0, categoryCapturesMade = 0, captureFrames = 0;
 		// The signature the category set was last rebuilt for.
 		std::uint64_t categorySignature = 0;
 		RE::NiNode* FindCategoryNode(RE::NiAVObject* a_object, Ineligible* a_parentReason) const;
 		void AddSubtree(RE::NiAVObject* a_root);
 		void AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason);
 		void ValidateSlice();
-		void FindLightingShader();
 		/** @brief The main camera's batch renderers, for the diagnostics' filter of the capture. Cheap; every frame. */
 		bool RefreshMainBatchRenderers();
 		/**
@@ -1901,9 +1929,9 @@ namespace DCLF
 		// a_accumulated: the frame's registered pass, whose captured fade state then stands in for the live one.
 		Ineligible ClassifyFrame(const Tracked& a_tracked, const AccumulatedPass* a_accumulated = nullptr) const;
 		/**
-		 * @brief The nodes whose kHidden bit the engine flips while the asynchronous walk runs, with the bit the
-		 * walk's views (the main camera and the sun) see. Taken on the render thread just before the walk is kicked,
-		 * sorted by pointer; ClassifyFrame reads a listed node's bit from here instead of from the node.
+		 * @brief Whether a node is hidden for the walk's views: the frame's capture for the nodes whose kHidden bit the engine
+		 * flips while the asynchronous walk runs (FrameGlobals::cullHidden, taken on the render thread just before the walk is
+		 * kicked, sorted by pointer), else the node's own bit.
 		 *
 		 * - ShadowSceneNode::OnVisible hides a portal graph's always-render children and its shared node for the
 		 *   room traversal, then restores each bit. It runs in the main camera's cull jobs.
@@ -1915,9 +1943,7 @@ namespace DCLF
 		 * Reading the nodes instead took the player's face shapes (classified every frame) out of the tables on
 		 * the frames a reflection updated.
 		 */
-		void CaptureCullHiddenBits();
 		bool HiddenForWalk(const RE::NiAVObject* a_object) const;
-		std::vector<std::pair<const RE::NiAVObject*, bool>> cullHiddenBits;
 
 		ankerl::unordered_dense::map<RE::BSGeometry*, Tracked> tracked;
 		SceneIdentity sceneIdentity;
@@ -1985,12 +2011,31 @@ namespace DCLF
 		// (BeginFrame) and read by the scene work's commit and the accumulate phase's binds (step 6e F1: frame globals are
 		// captured, never read by the scene work).
 		std::uint32_t frameMembershipWitness = 0;
+		// The frame's engine globals (FrameGlobals::Capture at BeginFrame): what the scene work's tasks read (KickSceneTask binds it).
+		std::shared_ptr<const FrameGlobals> frameGlobals;
 		// LightLimitFix's room map (its room nodes' indices), copied by the render thread when its generation moves
 		// (PrepareAccumulatePhase): the accumulate phase reads the copy, never the map the render thread swaps.
 		std::shared_ptr<const ankerl::unordered_dense::map<const RE::NiNode*, int>> roomMap;
 		std::uint64_t roomMapGeneration = ~0ull;
 		// Render thread: the first ingestion after a load catches up every switch in the world (CatchUpSwitches).
 		bool worldCatchUpPending = false;
+		struct EventBatch;
+		bool categoryCapturePending = false;
+		/**
+		 * @brief The scene mirror (step 6e F3): the hooks' records, applied by the scene work in event order (ApplyMirrorEvents).
+		 * Beside the live reads for now, checked by CS_DCLF_MIRROR_PARITY: the render thread's probe (ProbeMirror, a slice of the
+		 * tracked set captured live at the frame's start) against it after the frame's events (CheckMirror).
+		 */
+		SceneMirror mirror;
+		void ApplyMirrorEvents(const EventBatch& a_batch);
+		void ProbeMirror(EventBatch& a_batch);
+		void CheckMirror();
+		// Render thread: a load screen's attach and detach events, for the mirror (the next ingestion's batch takes them).
+		std::shared_ptr<EventBatch> loadingCarry;
+		std::size_t mirrorProbeCursor = 0;
+		// The scene work: the applied batch's probe, and the objects the frame's events named (the parity's).
+		std::unique_ptr<SceneCapture::Records> mirrorProbe;
+		SceneMirror::KeySet mirrorEventKeys;  // render thread: the next frame start's capture is forced (a detach ingested, a load's end)
 		std::vector<RE::NiAVObject*> attachedRoots;  // the ingestion's attached subtrees, for CatchUpSwitches (scratch)
 		// Render thread, since the last report: switches caught up at ingestion (by switch event, under an attached subtree or the
 		// world after a load), and the time taken.
@@ -2667,7 +2712,6 @@ namespace DCLF
 		std::vector<const void*> propertyChanged;
 		std::vector<RE::NiPointer<RE::NiAVObject>> nodeChanged;
 		// Ingestion (IngestEvents): the queues' events since the last apply, oldest first (Internal.h).
-		struct EventBatch;
 		std::shared_ptr<EventBatch> ingested;
 		// The references the scene work let go of, and its applied batches (their tracker events hold subtrees): released at
 		// Present (ReleaseHandedBack). Written by the scene work, cleared by the render thread with it joined.
