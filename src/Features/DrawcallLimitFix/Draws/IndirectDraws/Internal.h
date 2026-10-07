@@ -2034,6 +2034,10 @@ namespace DCLF
 			ParityCounter parity;
 		};
 
+		/** @brief The stores brought up to a_tables (from the versions a_from), as views (StreamViews): the coordinator's alone. */
+		std::shared_ptr<const StreamViews> MakeStreamViews(ObjectRecordStore& a_objects, ExtrasStore& a_extras, GeometryStore& a_geometries, const TablesHeld& a_from,
+			std::shared_ptr<const SceneStore::Tables> a_hold, const SceneStore::Tables& a_tables, std::uint32_t a_generation, std::uint32_t a_frame);
+
 		inline bool PersistentParityEnabled()
 		{
 			return SwitchEnabled(Switch::PersistentParity);
@@ -2240,29 +2244,24 @@ namespace DCLF
 				std::uint32_t object = ~0u;
 				std::uint64_t vertexNeeded = 0, indexNeeded = 0;
 			} shortBuffer;
-			// The worker's build stages its uploads itself (StageMainPayload), so the commit on the render thread only submits the
-			// batch. For the resources it was staged against, and the rows' backings then; a build made on the render thread has none.
-			std::shared_ptr<org::runtime::StagedUploadBatch> staged;
-			const void* stagedFor = nullptr;
-			std::uint64_t stagedRowsGeneration = 0;
-			std::uint64_t stagedSceneGeneration = 0;  // the scene tables' (SceneBuffers::generation) the batch was staged against
+			// Built at the epoch with rows of its own (the fallback, or a probe): their versions are no journal's the tables follow.
+			bool foreignRows = false;
 			// The segment's resident region (ResidentRegion): its inputs lead the input buffer, uploaded when residentVersion
 			// is not the one the buffer holds (Resources::residentUploaded); inputList follows them.
 			KeptView<DrawInput> resident;
 			std::uint32_t residentDraws = 0, residentPairs = 0, residentUndrawable = 0, residentResyncs = 0;
+			std::uint32_t residentResyncReasons = 0;  // bit k: kResyncReasons' k
+			std::uint32_t residentDecalRetakes = 0;   // builds whose decal groups' counts moved (no resync: UpdateRegionEntries)
 			std::uint32_t residentParityChecks = 0, residentParityMismatches = 0, residentMissing = 0;
 			std::uint32_t residentPairsChecked = 0, residentPairsStale = 0;  // pairs whose witness moved with no event (UpdateRegionPairs)
 
 			void Reset()
 			{
 				resident.Reset();
-				residentDraws = residentPairs = residentUndrawable = residentResyncs = 0;
+				residentDraws = residentPairs = residentUndrawable = residentResyncs = residentResyncReasons = residentDecalRetakes = 0;
 				residentParityChecks = residentParityMismatches = residentMissing = 0;
 				residentPairsChecked = residentPairsStale = 0;
-				staged.reset();
-				stagedFor = nullptr;
-				stagedRowsGeneration = 0;
-				stagedSceneGeneration = 0;
+				foreignRows = false;
 				bindingOwners.clear();
 				sequences.clear();
 				inputList.clear();
@@ -2405,25 +2404,16 @@ namespace DCLF
 			GeometryDrawsOut geometries;
 			std::vector<SceneStore::Tables::FaceStream> faceStreams;  // the tables', for the commit's uploads
 			std::uint32_t skippedTexture = 0, skippedPipeline = 0, deferredTextures = 0, deferredPipelines = 0;
-			// The worker's build stages its uploads itself (StageShadowPayload): everything but the views' blocks and counters,
-			// which the epoch's latched copies write. For the resources it was staged against, and the material rows' version
-			// (GrowableRows::generation) it wrote into.
-			std::shared_ptr<org::runtime::StagedUploadBatch> staged;
-			const void* stagedFor = nullptr;
-			std::uint64_t stagedRows = 0;
 			// Set members a mode could not draw (waiting on a pipeline or a texture): a defect, the engine having withheld them.
 			std::uint32_t setWaiting = 0;
 			std::string setWaitingFirst;  // the first, and why
-			// The worker's build also builds the next frame's exclusions, which the epoch publishes; empty for a build made on the
-			// render thread, which builds them at the publish.
+			// The build ahead also builds the next frame's exclusions, which the epoch publishes; empty for a build made at the epoch,
+			// which builds them at the publish.
 			std::shared_ptr<SunExclusion> sunExclusion;  // from the cascades' mode (BuildSunExclusion)
 			std::shared_ptr<SunExclusion> parabolicExclusion;  // and from the paraboloid mode (LocalLightCull)
 
 			void Reset()
 			{
-				staged.reset();
-				stagedFor = nullptr;
-				stagedRows = 0;
 				setWaiting = 0;
 				setWaitingFirst.clear();
 				sunExclusion.reset();
@@ -3230,12 +3220,12 @@ namespace DCLF
 			const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates, DXGI_FORMAT a_dsvFormat, const std::array<DXGI_FORMAT, kOcclusionViews>& a_occlusionFormats,
 			Lookups& a_lookups);
 
+		// The resident region's resync reasons (MainBuild::UpdateRegionEntries): log, segment, shrunk, scope, fit.
+		constexpr std::size_t kResyncReasons = 5;
 		constexpr std::size_t kAsyncColour = 0;
 		constexpr std::size_t kAsyncZPrepass = 1;
 		constexpr std::size_t kAsyncShadow = 2;
 
-		// Whether a build made for `a_job` serves an epoch whose inputs are `a_epoch`: every scalar the build
-		// read has to agree, the lookup generation is checked separately after the commit's refresh.
 		// Whether BuildMainPayload reads MainInputs::eye/previousEye: only CS_DCLF_BINDLESS_PARITY's reference, the engine's
 		// eye-relative PerGeometry groups, does.
 		inline bool BuildReadsEye(const MainInputs& a_in)
@@ -3243,92 +3233,10 @@ namespace DCLF
 			return a_in.bindlessParity;
 		}
 
-		inline bool SameInputs(const MainInputs& a_job, const MainInputs& a_epoch)
-		{
-			auto sameEye = [](const RE::NiPoint3& a, const RE::NiPoint3& b) { return std::memcmp(&a, &b, sizeof(RE::NiPoint3)) == 0; };
-			return a_job.frameNumber == a_epoch.frameNumber && a_job.depthOnly == a_epoch.depthOnly &&
-			       a_job.bindlessParity == a_epoch.bindlessParity &&
-			       sameEye(a_job.eye, a_epoch.eye) && sameEye(a_job.previousEye, a_epoch.previousEye) &&
-			       a_job.vsFrameMask == a_epoch.vsFrameMask && a_job.psFrameMask == a_epoch.psFrameMask && a_job.decalCount == a_epoch.decalCount &&
-			       a_job.materialPatchedFloats == a_epoch.materialPatchedFloats &&
-			       a_job.materialPatchedVSFloats == a_epoch.materialPatchedVSFloats &&
-			       a_job.addresses == a_epoch.addresses &&
-			       a_job.lookupGeneration == a_epoch.lookupGeneration && a_job.tablesGeneration == a_epoch.tablesGeneration;
-		}
-
-		inline bool SameShadowInputs(const ShadowInputs& a_job, const ShadowInputs& a_epoch)
-		{
-			// Not the sun's full-frustum planes: the build does not read them, and the epoch writes its own into the latch (the
-			// full-frustum cull runs after the scene phase, where the build may be kicked).
-			// Nor CS's SharedData and FeatureData beyond their sizes: the build only places their blocks, and the epoch writes the
-			// frame's over them (the water reflections' prepasses refresh them after the scene phase).
-			return a_job.frameNumber == a_epoch.frameNumber && a_job.modeUsed == a_epoch.modeUsed &&
-			       a_job.modeRasterStates == a_epoch.modeRasterStates && a_job.sunCandidates == a_epoch.sunCandidates &&
-			       a_job.lightCandidates == a_epoch.lightCandidates &&
-			       a_job.addresses == a_epoch.addresses && a_job.sharedData.size() == a_epoch.sharedData.size() &&
-			       a_job.featureData.size() == a_epoch.featureData.size() &&
-			       a_job.lookupGeneration == a_epoch.lookupGeneration && a_job.tablesGeneration == a_epoch.tablesGeneration;
-		}
-
 		// CS_DCLF_ASYNC=probe: two builds of the same inputs, compared byte for byte. The first difference is
 		// named by buffer and offset.
 		bool SamePayload(const MainPayload& a, const MainPayload& b, std::string& a_difference);
 		bool SamePayload(const ShadowPayload& a, const ShadowPayload& b, std::string& a_difference);
-
-		/** @brief Waits for an epoch's kicked job up to the async budget; a late one is cancelled, as the epoch builds its payload itself. */
-		inline AsyncWorker::WaitResult JoinJob(const AsyncWorker::JobHandle& a_handle)
-		{
-			if (!a_handle)
-				return AsyncWorker::WaitResult::None;
-			auto& worker = AsyncWorker::Get();
-			const auto joined = worker.Wait(a_handle, AsyncWaitBudget());
-			if (joined == AsyncWorker::WaitResult::Late)
-				worker.Cancel(a_handle);
-			return joined;
-		}
-
-		/**
-		 * @brief Whether an epoch commits its joined job's payload: done, and built for exactly the epoch's inputs (a_same(),
-		 * which a lookup refresh that changed an entry the build read makes false). The verdict is counted; a_stale runs for a
-		 * done job whose inputs differ.
-		 */
-		template <class Same, class Stale>
-		bool TakeJob(AsyncWorker::WaitResult a_joined, IndirectDraws::Stats::Async& a_async, Same&& a_same, Stale&& a_stale)
-		{
-			switch (a_joined) {
-			case AsyncWorker::WaitResult::Done:
-				if (a_same())
-					return true;
-				++a_async.stale;
-				a_stale();
-				return false;
-			case AsyncWorker::WaitResult::Late:
-				++a_async.late;
-				return false;
-			case AsyncWorker::WaitResult::Failed:
-				++a_async.failed;
-				return false;
-			default:
-				++a_async.cancelled;
-				return false;
-			}
-		}
-
-		/**
-		 * @brief CS_DCLF_ASYNC=probe: the worker's payload against a_build(a_probe), the same build on this thread from the
-		 * job's inputs. The first difference is logged once.
-		 */
-		template <class Payload, class Build>
-		void ProbeWorkerBuild(const Payload& a_worker, Payload& a_probe, IndirectDraws::Stats::Async& a_async, const char* a_name, Build&& a_build)
-		{
-			if (AsyncModeSetting() != AsyncMode::Probe)
-				return;
-			a_build(a_probe);
-			++a_async.probeCompared;
-			std::string difference;
-			if (!SamePayload(a_worker, a_probe, difference) && a_async.probeDiffer++ == 0)
-				logger::warn("[DCLF] async {} probe: the worker's build differs from the inline one: {}", a_name, difference);
-		}
 
 		// A commit's own uploads on the render thread, staged directly (StagedUploadBatch) and submitted when the
 		// commit ends: each is one memcpy into mapped staging here and one copy in the submission, instead of a
@@ -3740,10 +3648,6 @@ namespace DCLF
 
 	// a_device: records the batch's copies on the worker as well (StagedUploadBatch::Record), so the commit hands the list over
 	// as it is (SubmitWorkerBatch); null leaves them to be recorded at the submission.
-	void StageMainPayload(MainPayload& a_payload, const Resources& a_resources, std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool,
-		rhi::Device a_device);
-	void StageShadowPayload(ShadowPayload& a_payload, const ShadowResources& a_resources, std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool,
-		rhi::Device a_device);
 
 	struct IndirectDraws::Impl
 	{
@@ -3807,23 +3711,47 @@ namespace DCLF
 		std::array<ModeRasterStates, kShadowModeCount> readyStates{};
 		std::uint64_t shadowReadinessSerial = 0;
 		void CheckCascadeCulling(const PendingView& a_view, const BuildDrawsLatch& a_latch, std::uint32_t a_frame, const ShadowPayload& a_payload);
-		ShadowPayload shadowPayload;
-		std::shared_ptr<const void> shadowExecutionOwner;  // reused by the sky epoch's copy of the shadow records
-		// The shadow job (CS_DCLF_ASYNC): kicked at BeforeShadowMaps, joined by ExecuteShadowFrame. The render
-		// modes are known only once the views are captured, so the job builds last frame's set; the epoch's
-		// own set is checked like every other input.
-		struct ShadowJob
+		/**
+		 * @brief Step 6e S1: the shadow payload the frame's epoch committed - the installed publication's (built ahead with it) or the
+		 * epoch's own (shadowFallback: built there, with no kept state, when the installed one does not cover the frame's views) -
+		 * which the occlusion epoch and the revision shapes read until the next commit. It holds no publication (the builds ahead drop
+		 * their streams: the publication holds them).
+		 */
+		std::shared_ptr<ShadowPayload> committedShadow;
+		ShadowPayload shadowFallback;
+		const ShadowPayload& CommittedShadow() const { return committedShadow ? *committedShadow : shadowFallback; }
+		std::vector<std::shared_ptr<ShadowPayload>> shadowPayloadPool;  // the builds task's
+		std::shared_ptr<ShadowPayload> AcquireShadowPayload();
+		// What the buffers hold once the publication before is committed (the builds task's prediction, as its journals' floors).
+		struct
 		{
-			AsyncWorker::JobHandle handle;
-			ShadowInputs inputs;
+			std::uint64_t materialRows = 0;
+			std::array<std::uint64_t, kShadowModeCount> inputs{};
+		} shadowAheadHeld;
+		std::shared_ptr<const void> shadowExecutionOwner;  // reused by the sky epoch's copy of the shadow records
+		/**
+		 * @brief The shadow epoch's last views (ExecuteShadowFrame): the modes (occlusion maps included), rasterizer states and target
+		 * format the builds ahead and the frame's start's shadow lookups are for. A change shows a frame late: the epoch builds its own
+		 * meanwhile (ShadowAheadUsable).
+		 */
+		struct LastShadow
+		{
 			std::array<bool, kShadowModeCount> modes{};
 			std::array<ModeRasterStates, kShadowModeCount> rasterStates{};
-			bool modesKnown = false;
-			std::uint32_t views = 0;  // last frame's view count: the record slots the job stages
+			DXGI_FORMAT dsvFormat = DXGI_FORMAT_UNKNOWN;
+			bool known = false;
 			std::uint32_t loggedStale = 0;
-			std::uint32_t loggedStates = 0;
-			std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>> stagedPool;
-		} shadowJob;
+		} lastShadow;
+		// What the frame's shadow lookups were refreshed for at its start (RefreshShadowLookupsAtFrameStart), and the epochs that
+		// refreshed them again for other views (since the last report).
+		LastShadow shadowLookupsFor;
+		std::uint64_t shadowEpochRefreshes = 0;
+		/** @brief Whether the frame's shadow lookups were refreshed for these views' modes, states and format. */
+		bool ShadowLookupsCover(const std::array<bool, kShadowModeCount>& a_modes, const std::array<ModeRasterStates, kShadowModeCount>& a_states,
+			DXGI_FORMAT a_format) const;
+		/** @brief Whether the installed shadow payload can be committed by an epoch with the frame's inputs a_frame. */
+		bool ShadowAheadUsable(const ShadowPayload& a_payload, const ShadowInputs& a_frame) const;
+		void LogStaleShadow(const ShadowInputs& a_built, const ShadowInputs& a_frame);
 		// Per mode, the rasterizer states its views have drawn with, per caster class (ExecuteShadowFrame): what the shadow
 		// build's inputs are for.
 		std::array<ModeRasterStates, kShadowModeCount> shadowStatesSeen{};
@@ -3856,7 +3784,6 @@ namespace DCLF
 		std::vector<ShadowViewLayout> PredictedOcclusion() const;
 		std::vector<std::vector<ShadowViewLayout>> recentOcclusionLayouts;
 		std::uint64_t occlusionUnrecorded = 0;  // maps left to the engine for want of the revision's shape, since the last report
-		ShadowPayload shadowProbePayload;
 		/**
 		 * @brief The sequence buffers' reserves (render thread, before an epoch): each grown to hold every draw the scene's tracked
 		 * objects can produce (SceneDrawBound, kept in drawBound). A bound over the device's max sequence count, or over the sort's rank field,
@@ -3895,7 +3822,6 @@ namespace DCLF
 		std::uint32_t shadowRowsWanted = 0;  // the last shadow build's (ShadowPayload::rowsWanted)
 		ShadowInputs PrepareShadowInputs(const SceneStore& a_store, const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
 			const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates) const;
-		void DropShadowJob(IndirectDraws::Stats& a_stats);
 		std::uint32_t shadowLoggedReasons = 0;
 		bool ShadowNotReady(std::uint32_t a_reason, const char* a_what)
 		{
@@ -3908,9 +3834,6 @@ namespace DCLF
 		bool SetupShadow();
 		bool ImportShadowDepth(std::uint32_t a_index, std::uint32_t a_target);
 
-		// The two main epochs' payloads (colour, then the Z-prepass): what their builds produce and their
-		// commits upload. Kept past the commit, because the upload pass reads them when the epoch executes.
-		std::array<MainPayload, 2> mainPayload;
 		// The volatile t16+ inputs retain a live import only while their register
 		// keeps naming that SRV. This bounds reuse without an age-based import cache.
 		struct FrameTextureBinding
@@ -3920,14 +3843,142 @@ namespace DCLF
 		};
 		std::array<FrameTextureBinding, kTextureRegisters> frameTextureBindings{};
 		std::uint32_t frameTextureGeneration = ~0u;
-		// Per main job: the staged upload batches its builds write (StageMainPayload), reused once released.
-		std::array<std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>, 2> stagedPools;
 		// The commits' own uploads on the render thread (CommitUploads).
 		std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>> commitStagedPool;
-		std::array<BuildCache, 2> buildCaches;  // indexed like mainPayload
+		std::array<BuildCache, 2> buildCaches;  // kAsyncColour, kAsyncZPrepass
 		BuildCache* CacheFor(std::size_t a_job) { return &buildCaches[a_job]; }
-		// The scene tables (SceneBuffers) and their stores, every epoch's: the builds run in frame order, each joined before
-		// the next is kicked (KickShadowBuild and KickMainJob drop a job still outstanding).
+		/**
+		 * @brief Step 6e E3b, the builds ahead: the coordinator builds the main payloads with the publication they draw (BuildAhead),
+		 * from what the frame's start posted (AheadContext: the resources, the inputs' frame part, prepared by PrepareMainInputs). Its
+		 * journals keep what the payload ring's entries lack (ringHolders, step 6e E5): the frame's producer sends each entry that. The
+		 * frames that install the publication commit them (installedDraws); one that cannot - none built, other resources, other
+		 * frame slots - is built at the epoch with rows of its own (fallbackPayload), counted.
+		 */
+		struct DrawPublication
+		{
+			std::shared_ptr<const SceneStore::Tables> tables;
+			std::shared_ptr<const StreamViews> streams;
+			std::array<std::shared_ptr<MainPayload>, 2> payloads;  // kAsyncColour, kAsyncZPrepass
+			std::shared_ptr<ShadowPayload> shadow;                 // with its exclusions (step 6e S1)
+		};
+		struct AheadContext
+		{
+			bool valid = false;
+			std::array<MainInputs, 2> inputs;
+			std::array<bool, 2> build{};
+			std::shared_ptr<Resources> target;
+			// The shadow payload's (step 6e S1): its inputs' frame part (PrepareShadowInputs for the last epoch's views) and resources.
+			bool shadow = false;
+			ShadowInputs shadowInputs;
+			std::shared_ptr<ShadowResources> shadowTarget;
+		} aheadContext;  // render thread at the frame's start, read by the coordinator
+		std::vector<std::shared_ptr<MainPayload>> payloadPool;  // the builds' task's
+		/**
+		 * @brief A publication's draws as its builds' task makes them (BuildAhead): one task at a time, in publication order, on
+		 * the preparation pool, never joined - the frame's start installs a publication only once they are done (DrawsReady).
+		 */
+		struct AheadSlot
+		{
+			std::atomic<bool> done{ false };
+			std::shared_ptr<const DrawPublication> result;
+		};
+		std::uint64_t aheadKicked = 0;               // the coordinator's
+		std::atomic<std::uint64_t> aheadDone{ 0 };   // the last task done
+		/** @brief The builds' task: a publication's stream views and main payloads (on the pool, in order). */
+		std::shared_ptr<const DrawPublication> RunAhead(std::shared_ptr<const SceneStore::Tables> a_tables, const AheadContext& a_context, const Lookups& a_lookups,
+			std::uint32_t a_generation, std::uint32_t a_frame, std::shared_ptr<const SunCandidates> a_sunCandidates, std::shared_ptr<const SunCandidates> a_lightCandidates);
+		/** @brief Every builds' task kicked done (teardown, the toggle, a load screen). */
+		void WaitAhead();
+		std::shared_ptr<const DrawPublication> installedDraws;  // the frame's
+		/**
+		 * @brief Step 6e E4: the payload ring. Each frame the epochs read one entry - the installed publication's payload buffers
+		 * (object records, extras rows, geometry table, the rows' tables, each segment's inputs) - which the frame's producer
+		 * (FrameValues' job, its other uploads) brings up to that publication on the dedicated uploader before it signals the frame's
+		 * wait: each buffer is sent what changed since the version it holds. An entry is reused once the frame that last read it is
+		 * done on the GPU. The epochs name it by values (the latches, the frame record): no recording binds it.
+		 */
+		static constexpr std::uint32_t kPayloadRing = 4;
+		struct RingPart
+		{
+			std::shared_ptr<org::Buffer> buffer;
+			std::uint64_t capacity = 0;  // elements
+			std::uint32_t srvIndex = 0;
+			std::uint64_t address = 0;
+			std::uint64_t held = 0;  // the version it holds (the producer's)
+		};
+		struct RingEntry
+		{
+			RingPart objects, extras, geometries, materialRows, pipelineRows;
+			std::array<RingPart, 2> inputs;  // kAsyncColour, kAsyncZPrepass
+			org::PersistentGraphHost::GpuPoint reuse;  // the last frame that read it
+		};
+		std::array<RingEntry, kPayloadRing> payloadRing;
+		std::uint64_t payloadRingSeq = 0;
+		/** @brief What a frame's epochs read of the ring: its entry's values, for the payloads of its publication. */
+		struct RingFrame
+		{
+			bool valid = false;
+			std::uint32_t entry = 0;
+			std::shared_ptr<const DrawPublication> draws;
+			std::uint32_t objectsIndex = 0, extrasIndex = 0, geometriesIndex = 0;
+			std::array<std::uint32_t, 2> inputsIndex{};
+			std::uint64_t materialRows = 0, pipelineRows = 0;
+		};
+		RingFrame ringFrame;
+		// The last Z-prepass commit's (the reflection draws from the frame before's depth inputs): its entry, when it read one.
+		RingFrame ringDepth;
+		std::uint32_t ringDepthInputs = 0;
+		struct RingStats
+		{
+			std::uint64_t frames = 0, grown = 0, bytes = 0, runs = 0, committed = 0;
+		} ringStats;
+		std::atomic<std::uint64_t> ringBytes{ 0 }, ringRuns{ 0 };
+		// By buffer (RingPartIndex), for the report.
+		enum RingPartIndex : std::size_t
+		{
+			kRingObjects,
+			kRingExtras,
+			kRingGeometries,
+			kRingMaterialRows,
+			kRingPipelineRows,
+			kRingResident,
+			kRingFrameInputs,
+			kRingParts
+		};
+		std::array<std::atomic<std::uint64_t>, kRingParts> ringPartBytes{};
+		/**
+		 * @brief Step 6e E5: the versions the ring's entries hold of each journal (their producer sets them as it queues an entry's
+		 * uploads), the oldest of which the builds keep changes back to (ChangeJournal::BeginBuild): each entry is sent what changed
+		 * since it was last filled, a few frames back, never everything. The scene buffers (the shadow commits', a fallback's) are
+		 * holders too, uncounted: they are a frame behind at most in steady play, and one that falls below is sent everything.
+		 */
+		struct RingHolders
+		{
+			KeptHolders<kPayloadRing> objects, extras, geometries, materialRows, pipelineRows;
+			std::array<KeptHolders<kPayloadRing>, 2> resident;  // kAsyncColour, kAsyncZPrepass
+		} ringHolders;
+		/** @brief Whether a commit of a_payload reads the frame's ring entry (an installed payload, the entry filled for it). */
+		bool RingFor(const MainPayload& a_payload, std::size_t a_job) const
+		{
+			return ringFrame.valid && !a_payload.foreignRows && ringFrame.draws && ringFrame.draws->payloads[a_job].get() == &a_payload;
+		}
+		/** @brief The ring's values into a culling latch (none: the pass's own buffers). */
+		static void RingLatch(const RingFrame& a_ring, std::size_t a_job, BuildDrawsLatch& a_latch)
+		{
+			if (!a_ring.valid)
+				return;
+			a_latch.payloadValid = 1;
+			a_latch.inputsIndex = a_ring.inputsIndex[a_job];
+			a_latch.geometriesIndex = a_ring.geometriesIndex;
+			a_latch.materialRowsLo = static_cast<std::uint32_t>(a_ring.materialRows);
+			a_latch.materialRowsHi = static_cast<std::uint32_t>(a_ring.materialRows >> 32);
+			a_latch.pipelineRowsLo = static_cast<std::uint32_t>(a_ring.pipelineRows);
+			a_latch.pipelineRowsHi = static_cast<std::uint32_t>(a_ring.pipelineRows >> 32);
+		}
+		MainRows fallbackRows;
+		/** @brief Whether the installed payload can be committed by an epoch with the frame's inputs a_frame. */
+		bool AheadUsable(const MainPayload& a_payload, const MainInputs& a_frame, const Resources& a_resources) const;
+		// The scene tables (SceneBuffers) and their stores, every epoch's: the builds ahead run one at a time, in publication order.
 		std::shared_ptr<SceneBuffers> scene;
 		// The frame's tree LOD decision (DecideTreeLod), which the depth commit draws on; and the commits that could not.
 		bool treeLodOwned = false;
@@ -4044,6 +4095,24 @@ namespace DCLF
 		std::shared_ptr<const StreamViews> streamViews;  // the frame's, once joined
 		StreamsKey streamViewsKey;
 		std::uint32_t streamsFailed = 0;
+		std::uint64_t streamsRefused = 0;  // views wanted while the coordinator ran (none made: it owns the stores)
+		std::shared_ptr<MainPayload> AcquirePayload()
+		{
+			// An idle payload holds nothing: what it held (its stream views and their tables, its owners) would keep the retirement
+			// chain from that publication on (step 6e E3).
+			std::shared_ptr<MainPayload> free;
+			for (auto& payload : payloadPool)
+				if (payload.use_count() == 1) {
+					payload->Reset();
+					if (!free)
+						free = payload;
+				}
+			return free ? free : payloadPool.emplace_back(std::make_shared<MainPayload>());
+		}
+		// The payloads the frame's main epochs committed (for the parities), by job.
+		std::array<const MainPayload*, 2> committedPayload{};
+		std::array<std::uint32_t, 2> committedFrame{};
+		std::array<MainPayload, 2> fallbackPayloads;
 		SceneStreams CommitSceneStreams(SceneBuffers& a_scene, const SceneStore::Tables& a_tables, std::uint32_t a_frame, std::uint32_t a_generation,
 			CommitUploads& a_uploads);
 		GeometryStore* SceneGeometries() { return &geometryStore; }
@@ -4056,23 +4125,26 @@ namespace DCLF
 
 		/** @brief The per-frame constant blocks of an epoch from the capture's mirrors (render thread; records the Z-prepass's bytes for the replay). */
 		void PackFrameBlocks(const Capture& a_capture, bool a_depthOnly, FrameBlocks& a_out);
+		// Per main epoch (Z-prepass, colour): each frame slot's last captured block, for a frame that lacks it (PackFrameBlocks).
+		struct CarriedBlocks
+		{
+			std::array<std::vector<std::byte>, kConstantBufferRegisters> vs, ps;
+		};
+		std::array<CarriedBlocks, 2> carriedBlocks;
+		std::uint64_t frameSlotsCarried = 0;  // since the last report
+		std::uint32_t carriedLogged = 0;      // the slots logged once (bit: slot, +8 colour, +16 pixel)
 		/** @brief The build's inputs, snapshotted on the render thread. Without a capture (a job kicked ahead of the epoch) the eye is the replayed one. */
 		MainInputs PrepareMainInputs(const Capture* a_capture, bool a_depthOnly, const Resources& a_resources, std::uint32_t a_vsMask, std::uint32_t a_psMask, const SceneStore& a_store);
 
-		// The main epochs' jobs (CS_DCLF_ASYNC), indexed like mainPayload (kAsyncColour, kAsyncZPrepass): the
-		// colour job is kicked at Prepass, the Z-prepass job at the end of EarlyPrepass, each joined by its
-		// epoch. The inputs are kept to check the epoch's against; the frame-slot masks the epoch will supply
-		// are predicted from the same epoch's last ones and validated the same way.
-		struct MainJob
+		// Per main epoch (kAsyncColour, kAsyncZPrepass): the frame slots it last supplied, which the builds ahead are made for (a
+		// change shows a frame late: the epoch builds its own meanwhile, AheadUsable), and the stale payloads it logged.
+		struct EpochMasks
 		{
-			AsyncWorker::JobHandle handle;
-			MainInputs inputs;
 			std::uint32_t vsMask = 0, psMask = 0;
-			bool masksKnown = false;
+			bool known = false;
 			std::uint32_t loggedStale = 0;
 		};
-		std::array<MainJob, 2> mainJobs;
-		MainPayload probePayload;  // CS_DCLF_ASYNC=probe: the inline build to compare the worker's against
+		std::array<EpochMasks, 2> epochMasks;
 		// CS_DCLF_CAPTURE_POINT_PARITY (CheckCapturePoint), since the last report: the frames that differ, and how often
 		// each binding does.
 		struct
@@ -4080,11 +4152,9 @@ namespace DCLF
 			std::uint32_t checks = 0, frames = 0;
 			ankerl::unordered_dense::map<std::string, std::uint32_t> differ;
 		} captureParity;
-		void KickMainJob(bool a_depthOnly, const RE::NiPoint3* a_eye, const RE::NiPoint3* a_previousEye, IndirectDraws::Stats& a_stats);
-		void DropMainJob(std::size_t a_job, IndirectDraws::Stats& a_stats);
-		void LogStaleMainJob(std::size_t a_job, const MainInputs& a_actual);
+		void LogStalePayload(std::size_t a_job, const MainInputs& a_actual, const MainInputs& a_built);
 		/** @brief Inside the epoch's preparation: the frame textures and blocks, the uploads, the PassFrame. */
-		bool CommitMainPayload(const Capture& a_capture, const FrameBlocks& a_blocks, MainPayload& a_payload,
+		bool CommitMainPayload(const Capture& a_capture, const FrameBlocks& a_blocks, const MainInputs& a_frame, MainPayload& a_payload,
 			const std::shared_ptr<Resources>& a_resources, SceneStore& a_store, IndirectDraws::Stats& a_stats,
 			std::vector<std::shared_ptr<const void>>& a_bindingOwners);
 
@@ -4100,14 +4170,6 @@ namespace DCLF
 		// frame to frame, so the previous frame's value is right for this frame's prepass.
 		float mainMinDepth = 0.0f, mainMaxDepth = 0.0f;
 		bool prepassInputs = false;
-		// The colour build kicked at EarlyPrepass (KickZPrepassBuild), and the witness of the tables it read
-		// (SceneStore::BuildInputsWitness), until Prepass keeps or replaces it.
-		bool colourEarly = false;
-		std::uint64_t colourWitness = 0;
-		// The shadow build kicked at the end of the scene phase (KickShadowBuildEarly), and the change logs' witness it read
-		// (SceneStore::ShadowInputsWitness), until BeforeShadowMaps keeps or replaces it.
-		bool shadowEarly = false;
-		std::uint64_t shadowWitness = 0;
 		std::uint32_t loggedDepthViewport = 0;
 		std::uint32_t loggedColourViewport = 0;
 
@@ -4299,7 +4361,7 @@ namespace DCLF
 			std::uint32_t activeFrame = ~0u;
 			// The frame of the last revision sealed, and of the commit whose set the frame's claims are (SetApplicable, NoteSetApplied).
 			std::uint32_t sealedFrame = ~0u, claimsFrame = ~0u;
-			std::uint64_t setsHeld = 0;  // frames whose commit waited for its revision (since the last report)
+			std::uint64_t setsHeld = 0;  // publications passed over at a frame's start: their commit's revision not selected yet (since the last report)
 			// R3c (c), per epoch since the last report: commits that submitted the selected revision's recording (it covered the
 			// frame), and those that submitted their own preparation, by why (ChooseRevisionRecording).
 			enum Miss : std::uint32_t

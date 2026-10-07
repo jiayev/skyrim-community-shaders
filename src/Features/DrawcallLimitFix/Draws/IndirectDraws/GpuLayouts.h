@@ -416,8 +416,17 @@ namespace DCLF::Draws
 		// and fade node are its object's row, which the frame's values wrote; the descriptor is the frame's (a ring buffer), so the
 		// latch's.
 		std::uint32_t placementsIndex;
+		// Step 6e E4: the payload's buffers this execution reads when they are a payload ring entry (payloadValid; the upload queue
+		// filled it from the frame's publication): its inputs' and geometry table's SRVs and its rows' tables' addresses. 0: the
+		// pass's own (its push constants).
+		std::uint32_t payloadValid;
+		std::uint32_t inputsIndex;
+		std::uint32_t geometriesIndex;
+		std::uint32_t payloadPadding;
+		std::uint32_t materialRowsLo, materialRowsHi, pipelineRowsLo, pipelineRowsHi;
 	};
-	static_assert(sizeof(BuildDrawsLatch) == 256 && offsetof(BuildDrawsLatch, viewProj) == 32 && offsetof(BuildDrawsLatch, cullPlanes) == 96 &&
+	static_assert(sizeof(BuildDrawsLatch) == 288 && offsetof(BuildDrawsLatch, payloadValid) == 256 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
+				  offsetof(BuildDrawsLatch, viewProj) == 32 && offsetof(BuildDrawsLatch, cullPlanes) == 96 &&
 				  offsetof(BuildDrawsLatch, pipelineMapOffset) == 192 && offsetof(BuildDrawsLatch, sunState) == 196 &&
 				  offsetof(BuildDrawsLatch, treeHeight) == 200 && offsetof(BuildDrawsLatch, fadeEye) == 208 &&
 				  offsetof(BuildDrawsLatch, sunCascadeOffset) == 224 && offsetof(BuildDrawsLatch, sunEntryOffset) == 228 &&

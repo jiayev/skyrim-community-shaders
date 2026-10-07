@@ -13,6 +13,11 @@ namespace RE
 	class NiPoint3;
 }
 
+namespace org::runtime
+{
+	class IUploadService;
+}
+
 namespace DCLF
 {
 
@@ -104,20 +109,28 @@ namespace DCLF
 		/** @brief Where the main pass's opaque batches end: the colour pass, against the depth above. */
 		void ExecuteColour();
 
-		/**
-		 * @brief CS_DCLF_ASYNC: at Prepass, after RefreshFrameConstants, submits the colour epoch's build to the
-		 * worker (AsyncWorker.h). The epoch joins it; a job that cannot serve the epoch is rebuilt inline.
-		 */
-		void KickColourBuild();
 		/** @brief Render thread, the frame's start: the main material and shared lookups refreshed (step 6e C), against the frame's tables. */
 		void RefreshMainLookups();
-
 		/**
-		 * @brief CS_DCLF_ASYNC: at the end of EarlyPrepass, after the pipeline lookups, submits the Z-prepass
-		 * epoch's build with a predicted eye (the main camera's, and last frame's captured eye as the previous
-		 * one). The epoch checks the prediction against its capture exactly; a miss is stale and built inline.
+		 * @brief The coordinator, publishing the scene (SceneStore::PublishScene, step 6e E3b): the publication's stream views and the
+		 * Z-prepass and colour payloads, built from a_tables (its SceneStore::Tables) with what the frame's start posted
+		 * (PostAheadContext) and staged for the buffers as the publication before leaves them. The frames that install it commit
+		 * them: no build, no join in the frame.
 		 */
-		void KickZPrepassBuild();
+		std::shared_ptr<const void> BuildAhead(std::shared_ptr<const void> a_tables);
+		/** @brief Render thread: whether a publication's draws (BuildAhead's) are done, so the frame may install it. */
+		bool DrawsReady(const std::shared_ptr<const void>& a_draws) const;
+		/** @brief Render thread, the frame's start (the coordinator idle): what the next builds ahead take from the frame (resources, masks). */
+		void PostAheadContext();
+		/**
+		 * @brief Render thread, the frame's start, after InstallDraws: the payload ring entry the frame's epochs read, made to hold
+		 * the installed payloads, and what fills it (FrameValues' job runs it before the frame's signal, step 6e E4). Empty: none.
+		 */
+		std::function<void(org::runtime::IUploadService&)> PrepareFrameUploads();
+		/** @brief Render thread: the frame's producer did not run (FrameValues::Kick refused): its epochs read no ring entry. */
+		void DropFrameUploads();
+		/** @brief Render thread, the frame's start: the installed publication's draws (SceneStore::InstalledDraws), the frame's. */
+		void InstallDraws(std::shared_ptr<const void> a_draws);
 
 		/**
 		 * @brief Render thread, at the end of the scene tables: the fade write-back's events read back since the last kick (and any
@@ -155,13 +168,6 @@ namespace DCLF
 		void JoinFadeWriteBack();
 
 		/**
-		 * @brief CS_DCLF_ASYNC: at BeforeShadowMaps, after the scene phase and BeginShadowFrame, submits the shadow
-		 * epoch's build for last frame's render modes. ExecuteShadowFrame joins it; a change of modes is stale.
-		 */
-		void KickShadowBuild();
-		/** @brief The end of the scene phase: the shadow build kicked there, kept at BeforeShadowMaps when nothing it read moved. */
-		void KickShadowBuildEarly();
-		/**
 		 * @brief Render thread, at the scene work's join (SceneStore::FinishSceneWork): the main segments' shapes as a scene revision
 		 * made now would have them (R3c), with the capacities reserved for the tables as they are; compared with the commits' own
 		 * (Impl::ShapeParity). Counts only: nothing draws with them yet.
@@ -191,8 +197,6 @@ namespace DCLF
 		bool RevisionClaims() const;
 		/** @brief The set committed at a_commitFrame was applied: the frame's claims are its (RevisionHoldsClaims). */
 		void NoteSetApplied(std::uint32_t a_commitFrame);
-		/** @brief BeforeShadowMaps: whether the early shadow build stands (counted by cause when it does not). */
-		bool KeepEarlyShadowBuild();
 		/**
 		 * @brief Render thread, where nothing writes the tables until the next epoch's commit (after the placements' join; after
 		 * RefreshFrameConstants): the object records and bone rows staged and recorded on the worker, which that commit submits

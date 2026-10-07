@@ -30,9 +30,13 @@ namespace DCLF
 	void IndirectDraws::CaptureOcclusion(std::uint32_t) {}
 	bool IndirectDraws::OcclusionReady(std::uint32_t) const { return false; }
 	std::uint32_t IndirectDraws::ExecuteOcclusion(std::uint32_t) { return 0; }
-	void IndirectDraws::KickColourBuild() {}
 	void IndirectDraws::RefreshMainLookups() {}
-	void IndirectDraws::KickZPrepassBuild() {}
+	std::shared_ptr<const void> IndirectDraws::BuildAhead(std::shared_ptr<const void>) { return nullptr; }
+	void IndirectDraws::PostAheadContext() {}
+	std::function<void(org::runtime::IUploadService&)> IndirectDraws::PrepareFrameUploads() { return {}; }
+	void IndirectDraws::DropFrameUploads() {}
+	bool IndirectDraws::DrawsReady(const std::shared_ptr<const void>&) const { return true; }
+	void IndirectDraws::InstallDraws(std::shared_ptr<const void>) {}
 	void IndirectDraws::KickFadeWriteBack() {}
 	bool IndirectDraws::DecideTreeLod() { return false; }
 	void IndirectDraws::CaptureReflectionFace() {}
@@ -41,8 +45,6 @@ namespace DCLF
 	void IndirectDraws::ExecuteReflection() {}
 	std::string IndirectDraws::ReflectionReport() { return {}; }
 	void IndirectDraws::JoinFadeWriteBack() {}
-	void IndirectDraws::KickShadowBuild() {}
-	void IndirectDraws::KickShadowBuildEarly() {}
 	void IndirectDraws::MakeRevisionShapes() {}
 	void IndirectDraws::BuildPoint() {}
 	void IndirectDraws::SelectRevision() {}
@@ -50,7 +52,6 @@ namespace DCLF
 	bool IndirectDraws::SetApplicable(std::uint32_t) const { return true; }
 	bool IndirectDraws::RevisionClaims() const { return false; }
 	void IndirectDraws::NoteSetApplied(std::uint32_t) {}
-	bool IndirectDraws::KeepEarlyShadowBuild() { return false; }
 	void IndirectDraws::KickSceneStreams() {}
 	std::array<std::uint64_t, 3> IndirectDraws::TakeStreamsStats() { return {}; }
 	void IndirectDraws::EndFrame() {}

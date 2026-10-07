@@ -333,7 +333,7 @@ namespace DCLF
 			}
 		}
 		if (auto shadow = impl->shadow; (sp.known || !impl->recentShadowLayouts.empty() || !impl->recentOcclusionLayouts.empty()) && shadow && shadowIndirect.valid) {
-			auto& payload = impl->shadowPayload;
+			const auto& payload = impl->CommittedShadow();
 			// The slots the layouts name hold every draw the scene can produce, as the epochs reserve them.
 			std::uint32_t slots = 0;
 			for (const auto* recent : { &shadow->recentShapes, &shadow->recentOcclusionShapes })

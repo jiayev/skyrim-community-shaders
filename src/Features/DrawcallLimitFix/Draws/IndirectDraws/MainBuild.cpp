@@ -815,9 +815,13 @@ namespace DCLF::Draws
 		r.touched.clear();
 		// What the buffer holds is the version it was sent: what changes from here on is sent alone.
 		r.inputs.BeginBuild(in.residentUploaded);
-		const bool resync = !r.cursor.Continues(tables.changeLog, in.tablesGeneration) || r.depth != depthOnly || r.indexOf.size() > tables.objects.size() ||
-		                    r.wholeScene != wholeScene || r.fit != in.addresses.fit || r.decalCount != decalCount;
+		// Why, by reason (the report's): the log, the segment, the tables shrunk, the scope, the buffers' fit.
+		const std::array<bool, kResyncReasons> reasons{ !r.cursor.Continues(tables.changeLog, in.tablesGeneration), r.depth != depthOnly,
+			r.indexOf.size() > tables.objects.size(), r.wholeScene != wholeScene, r.fit != in.addresses.fit };
+		const bool resync = std::find(reasons.begin(), reasons.end(), true) != reasons.end();
 		if (resync) {
+			for (std::size_t k = 0; k < reasons.size(); ++k)
+				out.residentResyncReasons |= reasons[k] ? 1u << k : 0u;
 			// Every slot read again: the first build, new tables, a log this segment fell behind, or the scene's buffers grown
 			// (what fits them moved: ObjectFits).
 			r.Reset();
@@ -844,6 +848,20 @@ namespace DCLF::Draws
 				for (const auto& stream : tables.faceStreams)
 					if (stream.object != SceneStore::Tables::kNoFaceObject && stream.object < tables.objects.size())
 						RegionTake(stream.object);
+			}
+			// A decal group's range moved (RegionEligible: an ordinal past it is no entry). Every ordinal that changed is in the log
+			// (OrderDecals); the decals between the old and the new count are what a count the build caps (the sequences' decal
+			// range, the buffers' fit) moves without one.
+			if (r.decalCount != decalCount) {
+				++out.residentDecalRetakes;
+				for (std::uint32_t o = 0; o < tables.decalOrdinal.size() && o < tables.objects.size(); ++o) {
+					const std::uint32_t ordinal = tables.decalOrdinal[o];
+					const std::uint32_t group = ordinal != ~0u ? ObjectDecalGroup(tables.objects[o].flags) : 0;
+					if (group && ordinal >= std::min(r.decalCount[group - 1], decalCount[group - 1]) &&
+						ordinal < std::max(r.decalCount[group - 1], decalCount[group - 1]))
+						RegionTake(o);
+				}
+				r.decalCount = decalCount;
 			}
 		}
 		r.faceBase = in.addresses.facePositions ? tables.geometries.size() : 0;

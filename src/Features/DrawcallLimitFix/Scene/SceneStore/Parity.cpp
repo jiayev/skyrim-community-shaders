@@ -141,6 +141,8 @@ namespace DCLF
 		const auto savedFaceRegions = faceRegions;
 		const auto savedFaceRegionFree = faceRegionFree;
 		const auto savedFaceRegionTop = faceRegionTop;
+		const auto savedTreeOwners = treeOwners;
+		const auto savedFadeRootOwners = fadeRootOwners;
 		// What the delta walk evaluated (BuildFullOrder below overwrites scheduledWalk), for the stale verdicts' report.
 		ankerl::unordered_dense::set<const RE::BSGeometry*> evaluated;
 		for (const auto& [geometry, entry] : tracked)
@@ -157,6 +159,8 @@ namespace DCLF
 		faceRegions = savedFaceRegions;
 		faceRegionFree = savedFaceRegionFree;
 		faceRegionTop = savedFaceRegionTop;
+		treeOwners = savedTreeOwners;
+		fadeRootOwners = savedFadeRootOwners;
 		const Tables dense = std::move(tables);
 		tables = slots;
 		objectStamp = savedStamp;

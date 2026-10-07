@@ -190,6 +190,7 @@ namespace DCLF
 			org::PersistentGraphHost::GpuPoint reuse;
 			std::shared_ptr<rhi::TimelinePtr> timeline;
 			std::shared_ptr<org::runtime::IUploadService> uploads;
+			FrameUploads more;  // the frame's other uploads (Kick's a_uploads)
 		};
 		void Run(const Job& a_job);
 		void Sample(const Job& a_job);
@@ -220,6 +221,14 @@ namespace DCLF
 			const auto reusable = std::chrono::steady_clock::now();
 			pointWaitUs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(reusable - sampledAt).count());
 			Upload(a_job);
+			if (a_job.more) {
+				try {
+					a_job.more(*a_job.uploads);
+				} catch (const std::exception& e) {
+					if (failures++ == 0)
+						logger::error("[DCLF] frame values {}: the frame's other uploads failed: {}", a_job.seq, e.what());
+				}
+			}
 			uploadUs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - reusable).count());
 		} catch (const std::exception& e) {
 			if (failures++ == 0)
@@ -502,7 +511,7 @@ namespace DCLF
 	}
 
 	bool FrameValues::Kick(std::shared_ptr<const SceneStore::PlacementPlan> a_plan, std::vector<SceneStore::ShadingItem> a_shading,
-		std::vector<SceneStore::WetnessValue> a_wetness)
+		std::vector<SceneStore::WetnessValue> a_wetness, FrameUploads a_uploads)
 	{
 		auto& s = *impl;
 		s.kicked = false;
@@ -577,6 +586,7 @@ namespace DCLF
 		job.reuse = s.points[r];
 		job.timeline = std::move(timeline);
 		job.uploads = std::move(uploads);
+		job.more = std::move(a_uploads);
 		if (s.plan)
 			s.plans.emplace_back(seq, s.plan);
 		frameIndex = s.ring[r].srvIndex;

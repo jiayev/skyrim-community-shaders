@@ -536,7 +536,7 @@ namespace DCLF
 		if (!growths.empty() || rv.growthWaits)
 			text += fmt::format("{}[DCLF] {} joins sealed no revision for a pending growth\n", growths, std::exchange(rv.growthWaits, 0));
 		if (!covered.empty())
-			text += fmt::format("[DCLF] epochs submitted (R3c): {}; {} values staged that a revision's latched copies lacked; {} frames kept the last claims for want of the commit's revision\n", covered,
+			text += fmt::format("[DCLF] epochs submitted (R3c): {}; {} values staged that a revision's latched copies lacked; {} publications passed over at a frame's start for want of their commit's revision\n", covered,
 				std::exchange(rv.latchedMisses, 0), std::exchange(rv.setsHeld, 0));
 		if (RevisionsEnabled()) {
 			std::string uncovered;

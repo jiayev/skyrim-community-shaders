@@ -247,8 +247,9 @@ namespace DCLF
 	{
 		auto& region = faceRegions[a_geometry];
 		if (region.count != a_vertexCount) {
+			// The old region retires: an installed publication's streams may still name it (the reflection's, a frame behind).
 			if (region.count)
-				faceRegionFree.push_back({ region.first, region.count });
+				tables.Retire(Tables::kRetiredFaceRegion, region.first, region.count);
 			region = {};
 			// First fit among the freed ranges, else the top of the buffer.
 			for (auto it = faceRegionFree.begin(); it != faceRegionFree.end(); ++it) {
@@ -293,11 +294,11 @@ namespace DCLF
 					tables.faceStreams[tables.faceStream[slot]].region == first)
 					continue;
 			}
-			faceRegionFree.push_back({ it->second.first, it->second.count });
+			tables.Retire(Tables::kRetiredFaceRegion, it->second.first, it->second.count);
 			faceRegions.erase(it);
 		}
 		tables.faceStreamsReleased.clear();
-		// Sorted and coalesced, so a run of freed shapes is one range again.
+		// Sorted and coalesced, so a run of freed shapes is one range again (the retirement chain gives them back: RecycleRetired).
 		std::sort(faceRegionFree.begin(), faceRegionFree.end());
 		std::size_t out = 0;
 		for (std::size_t i = 0; i < faceRegionFree.size(); ++i) {

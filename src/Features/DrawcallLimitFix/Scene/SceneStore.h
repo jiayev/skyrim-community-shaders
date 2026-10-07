@@ -636,6 +636,7 @@ namespace DCLF
 				kRetiredGeometrySlot,    // a SlotTable's slot; extra: its generation when freed
 				kRetiredMaterialSlot,
 				kRetiredPipelineSlot,
+				kRetiredFaceRegion,  // slot: the region's first vertex in the face positions, extra: its vertices (faceRegionFree)
 			};
 			struct RetiredSlot
 			{
@@ -1038,11 +1039,19 @@ namespace DCLF
 		 * its tables the frame's; none: the installed one stands, tables and claims together. A change after the last publication is
 		 * published first (the coordinator is idle).
 		 */
-		void SelectPublication(const std::function<bool(std::uint32_t)>& a_applicable);
+		void SelectPublication(const std::function<bool(std::uint32_t, const std::shared_ptr<const void>&)>& a_applicable);
 		/** @brief Render thread, after SelectPublication and the coverage decision: the installed publication's claims made the frame's. */
 		void InstallClaims();
 		/** @brief Whether a publication is installed (none: the frame has no claims, WithdrawSet). */
 		bool HasInstalled() const { return installed != nullptr; }
+		/** @brief The installed publication's draws (IndirectDraws::BuildAhead), null without one. */
+		std::shared_ptr<const void> InstalledDraws() const { return installed ? installed->draws : nullptr; }
+		/** @brief Whether the scene work is out (kicked, not joined): nothing of the coordinator's may be touched by the frame. */
+		bool SceneTaskInFlight() const { return sceneTaskInFlight.load(std::memory_order_relaxed); }
+		/** @brief The coordinator: its copy of the lookups, as the frame's start refreshed them (TakeLookupsView). */
+		const Lookups& CoordinatorLookups() const { return lookupsView; }
+		/** @brief The coordinator's lookups as an immutable copy (the builds ahead hold it), made again only when they changed. */
+		const std::shared_ptr<const Lookups>& SharedLookups() const { return lookupsShared; }
 		/** @brief The installed publication's commit frame (IndirectDraws::NoteSetApplied). */
 		std::uint32_t InstalledCommitFrame() const { return installed ? installed->commitFrame : 0u; }
 		struct PublicationStats
@@ -1150,6 +1159,9 @@ namespace DCLF
 		 * geometries are LocalLightCull's.
 		 */
 		std::shared_ptr<const SunCandidates> GetLightCandidates() const { return frameLightCandidates; }
+		/** @brief The coordinator: the candidates as its work last made them (the builds ahead take them with the publication). */
+		std::shared_ptr<const SunCandidates> CoordinatorSunCandidates() const { return sunCandidates; }
+		std::shared_ptr<const SunCandidates> CoordinatorLightCandidates() const { return lightCandidates; }
 		/**
 		 * @brief Render thread: a count of the light entries that gained their first tracked geometry. An entry the point
 		 * lights' filter cut for holding none (LocalLightCull) is judged again when it moves.
@@ -2042,6 +2054,7 @@ namespace DCLF
 		// The lookups as the coordinator's set judges readiness by them (MainReady, the readiness witness): copied at the frame's
 		// start when they moved.
 		Lookups lookupsView;
+		std::shared_ptr<const Lookups> lookupsShared;
 		std::array<std::uint64_t, 3> lookupsViewKey{ ~0ull, ~0ull, ~0ull };
 		const Tables& FrameView() const { return acceptedTables ? *acceptedTables : tables; }
 		/** @brief A write of the frame's start (the set applied, withdrawn or revoked): to the tables and to the frame's snapshot alike. */
@@ -2206,27 +2219,7 @@ namespace DCLF
 		std::uint32_t frame = 0;
 		std::uint32_t tablesGeneration = 0;
 		std::uint32_t materialVersions = 0;  // the last Tables::materialVersion handed out
-	public:
-		/**
-		 * @brief Moves whenever what a main-pass build reads of the tables changes: the frame's tables (the accepted snapshot: its
-		 * writes are the frame's start's, step 6c). The builds read no frame values (step 6e A, B: the constants and the material
-		 * records are the tables'), so a build made before RefreshFrameConstants is current after it when this has not moved. Not
-		 * the coordinator's counters: its work runs beside the frame and moves them without changing anything the builds read.
-		 */
-		std::uint64_t BuildInputsWitness() const { return FrameView().versionCounter; }
-		/**
-		 * @brief Moves whenever the change logs gain what a shadow build takes from them (kShadowChangeCauses notes, geometry
-		 * slots written): a shadow build made before is current after when this has not moved.
-		 */
-		std::uint64_t ShadowInputsWitness() const
-		{
-			std::uint64_t witness = tables.geometryLog.End();
-			for (std::uint32_t bits = kShadowChangeCauses; bits; bits &= bits - 1)
-				witness += tables.changeCounts[std::countr_zero(bits)];
-			return witness;
-		}
 
-	private:
 		Lookups lookups;
 		// Frame state the scene phase reads once and the accumulate phase reuses, so that both halves of
 		// one frame see the same answer even though they run either side of the shadow maps.
@@ -2653,6 +2646,9 @@ namespace DCLF
 		// The references the scene work let go of, and its applied batches (their tracker events hold subtrees): released at
 		// Present (ReleaseHandedBack). Written by the scene work, cleared by the render thread with it joined.
 		std::vector<RE::NiPointer<RE::NiRefObject>> handedBack;
+		// The tree and fade-root nodes the tables list (Tables::treeNode, fadeRootNode), owned while listed: unlisted, they go
+		// through the retirement chain (a kept publication still walks them).
+		std::vector<RE::NiPointer<RE::NiAVObject>> treeOwners, fadeRootOwners;
 		std::vector<std::shared_ptr<EventBatch>> spentBatches;
 		template <class T>
 		void HandBack(RE::NiPointer<T>&& a_reference)
@@ -2773,6 +2769,8 @@ namespace DCLF
 			std::shared_ptr<const SetSnapshot> claims;
 			std::vector<const RE::BSGeometry*> joined, left;
 			std::array<std::uint32_t, 2> lackingCount{};
+			// What the frames that install it draw (IndirectDraws::BuildAhead, step 6e E3b): its stream views and main payloads.
+			std::shared_ptr<const void> draws;
 		};
 		/** @brief The coordinator: ApplySet, RevokeUndrawnClaims, PublishTables, and the publication queued. */
 		void PublishScene();
@@ -2851,7 +2849,8 @@ namespace DCLF
 			std::vector<std::shared_ptr<const void>> imports;
 			std::vector<MaterialReference> materials;
 			std::vector<RE::NiPointer<RE::NiRefObject>> references;
-			bool Empty() const { return slots.empty() && imports.empty() && materials.empty() && references.empty(); }
+			std::vector<std::shared_ptr<EventBatch>> events;  // applied event batches (their tracker events hold detached subtrees)
+			bool Empty() const { return slots.empty() && imports.empty() && materials.empty() && references.empty() && events.empty(); }
 		};
 		RetirementChain<RetiredBatch> retirement;
 		struct RetirementStats

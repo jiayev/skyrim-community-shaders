@@ -693,8 +693,9 @@ namespace DCLF
 
 		stats.tracked = static_cast<std::uint32_t>(tracked.size());
 		stats.categoryNodes = static_cast<std::uint32_t>(categoryNodes.size());
-		// Its tracker events (and the switch events folded into a pending entry) hold engine references.
-		spentBatches.push_back(std::move(batch));
+		// Its tracker events (and the switch events folded into a pending entry) hold engine references - the detached subtrees a
+		// published version of the tables may still name: through the retirement chain (step 6e E3).
+		retirement.Open().events.push_back(std::move(batch));
 	}
 
 	namespace

@@ -568,10 +568,12 @@ namespace DCLF
 		publication->joined = std::exchange(publicationJoined, {});
 		publication->left = std::exchange(publicationLeft, {});
 		publication->lackingCount = setLackingCount;
+		// The frames that install it draw what is built from it now (step 6e E3b): no build in the frame.
+		publication->draws = IndirectDraws::Get().BuildAhead(publishedTables);
 		publications.push_back(std::move(publication));
 	}
 
-	void SceneStore::SelectPublication(const std::function<bool(std::uint32_t)>& a_applicable)
+	void SceneStore::SelectPublication(const std::function<bool(std::uint32_t, const std::shared_ptr<const void>&)>& a_applicable)
 	{
 		ZoneScopedN("CS.DCLF.Scene.SelectPublication");
 		// The coordinator's tables changed after its last publication (events applied at Present, a frame whose accumulate work did not
@@ -586,7 +588,7 @@ namespace DCLF
 		// installed with it (their claims' changes in order). None: the installed one stands, whole.
 		std::size_t chosen = publications.size();
 		for (std::size_t i = publications.size(); i-- > 0;)
-			if (a_applicable(publications[i]->commitFrame)) {
+			if (a_applicable(publications[i]->commitFrame, publications[i]->draws)) {
 				chosen = i;
 				break;
 			}
@@ -666,11 +668,17 @@ namespace DCLF
 		if (const std::array<std::uint64_t, 3> key{ lookups.versionCounter, lookups.generation, lookups.shadowGeneration }; key != lookupsViewKey) {
 			lookupsView = lookups;
 			lookupsViewKey = key;
-		} else {
+			lookupsShared.reset();
+		} else if (lookupsView.samplersResolved != lookups.samplersResolved || lookupsView.nullTexture != lookups.nullTexture ||
+				   lookupsView.projectedTextures != lookups.projectedTextures) {
 			lookupsView.samplersResolved = lookups.samplersResolved;
 			lookupsView.nullTexture = lookups.nullTexture;
 			lookupsView.projectedTextures = lookups.projectedTextures;
+			lookupsShared.reset();
 		}
+		// The builds ahead read an immutable copy (step 6e E3b), made again only when the view changed.
+		if (!lookupsShared)
+			lookupsShared = std::make_shared<const Lookups>(lookupsView);
 	}
 
 	void SceneStore::HandOverAtFrameStart()
@@ -779,6 +787,9 @@ namespace DCLF
 				case Tables::kRetiredPipelineSlot:
 					tables.pipelineSlots.Recycle(slot, retired.extra);
 					break;
+				case Tables::kRetiredFaceRegion:
+					faceRegionFree.push_back({ slot, retired.extra });
+					break;
 				}
 			}
 			for (auto& owner : a_batch.imports)
@@ -787,6 +798,8 @@ namespace DCLF
 				materialsHandedBack.push_back(std::move(material));
 			for (auto& reference : a_batch.references)
 				handedBack.push_back(std::move(reference));
+			for (auto& events : a_batch.events)
+				spentBatches.push_back(std::move(events));
 		});
 	}
 

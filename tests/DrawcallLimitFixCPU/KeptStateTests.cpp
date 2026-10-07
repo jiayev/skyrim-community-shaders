@@ -198,6 +198,10 @@ namespace
         assert(slots.DrainUnreferenced(release) == 1);
         assert(freed == std::vector<std::uint32_t>{material});
         assert(slots.DrainUnreferenced(release) == 0);
+        // A freed slot retires first (a publication may still name it): reused once its owner recycles it.
+        auto recycle = [&] { slots.TakeRetiring([&](auto a_slot, auto a_generation) { slots.Recycle(a_slot, a_generation); }); };
+        assert(slots.Retiring() == 1);
+        recycle();
 
         const auto reused = slots.Allocate().slot;
         assert(reused == material && slots.Generation(reused) != generation);
@@ -213,7 +217,9 @@ namespace
         // A stale allocation event must not free a referenced reused slot.
         const auto abandoned = slots.Allocate().slot;
         slots.Free(abandoned);
+        recycle();
         const auto successor = slots.Allocate().slot;
+        assert(successor == abandoned);
         slots.AddRef(successor, slots.Generation(successor));
         assert(slots.DrainUnreferenced(release) == 0);
     }

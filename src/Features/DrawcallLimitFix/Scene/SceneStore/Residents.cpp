@@ -264,6 +264,10 @@ namespace DCLF
 			row.generation = ++tables.treeGenerations;
 			tables.trees[t] = row;
 			tables.treeNode[t] = node;
+			// Owned while listed (step 6e E3: a published version that names it keeps it, through the retirement chain).
+			if (treeOwners.size() <= t)
+				treeOwners.resize(std::size_t(t) + 1);
+			treeOwners[t].reset(const_cast<RE::NiAVObject*>(static_cast<const RE::NiAVObject*>(node)));
 			it->second = t;
 			++tables.treesVersion;
 		}
@@ -309,6 +313,10 @@ namespace DCLF
 				row.bits |= kFadeRootOwned | (owned->second ? kFadeRootStoodIn : 0u);
 			tables.fadeRoots[r] = row;
 			tables.fadeRootNode[r] = node;
+			// Owned while listed (step 6e E3: a published version that names it keeps it, through the retirement chain).
+			if (fadeRootOwners.size() <= r)
+				fadeRootOwners.resize(std::size_t(r) + 1);
+			fadeRootOwners[r].reset(const_cast<RE::NiAVObject*>(node));
 			if (const auto* lodSwitch = FadeState::TreeLodSwitch(*node))
 				tables.fadeRootSwitch.insert_or_assign(lodSwitch, r);
 			it->second = r;
@@ -331,6 +339,8 @@ namespace DCLF
 			std::erase_if(tables.fadeRootSwitch, [&](const auto& a_entry) { return a_entry.second == current; });
 			tables.fadeRootIndex.erase(node);
 			tables.fadeRootNode[current] = nullptr;
+			if (current < fadeRootOwners.size())
+				HandBack(std::move(fadeRootOwners[current]));
 			tables.fadeRoots[current] = FadeRootStatic{};
 			tables.Retire(Tables::kRetiredFadeRoot, current);
 			tables.NoteFadeRoot(current);
@@ -420,6 +430,8 @@ namespace DCLF
 		if (current < tables.treeRefs.size() && --tables.treeRefs[current] == 0) {
 			tables.treeIndex.erase(tables.treeNode[current]);
 			tables.treeNode[current] = nullptr;
+			if (current < treeOwners.size())
+				HandBack(std::move(treeOwners[current]));
 			tables.Retire(Tables::kRetiredTree, current);
 		}
 		if (current != kNoTree)
