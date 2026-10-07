@@ -18,6 +18,7 @@
 #include "Features/DrawcallLimitFix/Common/KeptState.h"
 #include "Features/DrawcallLimitFix/Published/SceneIdentity.h"
 #include "Features/DrawcallLimitFix/Common/SlotTable.h"
+#include "Features/DrawcallLimitFix/Common/Retirement.h"
 #include "LightingDescriptors.h"
 #include "LocalShadows.h"
 #include "ConstantEvaluator.h"
@@ -358,7 +359,7 @@ namespace DCLF
 			{
 				if (a_slot < extraOffset.size() && extraOffset[a_slot] != kNoExtraRows) {
 					NoteExtrasBlock(extraOffset[a_slot]);
-					extraFree.push_back(extraOffset[a_slot]);
+					Retire(kRetiredExtras, extraOffset[a_slot]);
 					extraOffset[a_slot] = kNoExtraRows;
 				}
 			}
@@ -616,6 +617,46 @@ namespace DCLF
 			bool IsLayer(std::uint32_t a_slot) const { return a_slot < layerBase.size() && layerBase[a_slot] != kNoObjectSlot; }
 			std::vector<std::uint32_t> objectFree;
 			std::uint32_t liveObjects = 0;
+			/**
+			 * @brief What was freed since the last publication, not on its free list yet (step 6e E3; BasicRenderer's rule: nothing
+			 * is logically freed while a published version that may name it lives). PublishTables moves it into the retirement chain
+			 * (SceneStore::retirement), which gives it back once every publication up to then is gone (SceneStore::RecycleRetired).
+			 * The SlotTables keep their own (SlotTable::TakeRetiring).
+			 */
+			enum RetiredKind : std::uint8_t
+			{
+				kRetiredObject,
+				kRetiredTree,
+				kRetiredFadeRoot,
+				kRetiredExtras,     // slot: the block's row offset
+				kRetiredBones,      // slot: the block's offset, extra: its rows
+				kRetiredFaceStream,
+				kRetiredMaterialLookup,  // a material slot's lookups to drop (retiredMaterialSlots)
+				kRetiredPipelineLookup,  // likewise a pipeline slot's (retiredPipelineSlots)
+				kRetiredGeometrySlot,    // a SlotTable's slot; extra: its generation when freed
+				kRetiredMaterialSlot,
+				kRetiredPipelineSlot,
+			};
+			struct RetiredSlot
+			{
+				RetiredKind kind = kRetiredObject;
+				std::uint32_t slot = 0, extra = 0;
+				std::uint32_t epoch = 0;  // slotEpoch when retired: a clear since drops it
+			};
+			std::vector<RetiredSlot> retiring;
+			std::uint32_t objectsRetiring = 0;  // object slots among them, and in the chain (neither live nor free)
+			std::uint32_t slotEpoch = 0;        // moves on when every slot is cleared
+			void Retire(RetiredKind a_kind, std::uint32_t a_slot, std::uint32_t a_extra = 0) { retiring.push_back({ a_kind, a_slot, a_extra, slotEpoch }); }
+			/** @brief An object slot freed: retiring until no publication names it (ResetObject first). */
+			void RetireObject(std::uint32_t a_slot)
+			{
+				Retire(kRetiredObject, a_slot);
+				++objectsRetiring;
+			}
+			/** @brief The live objects: neither free nor retiring. */
+			std::uint32_t CountLive() const { return static_cast<std::uint32_t>(objects.size() - objectFree.size() - objectsRetiring); }
+			// What the publication made from these tables holds of the retirement chain (published snapshots only).
+			std::shared_ptr<const void> retirementHold;
 			/** @brief Grows every per-object array to a_count, the new slots free. */
 			void GrowObjects(std::size_t a_count);
 			/** @brief Returns a slot to the free state (not to the free list). */
@@ -991,7 +1032,24 @@ namespace DCLF
 		 * @brief Render thread, BeginSceneFrame (the scene work joined): the newest published tables snapshot accepted for the frame
 		 * (dclf-async-publication.md, "Step 6"). Immutable while held. Null before the first publication.
 		 */
-		void AcceptTables();
+		/**
+		 * @brief Render thread, the frame's start, the scene work joined and the revision selected (step 6e E3): the newest publication
+		 * a_applicable(its commit frame) takes (IndirectDraws::SetApplicable), with the ones before it, becomes the installed one and
+		 * its tables the frame's; none: the installed one stands, tables and claims together. A change after the last publication is
+		 * published first (the coordinator is idle).
+		 */
+		void SelectPublication(const std::function<bool(std::uint32_t)>& a_applicable);
+		/** @brief Render thread, after SelectPublication and the coverage decision: the installed publication's claims made the frame's. */
+		void InstallClaims();
+		/** @brief Whether a publication is installed (none: the frame has no claims, WithdrawSet). */
+		bool HasInstalled() const { return installed != nullptr; }
+		/** @brief The installed publication's commit frame (IndirectDraws::NoteSetApplied). */
+		std::uint32_t InstalledCommitFrame() const { return installed ? installed->commitFrame : 0u; }
+		struct PublicationStats
+		{
+			std::uint64_t installed = 0, kept = 0, skipped = 0, pending = 0;
+		};
+		PublicationStats TakePublicationStats() { return std::exchange(publicationStats, PublicationStats{}); }
 		/**
 		 * @brief Render thread, the frame's start with the scene work joined (step 6c): what passes between the frame and the
 		 * coordinator, both ways. To the frame: the retired slots and imports, the texture changes, the switches applied, the sun
@@ -1009,8 +1067,6 @@ namespace DCLF
 		};
 		ConstantsPostStats TakeConstantsPostStats() { return std::exchange(constantsPostStats, ConstantsPostStats{}); }
 		std::pair<std::uint64_t, const char*> TakeFrameAccessViolations() { return { frameAccessViolations.exchange(0), frameAccessFirst.exchange(nullptr) }; }
-		/** @brief Render thread, the frame's start after the set's application: claims whose record the frame cannot draw, taken back. */
-		void RevokeClaims() { RevokeUndrawnClaims(); }
 		const std::shared_ptr<Tables>& AcceptedTables() const { return acceptedTables; }
 		struct TablesPublication
 		{
@@ -1028,6 +1084,13 @@ namespace DCLF
 			std::uint64_t treesKept = 0, fadeRootsKept = 0, parityFamiliesDiffer = 0;  // publications that kept the family (its stamp stood)
 			std::size_t pool = 0;
 		};
+		/** @brief Render thread, the scene work joined: the retirement chain's counts since the last call, and what waits in it now. */
+		std::string TakeRetirementReport()
+		{
+			const auto s = std::exchange(retirementStats, RetirementStats{});
+			return fmt::format("{} retired, {} recycled in {} batches, {} dropped by a clear; {} object slots retiring", s.retired, s.recycled, s.batches, s.dropped,
+				tables.objectsRetiring);
+		}
 		TablesPublication TakeTablesPublication() { return std::exchange(tablesPublication, TablesPublication{ .pool = tablesPool.size() }); }
 		/**
 		 * @brief Render thread, the depth commit (the scene task joined): its fade root rows hold a_held (Tables::fadeRootsJournal's
@@ -1305,7 +1368,7 @@ namespace DCLF
 		 * must then register the map's scene, and its registration withholds the members (PassCapture). 0: every occluder DCLF knows
 		 * is drawn by DCLF, and the engine's cull of the map can be skipped.
 		 */
-		std::uint32_t SetLacking(std::uint8_t a_phase) const { return a_phase == kSetOccluderSky ? setLackingCount[0] : a_phase == kSetOccluderPrecipitation ? setLackingCount[1] : 0u; }
+		std::uint32_t SetLacking(std::uint8_t a_phase) const { return a_phase == kSetOccluderSky ? frameLackingCount[0] : a_phase == kSetOccluderPrecipitation ? frameLackingCount[1] : 0u; }
 		/** @brief Whether a main-pass build can draw the object now: it has bindings and its pipeline is drawable. */
 		bool ObjectDrawable(std::int32_t a_object) const
 		{
@@ -2594,8 +2657,9 @@ namespace DCLF
 		template <class T>
 		void HandBack(RE::NiPointer<T>&& a_reference)
 		{
+			// Through the retirement chain: a published version of the tables may still name it (step 6e E3).
 			if (a_reference)
-				handedBack.emplace_back(std::move(a_reference));
+				retirement.Open().references.emplace_back(std::move(a_reference));
 		}
 		template <class T>
 		void HandBack(std::vector<RE::NiPointer<T>>& a_references)
@@ -2695,7 +2759,36 @@ namespace DCLF
 		// Parallel to objects: the geometry the last commit that decided a slot decided for (what a whole application after a
 		// withdrawal applies its setPhasesNext to); and whether the claims are withdrawn (WithdrawSet) until the next ApplySet.
 		std::vector<const RE::BSGeometry*> setGeometryNext;
-		bool setWithdrawn = false;
+		bool setWithdrawn = false;  // the frame's claims (WithdrawSet), until the next installation
+		/**
+		 * @brief A publication of the scene (step 6e E3): the tables the coordinator published with its set applied, the claims (the
+		 * set's snapshot less what the revocation took back), the main claims' changes against the publication before it, the lacking
+		 * counts, and the commit it applies. Made by PublishScene, installed whole by the frame's start (SelectPublication).
+		 */
+		struct ScenePublication
+		{
+			std::uint64_t sequence = 0;
+			std::uint32_t commitFrame = 0;
+			std::shared_ptr<Tables> tables;
+			std::shared_ptr<const SetSnapshot> claims;
+			std::vector<const RE::BSGeometry*> joined, left;
+			std::array<std::uint32_t, 2> lackingCount{};
+		};
+		/** @brief The coordinator: ApplySet, RevokeUndrawnClaims, PublishTables, and the publication queued. */
+		void PublishScene();
+		std::deque<std::shared_ptr<ScenePublication>> publications;  // made, not installed (oldest first)
+		std::shared_ptr<ScenePublication> installed;                  // the frame's
+		std::uint64_t publicationSequence = 0;
+		std::uint32_t publicationCommitFrame = 0;  // the commit the next publication applies
+		std::shared_ptr<const SetSnapshot> publicationClaims;
+		std::vector<const RE::BSGeometry*> publicationJoined, publicationLeft;
+		// The frame's: the installed publications' claim changes not told to PrimaryCull yet, whether one is waiting, the claims it was
+		// told of, and the lacking counts.
+		std::vector<std::pair<std::vector<const RE::BSGeometry*>, std::vector<const RE::BSGeometry*>>> installNotes;
+		bool installPending = false;
+		std::shared_ptr<const SetSnapshot> notedClaims;
+		std::array<std::uint32_t, 2> frameLackingCount{};
+		PublicationStats publicationStats;
 		std::vector<std::uint32_t> setApplyMark;  // parallel to objects: its index in setApply plus one, 0 when not in it
 		std::uint32_t setCommitFrame = 0;
 		// The claims as applied (the frame's), kept apart from Tables::setPhases, which a freed slot clears: what RevokeUndrawnClaims
@@ -2745,6 +2838,30 @@ namespace DCLF
 		ankerl::unordered_dense::set<std::pair<const RE::BSShaderMaterial*, std::uint32_t>> materialRequested;
 		ankerl::unordered_dense::map<std::pair<const RE::BSShaderMaterial*, std::uint32_t>, MaterialServed> materialsServed;
 		std::vector<MaterialReference> materialsHandedBack;  // released at Present (ReleaseHandedBack)
+		/**
+		 * @brief What the coordinator let go of that a published version of the tables may still name (step 6e E3): the slots
+		 * (Tables::retiring, the SlotTables'), the geometry slots' buffer owners, the material slots' engine references and every
+		 * engine reference handed back. Each publication holds the chain's node opened with it (Tables::retirementHold); a batch comes
+		 * back once no publication up to it lives, and RecycleRetired puts its slots on their free lists and its references where
+		 * they were released before (retiredImports, materialsHandedBack, handedBack).
+		 */
+		struct RetiredBatch
+		{
+			std::vector<Tables::RetiredSlot> slots;
+			std::vector<std::shared_ptr<const void>> imports;
+			std::vector<MaterialReference> materials;
+			std::vector<RE::NiPointer<RE::NiRefObject>> references;
+			bool Empty() const { return slots.empty() && imports.empty() && materials.empty() && references.empty(); }
+		};
+		RetirementChain<RetiredBatch> retirement;
+		struct RetirementStats
+		{
+			std::uint64_t retired = 0, recycled = 0, dropped = 0, batches = 0;
+		} retirementStats;
+		/** @brief The coordinator: the tables' retiring slots into the chain's open node (before a publication). */
+		void RetireIntoChain();
+		/** @brief The coordinator: the batches no publication names any more, back on the free lists. */
+		void RecycleRetired();
 		std::vector<std::uint32_t> bindRetry;                // joins that waited for a material, bound again next phase
 
 		// The scene task (KickSceneTask): its job, and what the work holds for the render thread while it runs.

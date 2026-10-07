@@ -292,7 +292,7 @@ namespace DCLF
 		}
 		if (!denseIndex.empty())
 			note("an object with no slot", denseIndex.begin()->first.first);
-		if (liveSeen != slots.liveObjects || slots.liveObjects + slots.objectFree.size() != slots.objects.size()) {
+		if (liveSeen != slots.liveObjects || slots.liveObjects + slots.objectFree.size() + slots.objectsRetiring != slots.objects.size()) {
 			++walkParity.differ;
 			note("the live count", nullptr);
 		}

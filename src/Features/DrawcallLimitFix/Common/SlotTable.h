@@ -15,6 +15,9 @@ namespace DCLF
 	 * in which its last reference went (DrainUnreferenced). A slot can also be freed while referenced (its record no
 	 * longer describes anything); its generation then moves on, and every count taken against the old generation lapses
 	 * instead of landing on the slot's next use.
+	 *
+	 * A freed slot is retiring, not free (step 6e E3): a published version of the tables may still name it. The owner takes the
+	 * retiring slots (TakeRetiring) into its retirement chain and gives each back (Recycle) once no publication that names it lives.
 	 */
 	class SlotTable
 	{
@@ -56,8 +59,23 @@ namespace DCLF
 			refs[a_slot] = 0;
 			++generation[a_slot];
 			--aliveCount;
-			freeList.push_back(a_slot);
+			retiring.push_back({ a_slot, generation[a_slot] });
 		}
+		/** @brief The slots freed since the last call, with their generations then (for Recycle). */
+		template <class F>
+		void TakeRetiring(F&& a_take)
+		{
+			for (const auto& entry : retiring)
+				a_take(entry.slot, entry.generation);
+			retiring.clear();
+		}
+		/** @brief A retired slot back on the free list: no publication names it any more (unless it was reused or cleared since). */
+		void Recycle(std::uint32_t a_slot, std::uint32_t a_generation)
+		{
+			if (a_slot < alive.size() && !alive[a_slot] && generation[a_slot] == a_generation)
+				freeList.push_back(a_slot);
+		}
+		std::size_t Retiring() const { return retiring.size(); }
 		bool Alive(std::size_t a_slot) const { return a_slot < alive.size() && alive[a_slot]; }
 		std::uint32_t Generation(std::size_t a_slot) const { return a_slot < generation.size() ? generation[a_slot] : 0; }
 		/** @brief A reference to the slot as of a_generation (none when the slot has moved on since). */
@@ -123,6 +141,7 @@ namespace DCLF
 		};
 		std::vector<std::uint8_t> alive;
 		std::vector<std::uint32_t> refs, generation, freeList;
+		std::vector<Idle> retiring;  // freed, not on the free list yet (TakeRetiring)
 		std::deque<Idle> idle;  // last-reference events, in order
 		std::size_t aliveCount = 0, referencedCount = 0;
 	};

@@ -282,27 +282,23 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// What passes between the frame and the coordinator (step 6c), with the scene work joined: then the tables the last scene work
 	// published, for the frame (a pointer swap; every frame reader reads them).
 	store.HandOverAtFrameStart();
-	store.AcceptTables();
+	// The newest complete scene revision (R3c), then the newest scene publication it covers - the tables with the set applied and
+	// its claims, made whole by the coordinator (step 6e E3: made at or after the commit it applies); until one is, the installed
+	// one stands, tables and claims together. A frame the selected revision does not cover - none selected yet, or its recordings
+	// are of the graph before the build point built - has no claims: the engine draws everything, and the next covered frame
+	// installs the whole set again.
+	auto& draws = DCLF::IndirectDraws::Get();
+	draws.SelectRevision();
+	store.SelectPublication([&draws](std::uint32_t a_commitFrame) { return draws.SetApplicable(a_commitFrame); });
 	store.SyncFrameTables();
 	RefreshFrameLookups();
 	// A write-back job no join reached, before anything changes the tables it reads.
 	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
-	// The newest complete scene revision (R3c), then the last commit's set as the frame's claims once that revision was made at or
-	// after it; until then the claims applied last stand (the frame draws within the revision's shapes). A frame the selected revision
-	// does not cover - none selected yet, or its recordings are of the graph before the build point built - has no claims: the
-	// engine draws everything, and the next covered frame applies the whole set again.
-	auto& draws = DCLF::IndirectDraws::Get();
-	draws.SelectRevision();
-	if (!draws.DecideCoverage()) {
+	if (!draws.DecideCoverage() || !store.HasInstalled()) {
 		store.WithdrawSet();
 	} else {
-		if (const auto commitFrame = store.SetCommitFrame(); draws.SetApplicable(commitFrame)) {
-			store.ApplySet();
-			draws.NoteSetApplied(commitFrame);
-		}
-		// Claims the accepted tables cannot draw (a binding the commit's accumulate phase dropped, a structural change since the
-		// selected revision's join), taken back before the engine registers anything (step 6c).
-		store.RevokeClaims();
+		store.InstallClaims();
+		draws.NoteSetApplied(store.InstalledCommitFrame());
 	}
 	// The frame's scene streams (step 6e E1): the object records, extras rows and geometry slots of the frame's tables, brought up to
 	// date once on the worker, ahead of every build of the frame, now that nothing writes those tables any more.

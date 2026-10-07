@@ -199,7 +199,7 @@ namespace DCLF
 		auto& import = tables.geometryImports[a_slot];
 		for (auto* owner : { &import.vertexOwner, &import.indexOwner })
 			if (*owner)
-				retiredImports.push_back(std::move(*owner));
+				retirement.Open().imports.push_back(std::move(*owner));
 		import = {};
 		tables.geometryLastUsed[a_slot] = Tables::kSlotFree;
 		// The log names every write of the geometry columns (the published tables replay them by it, step 6d).
@@ -217,11 +217,11 @@ namespace DCLF
 		const auto key = tables.materialSlotKey[a_slot];
 		materialIndex.erase(key);
 		UnlistMaterialDependent(key.first, a_slot);
-		// Released at Present (the last reference deletes the engine's material).
-		materialsHandedBack.push_back(std::move(materialOwners[a_slot]));
+		// Released at Present (the last reference deletes the engine's material), once no publication names the slot.
+		retirement.Open().materials.push_back(std::move(materialOwners[a_slot]));
 		tables.materialSlotKey[a_slot] = { nullptr, 0u };
 		tables.UnmarkMaterial(a_slot);
-		tables.retiredMaterialSlots.push_back(a_slot);
+		tables.Retire(Tables::kRetiredMaterialLookup, a_slot);
 	}
 
 	void SceneStore::UpdateSlotReferences()
@@ -292,7 +292,7 @@ namespace DCLF
 			pipelineIndex.erase(tables.pipelines[a_slot]);
 			tables.geometryTemplate[a_slot] = nullptr;
 			tables.UnmarkPipeline(a_slot);
-			tables.retiredPipelineSlots.push_back(a_slot);
+			tables.Retire(Tables::kRetiredPipelineLookup, a_slot);
 		});
 		const bool slotParity = SwitchEnabled(Switch::PersistentParity);
 		freed += tables.materialSlots.DrainUnreferenced([&](std::uint32_t a_slot) {
@@ -394,7 +394,7 @@ namespace DCLF
 			++residentStats.released;
 		}
 		tables.ResetObject(slot);
-		tables.objectFree.push_back(slot);
+		tables.RetireObject(slot);
 		if (tables.liveObjects)
 			--tables.liveObjects;
 	}
@@ -415,7 +415,7 @@ namespace DCLF
 			++residentStats.released;
 		}
 		tables.ResetObject(slot);
-		tables.objectFree.push_back(slot);
+		tables.RetireObject(slot);
 		if (tables.liveObjects)
 			--tables.liveObjects;
 	}
@@ -458,8 +458,8 @@ namespace DCLF
 					it->second.layerSlot = kNoObjectSlot;
 			}
 			tables.ResetObject(slot);
-			tables.objectFree.push_back(slot);
+			tables.RetireObject(slot);
 		}
-		tables.liveObjects = static_cast<std::uint32_t>(tables.objects.size() - tables.objectFree.size());
+		tables.liveObjects = tables.CountLive();
 	}
 }

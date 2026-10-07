@@ -1879,7 +1879,7 @@ namespace DCLF
 					Schedule(it->first, it->second);
 				} else {
 					tables.ResetObject(s);
-					tables.objectFree.push_back(s);
+					tables.RetireObject(s);
 					shadowSetsDirty = true;
 					shadowDirtySlots.push_back(s);
 				}
@@ -1912,7 +1912,7 @@ namespace DCLF
 		DCLF_SCENE_PART(ShadowSets, "CS.DCLF.Scene.ShadowSets");
 		// The shadow dependency index reads changed object slots from the same journal as the other kept tables.
 		std::sort(tables.actorObjects.begin(), tables.actorObjects.end());
-		tables.liveObjects = static_cast<std::uint32_t>(tables.objects.size() - tables.objectFree.size());
+		tables.liveObjects = tables.CountLive();
 		if (!shadowSetsDirty) {
 			stats.shadowCasters = keptShadowCasters;
 			stats.shadowRejects = keptShadowRejects;
