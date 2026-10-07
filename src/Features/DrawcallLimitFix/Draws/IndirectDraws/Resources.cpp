@@ -925,6 +925,7 @@ namespace DCLF
 		// table is BuildDraws' (raw words), and the face positions are a vertex buffer.
 		buffers->objects = MakeVersioned(StructuredBuffer(buffers->objectCapacity, sizeof(BindlessObject), "cs.dclf.objects", buffers->objectsIndex));
 		buffers->bones = MakeVersioned(StructuredBuffer(buffers->boneRows, 16, "cs.dclf.bones", buffers->bonesIndex));
+		buffers->placements = MakeVersioned(StructuredBuffer(buffers->objectCapacity, sizeof(BindlessPlacement), "cs.dclf.placements", buffers->placementsIndex));
 		buffers->geometries = MakeVersioned(CreateWords(std::uint64_t(buffers->geometryRows) * sizeof(GeometryDraw) / 4, false, "cs.dclf.geometries"));
 		buffers->facePositions = MakeVersioned(DeviceBuffer(std::uint64_t(buffers->faceVertices) * 16, "cs.dclf.face-positions"));
 		buffers->facePositionsAddress = AddressOf(a_device, *buffers->facePositions->Get());
@@ -1139,11 +1140,17 @@ namespace DCLF
 			if (a_adopted)
 				consequences.push_back(std::move(a_adopted));
 		};
-		grow("object records", next.objectCapacity, a_tables.objects.size(), sizeof(BindlessObject),
-			[&](std::uint32_t a_rows, auto& a_parts) { a_parts.push_back({ s.objects, a_rows }); },
+		// The records and the placement rows, by object slot.
+		grow("object records", next.objectCapacity, a_tables.objects.size(), sizeof(BindlessObject) + sizeof(BindlessPlacement),
+			[&](std::uint32_t a_rows, auto& a_parts) {
+				a_parts.push_back({ s.objects, a_rows });
+				a_parts.push_back({ s.placements, a_rows });
+			},
 			[&s] {
 				s.objectsIndex = s.objects->Get()->GetSRVInfo(0).slot.index;
+				s.placementsIndex = s.placements->Get()->GetSRVInfo(0).slot.index;
 				s.held.objects = 0;
+				s.held.placements = 0;
 			});
 		// The slots, then one row per face stream (AppendFaceStreams).
 		grow("geometry rows", next.geometryRows, a_tables.geometries.size() + a_tables.faceStreams.size(), sizeof(GeometryDraw),

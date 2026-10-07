@@ -160,7 +160,8 @@ namespace DCLF
 		// CS_DCLF_BINDLESS_PARITY: the per-object record against the packed constant group, variable by
 		// variable. Both are produced from tables.objects and tables.shading by the same rules, so the
 		// comparison is exact rather than tolerant - a tolerance here would only hide a layout mistake.
-		void CheckBindlessRecord(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, const BindlessObject& a_record, const RE::NiPoint3& a_eye,
+		void CheckBindlessRecord(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, const BindlessObject& a_record,
+			const BindlessPlacement& a_placement, const RE::NiPoint3& a_eye,
 			const RE::NiPoint3& a_previousEye, const GeometryPatchOffsets& a_offsets, std::span<const std::byte> a_vs, std::span<const std::byte> a_ps,
 			IndirectDraws::Stats& a_stats);
 
@@ -305,12 +306,12 @@ namespace DCLF
 		};
 
 		/**
-		 * @brief The versions of the kept tables (ObjectRecordStore, BonesStore, GeometryStore) a set of buffers holds, written
+		 * @brief The versions of the kept tables (ObjectRecordStore, BonesStore, GeometryStore, PlacementStore) a set of buffers holds, written
 		 * by the commit that uploads them; 0 for new buffers, which no version is.
 		 */
 		struct TablesHeld
 		{
-			std::uint64_t objects = 0, bones = 0, geometries = 0;
+			std::uint64_t objects = 0, bones = 0, geometries = 0, placements = 0;
 			bool operator==(const TablesHeld&) const = default;
 		};
 
@@ -524,12 +525,14 @@ namespace DCLF
 		struct SceneBuffers : SceneSizing
 		{
 			Versioned objects, bones, geometries, facePositions;
+			// The objects' placement rows (BindlessPlacement), by object slot like the records, which grow with them.
+			Versioned placements;
 			// The index pool every plain indexed draw binds (IndexPool): the shadow views' and the Z-prepass's, made by whichever
 			// sets up first (EnsureIndexPool) and kept current by every commit that draws from it (UpdateIndexPool).
 			std::shared_ptr<IndexPool> pool;
 			// Their SRVs' descriptor heap indices, and the positions' address: a growth gives the buffer new ones (the old ones
 			// are retired once the GPU is done with them), so every build takes them from here, after ReserveSceneTables.
-			std::uint32_t objectsIndex = 0, bonesIndex = 0;
+			std::uint32_t objectsIndex = 0, bonesIndex = 0, placementsIndex = 0;
 			std::uint64_t facePositionsAddress = 0;
 			// What each holds (SceneSizing: GpuLayouts.h, kInitialObjects), grown by ReserveSceneTables; `generation` counts the
 			// growths, so a batch staged before one is not submitted after it.
@@ -1727,7 +1730,7 @@ namespace DCLF
 			// main pass's pipeline rows.
 			std::uint64_t constants = 0, records = 0, pipelineRows = 0, frameConstants = 0;
 			std::uint64_t facePositions = 0;  // the face positions buffer (SceneBuffers::facePositions)
-			std::uint32_t objectsIndex = 0, bonesIndex = 0;
+			std::uint32_t objectsIndex = 0, bonesIndex = 0, placementsIndex = 0;
 			std::uint32_t treeWindIndex = 0;  // the wind buffer the frame's draws read (SceneBuffers::TreeWindReadIndex)
 			std::uint32_t recordCapacity = 0;  // the material rows' table's rows (a row past it waits for the table to grow)
 			std::uint32_t pipelineCapacity = 0;  // the main pipeline rows' likewise
@@ -1759,6 +1762,21 @@ namespace DCLF
 			// updates with any other cause, by cause.
 			std::uint64_t streamOnly = 0, structural = 0;
 			std::array<std::uint64_t, kChangeCauseCount> byCause{};
+			ParityCounter parity;
+		};
+
+		/**
+		 * @brief The placement rows (BindlessPlacement) one placements buffer holds, kept like the records (ObjectRecordStore): a row is
+		 * written again only when the change log names a placement (kPlacementRowCauses), and the buffer is sent what changed since
+		 * the version it holds. A move rewrites its row and nothing else; the records are the objects' structure.
+		 */
+		struct PlacementStore
+		{
+			LogCursor cursor;
+			MarkedList changedObjects;
+			KeptArray<BindlessPlacement> rows;
+			// Since the last report.
+			std::uint64_t updates = 0, rewritten = 0, resyncs = 0;
 			ParityCounter parity;
 		};
 
@@ -1963,9 +1981,11 @@ namespace DCLF
 			return SwitchEnabled(Switch::PersistentParity);
 		}
 
-		// What a record is built from (BuildObjectRecord): the placement, the alpha test (bindings), the shading, the lights,
+		// What a record is built from (BuildObjectRecord): the alpha test and the LOD fades (bindings), the shading, the lights,
 		// the tree animation, the palette and the extras.
-		constexpr std::uint32_t kObjectRecordCauses = kChangePlacement | kChangeBindings | kChangeShading | kChangeLights | kChangeTree | kChangeSkin | kChangeExtras;
+		constexpr std::uint32_t kObjectRecordCauses = kChangeBindings | kChangeShading | kChangeLights | kChangeTree | kChangeSkin | kChangeExtras;
+		// What a placement row is built from (BuildPlacementRow): the placement alone.
+		constexpr std::uint32_t kPlacementRowCauses = kChangePlacement;
 
 		/**
 		 * @brief The build's object records: brought up to date from the change log in the store (a_uploaded is the version
@@ -1973,6 +1993,12 @@ namespace DCLF
 		 */
 		void UpdateObjectRecords(ObjectRecordStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation,
 			std::uint32_t a_frame, std::uint32_t a_boneRegion, ObjectRecordsOut& a_out);
+
+		/** @brief A build's view of the placement rows: the store's, or a full set of its own without one (version 0). */
+		using PlacementRowsOut = KeptView<BindlessPlacement>;
+		/** @brief The placement rows, brought up to date from the change log like the records (UpdateObjectRecords). */
+		void UpdatePlacements(PlacementStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation,
+			std::uint32_t a_frame, PlacementRowsOut& a_out);
 
 		/**
 		 * @brief A main-pass row's bytes (DrawPipelines.h: kMaterialRowBytes, kPipelineRowBytes). Its header's addresses hold the
@@ -2548,7 +2574,7 @@ namespace DCLF
 		/**
 		 * @brief A depth-segment input's fade row: its fade root's slot (FadeStateCS's state, which an owned root's members
 		 * follow), and for the distance test of a root DCLF does not own (kObjectFadeTest), its fade-out distance. The node's
-		 * centre is its object record's (BindlessObject::lodFadeNode), which a move rewrites; the slot and the distance only
+		 * centre is its placement row's (BindlessPlacement::lodFadeNode), which a move rewrites; the slot and the distance only
 		 * change with its membership and bindings.
 		 */
 		inline void SetFadeRow(DrawInput& a_input, const SceneStore::Tables& a_tables, std::size_t a_object)
@@ -3905,20 +3931,22 @@ namespace DCLF
 		ObjectRecordStore objectStore;
 		BonesStore boneStore;
 		GeometryStore geometryStore;
+		PlacementStore placementStore;
 		ObjectRecordStore* SceneObjects() { return &objectStore; }
+		PlacementStore* ScenePlacements() { return &placementStore; }
 		BonesStore* SceneBones() { return &boneStore; }
 		/**
-		 * @brief The per-frame streams (drawcall-limit-fix.md, "The streams leave the builds"): the object records and the bone
-		 * rows the tables hold now, updated from the change log and uploaded as the changes since what the scene buffers hold.
+		 * @brief The per-frame streams (drawcall-limit-fix.md, "The streams leave the builds"): the object records, the placement
+		 * rows and the bone rows the tables hold now, updated from the change log and uploaded as the changes since what the scene buffers hold.
 		 * Render thread, at every epoch's commit, before its passes: a placement, a palette or a shading value reaches the
 		 * epoch that draws it, whichever build it ran with, and no build waits for them. Returns the rows it sent.
 		 */
 		struct SceneStreams
 		{
-			std::size_t objects = 0, boneRows = 0, objectBytes = 0, boneRowsSent = 0;
+			std::size_t objects = 0, boneRows = 0, objectBytes = 0, boneRowsSent = 0, placementBytes = 0;
 		};
 		/**
-		 * @brief The streams' job (KickSceneStreams): the object records and bone rows the tables hold, updated and staged on the
+		 * @brief The streams' job (KickSceneStreams): the object records, placement rows and bone rows the tables hold, updated and staged on the
 		 * worker - with the copies recorded there too - while nothing writes the tables (after the placements' join, while the
 		 * engine draws the shadow maps; after RefreshFrameConstants). The next CommitSceneStreams submits its batch when the buffers
 		 * still hold what it started from, takes its versions as held, and sends only what changed since. Otherwise the batch is
@@ -3933,7 +3961,7 @@ namespace DCLF
 			std::uint64_t sceneGeneration = 0;
 			// The job's result: its batch and the versions it brings the buffers to (0: that stream unchanged).
 			std::shared_ptr<org::runtime::StagedUploadBatch> batch;
-			std::uint64_t objects = 0, bones = 0;
+			std::uint64_t objects = 0, bones = 0, placements = 0;
 			bool staged = false;
 			std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>> pool;
 			// Since the last report: kicks, batches submitted, batches dropped.

@@ -146,6 +146,13 @@ namespace DCLF
 			store->updates = store->rewritten = store->resyncs = store->collisions = 0;
 			store->parity.Reset();
 		}
+		if (auto* store = &impl->placementStore; store->updates) {
+			text += fmt::format("[DCLF] placement rows: {} updates, {:.1f} rows rewritten an update, {} rows held, {} resyncs; parity {} checked, {} differ{}\n",
+				store->updates, static_cast<double>(store->rewritten) / store->updates, store->rows.Size(), store->resyncs, store->parity.checks, store->parity.mismatches,
+				store->parity.Verdict(true));
+			store->updates = store->rewritten = store->resyncs = 0;
+			store->parity.Reset();
+		}
 		if (auto& k = impl->shadowKept; k.builds) {
 			std::size_t entries = 0;
 			for (const auto& mode : k.modes)

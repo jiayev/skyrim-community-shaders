@@ -56,9 +56,9 @@ cbuffer BuildDrawsConstants : register(b0)
 	uint PipelineRowStride;
 	uint PipelineRowsAddressLo;
 	uint PipelineRowsAddressHi;
-	// StructuredBuffer of 256-byte object records (DCLFObjects.hlsli, BindlessObject): an input's bound, sun entry and fade
-	// node are its record's (a move rewrites the record, never the inputs).
-	uint ObjectsIndex;
+	// StructuredBuffer of the 144-byte placement rows (DCLFObjects.hlsli, BindlessPlacement): an input's bound, sun entry and
+	// fade node are its object's row (a move rewrites the row, never the inputs).
+	uint PlacementsIndex;
 	// The depth segment's first phase and the shadow views: StructuredBuffer<FadeRootStatic> and StructuredBuffer<FadeNodeState>
 	// (FadeStateCS.hlsl; Records.h). The first phase drops an input under an owned root (kFadeRootOwned) while its root's
 	// OnVisible stops; a shadow view drops a caster under a stood-in root (kFadeRootStoodIn) while it fades. 0 elsewhere.
@@ -200,19 +200,19 @@ static uint BucketTableOffset;
 // The depth segment's phases: each pipeline slot's bucket, in bytes into the latch block (BuildDrawsLatch::bucketMapOffset).
 static uint BucketMapOffset;
 
-// The object record's rows the culling reads (LightingConstants.h, BindlessObject): the fade node's centre, the world bound,
-// the sun entry's sphere.
-struct ObjectRecordRows
+// The placement row's rows the culling reads (LightingConstants.h, BindlessPlacement): the world bound, the sun entry's sphere,
+// the fade node's centre.
+struct PlacementRows
 {
-	float4 rows[16];
+	float4 rows[9];
 };
-static const uint kObjectFadeNodeRow = 13;
-static const uint kObjectBoundRow = 14;
-static const uint kObjectSunEntryRow = 15;
+static const uint kObjectBoundRow = 6;
+static const uint kObjectSunEntryRow = 7;
+static const uint kObjectFadeNodeRow = 8;
 float4 ObjectRow(uint a_object, uint a_row)
 {
-	StructuredBuffer<ObjectRecordRows> objects = ResourceDescriptorHeap[ObjectsIndex];
-	return objects[a_object].rows[a_row];
+	StructuredBuffer<PlacementRows> placements = ResourceDescriptorHeap[PlacementsIndex];
+	return placements[a_object].rows[a_row];
 }
 
 void LoadLatch()

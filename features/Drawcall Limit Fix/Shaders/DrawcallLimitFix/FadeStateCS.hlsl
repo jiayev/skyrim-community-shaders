@@ -15,7 +15,7 @@ cbuffer FadeStateConstants : register(b0)
 	uint RootsIndex;    // StructuredBuffer<FadeRootStatic>
 	uint StatesIndex;   // RWStructuredBuffer<FadeNodeState>
 	uint FrameIndex;    // StructuredBuffer<FadeFrame>, one row
-	uint ObjectsIndex;  // StructuredBuffer of the object records (a root's centre: its member's fade node row)
+	uint PlacementsIndex;  // StructuredBuffer of the placement rows (a root's centre: its member's fade node row)
 	uint LatchIndex;    // ByteAddressBuffer: the depth segment's BuildDrawsLatch (its view-projection)
 	uint LatchOffset;
 	uint LogIndex;      // RWStructuredBuffer<FadeLogEntry> (CS_DCLF_FADE_PARITY)
@@ -114,9 +114,10 @@ struct FadeLogEntry
 	uint Root;
 };
 
-struct ObjectRecordRows
+// The placement rows (LightingConstants.h, BindlessPlacement).
+struct PlacementRows
 {
-	float4 Rows[16];
+	float4 Rows[9];
 };
 
 static const uint kFadeFlagFadedIn = 1u << 14;
@@ -135,8 +136,8 @@ static const uint kFadeRootOther = 3;
 static const uint kFadeRootBitsShift = 8;
 static const uint kFadeRootTreeLod = 1u << 16;
 static const uint kFadeRootTreeThresholds = 1u << 17;
-static const uint kObjectFadeNodeRow = 13;
-static const uint kObjectSunEntryRow = 15;
+static const uint kObjectSunEntryRow = 7;
+static const uint kObjectFadeNodeRow = 8;
 static const uint kNoObject = 0xFFFFFFFFu;
 static const uint kFadeRootStoodIn = 1u << 19;
 static const uint kFadeEventHeaderWords = 4;
@@ -567,11 +568,11 @@ void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
 		return;
 	}
 	const FadeNodeState before = state;
-	StructuredBuffer<ObjectRecordRows> objects = ResourceDescriptorHeap[ObjectsIndex];
-	const float3 centre = objects[root.Object].Rows[kObjectFadeNodeRow].xyz;
+	StructuredBuffer<PlacementRows> placements = ResourceDescriptorHeap[PlacementsIndex];
+	const float3 centre = placements[root.Object].Rows[kObjectFadeNodeRow].xyz;
 	// The bound's radius as the engine reads it now: the member's sun entry node is its reference root, which is the fade
-	// root (the record's row 15, kept by the placements; a negative or unbounded radius: none, the listed radius instead).
-	const float entryRadius = objects[root.Object].Rows[kObjectSunEntryRow].w;
+	// root (the placement row's sun entry, kept by the placements; a negative or unbounded radius: none, the listed radius instead).
+	const float entryRadius = placements[root.Object].Rows[kObjectSunEntryRow].w;
 	const float radius = entryRadius >= 0.0f && entryRadius < 1e30f ? entryRadius : root.Radius;
 	state.Verdict = 0;
 	// The animation job's update since the last cull (FUN_1402cff60 -> FUN_14147a160): an animated reference its cull did not

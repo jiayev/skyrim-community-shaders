@@ -144,6 +144,11 @@ namespace DCLF
 	 * vertex-stage buffer like the two above it. The frame record gives it: the buffer alternates by frame.
 	 */
 	inline constexpr std::uint32_t kTreeWindRegister = kTextureRegisters - 4;
+	/**
+	 * @brief t123: the objects' placement rows (DCLFPlacements, Common/DCLFObjects.hlsli; BindlessPlacement), read by both stages: what
+	 * a move changes, apart from the records (t127). The frame record gives it, like the records.
+	 */
+	inline constexpr std::uint32_t kPlacementBufferRegister = kTextureRegisters - 5;
 
 	/**
 	 * @brief Everything one indirect draw binds, in GPU memory: its address is the draw's only push data,

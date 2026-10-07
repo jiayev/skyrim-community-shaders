@@ -130,9 +130,9 @@ static float4 TreeParams;
 // view's own eye, the view's VS_PerFrame CameraPosAdjust - the engine's own Utility World is relative to
 // whichever camera is drawing (engine notes: shadow maps).
 static precise row_major float4x4 World = float4x4(
-	DCLFObjects[DCLFObjectIndex].World[0] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.x),
-	DCLFObjects[DCLFObjectIndex].World[1] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.y),
-	DCLFObjects[DCLFObjectIndex].World[2] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.z),
+	DCLFPlacements[DCLFObjectIndex].World[0] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.x),
+	DCLFPlacements[DCLFObjectIndex].World[1] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.y),
+	DCLFPlacements[DCLFObjectIndex].World[2] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.z),
 	float4(0, 0, 0, 1));
 static float4 TreeParams = DCLFTreeParamsOf(DCLFObjectIndex);
 #endif
@@ -351,9 +351,9 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 
 	// What the DCLF_BINDLESS build's statics hold, from this draw's object and material row.
 	World = float4x4(
-		DCLFObjects[DCLFObjectIndex].World[0] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.x),
-		DCLFObjects[DCLFObjectIndex].World[1] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.y),
-		DCLFObjects[DCLFObjectIndex].World[2] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.z),
+		DCLFPlacements[DCLFObjectIndex].World[0] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.x),
+		DCLFPlacements[DCLFObjectIndex].World[1] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.y),
+		DCLFPlacements[DCLFObjectIndex].World[2] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.z),
 		float4(0, 0, 0, 1));
 	TreeParams = DCLFTreeParamsOf(DCLFObjectIndex);
 	TexcoordOffset = asfloat(vk::RawBufferLoad<uint4>(materialRow));

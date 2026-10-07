@@ -383,6 +383,7 @@ namespace DCLF::Draws
 			bindings.materialRows = a_builder.ShaderResource(*resources->materialRows.buffer, noViews).Resource();
 			bindings.pipelineRows = a_builder.ShaderResource(*resources->pipelineRows.buffer, noViews).Resource();
 			bindings.objects = a_builder.ShaderResource(*resources->scene->objects, noViews).Resource();
+			a_builder.ShaderResource(*resources->scene->placements, noViews);
 			bindings.bones = a_builder.ShaderResource(*resources->scene->bones, noViews).Resource();
 			if (segment == RenderGraphRuntime::Segment::ZPrepass) {
 				// The plain draws (DCLF_PULLED): the vertex stage reads the sequences and the face positions through their addresses,
@@ -691,7 +692,7 @@ namespace DCLF::Draws
 
 	struct BuildDrawsBindings
 	{
-		org::DeclaredViewToken inputs, inputsDepth, geometries, objects, sequences, count, hzb, visibility, frustum;
+		org::DeclaredViewToken inputs, inputsDepth, geometries, placements, sequences, count, hzb, visibility, frustum;
 		org::DeclaredViewToken sortCounts, sortStaging, sortRanks;
 		org::DeclaredViewToken fadeRoots;
 		org::DeclaredViewToken bucketCounts, poolFirsts;  // the depth segment's buckets (Resources::zBucketCounts) and the pool's firsts
@@ -730,7 +731,7 @@ namespace DCLF::Draws
 			if (resources->inputsDepth)
 				bindings.inputsDepth = a_builder.ShaderResource(*resources->inputsDepth).View();
 			bindings.geometries = a_builder.ShaderResource(*resources->scene->geometries).View();
-			bindings.objects = a_builder.ShaderResource(*resources->scene->objects).View();
+			bindings.placements = a_builder.ShaderResource(*resources->scene->placements).View();
 			bindings.sequences = a_builder.UnorderedAccess(*resources->sequences).View();
 			bindings.count = a_builder.UnorderedAccess(resources->count).View();
 			bindings.visibility = a_builder.UnorderedAccess(*resources->visibility).View();
@@ -790,7 +791,7 @@ namespace DCLF::Draws
 			const bool depthInputs = (phase == 1 || phase == 2) && resources->inputsDepth;
 			constants.inputsIndex = CaptureViewIndex(a_preparation, depthInputs ? a_bindings.inputsDepth : a_bindings.inputs);
 			constants.geometriesIndex = CaptureViewIndex(a_preparation, a_bindings.geometries);
-			constants.objectsIndex = CaptureViewIndex(a_preparation, a_bindings.objects);
+			constants.placementsIndex = CaptureViewIndex(a_preparation, a_bindings.placements);
 			constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
 			constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
 			// The rows both segments' draws name (MainRows), at their tables' addresses as the epoch sized them.
@@ -1012,7 +1013,7 @@ namespace DCLF::Draws
 
 	struct FadeStateBindings
 	{
-		org::DeclaredViewToken roots, states, frame, objects, log, visibility, rootLists, animated, events, reported;
+		org::DeclaredViewToken roots, states, frame, placements, log, visibility, rootLists, animated, events, reported;
 		std::array<org::DeclaredViewToken, 2> published;
 	};
 
@@ -1047,7 +1048,7 @@ namespace DCLF::Draws
 			bindings.visibility = a_builder.ShaderResource(scene.fadeVisibility).View();
 			bindings.rootLists = a_builder.ShaderResource(*scene.fadeRootLists).View();
 			bindings.animated = a_builder.ShaderResource(*scene.fadeAnimated).View();
-			bindings.objects = a_builder.ShaderResource(*scene.objects).View();
+			bindings.placements = a_builder.ShaderResource(*scene.placements).View();
 			bindings.log = a_builder.UnorderedAccess(scene.fadeLog).View();
 			if (scene.fadeEvents) {
 				bindings.events = a_builder.UnorderedAccess(*scene.fadeEvents).View();
@@ -1081,7 +1082,7 @@ namespace DCLF::Draws
 			constants.statesIndex = CaptureViewIndex(a_preparation, a_bindings.states);
 			constants.frameIndex = CaptureViewIndex(a_preparation, a_bindings.frame);
 			constants.visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
-			constants.objectsIndex = CaptureViewIndex(a_preparation, a_bindings.objects);
+			constants.placementsIndex = CaptureViewIndex(a_preparation, a_bindings.placements);
 			constants.logIndex = CaptureViewIndex(a_preparation, a_bindings.log);
 			constants.rootListsIndex = CaptureViewIndex(a_preparation, a_bindings.rootLists);
 			constants.animatedIndex = CaptureViewIndex(a_preparation, a_bindings.animated);
@@ -1675,7 +1676,7 @@ namespace DCLF::Draws
 	{
 		std::array<org::DeclaredViewToken, kShadowModeCount> inputs;
 		std::vector<org::DeclaredViewToken> sequences, count, bucketCounts;  // per view slot
-		org::DeclaredViewToken geometries, objects, visibility, poolFirsts;
+		org::DeclaredViewToken geometries, placements, visibility, poolFirsts;
 		org::DeclaredViewToken fadeRoots;
 	};
 
@@ -1711,7 +1712,7 @@ namespace DCLF::Draws
 				bindings.bucketCounts.push_back(a_builder.UnorderedAccess(*resources->bucketCounts[s]).View());
 			}
 			bindings.geometries = a_builder.ShaderResource(*resources->scene->geometries).View();
-			bindings.objects = a_builder.ShaderResource(*resources->scene->objects).View();
+			bindings.placements = a_builder.ShaderResource(*resources->scene->placements).View();
 			bindings.visibility = a_builder.UnorderedAccess(*resources->visibility).View();
 			bindings.poolFirsts = a_builder.ShaderResource(*resources->pool->firsts).View();
 			// The fade roots' rows: a shadow view's casters under stood-in roots follow FadeStateCS's state, and an occlusion view's
@@ -1740,7 +1741,7 @@ namespace DCLF::Draws
 			prepared.latch = frame->latch;
 			prepared.signature = resources->dispatchSignature->GetHandle();
 			const auto geometriesIndex = CaptureViewIndex(a_preparation, a_bindings.geometries);
-			const auto objectsIndex = CaptureViewIndex(a_preparation, a_bindings.objects);
+			const auto placementsIndex = CaptureViewIndex(a_preparation, a_bindings.placements);
 			const auto visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
 			const auto poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
 			const bool fadeRows = FadeRows();
@@ -1754,7 +1755,7 @@ namespace DCLF::Draws
 				constants.latchIndex = frame->latch->SrvIndex();
 				constants.inputsIndex = CaptureViewIndex(a_preparation, a_bindings.inputs[view.modeIndex]);
 				constants.geometriesIndex = geometriesIndex;
-				constants.objectsIndex = objectsIndex;
+				constants.placementsIndex = placementsIndex;
 				constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences[view.slot]);
 				constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count[view.slot]);
 				constants.bucketCountsIndex = CaptureViewIndex(a_preparation, a_bindings.bucketCounts[view.slot]);
@@ -2012,6 +2013,7 @@ namespace DCLF::Draws
 			bindings.constants = a_builder.ShaderResource(resources->constants, noViews).Resource();
 			bindings.viewBlocks = a_builder.ShaderResource(*resources->viewBlocks.buffer, noViews).Resource();
 			bindings.objects = a_builder.ShaderResource(*resources->scene->objects, noViews).Resource();
+			a_builder.ShaderResource(*resources->scene->placements, noViews);
 			bindings.bones = a_builder.ShaderResource(*resources->scene->bones, noViews).Resource();
 			// The face positions (a dynamic shape's second stream), and the geometries' vertices and indices, are read by the
 			// vertex stage through their addresses: the face positions after the commit's uploads into them.
@@ -2137,7 +2139,7 @@ namespace DCLF::Draws
 
 	struct ReflectionBuildBindings
 	{
-		org::DeclaredViewToken inputs, geometries, objects, sequences, count, visibility, poolFirsts;
+		org::DeclaredViewToken inputs, geometries, placements, sequences, count, visibility, poolFirsts;
 		std::array<org::DeclaredViewToken, kReflectionFaces> bucketCounts;
 	};
 
@@ -2168,7 +2170,7 @@ namespace DCLF::Draws
 			ReflectionBuildBindings bindings{};
 			bindings.inputs = a_builder.ShaderResource(*main.inputsDepth).View();
 			bindings.geometries = a_builder.ShaderResource(*main.scene->geometries).View();
-			bindings.objects = a_builder.ShaderResource(*main.scene->objects).View();
+			bindings.placements = a_builder.ShaderResource(*main.scene->placements).View();
 			bindings.sequences = a_builder.UnorderedAccess(*resources->sequences).View();
 			bindings.count = a_builder.UnorderedAccess(resources->count).View();
 			// Read only in the single phase (an input's published verdict), never written.
@@ -2199,7 +2201,7 @@ namespace DCLF::Draws
 			constants.latchIndex = frame->latch->SrvIndex();
 			constants.inputsIndex = CaptureViewIndex(a_preparation, a_bindings.inputs);
 			constants.geometriesIndex = CaptureViewIndex(a_preparation, a_bindings.geometries);
-			constants.objectsIndex = CaptureViewIndex(a_preparation, a_bindings.objects);
+			constants.placementsIndex = CaptureViewIndex(a_preparation, a_bindings.placements);
 			constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
 			constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
 			constants.visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
@@ -2376,6 +2378,7 @@ namespace DCLF::Draws
 			a_builder.ShaderResource(main.frameConstants, noViews);  // the colour segment's frame slots, by address
 			a_builder.ShaderResource(*main.pipelineRows.buffer, noViews);
 			a_builder.ShaderResource(*scene.objects, noViews);
+			a_builder.ShaderResource(*scene.placements, noViews);
 			a_builder.ShaderResource(*scene.bones, noViews);
 			a_builder.ShaderResource(*scene.facePositions, noViews);
 			a_builder.ShaderResource(resources->faceBlocks, noViews);

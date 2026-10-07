@@ -222,7 +222,7 @@ namespace DCLF::Draws
 	// scene frame, and the parity log's first root (~0u: no log). The frame's inputs are a buffer (Records.h, FadeFrame).
 	struct FadeStateConstants
 	{
-		std::uint32_t rootsIndex = 0, statesIndex = 0, frameIndex = 0, objectsIndex = 0;
+		std::uint32_t rootsIndex = 0, statesIndex = 0, frameIndex = 0, placementsIndex = 0;
 		std::uint32_t latchIndex = 0, latchOffset = 0, logIndex = 0;
 		std::uint32_t outIndices[2]{};  // the published states, by the scene frame's parity
 		std::uint32_t visibilityIndex = 0;  // ByteAddressBuffer: the list processes' cull tests (Records.h, kFadeVisibilityLists blocks)
@@ -253,7 +253,7 @@ namespace DCLF::Draws
 		std::uint32_t recordIndex;    // DrawBindings record
 		std::uint32_t geometryIndex;  // GeometryDraw
 		std::uint32_t flags;          // object flags, plus kInputDrawable for this epoch
-		// Unused (zero): the bound is the object record's (BindlessObject::bound), so a move rewrites no input.
+		// Unused (zero): the bound is the placement row's (BindlessPlacement::bound), so a move rewrites no input.
 		float boundCentre[3];
 		float boundRadius;
 		// Index into the frame's object table. The two segments emit different subsets in different
@@ -342,8 +342,8 @@ namespace DCLF::Draws
 		std::uint32_t pipelineRowStride;
 		std::uint32_t pipelineRowsAddressLo;
 		std::uint32_t pipelineRowsAddressHi;
-		// The object records (BindlessObject): an input's bound, sun entry and fade node are its record's, not its own.
-		std::uint32_t objectsIndex;
+		// The placement rows (BindlessPlacement): an input's bound, sun entry and fade node are its object's row, not its own.
+		std::uint32_t placementsIndex;
 		// The depth segment's first phase and the shadow views: the fade roots' static rows (an owned root's members follow its
 		// OnVisible verdict; the states are the latch's, BuildDrawsLatch::fadeStatesIndex). 0 elsewhere.
 		std::uint32_t fadeRootsIndex;

@@ -422,7 +422,7 @@ namespace DCLF::Draws
 				given = (material.textures >> t) & 1;
 			else if (const int f = FeatureMaterialSlot(t); f >= 0)
 				given = (material.features >> f) & 1;
-			else if (t == kObjectBufferRegister || t == kBonesBufferRegister || t == kTreeWindRegister)
+			else if (t == kObjectBufferRegister || t == kBonesBufferRegister || t == kTreeWindRegister || t == kPlacementBufferRegister)
 				given = true;
 			else if (depthOnly)
 				// The Z-prepass has no frame textures bound yet (its frame record binds the null texture), but for the character
@@ -581,7 +581,9 @@ namespace DCLF::Draws
 		IndirectDraws::Stats parityStats{};
 		BindlessObject record;
 		BuildObjectRecord(tables, o, SceneStore::kMainPassRenderFlags, record, in.addresses.fit.boneRegion);
-		CheckBindlessRecord(tables, o, record, eye, previousEye, geometryTemplate.offsets, parityVS, parityPS, parityStats);
+		BindlessPlacement placement;
+		BuildPlacementRow(tables, o, SceneStore::kMainPassRenderFlags, placement);
+		CheckBindlessRecord(tables, o, record, placement, eye, previousEye, geometryTemplate.offsets, parityVS, parityPS, parityStats);
 		out.bindlessParityChecks += parityStats.bindlessParityChecks;
 		out.bindlessParityMismatches += parityStats.bindlessParityMismatches;
 	}
