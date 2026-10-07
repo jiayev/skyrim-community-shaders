@@ -297,6 +297,10 @@ engine-drawn parts against FadeStateCS's test, is 0 in almost every 300-frame wi
 -   2026-10-07, x7, at the Riverwood bridge with the camera turning: the last window had 4,815 of 34,040 checks differ. The
     first was `'FXAmbWaterFishBucket01A.nif' slot 0: the engine culled, the port visible (compound accepted at op 63)`.
     The other 16 windows of that run, and every window of x5 and x6 (the same build except the fade uploads' runs), had 0.
+-   2026-10-07, y11 and y13 (step 6d, the published tables replayed), the same place: y11 2 windows (1,014 and 10,500 differ, first
+    `FXAmbWaterFishBucket01B.nif`), y13 4 windows (116, then 6,000 a window, first `IronMace01`, a loose item, "the engine culled,
+    the port visible (compound accepted at op 99)"); y12 (the same code as y11 but the extras block log) 0. The check reads no
+    DCLF table, so the replay cannot change a verdict; which object differs varies by run.
 -   Earlier sessions show the same class, in single windows, at other places: 3-37 differ, with "the engine visible, the
     port culled (compound rejected at op 22-110)" (`AkaviriKatana`, `BearTrap01`, `SpitPotClosed01`; logs junk-landOwn*,
     junk-trav15).

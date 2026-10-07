@@ -237,6 +237,9 @@ namespace DCLF::Draws
 			const auto& entry = lookups.pipelines[p];
 			if (entry.setIndex == Lookups::kNone || !(entry.key == tables.pipelines[p]))
 				continue;
+			// Its constants, as the tables publish them (step 6e A): none yet, no row (its members wait: MainReady).
+			if (!tables.PipelineConstantsCurrent(p) || !tables.TechniqueConstantsValid(p))
+				continue;
 			blocks.setIndex = entry.setIndex;
 			blocks.vsTable = entry.vsTable;
 			blocks.psTable = entry.psTable;
@@ -254,9 +257,9 @@ namespace DCLF::Draws
 		// What the row is written from: the pipeline's constants and permutation, its technique's constants and bindings (the
 		// shadow mask's filter), its lookup entry (the tables, the shadow mask), and the shared lookups (the samplers).
 		auto& state = rows.pipelines[p];
-		const auto& techniqueRow = frame.techniques[tables.pipelineTechnique[p]];
+		const auto& techniqueRow = tables.TechniqueOf(p);
 		const std::uint64_t vertexLayout = tables.pipelines[p].vertexLayout;
-		const std::array<std::uint32_t, 8> key{ p < frame.pipelineConstantsVersion.size() ? frame.pipelineConstantsVersion[p] : 0u, techniqueRow.constantsVersion,
+		const std::array<std::uint32_t, 8> key{ tables.pipelineConstants[p].version, techniqueRow.constantsVersion,
 			techniqueRow.bindingVersion, lookups.pipelines[p].version, lookups.sharedVersion, 1u, static_cast<std::uint32_t>(vertexLayout),
 			static_cast<std::uint32_t>(vertexLayout >> 32) };
 		if (state.written && state.key == key)
@@ -276,7 +279,7 @@ namespace DCLF::Draws
 		pack(technique.ps, LightingPSLayout(), blocks.psTable, kPSGroups[kPerTechnique], kPSFirstVariable[kPerTechnique], kPipelineRowTechniquePS, kPipelineRowTechniqueBytes);
 		// The PerGeometry template: everything the objects do not override (they read theirs from the object record).
 		GeometryTemplate geometry;
-		PackGeometryTemplate(frame.geometryConstants[p], blocks.vsTable, blocks.psTable, true, geometry);
+		PackGeometryTemplate(tables.pipelineConstants[p].constants, blocks.vsTable, blocks.psTable, true, geometry);
 		if (geometry.vs.size() > kPipelineRowGeometryVSBytes || geometry.ps.size() > kPipelineRowGeometryPSBytes)
 			ok = false;
 		else {
@@ -478,13 +481,13 @@ namespace DCLF::Draws
 		auto& state = rows.materials[m];
 		const Lookups::Material* lookup = m < lookups.materials.size() ? &lookups.materials[m] : nullptr;
 		const bool projected = (tables.pipelines[p].passDescriptor & 0x8000u) != 0;
-		const std::array<std::uint32_t, 8> key{ m < frame.materialVersion.size() ? frame.materialVersion[m] : 0u,
-			m < frame.materialFrameVersion.size() ? frame.materialFrameVersion[m] : 0u, lookup ? lookup->version : ~0u, lookups.sharedVersion,
-			frame.techniques[tables.pipelineTechnique[p]].bindingVersion, projected ? 1u : 0u, static_cast<std::uint32_t>(blocks.tables), static_cast<std::uint32_t>(blocks.tables >> 32) };
+		const std::array<std::uint32_t, 8> key{ m < tables.materialVersion.size() ? tables.materialVersion[m] : 0u,
+			m < tables.materialFrameVersion.size() ? tables.materialFrameVersion[m] : 0u, lookup ? lookup->version : ~0u, lookups.sharedVersion,
+			tables.TechniqueOf(p).bindingVersion, projected ? 1u : 0u, static_cast<std::uint32_t>(blocks.tables), static_cast<std::uint32_t>(blocks.tables >> 32) };
 		if (state.written && state.key == key)
 			return;
-		const auto& material = frame.materials[m];
-		const auto& technique = frame.techniques[tables.pipelineTechnique[p]].value;
+		const auto& material = tables.materials[m];
+		const auto& technique = tables.TechniqueOf(p).value;
 		MaterialRow row;
 		state = {};
 		// The PerMaterial blocks, packed through the technique's tables.
@@ -576,7 +579,7 @@ namespace DCLF::Draws
 		auto [templateIt, newTemplate] = geometryTemplates.try_emplace(object.pipelineIndex);
 		auto& geometryTemplate = templateIt->second;
 		if (newTemplate)
-			PackGeometryTemplate(frame.geometryConstants[object.pipelineIndex], blocks.vsTable, blocks.psTable, true, geometryTemplate);
+			PackGeometryTemplate(tables.pipelineConstants[object.pipelineIndex].constants, blocks.vsTable, blocks.psTable, true, geometryTemplate);
 		parityVS.assign(geometryTemplate.vs.begin(), geometryTemplate.vs.end());
 		parityPS.assign(geometryTemplate.ps.begin(), geometryTemplate.ps.end());
 		// The placement and the shading are FrameValues' (the frame's rows): the layout's check takes made-up ones, the same on both
@@ -860,7 +863,7 @@ namespace DCLF::Draws
 		mix(lookups.sharedVersion);
 		// The rows' tables: a pair past them waits for their growth, and resolves again once it is adopted.
 		mix((std::uint64_t(in.addresses.recordCapacity) << 32) | in.addresses.pipelineCapacity);
-		mix(frame.techniques[tables.pipelineTechnique[p]].bindingVersion);
+		mix(tables.TechniqueOf(p).bindingVersion);
 		mix((tables.pipelines[p].passDescriptor & 0x8000u) != 0 ? 1u : 0u);
 		mix(blocks.tables);
 		mix(blocks.setIndex);
@@ -890,9 +893,9 @@ namespace DCLF::Draws
 		const std::uint64_t frameWitness = (std::uint64_t(in.vsFrameMask) << 32) ^ std::uint64_t(in.psFrameMask) ^ (depthOnly ? (1ull << 63) : 0ull) ^ 1ull;
 		bool everyPair = frameWitness != r.frameWitness;
 		r.frameWitness = frameWitness;
-		if (!r.materialCursor.Continues(frame.materialLog, frame.materialLogGeneration) || !r.lookupCursor.Continues(lookups.materialLog, lookups.logGeneration)) {
+		if (!r.materialCursor.Continues(tables.materialLog, in.tablesGeneration) || !r.lookupCursor.Continues(lookups.materialLog, lookups.logGeneration)) {
 			everyPair = true;
-			r.materialCursor.Restart(frame.materialLogGeneration);
+			r.materialCursor.Restart(in.tablesGeneration);
 			r.lookupCursor.Restart(lookups.logGeneration);
 		}
 		std::vector<std::uint64_t> changedPairs;
@@ -922,7 +925,7 @@ namespace DCLF::Draws
 				if (const auto list = r.materialPairs.find(a_material); list != r.materialPairs.end())
 					check.insert(check.end(), list->second.begin(), list->second.end());
 			};
-			for (const std::uint32_t m : r.materialCursor.Unread(frame.materialLog))
+			for (const std::uint32_t m : r.materialCursor.Unread(tables.materialLog))
 				material(m);
 			for (const std::uint32_t m : r.lookupCursor.Unread(lookups.materialLog))
 				material(m);
@@ -931,7 +934,7 @@ namespace DCLF::Draws
 			check.erase(std::unique(check.begin(), check.end()), check.end());
 		}
 		r.freshPairs.clear();
-		r.materialCursor.Advance(frame.materialLog);
+		r.materialCursor.Advance(tables.materialLog);
 		r.lookupCursor.Advance(lookups.materialLog);
 		for (const std::uint64_t key : check) {
 			const auto found = r.pairs.find(key);
@@ -944,8 +947,8 @@ namespace DCLF::Draws
 			std::uint64_t witness = 1ull;
 			if (pipelineOk) {
 				witness = pipelineWitness[pipeline];
-				witness = (witness ^ (material < frame.materialVersion.size() ? frame.materialVersion[material] : 0u)) * 0x100000001b3ull;
-				witness = (witness ^ (material < frame.materialFrameVersion.size() ? frame.materialFrameVersion[material] : 0u)) * 0x100000001b3ull;
+				witness = (witness ^ (material < tables.materialVersion.size() ? tables.materialVersion[material] : 0u)) * 0x100000001b3ull;
+				witness = (witness ^ (material < tables.materialFrameVersion.size() ? tables.materialFrameVersion[material] : 0u)) * 0x100000001b3ull;
 				witness = (witness ^ (material < lookups.materialVersions.size() ? lookups.materialVersions[material] : ~0u)) * 0x100000001b3ull;
 				witness |= 1;  // never 0, which is "never resolved"
 			}
@@ -1066,8 +1069,8 @@ namespace DCLF::Draws
 				if (pipeline >= pipelineBlocks.size() || pipelineBlocks[pipeline].setIndex == Lookups::kNone)
 					continue;
 				std::uint64_t witness = PipelineWitness(pipeline);
-				witness = (witness ^ (material < frame.materialVersion.size() ? frame.materialVersion[material] : 0u)) * 0x100000001b3ull;
-				witness = (witness ^ (material < frame.materialFrameVersion.size() ? frame.materialFrameVersion[material] : 0u)) * 0x100000001b3ull;
+				witness = (witness ^ (material < tables.materialVersion.size() ? tables.materialVersion[material] : 0u)) * 0x100000001b3ull;
+				witness = (witness ^ (material < tables.materialFrameVersion.size() ? tables.materialFrameVersion[material] : 0u)) * 0x100000001b3ull;
 				witness = (witness ^ (material < lookups.materialVersions.size() ? lookups.materialVersions[material] : ~0u)) * 0x100000001b3ull;
 				witness |= 1;
 				++out.residentPairsChecked;

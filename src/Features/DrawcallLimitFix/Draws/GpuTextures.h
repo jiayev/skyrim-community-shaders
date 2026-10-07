@@ -26,7 +26,7 @@ namespace DCLF
 	 * Samplers copy the renderer's own D3D11 sampler states (the table the engine selects from by the
 	 * shadow state's address and filter modes) into ORG's sampler heap.
 	 *
-	 * Only while a graph epoch prepares (ORG's descriptor service is active); render thread.
+	 * Render thread: inside an epoch (its descriptor service) or outside one (the graph's own, retained, as the import thread uses).
 	 */
 	class GpuTextures
 	{

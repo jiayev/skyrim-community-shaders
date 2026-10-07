@@ -247,6 +247,7 @@ namespace DCLF
 					row.constantsVersion = frameTables.NextVersion();
 					row.bindingVersion = frameTables.NextVersion();
 					row.valid = true;
+					PostTechniqueConstants(view.pipelineTechnique[slot]);
 				}
 				if (frameTables.geometryConstantsValid[slot])
 					continue;
@@ -258,6 +259,7 @@ namespace DCLF
 				frameTables.geometryConstantsValid[slot] = 1;
 				lightingSeeds.push_back(constants.ps);
 				frameTables.pipelineConstantsVersion[slot] = frameTables.NextVersion();
+				PostPipelineConstants(slot);
 			}
 	}
 

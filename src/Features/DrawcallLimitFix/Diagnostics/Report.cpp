@@ -71,10 +71,10 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		const auto& capture = DCLF::PassCapture::Get().GetStats();
 		logger::info("[DCLF] DCLF set: {:.0f} members and {:.1f} bound objects waiting a frame over {} commits; {} joined, {} left, {} evaluated ({} readiness events, {} "
 					 "resyncs), {} left while their binding was taken again, {} publications; waiting for: pipeline {}, material {}, shadow mask {}, shared lookups {}, "
-					 "geometry {}, decal slot {}, layer partner {}, shadow pipelines {}, reflection (forward pipeline or last frame's membership) {}{}{}; members patched by the accumulate phase {}{}",
+					 "geometry {}, decal slot {}, layer partner {}, shadow pipelines {}, reflection (forward pipeline or last frame's membership) {}, constants {}{}{}; members patched by the accumulate phase {}{}",
 			set.members / commits, set.waiting / commits, set.commits, set.joined, set.left, set.evaluated, set.readinessEvents, set.resyncs, set.rebinding,
 			set.publications, set.waitingBy[0], set.waitingBy[1], set.waitingBy[2], set.waitingBy[3], set.waitingBy[4], set.waitingBy[5], set.waitingBy[6], set.waitingBy[7], set.waitingBy[8],
-			set.firstWaiting.empty() ? "" : "; first: ", set.firstWaiting, set.patchedMember, set.patchedMember ? " <- SET PATCHED" : "");
+			set.waitingBy[9], set.firstWaiting.empty() ? "" : "; first: ", set.firstWaiting, set.patchedMember, set.patchedMember ? " <- SET PATCHED" : "");
 		// Claims the frame's scene work took back because their record stopped drawing (SceneStore::RevokeUndrawnClaims).
 		const auto [revoked, revokedMain] = store.TakeRevokedClaims();
 		const auto structural = store.TakeStructureRevocations();
@@ -320,12 +320,30 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			stats.attachedEvents, stats.detachedEvents, stats.detachMoves, stats.validationDrops, timing.eventsMs / frames,
 			(timing.sceneMs + timing.buildMs) / frames, timing.sceneMs / frames, timing.sceneMaxMs, timing.buildMs / frames, timing.buildMaxMs,
 			parts);
+		if (const auto posts = store.TakeConstantsPostStats(); posts.pipelinesPosted || posts.techniquesPosted || posts.stale || posts.recordsPosted || posts.framesPosted)
+			logger::info("[DCLF] frame evaluations published (step 6e A, B): {} pipeline blocks and {} technique rows posted, {} and {} applied, {} dropped; {} material "
+						 "records (writer events) and {} slots' frame floats posted, {} and {} applied, {} dropped (the slot held another key)",
+				posts.pipelinesPosted, posts.techniquesPosted, posts.pipelinesApplied, posts.techniquesApplied, posts.stale, posts.recordsPosted, posts.framesPosted,
+				posts.recordsApplied, posts.framesApplied, posts.materialsStale);
 		if (const auto [violations, first] = store.TakeFrameAccessViolations(); violations)
 			logger::error("[DCLF] step 6c: {} reads of the coordinator's state from the frame while the scene work ran (first: {}) <- FRAME ACCESS", violations,
 				first ? first : "?");
-		if (const auto publication = store.TakeTablesPublication(); publication.published)
+		if (const auto publication = store.TakeTablesPublication(); publication.published) {
 			logger::info("[DCLF] tables published (step 6): {} snapshots ({} written again, {} made, pool {}), {:.3f} ms each on the coordinator (max {:.3f}); {} published again at the frame's start{}",
 				publication.published, publication.reused, publication.made, publication.pool, publication.ms / publication.published, publication.maxMs, publication.republished, publication.republished ? " <- TABLES CHANGED AFTER PUBLICATION" : " <- OK");
+			const double n = double(publication.published);
+			const std::uint64_t differ = publication.parityDiffer + publication.parityObjectsDiffer + publication.parityLogsDiffer + publication.parityGeometriesDiffer +
+			                             publication.parityFamiliesDiffer;
+			logger::info("[DCLF] tables replay (6d): {:.1f} of {:.0f} object slots, {:.1f} of {:.0f} geometry slots and {:.1f} of {:.0f} material records written a "
+						 "publication, {}/{} copied whole; trees kept {}, fade roots kept {}; the rest copied whole {:.3f} ms; parity {} checks: {} slots ({} differ), {} "
+						 "geometries ({} differ), {} records ({} differ), logs {} differ, kept families {} differ{}",
+				publication.objectsReplayed / n, publication.objectSlots / n, publication.geometriesReplayed / n, publication.geometrySlots / n,
+				publication.materialsReplayed / n, publication.materialSlots / n, publication.wholeCopies, publication.geometryWholeCopies, publication.treesKept,
+				publication.fadeRootsKept, publication.restMs / n,
+				publication.parityChecks, publication.parityObjects, publication.parityObjectsDiffer, publication.parityGeometries, publication.parityGeometriesDiffer,
+				publication.parityMaterials, publication.parityDiffer, publication.parityLogsDiffer, publication.parityFamiliesDiffer,
+				publication.parityChecks ? (differ ? " <- REPLAY DIFFERS" : " <- OK") : "");
+		}
 		{
 			// The "scene tables" zone by sub-zone (ScenePart). The four event parts are the scene work's (ApplyEvents), except
 			// a frame without scene work, whose batch Present applies outside the zone.

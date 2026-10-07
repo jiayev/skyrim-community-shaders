@@ -109,11 +109,8 @@ namespace DCLF
 		 * worker (AsyncWorker.h). The epoch joins it; a job that cannot serve the epoch is rebuilt inline.
 		 */
 		void KickColourBuild();
-		/**
-		 * @brief Prepass, before RefreshFrameConstants: the colour build kicked early (behind the Z-prepass's) is done before the
-		 * tables it reads are written. KickColourBuild then keeps it, unless what it read changed.
-		 */
-		void BeforeFrameConstants();
+		/** @brief Render thread, the frame's start: the main material and shared lookups refreshed (step 6e C), against the frame's tables. */
+		void RefreshMainLookups();
 
 		/**
 		 * @brief CS_DCLF_ASYNC: at the end of EarlyPrepass, after the pipeline lookups, submits the Z-prepass

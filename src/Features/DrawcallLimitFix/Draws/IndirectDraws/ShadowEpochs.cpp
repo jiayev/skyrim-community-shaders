@@ -1540,10 +1540,9 @@ namespace DCLF
 			auto& job = impl->shadowJob;
 			const auto joined = JoinJob(job.handle);
 			auto& lookups = store.MutableLookups();
-			auto refresh = [&] {
-				RefreshMaterialLookups(store, tables, false, store.GetProjectedTextures(), lookups);
-				RefreshShadowLookups(store, tables, modeUsed, modeRasterStates, dsvFormat, impl->OcclusionFormats(), lookups);
-			};
+			// The shadow lookups alone: the material and shared ones are the frame's start's (step 6e C), which the main builds read
+			// meanwhile.
+			auto refresh = [&] { RefreshShadowLookups(store, tables, modeUsed, modeRasterStates, dsvFormat, impl->OcclusionFormats(), lookups); };
 			bool refreshed = false;
 			if (lookups.shadowRefreshDue || !job.handle) {
 				refresh();

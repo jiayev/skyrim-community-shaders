@@ -203,6 +203,7 @@ namespace DCLF
 				std::memcmp(treeObjects.data(), tables.treeObjects.data(), treeObjects.size() * sizeof(TreeObject)) != 0) {
 				tables.treeObjects = std::move(treeObjects);
 				++tables.treeObjectsVersion;
+				tables.NoteTreesWrite();
 			}
 		}
 		// Each fade root's centre is a member's record (its fade node row): one that is still a member.
@@ -230,8 +231,10 @@ namespace DCLF
 		const auto* property = tree && geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
 		TreeStatic row;
 		const void* node = property ? TreeStaticOf(*property, row) : nullptr;
-		if (tables.objectTree.size() <= a_slot)
+		if (tables.objectTree.size() <= a_slot) {
+			tables.NoteTreesWrite();
 			tables.objectTree.resize(std::size_t(a_slot) + 1, kNoTree);
+		}
 		auto& current = tables.objectTree[a_slot];
 		const std::uint32_t wanted = !tree ? kNoTree : !node ? kNodelessTree : kNoTree;
 		// Already under this node (a patch that changed something else), or nodeless and staying so.
@@ -239,6 +242,7 @@ namespace DCLF
 			return;
 		if (!node && current == wanted)
 			return;
+		tables.NoteTreesWrite();
 		UnlistTree(a_slot);
 		if (!node) {
 			current = wanted;
@@ -273,13 +277,16 @@ namespace DCLF
 		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
 		const auto* property = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
 		const RE::NiAVObject* node = property ? property->fadeNode : nullptr;
-		if (tables.objectFadeRoot.size() <= a_slot)
+		if (tables.objectFadeRoot.size() <= a_slot) {
+			tables.NoteFadeRootsWrite();
 			tables.objectFadeRoot.resize(std::size_t(a_slot) + 1, kNoFadeRoot);
+		}
 		auto& current = tables.objectFadeRoot[a_slot];
 		if (node && current < tables.fadeRootNode.size() && tables.fadeRootNode[current] == node)
 			return;
 		if (!node && current == kNoFadeRoot)
 			return;
+		tables.NoteFadeRootsWrite();
 		UnlistFadeRoot(a_slot);
 		if (!node)
 			return;
@@ -317,6 +324,7 @@ namespace DCLF
 	{
 		if (a_slot >= tables.objectFadeRoot.size())
 			return;
+		tables.NoteFadeRootsWrite();
 		auto& current = tables.objectFadeRoot[a_slot];
 		if (current < tables.fadeRootRefs.size() && --tables.fadeRootRefs[current] == 0) {
 			const auto* node = static_cast<const RE::NiAVObject*>(tables.fadeRootNode[current]);
@@ -407,6 +415,7 @@ namespace DCLF
 	{
 		if (a_slot >= tables.objectTree.size())
 			return;
+		tables.NoteTreesWrite();
 		auto& current = tables.objectTree[a_slot];
 		if (current < tables.treeRefs.size() && --tables.treeRefs[current] == 0) {
 			tables.treeIndex.erase(tables.treeNode[current]);

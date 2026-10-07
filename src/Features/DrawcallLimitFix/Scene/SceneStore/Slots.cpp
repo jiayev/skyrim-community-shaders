@@ -15,8 +15,10 @@ namespace DCLF
 	std::uint32_t SceneStore::AllocatePipelineSlot()
 	{
 		const auto allocation = tables.pipelineSlots.Allocate();
-		if (allocation.grown)
+		if (allocation.grown) {
 			tables.PipelineColumns(kGrowColumn);
+			tables.NoteConstantsWrite();
+		}
 		return allocation.slot;
 	}
 
@@ -200,6 +202,8 @@ namespace DCLF
 				retiredImports.push_back(std::move(*owner));
 		import = {};
 		tables.geometryLastUsed[a_slot] = Tables::kSlotFree;
+		// The log names every write of the geometry columns (the published tables replay them by it, step 6d).
+		tables.NoteGeometry(a_slot);
 	}
 
 	void SceneStore::FreeGeometrySlot(std::uint32_t a_slot)

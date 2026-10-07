@@ -87,6 +87,8 @@ struct DrawcallLimitFix : Feature
 	 * what is missing. Each build a request starts is logged as a warning (on demand: the precompile missed it).
 	 */
 	static std::uint32_t RequestLightingPipeline(std::uint32_t a_slot, RE::BSShader& a_lighting);
+	/** @brief The frame's start: the Lighting programs and pipelines, and the main lookups, refreshed once (step 6e C). */
+	static void RefreshFrameLookups();
 
 	/** @brief The main camera's native draws since the last report, and the set members' among them (LEAK, must be 0). */
 	struct LeakStats

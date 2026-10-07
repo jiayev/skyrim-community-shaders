@@ -182,6 +182,10 @@ namespace DCLF
 			// the frame's floats into it. A consumer that kept something derived from the record compares this
 			// instead of the record's 2.3 KB.
 			std::vector<std::uint32_t> materialVersion;
+			// Parallel to materials: new whenever the record's frame floats (MaterialSources' frame components, the texture transform,
+			// the character light's modes) are written by the frame's post (step 6e B, CS_DCLF_FRAME_FLOATS=published), the record's
+			// own values kept: a row is written again, its record not evaluated again.
+			std::vector<std::uint32_t> materialFrameVersion;
 			// Versions the builds' kept bindings key on (IndirectDraws' PersistentBindings), each new (NextVersion) whenever
 			// what it covers is written with a different value: per pipeline its PerGeometry floats and what its pairs' records
 			// read of it (the key, the permutation), the technique's being its row's (TechniqueRow); per
@@ -223,8 +227,20 @@ namespace DCLF
 			// the table (about 1,350 rows of 80 B at the bridge, re-sent whole every few frames in motion before).
 			ChangeJournal fadeRootsJournal;
 			std::uint64_t FadeRootsVersion() const { return fadeRootsJournal.Version(); }
-			void NoteFadeRoot(std::uint32_t a_root) { fadeRootsJournal.Mark(a_root); }
+			void NoteFadeRoot(std::uint32_t a_root)
+			{
+				fadeRootsJournal.Mark(a_root);
+				NoteFadeRootsWrite();
+			}
 			std::uint32_t fadeRootGenerations = 0;
+			// Write stamps of the tree and fade-root families (trees, treeRefs, treeFree, treeNode, treeIndex, treeObjects, objectTree;
+			// fadeRoots, fadeRootRefs, fadeRootFree, fadeRootNode, fadeRootIndex, fadeRootSwitch, objectFadeRoot): every write of a
+			// family bumps its stamp (a row's through NoteFadeRoot), and they only grow, so a published snapshot with the tables' stamp
+			// holds the family as the tables do and the publication copies it only when they differ (step 6d). The fade roots' journal
+			// (the depth commit's hand-over moves it every frame) is not the family's: it is copied with the rest.
+			std::uint64_t treesStamp = 0, fadeRootsStamp = 0;
+			void NoteTreesWrite() { ++treesStamp; }
+			void NoteFadeRootsWrite() { ++fadeRootsStamp; }
 			// Advanced Skin's SkinPerGeometry (PS b7): the owning actor's sweat, water wetness, height and water depth,
 			// Skin::GetWetness, which its SetupGeometry hook binds for every Lighting draw. Zero for everything not owned
 			// by an actor (actorObjects lists those that are). The values are FrameValues' (CaptureWetness); these, who has one.
@@ -248,6 +264,44 @@ namespace DCLF
 			std::vector<std::uint32_t> techniqueKeys;
 			ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> techniqueRow;  // TechniqueKey -> row
 			std::vector<std::uint32_t> pipelineTechnique;  // parallel to pipelines: its row
+			// The constants the builds pack into the pipeline rows (step 6e A): the render thread's evaluations (EvaluateGeometry of a
+			// pipeline's template pass, EvaluateTechnique of a row's key; engine code) posted with the key they were made for and
+			// applied by the coordinator (ApplyConstantsPosts), published with the tables: a change is drawn a frame or two late, as a
+			// join. A pipeline's block holds its own values (what a DCLF_BINDLESS draw reads of it; the frame's globals are the frame
+			// blocks'). A pipeline, or its technique row, without them is not drawable (MainReady, MainBuild::PackPipelines).
+			struct PipelineConstantsRow
+			{
+				GeometryConstants constants{};
+				PipelineKey key{};         // what it was evaluated for, with the slot's binding version
+				std::uint32_t binding = 0;
+				std::uint32_t version = 0;  // NextVersion, whenever it is written
+				bool valid = false;
+			};
+			std::vector<PipelineConstantsRow> pipelineConstants;  // parallel to pipelines
+			struct TechniqueConstantsRow
+			{
+				TechniqueConstants value{};
+				std::uint32_t constantsVersion = 0, bindingVersion = 0;  // the floats', the bindings' (filter modes, the shadow mask)
+				bool valid = false;
+			};
+			std::vector<TechniqueConstantsRow> techniqueConstants;  // parallel to techniqueKeys
+			// Bumped by every write of pipelineConstants or techniqueConstants (sizes included): the publication copies them only when
+			// it moved (step 6d's stamps); the set's readiness reads it (a pipeline's constants arrived).
+			std::uint64_t constantsStamp = 0;
+			void NoteConstantsWrite() { ++constantsStamp; }
+			bool PipelineConstantsCurrent(std::size_t a_pipeline) const
+			{
+				if (a_pipeline >= pipelineConstants.size() || a_pipeline >= pipelines.size() || a_pipeline >= pipelineBindingVersion.size())
+					return false;
+				const auto& row = pipelineConstants[a_pipeline];
+				return row.valid && row.key == pipelines[a_pipeline] && row.binding == pipelineBindingVersion[a_pipeline];
+			}
+			bool TechniqueConstantsValid(std::size_t a_pipeline) const
+			{
+				return a_pipeline < pipelineTechnique.size() && pipelineTechnique[a_pipeline] < techniqueConstants.size() &&
+				       techniqueConstants[pipelineTechnique[a_pipeline]].valid;
+			}
+			const TechniqueConstantsRow& TechniqueOf(std::size_t a_pipeline) const { return techniqueConstants[pipelineTechnique[a_pipeline]]; }
 			/** @brief Whether the pipeline's technique binds the shadow mask (TechniqueKey's low bit, as its evaluation finds). */
 			bool TechniqueShadowMask(std::size_t a_pipeline) const { return (techniqueKeys[pipelineTechnique[a_pipeline]] & 1u) != 0; }
 			std::vector<PipelinePermutation> permutations;        // parallel to pipelines
@@ -282,21 +336,28 @@ namespace DCLF
 			std::vector<float> extraRows;
 			std::vector<std::uint32_t> extraOffset;  // parallel to objects
 			std::vector<std::uint32_t> extraFree;    // freed blocks' row offsets
+			// The blocks whose rows were written, allocated or freed (their row offsets): what the published tables replay the rows by
+			// (step 6d). Every write of extraRows is named here (NoteExtrasBlock).
+			EventLog<std::uint32_t> extrasBlockLog;
+			void NoteExtrasBlock(std::uint32_t a_offset) { extrasBlockLog.Push(a_offset); }
 			std::uint32_t AllocateExtras()
 			{
 				if (!extraFree.empty()) {
 					const std::uint32_t offset = extraFree.back();
 					extraFree.pop_back();
 					std::fill_n(extraRows.begin() + std::ptrdiff_t(offset) * 4, std::size_t(kExtraRows) * 4, 0.0f);
+					NoteExtrasBlock(offset);
 					return offset;
 				}
 				const auto offset = static_cast<std::uint32_t>(extraRows.size() / 4);
 				extraRows.resize(extraRows.size() + std::size_t(kExtraRows) * 4, 0.0f);
+				NoteExtrasBlock(offset);
 				return offset;
 			}
 			void FreeExtras(std::uint32_t a_slot)
 			{
 				if (a_slot < extraOffset.size() && extraOffset[a_slot] != kNoExtraRows) {
+					NoteExtrasBlock(extraOffset[a_slot]);
 					extraFree.push_back(extraOffset[a_slot]);
 					extraOffset[a_slot] = kNoExtraRows;
 				}
@@ -347,7 +408,8 @@ namespace DCLF
 					++changeCounts[std::countr_zero(bits)];
 			}
 			// The geometry slots written: a record resolved (ResolveGeometrySlot), a slot added (AllocateGeometrySlot), a
-			// partition link that changed. What the persistent geometry tables repack (IndirectDraws' GeometryStore), read
+			// partition link that changed, a slot cleared (ClearGeometrySlot). Every write of geometries, geometryImports,
+			// geometrySlotKey and geometryLayerKey is named here (the published tables replay them by it). What the persistent geometry tables repack (IndirectDraws' GeometryStore), read
 			// like the change log.
 			EventLog<std::uint32_t> geometryLog;
 			void NoteGeometry(std::uint32_t a_slot) { geometryLog.Push(a_slot); }
@@ -360,6 +422,7 @@ namespace DCLF
 			{
 				changeLog.Invalidate();
 				materialLog.Invalidate();
+				extrasBlockLog.Invalidate();
 			}
 			/** @brief A slot's columns, everything a persistent consumer builds from, for the writers to compare against. */
 			struct Columns
@@ -524,12 +587,14 @@ namespace DCLF
 				a_column(pipelineTechnique);
 				a_column(permutations);
 				a_column(pipelineBindingVersion);
+				a_column(pipelineConstants);
 			}
 			template <class F>
 			void MaterialColumns(F&& a_column)
 			{
 				a_column(materials);
 				a_column(materialVersion);
+				a_column(materialFrameVersion);
 				a_column(materialSlotKey);
 			}
 
@@ -934,7 +999,15 @@ namespace DCLF
 		 * the commit judges readiness by (a copy), a reset of the lookups the scene work asked for.
 		 */
 		void HandOverAtFrameStart();
+		/** @brief Render thread, the frame's start after the lookups' refresh: the coordinator's copy of them (lookupsView). */
+		void TakeLookupsView();
 		/** @brief Coordinator state read by the frame while the scene work ran (GuardFrameAccess), since the last call: count, first name. */
+		struct ConstantsPostStats
+		{
+			std::uint64_t pipelinesPosted = 0, techniquesPosted = 0, pipelinesApplied = 0, techniquesApplied = 0, stale = 0;
+			std::uint64_t recordsPosted = 0, framesPosted = 0, recordsApplied = 0, framesApplied = 0, materialsStale = 0;
+		};
+		ConstantsPostStats TakeConstantsPostStats() { return std::exchange(constantsPostStats, ConstantsPostStats{}); }
 		std::pair<std::uint64_t, const char*> TakeFrameAccessViolations() { return { frameAccessViolations.exchange(0), frameAccessFirst.exchange(nullptr) }; }
 		/** @brief Render thread, the frame's start after the set's application: claims whose record the frame cannot draw, taken back. */
 		void RevokeClaims() { RevokeUndrawnClaims(); }
@@ -943,6 +1016,16 @@ namespace DCLF
 		{
 			std::uint64_t published = 0, reused = 0, made = 0, republished = 0;  // republished: at the accept, the copy was not the tables
 			double ms = 0.0, maxMs = 0.0;
+			// 6d, replay: the material records written again (their version moved) against the slots, and the time the rest took
+			// (copied whole still); the replay's parity (CS_DCLF_PERSISTENT_PARITY, every 60 publications) against the tables.
+			std::uint64_t materialsReplayed = 0, materialSlots = 0;
+			double restMs = 0.0;
+			std::uint64_t parityChecks = 0, parityMaterials = 0, parityDiffer = 0;
+			// The object slots the change log named (copied by slot) against the slots; publications copied whole (a snapshot just
+			// made, or one the log no longer reaches); the parity's slots and logs compared.
+			std::uint64_t objectsReplayed = 0, objectSlots = 0, wholeCopies = 0, parityObjects = 0, parityObjectsDiffer = 0, parityLogsDiffer = 0;
+			std::uint64_t geometriesReplayed = 0, geometrySlots = 0, geometryWholeCopies = 0, parityGeometries = 0, parityGeometriesDiffer = 0;
+			std::uint64_t treesKept = 0, fadeRootsKept = 0, parityFamiliesDiffer = 0;  // publications that kept the family (its stamp stood)
 			std::size_t pool = 0;
 		};
 		TablesPublication TakeTablesPublication() { return std::exchange(tablesPublication, TablesPublication{ .pool = tablesPool.size() }); }
@@ -1213,7 +1296,7 @@ namespace DCLF
 			// lookups (samplers, null and projected textures), its geometry, its decal slot, its layer partner, its shadow pipelines
 			// or occlusion pipelines (or an alpha-tested caster's diffuse).
 			// The reflection phase (8): its forward pipeline, or the object was no main member at the last commit.
-			std::array<std::uint64_t, 9> waitingBy{};
+			std::array<std::uint64_t, 10> waitingBy{};
 			std::string firstWaiting;
 		};
 		SetStats TakeSetStats() { return std::exchange(setStats, {}); }
@@ -1817,6 +1900,10 @@ namespace DCLF
 		// Step 6: the tables as the scene work left them, published as an immutable snapshot (PublishTables, the coordinator), and the
 		// one the frame accepted (AcceptTables). Snapshots are pooled: one no frame holds any more is written again.
 		std::vector<std::shared_ptr<Tables>> tablesPool;
+		// Parallel to tablesPool: whether the snapshot equals the tables as they stood at its change log's end (6d: it is brought up
+		// to date by replay); a snapshot just made is copied whole once.
+		std::vector<std::uint8_t> tablesPoolReplayable;
+		std::vector<std::uint8_t> replaySlotMarks;  // scratch: the object slots a replay copied
 		// The accepted snapshot is the frame's alone (the pool writes no snapshot anyone holds): the frame's start writes the set into
 		// it as into the tables (WriteBoth), so the two stay equal there.
 		std::shared_ptr<Tables> publishedTables, acceptedTables;
@@ -1852,6 +1939,43 @@ namespace DCLF
 		std::optional<std::vector<SceneStore::OwnedFadeRoot>> pendingFadeOwned;
 		bool pendingFadeReseed = false;
 		bool lookupsResetPending = false;
+		// The frame's constant evaluations for the coordinator (step 6e A): posted by the render thread (PostPipelineConstants,
+		// PostTechniqueConstants), handed over at the frame's start (HandOverAtFrameStart), applied by the scene work
+		// (ApplyConstantsPosts) where the slot still holds what they were made for.
+		struct PipelineConstantsPost
+		{
+			std::uint32_t slot = 0, binding = 0, generation = 0;
+			PipelineKey key{};
+			GeometryConstants constants{};
+		};
+		struct TechniqueConstantsPost
+		{
+			std::uint32_t row = 0, key = 0, generation = 0;
+			TechniqueConstants value{};
+		};
+		std::vector<PipelineConstantsPost> pipelineConstantsPosted, pipelineConstantsInbox;
+		// The frame's material records for the coordinator (step 6e B): a writer event's re-evaluation (the record), and the frame
+		// floats of a slot that changed them (its frame record: the coordinator takes its frame part, CopyFrameComponents). Applied
+		// where the slot still holds the key they were made for.
+		struct MaterialPost
+		{
+			std::uint32_t slot = 0, generation = 0;
+			bool frameFloats = false;  // the frame part alone
+			std::pair<const RE::BSShaderMaterial*, std::uint32_t> key{};
+			MaterialRecord record;
+		};
+		std::vector<MaterialPost> materialPosted, materialInbox;
+		std::vector<std::uint32_t> frameFloatsDirty;      // render thread: slots whose frame floats changed this frame
+		std::vector<std::uint8_t> frameFloatsDirtyMark;  // parallel to the frame's materials
+		void PostMaterialRecord(std::uint32_t a_slot);
+		void NoteFrameFloats(std::uint32_t a_slot);
+		void PostFrameFloats();
+		void ApplyMaterialPosts();
+		std::vector<TechniqueConstantsPost> techniqueConstantsPosted, techniqueConstantsInbox;
+		ConstantsPostStats constantsPostStats;
+		void PostPipelineConstants(std::uint32_t a_slot);
+		void PostTechniqueConstants(std::uint32_t a_row);
+		void ApplyConstantsPosts();
 		// The lookups as the coordinator's set judges readiness by them (MainReady, the readiness witness): copied at the frame's
 		// start when they moved.
 		Lookups lookupsView;
@@ -2021,11 +2145,12 @@ namespace DCLF
 		std::uint32_t materialVersions = 0;  // the last Tables::materialVersion handed out
 	public:
 		/**
-		 * @brief Moves whenever the tables change a value a main-pass build reads through a version (the technique and pipeline
-		 * constants, the material records and their frame components): a build made before RefreshFrameConstants is current
-		 * after it when this has not moved.
+		 * @brief Moves whenever what a main-pass build reads of the tables changes: the frame's tables (the accepted snapshot: its
+		 * writes are the frame's start's, step 6c). The builds read no frame values (step 6e A, B: the constants and the material
+		 * records are the tables'), so a build made before RefreshFrameConstants is current after it when this has not moved. Not
+		 * the coordinator's counters: its work runs beside the frame and moves them without changing anything the builds read.
 		 */
-		std::uint64_t BuildInputsWitness() const { return (std::uint64_t(tables.versionCounter) << 32) | materialVersions; }
+		std::uint64_t BuildInputsWitness() const { return FrameView().versionCounter; }
 		/**
 		 * @brief Moves whenever the change logs gain what a shadow build takes from them (kShadowChangeCauses notes, geometry
 		 * slots written): a shadow build made before is current after when this has not moved.

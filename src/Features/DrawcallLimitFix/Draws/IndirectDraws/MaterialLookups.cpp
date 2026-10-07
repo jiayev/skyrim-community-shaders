@@ -7,9 +7,8 @@ namespace DCLF::Draws
 	{
 		ZoneScopedN("CS.DCLF.RefreshMaterialLookups");
 		auto& textures = GpuTextures::Get();
-		// Outside an epoch (a main-pass kick) a view never imported is not queued (RequestBinding): its material stays
-		// unresolved until the epoch's refresh asks again. The samplers are created only inside one.
-		const bool inEpoch = org::runtime::GetActiveDescriptorService() != nullptr;
+		// The frame's start (step 6e C), outside any epoch: GpuTextures uses the graph's retained descriptor service there, and queues
+		// a view never imported for its import thread (its material resolves at a later frame's start).
 		auto* host = RenderGraphRuntime::Get().Host();
 		const auto cleanup = host ? host->ResourceCleanup() : nullptr;
 		if (!cleanup)
@@ -59,7 +58,7 @@ namespace DCLF::Draws
 			a_lookups.sharedVersion = a_lookups.NextVersion();
 			++a_lookups.shadowGeneration;
 		}
-		if (!a_lookups.samplersResolved && inEpoch) {
+		if (!a_lookups.samplersResolved) {
 			for (std::uint32_t address = 0; address < 4; ++address)
 				for (std::uint32_t filter = 0; filter < 5; ++filter)
 					a_lookups.samplers[Lookups::SamplerIndex(address, filter)] = textures.Sampler(address, filter);
@@ -89,8 +88,7 @@ namespace DCLF::Draws
 			a_lookups.sharedBindingBlock = sealOwners(std::move(owners));
 		}
 		TracyCZoneN(materialBindingZone, "CS.DCLF.RefreshMaterial.Materials", true);
-		// The records as the frame draws them (FrameTables: the frame's writes on the coordinator's records).
-		const auto& frame = a_store.GetFrameTables();
+		// The records as the tables publish them (step 6e B: the frame's writes posted to the coordinator).
 		a_lookups.materials.resize(a_tables.materials.size());
 		a_lookups.materialVersions.resize(a_tables.materials.size(), 0);
 		// The members' materials and pipelines, once the accumulate phase has settled this frame's (a_members: not the shadow
@@ -98,7 +96,7 @@ namespace DCLF::Draws
 		for (std::size_t word = 0; a_members && word < a_tables.usedMaterialBits.size(); ++word) {
 			for (std::uint64_t remaining = a_tables.usedMaterialBits[word]; remaining; remaining &= remaining - 1) {
 				const std::uint32_t slot = static_cast<std::uint32_t>(word * 64 + std::countr_zero(remaining));
-				if (slot >= a_tables.materials.size() || slot >= frame.materials.size())
+				if (slot >= a_tables.materials.size() || slot >= a_tables.materialVersion.size())
 					continue;
 				auto& entry = a_lookups.materials[slot];
 				const auto& key = a_tables.materialSlotKey[slot];
@@ -110,10 +108,10 @@ namespace DCLF::Draws
 					entry.featureIndex.fill(Lookups::kNone);
 					entry.version = a_lookups.NextVersion();
 				}
-				const auto& material = frame.materials[slot];
+				const auto& material = a_tables.materials[slot];
 				// An unchanged material owns its bindings directly; there is no
 				// periodic lifetime restamp of its descriptor indices.
-				if (entry.resolved && entry.recordVersion == frame.materialVersion[slot] && entry.written == material.textureWritten && entry.texturesGeneration == textures.Generation()) {
+				if (entry.resolved && entry.recordVersion == a_tables.materialVersion[slot] && entry.written == material.textureWritten && entry.texturesGeneration == textures.Generation()) {
 					continue;
 				}
 				// A new record version is most often one texture: a view the entry already holds, resolved, is kept as it is,
@@ -212,7 +210,7 @@ namespace DCLF::Draws
 				entry.written = material.textureWritten;  // the record's, so a character-light pass's is not resolved every refresh
 				entry.texturesGeneration = textures.Generation();
 				// A held view is asked for again by the next refresh (no record version is 0).
-				entry.recordVersion = held ? 0 : frame.materialVersion[slot];
+				entry.recordVersion = held ? 0 : a_tables.materialVersion[slot];
 				if (bindingDirty) {
 					std::vector<std::shared_ptr<const void>> owners;
 					owners.reserve(entry.textureOwners.size() + entry.featureOwners.size());
@@ -232,7 +230,9 @@ namespace DCLF::Draws
 				const std::uint32_t p = static_cast<std::uint32_t>(word * 64 + std::countr_zero(remaining));
 				if (p >= a_tables.pipelines.size())
 					continue;
-				const auto& technique = a_store.GetFrameTables().techniques[a_tables.pipelineTechnique[p]].value;
+				if (!a_tables.TechniqueConstantsValid(p))
+					continue;
+				const auto& technique = a_tables.TechniqueOf(p).value;
 				auto& entry = a_lookups.pipelines[p];
 				auto* view = technique.shadowMask ? technique.shadowMaskTexture : nullptr;
 				// A view still being imported holds its owner with no index yet: asked again until it has one.
