@@ -52,12 +52,14 @@ namespace DCLF
 
 	std::int32_t SceneStore::FindObject(const RE::BSGeometry* a_geometry) const
 	{
+		GuardFrameAccess("FindObject");
 		const auto it = tracked.find(const_cast<RE::BSGeometry*>(a_geometry));
 		return it == tracked.end() || it->second.objectStamp != objectStamp ? -1 : static_cast<std::int32_t>(it->second.objectId);
 	}
 
 	std::int32_t SceneStore::FindLayerObject(const RE::BSGeometry* a_geometry) const
 	{
+		GuardFrameAccess("FindLayerObject");
 		const auto it = tracked.find(const_cast<RE::BSGeometry*>(a_geometry));
 		if (it == tracked.end() || it->second.objectStamp != objectStamp || it->second.layerSlot == kNoObjectSlot || !tables.IsLayer(it->second.layerSlot))
 			return -1;

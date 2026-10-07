@@ -20,6 +20,13 @@ namespace DCLF
 	{
 	public:
 		static PublishedSceneExecutor& Executor();
+		/**
+		 * @brief The scene's lane (step 6c): one thread, serialized, for the scene work alone (the walk and the accumulate phase,
+		 * SceneStore::KickSceneTask). The frame's builds keep the coordinator's lane, so a scene task that spans the frame never
+		 * holds one up. Its parallel loops run on Executor()'s preparation pool.
+		 */
+		static PublishedSceneExecutor& SceneLane();
+		static const org::async::Scope& SceneLaneScope();
 		/** @brief The scope every feature job runs under: never cancelled (a job's own stop source cancels it). */
 		static const org::async::Scope& Scope();
 		static unsigned PreparationWorkers();

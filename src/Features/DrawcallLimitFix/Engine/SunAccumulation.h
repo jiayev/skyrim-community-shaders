@@ -42,6 +42,9 @@ namespace DCLF
 		std::vector<RE::NiPointer<RE::NiAVObject>> held;
 		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> geometries;  // every tracked geometry under one -> geometry index
 		std::vector<std::uint32_t> geometryEntry;                                       // geometry index -> entry index
+		// geometry index -> its object slot as the walk that made the snapshot had it (-1: no record); the frame reads it, not the
+		// coordinator's tracked set (step 6c)
+		std::vector<std::int32_t> geometrySlot;
 		// Per geometry index: a main-pass table object PrimaryCull can give a synthetic pass (SceneStore::PrimaryEntryAllows);
 		// the rest under a left-out entry are registered by the engine, handed over as its cull would (PrimaryCull).
 		std::vector<std::uint8_t> primaryGeometry;

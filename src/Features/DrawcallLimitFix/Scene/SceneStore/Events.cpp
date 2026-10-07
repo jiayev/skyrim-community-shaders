@@ -918,8 +918,8 @@ namespace DCLF
 	bool SceneStore::TakeSwitchChanges(std::vector<const RE::NiAVObject*>& a_out)
 	{
 		a_out.clear();
-		a_out.swap(switchesApplied);
-		return std::exchange(switchResync, false) || !SwitchEventsLive();
+		a_out.swap(frameSwitchChanges);
+		return std::exchange(frameSwitchResync, false);
 	}
 
 	void SceneStore::ApplySwitchEvents(bool a_full)

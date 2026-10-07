@@ -2031,7 +2031,9 @@ namespace DCLF::Draws
 				if (!view.capacity || view.slot >= a_bindings.sequences.size() || view.target >= kShadowDepthTargets || !resources->depth[view.target] ||
 					IsOcclusionTarget(view.target) != sky)
 					continue;
-				if (view.slice >= resources->depthLayers[view.target])
+				// The slices this pass declared (its bindings), not the live target's: a target grown since (a new shadow map's
+				// import) has slices a recording prepared for these bindings cannot name.
+				if (view.slice >= resources->depthLayers[view.target] || view.slice >= a_bindings.depthViews[view.target].size())
 					continue;
 				prepared.views.push_back({ i, a_preparation.Capture(a_bindings.depthViews[view.target][view.slice]) });
 			}

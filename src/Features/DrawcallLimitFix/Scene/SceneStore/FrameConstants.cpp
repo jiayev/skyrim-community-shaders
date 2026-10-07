@@ -22,6 +22,7 @@ namespace DCLF
 
 	void SceneStore::SyncFrameMaterials()
 	{
+		const Tables& view = FrameView();
 		// The frame's copy of each slot's record: taken again from the tables when the slot's key or record moved (a join keyed
 		// it, a slot was freed and keyed again); the frame's writes stay on it otherwise. Held while the frame keys it.
 		auto& f = frameTables;
@@ -31,12 +32,12 @@ namespace DCLF
 			f.materialsGeneration = tablesGeneration;
 		}
 		f.materialLog.Trim(1u << 16);
-		const std::size_t count = tables.materials.size();
+		const std::size_t count = view.materials.size();
 		f.ResizeMaterials(count);
 		frameMaterialOwners.resize(count);
 		for (std::uint32_t slot = 0; slot < count; ++slot) {
-			const auto key = tables.materialSlotKey[slot];
-			const std::uint32_t source = tables.materialVersion[slot];
+			const auto key = view.materialSlotKey[slot];
+			const std::uint32_t source = view.materialVersion[slot];
 			if (f.materialKeys[slot] == key && f.materialSource[slot] == source)
 				continue;
 			if (f.materialKeys[slot].first != key.first) {
@@ -50,7 +51,7 @@ namespace DCLF
 			f.materialSource[slot] = source;
 			if (!key.first)
 				continue;
-			f.materials[slot] = tables.materials[slot];
+			f.materials[slot] = view.materials[slot];
 			f.materialVersion[slot] = f.NextVersion();
 			f.materialLog.Push(slot);
 			ListFrameMaterial(slot);
@@ -59,6 +60,7 @@ namespace DCLF
 
 	void SceneStore::RefreshFrameMaterials()
 	{
+		const Tables& view = FrameView();
 		stats.frameMaterialSamples = 0;
 		auto& evaluator = ConstantEvaluator::Get();
 		auto& f = frameTables;
@@ -78,17 +80,17 @@ namespace DCLF
 			}
 		};
 		auto keyed = [&](std::uint32_t a_slot, std::uint32_t a_signature) {
-			return a_slot < f.materials.size() && tables.materialSlots.Alive(a_slot) && f.materialKeys[a_slot].first &&
+			return a_slot < f.materials.size() && view.materialSlots.Alive(a_slot) && f.materialKeys[a_slot].first &&
 			       MaterialSources::Signature(f.materialKeys[a_slot].second) == a_signature;
 		};
 		for (auto& [signature, entry] : f.frameSignatures) {
 			// The live sample, from a slot of the signature drawn this frame (the last one's while it still is). With none
 			// drawn nothing of the signature is: the slots take the sample when one is.
 			auto& slots = entry.slots;
-			if (!(keyed(entry.representative, signature) && tables.MaterialUsed(entry.representative))) {
+			if (!(keyed(entry.representative, signature) && view.MaterialUsed(entry.representative))) {
 				entry.representative = ~0u;
 				for (const std::uint32_t slot : slots)
-					if (keyed(slot, signature) && tables.MaterialUsed(slot)) {
+					if (keyed(slot, signature) && view.MaterialUsed(slot)) {
 						entry.representative = slot;
 						break;
 					}
@@ -101,8 +103,8 @@ namespace DCLF
 				continue;
 			++stats.frameMaterialSamples;
 			++m.samples;
-			if (auto* view = MaterialSources::CharacterLightView(live, key.second))
-				frameCapture.characterLightView = view;
+			if (auto* lightView = MaterialSources::CharacterLightView(live, key.second))
+				frameCapture.characterLightView = lightView;
 			if (entry.appliedValid) {
 				MaterialRecord probe = entry.applied;
 				bool floatsChanged = false;
@@ -130,7 +132,7 @@ namespace DCLF
 		// The slots keyed or rewritten since the last application: the signature's sample regardless.
 		m.pending += f.materialFramePending.size();
 		for (const std::uint32_t slot : f.materialFramePending) {
-			if (slot >= f.materials.size() || !tables.materialSlots.Alive(slot) || !f.materialKeys[slot].first)
+			if (slot >= f.materials.size() || !view.materialSlots.Alive(slot) || !f.materialKeys[slot].first)
 				continue;
 			const auto it = f.frameSignatures.find(MaterialSources::Signature(f.materialKeys[slot].second));
 			if (it != f.frameSignatures.end() && it->second.appliedValid)
@@ -141,6 +143,7 @@ namespace DCLF
 
 	void SceneStore::RefreshTextureTransforms()
 	{
+		const Tables& view = FrameView();
 		ZoneScopedN("CS.DCLF.Capture.TextureTransforms");
 		auto& f = frameTables;
 		ankerl::unordered_dense::set<const RE::BSShaderMaterial*> changed;
@@ -148,7 +151,7 @@ namespace DCLF
 		for (const auto* material : changed) {
 			if (auto it = f.materialDependents.find(material); it != f.materialDependents.end())
 				for (const auto slot : it->second)
-					if (slot < f.transformWatchFrame.size() && tables.materialSlots.Alive(slot) && f.materialKeys[slot].first == material) {
+					if (slot < f.transformWatchFrame.size() && view.materialSlots.Alive(slot) && f.materialKeys[slot].first == material) {
 						if (!f.transformWatchFrame[slot])
 							f.transformWatch.push_back(slot);
 						f.transformWatchFrame[slot] = frame;
@@ -158,9 +161,9 @@ namespace DCLF
 		materialFrameStats.transformsWatched += list.size();
 		for (std::size_t i = 0; i < list.size();) {
 			const std::uint32_t slot = list[i];
-			bool keep = slot < f.materials.size() && tables.materialSlots.Alive(slot) && f.materialKeys[slot].first;
+			bool keep = slot < f.materials.size() && view.materialSlots.Alive(slot) && f.materialKeys[slot].first;
 			// The material is read only while a member's slot holds it.
-			if (keep && tables.MaterialUsed(slot)) {
+			if (keep && view.MaterialUsed(slot)) {
 				const auto* material = f.materialKeys[slot].first;
 				if (MaterialSources::ApplyTextureTransform(material, f.materials[slot])) {
 					f.materialFrameVersion[slot] = f.NextVersion();
@@ -183,6 +186,7 @@ namespace DCLF
 
 	void SceneStore::CheckMaterialFrame()
 	{
+		const Tables& view = FrameView();
 		// CS_DCLF_PERSISTENT_PARITY: every slot drawn this frame against its signature's sample and its material's transform,
 		// as the per-frame loops applied them.
 		const bool enabled = SwitchEnabled(Switch::PersistentParity);
@@ -191,16 +195,16 @@ namespace DCLF
 		// The used sets are kept by membership changes. On a parity frame compare them against the slots the bound records
 		// name, before trusting their absence to skip descriptor/import work.
 		{
-			std::vector<std::uint64_t> pipelines(tables.usedPipelineBits.size()), materials(tables.usedMaterialBits.size());
+			std::vector<std::uint64_t> pipelines(view.usedPipelineBits.size()), materials(view.usedMaterialBits.size());
 			auto set = [](std::vector<std::uint64_t>& a_bits, std::uint32_t a_slot) {
 				if (a_bits.size() <= a_slot / 64)
 					a_bits.resize(a_slot / 64 + 1, 0);
 				a_bits[a_slot / 64] |= 1ull << (a_slot % 64);
 			};
-			for (std::uint32_t o = 0; o < tables.objects.size(); ++o)
-				if (!(tables.objects[o].flags & (kObjectNoBindings | kObjectFree))) {
-					set(pipelines, tables.objects[o].pipelineIndex);
-					set(materials, tables.objects[o].materialIndex);
+			for (std::uint32_t o = 0; o < view.objects.size(); ++o)
+				if (!(view.objects[o].flags & (kObjectNoBindings | kObjectFree))) {
+					set(pipelines, view.objects[o].pipelineIndex);
+					set(materials, view.objects[o].materialIndex);
 				}
 			auto compare = [&](std::vector<std::uint64_t> a_named, const std::vector<std::uint64_t>& a_used, const char* a_name) {
 				a_named.resize(std::max(a_named.size(), a_used.size()), 0);
@@ -214,8 +218,8 @@ namespace DCLF
 					logger::warn("[DCLF] {} used set differs from the bound records at frame {}: {} named but not used, {} used but not named", a_name, frame,
 						missing, extra);
 			};
-			compare(std::move(pipelines), tables.usedPipelineBits, "pipeline");
-			compare(std::move(materials), tables.usedMaterialBits, "material");
+			compare(std::move(pipelines), view.usedPipelineBits, "pipeline");
+			compare(std::move(materials), view.usedMaterialBits, "material");
 		}
 		auto& evaluator = ConstantEvaluator::Get();
 		if (!evaluator.HasLightingShader())
@@ -225,7 +229,7 @@ namespace DCLF
 		ankerl::unordered_dense::map<std::uint32_t, MaterialRecord> live;
 		const auto& f = frameTables;
 		for (std::uint32_t slot = 0; slot < f.materials.size(); ++slot) {
-			if (!tables.MaterialUsed(slot) || !f.materialKeys[slot].first)
+			if (!view.MaterialUsed(slot) || !f.materialKeys[slot].first)
 				continue;
 			const auto key = f.materialKeys[slot];
 			const std::uint32_t signature = MaterialSources::Signature(key.second);
@@ -268,6 +272,7 @@ namespace DCLF
 
 	void SceneStore::ProcessMaterialWrites()
 	{
+		const Tables& view = FrameView();
 		ZoneScopedN("CS.DCLF.Capture.MaterialWrites");
 		writtenMaterials.clear();
 		const bool complete = MaterialSources::Drain(writtenMaterials);
@@ -304,7 +309,7 @@ namespace DCLF
 		affected.insert(affected.end(), retry.begin(), retry.end());
 		for (std::size_t i = 0; i < affected.size(); ++i) {
 			const std::uint32_t slot = affected[i];
-			if (slot >= f.materials.size() || !tables.materialSlots.Alive(slot))
+			if (slot >= f.materials.size() || !view.materialSlots.Alive(slot))
 				continue;
 			const auto key = f.materialKeys[slot];
 			if (!key.first || (i < written_ && !written(key.first)))
@@ -365,6 +370,7 @@ namespace DCLF
 
 	void SceneStore::RefreshFrameConstants()
 	{
+		const Tables& view = FrameView();
 		ZoneNamedN(frameConstantsZone, "CS.DCLF.FrameConstants", true);
 		SyncFrameMaterials();
 		{
@@ -393,14 +399,14 @@ namespace DCLF
 		const bool geometryParityEnabled = SwitchEnabled(Switch::PersistentParity);
 		const bool geometryParityFrame = geometryParityEnabled && ParityDue(frame, 30);
 		geometryStats.checks += geometryParityFrame ? 1u : 0u;
-		frameTables.SyncPipelines(tables.pipelines, tables.pipelineBindingVersion, tablesGeneration);
-		frameTables.SyncTechniques(tables.techniqueKeys.size());
+		frameTables.SyncPipelines(view.pipelines, view.pipelineBindingVersion, tablesGeneration);
+		frameTables.SyncTechniques(view.techniqueKeys.size());
 		TracyCZoneN(pipelinesZone, "CS.DCLF.FrameConstants.Pipelines", true);
 		std::int64_t pipelinesVisited = 0, techniquesEvaluated = 0;
-		for (std::size_t word = 0; word < tables.usedPipelineBits.size(); ++word) {
-			for (std::uint64_t remaining = tables.usedPipelineBits[word]; remaining; remaining &= remaining - 1) {
+		for (std::size_t word = 0; word < view.usedPipelineBits.size(); ++word) {
+			for (std::uint64_t remaining = view.usedPipelineBits[word]; remaining; remaining &= remaining - 1) {
 				const std::uint32_t i = static_cast<std::uint32_t>(word * 64 + std::countr_zero(remaining));
-				if (i >= tables.pipelines.size() || i >= tables.geometryTemplate.size())
+				if (i >= view.pipelines.size() || i >= view.geometryTemplate.size())
 					continue;
 				++pipelinesVisited;
 				// The technique constants are the frame's (fog, settings, and the shadow mask's view), so a
@@ -410,12 +416,12 @@ namespace DCLF
 				// row's (Tables::TechniqueRow): evaluated once a frame for all the pipelines of its key, and written, and
 				// versioned, only where the values differ.
 				auto sameFloats = [](const ConstantBlock& a, const ConstantBlock& b) { return std::memcmp(a.floats.data(), b.floats.data(), sizeof(a.floats)) == 0; };
-				auto& row = frameTables.techniques[tables.pipelineTechnique[i]];
+				auto& row = frameTables.techniques[view.pipelineTechnique[i]];
 				if (row.evaluated != frame) {
 					row.evaluated = frame;
 					++techniquesEvaluated;
 					TechniqueConstants now;
-					EvaluateTechnique(tables.pipelines[i].passDescriptor, now);
+					EvaluateTechnique(view.pipelines[i].passDescriptor, now);
 					// The fog is the frame's (FrameFog): taken for the frame, and the row keeps its own, so the time of
 					// day versions no technique row (nor every pipeline and pair with it).
 					MergeFrameFog(now, frameFog, fogWritten);
@@ -433,7 +439,7 @@ namespace DCLF
 					// CS_DCLF_PERSISTENT_PARITY: the row against a second evaluation, once a frame.
 					if (geometryParityFrame) {
 						TechniqueConstants reference;
-						EvaluateTechnique(tables.pipelines[i].passDescriptor, reference);
+						EvaluateTechnique(view.pipelines[i].passDescriptor, reference);
 						KeepTechniqueFog(row.value, reference);
 						++geometryStats.techniquesChecked;
 						if (!sameFloats(reference.vs, row.value.vs) || !sameFloats(reference.ps, row.value.ps) || reference.filterModes != row.value.filterModes ||
@@ -450,9 +456,9 @@ namespace DCLF
 				// in the block for the constant-buffer path and the parity checks, but no DCLF_BINDLESS draw reads them there
 				// (frameLighting; kPSBindlessGeometryUnread), and neither the template object's own values, so only what such a
 				// draw reads versions the pipeline (SameBindlessGeometry). The template's pass is looked up only to evaluate.
-				auto* property = tables.geometryTemplate[i];
+				auto* property = view.geometryTemplate[i];
 				auto templatePassOf = [&]() { return TemplatePassOf(property); };
-				const bool writesEye = WritesEyePosition(tables.pipelines[i].passDescriptor);
+				const bool writesEye = WritesEyePosition(view.pipelines[i].passDescriptor);
 				const bool full = !constantsRefreshed || !frameTables.geometryConstantsValid[i] || (writesEye && !eyeSample.valid);
 				auto& held = frameTables.geometryConstants[i];
 				bool ownChanged = false;
@@ -464,7 +470,7 @@ namespace DCLF
 					if (!templatePass)
 						continue;  // keep what BuildFrame evaluated rather than blanking it
 					GeometryConstants constants;
-					if (!evaluator.EvaluateGeometry(*templatePass, tables.pipelines[i].passDescriptor, kMainPassRenderFlags, constants))
+					if (!evaluator.EvaluateGeometry(*templatePass, view.pipelines[i].passDescriptor, kMainPassRenderFlags, constants))
 						continue;
 					++geometryStats.full;
 					publishLighting(constants);
@@ -478,7 +484,7 @@ namespace DCLF
 				} else {
 					if (!frameSample.valid) {
 						if (const auto* templatePass = templatePassOf()) {
-							frameSample.valid = evaluator.EvaluateGeometry(*templatePass, tables.pipelines[i].passDescriptor, kMainPassRenderFlags, frameSample.constants);
+							frameSample.valid = evaluator.EvaluateGeometry(*templatePass, view.pipelines[i].passDescriptor, kMainPassRenderFlags, frameSample.constants);
 							++geometryStats.samples;
 							if (frameSample.valid)
 								publishLighting(frameSample.constants);
@@ -498,7 +504,7 @@ namespace DCLF
 				if (geometryParityFrame) {
 					GeometryConstants reference;
 					const auto* templatePass = templatePassOf();
-					if (templatePass && evaluator.EvaluateGeometry(*templatePass, tables.pipelines[i].passDescriptor, kMainPassRenderFlags, reference)) {
+					if (templatePass && evaluator.EvaluateGeometry(*templatePass, view.pipelines[i].passDescriptor, kMainPassRenderFlags, reference)) {
 						CheckFrameGeometry(static_cast<std::uint32_t>(i), reference, held);
 						lightingReferences.emplace_back(static_cast<std::uint32_t>(i), reference);
 					}
@@ -525,7 +531,7 @@ namespace DCLF
 				continue;
 			++geometryStats.lightingDiffer;
 			if (!first.empty())
-				geometryStats.lightingFirst = fmt::format("pipeline {} (pass {:X}) {}", pipeline, tables.pipelines[pipeline].passDescriptor, first);
+				geometryStats.lightingFirst = fmt::format("pipeline {} (pass {:X}) {}", pipeline, view.pipelines[pipeline].passDescriptor, first);
 		}
 		++geometryStats.frames;
 
@@ -976,13 +982,14 @@ namespace DCLF
 
 	void SceneStore::RefreshLodTechniqueRanges()
 	{
+		const Tables& view = FrameView();
 		HoldLodHighDetailRange();
 		float range[4];
 		LodHighDetailRange(range);
 		const auto offset = LightingVSLayout().offset[kVSHighDetailRange];
-		frameTables.SyncTechniques(tables.techniqueKeys.size());
-		for (std::size_t r = 0; r < tables.techniqueKeys.size(); ++r) {
-			const std::uint32_t technique = tables.techniqueKeys[r] >> 1;  // TechniqueKey
+		frameTables.SyncTechniques(view.techniqueKeys.size());
+		for (std::size_t r = 0; r < view.techniqueKeys.size(); ++r) {
+			const std::uint32_t technique = view.techniqueKeys[r] >> 1;  // TechniqueKey
 			auto& row = frameTables.techniques[r];
 			if ((technique != 9 && technique != 18) || !row.valid)
 				continue;
@@ -1005,6 +1012,7 @@ namespace DCLF
 
 	void SceneStore::ValidateMaterialSlice()
 	{
+		const Tables& view = FrameView();
 		// The standing alarm: a few records drawn this frame, re-evaluated live and compared outside their
 		// frame-sourced components. A difference is a material writer the events do not cover; it is
 		// reported, not repaired, because repairing it here is what hid the missing events before.
@@ -1029,8 +1037,8 @@ namespace DCLF
 				NoteStaleMaterial(slot, key, served, live);
 		};
 		if (mode == "probe") {
-			Tables::ForEachBit(tables.usedMaterialBits, [&](const std::uint32_t slot) {
-				if (slot < tables.materials.size() && tables.materialSlots.Alive(slot))
+			Tables::ForEachBit(view.usedMaterialBits, [&](const std::uint32_t slot) {
+				if (slot < view.materials.size() && view.materialSlots.Alive(slot))
 					validate(slot);
 			});
 			return;
@@ -1038,7 +1046,7 @@ namespace DCLF
 		std::uint32_t looked = 0;
 		for (std::uint32_t n = 0; n < kMaterialValidationsPerFrame * kMaterialValidationStride && looked < kMaterialValidationsPerFrame; ++n) {
 			const std::uint32_t slot = materialValidationCursor++ % static_cast<std::uint32_t>(f.materials.size());
-			if (!tables.MaterialUsed(slot))
+			if (!view.MaterialUsed(slot))
 				continue;
 			++looked;
 			validate(slot);

@@ -51,13 +51,18 @@ namespace DCLF
 		ClearFaceRegions();
 		// Drop material binding owners on world/device reset without permitting
 		// an old worker snapshot to match a newly empty lookup generation.
-		const auto lookupGeneration = lookups.generation;
-		const auto shadowGeneration = lookups.shadowGeneration;
-		const auto lookupVersion = lookups.versionCounter;
-		lookups = Lookups{};
-		lookups.generation = lookupGeneration + 1;
-		lookups.shadowGeneration = shadowGeneration + 1;
-		lookups.versionCounter = lookupVersion;
+		// The lookups are the frame's (step 6c): the scene work posts the reset for the next frame's start.
+		if (inSceneTask) {
+			lookupsResetPending = true;
+		} else {
+			const auto lookupGeneration = lookups.generation;
+			const auto shadowGeneration = lookups.shadowGeneration;
+			const auto lookupVersion = lookups.versionCounter;
+			lookups = Lookups{};
+			lookups.generation = lookupGeneration + 1;
+			lookups.shadowGeneration = shadowGeneration + 1;
+			lookups.versionCounter = lookupVersion;
+		}
 		for (auto& [geometry, entry] : tracked) {
 			entry.slot = kNoObjectSlot;
 			entry.layerSlot = kNoObjectSlot;

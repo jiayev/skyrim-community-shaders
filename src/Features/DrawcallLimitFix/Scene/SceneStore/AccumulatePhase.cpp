@@ -81,12 +81,18 @@ namespace DCLF
 		if (SwitchValue(Switch::DecalOrderProbe) == "1")
 			Scene::ProbeDecalOrder(entries, mainBatchRenderers);
 		// Eligible objects DCLF has not bound that the engine registered: a scene event DCLF missed (a record not written
-		// again, a verdict not taken again) shows up here.
-		for (const auto& entry : entries) {
-			if (!entry.geometry || !mainBatchRenderers.contains(entry.batch) || entry.fading)
-				continue;
+		// again, a verdict not taken again). The tracked set is the coordinator's: checked by the accumulate work (CheckRegistrations).
+		capturedRegistrations.clear();
+		for (const auto& entry : entries)
+			if (entry.geometry && mainBatchRenderers.contains(entry.batch) && !entry.fading)
+				capturedRegistrations.push_back({ entry.geometry, entry.hint });
+	}
+
+	void SceneStore::CheckRegistrations()
+	{
+		for (const auto& entry : capturedRegistrations) {
 			const auto it = tracked.find(const_cast<RE::BSGeometry*>(entry.geometry));
-			if (it == tracked.end() || it->second.candidateReason != Ineligible::None || IsMember(FindObject(entry.geometry)))
+			if (it == tracked.end() || it->second.candidateReason != Ineligible::None || ResidentObject(FindObject(entry.geometry)))
 				continue;
 			++residentStats.registeredUnbound;
 			if (residentStats.registeredUnboundFirst.empty())
@@ -166,6 +172,12 @@ namespace DCLF
 		// What only the render thread may run, ahead of the joins: the engine's SetupMaterial for the materials the last joins
 		// asked for, and the material tail (writer events, texture transforms, the validation slice), which evaluate materials too.
 		ServeMaterialRequests();
+		// The frame's own work on its snapshot (step 6c): the new pipelines' blocks and technique rows (the last accumulate phase's,
+		// now in the snapshot), then the material tail.
+		RefreshNewPipelineConstants();
+		ProcessMaterialWrites();
+		RefreshTextureTransforms();
+		ValidateMaterialSlice();
 	}
 
 	void SceneStore::ServeMaterialRequests()
@@ -215,31 +227,22 @@ namespace DCLF
 		for (const auto* geometry : lostMembersHeld)
 			primary.NoteMemberLost(geometry);
 		lostMembersHeld.clear();
-		// The joins' new pipelines' PerGeometry blocks, before the Z-prepass's build reads them.
-		RefreshNewPipelineConstants();
-		// The material tail, after the joins as before the split (its evaluations leave the evaluator's state as the frame's
-		// constants find it).
-		if (sceneBuilt) {
-			SyncFrameMaterials();
-			ProcessMaterialWrites();
-			RefreshTextureTransforms();
-			ValidateMaterialSlice();
-		}
 	}
 
 	void SceneStore::RefreshNewPipelineConstants()
 	{
-		frameTables.SyncPipelines(tables.pipelines, tables.pipelineBindingVersion, tablesGeneration);
-		frameTables.SyncTechniques(tables.techniqueKeys.size());
+		const Tables& view = FrameView();
+		frameTables.SyncPipelines(view.pipelines, view.pipelineBindingVersion, tablesGeneration);
+		frameTables.SyncTechniques(view.techniqueKeys.size());
 		auto& evaluator = ConstantEvaluator::Get();
-		for (std::size_t word = 0; word < tables.usedPipelineBits.size(); ++word)
-			for (std::uint64_t remaining = tables.usedPipelineBits[word]; remaining; remaining &= remaining - 1) {
+		for (std::size_t word = 0; word < view.usedPipelineBits.size(); ++word)
+			for (std::uint64_t remaining = view.usedPipelineBits[word]; remaining; remaining &= remaining - 1) {
 				const std::uint32_t slot = static_cast<std::uint32_t>(word * 64 + std::countr_zero(remaining));
-				if (slot >= tables.pipelines.size())
+				if (slot >= view.pipelines.size())
 					continue;
 				// Its technique row, new: evaluated once (RefreshFrameConstants keeps it a frame's).
-				if (auto& row = frameTables.techniques[tables.pipelineTechnique[slot]]; !row.valid) {
-					EvaluateTechnique(tables.pipelines[slot].passDescriptor, row.value);
+				if (auto& row = frameTables.techniques[view.pipelineTechnique[slot]]; !row.valid) {
+					EvaluateTechnique(view.pipelines[slot].passDescriptor, row.value);
 					row.evaluated = frame;
 					row.constantsVersion = frameTables.NextVersion();
 					row.bindingVersion = frameTables.NextVersion();
@@ -248,8 +251,8 @@ namespace DCLF
 				if (frameTables.geometryConstantsValid[slot])
 					continue;
 				GeometryConstants constants{};
-				const auto* templatePass = TemplatePassOf(tables.geometryTemplate[slot]);
-				if (!templatePass || !evaluator.EvaluateGeometry(*templatePass, tables.pipelines[slot].passDescriptor, kMainPassRenderFlags, constants))
+				const auto* templatePass = TemplatePassOf(view.geometryTemplate[slot]);
+				if (!templatePass || !evaluator.EvaluateGeometry(*templatePass, view.pipelines[slot].passDescriptor, kMainPassRenderFlags, constants))
 					continue;
 				frameTables.geometryConstants[slot] = constants;
 				frameTables.geometryConstantsValid[slot] = 1;
@@ -267,6 +270,7 @@ namespace DCLF
 		PartTimer timer(stats.partMs, &stats.accumulatePartMs);
 		std::uint32_t fadingThisFrame = 0;
 		TracyCZoneN(captureZone, "CS.DCLF.Accumulate.Capture", true);
+		CheckRegistrations();
 		// The pass table holds the frame's membership joins alone (BindByMembership).
 		accumulatedPasses.clear();
 		accumulatedLayerPasses.clear();
@@ -626,8 +630,8 @@ namespace DCLF
 			patch.flags = (object.flags & kSceneKeptFlags) | staticFlags | (accumulated->sunTest ? kObjectSunTest : 0u) |
 			              (accumulated->fadeDistance != 0.0f ? kObjectFadeTest : 0u) | (accumulated->heightTest ? kObjectHeightTest : 0u) |
 			              (patch.projectedUV ? kObjectProjectedUV : 0u) | (patch.landBlend ? kObjectLandBlend : 0u) |
-			              ((SetPhasesOf(static_cast<std::int32_t>(objectId)) & kSetMain) ? kObjectMember : 0u);
-			if (SetPhasesOf(static_cast<std::int32_t>(objectId)) & kSetMain)
+			              ((PhasesIn(tables, objectId) & kSetMain) ? kObjectMember : 0u);
+			if (PhasesIn(tables, objectId) & kSetMain)
 				++setStats.patchedMember;
 			patch.fadeDistance = accumulated->fadeDistance;
 			timer.Add(BuildPart::Record);
@@ -782,6 +786,16 @@ namespace DCLF
 			}
 			(layer ? accumulatedLayerPasses : accumulatedPasses).insert_or_assign(geometry, pass);
 			(layer ? residentLayerJoining : residentJoining).insert(geometry);
+			// A record bound again leaves the main phases of the coordinator's set first (a join never patches a member): the frame
+			// draws its old record from the snapshot meanwhile, and the next frame's start takes the claim back (RevokeClaims), as the
+			// walk's join used to before the frame read a snapshot (step 6c).
+			if (PhasesIn(tables, slot) & (kSetMain | kSetReflection)) {
+				tables.setPhases[slot] &= static_cast<std::uint8_t>(~(kSetMain | kSetReflection));
+				if (tables.objects[slot].flags & kObjectMember) {
+					tables.objects[slot].flags &= ~kObjectMember;
+					tables.NoteChange(slot, kChangeBindings);
+				}
+			}
 			++residentStats.membershipQueued;
 		}
 	}

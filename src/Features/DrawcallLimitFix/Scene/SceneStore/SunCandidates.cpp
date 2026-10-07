@@ -19,8 +19,10 @@ namespace DCLF
 			a_out.resize(a_count);
 			auto run = [&](std::size_t a_begin, std::size_t a_end) {
 				ZoneScopedN("CS.DCLF.Scene.SunCandidates.Verdicts");
+				const bool marked = std::exchange(SceneStore::sceneWorkThread, true);
 				for (std::size_t i = a_begin; i < a_end; ++i)
 					a_out[i] = a_verdict(i);
+				SceneStore::sceneWorkThread = marked;
 			};
 			if (a_parallel)
 				SceneScheduler::Executor().ParallelFor("CS.DCLF.Scene.SunCandidates.Verdicts", a_count, 128, run);
@@ -136,8 +138,10 @@ namespace DCLF
 			snapshot->held.emplace_back(const_cast<RE::NiAVObject*>(root));
 			if (const auto* dependents = LightDependentsOf(root))
 				for (auto* geometry : *dependents)
-					if (snapshot->geometries.emplace(geometry, static_cast<std::uint32_t>(snapshot->geometryEntry.size())).second)
+					if (snapshot->geometries.emplace(geometry, static_cast<std::uint32_t>(snapshot->geometryEntry.size())).second) {
 						snapshot->geometryEntry.push_back(index);
+						snapshot->geometrySlot.push_back(FindObject(geometry));
+					}
 			++index;
 		}
 		lightCandidates = std::move(snapshot);
@@ -348,6 +352,7 @@ namespace DCLF
 				for (auto* geometry : it->second)
 					if (snapshot->geometries.emplace(geometry, static_cast<std::uint32_t>(snapshot->geometryEntry.size())).second) {
 						snapshot->geometryEntry.push_back(index);
+						snapshot->geometrySlot.push_back(FindObject(geometry));
 						const auto entry = tracked.find(geometry);
 						snapshot->primaryGeometry.push_back(entry != tracked.end() && PrimaryEntryAllows(entry->second, *geometry) ? 1 : 0);
 					}

@@ -1248,9 +1248,38 @@ resident-draw, set and fade parity; motion m28/m29).
   frame for their materials no such pipeline existed at the first frame, so the component stayed 0. The new pipelines'
   evaluations are now merged where nothing else wrote a component (`lightingSeeds`). y6: 0 of ~490 frame lightings, 0 geometry
   variables, 0 technique blocks, 0 material frame components and transforms differ; set parity 0; 7,420-7,443 sequences.
-- *Next* (6b, the rest): the fade-root journal's sent version (the depth commit writes it, the coordinator too), the retired-slot
-  and texture-change hand-overs (the render thread swaps the coordinator's lists), the lookups (the set's commit reads them while
-  the frame writes them), projected textures and imports; then 6c.
+- *6c, first part: the frame on its snapshot* (y7-y9). `GetTables()` is the accepted snapshot (`FrameView`); the coordinator's
+  tables are `GetSceneTables()` (the revision's shapes read them, on the coordinator). The snapshot is the frame's alone, so the
+  frame's start writes the set into both (`WriteBoth`: `ApplySet`, `WithdrawSet`, `RevokeUndrawnClaims`), and `AcceptTables`
+  checks the two are equal there (log end, version counter, sizes): a difference is a defect, logged once and republished at once
+  ("published again at the frame's start"). Revocation moved from the walk's join to the frame's start, after the set's
+  application, from the change log's position at the commit (`setCommitCursor`). Found on the way: `setPhases` indexed past the
+  snapshot (y7, `PhasesIn`); members re-bound by the joins kept the coordinator's applied phases (y8: set patched 15; the joins
+  now clear them). y9: set parity 0, 7,448 sequences, every parity 0 differ.
+- *6c, second part: the scene work spans the frame* (m34-m37, y10). The scene task runs on its own lane
+  (`SceneScheduler::SceneLane`, one thread "CS DCLF scene", `AsyncWorker::SubmitScene`), so the frame's builds never queue
+  behind it; it is joined only at Present and at the frame's start. The 12 in-frame joins are gone (PrimaryCull's full-frustum
+  hook, the epochs, EarlyPrepass: the accumulate work is posted there and joined at Present). What passes between the frame and
+  the coordinator is handed over at the frame's start with the task joined (`HandOverAtFrameStart`): sun and light candidates,
+  switch changes, retired slots, shadow texture changes, retired imports, the lookups (the coordinator keeps its own copy,
+  `lookupsView`); the frame's posts to the coordinator (fade roots sent and owned, reseeds, lookup resets) wait for the next
+  task. Sun candidates carry their geometry's slot, so PrimaryCull resolves members without the coordinator's maps. The
+  reports moved to Present, after its join; the fade write-back and the early shadow build are kicked after the set's
+  application. `GuardFrameAccess` counts every frame read of coordinator state while the task is in flight ("FRAME ACCESS",
+  an error line): 0 in m36, m37 and y10.
+  Crashes on the way: m34 (the lane made with no preparation workers: the executor requires one), m36 (ORG's host thread,
+  `ShadowViewPass::Prepare` read a target's depth views past their count after a shadow map import; the slice is bounded by
+  both). Results:
+  - m37 (motion, 7,719 frames): 0 crashes, 0 guard violations, 0 republishes; render-thread waits 0.10-0.38 ms/frame (m32
+    0.67), left at Present (join accumulate 0.05-0.19) and the colour build's join (0.04-0.18). Outermost DCLF zones on the
+    render thread (Tracy, 35 s): 0.65 -> 0.43 ms/frame (the walk's join 0.22 and the revision's shapes 0.03 gone; Present's
+    hook 0.015 -> 0.067 with the join it now holds). Publication 0.35-0.55 ms on the coordinator (the whole copy, 6d's).
+  - y10 (bridge, parities): set parity 0 in every window, 7,446 sequences, 0 constants skips; persistent records, extras,
+    geometry, decal order, fade port/visibility, tree LOD, sun exclusion, material frame components, pipeline constants all
+    0 differ.
+- *Next*: 6d (the whole copy becomes journal replay, family by family, each with a parity); the colour build's join (the
+  last in-frame wait); the Present join goes with the walk (events instead of the walk, so the scene work is short or done on
+  events alone).
 
 ## Implemented foundations
 

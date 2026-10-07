@@ -39,6 +39,29 @@ namespace DCLF
 		return *executor;
 	}
 
+	PublishedSceneExecutor& SceneScheduler::SceneLane()
+	{
+		// Never destroyed, as Executor(). The executor takes at least one preparation worker; the lane's is idle (the walk's parallel
+		// loops use Executor()'s).
+		static auto* lane = new PublishedSceneExecutor(1, [](org::async::TaskClass a_class, unsigned) {
+			if (a_class.domain != PublishedSceneExecutor::Coordinator.domain) {
+				SetThreadDescription(GetCurrentThread(), L"CS DCLF scene (idle)");
+				return;
+			}
+			SetThreadDescription(GetCurrentThread(), L"CS DCLF scene");
+			// The render thread waits for it only at Present; above the engine's job threads, as the coordinator.
+			if (SwitchValue(Switch::AsyncPriority) != "normal")
+				SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+		});
+		return *lane;
+	}
+
+	const org::async::Scope& SceneScheduler::SceneLaneScope()
+	{
+		static const org::async::Scope scope = SceneLane().CreateScope("DCLF scene");
+		return scope;
+	}
+
 	Published::SceneGraph& SceneScheduler::Graph()
 	{
 		// Never destroyed, as the executor it runs on; the graph holds it without owning it.

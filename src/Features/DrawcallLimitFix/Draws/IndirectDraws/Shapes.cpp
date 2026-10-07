@@ -257,7 +257,7 @@ namespace DCLF
 		if (failed || !impl->resources || !impl->resources->scene || !host)
 			return;
 		auto& store = SceneStore::Get();
-		const auto& tables = store.GetTables();
+		const auto& tables = store.GetSceneTables();
 		auto& r = *impl->resources;
 		// The capacities for the tables as the scene work left them: a growth here is one the frame's epochs would make.
 		impl->ReserveSceneTables(tables);
