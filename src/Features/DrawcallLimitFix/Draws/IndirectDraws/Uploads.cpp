@@ -96,150 +96,39 @@ namespace DCLF
 			return views;
 		}
 
-	void IndirectDraws::Impl::KickSceneStreams()
-	{
-		ZoneScopedN("CS.DCLF.KickSceneStreams");
-		auto& store = SceneStore::Get();
-		const auto& tables = store.GetTables();
-		const auto key = StreamsKeyOf(tables, store.GetTablesGeneration());
-		auto& job = streamsJob;
-		// Out for these tables, or made for them already.
-		if (job.handle ? job.key == key : (streamViews && streamViewsKey == key))
-			return;
-		DropSceneStreams();
-		if (!resources || !resources->scene || tables.objects.empty())
-			return;
-		// The capacities the job stages against, grown now (the first reserve of the frame does the growing).
-		ReserveSceneTables(tables);
-		const auto& sceneBuffers = *resources->scene;
-		job.key = key;
-		job.slot = std::make_shared<std::shared_ptr<const StreamViews>>();
-		job.scene = &sceneBuffers;
-		job.from = sceneBuffers.held;
-		job.tablesGeneration = store.GetTablesGeneration();
-		job.sceneGeneration = sceneBuffers.generation;
-		job.objects = job.extras = 0;
-		job.staged = false;
-		std::shared_ptr<const SceneStore::Tables> hold = store.AcceptedTables();
-		// The installed publication's (step 6e E3b: the coordinator made them, the stores are its own): the job only stages.
-		std::shared_ptr<const StreamViews> made = installedDraws && installedDraws->tables.get() == &tables ? installedDraws->streams : nullptr;
-		if (!made) {
-			// None (a publication made at the frame's start): made here while the coordinator is idle; never while it runs.
-			if (store.SceneTaskInFlight() || aheadDone.load(std::memory_order_acquire) < aheadKicked) {
-				++streamsRefused;
-				return;
-			}
-			// Its journals keep what the scene buffers and the ring's entries lack.
-			const auto& holders = ringHolders;
-			const TablesHeld from{ std::min(job.from.objects, holders.objects.Oldest()), std::min(job.from.extras, holders.extras.Oldest()),
-				std::min(job.from.geometries, holders.geometries.Oldest()) };
-			made = MakeStreamViews(objectStore, extrasStore, geometryStore, from, hold, tables, job.tablesGeneration, store.GetFrame());
-		}
-		if (!AsyncEnabled()) {
-			// No worker: made here, nothing staged (the commits send the changes).
-			streamViews = std::move(made);
-			streamViewsKey = key;
-			*job.slot = streamViews;
-			return;
-		}
-		// The persistent parity checks what the render thread uploads; the job's batch would bypass it.
-		const bool stage = !PersistentParityEnabled();
-		job.batch = stage ? AcquireStagedBatch(job.pool) : nullptr;
-		++job.kicked;
-		const rhi::Device device = RecordingDevice();
-		job.handle = AsyncWorker::Get().Submit("streams", [result = &job, slot = job.slot, batch = job.batch, objectsBuffer = sceneBuffers.objects->Get(),
-															extrasBuffer = sceneBuffers.extras->Get(), objectCapacity = sceneBuffers.objectCapacity, extraRows = sceneBuffers.extraRows,
-															views = std::move(made), from = job.from, device](std::stop_token) {
-			ZoneScopedN("CS.DCLF.StageSceneStreams");
-			using org::runtime::UploadTarget;
-			*slot = views;
-			// Past a buffer (its growth outstanding), or the parity on: the commit sends what fits.
-			if (!batch || views->objects.Count() > objectCapacity || views->extras.Rows() > extraRows)
-				return;
-			views->objects.Emit(from.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-				batch->Stage(UploadTarget::FromShared(objectsBuffer), a_offset, a_data, a_bytes);
-			});
-			EmitExtras(views->extras, from.extras, nullptr, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-				batch->Stage(UploadTarget::FromShared(extrasBuffer), a_offset, a_data, a_bytes);
-			});
-			if (device && !batch->Entries().empty())
-				batch->Record(device);
-			result->objects = views->objects.Version();
-			result->extras = views->extras.Version();
-			result->staged = true;
-		});
-	}
-
-	void IndirectDraws::Impl::JoinSceneStreams()
-	{
-		auto& job = streamsJob;
-		if (!job.handle)
-			return;
-		ZoneScopedN("CS.DCLF.JoinSceneStreams");
-		// Every build of the frame reads its views: waited for whole, never cancelled.
-		const auto joined = AsyncWorker::Get().Wait(job.handle, std::chrono::hours(1));
-		job.handle = {};
-		job.joinedDone = joined == AsyncWorker::WaitResult::Done && job.slot && *job.slot;
-		if (job.joinedDone) {
-			streamViews = *job.slot;
-			streamViewsKey = job.key;
-		} else if (streamsFailed++ == 0) {
-			logger::error("[DCLF] the scene streams' job did not finish; the frame's builds pack their own geometry and the commits send nothing of the streams");
-		}
-	}
-
-	void IndirectDraws::Impl::DropSceneStreams()
-	{
-		auto& job = streamsJob;
-		JoinSceneStreams();
-		if (job.batch) {
-			++job.dropped;
-			job.batch.reset();
-		}
-		job.staged = false;
-	}
-
 	std::shared_ptr<const StreamViews> IndirectDraws::Impl::StreamsNow()
 	{
-		KickSceneStreams();
-		JoinSceneStreams();
-		const auto& store = SceneStore::Get();
-		return streamViews && streamViewsKey == StreamsKeyOf(store.GetTables(), store.GetTablesGeneration()) ? streamViews : nullptr;
-	}
-
-	StreamsSlot IndirectDraws::Impl::StreamsForBuild()
-	{
-		KickSceneStreams();
-		if (streamsJob.handle)
-			return streamsJob.slot;
-		const auto& store = SceneStore::Get();
-		const bool current = streamViews && streamViewsKey == StreamsKeyOf(store.GetTables(), store.GetTablesGeneration());
-		return std::make_shared<std::shared_ptr<const StreamViews>>(current ? streamViews : nullptr);
+		ZoneScopedN("CS.DCLF.StreamsNow");
+		auto& store = SceneStore::Get();
+		const auto& tables = store.GetTables();
+		if (installedDraws && installedDraws->tables.get() == &tables)
+			return installedDraws->streams;
+		const auto key = StreamsKeyOf(tables, store.GetTablesGeneration());
+		if (streamViews && streamViewsKey == key)
+			return streamViews;
+		if (!resources || !resources->scene || tables.objects.empty())
+			return nullptr;
+		if (store.SceneTaskInFlight() || aheadDone.load(std::memory_order_acquire) < aheadKicked) {
+			++streamsRefused;
+			return nullptr;
+		}
+		// Their journals keep what the scene buffers and the ring's entries lack.
+		const auto& held = resources->scene->held;
+		const auto& holders = ringHolders;
+		const TablesHeld from{ std::min(held.objects, holders.objects.Oldest()), std::min(held.extras, holders.extras.Oldest()),
+			std::min(held.geometries, holders.geometries.Oldest()) };
+		streamViews = MakeStreamViews(objectStore, extrasStore, geometryStore, from, store.AcceptedTables(), tables, store.GetTablesGeneration(), store.GetFrame());
+		streamViewsKey = key;
+		return streamViews;
 	}
 
 	IndirectDraws::Impl::SceneStreams IndirectDraws::Impl::CommitSceneStreams(SceneBuffers& a_scene, const SceneStore::Tables& a_tables, std::uint32_t a_frame,
 		std::uint32_t a_generation, CommitUploads& a_uploads)
 	{
 		ZoneScopedN("CS.DCLF.CommitSceneStreams");
-		// The frame's views (the streams' job joined, or made now), then the job's batch first (ahead of this commit's own, submitted
-		// when it ends), when the buffers still hold what it started from.
+		// A commit that reads no ring entry (step 6e S3: a fallback build's): what the scene buffers lack of the frame's views.
+		(void)a_generation;
 		const auto views = StreamsNow();
-		if (auto& job = streamsJob; job.batch) {
-			if (job.joinedDone && job.staged && job.scene == &a_scene && a_scene.held.objects == job.from.objects && a_scene.held.extras == job.from.extras &&
-				job.tablesGeneration == a_generation && job.sceneGeneration == a_scene.generation) {
-				if (!job.batch->Entries().empty())
-					SubmitWorkerBatch(std::move(job.batch));
-				if (job.objects)
-					a_scene.held.objects = job.objects;
-				if (job.extras)
-					a_scene.held.extras = job.extras;
-				++job.used;
-			} else {
-				++job.dropped;
-			}
-			job.batch.reset();
-			job.staged = false;
-		}
 		SceneStreams sent;
 		if (!views)
 			return sent;
@@ -1042,85 +931,81 @@ namespace DCLF
 
 	void IndirectDraws::KickFadeWriteBack()
 	{
-		JoinFadeWriteBack();  // one no join reached (a frame that rendered neither shadows nor the accumulate phase)
 		if (!impl->scene || !impl->scene->fadeWriteBack)
 			return;
 		auto& writeBack = *impl->scene->fadeWriteBack;
-		// The batches after what the last job left, in frame order (the stack hands them back newest first, and two recordings
-		// need not finish in their frames' order).
-		std::vector<FadeWriteBack::Batch*> batches;
-		for (auto* batch = writeBack.batches.exchange(nullptr, std::memory_order_acquire); batch; batch = batch->next)
-			batches.push_back(batch);
-		std::reverse(batches.begin(), batches.end());
-		std::stable_sort(batches.begin(), batches.end(), [](const auto* a_a, const auto* a_b) { return a_a->frame < a_b->frame; });
-		for (auto* batch : batches) {
-			writeBack.pending.insert(writeBack.pending.end(), batch->events.begin(), batch->events.end());
-			writeBack.pendingFrames.insert(writeBack.pendingFrames.end(), batch->events.size(), batch->frame);
-			delete batch;
-		}
-		if (writeBack.pending.empty())
+		// One task at a time; one still running takes the new batches with it (or the next task does).
+		if (bool idle = false; !writeBack.running.compare_exchange_strong(idle, true, std::memory_order_acq_rel)) {
+			writeBack.busy.fetch_add(1, std::memory_order_relaxed);
 			return;
-		writeBack.done.store(0, std::memory_order_relaxed);
-		// Between here and the join the tables are the frame's and no node is freed: the scene events are applied at the next
-		// frame's start, after the join.
-		auto apply = [scene = impl->scene](std::stop_token a_stop, bool a_worker) {
+		}
+		// The task reads the frame's tables (immutable) and writes the nodes they name: holding them holds the publication's retirement
+		// node, so no root node it names is let go meanwhile (step 6e E3a).
+		std::shared_ptr<const SceneStore::Tables> tables = SceneStore::Get().AcceptedTables();
+		auto apply = [scene = impl->scene, tables, worker = AsyncEnabled()] {
+			ZoneScopedN("CS.DCLF.FadeWriteBack");
 			auto& state = *scene->fadeWriteBack;
-			const auto& tables = SceneStore::Get().GetTables();
-			for (std::size_t i = state.done.load(std::memory_order_relaxed); i < state.pending.size(); ++i) {
-				if (a_stop.stop_requested())
-					return;
-				// A worker writes the engine's nodes only inside the window; the next job takes what it left.
-				std::optional<EngineReadWindow::Lease> lease;
-				if (a_worker && !lease.emplace())
-					return;
-				const auto& event = state.pending[i];
-				const std::uint32_t frame = state.pendingFrames[i];
-				if (event.root >= state.appliedFrame.size())
-					state.appliedFrame.resize(std::size_t(event.root) + 1, 0u);
-				// The root the event was of, still stood in: one listed again since, or the engine's own again, keeps its node; and
-				// an event older than the one written last is not written over it.
-				if (event.root >= tables.fadeRoots.size() || tables.fadeRoots[event.root].generation != event.generation ||
-					!(tables.fadeRoots[event.root].bits & kFadeRootStoodIn) || !tables.fadeRootNode[event.root] ||
-					frame < state.appliedFrame[event.root]) {
-					++state.stale;
-				} else {
-					state.appliedFrame[event.root] = frame;
-					// The fade, and the fade bits of the flags (atomically: the engine owns the others). The fade watch is not told:
-					// a stood-in root's dependents read its fade from FadeStateCS's state (SceneStore::MarkFadeRootOwned).
-					auto* node = static_cast<std::byte*>(const_cast<void*>(tables.fadeRootNode[event.root]));
-					std::atomic_ref<std::uint32_t> flags(*reinterpret_cast<std::uint32_t*>(node + 0xF4));
-					flags.fetch_and(~kFadeFlagMask, std::memory_order_relaxed);
-					flags.fetch_or(event.flags & kFadeFlagMask, std::memory_order_relaxed);
-					*reinterpret_cast<float*>(node + 0x130) = event.currentFade;
-					++state.applied;
-				}
-				state.done.store(i + 1, std::memory_order_release);
+			// The batches since, in frame order (the stack hands them back newest first, and two recordings need not finish in their
+			// frames' order).
+			std::vector<FadeWriteBack::Batch*> batches;
+			for (auto* batch = state.batches.exchange(nullptr, std::memory_order_acquire); batch; batch = batch->next)
+				batches.push_back(batch);
+			std::reverse(batches.begin(), batches.end());
+			std::stable_sort(batches.begin(), batches.end(), [](const auto* a_a, const auto* a_b) { return a_a->frame < a_b->frame; });
+			for (auto* batch : batches) {
+				state.pending.insert(state.pending.end(), batch->events.begin(), batch->events.end());
+				state.pendingFrames.insert(state.pendingFrames.end(), batch->events.size(), batch->frame);
+				delete batch;
 			}
+			std::size_t done = 0;
+			if (tables) {
+				for (; done < state.pending.size(); ++done) {
+					// Engine nodes are written only inside the window (EngineReadWindow); the next task takes what is left.
+					std::optional<EngineReadWindow::Lease> lease;
+					if (worker && !lease.emplace())
+						break;
+					const auto& event = state.pending[done];
+					const std::uint32_t frame = state.pendingFrames[done];
+					if (event.root >= state.appliedFrame.size())
+						state.appliedFrame.resize(std::size_t(event.root) + 1, 0u);
+					// The root the event was of, still stood in: one listed again since, or the engine's own again, keeps its node; and an
+					// event older than the one written last is not written over it.
+					if (event.root >= tables->fadeRoots.size() || tables->fadeRoots[event.root].generation != event.generation ||
+						!(tables->fadeRoots[event.root].bits & kFadeRootStoodIn) || !tables->fadeRootNode[event.root] || frame < state.appliedFrame[event.root]) {
+						state.stale.fetch_add(1, std::memory_order_relaxed);
+					} else {
+						state.appliedFrame[event.root] = frame;
+						// The fade, and the fade bits of the flags (atomically: the engine owns the others). The fade watch is not told: a
+						// stood-in root's dependents read its fade from FadeStateCS's state (SceneStore::MarkFadeRootOwned).
+						auto* node = static_cast<std::byte*>(const_cast<void*>(tables->fadeRootNode[event.root]));
+						std::atomic_ref<std::uint32_t> flags(*reinterpret_cast<std::uint32_t*>(node + 0xF4));
+						flags.fetch_and(~kFadeFlagMask, std::memory_order_relaxed);
+						flags.fetch_or(event.flags & kFadeFlagMask, std::memory_order_relaxed);
+						*reinterpret_cast<float*>(node + 0x130) = event.currentFade;
+						state.applied.fetch_add(1, std::memory_order_relaxed);
+					}
+				}
+			}
+			state.pending.erase(state.pending.begin(), state.pending.begin() + static_cast<std::ptrdiff_t>(done));
+			state.pendingFrames.erase(state.pendingFrames.begin(), state.pendingFrames.begin() + static_cast<std::ptrdiff_t>(done));
+			state.running.store(false, std::memory_order_release);
+			state.running.notify_all();
 		};
 		if (!AsyncEnabled()) {
-			apply(std::stop_token{}, false);
-			writeBack.pending.clear();
-			writeBack.pendingFrames.clear();
+			apply();
 			return;
 		}
-		writeBack.job = std::make_shared<AsyncWorker::JobHandle>(
-			AsyncWorker::Get().Submit("fade write-back", [apply = std::move(apply)](std::stop_token a_stop) { apply(a_stop, true); }));
+		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), PublishedSceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "fade write-back",
+				[apply = std::move(apply)](const auto&) { apply(); }))
+			stl::report_and_fail("Drawcall Limit Fix: the fade write-back was refused by DCLF's executor");
 	}
 
-	void IndirectDraws::JoinFadeWriteBack()
+	void IndirectDraws::Impl::WaitFadeWriteBack()
 	{
-		if (!impl->scene || !impl->scene->fadeWriteBack || !impl->scene->fadeWriteBack->job)
+		if (!scene || !scene->fadeWriteBack)
 			return;
-		auto& writeBack = *impl->scene->fadeWriteBack;
-		auto& worker = AsyncWorker::Get();
-		const auto job = std::exchange(writeBack.job, nullptr);
-		// Late: stopped (waited for while it runs); the rest is the next job's, not this thread's.
-		if (worker.Wait(*job, AsyncWaitBudget()) != AsyncWorker::WaitResult::Done) {
-			worker.Cancel(*job);
-			++writeBack.late;
-		}
-		const std::size_t done = std::min(writeBack.done.load(std::memory_order_acquire), writeBack.pending.size());
-		writeBack.pending.erase(writeBack.pending.begin(), writeBack.pending.begin() + static_cast<std::ptrdiff_t>(done));
-		writeBack.pendingFrames.erase(writeBack.pendingFrames.begin(), writeBack.pendingFrames.begin() + static_cast<std::ptrdiff_t>(done));
+		auto& running = scene->fadeWriteBack->running;
+		while (running.load(std::memory_order_acquire))
+			running.wait(true, std::memory_order_acquire);
 	}
 }

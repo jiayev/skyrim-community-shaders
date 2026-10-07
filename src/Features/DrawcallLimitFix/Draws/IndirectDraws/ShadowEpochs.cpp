@@ -1355,7 +1355,8 @@ namespace DCLF
 				const std::uint32_t slot = OcclusionSlot(v), mode = OcclusionModeOf(v);
 				const auto inputCount = static_cast<std::uint32_t>(payload.ModeInputs(mode));
 				// The view slot's blocks, which its push data names, into the latch (its counters are zeroed by the latched copies).
-				// The occluders, material rows, frame record, objects and geometries were uploaded by this frame's shadow commit.
+				// The occluders, material rows, frame record, objects and geometries were uploaded by this frame's shadow commit (or are the
+				// ring entry it read).
 				WriteViewBlocks(latchBlock, latchLayout, latchSlot, slot, view);
 				// Its latch: frustum culling alone, near plane included as the rasterizer clips, every input drawn, and the rule's
 				// size test (Skylighting::OcclusionTechnique's bound radius above 32) on the record's bound, and the fade roots as the
@@ -1365,6 +1366,8 @@ namespace DCLF
 				static const REL::Relocation<const std::uint8_t*> fadesOn{ REL::Offset(0x2032dfd) };
 				latch.cullFlags = 1u | kCullMinRadius | (*fadesOn.get() ? kCullFadeOnVisible : 0u);
 				latch.fadeStatesIndex = scene.FadeStatesReadIndex(frameNumber);
+				// The ring entry the shadow commit read, when it read one (step 6e S2).
+				Impl::ShadowRingLatch(impl->ringShadow, mode, latch);
 				UseShadowMapRow(latchBlock, latchLayout, buckets, latchSlot, view.rasterState, true, latch);
 				WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, shapeView.buckets, latch);
 				LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
@@ -1454,14 +1457,19 @@ namespace DCLF
 		impl->ReserveSceneTables(tables);
 		impl->ReserveShadowRows();
 		ShadowInputs in = impl->PrepareShadowInputs(store, *resources, modeUsed, modeRasterStates);
-		impl->lastShadow.modes = modeUsed;
+		// Every mode the epochs have drawn and its states (step 6e S4): the builds ahead are made for them all, so a mode that comes and
+		// goes (a point light's paraboloids, an occlusion map) finds its inputs built; the epoch draws only the frame's.
+		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
+			if (modeUsed[m]) {
+				impl->lastShadow.modes[m] = true;
+				impl->lastShadow.rasterStates[m] = modeRasterStates[m];
+			}
 		// What the set's caster readiness reads (CasterReady): a new kind of view seen is a readiness event.
 		if (impl->readyModes != modeUsed || impl->readyStates != modeRasterStates) {
 			impl->readyModes = modeUsed;
 			impl->readyStates = modeRasterStates;
 			++impl->shadowReadinessSerial;
 		}
-		impl->lastShadow.rasterStates = modeRasterStates;
 		impl->lastShadow.dsvFormat = dsvFormat;
 		impl->lastShadow.known = true;
 		ShadowPayload* committed = &impl->shadowFallback;
@@ -1564,6 +1572,13 @@ namespace DCLF
 			impl->committedShadow = ahead;
 			ShadowPayload& payload = ahead ? *ahead : impl->shadowFallback;
 			committed = &payload;
+			// Step 6e S2: an installed payload is read from the frame's ring entry, which the frame's producer filled: nothing of it but
+			// the arena (frame captures) is uploaded here. The occlusion epoch reads what this commit read.
+			const bool ring = impl->RingForShadow(payload);
+			impl->ringShadow = ring ? impl->ringFrame : Impl::RingFrame{};
+			impl->ringShadow.draws.reset();
+			if (ring)
+				++impl->ringStats.shadowCommitted;
 			// Copied: a frame that keeps the publication commits the payload again.
 			*frameOwners = payload.bindingOwners;
 			// The cleared geometry slots' buffers, held until this execution retires (SceneStore::TakeRetiredImports).
@@ -1583,8 +1598,8 @@ namespace DCLF
 			TracyCZoneN(shadowCommitZone, "CS.DCLF.ShadowInputs.CommitShared", true);
 			const auto inputsStart = std::chrono::steady_clock::now();
 			// What the buffers lack of the payload, from its vectors (against the versions they hold: a payload committed again, or one
-			// whose journals the buffers fell behind, sends more).
-			{
+			// whose journals the buffers fell behind, sends more). None of it when the ring's entry holds it.
+			if (!ring) {
 				auto& scene = *resources->scene;
 				EmitGeometryDraws(payload.geometries, scene.held.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 					uploads(scene.geometries, a_data, a_bytes, a_offset);
@@ -1595,15 +1610,17 @@ namespace DCLF
 			}
 			// The rows the table holds (none past its capacity, which the build left waiting), and what the next frame's
 			// Reserve grows it to. A build without the kept state wrote them whole: the table holds no journal version.
-			resources->materialRowsHeld = payload.kept ? payload.materialRows.Version() : 0;
+			if (!ring)
+				resources->materialRowsHeld = payload.kept ? payload.materialRows.Version() : 0;
 			impl->shadowRowsWanted = payload.rowsWanted;
 			shadowStats.waitingRows = payload.waitingRows;
 			// The geometry slots' draws the buffers did not hold are uploaded. The object records and the bone rows are
-			// the streams, as the tables hold them now (CommitSceneStreams).
+			// the streams, as the tables hold them now (CommitSceneStreams), or the ring entry's.
 			auto& scene = *resources->scene;
-			if (payload.geometries.Version() && payload.geometries.Count() <= scene.geometryRows)
+			if (!ring && payload.geometries.Version() && payload.geometries.Count() <= scene.geometryRows)
 				scene.held.geometries = payload.geometries.Version();
-			impl->CommitSceneStreams(scene, store.GetTables(), store.GetFrame(), store.GetTablesGeneration(), uploads);
+			if (!ring)
+				impl->CommitSceneStreams(scene, store.GetTables(), store.GetFrame(), store.GetTablesGeneration(), uploads);
 			shadowStats.faceUploads += UploadFaceStreams(payload.faceStreams, scene.facePositions, scene.faceUploaded, uploads, scene.faceVertices);
 			ZeroFrameAheadOutputs(scene, uploads);
 			UploadTrees(store.GetTables(), store.GetFrame(), scene, uploads, false);
@@ -1615,11 +1632,13 @@ namespace DCLF
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
 				if (!modeUsed[m])
 					continue;
-				EmitShadowInputs(payload, m, payload.kept ? resources->inputsUploaded[m] : 0,
-					[&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { uploads(resources->inputs[m], a_data, a_bytes, a_offset); });
-				// What the buffer did not hold was written; a build without the kept state wrote it whole, which no version of the kept
-				// state is.
-				resources->inputsUploaded[m] = payload.kept ? payload.regionInputs[m].Version() : 0;
+				if (!ring) {
+					EmitShadowInputs(payload, m, payload.kept ? resources->inputsUploaded[m] : 0,
+						[&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { uploads(resources->inputs[m], a_data, a_bytes, a_offset); });
+					// What the buffer did not hold was written; a build without the kept state wrote it whole, which no version of the kept
+					// state is.
+					resources->inputsUploaded[m] = payload.kept ? payload.regionInputs[m].Version() : 0;
+				}
 				shadowStats.inputs = static_cast<std::uint32_t>(payload.ModeInputs(m));
 			}
 			inputsMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - inputsStart).count();
@@ -1679,6 +1698,7 @@ namespace DCLF
 				latch.cullPlaneMask = view.cullPlaneMask;
 				std::memcpy(latch.cullPlanes, view.cullPlanes, sizeof(latch.cullPlanes));
 				latch.fadeStatesIndex = resources->scene->FadeStatesReadIndex(frameNumber);
+				Impl::ShadowRingLatch(impl->ringShadow, view.modeIndex, latch);
 				// A sun view's entry rule on the GPU: the slot's region of the frame's full-frustum processes (written once, below the
 				// loop's first sun view), which BuildDraws tests every input's entry sphere against (SetSunEntryRow).
 				if (view.sunView) {
@@ -1723,8 +1743,8 @@ namespace DCLF
 			// (copies into one batch are unordered).
 			if (const auto& bytes = arena.Bytes(); !bytes.empty()) {
 				DrawBindings record = payload.frameRecord;
-				record.textures[kObjectBufferRegister] = in.addresses.objectsIndex;
-				record.textures[kExtrasBufferRegister] = in.addresses.extrasIndex;
+				record.textures[kObjectBufferRegister] = ring ? impl->ringShadow.objectsIndex : in.addresses.objectsIndex;
+				record.textures[kExtrasBufferRegister] = ring ? impl->ringShadow.extrasIndex : in.addresses.extrasIndex;
 				record.textures[kPlacementBufferRegister] = in.addresses.placementsIndex;
 				record.textures[kPaletteBufferRegister] = in.addresses.palettesIndex;
 				record.textures[kTreeWindRegister] = in.addresses.treeWindIndex;
@@ -2064,14 +2084,15 @@ namespace DCLF
 
 	bool IndirectDraws::Impl::ShadowAheadUsable(const ShadowPayload& a_payload, const ShadowInputs& a_frame) const
 	{
-		// Built for these resources, every mode the frame's views draw with their rasterizer states, and CS's blocks of these sizes. Not
-		// the per-frame buffers (the commit writes the frame record), the full-frustum planes (the latch's) or the candidates (the
-		// publication's).
+		// Built for these resources (their arena, the face positions its geometry rows name), every mode the frame's views draw with their
+		// rasterizer states, and CS's blocks of these sizes. Not the per-frame buffers (the commit writes the frame record), the
+		// full-frustum planes (the latch's), the candidates (the publication's), nor the capacities it was built within: a ring entry
+		// is sized from the payload, and the buffers only grow.
 		const auto& built = a_payload.inputs;
 		const auto& b = built.addresses;
 		const auto& f = a_frame.addresses;
-		if (b.identity != f.identity || b.constants != f.constants || b.records != f.records || b.recordCapacity != f.recordCapacity || !(b.fit == f.fit) ||
-			b.facePositions != f.facePositions || built.sharedData.size() != a_frame.sharedData.size() || built.featureData.size() != a_frame.featureData.size())
+		if (b.identity != f.identity || b.constants != f.constants || b.facePositions != f.facePositions || built.sharedData.size() != a_frame.sharedData.size() ||
+			built.featureData.size() != a_frame.featureData.size())
 			return false;
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 			if (a_frame.modeUsed[m] && (!built.modeUsed[m] || !(built.modeRasterStates[m] == a_frame.modeRasterStates[m])))

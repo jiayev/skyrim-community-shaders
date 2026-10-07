@@ -483,15 +483,15 @@ namespace DCLF
 			// The largest count a recording read past its buffer's events: the list grows to it (the roots it left out try again).
 			std::atomic<std::uint32_t> wanted{ 0 };
 			std::atomic<Batch*> batches{ nullptr };
-			// The write-back job's (IndirectDraws::KickFadeWriteBack): the events taken from the batches in order, those of them it
-			// has written (or found stale), and its tallies. The render thread touches them only with no job out.
+			// The write-back task's (IndirectDraws::KickFadeWriteBack, step 6e S4: one at a time on DCLF's executor, never joined): the
+			// events it took from the batches in order and has not written yet (the window closed on it), and per root slot the scene
+			// frame of the event last written - an older one (a list read late) is not written over it. Its alone.
 			std::vector<FadeEvent> pending;
 			std::vector<std::uint32_t> pendingFrames;  // each pending event's scene frame
-			std::atomic<std::size_t> done{ 0 };
-			// Per root slot, the scene frame of the event last written: an older one (a list read late) is not written over it.
 			std::vector<std::uint32_t> appliedFrame;
-			std::shared_ptr<AsyncWorker::JobHandle> job;
-			std::uint64_t applied = 0, stale = 0, late = 0;
+			std::atomic<bool> running{ false };
+			// Since the last report: milestones written, stale, and frames whose start found the last task still running.
+			std::atomic<std::uint64_t> applied{ 0 }, stale{ 0 }, busy{ 0 };
 
 			void Push(Batch* a_batch)
 			{
@@ -2106,6 +2106,9 @@ namespace DCLF
 			bool active = false;
 			// Since the last report.
 			std::uint64_t builds = 0, materialsWritten = 0, pipelinesWritten = 0, resyncs = 0;
+			// Material rows written again, by the key part that moved (WriteMaterialRow): record, frame values, lookup, shared lookups,
+			// technique bindings, projected, constant tables (two words).
+			std::array<std::uint64_t, 8> keyMoved{};
 			std::atomic<std::uint32_t> busy{ 0 };
 		};
 
@@ -3722,17 +3725,11 @@ namespace DCLF
 		const ShadowPayload& CommittedShadow() const { return committedShadow ? *committedShadow : shadowFallback; }
 		std::vector<std::shared_ptr<ShadowPayload>> shadowPayloadPool;  // the builds task's
 		std::shared_ptr<ShadowPayload> AcquireShadowPayload();
-		// What the buffers hold once the publication before is committed (the builds task's prediction, as its journals' floors).
-		struct
-		{
-			std::uint64_t materialRows = 0;
-			std::array<std::uint64_t, kShadowModeCount> inputs{};
-		} shadowAheadHeld;
 		std::shared_ptr<const void> shadowExecutionOwner;  // reused by the sky epoch's copy of the shadow records
 		/**
-		 * @brief The shadow epoch's last views (ExecuteShadowFrame): the modes (occlusion maps included), rasterizer states and target
-		 * format the builds ahead and the frame's start's shadow lookups are for. A change shows a frame late: the epoch builds its own
-		 * meanwhile (ShadowAheadUsable).
+		 * @brief The shadow epochs' views (ExecuteShadowFrame): every mode drawn so far (occlusion maps included) with its last rasterizer
+		 * states, and the target format, which the builds ahead and the frame's start's shadow lookups are for. A new mode or state shows
+		 * a frame late: the epoch builds its own meanwhile (ShadowAheadUsable).
 		 */
 		struct LastShadow
 		{
@@ -3889,6 +3886,8 @@ namespace DCLF
 			std::uint32_t a_generation, std::uint32_t a_frame, std::shared_ptr<const SunCandidates> a_sunCandidates, std::shared_ptr<const SunCandidates> a_lightCandidates);
 		/** @brief Every builds' task kicked done (teardown, the toggle, a load screen). */
 		void WaitAhead();
+		/** @brief Teardown, the toggle, a load screen: the fade write-back task done (never per frame). */
+		void WaitFadeWriteBack();
 		std::shared_ptr<const DrawPublication> installedDraws;  // the frame's
 		/**
 		 * @brief Step 6e E4: the payload ring. Each frame the epochs read one entry - the installed publication's payload buffers
@@ -3910,6 +3909,9 @@ namespace DCLF
 		{
 			RingPart objects, extras, geometries, materialRows, pipelineRows;
 			std::array<RingPart, 2> inputs;  // kAsyncColour, kAsyncZPrepass
+			// The shadow payload's (step 6e S2): its material rows and each mode's inputs (the occlusion maps' included).
+			RingPart shadowRows;
+			std::array<RingPart, kShadowModeCount> shadowInputs;
 			org::PersistentGraphHost::GpuPoint reuse;  // the last frame that read it
 		};
 		std::array<RingEntry, kPayloadRing> payloadRing;
@@ -3923,6 +3925,9 @@ namespace DCLF
 			std::uint32_t objectsIndex = 0, extrasIndex = 0, geometriesIndex = 0;
 			std::array<std::uint32_t, 2> inputsIndex{};
 			std::uint64_t materialRows = 0, pipelineRows = 0;
+			bool shadow = false;  // the entry holds the publication's shadow payload
+			std::uint64_t shadowRows = 0;
+			std::array<std::uint32_t, kShadowModeCount> shadowInputsIndex{};
 		};
 		RingFrame ringFrame;
 		// The last Z-prepass commit's (the reflection draws from the frame before's depth inputs): its entry, when it read one.
@@ -3930,7 +3935,7 @@ namespace DCLF
 		std::uint32_t ringDepthInputs = 0;
 		struct RingStats
 		{
-			std::uint64_t frames = 0, grown = 0, bytes = 0, runs = 0, committed = 0;
+			std::uint64_t frames = 0, grown = 0, bytes = 0, runs = 0, committed = 0, shadowCommitted = 0;
 		} ringStats;
 		std::atomic<std::uint64_t> ringBytes{ 0 }, ringRuns{ 0 };
 		// By buffer (RingPartIndex), for the report.
@@ -3943,6 +3948,8 @@ namespace DCLF
 			kRingPipelineRows,
 			kRingResident,
 			kRingFrameInputs,
+			kRingShadowRows,
+			kRingShadowInputs,
 			kRingParts
 		};
 		std::array<std::atomic<std::uint64_t>, kRingParts> ringPartBytes{};
@@ -3956,7 +3963,28 @@ namespace DCLF
 		{
 			KeptHolders<kPayloadRing> objects, extras, geometries, materialRows, pipelineRows;
 			std::array<KeptHolders<kPayloadRing>, 2> resident;  // kAsyncColour, kAsyncZPrepass
+			KeptHolders<kPayloadRing> shadowRows;
+			std::array<KeptHolders<kPayloadRing>, kShadowModeCount> shadowInputs;
 		} ringHolders;
+		// The entry the frame's shadow commit read (none: its own buffers), which the occlusion epoch's latches name too.
+		RingFrame ringShadow;
+		/** @brief Whether a shadow commit of a_payload reads the frame's ring entry (the installed shadow payload, the entry filled for it). */
+		bool RingForShadow(const ShadowPayload& a_payload) const
+		{
+			return ringFrame.valid && ringFrame.shadow && ringFrame.draws && ringFrame.draws->shadow.get() == &a_payload;
+		}
+		/** @brief The ring's values into a shadow or occlusion view's latch, for its mode (none: the views' own buffers). */
+		static void ShadowRingLatch(const RingFrame& a_ring, std::uint32_t a_mode, BuildDrawsLatch& a_latch)
+		{
+			if (!a_ring.valid || !a_ring.shadow || a_mode >= kShadowModeCount)
+				return;
+			a_latch.payloadValid = 1;
+			a_latch.inputsIndex = a_ring.shadowInputsIndex[a_mode];
+			a_latch.geometriesIndex = a_ring.geometriesIndex;
+			a_latch.materialRowsLo = static_cast<std::uint32_t>(a_ring.shadowRows);
+			a_latch.materialRowsHi = static_cast<std::uint32_t>(a_ring.shadowRows >> 32);
+			a_latch.pipelineRowsLo = a_latch.pipelineRowsHi = 0;
+		}
 		/** @brief Whether a commit of a_payload reads the frame's ring entry (an installed payload, the entry filled for it). */
 		bool RingFor(const MainPayload& a_payload, std::size_t a_job) const
 		{
@@ -4057,45 +4085,14 @@ namespace DCLF
 			std::size_t objects = 0, extraRows = 0, objectBytes = 0, extraRowsSent = 0;
 		};
 		/**
-		 * @brief The streams' job (KickSceneStreams): the frame's stream views (StreamViews) made on the worker at the frame's start,
-		 * once its set is written (nothing writes the frame's tables after it), ahead of every build of the frame on the same lane,
-		 * and the object records' and extras rows' uploads staged with them - with the copies recorded there too. The next
-		 * CommitSceneStreams submits its batch when the buffers still hold what it started from, takes its versions as held, and
-		 * sends only what changed since. Otherwise the batch is dropped and the commit sends everything since the held versions, the
-		 * job's changes included (the views keep them).
+		 * @brief Render thread: the frame's stream views - the installed publication's (the builds task made them with it), or, with
+		 * none installed for the frame's tables, made here while the coordinator and the builds task are idle (they own the stores;
+		 * none is made while they run, counted). What the epochs' own builds and a commit that reads no ring entry take (step 6e S3).
 		 */
-		struct StreamsJob
-		{
-			AsyncWorker::JobHandle handle;
-			StreamsKey key;                           // the tables it makes views of
-			StreamsSlot slot;                         // where it puts them
-			bool joinedDone = false;                  // its last join found it done
-			const SceneBuffers* scene = nullptr;
-			TablesHeld from;                          // what the buffers held at the kick
-			std::uint32_t tablesGeneration = 0;
-			std::uint64_t sceneGeneration = 0;
-			// The job's result: its batch and the versions it brings the buffers to (0: that stream unchanged).
-			std::shared_ptr<org::runtime::StagedUploadBatch> batch;
-			std::uint64_t objects = 0, extras = 0;
-			bool staged = false;
-			std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>> pool;
-			// Since the last report: kicks, batches submitted, batches dropped.
-			std::uint64_t kicked = 0, used = 0, dropped = 0;
-		} streamsJob;
-		/** @brief Render thread, once the frame's start wrote its set: the streams' job (StreamsJob), unless one is out for these tables. */
-		void KickSceneStreams();
-		/** @brief Render thread: the streams' job waited for (it is every build's dependency: never cancelled), and its batch dropped. */
-		void DropSceneStreams();
-		/** @brief Render thread: the streams' job waited for, its views the current ones. */
-		void JoinSceneStreams();
-		/** @brief Render thread: the frame's stream views (the job's, joined; made now without one). Null without scene buffers. */
 		std::shared_ptr<const StreamViews> StreamsNow();
-		/** @brief Render thread, kicking a build: where it finds the frame's stream views when it runs. */
-		StreamsSlot StreamsForBuild();
-		std::shared_ptr<const StreamViews> streamViews;  // the frame's, once joined
+		std::shared_ptr<const StreamViews> streamViews;  // made here, for the tables of streamViewsKey (released at the frame's end)
 		StreamsKey streamViewsKey;
-		std::uint32_t streamsFailed = 0;
-		std::uint64_t streamsRefused = 0;  // views wanted while the coordinator ran (none made: it owns the stores)
+		std::uint64_t streamsRefused = 0;  // views wanted while the coordinator or the builds task ran (since the last report)
 		std::shared_ptr<MainPayload> AcquirePayload()
 		{
 			// An idle payload holds nothing: what it held (its stream views and their tables, its owners) would keep the retirement

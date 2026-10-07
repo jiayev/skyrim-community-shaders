@@ -295,8 +295,6 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	});
 	store.SyncFrameTables();
 	RefreshFrameLookups();
-	// A write-back job no join reached, before anything changes the tables it reads.
-	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
 	if (!draws.DecideCoverage() || !store.HasInstalled()) {
 		store.WithdrawSet();
 	} else {
@@ -306,10 +304,8 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// What the frame's epochs commit (step 6e E3b: built ahead with the publication), and what the next builds ahead take from it.
 	draws.InstallDraws(store.InstalledDraws());
 	draws.PostAheadContext();
-	// The frame's scene streams (step 6e E1): the object records, extras rows and geometry slots of the frame's tables, brought up to
-	// date once on the worker, ahead of every build of the frame, now that nothing writes those tables any more.
-	DCLF::IndirectDraws::Get().KickSceneStreams();
-	// The stood-in fade roots' write-back (engine writes under the read window's leases): it reads the frame's snapshot.
+	// The stood-in fade roots' write-back (engine writes under the read window's leases, step 6e S4): a task on DCLF's executor holding
+	// the frame's snapshot, never joined.
 	DCLF::IndirectDraws::Get().KickFadeWriteBack();
 	// The frame's ingestion: the engine's queues drained into the batch the scene work applies first (ApplyEvents, on the
 	// coordinator). The references it lets go of - detached subtrees among them, whose last drop runs the engine's destructors - are
@@ -371,7 +367,6 @@ void DrawcallLimitFix::BeforeShadowMaps()
 	// CS_DCLF_PERSISTENT_PARITY: the frame values' rows and palettes against the engine's now.
 	if (auto& store = DCLF::SceneStore::Get(); DCLF::SwitchEnabled(DCLF::Switch::PersistentParity) && DCLF::ParityDue(store.GetFrame()))
 		DCLF::FrameValues::Get().CheckParity(store.GetTables(), store.PeekPlacementPlan());
-	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
 	// The frame's shadow views, in the order the engine is about to render them. Everything downstream -
 	// the capture's attribution, the withholding, the epochs - identifies a view by this list.
 	DCLF::ShadowViews::Get().SetViewCapacity(DCLF::ActiveToggles().shadows ? DCLF::IndirectDraws::Get().ShadowViewCapacity() : UINT32_MAX);
@@ -500,7 +495,6 @@ void DrawcallLimitFix::EarlyPrepass()
 	// before the shadow maps (Main::Draw) - and because the tables read the latched accumulator rather
 	// than `currentAccumulator`, which is not set this early.
 	auto& store = DCLF::SceneStore::Get();
-	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
 	ScopedPerfEvent event("CS DCLF: accumulator tables and pipelines");
 	const auto start = std::chrono::steady_clock::now();
 	// The accumulate phase (step 6b): what only the render thread may run (the registrations drained, the engine's material

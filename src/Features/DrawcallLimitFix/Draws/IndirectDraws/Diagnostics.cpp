@@ -96,12 +96,11 @@ namespace DCLF
 			text += window + "\n";
 		if (impl->scene && impl->scene->fadeWriteBack) {
 			auto& writeBack = *impl->scene->fadeWriteBack;
-			if (writeBack.applied || writeBack.stale || writeBack.late) {
-				text += fmt::format("[DCLF] fade write-back: {} milestones written onto stood-in roots' nodes, {} stale (the root listed again or no longer stood in), "
-									"{} joins late (their rest carried over); event list {} events\n",
-					writeBack.applied, writeBack.stale, writeBack.late, writeBack.capacity.load(std::memory_order_relaxed));
-				writeBack.applied = writeBack.stale = writeBack.late = 0;
-			}
+			const auto applied = writeBack.applied.exchange(0), stale = writeBack.stale.exchange(0), busy = writeBack.busy.exchange(0);
+			if (applied || stale || busy)
+				text += fmt::format("[DCLF] fade write-back (6e S4): {} milestones written onto stood-in roots' nodes, {} stale (the root listed again or no "
+									"longer stood in), {} frames found the last task still running (their batches its or the next's); event list {} events\n",
+					applied, stale, busy, writeBack.capacity.load(std::memory_order_relaxed));
 		}
 		text += ReflectionReport();
 		if (impl->scene && impl->scene->treeLodCull && impl->scene->treeLodUploads) {
@@ -126,10 +125,13 @@ namespace DCLF
 		}
 		if (auto& rows = impl->mainRows; rows.builds) {
 			text += fmt::format("[DCLF] main rows: {} builds; a build: {:.1f} material and {:.1f} pipeline rows written; {} material and {} pipeline rows held "
-								"(tables {} and {} rows), {} resyncs\n",
+								"(tables {} and {} rows), {} resyncs; material rows written again by what moved: record {}, frame values {}, lookup {}, shared {}, "
+								"technique bindings {}, projected {}, constant tables {}\n",
 				rows.builds, double(rows.materialsWritten) / rows.builds, double(rows.pipelinesWritten) / rows.builds, rows.material.Size(), rows.pipeline.Size(),
-				impl->resources ? impl->resources->materialRows.capacity : 0u, impl->resources ? impl->resources->pipelineRows.capacity : 0u, rows.resyncs);
+				impl->resources ? impl->resources->materialRows.capacity : 0u, impl->resources ? impl->resources->pipelineRows.capacity : 0u, rows.resyncs,
+				rows.keyMoved[0], rows.keyMoved[1], rows.keyMoved[2], rows.keyMoved[3], rows.keyMoved[4], rows.keyMoved[5], rows.keyMoved[6] + rows.keyMoved[7]);
 			rows.builds = rows.materialsWritten = rows.pipelinesWritten = rows.resyncs = 0;
+			rows.keyMoved = {};
 		}
 		if (auto* store = &impl->objectStore; store->updates) {
 			text += fmt::format("[DCLF] persistent object records: {} updates, {:.1f} records rewritten an update, {} records held, {} resyncs, {} collisions; parity {} checked, {} differ{}\n",
@@ -288,9 +290,9 @@ namespace DCLF
 			text += fmt::format("[DCLF] payload ring (6e E4): {} frames filled by the producer ({} grew an entry), {} commits read it; {:.1f} KB in {:.1f} runs a frame\n",
 				ring.frames, ring.grown, ring.committed, impl->ringBytes.exchange(0) / 1024.0 / frames, double(impl->ringRuns.exchange(0)) / frames);
 			auto part = [&](std::size_t a_part) { return impl->ringPartBytes[a_part].exchange(0) / 1024.0 / frames; };
-			text += fmt::format("[DCLF] payload ring by buffer (KB a frame): objects {:.1f}, extras {:.1f}, geometries {:.1f}, material rows {:.1f}, pipeline rows {:.1f}, resident regions {:.1f}, frame inputs {:.1f}\n",
+			text += fmt::format("[DCLF] payload ring by buffer (KB a frame): objects {:.1f}, extras {:.1f}, geometries {:.1f}, material rows {:.1f}, pipeline rows {:.1f}, resident regions {:.1f}, frame inputs {:.1f}, shadow rows {:.1f}, shadow inputs {:.1f}; {} shadow commits read it (6e S2)\n",
 				part(Impl::kRingObjects), part(Impl::kRingExtras), part(Impl::kRingGeometries), part(Impl::kRingMaterialRows), part(Impl::kRingPipelineRows),
-				part(Impl::kRingResident), part(Impl::kRingFrameInputs));
+				part(Impl::kRingResident), part(Impl::kRingFrameInputs), part(Impl::kRingShadowRows), part(Impl::kRingShadowInputs), ring.shadowCommitted);
 			ring = {};
 		}
 		AsyncWorker::Get().ResetStats();

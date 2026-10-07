@@ -44,7 +44,6 @@ namespace DCLF
 	bool IndirectDraws::ReflectionDrawable() const { return false; }
 	void IndirectDraws::ExecuteReflection() {}
 	std::string IndirectDraws::ReflectionReport() { return {}; }
-	void IndirectDraws::JoinFadeWriteBack() {}
 	void IndirectDraws::MakeRevisionShapes() {}
 	void IndirectDraws::BuildPoint() {}
 	void IndirectDraws::SelectRevision() {}
@@ -52,8 +51,7 @@ namespace DCLF
 	bool IndirectDraws::SetApplicable(std::uint32_t) const { return true; }
 	bool IndirectDraws::RevisionClaims() const { return false; }
 	void IndirectDraws::NoteSetApplied(std::uint32_t) {}
-	void IndirectDraws::KickSceneStreams() {}
-	std::array<std::uint64_t, 3> IndirectDraws::TakeStreamsStats() { return {}; }
+	std::uint64_t IndirectDraws::TakeStreamsRefused() { return 0; }
 	void IndirectDraws::EndFrame() {}
 	void IndirectDraws::DrainAsync() {}
 	std::string IndirectDraws::AsyncReport() { return {}; }
