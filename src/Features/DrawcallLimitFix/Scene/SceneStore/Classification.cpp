@@ -328,6 +328,7 @@ namespace DCLF
 			ResolveSunEntry(entry, *a_geometry);
 			if (entry.sunEntryNode) {
 				rootDependents[entry.sunEntryNode].push_back(a_geometry);
+				OwnRoot(entry.sunEntryNode);
 				if (const auto* reference = entry.sunEntryNode->GetUserData(); reference && rootReference.try_emplace(entry.sunEntryNode, reference).second)
 					referenceRoot[reference] = entry.sunEntryNode;
 				entry.listedRoot = entry.sunEntryNode;
@@ -338,6 +339,7 @@ namespace DCLF
 				auto& dependents = lightDependents[lightEntry];
 				lightEntriesAppeared += dependents.empty() ? 1 : 0;
 				dependents.push_back(a_geometry);
+				OwnRoot(lightEntry);
 				entry.lightRoot = lightEntry;
 				MarkLightEntryDirty(lightEntry);
 			}
@@ -386,11 +388,7 @@ namespace DCLF
 				continue;
 			}
 			if (auto* node = object->AsNode()) {
-				// Its selected child as the cull would find it (with the switch events, nothing else does it before the
-				// walk classifies it).
-				if (SwitchEventsLive())
-					if (auto* switchNode = node->AsSwitchNode(); switchNode && CatchUpSwitch(*switchNode))
-						++delta.attachCatchUps;
+				// Its switches' selected children were caught up at ingestion (CatchUpSwitches).
 				const Ineligible below = CombineParentReasons(reason, ParentReason(node));
 				for (auto& child : node->GetChildren()) {
 					if (child)

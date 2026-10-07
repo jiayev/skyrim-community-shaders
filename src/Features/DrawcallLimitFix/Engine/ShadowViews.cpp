@@ -32,6 +32,26 @@ namespace DCLF
 		return index < std::size(kNames) ? kNames[index] : "?";
 	}
 
+	std::uint32_t UtilityShaderDecl(std::uint64_t a_flags)
+	{
+		// BSLightingShaderProperty::DetermineUtilityShaderDecl (vtable slot 0x3D, AE 0x1414adf00), ported (step 6e F1: the scene work
+		// calls no engine code): a function of the property's flags (+0x38) alone, never 0.
+		std::uint32_t decl = (a_flags & 0x1000) ? 0x2u : 0x1Au;
+		if (a_flags & 0x2)
+			decl |= 0x4;
+		if (a_flags & 0x20'0000'0000ull)
+			decl |= 0x1;
+		if (a_flags & (0x4000ull | 0x4000'0000'0000ull))
+			decl |= 0x20;
+		if (a_flags & 0x2'0000'0000ull)
+			decl |= 0x100;
+		if (a_flags & 0x2'0000ull)
+			decl |= 0x40;
+		if (a_flags & 0x2000'0000'0000'0000ull)
+			decl |= 1u << 26;
+		return decl;
+	}
+
 	ShadowReject ShadowCasterReject(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry, bool a_fadeOnGpu)
 	{
 		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_property);
@@ -62,7 +82,7 @@ namespace DCLF
 			if (ShadowGlobal() == 2)
 				return ShadowReject::VolumetricOnly;
 		}
-		if (const_cast<RE::BSLightingShaderProperty*>(lighting)->DetermineUtilityShaderDecl() == 0)
+		if (UtilityShaderDecl(flags) == 0)
 			return ShadowReject::DeclZero;
 		return ShadowReject::None;
 	}
@@ -85,16 +105,16 @@ namespace DCLF
 			return true;  // Refraction: GetRenderPasses_ShadowMapOrMask rejects the flags themselves
 		if (blended && !decalLike)
 			return true;  // AlphaBlended
-		return const_cast<RE::BSLightingShaderProperty*>(lighting)->DetermineUtilityShaderDecl() == 0;
+		return UtilityShaderDecl(flags) == 0;
 	}
 
 	std::uint32_t ShadowUtilityTechnique(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry)
 	{
-		auto* lighting = const_cast<RE::BSLightingShaderProperty*>(netimmerse_cast<const RE::BSLightingShaderProperty*>(a_property));
+		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_property);
 		if (!lighting || !a_geometry)
 			return 0;
 		const std::uint64_t flags = lighting->flags.underlying();
-		std::uint32_t technique = lighting->DetermineUtilityShaderDecl();
+		std::uint32_t technique = UtilityShaderDecl(flags);
 		const auto* alpha = a_geometry->GetGeometryRuntimeData().alphaProperty.get();
 		if (alpha && (alpha->alphaFlags & (1u << 9)))
 			technique |= 0x80;

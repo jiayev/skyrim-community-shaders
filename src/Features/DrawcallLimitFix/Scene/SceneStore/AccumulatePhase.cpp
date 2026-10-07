@@ -169,6 +169,15 @@ namespace DCLF
 			return;  // a load screen, or the feature installed mid-frame: nothing to patch
 		SyncFrameMaterials();
 		PrimaryCull::Get().CheckLightMasks();
+		// LightLimitFix's room map, for the joins (a copy: the render thread swaps the map itself).
+		if (auto& lightFix = globals::features::lightLimitFix; lightFix.loaded && lightFix.GetRoomMapGeneration() != roomMapGeneration) {
+			auto copy = std::make_shared<ankerl::unordered_dense::map<const RE::NiNode*, int>>();
+			copy->reserve(lightFix.roomNodes.size());
+			for (const auto& [node, index] : lightFix.roomNodes)
+				copy->emplace(node, index);
+			roomMap = std::move(copy);
+			roomMapGeneration = lightFix.GetRoomMapGeneration();
+		}
 		// What only the render thread may run, ahead of the joins: the engine's SetupMaterial for the materials the last joins
 		// asked for, and the material tail (writer events, texture transforms, the validation slice), which evaluate materials too.
 		ServeMaterialRequests();
@@ -640,10 +649,12 @@ namespace DCLF
 			patch.fadeDistance = accumulated->fadeDistance;
 			timer.Add(BuildPart::Record);
 			if (lightLimitFixLoaded) {
-				auto& lightFix = globals::features::lightLimitFix;
-				if (trackedEntry->roomMapGeneration != lightFix.GetRoomMapGeneration()) {
-					trackedEntry->roomIndex = lightFix.GetRoomIndexForRoom(trackedEntry->roomNode);
-					trackedEntry->roomMapGeneration = lightFix.GetRoomMapGeneration();
+				if (trackedEntry->roomMapGeneration != roomMapGeneration) {
+					trackedEntry->roomIndex = -1;
+					if (roomMap && trackedEntry->roomNode)
+						if (const auto room = roomMap->find(trackedEntry->roomNode); room != roomMap->end())
+							trackedEntry->roomIndex = room->second;
+					trackedEntry->roomMapGeneration = roomMapGeneration;
 				}
 				patch.lights.roomIndex = trackedEntry->roomIndex;
 			}
@@ -745,7 +756,7 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.Accumulate.BindByMembership");
 		// The frame globals a membership pass reads changed (the static sun bits, the fade distances): every resident is bound
 		// again from this frame's.
-		if (const std::uint32_t witness = PrimaryCull::Get().FrameMembershipWitness(); witness != membershipWitness) {
+		if (const std::uint32_t witness = frameMembershipWitness; witness != membershipWitness) {
 			bindQueue.insert(bindQueue.end(), residents.begin(), residents.end());
 			EndAllResidency();
 			membershipWitness = witness;

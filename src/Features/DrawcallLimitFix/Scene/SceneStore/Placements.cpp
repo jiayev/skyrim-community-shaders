@@ -61,8 +61,9 @@ namespace DCLF
 	{
 		ResolveSunEntry(a_tracked, *a_geometry);
 		PlacementPlan::Item item;
-		item.geometry.reset(a_geometry);
-		item.sunEntryNode.reset(const_cast<RE::NiAVObject*>(a_tracked.sunEntryNode));
+		// Copies of references the scene work holds (step 6e F1): the entry's, and its listed root's.
+		item.geometry = a_tracked.geometry;
+		item.sunEntryNode = OwnedRoot(a_tracked.sunEntryNode);
 		item.slot = a_tracked.slot;
 		item.layerSlot = a_tracked.slot < tables.layerOf.size() ? tables.layerOf[a_tracked.slot] : kNoObjectSlot;
 		// A skinned record's palette: its block, which the record addresses.
@@ -107,14 +108,17 @@ namespace DCLF
 			const auto dependents = rootDependents.find(root);
 			if (dependents == rootDependents.end())
 				continue;
+			auto owned = OwnedRoot(root);
+			if (!owned)
+				continue;
 			auto& listed = plan.roots.emplace_back();
-			listed.root.reset(const_cast<RE::NiAVObject*>(root));
+			listed.root = std::move(owned);
 			for (auto* geometry : dependents->second) {
 				const auto it = tracked.find(geometry);
 				if (it == tracked.end() || it->second.slot == kNoObjectSlot || it->second.slot >= tables.objects.size())
 					continue;
 				auto& dependent = listed.dependents.emplace_back();
-				dependent.geometry.reset(geometry);
+				dependent.geometry = it->second.geometry;
 				dependent.slot = it->second.slot;
 				if (const std::uint32_t layer = it->second.layerSlot; layer != kNoObjectSlot && tables.IsLayer(layer))
 					dependent.layerSlot = layer;

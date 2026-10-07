@@ -934,15 +934,33 @@ namespace DCLF
 		if (!impl->scene || !impl->scene->fadeWriteBack)
 			return;
 		auto& writeBack = *impl->scene->fadeWriteBack;
+		// The stores the last finished task found (step 6e F1): engine writes are the render thread's, here at the frame's start, with
+		// the engine's update done and before the culls read the fades. Their snapshot is let go after.
+		if (std::unique_ptr<FadeWriteBack::Stores> stores{ writeBack.ready.exchange(nullptr, std::memory_order_acq_rel) }) {
+			ZoneScopedN("CS.DCLF.FadeWriteBack.Stores");
+			const auto start = std::chrono::steady_clock::now();
+			for (const auto& store : stores->stores) {
+				// The fade, and the fade bits of the flags (atomically: the engine owns the others). The fade watch is not told: a
+				// stood-in root's dependents read its fade from FadeStateCS's state (SceneStore::MarkFadeRootOwned).
+				auto* node = static_cast<std::byte*>(store.node);
+				std::atomic_ref<std::uint32_t> flags(*reinterpret_cast<std::uint32_t*>(node + 0xF4));
+				flags.fetch_and(~kFadeFlagMask, std::memory_order_relaxed);
+				flags.fetch_or(store.flags, std::memory_order_relaxed);
+				*reinterpret_cast<float*>(node + 0x130) = store.fade;
+			}
+			writeBack.applied.fetch_add(stores->stores.size(), std::memory_order_relaxed);
+			writeBack.storeNs.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()),
+				std::memory_order_relaxed);
+		}
 		// One task at a time; one still running takes the new batches with it (or the next task does).
 		if (bool idle = false; !writeBack.running.compare_exchange_strong(idle, true, std::memory_order_acq_rel)) {
 			writeBack.busy.fetch_add(1, std::memory_order_relaxed);
 			return;
 		}
-		// The task reads the frame's tables (immutable) and writes the nodes they name: holding them holds the publication's retirement
-		// node, so no root node it names is let go meanwhile (step 6e E3a).
+		// The task judges the events against the frame's tables (immutable), which the stores then hold: so the publication's
+		// retirement node, and the root nodes it names (step 6e E3a).
 		std::shared_ptr<const SceneStore::Tables> tables = SceneStore::Get().AcceptedTables();
-		auto apply = [scene = impl->scene, tables, worker = AsyncEnabled()] {
+		auto find = [scene = impl->scene, tables] {
 			ZoneScopedN("CS.DCLF.FadeWriteBack");
 			auto& state = *scene->fadeWriteBack;
 			// The batches since, in frame order (the stack hands them back newest first, and two recordings need not finish in their
@@ -952,51 +970,44 @@ namespace DCLF
 				batches.push_back(batch);
 			std::reverse(batches.begin(), batches.end());
 			std::stable_sort(batches.begin(), batches.end(), [](const auto* a_a, const auto* a_b) { return a_a->frame < a_b->frame; });
+			auto stores = std::make_unique<FadeWriteBack::Stores>();
+			stores->tables = tables;
 			for (auto* batch : batches) {
-				state.pending.insert(state.pending.end(), batch->events.begin(), batch->events.end());
-				state.pendingFrames.insert(state.pendingFrames.end(), batch->events.size(), batch->frame);
-				delete batch;
-			}
-			std::size_t done = 0;
-			if (tables) {
-				for (; done < state.pending.size(); ++done) {
-					// Engine nodes are written only inside the window (EngineReadWindow); the next task takes what is left.
-					std::optional<EngineReadWindow::Lease> lease;
-					if (worker && !lease.emplace())
+				for (const auto& event : batch->events) {
+					if (!tables)
 						break;
-					const auto& event = state.pending[done];
-					const std::uint32_t frame = state.pendingFrames[done];
 					if (event.root >= state.appliedFrame.size())
 						state.appliedFrame.resize(std::size_t(event.root) + 1, 0u);
-					// The root the event was of, still stood in: one listed again since, or the engine's own again, keeps its node; and an
-					// event older than the one written last is not written over it.
+					// The root the event was of, still stood in: one listed again since, or the engine's own again, keeps its node; and
+					// an event older than the one taken last is not written over it.
 					if (event.root >= tables->fadeRoots.size() || tables->fadeRoots[event.root].generation != event.generation ||
-						!(tables->fadeRoots[event.root].bits & kFadeRootStoodIn) || !tables->fadeRootNode[event.root] || frame < state.appliedFrame[event.root]) {
+						!(tables->fadeRoots[event.root].bits & kFadeRootStoodIn) || !tables->fadeRootNode[event.root] || batch->frame < state.appliedFrame[event.root]) {
 						state.stale.fetch_add(1, std::memory_order_relaxed);
-					} else {
-						state.appliedFrame[event.root] = frame;
-						// The fade, and the fade bits of the flags (atomically: the engine owns the others). The fade watch is not told: a
-						// stood-in root's dependents read its fade from FadeStateCS's state (SceneStore::MarkFadeRootOwned).
-						auto* node = static_cast<std::byte*>(const_cast<void*>(tables->fadeRootNode[event.root]));
-						std::atomic_ref<std::uint32_t> flags(*reinterpret_cast<std::uint32_t*>(node + 0xF4));
-						flags.fetch_and(~kFadeFlagMask, std::memory_order_relaxed);
-						flags.fetch_or(event.flags & kFadeFlagMask, std::memory_order_relaxed);
-						*reinterpret_cast<float*>(node + 0x130) = event.currentFade;
-						state.applied.fetch_add(1, std::memory_order_relaxed);
+						continue;
 					}
+					state.appliedFrame[event.root] = batch->frame;
+					stores->stores.push_back({ const_cast<void*>(tables->fadeRootNode[event.root]), event.flags & kFadeFlagMask, event.currentFade });
 				}
+				delete batch;
 			}
-			state.pending.erase(state.pending.begin(), state.pending.begin() + static_cast<std::ptrdiff_t>(done));
-			state.pendingFrames.erase(state.pendingFrames.begin(), state.pendingFrames.begin() + static_cast<std::ptrdiff_t>(done));
+			// What an earlier task found and no frame start has made yet goes first (a task runs only after the frame's start has taken
+			// the last one's, so this is only the toggle's drain).
+			if (std::unique_ptr<FadeWriteBack::Stores> earlier{ state.ready.exchange(nullptr, std::memory_order_acq_rel) }) {
+				earlier->stores.insert(earlier->stores.end(), stores->stores.begin(), stores->stores.end());
+				earlier->tables = std::move(stores->tables);
+				stores = std::move(earlier);
+			}
+			if (!stores->stores.empty())
+				state.ready.store(stores.release(), std::memory_order_release);
 			state.running.store(false, std::memory_order_release);
 			state.running.notify_all();
 		};
 		if (!AsyncEnabled()) {
-			apply();
+			find();
 			return;
 		}
 		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), PublishedSceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "fade write-back",
-				[apply = std::move(apply)](const auto&) { apply(); }))
+				[find = std::move(find)](const auto&) { find(); }))
 			stl::report_and_fail("Drawcall Limit Fix: the fade write-back was refused by DCLF's executor");
 	}
 
@@ -1007,5 +1018,7 @@ namespace DCLF
 		auto& running = scene->fadeWriteBack->running;
 		while (running.load(std::memory_order_acquire))
 			running.wait(true, std::memory_order_acquire);
+		// Teardown, the toggle, a load: what it found is not written (the roots may stand in no more).
+		delete scene->fadeWriteBack->ready.exchange(nullptr, std::memory_order_acq_rel);
 	}
 }

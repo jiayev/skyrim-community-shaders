@@ -184,7 +184,7 @@ namespace DCLF
 		}
 		// The frame globals a membership pass reads changed: this frame's accumulate phase binds every resident again
 		// (BindByMembership), so none of them is a member this frame.
-		const bool rebindAll = live && PrimaryCull::Get().SampleMembershipWitness() != membershipWitness;
+		const bool rebindAll = live && frameMembershipWitness != membershipWitness;
 		if (rebindAll)
 			for (const std::uint32_t slot : residents)
 				QueueSet(slot);
@@ -641,6 +641,7 @@ namespace DCLF
 		switchEventThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 		++frame;
 		publishedSunGeneration = sunCandidatesGeneration;
+		frameMembershipWitness = PrimaryCull::Get().SampleMembershipWitness();
 	}
 
 	void SceneStore::RunSceneWork(bool a_task)

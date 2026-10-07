@@ -304,8 +304,8 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// What the frame's epochs commit (step 6e E3b: built ahead with the publication), and what the next builds ahead take from it.
 	draws.InstallDraws(store.InstalledDraws());
 	draws.PostAheadContext();
-	// The stood-in fade roots' write-back (engine writes under the read window's leases, step 6e S4): a task on DCLF's executor holding
-	// the frame's snapshot, never joined.
+	// The stood-in fade roots' write-back: the stores the last task found, made here (engine writes are the render thread's, step 6e
+	// F1), then the next task on DCLF's executor, never joined (step 6e S4), finding the next ones from the frame's snapshot.
 	DCLF::IndirectDraws::Get().KickFadeWriteBack();
 	// The frame's ingestion: the engine's queues drained into the batch the scene work applies first (ApplyEvents, on the
 	// coordinator). The references it lets go of - detached subtrees among them, whose last drop runs the engine's destructors - are

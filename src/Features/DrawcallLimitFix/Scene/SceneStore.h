@@ -29,6 +29,10 @@
 
 namespace DCLF
 {
+	namespace Scene
+	{
+		struct SwitchEvent;
+	}
 	/** @brief Attributes the time since the last call to one BuildPart (SceneStore/Internal.h; CS_DCLF_PROFILE). */
 	struct PartTimer;
 	struct SunCandidates;
@@ -883,9 +887,17 @@ namespace DCLF
 		 * @brief NiSwitchNode::OnVisible's catch-up (AE 0x140d29700), outside the cull: when the selected child has not
 		 * been updated since the switch's last update pass (childRevID[index] != revID), its revision is marked current
 		 * and it takes UpdateDownwardPass with the switch's saved time. True when it ran. Render thread, the node in the
-		 * scene.
+		 * scene: engine code that writes the subtree's transforms, so never the scene work's (step 6e F1, CatchUpSwitches).
 		 */
 		static bool CatchUpSwitch(RE::NiSwitchNode& a_switch);
+		/**
+		 * @brief Render thread, at ingestion (step 6e F1): the catch-ups the scene work used to run itself (ApplySwitchEvents,
+		 * AddSubtree), for what the drain brought - every switch event whose selection changed and every switch under an attached
+		 * subtree, each in the world (reached from Main::WorldRootNode: a subtree a loader still assembles is not walked) - and,
+		 * on the first ingestion after a load, every switch in the world (the rescan's AddSubtree did that). Before the culls
+		 * when called from the frame's start.
+		 */
+		void CatchUpSwitches(std::span<RE::NiAVObject* const> a_attached, std::span<const Scene::SwitchEvent> a_switches);
 		/**
 		 * @brief PrimaryCull, before the list jobs (render thread): the switch nodes whose selection the walks applied since
 		 * the last call, as keys (never dereferenced). True when the caller must read every switch again instead (a full
@@ -1718,7 +1730,6 @@ namespace DCLF
 			// (ReasonThisFrame).
 			Ineligible accumulateReason = Ineligible::None;
 			std::uint32_t accumulateReasonFrame = 0;
-			std::uint32_t skinUpdatedFrame = 0;  // the frame the engine's palette update last ran for it (render thread)
 			// Its index in this walk's tables, valid while objectStamp equals SceneStore::objectStamp. Kept here
 			// rather than in a geometry -> index map rebuilt by every walk: the map's insert was ~0.12 us an object,
 			// and every consumer already has the entry (the accumulate phase) or looks it up by the same key.
@@ -1970,6 +1981,21 @@ namespace DCLF
 		// Set while a load screen is up, so the first frame after it rebuilds the tracked set from
 		// scratch instead of trusting anything discovered across the load (ProcessEvents).
 		bool rescanPending = false;
+		// The frame's membership witness (PrimaryCull::SampleMembershipWitness), sampled by the render thread at the frame's start
+		// (BeginFrame) and read by the scene work's commit and the accumulate phase's binds (step 6e F1: frame globals are
+		// captured, never read by the scene work).
+		std::uint32_t frameMembershipWitness = 0;
+		// LightLimitFix's room map (its room nodes' indices), copied by the render thread when its generation moves
+		// (PrepareAccumulatePhase): the accumulate phase reads the copy, never the map the render thread swaps.
+		std::shared_ptr<const ankerl::unordered_dense::map<const RE::NiNode*, int>> roomMap;
+		std::uint64_t roomMapGeneration = ~0ull;
+		// Render thread: the first ingestion after a load catches up every switch in the world (CatchUpSwitches).
+		bool worldCatchUpPending = false;
+		std::vector<RE::NiAVObject*> attachedRoots;  // the ingestion's attached subtrees, for CatchUpSwitches (scratch)
+		// Render thread, since the last report: switches caught up at ingestion (by switch event, under an attached subtree or the
+		// world after a load), and the time taken.
+		std::atomic<std::uint64_t> catchUpsBySwitch{ 0 }, catchUpsByAttach{ 0 };
+		std::atomic<std::uint64_t> catchUpNs{ 0 };
 
 		Tables tables;
 		// Step 6: the tables as the scene work left them, published as an immutable snapshot (PublishTables, the coordinator), and the
@@ -2897,6 +2923,20 @@ namespace DCLF
 		std::vector<const RE::NiAVObject*> dirtyRoots;
 		ankerl::unordered_dense::map<const void*, std::vector<RE::BSGeometry*>> propertyDependents;
 		ankerl::unordered_dense::map<const RE::NiAVObject*, std::vector<RE::BSGeometry*>> rootDependents;
+		/**
+		 * @brief A reference to every root listed in rootDependents or lightDependents (step 6e F1), taken when it is first listed (a
+		 * live ancestor of the geometry listing it) and handed back when neither lists it any more. What the scene work hands out
+		 * of a root - the placement plan's roots and entries, the candidates' snapshots - is a copy of it: no reference is ever
+		 * made from a key, which may name a node already gone.
+		 */
+		ankerl::unordered_dense::map<const RE::NiAVObject*, RE::NiPointer<RE::NiAVObject>> rootOwners;
+		void OwnRoot(const RE::NiAVObject* a_root);
+		/** @brief Hands the root's reference back once neither dependents list names it. */
+		void ReleaseRootOwner(const RE::NiAVObject* a_root);
+		void ReleaseRootOwners();
+		/** @brief The listed root's reference (a copy); null, and counted, for a root no list names. */
+		RE::NiPointer<RE::NiAVObject> OwnedRoot(const RE::NiAVObject* a_root);
+		std::uint64_t unownedRoots = 0;  // since the last report: roots handed out that no list names (a defect)
 		// A listed reference root's reference, and back (the root is a key once its last dependent leaves: it may be gone).
 		ankerl::unordered_dense::map<const RE::NiAVObject*, const void*> rootReference;
 		ankerl::unordered_dense::map<const void*, const RE::NiAVObject*> referenceRoot;

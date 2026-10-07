@@ -135,7 +135,7 @@ namespace DCLF
 		for (const auto* root : lightCandidateSet) {
 			snapshot->entries.emplace(root, index);
 			snapshot->entryNodes.push_back(root);
-			snapshot->held.emplace_back(const_cast<RE::NiAVObject*>(root));
+			snapshot->held.push_back(OwnedRoot(root));
 			if (const auto* dependents = LightDependentsOf(root))
 				for (auto* geometry : *dependents)
 					if (snapshot->geometries.emplace(geometry, static_cast<std::uint32_t>(snapshot->geometryEntry.size())).second) {
@@ -347,7 +347,7 @@ namespace DCLF
 		for (const auto* root : sunCandidateSet) {
 			snapshot->entries.emplace(root, index);
 			snapshot->entryNodes.push_back(root);
-			snapshot->held.emplace_back(const_cast<RE::NiAVObject*>(root));
+			snapshot->held.push_back(OwnedRoot(root));
 			if (const auto it = rootDependents.find(root); it != rootDependents.end())
 				for (auto* geometry : it->second)
 					if (snapshot->geometries.emplace(geometry, static_cast<std::uint32_t>(snapshot->geometryEntry.size())).second) {
