@@ -321,9 +321,8 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			(timing.sceneMs + timing.buildMs) / frames, timing.sceneMs / frames, timing.sceneMaxMs, timing.buildMs / frames, timing.buildMaxMs,
 			parts);
 		{
-			// The "scene tables" zone by sub-zone (ScenePart). The four event parts also count Present's ProcessEvents,
-			// which is outside the zone, so "other" (the zone less its parts: the rescan after a load, the claims'
-			// selection) goes negative by about that call's cost.
+			// The "scene tables" zone by sub-zone (ScenePart). The four event parts are the scene work's (ApplyEvents), except
+			// a frame without scene work, whose batch Present applies outside the zone.
 			const double tablesFrames = std::max(1u, timing.sceneTablesFrames);
 			std::string sceneParts;
 			double covered = 0.0;

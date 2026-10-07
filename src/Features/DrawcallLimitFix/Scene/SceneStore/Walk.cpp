@@ -44,7 +44,7 @@ namespace DCLF
 		// entries reads freed BSGraphics::TriShape data and hands the render graph device addresses that no
 		// longer belong to anything, which the GPU answers with VK_ERROR_DEVICE_LOST a few frames later.
 		//
-		// Before ProcessEvents stopped walking the scene graph across loads, this did not arise: the
+		// Before the events stopped being applied the scene graph across loads, this did not arise: the
 		// category-node refresh pruned those entries as the cell's nodes vanished, so they never reached
 		// this loop. Leaving the tables empty is both the safe and the obviously correct thing to draw
 		// during a load screen.
@@ -1706,7 +1706,7 @@ namespace DCLF
 			fadeChanged.clear();
 			fadeDependents.clear();
 			propertyChanged.clear();
-			nodeChanged.clear();
+			HandBack(nodeChanged);
 			dirtyRoots.clear();
 			propertyDependents.clear();
 			rootMotion.clear();
@@ -1785,7 +1785,8 @@ namespace DCLF
 			nodeChanged.erase(std::unique(nodeChanged.begin(), nodeChanged.end()), nodeChanged.end());
 			for (auto& node : nodeChanged)
 				ApplyNodeEvent(node.get());
-			nodeChanged.clear();
+			// Their references are the render thread's to drop (ReleaseHandedBack).
+			HandBack(nodeChanged);
 			count(delta.node);
 			std::sort(dirtyRoots.begin(), dirtyRoots.end());
 			dirtyRoots.erase(std::unique(dirtyRoots.begin(), dirtyRoots.end()), dirtyRoots.end());

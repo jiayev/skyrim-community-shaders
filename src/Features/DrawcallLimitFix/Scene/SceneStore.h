@@ -63,7 +63,7 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief The sub-zones of the scene tables (DrawcallLimitFix::BeginSceneFrame): ProcessEvents and the scene phase,
+	 * @brief The sub-zones of the scene tables (DrawcallLimitFix::BeginSceneFrame): the events applied (ApplyEvents) and the scene phase,
 	 * block by block. Each is a Tracy zone and a sum in Stats::scenePartMs, reported under CS_DCLF_STATS. The first
 	 * evaluation round's split by entry (EvaluateKind) is measured only under CS_DCLF_PROFILE.
 	 */
@@ -150,8 +150,8 @@ namespace DCLF
 	/**
 	 * @brief The render thread's view of the static scene content Drawcall Limit Fix can draw.
 	 *
-	 * Only the render thread touches it: ProcessEvents (at Present, and before the scene phase) applies the
-	 * SceneTracker's events and the loaded-cell changes; BuildFrame's scene phase (BeginSceneFrame, at Main::Draw,
+	 * The render thread ingests the engine's events (IngestEvents, at Present and at the frame's start) and the scene work
+	 * applies them (ApplyEvents: SceneTracker's events and the loaded-cell changes); BuildFrame's scene phase (BeginSceneFrame, at Main::Draw,
 	 * before the main camera's cull) refreshes the tracked geometries' records, and its accumulate phase
 	 * (EarlyPrepass, once the cull job is done) patches the half of each record the main camera's accumulator decides.
 	 *
@@ -761,8 +761,30 @@ namespace DCLF
 
 		static SceneStore& Get();
 
-		/** @brief Present-time: follow loaded cells and apply queued scene graph events. */
-		void ProcessEvents();
+		/**
+		 * @brief Render thread, the scene work joined (Present, and the frame's start before the kick): the frame's ingestion
+		 * (dclf-async-publication.md, "Step 5: ingestion"). The engine's queues - attach and detach, fade snaps, fades, property
+		 * and node events, switch events, object LOD's segment writes - drained into the pending batch in push order, and tree
+		 * LOD's mirror (DecideTreeLod reads it next). Nothing is walked or evaluated. While a load screen is up the queues and
+		 * the batch are discarded instead, and the first frame after the load rescans.
+		 */
+		void IngestEvents();
+		/**
+		 * @brief The pending batch applied to the scene state: the category refresh, the attached subtrees walked and the detached
+		 * entries erased, the validation slice, the structural events. The scene work's first part (RunSceneWork, on the
+		 * coordinator), or the render thread's at Present for a batch no scene work took (EventsUnapplied). What it lets go of is
+		 * handed back (HandBack).
+		 */
+		void ApplyEvents();
+		/** @brief Render thread at Present, after IngestEvents: the batch has waited through a Present. */
+		void NoteEventsPresent();
+		/** @brief Render thread at Present: a batch has waited a whole frame for scene work that did not run (menus, switched off). */
+		bool EventsUnapplied() const;
+		/**
+		 * @brief Render thread at Present, the scene work joined and the read window closed: the engine references the scene work
+		 * let go of, released (dropping the last one runs the engine's destructors, which belong on its main thread).
+		 */
+		void ReleaseHandedBack();
 		/**
 		 * @brief Hooks the engine's writers the delta walk takes events from: BSFadeNode::currentFade's, the shader
 		 * properties' flags and materials, Havok's node transforms and the controllers' targets.
@@ -1105,14 +1127,15 @@ namespace DCLF
 		/**
 		 * @brief The frame's scene work on DCLF's coordinator (dclf-async-publication.md, "Phase 3"): the walk (its placements
 		 * inline, under EngineReadWindow leases) and the set's commit, from Main::Draw to the first reader that needs this frame's
-		 * walk (PrimaryCull's full-frustum hook; every later DCLF hook joins too). The frame's events stay on the render thread,
-		 * before the kick (ProcessEvents).
+		 * walk (PrimaryCull's full-frustum hook; every later DCLF hook joins too). It starts with the frame's events (ApplyEvents),
+		 * which the render thread ingested before the kick (IngestEvents).
 		 *
 		 * Render thread, in order: BeginFrame (the frame number, the published sun candidates' generation), ApplySet, the frame's
-		 * events, what the frame's claims need (the filters), then KickSceneTask. Between the kick and JoinSceneTask
+		 * ingestion, what the frame's claims need (the filters), then KickSceneTask. Between the kick and JoinSceneTask
 		 * nothing on the render thread or the engine's threads reads the store but GetFrame, GetPublishedSunGeneration and the
 		 * immutable publications (the set snapshot, the filters). What the walk has for other modules is held and handed over at
-		 * the join (FinishSceneWork): PrimaryCull's hidden keys and lost members, and the claims whose record stopped drawing.
+		 * the join (FinishSceneWork): PrimaryCull's hidden keys and lost members, and the claims whose record stopped drawing; the
+		 * engine references it let go of, at Present (ReleaseHandedBack).
 		 */
 		void BeginFrame();
 		/** @brief Coordinator (or inline): the scene work itself. a_task: on the coordinator (its placements take read leases). */
@@ -2192,7 +2215,7 @@ namespace DCLF
 		// Tree LOD (dclf-lod.md, L4): the engine's tree LOD groups and their instance records, by events (TreeLod.h).
 		TreeLod::Mirror treeLod;
 		void SampleLodRanges(const RE::BSGeometry& a_shape, bool a_event);
-		void ApplyLodSegmentEvents();
+		void ApplyLodSegmentEvents(const std::vector<const void*>& a_shapes);
 		struct ChangeLogParity
 		{
 			std::vector<Tables::Columns> snapshot;
@@ -2294,7 +2317,7 @@ namespace DCLF
 		bool slotsFreedThisFrame = true;
 		// The decals given an ordinal last frame, whose decalOrdinal entries are reset this frame.
 		std::vector<std::uint32_t> decalOrdered;
-		std::vector<const RE::BSFadeNode*> fadeChanged;  // drained from FadeWatch at ProcessEvents
+		std::vector<const RE::BSFadeNode*> fadeChanged;  // FadeWatch's, applied at ApplyEvents
 		// SetFadeRootsOwned's set (kFadeRootOwned), by node: whether each is stood in (kFadeRootStoodIn).
 		ankerl::unordered_dense::map<const void*, bool> fadeRootOwned;
 		// Counts the fade roots that became owned or stopped being: an occluder's readiness reads it (IndirectDraws::PhaseReady).
@@ -2305,9 +2328,29 @@ namespace DCLF
 		 */
 		void MarkFadeRootOwned(const void* a_node, bool a_owned, bool a_standIn);
 		ankerl::unordered_dense::map<const RE::BSFadeNode*, std::vector<RE::BSGeometry*>> fadeDependents;
-		// The structural events (SceneEvents in SceneStore.cpp), drained at ProcessEvents: properties by key, nodes held.
+		// The structural events (SceneEvents in SceneStore.cpp), applied at ApplyEvents: properties by key, nodes held.
 		std::vector<const void*> propertyChanged;
 		std::vector<RE::NiPointer<RE::NiAVObject>> nodeChanged;
+		// Ingestion (IngestEvents): the queues' events since the last apply, oldest first (Internal.h).
+		struct EventBatch;
+		std::shared_ptr<EventBatch> ingested;
+		// The references the scene work let go of, and its applied batches (their tracker events hold subtrees): released at
+		// Present (ReleaseHandedBack). Written by the scene work, cleared by the render thread with it joined.
+		std::vector<RE::NiPointer<RE::NiRefObject>> handedBack;
+		std::vector<std::shared_ptr<EventBatch>> spentBatches;
+		template <class T>
+		void HandBack(RE::NiPointer<T>&& a_reference)
+		{
+			if (a_reference)
+				handedBack.emplace_back(std::move(a_reference));
+		}
+		template <class T>
+		void HandBack(std::vector<RE::NiPointer<T>>& a_references)
+		{
+			for (auto& reference : a_references)
+				HandBack(std::move(reference));
+			a_references.clear();
+		}
 		// The switch events (SwitchEvents in SceneStore.cpp) drained so far, one per switch node: the index before its
 		// oldest event, and whether a child changed. Applied, and cleared, by the next walk.
 		struct SwitchPending

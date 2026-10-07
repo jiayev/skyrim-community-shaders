@@ -523,10 +523,21 @@ namespace DCLF
 		auto* lists = Global<SceneList*>(kSceneLists);
 		if (!filter || !lists || !count)
 			return;
-		// The snapshot is current this frame (PublishListFilter), so its roots are alive; a hidden one is skipped by the cull.
+		// The filter's roots are alive: its candidates hold them (SunCandidates::held). One the engine detached since the snapshot
+		// was made stays out (it is no longer in the scene); a hidden one is skipped by the cull. Taking a reference to a root the
+		// snapshot did not hold is what put freed roots into the lists, released at Present (crash-catalog.md).
+		const auto* scene = SceneNode();
 		std::uint32_t l = 0;
-		for (const auto* root : filter->roots)
+		for (const auto* root : filter->roots) {
+			const RE::NiAVObject* above = root;
+			for (std::uint32_t depth = 0; above && above != scene && depth < 64; ++depth)
+				above = above->parent;
+			if (!scene || above != scene) {
+				++listStats.restoreDetached;
+				continue;
+			}
 			lists[l++ % count].push_back(RE::NiPointer<RE::NiAVObject>(const_cast<RE::NiAVObject*>(root)));
+		}
 		listsDirty.store(true, std::memory_order_relaxed);
 		++listStats.restored;
 	}
@@ -689,7 +700,7 @@ namespace DCLF
 		logger::info("[DCLF] scene lists: {} frames: {} kept, {} built by DCLF ({} late; by cause: {} structure or hidden ({}), {} filter, {} globals, {} not DCLF's), {} the engine's ({} not keepable: {}; {} filtered); "
 					 "per DCLF build {:.0f} entries ({:.3f} ms), {:.0f} DCLF roots left out a build or filtered frame; filter sets built {} (not published: {} toggled off, {} decal order, {} occlusion maps native, {} snapshot not current, {} no exclusion); "
 					 "dry runs {}: {} roots, {} stand-in disagreements; DCLF's lists against the engine's: {} checks, {} of the engine's missing, {} of DCLF's not hidden extra; "
-					 "put back for an occlusion map the engine drew on {} frames; filtered frames without the sun's exclusion {}, members lost while out {}{}{}",
+					 "put back for an occlusion map the engine drew on {} frames ({} detached roots left out); filtered frames without the sun's exclusion {}, members lost while out {}{}{}",
 			l.frames, kept, rebuilt, late, l.rebuildStructure, fmt::format("events: {} object root children, {} category nodes, {} roots ({} applied: {} added, {} removed, {} rebuilt), {} hidden bits", l.structureBy[0].exchange(0),
 				l.structureBy[1].exchange(0), l.structureBy[2].exchange(0), l.eventsApplied.exchange(0), l.eventsAdded.exchange(0), l.eventsRemoved.exchange(0),
 				l.eventsRebuilt.exchange(0), l.structureBy[3].exchange(0)), l.rebuildFilter, l.rebuildWitness, l.rebuildDirty, l.engineFrames, l.notKeepable,
@@ -698,10 +709,10 @@ namespace DCLF
 			filtered,
 			rebuilt ? double(rebuildEntries) / rebuilt : 0.0, rebuilt ? ticks * toMs / rebuilt : 0.0, (rebuilt + filtered) ? double(removed) / double(rebuilt + filtered) : 0.0,
 			l.built, l.notToggled, l.decalOrder, l.noOcclusion, l.notCurrent, l.noExclusion, l.dryRuns, a_checked, a_missed, parityChecks, parityMissing, parityExtra,
-			l.restored, l.unexcluded, l.lostWhileOut, bad ? " <- LIST FILTER" : " <- OK", l.parityFirst.empty() ? "" : "; first: " + l.parityFirst);
+			l.restored, l.restoreDetached, l.unexcluded, l.lostWhileOut, bad ? " <- LIST FILTER" : " <- OK", l.parityFirst.empty() ? "" : "; first: " + l.parityFirst);
 		(void)entries;
 		l.frames = l.published = l.built = l.dryRuns = l.notToggled = l.notCurrent = l.noExclusion = l.noOcclusion = l.decalOrder = 0;
-		l.restored = l.unexcluded = l.lostWhileOut = l.engineFrames = l.notKeepable = 0;
+		l.restored = l.restoreDetached = l.unexcluded = l.lostWhileOut = l.engineFrames = l.notKeepable = 0;
 		l.notKeepableBy = {};
 		l.rebuildStructure = l.rebuildFilter = l.rebuildWitness = l.rebuildDirty = 0;
 		l.parityFirst.clear();

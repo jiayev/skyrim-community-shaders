@@ -421,6 +421,7 @@ namespace DCLF
 			UnlistFaceShape(it->first, it->second);
 			sceneIdentity.Detach(a_geometry);
 			lodRanges.erase(a_geometry);
+			HandBack(std::move(it->second.geometry));
 			tracked.erase(it);
 			++trackedLayout;
 		}

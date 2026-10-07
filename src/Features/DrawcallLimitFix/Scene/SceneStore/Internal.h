@@ -121,7 +121,7 @@ namespace DCLF
 		 * class reaches; BSLeafAnimNode::OnVisible calls it) writes it directly for one LOD mode and through the fade
 		 * update FUN_14147a160 otherwise, and FUN_1402cff60 calls that update outside a cull. Both are detoured; each
 		 * compares the value before and after and pushes the node when it moved. Cull job threads push, the render
-		 * thread drains (SceneStore::ProcessEvents). A few tens a frame while the camera moves, none at rest.
+		 * thread ingests (SceneStore::IngestEvents). A few tens a frame while the camera moves, none at rest.
 		 */
 		/**
 		 * @brief CS_DCLF_DECAL_ORDER_PROBE (DecalOrder.cpp): the main registration's decal chains against the order the scene lists
@@ -160,7 +160,7 @@ namespace DCLF
 
 		/**
 		 * @brief SceneEvents: the delta walk's structural events (dclf-event-driven-tables.md, "Phase 3"), pushed
-		 * from the engine's writers on whichever thread runs them, drained by the render thread (ProcessEvents).
+		 * from the engine's writers on whichever thread runs them, ingested by the render thread (IngestEvents), applied by the scene work (ApplyEvents).
 		 *
 		 * - A property event: BSShaderProperty::SetFlags (0x14147bee0) or SetMaterial (0x14147bff0) changed a shader
 		 *   property, or a controller was added to a property. It carries the pointer as a key only: the drain looks it
@@ -215,7 +215,7 @@ namespace DCLF
 		 * @brief Object LOD's segment events (dclf-lod.md, LodSegments): the BSSubIndexTriShapes a segment write touched, as keys
 		 * (never dereferenced: the drain looks them up among the tracked shapes). Pushed after the write, by the patched calls
 		 * of the terrain manager's segment updates (InstallLodSegmentHooks), from whichever thread runs them; drained by the
-		 * render thread at ProcessEvents.
+		 * render thread at IngestEvents.
 		 */
 		inline EventQueue<const void*> lodSegmentEvents;
 		inline bool lodSegmentEventsInstalled = false;
@@ -277,7 +277,7 @@ namespace DCLF
 
 		/**
 		 * @brief SwitchEvents: an NiSwitchNode's selection may have changed (dclf-cull-job-elimination.md, "Phase 3"),
-		 * pushed from the writer's thread, drained at ProcessEvents and applied by the next walk (ApplySwitchEvents).
+		 * pushed from the writer's thread, ingested by the render thread (IngestEvents) and applied by the next walk (ApplySwitchEvents).
 		 *
 		 * NiSwitchNode::index (+0x12C) has no setter. Its only stores outside construction, cloning and loading (AE
 		 * 1.6.1170, every `mov [reg+0x12c]` in .text) are:
@@ -309,7 +309,7 @@ namespace DCLF
 			return *reinterpret_cast<std::int32_t*>(reinterpret_cast<std::byte*>(a_switch) + kSwitchIndex);
 		}
 
-		// The render thread (Skyrim's main thread), recorded at the first ProcessEvents. A switch event is taken only there:
+		// The render thread (Skyrim's main thread), recorded at every IngestEvents. A switch event is taken only there:
 		// a loader thread builds subtrees that are not in the scene yet (their attach brings the switches up to date,
 		// AddSubtree), and a reference taken to a node a loader is still assembling, released later on another thread,
 		// is not safe (a QueuedTree load crashed on a freed child under a tree's switch with these events taken there).
@@ -535,6 +535,37 @@ namespace DCLF
 
 	// What were one translation unit's anonymous namespaces: their names resolve here as they did there.
 	using namespace Scene;
+
+	/**
+	 * @brief One ingestion's events (SceneStore::IngestEvents), oldest first per queue, until the scene work applies them
+	 * (ApplyEvents). Applied, it is handed back whole: its tracker events hold attached subtrees, released at Present.
+	 */
+	struct SceneStore::EventBatch
+	{
+		SceneTracker::Event* head = nullptr;  // SceneTracker's attach and detach events
+		SceneTracker::Event* tail = nullptr;
+		std::vector<const void*> fadeSnaps;
+		std::vector<const RE::BSFadeNode*> fades;
+		std::vector<const void*> properties;
+		std::vector<RE::NiPointer<RE::NiAVObject>> nodes;
+		std::vector<SwitchEvent> switches;
+		std::vector<const void*> lodSegments;
+		std::uint32_t presents = 0;  // the Presents that ingested into it (EventsUnapplied)
+
+		EventBatch() = default;
+		EventBatch(const EventBatch&) = delete;
+		EventBatch& operator=(const EventBatch&) = delete;
+		~EventBatch() { SceneTracker::FreeEvents(head); }
+
+		void Append(SceneTracker::Event* a_events)
+		{
+			if (!a_events)
+				return;
+			(tail ? tail->next : head) = a_events;
+			for (tail = a_events; tail->next;)
+				tail = tail->next;
+		}
+	};
 
 	/**
 	 * @brief Attributes the time since the last call to one BuildPart.
