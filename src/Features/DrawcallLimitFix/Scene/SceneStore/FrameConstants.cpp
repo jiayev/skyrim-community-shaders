@@ -315,6 +315,8 @@ namespace DCLF
 		FrameLighting frameLighting;
 		std::memcpy(frameLighting.data(), tables.frameLighting.data(), sizeof(frameLighting));
 		std::uint32_t lightingWritten = 0;
+		FrameFog frameFog = tables.frameFog;
+		std::uint32_t fogWritten = 0;
 		auto publishLighting = [&](const GeometryConstants& a_constants) { MergeFrameLighting(a_constants.ps, frameLighting, lightingWritten); };
 		std::vector<std::pair<std::uint32_t, GeometryConstants>> lightingReferences;
 		const bool geometryParityEnabled = SwitchEnabled(Switch::PersistentParity);
@@ -337,6 +339,10 @@ namespace DCLF
 					row.evaluated = frame;
 					TechniqueConstants now;
 					EvaluateTechnique(tables.pipelines[i].passDescriptor, now);
+					// The fog is the frame's (FrameFog): taken for the frame, and the row keeps its own, so the time of
+					// day versions no technique row (nor every pipeline and pair with it).
+					MergeFrameFog(now, frameFog, fogWritten);
+					KeepTechniqueFog(row.value, now);
 					const bool floats = !sameFloats(now.vs, row.value.vs) || !sameFloats(now.ps, row.value.ps);
 					const bool binding = now.filterModes != row.value.filterModes || now.shadowMask != row.value.shadowMask ||
 					                     now.shadowMaskTexture != row.value.shadowMaskTexture;
@@ -350,6 +356,7 @@ namespace DCLF
 					if (geometryParityFrame) {
 						TechniqueConstants reference;
 						EvaluateTechnique(tables.pipelines[i].passDescriptor, reference);
+						KeepTechniqueFog(row.value, reference);
 						++geometryStats.techniquesChecked;
 						if (!sameFloats(reference.vs, row.value.vs) || !sameFloats(reference.ps, row.value.ps) || reference.filterModes != row.value.filterModes ||
 							reference.shadowMask != row.value.shadowMask || reference.shadowMaskTexture != row.value.shadowMaskTexture)
@@ -420,6 +427,8 @@ namespace DCLF
 				}
 			}
 		}
+		if (fogWritten)
+			tables.frameFog = frameFog;
 		if (lightingWritten && std::memcmp(frameLighting.data(), tables.frameLighting.data(), sizeof(frameLighting)) != 0) {
 			std::memcpy(tables.frameLighting.data(), frameLighting.data(), sizeof(frameLighting));
 			tables.frameLightingVersion = ++tables.frameLightingCounter;

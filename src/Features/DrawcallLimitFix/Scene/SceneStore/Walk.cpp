@@ -965,6 +965,44 @@ namespace DCLF
 		return ResolveGeometrySource(source, a_timer);
 	}
 
+	void SceneStore::PrefetchGeometryBuffers(std::size_t a_first)
+	{
+		// The buffers the round's geometry slots will resolve (ResolveGeometrySource), named to GpuResources at once: one
+		// synchronization with DXVK's worker thread for the round rather than one per new buffer (the cell loads' cost). An entry
+		// the light path keeps resolves nothing; one this misses still resolves, alone.
+		if (!frameResolveBuffers)
+			return;
+		ZoneScopedN("CS.DCLF.Scene.PrefetchBuffers");
+		std::vector<ID3D11Buffer*> buffers;
+		auto add = [&](const RE::BSGraphics::TriShape* a_shape) {
+			if (!a_shape)
+				return;
+			buffers.push_back(reinterpret_cast<ID3D11Buffer*>(a_shape->vertexBuffer));
+			buffers.push_back(reinterpret_cast<ID3D11Buffer*>(a_shape->indexBuffer));
+		};
+		for (std::size_t i = a_first; i < order.size(); ++i) {
+			// A per-frame entry is placed, not written (a selected switch child or an actor's record resolves alone), and one the
+			// last classification left without a record has nothing to resolve unless an event changed it, which is rare.
+			const Tracked& entry = *order[i].tracked;
+			if (entry.perFrame || (entry.slot == kNoObjectSlot && entry.candidateFrame != 0 && entry.candidateReason != Ineligible::None))
+				continue;
+			auto* geometry = order[i].geometry;
+			const auto& data = geometry->GetGeometryRuntimeData();
+			if (const auto* partitions = data.skinInstance ? data.skinInstance->skinPartition.get() : nullptr) {
+				for (std::uint32_t p = 0; p < partitions->numPartitions; ++p)
+					add(partitions->partitions[p].buffData);
+			} else {
+				add(data.rendererData);
+			}
+			if (geometry->GetType().get() == RE::BSGeometry::Type::kMultiIndexTriShape) {
+				const auto& multi = static_cast<RE::BSMultiIndexTriShape*>(geometry)->GetMultiIndexTrishapeRuntimeData();
+				if (multi.altIndexBuffer)
+					buffers.push_back(*reinterpret_cast<ID3D11Buffer* const*>(multi.altIndexBuffer));
+			}
+		}
+		GpuResources::Get().Prefetch(buffers);
+	}
+
 	std::uint32_t SceneStore::ResolveGeometrySource(const GeometrySource& a_source, PartTimer& a_timer)
 	{
 		auto& gpu = GpuResources::Get();
@@ -1801,6 +1839,7 @@ namespace DCLF
 		}
 		{
 			DCLF_SCENE_PART(Evaluate, "CS.DCLF.Scene.Evaluate");
+			PrefetchGeometryBuffers(0);
 			EvaluateRound(timer, 0);
 		}
 		if (!shadowSetsDirty) {

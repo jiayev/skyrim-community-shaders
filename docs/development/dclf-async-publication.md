@@ -877,6 +877,85 @@ a forced growth, default r4g6: no losses, 0 epochs on own preparation in the who
   startup as "not replayable" (pre-existing, also in r4f1-3; the faces stay the engine's those frames). Next: R6, the
   own-preparation path deleted (nothing reaches it now), then R5 and R7.
 
+**Parallel graph work, step 1: per-frame engine values out of the versions** (2026-10-06; motion runs m1 -> m14: carried 40
+units/frame through the worldspace on a slow turn, Tracy 35 s; bridge run fog1 with the persistent parity).
+- *Found* (m1): two values that drift with the time of day almost every frame re-versioned scene state every frame. IBLParams
+  (a material frame component) re-versioned ~1,030 material slots a frame; the vertex fog (FogParam, FogNearColor, FogFarColor)
+  and the pixel stage's FogColor re-versioned every technique row, so every pipeline's witness moved and every pair resolved
+  again (~800 of ~1,100 a build), and, refreshed at Prepass, they re-kicked the early colour build every frame.
+- *Changed:* IBLParams and FogColor are read by no Lighting stage: dropped from the material frame components, and kept at a
+  technique row's first value (KeepTechniqueFog). The vertex fog is the frame's: under DCLF_BINDLESS the vertex stage reads it
+  from its own frame block (DCLFFrameFog, VS b13, which no shader declared), latched by every main commit from
+  SceneStore::Tables::frameFog (MergeFrameFog over the frame's technique evaluations).
+  The main frame mask names VS b13 as supplied although the pass's block there is emptied (PackFrameBlocks): the mask is the
+  constants check's contract, and without the bit every pair of a pipeline reading DCLFFrameFog was rejected (constants skip,
+  0 sequences; m10-m14 and fog1 drew almost nothing). A constants skip now warns in the report.
+- *Measured* (m1 -> m14, confirmed by m15 with the draws restored: same worker and join figures, median 8.8 ms; bridge fogfix1:
+  set parity clean, resident draw parity 0 differ, 7,450 sequences): main builds 131 -> 35 ms/s of worker time (2.7 -> 2.0 a frame, resolve ~400 -> ~50 us a build); the
+  worker 25-34% -> 12-19% busy; render-thread joins 1.5-2.0 -> 0.5-0.8 ms/frame, now mostly the scene join; median frame
+  9.4 -> 8.5 ms. Early colour rekicks: a few per 300 frames (lookups). Technique parity 0 of 80 differ; fog unchanged on screen.
+- *Left:* the scene join (Scene.Evaluate, up to ~10 ms at cell loads) is steps 2-4's; latched copies staged during motion
+  (~3 a frame, also before this step); one 243 ms render-thread "scene tables" frame in m14, not in m13 (same values work).
+
+**Scene revisions on the graph** (2026-10-06; supersedes parallel graph work steps 2-4). The goal is render-thread waits of
+effectively 0, by BasicRenderer's model: the render thread ingests (drains the engine's queues and posts the batch), the graph
+prepares a scene revision (SceneState in batch order on the coordinator, payload producers on the pool, shapes, recordings,
+assembly) and publishes it, and BeginSceneFrame selects the newest complete one. Per-frame values are FrameValues(N), written
+per frame and waited for by the GPU. No scene work is time-sliced or resumed on the render thread.
+- *Measured* (m15, motion): waits 1.0-1.5 ms/frame, nearly all the scene join (median 0.05 ms, p90 1.8, p99 8.1, max 10.2;
+  kick-to-join window ~0.2 ms). The engine evaluations inside Scene.Evaluate cost ~0.004 ms/frame; the rest is DCLF's own
+  (geometry resolve 0.35-0.5, records 0.15-0.2, loop tail 0.2, sun candidates 0.24, placements 0.25-0.3).
+- *Why the joins exist:* the frame reads and writes the tables the walk mutates. Inventory, in frame order, with where each
+  goes (P: the publication, read immutable; FV: FrameValues(N); I: an intent posted to SceneState; E: the engine boundary):
+
+| Hook | Reads or writes today | Goes to |
+|---|---|---|
+| BeginSceneFrame | JoinSceneTask, InvalidateVerdicts (toggles) | deleted; I |
+| | SelectRevision, DecideCoverage, ApplySet/WithdrawSet (claims, `setPhases`) | P (pointer swaps) |
+| | ProcessEvents (walks attached subtrees, writes `tracked` and tables; last references' destructors) | I (drain and post); E (releases handed back) |
+| | DecideTreeLod (mirror, camera) | FV |
+| | PrepareReflection, PublishListFilter, RefreshMainRenderers | P |
+| | the scene task kick | SceneState producer |
+| AfterFullFrustum | join; PrimaryCull's hidden keys and lost members; RevokeUndrawnClaims; MakeRevisionShapes; fade write-back and early shadow kicks | P (notes and claims); producers; E (fade stores) |
+| BeforeShadowMaps | ExecuteReflection (commit); placement join (writes records); KickSceneStreams (stages records); ShadowViews::Rebuild; coverage; KickShadowBuild (sun planes, modes) | P + FV; FV; producer (structure) + FV (placements); capture; P; producer (camera parts to the GPU or FV) |
+| AfterShadowMaps | ExecuteShadowFrame | P + FV |
+| EarlyPrepass | placement join; BuildFrame(Accumulate) (membership binding from the registrations); pipeline and program requests; pipeline lookups (`MutableLookups`); shadow program requests; RefreshLodTechniqueRanges; KickZPrepassBuild | FV; I (the registrations captured); Lookups producer; FV (frame block); producer |
+| Occlusion hooks | set, SetLacking | P |
+| Prepass | LatchAccumulator; RefreshFrameConstants (technique rows, frame lighting, material frame components); KickSceneStreams; KickColourBuild; reports | capture; FV (frame blocks); producer; coordinator task |
+| Z-prepass, colour, reflection, occlusion, shadow epochs | commits: payloads, `GetTables` (frame fog and lighting, LOD fade, face streams), lookups | P + FV |
+| Engine hooks | PassCapture (claims), PrimaryCull (filter, notes), SunAccumulation, LocalLightCull, SceneLists | P |
+
+  The main payload's inputs are already camera-independent (MainInputs: the eye only for parity; frame masks, addresses,
+  lookups and tables generations). The shadow build's are not yet (the sun's culling processes, modes, CS's shared and feature
+  data). Each step below removes rows; the join moves later as rows go, and is deleted with the last.
+- *Steps:* 2 FrameValues(N); 3 frame constants and captures out of the tables; 4 the accumulate phase and lookups as an intent
+  and a producer; 5 ingestion split (drain and post, releases handed back); 6 the chain and the publication, every join and
+  AsyncWorker deleted; 7 payload producers in parallel, shadow views from a capture, stress runs.
+
+**Scene revisions on the graph, first increments** (2026-10-06; motion runs m16, m17; bridge par1 with set, resident-draw,
+persistent and walk parity).
+- *ParallelFor* on `PublishedSceneExecutor` (BasicRenderer's TaskSchedulerManager::ParallelFor): the caller and up to every
+  preparation worker take chunks from one atomic counter; the caller waits only for chunks a worker is running. CPU tests:
+  every index once across threads, a throwing chunk reaches the caller, late helpers never touch the body.
+- *Placements* from the scene task: items, then roots, across the pool, each under its own read lease; a per-item taken bit
+  replaces the resume index (the join takes what a refused lease left); a root's changed slots go to its own list.
+- *Sun and light candidates:* the dirty entries' verdicts across the pool, applied in order.
+- *Batched buffer resolve:* `dxvkGetInteropResourceInfos` (DXVK fork, export @145) pins every buffer that needs a stable
+  address in one command-stream chunk (full chunks go ahead unsynchronized) with one synchronization;
+  `RenderGraphRuntime::DescribeResources`; `GpuResources::Prefetch` (results until BeginFrame, Acquire takes them); the walk
+  names the round's buffers before evaluating (not per-frame entries, not entries left without a record). Resolve time over
+  the motion run 3.19 s (m15) -> 1.35 s (m17); Scene.Evaluate max 10 -> 3.8 ms.
+- *Measured* (m17 against m15): waits 1.0-1.5 -> 0.5-1.3 ms/frame, still the scene join. Inside the task, parallel chunks
+  this small gain little: placements' takes are ~55 us of work over 15 threads, but the wall time stays ~115 us (44 us of it
+  the serial queueing; the helpers' wake-up costs about what they save); the candidates' cost is the snapshot rebuild
+  (~1.2 ms, ~200 times in 35 s), not the verdicts. The join must go, not shrink: the next steps are structural.
+- *Parity* (par1): 7,458 sequences, set parity clean, resident draws and records 0 differ. Walk parity (first run with it in
+  a while) reports 10 records and ~660 stale verdicts, all non-per-frame entries (hidden LOD land chunks kept eligible; one
+  lever's record): event coverage, not the placements; to look at separately.
+- *Next* (step 2 proper): the per-frame columns leave the tables one at a time for a FrameValues store with its own GPU path
+  (placements, sun entries, LOD fade and palettes first), so the frame stops writing what the walk owns; then the structural
+  tables' frame readers move into the chain.
+
 ## Implemented foundations
 
 - `ORGModuleServices::AsyncPrimitives` is a backend-independent header-only target.

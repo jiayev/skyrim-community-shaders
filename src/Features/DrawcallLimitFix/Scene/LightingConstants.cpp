@@ -69,6 +69,42 @@ namespace DCLF
 		});
 	}
 
+	namespace
+	{
+		/** @brief Each fog float: its stage, its block's float and its FrameFog index (FogColor: none, ~0u). */
+		template <class F>
+		void ForEachFogFloat(F&& a_visit)
+		{
+			const auto& vs = LightingVSLayout();
+			for (std::uint32_t row = 0; row < kFrameFogRows; ++row)
+				for (std::uint32_t c = 0; c < 4 && c < vs.size[kVSFrameFog[row]]; ++c)
+					a_visit(false, vs.offset[kVSFrameFog[row]] + c, row * 4 + c);
+			const auto& ps = LightingPSLayout();
+			for (std::uint32_t c = 0; c < 4 && c < ps.size[kPSFogColor]; ++c)
+				a_visit(true, ps.offset[kPSFogColor] + c, ~0u);
+		}
+	}
+
+	void MergeFrameFog(const TechniqueConstants& a_technique, FrameFog& a_out, std::uint32_t& a_written)
+	{
+		static_assert(std::tuple_size_v<FrameFog> <= 32);
+		ForEachFogFloat([&](bool a_pixel, std::uint32_t a_float, std::uint32_t a_index) {
+			if (a_pixel)
+				return;
+			if (!((a_written >> a_index) & 1) && a_technique.vs.Written(a_float)) {
+				a_out[a_index] = a_technique.vs.floats[a_float];
+				a_written |= 1u << a_index;
+			}
+		});
+	}
+
+	void KeepTechniqueFog(const TechniqueConstants& a_from, TechniqueConstants& a_to)
+	{
+		ForEachFogFloat([&](bool a_pixel, std::uint32_t a_float, std::uint32_t) {
+			(a_pixel ? a_to.ps : a_to.vs).floats[a_float] = (a_pixel ? a_from.ps : a_from.vs).floats[a_float];
+		});
+	}
+
 	bool MatchesFrameLighting(const ConstantBlock& a_ps, const FrameLighting& a_lighting, std::string* a_first)
 	{
 		bool match = true;

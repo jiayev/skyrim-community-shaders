@@ -205,6 +205,7 @@ namespace DCLF
 			Shutdown();
 			throw;
 		}
+		parallelScope = CreateScope("parallel for");
 	}
 
 	PublishedSceneExecutor::~PublishedSceneExecutor() { Shutdown(); }
@@ -240,6 +241,57 @@ namespace DCLF
 			 !domain.highWater.compare_exchange_weak(high, queued, std::memory_order_relaxed);) {}
 		domain.available.release();
 		return true;
+	}
+
+	void PublishedSceneExecutor::ParallelFor(std::string_view a_name, std::size_t a_count, std::size_t a_grain,
+		const std::function<void(std::size_t, std::size_t)>& a_body)
+	{
+		if (!a_count)
+			return;
+		const std::size_t grain = (std::max)(a_grain, std::size_t(1));
+		const std::size_t chunks = (a_count + grain - 1) / grain;
+		if (chunks == 1) {
+			a_body(0, a_count);
+			return;
+		}
+		// Shared with the helpers, which may start after the caller returned: they touch the body only for a chunk they
+		// claimed, and the caller returns only once every claimed chunk is done.
+		struct Shared
+		{
+			std::atomic<std::size_t> next{ 0 }, done{ 0 };
+			std::size_t count = 0, grain = 0, chunks = 0;
+			const std::function<void(std::size_t, std::size_t)>* body = nullptr;
+			std::mutex errorMutex;
+			std::exception_ptr error;
+			void Work()
+			{
+				for (std::size_t chunk = next.fetch_add(1, std::memory_order_relaxed); chunk < chunks; chunk = next.fetch_add(1, std::memory_order_relaxed)) {
+					try {
+						(*body)(chunk * grain, (std::min)(count, (chunk + 1) * grain));
+					} catch (...) {
+						std::lock_guard lock(errorMutex);
+						if (!error)
+							error = std::current_exception();
+					}
+					if (done.fetch_add(1, std::memory_order_acq_rel) + 1 == chunks)
+						done.notify_all();
+				}
+			}
+		};
+		auto shared = std::make_shared<Shared>();
+		shared->count = a_count;
+		shared->grain = grain;
+		shared->chunks = chunks;
+		shared->body = &a_body;
+		const std::size_t helpers = (std::min)(chunks - 1, std::size_t(state->domains[1]->workers));
+		for (std::size_t i = 0; i < helpers; ++i)
+			if (!Dispatch(parallelScope, Preparation, org::async::TaskDispatch::Cpu, a_name, [shared](const org::async::TaskContext&) { shared->Work(); }))
+				break;  // the caller takes what no helper does
+		shared->Work();
+		for (std::size_t done = shared->done.load(std::memory_order_acquire); done != chunks; done = shared->done.load(std::memory_order_acquire))
+			shared->done.wait(done, std::memory_order_acquire);
+		if (shared->error)
+			std::rethrow_exception(shared->error);
 	}
 
 	PublishedSceneExecutor::Statistics PublishedSceneExecutor::GetStatistics() const

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <span>
 
 #include <cstdint>
 #include <memory>
@@ -47,6 +48,7 @@ namespace DCLF
 			std::uint32_t resolvedThisFrame = 0;
 			double resolveMs = 0.0;  // this frame
 			std::uint64_t resolvedTotal = 0;
+			std::uint64_t prefetchBatches = 0, prefetched = 0;  // batched resolutions, and the buffers they resolved
 			double resolveMsTotal = 0.0;
 			double resolveMsMax = 0.0;  // slowest single resolution
 		};
@@ -61,6 +63,12 @@ namespace DCLF
 		 * made stable. The buffer stays resolved while the caller holds the lease.
 		 */
 		std::optional<LeasedBuffer> Acquire(ID3D11Buffer* a_buffer);
+		/**
+		 * @brief Resolves the buffers no lease holds, all in one synchronization with DXVK's worker thread
+		 * (RenderGraphRuntime::DescribeResources), for the Acquire calls that follow this frame: one per buffer otherwise. The
+		 * results are kept until BeginFrame; a buffer named twice, or already held, costs nothing.
+		 */
+		void Prefetch(std::span<ID3D11Buffer* const> a_buffers);
 
 		/** @brief Once per frame, before the tables are built: removes the entries whose last lease went. */
 		void BeginFrame();
@@ -84,7 +92,11 @@ namespace DCLF
 			std::vector<ID3D11Buffer*> keys;
 		};
 
+		/** @brief A new entry for a resolved buffer, and its first lease. */
+		LeasedBuffer Insert(ID3D11Buffer* a_buffer, const Buffer& a_resolved);
 		ankerl::unordered_dense::map<ID3D11Buffer*, Entry> entries;
+		// Prefetch's results until BeginFrame: the buffer as resolved, or nullopt when it cannot be made stable.
+		ankerl::unordered_dense::map<ID3D11Buffer*, std::optional<Buffer>> prefetched;
 		std::shared_ptr<Released> released = std::make_shared<Released>();
 		std::uint64_t nextGeneration = 1;
 		Stats stats;

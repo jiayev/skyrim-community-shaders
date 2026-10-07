@@ -2110,7 +2110,7 @@ namespace DCLF
 			std::array<std::uint32_t, kDecalGroups> decalCount{};
 			// The PerMaterial floats that are the frame's rather than the material's (SceneStore::
 			// GetMaterialPatchedFloats / GetMaterialPatchedVSFloats, MaterialSources): the build cache leaves them
-			// out of a pair's signature and repacks the group, so a drifting IBLParams or a scrolling
+			// out of a pair's signature and repacks the group, so a drifting frame component or a scrolling
 			// TexcoordOffset does not rebuild every pair every frame.
 			std::vector<std::uint32_t> materialPatchedFloats;
 			std::vector<std::uint32_t> materialPatchedVSFloats;

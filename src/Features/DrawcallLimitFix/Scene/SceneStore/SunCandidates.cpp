@@ -1,10 +1,34 @@
 #include "Internal.h"
 
+#include "Features/DrawcallLimitFix/Common/SceneScheduler.h"
+
 #include <map>
 #include <numeric>
 
 namespace DCLF
 {
+	namespace
+	{
+		/**
+		 * @brief a_verdict(i) for every dirty entry, into a_out: across the preparation pool from the scene task (the verdicts read
+		 * the coordinator's state, which nothing writes meanwhile), else on the calling thread.
+		 */
+		template <class Verdict>
+		void DirtyVerdicts(bool a_parallel, std::size_t a_count, std::vector<std::pair<bool, std::uint64_t>>& a_out, Verdict&& a_verdict)
+		{
+			a_out.resize(a_count);
+			auto run = [&](std::size_t a_begin, std::size_t a_end) {
+				ZoneScopedN("CS.DCLF.Scene.SunCandidates.Verdicts");
+				for (std::size_t i = a_begin; i < a_end; ++i)
+					a_out[i] = a_verdict(i);
+			};
+			if (a_parallel)
+				SceneScheduler::Executor().ParallelFor("CS.DCLF.Scene.SunCandidates.Verdicts", a_count, 128, run);
+			else
+				run(0, a_count);
+		}
+	}
+
 	bool SceneStore::OcclusionEnabled(std::uint32_t a_view)
 	{
 		// Skylighting's RenderOcclusion drives both maps (its hook of the engine's precipitation mask, then its own map).
@@ -58,8 +82,9 @@ namespace DCLF
 			std::sort(lightEntriesDirty.begin(), lightEntriesDirty.end());
 			lightEntriesDirty.erase(std::unique(lightEntriesDirty.begin(), lightEntriesDirty.end()), lightEntriesDirty.end());
 			const bool switchNodes = ActiveToggles().switchNodes;
-			for (const auto* root : lightEntriesDirty) {
-				const auto* dependents = LightDependentsOf(root);
+			std::vector<std::pair<bool, std::uint64_t>> verdicts;
+			DirtyVerdicts(inSceneTask, lightEntriesDirty.size(), verdicts, [&](std::size_t a_index) {
+				const auto* dependents = LightDependentsOf(lightEntriesDirty[a_index]);
 				bool candidate = dependents != nullptr;
 				std::uint64_t signature = 0;
 				if (dependents)
@@ -73,6 +98,11 @@ namespace DCLF
 						member.Mix(reinterpret_cast<std::uintptr_t>(geometry));
 						signature += member.value;
 					}
+				return std::pair{ candidate, signature };
+			});
+			for (std::size_t i = 0; i < lightEntriesDirty.size(); ++i) {
+				const auto* root = lightEntriesDirty[i];
+				const auto [candidate, signature] = verdicts[i];
 				if (candidate ? lightCandidateSet.insert(root).second : lightCandidateSet.erase(root) != 0)
 					changed = true;
 				if (candidate) {
@@ -255,12 +285,13 @@ namespace DCLF
 			std::sort(sunEntriesDirty.begin(), sunEntriesDirty.end());
 			sunEntriesDirty.erase(std::unique(sunEntriesDirty.begin(), sunEntriesDirty.end()), sunEntriesDirty.end());
 			const bool switchNodes = ActiveToggles().switchNodes;
-			for (const auto* root : sunEntriesDirty) {
+			std::vector<std::pair<bool, std::uint64_t>> verdicts;
+			DirtyVerdicts(inSceneTask, sunEntriesDirty.size(), verdicts, [&](std::size_t a_index) {
 				bool candidate = false;
 				// The dependents as a set (a sum of their hashes): a geometry moved between containers is listed again at the
 				// end, which changes nothing.
 				std::uint64_t signature = 0;
-				if (const auto it = rootDependents.find(root); it != rootDependents.end() && !it->second.empty()) {
+				if (const auto it = rootDependents.find(sunEntriesDirty[a_index]); it != rootDependents.end() && !it->second.empty()) {
 					candidate = true;
 					for (auto* geometry : it->second) {
 						const auto entry = tracked.find(geometry);
@@ -274,6 +305,11 @@ namespace DCLF
 						signature += member.value;
 					}
 				}
+				return std::pair{ candidate, signature };
+			});
+			for (std::size_t i = 0; i < sunEntriesDirty.size(); ++i) {
+				const auto* root = sunEntriesDirty[i];
+				const auto [candidate, signature] = verdicts[i];
 				if (candidate ? sunCandidateSet.insert(root).second : sunCandidateSet.erase(root) != 0)
 					changed = true;
 				if (candidate) {
@@ -295,6 +331,7 @@ namespace DCLF
 		if (sunCandidatesBuilt == sunCandidatesGeneration && sunCandidates)
 			return;
 		// A walk that changed nothing: the snapshot for the generation now in force.
+		ZoneScopedN("CS.DCLF.Scene.SunCandidates.Snapshot");
 		auto snapshot = std::make_shared<SunCandidates>();
 		snapshot->generation = sunCandidatesGeneration;
 		snapshot->entries.reserve(sunCandidateSet.size());

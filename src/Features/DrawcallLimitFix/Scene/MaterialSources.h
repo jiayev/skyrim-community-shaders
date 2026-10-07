@@ -31,9 +31,10 @@ namespace DCLF
 	 * - TexcoordOffset (VS 11): the material's two texture-transform buffers, read at the index the engine
 	 *   flips every frame (Main::Update). Controller writes wake affected material slots; the short watch
 	 *   spans the buffer flip and samples both buffers until they agree (ApplyTextureTransform).
-	 * - The shader object and engine globals: IBLParams, PS 6, SnowRimLightParameters, CharacterLightParams,
+	 * - The shader object and engine globals: PS 6, SnowRimLightParameters, CharacterLightParams,
 	 *   LODTexParams.z, LandscapeTexture5to6IsSnow.zw. The same for every material that writes them, so they
-	 *   are taken each frame from one live evaluation per signature (Signature, ApplyFrameComponents).
+	 *   are taken each frame from one live evaluation per signature (Signature, ApplyFrameComponents). IBLParams
+	 *   is the shader object's too, but no Lighting stage reads it: the record keeps its first evaluation's.
 	 * - Render targets: the character light's t11, re-picked every frame. It is the frame's (FrameCharacterLight), not the
 	 *   records': a character-light pass's record keeps t11's modes and no view, and the frame record gives the view.
 	 */

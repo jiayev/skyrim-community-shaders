@@ -74,6 +74,14 @@ namespace DCLF
 	inline constexpr std::uint32_t kFrameLightingRegister = 13;
 	inline constexpr std::uint32_t kFrameLightingRows = 6;
 	using FrameLighting = std::array<float, kFrameLightingRows * 4>;
+	// The fog (VS PerTechnique FogParam, FogNearColor, FogFarColor): the frame's, the same in every technique that writes it, and
+	// drifting with the time of day almost every frame. The DCLF_BINDLESS vertex stage reads it from its own frame block
+	// (DCLFFrameFog, VS b13 in Lighting.hlsl, which nothing else declares), so no technique row changes with it. The pixel stage's
+	// FogColor (PS PerTechnique) drifts with it, but no Lighting stage reads it: a technique row keeps the one it was made with.
+	inline constexpr std::uint32_t kVSFrameFog[3] = { 13, 14, 15 };
+	inline constexpr std::uint32_t kFrameFogRegister = 13;
+	inline constexpr std::uint32_t kFrameFogRows = 3;
+	using FrameFog = std::array<float, kFrameFogRows * 4>;
 	/**
 	 * @brief What the DCLF_BINDLESS builds leave out of a pipeline's PerGeometry block: the frame lighting (read from
 	 * DCLFFrameLighting), what they read from the object's record and extras rows instead (World, PreviousWorld,
@@ -95,6 +103,10 @@ namespace DCLF
 	 * AmbientSpecularTintAndFresnelPower.w), so the frame's rows are merged from every evaluation of the frame.
 	 */
 	void MergeFrameLighting(const ConstantBlock& a_ps, FrameLighting& a_out, std::uint32_t& a_written);
+	/** @brief The vertex fog a technique writes, into a_out where a_written (a bit per float) does not have it yet. */
+	void MergeFrameFog(const TechniqueConstants& a_technique, FrameFog& a_out, std::uint32_t& a_written);
+	/** @brief a_from's fog floats (the vertex rows and FogColor) into a_to: a technique row keeps the fog it was made with. */
+	void KeepTechniqueFog(const TechniqueConstants& a_from, TechniqueConstants& a_to);
 	/** @brief Whether a PerGeometry PS block agrees with the frame lighting in every component it writes. */
 	bool MatchesFrameLighting(const ConstantBlock& a_ps, const FrameLighting& a_lighting, std::string* a_first = nullptr);
 

@@ -3,6 +3,8 @@
 #include <atomic>
 #include <cassert>
 #include <future>
+#include <mutex>
+#include <set>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -118,9 +120,61 @@ void TestLifetimeAndShutdown()
 	retainedScope->CancelAndWait();
 }
 
+void TestParallelFor()
+{
+	Executor executor(4);
+	// Every index once, across several threads, from a coordinator task (the frame's producers call it there).
+	const std::size_t count = 100000;
+	std::vector<std::atomic_uint> hits(count);
+	std::mutex threadsMutex;
+	std::set<std::thread::id> threads;
+	std::promise<void> finished;
+	auto result = finished.get_future();
+	const auto scope = executor.CreateScope("parallel for");
+	assert(executor.Submit(scope, 0, 0, "coordinator", [&](const auto&) {
+		executor.ParallelFor("test", count, 64, [&](std::size_t a_begin, std::size_t a_end) {
+			for (std::size_t i = a_begin; i < a_end; ++i)
+				hits[i].fetch_add(1);
+			std::this_thread::sleep_for(std::chrono::microseconds(20));
+			std::lock_guard lock(threadsMutex);
+			threads.insert(std::this_thread::get_id());
+		});
+		finished.set_value();
+	}));
+	Ready(result);
+	for (const auto& hit : hits)
+		assert(hit.load() == 1);
+	assert(threads.size() > 1);
+	// Nothing, one chunk, and a throwing chunk: the rest still run, and the first error reaches the caller.
+	executor.ParallelFor("empty", 0, 16, [](std::size_t, std::size_t) { assert(false); });
+	std::size_t single = 0;
+	executor.ParallelFor("single", 10, 16, [&](std::size_t a_begin, std::size_t a_end) { single += a_end - a_begin; });
+	assert(single == 10);
+	std::atomic_uint ran{ 0 };
+	bool threw = false;
+	try {
+		executor.ParallelFor("throws", 1000, 10, [&](std::size_t a_begin, std::size_t) {
+			ran.fetch_add(1);
+			if (a_begin == 500)
+				throw std::runtime_error("chunk");
+		});
+	} catch (const std::runtime_error&) {
+		threw = true;
+	}
+	assert(threw && ran.load() == 100);
+	// Helpers that start after the caller returned do nothing with the (gone) body.
+	for (unsigned round = 0; round != 200; ++round) {
+		std::vector<int> local(8, 0);
+		executor.ParallelFor("short", local.size(), 1, [&](std::size_t a_begin, std::size_t) { local[a_begin] = 1; });
+		for (int value : local)
+			assert(value == 1);
+	}
+}
+
 int main()
 {
 	TestLanesAndQueues();
 	TestOrderingAndFailures();
 	TestLifetimeAndShutdown();
+	TestParallelFor();
 }

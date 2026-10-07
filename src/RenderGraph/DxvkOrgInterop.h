@@ -152,6 +152,9 @@ typedef HRESULT(__stdcall* PFN_dxvkEmitCommandBufferCallback)(ID3D11Device* pDev
 typedef HRESULT(__stdcall* PFN_dxvkSetCommandBufferBoundaryCallbacks)(ID3D11Device* pDevice, PFN_dxvkOrgInteropCommandBufferCallback pOnEnd,
 	PFN_dxvkOrgInteropCommandBufferCallback pOnBegin, void* pUser);
 typedef HRESULT(__stdcall* PFN_dxvkGetInteropResourceInfo)(ID3D11Device* pDevice, IUnknown* pObject, DxvkOrgInteropResourceInfo* pInfo);
+// dxvkGetInteropResourceInfo for many objects: the buffers needing a stable address are pinned by one chunk on DXVK's worker
+// thread, one synchronization in all. pResults[i] is object i's result.
+typedef HRESULT(__stdcall* PFN_dxvkGetInteropResourceInfos)(ID3D11Device* pDevice, UINT count, IUnknown* const* pObjects, DxvkOrgInteropResourceInfo* pInfos, HRESULT* pResults);
 // Address of the immediate context's submission counter: +1 each time DXVK closes a command list (implicit
 // flushes, Flush(), the flush ahead of an enqueued submission). Read on the immediate context's thread.
 typedef HRESULT(__stdcall* PFN_dxvkGetSubmissionCounter)(ID3D11Device* pDevice, const volatile uint64_t** ppCounter);

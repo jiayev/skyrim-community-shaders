@@ -581,6 +581,11 @@ namespace DCLF
 				a_out.ps[kFeatureDataRegister].assign(feature, feature + state->lastFeatureData.size());
 			}
 		}
+		// The vertex stage's b13 is DCLF's own (DCLFFrameFog), latched by the commit: nothing the pass binds there is the draws'.
+		// Its block stays empty here, but the slot is supplied, so the mask names it (a pipeline reading an unsupplied slot is
+		// rejected by the constants check).
+		a_out.vs[kFrameFogRegister].clear();
+		a_out.vsMask |= 1u << kFrameFogRegister;
 		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
 			if (!a_out.vs[slot].empty())
 				a_out.vsMask |= 1u << slot;
