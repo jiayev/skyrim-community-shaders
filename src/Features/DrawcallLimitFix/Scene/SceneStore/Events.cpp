@@ -573,6 +573,7 @@ namespace DCLF
 	{
 		handedBack.clear();
 		spentBatches.clear();
+		materialsHandedBack.clear();
 	}
 
 	void SceneStore::ApplyEvents()

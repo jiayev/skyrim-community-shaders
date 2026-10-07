@@ -832,6 +832,7 @@ namespace DCLF
 		{
 			std::uint64_t joined = 0, failed = 0, rewritten = 0, released = 0, frames = 0, resident = 0;
 			std::uint64_t membershipQueued = 0;  // records BindByMembership handed a pass
+			std::uint64_t materialWaits = 0, materialsServed = 0;  // joins that waited for a material record, records the render thread served
 			std::uint64_t membershipKept = 0;    // members written again whose binding stands
 			std::uint64_t layerUnpaired = 0;     // a base or a layer that joined without the other, and left again
 			std::array<std::uint64_t, 4> failedBy{};  // (unused), no record, a frame verdict, material or extras
@@ -933,6 +934,19 @@ namespace DCLF
 		void Clear();
 
 		const Tables& GetTables() const { return tables; }
+		/**
+		 * @brief Render thread, BeginSceneFrame (the scene work joined): the newest published tables snapshot accepted for the frame
+		 * (dclf-async-publication.md, "Step 6"). Immutable while held. Null before the first publication.
+		 */
+		void AcceptTables() { acceptedTables = publishedTables; }
+		const std::shared_ptr<const Tables>& AcceptedTables() const { return acceptedTables; }
+		struct TablesPublication
+		{
+			std::uint64_t published = 0, reused = 0, made = 0;
+			double ms = 0.0, maxMs = 0.0;
+			std::size_t pool = 0;
+		};
+		TablesPublication TakeTablesPublication() { return std::exchange(tablesPublication, TablesPublication{ .pool = tablesPool.size() }); }
 		/**
 		 * @brief Render thread, the depth commit (the scene task joined): its fade root rows hold a_held (Tables::fadeRootsJournal's
 		 * version): the journal forgets what it has, and the next write opens a new version.
@@ -1140,8 +1154,20 @@ namespace DCLF
 		void BeginFrame();
 		/** @brief Coordinator (or inline): the scene work itself. a_task: on the coordinator (its placements take read leases). */
 		void RunSceneWork(bool a_task);
-		/** @brief Render thread: runs a_work on the coordinator, joined by JoinSceneTask. */
-		void KickSceneTask(std::function<void()> a_work);
+		/** @brief Render thread: runs a_work on the coordinator (a_name: the job's, as the wait report shows it), joined by JoinSceneTask. */
+		void KickSceneTask(std::function<void()> a_work, const char* a_name = "scene");
+		/**
+		 * @brief EarlyPrepass, render thread, the scene work joined: the accumulate phase's render-thread half (step 6b). The
+		 * registrations drained (diagnostics; the frame's lighting pass), the material evaluations the last joins asked for
+		 * (ServeMaterialRequests: SetupMaterial is the engine's), the material writes, texture transforms and validation slice.
+		 */
+		void PrepareAccumulatePhase();
+		/**
+		 * @brief The accumulate phase's joins on the coordinator (a_task) or inline: membership bound, residents kept, decals ordered;
+		 * then the tables published (PublishTables). What it drops of PrimaryCull's and the new pipelines' PerGeometry blocks are the
+		 * join's (FinishSceneWork).
+		 */
+		void RunAccumulateWork(bool a_task);
 		/** @brief Render thread: waits for the scene task if one runs, then FinishSceneWork. Cheap when there is none. */
 		void JoinSceneTask();
 		/** @brief The sun candidates' generation as the frame's claims were installed (BeginFrame): the engine's hooks in the window. */
@@ -1763,6 +1789,13 @@ namespace DCLF
 		bool rescanPending = false;
 
 		Tables tables;
+		// Step 6: the tables as the scene work left them, published as an immutable snapshot (PublishTables, the coordinator), and the
+		// one the frame accepted (AcceptTables). Snapshots are pooled: one no frame holds any more is written again.
+		std::vector<std::shared_ptr<Tables>> tablesPool;
+		std::shared_ptr<const Tables> publishedTables, acceptedTables;
+		TablesPublication tablesPublication;
+		/** @brief The coordinator, at the end of the scene work: the tables into a pooled snapshot no one holds, published. */
+		void PublishTables();
 		// The walk whose object indices the Tracked entries' objectStamp must match; a new walk or a teardown
 		// takes a new value, which invalidates every entry's index at once.
 		std::uint32_t objectStamp = 1;
@@ -2466,6 +2499,35 @@ namespace DCLF
 		void RevokeUndrawnClaims();
 		/** @brief Render thread, after the scene work (the task's or inline): the held hand-overs, the revocations, the kicks. */
 		void FinishSceneWork();
+		/** @brief Render thread, after the accumulate work: its dropped members to PrimaryCull, its new pipelines evaluated. */
+		void FinishAccumulateWork();
+		/** @brief Render thread, the coordinator idle: the joins' material evaluations (SetupMaterial), for the next joins. */
+		void ServeMaterialRequests();
+		bool accumulateWorkPending = false;  // RunAccumulateWork ran; FinishAccumulateWork has not
+		bool holdLostMembers = false;        // RunAccumulateWork: the members it drops are held for PrimaryCull (lostMembersHeld)
+		std::vector<const RE::BSGeometry*> lostMembersHeld;
+		// The new pipelines of the joins (their PerGeometry block is the engine's SetupGeometry): evaluated at the join.
+		std::vector<std::uint32_t> pipelinesToEvaluate;
+		// A join whose material record the engine has not evaluated yet asks for it and waits a frame (bindRetry). Requests
+		// hold the material; a served record is taken by the next join (its reference moves into the slot's owner).
+		struct MaterialRequest
+		{
+			MaterialReference owner;
+			const RE::BSShaderMaterial* material = nullptr;
+			std::uint32_t pass = 0;
+		};
+		struct MaterialServed
+		{
+			MaterialReference owner;
+			MaterialRecord record;
+			bool valid = false;
+			std::uint32_t frame = 0;
+		};
+		std::vector<MaterialRequest> materialRequests;
+		ankerl::unordered_dense::set<std::pair<const RE::BSShaderMaterial*, std::uint32_t>> materialRequested;
+		ankerl::unordered_dense::map<std::pair<const RE::BSShaderMaterial*, std::uint32_t>, MaterialServed> materialsServed;
+		std::vector<MaterialReference> materialsHandedBack;  // released at Present (ReleaseHandedBack)
+		std::vector<std::uint32_t> bindRetry;                // joins that waited for a material, bound again next phase
 
 		// The scene task (KickSceneTask): its job, and what the work holds for the render thread while it runs.
 		std::shared_ptr<void> sceneTask;  // AsyncWorker::JobHandle
