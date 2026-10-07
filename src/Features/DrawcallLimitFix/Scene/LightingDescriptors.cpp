@@ -8,6 +8,7 @@
 #include "Features/TerrainBlending.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Scene/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Engine/ShadowViews.h"
 
 namespace DCLF
@@ -69,23 +70,6 @@ namespace DCLF
 			}
 		}
 
-		// [LightingShader] thresholds GetRenderPasses compares the fade node's LOD metric against
-		// (engine notes: LOD fades). Defaults are the engine's.
-		struct LodFadeSettings
-		{
-			float specularStart = 0.09f;
-			float specularEnd = 0.10f;
-			float envmapStart = 0.09f;
-			float envmapEnd = 0.10f;
-		};
-		LodFadeSettings lodFade;
-
-		float ReadSetting(const char* a_name, float a_default)
-		{
-			auto* setting = RE::GetINISetting(a_name);
-			return setting ? setting->GetFloat() : a_default;
-		}
-
 		// FUN_14147c470: false when the feature has faded out; otherwise the fade factor in a_fade.
 		// a_metric is the fade node's current LOD metric (+0x144); the previous one (+0x148) only
 		// feeds the engine's render-pass cache invalidation, which DCLF does not need.
@@ -141,14 +125,10 @@ namespace DCLF
 
 	std::uint32_t StaticShadowBits(const RE::BSGeometry& a_geometry, bool a_settled, const RE::BSLightingShaderProperty* a_property)
 	{
-		using Engine::Global;
-		constexpr std::uintptr_t kMainAccumulator = 0x338c830;     // BSShaderAccumulator*, render mode 0
-		constexpr std::size_t kAccumulatorDeferredShadow = 0x178;  // byte: the accumulator draws the deferred shadow mask
-		constexpr std::uintptr_t kNoSunShadowDir = 0x20330a4;      // byte: GetRenderPasses gives no pass ShadowDir
-		constexpr std::uintptr_t kScreenDoorFades = 0x2033468;     // byte: screen-door fades are on
+		// The frame's globals (FrameGlobals: the main accumulator's deferred-shadow byte, no ShadowDir, screen-door fades).
+		const auto& g = FrameGlobals::Current();
 		const auto* lighting = a_property ? a_property : netimmerse_cast<const RE::BSLightingShaderProperty*>(a_geometry.GetGeometryRuntimeData().shaderProperty.get());
-		const auto* accumulator = Global<std::uint8_t*>(kMainAccumulator);
-		if (!lighting || !accumulator)
+		if (!lighting || !g.accumulator)
 			return 0;
 		const std::uint64_t flags = lighting->flags.underlying();
 		const auto* fadeNode = lighting->fadeNode;
@@ -160,14 +140,14 @@ namespace DCLF
 		const bool blended = alphaProperty && (alphaProperty->alphaFlags & 1);
 		// GetRenderPasses: local_164, local_167, local_165/local_168 and local_158.
 		const bool translucent = alpha < 1.0f || blended;
-		const bool screenDoor = Global<std::uint8_t>(kScreenDoorFades) && fadeNode && fadeNode->GetRuntimeData().unk154 && fade < 1.0f &&
+		const bool screenDoor = g.screenDoorFades && fadeNode && fadeNode->GetRuntimeData().unk154 && fade < 1.0f &&
 		                        !(flags & (1ull << 19));
 		constexpr std::uint64_t kOpaqueClasses = 0x800c000000ull;
 		const bool eligible = !translucent || (screenDoor && !blended) || (flags & kOpaqueClasses);
-		bool deferred = accumulator[kAccumulatorDeferredShadow] != 0;
+		bool deferred = g.accumulatorDeferredShadow != 0;
 		if (!screenDoor || blended)
 			deferred = deferred && !((alpha < 1.0f || blended || (flags & (1ull << 33))) && !(flags & kOpaqueClasses));
-		bool shadowDir = deferred && eligible && !Global<std::uint8_t>(kNoSunShadowDir);
+		bool shadowDir = deferred && eligible && !g.noSunShadowDir;
 		bool defShadow = deferred;
 		if (!(flags & 0x800c000100ull) && !lighting->shadowMapOrMaskPasses.head)
 			shadowDir = defShadow = false;
@@ -176,25 +156,24 @@ namespace DCLF
 
 	LodFadeFrame SampleLodFadeFrame()
 	{
-		using Engine::Global;
+		// The frame's capture (FrameGlobals): the main camera, the [LightingShader] thresholds and the fade update's constants.
+		const auto& g = FrameGlobals::Current();
 		LodFadeFrame frame;
-		if (const auto* camera = RE::Main::WorldRootCamera()) {
-			frame.eye[0] = camera->world.translate.x;
-			frame.eye[1] = camera->world.translate.y;
-			frame.eye[2] = camera->world.translate.z;
-			frame.lodAdjust = camera->GetRuntimeData2().lodAdjust;
-		}
-		frame.specularStart = lodFade.specularStart;
-		frame.specularEnd = lodFade.specularEnd;
-		frame.envmapStart = lodFade.envmapStart;
-		frame.envmapEnd = lodFade.envmapEnd;
-		frame.metricScale = Global<float>(0x1aa6300);
-		frame.defaultScale = Global<float>(0x1ad2840);
-		frame.metricOverride = Global<float>(0x332a254);
-		frame.overridden = Global<float>(0x332a254) != Global<float>(0x1769578) ? 1.0f : 0.0f;
+		frame.eye[0] = g.eye[0];
+		frame.eye[1] = g.eye[1];
+		frame.eye[2] = g.eye[2];
+		frame.lodAdjust = g.lodAdjust;
+		frame.specularStart = g.specularStart;
+		frame.specularEnd = g.specularEnd;
+		frame.envmapStart = g.envmapStart;
+		frame.envmapEnd = g.envmapEnd;
+		frame.metricScale = g.metricScale;
+		frame.defaultScale = g.fadeDefaultScale;
+		frame.metricOverride = g.fadeSpecialA;
+		frame.overridden = g.fadeSpecialA != g.fadeSpecialB ? 1.0f : 0.0f;
 		for (std::uint32_t type = 0; type < 16; ++type)
-			frame.divisors[type] = Global<float>(0x2032e00 + type * 4);
-		frame.fadesOn = Global<std::uint8_t>(0x2032dfd) ? 1.0f : 0.0f;
+			frame.divisors[type] = g.fadeTypeDivisors[type];
+		frame.fadesOn = g.fadesOn ? 1.0f : 0.0f;
 		return frame;
 	}
 
@@ -227,14 +206,6 @@ namespace DCLF
 		return LodFadeVisible(a_metric, a_start, a_end, fade) ? fade : 0.0f;
 	}
 
-	void RefreshLodFadeSettings()
-	{
-		lodFade.specularStart = ReadSetting("fSpecularLODFadeStart:LightingShader", 0.09f);
-		lodFade.specularEnd = ReadSetting("fSpecularLODFadeEnd:LightingShader", 0.10f);
-		lodFade.envmapStart = ReadSetting("fEnvmapLODFadeStart:LightingShader", 0.09f);
-		lodFade.envmapEnd = ReadSetting("fEnvmapLODFadeEnd:LightingShader", 0.10f);
-	}
-
 	static_assert(kLightingPixelDeferred == static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::Deferred));
 
 	void LightingShaderDescriptors(std::uint32_t a_pass, bool a_deferred, std::uint32_t& a_vertex, std::uint32_t& a_pixel)
@@ -253,9 +224,11 @@ namespace DCLF
 	std::uint32_t SetupTechniqueDescriptor(std::uint32_t a_pass)
 	{
 		const std::uint32_t technique = a_pass & 0x3f000000u;
-		if (technique == 0x12000000u && !*reinterpret_cast<const std::uint8_t*>(REL::Offset(0x2032fdb).address()))
+		// The engine's bytes 0x2032fdb and 0x2035500, as the frame captured them (FrameGlobals).
+		const auto& g = FrameGlobals::Current();
+		if (technique == 0x12000000u && !g.techniqueByte12)
 			return (a_pass & 0xc9ffffffu) | 0x9000000u;
-		if (technique == 0x7000000u && !*reinterpret_cast<const std::uint8_t*>(REL::Offset(0x2035500).address()))
+		if (technique == 0x7000000u && !g.techniqueByte7)
 			return a_pass & 0xc0ffffffu;
 		return a_pass;
 	}
@@ -415,9 +388,10 @@ namespace DCLF
 	{
 		const void* node = AsTreeNode(a_property.fadeNode);
 
+		// The wind's globals as the frame captured them (FrameGlobals).
+		const auto& g = FrameGlobals::Current();
 		a_out.treeParams[0] = 0.0f;
-		a_out.treeParams[1] = *reinterpret_cast<const float*>(
-			*reinterpret_cast<const std::uintptr_t*>(treeWindSource.address()) + 0x304);
+		a_out.treeParams[1] = g.treeWindMagnitude;
 
 		// Amplitude falls off with distance. The engine does NOT use sqrtf here: it takes the squared
 		// distance at +0x158 through the 0x5f3759df fast inverse square root with one Newton step, and
@@ -426,15 +400,15 @@ namespace DCLF
 		// is exactly the population whose amplitude depends on the value rather than on the clamp.
 		const float distance = node ? FastSqrt(TreeNodeFloat(node, 0x158)) : 0.0f;
 		const float maxAmplitude = node ? TreeNodeFloat(node, 0x15c) : 1.0f;
-		const float fadeStart = GlobalFloat(treeWindFadeStart);
-		const float span = GlobalFloat(treeWindFadeEnd) - fadeStart;
+		const float fadeStart = g.treeWindFadeStart;
+		const float span = g.treeWindFadeEnd - fadeStart;
 		float amplitude = (1.0f - (distance - fadeStart) / span) * maxAmplitude;
 		amplitude = std::max(amplitude, 0.0f);
 		amplitude = std::min(amplitude, maxAmplitude);
 		a_out.treeParams[2] = amplitude;
 		a_out.treeParams[3] = node ? TreeNodeFloat(node, 0x160) : 1.0f;
 
-		const float scale = GlobalFloat(treeWindTimerScale);
+		const float scale = g.treeWindTimerScale;
 		a_out.windTimers[0] = node ? TreeNodeFloat(node, 0x164) * scale : 0.0f;
 		a_out.windTimers[1] = node ? TreeNodeFloat(node, 0x168) * scale : 0.0f;
 		// Diagnostics only (the shader reads xy): the raw inputs the amplitude came from, so a parity

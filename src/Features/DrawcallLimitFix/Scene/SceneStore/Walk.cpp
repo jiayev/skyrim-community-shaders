@@ -50,7 +50,9 @@ namespace DCLF
 		// this loop. Leaving the tables empty is both the safe and the obviously correct thing to draw
 		// during a load screen.
 		sceneBuilt = false;
-		if (IsLoadingScreenUp()) {
+		// The frame's globals (FrameGlobals: the render thread's capture at the frame's start; step 6e F2).
+		const auto& globals = FrameGlobals::Current();
+		if (globals.loading) {
 			ResetSlotTables();
 			InvalidateObjectIndices();
 			accumulatedPasses.clear();
@@ -63,7 +65,6 @@ namespace DCLF
 		PartTimer timer(stats.partMs);
 		{
 			DCLF_SCENE_PART(Prologue, "CS.DCLF.Scene.Prologue");
-			RefreshLodFadeSettings();
 			auto& gpu = GpuResources::Get();
 			gpu.BeginFrame();
 			const bool resolveBuffers = gpu.Enabled();
@@ -77,12 +78,9 @@ namespace DCLF
 			// only one of them is per object - the interior test is the same answer for every object in the
 			// frame. The depth-bias mode of each decal group is frame state (a console toggle and whether sun
 			// shadows are off), read once here rather than per decal.
-			frameInterior = Util::IsInterior();
-			frameDecalBias = { 0u, DecalDepthBiasMode(1), DecalDepthBiasMode(2), DecalDepthBiasMode(3) };
-			auto& evaluator = ConstantEvaluator::Get();
+			frameInterior = globals.interior;
+			frameDecalBias = globals.decalBias;
 			ConstantEvaluator::ResetFrameAudits();
-			if (!evaluator.HasLightingShader())
-				FindLightingShader();
 			geometryIndex.reserve(tracked.size());
 		}
 		timer.Add(BuildPart::Walk);
@@ -91,10 +89,6 @@ namespace DCLF
 			// on their last-reference event; geometry and pipeline slots retain their grace period.
 			DCLF_SCENE_PART(SweepSlots, "CS.DCLF.Scene.SweepSlots");
 			SweepSlots();
-		}
-		{
-			DCLF_SCENE_PART(CullHiddenBits, "CS.DCLF.Scene.CullHiddenBits");
-			CaptureCullHiddenBits();
 		}
 
 		// Only what can have changed (DeltaWalk). CS_DCLF_WALK_PARITY=1: every 60 frames a dense rebuild, classifying

@@ -98,6 +98,7 @@ namespace DCLF
 			{ ResidentDrawParity, "CS_DCLF_RESIDENT_DRAW_PARITY", P, N, false, "1: the resident region's draws against a whole-scene build" },
 			{ BuildParity, "CS_DCLF_BUILD_PARITY", P, N, false, "1: the build cache against a fresh build" },
 			{ SetParity, "CS_DCLF_SET_PARITY", P, N, false, "1: the per-object visibility words read back after the colour epoch against the CPU's decisions" },
+			{ MirrorParity, "CS_DCLF_MIRROR_PARITY", P, N, false, "1: the scene mirror against the live objects, a slice of the tracked set a frame (step 6e F3)" },
 			{ BindlessParity, "CS_DCLF_BINDLESS_PARITY", P, N, false, "1: the object records against the values of the constant groups they replace" },
 			{ CaptureParity, "CS_DCLF_CAPTURE_PARITY", P, N, false, "1: the tables against the engine's own lighting draws (run with CS_DCLF_PARITY_BOTH=1, so the engine draws what DCLF draws)" },
 			{ ParityBoth, "CS_DCLF_PARITY_BOTH", P, N, false, "1: nothing is withheld from the engine, which draws everything while DCLF draws its set as well (capture parity compares the two; it double-draws)" },

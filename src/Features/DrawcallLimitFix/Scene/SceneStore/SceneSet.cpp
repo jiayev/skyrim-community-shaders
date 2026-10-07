@@ -641,6 +641,12 @@ namespace DCLF
 		switchEventThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 		++frame;
 		publishedSunGeneration = sunCandidatesGeneration;
+		// The frame's engine globals (step 6e F2), before anything of the frame reads them; the scene work's tasks bind it.
+		const auto captureStart = std::chrono::steady_clock::now();
+		frameGlobals = FrameGlobals::Capture();
+		SceneCapture::SetMainThread(::GetCurrentThreadId());
+		captureNs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - captureStart).count());
+		++captureFrames;
 		frameMembershipWitness = PrimaryCull::Get().SampleMembershipWitness();
 	}
 
@@ -658,6 +664,8 @@ namespace DCLF
 		BuildFrame(Phase::Scene);
 		CommitSet();
 		EndSceneFrame();
+		// The mirror's parity (step 6e F3), with the frame's events all drained.
+		CheckMirror();
 		holdPrimaryNotes = false;
 		inSceneTask = false;
 		sceneWorkPending = true;
@@ -1126,9 +1134,11 @@ namespace DCLF
 		// The scene's lane (step 6c): the frame's builds never queue behind it. Joined at Present (or the next frame's start).
 		sceneTaskInFlight.store(true, std::memory_order_relaxed);
 		sceneTask = std::static_pointer_cast<void>(std::make_shared<AsyncWorker::JobHandle>(
-			AsyncWorker::Get().SubmitScene(a_name, [this, work = std::move(a_work)](std::stop_token) {
+			AsyncWorker::Get().SubmitScene(a_name, [this, work = std::move(a_work), globals = frameGlobals](std::stop_token) {
 				sceneLaneThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 				sceneWorkThread = true;
+				// The frame's engine globals, never the engine's (step 6e F2).
+				FrameGlobals::Scope scope(globals);
 				work();
 			})));
 	}

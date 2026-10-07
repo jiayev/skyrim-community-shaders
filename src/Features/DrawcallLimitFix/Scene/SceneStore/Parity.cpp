@@ -111,6 +111,19 @@ namespace DCLF
 				c.changed, c.missing, c.missing ? " <- MISSING; first: " : " <- OK", c.first);
 			c = { std::move(c.snapshot), c.cursor };
 		}
+		text += mirror.Report();
+		if (const auto c = SceneCapture::TakeCounters(); c.attaches || c.outOfWorld)
+			text += fmt::format("[DCLF] scene capture (6e F3): {} attaches in the world captured ({} records, {:.1f} us in all; {} on the main thread, {:.1f} us), {} out of the "
+								"world left to their world attach\n",
+				c.attaches, c.records, static_cast<double>(c.ns) / 1000.0, c.mainThread, static_cast<double>(c.mainThreadNs) / 1000.0, c.outOfWorld);
+		if (captureFrames) {
+			const auto unscoped = FrameGlobals::TakeUnscopedReads();
+			text += fmt::format("[DCLF] frame capture (6e F2): render thread {:.1f} us/frame for the globals, {:.1f} us/frame for the categories ({} captures made); "
+								"{} reads off the render thread with no frame's capture bound{}\n",
+				static_cast<double>(captureNs) / 1000.0 / captureFrames, static_cast<double>(categoryCaptureNs) / 1000.0 / captureFrames, categoryCapturesMade, unscoped,
+				unscoped ? " <- UNSCOPED GLOBALS" : " <- OK");
+			captureNs = categoryCaptureNs = categoryCapturesMade = captureFrames = 0;
+		}
 		if (auto& t = delta; t.walks) {
 			const double n = t.walks;
 			// The catch-ups are the render thread's, at ingestion (CatchUpSwitches).

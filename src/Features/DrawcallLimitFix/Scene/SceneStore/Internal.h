@@ -3,6 +3,7 @@
 // SceneStore's implementation, shared by the files of this folder only (SceneStore.h is the interface).
 
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
+#include "Features/DrawcallLimitFix/Scene/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
 #include "Features/DrawcallLimitFix/Scene/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Scene/MaterialSources.h"
@@ -548,11 +549,31 @@ namespace DCLF
 		std::vector<SwitchEvent> switches;
 		std::vector<const void*> lodSegments;
 		std::uint32_t presents = 0;  // the Presents that ingested into it (EventsUnapplied)
+		// Step 6e F3: the attach and detach events a load screen's ingestions carried, for the mirror alone (oldest first, applied
+		// before the batch's own), and the frame start's parity probe (CS_DCLF_MIRROR_PARITY).
+		SceneTracker::Event* mirrorHead = nullptr;
+		SceneTracker::Event* mirrorTail = nullptr;
+		std::unique_ptr<SceneCapture::Records> probe;
+		// The objects a load screen's discarded events named (the parity counts them named: their writers have hooks).
+		std::vector<const void*> mirrorNamed;
 
 		EventBatch() = default;
 		EventBatch(const EventBatch&) = delete;
 		EventBatch& operator=(const EventBatch&) = delete;
-		~EventBatch() { SceneTracker::FreeEvents(head); }
+		~EventBatch()
+		{
+			SceneTracker::FreeEvents(head);
+			SceneTracker::FreeEvents(mirrorHead);
+		}
+
+		void AppendMirror(SceneTracker::Event* a_events)
+		{
+			if (!a_events)
+				return;
+			(mirrorTail ? mirrorTail->next : mirrorHead) = a_events;
+			for (mirrorTail = a_events; mirrorTail->next;)
+				mirrorTail = mirrorTail->next;
+		}
 
 		void Append(SceneTracker::Event* a_events)
 		{

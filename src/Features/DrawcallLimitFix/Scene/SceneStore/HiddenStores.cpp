@@ -678,7 +678,10 @@ namespace DCLF
 	{
 		// A node's key only: an entry listing it is announced, and the address is never read.
 		auto& primary = PrimaryCull::Get();
+		const bool mirrorParity = SwitchEnabled(Switch::MirrorParity);
 		stats.hiddenEvents += hiddenEvents.Drain([&](const void* a_key) {
+			if (mirrorParity)
+				mirrorEventKeys.insert(a_key);
 			// A cell's or a category node's: the kept scene lists are built again (held while the scene list job may run).
 			if (holdPrimaryNotes)
 				hiddenKeysHeld.push_back(a_key);

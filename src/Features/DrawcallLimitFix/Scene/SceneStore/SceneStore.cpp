@@ -17,6 +17,7 @@ namespace DCLF
 		++trackedLayout;
 		sceneIdentity.Reset();
 		categoryNodes.clear();
+		categoryAppliedGeneration = 0;
 		alwaysRenderRoots.clear();
 		ResetSlotTables();
 		InvalidateObjectIndices();

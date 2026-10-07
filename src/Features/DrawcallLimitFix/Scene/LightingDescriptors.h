@@ -182,7 +182,6 @@ namespace DCLF
 	inline constexpr std::uint32_t PassDescriptorOf(std::uint32_t a_passEnum) { return a_passEnum - 0x4800002Du; }
 
 	/** @brief Re-reads the [LightingShader] LOD fade settings (once per frame). */
-	void RefreshLodFadeSettings();
 
 	/** @brief Technique GetRenderPasses selects from the property flags (engine notes: technique table). */
 	std::uint32_t SelectLightingTechnique(std::uint64_t a_flags);
