@@ -96,6 +96,8 @@ namespace DCLF
 
 		/** @brief Queues a job. `a_name` must outlive the worker (a string literal): it keys the stats. */
 		JobHandle Submit(const char* a_name, std::function<void(std::stop_token)> a_job);
+		/** @brief As Submit, on the scene's lane (SceneScheduler::SceneLane): the scene work, which the frame's jobs never queue behind. */
+		JobHandle SubmitScene(const char* a_name, std::function<void(std::stop_token)> a_job);
 
 		/**
 		 * @brief Waits for a job, at most `a_budget`. Late leaves the job running; the caller builds inline and

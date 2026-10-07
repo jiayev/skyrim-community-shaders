@@ -45,17 +45,17 @@ namespace DCLF
 		// tables' own structure: a member it fails is a defect, which set parity reports.
 		const auto& object = tables.objects[a_slot];
 		const std::uint32_t p = object.pipelineIndex, m = object.materialIndex;
-		if ((object.flags & kObjectNoBindings) || !PipelineDrawable(p))
+		if ((object.flags & kObjectNoBindings) || !PipelineDrawableIn(tables, lookupsView, p))
 			return a_why = 0, false;
-		if (m >= lookups.materials.size() || m >= tables.materialSlotKey.size() || !lookups.materials[m].resolved || lookups.materials[m].key != tables.materialSlotKey[m])
+		if (m >= lookupsView.materials.size() || m >= tables.materialSlotKey.size() || !lookupsView.materials[m].resolved || lookupsView.materials[m].key != tables.materialSlotKey[m])
 			return a_why = 1, false;
-		if (tables.TechniqueShadowMask(p) && lookups.pipelines[p].shadowMaskIndex == Lookups::kNone)
+		if (tables.TechniqueShadowMask(p) && lookupsView.pipelines[p].shadowMaskIndex == Lookups::kNone)
 			return a_why = 2, false;
-		if (!lookups.samplersResolved || lookups.nullTexture == Lookups::kNone)
+		if (!lookupsView.samplersResolved || lookupsView.nullTexture == Lookups::kNone)
 			return a_why = 3, false;
 		// A ProjectedUV pipeline binds the projected textures where its material binds none (but the Hair technique, which binds none).
 		if (const auto pass = tables.pipelines[p].passDescriptor; (pass & 0x8000u) && ((pass >> 24) & 0x3f) != 6)
-			for (const auto index : lookups.projectedTextures)
+			for (const auto index : lookupsView.projectedTextures)
 				if (index == Lookups::kNone)
 					return a_why = 3, false;
 		if (object.geometryIndex >= tables.geometries.size() || !tables.geometries[object.geometryIndex].vertexAddress ||
@@ -152,7 +152,7 @@ namespace DCLF
 		setLagged.clear();
 		// Readiness moved: anything the lookups resolve is a new version of them (Lookups::NextVersion), the shadow lookups
 		// have their own generation.
-		const std::uint64_t readiness = (std::uint64_t(lookups.versionCounter) << 32) ^ (std::uint64_t(lookups.shadowGeneration) << 1) ^ lookups.generation;
+		const std::uint64_t readiness = (std::uint64_t(lookupsView.versionCounter) << 32) ^ (std::uint64_t(lookupsView.shadowGeneration) << 1) ^ lookupsView.generation;
 		if (readiness != setReadiness) {
 			setReadiness = readiness;
 			++setStats.readinessEvents;
@@ -363,6 +363,9 @@ namespace DCLF
 			setSnapshotDirty = false;
 			++setStats.publications;
 		}
+		// Where the log stood at this commit: the applied set's revocation reads from here (ApplySet).
+		setCommitCursor.Restart(tablesGeneration);
+		setCommitCursor.Advance(tables.changeLog);
 	}
 
 	void SceneStore::ApplySet()
@@ -370,8 +373,8 @@ namespace DCLF
 		DCLF_FRAME_TRACE("ApplySet");  // TEMP frame trace
 		ZoneScopedN("CS.DCLF.Scene.ApplySet");
 		const std::size_t objects = tables.objects.size();
+		WriteBoth([&](Tables& a_tables) { a_tables.setPhases.resize(objects, 0); });
 		auto& applied = tables.setPhases;
-		applied.resize(objects, 0);
 		setLacking.resize(objects, 0);
 		setPhasesNext.resize(objects, 0);
 		setLackingNext.resize(objects, 0);
@@ -423,21 +426,29 @@ namespace DCLF
 			}
 			if (applied[slot] == phases)
 				continue;
-			applied[slot] = phases;
-			// The record's bit is the main phase's (what the main builds' GPU inputs carry); the shadow builds read the phases.
-			if (!(tables.objects[slot].flags & kObjectFree)) {
-				auto& object = tables.objects[slot];
-				object.flags = (phases & kSetMain) ? (object.flags | kObjectMember) : (object.flags & ~kObjectMember);
-				tables.NoteChange(slot, kChangeBindings);
-			}
+			// The record's bit is the main phase's (what the main builds' GPU inputs carry); the shadow builds read the phases. Into the
+			// frame's snapshot as into the tables (step 6c).
+			WriteBoth([&](Tables& a_tables) {
+				a_tables.setPhases[slot] = phases;
+				if (!(a_tables.objects[slot].flags & kObjectFree)) {
+					auto& object = a_tables.objects[slot];
+					object.flags = (phases & kSetMain) ? (object.flags | kObjectMember) : (object.flags & ~kObjectMember);
+					a_tables.NoteChange(slot, kChangeBindings);
+				}
+			});
 		}
 		setApply.clear();
 		PassCapture::Get().PublishSet(setSnapshot);
 		if (!joined.empty() || !left.empty())
 			PrimaryCull::Get().NoteSetChanges(joined, left);
-		// What the frame's work changes from here is what RevokeUndrawnClaims checks.
-		revokeCursor.Restart(tablesGeneration);
-		revokeCursor.Advance(tables.changeLog);
+		// What changed since the applied commit (the rest of its walk, its accumulate phase's drops) is what RevokeUndrawnClaims checks
+		// next, at the frame's start (step 6c: the frame reads the snapshot, so nothing changes under it afterwards).
+		if (setCommitCursor.Continues(tables.changeLog, tablesGeneration)) {
+			revokeCursor = setCommitCursor;
+		} else {
+			revokeCursor.Restart(tablesGeneration);
+			revokeCursor.Advance(tables.changeLog);
+		}
 	}
 
 	void SceneStore::WithdrawSet()
@@ -453,15 +464,17 @@ namespace DCLF
 			setPhasesApplied[slot] = 0;
 		}
 		std::fill(setGeometryApplied.begin(), setGeometryApplied.end(), nullptr);
-		auto& applied = tables.setPhases;
-		for (std::uint32_t slot = 0; slot < applied.size(); ++slot) {
-			if (!std::exchange(applied[slot], std::uint8_t{ 0 }) || slot >= tables.objects.size())
-				continue;
-			if (auto& object = tables.objects[slot]; !(object.flags & kObjectFree) && (object.flags & kObjectMember)) {
-				object.flags &= ~kObjectMember;
-				tables.NoteChange(slot, kChangeBindings);
+		WriteBoth([&](Tables& a_tables) {
+			auto& applied = a_tables.setPhases;
+			for (std::uint32_t slot = 0; slot < applied.size(); ++slot) {
+				if (!std::exchange(applied[slot], std::uint8_t{ 0 }) || slot >= a_tables.objects.size())
+					continue;
+				if (auto& object = a_tables.objects[slot]; !(object.flags & kObjectFree) && (object.flags & kObjectMember)) {
+					object.flags &= ~kObjectMember;
+					a_tables.NoteChange(slot, kChangeBindings);
+				}
 			}
-		}
+		});
 		// No claims for the engine's hooks: every phase the engine's (drawn 0: the occlusion maps too); no sun exclusion (it names the
 		// casters the last shadow epoch drew).
 		auto none = std::make_shared<SetSnapshot>();
@@ -513,11 +526,13 @@ namespace DCLF
 			setPhasesApplied[a_slot] &= ~lost;
 			if (same) {
 				// Out of the frame's set in what it no longer draws: the accumulate phase must not make it a member again.
-				tables.setPhases[a_slot] &= ~lost;
-				if ((lost & kSetMain) && (tables.objects[a_slot].flags & kObjectMember)) {
-					tables.objects[a_slot].flags &= ~kObjectMember;
-					tables.NoteChange(a_slot, kChangeBindings);
-				}
+				WriteBoth([&](Tables& a_tables) {
+					a_tables.setPhases[a_slot] &= ~lost;
+					if ((lost & kSetMain) && (a_tables.objects[a_slot].flags & kObjectMember)) {
+						a_tables.objects[a_slot].flags &= ~kObjectMember;
+						a_tables.NoteChange(a_slot, kChangeBindings);
+					}
+				});
 			}
 			revoked.emplace_back(geometry, lost);
 		};
@@ -586,6 +601,69 @@ namespace DCLF
 		sceneWorkPending = true;
 	}
 
+	void SceneStore::HandOverAtFrameStart()
+	{
+		// To the coordinator.
+		if (fadeRootsSentHeld)
+			tables.fadeRootsJournal.BeginBuild(*std::exchange(fadeRootsSentHeld, std::nullopt));
+		if (pendingFadeOwned)
+			ApplyFadeRootsOwned(*std::exchange(pendingFadeOwned, std::nullopt));
+		if (std::exchange(pendingFadeReseed, false))
+			ApplyReseedOwnedFadeRoots();
+		if (std::exchange(lookupsResetPending, false)) {
+			const auto lookupGeneration = lookups.generation;
+			const auto shadowGeneration = lookups.shadowGeneration;
+			const auto lookupVersion = lookups.versionCounter;
+			lookups = Lookups{};
+			lookups.generation = lookupGeneration + 1;
+			lookups.shadowGeneration = shadowGeneration + 1;
+			lookups.versionCounter = lookupVersion;
+		}
+		if (const std::array<std::uint64_t, 3> key{ lookups.versionCounter, lookups.generation, lookups.shadowGeneration }; key != lookupsViewKey) {
+			lookupsView = lookups;
+			lookupsViewKey = key;
+		} else {
+			lookupsView.samplersResolved = lookups.samplersResolved;
+			lookupsView.nullTexture = lookups.nullTexture;
+			lookupsView.projectedTextures = lookups.projectedTextures;
+		}
+		// To the frame.
+		auto append = [](auto& a_to, auto& a_from) {
+			a_to.insert(a_to.end(), std::make_move_iterator(a_from.begin()), std::make_move_iterator(a_from.end()));
+			a_from.clear();
+		};
+		append(frameRetiredMaterialSlots, tables.retiredMaterialSlots);
+		append(frameRetiredPipelineSlots, tables.retiredPipelineSlots);
+		append(frameShadowTextureChanges, tables.shadowTextureChanges);
+		append(frameRetiredImports, retiredImports);
+		append(frameSwitchChanges, switchesApplied);
+		frameSwitchResync = frameSwitchResync || std::exchange(switchResync, false) || !SwitchEventsLive();
+		frameSunCandidates = sunCandidates;
+		frameSunGeneration = sunCandidatesGeneration;
+		frameLightCandidates = lightCandidates;
+		frameLightGeneration = lightCandidatesGeneration;
+		frameLightEntriesAppeared = lightEntriesAppeared;
+	}
+
+	void SceneStore::AcceptTables()
+	{
+		// Nothing published yet (the first frames): published now, with the coordinator idle.
+		if (!publishedTables)
+			PublishTables();
+		acceptedTables = publishedTables;
+		// The publication and the tables are equal here: nothing writes the tables between the scene work's end and the frame's start
+		// but the frame's start itself (WriteBoth). A write that did is a defect, loud: the tables are published again now.
+		if (acceptedTables->changeLog.End() != tables.changeLog.End() || acceptedTables->versionCounter != tables.versionCounter ||
+			acceptedTables->objects.size() != tables.objects.size() || acceptedTables->pipelines.size() != tables.pipelines.size() ||
+			acceptedTables->materials.size() != tables.materials.size()) {
+			if (tablesPublication.republished++ == 0)
+				logger::error("[DCLF] frame {}: the tables changed after their publication (log {} -> {}, versions {} -> {}); published again at the frame's start",
+					frame, acceptedTables->changeLog.End(), tables.changeLog.End(), acceptedTables->versionCounter, tables.versionCounter);
+			PublishTables();
+			acceptedTables = publishedTables;
+		}
+	}
+
 	void SceneStore::PublishTables()
 	{
 		ZoneScopedN("CS.DCLF.Scene.PublishTables");
@@ -613,8 +691,14 @@ namespace DCLF
 
 	void SceneStore::KickSceneTask(std::function<void()> a_work, const char* a_name)
 	{
+		// The scene's lane (step 6c): the frame's builds never queue behind it. Joined at Present (or the next frame's start).
+		sceneTaskInFlight.store(true, std::memory_order_relaxed);
 		sceneTask = std::static_pointer_cast<void>(std::make_shared<AsyncWorker::JobHandle>(
-			AsyncWorker::Get().Submit(a_name, [work = std::move(a_work)](std::stop_token) { work(); })));
+			AsyncWorker::Get().SubmitScene(a_name, [this, work = std::move(a_work)](std::stop_token) {
+				sceneLaneThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
+				sceneWorkThread = true;
+				work();
+			})));
 	}
 
 	void SceneStore::JoinSceneTask()
@@ -625,6 +709,7 @@ namespace DCLF
 			if (result == AsyncWorker::WaitResult::Failed && !std::exchange(sceneTaskFailedLogged, true))
 				logger::error("[DCLF] the scene task threw; the frame's tables are whatever it left");
 		}
+		sceneTaskInFlight.store(false, std::memory_order_relaxed);
 		FinishSceneWork();
 	}
 
@@ -640,14 +725,9 @@ namespace DCLF
 		hiddenKeysHeld.clear();
 		if (std::exchange(allMembersLostHeld, false))
 			primary.NoteAllMembersLost();
-		RevokeUndrawnClaims();
 		auto& draws = IndirectDraws::Get();
 		// The shapes a scene revision made now would have (R3c), before the jobs below read the tables' buffers.
 		draws.MakeRevisionShapes();
-		// What the work's results start: the stood-in fade roots' write-back, and the shadow build kept at BeforeShadowMaps when
-		// nothing it read moves.
-		draws.KickFadeWriteBack();
-		if (ActiveToggles().shadows)
-			draws.KickShadowBuildEarly();
+		// The stood-in fade roots' write-back and the early shadow build read the frame's snapshot: kicked at the next frame's start.
 	}
 }

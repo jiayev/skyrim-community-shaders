@@ -425,7 +425,13 @@ namespace DCLF
 				// The members' object indices (stable while an object stays tracked; a change of membership is a new snapshot).
 			cut.memberObject.resize(cut.members.size());
 			for (std::size_t m = 0; m < cut.members.size(); ++m)
-				cut.memberObject[m] = cut.members[m].engine ? -1 : SceneStore::Get().FindObject(cut.members[m].geometry);
+				if (cut.members[m].engine) {
+					cut.memberObject[m] = -1;
+				} else {
+					// The slot the snapshot's walk had (step 6c: the frame reads no tracked set).
+					const auto it = candidates->geometries.find(cut.members[m].geometry);
+					cut.memberObject[m] = it != candidates->geometries.end() && it->second < candidates->geometrySlot.size() ? candidates->geometrySlot[it->second] : -1;
+				}
 			cut.switchEntry.clear();
 			for (std::uint32_t e = 0; e < entries; ++e)
 				for (std::uint32_t w = cut.switchOffsets[e]; w < cut.switchOffsets[e + 1]; ++w)
@@ -1026,8 +1032,7 @@ namespace DCLF
 
 	void PrimaryCull::AfterFullFrustum()
 	{
-		// The first reader that needs the frame's walk: the scene task joins here (SceneStore::KickSceneTask).
-		SceneStore::Get().JoinSceneTask();
+		// The frame's walk runs on (step 6c): what this reads of it is the last walk's, handed over at the frame's start.
 		ZoneScopedN("CS.DCLF.AfterFullFrustum");
 		frameLive.store(false, std::memory_order_relaxed);
 		gpuSunFrame = false;

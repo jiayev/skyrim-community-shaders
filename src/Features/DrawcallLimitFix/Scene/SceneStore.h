@@ -899,14 +899,25 @@ namespace DCLF
 		/** @brief Drops everything (feature disabled or game unloaded). */
 		void Clear();
 
-		const Tables& GetTables() const { return tables; }
+		/**
+		 * @brief The tables as the frame reads them (step 6c): the snapshot it accepted at its start, equal to the coordinator's
+		 * tables there and held still while the scene work changes those (FrameView). Render thread and the frame's builds.
+		 */
+		const Tables& GetTables() const { return FrameView(); }
+		/** @brief The coordinator's tables (the scene work's, the next publication's): the revision made for the next frame reads them. */
+		const Tables& GetSceneTables() const
+		{
+			GuardFrameAccess("GetSceneTables");
+			return tables;
+		}
 		/** @brief The frame's per-frame engine values (FrameTables): render thread, and the frame's builds kicked after its writes. */
 		const FrameTables& GetFrameTables() const { return frameTables; }
 		/** @brief Render thread, the coordinator idle (the frame's start): the frame's values sized and keyed to the tables, before any build. */
 		void SyncFrameTables()
 		{
-			frameTables.SyncPipelines(tables.pipelines, tables.pipelineBindingVersion, tablesGeneration);
-			frameTables.SyncTechniques(tables.techniqueKeys.size());
+			const Tables& view = FrameView();
+			frameTables.SyncPipelines(view.pipelines, view.pipelineBindingVersion, tablesGeneration);
+			frameTables.SyncTechniques(view.techniqueKeys.size());
 			SyncFrameMaterials();
 		}
 		/** @brief Render thread, the accumulate work joined: the PerGeometry blocks of pipelines that have none (new, or a slot reused). */
@@ -915,11 +926,22 @@ namespace DCLF
 		 * @brief Render thread, BeginSceneFrame (the scene work joined): the newest published tables snapshot accepted for the frame
 		 * (dclf-async-publication.md, "Step 6"). Immutable while held. Null before the first publication.
 		 */
-		void AcceptTables() { acceptedTables = publishedTables; }
-		const std::shared_ptr<const Tables>& AcceptedTables() const { return acceptedTables; }
+		void AcceptTables();
+		/**
+		 * @brief Render thread, the frame's start with the scene work joined (step 6c): what passes between the frame and the
+		 * coordinator, both ways. To the frame: the retired slots and imports, the texture changes, the switches applied, the sun
+		 * and light candidates. To the coordinator: the fade roots the depth commit holds, PrimaryCull's fade ownership, the lookups
+		 * the commit judges readiness by (a copy), a reset of the lookups the scene work asked for.
+		 */
+		void HandOverAtFrameStart();
+		/** @brief Coordinator state read by the frame while the scene work ran (GuardFrameAccess), since the last call: count, first name. */
+		std::pair<std::uint64_t, const char*> TakeFrameAccessViolations() { return { frameAccessViolations.exchange(0), frameAccessFirst.exchange(nullptr) }; }
+		/** @brief Render thread, the frame's start after the set's application: claims whose record the frame cannot draw, taken back. */
+		void RevokeClaims() { RevokeUndrawnClaims(); }
+		const std::shared_ptr<Tables>& AcceptedTables() const { return acceptedTables; }
 		struct TablesPublication
 		{
-			std::uint64_t published = 0, reused = 0, made = 0;
+			std::uint64_t published = 0, reused = 0, made = 0, republished = 0;  // republished: at the accept, the copy was not the tables
 			double ms = 0.0, maxMs = 0.0;
 			std::size_t pool = 0;
 		};
@@ -928,7 +950,7 @@ namespace DCLF
 		 * @brief Render thread, the depth commit (the scene task joined): its fade root rows hold a_held (Tables::fadeRootsJournal's
 		 * version): the journal forgets what it has, and the next write opens a new version.
 		 */
-		void FadeRootsSent(std::uint64_t a_held) { tables.fadeRootsJournal.BeginBuild(a_held); }
+		void FadeRootsSent(std::uint64_t a_held) { fadeRootsSentHeld = a_held; }
 		/**
 		 * @brief The frame's globals the engine's evaluations give (RefreshFrameConstants, at Prepass): no column of the tables, a
 		 * capture of the frame each commit latches into its frame blocks.
@@ -950,9 +972,9 @@ namespace DCLF
 		};
 		/** @brief Render thread: the frame's capture (latched by every commit). */
 		const FrameCapture& GetFrameCapture() const { return frameCapture; }
-		void TakeRetiredMaterialSlots(std::vector<std::uint32_t>& a_out) { tables.TakeRetiredMaterialSlots(a_out); }
-		void TakeRetiredPipelineSlots(std::vector<std::uint32_t>& a_out) { tables.TakeRetiredPipelineSlots(a_out); }
-		void TakeShadowTextureChanges(std::vector<std::pair<ID3D11ShaderResourceView*, bool>>& a_out) { tables.TakeShadowTextureChanges(a_out); }
+		void TakeRetiredMaterialSlots(std::vector<std::uint32_t>& a_out) { a_out.clear(); a_out.swap(frameRetiredMaterialSlots); }
+		void TakeRetiredPipelineSlots(std::vector<std::uint32_t>& a_out) { a_out.clear(); a_out.swap(frameRetiredPipelineSlots); }
+		void TakeShadowTextureChanges(std::vector<std::pair<ID3D11ShaderResourceView*, bool>>& a_out) { a_out.clear(); a_out.swap(frameShadowTextureChanges); }
 		const Stats& GetStats() const { return stats; }
 		/** @brief The screen-door fading objects given bindings since the last call, and in how many frames. */
 		std::pair<std::uint32_t, std::uint32_t> TakeFadingDrawn()
@@ -972,8 +994,8 @@ namespace DCLF
 		/** @brief Bumped whenever the slot tables are reset or every cached verdict is dropped (InvalidateVerdicts). */
 		std::uint32_t GetTablesGeneration() const { return tablesGeneration; }
 		/** @brief The sun entries DCLF can take out of the cascade culls (UpdateSunCandidates), and their generation now. */
-		std::shared_ptr<const SunCandidates> GetSunCandidates() const { return sunCandidates; }
-		std::uint32_t GetSunCandidatesGeneration() const { return sunCandidatesGeneration; }
+		std::shared_ptr<const SunCandidates> GetSunCandidates() const { return frameSunCandidates; }
+		std::uint32_t GetSunCandidatesGeneration() const { return frameSunGeneration; }
 		/**
 		 * @brief The entries DCLF can take out of the point lights' culls (UpdateLightCandidates), and their generation now:
 		 * the light entries (LightEntryOf: an actor's root, a reference's, a terrain block's multibound node) whose every
@@ -981,17 +1003,25 @@ namespace DCLF
 		 * BuildSunExclusion), or one the light's registration takes nothing from (LightEntryAllows). The lights' bits of their
 		 * geometries are LocalLightCull's.
 		 */
-		std::shared_ptr<const SunCandidates> GetLightCandidates() const { return lightCandidates; }
+		std::shared_ptr<const SunCandidates> GetLightCandidates() const { return frameLightCandidates; }
 		/**
 		 * @brief Render thread: a count of the light entries that gained their first tracked geometry. An entry the point
 		 * lights' filter cut for holding none (LocalLightCull) is judged again when it moves.
 		 */
-		std::uint64_t GetLightEntriesAppeared() const { return lightEntriesAppeared; }
+		std::uint64_t GetLightEntriesAppeared() const { return frameLightEntriesAppeared; }
 		/** @brief Render thread: whether a node is a light entry (LightDependentsOf). */
-		bool IsLightEntry(const RE::NiAVObject* a_node) const { return LightDependentsOf(a_node) != nullptr; }
+		bool IsLightEntry(const RE::NiAVObject* a_node) const
+		{
+			GuardFrameAccess("IsLightEntry");
+			return LightDependentsOf(a_node) != nullptr;
+		}
 		/** @brief Render thread: whether a node is one of the cells' category nodes DCLF tracks (RefreshCategoryNodes). */
-		bool IsCategoryNode(const RE::NiAVObject* a_node) const { return categoryNodes.contains(static_cast<RE::NiNode*>(const_cast<RE::NiAVObject*>(a_node))); }
-		std::uint32_t GetLightCandidatesGeneration() const { return lightCandidatesGeneration; }
+		bool IsCategoryNode(const RE::NiAVObject* a_node) const
+		{
+			GuardFrameAccess("IsCategoryNode");
+			return categoryNodes.contains(static_cast<RE::NiNode*>(const_cast<RE::NiAVObject*>(a_node)));
+		}
+		std::uint32_t GetLightCandidatesGeneration() const { return frameLightGeneration; }
 		/**
 		 * @brief Whether DCLF's native variant of Skylighting's occlusion map is on: the toggle (CS_DCLF_SKYLIGHT) and
 		 * the Skylighting feature loaded. The objects' sky techniques are classified only then.
@@ -1065,7 +1095,12 @@ namespace DCLF
 		 * @brief Whether the object is bound by scene membership (drawn from its record whenever the GPU finds it). Read-only:
 		 * the list jobs ask it, while nothing binds (the accumulate phase runs after them).
 		 */
-		bool IsMember(std::int32_t a_object) const { return a_object >= 0 && IsResidentSlot(static_cast<std::uint32_t>(a_object)); }
+		/** @brief Whether the slot is a resident record in the frame's tables (their residentSlot). */
+		bool IsMember(std::int32_t a_object) const
+		{
+			const auto& resident = FrameView().residentSlot;
+			return a_object >= 0 && static_cast<std::size_t>(a_object) < resident.size() && resident[a_object] != 0;
+		}
 		/** @brief Render thread (diagnostics): the shader property a slot draws with (its layer property for a layer's). */
 		RE::BSShaderProperty* SlotPropertyOf(std::uint32_t a_slot) const { return SlotProperty(a_slot); }
 		/**
@@ -1074,8 +1109,15 @@ namespace DCLF
 		 */
 		bool PipelineDrawable(std::uint32_t a_pipeline) const
 		{
-			return a_pipeline < tables.pipelines.size() && a_pipeline < lookups.pipelines.size() && lookups.pipelines[a_pipeline].setIndex != Lookups::kNone &&
-			       lookups.pipelines[a_pipeline].key == tables.pipelines[a_pipeline];
+			return PipelineDrawableIn(FrameView(), lookups, a_pipeline);
+		}
+		/** @brief A slot's set phases in given tables (the coordinator's: its own), 0 past the column (sized when the set is applied). */
+		static std::uint8_t PhasesIn(const Tables& a_tables, std::uint32_t a_slot) { return a_slot < a_tables.setPhases.size() ? a_tables.setPhases[a_slot] : std::uint8_t{ 0 }; }
+		/** @brief PipelineDrawable against given tables (the coordinator's commit: its own). */
+		static bool PipelineDrawableIn(const Tables& a_tables, const Lookups& a_lookups, std::uint32_t a_pipeline)
+		{
+			return a_pipeline < a_tables.pipelines.size() && a_pipeline < a_lookups.pipelines.size() && a_lookups.pipelines[a_pipeline].setIndex != Lookups::kNone &&
+			       a_lookups.pipelines[a_pipeline].key == a_tables.pipelines[a_pipeline];
 		}
 		/**
 		 * @brief The DCLF set (SceneSet.h): decided once a frame by CommitSet, at the scene phase, after the walk and before the
@@ -1156,7 +1198,8 @@ namespace DCLF
 		/** @brief The set's phases of an object slot (SetPhase bits), 0 when it is not a member. Render thread, or any thread between commits. */
 		std::uint8_t SetPhasesOf(std::int32_t a_object) const
 		{
-			return a_object >= 0 && static_cast<std::size_t>(a_object) < tables.setPhases.size() ? tables.setPhases[a_object] : std::uint8_t{ 0 };
+			const auto& phases = FrameView().setPhases;
+			return a_object >= 0 && static_cast<std::size_t>(a_object) < phases.size() ? phases[a_object] : std::uint8_t{ 0 };
 		}
 		/** @brief The frame's set as the engine's hooks read it (CommitSet's publication). */
 		std::shared_ptr<const SetSnapshot> GetSet() const { return setSnapshot; }
@@ -1183,9 +1226,10 @@ namespace DCLF
 		/** @brief Whether a main-pass build can draw the object now: it has bindings and its pipeline is drawable. */
 		bool ObjectDrawable(std::int32_t a_object) const
 		{
-			if (a_object < 0 || static_cast<std::size_t>(a_object) >= tables.objects.size())
+			const auto& objects = FrameView().objects;
+			if (a_object < 0 || static_cast<std::size_t>(a_object) >= objects.size())
 				return false;
-			const auto& record = tables.objects[a_object];
+			const auto& record = objects[a_object];
 			return !(record.flags & kObjectNoBindings) && PipelineDrawable(record.pipelineIndex);
 		}
 		/**
@@ -1217,7 +1261,9 @@ namespace DCLF
 			const RE::NiAVObject* node = nullptr;
 			bool standIn = false;  // kFadeRootStoodIn: no engine-drawn part
 		};
-		void SetFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned);
+		/** @brief Render thread (PrimaryCull): applied to the coordinator's state at the next frame's start (HandOverAtFrameStart). */
+		void SetFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned) { pendingFadeOwned = a_owned; }
+		void ApplyFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned);
 		/**
 		 * @brief Render thread: whether the fade node's state is the GPU's alone (a stood-in root, kFadeRootStoodIn): the engine
 		 * does not cull it, so its node keeps what the engine last left there, and a reader takes the GPU's state or the settled
@@ -1239,7 +1285,8 @@ namespace DCLF
 			return static_cast<std::size_t>(std::count_if(fadeRootOwned.begin(), fadeRootOwned.end(), [](const auto& a_root) { return a_root.second; }));
 		}
 		/** @brief PrimaryCull: after frames the engine culled every entry (its OnVisible ran on the nodes), every owned root again from its node. */
-		void ReseedOwnedFadeRoots();
+		void ReseedOwnedFadeRoots() { pendingFadeReseed = true; }
+		void ApplyReseedOwnedFadeRoots();
 		/** @brief A listed fade root's row from its node again (a new generation: the GPU's state restarts from it), owned bits kept. */
 		void ReseedFadeRoot(const void* a_node);
 		/**
@@ -1308,9 +1355,9 @@ namespace DCLF
 		 * the game created (a LOD chunk streamed in after a teleport), so an in-flight frame's colour pass drew other vertices
 		 * than its Z-prepass had. Any execution submitted after the clear completes after every one before it (one queue).
 		 */
-		std::vector<std::shared_ptr<const void>> TakeRetiredImports() { return std::exchange(retiredImports, {}); }
+		std::vector<std::shared_ptr<const void>> TakeRetiredImports() { return std::exchange(frameRetiredImports, {}); }
 		/** @brief Render thread: a GPU object the frame's executions may still read, released with the next main commit's (TakeRetiredImports). */
-		void RetireImport(std::shared_ptr<const void> a_owner) { retiredImports.push_back(std::move(a_owner)); }
+		void RetireImport(std::shared_ptr<const void> a_owner) { frameRetiredImports.push_back(std::move(a_owner)); }
 
 		/**
 		 * @brief What FrameValues samples (dclf-async-publication.md, "FrameValues"): the placements and palettes of the per-frame
@@ -1770,7 +1817,56 @@ namespace DCLF
 		// Step 6: the tables as the scene work left them, published as an immutable snapshot (PublishTables, the coordinator), and the
 		// one the frame accepted (AcceptTables). Snapshots are pooled: one no frame holds any more is written again.
 		std::vector<std::shared_ptr<Tables>> tablesPool;
-		std::shared_ptr<const Tables> publishedTables, acceptedTables;
+		// The accepted snapshot is the frame's alone (the pool writes no snapshot anyone holds): the frame's start writes the set into
+		// it as into the tables (WriteBoth), so the two stay equal there.
+		std::shared_ptr<Tables> publishedTables, acceptedTables;
+		// Step 6c: the scene work in flight (kicked, not joined) and its lane's thread; a frame-side read of the coordinator's state
+		// meanwhile is a defect, counted and named (GuardFrameAccess).
+		std::atomic<bool> sceneTaskInFlight{ false };
+		std::atomic<std::uint32_t> sceneLaneThread{ 0 };
+		mutable std::atomic<std::uint64_t> frameAccessViolations{ 0 };
+		mutable std::atomic<const char*> frameAccessFirst{ nullptr };
+	public:
+		/** @brief A thread running scene work (the lane, or a parallel loop's chunk of it): no frame-side access to guard. */
+		static inline thread_local bool sceneWorkThread = false;
+		void GuardFrameAccess(const char* a_what) const
+		{
+			if (!sceneTaskInFlight.load(std::memory_order_relaxed) || sceneWorkThread)
+				return;
+			if (frameAccessViolations.fetch_add(1, std::memory_order_relaxed) == 0)
+				frameAccessFirst.store(a_what, std::memory_order_relaxed);
+		}
+
+	private:
+		// The frame's copies, taken at its start (HandOverAtFrameStart).
+		std::shared_ptr<const SunCandidates> frameSunCandidates, frameLightCandidates;
+		std::uint32_t frameSunGeneration = 0, frameLightGeneration = 0;
+		std::uint64_t frameLightEntriesAppeared = 0;
+		std::vector<const RE::NiAVObject*> frameSwitchChanges;
+		bool frameSwitchResync = true;
+		std::vector<std::uint32_t> frameRetiredMaterialSlots, frameRetiredPipelineSlots;
+		std::vector<std::pair<ID3D11ShaderResourceView*, bool>> frameShadowTextureChanges;
+		std::vector<std::shared_ptr<const void>> frameRetiredImports;
+		// To the coordinator, at the next frame's start.
+		std::optional<std::uint64_t> fadeRootsSentHeld;
+		std::optional<std::vector<SceneStore::OwnedFadeRoot>> pendingFadeOwned;
+		bool pendingFadeReseed = false;
+		bool lookupsResetPending = false;
+		// The lookups as the coordinator's set judges readiness by them (MainReady, the readiness witness): copied at the frame's
+		// start when they moved.
+		Lookups lookupsView;
+		std::array<std::uint64_t, 3> lookupsViewKey{ ~0ull, ~0ull, ~0ull };
+		const Tables& FrameView() const { return acceptedTables ? *acceptedTables : tables; }
+		/** @brief A write of the frame's start (the set applied, withdrawn or revoked): to the tables and to the frame's snapshot alike. */
+		template <class F>
+		void WriteBoth(F&& a_write)
+		{
+			a_write(tables);
+			if (acceptedTables)
+				a_write(*acceptedTables);
+		}
+		// The change log's position at the last commit (CommitSet): what the applied set's revocation checks from.
+		LogCursor setCommitCursor;
 		TablesPublication tablesPublication;
 		/** @brief The coordinator, at the end of the scene work: the tables into a pooled snapshot no one holds, published. */
 		void PublishTables();
@@ -1887,6 +1983,16 @@ namespace DCLF
 		 * cache entry, so its next use evaluates it afresh.
 		 */
 		void ProcessMaterialWrites();
+		// The main renderers' registrations of the frame (DrainCapture), for the accumulate work's diagnostics (CheckRegistrations).
+		struct CapturedRegistration
+		{
+			const RE::BSGeometry* geometry = nullptr;
+			std::uint32_t hint = 0;
+		};
+		std::vector<CapturedRegistration> capturedRegistrations;
+		void CheckRegistrations();
+		/** @brief The coordinator's residency of a slot (IsMember is the frame's). */
+		bool ResidentObject(std::int32_t a_object) const { return a_object >= 0 && IsResidentSlot(static_cast<std::uint32_t>(a_object)); }
 		ankerl::unordered_dense::set<const RE::BSShaderMaterial*> writtenMaterials;
 		// The materials written since the coordinator last looked (ProcessMaterialWrites, the render thread): their slots no object
 		// references are dropped by the coordinator (DropWrittenMaterials), whose the references are. All of them after an overflow.

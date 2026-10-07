@@ -354,7 +354,7 @@ namespace DCLF
 		tables.NoteFadeRoot(it->second);
 	}
 
-	void SceneStore::SetFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned)
+	void SceneStore::ApplyFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned)
 	{
 		ankerl::unordered_dense::map<const void*, bool> owned;
 		for (const auto& root : a_owned)
@@ -383,7 +383,7 @@ namespace DCLF
 		tables.NoteFadeRoot(it->second);
 	}
 
-	void SceneStore::ReseedOwnedFadeRoots()
+	void SceneStore::ApplyReseedOwnedFadeRoots()
 	{
 		for (const auto& [node, standIn] : fadeRootOwned)
 			MarkFadeRootOwned(node, true, standIn);

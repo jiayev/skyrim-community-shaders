@@ -177,6 +177,23 @@ namespace DCLF
 		return handle;
 	}
 
+	AsyncWorker::JobHandle AsyncWorker::SubmitScene(const char* a_name, std::function<void(std::stop_token)> a_job)
+	{
+		auto job = std::make_shared<Job>();
+		job->name = a_name;
+		job->run = std::move(a_job);
+		job->submitted = std::chrono::steady_clock::now();
+		impl->Prune();
+		impl->outstanding.push_back(job);
+		++impl->stats[a_name].kicked;
+		if (!SceneScheduler::SceneLane().Dispatch(SceneScheduler::SceneLaneScope(), PublishedSceneExecutor::Coordinator, org::async::TaskDispatch::Controlled,
+				a_name, [job](const auto&) { Impl::Run(*job); }))
+			CancelQueued(*job);
+		JobHandle handle;
+		handle.job = std::move(job);
+		return handle;
+	}
+
 	AsyncWorker::WaitResult AsyncWorker::Wait(const JobHandle& a_handle, std::chrono::microseconds a_budget)
 	{
 		ZoneScopedN("CS.DCLF.Worker.Wait");
