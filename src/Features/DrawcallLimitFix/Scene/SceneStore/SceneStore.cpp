@@ -30,7 +30,7 @@ namespace DCLF
 		perFrameSet.clear();
 		pendingEvaluation.clear();
 		memberDecals.clear();
-		materialEvaluationsPending.clear();
+		frameTables.materialEvaluationsPending.clear();
 		NoteDecalsCleared();
 		fadeChanged.clear();
 		fadeDependents.clear();

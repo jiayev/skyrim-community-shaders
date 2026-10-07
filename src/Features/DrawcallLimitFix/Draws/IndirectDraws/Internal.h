@@ -2973,7 +2973,7 @@ namespace DCLF
 		 * own textures are left as patches for the commit. The per-frame constant blocks are addressed by
 		 * their fixed slots (FrameSlotOffset) for the slots the inputs say the commit supplies.
 		 */
-		void BuildMainPayload(const MainInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, MainPayload& a_out, MainRows& a_rows,
+		void BuildMainPayload(const MainInputs& a_in, const SceneStore::Tables& a_tables, const FrameTables& a_frame, const Lookups& a_lookups, MainPayload& a_out, MainRows& a_rows,
 			BuildCache* a_cache = nullptr, ObjectRecordStore* a_objects = nullptr, ExtrasStore* a_bones = nullptr, GeometryStore* a_geometries = nullptr);
 
 		// The objects a mode's inputs draw, as the geometry the native shadow loop withholds (PassCapture).

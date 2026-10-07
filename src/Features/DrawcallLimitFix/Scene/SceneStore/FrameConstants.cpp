@@ -6,47 +6,82 @@
 
 namespace DCLF
 {
-	void SceneStore::Tables::ListMaterialSlot(std::uint32_t a_slot, std::uint32_t a_frame)
+	void SceneStore::ListFrameMaterial(std::uint32_t a_slot)
 	{
-		const std::uint32_t signature = MaterialSources::Signature(materialSlotKey[a_slot].second);
-		if (a_slot >= materialSignatureListed.size()) {
-			materialSignatureListed.resize(materialSlotKey.size(), 0);
-			transformWatchFrame.resize(materialSlotKey.size(), 0);
+		auto& f = frameTables;
+		const std::uint32_t signature = MaterialSources::Signature(f.materialKeys[a_slot].second);
+		if (f.materialSignatureListed[a_slot] != signature + 1) {
+			f.materialSignatureListed[a_slot] = signature + 1;
+			f.frameSignatures[signature].slots.push_back(a_slot);
 		}
-		if (materialSignatureListed[a_slot] != signature + 1) {
-			materialSignatureListed[a_slot] = signature + 1;
-			frameSignatures[signature].slots.push_back(a_slot);
+		f.materialFramePending.push_back(a_slot);
+		if (!f.transformWatchFrame[a_slot])
+			f.transformWatch.push_back(a_slot);
+		f.transformWatchFrame[a_slot] = frame;
+	}
+
+	void SceneStore::SyncFrameMaterials()
+	{
+		// The frame's copy of each slot's record: taken again from the tables when the slot's key or record moved (a join keyed
+		// it, a slot was freed and keyed again); the frame's writes stay on it otherwise. Held while the frame keys it.
+		auto& f = frameTables;
+		if (f.materialsGeneration != tablesGeneration) {
+			f.ResetMaterials();
+			frameMaterialOwners.clear();
+			f.materialsGeneration = tablesGeneration;
 		}
-		materialFramePending.push_back(a_slot);
-		if (!transformWatchFrame[a_slot])
-			transformWatch.push_back(a_slot);
-		transformWatchFrame[a_slot] = a_frame;
+		f.materialLog.Trim(1u << 16);
+		const std::size_t count = tables.materials.size();
+		f.ResizeMaterials(count);
+		frameMaterialOwners.resize(count);
+		for (std::uint32_t slot = 0; slot < count; ++slot) {
+			const auto key = tables.materialSlotKey[slot];
+			const std::uint32_t source = tables.materialVersion[slot];
+			if (f.materialKeys[slot] == key && f.materialSource[slot] == source)
+				continue;
+			if (f.materialKeys[slot].first != key.first) {
+				if (f.materialKeys[slot].first)
+					f.UnlistMaterialDependent(f.materialKeys[slot].first, slot);
+				if (key.first)
+					f.materialDependents[key.first].push_back(slot);
+				frameMaterialOwners[slot].reset(const_cast<RE::BSShaderMaterial*>(key.first));
+			}
+			f.materialKeys[slot] = key;
+			f.materialSource[slot] = source;
+			if (!key.first)
+				continue;
+			f.materials[slot] = tables.materials[slot];
+			f.materialVersion[slot] = f.NextVersion();
+			f.materialLog.Push(slot);
+			ListFrameMaterial(slot);
+		}
 	}
 
 	void SceneStore::RefreshFrameMaterials()
 	{
 		stats.frameMaterialSamples = 0;
 		auto& evaluator = ConstantEvaluator::Get();
-		if (tables.materials.empty() || !evaluator.HasLightingShader())
+		auto& f = frameTables;
+		if (f.materials.empty() || !evaluator.HasLightingShader())
 			return;
 		auto& m = materialFrameStats;
 		++m.frames;
 		auto apply = [&](std::uint32_t a_slot, const MaterialRecord& a_live) {
 			bool floatsChanged = false;
-			if (MaterialSources::ApplyFrameComponents(a_live, tables.materials[a_slot], tables.materialSlotKey[a_slot].second, &floatsChanged)) {
-				tables.materialVersion[a_slot] = ++materialVersions;
-				tables.NoteMaterial(a_slot);
+			if (MaterialSources::ApplyFrameComponents(a_live, f.materials[a_slot], f.materialKeys[a_slot].second, &floatsChanged)) {
+				f.materialVersion[a_slot] = f.NextVersion();
+				f.materialLog.Push(a_slot);
 			}
 			if (floatsChanged) {
-				tables.materialFrameVersion[a_slot] = tables.NextVersion();
-				tables.NoteMaterial(a_slot);
+				f.materialFrameVersion[a_slot] = f.NextVersion();
+				f.materialLog.Push(a_slot);
 			}
 		};
 		auto keyed = [&](std::uint32_t a_slot, std::uint32_t a_signature) {
-			return a_slot < tables.materials.size() && tables.materialSlots.Alive(a_slot) && tables.materialSlotKey[a_slot].first &&
-			       MaterialSources::Signature(tables.materialSlotKey[a_slot].second) == a_signature;
+			return a_slot < f.materials.size() && tables.materialSlots.Alive(a_slot) && f.materialKeys[a_slot].first &&
+			       MaterialSources::Signature(f.materialKeys[a_slot].second) == a_signature;
 		};
-		for (auto& [signature, entry] : tables.frameSignatures) {
+		for (auto& [signature, entry] : f.frameSignatures) {
 			// The live sample, from a slot of the signature drawn this frame (the last one's while it still is). With none
 			// drawn nothing of the signature is: the slots take the sample when one is.
 			auto& slots = entry.slots;
@@ -60,7 +95,7 @@ namespace DCLF
 			}
 			if (entry.representative == ~0u)
 				continue;
-			const auto key = tables.materialSlotKey[entry.representative];
+			const auto key = f.materialKeys[entry.representative];
 			MaterialRecord live;
 			if (!evaluator.EvaluateMaterial(key.first, key.second, live))
 				continue;
@@ -81,8 +116,8 @@ namespace DCLF
 			for (std::size_t i = 0; i < slots.size();) {
 				const std::uint32_t slot = slots[i];
 				if (!keyed(slot, signature)) {
-					if (slot < tables.materialSignatureListed.size() && tables.materialSignatureListed[slot] == signature + 1)
-						tables.materialSignatureListed[slot] = 0;
+					if (slot < f.materialSignatureListed.size() && f.materialSignatureListed[slot] == signature + 1)
+						f.materialSignatureListed[slot] = 0;
 					slots[i] = slots.back();
 					slots.pop_back();
 					continue;
@@ -93,49 +128,51 @@ namespace DCLF
 			}
 		}
 		// The slots keyed or rewritten since the last application: the signature's sample regardless.
-		m.pending += tables.materialFramePending.size();
-		for (const std::uint32_t slot : tables.materialFramePending) {
-			if (slot >= tables.materials.size() || !tables.materialSlots.Alive(slot) || !tables.materialSlotKey[slot].first)
+		m.pending += f.materialFramePending.size();
+		for (const std::uint32_t slot : f.materialFramePending) {
+			if (slot >= f.materials.size() || !tables.materialSlots.Alive(slot) || !f.materialKeys[slot].first)
 				continue;
-			const auto it = tables.frameSignatures.find(MaterialSources::Signature(tables.materialSlotKey[slot].second));
-			if (it != tables.frameSignatures.end() && it->second.appliedValid)
+			const auto it = f.frameSignatures.find(MaterialSources::Signature(f.materialKeys[slot].second));
+			if (it != f.frameSignatures.end() && it->second.appliedValid)
 				apply(slot, it->second.applied);
 		}
-		tables.materialFramePending.clear();
+		f.materialFramePending.clear();
 	}
 
 	void SceneStore::RefreshTextureTransforms()
 	{
 		ZoneScopedN("CS.DCLF.Capture.TextureTransforms");
+		auto& f = frameTables;
 		ankerl::unordered_dense::set<const RE::BSShaderMaterial*> changed;
 		MaterialSources::DrainTransformChanges(changed);
 		for (const auto* material : changed) {
-			if (auto it = materialDependents.find(material); it != materialDependents.end())
+			if (auto it = f.materialDependents.find(material); it != f.materialDependents.end())
 				for (const auto slot : it->second)
-					if (slot < tables.transformWatchFrame.size() && tables.materialSlots.Alive(slot) && tables.materialSlotKey[slot].first == material) {
-						if (!tables.transformWatchFrame[slot])
-							tables.transformWatch.push_back(slot);
-						tables.transformWatchFrame[slot] = frame;
+					if (slot < f.transformWatchFrame.size() && tables.materialSlots.Alive(slot) && f.materialKeys[slot].first == material) {
+						if (!f.transformWatchFrame[slot])
+							f.transformWatch.push_back(slot);
+						f.transformWatchFrame[slot] = frame;
 					}
 		}
-		auto& list = tables.transformWatch;
+		auto& list = f.transformWatch;
 		materialFrameStats.transformsWatched += list.size();
 		for (std::size_t i = 0; i < list.size();) {
 			const std::uint32_t slot = list[i];
-			bool keep = slot < tables.materials.size() && tables.materialSlots.Alive(slot) && tables.materialSlotKey[slot].first;
+			bool keep = slot < f.materials.size() && tables.materialSlots.Alive(slot) && f.materialKeys[slot].first;
 			// The material is read only while a member's slot holds it.
 			if (keep && tables.MaterialUsed(slot)) {
-				const auto* material = tables.materialSlotKey[slot].first;
-				if (MaterialSources::ApplyTextureTransform(material, tables.materials[slot])) {
-					tables.materialFrameVersion[slot] = tables.NextVersion();
-					tables.NoteMaterial(slot);
+				const auto* material = f.materialKeys[slot].first;
+				if (MaterialSources::ApplyTextureTransform(material, f.materials[slot])) {
+					f.materialFrameVersion[slot] = f.NextVersion();
+					f.materialLog.Push(slot);
 				}
 				const auto* base = static_cast<const RE::BSLightingShaderMaterialBase*>(material);
-				keep = frame - tables.transformWatchFrame[slot] <= 2 || base->texCoordOffset[0] != base->texCoordOffset[1] ||
+				keep = frame - f.transformWatchFrame[slot] <= 2 || base->texCoordOffset[0] != base->texCoordOffset[1] ||
 				       base->texCoordScale[0] != base->texCoordScale[1];
 			}
 			if (!keep) {
-				tables.transformWatchFrame[slot] = 0;
+				if (slot < f.transformWatchFrame.size())
+					f.transformWatchFrame[slot] = 0;
 				list[i] = list.back();
 				list.pop_back();
 				continue;
@@ -186,10 +223,11 @@ namespace DCLF
 		auto& m = materialFrameStats;
 		++m.checks;
 		ankerl::unordered_dense::map<std::uint32_t, MaterialRecord> live;
-		for (std::uint32_t slot = 0; slot < tables.materials.size(); ++slot) {
-			if (!tables.MaterialUsed(slot) || !tables.materialSlotKey[slot].first)
+		const auto& f = frameTables;
+		for (std::uint32_t slot = 0; slot < f.materials.size(); ++slot) {
+			if (!tables.MaterialUsed(slot) || !f.materialKeys[slot].first)
 				continue;
-			const auto key = tables.materialSlotKey[slot];
+			const auto key = f.materialKeys[slot];
 			const std::uint32_t signature = MaterialSources::Signature(key.second);
 			auto it = live.find(signature);
 			if (it == live.end()) {
@@ -199,7 +237,7 @@ namespace DCLF
 				it = live.emplace(signature, record).first;
 			}
 			++m.slotsChecked;
-			MaterialRecord probe = tables.materials[slot];
+			MaterialRecord probe = f.materials[slot];
 			bool floatsChanged = false;
 			if (MaterialSources::ApplyFrameComponents(it->second, probe, key.second, &floatsChanged) || floatsChanged) {
 				if (m.componentsDiffer++ == 0 && m.first.empty())
@@ -234,64 +272,90 @@ namespace DCLF
 		writtenMaterials.clear();
 		const bool complete = MaterialSources::Drain(writtenMaterials);
 		stats.materialWrites = static_cast<std::uint32_t>(writtenMaterials.size());
-		stats.materialsRewritten = stats.materialsDropped = stats.materialsHeld = 0;
-		// The referenced slots a write could not be evaluated for yet (the Lighting shader not found, the material not ready):
-		// asked again, as if written again, until they are.
-		std::vector<std::uint32_t> retry = std::move(materialEvaluationsPending);
-		materialEvaluationsPending.clear();
+		stats.materialsRewritten = stats.materialsHeld = 0;
+		auto& f = frameTables;
+		// The slots a write could not be evaluated for yet (the Lighting shader not found, the material not ready): asked again, as
+		// if written again, until they are.
+		std::vector<std::uint32_t> retry = std::move(f.materialEvaluationsPending);
+		f.materialEvaluationsPending.clear();
 		if (complete && writtenMaterials.empty() && retry.empty())
 			return;
 		if (!complete)
 			logger::warn("[DCLF] material write queue overflowed: every material record is re-evaluated");
+		// The slots no object references are the coordinator's to drop (their references are its): posted for its next work.
+		if (!complete)
+			materialWritesAll = true;
+		else
+			materialWritesPosted.insert(materialWritesPosted.end(), writtenMaterials.begin(), writtenMaterials.end());
 		auto& evaluator = ConstantEvaluator::Get();
 		const bool canEvaluate = evaluator.HasLightingShader();
 		auto written = [&](const RE::BSShaderMaterial* a_material) { return !complete || writtenMaterials.contains(a_material); };
-		// Whether a slot is referenced is read below: the references are counted from the tables' logs, which this frame's
-		// bindings (a member joined since the walk's sweep) are in but not counted yet.
-		UpdateSlotReferences();
 		std::vector<std::uint32_t> affected;
 		if (complete) {
 			for (const auto* material : writtenMaterials)
-				if (auto it = materialDependents.find(material); it != materialDependents.end())
+				if (auto it = f.materialDependents.find(material); it != f.materialDependents.end())
 					affected.insert(affected.end(), it->second.begin(), it->second.end());
 		} else {
-			affected.reserve(tables.materials.size());
-			for (std::uint32_t slot = 0; slot < tables.materials.size(); ++slot)
+			affected.reserve(f.materials.size());
+			for (std::uint32_t slot = 0; slot < f.materials.size(); ++slot)
 				affected.push_back(slot);
 		}
 		const std::size_t written_ = affected.size();
 		affected.insert(affected.end(), retry.begin(), retry.end());
 		for (std::size_t i = 0; i < affected.size(); ++i) {
 			const std::uint32_t slot = affected[i];
-			if (!tables.materialSlots.Alive(slot))
+			if (slot >= f.materials.size() || !tables.materialSlots.Alive(slot))
 				continue;
-			const auto key = tables.materialSlotKey[slot];
+			const auto key = f.materialKeys[slot];
 			if (!key.first || (i < written_ && !written(key.first)))
 				continue;
-			// A referenced slot's key is a bound object's material, and so live: it is evaluated again in place. One that
-			// cannot be evaluated now keeps its last record, which its objects go on drawing with, and is asked again next
-			// frame: a referenced slot is never freed under the objects that hold it (a member is bound once).
-			if (tables.materialSlots.References(slot)) {
-				MaterialRecord live;
-				if (canEvaluate && evaluator.EvaluateMaterial(key.first, key.second, live)) {
-					// Its frame-sourced components (and the character light's t11, which records hold no view of) are the
-					// frame's, kept by RefreshFrameMaterials: only the material's own values are compared and rewritten.
-					MaterialSources::CopyFrameComponents(tables.materials[slot], live, key.second);
-					if (!(live == tables.materials[slot])) {
-						tables.materials[slot] = live;
-						tables.materialVersion[slot] = ++materialVersions;
-						tables.NoteMaterial(slot);
-						++stats.materialsRewritten;
-					}
-				} else if (std::find(materialEvaluationsPending.begin(), materialEvaluationsPending.end(), slot) == materialEvaluationsPending.end()) {
-					materialEvaluationsPending.push_back(slot);
-					++stats.materialsHeld;
+			// The frame's record, evaluated again in place (the frame holds the material: frameMaterialOwners). One that cannot be
+			// evaluated now keeps its last record, which its objects go on drawing with, and is asked again next frame.
+			MaterialRecord live;
+			if (canEvaluate && evaluator.EvaluateMaterial(key.first, key.second, live)) {
+				// Its frame-sourced components (and the character light's t11, which records hold no view of) are the frame's,
+				// kept by RefreshFrameMaterials: only the material's own values are compared and rewritten.
+				MaterialSources::CopyFrameComponents(f.materials[slot], live, key.second);
+				if (!(live == f.materials[slot])) {
+					f.materials[slot] = live;
+					f.materialVersion[slot] = f.NextVersion();
+					f.materialLog.Push(slot);
+					++stats.materialsRewritten;
 				}
-				tables.ListMaterialSlot(slot, frame);
-				continue;
+			} else if (std::find(f.materialEvaluationsPending.begin(), f.materialEvaluationsPending.end(), slot) == f.materialEvaluationsPending.end()) {
+				f.materialEvaluationsPending.push_back(slot);
+				++stats.materialsHeld;
 			}
-			// Unreferenced (the drain frees it): dropped, so that its next use evaluates it afresh. An object's cached
-			// derivation checks its slot is still allocated to the same key.
+			ListFrameMaterial(slot);
+		}
+	}
+
+	void SceneStore::DropWrittenMaterials()
+	{
+		// The coordinator: a written material's slots no object references are dropped, so that their next use evaluates them
+		// afresh (the frame re-evaluated the referenced ones in its copies). An object's cached derivation checks its slot is
+		// still allocated to the same key.
+		if (materialWritesPosted.empty() && !materialWritesAll)
+			return;
+		stats.materialsDropped = 0;
+		// The references are counted from the tables' logs, which this frame's bindings are in but not counted yet.
+		UpdateSlotReferences();
+		std::vector<std::uint32_t> affected;
+		if (materialWritesAll) {
+			for (std::uint32_t slot = 0; slot < tables.materials.size(); ++slot)
+				affected.push_back(slot);
+		} else {
+			std::sort(materialWritesPosted.begin(), materialWritesPosted.end());
+			materialWritesPosted.erase(std::unique(materialWritesPosted.begin(), materialWritesPosted.end()), materialWritesPosted.end());
+			for (const auto* material : materialWritesPosted)
+				if (auto it = materialDependents.find(material); it != materialDependents.end())
+					affected.insert(affected.end(), it->second.begin(), it->second.end());
+		}
+		materialWritesPosted.clear();
+		materialWritesAll = false;
+		for (const std::uint32_t slot : affected) {
+			if (!tables.materialSlots.Alive(slot) || !tables.materialSlotKey[slot].first || tables.materialSlots.References(slot))
+				continue;
 			ClearMaterialSlot(slot);
 			tables.materialSlots.Free(slot);
 			++stats.materialsDropped;
@@ -302,6 +366,7 @@ namespace DCLF
 	void SceneStore::RefreshFrameConstants()
 	{
 		ZoneNamedN(frameConstantsZone, "CS.DCLF.FrameConstants", true);
+		SyncFrameMaterials();
 		{
 			ZoneScopedN("CS.DCLF.FrameConstants.Materials");
 			RefreshFrameMaterials();
@@ -328,6 +393,8 @@ namespace DCLF
 		const bool geometryParityEnabled = SwitchEnabled(Switch::PersistentParity);
 		const bool geometryParityFrame = geometryParityEnabled && ParityDue(frame, 30);
 		geometryStats.checks += geometryParityFrame ? 1u : 0u;
+		frameTables.SyncPipelines(tables.pipelines, tables.pipelineBindingVersion, tablesGeneration);
+		frameTables.SyncTechniques(tables.techniqueKeys.size());
 		TracyCZoneN(pipelinesZone, "CS.DCLF.FrameConstants.Pipelines", true);
 		std::int64_t pipelinesVisited = 0, techniquesEvaluated = 0;
 		for (std::size_t word = 0; word < tables.usedPipelineBits.size(); ++word) {
@@ -343,7 +410,7 @@ namespace DCLF
 				// row's (Tables::TechniqueRow): evaluated once a frame for all the pipelines of its key, and written, and
 				// versioned, only where the values differ.
 				auto sameFloats = [](const ConstantBlock& a, const ConstantBlock& b) { return std::memcmp(a.floats.data(), b.floats.data(), sizeof(a.floats)) == 0; };
-				auto& row = tables.techniques[tables.pipelineTechnique[i]];
+				auto& row = frameTables.techniques[tables.pipelineTechnique[i]];
 				if (row.evaluated != frame) {
 					row.evaluated = frame;
 					++techniquesEvaluated;
@@ -356,12 +423,13 @@ namespace DCLF
 					const bool floats = !sameFloats(now.vs, row.value.vs) || !sameFloats(now.ps, row.value.ps);
 					const bool binding = now.filterModes != row.value.filterModes || now.shadowMask != row.value.shadowMask ||
 					                     now.shadowMaskTexture != row.value.shadowMaskTexture;
-					if (floats || binding)
+					if (floats || binding || !row.valid)
 						row.value = now;
-					if (floats)
-						row.constantsVersion = tables.NextVersion();
-					if (binding)
-						row.bindingVersion = tables.NextVersion();
+					if (floats || !row.valid)
+						row.constantsVersion = frameTables.NextVersion();
+					if (binding || !row.valid)
+						row.bindingVersion = frameTables.NextVersion();
+					row.valid = true;
 					// CS_DCLF_PERSISTENT_PARITY: the row against a second evaluation, once a frame.
 					if (geometryParityFrame) {
 						TechniqueConstants reference;
@@ -385,8 +453,8 @@ namespace DCLF
 				auto* property = tables.geometryTemplate[i];
 				auto templatePassOf = [&]() { return TemplatePassOf(property); };
 				const bool writesEye = WritesEyePosition(tables.pipelines[i].passDescriptor);
-				const bool full = !constantsRefreshed || !tables.geometryConstantsValid[i] || (writesEye && !eyeSample.valid);
-				auto& held = tables.geometryConstants[i];
+				const bool full = !constantsRefreshed || !frameTables.geometryConstantsValid[i] || (writesEye && !eyeSample.valid);
+				auto& held = frameTables.geometryConstants[i];
 				bool ownChanged = false;
 				if (!full && writesEye) {
 					CopyFrameGeometry(eyeSample.constants, held);
@@ -401,7 +469,7 @@ namespace DCLF
 					++geometryStats.full;
 					publishLighting(constants);
 					// Its own values: what a bindless draw reads from the block (PackGeometryTemplate's mask).
-					ownChanged = !tables.geometryConstantsValid[i] || !SameBindlessGeometry(constants, held);
+					ownChanged = !frameTables.geometryConstantsValid[i] || !SameBindlessGeometry(constants, held);
 					held = constants;
 					if (writesEye && !eyeSample.valid) {
 						eyeSample.constants = constants;
@@ -421,10 +489,10 @@ namespace DCLF
 					CopyFrameGeometry(frameSample.constants, held);
 				}
 				if (ownChanged) {
-					tables.pipelineConstantsVersion[i] = tables.NextVersion();
+					frameTables.pipelineConstantsVersion[i] = frameTables.NextVersion();
 					++geometryStats.changed;
 				}
-				tables.geometryConstantsValid[i] = 1;
+				frameTables.geometryConstantsValid[i] = 1;
 				// CS_DCLF_PERSISTENT_PARITY: the block against a full evaluation, in what no object overrides; the frame
 				// lighting is checked against each reference after the loop, where the reference writes it.
 				if (geometryParityFrame) {
@@ -440,6 +508,10 @@ namespace DCLF
 		TracyCZoneEnd(pipelinesZone);
 		TracyPlot("CS.DCLF.FrameConstants.Pipelines", pipelinesVisited);
 		TracyPlot("CS.DCLF.FrameConstants.Techniques", techniquesEvaluated);
+		// The new pipelines' evaluations, where nothing above wrote the component (a later pipeline's own frame variables).
+		for (const auto& seed : lightingSeeds)
+			MergeFrameLighting(seed, frameLighting, lightingWritten);
+		lightingSeeds.clear();
 		if (fogWritten)
 			frameCapture.fog = frameFog;
 		if (lightingWritten && std::memcmp(frameLighting.data(), frameCapture.lighting.data(), sizeof(frameLighting)) != 0) {
@@ -908,30 +980,26 @@ namespace DCLF
 		float range[4];
 		LodHighDetailRange(range);
 		const auto offset = LightingVSLayout().offset[kVSHighDetailRange];
-		for (auto& row : tables.techniques) {
-			const std::uint32_t technique = row.key >> 1;  // TechniqueKey
-			if (technique != 9 && technique != 18)
+		frameTables.SyncTechniques(tables.techniqueKeys.size());
+		for (std::size_t r = 0; r < tables.techniqueKeys.size(); ++r) {
+			const std::uint32_t technique = tables.techniqueKeys[r] >> 1;  // TechniqueKey
+			auto& row = frameTables.techniques[r];
+			if ((technique != 9 && technique != 18) || !row.valid)
 				continue;
 			float* out = &row.value.vs.floats[offset];
 			if (std::memcmp(out, range, sizeof(range)) == 0)
 				continue;
 			std::memcpy(out, range, sizeof(range));
-			row.constantsVersion = tables.NextVersion();
+			row.constantsVersion = frameTables.NextVersion();
 		}
 	}
 
 	std::uint32_t SceneStore::TechniqueRowFor(std::uint32_t a_passDescriptor)
 	{
 		const std::uint32_t key = TechniqueKey(a_passDescriptor);
-		const auto [it, fresh] = tables.techniqueRow.try_emplace(key, static_cast<std::uint32_t>(tables.techniques.size()));
-		if (fresh) {
-			auto& row = tables.techniques.emplace_back();
-			row.key = key;
-			EvaluateTechnique(a_passDescriptor, row.value);
-			row.evaluated = frame;
-			row.constantsVersion = tables.NextVersion();
-			row.bindingVersion = tables.NextVersion();
-		}
+		const auto [it, fresh] = tables.techniqueRow.try_emplace(key, static_cast<std::uint32_t>(tables.techniqueKeys.size()));
+		if (fresh)
+			tables.techniqueKeys.push_back(key);
 		return it->second;
 	}
 
@@ -941,18 +1009,21 @@ namespace DCLF
 		// frame-sourced components. A difference is a material writer the events do not cover; it is
 		// reported, not repaired, because repairing it here is what hid the missing events before.
 		const std::string& mode = SwitchValue(Switch::MaterialCache);
-		if (mode == "off" || tables.materials.empty())
+		const auto& f = frameTables;
+		if (mode == "off" || f.materials.empty())
 			return;
 		auto& evaluator = ConstantEvaluator::Get();
 		if (!evaluator.HasLightingShader())
 			return;
 		auto validate = [&](std::uint32_t slot) {
-			const auto key = tables.materialSlotKey[slot];
+			if (slot >= f.materials.size())
+				return;
+			const auto key = f.materialKeys[slot];
 			MaterialRecord live;
 			if (!key.first || !evaluator.EvaluateMaterial(key.first, key.second, live))
 				return;
 			++stats.materialsValidated;
-			MaterialRecord served = tables.materials[slot];
+			MaterialRecord served = f.materials[slot];
 			MaterialSources::CopyFrameComponents(live, served, key.second);
 			if (!(served == live))
 				NoteStaleMaterial(slot, key, served, live);
@@ -966,7 +1037,7 @@ namespace DCLF
 		}
 		std::uint32_t looked = 0;
 		for (std::uint32_t n = 0; n < kMaterialValidationsPerFrame * kMaterialValidationStride && looked < kMaterialValidationsPerFrame; ++n) {
-			const std::uint32_t slot = materialValidationCursor++ % static_cast<std::uint32_t>(tables.materials.size());
+			const std::uint32_t slot = materialValidationCursor++ % static_cast<std::uint32_t>(f.materials.size());
 			if (!tables.MaterialUsed(slot))
 				continue;
 			++looked;

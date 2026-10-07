@@ -272,7 +272,7 @@ namespace DCLF
 	bool CaptureParity::CompareMaterial(const RE::BSGeometry* a_geometry, std::uint32_t a_materialIndex)
 	{
 		const auto& tables = SceneStore::Get().GetTables();
-		const auto& record = tables.materials[a_materialIndex];
+		const auto& record = SceneStore::Get().GetFrameTables().materials[a_materialIndex];
 		const bool frameCharacterLight = MaterialSources::FrameCharacterLight(tables.materialSlotKey[a_materialIndex].second);
 		auto* vs = *globals::game::currentVertexShader;
 		auto* ps = *globals::game::currentPixelShader;
@@ -306,7 +306,7 @@ namespace DCLF
 	{
 		const auto& tables = SceneStore::Get().GetTables();
 		const auto& object = tables.objects[a_objectIndex];
-		if ((object.flags & kObjectNoBindings) || !tables.geometryConstantsValid[object.pipelineIndex])
+		if ((object.flags & kObjectNoBindings) || !SceneStore::Get().GetFrameTables().geometryConstantsValid[object.pipelineIndex])
 			return true;
 
 		// Expected values: the per-frame block for this pass descriptor with the per-object values on top.
@@ -330,7 +330,7 @@ namespace DCLF
 			++shadingSinceStart;
 			shading = now;
 		}
-		GeometryConstants expected = ObjectGeometryConstants(tables, a_objectIndex, placement, shading, SampleExtrasFrame(), shadowState.posAdjust.getEye(),
+		GeometryConstants expected = ObjectGeometryConstants(tables, SceneStore::Get().GetFrameTables(), a_objectIndex, placement, shading, SampleExtrasFrame(), shadowState.posAdjust.getEye(),
 			shadowState.previousPosAdjust.getEye());
 		const auto& vsLayout = LightingVSLayout();
 		const auto& psLayout = LightingPSLayout();
@@ -380,7 +380,7 @@ namespace DCLF
 	{
 		const auto& tables = SceneStore::Get().GetTables();
 		const auto& object = tables.objects[a_objectIndex];
-		const auto& technique = tables.TechniqueOf(object.pipelineIndex);
+		const auto& technique = SceneStore::Get().GetFrameTables().techniques[tables.pipelineTechnique[object.pipelineIndex]].value;
 		// SetupTechnique writes VPOSOffset after it unmaps the buffer (engine notes, SetupTechnique); with
 		// DXVK the memory stays mapped and the draw sees the late write, so compare what is there now.
 		for (auto& stage : snapshots) {
@@ -407,7 +407,7 @@ namespace DCLF
 				Slot(1, kPerTechnique), reinterpret_cast<ID3D11Resource*>(ps->constantBuffers[kPerTechnique].buffer), kPSFogColor, kPSGroups[kPerTechnique], 0);
 
 		// Filter modes of the slots the material binds: the one SetupMaterial sets, else the technique's.
-		const auto& material = tables.materials[object.materialIndex];
+		const auto& material = SceneStore::Get().GetFrameTables().materials[object.materialIndex];
 		const auto& state = globals::game::shadowState->GetRuntimeData();
 		if (technique.shadowMask) {
 			const auto* native = reinterpret_cast<const ID3D11ShaderResourceView*>(state.PSTexture[kShadowMaskSlot]);
@@ -495,7 +495,7 @@ namespace DCLF
 
 		// t71 and t74 as State::Draw bound them from the pending binding the SetupMaterial hook left.
 		if (!(object.flags & kObjectNoBindings) && object.materialIndex < tables.materials.size()) {
-			const auto& expected = tables.materials[object.materialIndex].featureTextures;
+			const auto& expected = SceneStore::Get().GetFrameTables().materials[object.materialIndex].featureTextures;
 			if (expected[0] || expected[1]) {
 				std::array<ID3D11ShaderResourceView*, kFeatureMaterialTextures> native{};
 				for (std::uint32_t f = 0; f < kFeatureMaterialTextures; ++f)

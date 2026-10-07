@@ -121,7 +121,7 @@ namespace DCLF
 	struct BindlessPlacement;
 	struct BindlessShading;
 	struct ExtrasFrame;
-	GeometryConstants ObjectGeometryConstants(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, const BindlessPlacement& a_placement,
+	GeometryConstants ObjectGeometryConstants(const SceneStore::Tables& a_tables, const FrameTables& a_frame, std::uint32_t a_objectIndex, const BindlessPlacement& a_placement,
 		const BindlessShading& a_shading, const ExtrasFrame& a_extrasFrame, const RE::NiPoint3& a_eye, const RE::NiPoint3& a_previousEye);
 
 	/**
