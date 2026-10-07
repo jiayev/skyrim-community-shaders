@@ -209,6 +209,13 @@ static const uint kObjectFadeNodeRow = 8;
 // StructuredBuffer of the 144-byte placement rows (DCLFObjects.hlsli, BindlessPlacement), the frame's (the latch's placementsIndex,
 // read at LoadLatch): an input's bound, sun entry and fade node are its object's row (a move rewrites the row, never the inputs).
 static uint PlacementsIndex;
+// The payload's buffers (BuildDrawsLatch::payloadValid): a payload ring entry's when the latch names one, else the pass's own.
+static uint InputsBuffer;
+static uint GeometriesBuffer;
+static uint MaterialRowsLo;
+static uint MaterialRowsHi;
+static uint PipelineRowsLo;
+static uint PipelineRowsHi;
 float4 ObjectRow(uint a_object, uint a_row)
 {
 	StructuredBuffer<PlacementRows> placements = ResourceDescriptorHeap[PlacementsIndex];
@@ -242,6 +249,15 @@ void LoadLatch()
 	BucketMapOffset = latch.Load(LatchOffset + 248);
 	FadeStatesIndex = latch.Load(LatchOffset + 240);
 	PlacementsIndex = latch.Load(LatchOffset + 252);
+	const uint4 payload = latch.Load4(LatchOffset + 256);
+	const uint4 rows = latch.Load4(LatchOffset + 272);
+	const bool ring = payload.x != 0;
+	InputsBuffer = ring ? payload.y : InputsIndex;
+	GeometriesBuffer = ring ? payload.z : GeometriesIndex;
+	MaterialRowsLo = ring ? rows.x : MaterialRowsAddressLo;
+	MaterialRowsHi = ring ? rows.y : MaterialRowsAddressHi;
+	PipelineRowsLo = ring ? rows.z : PipelineRowsAddressLo;
+	PipelineRowsHi = ring ? rows.w : PipelineRowsAddressHi;
 }
 
 // Light Limit Fix's shadow mask of an input, as the main pass's light selection gives it (LocalShadowLights): the local
@@ -520,8 +536,8 @@ uint2 AddressOf(uint a_lo, uint a_hi, uint a_offset)
 // draw's first four push words.
 uint4 RowsOf(uint a_rows)
 {
-	const uint2 pipelineRow = PipelineRowStride ? AddressOf(PipelineRowsAddressLo, PipelineRowsAddressHi, (a_rows >> 20) * PipelineRowStride) : uint2(0, 0);
-	const uint2 materialRow = AddressOf(MaterialRowsAddressLo, MaterialRowsAddressHi, (a_rows & 0xFFFFFu) * MaterialRowStride);
+	const uint2 pipelineRow = PipelineRowStride ? AddressOf(PipelineRowsLo, PipelineRowsHi, (a_rows >> 20) * PipelineRowStride) : uint2(0, 0);
+	const uint2 materialRow = AddressOf(MaterialRowsLo, MaterialRowsHi, (a_rows & 0xFFFFFu) * MaterialRowStride);
 	return uint4(pipelineRow, materialRow);
 }
 
@@ -604,8 +620,8 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	if (draw >= DrawCount)
 		return;
 
-	ByteAddressBuffer inputs = ResourceDescriptorHeap[InputsIndex];
-	ByteAddressBuffer geometries = ResourceDescriptorHeap[GeometriesIndex];
+	ByteAddressBuffer inputs = ResourceDescriptorHeap[InputsBuffer];
+	ByteAddressBuffer geometries = ResourceDescriptorHeap[GeometriesBuffer];
 	RWByteAddressBuffer sequences = ResourceDescriptorHeap[SequencesIndex];
 	RWByteAddressBuffer count = ResourceDescriptorHeap[CountIndex];
 	RWByteAddressBuffer visibility = ResourceDescriptorHeap[VisibilityIndex];

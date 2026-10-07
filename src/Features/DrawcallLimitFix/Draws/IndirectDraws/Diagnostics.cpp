@@ -270,19 +270,28 @@ namespace DCLF
 		static constexpr const char* kNames[3] = { "colour", "zprepass", "shadow" };
 		for (std::size_t i = 0; i < stats.async.size(); ++i) {
 			auto& a = stats.async[i];
-			if (!a.kicked && !a.notKicked && !a.builtInline && !a.leaked)
+			if (!a.notKicked && !a.builtInline && !a.used)
 				continue;
-			text += fmt::format("[DCLF] async {} epochs: {} used the worker's build, {} built inline ({} not kicked, {} stale ({} on the lookups), {} late, {} failed, {} cancelled), {} dropped, {} leaked; probe: {} compared, {} differ\n",
-				kNames[i], a.used, a.builtInline, a.notKicked, a.stale, a.staleLookups, a.late, a.failed, a.cancelled, a.dropped, a.leaked, a.probeCompared, a.probeDiffer);
-			if (i == kAsyncShadow && a.earlyKicked)
-				text += fmt::format("[DCLF] async shadow early: {} kicked at the end of the scene phase, {} kept at BeforeShadowMaps, {} kicked again ({} change logs, {} shared or feature data, {} other inputs)\n",
-					a.earlyKicked, a.earlyKept, a.earlyRekicked, a.earlyRekickedBy[0], a.earlyRekickedBy[1], a.earlyRekickedBy[2]);
-			if (i == kAsyncColour && a.earlyKicked)
-				text += fmt::format("[DCLF] async colour early: {} kicked at EarlyPrepass, {} kept at Prepass, {} kicked again (the frame's tables {}, the frame's values {}, lookups {})\n",
-					a.earlyKicked, a.earlyKept, a.earlyRekicked, a.earlyRekickedBy[0], a.earlyRekickedBy[1], a.earlyRekickedBy[2]);
-			if (i == kAsyncZPrepass && a.kicked)
-				text += fmt::format("[DCLF] async zprepass eye: the predicted eye pair missed the captured one {} times ({} the previous eye only)\n", a.eyeMismatches, a.previousEyeMismatches);
+			text += fmt::format("[DCLF] {} epochs (6e E3b, S1): {} committed the payload built ahead with their publication, {} built at the epoch ({} no draws installed, "
+								"{} none built, {} for other resources, frame slots or views){}\n",
+				kNames[i], a.used, a.builtInline, a.notKicked, a.late, a.stale, a.builtInline ? " <- BUILT IN THE FRAME" : " <- OK");
+			if (i == kAsyncZPrepass)
+				text += fmt::format("[DCLF] frame slots supplied from an earlier capture (6e E5): {}\n", std::exchange(impl->frameSlotsCarried, 0));
+			if (i == kAsyncShadow)
+				text += fmt::format("[DCLF] shadow lookups refreshed at the epoch for views the frame's start's did not cover (6e S1): {}\n",
+					std::exchange(impl->shadowEpochRefreshes, 0));
 			a = {};
+		}
+		{
+			auto& ring = impl->ringStats;
+			const auto frames = std::max<std::uint64_t>(ring.frames, 1);
+			text += fmt::format("[DCLF] payload ring (6e E4): {} frames filled by the producer ({} grew an entry), {} commits read it; {:.1f} KB in {:.1f} runs a frame\n",
+				ring.frames, ring.grown, ring.committed, impl->ringBytes.exchange(0) / 1024.0 / frames, double(impl->ringRuns.exchange(0)) / frames);
+			auto part = [&](std::size_t a_part) { return impl->ringPartBytes[a_part].exchange(0) / 1024.0 / frames; };
+			text += fmt::format("[DCLF] payload ring by buffer (KB a frame): objects {:.1f}, extras {:.1f}, geometries {:.1f}, material rows {:.1f}, pipeline rows {:.1f}, resident regions {:.1f}, frame inputs {:.1f}\n",
+				part(Impl::kRingObjects), part(Impl::kRingExtras), part(Impl::kRingGeometries), part(Impl::kRingMaterialRows), part(Impl::kRingPipelineRows),
+				part(Impl::kRingResident), part(Impl::kRingFrameInputs));
+			ring = {};
 		}
 		AsyncWorker::Get().ResetStats();
 		return text;
@@ -493,7 +502,7 @@ namespace DCLF
 
 		// This frame: the words as the colour epoch left them, and the CPU side that explains them. Only when
 		// the depth build is this frame's too.
-		if (!a_resources->visibilityD3D11 || a_depth.inputs.frameNumber != a_colour.inputs.frameNumber || setParityFrames.size() >= 8)
+		if (!a_resources->visibilityD3D11 || &a_depth == &a_colour || setParityFrames.size() >= 8)
 			return;
 		SetParityFrame snapshot;
 		D3D11_BUFFER_DESC desc{};
@@ -516,7 +525,8 @@ namespace DCLF
 				return;
 		}
 		context->CopyResource(snapshot.staging.get(), a_resources->visibilityD3D11.get());
-		snapshot.frame = a_colour.inputs.frameNumber;
+		// The frame the epochs drew (their visibility stamps), not the one the payloads were built in (step 6e E3b).
+		snapshot.frame = store.GetFrame();
 		snapshot.framesLeft = 3;
 		snapshot.depthState = a_depth.objectState;
 		snapshot.colourState = a_colour.objectState;

@@ -135,7 +135,6 @@ namespace DCLF
 		const bool depthOnly = a_depthOnly;
 		const std::size_t jobIndex = depthOnly ? kAsyncZPrepass : kAsyncColour;
 		if (!impl->pending) {
-			impl->DropMainJob(jobIndex, stats);
 			return;
 		}
 		auto capture = std::move(*impl->pending);
@@ -144,7 +143,6 @@ namespace DCLF
 		auto* lighting = ConstantEvaluator::Get().GetLightingShader();
 		if (failed || !lighting || !pipelines.Enabled() || !GetIndirectState().valid) {
 			capture.Release();
-			impl->DropMainJob(jobIndex, stats);
 			return;
 		}
 		bool ready = false;
@@ -165,7 +163,6 @@ namespace DCLF
 		if (!ready) {
 			capture.Release();
 			++stats.notReady;
-			impl->DropMainJob(jobIndex, stats);
 			return;
 		}
 
@@ -205,77 +202,72 @@ namespace DCLF
 		// is not submitted.
 		if (RevisionClaims() && store.SetWithdrawn()) {
 			capture.Release();
-			impl->DropMainJob(jobIndex, stats);
 			return;
 		}
 		MainInputs in = impl->PrepareMainInputs(&capture, depthOnly, *resources, blocks.vsMask, blocks.psMask, store);
-		auto& job = impl->mainJobs[jobIndex];
-		job.vsMask = blocks.vsMask;
-		job.psMask = blocks.psMask;
-		job.masksKnown = true;
-		auto& payload = impl->mainPayload[jobIndex];
+		auto& masks = impl->epochMasks[jobIndex];
+		masks.vsMask = blocks.vsMask;
+		masks.psMask = blocks.psMask;
+		masks.known = true;
 		auto& async = stats.async[jobIndex];
-		bool builtOnWorker = false;
+		bool builtAhead = false;
+		const MainPayload* committed = nullptr;
 
 		const auto cleanup = RenderGraphRuntime::Get().Host()->ResourceCleanup();
 		if (!cleanup) {
 			capture.Release();
 			++stats.notReady;
-			impl->DropMainJob(jobIndex, stats);
 			return;
 		}
 		auto frameOwners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(segment, [&](org::RenderGraph&) {
-			// The descriptor entries the build reads, resolved now that the descriptor service is active.
-
-			// The worker's build, if one was kicked for this epoch and it was built for exactly these inputs;
-			// otherwise the build runs here. A late or stale job is dropped (its payload is the one this
-			// build overwrites, so a late job is waited for before the inline build; counted). Joined before
-			// the lookup refresh: the worker reads the lookups until it is done. The kick refreshed them for the job, so
-			// they are refreshed here after it is taken (queueing the imports only an epoch can), or before the build here.
-			const auto joinStart = std::chrono::steady_clock::now();
-			const auto joined = JoinJob(job.handle);
-			stats.commitUs[0] += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - joinStart).count();
 			// The lookups hold still for the whole frame (refreshed at its start alone, step 6e C).
 			const auto& lookups = store.GetLookups();
 			in.lookupGeneration = lookups.generation;
-			bool useAsync = false;
-			if (job.handle) {
-				useAsync = TakeJob(
-					joined, async, [&] { return SameInputs(job.inputs, in); }, [&] {
-						if (job.inputs.lookupGeneration != in.lookupGeneration)
-							++async.staleLookups;
-						impl->LogStaleMainJob(jobIndex, in);
-					});
-				// The Z-prepass job's eye is a prediction: counted apart from the other reasons for staleness.
-				if (depthOnly && joined == AsyncWorker::WaitResult::Done) {
-					const bool eyeDiffers = std::memcmp(&job.inputs.eye, &in.eye, sizeof(RE::NiPoint3)) != 0;
-					const bool previousDiffers = std::memcmp(&job.inputs.previousEye, &in.previousEye, sizeof(RE::NiPoint3)) != 0;
-					if (eyeDiffers || previousDiffers)
-						++async.eyeMismatches;
-					if (!eyeDiffers && previousDiffers)
-						++async.previousEyeMismatches;
-				}
-				job.handle = {};
+			// The installed publication's payload, built ahead by the coordinator (step 6e E3b): nothing is built or waited for here.
+			// One it cannot commit (none built yet, other resources or frame slots) is built here with rows of its own, counted.
+			std::shared_ptr<MainPayload> ahead;
+			if (const auto& draws = impl->installedDraws; !draws) {
+				++async.notKicked;  // no publication installed with draws
+			} else if (!draws->payloads[jobIndex]) {
+				++async.late;  // its builds had no context (the frame slots not known yet, other resources)
+			} else if (!impl->AheadUsable(*draws->payloads[jobIndex], in, *resources)) {
+				++async.stale;
+				impl->LogStalePayload(jobIndex, in, draws->payloads[jobIndex]->inputs);
+			} else {
+				ahead = draws->payloads[jobIndex];
 			}
-			builtOnWorker = useAsync;
-			if (useAsync) {
+			MainPayload* payload = ahead.get();
+			if (ahead) {
 				++async.used;
-				ProbeWorkerBuild(payload, impl->probePayload, async, depthOnly ? "zprepass" : "colour",
-					[&](MainPayload& a_probe) {
-						// Its own rows, written from scratch (the worker's are the scene's, kept across frames).
-						MainRows probeRows;
-						BuildMainPayload(job.inputs, tables, store.GetFrameTables(), lookups, a_probe, probeRows);
-					});
+				builtAhead = true;
 			} else {
 				++async.builtInline;
-				BuildMainPayload(in, tables, store.GetFrameTables(), lookups, payload, impl->mainRows, impl->CacheFor(jobIndex), impl->StreamsNow());
+				payload = &impl->fallbackPayloads[jobIndex];
+				BuildMainPayload(in, tables, store.GetFrameTables(), lookups, *payload, impl->fallbackRows, nullptr, impl->StreamsNow());
+				payload->foreignRows = true;
 			}
-			*frameOwners = std::move(payload.bindingOwners);
-			impl->CommitMainPayload(capture, blocks, payload, resources, store, stats, *frameOwners);
+			committed = payload;
+			// Copied: a frame that keeps the publication commits the payload again.
+			*frameOwners = payload->bindingOwners;
+			if (ahead)
+				frameOwners->push_back(ahead);
+			impl->CommitMainPayload(capture, blocks, in, *payload, resources, store, stats, *frameOwners);
 		}, frameOwners);
+		impl->committedPayload[jobIndex] = committed;
+		if (depthOnly) {
+			const bool ring = committed && impl->RingFor(*committed, kAsyncZPrepass);
+			impl->ringDepth = ring ? impl->ringFrame : Impl::RingFrame{};
+			impl->ringDepth.draws.reset();
+		}
+		impl->committedFrame[jobIndex] = store.GetFrame();
 		capture.Release();
 		++stats.epochs;
+		if (!committed) {
+			stats.cpuMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+			return;
+		}
+		const MainPayload& payload = *committed;
 		if (ok && BuildParityEnabled())
 			impl->CheckBuildParity(resources, payload, stats);
 		// Only the colour epoch's counters. Both epochs run BuildDraws into the same count buffer, and the
@@ -288,13 +280,14 @@ namespace DCLF
 		if (ok && depthOnly)
 			impl->ReadFadeLog(resources);
 		if (ok && !depthOnly && SetParityEnabled())
-			impl->CheckSetParity(resources, impl->mainPayload[1], payload);
+			if (const auto* depth = impl->committedPayload[kAsyncZPrepass]; depth && impl->committedFrame[kAsyncZPrepass] == store.GetFrame())
+				impl->CheckSetParity(resources, *depth, payload);
 
 		stats.cpuMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		// The remainder is the epoch execution itself and the commit. It stays a subtraction, but it is now
 		// a small one rather than the bucket the per-draw work hid in. When the worker built the payload, the
 		// build's parts are the worker's time and the render thread's is all remainder (the join included).
-		stats.partMs[7] = builtOnWorker ? stats.cpuMs :
+		stats.partMs[7] = builtAhead ? stats.cpuMs :
 		                                  stats.cpuMs - (stats.partMs[0] + stats.partMs[1] + stats.partMs[2] +
 		                                                    stats.partMs[3] + stats.partMs[4] + stats.partMs[5] + stats.partMs[6]);
 		if (!ok)
@@ -307,118 +300,306 @@ namespace DCLF
 			return;
 		auto& store = SceneStore::Get();
 		RefreshMaterialLookups(store, store.GetTables(), true, store.GetProjectedTextures(), store.MutableLookups());
+		// The shadow lookups too (step 6e S1), for the last shadow epoch's views: the builds ahead read them, and the epoch refreshes
+		// them only for views of other modes, states or format (counted).
+		auto& views = impl->lastShadow;
+		if (!ActiveToggles().shadows || !views.known || !globals::game::utilityShader)
+			return;
+		const auto& tables = store.GetTables();
+		if (tables.objects.empty() || tables.shadowTechnique.size() != tables.objects.size())
+			return;
+		RefreshShadowLookups(store, tables, views.modes, views.rasterStates, views.dsvFormat, impl->OcclusionFormats(), store.MutableLookups());
+		impl->shadowLookupsFor = views;
 	}
 
-	void IndirectDraws::KickColourBuild()
+	bool IndirectDraws::Impl::AheadUsable(const MainPayload& a_payload, const MainInputs& a_frame, const Resources& a_resources) const
 	{
-		// The colour epoch's inputs are final from here (RefreshFrameConstants was the frame's last writer of
-		// the tables), and the epoch itself is ~1.5-2 ms of native rendering away: the build runs on the
-		// worker in between, so the render thread only commits when the epoch comes. It replays the Z-prepass's
-		// eye and constants; without them the eye would come from a capture that does not exist yet.
-		// A build kicked at EarlyPrepass (KickZPrepassBuild) is kept when nothing it read has changed since: not the versioned
-		// values RefreshFrameConstants writes (BuildInputsWitness), nor the lookups (a refresh here, which an import the
-		// Z-prepass epoch queued may move).
-		auto& store = SceneStore::Get();
-		auto& early = impl->mainJobs[kAsyncColour];
-		if (std::exchange(impl->colourEarly, false) && early.handle) {
-			// Nothing a build reads changes after the frame's start (the tables accepted, the lookups refreshed: step 6e): the early
-			// build stands. One that does not is a defect, counted (and built again).
-			if (store.BuildInputsWitness() == impl->colourWitness && early.inputs.lookupGeneration == store.GetLookups().generation) {
-				++stats.async[kAsyncColour].earlyKept;
-				return;
-			}
-			auto& by = stats.async[kAsyncColour].earlyRekickedBy;
-			const auto witness = store.BuildInputsWitness();
-			by[0] += (witness >> 32) != (impl->colourWitness >> 32) ? 1u : 0u;
-			by[1] += static_cast<std::uint32_t>(witness) != static_cast<std::uint32_t>(impl->colourWitness) ? 1u : 0u;
-			by[2] += early.inputs.lookupGeneration != store.GetLookups().generation ? 1u : 0u;
-			++stats.async[kAsyncColour].earlyRekicked;
-		}
-		impl->DropMainJob(kAsyncColour, stats);
-		if (!AsyncEnabled())
-			return;
-		if (!impl->resources || !impl->prepassInputs) {
-			++stats.async[kAsyncColour].notKicked;
-			return;
-		}
-		impl->KickMainJob(false, nullptr, nullptr, stats);
+		// Built for these resources, this segment and these frame slots (a change of them shows a frame late: built here meanwhile).
+		const auto& built = a_payload.inputs;
+		return built.addresses.identity == &a_resources && built.depthOnly == a_frame.depthOnly && built.vsFrameMask == a_frame.vsFrameMask &&
+		       built.psFrameMask == a_frame.psFrameMask && !a_frame.bindlessParity;
 	}
 
-	void IndirectDraws::KickZPrepassBuild()
+	void IndirectDraws::PostAheadContext()
 	{
-		// The Z-prepass epoch's inputs are final from here to the Z-prepass in Main_RenderDepth - the accumulate
-		// phase was the tables' last writer, RefreshFrameConstants runs after the epoch - except the eye,
-		// which the epoch captures from posAdjust. posAdjust still holds the shadow cameras' here, so the eye
-		// is predicted: the main camera's world position, and last frame's captured eye as the previous one.
-		// The epoch compares both exactly with its capture.
-		impl->DropMainJob(kAsyncZPrepass, stats);
-		if (!AsyncEnabled())
+		auto& c = impl->aheadContext;
+		c = {};
+		if (failed || !impl->resources || !impl->resources->scene)
 			return;
-		auto* camera = RE::Main::WorldRootCamera();
-		if (!impl->resources || !impl->prepassInputs || !camera) {
-			++stats.async[kAsyncZPrepass].notKicked;
-			return;
-		}
-		const RE::NiPoint3 eye = camera->world.translate;
-		const RE::NiPoint3 previousEye = impl->prepassEye;
-		// The lookups as the frame's start refreshed them (step 6e C): they hold still while the jobs read them.
-		auto& store = SceneStore::Get();
-		impl->KickMainJob(true, &eye, &previousEye, stats);
-		// The colour build too, behind it on the worker: its inputs are final from here but for what RefreshFrameConstants
-		// writes at Prepass, which first waits for it (BeforeFrameConstants) and kicks it again only when that changed what it
-		// read. Not under the bindless parity, whose builds read the eye the Z-prepass epoch captures.
-		impl->DropMainJob(kAsyncColour, stats);
-		impl->colourEarly = false;
-		if (impl->resources && impl->prepassInputs && !SwitchEnabled(Switch::BindlessParity)) {
-			impl->colourWitness = store.BuildInputsWitness();
-			impl->KickMainJob(false, nullptr, nullptr, stats);
-			impl->colourEarly = static_cast<bool>(impl->mainJobs[kAsyncColour].handle);
-			stats.async[kAsyncColour].earlyKicked += impl->colourEarly ? 1u : 0u;
-		}
-	}
-
-	void IndirectDraws::Impl::KickMainJob(bool a_depthOnly, const RE::NiPoint3* a_eye, const RE::NiPoint3* a_previousEye, IndirectDraws::Stats& a_stats)
-	{
-		ZoneScopedN("CS.DCLF.KickMainJob");
-		const std::size_t index = a_depthOnly ? kAsyncZPrepass : kAsyncColour;
-		auto& job = mainJobs[index];
-		auto& async = a_stats.async[index];
 		auto* lighting = ConstantEvaluator::Get().GetLightingShader();
-		if (!lighting || !DrawPipelines::Get().Enabled() || !GetIndirectState().valid || !job.masksKnown) {
-			++async.notKicked;
+		// Under the bindless parity the builds read the eye the Z-prepass epoch captures: built at the epochs.
+		if (!lighting || !DrawPipelines::Get().Enabled() || !GetIndirectState().valid || SwitchEnabled(Switch::BindlessParity))
 			return;
-		}
-		// The scene stores are the shadow build's too: it is joined at AfterShadowMaps, before either main job is kicked.
-		DropShadowJob(a_stats);
 		auto& store = SceneStore::Get();
-		// What the build is built against: the scene tables and the rows grown to the frame's (the epoch's own reserve then finds
-		// nothing to grow).
-		ReserveSceneTables(store.GetTables());
-		ReserveMainSequences(store.GetTables());
-		job.inputs = PrepareMainInputs(nullptr, a_depthOnly, *resources, job.vsMask, job.psMask, store);
-		// A build without the bindless parity does not read the eye (PrepareMainInputs leaves it zero), so the
-		// prediction only matters where it does.
-		if (a_eye && BuildReadsEye(job.inputs))
-			job.inputs.eye = *a_eye;
-		if (a_previousEye && BuildReadsEye(job.inputs))
-			job.inputs.previousEye = *a_previousEye;
-		++async.kicked;
-		const auto* tables = &store.GetTables();
-		const auto* frameTables = &store.GetFrameTables();
-		const auto* lookups = &store.GetLookups();
-		auto* payload = &mainPayload[index];
-		auto* cache = CacheFor(index);
-		auto streams = StreamsForBuild();
-		auto* rows = &mainRows;
-		auto* pool = &stagedPools[index];
-		const MainInputs inputs = job.inputs;
-		const rhi::Device device = RecordingDevice();
-		job.handle = AsyncWorker::Get().Submit(a_depthOnly ? "zprepass" : "colour", [inputs, tables, frameTables, lookups, payload, rows, cache, streams, pool,
-																							target = resources, device](std::stop_token) {
-			BuildMainPayload(inputs, *tables, *frameTables, *lookups, *payload, *rows, cache, *streams);
-			if (target)
-				StageMainPayload(*payload, *target, *pool, device);
-		});
+		// The capacities the builds are made against, grown for the frame's tables now (the first reserve of the frame grows).
+		impl->ReserveSceneTables(store.GetTables());
+		impl->ReserveMainSequences(store.GetTables());
+		for (const std::size_t j : { kAsyncZPrepass, kAsyncColour }) {
+			const auto& masks = impl->epochMasks[j];
+			// The frame slots the epochs last supplied; the colour build replays the Z-prepass's vertex inputs.
+			if (!masks.known || (j == kAsyncColour && !impl->prepassInputs))
+				continue;
+			c.inputs[j] = impl->PrepareMainInputs(nullptr, j == kAsyncZPrepass, *impl->resources, masks.vsMask, masks.psMask, store);
+			c.build[j] = true;
+		}
+		c.target = impl->resources;
+		// The shadow payload's (step 6e S1), for the last epoch's views; the lookups the frame's start refreshed for them.
+		const auto& tables = store.GetTables();
+		if (ActiveToggles().shadows && impl->shadow && impl->lastShadow.known && globals::game::utilityShader && !tables.objects.empty() &&
+			tables.shadowTechnique.size() == tables.objects.size()) {
+			impl->ReserveShadowRows();
+			c.shadowInputs = impl->PrepareShadowInputs(store, *impl->shadow, impl->lastShadow.modes, impl->lastShadow.rasterStates);
+			c.shadowTarget = impl->shadow;
+			c.shadow = true;
+		}
+		c.valid = c.build[kAsyncZPrepass] || c.build[kAsyncColour] || c.shadow;
+	}
+
+	std::function<void(org::runtime::IUploadService&)> IndirectDraws::PrepareFrameUploads()
+	{
+		if (!impl)
+			return {};
+		auto& s = *impl;
+		s.ringFrame = {};
+		auto draws = s.installedDraws;
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (failed || !draws || !draws->streams || !host || (!draws->payloads[kAsyncZPrepass] && !draws->payloads[kAsyncColour]))
+			return {};
+		auto device = host->GetDesc().device;
+		const std::uint32_t r = static_cast<std::uint32_t>(s.payloadRingSeq++ % Impl::kPayloadRing);
+		auto& entry = s.payloadRing[r];
+		const auto& views = *draws->streams;
+		// What the publication's payloads need of each buffer (the colour build's rows are the newest: it ran after the Z-prepass's).
+		const MainPayload* newest = draws->payloads[kAsyncColour] ? draws->payloads[kAsyncColour].get() : draws->payloads[kAsyncZPrepass].get();
+		std::uint64_t geometryRows = 0;
+		std::array<std::uint64_t, 2> inputs{};
+		for (const std::size_t j : { kAsyncColour, kAsyncZPrepass })
+			if (const auto& payload = draws->payloads[j]) {
+				geometryRows = std::max<std::uint64_t>(geometryRows, payload->geometryDraws.Count());
+				inputs[j] = payload->resident.Count() + payload->inputList.size();
+			}
+		bool grown = false;
+		auto ensure = [&](Impl::RingPart& a_part, std::uint64_t a_elements, std::uint32_t a_stride, const char* a_name, bool a_address) {
+			if (a_part.buffer && a_part.capacity >= a_elements)
+				return;
+			std::uint64_t capacity = std::max<std::uint64_t>(a_part.capacity, 64);
+			while (capacity < a_elements)
+				capacity *= 2;
+			auto buffer = org::Buffer::CreateUnmaterializedStructuredBuffer(static_cast<std::uint32_t>(capacity), a_stride, false);
+			buffer->SetName(fmt::format("cs.dclf.payload-ring.{}.{}", a_name, r).c_str());
+			buffer->Materialize();
+			// The old one goes when the frames that read it retire.
+			if (a_part.buffer)
+				SceneStore::Get().RetireImport(std::move(a_part.buffer));
+			a_part.buffer = std::move(buffer);
+			a_part.capacity = capacity;
+			a_part.srvIndex = a_part.buffer->GetSRVInfo(0).slot.index;
+			a_part.address = a_address ? device.GetBufferDeviceAddress({ a_part.buffer->GetAPIResource().GetHandle(), 0 }) : 0;
+			a_part.held = 0;  // holds nothing yet
+			grown = true;
+		};
+		ensure(entry.objects, views.objects.Count(), sizeof(BindlessObject), "objects", false);
+		ensure(entry.extras, views.extras.Rows(), 16, "extras", false);
+		ensure(entry.geometries, geometryRows * sizeof(GeometryDraw) / 4, 4, "geometries", false);
+		ensure(entry.materialRows, newest->materialRows.Count(), kMaterialRowBytes, "material-rows", true);
+		ensure(entry.pipelineRows, newest->pipelineRows.Count(), kPipelineRowBytes, "pipeline-rows", true);
+		for (const std::size_t j : { kAsyncColour, kAsyncZPrepass })
+			ensure(entry.inputs[j], inputs[j] * sizeof(DrawInput) / 4, 4, j == kAsyncZPrepass ? "inputs-depth" : "inputs", false);
+		s.ringStats.grown += grown ? 1 : 0;
+		++s.ringStats.frames;
+		auto& frame = s.ringFrame;
+		frame.valid = true;
+		frame.entry = r;
+		frame.draws = draws;
+		frame.objectsIndex = entry.objects.srvIndex;
+		frame.extrasIndex = entry.extras.srvIndex;
+		frame.geometriesIndex = entry.geometries.srvIndex;
+		for (const std::size_t j : { kAsyncColour, kAsyncZPrepass })
+			frame.inputsIndex[j] = entry.inputs[j].srvIndex;
+		frame.materialRows = entry.materialRows.address;
+		frame.pipelineRows = entry.pipelineRows.address;
+		// The producer's part: the entry brought up to the publication, once the frame that last read it is done on the GPU.
+		return [&s, draws = std::move(draws), &entry, r, reuse = entry.reuse](org::runtime::IUploadService& a_uploads) {
+			ZoneScopedN("CS.DCLF.PayloadRing.Fill");
+			if (!reuse.Reached() && !reuse.Wait(10000))
+				throw std::runtime_error("the frame that last read the payload ring entry did not complete on the GPU");
+			std::uint64_t runs = 0, bytes = 0;
+			std::array<std::uint64_t, Impl::kRingParts> partBytes{};
+			auto sender = [&](const Impl::RingPart& a_part, Impl::RingPartIndex a_index) {
+				return [&, target = a_part.buffer, a_index](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+					const org::StreamingUploadSegment segment{ a_data, a_bytes };
+					auto ticket = a_uploads.QueueTrackedStreamingUploadSegments({ &segment, 1 }, a_bytes,
+						org::WorkerOwnedDestination{ target, org::WorkerOwnedDestination::Ownership::RetiredFrameRegion }, a_offset);
+					if (!ticket || ticket->state.load(std::memory_order_acquire) == org::TrackedUploadTicketState::Cancelled)
+						throw std::runtime_error("the dedicated uploader refused the payload ring's uploads");
+					++runs;
+					bytes += a_bytes;
+					partBytes[a_index] += a_bytes;
+				};
+			};
+			auto& holders = s.ringHolders;
+			const auto& views = *draws->streams;
+			views.objects.Emit(entry.objects.held, sender(entry.objects, Impl::kRingObjects));
+			entry.objects.held = views.objects.Version();
+			holders.objects.Set(r, entry.objects.held);
+			EmitExtras(views.extras, entry.extras.held, nullptr, sender(entry.extras, Impl::kRingExtras));
+			entry.extras.held = views.extras.Version();
+			holders.extras.Set(r, entry.extras.held);
+			const MainPayload* newest = draws->payloads[kAsyncColour] ? draws->payloads[kAsyncColour].get() : draws->payloads[kAsyncZPrepass].get();
+			EmitGeometryDraws(newest->geometryDraws, entry.geometries.held, sender(entry.geometries, Impl::kRingGeometries));
+			entry.geometries.held = newest->geometryDraws.Version();
+			holders.geometries.Set(r, entry.geometries.held);
+			// The rows' headers made absolute for this entry's tables.
+			EmitMainRows(newest->materialRows, entry.materialRows.held, entry.materialRows.address, entry.materialRows.capacity,
+				[](MaterialRow& a_row, std::uint64_t a_address) { PatchRowAddresses(a_row, a_address); }, sender(entry.materialRows, Impl::kRingMaterialRows));
+			entry.materialRows.held = newest->materialRows.Version();
+			holders.materialRows.Set(r, entry.materialRows.held);
+			EmitMainRows(newest->pipelineRows, entry.pipelineRows.held, entry.pipelineRows.address, entry.pipelineRows.capacity,
+				[](PipelineRow& a_row, std::uint64_t a_address) { PatchRowAddresses(a_row, a_address); }, sender(entry.pipelineRows, Impl::kRingPipelineRows));
+			entry.pipelineRows.held = newest->pipelineRows.Version();
+			holders.pipelineRows.Set(r, entry.pipelineRows.held);
+			// Each segment's inputs: its resident region at the head (what changed since), the build's own after it (whole).
+			for (const std::size_t j : { kAsyncColour, kAsyncZPrepass }) {
+				const auto& payload = draws->payloads[j];
+				if (!payload)
+					continue;
+				auto& part = entry.inputs[j];
+				payload->resident.Emit(part.held, sender(part, Impl::kRingResident));
+				part.held = payload->resident.Version();
+				holders.resident[j].Set(r, part.held);
+				if (!payload->inputList.empty())
+					sender(part, Impl::kRingFrameInputs)(payload->inputList.data(), payload->inputList.size() * sizeof(DrawInput), payload->resident.Count() * sizeof(DrawInput));
+			}
+			s.ringRuns += runs;
+			s.ringBytes += bytes;
+			for (std::size_t k = 0; k < partBytes.size(); ++k)
+				s.ringPartBytes[k] += partBytes[k];
+		};
+	}
+
+	void IndirectDraws::DropFrameUploads()
+	{
+		if (impl)
+			impl->ringFrame = {};
+	}
+
+	void IndirectDraws::InstallDraws(std::shared_ptr<const void> a_draws)
+	{
+		if (!impl)
+			return;
+		const auto slot = std::static_pointer_cast<const Impl::AheadSlot>(std::move(a_draws));
+		impl->installedDraws = slot && slot->done.load(std::memory_order_acquire) ? slot->result : nullptr;
+	}
+
+	bool IndirectDraws::DrawsReady(const std::shared_ptr<const void>& a_draws) const
+	{
+		// A publication without draws (DCLF failed, none asked for) draws nothing of DCLF's: nothing to wait for.
+		const auto* slot = static_cast<const Impl::AheadSlot*>(a_draws.get());
+		return !slot || slot->done.load(std::memory_order_acquire);
+	}
+
+	std::shared_ptr<const void> IndirectDraws::BuildAhead(std::shared_ptr<const void> a_tables)
+	{
+		if (!impl || failed || !a_tables)
+			return nullptr;
+		auto& s = *impl;
+		auto& store = SceneStore::Get();
+		auto slot = std::make_shared<Impl::AheadSlot>();
+		const std::uint64_t seq = ++s.aheadKicked;
+		// What the task reads that the coordinator or the frame write later is copied into it now: the context, the lookups.
+		auto job = [&s, slot, seq, tables = std::static_pointer_cast<const SceneStore::Tables>(std::move(a_tables)), context = s.aheadContext,
+						lookups = store.SharedLookups() ? store.SharedLookups() : std::make_shared<const Lookups>(store.CoordinatorLookups()), generation = store.GetTablesGeneration(),
+						frame = store.GetFrame(), sun = store.CoordinatorSunCandidates(), light = store.CoordinatorLightCandidates()](const auto&) mutable {
+			// One at a time, in publication order: each builds on the stores and rows the one before left.
+			for (auto finished = s.aheadDone.load(std::memory_order_acquire); finished + 1 < seq; finished = s.aheadDone.load(std::memory_order_acquire))
+				s.aheadDone.wait(finished, std::memory_order_acquire);
+			try {
+				slot->result = s.RunAhead(std::move(tables), context, *lookups, generation, frame, std::move(sun), std::move(light));
+			} catch (const std::exception& e) {
+				static std::atomic<std::uint32_t> logged{ 0 };
+				if (logged++ < 4)
+					logger::error("[DCLF] builds ahead {} failed: {}; its frames draw what the epochs build", seq, e.what());
+			}
+			slot->done.store(true, std::memory_order_release);
+			s.aheadDone.store(seq, std::memory_order_release);
+			s.aheadDone.notify_all();
+		};
+		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), PublishedSceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "builds ahead", std::move(job)))
+			stl::report_and_fail("Drawcall Limit Fix: the builds ahead were refused by DCLF's executor");
+		return slot;
+	}
+
+	void IndirectDraws::Impl::WaitAhead()
+	{
+		for (auto finished = aheadDone.load(std::memory_order_acquire); finished < aheadKicked; finished = aheadDone.load(std::memory_order_acquire))
+			aheadDone.wait(finished, std::memory_order_acquire);
+	}
+
+	std::shared_ptr<const IndirectDraws::Impl::DrawPublication> IndirectDraws::Impl::RunAhead(std::shared_ptr<const SceneStore::Tables> a_tables,
+		const AheadContext& a_context, const Lookups& a_lookups, std::uint32_t a_generation, std::uint32_t a_frame,
+		std::shared_ptr<const SunCandidates> a_sunCandidates, std::shared_ptr<const SunCandidates> a_lightCandidates)
+	{
+		ZoneScopedN("CS.DCLF.BuildAhead");
+		auto& store = SceneStore::Get();
+		auto out = std::make_shared<DrawPublication>();
+		out->tables = a_tables;
+		const auto& holders = ringHolders;
+		// The publication's stream views: the stores are this task's alone (no build in the frame updates them). Their journals keep
+		// what the oldest ring entry lacks.
+		const TablesHeld from{ holders.objects.Oldest(), holders.extras.Oldest(), holders.geometries.Oldest() };
+		out->streams = MakeStreamViews(objectStore, extrasStore, geometryStore, from, a_tables, *a_tables, a_generation, a_frame);
+		const auto& c = a_context;
+		if (!c.valid || !c.target || !c.target->scene)
+			return out;
+		// The Z-prepass's first, as its commit.
+		for (const std::size_t j : { kAsyncZPrepass, kAsyncColour }) {
+			if (!c.build[j])
+				continue;
+			MainInputs in = c.inputs[j];
+			in.frameNumber = a_frame;
+			in.tablesGeneration = a_generation;
+			in.lookupGeneration = a_lookups.generation;
+			// The oldest versions the ring's entries hold: what the rows' and the region's journals keep changes back to.
+			in.materialRowsHeld = holders.materialRows.Oldest();
+			in.pipelineRowsHeld = holders.pipelineRows.Oldest();
+			in.residentUploaded = holders.resident[j].Oldest();
+			in.tablesHeld = from;
+			auto payload = AcquirePayload();
+			BuildMainPayload(in, *a_tables, store.GetFrameTables(), a_lookups, *payload, mainRows, CacheFor(j), out->streams);
+			out->payloads[j] = std::move(payload);
+		}
+		// The shadow payload (step 6e S1), from the same tables, stream views and lookups, with the publication's candidates, and the
+		// next frame's exclusions from it.
+		if (c.shadow && c.shadowTarget && c.shadowTarget->scene) {
+			ShadowInputs in = c.shadowInputs;
+			in.frameNumber = a_frame;
+			in.tablesGeneration = a_generation;
+			in.lookupGeneration = a_lookups.shadowGeneration;
+			in.sunCandidates = a_sunCandidates;
+			in.lightCandidates = a_lightCandidates;
+			in.tablesHeld = from;
+			in.materialRowsHeld = shadowAheadHeld.materialRows;
+			in.inputsHeld = shadowAheadHeld.inputs;
+			auto payload = AcquireShadowPayload();
+			BuildShadowPayload(in, *a_tables, a_lookups, *payload, out->streams, ShadowKeptState());
+			// The publication holds the views; the payload, which the epochs may hold past it, does not.
+			payload->streams.reset();
+			if (payload->kept) {
+				shadowAheadHeld.materialRows = payload->materialRows.Version();
+				for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
+					if (in.modeUsed[m])
+						shadowAheadHeld.inputs[m] = payload->regionInputs[m].Version();
+			}
+			if (PassCapture::ShadowWithholdingEnabled()) {
+				ZoneScopedN("CS.DCLF.BuildShadow.Exclusions");
+				if (in.modeUsed[kSunShadowMode])
+					payload->sunExclusion = BuildSunExclusion(in.sunCandidates, *payload, kSunShadowMode, *a_tables, &sunExclusionCache);
+				if (in.modeUsed[kParabolicShadowMode])
+					payload->parabolicExclusion = BuildSunExclusion(in.lightCandidates, *payload, kParabolicShadowMode, *a_tables, &parabolicExclusionCache);
+			}
+			out->shadow = std::move(payload);
+		}
+		return out;
 	}
 
 	void IndirectDraws::KickSceneStreams()
@@ -437,49 +618,33 @@ namespace DCLF
 
 	void IndirectDraws::EndFrame()
 	{
+		// The epochs' own builds hold the frame's stream views (and through them its publication's retirement node): let go.
+		for (auto& payload : impl->fallbackPayloads)
+			payload.Reset();
+		// The ring entry the frame read: free again once what the frame submitted is done on the GPU.
+		if (impl->ringFrame.valid)
+			if (auto* host = RenderGraphRuntime::Get().Host())
+				impl->payloadRing[impl->ringFrame.entry].reuse = host->SubmittedPoint();
+		impl->ringFrame.draws.reset();
+		impl->shadowFallback.streams.reset();
 		AsyncWorker::Get().NoteFrame();
 		// Never taken this frame (no commit ran after it): its inputs name this frame's tables.
 		impl->DropSceneStreams();
-		// A job kicked this frame and never joined (the epoch did not run: a load screen, a failed setup) must
-		// not outlive the frame: its inputs name this frame's tables.
-		for (std::size_t j = 0; j < impl->mainJobs.size(); ++j) {
-			if (impl->mainJobs[j].handle) {
-				++stats.async[j].leaked;
-				impl->DropMainJob(j, stats);
-			}
-		}
-		if (impl->shadowJob.handle) {
-			++stats.async[kAsyncShadow].leaked;
-			impl->DropShadowJob(stats);
-		}
 	}
 
 	void IndirectDraws::DrainAsync()
 	{
+		impl->WaitAhead();
 		impl->DropSceneStreams();
-		for (std::size_t j = 0; j < impl->mainJobs.size(); ++j)
-			impl->DropMainJob(j, stats);
-		impl->DropShadowJob(stats);
 		AsyncWorker::Get().Drain();
 	}
 
-	void IndirectDraws::Impl::DropMainJob(std::size_t a_job, IndirectDraws::Stats& a_stats)
+	void IndirectDraws::Impl::LogStalePayload(std::size_t a_job, const MainInputs& a_actual, const MainInputs& a_built)
 	{
-		auto& job = mainJobs[a_job];
-		if (!job.handle)
+		if (epochMasks[a_job].loggedStale++ >= 4)
 			return;
-		AsyncWorker::Get().Cancel(job.handle);
-		++a_stats.async[a_job].dropped;
-		job.handle = {};
-	}
-
-	void IndirectDraws::Impl::LogStaleMainJob(std::size_t a_job, const MainInputs& a_actual)
-	{
-		auto& job = mainJobs[a_job];
-		if (job.loggedStale++ >= 4)
-			return;
-		const auto& k = job.inputs;
-		logger::info("[DCLF] async {}: the job's inputs are stale (frame {} vs {}, VS mask {:#x} vs {:#x}, PS mask {:#x} vs {:#x}, eye ({:.3f} {:.3f} {:.3f}) vs ({:.3f} {:.3f} {:.3f}), previous eye ({:.3f} {:.3f} {:.3f}) vs ({:.3f} {:.3f} {:.3f}), tables {} vs {}, lookups {} vs {}, resources {})",
+		const auto& k = a_built;
+		logger::info("[DCLF] async {}: the installed payload's inputs are stale (frame {} vs {}, VS mask {:#x} vs {:#x}, PS mask {:#x} vs {:#x}, eye ({:.3f} {:.3f} {:.3f}) vs ({:.3f} {:.3f} {:.3f}), previous eye ({:.3f} {:.3f} {:.3f}) vs ({:.3f} {:.3f} {:.3f}), tables {} vs {}, lookups {} vs {}, resources {})",
 			a_job == kAsyncZPrepass ? "zprepass" : "colour",
 			k.frameNumber, a_actual.frameNumber, k.vsFrameMask, a_actual.vsFrameMask, k.psFrameMask, a_actual.psFrameMask,
 			k.eye.x, k.eye.y, k.eye.z, a_actual.eye.x, a_actual.eye.y, a_actual.eye.z,
@@ -559,6 +724,30 @@ namespace DCLF
 		// rejected by the constants check).
 		a_out.vs[kFrameFogRegister].clear();
 		a_out.vsMask |= 1u << kFrameFogRegister;
+		// Step 6e E5: a slot the epoch supplied before and lacks now - a feature's block the capture point sees bound in some frames
+		// only (VS b7) - is supplied from its last capture, counted, so the frame's slots are the same every frame and the builds
+		// ahead, made for the slots the epoch last supplied, stay usable (AheadUsable). The Z-prepass's carried vertex blocks are
+		// the colour epoch's replay too: the two transform alike.
+		auto& carry = carriedBlocks[a_depthOnly ? 0 : 1];
+		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
+			for (auto [out, kept, vertex] : { std::tuple{ &a_out.vs[slot], &carry.vs[slot], true }, std::tuple{ &a_out.ps[slot], &carry.ps[slot], false } }) {
+				if (!out->empty()) {
+					kept->assign(out->begin(), out->end());
+					continue;
+				}
+				if (kept->empty() || (vertex && replayVertexInputs) || (!vertex && a_depthOnly))
+					continue;
+				out->assign(kept->begin(), kept->end());
+				++frameSlotsCarried;
+				if (const std::uint32_t bit = 1u << (slot + (vertex ? 0 : 16) + (a_depthOnly ? 0 : 8)); !(carriedLogged & bit)) {
+					carriedLogged |= bit;
+					logger::info("[DCLF] {} epoch, frame {}: {} b{} not bound at the capture, supplied from an earlier one ({} bytes)", a_depthOnly ? "zprepass" : "colour",
+						SceneStore::Get().GetFrame(), vertex ? "VS" : "PS", slot, out->size());
+				}
+				if (vertex && a_depthOnly)
+					prepassVS[slot] = *out;
+			}
+		}
 		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
 			if (!a_out.vs[slot].empty())
 				a_out.vsMask |= 1u << slot;

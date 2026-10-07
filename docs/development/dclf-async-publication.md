@@ -1354,6 +1354,77 @@ resident-draw, set and fade parity; motion m28/m29).
     back - returns to the coordinator's free lists (RecycleRetired) once no publication up to it lives. CPU test
     (TestRetirementChain). m48: ~10,000 slots retired and recycled a 300-frame window, balanced; m49: 32-87 frames of 300 kept the
     installed publication, 0 crashes, lost-while-out 0; y20: set parity 0, every parity 0. Left: face regions (faceRegionFree).
+  - *E3b: the builds ahead* (y21-y23, m50-m55). The Z-prepass and colour payloads are built with their publication (BuildAhead,
+    called by PublishScene): one task at a time on the preparation pool, in publication order, never joined; it makes the
+    publication's stream views (the kept stores are its alone) and both payloads from the publication's tables, the coordinator's
+    lookups (an immutable copy, made again only when they change) and what the frame's start posted (PostAheadContext: resources,
+    the epochs' last frame slots), and stages them against the versions the buffers hold once the publication before is committed
+    (predicted; a commit whose buffers hold others sends from the vectors: 10-20% of frames in motion, the kept ones). The frame's
+    start installs a publication only once its draws are done (DrawsReady). The epochs commit the installed payload: no build, no
+    join; the frame part of a commit (frame number, frame slots, the frame record's buffers and FrameValues' ring indices) is the
+    frame's. A payload the epoch cannot commit (none built yet, other resources, other frame slots: the VS mask toggles b7 a few
+    times a minute) is built at the epoch with rows of its own (counted; the tables then hold no journal version of them). The
+    kicks (KickZPrepassBuild, KickColourBuild, KickMainJob) and the joins are gone.
+    Found on the way: builds on the lane after the accumulate work overran Present (m50: Present join 1.2-1.9 ms/frame) - hence
+    the pool; a kept publication walked a freed fade-root node (m51, m52: crash in FadeRootLists) - the tree and fade-root nodes
+    are now owned while listed and the applied event batches (detached subtrees) go through the retirement chain; idle pooled and
+    fallback payloads pinned old publications and with them the whole chain (m53, m54: slots stuck retiring) - released when idle.
+    m55: waits 0.01-0.19 ms/frame (the Present join alone; m46: 0.03-0.24 with the colour join), 0 crashes, the chain recycling
+    every frame. y23: 7,431 sequences, set parity 0, 600 of 600 staged batches taken, every parity 0 but the known
+    fade-visibility windows.
+  - *E2+E4: the payload ring on the upload queue* (y24, m56). The epochs read the installed payloads from a ring of 4 entries (object
+    records, extras rows, geometry table, the rows' tables, each segment's inputs), named by values: BuildDrawsLatch grew a payload
+    block (payloadValid, the inputs' and geometry table's SRVs, the rows' addresses; 288 bytes) that BuildDrawsCS takes over its
+    push constants, and the frame record names the entry's objects and extras. The frame's start makes the entry hold the installed
+    publication (PrepareFrameUploads: grown by replacement, the old buffer retired with the frame's imports) and hands FrameValues'
+    job what fills it (FrameValues::Kick's FrameUploads): after its own rows, before the frame's signal, on the dedicated uploader,
+    once the frame that last read the entry is done on the GPU - each buffer sent what changed since the version it holds, the rows'
+    headers made absolute for the entry. The commits upload none of it (no staged batch, no streams, no rows, no inputs); a payload
+    built at the epoch (the fallback) keeps today's buffers and uploads. The reflection reads the entry the last Z-prepass commit
+    read (its depth inputs are the frame before's). y24: 7,426 sequences, set parity 0, 600 of 600 commits read the ring. m56: 0
+    crashes, waits 0.03-0.17 ms/frame, the producer 0.7 ms a frame at most 1.8 (FrameValues' rows with it), 2.2-2.6 MB a frame.
+    (The m56 attribution of those bytes to the segments' own inputs was wrong: see E5.)
+  - *E5: the journals kept for the ring; cleanup* (y25, y26, m57-m60). The 2.2-2.6 MB a frame were whole resends: each publication's
+    build trimmed its journals (ChangeJournal::BeginBuild) to the version the publication before predicted for today's buffers, while
+    a ring entry, filled every fourth frame, holds an older one - below the floor, so sent everything (objects, extras, the regions).
+    The ring's entries are now the journals' holders (RingHolders: a KeptHolders per journal, set by the producer as it queues an
+    entry's uploads), and the builds trim to the oldest of them; the scene buffers (the shadow commits', a fallback's) are holders
+    too, uncounted (a frame behind at most; one below the floor is sent everything). The segments' own inputs are 0 KB a frame (the
+    region holds nearly every input). m57: 120-265 KB a frame, the producer's sending 270-370 us (m56 675-740); the report now
+    breaks the ring's bytes down by buffer. Removed: the builds task's staging (StageMainPayload, its pools, the payloads' staged
+    fields, the commit's staged branch), the main jobs (MainJob, DropMainJob, SameInputs, mainPayload, probePayload, colourEarly,
+    BuildInputsWitness). The epochs' frame slots: a slot an epoch supplied before and lacks now is supplied from its last capture
+    (counted, logged once per slot), so the builds ahead see the same slots every frame - the in-frame builds for frame slots went
+    from 1-6 per 300 frames to 0 (VS b7: 16 bytes captured at startup, absent since on the bridge; no pipeline drawn reads it, 0
+    constants skips before and after). The Z-prepass's carried vertex blocks are the colour epoch's replay too. Face regions
+    (faceRegionFree) now retire through the chain (kRetiredFaceRegion): the reflection draws the frame before's streams. The
+    resident region's resyncs, now most of the ring's bytes, were 1,209 of 1,211 decal-count changes (counted by reason): every
+    ordinal OrderDecals moves is in the change log, so a count change re-takes only the decals between the old and the new count (a
+    capped count moves those without a log entry). y26: 0 resyncs, resident-draw parity 0 differ (1.4M entries), set parity 0, 7,447
+    sequences. m60 (motion): the regions 17-33 KB a frame (m57 80-220), material rows 15-45 KB the largest part left, waits 0-0.19 ms/frame
+    (the accumulate join at Present), 0 in-frame builds past startup, 0 crashes. The SlotTable CPU test, failing since E3a's retirement, follows the contract (recycled before reuse).
+    m59 crashed once on the coordinator (RefreshCategoryNodes walking a newly appeared category node's children during a cell load:
+    a parent pointer read garbage) - the scene work reading engine memory the engine changes inside Main::Draw..Present (F); not
+    reproduced in m60.
+  - *S1: the shadow payload built ahead* (y27, m61). The shadow epoch was ~0.1 ms of render thread (the views' blocks 0.04, frame
+    captures that stay) and its AsyncWorker join ~0.002 ms: the step is structural. The shadow lookups are refreshed at the frame's
+    start (RefreshMainLookups) for the last epoch's views - modes (occlusion maps included), rasterizer states, target format
+    (Impl::lastShadow) -, so the builds ahead read them in the lookups snapshot; the epoch refreshes them only for views those did not
+    cover (counted: 0-1 a 300-frame window). The builds task builds the shadow payload after the main ones (RunAhead), from the
+    publication's tables, stream views and lookups, the candidates the coordinator made with it (CoordinatorSunCandidates,
+    CoordinatorLightCandidates) and the inputs posted at the frame's start (PrepareShadowInputs for the last views), with the next
+    frame's exclusions (the exclusion caches are the task's alone). The payload drops its stream views after the build (the
+    publication holds them), so the payload the epoch committed (committedShadow: the occlusion epoch and the revision shapes read it)
+    pins no publication. The epoch commits the installed publication's shadow payload when it covers the frame's views
+    (ShadowAheadUsable: resources, modes and states, CS block sizes), with the frame's full-frustum planes in its latch and the frame
+    record's per-frame buffers (FrameValues' ring entries, the tree wind's slot) written over the build's (uploaded around it: copies
+    in one batch are unordered); otherwise it builds its own (shadowFallback: no kept state, no exclusion cache), counted. The commit
+    still uploads from the vectors (against what the buffers hold: S2 moves them to the ring). Deleted: the shadow job, its early and
+    BeforeShadowMaps kicks, the witness (ShadowInputsWitness), SameShadowInputs, StageShadowPayload, JoinJob, TakeJob, the probe
+    (ProbeWorkerBuild), and the async stats' job fields. y27: 300 of 300 shadow epochs committed the payload built ahead in steady
+    play (fallbacks at startup and once when a view's mode and state first appeared, a frame late), persistent shadow parity 0 differ
+    (105k inputs), cascade-culling and sun parity OK, set parity 0, 7,446 sequences. m61: 0 crashes, the render-thread waits' only
+    site the accumulate join at Present (m60: shadow join and cancel in 23 windows), occlusion maps all drawn.
 
 ## Implemented foundations
 

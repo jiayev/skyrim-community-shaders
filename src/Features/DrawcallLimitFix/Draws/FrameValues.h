@@ -10,6 +10,13 @@
 
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 
+#include <functional>
+
+namespace org::runtime
+{
+	class IUploadService;
+}
+
 namespace DCLF
 {
 	struct BindlessPlacement;
@@ -62,8 +69,13 @@ namespace DCLF
 		 * graph, no dedicated upload queue): the frame waits for nothing, and its draws have no rows; what it was handed waits for the
 		 * first producer.
 		 */
+		/**
+		 * @brief What else the frame's producer uploads before it signals the frame's wait (step 6e E4: the payload ring entry the
+		 * frame's epochs read), on the producer's thread and the dedicated uploader. A throw is logged; the signal always goes.
+		 */
+		using FrameUploads = std::function<void(org::runtime::IUploadService&)>;
 		bool Kick(std::shared_ptr<const SceneStore::PlacementPlan> a_plan, std::vector<SceneStore::ShadingItem> a_shading,
-			std::vector<SceneStore::WetnessValue> a_wetness);
+			std::vector<SceneStore::WetnessValue> a_wetness, FrameUploads a_uploads = {});
 		/** @brief Render thread: a frame with no producer (DCLF not running): no batch waits for one. */
 		void Skip();
 		/** @brief Render thread, at Present: the GPU point of everything the frame submitted (its ring buffers' readers). */

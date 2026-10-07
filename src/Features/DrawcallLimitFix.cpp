@@ -289,7 +289,10 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// installs the whole set again.
 	auto& draws = DCLF::IndirectDraws::Get();
 	draws.SelectRevision();
-	store.SelectPublication([&draws](std::uint32_t a_commitFrame) { return draws.SetApplicable(a_commitFrame); });
+	// Its draws too (step 6e E3b: built ahead on the pool, never waited for): a publication whose builds are not done waits.
+	store.SelectPublication([&draws](std::uint32_t a_commitFrame, const std::shared_ptr<const void>& a_draws) {
+		return draws.SetApplicable(a_commitFrame) && draws.DrawsReady(a_draws);
+	});
 	store.SyncFrameTables();
 	RefreshFrameLookups();
 	// A write-back job no join reached, before anything changes the tables it reads.
@@ -300,14 +303,14 @@ bool DrawcallLimitFix::BeginSceneFrame()
 		store.InstallClaims();
 		draws.NoteSetApplied(store.InstalledCommitFrame());
 	}
+	// What the frame's epochs commit (step 6e E3b: built ahead with the publication), and what the next builds ahead take from it.
+	draws.InstallDraws(store.InstalledDraws());
+	draws.PostAheadContext();
 	// The frame's scene streams (step 6e E1): the object records, extras rows and geometry slots of the frame's tables, brought up to
 	// date once on the worker, ahead of every build of the frame, now that nothing writes those tables any more.
 	DCLF::IndirectDraws::Get().KickSceneStreams();
-	// The stood-in fade roots' write-back (engine writes under the read window's leases) and the shadow build kept from the last
-	// frame when nothing it reads moved: both read the frame's snapshot.
+	// The stood-in fade roots' write-back (engine writes under the read window's leases): it reads the frame's snapshot.
 	DCLF::IndirectDraws::Get().KickFadeWriteBack();
-	if (DCLF::ActiveToggles().shadows)
-		DCLF::IndirectDraws::Get().KickShadowBuildEarly();
 	// The frame's ingestion: the engine's queues drained into the batch the scene work applies first (ApplyEvents, on the
 	// coordinator). The references it lets go of - detached subtrees among them, whose last drop runs the engine's destructors - are
 	// handed back and released at Present (dclf-async-publication.md, "Step 5: ingestion").
@@ -326,7 +329,9 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// The frame's values (FrameValues): the placements and the shading the frame draws with, made on the pool from the last walk's
 	// plan and named slots while the frame runs, and waited for by the GPU; the wetness captured here (Skin's cache is the render
 	// thread's). Before the scene work, which makes the next plan.
-	DCLF::FrameValues::Get().Kick(store.TakePlacementPlan(), store.TakeShadingItems(), store.CaptureWetness());
+	// With them, the payload ring entry the frame's epochs read (step 6e E4), filled from the installed publication before the signal.
+	if (!DCLF::FrameValues::Get().Kick(store.TakePlacementPlan(), store.TakeShadingItems(), store.CaptureWetness(), draws.PrepareFrameUploads()))
+		draws.DropFrameUploads();
 	// The frame's scene work: the walk and the set's commit, for the next frame's claims. On DCLF's coordinator while
 	// the engine culls (SceneStore::KickSceneTask), joined by the first reader that needs it: everything the walk reads is final
 	// from Main::Draw on (the world update is done, and the palette update's frame counter moves only at Renderer::End), except
@@ -373,11 +378,9 @@ void DrawcallLimitFix::BeforeShadowMaps()
 	DCLF::ShadowViews::Get().Rebuild();
 	if (DCLF::ActiveToggles().shadows)
 		DCLF::IndirectDraws::Get().DecideShadowCoverage();
-	if (DCLF::ActiveToggles().shadows) {
+	// The shadow epoch commits the installed publication's shadow payload (built ahead with it, step 6e S1).
+	if (DCLF::ActiveToggles().shadows)
 		DCLF::IndirectDraws::Get().BeginShadowFrame();
-		// The shadow epoch's build, on the worker, while the engine draws the shadow maps (CS_DCLF_ASYNC).
-		DCLF::IndirectDraws::Get().KickShadowBuild();
-	}
 	const double sceneMs = MillisecondsSince(start);
 	timing.sceneMs += sceneMs;
 	timing.sceneMaxMs = std::max(timing.sceneMaxMs, sceneMs);
@@ -564,8 +567,6 @@ void DrawcallLimitFix::EarlyPrepass()
 
 	// Terrain LOD's HighDetailRange moves vertices: the Z-prepass draws with this frame's, as the colour pass does.
 	DCLF::SceneStore::Get().RefreshLodTechniqueRanges();
-	// The Z-prepass epoch's build, on the worker, from here to the Z-prepass in Main_RenderDepth (CS_DCLF_ASYNC).
-	DCLF::IndirectDraws::Get().KickZPrepassBuild();
 }
 
 namespace
@@ -779,8 +780,6 @@ void DrawcallLimitFix::Prepass()
 	// The camera-dependent half of the per-frame constants, now that the main camera's shadow state is
 	// current (BuildFrame ran at EarlyPrepass, where it still belonged to the shadow-map camera).
 	store.RefreshFrameConstants();
-	// The colour epoch's build, on the worker, from here to the epoch (CS_DCLF_ASYNC).
-	DCLF::IndirectDraws::Get().KickColourBuild();
 
 	if (DCLF::CaptureParity::Enabled())
 		DCLF::CaptureParity::Get().Report(store.GetFrame(), kReportInterval);

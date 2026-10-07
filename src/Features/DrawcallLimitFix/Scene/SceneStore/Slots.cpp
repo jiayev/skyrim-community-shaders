@@ -49,6 +49,9 @@ namespace DCLF
 		residentPatches.clear();
 		residentPos.clear();
 		residentMaintenanceDirty = true;
+		// The listed nodes' references through the retirement chain with everything else the cleared tables named.
+		HandBack(treeOwners);
+		HandBack(fadeRootOwners);
 		tables.Clear();
 		ClearFaceRegions();
 		// Drop material binding owners on world/device reset without permitting

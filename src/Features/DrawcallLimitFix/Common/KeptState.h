@@ -330,7 +330,7 @@ namespace DCLF
 					if (!next)
 						next = std::make_shared<std::vector<T>>();
 					*next = *elements;
-					if (spare.size() < 2)
+					if (spare.size() < 6)  // views live across frames (publications hold their payloads)
 						spare.push_back(std::move(elements));
 					elements = std::move(next);
 				}

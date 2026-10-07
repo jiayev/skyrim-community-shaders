@@ -8,8 +8,23 @@ namespace DCLF
 		// The payload's own uploads: the rows, the per-object records and bone rows, and the draw inputs
 		// with their geometry. Each buffer has its own condition: a depth epoch where every candidate is cull-only has plenty
 		// of inputs, and BuildDraws dispatches over the inputs.
+		/** @brief The versions a payload's uploads are against: what the buffers hold (the commit), or are to hold (a build ahead's staging). */
+		struct PayloadHeld
+		{
+			std::uint64_t materialRows = 0, pipelineRows = 0, resident = 0, geometries = 0;
+		};
+		PayloadHeld HeldNow(const MainPayload& a_payload, const Resources& a_resources)
+		{
+			const auto& addresses = a_payload.inputs.addresses;
+			const bool depth = a_payload.inputs.depthOnly && a_resources.inputsDepth;
+			const bool own = !a_payload.foreignRows;
+			return { own && addresses.records == a_resources.materialRows.address ? a_resources.materialRowsHeld : 0,
+				own && addresses.pipelineRows == a_resources.pipelineRows.address ? a_resources.pipelineRowsHeld : 0, a_resources.residentUploaded[depth ? 0 : 1],
+				a_resources.scene->held.geometries };
+		}
+
 		template <class Emit>
-		void ForEachMainPayloadUpload(const MainPayload& a_payload, const Resources& a_resources, Emit&& a_emit)
+		void ForEachMainPayloadUpload(const MainPayload& a_payload, const Resources& a_resources, const PayloadHeld& a_held, Emit&& a_emit)
 		{
 			{
 				ZoneScopedN("CS.DCLF.UploadRanges.Rows");
@@ -19,11 +34,11 @@ namespace DCLF
 				const auto& addresses = a_payload.inputs.addresses;
 				const auto& materials = a_resources.materialRows;
 				const auto& pipelines = a_resources.pipelineRows;
-				EmitMainRows(a_payload.materialRows, addresses.records == materials.address ? a_payload.inputs.materialRowsHeld : 0, materials.address, materials.capacity,
+				EmitMainRows(a_payload.materialRows, addresses.records == materials.address ? a_held.materialRows : 0, materials.address, materials.capacity,
 					[](MaterialRow& a_row, std::uint64_t a_address) {
 					PatchRowAddresses(a_row, a_address);
 				}, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { a_emit(a_resources.materialRows.buffer, a_data, a_bytes, a_offset); });
-				EmitMainRows(a_payload.pipelineRows, addresses.pipelineRows == pipelines.address ? a_payload.inputs.pipelineRowsHeld : 0, pipelines.address, pipelines.capacity,
+				EmitMainRows(a_payload.pipelineRows, addresses.pipelineRows == pipelines.address ? a_held.pipelineRows : 0, pipelines.address, pipelines.capacity,
 					[](PipelineRow& a_row, std::uint64_t a_address) {
 					PatchRowAddresses(a_row, a_address);
 				}, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { a_emit(a_resources.pipelineRows.buffer, a_data, a_bytes, a_offset); });
@@ -36,12 +51,12 @@ namespace DCLF
 			const auto& inputs = depth ? a_resources.inputsDepth : a_resources.inputs;
 			const std::size_t regionCount = a_payload.resident.Count();
 			TracyCZoneN(residentUploadZone, "CS.DCLF.UploadRanges.Resident", true);
-			a_payload.resident.Emit(a_resources.residentUploaded[depth ? 0 : 1],
+			a_payload.resident.Emit(a_held.resident,
 				[&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { a_emit(inputs, a_data, a_bytes, a_offset); });
 			if (!a_payload.inputList.empty())
 				a_emit(inputs, a_payload.inputList.data(), a_payload.inputList.size() * sizeof(DrawInput), regionCount * sizeof(DrawInput));
 			TracyCZoneEnd(residentUploadZone);
-			EmitGeometryDraws(a_payload.geometryDraws, scene.held.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+			EmitGeometryDraws(a_payload.geometryDraws, a_held.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 				a_emit(scene.geometries->Get(), a_data, a_bytes, a_offset);
 			}, scene.geometryRows);
 		}
@@ -49,70 +64,11 @@ namespace DCLF
 		// Render thread: the payload through the commit's uploads, copied now.
 		void UploadMainPayload(const MainPayload& a_payload, const Resources& a_resources, CommitUploads& a_uploads)
 		{
-			ForEachMainPayloadUpload(a_payload, a_resources, [&](const auto& a_target, const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+			ForEachMainPayloadUpload(a_payload, a_resources, HeldNow(a_payload, a_resources), [&](const auto& a_target, const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 				a_uploads(a_target, a_data, a_bytes, a_offset);
 			});
 		}
 
-		/** @brief The rows' backings a staged batch was staged against: one of them grown since, and it is not submitted. */
-		std::uint64_t RowsGeneration(const Resources& a_resources)
-		{
-			return a_resources.MainRowsGeneration();
-		}
-	}
-
-	// On the worker, after the build: the payload's uploads into a staged batch (a released one from the job's
-	// pool, or a new one), so the commit copies nothing.
-	void StageMainPayload(MainPayload& a_payload, const Resources& a_resources, std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool,
-		rhi::Device a_device)
-	{
-		ZoneScopedN("CS.DCLF.StageMainPayload");
-		auto batch = AcquireStagedBatch(a_pool);
-		ForEachMainPayloadUpload(a_payload, a_resources, [&](const auto& a_target, const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-			batch->Stage(org::runtime::UploadTarget::FromShared(Target(a_target)), a_offset, a_data, a_bytes);
-		});
-		a_payload.stagedFor = &a_resources;
-		a_payload.stagedRowsGeneration = RowsGeneration(a_resources);
-		a_payload.stagedSceneGeneration = a_resources.scene->generation;
-		if (a_device)
-			batch->Record(a_device);
-		a_payload.staged = std::move(batch);
-	}
-
-	// On the worker, after the shadow build: what the commit would upload that does not depend on the views it
-	// captures - the shared tables, the material rows, the used modes' inputs, the arena (the frame record and the blocks). The
-	// views' blocks and counters are the epoch's latched copies (ShadowLatchedCopiesPass).
-	void StageShadowPayload(ShadowPayload& a_payload, const ShadowResources& a_resources, std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool,
-		rhi::Device a_device)
-	{
-		ZoneScopedN("CS.DCLF.StageShadowPayload");
-		using org::runtime::UploadTarget;
-		auto batch = AcquireStagedBatch(a_pool);
-		// Against the versions the buffers held when the build's inputs were taken: no commit runs between then and this
-		// one's (frame order), and one that did would only have sent a subset of this.
-		const auto& scene = *a_resources.scene;
-		const TablesHeld& held = a_payload.inputs.tablesHeld;
-		EmitGeometryDraws(a_payload.geometries, held.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-			batch->Stage(UploadTarget::FromShared(scene.geometries->Get()), a_offset, a_data, a_bytes);
-		}, scene.geometryRows);
-		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
-			if (!a_payload.inputs.modeUsed[m])
-				continue;
-			EmitShadowInputs(a_payload, m, a_payload.kept ? a_resources.inputsUploaded[m] : 0, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-				batch->Stage(UploadTarget::FromShared(Target(a_resources.inputs[m])), a_offset, a_data, a_bytes);
-			});
-		}
-		// The material rows the table does not hold (all of them without the kept state, or in a new backing).
-		a_payload.materialRows.Emit(a_payload.kept ? a_payload.inputs.materialRowsHeld : 0, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-			batch->Stage(UploadTarget::FromShared(Target(a_resources.materialRows.buffer)), a_offset, a_data, a_bytes);
-		});
-		if (const auto& bytes = a_payload.arena.Bytes(); !bytes.empty())
-			batch->Stage(UploadTarget::FromShared(a_resources.constants), 0, bytes.data(), bytes.size());
-		a_payload.stagedFor = &a_resources;
-		a_payload.stagedRows = a_resources.materialRows.generation;
-		if (a_device)
-			batch->Record(a_device);
-		a_payload.staged = std::move(batch);
 	}
 
 	namespace
@@ -122,8 +78,10 @@ namespace DCLF
 			return { &a_tables, a_tables.changeLog.End(), a_tables.geometryLog.End(), a_generation };
 		}
 
-		/** @brief The stores brought up to the tables (from what the buffers hold), as views (StreamViews). */
-		std::shared_ptr<const StreamViews> MakeStreamViews(ObjectRecordStore& a_objects, ExtrasStore& a_extras, GeometryStore& a_geometries, const TablesHeld& a_from,
+	}
+
+	/** @brief The stores brought up to the tables (from what the buffers hold), as views (StreamViews). */
+	std::shared_ptr<const StreamViews> Draws::MakeStreamViews(ObjectRecordStore& a_objects, ExtrasStore& a_extras, GeometryStore& a_geometries, const TablesHeld& a_from,
 			std::shared_ptr<const SceneStore::Tables> a_hold, const SceneStore::Tables& a_tables, std::uint32_t a_generation, std::uint32_t a_frame)
 		{
 			ZoneScopedN("CS.DCLF.MakeStreamViews");
@@ -137,7 +95,6 @@ namespace DCLF
 			views->geometries = std::move(geometries.slots);
 			return views;
 		}
-	}
 
 	void IndirectDraws::Impl::KickSceneStreams()
 	{
@@ -164,9 +121,23 @@ namespace DCLF
 		job.objects = job.extras = 0;
 		job.staged = false;
 		std::shared_ptr<const SceneStore::Tables> hold = store.AcceptedTables();
+		// The installed publication's (step 6e E3b: the coordinator made them, the stores are its own): the job only stages.
+		std::shared_ptr<const StreamViews> made = installedDraws && installedDraws->tables.get() == &tables ? installedDraws->streams : nullptr;
+		if (!made) {
+			// None (a publication made at the frame's start): made here while the coordinator is idle; never while it runs.
+			if (store.SceneTaskInFlight() || aheadDone.load(std::memory_order_acquire) < aheadKicked) {
+				++streamsRefused;
+				return;
+			}
+			// Its journals keep what the scene buffers and the ring's entries lack.
+			const auto& holders = ringHolders;
+			const TablesHeld from{ std::min(job.from.objects, holders.objects.Oldest()), std::min(job.from.extras, holders.extras.Oldest()),
+				std::min(job.from.geometries, holders.geometries.Oldest()) };
+			made = MakeStreamViews(objectStore, extrasStore, geometryStore, from, hold, tables, job.tablesGeneration, store.GetFrame());
+		}
 		if (!AsyncEnabled()) {
 			// No worker: made here, nothing staged (the commits send the changes).
-			streamViews = MakeStreamViews(objectStore, extrasStore, geometryStore, job.from, std::move(hold), tables, job.tablesGeneration, store.GetFrame());
+			streamViews = std::move(made);
 			streamViewsKey = key;
 			*job.slot = streamViews;
 			return;
@@ -178,11 +149,9 @@ namespace DCLF
 		const rhi::Device device = RecordingDevice();
 		job.handle = AsyncWorker::Get().Submit("streams", [result = &job, slot = job.slot, batch = job.batch, objectsBuffer = sceneBuffers.objects->Get(),
 															extrasBuffer = sceneBuffers.extras->Get(), objectCapacity = sceneBuffers.objectCapacity, extraRows = sceneBuffers.extraRows,
-															tables = &tables, hold = std::move(hold), objects = SceneObjects(), extrasStore = SceneExtras(), geometries = SceneGeometries(),
-															from = job.from, generation = job.tablesGeneration, frame = store.GetFrame(), device](std::stop_token) mutable {
+															views = std::move(made), from = job.from, device](std::stop_token) {
 			ZoneScopedN("CS.DCLF.StageSceneStreams");
 			using org::runtime::UploadTarget;
-			auto views = MakeStreamViews(*objects, *extrasStore, *geometries, from, std::move(hold), *tables, generation, frame);
 			*slot = views;
 			// Past a buffer (its growth outstanding), or the parity on: the commit sends what fits.
 			if (!batch || views->objects.Count() > objectCapacity || views->extras.Rows() > extraRows)
@@ -298,7 +267,7 @@ namespace DCLF
 		return sent;
 	}
 
-	bool IndirectDraws::Impl::CommitMainPayload(const Capture& a_capture, const FrameBlocks& a_blocks, MainPayload& a_payload,
+	bool IndirectDraws::Impl::CommitMainPayload(const Capture& a_capture, const FrameBlocks& a_blocks, const MainInputs& a_frame, MainPayload& a_payload,
 		const std::shared_ptr<Resources>& a_resources, SceneStore& a_store, IndirectDraws::Stats& a_stats,
 		std::vector<std::shared_ptr<const void>>& a_bindingOwners)
 	{
@@ -306,9 +275,17 @@ namespace DCLF
 		// The cleared geometry slots' buffers, held until this execution retires (SceneStore::TakeRetiredImports).
 		for (auto& owner : a_store.TakeRetiredImports())
 			a_bindingOwners.push_back(std::move(owner));
-		const auto& in = a_payload.inputs;
+		// The frame's part (its number, frame slots, the frame record's buffers and ring indices) is the frame's: a payload built ahead
+		// was built a frame before (step 6e E3b).
+		const auto& in = a_frame;
 		const auto& tables = a_store.GetTables();
 		const bool depthOnly = in.depthOnly;
+		// Step 6e E4: an installed payload is read from the frame's ring entry, which the frame's producer filled: nothing of it is
+		// uploaded here.
+		const std::size_t job = depthOnly ? kAsyncZPrepass : kAsyncColour;
+		const bool ring = RingFor(a_payload, job);
+		if (ring)
+			++ringStats.committed;
 		const std::uint32_t frameNumber = in.frameNumber;
 		auto& textures = GpuTextures::Get();
 		auto& mirror = ConstantMirror::Get();
@@ -524,8 +501,8 @@ namespace DCLF
 			const std::uint32_t nullIndex = textures.NullIndex() != kInvalidIndex ? textures.NullIndex() : 0u;
 			for (std::uint32_t t = 0; t < kTextureRegisters; ++t)
 				frameRecord.textures[t] = frameTextures[t] == kInvalidIndex ? nullIndex : frameTextures[t];
-			frameRecord.textures[kObjectBufferRegister] = in.addresses.objectsIndex;
-			frameRecord.textures[kExtrasBufferRegister] = in.addresses.extrasIndex;
+			frameRecord.textures[kObjectBufferRegister] = ring ? ringFrame.objectsIndex : in.addresses.objectsIndex;
+			frameRecord.textures[kExtrasBufferRegister] = ring ? ringFrame.extrasIndex : in.addresses.extrasIndex;
 			frameRecord.textures[kPlacementBufferRegister] = in.addresses.placementsIndex;
 			frameRecord.textures[kPaletteBufferRegister] = in.addresses.palettesIndex;
 			frameRecord.textures[kShadingBufferRegister] = in.addresses.shadingIndex;
@@ -575,17 +552,11 @@ namespace DCLF
 		}
 
 		lap(3);
-		// Upload (the graph's upload pass runs ahead of every pass of this epoch). The worker's build staged its
-		// payload itself: one submission, no copies here. A build made here, or staged against resources since
-		// recreated, is uploaded from its vectors.
+		// Upload (the graph's upload pass runs ahead of every pass of this epoch). An installed payload is the ring entry's (the
+		// frame's producer sent it); a build made here is uploaded from its vectors.
 		// Rows past the rows' tables wait for their growth (EmitMainRows; the build drew none of them).
 		// The inputs: one an object at most, and none for an object past the buffers (ObjectFits).
 		CheckSceneCapacity(*a_resources->scene, 0, 0, 0, a_payload.resident.Count() + a_payload.inputList.size(), a_resources->objectCapacity, "the main pass");
-		// A batch staged against these resources and these rows' backings (one grown since holds nothing it staged against).
-		const bool staged = a_payload.staged && a_payload.stagedFor == a_resources.get() && a_payload.stagedRowsGeneration == RowsGeneration(*a_resources) &&
-		                    a_payload.stagedSceneGeneration == a_resources->scene->generation;
-		if (staged)
-			SubmitWorkerBatch(std::move(a_payload.staged));
 		UploadFaceStreams(a_payload.faceStreams, a_resources->scene->facePositions, a_resources->scene->faceUploaded, uploads, a_resources->scene->faceVertices);
 		ZeroFrameAheadOutputs(*a_resources->scene, uploads);
 		UploadTrees(a_store.GetTables(), a_store.GetFrame(), *a_resources->scene, uploads, depthOnly);
@@ -669,8 +640,8 @@ namespace DCLF
 				buffers.fadeRootListsHeld = listsKey;
 			}
 		}
-		// The streams as the tables hold them now, whichever frame's build this is.
-		const auto streams = CommitSceneStreams(*a_resources->scene, a_store.GetTables(), a_store.GetFrame(), a_store.GetTablesGeneration(), uploads);
+		// The streams as the tables hold them now, whichever frame's build this is (the ring entry's, filled by the producer).
+		const auto streams = ring ? SceneStreams{} : CommitSceneStreams(*a_resources->scene, a_store.GetTables(), a_store.GetFrame(), a_store.GetTablesGeneration(), uploads);
 		// The depth segment clears every counter; the colour segment clears only the word its own draws
 		// append through. The culling happens in the depth segment, so clearing the
 		// whole buffer again here would erase the phase 1 and phase 2 numbers before anything read them
@@ -693,22 +664,29 @@ namespace DCLF
 			latched(a_resources->count, decalWords.data(), 4 * sizeof(std::uint32_t), kCountDecalGroupWord * sizeof(std::uint32_t));
 			latched(a_resources->count, &decalWords[4], sizeof(std::uint32_t), kCountDecalLayerWord * sizeof(std::uint32_t));
 		}
-		if (!staged)
+		if (!ring)
 			UploadMainPayload(a_payload, *a_resources, uploads);
-		// Either path uploaded the rows the tables did not hold: all of them when they fit, else the ones that fit, sent again until
-		// the growth is adopted (it then holds the version it was filled with).
-		if (a_payload.materialRows.Count() <= a_resources->materialRows.capacity)
-			a_resources->materialRowsHeld = a_payload.materialRows.Version();
-		if (a_payload.pipelineRows.Count() <= a_resources->pipelineRows.capacity)
-			a_resources->pipelineRowsHeld = a_payload.pipelineRows.Version();
+		// The upload sent the rows the tables did not hold: all of them when they fit, else the ones that fit, sent again until
+		// the growth is adopted (it then holds the version it was filled with). The ring's path uploaded nothing into them.
+		// Rows of the payload's own (built at the epoch) are no version of the coordinator's journal: the tables hold nothing it counts.
+		if (ring) {
+		} else if (a_payload.foreignRows) {
+			a_resources->materialRowsHeld = a_resources->pipelineRowsHeld = 0;
+		} else {
+			if (a_payload.materialRows.Count() <= a_resources->materialRows.capacity)
+				a_resources->materialRowsHeld = a_payload.materialRows.Version();
+			if (a_payload.pipelineRows.Count() <= a_resources->pipelineRows.capacity)
+				a_resources->pipelineRowsHeld = a_payload.pipelineRows.Version();
+		}
 		committedMaterialRows = a_payload.materialRows;
 		committedPipelineRows = a_payload.pipelineRows;
-		// Either path uploaded the resident region when the buffer held another version of it, and the object records.
-		a_resources->residentUploaded[depthOnly && a_resources->inputsDepth ? 0 : 1] = a_payload.resident.Version();
+		// The upload sent the resident region when the buffer held another version of it, and the object records.
+		if (!ring)
+			a_resources->residentUploaded[depthOnly && a_resources->inputsDepth ? 0 : 1] = a_payload.resident.Version();
 		auto& held = a_resources->scene->held;
 		const std::size_t objectBytes = streams.objectBytes;
 		const std::size_t geometryBytes = EmitGeometryDraws(a_payload.geometryDraws, held.geometries, [](const void*, std::size_t, std::size_t) {}, a_resources->scene->geometryRows);
-		if (a_payload.geometryDraws.Version() && a_payload.geometryDraws.Count() <= a_resources->scene->geometryRows)
+		if (!ring && a_payload.geometryDraws.Version() && a_payload.geometryDraws.Count() <= a_resources->scene->geometryRows)
 			held.geometries = a_payload.geometryDraws.Version();
 		a_stats.residentInputs = static_cast<std::uint32_t>(a_payload.resident.Count());
 		if (!depthOnly) {
@@ -719,6 +697,9 @@ namespace DCLF
 		a_stats.residentVersions += a_payload.resident.Version() != a_stats.residentLastVersion[depthOnly ? 0 : 1] ? 1 : 0;
 		a_stats.residentLastVersion[depthOnly ? 0 : 1] = a_payload.resident.Version();
 		a_stats.residentResyncs += a_payload.residentResyncs;
+		for (std::size_t k = 0; k < a_stats.residentResyncBy.size(); ++k)
+			a_stats.residentResyncBy[k] += (a_payload.residentResyncReasons >> k) & 1u;
+		a_stats.residentDecalRetakes += a_payload.residentDecalRetakes;
 		a_stats.residentParityChecks += a_payload.residentParityChecks;
 		a_stats.residentParityMismatches += a_payload.residentParityMismatches;
 		a_stats.residentMissing += a_payload.residentMissing;
@@ -890,6 +871,8 @@ namespace DCLF
 		// waited for the slot): what the BuildDraws dispatches of the segment read instead of push constants.
 		BuildDrawsLatch latch{};
 		latch.placementsIndex = FrameValues::Get().PlacementsIndex();
+		if (ring)
+			RingLatch(ringFrame, job, latch);
 		latch.dispatch[0] = (inputCount + 63) / 64;
 		latch.dispatch[1] = 1;
 		latch.dispatch[2] = 1;

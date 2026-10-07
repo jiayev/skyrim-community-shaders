@@ -307,6 +307,8 @@ namespace DCLF
 				latch.cullFlags = 1;  // the frustum alone, near plane included
 				latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;
 				latch.placementsIndex = FrameValues::Get().PlacementsIndex();
+				// The depth inputs the last Z-prepass commit read: its ring entry's, when it read one (step 6e E4).
+				Impl::RingLatch(impl->ringDepth, kAsyncZPrepass, latch);
 				FoldEyeIntoViewProj(face.viewProj, face.eye, latch.viewProj);
 				latch.bucketMapOffset = region + ReflectionLatchLayout::MapOffset();
 				latch.bucketTableOffset = region + layout.TableOffset(f);

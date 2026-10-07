@@ -78,6 +78,8 @@ namespace DCLF
 		// counts, since the start.
 		std::uint32_t residentInputs = 0, residentDraws = 0, residentPairs = 0, residentUndrawable = 0;
 		std::uint64_t residentVersions = 0, residentResyncs = 0, residentParityChecks = 0, residentParityMismatches = 0, residentMissing = 0;
+		std::array<std::uint64_t, 5> residentResyncBy{};  // since the start, by reason (MainBuild::UpdateRegionEntries)
+		std::uint64_t residentDecalRetakes = 0;           // since the start: decal group counts moved (decals re-taken, no resync)
 		std::uint64_t residentPairsChecked = 0, residentPairsStale = 0;
 		std::array<std::uint64_t, 2> residentLastVersion{};
 		std::uint32_t extraRows = 0;  // extras rows uploaded by the last epoch
@@ -103,27 +105,11 @@ namespace DCLF
 		// CS_DCLF_ASYNC: per job kind (colour, Z-prepass, shadow), per report interval.
 		struct Async
 		{
-			std::uint32_t kicked = 0;      // jobs submitted to the worker
-			std::uint32_t notKicked = 0;   // epochs whose conditions kept the build inline (no replay, not bindless, ...)
-			std::uint32_t used = 0;        // epochs that committed the worker's build
-			std::uint32_t builtInline = 0; // epochs that built on the render thread (no job, or the job could not be used)
-			std::uint32_t late = 0;        // the job was still running at the join
-			std::uint32_t failed = 0;      // the job threw
-			std::uint32_t cancelled = 0;
-			std::uint32_t stale = 0;       // the job's inputs differed from the epoch's
-			std::uint32_t staleLookups = 0;  // of which the lookups' generation (a refresh between kick and epoch)
-			// The colour build kicked early (at EarlyPrepass, behind the Z-prepass's): kept at Prepass, or kicked again because
-			// RefreshFrameConstants or the lookups changed what it read.
-			std::uint32_t earlyKicked = 0, earlyKept = 0, earlyRekicked = 0;
-			// Why: the colour build's by (tables' versions, material records, lookups); the shadow build's by (change logs, CS's
-			// shared or feature data, the other inputs).
-			std::array<std::uint32_t, 3> earlyRekickedBy{};  // the tables' versions, the material records, the lookups
-			std::uint32_t dropped = 0;     // jobs discarded without an epoch to serve
-			std::uint32_t leaked = 0;      // jobs still pending at Present (a defect)
-			std::uint32_t probeCompared = 0;
-			std::uint32_t probeDiffer = 0;
-			std::uint32_t eyeMismatches = 0;          // Z-prepass: the predicted eye pair differed from the captured one
-			std::uint32_t previousEyeMismatches = 0;  // of which the previous eye alone
+			// Per epoch, since the last report (step 6e E3b, S1): committed the installed publication's payload (built ahead), or built
+			// at the epoch because no publication with draws was installed, none was built for it, or it was for other resources,
+			// frame slots or views.
+			std::uint32_t used = 0, builtInline = 0;
+			std::uint32_t notKicked = 0, late = 0, stale = 0;
 		};
 		std::array<Async, 3> async{};
 	};

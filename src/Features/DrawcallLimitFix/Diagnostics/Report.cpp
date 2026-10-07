@@ -231,8 +231,9 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				(draws.sunTested == draws.sunCpuTested && draws.sunMissed == draws.sunCpuMissed) ? " <- OK" : " <- DIFFERS");
 		if (draws.residentInputs || draws.residentResyncs)
 			logger::info("[DCLF] persistent draws (last frame, colour): {} kept inputs, {} sequences, {} pairs, {} not drawable; since the start {} region "
-						 "versions uploaded, {} resyncs; parity {} entries checked, {} differ, {} missing{}",
+						 "versions uploaded, {} resyncs (log {}, segment {}, shrunk {}, scope {}, fit {}), {} decal count moves; parity {} entries checked, {} differ, {} missing{}",
 				draws.residentInputs, draws.residentDraws, draws.residentPairs, draws.residentUndrawable, draws.residentVersions, draws.residentResyncs,
+				draws.residentResyncBy[0], draws.residentResyncBy[1], draws.residentResyncBy[2], draws.residentResyncBy[3], draws.residentResyncBy[4], draws.residentDecalRetakes,
 				draws.residentParityChecks, draws.residentParityMismatches, draws.residentMissing,
 				draws.residentParityChecks ? fmt::format("; pairs {} checked, {} resolved with no event{}", draws.residentPairsChecked, draws.residentPairsStale,
 												 draws.residentParityMismatches || draws.residentMissing || draws.residentPairsStale ? " <- RESIDENT DRAW PARITY" : " <- OK") :
@@ -329,8 +330,8 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			logger::error("[DCLF] step 6c: {} reads of the coordinator's state from the frame while the scene work ran (first: {}) <- FRAME ACCESS", violations,
 				first ? first : "?");
 		if (const auto publication = store.TakeTablesPublication(); publication.published) {
-			logger::info("[DCLF] tables published (step 6): {} snapshots ({} written again, {} made, pool {}), {:.3f} ms each on the coordinator (max {:.3f}); {} published again at the frame's start{}",
-				publication.published, publication.reused, publication.made, publication.pool, publication.ms / publication.published, publication.maxMs, publication.republished, publication.republished ? " <- TABLES CHANGED AFTER PUBLICATION" : " <- OK");
+			logger::info("[DCLF] tables published (step 6): {} snapshots ({} written again, {} made, pool {}), {:.3f} ms each on the coordinator (max {:.3f}); {} published on the render thread at the frame's start (tables changed after the coordinator's last publication: events applied at Present, a frame without accumulate work){}",
+				publication.published, publication.reused, publication.made, publication.pool, publication.ms / publication.published, publication.maxMs, publication.republished, publication.republished ? " <- RENDER THREAD" : "");
 			const double n = double(publication.published);
 			const std::uint64_t differ = publication.parityDiffer + publication.parityObjectsDiffer + publication.parityLogsDiffer + publication.parityGeometriesDiffer +
 			                             publication.parityFamiliesDiffer;
