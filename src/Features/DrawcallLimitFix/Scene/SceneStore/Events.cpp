@@ -536,7 +536,9 @@ namespace DCLF
 			moveEvents.Discard();
 			movedFrame.clear();
 			hiddenEvents.Discard();
-			// The switches are brought up to date by the rescan's walk (AddSubtree); PrimaryCull reads them all again.
+			// The switches are brought up to date at the first ingestion after the load (CatchUpSwitches); PrimaryCull reads them all
+			// again.
+			worldCatchUpPending = true;
 			switchEvents.Discard();
 			switchPending.clear();
 			switchPendingIndex.clear();
@@ -547,13 +549,21 @@ namespace DCLF
 		if (!ingested)
 			ingested = std::make_shared<EventBatch>();
 		auto& batch = *ingested;
-		batch.Append(tracker.Drain());
+		auto* attached = tracker.Drain();
+		batch.Append(attached);
 		fadeSnapEvents.Drain([&](const void* a_node) { batch.fadeSnaps.push_back(a_node); });
 		DrainFadeEvents(batch.fades);
 		DrainPropertyEvents(batch.properties);
 		DrainNodeEvents(batch.nodes);
+		const std::size_t switchesBefore = batch.switches.size();
 		switchEvents.Drain([&](SwitchEvent&& a_event) { batch.switches.push_back(std::move(a_event)); });
 		lodSegmentEvents.Drain([&](const void* a_key) { batch.lodSegments.push_back(a_key); });
+		// The switches' catch-ups are engine code that writes: the render thread's, here, never the scene work's.
+		attachedRoots.clear();
+		for (const auto* event = attached; event; event = event->next)
+			if (event->type == SceneTracker::EventType::Attached && event->node)
+				attachedRoots.push_back(event->node.get());
+		CatchUpSwitches(attachedRoots, std::span<const SwitchEvent>(batch.switches).subspan(switchesBefore));
 		// Tree LOD's mirror is the render thread's (DecideTreeLod reads it at the frame's start).
 		treeLod.Drain(frame);
 	}
@@ -605,6 +615,7 @@ namespace DCLF
 			propertyDependents.clear();
 			rootDependents.clear();
 			lightDependents.clear();
+			ReleaseRootOwners();
 			rootReference.clear();
 			referenceRoot.clear();
 			dirtyRoots.clear();
@@ -893,6 +904,58 @@ namespace DCLF
 		return switchEventsInstalled;
 	}
 
+	void SceneStore::CatchUpSwitches(std::span<RE::NiAVObject* const> a_attached, std::span<const SwitchEvent> a_switches)
+	{
+		if (!SwitchEventsLive())
+			return;
+		const bool world = std::exchange(worldCatchUpPending, false);
+		if (!world && a_attached.empty() && a_switches.empty())
+			return;
+		ZoneScopedN("CS.DCLF.Ingest.SwitchCatchUps");
+		const auto start = std::chrono::steady_clock::now();
+		const auto* root = static_cast<const RE::NiAVObject*>(RE::Main::WorldRootNode());
+		auto inWorld = [root](const RE::NiAVObject* a_object) {
+			for (std::uint32_t depth = 0; root && a_object && depth <= kMaxParentDepth; ++depth, a_object = a_object->parent)
+				if (a_object == root)
+					return true;
+			return false;
+		};
+		// Every switch under a_from (a whole subtree: no bound, unlike an event's walk).
+		std::vector<RE::NiAVObject*> stack;
+		auto catchUpUnder = [&](RE::NiAVObject* a_from, std::atomic<std::uint64_t>& a_count) {
+			stack.assign(1, a_from);
+			std::uint64_t count = 0;
+			while (!stack.empty()) {
+				auto* object = stack.back();
+				stack.pop_back();
+				auto* node = object ? object->AsNode() : nullptr;
+				if (!node)
+					continue;
+				if (auto* switchNode = node->AsSwitchNode(); switchNode && CatchUpSwitch(*switchNode))
+					++count;
+				for (auto& child : node->GetChildren())
+					if (child)
+						stack.push_back(child.get());
+			}
+			a_count.fetch_add(count, std::memory_order_relaxed);
+		};
+		if (world && root)
+			catchUpUnder(const_cast<RE::NiAVObject*>(root), catchUpsByAttach);
+		for (auto* attachedRoot : a_attached)
+			if (inWorld(attachedRoot))
+				catchUpUnder(attachedRoot, catchUpsByAttach);
+		for (const auto& event : a_switches) {
+			auto* node = event.node.get();
+			auto* switchNode = node ? node->AsSwitchNode() : nullptr;
+			if (!switchNode || !inWorld(node) || (!event.structural && SwitchIndexOf(node) == event.before))
+				continue;
+			if (CatchUpSwitch(*switchNode))
+				catchUpsBySwitch.fetch_add(1, std::memory_order_relaxed);
+		}
+		catchUpNs.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()),
+			std::memory_order_relaxed);
+	}
+
 	bool SceneStore::CatchUpSwitch(RE::NiSwitchNode& a_switch)
 	{
 		// NiSwitchNode::OnVisible: childRevID.SetAt(index, revID) (FUN_140d29990), then the child's UpdateDownwardPass
@@ -936,8 +999,6 @@ namespace DCLF
 			if (!pending.structural && SwitchIndexOf(node) == pending.before)
 				continue;
 			++delta.switchChanges;
-			if (CatchUpSwitch(*switchNode))
-				++delta.switchCatchUps;
 			if (switchesApplied.size() < kMaxSwitchChanges)
 				switchesApplied.push_back(node);
 			else

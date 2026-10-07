@@ -483,15 +483,30 @@ namespace DCLF
 			// The largest count a recording read past its buffer's events: the list grows to it (the roots it left out try again).
 			std::atomic<std::uint32_t> wanted{ 0 };
 			std::atomic<Batch*> batches{ nullptr };
-			// The write-back task's (IndirectDraws::KickFadeWriteBack, step 6e S4: one at a time on DCLF's executor, never joined): the
-			// events it took from the batches in order and has not written yet (the window closed on it), and per root slot the scene
-			// frame of the event last written - an older one (a list read late) is not written over it. Its alone.
-			std::vector<FadeEvent> pending;
-			std::vector<std::uint32_t> pendingFrames;  // each pending event's scene frame
+			// The write-back task's (IndirectDraws::KickFadeWriteBack, step 6e S4: one at a time on DCLF's executor, never joined): per
+			// root slot the scene frame of the event last taken - an older one (a list read late) is not written over it. Its alone.
 			std::vector<std::uint32_t> appliedFrame;
 			std::atomic<bool> running{ false };
-			// Since the last report: milestones written, stale, and frames whose start found the last task still running.
-			std::atomic<std::uint64_t> applied{ 0 }, stale{ 0 }, busy{ 0 };
+			/**
+			 * @brief What a task found to write (step 6e F1): the stores, in event order, and the tables snapshot they were judged
+			 * against - held until the render thread makes them, so no node they name is let go first (its publication's
+			 * retirement node). The task touches no engine memory; the render thread makes the stores at the next frame's start.
+			 */
+			struct Stores
+			{
+				struct Store
+				{
+					void* node = nullptr;
+					std::uint32_t flags = 0;  // the fade bits (kFadeFlagMask) only
+					float fade = 0.0f;
+				};
+				std::shared_ptr<const SceneStore::Tables> tables;
+				std::vector<Store> stores;
+			};
+			std::atomic<Stores*> ready{ nullptr };
+			// Since the last report: milestones taken and written, stale, frames whose start found the last task still running, and
+			// the render thread's time making the stores.
+			std::atomic<std::uint64_t> applied{ 0 }, stale{ 0 }, busy{ 0 }, storeNs{ 0 };
 
 			void Push(Batch* a_batch)
 			{
@@ -500,6 +515,7 @@ namespace DCLF
 			}
 			~FadeWriteBack()
 			{
+				delete ready.exchange(nullptr);
 				for (Batch* b = batches.exchange(nullptr); b;) {
 					Batch* following = b->next;
 					delete b;

@@ -1450,6 +1450,37 @@ resident-draw, set and fade parity; motion m28/m29).
     light's paraboloids or an occlusion map that come and go find their inputs built). y33, m65: in-frame builds only in the first
     frames (none built yet), set parity 0, every parity 0 but FrameValues' known 2 rows, the render-thread waits' one site the
     accumulate join at Present (0.001-0.12 ms/frame). AsyncWorker now runs only the scene lane (F).
+- **F: the scene lane reads no engine memory** (decided 2026-10-07). The scene lane is joined at Present (and at the frame's start)
+  because it reads the engine's scene graph live, and runs engine code on it, while the engine's next update writes and frees that
+  memory (the m59 crash in RefreshCategoryNodes; the hidden flips after the drain). The lane takes no read leases: every engine field
+  it reads becomes a value captured by the hooks on the writer's thread and carried by the events into a mirror the lane applies in
+  order (CS_DCLF_MIRROR_PARITY compares it with the live scene at the frame's start, naming the writers the hooks miss); the fade
+  write-back's engine stores are the render thread's; FrameValues keeps its leases (its sampling is the frame's by nature). Steps:
+  F1 engine code off the lane, F2 the frame capture (frame globals, category roots), F3 the mirror and its parity (lane still reads
+  live), F4 the lane reads the mirror (a guard fails loudly on any engine access from it), F5 the joins out (an intent mailbox
+  drained by a serialized pump on the executor's coordinator; outputs as publications and queues), F6 AsyncWorker deleted.
+  - *F1: engine code off the lane* (y34, y35, m66). Inventory of what the lane ran: the skin palette update in WriteObject; the
+    switch catch-up (FUN_140d29990 and the child's UpdateDownwardPass: transforms written) from ApplySwitchEvents and AddSubtree;
+    NiPointers made from raw keys (the placement plan's roots, the candidates' held entries); the engine's
+    DetermineUtilityShaderDecl; the membership witness sampled by both the render thread and the lane; LightLimitFix's room map read
+    while the render thread swaps it. Now:
+    - the record's palette rows are the skin data's bone count (the engine's update copies it into numMatrices; FrameValues runs that
+      update before it samples, and counts a palette of another size);
+    - the catch-ups are the render thread's at ingestion (SceneStore::CatchUpSwitches): every switch event whose selection changed,
+      every switch under an attached subtree, each reached from Main::WorldRootNode (a subtree a loader still assembles is not
+      walked), and every switch in the world on the first ingestion after a load (what the rescan's AddSubtree did);
+    - the roots the scene work lists hold a reference taken when first listed (rootOwners); the plan's roots and entries and the
+      candidates' snapshots copy it, and a root no list names is left out, logged;
+    - DetermineUtilityShaderDecl (vtable 0x3D, 0x1414adf00) is ported: a function of the property's flags alone, never 0;
+    - the membership witness is sampled once by the render thread at the frame's start (BeginFrame), the commit and the binds read
+      that copy; the room map is copied by the render thread when its generation moves (PrepareAccumulatePhase);
+    - the fade write-back task finds the stores (node, fade bits, fade) from the frame's tables and holds them with that snapshot;
+      the render thread makes them at the next frame's start (m66: 16-301 milestones a window, 0.7-3.8 us a window), never under a
+      lease.
+    Left for F3/F4 (captured at the hooks): treeObjectOf (a virtual call), GetExtraData("BSX"), the extra list's emittance source,
+    the actor's race and keywords, the property and material owners the accumulate phase takes. y34/y35: sequences 7,404-7,445, set
+    parity 0, every parity as y33 (y34's three fade visibility windows are the intermittent seen in y18-y26; y35 0 in all); m66:
+    waits at the accumulate join only (0.07-0.19 ms/frame), 0 errors.
 
 ## Implemented foundations
 

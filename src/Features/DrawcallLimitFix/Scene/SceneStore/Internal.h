@@ -101,16 +101,13 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief The engine's per-frame palette update (AE FUN_140e4ff90): what the bone setter runs from the
-		 * native draw an owned object no longer gets. Idempotent within a frame (frameID); it copies the current
-		 * palette to the previous one first and writes three float4 rows a bone in absolute world space.
-		 * Render thread only.
+		 * @brief A skin's palette rows: three a bone, as the engine's palette update (AE FUN_140e4ff90, which FrameValues runs) sizes
+		 * it - numMatrices is the skin data's bone count (+0x58), copied by that update.
 		 */
-		inline void UpdateSkin(RE::NiSkinInstance* a_skin, const RE::NiTransform& a_world)
+		inline std::uint32_t SkinRowsOf(const RE::NiSkinInstance& a_skin)
 		{
-			using UpdateSkinInstance = void (*)(RE::NiSkinInstance*, const RE::NiTransform*);
-			static const REL::Relocation<UpdateSkinInstance> updateSkinInstance{ REL::Offset(0xe4ff90) };
-			updateSkinInstance(a_skin, &a_world);
+			const auto* data = a_skin.skinData.get();
+			return data ? data->GetBoneCount() * 3 : 0u;
 		}
 
 		/**

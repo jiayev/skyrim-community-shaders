@@ -640,19 +640,16 @@ namespace DCLF
 			object.flags |= kObjectAlphaTest | (static_cast<std::uint32_t>(sceneAlpha->alphaThreshold) << kObjectAlphaThresholdShift) |
 			                (sceneAlpha->GetAlphaBlending() ? kObjectAlphaBlended : 0u);
 
-		// Skinning: the engine's own palette, whose rows FrameValues samples. Its per-frame update (AE FUN_140e4ff90) is what the
-		// bone setter runs from the native draw this object no longer gets; it is idempotent within a frame (frameID, under the
-		// skin's critical section) and sizes the palette, which the block is placed by.
+		// Skinning: the engine's own palette, whose rows FrameValues samples after running the engine's per-frame update (AE
+		// FUN_140e4ff90) itself - what the bone setter runs from the native draw this object no longer gets. That update sizes the
+		// palette from the skin data's bone count (numMatrices = skinData +0x58), so the block is placed by the bone count here
+		// (step 6e F1: the scene work runs no engine code). A palette that is not that size is FrameValues' defect, counted.
 		std::uint32_t objectBoneRows = 0;
 		if (auto* skin = data.skinInstance.get(); skin && ActiveToggles().skinned) {
 			timer.Add(BuildPart::Record);
-			if (trackedEntry->skinUpdatedFrame != frame) {
-				UpdateSkin(skin, geometry->world);
-				trackedEntry->skinUpdatedFrame = frame;
-			}
 			skinnedObjects.push_back(geometry);
-			const std::uint32_t rows = skin->numMatrices * 3;
-			if (rows && skin->boneMatrices && skin->prevBoneMatrices && rows <= 240) {
+			const std::uint32_t rows = SkinRowsOf(*skin);
+			if (rows && rows <= 240) {
 				objectBoneRows = rows;
 				object.flags |= kObjectSkinned;
 				++stats.skinned;
@@ -1127,9 +1124,9 @@ namespace DCLF
 		const std::uint32_t slot = a_tracked.slot;
 		if (!skin || !ActiveToggles().skinned || !(tables.objects[slot].flags & kObjectSkinned))
 			return false;
-		// The size the engine's last palette update gave it; the job checks it again after this frame's.
-		const std::uint32_t rows = skin->numMatrices * 3;
-		if (!rows || !skin->boneMatrices || !skin->prevBoneMatrices || rows > 240 || rows != tables.boneRows[slot])
+		// The size the engine's palette update gives it (the skin data's bone count); FrameValues checks it after this frame's.
+		const std::uint32_t rows = SkinRowsOf(*skin);
+		if (!rows || rows > 240 || rows != tables.boneRows[slot])
 			return false;
 		skinnedObjects.push_back(a_geometry);
 		++stats.lightSkins;
@@ -1328,6 +1325,7 @@ namespace DCLF
 			if (lightCandidateSet.contains(a_tracked.lightRoot))
 				++lightCandidatesGeneration;
 			Unlist(lightDependents, a_tracked.lightRoot, a_geometry);
+			ReleaseRootOwner(a_tracked.lightRoot);
 			a_tracked.lightRoot = nullptr;
 		}
 		if (a_root && a_tracked.listedRoot) {
@@ -1344,8 +1342,43 @@ namespace DCLF
 					rootReference.erase(reference);
 				}
 			}
+			ReleaseRootOwner(a_tracked.listedRoot);
 			a_tracked.listedRoot = nullptr;
 		}
+	}
+
+	void SceneStore::OwnRoot(const RE::NiAVObject* a_root)
+	{
+		if (auto& owner = rootOwners[a_root]; !owner)
+			owner.reset(const_cast<RE::NiAVObject*>(a_root));
+	}
+
+	void SceneStore::ReleaseRootOwner(const RE::NiAVObject* a_root)
+	{
+		if (!a_root || rootDependents.contains(a_root) || lightDependents.contains(a_root))
+			return;
+		if (const auto it = rootOwners.find(a_root); it != rootOwners.end()) {
+			HandBack(std::move(it->second));
+			rootOwners.erase(it);
+		}
+	}
+
+	void SceneStore::ReleaseRootOwners()
+	{
+		for (auto& [root, owner] : rootOwners)
+			HandBack(std::move(owner));
+		rootOwners.clear();
+	}
+
+	RE::NiPointer<RE::NiAVObject> SceneStore::OwnedRoot(const RE::NiAVObject* a_root)
+	{
+		if (!a_root)
+			return nullptr;
+		if (const auto it = rootOwners.find(a_root); it != rootOwners.end())
+			return it->second;
+		if (unownedRoots++ == 0)
+			logger::error("[DCLF] a root no dependents list names was handed out (step 6e F1: its reference would be made from a key); left out");
+		return nullptr;
 	}
 
 	void SceneStore::Reclassify(RE::BSGeometry* a_geometry, Tracked& a_tracked)

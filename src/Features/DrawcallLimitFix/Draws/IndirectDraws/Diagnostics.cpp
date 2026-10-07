@@ -97,10 +97,12 @@ namespace DCLF
 		if (impl->scene && impl->scene->fadeWriteBack) {
 			auto& writeBack = *impl->scene->fadeWriteBack;
 			const auto applied = writeBack.applied.exchange(0), stale = writeBack.stale.exchange(0), busy = writeBack.busy.exchange(0);
+			const auto storeNs = writeBack.storeNs.exchange(0);
 			if (applied || stale || busy)
-				text += fmt::format("[DCLF] fade write-back (6e S4): {} milestones written onto stood-in roots' nodes, {} stale (the root listed again or no "
-									"longer stood in), {} frames found the last task still running (their batches its or the next's); event list {} events\n",
-					applied, stale, busy, writeBack.capacity.load(std::memory_order_relaxed));
+				text += fmt::format("[DCLF] fade write-back (6e S4, F1): {} milestones written onto stood-in roots' nodes by the render thread at the frame's "
+									"start ({:.1f} us in all), {} stale (the root listed again or no longer stood in), {} frames found the last task still running "
+									"(their batches its or the next's); event list {} events\n",
+					applied, static_cast<double>(storeNs) / 1000.0, stale, busy, writeBack.capacity.load(std::memory_order_relaxed));
 		}
 		text += ReflectionReport();
 		if (impl->scene && impl->scene->treeLodCull && impl->scene->treeLodUploads) {

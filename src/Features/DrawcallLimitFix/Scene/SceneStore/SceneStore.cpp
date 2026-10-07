@@ -41,6 +41,7 @@ namespace DCLF
 		propertyDependents.clear();
 		rootDependents.clear();
 		lightDependents.clear();
+		ReleaseRootOwners();
 		rootReference.clear();
 		referenceRoot.clear();
 		rootMotion.clear();
