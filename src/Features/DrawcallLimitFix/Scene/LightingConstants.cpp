@@ -273,10 +273,6 @@ namespace DCLF
 	{
 		const auto& object = a_tables.objects[a_objectIndex];
 
-		std::memcpy(a_out.world, object.world, sizeof(a_out.world));
-		// Render flag 0x10: the previous transform is the current one (engine notes: SetupGeometry).
-		std::memcpy(a_out.previousWorld, (a_renderFlags & 0x10) ? object.world : object.previousWorld, sizeof(a_out.previousWorld));
-
 		// The shading half is ObjectShading's own layout, except that an unwritten component packs as zero
 		// the way PackConstantGroup and PatchObjectGeometry make it. The sweep stops at ObjectShading on
 		// purpose: the tail below carries no unwritten sentinel, and 0 is a legal value in all four of its
@@ -317,15 +313,22 @@ namespace DCLF
 		const auto wetness = a_objectIndex < a_tables.skinWetness.size() ? a_tables.skinWetness[a_objectIndex] : std::array<float, 4>{};
 		std::memcpy(a_out.skinPerGeometry, wetness.data(), sizeof(a_out.skinPerGeometry));
 		// The LOD fades the pass draws with (MakeShading's rule: MaterialData.x for the Envmap technique, .y and SSRParams.w
-		// with Specular), faded by the draw when the object has a fade node.
-		const auto& node = a_objectIndex < a_tables.lodFade.size() ? a_tables.lodFade[a_objectIndex] : std::array<float, 4>{ 0.0f, 0.0f, 0.0f, -1.0f };
+		// with Specular), faded by the draw while the object's fade node has them apply (its placement row's).
 		std::uint32_t fades = 0;
-		if (LodFadesApply(node) && !(object.flags & kObjectNoBindings) && object.pipelineIndex < a_tables.pipelines.size()) {
+		if (!(object.flags & kObjectNoBindings) && object.pipelineIndex < a_tables.pipelines.size()) {
 			const std::uint32_t pass = a_tables.pipelines[object.pipelineIndex].passDescriptor;
 			fades = ((pass & 0x200u) ? kLodFadeSpecular | ((a_renderFlags & 2) ? 0u : kLodFadeSsr) : 0u) | (((pass >> 24) & 0x3f) == 1 ? kLodFadeEnvmap : 0u);
 		}
-		std::memcpy(a_out.lodFadeNode, node.data(), sizeof(a_out.lodFadeNode));
-		a_out.lodFadeFlags = fades ? fades | (static_cast<std::uint32_t>(node[3]) & kLodFadeTypeMask) : 0u;
+		a_out.lodFades = fades;
+		a_out.padding[0] = a_out.padding[1] = a_out.padding[2] = 0u;
+	}
+
+	void BuildPlacementRow(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, std::uint32_t a_renderFlags, BindlessPlacement& a_out)
+	{
+		const auto& object = a_tables.objects[a_objectIndex];
+		std::memcpy(a_out.world, object.world, sizeof(a_out.world));
+		// Render flag 0x10: the previous transform is the current one (engine notes: SetupGeometry).
+		std::memcpy(a_out.previousWorld, (a_renderFlags & 0x10) ? object.world : object.previousWorld, sizeof(a_out.previousWorld));
 		a_out.bound[0] = object.boundCenter[0];
 		a_out.bound[1] = object.boundCenter[1];
 		a_out.bound[2] = object.boundCenter[2];
@@ -337,6 +340,8 @@ namespace DCLF
 			a_out.sunEntry[0] = a_out.sunEntry[1] = a_out.sunEntry[2] = 0.0f;
 			a_out.sunEntry[3] = std::numeric_limits<float>::max();
 		}
+		const auto& node = a_objectIndex < a_tables.lodFade.size() ? a_tables.lodFade[a_objectIndex] : std::array<float, 4>{ 0.0f, 0.0f, 0.0f, -1.0f };
+		std::memcpy(a_out.lodFadeNode, node.data(), sizeof(a_out.lodFadeNode));
 	}
 
 	std::uint32_t PackedPositionOf(const StageLayout& a_layout, std::span<const std::uint8_t> a_table, std::uint64_t a_variables, std::uint32_t a_firstVariable,

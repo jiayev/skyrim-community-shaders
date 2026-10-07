@@ -191,19 +191,19 @@ cbuffer VS_PerFrame : register(b12)
 };
 
 #if defined(DCLF_BINDLESS)
-// The record holds World and PreviousWorld absolute, so one record serves every epoch and every camera;
+// The placement holds World and PreviousWorld absolute, so one row serves every epoch and every camera;
 // the vertex stage makes them relative to this epoch's eye and previous eye, the subtraction the engine
 // does on the CPU for its own draws. `precise` keeps it the same single float subtraction (so the depth
 // and colour epochs, and the native draws, agree to the bit) rather than something folded into the
 // transform that follows.
 #	define DCLF_VS_WORLD float3x4(                                         \
-		DCLFObjects[DCLFObjectIndex].World[0] - float4(0, 0, 0, BonesPivot.x), \
-		DCLFObjects[DCLFObjectIndex].World[1] - float4(0, 0, 0, BonesPivot.y), \
-		DCLFObjects[DCLFObjectIndex].World[2] - float4(0, 0, 0, BonesPivot.z))
+		DCLFPlacements[DCLFObjectIndex].World[0] - float4(0, 0, 0, BonesPivot.x), \
+		DCLFPlacements[DCLFObjectIndex].World[1] - float4(0, 0, 0, BonesPivot.y), \
+		DCLFPlacements[DCLFObjectIndex].World[2] - float4(0, 0, 0, BonesPivot.z))
 #	define DCLF_VS_PREVIOUS_WORLD float3x4(                                                 \
-		DCLFObjects[DCLFObjectIndex].PreviousWorld[0] - float4(0, 0, 0, PreviousBonesPivot.x), \
-		DCLFObjects[DCLFObjectIndex].PreviousWorld[1] - float4(0, 0, 0, PreviousBonesPivot.y), \
-		DCLFObjects[DCLFObjectIndex].PreviousWorld[2] - float4(0, 0, 0, PreviousBonesPivot.z))
+		DCLFPlacements[DCLFObjectIndex].PreviousWorld[0] - float4(0, 0, 0, PreviousBonesPivot.x), \
+		DCLFPlacements[DCLFObjectIndex].PreviousWorld[1] - float4(0, 0, 0, PreviousBonesPivot.y), \
+		DCLFPlacements[DCLFObjectIndex].PreviousWorld[2] - float4(0, 0, 0, PreviousBonesPivot.z))
 // Tree animation is per object for the same reason World is: with DCLF_BINDLESS the PerGeometry
 // buffer is one block for the whole pipeline, and a tree's wind amplitude and clock are its own.
 // Likewise the landscape blend parameters (MTLand) and the ProjectedUV texture matrix, from the object's
@@ -867,8 +867,8 @@ float DCLFLodFadeAt(float a_metric, float a_start, float a_end)
 		return 1;
 	return saturate((a_metric - a_end) / (a_start - a_end));
 }
-#	define DCLF_PS_LOD_FADES (DCLFLodFadeState.x != 0 ? DCLFObjects[DCLFObjectIndex].DCLFLodFadeFlags : 0)
-#	define DCLF_PS_LOD_METRIC (DCLFLodFades ? DCLFLodMetric(DCLFObjects[DCLFObjectIndex].DCLFLodFadeNode, DCLFLodFades & 0xF) : 0)
+#	define DCLF_PS_LOD_FADES (DCLFLodFadeState.x != 0 ? DCLFLodFadeFlagsOf(DCLFObjectIndex) : 0)
+#	define DCLF_PS_LOD_METRIC (DCLFLodFades ? DCLFLodMetric(DCLFPlacements[DCLFObjectIndex].LodFadeNode.xyz, DCLFLodFades & 0xF) : 0)
 #	define DCLF_PS_SPECULAR_LOD_FADE DCLFLodFadeAt(DCLFLodMetricValue, DCLFLodFadeThresholds.x, DCLFLodFadeThresholds.y)
 #	define DCLF_PS_MATERIAL_DATA float4(                                                                                                                 \
 		(DCLFLodFades & (1u << 5)) ? DCLFLodFadeAt(DCLFLodMetricValue, DCLFLodFadeThresholds.z, DCLFLodFadeThresholds.w) : DCLFObjects[DCLFObjectIndex].MaterialData.x, \

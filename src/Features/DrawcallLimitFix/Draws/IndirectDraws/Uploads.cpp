@@ -134,12 +134,13 @@ namespace DCLF
 		job.from = sceneBuffers.held;
 		job.tablesGeneration = store.GetTablesGeneration();
 		job.sceneGeneration = sceneBuffers.generation;
-		job.objects = job.bones = 0;
+		job.objects = job.bones = job.placements = 0;
 		job.staged = false;
 		job.batch = AcquireStagedBatch(job.pool);
 		++job.kicked;
 		const rhi::Device device = RecordingDevice();
 		job.handle = AsyncWorker::Get().Submit("streams", [result = &job, batch = job.batch, objectsBuffer = sceneBuffers.objects->Get(), bonesBuffer = sceneBuffers.bones->Get(),
+															placementsBuffer = sceneBuffers.placements->Get(), placementStore = ScenePlacements(),
 															objectCapacity = sceneBuffers.objectCapacity, boneRows = sceneBuffers.boneRows, boneRegion = sceneBuffers.boneRegion,
 															tables = &tables, objects = SceneObjects(),
 															bonesStore = SceneBones(), from = job.from, generation = job.tablesGeneration, frame = store.GetFrame(), device](std::stop_token) {
@@ -147,13 +148,18 @@ namespace DCLF
 			using org::runtime::UploadTarget;
 			ObjectRecordsOut records;
 			UpdateObjectRecords(objects, from.objects, *tables, generation, frame, boneRegion, records);
+			PlacementRowsOut placements;
+			UpdatePlacements(placementStore, from.placements, *tables, generation, frame, placements);
 			BonesOut bones;
 			UpdateBones(bonesStore, from.bones, *tables, generation, boneRegion, bones);
 			// Past a buffer (its growth outstanding): the commit's own update sends what fits.
-			if (records.Count() > objectCapacity || bones.Rows() > boneRows)
+			if (records.Count() > objectCapacity || placements.Count() > objectCapacity || bones.Rows() > boneRows)
 				return;
 			records.Emit(from.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 				batch->Stage(UploadTarget::FromShared(objectsBuffer), a_offset, a_data, a_bytes);
+			});
+			placements.Emit(from.placements, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+				batch->Stage(UploadTarget::FromShared(placementsBuffer), a_offset, a_data, a_bytes);
 			});
 			EmitBones(bones, from.bones, nullptr, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 				batch->Stage(UploadTarget::FromShared(bonesBuffer), a_offset, a_data, a_bytes);
@@ -161,6 +167,7 @@ namespace DCLF
 			if (device && !batch->Entries().empty())
 				batch->Record(device);
 			result->objects = records.Version();
+			result->placements = placements.Version();
 			result->bones = bones.Version();
 			result->staged = true;
 		});
@@ -189,13 +196,16 @@ namespace DCLF
 			const auto joined = JoinJob(job.handle);
 			job.handle = {};
 			if (joined == AsyncWorker::WaitResult::Done && job.staged && job.scene == &a_scene && a_scene.held.objects == job.from.objects &&
-				a_scene.held.bones == job.from.bones && job.tablesGeneration == a_generation && job.sceneGeneration == a_scene.generation) {
+				a_scene.held.bones == job.from.bones && a_scene.held.placements == job.from.placements && job.tablesGeneration == a_generation &&
+				job.sceneGeneration == a_scene.generation) {
 				if (!job.batch->Entries().empty())
 					SubmitWorkerBatch(std::move(job.batch));
 				if (job.objects)
 					a_scene.held.objects = job.objects;
 				if (job.bones)
 					a_scene.held.bones = job.bones;
+				if (job.placements)
+					a_scene.held.placements = job.placements;
 				++job.used;
 			} else {
 				++job.dropped;
@@ -214,6 +224,13 @@ namespace DCLF
 		}, a_scene.objectCapacity);
 		if (objects.Version() && objects.Count() <= a_scene.objectCapacity)
 			a_scene.held.objects = objects.Version();
+		PlacementRowsOut placements;
+		UpdatePlacements(ScenePlacements(), a_scene.held.placements, a_tables, a_generation, a_frame, placements);
+		sent.placementBytes = placements.Emit(a_scene.held.placements, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+			a_uploads(a_scene.placements, a_data, a_bytes, a_offset);
+		}, a_scene.objectCapacity);
+		if (placements.Version() && placements.Count() <= a_scene.objectCapacity)
+			a_scene.held.placements = placements.Version();
 		BonesOut bones;
 		UpdateBones(SceneBones(), a_scene.held.bones, a_tables, a_generation, a_scene.boneRegion, bones);
 		sent.boneRows = bones.Rows();
@@ -457,6 +474,7 @@ namespace DCLF
 				frameRecord.textures[t] = frameTextures[t] == kInvalidIndex ? nullIndex : frameTextures[t];
 			frameRecord.textures[kObjectBufferRegister] = in.addresses.objectsIndex;
 			frameRecord.textures[kBonesBufferRegister] = in.addresses.bonesIndex;
+			frameRecord.textures[kPlacementBufferRegister] = in.addresses.placementsIndex;
 			frameRecord.textures[kTreeWindRegister] = in.addresses.treeWindIndex;
 			latched(a_resources->frameConstants, &frameRecord, sizeof(frameRecord), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
 		}

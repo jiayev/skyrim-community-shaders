@@ -956,6 +956,24 @@ persistent and walk parity).
   (placements, sun entries, LOD fade and palettes first), so the frame stops writing what the walk owns; then the structural
   tables' frame readers move into the chain.
 
+**FrameValues, step 2a: placements leave the object records** (2026-10-06; bridge pl1 with set, resident-draw, persistent and
+walk parity).
+- *Split.* `BindlessObject` keeps the object's structure (shading, room, alpha, tree, skin offsets, wetness, and `lodFades`: the
+  fades its pipeline allows), 256 -> 128 B. The placement is a row of its own, `BindlessPlacement` (144 B: world, previous world,
+  bound, sun entry, fade node with its LOD type and held flag in w), in its own buffer by object slot (`SceneBuffers::placements`,
+  grown with the records; t123 in both stages, from the frame record like t124-t127). The draw's LOD fade word is made in the
+  shader (`DCLFLodFadeFlagsOf`: the record's fades while the row's node has them apply, with its type), exactly as
+  `BuildObjectRecord` made it. BuildDrawsCS and FadeStateCS read only placement rows (`placementsIndex`).
+- *Kept.* `PlacementStore` keeps the rows from the change log's `kChangePlacement` (kPlacementRowCauses) and the streams upload
+  its runs beside the records'; `kChangePlacement` no longer rewrites a record.
+- *Measured* (pl1): 7,457 sequences, no constants skips, set parity clean, resident draws 0 differ; records 0 differ (8.8
+  rewritten an update), placement rows 0 differ (84.4 rewritten an update: the movers, now 144 B each instead of 256 B records);
+  walk parity as in par1 (the 665 stale verdicts and 10 records noted there).
+- *Next* (2b): the rows from a FrameValues producer on the pool, into a ring of per-frame buffers sent on the dedicated copy
+  queue, which signals frame N's value of a FrameValues timeline that every epoch of frame N waits on at submission (ORG:
+  signal entries on `CopyQueueUploadService`, a host frame-wait timeline in `SubmitPersistentTicket`); the walk stops writing
+  placement columns and the placement join goes.
+
 ## Implemented foundations
 
 - `ORGModuleServices::AsyncPrimitives` is a backend-independent header-only target.

@@ -839,9 +839,10 @@ namespace DCLF
 			}
 		}
 		// The other direction: what the view draws that covers most of the map at the light's near plane (a caster in front of
-		// everything), and anything drawn whose world transform is far from its own bound. From the records the GPU reads.
+		// everything), and anything drawn whose world transform is far from its own bound. From the rows the GPU reads.
 		{
 			const auto& records = objectStore.records.Get();
+			const auto& placements = placementStore.rows.Get();
 			const auto& tablesNow = SceneStore::Get().GetTables();
 			ankerl::unordered_dense::set<const RE::BSGeometry*> reached;
 			for (const auto& registration : registrations)
@@ -858,12 +859,12 @@ namespace DCLF
 			std::string farFirst, staleFirst;
 			a_payload.ForEachInput(a_view.modeIndex, [&](const DrawInput& a_input) {
 				const std::uint32_t object = a_input.objectIndex;
-				if (object >= records.size() || (a_input.flags & kObjectVolumetricOnly) || OutsideSunEntry(a_payload.inputs, tablesNow, object))
+				if (object >= placements.size() || (a_input.flags & kObjectVolumetricOnly) || OutsideSunEntry(a_payload.inputs, tablesNow, object))
 					return;
-				const auto& record = records[object];
+				const auto& placement = placements[object];
 				RE::NiBound bound;
-				bound.center = { record.bound[0], record.bound[1], record.bound[2] };
-				bound.radius = record.bound[3];
+				bound.center = { placement.bound[0], placement.bound[1], placement.bound[2] };
+				bound.radius = placement.bound[3];
 				if (CulledByLatch(a_latch, bound))
 					return;
 				++drawn;
@@ -880,12 +881,12 @@ namespace DCLF
 								static_cast<const void*>(triShape->vertexBuffer), static_cast<const void*>(triShape->indexBuffer));
 					}
 				}
-				const float dx = record.world[3] - bound.center.x, dy = record.world[7] - bound.center.y, dz = record.world[11] - bound.center.z;
+				const float dx = placement.world[3] - bound.center.x, dy = placement.world[7] - bound.center.y, dz = placement.world[11] - bound.center.z;
 				if (std::sqrt(dx * dx + dy * dy + dz * dz) > 4.0f * bound.radius + 512.0f) {
 					if (farWorld++ == 0) {
 						const auto* geometry = object < tablesNow.objectGeometry.size() ? tablesNow.objectGeometry[object] : nullptr;
 						farFirst = fmt::format("'{}' world at ({:.0f} {:.0f} {:.0f}), bound ({:.0f} {:.0f} {:.0f}) r {:.0f}", geometry && geometry->name.c_str() ? geometry->name.c_str() : "?",
-							record.world[3], record.world[7], record.world[11], bound.center.x, bound.center.y, bound.center.z, bound.radius);
+							placement.world[3], placement.world[7], placement.world[11], bound.center.x, bound.center.y, bound.center.z, bound.radius);
 					}
 				}
 				float minX = 1, maxX = -1, minY = 1, maxY = -1, maxZ = -1e30f;
@@ -912,9 +913,10 @@ namespace DCLF
 				for (std::size_t i = 0; i < covers.size() && i < 5; ++i) {
 					const auto& c = covers[i];
 					const auto* geometry = c.object < tablesNow.objectGeometry.size() ? tablesNow.objectGeometry[c.object] : nullptr;
-					const auto& r = records[c.object];
+					const auto& r = c.object < records.size() ? records[c.object] : BindlessObject{};
+					const auto& b = placements[c.object].bound;
 					text += fmt::format("; '{}' (object {}) {:.0f}% of the map, depth at most {:.4f}, bound ({:.0f} {:.0f} {:.0f}) r {:.0f}, the engine's ({:.0f} {:.0f} {:.0f}) r {:.0f}, {}",
-						geometry && geometry->name.c_str() ? geometry->name.c_str() : "?", c.object, 100.0f * c.area, c.maxZ, r.bound[0], r.bound[1], r.bound[2], r.bound[3],
+						geometry && geometry->name.c_str() ? geometry->name.c_str() : "?", c.object, 100.0f * c.area, c.maxZ, b[0], b[1], b[2], b[3],
 						geometry ? geometry->worldBound.center.x : 0.0f, geometry ? geometry->worldBound.center.y : 0.0f, geometry ? geometry->worldBound.center.z : 0.0f,
 						geometry ? geometry->worldBound.radius : 0.0f, reached.contains(geometry) ? "the engine's cull reached it" : "the engine's cull did not reach it");
 					{
@@ -1724,17 +1726,17 @@ namespace DCLF
 					if (!sunEntryOffset)
 						sunEntryOffset = WriteSunEntryRegion(latchBlock, latchLayout, latchSlot, payload.inputs.sunEntryProcesses);
 					latch.sunEntryOffset = sunEntryOffset;
-					// CS_DCLF_PERSISTENT_PARITY: the test BuildDraws makes on the object record's entry sphere (the kept records the
+					// CS_DCLF_PERSISTENT_PARITY: the test BuildDraws makes on the placement row's entry sphere (the kept rows the
 					// epoch uploads), against the CPU's verdict from the tables' entry, per input.
 					if (PersistentParityEnabled() && ParityDue(frameNumber)) {
 						const auto& tablesNow = store.GetTables();
-						const auto& records = impl->objectStore.records.Get();
+						const auto& placements = impl->placementStore.rows.Get();
 						for (const auto& input : payload.Flat(view.modeIndex)) {
-							if (input.objectIndex >= records.size())
+							if (input.objectIndex >= placements.size())
 								continue;
 							const bool cpu = OutsideSunEntry(payload.inputs, tablesNow, input.objectIndex);
 							++shadowStats.sunEntryChecks;
-							shadowStats.sunEntryMismatches += cpu != OutsideSunEntryProcesses(payload.inputs.sunEntryProcesses, records[input.objectIndex].sunEntry) ? 1 : 0;
+							shadowStats.sunEntryMismatches += cpu != OutsideSunEntryProcesses(payload.inputs.sunEntryProcesses, placements[input.objectIndex].sunEntry) ? 1 : 0;
 						}
 					}
 				}
@@ -2047,6 +2049,7 @@ namespace DCLF
 		in.addresses.records = a_resources.materialRows.address;
 		in.addresses.objectsIndex = a_resources.scene->objectsIndex;
 		in.addresses.bonesIndex = a_resources.scene->bonesIndex;
+		in.addresses.placementsIndex = a_resources.scene->placementsIndex;
 		in.addresses.treeWindIndex = a_resources.scene->TreeWindReadIndex(a_store.GetFrame());
 		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.scene->facePositionsAddress : 0;
 		in.addresses.recordCapacity = a_resources.materialRows.capacity;

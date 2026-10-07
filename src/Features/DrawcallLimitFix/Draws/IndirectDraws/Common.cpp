@@ -3,7 +3,8 @@
 
 namespace DCLF::Draws
 {
-	void CheckBindlessRecord(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, const BindlessObject& a_record, const RE::NiPoint3& a_eye,
+	void CheckBindlessRecord(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, const BindlessObject& a_record,
+		const BindlessPlacement& a_placement, const RE::NiPoint3& a_eye,
 		const RE::NiPoint3& a_previousEye, const GeometryPatchOffsets& a_offsets, std::span<const std::byte> a_vs, std::span<const std::byte> a_ps,
 		IndirectDraws::Stats& a_stats)
 	{
@@ -23,11 +24,11 @@ namespace DCLF::Draws
 					logger::warn("[DCLF] bindless record parity: {}[{}] is {} in the record and {} in the constant group", a_name, c, a_expected[c], packed);
 			}
 		};
-		// The record is absolute; the shader makes it relative with the same single subtraction as this.
+		// The placement is absolute; the shader makes it relative with the same single subtraction as this.
 		float relative[16] = {};
-		StoreRelativeTo(relative, a_record.world, a_eye);
+		StoreRelativeTo(relative, a_placement.world, a_eye);
 		compare(a_vs, a_offsets.vsWorld, std::min(a_offsets.vsWorldSize, 12u), relative, "World");
-		StoreRelativeTo(relative, a_record.previousWorld, a_previousEye);
+		StoreRelativeTo(relative, a_placement.previousWorld, a_previousEye);
 		compare(a_vs, a_offsets.vsPreviousWorld, std::min(a_offsets.vsPreviousWorldSize, 12u), relative, "PreviousWorld");
 		compare(a_ps, a_offsets.psMaterialData, std::min(a_offsets.psMaterialDataSize, 4u), a_record.shading.materialData, "MaterialData");
 		compare(a_ps, a_offsets.psEmitColor, std::min(a_offsets.psEmitColorSize, 3u), a_record.shading.emitColor, "EmitColor");

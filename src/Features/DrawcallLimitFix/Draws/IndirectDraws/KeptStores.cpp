@@ -121,6 +121,68 @@ namespace DCLF::Draws
 		s.busy.store(0, std::memory_order_release);
 	}
 
+	void UpdatePlacements(PlacementStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation,
+		std::uint32_t a_frame, PlacementRowsOut& a_out)
+	{
+		ZoneScopedN("CS.DCLF.Build.UpdatePlacements");
+		const std::size_t count = a_tables.objects.size();
+		auto build = [&](std::size_t a_slot, BindlessPlacement& a_row) { BuildPlacementRow(a_tables, static_cast<std::uint32_t>(a_slot), SceneStore::kMainPassRenderFlags, a_row); };
+		if (!a_store) {
+			auto rows = std::make_shared<std::vector<BindlessPlacement>>(count);
+			for (std::size_t r = 0; r < count; ++r)
+				build(r, (*rows)[r]);
+			a_out = {};
+			a_out.elements = std::move(rows);
+			return;
+		}
+		auto& s = *a_store;
+		++s.updates;
+		s.rows.BeginBuild(a_uploaded);
+		if (!s.cursor.Continues(a_tables.changeLog, a_generation) || s.rows.Size() > count) {
+			// Every row again: the first build, new tables, or a log this store fell behind.
+			auto& rows = s.rows.Mutable();
+			rows.resize(count);
+			for (std::size_t r = 0; r < count; ++r)
+				build(r, rows[r]);
+			s.rows.Resync();
+			s.cursor.Restart(a_generation);
+			++s.resyncs;
+		} else {
+			// Slots the tables grew by since: rows of their own (the log names them too).
+			if (s.rows.Size() < count) {
+				auto& rows = s.rows.Mutable();
+				const auto first = rows.size();
+				rows.resize(count);
+				for (std::size_t r = first; r < count; ++r) {
+					build(r, rows[r]);
+					s.rows.Mark(r);
+				}
+			}
+			BindlessPlacement fresh;
+			s.changedObjects.Clear();
+			for (const auto& change : s.cursor.Unread(a_tables.changeLog)) {
+				if (!(change.causes & kPlacementRowCauses) || change.slot >= count || (reuseKeptStorage && !s.changedObjects.Add(change.slot)))
+					continue;
+				build(change.slot, fresh);
+				s.rewritten += s.rows.Set(change.slot, fresh) ? 1u : 0u;
+			}
+		}
+		s.cursor.Advance(a_tables.changeLog);
+		// CS_DCLF_PERSISTENT_PARITY: every row against one built from the tables now.
+		if (PersistentParityEnabled() && ParityDue(a_frame)) {
+			BindlessPlacement fresh;
+			const auto& rows = s.rows.Get();
+			for (std::size_t r = 0; r < count; ++r) {
+				build(r, fresh);
+				s.parity.Check(std::memcmp(&fresh, &rows[r], sizeof(fresh)) == 0, [&] {
+					const auto* geometry = r < a_tables.objectGeometry.size() ? a_tables.objectGeometry[r] : nullptr;
+					return fmt::format("placement {} '{}'", r, geometry && geometry->name.c_str() ? geometry->name.c_str() : "?");
+				});
+			}
+		}
+		a_out = s.rows.View();
+	}
+
 	void UpdateGeometryDraws(GeometryStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation,
 		std::uint32_t a_frame, GeometryDrawsOut& a_out)
 	{

@@ -11,10 +11,9 @@
 // multiplier and is included before the point where the block used to sit.
 #if defined(DCLF_BINDLESS)
 
+// The object's structure (LightingConstants.h, BindlessObject); its placement is a row of its own (DCLFPlacement, below).
 struct DCLFObjectRecord
 {
-	float4 World[3];          // row_major float3x4, absolute: the vertex stage subtracts the drawing camera's eye
-	float4 PreviousWorld[3];  // likewise, against the previous eye
 	float4 MaterialData;
 	float4 EmitColor;         // emissive in xyz, the per-object w of SSRParams in w
 	// The values that used to reach the shader as constant buffers of their own: Light Limit Fix's room
@@ -40,14 +39,24 @@ struct DCLFObjectRecord
 	// Advanced Skin's SkinPerGeometry (b7): the owning actor's wetness, zero for everything else. Only read
 	// when DCLF_BINDLESS_DRAW is also defined (Skin.hlsli).
 	float4 DCLFSkinPerGeometry;
-	// The specular and envmap LOD fades, made by the draw from the frame's camera (Lighting.hlsl, DCLFFrameLighting c6-c12):
-	// the fade node's world bound centre, and its LOD type (bits 0-3) and which fades apply (bit 4 specular, 5 envmap, 6
-	// SSRParams.w with specular) in the word; 0 when nothing fades and MaterialData's fades are the property's.
-	float3 DCLFLodFadeNode;
-	uint DCLFLodFadeFlags;
+	// The specular and envmap LOD fades the pass applies (bit 4 specular, 5 envmap, 6 SSRParams.w with specular), made by the
+	// draw from the frame's camera (Lighting.hlsl, DCLFFrameLighting c6-c12) while the placement's fade node has them apply
+	// (DCLFLodFadeFlagsOf).
+	uint DCLFLodFades;
+	uint3 DCLFRecordPadding;
+};
+
+// The object's placement (LightingConstants.h, BindlessPlacement), by the same index: what a move changes.
+struct DCLFPlacement
+{
+	float4 World[3];          // row_major float3x4, absolute: the vertex stage subtracts the drawing camera's eye
+	float4 PreviousWorld[3];  // likewise, against the previous eye
 	// The culling's (BuildDrawsCS): the world bound (centre, radius), and the sun entry's sphere.
-	float4 DCLFBound;
-	float4 DCLFSunEntry;
+	float4 Bound;
+	float4 SunEntry;
+	// The fade node's world bound centre, and in w its LOD type plus 16 (kLodFadeHeld) when its LOD fades do not apply; w < 0
+	// without one.
+	float4 LodFadeNode;
 };
 
 #	if defined(DCLF_PULLED)
@@ -90,6 +99,8 @@ static const bool DCLFSunMiss = (DCLFObjectWord & 0x80000000u) != 0;
 // The object rows, by the draw's object index. Read as a structured buffer: reading the row as a constant buffer at its
 // address (a per-draw push address) measured no faster on NVIDIA (dclf-architecture.md, "Object rows").
 StructuredBuffer<DCLFObjectRecord> DCLFObjects : register(t127);
+// The placement rows, by the same index (IndirectDraws: kPlacementBufferRegister).
+StructuredBuffer<DCLFPlacement> DCLFPlacements : register(t123);
 // The epoch's row buffer (IndirectDraws: kBonesBufferRegister): every skinned object's bone palette
 // rows end to end, current then previous, and after them the per-object extras rows (DCLFExtraOffset).
 StructuredBuffer<float4> DCLFBones : register(t126);
@@ -196,6 +207,15 @@ float3x3 DCLFRowFloat3x3(uint64_t a_row, uint a_offset)
 }
 #	endif  // DCLF_PULLED
 static const uint kDCLFNodelessTree = 0xFFFFFFFEu;
+
+// The draw's LOD fade word (LightingDescriptors.h): its fade node's LOD type (bits 0-3) and the fades its pass applies, while
+// the node has them apply (LodFadesApply); 0 when nothing fades and MaterialData's fades are the property's.
+uint DCLFLodFadeFlagsOf(uint a_object)
+{
+	const uint fades = DCLFObjects[a_object].DCLFLodFades;
+	const float node = DCLFPlacements[a_object].LodFadeNode.w;
+	return fades != 0 && node >= 0.0f && node < 16.0f ? fades | (uint(node) & 0xFu) : 0u;
+}
 
 bool DCLFTreeWindEntry(uint a_object, out uint a_entry)
 {

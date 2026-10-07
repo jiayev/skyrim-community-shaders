@@ -647,6 +647,7 @@ namespace DCLF
 		in.addresses.frameConstants = a_resources.frameConstantsAddress;
 		in.addresses.objectsIndex = a_resources.scene->objectsIndex;
 		in.addresses.bonesIndex = a_resources.scene->bonesIndex;
+		in.addresses.placementsIndex = a_resources.scene->placementsIndex;
 		in.addresses.treeWindIndex = a_resources.scene->TreeWindReadIndex(a_store.GetFrame());
 		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.scene->facePositionsAddress : 0;
 		in.addresses.fit = SceneFitOf(*a_resources.scene, a_resources.objectCapacity);

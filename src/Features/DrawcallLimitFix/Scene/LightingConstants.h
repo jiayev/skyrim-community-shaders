@@ -171,16 +171,12 @@ namespace DCLF
 
 	/**
 	 * @brief One object's entry in the per-object record table the DCLF_BINDLESS builds read
-	 * (DCLFObjectRecord in Lighting.hlsl): the five PerGeometry variables that are not per-pipeline.
-	 *
-	 * The two transforms are stored the way the VS constant buffer stores them, eye-relative and
-	 * row-major, and the shading half is ObjectShading unchanged, which is why they can be copied
-	 * straight through.
+	 * (DCLFObjectRecord in Common/DCLFObjects.hlsli): what is the object's and changes with its structure (shading, bindings,
+	 * skin, tree), not with its placement. The placement is the frame's, in a row of its own (BindlessPlacement), so a move
+	 * rewrites no record. The shading half is ObjectShading unchanged, which is why it can be copied straight through.
 	 */
 	struct BindlessObject
 	{
-		float world[12];
-		float previousWorld[12];
 		ObjectShading shading;  // MaterialData, EmitColor, and SSRParams.w in the last float
 		// The values the native shaders read from constant buffers of their own, which would make the binding
 		// record per-object: Light Limit Fix's room index (PS b3; its shadow bit mask is the draw's object word), the alpha
@@ -206,36 +202,49 @@ namespace DCLF
 		// Advanced Skin's SkinPerGeometry (PS b7): the owning actor's wetness (SceneStore::Tables::skinWetness),
 		// zero for everything else. Per object like the rest, so the binding record stays per (material, pipeline).
 		float skinPerGeometry[4];
-		// The specular and envmap LOD fades, made by the draw from the frame's camera (LodFadeFrame): the fade node's world
-		// bound centre, and in the word its LOD type and which fades it applies (kLodFadeTypeMask, kLodFadeSpecular, ...);
-		// 0 when nothing fades, and MaterialData's fades are the property's.
-		float lodFadeNode[3];
-		std::uint32_t lodFadeFlags;
-		// The culling's (BuildDrawsCS): the world bound (centre, radius) and the sun entry's sphere (SceneStore::Tables::sunEntry;
-		// radius +max when it has none, inside every process). A move rewrites the record, not the draw inputs, which carry
-		// no placement (drawcall-limit-fix.md, "Placements in the object record").
-		float bound[4];
-		float sunEntry[4];
+		// The specular and envmap LOD fades the pass applies (kLodFadeSpecular, kLodFadeEnvmap, kLodFadeSsr): its pipeline's.
+		// The draw applies them, from the frame's camera (LodFadeFrame), only while the placement's fade node has them apply
+		// (BindlessPlacement::lodFadeNode, LodFadesApply), with that node's LOD type; else MaterialData's fades are the property's.
+		std::uint32_t lodFades;
+		std::uint32_t padding[3];
 	};
-	static_assert(sizeof(BindlessObject) == 256);
+	static_assert(sizeof(BindlessObject) == 128);
 	// BindlessObject::recordFlags (DCLFObjects.hlsli, DCLFRecordFlags): Subsurface Scattering's IsBeastRace (kObjectBeastRace).
 	inline constexpr std::uint32_t kRecordBeastRace = 1u << 0;
 	// ... and an alpha-tested object whose alpha property blends (kObjectAlphaBlended): the depth pass's reference (Utility.hlsl).
 	inline constexpr std::uint32_t kRecordAlphaBlended = 1u << 1;
-	// BuildDrawsCS.hlsl reads these by their float4 index in the record (kObjectFadeNodeRow, kObjectBoundRow, kObjectSunEntryRow).
-	static_assert(offsetof(BindlessObject, lodFadeNode) == 13 * 16 && offsetof(BindlessObject, bound) == 14 * 16 && offsetof(BindlessObject, sunEntry) == 15 * 16);
 
 	/**
-	 * @brief Fills one, from the same inputs PatchObjectGeometry writes into a packed group. World and
-	 * PreviousWorld are absolute: the shaders subtract the drawing camera's eye (VS_PerFrame c40/c41), so
-	 * one record serves every epoch and every camera.
+	 * @brief One object's placement (DCLFPlacement in Common/DCLFObjects.hlsli, VS and PS t123): what a move changes, by object
+	 * slot like the records. World and PreviousWorld are absolute: the shaders subtract the drawing camera's eye (VS_PerFrame
+	 * c40/c41), so one row serves every epoch and every camera.
 	 */
+	struct BindlessPlacement
+	{
+		float world[12];
+		float previousWorld[12];
+		// The culling's (BuildDrawsCS): the world bound (centre, radius) and the sun entry's sphere (SceneStore::Tables::sunEntry;
+		// radius +max when it has none, inside every process).
+		float bound[4];
+		float sunEntry[4];
+		// The fade node (LodFadeNodeOf): its world bound centre, and in w its LOD type plus kLodFadeHeld when the LOD fades do not
+		// apply; w < 0 without one. The fade-out tests' centre (BuildDrawsCS, FadeStateCS) and the draw's LOD fades' (Lighting.hlsl).
+		float lodFadeNode[4];
+	};
+	static_assert(sizeof(BindlessPlacement) == 144);
+	// BuildDrawsCS.hlsl and FadeStateCS.hlsl read these by their float4 index in the row (kPlacementBoundRow, kPlacementSunEntryRow,
+	// kPlacementFadeNodeRow).
+	static_assert(offsetof(BindlessPlacement, bound) == 6 * 16 && offsetof(BindlessPlacement, sunEntry) == 7 * 16 && offsetof(BindlessPlacement, lodFadeNode) == 8 * 16);
+
 	/**
+	 * @brief Fills one, from the same inputs PatchObjectGeometry writes into a packed group.
 	 * a_boneRegion: the bone rows' layout the record addresses (the buffer's: SceneSizing::boneRegion), its previous palette and
 	 * extras past it; ~0u: the tables' own capacity.
 	 */
 	void BuildObjectRecord(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, std::uint32_t a_renderFlags, BindlessObject& a_out,
 		std::uint32_t a_boneRegion = ~0u);
+	/** @brief Fills an object's placement row from the tables (render flag 0x10: the previous transform is the current one). */
+	void BuildPlacementRow(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, std::uint32_t a_renderFlags, BindlessPlacement& a_out);
 
 	/** @brief World made relative to an eye the way the engine does it (and the shaders do for a record). */
 	void StoreRelativeTo(float* a_out, const float (&a_world)[12], const RE::NiPoint3& a_eye);

@@ -156,7 +156,10 @@ namespace DCLF
 	static_assert(sizeof(LodFadeFrame) == 128);
 	/** @brief This frame's, from the main camera and the engine's settings. Render thread. */
 	LodFadeFrame SampleLodFadeFrame();
-	/** @brief The object row's LOD fade word (BindlessObject::lodFadeFlags): the fade node's LOD type, and the fades the draw applies. */
+	/**
+	 * @brief The draw's LOD fade word (DCLFLodFadeFlagsOf in Common/DCLFObjects.hlsli): the fade node's LOD type (its placement row's), and the
+	 * fades the draw applies (the record's, BindlessObject::lodFades, while the node has them apply).
+	 */
 	inline constexpr std::uint32_t kLodFadeTypeMask = 0xFu;
 	inline constexpr std::uint32_t kLodFadeSpecular = 1u << 4;  // MaterialData.y, and SSRParams.w with kLodFadeSsr
 	inline constexpr std::uint32_t kLodFadeEnvmap = 1u << 5;    // MaterialData.x
