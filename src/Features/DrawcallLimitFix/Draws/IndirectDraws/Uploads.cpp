@@ -158,7 +158,7 @@ namespace DCLF
 
 	bool IndirectDraws::Impl::CommitMainPayload(const Capture& a_capture, const FrameBlocks& a_blocks, const MainInputs& a_frame, MainPayload& a_payload,
 		const std::shared_ptr<Resources>& a_resources, SceneStore& a_store, IndirectDraws::Stats& a_stats,
-		std::vector<std::shared_ptr<const void>>& a_bindingOwners)
+		std::vector<std::shared_ptr<const void>>& a_bindingOwners, const EpochRevision& a_revision)
 	{
 		ZoneScopedN("CS.DCLF.CommitMainPayload");
 		// The cleared geometry slots' buffers, held until this execution retires (SceneStore::TakeRetiredImports).
@@ -180,23 +180,15 @@ namespace DCLF
 		auto& mirror = ConstantMirror::Get();
 		const bool replayVertexInputs = !depthOnly && prepassInputs;
 		CommitUploads uploads(commitStagedPool);
-		// What the segment's shape is made of that this commit fixes before writing anything (MakeMainShape): the pipeline set,
-		// the Z-prepass's buckets (PlanZBuckets) and the latched copies' layout (MainLatchedLayout), its block reserved to hold it.
-		const std::size_t latchedShape = a_payload.inputs.depthOnly ? kDepthShape : kColourShape;
-		const auto indirect = GetIndirectState();
-		auto& zPlan = zBucketPlan;
-		zPlan = {};
-		if (depthOnly && a_resources->pool)
-			PlanZBuckets(*a_resources, a_store.GetLookups(), tables, indirect, zPlan);
-		FrameBlockSizes blockSizes;
-		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
-			blockSizes.vs[slot] = static_cast<std::uint32_t>(a_blocks.vs[slot].size());
-			blockSizes.ps[slot] = static_cast<std::uint32_t>(a_blocks.ps[slot].size());
-		}
-		const auto latchedLayout = MainLatchedLayout(*a_resources, depthOnly, blockSizes, zPlan.Buckets());
-		ReserveLatchedBlock(a_resources->latchedBlocks[latchedShape], LatchedBytes(latchedLayout), RenderGraphRuntime::Get().Host()->FrameSlots());
-		// The colour pass's cascades and local shadow volumes (the sun's Accumulate has run, the shadow maps are drawn): the main
-		// latch grown to hold them before the shape names it.
+		const std::size_t latchedShape = depthOnly ? kDepthShape : kColourShape;
+		// The selected revision's shape, trusted (DecideCoverage covered the frame's main epochs): the commit writes the frame's values
+		// into its latch block and layout, its bucket plan and its latched copies, and submits its recording. Nothing of the frame is
+		// checked against it here (CS_DCLF_REVISION_PARITY does that).
+		const auto revisionEpoch = static_cast<std::uint32_t>(latchedShape);
+		const auto revisionShape = a_revision.shape->Value<PassFrame>();
+		const PassFrame& shape = *revisionShape;
+		// The colour pass's cascades and local shadow volumes (the sun's Accumulate has run, the shadow maps are drawn), as many as the
+		// revision's latch holds (its producer sizes it for every shadow view: ReserveMainLatch at the join).
 		if (!depthOnly) {
 			SunAccumulation::Get().GpuCascades(sunCascades);
 			{
@@ -227,86 +219,28 @@ namespace DCLF
 					std::memcpy(out.planes, volume.planes.data(), sizeof(out.planes));
 				}
 			}
-			ReserveMainLatch(*a_resources, static_cast<std::uint32_t>(sunCascades.size()), static_cast<std::uint32_t>(shadowVolumes.size()));
 		}
-		// R3c: the selected revision's shape, when it covers the frame - its versions current, the same pipeline set, heaps, viewport
-		// and cull mode, its max counts holding the frame's draws, its latch the cascades, volumes and bucket slots. The commit then
-		// writes its values into that shape (its latch block and layout, its bucket plan, its latched copies) and submits the
-		// revision's recording; else into its own shape, which the ticket's own preparation reads.
-		const auto revisionEpoch = static_cast<std::uint32_t>(latchedShape);
-		std::shared_ptr<const PassFrame> revisionShape;
-		std::shared_ptr<const RevisionRecordings> revisionRecordings;
-		{
-			std::shared_ptr<const org::async::RevisionFragment> fragment;
-			if (ActiveRevision(revisionEpoch, fragment, revisionRecordings)) {
-				using R = SceneRevisions;
-				auto shape = fragment->Value<PassFrame>();
-				const auto draws = static_cast<std::uint32_t>(a_payload.sequences.size() + a_payload.residentDraws);
-				const bool mainRange = mainMaxDepth > 0.0f;
-				const MainViewport viewport{ a_capture.viewportWidth, a_capture.viewportHeight, mainRange ? mainMinDepth : a_capture.minDepth,
-					mainRange ? mainMaxDepth : a_capture.maxDepth };
-				bool decalsFit = true;
-				for (std::uint32_t group = 0; group < kDecalGroups && !depthOnly; ++group)
-					decalsFit &= a_payload.decalCount[group] <= shape->decalCapacity[group];
-				std::uint32_t miss = R::kMisses;
-				if (!shape || !shape->latch)
-					miss = R::kNoRecording;
-				else if (!indirect.valid || !shape->indirect.valid || !SameHandle(shape->indirect.layout, indirect.layout) ||
-						 !SameHandle(shape->resourceHeap, org::runtime::GetActiveSRVDescriptorHeap().GetHandle()) ||
-						 !SameHandle(shape->samplerHeap, org::runtime::GetActiveSamplerDescriptorHeap().GetHandle()) ||
-						 (shape->indirect.version != indirect.version && !RevisionHoldsClaims()))
-					miss = R::kPipelines;
-				else if (!(MainViewport{ shape->width, shape->height, shape->minDepth, shape->maxDepth } == viewport))
-					miss = R::kViewport;
-				else if (shape->cullMode != ActiveToggles().cullMode)
-					miss = R::kShape;
-				else if (draws > shape->drawCapacity || !decalsFit)
-					miss = R::kCapacity;
-				else if (!depthOnly && (sunCascades.size() > shape->latchLayout.cascades || shadowVolumes.size() > shape->latchLayout.shadowVolumes))
-					miss = R::kLatch;
-				// The bucket map the commit writes covers every pipeline slot the tables have (below): a slot gained while its bucket
-				// growth is outstanding is past zBucketCapacity but still in the map, so the shape's latch must hold the tables' too.
-				else if (depthOnly && a_resources->pool &&
-						 (!shape->zPlan || std::max({ a_resources->zBucketCapacity.size(), a_store.GetTables().pipelines.size(), shape->zPlan->map.size() }) >
-											   shape->latchLayout.buckets))
-					miss = R::kLatch;
-				else if (!RecordingAdmitted(*revisionRecordings, 0))
-					miss = R::kNotAdmitted;
-				if (miss == R::kCapacity) {
-					static std::uint32_t logged = 0;
-					if (logged++ < 16)
-						logger::warn("[DCLF] {} commit of frame {}: {} draws ({} sequences, {} resident) past the revision shape's capacity {} (its sequences {}; "
-									 "the scene's draw bound now {}, the commit's shape {}); decals fit {} <- CAPACITY",
-							depthOnly ? "Z-prepass" : "colour", a_store.GetFrame(), draws, a_payload.sequences.size(), a_payload.residentDraws, shape->drawCapacity,
-							shape->sequenceDraws, drawBound.Draws(), a_resources->published[latchedShape] ? a_resources->published[latchedShape]->drawCapacity : 0u, decalsFit);
-					if (!decalsFit && logged <= 16)
-						for (std::uint32_t group = 0; group < kDecalGroups; ++group)
-							logger::warn("[DCLF]   decal group {}: the commit's {}, the revision shape's capacity {} (its sequences {}), the tables' {} now, the commit's shape {}", group,
-								a_payload.decalCount[group], shape->decalCapacity[group], shape->sequenceDecals, a_store.GetTables().decalCount[group],
-								a_resources->published[latchedShape] ? a_resources->published[latchedShape]->decalCapacity[group] : 0u);
-				}
-				if (miss == R::kMisses)
-					revisionShape = std::move(shape);
-				else
-					NoteRevisionMiss(revisionEpoch, miss);
-			}
+		// CS_DCLF_REVISION_PARITY: the commit's own shape against the revision's. It observes only.
+		if (RevisionParityEnabled() && ParityDue(frameNumber))
+			CheckMainRevision(revisionEpoch, a_capture, a_blocks, a_payload, a_resources, a_store, shape);
+		if (sunCascades.size() > shape.latchLayout.cascades || shadowVolumes.size() > shape.latchLayout.shadowVolumes) {
+			++revisions.latchClamped[revisionEpoch];
+			sunCascades.resize(std::min<std::size_t>(sunCascades.size(), shape.latchLayout.cascades));
+			shadowVolumes.resize(std::min<std::size_t>(shadowVolumes.size(), shape.latchLayout.shadowVolumes));
 		}
-		const ZBucketPlan& writePlan = revisionShape && revisionShape->zPlan ? *revisionShape->zPlan : zPlan;
-		const org::LatchBlock& latchBlock = revisionShape ? *revisionShape->latch : *a_resources->latch;
-		const MainLatchLayout& latchLayout = revisionShape ? revisionShape->latchLayout : a_resources->latchLayout;
+		static const ZBucketPlan kNoPlan;
+		const ZBucketPlan& writePlan = shape.zPlan ? *shape.zPlan : kNoPlan;
+		const org::LatchBlock& latchBlock = *shape.latch;
+		const MainLatchLayout& latchLayout = shape.latchLayout;
 		// The per-frame values (the frame constants, the counters, the frame buffers' copies, tree LOD's row): copied from the
 		// latch by the epoch's first pass, so this commit records no copy for them.
-		auto latched = revisionShape ? LatchedUploads(revisionShape->latched, uploads, RenderGraphRuntime::Get().Host()->CurrentFrameSlot()) :
-		                               LatchedUploads(a_resources->latchedTargets, uploads, a_resources->latchedBlocks[latchedShape],
-										   RenderGraphRuntime::Get().Host()->CurrentFrameSlot(), RenderGraphRuntime::Get().Host()->FrameSlots());
+		auto latched = LatchedUploads(shape.latched, uploads, RenderGraphRuntime::Get().Host()->CurrentFrameSlot());
 		auto lap = [&, last = std::chrono::steady_clock::now()](std::size_t a_part) mutable {
 			const auto now = std::chrono::steady_clock::now();
 			a_stats.commitUs[a_part] += std::chrono::duration<double, std::micro>(now - last).count();
 			last = now;
 		};
-		// Nothing to draw until this commit publishes the segment's shape again (a failed commit leaves it so).
-		const std::size_t shapeIndex = depthOnly ? kDepthShape : kColourShape;
-		a_resources->frames[shapeIndex].store(nullptr, std::memory_order_release);
+		const std::size_t shapeIndex = latchedShape;
 
 		// The frame's textures (t16 and up), resolved now into the frame record.
 		std::array<std::uint32_t, kTextureRegisters> frameTextures;
@@ -661,22 +595,6 @@ namespace DCLF
 		for (std::uint32_t group = 0; group < kDecalGroups; ++group)
 			if (decalCount[group] > a_resources->sequenceDecals)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} decals past the sequence buffer's {} per group", decalCount[group], a_resources->sequenceDecals));
-		// The shape (MakeMainShape), from this commit's inputs; a scene revision makes it from its own (MakeRevisionShapes). Its max
-		// counts are the sequence buffer's ranges, which hold this frame's draws (checked above).
-		auto shapeIn = MainShapeInputsOf(*a_resources, depthOnly);
-		// Both epochs rasterise with the main pass's depth range; see Impl::mainMinDepth.
-		const bool useMainRange = mainMaxDepth > 0.0f;
-		shapeIn.viewport = { a_capture.viewportWidth, a_capture.viewportHeight, useMainRange ? mainMinDepth : a_capture.minDepth,
-			useMainRange ? mainMaxDepth : a_capture.maxDepth };
-		shapeIn.resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
-		shapeIn.samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
-		shapeIn.indirect = indirect;
-		shapeIn.zCalls = zPlan.calls;
-		shapeIn.zPlan = std::make_shared<const ZBucketPlan>(zPlan);
-		shapeIn.latched.copies = latchedLayout;
-		if (!latchedLayout.empty())
-			shapeIn.latched.latch = a_resources->latchedBlocks[latchedShape];
-		auto frame = MakeMainShape(shapeIn);
 		// The main pass's ViewProj (VS_PerFrame c8), which the draws project with: the culling has to
 		// use the same matrix or it would reject what the draws would have put on screen.
 		std::array<float, 16> viewProj{};
@@ -691,7 +609,7 @@ namespace DCLF
 		}
 		if (!loggedNoViewProj) {
 			loggedNoViewProj = true;
-			logger::info("[DCLF] culling setup: mode {}, ViewProj {}, VS_PerFrame b{} {}", frame->cullMode, hasViewProj ? "yes" : "no",
+			logger::info("[DCLF] culling setup: mode {}, ViewProj {}, VS_PerFrame b{} {}", shape.cullMode, hasViewProj ? "yes" : "no",
 				kPerFrameVertexRegister, a_capture.vsBuffers[kPerFrameVertexRegister] ? "bound" : "not bound");
 		}
 		// The two epochs must rasterise into the same pixels for the colour pass's EQUAL test to have any
@@ -713,7 +631,7 @@ namespace DCLF
 				}
 			}
 			logger::info("[DCLF] {} epoch: tables frame {} holding {} objects; render area {}x{}, depth range [{}, {}] (captured [{}, {}]), replay {}, eye ({:.2f} {:.2f} {:.2f}), ViewProj z row {}",
-				depthOnly ? "z-prepass" : "colour", frameNumber, tables.liveObjects, frame->width, frame->height, frame->minDepth, frame->maxDepth,
+				depthOnly ? "z-prepass" : "colour", frameNumber, tables.liveObjects, shape.width, shape.height, shape.minDepth, shape.maxDepth,
 				a_capture.minDepth, a_capture.maxDepth, replayVertexInputs ? "on" : "off", a_capture.eye.x, a_capture.eye.y, a_capture.eye.z, viewProjZ);
 		}
 		// The jitter the colour epoch projects with (dclf-open-defects.md, "DCLF's draws appear not to carry the TAA /
@@ -763,11 +681,6 @@ namespace DCLF
 				}
 			}
 		}
-		if (depthOnly) {
-			prepassEye = a_capture.eye;
-			prepassPreviousEye = a_capture.previousEye;
-			prepassInputs = true;
-		}
 		a_stats.drawn = drawCount;
 		++a_stats.commitEpochs;
 
@@ -781,28 +694,28 @@ namespace DCLF
 		latch.dispatch[1] = 1;
 		latch.dispatch[2] = 1;
 		latch.drawCount = inputCount;
-		latch.cullFlags = hasViewProj ? frame->cullMode : 0u;
+		latch.cullFlags = hasViewProj ? shape.cullMode : 0u;
 		// The frame number, not the epoch: the depth segment publishes and the colour segment reads within one
 		// frame, so the stamp has to be the thing they share.
 		latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;  // 28 bits: BuildDrawsCS keeps flags below it
-		if (a_resources->hzb && frame->width && frame->height) {
+		if (a_resources->hzb && shape.width && shape.height) {
 			// Mip 0 covers twice its own size in source pixels, of which only the rendered area holds real
 			// depth. A texture coordinate in the image scales by that ratio to reach the HZB.
 			const auto scale = [](std::uint32_t a_rendered, std::uint32_t a_covered) {
 				const double ratio = a_covered ? std::min(1.0, double(a_rendered) / double(a_covered)) : 0.0;
 				return static_cast<std::uint32_t>(std::lround(ratio * 65535.0)) & 0xFFFFu;
 			};
-			latch.hzbUvScalePacked = scale(frame->width, a_resources->hzbWidth * 2) | (scale(frame->height, a_resources->hzbHeight * 2) << 16);
+			latch.hzbUvScalePacked = scale(shape.width, a_resources->hzbWidth * 2) | (scale(shape.height, a_resources->hzbHeight * 2) << 16);
 		}
 		FoldEyeIntoViewProj(viewProj, a_capture.eye, latch.viewProj);
 		std::copy(std::begin(latch.viewProj), std::end(latch.viewProj), a_payload.cullViewProj.begin());
 		a_payload.culled = latch.cullFlags != 0;
 		// CS_DCLF_TARGET_PROBE: the objects whose bound covers the probed pixel, nearest first, with their pipelines' descriptors.
-		if (!depthOnly && frame->width && frame->height && (frameNumber % 240) == 0) {
+		if (!depthOnly && shape.width && shape.height && (frameNumber % 240) == 0) {
 			if (const auto& pixel = SwitchValue(Switch::TargetProbe); !pixel.empty()) {
 				const auto sep = pixel.find_first_of(",x");
 				const float px = std::strtof(pixel.substr(0, sep).c_str(), nullptr) + 32.0f, py = std::strtof(pixel.substr(sep + 1).c_str(), nullptr) + 32.0f;
-				const float nx = px / frame->width * 2.0f - 1.0f, ny = 1.0f - py / frame->height * 2.0f;
+				const float nx = px / shape.width * 2.0f - 1.0f, ny = 1.0f - py / shape.height * 2.0f;
 				struct Hit { float w; std::uint32_t object; };
 				std::vector<Hit> hits;
 				for (std::uint32_t o = 0; o < tables.objects.size() && o < tables.objectGeometry.size(); ++o) {
@@ -858,10 +771,13 @@ namespace DCLF
 			// The plan's slots, and none for every other pipeline slot the tables have: gained since the plan was made, or past the
 			// bucket layout while its growth is outstanding (Growths). None of their draws is the frame's.
 			const auto planned = static_cast<std::uint32_t>(writePlan.map.size());
-			const auto slots = std::max({ planned, static_cast<std::uint32_t>(a_resources->zBucketCapacity.size()),
+			auto slots = std::max({ planned, static_cast<std::uint32_t>(a_resources->zBucketCapacity.size()),
 				static_cast<std::uint32_t>(a_store.GetTables().pipelines.size()) });
-			if (slots > layout.buckets)
-				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} Z-prepass pipeline slots past the latch's {}", slots, layout.buckets));
+			// Past the revision's bucket map (a slot gained after its join): those slots' draws are dropped until the next revision.
+			if (slots > layout.buckets) {
+				++revisions.latchClamped[revisionEpoch];
+				slots = layout.buckets;
+			}
 			const std::uint32_t buckets = writePlan.Buckets();
 			if (planned)
 				LatchWrite(latchBlock, "main bucket map", latchSlot, layout.BucketMapOffset(), std::as_bytes(std::span(writePlan.map.data(), planned)));
@@ -902,21 +818,88 @@ namespace DCLF
 		// What the reflection's faces, early next frame, draw from (ExecuteReflection): this commit's inputs and the buffers' backings.
 		a_resources->committed[shapeIndex] = { frameNumber, inputCount, a_resources->scene->generation, a_resources->objectCapacity, a_resources->MainRowsGeneration() };
 
-		if (revisionShape) {
-			// The values went into the revision's shape; the commit's own shape is published as its producer laid it out.
-			(void)latched.Finish();
-			revisions.latchedMisses += latched.Misses();
-			frame->latched = shapeIn.latched;
-		} else {
-			frame->latched = latched.Finish();
-		}
-		NoteShapeParity(shapeIndex, *frame, latchedLayout, frameNumber);
-		if (revisionShape)
-			SubmitRevisionRecording(revisionEpoch, *revisionRecordings, 0);
-		PublishShape(std::move(frame), a_resources->published[shapeIndex], a_resources->frames[shapeIndex], a_resources->shapeGenerations,
-			a_resources->recentShapes[shapeIndex]);
+		(void)latched.Finish();
+		revisions.latchedMisses += latched.Misses();
+		SubmitRevisionRecording(revisionEpoch, *a_revision.recordings, 0);
 		lap(6);
 		return true;
+	}
+
+	void IndirectDraws::Impl::CheckMainRevision(std::uint32_t a_epoch, const Capture& a_capture, const FrameBlocks& a_blocks, const MainPayload& a_payload,
+		const std::shared_ptr<Resources>& a_resources, SceneStore& a_store, const PassFrame& a_shape)
+	{
+		using R = SceneRevisions;
+		const bool depthOnly = a_epoch == kDepthShape;
+		const auto& tables = a_store.GetTables();
+		const auto indirect = GetIndirectState();
+		// The commit's own shape, as its frame's inputs make it (MakeMainShape), for the shape parity.
+		ZBucketPlan plan;
+		if (depthOnly && a_resources->pool)
+			PlanZBuckets(*a_resources, a_store.GetLookups(), tables, indirect, plan);
+		FrameBlockSizes blockSizes;
+		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
+			blockSizes.vs[slot] = static_cast<std::uint32_t>(a_blocks.vs[slot].size());
+			blockSizes.ps[slot] = static_cast<std::uint32_t>(a_blocks.ps[slot].size());
+		}
+		auto in = MainShapeInputsOf(*a_resources, depthOnly);
+		const bool mainRange = mainMaxDepth > 0.0f;
+		const MainViewport viewport{ a_capture.viewportWidth, a_capture.viewportHeight, mainRange ? mainMinDepth : a_capture.minDepth,
+			mainRange ? mainMaxDepth : a_capture.maxDepth };
+		in.viewport = viewport;
+		in.resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
+		in.samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
+		in.indirect = indirect;
+		in.zCalls = plan.calls;
+		in.zPlan = std::make_shared<const ZBucketPlan>(plan);
+		in.latched.copies = MainLatchedLayout(*a_resources, depthOnly, blockSizes, plan.Buckets());
+		if (!in.latched.copies.empty())
+			in.latched.latch = a_resources->latchedBlocks[a_epoch];
+		NoteShapeParity(a_epoch, *MakeMainShape(in), in.latched.copies, a_store.GetFrame());
+		// What the revision's shape must hold for the frame (what a commit would have checked before writing into it).
+		const auto& active = revisions.active;
+		const auto& versionsFragment = active ? active->Fragment(R::kVersionsSlot) : nullptr;
+		const auto versions = versionsFragment ? versionsFragment->Value<VersionSet>() : nullptr;
+		const auto draws = static_cast<std::uint32_t>(a_payload.sequences.size() + a_payload.residentDraws);
+		bool decalsFit = true;
+		for (std::uint32_t group = 0; group < kDecalGroups && !depthOnly; ++group)
+			decalsFit &= a_payload.decalCount[group] <= a_shape.decalCapacity[group];
+		std::uint32_t miss = R::kMisses;
+		std::string detail;
+		if (!versions || versions->changes != VersionRegistry::Get().changes)
+			miss = R::kVersions;
+		else if (!a_shape.latch)
+			miss = R::kNoRecording;
+		else if (!indirect.valid || !a_shape.indirect.valid || !SameHandle(a_shape.indirect.layout, indirect.layout) || !SameHandle(a_shape.resourceHeap, in.resourceHeap) ||
+				 !SameHandle(a_shape.samplerHeap, in.samplerHeap) || (a_shape.indirect.version != indirect.version && !RevisionHoldsClaims()))
+			miss = R::kPipelines;
+		else if (!(MainViewport{ a_shape.width, a_shape.height, a_shape.minDepth, a_shape.maxDepth } == viewport)) {
+			miss = R::kViewport;
+			detail = fmt::format("{}x{} [{}, {}], the frame's {}x{} [{}, {}]", a_shape.width, a_shape.height, a_shape.minDepth, a_shape.maxDepth, viewport.width,
+				viewport.height, viewport.minDepth, viewport.maxDepth);
+		} else if (a_shape.cullMode != ActiveToggles().cullMode)
+			miss = R::kShape;
+		else if (draws > a_shape.drawCapacity || !decalsFit) {
+			miss = R::kCapacity;
+			detail = fmt::format("{} draws for {}; decals", draws, a_shape.drawCapacity);
+			for (std::uint32_t group = 0; group < kDecalGroups; ++group)
+				detail += fmt::format(" {}/{}", a_payload.decalCount[group], a_shape.decalCapacity[group]);
+		} else if (!depthOnly && (sunCascades.size() > a_shape.latchLayout.cascades || shadowVolumes.size() > a_shape.latchLayout.shadowVolumes)) {
+			miss = R::kLatch;
+			detail = fmt::format("{} cascades for {}, {} shadow volumes for {}", sunCascades.size(), a_shape.latchLayout.cascades, shadowVolumes.size(),
+				a_shape.latchLayout.shadowVolumes);
+		} else if (depthOnly && a_resources->pool &&
+				   (!a_shape.zPlan || std::max({ a_resources->zBucketCapacity.size(), tables.pipelines.size(), a_shape.zPlan->map.size() }) > a_shape.latchLayout.buckets)) {
+			miss = R::kLatch;
+			detail = fmt::format("{} pipeline slots for {} buckets", std::max(a_resources->zBucketCapacity.size(), tables.pipelines.size()), a_shape.latchLayout.buckets);
+		}
+		++revisions.parityChecks[a_epoch];
+		if (miss == R::kMisses)
+			return;
+		NoteRevisionMiss(a_epoch, miss);
+		static std::uint32_t logged = 0;
+		if (logged++ < 16)
+			logger::warn("[DCLF] revision parity: the {} commit of frame {} does not fit the selected revision's shape: {}{} <- REVISION", SceneRevisions::kNames[a_epoch],
+				a_store.GetFrame(), SceneRevisions::kMissNames[miss], detail.empty() ? std::string() : " (" + detail + ")");
 	}
 }
 

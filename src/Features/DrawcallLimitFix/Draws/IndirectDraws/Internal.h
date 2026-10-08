@@ -1337,6 +1337,14 @@ namespace DCLF
 		 */
 		bool SetParityEnabled();
 
+		/**
+		 * CS_DCLF_REVISION_PARITY=1: on ParityDue frames each epoch's commit also makes its own shape and checks the selected revision's
+		 * against it (versions, pipelines, viewport, shape, capacity, latch, admission: <- REVISION), and the installed payload against
+		 * the frame's inputs (<- STALE). It observes only: the frame draws the revision's shape and the installed payload whatever it
+		 * finds (the normal path trusts both).
+		 */
+		bool RevisionParityEnabled();
+
 		// CS_DCLF_BUILD_PARITY=1: compare BuildDraws' output with the CPU templates every 300 epochs.
 		bool BuildParityEnabled();
 
@@ -1904,6 +1912,8 @@ namespace DCLF
 			std::array<ankerl::unordered_dense::map<ShadowPipelineKey, std::uint64_t, ShadowPipelineKeyHash>, kShadowModeCount> modeKeyDraws;
 			// Since the last report.
 			std::uint64_t updates = 0, changes = 0, resyncs = 0;
+			// Moves whenever an object's casting share does (modeKeyDraws changed): what the revisions' shadow shapes are sized from.
+			std::uint64_t shadowVersion = 0;
 			ParityCounter parity;
 
 			std::uint32_t Draws() const { return static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX)); }
@@ -3638,6 +3648,17 @@ namespace DCLF
 		{
 			std::vector<std::shared_ptr<const org::PersistentGraphHost::EpochRecording>> recordings;
 		};
+		/**
+		 * @brief An epoch's part of the selected revision (Impl::RevisionOf): its shape fragment and its recordings. A commit writes the
+		 * frame's values into the shape and submits the recording, trusting both (the frame's coverage was decided before the engine
+		 * drew: DecideCoverage, DecideShadowCoverage, OcclusionReady).
+		 */
+		struct EpochRevision
+		{
+			std::shared_ptr<const org::async::RevisionFragment> shape;
+			std::shared_ptr<const RevisionRecordings> recordings;
+			explicit operator bool() const { return shape && recordings && !recordings->recordings.empty(); }
+		};
 	}
 
 	// What was one translation unit's anonymous namespace: its names resolve here as they did there.
@@ -3726,14 +3747,19 @@ namespace DCLF
 		} capabilityStats;
 		void CheckCascadeCulling(const PendingView& a_view, const BuildDrawsLatch& a_latch, std::uint32_t a_frame, const ShadowPayload& a_payload);
 		/**
-		 * @brief Step 6e S1: the shadow payload the frame's epoch committed - the installed publication's (built ahead with it) or the
-		 * epoch's own (shadowFallback: built there, with no kept state, when the installed one does not cover the frame's views) -
-		 * which the occlusion epoch and the revision shapes read until the next commit. It holds no publication (the builds ahead drop
-		 * their streams: the publication holds them).
+		 * @brief Step 6e S1: the shadow payload the frame's epoch committed (the installed publication's, built ahead with it), which the
+		 * occlusion epoch and the revision shapes read until the next commit. It holds no publication (the builds ahead drop their
+		 * streams: the publication holds them).
 		 */
 		std::shared_ptr<ShadowPayload> committedShadow;
-		ShadowPayload shadowFallback;
-		const ShadowPayload& CommittedShadow() const { return committedShadow ? *committedShadow : shadowFallback; }
+		std::uint64_t shadowUnbuilt = 0;  // covered frames whose installed publication had no shadow payload (<- UNBUILT), since the last report
+		/**
+		 * @brief CS_DCLF_REVISION_PARITY, on ParityDue frames: a shadow (a_epoch 2) or occlusion (3) commit's own shape for a_layouts (the
+		 * shape parity) and whether the selected revision's variant holds it (ShadowRevisionFor: <- REVISION). It observes only.
+		 */
+		void CheckShadowRevision(std::uint32_t a_epoch, const std::vector<ShadowViewLayout>& a_layouts, const ShadowPayload& a_payload,
+			const ShadowIndirectState& a_indirect, std::size_t a_sunProcesses, const std::shared_ptr<const ShadowFrame>& a_revision, ShadowResources& a_resources,
+			SceneStore& a_store);
 		std::vector<std::shared_ptr<ShadowPayload>> shadowPayloadPool;  // the builds task's
 		std::shared_ptr<ShadowPayload> AcquireShadowPayload();
 		std::shared_ptr<const void> shadowExecutionOwner;  // reused by the sky epoch's copy of the shadow records
@@ -3773,10 +3799,9 @@ namespace DCLF
 		/** @brief The placement a captured view drew at (its target, slice and viewport), or SIZE_MAX. */
 		std::size_t PlacementOf(const PendingView& a_view) const;
 		std::uint32_t placementDefectsLogged = 0;
-		// Since the last report: frames whose views were left to the engine as the selected revision had no shape for the placements
-		// (startup, or after a growth); covered frames whose views did not come as predicted.
-		std::uint64_t shadowUnrecorded = 0, shadowMispredicted = 0;
-		std::vector<ShadowViewLayout> predictedShadow;  // the frame's, when its views are DCLF's (else empty): the placements
+		// Since the last report: frames whose views were left to the engine as the selected revision had no shape for the placements, or
+		// the installed publication no shadow payload (startup, a toggle).
+		std::uint64_t shadowUnrecorded = 0;
 		/**
 		 * @brief The occlusion maps' layout as their last captures drew (CaptureOcclusion, taken whether DCLF draws a map or not): what
 		 * a revision makes the occlusion epoch's shapes for (recentOcclusionLayouts, newest first), and what OcclusionReady asks the
@@ -4120,7 +4145,11 @@ namespace DCLF
 		// The payloads the frame's main epochs committed (for the parities), by job.
 		std::array<const MainPayload*, 2> committedPayload{};
 		std::array<std::uint32_t, 2> committedFrame{};
+		// CS_DCLF_BINDLESS_PARITY's payloads, built at the epoch (the parity's builds read the eye the Z-prepass captures).
 		std::array<MainPayload, 2> fallbackPayloads;
+		// Per main epoch since the last report: covered frames whose installed publication had no payload for the main resources
+		// (not submitted, <- UNBUILT).
+		std::array<std::uint64_t, 2> unbuilt{};
 		SceneStreams CommitSceneStreams(SceneBuffers& a_scene, const SceneStore::Tables& a_tables, std::uint32_t a_frame, std::uint32_t a_generation,
 			CommitUploads& a_uploads);
 		GeometryStore* SceneGeometries() { return &geometryStore; }
@@ -4164,7 +4193,14 @@ namespace DCLF
 		/** @brief Inside the epoch's preparation: the frame textures and blocks, the uploads, the PassFrame. */
 		bool CommitMainPayload(const Capture& a_capture, const FrameBlocks& a_blocks, const MainInputs& a_frame, MainPayload& a_payload,
 			const std::shared_ptr<Resources>& a_resources, SceneStore& a_store, IndirectDraws::Stats& a_stats,
-			std::vector<std::shared_ptr<const void>>& a_bindingOwners);
+			std::vector<std::shared_ptr<const void>>& a_bindingOwners, const EpochRevision& a_revision);
+		/**
+		 * @brief CS_DCLF_REVISION_PARITY, on ParityDue frames: the main commit's own shape (the shape parity) and whether the selected
+		 * revision's shape a_shape holds the frame (versions, pipelines, viewport, capacities, latch): a miss is counted and logged
+		 * (<- REVISION). It observes only: the commit writes into a_shape whatever it finds.
+		 */
+		void CheckMainRevision(std::uint32_t a_epoch, const Capture& a_capture, const FrameBlocks& a_blocks, const MainPayload& a_payload,
+			const std::shared_ptr<Resources>& a_resources, SceneStore& a_store, const PassFrame& a_shape);
 
 		// The vertex-stage inputs the Z-prepass wrote its depth with. The colour pass tests EQUAL against
 		// that depth, so it has to transform the geometry to exactly the same place - and it cannot simply
@@ -4292,6 +4328,12 @@ namespace DCLF
 		} reflectionParity;
 		void NoteReflectionParity(const ReflectionFrame& a_frame, std::uint32_t a_frameNumber);
 		/**
+		 * @brief CS_DCLF_REVISION_PARITY, on ParityDue frames: the reflection commit's own shape (the shape parity) and whether the selected
+		 * revision's a_shape holds the frame's faces (<- REVISION). It observes only.
+		 */
+		void CheckReflectionRevision(const ReflectionFrame& a_shape, const IndirectState& a_indirect, std::uint32_t a_slots, const TreeLodPipelines* a_treeLod,
+			std::uint32_t a_frame);
+		/**
 		 * @brief The shadow and occlusion epochs' (ShapeParity's). Their views come and go with the engine's (a local light's pair,
 		 * the cascades' alternating states), so a revision holds a shape per view layout it has seen: at the join each recent shape's
 		 * layout is made again from the revision's inputs (MakeShadowShape), and a commit is compared with the one of its layout
@@ -4370,8 +4412,8 @@ namespace DCLF
 			// The frame of the last revision sealed, and of the commit whose set the frame's claims are (SetApplicable, NoteSetApplied).
 			std::uint32_t sealedFrame = ~0u, claimsFrame = ~0u;
 			std::uint64_t setsHeld = 0;  // publications passed over at a frame's start: their commit's revision not selected yet (since the last report)
-			// R3c (c), per epoch since the last report: commits that submitted the selected revision's recording (it covered the
-			// frame), and those that submitted their own preparation, by why (ChooseRevisionRecording).
+			// Per epoch since the last report: commits that submitted the selected revision's recording, and what the revision parity
+			// (CS_DCLF_REVISION_PARITY) found the revision's shape lacked for the frame, by kind (NoteRevisionMiss).
 			enum Miss : std::uint32_t
 			{
 				kNoRevision,
@@ -4382,14 +4424,14 @@ namespace DCLF
 				kViewport,
 				kCapacity,
 				kLatch,
-				kNotAdmitted,
-				kWithdrawn,
 				kMisses
 			};
 			static constexpr std::array<const char*, kMisses> kMissNames = { "no revision", "no recording", "versions moved", "shape differs", "pipelines moved",
-				"viewport moved", "draws past its capacity", "values past its latch", "not its ticket's",
-				"a frame without claims" };
+				"viewport moved", "draws past its capacity", "values past its latch" };
 			std::uint64_t latchedMisses = 0;  // values a commit writing into a revision's shape staged: its latched copies lacked them
+			// Per epoch since the last report: commits that found no shape or recording in the selected revision (not submitted: a
+			// coverage decision missed it), values past the revision's latch (clamped: dropped), and the revision parity's checks.
+			std::array<std::uint64_t, kEpochs> unrevised{}, latchClamped{}, parityChecks{};
 			struct Coverage
 			{
 				std::uint64_t covered = 0;
@@ -4409,25 +4451,16 @@ namespace DCLF
 		/** @brief The scene work's join: the revision of MakeRevisionShapes' shapes, sealed (SceneRevisions). */
 		void AssembleRevision(std::uint32_t a_frame);
 		/**
-		 * @brief R3c (c), inside an epoch's commit, its shape made: when the selected revision covers the frame
-		 * - its versions are the current ones, it has the epoch's recording, and a_match finds the commit's shape among its shapes
-		 * (SameShape: the latch blocks, layouts and addresses the commit wrote into are the recording's) - that recording is
-		 * submitted instead of the ticket's own preparation (PersistentGraphHost::UseEpochRecording). a_match: the shape's index
-		 * in the epoch's shapes (a shadow epoch's variants), or SIZE_MAX.
-		 */
-		void ChooseRevisionRecording(std::uint32_t a_epoch, const std::function<std::size_t(const org::async::RevisionFragment&)>& a_match);
-		/**
-		 * @brief R3c (c): the selected revision's shape fragment and recordings for epoch a_epoch, when it has them and its versions are
-		 * current; else false, the miss counted. A commit that writes its values into the shape (it covers the
-		 * frame) submits a recording with SubmitRevisionRecording; one that does not counts why (NoteRevisionMiss).
+		 * @brief CS_DCLF_REVISION_PARITY: the selected revision's shape fragment and recordings for epoch a_epoch, when it has them and its
+		 * versions are current; else false, the miss counted (NoteRevisionMiss).
 		 */
 		bool ActiveRevision(std::uint32_t a_epoch, std::shared_ptr<const org::async::RevisionFragment>& a_shape, std::shared_ptr<const RevisionRecordings>& a_recordings);
 		/**
-		 * @brief Inside an epoch's commit: whether the ticket being submitted takes the revision's recording a_index
-		 * (PersistentGraphHost::CanUseEpochRecording) - false for one recorded for the graph before a rebuild. Asked before the
-		 * commit writes into the revision's shape (else kNotAdmitted, and its own).
+		 * @brief The selected revision's shape and recordings for epoch a_epoch, trusted (invariant 5): nothing of the frame is checked
+		 * against them. Empty (counted, <- UNREVISED) only when a coverage decision let a frame through without them: the epoch is
+		 * then not submitted.
 		 */
-		bool RecordingAdmitted(const RevisionRecordings& a_recordings, std::size_t a_index) const;
+		EpochRevision RevisionOf(std::uint32_t a_epoch);
 		void NoteRevisionMiss(std::uint32_t a_epoch, std::uint32_t a_miss) { ++revisions.coverage[a_epoch].missed[a_miss]; }
 		/**
 		 * @brief Strict epochs: whether the frame's selected revision covers epoch a_epoch (DecideCoverage) and the graph it was recorded
@@ -4451,6 +4484,35 @@ namespace DCLF
 		 */
 		bool RevisionHoldsClaims() const;
 		std::string RevisionReport();
+		/**
+		 * @brief What the revisions' shapes are made from (MakeRevisionShapes), hashed: the growths, the pipeline sets, the heaps, the
+		 * toggles, the lookups, the latches and their layouts, the main commits' viewport and frame blocks, the shadow placements and the
+		 * occlusion maps' layouts, the scene's casting bound, the reflection's resources and pipelines. The shapes are made again only
+		 * when it moves.
+		 */
+		enum ShapesKeyGroup : std::size_t
+		{
+			kKeyGrowths,
+			kKeyPipelines,
+			kKeyLookups,
+			kKeyMain,
+			kKeyShadow,
+			kKeyBound,
+			kKeyReflection,
+			kKeyGroups
+		};
+		static constexpr std::array<const char*, kKeyGroups> kKeyGroupNames = { "growths", "pipelines", "lookups", "main latch and captures", "shadow latch and layouts",
+			"casting bound", "reflection" };
+		using ShapesKey = std::array<std::uint64_t, kKeyGroups>;
+		ShapesKey RevisionShapesKey(const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect, const rhi::DescriptorHeapHandle& a_resourceHeap,
+			const rhi::DescriptorHeapHandle& a_samplerHeap) const;
+		ShapesKey revisionShapesKey{};
+		std::array<std::uint64_t, kKeyGroups> shapesMadeBy{};  // since the last report: makes by the group whose inputs moved
+		bool shapesKeyUnchanged = false;  // this join's key is the last made's (a parity make: any shape it changes is the key's miss)
+		// Since the last report: joins that made the shapes, that kept the last ones, and per epoch the shapes a parity make changed
+		// under an unchanged key (<- SHAPE KEY).
+		std::uint64_t shapesMade = 0, shapesKept = 0;
+		std::array<std::uint64_t, SceneRevisions::kEpochs> shapeKeyMisses{};
 
 		void ReadCullCounters(const std::shared_ptr<Resources>& a_resources, IndirectDraws::Stats& a_stats, const MainPayload& a_payload);
 		/**

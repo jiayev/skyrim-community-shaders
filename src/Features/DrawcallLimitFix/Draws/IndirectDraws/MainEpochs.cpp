@@ -198,17 +198,39 @@ namespace DCLF
 			}
 			parity.known[shape] = true;
 		}
-		// Strict epochs: a frame without claims (SceneStore::WithdrawSet: no revision covers it) has nothing of DCLF's to draw, and
-		// is not submitted.
-		if (RevisionClaims() && store.SetWithdrawn()) {
-			capture.Release();
-			return;
-		}
-		MainInputs in = impl->PrepareMainInputs(&capture, depthOnly, *resources, blocks.vsMask, blocks.psMask, store);
+		// The frame slots the epoch supplies, and the Z-prepass's vertex inputs the colour epoch replays: what the builds ahead are made
+		// for (PostAheadContext). Taken on a frame without claims too, so the first publication's payloads are built before any frame
+		// is DCLF's (DrawsReady waits for them).
 		auto& masks = impl->epochMasks[jobIndex];
 		masks.vsMask = blocks.vsMask;
 		masks.psMask = blocks.psMask;
 		masks.known = true;
+		if (depthOnly) {
+			impl->prepassEye = capture.eye;
+			impl->prepassPreviousEye = capture.previousEye;
+			impl->prepassInputs = true;
+		}
+		// A frame without claims (SceneStore::WithdrawSet: no revision covers it) has nothing of DCLF's to draw, and is not submitted.
+		if (store.SetWithdrawn()) {
+			capture.Release();
+			return;
+		}
+		// The selected revision's shape and recording (DecideCoverage covered the main epochs), and the installed publication's
+		// payload (DrawsReady held it back until it had one for each epoch): trusted, nothing is built or checked here. A payload built
+		// for other main resources (made at this frame's Setup: a new render size) names their buffers: the frame is not submitted.
+		const auto revision = impl->RevisionOf(static_cast<std::uint32_t>(depthOnly ? kDepthShape : kColourShape));
+		const bool bindlessParity = SwitchEnabled(Switch::BindlessParity);
+		std::shared_ptr<MainPayload> ahead = impl->installedDraws ? impl->installedDraws->payloads[jobIndex] : nullptr;
+		if (!revision || (!bindlessParity && (!ahead || ahead->inputs.addresses.identity != resources.get()))) {
+			// Resources made at this frame's Setup are the only way here (the graph is built for them, and the frames until their
+			// revision are the engine's); anything else is a defect.
+			if (revision && resources == resourcesBefore && impl->unbuilt[jobIndex]++ == 0)
+				logger::warn("[DCLF] the {} epoch of frame {} has no payload for its resources in the installed publication: not submitted <- UNBUILT",
+					depthOnly ? "Z-prepass" : "colour", store.GetFrame());
+			capture.Release();
+			return;
+		}
+		MainInputs in = impl->PrepareMainInputs(&capture, depthOnly, *resources, blocks.vsMask, blocks.psMask, store);
 		auto& async = stats.async[jobIndex];
 		bool builtAhead = false;
 		const MainPayload* committed = nullptr;
@@ -224,35 +246,29 @@ namespace DCLF
 			// The lookups hold still for the whole frame (refreshed at its start alone, step 6e C).
 			const auto& lookups = store.GetLookups();
 			in.lookupGeneration = lookups.generation;
-			// The installed publication's payload, built ahead by the coordinator (step 6e E3b): nothing is built or waited for here.
-			// One it cannot commit (none built yet, other resources or frame slots) is built here with rows of its own, counted.
-			std::shared_ptr<MainPayload> ahead;
-			if (const auto& draws = impl->installedDraws; !draws) {
-				++async.notKicked;  // no publication installed with draws
-			} else if (!draws->payloads[jobIndex]) {
-				++async.late;  // its builds had no context (the frame slots not known yet, other resources)
-			} else if (!impl->AheadUsable(*draws->payloads[jobIndex], in, *resources)) {
+			// CS_DCLF_REVISION_PARITY: the installed payload against the frame's inputs (what it was built for). It observes only.
+			if (ahead && RevisionParityEnabled() && ParityDue(store.GetFrame()) && !impl->AheadUsable(*ahead, in, *resources)) {
 				++async.stale;
-				impl->LogStalePayload(jobIndex, in, draws->payloads[jobIndex]->inputs);
-			} else {
-				ahead = draws->payloads[jobIndex];
+				impl->LogStalePayload(jobIndex, in, ahead->inputs);
 			}
 			MainPayload* payload = ahead.get();
-			if (ahead) {
-				++async.used;
-				builtAhead = true;
-			} else {
+			if (bindlessParity) {
+				// CS_DCLF_BINDLESS_PARITY: the builds read the eye this epoch captures, so the payload is built here, with rows of its own.
 				++async.builtInline;
 				payload = &impl->fallbackPayloads[jobIndex];
 				BuildMainPayload(in, tables, store.GetFrameTables(), lookups, *payload, impl->fallbackRows, nullptr, impl->StreamsNow());
 				payload->foreignRows = true;
+				ahead.reset();
+			} else {
+				++async.used;
+				builtAhead = true;
 			}
 			committed = payload;
 			// Copied: a frame that keeps the publication commits the payload again.
 			*frameOwners = payload->bindingOwners;
 			if (ahead)
 				frameOwners->push_back(ahead);
-			impl->CommitMainPayload(capture, blocks, in, *payload, resources, store, stats, *frameOwners);
+			impl->CommitMainPayload(capture, blocks, in, *payload, resources, store, stats, *frameOwners, revision);
 		}, frameOwners);
 		impl->committedPayload[jobIndex] = committed;
 		if (depthOnly) {
@@ -570,7 +586,20 @@ namespace DCLF
 	{
 		// A publication without draws (DCLF failed, none asked for) draws nothing of DCLF's: nothing to wait for.
 		const auto* slot = static_cast<const Impl::AheadSlot*>(a_draws.get());
-		return !slot || slot->done.load(std::memory_order_acquire);
+		if (!slot)
+			return true;
+		if (!slot->done.load(std::memory_order_acquire))
+			return false;
+		// The epochs build nothing (CS_DCLF_BINDLESS_PARITY aside): a publication is installed only with both main payloads, built for
+		// the main resources as they are (until the frame slots are known, at startup, or for resources since replaced, it has none).
+		if (failed || SwitchEnabled(Switch::BindlessParity))
+			return true;
+		const auto& built = slot->result;
+		const auto* resources = impl->resources.get();
+		for (const std::size_t j : { kAsyncZPrepass, kAsyncColour })
+			if (!built || !built->payloads[j] || built->payloads[j]->inputs.addresses.identity != resources)
+				return false;
+		return true;
 	}
 
 	std::shared_ptr<const void> IndirectDraws::BuildAhead(std::shared_ptr<const void> a_tables)
@@ -692,7 +721,6 @@ namespace DCLF
 				impl->payloadRing[impl->ringFrame.entry].reuse = host->SubmittedPoint();
 		impl->ringFrame.draws.reset();
 		impl->ringShadow = {};
-		impl->shadowFallback.streams.reset();
 		AsyncWorker::Get().NoteFrame();
 		// Views made for the frame's tables hold its publication: let go.
 		impl->streamViews.reset();

@@ -117,6 +117,9 @@ namespace DCLF
 		auto setShape = [&]<class Value>(std::uint32_t a_epoch, std::shared_ptr<const Value> a_value) {
 			draft.Set(R::kShapeSlot + a_epoch, RevisionFragment::MakeReady(std::move(a_value)));
 			++rv.epochs[a_epoch].changed;
+			// A parity make under the last make's key changed it: an input RevisionShapesKey does not name.
+			if (shapesKeyUnchanged && shapeKeyMisses[a_epoch]++ < 4)
+				logger::warn("[DCLF] revision parity: the {} epoch's shape changed at frame {} under an unchanged shapes key <- SHAPE KEY", R::kNames[a_epoch], a_frame);
 		};
 		for (const std::size_t shape : { kDepthShape, kColourShape }) {
 			const auto& made = shapeParity.revisions[shape][0];
@@ -296,11 +299,6 @@ namespace DCLF
 		using R = SceneRevisions;
 		a_shape = nullptr;
 		a_recordings = nullptr;
-		// A frame no revision covers draws nothing of DCLF's (SceneStore::WithdrawSet): its commits prepare an empty epoch.
-		if (SceneStore::Get().SetWithdrawn()) {
-			NoteRevisionMiss(a_epoch, R::kWithdrawn);
-			return false;
-		}
 		const auto& active = revisions.active;
 		if (!active || !RenderGraphRuntime::Get().Host()) {
 			NoteRevisionMiss(a_epoch, R::kNoRevision);
@@ -322,6 +320,23 @@ namespace DCLF
 		return true;
 	}
 
+	Draws::EpochRevision IndirectDraws::Impl::RevisionOf(std::uint32_t a_epoch)
+	{
+		using R = SceneRevisions;
+		EpochRevision out;
+		if (const auto& active = revisions.active) {
+			out.shape = active->Fragment(R::kShapeSlot + a_epoch);
+			out.recordings = active->Get<RevisionRecordings>(R::kRecordingSlot + a_epoch);
+		}
+		if (!out) {
+			if (revisions.unrevised[a_epoch]++ == 0)
+				logger::warn("[DCLF] the {} epoch of frame {} has no shape or recording in the selected revision: not submitted <- UNREVISED", R::kNames[a_epoch],
+					SceneStore::Get().GetFrame());
+			return {};
+		}
+		return out;
+	}
+
 	bool IndirectDraws::SetApplicable(std::uint32_t a_commitFrame) const
 	{
 		if (failed)
@@ -341,6 +356,12 @@ namespace DCLF
 		auto* host = RenderGraphRuntime::Get().Host();
 		if (!host)
 			return;
+		// DCLF draws only from scene revisions' recordings, which need async, revision-driven epochs (CS_ORG_ASYNC_EPOCHS and
+		// CS_ORG_REUSE_RECORDINGS): without them no frame is DCLF's.
+		if (!host->AsyncEpochs() && !failed) {
+			logger::error("[DCLF] the render graph runs without async epochs: no scene revision is recorded, and DCLF draws nothing");
+			failed = true;
+		}
 		auto& rv = impl->revisions;
 		// Explicit while scene revisions draw: an extension added or removed during a frame waits for this point, so the graph a
 		// frame's revision was recorded on runs through that frame (a build invalidates every recording: the frame after one is the
@@ -381,11 +402,10 @@ namespace DCLF
 		const auto versions = versionsFragment ? versionsFragment->Value<VersionSet>() : nullptr;
 		if (host && versions && versions->changes == VersionRegistry::Get().changes)
 			for (std::uint32_t e = 0; e < R::kEpochs; ++e) {
+				// An epoch's recordings are all of the build its versions were made at (AssembleRevision asks for them again after one).
 				const auto recordings = active->Get<RevisionRecordings>(R::kRecordingSlot + e);
-				bool current = recordings && !recordings->recordings.empty();
-				for (std::size_t i = 0; current && i < recordings->recordings.size(); ++i)
-					current = recordings->recordings[i] && host->EpochRecordingCurrent(*recordings->recordings[i]);
-				rv.covered[e] = current;
+				rv.covered[e] = recordings && !recordings->recordings.empty() && recordings->recordings.front() &&
+				                host->EpochRecordingCurrent(*recordings->recordings.front());
 			}
 		for (std::uint32_t e = 0; e < R::kEpochs; ++e)
 			rv.uncovered[e] += rv.covered[e] ? 0 : 1;
@@ -431,62 +451,12 @@ namespace DCLF
 		return revisions.activeFrame != ~0u && revisions.claimsFrame != ~0u && revisions.activeFrame >= revisions.claimsFrame;
 	}
 
-	bool IndirectDraws::Impl::RecordingAdmitted(const RevisionRecordings& a_recordings, std::size_t a_index) const
-	{
-		auto* host = RenderGraphRuntime::Get().Host();
-		if (!host || a_index >= a_recordings.recordings.size() || !a_recordings.recordings[a_index])
-			return false;
-		std::string why;
-		if (host->CanUseEpochRecording(*a_recordings.recordings[a_index], &why))
-			return true;
-		static std::uint32_t logged = 0;
-		if (logged++ < 8)
-			logger::info("[DCLF] a revision's recording is not its epoch's ticket's: {}", why);
-		return false;
-	}
-
 	void IndirectDraws::Impl::SubmitRevisionRecording(std::uint32_t a_epoch, const RevisionRecordings& a_recordings, std::size_t a_index)
 	{
 		if (auto* host = RenderGraphRuntime::Get().Host(); host && a_index < a_recordings.recordings.size()) {
 			host->UseEpochRecording(a_recordings.recordings[a_index]);
 			++revisions.coverage[a_epoch].covered;
 		}
-	}
-
-	void IndirectDraws::Impl::ChooseRevisionRecording(std::uint32_t a_epoch, const std::function<std::size_t(const RevisionFragment&)>& a_match)
-	{
-		using R = SceneRevisions;
-		auto& coverage = revisions.coverage[a_epoch];
-		const auto& active = revisions.active;
-		auto* host = RenderGraphRuntime::Get().Host();
-		if (SceneStore::Get().SetWithdrawn()) {
-			++coverage.missed[R::kWithdrawn];
-			return;
-		}
-		if (!active || !host) {
-			++coverage.missed[R::kNoRevision];
-			return;
-		}
-		// Its versions current: every buffer its recordings read is the one this commit wrote.
-		const auto& versionsFragment = active->Fragment(R::kVersionsSlot);
-		const auto versions = versionsFragment ? versionsFragment->Value<VersionSet>() : nullptr;
-		if (!versions || versions->changes != VersionRegistry::Get().changes) {
-			++coverage.missed[R::kVersions];
-			return;
-		}
-		const auto& shapeFragment = active->Fragment(R::kShapeSlot + a_epoch);
-		const auto recordings = active->Get<RevisionRecordings>(R::kRecordingSlot + a_epoch);
-		if (!shapeFragment || !recordings) {
-			++coverage.missed[R::kNoRecording];
-			return;
-		}
-		const std::size_t index = a_match(*shapeFragment);
-		if (index >= recordings->recordings.size()) {
-			++coverage.missed[R::kShape];
-			return;
-		}
-		host->UseEpochRecording(recordings->recordings[index]);
-		++coverage.covered;
 	}
 
 	std::string IndirectDraws::Impl::RevisionReport()
@@ -507,13 +477,28 @@ namespace DCLF
 			for (std::uint32_t m = 0; m < SceneRevisions::kMisses; ++m)
 				if (c.missed[m])
 					misses += fmt::format("{}{} {}", misses.empty() ? "" : ", ", SceneRevisions::kMissNames[m], c.missed[m]);
-			covered += fmt::format("{}{} {} by the revision{}", covered.empty() ? "" : "; ", SceneRevisions::kNames[e], c.covered,
-				misses.empty() ? std::string() : " (own: " + misses + ")");
+			const auto unrevised = std::exchange(rv.unrevised[e], 0), clamped = std::exchange(rv.latchClamped[e], 0), checks = std::exchange(rv.parityChecks[e], 0);
+			covered += fmt::format("{}{} {}{}{}{}", covered.empty() ? "" : "; ", SceneRevisions::kNames[e], c.covered,
+				unrevised ? fmt::format(", {} without the revision's shape <- UNREVISED", unrevised) : std::string(),
+				clamped ? fmt::format(", {} with values past its latch <- LATCH", clamped) : std::string(),
+				checks ? fmt::format(", {} checked{}", checks, misses.empty() ? std::string(" <- OK") : " (" + misses + ") <- REVISION") : std::string());
 			c = {};
 		}
 		const auto& assembled = rv.assembler.GetStats();
 		const auto growths = Growths::Get().Report();
-		std::string text = fmt::format("[DCLF] scene revisions (R3c): {} sealed ({} version sets), {} published, {} selected (made {:.2f} frames before on average), {} pending; "
+		std::string keyMisses;
+		for (std::uint32_t e = 0; e < SceneRevisions::kEpochs; ++e)
+			if (const auto misses = std::exchange(shapeKeyMisses[e], 0))
+				keyMisses += fmt::format("{}{} {}", keyMisses.empty() ? "" : ", ", SceneRevisions::kNames[e], misses);
+		std::string madeBy;
+		for (std::size_t g = 0; g < kKeyGroups; ++g)
+			if (const auto made = std::exchange(shapesMadeBy[g], 0))
+				madeBy += fmt::format("{}{} {}", madeBy.empty() ? " (moved: " : ", ", kKeyGroupNames[g], made);
+		if (!madeBy.empty())
+			madeBy += ")";
+		std::string text = fmt::format("[DCLF] revision shapes: made at {} joins{}, kept at {}{}\n", std::exchange(shapesMade, 0), madeBy, std::exchange(shapesKept, 0),
+			keyMisses.empty() ? std::string() : "; changed under an unchanged key: " + keyMisses + " <- SHAPE KEY");
+		text += fmt::format("[DCLF] scene revisions (R3c): {} sealed ({} version sets), {} published, {} selected (made {:.2f} frames before on average), {} pending; "
 									   "assembler {} failed, {} superseded, {} abandoned; {}{}\n",
 			rv.sealed, rv.versionSets, rv.published, rv.selections, rv.selections ? double(rv.selectedAge) / rv.selections : 0.0, rv.assembler.Pending(), assembled.failed,
 			assembled.superseded, assembled.abandoned, epochs, rv.sealFailures ? fmt::format(" <- {} NOT SEALED", rv.sealFailures) : std::string());
@@ -521,19 +506,22 @@ namespace DCLF
 		if (!growths.empty() || rv.growthWaits)
 			text += fmt::format("{}[DCLF] {} joins sealed no revision for a pending growth\n", growths, std::exchange(rv.growthWaits, 0));
 		if (!covered.empty())
-			text += fmt::format("[DCLF] epochs submitted (R3c): {}; {} values staged that a revision's latched copies lacked; {} publications passed over at a frame's start for want of their commit's revision\n", covered,
+			text += fmt::format("[DCLF] epochs submitted by the revision: {}; {} values staged that a revision's latched copies lacked; {} publications passed over at a frame's start for want of their commit's revision\n", covered,
 				std::exchange(rv.latchedMisses, 0), std::exchange(rv.setsHeld, 0));
 		{
 			std::string uncovered;
 			for (std::uint32_t e = 0; e < SceneRevisions::kEpochs; ++e)
 				uncovered += fmt::format("{}{} {}", e ? ", " : "", SceneRevisions::kNames[e], std::exchange(rv.uncovered[e], 0));
+			const std::uint64_t unbuiltTotal = unbuilt[kAsyncZPrepass] + unbuilt[kAsyncColour] + shadowUnbuilt;
 			text += fmt::format("[DCLF] strict epochs: {} frames without the selected revision's main recordings (claims withdrawn: the engine's), {} graph builds at the "
 								"build point, {} tickets of epochs not submitted given back for recordings; frames whose revision lacked an epoch's current recordings: {}; "
-								"shadow views left to the engine: {} frames whose revision had no shape for the placements; {} covered frames "
-								"whose views did not come as predicted{}; occlusion maps left to the engine for want of the revision's shape: {}\n",
-				std::exchange(rv.withdrawn, 0), std::exchange(rv.builds, 0), std::exchange(rv.ticketsReleased, 0), uncovered,
-				std::exchange(shadowUnrecorded, 0), shadowMispredicted, shadowMispredicted ? " <- MISPREDICTED" : "", std::exchange(occlusionUnrecorded, 0));
-			shadowMispredicted = 0;
+								"shadow views left to the engine: {} frames without the revision's shadow recording or the installed shadow payload; occlusion maps "
+								"left to the engine for want of the revision's shape: {}; covered epochs without the installed publication's payload: Z-prepass {}, "
+								"colour {}, shadow {}{}\n",
+				std::exchange(rv.withdrawn, 0), std::exchange(rv.builds, 0), std::exchange(rv.ticketsReleased, 0), uncovered, std::exchange(shadowUnrecorded, 0),
+				std::exchange(occlusionUnrecorded, 0), unbuilt[kAsyncZPrepass], unbuilt[kAsyncColour], shadowUnbuilt, unbuiltTotal ? " <- UNBUILT" : "");
+			unbuilt = {};
+			shadowUnbuilt = 0;
 		}
 		return text;
 	}

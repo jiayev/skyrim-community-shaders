@@ -205,29 +205,26 @@ namespace DCLF
 		if (!impl->reflectionCovered)
 			return skip(1);
 
-		// The buckets (PlanReflectionBuckets), and the resources reserved for them.
-		ReflectionPlan plan;
-		PlanReflectionBuckets(*main, reflection.slotPipelines, plan);
-		// Every pipeline slot the tables have: the map's, and none for the rest (past the bucket layout while its growth is
-		// outstanding: Growths).
-		const auto slots = std::max(static_cast<std::uint32_t>(plan.map.size()), static_cast<std::uint32_t>(SceneStore::Get().GetTables().pipelines.size()));
-		const auto& map = plan.map;
-		const auto& buckets = plan.buckets;
-		impl->ReserveReflection(slots, static_cast<std::uint32_t>(buckets.size()), plan.draws, true);
+		// The selected revision's shape and recording (DecideCoverage covered the faces): trusted, its map, buckets and latch are what
+		// the values go into (CS_DCLF_REVISION_PARITY checks them against the frame's own).
+		const auto revision = impl->RevisionOf(4);
+		if (!revision)
+			return skip(1);
+		const auto revisionShape = revision.shape->Value<ReflectionFrame>();
+		const ReflectionFrame& target = *revisionShape;
 		auto resources = reflection.resources;
-		// Within the current versions: the plan comes from the main sizing, which is adopted with the reflection's growth for it
-		// (requested at the same join, named by the same revision). Past them is a defect of that order: reported, not drawn.
-		if (buckets.size() > resources->bucketCountWords || plan.draws > resources->sequenceDraws) {
-			static std::uint32_t reported = 0;
-			if (reported++ < 8)
-				logger::error("[DCLF] reflection: {} buckets and {} draws a face past its buffers' {} and {}", buckets.size(), plan.draws, resources->bucketCountWords,
-					resources->sequenceDraws);
-			return skip(4);
-		}
 		auto& scene = *impl->scene;
 		const auto treeLod = scene.treeLodPipelines.load(std::memory_order_acquire);
-		const bool trees = reflection.treePipeline.valid() && treeLod && scene.treeLodCull && resources->treeShapeCapacity == scene.treeLodShapeCapacity;
-
+		// Tree LOD's draws, when the revision's faces have them and the scene's tables are the ones they were sized for.
+		const bool trees = target.tree.valid() && reflection.treePipeline.valid() && treeLod && scene.treeLodCull &&
+		                   resources->treeShapeCapacity == scene.treeLodShapeCapacity;
+		// Every pipeline slot the tables have: the map's, and none for the rest (gained since the revision's join), as many as its
+		// latch holds.
+		auto slots = std::max(static_cast<std::uint32_t>(target.map->size()), static_cast<std::uint32_t>(SceneStore::Get().GetTables().pipelines.size()));
+		if (slots > target.latchLayout.slots) {
+			++impl->revisions.latchClamped[4];
+			slots = target.latchLayout.slots;
+		}
 		const auto cleanup = RenderGraphRuntime::Get().Host()->ResourceCleanup();
 		if (!cleanup)
 			return skip(4);
@@ -238,53 +235,11 @@ namespace DCLF
 				owners->push_back(held.binding.owner);
 		std::uint32_t drawn = 0;
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::Reflection, [&](org::RenderGraph&) {
-			resources->frame.store(nullptr, std::memory_order_release);
+			// CS_DCLF_REVISION_PARITY: the commit's own shape and the revision's against it (inside the epoch: the graph's heaps). It
+			// observes only.
+			if (RevisionParityEnabled() && ParityDue(frameNumber))
+				impl->CheckReflectionRevision(target, indirect, slots, trees ? treeLod.get() : nullptr, frameNumber);
 			const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
-			// The commit's own shape (MakeReflectionShape), which the ticket's own preparation reads.
-			ReflectionShapeInputs shapeIn;
-			shapeIn.resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
-			shapeIn.samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
-			shapeIn.indirect = indirect;
-			shapeIn.buckets = buckets;
-			shapeIn.map = std::make_shared<const std::vector<std::uint32_t>>(map);
-			shapeIn.materialRows = resources->main->materialRows.address;
-			shapeIn.pipelineRows = resources->main->pipelineRows.address;
-			if (trees) {
-				shapeIn.tree = reflection.treePipeline;
-				shapeIn.treeSignature = treeLod->drawSignature;
-				shapeIn.treeShapes = scene.treeLodShapeCapacity;
-			}
-			auto frame = MakeReflectionShape(*resources, shapeIn);
-			// R3c: the selected revision's shape when it covers the faces - its versions current, the same heaps and pipeline layout,
-			// a pipeline set holding the frame's claims, the same targets, tree LOD and buckets' slots - which the values then go into
-			// (its latch and layout, its map and buckets), its recording submitted; else the commit's own.
-			std::shared_ptr<const ReflectionFrame> revisionShape;
-			std::shared_ptr<const RevisionRecordings> revisionRecordings;
-			{
-				std::shared_ptr<const org::async::RevisionFragment> fragment;
-				if (impl->ActiveRevision(4, fragment, revisionRecordings)) {
-					using R = IndirectDraws::Impl::SceneRevisions;
-					auto shape = fragment->Value<ReflectionFrame>();
-					std::uint32_t miss = R::kMisses;
-					if (!shape || !shape->latch || !shape->map)
-						miss = R::kNoRecording;
-					else if (!SameHandle(shape->resourceHeap, frame->resourceHeap) || !SameHandle(shape->samplerHeap, frame->samplerHeap) ||
-							 !SameHandle(shape->indirect.zLayout, indirect.zLayout) || !SameHandle(shape->indirect.zDrawSignature, indirect.zDrawSignature) ||
-							 (shape->indirect.version != indirect.version && !impl->RevisionHoldsClaims()))
-						miss = R::kPipelines;
-					else if (shape->width != frame->width || shape->height != frame->height)
-						miss = R::kViewport;
-					else if (!SameHandle(shape->tree, frame->tree) || shape->treeGroups != frame->treeGroups || slots > shape->latchLayout.slots)
-						miss = R::kShape;
-					else if (!impl->RecordingAdmitted(*revisionRecordings, 0))
-						miss = R::kNotAdmitted;
-					if (miss == R::kMisses)
-						revisionShape = std::move(shape);
-					else
-						impl->NoteRevisionMiss(4, miss);
-				}
-			}
-			const auto& target = revisionShape ? *revisionShape : *frame;
 			const auto& latchBlock = *target.latch;
 			const auto& layout = target.latchLayout;
 			const auto& writeMap = *target.map;
@@ -330,8 +285,9 @@ namespace DCLF
 				// A face not captured draws nothing (no inputs): its block is copied as the latch holds it.
 				if (face.captured)
 					LatchWrite(latchBlock, "reflection face per-frame data", latchSlot, layout.FaceOffset(f), std::span(face.perFrame.data(), face.perFrameBytes));
-				if (trees) {
-					// The face's row (its own list), naming no slot when the face is not drawn or the faces' tree LOD is the engine's.
+				if (target.tree.valid()) {
+					// The face's row (its own list), naming no slot when the face is not drawn, the faces' tree LOD is the engine's, or the
+					// scene's tables are not the ones the revision's tree passes were sized for.
 					TreeLod::DrawRow row = treeRow;
 					row.visible = resources->treeVisibleAddress[f] + TreeLod::kVisibleHeaderWords * sizeof(std::uint32_t);
 					row.shapeSlots = face.captured && treeRowBound ? treeRow.shapeSlots : 0u;
@@ -343,10 +299,7 @@ namespace DCLF
 				drawn += face.captured ? 1u : 0u;
 			}
 
-			impl->NoteReflectionParity(*frame, frameNumber);
-			if (revisionShape)
-				impl->SubmitRevisionRecording(4, *revisionRecordings, 0);
-			PublishShape(std::move(frame), resources->published, resources->frame, resources->shapeGenerations, resources->recentShapes);
+			impl->SubmitRevisionRecording(4, *revision.recordings, 0);
 		}, owners);
 		if (!ok) {
 			logger::error("[DCLF] the reflection faces' epoch failed");
@@ -354,6 +307,52 @@ namespace DCLF
 		}
 		++reflection.epochs;
 		reflection.facesDrawn += drawn;
+	}
+
+	void IndirectDraws::Impl::CheckReflectionRevision(const ReflectionFrame& a_shape, const IndirectState& a_indirect, std::uint32_t a_slots,
+		const TreeLodPipelines* a_treeLod, std::uint32_t a_frame)
+	{
+		using R = SceneRevisions;
+		const auto& faces = *reflection.resources;
+		ReflectionPlan plan;
+		PlanReflectionBuckets(*faces.main, reflection.slotPipelines, plan);
+		ReflectionShapeInputs in;
+		in.resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
+		in.samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
+		in.indirect = a_indirect;
+		in.buckets = plan.buckets;
+		in.map = std::make_shared<const std::vector<std::uint32_t>>(plan.map);
+		in.materialRows = faces.main->materialRows.address;
+		in.pipelineRows = faces.main->pipelineRows.address;
+		if (a_treeLod) {
+			in.tree = reflection.treePipeline;
+			in.treeSignature = a_treeLod->drawSignature;
+			in.treeShapes = scene->treeLodShapeCapacity;
+		}
+		const auto own = MakeReflectionShape(faces, in);
+		NoteReflectionParity(*own, a_frame);
+		std::shared_ptr<const org::async::RevisionFragment> fragment;
+		std::shared_ptr<const RevisionRecordings> recordings;
+		++revisions.parityChecks[4];
+		if (!ActiveRevision(4, fragment, recordings))
+			return;
+		std::uint32_t miss = R::kMisses;
+		if (!a_shape.latch || !a_shape.map)
+			miss = R::kNoRecording;
+		else if (!SameHandle(a_shape.resourceHeap, own->resourceHeap) || !SameHandle(a_shape.samplerHeap, own->samplerHeap) ||
+				 !SameHandle(a_shape.indirect.zLayout, a_indirect.zLayout) || !SameHandle(a_shape.indirect.zDrawSignature, a_indirect.zDrawSignature) ||
+				 (a_shape.indirect.version != a_indirect.version && !RevisionHoldsClaims()))
+			miss = R::kPipelines;
+		else if (a_shape.width != own->width || a_shape.height != own->height)
+			miss = R::kViewport;
+		else if (!SameHandle(a_shape.tree, own->tree) || a_shape.treeGroups != own->treeGroups || a_slots > a_shape.latchLayout.slots)
+			miss = R::kShape;
+		if (miss == R::kMisses)
+			return;
+		NoteRevisionMiss(4, miss);
+		static std::uint32_t logged = 0;
+		if (logged++ < 16)
+			logger::warn("[DCLF] revision parity: the reflection commit of frame {} does not fit the selected revision's shape: {} <- REVISION", a_frame, R::kMissNames[miss]);
 	}
 
 	std::string IndirectDraws::ReflectionReport()
