@@ -1,5 +1,6 @@
 #include "CinematicCamera.h"
 
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "I18n/I18n.h"
 #include "Util.h"
 
@@ -9,14 +10,14 @@
 namespace CinematicCamera
 {
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-		FilmbackSettings,
+		CinematicCamera::FilmbackSettings,
 		Preset,
 		SensorWidthMM,
 		SensorHeightMM,
 		GateFit)
 
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-		LensSettings,
+		CinematicCamera::LensSettings,
 		FocalLengthMM,
 		FNumber,
 		ApertureBladeCount,
@@ -24,14 +25,14 @@ namespace CinematicCamera
 		ApertureRoundness)
 
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-		FocusSettings,
+		CinematicCamera::FocusSettings,
 		Mode,
 		ManualDistanceM,
 		ScreenPointUV,
 		TransitionSpeed)
 
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-		ExposureSettings,
+		CinematicCamera::ExposureSettings,
 		Mode,
 		ISO,
 		MinISO,
@@ -41,7 +42,7 @@ namespace CinematicCamera
 		ExposureCompensationEV)
 
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-		Settings,
+		CinematicCamera::CameraSettings,
 		Enabled,
 		Filmback,
 		Lens,
@@ -215,7 +216,7 @@ namespace CinematicCamera
 
 	void Controller::RestoreDefaultSettings()
 	{
-		settings = Settings{};
+		settings = CameraSettings{};
 		ValidateSettings();
 	}
 
@@ -440,6 +441,10 @@ namespace CinematicCamera
 
 	void Controller::DrawSettings()
 	{
+		ImGui::Checkbox(T("feature.post_processing.cinematic_camera.name", "Cinematic Camera"), &settings.Enabled);
+		if (!settings.Enabled)
+			return;
+
 		auto& fb = settings.Filmback;
 		auto& lens = settings.Lens;
 		auto& focus = settings.Focus;
@@ -517,18 +522,16 @@ namespace CinematicCamera
 					ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.focus_distance_desc", "Logarithmic scale for precise close-range focus while retaining the full distance range. In Target mode, this is used until a target is found; losing the target holds the last focus input."));
 			}
 			if ((FocusMode)focus.Mode == FocusMode::ScreenPoint) {
-				float focusX = focus.ScreenPointUV.x * 100.0f;
-				float focusY = focus.ScreenPointUV.y * 100.0f;
-				if (ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.focus_point_x", "Horizontal Focus Position"), &focusX, 0.0f, 100.0f, "%.1f%%", ImGuiSliderFlags_AlwaysClamp))
-					focus.ScreenPointUV.x = focusX / 100.0f;
+				Util::PercentageSlider(T("feature.post_processing.cinematic_camera.focus_point_x", "Horizontal Focus Position"), &focus.ScreenPointUV.x, 0.f, 100.f, "%.1f%%", ImGuiSliderFlags_AlwaysClamp);
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.focus_point_x_desc", "0% is the left edge; 100% is the right edge."));
-				if (ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.focus_point_y", "Vertical Focus Position"), &focusY, 0.0f, 100.0f, "%.1f%%", ImGuiSliderFlags_AlwaysClamp))
-					focus.ScreenPointUV.y = focusY / 100.0f;
+				Util::PercentageSlider(T("feature.post_processing.cinematic_camera.focus_point_y", "Vertical Focus Position"), &focus.ScreenPointUV.y, 0.f, 100.f, "%.1f%%", ImGuiSliderFlags_AlwaysClamp);
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.focus_point_y_desc", "0% is the top edge; 100% is the bottom edge."));
+				ImGui::BeginDisabled(SceneWidgetInterceptor::IsArmed());
 				if (ImGui::Button(T("feature.post_processing.cinematic_camera.center_focus_point", "Center Focus Point")))
 					focus.ScreenPointUV = float2(0.5f, 0.5f);
+				ImGui::EndDisabled();
 			}
 			ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.transition_speed", "Transition Speed"), &focus.TransitionSpeed, 0.1f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper())

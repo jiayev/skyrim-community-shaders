@@ -1,4 +1,6 @@
 #include "MotionBlur.h"
+
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "Features/PostProcessing.h"
 #include "Features/Upscaling.h"
 #include "ShaderCache.h"
@@ -150,9 +152,11 @@ void MotionBlur::DrawSettings()
 	const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr;
 	ImGui::BeginDisabled(cam != nullptr);
 
-	int preset = static_cast<int>(settings.ScalePreset);
-	if (ImGui::Combo("Motion Length", &preset, presets, IM_ARRAYSIZE(presets))) {
-		settings.ScalePreset = static_cast<MotionScale>(preset);
+	{
+		int preset = static_cast<int>(settings.ScalePreset);
+		const SceneWidgetInterceptor::ProxyScope proxy(&settings.ScalePreset, 1.0f);
+		if (ImGui::Combo("Motion Length", &preset, presets, IM_ARRAYSIZE(presets)) && !SceneWidgetInterceptor::IsArmed())
+			settings.ScalePreset = static_cast<MotionScale>(preset);
 	}
 
 	ImGui::EndDisabled();

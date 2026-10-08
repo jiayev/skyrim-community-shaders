@@ -90,7 +90,7 @@ bool SceneSettingsManager::IsSameSceneContext(const SceneContextId& lhs, const S
 }
 
 SceneSettingsManager::EffectiveContextEntries SceneSettingsManager::BuildEffectiveContextEntries(
-	const std::vector<SettingEntry>& contextEntries, const SceneContextId& context)
+	const std::vector<SettingEntry>& contextEntries, const SceneContextId& context, bool includeDeleted)
 {
 	EffectiveContextEntries effectiveEntries;
 	// User last: a user entry shadows the overwrite it was authored over.
@@ -98,9 +98,8 @@ SceneSettingsManager::EffectiveContextEntries SceneSettingsManager::BuildEffecti
 		for (const auto& entry : contextEntries)
 			if (entry.source == entrySource && !entry.paused && EntryBelongsToContext(entry, context))
 				effectiveEntries[{ entry.featureShortName, entry.settingPath, entry.settingKey }] = &entry;
-	// A tombstone shadows the overwrite beneath it and then supplies nothing, so the address leaves the
-	// set entirely: neither copy nor export may offer a value the user deleted.
-	std::erase_if(effectiveEntries, [](const auto& item) { return item.second->deleted; });
+	if (!includeDeleted)
+		std::erase_if(effectiveEntries, [](const auto& item) { return item.second->deleted; });
 	return effectiveEntries;
 }
 
@@ -205,17 +204,18 @@ std::vector<SceneSettingsManager::SettingEntry>* SceneSettingsManager::EnsureCon
 		if (!TryEnsureWeatherDataLoaded())
 			return nullptr;
 		return &GetWeatherConfigMut(context.weatherId).entries;
-	case SceneContextType::Location: {
-		if (!TryEnsureLocationDataLoaded())
-			return nullptr;
-		// Adding the first setting authors the target, so the page survives a reload with no settings.
-		const auto& existing = GetLocationConfig(context.locationType, context.locationFormKey);
-		const auto name = existing.name;
-		const auto cocCode = existing.cocCode;
-		auto& config = EnsureAuthoredLocationConfig(context.locationType, context.locationFormKey,
-			name, cocCode);
-		return &config.entries;
-	}
+	case SceneContextType::Location:
+		{
+			if (!TryEnsureLocationDataLoaded())
+				return nullptr;
+			// Adding the first setting authors the target, so the page survives a reload with no settings.
+			const auto& existing = GetLocationConfig(context.locationType, context.locationFormKey);
+			const auto name = existing.name;
+			const auto cocCode = existing.cocCode;
+			auto& config = EnsureAuthoredLocationConfig(context.locationType, context.locationFormKey,
+				name, cocCode);
+			return &config.entries;
+		}
 	default:
 		return GetContextEntriesMut(context);
 	}
@@ -267,12 +267,13 @@ std::optional<json> SceneSettingsManager::CaptureContextValue(const SceneContext
 	case SceneContextType::Location:
 		return ResolveLocationLowerValue(context.locationType, context.locationFormKey, address,
 			kCaptureSourceLayer);
-	default: {
-		// The entry lists sit directly on the feature's own value.
-		auto value = GetFeatureSettingValue(address.featureShortName, address.settingPath,
-			address.settingKey);
-		return value.is_null() ? std::nullopt : std::optional{ std::move(value) };
-	}
+	default:
+		{
+			// The entry lists sit directly on the feature's own value.
+			auto value = GetFeatureSettingValue(address.featureShortName, address.settingPath,
+				address.settingKey);
+			return value.is_null() ? std::nullopt : std::optional{ std::move(value) };
+		}
 	}
 }
 
@@ -567,7 +568,7 @@ void SceneSettingsManager::RevertContextEntryToDefault(const SceneContextId& con
 	const auto rules = GetSceneContextRules(context);
 	const auto defaultValue = ResolveContextEntryDefault(context, entry);
 	if (!defaultValue || !ValidateSceneSettingEntry(rules.label, rules.sceneType, entry.featureShortName,
-							  entry.settingPath, entry.settingKey, *defaultValue, rules.requireNumeric))
+							 entry.settingPath, entry.settingKey, *defaultValue, rules.requireNumeric))
 		return;
 
 	entry.value = *defaultValue;

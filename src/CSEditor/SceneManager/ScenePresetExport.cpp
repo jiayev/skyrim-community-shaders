@@ -23,8 +23,8 @@
 #include "../EditorWindow.h"
 #include "../FormEditSources.h"
 #include "Feature.h"
-#include "Features/CSEditor.h"
 #include "FeatureOverwritesPanel.h"
+#include "Features/CSEditor.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/PresetManager.h"
 #include "Features/PostProcessing.h"
@@ -107,9 +107,9 @@ namespace
 
 		auto count = files.size();
 		return std::vformat(T(TKEY("scene_export_replace_message"),
-								 "'{}' already has {} file(s) on disk. Exporting deletes every one of "
-								 "them and writes this preset in their place. If another mod owns "
-								 "these files, they are gone.{}"),
+								"'{}' already has {} file(s) on disk. Exporting deletes every one of "
+								"them and writes this preset in their place. If another mod owns "
+								"these files, they are gone.{}"),
 			std::make_format_args(name, count, listed));
 	}
 
@@ -162,10 +162,10 @@ namespace
 	{
 		auto message = exported ?
 		                   std::vformat(T(TKEY("scene_export_result_success"), "Preset '{}' exported."),
-						   std::make_format_args(name)) :
+							   std::make_format_args(name)) :
 		                   std::vformat(T(TKEY("scene_export_result_failure"),
-										   "Preset '{}' export failed. Check the log for details."),
-						   std::make_format_args(name));
+											"Preset '{}' export failed. Check the log for details."),
+							   std::make_format_args(name));
 		EditorWindow::GetSingleton()->ShowNotification(
 			message, exported ? Util::Colors::GetSuccess() : Util::Colors::GetError());
 	}
@@ -349,7 +349,7 @@ namespace
 		ImGui::SameLine();
 		PresetsPageRenderer::DrawBackendBadges(pack.IsE11(), pack.IsCS(), pack.IsBaseline(), true);
 		if (!pack.author.empty() || !pack.version.empty()) {
-			const auto meta = pack.author.empty() ? std::format("v{}", pack.version) :
+			const auto meta = pack.author.empty()  ? std::format("v{}", pack.version) :
 			                  pack.version.empty() ? pack.author :
 			                                         std::format("{} · v{}", pack.author, pack.version);
 			ImGui::TextDisabled("%s", meta.c_str());
@@ -683,46 +683,36 @@ namespace
 		return info;
 	}
 
-	/** @brief Writes each ticked feature's base settings into the pack's Baseline folder. */
-	bool WriteBaselineFeatures(const std::string& packName)
+	bool CaptureBaselines(PresetExportInfo& info)
 	{
-		auto* overrides = SettingsOverrideManager::GetSingleton();
-		bool wroteAll = true;
-		for (const auto& shortName : baselineFeatures) {
-			auto* feature = Feature::FindFeatureByShortName(shortName);
-			if (!IsBaselineCandidate(feature))
-				continue;
-
-			json settings;
-			{
-				// The author's own values, not whatever scene layer is applying right now.
-				SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+		try {
+			SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+			auto names = baselineFeatures;
+			if (includePostProcessing && CanIncludePostProcessing()) {
+				names.push_back(PostProcessingPresets::kFeatureShortName);
+				info.replaceBaselines.insert(PostProcessingPresets::kFeatureShortName);
+			}
+			for (const auto& shortName : names) {
+				auto* feature = Feature::FindFeatureByShortName(shortName);
+				if (!feature || !feature->loaded)
+					return false;
+				json settings;
 				feature->SaveSettings(settings);
+				if (info.replaceBaselines.contains(shortName)) {
+					info.baselines[shortName] = std::move(settings);
+				} else {
+					std::vector<std::string> paths;
+					for (const auto& setting : Util::Settings::GetExportSettings(shortName, settings))
+						paths.push_back(setting.path);
+					info.baselines[shortName] = Util::Settings::SelectSettingPaths(settings, paths);
+				}
+				if (!feature->IsAlwaysEnabled())
+					info.disableAtBoot[shortName] = globals::state->IsFeatureDisabled(shortName);
 			}
-			std::vector<std::string> paths;
-			for (const auto& setting : Util::Settings::GetExportSettings(shortName, settings))
-				paths.push_back(setting.path);
-
-			if (!overrides->ExportSettings(packName, shortName, paths, settings, true)) {
-				logger::error("[ScenePresetExport] Could not write the Baseline settings of {} into '{}'", shortName, packName);
-				wroteAll = false;
-			}
-		}
-		return wroteAll;
-	}
-
-	/** @brief Records whether each exported feature loads at boot, so applying the pack restores it. */
-	void WriteBootStates(const std::string& packId)
-	{
-		auto& catalog = UnifiedPresetCatalog::GetSingleton();
-		auto names = baselineFeatures;
-		if (includePostProcessing && CanIncludePostProcessing())
-			names.push_back(PostProcessingPresets::kFeatureShortName);
-		for (const auto& shortName : names) {
-			auto* feature = Feature::FindFeatureByShortName(shortName);
-			if (!feature || feature->IsAlwaysEnabled())
-				continue;
-			catalog.SetPackFeatureDisabledAtBoot(packId, shortName, globals::state->IsFeatureDisabled(shortName));
+			return true;
+		} catch (const std::exception& e) {
+			logger::error("[ScenePresetExport] Could not capture base settings: {}", e.what());
+			return false;
 		}
 	}
 
@@ -752,7 +742,7 @@ namespace
 			form.type = PresetType::CS;
 		if (form.type == PresetType::E11) {
 			ImGui::TextDisabled("%s", T(TKEY("scene_export_type_e11_hint"),
-				"Copies the active ENB files into Presets/<Name>/effects11/."));
+										  "Copies the active ENB files into Presets/<Name>/effects11/."));
 		}
 		ImGui::Separator();
 
@@ -845,8 +835,8 @@ namespace
 		const bool typeMismatch = existingPack && !existingPack->AcceptsExport(form.type);
 		// A CS export with no scene settings, base settings or form edits would write an empty pack.
 		const bool nothingToExport = form.type == PresetType::Baseline ? !HasBaselinePayload() :
-		                             form.type == PresetType::CS      ? !manager->HasAnyUserEntries() && !hasMods && !HasBaselinePayload() && formEditKeys.empty() :
-		                                                                false;
+		                             form.type == PresetType::CS       ? !manager->HasAnyUserEntries() && !hasMods && !HasBaselinePayload() && formEditKeys.empty() :
+		                                                                 false;
 		ImGui::BeginDisabled(sanitizedName.empty() || reservedName || !validVersion || typeMismatch || nothingToExport);
 		if (ImGui::Button(T(TKEY("scene_export_confirm"), "Export"))) {
 			collidingFiles = SceneSettingsManager::FindPresetFiles(sanitizedName);
@@ -856,8 +846,8 @@ namespace
 			exportConfirmation.title = T(TKEY("scene_export_title"), "Export preset");
 			exportConfirmation.message = collidingFiles.empty() ?
 			                                 std::vformat(T(TKEY("scene_export_create_message"),
-															 "Write your settings out as the preset '{}'?"),
-													 std::make_format_args(sanitizedName)) :
+															  "Write your settings out as the preset '{}'?"),
+												 std::make_format_args(sanitizedName)) :
 			                                 DescribeCollision(sanitizedName, collidingFiles);
 			exportConfirmation.confirmLabel = collidingFiles.empty() ?
 			                                      T(TKEY("scene_export_confirm"), "Export") :
@@ -984,17 +974,13 @@ void ScenePresetExport::Draw()
 
 	if (exportConfirmation.Draw()) {
 		auto sanitizedName = Util::FileHelpers::SanitizeFileName(form.name);
-		bool exported = manager->ExportPreset(BuildExportInfo(sanitizedName));
-		if (exported && includePostProcessing && CanIncludePostProcessing())
-			exported = PostProcessingPresets::WriteBaseline(Util::PathHelpers::GetUnifiedPackPath(sanitizedName));
-		if (exported)
-			exported = WriteBaselineFeatures(sanitizedName);
+		auto info = BuildExportInfo(sanitizedName);
+		const bool exported = CaptureBaselines(info) && manager->ExportPreset(info);
 		ReportExportResult(sanitizedName, exported);
-		// The Presets page lists the new or updated pack without a manual refresh.
-		UnifiedPresetCatalog::GetSingleton().Discover();
-		// After the scan: the boot states live in the manifest of a pack the catalog now knows.
-		if (exported)
-			WriteBootStates(sanitizedName);
+		if (exported) {
+			UnifiedPresetCatalog::GetSingleton().Discover();
+			SettingsOverrideManager::GetSingleton()->RefreshOverrides();
+		}
 		exportRequested = false;
 	} else if (!exportConfirmation.IsOpen()) {
 		exportRequested = false;

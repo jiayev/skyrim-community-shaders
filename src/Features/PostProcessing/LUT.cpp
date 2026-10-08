@@ -93,7 +93,10 @@ void LUT::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	tempPath = settings.LutPath;
+}
 
+void LUT::UpdateTexture()
+{
 	// Scene blends reload every frame, so only hit the disk when the path or the pack it resolves against changes.
 	if (settings.LutPath == attemptedPath && UnifiedPresetCatalog::GetSingleton().GetActivePackId() == attemptedPackId)
 		return;
@@ -166,7 +169,7 @@ std::string LUT::ValidateLutFile(const std::filesystem::path& resolvedPath)
 	return {};
 }
 
-void LUT::ReadTexture(const std::string& requestedPath)
+void LUT::ReadTexture(std::string requestedPath)
 {
 	constexpr auto comErrMsg = "Failed to create texture! Error: {}";
 

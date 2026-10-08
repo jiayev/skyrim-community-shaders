@@ -1,5 +1,7 @@
 #include "Camera.h"
 
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
+
 #include "Features/PostProcessing.h"
 #include "I18n/I18n.h"
 #include "RasterPass.h"
@@ -26,11 +28,16 @@ void Camera::DrawSettings()
 	if (settings.UseFE) {
 		const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr;
 
-		float feFov = cam ? cam->HorizontalFOVDeg : settings.FEFoV;
+		float feFov = settings.FEFoV;
+		if (cam)
+			feFov = cam->HorizontalFOVDeg;
 		ImGui::BeginDisabled(cam != nullptr);
-		ImGui::SliderFloat(T("feature.post_processing.camera.fov", "FOV"), &feFov, 20.0f, 180.0f, "%1.0f °");
+		{
+			const SceneWidgetInterceptor::ProxyScope proxy(&settings.FEFoV, 1.0f);
+			ImGui::SliderFloat(T("feature.post_processing.camera.fov", "FOV"), &feFov, 20.0f, 180.0f, "%1.0f °");
+		}
 		ImGui::EndDisabled();
-		if (!cam)
+		if (!cam && !SceneWidgetInterceptor::IsArmed())
 			settings.FEFoV = feFov;
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			if (cam)

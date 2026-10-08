@@ -112,7 +112,7 @@ namespace SceneSettingsOverwrites
 		}
 
 		if (auto featureIt = data.find(kFeatureKey); featureIt != data.end() &&
-			(!featureIt->is_string() || featureIt->get<std::string>() != featureShortName)) {
+													 (!featureIt->is_string() || featureIt->get<std::string>() != featureShortName)) {
 			logger::error("[SceneSettings] Refusing to relabel overwrite file '{}' from another feature", path.string());
 			return false;
 		}
@@ -137,6 +137,11 @@ namespace SceneSettingsOverwrites
 		}
 		if (entryTransitions.is_null())
 			entryTransitions = json::object();
+		auto& entryDeletions = metadata[kMetadataEntryDeletionsKey];
+		if (entryDeletions.is_null())
+			entryDeletions = json::object();
+		if (!entryDeletions.is_object())
+			return false;
 		for (const auto* entry : entries) {
 			auto* node = GetOrCreateObjectAtPath(data, entry->settingPath);
 			if (!node) {
@@ -145,7 +150,15 @@ namespace SceneSettingsOverwrites
 				return false;
 			}
 			(*node)[entry->settingKey] = entry->value;
-			if (!entry->transitionSeconds) {
+			if (entry->deleted) {
+				auto* deletionNode = GetOrCreateObjectAtPath(entryDeletions, entry->settingPath);
+				if (!deletionNode)
+					return false;
+				(*deletionNode)[entry->settingKey] = true;
+			} else {
+				RemoveObjectValueAtPath(entryDeletions, entry->settingPath, 0, entry->settingKey);
+			}
+			if (entry->deleted || !entry->transitionSeconds) {
 				RemoveObjectValueAtPath(entryTransitions, entry->settingPath, 0, entry->settingKey);
 				continue;
 			}
@@ -159,6 +172,8 @@ namespace SceneSettingsOverwrites
 		}
 		if (entryTransitions.empty())
 			metadata.erase(kMetadataEntryTransitionsKey);
+		if (entryDeletions.empty())
+			metadata.erase(kMetadataEntryDeletionsKey);
 
 		return Util::FileHelpers::WriteJsonAtomically(path, data, kOverwriteJsonIndent, "overwrite file");
 	}
@@ -187,11 +202,12 @@ namespace SceneSettingsOverwrites
 			return false;
 		}
 		if (auto metadataIt = data.find(kMetadataKey); metadataIt != data.end() && metadataIt->is_object()) {
-			if (auto transitionsIt = metadataIt->find(kMetadataEntryTransitionsKey);
-				transitionsIt != metadataIt->end() && transitionsIt->is_object()) {
-				RemoveObjectValueAtPath(*transitionsIt, settingPath, 0, settingKey);
-				if (transitionsIt->empty())
-					metadataIt->erase(transitionsIt);
+			for (const auto* key : { kMetadataEntryTransitionsKey, kMetadataEntryDeletionsKey }) {
+				if (auto field = metadataIt->find(key); field != metadataIt->end() && field->is_object()) {
+					RemoveObjectValueAtPath(*field, settingPath, 0, settingKey);
+					if (field->empty())
+						metadataIt->erase(field);
+				}
 			}
 		}
 		if (!HasSceneOverwriteContent(data)) {
@@ -228,7 +244,13 @@ namespace SceneSettingsOverwrites
 		using SSM = SceneSettingsManager;
 
 		const json* entryTransitions = nullptr;
+		const json* entryDeletions = nullptr;
 		if (auto metadataIt = data.find(kMetadataKey); metadataIt != data.end() && metadataIt->is_object()) {
+			if (auto deletedIt = metadataIt->find(kMetadataEntryDeletionsKey); deletedIt != metadataIt->end()) {
+				if (!deletedIt->is_object())
+					return false;
+				entryDeletions = &*deletedIt;
+			}
 			if (auto modeIt = metadataIt->find(kTimeOfDayEnabledKey); timeOfDayEnabled && modeIt != metadataIt->end()) {
 				if (modeIt->is_boolean())
 					*timeOfDayEnabled = modeIt->get<bool>();
@@ -275,6 +297,12 @@ namespace SceneSettingsOverwrites
 				return;
 
 			SSM::SettingEntry entry;
+			if (const auto* deletionNode = entryDeletions ? GetObjectAtPath(*entryDeletions, settingPath) : nullptr)
+				if (auto deletedIt = deletionNode->find(key); deletedIt != deletionNode->end()) {
+					if (!deletedIt->is_boolean())
+						return;
+					entry.deleted = deletedIt->get<bool>();
+				}
 			if (const auto* transitionNode = entryTransitions ? GetObjectAtPath(*entryTransitions, settingPath) : nullptr)
 				if (auto transitionIt = transitionNode->find(key); transitionIt != transitionNode->end()) {
 					const auto seconds = transitionIt->is_number() ? std::optional{ transitionIt->get<float>() } : std::nullopt;
@@ -286,6 +314,8 @@ namespace SceneSettingsOverwrites
 							SSM::kMaxLocationTransitionSeconds);
 				}
 			entry.featureShortName = featureShortName;
+			if (entry.deleted)
+				entry.transitionSeconds.reset();
 			entry.settingPath = settingPath;
 			entry.settingKey = key;
 			entry.displayName = GetSceneSettingDisplayName(featureShortName, settingPath, key);

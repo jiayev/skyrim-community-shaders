@@ -1,13 +1,15 @@
 #include "SceneSettingsManager.h"
 
-#include "SceneSettingsInternal.h"
-#include "SceneSettingsLocationTargets.h"
 #include "CSEditor/FormEditSources.h"
 #include "Features/CSEditor.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/PresetManager.h"
+#include "PresetExportTransaction.h"
 #include "Presets/UnifiedPresetCatalog.h"
+#include "SceneSettingsInternal.h"
+#include "SceneSettingsLocationTargets.h"
 #include "SceneSettingsOverwrites.h"
+#include "SettingsOverrideManager.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
 
@@ -143,7 +145,7 @@ std::vector<std::filesystem::path> SceneSettingsManager::FindPresetFiles(const s
 }
 
 bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
-{
+try {
 	if (!IsValidPresetVersion(info.version)) {
 		logger::error("[SceneSettings] Preset '{}' not exported: version '{}' is not MAJOR.MINOR.PATCH", info.name, info.version);
 		return false;
@@ -182,7 +184,11 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 		return false;
 	}
 
-	const auto packRoot = Util::PathHelpers::GetUnifiedPackPath(safeModName);
+	const auto targetRoot = Util::PathHelpers::GetUnifiedPackPath(safeModName);
+	PresetExportTransaction transaction(targetRoot);
+	if (!transaction.Prepare())
+		return false;
+	const auto& packRoot = transaction.Root();
 	// Merged into rather than replaced, so fields other backends own (effects11, backends) survive.
 	std::string manifestError;
 	auto manifest = UnifiedPresetCatalog::ReadPackManifest(packRoot, &manifestError);
@@ -229,7 +235,12 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 	const auto removeStaleFiles = [&](const std::vector<std::filesystem::path>& paths) {
 		for (const auto& path : paths) {
 			std::error_code ec;
-			std::filesystem::remove(path, ec);
+			if (!Util::IsPathWithinDirectory(targetRoot, path) && !Util::IsPathWithinDirectory(packRoot, path))
+				throw std::runtime_error("Preset cleanup path is outside the export roots");
+			const auto stagedPath = Util::IsPathWithinDirectory(targetRoot, path) ?
+			                            packRoot / path.lexically_relative(targetRoot) :
+			                            path;
+			std::filesystem::remove(stagedPath, ec);
 			if (ec) {
 				logger::error("[SceneSettings] Could not remove stale preset file '{}': {}", path.string(), ec.message());
 				wroteAll = false;
@@ -274,7 +285,7 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 			if (!source)
 				return;
 			std::error_code sourceError, rootError;
-			const auto relative = std::filesystem::absolute(*source, sourceError).lexically_relative(std::filesystem::absolute(packRoot, rootError));
+			const auto relative = std::filesystem::absolute(*source, sourceError).lexically_relative(std::filesystem::absolute(targetRoot, rootError));
 			if (sourceError || rootError || relative.empty() || relative.generic_string().starts_with(".."))
 				return;
 			const auto relativeString = relative.generic_string();
@@ -297,7 +308,7 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 									 const std::filesystem::path& allowedRoot, const std::filesystem::path& baseDir,
 									 std::string_view sceneLabel, const json& extraMetadata = json::object()) {
 			const auto directory = GetOverwriteDir(baseDir, context.period);
-			for (const auto& [identity, entry] : BuildEffectiveContextEntries(sourceEntries, context)) {
+			for (const auto& [identity, entry] : BuildEffectiveContextEntries(sourceEntries, context, true)) {
 				auto& file = files[{ directory, identity.featureShortName }];
 				file.allowedRoot = allowedRoot;
 				file.typeDescription = GetOverwriteTypeDescription(sceneLabel, context.period);
@@ -350,7 +361,8 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 		for (auto& [fileKey, file] : files)
 			std::ranges::transform(file.entries, file.entries.begin(), packFile);
 
-		wroteAll &= !fileCopyFailed;
+		if (fileCopyFailed)
+			return false;
 		// The sweep runs only once every output is known, so a failure above costs nothing on disk. A file
 		// that survives it would be merged into rather than replaced, silently reviving a deleted setting.
 		removeStaleFiles(FindPresetFiles(safeModName));
@@ -384,6 +396,8 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 
 	if (exportEffects11) {
 		const auto effects11Root = packRoot / UnifiedPresetCatalog::kEffects11PackSubdir;
+		if (Util::IsPathWithinDirectory(targetRoot, PresetManager::GetSingleton().GetActivePresetRoot()))
+			transaction.TrackExternalWrites();
 		if (!PresetManager::GetSingleton().ExportActivePresetTo(effects11Root, true)) {
 			logger::error("[SceneSettings] Preset '{}' failed to export Effects 11 files into '{}'",
 				safeModName, effects11Root.string());
@@ -424,6 +438,8 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 		if (!source.empty()) {
 			if (auto rel = copyPackFile(source, std::format("{}{}", stem, source.extension().string())))
 				manifest[key] = *rel;
+			else
+				wroteAll = false;
 		} else if (clear) {
 			manifest.erase(key);
 		}
@@ -435,24 +451,50 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 		const std::filesystem::path galleryDir = "gallery";
 		std::error_code galleryEc;
 		std::filesystem::remove_all(packRoot / galleryDir, galleryEc);
+		if (galleryEc)
+			return false;
 		manifest.erase(kPresetMetadataScreenshotsKey);
 		json shots = json::array();
 		for (size_t i = 0; i < info.screenshotSources.size(); ++i) {
 			const auto& source = info.screenshotSources[i];
 			if (auto written = copyPackFile(source, galleryDir / std::format("{:02}{}", i + 1, source.extension().string())))
 				shots.push_back(*written);
+			else
+				wroteAll = false;
 		}
 		if (!shots.empty())
 			manifest[kPresetMetadataScreenshotsKey] = std::move(shots);
 	}
+
+	for (const auto& [featureName, settings] : info.baselines) {
+		const auto path = packRoot / UnifiedPresetCatalog::kBaselineSubdir / (featureName + ".json");
+		if (Util::FileHelpers::SanitizeFileName(featureName) != featureName ||
+			!SettingsOverrideManager::GetSingleton()->IsValidOverrideDocument(settings, path))
+			return false;
+		auto document = SettingsOverrideManager::ReadExportTarget(path);
+		if (!document)
+			return false;
+		if (info.replaceBaselines.contains(featureName))
+			*document = settings;
+		else
+			document->update(settings, true);
+		if (!SettingsOverrideManager::GetSingleton()->IsValidOverrideDocument(*document, path) ||
+			!Util::FileHelpers::WriteJsonAtomically(path, *document, kOverwriteJsonIndent, "preset baseline"))
+			return false;
+	}
+	for (const auto& [featureName, disabled] : info.disableAtBoot)
+		manifest[UnifiedPresetCatalog::kDisableAtBootKey][featureName] = disabled;
 
 	if (!Util::FileHelpers::WriteJsonAtomically(UnifiedPresetCatalog::GetPackManifestPath(packRoot), manifest, kOverwriteJsonIndent, "preset manifest")) {
 		logger::error("[SceneSettings] Preset '{}' failed to write its manifest", safeModName);
 		wroteAll = false;
 	}
 
+	if (!wroteAll || !transaction.Commit())
+		return false;
+
 	std::error_code activeEc;
-	const bool exportedIntoActivePack = std::filesystem::equivalent(packRoot, GetActiveScenePackRoot(), activeEc);
+	const bool exportedIntoActivePack = std::filesystem::equivalent(targetRoot, GetActiveScenePackRoot(), activeEc);
 	if (exportScene && exportedIntoActivePack)
 		ReloadOverwrites();
 	if (exportForms && exportedIntoActivePack)
@@ -460,8 +502,11 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 
 	logger::info("[SceneSettings] Exported preset '{}' ({} scene file(s), {} form edit(s){}, type {}) to '{}'",
 		safeModName, sceneFileCount, formEdits.size(), exportEffects11 ? ", Effects 11" : "",
-		UnifiedPresetCatalog::GetPresetTypeName(info.type), packRoot.string());
-	return wroteAll;
+		UnifiedPresetCatalog::GetPresetTypeName(info.type), targetRoot.string());
+	return true;
+} catch (const std::exception& e) {
+	logger::error("[SceneSettings] Preset export failed: {}", e.what());
+	return false;
 }
 
 std::optional<SceneSettingsManager::PresetMetadata> SceneSettingsManager::ReadPresetMetadata(const std::filesystem::path& packRoot)
