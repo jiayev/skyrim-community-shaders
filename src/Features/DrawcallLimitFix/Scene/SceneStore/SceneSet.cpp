@@ -1,5 +1,4 @@
 #include "Internal.h"
-#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Common/AsyncWorker.h"
@@ -138,7 +137,6 @@ namespace DCLF
 
 	void SceneStore::CommitSet()
 	{
-		DCLF_FRAME_TRACE("CommitSet");  // TEMP frame trace
 		ZoneScopedN("CS.DCLF.Scene.CommitSet");
 		++setStats.commits;
 		const std::size_t objects = tables.objects.size();
@@ -422,7 +420,6 @@ namespace DCLF
 
 	void SceneStore::ApplySet()
 	{
-		DCLF_FRAME_TRACE("ApplySet");  // TEMP frame trace
 		ZoneScopedN("CS.DCLF.Scene.ApplySet");
 		const std::size_t objects = tables.objects.size();
 		tables.setPhases.resize(objects, 0);

@@ -1066,7 +1066,7 @@ namespace DCLF
 		};
 		if (!pipelines.Enabled() || !utility || !impl->SetupShadow())
 			return notReady(ShadowNotReady::Setup);
-		// The tables are not read here: under CS_DCLF_ASYNC the scene walk is still writing them while the
+		// The tables are not read here: the scene lane is still writing them while the
 		// engine draws the shadow maps. ExecuteShadowFrame checks them after the join.
 		const auto* shadowView = ShadowViews::Get().At(a_viewId);
 		if (!shadowView)

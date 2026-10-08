@@ -102,7 +102,7 @@ namespace DCLF
 		std::uint32_t bindlessParityMismatches = 0;
 		// Pairs whose pipeline's constant tables were not the ones their material row was packed with (they stayed native).
 		std::uint32_t rowTableConflicts = 0;
-		// CS_DCLF_ASYNC: per job kind (colour, Z-prepass, shadow), per report interval.
+		// The scene lane's builds: per job kind (colour, Z-prepass, shadow), per report interval.
 		struct Async
 		{
 			// Per epoch, since the last report (step 6e E3b, S1): committed the installed publication's payload (built ahead), or built

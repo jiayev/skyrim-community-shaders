@@ -50,8 +50,7 @@ The scene walk (about 0.5 ms) and the table builds run on DCLF's worker.
 ## Decals and the primary's stand-in
 
 Decals are scene members like every other eligible object, stood in with their entries (drawcall-limit-fix.md, "Every
-eligible object a member"). Their order is the scene's by default, or the engine's scene lists with
-`CS_DCLF_DECAL_ORDER=engine`. Their depth is DCLF's decal depth pass (drawcall-limit-fix.md, "Decal depth"). Nothing
+eligible object a member"). Their order is the scene's. Their depth is DCLF's decal depth pass (drawcall-limit-fix.md, "Decal depth"). Nothing
 eligible is registered by the engine any more.
 
 ## What removing the culling jobs takes

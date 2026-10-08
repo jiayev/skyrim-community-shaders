@@ -1,5 +1,4 @@
 #include "ReflectionFaces.h"
-#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "Features/DrawcallLimitFix/Engine/PassCapture.h"
 
@@ -19,7 +18,6 @@ namespace DCLF::ReflectionFaces
 		{
 			static void thunk(RE::NiCamera* a_camera, void* a_accumulator, std::uint32_t a_flags)
 			{
-				DCLF_FRAME_TRACE("ReflectionFaces.cpp:19");  // TEMP frame trace
 				func(a_camera, a_accumulator, a_flags);
 				if (afterFaceDraws)
 					afterFaceDraws();
@@ -32,7 +30,6 @@ namespace DCLF::ReflectionFaces
 		{
 			static void thunk(RE::NiCamera* a_camera, std::uint32_t a_faces, bool a_silhouettes, bool a_clearRoots, bool a_noSky)
 			{
-				DCLF_FRAME_TRACE("ReflectionFaces.cpp:31");  // TEMP frame trace
 				camera = a_camera;
 				faceMask = a_faces;
 				// The render mode the faces register under: 0x1B with silhouettes, 0x19 without the sky, else 0. Only mode 0's

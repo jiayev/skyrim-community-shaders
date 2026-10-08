@@ -2028,8 +2028,6 @@ namespace DCLF
 			std::uint32_t generation = 0;
 			bool operator==(const StreamsKey&) const = default;
 		};
-		/** @brief Where a build kicked behind the streams' job finds its views (the job fills it before the build runs: one FIFO lane). */
-		using StreamsSlot = std::shared_ptr<std::shared_ptr<const StreamViews>>;
 		/**
 		 * @brief A build's geometry slots: the frame's stream views', or packed whole from the tables without them (a probe's
 		 * build, or no scene buffers yet).
@@ -3255,11 +3253,6 @@ namespace DCLF
 		{
 			return a_in.bindlessParity;
 		}
-
-		// CS_DCLF_ASYNC=probe: two builds of the same inputs, compared byte for byte. The first difference is
-		// named by buffer and offset.
-		bool SamePayload(const MainPayload& a, const MainPayload& b, std::string& a_difference);
-		bool SamePayload(const ShadowPayload& a, const ShadowPayload& b, std::string& a_difference);
 
 		// A commit's own uploads on the render thread, staged directly (StagedUploadBatch) and submitted when the
 		// commit ends: each is one memcpy into mapped staging here and one copy in the submission, instead of a

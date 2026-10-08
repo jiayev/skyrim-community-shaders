@@ -1,5 +1,4 @@
 #include "SceneTracker.h"
-#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "PrimaryCull.h"
 
@@ -26,7 +25,6 @@ namespace DCLF
 		{
 			static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child, bool a_firstAvail)
 			{
-				DCLF_FRAME_TRACE("SceneTracker.cpp:26");  // TEMP frame trace
 				func(a_this, a_child, a_firstAvail);
 				PrimaryCull::Get().NoteListStructure(a_this, a_child, true);
 				SceneTracker::Get().PushAttached(a_child);
@@ -38,7 +36,6 @@ namespace DCLF
 		{
 			static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child, RE::NiPointer<RE::NiAVObject>& a_out)
 			{
-				DCLF_FRAME_TRACE("SceneTracker.cpp:37");  // TEMP frame trace
 				PrimaryCull::Get().NoteListStructure(a_this, a_child, false);
 				SceneTracker::Get().PushDetached(a_child);
 				func(a_this, a_child, a_out);
@@ -50,7 +47,6 @@ namespace DCLF
 		{
 			static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child)
 			{
-				DCLF_FRAME_TRACE("SceneTracker.cpp:48");  // TEMP frame trace
 				PrimaryCull::Get().NoteListStructure(a_this, a_child, false);
 				SceneTracker::Get().PushDetached(a_child);
 				func(a_this, a_child);
@@ -62,7 +58,6 @@ namespace DCLF
 		{
 			static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiPointer<RE::NiAVObject>& a_out)
 			{
-				DCLF_FRAME_TRACE("SceneTracker.cpp:59");  // TEMP frame trace
 				PrimaryCull::Get().NoteListStructure(a_this, ChildAt(a_this, a_index), false);
 				SceneTracker::Get().PushDetached(ChildAt(a_this, a_index));
 				func(a_this, a_index, a_out);
@@ -74,7 +69,6 @@ namespace DCLF
 		{
 			static void thunk(RE::NiNode* a_this, std::uint32_t a_index)
 			{
-				DCLF_FRAME_TRACE("SceneTracker.cpp:70");  // TEMP frame trace
 				PrimaryCull::Get().NoteListStructure(a_this, ChildAt(a_this, a_index), false);
 				SceneTracker::Get().PushDetached(ChildAt(a_this, a_index));
 				func(a_this, a_index);
@@ -86,7 +80,6 @@ namespace DCLF
 		{
 			static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiAVObject* a_child, RE::NiPointer<RE::NiAVObject>& a_out)
 			{
-				DCLF_FRAME_TRACE("SceneTracker.cpp:81");  // TEMP frame trace
 				auto* previous = ChildAt(a_this, a_index);
 				if (previous != a_child) {
 					PrimaryCull::Get().NoteListStructure(a_this, previous, false);
@@ -104,7 +97,6 @@ namespace DCLF
 		{
 			static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiAVObject* a_child)
 			{
-				DCLF_FRAME_TRACE("SceneTracker.cpp:98");  // TEMP frame trace
 				auto* previous = ChildAt(a_this, a_index);
 				if (previous != a_child) {
 					PrimaryCull::Get().NoteListStructure(a_this, previous, false);

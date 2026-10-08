@@ -1,5 +1,4 @@
 #include "MaterialSources.h"
-#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
 
@@ -109,7 +108,6 @@ namespace DCLF::MaterialSources
 		{
 			static void thunk(RE::NiTimeController* a_this, void* a_data)
 			{
-				DCLF_FRAME_TRACE("MaterialSources.cpp:108");  // TEMP frame trace
 				const auto type = ControllerType(a_this);
 				auto* property = static_cast<RE::BSLightingShaderProperty*>(a_this->target);
 				if (type == 0xb && property) {
@@ -157,7 +155,6 @@ namespace DCLF::MaterialSources
 		{
 			static void thunk(RE::NiTimeController* a_this, void* a_data)
 			{
-				DCLF_FRAME_TRACE("MaterialSources.cpp:155");  // TEMP frame trace
 				const auto type = ControllerType(a_this);
 				auto* property = static_cast<RE::BSLightingShaderProperty*>(a_this->target);
 				if (type == 1 && property && property->emissiveColor) {
@@ -191,7 +188,6 @@ namespace DCLF::MaterialSources
 			{
 				static void thunk(RE::BSShaderMaterial* a_this, RE::BSShaderMaterial* a_that)
 				{
-					DCLF_FRAME_TRACE("MaterialSources.cpp:188");  // TEMP frame trace
 					func(a_this, a_that);
 					NoteWritten(a_this);
 				}
@@ -201,7 +197,6 @@ namespace DCLF::MaterialSources
 			{
 				static void thunk(RE::BSShaderMaterial* a_this, std::uint64_t a_arg, RE::BSTextureSet* a_set)
 				{
-					DCLF_FRAME_TRACE("MaterialSources.cpp:197");  // TEMP frame trace
 					func(a_this, a_arg, a_set);
 					NoteWritten(a_this);
 				}
@@ -211,7 +206,6 @@ namespace DCLF::MaterialSources
 			{
 				static void thunk(RE::BSShaderMaterial* a_this)
 				{
-					DCLF_FRAME_TRACE("MaterialSources.cpp:206");  // TEMP frame trace
 					func(a_this);
 					NoteWritten(a_this);
 				}
@@ -221,7 +215,6 @@ namespace DCLF::MaterialSources
 			{
 				static void thunk(RE::BSShaderMaterial* a_this, bool a_1, bool a_2, bool a_3, bool a_4, bool a_5)
 				{
-					DCLF_FRAME_TRACE("MaterialSources.cpp:215");  // TEMP frame trace
 					func(a_this, a_1, a_2, a_3, a_4, a_5);
 					NoteWritten(a_this);
 				}

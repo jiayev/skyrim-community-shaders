@@ -14,8 +14,6 @@ namespace DCLF
 	{
 		// Features: unset is DCLF's full featureset; the startup log names a run that narrows one.
 		Dclf,
-		Async,
-		AsyncWaitMs,
 		AsyncPriority,
 		Workers,
 		Precompile,
@@ -38,12 +36,6 @@ namespace DCLF
 		SunSkip,
 		SunExclude,
 		PrimaryExclude,
-		ListFilter,
-		TreeList,
-		LightExclude,
-		LightList,
-		MoveEvents,
-		HiddenEvents,
 		Skylight,
 		Precipitation,
 		Reflections,
@@ -69,9 +61,6 @@ namespace DCLF
 		ParityBoth,
 		CapturePointParity,
 		SkylightParity,
-		ClassifyCache,
-		DerivedCache,
-		MaterialCache,
 
 		// Diagnostics: stats, shader debugging, and the probes of open investigations (dclf-open-defects.md).
 		Stats,
@@ -91,7 +80,6 @@ namespace DCLF
 		HiddenWatch,
 		MirrorWatch,
 		InputWatch,
-		DecalOrder,
 		TableStart,
 		SkylightDumpDir,
 		DepthTrace,

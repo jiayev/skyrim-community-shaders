@@ -1,5 +1,4 @@
 #include "SunAccumulation.h"
-#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "EngineAccess.h"
 #include "PassCapture.h"
@@ -142,12 +141,6 @@ namespace DCLF
 		return instance;
 	}
 
-	bool SunAccumulation::ExclusionProbe()
-	{
-		const bool probe = SwitchValue(Switch::SunExclude) == "probe";
-		return probe;
-	}
-
 	void SunAccumulation::ExcludeEntries(RE::BSShadowDirectionalLight* a_light)
 	{
 		auto exclusion = std::move(pendingExclusion);
@@ -171,7 +164,6 @@ namespace DCLF
 			return;
 		}
 		const std::int64_t start = Now();
-		const bool probe = ExclusionProbe();
 		const std::uint32_t stamp = stampCounter.fetch_add(1, std::memory_order_relaxed) + 1;
 		const auto& candidates = *exclusion->candidates;
 		for (auto& process : a_light->GetShadowDirectionalLightRuntimeData().fullFrustumCullingProcessArray) {
@@ -205,24 +197,20 @@ namespace DCLF
 			for (std::uint32_t r = 0; r < size; ++r) {
 				if (removeScratch[r]) {
 					exclusion->removed[removeScratch[r] - 1].store(stamp, std::memory_order_relaxed);
-					if (!probe) {
-						array[r].reset();
-						continue;
-					}
+					array[r].reset();
+					continue;
 				}
-				if (!probe && kept != r)
+				if (kept != r)
 					array[kept] = std::move(array[r]);
 				++kept;
 			}
-			if (!probe)
-				array.resize(kept);
+			array.resize(kept);
 		}
 		++stats.exclusionFrames;
 		stats.candidates += candidates.entries.size();
 		stats.excluded += exclusion->excludedCount;
 		frameState.exclusion = std::move(exclusion);
 		frameState.stamp = stamp;
-		frameState.probe = probe;
 		frameState.parity = SwitchEnabled(Switch::PersistentParity) && ParityDue(SceneStore::Get().GetFrame());
 		skipStats.parityFrames.fetch_add(frameState.parity ? 1 : 0, std::memory_order_relaxed);
 		exclusionLive.store(true, std::memory_order_release);
@@ -310,46 +298,10 @@ namespace DCLF
 				bits |= cascade.bit;
 		}
 		auto& mask = At<std::uint32_t>(lightData, kLightDataActiveMask);
-		if (!state.probe) {
-			mask |= bits;
-			bitStats.written.fetch_add(1, std::memory_order_relaxed);
-			if (bits)
-				bitStats.withBits.fetch_add(1, std::memory_order_relaxed);
-			return;
-		}
-		const std::uint32_t engine = mask & state.sunBits;
-		bitStats.compared.fetch_add(1, std::memory_order_relaxed);
-		if (engine == bits) {
-			bitStats.agree.fetch_add(1, std::memory_order_relaxed);
-			return;
-		}
-		if (engine & ~bits)
-			bitStats.engineOnly.fetch_add(1, std::memory_order_relaxed);
-		if (bits & ~engine)
-			bitStats.dclfOnly.fetch_add(1, std::memory_order_relaxed);
-		static std::atomic<std::uint32_t> loggedEngine{ 0 }, loggedDclf{ 0 };
-		if ((engine & ~bits ? loggedEngine : loggedDclf).fetch_add(1, std::memory_order_relaxed) < 12)
-			logger::info("[DCLF] sun exclusion probe: bits differ: '{}' under '{}', engine {:#x}, DCLF {:#x} (cascades {:#x}), bound ({:.0f} {:.0f} {:.0f}) r {:.0f}",
-				a_geometry->name.c_str() ? a_geometry->name.c_str() : "?", a_geometry->parent && a_geometry->parent->name.c_str() ? a_geometry->parent->name.c_str() : "?",
-				engine, bits, state.sunBits, bound.center.x, bound.center.y, bound.center.z, bound.radius);
-	}
-
-	void SunAccumulation::NoteProbeUnclaimed(RE::BSGeometry* a_geometry, std::uint32_t a_passes)
-	{
-		// Without a pass the registration wrote only the mask, which DCLF's bits replace.
-		if (!a_passes) {
-			bitStats.probeNoPass.fetch_add(1, std::memory_order_relaxed);
-			return;
-		}
-		bitStats.probeUnclaimed.fetch_add(1, std::memory_order_relaxed);
-		static std::uint32_t logged = 0;
-		if (logged++ < 30) {
-			auto* property = a_geometry->GetGeometryRuntimeData().shaderProperty.get();
-			logger::info("[DCLF] sun exclusion probe: the engine built {} pass(es) for '{}' (parent '{}', {}, property {}) under a would-be-removed entry",
-				a_passes, a_geometry->name.c_str() ? a_geometry->name.c_str() : "?",
-				a_geometry->parent && a_geometry->parent->name.c_str() ? a_geometry->parent->name.c_str() : "?",
-				a_geometry->GetRTTI() ? a_geometry->GetRTTI()->name : "?", property && property->GetRTTI() ? property->GetRTTI()->name : "none");
-		}
+		mask |= bits;
+		bitStats.written.fetch_add(1, std::memory_order_relaxed);
+		if (bits)
+			bitStats.withBits.fetch_add(1, std::memory_order_relaxed);
 	}
 
 	struct SunAccumulation::Hooks
@@ -359,7 +311,6 @@ namespace DCLF
 		{
 			static void thunk(RE::BSShadowDirectionalLight* a_light, std::uint32_t* a_count, std::uint32_t* a_arg2, RE::NiAVObject* a_arg3)
 			{
-				DCLF_FRAME_TRACE("SunAccumulation.cpp:358");  // TEMP frame trace
 				auto* node = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
 				if (!node || node->GetRuntimeData().sunShadowDirLight != a_light) {
 					func(a_light, a_count, a_arg2, a_arg3);
@@ -441,7 +392,6 @@ namespace DCLF
 		{
 			static std::uint64_t thunk(void* a_accumulator, void* a_geometry, std::uint64_t a_arg)
 			{
-				DCLF_FRAME_TRACE("SunAccumulation.cpp:439");  // TEMP frame trace
 				SunCall* call = currentCall;
 				const int cascade = call ? call->IndexOf(a_accumulator) : -1;
 				auto& self = SunAccumulation::Get();
@@ -452,8 +402,6 @@ namespace DCLF
 							known && std::find(known->begin(), known->end(), a_accumulator) != known->end())
 							self.offThread.fetch_add(1, std::memory_order_relaxed);
 					}
-					if (PrimaryCull::Probe() && PrimaryCull::Get().Counting())
-						PrimaryCull::Get().NoteRegistration(a_accumulator, geometry);
 					// An owned geometry: a shadow light's accumulation (+0x160 neither 0 nor 0xFFFF) leaves its mask 0, and no
 					// registration of it takes the sun's bits (ClearOwnedMask).
 					const std::uint32_t lightIndex = At<std::uint32_t>(a_accumulator, kAccumulatorLightIndex);
@@ -477,11 +425,8 @@ namespace DCLF
 				std::uint64_t result = 1;
 				const auto& claims = call->claims[cascade];
 				const bool claimed = claims && (claims->PhasesOf(geometry) & kSetCaster);
-				// A removed entry's geometry reaching a cascade: live, it means the entry was culled through another path
-				// (checked every 64th cull); dry, an unclaimed one that builds a pass is a caster the exclusion would lose.
-				const bool underRemoved = self.exclusionLive.load(std::memory_order_relaxed) &&
-				                          (self.frameState.probe || (self.frameState.stamp & 63) == 0) && self.UnderRemovedEntry(geometry);
-				if (underRemoved && !self.frameState.probe)
+				// A removed entry's geometry reaching a cascade: the entry was culled through another path (checked every 64th cull).
+				if (self.exclusionLive.load(std::memory_order_relaxed) && (self.frameState.stamp & 63) == 0 && self.UnderRemovedEntry(geometry))
 					++self.stats.cascadeRegistrationsUnderRemoved;
 				if (claimed) {
 					if (call->record)
@@ -507,8 +452,6 @@ namespace DCLF
 					if (PrimaryCull::Get().Owned(*geometry))
 						ClearOwnedMask(a_geometry);
 					++call->registered;
-					if (underRemoved && self.frameState.probe)
-						self.NoteProbeUnclaimed(geometry, PassCapture::PassesOnThisThread() - passesBefore);
 				}
 				return result;
 			}
@@ -520,7 +463,6 @@ namespace DCLF
 		{
 			static void thunk(void* a_light, void* a_lists, void* a_arg)
 			{
-				DCLF_FRAME_TRACE("SunAccumulation.cpp:517");  // TEMP frame trace
 				auto& self = SunAccumulation::Get();
 				self.bitsReady.store(false, std::memory_order_relaxed);
 				self.exclusionLive.store(false, std::memory_order_relaxed);
@@ -547,7 +489,6 @@ namespace DCLF
 		{
 			static void thunk(std::uint64_t a_1, std::uint64_t a_2, std::uint64_t a_3, std::uint64_t a_4)
 			{
-				DCLF_FRAME_TRACE("SunAccumulation.cpp:543");  // TEMP frame trace
 				func(a_1, a_2, a_3, a_4);
 				SunAccumulation::Get().bitsReady.store(false, std::memory_order_relaxed);
 			}
@@ -559,7 +500,6 @@ namespace DCLF
 		{
 			static void thunk(void* a_light, void* a_descriptor, std::uint32_t* a_count, void* a_processes, std::uint32_t a_arg)
 			{
-				DCLF_FRAME_TRACE("SunAccumulation.cpp:554");  // TEMP frame trace
 				SunCall* call = currentCall;
 				auto& self = SunAccumulation::Get();
 				if (call && a_descriptor) {
@@ -583,17 +523,16 @@ namespace DCLF
 		 * @brief BSCullingProcess::Process1 (vtable slot 0x16), for the sun's cascade culls: the objectArray holds no excluded
 		 * entry (ExcludeEntries), but one can still be reached through a node above it that stays. Skipped there too, stamped
 		 * as removed, so that a geometry of it the main camera registers takes DCLF's bits (ApplySunBits). Only inside the
-		 * sun's Accumulate on its own thread (currentCall), and never on a probe or parity frame.
+		 * sun's Accumulate on its own thread (currentCall), and never on a parity frame.
 		 */
 		struct CascadeProcess1
 		{
 			static void thunk(RE::NiCullingProcess* a_process, RE::NiAVObject* a_object, std::int32_t a_arg)
 			{
-				DCLF_FRAME_TRACE("SunAccumulation.cpp:583");  // TEMP frame trace
 				if (SunCall* call = currentCall; call && call->cascade >= 0 && a_object) {
 					auto& self = SunAccumulation::Get();
 					const auto& state = self.frameState;
-					if (self.exclusionLive.load(std::memory_order_relaxed) && !state.probe && !state.parity && state.exclusion && state.exclusion->candidates) {
+					if (self.exclusionLive.load(std::memory_order_relaxed) && !state.parity && state.exclusion && state.exclusion->candidates) {
 						const auto& entries = state.exclusion->candidates->entries;
 						if (const auto it = entries.find(a_object); it != entries.end() && state.exclusion->excluded[it->second]) {
 							state.exclusion->removed[it->second].store(state.stamp, std::memory_order_relaxed);
@@ -612,7 +551,6 @@ namespace DCLF
 		{
 			static void thunk(void* a_fullProcess, RE::NiCullingProcess* a_process, std::uint64_t a_arg)
 			{
-				DCLF_FRAME_TRACE("SunAccumulation.cpp:605");  // TEMP frame trace
 				func(a_fullProcess, a_process, a_arg);
 				// After it: the traversal's first call (vfunc 0xB8) has set the process up from the cascade's camera. With
 				// an empty objectArray it made none, and the planes are not this cascade's.
@@ -656,8 +594,7 @@ namespace DCLF
 		stl::write_thunk_call<Hooks::CascadeCull>(cascadeCull);
 		stl::write_thunk_call<Hooks::MaskClear>(maskClear);
 		// The cascades' skip of the excluded entries they reach anyway: with the point lights' (CS_DCLF_LIGHT_EXCLUDE=0: neither).
-		if (SwitchValue(Switch::LightExclude) != "0")
-			stl::write_vfunc<0x16, Hooks::CascadeProcess1>(RE::VTABLE_BSCullingProcess[0]);
+		stl::write_vfunc<0x16, Hooks::CascadeProcess1>(RE::VTABLE_BSCullingProcess[0]);
 		installed = true;
 		logger::info("[DCLF] sun accumulation installed (Accumulate, its cascades and registrations, the full-frustum cull)");
 	}
@@ -680,19 +617,14 @@ namespace DCLF
 				const double applied = std::max<double>(stats.exclusionFrames, 1.0);
 				const auto take = [](std::atomic<std::uint64_t>& a_value) { return a_value.exchange(0, std::memory_order_relaxed); };
 				const auto written = take(bitStats.written), withBits = take(bitStats.withBits), notReady = take(bitStats.notReady);
-				const auto compared = take(bitStats.compared), agree = take(bitStats.agree), engineOnly = take(bitStats.engineOnly), dclfOnly = take(bitStats.dclfOnly);
-				const auto unclaimed = take(bitStats.probeUnclaimed), noPass = take(bitStats.probeNoPass);
-				logger::info("[DCLF] sun entry exclusion{}: applied on {} frames ({} stale, {} with none); per frame {:.0f} of {:.0f} objectArray entries removed, "
+				logger::info("[DCLF] sun entry exclusion: applied on {} frames ({} stale, {} with none); per frame {:.0f} of {:.0f} objectArray entries removed, "
 							 "{:.0f} of {:.0f} candidates excluded, filter {:.3f} ms; {:.0f} registrations took DCLF's bits ({:.0f} with a cascade), {} before the cascades, "
-							 "{} cascade registrations under a removed entry; excluded entries the cascades reached anyway and skipped {:.0f} a frame, parity {} frames: {} unclaimed casters under an excluded entry{}{}",
-					ExclusionProbe() ? " (probe: dry)" : "", stats.exclusionFrames, stats.exclusionStale, stats.exclusionMissing,
+							 "{} cascade registrations under a removed entry; excluded entries the cascades reached anyway and skipped {:.0f} a frame, parity {} frames: {} unclaimed casters under an excluded entry{}",
+					stats.exclusionFrames, stats.exclusionStale, stats.exclusionMissing,
 					stats.entriesRemoved / applied, stats.entriesSeen / applied, stats.excluded / applied, stats.candidates / applied,
 					stats.filterTicks * toMs / applied, written / applied, withBits / applied, notReady, stats.cascadeRegistrationsUnderRemoved,
 					skipStats.skipped.exchange(0) / applied, skipStats.parityFrames.load(), skipStats.parityLost.load(),
-					skipStats.parityFrames.load() ? (skipStats.parityLost.load() ? " <- SUN EXCLUSION; first " + skipStats.parityLostFirst : std::string(" <- OK")) : std::string(),
-					ExclusionProbe() ? fmt::format("; bits compared {}, agree {}, engine only {}, DCLF only {}; unclaimed cascade registrations {} with a pass, {} without",
-										   compared, agree, engineOnly, dclfOnly, unclaimed, noPass) :
-									   std::string());
+					skipStats.parityFrames.load() ? (skipStats.parityLost.load() ? " <- SUN EXCLUSION; first " + skipStats.parityLostFirst : std::string(" <- OK")) : std::string());
 			}
 		}
 		stats = {};

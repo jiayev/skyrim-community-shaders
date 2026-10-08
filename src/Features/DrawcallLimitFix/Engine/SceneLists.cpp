@@ -1,5 +1,4 @@
 #include "PrimaryCull.h"
-#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "EngineAccess.h"
 #include "PassCapture.h"
@@ -196,13 +195,13 @@ namespace DCLF
 		listMode.store(ListMode::Engine, std::memory_order_release);
 		parityFilter.reset();
 		listParity = false;
-		if (!installed || SwitchValue(Switch::ListFilter) == "0" || Probe()) {
+		if (!installed) {
 			++listStats.notToggled;
 			listsDirty.store(true, std::memory_order_relaxed);
 			return;
 		}
-		// The engine's decal order is the lists' (CS_DCLF_DECAL_ORDER=engine, and its probe): its own build, whole.
-		if (SwitchValue(Switch::DecalOrder) == "engine" || SwitchEnabled(Switch::DecalOrderProbe)) {
+		// CS_DCLF_DECAL_ORDER_PROBE compares the decal order with the engine's lists: its own build, whole.
+		if (SwitchEnabled(Switch::DecalOrderProbe)) {
 			++listStats.decalOrder;
 			listsDirty.store(true, std::memory_order_relaxed);
 			return;
@@ -244,7 +243,6 @@ namespace DCLF
 
 	void PrimaryCull::FilterSceneLists()
 	{
-		DCLF_FRAME_TRACE("PrimaryCull::FilterSceneLists");  // TEMP frame trace
 		const auto filter = listFilter.load(std::memory_order_acquire);
 		if (!filter || filter->roots.empty())
 			return;
@@ -292,7 +290,6 @@ namespace DCLF
 
 	void PrimaryCull::RebuildSceneLists(const ListFilter* a_filter)
 	{
-		DCLF_FRAME_TRACE("PrimaryCull::RebuildSceneLists");  // TEMP frame trace
 		const std::int64_t start = Now();
 		const auto* sceneNode = SceneNode();
 		const std::uint32_t count = Global<std::uint32_t>(kSceneListCount);
@@ -576,7 +573,6 @@ namespace DCLF
 		{
 			static void thunk()
 			{
-				DCLF_FRAME_TRACE("SceneLists.cpp:563");  // TEMP frame trace
 				auto& self = PrimaryCull::Get();
 				auto mode = self.listMode.load(std::memory_order_acquire);
 				// A structure change since the publication: built again now rather than kept.
@@ -638,7 +634,6 @@ namespace DCLF
 		{
 			static RE::NiNode* thunk(RE::NiAVObject* a_object)
 			{
-				DCLF_FRAME_TRACE("SceneLists.cpp:624");  // TEMP frame trace
 				return PrimaryCull::Get().skipObjectRoot ? nullptr : a_object->AsNode();
 			}
 		};
@@ -648,7 +643,6 @@ namespace DCLF
 		{
 			static void thunk(void* a_list)
 			{
-				DCLF_FRAME_TRACE("SceneLists.cpp:633");  // TEMP frame trace
 				if (PrimaryCull::Get().listMode.load(std::memory_order_acquire) != ListMode::Engine && IsSceneList(a_list, false))
 					return;
 				func(a_list);
@@ -664,7 +658,6 @@ namespace DCLF
 		{
 			static void thunk(void* a_process, void* a_list, void* a_camera, bool a_skipHidden, bool a_jobs)
 			{
-				DCLF_FRAME_TRACE("SceneLists.cpp:648");  // TEMP frame trace
 				func(a_process, a_list, a_camera, a_skipHidden || IsSceneList(a_list, true), a_jobs);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;

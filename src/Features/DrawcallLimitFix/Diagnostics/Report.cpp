@@ -159,9 +159,9 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		std::string epochParts;
 		for (std::size_t i = 0; i < draws.partMs.size(); ++i)
 			epochParts += fmt::format("{}{} {:.3f} ms", epochParts.empty() ? "" : ", ", DCLF::kEpochPartNames[i], draws.partMs[i]);
-		// Under CS_DCLF_ASYNC the build's parts are measured on the worker when it built the payload, and
-		// "graph execute" is then everything the render thread spent on the epoch.
-		logger::info("[DCLF] indirect epoch CPU by part{}: {}", DCLF::AsyncModeSetting() != DCLF::AsyncMode::Off ? " (build parts on the worker when it built)" : "", epochParts);
+		// The build's parts are measured where the payload was built, and "graph execute" is everything the render thread spent on
+		// the epoch.
+		logger::info("[DCLF] indirect epoch CPU by part (build parts where built): {}", epochParts);
 		if (draws.commitEpochs) {
 			static constexpr std::array<const char*, 7> kCommitParts{ "join", "lookups", "frame textures and patches", "frame blocks",
 				"payload uploads", "drawn set", "rest" };
@@ -173,8 +173,7 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				logger::info("[DCLF] scene stream views a fallback wanted while the coordinator or the builds task ran (none made): {}", refused);
 			DCLF::IndirectDraws::Get().ResetCommitTimings();
 		}
-		std::istringstream reportLines((DCLF::AsyncModeSetting() != DCLF::AsyncMode::Off ? DCLF::IndirectDraws::Get().AsyncReport() : std::string()) +
-									   DCLF::SceneStore::Get().SceneReport());
+		std::istringstream reportLines(DCLF::IndirectDraws::Get().AsyncReport() + DCLF::SceneStore::Get().SceneReport());
 		for (std::string line; std::getline(reportLines, line);)
 			logger::info("{}", line);
 		if (DCLF::ActiveToggles().shadows) {

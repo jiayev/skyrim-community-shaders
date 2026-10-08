@@ -1,5 +1,4 @@
 #include "Internal.h"
-#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 #include "Features/DrawcallLimitFix/Diagnostics/HiddenWatch.h"
 
 namespace DCLF
@@ -27,7 +26,6 @@ namespace DCLF
 	 */
 	void SceneStore::BuildScenePhase()
 	{
-		DCLF_FRAME_TRACE("BuildScenePhase");  // TEMP frame trace
 		{
 			DCLF_SCENE_PART(Prologue, "CS.DCLF.Scene.Prologue");
 			// The frame number moved at BeginFrame, before the work was kicked: what the engine's hooks read in the window.
@@ -405,8 +403,8 @@ namespace DCLF
 
 	bool SceneStore::WriteObject(RE::BSGeometry* geometry, Tracked& a_tracked, PartTimer& timer, Ineligible& a_bucket)
 	{
-		// CS_DCLF_CLASSIFY_CACHE=probe: the cached verdict is used and *also* recomputed, and the two compared.
-		const bool classifyProbe = SwitchValue(Switch::ClassifyCache) == "probe";
+		// CS_DCLF_PERSISTENT_PARITY's frames: the cached verdict is used and *also* recomputed, and the two compared.
+		const bool classifyProbe = SwitchEnabled(Switch::PersistentParity) && ParityDue(frame, 17);
 		// CS_DCLF_COVERAGE_PROBE=1: which shader the uncovered objects actually use.
 		const bool coverageProbe = SwitchEnabled(Switch::CoverageProbe);
 		auto* trackedEntry = &a_tracked;

@@ -28,7 +28,7 @@ namespace DCLF
 	 * paraboloid mode, over the light candidates (SceneStore::GetLightCandidates): an entry all of whose shadow casters are that
 	 * mode's inputs. The process's Process1 (vtable slot 0x16)
 	 * skips such an entry while the set withholds that mode's casters this frame and the exclusion was built for the current candidates.
-	 * CS_DCLF_LIGHT_EXCLUDE=0 turns it off; =probe skips nothing and counts. On persistent-parity frames nothing is skipped
+	 * On persistent-parity frames nothing is skipped
 	 * and a paraboloid pass the registration did not withhold under an excluded entry counts as one the skip would lose.
 	 */
 	namespace LocalLightCull
@@ -43,7 +43,7 @@ namespace DCLF
 		std::string Report();
 
 		/**
-		 * The category filter (CS_DCLF_LIGHT_LIST, on with the skip): inside a point light's cull, a category node (an exact
+		 * The category filter (with the skip): inside a point light's cull, a category node (an exact
 		 * NiNode that is the parent of excluded entries) culls its children less those entries, through NiNode::OnVisible's
 		 * vtable slot, instead of reaching each to skip it. Everything above (the cells and their multibound tests, kAllPass,
 		 * the portals' compound frustum) stays the engine's, so every light takes it, portal-strict ones included. Built at

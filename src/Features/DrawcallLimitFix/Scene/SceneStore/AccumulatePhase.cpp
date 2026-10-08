@@ -1,5 +1,4 @@
 #include "Internal.h"
-#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "Features/SubsurfaceScattering.h"
 
@@ -167,7 +166,6 @@ namespace DCLF
 	 */
 	void SceneStore::PrepareAccumulatePhase()
 	{
-		DCLF_FRAME_TRACE("PrepareAccumulatePhase");  // TEMP frame trace
 		ZoneScopedN("CS.DCLF.Accumulate.Prepare");
 		// The engine's registrations are drained for the diagnostics (and the frame's lighting pass, TemplatePassOf's fallback).
 		RefreshMainBatchRenderers();
@@ -283,7 +281,6 @@ namespace DCLF
 
 	void SceneStore::BuildAccumulatePhase()
 	{
-		DCLF_FRAME_TRACE("BuildAccumulatePhase");  // TEMP frame trace
 		ZoneScopedN("CS.DCLF.Accumulate.Tables");
 		if (!sceneBuilt)
 			return;  // a load screen, or the feature installed mid-frame: nothing to patch
@@ -306,8 +303,8 @@ namespace DCLF
 		const auto& decalBiasMode = frameDecalBias;
 		const std::uint32_t biasWitness = decalBiasMode[1] | (decalBiasMode[2] << 8) | (decalBiasMode[3] << 16);
 		const bool lightLimitFixLoaded = globals::features::lightLimitFix.loaded;
-		// CS_DCLF_DERIVED_CACHE=probe: the cached derivation is served and also recomputed, and the two compared.
-		const bool derivedProbe = SwitchValue(Switch::DerivedCache) == "probe";
+		// CS_DCLF_PERSISTENT_PARITY's frames: the cached derivation is served and also recomputed, and the two compared.
+		const bool derivedProbe = SwitchEnabled(Switch::PersistentParity) && ParityDue(frame, 13);
 		const bool derivationStats = SwitchEnabled(Switch::DeriveProbe);
 
 		// What this phase has anything to do with: the frame's membership joins (BindByMembership). Every other
