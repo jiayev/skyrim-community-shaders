@@ -64,6 +64,9 @@ namespace DCLF
 		if (object.geometryIndex >= tables.geometries.size() || !tables.geometries[object.geometryIndex].vertexAddress ||
 			!tables.geometries[object.geometryIndex].indexAddress)
 			return a_why = 4, false;
+		// Within the scene buffers the main builds ahead are made against: past them it has no input until their growth.
+		if (!IndirectDraws::Get().FitsScene(&tables, a_slot, false))
+			return a_why = 10, false;
 		// A decal draws at its slot in its group's range (OrderDecals), and one slot holds one sequence: one of several partitions
 		// has none.
 		if (const std::uint32_t group = ObjectDecalGroup(object.flags))
@@ -208,7 +211,7 @@ namespace DCLF
 		// Readiness moved: anything the lookups resolve is a new version of them (Lookups::NextVersion), the shadow lookups
 		// have their own generation.
 		const std::uint64_t readiness = ((std::uint64_t(lookupsView.versionCounter) << 32) ^ (std::uint64_t(lookupsView.shadowGeneration) << 1) ^ lookupsView.generation) +
-		                                tables.constantsStamp * 0x9e3779b97f4a7c15ull;
+		                                tables.constantsStamp * 0x9e3779b97f4a7c15ull + IndirectDraws::Get().SceneFitSerial() * 0xc2b2ae3d27d4eb4full;
 		if (readiness != setReadiness) {
 			setReadiness = readiness;
 			++setStats.readinessEvents;
@@ -320,7 +323,7 @@ namespace DCLF
 			// pipeline slot's forward pipeline is ready. A joiner is the engine's for a frame.
 			if (phases & kSetReflection) {
 				const bool wasMain = a_slot < tables.setPhases.size() && (tables.setPhases[a_slot] & kSetMain) != 0;
-				if (!(phases & kSetMain) || !wasMain || !IndirectDraws::Get().PhaseReady(a_slot, kSetReflection)) {
+				if (!(phases & kSetMain) || !wasMain || !IndirectDraws::Get().PhaseReady(&tables, a_slot, kSetReflection)) {
 					if (phases & kSetMain) {
 						waiting(8);
 						if (!wasMain)
@@ -330,7 +333,7 @@ namespace DCLF
 				}
 			}
 			for (const std::uint8_t phase : { kSetCaster, kSetCasterPoint, kSetOccluderSky, kSetOccluderPrecipitation })
-				if ((phases & phase) && !IndirectDraws::Get().PhaseReady(a_slot, phase)) {
+				if ((phases & phase) && !IndirectDraws::Get().PhaseReady(&tables, a_slot, phase)) {
 					waiting(7);
 					phases &= ~phase;
 				}
@@ -537,8 +540,12 @@ namespace DCLF
 			std::uint8_t drawn = 0;
 			if (same) {
 				const auto flags = tables.objects[a_slot].flags;
-				const bool main = (flags & kObjectMember) && !(flags & kObjectNoBindings);
-				drawn = static_cast<std::uint8_t>((main ? (kSetMain | kSetReflection) : 0u) | (tables.setPhases[a_slot] & ~(kSetMain | kSetReflection)));
+				// Within the scene buffers the builds ahead are made against too (FitsScene): rows the record took after its commit (an
+				// extras row, a fade root) may lie past them until their growth, and a build gives such an object no input.
+				auto& draws = IndirectDraws::Get();
+				const bool main = (flags & kObjectMember) && !(flags & kObjectNoBindings) && draws.FitsScene(&tables, a_slot, false);
+				const std::uint8_t others = draws.FitsScene(&tables, a_slot, true) ? static_cast<std::uint8_t>(tables.setPhases[a_slot] & ~(kSetMain | kSetReflection)) : 0;
+				drawn = static_cast<std::uint8_t>((main ? (kSetMain | kSetReflection) : 0u) | others);
 			}
 			// A structural change since the last revocation (R3b): the shapes were made without it, so the claim goes whole.
 			const std::uint8_t lost = (same && a_structure) ? claimed : static_cast<std::uint8_t>(claimed & ~drawn);

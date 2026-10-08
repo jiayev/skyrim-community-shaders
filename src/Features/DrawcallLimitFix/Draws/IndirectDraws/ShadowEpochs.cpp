@@ -2207,17 +2207,20 @@ namespace DCLF
 		return impl->shadowReadinessSerial;
 	}
 
-	bool IndirectDraws::PhaseReady(std::uint32_t a_slot, std::uint8_t a_phase) const
+	bool IndirectDraws::PhaseReady(const void* a_tables, std::uint32_t a_slot, std::uint8_t a_phase) const
 	{
 		const auto& store = SceneStore::Get();
-		const auto& tables = store.GetTables();
+		const auto& tables = *static_cast<const SceneStore::Tables*>(a_tables);
 		const auto& lookups = store.GetLookups();
 		if (a_phase == kSetReflection)
-			return impl->ReflectionPhaseReady(a_slot);
+			return impl->ReflectionPhaseReady(tables, a_slot);
 		if (a_slot >= tables.objects.size() || a_slot >= tables.shadowTechnique.size())
 			return false;
 		const auto& object = tables.objects[a_slot];
 		if (object.geometryIndex >= tables.geometries.size())
+			return false;
+		// Within the scene buffers the shadow build ahead is made against (FitsScene): past them it has no input until their growth.
+		if (!FitsScene(&tables, a_slot, true))
 			return false;
 		// An occluder under a fade node: the engine's cull of the map goes into it only as the node's fade allows
 		// (BuildDrawsCS, FadedOutOfOcclusion), which DCLF knows for a root it services (kFadeRootOwned, FadeStateCS) and no other.

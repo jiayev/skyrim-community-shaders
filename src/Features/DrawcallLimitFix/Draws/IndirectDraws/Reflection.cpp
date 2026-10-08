@@ -158,10 +158,9 @@ namespace DCLF
 		return ActiveToggles().reflections && !failed && reflection.resources && impl->resources && reflection.pipelinesReady;
 	}
 
-	bool IndirectDraws::Impl::ReflectionPhaseReady(std::uint32_t a_slot) const
+	bool IndirectDraws::Impl::ReflectionPhaseReady(const SceneStore::Tables& a_tables, std::uint32_t a_slot) const
 	{
-		const auto& tables = SceneStore::Get().GetTables();
-		const std::uint32_t p = a_slot < tables.objects.size() ? tables.objects[a_slot].pipelineIndex : ~0u;
+		const std::uint32_t p = a_slot < a_tables.objects.size() ? a_tables.objects[a_slot].pipelineIndex : ~0u;
 		return p < reflection.slotPipelines.size() && reflection.slotPipelines[p].valid();
 	}
 

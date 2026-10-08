@@ -415,6 +415,7 @@ namespace DCLF
 				}
 			}
 			bool damaged = false;
+			const std::uint32_t undrawnBefore = counts.withheldUndrawn;
 			for (std::size_t o = 0; o < snapshot.flags.size(); ++o) {
 				const std::uint32_t word = words[o];
 				const bool current = (word >> 4) == stamp;
@@ -434,7 +435,7 @@ namespace DCLF
 					if (counts.samples++ < 40) {
 						const auto* geometry = o < snapshot.geometry.size() ? snapshot.geometry[o] : nullptr;
 						logger::info("[DCLF] set parity, frame {}: drawn outside the set - object {} '{}' ({}{})", snapshot.frame, o,
-							geometry && store.IsTracked(geometry) ? geometry->name.c_str() : "?", depthDrawn ? "depth" : "", colourDrawn ? " colour" : "");
+							geometry && geometry->name.c_str() ? geometry->name.c_str() : "?", depthDrawn ? "depth" : "", colourDrawn ? " colour" : "");
 					}
 				}
 				// A decal is drawn by the colour segment's decal pass only (the depth segment never draws one), so it
@@ -460,7 +461,7 @@ namespace DCLF
 						// root fades out in view; the fade parities judge the fade).
 						++(fadeHidden ? counts.fadeHiddenInView : counts.rejectedInView);
 						const auto* geometry = o < snapshot.geometry.size() ? snapshot.geometry[o] : nullptr;
-						const bool alive = geometry && store.IsTracked(geometry);
+						const bool alive = geometry != nullptr;  // held by snapshot.tables
 						const bool skinned = alive && geometry->GetGeometryRuntimeData().skinInstance;
 						counts.skinnedInView += skinned;
 						if (alive && !fadeHidden && counts.inViewSamples++ < 24) {
@@ -468,7 +469,7 @@ namespace DCLF
 							for (const RE::NiAVObject* node = geometry; node && !owner; node = node->parent)
 								owner = node->GetUserData();
 							const auto* base = owner ? owner->GetBaseObject() : nullptr;
-							const auto& tables = store.GetTables();
+							const auto& tables = *snapshot.tables;
 							const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
 							const auto* rootNode = root < tables.fadeRootNode.size() ? static_cast<const RE::NiAVObject*>(tables.fadeRootNode[root]) : nullptr;
 							const auto* fadeNode = rootNode ? const_cast<RE::NiAVObject*>(rootNode)->AsFadeNode() : nullptr;
@@ -498,9 +499,9 @@ namespace DCLF
 					const bool claimed = (snapshot.claims[o] & kSetMain) != 0;
 					++(claimed ? counts.claimedOutside : counts.unclaimedMembers);
 					const auto* geometry = o < snapshot.geometry.size() ? snapshot.geometry[o] : nullptr;
-					if (geometry && store.IsTracked(geometry) && counts.claimSamples++ < 12)
+					if (geometry && counts.claimSamples++ < 12)
 					{
-						const auto& tables = store.GetTables();
+						const auto& tables = *snapshot.tables;
 						const std::uint32_t partner = tables.IsLayer(static_cast<std::uint32_t>(o)) ? tables.layerBase[o] : o < tables.layerOf.size() ? tables.layerOf[o] : kNoObjectSlot;
 						logger::info("[DCLF] set parity, frame {}: {} - object {} '{}' (claims {:#x}{}){}", snapshot.frame,
 							claimed ? "claimed by the registration hooks, not in the set: drawn by nobody" : "in the set, not claimed: drawn twice", o,
@@ -522,7 +523,7 @@ namespace DCLF
 						counts.gapsRetest += gapVerdict == 0;
 						counts.gapsRejected += gapVerdict == 2;
 						// The snapshot is frames old: a geometry released since (a teleport, a cell unloading) is not read.
-						const bool alive = store.IsTracked(geometry);
+						const bool alive = true;  // held by snapshot.tables
 						const RE::TESObjectREFR* owner = nullptr;
 						for (const RE::NiAVObject* node = alive ? geometry : nullptr; node && !owner; node = node->parent)
 							owner = node->GetUserData();
@@ -544,7 +545,7 @@ namespace DCLF
 				damaged = true;
 				if (counts.samples++ < 40) {
 					const auto* geometry = o < snapshot.geometry.size() ? snapshot.geometry[o] : nullptr;
-					const bool alive = geometry && store.IsTracked(geometry);
+					const bool alive = geometry != nullptr;  // held by snapshot.tables
 					static constexpr const char* kVerdicts[] = { "occluded (retest)", "visible", "rejected", "no verdict" };
 					logger::info("[DCLF] set parity, frame {}: {} - object {} '{}'{}: verdict {}, depth build {}, colour build {}, {}{}{}", snapshot.frame, kind, o,
 						alive ? geometry->name.c_str() : "?", alpha ? " (alpha tested)" : "", current ? kVerdicts[verdict] : "not this frame's",
@@ -553,6 +554,8 @@ namespace DCLF
 						(flags & 2) ? "bound" : "not bound", withheld ? ", in the set" : "", (flags & 8) ? ", RECORD DISAGREES" : "");
 				}
 			}
+			if (counts.withheldUndrawn > undrawnBefore + 50)
+				logger::info("[DCLF] set parity, frame {}: {} drawn by nobody; {}", snapshot.frame, counts.withheldUndrawn - undrawnBefore, snapshot.payloads);
 			context->Unmap(snapshot.staging.get(), 0);
 			setParityStaging.push_back(std::move(snapshot.staging));
 			if (frustum)
@@ -627,8 +630,59 @@ namespace DCLF
 		// The frame the epochs drew (their visibility stamps), not the one the payloads were built in (step 6e E3b).
 		snapshot.frame = store.GetFrame();
 		snapshot.framesLeft = 3;
+		// TEMP: the payloads' resident regions, logged with a frame whose objects nobody drew.
+		{
+			auto describe = [&](const MainPayload& a_payload) {
+				std::array<std::uint32_t, 4> states{};  // drawable, decal, absent, skipped
+				for (const auto state : a_payload.objectState)
+					++states[state == kObjectStateDrawable ? 0 : state == kObjectStateDecal ? 1 : state == kObjectStateAbsent ? 2 : 3];
+				return fmt::format("objects {} (drawable {}, decal {}, absent {}, skipped {}), inputs {}, resident {} version {} (uploaded {}/{}), resyncs {} reasons {:#x}, "
+								   "region draws {}, capacity skips {}",
+					a_payload.objectState.size(), states[0], states[1], states[2], states[3], a_payload.inputList.size(), a_payload.resident.Count(),
+					a_payload.resident.Version(), a_resources->residentUploaded[0], a_resources->residentUploaded[1], a_payload.residentResyncs,
+					a_payload.residentResyncReasons, a_payload.residentDraws, a_payload.skipped[static_cast<std::size_t>(IndirectDraws::Skip::Capacity)]);
+			};
+			snapshot.payloads = fmt::format("depth: {}; colour: {}", describe(a_depth), describe(a_colour));
+			{
+				const auto draws = installedDraws;
+				const bool own = draws && draws->payloads[kAsyncColour].get() == &a_colour;
+				std::uint32_t skippedClaimed = 0;
+				if (const auto set = PassCapture::Get().CurrentSet())
+					for (std::size_t o = 0; o < a_colour.objectState.size() && o < store.GetTables().objectGeometry.size(); ++o)
+						if (a_colour.objectState[o] == static_cast<std::uint8_t>(IndirectDraws::Skip::Capacity) && (set->PhasesOf(store.GetTables().objectGeometry[o]) & kSetMain))
+							++skippedClaimed;
+				snapshot.payloads += fmt::format("; colour payload the installed publication's {}, its tables the accepted ones {}, capacity-skipped and claimed {}", own,
+					draws && draws->tables == store.AcceptedTables(), skippedClaimed);
+			}
+			{
+				const auto& f = a_colour.inputs.addresses.fit;
+				const auto& pf = postedFit[0];
+				snapshot.payloads += fmt::format("; colour fit objects {} geometry {} extras {} trees {} fadeRoots {} rows {}/{}; posted objects {} geometry {} extras {} trees {} fadeRoots {} rows {}/{}",
+					f.objects, f.geometryRows, f.extraRows, f.trees, f.fadeRoots, a_colour.inputs.addresses.recordCapacity, a_colour.inputs.addresses.pipelineCapacity,
+					pf.objects, pf.geometryRows, pf.extraRows, pf.trees, pf.fadeRoots, postedRows[0], postedRows[1]);
+				const auto& t = store.GetTables();
+				std::uint32_t shown = 0;
+				for (std::uint32_t o = 0; o < t.objects.size() && o < a_colour.objectState.size() && shown < 4; ++o) {
+					if (a_colour.objectState[o] != static_cast<std::uint8_t>(IndirectDraws::Skip::Capacity) || !(store.SetPhasesOf(static_cast<std::int32_t>(o)) & kSetMain))
+						continue;
+					++shown;
+					const auto& r = t.objects[o];
+					snapshot.payloads += fmt::format("; object {}: material {} pipeline {} geometry {} extras {} tree {} fadeRoot {} fits {}", o, r.materialIndex, r.pipelineIndex,
+						r.geometryIndex, o < t.extraOffset.size() ? t.extraOffset[o] : 0u, o < t.objectTree.size() ? t.objectTree[o] : 0u,
+						o < t.objectFadeRoot.size() ? t.objectFadeRoot[o] : 0u, ObjectFits(t, o, f));
+				}
+			}
+		}
 		snapshot.depthState = a_depth.objectState;
 		snapshot.colourState = a_colour.objectState;
+		// Only a publication's tables: the coordinator's own (none accepted yet) are not the render thread's to hold.
+		snapshot.tables = store.AcceptedTables();
+		if (!snapshot.tables) {
+			setParityStaging.push_back(std::move(snapshot.staging));
+			if (snapshot.frustumStaging)
+				setParityStaging.push_back(std::move(snapshot.frustumStaging));
+			return;
+		}
 		const auto& tables = store.GetTables();
 		const std::size_t objects = tables.objects.size();
 		// The frame's set: the engine withholds every member from the main camera's views, so one the GPU culling kept and
