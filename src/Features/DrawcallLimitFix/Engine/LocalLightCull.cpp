@@ -38,7 +38,7 @@ namespace DCLF::LocalLightCull
 		struct Stats
 		{
 			std::atomic<std::uint64_t> visited{ 0 }, skipped{ 0 }, parityPasses{ 0 }, parityLost{ 0 };
-			std::uint64_t frames = 0, live = 0, noExclusion = 0, noClaims = 0, stale = 0, parityFrames = 0;
+			std::uint64_t frames = 0, live = 0, noExclusion = 0, noClaims = 0, stale = 0, masked = 0, parityFrames = 0;
 		};
 		Stats stats;
 
@@ -268,7 +268,9 @@ namespace DCLF::LocalLightCull
 				return;
 			}
 			const std::uint64_t appeared = SceneStore::Get().GetLightEntriesAppeared();
-			const bool whole = !filterBuilt || filterBuilt->candidates != a_exclusion->candidates.get() || filterBuilt->exclusionVersion != a_exclusion->version;
+			// Whole for a new verdict; for one translated to newer candidates (the same version) the nodes of the entries that moved were
+			// made dirty (SelectFrame), and the rest stand.
+			const bool whole = !filterBuilt || filterBuilt->exclusionVersion != a_exclusion->version;
 			// An entry appeared: the nodes that cut a child for holding no geometry judge it again (it may hold one now).
 			const bool appearedNow = filterBuilt && filterBuilt->entriesAppeared != appeared;
 			const std::uint64_t dirtyNow = dirtied.load(std::memory_order_acquire);
@@ -517,8 +519,26 @@ namespace DCLF::LocalLightCull
 			++stats.noExclusion, next.reset();
 		else if (!PassCapture::Get().CastersWithheld(kSetCasterPoint))
 			++stats.noClaims, next.reset();  // the registration withholds nothing of the mode: the engine draws its casters
-		else if (next->candidates->generation != SceneStore::Get().GetLightCandidatesGeneration())
-			++stats.stale, next.reset();  // built for other candidates: an entry may hold a caster no epoch has drawn yet
+		else if (const auto candidates = SceneStore::Get().GetLightCandidates(); !candidates)
+			++stats.stale, next.reset();  // no candidates this frame (a load, a reset)
+		else if (next->candidates != candidates) {
+			// A verdict on the frame's candidates (TranslateExclusion): the entries changed since its snapshot are the engine's (the lights
+			// cull them natively), the rest stand. The filter's nodes holding a changed entry are walked natively until they are built
+			// again (dirty: UpdateFilter); the version is kept, so the rest of the filter stands.
+			std::vector<std::uint32_t> changed;
+			auto translated = TranslateExclusion(next, candidates, false, true, &changed);
+			if (filterInstalled && filterBuilt)
+				for (const std::uint32_t e : changed)
+					for (const auto* snapshot : { next->candidates.get(), candidates.get() }) {
+						// The parent as a key only (the entry is held by its snapshot; its parent may be detached meanwhile).
+						const auto* root = e < snapshot->Capacity() ? snapshot->entryNodes[e] : nullptr;
+						if (const auto node = root ? filterBuilt->nodes.find(root->parent) : filterBuilt->nodes.end();
+							node != filterBuilt->nodes.end() && !node->second->dirty.exchange(true, std::memory_order_acq_rel))
+							dirtied.fetch_add(1, std::memory_order_release);
+					}
+			next = std::move(translated);
+			++stats.masked;
+		}
 		const bool parity = next && SwitchEnabled(Switch::PersistentParity) && ParityDue(a_frame);
 		parityFrame.store(parity, std::memory_order_relaxed);
 		stats.parityFrames += parity ? 1 : 0;
@@ -733,8 +753,8 @@ namespace DCLF::LocalLightCull
 			return timing;
 		auto& s = stats;
 		const auto lost = s.parityLost.exchange(0);
-		const auto text = fmt::format("[DCLF] point lights' shadow culls: {} frames, {} with the exclusion ({} none built, {} the mode's claims not live, {} stale); {} entries visited, {} skipped; parity {} frames: {} paraboloid passes not withheld, {} of them under an excluded entry{}",
-			s.frames, s.live, s.noExclusion, s.noClaims, s.stale, s.visited.exchange(0), s.skipped.exchange(0),
+		const auto text = fmt::format("[DCLF] point lights' shadow culls: {} frames, {} with the exclusion ({} none built, {} the mode's claims not live, {} without candidates, {} translated to newer candidates); {} entries visited, {} skipped; parity {} frames: {} paraboloid passes not withheld, {} of them under an excluded entry{}",
+			s.frames, s.live, s.noExclusion, s.noClaims, s.stale, s.masked, s.visited.exchange(0), s.skipped.exchange(0),
 			s.parityFrames, s.parityPasses.exchange(0), lost, s.parityFrames ? (lost ? " <- LIGHT EXCLUSION" : " <- OK") : "");
 		std::scoped_lock lock(firstMutex);
 		std::string by;
@@ -742,7 +762,7 @@ namespace DCLF::LocalLightCull
 			if (lostByReject[r])
 				by += fmt::format(" reject {}={}", r, std::exchange(lostByReject[r], 0));
 		const auto withFirst = firstLost.empty() ? text : text + "; lost by" + by + "; first lost " + std::exchange(firstLost, {});
-		s.frames = s.live = s.noExclusion = s.noClaims = s.stale = s.parityFrames = 0;
+		s.frames = s.live = s.noExclusion = s.noClaims = s.stale = s.masked = s.parityFrames = 0;
 		std::string list;
 		if (filterInstalled) {
 			auto& f = filterStats;

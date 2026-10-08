@@ -898,6 +898,13 @@ namespace DCLF
 			// an attach, which is a move. Its entry, slot and binding stay; the attach has evaluated it again (AddGeometry).
 			std::vector<RE::BSGeometry*> detached;
 			for (auto* event = batch->head; event; event = event->next) {
+				// A sun candidate above it: its subtree changed, which its plan in the primary cut reads (PlanOf), whether or not a
+				// tracked geometry came or went.
+				for (const void* ancestor : event->ancestors)
+					if (const auto it = sunTable.index.find(static_cast<const RE::NiAVObject*>(ancestor)); it != sunTable.index.end()) {
+						sunEntriesForced.insert(it->first);
+						sunEntriesDirty.push_back(it->first);
+					}
 				if (event->type == SceneTracker::EventType::Attached) {
 					++stats.attachedEvents;
 					if (!categoryNodes.empty())
@@ -918,8 +925,10 @@ namespace DCLF
 		}
 
 		{
+			// CS_DCLF_PERSISTENT_PARITY: a slice of the tracked geometries checked for a detach the events missed (each one found is dropped,
+			// and flagged). The normal path trusts the detach events (invariant 5).
 			DCLF_SCENE_PART(Validate, "CS.DCLF.Scene.Validate");
-			if (std::exchange(validatedFrame, frame) != frame)
+			if (SwitchEnabled(Switch::PersistentParity) && std::exchange(validatedFrame, frame) != frame)
 				ValidateSlice();
 		}
 		DCLF_SCENE_PART(StructuralEvents, "CS.DCLF.Scene.StructuralEvents");
@@ -928,10 +937,6 @@ namespace DCLF
 			ReseedFadeRoot(node);
 		// The fade nodes whose currentFade changed since the last apply (the delta walk re-evaluates their dependents).
 		fadeChanged.insert(fadeChanged.end(), batch->fades.begin(), batch->fades.end());
-		if (fadeChanged.size() > kMaxFadeChanges) {
-			fadeChanged.clear();
-			fullEvaluation = true;
-		}
 		// The structural events (SceneEvents): properties whose flags, material or controllers changed, and nodes Havok
 		// moved or gave a controller.
 		propertyChanged.insert(propertyChanged.end(), batch->properties.begin(), batch->properties.end());
@@ -949,11 +954,6 @@ namespace DCLF
 				switchPending[at->second].structural |= event.structural;
 		}
 		ApplyLodSegmentEvents(batch->lodSegments);
-		if (propertyChanged.size() > kMaxStructuralEvents || nodeChanged.size() > kMaxStructuralEvents) {
-			propertyChanged.clear();
-			HandBack(nodeChanged);
-			fullEvaluation = true;
-		}
 
 		stats.tracked = static_cast<std::uint32_t>(tracked.size());
 		stats.categoryNodes = static_cast<std::uint32_t>(categoryNodes.size());
@@ -1122,7 +1122,11 @@ namespace DCLF
 		stl::detour_thunk<SetExternalEmittance>(REL::Offset(kSetExternalEmittance).address());
 		stl::write_vfunc<0x31, PropertySetMaterialAlpha>(RE::VTABLE_BSLightingShaderProperty[0]);
 		lodFadeEventsInstalled = true;
-		if (InstallSwitchStores()) {
+		// The switch nodes' selections are followed by event alone (the cut's memberLive, ApplySwitchEvents): without the stores' hooks
+		// (an unsupported build) DCLF cannot run.
+		if (!InstallSwitchStores())
+			stl::report_and_fail("Drawcall Limit Fix: the switch nodes' hooks could not be installed (an unsupported game build)");
+		{
 			// NiSwitchNode's own child edits (NiNode vtable slots 0x35, 0x37-0x3C, as SceneTracker's).
 			DetourSwitchSlot<SwitchAttachChild>(0x35);
 			DetourSwitchSlot<SwitchDetachChild1>(0x37);
@@ -1275,8 +1279,6 @@ namespace DCLF
 
 	void SceneStore::CatchUpSwitches(std::span<RE::NiAVObject* const> a_attached, std::span<const SwitchEvent> a_switches)
 	{
-		if (!SwitchEventsLive())
-			return;
 		const bool world = std::exchange(worldCatchUpPending, false);
 		if (!world && a_attached.empty() && a_switches.empty())
 			return;

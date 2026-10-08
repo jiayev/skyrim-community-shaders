@@ -223,7 +223,10 @@ private:
 	// Per occlusion view (DCLF::kOcclusionSky, kOcclusionPrecipitation), the maps left to the engine (DCLF not ready) per
 	// report interval; and the views this frame's Ready calls said DCLF draws (DrawOcclusion's epoch draws them).
 	std::array<std::uint32_t, 2> occlusionNativeFrames{};
-	std::array<std::uint32_t, 2> occlusionEngineFrames{};  // frames the engine registered the map's non-members (OcclusionNeedsEngine)
+	std::array<std::uint32_t, 2> occlusionEngineFrames{};
+	// The toggles' generation last seen at a frame's start, and the first scene frame whose commit is under them (BeginSceneFrame).
+	std::uint32_t toggleGeneration = 0;
+	std::uint32_t toggleCommitFrame = 0;  // frames the engine registered the map's non-members (OcclusionNeedsEngine)
 	std::uint32_t occlusionWanted = 0;
 	std::uint32_t occlusionParityWaiting = 0;  // the maps whose engine render was kept this frame (CopyOcclusion stage 0)
 	/** @brief The periodic report (DrawcallLimitFix/Report.cpp): every kReportInterval frames. */

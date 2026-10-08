@@ -170,7 +170,6 @@ namespace DCLF
 		                                       SceneCapture::NodeRecord::kFade109 | SceneCapture::NodeRecord::kFadeType;
 
 		inline EventQueue<const RE::BSFadeNode*> fadeEvents;
-		constexpr std::size_t kMaxFadeChanges = 1u << 16;
 
 		inline float CurrentFade(RE::BSFadeNode* a_node)
 		{
@@ -213,7 +212,6 @@ namespace DCLF
 		 */
 		inline EventQueue<const void*> propertyEvents;
 		inline EventQueue<RE::NiPointer<RE::NiAVObject>> nodeEvents;
-		constexpr std::size_t kMaxStructuralEvents = 1u << 16;
 
 		inline void PushProperty(const void* a_property) { propertyEvents.Push(a_property); }
 

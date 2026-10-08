@@ -69,12 +69,13 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		const auto set = store.TakeSetStats();
 		const double commits = std::max<double>(static_cast<double>(set.commits), 1.0);
 		const auto& capture = DCLF::PassCapture::Get().GetStats();
-		logger::info("[DCLF] DCLF set: {:.0f} members and {:.1f} bound objects waiting a frame over {} commits; {} joined, {} left, {} evaluated ({} readiness events, {} "
+		logger::info("[DCLF] DCLF set: {:.0f} members and {:.1f} bound objects waiting a frame over {} commits; {} joined, {} left, {} evaluated ({} readiness events taking {} waiting ones again, {} "
 					 "resyncs), {} left while their binding was taken again, {} publications; waiting for: pipeline {}, material {}, shadow mask {}, shared lookups {}, "
-					 "geometry {}, decal slot {}, layer partner {}, shadow pipelines {}, reflection (forward pipeline or last frame's membership) {}, constants {}, scene buffers' growth {}{}{}; members patched by the accumulate phase {}{}; {} left the commit's decision after it (LeaveSet)",
-			set.members / commits, set.waiting / commits, set.commits, set.joined, set.left, set.evaluated, set.readinessEvents, set.resyncs, set.rebinding,
+					 "geometry {}, decal slot {}, layer partner {}, shadow pipelines {}, reflection (forward pipeline or last frame's membership) {}, constants {}, scene buffers' growth {}, an occluder's fade root not serviced {}, past the scene buffers (shadow) {}, a shadow diffuse not imported {}{}{}; members patched by the accumulate phase {}{}; {} left the commit's decision after it (LeaveSet); commit parity {} checks, {} slots differ{}",
+			set.members / commits, set.waiting / commits, set.commits, set.joined, set.left, set.evaluated, set.readinessEvents, set.waitingRequeued, set.resyncs, set.rebinding,
 			set.publications, set.waitingBy[0], set.waitingBy[1], set.waitingBy[2], set.waitingBy[3], set.waitingBy[4], set.waitingBy[5], set.waitingBy[6], set.waitingBy[7], set.waitingBy[8],
-			set.waitingBy[9], set.waitingBy[10], set.firstWaiting.empty() ? "" : "; first: ", set.firstWaiting, set.patchedMember, set.patchedMember ? " <- SET PATCHED" : "", set.leftAfterCommit);
+			set.waitingBy[9], set.waitingBy[10], set.waitingBy[11], set.waitingBy[12], set.waitingBy[13], set.firstWaiting.empty() ? "" : "; first: ", set.firstWaiting, set.patchedMember, set.patchedMember ? " <- SET PATCHED" : "", set.leftAfterCommit, set.commitParityChecks, set.commitParityDiffer,
+			set.commitParityChecks ? (set.commitParityDiffer ? " <- COMMIT" : " <- OK") : "");
 		// Claims the frame's scene work took back because their record stopped drawing (SceneStore::RevokeUndrawnClaims).
 		const auto [revoked, revokedMain] = store.TakeRevokedClaims();
 		const auto structural = store.TakeStructureRevocations();
@@ -317,9 +318,9 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				(stats.materialDiffMask & 1) ? "vs " : "", (stats.materialDiffMask & 2) ? "ps " : "",
 				(stats.materialDiffMask & 4) ? "textures " : "", (stats.materialDiffMask & 8) ? "address " : "",
 				(stats.materialDiffMask & 16) ? "filter " : "", (stats.materialDiffMask & 32) ? "written" : "");
-		logger::info("[DCLF] tracked {} under {} category nodes: {} objects, {} geometries, {} pipelines, {} materials; left native:{}; events +{} -{} ({} geometries moved), validation drops {}; CPU per frame: events {:.3f} ms, tables {:.3f} ms (scene {:.3f}, max {:.3f}; accumulate {:.3f}, max {:.3f}){}",
+		logger::info("[DCLF] tracked {} under {} category nodes: {} objects, {} geometries, {} pipelines, {} materials; left native:{}; events +{} -{} ({} geometries moved), validation drops {}{}; CPU per frame: events {:.3f} ms, tables {:.3f} ms (scene {:.3f}, max {:.3f}; accumulate {:.3f}, max {:.3f}){}",
 			stats.tracked, stats.categoryNodes, stats.objects, stats.geometries, stats.pipelines, stats.materials, reasons,
-			stats.attachedEvents, stats.detachedEvents, stats.detachMoves, stats.validationDrops, timing.eventsMs / frames,
+			stats.attachedEvents, stats.detachedEvents, stats.detachMoves, stats.validationDrops, stats.validationDrops ? " <- DETACH" : "", timing.eventsMs / frames,
 			(timing.sceneMs + timing.buildMs) / frames, timing.sceneMs / frames, timing.sceneMaxMs, timing.buildMs / frames, timing.buildMaxMs,
 			parts);
 		if (const auto posts = store.TakeConstantsPostStats(); posts.pipelinesPosted || posts.techniquesPosted || posts.stale || posts.recordsPosted || posts.framesPosted)

@@ -1386,7 +1386,9 @@ namespace DCLF
 			// lookups (samplers, null and projected textures), its geometry, its decal slot, its layer partner, its shadow pipelines
 			// or occlusion pipelines (or an alpha-tested caster's diffuse).
 			// The reflection phase (8): its forward pipeline, or the object was no main member at the last commit.
-			std::array<std::uint64_t, 11> waitingBy{};
+			std::array<std::uint64_t, 14> waitingBy{};
+			std::uint64_t waitingRequeued = 0;  // waiting slots taken again for a readiness source they wait on
+			std::uint64_t commitParityChecks = 0, commitParityDiffer = 0;  // CS_DCLF_SET_PARITY: full evaluations, slots that differed
 			std::string firstWaiting;
 		};
 		SetStats TakeSetStats() { return std::exchange(setStats, {}); }
@@ -1865,15 +1867,53 @@ namespace DCLF
 		std::vector<const RE::NiAVObject*> lightEntriesDirty;
 		std::shared_ptr<const SunCandidates> lightCandidates;
 		std::uint32_t lightCandidatesGeneration = 0;
-		std::uint32_t lightCandidatesBuilt = 0;
 		std::uint64_t lightEntriesAppeared = 0;
 		ankerl::unordered_dense::set<const RE::NiAVObject*> sunCandidateSet;
 		// Per sun candidate, a signature of its geometries' PrimaryEntryAllows verdicts: a change bumps the generation.
 		ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint64_t> primarySignature;
 		std::vector<const RE::NiAVObject*> sunEntriesDirty;
+		ankerl::unordered_dense::set<const RE::NiAVObject*> sunEntriesForced;  // candidates whose subtree an attach or detach changed
 		std::shared_ptr<const SunCandidates> sunCandidates;
 		std::uint32_t sunCandidatesGeneration = 0;
-		std::uint32_t sunCandidatesBuilt = 0;  // the generation the snapshot was built for
+		/**
+		 * @brief A candidate set's stable index space (SunCandidates' indices), the coordinator's: the entries' and their geometries'
+		 * indices with their free lists, each entry's geometries and its version (moved by every change of the index, from
+		 * candidateVersions). A snapshot is brought up to it at the indices whose versions moved (PublishCandidates), reusing one of
+		 * the pool no reader holds any more.
+		 */
+		struct CandidateTable
+		{
+			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> index;
+			std::vector<const RE::NiAVObject*> nodes;
+			std::vector<std::uint32_t> version;
+			std::vector<std::vector<std::uint32_t>> geometries;  // per entry
+			std::vector<std::uint32_t> free;
+			ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> geometryIndex;
+			std::vector<const RE::BSGeometry*> geometryNodes;
+			std::vector<std::uint32_t> geometryEntry;
+			std::vector<std::int32_t> geometrySlot;
+			std::vector<std::uint8_t> primaryGeometry;
+			std::vector<std::uint32_t> geometryFree;
+			std::vector<std::shared_ptr<SunCandidates>> pool;
+			bool changed = true;  // an index moved since the last snapshot
+			std::uint64_t entriesWritten = 0, snapshots = 0;  // since the last report
+		};
+		CandidateTable sunTable, lightTable;
+		std::uint32_t candidateVersions = 0;
+		/**
+		 * @brief a_root's entry in a_table as its dependents now are (a_dependents; null: not a candidate): written again, its
+		 * geometries with it, under a new version; a_sun: its geometries' PrimaryEntryAllows verdicts.
+		 */
+		void SetCandidate(CandidateTable& a_table, const RE::NiAVObject* a_root, const std::vector<RE::BSGeometry*>* a_dependents, bool a_sun);
+		void ResetCandidateTable(CandidateTable& a_table);
+		/** @brief CS_DCLF_PERSISTENT_PARITY: a_table against a_set and the dependents now; the first difference, or empty. */
+		std::string CheckCandidateTable(const CandidateTable& a_table, const ankerl::unordered_dense::set<const RE::NiAVObject*>& a_set, bool a_sun) const;
+		struct CandidateParity
+		{
+			std::uint64_t checks = 0, mismatches = 0;
+		} candidateParity;
+		/** @brief A snapshot of a_table, a new generation (a_generation), brought up to it at the indices that moved. */
+		std::shared_ptr<const SunCandidates> PublishCandidates(CandidateTable& a_table, std::uint32_t& a_generation);
 
 		void RefreshCategoryNodes(bool a_force = false);
 		/**
@@ -2792,6 +2832,11 @@ namespace DCLF
 				lists.clear();
 				position.clear();
 			}
+			/** @brief Whether a_slot is listed under a_key (Remove's precondition). */
+			bool Has(std::uint32_t a_key, std::uint32_t a_slot) const
+			{
+				return a_key < lists.size() && a_slot < position.size() && position[a_slot] < lists[a_key].size() && lists[a_key][position[a_slot]] == a_slot;
+			}
 		};
 		// What each resident slot was counted under (kNone: not counted).
 		struct ResidentCounted
@@ -2803,6 +2848,10 @@ namespace DCLF
 		std::vector<ResidentCounted> residentCounted;  // by slot
 		std::vector<std::uint32_t> residentsTouched;   // since the last KeepResidentsAlive
 		SlotMembers pipelineMembers, fadeRootMembers, treeMembers;  // the trees' under key 0
+		// Every object slot by the fade root it is listed under (objectFadeRoot), resident or not: the occluders of a root whose
+		// servicing flipped are what the set's commit takes again (fadeOwnershipFlips).
+		SlotMembers fadeRootObjects;
+		std::vector<std::uint32_t> fadeOwnershipFlips;  // fade roots whose kFadeRootOwned flipped since the set's last commit
 		std::vector<std::uint32_t> materialMembers;    // by material slot: how many residents
 		// The pipelines and materials the accumulate phase's joins marked used this frame: cleared again where no resident holds them.
 		std::vector<std::uint32_t> joinMarkedPipelines, joinMarkedMaterials;
@@ -2951,7 +3000,37 @@ namespace DCLF
 		// Members whose registration met a fade DCLF does not model (PassCapture::TakeUnmodelledFades): out of the set until it ends.
 		ankerl::unordered_dense::set<const RE::BSGeometry*> setFadeHeld;
 		LogCursor setCursor;
-		std::uint64_t setReadiness = ~0ull;        // the lookups' generations the waiting slots were last checked against
+		// The readiness sources a waiting slot may wait on (SetWaitCause bits by index), and their stamps as the waiting slots were last
+		// checked against: the lookups' versions, the shadow lookups' generation, the constants' stamp, the scene buffers' fit serial.
+		static constexpr std::uint32_t kWaitSources = 4;
+		static constexpr std::uint8_t kWaitLookups = 1, kWaitShadow = 2, kWaitConstants = 4, kWaitFit = 8;
+		static constexpr std::uint8_t kWaitOther = 16;  // any source moving takes it again (geometry, decal slot, reflection, layer partner)
+		static constexpr std::uint8_t kWaitFade = 32;   // its occluder's fade root's servicing (fadeOwnershipFlips), no source
+		/** @brief The readiness source a waiting reason (SetStats::waitingBy's index) is released by. */
+		static constexpr std::uint8_t WaitCauseOf(std::uint32_t a_why)
+		{
+			switch (a_why) {
+			case 0:
+			case 1:
+			case 2:
+			case 3:
+				return kWaitLookups;
+			case 7:
+			case 13:
+				return kWaitShadow;
+			case 9:
+				return kWaitConstants;
+			case 10:
+			case 12:
+				return kWaitFit;
+			case 11:
+				return kWaitFade;
+			default:
+				return kWaitOther;
+			}
+		}
+		std::array<std::uint64_t, kWaitSources> setReadiness{ ~0ull, ~0ull, ~0ull, ~0ull };
+		std::vector<std::uint8_t> setWaitCause;  // by slot: what it waits on (its last evaluation's), when waiting
 		std::uint64_t setShadowModes = ~0ull;      // the shadow modes and states caster readiness was last taken under
 		std::uint64_t setFadeOwnership = ~0ull;    // fadeOwnershipSerial as occluder readiness was last taken under
 		std::uint32_t setPhaseMask = ~0u;          // the phases DCLF draws (toggles) the last commit evaluated with

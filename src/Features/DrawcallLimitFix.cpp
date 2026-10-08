@@ -259,6 +259,13 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// cached verdicts, so the next frame classifies every object under the new switches.
 	if (DCLF::Toggles::Get().BeginFrame())
 		store.InvalidateVerdicts();
+	// A toggle (P4f): the claims committed before it are another capability's (a view DCLF no longer draws, a phase it now does). The
+	// frames are the engine's from here until a publication committed under the new toggles is installed: withdraw, the capability
+	// (RefreshFrameLookups), the full commit (the set's capability change), reinstall.
+	if (const std::uint32_t toggles = DCLF::Toggles::Get().Generation(); toggles != toggleGeneration) {
+		toggleGeneration = toggles;
+		toggleCommitFrame = store.GetFrame() + 1;
+	}
 	ScopedPerfEvent event("CS DCLF: scene tables");
 	// What the frame's claims need, from the last walk's state, before the scene work is kicked (the coordinator is idle here):
 	// the frame number, the last commit's set as the frame's (the claims the registration withholds by, and the records this
@@ -268,6 +275,8 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// What passes between the frame and the coordinator (step 6c), with the scene work joined: then the tables the last scene work
 	// published, for the frame (a pointer swap; every frame reader reads them).
 	store.HandOverAtFrameStart();
+	// The candidate entries changed since the sun exclusion's snapshot leave it (the engine culls them); the rest stand.
+	DCLF::SunAccumulation::Get().BeginFrame(store.GetSunCandidates());
 	// The newest complete scene revision (R3c), then the newest scene publication it covers - the tables with the set applied and
 	// its claims, made whole by the coordinator (step 6e E3: made at or after the commit it applies); until one is, the installed
 	// one stands, tables and claims together. A frame the selected revision does not cover - none selected yet, or its recordings
@@ -276,12 +285,12 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	auto& draws = DCLF::IndirectDraws::Get();
 	draws.SelectRevision();
 	// Its draws too (step 6e E3b: built ahead on the pool, never waited for): a publication whose builds are not done waits.
-	store.SelectPublication([&draws](std::uint32_t a_commitFrame, const std::shared_ptr<const void>& a_draws) {
-		return draws.SetApplicable(a_commitFrame) && draws.DrawsReady(a_draws);
+	store.SelectPublication([&draws, this](std::uint32_t a_commitFrame, const std::shared_ptr<const void>& a_draws) {
+		return a_commitFrame >= toggleCommitFrame && draws.SetApplicable(a_commitFrame) && draws.DrawsReady(a_draws);
 	});
 	store.SyncFrameTables();
 	RefreshFrameLookups();
-	if (!draws.DecideCoverage() || !store.HasInstalled()) {
+	if (!draws.DecideCoverage() || !store.HasInstalled() || store.InstalledCommitFrame() < toggleCommitFrame) {
 		store.WithdrawSet();
 	} else {
 		store.InstallClaims();

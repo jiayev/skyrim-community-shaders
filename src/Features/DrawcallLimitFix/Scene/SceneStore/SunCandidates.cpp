@@ -1,6 +1,7 @@
 #include "Internal.h"
 
 #include "Features/DrawcallLimitFix/Common/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Engine/SunAccumulation.h"
 
 #include <map>
 #include <numeric>
@@ -39,16 +40,213 @@ namespace DCLF
 		return a_view == kOcclusionSky ? ActiveToggles().skyOcclusion : a_view == kOcclusionPrecipitation && ActiveToggles().precipitationOcclusion;
 	}
 
+	void SceneStore::ResetCandidateTable(CandidateTable& a_table)
+	{
+		// Every index freed under a new version: the pooled snapshots drop their entries when brought up to it.
+		for (std::uint32_t e = 0; e < a_table.nodes.size(); ++e)
+			a_table.version[e] = ++candidateVersions;
+		a_table.index.clear();
+		std::fill(a_table.nodes.begin(), a_table.nodes.end(), nullptr);
+		for (auto& geometries : a_table.geometries)
+			geometries.clear();
+		a_table.free.resize(a_table.nodes.size());
+		std::iota(a_table.free.rbegin(), a_table.free.rend(), 0u);
+		a_table.geometryIndex.clear();
+		std::fill(a_table.geometryNodes.begin(), a_table.geometryNodes.end(), nullptr);
+		std::fill(a_table.geometryEntry.begin(), a_table.geometryEntry.end(), SunCandidates::kNone);
+		a_table.geometryFree.resize(a_table.geometryNodes.size());
+		std::iota(a_table.geometryFree.rbegin(), a_table.geometryFree.rend(), 0u);
+		a_table.changed = true;
+	}
+
+	void SceneStore::SetCandidate(CandidateTable& a_table, const RE::NiAVObject* a_root, const std::vector<RE::BSGeometry*>* a_dependents, bool a_sun)
+	{
+		auto& t = a_table;
+		const auto found = t.index.find(a_root);
+		if (!a_dependents && found == t.index.end())
+			return;
+		std::uint32_t e;
+		if (found != t.index.end()) {
+			e = found->second;
+		} else if (!t.free.empty()) {
+			e = t.free.back();
+			t.free.pop_back();
+		} else {
+			e = static_cast<std::uint32_t>(t.nodes.size());
+			t.nodes.push_back(nullptr);
+			t.version.push_back(0);
+			t.geometries.emplace_back();
+		}
+		// Its geometries let go (a geometry another entry lists too stays that entry's).
+		for (const std::uint32_t g : t.geometries[e]) {
+			if (const auto it = t.geometryIndex.find(t.geometryNodes[g]); it != t.geometryIndex.end() && it->second == g)
+				t.geometryIndex.erase(it);
+			t.geometryNodes[g] = nullptr;
+			t.geometryEntry[g] = SunCandidates::kNone;
+			t.geometryFree.push_back(g);
+		}
+		t.geometries[e].clear();
+		t.version[e] = ++candidateVersions;
+		t.changed = true;
+		++t.entriesWritten;
+		if (!a_dependents) {
+			t.index.erase(found);
+			t.nodes[e] = nullptr;
+			t.free.push_back(e);
+			return;
+		}
+		t.nodes[e] = a_root;
+		t.index.insert_or_assign(a_root, e);
+		for (auto* geometry : *a_dependents) {
+			if (t.geometryIndex.contains(geometry))
+				continue;  // listed by another entry first
+			std::uint32_t g;
+			if (!t.geometryFree.empty()) {
+				g = t.geometryFree.back();
+				t.geometryFree.pop_back();
+			} else {
+				g = static_cast<std::uint32_t>(t.geometryNodes.size());
+				t.geometryNodes.push_back(nullptr);
+				t.geometryEntry.push_back(SunCandidates::kNone);
+				t.geometrySlot.push_back(-1);
+				t.primaryGeometry.push_back(0);
+			}
+			t.geometryIndex.emplace(geometry, g);
+			t.geometryNodes[g] = geometry;
+			t.geometryEntry[g] = e;
+			t.geometrySlot[g] = FindObject(geometry);
+			t.primaryGeometry[g] = 0;
+			if (a_sun)
+				if (const auto entry = tracked.find(geometry); entry != tracked.end() && PrimaryEntryAllows(entry->second, *geometry))
+					t.primaryGeometry[g] = 1;
+			t.geometries[e].push_back(g);
+		}
+	}
+
+	std::shared_ptr<const SunCandidates> SceneStore::PublishCandidates(CandidateTable& a_table, std::uint32_t& a_generation)
+	{
+		ZoneScopedN("CS.DCLF.Scene.SunCandidates.Snapshot");
+		auto& t = a_table;
+		// A pooled snapshot no reader holds (the pool's own reference only), else a new one.
+		std::shared_ptr<SunCandidates> snapshot;
+		for (const auto& pooled : t.pool)
+			if (pooled.use_count() == 1) {
+				snapshot = pooled;
+				break;
+			}
+		if (!snapshot)
+			snapshot = t.pool.emplace_back(std::make_shared<SunCandidates>());
+		auto& s = *snapshot;
+		const std::uint32_t capacity = static_cast<std::uint32_t>(t.nodes.size());
+		const std::uint32_t geometryCapacity = static_cast<std::uint32_t>(t.geometryNodes.size());
+		const std::uint32_t span = std::max(capacity, s.Capacity());
+		s.entryNodes.resize(span, nullptr);
+		s.entryVersion.resize(span, 0);
+		s.held.resize(span);
+		s.entryGeometries.resize(span);
+		s.geometryNodes.resize(std::max(geometryCapacity, s.GeometryCapacity()), nullptr);
+		s.geometryEntry.resize(s.geometryNodes.size(), SunCandidates::kNone);
+		s.geometrySlot.resize(s.geometryNodes.size(), -1);
+		s.primaryGeometry.resize(s.geometryNodes.size(), 0);
+		// The indices whose versions moved since this snapshot was brought up last: each let go first (a geometry index can pass from
+		// one entry to another among them), then written as the table has it.
+		std::vector<std::uint32_t> changed;
+		for (std::uint32_t e = 0; e < span; ++e)
+			if (s.entryVersion[e] != (e < capacity ? t.version[e] : 0u))
+				changed.push_back(e);
+		for (const std::uint32_t e : changed) {
+			if (const auto* old = s.entryNodes[e])
+				s.entries.erase(old);
+			for (const std::uint32_t g : s.entryGeometries[e]) {
+				if (g >= s.geometryNodes.size() || s.geometryEntry[g] != e)
+					continue;
+				if (const auto it = s.geometries.find(s.geometryNodes[g]); it != s.geometries.end() && it->second == g)
+					s.geometries.erase(it);
+				s.geometryNodes[g] = nullptr;
+				s.geometryEntry[g] = SunCandidates::kNone;
+			}
+			s.entryGeometries[e].clear();
+			s.entryNodes[e] = nullptr;
+			if (s.held[e])
+				EngineReleases::Push(std::move(s.held[e]));
+		}
+		for (const std::uint32_t e : changed) {
+			s.entryVersion[e] = e < capacity ? t.version[e] : 0u;
+			const auto* root = e < capacity ? t.nodes[e] : nullptr;
+			if (!root)
+				continue;
+			s.entryNodes[e] = root;
+			s.entries.insert_or_assign(root, e);
+			s.held[e] = OwnedRoot(root);
+			s.entryGeometries[e] = t.geometries[e];
+			for (const std::uint32_t g : t.geometries[e]) {
+				s.geometryNodes[g] = t.geometryNodes[g];
+				s.geometryEntry[g] = e;
+				s.geometrySlot[g] = t.geometrySlot[g];
+				s.primaryGeometry[g] = t.primaryGeometry[g];
+				s.geometries.insert_or_assign(t.geometryNodes[g], g);
+			}
+		}
+		s.entryNodes.resize(capacity);
+		s.entryVersion.resize(capacity);
+		s.held.resize(capacity);
+		s.entryGeometries.resize(capacity);
+		s.geometryNodes.resize(geometryCapacity);
+		s.geometryEntry.resize(geometryCapacity);
+		s.geometrySlot.resize(geometryCapacity);
+		s.primaryGeometry.resize(geometryCapacity);
+		s.generation = ++a_generation;
+		t.changed = false;
+		++t.snapshots;
+		return snapshot;
+	}
+
+	std::string SceneStore::CheckCandidateTable(const CandidateTable& a_table, const ankerl::unordered_dense::set<const RE::NiAVObject*>& a_set, bool a_sun) const
+	{
+		// CS_DCLF_PERSISTENT_PARITY: the table against the set and the dependents as they are (what a snapshot made whole would hold).
+		if (a_table.index.size() != a_set.size())
+			return fmt::format("{} entries, the set {}", a_table.index.size(), a_set.size());
+		for (const auto* root : a_set) {
+			const auto it = a_table.index.find(root);
+			if (it == a_table.index.end())
+				return fmt::format("a candidate without an entry ({})", static_cast<const void*>(root));
+			const auto* dependents = a_sun ? (rootDependents.contains(root) ? &rootDependents.at(root) : nullptr) : LightDependentsOf(root);
+			const auto& rows = a_table.geometries[it->second];
+			std::size_t owned = 0;
+			for (const auto* geometry : dependents ? *dependents : std::vector<RE::BSGeometry*>{}) {
+				const auto g = a_table.geometryIndex.find(geometry);
+				if (g == a_table.geometryIndex.end())
+					return fmt::format("a dependent of {} with no geometry row", static_cast<const void*>(root));
+				if (a_table.geometryEntry[g->second] != it->second)
+					continue;  // another entry's (listed there first)
+				++owned;
+				if (a_table.geometrySlot[g->second] != FindObject(geometry))
+					return fmt::format("a geometry of {} with object {}, now {}", static_cast<const void*>(root), a_table.geometrySlot[g->second], FindObject(geometry));
+				if (a_sun) {
+					const auto entry = tracked.find(const_cast<RE::BSGeometry*>(geometry));
+					const std::uint8_t allows = entry != tracked.end() && PrimaryEntryAllows(entry->second, *geometry) ? 1 : 0;
+					if (a_table.primaryGeometry[g->second] != allows)
+						return fmt::format("a geometry of {} with its primary verdict {}, now {}", static_cast<const void*>(root), a_table.primaryGeometry[g->second], allows);
+				}
+			}
+			if (owned != rows.size())
+				return fmt::format("{} with {} geometry rows, {} dependents its own", static_cast<const void*>(root), rows.size(), owned);
+		}
+		return {};
+	}
+
 	void SceneStore::DropSunCandidates()
 	{
 		sunCandidateSet.clear();
 		primarySignature.clear();
 		sunEntriesDirty.clear();
+		ResetCandidateTable(sunTable);
 		sunCandidates.reset();
 		++sunCandidatesGeneration;
 		lightCandidateSet.clear();
 		lightSignature.clear();
 		lightEntriesDirty.clear();
+		ResetCandidateTable(lightTable);
 		lightCandidates.reset();
 		++lightCandidatesGeneration;
 	}
@@ -74,6 +272,7 @@ namespace DCLF
 	{
 		bool changed = a_full;
 		if (a_full) {
+			ResetCandidateTable(lightTable);
 			lightCandidateSet.clear();
 			lightSignature.clear();
 			lightEntriesDirty.clear();
@@ -98,6 +297,7 @@ namespace DCLF
 						}
 						Fnv1a member;
 						member.Mix(reinterpret_cast<std::uintptr_t>(geometry));
+						member.Mix(entry->second.slot);
 						signature += member.value;
 					}
 				return std::pair{ candidate, signature };
@@ -105,47 +305,36 @@ namespace DCLF
 			for (std::size_t i = 0; i < lightEntriesDirty.size(); ++i) {
 				const auto* root = lightEntriesDirty[i];
 				const auto [candidate, signature] = verdicts[i];
-				if (candidate ? lightCandidateSet.insert(root).second : lightCandidateSet.erase(root) != 0)
+				bool written = false;
+				if (candidate ? lightCandidateSet.insert(root).second : lightCandidateSet.erase(root) != 0) {
 					changed = true;
+					written = true;
+				}
 				if (candidate) {
 					const auto [slot, inserted] = lightSignature.try_emplace(root, signature);
 					if (!inserted && slot->second != signature) {
 						slot->second = signature;
 						changed = true;
+						written = true;
 					}
 				} else {
 					lightSignature.erase(root);
 				}
+				// Its entry, written again: its index's version moves (the readers take it entry by entry).
+				if (written)
+					SetCandidate(lightTable, root, candidate ? LightDependentsOf(root) : nullptr, false);
 			}
 			lightEntriesDirty.clear();
 		}
-		if (changed) {
-			++lightCandidatesGeneration;
-			return;
+		// A snapshot for every walk that moved an entry (and the first): the readers bring themselves up to it entry by entry.
+		if (lightTable.changed || !lightCandidates)
+			lightCandidates = PublishCandidates(lightTable, lightCandidatesGeneration);
+		if (SwitchEnabled(Switch::PersistentParity) && ParityDue(frame, 7)) {
+			++candidateParity.checks;
+			if (auto why = CheckCandidateTable(lightTable, lightCandidateSet, false); !why.empty() && candidateParity.mismatches++ < 8)
+				logger::warn("[DCLF] light candidates parity at frame {}: {} <- CANDIDATES", frame, why);
 		}
-		if (lightCandidatesBuilt == lightCandidatesGeneration && lightCandidates)
-			return;
-		// A walk that changed nothing: the snapshot for the generation now in force.
-		auto snapshot = std::make_shared<SunCandidates>();
-		snapshot->generation = lightCandidatesGeneration;
-		snapshot->entries.reserve(lightCandidateSet.size());
-		snapshot->entryNodes.reserve(lightCandidateSet.size());
-		snapshot->held.reserve(lightCandidateSet.size());
-		std::uint32_t index = 0;
-		for (const auto* root : lightCandidateSet) {
-			snapshot->entries.emplace(root, index);
-			snapshot->entryNodes.push_back(root);
-			snapshot->held.push_back(OwnedRoot(root));
-			if (const auto* dependents = LightDependentsOf(root))
-				for (auto* geometry : *dependents)
-					if (snapshot->geometries.emplace(geometry, static_cast<std::uint32_t>(snapshot->geometryEntry.size())).second) {
-						snapshot->geometryEntry.push_back(index);
-						snapshot->geometrySlot.push_back(FindObject(geometry));
-					}
-			++index;
-		}
-		lightCandidates = std::move(snapshot);
-		lightCandidatesBuilt = lightCandidatesGeneration;
+		(void)changed;
 	}
 
 	bool SceneStore::SunEntryAllows(const Tracked& a_tracked, bool a_switchNodes)
@@ -281,6 +470,7 @@ namespace DCLF
 	{
 		bool changed = a_full;
 		if (a_full) {
+			ResetCandidateTable(sunTable);
 			sunCandidateSet.clear();
 			primarySignature.clear();
 			sunEntriesDirty.clear();
@@ -308,6 +498,7 @@ namespace DCLF
 						const std::uint64_t allows = PrimaryEntryAllows(entry->second, *geometry) ? 1 : 0;
 						Fnv1a member;
 						member.Mix(reinterpret_cast<std::uintptr_t>(geometry) * 2 + allows);
+						member.Mix(entry->second.slot);
 						signature += member.value;
 					}
 				}
@@ -316,49 +507,39 @@ namespace DCLF
 			for (std::size_t i = 0; i < sunEntriesDirty.size(); ++i) {
 				const auto* root = sunEntriesDirty[i];
 				const auto [candidate, signature] = verdicts[i];
-				if (candidate ? sunCandidateSet.insert(root).second : sunCandidateSet.erase(root) != 0)
+				bool written = false;
+				if (candidate ? sunCandidateSet.insert(root).second : sunCandidateSet.erase(root) != 0) {
 					changed = true;
+					written = true;
+				}
 				if (candidate) {
 					const auto [slot, inserted] = primarySignature.try_emplace(root, signature);
 					if (!inserted && slot->second != signature) {
 						slot->second = signature;
 						changed = true;
+						written = true;
 					}
 				} else {
 					primarySignature.erase(root);
 				}
+				// Its subtree changed under it (an attach or detach below it): written again whatever its verdict, its plan to be made again.
+				written = written || (candidate && sunEntriesForced.contains(root));
+				if (written) {
+					const auto dependents = candidate ? rootDependents.find(root) : rootDependents.end();
+					SetCandidate(sunTable, root, dependents != rootDependents.end() ? &dependents->second : nullptr, true);
+				}
 			}
 			sunEntriesDirty.clear();
+			sunEntriesForced.clear();
 		}
-		if (changed) {
-			++sunCandidatesGeneration;
-			return;
+		// A snapshot for every walk that moved an entry (and the first): the readers bring themselves up to it entry by entry.
+		if (sunTable.changed || !sunCandidates)
+			sunCandidates = PublishCandidates(sunTable, sunCandidatesGeneration);
+		if (SwitchEnabled(Switch::PersistentParity) && ParityDue(frame, 7)) {
+			++candidateParity.checks;
+			if (auto why = CheckCandidateTable(sunTable, sunCandidateSet, true); !why.empty() && candidateParity.mismatches++ < 8)
+				logger::warn("[DCLF] sun candidates parity at frame {}: {} <- CANDIDATES", frame, why);
 		}
-		if (sunCandidatesBuilt == sunCandidatesGeneration && sunCandidates)
-			return;
-		// A walk that changed nothing: the snapshot for the generation now in force.
-		ZoneScopedN("CS.DCLF.Scene.SunCandidates.Snapshot");
-		auto snapshot = std::make_shared<SunCandidates>();
-		snapshot->generation = sunCandidatesGeneration;
-		snapshot->entries.reserve(sunCandidateSet.size());
-		snapshot->entryNodes.reserve(sunCandidateSet.size());
-		snapshot->held.reserve(sunCandidateSet.size());
-		std::uint32_t index = 0;
-		for (const auto* root : sunCandidateSet) {
-			snapshot->entries.emplace(root, index);
-			snapshot->entryNodes.push_back(root);
-			snapshot->held.push_back(OwnedRoot(root));
-			if (const auto it = rootDependents.find(root); it != rootDependents.end())
-				for (auto* geometry : it->second)
-					if (snapshot->geometries.emplace(geometry, static_cast<std::uint32_t>(snapshot->geometryEntry.size())).second) {
-						snapshot->geometryEntry.push_back(index);
-						snapshot->geometrySlot.push_back(FindObject(geometry));
-						const auto entry = tracked.find(geometry);
-						snapshot->primaryGeometry.push_back(entry != tracked.end() && PrimaryEntryAllows(entry->second, *geometry) ? 1 : 0);
-					}
-			++index;
-		}
-		sunCandidates = std::move(snapshot);
-		sunCandidatesBuilt = sunCandidatesGeneration;
+		(void)changed;
 	}
 }

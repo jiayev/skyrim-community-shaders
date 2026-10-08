@@ -384,19 +384,18 @@ namespace DCLF::Draws
 		const SceneStore::Tables& a_tables, SunExclusionCache* a_cache)
 	{
 		ZoneScopedN("CS.DCLF.BuildSunExclusion");
-		if (!a_candidates || a_candidates->entries.empty())
+		if (!a_candidates || !a_candidates->Count())
 			return nullptr;
 		auto exclusion = std::make_shared<SunExclusion>();
 		exclusion->candidates = a_candidates;
 		exclusion->builtFrame = a_payload.inputs.frameNumber;
-		const std::size_t count = a_candidates->entries.size();
+		const std::size_t count = a_candidates->Capacity();
 		const std::uint64_t membership = a_payload.kept ? a_payload.membership[a_mode] : 0;
 		bool wouldReuse = false;
 		if (a_cache) {
 			auto& c = *a_cache;
 			++c.builds;
-			bool reuse = c.valid && membership && c.candidates == a_candidates && c.membership == membership &&
-			             c.cursor.Continues(a_tables.changeLog, a_payload.inputs.tablesGeneration);
+			bool reuse = c.valid && membership && c.candidates && c.membership == membership && c.cursor.Continues(a_tables.changeLog, a_payload.inputs.tablesGeneration);
 			const std::uint32_t causes = kChangeBindings | kChangeGeometry;
 			if (reuse)
 				for (const auto& change : c.cursor.Unread(a_tables.changeLog))
@@ -405,7 +404,47 @@ namespace DCLF::Draws
 						break;
 					}
 			c.cursor.Advance(a_tables.changeLog);
-			// CS_DCLF_PERSISTENT_PARITY: a reuse is built in full every 60 frames and compared.
+			if (reuse && c.candidates != a_candidates) {
+				// The candidates moved, nothing the verdicts read did: the cached verdicts for the entries that stand (the indices are
+				// stable), each entry that moved judged again from its own geometries.
+				std::vector<std::uint32_t> changed;
+				ChangedEntries(c.candidates.get(), *a_candidates, changed);
+				std::vector<std::uint8_t> isInput(a_tables.objects.size(), 0);
+				a_payload.ForEachInput(a_mode, [&](const DrawInput& a_input) {
+					if (a_input.objectIndex < isInput.size())
+						isInput[a_input.objectIndex] = 1;
+				});
+				auto excluded = c.excluded;
+				excluded.resize(count, 0);
+				bool moved = false;
+				for (const std::uint32_t e : changed) {
+					std::uint8_t verdict = 0;
+					if (e < count && a_candidates->entryNodes[e]) {
+						verdict = 1;
+						for (const std::uint32_t g : a_candidates->entryGeometries[e]) {
+							const std::int32_t o = a_candidates->geometrySlot[g];
+							if (o >= 0 && std::size_t(o) < a_tables.objects.size() && !(a_tables.objects[o].flags & kObjectFree) && !isInput[o] &&
+								(!(a_tables.objects[o].flags & kObjectNoShadow) ||
+									(std::size_t(o) < a_tables.shadowReject.size() && a_tables.shadowReject[o] == static_cast<std::uint8_t>(ShadowReject::Faded)))) {
+								verdict = 0;
+								break;
+							}
+						}
+					}
+					moved |= e < excluded.size() && excluded[e] != verdict;
+					if (e < excluded.size())
+						excluded[e] = verdict;
+				}
+				++c.translated;
+				c.candidates = a_candidates;
+				c.excluded = std::move(excluded);
+				c.excludedCount = static_cast<std::uint32_t>(std::count(c.excluded.begin(), c.excluded.end(), std::uint8_t(1)));
+				if (moved) {
+					static std::atomic<std::uint64_t> translatedVersions{ 0 };
+					c.version = (1ull << 62) | (translatedVersions.fetch_add(1, std::memory_order_relaxed) + 1);
+				}
+			}
+			// CS_DCLF_PERSISTENT_PARITY: a reuse (translated or not) is built in full every 60 frames and compared.
 			wouldReuse = reuse;
 			if (reuse && PersistentParityEnabled() && ParityDue(a_payload.inputs.frameNumber))
 				reuse = false;
@@ -422,7 +461,10 @@ namespace DCLF::Draws
 				return exclusion;
 			}
 		}
-		exclusion->excluded.assign(count, 1);
+		// Every live entry excluded unless a caster under it is not drawn; a free index never.
+		exclusion->excluded.assign(count, 0);
+		for (std::size_t e = 0; e < count; ++e)
+			exclusion->excluded[e] = a_candidates->entryNodes[e] ? 1 : 0;
 		std::vector<std::uint8_t> isInput(a_tables.objects.size(), 0);
 		a_payload.ForEachInput(a_mode, [&](const DrawInput& a_input) {
 			if (a_input.objectIndex < isInput.size())

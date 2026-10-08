@@ -150,9 +150,16 @@ namespace DCLF
 			return nullptr;
 		}
 		auto& store = SceneStore::Get();
-		if (!cut.candidates || cut.candidates->generation != store.GetSunCandidatesGeneration()) {
+		// The cut's snapshot, with the frame's candidate changes following it (the changed entries stay in the lists: Cut::stale).
+		// The cut as the last frame left it, brought up to the frame's candidates (it plans again only the entries that moved).
+		if (const auto candidates = store.GetSunCandidates(); !candidates) {
 			++listStats.notCurrent;
 			return nullptr;
+		} else if (candidates != cut.candidates) {
+			std::vector<std::uint32_t> changed;
+			ChangedEntries(cut.candidates.get(), *candidates, changed);
+			SyncCut(candidates, changed);
+			cutStats.entriesPlanned += changed.size();
 		}
 		// The exclusion this frame's full-frustum cull applies, for the same snapshot: a root out of the lists is out of
 		// the sun's cascades only when that exclusion takes it out too.
@@ -171,7 +178,8 @@ namespace DCLF
 		bool changed = !listFilterBuilt || listFilterBuilt->candidates != cut.candidates || listRemovable.size() != entries;
 		listRemovable.resize(entries, 0);
 		for (std::uint32_t e = 0; e < entries; ++e) {
-			const std::uint8_t removable = cut.plans[e] != EntryPlan::Rejected && cut.admitted[e] && !cut.walk[e] && !cut.mixed[e] && exclusion->excluded[e] ? 1 : 0;
+			const std::uint8_t removable =
+				cut.plans[e] != EntryPlan::Rejected && cut.admitted[e] && !cut.walk[e] && !cut.mixed[e] && e < exclusion->excluded.size() && exclusion->excluded[e] ? 1 : 0;
 			changed |= removable != listRemovable[e];
 			listRemovable[e] = removable;
 		}

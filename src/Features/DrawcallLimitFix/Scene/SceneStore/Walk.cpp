@@ -1310,12 +1310,9 @@ namespace DCLF
 		if (a_root)
 			UnlistHiddenChain(a_geometry, a_tracked);
 		if (a_root && a_tracked.lightRoot) {
+			// A candidate losing a geometry (a cell unloading frees the entry after its geometries) is written again at the walk's
+			// candidates update; until then the snapshots that name it hold its node.
 			MarkLightEntryDirty(a_tracked.lightRoot);
-			// A candidate losing a geometry may be on its way out of the scene (a cell unloading frees the entry after its
-			// geometries): the snapshots that name it are stale now, not at the next walk, since the point lights' selection
-			// (LocalLightCull::SelectFrame) reads their entries' nodes.
-			if (lightCandidateSet.contains(a_tracked.lightRoot))
-				++lightCandidatesGeneration;
 			Unlist(lightDependents, a_tracked.lightRoot, a_geometry);
 			ReleaseRootOwner(a_tracked.lightRoot);
 			a_tracked.lightRoot = nullptr;
@@ -1442,8 +1439,6 @@ namespace DCLF
 		std::uint32_t traits = 0;
 		traits |= a_tracked.faceShape ? kTraitFace : 0u;
 		traits |= a_tracked.actorOwned ? kTraitActor : 0u;
-		// A switch's selection changes by event with the switch events (ApplySwitchEvents), not every frame.
-		traits |= a_tracked.parentReason == Ineligible::Switch && !SwitchEventsLive() ? kTraitSwitch : 0u;
 		const auto& data = a_geometry.GetGeometryRuntimeData();
 		traits |= data.skinInstance ? kTraitSkin : 0u;
 		if (const auto* property = data.shaderProperty.get(); property && property->GetControllers())
@@ -1464,9 +1459,8 @@ namespace DCLF
 	std::pair<bool, std::uint32_t> SceneStore::PerFrameOf(const Tracked& a_tracked, const RE::BSGeometry& a_geometry, Ineligible a_reason, std::uint32_t& a_traits,
 		ankerl::unordered_dense::map<const RE::NiAVObject*, bool>* a_freshMotion)
 	{
-		// An unselected switch child may get a record when its switch selects it: every frame without the switch events,
-		// by event with them (ApplySwitchEvents), like any other verdict.
-		const bool mayRecord = (a_tracked.parentReason == Ineligible::Switch && !SwitchEventsLive()) || a_reason == Ineligible::None || DeferredToAccumulate(a_reason) ||
+		// An unselected switch child may get a record when its switch selects it: by event (ApplySwitchEvents), like any other verdict.
+		const bool mayRecord = a_reason == Ineligible::None || DeferredToAccumulate(a_reason) ||
 		                       ShadowOnlyCaster(a_reason, const_cast<RE::BSGeometry&>(a_geometry));
 		std::uint32_t traits = PerFrameTraits(a_tracked, a_geometry);
 		if (mayRecord && !(traits & (kTraitFace | kTraitActor)) && a_tracked.sunEntryNode) {
@@ -1636,8 +1630,9 @@ namespace DCLF
 				else
 					tables.NoteChange(entry.slot, kChangeAll);
 			}
-			// What its sun entry's candidacy reads (SunEntryAllows).
-			if (hadSlot != (entry.slot != kNoObjectSlot) || reasonBefore != entry.candidateReason) {
+			// What its sun entry's candidacy reads (SunEntryAllows), and what the entry's snapshot row holds of it (its object, whether the
+			// primary cut may give it a synthetic pass: PrimaryEntryAllows), any of which a write may change.
+			if (hadSlot != (entry.slot != kNoObjectSlot) || reasonBefore != entry.candidateReason || written) {
 				MarkSunEntryDirty(entry.sunEntryNode);
 				MarkLightEntryDirty(entry.lightRoot);
 			}

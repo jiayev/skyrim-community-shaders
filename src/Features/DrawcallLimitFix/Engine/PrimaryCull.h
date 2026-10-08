@@ -161,6 +161,16 @@ namespace DCLF
 		 * (NoteSetChanges), and once for every entry of a new snapshot. Only against a current snapshot: a stale one's geometries
 		 * may have been released since (a cell unloading), and its successor queues its entries again.
 		 */
+		/**
+		 * @brief The cut brought up to a_candidates at the entries a_changed names (ChangedEntries): each let go of and planned again
+		 * (PlanOf, its objects, its switches, admission, the walk); every other entry stands.
+		 */
+		void SyncCut(const std::shared_ptr<const SunCandidates>& a_candidates, std::span<const std::uint32_t> a_changed);
+		/** @brief The members' and switches' pools gathered again, without the ranges the entries planned again let go of. */
+		void CompactCut();
+		/** @brief CS_DCLF_PERSISTENT_PARITY: the kept cut against a whole plan of the same snapshot (<- CUT). */
+		void CheckCut();
+		std::size_t cutGarbage = 0;  // members of let-go ranges still in the pool
 		void RunAdmission();
 
 		/**
@@ -422,9 +432,11 @@ namespace DCLF
 				std::uint32_t switchBegin = 0, switchEnd = 0;
 			};
 			std::vector<std::pair<const RE::NiSwitchNode*, std::int32_t>> switchPaths;
-			std::vector<std::uint32_t> switchOffsets;  // per candidate entry index: its switch nodes in switches
+			// Per candidate entry index: its switch nodes in switches, and its geometries in members in the cull's order. The pools
+			// are appended to as entries are planned again (SyncCut), and gathered again when their garbage outgrows them (CompactCut).
+			std::vector<std::uint32_t> switchBegin, switchEnd;
 			std::vector<const RE::NiSwitchNode*> switches;
-			std::vector<std::uint32_t> memberOffsets;  // per candidate entry index: its geometries in members, in the cull's order
+			std::vector<std::uint32_t> memberBegin, memberEnd;
 			std::vector<Member> members;
 			std::vector<std::int32_t> memberObject;    // per member: its object index in the tables (-1: none)
 			// Per member: every switch above it selects its path. Read from the switches for a new snapshot, then kept by
@@ -432,8 +444,6 @@ namespace DCLF
 			std::vector<std::uint8_t> memberLive;
 			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> switchEntry;  // switch node -> entry index
 			bool liveEvents = false;  // memberLive is in force (SceneStore::SwitchEventsLive); else the jobs read the switches
-			std::vector<std::uint32_t> geometryOffsets;       // per candidate entry index: its tracked geometries in geometryIndices
-			std::vector<const RE::BSGeometry*> geometryIndices;
 			std::vector<const RE::NiAVObject*> roots;         // per candidate entry index
 			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> eligible;  // root -> entry index, plan not Rejected
 			std::vector<std::uint8_t> admitted;               // per entry index: DCLF has drawn all of it (see the class)
@@ -480,6 +490,7 @@ namespace DCLF
 		{
 			std::uint64_t frames = 0, appliedFrames = 0;
 			std::uint64_t skippedStale = 0, skippedPreconditions = 0;
+			std::uint64_t entriesPlanned = 0, compactions = 0, parityChecks = 0, parityMismatches = 0;  // entries planned again as their snapshot rows moved (SyncCut), pool gatherings
 			std::uint64_t seen = 0, skipped = 0, visibleEntries = 0;
 			std::uint64_t notSettled = 0, notAdmitted = 0, admittedNow = 0;
 			std::uint64_t members = 0, unbound = 0, hiddenSkipped = 0;

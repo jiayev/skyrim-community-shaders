@@ -86,7 +86,9 @@ namespace DCLF
 		 * caster's diffuse imported. Part of the set's readiness (SceneSet.h). a_tables: the commit's SceneStore::Tables
 		 * (the coordinator's: the frame's view may hold another object in the slot).
 		 */
-		bool PhaseReady(const void* a_tables, std::uint32_t a_slot, std::uint8_t a_phase) const;
+		/** a_why (optional), when not: SceneStore::SetStats::waitingBy's index (7 shadow pipeline, 11 an occluder's fade root not serviced, 12 past
+		 * the scene buffers, 13 the alpha test's diffuse not imported). */
+		bool PhaseReady(const void* a_tables, std::uint32_t a_slot, std::uint8_t a_phase, std::uint32_t* a_why = nullptr) const;
 		/** @brief Changes when the capability's modes or the catalog's rasterizer states that PhaseReady reads change: at setup. */
 		std::uint64_t ShadowReadinessSerial() const;
 		/**
