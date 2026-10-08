@@ -1233,7 +1233,7 @@ namespace DCLF
 		const std::uint32_t mode = OcclusionModeOf(a_view);
 		if (!impl->readyModes[mode]) {
 			impl->readyModes[mode] = true;
-			impl->NoteCapability(false, fmt::format("occlusion map {} captured", a_view));
+			impl->NoteCapability(impl->shadowCatalogBuilt, fmt::format("occlusion map {} captured before its setup", a_view));
 		}
 		if (const auto& states = impl->readyStates[mode].Of(false); !std::binary_search(states.begin(), states.end(), rasterState)) {
 			impl->readyStates[mode].Add(rasterState, false);
@@ -1250,7 +1250,11 @@ namespace DCLF
 		CaptureViewTarget(view, target);
 		CapturePerFrame(view);
 		occlusion.rasterState = rasterState;
-		occlusion.dsvFormat = view.dsvFormat;
+		if (view.dsvFormat != occlusion.dsvFormat) {
+			impl->NoteCapability(impl->shadowCatalogBuilt && occlusion.dsvFormat != DXGI_FORMAT_UNKNOWN,
+				fmt::format("occlusion map {} draws into format {}, not {}", a_view, static_cast<int>(view.dsvFormat), static_cast<int>(occlusion.dsvFormat)));
+			occlusion.dsvFormat = view.dsvFormat;
+		}
 		occlusion.capturedFrame = SceneStore::Get().GetFrame();
 	}
 
@@ -1448,13 +1452,11 @@ namespace DCLF
 				impl->NoteCapability(impl->shadowCatalogBuilt, fmt::format("view {} (mode {:#x}) draws with rasterizer state {}, not in the catalog", view.viewId, view.renderMode, view.rasterState));
 			}
 		}
-		// The occlusion maps are drawn later in the frame, by their own epoch, from this build (once the engine's own draw of the map
-		// has been captured).
-		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
-			const auto& occlusion = impl->occlusion[v];
-			if (SceneStore::OcclusionEnabled(v) && occlusion.rasterState && occlusion.dsvFormat != DXGI_FORMAT_UNKNOWN)
+		// The occlusion maps are drawn later in the frame, by their own epoch, from this build: their inputs are the capability's,
+		// whether or not the engine draws the map this frame.
+		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+			if (SceneStore::OcclusionEnabled(v) && impl->readyModes[OcclusionModeOf(v)] && impl->occlusion[v].dsvFormat != DXGI_FORMAT_UNKNOWN)
 				modeUsed[OcclusionModeOf(v)] = true;
-		}
 		std::array<ModeRasterStates, kShadowModeCount> modeRasterStates{};
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 			if (modeUsed[m])
@@ -2264,14 +2266,27 @@ namespace DCLF
 					// The casters' modes: the sun's and spot lights' clamped views, the point lights' paraboloids. The plain mode is
 					// no view's (ShadowViews: the engine picks the mode from the light).
 					i.readyModes[kSunShadowMode] = i.readyModes[kParabolicShadowMode] = true;
-					i.NoteCapability(false, "the casters' modes and the catalog set up");
+					// The occlusion maps: both are drawn into the precipitation occlusion target (Skylighting swaps its own map into
+					// it for its draw), in its format. Their phases are the set's from here on, whenever the engine first draws them.
+					if (auto* renderer = globals::game::renderer)
+						if (auto* view = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP].views[0]) {
+							D3D11_DEPTH_STENCIL_VIEW_DESC desc{};
+							view->GetDesc(&desc);
+							for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
+								i.occlusion[v].dsvFormat = desc.Format;
+								i.readyModes[OcclusionModeOf(v)] = true;
+							}
+						}
+					i.NoteCapability(false, "the casters' and occlusion maps' modes and the catalog set up");
 				}
 			}
 			if (i.shadowCatalogBuilt && i.shadowTargetFormat != DXGI_FORMAT_UNKNOWN) {
 				for (std::uint32_t m = 0; m < kFirstOcclusionMode; ++m)
 					phases |= i.readyModes[m] ? SetPhaseOfMode(m) : 0;
 				for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
-					phases |= i.readyModes[OcclusionModeOf(v)] && SceneStore::OcclusionEnabled(v) ? SetPhaseOfMode(OcclusionModeOf(v)) : 0;
+					phases |= i.readyModes[OcclusionModeOf(v)] && i.occlusion[v].dsvFormat != DXGI_FORMAT_UNKNOWN && SceneStore::OcclusionEnabled(v) ?
+					              SetPhaseOfMode(OcclusionModeOf(v)) :
+					              0;
 			}
 		}
 		// What the builds ahead and the frame's start's shadow lookups are for: the capability's modes, the catalog, the targets' format.
