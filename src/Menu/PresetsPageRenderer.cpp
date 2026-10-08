@@ -1,6 +1,7 @@
 #include "PresetsPageRenderer.h"
 #include "PCH.h"
 
+#include "CSEditor/Browser/BrowserWidgets.h"
 #include "CSEditor/EditorWindow.h"
 #include "Feature.h"
 #include "Features/CSEditor.h"
@@ -190,16 +191,38 @@ namespace
 	}
 
 	constexpr float kHoverLift = 0.1f;
+	/// Floor for a list row's name width, in font sizes, so badges cannot squeeze it to nothing.
+	constexpr float kMinRowNameFontSizes = 5.0f;
+	/// Narrowest the detail title column may get, in font sizes, before the badges move beneath it.
+	constexpr float kMinTitleColumnFontSizes = 14.0f;
+
+	/** @brief Width of a default ImGui::Button with this label. */
+	float MeasureButtonWidth(const char* label)
+	{
+		return ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+	}
+
+	/** @brief Draws text on one line, ellipsised past maxWidth; advances the cursor like ImGui::Text. */
+	void TextEllipsized(const char* text, float maxWidth)
+	{
+		const ImVec2 size = ImGui::CalcTextSize(text);
+		if (size.x <= maxWidth) {
+			ImGui::TextUnformatted(text);
+			return;
+		}
+		const ImVec2 pos = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(ImVec2(maxWidth, size.y));
+		ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), pos, ImVec2(pos.x + maxWidth, pos.y + size.y), pos.x + maxWidth, text, nullptr, &size);
+	}
 
 	/** @brief Apply, open-folder, remove-baseline and disable buttons, then a line saying how the pack is active. */
 	void DrawPackActions(UnifiedPresetCatalog& catalog, const UnifiedPresetCatalog::PackInfo& pack)
 	{
 		const auto& theme = globals::menu->GetTheme();
-		const ImGuiStyle& style = ImGui::GetStyle();
 		const bool packActive = catalog.GetActivePackId() == pack.id;
 		const bool baselineEnabled = catalog.IsBaselineEnabled(pack.id);
 
-		// Both auto-size so they stay readable when the CS window is narrow.
+		// Each button after the first wraps to a new row when the pane is too narrow to hold it.
 		ImGui::BeginDisabled(!CanApplyPack(pack));
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
 		const ImVec4& info = theme.StatusPalette.InfoColor;
@@ -214,38 +237,41 @@ namespace
 		ImGui::PopStyleVar();
 		ImGui::EndDisabled();
 
-		ImGui::SameLine(0.0f, style.ItemSpacing.x);
+		const Icons::GlyphRef folderIcon = Icons::FA(ICON_FA_FOLDER_OPEN);
+		BrowserUI::SameLineIfFits(Icons::CalcGlyphSize(folderIcon).x + ImGui::GetStyle().FramePadding.x * 2.0f);
 		{
 			auto _style = Util::TransparentIconButtonStyle();
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-			if (Icons::Button("##OpenPack", Icons::FA(ICON_FA_FOLDER_OPEN)))
+			if (Icons::Button("##OpenPack", folderIcon))
 				catalog.OpenPackFolder(pack.id);
 			ImGui::PopStyleVar();
 		}
 		Util::AddTooltip(T("menu.presets.open_pack", "Open Preset Folder"));
 
 		if (baselineEnabled) {
-			ImGui::SameLine(0.0f, style.ItemSpacing.x);
-			if (ImGui::Button(T("menu.presets.remove_baseline", "Remove Baseline")))
+			const char* removeLabel = T("menu.presets.remove_baseline", "Remove Baseline");
+			BrowserUI::SameLineIfFits(MeasureButtonWidth(removeLabel));
+			if (ImGui::Button(removeLabel))
 				catalog.RemoveBaseline(pack.id);
 			Util::AddTooltip(T("menu.presets.remove_baseline_tooltip",
 				"Stops applying this pack's baseline settings on the next load. Values already in use are kept until you reset them."));
 		}
 
 		if (packActive) {
-			ImGui::SameLine(0.0f, style.ItemSpacing.x);
-			if (ImGui::Button(T("menu.presets.disable", "Disable Preset")))
+			const char* disableLabel = T("menu.presets.disable", "Disable Preset");
+			BrowserUI::SameLineIfFits(MeasureButtonWidth(disableLabel));
+			if (ImGui::Button(disableLabel))
 				catalog.DisableActivePack();
 			Util::AddTooltip(T("menu.presets.disable_tooltip",
 				"Turns this preset off. Scene settings and form edits fall back to your own, and an Effects 11 preset returns to the Legacy install."));
 		}
 
-		if (packActive) {
+		if (packActive || baselineEnabled) {
 			MenuFonts::FontRoleGuard sub(Menu::FontRole::Subtext);
-			ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T("menu.presets.active_pack", "This pack is currently active."));
-		} else if (baselineEnabled) {
-			MenuFonts::FontRoleGuard sub(Menu::FontRole::Subtext);
-			ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T("menu.presets.baseline_enabled", "This pack's baseline settings are enabled."));
+			ImGui::PushStyleColor(ImGuiCol_Text, theme.StatusPalette.SuccessColor);
+			ImGui::TextWrapped("%s", packActive ? T("menu.presets.active_pack", "This pack is currently active.") :
+												  T("menu.presets.baseline_enabled", "This pack's baseline settings are enabled."));
+			ImGui::PopStyleColor();
 		}
 	}
 }
@@ -381,6 +407,8 @@ void PresetsPageRenderer::RenderList(float width)
 	const float rowPad = 6.0f * scale;
 	const float logoSize = 40.0f * scale;
 	const float rowGap = ImGui::GetStyle().ItemSpacing.y;
+	const float rowInset = 8.0f * scale;
+	const float statusGap = 6.0f * scale;
 
 	for (size_t idx : indices) {
 		const auto& packId = catalog.GetPacks()[idx].id;
@@ -401,6 +429,7 @@ void PresetsPageRenderer::RenderList(float width)
 		ImGui::PushID(pack.id.c_str());
 
 		const ImVec2 rowOrigin = ImGui::GetCursorScreenPos();
+		const float textWidth = ImGui::GetContentRegionAvail().x - logoSize - rowInset * 3.0f;
 		const bool clicked = ImGui::Selectable("##row", selected, ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0, rowHeight));
 		if (clicked) {
 			selectedPackId = pack.id;
@@ -413,7 +442,7 @@ void PresetsPageRenderer::RenderList(float width)
 
 		// Draw contents inside the selectable bounds, then park the cursor past the row so the
 		// next selectable cannot overlap this highlight.
-		ImGui::SetCursorScreenPos(ImVec2(rowOrigin.x + 8.0f * scale, rowOrigin.y + rowPad));
+		ImGui::SetCursorScreenPos(ImVec2(rowOrigin.x + rowInset, rowOrigin.y + rowPad));
 
 		catalog.EnsureArtwork(pack);
 		{
@@ -428,20 +457,30 @@ void PresetsPageRenderer::RenderList(float width)
 				dl->AddRectFilled(p0, p1, ImGui::ColorConvertFloat4ToU32(ImVec4(0.15f, 0.15f, 0.18f, 1.0f)), rounding);
 		}
 
-		ImGui::SameLine(0.0f, 8.0f * scale);
+		ImGui::SameLine(0.0f, rowInset);
 		ImGui::BeginGroup();
 		{
 			MenuFonts::FontRoleGuard body(Menu::FontRole::Body);
-			ImGui::TextUnformatted(pack.name.c_str());
-			ImGui::SameLine(0.0f, 8.0f * scale);
+			const char* activeLabel = T("menu.presets.active", "Active");
+			const char* invalidLabel = T("menu.presets.invalid", "Invalid");
+
+			// The name gives way to the badges and status, ellipsised so they stay on screen.
+			float trailingWidth = rowInset + MeasureBackendBadgesWidth(pack.IsE11(), pack.IsCS(), pack.IsBaseline(), true);
+			if (isActive)
+				trailingWidth += statusGap + ImGui::CalcTextSize(activeLabel).x;
+			if (!pack.valid)
+				trailingWidth += statusGap + ImGui::CalcTextSize(invalidLabel).x;
+			TextEllipsized(pack.name.c_str(), std::max(textWidth - trailingWidth, ImGui::GetFontSize() * kMinRowNameFontSizes));
+
+			ImGui::SameLine(0.0f, rowInset);
 			DrawBackendBadges(pack.IsE11(), pack.IsCS(), pack.IsBaseline(), true);
 			if (isActive) {
-				ImGui::SameLine(0.0f, 6.0f * scale);
-				ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T("menu.presets.active", "Active"));
+				ImGui::SameLine(0.0f, statusGap);
+				ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", activeLabel);
 			}
 			if (!pack.valid) {
-				ImGui::SameLine(0.0f, 6.0f * scale);
-				ImGui::TextColored(theme.StatusPalette.Error, "%s", T("menu.presets.invalid", "Invalid"));
+				ImGui::SameLine(0.0f, statusGap);
+				ImGui::TextColored(theme.StatusPalette.Error, "%s", invalidLabel);
 			}
 		}
 		{
@@ -461,8 +500,11 @@ void PresetsPageRenderer::RenderList(float width)
 				meta = T("menu.presets.source_cs", "CS Presets");
 			else if (pack.IsBaseline())
 				meta = T("menu.presets.source_baseline", "Baseline feature settings");
-			if (!meta.empty())
-				ImGui::TextDisabled("%s", meta.c_str());
+			if (!meta.empty()) {
+				ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+				TextEllipsized(meta.c_str(), textWidth);
+				ImGui::PopStyleColor();
+			}
 			PresetCompatibility::DrawWarnings(compat, true);
 		}
 		ImGui::EndGroup();
@@ -507,12 +549,17 @@ void PresetsPageRenderer::RenderDetail()
 	const float posterH = ImGui::GetFrameHeight() * 6.0f;
 	const float posterW = posterH * (2.0f / 3.0f);  // movie-poster portrait
 
+	// A narrow pane would leave the title no room beside the badges, so they drop beneath it instead.
+	const bool badgesBesideTitle = ImGui::GetContentRegionAvail().x - posterW - badgesWidth - style.ItemSpacing.x * 2.0f >=
+	                               ImGui::GetFontSize() * kMinTitleColumnFontSizes;
+
 	// Poster | title+author | badges in one table so pills share a baseline and spacing is style-driven.
-	if (ImGui::BeginTable("##PresetDetailHeader", 3,
+	if (ImGui::BeginTable("##PresetDetailHeader", badgesBesideTitle ? 3 : 2,
 			ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoPadOuterX)) {
 		ImGui::TableSetupColumn("poster", ImGuiTableColumnFlags_WidthFixed, posterW);
 		ImGui::TableSetupColumn("title", ImGuiTableColumnFlags_WidthStretch);
-		ImGui::TableSetupColumn("badges", ImGuiTableColumnFlags_WidthFixed, badgesWidth);
+		if (badgesBesideTitle)
+			ImGui::TableSetupColumn("badges", ImGuiTableColumnFlags_WidthFixed, badgesWidth);
 
 		ImGui::TableNextRow(ImGuiTableRowFlags_None, posterH);
 		ImGui::TableSetColumnIndex(0);
@@ -548,8 +595,8 @@ void PresetsPageRenderer::RenderDetail()
 				ImGui::SetWindowFontScale(1.35f);
 				ImGui::TextWrapped("%s", pack->name.c_str());
 				if (!stageTag.empty()) {
-					ImGui::SameLine(0.0f, style.ItemSpacing.x);
 					MenuFonts::FontRoleGuard body(Menu::FontRole::Body);
+					BrowserUI::SameLineIfFits(ImGui::CalcTextSize(stageTag.c_str()).x);
 					ImGui::TextColored(Feature::GetReleaseStageColor(stage), "%s", stageTag.c_str());
 				}
 				ImGui::SetWindowFontScale(1.0f);
@@ -575,6 +622,11 @@ void PresetsPageRenderer::RenderDetail()
 				PresetCompatibility::DrawWarnings(pack->compat, false);
 			}
 
+			if (!badgesBesideTitle && badgesWidth > 0.0f) {
+				ImGui::Spacing();
+				DrawBackendBadges(pack->IsE11(), pack->IsCS(), pack->IsBaseline(), false);
+			}
+
 			ImGui::Spacing();
 
 			DrawPackActions(catalog, *pack);
@@ -582,8 +634,8 @@ void PresetsPageRenderer::RenderDetail()
 			ImGui::EndGroup();
 		}
 
-		ImGui::TableSetColumnIndex(2);
-		if (badgesWidth > 0.0f) {
+		if (badgesBesideTitle && badgesWidth > 0.0f) {
+			ImGui::TableSetColumnIndex(2);
 			// Aligned to the title line rather than centred in the whole poster height, now that
 			// the title column reads top-down (title, author, actions) instead of floating in the middle.
 			const float titleLineH = ImGui::GetTextLineHeight() * 1.35f;
