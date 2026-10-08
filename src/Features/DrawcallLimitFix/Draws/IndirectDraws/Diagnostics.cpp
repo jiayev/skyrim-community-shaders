@@ -373,6 +373,9 @@ namespace DCLF
 
 	void IndirectDraws::Impl::CheckSetParity(const std::shared_ptr<Resources>& a_resources, const MainPayload& a_depth, const MainPayload& a_colour)
 	{
+		// A gap's first frame, by what rejected it: the frustum stamp and its fade bit, the root's ownership.
+		static constexpr const char* kGapClasses[] = { "?", "the frustum", "an owned fade root", "the resident fade test",
+			"past the frustum and fade (HZB or tree height)", "no frustum stamp", "no verdict this frame" };
 		auto* context = globals::d3d::context;
 		auto& store = SceneStore::Get();
 		auto& counts = setParity;
@@ -511,31 +514,64 @@ namespace DCLF
 							depthDrawn || colourDrawn ? ", drawn by DCLF" : "");
 					}
 				}
-				// The gap detector, by geometry (object indices are rebuilt every frame).
+				// The gap detector, by geometry (object indices are rebuilt every frame): a run of one to eight frames withheld and
+				// GPU-culled between frames something drew it.
 				if (const auto* geometry = o < snapshot.geometry.size() ? snapshot.geometry[o] : nullptr) {
 					const bool kept = flags & 2;
-					const std::uint8_t state = !kept ? 0 : (withheld && !colourDrawn) ? static_cast<std::uint8_t>(2 | (verdict << 4)) : 1;
+					const std::uint8_t state = !kept ? 0 : (withheld && !colourDrawn) ? 2 : 1;
 					auto& history = gapHistory[geometry];
-					if (history.frame + 1 == snapshot.frame && state == 1 && (history.last & 3) == 2 && history.before == 1) {
+					const bool contiguous = history.frame + 1 == snapshot.frame;
+					if (!contiguous || !(history.last & 3))
+						history.first = kept ? snapshot.frame : 0;
+					if (state == 1 && contiguous && history.last == 2 && history.run && history.run <= 8 && history.runDrawnBy) {
 						++counts.gaps;
-						const std::uint32_t gapVerdict = history.last >> 4;
-						counts.gapsRetest += gapVerdict == 0;
-						counts.gapsRejected += gapVerdict == 2;
-						// The snapshot is frames old: a geometry released since (a teleport, a cell unloading) is not read.
-						const bool alive = true;  // held by snapshot.tables
+						++counts.gapsByLength[history.run == 1 ? 0 : history.run == 2 ? 1 : 2];
+						++counts.gapsByClass[std::min<std::uint8_t>(history.runClass, 6)];
+						counts.gapsRetest += history.runVerdict == 0;
+						counts.gapsRejected += history.runVerdict == 2;
+						counts.gapsInView += history.runInView;
+						const std::uint32_t age = snapshot.frame - history.run - history.first;
+						counts.gapsNew += age <= 60;
+						counts.gapsBeforeNative += history.runDrawnBy == 1;
+						counts.gapsAfterNative += !withheld;
 						const RE::TESObjectREFR* owner = nullptr;
-						for (const RE::NiAVObject* node = alive ? geometry : nullptr; node && !owner; node = node->parent)
+						for (const RE::NiAVObject* node = geometry; node && !owner; node = node->parent)
 							owner = node->GetUserData();
 						const auto* base = owner ? owner->GetBaseObject() : nullptr;
 						const bool tree = base && base->GetFormType() == RE::FormType::Tree;
 						counts.gapsTree += tree;
 						if (counts.gapSamples++ < 12)
-							logger::info("[DCLF] set parity, frame {}: one-frame gap - '{}' ({}{}), culled in frame {} with verdict {}", snapshot.frame,
-								alive && geometry->name.c_str() ? geometry->name.c_str() : "?", base ? RE::FormTypeToString(base->GetFormType()) : "no ref",
-								alive && geometry->GetGeometryRuntimeData().skinInstance ? ", skinned" : "", snapshot.frame - 1,
-								gapVerdict == 0 ? "occluded (retest)" : gapVerdict == 2 ? "rejected" : "other");
+							logger::info("[DCLF] set parity, frame {}: {}-frame gap - '{}' ({}{}), culled from frame {} by {} (verdict {}{}), {} frames after it was first resident; "
+										 "before it {}, after it {}",
+								snapshot.frame, history.run, geometry->name.c_str() ? geometry->name.c_str() : "?", base ? RE::FormTypeToString(base->GetFormType()) : "no ref",
+								geometry->GetGeometryRuntimeData().skinInstance ? ", skinned" : "", snapshot.frame - history.run,
+								kGapClasses[std::min<std::uint8_t>(history.runClass, 6)], history.runVerdict, history.runInView ? ", live bound in view" : "", age,
+								history.runDrawnBy == 1 ? "outside the set" : "drawn by DCLF", withheld ? "drawn by DCLF" : "outside the set");
 					}
-					history.before = history.frame + 1 == snapshot.frame ? history.last : 0;
+					if (state == 2) {
+						if (contiguous && history.last == 2) {
+							history.run = static_cast<std::uint8_t>(std::min(history.run + 1, 255));
+						} else {
+							// The run's first frame: what rejected it.
+							const std::uint32_t frustumWord = frustum && o < frustumWords ? frustum[o] : 0u;
+							const bool passedFrustum = (frustumWord & 0x0FFFFFFFu) == stamp;
+							std::uint8_t cls = !current ? 6 : !frustum ? 5 : !passedFrustum ? 1 : 4;
+							if (passedFrustum && (frustumWord & 0x80000000u)) {
+								const auto& tables = *snapshot.tables;
+								const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
+								cls = root < tables.fadeRoots.size() && (tables.fadeRoots[root].bits & kFadeRootOwned) ? 2 : 3;
+							}
+							history.run = 1;
+							history.runClass = cls;
+							history.runVerdict = static_cast<std::uint8_t>(verdict & 3);
+							history.runInView = o < snapshot.inView.size() && snapshot.inView[o];
+							history.runDrawnBy = contiguous && history.last == 1 ? history.drawnBy : 0;
+						}
+					} else {
+						history.run = 0;
+					}
+					if (state == 1)
+						history.drawnBy = withheld ? 2 : 1;
 					history.last = state;
 					history.frame = snapshot.frame;
 				}
@@ -575,8 +611,13 @@ namespace DCLF
 							 "not claimed (drawn twice){}",
 					counts.frames, counts.claimedOutside, counts.unclaimedMembers, counts.claimedOutside || counts.unclaimedMembers ? " <- CLAIMS" : " <- OK");
 				if (counts.gaps)
-					logger::info("[DCLF] set parity over {} frames: {} one-frame gaps (kept, drawn, withheld and GPU-culled, drawn again): {} occluded (retest), {} rejected; {} of them trees",
-						counts.frames, counts.gaps, counts.gapsRetest, counts.gapsRejected, counts.gapsTree);
+					logger::info("[DCLF] set parity over {} frames: {} gaps (resident, drawn, withheld and GPU-culled for 1-8 frames, drawn again; counted, not flagged: an "
+								 "occlusion rejection is against this frame's depth): {} of one frame, {} of two, {} longer; {} occluded (retest), {} rejected; by the first gap "
+								 "frame's rejection: frustum {}, owned fade root {}, resident fade test {}, HZB or tree height {}, no frustum stamp {}, no verdict {}; {} with the live "
+								 "bound in view, {} within 60 frames of first resident, {} outside the set before, {} after; {} of them trees",
+						counts.frames, counts.gaps, counts.gapsByLength[0], counts.gapsByLength[1], counts.gapsByLength[2], counts.gapsRetest, counts.gapsRejected,
+						counts.gapsByClass[1], counts.gapsByClass[2], counts.gapsByClass[3], counts.gapsByClass[4], counts.gapsByClass[5], counts.gapsByClass[6],
+						counts.gapsInView, counts.gapsNew, counts.gapsBeforeNative, counts.gapsAfterNative, counts.gapsTree);
 				counts = {};
 				// Forget geometries not seen for a while, so the history does not keep every object ever drawn.
 				std::erase_if(gapHistory, [&](const auto& a_entry) { return a_entry.second.frame + 8 < snapshot.frame; });

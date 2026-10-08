@@ -4562,10 +4562,16 @@ namespace DCLF
 			// Drawn by DCLF outside the set (the engine draws it too: a double draw), and records whose kObjectMember is not the set.
 			std::uint32_t outsideDrawn = 0, recordDisagrees = 0;
 			std::uint32_t samples = 0;
-			// One-frame gaps: an object the engine kept on three consecutive frames, drawn on the first and the
-			// third and withheld and GPU-culled on the second - a flicker, unless it really was hidden for that
-			// one frame. By the gap frame's verdict (occluded retest, rejected), and how many were trees.
+			// Gaps: a resident object drawn (by DCLF, or outside the set), then withheld and GPU-culled for one to eight frames, then
+			// drawn again. Counted, not flagged: an occlusion rejection is against this frame's depth, which only gets nearer, so it is
+			// hidden in the final image too (two-phase oscillation behind an occluder that moves between the phases is most of them).
+			// By the first gap frame's verdict (occluded retest, rejected), and how many were trees.
 			std::uint32_t gaps = 0, gapsRetest = 0, gapsRejected = 0, gapsTree = 0, gapSamples = 0;
+			// By length (one, two, longer), by the first gap frame's rejection (kGapClasses), with the live bound in view then,
+			// within 60 frames of the geometry's first resident frame, and outside the set before and after.
+			std::array<std::uint32_t, 3> gapsByLength{};
+			std::array<std::uint32_t, 7> gapsByClass{};
+			std::uint32_t gapsInView = 0, gapsNew = 0, gapsAfterNative = 0, gapsBeforeNative = 0;
 			// Set members rejected while their live bound was in view: by the frustum (the bound the culling read was not the live
 			// one), by the fade test (a fade root DCLF owns, faded out), and how many of those were skinned.
 			std::uint32_t rejectedInView = 0, fadeHiddenInView = 0, skinnedInView = 0, inViewSamples = 0;
@@ -4573,12 +4579,15 @@ namespace DCLF
 			// drawn by DCLF), in it and not claimed (drawn by both).
 			std::uint32_t claimedOutside = 0, unclaimedMembers = 0, claimSamples = 0;
 		} setParity;
-		// Per geometry, the last two frames' state for the gap detector: 0 not kept, 1 kept and drawn by someone,
-		// 2 kept, withheld and GPU-culled (verdict in the high bits).
+		// Per geometry, for the gap detector: its last frame's state (0 not resident, 1 resident and drawn by DCLF or outside the set,
+		// 2 resident, withheld and GPU-culled), and its first resident frame.
 		struct GapHistory
 		{
-			std::uint32_t frame = 0;
-			std::uint8_t last = 0, before = 0;
+			std::uint32_t frame = 0, first = 0;
+			std::uint8_t last = 0;
+			// The run of withheld, GPU-culled frames in progress: its length, its first frame's class (kGapClasses) and verdict, whether
+			// its live bound was in view then, and who had it before the run (1 outside the set, 2 DCLF); drawnBy, the last frame's.
+			std::uint8_t run = 0, runClass = 0, runVerdict = 0, runInView = 0, drawnBy = 0, runDrawnBy = 0;
 		};
 		ankerl::unordered_dense::map<const RE::BSGeometry*, GapHistory> gapHistory;
 		void CheckSetParity(const std::shared_ptr<Resources>& a_resources, const MainPayload& a_depth, const MainPayload& a_colour);

@@ -482,7 +482,8 @@ namespace DCLF
 			std::vector<std::uint8_t> admitted;               // per entry index: DCLF has drawn all of it (see the class)
 			std::vector<std::uint8_t> mixed;                  // per entry index: some member is the engine's (drawn from the node)
 			// Per entry index: the stand-in walks it (its bound test and its members): it has engine-drawn members to hand to
-			// the registration, or a member shown but not bound (handed over until it is). Any other admitted entry is left
+			// the registration, or a tracked member not in the set, shown or not (handed over whenever the walk finds it shown, until
+			// it is in the set: the engine shows one with no event that reaches the decision first). Any other admitted entry is left
 			// to the GPU whole. Kept by events (RefreshWalk): a new snapshot, a member's binding lost (NoteMemberLost, then
 			// the next frame), a member newly drawn.
 			std::vector<std::uint8_t> walk;
@@ -513,6 +514,7 @@ namespace DCLF
 			// CS_DCLF_FADE_PARITY: those entries' cull by the engine against FadeStateCS's test (VisibilityPort) on the job's block.
 			std::uint64_t visibilityChecked = 0, visibilityDiffer = 0;
 			std::string visibilityFirst;
+			std::string walkMissedFirst;  // CS_DCLF_PERSISTENT_PARITY: walkMissed's first few
 		};
 		std::array<JobOut, 16> jobOut;
 
@@ -532,6 +534,7 @@ namespace DCLF
 			std::uint64_t filterChecked = 0, filterMissed = 0;
 			std::uint64_t mixed = 0, visibilityChecked = 0, visibilityDiffer = 0;
 			std::string visibilityFirst;
+			std::string walkMissedFirst;  // CS_DCLF_PERSISTENT_PARITY: walkMissed's first few
 			std::uint64_t engineMembers = 0;  // the engine's members in view, handed to its registration
 			std::uint64_t switchStale = 0;    // entries the engine culled this frame because a switch's selected child was out of date
 			std::uint64_t unselected = 0;     // members under an unselected switch child
