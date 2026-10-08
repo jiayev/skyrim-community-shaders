@@ -139,8 +139,8 @@ namespace
 	/**
 	 * @brief Constructs a JSON object describing a feature's state and any pending restart-required changes.
 	 *
-	 * Includes feature metadata (name, version, category, load state, etc.) and, if the feature 
-	 * has restart-required fields, an array of those fields with their pending status determined 
+	 * Includes feature metadata (name, version, category, load state, etc.) and, if the feature
+	 * has restart-required fields, an array of those fields with their pending status determined
 	 * by comparing boot values against current live settings.
 	 *
 	 * @return json Feature entry with metadata and optional restart fields array.
@@ -185,10 +185,10 @@ namespace
 
 	/**
 	 * @brief Dispatches feature management operations (list, get, set, reset, toggle).
-	 * 
+	 *
 	 * Validates parameters and executes the requested feature operation, returning
 	 * success or error details in JSON format.
-	 * 
+	 *
 	 * @param a_args JSON object specifying the action and operation parameters.
 	 * @return JSON object containing the operation result or error information.
 	 */
@@ -680,7 +680,7 @@ namespace DevBenchBridge
  * inspection, shader caching, capture operations, and settings persistence.
  * If DevBench is unavailable, no action is taken.
  */
-void Install() {}  // inert until built with DEVBENCH_BRIDGE_ENABLED
+	void Install() {}  // inert until built with DEVBENCH_BRIDGE_ENABLED
 }
 
 #endif

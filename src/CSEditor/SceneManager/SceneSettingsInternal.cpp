@@ -15,7 +15,6 @@
 #include <charconv>
 #include <cmath>
 #include <filesystem>
-#include <fstream>
 #include <functional>
 #include <map>
 #include <set>
@@ -162,16 +161,11 @@ namespace SceneSettingsInternal
 
 	bool ReadBoundedSceneJson(const std::filesystem::path& path, json& data)
 	{
-		std::error_code ec;
-		const auto fileSize = std::filesystem::file_size(path, ec);
-		if (ec || fileSize > kMaxSceneOverwriteFileSize)
+		auto document = Util::FileHelpers::ReadJsonObject(path, "scene settings", kMaxSceneOverwriteFileSize);
+		if (!document)
 			return false;
-
-		std::ifstream file(path);
-		if (!file.is_open())
-			return false;
-		data = json::parse(file, nullptr, false);
-		return data.is_object();
+		data = std::move(*document);
+		return true;
 	}
 
 	bool IsNumericValue(const json& value)

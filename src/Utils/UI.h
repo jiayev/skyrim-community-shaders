@@ -202,6 +202,9 @@ namespace Util
 	 */
 	void AddTooltip(const char* a_desc, ImGuiHoveredFlags a_flags = ImGuiHoveredFlags_DelayNormal);
 
+	/** @brief Text HelpMarker draws, exposed so callers can measure it. */
+	inline constexpr const char* kHelpMarkerLabel = "(?)";
+
 	/**
 	 * Draws a "(?)" help marker with a tooltip on hover.
 	 * @param a_desc Tooltip text to show

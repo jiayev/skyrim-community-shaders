@@ -3,6 +3,7 @@
 #include "Format.h"
 #include "WinApi.h"
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <imgui.h>
 #include <nlohmann/json.hpp>
@@ -318,11 +319,17 @@ namespace Util
 		bool WriteJsonAtomically(const std::filesystem::path& path, const nlohmann::json& data, int indent, std::string_view context);
 
 		/**
-		 * @brief Parses a JSON file.
+		 * @brief Parses a JSON file (instantiated for nlohmann::json and nlohmann::ordered_json).
 		 * @param context Human-readable description used in the log message
-		 * @return The document, or nullopt when the file cannot be opened or parsed (parse failures are logged)
+		 * @param maxBytes Larger files are rejected; 0 means unbounded
+		 * @param error Receives the reason when the file exists but is rejected; untouched when it cannot be opened
+		 * @return The document, or nullopt when the file cannot be opened, is too large, or cannot be parsed
 		 */
-		std::optional<nlohmann::json> ReadJsonFile(const std::filesystem::path& path, std::string_view context);
+		template <class Json = nlohmann::json>
+		std::optional<Json> ReadJsonFile(const std::filesystem::path& path, std::string_view context, std::uintmax_t maxBytes = 0, std::string* error = nullptr);
+
+		/** @brief ReadJsonFile that also rejects documents whose root is not an object. */
+		std::optional<nlohmann::json> ReadJsonObject(const std::filesystem::path& path, std::string_view context, std::uintmax_t maxBytes = 0, std::string* error = nullptr);
 	}
 
 	/**

@@ -112,10 +112,14 @@ namespace
 		return ImVec4(hot.x + (warn.x - hot.x) * t, hot.y + (warn.y - hot.y) * t, hot.z + (warn.z - hot.z) * t, 1.0f);
 	}
 
+	bool IsEnterPressed()
+	{
+		return ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
+	}
+
 	bool IsActivateKeyPressed()
 	{
-		return ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false) ||
-		       ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false);
+		return IsEnterPressed() || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false);
 	}
 
 	/// Text cut to maxWidth with a trailing "...", keeping UTF-8 sequences whole.
@@ -175,13 +179,20 @@ namespace
 		editor.SelectCategory(category);
 	}
 
+	/// A plain click selects the record in its own list; Ctrl opens its editor instead.
+	void FollowLink(FormListState& state, EditorWindow& editor, const std::string& category, Widget* widget, RE::FormID formId)
+	{
+		if (!ImGui::GetIO().KeyCtrl)
+			JumpTo(state, editor, category, formId);
+		else if (widget)
+			OpenWidget(editor, category, *widget);
+	}
+
 	void RevealInExplorer(const std::string& path)
 	{
 		const std::wstring args = L"/select,\"" + std::filesystem::path(path).wstring() + L"\"";
 		ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
 	}
-
-	// ------------------------------------------------------------------------------------------ view
 
 	bool MatchesFilter(const FormRow& row, const FormListState& state)
 	{
@@ -317,8 +328,6 @@ namespace
 			RebuildView(state, context);
 	}
 
-	// ------------------------------------------------------------------------------ active records
-
 	std::vector<ActiveRecord> CollectActiveRecords(const Context& context)
 	{
 		EditorWindow& editor = *context.editor;
@@ -391,6 +400,16 @@ namespace
 		return records;
 	}
 
+	const char* GetActiveBadgeLabel(const ActiveRecord& record)
+	{
+		return record.outgoing ? T(TKEY("badge_outgoing"), "OUTGOING") : T(TKEY("badge_live"), "LIVE");
+	}
+
+	ImVec4 GetActiveBadgeColor(const ActiveRecord& record)
+	{
+		return record.outgoing ? Util::Colors::GetSecondary() : Util::Colors::GetSuccess();
+	}
+
 	const ActiveRecord* FindActive(const std::vector<ActiveRecord>& records, RE::FormID formId)
 	{
 		const auto it = std::ranges::find_if(records, [formId](const ActiveRecord& record) { return record.formId == formId; });
@@ -440,8 +459,6 @@ namespace
 			ImGui::PopID();
 		}
 	}
-
-	// ------------------------------------------------------------------------------------- toolbar
 
 	void DrawToolbar(FormListState& state)
 	{
@@ -591,8 +608,6 @@ namespace
 			}
 		}
 	}
-
-	// ---------------------------------------------------------------------------------------- list
 
 	void DrawWeatherTooltip(const Context& context, Widget* widget)
 	{
@@ -754,13 +769,11 @@ namespace
 		ImGui::SetCursorScreenPos(ImVec2(nameX, cellStart.y));
 		ImGui::AlignTextToFramePadding();
 		const ActiveRecord* activeRecord = FindActive(active, row.formId);
-		const char* badge = nullptr;
-		if (activeRecord)
-			badge = activeRecord->outgoing ? T(TKEY("badge_outgoing"), "OUTGOING") : T(TKEY("badge_live"), "LIVE");
+		const char* badge = activeRecord ? GetActiveBadgeLabel(*activeRecord) : nullptr;
 		const float badgeWidth = badge ? Util::MeasureBadgeWidth(badge) + ImGui::GetStyle().ItemSpacing.x : 0.0f;
 		BrowserUI::EllipsizedText(row.display.c_str(), std::max(1.0f, ImGui::GetContentRegionAvail().x - badgeWidth), ImGui::GetStyleColorVec4(ImGuiCol_Text));
 		if (badge)
-			BrowserUI::InlineBadge(badge, activeRecord->outgoing ? Util::Colors::GetSecondary() : Util::Colors::GetSuccess());
+			BrowserUI::InlineBadge(badge, GetActiveBadgeColor(*activeRecord));
 
 		if (ImGui::TableSetColumnIndex(2)) {
 			ImGui::AlignTextToFramePadding();
@@ -881,8 +894,6 @@ namespace
 		ImGui::EndTable();
 	}
 
-	// ----------------------------------------------------------------------------------- inspector
-
 	/// A record reference that selects it in its own list, or opens its editor with Ctrl held.
 	void FormLink(FormListState& state, const Context& context, RE::TESForm* form, std::string_view category, WidgetVec& widgets, const char* id)
 	{
@@ -892,12 +903,7 @@ namespace
 		}
 		const std::string label = context.resolveEditorId(form, widgets);
 		if (BrowserUI::Link(id, label.c_str())) {
-			if (ImGui::GetIO().KeyCtrl) {
-				if (Widget* widget = FindWidget(widgets, form->GetFormID()))
-					OpenWidget(*context.editor, std::string(category), *widget);
-			} else {
-				JumpTo(state, *context.editor, std::string(category), form->GetFormID());
-			}
+			FollowLink(state, *context.editor, std::string(category), FindWidget(widgets, form->GetFormID()), form->GetFormID());
 		}
 		Util::AddTooltip(T(TKEY("form_link_tooltip"), "Click to find it in its list. Ctrl+click to open its editor."));
 	}
@@ -946,8 +952,7 @@ namespace
 			any = true;
 		};
 		if (const ActiveRecord* record = widget.form ? FindActive(active, widget.form->GetFormID()) : nullptr)
-			badge(record->outgoing ? T(TKEY("badge_outgoing"), "OUTGOING") : T(TKEY("badge_live"), "LIVE"),
-				record->outgoing ? Util::Colors::GetSecondary() : Util::Colors::GetSuccess());
+			badge(GetActiveBadgeLabel(*record), GetActiveBadgeColor(*record));
 		if (widget.HasUnsavedChanges())
 			badge(T(TKEY("badge_unsaved"), "Unsaved"), Util::Colors::GetWarning());
 		if (context.hasSavedFile(&widget))
@@ -1100,12 +1105,8 @@ namespace
 			const std::string name = use.weather->GetEditorID();
 			const float avail = ImGui::GetContentRegionAvail().x;
 			const float slotsWidth = std::min(ImGui::CalcTextSize(use.slots.c_str()).x + spacing, avail * 0.45f);
-			if (BrowserUI::Link("##weather", name.c_str(), avail - slotsWidth) && use.weather->form) {
-				if (ImGui::GetIO().KeyCtrl)
-					OpenWidget(editor, std::string(kWeather), *use.weather);
-				else
-					JumpTo(state, editor, std::string(kWeather), use.weather->form->GetFormID());
-			}
+			if (BrowserUI::Link("##weather", name.c_str(), avail - slotsWidth) && use.weather->form)
+				FollowLink(state, editor, std::string(kWeather), use.weather, use.weather->form->GetFormID());
 			Util::AddTooltip(T(TKEY("form_link_tooltip"), "Click to find it in its list. Ctrl+click to open its editor."));
 			ImGui::SameLine();
 			BrowserUI::MetaText(use.slots.c_str());
@@ -1181,17 +1182,24 @@ namespace
 		}
 	}
 
-	void DrawInspector(FormListState& state, const Context& context, const ImVec2& size, const std::vector<ActiveRecord>& active)
+	/// A rounded, softly tinted child window; the caller ends it whatever this returns.
+	bool BeginCard(const char* id, const ImVec2& size, ImGuiChildFlags flags = ImGuiChildFlags_None)
 	{
 		const auto& style = ImGui::GetStyle();
 		ImVec4 background = style.Colors[ImGuiCol_FrameBg];
 		background.w *= kInspectorBgAlpha;
 		ImGui::PushStyleColor(ImGuiCol_ChildBg, background);
 		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, style.FrameRounding);
-		const bool visible = ImGui::BeginChild("##Inspector", size, ImGuiChildFlags_AlwaysUseWindowPadding);
+		const bool visible = ImGui::BeginChild(id, size, flags | ImGuiChildFlags_AlwaysUseWindowPadding);
 		ImGui::PopStyleVar();
 		ImGui::PopStyleColor();
-		if (visible) {
+		return visible;
+	}
+
+	void DrawInspector(FormListState& state, const Context& context, const ImVec2& size, const std::vector<ActiveRecord>& active)
+	{
+		const auto& style = ImGui::GetStyle();
+		if (BeginCard("##Inspector", size)) {
 			Widget* widget = FindWidget(*context.widgets, GetSelectedId(state, context.category));
 			if (!widget) {
 				BrowserUI::EmptyState(T(TKEY("inspector_empty"), "Nothing selected"),
@@ -1219,8 +1227,6 @@ namespace
 		ImGui::EndChild();
 	}
 
-	// -------------------------------------------------------------------------------- cell lighting
-
 	void DrawCellLightingCard(FormListState& state, const Context& context)
 	{
 		EditorWindow& editor = *context.editor;
@@ -1236,16 +1242,8 @@ namespace
 			return;
 		}
 
-		const auto& style = ImGui::GetStyle();
-		ImVec4 background = style.Colors[ImGuiCol_FrameBg];
-		background.w *= kInspectorBgAlpha;
 		ImGui::Spacing();
-		ImGui::PushStyleColor(ImGuiCol_ChildBg, background);
-		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, style.FrameRounding);
-		const bool visible = ImGui::BeginChild("##CellCard", ImVec2(0.0f, 0.0f), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding);
-		ImGui::PopStyleVar();
-		ImGui::PopStyleColor();
-		if (visible) {
+		if (BeginCard("##CellCard", ImVec2(0.0f, 0.0f), ImGuiChildFlags_AutoResizeY)) {
 			const char* cellName = cell->GetName();
 			ImGui::AlignTextToFramePadding();
 			{
@@ -1282,7 +1280,7 @@ namespace
 		ImGui::EndChild();
 
 		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
-			(ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)))
+			IsEnterPressed())
 			editor.OpenCellLighting(cell, true);
 	}
 }

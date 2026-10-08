@@ -8,13 +8,22 @@
 #include <cctype>
 #include <format>
 #include <map>
+#include <ranges>
 #include <set>
 
 namespace Util::Settings
 {
 	constexpr std::string_view kImGuiIdSeparator = "##";
+	constexpr std::string_view kLabelSeparator = " / ";
 	/// Decimals FormatValue shows for a float, before trailing zeros are trimmed.
 	constexpr int kValueDecimals = 3;
+
+	/// Joins the non-empty parts into the "Group / Setting" form export lists show.
+	static std::string JoinLabelParts(const std::vector<std::string>& parts)
+	{
+		return parts | std::views::filter([](const auto& part) { return !part.empty(); }) |
+		       std::views::join_with(kLabelSeparator) | std::ranges::to<std::string>();
+	}
 
 	std::string StripImGuiId(std::string_view label)
 	{
@@ -90,6 +99,7 @@ namespace Util::Settings
 			displayName = StripImGuiId(T(setting.displayNameKey, displayName.c_str()));
 		return displayName;
 	}
+
 	std::vector<ExportSetting> GetExportSettings(std::string_view featureShortName, const nlohmann::json& settings)
 	{
 		using json = nlohmann::json;
@@ -104,15 +114,7 @@ namespace Util::Settings
 			path /= std::string(setting.serializedKey);
 			auto parts = GetCatalogDisplayPath(setting);
 			parts.push_back(GetCatalogLeafDisplayName(setting));
-			std::string label;
-			for (const auto& part : parts) {
-				if (part.empty())
-					continue;
-				if (!label.empty())
-					label += " / ";
-				label += part;
-			}
-			labels.try_emplace(path.to_string(), std::move(label));
+			labels.try_emplace(path.to_string(), JoinLabelParts(parts));
 		}
 		std::vector<ExportSetting> result;
 		const auto visit = [&](auto&& self, const json& node, const json::json_pointer& parent, const std::string& context) -> void {
@@ -120,7 +122,7 @@ namespace Util::Settings
 				if (key.starts_with('_'))
 					continue;
 				auto path = parent / key;
-				auto label = context.empty() ? NormalizeDisplayPart(key) : context + " / " + NormalizeDisplayPart(key);
+				auto label = JoinLabelParts({ context, NormalizeDisplayPart(key) });
 				if (value.is_object() && !SceneBlend::IsValid(value)) {
 					self(self, value, path, label);
 				} else {

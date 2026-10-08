@@ -853,6 +853,8 @@ void EditorWindow::RenderUI()
 			if (ImGui::BeginMenu(T(TKEY("file"), "File"))) {
 				if (MenuItemWithShortcutSubtext(T(TKEY("save"), "Save"), "Ctrl+S"))
 					SaveAll();
+				Util::AddTooltip(T(TKEY("save_tooltip"),
+					"Saves your edited widgets and scene settings on this PC. To share them, use Export Preset."));
 
 				// Save individual widgets submenu
 				if (ImGui::BeginMenu(T(TKEY("save_open_widget"), "Save Widget"))) {
@@ -877,9 +879,7 @@ void EditorWindow::RenderUI()
 				const bool canExport = ScenePresetExport::CanExport();
 				if (MenuItemWithShortcutSubtext(T(TKEY("export_preset"), "Export Preset..."), "Ctrl+Shift+S", canExport))
 					ScenePresetExport::Open();
-				Util::AddTooltip(T(TKEY("scene_page_export_tooltip"),
-									 "Export scene settings as a preset, or update an existing pack's metadata and artwork."),
-					Util::kTooltipWhenDisabled);
+				Util::AddTooltip(ScenePresetExport::GetSummary(), Util::kTooltipWhenDisabled);
 
 				ImGui::Separator();
 				for (auto* collection : GetWidgetCollections())
@@ -1083,12 +1083,12 @@ void EditorWindow::RenderUI()
 				ImGui::PopStyleVar(2);
 				const std::string exportTooltip = std::format("{} (Ctrl+Shift+S)\n{}", T(TKEY("export_preset"), "Export Preset..."),
 					canExport ?
-						T(TKEY("scene_page_export_tooltip"), "Export scene settings as a preset, or update an existing pack's metadata and artwork.") :
+						ScenePresetExport::GetSummary() :
 						T(TKEY("export_preset_empty_tooltip"), "Nothing to export yet: author scene settings, save form edits, or load Post Processing or an Effects 11 preset first."));
 				Util::AddTooltip(exportTooltip.c_str(), Util::kTooltipWhenDisabled);
 			}
 
-			// Delete authored scene changes — global action, same row as Undo.
+			// Delete authored scene changes: global action, same row as Undo.
 			ImGui::SameLine(0.0f, style.ItemSpacing.x);
 			{
 				auto* sceneManager = globals::sceneSettingsManager;
@@ -1124,7 +1124,7 @@ void EditorWindow::RenderUI()
 					Util::kTooltipWhenDisabled);
 			}
 
-			// Right-aligned items — X from the trailing edge; Y shares iconY / textY with the left cluster.
+			// Right-aligned items: X from the trailing edge; Y shares iconY / textY with the left cluster.
 			const float clipRight = barPos.x + ImGui::GetWindowSize().x - style.FramePadding.x;
 			const float barMinX = barPos.x;
 			const float barWidth = ImGui::GetWindowSize().x;
@@ -1177,7 +1177,7 @@ void EditorWindow::RenderUI()
 				previewStatusX = rightCursor;
 			}
 
-			// Weather lock + name, and period title — centered in the header
+			// Weather lock + name, and period title, centered in the header
 			const bool weatherLocked = IsWeatherLocked();
 			RE::TESWeather* statusWeather = GetLockedWeather();
 			if (!statusWeather) {
@@ -1238,7 +1238,7 @@ void EditorWindow::RenderUI()
 				ImGui::TextUnformatted(periodBuf);
 			}
 
-			// Toggle-style FA/Lucide/Tabler glyph button — same chrome as the old image toggles.
+			// Toggle-style FA/Lucide/Tabler glyph button: same chrome as the old image toggles.
 			auto PlaceToggleIconButton = [&](const char* id, Icons::GlyphRef glyph, bool isActive, float posX, const ImVec4& activeColor) -> bool {
 				ImGui::SetCursorScreenPos(ImVec2(posX, iconY));
 				return DrawToggleIconButton(id, glyph, isActive, activeColor, iconButtonSize, ImGui::GetColorU32(textColor));
@@ -1286,7 +1286,7 @@ void EditorWindow::RenderUI()
 				DrawTimeScaleSlider("##MenuBarTimeScaleSlider", calendar);
 			}
 
-			// Close — white cross, no red fill
+			// Close: white cross, no red fill
 			ImGui::SetCursorScreenPos(ImVec2(xButtonX, iconY));
 			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
 			{
@@ -1785,43 +1785,40 @@ void EditorWindow::ShowSettingsWindow()
 	ImGui::End();
 }
 
+/** @brief Path of the editor's own settings file in the CommunityShaders folder. */
+static std::filesystem::path GetEditorSettingsPath(const std::string& settingsFilename)
+{
+	return Util::PathHelpers::GetCommunityShaderPath() / (settingsFilename + ".json");
+}
+
 void EditorWindow::Save()
 {
 	// Favourites and status markers change through here; the browser rebuilds its rows from them.
 	m_formList.Invalidate();
 	SaveSettings();
-	const std::string filePath = Util::PathHelpers::GetCommunityShaderPath().string();
-	const std::string file = std::format("{}\\{}.json", filePath, settingsFilename);
+	const auto file = GetEditorSettingsPath(settingsFilename);
 
-	logger::info("Saving settings file: {}", file);
+	logger::info("Saving settings file: {}", file.string());
 
 	if (!Util::FileHelpers::WriteJsonAtomically(file, j, 1, "editor settings"))
-		logger::warn("Failed to write settings file: {}", file);
+		logger::warn("Failed to write settings file: {}", file.string());
 }
 
 void EditorWindow::Load()
 {
-	std::string filePath = std::format("{}\\{}.json", Util::PathHelpers::GetCommunityShaderPath().string(), settingsFilename);
+	const auto path = GetEditorSettingsPath(settingsFilename);
+	// No settings file yet: keep the defaults untouched.
+	if (!std::filesystem::exists(path))
+		return;
 
-	std::ifstream settingsFile(filePath);
-
-	if (!std::filesystem::exists(filePath)) {
-		// Does not have any settings so just return.
+	std::string error;
+	auto loaded = Util::FileHelpers::ReadJsonFile(path, "editor settings", 0, &error);
+	if (!loaded && error.empty()) {
+		logger::warn("Failed to open settings file: {}", path.string());
 		return;
 	}
-
-	if (!settingsFile.good() || !settingsFile.is_open()) {
-		logger::warn("Failed to load settings file: {}", filePath);
-		return;
-	}
-
-	try {
-		j << settingsFile;
-		settingsFile.close();
-	} catch (const nlohmann::json::parse_error& e) {
-		logger::warn("Error parsing settings for file ({}) : {}\n", filePath, e.what());
-		settingsFile.close();
-	}
+	if (loaded)
+		j = std::move(*loaded);
 	LoadSettings();
 }
 

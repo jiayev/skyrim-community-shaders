@@ -22,11 +22,11 @@ Three properties are non-negotiable, all stated by the user during discovery:
 
 ## Decisions (from brainstorming)
 
-- **Replay, do not re-render.** The replica calls `feature->DrawSettings()` and intercepts the ImGui calls it makes. This is the only approach that satisfies all three properties at once.
-- **Detour ImGui, not the test engine.** Binding a widget to a catalog entry needs the value pointer *and* a window before the call to push `BeginDisabled`/styles. `IMGUI_ENABLE_TEST_ENGINE` hooks fire inside `ItemAdd`, too late, and never see the pointer.
-- **Real `BeginDisabled` for paused controls.** A visually greyed but still draggable control was explicitly rejected.
-- **A paused entry keeps its value.** The JSON already supports this: `SettingEntry::paused` is persisted ([SceneSettingsManager.cpp:3500](../../../src/SceneSettingsManager.cpp#L3500)) and read back with a type check ([:3703](../../../src/SceneSettingsManager.cpp#L3703)), and `IsEntryActive` gates application on it ([:1783](../../../src/SceneSettingsManager.cpp#L1783)). No format change is needed.
-- **Same system in all three hosts.** Weather tab, scene panel, and location windows differ only in how the context is established.
+-   **Replay, do not re-render.** The replica calls `feature->DrawSettings()` and intercepts the ImGui calls it makes. This is the only approach that satisfies all three properties at once.
+-   **Detour ImGui, not the test engine.** Binding a widget to a catalog entry needs the value pointer _and_ a window before the call to push `BeginDisabled`/styles. `IMGUI_ENABLE_TEST_ENGINE` hooks fire inside `ItemAdd`, too late, and never see the pointer.
+-   **Real `BeginDisabled` for paused controls.** A visually greyed but still draggable control was explicitly rejected.
+-   **A paused entry keeps its value.** The JSON already supports this: `SettingEntry::paused` is persisted ([SceneSettingsManager.cpp:3500](../../../src/SceneSettingsManager.cpp#L3500)) and read back with a type check ([:3703](../../../src/SceneSettingsManager.cpp#L3703)), and `IsEntryActive` gates application on it ([:1783](../../../src/SceneSettingsManager.cpp#L1783)). No format change is needed.
+-   **Same system in all three hosts.** Weather tab, scene panel, and location windows differ only in how the context is established.
 
 ## Architecture
 
@@ -56,10 +56,10 @@ The existing public API is index-keyed (`RemoveSetting(SceneType, size_t)`, `Tog
 
 Keyed on the entry state for that control's address:
 
-| State | Pointer passed to ImGui | Behaviour |
-|-------|------------------------|-----------|
-| **Absent** | the real member | live; an edit authors a new entry |
-| **Active** | the real member | live; the value shown is the override, because the resolver has already applied it |
+| State      | Pointer passed to ImGui                 | Behaviour                                                                                 |
+| ---------- | --------------------------------------- | ----------------------------------------------------------------------------------------- |
+| **Absent** | the real member                         | live; an edit authors a new entry                                                         |
+| **Active** | the real member                         | live; the value shown is the override, because the resolver has already applied it        |
 | **Paused** | a temporary holding the stored override | wrapped in `BeginDisabled`; shows the value being compared against, not the inherited one |
 
 The paused case is why a temporary is needed at all: the user asked that a paused control display its stored override, and the feature's member holds the inherited value at that moment.
@@ -110,10 +110,10 @@ Context is `Weather` + the widget's FormID + the period bar's period. The editor
 
 **Flat versus TOD view.** Data is always per-period; the comment at [SceneSettingsManager.h:389-394](../../../src/SceneSettingsManager.h#L389-L394) is explicit that the flat/TOD toggle is a view preference, not a data mode. So:
 
-- A "global override for this weather" writes the same value to all six periods.
-- Flat view renders **mixed** when the six disagree: `ImGuiItemFlags_MixedValue` on the gutter checkbox, with the control showing the live period's value.
-- Editing in flat view fans out to all six periods.
-- Flipping between views never writes.
+-   A "global override for this weather" writes the same value to all six periods.
+-   Flat view renders **mixed** when the six disagree: `ImGuiItemFlags_MixedValue` on the gutter checkbox, with the control showing the live period's value.
+-   Editing in flat view fans out to all six periods.
+-   Flipping between views never writes.
 
 In TOD view the context carries the selected period. In flat view it carries `TimeOfDayPeriod::Count`, the existing sentinel, which the façade reads as "all six" and fans out over. No new encoding is introduced.
 
@@ -129,19 +129,19 @@ Context is `Location` + type and form key, flat. This is the **only simulated ho
 
 **Gutter toggle**, one click per transition:
 
-| From | Click does |
-|------|-----------|
-| Absent | create the entry at the control's current value, active |
+| From   | Click does                                                                                              |
+| ------ | ------------------------------------------------------------------------------------------------------- |
+| Absent | create the entry at the control's current value, active                                                 |
 | Active | pause: value kept in JSON, stops applying, control switches to `BeginDisabled` showing the stored value |
-| Paused | resume |
+| Paused | resume                                                                                                  |
 
 The hover tooltip names the state. It is also the natural home for the deferred winning/losing readout.
 
 **Right-click menu** via `BeginPopupContextItem()`:
 
-- *Remove override* → `RemoveSetting`
-- *Revert to default* → `RevertEntryToDefault`
-- *Copy value to all periods*, weather TOD view only: the explicit form of what flat-view editing does implicitly
+-   _Remove override_ → `RemoveSetting`
+-   _Revert to default_ → `RevertEntryToDefault`
+-   _Copy value to all periods_, weather TOD view only: the explicit form of what flat-view editing does implicitly
 
 Items grey out when no entry exists for the control.
 
@@ -160,22 +160,22 @@ Items grey out when no entry exists for the control.
 
 ## Testing
 
-- **[tests/test_scene_settings_catalog_generator.py](../../../tests/test_scene_settings_catalog_generator.py)** gains cases for the unbindable-label emission, the widget-coverage gate failing the build when a scene-controllable entry is backed by an unrecognised widget, and `##id` label normalization. It also asserts the entry counts are unchanged: the new emission adds fields, not entries, so the CMake floors (`--min-entries 250 --min-controllable 290 --min-controllable-features 28`, [CMakeLists.txt:385-389](../../../CMakeLists.txt#L385-L389)) must still pass.
-- **[tests/test_scene_settings_policy.py](../../../tests/test_scene_settings_policy.py)** gains a round-trip case proving a paused entry survives save and load with its value intact. That JSON contract is what the whole toggle rests on.
-- **i18n**: `python tools/extract-i18n.py --write`, then `--check`, `--orphans`, and `python tools/sort-i18n.py --check`, per `pr-i18n.yaml`.
-- **Scriptable in-game check**: `communityshaders.feature get` before and after authoring through the replica proves the edit reached the feature's `SaveSettings` blob, and that pausing removes it, without a human reading sliders ([DevBenchBridge.cpp:646-668](../../../src/Features/RemoteControl/DevBenchBridge.cpp#L646-L668)). No scene-manager bridge tool exists; adding one is out of scope.
-- **Manual matrix**: three hosts × {absent, active, paused}, flat and TOD for the weather host, plus one feature with a conditionally visible control to prove the replica preserves conditional widgets.
+-   **[tests/test_scene_settings_catalog_generator.py](../../../tests/test_scene_settings_catalog_generator.py)** gains cases for the unbindable-label emission, the widget-coverage gate failing the build when a scene-controllable entry is backed by an unrecognised widget, and `##id` label normalization. It also asserts the entry counts are unchanged: the new emission adds fields, not entries, so the CMake floors (`--min-entries 250 --min-controllable 290 --min-controllable-features 28`, [CMakeLists.txt:385-389](../../../CMakeLists.txt#L385-L389)) must still pass.
+-   **[tests/test_scene_settings_policy.py](../../../tests/test_scene_settings_policy.py)** gains a round-trip case proving a paused entry survives save and load with its value intact. That JSON contract is what the whole toggle rests on.
+-   **i18n**: `python tools/extract-i18n.py --write`, then `--check`, `--orphans`, and `python tools/sort-i18n.py --check`, per `pr-i18n.yaml`.
+-   **Scriptable in-game check**: `communityshaders.feature get` before and after authoring through the replica proves the edit reached the feature's `SaveSettings` blob, and that pausing removes it, without a human reading sliders ([DevBenchBridge.cpp:646-668](../../../src/Features/RemoteControl/DevBenchBridge.cpp#L646-L668)). No scene-manager bridge tool exists; adding one is out of scope.
+-   **Manual matrix**: three hosts × {absent, active, paused}, flat and TOD for the weather host, plus one feature with a conditionally visible control to prove the replica preserves conditional widgets.
 
 ## Deferred
 
 **Preset export.** The manager can already export user entries into overwrite files (`ExportUserSettingsToOverwrites`, `ExportWeatherUserSettingsToOverwrites`, `ExportLocationUserSettingsToOverwrites`), all implemented with no callers. Wiring it up is deferred, with two constraints recorded now:
 
-- The `SceneContextId` façade must stay additive on top of the index-keyed API, because export operates on entry indices.
-- Export needs a multi-select entry-list surface. This design does not provide one, since removal was assigned to the right-click menu.
+-   The `SceneContextId` façade must stay additive on top of the index-keyed API, because export operates on entry indices.
+-   Export needs a multi-select entry-list surface. This design does not provide one, since removal was assigned to the right-click menu.
 
 **Readability.** Coloured sliders showing whether an override is winning or losing in the current scene, and showing which value is currently winning. `ResolvedSettingMap` is `std::map<SettingAddress, json>` ([SceneSettingsManager.h:812](../../../src/SceneSettingsManager.h#L812)), value only, with no provenance. This does not require touching the per-frame hot path: an on-demand `GetSettingProvenance(address)` query serves the UI, which only needs one feature's worth while a panel is open.
 
 ## Known gaps left unaddressed
 
-- `CaptureExternalFeatureChanges` remains callerless. This design routes around it rather than fixing it.
-- `HasRestoreDefaults()` and parts of the catalog's presentation metadata remain unread.
+-   `CaptureExternalFeatureChanges` remains callerless. This design routes around it rather than fixing it.
+-   `HasRestoreDefaults()` and parts of the catalog's presentation metadata remain unread.

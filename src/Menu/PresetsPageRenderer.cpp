@@ -61,6 +61,28 @@ namespace
 		needGap = true;
 	}
 
+	/** @brief A backend label with its resting fill color, the fill's alpha at rest, and the text color drawn over it. */
+	struct BackendBadge
+	{
+		const char* label;
+		ImVec4 color;
+		float restingAlpha;
+		ImVec4 textColor;
+	};
+
+	/** @brief Calls visit with a BackendBadge for each backend present, in display order. */
+	template <typename Visitor>
+	void ForEachBackendBadge(bool hasE11, bool hasCSPresets, bool hasBaseline, bool compact, Visitor&& visit)
+	{
+		const auto& palette = globals::menu->GetTheme().StatusPalette;
+		if (hasE11)
+			visit(BackendBadge{ BackendLabelE11(compact), palette.InfoColor, 0.9f, ImVec4(0.05f, 0.05f, 0.08f, 1.0f) });
+		if (hasCSPresets)
+			visit(BackendBadge{ BackendLabelCS(compact), palette.Warning, 0.85f, ImVec4(0.08f, 0.06f, 0.02f, 1.0f) });
+		if (hasBaseline)
+			visit(BackendBadge{ BackendLabelBaseline(compact), palette.SuccessColor, 0.85f, ImVec4(0.02f, 0.08f, 0.04f, 1.0f) });
+	}
+
 	bool CanApplyPack(const UnifiedPresetCatalog::PackInfo& pack)
 	{
 		return pack.valid && (pack.hasEffects11 || pack.hasCSPresets || pack.hasBaseline || pack.hasFormEdits);
@@ -118,15 +140,113 @@ namespace
 		const ImVec2 p0 = ImGui::GetItemRectMin();
 		const ImVec2 p1 = ImGui::GetItemRectMax();
 		ImDrawList* dl = ImGui::GetWindowDrawList();
-		const ImU32 bg = ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_ButtonActive :
-				ImGui::IsItemHovered()                                                     ? ImGuiCol_ButtonHovered :
-																							   ImGuiCol_Button);
+		const ImU32 bg = ImGui::GetColorU32(ImGui::IsItemActive()  ? ImGuiCol_ButtonActive :
+											ImGui::IsItemHovered() ? ImGuiCol_ButtonHovered :
+																	 ImGuiCol_Button);
 		dl->AddCircleFilled(ImVec2((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f), diameter * 0.5f, bg);
 		Icons::DrawCenteredGlyph(dl, p0, ImVec2(p1.x - p0.x, p1.y - p0.y), icon, ImGui::GetColorU32(ImGuiCol_Text));
 
 		ImGui::PopStyleColor(3);
 		ImGui::PopStyleVar(3);
 		return clicked;
+	}
+
+	/** @brief Baseline layer note, the features the pack sets, and its disable-at-boot list. */
+	void DrawBaselineDetails(const UnifiedPresetCatalog::PackInfo& pack)
+	{
+		ImGui::Spacing();
+		ImGui::TextDisabled("%s", T("menu.presets.baseline_layer_note",
+									  "Baseline settings are feature defaults applied beneath the Scene Manager, independent of the active pack. "
+									  "They win over saved settings until you change a value yourself."));
+		if (!pack.baselineFeatures.empty()) {
+			ImGui::SeparatorText(T("menu.presets.baseline_features", "Baseline feature settings"));
+			for (const auto& featureName : pack.baselineFeatures) {
+				auto* feature = Feature::FindFeatureByShortName(featureName);
+				if (feature)
+					ImGui::BulletText("%s", feature->GetDisplayName().c_str());
+				else
+					ImGui::BulletText("%s %s", featureName.c_str(), T("menu.presets.baseline_feature_unavailable", "(not available)"));
+			}
+		}
+		if (!pack.disableAtBoot.empty()) {
+			ImGui::Spacing();
+			ImGui::SeparatorText(T("menu.presets.baseline_boot", "Disable at boot"));
+			ImGui::TextDisabled("%s", T("menu.presets.baseline_boot_note",
+										  "Applied when this Baseline pack is enabled. A game restart is still required for load/unload."));
+			std::vector<std::pair<std::string, bool>> bootEntries(pack.disableAtBoot.begin(), pack.disableAtBoot.end());
+			std::ranges::sort(bootEntries, {}, &std::pair<std::string, bool>::first);
+			for (const auto& [featureName, disabled] : bootEntries) {
+				std::string label = featureName;
+				for (auto* feature : Feature::GetFeatureList()) {
+					if (feature && feature->GetShortName() == featureName) {
+						label = feature->GetDisplayName();
+						break;
+					}
+				}
+				ImGui::BulletText("%s: %s", label.c_str(),
+					disabled ? T("menu.features.disabled", "Disabled") : T("menu.features.enabled", "Enabled"));
+			}
+		}
+	}
+
+	constexpr float kHoverLift = 0.1f;
+
+	/** @brief Apply, open-folder, remove-baseline and disable buttons, then a line saying how the pack is active. */
+	void DrawPackActions(UnifiedPresetCatalog& catalog, const UnifiedPresetCatalog::PackInfo& pack)
+	{
+		const auto& theme = globals::menu->GetTheme();
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const bool packActive = catalog.GetActivePackId() == pack.id;
+		const bool baselineEnabled = catalog.IsBaselineEnabled(pack.id);
+
+		// Both auto-size so they stay readable when the CS window is narrow.
+		ImGui::BeginDisabled(!CanApplyPack(pack));
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
+		const ImVec4& info = theme.StatusPalette.InfoColor;
+		const ImVec4 infoHovered(std::min(1.0f, info.x + kHoverLift), std::min(1.0f, info.y + kHoverLift), std::min(1.0f, info.z + kHoverLift), 1.0f);
+		ImGui::PushStyleColor(ImGuiCol_Button, info);
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, infoHovered);
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, info);
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.07f, 0.1f, 1.0f));
+		if (Util::ButtonWithFlash(T("menu.presets.apply", "Apply Preset")))
+			RequestApplyPack(pack);
+		ImGui::PopStyleColor(4);
+		ImGui::PopStyleVar();
+		ImGui::EndDisabled();
+
+		ImGui::SameLine(0.0f, style.ItemSpacing.x);
+		{
+			auto _style = Util::TransparentIconButtonStyle();
+			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+			if (Icons::Button("##OpenPack", Icons::FA(ICON_FA_FOLDER_OPEN)))
+				catalog.OpenPackFolder(pack.id);
+			ImGui::PopStyleVar();
+		}
+		Util::AddTooltip(T("menu.presets.open_pack", "Open Preset Folder"));
+
+		if (baselineEnabled) {
+			ImGui::SameLine(0.0f, style.ItemSpacing.x);
+			if (ImGui::Button(T("menu.presets.remove_baseline", "Remove Baseline")))
+				catalog.RemoveBaseline(pack.id);
+			Util::AddTooltip(T("menu.presets.remove_baseline_tooltip",
+				"Stops applying this pack's baseline settings on the next load. Values already in use are kept until you reset them."));
+		}
+
+		if (packActive) {
+			ImGui::SameLine(0.0f, style.ItemSpacing.x);
+			if (ImGui::Button(T("menu.presets.disable", "Disable Preset")))
+				catalog.DisableActivePack();
+			Util::AddTooltip(T("menu.presets.disable_tooltip",
+				"Turns this preset off. Scene settings and form edits fall back to your own, and an Effects 11 preset returns to the Legacy install."));
+		}
+
+		if (packActive) {
+			MenuFonts::FontRoleGuard sub(Menu::FontRole::Subtext);
+			ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T("menu.presets.active_pack", "This pack is currently active."));
+		} else if (baselineEnabled) {
+			MenuFonts::FontRoleGuard sub(Menu::FontRole::Subtext);
+			ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T("menu.presets.baseline_enabled", "This pack's baseline settings are enabled."));
+		}
 	}
 }
 
@@ -153,63 +273,31 @@ float PresetsPageRenderer::MeasureBackendBadgesWidth(bool hasE11, bool hasCSPres
 	const ImGuiStyle& style = ImGui::GetStyle();
 	float width = 0.0f;
 	bool needGap = false;
-	if (hasE11) {
+	ForEachBackendBadge(hasE11, hasCSPresets, hasBaseline, compact, [&](const BackendBadge& badge) {
 		AppendBadgeGap(width, needGap);
-		width += ImGui::CalcTextSize(BackendLabelE11(compact)).x + style.FramePadding.x * 2.0f;
-	}
-	if (hasCSPresets) {
-		AppendBadgeGap(width, needGap);
-		width += ImGui::CalcTextSize(BackendLabelCS(compact)).x + style.FramePadding.x * 2.0f;
-	}
-	if (hasBaseline) {
-		AppendBadgeGap(width, needGap);
-		width += ImGui::CalcTextSize(BackendLabelBaseline(compact)).x + style.FramePadding.x * 2.0f;
-	}
+		width += ImGui::CalcTextSize(badge.label).x + style.FramePadding.x * 2.0f;
+	});
 	return width;
 }
 
 void PresetsPageRenderer::DrawBackendBadges(bool hasE11, bool hasCSPresets, bool hasBaseline, bool compact)
 {
-	const auto& info = globals::menu->GetTheme().StatusPalette.InfoColor;
-	const auto& warning = globals::menu->GetTheme().StatusPalette.Warning;
-	const auto& success = globals::menu->GetTheme().StatusPalette.SuccessColor;
 	const float gap = BadgeGap();
 
 	ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
 	ImGui::BeginGroup();
 	bool needGap = false;
-	if (hasE11) {
+	ForEachBackendBadge(hasE11, hasCSPresets, hasBaseline, compact, [&](const BackendBadge& badge) {
 		if (needGap)
 			ImGui::SameLine(0.0f, gap);
 		needGap = true;
-		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(info.x, info.y, info.z, 0.9f));
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, info);
-		ImGui::PushStyleColor(ImGuiCol_ButtonActive, info);
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.05f, 0.08f, 1.0f));
-		ImGui::SmallButton(BackendLabelE11(compact));
+		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(badge.color.x, badge.color.y, badge.color.z, badge.restingAlpha));
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, badge.color);
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, badge.color);
+		ImGui::PushStyleColor(ImGuiCol_Text, badge.textColor);
+		ImGui::SmallButton(badge.label);
 		ImGui::PopStyleColor(4);
-	}
-	if (hasCSPresets) {
-		if (needGap)
-			ImGui::SameLine(0.0f, gap);
-		needGap = true;
-		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(warning.x, warning.y, warning.z, 0.85f));
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, warning);
-		ImGui::PushStyleColor(ImGuiCol_ButtonActive, warning);
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.08f, 0.06f, 0.02f, 1.0f));
-		ImGui::SmallButton(BackendLabelCS(compact));
-		ImGui::PopStyleColor(4);
-	}
-	if (hasBaseline) {
-		if (needGap)
-			ImGui::SameLine(0.0f, gap);
-		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(success.x, success.y, success.z, 0.85f));
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, success);
-		ImGui::PushStyleColor(ImGuiCol_ButtonActive, success);
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.02f, 0.08f, 0.04f, 1.0f));
-		ImGui::SmallButton(BackendLabelBaseline(compact));
-		ImGui::PopStyleColor(4);
-	}
+	});
 	ImGui::EndGroup();
 	ImGui::PopStyleVar();
 }
@@ -261,7 +349,7 @@ void PresetsPageRenderer::RenderToolbar()
 		const char* csEditorTitle = T("menu.presets.open_cs_editor", "CS Editor");
 		const Icons::GlyphRef brush = Icons::FA(ICON_FA_PAINT_BRUSH);
 		const float buttonWidth = Icons::CalcGlyphSize(brush).x + style.ItemInnerSpacing.x +
-			ImGui::CalcTextSize(csEditorTitle).x + style.FramePadding.x * 2.0f;
+		                          ImGui::CalcTextSize(csEditorTitle).x + style.FramePadding.x * 2.0f;
 		ImGui::SameLine();
 		if (const float avail = ImGui::GetContentRegionAvail().x; avail > buttonWidth)
 			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonWidth);
@@ -489,57 +577,7 @@ void PresetsPageRenderer::RenderDetail()
 
 			ImGui::Spacing();
 
-			// Compact apply + folder icon; both auto-size so they stay readable when the CS window is narrow.
-			ImGui::BeginDisabled(!CanApplyPack(*pack));
-			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
-			ImGui::PushStyleColor(ImGuiCol_Button, theme.StatusPalette.InfoColor);
-			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(
-				std::min(1.0f, theme.StatusPalette.InfoColor.x + 0.1f),
-				std::min(1.0f, theme.StatusPalette.InfoColor.y + 0.1f),
-				std::min(1.0f, theme.StatusPalette.InfoColor.z + 0.1f),
-				1.0f));
-			ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.StatusPalette.InfoColor);
-			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.07f, 0.1f, 1.0f));
-			if (Util::ButtonWithFlash(T("menu.presets.apply", "Apply Preset")))
-				RequestApplyPack(*pack);
-			ImGui::PopStyleColor(4);
-			ImGui::PopStyleVar();
-			ImGui::EndDisabled();
-
-			ImGui::SameLine(0.0f, style.ItemSpacing.x);
-			{
-				auto _style = Util::TransparentIconButtonStyle();
-				ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-				if (Icons::Button("##OpenPack", Icons::FA(ICON_FA_FOLDER_OPEN)))
-					catalog.OpenPackFolder(pack->id);
-				ImGui::PopStyleVar();
-			}
-			Util::AddTooltip(T("menu.presets.open_pack", "Open Preset Folder"));
-
-			const bool baselineEnabled = catalog.IsBaselineEnabled(pack->id);
-			if (baselineEnabled) {
-				ImGui::SameLine(0.0f, style.ItemSpacing.x);
-				if (ImGui::Button(T("menu.presets.remove_baseline", "Remove Baseline")))
-					catalog.RemoveBaseline(pack->id);
-				Util::AddTooltip(T("menu.presets.remove_baseline_tooltip",
-					"Stops applying this pack's baseline settings on the next load. Values already in use are kept until you reset them."));
-			}
-
-			if (catalog.GetActivePackId() == pack->id) {
-				ImGui::SameLine(0.0f, style.ItemSpacing.x);
-				if (ImGui::Button(T("menu.presets.disable", "Disable Preset")))
-					catalog.DisableActivePack();
-				Util::AddTooltip(T("menu.presets.disable_tooltip",
-					"Turns this preset off. Scene settings and form edits fall back to your own, and an Effects 11 preset returns to the Legacy install."));
-			}
-
-			if (catalog.GetActivePackId() == pack->id) {
-				MenuFonts::FontRoleGuard sub(Menu::FontRole::Subtext);
-				ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T("menu.presets.active_pack", "This pack is currently active."));
-			} else if (baselineEnabled) {
-				MenuFonts::FontRoleGuard sub(Menu::FontRole::Subtext);
-				ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T("menu.presets.baseline_enabled", "This pack's baseline settings are enabled."));
-			}
+			DrawPackActions(catalog, *pack);
 
 			ImGui::EndGroup();
 		}
@@ -569,44 +607,11 @@ void PresetsPageRenderer::RenderDetail()
 	if (pack->hasCSPresets) {
 		ImGui::Spacing();
 		ImGui::TextDisabled("%s", T("menu.presets.cs_layer_note",
-			"Applying makes this pack's CS Presets the active scene layer, replacing the previous pack's."));
+									  "Applying makes this pack's CS Presets the active scene layer, replacing the previous pack's."));
 	}
 
-	if (pack->hasBaseline) {
-		ImGui::Spacing();
-		ImGui::TextDisabled("%s", T("menu.presets.baseline_layer_note",
-			"Baseline settings are feature defaults applied beneath the Scene Manager, independent of the active pack. "
-			"They win over saved settings until you change a value yourself."));
-		if (!pack->baselineFeatures.empty()) {
-			ImGui::SeparatorText(T("menu.presets.baseline_features", "Baseline feature settings"));
-			for (const auto& featureName : pack->baselineFeatures) {
-				auto* feature = Feature::FindFeatureByShortName(featureName);
-				if (feature)
-					ImGui::BulletText("%s", feature->GetDisplayName().c_str());
-				else
-					ImGui::BulletText("%s %s", featureName.c_str(), T("menu.presets.baseline_feature_unavailable", "(not available)"));
-			}
-		}
-		if (!pack->disableAtBoot.empty()) {
-			ImGui::Spacing();
-			ImGui::SeparatorText(T("menu.presets.baseline_boot", "Disable at boot"));
-			ImGui::TextDisabled("%s", T("menu.presets.baseline_boot_note",
-				"Applied when this Baseline pack is enabled. A game restart is still required for load/unload."));
-			std::vector<std::pair<std::string, bool>> bootEntries(pack->disableAtBoot.begin(), pack->disableAtBoot.end());
-			std::ranges::sort(bootEntries, {}, &std::pair<std::string, bool>::first);
-			for (const auto& [featureName, disabled] : bootEntries) {
-				std::string label = featureName;
-				for (auto* feature : Feature::GetFeatureList()) {
-					if (feature && feature->GetShortName() == featureName) {
-						label = feature->GetDisplayName();
-						break;
-					}
-				}
-				ImGui::BulletText("%s: %s", label.c_str(),
-					disabled ? T("menu.features.disabled", "Disabled") : T("menu.features.enabled", "Enabled"));
-			}
-		}
-	}
+	if (pack->hasBaseline)
+		DrawBaselineDetails(*pack);
 
 	if (!pack->valid && !pack->invalidReason.empty()) {
 		ImGui::Spacing();
@@ -631,8 +636,8 @@ void PresetsPageRenderer::RenderDetail()
 				DrawRoundedImage(dl, reinterpret_cast<ImTextureID>(pack->screenshotSRVs[i].get()), p0, p1, style.FrameRounding);
 			if (isOpen || ImGui::IsItemHovered()) {
 				const ImU32 border = ImGui::ColorConvertFloat4ToU32(isOpen ?
-						theme.StatusPalette.InfoColor :
-						ImGui::GetStyleColorVec4(ImGuiCol_Border));
+																		theme.StatusPalette.InfoColor :
+																		ImGui::GetStyleColorVec4(ImGuiCol_Border));
 				dl->AddRect(p0, p1, border, style.FrameRounding, 0, style.FrameBorderSize + (isOpen ? 1.0f : 0.0f));
 			}
 			if (clicked) {

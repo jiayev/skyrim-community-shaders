@@ -34,6 +34,14 @@ namespace PresetCompatibility
 			return true;
 		}
 
+		bool ConsumeDot(std::string_view text, size_t& cursor)
+		{
+			if (cursor >= text.size() || text[cursor] != '.')
+				return false;
+			++cursor;
+			return true;
+		}
+
 		std::string JoinNames(const std::vector<std::string>& names)
 		{
 			return names | std::views::join_with(std::string_view(", ")) | std::ranges::to<std::string>();
@@ -46,19 +54,11 @@ namespace PresetCompatibility
 			text.remove_prefix(1);
 		size_t cursor = 0;
 		SemVer parsed{};
-		if (!ParseComponent(text, cursor, parsed.major))
+		// A trailing build segment (e.g. 0.8.0.0) is tolerated by ignoring the rest.
+		if (!ParseComponent(text, cursor, parsed.major) || !ConsumeDot(text, cursor) ||
+			!ParseComponent(text, cursor, parsed.minor) || !ConsumeDot(text, cursor) ||
+			!ParseComponent(text, cursor, parsed.patch))
 			return false;
-		if (cursor >= text.size() || text[cursor] != '.')
-			return false;
-		++cursor;
-		if (!ParseComponent(text, cursor, parsed.minor))
-			return false;
-		if (cursor >= text.size() || text[cursor] != '.')
-			return false;
-		++cursor;
-		if (!ParseComponent(text, cursor, parsed.patch))
-			return false;
-		// Tolerate a trailing build segment (e.g. 0.8.0.0) by ignoring the rest.
 		out = parsed;
 		return true;
 	}
@@ -137,31 +137,31 @@ namespace PresetCompatibility
 		warning.missingFeatures = MissingRequiredFeatures(requiredFeatures);
 		warning.missingPlugins = MissingRequiredPlugins(requiredPlugins);
 
+		auto* i18n = I18n::GetSingleton();
+		const std::string required{ requiredCsVersion };
 		if (warning.versionGap == VersionGap::Major) {
-			warning.versionMessage = I18n::GetSingleton()->Format("menu.presets.compat_cs_major",
-				{ { "required", std::string{ requiredCsVersion } },
-					{ "current", CurrentCsVersionString() } },
+			warning.versionMessage = i18n->Format("menu.presets.compat_cs_major",
+				{ { "required", required }, { "current", CurrentCsVersionString() } },
 				"Made for Community Shaders {required}. This build ({current}) is a major version behind and may not work correctly.");
-			warning.versionMessageCompact = I18n::GetSingleton()->Format("menu.presets.compat_cs_major_short",
-				{ { "required", std::string{ requiredCsVersion } } },
+			warning.versionMessageCompact = i18n->Format("menu.presets.compat_cs_major_short",
+				{ { "required", required } },
 				"Needs Community Shaders {required}+");
 		} else if (warning.versionGap == VersionGap::Minor) {
-			warning.versionMessage = I18n::GetSingleton()->Format("menu.presets.compat_cs_minor",
-				{ { "required", std::string{ requiredCsVersion } },
-					{ "current", CurrentCsVersionString() } },
+			warning.versionMessage = i18n->Format("menu.presets.compat_cs_minor",
+				{ { "required", required }, { "current", CurrentCsVersionString() } },
 				"Made for Community Shaders {required}. This build ({current}) is slightly older.");
-			warning.versionMessageCompact = I18n::GetSingleton()->Format("menu.presets.compat_cs_minor_short",
-				{ { "required", std::string{ requiredCsVersion } } },
+			warning.versionMessageCompact = i18n->Format("menu.presets.compat_cs_minor_short",
+				{ { "required", required } },
 				"Made for CS {required}");
 		}
 
 		if (!warning.missingFeatures.empty()) {
-			warning.featuresMessage = I18n::GetSingleton()->Format("menu.presets.compat_features_missing",
+			warning.featuresMessage = i18n->Format("menu.presets.compat_features_missing",
 				{ { "features", JoinNames(warning.missingFeatures) } },
 				"Missing required feature(s): {features}");
 		}
 		if (!warning.missingPlugins.empty()) {
-			warning.pluginsMessage = I18n::GetSingleton()->Format("menu.presets.compat_plugins_missing",
+			warning.pluginsMessage = i18n->Format("menu.presets.compat_plugins_missing",
 				{ { "plugins", JoinNames(warning.missingPlugins) } },
 				"Made with plugin(s) not in your load order: {plugins}");
 		}

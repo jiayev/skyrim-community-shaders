@@ -157,7 +157,8 @@ namespace
 
 	int GetTickState(size_t ticked, size_t total)
 	{
-		return ticked == 0 ? kTickNone : ticked == total ? kTickAll : kTickSome;
+		return ticked == 0 ? kTickNone : ticked == total ? kTickAll :
+		                                                   kTickSome;
 	}
 
 	bool IsRemoved(const FeatureExport& entry, size_t index)
@@ -274,6 +275,17 @@ namespace
 				"Writes Presets/<Mod Name>/Baseline/<Feature>.json with a starter manifest instead of an Overrides file.\n"
 				"It then appears on the Presets page under Baseline, with author, version and description you can edit in the manifest."),
 			true);
+		BrowserUI::HelpMarkerRight(T(TKEY("export.guide"),
+			"Writes feature settings to files of their own, without any scene layer values.\n\n"
+			"Save to: an Overrides file is loaded at every game start, so a mod can ship it as its defaults. A Baseline "
+			"preset pack only applies when picked on the Presets page.\n"
+			"Name and Existing...: one file per feature is written under this name; Existing... adds to a file exported "
+			"before.\n"
+			"Settings: tick what to write. With several features, pick each one on the left. In file shows what the "
+			"destination already holds.\n"
+			"Remove unticked settings: deletes the settings you left unticked from the file instead of keeping them.\n\n"
+			"Workflow: tune a feature in Base Settings, then export the settings a mod should ship. For a full look "
+			"with scene layers, use Export Preset in the CS Editor (Ctrl+Shift+S)."));
 	}
 
 	/** @brief Name field and the picker of names already in use for the current target. */
@@ -292,7 +304,7 @@ namespace
 				ImGui::OpenPopup(kPickerId);
 		}
 		Util::AddTooltip(names.empty() ? T(TKEY("export.existing_none_tooltip"), "Nothing exported under a name yet.") :
-		                                 T(TKEY("export.existing_tooltip"), "Pick a name already in use to add to its file."),
+										 T(TKEY("export.existing_tooltip"), "Pick a name already in use to add to its file."),
 			Util::kTooltipWhenDisabled);
 		if (ImGui::BeginPopup(kPickerId)) {
 			for (const auto& name : names)
@@ -582,15 +594,15 @@ namespace
 	void DrawButtons(const ExportCounts& counts)
 	{
 		const auto name = Util::FileHelpers::SanitizeFileName(target.name);
-		const char* blocker = name.empty()           ? T(TKEY("export.blocked_name"), "Enter a name first.") :
-		                      counts.Ticked() == 0   ? T(TKEY("export.blocked_ticks"), "Tick the settings to export.") :
-		                      counts.unreadable      ? T(TKEY("export.blocked_unreadable"), "A destination file cannot be read. Fix or remove it first.") :
-		                      counts.Changes() == 0  ? T(TKEY("export.blocked_unchanged"), "The file already holds these values.") :
-		                                               nullptr;
+		const char* blocker = name.empty()          ? T(TKEY("export.blocked_name"), "Enter a name first.") :
+		                      counts.Ticked() == 0  ? T(TKEY("export.blocked_ticks"), "Tick the settings to export.") :
+		                      counts.unreadable     ? T(TKEY("export.blocked_unreadable"), "A destination file cannot be read. Fix or remove it first.") :
+		                      counts.Changes() == 0 ? T(TKEY("export.blocked_unchanged"), "The file already holds these values.") :
+		                                              nullptr;
 		auto ticked = counts.Ticked();
 		auto files = counts.files;
 		const auto label = (files > 1 ? std::vformat(T(TKEY("export.count_files"), "Export {} to {} files"), std::make_format_args(ticked, files)) :
-		                                std::vformat(T(TKEY("export.count"), "Export {}"), std::make_format_args(ticked))) +
+										std::vformat(T(TKEY("export.count"), "Export {}"), std::make_format_args(ticked))) +
 		                   "###export";
 		{
 			const Util::DisableGuard blocked(blocker != nullptr);
@@ -715,7 +727,9 @@ void FeatureOverwritesPanel::DrawExportButton(Feature* feature, const char* id)
 	}
 	const auto tooltip = std::format("{}\n{}", T(TKEY("export.button_title"), "Export Feature Overwrite..."),
 		T(TKEY("export.button_tooltip"),
-			"Saves settings as an overwrite file loaded at startup. For a preset applied from the Presets page, use Export Baseline Preset."));
+			"Writes this feature's settings to a file of their own: an Overrides file loaded at every game start, or a "
+			"Baseline preset pack. Scene layers are left out.\n"
+			"For a full preset with scene layers, use Export Preset in the CS Editor (Ctrl+Shift+S)."));
 	Util::AddTooltip(tooltip.c_str());
 }
 

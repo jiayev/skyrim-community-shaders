@@ -80,7 +80,10 @@ namespace
 	{
 		if (Icons::LabeledButton("##export", Icons::FA(ICON_FA_FILE_EXPORT), T(TKEY("export.button"), "Export Settings")))
 			FeatureOverwritesPanel::BeginExport();
-		Util::AddTooltip(T(TKEY("export.toolbar_tooltip"), "Saves settings of one or more features as overwrite files loaded at startup."));
+		Util::AddTooltip(T(TKEY("export.toolbar_tooltip"),
+			"Writes settings of one or more features to files of their own: Overrides files loaded at every game start, "
+			"or a Baseline preset pack. Scene layers are left out.\n"
+			"For a full preset with scene layers, use Export Preset in the CS Editor (Ctrl+Shift+S)."));
 
 		auto count = static_cast<size_t>(std::ranges::count_if(rows, [](const OverwriteRow& row) { return row.enabled && !row.unknownKeys.empty(); }));
 		notAppliedOnly &= count != 0;
@@ -92,7 +95,7 @@ namespace
 		if (BrowserUI::Chip("##notApplied", label.c_str(), Icons::FA(ICON_FA_TIMES), &warning, notAppliedOnly ? &warning : nullptr))
 			notAppliedOnly = !notAppliedOnly;
 		Util::AddTooltip(notAppliedOnly ? T("cs_editor.scene_copy_filter_clear_tooltip", "Click to list every setting again.") :
-		                                  T(TKEY("not_applied_tooltip"), "These name settings their feature does not have, so they are skipped. Click to list only them."));
+										  T(TKEY("not_applied_tooltip"), "These name settings their feature does not have, so they are skipped. Click to list only them."));
 	}
 
 	void DrawEnableToggle(const OverwriteRow& row)
@@ -105,7 +108,7 @@ namespace
 				actionFailed = !SettingsOverrideManager::GetSingleton()->SetOverrideEnabled(row.filePath, enabled);
 		}
 		Util::AddTooltip(isPack ? T(TKEY("enable_pack_tooltip"), "Part of a preset pack. Enable or disable the pack from the Presets page.") :
-		                          T(TKEY("enable_tooltip"), "Loads this overwrite at startup. Changes take effect on the next game start."),
+								  T(TKEY("enable_tooltip"), "Loads this overwrite at startup. Changes take effect on the next game start."),
 			Util::kTooltipWhenDisabled);
 	}
 

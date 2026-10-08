@@ -2,12 +2,12 @@
 
 #include "../I18n/I18n.h"
 #include "EditorWindow.h"
-#include "PaletteWindow.h"
 #include "Features/CSEditor.h"
 #include "Globals.h"
 #include "IconsFontAwesome5.h"
 #include "Menu/Icons/helpers/IconFonts.h"
 #include "Menu/ThemeManager.h"
+#include "PaletteWindow.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 #include "imgui_internal.h"

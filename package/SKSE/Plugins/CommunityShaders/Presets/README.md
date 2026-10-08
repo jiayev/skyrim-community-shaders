@@ -7,6 +7,7 @@ Metadata (`<PackId>.json` or `preset.json`) is **optional**. A classic ENB folde
 ## Supported layouts
 
 ### Classic ENB drop (no metadata)
+
 Same shape as Nexus ENB presets (e.g. NAT.ENB):
 
 ```
@@ -20,6 +21,7 @@ Presets/NAT.ENB - .../
 ```
 
 ### Nested Effects11 (with or without metadata)
+
 ```
 Presets/MyPack/
   MyPack.json           (optional metadata)
@@ -56,11 +58,11 @@ Presets/MyModpack/
   logo.png / cover.png / gallery/
 ```
 
-- Baseline sits **beneath** the Scene Manager and is independent of the active pack: applying a Baseline-only pack never replaces the active Effects 11 / CS pack, and several Baseline packs can be enabled at once (the one applied last wins conflicts).
-- It is not limited by the Scene Manager black/whitelists. Any setting a feature saves to `SettingsUser.json` can be set. Only per-feature files are read, so Menu, Advanced (compiler threads, log level, ...) and other global keys cannot be shipped this way; files that name an unknown feature or unknown setting keys are skipped and reported under Feature Issues.
-- Enabled Baseline packs are remembered in `Presets/_active.json` and re-applied every launch, so the values win over saved settings until the user changes a setting themselves (their change is kept as a delta). **Remove Baseline** stops applying the pack from the next load; values already in use are kept until reset.
-- Per-file `_metadata` (`version`, `description`, `enabled`) works as for `Overrides/` files.
-- Author one from **Export Overwrite** (feature header or Scene Manager): tick *Save as Baseline preset pack* and the selected settings are written to `Presets/<Mod Name>/Baseline/<Feature>.json` with a starter manifest.
+-   Baseline sits **beneath** the Scene Manager and is independent of the active pack: applying a Baseline-only pack never replaces the active Effects 11 / CS pack, and several Baseline packs can be enabled at once (the one applied last wins conflicts).
+-   It is not limited by the Scene Manager black/whitelists. Any setting a feature saves to `SettingsUser.json` can be set. Only per-feature files are read, so Menu, Advanced (compiler threads, log level, ...) and other global keys cannot be shipped this way; files that name an unknown feature or unknown setting keys are skipped and reported under Feature Issues.
+-   Enabled Baseline packs are remembered in `Presets/_active.json` and re-applied every launch, so the values win over saved settings until the user changes a setting themselves (their change is kept as a delta). **Remove Baseline** stops applying the pack from the next load; values already in use are kept until reset.
+-   Per-file `_metadata` (`version`, `description`, `enabled`) works as for `Overrides/` files.
+-   Author one from **Export Overwrite** (feature header or Scene Manager): tick _Save as Baseline preset pack_ and the selected settings are written to `Presets/<Mod Name>/Baseline/<Feature>.json` with a starter manifest.
 
 ## Discovery
 

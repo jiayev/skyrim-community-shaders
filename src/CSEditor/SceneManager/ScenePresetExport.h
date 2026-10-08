@@ -9,6 +9,9 @@ namespace ScenePresetExport
 	/// Whether there is anything to export: a user layer, or any installed overwrite.
 	bool CanExport();
 
+	/** @brief Translated tooltip of every Export Preset entry point: what it makes, and when to use another export. */
+	const char* GetSummary();
+
 	/// Opens the export dialog.
 	void Open();
 

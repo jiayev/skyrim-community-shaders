@@ -5,6 +5,8 @@
 #include <span>
 #include <string>
 
+#include <imgui.h>
+
 struct Feature;
 
 /// The feature column shared by Base Settings and the scene pages: an optional search bar, optional
@@ -18,6 +20,12 @@ namespace FeatureListPicker
 		Hollow,
 		Filled,
 	};
+
+	/// Starting width of the feature column at the baseline font size; the user can drag it.
+	inline constexpr float kColumnWidth = 180.0f;
+
+	/// The divider doubles as the resize grip, so the feature column and the panel share one border.
+	inline constexpr ImGuiTableFlags kLayoutFlags = ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV;
 
 	struct Options
 	{

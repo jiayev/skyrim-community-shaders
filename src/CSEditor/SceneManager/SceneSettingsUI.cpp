@@ -39,13 +39,6 @@ namespace
 	/// reset the baseline, so time running at any timescale still re-couples the bar.
 	constexpr float kScrubEpsilon = 1e-3f;
 
-	/// Starting width of the weather tab's feature column at the baseline font size; the user can drag it.
-	constexpr float kFeatureListWidth = 180.0f;
-
-	/// The divider doubles as the resize grip, so the feature column and the panel share one border.
-	constexpr ImGuiTableFlags kFeatureLayoutFlags =
-		ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV;
-
 	/// The objects window nests its list inside the category list, so it reads as a sub-level.
 	constexpr float kNestedFeatureFontScale = 0.85f;
 
@@ -312,7 +305,7 @@ namespace
 			ImGui::Checkbox(T(TKEY("interior_toggle"), "Interior"), &interiorEnabled);
 			ImGui::EndDisabled();
 			Util::AddTooltip(T(TKEY("interior_toggle_tooltip"),
-				"Shows whether interior settings are being edited. Follows the cell the player is in."),
+								 "Shows whether interior settings are being edited. Follows the cell the player is in."),
 				Util::kTooltipWhenDisabled);
 		}
 
@@ -392,9 +385,9 @@ namespace
 		FeatureListPicker::Draw(features, selected,
 			{
 				.search = search,
-				.marker = [&context](const Feature& feature) { return ContextHasFeature(context, const_cast<Feature&>(feature).GetShortName()) ?
-			                                                              FeatureListPicker::Marker::Filled :
-			                                                              FeatureListPicker::Marker::None; },
+				.marker = [&context](const Feature& feature) {
+					const bool holdsSettings = ContextHasFeature(context, const_cast<Feature&>(feature).GetShortName());
+					return holdsSettings ? FeatureListPicker::Marker::Filled : FeatureListPicker::Marker::None; },
 				.markerTooltip = [](const Feature&, FeatureListPicker::Marker) { return T(TKEY("scene_feature_has_settings"), "Has settings on this page."); },
 			});
 	}
@@ -427,10 +420,10 @@ namespace
 	void DrawFeatureLayout(std::string& selectedFeature, std::string& featureSearch, bool transitionableOnly,
 		bool withPeriodBar, const SceneSettingsManager::SceneContextId& baseContext)
 	{
-		if (!ImGui::BeginTable("SceneFeatureLayout", 2, kFeatureLayoutFlags))
+		if (!ImGui::BeginTable("SceneFeatureLayout", 2, FeatureListPicker::kLayoutFlags))
 			return;
 
-		ImGui::TableSetupColumn("##Features", ImGuiTableColumnFlags_WidthFixed, kFeatureListWidth * Util::GetUIScale());
+		ImGui::TableSetupColumn("##Features", ImGuiTableColumnFlags_WidthFixed, FeatureListPicker::kColumnWidth * Util::GetUIScale());
 		ImGui::TableSetupColumn("##Body", ImGuiTableColumnFlags_WidthStretch);
 		ImGui::TableNextRow();
 
@@ -494,11 +487,16 @@ namespace
 		ImGui::SameLine(start + box);
 	}
 
+	bool IsSameLocationTarget(const SceneSettingsManager::LocationTarget& lhs, const SceneSettingsManager::LocationTarget& rhs)
+	{
+		return lhs.type == rhs.type && lhs.formKey == rhs.formKey;
+	}
+
 	/// Opens a location's editor window, focusing the existing one rather than opening a second.
 	LocationWindow& OpenLocationWindow(const SceneSettingsManager::LocationTarget& target)
 	{
 		auto existing = std::ranges::find_if(locationWindows, [&](const auto& window) {
-			return window.target.type == target.type && window.target.formKey == target.formKey;
+			return IsSameLocationTarget(window.target, target);
 		});
 		if (existing != locationWindows.end()) {
 			existing->open = true;
@@ -546,6 +544,13 @@ namespace
 
 		ImGui::TableNextColumn();
 		Util::Text::Secondary("%s", GetLocationTypeLabel(target.type));
+	}
+
+	/// What an add button promises, or why it is greyed once the place is listed.
+	const char* GetLocationAddTooltip(bool authored)
+	{
+		return authored ? T(TKEY("location_already_added"), "Already on your list.") :
+		                  T(TKEY("location_add_tooltip"), "Add to your locations");
 	}
 
 	/// Trailing icon action for an addable row: quiet until hovered, a check once the place is listed.
@@ -613,16 +618,9 @@ namespace
 		const bool authored = manager.IsLocationTargetAuthored(target.type, target.formKey);
 		if (DrawLocationAddButton(authored))
 			manager.AddLocationTarget(target);
-		Util::AddTooltip(authored ? T(TKEY("location_already_added"), "Already on your list.") :
-									T(TKEY("location_add_tooltip"), "Add to your locations"),
-			Util::kTooltipWhenDisabled);
+		Util::AddTooltip(GetLocationAddTooltip(authored), Util::kTooltipWhenDisabled);
 
 		ImGui::PopID();
-	}
-
-	bool IsSameLocationTarget(const SceneSettingsManager::LocationTarget& lhs, const SceneSettingsManager::LocationTarget& rhs)
-	{
-		return lhs.type == rhs.type && lhs.formKey == rhs.formKey;
 	}
 
 	using BrowserUI::SameLineIfFits;
@@ -659,7 +657,7 @@ namespace
 					{
 						Icons::FontGuard font(separator);
 						Util::Text::Disabled("%s", separator.utf8);
-		}
+					}
 					ImGui::SameLine();
 				} else {
 					ImGui::NewLine();
@@ -680,7 +678,7 @@ namespace
 			ImGui::SameLine(0.0f, 0.0f);
 			ImGui::BeginDisabled(authored);
 			if (BrowserUI::IconButton("##add", authored ? SceneActionIcons::kAdded : SceneActionIcons::kAdd,
-					authored ? T(TKEY("location_already_added"), "Already on your list.") : T(TKEY("location_add_tooltip"), "Add to your locations"),
+					GetLocationAddTooltip(authored),
 					false, ImGui::GetColorU32(authored ? Util::Colors::GetSuccess() : Util::Colors::GetAccent())))
 				manager->AddLocationTarget(target);
 			ImGui::EndDisabled();
@@ -731,7 +729,7 @@ namespace
 			ImGui::PopID();
 		}
 
-			const std::string query = locationPicker.search;
+		const std::string query = locationPicker.search;
 		// The catalog runs to thousands of forms, so it is filtered only when the query or type changes.
 		if (changed || !locationPicker.matchesValid) {
 			locationPicker.matches.clear();
@@ -762,16 +760,16 @@ namespace
 		const ImVec2 tableSize{ 0.0f, ImGui::GetFrameHeightWithSpacing() * rows };
 		{
 			BrowserUI::RowShadeScope shade;
-		if (ImGui::BeginTable("LocationCatalog", 4, kLocationTableFlags | ImGuiTableFlags_ScrollY, tableSize)) {
-			ImGui::TableSetupScrollFreeze(0, 1);
+			if (ImGui::BeginTable("LocationCatalog", 4, kLocationTableFlags | ImGuiTableFlags_ScrollY, tableSize)) {
+				ImGui::TableSetupScrollFreeze(0, 1);
 				SetupLocationColumns(kLocationAddColumnWidth * scale, false);
-			ImGuiListClipper clipper;
-			clipper.Begin(static_cast<int>(locationPicker.matches.size()));
-			while (clipper.Step())
-				for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
-					DrawLocationAddRow(*manager, catalog[locationPicker.matches[row]]);
-			ImGui::EndTable();
-		}
+				ImGuiListClipper clipper;
+				clipper.Begin(static_cast<int>(locationPicker.matches.size()));
+				while (clipper.Step())
+					for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
+						DrawLocationAddRow(*manager, catalog[locationPicker.matches[row]]);
+				ImGui::EndTable();
+			}
 		}
 		Util::Text::Disabled("%s", I18n::GetSingleton()->Format(TKEY("location_result_count"),
 														   { { "shown", std::to_string(locationPicker.matches.size()) }, { "total", std::to_string(catalog.size()) } },
@@ -800,7 +798,7 @@ namespace
 		auto targets = manager->GetAuthoredLocationTargets();
 		if (targets.empty()) {
 			Util::Text::WrappedSecondary("%s", T(TKEY("location_list_empty"),
-				"No locations yet. Add one from where you are standing, or search for any place."));
+												   "No locations yet. Add one from where you are standing, or search for any place."));
 			return;
 		}
 
@@ -820,25 +818,25 @@ namespace
 			BrowserUI::RowShadeScope shade;
 			if (ImGui::BeginTable("AuthoredLocations", 5, kAuthoredLocationTableFlags)) {
 				SetupLocationColumns(actionWidth, true);
-		// The list is rebuilt from the manager each frame, so it is re-sorted each frame too.
-		SortLocationTargets(targets);
+				// The list is rebuilt from the manager each frame, so it is re-sorted each frame too.
+				SortLocationTargets(targets);
 
-		for (const auto& target : targets) {
-			ImGui::TableNextRow();
-			ImGui::PushID(target.formKey.c_str());
+				for (const auto& target : targets) {
+					ImGui::TableNextRow();
+					ImGui::PushID(target.formKey.c_str());
 
-			ImGui::TableNextColumn();
-			const bool opened = std::ranges::any_of(locationWindows, [&](const auto& window) {
+					ImGui::TableNextColumn();
+					const bool opened = std::ranges::any_of(locationWindows, [&](const auto& window) {
 						return window.open && IsSameLocationTarget(window.target, target);
-			});
-			DrawLocationTypeIcon(target);
-			if (Util::TableRowSelectable(target.name.c_str(), opened,
-					ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap) &&
-				ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-				OpenLocationWindow(target);
-			DrawLocationDetailColumns(target);
+					});
+					DrawLocationTypeIcon(target);
+					if (Util::TableRowSelectable(target.name.c_str(), opened,
+							ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap) &&
+						ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+						OpenLocationWindow(target);
+					DrawLocationDetailColumns(target);
 
-			ImGui::TableNextColumn();
+					ImGui::TableNextColumn();
 					if (std::ranges::any_of(here, [&](const auto& link) { return IsSameLocationTarget(link, target); })) {
 						Util::DrawInlineIndicatorDot(ImGui::GetColorU32(Util::Colors::GetSuccess()), true);
 						Util::AddTooltip(T(TKEY("location_here_tooltip"), "You are here: its settings apply now."));
@@ -850,15 +848,14 @@ namespace
 						OpenLocationWindow(target);
 					ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
 					ImGui::SetNextItemAllowOverlap();
-					const ImVec4 error = Util::Colors::GetError();
 					if (BrowserUI::IconButton("##remove", SceneActionIcons::kDelete,
 							T(TKEY("location_remove_tooltip"), "Drops the location from the list along with the settings authored for it."),
-							false, ImGui::GetColorU32(ImVec4(error.x, error.y, error.z, 0.8f))))
+							false, BrowserUI::DestructiveIconColor()))
 						RequestLocationRemoval(target);
 
-			ImGui::PopID();
-		}
-		ImGui::EndTable();
+					ImGui::PopID();
+				}
+				ImGui::EndTable();
 			}
 		}
 
@@ -942,10 +939,14 @@ void SceneSettingsUI::DrawLocationBrowser()
 
 	ImGui::Spacing();
 	BrowserUI::SectionLabel(T(TKEY("location_add_from_here"), "Add from where you are"));
+	Util::AddTooltip(T(TKEY("location_add_from_here_tooltip"),
+		"The places the player is standing in, outermost first. Where listed places overlap, the narrowest one wins."));
 	DrawLocationChain();
 
 	ImGui::Spacing();
 	BrowserUI::SectionLabel(T(TKEY("location_add_any"), "Add any place"));
+	Util::AddTooltip(T(TKEY("location_add_any_tooltip"),
+		"Every place the game defines, so you can add one without travelling there."));
 	DrawLocationPicker();
 }
 

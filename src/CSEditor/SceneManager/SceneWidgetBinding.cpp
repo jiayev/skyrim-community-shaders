@@ -594,7 +594,7 @@ void SceneWidgetBinding::Guard::ResolveComponents()
 		// Siblings share featureShortName/settingPath (see MakeAggregateKey), so the guard's own
 		// resolved values apply to every component here; only settingKey varies.
 		if (rules && !SceneSettingsManager::IsSettingAllowedForType(rules->sceneType, identity.featureShortName,
-				identity.settingPath, std::string{ setting->settingKey }, rules->requireNumeric))
+						 identity.settingPath, std::string{ setting->settingKey }, rules->requireNumeric))
 			continue;
 
 		const auto slot = setting->aggregateCount <= 1 ?
@@ -1243,12 +1243,12 @@ void SceneWidgetBinding::Guard::NavigateGreyedSetting() const
 		// Prefer the catalog address: Unavailable leaves components empty so identity.settingKey
 		// may never have been filled in ResolveComponents.
 		const std::string feature = !identity.featureShortName.empty() ? identity.featureShortName :
-		                             (metadata ? std::string{ metadata->featureShortName } : std::string{});
+		                                                                 (metadata ? std::string{ metadata->featureShortName } : std::string{});
 		const auto path = !identity.settingPath.empty() ? identity.settingPath :
-		                                                   (metadata ? SceneSettingsManager::SplitSettingPath(metadata->settingPath) :
-																	   std::vector<std::string>{});
+		                                                  (metadata ? SceneSettingsManager::SplitSettingPath(metadata->settingPath) :
+																	  std::vector<std::string>{});
 		const std::string key = !identity.settingKey.empty() ? identity.settingKey :
-		                        (metadata ? std::string{ metadata->settingKey } : std::string{});
+		                                                       (metadata ? std::string{ metadata->settingKey } : std::string{});
 		if (feature.empty()) {
 			if (auto* editor = EditorWindow::GetSingleton())
 				editor->ShowNotification(

@@ -682,6 +682,17 @@ namespace
 		drawChip("##to", { T(TKEY("scene_page_copy_to"), "To"), Icons::FA(ICON_FA_ANGLE_RIGHT) },
 			T(TKEY("scene_page_copy_to_tooltip"), "Copies this page's settings into another context."),
 			CopyDirection::To);
+		BrowserUI::HelpMarkerRight(T(TKEY("scene_copy_guide"),
+			"Copies scene settings between this page and other contexts: times of day, interiors, weathers and "
+			"locations.\n\n"
+			"From: pulls one context's settings into this page.\n"
+			"To: pushes this page's settings into every context you tick.\n"
+			"Search and type chips: narrow the list. Authored only hides contexts that hold no settings yet.\n"
+			"Periods: in To, the periods that receive the settings; in From, the period they are read from.\n"
+			"Preview and Details: what happens to each setting before anything is written.\n"
+			"Copy fills only settings not set yet; Overwrite also replaces values already set.\n\n"
+			"Use it to start a new weather or location from one you already tuned. It changes only your own scene "
+			"settings; export a preset to share them."));
 	}
 
 	/** @brief Search and the type chips. */
@@ -767,7 +778,7 @@ namespace
 			Util::DrawIconCircle(center, radius, set && set->settingCount != 0 ? setColor : emptyColor, true);
 		}
 		Util::AddTooltip(row.flat ? T(TKEY("scene_copy_dots_flat_tooltip"), "One set covers every period.") :
-		                            T(TKEY("scene_copy_dots_tooltip"), "Filled periods hold settings."));
+									T(TKEY("scene_copy_dots_tooltip"), "Filled periods hold settings."));
 	}
 
 	/** @brief One scene: click highlights it, the tick box adds it to To's targets, double-click commits.
@@ -905,6 +916,9 @@ namespace
 		                              std::optional{ GetSourcePeriod(*cursorRow) } :
 		                              std::nullopt;
 		BrowserUI::SectionLabel(T(TKEY("scene_copy_periods"), "Periods"));
+		Util::AddTooltip(from ? T(TKEY("scene_copy_periods_from_tooltip"),
+									"The period the settings are read from. A source with one set for every period has nothing to pick.") :
+								T(TKEY("scene_copy_periods_to_tooltip"), "The periods that receive the settings."));
 		ImGui::PushID("periods");
 		{
 			// A flat source has one set for every period, so there is nothing to pick.
@@ -990,6 +1004,7 @@ namespace
 			Util::TextUnformattedDisabled(T(TKEY("scene_copy_pick"), "Pick a context to copy."));
 		};
 		BrowserUI::SectionLabel(T(TKEY("scene_copy_preview"), "Preview"));
+		Util::AddTooltip(T(TKEY("scene_copy_preview_tooltip"), "Where the copy reads from, and where it writes."));
 		drawSide("##source", source, nullptr);
 		ImGui::SameLine();
 		ImGui::AlignTextToFramePadding();
@@ -1174,7 +1189,7 @@ namespace
 		// Fetched after the direction chips, which drop the cached rows on a switch.
 		const auto& rows = session.rows.Get(revision, [&] {
 			return BuildRows(filters.direction == CopyDirection::From ? manager->GetCopySources(session.page) :
-			                                                            manager->GetCopyDestinations(session.page));
+																		manager->GetCopyDestinations(session.page));
 		});
 		DrawFilterRow();
 		const std::string query = session.search;

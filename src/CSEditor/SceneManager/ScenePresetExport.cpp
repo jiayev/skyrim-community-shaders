@@ -20,6 +20,7 @@
 #include <imgui_stdlib.h>
 
 #include "../../I18n/I18n.h"
+#include "../Browser/BrowserWidgets.h"
 #include "../EditorWindow.h"
 #include "../FormEditSources.h"
 #include "Feature.h"
@@ -155,6 +156,8 @@ namespace
 			Util::Text::Disabled("%s", T(TKEY("scene_export_no_form_edits"), "No edited forms to include."));
 		else
 			ImGui::TextUnformatted(formEditSummary.c_str());
+		Util::AddTooltip(T(TKEY("scene_export_form_edits_tooltip"),
+			"Weather, lighting, ImageSpace and other form edits saved in the CS Editor. They are written into the pack."));
 	}
 
 	/** @brief Shows a success or failure notification for an export. */
@@ -171,10 +174,40 @@ namespace
 	}
 
 	/** @brief Draws one preset type choice, selecting it on click. */
-	void DrawPresetTypeOption(const char* label, PresetType type)
+	void DrawPresetTypeOption(const char* label, PresetType type, const char* tooltip)
 	{
 		if (ImGui::RadioButton(label, form.type == type))
 			form.type = type;
+		Util::AddTooltip(tooltip, Util::kTooltipWhenDisabled);
+	}
+
+	/** @brief The dialog's (?) guide: every control and where exporting fits in authoring. */
+	void DrawGuide()
+	{
+		if (simplified) {
+			BrowserUI::HelpMarkerRight(T(TKEY("scene_export_guide_baseline"),
+				"Saves base settings as a Baseline preset, applied from the Presets page. Scene layers are left out.\n\n"
+				"Include Post Processing: adds your current Post Processing settings.\n"
+				"Base settings to include: each ticked feature's settings, and whether it loads at boot.\n"
+				"Preset name and Existing...: a new name makes a new pack; picking an installed one fills in its "
+				"details and writes into it.\n\n"
+				"For a full preset with scene layers and edited forms, use Export Preset (Ctrl+Shift+S)."));
+			return;
+		}
+		BrowserUI::HelpMarkerRight(T(TKEY("scene_export_guide"),
+			"Packages your work into Presets/<Name>/, so it can be shared and applied from the Presets page.\n\n"
+			"Preset type: CS carries scene settings, edited forms and ticked base settings. E11 adds the active "
+			"Effects 11 ENB files. Baseline carries only the ticked base settings.\n"
+			"Include Post Processing: saves your current Post Processing settings in the pack.\n"
+			"Mods supplying values: scene settings from the active preset and installed mods, baked in with yours.\n"
+			"Base settings to include: each ticked feature's own settings, applied with the preset.\n"
+			"Preset name and Existing...: a new name makes a new pack; picking an installed one fills in its "
+			"details and writes into it.\n"
+			"Version, artwork and Compatibility: shown on the Presets page, which warns when a required build, "
+			"feature or plugin is missing.\n\n"
+			"Workflow: edit scene pages and Base Settings, saving with Ctrl+S as you go, then export here once the "
+			"look is ready. Ctrl+S only keeps your work; exporting makes the shareable preset. For one feature's "
+			"settings as a mod file, use Export Feature Overwrite in Base Settings."));
 	}
 
 	bool IsFeatureRequired(const std::string& shortName)
@@ -557,6 +590,8 @@ namespace
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
 		ImGui::TextUnformatted(label);
+		Util::AddTooltip(T(TKEY("scene_export_artwork_tooltip"),
+			"Shown for this preset on the Presets page, and copied into the pack on export. Clear drops the current image."));
 
 		std::string status;
 		if (multi) {
@@ -621,10 +656,15 @@ namespace
 	/** @brief Feature checklist for the Baseline folder: each ticked feature's base settings go in the pack. */
 	void DrawBaselineFeatureList(float visibleLines)
 	{
+		if (simplified)
+			ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(T(TKEY("scene_export_baseline_features"), "Base settings to include"));
 		Util::AddTooltip(T(TKEY("scene_export_baseline_features_tooltip"),
 			"Saves each ticked feature's current base settings, and whether it loads at boot, in the preset's Baseline "
 			"folder. Applying the preset sets them. Scene layers are not part of this."));
+		// The simplified form has no type row, so its guide heads this list instead.
+		if (simplified)
+			DrawGuide();
 
 		const float listHeight = ImGui::GetTextLineHeightWithSpacing() * visibleLines + ImGui::GetStyle().FramePadding.y * 2.0f;
 		if (ImGui::BeginChild("##SceneExportBaselineFeatures", ImVec2(0.0f, listHeight), ImGuiChildFlags_Borders)) {
@@ -720,40 +760,33 @@ namespace
 	void DrawTypeSection()
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
+		// Frame-aligned so the label shares a baseline with the guide marker beside it.
+		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(T(TKEY("scene_export_type"), "Preset type"));
-		DrawPresetTypeOption(T(TKEY("scene_export_type_cs"), "CS Preset"), PresetType::CS);
+		DrawGuide();
+		DrawPresetTypeOption(T(TKEY("scene_export_type_cs"), "CS Preset"), PresetType::CS,
+			T(TKEY("scene_export_type_cs_tooltip"),
+				"Every scene setting from every context, not just this page, plus edited forms and any base settings "
+				"you tick."));
 		ImGui::SameLine(0.0f, style.ItemSpacing.x);
 		const bool e11Ready = globals::features::effects11.loaded &&
 		                      PresetManager::GetSingleton().CanExportActivePreset();
 		{
 			ImGui::BeginDisabled(!e11Ready);
-			DrawPresetTypeOption(T(TKEY("scene_export_type_e11"), "E11 Preset"), PresetType::E11);
+			DrawPresetTypeOption(T(TKEY("scene_export_type_e11"), "E11 Preset"), PresetType::E11,
+				e11Ready ? T(TKEY("scene_export_type_e11_tooltip"),
+							   "Copies the active Effects 11 ENB files into Presets/<Name>/effects11/, plus any scene "
+							   "settings that are present.") :
+						   T(TKEY("scene_export_type_e11_unavailable"),
+							   "Load Effects 11 with a valid ENB preset (enbseries.ini + enbseries/) to export as E11."));
 			ImGui::EndDisabled();
-			if (!e11Ready)
-				Util::AddTooltip(T(TKEY("scene_export_type_e11_unavailable"),
-									 "Load Effects 11 with a valid ENB preset (enbseries.ini + enbseries/) to export as E11."),
-					Util::kTooltipWhenDisabled);
 		}
 		ImGui::SameLine(0.0f, style.ItemSpacing.x);
-		DrawPresetTypeOption(T(TKEY("scene_export_type_baseline"), "Baseline"), PresetType::Baseline);
-		Util::AddTooltip(T(TKEY("scene_export_type_baseline_tooltip"),
-			"Base settings only: the features you tick, without scene layers or Effects 11 files."));
+		DrawPresetTypeOption(T(TKEY("scene_export_type_baseline"), "Baseline"), PresetType::Baseline,
+			T(TKEY("scene_export_type_baseline_tooltip"),
+				"Base settings only: the features you tick, without scene layers or Effects 11 files."));
 		if (!e11Ready && form.type == PresetType::E11)
 			form.type = PresetType::CS;
-		if (form.type == PresetType::E11) {
-			ImGui::TextDisabled("%s", T(TKEY("scene_export_type_e11_hint"),
-										  "Copies the active ENB files into Presets/<Name>/effects11/."));
-		}
-		ImGui::Separator();
-
-		const char* scope = T(TKEY("scene_export_scope"), "Exports every setting from every context, not just this page.");
-		if (form.type == PresetType::E11)
-			scope = T(TKEY("scene_export_scope_e11"),
-				"Exports the active Effects 11 ENB files, plus any Scene Manager settings that are present.");
-		else if (form.type == PresetType::Baseline)
-			scope = T(TKEY("scene_export_scope_baseline"),
-				"Exports the base settings of the features ticked below, as a Baseline preset.");
-		ImGui::TextWrapped("%s", scope);
 	}
 
 	/** @brief Mods supplying scene values, which a Baseline leaves out. */
@@ -765,6 +798,8 @@ namespace
 			return;
 		}
 		ImGui::TextUnformatted(T(TKEY("scene_export_mod_list"), "Mods supplying values, last one wins:"));
+		Util::AddTooltip(T(TKEY("scene_export_mod_list_tooltip"),
+			"Scene settings from the active preset and installed mods. They are baked into the export together with yours."));
 		if (ImGui::BeginChild("##ScenePresetExportMods",
 				ImVec2(0.0f, kModListHeight * Util::GetUIScale()), ImGuiChildFlags_Borders)) {
 			for (size_t index = 0; index < modNames.size(); ++index)
@@ -783,6 +818,9 @@ namespace
 		ImGui::InputText("##ScenePresetExportName", &form.name);
 		if (ImGui::IsItemDeactivatedAfterEdit())
 			PrefillFromName();
+		Util::AddTooltip(T(TKEY("scene_export_name_tooltip"),
+			"Folder name under Presets/. Naming an installed pack fills in its details and exports into it; the "
+			"confirmation lists any files that get replaced."));
 		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 		DrawPickerButton(existingLabel);
 		DrawPresetPicker();
@@ -920,6 +958,14 @@ bool ScenePresetExport::CanExport()
 	if (globals::features::postProcessing.loaded || HasAnyBaselineCandidate())
 		return true;
 	return globals::features::effects11.loaded && PresetManager::GetSingleton().CanExportActivePreset();
+}
+
+const char* ScenePresetExport::GetSummary()
+{
+	return T(TKEY("scene_page_export_tooltip"),
+		"Packages your scene settings, edited forms and chosen base settings into a preset you can share and "
+		"apply from the Presets page. Picking an installed pack updates its metadata and artwork.\n"
+		"For one feature's settings as a mod file, use Export Feature Overwrite in Base Settings.");
 }
 
 void ScenePresetExport::Open()

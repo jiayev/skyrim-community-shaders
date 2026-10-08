@@ -223,7 +223,7 @@ std::optional<json> SceneSettingsManager::ResolveLocationLowerValue(LocationTarg
 	if (!lowerLayers)
 		return std::nullopt;
 	if (auto valueIt = lowerLayers->find(address); valueIt != lowerLayers->end() &&
-		IsSceneSettingPrimitive(valueIt->second))
+												   IsSceneSettingPrimitive(valueIt->second))
 		return valueIt->second;
 	return baseline;
 }

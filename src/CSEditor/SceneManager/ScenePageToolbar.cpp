@@ -156,7 +156,9 @@ namespace
 	{
 		// A page holding entries always has somewhere to offer them, so destinations are never walked just to grey the button.
 		const std::string tooltip = ActionTooltip(T(TKEY("scene_page_copy"), "Copy"),
-			T(TKEY("scene_page_copy_tooltip"), "Copies settings between this page and another context."));
+			T(TKEY("scene_page_copy_tooltip"),
+				"Copies settings between this page and other times of day, interiors, weathers or locations, with a "
+				"preview before anything changes."));
 		ImGui::BeginDisabled(!a_hasEntries && !SceneCopyModal::HasSources(a_context));
 		if (BrowserUI::IconButton("##ScenePageCopy", SceneActionIcons::kCopy, tooltip.c_str()))
 			SceneCopyModal::Open(a_context);
@@ -169,10 +171,9 @@ namespace
 		const char* clearLabel = T(TKEY("scene_page_clear"), "Clear");
 		const std::string tooltip = ActionTooltip(clearLabel,
 			T(TKEY("scene_page_clear_tooltip"), "Removes every override this page holds."));
-		const ImVec4 error = Util::Colors::GetError();
 		ImGui::BeginDisabled(a_summary.total == 0);
 		if (BrowserUI::IconButton("##ScenePageClear", SceneActionIcons::kDelete, tooltip.c_str(), false,
-				ImGui::GetColorU32(ImVec4(error.x, error.y, error.z, 0.8f)))) {
+				BrowserUI::DestructiveIconColor())) {
 			auto count = a_summary.total;
 			auto pageName = a_manager.GetSceneContextDisplayName(a_context);
 			clearConfirmation.popup.title = T(TKEY("scene_page_clear_title"), "Clear page");

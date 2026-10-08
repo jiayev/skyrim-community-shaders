@@ -77,24 +77,18 @@ namespace PNState
 					logger::info("[TruePBR] loading json : {}", path);
 				}
 
-				std::ifstream fileStream(path);
-				if (!fileStream.is_open()) {
-					logger::error("[TruePBR] failed to read {}", path);
-					anyFailed = true;
-					continue;
-				}
-
-				json config;
-				try {
-					fileStream >> config;
-				} catch (const nlohmann::json::parse_error& e) {
-					logger::error("[TruePBR] failed to parse {} : {}", path, e.what());
+				std::string error;
+				const auto config = Util::FileHelpers::ReadJsonFile(path, "PBR record config", 0, &error);
+				if (!config) {
+					// The helper already logged parse failures; only a failed open is still unreported.
+					if (error.empty())
+						logger::error("[TruePBR] failed to read {}", path);
 					anyFailed = true;
 					continue;
 				}
 
 				const auto editorId = std::filesystem::path(path).stem().string();
-				if (!recordReader(editorId, config)) {
+				if (!recordReader(editorId, *config)) {
 					anyFailed = true;
 				}
 			}
@@ -107,20 +101,7 @@ namespace PNState
 
 	void SavePBRRecordConfig(const std::string& rootPath, const std::string& editorId, const json& config)
 	{
-		std::filesystem::create_directory(rootPath);
-
-		const std::string outputPath = std::format("{}\\{}.json", rootPath, editorId);
-		std::ofstream fileStream(outputPath);
-		if (!fileStream.is_open()) {
-			logger::error("[TruePBR] failed to write {}", outputPath);
-			return;
-		}
-		try {
-			fileStream << std::setw(4) << config;
-		} catch (const nlohmann::json::type_error& e) {
-			logger::error("[TruePBR] failed to serialize {} : {}", outputPath, e.what());
-			return;
-		}
+		Util::FileHelpers::WriteJsonAtomically(std::filesystem::path(rootPath) / (editorId + ".json"), config, 4, "PBR record config");
 	}
 }
 

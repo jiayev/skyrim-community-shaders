@@ -481,7 +481,6 @@
     "cs_editor.scene_export_result_failure": "预设“{}”导出失败。请查看日志了解详情。",
     "cs_editor.scene_export_result_success": "预设“{}”已导出。",
     "cs_editor.scene_export_scope": "导出所有场景中的全部设置，而不仅是当前页面。",
-    "cs_editor.scene_export_scope_baseline": "将下方勾选功能的基础设置导出为基础预设。",
     "cs_editor.scene_export_scope_e11": "导出当前启用的 Effects 11 ENB 文件，以及所有现有的场景管理器设置。",
     "cs_editor.scene_export_screenshots": "截图",
     "cs_editor.scene_export_tags": "标签（以英文逗号分隔）",

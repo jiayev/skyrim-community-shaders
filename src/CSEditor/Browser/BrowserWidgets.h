@@ -87,6 +87,9 @@ namespace BrowserUI
 	 */
 	bool IconButton(const char* id, Icons::GlyphRef glyph, const char* tooltip, bool active = false, ImU32 color = 0);
 
+	/** @brief Glyph colour for IconButtons that delete: the error colour, softened to sit quietly in a row. */
+	ImU32 DestructiveIconColor();
+
 	/** @brief IconButton variant for painted (non-font) icons such as the star and flag. */
 	bool PaintedIconButton(const char* id, const IconPainter& icon, ImU32 color, const char* tooltip);
 
@@ -136,6 +139,9 @@ namespace BrowserUI
 
 	/** @brief Moves the cursor on the current line so the next `width` pixels end at the right edge. */
 	void RightAlign(float width);
+
+	/** @brief Util::HelpMarker at the right edge of the current line, for a dialog's guide. */
+	void HelpMarkerRight(const char* text);
 
 	/** @brief What the user asked of a SelectionFooter. */
 	enum class SelectionAction
