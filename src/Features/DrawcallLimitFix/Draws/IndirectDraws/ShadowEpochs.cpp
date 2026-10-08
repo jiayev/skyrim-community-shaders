@@ -1407,7 +1407,6 @@ namespace DCLF
 		}
 		double prepareMs = 0.0, inputsMs = 0.0, blocksMs = 0.0, bodyMs = 0.0;
 
-		impl->ReserveSceneTables(tables);
 		impl->ReserveShadowRows();
 		ShadowInputs in = impl->PrepareShadowInputs(store, *resources, modeUsed, modeRasterStates);
 		// The selected revision's shape for the placements and its recording (DecideShadowCoverage covered the views), and the installed
@@ -2278,21 +2277,26 @@ namespace DCLF
 		return impl->shadowReadinessSerial;
 	}
 
-	bool IndirectDraws::PhaseReady(const void* a_tables, std::uint32_t a_slot, std::uint8_t a_phase) const
+	bool IndirectDraws::PhaseReady(const void* a_tables, std::uint32_t a_slot, std::uint8_t a_phase, std::uint32_t* a_why) const
 	{
+		auto no = [a_why](std::uint32_t a_reason) {
+			if (a_why)
+				*a_why = a_reason;
+			return false;
+		};
 		const auto& store = SceneStore::Get();
 		const auto& tables = *static_cast<const SceneStore::Tables*>(a_tables);
 		const auto& lookups = store.GetLookups();
 		if (a_phase == kSetReflection)
-			return impl->ReflectionPhaseReady(tables, a_slot);
+			return impl->ReflectionPhaseReady(tables, a_slot) || no(8);
 		if (a_slot >= tables.objects.size() || a_slot >= tables.shadowTechnique.size())
-			return false;
+			return no(7);
 		const auto& object = tables.objects[a_slot];
 		if (object.geometryIndex >= tables.geometries.size())
-			return false;
+			return no(7);
 		// Within the scene buffers the shadow build ahead is made against (FitsScene): past them it has no input until their growth.
 		if (!FitsScene(&tables, a_slot, true))
-			return false;
+			return no(12);
 		// An occluder under a fade node: the engine's cull of the map goes into it only as the node's fade allows
 		// (BuildDrawsCS, FadedOutOfOcclusion), which DCLF knows for a root it services (kFadeRootOwned, FadeStateCS) and no other.
 		if (a_phase & (kSetOccluderSky | kSetOccluderPrecipitation)) {
@@ -2301,7 +2305,7 @@ namespace DCLF
 			if (const auto* node = property ? property->fadeNode : nullptr) {
 				const std::uint32_t root = a_slot < tables.objectFadeRoot.size() ? tables.objectFadeRoot[a_slot] : kNoFadeRoot;
 				if (root >= tables.fadeRoots.size() || tables.fadeRootNode[root] != node || !(tables.fadeRoots[root].bits & kFadeRootOwned))
-					return false;
+					return no(11);
 			}
 		}
 		// The shadow build's rule (BuildKeptShadow's evaluate): every view of the object's class in each of the phase's modes drawn
@@ -2318,15 +2322,15 @@ namespace DCLF
 			const ShadowPipelineKey key{ technique, (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u, VertexLayoutOf(tables.geometries[object.geometryIndex].vertexDesc) };
 			const auto slot = lookups.shadowSlots.find(key);
 			if (slot == lookups.shadowSlots.end())
-				return false;
+				return no(7);
 			for (const std::uint32_t state : states)
 				if (lookups.ShadowMapPipeline(state, slot->second) == Lookups::kNone)
-					return false;
+					return no(7);
 			if (technique & 0x80) {
 				auto* diffuse = a_slot < tables.shadowDiffuse.size() ? tables.shadowDiffuse[a_slot] : nullptr;
 				const auto texture = diffuse ? lookups.shadowTextures.find(diffuse) : lookups.shadowTextures.end();
 				if (texture == lookups.shadowTextures.end() || texture->second == Lookups::kNone)
-					return false;
+					return no(13);
 			}
 		}
 		return true;

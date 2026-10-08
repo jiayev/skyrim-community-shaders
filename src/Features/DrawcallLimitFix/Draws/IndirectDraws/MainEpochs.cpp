@@ -169,10 +169,6 @@ namespace DCLF
 		auto& store = SceneStore::Get();
 		const auto& tables = store.GetTables();
 		auto resources = impl->resources;
-		// The scene tables hold the frame's, and the sequence buffer every draw the scene can produce: grown here, before the
-		// epoch, when they would not.
-		impl->ReserveSceneTables(tables);
-		impl->ReserveMainSequences(tables);
 		stats.skipped = {};
 		stats.missingTextures = {};
 		stats.missingVertexConstants = stats.missingPixelConstants = 0;
@@ -352,9 +348,8 @@ namespace DCLF
 			return;
 		}
 		auto& store = SceneStore::Get();
-		// The capacities the builds are made against, grown for the frame's tables now (the first reserve of the frame grows).
-		impl->ReserveSceneTables(store.GetTables());
-		impl->ReserveMainSequences(store.GetTables());
+		// The capacities the builds are made against are the scene work's join's (MakeRevisionShapes reserves them from the coordinator's
+		// tables, the only tables the kept draw bound follows).
 		for (const std::size_t j : { kAsyncZPrepass, kAsyncColour }) {
 			const auto& masks = impl->epochMasks[j];
 			// The frame slots the epochs last supplied; the colour build replays the Z-prepass's vertex inputs.

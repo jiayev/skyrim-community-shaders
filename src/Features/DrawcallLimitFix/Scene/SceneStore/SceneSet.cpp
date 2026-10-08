@@ -150,6 +150,7 @@ namespace DCLF
 		setRebinding.resize(objects, 0);
 		setLackingNext.resize(objects, 0);
 		setApplyMark.resize(objects, 0);
+		setWaitCause.resize(objects, 0);
 		setCommitFrame = frame;
 		// A slot whose phases or lacking phases this commit changed, for ApplySet, with the geometry it holds now (an earlier commit's
 		// entry not yet applied takes this one's geometry: the decision is now for it).
@@ -212,15 +213,25 @@ namespace DCLF
 			if (slot < objects)
 				QueueSet(slot);
 		setLagged.clear();
-		// Readiness moved: anything the lookups resolve is a new version of them (Lookups::NextVersion), the shadow lookups
-		// have their own generation.
-		const std::uint64_t readiness = ((std::uint64_t(lookupsView.versionCounter) << 32) ^ (std::uint64_t(lookupsView.shadowGeneration) << 1) ^ lookupsView.generation) +
-		                                tables.constantsStamp * 0x9e3779b97f4a7c15ull + IndirectDraws::Get().SceneFitSerial() * 0xc2b2ae3d27d4eb4full;
-		if (readiness != setReadiness) {
-			setReadiness = readiness;
+		// Readiness moved, by source: anything the lookups resolve is a new version of them (Lookups::NextVersion), the shadow lookups
+		// have their own generation, the constants their stamp, the scene buffers their fit serial. A waiting slot is taken again when
+		// a source it waits on moved (SetWaitCause), or any moved for one waiting on something else; one waiting on its occluder's
+		// fade root by that root's servicing (fadeOwnershipFlips, above).
+		const std::array<std::uint64_t, kWaitSources> readiness{ (std::uint64_t(lookupsView.versionCounter) << 32) ^ lookupsView.generation, lookupsView.shadowGeneration,
+			tables.constantsStamp, IndirectDraws::Get().SceneFitSerial() };
+		std::uint8_t moved = 0;
+		for (std::uint32_t source = 0; source < kWaitSources; ++source)
+			if (readiness[source] != setReadiness[source]) {
+				setReadiness[source] = readiness[source];
+				moved |= std::uint8_t(1u << source);
+			}
+		if (moved) {
 			++setStats.readinessEvents;
 			for (const std::uint32_t slot : setWaiting)
-				QueueSet(slot);
+				if (slot < setWaitCause.size() && (setWaitCause[slot] & (moved | kWaitOther))) {
+					QueueSet(slot);
+					++setStats.waitingRequeued;
+				}
 		}
 		// The shadow views' modes and rasterizer states changed: a member's casting may need pipelines it has not got, so every
 		// member and waiting slot is taken again (rare: a kind of view seen for the first time).
@@ -232,15 +243,13 @@ namespace DCLF
 			for (const std::uint32_t slot : setWaiting)
 				QueueSet(slot);
 		}
-		// Fade roots became DCLF's to service or stopped being: an occluder under one is ready only while it is (PhaseReady).
-		if (fadeOwnershipSerial != setFadeOwnership) {
-			setFadeOwnership = fadeOwnershipSerial;
-			for (std::uint32_t slot = 0; slot < objects; ++slot)
-				if (setPhases[slot] & (kSetOccluderSky | kSetOccluderPrecipitation))
+		// Fade roots became DCLF's to service or stopped being: an occluder under one is ready only while it is (PhaseReady). The
+		// objects listed under each root that flipped are taken again: its occluders leave, its waiting ones may join.
+		for (const std::uint32_t root : std::exchange(fadeOwnershipFlips, {}))
+			if (root < fadeRootObjects.lists.size())
+				for (const std::uint32_t slot : fadeRootObjects.lists[root])
 					QueueSet(slot);
-			for (const std::uint32_t slot : setWaiting)
-				QueueSet(slot);
-		}
+		setFadeOwnership = fadeOwnershipSerial;
 		// The frame globals a membership pass reads changed: this frame's accumulate phase binds every resident again
 		// (BindByMembership), so none of them is a member this frame.
 		const bool rebindAll = live && frameMembershipWitness != membershipWitness;
@@ -290,9 +299,13 @@ namespace DCLF
 			it = setFadeHeld.erase(it);
 		}
 
+		// The set parity's pass (below) decides every slot again without the commit's side effects (counters, causes, lags).
+		bool parityPass = false;
 		// One slot's phases now, each with its readiness (0: not a member); a_wait: it takes part in a phase it is not ready for.
 		auto wanted = [&](std::uint32_t a_slot, bool& a_wait) -> std::uint8_t {
 			a_wait = false;
+			if (a_slot < setWaitCause.size() && !parityPass)
+				setWaitCause[a_slot] = 0;
 			if (!live || a_slot >= objects)
 				return 0;
 			std::uint8_t phases = SetParticipation(a_slot, drawn);
@@ -300,6 +313,9 @@ namespace DCLF
 				return 0;
 			auto waiting = [&](std::uint32_t a_why) {
 				a_wait = true;
+				if (parityPass)
+					return;
+				setWaitCause[a_slot] |= WaitCauseOf(a_why);
 				++setStats.waitingBy[a_why];
 				if (setStats.firstWaiting.empty())
 					if (const auto* geometry = tables.objectGeometry[a_slot])
@@ -310,7 +326,7 @@ namespace DCLF
 			if (phases & kSetMain) {
 				bool main = IsResidentSlot(a_slot);
 				if (main && (rebindAll || setRebinding[a_slot])) {
-					++setStats.rebinding;
+					setStats.rebinding += parityPass ? 0 : 1;
 					main = false;
 				}
 				if (const auto* geometry = tables.objectGeometry[a_slot]; main && geometry && setFadeHeld.contains(geometry))
@@ -330,15 +346,15 @@ namespace DCLF
 				if (!(phases & kSetMain) || !wasMain || !IndirectDraws::Get().PhaseReady(&tables, a_slot, kSetReflection)) {
 					if (phases & kSetMain) {
 						waiting(8);
-						if (!wasMain)
+						if (!wasMain && !parityPass)
 							setLaggedNext.push_back(a_slot);
 					}
 					phases &= ~kSetReflection;
 				}
 			}
 			for (const std::uint8_t phase : { kSetCaster, kSetCasterPoint, kSetOccluderSky, kSetOccluderPrecipitation })
-				if ((phases & phase) && !IndirectDraws::Get().PhaseReady(&tables, a_slot, phase)) {
-					waiting(7);
+				if (std::uint32_t why = 7; (phases & phase) && !IndirectDraws::Get().PhaseReady(&tables, a_slot, phase, &why)) {
+					waiting(why);
 					phases &= ~phase;
 				}
 			return phases;
@@ -397,12 +413,46 @@ namespace DCLF
 				std::uint8_t partnerPhases = wanted(partner, partnerWait);
 				if (!(phases & kSetMain) != !(partnerPhases & kSetMain)) {
 					++setStats.waitingBy[6];
+					// The waiting one is taken again with the other (whose verdict may change with any source).
+					setWaitCause[slot] |= kWaitOther;
+					setWaitCause[partner] |= kWaitOther;
 					phases &= ~(kSetMain | kSetReflection);
 					partnerPhases &= ~(kSetMain | kSetReflection);
 				}
 				apply(partner, partnerPhases, partnerWait);
 			}
 			apply(slot, phases, wait);
+		}
+		// (Before the queue's marks are cleared: a slot this commit took again while its binding is (setRebinding) is decided as it was.)
+		// CS_DCLF_SET_PARITY, every 60th commit: every slot's phases and waiting decided again, against what the commit's queue (its
+		// events and requeues by cause) left: a slot the requeues missed differs.
+		if (SwitchEnabled(Switch::SetParity) && ParityDue(frame, 23)) {
+			parityPass = true;
+			std::uint32_t differ = 0;
+			std::string first;
+			for (std::uint32_t slot = 0; slot < objects; ++slot) {
+				bool wait = false;
+				std::uint8_t phases = wanted(slot, wait);
+				const std::uint32_t partner = tables.IsLayer(slot) ? tables.layerBase[slot] : slot < tables.layerOf.size() ? tables.layerOf[slot] : kNoObjectSlot;
+				if (partner != kNoObjectSlot && partner < objects) {
+					bool partnerWait = false;
+					if (!(phases & kSetMain) != !(wanted(partner, partnerWait) & kSetMain))
+						phases &= ~(kSetMain | kSetReflection);
+				}
+				if (phases == setPhases[slot] && wait == (setWaitingMark[slot] != 0))
+					continue;
+				if (!differ++) {
+					const auto* geometry = tables.objectGeometry[slot];
+					first = fmt::format("'{}' (slot {}): phases {:#x} kept, {:#x} now; waiting {} kept, {} now (its causes {:#x})", geometry && geometry->name.c_str() ? geometry->name.c_str() : "?",
+						slot, setPhases[slot], phases, setWaitingMark[slot] != 0, wait, setWaitCause[slot]);
+				}
+			}
+			parityPass = false;
+			++setStats.commitParityChecks;
+			setStats.commitParityDiffer += differ;
+			static std::uint32_t logged = 0;
+			if (differ && logged++ < 8)
+				logger::warn("[DCLF] set commit parity at frame {}: {} slots differ from a full evaluation; first {} <- COMMIT", frame, differ, first);
 		}
 		setStats.evaluated += setQueue.size();
 		for (const std::uint32_t slot : setQueue)
@@ -786,7 +836,7 @@ namespace DCLF
 		append(frameShadowTextureChanges, tables.shadowTextureChanges);
 		append(frameRetiredImports, retiredImports);
 		append(frameSwitchChanges, switchesApplied);
-		frameSwitchResync = frameSwitchResync || std::exchange(switchResync, false) || !SwitchEventsLive();
+		frameSwitchResync = frameSwitchResync || std::exchange(switchResync, false);
 		frameSunCandidates = sunCandidates;
 		frameSunGeneration = sunCandidatesGeneration;
 		frameLightCandidates = lightCandidates;

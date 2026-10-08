@@ -260,7 +260,10 @@ namespace DCLF
 		// a revision names holds them from its join on, not from a colour commit's growth (which a frame without claims never runs).
 		{
 			const std::uint32_t views = ShadowViews::Get().Candidates();
-			impl->ReserveMainLatch(r, std::max(views, r.latchLayout.cascades), std::max(views, r.latchLayout.shadowVolumes), r.latchLayout.buckets);
+			// And the Z-prepass's bucket map for every pipeline slot the tables have: a publication a revision made now covers holds no more
+			// (its commit is this join's or older), and a commit past the map draws nothing for the slots it lacks.
+			impl->ReserveMainLatch(r, std::max(views, r.latchLayout.cascades), std::max(views, r.latchLayout.shadowVolumes),
+				std::max(r.latchLayout.buckets, static_cast<std::uint32_t>(tables.pipelines.size())));
 		}
 		// The growths the graph finished (G2): what the revision made now names, its shapes' addresses included. One still pending
 		// keeps the revision from being sealed (AssembleRevision).
@@ -313,7 +316,9 @@ namespace DCLF
 		if (reflection.resources) {
 			ReflectionPlan latest;
 			PlanReflectionBuckets(Growths::Get().LatestSizing<MainSizing>(r), reflection.slotPipelines, latest);
-			impl->ReserveReflection(static_cast<std::uint32_t>(latest.map.size()), static_cast<std::uint32_t>(latest.buckets.size()), latest.draws);
+			// The faces' map for every pipeline slot the tables have, as the Z-prepass's (above).
+			impl->ReserveReflection(static_cast<std::uint32_t>(std::max(latest.map.size(), tables.pipelines.size())), static_cast<std::uint32_t>(latest.buckets.size()),
+				latest.draws);
 		}
 		// The shapes are made again only when what they are made from moved (RevisionShapesKey): otherwise the revision sealed at this
 		// join keeps the last ones. CS_DCLF_REVISION_PARITY makes them around its frames whatever the key, and flags a change the key
@@ -492,6 +497,7 @@ namespace DCLF
 		group = kKeyLookups;
 		mix(lookups.instance);
 		mix(lookups.generation);
+		mix(lookups.versionCounter);
 		mix(lookups.shadowGeneration);
 		mix(tables.pipelines.size());
 		// The main segments': their latch, latched blocks and targets, and what their commits captured (viewport, frame blocks).

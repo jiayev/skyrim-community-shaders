@@ -38,6 +38,9 @@ namespace DCLF
 			std::unique_ptr<SceneCapture::Records> captured;
 			const void* detachedRoot = nullptr;
 			std::vector<const void*> removedNodes;
+			// The attached or detached node's ancestors at the hook (identities only, never dereferenced): the sun candidates among them
+			// are planned again (their subtrees changed: SceneStore::sunEntriesForced).
+			std::vector<const void*> ancestors;
 			SceneCapture::Update update;
 		};
 
@@ -57,6 +60,7 @@ namespace DCLF
 		static void FreeEvents(Event* a_head);
 
 		void PushAttached(RE::NiAVObject* a_child);
+		static void CollectAncestors(const RE::NiAVObject* a_node, std::vector<const void*>& a_out);
 		void PushDetached(RE::NiAVObject* a_child);
 		/** @brief A hook's values (after its write, on the writer's thread): one stack with the attaches and detaches, so an address a
 		 * detach let go and an attach took again is never given an earlier object's values. */

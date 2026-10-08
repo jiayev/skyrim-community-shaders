@@ -15,12 +15,17 @@ namespace DCLF
 {
 	/**
 	 * @brief The sun entries DCLF could take out of the engine's cascade culls, as the scene store last found them
-	 * (SceneStore::UpdateSunCandidates): immutable, and replaced whole when any entry's status changes.
+	 * (SceneStore::UpdateSunCandidates): immutable once published, one for each walk that changed an entry.
 	 *
 	 * An entry (a static reference's root, or a terrain block's multibound node: SceneStore::ResolveSunEntry) is a
 	 * candidate when every tracked geometry under it is either a table object, whose shadow the shadow epoch draws or
 	 * the caster rule rejects, or one the engine never draws into a shadow map (not a Lighting geometry, hidden,
 	 * alpha-blended, fading, or an unselected switch child).
+	 *
+	 * Indices are stable: an entry keeps its index while it is a candidate, and so does each of its geometries. A free index has
+	 * no node (entryNodes). Every change of an index takes a new version (entryVersion, session-unique), so two snapshots differ
+	 * exactly at the indices whose versions differ (ChangedEntries): what every consumer brings itself up to date by, entry by
+	 * entry.
 	 */
 	struct SunCandidates
 	{
@@ -36,19 +41,35 @@ namespace DCLF
 
 		std::uint32_t generation = 0;
 		ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> entries;     // entry node -> entry index
-		std::vector<const RE::NiAVObject*> entryNodes;                                  // entry index -> entry node
+		std::vector<const RE::NiAVObject*> entryNodes;                                  // entry index -> entry node (null: free)
+		std::vector<std::uint32_t> entryVersion;                                        // entry index -> its version (see the struct)
 		// The entry nodes, held as long as the snapshot is: every reader keyed by them (PrimaryCull's cut and list filter, the
 		// exclusions) may dereference one, and the engine may detach and drop it before the next snapshot replaces this one.
 		std::vector<RE::NiPointer<RE::NiAVObject>> held;
+		std::vector<std::vector<std::uint32_t>> entryGeometries;                        // entry index -> its geometry indices
 		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> geometries;  // every tracked geometry under one -> geometry index
-		std::vector<std::uint32_t> geometryEntry;                                       // geometry index -> entry index
+		std::vector<const RE::BSGeometry*> geometryNodes;                               // geometry index -> geometry (null: free)
+		std::vector<std::uint32_t> geometryEntry;                                       // geometry index -> entry index (kNone: free)
 		// geometry index -> its object slot as the walk that made the snapshot had it (-1: no record); the frame reads it, not the
 		// coordinator's tracked set (step 6c)
 		std::vector<std::int32_t> geometrySlot;
 		// Per geometry index: a main-pass table object PrimaryCull can give a synthetic pass (SceneStore::PrimaryEntryAllows);
 		// the rest under a left-out entry are registered by the engine, handed over as its cull would (PrimaryCull).
 		std::vector<std::uint8_t> primaryGeometry;
+
+		static constexpr std::uint32_t kNone = ~0u;
+		/** @brief The index space: entry indices are below it (free ones among them). */
+		std::uint32_t Capacity() const { return static_cast<std::uint32_t>(entryNodes.size()); }
+		std::uint32_t GeometryCapacity() const { return static_cast<std::uint32_t>(geometryNodes.size()); }
+		/** @brief The live entries. */
+		std::uint32_t Count() const { return static_cast<std::uint32_t>(entries.size()); }
 	};
+
+	/**
+	 * @brief The entry indices at which a_to differs from a_from (their versions differ, or one has the index and the other not),
+	 * appended to a_out in order. A null a_from: every index of a_to.
+	 */
+	void ChangedEntries(const SunCandidates* a_from, const SunCandidates& a_to, std::vector<std::uint32_t>& a_out);
 
 	/**
 	 * @brief One shadow epoch's verdict on the candidates: the entries whose casters it all drew (the set's), which the
@@ -75,6 +96,16 @@ namespace DCLF
 		std::uint32_t builtFrame = 0;
 		bool reused = false;
 	};
+
+	/**
+	 * @brief a_exclusion, made for an earlier snapshot, as a verdict on a_to: the entries changed between the two (ChangedEntries)
+	 * are not excluded (the engine culls them), every other one keeps its verdict (the indices are stable). a_exclusion itself when
+	 * it is a_to's. a_newVersion: the copy's version is a new one when its content differs (a consumer keyed on it), else the
+	 * original's (one that follows the changed entries itself). a_lightReach: the copy has the paraboloid mode's reach words.
+	 * a_changed (optional): the changed indices.
+	 */
+	std::shared_ptr<SunExclusion> TranslateExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const SunCandidates>& a_to,
+		bool a_newVersion, bool a_lightReach, std::vector<std::uint32_t>* a_changed = nullptr);
 
 	/**
 	 * @brief The engine's own work for the sun's cascades, taken away where DCLF already draws the result
@@ -116,6 +147,11 @@ namespace DCLF
 		void PublishExclusion(std::shared_ptr<SunExclusion> a_exclusion) { pendingExclusion = std::move(a_exclusion); }
 		/** @brief Render thread: the exclusion the next full-frustum cull will apply (null: none published). */
 		std::shared_ptr<const SunExclusion> PendingExclusion() const { return pendingExclusion; }
+		/**
+		 * @brief Render thread, at the frame's start (before the scene lists' filter reads it): the pending exclusion as a verdict on
+		 * the frame's candidates (TranslateExclusion: the entries changed since its snapshot are the engine's, the rest stand).
+		 */
+		void BeginFrame(const std::shared_ptr<const SunCandidates>& a_candidates);
 
 		/**
 		 * @brief Render thread, from the end of the sun's Accumulate to the next full-frustum cull: whether the bound

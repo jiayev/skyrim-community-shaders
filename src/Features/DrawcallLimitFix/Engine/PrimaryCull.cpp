@@ -229,7 +229,7 @@ namespace DCLF
 
 	void PrimaryCull::RefreshLive(std::uint32_t a_e)
 	{
-		for (std::uint32_t m = cut.memberOffsets[a_e]; m < cut.memberOffsets[a_e + 1]; ++m)
+		for (std::uint32_t m = cut.memberBegin[a_e]; m < cut.memberEnd[a_e]; ++m)
 			cut.memberLive[m] = PathSelected(cut.members[m]) ? 1 : 0;
 	}
 
@@ -348,95 +348,36 @@ namespace DCLF
 			frameLive.store(true, std::memory_order_release);
 			return;
 		}
-		const bool current = candidates && candidates->generation == SceneStore::Get().GetSunCandidatesGeneration();
-		if (!SunAccumulation::Get().ExclusionLive() || !current) {
-			++(current ? cutStats.skippedPreconditions : cutStats.skippedStale);
+		if (!candidates || !SunAccumulation::Get().ExclusionLive()) {
+			++(candidates ? cutStats.skippedPreconditions : cutStats.skippedStale);
 			liveStale = true;
 			fadeSkipped = true;
 			frameLive.store(true, std::memory_order_release);
 			return;
 		}
 		const std::int64_t start = Now();
+		// The cut follows the frame's snapshot entry by entry: the indices whose versions moved since the one it followed are planned
+		// again (SyncCut), every other entry stands.
 		const bool newSnapshot = cut.candidates != candidates;
+		std::vector<std::uint32_t> changedEntries;
 		if (newSnapshot) {
-			// A new snapshot: each entry's geometries, the plans and the eligible roots, again; admission by node.
-			cut.candidates = candidates;
-			const std::uint32_t entries = static_cast<std::uint32_t>(candidates->entries.size());
-			cut.geometryOffsets.assign(entries + 2, 0);
-			for (const auto entry : candidates->geometryEntry)
-				++cut.geometryOffsets[entry + 2];
-			for (std::size_t e = 2; e < cut.geometryOffsets.size(); ++e)
-				cut.geometryOffsets[e] += cut.geometryOffsets[e - 1];
-			cut.geometryIndices.assign(candidates->geometryEntry.size(), nullptr);
-			for (const auto& [geometry, index] : candidates->geometries)
-				cut.geometryIndices[cut.geometryOffsets[candidates->geometryEntry[index] + 1]++] = geometry;
-			cut.geometryOffsets.pop_back();
-			cut.roots.assign(entries, nullptr);
-			for (const auto& [root, index] : candidates->entries)
-				cut.roots[index] = root;
-			cut.plans.assign(entries, EntryPlan::Rejected);
-			cut.memberOffsets.assign(entries + 1, 0);
-			cut.members.clear();
-			cut.switchPaths.clear();
-			cut.switchOffsets.assign(entries + 1, 0);
-			cut.switches.clear();
-			cut.admitted.assign(entries, 0);
-			cut.mixed.assign(entries, 0);
-			cut.walk.assign(entries, 1);
-			cut.entrySlot.assign(entries, 0xFF);
-			entrySlotsVersion.fetch_add(1, std::memory_order_relaxed);
-			cut.eligible.clear();
-			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint64_t> admittedRoots;
-			for (std::uint32_t e = 0; e < entries; ++e) {
-				cut.memberOffsets[e] = static_cast<std::uint32_t>(cut.members.size());
-				cut.switchOffsets[e] = static_cast<std::uint32_t>(cut.switches.size());
-				cut.plans[e] = PlanOf(e, cut.roots[e]);
-				cut.memberOffsets[e + 1] = static_cast<std::uint32_t>(cut.members.size());
-				cut.switchOffsets[e + 1] = static_cast<std::uint32_t>(cut.switches.size());
-				if (cut.plans[e] == EntryPlan::Rejected)
-					continue;
-				for (std::uint32_t m = cut.memberOffsets[e]; m < cut.memberOffsets[e + 1]; ++m)
-					cut.mixed[e] |= cut.members[m].engine ? 1 : 0;
-				cut.eligible.emplace(cut.roots[e], e);
-				if (const auto it = cut.admittedRoots.find(cut.roots[e]); it != cut.admittedRoots.end() && it->second == MemberSignature(e)) {
-					cut.admitted[e] = 1;
-					admittedRoots.emplace(cut.roots[e], it->second);
-				}
-			}
-			cut.admittedRoots = std::move(admittedRoots);
-			// Every entry not admitted yet is checked once: its members may all be drawn already (Admit).
-			cut.pendingAdmission.clear();
-			for (std::uint32_t e = 0; e < entries; ++e)
-				if (cut.plans[e] != EntryPlan::Rejected && !cut.admitted[e])
-					cut.pendingAdmission.push_back(e);
-				// The members' object indices (stable while an object stays tracked; a change of membership is a new snapshot).
-			cut.memberObject.resize(cut.members.size());
-			for (std::size_t m = 0; m < cut.members.size(); ++m)
-				if (cut.members[m].engine) {
-					cut.memberObject[m] = -1;
-				} else {
-					// The slot the snapshot's walk had (step 6c: the frame reads no tracked set).
-					const auto it = candidates->geometries.find(cut.members[m].geometry);
-					cut.memberObject[m] = it != candidates->geometries.end() && it->second < candidates->geometrySlot.size() ? candidates->geometrySlot[it->second] : -1;
-				}
-			cut.switchEntry.clear();
-			for (std::uint32_t e = 0; e < entries; ++e)
-				for (std::uint32_t w = cut.switchOffsets[e]; w < cut.switchOffsets[e + 1]; ++w)
-					cut.switchEntry.emplace(cut.switches[w], e);
-			walkRefresh.clear();
-			++cutVersion;
+			ChangedEntries(cut.candidates.get(), *candidates, changedEntries);
+			SyncCut(candidates, changedEntries);
 		}
+		if (SwitchEnabled(Switch::PersistentParity) && ParityDue(SceneStore::Get().GetFrame(), 11))
+			CheckCut();
 		// Which members their switches select: the switch events name the entries to read again (dclf-cull-job-elimination.md,
 		// "Phase 3"); a new snapshot, a resync or a skipped frame reads them all.
 		cut.liveEvents = SceneStore::SwitchEventsLive();
 		if (cut.liveEvents) {
-			if (newSnapshot || liveStale) {
-				cut.memberLive.assign(cut.members.size(), 1);
-				for (std::uint32_t e = 0; e + 1 < cut.switchOffsets.size(); ++e)
-					if (cut.switchOffsets[e] != cut.switchOffsets[e + 1])
+			if (liveStale) {
+				std::fill(cut.memberLive.begin(), cut.memberLive.end(), std::uint8_t(1));
+				for (std::uint32_t e = 0; e < cut.switchBegin.size(); ++e)
+					if (cut.switchBegin[e] != cut.switchEnd[e])
 						RefreshLive(e);
 				++cutStats.liveAll;
 			} else {
+				// The entries planned again read their switches when planned (SyncCut).
 				for (const auto* node : switchChanges)
 					if (const auto it = cut.switchEntry.find(node); it != cut.switchEntry.end()) {
 						RefreshLive(it->second);
@@ -445,22 +386,18 @@ namespace DCLF
 			}
 			liveStale = false;
 		}
+		cutStats.entriesPlanned += changedEntries.size();
 		standInLive = true;
 		walkEverything = SwitchEnabled(Switch::PersistentParity);
-		// Which entries the stand-in walks: a new snapshot's, from their members once memberLive is current; the entries a
-		// member joined or left the set in since.
-		if (newSnapshot) {
-			for (std::uint32_t e = 0; e < cut.walk.size(); ++e)
-				RefreshWalk(e);
-		} else {
-			for (const std::uint32_t e : std::exchange(walkRefresh, {}))
-				RefreshWalk(e);
-		}
+		// Which entries the stand-in walks: the entries planned again (SyncCut queues them), from their members once memberLive is
+		// current; the entries a member joined or left the set in since.
+		for (const std::uint32_t e : std::exchange(walkRefresh, {}))
+			RefreshWalk(e);
 		// The entries whose members are all in the set now are left out of the engine's cull from this frame on.
 		RunAdmission();
 		// The fade roots DCLF services: a new snapshot's, and every one again from its node after frames the engine culled
 		// them all (its OnVisible ran on them meanwhile).
-		if (newSnapshot)
+		if (!changedEntries.empty())
 			SyncFadeOwnership();
 		else if (std::exchange(fadeSkipped, false))
 			SceneStore::Get().ReseedOwnedFadeRoots();
@@ -658,17 +595,215 @@ namespace DCLF
 			}
 	}
 
+	void PrimaryCull::SyncCut(const std::shared_ptr<const SunCandidates>& a_candidates, std::span<const std::uint32_t> a_changed)
+	{
+		cut.candidates = a_candidates;
+		const auto& candidates = *a_candidates;
+		const std::uint32_t capacity = candidates.Capacity();
+		const std::size_t span = std::max<std::size_t>(capacity, cut.roots.size());
+		auto grow = [span](auto& a_column, auto a_value) {
+			if (a_column.size() < span)
+				a_column.resize(span, a_value);
+		};
+		grow(cut.roots, static_cast<const RE::NiAVObject*>(nullptr));
+		grow(cut.plans, EntryPlan::Rejected);
+		grow(cut.memberBegin, 0u);
+		grow(cut.memberEnd, 0u);
+		grow(cut.switchBegin, 0u);
+		grow(cut.switchEnd, 0u);
+		grow(cut.admitted, std::uint8_t(0));
+		grow(cut.mixed, std::uint8_t(0));
+		grow(cut.walk, std::uint8_t(0));
+		grow(cut.entrySlot, std::uint8_t(0xFF));
+		for (const std::uint32_t e : a_changed) {
+			// The entry as the cut had it, let go: its root's verdicts, its switches; its members' ranges become garbage.
+			if (const auto* old = cut.roots[e]) {
+				if (const auto it = cut.eligible.find(old); it != cut.eligible.end() && it->second == e)
+					cut.eligible.erase(it);
+				for (std::uint32_t w = cut.switchBegin[e]; w < cut.switchEnd[e]; ++w)
+					if (const auto it = cut.switchEntry.find(cut.switches[w]); it != cut.switchEntry.end() && it->second == e)
+						cut.switchEntry.erase(it);
+				if (e >= capacity || candidates.entryNodes[e] != old)
+					cut.admittedRoots.erase(old);
+			}
+			cutGarbage += cut.memberEnd[e] - cut.memberBegin[e];
+			cut.memberBegin[e] = cut.memberEnd[e] = static_cast<std::uint32_t>(cut.members.size());
+			cut.switchBegin[e] = cut.switchEnd[e] = static_cast<std::uint32_t>(cut.switches.size());
+			cut.plans[e] = EntryPlan::Rejected;
+			cut.admitted[e] = cut.mixed[e] = cut.walk[e] = 0;
+			cut.entrySlot[e] = 0xFF;
+			const auto* root = e < capacity ? candidates.entryNodes[e] : nullptr;
+			cut.roots[e] = root;
+			if (!root)
+				continue;
+			// Planned again: its members and switches appended (PlanOf), their objects, whether its switches select them.
+			cut.plans[e] = PlanOf(e, root);
+			cut.memberEnd[e] = static_cast<std::uint32_t>(cut.members.size());
+			cut.switchEnd[e] = static_cast<std::uint32_t>(cut.switches.size());
+			if (cut.plans[e] == EntryPlan::Rejected)
+				continue;
+			cut.memberObject.resize(cut.members.size(), -1);
+			cut.memberLive.resize(cut.members.size(), 1);
+			for (std::uint32_t m = cut.memberBegin[e]; m < cut.memberEnd[e]; ++m) {
+				cut.mixed[e] |= cut.members[m].engine ? 1 : 0;
+				// The object the snapshot's walk had (step 6c: the frame reads no tracked set).
+				const auto it = cut.members[m].engine ? candidates.geometries.end() : candidates.geometries.find(cut.members[m].geometry);
+				cut.memberObject[m] = it != candidates.geometries.end() && it->second < candidates.geometrySlot.size() ? candidates.geometrySlot[it->second] : -1;
+			}
+			for (std::uint32_t w = cut.switchBegin[e]; w < cut.switchEnd[e]; ++w)
+				cut.switchEntry.insert_or_assign(cut.switches[w], e);
+			RefreshLive(e);
+			cut.eligible.insert_or_assign(root, e);
+			// Admitted again with the same DCLF members it was admitted with; checked for admission otherwise (Admit).
+			if (const auto it = cut.admittedRoots.find(root); it != cut.admittedRoots.end() && it->second == MemberSignature(e))
+				cut.admitted[e] = 1;
+			else
+				cut.pendingAdmission.push_back(e);
+			cut.walk[e] = 1;
+			walkRefresh.push_back(e);
+		}
+		for (auto* column : { &cut.roots })
+			column->resize(capacity);
+		cut.plans.resize(capacity);
+		cut.memberBegin.resize(capacity);
+		cut.memberEnd.resize(capacity);
+		cut.switchBegin.resize(capacity);
+		cut.switchEnd.resize(capacity);
+		cut.admitted.resize(capacity);
+		cut.mixed.resize(capacity);
+		cut.walk.resize(capacity);
+		cut.entrySlot.resize(capacity);
+		std::erase_if(cut.pendingAdmission, [capacity](std::uint32_t a_e) { return a_e >= capacity; });
+		std::erase_if(walkRefresh, [capacity](std::uint32_t a_e) { return a_e >= capacity; });
+		// The members' pool gathered again once more of it is garbage than live (each live member copied once per as many let go).
+		if (cutGarbage > cut.members.size() / 2)
+			CompactCut();
+		entrySlotsVersion.fetch_add(1, std::memory_order_relaxed);
+		++cutVersion;
+	}
+
+	void PrimaryCull::CheckCut()
+	{
+		// CS_DCLF_PERSISTENT_PARITY: the cut as SyncCut kept it against one planned whole for the same snapshot, entry by entry: the
+		// plan, the members (their geometries, engine-drawn or not, objects, switch paths), the switches, mixed, the eligible roots.
+		// Admission and the walk are history (the set's joins since), not compared.
+		if (!cut.candidates)
+			return;
+		Cut kept = std::move(cut);
+		const auto keptWalkRefresh = walkRefresh;
+		const auto keptGarbage = cutGarbage;
+		const auto keptVersion = cutVersion;
+		cut = Cut{};
+		cut.processes = kept.processes;
+		cut.processCount = kept.processCount;
+		cut.admittedRoots = kept.admittedRoots;
+		std::vector<std::uint32_t> all;
+		ChangedEntries(nullptr, *kept.candidates, all);
+		SyncCut(kept.candidates, all);
+		Cut whole = std::move(cut);
+		cut = std::move(kept);
+		walkRefresh = keptWalkRefresh;
+		cutGarbage = keptGarbage;
+		cutVersion = keptVersion;
+		++cutStats.parityChecks;
+		std::string first;
+		std::uint32_t differ = 0;
+		auto note = [&](std::uint32_t a_e, const char* a_what) {
+			if (!differ++)
+				first = fmt::format("entry {} ({}): {}", a_e, static_cast<const void*>(a_e < cut.roots.size() ? cut.roots[a_e] : nullptr), a_what);
+		};
+		if (whole.roots.size() != cut.roots.size())
+			note(0, "the index space");
+		for (std::uint32_t e = 0; e < std::min(whole.roots.size(), cut.roots.size()); ++e) {
+			if (whole.roots[e] != cut.roots[e] || whole.plans[e] != cut.plans[e]) {
+				if (!differ) {
+					const auto* root = cut.roots[e];
+					note(e, "");
+					first += fmt::format("root {} / {}, plan {} kept, {} whole; members {} kept, {} whole; '{}' {}", static_cast<const void*>(cut.roots[e]),
+						static_cast<const void*>(whole.roots[e]), static_cast<int>(cut.plans[e]), static_cast<int>(whole.plans[e]), cut.memberEnd[e] - cut.memberBegin[e],
+						whole.memberEnd[e] - whole.memberBegin[e], root && root->name.c_str() ? root->name.c_str() : "?", root ? root->GetRTTI() ? root->GetRTTI()->name : "?" : "");
+				} else {
+					note(e, "root or plan");
+				}
+				continue;
+			}
+			if (whole.mixed[e] != cut.mixed[e])
+				note(e, "mixed");
+			const auto members = cut.memberEnd[e] - cut.memberBegin[e];
+			if (whole.memberEnd[e] - whole.memberBegin[e] != members) {
+				note(e, "member count");
+				continue;
+			}
+			for (std::uint32_t i = 0; i < members; ++i) {
+				const auto& a = cut.members[cut.memberBegin[e] + i];
+				const auto& b = whole.members[whole.memberBegin[e] + i];
+				const bool samePath = std::equal(cut.switchPaths.begin() + a.switchBegin, cut.switchPaths.begin() + a.switchEnd, whole.switchPaths.begin() + b.switchBegin,
+					whole.switchPaths.begin() + b.switchEnd);
+				if (a.geometry != b.geometry || a.engine != b.engine || !samePath || cut.memberObject[cut.memberBegin[e] + i] != whole.memberObject[whole.memberBegin[e] + i]) {
+					note(e, "a member");
+					break;
+				}
+			}
+			if (!std::equal(cut.switches.begin() + cut.switchBegin[e], cut.switches.begin() + cut.switchEnd[e], whole.switches.begin() + whole.switchBegin[e],
+					whole.switches.begin() + whole.switchEnd[e]))
+				note(e, "switches");
+		}
+		if (whole.eligible.size() != cut.eligible.size())
+			note(0, "the eligible roots");
+		if (differ) {
+			++cutStats.parityMismatches;
+			static std::uint32_t logged = 0;
+			if (logged++ < 8)
+				logger::warn("[DCLF] cut parity at frame {}: {} entries differ from a whole plan; first {} <- CUT", SceneStore::Get().GetFrame(), differ, first);
+		}
+	}
+
+	void PrimaryCull::CompactCut()
+	{
+		std::vector<Cut::Member> members;
+		std::vector<std::pair<const RE::NiSwitchNode*, std::int32_t>> switchPaths;
+		std::vector<const RE::NiSwitchNode*> switches;
+		std::vector<std::int32_t> memberObject;
+		std::vector<std::uint8_t> memberLive;
+		for (std::uint32_t e = 0; e < cut.roots.size(); ++e) {
+			const auto begin = static_cast<std::uint32_t>(members.size());
+			for (std::uint32_t m = cut.memberBegin[e]; m < cut.memberEnd[e]; ++m) {
+				auto member = cut.members[m];
+				const auto pathBegin = static_cast<std::uint32_t>(switchPaths.size());
+				switchPaths.insert(switchPaths.end(), cut.switchPaths.begin() + member.switchBegin, cut.switchPaths.begin() + member.switchEnd);
+				member.switchBegin = pathBegin;
+				member.switchEnd = static_cast<std::uint32_t>(switchPaths.size());
+				members.push_back(member);
+				memberObject.push_back(cut.memberObject[m]);
+				memberLive.push_back(cut.memberLive[m]);
+			}
+			cut.memberBegin[e] = begin;
+			cut.memberEnd[e] = static_cast<std::uint32_t>(members.size());
+			const auto switchBegin = static_cast<std::uint32_t>(switches.size());
+			switches.insert(switches.end(), cut.switches.begin() + cut.switchBegin[e], cut.switches.begin() + cut.switchEnd[e]);
+			cut.switchBegin[e] = switchBegin;
+			cut.switchEnd[e] = static_cast<std::uint32_t>(switches.size());
+		}
+		cut.members = std::move(members);
+		cut.switchPaths = std::move(switchPaths);
+		cut.switches = std::move(switches);
+		cut.memberObject = std::move(memberObject);
+		cut.memberLive = std::move(memberLive);
+		cutGarbage = 0;
+		++cutStats.compactions;
+	}
+
 	void PrimaryCull::RunAdmission()
 	{
 		auto& store = SceneStore::Get();
-		if (!cut.candidates || cut.candidates->generation != store.GetSunCandidatesGeneration())
+		if (!cut.candidates)
 			return;
 		bool admittedAny = false;
 		for (const std::uint32_t e : cut.pendingAdmission) {
 			if (e >= cut.admitted.size() || cut.admitted[e] || cut.plans[e] == EntryPlan::Rejected)
 				continue;
 			bool all = true;
-			for (std::uint32_t m = cut.memberOffsets[e]; m < cut.memberOffsets[e + 1] && all; ++m) {
+			for (std::uint32_t m = cut.memberBegin[e]; m < cut.memberEnd[e] && all; ++m) {
 				const auto* geometry = cut.members[m].geometry;
 				// A member no longer tracked may be gone: the entry waits for the snapshot that follows.
 				if (!store.IsTracked(geometry)) {
@@ -700,7 +835,7 @@ namespace DCLF
 		// terrain chunk once it loads) with no event that reaches here before the frame culls it.
 		bool walk = cut.mixed[a_e] != 0;
 		auto& store = SceneStore::Get();
-		for (std::uint32_t m = cut.memberOffsets[a_e]; m < cut.memberOffsets[a_e + 1] && !walk; ++m)
+		for (std::uint32_t m = cut.memberBegin[a_e]; m < cut.memberEnd[a_e] && !walk; ++m)
 			if (!cut.members[m].engine && !MemberDrawable(cut.memberObject[m]) && store.IsTracked(cut.members[m].geometry))
 				walk = true;
 		cutVersion += cut.walk[a_e] != (walk ? 1 : 0) ? 1 : 0;
@@ -773,7 +908,7 @@ namespace DCLF
 				animated.push_back(cut.roots[e]);
 				// A skin whose drawn partitions follow the node's LOD level (SceneStore::LodRowOf): read from a node that no
 				// longer changes. Counted, for the report.
-				for (std::uint32_t m = cut.memberOffsets[e]; m < cut.memberOffsets[e + 1]; ++m)
+				for (std::uint32_t m = cut.memberBegin[e]; m < cut.memberEnd[e]; ++m)
 					if (const auto* geometry = cut.members[m].geometry; geometry && geometry->GetFlags().any(RE::NiAVObject::Flag::kMeshLOD) &&
 																	   geometry->GetGeometryRuntimeData().skinInstance)
 						++standInLodSkins;
@@ -786,7 +921,7 @@ namespace DCLF
 	std::uint64_t PrimaryCull::MemberSignature(std::uint32_t a_e) const
 	{
 		std::uint64_t signature = 0;
-		for (std::uint32_t m = cut.memberOffsets[a_e]; m < cut.memberOffsets[a_e + 1]; ++m)
+		for (std::uint32_t m = cut.memberBegin[a_e]; m < cut.memberEnd[a_e]; ++m)
 			if (!cut.members[m].engine)
 				signature += ankerl::unordered_dense::hash<const RE::BSGeometry*>{}(cut.members[m].geometry);
 		return signature;
@@ -847,7 +982,7 @@ namespace DCLF
 		// (UpdateDownwardPass). With the switch events that is done when the selection changes (SceneStore::CatchUpSwitch),
 		// so none is found here; without them, the engine culls this entry this frame.
 		if (!cut.liveEvents) {
-			for (std::uint32_t w = cut.switchOffsets[e]; w < cut.switchOffsets[e + 1]; ++w) {
+			for (std::uint32_t w = cut.switchBegin[e]; w < cut.switchEnd[e]; ++w) {
 				const auto* switchNode = cut.switches[w];
 				if (const auto selection = SceneStore::SelectionOf(*switchNode, SceneStore::ReadSwitch(*switchNode)); selection.child && !selection.current) {
 					++out.switchStale;
@@ -898,7 +1033,7 @@ namespace DCLF
 		if (Outside(a_process->planes, a_object->worldBound))
 			return true;
 		++out.visibleEntries;
-		for (std::uint32_t m = cut.memberOffsets[e]; m < cut.memberOffsets[e + 1]; ++m) {
+		for (std::uint32_t m = cut.memberBegin[e]; m < cut.memberEnd[e]; ++m) {
 			const auto& member = cut.members[m];
 			const auto* geometry = member.geometry;
 			const bool selected = cut.liveEvents ? cut.memberLive[m] != 0 : PathSelected(member);
@@ -1252,11 +1387,11 @@ namespace DCLF
 			QueryPerformanceFrequency(&frequency);
 			const double toMs = 1000.0 / static_cast<double>(frequency.QuadPart);
 			const double applied = std::max<double>(static_cast<double>(s.appliedFrames), 1.0);
-			logger::info("[DCLF] primary exclusion: applied on {} of {} frames ({} stale, {} preconditions); per frame {:.0f} eligible entries reached, "
+			logger::info("[DCLF] primary exclusion: applied on {} of {} frames ({} without candidates, {} preconditions), {:.1f} entries planned again a frame as their candidates moved ({} pool gatherings; parity {} checks, {} differ); per frame {:.0f} eligible entries reached, "
 						 "{:.0f} stood in for ({:.0f} walked, {:.0f} of them in view), {:.1f} cross-fading LOD (stood in), {:.1f} not yet admitted ({:.1f} admitted); {:.0f} members in view, {:.1f} not bound yet (the engine's), "
 						 "{:.1f} bound but not in the set (the engine's), {:.1f} hidden;  {:.1f} owned geometries left out of the engine's registration; "
 						 "{:.0f} of the engine's members in view registered by it; switches: {:.1f} entries culled by the engine (stale child), {:.0f} members unselected, selection read from every switch on {} frames and from {} events' entries; render thread: prepare {:.3f} ms, after the jobs {:.3f} ms",
-				s.appliedFrames, s.frames, s.skippedStale, s.skippedPreconditions, s.seen / applied, s.skipped / applied, s.walked / applied, s.visibleEntries / applied,
+				s.appliedFrames, s.frames, s.skippedStale, s.skippedPreconditions, double(s.entriesPlanned) / applied, s.compactions, s.parityChecks, s.parityMismatches, s.seen / applied, s.skipped / applied, s.walked / applied, s.visibleEntries / applied,
 				s.notSettled / applied, s.notAdmitted / applied, s.admittedNow / applied, s.members / applied, s.unbound / applied,
 				s.undrawable / applied, s.hiddenSkipped / applied, s.excluded / applied,
 				s.engineMembers / applied, s.switchStale / applied, s.unselected / applied, s.liveAll, s.liveEntries, s.prepareTicks * toMs / applied, s.afterTicks * toMs / applied);

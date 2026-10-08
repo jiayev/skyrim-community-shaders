@@ -724,10 +724,9 @@ namespace DCLF
 		if (ResidentParityEnabled() && ParityDue(frame) && !residents.empty())
 			CheckResidentParity();
 		{
-			// A bound object can reference a slot that is not live only after a slot was freed (the sweep, a material
-			// drop, a geometry slot that could not be resolved again).
-			const bool slotParity = SwitchEnabled(Switch::PersistentParity);
-			if (slotsFreedThisFrame || slotParity)
+			// CS_DCLF_PERSISTENT_PARITY: no bound object references a slot that is not live. Slots are freed only when nothing references
+			// them (their reference counts), which this checks; the normal path trusts them (invariant 5).
+			if (SwitchEnabled(Switch::PersistentParity) && (slotsFreedThisFrame || ParityDue(frame)))
 				CheckObjectSlots(frameResolveBuffers);
 			slotsFreedThisFrame = false;
 		}

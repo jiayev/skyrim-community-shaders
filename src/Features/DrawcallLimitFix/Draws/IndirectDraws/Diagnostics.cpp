@@ -179,9 +179,9 @@ namespace DCLF
 		}
 		for (auto* cache : { &impl->sunExclusionCache, &impl->parabolicExclusionCache }) {
 			if (auto& c = *cache; c.builds) {
-				text += fmt::format("[DCLF] {} exclusion: {} builds, {} reused; parity {} checked, {} differ{}\n", cache == &impl->sunExclusionCache ? "sun" : "paraboloid",
-					c.builds, c.reused, c.parity.checks, c.parity.mismatches, c.parity.Verdict());
-				c.builds = c.reused = 0;
+				text += fmt::format("[DCLF] {} exclusion: {} builds, {} reused ({} of them for newer candidates, the entries that moved judged again); parity {} checked, {} differ{}\n", cache == &impl->sunExclusionCache ? "sun" : "paraboloid",
+					c.builds, c.reused, c.translated, c.parity.checks, c.parity.mismatches, c.parity.Verdict());
+				c.builds = c.reused = c.translated = 0;
 				c.parity.Reset();
 			}
 		}

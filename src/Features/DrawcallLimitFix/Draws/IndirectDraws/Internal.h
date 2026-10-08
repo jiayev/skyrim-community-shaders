@@ -3077,7 +3077,7 @@ namespace DCLF
 			std::uint32_t excludedCount = 0;
 			std::uint64_t version = 0;  // SunExclusion::version of excluded
 			bool valid = false;
-			std::uint64_t builds = 0, reused = 0;  // since the last report
+			std::uint64_t builds = 0, reused = 0, translated = 0;  // since the last report (translated: reused for newer candidates)
 			ParityCounter parity;
 		};
 

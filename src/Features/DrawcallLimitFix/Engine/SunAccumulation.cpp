@@ -18,6 +18,58 @@
 
 namespace DCLF
 {
+	void SunAccumulation::BeginFrame(const std::shared_ptr<const SunCandidates>& a_candidates)
+	{
+		if (pendingExclusion && a_candidates)
+			pendingExclusion = TranslateExclusion(pendingExclusion, a_candidates, true, false);
+	}
+
+	void ChangedEntries(const SunCandidates* a_from, const SunCandidates& a_to, std::vector<std::uint32_t>& a_out)
+	{
+		if (a_from == &a_to)
+			return;
+		const std::uint32_t to = a_to.Capacity(), from = a_from ? a_from->Capacity() : 0u;
+		for (std::uint32_t e = 0, end = std::max(to, from); e < end; ++e) {
+			const bool inFrom = e < from && a_from->entryNodes[e];
+			const bool inTo = e < to && a_to.entryNodes[e];
+			if ((inFrom || inTo) && (inFrom != inTo || a_from->entryVersion[e] != a_to.entryVersion[e]))
+				a_out.push_back(e);
+		}
+	}
+
+	std::shared_ptr<SunExclusion> TranslateExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const SunCandidates>& a_to,
+		bool a_newVersion, bool a_lightReach, std::vector<std::uint32_t>* a_changed)
+	{
+		if (!a_exclusion || !a_to || a_exclusion->candidates == a_to)
+			return a_exclusion;
+		std::vector<std::uint32_t> local;
+		auto& changed = a_changed ? *a_changed : local;
+		changed.clear();
+		ChangedEntries(a_exclusion->candidates.get(), *a_to, changed);
+		auto out = std::make_shared<SunExclusion>();
+		out->candidates = a_to;
+		const std::uint32_t capacity = a_to->Capacity();
+		out->excluded.assign(capacity, 0);
+		std::copy_n(a_exclusion->excluded.begin(), std::min<std::size_t>(capacity, a_exclusion->excluded.size()), out->excluded.begin());
+		bool flipped = false;
+		for (const std::uint32_t e : changed)
+			if (e < capacity && out->excluded[e]) {
+				out->excluded[e] = 0;
+				flipped = true;
+			}
+		out->excludedCount = static_cast<std::uint32_t>(std::count(out->excluded.begin(), out->excluded.end(), std::uint8_t(1)));
+		// Versions of translated copies are apart from the builds' (ShadowBuild.cpp counts from 1).
+		static std::atomic<std::uint64_t> translatedVersions{ 0 };
+		out->version = a_newVersion && flipped ? (1ull << 63) | (translatedVersions.fetch_add(1, std::memory_order_relaxed) + 1) : a_exclusion->version;
+		out->builtFrame = a_exclusion->builtFrame;
+		out->reused = a_exclusion->reused;
+		out->removed = std::make_unique<std::atomic<std::uint32_t>[]>(capacity);
+		out->cleared = std::make_unique<std::atomic<std::uint32_t>[]>(a_to->GeometryCapacity());
+		if (a_lightReach)
+			out->lightReach = std::make_unique<std::atomic<std::uint64_t>[]>(std::size_t(capacity) * 3);
+		return out;
+	}
+
 	namespace
 	{
 		using namespace Engine;
@@ -156,10 +208,9 @@ namespace DCLF
 			++stats.exclusionMissing;
 			return;
 		}
-		// Built for other candidates: the scene changed since the set it follows, and an entry may hold a caster no
-		// epoch has drawn yet. The engine culls everything this frame.
-		// The candidates as the frame's claims were installed: the scene task may be updating them now.
-		if (exclusion->candidates->generation != SceneStore::Get().GetPublishedSunGeneration()) {
+		// Not a verdict on the frame's candidates (BeginFrame translates it at the frame's start; none then): an entry may hold a
+		// caster no epoch has drawn yet. The engine culls everything this frame.
+		if (exclusion->candidates != SceneStore::Get().GetSunCandidates()) {
 			++stats.exclusionStale;
 			return;
 		}
@@ -207,7 +258,7 @@ namespace DCLF
 			array.resize(kept);
 		}
 		++stats.exclusionFrames;
-		stats.candidates += candidates.entries.size();
+		stats.candidates += candidates.Count();
 		stats.excluded += exclusion->excludedCount;
 		frameState.exclusion = std::move(exclusion);
 		frameState.stamp = stamp;

@@ -157,6 +157,13 @@ namespace DCLF
 		FreeEvents(Drain());
 	}
 
+	void SceneTracker::CollectAncestors(const RE::NiAVObject* a_node, std::vector<const void*>& a_out)
+	{
+		// On the hook's thread, while the engine holds the chain (the attach or detach is in progress under it).
+		for (const RE::NiAVObject* parent = a_node ? a_node->parent : nullptr; parent && a_out.size() < 32; parent = parent->parent)
+			a_out.push_back(parent);
+	}
+
 	void SceneTracker::PushAttached(RE::NiAVObject* a_child)
 	{
 		if (!a_child || stopped.load(std::memory_order_acquire))
@@ -164,6 +171,7 @@ namespace DCLF
 		auto* event = new Event{};
 		event->type = EventType::Attached;
 		event->node.reset(a_child);
+		CollectAncestors(a_child, event->ancestors);
 		// The mirror's records, on this thread after the engine's attach (step 6e F3): only what is in the world.
 		event->captured = SceneCapture::CaptureAttached(*a_child);
 		Push(event);
@@ -175,6 +183,7 @@ namespace DCLF
 			return;
 		auto* event = new Event{};
 		event->type = EventType::Detached;
+		CollectAncestors(a_child, event->ancestors);
 		// In the world (before the engine's detach, which follows the hook): the mirror drops every record under it (step 6e F3).
 		const bool inWorld = SceneCapture::InWorld(a_child);
 		CollectGeometry(a_child, event->removed, inWorld ? &event->removedNodes : nullptr);

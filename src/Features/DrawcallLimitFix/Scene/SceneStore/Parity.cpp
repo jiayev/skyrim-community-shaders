@@ -132,6 +132,12 @@ namespace DCLF
 			t.switchCatchUps = catchUpsBySwitch.exchange(0, std::memory_order_relaxed);
 			t.attachCatchUps = catchUpsByAttach.exchange(0, std::memory_order_relaxed);
 			const double catchUpUs = static_cast<double>(catchUpNs.exchange(0, std::memory_order_relaxed)) / 1000.0 / n;
+			text += fmt::format("[DCLF] candidates: sun {} entries ({} indices, {} geometry rows), {} written in {} snapshots; light {} entries ({} indices), "
+								"{} written in {} snapshots; parity {} checks, {} differ{}\n",
+				sunTable.index.size(), sunTable.nodes.size(), sunTable.geometryIndex.size(), std::exchange(sunTable.entriesWritten, 0), std::exchange(sunTable.snapshots, 0),
+				lightTable.index.size(), lightTable.nodes.size(), std::exchange(lightTable.entriesWritten, 0), std::exchange(lightTable.snapshots, 0),
+				candidateParity.checks, candidateParity.mismatches, candidateParity.checks ? (candidateParity.mismatches ? " <- CANDIDATES" : " <- OK") : "");
+			candidateParity = {};
 			text += fmt::format("[DCLF] scene delta: {} walks ({} full), evaluated {:.0f}/frame (max {}; per-frame {:.0f}, of them {:.0f} kept by the light path and {:.0f} moved by it; pending {:.0f}, fade {:.1f}, property {:.1f}, node {:.1f}, sun entry node {:.1f}, geometry {:.1f}), settling {:.1f}, lapsed {:.0f}, {:.0f} live slots; events per frame: {:.1f} property, {:.1f} node; {:.2f} inputs re-read changed; switch events {:.2f}/frame: {:.2f} changed, {:.2f} caught up by the render thread at ingestion ({:.2f} under attached subtrees or the world after a load; {:.2f} us/frame), {:.1f} entries classified again; face publications {:.1f}/frame: {:.1f} streams updated in place, {:.2f} shapes written\n",
 				t.walks, t.full, t.evaluated / n, t.evaluatedMax, t.perFrame / n, t.kept / n, t.moved / n, t.pending / n, t.fade / n, t.property / n, t.node / n, t.roots / n,
 				t.geometryDirty / n, t.settling / n, t.restored / n, t.live / n, t.propertyEvents / n, t.nodeEvents / n, t.reread / n,
