@@ -396,6 +396,10 @@ bool MinRadius() { return (CullFlags & 0x2000) != 0; }
 // The occlusion map's view (kCullFadeOnVisible): its occluders' fade roots as BSFadeNode::OnVisible tests them without
 // cameraRelatedUpdates (FadedOutOfOcclusion), instead of a shadow view's stood-in fading test.
 bool FadeOnVisible() { return (CullFlags & 0x4000) != 0; }
+// The key word a view reads of an input (GpuLayouts.h: kCullKeyShift): 0 its pipeline word and its rows' word (the main segments,
+// the reflection); otherwise a shadow view's, whose material row is the input's shadowRow - 1 a caster's key (ViewWords::shadowKey),
+// 2 and 3 an occlusion map's (occlusionKey[0], [1]). The shadow list holds every mode's casters and occluders once (U4b).
+uint KeyWord() { return (CullFlags >> 16) & 3; }
 
 // Object flags (Records.h), as the draw input carries them.
 // A synthetic main pass with the sun's bits (Records.h), and the object word's mark for a draw that misses every
@@ -634,6 +638,12 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	if (ViewBits != 0 && (inputs.Load(inputOffset + 16) & ViewBits) == 0)
 		return;
 	const uint objectIndex = inputs.Load(inputOffset + 32);
+	// The view's key and rows' words (KeyWord): a shadow view's are the view words' key of its family and the shadow row.
+	const uint keyWord = KeyWord();
+	const uint drawKey = keyWord != 0 ? inputs.Load(inputOffset + 16 + keyWord * 4) : input.x;
+	const uint rowsWord = keyWord != 0 ? inputs.Load(inputOffset + 52) : input.y;
+	if (drawKey == 0xFFFFFFFFu)
+		return;  // no key in the view's family: never an input its mask lets through
 	// The word the draw's root constants carry: the object index, and kObjectSunMiss when a synthetic pass with the
 	// sun's bits meets no cascade this frame. Tested and counted for every such input, drawn or not, so the count
 	// compares with the CPU's over the same inputs.
@@ -652,7 +662,8 @@ bool Occluded(float3 boundCentre, float boundRadius)
 		const float4 bound = ObjectRow(objectIndex, kObjectBoundRow);
 		objectWord |= (LocalShadowMask(bound.xyz, bound.w, (input.w & kObjectLandscapeLights) != 0) & 0xFu) << kObjectLocalShadowShift;
 	}
-	const bool drawable = (input.w & kInputDrawable) != 0;
+	// The drawable bit is the main family's (a scene entry's main part, U4c): a shadow view draws every input its bits select.
+	const bool drawable = keyWord != 0 || (input.w & kInputDrawable) != 0;
 	uint scratch;
 	const uint phase = CullPhase();
 
@@ -684,7 +695,7 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	// Decals: single-phase, fixed slot. Every decal input writes its slot, culled or not, so nothing a
 	// previous frame left there can be executed: a culled or undrawable decal writes the same sequence
 	// with an index count of zero, which the indirect draw fetches and skips.
-	const uint decalGroup = (input.w & kObjectDecal) ? (input.w >> kObjectDecalGroupShift) & 3 : 0;
+	const uint decalGroup = keyWord == 0 && (input.w & kObjectDecal) ? (input.w >> kObjectDecalGroupShift) & 3 : 0;
 	if (decalGroup != 0) {
 		if (phase != kPhaseColour && phase != kPhaseSingle)
 			return;  // the depth segment never submits one; belt and braces
@@ -820,7 +831,7 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	// visible and its visibility has been published.
 	if (!drawable)
 		return;
-	const uint pipeline = DrawPipeline(input.x);  // a shadow view's: the draw's bucket
+	const uint pipeline = DrawPipeline(drawKey);  // a shadow view's: the draw's bucket
 	// A draw's bucket: a shadow view's is its pipeline map entry (above); the depth segment's is its pipeline slot's (the rows' top
 	// 12 bits) in the slots' map, the group of slots sharing its depth pipeline (MainOpaquePass), kNoPipeline for a slot with none.
 	// A reflection face's likewise, its map sending a LOD slot to the bucket of its forward pipeline and every other slot to none
@@ -828,7 +839,7 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	uint bucketKey = pipeline;
 	if (BucketMapOffset != 0) {
 		ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
-		bucketKey = latch.Load(BucketMapOffset + (input.y >> 20) * 4);
+		bucketKey = latch.Load(BucketMapOffset + (rowsWord >> 20) * 4);
 	}
 	if (pipeline == kNoPipeline || bucketKey == kNoPipeline)
 		return;
@@ -845,7 +856,7 @@ bool Occluded(float3 boundCentre, float boundRadius)
 		return;  // outside the sets, like kNoPipeline; before any slot is taken, so the sorted range has no hole
 
 	// The draw's rows' addresses (its push data).
-	const uint4 rows = RowsOf(input.y);
+	const uint4 rows = RowsOf(rowsWord);
 
 	// One draw of the input's geometry, or - for a skin of several partitions - one per partition its mask
 	// names, walking the partitions' GeometryDraw links. Every draw is the same object: one record, one

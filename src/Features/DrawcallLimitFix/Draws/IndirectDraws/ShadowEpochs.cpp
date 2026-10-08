@@ -1307,7 +1307,7 @@ namespace DCLF
 				const auto& shapeView = target.views[index];
 				const auto& buckets = (*target.rows)[index++];
 				const std::uint32_t slot = OcclusionSlot(v), mode = OcclusionModeOf(v);
-				const auto inputCount = static_cast<std::uint32_t>(payload.ModeInputs(mode));
+				const auto inputCount = static_cast<std::uint32_t>(payload.Inputs());  // the whole shadow list (U4b)
 				// The view slot's blocks, which its push data names, into the latch (its counters are zeroed by the latched copies).
 				// The occluders, material rows, frame record, objects and geometries are in the ring entry this frame's shadow commit read.
 				WriteViewBlocks(latchBlock, latchLayout, latchSlot, slot, view);
@@ -1317,7 +1317,7 @@ namespace DCLF
 				// the roots of a new cell before the main camera has seen them.
 				auto latch = ShadowViewLatch(view, inputCount, frameNumber);
 				static const REL::Relocation<const std::uint8_t*> fadesOn{ REL::Offset(0x2032dfd) };
-				latch.cullFlags = 1u | kCullMinRadius | (*fadesOn.get() ? kCullFadeOnVisible : 0u);
+				latch.cullFlags = 1u | kCullMinRadius | (*fadesOn.get() ? kCullFadeOnVisible : 0u) | KeyWordOf(mode);
 				latch.viewBits = ShadowViewBits(mode, false);
 				latch.fadeStatesIndex = scene.FadeStatesReadIndex(frameNumber);
 				// The ring entry the shadow commit read (step 6e S2).
@@ -1523,12 +1523,15 @@ namespace DCLF
 				slotDrawn[index] = true;
 				// Its blocks into the latch; the epoch's latched copies take them to the view-blocks buffer and zero its counters.
 				WriteViewBlocks(latchBlock, latchLayout, latchSlot, slot, view);
-				const auto inputCount = static_cast<std::uint32_t>(payload.ModeInputs(view.modeIndex));
+				// The whole shadow list: the view's bits select its mode's inputs (U4b).
+				const auto inputCount = static_cast<std::uint32_t>(payload.Inputs());
 				// The view's values into its latch: frustum culling alone (mode 1), the single phase, and no
-				// engine-visibility gate - a caster is drawn whether or not the main camera kept it.
+				// engine-visibility gate - a caster is drawn whether or not the main camera kept it. The caster class is tested only
+				// by a class-split mode's views (VolumetricClass: not the paraboloids).
 				auto latch = ShadowViewLatch(view, inputCount, frameNumber);
-				latch.cullFlags = (view.hasViewProj ? (1u | (view.renderMode == 0xE ? kCullNoNearPlane : 0u)) : 0u) |
-				                  (view.casterClass ? kCullVolumetricOnly : kCullCastersOnly) | (view.sunView ? kCullSunEntry : 0u);
+				const std::uint32_t classFlags = view.casterClass ? kCullVolumetricOnly : view.modeIndex == kParabolicShadowMode ? 0u : kCullCastersOnly;
+				latch.cullFlags = (view.hasViewProj ? (1u | (view.renderMode == 0xE ? kCullNoNearPlane : 0u)) : 0u) | classFlags |
+				                  (view.sunView ? kCullSunEntry : 0u) | KeyWordOf(view.modeIndex);
 				latch.viewBits = ShadowViewBits(view.modeIndex, view.sunView);
 				latch.cullPlaneMask = view.cullPlaneMask;
 				std::memcpy(latch.cullPlanes, view.cullPlanes, sizeof(latch.cullPlanes));

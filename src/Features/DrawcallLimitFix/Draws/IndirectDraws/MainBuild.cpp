@@ -152,6 +152,8 @@ namespace DCLF::Draws
 			// An entry's draws, with the region's totals.
 			void RegionSetDraws(std::uint32_t i, std::uint8_t a_draws);
 			void RegionRemove(std::uint32_t o);
+			/** @brief Entry i written (the whole entry: its main part merged by the caller). */
+			void RegionWrite(std::uint32_t i, const DrawInput& a_entry);
 			/**
 			 * @brief A decal's blank input: undrawable, so BuildDrawsCS writes its slot as a zero-count draw, and naming no row past the
 			 * scene's buffers (a geometry row past them is the first's; no second stream).
@@ -733,7 +735,7 @@ namespace DCLF::Draws
 		// cannot draw is still an input, which BuildDraws writes as a zero-count draw (the loop's blank).
 		const bool decal = ObjectDecalGroup(object.flags) != 0;
 		const std::uint32_t ordinal = decal ? tables.decalOrdinal[o] : 0u;
-		const std::uint32_t partitions = decal ? 0u : PartitionsOf(tables, o);
+		const std::uint32_t partitions = PartitionsOf(tables, o);  // a decal of several never draws (below)
 		const bool drawable = InSet(o) && blocks.setIndex != Lookups::kNone && pair != r.pairs.end() && pair->second.ok && !(decal && PartitionsOf(tables, o));
 		// The pair's slot is its rows (RowsOf).
 		a_input = { drawable ? blocks.setIndex : 0u, drawable ? pair->second.slot : 0u, object.geometryIndex, object.flags | (drawable ? kInputDrawable : 0u),
@@ -802,23 +804,40 @@ namespace DCLF::Draws
 		return { 0, 0, object.geometryIndex < in.addresses.fit.geometryRows ? object.geometryIndex : 0u, object.flags, { MainMaskOf(tables, o) }, o, tables.decalOrdinal[o] };
 	}
 
+	void MainBuild::RegionWrite(std::uint32_t i, const DrawInput& a_entry)
+	{
+		auto& r = *region;
+		if (reuseKeptStorage)
+			r.inputs.Set(i, a_entry);
+		else {
+			r.inputs.Mutable()[i] = a_entry;
+			r.inputs.Mark(i);
+		}
+	}
+
 	void MainBuild::RegionRemove(std::uint32_t o)
 	{
 		auto& r = *region;
 		const std::uint32_t i = r.EntryOf(o);
-		if (i == kNoRegion)
+		if (i == kNoRegion || !(r.sideOf[i] & kSideMain))
 			return;
 		RegionRelease(r.pairOf[i]);
 		r.touched.push_back(o);
 		r.undrawable -= r.drawsOf[i] ? 0 : 1;
 		r.draws -= RegionDraws(r.drawsOf[i]);
 		r.decals -= r.drawsOf[i] == kRegionDecal ? 1 : 0;
+		if (r.sideOf[i] & kSideShadow) {
+			// The shadow build's words stay (the scene list, U4c): the entry is its alone.
+			r.pairOf[i] = kNoPair;
+			r.drawsOf[i] = 0;
+			r.sideOf[i] = kSideShadow;
+			DrawInput entry = r.inputs.Get()[i];
+			ClearMainPart(entry);
+			RegionWrite(i, entry);
+			return;
+		}
 		// The entry's columns follow the entry the region moves into its place.
-		const auto removal = r.Remove(o);
-		r.pairOf[removal.at] = r.pairOf[removal.from];
-		r.drawsOf[removal.at] = r.drawsOf[removal.from];
-		r.pairOf.pop_back();
-		r.drawsOf.pop_back();
+		r.RemoveEntry(o);
 	}
 
 	void MainBuild::RegionUpsert(std::uint32_t o)
@@ -832,12 +851,15 @@ namespace DCLF::Draws
 		const auto& object = tables.objects[o];
 		const std::uint64_t key = (object.flags & kObjectNoBindings) ? kNoPair : PairKeyOf(object);
 		std::uint32_t i = r.indexOf[o];
-		if (i == kNoRegion) {
+		if (i == kNoRegion || !(r.sideOf[i] & kSideMain)) {
 			// No share to stay within: the region and the loop together have at most an input per object, which the input buffer
-			// holds (ReserveSceneTables), and the sequence buffer holds every draw the scene can produce.
-			i = r.Add(o);
-			r.pairOf.push_back(key);
-			r.drawsOf.push_back(0);
+			// holds (ReserveSceneTables), and the sequence buffer holds every draw the scene can produce. An entry of the shadow
+			// build's alone takes the main part too (the scene list, U4c).
+			if (i == kNoRegion)
+				i = r.AddEntry(o, DrawInput{}, kSideMain);
+			else
+				r.sideOf[i] |= kSideMain;
+			r.pairOf[i] = key;
 			++r.undrawable;
 			if (key != kNoPair)
 				RegionAcquire(key);
@@ -849,12 +871,9 @@ namespace DCLF::Draws
 		}
 		DrawInput fresh{};
 		RegionSetDraws(i, RegionEntry(o, fresh));
-		if (reuseKeptStorage)
-			r.inputs.Set(i, fresh);
-		else {
-			r.inputs.Mutable()[i] = fresh;
-			r.inputs.Mark(i);
-		}
+		DrawInput entry = r.inputs.Get()[i];
+		SetMainPart(entry, fresh);
+		RegionWrite(i, entry);
 		r.touched.push_back(o);
 	}
 
@@ -872,8 +891,9 @@ namespace DCLF::Draws
 	{
 		auto& r = *region;
 		r.touched.clear();
-		// What the buffer holds is the version it was sent: what changes from here on is sent alone.
-		r.inputs.BeginBuild(in.residentUploaded);
+		// What the buffer holds is the version it was sent: what changes from here on is sent alone. Once a publication, whichever of
+		// the scene list's builds writes first (U4c).
+		r.Begin(in.residentUploaded);
 		// Why, by reason (the report's): the log, the segment, the tables shrunk, the scope, the buffers' fit.
 		const std::array<bool, kResyncReasons> reasons{ !r.cursor.Continues(tables.changeLog, in.tablesGeneration), r.segments != Segments(),
 			r.indexOf.size() > tables.objects.size(), r.wholeScene != wholeScene, r.fit != in.addresses.fit };
@@ -1105,10 +1125,12 @@ namespace DCLF::Draws
 			auto& inputs = r.inputs.Mutable();
 			for (std::uint32_t i = 0; i < inputs.size(); ++i) {
 				const auto key = r.pairOf[i];
-				if (std::find(changedPairs.begin(), changedPairs.end(), key) == changedPairs.end() &&
-					std::find(changedPipelines.begin(), changedPipelines.end(), static_cast<std::uint32_t>(key)) == changedPipelines.end())
+				if (!(r.sideOf[i] & kSideMain) || (std::find(changedPairs.begin(), changedPairs.end(), key) == changedPairs.end() &&
+														std::find(changedPipelines.begin(), changedPipelines.end(), static_cast<std::uint32_t>(key)) == changedPipelines.end()))
 					continue;
-				RegionSetDraws(i, RegionEntry(inputs[i].objectIndex, inputs[i]));
+				DrawInput fresh{};
+				RegionSetDraws(i, RegionEntry(inputs[i].objectIndex, fresh));
+				SetMainPart(inputs[i], fresh);
 				r.inputs.Mark(i);
 				r.touched.push_back(inputs[i].objectIndex);
 			}
@@ -1123,10 +1145,15 @@ namespace DCLF::Draws
 		if (ResidentDrawParityEnabled() && ParityDue(frameNumber)) {
 			const auto& inputs = r.inputs.Get();
 			for (std::uint32_t i = 0; i < inputs.size(); ++i) {
-				DrawInput expected;
+				// The main part of the entry (the shadow build's words are its parity's: CheckKeptShadow).
+				if (!(r.sideOf[i] & kSideMain))
+					continue;
+				DrawInput fresh{};
 				const std::uint32_t o = inputs[i].objectIndex;
 				const bool known = o < tables.objects.size() && RegionEligible(o);
-				const auto draws = known ? RegionEntry(o, expected) : std::uint8_t{ 0 };
+				const auto draws = known ? RegionEntry(o, fresh) : std::uint8_t{ 0 };
+				DrawInput expected = inputs[i];
+				SetMainPart(expected, fresh);
 				++out.residentParityChecks;
 				if (!known || draws != r.drawsOf[i] || std::memcmp(&expected, &inputs[i], sizeof(DrawInput)) != 0 || r.indexOf[o] != i) {
 					// The first few, with why.
@@ -1138,7 +1165,7 @@ namespace DCLF::Draws
 				}
 			}
 			for (std::uint32_t o = 0; o < tables.objects.size(); ++o)
-				if (RegionEligible(o) && (o >= r.indexOf.size() || r.indexOf[o] == kNoRegion))
+				if (RegionEligible(o) && !r.MainHolds(o))
 					++out.residentMissing;
 			// Every pair's witness as UpdateRegionPairs makes it, against the one it holds: a difference is a change no event named.
 			for (const auto& [key, pair] : r.pairs) {
@@ -1169,7 +1196,7 @@ namespace DCLF::Draws
 			if (o >= r.loopIndex.size())
 				continue;
 			const auto flags = o < tables.objects.size() ? tables.objects[o].flags : kObjectFree;
-			const bool inRegion = o < r.indexOf.size() && r.indexOf[o] != kNoRegion;
+			const bool inRegion = r.MainHolds(o);
 			const bool isCandidate = !(flags & kObjectFree) && (flags & (kObjectNoBindings | kObjectShadowOnly));
 			// The one list holds every segment's candidates: cull-only ones and decals too (their masks say whose).
 			const bool loop = !inRegion && !(flags & (kObjectFree | kObjectShadowOnly));
@@ -1198,7 +1225,7 @@ namespace DCLF::Draws
 		const auto& inputs = r.inputs.Get();
 		if (!out.objectState.empty()) {
 			for (std::uint32_t i = 0; i < inputs.size(); ++i)
-				if (inputs[i].objectIndex < out.objectState.size())
+				if ((r.sideOf[i] & kSideMain) && inputs[i].objectIndex < out.objectState.size())
 					out.objectState[inputs[i].objectIndex] = r.drawsOf[i] == kRegionDecal ? kObjectStateDecal :
 					                                         r.drawsOf[i]                  ? kObjectStateDrawable :
 					                                         r.pairOf[i] == kNoPair        ? static_cast<std::uint8_t>(Skip::CandidateOnly) :
@@ -1212,7 +1239,8 @@ namespace DCLF::Draws
 		// Every candidate is one whether the loop sees it or not (the report's "candidate-only").
 		out.skipped[static_cast<std::size_t>(Skip::CandidateOnly)] += static_cast<std::uint32_t>(r.candidates);
 		out.residentUndrawable = static_cast<std::uint32_t>(r.undrawable);
-		out.resident = r.inputs.View();
+		// Not the region's view: the shadow build writes its words into the scene list after this build, and the builds ahead give
+		// every payload the view once both have (RunAhead, U4c).
 		out.residentDraws = static_cast<std::uint32_t>(r.draws);
 		out.decalsDrawn += static_cast<std::uint32_t>(r.decals);
 		out.residentPairs = static_cast<std::uint32_t>(r.pairs.size());
@@ -1240,7 +1268,7 @@ namespace DCLF::Draws
 		currentObject = o;
 		const auto& object = tables.objects[o];
 		// A resident region's object: its draw input is the region's (above).
-		if (region && o < region->indexOf.size() && region->indexOf[o] != kNoRegion)
+		if (region && region->MainHolds(o))
 			return;
 		// A free slot is no object: not even a culling candidate.
 		if (object.flags & kObjectFree)
