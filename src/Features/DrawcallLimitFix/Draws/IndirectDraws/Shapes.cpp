@@ -105,8 +105,7 @@ namespace DCLF
 		}
 
 		// a_revision: a revision's (the rows' addresses it names: a ready growth's), else the commit's (the current versions').
-		MainShapeInputs MainShapeInputsOf(const Resources& a_resources, bool a_depthOnly, const SceneStore::Tables& a_tables, std::uint32_t a_drawBound,
-			bool a_revision)
+		MainShapeInputs MainShapeInputsOf(const Resources& a_resources, bool a_depthOnly, bool a_revision)
 		{
 			MainShapeInputs in;
 			in.depthOnly = a_depthOnly;
@@ -115,14 +114,6 @@ namespace DCLF
 			in.sequenceDecals = sizing.sequenceDecals;
 			in.materialRows = a_revision ? a_resources.materialRows.RevisionAddress() : a_resources.materialRows.address;
 			in.pipelineRows = a_revision ? a_resources.pipelineRows.RevisionAddress() : a_resources.pipelineRows.address;
-			in.drawBound = a_drawBound;
-			// The depth segment is given no decals (BuildDrawsCS).
-			if (!a_depthOnly)
-				in.decalBound = a_tables.decalCount;
-			if (const auto& previous = a_resources.published[a_depthOnly ? kDepthShape : kColourShape]) {
-				in.previousDraws = previous->drawCapacity;
-				in.previousDecals = previous->decalCapacity;
-			}
 			in.cullMode = ActiveToggles().cullMode;
 			in.latch = a_resources.latch;
 			in.latchLayout = a_resources.latchLayout;
@@ -136,11 +127,13 @@ namespace DCLF
 			frame->sequenceDecals = a_in.sequenceDecals;
 			frame->materialRows = a_in.materialRows;
 			frame->pipelineRows = a_in.pipelineRows;
-			// The max counts: every draw the scene can produce, within the sequence buffer's ranges, which hold them
-			// (ReserveMainSequences), growing only: a frame's count is on the GPU.
-			frame->drawCapacity = GrowCapacity(a_in.previousDraws, a_in.drawBound, a_in.sequenceDraws);
+			// The max counts: the sequence buffer's ranges, which hold every draw the scene can produce (ReserveMainSequences). Not the
+			// counts of the tables the shape was made from: a publication a revision covers may hold newer tables (a decal group's
+			// first decal, more draws), and its commit would find the shape short. They change with the buffer's growth alone, which
+			// a revision adopts. The depth segment is given no decals (BuildDrawsCS).
+			frame->drawCapacity = a_in.sequenceDraws;
 			for (std::uint32_t group = 0; group < kDecalGroups; ++group)
-				frame->decalCapacity[group] = GrowCapacity(a_in.previousDecals[group], a_in.decalBound[group], a_in.sequenceDecals);
+				frame->decalCapacity[group] = a_in.depthOnly ? 0u : a_in.sequenceDecals;
 			frame->width = a_in.viewport.width;
 			frame->height = a_in.viewport.height;
 			frame->minDepth = a_in.viewport.minDepth;
@@ -292,7 +285,7 @@ namespace DCLF
 			if (!parity.known[shape] || !indirect.valid)
 				continue;
 			const bool depthOnly = shape == kDepthShape;
-			auto in = MainShapeInputsOf(r, depthOnly, tables, impl->drawBound.Draws(), true);
+			auto in = MainShapeInputsOf(r, depthOnly, true);
 			in.viewport = parity.viewport[shape];
 			in.resourceHeap = resourceHeap;
 			in.samplerHeap = samplerHeap;

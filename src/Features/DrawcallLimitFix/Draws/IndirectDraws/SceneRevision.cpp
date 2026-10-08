@@ -5,16 +5,6 @@ namespace DCLF
 {
 	using org::async::RevisionFragment;
 
-	namespace
-	{
-		/** @brief CS_DCLF_REVISIONS: on unless 0 or off. */
-		bool RevisionsEnabled()
-		{
-			const auto& value = SwitchValue(Switch::Revisions);
-			return value != "0" && value != "off";
-		}
-	}
-
 	std::shared_ptr<const org::BufferVersion> Draws::VersionSet::Find(const org::VersionedBuffer& a_buffer) const noexcept
 	{
 		const void* key = a_buffer.Key();
@@ -58,7 +48,7 @@ namespace DCLF
 	bool Draws::Growths::Deferred()
 	{
 		auto* host = RenderGraphRuntime::Get().Host();
-		return RevisionsEnabled() && host && host->AsyncEpochs() && host->Uploads();
+		return host && host->AsyncEpochs() && host->Uploads();
 	}
 
 	namespace
@@ -306,8 +296,6 @@ namespace DCLF
 		using R = SceneRevisions;
 		a_shape = nullptr;
 		a_recordings = nullptr;
-		if (!RevisionsEnabled())
-			return false;
 		// A frame no revision covers draws nothing of DCLF's (SceneStore::WithdrawSet): its commits prepare an empty epoch.
 		if (SceneStore::Get().SetWithdrawn()) {
 			NoteRevisionMiss(a_epoch, R::kWithdrawn);
@@ -336,7 +324,7 @@ namespace DCLF
 
 	bool IndirectDraws::SetApplicable(std::uint32_t a_commitFrame) const
 	{
-		if (failed || !RevisionsEnabled())
+		if (failed)
 			return true;
 		auto& rv = impl->revisions;
 		// No revision was made for the commit (no resources yet, a load screen): the claims are not a revision's.
@@ -357,7 +345,7 @@ namespace DCLF
 		// Explicit while scene revisions draw: an extension added or removed during a frame waits for this point, so the graph a
 		// frame's revision was recorded on runs through that frame (a build invalidates every recording: the frame after one is the
 		// engine's, DecideCoverage). Without them (or failed), the graph builds at its next submission, as before.
-		const bool explicitBuilds = !failed && RevisionsEnabled();
+		const bool explicitBuilds = !failed;
 		if (rv.explicitBuilds != explicitBuilds) {
 			rv.explicitBuilds = explicitBuilds;
 			host->SetExplicitBuilds(explicitBuilds);
@@ -378,7 +366,7 @@ namespace DCLF
 		using R = Impl::SceneRevisions;
 		auto& rv = impl->revisions;
 		const auto& reflection = impl->reflection;
-		if (failed || !RevisionsEnabled()) {
+		if (failed) {
 			rv.covered.fill(true);
 			impl->reflectionCovered = true;
 			PassCapture::Get().SetReflectionCovered(true);
@@ -423,12 +411,12 @@ namespace DCLF
 
 	bool IndirectDraws::Impl::EpochCovered(std::uint32_t a_epoch) const
 	{
-		return !RevisionsEnabled() || (a_epoch < revisions.covered.size() && revisions.covered[a_epoch]);
+		return a_epoch < revisions.covered.size() && revisions.covered[a_epoch];
 	}
 
 	bool IndirectDraws::RevisionClaims() const
 	{
-		return !failed && RevisionsEnabled();
+		return !failed;
 	}
 
 	void IndirectDraws::NoteSetApplied(std::uint32_t a_commitFrame)
@@ -468,8 +456,6 @@ namespace DCLF
 	void IndirectDraws::Impl::ChooseRevisionRecording(std::uint32_t a_epoch, const std::function<std::size_t(const RevisionFragment&)>& a_match)
 	{
 		using R = SceneRevisions;
-		if (!RevisionsEnabled())
-			return;
 		auto& coverage = revisions.coverage[a_epoch];
 		const auto& active = revisions.active;
 		auto* host = RenderGraphRuntime::Get().Host();
@@ -515,17 +501,16 @@ namespace DCLF
 			s.changed = s.requested = s.refused = 0;
 		}
 		std::string covered;
-		if (RevisionsEnabled())
-			for (std::uint32_t e = 0; e < SceneRevisions::kEpochs; ++e) {
-				auto& c = rv.coverage[e];
-				std::string misses;
-				for (std::uint32_t m = 0; m < SceneRevisions::kMisses; ++m)
-					if (c.missed[m])
-						misses += fmt::format("{}{} {}", misses.empty() ? "" : ", ", SceneRevisions::kMissNames[m], c.missed[m]);
-				covered += fmt::format("{}{} {} by the revision{}", covered.empty() ? "" : "; ", SceneRevisions::kNames[e], c.covered,
-					misses.empty() ? std::string() : " (own: " + misses + ")");
-				c = {};
-			}
+		for (std::uint32_t e = 0; e < SceneRevisions::kEpochs; ++e) {
+			auto& c = rv.coverage[e];
+			std::string misses;
+			for (std::uint32_t m = 0; m < SceneRevisions::kMisses; ++m)
+				if (c.missed[m])
+					misses += fmt::format("{}{} {}", misses.empty() ? "" : ", ", SceneRevisions::kMissNames[m], c.missed[m]);
+			covered += fmt::format("{}{} {} by the revision{}", covered.empty() ? "" : "; ", SceneRevisions::kNames[e], c.covered,
+				misses.empty() ? std::string() : " (own: " + misses + ")");
+			c = {};
+		}
 		const auto& assembled = rv.assembler.GetStats();
 		const auto growths = Growths::Get().Report();
 		std::string text = fmt::format("[DCLF] scene revisions (R3c): {} sealed ({} version sets), {} published, {} selected (made {:.2f} frames before on average), {} pending; "
@@ -538,7 +523,7 @@ namespace DCLF
 		if (!covered.empty())
 			text += fmt::format("[DCLF] epochs submitted (R3c): {}; {} values staged that a revision's latched copies lacked; {} publications passed over at a frame's start for want of their commit's revision\n", covered,
 				std::exchange(rv.latchedMisses, 0), std::exchange(rv.setsHeld, 0));
-		if (RevisionsEnabled()) {
+		{
 			std::string uncovered;
 			for (std::uint32_t e = 0; e < SceneRevisions::kEpochs; ++e)
 				uncovered += fmt::format("{}{} {}", e ? ", " : "", SceneRevisions::kNames[e], std::exchange(rv.uncovered[e], 0));

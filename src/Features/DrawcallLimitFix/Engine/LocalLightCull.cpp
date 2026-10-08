@@ -61,6 +61,9 @@ namespace DCLF::LocalLightCull
 		/** @brief One category node's children less its excluded entries, in child order. */
 		struct CategoryFilter
 		{
+			// The node, held: the snapshots key it and a later selection builds it again from here, so it must not be freed (nor its
+			// address reused by another node) while a snapshot names it. Released with the snapshot, at Present.
+			RE::NiPointer<RE::NiNode> node;
 			std::vector<RE::NiPointer<RE::NiAVObject>> children;
 			std::uint32_t cut = 0;               // the excluded entries left out
 			std::uint32_t empty = 0;             // and the children holding no geometry (a tracked category node's)
@@ -234,6 +237,7 @@ namespace DCLF::LocalLightCull
 		std::shared_ptr<CategoryFilter> BuildCategory(const RE::NiNode& a_node, const SunExclusion& a_exclusion)
 		{
 			auto filter = std::make_shared<CategoryFilter>();
+			filter->node.reset(const_cast<RE::NiNode*>(&a_node));
 			const auto& children = a_node.GetChildren();
 			const bool tracked = SceneStore::Get().IsCategoryNode(&a_node);
 			filter->children.reserve(children.size());
@@ -278,11 +282,12 @@ namespace DCLF::LocalLightCull
 			next->entriesAppeared = appeared;
 			if (whole) {
 				for (const auto& [entry, index] : a_exclusion->candidates->entries) {
-					if (!a_exclusion->excluded[index] || !entry->parent || !ExactNiNode(entry->parent))
+					// The parent read once: a loader thread may detach the entry meanwhile.
+					auto* parent = a_exclusion->excluded[index] ? entry->parent : nullptr;
+					if (!parent || !ExactNiNode(parent))
 						continue;
-					const RE::NiAVObject* parent = entry->parent;
 					if (!next->nodes.contains(parent)) {
-						next->nodes.emplace(parent, BuildCategory(*entry->parent, *a_exclusion));
+						next->nodes.emplace(parent, BuildCategory(*parent, *a_exclusion));
 						++filterStats.nodesRebuilt;
 					}
 				}
@@ -291,7 +296,7 @@ namespace DCLF::LocalLightCull
 				next->nodes = filterBuilt->nodes;
 				for (auto& [node, category] : next->nodes)
 					if (category->dirty.load(std::memory_order_acquire) || (appearedNow && category->empty)) {
-						category = BuildCategory(*static_cast<const RE::NiNode*>(node), *a_exclusion);
+						category = BuildCategory(*category->node, *a_exclusion);
 						++filterStats.nodesRebuilt;
 					}
 			}
