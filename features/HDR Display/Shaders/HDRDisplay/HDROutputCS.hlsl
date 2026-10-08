@@ -46,7 +46,7 @@ cbuffer PerFrame : register(b0)
 
 		if (applyAutoHDR > 0.5) {
 			float3 outputColor = sceneIsLinear ? scene.xyz : TransferFunctions::SignedGamma22ToLinear(scene.xyz);
-			outputColor = DisplayMapping::PumboAutoHDR(outputColor, SharedData::HDRData.z, SharedData::HDRData.y, 2.75, 1.0);
+			outputColor = DisplayMapping::PumboAutoHDR(outputColor, peakNits, paperWhite, 2.75, 1.0);
 			scene.xyz = sceneIsLinear ? outputColor : TransferFunctions::LinearToSignedGamma22(outputColor);
 		}
 

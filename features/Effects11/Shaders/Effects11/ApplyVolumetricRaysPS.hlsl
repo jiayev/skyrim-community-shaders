@@ -43,7 +43,7 @@ float UpsampleScattering(float2 fullResPixel, float fullResDepth)
 	[unroll]
 	for (uint i = 0; i < 4; i++) {
 		int2 tap = clamp(basePixel + offsets[i], int2(0, 0), ScreenSizeMin1);
-		float tapDepth = SharedData::GetScreenDepth(RaymarchDepthTexture[tap]);
+		float tapDepth = RaymarchDepthTexture[tap];
 		float relativeDelta = abs(referenceDepth - tapDepth) / max(referenceDepth, 1e-4);
 		float weight = bilinearWeights[i] * rcp(0.01 + relativeDelta);
 		weightedSum += weight * BlurredShadowTexture[tap];

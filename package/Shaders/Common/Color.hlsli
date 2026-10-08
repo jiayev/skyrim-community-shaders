@@ -290,7 +290,6 @@ namespace Color
 // https://github.com/Filoppi/Luma-Framework
 // ============================================================================
 
-static const float sRGB_WhiteLevelNits = 80.0;
 static const float HDR10_MaxWhiteNits = 10000.0;
 
 #define GCT_NONE 0
