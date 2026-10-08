@@ -17,19 +17,27 @@ namespace DCLF
 	 * Step F3 builds it beside the live reads and checks it (CS_DCLF_MIRROR_PARITY): the render thread captures a slice of the
 	 * tracked objects live at the frame's start (the probe), and the scene work compares it with the mirror after the frame's
 	 * events. A field that differs is
-	 * - evented: an event named the object since it was last captured (a hook that carries no value yet: F3b);
-	 * - late: an event named it in the next batch (pushed after the drain);
-	 * - missed: no event named it (a writer no hook sees: F3c).
+	 * - evented: an event without values named the object since it was last captured (a hook that carries no value yet);
+	 * - late: the next batch names it (an update of the field, or an event without values: pushed after the drain);
+	 * - missed: nothing named it (a writer no hook sees: F3c).
+	 * An update (step F3b) names only its fields: a field it did not carry that differs is late or missed.
 	 */
 	class SceneMirror
 	{
 	public:
 		using KeySet = ankerl::unordered_dense::set<const void*>;
+		// By object and record type (Key), the fields the batch's updates carried.
+		using FieldMap = ankerl::unordered_dense::map<std::uintptr_t, std::uint32_t>;
+		static std::uintptr_t Key(const void* a_object, std::uint8_t a_type) { return reinterpret_cast<std::uintptr_t>(a_object) | a_type; }
+		/** @brief The record type (node 0, geometry 1, property 2, alpha 3) and key of an update. */
+		static std::pair<std::uint8_t, const void*> TypeOf(const SceneCapture::Update& a_update);
 
 		/** @brief A capture's records, newest wins. */
 		void Apply(const SceneCapture::Records& a_records);
 		/** @brief A detached subtree: its root (taken off its parent's children) and every object under it. */
 		void Detach(const void* a_root, std::span<RE::BSGeometry* const> a_geometries, std::span<const void* const> a_nodes);
+		/** @brief A hook's values into the record, when the mirror holds one (an object out of the world has none). */
+		void Update(const SceneCapture::Update& a_update);
 		void Clear();
 
 		const SceneCapture::NodeRecord* Node(const void* a_key) const;
@@ -41,7 +49,7 @@ namespace DCLF
 		 * @brief The parity: the last probe's pending differences resolved by this batch's event keys (late or missed), then this
 		 * probe against the mirror (a difference whose object an event of the probe's batch named is evented, else pending).
 		 */
-		void Check(const SceneCapture::Records& a_probe, const KeySet& a_eventKeys);
+		void Check(const SceneCapture::Records& a_probe, const KeySet& a_eventKeys, const FieldMap& a_eventFields);
 		/** @brief Since the last call: the records held and what the parity found. Empty when nothing to say. */
 		std::string Report();
 
@@ -81,6 +89,8 @@ namespace DCLF
 			std::array<std::array<std::string, 16>, kTypes> firstMissedBy;
 			std::array<std::uint64_t, 32> flagBitsMissed{}, flagBitsEvented{};
 		} tally;
-		std::uint64_t applied = 0, detached = 0;
+		std::uint64_t applied = 0, detached = 0, updates = 0, updatesUnheld = 0;
+		// The updates applied, by record type and field.
+		std::array<std::array<std::uint64_t, 16>, kTypes> updated{};
 	};
 }

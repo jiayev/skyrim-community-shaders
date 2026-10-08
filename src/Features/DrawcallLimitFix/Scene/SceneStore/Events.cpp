@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Diagnostics/MirrorWatch.h"
 
 
 namespace DCLF::Scene
@@ -78,23 +79,88 @@ namespace DCLF::Scene
 			auto* property = geometry ? netimmerse_cast<RE::BSLightingShaderProperty*>(geometry->GetGeometryRuntimeData().shaderProperty.get()) : nullptr;
 			const RE::NiColor* before = property ? property->emissiveColor : nullptr;
 			const auto result = func(a_object, a_colour);
-			if (property && property->emissiveColor != before)
+			if (property && property->emissiveColor != before) {
 				PushProperty(property);
+				PushPropertyUpdate(property, SceneCapture::PropertyRecord::kEmissive);
+			}
 			return result;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_14147aa20: a fade node's placement snap (fadeSnapEvents).
+	// FUN_14147aa20: a fade node's placement snap (fadeSnapEvents). The cell attaches (FUN_1402d1280, FUN_1402d5090) call it after
+	// their own writes of the node's fade statics (the LOD type's `and`/`or` at +0x153, the range through FUN_14021f200), so its
+	// update carries them.
 	struct FadeSnap
 	{
 		static std::uint64_t thunk(RE::NiAVObject* a_node, void* a_camera)
 		{
 			DCLF_FRAME_TRACE("Events.cpp:85");  // TEMP frame trace
 			const auto result = func(a_node, a_camera);
-			if (a_node)
+			if (a_node) {
 				fadeSnapEvents.Push(a_node);
+				if (netimmerse_cast<RE::BSFadeNode*>(a_node))
+					PushNodeUpdate(a_node, kFadeStatics);
+			}
 			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_1402d1280 (cell, reference) and FUN_1402d5090 (cell, reference, flag): a reference's 3D placed in its cell. They write the
+	// fade node's LOD type inline (`and`/`or` at +0x153: 10 for a reference flagged so, 6 for a distant one) around the range
+	// (FUN_14021f200) and snap it only on one branch (the save-load or sky cell branch skips the snap): the statics after the call.
+	inline void PushReferenceFadeStatics(RE::TESObjectREFR* a_reference)
+	{
+		auto* root = a_reference ? a_reference->Get3D() : nullptr;
+		if (auto* fade = root ? root->AsFadeNode() : nullptr) {
+			PushNodeUpdate(fade, kFadeStatics);
+			// CS_DCLF_MIRROR_WATCH: a placed node in the world, its statics just set, is watched for the next writer.
+			if (MirrorWatch::Enabled() && SceneCapture::InWorld(fade))
+				MirrorWatch::Arm(fade);
+		}
+	}
+
+	struct CellPlaceReference
+	{
+		static void thunk(RE::TESObjectCELL* a_cell, RE::TESObjectREFR* a_reference)
+		{
+			func(a_cell, a_reference);
+			PushReferenceFadeStatics(a_reference);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct CellPlaceReferenceAt
+	{
+		static void* thunk(RE::TESObjectCELL* a_cell, RE::TESObjectREFR* a_reference, bool a_snap)
+		{
+			auto* result = func(a_cell, a_reference, a_snap);
+			PushReferenceFadeStatics(a_reference);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_14147a9b0 (node, near, far): the fade node's range (+0x128, +0x12C; near clamped to a minimum, far to twice it), from the
+	// model and reference attach (FUN_14021f200, from the node's radius) and an FX path (FUN_1407cfba0). Its only writer.
+	struct FadeSetRange
+	{
+		static void thunk(RE::BSFadeNode* a_this, float a_near, float a_far)
+		{
+			func(a_this, a_near, a_far);
+			PushNodeUpdate(a_this, SceneCapture::NodeRecord::kFadeNear | SceneCapture::NodeRecord::kFadeFar);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_14147aa00 (node, type): the fade node's LOD type (+0x153 & 0xF), from the model processor and the reference 3D paths.
+	struct FadeSetLodType
+	{
+		static void thunk(RE::BSFadeNode* a_this, std::uint8_t a_type)
+		{
+			func(a_this, a_type);
+			PushNodeUpdate(a_this, SceneCapture::NodeRecord::kFadeType);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -126,8 +192,11 @@ namespace DCLF::Scene
 			DCLF_FRAME_TRACE("Events.cpp:117");  // TEMP frame trace
 			const auto before = a_this->flags.underlying();
 			func(a_this, a_flag, a_set);
-			if (a_this->flags.underlying() != before)
+			if (a_this->flags.underlying() != before) {
 				PushProperty(a_this);
+				// The glints follow kVertexLighting (CaptureProperty).
+				PushPropertyUpdate(a_this, SceneCapture::PropertyRecord::kFlags | SceneCapture::PropertyRecord::kMaterialOther);
+			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -139,8 +208,11 @@ namespace DCLF::Scene
 			DCLF_FRAME_TRACE("Events.cpp:129");  // TEMP frame trace
 			const auto* before = a_this->material;
 			func(a_this, a_material, a_unique);
-			if (a_this->material != before)
+			if (a_this->material != before) {
 				PushProperty(a_this);
+				PushPropertyUpdate(a_this, SceneCapture::PropertyRecord::kMaterial | SceneCapture::PropertyRecord::kMaterialAlpha |
+				                               SceneCapture::PropertyRecord::kMaterialOther);
+			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -155,8 +227,10 @@ namespace DCLF::Scene
 			const float before = material ? material->materialAlpha : 0.0f;
 			func(a_this, a_alpha);
 			material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_this->material);
-			if (material && std::bit_cast<std::uint32_t>(material->materialAlpha) != std::bit_cast<std::uint32_t>(before))
+			if (material && std::bit_cast<std::uint32_t>(material->materialAlpha) != std::bit_cast<std::uint32_t>(before)) {
 				PushProperty(a_this);
+				PushPropertyUpdate(a_this, SceneCapture::PropertyRecord::kMaterialAlpha);
+			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -169,10 +243,13 @@ namespace DCLF::Scene
 			func(a_target, a_controller);
 			if (!a_target)
 				return;
-			if (auto* object = netimmerse_cast<RE::NiAVObject*>(a_target))
+			if (auto* object = netimmerse_cast<RE::NiAVObject*>(a_target)) {
 				PushNode(object);
-			else
+				PushNodeUpdate(object, SceneCapture::NodeRecord::kControllers);
+			} else {
 				PushProperty(a_target);
+				PushPropertyUpdate(netimmerse_cast<RE::BSShaderProperty*>(a_target), SceneCapture::PropertyRecord::kControllers);
+			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -524,22 +601,19 @@ namespace DCLF
 			if (!loadingCarry)
 				loadingCarry = std::make_shared<EventBatch>();
 			loadingCarry->AppendMirror(tracker.Drain());
-			// The other queues are discarded for the tracking, but the objects they name are kept for the mirror's parity.
+			// The other queues are discarded for the tracking; the objects the ones without values name are kept for the mirror's
+			// parity.
 			auto& named = loadingCarry->mirrorNamed;
 			auto keep = [&named](const void* a_key) { named.push_back(a_key); };
 			{
 				std::vector<const RE::BSFadeNode*> fades;
 				DrainFadeEvents(fades);
-				named.insert(named.end(), fades.begin(), fades.end());
 				std::vector<const void*> keys;
 				DrainPropertyEvents(keys);
 				DrainLodFadeEvents(keys);
 				DrainEmittanceEvents(keys);
-				named.insert(named.end(), keys.begin(), keys.end());
 				std::vector<RE::NiPointer<RE::NiAVObject>> nodes;
 				DrainNodeEvents(nodes);
-				for (const auto& node : nodes)
-					keep(node.get());
 			}
 			fadeChanged.clear();
 			propertyChanged.clear();
@@ -548,7 +622,7 @@ namespace DCLF
 			lodSegmentEvents.Drain(keep);
 			moveEvents.Discard();
 			movedFrame.clear();
-			hiddenEvents.Drain(keep);
+			hiddenEvents.Discard();
 			// The switches are brought up to date at the first ingestion after the load (CatchUpSwitches); PrimaryCull reads them all
 			// again.
 			worldCatchUpPending = true;
@@ -680,7 +754,7 @@ namespace DCLF
 					++stats.attachedEvents;
 					if (!categoryNodes.empty())
 						AddSubtree(event->node.get());
-				} else {
+				} else if (event->type == SceneTracker::EventType::Detached) {
 					++stats.detachedEvents;
 					detached.insert(detached.end(), event->removed.begin(), event->removed.end());
 				}
@@ -862,6 +936,14 @@ namespace DCLF
 		stl::detour_thunk<LodLevelUpdate>(REL::Offset(kLodLevelUpdate).address());
 		constexpr std::uintptr_t kFadeSnap = 0x147aa20;             // FUN_14147aa20: a fade node's placement snap
 		stl::detour_thunk<FadeSnap>(REL::Offset(kFadeSnap).address());
+		constexpr std::uintptr_t kFadeSetRange = 0x147a9b0;         // FUN_14147a9b0: a fade node's near and far
+		constexpr std::uintptr_t kFadeSetLodType = 0x147aa00;       // FUN_14147aa00: a fade node's LOD type
+		stl::detour_thunk<FadeSetRange>(REL::Offset(kFadeSetRange).address());
+		stl::detour_thunk<FadeSetLodType>(REL::Offset(kFadeSetLodType).address());
+		constexpr std::uintptr_t kCellPlaceReference = 0x2d1280;    // FUN_1402d1280: a reference's 3D placed in its cell
+		constexpr std::uintptr_t kCellPlaceReferenceAt = 0x2d5090;  // FUN_1402d5090: the same, another path
+		stl::detour_thunk<CellPlaceReference>(REL::Offset(kCellPlaceReference).address());
+		stl::detour_thunk<CellPlaceReferenceAt>(REL::Offset(kCellPlaceReferenceAt).address());
 		stl::detour_thunk<PropertySetFlags>(REL::Offset(kPropertySetFlags).address());
 		stl::detour_thunk<PropertySetMaterial>(REL::Offset(kPropertySetMaterial).address());
 		stl::detour_thunk<PrependController>(REL::Offset(kPrependController).address());
@@ -938,21 +1020,30 @@ namespace DCLF
 	void SceneStore::ApplyMirrorEvents(const EventBatch& a_batch)
 	{
 		ZoneScopedN("CS.DCLF.Scene.Mirror");
+		const bool parity = SwitchEnabled(Switch::MirrorParity);
 		auto apply = [&](const SceneTracker::Event* a_head) {
 			for (const auto* event = a_head; event; event = event->next) {
 				if (event->type == SceneTracker::EventType::Attached) {
 					if (event->captured)
 						mirror.Apply(*event->captured);
-				} else if (event->detachedRoot) {
-					mirror.Detach(event->detachedRoot, event->removed, event->removedNodes);
+				} else if (event->type == SceneTracker::EventType::Detached) {
+					if (event->detachedRoot)
+						mirror.Detach(event->detachedRoot, event->removed, event->removedNodes);
+				} else {
+					mirror.Update(event->update);
+					if (parity) {
+						const auto [type, key] = SceneMirror::TypeOf(event->update);
+						mirrorEventFields[SceneMirror::Key(key, type)] |= event->update.fields;
+					}
 				}
 			}
 		};
 		apply(a_batch.mirrorHead);
 		apply(a_batch.head);
-		if (!SwitchEnabled(Switch::MirrorParity))
+		if (!parity)
 			return;
-		// The objects the batch's events named: a field the probe finds different on one of them has a hook (step 6e F3).
+		// The objects the batch's events without values named: a field the probe finds different on one of them has a hook that
+		// carries no value (step 6e F3). The fade, property, node and hidden events' values are updates (F3b).
 		auto add = [&](const auto& a_keys) {
 			for (const auto& key : a_keys) {
 				if constexpr (requires { key.get(); })
@@ -964,9 +1055,6 @@ namespace DCLF
 			}
 		};
 		add(a_batch.fadeSnaps);
-		add(a_batch.fades);
-		add(a_batch.properties);
-		add(a_batch.nodes);
 		add(a_batch.switches);
 		add(a_batch.lodSegments);
 		add(a_batch.mirrorNamed);
@@ -1001,14 +1089,13 @@ namespace DCLF
 
 	void SceneStore::CheckMirror()
 	{
-		if (!mirrorProbe) {
-			mirrorEventKeys.clear();
-			return;
+		if (mirrorProbe) {
+			ZoneScopedN("CS.DCLF.Scene.MirrorParity");
+			mirror.Check(*mirrorProbe, mirrorEventKeys, mirrorEventFields);
+			mirrorProbe.reset();
 		}
-		ZoneScopedN("CS.DCLF.Scene.MirrorParity");
-		mirror.Check(*mirrorProbe, mirrorEventKeys);
-		mirrorProbe.reset();
 		mirrorEventKeys.clear();
+		mirrorEventFields.clear();
 	}
 
 	void SceneStore::CatchUpSwitches(std::span<RE::NiAVObject* const> a_attached, std::span<const SwitchEvent> a_switches)

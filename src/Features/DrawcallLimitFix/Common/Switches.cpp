@@ -123,6 +123,7 @@ namespace DCLF
 			{ SlotProbe, "CS_DCLF_SLOT_PROBE", D, N, false, "1: slot lifetime statistics in the report" },
 			{ DecalOrderProbe, "CS_DCLF_DECAL_ORDER_PROBE", D, N, false, "1: the main pass's decal registration order against the scene lists' order" },
 			{ HiddenWatch, "CS_DCLF_HIDDEN_WATCH", D, N, false, "1: hardware watchpoints name the store behind a hidden change no event announced (with walk parity)" },
+			{ MirrorWatch, "CS_DCLF_MIRROR_WATCH", D, N, false, "1: hardware watchpoints on a fade node's statics after its placement name the writers the mirror misses" },
 			{ InputWatch, "CS_DCLF_INPUT_WATCH", D, N, false, "1: which of a per-frame entry's classify and shading inputs changed when the light path re-read them" },
 			{ DecalOrder, "CS_DCLF_DECAL_ORDER", F, N, false, "engine: member decals draw in the order of the frame's scene lists, as the engine's (which reorders them whenever a root before them is shown or hidden); stable (default): the scene's order, rewritten only when the member decals change" },
 			{ TableStart, "CS_DCLF_TABLE_START", D, N, false, "small: the growable GPU tables start with a few rows, so that growth runs early and often" },

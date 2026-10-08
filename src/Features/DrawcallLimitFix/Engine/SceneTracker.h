@@ -24,6 +24,7 @@ namespace DCLF
 		{
 			Attached,
 			Detached,
+			Updated,  // step 6e F3b: a hook's values for the mirror (update), in the same order as the attaches and detaches
 		};
 
 		struct Event
@@ -37,6 +38,7 @@ namespace DCLF
 			std::unique_ptr<SceneCapture::Records> captured;
 			const void* detachedRoot = nullptr;
 			std::vector<const void*> removedNodes;
+			SceneCapture::Update update;
 		};
 
 		static SceneTracker& Get();
@@ -56,6 +58,9 @@ namespace DCLF
 
 		void PushAttached(RE::NiAVObject* a_child);
 		void PushDetached(RE::NiAVObject* a_child);
+		/** @brief A hook's values (after its write, on the writer's thread): one stack with the attaches and detaches, so an address a
+		 * detach let go and an attach took again is never given an earlier object's values. */
+		void PushUpdate(SceneCapture::Update&& a_update);
 
 		static void CollectGeometry(RE::NiAVObject* a_root, std::vector<RE::BSGeometry*>& a_out, std::vector<const void*>* a_nodes = nullptr);
 

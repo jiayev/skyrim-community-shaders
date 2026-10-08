@@ -1522,6 +1522,26 @@ resident-draw, set and fade parity; motion m28/m29).
     - missed, F3c: geometry property and alpha pointer swaps (LOD terrain blocks: 'Block (3, 0)', 'objHD-LargeRef'), property flags
       and material changes with no SetFlags/SetMaterial, hidden bits on objects no patched store names (the water's 'CurrentPlane'),
       the LOD type on the sky's clouds, rigid body motion, dismember editorVisible, flag bits 11/12/20.
+  - *F3b: the hooks carry values* (y42-y49, m72). An update (SceneCapture::Update) is the fields a writer changed, captured after
+    the write on the writer's thread, and goes onto SceneTracker's stack as a third event type (Updated), in one order with the
+    attaches and detaches: an address a detach let go and an attach took again never gets an earlier object's values. The mirror
+    applies an update into the record it holds (SceneMirror::Update) and ignores one for an object out of the world (its attach
+    captures it whole). Carried: the hidden bit (the 464 patched stores' stubs), property flags (and the glints they decide),
+    material, material alpha, external emittance and controllers (the property setters' detours), node controllers
+    (PrependController), the fade range (a new detour on its only setter, FUN_14147a9b0), the LOD type (FUN_14147aa00, its setter
+    for the model and 3D paths), and the fade statics after the cell's placement of a reference (FUN_1402d1280, FUN_1402d5090: new
+    detours; they write the LOD type inline, and one branch skips the fade snap). The parity names a field only by an update that
+    carried it; the events without values (switches, fade snaps, LOD segments) still name the object.
+    Found on the way: the stale fade fields (about 10,500 a window, every one captured during the load) were the capture's own: it
+    read a fade node's statics only when netimmerse_cast<BSFadeNode*> passed, while the engine and the hooks reach fade nodes by the
+    vtable's AsFadeNode, so the updates filled records the probe read as zero. The capture uses AsFadeNode now. +0x109's 0x40 is the
+    cull's, every frame (a watchpoint showed it), and is not the record's. CS_DCLF_MIRROR_WATCH (Diagnostics/MirrorWatch): hardware
+    watchpoints on a fade node's statics after its placement (1, or a node's name), the writer named by the instruction.
+    Measured: about 50k updates a window at the bridge (nearly all hidden-bit flips by the culls' stores), 92k in motion (32k to
+    objects out of the world). Mirror parity: late 0; hidden, property flags and material, fade range and type all 0 missed (y41:
+    3.6k, 1k, 7k, 4.5k). Left for F3c (no hook): node flag bits 11/12/20, rigid body motion, renames, dismember, geometry property
+    and alpha swaps (LOD blocks), the property's fade node; the geometry alpha the LOD segment events name (evented). Standard
+    parities as y41/m71.
 
 ## Implemented foundations
 

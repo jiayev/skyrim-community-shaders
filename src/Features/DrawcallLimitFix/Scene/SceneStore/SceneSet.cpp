@@ -645,6 +645,7 @@ namespace DCLF
 		const auto captureStart = std::chrono::steady_clock::now();
 		frameGlobals = FrameGlobals::Capture();
 		SceneCapture::SetMainThread(::GetCurrentThreadId());
+		SceneCapture::SetFrame(frame);
 		captureNs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - captureStart).count());
 		++captureFrames;
 		frameMembershipWitness = PrimaryCull::Get().SampleMembershipWitness();

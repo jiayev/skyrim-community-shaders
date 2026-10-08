@@ -93,6 +93,49 @@ namespace DCLF
 		}
 	}
 
+	std::pair<std::uint8_t, const void*> SceneMirror::TypeOf(const SceneCapture::Update& a_update)
+	{
+		return std::visit(
+			[&](const auto& a_record) -> std::pair<std::uint8_t, const void*> {
+				using T = std::decay_t<decltype(a_record)>;
+				return { static_cast<std::uint8_t>(std::is_same_v<T, NodeRecord> ? 0 : std::is_same_v<T, PropertyRecord> ? 2 : 3), a_record.key };
+			},
+			a_update.record);
+	}
+
+	void SceneMirror::Update(const SceneCapture::Update& a_update)
+	{
+		++updates;
+		bool held = false;
+		std::visit(
+			[&](const auto& a_record) {
+				using T = std::decay_t<decltype(a_record)>;
+				if constexpr (std::is_same_v<T, NodeRecord>) {
+					if (const auto it = nodes.find(a_record.key); it != nodes.end()) {
+						it->second.Assign(a_record, a_update.fields);
+						held = true;
+					}
+				} else if constexpr (std::is_same_v<T, PropertyRecord>) {
+					if (const auto it = properties.find(a_record.key); it != properties.end()) {
+						it->second.record.Assign(a_record, a_update.fields);
+						held = true;
+					}
+				} else {
+					if (const auto it = alphas.find(a_record.key); it != alphas.end()) {
+						it->second.record.Assign(a_record, a_update.fields);
+						held = true;
+					}
+				}
+			},
+			a_update.record);
+		updatesUnheld += held ? 0 : 1;
+		if (held) {
+			const auto type = TypeOf(a_update).first;
+			for (std::uint32_t f = 0; f < 16; ++f)
+				updated[type][f] += (a_update.fields >> f) & 1u;
+		}
+	}
+
 	void SceneMirror::Clear()
 	{
 		nodes.clear();
@@ -127,13 +170,14 @@ namespace DCLF
 		return it != alphas.end() ? &it->second.record : nullptr;
 	}
 
-	void SceneMirror::Check(const Records& a_probe, const KeySet& a_eventKeys)
+	void SceneMirror::Check(const Records& a_probe, const KeySet& a_eventKeys, const FieldMap& a_eventFields)
 	{
 		auto& t = tally;
-		// The last probe's: an event since names the object (late), or none does (missed).
+		// The last probe's: an event without values since names the object, or updates its fields (late), or nothing does (missed).
 		for (auto& [pendingKey, p] : pending) {
 			const void* key = reinterpret_cast<const void*>(pendingKey & ~std::uintptr_t(7));
-			const bool late = a_eventKeys.contains(key);
+			const auto fields = a_eventFields.find(pendingKey);
+			const bool late = a_eventKeys.contains(key) || (fields != a_eventFields.end() && (fields->second & p.fields) == p.fields);
 			auto& into = late ? t.late[p.type] : t.missed[p.type];
 			for (std::uint32_t f = 0; f < 16; ++f)
 				if (p.fields & (1u << f)) {
@@ -163,7 +207,16 @@ namespace DCLF
 			const std::uint32_t differ = a_mirror->Differ(a_live);
 			if (!differ)
 				return;
-			const std::string what = fmt::format("{} {} '{}': {}", kTypeNames[a_type], a_live.key, a_name ? a_name : "", a_fields(differ));
+			std::string what = fmt::format("{} {} '{}': {}", kTypeNames[a_type], a_live.key, a_name ? a_name : "", a_fields(differ));
+			// The values, mirror -> live, of the fields worth seeing.
+			if constexpr (std::is_same_v<std::decay_t<decltype(a_live)>, NodeRecord>) {
+				if (differ & (NodeRecord::kFadeNear | NodeRecord::kFadeFar | NodeRecord::kFadeType))
+					what += fmt::format(" (near {} -> {}, far {} -> {}, type {} -> {}; captured frame {} thread {}, updated frame {}, probed frame {})", a_mirror->fadeNear,
+						a_live.fadeNear, a_mirror->fadeFar, a_live.fadeFar, a_mirror->fadeType, a_live.fadeType, a_mirror->capturedFrame, a_mirror->thread,
+						a_mirror->updatedFrame, a_live.capturedFrame);
+				if (differ & NodeRecord::kFlags)
+					what += fmt::format(" (flags {:#x} -> {:#x})", a_mirror->flags, a_live.flags);
+			}
 			if (named.contains(a_live.key)) {
 				for (std::uint32_t b = 0; b < 32; ++b)
 					t.flagBitsEvented[b] += (a_flagBits >> b) & 1u;
@@ -197,11 +250,13 @@ namespace DCLF
 
 	std::string SceneMirror::Report()
 	{
-		std::string text = fmt::format("[DCLF] scene mirror (6e F3): {} nodes, {} geometries, {} properties, {} alphas; {} captures applied, {} detaches\n", nodes.size(),
-			geometries.size(), properties.size(), alphas.size(), std::exchange(applied, 0), std::exchange(detached, 0));
+		std::string text = fmt::format(
+			"[DCLF] scene mirror (6e F3): {} nodes, {} geometries, {} properties, {} alphas; {} captures applied, {} detaches, {} updates ({} to objects it holds "
+			"no record of)\n",
+			nodes.size(), geometries.size(), properties.size(), alphas.size(), std::exchange(applied, 0), std::exchange(detached, 0), std::exchange(updates, 0),
+			std::exchange(updatesUnheld, 0));
 		auto& t = tally;
-		if (t.probes) {
-			auto line = [&](const char* a_label, const auto& a_counts) {
+		auto line = [&](const char* a_label, const auto& a_counts) {
 				std::string out;
 				for (std::size_t type = 0; type < kTypes; ++type) {
 					for (std::uint32_t f = 0; f < 16; ++f) {
@@ -216,12 +271,15 @@ namespace DCLF
 				}
 				return fmt::format("{} {}", a_label, out.empty() ? "0" : out);
 			};
+		text += fmt::format("[DCLF] scene mirror, {}\n", line("updated fields:", updated));
+		updated = {};
+		if (t.probes) {
 			std::uint64_t missed = 0;
 			for (const auto& type : t.missed)
 				for (const auto count : type)
 					missed += count;
 			text += fmt::format("[DCLF] mirror parity: {} probes, {} records compared, {} absent from the mirror; {}; {}; {}{}{}{}{}\n", t.probes, t.checked, t.absent,
-				line("evented (a hook without its value):", t.evented), line("late:", t.late), line("missed (no event):", t.missed),
+				line("evented (an event without values):", t.evented), line("late:", t.late), line("missed (no event):", t.missed),
 				t.absent || missed ? " <- MIRROR" : " <- OK", t.firstAbsent.empty() ? "" : "; first absent: " + t.firstAbsent,
 				t.firstMissed.empty() ? "" : "; first missed: " + t.firstMissed, t.firstEvented.empty() ? "" : "; first evented: " + t.firstEvented);
 			std::string bits;

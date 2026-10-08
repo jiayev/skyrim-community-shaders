@@ -195,6 +195,16 @@ namespace DCLF
 		Push(event);
 	}
 
+	void SceneTracker::PushUpdate(SceneCapture::Update&& a_update)
+	{
+		if (!installed || stopped.load(std::memory_order_acquire))
+			return;
+		auto* event = new Event{};
+		event->type = EventType::Updated;
+		event->update = std::move(a_update);
+		Push(event);
+	}
+
 	SceneTracker::Event* SceneTracker::Drain()
 	{
 		// The stack holds the newest event first; reverse it to replay in order.

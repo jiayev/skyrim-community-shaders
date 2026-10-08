@@ -89,6 +89,7 @@ namespace DCLF
 		SlotProbe,
 		DecalOrderProbe,
 		HiddenWatch,
+		MirrorWatch,
 		InputWatch,
 		DecalOrder,
 		TableStart,

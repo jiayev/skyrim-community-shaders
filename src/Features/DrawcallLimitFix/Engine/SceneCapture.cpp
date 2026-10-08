@@ -15,9 +15,12 @@ namespace DCLF::SceneCapture
 		using Engine::At;
 
 		constexpr std::uint32_t kMaxDepth = 64;
+		// +0x109's bit the cull writes every frame (0x40), not the record's.
+		constexpr std::uint8_t kFade109FrameBits = 0x40;
 
 		std::atomic<std::uint64_t> attaches{ 0 }, records{ 0 }, ns{ 0 }, mainThreadCaptures{ 0 }, mainThreadNs{ 0 }, outOfWorld{ 0 };
 		std::atomic<std::uint32_t> mainThread{ 0 };
+		std::atomic<std::uint32_t> currentFrame{ 0 };
 
 		bool NonFixedBody(const RE::NiAVObject& a_object)
 		{
@@ -114,11 +117,110 @@ namespace DCLF::SceneCapture
 		return (flags != a_o.flags ? kFlags : 0u) | (threshold != a_o.threshold ? kThreshold : 0u);
 	}
 
+	void NodeRecord::Assign(const NodeRecord& a_o, std::uint32_t a_f)
+	{
+		if (a_f & kParent)
+			parent = a_o.parent;
+		if (a_f & kRtti)
+			rtti = a_o.rtti;
+		if (a_f & kKind)
+			kind = a_o.kind;
+		if (a_f & kHidden)
+			flags = (flags & ~1u) | (a_o.flags & 1u);
+		if (a_f & kFlags)
+			flags = (flags & (1u | kFrameFlags)) | (a_o.flags & ~(1u | kFrameFlags));
+		if (a_f & kUserData) {
+			userData = a_o.userData;
+			formType = a_o.formType;
+			actor = a_o.actor;
+		}
+		if (a_f & kControllers)
+			controllers = a_o.controllers;
+		if (a_f & kBody)
+			body = a_o.body;
+		if (a_f & kChildren)
+			children = a_o.children;
+		if (a_f & kSwitch) {
+			switchIndex = a_o.switchIndex;
+			switchFlags = a_o.switchFlags;
+			switchCurrent = a_o.switchCurrent;
+		}
+		if (a_f & kFadeNear)
+			fadeNear = a_o.fadeNear;
+		if (a_f & kFadeFar)
+			fadeFar = a_o.fadeFar;
+		if (a_f & kFade109)
+			fade109 = a_o.fade109;
+		if (a_f & kFadeType)
+			fadeType = a_o.fadeType;
+		if (a_f & kTreeLodSwitch)
+			treeLodSwitch = a_o.treeLodSwitch;
+		if (a_f & kName)
+			name = a_o.name;
+		updatedFrame = Frame();
+	}
+
+	void PropertyRecord::Assign(const PropertyRecord& a_o, std::uint32_t a_f)
+	{
+		if (a_f & kRtti) {
+			rtti = a_o.rtti;
+			lighting = a_o.lighting;
+		}
+		if (a_f & kFlags)
+			flags = a_o.flags;
+		if (a_f & kMaterial)
+			material = a_o.material;
+		if (a_f & kMaterialAlpha)
+			materialAlpha = a_o.materialAlpha;
+		if (a_f & kMaterialOther) {
+			feature = a_o.feature;
+			glints = a_o.glints;
+			diffuseView = a_o.diffuseView;
+		}
+		if (a_f & kFadeNode)
+			fadeNode = a_o.fadeNode;
+		if (a_f & kEmissive)
+			emissive = a_o.emissive;
+		if (a_f & kControllers)
+			controllers = a_o.controllers;
+	}
+
+	void AlphaRecord::Assign(const AlphaRecord& a_o, std::uint32_t a_f)
+	{
+		if (a_f & kFlags)
+			flags = a_o.flags;
+		if (a_f & kThreshold)
+			threshold = a_o.threshold;
+	}
+
+	NodeRecord CaptureNodeFields(const RE::NiAVObject& a_object, std::uint32_t a_fields)
+	{
+		using F = NodeRecord::Field;
+		auto& object = const_cast<RE::NiAVObject&>(a_object);
+		NodeRecord r;
+		r.key = &a_object;
+		if (a_fields & (F::kHidden | F::kFlags))
+			r.flags = a_object.GetFlags().underlying();
+		if (a_fields & F::kControllers)
+			r.controllers = object.GetControllers() != nullptr;
+		if (a_fields & F::kBody)
+			r.body = NonFixedBody(a_object);
+		if (a_fields & (F::kFadeNear | F::kFadeFar | F::kFade109 | F::kFadeType)) {
+			r.fadeNear = At<float>(&a_object, 0x128);
+			r.fadeFar = At<float>(&a_object, 0x12C);
+			r.fade109 = At<std::uint8_t>(&a_object, 0x109) & ~kFade109FrameBits;
+			r.fadeType = At<std::uint8_t>(&a_object, 0x153) & 0xF;
+		}
+		return r;
+	}
+
 	NodeRecord CaptureNode(const RE::NiAVObject& a_object)
 	{
 		auto& object = const_cast<RE::NiAVObject&>(a_object);
 		NodeRecord r;
 		r.key = &a_object;
+		r.capturedFrame = Frame();
+		r.thread = ::GetCurrentThreadId();
 		r.parent = a_object.parent;
 		r.rtti = object.GetRTTI();
 		r.flags = a_object.GetFlags().underlying();
@@ -156,12 +258,13 @@ namespace DCLF::SceneCapture
 		r.kind |= netimmerse_cast<RE::BSOrderedNode*>(node) ? kKindOrdered : 0u;
 		r.kind |= netimmerse_cast<RE::BSMultiBoundNode*>(node) ? kKindMultiBound : 0u;
 		r.kind |= netimmerse_cast<RE::BSFaceGenNiNode*>(node) ? kKindFaceGen : 0u;
-		if (netimmerse_cast<RE::BSFadeNode*>(node)) {
+		// The engine's own test (the vtable's AsFadeNode, which every fade writer reaches the node by), not the RTTI chain.
+		if (node->AsFadeNode()) {
 			r.kind |= kKindFadeNode;
 			r.kind |= netimmerse_cast<RE::BSTreeNode*>(node) ? kKindTree : 0u;
 			r.fadeNear = At<float>(node, 0x128);
 			r.fadeFar = At<float>(node, 0x12C);
-			r.fade109 = At<std::uint8_t>(node, 0x109);
+			r.fade109 = At<std::uint8_t>(node, 0x109) & ~kFade109FrameBits;
 			r.fadeType = At<std::uint8_t>(node, 0x153) & 0xF;
 			r.treeLodSwitch = FadeState::TreeLodSwitch(*node);
 		}
@@ -318,6 +421,16 @@ namespace DCLF::SceneCapture
 	void NoteOutOfWorld()
 	{
 		outOfWorld.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	void SetFrame(std::uint32_t a_frame)
+	{
+		currentFrame.store(a_frame, std::memory_order_relaxed);
+	}
+
+	std::uint32_t Frame()
+	{
+		return currentFrame.load(std::memory_order_relaxed);
 	}
 
 	void SetMainThread(std::uint32_t a_thread)

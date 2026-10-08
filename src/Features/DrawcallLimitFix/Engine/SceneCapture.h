@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <variant>
 #include <vector>
 
 struct ID3D11Buffer;
@@ -82,8 +83,12 @@ namespace DCLF::SceneCapture
 		std::uint8_t fade109 = 0, fadeType = 0;
 		const void* treeLodSwitch = nullptr;
 		const char* name = nullptr;
+		// Diagnostics, not compared: the frame of the capture and of the last update (Frame()), and the capturing thread.
+		std::uint32_t capturedFrame = 0, updatedFrame = 0, thread = 0;
 
 		std::uint32_t Differ(const NodeRecord& a_other) const;
+		/** @brief a_from's a_fields into this record (an update's). */
+		void Assign(const NodeRecord& a_from, std::uint32_t a_fields);
 	};
 
 	struct GeometryRecord
@@ -165,6 +170,7 @@ namespace DCLF::SceneCapture
 		bool controllers = false;
 
 		std::uint32_t Differ(const PropertyRecord& a_other) const;
+		void Assign(const PropertyRecord& a_from, std::uint32_t a_fields);
 	};
 
 	struct AlphaRecord
@@ -182,6 +188,7 @@ namespace DCLF::SceneCapture
 		std::uint8_t threshold = 0;
 
 		std::uint32_t Differ(const AlphaRecord& a_other) const;
+		void Assign(const AlphaRecord& a_from, std::uint32_t a_fields);
 	};
 
 	/** @brief What one capture took: nodes (geometries' node half included), geometries, and the properties they name. */
@@ -194,7 +201,20 @@ namespace DCLF::SceneCapture
 		bool Empty() const { return nodes.empty(); }
 	};
 
+	/**
+	 * @brief A hook's values (step F3b): the fields its writer changed, captured after the write on the writer's thread, applied
+	 * into the mirror's record in push order when the mirror holds one (an object out of the world has none: its attach captures
+	 * it whole). The record carries only a_fields' values and its key.
+	 */
+	struct Update
+	{
+		std::uint32_t fields = 0;
+		std::variant<NodeRecord, PropertyRecord, AlphaRecord> record;
+	};
+
 	NodeRecord CaptureNode(const RE::NiAVObject& a_object);
+	/** @brief Only a_fields of a node (no children list): a hook's update. A fade field needs a BSFadeNode. */
+	NodeRecord CaptureNodeFields(const RE::NiAVObject& a_object, std::uint32_t a_fields);
 	GeometryRecord CaptureGeometry(const RE::BSGeometry& a_geometry);
 	PropertyRecord CaptureProperty(const RE::BSShaderProperty& a_property);
 	AlphaRecord CaptureAlpha(const RE::NiAlphaProperty& a_alpha);
@@ -220,4 +240,7 @@ namespace DCLF::SceneCapture
 	void NoteOutOfWorld();
 	/** @brief The main thread (the render thread), recorded at the frame's start, for the counters. */
 	void SetMainThread(std::uint32_t a_thread);
+	/** @brief The render thread's frame (set with SetMainThread), for the records' diagnostics. */
+	void SetFrame(std::uint32_t a_frame);
+	std::uint32_t Frame();
 }
