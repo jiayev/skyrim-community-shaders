@@ -710,12 +710,13 @@ namespace DCLF
 	{
 		if (a_e >= cut.walk.size() || cut.plans[a_e] == EntryPlan::Rejected)
 			return;
-		// Engine-drawn members are handed to the registration every frame; a member shown but not bound is, until it is.
+		// Engine-drawn members are handed to the registration every frame; a member not in the set is, until it is. Whether it is
+		// shown (its hidden bits, its switches) is the walk's test each frame, not this decision's: the engine shows a member (a cell's
+		// terrain chunk once it loads) with no event that reaches here before the frame culls it.
 		bool walk = cut.mixed[a_e] != 0;
 		auto& store = SceneStore::Get();
 		for (std::uint32_t m = cut.memberOffsets[a_e]; m < cut.memberOffsets[a_e + 1] && !walk; ++m)
-			if (!cut.members[m].engine && !MemberDrawable(cut.memberObject[m]) && store.IsTracked(cut.members[m].geometry) &&
-				MemberShown(m, cut.roots[a_e]))
+			if (!cut.members[m].engine && !MemberDrawable(cut.memberObject[m]) && store.IsTracked(cut.members[m].geometry))
 				walk = true;
 		cutVersion += cut.walk[a_e] != (walk ? 1 : 0) ? 1 : 0;
 		cut.walk[a_e] = walk ? 1 : 0;
@@ -942,8 +943,21 @@ namespace DCLF
 				a_process->AppendVirtual(*const_cast<RE::BSGeometry*>(geometry), a_arg);
 				++(member.engine ? out.engineMembers : out.unbound);
 				// An entry only the parity walks (Cut::walk clear): normally nothing would have handed this one over.
-				if (!cut.walk[e])
+				if (!cut.walk[e]) {
 					++out.walkMissed;
+					// What the walk's decision missed (the first few a job, a frame).
+					if (out.walkMissed <= 4) {
+						auto& store = SceneStore::Get();
+						const auto& view = store.GetTables();
+						const std::int32_t slot = cut.memberObject[m];
+						const auto* atSlot = slot >= 0 && static_cast<std::size_t>(slot) < view.objectGeometry.size() ? view.objectGeometry[slot] : nullptr;
+						out.walkMissedFirst += fmt::format("{}'{}' (entry {} '{}', {}): slot {} {}, set phases {:#x}, resident {}, claimed {:#x}, admitted {}",
+							out.walkMissedFirst.empty() ? "" : "; ", geometry->name.c_str() ? geometry->name.c_str() : "", e,
+							cut.roots[e] && cut.roots[e]->name.c_str() ? cut.roots[e]->name.c_str() : "", member.engine ? "the engine's" : "DCLF's", slot,
+							atSlot == geometry ? "holds it" : atSlot ? "holds another" : "empty", store.SetPhasesOf(slot), store.IsMember(slot),
+							frameSet ? frameSet->PhasesOf(geometry) : 0xFF, cut.admitted[e]);
+					}
+				}
 				out.filterMissed += dry ? 1 : 0;
 			}
 		}
@@ -1004,6 +1018,8 @@ namespace DCLF
 			s.visibilityDiffer += out.visibilityDiffer;
 			if (s.visibilityFirst.empty() && !out.visibilityFirst.empty())
 				s.visibilityFirst = out.visibilityFirst;
+			if (s.walkMissedFirst.size() < 2000 && !out.walkMissedFirst.empty())
+				s.walkMissedFirst += fmt::format(" [frame {}] {}", SceneStore::Get().GetFrame(), out.walkMissedFirst);
 			s.switchStale += out.switchStale;
 			s.unselected += out.unselected;
 		}
@@ -1357,6 +1373,8 @@ namespace DCLF
 			if (walkEverything)
 				logger::info("[DCLF] stand-in walk parity: {} geometries handed to the registration from entries the stand-in would not walk{}", s.walkMissed,
 					s.walkMissed ? " <- STAND-IN WALK" : " <- OK");
+			if (!s.walkMissedFirst.empty())
+				logger::info("[DCLF] stand-in walk parity, missed:{}", s.walkMissedFirst);
 			if (s.maskChecked)
 				logger::info("[DCLF] light masks (owned members in view, which no main registration clears): {} checked, {} with the sun's bits, {} with other lights' bits{}{}",
 					s.maskChecked, s.maskSun, s.maskOther, s.maskSun || s.maskOther ? " <- LIGHT MASKS" : " <- OK", maskFirst.empty() ? "" : "; first: " + std::exchange(maskFirst, {}));
