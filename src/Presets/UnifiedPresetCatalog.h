@@ -162,6 +162,8 @@ public:
 	const std::vector<std::string>& GetBaselinePackIds() const { return baselinePackIds; }
 	/** @brief Whether a pack's Baseline overwrites are enabled. */
 	bool IsBaselineEnabled(const std::string& id) const;
+	/** @brief Re-applies a pack that is active or has its Baseline enabled, so freshly exported files take effect. */
+	void ReapplyIfInUse(const std::string& id);
 	/** @brief Stops applying a pack's Baseline overwrites from the next load; values already in use are kept.
 	 *  @return False when the pack was not enabled. */
 	bool RemoveBaseline(const std::string& id);

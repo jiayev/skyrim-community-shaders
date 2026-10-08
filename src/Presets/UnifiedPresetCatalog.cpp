@@ -743,6 +743,12 @@ bool UnifiedPresetCatalog::IsBaselineEnabled(const std::string& id) const
 	return std::ranges::find(baselinePackIds, id) != baselinePackIds.end();
 }
 
+void UnifiedPresetCatalog::ReapplyIfInUse(const std::string& id)
+{
+	if (activePackId == id || IsBaselineEnabled(id))
+		ApplyPack(id);
+}
+
 void UnifiedPresetCatalog::EnableBaseline(const PackInfo& pack)
 {
 	// Re-enabling moves the pack to the end so it wins conflicts against the other Baseline packs.

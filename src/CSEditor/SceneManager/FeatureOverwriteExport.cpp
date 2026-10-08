@@ -588,8 +588,11 @@ namespace
 			// The exported value is now the baseline's, so the scene resolves over it as it will after a reopen.
 			SceneSettingsManager::GetSingleton()->ReleaseSketches(entry.shortName);
 		}
-		if (target.toPresetPack)
-			UnifiedPresetCatalog::GetSingleton().Discover();
+		if (target.toPresetPack) {
+			auto& catalog = UnifiedPresetCatalog::GetSingleton();
+			catalog.Discover();
+			catalog.ReapplyIfInUse(Util::FileHelpers::SanitizeFileName(target.name));
+		}
 		return true;
 	}
 

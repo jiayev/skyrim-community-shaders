@@ -1031,9 +1031,8 @@ void ScenePresetExport::Draw()
 				// The export baked the user entries into the pack, so apply it and drop them from SceneManager.json.
 				if (catalog.ApplyPack(sanitizedName))
 					manager->ClearAllUserEntries();
-			} else if (catalog.GetActivePackId() == sanitizedName || catalog.IsBaselineEnabled(sanitizedName)) {
-				// Reload the applied preset so the exported base settings take effect.
-				catalog.ApplyPack(sanitizedName);
+			} else {
+				catalog.ReapplyIfInUse(sanitizedName);
 			}
 		}
 		exportRequested = false;
