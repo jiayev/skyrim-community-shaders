@@ -38,9 +38,8 @@ public:
 			if (std::filesystem::is_symlink(target))
 				return false;
 			static std::atomic_uint64_t sequence{ 0 };
-			std::filesystem::create_directories(target.parent_path());
-			const auto candidate = target.parent_path() / std::format("_export_{}_{}_{}",
-															  target.filename().string(), std::chrono::steady_clock::now().time_since_epoch().count(), sequence++);
+			const auto candidate = std::filesystem::temp_directory_path() / std::format("cspex_{:x}_{:x}_{:x}",
+																				::GetCurrentProcessId(), std::chrono::steady_clock::now().time_since_epoch().count(), sequence++);
 			if (!std::filesystem::create_directory(candidate))
 				return false;
 			workspace = candidate;
