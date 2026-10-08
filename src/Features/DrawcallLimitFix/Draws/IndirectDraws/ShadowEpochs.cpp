@@ -537,16 +537,6 @@ namespace DCLF
 			return SIZE_MAX;
 		}
 
-		/** @brief A shadow view's key among the frame's views (Impl::ObservedViewKey): which of those sharing its three it is. */
-		ObservedViewKey ObservedKeyOf(std::span<const ShadowViews::View> a_views, std::size_t a_id, std::uint32_t a_renderMode)
-		{
-			const auto& view = a_views[a_id];
-			std::uint32_t occurrence = 0;
-			for (std::size_t i = 0; i < a_id; ++i)
-				occurrence += a_views[i].accumulator == view.accumulator && a_views[i].descriptor == view.descriptor && a_views[i].renderMode == view.renderMode ? 1u : 0u;
-			return { view.accumulator, view.descriptor, a_renderMode, occurrence };
-		}
-
 		/** @brief A pending view's layout in a_slot (ShadowViewLayout). */
 		ShadowViewLayout LayoutOf(const PendingView& a_view, std::uint32_t a_slot, std::uint32_t a_mode, std::uint32_t a_target)
 		{
@@ -953,78 +943,35 @@ namespace DCLF
 	std::uint32_t IndirectDraws::ShadowViewCapacity()
 	{
 		// None when DCLF draws no shadows (failed, or not set up): the engine draws every view, and withholds nothing.
-		if (failed || !impl->SetupShadow())
+		if (failed || !impl->SetupShadow() || impl->shadowPlacements.empty())
 			return 0;
-		// Slots for the views DCLF would draw (the last Rebuild's candidates), asked for here whether or not any view was drawn:
-		// a frame whose views all stay the engine's has no epoch to ask.
-		const auto& layout = impl->shadow->latchLayout;
-		impl->ReserveShadowLatch(ShadowViews::Get().Candidates(), layout.keySlots, layout.rasterStates, layout.sunProcesses);
-		// The shadow maps the views draw into, imported before the engine draws them (a capture finds them imported): one imported now
-		// is built at the next build point.
+		// The shadow maps the views draw into, imported at setup (UpdateShadowCapability) and again when the engine replaces one: one
+		// imported now is built at the next build point.
 		if (auto* renderer = globals::game::renderer; renderer && RevisionClaims()) {
 			using T = RE::RENDER_TARGETS_DEPTHSTENCIL;
 			for (const auto [index, target] : { std::pair{ 0u, T::kSHADOWMAPS_ESRAM }, std::pair{ 1u, T::kSHADOWMAPS }, std::pair{ 2u, T::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM } })
 				if (renderer->GetDepthStencilData().depthStencils[target].texture)
 					(void)impl->ImportShadowDepth(index, target);
 		}
-		// Strict epochs: none while the graph as built lacks what the views would need (new slots, a new import: built at the next
-		// build point), or the frame has no claims.
+		// Strict epochs: none while the graph as built lacks what the views would need (a new import: built at the next build point),
+		// or the frame has no claims.
 		if (auto* host = RenderGraphRuntime::Get().Host(); RevisionClaims() && (!host || host->RebuildRequested() || SceneStore::Get().SetWithdrawn()))
 			return 0;
-		const std::uint32_t slots = impl->shadow->viewSlots;
-		return slots > kFirstShadowViewSlot ? slots - kFirstShadowViewSlot : 0u;
+		// Every view: each draws at its placement's slot (shadowPlacements), whichever views the frame has.
+		return UINT32_MAX;
 	}
 
 	void IndirectDraws::DecideShadowCoverage()
 	{
 		impl->predictedShadow.clear();
-		if (failed || !RevisionClaims() || !impl->shadow)
+		if (failed || !RevisionClaims() || !impl->shadow || impl->shadowPlacements.empty())
 			return;
 		auto& views = ShadowViews::Get();
-		// The frame's views DCLF would draw, in the engine's order, as each drew when last seen; then the retained slots past them.
-		std::vector<ShadowViewLayout> layouts;
-		bool any = false, known = true;
 		const auto all = views.All();
-		for (std::size_t id = 0; id < all.size(); ++id) {
-			const auto& view = all[id];
-			if (!view.covered)
-				continue;
-			any = true;
-			const auto it = impl->observedViews.find(ObservedKeyOf(all, id, view.renderMode));
-			if (it == impl->observedViews.end()) {
-				known = false;
-				break;
-			}
-			auto layout = it->second;
-			layout.slot = kFirstShadowViewSlot + static_cast<std::uint32_t>(layouts.size());
-			layouts.push_back(layout);
-		}
-		if (!any)
+		if (std::none_of(all.begin(), all.end(), [](const ShadowViews::View& a_view) { return a_view.covered; }))
 			return;
-		if (!known) {
-			// A view never drawn yet: the engine's, and seen for the next frame.
-			++impl->shadowUnobserved;
-			views.UncoverAll();
-			return;
-		}
-		const std::uint32_t frameNumber = SceneStore::Get().GetFrame();
-		if (const auto& previousShape = impl->shadow->published) {
-			for (std::size_t index = layouts.size(); index < previousShape->views.size(); ++index) {
-				const auto& retained = previousShape->views[index];
-				const std::uint32_t slot = kFirstShadowViewSlot + static_cast<std::uint32_t>(index);
-				if (retained.slot != slot || slot >= impl->shadowSlotDrawn.size() || frameNumber - impl->shadowSlotDrawn[slot] > Impl::kRetainedViewFrames)
-					break;
-				layouts.push_back({ retained.slot, retained.modeIndex, retained.target, retained.slice, retained.x, retained.y, retained.width, retained.height,
-					retained.rasterState });
-			}
-		}
-		// One the next revisions make a shape for (newest first, a few).
-		auto& recent = impl->recentShadowLayouts;
-		std::erase(recent, layouts);
-		recent.insert(recent.begin(), layouts);
-		if (recent.size() > RecentShapes<ShadowFrame>::kShapes)
-			recent.resize(RecentShapes<ShadowFrame>::kShapes);
-		// DCLF's only with the selected revision's shape for it, recorded on the graph as built.
+		// The frame's views are DCLF's with the selected revision's shape for the placements (all of them, whichever views come),
+		// recorded on the graph as built: until a revision has recorded it (startup, a growth), the engine's.
 		bool shaped = false;
 		if (impl->EpochCovered(2)) {
 			using R = Impl::SceneRevisions;
@@ -1032,20 +979,19 @@ namespace DCLF
 				if (const auto& fragment = active->Fragment(R::kShapeSlot + 2))
 					if (const auto variants = fragment->Value<ShadowVariants>())
 						for (const auto& shape : variants->shapes)
-							shaped = shaped || (shape && LayoutOf(*shape) == layouts);
+							shaped = shaped || (shape && LayoutOf(*shape) == impl->shadowPlacements);
 		}
 		if (!shaped) {
 			++impl->shadowUnrecorded;
 			views.UncoverAll();
 			return;
 		}
-		impl->predictedShadow = std::move(layouts);
+		impl->predictedShadow = impl->shadowPlacements;
 	}
 
 	void IndirectDraws::BeginShadowFrame()
 	{
 		impl->pendingViews.clear();
-		impl->capturedViews.clear();
 	}
 
 	void IndirectDraws::CaptureShadowView(std::uint32_t a_viewId, std::uint32_t a_renderMode)
@@ -1079,25 +1025,7 @@ namespace DCLF
 			++shadowStats.focusSkipped;
 			return;
 		}
-		// What the view draws with, DCLF's or not: the frame's predicted layout is made from it (DecideShadowCoverage), so a view the
-		// engine drew alone is DCLF's once a revision has a shape for it. The rasterizer state as below.
-		{
-			auto& state = globals::game::shadowState->GetRuntimeData();
-			const std::uint32_t observedTarget = state.depthStencil == RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS_ESRAM ? 0u :
-			                                     state.depthStencil == RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS       ? 1u :
-			                                     state.depthStencil == RE::RENDER_TARGETS_DEPTHSTENCIL::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM ? 2u :
-			                                                                                                                 ~0u;
-			std::uint32_t observedState = EngineRasterStateId(state.rasterStateFillMode, 1, state.rasterStateDepthBiasMode, state.rasterStateScissorMode, a_renderMode);
-			if (observedState == 0)
-				observedState = EngineRasterStateId(state.rasterStateFillMode, 0, state.rasterStateDepthBiasMode, state.rasterStateScissorMode, a_renderMode);
-			if (observedTarget != ~0u && observedState)
-				impl->observedViews[{ shadowView->accumulator, shadowView->descriptor, a_renderMode,
-					impl->capturedViews[{ shadowView->accumulator, shadowView->descriptor, a_renderMode, 0u }]++ }] = { 0u, a_renderMode - PassCapture::kFirstShadowMode, observedTarget,
-					state.depthStencilSlice, static_cast<std::uint32_t>(std::max(0.0f, state.viewPort.TopLeftX)), static_cast<std::uint32_t>(std::max(0.0f, state.viewPort.TopLeftY)),
-					static_cast<std::uint32_t>(state.viewPort.Width), static_cast<std::uint32_t>(state.viewPort.Height), observedState };
-		}
-		// Not DCLF's this frame (past the view slots its buffers hold, a mode not known at Rebuild, or a layout no revision has a shape
-		// for yet): the engine drew it whole.
+		// Not DCLF's this frame (the revision has no shape for the placements yet, a mode not known at Rebuild): the engine drew it whole.
 		if (!shadowView->covered) {
 			++shadowStats.uncovered;
 			return;
@@ -1150,6 +1078,26 @@ namespace DCLF
 		view.casterClass = volumetricCopy ? 1u : 0u;
 		view.sunView = shadowView->kind == ShadowViews::Kind::Directional;
 		CaptureViewTarget(view, target);
+		// Its placement's slot: one the setup foresaw, under the placement's state, and the frame's only view there. Anything else is a
+		// defect: the casters withheld from the view are a hole this frame.
+		{
+			const std::size_t placement = impl->PlacementOf(view);
+			std::string defect;
+			if (placement == SIZE_MAX)
+				defect = "at no placement";
+			else if (const auto& p = impl->shadowPlacements[placement]; p.rasterState != rasterState || p.modeIndex != view.modeIndex)
+				defect = fmt::format("at placement {} (mode {}, state {}) with mode {}, state {}", placement, p.modeIndex, p.rasterState, view.modeIndex, rasterState);
+			else if (std::any_of(impl->pendingViews.begin(), impl->pendingViews.end() - 1, [&](const PendingView& a_other) { return a_other.slot == p.slot; }))
+				defect = fmt::format("at placement {}, which a view of the frame already drew at", placement);
+			if (!defect.empty()) {
+				if (impl->placementDefectsLogged++ < 16)
+					logger::warn("[DCLF] shadow view {} ({}, mode {:#x}) drew into target {} slice {} at ({} {}) {}x{} {} <- PLACEMENT", a_viewId,
+						ShadowViews::KindName(shadowView->kind), a_renderMode, targetIndex, slice, view.x, view.y, view.width, view.height, defect);
+				impl->pendingViews.pop_back();
+				return notReady(ShadowNotReady::Placement);
+			}
+			view.slot = impl->shadowPlacements[placement].slot;
+		}
 		// The caster volume the engine culled this view's casters against: BSShadowDirectionalLight::UpdateCamera
 		// builds it from the main camera frustum's corners and the light direction into the descriptor's culling
 		// process, and the accumulation's cull (FUN_1414f0920) tests it on top of the shadow camera's frustum. It
@@ -1423,7 +1371,7 @@ namespace DCLF
 		};
 		auto& pipelines = DrawPipelines::Get();
 		auto* utility = globals::game::utilityShader;
-		if (!pipelines.Enabled() || !utility || !impl->shadow)
+		if (!pipelines.Enabled() || !utility || !impl->shadow || impl->shadowPlacements.empty())
 			return notReady(ShadowNotReady::Setup);
 		const auto indirect = GetShadowIndirectState();
 		if (!indirect.valid) {
@@ -1488,30 +1436,14 @@ namespace DCLF
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 				if (modeUsed[m])
 					keys += IsOcclusionMode(m) ? tables.occlusionKeysUsed[OcclusionOfMode(m)].size() : tables.shadowKeysUsed.size();
-			// Slots for every view DCLF would draw (ShadowViews::Candidates): those past its slots now stayed the engine's this frame.
-			const auto views = std::max<std::size_t>(pending.size(), ShadowViews::Get().Candidates());
-			impl->ReserveShadowLatch(static_cast<std::uint32_t>(views), static_cast<std::uint32_t>(keys), DrawPipelines::Get().ShadowRasterStateCount(),
+			// A slot per placement.
+			impl->ReserveShadowLatch(static_cast<std::uint32_t>(impl->shadowPlacements.size()), static_cast<std::uint32_t>(keys), DrawPipelines::Get().ShadowRasterStateCount(),
 				static_cast<std::uint32_t>(in.sunEntryProcesses.size()));
 		}
-		// The epoch's views (ShadowViewLayout): the frame's, then the view slots the last shape had past them (a local light's
-		// paraboloid pair, which comes and goes with the light), kept in the shape with no work - a zero latch (no dispatch, no
-		// draw), their counters zeroed by the latched copies, and their render passes loading and storing what the engine left - so
-		// a view's coming and going changes no shape and the epoch's ticket stays current. One whose light comes back finds its
-		// capacity and buckets. A slot not drawn for kRetainedViewFrames frames leaves the shape.
-		std::vector<ShadowViewLayout> layouts;
-		layouts.reserve(pending.size());
-		for (std::uint32_t index = 0; index < pending.size(); ++index)
-			layouts.push_back(LayoutOf(pending[index], kFirstShadowViewSlot + index, pending[index].modeIndex, pending[index].targetIndex));
-		if (const auto& previousShape = resources->published) {
-			for (std::uint32_t index = static_cast<std::uint32_t>(pending.size()); index < previousShape->views.size(); ++index) {
-				const auto& retained = previousShape->views[index];
-				const std::uint32_t slot = kFirstShadowViewSlot + index;
-				if (retained.slot != slot || slot >= impl->shadowSlotDrawn.size() || frameNumber - impl->shadowSlotDrawn[slot] > Impl::kRetainedViewFrames)
-					break;
-				layouts.push_back({ retained.slot, retained.modeIndex, retained.target, retained.slice, retained.x, retained.y, retained.width, retained.height,
-					retained.rasterState });
-			}
-		}
+		// The epoch's views (ShadowViewLayout): every placement, whichever views the frame has - a slot without a view does no work (a
+		// zero latch: no dispatch, no draw, its counters zeroed by the latched copies, its render pass loading and storing what the
+		// engine left) - so the frame's views change no shape and the epoch's ticket stays current.
+		const std::vector<ShadowViewLayout>& layouts = impl->shadowPlacements;
 		// Strict coverage: the views came as DecideShadowCoverage predicted them (else the revision's shape is not theirs: counted).
 		if (!impl->predictedShadow.empty() && layouts != impl->predictedShadow) {
 			if (impl->shadowMispredicted++ == 0) {
@@ -1683,10 +1615,12 @@ namespace DCLF
 			}
 			std::vector<bool> mapRowsWritten(std::size_t(DrawPipelines::Get().ShadowRasterStateCount()) + 1);  // per state: its row is in the latch
 			std::uint32_t sunEntryOffset = 0;  // the slot's sun entry region, once written
-			for (std::uint32_t index = 0; index < pending.size(); ++index) {
+			std::vector<bool> slotDrawn(layouts.size());
+			for (const auto& view : pending) {
 				ZoneScopedN("CS.DCLF.ShadowInputs.View");
-				const auto& view = pending[index];
-				const std::uint32_t slot = kFirstShadowViewSlot + index;
+				const std::uint32_t slot = view.slot;
+				const std::uint32_t index = slot - kFirstShadowViewSlot;
+				slotDrawn[index] = true;
 				// Its blocks into the latch; the epoch's latched copies take them to the view-blocks buffer and zero its counters.
 				WriteViewBlocks(latchBlock, latchLayout, latchSlot, slot, view);
 				const auto inputCount = static_cast<std::uint32_t>(payload.ModeInputs(view.modeIndex));
@@ -1729,12 +1663,11 @@ namespace DCLF
 				LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 				impl->CheckCascadeCulling(view, latch, frameNumber, payload);
 				resources->labels.push_back({ view.viewId, view.renderMode, slot });
-				if (impl->shadowSlotDrawn.size() <= slot)
-					impl->shadowSlotDrawn.resize(std::size_t(slot) + 1, 0u);
-				impl->shadowSlotDrawn[slot] = frameNumber;
 			}
-			// The retained views (the layouts past the frame's): a zero latch, no work.
-			for (std::size_t index = pending.size(); index < layouts.size(); ++index) {
+			// The placements without a view this frame: a zero latch, no work.
+			for (std::size_t index = 0; index < layouts.size(); ++index) {
+				if (slotDrawn[index])
+					continue;
 				LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, layouts[index].slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), BuildDrawsLatch{});
 				++shadowStats.retainedViews;
 			}
@@ -1787,10 +1720,10 @@ namespace DCLF
 			static std::uint32_t logged = 0;
 			if (logged++ % 600 == 0) {
 				std::string views;
-				for (std::size_t v = 0; v < frame->views.size() && v < pending.size(); ++v) {
-					const auto& view = frame->views[v];
-					views += fmt::format("{}view {} mode {:#x} target {} slice {} at ({} {}) {}x{} {} inputs (capacity {})", views.empty() ? "" : "; ", pending[v].viewId,
-						pending[v].renderMode, view.target, view.slice, view.x, view.y, view.width, view.height, payload.ModeInputs(view.modeIndex), view.capacity);
+				for (const auto& p : pending) {
+					const auto& view = frame->views[p.slot - kFirstShadowViewSlot];
+					views += fmt::format("{}view {} mode {:#x} target {} slice {} at ({} {}) {}x{} {} inputs (capacity {})", views.empty() ? "" : "; ", p.viewId,
+						p.renderMode, view.target, view.slice, view.x, view.y, view.width, view.height, payload.ModeInputs(view.modeIndex), view.capacity);
 				}
 				logger::info("[DCLF] shadow epoch: {} views ({} without a pipeline, {} without a texture), {} material rows ({} waiting for the table to grow, {} held): {}",
 					frame->views.size(), shadowStats.skippedPipeline, shadowStats.skippedTexture, shadowStats.records, payload.waitingRows,
@@ -2235,6 +2168,73 @@ namespace DCLF
 			readyStates[kFirstOcclusionMode].All().size());
 	}
 
+	bool IndirectDraws::Impl::BuildShadowPlacements()
+	{
+		auto* renderer = globals::game::renderer;
+		auto* plain = renderer ? EngineRasterStates()[0][1][0][0] : nullptr;
+		if (!plain)
+			return false;
+		// The states: the cascades draw with ShadowmapCascadeRasterizerFix's clones (cascade c into slice c), every other view with the
+		// table's entry at depth bias mode 0.
+		const std::uint32_t plainState = EngineRasterStateId(0, 1, 0, 0, PassCapture::kFirstShadowMode + kSunShadowMode);
+		(void)EngineRasterStateId(0, 1, 0, 0, PassCapture::kFirstShadowMode + kParabolicShadowMode);
+		const auto cascadeState = [&](std::uint32_t a_cascade) {
+			if (a_cascade >= ShadowmapRasterizerFix::CascadeCount())
+				return plainState;
+			D3D11_RASTERIZER_DESC desc{};
+			plain->GetDesc(&desc);
+			ShadowmapRasterizerFix::CascadeRasterDesc(desc, a_cascade);
+			return DrawPipelines::Get().ShadowRasterStateId(desc, PassCapture::kFirstShadowMode + kSunShadowMode);
+		};
+		std::vector<ShadowViewLayout> placements;
+		const auto add = [&](std::uint32_t a_mode, std::uint32_t a_target, std::uint32_t a_slice, std::uint32_t a_y, std::uint32_t a_width, std::uint32_t a_height,
+							 std::uint32_t a_state) {
+			placements.push_back({ kFirstShadowViewSlot + static_cast<std::uint32_t>(placements.size()), a_mode, a_target, a_slice, 0u, a_y, a_width, a_height, a_state });
+		};
+		using T = RE::RENDER_TARGETS_DEPTHSTENCIL;
+		for (const auto [index, target] : { std::pair{ 0u, T::kSHADOWMAPS_ESRAM }, std::pair{ 1u, T::kSHADOWMAPS }, std::pair{ 2u, T::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM } }) {
+			auto* texture = renderer->GetDepthStencilData().depthStencils[target].texture;
+			if (!texture)
+				continue;
+			// Imported now, before any view draws into it.
+			(void)ImportShadowDepth(index, target);
+			D3D11_TEXTURE2D_DESC desc{};
+			texture->GetDesc(&desc);
+			for (std::uint32_t slice = 0; slice < desc.ArraySize; ++slice) {
+				if (index == 0) {
+					// The sun's cascades.
+					add(kSunShadowMode, index, slice, 0, desc.Width, desc.Height, cascadeState(slice));
+				} else if (index == 2) {
+					// Their volumetric lighting copies.
+					add(kSunShadowMode, index, slice, 0, desc.Width, desc.Height, plainState);
+				} else {
+					// The lights' map: a spot light's view takes a slice, a point light's paraboloid pair its two halves.
+					add(kSunShadowMode, index, slice, 0, desc.Width, desc.Height, plainState);
+					add(kParabolicShadowMode, index, slice, 0, desc.Width, desc.Height / 2, plainState);
+					add(kParabolicShadowMode, index, slice, desc.Height / 2, desc.Width, desc.Height / 2, plainState);
+				}
+			}
+		}
+		if (placements.empty() || !plainState)
+			return false;
+		shadowPlacements = std::move(placements);
+		ReserveShadowLatch(static_cast<std::uint32_t>(shadowPlacements.size()), shadow->latchLayout.keySlots, DrawPipelines::Get().ShadowRasterStateCount(),
+			shadow->latchLayout.sunProcesses);
+		logger::info("[DCLF] shadow view placements: {} (slots {} to {})", shadowPlacements.size(), shadowPlacements.front().slot, shadowPlacements.back().slot);
+		return true;
+	}
+
+	std::size_t IndirectDraws::Impl::PlacementOf(const PendingView& a_view) const
+	{
+		for (std::size_t p = 0; p < shadowPlacements.size(); ++p) {
+			const auto& placement = shadowPlacements[p];
+			if (placement.target == a_view.targetIndex && placement.slice == a_view.slice && placement.x == a_view.x && placement.y == a_view.y &&
+				placement.width == a_view.width && placement.height == a_view.height)
+				return p;
+		}
+		return SIZE_MAX;
+	}
+
 	void IndirectDraws::Impl::NoteCapability(bool a_defect, std::string a_cause)
 	{
 		++shadowReadinessSerial;
@@ -2280,7 +2280,9 @@ namespace DCLF
 					i.NoteCapability(false, "the casters' and occlusion maps' modes and the catalog set up");
 				}
 			}
-			if (i.shadowCatalogBuilt && i.shadowTargetFormat != DXGI_FORMAT_UNKNOWN) {
+			if (i.shadowCatalogBuilt && i.shadowPlacements.empty() && i.BuildShadowPlacements())
+				i.NoteCapability(false, fmt::format("{} shadow view placements set up", i.shadowPlacements.size()));
+			if (i.shadowCatalogBuilt && !i.shadowPlacements.empty() && i.shadowTargetFormat != DXGI_FORMAT_UNKNOWN) {
 				for (std::uint32_t m = 0; m < kFirstOcclusionMode; ++m)
 					phases |= i.readyModes[m] ? SetPhaseOfMode(m) : 0;
 				for (std::uint32_t v = 0; v < kOcclusionViews; ++v)

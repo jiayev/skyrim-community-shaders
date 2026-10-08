@@ -332,7 +332,7 @@ namespace DCLF
 					recent.resize(RecentShapes<ShadowFrame>::kShapes);
 			}
 		}
-		if (auto shadow = impl->shadow; (sp.known || !impl->recentShadowLayouts.empty() || !impl->recentOcclusionLayouts.empty()) && shadow && shadowIndirect.valid) {
+		if (auto shadow = impl->shadow; (sp.known || !impl->shadowPlacements.empty() || !impl->recentOcclusionLayouts.empty()) && shadow && shadowIndirect.valid) {
 			const auto& payload = impl->CommittedShadow();
 			// The slots the layouts name hold every draw the scene can produce, as the epochs reserve them.
 			std::uint32_t slots = 0;
@@ -341,10 +341,11 @@ namespace DCLF
 					if (shape)
 						for (const auto& view : shape->views)
 							slots = std::max(slots, view.slot + 1);
-			for (const auto* recentLayouts : { &impl->recentShadowLayouts, &impl->recentOcclusionLayouts })
-				for (const auto& layouts : *recentLayouts)
-					for (const auto& view : layouts)
-						slots = std::max(slots, view.slot + 1);
+			for (const auto& view : impl->shadowPlacements)
+				slots = std::max(slots, view.slot + 1);
+			for (const auto& layouts : impl->recentOcclusionLayouts)
+				for (const auto& view : layouts)
+					slots = std::max(slots, view.slot + 1);
 			impl->ReserveShadowSequences(tables, slots, 0);
 			// The latch for what the frame's epochs can name (as the shadow epoch reserves it, over every mode): its views, key slots,
 			// the states registered and the sun's processes, a view's each at most. A growth at the epoch instead would leave the
@@ -354,18 +355,22 @@ namespace DCLF
 				std::size_t keys = lookups.shadowSlotKeys.size() + tables.shadowKeysUsed.size();
 				for (const auto& used : tables.occlusionKeysUsed)
 					keys += used.size();
-				const std::uint32_t views = ShadowViews::Get().Candidates();
+				const auto views = static_cast<std::uint32_t>(impl->shadowPlacements.size());
 				impl->ReserveShadowLatch(views, static_cast<std::uint32_t>(keys), DrawPipelines::Get().ShadowRasterStateCount(),
 					std::max(views, shadow->latchLayout.sunProcesses));
 			}
 			const auto bounds = ShadowBoundsOf(impl->drawBound, store.GetLookups());
 			for (std::size_t kind = 0; kind < 2; ++kind) {
 				const bool occlusion = kind == 1;
-				// The layouts the epoch may draw: with scene revisions the shadow views' predicted ones (DecideShadowCoverage: a frame's
-				// views are DCLF's only once a revision has a shape for theirs), else those its commits drew lately.
+				// The layouts the epoch may draw: with scene revisions the shadow views' placements (all of them: DecideShadowCoverage) and
+				// the occlusion maps' last, else those its commits drew lately.
 				std::vector<std::vector<ShadowViewLayout>> sources;
-				if (RevisionClaims())
-					sources = occlusion ? impl->recentOcclusionLayouts : impl->recentShadowLayouts;
+				if (RevisionClaims()) {
+					if (occlusion)
+						sources = impl->recentOcclusionLayouts;
+					else if (!impl->shadowPlacements.empty())
+						sources.push_back(impl->shadowPlacements);
+				}
 				else
 					for (const auto& shape : (occlusion ? shadow->recentOcclusionShapes : shadow->recentShapes).shapes)
 						if (shape)

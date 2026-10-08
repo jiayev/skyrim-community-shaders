@@ -1356,6 +1356,7 @@ namespace DCLF
 		{
 			std::uint32_t viewId = 0, renderMode = 0, modeIndex = 0, targetIndex = 0, slice = 0;
 			std::uint32_t x = 0, y = 0, width = 0, height = 0;
+			std::uint32_t slot = 0;  // its placement's (Impl::shadowPlacements)
 			float minDepth = 0.0f, maxDepth = 1.0f;
 			RE::NiPoint3 eye;
 			bool hasViewProj = false;
@@ -2473,20 +2474,6 @@ namespace DCLF
 			bool operator==(const ShadowViewLayout&) const = default;
 		};
 		std::vector<ShadowViewLayout> LayoutOf(const ShadowFrame& a_frame);
-		/** @brief A shadow view as Impl::observedViews keys it (DecideShadowCoverage). */
-		struct ObservedViewKey
-		{
-			const void* accumulator = nullptr;
-			std::uint32_t descriptor = 0, renderMode = 0, occurrence = 0;
-			bool operator==(const ObservedViewKey&) const = default;
-		};
-		struct ObservedViewKeyHash
-		{
-			std::size_t operator()(const ObservedViewKey& a_key) const noexcept
-			{
-				return std::hash<const void*>{}(a_key.accumulator) ^ (std::size_t(a_key.descriptor) << 20) ^ (std::size_t(a_key.renderMode) << 28) ^ (std::size_t(a_key.occurrence) << 36);
-			}
-		};
 
 		/**
 		 * @brief What a shadow or occlusion epoch's shape is made from (MakeShadowShape): the views' layout, each view's map row's
@@ -3779,27 +3766,23 @@ namespace DCLF
 		/** @brief Whether the installed shadow payload can be committed by an epoch with the frame's inputs a_frame. */
 		bool ShadowAheadUsable(const ShadowPayload& a_payload, const ShadowInputs& a_frame) const;
 		void LogStaleShadow(const ShadowInputs& a_built, const ShadowInputs& a_frame);
-		// Per shadow view slot, the frame it last drew a view: a slot past the frame's views stays in the shape, with no work,
-		// for kRetainedViewFrames frames after (ExecuteShadowFrame).
-		static constexpr std::uint32_t kRetainedViewFrames = 600;
-		std::vector<std::uint32_t> shadowSlotDrawn;
 		/**
-		 * @brief Strict shadow coverage (DecideShadowCoverage). What each shadow view drew with when the engine last drew it, DCLF's
-		 * or not (CaptureShadowView: its mode, target, slice, viewport and rasterizer state; the slot is the frame's), by view: its
-		 * accumulator, descriptor and render mode, and which of the views that share them it is in the engine's order (a sun cascade's
-		 * volumetric copy is a view of its own, drawn before the cascade with the same three). From them, before the engine draws a view, the frame's layout is predicted (its
-		 * covered views in order, then the retained slots, as ExecuteShadowFrame lays them out); the layouts predicted lately are
-		 * what a scene revision makes the shadow epoch's shapes for (MakeRevisionShapes), newest first.
+		 * @brief The shadow views' placements (BuildShadowPlacements, at setup): every place the engine's shadow maps can take a view -
+		 * the sun's cascade slices and their volumetric copies, and each slice of the lights' map whole (a spot light) or as two halves
+		 * (a point light's paraboloid pair) - each with its mode and rasterizer state, at a slot of its own (kFirstShadowViewSlot + its
+		 * index). The shadow epoch's shape is all of them, whichever views a frame has: a view draws at its placement's slot, and a slot
+		 * without one does no work. A view at no placement, under another state, or twice in a frame is a defect
+		 * (ShadowNotReady::Placement): the casters withheld from it are a hole, flagged.
 		 */
-		ankerl::unordered_dense::map<ObservedViewKey, ShadowViewLayout, ObservedViewKeyHash> observedViews;
-		// The frame's captures so far, per view key with occurrence 0: an accumulator the engine draws twice (a cascade's volumetric
-		// copy, then the cascade: ShadowViews lists both, the accumulator names one) is that view's first, then its second occurrence.
-		ankerl::unordered_dense::map<ObservedViewKey, std::uint32_t, ObservedViewKeyHash> capturedViews;
-		std::vector<std::vector<ShadowViewLayout>> recentShadowLayouts;
-		// Since the last report: frames whose views were all left to the engine, as a view had not been seen yet or the selected
-		// revision had no shape for the predicted layout; and covered frames whose views did not come as predicted.
-		std::uint64_t shadowUnobserved = 0, shadowUnrecorded = 0, shadowMispredicted = 0;
-		std::vector<ShadowViewLayout> predictedShadow;  // the frame's, when its views are DCLF's (else empty)
+		std::vector<ShadowViewLayout> shadowPlacements;
+		bool BuildShadowPlacements();
+		/** @brief The placement a captured view drew at (its target, slice and viewport), or SIZE_MAX. */
+		std::size_t PlacementOf(const PendingView& a_view) const;
+		std::uint32_t placementDefectsLogged = 0;
+		// Since the last report: frames whose views were left to the engine as the selected revision had no shape for the placements
+		// (startup, or after a growth); covered frames whose views did not come as predicted.
+		std::uint64_t shadowUnrecorded = 0, shadowMispredicted = 0;
+		std::vector<ShadowViewLayout> predictedShadow;  // the frame's, when its views are DCLF's (else empty): the placements
 		/**
 		 * @brief The occlusion maps' layout as their last captures drew (CaptureOcclusion, taken whether DCLF draws a map or not): what
 		 * a revision makes the occlusion epoch's shapes for (recentOcclusionLayouts, newest first), and what OcclusionReady asks the
