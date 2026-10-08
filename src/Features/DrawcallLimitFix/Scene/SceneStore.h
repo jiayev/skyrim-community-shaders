@@ -1386,7 +1386,7 @@ namespace DCLF
 			// lookups (samplers, null and projected textures), its geometry, its decal slot, its layer partner, its shadow pipelines
 			// or occlusion pipelines (or an alpha-tested caster's diffuse).
 			// The reflection phase (8): its forward pipeline, or the object was no main member at the last commit.
-			std::array<std::uint64_t, 10> waitingBy{};
+			std::array<std::uint64_t, 11> waitingBy{};
 			std::string firstWaiting;
 		};
 		SetStats TakeSetStats() { return std::exchange(setStats, {}); }

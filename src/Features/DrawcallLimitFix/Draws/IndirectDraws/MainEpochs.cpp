@@ -330,8 +330,10 @@ namespace DCLF
 			return;
 		auto* lighting = ConstantEvaluator::Get().GetLightingShader();
 		// Under the bindless parity the builds read the eye the Z-prepass epoch captures: built at the epochs.
-		if (!lighting || !DrawPipelines::Get().Enabled() || !GetIndirectState().valid || SwitchEnabled(Switch::BindlessParity))
+		if (!lighting || !DrawPipelines::Get().Enabled() || !GetIndirectState().valid || SwitchEnabled(Switch::BindlessParity)) {
+			impl->PostFit();
 			return;
+		}
 		auto& store = SceneStore::Get();
 		// The capacities the builds are made against, grown for the frame's tables now (the first reserve of the frame grows).
 		impl->ReserveSceneTables(store.GetTables());
@@ -355,6 +357,39 @@ namespace DCLF
 			c.shadow = true;
 		}
 		c.valid = c.build[kAsyncZPrepass] || c.build[kAsyncColour] || c.shadow;
+		impl->PostFit();
+	}
+
+	void IndirectDraws::Impl::PostFit()
+	{
+		// What the commit's set may claim (FitsScene): the buffers as reserved now.
+		const std::array<SceneFit, 2> fit{ SceneFitOf(*resources->scene, resources->objectCapacity),
+			shadow && shadow->scene ? SceneFitOf(*shadow->scene, shadow->objectCapacity) : SceneFit{} };
+		const std::array<std::uint32_t, 2> rows{ static_cast<std::uint32_t>(resources->materialRows.capacity), static_cast<std::uint32_t>(resources->pipelineRows.capacity) };
+		if (fit != postedFit || rows != postedRows) {
+			logger::info("[DCLF] TEMP fit posted at frame {}: fade roots {} -> {}, extras {} -> {}, rows {} -> {}", SceneStore::Get().GetFrame(), postedFit[0].fadeRoots, fit[0].fadeRoots,
+				postedFit[0].extraRows, fit[0].extraRows, postedRows[0], rows[0]);
+			postedFit = fit;
+			postedRows = rows;
+			++postedFitSerial;
+		}
+	}
+
+	bool IndirectDraws::FitsScene(const void* a_tables, std::uint32_t a_slot, bool a_shadow) const
+	{
+		if (!impl)
+			return true;
+		const auto& tables = *static_cast<const SceneStore::Tables*>(a_tables);
+		if (a_slot >= tables.objects.size() || !ObjectFits(tables, a_slot, impl->postedFit[a_shadow ? 1 : 0]))
+			return false;
+		// The main pair's rows (MainBuild::ResolvePair: a row past its table waits for its growth).
+		const auto& object = tables.objects[a_slot];
+		return a_shadow || (object.flags & kObjectNoBindings) || (object.materialIndex < impl->postedRows[0] && object.pipelineIndex < impl->postedRows[1]);
+	}
+
+	std::uint64_t IndirectDraws::SceneFitSerial() const
+	{
+		return impl ? impl->postedFitSerial : 0;
 	}
 
 	std::function<void(org::runtime::IUploadService&)> IndirectDraws::PrepareFrameUploads()
@@ -548,6 +583,10 @@ namespace DCLF
 		auto slot = std::make_shared<Impl::AheadSlot>();
 		const std::uint64_t seq = ++s.aheadKicked;
 		// What the task reads that the coordinator or the frame write later is copied into it now: the context, the lookups.
+		if (s.aheadContext.build[kAsyncColour] && (s.aheadContext.inputs[kAsyncColour].addresses.fit != s.postedFit[0] || s.aheadContext.inputs[kAsyncColour].addresses.recordCapacity != s.postedRows[0]))
+			logger::info("[DCLF] TEMP build ahead {} at frame {}: context fade roots {} extras {} rows {}, posted {} {} {}", seq + 1, store.GetFrame(),
+				s.aheadContext.inputs[kAsyncColour].addresses.fit.fadeRoots, s.aheadContext.inputs[kAsyncColour].addresses.fit.extraRows,
+				s.aheadContext.inputs[kAsyncColour].addresses.recordCapacity, s.postedFit[0].fadeRoots, s.postedFit[0].extraRows, s.postedRows[0]);
 		auto job = [&s, slot, seq, tables = std::static_pointer_cast<const SceneStore::Tables>(std::move(a_tables)), context = s.aheadContext,
 						lookups = store.SharedLookups() ? store.SharedLookups() : std::make_shared<const Lookups>(store.CoordinatorLookups()), generation = store.GetTablesGeneration(),
 						frame = store.GetFrame(), sun = store.CoordinatorSunCandidates(), light = store.CoordinatorLightCandidates()](const auto&) mutable {

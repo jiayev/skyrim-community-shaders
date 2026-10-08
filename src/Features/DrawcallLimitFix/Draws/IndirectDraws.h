@@ -77,11 +77,23 @@ namespace DCLF
 		/**
 		 * @brief Render thread, SceneStore::CommitSet: whether the object is ready for a shadow phase (SetPhaseOfMode's): its Utility
 		 * pipeline under every rasterizer state of its caster class in each of the phase's modes the last epoch drew, and an
-		 * alpha-tested caster's diffuse imported. Part of the set's readiness (SceneSet.h).
+		 * alpha-tested caster's diffuse imported. Part of the set's readiness (SceneSet.h). a_tables: the commit's SceneStore::Tables
+		 * (the coordinator's: the frame's view may hold another object in the slot).
 		 */
-		bool PhaseReady(std::uint32_t a_slot, std::uint8_t a_phase) const;
+		bool PhaseReady(const void* a_tables, std::uint32_t a_slot, std::uint8_t a_phase) const;
 		/** @brief Changes when the shadow modes or their views' rasterizer states that PhaseReady reads change. */
 		std::uint64_t ShadowReadinessSerial() const;
+		/**
+		 * @brief SceneStore::CommitSet: whether the object is within the scene buffers (and, for the main builds, the material and
+		 * pipeline rows) the builds ahead are made against (the fit the
+		 * frame's start posted with their context, PostAheadContext): the main builds' (a_shadow false) or the shadow build's. One past
+		 * them has no input until their growth (ObjectFits), so a member must wait for it: claimed, it would be drawn by nobody. The
+		 * buffers only grow, and a build ahead takes a context posted at or after the commit's. a_tables: the caller's
+		 * SceneStore::Tables (the coordinator's own in CommitSet and the revocation, not the frame's view).
+		 */
+		bool FitsScene(const void* a_tables, std::uint32_t a_slot, bool a_shadow) const;
+		/** @brief Changes when FitsScene's fits do (a growth of the scene buffers): the slots waiting for one are taken again. */
+		std::uint64_t SceneFitSerial() const;
 
 		/**
 		 * @brief What the main pass binds (buffers, views, targets, viewport), for this frame's colour epoch: where its opaque

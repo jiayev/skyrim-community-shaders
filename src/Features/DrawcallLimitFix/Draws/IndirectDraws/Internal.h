@@ -3889,6 +3889,11 @@ namespace DCLF
 			ShadowInputs shadowInputs;
 			std::shared_ptr<ShadowResources> shadowTarget;
 		} aheadContext;  // render thread at the frame's start, read by the coordinator
+		// The fits the builds ahead are made against (the main builds', the shadow build's), posted with aheadContext; changes counted.
+		std::array<SceneFit, 2> postedFit{};
+		std::array<std::uint32_t, 2> postedRows{};  // the main material and pipeline rows' capacities (MainBuild::ResolvePair's rowsFit)
+		std::uint64_t postedFitSerial = 0;
+		void PostFit();
 		std::vector<std::shared_ptr<MainPayload>> payloadPool;  // the builds' task's
 		/**
 		 * @brief A publication's draws as its builds' task makes them (BuildAhead): one task at a time, in publication order, on
@@ -4071,7 +4076,7 @@ namespace DCLF
 		/** @brief The reflection's graph resources, created once its targets are known (render thread). */
 		bool SetupReflection();
 		/** @brief The reflection phase's readiness of an object (PhaseReady): its pipeline slot's forward pipeline is built. */
-		bool ReflectionPhaseReady(std::uint32_t a_slot) const;
+		bool ReflectionPhaseReady(const SceneStore::Tables& a_tables, std::uint32_t a_slot) const;
 		/**
 		 * @brief The reflection's resources grown before its epoch: the latch for a_slots pipeline slots and a_buckets buckets, the
 		 * sequences for a_draws a face, the faces' tree LOD lists for the scene's shape slots.
@@ -4533,6 +4538,9 @@ namespace DCLF
 			// disagrees with the set.
 			std::vector<std::uint8_t> flags;
 			std::vector<const RE::BSGeometry*> geometry;
+			// The published tables the snapshot read (render thread): held, they keep every geometry they name alive (the retirement
+			// chain), so the readback frames later reads them without asking the scene lane's live state.
+			std::shared_ptr<const SceneStore::Tables> tables;
 			// The frustum stamps (the fade test's drops), and per set member whether its live bound is inside the depth build's
 			// frustum (the engine's verdict for it, occlusion and fading aside), with that bound: a rejection of one inside is not
 			// the culling's to make.
@@ -4542,6 +4550,7 @@ namespace DCLF
 			// Per object, its geometry's phases in the claims the registration hooks withhold by (PassCapture::CurrentSet): the main
 			// claim must be the frame's set exactly, or an object is drawn by nobody (claimed, not in the set) or twice.
 			std::vector<std::uint8_t> claims;
+			std::string payloads;  // TEMP: the two payloads' resident regions and inputs, for a frame drawn by nobody
 		};
 		std::deque<SetParityFrame> setParityFrames;
 		std::vector<winrt::com_ptr<ID3D11Buffer>> setParityStaging;  // released stagings, reused
