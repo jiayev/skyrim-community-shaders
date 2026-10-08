@@ -22,13 +22,30 @@
 #include "Features/Upscaling.h"
 #include "Utils/ColorSpace.h"
 
+#include <algorithm>
+#include <array>
 #include <format>
+
+namespace
+{
+	constexpr std::array kPointerButtons{ ImGuiMouseButton_Left, ImGuiMouseButton_Right, ImGuiMouseButton_Middle };
+	constexpr std::array kActivateKeys{ ImGuiKey_Enter, ImGuiKey_KeypadEnter, ImGuiKey_Space, ImGuiKey_GamepadFaceDown };
+
+	/** @brief Whether this frame's input could activate a control, so idle frames skip the settings diff. */
+	bool InputMayEditSettings()
+	{
+		return ImGui::IsAnyItemActive() ||
+		       std::ranges::any_of(kPointerButtons, [](auto button) { return ImGui::IsMouseClicked(button) || ImGui::IsMouseReleased(button); }) ||
+		       std::ranges::any_of(kActivateKeys, [](auto key) { return ImGui::IsKeyPressed(key); });
+	}
+}
 
 void PostProcessing::DrawSettings()
 {
 	json before;
-	const bool baseline = !SceneWidgetInterceptor::IsArmed();
-	if (baseline)
+	// Unbound widgets (buttons, popup combos) bypass the interceptor, so a diff is their only edit signal.
+	const bool watchEdits = !SceneWidgetInterceptor::IsArmed() && InputMayEditSettings();
+	if (watchEdits)
 		SaveSettings(before);
 	static int pipelinePageNum = 0;
 	static int pipelineFeatIdx = 0;
@@ -293,9 +310,7 @@ void PostProcessing::DrawSettings()
 		}
 		ImGui::TreePop();
 	}
-
-	JiayeStatement::GetSingleton()->DrawJSInfo();
-	if (baseline) {
+	if (watchEdits) {
 		json after;
 		SaveSettings(after);
 		if (before != after)

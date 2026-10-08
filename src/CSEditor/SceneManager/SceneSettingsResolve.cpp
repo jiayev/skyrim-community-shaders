@@ -783,7 +783,7 @@ void SceneSettingsManager::ResolveWeatherSettings(
 	const auto& previousValues = BuildWeatherValueGroups(weather.previousWeatherId);
 
 	const auto resolveWeather = [&](const SettingAddress& address, const PeriodSettingMap& weatherValues,
-									const json& baseline) -> std::optional<json> {
+									float baseline) -> std::optional<float> {
 		auto weatherIt = weatherValues.find(address);
 		if (weatherIt == weatherValues.end())
 			return std::nullopt;
