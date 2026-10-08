@@ -712,6 +712,7 @@ namespace DCLF
 				CountShadowShare(s.modeKeyDraws, s.shadow[a_slot], false);
 				CountShadowShare(s.modeKeyDraws, share, true);
 				s.shadow[a_slot] = share;
+				++s.shadowVersion;
 			}
 			s.draws -= s.produced[a_slot];
 			if (s.pipeline[a_slot] != kNoPipeline)
@@ -741,6 +742,7 @@ namespace DCLF
 				set(o);
 			s.cursor.Restart(generation);
 			++s.resyncs;
+			++s.shadowVersion;
 		} else {
 			// Slots the tables grew by since (the log names them too).
 			if (const std::size_t first = s.produced.size(); first < count) {

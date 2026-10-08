@@ -1614,6 +1614,11 @@ namespace DCLF::Draws
 		return SwitchEnabled(Switch::SetParity);
 	}
 
+	bool RevisionParityEnabled()
+	{
+		return SwitchEnabled(Switch::RevisionParity);
+	}
+
 	bool BuildParityEnabled()
 	{
 		return SwitchEnabled(Switch::BuildParity);

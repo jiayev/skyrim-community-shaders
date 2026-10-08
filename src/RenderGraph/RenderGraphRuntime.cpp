@@ -979,8 +979,12 @@ bool RenderGraphRuntime::Initialize()
 		try {
 			std::vector<std::uint32_t> epochs{ EpochOf(Segment::Reflection), EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::SkyOcclusion),
 				EpochOf(Segment::LightCulling), EpochOf(Segment::MainOpaque) };
-			state->host->SetAsyncEpochs(std::move(epochs));
-			logger::info("[ORG] Async epochs: each epoch is prepared and recorded ahead on the graph host's thread; the render thread submits");
+			// Drawcall Limit Fix's epochs are revision-driven: each submission carries the recording of the scene revision its commit
+			// selected (the commit trusts it), so no live ticket is prepared for them. Light culling's stays live.
+			std::vector<std::uint32_t> revisionEpochs{ EpochOf(Segment::Reflection), EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass),
+				EpochOf(Segment::SkyOcclusion), EpochOf(Segment::MainOpaque) };
+			state->host->SetAsyncEpochs(std::move(epochs), std::move(revisionEpochs));
+			logger::info("[ORG] Async epochs: each epoch is prepared and recorded ahead on the graph host's thread; the render thread submits (DCLF's from its scene revisions)");
 		} catch (const std::exception& e) {
 			logger::warn("[ORG] Async epochs unavailable ({}); epochs run synchronously", e.what());
 			state->asyncEpochs = false;
