@@ -34,9 +34,6 @@ namespace DCLF
 	 * (JobList::Finish); the registration jobs walk the list processes' output afterwards. Between the full-frustum
 	 * cull and that Finish, nothing but the list jobs reads the lists.
 	 *
-	 * Step 1, the census (CS_DCLF_PRIMARY_EXCLUDE=probe, nothing removed): what the lists hold, against the sun's entry
-	 * candidates, and what the main camera registers under them.
-	 *
 	 * The cut (toggle `excludePrimaryEntries`, CS_DCLF_PRIMARY_EXCLUDE): the list processes' Process1 (vtable slot 0x16,
 	 * shared with every other list process, so filtered by process) stands in for the cull of every eligible entry, on
 	 * the list job's own thread. For an admitted, settled entry in view (the job's own planes) it:
@@ -64,16 +61,6 @@ namespace DCLF
 		/** @brief AE: the call sites in CalculateAndDrawShadowCasterLights, verified before patching. */
 		void Install();
 		bool Installed() const { return installed; }
-
-		/** @brief CS_DCLF_PRIMARY_EXCLUDE=probe. */
-		static bool Probe();
-
-		/**
-		 * @brief A registration through FUN_140e28af0 outside the sun's Accumulate, any thread: counted by accumulator
-		 * (the main one, render mode 0; the depth one, 0xC) and by whether the geometry is under a listed candidate entry.
-		 */
-		void NoteRegistration(const void* a_accumulator, const RE::BSGeometry* a_geometry);
-		bool Counting() const { return counting.load(std::memory_order_relaxed); }
 
 		/**
 		 * @brief Render thread, after the sun's Accumulate: the pass descriptor's ShadowDir and DefShadow bits (13, 14)
@@ -199,7 +186,7 @@ namespace DCLF
 		 * @brief Render thread, at the scene phase's end (before Main::Draw queues DrawWorld_BuildSceneLists): this frame's
 		 * scene lists (Engine/SceneLists.cpp; drawcall-limit-fix.md, "The scene lists without DCLF's roots").
 		 *
-		 * The roots they leave out (CS_DCLF_LIST_FILTER): an entry admitted with nothing for the registration (no engine-drawn
+		 * The roots they leave out: an entry admitted with nothing for the registration (no engine-drawn
 		 * part, every member bound: Cut::walk clear) that the exclusion this frame's full-frustum cull applies takes out of
 		 * the sun's cascades, while DCLF draws both occlusion maps. Then the main camera's list jobs (the stand-in's lookup)
 		 * and the sun's full-frustum cull never see it.
@@ -274,7 +261,7 @@ namespace DCLF
 		struct Hooks;
 		friend struct Hooks;
 
-		/** @brief After the full-frustum cull, render thread: the census of the lists. */
+		/** @brief After the full-frustum cull, render thread: the stand-in's frame. */
 		void AfterFullFrustum();
 		/** @brief The scene lists' hooks (SceneLists.cpp). */
 		struct ListHooks;
@@ -390,36 +377,6 @@ namespace DCLF
 		void AfterListJobs();
 
 		bool installed = false;
-		std::atomic<bool> counting{ false };
-
-		struct Census
-		{
-			std::uint64_t frames = 0;
-			std::uint64_t lists = 0;
-			std::uint64_t entries = 0;          // all lists' entries
-			std::uint64_t firstEntries = 0;     // entry 0 of each list (never removable)
-			std::uint64_t candidates = 0;       // entries that are sun candidates
-			std::uint64_t candidateGeometries = 0;  // tracked geometries under those
-			std::uint64_t actorEntries = 0;     // entries whose reference is an actor
-			std::uint64_t extraEntries = 0;     // the first job's extra list (DAT_14338c888)
-			std::uint64_t sunCandidates = 0;    // the sun candidates' size, for the share found in the lists
-			std::map<std::string, std::uint64_t> others;  // not a candidate: "RTTI / parent" -> count
-		};
-		Census census;
-
-		// This frame's listed candidate entries (by candidate entry index), for the registration counts.
-		std::shared_ptr<const SunCandidates> frameCandidates;
-		std::vector<std::uint8_t> listed;  // per candidate entry index
-
-		struct Registrations
-		{
-			std::atomic<std::uint64_t> main{ 0 }, mainUnder{ 0 };
-			std::atomic<std::uint64_t> depth{ 0 }, depthUnder{ 0 };
-			std::atomic<std::uint64_t> other{ 0 };
-		};
-		Registrations registrations;
-
-		std::string playerChain;
 
 		/** @brief Per candidate entry, what the snapshot and a walk of its subtree say (once per generation). */
 		enum class EntryPlan : std::uint8_t

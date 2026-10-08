@@ -1,5 +1,4 @@
 #include "LocalLightCull.h"
-#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "EngineAccess.h"
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
@@ -26,7 +25,6 @@ namespace DCLF::LocalLightCull
 		constexpr std::uint32_t kParabolicMode = 0xF - PassCapture::kFirstShadowMode;
 
 		bool installed = false;
-		bool probe = false;
 		// The exclusion the next frame applies (render thread), and this frame's, held until the next selection: the culls
 		// that read it run between the two on the render thread.
 		std::shared_ptr<SunExclusion> pending;
@@ -39,7 +37,7 @@ namespace DCLF::LocalLightCull
 
 		struct Stats
 		{
-			std::atomic<std::uint64_t> visited{ 0 }, skipped{ 0 }, wouldSkip{ 0 }, parityPasses{ 0 }, parityLost{ 0 };
+			std::atomic<std::uint64_t> visited{ 0 }, skipped{ 0 }, parityPasses{ 0 }, parityLost{ 0 };
 			std::uint64_t frames = 0, live = 0, noExclusion = 0, noClaims = 0, stale = 0, parityFrames = 0;
 		};
 		Stats stats;
@@ -316,7 +314,6 @@ namespace DCLF::LocalLightCull
 		{
 			static void thunk(RE::NiNode* a_node, RE::NiCullingProcess* a_process, std::int32_t a_arg)
 			{
-				DCLF_FRAME_TRACE("LocalLightCull.cpp:316");  // TEMP frame trace
 				// The frame's filter (built on parity frames too): the light reaching its nodes is what its bits follow.
 				if (const auto* filter = currentLight != kNoLight ? filterCurrent.load(std::memory_order_acquire) : nullptr)
 					if (const auto it = filter->nodes.find(a_node); it != filter->nodes.end()) {
@@ -396,7 +393,6 @@ namespace DCLF::LocalLightCull
 		{
 			static void thunk(void* a_light, std::uint32_t* a_count, std::uint32_t* a_arg2, RE::NiAVObject* a_arg3)
 			{
-				DCLF_FRAME_TRACE("LocalLightCull.cpp:395");  // TEMP frame trace
 				LARGE_INTEGER start{}, end{};
 				QueryPerformanceCounter(&start);
 				// A light DCLF cannot give its bits to (past the mask's 32) culls everything.
@@ -444,7 +440,6 @@ namespace DCLF::LocalLightCull
 		{
 			static void thunk(RE::NiCullingProcess* a_process, RE::NiAVObject* a_object, std::int32_t a_arg)
 			{
-				DCLF_FRAME_TRACE("LocalLightCull.cpp:442");  // TEMP frame trace
 				if (a_object && currentLight != kNoLight)
 					if (const auto* exclusion = frameExclusion.load(std::memory_order_acquire)) {
 						stats.visited.fetch_add(1, std::memory_order_relaxed);
@@ -452,11 +447,10 @@ namespace DCLF::LocalLightCull
 							// The light reached it, in the state its geometries' tests would have run in.
 							if (exclusion->lightReach)
 								NoteReach(a_process, &exclusion->lightReach[index * kReachKinds]);
-							if (!probe && !parityFrame.load(std::memory_order_relaxed)) {
+							if (!parityFrame.load(std::memory_order_relaxed)) {
 								stats.skipped.fetch_add(1, std::memory_order_relaxed);
 								return;
 							}
-							stats.wouldSkip.fetch_add(1, std::memory_order_relaxed);
 						}
 					}
 				func(a_process, a_object, a_arg);
@@ -473,7 +467,7 @@ namespace DCLF::LocalLightCull
 			stl::write_vfunc<0x9, Accumulate>(RE::VTABLE_BSShadowParabolicLight[0]);
 			timed = true;
 		}
-		if (installed || SwitchValue(Switch::LightExclude) == "0")
+		if (installed)
 			return;
 		// A cut entry's geometries take the lights' bits from SunAccumulation's registration and mask-clear hooks.
 		if (!SunAccumulation::Get().Installed()) {
@@ -487,9 +481,8 @@ namespace DCLF::LocalLightCull
 			return;
 		}
 		stl::write_vfunc<0x16, Process1>(RE::VTABLE_BSParabolicCullingProcess[0]);
-		probe = SwitchValue(Switch::LightExclude) == "probe";
 		installed = true;
-		if (!probe && SwitchValue(Switch::LightList) != "0") {
+		{
 			REL::Relocation<std::uintptr_t> nodeVtable{ RE::VTABLE_NiNode[0] };
 			if (reinterpret_cast<const std::uintptr_t*>(nodeVtable.address())[0x34] != base + kNodeOnVisible) {
 				logger::warn("[DCLF] point lights' shadow culls: NiNode::OnVisible is not the engine's; the category nodes are walked whole");
@@ -498,8 +491,7 @@ namespace DCLF::LocalLightCull
 				filterInstalled = true;
 			}
 		}
-		logger::info("[DCLF] point lights' shadow culls without DCLF's entries{}{}", probe ? " (probe: nothing skipped)" : "",
-			filterInstalled ? ", their category nodes filtered" : "");
+		logger::info("[DCLF] point lights' shadow culls without DCLF's entries{}", filterInstalled ? ", their category nodes filtered" : "");
 	}
 
 	void Publish(std::shared_ptr<SunExclusion> a_exclusion)
@@ -736,8 +728,8 @@ namespace DCLF::LocalLightCull
 			return timing;
 		auto& s = stats;
 		const auto lost = s.parityLost.exchange(0);
-		const auto text = fmt::format("[DCLF] point lights' shadow culls: {} frames, {} with the exclusion ({} none built, {} the mode's claims not live, {} stale); {} entries visited, {} skipped{}; parity {} frames: {} paraboloid passes not withheld, {} of them under an excluded entry{}",
-			s.frames, s.live, s.noExclusion, s.noClaims, s.stale, s.visited.exchange(0), s.skipped.exchange(0), probe ? fmt::format(" (probe: {} would be)", s.wouldSkip.load()) : std::string(),
+		const auto text = fmt::format("[DCLF] point lights' shadow culls: {} frames, {} with the exclusion ({} none built, {} the mode's claims not live, {} stale); {} entries visited, {} skipped; parity {} frames: {} paraboloid passes not withheld, {} of them under an excluded entry{}",
+			s.frames, s.live, s.noExclusion, s.noClaims, s.stale, s.visited.exchange(0), s.skipped.exchange(0),
 			s.parityFrames, s.parityPasses.exchange(0), lost, s.parityFrames ? (lost ? " <- LIGHT EXCLUSION" : " <- OK") : "");
 		std::scoped_lock lock(firstMutex);
 		std::string by;
@@ -745,7 +737,6 @@ namespace DCLF::LocalLightCull
 			if (lostByReject[r])
 				by += fmt::format(" reject {}={}", r, std::exchange(lostByReject[r], 0));
 		const auto withFirst = firstLost.empty() ? text : text + "; lost by" + by + "; first lost " + std::exchange(firstLost, {});
-		s.wouldSkip = 0;
 		s.frames = s.live = s.noExclusion = s.noClaims = s.stale = s.parityFrames = 0;
 		std::string list;
 		if (filterInstalled) {

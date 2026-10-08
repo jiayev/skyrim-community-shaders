@@ -9,45 +9,13 @@
 
 namespace DCLF
 {
-	/** @brief `CS_DCLF_ASYNC`: on (the default: the enabled jobs build on the worker), off (inline), probe (both, compared). */
-	enum class AsyncMode : std::uint8_t
-	{
-		Off,
-		On,
-		Probe
-	};
-
-	/** @brief The `CS_DCLF_ASYNC` setting, read once. */
-	AsyncMode AsyncModeSetting();
-
-	/** @brief Whether the jobs (colour, zprepass, shadow, primary) take the asynchronous path: the mode is on or probe. */
-	inline bool AsyncEnabled() { return AsyncModeSetting() != AsyncMode::Off; }
-
-	/** @brief `CS_DCLF_ASYNC_WAIT_MS` (default 3): how long a join waits before the render thread builds inline. */
-	std::chrono::microseconds AsyncWaitBudget();
-
 	/**
-	 * @brief DCLF's per-frame builds, on the coordinator lane of DCLF's executor (SceneScheduler).
+	 * @brief The scene lane's host (SceneScheduler::SceneLane): the scene work and the accumulate work, submitted at the frame's
+	 * start and joined at Present and the next frame's start. The threading plan's F5 replaces the joins with an intent mailbox
+	 * and F6 deletes this class.
 	 *
-	 * The jobs of a frame form a serial chain, each kicked at the point of the frame where its inputs are final
-	 * and joined at the hook that consumes it: the coordinator lane is one thread, first in first out, which gives
-	 * deterministic latency and a trivial cancellation story. It is deliberately not ORG's task service (that is
-	 * what the graph's own frame preparation fans onto while the render thread waits on it) nor the shader cache's
-	 * pool (saturated at startup and at every new cell, exactly when a late join would bring the bubble back).
-	 *
-	 * This is the frame-synchronous model the asynchronous scene replaces (dclf-async-publication.md, "The design"):
-	 * its kicks and joins go in phase 6.
-	 *
-	 * The jobs, in frame order, each with where it is kicked and joined:
-	 * - "zprepass": the Z-prepass epoch's build (EarlyPrepass; Main_RenderDepth);
-	 * - "colour": the colour epoch's build (Prepass; the end of the opaque batches).
-	 *
-	 * A job that is late at its join is waited for no longer than the budget, but the callers then Cancel it before
-	 * building inline over its payload, and Cancel waits for a running job to reach its next stop check: a late join
-	 * still blocks for the rest of the job. Never seen in the reports so far (0 late); phase 6 deletes the joins.
-	 *
-	 * Render thread: Submit, Wait, CancelPending, Drain, WaitIdle and the stats. No mutex on its side: a job's state
-	 * is one atomic the coordinator and a canceller race for, and its end a semaphore.
+	 * Render thread: SubmitScene, Wait, Drain and the stats. No mutex on its side: a job's state is one atomic, its end a
+	 * semaphore.
 	 */
 	class AsyncWorker
 	{
@@ -91,9 +59,7 @@ namespace DCLF
 
 		static AsyncWorker& Get();
 
-		/** @brief Queues a job. `a_name` must outlive the worker (a string literal): it keys the stats. */
-		JobHandle Submit(const char* a_name, std::function<void(std::stop_token)> a_job);
-		/** @brief As Submit, on the scene's lane (SceneScheduler::SceneLane): the scene work, which the frame's jobs never queue behind. */
+		/** @brief Queues a job on the scene's lane. `a_name` must outlive the worker (a string literal): it keys the stats. */
 		JobHandle SubmitScene(const char* a_name, std::function<void(std::stop_token)> a_job);
 
 		/**
@@ -102,29 +68,14 @@ namespace DCLF
 		 */
 		WaitResult Wait(const JobHandle& a_handle, std::chrono::microseconds a_budget);
 
-		/** @brief Drops every queued job that has not started; the running one is left to finish. */
-		void CancelPending();
-
-		/**
-		 * @brief Ends one job: dropped if still queued, otherwise asked to stop and waited for (unbounded), so its
-		 * payload is no longer written to when this returns. Other jobs are untouched.
-		 */
-		void Cancel(const JobHandle& a_handle);
-
-		/** @brief CancelPending, then waits (unbounded) for the running job. Teardown, the live toggle, a load screen. */
+		/** @brief Drops the queued jobs, then waits (unbounded) for the running one. Teardown, the live toggle, a load screen. */
 		void Drain();
-
-		/**
-		 * @brief Waits (unbounded) until nothing is queued or running, cancelling nothing: every queued job runs.
-		 * Before the render thread rewrites data a queued job may still read.
-		 */
-		void WaitIdle();
 
 		/** @brief The report lines (one per job name) since the last reset, or empty when nothing ran. */
 		std::string Report();
 
 		/**
-		 * @brief The render thread's waits (Phase D's gate: none): every Wait, Cancel, Drain or WaitIdle that found its job
+		 * @brief The render thread's waits (Phase D's gate: none): every Wait or Drain that found its job
 		 * unfinished and blocked, by site, and the worker mutexes the render thread took. Counted per frame (NoteFrame).
 		 */
 		void NoteFrame();

@@ -30,8 +30,7 @@ namespace DCLF
 			moveUngatedThrough = frame + 1;
 		if ((frame & 0xFF) == 0)
 			std::erase_if(movedFrame, [&](const auto& a_entry) { return frame - a_entry.second > 1; });
-		static const bool enabled = SwitchValue(Switch::MoveEvents) != "0";
-		moveGating = enabled && MoveEventsLive() && frame > moveUngatedThrough;
+		moveGating = MoveEventsLive() && frame > moveUngatedThrough;
 	}
 
 	const void* SceneStore::MoveKeyOf(const RE::BSGeometry& a_geometry, const RE::NiNode* a_categoryNode)

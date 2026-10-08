@@ -1,5 +1,4 @@
 #include "RenderThreadBudget.h"
-#include "FrameTrace.h"
 
 #include "RenderGraph/RenderGraphRuntime.h"
 
@@ -35,8 +34,6 @@ namespace DCLF
 	RenderThreadBudget::Hook::Hook(Site a_site)
 	{
 		auto& b = Get();
-		if (FrameTrace::Enabled())
-			FrameTrace::Note(kSiteNames[static_cast<std::size_t>(a_site)]);  // TEMP frame trace
 		// The render thread is Main::Draw's: a load screen's Present runs on another thread, which is not the frame's.
 		if (a_site == Site::SceneFrame)
 			b.renderThread = ::GetCurrentThreadId();

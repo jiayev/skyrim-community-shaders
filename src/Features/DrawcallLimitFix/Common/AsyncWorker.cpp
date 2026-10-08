@@ -1,9 +1,7 @@
 #include "AsyncWorker.h"
 #include <Tracy/Tracy.hpp>
 
-#include "FrameTrace.h"
 #include "SceneScheduler.h"
-#include "Switches.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 
 #include <Windows.h>
@@ -15,30 +13,6 @@
 
 namespace DCLF
 {
-	AsyncMode AsyncModeSetting()
-	{
-		static const AsyncMode mode = [] {
-			// On unless turned off: the full featureset is what testers and every validation run exercise.
-			const auto value = SwitchValue(Switch::Async);
-			if (value == "off" || value == "0")
-				return AsyncMode::Off;
-			if (value == "probe")
-				return AsyncMode::Probe;
-			return AsyncMode::On;
-		}();
-		return mode;
-	}
-
-	std::chrono::microseconds AsyncWaitBudget()
-	{
-		static const std::chrono::microseconds budget = [] {
-			const auto value = SwitchValue(Switch::AsyncWaitMs);
-			const double ms = value.empty() ? 3.0 : std::strtod(value.c_str(), nullptr);
-			return std::chrono::microseconds(static_cast<long long>(ms * 1000.0));
-		}();
-		return budget;
-	}
-
 	struct AsyncWorker::Job
 	{
 		enum class State : std::uint8_t
@@ -97,7 +71,7 @@ namespace DCLF
 
 	struct AsyncWorker::Impl
 	{
-		// The jobs submitted and not yet seen ended (render thread only): what CancelPending, Drain and WaitIdle cover.
+		// The jobs submitted and not yet seen ended (render thread only): what Drain covers.
 		std::vector<std::shared_ptr<Job>> outstanding;
 		std::map<const char*, JobStats> stats;  // render thread
 		// The render thread's waits since the last report (RenderWaitReport): by site, blocked count and time.
@@ -126,8 +100,6 @@ namespace DCLF
 			if (!a_job.state.compare_exchange_strong(expected, Job::State::Running, std::memory_order_acq_rel))
 				return;  // cancelled while queued: its canceller ended it
 			a_job.started = std::chrono::steady_clock::now();
-			if (FrameTrace::Enabled())
-				FrameTrace::Note(a_job.name);  // TEMP frame trace
 			Job::State result = Job::State::Done;
 			try {
 				ZoneScopedN("CS.DCLF.Worker.Run");
@@ -158,24 +130,6 @@ namespace DCLF
 	}
 
 	AsyncWorker::~AsyncWorker() = default;
-
-	AsyncWorker::JobHandle AsyncWorker::Submit(const char* a_name, std::function<void(std::stop_token)> a_job)
-	{
-		auto job = std::make_shared<Job>();
-		job->name = a_name;
-		job->run = std::move(a_job);
-		job->submitted = std::chrono::steady_clock::now();
-		impl->Prune();
-		impl->outstanding.push_back(job);
-		++impl->stats[a_name].kicked;
-		// The coordinator's lane is serialized and first in, first out: the frame's jobs keep the order they were kicked in.
-		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), PublishedSceneExecutor::Coordinator, org::async::TaskDispatch::Controlled, a_name,
-				[job](const auto&) { Impl::Run(*job); }))
-			CancelQueued(*job);  // only an invalid scope or class is refused: the join finds it cancelled
-		JobHandle handle;
-		handle.job = std::move(job);
-		return handle;
-	}
 
 	AsyncWorker::JobHandle AsyncWorker::SubmitScene(const char* a_name, std::function<void(std::stop_token)> a_job)
 	{
@@ -235,37 +189,13 @@ namespace DCLF
 		}
 	}
 
-	void AsyncWorker::CancelPending()
+	void AsyncWorker::Drain()
 	{
+		ZoneScopedN("CS.DCLF.Worker.Drain");
 		for (auto& job : impl->outstanding)
 			if (CancelQueued(*job))
 				++impl->stats[job->name].cancelled;
 		impl->Prune();
-	}
-
-	void AsyncWorker::Cancel(const JobHandle& a_handle)
-	{
-		ZoneScopedN("CS.DCLF.Worker.CancelAndJoin");
-		const auto& job = a_handle.job;
-		if (!job)
-			return;
-		if (CancelQueued(*job)) {
-			++impl->stats[job->name].cancelled;
-			return;
-		}
-		if (job->Ended())
-			return;
-		// Running: asked to stop, and waited for (its run returns at its next stop check).
-		const auto start = std::chrono::steady_clock::now();
-		job->stop.request_stop();
-		job->AwaitEnd(std::nullopt);
-		impl->NoteWait("cancel", job->name, std::chrono::steady_clock::now() - start);
-	}
-
-	void AsyncWorker::Drain()
-	{
-		ZoneScopedN("CS.DCLF.Worker.Drain");
-		CancelPending();
 		for (auto& job : impl->outstanding) {
 			if (job->Ended())
 				continue;
@@ -275,20 +205,6 @@ namespace DCLF
 			impl->NoteWait("drain", job->name, std::chrono::steady_clock::now() - start);
 		}
 		impl->Prune();
-	}
-
-	void AsyncWorker::WaitIdle()
-	{
-		ZoneScopedN("CS.DCLF.Worker.WaitIdle");
-		const auto start = std::chrono::steady_clock::now();
-		bool blocked = false;
-		for (auto& job : impl->outstanding) {
-			blocked |= !job->Ended();
-			job->AwaitEnd(std::nullopt);
-		}
-		impl->Prune();
-		if (blocked)
-			impl->NoteWait("wait idle", "", std::chrono::steady_clock::now() - start);
 	}
 
 	void AsyncWorker::NoteFrame()

@@ -27,9 +27,7 @@ namespace DCLF
 		{
 			Never,       // not a feature
 			UnlessOne,   // on when unset or "1"
-			UnlessStatic,  // on when unset or "static"
 			Zero,        // off only with "0"
-			Async,       // "off", "0" and "probe" (inline builds, compared) all narrow it
 			Cull,        // "off" and "frustum" narrow it
 		};
 
@@ -50,8 +48,6 @@ namespace DCLF
 		// One row per switch, in Switch order (checked below).
 		constexpr Entry kRegistry[] = {
 			{ Dclf, "CS_DCLF", F, Reduced::Zero, false, "0: DCLF does not install" },
-			{ Async, "CS_DCLF_ASYNC", F, Reduced::Async, false, "off|0: builds inline on the render thread; probe: the worker's builds, compared against inline ones" },
-			{ AsyncWaitMs, "CS_DCLF_ASYNC_WAIT_MS", F, N, false, "how long the render thread waits for a worker build before building inline (default 3)" },
 			{ AsyncPriority, "CS_DCLF_ASYNC_PRIORITY", F, N, false, "normal: the coordinator thread keeps normal priority instead of above normal" },
 			{ Workers, "CS_DCLF_WORKERS", F, N, false, "the preparation pool's threads (default hardware threads - 2, at least 1)" },
 			{ Precompile, "CS_DCLF_PRECOMPILE", F, Reduced::Zero, false, "0: DCLF's SPIR-V programs compile on first use instead of alongside the engine's shaders" },
@@ -72,14 +68,8 @@ namespace DCLF
 			{ LodTrees, "CS_DCLF_LOD_TREES", F, Reduced::UnlessOne, false, "0: tree LOD stays native (live toggle's seed)" },
 			{ Shadows, "CS_DCLF_SHADOWS", F, Reduced::UnlessOne, false, "0: DCLF does not draw the shadow views (live toggle's seed)" },
 			{ SunSkip, "CS_DCLF_SUN_SKIP", F, Reduced::UnlessOne, false, "0: the engine keeps culling and registering the sun's casters (live toggle's seed)" },
-			{ SunExclude, "CS_DCLF_SUN_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the sun's culls; probe: the exclusion runs dry (live toggle's seed)" },
-			{ PrimaryExclude, "CS_DCLF_PRIMARY_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the main camera's cull; probe: a census that removes nothing (live toggle's seed)" },
-			{ ListFilter, "CS_DCLF_LIST_FILTER", F, Reduced::Zero, false, "0: the scene lists keep the roots DCLF draws whole (the engine's cull and the sun's full-frustum cull walk them)" },
-			{ TreeList, "CS_DCLF_TREE_LIST", F, Reduced::Zero, false, "0: the trees DCLF draws stay on the tree manager's animation list (its update walks them every frame)" },
-			{ LightExclude, "CS_DCLF_LIGHT_EXCLUDE", F, Reduced::Async, false, "0: point lights' shadow culls walk DCLF's entries too; probe: nothing skipped, counted" },
-			{ LightList, "CS_DCLF_LIGHT_LIST", F, Reduced::Async, false, "0: point lights walk the whole object root, skipping DCLF's entries, instead of a list of the rest" },
-			{ MoveEvents, "CS_DCLF_MOVE_EVENTS", F, Reduced::Zero, false, "0: the light path places every mover every frame instead of those the engine's move events name" },
-			{ HiddenEvents, "CS_DCLF_HIDDEN_EVENTS", F, Reduced::Zero, false, "0: an actor's frame verdict is taken again every frame instead of on its chain's hidden-bit events" },
+			{ SunExclude, "CS_DCLF_SUN_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the sun's culls (live toggle's seed)" },
+			{ PrimaryExclude, "CS_DCLF_PRIMARY_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the main camera's cull (live toggle's seed)" },
 			{ Skylight, "CS_DCLF_SKYLIGHT", F, Reduced::UnlessOne, false, "0: Skylighting's occlusion map stays native (live toggle's seed)" },
 			{ Precipitation, "CS_DCLF_PRECIPITATION", F, Reduced::UnlessOne, false, "0: the precipitation occlusion mask stays native (live toggle's seed)" },
 			{ Reflections, "CS_DCLF_REFLECTIONS", F, Reduced::UnlessOne, false, "0: the water reflection's faces stay native (live toggle's seed)" },
@@ -104,9 +94,6 @@ namespace DCLF
 			{ ParityBoth, "CS_DCLF_PARITY_BOTH", P, N, false, "1: nothing is withheld from the engine, which draws everything while DCLF draws its set as well (capture parity compares the two; it double-draws)" },
 			{ CapturePointParity, "CS_DCLF_CAPTURE_POINT_PARITY", P, N, false, "1: the colour epoch's captured bindings against the frame's first native lighting draw" },
 			{ SkylightParity, "CS_DCLF_SKYLIGHT_PARITY", P, N, false, "1: DCLF's Skylighting occlusion map against the engine's, texel by texel" },
-			{ ClassifyCache, "CS_DCLF_CLASSIFY_CACHE", P, N, false, "probe: every cached classification verdict against a recomputed one" },
-			{ DerivedCache, "CS_DCLF_DERIVED_CACHE", P, N, false, "probe: every cached derivation against a recomputed one" },
-			{ MaterialCache, "CS_DCLF_MATERIAL_CACHE", P, N, false, "off: stops the standing check of a few drawn material records against a live evaluation" },
 
 			{ Stats, "CS_DCLF_STATS", D, N, false, "1: the periodic report" },
 			{ PassStats, "CS_DCLF_PASS_STATS", D, N, false, "1: per-pass counts in the report" },
@@ -125,7 +112,6 @@ namespace DCLF
 			{ HiddenWatch, "CS_DCLF_HIDDEN_WATCH", D, N, false, "1: hardware watchpoints name the store behind a hidden change no event announced (with walk parity)" },
 			{ MirrorWatch, "CS_DCLF_MIRROR_WATCH", D, N, false, "1: hardware watchpoints on a fade node's statics after its placement name the writers the mirror misses" },
 			{ InputWatch, "CS_DCLF_INPUT_WATCH", D, N, false, "1: which of a per-frame entry's classify and shading inputs changed when the light path re-read them" },
-			{ DecalOrder, "CS_DCLF_DECAL_ORDER", F, N, false, "engine: member decals draw in the order of the frame's scene lists, as the engine's (which reorders them whenever a root before them is shown or hidden); stable (default): the scene's order, rewritten only when the member decals change" },
 			{ TableStart, "CS_DCLF_TABLE_START", D, N, false, "small: the growable GPU tables start with a few rows, so that growth runs early and often" },
 			{ SkylightDumpDir, "CS_DCLF_SKYLIGHT_DUMP_DIR", D, N, false, "where CS_DCLF_SKYLIGHT_PARITY writes the maps it compares" },
 			{ DepthTrace, "CS_DCLF_DEPTH_TRACE", D, N, false, "1: the D3D11 calls that touch the main depth buffer, for five frames" },
@@ -254,12 +240,8 @@ namespace DCLF
 			switch (a_rule) {
 			case Reduced::UnlessOne:
 				return !a_value.empty() && a_value != "1";
-			case Reduced::UnlessStatic:
-				return !a_value.empty() && a_value != "static";
 			case Reduced::Zero:
 				return a_value == "0";
-			case Reduced::Async:
-				return a_value == "off" || a_value == "0" || a_value == "probe";
 			case Reduced::Cull:
 				return a_value == "off" || a_value == "frustum";
 			default:

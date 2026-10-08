@@ -44,15 +44,14 @@ The render thread drives everything; one worker thread (`Common/AsyncWorker`) ru
 The scene placement job takes the kept records' placements and bone palettes (the engine's palette update is
 thread-safe: it locks the skin instance and runs once a frame), and the moving reference roots' bounds into their
 dependents' sun entries. A mover is queued only when the engine's move events named its reference or its category node
-this frame or the last (`MoveEvents`, `SceneStore::MoveReasonOf`, `CS_DCLF_MOVE_EVENTS=0` places every mover). From its kick to its join the render thread writes none
+this frame or the last (`MoveEvents`, `SceneStore::MoveReasonOf`). From its kick to its join the render thread writes none
 of those columns and no table grows, and the engine's work in that window (the main cull, the water reflections)
 moves no transform. A late join waits for it, or takes its items inline when it had not started; a walk-parity frame
-takes them inline before the parity reads the tables. Under `probe` the join takes every item again and counts those
-that moved inside the window.
+takes them inline before the parity reads the tables.
 
 A build runs on the worker between its kick and its join. At the join the epoch checks that the job was built for
 exactly its own inputs (`SameInputs`, `SameShadowInputs`). If it was not, or the job is late, the render thread builds
-the payload itself. `CS_DCLF_ASYNC=off` builds everything inline; `probe` builds both and compares them byte for byte.
+the payload itself.
 
 ## The data
 
@@ -284,7 +283,6 @@ fails on the baseline is listed in [dclf-open-defects.md](./dclf-open-defects.md
 | `CS_DCLF_RESIDENT_PARITY`, `CS_DCLF_RESIDENT_DRAW_PARITY` | Resident records against the engine's registrations; the resident region's inputs against the tables |
 | `CS_DCLF_BUILD_PARITY` | The GPU's draw sequences against the CPU's templates |
 | `CS_DCLF_SKYLIGHT_PARITY` | DCLF's Skylighting occlusion map against the engine's |
-| `CS_DCLF_ASYNC=probe` | Each worker build against an inline one |
 | `CS_DCLF_CAPTURE_PARITY` (with `CS_DCLF_PARITY_BOTH=1`) | The tables against the engine's own lighting draws: descriptors, transforms, every constant group, textures |
 | `CS_DCLF_SET_PARITY`, `CS_DCLF_BINDLESS_PARITY`, `CS_DCLF_PASS_PARITY`, `CS_DCLF_CAPTURE_POINT_PARITY` | Narrower checks of one mechanism each (see their registry rows) |
 

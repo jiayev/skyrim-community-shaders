@@ -1,5 +1,4 @@
 #include "PrimaryCull.h"
-#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
 #include "PassCapture.h"
@@ -126,25 +125,12 @@ namespace DCLF
 			reinterpret_cast<Fn>(REL::Module::get().base() + kProcess1)(a_process, a_object, a_arg);
 		}
 
-		std::string NameOf(const RE::NiAVObject* a_object)
-		{
-			if (!a_object)
-				return "null";
-			const char* name = a_object->name.c_str();
-			return fmt::format("{}:{}", a_object->GetRTTI() ? a_object->GetRTTI()->name : "?", name && *name ? name : "-");
-		}
 	}
 
 	PrimaryCull& PrimaryCull::Get()
 	{
 		static PrimaryCull instance;
 		return instance;
-	}
-
-	bool PrimaryCull::Probe()
-	{
-		const bool probe = SwitchValue(Switch::PrimaryExclude) == "probe";
-		return probe;
 	}
 
 	std::int32_t PrimaryCull::SwitchIndex(const RE::NiSwitchNode* a_switch)
@@ -316,7 +302,6 @@ namespace DCLF
 
 	void PrimaryCull::PrepareFrame()
 	{
-		DCLF_FRAME_TRACE("PrimaryCull::PrepareFrame");  // TEMP frame trace
 		++cutStats.frames;
 		// The membership witness, before the list jobs: the commit sampled it at the scene phase (a frame without one samples it
 		// here), and BindByMembership reads the same sample.
@@ -966,7 +951,6 @@ namespace DCLF
 
 	void PrimaryCull::AfterListJobs()
 	{
-		DCLF_FRAME_TRACE("PrimaryCull::AfterListJobs");  // TEMP frame trace
 		// The animation job's updates since the last list jobs: complete now (the job runs between two culls), this frame's batch.
 		{
 			std::scoped_lock lock(animatedMutex);
@@ -1060,60 +1044,6 @@ namespace DCLF
 		if (!PassCapture::ParityBoth())
 			PrepareFrame();
 		CheckFadePort();
-		if (!Probe())
-			return;
-		const std::uint32_t count = Global<std::uint32_t>(kSceneListCount);
-		auto* lists = Global<SceneList*>(kSceneLists);
-		if (!lists || !count)
-			return;
-		auto candidates = SceneStore::Get().GetSunCandidates();
-		frameCandidates = candidates;
-		listed.assign(candidates ? candidates->entries.size() : 0, 0);
-		ankerl::unordered_dense::set<const RE::NiAVObject*> entrySet;
-		auto& c = census;
-		++c.frames;
-		c.lists += count;
-		c.sunCandidates += candidates ? candidates->entries.size() : 0;
-		for (std::uint32_t l = 0; l < count; ++l) {
-			const auto& list = lists[l];
-			c.firstEntries += list.empty() ? 0 : 1;
-			for (const auto& entry : list) {
-				const auto* object = entry.get();
-				if (!object)
-					continue;
-				++c.entries;
-				entrySet.insert(object);
-				const auto* reference = object->GetUserData();
-				if (reference && reference->IsActor())
-					++c.actorEntries;
-				if (candidates) {
-					const auto it = candidates->entries.find(object);
-					if (it != candidates->entries.end()) {
-						++c.candidates;
-						listed[it->second] = 1;
-						continue;
-					}
-				}
-				if (c.others.size() < 200)
-					++c.others[fmt::format("{} under {}{}", NameOf(object), NameOf(object->parent), reference && reference->IsActor() ? " (actor)" : "")];
-				else
-					++c.others["(more)"];
-			}
-		}
-		if (candidates)
-			for (std::uint32_t g = 0; g < candidates->geometryEntry.size(); ++g)
-				c.candidateGeometries += listed[candidates->geometryEntry[g]];
-		c.extraEntries += Global<SceneList>(kExtraList).size();
-
-		// Where the player's third-person 3D reaches the cull: its chain of parents, marking the list entries.
-		if (playerChain.empty() || (c.frames % 300) == 1) {
-			std::string chain;
-			if (auto* player = RE::PlayerCharacter::GetSingleton())
-				for (auto* node = player->Get3D(false); node; node = node->parent)
-					chain += fmt::format(" <- {}{}", NameOf(node), entrySet.contains(node) ? " [LIST ENTRY]" : "");
-			playerChain = chain;
-		}
-		counting.store(true, std::memory_order_release);
 	}
 
 	void PrimaryCull::CheckFadePort()
@@ -1137,24 +1067,6 @@ namespace DCLF
 			++checked;
 		}
 		fadePortCursor = entries ? (fadePortCursor + 64) % entries : 0;
-	}
-
-	void PrimaryCull::NoteRegistration(const void* a_accumulator, const RE::BSGeometry* a_geometry)
-	{
-		const bool main = a_accumulator == Global<void*>(kMainAccumulator);
-		const bool depth = !main && a_accumulator == Global<void*>(kDepthAccumulator);
-		if (!main && !depth) {
-			registrations.other.fetch_add(1, std::memory_order_relaxed);
-			return;
-		}
-		bool under = false;
-		if (const auto* candidates = frameCandidates.get()) {
-			const auto it = candidates->geometries.find(a_geometry);
-			under = it != candidates->geometries.end() && listed[candidates->geometryEntry[it->second]];
-		}
-		(main ? registrations.main : registrations.depth).fetch_add(1, std::memory_order_relaxed);
-		if (under)
-			(main ? registrations.mainUnder : registrations.depthUnder).fetch_add(1, std::memory_order_relaxed);
 	}
 
 	std::uint32_t PrimaryCull::SunShadowBits(const RE::BSGeometry& a_geometry, const RE::BSLightingShaderProperty* a_property)
@@ -1232,7 +1144,6 @@ namespace DCLF
 		{
 			static void thunk(RE::NiCullingProcess* a_process, RE::NiAVObject* a_object, std::int32_t a_arg)
 			{
-				DCLF_FRAME_TRACE("PrimaryCull.cpp:1205");  // TEMP frame trace
 				auto& self = PrimaryCull::Get();
 				if (a_object && self.frameLive.load(std::memory_order_acquire))
 					if (const int slot = self.SlotOf(a_process); slot >= 0 && self.StandIn(slot, a_process, a_object, a_arg))
@@ -1247,7 +1158,6 @@ namespace DCLF
 		{
 			static void thunk(RE::NiCullingProcess* a_process, RE::BSGeometry& a_geometry, std::int32_t a_arg)
 			{
-				DCLF_FRAME_TRACE("PrimaryCull.cpp:1219");  // TEMP frame trace
 				auto& self = PrimaryCull::Get();
 				if (self.frameLive.load(std::memory_order_acquire))
 					if (const int slot = self.SlotOf(a_process); slot >= 0 && self.Owned(a_geometry)) {
@@ -1269,7 +1179,6 @@ namespace DCLF
 		{
 			static void thunk(void* a_node, float a_amount, const float* a_camera)
 			{
-				DCLF_FRAME_TRACE("PrimaryCull.cpp:1240");  // TEMP frame trace
 				PrimaryCull::Get().NoteAnimatedFade(a_node, a_camera);
 				func(a_node, a_amount, a_camera);
 			}
@@ -1281,7 +1190,6 @@ namespace DCLF
 		{
 			static std::uint64_t thunk(std::uint64_t a_1, std::uint64_t a_2, std::uint64_t a_3, std::uint64_t a_4)
 			{
-				DCLF_FRAME_TRACE("PrimaryCull.cpp:1251");  // TEMP frame trace
 				PrimaryCull::Get().AfterFullFrustum();
 				return func(a_1, a_2, a_3, a_4);
 			}
@@ -1293,7 +1201,6 @@ namespace DCLF
 		{
 			static std::uint64_t thunk(std::uint64_t a_1, std::uint64_t a_2, std::uint64_t a_3, std::uint64_t a_4)
 			{
-				DCLF_FRAME_TRACE("PrimaryCull.cpp:1262");  // TEMP frame trace
 				const auto result = func(a_1, a_2, a_3, a_4);
 				PrimaryCull::Get().AfterListJobs();
 				return result;
@@ -1333,7 +1240,7 @@ namespace DCLF
 		REL::Relocation<std::uintptr_t> triShape{ RE::VTABLE_BSTriShape[0] };
 		geometryOnVisible = reinterpret_cast<const std::uintptr_t*>(triShape.address())[0x34];
 		installed = true;
-		logger::info("[DCLF] primary cull installed (the scene lists after the full-frustum cull, the list jobs' Finish){}", Probe() ? "; census on" : "");
+		logger::info("[DCLF] primary cull installed (the scene lists after the full-frustum cull, the list jobs' Finish)");
 	}
 
 	void PrimaryCull::Report(std::uint32_t a_frame, std::uint32_t a_interval)
@@ -1392,24 +1299,5 @@ namespace DCLF
 			logger::info("[DCLF] fade roots: {} stood in ({} of their members skins with LOD levels{}); {:.0f} entries with engine-drawn parts culled by the engine a frame; compound frustum larger than the fade test's block on {} frames",
 				SceneStore::Get().StoodInFadeRoots(), standInLodSkins, standInLodSkins ? " <- LOD SKINS" : "", mixedPerFrame, std::exchange(visibilityOverflows, 0));
 		}
-		if (!Probe() || !census.frames)
-			return;
-		const auto& c = census;
-		const double f = static_cast<double>(c.frames);
-		const auto take = [](std::atomic<std::uint64_t>& a_value) { return a_value.exchange(0, std::memory_order_relaxed); };
-		const auto main = take(registrations.main), mainUnder = take(registrations.mainUnder);
-		const auto depth = take(registrations.depth), depthUnder = take(registrations.depthUnder), other = take(registrations.other);
-		logger::info("[DCLF] primary census, per frame: {:.0f} lists, {:.0f} entries ({:.0f} first), {:.0f} extra; {:.0f} are sun candidates ({:.0f} of the candidates' {:.0f}; {:.0f} tracked geometries under them), {:.0f} actor entries; "
-					 "registrations: main {:.0f} ({:.0f} under a listed candidate), depth {:.0f} ({:.0f}), other {:.0f}",
-			c.lists / f, c.entries / f, c.firstEntries / f, c.extraEntries / f, c.candidates / f, c.candidates / f, c.sunCandidates / f, c.candidateGeometries / f,
-			c.actorEntries / f, main / f, mainUnder / f, depth / f, depthUnder / f, other / f);
-		std::vector<std::pair<std::uint64_t, std::string>> top;
-		for (const auto& [key, count] : c.others)
-			top.emplace_back(count, key);
-		std::sort(top.rbegin(), top.rend());
-		for (std::size_t i = 0; i < top.size() && i < 30; ++i)
-			logger::info("[DCLF] primary census, not a candidate: {:.2f}/frame {}", top[i].first / f, top[i].second);
-		logger::info("[DCLF] primary census, the player's 3D:{}", playerChain);
-		census = {};
 	}
 }

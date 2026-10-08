@@ -693,8 +693,7 @@ namespace DCLF
 				if (const auto entry = tracked.find(geometry); entry != tracked.end())
 					entry->second.hiddenEventFrame = frame;
 		});
-		static const bool enabled = SwitchValue(Switch::HiddenEvents) != "0";
-		hiddenGating = enabled && hiddenEventsInstalled && frame > moveUngatedThrough;
+		hiddenGating = hiddenEventsInstalled && frame > moveUngatedThrough;
 		hiddenWitness = hiddenGating && (SwitchEnabled(Switch::WalkParity) || SwitchEnabled(Switch::PersistentParity)) && ParityDue(frame);
 	}
 }

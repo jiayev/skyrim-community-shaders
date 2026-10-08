@@ -1,5 +1,4 @@
 #include "PassCapture.h"
-#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/OpenDefectProbes.h"
 
@@ -293,7 +292,6 @@ namespace DCLF
 	{
 		static void thunk(RE::BSBatchRenderer* a_this, RE::BSRenderPass* a_pass, std::uint32_t a_techniqueID)
 		{
-			DCLF_FRAME_TRACE("PassCapture.cpp:293");  // TEMP frame trace
 			++passesOnThisThread;
 			auto& capture = PassCapture::Get();
 			if (capture.bypassed.load(std::memory_order_acquire)) {
@@ -307,8 +305,6 @@ namespace DCLF
 			const bool withheld = capture.WithholdMain(a_this, a_pass) || capture.WithholdReflection(a_this, a_pass) || capture.Withhold(a_this, a_pass, fading);
 			capture.Record(a_this, a_pass, a_techniqueID, fading, withheld);
 			LocalLightCull::NoteRegistration(a_this, a_pass, withheld);
-			if (std::uint32_t mode = 0; !withheld && capture.ShadowModeOfBatch(a_this, mode))
-				CensusNativePass(a_pass, a_techniqueID, mode, false);
 			if (!withheld)
 				func(a_this, a_pass, a_techniqueID);
 		}
@@ -337,7 +333,6 @@ namespace DCLF
 	{
 		static void thunk(RE::BSBatchRenderer* a_batch, RE::BSRenderPass* a_pass, std::uint32_t a_group, std::uint32_t a_arg)
 		{
-			DCLF_FRAME_TRACE("PassCapture.cpp:336");  // TEMP frame trace
 			++passesOnThisThread;
 			auto& capture = PassCapture::Get();
 			const bool withheld = (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdMain(a_batch, a_pass)) ||
@@ -361,7 +356,6 @@ namespace DCLF
 	{
 		static void thunk(RE::BSBatchRenderer* a_batch, RE::BSRenderPass* a_pass, std::uint32_t a_group, std::uint32_t a_arg)
 		{
-			DCLF_FRAME_TRACE("PassCapture.cpp:359");  // TEMP frame trace
 			++passesOnThisThread;
 			auto& capture = PassCapture::Get();
 			const bool withheld = (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdMain(a_batch, a_pass)) ||
@@ -386,7 +380,6 @@ namespace DCLF
 	{
 		static void thunk(RE::BSBatchRenderer* a_batch, RE::BSRenderPass* a_pass, std::uint32_t a_group, std::uint32_t a_arg)
 		{
-			DCLF_FRAME_TRACE("PassCapture.cpp:383");  // TEMP frame trace
 			++passesOnThisThread;
 			auto& capture = PassCapture::Get();
 			if (!capture.bypassed.load(std::memory_order_acquire) && (capture.WithholdMain(a_batch, a_pass) || capture.WithholdReflection(a_batch, a_pass)))
@@ -401,7 +394,6 @@ namespace DCLF
 	{
 		static void thunk(RE::BSBatchRenderer* a_batch, RE::BSRenderPass* a_pass, void* a_list)
 		{
-			DCLF_FRAME_TRACE("PassCapture.cpp:397");  // TEMP frame trace
 			++passesOnThisThread;
 			auto& capture = PassCapture::Get();
 			if (!capture.bypassed.load(std::memory_order_acquire) && (capture.WithholdMain(a_batch, a_pass) || capture.WithholdReflection(a_batch, a_pass)))
@@ -420,7 +412,6 @@ namespace DCLF
 	{
 		static void thunk(RE::BSBatchRenderer* a_batch, RE::BSRenderPass* a_pass, std::uint32_t a_group, std::uint32_t a_arg)
 		{
-			DCLF_FRAME_TRACE("PassCapture.cpp:415");  // TEMP frame trace
 			++passesOnThisThread;
 			auto& capture = PassCapture::Get();
 			const std::uint8_t phase = capture.occlusionPhase.load(std::memory_order_acquire);

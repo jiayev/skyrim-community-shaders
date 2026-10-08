@@ -290,50 +290,23 @@ namespace DCLF
 		// The engine draws a decal chain (a group's technique bucket and sub-pass list) in reverse registration order, and
 		// registers in the order of its scene lists (DecalOrder.cpp's key, which the order probe measures). Stable: the
 		// scene's order, kept: a decal's key is taken when it joins (or is patched again), and a change re-keys only the
-		// decals it names; the ordinals are counted again in one pass. Engine: the frame's lists, every frame, whole.
-		const bool engineOrder = SwitchValue(Switch::DecalOrder) == "engine";
+		// decals it names; the ordinals are counted again in one pass.
 		if (!keptDecals)
 			keptDecals = std::make_shared<KeptDecalOrder>();
 		auto& kept = keptDecals->entries;
-		const bool parity = !engineOrder && SwitchEnabled(Switch::PersistentParity) && ParityDue(frame);
-		if (!engineOrder && !decalsRebuild && decalsChanged.empty() && !parity)
+		const bool parity = SwitchEnabled(Switch::PersistentParity) && ParityDue(frame);
+		if (!decalsRebuild && decalsChanged.empty() && !parity)
 			return;
 		if (tables.decalOrdinal.size() != tables.objects.size())
 			tables.decalOrdinal.resize(tables.objects.size(), ~0u);
 
-		auto& probe = decalOrderProbe;
-		if (engineOrder) {
-			probe.positions.clear();
-			const std::uint32_t count = Global<std::uint32_t>(kSceneListCount);
-			if (auto* lists = Global<SceneList*>(kSceneLists))
-				for (std::uint32_t l = 0; l < count; ++l)
-					for (std::uint32_t i = 0; i < lists[l].size(); ++i)
-						if (const auto* root = lists[l][i].get())
-							probe.positions.emplace(root, std::pair{ l, i });
-			// The first list job culls the extra list after its own list (FirstListAccumulationJob, AE 1414cc260).
-			if (count)
-				if (auto* lists = Global<SceneList*>(kSceneLists)) {
-					const auto& extra = Global<SceneList>(kExtraList);
-					for (std::uint32_t i = 0; i < extra.size(); ++i)
-						if (const auto* root = extra[i].get())
-							probe.positions.emplace(root, std::pair{ 0u, lists[0].size() + i });
-				}
-		}
 		// A decal's place in the order: its chain and key (none for an object with no geometry).
 		auto keyed = [&](std::uint32_t a_object, std::uint64_t a_chain, OrderedDecal& a_out) {
 			const auto* geometry = a_object < tables.objectGeometry.size() ? tables.objectGeometry[a_object] : nullptr;
 			if (!geometry)
 				return false;
 			a_out = { a_chain, {}, a_object, DecalNodeOf(geometry) };
-			if (engineOrder) {
-				const RE::NiAVObject* root = nullptr;
-				if (KeyOf(geometry, probe, a_out.key, root) != Miss::None) {
-					SceneKeyOf(geometry, a_out.key);
-					a_out.key.list = ~0u;  // under no list root: after every list, in the scene's order
-				}
-			} else {
-				SceneKeyOf(geometry, a_out.key);
-			}
+			SceneKeyOf(geometry, a_out.key);
 			return true;
 		};
 		auto whole = [&] {
@@ -346,7 +319,7 @@ namespace DCLF
 			return ordered;
 		};
 
-		if (engineOrder || decalsRebuild) {
+		if (decalsRebuild) {
 			kept = whole();
 		} else if (!decalsChanged.empty()) {
 			// The changed decals out, and those still members in again with their keys taken now; with them every kept decal under
@@ -384,7 +357,7 @@ namespace DCLF
 			kept.insert(kept.end(), std::make_move_iterator(joined.begin()), std::make_move_iterator(joined.end()));
 			std::inplace_merge(kept.begin(), kept.begin() + middle, kept.end(), DrawnBefore);
 		}
-		const bool changed = engineOrder || decalsRebuild || !decalsChanged.empty();
+		const bool changed = decalsRebuild || !decalsChanged.empty();
 		decalsChanged.clear();
 		decalsRebuild = false;
 

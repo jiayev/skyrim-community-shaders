@@ -95,8 +95,7 @@ namespace DCLF
 	 * entirely is taken out of it (SunCandidates, SunExclusion). Those entries are then never traversed, culled or
 	 * registered for the cascades. What the registration would have written, the sun's bits in each geometry's
 	 * activeLightMask, DCLF writes when the main camera registers the geometry: the cascades its bound meets, tested
-	 * against the planes the engine's own cascade cull used (the Geometric rule; CS_DCLF_SUN_EXCLUDE=probe compares
-	 * them with the engine's bits, and the casters the exclusion would lose, on a dry run).
+	 * against the planes the engine's own cascade cull used (the Geometric rule).
 	 */
 	class SunAccumulation
 	{
@@ -166,8 +165,6 @@ namespace DCLF
 			const auto it = exclusion->candidates->entries.find(static_cast<const RE::NiAVObject*>(a_node));
 			return it != exclusion->candidates->entries.end() && exclusion->excluded[it->second];
 		}
-		/** @brief CS_DCLF_SUN_EXCLUDE=probe: the exclusion runs dry, and DCLF's sun bits are compared with the engine's. */
-		static bool ExclusionProbe();
 
 
 		struct Stats
@@ -207,13 +204,6 @@ namespace DCLF
 			std::atomic<std::uint64_t> written{ 0 };       // registrations of a geometry under a removed entry that took DCLF's bits
 			std::atomic<std::uint64_t> withBits{ 0 };      // ... with at least one cascade's bit
 			std::atomic<std::uint64_t> notReady{ 0 };      // ... before the cascades were known (must be 0)
-			// CS_DCLF_SUN_EXCLUDE=probe, the main registrations of geometries under would-be-removed entries.
-			std::atomic<std::uint64_t> compared{ 0 };
-			std::atomic<std::uint64_t> agree{ 0 };
-			std::atomic<std::uint64_t> engineOnly{ 0 };    // the engine set a cascade's bit, DCLF's test would not
-			std::atomic<std::uint64_t> dclfOnly{ 0 };      // DCLF's test would set one the engine did not
-			std::atomic<std::uint64_t> probeUnclaimed{ 0 };  // cascade registrations the engine made under would-be-removed entries that built a pass
-			std::atomic<std::uint64_t> probeNoPass{ 0 };     // ... that built none (the mask only)
 		};
 
 	private:
@@ -226,7 +216,7 @@ namespace DCLF
 		 * @brief After the full-frustum cull, render thread: takes the published exclusion (once) and, when it still
 		 * describes the scene, removes its excluded entries from the full-frustum processes' objectArray, which is all
 		 * the cascade culls walk. Each process keeps at least one entry: the cascade cull sets its planes up from the
-		 * first. Under the probe nothing is removed, but the entries are marked all the same.
+		 * first.
 		 */
 		void ExcludeEntries(RE::BSShadowDirectionalLight* a_light);
 		/**
@@ -251,12 +241,9 @@ namespace DCLF
 		}
 		/**
 		 * @brief A registration after the sun's Accumulate, any thread: a geometry under a removed entry gets the bits of
-		 * the cascades its bound meets, ORed into its activeLightMask before GetRenderPasses reads it. Under the probe
-		 * the bits are compared with the engine's instead.
+		 * the cascades its bound meets, ORed into its activeLightMask before GetRenderPasses reads it.
 		 */
 		void ApplySunBits(RE::BSGeometry* a_geometry, bool a_clears);
-		/** @brief The probe, render thread: a cascade registration the engine made for a would-be-removed entry. */
-		void NoteProbeUnclaimed(RE::BSGeometry* a_geometry, std::uint32_t a_passes);
 
 		bool installed = false;
 		Stats stats;
@@ -278,7 +265,6 @@ namespace DCLF
 		{
 			std::shared_ptr<SunExclusion> exclusion;  // kept alive until the next full-frustum cull
 			std::uint32_t stamp = 0;
-			bool probe = false;                       // dry: nothing removed, the bits compared instead
 			// CS_DCLF_PERSISTENT_PARITY's frames: the cascade culls skip nothing, and an unclaimed caster registered under an
 			// excluded entry counts as one the skip would lose.
 			bool parity = false;

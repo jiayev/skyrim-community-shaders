@@ -286,7 +286,7 @@ featureset. Each count below is the same before and after the cleanup, so the cl
 later stage's parity runs are compared against these numbers, not against zero.
 
 Runs: `CS_DCLF_PERSISTENT_PARITY`, `WALK_PARITY`, `CHANGE_LOG_PARITY`, `RESIDENT_PARITY`,
-`RESIDENT_DRAW_PARITY`, `BUILD_PARITY`, `SKYLIGHT_PARITY` and `CS_DCLF_ASYNC=probe` together; and
+`RESIDENT_DRAW_PARITY`, `BUILD_PARITY` and `SKYLIGHT_PARITY` together; and
 `CS_DCLF_CAPTURE_PARITY=1` with `CS_DCLF_OWNERSHIP=off` on its own. 60 seconds each; counts are per report
 interval (300 frames). Every check not listed reports 0.
 
@@ -301,6 +301,9 @@ engine-drawn parts against FadeStateCS's test, is 0 in almost every 300-frame wi
     `FXAmbWaterFishBucket01B.nif`), y13 4 windows (116, then 6,000 a window, first `IronMace01`, a loose item, "the engine culled,
     the port visible (compound accepted at op 99)"); y12 (the same code as y11 but the extras block log) 0. The check reads no
     DCLF table, so the replay cannot change a verdict; which object differs varies by run.
+-   2026-10-08, y59 and y73 (y73: P0 of the persistent-views rework, which removed only inactive probes), the same place: 3-4
+    windows (851, then 5,700 a window), first `'GourdCluster01' slot 0: the engine culled, the port visible (compound
+    accepted at op 93)`. y60-y72 had 0.
 -   Earlier sessions show the same class, in single windows, at other places: 3-37 differ, with "the engine visible, the
     port culled (compound rejected at op 22-110)" (`AkaviriKatana`, `BearTrap01`, `SpitPotClosed01`; logs junk-landOwn*,
     junk-trav15).
@@ -319,21 +322,6 @@ the fade uploads; the GPU-side fade parities (port, state, roots with engine-dra
 
 **To investigate.** Log the first differing node's class, the frame's two process calls on it, and its +0x13C/+0x144 before
 and after; and compare the block sampled at the first stand-in call with one sampled at the differing call.
-
-### The async probes compare two different builds
-
-**Evidence.** `CS_DCLF_ASYNC=probe` reports every shadow build as different (`constants: 227840 vs 154128
-bytes`, 230-282 of 230-282), and 6-70 of 300 colour builds (with an empty difference, which `SamePayload`
-leaves for a bone-row or drawn-change count).
-
-**Cause.** The probe rebuilds on the render thread with `BuildShadowPayload(job.inputs, tables, lookups,
-probePayload)` and `BuildMainPayload(job.inputs, tables, lookups, probePayload)`, without the kept stores
-(object records, bones, geometries, the kept shadow state and the build cache). The worker's build uses them.
-Since the kept stores became the only path, the probe compares a kept build against a from-scratch one, which
-is `CS_DCLF_PERSISTENT_PARITY`'s job, and it says nothing about whether the worker and the render thread agree.
-
-**Fix.** Compare like with like: either build the reference from the same kept stores (as a snapshot, since
-the build advances them), or compare only the parts that do not depend on them.
 
 ### Resolved: the kept shadow state missed casters once their materials outnumbered the record slots
 
@@ -411,16 +399,6 @@ the hidden witness reported 0 misses in both.
 
 **Next step.** The report now breaks these draws down by their verdict now, naming the first of each ("tracked but
 excluded, by the verdict now"). If it recurs, an `eligible` entry there is a verdict DCLF kept stale.
-
-### The scene placement probe: one item moves inside its window
-
-**Evidence.** Under `CS_DCLF_ASYNC=probe` the scene placement join takes every item again and counts those that
-moved since the job read them: one item a frame (about 300 an interval), always `ImperialSwordBloodAdd`. An engine
-writer moves that geometry between the end of the scene tables and `BeforeShadowMaps`. The records take it at the
-end of the scene tables, as the light path always has, so this is not a change the job made.
-
-**Next step.** Identify the writer (the candidates in that window are `FUN_140742470`, which `Main::Draw` calls with
-the player's position, and the first-person culling), and decide whether the record should take the later value.
 
 ### Fixed: capture parity: `EyePosition` differs on a candle lantern after a load
 

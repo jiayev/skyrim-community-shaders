@@ -1008,10 +1008,6 @@ namespace DCLF
 			state.running.store(false, std::memory_order_release);
 			state.running.notify_all();
 		};
-		if (!AsyncEnabled()) {
-			find();
-			return;
-		}
 		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), PublishedSceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "fade write-back",
 				[find = std::move(find)](const auto&) { find(); }))
 			stl::report_and_fail("Drawcall Limit Fix: the fade write-back was refused by DCLF's executor");

@@ -1,5 +1,4 @@
 #include "FaceSnapshots.h"
-#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "EngineAccess.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
@@ -233,7 +232,6 @@ namespace DCLF
 	{
 		static void thunk(RE::BSFaceGenNiNode* a_head, std::uint8_t a_flag)
 		{
-			DCLF_FRAME_TRACE("FaceSnapshots.cpp:233");  // TEMP frame trace
 			func(a_head, a_flag);
 			if (!a_head)
 				return;
@@ -249,7 +247,6 @@ namespace DCLF
 	{
 		static void thunk(void* a_jobList)
 		{
-			DCLF_FRAME_TRACE("FaceSnapshots.cpp:248");  // TEMP frame trace
 			func(a_jobList);
 			auto& impl = *Get().impl;
 			for (auto& entry : impl.table) {

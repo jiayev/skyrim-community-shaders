@@ -1166,12 +1166,11 @@ namespace DCLF
 	void SceneStore::ValidateMaterialSlice()
 	{
 		const Tables& view = FrameView();
-		// The standing alarm: a few records drawn this frame, re-evaluated live and compared outside their
-		// frame-sourced components. A difference is a material writer the events do not cover; it is
-		// reported, not repaired, because repairing it here is what hid the missing events before.
-		const std::string& mode = SwitchValue(Switch::MaterialCache);
+		// CS_DCLF_PERSISTENT_PARITY: a few records drawn this frame (every one on a parity frame), re-evaluated live and compared
+		// outside their frame-sourced components. A difference is a material writer the events do not cover; it is reported, not
+		// repaired, because repairing it here is what hid the missing events before.
 		const auto& f = frameTables;
-		if (mode == "off" || f.materials.empty())
+		if (!SwitchEnabled(Switch::PersistentParity) || f.materials.empty())
 			return;
 		auto& evaluator = ConstantEvaluator::Get();
 		if (!evaluator.HasLightingShader())
@@ -1189,7 +1188,7 @@ namespace DCLF
 			if (!(served == live))
 				NoteStaleMaterial(slot, key, served, live);
 		};
-		if (mode == "probe") {
+		if (ParityDue(frame, 23)) {
 			Tables::ForEachBit(view.usedMaterialBits, [&](const std::uint32_t slot) {
 				if (slot < view.materials.size() && view.materialSlots.Alive(slot))
 					validate(slot);

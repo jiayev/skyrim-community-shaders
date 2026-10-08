@@ -1612,7 +1612,6 @@ names the switches that reduce it. The ones most runs use:
 | Switch | Effect |
 | --- | --- |
 | `CS_DCLF=0` | DCLF does not install. The menu's toggle, by contrast, applies live. |
-| `CS_DCLF_ASYNC=off\|probe` | The builds run inline on the render thread; `probe` also runs the worker's and compares the two. |
 | `CS_DCLF_PARITY_BOTH=1` | Nothing is withheld from the engine, which draws everything while DCLF draws its set too: the capture parity configuration (it double-draws). |
 | `CS_DCLF_CULL=off\|frustum` | Less GPU culling than the default (frustum and HZB occlusion). |
 | `CS_DCLF_STATS=1` | The periodic report, with the GPU time of each render-graph segment and pass. |
@@ -2971,7 +2970,7 @@ blocks moved into `frameConstants`, a buffer of fixed 64 KB slots (`FrameSlotOff
 so a record can name a block's address before the block exists.
 
 **The worker** (`DrawcallLimitFix/AsyncWorker.{h,cpp}`) is one dedicated thread, `CS DCLF worker`, with
-a small FIFO and a bounded join. A job that is late (`CS_DCLF_ASYNC_WAIT_MS`), fails or is stale falls
+a small FIFO and a join. A job that fails or is stale falls
 back to the inline build, and the worker's payload is dropped. `EndFrame` counts any job still
 outstanding at the end of the frame as `leaked`. `SetActive(false)` drains the worker. ORG's task
 service and the shader compilation pool were ruled out: the first is what `ExecuteFrame` fans onto while

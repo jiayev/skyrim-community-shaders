@@ -5,7 +5,6 @@
 #include "DrawcallLimitFix/Common/EngineReleases.h"
 #include "DrawcallLimitFix/Common/RenderThreadBudget.h"
 #include "DrawcallLimitFix/Common/SceneScheduler.h"
-#include "DrawcallLimitFix/Common/FrameTrace.h"
 #include "DrawcallLimitFix/Engine/EngineReadWindow.h"
 #include "DrawcallLimitFix/Diagnostics/CaptureParity.h"
 #include "DrawcallLimitFix/Scene/ConstantEvaluator.h"
@@ -73,12 +72,12 @@ namespace
 	}
 
 	/**
-	 * @brief The scene work on the render thread, as before the scene task: CS_DCLF_ASYNC=off, and the diagnostics that read the
-	 * store from the engine's hooks while the work would run (capture parity's face draws, the walk and persistent parities).
+	 * @brief The scene work on the render thread: the parities that read the store from the engine's hooks while the work would
+	 * run (capture parity's face draws, the walk and persistent parities).
 	 */
 	bool SceneWorkInline()
 	{
-		return !DCLF::AsyncEnabled() || DCLF::SwitchEnabled(DCLF::Switch::PersistentParity) || DCLF::SwitchEnabled(DCLF::Switch::WalkParity) ||
+		return DCLF::SwitchEnabled(DCLF::Switch::PersistentParity) || DCLF::SwitchEnabled(DCLF::Switch::WalkParity) ||
 		       DCLF::CaptureParity::Enabled();
 	}
 }
@@ -196,15 +195,6 @@ void DrawcallLimitFix::Reset()
 		UpdateActive();
 	}
 	DCLF::RenderThreadBudget::Get().EndFrame();
-	if (DCLF::FrameTrace::Enabled())  // TEMP frame trace
-		DCLF::FrameTrace::EndFrame([](const DCLF::FrameTrace::Entry* a_entries, std::uint32_t a_count) {
-			std::vector<DCLF::FrameTrace::Entry> sorted(a_entries, a_entries + a_count);
-			std::stable_sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.us < b.us; });
-			std::string text;
-			for (const auto& entry : sorted)
-				text += fmt::format("\n    {:8} us  thread {:6}  {}", entry.us, entry.thread, entry.site ? entry.site : "?");
-			logger::info("[DCLF] frame trace (TEMP): {} sites, first call each, from Main::Draw:{}", a_count, text);
-		});
 }
 
 void DrawcallLimitFix::UpdateActive()
@@ -233,10 +223,6 @@ void DrawcallLimitFix::SetActive(bool a_active)
 
 std::int64_t DrawcallLimitFix::Hooks::Main_Draw_Early::thunk(void* a_main)
 {
-	if (DCLF::FrameTrace::Enabled()) {  // TEMP frame trace
-		DCLF::FrameTrace::BeginFrame();
-		DCLF::FrameTrace::Note("Main::Draw (early hook, before the engine's call)");
-	}
 	const auto result = func(a_main);
 	globals::features::drawcallLimitFix.BeginSceneFrame();
 	return result;
@@ -911,7 +897,6 @@ void DrawcallLimitFix::Hooks::BSBatchRenderer_RenderPassImmediately<N>::thunk(RE
 	auto& feature = globals::features::drawcallLimitFix;
 	feature.NoteNativePass(a_pass, a_technique);
 	func(a_pass, a_technique, a_alphaTest, a_renderFlags);
-	DCLF::CensusNativePass(a_pass, a_technique, ~0u, feature.inDepthPass);
 	// CS_DCLF_TARGET_PROBE: the blend state a native Lighting draw of the main pass left bound (its write masks per target),
 	// and the renderer's alpha blend indices, once for each distinct write mode.
 	if (!feature.inDepthPass && !DCLF::SwitchValue(DCLF::Switch::TargetProbe).empty() && a_pass->shader &&

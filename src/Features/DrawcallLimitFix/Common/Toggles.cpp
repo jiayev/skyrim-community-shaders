@@ -5,7 +5,7 @@ namespace DCLF
 	namespace
 	{
 		using S = ToggleSet;
-		constexpr std::string_view kOn = "1", kStatic = "static";
+		constexpr std::string_view kOn = "1";
 
 		constexpr ToggleInfo kToggles[] = {
 			{ &S::skinned, Switch::Skinned, kOn, "skinned", "Object classes", "Skinned (CS_DCLF_SKINNED)", nullptr, true, {} },
@@ -25,7 +25,6 @@ namespace DCLF
 			{ &S::shadows, Switch::Shadows, kOn, "shadows", "Shadow views", "Draw the shadow views (CS_DCLF_SHADOWS)", nullptr, false, {} },
 			{ &S::skipSunAccumulation, Switch::SunSkip, kOn, "skip sun accumulation", {}, "Skip the engine's sun shadow culling and registration (CS_DCLF_SUN_SKIP)",
 				"The engine stops building sun shadow passes for the casters DCLF draws; it still sets their shadow bits for the main pass.", false, { &S::shadows } },
-			// `probe` runs the exclusion dry (SunAccumulation), which needs the toggle on.
 			{ &S::excludeSunEntries, Switch::SunExclude, kOn, "exclude sun entries", {}, "Take DCLF's objects out of the engine's sun culls (CS_DCLF_SUN_EXCLUDE)",
 				"The sun's cascade culls skip every reference whose shadows DCLF draws entirely; DCLF sets those objects' sun shadow bits for the main pass.", false, { &S::skipSunAccumulation } },
 			// `probe` is PrimaryCull's census, which removes nothing (and so leaves the cut off).
@@ -61,7 +60,7 @@ namespace DCLF
 			set.cullMode = (cull.empty() || cull == "occlusion") ? 2 : cull == "frustum" ? 1 : 0;
 			for (const auto& toggle : kToggles) {
 				const auto& value = SwitchValue(toggle.seed);
-				set.*toggle.member = value.empty() || value == toggle.onValue || (toggle.seed == Switch::SunExclude && value == "probe");
+				set.*toggle.member = value.empty() || value == toggle.onValue;
 			}
 			return set;
 		}
