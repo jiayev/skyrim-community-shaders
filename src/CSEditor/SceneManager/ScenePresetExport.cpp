@@ -1026,6 +1026,15 @@ void ScenePresetExport::Draw()
 		if (exported) {
 			UnifiedPresetCatalog::GetSingleton().Discover();
 			SettingsOverrideManager::GetSingleton()->RefreshOverrides();
+			auto& catalog = UnifiedPresetCatalog::GetSingleton();
+			if (info.type != PresetType::Baseline) {
+				// The export baked the user entries into the pack, so apply it and drop them from SceneManager.json.
+				if (catalog.ApplyPack(sanitizedName))
+					manager->ClearAllUserEntries();
+			} else if (catalog.GetActivePackId() == sanitizedName || catalog.IsBaselineEnabled(sanitizedName)) {
+				// Reload the applied preset so the exported base settings take effect.
+				catalog.ApplyPack(sanitizedName);
+			}
 		}
 		exportRequested = false;
 	} else if (!exportConfirmation.IsOpen()) {
