@@ -976,6 +976,7 @@ void SceneSettingsUI::DrawLocationWindows()
 				std::function<void(ImVec2, float)>{});
 		UpdateWidgetTypeSize(kLocationWidgetType);
 		if (visible) {
+			EditorWindow::GetSingleton()->ClaimTimePeriodSet(EditorWindow::TimePeriodSet::Scene);
 			const SceneSettingsManager::SceneContextId context{
 				.type = SceneSettingsManager::SceneContextType::Location,
 				.period = TimeOfDayPeriod::Count,

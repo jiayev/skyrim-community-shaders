@@ -49,7 +49,7 @@ namespace
 	constexpr float kInactiveHoverAlpha = 0.25f;
 	constexpr float kMenuShortcutScale = 0.85f;
 	/// Game time slider width relative to the time speed slider in the toolbar.
-	constexpr float kMenuBarGameTimeWidthScale = 1.5f;
+	constexpr float kMenuBarGameTimeWidthScale = 2.0f;
 	/// Help note wrap width in font sizes; a window-edge wrap (0) collapses on the popup's first auto-size frame.
 	constexpr float kHelpNoteWrapFontScale = 30.0f;
 
@@ -455,6 +455,9 @@ void EditorWindow::DrawBrowserPage()
 	}
 
 	const std::string id = category->id;
+	ClaimTimePeriodSet(id == "Weather"                            ? TimePeriodSet::Weather :
+					   id == "Locations" || id == "Scene Manager" ? TimePeriodSet::Scene :
+																	TimePeriodSet::None);
 	if (id == "Light Editor") {
 		lightEditor.DrawSettings();
 		return;
@@ -2200,11 +2203,10 @@ namespace
 		std::size_t count = 0;
 	};
 
-	/** @brief The periods the selected category edits: four sky colour times for weather, six for scenes. */
-	PeriodSegments GetPeriodSegments(std::string_view category)
+	PeriodSegments GetPeriodSegments(EditorWindow::TimePeriodSet periodSet)
 	{
 		PeriodSegments segments;
-		if (category == "Weather") {
+		if (periodSet == EditorWindow::TimePeriodSet::Weather) {
 			const auto sky = globals::game::sky;
 			if (!sky || !sky->currentClimate)
 				return segments;
@@ -2214,7 +2216,7 @@ namespace
 				{ day.dayEnd, day.nightStart, kSunsetColor },
 				{ day.nightStart, day.nightEnd + kHoursPerDay, kNightColor } } };
 			segments.count = 4;
-		} else if (category == "Locations" || category == "Scene Manager") {
+		} else if (periodSet == EditorWindow::TimePeriodSet::Scene) {
 			constexpr std::array periodColors{ kDawnColor, kSunriseColor, kDayColor, kSunsetColor, kDuskColor, kNightColor };
 			static_assert(periodColors.size() == SceneSettingsManager::kPeriodCount);
 			const auto starts = SceneSettingsManager::GetPeriodStartHours();
@@ -2254,13 +2256,19 @@ namespace
 	}
 }
 
+void EditorWindow::ClaimTimePeriodSet(TimePeriodSet periodSet)
+{
+	if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+		timePeriodSet = periodSet;
+}
+
 bool EditorWindow::DrawGameHourSlider(const char* label, const char* format)
 {
 	auto calendar = Util::Climate::GetCalendar();
 	if (!calendar || !calendar->gameHour)
 		return false;
 	const bool changed = ImGui::SliderFloat(label, &calendar->gameHour->value, 0.0f, kGameHourMax, format);
-	if (const auto segments = GetPeriodSegments(m_selectedCategory); segments.count > 0)
+	if (const auto segments = GetPeriodSegments(timePeriodSet); segments.count > 0)
 		DrawPeriodStrip(segments, kGameHourMax);
 	// Backward clock edits otherwise look like a midnight wrap and expire the weather override.
 	if (auto* sky = globals::game::sky; changed && sky && GetActiveLock())
