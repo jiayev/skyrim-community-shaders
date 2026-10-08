@@ -695,6 +695,8 @@ namespace DCLF
 		latch.dispatch[2] = 1;
 		latch.drawCount = inputCount;
 		latch.cullFlags = hasViewProj ? shape.cullMode : 0u;
+		// Every main input is a candidate (the colour segment's undrawable decals among them, which write their slot's blank).
+		latch.viewBits = kViewMainCull;
 		// The frame number, not the epoch: the depth segment publishes and the colour segment reads within one
 		// frame, so the stamp has to be the thing they share.
 		latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;  // 28 bits: BuildDrawsCS keeps flags below it
@@ -768,14 +770,15 @@ namespace DCLF
 		if (depthOnly && a_resources->pool) {
 			const auto& layout = latchLayout;
 			UpdateIndexPool(*a_resources->pool, a_store.GetTables(), a_store.GetTablesGeneration(), latchBlock, latchSlot, layout.PoolOffset(), uploads);
-			// The plan's slots, and none for every other pipeline slot the tables have: gained since the plan was made, or past the
-			// bucket layout while its growth is outstanding (Growths). None of their draws is the frame's.
+			// The plan's slots, and none for every other pipeline slot the installed publication's members can draw with: gained since
+			// the plan was made, or past the bucket layout while its growth is outstanding (Growths). None of their draws is the frame's.
 			const auto planned = static_cast<std::uint32_t>(writePlan.map.size());
-			auto slots = std::max({ planned, static_cast<std::uint32_t>(a_resources->zBucketCapacity.size()),
-				static_cast<std::uint32_t>(a_store.GetTables().pipelines.size()) });
-			// Past the revision's bucket map (a slot gained after its join): those slots' draws are dropped until the next revision.
+			auto slots = std::max({ planned, static_cast<std::uint32_t>(a_resources->zBucketCapacity.size()), InstalledPipelineSlots() });
+			// Past the revision's bucket map: slots no member draws with, or (flagged under CS_DCLF_REVISION_PARITY) a member's the
+			// revision's latch does not hold.
 			if (slots > layout.buckets) {
-				++revisions.latchClamped[revisionEpoch];
+				if (RevisionParityEnabled() && MemberPastSlots(layout.buckets))
+					++revisions.latchClamped[revisionEpoch];
 				slots = layout.buckets;
 			}
 			const std::uint32_t buckets = writePlan.Buckets();

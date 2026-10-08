@@ -1454,6 +1454,12 @@ namespace DCLF
 		 * by what blocks them (the first geometry LightEntryAllows refuses, or a caster the paraboloid views do not draw).
 		 */
 		std::string CoverageCensus() const;
+		/**
+		 * @brief Render thread, the scene work joined (a report): why a tracked geometry's sun entry rule allows it - its record, its
+		 * ineligibility reason and the caster rule's verdict - or that it is not tracked. Looked up by address, never dereferenced
+		 * unless tracked.
+		 */
+		std::string DescribeSunCandidate(const void* a_geometry) const;
 		std::size_t StoodInFadeRoots() const
 		{
 			return static_cast<std::size_t>(std::count_if(fadeRootOwned.begin(), fadeRootOwned.end(), [](const auto& a_root) { return a_root.second; }));
@@ -2743,8 +2749,6 @@ namespace DCLF
 		std::vector<const RE::BSFadeNode*> fadeChanged;  // FadeWatch's, applied at ApplyEvents
 		// SetFadeRootsOwned's set (kFadeRootOwned), by node: whether each is stood in (kFadeRootStoodIn).
 		ankerl::unordered_dense::map<const void*, bool> fadeRootOwned;
-		// Counts the fade roots that became owned or stopped being: an occluder's readiness reads it (IndirectDraws::PhaseReady).
-		std::uint64_t fadeOwnershipSerial = 0;
 		/**
 		 * @brief The root's row owned or not; a root newly owned is seeded again from its node (a new generation). One whose
 		 * stood-in state changes is reported to the fade watch: its dependents' shadow verdicts read its fade from elsewhere.
@@ -2847,10 +2851,6 @@ namespace DCLF
 		std::vector<ResidentCounted> residentCounted;  // by slot
 		std::vector<std::uint32_t> residentsTouched;   // since the last KeepResidentsAlive
 		SlotMembers pipelineMembers, fadeRootMembers, treeMembers;  // the trees' under key 0
-		// Every object slot by the fade root it is listed under (objectFadeRoot), resident or not: the occluders of a root whose
-		// servicing flipped are what the set's commit takes again (fadeOwnershipFlips).
-		SlotMembers fadeRootObjects;
-		std::vector<std::uint32_t> fadeOwnershipFlips;  // fade roots whose kFadeRootOwned flipped since the set's last commit
 		std::vector<std::uint32_t> materialMembers;    // by material slot: how many residents
 		// The pipelines and materials the accumulate phase's joins marked used this frame: cleared again where no resident holds them.
 		std::vector<std::uint32_t> joinMarkedPipelines, joinMarkedMaterials;
@@ -3004,7 +3004,6 @@ namespace DCLF
 		static constexpr std::uint32_t kWaitSources = 4;
 		static constexpr std::uint8_t kWaitLookups = 1, kWaitShadow = 2, kWaitConstants = 4, kWaitFit = 8;
 		static constexpr std::uint8_t kWaitOther = 16;  // any source moving takes it again (geometry, decal slot, reflection, layer partner)
-		static constexpr std::uint8_t kWaitFade = 32;   // its occluder's fade root's servicing (fadeOwnershipFlips), no source
 		/** @brief The readiness source a waiting reason (SetStats::waitingBy's index) is released by. */
 		static constexpr std::uint8_t WaitCauseOf(std::uint32_t a_why)
 		{
@@ -3022,8 +3021,6 @@ namespace DCLF
 			case 10:
 			case 12:
 				return kWaitFit;
-			case 11:
-				return kWaitFade;
 			default:
 				return kWaitOther;
 			}
@@ -3031,7 +3028,6 @@ namespace DCLF
 		std::array<std::uint64_t, kWaitSources> setReadiness{ ~0ull, ~0ull, ~0ull, ~0ull };
 		std::vector<std::uint8_t> setWaitCause;  // by slot: what it waits on (its last evaluation's), when waiting
 		std::uint64_t setShadowModes = ~0ull;      // the shadow modes and states caster readiness was last taken under
-		std::uint64_t setFadeOwnership = ~0ull;    // fadeOwnershipSerial as occluder readiness was last taken under
 		std::uint32_t setPhaseMask = ~0u;          // the phases DCLF draws (toggles) the last commit evaluated with
 		std::shared_ptr<SetSnapshot> setBuilding;  // the next publication, kept up to date by each commit
 		std::shared_ptr<const SetSnapshot> setSnapshot;

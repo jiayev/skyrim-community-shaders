@@ -424,13 +424,14 @@ namespace DCLF
 		 * rows, which async epochs never write (every draw got bucket 0).
 		 */
 		void UseShadowMapRow(const org::LatchBlock& a_latchBlock, const ShadowLatchLayout& a_layout, const RowBuckets& a_buckets, std::uint32_t a_latchSlot,
-			std::uint32_t a_rasterState, bool a_write, BuildDrawsLatch& a_latch)
+			std::uint32_t a_mode, std::uint32_t a_rasterState, bool a_write, BuildDrawsLatch& a_latch)
 		{
 			const auto& layout = a_layout;
-			// Every registered state has its row (ReserveShadowLatch, before the epoch): past it is a defect of that reserve.
-			if (a_rasterState == 0 || a_rasterState > layout.rasterStates)
-				stl::report_and_fail(fmt::format("Drawcall Limit Fix: shadow view rasterizer state {} past the latch's {} rows", a_rasterState, layout.rasterStates));
-			const std::uint32_t mapRowOffset = layout.MapOffset() + (a_rasterState - 1) * layout.MapRowBytes();
+			// Every registered state has its row in every mode (ReserveShadowLatch, before the epoch): past it is a defect of that reserve.
+			if (a_rasterState == 0 || a_rasterState > layout.rasterStates || a_mode >= kShadowModeCount)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: shadow view rasterizer state {} of mode {} past the latch's {} rows", a_rasterState, a_mode,
+					layout.rasterStates));
+			const std::uint32_t mapRowOffset = layout.MapOffset() + layout.MapRowOf(a_mode, a_rasterState) * layout.MapRowBytes();
 			a_latch.pipelineMapOffset = static_cast<std::uint32_t>(a_latchBlock.Offset(a_latchSlot)) + mapRowOffset;
 			if (!a_write)
 				return;
@@ -556,7 +557,7 @@ namespace DCLF
 		} else {
 			if (!caster)
 				return false;
-			modeTechnique = technique | ModeBitsOf(a_mode);
+			modeTechnique = technique;
 		}
 		a_key = { modeTechnique, rasterFlags, vertexLayout };
 		return true;
@@ -1317,10 +1318,11 @@ namespace DCLF
 				auto latch = ShadowViewLatch(view, inputCount, frameNumber);
 				static const REL::Relocation<const std::uint8_t*> fadesOn{ REL::Offset(0x2032dfd) };
 				latch.cullFlags = 1u | kCullMinRadius | (*fadesOn.get() ? kCullFadeOnVisible : 0u);
+				latch.viewBits = ShadowViewBits(mode, false);
 				latch.fadeStatesIndex = scene.FadeStatesReadIndex(frameNumber);
 				// The ring entry the shadow commit read (step 6e S2).
 				Impl::ShadowRingLatch(impl->ringShadow, mode, latch);
-				UseShadowMapRow(latchBlock, latchLayout, buckets, latchSlot, view.rasterState, true, latch);
+				UseShadowMapRow(latchBlock, latchLayout, buckets, latchSlot, mode, view.rasterState, true, latch);
 				WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, shapeView.buckets, latch);
 				LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 				shadowStats.occlusionInputs[v] = inputCount;
@@ -1511,7 +1513,7 @@ namespace DCLF
 				ZoneScopedN("CS.DCLF.ShadowInputs.IndexPool");
 				UpdateIndexPool(*resources->pool, store.GetTables(), store.GetTablesGeneration(), latchBlock, latchSlot, latchLayout.PoolOffset(), uploads);
 			}
-			std::vector<bool> mapRowsWritten(std::size_t(DrawPipelines::Get().ShadowRasterStateCount()) + 1);  // per state: its row is in the latch
+			std::vector<bool> mapRowsWritten(latchLayout.MapRows());  // per mode and state (MapRowOf): its row is in the latch
 			std::uint32_t sunEntryOffset = 0;  // the slot's sun entry region, once written
 			std::vector<bool> slotDrawn(layouts.size());
 			for (const auto& view : pending) {
@@ -1527,6 +1529,7 @@ namespace DCLF
 				auto latch = ShadowViewLatch(view, inputCount, frameNumber);
 				latch.cullFlags = (view.hasViewProj ? (1u | (view.renderMode == 0xE ? kCullNoNearPlane : 0u)) : 0u) |
 				                  (view.casterClass ? kCullVolumetricOnly : kCullCastersOnly) | (view.sunView ? kCullSunEntry : 0u);
+				latch.viewBits = ShadowViewBits(view.modeIndex, view.sunView);
 				latch.cullPlaneMask = view.cullPlaneMask;
 				std::memcpy(latch.cullPlanes, view.cullPlanes, sizeof(latch.cullPlanes));
 				latch.fadeStatesIndex = resources->scene->FadeStatesReadIndex(frameNumber);
@@ -1553,10 +1556,11 @@ namespace DCLF
 						}
 					}
 				}
-				const bool rowWritten = view.rasterState < mapRowsWritten.size() && mapRowsWritten[view.rasterState];
-				if (view.rasterState < mapRowsWritten.size())
-					mapRowsWritten[view.rasterState] = true;
-				UseShadowMapRow(latchBlock, latchLayout, (*target.rows)[index], latchSlot, view.rasterState, !rowWritten, latch);
+				const std::uint32_t mapRow = view.rasterState ? latchLayout.MapRowOf(view.modeIndex, view.rasterState) : ~0u;
+				const bool rowWritten = mapRow < mapRowsWritten.size() && mapRowsWritten[mapRow];
+				if (mapRow < mapRowsWritten.size())
+					mapRowsWritten[mapRow] = true;
+				UseShadowMapRow(latchBlock, latchLayout, (*target.rows)[index], latchSlot, view.modeIndex, view.rasterState, !rowWritten, latch);
 				WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, target.views[index].buckets, latch);
 				LatchWriteValue(latchBlock, "shadow culling latches", latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 				impl->CheckCascadeCulling(view, latch, frameNumber, payload);
@@ -1672,7 +1676,7 @@ namespace DCLF
 		in.indirect = a_indirect;
 		in.views = a_layouts;
 		for (const auto& layout : a_layouts)
-			in.rows.push_back(ShadowRowBuckets(layout.rasterState, a_store.GetLookups(), a_indirect));
+			in.rows.push_back(ShadowRowBuckets(layout.modeIndex, layout.rasterState, a_store.GetLookups(), a_indirect));
 		in.payload = &a_payload;
 		const auto bounds = ShadowBoundsOf(drawBound, a_store.GetLookups());
 		in.bounds = &bounds;
@@ -1696,21 +1700,23 @@ namespace DCLF
 		++revisions.parityChecks[a_epoch];
 	}
 
-	const RowBuckets& IndirectDraws::Impl::ShadowRowBuckets(std::uint32_t a_state, const Lookups& a_lookups, const ShadowIndirectState& a_indirect)
+	const RowBuckets& IndirectDraws::Impl::ShadowRowBuckets(std::uint32_t a_mode, std::uint32_t a_state, const Lookups& a_lookups, const ShadowIndirectState& a_indirect)
 	{
 		auto& cache = shadowRowBuckets;
 		if (cache.lookups != a_lookups.instance || cache.generation != a_lookups.shadowGeneration || cache.version != a_indirect.version) {
 			cache.lookups = a_lookups.instance;
 			cache.generation = a_lookups.shadowGeneration;
 			cache.version = a_indirect.version;
-			cache.rows.clear();
+			for (auto& rows : cache.rows)
+				rows.clear();
 		}
-		if (a_state >= cache.rows.size())
-			cache.rows.resize(std::size_t(a_state) + 1);
-		auto& row = cache.rows[a_state];
+		auto& rows = cache.rows[a_mode < kShadowModeCount ? a_mode : 0];
+		if (a_state >= rows.size())
+			rows.resize(std::size_t(a_state) + 1);
+		auto& row = rows[a_state];
 		if (!row) {
 			ZoneScopedN("CS.DCLF.ShadowInputs.RowBuckets");
-			row = BucketsOfRow(a_lookups.ShadowMapRow(a_state), a_indirect);
+			row = BucketsOfRow(a_lookups.ShadowMapRow(a_mode, a_state), a_indirect);
 		}
 		return *row;
 	}
@@ -2256,17 +2262,8 @@ namespace DCLF
 		// Within the scene buffers the shadow build ahead is made against (FitsScene): past them it has no input until their growth.
 		if (!FitsScene(&tables, a_slot, true))
 			return no(12);
-		// An occluder under a fade node: the engine's cull of the map goes into it only as the node's fade allows
-		// (BuildDrawsCS, FadedOutOfOcclusion), which DCLF knows for a root it services (kFadeRootOwned, FadeStateCS) and no other.
-		if (a_phase & (kSetOccluderSky | kSetOccluderPrecipitation)) {
-			const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
-			const auto* property = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
-			if (const auto* node = property ? property->fadeNode : nullptr) {
-				const std::uint32_t root = a_slot < tables.objectFadeRoot.size() ? tables.objectFadeRoot[a_slot] : kNoFadeRoot;
-				if (root >= tables.fadeRoots.size() || tables.fadeRootNode[root] != node || !(tables.fadeRoots[root].bits & kFadeRootOwned))
-					return no(11);
-			}
-		}
+		// An occluder under a fade node is culled by the node's fade as FadeStateCS keeps it for every listed root (BuildDrawsCS,
+		// FadedOutOfOcclusion): nothing of the engine's cull is waited for.
 		// The shadow build's rule (BuildKeptShadow's evaluate): every view of the object's class in each of the phase's modes drawn
 		// has its pipeline, and an alpha-tested technique's diffuse is imported.
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
@@ -2278,12 +2275,13 @@ namespace DCLF
 			const auto& states = impl->readyStates[m].Of(VolumetricClass(m, object.flags));
 			if (states.empty())
 				continue;
-			const ShadowPipelineKey key{ technique, (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u, VertexLayoutOf(tables.geometries[object.geometryIndex].vertexDesc) };
+			const ShadowPipelineKey key{ BaseTechnique(tables, m, a_slot), (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u,
+				VertexLayoutOf(tables.geometries[object.geometryIndex].vertexDesc) };
 			const auto slot = lookups.shadowSlots.find(key);
 			if (slot == lookups.shadowSlots.end())
 				return no(7);
 			for (const std::uint32_t state : states)
-				if (lookups.ShadowMapPipeline(state, slot->second) == Lookups::kNone)
+				if (lookups.ShadowMapPipeline(m, state, slot->second) == Lookups::kNone)
 					return no(7);
 			if (technique & 0x80) {
 				auto* diffuse = a_slot < tables.shadowDiffuse.size() ? tables.shadowDiffuse[a_slot] : nullptr;

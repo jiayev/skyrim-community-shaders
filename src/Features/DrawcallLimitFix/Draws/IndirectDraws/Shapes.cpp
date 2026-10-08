@@ -402,7 +402,7 @@ namespace DCLF
 					in.samplerHeap = samplerHeap;
 					in.indirect = shadowIndirect;
 					for (const auto& layout : layouts)
-						in.rows.push_back(impl->ShadowRowBuckets(layout.rasterState, store.GetLookups(), shadowIndirect));
+						in.rows.push_back(impl->ShadowRowBuckets(layout.modeIndex, layout.rasterState, store.GetLookups(), shadowIndirect));
 					in.views = layouts;
 					in.bounds = &bounds;
 					in.sizing = &sizing;

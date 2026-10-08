@@ -495,8 +495,10 @@ namespace DCLF
 					// One that built a pass is a caster the skip would have lost (a registration without one draws nothing).
 					if (parityWatch && PassCapture::PassesOnThisThread() != passesBefore) {
 						self.skipStats.parityLost.fetch_add(1, std::memory_order_relaxed);
-						if (self.skipStats.parityLostFirst.empty())
+						if (self.skipStats.parityLostFirst.empty()) {
 							self.skipStats.parityLostFirst = fmt::format("'{}'", geometry->name.c_str());
+							self.skipStats.parityLostGeometry = geometry;
+						}
 					}
 					// A caster the sun's views do not claim is registered for its native shadow; if DCLF draws its main pass, the
 					// cascade's bit has no main registration to read it (ClearOwnedMask).
@@ -675,12 +677,13 @@ namespace DCLF
 					stats.entriesRemoved / applied, stats.entriesSeen / applied, stats.excluded / applied, stats.candidates / applied,
 					stats.filterTicks * toMs / applied, written / applied, withBits / applied, notReady, stats.cascadeRegistrationsUnderRemoved,
 					skipStats.skipped.exchange(0) / applied, skipStats.parityFrames.load(), skipStats.parityLost.load(),
-					skipStats.parityFrames.load() ? (skipStats.parityLost.load() ? " <- SUN EXCLUSION; first " + skipStats.parityLostFirst : std::string(" <- OK")) : std::string());
+					skipStats.parityFrames.load() ? (skipStats.parityLost.load() ? " <- SUN EXCLUSION; first " + skipStats.parityLostFirst + " (" + SceneStore::Get().DescribeSunCandidate(skipStats.parityLostGeometry) + ")" : std::string(" <- OK")) : std::string());
 			}
 		}
 		stats = {};
 		skipStats.parityFrames = 0;
 		skipStats.parityLost = 0;
 		skipStats.parityLostFirst.clear();
+		skipStats.parityLostGeometry = nullptr;
 	}
 }

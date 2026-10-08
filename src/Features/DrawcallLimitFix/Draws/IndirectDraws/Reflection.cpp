@@ -218,11 +218,12 @@ namespace DCLF
 		// Tree LOD's draws, when the revision's faces have them and the scene's tables are the ones they were sized for.
 		const bool trees = target.tree.valid() && reflection.treePipeline.valid() && treeLod && scene.treeLodCull &&
 		                   resources->treeShapeCapacity == scene.treeLodShapeCapacity;
-		// Every pipeline slot the tables have: the map's, and none for the rest (gained since the revision's join), as many as its
-		// latch holds.
-		auto slots = std::max(static_cast<std::uint32_t>(target.map->size()), static_cast<std::uint32_t>(SceneStore::Get().GetTables().pipelines.size()));
+		// Every pipeline slot the installed publication's members can draw with: the map's, and none for the rest (gained since the
+		// revision's join), as many as its latch holds.
+		auto slots = std::max(static_cast<std::uint32_t>(target.map->size()), impl->InstalledPipelineSlots());
 		if (slots > target.latchLayout.slots) {
-			++impl->revisions.latchClamped[4];
+			if (RevisionParityEnabled() && impl->MemberPastSlots(target.latchLayout.slots))
+				++impl->revisions.latchClamped[4];
 			slots = target.latchLayout.slots;
 		}
 		const auto cleanup = RenderGraphRuntime::Get().Host()->ResourceCleanup();
@@ -267,6 +268,7 @@ namespace DCLF
 				latch.dispatch[2] = 1;
 				latch.drawCount = inputs;
 				latch.cullFlags = 1;  // the frustum alone, near plane included
+				latch.viewBits = kViewReflection;  // the depth segment's inputs: the reflection phase's members
 				latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;
 				latch.placementsIndex = FrameValues::Get().PlacementsIndex();
 				// The depth inputs the last Z-prepass commit read: its ring entry's, when it read one (step 6e E4).

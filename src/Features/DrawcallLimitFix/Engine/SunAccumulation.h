@@ -231,6 +231,7 @@ namespace DCLF
 		{
 			std::atomic<std::uint64_t> skipped{ 0 }, parityFrames{ 0 }, parityLost{ 0 };
 			std::string parityLostFirst;  // render thread (the cascades' registrations run on it)
+			const void* parityLostGeometry = nullptr;  // the first, described at the report (SceneStore::DescribeSunCandidate)
 		};
 		SkipStats skipStats;
 

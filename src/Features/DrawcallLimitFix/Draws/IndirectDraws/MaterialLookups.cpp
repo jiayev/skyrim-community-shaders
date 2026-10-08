@@ -349,8 +349,8 @@ namespace DCLF::Draws
 			const auto& keys = IsOcclusionMode(m) ? a_tables.occlusionKeysUsed[OcclusionOfMode(m)] : a_tables.shadowKeysUsed;
 			const DXGI_FORMAT format = IsOcclusionMode(m) ? a_occlusionFormats[OcclusionOfMode(m)] : a_dsvFormat;
 			for (const auto& key : keys) {
-				const std::uint32_t modeBits = ModeBitsOf(m);
-				const ShadowPipelineKey slotKey{ key.technique | modeBits, key.rasterFlags, key.vertexLayout };
+				const std::uint32_t technique = key.technique | ModeBitsOf(m);
+				const ShadowPipelineKey slotKey{ key.technique, key.rasterFlags, key.vertexLayout };
 				auto slotIt = a_lookups.shadowSlots.find(slotKey);
 				if (slotIt == a_lookups.shadowSlots.end()) {
 					// The latch's map rows hold every slot this refresh can add (ReserveShadowLatch, before the epoch).
@@ -365,13 +365,13 @@ namespace DCLF::Draws
 				const auto* program = [&] {
 					ZoneScopedN("CS.DCLF.RefreshShadow.FindProgram");
 					bool requested = false;
-					const auto* found = RequestShadowProgram(slotKey.technique, key, occlusion, *utility, mayRequestProgram, &requested);
+					const auto* found = RequestShadowProgram(technique, key, occlusion, *utility, mayRequestProgram, &requested);
 					mayRequestProgram &= !requested;
 					return found;
 				}();
 				// The key under each rasterizer state its mode's views draw with.
 				for (const std::uint32_t state : modeStates[m]) {
-					const ShadowPipelineKey viewKey{ slotKey.technique, slotKey.rasterFlags, slotKey.vertexLayout, state };
+					const ShadowPipelineKey viewKey{ technique, slotKey.rasterFlags, slotKey.vertexLayout, state };
 					const std::uint32_t set = [&] {
 						ZoneScopedN("CS.DCLF.RefreshShadow.FindPipeline");
 						return program ? RequestShadowPipeline(viewKey, *program, format, key, occlusion) : DrawPipelines::kNotReady;
@@ -383,12 +383,18 @@ namespace DCLF::Draws
 						++a_lookups.shadowGeneration;
 						it->second = index;
 					}
-					if (a_lookups.shadowMapRows.size() <= state)
-						a_lookups.shadowMapRows.resize(std::size_t(state) + 1);
-					auto& row = a_lookups.shadowMapRows[state];
+					auto& rows = a_lookups.shadowMapRows[m];
+					if (rows.size() <= state)
+						rows.resize(std::size_t(state) + 1);
+					auto& row = rows[state];
 					if (row.size() <= slot)
 						row.resize(slot + 1, Lookups::kNone);
-					row[slot] = index;
+					// A row entry is its mode's: two modes whose techniques are the same (the occlusion maps' share their keys) share the
+					// pipeline above but not the row, which moves the generation itself.
+					if (row[slot] != index) {
+						row[slot] = index;
+						++a_lookups.shadowGeneration;
+					}
 				}
 			}
 		}

@@ -324,7 +324,6 @@ namespace DCLF
 		}
 		++tables.fadeRootRefs[it->second];
 		current = it->second;
-		fadeRootObjects.Add(current, a_slot);
 		// The shadow inputs name it (FadeRootOf).
 		tables.NoteChange(a_slot, kChangeBindings);
 	}
@@ -335,8 +334,6 @@ namespace DCLF
 			return;
 		tables.NoteFadeRootsWrite();
 		auto& current = tables.objectFadeRoot[a_slot];
-		if (current != kNoFadeRoot && fadeRootObjects.Has(current, a_slot))
-			fadeRootObjects.Remove(current, a_slot);
 		if (current < tables.fadeRootRefs.size() && --tables.fadeRootRefs[current] == 0) {
 			const auto* node = static_cast<const RE::NiAVObject*>(tables.fadeRootNode[current]);
 			std::erase_if(tables.fadeRootSwitch, [&](const auto& a_entry) { return a_entry.second == current; });
@@ -360,10 +357,6 @@ namespace DCLF
 		if (it == tables.fadeRootIndex.end())
 			return;
 		auto& row = tables.fadeRoots[it->second];
-		if (((row.bits & kFadeRootOwned) != 0) != a_owned) {
-			++fadeOwnershipSerial;
-			fadeOwnershipFlips.push_back(it->second);
-		}
 		if (a_owned) {
 			// From here the GPU's state is the members': it starts from the node as the engine left it.
 			const std::uint32_t object = row.object;
