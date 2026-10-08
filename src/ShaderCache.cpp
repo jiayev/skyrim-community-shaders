@@ -11,6 +11,7 @@
 
 #include "Deferred.h"
 #include "State.h"
+#include "Utils/CompileDedupe.h"
 
 #include "Features/DynamicCubemaps.h"
 
@@ -1404,6 +1405,52 @@ namespace SIE
 			return false;
 		}
 
+		/** @brief Shares one compile between tasks with identical preprocessed code and compile inputs. */
+		static Util::CompileDedupe::Registry& GetCompileDedupe()
+		{
+			static Util::CompileDedupe::Registry registry;
+			return registry;
+		}
+
+		/** @brief What preprocessing a task and joining any identical compile produced. */
+		struct SharedCompile
+		{
+			ID3DBlob* blob = nullptr;                           ///< A finished blob for identical code.
+			std::optional<Util::CompileDedupe::Ticket> ticket;  ///< Set when this task must compile.
+			std::string source;                                 ///< The preprocessed code the key was built from; empty if preprocessing failed.
+			bool compileFailed = false;                         ///< An identical compile already failed; skip compiling.
+		};
+
+		static SharedCompile AcquireSharedCompile(ShaderClass a_class, const std::wstring& a_path, const std::string& a_pathString,
+			const D3D_SHADER_MACRO* a_defines, uint32_t a_flags, TrackingIncludeHandler& a_includes)
+		{
+			SharedCompile result;
+			std::ifstream sourceFile(a_path, std::ios::binary);
+			const std::string source((std::istreambuf_iterator<char>(sourceFile)), std::istreambuf_iterator<char>());
+			if (source.empty())
+				return result;
+			winrt::com_ptr<ID3DBlob> preprocessed;
+			winrt::com_ptr<ID3DBlob> errors;
+			if (FAILED(D3DPreprocess(source.data(), source.size(), a_pathString.c_str(), a_defines, &a_includes, preprocessed.put(), errors.put())) || !preprocessed)
+				return result;
+			result.source.assign(static_cast<const char*>(preprocessed->GetBufferPointer()), preprocessed->GetBufferSize());
+			if (!result.source.empty() && result.source.back() == '\0')
+				result.source.pop_back();
+			// Developer Mode keeps #line in the key: stripping it would share debug info with another variant's source lines.
+			const auto keyText = globals::state->IsDeveloperMode() ? result.source : Util::CompileDedupe::StripLineDirectives(result.source);
+			auto acquired = GetCompileDedupe().Acquire(Util::CompileDedupe::MakeKey({ keyText, "main", GetShaderProfile(a_class), a_flags }));
+			result.compileFailed = acquired.compileFailed;
+			if (acquired.compileFailed)
+				return result;
+			if (!acquired.blob) {
+				result.ticket.emplace(std::move(*acquired.ticket));
+				return result;
+			}
+			if (SUCCEEDED(D3DCreateBlob(acquired.blob->size(), &result.blob)))
+				std::memcpy(result.blob->GetBufferPointer(), acquired.blob->data(), acquired.blob->size());
+			return result;
+		}
+
 		/**
 		 * @brief Compiles or retrieves a cached shader.
 		 *
@@ -1549,17 +1596,34 @@ namespace SIE
 
 			// Track includes
 			TrackingIncludeHandler includeHandler(std::filesystem::path(path).parent_path());
-			const HRESULT compileResult = D3DCompileFromFile(path.c_str(), defines.data(), &includeHandler, "main",
-				GetShaderProfile(shaderClass), flags, 0, &shaderBlob, &errorBlob);
+			TrackingIncludeHandler preprocessHandler(std::filesystem::path(path).parent_path());
+			auto shared = AcquireSharedCompile(shaderClass, path, pathString, defines.data(), flags, preprocessHandler);
+			shaderBlob = shared.blob;
+			auto& dedupeTicket = shared.ticket;
+			const bool dedupeHit = shaderBlob != nullptr;
+			if (dedupeHit)
+				cache.IncContentDedupeTasks();
+
+			// Compiling the preprocessed snapshot keeps the published bytecode matched to the key if the files change meanwhile.
+			const bool fromSnapshot = !shared.source.empty();
+			const HRESULT compileResult = shared.compileFailed ? E_FAIL :
+			                              dedupeHit ? S_OK :
+			                              fromSnapshot ? D3DCompile(shared.source.data(), shared.source.size(), pathString.c_str(), nullptr, nullptr, "main",
+															 GetShaderProfile(shaderClass), flags, 0, &shaderBlob, &errorBlob) :
+			                                             D3DCompileFromFile(path.c_str(), defines.data(), &includeHandler, "main",
+															 GetShaderProfile(shaderClass), flags, 0, &shaderBlob, &errorBlob);
+			const auto& capturedIncludes = fromSnapshot ? preprocessHandler.includes : includeHandler.includes;
 			// If the include handler captured any includes, register them so the watcher
 			// can invalidate dependents even if this compilation fails. Do NOT clear
 			// mappings when there are no captured includes to avoid removing prior
 			// dependency information on transient failures.
-			if (dependencyTracker && !includeHandler.includes.empty()) {
-				dependencyTracker->RegisterDependencies(Util::WStringToString(path), includeHandler.includes);
+			if (dependencyTracker && !capturedIncludes.empty()) {
+				dependencyTracker->RegisterDependencies(Util::WStringToString(path), capturedIncludes);
 			}
 
 			if (FAILED(compileResult)) {
+				if (dedupeTicket)
+					dedupeTicket->FailCompile();
 				if (errorBlob != nullptr) {
 					logger::error("Failed to compile {} shader {}::{:X}:\n{}",
 						magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor,
@@ -1603,7 +1667,7 @@ namespace SIE
 #endif
 
 			// strip debug info
-			if (!globals::state->IsDeveloperMode()) {
+			if (!globals::state->IsDeveloperMode() && !dedupeHit) {
 				ID3DBlob* strippedShaderBlob = nullptr;
 
 				const uint32_t stripFlags = D3DCOMPILER_STRIP_DEBUG_INFO |
@@ -1614,6 +1678,9 @@ namespace SIE
 				std::swap(shaderBlob, strippedShaderBlob);
 				strippedShaderBlob->Release();
 			}
+
+			if (dedupeTicket)
+				dedupeTicket->Publish(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize());
 
 			// save shader to disk
 			if (useDiskCache) {
@@ -2784,6 +2851,14 @@ namespace SIE
 	{
 		compilationSet.cacheHitTasks++;
 	}
+	uint64_t ShaderCache::GetContentDedupeTasks()
+	{
+		return compilationSet.contentDedupeTasks;
+	}
+	void ShaderCache::IncContentDedupeTasks()
+	{
+		compilationSet.contentDedupeTasks++;
+	}
 
 	bool ShaderCache::IsHideErrors()
 	{
@@ -3427,6 +3502,10 @@ namespace SIE
 		// Log completion outside the lock
 		if (shouldLogCompletion) {
 			logger::debug("Compilation completed in {} ms", GetHumanTime(completionTimeMs));
+			auto& compileDedupe = SShaderCache::GetCompileDedupe();
+			logger::debug("Compile dedupe: {} compiles shared, {} MiB retained, {} blobs over the retention cap",
+				contentDedupeTasks.load(), compileDedupe.RetainedBytes() >> 20, compileDedupe.DroppedBlobs());
+			compileDedupe.Clear();
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			// A compilation batch finished (initial build OR a hot-reload recompile).
@@ -3461,6 +3540,8 @@ namespace SIE
 		cacheHitTasks = 0;
 		diskHitTasks = 0;
 		diskHitPriorityWeight = 0;
+		contentDedupeTasks = 0;
+		SShaderCache::GetCompileDedupe().Clear();
 		compilationPhaseStarted = false;
 		compilationPhaseStart = { 0 };
 		slowTasks = 0;
