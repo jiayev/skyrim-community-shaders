@@ -86,7 +86,7 @@ namespace CinematicCamera
 		float ExposureCompensationEV = 0.0f;
 	};
 
-	struct Settings
+	struct CameraSettings
 	{
 		bool Enabled = false;
 		FilmbackSettings Filmback;
@@ -184,7 +184,7 @@ namespace CinematicCamera
 
 	struct Controller
 	{
-		Settings settings;
+		CameraSettings settings;
 
 		FocusResolver focusResolver;
 

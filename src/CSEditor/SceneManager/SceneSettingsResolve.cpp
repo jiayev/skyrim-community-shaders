@@ -80,7 +80,7 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 	const bool blendAdvanced = std::abs(weather.lerp - lastResolvedWeatherLerp) >= kBlendEpsilon ||
 	                           // Indoors resolves nothing from the hour, so time alone cannot change it.
 	                           (!interior && (lastResolvedHour < 0.0f ||
-	                                             std::abs(hour - lastResolvedHour) >= kHourUpdateThreshold));
+												 std::abs(hour - lastResolvedHour) >= kHourUpdateThreshold));
 	// Continuous blends reload every blended feature per resolve, so they share the transition tick rate.
 	const auto sinceLastBlendResolve = transitionTime - lastBlendResolveTime;
 	const bool blendResolveDue = blendAdvanced &&
@@ -203,8 +203,8 @@ void SceneSettingsManager::StartLocationTransitions(
 		const auto resolvedIt = resolved.find(address);
 		const bool restoreAtEnd = nextIt == nextOverrideValues.end() && resolvedIt == resolved.end();
 		const auto& targetJson = nextIt != nextOverrideValues.end() ? nextIt->second :
-		                         resolvedIt != resolved.end()      ? resolvedIt->second :
-		                                                             baselineIt->second;
+		                         resolvedIt != resolved.end()       ? resolvedIt->second :
+		                                                              baselineIt->second;
 		if (!IsNumericValue(targetJson))
 			continue;
 		const auto targetValue = targetJson.get<float>();
@@ -216,12 +216,12 @@ void SceneSettingsManager::StartLocationTransitions(
 			continue;
 		}
 		activeLocationTransitions.insert_or_assign(address, LocationTransition{
-															   .startValue = startValue,
-															   .targetValue = targetValue,
-															   .startTime = now,
-															   .duration = duration,
-															   .restoreAtEnd = restoreAtEnd,
-														   });
+																.startValue = startValue,
+																.targetValue = targetValue,
+																.startTime = now,
+																.duration = duration,
+																.restoreAtEnd = restoreAtEnd,
+															});
 		locationTransitionBatchesDirty = true;
 	}
 	lastLocationOverrideValues = std::move(nextOverrideValues);
@@ -636,8 +636,7 @@ void SceneSettingsManager::RestoreAppliedSettings()
 	for (const auto& [address, _] : appliedSettings) {
 		auto baselineIt = baselineSettings.find(address);
 		if (baselineIt != baselineSettings.end())
-			updatesByFeature[address.featureShortName].push_back({
-				address, { address.settingPath, address.settingKey, baselineIt->second, false } });
+			updatesByFeature[address.featureShortName].push_back({ address, { address.settingPath, address.settingKey, baselineIt->second, false } });
 	}
 
 	for (const auto& [featureShortName, pending] : updatesByFeature) {
@@ -787,7 +786,7 @@ void SceneSettingsManager::ResolveWeatherSettings(
 	const auto& previousValues = BuildWeatherValueGroups(weather.previousWeatherId);
 
 	const auto resolveWeather = [&](const SettingAddress& address, const PeriodSettingMap& weatherValues,
-								   float baseline) -> std::optional<float> {
+									float baseline) -> std::optional<float> {
 		auto weatherIt = weatherValues.find(address);
 		if (weatherIt == weatherValues.end())
 			return std::nullopt;
@@ -857,7 +856,7 @@ void SceneSettingsManager::ResolveLocationLink(const std::vector<SettingEntry>& 
 		// A broader flat value is what this link's unset periods keep; a flat tombstone keeps the baseline.
 		if (auto flatIt = resolved.find(address); flatIt != resolved.end()) {
 			auto baselineIt = baselineSettings.find(address);
-			const auto* seed = IsNumericValue(flatIt->second)    ? &flatIt->second :
+			const auto* seed = IsNumericValue(flatIt->second)       ? &flatIt->second :
 			                   baselineIt != baselineSettings.end() ? &baselineIt->second :
 			                                                          nullptr;
 			if (seed && IsNumericValue(*seed))

@@ -1,5 +1,7 @@
 #include "DoF.h"
 
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
+
 #include "Features/PostProcessing.h"
 #include "Menu.h"
 #include "ShaderCache.h"
@@ -75,21 +77,40 @@ void DoF::DrawSettings()
 	ImGui::Checkbox(T("feature.post_processing.do_f.auto_focus", "Auto Focus"), &settings.AutoFocus);
 
 	if (settings.AutoFocus) {
+		const SceneWidgetInterceptor::ProxyScope proxy(&settings.FocusCoord, 1.0f);
 		ImGui::SliderFloat2(T("feature.post_processing.do_f.focus_point", "Focus Point"), autoFocusCoord, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	}
-	ImGui::SliderFloat(T("feature.post_processing.do_f.transition_speed", "Transition Speed"), &transitionSpeed, 0.1f, 1.0f, "%.2f");
-	ImGui::SliderFloat(T("feature.post_processing.do_f.manual_focus", "Manual Focus"), &manualFocus, 0.1f, 150.0f, "%.2f m");
-	ImGui::SliderFloat(T("feature.post_processing.do_f.focal_length", "Focal Length"), &focalLength, 1.0f, 300.0f, "%.1f mm");
-	ImGui::SliderFloat(T("feature.post_processing.do_f.f_number", "F-Number"), &fNumber, 1.0f, 22.0f, "f/%.1f");
-	ImGui::SliderFloat(T("feature.post_processing.do_f.sensor_width", "Sensor Width"), &sensorWidth, 1.0f, 100.0f, "%.1f mm", ImGuiSliderFlags_AlwaysClamp);
+	{
+		const SceneWidgetInterceptor::ProxyScope proxy(&settings.TransitionSpeed, 1.0f);
+		ImGui::SliderFloat(T("feature.post_processing.do_f.transition_speed", "Transition Speed"), &transitionSpeed, 0.1f, 1.0f, "%.2f");
+	}
+	{
+		const SceneWidgetInterceptor::ProxyScope proxy(&settings.ManualFocusPlane, 1.0f);
+		ImGui::SliderFloat(T("feature.post_processing.do_f.manual_focus", "Manual Focus"), &manualFocus, 0.1f, 150.0f, "%.2f m");
+	}
+	{
+		const SceneWidgetInterceptor::ProxyScope proxy(&settings.FocalLength, 1.0f);
+		ImGui::SliderFloat(T("feature.post_processing.do_f.focal_length", "Focal Length"), &focalLength, 1.0f, 300.0f, "%.1f mm");
+	}
+	{
+		const SceneWidgetInterceptor::ProxyScope proxy(&settings.FNumber, 1.0f);
+		ImGui::SliderFloat(T("feature.post_processing.do_f.f_number", "F-Number"), &fNumber, 1.0f, 22.0f, "f/%.1f");
+	}
+	{
+		const SceneWidgetInterceptor::ProxyScope proxy(&settings.SensorWidthMM, 1.0f);
+		ImGui::SliderFloat(T("feature.post_processing.do_f.sensor_width", "Sensor Width"), &sensorWidth, 1.0f, 100.0f, "%.1f mm", ImGuiSliderFlags_AlwaysClamp);
+	}
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(T("feature.post_processing.do_f.sensor_width_desc", "Horizontal sensor extent the focal length and F-number are expressed for. 36 mm matches a full frame camera."));
 	ImGui::EndDisabled();
-	if (!camActive) {
+	if (!camActive && !SceneWidgetInterceptor::IsArmed()) {
 		settings.FocusCoord.x = autoFocusCoord[0];
 		settings.FocusCoord.y = autoFocusCoord[1];
 		settings.ManualFocusPlane = manualFocus;
 		settings.TransitionSpeed = transitionSpeed;
+		settings.FocalLength = focalLength;
+		settings.FNumber = fNumber;
+		settings.SensorWidthMM = sensorWidth;
 	}
 	ImGui::SliderFloat(T("feature.post_processing.do_f.far_plane_max_blur", "Far Plane Max Blur"), &settings.FarPlaneMaxBlur, 0.0f, 8.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.near_plane_max_blur", "Near Plane Max Blur"), &settings.NearPlaneMaxBlur, 0.0f, 4.0f, "%.2f");
@@ -116,10 +137,16 @@ void DoF::DrawSettings()
 	ImGui::Combo(T("feature.post_processing.do_f.bokeh_mode", "Bokeh Mode"), &settings.BokehMode, "Procedural\0Custom Texture (Higher Cost)\0");
 	if (settings.BokehMode == 0) {
 		ImGui::BeginDisabled(camActive);
-		ImGui::SliderInt(T("feature.post_processing.do_f.bokeh_blade_count", "Aperture Blades"), &bladeCount, 4, 16, "%d", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::SliderFloat(T("feature.post_processing.do_f.bokeh_blade_roundness", "Blade Roundness"), &bladeRoundness, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		{
+			const SceneWidgetInterceptor::ProxyScope proxy(&settings.BokehBladeCount, 1.0f);
+			ImGui::SliderInt(T("feature.post_processing.do_f.bokeh_blade_count", "Aperture Blades"), &bladeCount, 4, 16, "%d", ImGuiSliderFlags_AlwaysClamp);
+		}
+		{
+			const SceneWidgetInterceptor::ProxyScope proxy(&settings.BokehBladeRoundness, 1.0f);
+			ImGui::SliderFloat(T("feature.post_processing.do_f.bokeh_blade_roundness", "Blade Roundness"), &bladeRoundness, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		}
 		ImGui::EndDisabled();
-		if (!camActive) {
+		if (!camActive && !SceneWidgetInterceptor::IsArmed()) {
 			settings.BokehBladeCount = bladeCount;
 			settings.BokehBladeRoundness = bladeRoundness;
 		}
@@ -128,9 +155,10 @@ void DoF::DrawSettings()
 	} else if (owner) {
 		const int shapeCount = owner->bokehResources.GetTotalShapeCount();
 		const int shape = std::clamp(settings.HighlightShape, 1, std::max(shapeCount, 1));
-		if (!settings.VanillaCompatibility)
+		if (!settings.VanillaCompatibility && !SceneWidgetInterceptor::IsArmed())
 			settings.HighlightShape = shape;
 		const int selectedShape = shape - 1;
+		ImGui::BeginDisabled(SceneWidgetInterceptor::IsArmed());
 		if (ImGui::BeginCombo(T("feature.post_processing.do_f.highlight_custom_shape", "Custom Aperture Texture"), owner->bokehResources.GetShapeName(selectedShape))) {
 			for (int i = 0; i < shapeCount; ++i) {
 				const bool selected = i == selectedShape;
@@ -141,12 +169,16 @@ void DoF::DrawSettings()
 			}
 			ImGui::EndCombo();
 		}
+		ImGui::EndDisabled();
 		ImGui::TextDisabled(T("feature.post_processing.do_f.custom_shape_cost", "Custom textures preserve arbitrary silhouettes but add a texture lookup per gather tap."));
 	}
 	ImGui::BeginDisabled(camActive);
-	ImGui::SliderFloat(T("feature.post_processing.do_f.highlight_shape_rotation", "Highlight Shape Rotation"), &shapeRotation, 0.0f, 1.0f, "%.2f");
+	{
+		const SceneWidgetInterceptor::ProxyScope proxy(&settings.HighlightShapeRotationAngle, 1.0f);
+		ImGui::SliderFloat(T("feature.post_processing.do_f.highlight_shape_rotation", "Highlight Shape Rotation"), &shapeRotation, 0.0f, 1.0f, "%.2f");
+	}
 	ImGui::EndDisabled();
-	if (!camActive)
+	if (!camActive && !SceneWidgetInterceptor::IsArmed())
 		settings.HighlightShapeRotationAngle = shapeRotation;
 	ImGui::BeginDisabled(camActive);
 	ImGui::Checkbox(T("feature.post_processing.do_f.target_focus", "Target Focus"), &settings.targetFocus);

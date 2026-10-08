@@ -69,8 +69,7 @@ struct PostProcessing : Feature
 	 */
 	bool WantsAutoHDR() const;
 
-	/// Settings from LoadSettings/RestoreDefaultSettings awaiting ProcessSettings in SetupResources or Prepass.
-	/// While non-empty, SaveSettings returns this instead of the live pipeline state.
+	/// Settings loaded before the pipeline exists.
 	json pendingSettings = {};
 
 	void ProcessSettings(json& o_json);

@@ -719,7 +719,7 @@ bool SceneSettingsManager::IsActiveSceneSetting(const std::string& featureShortN
 	return appliedSettings.contains({ featureShortName, settingPath, settingKey });
 }
 
-void SceneSettingsManager::CaptureExternalFeatureChanges(Feature* feature)
+void SceneSettingsManager::CaptureExternalFeatureChanges(Feature* feature, bool sketch)
 {
 	if (!feature)
 		return;
@@ -753,6 +753,10 @@ void SceneSettingsManager::CaptureExternalFeatureChanges(Feature* feature)
 	if (changedSettings.empty())
 		return;
 	for (const auto& [address, value] : changedSettings) {
+		if (sketch) {
+			RecordBaselineEdit(address, value);
+			continue;
+		}
 		baselineSettings[address] = value;
 		appliedSettings[address] = value;
 	}
@@ -763,7 +767,7 @@ void SceneSettingsManager::CaptureExternalFeatureChanges(Feature* feature)
 
 void SceneSettingsManager::RecordBaselineEdit(const SettingIdentity& setting, const json& value)
 {
-	// The feature's base snapshot and apply document predate the edit, so replaying either would revert it.
+	// Baseline capture must see the edit.
 	InvalidateFeatureSnapshot(setting.featureShortName);
 	auto baselineIt = baselineSettings.find(setting);
 	if (!appliedSettings.contains(setting) || baselineIt == baselineSettings.end())

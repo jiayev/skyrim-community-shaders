@@ -48,6 +48,7 @@ struct LUT : PostProcessFeature
 	virtual void RestoreDefaultSettings() override;
 	virtual void LoadSettings(json&) override;
 	virtual void SaveSettings(json&) override;
+	void UpdateTexture();
 
 	virtual void DrawSettings() override;
 	void inline Clear()
@@ -62,7 +63,7 @@ struct LUT : PostProcessFeature
 			texLUT3D.reset();
 	}
 	/** @brief Loads a LUT from a game-relative, absolute or active-pack-relative path. A failed load keeps the path. */
-	void ReadTexture(const std::string& requestedPath);
+	void ReadTexture(std::string requestedPath);
 	/** @brief Error text for a LUT file that cannot be loaded, or empty when its extension and existence check out. */
 	static std::string ValidateLutFile(const std::filesystem::path& resolvedPath);
 

@@ -1,5 +1,7 @@
 #include "PhysicalGlare.h"
 
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
+
 #include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
 #include "Globals.h"
@@ -87,20 +89,30 @@ void PhysicalGlare::DrawSettings()
 	if (settings.ApertureMode == 0) {
 		const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr;
 
-		int apertureBlades = cam ? cam->ApertureBladeCount : settings.ApertureBlades;
-		float fStop = cam ? cam->FNumber : settings.FStop;
+		int apertureBlades = settings.ApertureBlades;
+		if (cam)
+			apertureBlades = cam->ApertureBladeCount;
+		float fStop = settings.FStop;
+		if (cam)
+			fStop = cam->FNumber;
 
 		ImGui::BeginDisabled(cam != nullptr);
-		ImGui::SliderInt(T("feature.post_processing.physical_glare.aperture_blades", "Aperture Blades"), &apertureBlades, 3, 10);
+		{
+			const SceneWidgetInterceptor::ProxyScope proxy(&settings.ApertureBlades, 1.0f);
+			ImGui::SliderInt(T("feature.post_processing.physical_glare.aperture_blades", "Aperture Blades"), &apertureBlades, 3, 10);
+		}
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(T("feature.post_processing.physical_glare.number_of_aperture_blades_controls_starburst_pattern", "Number of aperture blades. Controls starburst pattern."));
 
-		ImGui::SliderFloat(T("feature.post_processing.physical_glare.f_stop", "F-Stop"), &fStop, 1.0f, 22.0f, "F%.1f");
+		{
+			const SceneWidgetInterceptor::ProxyScope proxy(&settings.FStop, 1.0f);
+			ImGui::SliderFloat(T("feature.post_processing.physical_glare.f_stop", "F-Stop"), &fStop, 1.0f, 22.0f, "F%.1f");
+		}
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(T("feature.post_processing.physical_glare.aperture_f_number_e_g_f2_8_smaller", "Aperture f-number (e.g. F2.8). Smaller = larger aperture = wider diffraction spikes.\nPhysically: aperture radius = 1 / f-number."));
 		ImGui::EndDisabled();
 
-		if (!cam) {
+		if (!cam && !SceneWidgetInterceptor::IsArmed()) {
 			settings.ApertureBlades = apertureBlades;
 			settings.FStop = fStop;
 		}
@@ -156,12 +168,17 @@ void PhysicalGlare::DrawSettings()
 	{
 		const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr;
 		const bool camLens = cam && settings.ApertureMode == 0;
-		float apertureRotation = camLens ? cam->ApertureBladeRotationDeg : settings.ApertureRotation;
+		float apertureRotation = settings.ApertureRotation;
+		if (camLens)
+			apertureRotation = cam->ApertureBladeRotationDeg;
 
 		ImGui::BeginDisabled(camLens);
-		ImGui::SliderFloat(T("feature.post_processing.physical_glare.aperture_rotation", "Aperture Rotation"), &apertureRotation, -180.f, 180.f, "%.1f deg");
+		{
+			const SceneWidgetInterceptor::ProxyScope proxy(&settings.ApertureRotation, 1.0f);
+			ImGui::SliderFloat(T("feature.post_processing.physical_glare.aperture_rotation", "Aperture Rotation"), &apertureRotation, -180.f, 180.f, "%.1f deg");
+		}
 		ImGui::EndDisabled();
-		if (!camLens)
+		if (!camLens && !SceneWidgetInterceptor::IsArmed())
 			settings.ApertureRotation = apertureRotation;
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(T("feature.post_processing.physical_glare.rotation_angle_of_the_aperture", "Rotation angle of the aperture."));
@@ -276,8 +293,10 @@ void PhysicalGlare::DrawSettings()
 			if (resValues[i] == settings.FFTResolution)
 				curIdx = i;
 
+		ImGui::BeginDisabled(SceneWidgetInterceptor::IsArmed());
 		if (ImGui::Combo(T("feature.post_processing.physical_glare.fft_resolution", "FFT Resolution"), &curIdx, resNames, 4))
 			settings.FFTResolution = resValues[curIdx];
+		ImGui::EndDisabled();
 
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(T("feature.post_processing.physical_glare.resolution_of_the_fft_convolution_higher_sharper_starburst", "Resolution of the FFT convolution. Higher = sharper starburst but more expensive."));

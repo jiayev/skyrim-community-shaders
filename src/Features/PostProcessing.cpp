@@ -21,10 +21,31 @@
 #include "Features/Upscaling.h"
 #include "Utils/ColorSpace.h"
 
+#include <algorithm>
+#include <array>
 #include <format>
+
+namespace
+{
+	constexpr std::array kPointerButtons{ ImGuiMouseButton_Left, ImGuiMouseButton_Right, ImGuiMouseButton_Middle };
+	constexpr std::array kActivateKeys{ ImGuiKey_Enter, ImGuiKey_KeypadEnter, ImGuiKey_Space, ImGuiKey_GamepadFaceDown };
+
+	/** @brief Whether this frame's input could activate a control, so idle frames skip the settings diff. */
+	bool InputMayEditSettings()
+	{
+		return ImGui::IsAnyItemActive() ||
+		       std::ranges::any_of(kPointerButtons, [](auto button) { return ImGui::IsMouseClicked(button) || ImGui::IsMouseReleased(button); }) ||
+		       std::ranges::any_of(kActivateKeys, [](auto key) { return ImGui::IsKeyPressed(key); });
+	}
+}
 
 void PostProcessing::DrawSettings()
 {
+	json before;
+	// Unbound widgets (buttons, popup combos) bypass the interceptor, so a diff is their only edit signal.
+	const bool watchEdits = !SceneWidgetInterceptor::IsArmed() && InputMayEditSettings();
+	if (watchEdits)
+		SaveSettings(before);
 	static int pipelinePageNum = 0;
 	static int pipelineFeatIdx = 0;
 
@@ -188,10 +209,9 @@ void PostProcessing::DrawSettings()
 									 "Controls lens, focus, exposure and FOV. Exposure processing runs automatically while the camera is active; other effects must be enabled separately."));
 		ImGui::Spacing();
 
-		ImGui::Checkbox(T("feature.post_processing.enabled", "Enabled"), &cinematicCamera.settings.Enabled);
+		cinematicCamera.DrawSettings();
 		if (cinematicCamera.settings.Enabled) {
 			ImGui::Indent();
-			cinematicCamera.DrawSettings();
 			if (auto* exposure = GetPipelineFeature<HistogramAutoExposure>(FeaturePipelineIndex::AutoExposure)) {
 				ImGui::SeparatorText(T("feature.post_processing.cinematic_camera.exposure_meter", "Exposure Meter"));
 				exposure->DrawCameraExposureReadout();
@@ -289,13 +309,20 @@ void PostProcessing::DrawSettings()
 		}
 		ImGui::TreePop();
 	}
+	if (watchEdits) {
+		json after;
+		SaveSettings(after);
+		if (before != after)
+			SceneSettingsManager::GetSingleton()->CaptureExternalFeatureChanges(this, true);
+	}
 }
 
 void PostProcessing::LoadSettings(json& o_json)
 {
-	// Deferred to Prepass so a load lands at a fixed point in the frame instead of mid-pass
-	// (Scene Manager and overrides call this from State::Draw); SaveSettings reports it until then.
-	pendingSettings = o_json;
+	if (!pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)])
+		pendingSettings = o_json;
+	else
+		ProcessSettings(o_json);
 }
 
 void PostProcessing::ProcessSettings(json& o_json)
@@ -323,9 +350,6 @@ void PostProcessing::ProcessSettings(json& o_json)
 
 void PostProcessing::SaveSettings(json& o_json)
 {
-	// A load not yet applied is the newest state, so report it rather than the live pipeline. This means
-	// a Save -> Load -> Save round trip within one frame cannot observe clamping by the pipeline;
-	// callers verifying retention (Scene Manager) only see it once Prepass has consumed the load.
 	if (!pendingSettings.empty()) {
 		o_json = pendingSettings;
 		o_json.erase("ppsettings");
@@ -361,7 +385,6 @@ void PostProcessing::ApplyDefaultEnabledStates()
 
 void PostProcessing::RestoreDefaultSettings()
 {
-	// A restore supersedes any load still waiting for Prepass.
 	pendingSettings = {};
 	cinematicCamera.RestoreDefaultSettings();
 
@@ -722,11 +745,8 @@ bool PostProcessing::WantsAutoHDR() const
 
 void PostProcessing::Prepass()
 {
-	if (!pendingSettings.empty()) {
-		logger::debug("Processing pending post processing settings...");
-		ProcessSettings(pendingSettings);
-		pendingSettings = {};
-	}
+	if (auto* lut = GetPipelineFeature<::LUT>(FeaturePipelineIndex::LUT))
+		lut->UpdateTexture();
 
 	{
 		auto graphicsState = globals::game::graphicsState;
