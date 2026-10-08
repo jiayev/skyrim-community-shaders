@@ -122,6 +122,7 @@ namespace DCLF
 		Tables,     // the scene phase has not built this frame's tables, or the view is unknown
 		Depth,      // the engine's shadow map could not be imported, or the view draws into an unknown target
 		Epoch,      // the epoch itself failed
+		Placement,  // the view drew where no placement is (target, slice, viewport), under another state, or twice: a defect
 		Count
 	};
 
@@ -178,7 +179,7 @@ namespace DCLF
 	};
 
 	inline constexpr std::array<const char*, static_cast<std::size_t>(ShadowViewNotReady::Count)> kShadowNotReadyNames{
-		"setup", "pipelines", "tables", "depth", "epoch"
+		"setup", "pipelines", "tables", "depth", "epoch", "placement"
 	};
 
 	inline constexpr std::array<const char*, static_cast<std::size_t>(DrawSkip::Count)> kSkipNames{ "pipeline", "geometry", "texture", "sampler",

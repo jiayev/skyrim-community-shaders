@@ -70,14 +70,14 @@ namespace DCLF
 		/** @brief The report's line: the capability, the catalog, and its changes since startup ("<- PHASES": a view it did not foresee). */
 		std::string ShadowCapabilityReport() const;
 		/**
-		 * @brief Render thread, before ShadowViews::Rebuild: how many shadow views DCLF's view slots hold now (their buffers and view
-		 * blocks, ShadowSizing::viewSlots) - the views past them stay the engine's while the slots grow; UINT32_MAX without a bound.
+		 * @brief Render thread, before ShadowViews::Rebuild: how many shadow views DCLF draws - every one (UINT32_MAX) once the view
+		 * placements are set up (a view draws at its placement's slot), none before, after a failure, or on a frame without claims.
 		 */
 		std::uint32_t ShadowViewCapacity();
 		/**
-		 * @brief BeforeShadowMaps, after ShadowViews::Rebuild and before the engine draws a view (scene revisions): the frame's views stay
-		 * DCLF's only when the selected revision has a shape for their predicted layout (Impl::observedViews); else every one is the
-		 * engine's this frame (ShadowViews::UncoverAll), and the layout is one the next revisions make a shape for.
+		 * @brief BeforeShadowMaps, after ShadowViews::Rebuild and before the engine draws a view (scene revisions): the frame's views are
+		 * DCLF's with the selected revision's shape for the placements (one shape, whichever views come); until a revision has recorded
+		 * it (startup, a growth), every one is the engine's this frame (ShadowViews::UncoverAll).
 		 */
 		void DecideShadowCoverage();
 		/**

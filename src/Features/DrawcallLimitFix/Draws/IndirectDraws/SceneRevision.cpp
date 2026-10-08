@@ -544,9 +544,9 @@ namespace DCLF
 				uncovered += fmt::format("{}{} {}", e ? ", " : "", SceneRevisions::kNames[e], std::exchange(rv.uncovered[e], 0));
 			text += fmt::format("[DCLF] strict epochs: {} frames without the selected revision's main recordings (claims withdrawn: the engine's), {} graph builds at the "
 								"build point, {} tickets of epochs not submitted given back for recordings; frames whose revision lacked an epoch's current recordings: {}; "
-								"shadow views left to the engine: {} frames with a view not seen yet, {} with a layout no revision had a shape for; {} covered frames "
+								"shadow views left to the engine: {} frames whose revision had no shape for the placements; {} covered frames "
 								"whose views did not come as predicted{}; occlusion maps left to the engine for want of the revision's shape: {}\n",
-				std::exchange(rv.withdrawn, 0), std::exchange(rv.builds, 0), std::exchange(rv.ticketsReleased, 0), uncovered, std::exchange(shadowUnobserved, 0),
+				std::exchange(rv.withdrawn, 0), std::exchange(rv.builds, 0), std::exchange(rv.ticketsReleased, 0), uncovered,
 				std::exchange(shadowUnrecorded, 0), shadowMispredicted, shadowMispredicted ? " <- MISPREDICTED" : "", std::exchange(occlusionUnrecorded, 0));
 			shadowMispredicted = 0;
 		}
