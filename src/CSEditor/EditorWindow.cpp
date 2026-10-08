@@ -2241,8 +2241,11 @@ namespace
 
 		auto* drawList = ImGui::GetWindowDrawList();
 		const ImU32 dividerColor = ImGui::GetColorU32(ImGuiCol_Text, kPeriodDividerAlpha);
+		// The first and last spans run to the frame edges rather than the grab travel limits.
+		auto stripX = [&](float hour) { return hour <= 0.0f ? frameMin.x : hour >= hourMax ? frameMax.x :
+			                                                                                 hourToX(hour); };
 		auto fillSpan = [&](float startHour, float endHour, ImU32 color) {
-			drawList->AddRectFilled(ImVec2(hourToX(startHour), frameMax.y - kPeriodStripHeight), ImVec2(hourToX(endHour), frameMax.y), color);
+			drawList->AddRectFilled(ImVec2(stripX(startHour), frameMax.y - kPeriodStripHeight), ImVec2(stripX(endHour), frameMax.y), color);
 		};
 
 		for (std::size_t index = 0; index < segments.count; ++index) {
