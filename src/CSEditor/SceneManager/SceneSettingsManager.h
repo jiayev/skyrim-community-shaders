@@ -722,6 +722,8 @@ public:
 	bool HasSketches(const std::string& featureShortName) const;
 	/// Keeps this feature's sketches alive through the next Update; without a retain from a drawn body they drop.
 	void RetainSketches(const std::string& featureShortName);
+	/** @brief Drops this feature's sketches now, leaving their values as its base and the scene resolving over them. */
+	void ReleaseSketches(const std::string& featureShortName);
 
 	/** @brief The context supplying an address's winning value: narrowest location link, else weather, else
 	 *  period or interior. Mid-blend the incoming side wins when it supplies one; null when no scene does. */

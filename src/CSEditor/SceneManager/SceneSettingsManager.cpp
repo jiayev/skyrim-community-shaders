@@ -800,6 +800,12 @@ void SceneSettingsManager::RetainSketches(const std::string& featureShortName)
 		sketchesRetained = true;
 }
 
+void SceneSettingsManager::ReleaseSketches(const std::string& featureShortName)
+{
+	if (HasSketches(featureShortName))
+		DropSketches();
+}
+
 void SceneSettingsManager::DropSketches()
 {
 	if (sketchOriginals.empty())

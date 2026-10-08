@@ -584,6 +584,8 @@ namespace
 			entry.targetKey.clear();
 			if (!manager->ExportSettings(target.name, entry.shortName, paths, entry.values, target.toPresetPack, removePaths))
 				return false;
+			// The exported value is now the baseline's, so the scene resolves over it as it will after a reopen.
+			SceneSettingsManager::GetSingleton()->ReleaseSketches(entry.shortName);
 		}
 		if (target.toPresetPack)
 			UnifiedPresetCatalog::GetSingleton().Discover();
