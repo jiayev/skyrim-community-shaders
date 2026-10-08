@@ -103,6 +103,12 @@ namespace DCLF
 		// targets once a face has been seen: requested here, ready a few frames later. The slots whose pipeline is ready are the
 		// reflection phase's readiness (PhaseReady): a change of them is a readiness event for the set.
 		auto& reflection = impl->reflection;
+		// The faces' targets, known before any face is drawn: the engine's reflection cube target's face views (a face's capture
+		// checks them), so the reflection phase is the set's from the start rather than from the first face.
+		if (reflection.targets.colour == DXGI_FORMAT_UNKNOWN)
+			if (auto* renderer = globals::game::renderer)
+				if (auto* face = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS].cubeSideRTV[0])
+					reflection.targets = { TargetOf(face).format, DXGI_FORMAT_D24_UNORM_S8_UINT };
 		auto* lighting = ConstantEvaluator::Get().GetLightingShader();
 		const bool on = reflection.targets.colour != DXGI_FORMAT_UNKNOWN && ActiveToggles().reflections && !failed && lighting;
 		const auto& tables = SceneStore::Get().GetTables();
@@ -153,10 +159,11 @@ namespace DCLF
 
 	bool IndirectDraws::ReflectionDrawable() const
 	{
-		// A capability, not whether the last update drew nor how many pipelines the frame's slots have: it flips only when the faces'
-		// resources appear (each member then waits for its own pipeline: ReflectionPhaseReady).
+		// A capability, not whether the last update drew nor what the faces' resources or pipelines are yet: the faces' targets, known
+		// at the first frame (PrepareReflection). Each member then waits for its own pipeline (ReflectionPhaseReady), and the faces
+		// withhold nothing until their epoch can draw them (DecideCoverage: the resources and the revision's shape).
 		const auto& reflection = impl->reflection;
-		return ActiveToggles().reflections && !failed && reflection.resources && impl->resources;
+		return ActiveToggles().reflections && !failed && reflection.targets.colour != DXGI_FORMAT_UNKNOWN;
 	}
 
 	bool IndirectDraws::Impl::ReflectionPhaseReady(const SceneStore::Tables& a_tables, std::uint32_t a_slot) const

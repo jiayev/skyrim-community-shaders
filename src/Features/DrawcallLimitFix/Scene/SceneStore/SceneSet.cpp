@@ -170,9 +170,15 @@ namespace DCLF
 		// its residency or its bindings, whoever made it), the waiting slots when a lookup they wait for moved, a new set of
 		// phases. A log this cursor cannot read on, new tables or new phases evaluate every slot.
 		const bool everything = drawn != setPhaseMask || !setCursor.Continues(tables.changeLog, tablesGeneration) || setPhases.size() > objects;
-		setPhaseMask = drawn;
 		if (everything) {
 			++setStats.resyncs;
+			logger::info("[DCLF] set resync at frame {} ({} objects, scene {}): {}", frame, objects, live ? "built" : "not built",
+				drawn != setPhaseMask                                 ? fmt::format("phases {:#x} -> {:#x}", setPhaseMask, drawn) :
+				!setCursor.Continues(tables.changeLog, tablesGeneration) ? std::string("new tables or a change log the cursor cannot read on") :
+				                                                          std::string("fewer objects"));
+		}
+		setPhaseMask = drawn;
+		if (everything) {
 			setCursor.Restart(tablesGeneration);
 			setPhases.assign(objects, 0);
 			setGeometry.assign(objects, nullptr);
