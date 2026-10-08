@@ -1,5 +1,6 @@
 #include "SceneCapture.h"
 
+#include "Features/DrawcallLimitFix/Diagnostics/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Scene/FadeState.h"
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
@@ -15,12 +16,13 @@ namespace DCLF::SceneCapture
 		using Engine::At;
 
 		constexpr std::uint32_t kMaxDepth = 64;
-		// +0x109's bit the cull writes every frame (0x40), not the record's.
-		constexpr std::uint8_t kFade109FrameBits = 0x40;
+		// +0x109's bits written every frame, not the record's: 0x40 the cull's (FUN_140d1c5f0), 0x20 the strip particles' update (set) and the cell's update pass (clear, FUN_1402b41a0).
+		constexpr std::uint8_t kFade109FrameBits = 0x60;
 
 		std::atomic<std::uint64_t> attaches{ 0 }, records{ 0 }, ns{ 0 }, mainThreadCaptures{ 0 }, mainThreadNs{ 0 }, outOfWorld{ 0 };
 		std::atomic<std::uint32_t> mainThread{ 0 };
 		std::atomic<std::uint32_t> currentFrame{ 0 };
+		std::atomic<std::uint64_t> sequence{ 0 };
 
 		bool NonFixedBody(const RE::NiAVObject& a_object)
 		{
@@ -46,9 +48,11 @@ namespace DCLF::SceneCapture
 				stack.pop_back();
 				if (const auto* geometry = const_cast<RE::NiAVObject*>(object)->AsGeometry()) {
 					CaptureLeaf(*geometry, a_out);
+					MirrorWatch::ArmGeometry(geometry);
 					continue;
 				}
 				a_out.nodes.push_back(CaptureNode(*object));
+				MirrorWatch::ArmNode(object);
 				if (const auto* node = const_cast<RE::NiAVObject*>(object)->AsNode())
 					for (const auto& child : node->GetChildren())
 						if (child)
@@ -64,7 +68,7 @@ namespace DCLF::SceneCapture
 		d |= rtti != a_o.rtti ? kRtti : 0u;
 		d |= kind != a_o.kind ? kKind : 0u;
 		d |= ((flags ^ a_o.flags) & 1u) ? kHidden : 0u;
-		d |= ((flags ^ a_o.flags) & ~(1u | kFrameFlags)) ? kFlags : 0u;
+		d |= ((flags ^ a_o.flags) & RecordFlags(kind)) ? kFlags : 0u;
 		d |= (userData != a_o.userData || formType != a_o.formType || actor != a_o.actor) ? kUserData : 0u;
 		d |= controllers != a_o.controllers ? kControllers : 0u;
 		d |= body != a_o.body ? kBody : 0u;
@@ -75,7 +79,6 @@ namespace DCLF::SceneCapture
 		d |= fade109 != a_o.fade109 ? kFade109 : 0u;
 		d |= fadeType != a_o.fadeType ? kFadeType : 0u;
 		d |= treeLodSwitch != a_o.treeLodSwitch ? kTreeLodSwitch : 0u;
-		d |= name != a_o.name ? kName : 0u;
 		return d;
 	}
 
@@ -128,7 +131,7 @@ namespace DCLF::SceneCapture
 		if (a_f & kHidden)
 			flags = (flags & ~1u) | (a_o.flags & 1u);
 		if (a_f & kFlags)
-			flags = (flags & (1u | kFrameFlags)) | (a_o.flags & ~(1u | kFrameFlags));
+			flags = (flags & ~RecordFlags(kind)) | (a_o.flags & RecordFlags(kind));
 		if (a_f & kUserData) {
 			userData = a_o.userData;
 			formType = a_o.formType;
@@ -160,6 +163,39 @@ namespace DCLF::SceneCapture
 		updatedFrame = Frame();
 	}
 
+	void GeometryRecord::Assign(const GeometryRecord& a_o, std::uint32_t a_f)
+	{
+		if (a_f & kType)
+			type = a_o.type;
+		if (a_f & kRenderer) {
+			rendererData = a_o.rendererData;
+			vertexBuffer = a_o.vertexBuffer;
+			indexBuffer = a_o.indexBuffer;
+			vertexDesc = a_o.vertexDesc;
+			vertexCount = a_o.vertexCount;
+			triangleCount = a_o.triangleCount;
+		}
+		if (a_f & kSkin) {
+			skin = a_o.skin;
+			skinRtti = a_o.skinRtti;
+			skinPartition = a_o.skinPartition;
+			skinData = a_o.skinData;
+			boneCount = a_o.boneCount;
+			partitions = a_o.partitions;
+		}
+		if (a_f & kDismember)
+			shown = a_o.shown;
+		if (a_f & kProperty)
+			property = a_o.property;
+		if (a_f & kAlpha)
+			alpha = a_o.alpha;
+		if (a_f & kLayer) {
+			layerProperty = a_o.layerProperty;
+			altIndexBuffer = a_o.altIndexBuffer;
+			altPrimCount = a_o.altPrimCount;
+		}
+	}
+
 	void PropertyRecord::Assign(const PropertyRecord& a_o, std::uint32_t a_f)
 	{
 		if (a_f & kRtti) {
@@ -183,6 +219,8 @@ namespace DCLF::SceneCapture
 			emissive = a_o.emissive;
 		if (a_f & kControllers)
 			controllers = a_o.controllers;
+		writer = 2;
+		writtenFrame = Frame();
 	}
 
 	void AlphaRecord::Assign(const AlphaRecord& a_o, std::uint32_t a_f)
@@ -336,6 +374,8 @@ namespace DCLF::SceneCapture
 		auto& property = const_cast<RE::BSShaderProperty&>(a_property);
 		PropertyRecord r;
 		r.key = &a_property;
+		r.capturedFrame = Frame();
+		r.thread = ::GetCurrentThreadId();
 		r.rtti = property.GetRTTI();
 		r.flags = a_property.flags.underlying();
 		r.material = a_property.material;
@@ -398,6 +438,7 @@ namespace DCLF::SceneCapture
 		}
 		const auto start = std::chrono::steady_clock::now();
 		auto out = std::make_unique<Records>();
+		out->sequence = NextSequence();
 		Visit(a_root, *out);
 		// The ancestors: their children lists changed (the parent's), and a record is wanted for every node a chain walks.
 		for (const auto* ancestor = a_root.parent; ancestor; ancestor = ancestor->parent)
@@ -421,6 +462,11 @@ namespace DCLF::SceneCapture
 	void NoteOutOfWorld()
 	{
 		outOfWorld.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	std::uint64_t NextSequence()
+	{
+		return sequence.fetch_add(1, std::memory_order_acq_rel) + 1;
 	}
 
 	void SetFrame(std::uint32_t a_frame)

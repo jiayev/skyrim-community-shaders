@@ -142,6 +142,183 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	// FUN_140b44490 (rigid body, motion type, ...): Havok's motion change, the motion rebuilt in place (hkpRigidBody::setMotionType,
+	// FUN_140b30700, calls it directly, or as a world operation when the world is locked, which runs it later). Every path to a
+	// body's motion type ends here: NiAVObject::SetMotionType's collision objects, the animation graph, ragdolls, Havok's own.
+	// The node owning the body (TESHavokUtilities::FindCollidableObject) after the call.
+	struct RigidBodyMotionType
+	{
+		static void thunk(RE::hkpRigidBody* a_body, std::uint32_t a_type, std::uint32_t a_arg2, std::uint32_t a_arg3)
+		{
+			func(a_body, a_type, a_arg2, a_arg3);
+			if (a_body)
+				PushNodeUpdate(RE::TESHavokUtilities::FindCollidableObject(*a_body->GetCollidable()), SceneCapture::NodeRecord::kBody);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// NiObjectNET::RemoveController (0x140d269a0): the controllers a node or a property holds (PrependController's other half).
+	struct RemoveController
+	{
+		static void thunk(RE::NiObjectNET* a_target, RE::NiTimeController* a_controller)
+		{
+			func(a_target, a_controller);
+			if (!a_target)
+				return;
+			if (auto* object = netimmerse_cast<RE::NiAVObject*>(a_target))
+				PushNodeUpdate(object, SceneCapture::NodeRecord::kControllers);
+			else
+				PushPropertyUpdate(netimmerse_cast<RE::BSShaderProperty*>(a_target), SceneCapture::PropertyRecord::kControllers);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// BSDismemberSkinInstance::UpdateDismemberPartion (0x14021a530): a partition's editorVisible, its only writer after the load.
+	// The skin instance knows no geometry: the mirror finds it by the skin (SceneMirror::Update).
+	inline void PushSkinShown(const RE::BSDismemberSkinInstance* a_skin)
+	{
+		if (!a_skin)
+			return;
+		SceneCapture::GeometryRecord record;
+		record.skin = a_skin;
+		const auto& data = a_skin->GetRuntimeData();
+		if (data.partitions)
+			for (std::int32_t i = 0; i < data.numPartitions; ++i)
+				record.shown.push_back(data.partitions[i].editorVisible ? 1 : 0);
+		SceneTracker::Get().PushUpdate(SceneCapture::Update{ SceneCapture::GeometryRecord::kDismember, std::move(record) });
+	}
+
+	struct DismemberPartition
+	{
+		static void thunk(RE::BSDismemberSkinInstance* a_this, std::uint16_t a_slot, bool a_visible)
+		{
+			func(a_this, a_slot, a_visible);
+			PushSkinShown(a_this);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_140218200 (biped, ?, skin, slot, flag): an armor's dismember partitions shown for a biped slot, stored inline (a job thread:
+	// the actor's 3D update). The skin's partitions after the call.
+	struct BipedDismemberPartitions
+	{
+		static void thunk(void* a_biped, void* a_object, RE::BSDismemberSkinInstance* a_skin, std::int32_t a_slot, bool a_flag)
+		{
+			func(a_biped, a_object, a_skin, a_slot, a_flag);
+			PushSkinShown(a_skin);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_1402ad800 (land): a TESObjectLAND's landscape properties, made and stored into each of its four quads' geometry (+0x128)
+	// after the quads were attached. Each quad's leaf after the call (a swap: the new property's record with it).
+	struct LandSetupProperties
+	{
+		static std::uint64_t thunk(RE::TESObjectLAND* a_land)
+		{
+			const auto result = func(a_land);
+			const auto* loaded = a_land ? Engine::At<const RE::NiNode* const*>(a_land, 0x40) : nullptr;
+			if (!loaded)
+				return result;
+			for (std::uint32_t quad = 0; quad < 4; ++quad) {
+				const auto* node = loaded[quad];
+				if (!node || node->GetChildren().empty() || !node->GetChildren()[0])
+					continue;
+				if (auto* geometry = node->GetChildren()[0]->AsGeometry())
+					PushLeafUpdate(*geometry);
+			}
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// BSGeometry::AttachProperty (0x140267cf0, geometry, alpha): the geometry's alpha property (+0x120), set after its attach
+	// (object LOD's blocks). The leaf after the call.
+	struct GeometryAttachAlpha
+	{
+		static void thunk(RE::BSGeometry* a_geometry, RE::NiAlphaProperty* a_alpha)
+		{
+			func(a_geometry, a_alpha);
+			if (a_geometry)
+				PushLeafUpdate(*a_geometry);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_1414ab770 (object, visitor {predicate, threshold}): the alpha test threshold (+0x32) of every geometry's alpha property
+	// under the object the predicate admits, recursively (each child through the entry again), stored inline: an actor's or an
+	// effect's fade in and out (job threads, every frame of it). The alpha's threshold after the call, per geometry.
+	struct AlphasSetThreshold
+	{
+		static std::uint64_t thunk(RE::NiAVObject* a_object, void* a_visitor)
+		{
+			const auto result = func(a_object, a_visitor);
+			if (auto* geometry = a_object ? a_object->AsGeometry() : nullptr)
+				PushAlphaUpdate(geometry->GetGeometryRuntimeData().alphaProperty.get(), SceneCapture::AlphaRecord::kThreshold);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_1414ab580 (object, visitor {flag, hide}): weapon blood on every geometry under the object whose property has the flag,
+	// recursively (each child through the entry again): the node's hidden bit, kWeaponBlood (SetFlags, its own event), and the
+	// alpha's blend bits cleared inline (& 0xFE01). The alpha's flags and the hidden bit after the call, per geometry.
+	struct WeaponBloodGeometry
+	{
+		static std::uint64_t thunk(RE::NiAVObject* a_object, void* a_visitor)
+		{
+			const auto result = func(a_object, a_visitor);
+			if (auto* geometry = a_object ? a_object->AsGeometry() : nullptr) {
+				PushAlphaUpdate(geometry->GetGeometryRuntimeData().alphaProperty.get(), SceneCapture::AlphaRecord::kFlags);
+				PushNodeUpdate(geometry, SceneCapture::NodeRecord::kHidden);
+			}
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_140e880e0 (visit): FUN_140e874d0's subtree walk callback that releases a node's collision object (+0x40), as an equipped item
+	// loses its physics. The visit holds the node at +0x10. The node's body after the call.
+	struct ReleaseCollisionObject
+	{
+		static void thunk(std::byte* a_visit)
+		{
+			auto* node = a_visit ? *reinterpret_cast<RE::NiAVObject**>(a_visit + 0x10) : nullptr;
+			func(a_visit);
+			PushNodeUpdate(node, SceneCapture::NodeRecord::kBody);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_14147c1e0 (object, flag, set, Lighting only): one shader property flag set or cleared on every geometry's property under the
+	// object, recursively (each child through the entry again), stored inline (not SetFlags): AIProcess::Update3DModel_Impl gives an
+	// actor's 3D kCharacterLighting, the sky, explosions. The property's flags after the call, per geometry.
+	struct PropertiesSetFlag
+	{
+		static std::uint64_t thunk(RE::NiAVObject* a_object, std::uint32_t a_flag, bool a_set, bool a_lightingOnly)
+		{
+			const auto result = func(a_object, a_flag, a_set, a_lightingOnly);
+			if (auto* geometry = a_object ? a_object->AsGeometry() : nullptr)
+				PushPropertyUpdate(geometry->GetGeometryRuntimeData().shaderProperty.get(),
+					SceneCapture::PropertyRecord::kFlags | SceneCapture::PropertyRecord::kMaterialOther);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_14147c690 (&fadeNode, object): the fade node of every geometry's shader property under the object (+0x60), recursively
+	// (each child through the entry again), from FUN_14147bf70. The property's fade node after the call, per geometry.
+	struct PropertiesSetFadeNode
+	{
+		static void thunk(RE::BSFadeNode** a_fadeNode, RE::NiAVObject* a_object)
+		{
+			func(a_fadeNode, a_object);
+			if (auto* geometry = a_object ? a_object->AsGeometry() : nullptr)
+				PushPropertyUpdate(geometry->GetGeometryRuntimeData().shaderProperty.get(), SceneCapture::PropertyRecord::kFadeNode);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	// FUN_14147a9b0 (node, near, far): the fade node's range (+0x128, +0x12C; near clamped to a minimum, far to twice it), from the
 	// model and reference attach (FUN_14021f200, from the node's radius) and an FX path (FUN_1407cfba0). Its only writer.
 	struct FadeSetRange
@@ -940,6 +1117,28 @@ namespace DCLF
 		constexpr std::uintptr_t kFadeSetLodType = 0x147aa00;       // FUN_14147aa00: a fade node's LOD type
 		stl::detour_thunk<FadeSetRange>(REL::Offset(kFadeSetRange).address());
 		stl::detour_thunk<FadeSetLodType>(REL::Offset(kFadeSetLodType).address());
+		constexpr std::uintptr_t kRigidBodyMotionType = 0xb44490;  // FUN_140b44490: a rigid body's motion rebuilt (its type)
+		stl::detour_thunk<RigidBodyMotionType>(REL::Offset(kRigidBodyMotionType).address());
+		constexpr std::uintptr_t kRemoveController = 0xd269a0;     // NiObjectNET::RemoveController
+		constexpr std::uintptr_t kDismemberPartition = 0x21a530;   // BSDismemberSkinInstance::UpdateDismemberPartion
+		stl::detour_thunk<RemoveController>(REL::Offset(kRemoveController).address());
+		stl::detour_thunk<DismemberPartition>(REL::Offset(kDismemberPartition).address());
+		constexpr std::uintptr_t kBipedDismemberPartitions = 0x218200;  // FUN_140218200: a biped slot's dismember partitions
+		stl::detour_thunk<BipedDismemberPartitions>(REL::Offset(kBipedDismemberPartitions).address());
+		constexpr std::uintptr_t kGeometryAttachAlpha = 0x267cf0;  // BSGeometry::AttachProperty (the alpha)
+		stl::detour_thunk<GeometryAttachAlpha>(REL::Offset(kGeometryAttachAlpha).address());
+		constexpr std::uintptr_t kWeaponBloodGeometry = 0x14ab580;  // FUN_1414ab580: weapon blood under an object
+		stl::detour_thunk<WeaponBloodGeometry>(REL::Offset(kWeaponBloodGeometry).address());
+		constexpr std::uintptr_t kAlphasSetThreshold = 0x14ab770;  // FUN_1414ab770: the alpha thresholds under an object
+		stl::detour_thunk<AlphasSetThreshold>(REL::Offset(kAlphasSetThreshold).address());
+		constexpr std::uintptr_t kReleaseCollisionObject = 0xe880e0;  // FUN_140e880e0: a node's collision object released (a walk's visit)
+		stl::detour_thunk<ReleaseCollisionObject>(REL::Offset(kReleaseCollisionObject).address());
+		constexpr std::uintptr_t kPropertiesSetFlag = 0x147c1e0;  // FUN_14147c1e0: a shader flag on the properties under an object
+		stl::detour_thunk<PropertiesSetFlag>(REL::Offset(kPropertiesSetFlag).address());
+		constexpr std::uintptr_t kPropertiesSetFadeNode = 0x147c690;  // FUN_14147c690: the properties' fade node under an object
+		stl::detour_thunk<PropertiesSetFadeNode>(REL::Offset(kPropertiesSetFadeNode).address());
+		constexpr std::uintptr_t kLandSetupProperties = 0x2ad800;  // FUN_1402ad800: a land's quads' landscape properties
+		stl::detour_thunk<LandSetupProperties>(REL::Offset(kLandSetupProperties).address());
 		constexpr std::uintptr_t kCellPlaceReference = 0x2d1280;    // FUN_1402d1280: a reference's 3D placed in its cell
 		constexpr std::uintptr_t kCellPlaceReferenceAt = 0x2d5090;  // FUN_1402d5090: the same, another path
 		stl::detour_thunk<CellPlaceReference>(REL::Offset(kCellPlaceReference).address());
@@ -1020,6 +1219,7 @@ namespace DCLF
 	void SceneStore::ApplyMirrorEvents(const EventBatch& a_batch)
 	{
 		ZoneScopedN("CS.DCLF.Scene.Mirror");
+		mirror.BeginBatch();
 		const bool parity = SwitchEnabled(Switch::MirrorParity);
 		auto apply = [&](const SceneTracker::Event* a_head) {
 			for (const auto* event = a_head; event; event = event->next) {
@@ -1030,11 +1230,9 @@ namespace DCLF
 					if (event->detachedRoot)
 						mirror.Detach(event->detachedRoot, event->removed, event->removedNodes);
 				} else {
-					mirror.Update(event->update);
-					if (parity) {
-						const auto [type, key] = SceneMirror::TypeOf(event->update);
+					const auto [type, key] = mirror.Update(event->update);
+					if (parity && key)
 						mirrorEventFields[SceneMirror::Key(key, type)] |= event->update.fields;
-					}
 				}
 			}
 		};
@@ -1066,6 +1264,11 @@ namespace DCLF
 	{
 		if (!SwitchEnabled(Switch::MirrorParity) || tracked.empty())
 			return;
+		// CS_DCLF_MIRROR_WATCH=parity: the property the last check found stale, watched from here (the render thread).
+		if (const void* property = mirrorWatchRequest.exchange(nullptr, std::memory_order_acq_rel))
+			MirrorWatch::ArmProperty(property);
+		if (const void* alpha = mirrorWatchAlpha.exchange(nullptr, std::memory_order_acq_rel))
+			MirrorWatch::ArmAlpha(alpha);
 		ZoneScopedN("CS.DCLF.Ingest.ProbeMirror");
 		// A slice of the tracked set, live (the render thread at the frame's start: the update done, before the culls): each
 		// geometry's records and its ancestors' up to the world's root, each object once. A tracked geometry is held by its entry.
@@ -1092,6 +1295,10 @@ namespace DCLF
 		if (mirrorProbe) {
 			ZoneScopedN("CS.DCLF.Scene.MirrorParity");
 			mirror.Check(*mirrorProbe, mirrorEventKeys, mirrorEventFields);
+			if (const void* property = mirror.TakeMissedProperty())
+				mirrorWatchRequest.store(property, std::memory_order_release);
+			if (const void* alpha = mirror.TakeMissedAlpha())
+				mirrorWatchAlpha.store(alpha, std::memory_order_release);
 			mirrorProbe.reset();
 		}
 		mirrorEventKeys.clear();

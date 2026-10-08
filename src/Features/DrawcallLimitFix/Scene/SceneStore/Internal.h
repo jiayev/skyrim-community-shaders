@@ -144,6 +144,27 @@ namespace DCLF
 				SceneTracker::Get().PushUpdate(SceneCapture::Update{ a_fields, SceneCapture::CaptureProperty(*a_property) });
 		}
 
+		inline void PushAlphaUpdate(const RE::NiAlphaProperty* a_alpha, std::uint32_t a_fields)
+		{
+			if (a_alpha)
+				SceneTracker::Get().PushUpdate(SceneCapture::Update{ a_fields, SceneCapture::CaptureAlpha(*a_alpha) });
+		}
+
+		/** @brief A geometry whose property or alpha a writer swapped: its leaf, applied as a capture when the mirror holds it. */
+		inline void PushLeafUpdate(const RE::BSGeometry& a_geometry)
+		{
+			using G = SceneCapture::GeometryRecord;
+			// A capture too: numbered at its start.
+			const auto sequence = SceneCapture::NextSequence();
+			SceneCapture::Update update{ G::kProperty | G::kAlpha | G::kLayer, SceneCapture::CaptureGeometry(a_geometry) };
+			auto leaf = std::make_shared<SceneCapture::Records>();
+			SceneCapture::CaptureLeaf(a_geometry, *leaf);
+			leaf->sequence = sequence;
+			update.leaf = std::move(leaf);
+			update.sequence = sequence;
+			SceneTracker::Get().PushUpdate(std::move(update));
+		}
+
 		// A fade node's statics (near and far, +0x109, the LOD type).
 		constexpr std::uint32_t kFadeStatics = SceneCapture::NodeRecord::kFadeNear | SceneCapture::NodeRecord::kFadeFar |
 		                                       SceneCapture::NodeRecord::kFade109 | SceneCapture::NodeRecord::kFadeType;

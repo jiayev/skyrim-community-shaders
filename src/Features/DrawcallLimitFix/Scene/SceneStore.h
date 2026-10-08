@@ -1381,6 +1381,7 @@ namespace DCLF
 			std::uint64_t members = 0, waiting = 0, rebinding = 0;  // summed over the commits
 			std::uint64_t publications = 0;
 			std::uint64_t patchedMember = 0;  // must be 0: the accumulate phase patched a member's binding (CommitSet keeps rebinds out)
+			std::uint64_t leftAfterCommit = 0;  // slots out of phases of the commit's decision after it (LeaveSet)
 			// Why a bound object waits, summed over the commits: its pipeline, its material, its pipeline's shadow mask, the shared
 			// lookups (samplers, null and projected textures), its geometry, its decal slot, its layer partner, its shadow pipelines
 			// or occlusion pipelines (or an alpha-tested caster's diffuse).
@@ -2036,7 +2037,9 @@ namespace DCLF
 		// The scene work: the applied batch's probe, and the objects the frame's events named (the parity's).
 		std::unique_ptr<SceneCapture::Records> mirrorProbe;
 		SceneMirror::KeySet mirrorEventKeys;
-		SceneMirror::FieldMap mirrorEventFields;  // the scene work's: the fields the batch's updates carried (step 6e F3b)  // render thread: the next frame start's capture is forced (a detach ingested, a load's end)
+		SceneMirror::FieldMap mirrorEventFields;
+		std::atomic<const void*> mirrorWatchRequest{ nullptr };
+		std::atomic<const void*> mirrorWatchAlpha{ nullptr };     // ... and its stale alpha property  // the scene work's stale property for the render thread's watch  // the scene work's: the fields the batch's updates carried (step 6e F3b)  // render thread: the next frame start's capture is forced (a detach ingested, a load's end)
 		std::vector<RE::NiAVObject*> attachedRoots;  // the ingestion's attached subtrees, for CatchUpSwitches (scratch)
 		// Render thread, since the last report: switches caught up at ingestion (by switch event, under an attached subtree or the
 		// world after a load), and the time taken.
@@ -2958,6 +2961,16 @@ namespace DCLF
 		SetStats setStats;
 		/** @brief Queues a slot for the next commit. */
 		void QueueSet(std::uint32_t a_slot);
+		/**
+		 * @brief A slot taken out of phases of the applied set after its commit (the accumulate phase binding it again, a claim
+		 * revoked): out of the commit's decision and the snapshot the claims are made from too, and queued, so the next commit
+		 * decides it again from what it has now. Without this the commit's copy keeps the phases: its next decision of the same
+		 * phases is no change, the record stays out of them and the claims keep them, and nobody draws it. A base and its layer
+		 * leave the main phases together, the applied tables too (CommitSet's rule: the claim is the base geometry's).
+		 */
+		void LeaveSet(std::uint32_t a_slot, std::uint8_t a_lost, bool a_partner = true);
+		/** @brief The claims' snapshot of setBuilding, made again when a commit or LeaveSet changed it. */
+		void RefreshSetSnapshot();
 		/** @brief The phases DCLF draws this frame (toggles, the render graph): an object's mask is its participation within them. */
 		static std::uint32_t SetPhasesDrawn();
 		/** @brief The phases an object takes part in among a_drawn, from its record (no readiness). */

@@ -38,13 +38,50 @@ namespace DCLF
 
 	void SceneMirror::Apply(const Records& a_records)
 	{
+		ApplyCapture(a_records);
+		if (replaying || !a_records.sequence)
+			return;
+		// The updates numbered after this capture's start: their writes may be newer than what it read.
+		replaying = true;
+		for (const auto& n : a_records.nodes)
+			Replay(Key(n.key, 0), a_records.sequence);
+		for (const auto& g : a_records.geometries)
+			Replay(Key(g.key, 1), a_records.sequence);
+		for (const auto& p : a_records.properties)
+			Replay(Key(p.key, 2), a_records.sequence);
+		for (const auto& a : a_records.alphas)
+			Replay(Key(a.key, 3), a_records.sequence);
+		replaying = false;
+	}
+
+	void SceneMirror::ApplyCapture(const Records& a_records)
+	{
 		++applied;
+		// A record a newer capture took stays (two loader threads capture subtrees naming one shared property or ancestor; the
+		// older capture can be pushed last).
+		const std::uint64_t sequence = a_records.sequence;
+		auto take = [&](auto& a_record, const auto& a_captured) {
+			if (a_record.key && a_record.sequence > sequence) {
+				++superseded;
+				return;
+			}
+			a_record = a_captured;
+			a_record.sequence = sequence;
+			if constexpr (requires { a_record.writer; }) {
+				a_record.writer = 1;
+				a_record.writtenFrame = SceneCapture::Frame();
+			}
+		};
 		// Properties and alphas first (their values), then the geometries that count their uses.
 		for (const auto& p : a_records.properties)
-			properties[p.key].record = p;
+			take(properties[p.key].record, p);
 		for (const auto& a : a_records.alphas)
-			alphas[a.key].record = a;
+			take(alphas[a.key].record, a);
 		for (const auto& g : a_records.geometries) {
+			if (const auto it = geometries.find(g.key); it != geometries.end() && it->second.sequence > sequence) {
+				++superseded;
+				continue;
+			}
 			// The new record's uses first, then the old one's let go: a property both name keeps its record.
 			for (const void* key : { g.property, g.layerProperty })
 				if (key)
@@ -54,14 +91,19 @@ namespace DCLF
 			auto [it, inserted] = geometries.try_emplace(g.key, g);
 			if (!inserted) {
 				Use(it->second.property, it->second.layerProperty, it->second.alpha, -1);
+				if (it->second.skin && it->second.skin != g.skin)
+					geometryBySkin.erase(it->second.skin);
 				it->second = g;
 			}
+			it->second.sequence = a_records.sequence;
+			if (g.skin)
+				geometryBySkin[g.skin] = g.key;
 		}
 		// A property or alpha the capture took that no geometry counts (none can be: each comes with its geometry) is not kept.
 		std::erase_if(properties, [](const auto& a_entry) { return a_entry.second.uses == 0; });
 		std::erase_if(alphas, [](const auto& a_entry) { return a_entry.second.uses == 0; });
 		for (const auto& n : a_records.nodes) {
-			nodes[n.key] = n;
+			take(nodes[n.key], n);
 			named.erase(n.key);
 		}
 		for (const auto& g : a_records.geometries)
@@ -82,6 +124,8 @@ namespace DCLF
 		for (const auto* geometry : a_geometries) {
 			if (const auto it = geometries.find(geometry); it != geometries.end()) {
 				Use(it->second.property, it->second.layerProperty, it->second.alpha, -1);
+				if (it->second.skin)
+					geometryBySkin.erase(it->second.skin);
 				geometries.erase(it);
 			}
 			nodes.erase(geometry);
@@ -98,48 +142,103 @@ namespace DCLF
 		return std::visit(
 			[&](const auto& a_record) -> std::pair<std::uint8_t, const void*> {
 				using T = std::decay_t<decltype(a_record)>;
-				return { static_cast<std::uint8_t>(std::is_same_v<T, NodeRecord> ? 0 : std::is_same_v<T, PropertyRecord> ? 2 : 3), a_record.key };
+				return { static_cast<std::uint8_t>(std::is_same_v<T, NodeRecord> ? 0 : std::is_same_v<T, GeometryRecord> ? 1 : std::is_same_v<T, PropertyRecord> ? 2 : 3),
+					a_record.key };
 			},
 			a_update.record);
 	}
 
-	void SceneMirror::Update(const SceneCapture::Update& a_update)
+	void SceneMirror::BeginBatch()
+	{
+		++batch;
+		std::erase_if(recent, [this](auto& a_entry) {
+			std::erase_if(a_entry.second, [this](const Recent& a_recent) { return a_recent.batch + 2 < batch; });
+			return a_entry.second.empty();
+		});
+	}
+
+	std::pair<std::uint8_t, const void*> SceneMirror::Update(const SceneCapture::Update& a_update)
 	{
 		++updates;
+		const auto result = UpdateRecord(a_update);
+		// Kept by the key it names (a geometry named by its skin, by its key once resolved).
+		const auto [type, key] = TypeOf(a_update);
+		if (const void* object = result.second ? result.second : key)
+			recent[Key(object, type)].push_back({ batch, a_update });
+		return result;
+	}
+
+	void SceneMirror::Replay(std::uintptr_t a_key, std::uint64_t a_after)
+	{
+		const auto it = recent.find(a_key);
+		if (it == recent.end())
+			return;
+		// In their order (a later update may have been pushed first).
+		std::vector<const SceneCapture::Update*> later;
+		for (const auto& r : it->second)
+			if (r.update.sequence > a_after)
+				later.push_back(&r.update);
+		std::ranges::sort(later, {}, [](const auto* a_update) { return a_update->sequence; });
+		for (const auto* update : later) {
+			++replayed;
+			UpdateRecord(*update);
+		}
+	}
+
+	std::pair<std::uint8_t, const void*> SceneMirror::UpdateRecord(const SceneCapture::Update& a_update)
+	{
+		auto [type, key] = TypeOf(a_update);
 		bool held = false;
 		std::visit(
 			[&](const auto& a_record) {
 				using T = std::decay_t<decltype(a_record)>;
+				auto assign = [&](auto& a_map, auto a_get) {
+					if (const auto it = a_map.find(key); it != a_map.end()) {
+						auto& record = a_get(it->second);
+						held = true;
+						// Written before the record's capture started: the capture has it, and may have newer values.
+						if (a_update.sequence && a_update.sequence < record.sequence) {
+							++stale;
+							return;
+						}
+						// A leaf is applied whole below (Apply counts the old record's uses off before it replaces it).
+						if (!a_update.leaf)
+							record.Assign(a_record, a_update.fields);
+					}
+				};
 				if constexpr (std::is_same_v<T, NodeRecord>) {
-					if (const auto it = nodes.find(a_record.key); it != nodes.end()) {
-						it->second.Assign(a_record, a_update.fields);
-						held = true;
-					}
+					assign(nodes, [](auto& a_value) -> NodeRecord& { return a_value; });
+				} else if constexpr (std::is_same_v<T, GeometryRecord>) {
+					if (!key)
+						if (const auto it = geometryBySkin.find(a_record.skin); it != geometryBySkin.end())
+							key = it->second;
+					assign(geometries, [](auto& a_value) -> GeometryRecord& { return a_value; });
 				} else if constexpr (std::is_same_v<T, PropertyRecord>) {
-					if (const auto it = properties.find(a_record.key); it != properties.end()) {
-						it->second.record.Assign(a_record, a_update.fields);
-						held = true;
-					}
+					assign(properties, [](auto& a_value) -> PropertyRecord& { return a_value.record; });
 				} else {
-					if (const auto it = alphas.find(a_record.key); it != alphas.end()) {
-						it->second.record.Assign(a_record, a_update.fields);
-						held = true;
-					}
+					assign(alphas, [](auto& a_value) -> AlphaRecord& { return a_value.record; });
 				}
 			},
 			a_update.record);
-		updatesUnheld += held ? 0 : 1;
-		if (held) {
-			const auto type = TypeOf(a_update).first;
-			for (std::uint32_t f = 0; f < 16; ++f)
-				updated[type][f] += (a_update.fields >> f) & 1u;
+		if (!held) {
+			++updatesUnheld;
+			return { type, nullptr };
 		}
+		if (a_update.leaf && !(a_update.sequence && type == 1 && geometries.contains(key) && a_update.sequence < geometries.find(key)->second.sequence)) {
+			Apply(*a_update.leaf);
+			--applied;
+		}
+		for (std::uint32_t f = 0; f < 16; ++f)
+			updated[type][f] += (a_update.fields >> f) & 1u;
+		return { type, key };
 	}
 
 	void SceneMirror::Clear()
 	{
 		nodes.clear();
+		recent.clear();
 		geometries.clear();
+		geometryBySkin.clear();
 		properties.clear();
 		alphas.clear();
 		pending.clear();
@@ -182,12 +281,25 @@ namespace DCLF
 			for (std::uint32_t f = 0; f < 16; ++f)
 				if (p.fields & (1u << f)) {
 					++into[f];
-					if (!late && t.firstMissedBy[p.type][f].empty())
+					if (!late && t.firstMissedBy[p.type][f].empty()) {
 						t.firstMissedBy[p.type][f] = p.what;
+						// A property has no name: a geometry naming it (once per field and report).
+						if (p.type == 2)
+							for (const auto& [geometryKey, geometry] : geometries)
+								if (geometry.property == key || geometry.layerProperty == key) {
+									const auto* node = Node(geometryKey);
+									t.firstMissedBy[p.type][f] += fmt::format(" (geometry {} '{}')", geometryKey, node && node->name ? node->name : "");
+									break;
+								}
+					}
 				}
 			if (!late)
 				for (std::uint32_t b = 0; b < 32; ++b)
 					t.flagBitsMissed[b] += (p.flagBits >> b) & 1u;
+			if (!late && p.type == 2 && (p.fields & PropertyRecord::kFlags))
+				missedProperty = key;
+			if (!late && p.type == 3)
+				missedAlpha = key;
 			if (!late && t.firstMissed.empty())
 				t.firstMissed = std::move(p.what);
 		}
@@ -216,6 +328,29 @@ namespace DCLF
 						a_mirror->updatedFrame, a_live.capturedFrame);
 				if (differ & NodeRecord::kFlags)
 					what += fmt::format(" (flags {:#x} -> {:#x})", a_mirror->flags, a_live.flags);
+				if (differ & NodeRecord::kBody) {
+					// Diagnostic (the parity's, F3): the live chain NonFixedBody reads, from the probe's key (alive: the probe just read it).
+					const auto* node = static_cast<const RE::NiAVObject*>(a_live.key);
+					const auto* collision = node->collisionObject.get();
+					const auto* ni = collision ? const_cast<RE::NiCollisionObject*>(collision)->AsBhkNiCollisionObject() : nullptr;
+					const auto* body = ni ? ni->body.get() : nullptr;
+					const auto* rtti = body ? const_cast<RE::bhkWorldObject*>(body)->GetRTTI() : nullptr;
+					const auto* entity = body ? reinterpret_cast<const std::byte*>(body->referencedObject.get()) : nullptr;
+					what += fmt::format(" (live: collision {} body {} '{}' entity {} motion {})", static_cast<const void*>(collision), static_cast<const void*>(body),
+						rtti && rtti->name ? rtti->name : "", static_cast<const void*>(entity), entity ? static_cast<int>(*reinterpret_cast<const std::uint8_t*>(entity + 0x160)) : -1);
+				}
+				if (differ & (NodeRecord::kBody | NodeRecord::kFade109))
+					what += fmt::format(" (body {} -> {}, +0x109 {:#x} -> {:#x}; captured frame {} thread {}, updated frame {})", a_mirror->body, a_live.body, a_mirror->fade109,
+						a_live.fade109, a_mirror->capturedFrame, a_mirror->thread, a_mirror->updatedFrame);
+			}
+			if constexpr (std::is_same_v<std::decay_t<decltype(a_live)>, AlphaRecord>)
+				what += fmt::format(" (flags {:#x} -> {:#x}, threshold {} -> {})", a_mirror->flags, a_live.flags, a_mirror->threshold, a_live.threshold);
+			if constexpr (std::is_same_v<std::decay_t<decltype(a_live)>, PropertyRecord>) {
+				if (differ & PropertyRecord::kFlags)
+					what += fmt::format(" (flags {:#x} -> {:#x}, bits {:#x}; captured frame {} thread {} sequence {}, last written by {} at frame {}; now frame {} sequence {})",
+						a_mirror->flags, a_live.flags, a_mirror->flags ^ a_live.flags, a_mirror->capturedFrame, a_mirror->thread, a_mirror->sequence,
+						a_mirror->writer == 1 ? "a capture" : a_mirror->writer == 2 ? "an update" : "?", a_mirror->writtenFrame, SceneCapture::Frame(),
+						SceneCapture::NextSequence());
 			}
 			if (named.contains(a_live.key)) {
 				for (std::uint32_t b = 0; b < 32; ++b)
@@ -255,6 +390,10 @@ namespace DCLF
 			"no record of)\n",
 			nodes.size(), geometries.size(), properties.size(), alphas.size(), std::exchange(applied, 0), std::exchange(detached, 0), std::exchange(updates, 0),
 			std::exchange(updatesUnheld, 0));
+		text += fmt::format(
+			"[DCLF] scene mirror order (6e F3c): {} updates replayed after a capture numbered before them, {} skipped as older than their record's capture, {} "
+			"records a capture left to a newer one\n",
+			std::exchange(replayed, 0), std::exchange(stale, 0), std::exchange(superseded, 0));
 		auto& t = tally;
 		auto line = [&](const char* a_label, const auto& a_counts) {
 				std::string out;

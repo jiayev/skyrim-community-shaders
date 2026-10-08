@@ -400,6 +400,20 @@ namespace DCLF
 			}
 			const auto* words = static_cast<const std::uint32_t*>(mapped.pData);
 			const std::uint32_t stamp = snapshot.frame & 0x0FFFFFFFu;
+			D3D11_MAPPED_SUBRESOURCE frustumMapped{};
+			const std::uint32_t* frustum = nullptr;
+			std::size_t frustumWords = 0;
+			if (snapshot.frustumStaging && SUCCEEDED(context->Map(snapshot.frustumStaging.get(), 0, D3D11_MAP_READ, 0, &frustumMapped))) {
+				D3D11_BUFFER_DESC frustumDesc{};
+				snapshot.frustumStaging->GetDesc(&frustumDesc);
+				frustum = static_cast<const std::uint32_t*>(frustumMapped.pData);
+				frustumWords = frustumDesc.ByteWidth / sizeof(std::uint32_t);
+				// No stamp of this frame at all: phase 1 wrote no feedback (a frame before the first cull), nothing to read.
+				if (std::none_of(frustum, frustum + std::min(frustumWords, snapshot.flags.size()), [&](std::uint32_t a_word) { return (a_word & 0x0FFFFFFFu) == stamp; })) {
+					context->Unmap(snapshot.frustumStaging.get(), 0);
+					frustum = nullptr;
+				}
+			}
 			bool damaged = false;
 			for (std::size_t o = 0; o < snapshot.flags.size(); ++o) {
 				const std::uint32_t word = words[o];
@@ -435,12 +449,66 @@ namespace DCLF
 					counts.colourUnpublished += verdict == 3;
 					counts.alphaColourOnly += alpha;
 				} else if (withheld && !colourDrawn) {
+					// The frustum stamp is this frame's for an object phase 1 found inside the frustum, with the fade test's drop in its
+					// top bit: one without it was rejected by the frustum, one with it and no drop by the HZB (phase 2's final verdict).
+					const std::uint32_t frustumWord = frustum && o < frustumWords ? frustum[o] : 0u;
+					const bool passedFrustum = (frustumWord & 0x0FFFFFFFu) == stamp;
+					const bool fadeHidden = passedFrustum && (frustumWord & 0x80000000u);
+					if (verdict == 2 && frustum && !decal && (fadeHidden || !passedFrustum) && o < snapshot.inView.size() && snapshot.inView[o]) {
+						// Rejected as final with its live bound in view. By the frustum: the bound the culling read was not the live one,
+						// and the engine would have drawn it. By the fade test: an owned root FadeStateCS has faded out, counted (a far
+						// root fades out in view; the fade parities judge the fade).
+						++(fadeHidden ? counts.fadeHiddenInView : counts.rejectedInView);
+						const auto* geometry = o < snapshot.geometry.size() ? snapshot.geometry[o] : nullptr;
+						const bool alive = geometry && store.IsTracked(geometry);
+						const bool skinned = alive && geometry->GetGeometryRuntimeData().skinInstance;
+						counts.skinnedInView += skinned;
+						if (alive && !fadeHidden && counts.inViewSamples++ < 24) {
+							const RE::TESObjectREFR* owner = nullptr;
+							for (const RE::NiAVObject* node = geometry; node && !owner; node = node->parent)
+								owner = node->GetUserData();
+							const auto* base = owner ? owner->GetBaseObject() : nullptr;
+							const auto& tables = store.GetTables();
+							const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
+							const auto* rootNode = root < tables.fadeRootNode.size() ? static_cast<const RE::NiAVObject*>(tables.fadeRootNode[root]) : nullptr;
+							const auto* fadeNode = rootNode ? const_cast<RE::NiAVObject*>(rootNode)->AsFadeNode() : nullptr;
+							const auto& b = snapshot.bound[o];
+							const auto& live = geometry->worldBound;
+							logger::info(
+								"[DCLF] set parity, frame {}: rejected in view ({}) - object {} '{}'{} of {} '{}': bound at the snapshot ({:.0f} {:.0f} {:.0f}) r {:.0f}, "
+								"now ({:.0f} {:.0f} {:.0f}) r {:.0f}; fade root {} '{}' (bits {:#x}, currentFade {:.3f}); colour build {}",
+								snapshot.frame, fadeHidden ? "the fade test" : "the frustum", o, geometry->name.c_str() ? geometry->name.c_str() : "", skinned ? " (skinned)" : "",
+								base ? RE::FormTypeToString(base->GetFormType()) : "no ref", base && base->GetName() ? base->GetName() : "", b[0], b[1], b[2], b[3], live.center.x,
+								live.center.y, live.center.z, live.radius, root == kNoFadeRoot ? -1 : static_cast<std::int64_t>(root),
+								rootNode && rootNode->name.c_str() ? rootNode->name.c_str() : "", root < tables.fadeRoots.size() ? tables.fadeRoots[root].bits : 0u,
+								fadeNode ? fadeNode->GetRuntimeData().currentFade : -1.0f,
+								stateName(o < snapshot.colourState.size() ? snapshot.colourState[o] : kObjectStateAbsent));
+						}
+					}
 					if (verdict == 0 || verdict == 2) {
 						++counts.withheldCulled;  // the GPU culling rejected it: not drawn by anyone, as intended
 					} else {
 						kind = "in the set, drawn by nobody";
 						++counts.withheldUndrawn;
 						counts.alphaWithheldUndrawn += alpha;
+					}
+				}
+				// The registration hooks' main claim against the set: claimed outside it, nobody draws the object.
+				if (o < snapshot.claims.size() && ((snapshot.claims[o] & kSetMain) != 0) != withheld) {
+					const bool claimed = (snapshot.claims[o] & kSetMain) != 0;
+					++(claimed ? counts.claimedOutside : counts.unclaimedMembers);
+					const auto* geometry = o < snapshot.geometry.size() ? snapshot.geometry[o] : nullptr;
+					if (geometry && store.IsTracked(geometry) && counts.claimSamples++ < 12)
+					{
+						const auto& tables = store.GetTables();
+						const std::uint32_t partner = tables.IsLayer(static_cast<std::uint32_t>(o)) ? tables.layerBase[o] : o < tables.layerOf.size() ? tables.layerOf[o] : kNoObjectSlot;
+						logger::info("[DCLF] set parity, frame {}: {} - object {} '{}' (claims {:#x}{}){}", snapshot.frame,
+							claimed ? "claimed by the registration hooks, not in the set: drawn by nobody" : "in the set, not claimed: drawn twice", o,
+							geometry->name.c_str() ? geometry->name.c_str() : "", snapshot.claims[o],
+							partner == kNoObjectSlot ? std::string() :
+													 fmt::format(", {} {} {}", tables.IsLayer(static_cast<std::uint32_t>(o)) ? "layer of" : "base of", partner,
+														 partner < snapshot.flags.size() && (snapshot.flags[partner] & 1) ? "in the set" : "not in the set"),
+							depthDrawn || colourDrawn ? ", drawn by DCLF" : "");
 					}
 				}
 				// The gap detector, by geometry (object indices are rebuilt every frame).
@@ -487,6 +555,10 @@ namespace DCLF
 			}
 			context->Unmap(snapshot.staging.get(), 0);
 			setParityStaging.push_back(std::move(snapshot.staging));
+			if (frustum)
+				context->Unmap(snapshot.frustumStaging.get(), 0);
+			if (snapshot.frustumStaging)
+				setParityStaging.push_back(std::move(snapshot.frustumStaging));
 			++counts.frames;
 			counts.framesWithDamage += damaged;
 			if (counts.frames == 300) {
@@ -495,6 +567,12 @@ namespace DCLF
 					counts.colourUnpublished, counts.withheldUndrawn, counts.alphaWithheldUndrawn, counts.withheldCulled, counts.outsideDrawn, counts.recordDisagrees,
 					double(counts.depthDrawnTotal) / counts.frames, double(counts.colourDrawnTotal) / counts.frames,
 					counts.depthOnly || counts.colourOnly || counts.withheldUndrawn || counts.outsideDrawn || counts.recordDisagrees ? " <- SET PARITY" : " <- OK");
+				logger::info("[DCLF] set parity over {} frames: members rejected with their live bound in view: {} by the frustum{}; {} by the fade test (owned roots faded out), "
+							 "{} of all of them skinned",
+					counts.frames, counts.rejectedInView, counts.rejectedInView ? " <- REJECTED IN VIEW" : " <- OK", counts.fadeHiddenInView, counts.skinnedInView);
+				logger::info("[DCLF] set parity over {} frames: the registration hooks' main claims against the set: {} claimed outside it (drawn by nobody), {} members "
+							 "not claimed (drawn twice){}",
+					counts.frames, counts.claimedOutside, counts.unclaimedMembers, counts.claimedOutside || counts.unclaimedMembers ? " <- CLAIMS" : " <- OK");
 				if (counts.gaps)
 					logger::info("[DCLF] set parity over {} frames: {} one-frame gaps (kept, drawn, withheld and GPU-culled, drawn again): {} occluded (retest), {} rejected; {} of them trees",
 						counts.frames, counts.gaps, counts.gapsRetest, counts.gapsRejected, counts.gapsTree);
@@ -529,6 +607,23 @@ namespace DCLF
 				return;
 		}
 		context->CopyResource(snapshot.staging.get(), a_resources->visibilityD3D11.get());
+		if (a_resources->frustumD3D11) {
+			while (!setParityStaging.empty() && !snapshot.frustumStaging) {
+				D3D11_BUFFER_DESC held{};
+				setParityStaging.back()->GetDesc(&held);
+				if (held.ByteWidth == desc.ByteWidth)
+					snapshot.frustumStaging = std::move(setParityStaging.back());
+				setParityStaging.pop_back();
+			}
+			D3D11_BUFFER_DESC staging = desc;
+			staging.Usage = D3D11_USAGE_STAGING;
+			staging.BindFlags = 0;
+			staging.MiscFlags = 0;
+			staging.StructureByteStride = 0;
+			staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+			if (snapshot.frustumStaging || SUCCEEDED(globals::d3d::device->CreateBuffer(&staging, nullptr, snapshot.frustumStaging.put())))
+				context->CopyResource(snapshot.frustumStaging.get(), a_resources->frustumD3D11.get());
+		}
 		// The frame the epochs drew (their visibility stamps), not the one the payloads were built in (step 6e E3b).
 		snapshot.frame = store.GetFrame();
 		snapshot.framesLeft = 3;
@@ -555,6 +650,46 @@ namespace DCLF
 			if (((objectFlags & kObjectMember) != 0) != ((flags & 1) != 0))
 				flags |= 8;
 			snapshot.flags[o] = flags;
+		}
+		// The engine's frustum verdict for each member: its live bound against the depth build's ViewProj, the corner test the
+		// culling makes (BuildDrawsCS: Culled).
+		if (a_depth.culled) {
+			const auto& m = a_depth.cullViewProj;
+			snapshot.inView.assign(objects, 0);
+			snapshot.bound.assign(objects, {});
+			for (std::size_t o = 0; o < objects; ++o) {
+				const auto* geometry = snapshot.geometry[o];
+				if (!(snapshot.flags[o] & 1) || !geometry)
+					continue;
+				const auto& b = geometry->worldBound;
+				snapshot.bound[o] = { b.center.x, b.center.y, b.center.z, b.radius };
+				std::uint32_t outside = 0x3F;  // -x, +x, -y, +y, near, far: every corner outside
+				for (std::uint32_t corner = 0; corner < 8; ++corner) {
+					const float p[3] = { b.center.x + ((corner & 1) ? b.radius : -b.radius), b.center.y + ((corner & 2) ? b.radius : -b.radius),
+						b.center.z + ((corner & 4) ? b.radius : -b.radius) };
+					float clip[4];
+					for (std::uint32_t row = 0; row < 4; ++row)
+						clip[row] = m[row * 4] * p[0] + m[row * 4 + 1] * p[1] + m[row * 4 + 2] * p[2] + m[row * 4 + 3];
+					std::uint32_t corners = 0;
+					corners |= clip[0] < -clip[3] ? 1u : 0u;
+					corners |= clip[0] > clip[3] ? 2u : 0u;
+					corners |= clip[1] < -clip[3] ? 4u : 0u;
+					corners |= clip[1] > clip[3] ? 8u : 0u;
+					corners |= clip[2] < 0.0f ? 16u : 0u;
+					corners |= clip[2] > clip[3] ? 32u : 0u;
+					outside &= corners;
+				}
+				snapshot.inView[o] = outside == 0;
+			}
+		}
+		{
+			// The claims the registration hooks withhold by this frame, by the object's geometry.
+			if (const auto set = PassCapture::Get().CurrentSet()) {
+				snapshot.claims.assign(objects, 0);
+				for (std::size_t o = 0; o < objects; ++o)
+					if (snapshot.geometry[o])
+						snapshot.claims[o] = set->PhasesOf(snapshot.geometry[o]);
+			}
 		}
 		setParityFrames.push_back(std::move(snapshot));
 	}

@@ -264,7 +264,11 @@ namespace DCLF
 					miss = R::kCapacity;
 				else if (!depthOnly && (sunCascades.size() > shape->latchLayout.cascades || shadowVolumes.size() > shape->latchLayout.shadowVolumes))
 					miss = R::kLatch;
-				else if (depthOnly && a_resources->pool && (!shape->zPlan || a_resources->zBucketCapacity.size() > shape->latchLayout.buckets))
+				// The bucket map the commit writes covers every pipeline slot the tables have (below): a slot gained while its bucket
+				// growth is outstanding is past zBucketCapacity but still in the map, so the shape's latch must hold the tables' too.
+				else if (depthOnly && a_resources->pool &&
+						 (!shape->zPlan || std::max({ a_resources->zBucketCapacity.size(), a_store.GetTables().pipelines.size(), shape->zPlan->map.size() }) >
+											   shape->latchLayout.buckets))
 					miss = R::kLatch;
 				else if (!RecordingAdmitted(*revisionRecordings, 0))
 					miss = R::kNotAdmitted;
@@ -780,6 +784,8 @@ namespace DCLF
 			latch.hzbUvScalePacked = scale(frame->width, a_resources->hzbWidth * 2) | (scale(frame->height, a_resources->hzbHeight * 2) << 16);
 		}
 		FoldEyeIntoViewProj(viewProj, a_capture.eye, latch.viewProj);
+		std::copy(std::begin(latch.viewProj), std::end(latch.viewProj), a_payload.cullViewProj.begin());
+		a_payload.culled = latch.cullFlags != 0;
 		// CS_DCLF_TARGET_PROBE: the objects whose bound covers the probed pixel, nearest first, with their pipelines' descriptors.
 		if (!depthOnly && frame->width && frame->height && (frameNumber % 240) == 0) {
 			if (const auto& pixel = SwitchValue(Switch::TargetProbe); !pixel.empty()) {

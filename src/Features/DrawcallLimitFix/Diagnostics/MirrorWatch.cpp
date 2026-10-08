@@ -10,8 +10,6 @@ namespace DCLF::MirrorWatch
 	{
 		constexpr std::uint32_t kSlots = 4;
 		constexpr std::uint32_t kMaxHits = 16;
-		constexpr std::array<std::uintptr_t, kSlots> kOffsets{ 0x108, 0x128, 0x12C, 0x150 };
-		constexpr std::array<const char*, kSlots> kSlotNames{ "+0x108", "near", "far", "+0x150" };
 
 		struct Hit
 		{
@@ -23,6 +21,8 @@ namespace DCLF::MirrorWatch
 
 		std::array<std::atomic<std::uintptr_t>, kSlots> watched{};
 		std::array<std::atomic<std::uint32_t>, kSlots> lastValue{};
+		std::array<std::uint32_t, kSlots> ignored{};  // per slot, the bits whose changes are not recorded
+		std::array<std::string, kSlots> slotNames;
 		std::array<Hit, kMaxHits> hits{};
 		std::atomic<std::uint32_t> hitCount{ 0 };
 		std::atomic<bool> armed{ false };
@@ -35,12 +35,19 @@ namespace DCLF::MirrorWatch
 
 		LONG CALLBACK OnException(PEXCEPTION_POINTERS a_info)
 		{
-			if (a_info->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP || !armed.load(std::memory_order_acquire))
+			if (a_info->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP)
 				return EXCEPTION_CONTINUE_SEARCH;
 			auto* context = a_info->ContextRecord;
 			const auto triggered = context->Dr6 & 0xF;
 			if (!triggered)
 				return EXCEPTION_CONTINUE_SEARCH;
+			// A watchpoint the disarm did not reach on this thread (its context was not set, or it raced the disarm): this thread's
+			// registers are cleared and it goes on. An unhandled one crashed the game (y57).
+			if (!armed.load(std::memory_order_acquire)) {
+				context->Dr7 = 0;
+				context->Dr6 = 0;
+				return EXCEPTION_CONTINUE_EXECUTION;
+			}
 			for (std::uint32_t s = 0; s < kSlots; ++s) {
 				if (!(triggered & (1ull << s)))
 					continue;
@@ -49,8 +56,7 @@ namespace DCLF::MirrorWatch
 					continue;
 				const auto value = *reinterpret_cast<const volatile std::uint32_t*>(address);
 				const auto before = lastValue[s].exchange(value, std::memory_order_relaxed);
-				// +0x109's 0x40 is the cull's, every frame.
-				if (value == before || (s == 0 && ((value ^ before) & ~0x4000u) == 0))
+				if (((value ^ before) & ~ignored[s]) == 0)
 					continue;
 				const auto at = hitCount.fetch_add(1, std::memory_order_relaxed);
 				if (at < kMaxHits)
@@ -104,41 +110,155 @@ namespace DCLF::MirrorWatch
 			std::thread helper([a_addresses] { SetAll(a_addresses); });
 			helper.join();
 		}
+
+		std::string Where(std::uintptr_t a_rip)
+		{
+			const auto base = REL::Module::get().base();
+			const auto size = REL::Module::get().segment(REL::Segment::textx).size() + (REL::Module::get().segment(REL::Segment::textx).address() - base);
+			if (a_rip >= base && a_rip < base + size)
+				return fmt::format("{:#x}", a_rip - base + 0x140000000);
+			HMODULE module = nullptr;
+			if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(a_rip), &module) ||
+				!module)
+				return fmt::format("{:#x} (no module)", a_rip);
+			wchar_t path[MAX_PATH]{};
+			GetModuleFileNameW(module, path, MAX_PATH);
+			const std::filesystem::path file(path);
+			return fmt::format("{}+{:#x}", file.filename().string(), a_rip - reinterpret_cast<std::uintptr_t>(module));
+		}
+
+		// The switch's value: "1" (any placed fade node), a node's name (that fade node), or "geometry:<name>" (a geometry by name at
+		// its world attach: its alpha and shader property pointers and the property's flags and fade node).
+		const std::string& Value() { return SwitchValue(Switch::MirrorWatch); }
+		constexpr std::string_view kGeometryPrefix = "geometry:";
+		constexpr std::string_view kSkinPrefix = "skin:";
+		constexpr std::string_view kNodePrefix = "node:";
+
+		bool Matches(const RE::NiAVObject& a_object, std::string_view a_name)
+		{
+			return a_name.empty() || (a_object.name.c_str() && a_name == a_object.name.c_str());
+		}
+
+		struct Slot
+		{
+			const void* address = nullptr;
+			const char* name = "";
+			std::uint32_t ignore = 0;
+		};
+
+		void ArmSlots(std::string a_name, const std::array<Slot, kSlots>& a_slots);
+
+		void ArmSlots(const RE::NiAVObject& a_object, const std::array<Slot, kSlots>& a_slots)
+		{
+			auto& object = const_cast<RE::NiAVObject&>(a_object);
+			ArmSlots(fmt::format("'{}' {} ({})", a_object.name.c_str() ? a_object.name.c_str() : "", static_cast<const void*>(&a_object),
+						 object.GetRTTI() && object.GetRTTI()->name ? object.GetRTTI()->name : "?"),
+				a_slots);
+		}
+
+		void ArmSlots(std::string a_name, const std::array<Slot, kSlots>& a_slots)
+		{
+			if (armed.load(std::memory_order_acquire) || arming.exchange(true, std::memory_order_acquire))
+				return;
+			if (!handler)
+				handler = AddVectoredExceptionHandler(1, OnException);
+			std::array<std::uintptr_t, kSlots> addresses{};
+			for (std::uint32_t s = 0; s < kSlots; ++s) {
+				addresses[s] = reinterpret_cast<std::uintptr_t>(a_slots[s].address);
+				watched[s].store(addresses[s], std::memory_order_relaxed);
+				lastValue[s].store(addresses[s] ? *reinterpret_cast<const std::uint32_t*>(addresses[s]) : 0u, std::memory_order_relaxed);
+				ignored[s] = a_slots[s].ignore;
+				slotNames[s] = a_slots[s].name;
+			}
+			name = std::move(a_name);
+			hitCount.store(0, std::memory_order_relaxed);
+			armedFrame = 0;
+			++armings;
+			armThread = GetCurrentThreadId();
+			armed.store(true, std::memory_order_release);
+			SetAllFromHelper(addresses);
+			arming.store(false, std::memory_order_release);
+			logger::info("[DCLF] mirror watch armed (arming {}) on {}, thread {}", armings, name, armThread);
+		}
 	}
 
 	bool Enabled()
 	{
-		static const bool enabled = !SwitchValue(Switch::MirrorWatch).empty() && SwitchValue(Switch::MirrorWatch) != "0";
+		static const bool enabled = !Value().empty() && Value() != "0";
 		return enabled;
+	}
+
+	void ArmNode(const RE::NiAVObject* a_node)
+	{
+		if (!a_node || !Enabled() || armed.load(std::memory_order_acquire) || !Value().starts_with(kNodePrefix))
+			return;
+		if (!Matches(*a_node, std::string_view(Value()).substr(kNodePrefix.size())))
+			return;
+		const auto* base = reinterpret_cast<const std::byte*>(a_node);
+		// The collision object, its body (bhkNiCollisionObject +0x20), and the Havok entity's motion type (hkpEntity +0x150 motion,
+		// its type at +0x10: the dword at +0x160).
+		const auto* collision = a_node->collisionObject.get();
+		const auto* ni = collision ? const_cast<RE::NiCollisionObject*>(collision)->AsBhkNiCollisionObject() : nullptr;
+		const auto* body = ni ? ni->body.get() : nullptr;
+		const auto* entity = body ? reinterpret_cast<const std::byte*>(body->referencedObject.get()) : nullptr;
+		ArmSlots(*a_node, { Slot{ base + 0x40, "collision object" }, Slot{ ni ? reinterpret_cast<const std::byte*>(ni) + 0x20 : nullptr, "body" },
+							  Slot{ entity ? entity + 0x160 : nullptr, "motion type" }, Slot{ base + 0xF4, "flags", 0x0C404000u } });
 	}
 
 	void Arm(const RE::NiAVObject* a_node)
 	{
-		if (!a_node || !Enabled() || armed.load(std::memory_order_acquire))
+		if (!a_node || !Enabled() || armed.load(std::memory_order_acquire) || Value().starts_with(kGeometryPrefix) || Value().starts_with(kSkinPrefix) ||
+			Value().starts_with(kNodePrefix))
 			return;
-		// A value other than 1 names the node to watch.
-		static const std::string only = std::string(SwitchValue(Switch::MirrorWatch)) == "1" ? std::string() : std::string(SwitchValue(Switch::MirrorWatch));
-		if (!only.empty() && (!a_node->name.c_str() || only != a_node->name.c_str()))
+		if (!Matches(*a_node, Value() == "1" ? std::string_view() : std::string_view(Value())))
 			return;
-		if (arming.exchange(true, std::memory_order_acquire))
+		const auto* base = reinterpret_cast<const std::byte*>(a_node);
+		// +0x109's 0x40 (+0x108's 0x4000) is the cull's, every frame.
+		ArmSlots(*a_node, { Slot{ base + 0x108, "+0x108", 0x4000 }, Slot{ base + 0x128, "near" }, Slot{ base + 0x12C, "far" }, Slot{ base + 0x150, "+0x150" } });
+	}
+
+	void ArmGeometry(const RE::BSGeometry* a_geometry)
+	{
+		if (!a_geometry || !Enabled() || armed.load(std::memory_order_acquire))
 			return;
-		if (!handler)
-			handler = AddVectoredExceptionHandler(1, OnException);
-		std::array<std::uintptr_t, kSlots> addresses{};
-		for (std::uint32_t s = 0; s < kSlots; ++s) {
-			addresses[s] = reinterpret_cast<std::uintptr_t>(a_node) + kOffsets[s];
-			watched[s].store(addresses[s], std::memory_order_relaxed);
-			lastValue[s].store(*reinterpret_cast<const std::uint32_t*>(addresses[s]), std::memory_order_relaxed);
+		const auto* base = reinterpret_cast<const std::byte*>(a_geometry);
+		if (Value().starts_with(kSkinPrefix)) {
+			// A dismember skin's first partitions (editorVisible is each Data's first byte; 4 bytes each).
+			if (!Matches(*a_geometry, std::string_view(Value()).substr(kSkinPrefix.size())))
+				return;
+			const auto* skin = netimmerse_cast<const RE::BSDismemberSkinInstance*>(a_geometry->GetGeometryRuntimeData().skinInstance.get());
+			const auto& data = skin ? skin->GetRuntimeData() : RE::BSDismemberSkinInstance::RUNTIME_DATA{};
+			if (!skin || !data.partitions || data.numPartitions <= 0)
+				return;
+			const auto* partitions = reinterpret_cast<const std::byte*>(data.partitions);
+			const std::int32_t n = data.numPartitions;
+			ArmSlots(*a_geometry, { Slot{ base + 0x130, "skin" }, Slot{ partitions, "partition 0" }, Slot{ n > 1 ? partitions + 4 : nullptr, "partition 1" },
+									  Slot{ n > 2 ? partitions + 8 : nullptr, "partition 2" } });
+			return;
 		}
-		name = fmt::format("'{}' {} ({})", a_node->name.c_str() ? a_node->name.c_str() : "", static_cast<const void*>(a_node),
-			const_cast<RE::NiAVObject*>(a_node)->GetRTTI() && const_cast<RE::NiAVObject*>(a_node)->GetRTTI()->name ? const_cast<RE::NiAVObject*>(a_node)->GetRTTI()->name : "?");
-		hitCount.store(0, std::memory_order_relaxed);
-		armedFrame = 0;
-		++armings;
-		armThread = GetCurrentThreadId();
-		armed.store(true, std::memory_order_release);
-		SetAllFromHelper(addresses);
-		arming.store(false, std::memory_order_release);
+		if (!Value().starts_with(kGeometryPrefix) || !Matches(*a_geometry, std::string_view(Value()).substr(kGeometryPrefix.size())))
+			return;
+		const auto* property = reinterpret_cast<const std::byte*>(a_geometry->GetGeometryRuntimeData().shaderProperty.get());
+		ArmSlots(*a_geometry, { Slot{ base + 0x120, "alpha" }, Slot{ base + 0x128, "property" }, Slot{ property ? property + 0x3C : nullptr, "property flags (high: 32-63)" },
+								  Slot{ property ? property + 0x60 : nullptr, "property fade node" } });
+	}
+
+	void ArmProperty(const void* a_property)
+	{
+		if (!a_property || !Enabled() || Value() != "parity" || armed.load(std::memory_order_acquire))
+			return;
+		const auto* base = static_cast<const std::byte*>(a_property);
+		ArmSlots(fmt::format("property {}", a_property),
+			{ Slot{ base + 0x38, "flags (low)" }, Slot{ base + 0x3C, "flags (high)" }, Slot{ base + 0x60, "fade node" }, Slot{ base + 0x78, "material" } });
+	}
+
+	void ArmAlpha(const void* a_alpha)
+	{
+		if (!a_alpha || !Enabled() || Value() != "parity" || armed.load(std::memory_order_acquire))
+			return;
+		const auto* base = static_cast<const std::byte*>(a_alpha);
+		// The threshold (+0x32) has its writer's event (FUN_1414ab770): the flags only.
+		ArmSlots(fmt::format("alpha {}", a_alpha), { Slot{ base + 0x30, "flags", 0xFFFF0000u }, Slot{}, Slot{}, Slot{} });
 	}
 
 	std::string TakeReport(std::uint32_t a_frame)
@@ -151,13 +271,11 @@ namespace DCLF::MirrorWatch
 		const bool done = count >= kMaxHits || a_frame - armedFrame >= 600;
 		std::string text;
 		if (count) {
-			const auto base = REL::Module::get().base();
 			text = fmt::format("[DCLF] mirror watch (arming {} on {}, armed on thread {}): {} changes recorded\n", armings, name, armThread,
 				hitCount.load(std::memory_order_relaxed));
 			for (std::uint32_t i = 0; i < count; ++i) {
 				const auto& hit = hits[i];
-				text += fmt::format("[DCLF]   {} {:08X} -> {:08X} (thread {}) after {:#x}\n", kSlotNames[hit.slot], hit.before, hit.value, hit.thread,
-					hit.rip - base + 0x140000000);
+				text += fmt::format("[DCLF]   {} {:08X} -> {:08X} (thread {}) after {}\n", slotNames[hit.slot], hit.before, hit.value, hit.thread, Where(hit.rip));
 			}
 		}
 		if (done) {

@@ -44,7 +44,7 @@ namespace DCLF::SceneCapture
 			kRtti = 1u << 1,
 			kKind = 1u << 2,
 			kHidden = 1u << 3,       // flags bit 0
-			kFlags = 1u << 4,        // the other flag bits but the frame's (kFrameFlags)
+			kFlags = 1u << 4,        // the flag bits the scene work reads that hold still (RecordFlags)
 			kUserData = 1u << 5,     // the reference, its form type, whether an actor
 			kControllers = 1u << 6,
 			kBody = 1u << 7,         // a rigid body whose motion is not fixed
@@ -55,15 +55,18 @@ namespace DCLF::SceneCapture
 			kFade109 = 1u << 12,
 			kFadeType = 1u << 13,    // the LOD type (+0x153 & 0xF)
 			kTreeLodSwitch = 1u << 14,
-			kName = 1u << 15,
+			kName = 1u << 15,        // for the logs only: not compared (Differ)
 			kFieldCount = 16,
 		};
 		static constexpr std::array<const char*, kFieldCount> kFieldNames{ "parent", "rtti", "kind", "hidden", "flags", "user data", "controllers",
 			"body", "children", "switch", "fade near", "fade far", "fade +0x109", "fade type", "tree LOD switch", "name" };
 
-		// The flag bits the frame's culls and fade updates write (not the mirror's: FrameValues' and the fade events'): kTopFadeNode
-		// (14, the fade's faded-in), kIgnoreFade (15, settled), kRenderUse (22), kAccumulated (26), 27 (the LOD step in the update).
-		static constexpr std::uint32_t kFrameFlags = (1u << 14) | (1u << 15) | (1u << 22) | (1u << 26) | (1u << 27);
+		// The flag bits a record holds besides kHidden: those the scene work reads that hold still between their writers. A
+		// geometry's kMeshLOD (12, set by its loader). Not records (FrameValues', step F4): the bits the frame's culls and updates
+		// write - kTopFadeNode (14, the fade's faded-in), kIgnoreFade (15, settled), kRenderUse (22), kAccumulated (26), 27 (the LOD
+		// step), and on a fade root kAlwaysDraw (11: TESWaterReflections::Update), kPreProcessedNode (12: BSFadeNodeCuller::Process1)
+		// and 20 (HighActorCuller::Operate), which FadeState::StaticOf reads - and the bits the scene work never reads (17, ...).
+		static constexpr std::uint32_t RecordFlags(std::uint16_t a_kind) { return (a_kind & kKindGeometry) ? (1u << 12) : 0u; }
 
 		const void* key = nullptr;
 		const void* parent = nullptr;
@@ -85,6 +88,9 @@ namespace DCLF::SceneCapture
 		const char* name = nullptr;
 		// Diagnostics, not compared: the frame of the capture and of the last update (Frame()), and the capturing thread.
 		std::uint32_t capturedFrame = 0, updatedFrame = 0, thread = 0;
+
+		// The capture that took it (SceneCapture::NextSequence at its start): not compared.
+		std::uint64_t sequence = 0;
 
 		std::uint32_t Differ(const NodeRecord& a_other) const;
 		/** @brief a_from's a_fields into this record (an update's). */
@@ -136,7 +142,11 @@ namespace DCLF::SceneCapture
 		ID3D11Buffer* altIndexBuffer = nullptr;
 		std::uint32_t altPrimCount = 0;
 
+		// The capture that took it (SceneCapture::NextSequence at its start): not compared.
+		std::uint64_t sequence = 0;
+
 		std::uint32_t Differ(const GeometryRecord& a_other) const;
+		void Assign(const GeometryRecord& a_from, std::uint32_t a_fields);
 	};
 
 	struct PropertyRecord
@@ -169,6 +179,13 @@ namespace DCLF::SceneCapture
 		const void* emissive = nullptr;
 		bool controllers = false;
 
+		// The capture that took it (SceneCapture::NextSequence at its start): not compared.
+		std::uint64_t sequence = 0;
+		// Diagnostics, not compared: the frame and thread of the capture, and the last writer in the mirror (1 a capture, 2 an
+		// update's fields), its frame.
+		std::uint32_t capturedFrame = 0, thread = 0, writtenFrame = 0;
+		std::uint8_t writer = 0;
+
 		std::uint32_t Differ(const PropertyRecord& a_other) const;
 		void Assign(const PropertyRecord& a_from, std::uint32_t a_fields);
 	};
@@ -187,6 +204,9 @@ namespace DCLF::SceneCapture
 		std::uint16_t flags = 0;
 		std::uint8_t threshold = 0;
 
+		// The capture that took it (SceneCapture::NextSequence at its start): not compared.
+		std::uint64_t sequence = 0;
+
 		std::uint32_t Differ(const AlphaRecord& a_other) const;
 		void Assign(const AlphaRecord& a_from, std::uint32_t a_fields);
 	};
@@ -198,6 +218,8 @@ namespace DCLF::SceneCapture
 		std::vector<GeometryRecord> geometries;
 		std::vector<PropertyRecord> properties;
 		std::vector<AlphaRecord> alphas;
+		// NextSequence at the capture's start: an update numbered after it may have written after the capture read the object.
+		std::uint64_t sequence = 0;
 		bool Empty() const { return nodes.empty(); }
 	};
 
@@ -209,8 +231,22 @@ namespace DCLF::SceneCapture
 	struct Update
 	{
 		std::uint32_t fields = 0;
-		std::variant<NodeRecord, PropertyRecord, AlphaRecord> record;
+		// A geometry's update may name it by its skin alone (key null, skin set: the dismember setter knows only the skin).
+		std::variant<NodeRecord, PropertyRecord, AlphaRecord, GeometryRecord> record;
+		// A geometry's new property or alpha (a swap): its whole leaf (CaptureLeaf), applied as a capture when the mirror holds the
+		// geometry, so the new property's record comes with it and the uses are counted.
+		std::shared_ptr<const Records> leaf;
+		// NextSequence after the write (SceneTracker::PushUpdate takes it): an update numbered before a capture's start is in it.
+		std::uint64_t sequence = 0;
 	};
+
+	/**
+	 * @brief The order of captures and updates (step F3c). A capture on a loader thread takes milliseconds; a writer on another
+	 * thread can change an object it already read before its attach event is pushed, and that update, pushed first, would be
+	 * applied before the stale capture. The mirror applies a capture, then the recent updates numbered after its start, and skips
+	 * an update numbered before the capture of the record it names.
+	 */
+	std::uint64_t NextSequence();
 
 	NodeRecord CaptureNode(const RE::NiAVObject& a_object);
 	/** @brief Only a_fields of a node (no children list): a hook's update. A fade field needs a BSFadeNode. */

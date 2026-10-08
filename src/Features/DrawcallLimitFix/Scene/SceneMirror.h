@@ -36,8 +36,13 @@ namespace DCLF
 		void Apply(const SceneCapture::Records& a_records);
 		/** @brief A detached subtree: its root (taken off its parent's children) and every object under it. */
 		void Detach(const void* a_root, std::span<RE::BSGeometry* const> a_geometries, std::span<const void* const> a_nodes);
-		/** @brief A hook's values into the record, when the mirror holds one (an object out of the world has none). */
-		void Update(const SceneCapture::Update& a_update);
+		/**
+		 * @brief A hook's values into the record, when the mirror holds one (an object out of the world has none). Returns the
+		 * record's type and key (a geometry named by its skin resolved), the key null when the mirror holds none.
+		 */
+		std::pair<std::uint8_t, const void*> Update(const SceneCapture::Update& a_update);
+		/** @brief A new batch: the recent updates older than two batches go. */
+		void BeginBatch();
 		void Clear();
 
 		const SceneCapture::NodeRecord* Node(const void* a_key) const;
@@ -52,6 +57,9 @@ namespace DCLF
 		void Check(const SceneCapture::Records& a_probe, const KeySet& a_eventKeys, const FieldMap& a_eventFields);
 		/** @brief Since the last call: the records held and what the parity found. Empty when nothing to say. */
 		std::string Report();
+		/** @brief The last missed property's key (its flags differed with no event), taken: CS_DCLF_MIRROR_WATCH=parity arms on it. */
+		const void* TakeMissedProperty() { return std::exchange(missedProperty, nullptr); }
+		const void* TakeMissedAlpha() { return std::exchange(missedAlpha, nullptr); }
 
 	private:
 		template <class T>
@@ -61,11 +69,27 @@ namespace DCLF
 			std::uint32_t uses = 0;
 		};
 		void Use(const void* a_property, const void* a_layer, const void* a_alpha, int a_delta);
+		void ApplyCapture(const SceneCapture::Records& a_records);
 
 		ankerl::unordered_dense::map<const void*, SceneCapture::NodeRecord> nodes;
 		ankerl::unordered_dense::map<const void*, SceneCapture::GeometryRecord> geometries;
 		ankerl::unordered_dense::map<const void*, Counted<SceneCapture::PropertyRecord>> properties;
 		ankerl::unordered_dense::map<const void*, Counted<SceneCapture::AlphaRecord>> alphas;
+		ankerl::unordered_dense::map<const void*, const void*> geometryBySkin;  // a skinned geometry record's skin instance -> its key
+		// The last two batches' updates by object and record type (Key), for the captures numbered before them (Apply).
+		struct Recent
+		{
+			std::uint64_t batch = 0;
+			SceneCapture::Update update;
+		};
+		ankerl::unordered_dense::map<std::uintptr_t, std::vector<Recent>> recent;
+		std::uint64_t batch = 0;
+		bool replaying = false;
+		std::uint64_t replayed = 0, stale = 0, superseded = 0;
+		const void* missedProperty = nullptr;
+		const void* missedAlpha = nullptr;
+		std::pair<std::uint8_t, const void*> UpdateRecord(const SceneCapture::Update& a_update);
+		void Replay(std::uintptr_t a_key, std::uint64_t a_after);
 
 		// The parity, by record type (node, geometry, property, alpha) and field.
 		static constexpr std::size_t kTypes = 4;
