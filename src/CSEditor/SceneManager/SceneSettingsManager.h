@@ -262,7 +262,7 @@ public:
 	bool HasActiveSettingsForFeature(const std::string& featureShortName) const;
 	/// Whether a feature has any entry authored anywhere, in effect here or not.
 	bool HasAnySceneEntriesForFeature(const std::string& featureShortName) const;
-	/** @brief Whether the scene layer currently applies a value at this address. */
+	/** @brief Whether the scene layer currently applies a value at this address that differs from the base. */
 	bool IsActiveSceneSetting(std::string_view featureShortName,
 		std::string_view settingPath, std::string_view settingKey) const;
 	bool IsActiveSceneSetting(const std::string& featureShortName,
@@ -273,6 +273,8 @@ public:
 	/// Whether the scene layer is currently driving this feature, so a settings UI without sketch
 	/// support must not offer its base settings: the next resolve would revert the edit.
 	bool IsFeatureSceneControlled(const std::string& featureShortName) const;
+	/// Whether any applied value of the feature differs from its base, i.e. a layer is visibly overriding it.
+	bool IsFeatureOverridingBase(const std::string& featureShortName) const;
 
 	/// RAII suspend of the scene layer. Anything reading or writing a feature's *base* settings must
 	/// hold one, otherwise it captures an overridden value as if it were the user's choice.
