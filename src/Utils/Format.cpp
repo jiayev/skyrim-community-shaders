@@ -311,9 +311,8 @@ namespace Util
 					appendSpaceIfNeeded();
 			}
 
-			result += result.empty() || result.back() == ' ' ?
-			              static_cast<char>(std::toupper(static_cast<unsigned char>(character))) :
-			              character;
+			const bool startsWord = result.empty() || result.back() == ' ';
+			result += startsWord ? static_cast<char>(std::toupper(static_cast<unsigned char>(character))) : character;
 		}
 
 		return result;

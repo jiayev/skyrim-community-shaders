@@ -1803,13 +1803,13 @@ void EditorWindow::Load()
 		return;
 
 	std::string error;
-	auto settings = Util::FileHelpers::ReadJsonFile(path, "editor settings", 0, &error);
-	if (!settings && error.empty()) {
+	auto loaded = Util::FileHelpers::ReadJsonFile(path, "editor settings", 0, &error);
+	if (!loaded && error.empty()) {
 		logger::warn("Failed to open settings file: {}", path.string());
 		return;
 	}
-	if (settings)
-		j = std::move(*settings);
+	if (loaded)
+		j = std::move(*loaded);
 	LoadSettings();
 }
 

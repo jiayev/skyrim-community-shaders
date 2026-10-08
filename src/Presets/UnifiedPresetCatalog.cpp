@@ -27,6 +27,7 @@
 #include <fstream>
 #include <imgui.h>
 #include <nlohmann/json.hpp>
+#include <span>
 #include <stb_image.h>
 #include <vector>
 
@@ -42,6 +43,10 @@ namespace
 	// The colon keeps it out of the pack folder namespace, like orphan "e11:" ids.
 	constexpr const char* kEffects11LegacyPackId = "legacy:effects11";
 	constexpr std::string_view kEffects11OrphanPrefix = "e11:";
+	constexpr size_t kMaxDescriptionLength = 400;
+	constexpr std::string_view kTruncationSuffix = "...";
+	constexpr size_t kMaxScreenshots = 12;
+	constexpr int kRgbaChannels = 4;
 
 	using Util::ToLower;
 
@@ -72,8 +77,16 @@ namespace
 		if (rel.empty())
 			return {};
 		auto path = root / rel;
-		if (std::filesystem::exists(path))
-			return path;
+		return std::filesystem::exists(path) ? path : std::filesystem::path{};
+	}
+
+	/** @brief The first candidate that exists under root, or an empty path. */
+	std::filesystem::path FindFirstExisting(const std::filesystem::path& root, std::span<const char* const> candidates)
+	{
+		for (const char* name : candidates) {
+			if (auto path = ResolveRelative(root, name); !path.empty())
+				return path;
+		}
 		return {};
 	}
 
@@ -147,12 +160,14 @@ namespace
 				if (!result.empty())
 					result += ' ';
 				result += line;
-				if (result.size() > 400)
+				if (result.size() > kMaxDescriptionLength)
 					break;
 			}
 			if (!result.empty()) {
-				if (result.size() > 400)
-					result.resize(397), result += "...";
+				if (result.size() > kMaxDescriptionLength) {
+					result.resize(kMaxDescriptionLength - kTruncationSuffix.size());
+					result += kTruncationSuffix;
+				}
 				return result;
 			}
 		}
@@ -174,20 +189,10 @@ namespace
 			"gallery", "screenshots", "Screenshots", "images", "Images", "previews", "Previews"
 		};
 
-		if (pack.logoPath.empty()) {
-			for (const char* name : kLogoCandidates) {
-				pack.logoPath = ResolveRelative(pack.rootPath, name);
-				if (!pack.logoPath.empty())
-					break;
-			}
-		}
-		if (pack.coverPath.empty()) {
-			for (const char* name : kCoverCandidates) {
-				pack.coverPath = ResolveRelative(pack.rootPath, name);
-				if (!pack.coverPath.empty())
-					break;
-			}
-		}
+		if (pack.logoPath.empty())
+			pack.logoPath = FindFirstExisting(pack.rootPath, kLogoCandidates);
+		if (pack.coverPath.empty())
+			pack.coverPath = FindFirstExisting(pack.rootPath, kCoverCandidates);
 
 		if (!pack.screenshotPaths.empty())
 			return;
@@ -216,9 +221,8 @@ namespace
 		}
 
 		std::sort(pack.screenshotPaths.begin(), pack.screenshotPaths.end());
-		constexpr size_t kMaxShots = 12;
-		if (pack.screenshotPaths.size() > kMaxShots)
-			pack.screenshotPaths.resize(kMaxShots);
+		if (pack.screenshotPaths.size() > kMaxScreenshots)
+			pack.screenshotPaths.resize(kMaxScreenshots);
 	}
 }
 
@@ -365,11 +369,7 @@ void UnifiedPresetCatalog::SetActivePackId(const std::string& id)
 
 UnifiedPresetCatalog::PackInfo* UnifiedPresetCatalog::FindPack(const std::string& id)
 {
-	for (auto& pack : packs) {
-		if (pack.id == id)
-			return &pack;
-	}
-	return nullptr;
+	return const_cast<PackInfo*>(std::as_const(*this).FindPack(id));
 }
 
 const UnifiedPresetCatalog::PackInfo* UnifiedPresetCatalog::FindPack(const std::string& id) const
@@ -549,16 +549,9 @@ std::vector<size_t> UnifiedPresetCatalog::Query(std::optional<PresetType> typeFi
 			continue;
 
 		if (!search.empty()) {
-			bool match = ContainsStringIgnoreCase(pack.name, search) || ContainsStringIgnoreCase(pack.author, search) ||
-			             ContainsStringIgnoreCase(pack.description, search);
-			if (!match) {
-				for (const auto& tag : pack.tags) {
-					if (ContainsStringIgnoreCase(tag, search)) {
-						match = true;
-						break;
-					}
-				}
-			}
+			const bool match = ContainsStringIgnoreCase(pack.name, search) || ContainsStringIgnoreCase(pack.author, search) ||
+			                   ContainsStringIgnoreCase(pack.description, search) ||
+			                   std::ranges::any_of(pack.tags, [&](const auto& tag) { return ContainsStringIgnoreCase(tag, search); });
 			if (!match)
 				continue;
 		}
@@ -600,7 +593,7 @@ bool UnifiedPresetCatalog::LoadTextureSRV(const std::filesystem::path& path, win
 		ok = Util::LoadDDSTextureFromFile(globals::d3d::device, path.string().c_str(), &srv, size);
 	} else {
 		int width = 0, height = 0;
-		unsigned char* pixels = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &width, &height, nullptr, 4);
+		unsigned char* pixels = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &width, &height, nullptr, kRgbaChannels);
 		if (!pixels) {
 			logger::warn("[Presets] stbi failed for '{}': {}", path.string(), stbi_failure_reason() ? stbi_failure_reason() : "unknown");
 			return false;
@@ -618,7 +611,7 @@ bool UnifiedPresetCatalog::LoadTextureSRV(const std::filesystem::path& path, win
 
 		D3D11_SUBRESOURCE_DATA init = {};
 		init.pSysMem = pixels;
-		init.SysMemPitch = static_cast<UINT>(width * 4);
+		init.SysMemPitch = static_cast<UINT>(width * kRgbaChannels);
 
 		winrt::com_ptr<ID3D11Texture2D> texture;
 		const HRESULT hrTex = globals::d3d::device->CreateTexture2D(&desc, &init, texture.put());
