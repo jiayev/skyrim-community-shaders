@@ -419,12 +419,12 @@ namespace DCLF
 		const ShadowPayload* shadow = draws->shadow.get();
 		// The geometry table: the main payloads' and the shadow payload's are the same (the publication's stream views and face streams).
 		std::uint64_t geometryRows = shadow ? shadow->geometries.Count() : 0;
-		std::array<std::uint64_t, 2> inputs{};
-		for (const std::size_t j : { kAsyncColour, kAsyncZPrepass })
-			if (const auto& payload = draws->payloads[j]) {
-				geometryRows = std::max<std::uint64_t>(geometryRows, payload->geometryDraws.Count());
-				inputs[j] = payload->resident.Count() + payload->inputList.size();
-			}
+		// The main list: both segments' payloads hold the same one (BuildMainPayloads).
+		std::uint64_t inputs = 0;
+		if (newest) {
+			geometryRows = std::max<std::uint64_t>(geometryRows, newest->geometryDraws.Count());
+			inputs = newest->resident.Count() + newest->inputList.size();
+		}
 		bool grown = false;
 		auto ensure = [&](Impl::RingPart& a_part, std::uint64_t a_elements, std::uint32_t a_stride, const char* a_name, bool a_address) {
 			if (a_part.buffer && a_part.capacity >= a_elements)
@@ -452,8 +452,7 @@ namespace DCLF
 			ensure(entry.materialRows, newest->materialRows.Count(), kMaterialRowBytes, "material-rows", true);
 			ensure(entry.pipelineRows, newest->pipelineRows.Count(), kPipelineRowBytes, "pipeline-rows", true);
 		}
-		for (const std::size_t j : { kAsyncColour, kAsyncZPrepass })
-			ensure(entry.inputs[j], inputs[j] * sizeof(DrawInput) / 4, 4, j == kAsyncZPrepass ? "inputs-depth" : "inputs", false);
+		ensure(entry.inputs, inputs * sizeof(DrawInput) / 4, 4, "inputs", false);
 		if (shadow) {
 			ensure(entry.shadowRows, shadow->materialRows.Count(), sizeof(ShadowMaterialRow), "shadow-rows", true);
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
@@ -469,8 +468,7 @@ namespace DCLF
 		frame.objectsIndex = entry.objects.srvIndex;
 		frame.extrasIndex = entry.extras.srvIndex;
 		frame.geometriesIndex = entry.geometries.srvIndex;
-		for (const std::size_t j : { kAsyncColour, kAsyncZPrepass })
-			frame.inputsIndex[j] = entry.inputs[j].srvIndex;
+		frame.inputsIndex = entry.inputs.srvIndex;
 		if (shadow) {
 			frame.shadow = true;
 			frame.shadowRows = entry.shadowRows.address;
@@ -542,17 +540,14 @@ namespace DCLF
 				[](PipelineRow& a_row, std::uint64_t a_address) { PatchRowAddresses(a_row, a_address); }, sender(entry.pipelineRows, Impl::kRingPipelineRows));
 			entry.pipelineRows.held = newest->pipelineRows.Version();
 			holders.pipelineRows.Set(r, entry.pipelineRows.held);
-			// Each segment's inputs: its resident region at the head (what changed since), the build's own after it (whole).
-			for (const std::size_t j : { kAsyncColour, kAsyncZPrepass }) {
-				const auto& payload = draws->payloads[j];
-				if (!payload)
-					continue;
-				auto& part = entry.inputs[j];
-				payload->resident.Emit(part.held, sender(part, Impl::kRingResident));
-				part.held = payload->resident.Version();
-				holders.resident[j].Set(r, part.held);
-				if (!payload->inputList.empty())
-					sender(part, Impl::kRingFrameInputs)(payload->inputList.data(), payload->inputList.size() * sizeof(DrawInput), payload->resident.Count() * sizeof(DrawInput));
+			// The main list, both segments': its resident region at the head (what changed since), the build's own after it (whole).
+			{
+				auto& part = entry.inputs;
+				newest->resident.Emit(part.held, sender(part, Impl::kRingResident));
+				part.held = newest->resident.Version();
+				holders.resident.Set(r, part.held);
+				if (!newest->inputList.empty())
+					sender(part, Impl::kRingFrameInputs)(newest->inputList.data(), newest->inputList.size() * sizeof(DrawInput), newest->resident.Count() * sizeof(DrawInput));
 			}
 			s.ringRuns += runs;
 			s.ringBytes += bytes;
@@ -651,23 +646,28 @@ namespace DCLF
 		const auto& c = a_context;
 		if (!c.valid || !c.target || !c.target->scene)
 			return out;
-		// The Z-prepass's first, as its commit.
+		// Both segments in one build: one list, read by each through its view bits (U4a).
+		std::array<MainInputs, 2> inputs;
+		std::array<const MainInputs*, 2> segmentIn{};
+		std::array<MainPayload*, 2> segmentOut{};
 		for (const std::size_t j : { kAsyncZPrepass, kAsyncColour }) {
 			if (!c.build[j])
 				continue;
-			MainInputs in = c.inputs[j];
+			MainInputs& in = inputs[j];
+			in = c.inputs[j];
 			in.frameNumber = a_frame;
 			in.tablesGeneration = a_generation;
 			in.lookupGeneration = a_lookups.generation;
 			// The oldest versions the ring's entries hold: what the rows' and the region's journals keep changes back to.
 			in.materialRowsHeld = holders.materialRows.Oldest();
 			in.pipelineRowsHeld = holders.pipelineRows.Oldest();
-			in.residentUploaded = holders.resident[j].Oldest();
+			in.residentUploaded = holders.resident.Oldest();
 			in.tablesHeld = from;
-			auto payload = AcquirePayload();
-			BuildMainPayload(in, *a_tables, store.GetFrameTables(), a_lookups, *payload, mainRows, CacheFor(j), out->streams);
-			out->payloads[j] = std::move(payload);
+			out->payloads[j] = AcquirePayload();
+			segmentIn[j] = &in;
+			segmentOut[j] = out->payloads[j].get();
 		}
+		BuildMainPayloads(segmentIn, *a_tables, store.GetFrameTables(), a_lookups, segmentOut, mainRows, &mainCache, out->streams);
 		// The shadow payload (step 6e S1), from the same tables, stream views and lookups, with the publication's candidates, and the
 		// next frame's exclusions from it.
 		if (c.shadow && c.shadowTarget && c.shadowTarget->scene) {
@@ -705,7 +705,7 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.ViewMaskParity");
 		auto& p = viewMaskParity;
 		std::uint64_t inputs = 0, differ = 0;
-		// a_list: 0 Z-prepass, 1 colour, 2 + mode a shadow mode's.
+		// a_list: 2 + mode a shadow mode's (0 and 1 are the main list's: undrawable, drawable).
 		auto check = [&](std::uint32_t a_list, const DrawInput& a_input, bool a_main, std::uint32_t a_listBits) {
 			++inputs;
 			const std::uint32_t expected = ViewMaskOf(a_tables, a_input.objectIndex, a_main);
@@ -716,15 +716,27 @@ namespace DCLF
 			if (p.first.compare_exchange_strong(none, (std::uint64_t(a_list) << 56) | (std::uint64_t(a_input.objectIndex & 0xFFFFFFFFu) << 24) | (expected & 0xFFFFFFu)))
 				p.firstMask.store(a_input.view.mask, std::memory_order_relaxed);
 		};
-		for (const std::size_t j : { kAsyncZPrepass, kAsyncColour }) {
-			const auto& payload = a_draws.payloads[j];
-			if (!payload)
-				continue;
-			const std::uint32_t list = j == kAsyncZPrepass ? 0u : 1u;
+		// The main list (both segments read the same, U4a): every input taken by one of them, and a drawable one by both (the colour
+		// segment's bits, kViewMain or kViewDecal, and the depth segment's but for a decal).
+		auto checkMain = [&](const DrawInput& a_input) {
+			++inputs;
+			const std::uint32_t expected = MainMaskOf(a_tables, a_input.objectIndex);
+			const std::uint32_t mask = a_input.view.mask;
+			const bool decal = ObjectDecalGroup(a_input.flags) != 0;
+			const bool drawable = (a_input.flags & kInputDrawable) != 0;
+			if (mask == expected && (mask & (kDepthViewBits | kColourViewBits)) &&
+				(!drawable || ((mask & kColourViewBits) && (decal || (mask & kDepthViewBits)))))
+				return;
+			++differ;
+			std::uint64_t none = ~0ull;
+			if (p.first.compare_exchange_strong(none, (std::uint64_t(drawable ? 1 : 0) << 56) | (std::uint64_t(a_input.objectIndex & 0xFFFFFFFFu) << 24) | (expected & 0xFFFFFFu)))
+				p.firstMask.store(mask, std::memory_order_relaxed);
+		};
+		if (const auto& payload = a_draws.payloads[kAsyncColour] ? a_draws.payloads[kAsyncColour] : a_draws.payloads[kAsyncZPrepass]) {
 			for (std::size_t i = 0; i < payload->resident.Count(); ++i)
-				check(list, *payload->resident.At(i), true, kViewMainCull);
+				checkMain(*payload->resident.At(i));
 			for (const auto& input : payload->inputList)
-				check(list, input, true, kViewMainCull);
+				checkMain(input);
 		}
 		if (const auto& shadowPayload = a_draws.shadow)
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)

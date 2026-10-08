@@ -2797,7 +2797,7 @@ namespace DCLF
 		struct ResidentRegion : KeptRegion
 		{
 			LogCursor cursor;               // the change log, and the tables generation it was read from
-			bool depth = false;             // the Z-prepass's
+			std::uint8_t segments = 0;      // the segments its pairs' verdicts are of (MainBuild::Segments)
 			std::vector<std::uint64_t> pairOf;   // per entry: its (material, pipeline)
 			// Per entry: its sequences, 0 when it cannot be drawn this frame; a drawable decal is kRegionDecal (its sequence is in
 			// its group's range, not the draws').
@@ -2929,6 +2929,12 @@ namespace DCLF
 		 */
 		void BuildMainPayload(const MainInputs& a_in, const SceneStore::Tables& a_tables, const FrameTables& a_frame, const Lookups& a_lookups, MainPayload& a_out, MainRows& a_rows,
 			BuildCache* a_cache = nullptr, std::shared_ptr<const StreamViews> a_streams = nullptr);
+		/**
+		 * @brief Both main segments' payloads in one build (U4a): one list, which both read through their view bits, and a member
+		 * drawable in both or neither. a_in[j] / a_out[j] per segment (kAsyncColour, kAsyncZPrepass); a segment with no inputs is not built.
+		 */
+		void BuildMainPayloads(const std::array<const MainInputs*, 2>& a_in, const SceneStore::Tables& a_tables, const FrameTables& a_frame, const Lookups& a_lookups,
+			const std::array<MainPayload*, 2>& a_out, MainRows& a_rows, BuildCache* a_cache, std::shared_ptr<const StreamViews> a_streams);
 
 		// The objects a mode's inputs draw, as the geometry the native shadow loop withholds (PassCapture).
 
@@ -2989,6 +2995,19 @@ namespace DCLF
 		{
 			const std::uint8_t phases = a_object < a_tables.setPhases.size() ? a_tables.setPhases[a_object] : std::uint8_t{ 0 };
 			return ViewBitsOf(phases) | (a_mainCandidate ? kViewMainCull : 0u);
+		}
+		/**
+		 * @brief A main input's view mask (U4a: the one main list both segments read). A decal's is kViewDecal alone: the colour
+		 * segment's fixed slots, culled by no other view. Every other candidate's is its phases' bits with kViewMainCull, kViewMain
+		 * exactly while its record is a member (kObjectMember, what its drawable bit follows), so a drawable input is the colour
+		 * segment's whenever it is the depth segment's.
+		 */
+		inline std::uint32_t MainMaskOf(const SceneStore::Tables& a_tables, std::size_t a_object)
+		{
+			const std::uint32_t flags = a_object < a_tables.objects.size() ? a_tables.objects[a_object].flags : 0u;
+			if (ObjectDecalGroup(flags))
+				return kViewDecal;
+			return (ViewMaskOf(a_tables, a_object, true) & ~kViewMain) | ((flags & kObjectMember) ? kViewMain : 0u);
 		}
 		/** @brief The view bits a shadow or occlusion view draws: its mode's, a clamped view's split by whether it is the sun's. */
 		inline std::uint32_t ShadowViewBits(std::uint32_t a_mode, bool a_sun)
@@ -3822,8 +3841,7 @@ namespace DCLF
 		std::uint32_t frameTextureGeneration = ~0u;
 		// The commits' own uploads on the render thread (CommitUploads).
 		std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>> commitStagedPool;
-		std::array<BuildCache, 2> buildCaches;  // kAsyncColour, kAsyncZPrepass
-		BuildCache* CacheFor(std::size_t a_job) { return &buildCaches[a_job]; }
+		BuildCache mainCache;  // the main list's region, both segments' (BuildMainPayloads)
 		/**
 		 * @brief Step 6e E3b, the builds ahead: the coordinator builds the main payloads with the publication they draw (BuildAhead),
 		 * from what the frame's start posted (AheadContext: the resources, the inputs' frame part, prepared by PrepareMainInputs). Its
@@ -3927,7 +3945,7 @@ namespace DCLF
 		struct RingEntry
 		{
 			RingPart objects, extras, geometries, materialRows, pipelineRows;
-			std::array<RingPart, 2> inputs;  // kAsyncColour, kAsyncZPrepass
+			RingPart inputs;  // the main list, both segments' (U4a)
 			// The shadow payload's (step 6e S2): its material rows and each mode's inputs (the occlusion maps' included).
 			RingPart shadowRows;
 			std::array<RingPart, kShadowModeCount> shadowInputs;
@@ -3942,7 +3960,7 @@ namespace DCLF
 			std::uint32_t entry = 0;
 			std::shared_ptr<const DrawPublication> draws;
 			std::uint32_t objectsIndex = 0, extrasIndex = 0, geometriesIndex = 0;
-			std::array<std::uint32_t, 2> inputsIndex{};
+			std::uint32_t inputsIndex = 0;  // the main list's
 			std::uint64_t materialRows = 0, pipelineRows = 0;
 			bool shadow = false;  // the entry holds the publication's shadow payload
 			std::uint64_t shadowRows = 0;
@@ -3981,7 +3999,7 @@ namespace DCLF
 		struct RingHolders
 		{
 			KeptHolders<kPayloadRing> objects, extras, geometries, materialRows, pipelineRows;
-			std::array<KeptHolders<kPayloadRing>, 2> resident;  // kAsyncColour, kAsyncZPrepass
+			KeptHolders<kPayloadRing> resident;  // the main list's region
 			KeptHolders<kPayloadRing> shadowRows;
 			std::array<KeptHolders<kPayloadRing>, kShadowModeCount> shadowInputs;
 		} ringHolders;
@@ -4005,12 +4023,12 @@ namespace DCLF
 			return ringFrame.valid && !a_payload.foreignRows && ringFrame.draws && ringFrame.draws->payloads[a_job].get() == &a_payload;
 		}
 		/** @brief The ring's values into a culling latch (none: the pass's own buffers). */
-		static void RingLatch(const RingFrame& a_ring, std::size_t a_job, BuildDrawsLatch& a_latch)
+		static void RingLatch(const RingFrame& a_ring, BuildDrawsLatch& a_latch)
 		{
 			if (!a_ring.valid)
 				return;
 			a_latch.payloadValid = 1;
-			a_latch.inputsIndex = a_ring.inputsIndex[a_job];
+			a_latch.inputsIndex = a_ring.inputsIndex;
 			a_latch.geometriesIndex = a_ring.geometriesIndex;
 			a_latch.materialRowsLo = static_cast<std::uint32_t>(a_ring.materialRows);
 			a_latch.materialRowsHi = static_cast<std::uint32_t>(a_ring.materialRows >> 32);

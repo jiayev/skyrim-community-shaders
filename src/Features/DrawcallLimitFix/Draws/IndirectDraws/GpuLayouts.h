@@ -298,6 +298,11 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kViewSkyOccluder = 1u << 5;    // Skylighting's occlusion map
 	constexpr std::uint32_t kViewPrecipOccluder = 1u << 6; // the precipitation mask
 	constexpr std::uint32_t kViewReflection = 1u << 7;     // the water reflection's faces
+	constexpr std::uint32_t kViewDecal = 1u << 8;          // a decal: the colour segment's fixed ordinal slots, and no other view's
+	// The main segments' views of the one main list (U4a): the depth segment culls every candidate; the colour segment draws the
+	// members and writes every decal's slot (an undrawable one's blank).
+	constexpr std::uint32_t kDepthViewBits = kViewMainCull;
+	constexpr std::uint32_t kColourViewBits = kViewMain | kViewDecal;
 	static_assert(offsetof(DrawInput, view) == 16 && offsetof(DrawInput, shadowRow) == 52 && offsetof(DrawInput, fadeDistance) == 60);
 	// The main sequence buffer's ranges (Resources::sequenceDraws, sequenceDecals): phase 1 and the colour segment's draws,
 	// then phase 2's (the CPU records where its draw starts, so the two need ranges fixed in advance rather than one shared
