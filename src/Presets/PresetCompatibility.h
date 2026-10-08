@@ -37,6 +37,9 @@ namespace PresetCompatibility
 	/// Feature short names from the pack that are not loaded in this session.
 	std::vector<std::string> MissingRequiredFeatures(const std::vector<std::string>& requiredFeatures);
 
+	/// Plugin file names (.esp/.esm/.esl) from the pack that are not in the active load order.
+	std::vector<std::string> MissingRequiredPlugins(const std::vector<std::string>& requiredPlugins);
+
 	/// Running Community Shaders version as MAJOR.MINOR.PATCH (no build suffix).
 	std::string CurrentCsVersionString();
 
@@ -47,12 +50,15 @@ namespace PresetCompatibility
 		std::string versionMessageCompact;
 		std::vector<std::string> missingFeatures;
 		std::string featuresMessage;
+		std::vector<std::string> missingPlugins;
+		std::string pluginsMessage;
 
-		/** @brief Whether any warning would be drawn. */
+		/** @brief Whether applying should ask for confirmation; missing plugins only warn. */
 		bool HasIssues() const { return versionGap != VersionGap::None || !missingFeatures.empty(); }
 	};
 
-	Warning Evaluate(std::string_view requiredCsVersion, const std::vector<std::string>& requiredFeatures);
+	Warning Evaluate(std::string_view requiredCsVersion, const std::vector<std::string>& requiredFeatures,
+		const std::vector<std::string>& requiredPlugins);
 
 	/** @brief Draws compact coloured warning lines; returns whether anything was drawn. */
 	bool DrawWarnings(const Warning& warning, bool compact);

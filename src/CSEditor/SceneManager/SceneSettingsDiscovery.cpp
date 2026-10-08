@@ -415,6 +415,7 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 	setOrErase(kPresetMetadataTagsKey, info.tags);
 	setOrErase(kPresetMetadataCsVersionKey, info.csVersion);
 	setOrErase(kPresetMetadataRequiredFeaturesKey, info.requiredFeatures);
+	setOrErase(kPresetMetadataRequiredPluginsKey, info.requiredPlugins);
 	if (exportEffects11)
 		setOrErase(UnifiedPresetCatalog::kSceneControlKey, E11Handoff::ToManifest());
 
@@ -493,6 +494,7 @@ std::optional<SceneSettingsManager::PresetMetadata> SceneSettingsManager::ReadPr
 		.tags = readStrings(kPresetMetadataTagsKey),
 		.csVersion = readString(kPresetMetadataCsVersionKey),
 		.requiredFeatures = readStrings(kPresetMetadataRequiredFeaturesKey),
+		.requiredPlugins = readStrings(kPresetMetadataRequiredPluginsKey),
 		.logo = readString(kPresetMetadataLogoKey),
 		.cover = readString(kPresetMetadataCoverKey),
 		.screenshots = readStrings(kPresetMetadataScreenshotsKey),

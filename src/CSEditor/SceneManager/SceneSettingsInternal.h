@@ -45,6 +45,8 @@ namespace SceneSettingsInternal
 	constexpr const char* kPresetMetadataCsVersionKey = "csVersion";
 	/// Feature short names the preset expects to be loaded.
 	constexpr const char* kPresetMetadataRequiredFeaturesKey = "requiredFeatures";
+	/// Plugin file names the preset was made with; missing ones only warn.
+	constexpr const char* kPresetMetadataRequiredPluginsKey = "requiredPlugins";
 	constexpr const char* kTimeOfDayTransitionHoursKey = "periodTransitionHours";
 
 	using namespace Util::Settings;

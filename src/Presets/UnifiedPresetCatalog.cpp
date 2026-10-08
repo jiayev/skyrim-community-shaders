@@ -413,18 +413,17 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 			pack.nexusUrl = meta.value("nexusUrl", "");
 			pack.csVersion = meta.value("csVersion", "");
 			pack.type = ReadPresetType(meta, packId);
-			if (meta.contains("tags") && meta["tags"].is_array()) {
-				for (const auto& tag : meta["tags"]) {
-					if (tag.is_string())
-						pack.tags.push_back(tag.get<std::string>());
+			const auto readStrings = [&](const char* key, std::vector<std::string>& out) {
+				if (const auto it = meta.find(key); it != meta.end() && it->is_array()) {
+					for (const auto& value : *it) {
+						if (value.is_string())
+							out.push_back(value.get<std::string>());
+					}
 				}
-			}
-			if (meta.contains("requiredFeatures") && meta["requiredFeatures"].is_array()) {
-				for (const auto& feature : meta["requiredFeatures"]) {
-					if (feature.is_string())
-						pack.requiredFeatures.push_back(feature.get<std::string>());
-				}
-			}
+			};
+			readStrings("tags", pack.tags);
+			readStrings("requiredFeatures", pack.requiredFeatures);
+			readStrings("requiredPlugins", pack.requiredPlugins);
 			if (const auto disableAtBoot = meta.find(kDisableAtBootKey); disableAtBoot != meta.end() && disableAtBoot->is_object()) {
 				for (auto it = disableAtBoot->begin(); it != disableAtBoot->end(); ++it) {
 					if (it.value().is_boolean())
@@ -450,7 +449,7 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 			pack.invalidReason = I18n::GetSingleton()->Format("menu.presets.invalid_manifest",
 				{ { "file", GetPackManifestPath(packRoot).filename().string() }, { "error", e.what() } }, "Invalid {file}: {error}");
 		}
-		pack.compat = PresetCompatibility::Evaluate(pack.csVersion, pack.requiredFeatures);
+		pack.compat = PresetCompatibility::Evaluate(pack.csVersion, pack.requiredFeatures, pack.requiredPlugins);
 
 		pack.effects11Root = ResolveEffects11Root(packRoot, meta);
 		pack.hasEffects11 = !pack.effects11Root.empty();

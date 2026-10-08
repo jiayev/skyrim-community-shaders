@@ -69,9 +69,10 @@ namespace
 			[manager] { return manager->GetOverwriteModNames(); });
 	}
 
-	/// The name is kept as typed and tags stay unparsed until export.
+	/// The name is kept as typed; tags and plugins stay unparsed until export.
 	PresetExportInfo form;
 	std::string presetTags;
+	std::string requiredPlugins;
 	/// Existing relative paths from a prior export of this name (shown when no new pick).
 	std::string existingLogo;
 	std::string existingCover;
@@ -267,10 +268,16 @@ namespace
 		simplified = false;
 		baselineFeatures.clear();
 		presetTags.clear();
+		requiredPlugins.clear();
 		existingLogo.clear();
 		existingCover.clear();
 		existingScreenshots.clear();
 		collidingFiles.clear();
+	}
+
+	std::string JoinList(const std::vector<std::string>& values)
+	{
+		return values | std::views::join_with(std::string_view(", ")) | std::ranges::to<std::string>();
 	}
 
 	/** @brief Fills empty fields from an existing preset and adopts its artwork, dropping any pending picks. */
@@ -281,7 +288,9 @@ namespace
 		if (form.description.empty())
 			form.description = meta.description;
 		if (presetTags.empty())
-			presetTags = meta.tags | std::views::join_with(std::string_view(", ")) | std::ranges::to<std::string>();
+			presetTags = JoinList(meta.tags);
+		if (requiredPlugins.empty())
+			requiredPlugins = JoinList(meta.requiredPlugins);
 		if (!meta.version.empty())
 			form.version = meta.version;
 		if (!meta.csVersion.empty())
@@ -416,7 +425,7 @@ namespace
 			ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
 		ImGui::TextUnformatted(T(TKEY("scene_export_compat"), "Compatibility"));
 		Util::AddTooltip(T(TKEY("scene_export_compat_tooltip"),
-			"Records which Community Shaders build and features this pack expects. The Presets browser warns when they do not match."));
+			"Records which Community Shaders build, features and plugins this pack expects. The Presets browser warns when they do not match."));
 
 		ImGui::TextUnformatted(T(TKEY("scene_export_cs_version"), "CS version"));
 		ImGui::SetNextItemWidth(-1);
@@ -456,11 +465,18 @@ namespace
 				.c_str());
 		Util::AddTooltip(T(TKEY("scene_export_features_tooltip"),
 			"Features this export has settings for start ticked. Core features ship with every install, so they are not listed."));
+
+		ImGui::TextUnformatted(T(TKEY("scene_export_plugins"), "Required plugins"));
+		ImGui::SetNextItemWidth(-1);
+		ImGui::InputTextWithHint("##ScenePresetExportPlugins",
+			T(TKEY("scene_export_plugins_hint"), "e.g. Cathedral Weathers.esp"), &requiredPlugins);
+		Util::AddTooltip(T(TKEY("scene_export_plugins_tooltip"),
+			"Comma-separated .esp, .esm or .esl files this pack was made with. The Presets browser warns when one is not in the load order, but still lets the pack apply."));
 		ImGui::EndChild();
 	}
 
 	/** @brief Splits on ',' or ';', trimming whitespace and dropping empty tags. */
-	std::vector<std::string> ParseTags(const std::string& text)
+	std::vector<std::string> ParseList(const std::string& text)
 	{
 		std::vector<std::string> tags;
 		std::string current;
@@ -645,12 +661,13 @@ namespace
 		return !baselineFeatures.empty() || (includePostProcessing && CanIncludePostProcessing());
 	}
 
-	/** @brief The form as export info, with the sanitized name and parsed tags. */
+	/** @brief The form as export info, with the sanitized name and parsed tags and plugins. */
 	PresetExportInfo BuildExportInfo(const std::string& sanitizedName)
 	{
 		auto info = form;
 		info.name = sanitizedName;
-		info.tags = ParseTags(presetTags);
+		info.tags = ParseList(presetTags);
+		info.requiredPlugins = ParseList(requiredPlugins);
 		// A pack that sets a feature's base settings needs that feature to apply them.
 		if (simplified)
 			info.requiredFeatures.clear();
