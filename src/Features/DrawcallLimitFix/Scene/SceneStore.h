@@ -2035,7 +2035,8 @@ namespace DCLF
 		std::size_t mirrorProbeCursor = 0;
 		// The scene work: the applied batch's probe, and the objects the frame's events named (the parity's).
 		std::unique_ptr<SceneCapture::Records> mirrorProbe;
-		SceneMirror::KeySet mirrorEventKeys;  // render thread: the next frame start's capture is forced (a detach ingested, a load's end)
+		SceneMirror::KeySet mirrorEventKeys;
+		SceneMirror::FieldMap mirrorEventFields;  // the scene work's: the fields the batch's updates carried (step 6e F3b)  // render thread: the next frame start's capture is forced (a detach ingested, a load's end)
 		std::vector<RE::NiAVObject*> attachedRoots;  // the ingestion's attached subtrees, for CatchUpSwitches (scratch)
 		// Render thread, since the last report: switches caught up at ingestion (by switch event, under an attached subtree or the
 		// world after a load), and the time taken.

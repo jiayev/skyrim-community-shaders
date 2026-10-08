@@ -1,4 +1,5 @@
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/MirrorWatch.h"
 
 namespace DCLF
 {
@@ -112,6 +113,7 @@ namespace DCLF
 			c = { std::move(c.snapshot), c.cursor };
 		}
 		text += mirror.Report();
+		text += MirrorWatch::TakeReport(frame);
 		if (const auto c = SceneCapture::TakeCounters(); c.attaches || c.outOfWorld)
 			text += fmt::format("[DCLF] scene capture (6e F3): {} attaches in the world captured ({} records, {:.1f} us in all; {} on the main thread, {:.1f} us), {} out of the "
 								"world left to their world attach\n",

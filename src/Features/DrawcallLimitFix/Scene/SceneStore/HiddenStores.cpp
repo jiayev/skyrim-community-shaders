@@ -497,6 +497,8 @@ namespace DCLF::Scene
 		void PushHidden(const void* a_object)
 		{
 			hiddenEvents.Push(a_object);
+			// The store just made (the stubs call after it): the hidden bit's value for the mirror (step 6e F3b).
+			PushNodeUpdate(static_cast<const RE::NiAVObject*>(a_object), SceneCapture::NodeRecord::kHidden);
 		}
 
 		/**
@@ -678,10 +680,7 @@ namespace DCLF
 	{
 		// A node's key only: an entry listing it is announced, and the address is never read.
 		auto& primary = PrimaryCull::Get();
-		const bool mirrorParity = SwitchEnabled(Switch::MirrorParity);
 		stats.hiddenEvents += hiddenEvents.Drain([&](const void* a_key) {
-			if (mirrorParity)
-				mirrorEventKeys.insert(a_key);
 			// A cell's or a category node's: the kept scene lists are built again (held while the scene list job may run).
 			if (holdPrimaryNotes)
 				hiddenKeysHeld.push_back(a_key);

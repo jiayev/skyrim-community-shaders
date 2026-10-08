@@ -127,6 +127,27 @@ namespace DCLF
 		 */
 		void ProbeDecalOrder(std::span<const PassCapture::Entry> a_entries, const ankerl::unordered_dense::set<const RE::BSBatchRenderer*>& a_main);
 
+		/**
+		 * @brief The mirror's updates (step 6e F3b): the values a hook's writer changed (SceneCapture::Update), captured after the
+		 * write on the writer's thread and pushed onto SceneTracker's stack, in order with the attaches and detaches; the scene work
+		 * applies them in that order (SceneMirror::Update).
+		 */
+		inline void PushNodeUpdate(const RE::NiAVObject* a_node, std::uint32_t a_fields)
+		{
+			if (a_node)
+				SceneTracker::Get().PushUpdate(SceneCapture::Update{ a_fields, SceneCapture::CaptureNodeFields(*a_node, a_fields) });
+		}
+
+		inline void PushPropertyUpdate(const RE::BSShaderProperty* a_property, std::uint32_t a_fields)
+		{
+			if (a_property)
+				SceneTracker::Get().PushUpdate(SceneCapture::Update{ a_fields, SceneCapture::CaptureProperty(*a_property) });
+		}
+
+		// A fade node's statics (near and far, +0x109, the LOD type).
+		constexpr std::uint32_t kFadeStatics = SceneCapture::NodeRecord::kFadeNear | SceneCapture::NodeRecord::kFadeFar |
+		                                       SceneCapture::NodeRecord::kFade109 | SceneCapture::NodeRecord::kFadeType;
+
 		inline EventQueue<const RE::BSFadeNode*> fadeEvents;
 		constexpr std::size_t kMaxFadeChanges = 1u << 16;
 
