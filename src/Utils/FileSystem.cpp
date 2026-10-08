@@ -247,15 +247,21 @@ namespace Util
 			return found;
 		}
 
-		std::filesystem::path GetUnifiedPackPath(const std::string& packId)
+		std::vector<std::filesystem::path> GetUnifiedPackPaths(const std::string& packId)
 		{
-			const auto roots = GetCommunityShaderScanRoots(kUnifiedPresetsSubdir);
-			for (const auto& root : roots) {
+			std::vector<std::filesystem::path> packPaths;
+			for (const auto& root : GetCommunityShaderScanRoots(kUnifiedPresetsSubdir)) {
 				std::error_code ec;
 				if (std::filesystem::is_directory(root / packId, ec))
-					return root / packId;
+					packPaths.push_back(root / packId);
 			}
-			return roots.front() / packId;
+			return packPaths;
+		}
+
+		std::filesystem::path GetUnifiedPackPath(const std::string& packId)
+		{
+			const auto packPaths = GetUnifiedPackPaths(packId);
+			return packPaths.empty() ? GetCommunityShaderScanRoots(kUnifiedPresetsSubdir).front() / packId : packPaths.front();
 		}
 
 		std::filesystem::path GetFeaturesRealPath()

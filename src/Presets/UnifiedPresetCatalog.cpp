@@ -114,17 +114,19 @@ namespace
 	}
 
 	/** @brief Feature short names set by a pack's Baseline folder, sorted and de-duplicated. */
-	std::vector<std::string> ListBaselineFeatures(const std::filesystem::path& packRoot)
+	std::vector<std::string> ListBaselineFeatures(const std::string& packId)
 	{
 		std::vector<std::string> features;
-		std::error_code ec;
-		for (const auto& entry : std::filesystem::directory_iterator(packRoot / UnifiedPresetCatalog::kBaselineSubdir, ec)) {
-			std::error_code typeEc;
-			if (!entry.is_regular_file(typeEc))
-				continue;
-			auto name = SettingsOverrideManager::ParseBaselineFeatureName(entry.path());
-			if (!name.empty())
-				features.push_back(std::move(name));
+		for (const auto& packPath : Util::PathHelpers::GetUnifiedPackPaths(packId)) {
+			std::error_code ec;
+			for (const auto& entry : std::filesystem::directory_iterator(packPath / UnifiedPresetCatalog::kBaselineSubdir, ec)) {
+				std::error_code typeEc;
+				if (!entry.is_regular_file(typeEc))
+					continue;
+				auto name = SettingsOverrideManager::ParseBaselineFeatureName(entry.path());
+				if (!name.empty())
+					features.push_back(std::move(name));
+			}
 		}
 		std::ranges::sort(features);
 		features.erase(std::unique(features.begin(), features.end()), features.end());
@@ -445,7 +447,7 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 		pack.hasEffects11 = !pack.effects11Root.empty();
 		pack.hasCSPresets = SceneSettingsManager::HasScenePayload(packRoot);
 		pack.hasFormEdits = FormEditSources::HasPackFormFiles(packRoot);
-		pack.baselineFeatures = ListBaselineFeatures(packRoot);
+		pack.baselineFeatures = ListBaselineFeatures(packId);
 		pack.hasBaseline = !pack.baselineFeatures.empty() || !pack.disableAtBoot.empty() ||
 		                   (pack.type && *pack.type == PresetType::Baseline);
 

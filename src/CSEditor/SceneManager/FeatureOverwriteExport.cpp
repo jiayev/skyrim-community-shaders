@@ -330,7 +330,8 @@ namespace
 													T(TKEY("export.file_new_tooltip"), "Export creates this file.") } :
 		                                        std::tuple{ T(TKEY("export.file_existing"), "Existing file"), Util::Colors::GetInfo(),
 													T(TKEY("export.file_existing_tooltip"), "Export updates the ticked settings. Other settings and metadata in the file are kept.") };
-		const auto root = target.toPresetPack ? UnifiedPresetCatalog::GetSingleton().GetPresetsRealPath() :
+		// A pack file is <presets>/<pack>/Baseline/<feature>.json; an override sits in the Overrides folder.
+		const auto root = target.toPresetPack ? entry.destination.parent_path().parent_path().parent_path() :
 		                                        SettingsOverrideManager::GetSingleton()->GetOverridesDirectory();
 		const auto shown = entry.destination.lexically_relative(root.parent_path()).generic_string();
 		const float badgeWidth = Util::MeasureBadgeWidth(label) + ImGui::GetStyle().ItemSpacing.x;
