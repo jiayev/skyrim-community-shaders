@@ -58,11 +58,17 @@ namespace DCLF
 		static IndirectDraws& Get();
 
 		/**
-		 * @brief The set's shadow phases DCLF draws next frame (SetPhase bits; SceneStore::SetPhasesDrawn): a mode's, once its last
-		 * shadow epoch drew the mode's views and left none undrawn. A mode seen for the first time is the engine's for that frame,
-		 * so its casters are never withheld from a view DCLF has no pipelines for.
+		 * @brief The set's shadow phases DCLF can draw (SetPhase bits; SceneStore::SetCapability): the casters' and the point lights'
+		 * once the shadow resources and the rasterizer state catalog are set up, and each enabled occlusion map's once its map has been
+		 * captured. A capability, not what a frame drew: it changes only at setup, on a toggle or a failure, so which views the
+		 * engine asks for in a frame never changes the set. Published by the render thread at the frame's start
+		 * (UpdateShadowCapability); any thread.
 		 */
-		std::uint8_t ShadowPhasesDrawn() const;
+		std::uint8_t ShadowCapability() const;
+		/** @brief Render thread, at the frame's start: sets up what the capability needs and publishes it. */
+		void UpdateShadowCapability();
+		/** @brief The report's line: the capability, the catalog, and its changes since startup ("<- PHASES": a view it did not foresee). */
+		std::string ShadowCapabilityReport() const;
 		/**
 		 * @brief Render thread, before ShadowViews::Rebuild: how many shadow views DCLF's view slots hold now (their buffers and view
 		 * blocks, ShadowSizing::viewSlots) - the views past them stay the engine's while the slots grow; UINT32_MAX without a bound.
@@ -76,12 +82,12 @@ namespace DCLF
 		void DecideShadowCoverage();
 		/**
 		 * @brief Render thread, SceneStore::CommitSet: whether the object is ready for a shadow phase (SetPhaseOfMode's): its Utility
-		 * pipeline under every rasterizer state of its caster class in each of the phase's modes the last epoch drew, and an
-		 * alpha-tested caster's diffuse imported. Part of the set's readiness (SceneSet.h). a_tables: the commit's SceneStore::Tables
+		 * pipeline under every rasterizer state of the catalog in each of the phase's modes of the capability, and an alpha-tested
+		 * caster's diffuse imported. Part of the set's readiness (SceneSet.h). a_tables: the commit's SceneStore::Tables
 		 * (the coordinator's: the frame's view may hold another object in the slot).
 		 */
 		bool PhaseReady(const void* a_tables, std::uint32_t a_slot, std::uint8_t a_phase) const;
-		/** @brief Changes when the shadow modes or their views' rasterizer states that PhaseReady reads change. */
+		/** @brief Changes when the capability's modes or the catalog's rasterizer states that PhaseReady reads change: at setup. */
 		std::uint64_t ShadowReadinessSerial() const;
 		/**
 		 * @brief SceneStore::CommitSet: whether the object is within the scene buffers (and, for the main builds, the material and
@@ -164,7 +170,7 @@ namespace DCLF
 		 * the face's camera for this update's epoch. PrepareReflection: render thread, once a frame, after DecideTreeLod: the forward
 		 * programs and pipelines of the LOD pipeline slots in use, and tree LOD's, for those targets (the reflection phase's
 		 * readiness), and whether the faces' tree LOD is DCLF's. ReflectionDrawable: the set draws the reflection phase (SceneStore::
-		 * SetPhasesDrawn). ExecuteReflection: render thread, once a frame at BeforeShadowMaps, after the frame's reflection updates
+		 * SetCapability). ExecuteReflection: render thread, once a frame at BeforeShadowMaps, after the frame's reflection updates
 		 * (TESWaterReflections::Update runs twice a frame, a face each): one epoch drawing the frame's faces' reflection-phase
 		 * members and tree LOD into the cube target.
 		 */

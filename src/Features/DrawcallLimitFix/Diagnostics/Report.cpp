@@ -187,6 +187,8 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				shadow.views, shadow.viewsDrawn, shadow.epochs, shadow.retainedViews, shadow.notReady, notReadyReasons.empty() ? "-" : notReadyReasons.c_str() + 1, shadow.focusSkipped, shadow.uncovered, shadow.inputs, shadow.skippedPipeline,
 				shadow.skippedTexture, shadow.records, (shadow.cpuMs + shadow.captureMs) / frames, shadow.captureMs / frames, shadow.prepareMs / frames, shadow.inputsMs / frames, shadow.blocksMs / frames,
 				shadow.executeMs / frames);
+			if (shadow.views)
+				logger::info("{}", DCLF::IndirectDraws::Get().ShadowCapabilityReport());
 			if (shadow.cullTested || shadow.cullClass)
 				logger::info("[DCLF] shadow culling (view {} mode {:#x}, sampled): {} of the caster class, {} outside the sun's entry, {} small, {} stood-in fading; "
 							 "{} tested, {} drawn, {} rejected by the frustum",

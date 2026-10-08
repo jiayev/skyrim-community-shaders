@@ -63,6 +63,15 @@ struct ShadowmapRasterizerFix : EngineFix
 		{ thirdCascadeDepthBias, thirdCascadeDepthBiasClamp, thirdCascadeSlopeScaleBias }
 	};
 
+	/** @brief The cascades the clones are made for (the INI's split count, at most maxCascades): known from Install on. */
+	static uint CascadeCount() { return std::min(numCascades, maxCascades); }
+	/**
+	 * @brief The state cascade a_cascade draws with in place of the engine's entry a_desc: its clone's, made from it with the
+	 * cascade's bias values. Known before the first cascade renders (the clones are made then), for Drawcall Limit Fix's
+	 * pipelines, which are built per rasterizer state.
+	 */
+	static void CascadeRasterDesc(D3D11_RASTERIZER_DESC& a_desc, uint a_cascade) { GetUpdatedRasterDesc(a_desc, cascadeDescriptors[a_cascade]); }
+
 	struct BSShadowDirectionalLight_RenderShadowmaps_RenderCascade
 	{
 		static void thunk(RE::BSShadowDirectionalLight* light, void* arg1, void* arg2, uint32_t flags);

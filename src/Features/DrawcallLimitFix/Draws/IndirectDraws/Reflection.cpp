@@ -153,9 +153,10 @@ namespace DCLF
 
 	bool IndirectDraws::ReflectionDrawable() const
 	{
-		// Readiness, not whether the last update drew: it flips only when the faces' resources or their first pipeline appear.
+		// A capability, not whether the last update drew nor how many pipelines the frame's slots have: it flips only when the faces'
+		// resources appear (each member then waits for its own pipeline: ReflectionPhaseReady).
 		const auto& reflection = impl->reflection;
-		return ActiveToggles().reflections && !failed && reflection.resources && impl->resources && reflection.pipelinesReady;
+		return ActiveToggles().reflections && !failed && reflection.resources && impl->resources;
 	}
 
 	bool IndirectDraws::Impl::ReflectionPhaseReady(const SceneStore::Tables& a_tables, std::uint32_t a_slot) const

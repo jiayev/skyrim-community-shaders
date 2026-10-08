@@ -1,6 +1,7 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Internal.h"
 #	include "Features/DrawcallLimitFix/Engine/LocalLightCull.h"
+#	include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
 
 namespace DCLF
 {
@@ -1229,6 +1230,15 @@ namespace DCLF
 		if (!rasterState || !impl->ImportShadowDepth(OcclusionDepthTarget(a_view), target))
 			return;
 		auto& occlusion = impl->occlusion[a_view];
+		const std::uint32_t mode = OcclusionModeOf(a_view);
+		if (!impl->readyModes[mode]) {
+			impl->readyModes[mode] = true;
+			impl->NoteCapability(false, fmt::format("occlusion map {} captured", a_view));
+		}
+		if (const auto& states = impl->readyStates[mode].Of(false); !std::binary_search(states.begin(), states.end(), rasterState)) {
+			impl->readyStates[mode].Add(rasterState, false);
+			impl->NoteCapability(impl->shadowCatalogBuilt, fmt::format("occlusion map {} draws with rasterizer state {}, not in the catalog", a_view, rasterState));
+		}
 		auto& view = occlusion.view;
 		view = {};
 		view.viewId = ~0u;
@@ -1291,18 +1301,16 @@ namespace DCLF
 		const auto start = std::chrono::steady_clock::now();
 		auto& store = SceneStore::Get();
 		const std::uint32_t frameNumber = store.GetFrame();
-		// The views asked for that can be drawn: ready, captured this frame, under the state their pipelines were built for.
+		// The views asked for that can be drawn: ready and captured this frame. A map the engine did not draw this frame draws nothing:
+		// its phase stays (the capability).
 		std::uint32_t drawable = 0;
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
 			if (!(a_views & (1u << v)))
 				continue;
-			const auto& occlusion = impl->occlusion[v];
-			if (OcclusionReady(v) && occlusion.capturedFrame == frameNumber && occlusion.view.rasterState == occlusion.rasterState)
+			if (OcclusionReady(v) && impl->occlusion[v].capturedFrame == frameNumber)
 				drawable |= 1u << v;
 			else
 				++shadowStats.occlusionNotReady[v];
-			// Drawn or not, the next commit takes the map's occluders into the set only after a frame that drew it.
-			impl->occlusionDrawable[v] = (drawable >> v) & 1;
 		}
 		const auto indirect = GetShadowIndirectState();
 		if (!drawable || !indirect.valid) {
@@ -1386,7 +1394,6 @@ namespace DCLF
 				if (drawable & (1u << v)) {
 					--shadowStats.occlusionDrawn[v];
 					++shadowStats.occlusionNotReady[v];
-					impl->occlusionDrawable[v] = false;
 				}
 			return 0;
 		}
@@ -1426,52 +1433,43 @@ namespace DCLF
 		const std::uint32_t frameNumber = store.GetFrame();
 		auto resources = impl->shadow;
 		std::array<bool, kShadowModeCount> modeUsed{};
-		// Per mode and caster class, every rasterizer state its views have drawn with (DrawPipelines' ids, which only
-		// grow): the build's inputs and the shadow pipelines are for all of them, so which of its views a frame draws -
-		// the sun's cascades alternate their depth-bias states frame by frame, a local light's culling-off view comes and
-		// goes - changes nothing the build reads. It grows when a state first appears. Each view's latch row is its own.
+		// Per mode, the catalog's states (UpdateShadowCapability): the build's inputs and the shadow pipelines are for all of them, so
+		// which views a frame draws - the sun's cascades alternate their depth-bias states, a point light's views come and go - changes
+		// nothing the build or the set reads. A view of a mode or under a state the capability did not foresee is a defect, taken
+		// into it now. Each view's latch row is its own.
 		for (const auto& view : pending) {
 			modeUsed[view.modeIndex] = true;
-			impl->shadowStatesSeen[view.modeIndex].Add(view.rasterState, view.casterClass != 0);
+			if (!impl->readyModes[view.modeIndex]) {
+				impl->readyModes[view.modeIndex] = true;
+				impl->NoteCapability(impl->shadowCatalogBuilt, fmt::format("a view of render mode {:#x}", view.renderMode));
+			}
+			if (const auto& states = impl->readyStates[view.modeIndex].Of(view.casterClass != 0); !std::binary_search(states.begin(), states.end(), view.rasterState)) {
+				impl->readyStates[view.modeIndex].Add(view.rasterState, view.casterClass != 0);
+				impl->NoteCapability(impl->shadowCatalogBuilt, fmt::format("view {} (mode {:#x}) draws with rasterizer state {}, not in the catalog", view.viewId, view.renderMode, view.rasterState));
+			}
+		}
+		// The occlusion maps are drawn later in the frame, by their own epoch, from this build (once the engine's own draw of the map
+		// has been captured).
+		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
+			const auto& occlusion = impl->occlusion[v];
+			if (SceneStore::OcclusionEnabled(v) && occlusion.rasterState && occlusion.dsvFormat != DXGI_FORMAT_UNKNOWN)
+				modeUsed[OcclusionModeOf(v)] = true;
 		}
 		std::array<ModeRasterStates, kShadowModeCount> modeRasterStates{};
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 			if (modeUsed[m])
-				modeRasterStates[m] = impl->shadowStatesSeen[m];
-		// The occlusion maps are drawn later in the frame, by their own epoch, from this build: their occluders under the state
-		// each view drew with last (known once the engine's own draw of the map has been captured).
-		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
-			const auto& occlusion = impl->occlusion[v];
-			if (!SceneStore::OcclusionEnabled(v) || !occlusion.rasterState || occlusion.dsvFormat == DXGI_FORMAT_UNKNOWN)
-				continue;
-			const std::uint32_t m = OcclusionModeOf(v);
-			modeUsed[m] = true;
-			modeRasterStates[m] = {};
-			modeRasterStates[m].Add(occlusion.rasterState, false);
-		}
-		// One pipeline set per shadow map format: every target the engine has is D16 (engine notes), and a
-		// view whose target differed would rebuild the set on every epoch, so the first view's is taken.
+				modeRasterStates[m] = impl->readyStates[m];
+		// One pipeline set per shadow map format, the targets' as set up: every target the engine has is D16 (engine notes).
 		const DXGI_FORMAT dsvFormat = pending.front().dsvFormat;
+		if (dsvFormat != impl->shadowTargetFormat) {
+			impl->shadowTargetFormat = dsvFormat;
+			impl->NoteCapability(impl->shadowCatalogBuilt, fmt::format("a view draws into format {}", static_cast<int>(dsvFormat)));
+		}
 		double prepareMs = 0.0, inputsMs = 0.0, blocksMs = 0.0, bodyMs = 0.0;
 
 		impl->ReserveSceneTables(tables);
 		impl->ReserveShadowRows();
 		ShadowInputs in = impl->PrepareShadowInputs(store, *resources, modeUsed, modeRasterStates);
-		// Every mode the epochs have drawn and its states (step 6e S4): the builds ahead are made for them all, so a mode that comes and
-		// goes (a point light's paraboloids, an occlusion map) finds its inputs built; the epoch draws only the frame's.
-		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-			if (modeUsed[m]) {
-				impl->lastShadow.modes[m] = true;
-				impl->lastShadow.rasterStates[m] = modeRasterStates[m];
-			}
-		// What the set's caster readiness reads (CasterReady): a new kind of view seen is a readiness event.
-		if (impl->readyModes != modeUsed || impl->readyStates != modeRasterStates) {
-			impl->readyModes = modeUsed;
-			impl->readyStates = modeRasterStates;
-			++impl->shadowReadinessSerial;
-		}
-		impl->lastShadow.dsvFormat = dsvFormat;
-		impl->lastShadow.known = true;
 		ShadowPayload* committed = &impl->shadowFallback;
 		auto& async = stats.async[kAsyncShadow];
 		bool usedWorkerBuild = false;
@@ -1820,8 +1818,6 @@ namespace DCLF
 				occlusion.inputs = static_cast<std::uint32_t>(payload.ModeInputs(OcclusionModeOf(v)));
 			}
 			impl->ReadShadowCullCounters(frameNumber, shadowStats);
-			// The views are drawn: the set's casters stay DCLF's (SetPhasesDrawn).
-			impl->shadowsDrawable = true;
 			for (std::uint32_t m = 0; m < kFirstOcclusionMode && m < shadowStats.casters.size(); ++m)
 				if (modeUsed[m])
 					shadowStats.casters[m] = static_cast<std::uint32_t>(payload.ModeInputs(m));
@@ -2186,20 +2182,120 @@ namespace DCLF
 	{
 		if (const auto set = PassCapture::Get().CurrentSet(); set && (set->drawn & (kSetCaster | kSetCasterPoint)) && PassCapture::ShadowWithholdingEnabled())
 			++a_stats.notReadyWithheld;
-		shadowsDrawable = false;
 	}
 
-	std::uint8_t IndirectDraws::ShadowPhasesDrawn() const
+	void IndirectDraws::Impl::BuildShadowCatalog()
 	{
-		if (!impl->shadowsDrawable || failed)
-			return 0;
+		// The engine's table holds its states once the renderer is up: until then the catalog, and the capability, wait.
+		auto& table = EngineRasterStates();
+		std::vector<D3D11_RASTERIZER_DESC> engine, cascades;
+		for (std::uint32_t bias = 0; bias < 12; ++bias) {
+			// The entry a view draws with (EngineRasterStateId's rule): at cull mode 1, or at 0 where the table has none at 1. The
+			// fill and the depth clip DCLF's pipelines cannot express are left out: a view with one stays the engine's.
+			auto* entry = table[0][1][bias][0] ? table[0][1][bias][0] : table[0][0][bias][0];
+			if (!entry)
+				continue;
+			D3D11_RASTERIZER_DESC desc{};
+			entry->GetDesc(&desc);
+			if (desc.FillMode != D3D11_FILL_SOLID || !desc.DepthClipEnable)
+				continue;
+			engine.push_back(desc);
+			// The sun's cascades draw with ShadowmapCascadeRasterizerFix's clones of the table: each entry with the cascade's bias.
+			for (std::uint32_t cascade = 0; cascade < ShadowmapRasterizerFix::CascadeCount(); ++cascade) {
+				auto clone = desc;
+				ShadowmapRasterizerFix::CascadeRasterDesc(clone, cascade);
+				cascades.push_back(clone);
+			}
+		}
+		if (engine.empty())
+			return;
+		auto& pipelines = DrawPipelines::Get();
+		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+			const std::uint32_t renderMode = IsOcclusionMode(m) ? kOcclusionRenderMode : PassCapture::kFirstShadowMode + m;
+			auto& states = readyStates[m];
+			const auto add = [&](const D3D11_RASTERIZER_DESC& a_desc) {
+				if (const std::uint32_t id = pipelines.ShadowRasterStateId(a_desc, renderMode)) {
+					states.Add(id, false);
+					// The volumetric lighting copy's casters are a class of the sun's views alone (VolumetricClass).
+					if (m == kSunShadowMode)
+						states.Add(id, true);
+				}
+			};
+			for (const auto& desc : engine)
+				add(desc);
+			if (m == kSunShadowMode)
+				for (const auto& desc : cascades)
+					add(desc);
+		}
+		shadowCatalogBuilt = true;
+		logger::info("[DCLF] shadow rasterizer state catalog: {} states ({} engine entries, {} cascade clones); sun {}, paraboloid {}, occlusion {}",
+			pipelines.ShadowRasterStateCount(), engine.size(), cascades.size(), readyStates[kSunShadowMode].All().size(), readyStates[kParabolicShadowMode].All().size(),
+			readyStates[kFirstOcclusionMode].All().size());
+	}
+
+	void IndirectDraws::Impl::NoteCapability(bool a_defect, std::string a_cause)
+	{
+		++shadowReadinessSerial;
+		++capabilityStats.changes;
+		if (a_defect) {
+			++capabilityStats.defects;
+			logger::warn("[DCLF] shadow capability changed: {} <- PHASES", a_cause);
+		} else {
+			logger::info("[DCLF] shadow capability: {}", a_cause);
+		}
+		capabilityStats.lastCause = std::move(a_cause);
+	}
+
+	void IndirectDraws::UpdateShadowCapability()
+	{
+		auto& i = *impl;
 		std::uint8_t phases = 0;
-		for (std::uint32_t m = 0; m < kFirstOcclusionMode; ++m)
-			phases |= impl->readyModes[m] ? SetPhaseOfMode(m) : 0;
-		// An occlusion map's once its last ExecuteOcclusion drew it.
-		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
-			phases |= impl->readyModes[OcclusionModeOf(v)] && impl->occlusionDrawable[v] && SceneStore::OcclusionEnabled(v) ? SetPhaseOfMode(OcclusionModeOf(v)) : 0;
-		return phases;
+		if (!failed && ActiveToggles().shadows && DrawPipelines::Get().Enabled() && globals::game::utilityShader && i.SetupShadow()) {
+			if (!i.shadowCatalogBuilt) {
+				i.BuildShadowCatalog();
+				if (i.shadowCatalogBuilt) {
+					// The shadow targets' format, which the pipelines are built for: the depth-stencil view's, not the typeless texture's.
+					if (auto* renderer = globals::game::renderer)
+						if (auto* view = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS_ESRAM].views[0]) {
+							D3D11_DEPTH_STENCIL_VIEW_DESC desc{};
+							view->GetDesc(&desc);
+							i.shadowTargetFormat = desc.Format;
+						}
+					// The casters' modes: the sun's and spot lights' clamped views, the point lights' paraboloids. The plain mode is
+					// no view's (ShadowViews: the engine picks the mode from the light).
+					i.readyModes[kSunShadowMode] = i.readyModes[kParabolicShadowMode] = true;
+					i.NoteCapability(false, "the casters' modes and the catalog set up");
+				}
+			}
+			if (i.shadowCatalogBuilt && i.shadowTargetFormat != DXGI_FORMAT_UNKNOWN) {
+				for (std::uint32_t m = 0; m < kFirstOcclusionMode; ++m)
+					phases |= i.readyModes[m] ? SetPhaseOfMode(m) : 0;
+				for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+					phases |= i.readyModes[OcclusionModeOf(v)] && SceneStore::OcclusionEnabled(v) ? SetPhaseOfMode(OcclusionModeOf(v)) : 0;
+			}
+		}
+		// What the builds ahead and the frame's start's shadow lookups are for: the capability's modes, the catalog, the targets' format.
+		auto& views = i.lastShadow;
+		views.known = phases != 0;
+		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+			views.modes[m] = phases && i.readyModes[m] && (!IsOcclusionMode(m) || SceneStore::OcclusionEnabled(OcclusionOfMode(m)));
+			views.rasterStates[m] = views.modes[m] ? i.readyStates[m] : ModeRasterStates{};
+		}
+		views.dsvFormat = i.shadowTargetFormat;
+		i.shadowCapability.store(phases, std::memory_order_release);
+	}
+
+	std::uint8_t IndirectDraws::ShadowCapability() const
+	{
+		return failed ? 0 : impl->shadowCapability.load(std::memory_order_acquire);
+	}
+
+	std::string IndirectDraws::ShadowCapabilityReport() const
+	{
+		const auto& c = impl->capabilityStats;
+		return fmt::format("[DCLF] shadow capability: phases {:#x}, {} rasterizer states in the catalog; {} changes since startup, {} of them views it did not foresee{}{}",
+			ShadowCapability(), DrawPipelines::Get().ShadowRasterStateCount(), c.changes, c.defects, c.defects ? " <- PHASES" : " <- OK",
+			c.lastCause.empty() ? "" : " (last: " + c.lastCause + ")");
 	}
 
 	std::uint64_t IndirectDraws::ShadowReadinessSerial() const

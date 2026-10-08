@@ -3713,19 +3713,36 @@ namespace DCLF
 				viewFormats[v] = occlusion[v].dsvFormat;
 			return viewFormats;
 		}
-		/** @brief A shadow view not drawn: counts a hole when its mode withholds casters this frame, and hands the mode back. */
 		/**
-		 * @brief A shadow view this frame's epoch cannot draw: the casters the engine withheld from it are a hole this frame, and the
-		 * next commit leaves the casters to the engine until an epoch draws the views again (ShadowsDrawable).
+		 * @brief A shadow view of a captured phase this frame's epoch cannot draw: the casters the engine withheld from it are a hole
+		 * this frame (counted, flagged). The capability stays: the set does not change with a frame.
 		 */
 		void ShadowsNotDrawn(IndirectDraws::ShadowStats& a_stats);
-		bool shadowsDrawable = false;
-		// Per occlusion view: its last ExecuteOcclusion drew it, so its occluders are the set's from the next commit on.
-		std::array<bool, kOcclusionViews> occlusionDrawable{};
-		// The modes and rasterizer states the last epoch drew (CasterReady's), and their serial.
+		/**
+		 * The shadow capability (IndirectDraws::ShadowCapability): the modes DCLF draws and the rasterizer state catalog their
+		 * pipelines are built for (PhaseReady's), set up once (UpdateShadowCapability) and changed only by a toggle, a failure, an
+		 * occlusion map's first capture, or a defect: a view of a mode or under a state the catalog does not hold (NoteCapability,
+		 * flagged "<- PHASES"). Render thread; the set reads the published phases.
+		 */
 		std::array<bool, kShadowModeCount> readyModes{};
 		std::array<ModeRasterStates, kShadowModeCount> readyStates{};
 		std::uint64_t shadowReadinessSerial = 0;
+		std::atomic<std::uint8_t> shadowCapability{ 0 };
+		bool shadowCatalogBuilt = false;
+		DXGI_FORMAT shadowTargetFormat = DXGI_FORMAT_UNKNOWN;
+		/** @brief The catalog: every solid-fill state of the engine's table its shadow views can draw with, and the cascades' clones. */
+		void BuildShadowCatalog();
+		/**
+		 * @brief The capability's modes or catalog changed: the readiness serial moves and every caster is decided again. a_defect: a
+		 * view the capability did not foresee (counted and named, "<- PHASES").
+		 */
+		void NoteCapability(bool a_defect, std::string a_cause);
+		struct CapabilityStats
+		{
+			std::uint32_t changes = 0;  // every change of the modes or the catalog, setup's included
+			std::uint32_t defects = 0;  // of them, a view the capability did not foresee
+			std::string lastCause;
+		} capabilityStats;
 		void CheckCascadeCulling(const PendingView& a_view, const BuildDrawsLatch& a_latch, std::uint32_t a_frame, const ShadowPayload& a_payload);
 		/**
 		 * @brief Step 6e S1: the shadow payload the frame's epoch committed - the installed publication's (built ahead with it) or the
@@ -3740,9 +3757,9 @@ namespace DCLF
 		std::shared_ptr<ShadowPayload> AcquireShadowPayload();
 		std::shared_ptr<const void> shadowExecutionOwner;  // reused by the sky epoch's copy of the shadow records
 		/**
-		 * @brief The shadow epochs' views (ExecuteShadowFrame): every mode drawn so far (occlusion maps included) with its last rasterizer
-		 * states, and the target format, which the builds ahead and the frame's start's shadow lookups are for. A new mode or state shows
-		 * a frame late: the epoch builds its own meanwhile (ShadowAheadUsable).
+		 * @brief The capability's modes (occlusion maps included) with the catalog's states, and the shadow targets' format, which the
+		 * builds ahead and the frame's start's shadow lookups are for (UpdateShadowCapability). A mode or state the capability did not
+		 * foresee shows a frame late: the epoch builds its own meanwhile (ShadowAheadUsable).
 		 */
 		struct LastShadow
 		{
@@ -3762,9 +3779,6 @@ namespace DCLF
 		/** @brief Whether the installed shadow payload can be committed by an epoch with the frame's inputs a_frame. */
 		bool ShadowAheadUsable(const ShadowPayload& a_payload, const ShadowInputs& a_frame) const;
 		void LogStaleShadow(const ShadowInputs& a_built, const ShadowInputs& a_frame);
-		// Per mode, the rasterizer states its views have drawn with, per caster class (ExecuteShadowFrame): what the shadow
-		// build's inputs are for.
-		std::array<ModeRasterStates, kShadowModeCount> shadowStatesSeen{};
 		// Per shadow view slot, the frame it last drew a view: a slot past the frame's views stays in the shape, with no work,
 		// for kRetainedViewFrames frames after (ExecuteShadowFrame).
 		static constexpr std::uint32_t kRetainedViewFrames = 600;
