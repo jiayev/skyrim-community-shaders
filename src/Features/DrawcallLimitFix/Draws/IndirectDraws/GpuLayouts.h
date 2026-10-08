@@ -25,7 +25,7 @@ namespace DCLF::Draws
 	// frame's shadow views through the slots after them (kFirstShadowViewSlot plus the view's index). There are as many as the frame has views,
 	// grown before its epoch (Impl::ReserveShadowLatch) - the exterior has four (two cascades, twice), an interior two
 	// hemispheres per shadow-casting point light - from this many. Likewise the key slots the pipeline map rows hold
-	// (Lookups::shadowSlotKeys: one per caster key and render mode).
+	// (Lookups::shadowSlotKeys: one per caster key, whatever the render mode, and one per occlusion key).
 	constexpr std::uint32_t kInitialShadowViewSlots = 8;
 	inline constexpr std::uint32_t OcclusionSlot(std::uint32_t a_view) { return a_view; }
 	constexpr std::uint32_t kFirstShadowViewSlot = kOcclusionViews;
@@ -253,9 +253,17 @@ namespace DCLF::Draws
 		std::uint32_t recordIndex;    // DrawBindings record
 		std::uint32_t geometryIndex;  // GeometryDraw
 		std::uint32_t flags;          // object flags, plus kInputDrawable for this epoch
-		// Unused (zero): the bound is the placement row's (BindlessPlacement::bound), so a move rewrites no input.
-		float boundCentre[3];
-		float boundRadius;
+		/**
+		 * @brief What the object takes part in, per view type (the scene is one, views are masks): its kView* bits, which a view's
+		 * BuildDraws tests against its own (BuildDrawsLatch::viewBits) before anything else; and the keys a view family draws it by
+		 * (U4: the one persistent list). The bound is the placement row's (BindlessPlacement::bound), so a move rewrites no input.
+		 */
+		struct ViewWords
+		{
+			std::uint32_t mask = 0;
+			std::uint32_t shadowKey = ~0u;                      // a caster's key slot (Lookups::shadowSlots), every caster mode's
+			std::uint32_t occlusionKey[2]{ ~0u, ~0u };        // each occlusion map's key slot
+		} view;
 		// Index into the frame's object table. The two segments emit different subsets in different
 		// orders, so this is what lets the colour segment look up the visibility the depth segment
 		// published for the same object.
@@ -270,7 +278,8 @@ namespace DCLF::Draws
 		// The object's fade root slot (SceneStore::Tables::objectFadeRoot; FadeStateCS's state row), ~0u when it has none: the
 		// depth segment's first phase drops it while an owned root's OnVisible stops (kFadeRootOwned).
 		std::uint32_t fadeRoot = ~0u;
-		std::uint32_t fadeReserved[2]{};
+		std::uint32_t shadowRow = 0;      // a caster's ShadowMaterialRow (U4: the one persistent list)
+		std::uint32_t inputReserved = 0;
 		// kObjectFadeTest (the depth segment's inputs, a root DCLF does not own): the fade-out distance
 		// (SceneStore::Tables::fadeDistance); the fade node's centre is the object record's.
 		float fadeDistance = 0.0f;
@@ -280,6 +289,16 @@ namespace DCLF::Draws
 	// submits an input for every candidate so the culling covers them all, but builds records only for
 	// the ones it may draw.
 	constexpr std::uint32_t kInputDrawable = 1u << 16;
+	// DrawInput::ViewWords::mask, and a view's BuildDrawsLatch::viewBits: the view types an object takes part in. BuildDrawsCS.hlsl.
+	constexpr std::uint32_t kViewMainCull = 1u << 0;       // a main-camera visibility candidate (the depth segment's inputs)
+	constexpr std::uint32_t kViewMain = 1u << 1;           // drawn by the main camera (the set's main phase)
+	constexpr std::uint32_t kViewSunCaster = 1u << 2;      // the sun's cascades
+	constexpr std::uint32_t kViewSpotCaster = 1u << 3;     // the other clamped views (spot lights)
+	constexpr std::uint32_t kViewPointCaster = 1u << 4;    // the point lights' paraboloids
+	constexpr std::uint32_t kViewSkyOccluder = 1u << 5;    // Skylighting's occlusion map
+	constexpr std::uint32_t kViewPrecipOccluder = 1u << 6; // the precipitation mask
+	constexpr std::uint32_t kViewReflection = 1u << 7;     // the water reflection's faces
+	static_assert(offsetof(DrawInput, view) == 16 && offsetof(DrawInput, shadowRow) == 52 && offsetof(DrawInput, fadeDistance) == 60);
 	// The main sequence buffer's ranges (Resources::sequenceDraws, sequenceDecals): phase 1 and the colour segment's draws,
 	// then phase 2's (the CPU records where its draw starts, so the two need ranges fixed in advance rather than one shared
 	// through an atomic counter), then one range per decal group. A decal's sequence goes to the slot of its ordinal in the
@@ -422,7 +441,8 @@ namespace DCLF::Draws
 		std::uint32_t payloadValid;
 		std::uint32_t inputsIndex;
 		std::uint32_t geometriesIndex;
-		std::uint32_t payloadPadding;
+		// The view types this dispatch draws (kView*): an input whose mask has none of them is not this view's. 0: no test.
+		std::uint32_t viewBits;
 		std::uint32_t materialRowsLo, materialRowsHi, pipelineRowsLo, pipelineRowsHi;
 	};
 	static_assert(sizeof(BuildDrawsLatch) == 288 && offsetof(BuildDrawsLatch, payloadValid) == 256 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
@@ -494,16 +514,19 @@ namespace DCLF::Draws
 		return true;
 	}
 	/**
-	 * @brief The shadow latch block's region per frame slot: the view slots' latches, a pipeline map row per view rasterizer state
-	 * (DrawPipelines::ShadowRasterStateId, 1 to rasterStates), then the sun's full-frustum processes. Each dimension is grown
-	 * before the epoch (Impl::ReserveShadowLatch).
+	 * @brief The shadow latch block's region per frame slot: the view slots' latches, a pipeline map row per render mode and view
+	 * rasterizer state (DrawPipelines::ShadowRasterStateId, 1 to rasterStates; MapRowOf), then the sun's full-frustum processes.
+	 * Each dimension is grown before the epoch (Impl::ReserveShadowLatch).
 	 */
 	struct ShadowLatchLayout
 	{
 		std::uint32_t viewSlots = 0, keySlots = 0, rasterStates = 0, sunProcesses = 0;
 		std::uint32_t MapOffset() const { return viewSlots * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
 		std::uint32_t MapRowBytes() const { return keySlots * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
-		std::uint32_t SunEntryOffset() const { return MapOffset() + rasterStates * MapRowBytes(); }
+		std::uint32_t MapRows() const { return kShadowModeCount * rasterStates; }
+		/** @brief A view's map row: its mode's rows, then its state's (1 to rasterStates). */
+		std::uint32_t MapRowOf(std::uint32_t a_mode, std::uint32_t a_state) const { return a_mode * rasterStates + (a_state - 1); }
+		std::uint32_t SunEntryOffset() const { return MapOffset() + MapRows() * MapRowBytes(); }
 		// A view slot's bucket table (BuildDrawsLatch::bucketTableOffset): (first, capacity) per bucket, at most one a key slot.
 		std::uint32_t BucketTableBytes() const { return keySlots * 2 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 		std::uint32_t BucketOffset(std::uint32_t a_slot) const

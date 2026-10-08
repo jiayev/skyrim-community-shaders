@@ -124,16 +124,14 @@ bool StoodInFading(uint a_root)
 
 // Whether BSFadeNode::OnVisible stops at a fade root slot (~0u: none) for a culling process without cameraRelatedUpdates
 // (Precipitation::SetupMask's, Skylighting's occlusion map): with fades on, a root that is not settled goes on into its
-// children only while its fade is above 0 and its fadeAmount is not 0 - the fade as the main camera's cull left it, which
-// FadeStateCS keeps for an owned root (the occluder phase holds no other: IndirectDraws::PhaseReady).
+// children only while its fade is above 0 and its fadeAmount is not 0 - the fade as the main camera's cull leaves it, which
+// FadeStateCS keeps for every listed root.
 bool FadedOutOfOcclusion(uint a_root)
 {
 	if (a_root == 0xFFFFFFFFu)
 		return false;
 	StructuredBuffer<FadeRootStatic> fadeRoots = ResourceDescriptorHeap[FadeRootsIndex];
 	const FadeRootStatic row = fadeRoots[a_root];
-	if ((row.Bits & kFadeRootOwned) == 0)
-		return false;
 	StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
 	FadeNodeState state = fadeStates[a_root];
 	if (state.Generation != row.Generation)
@@ -196,6 +194,8 @@ static float2 TreeHeight;
 static uint BucketTableOffset;
 // The depth segment's phases: each pipeline slot's bucket, in bytes into the latch block (BuildDrawsLatch::bucketMapOffset).
 static uint BucketMapOffset;
+// The view types this dispatch draws (BuildDrawsLatch::viewBits, kView* in GpuLayouts.h); 0: every input.
+static uint ViewBits;
 
 // The placement row's rows the culling reads (LightingConstants.h, BindlessPlacement): the world bound, the sun entry's sphere,
 // the fade node's centre.
@@ -252,6 +252,7 @@ void LoadLatch()
 	const uint4 payload = latch.Load4(LatchOffset + 256);
 	const uint4 rows = latch.Load4(LatchOffset + 272);
 	const bool ring = payload.x != 0;
+	ViewBits = payload.w;
 	InputsBuffer = ring ? payload.y : InputsIndex;
 	GeometriesBuffer = ring ? payload.z : GeometriesIndex;
 	MaterialRowsLo = ring ? rows.x : MaterialRowsAddressLo;
@@ -628,6 +629,10 @@ bool Occluded(float3 boundCentre, float boundRadius)
 
 	const uint inputOffset = draw * kInputStride;
 	const uint4 input = inputs.Load4(inputOffset);  // pipeline index, record index, geometry index, flags
+	// The view types this dispatch draws (BuildDrawsLatch::viewBits) against what the object takes part in (DrawInput's view mask):
+	// the scene is one, a view is a mask. Before anything else of the input is read.
+	if (ViewBits != 0 && (inputs.Load(inputOffset + 16) & ViewBits) == 0)
+		return;
 	const uint objectIndex = inputs.Load(inputOffset + 32);
 	// The word the draw's root constants carry: the object index, and kObjectSunMiss when a synthetic pass with the
 	// sun's bits meets no cascade this frame. Tested and counted for every such input, drawn or not, so the count

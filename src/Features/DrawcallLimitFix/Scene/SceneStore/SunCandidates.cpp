@@ -358,6 +358,18 @@ namespace DCLF
 		}
 	}
 
+	std::string SceneStore::DescribeSunCandidate(const void* a_geometry) const
+	{
+		const auto it = tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(a_geometry)));
+		if (it == tracked.end() || !it->second.geometry)
+			return "not tracked";
+		const auto& entry = it->second;
+		const auto* property = entry.geometry->GetGeometryRuntimeData().shaderProperty.get();
+		return fmt::format("{}, {} (classified at frame {}), {} property, caster rule {}", entry.slot != kNoObjectSlot ? "record" : "no record",
+			kIneligibleNames[static_cast<std::size_t>(entry.candidateReason)], entry.candidateFrame, property && property->GetRTTI() ? property->GetRTTI()->name : "no",
+			ShadowRejectName(ShadowCasterReject(property, entry.geometry.get(), false)));
+	}
+
 	std::string SceneStore::CoverageCensus() const
 	{
 		struct Row

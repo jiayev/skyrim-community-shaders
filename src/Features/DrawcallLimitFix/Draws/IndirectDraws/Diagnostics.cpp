@@ -176,6 +176,16 @@ namespace DCLF
 				text += fmt::format("[DCLF] frame slots supplied from an earlier capture (6e E5): {}\n", std::exchange(impl->frameSlotsCarried, 0));
 			a = {};
 		}
+		if (auto& p = impl->viewMaskParity; p.checks.load(std::memory_order_relaxed)) {
+			static constexpr std::array<const char*, 2 + kShadowModeCount> kLists{ "Z-prepass", "colour", "plain", "clamped", "paraboloid", "sky occlusion", "precipitation" };
+			const auto first = p.first.exchange(~0ull);
+			const auto differ = p.differ.exchange(0);
+			text += fmt::format("[DCLF] view mask parity (U3): {} publications, {} inputs, {} with a mask other than their object's or outside their list's views{}{}\n",
+				p.checks.exchange(0), p.inputs.exchange(0), differ, differ ? " <- VIEW MASK" : " <- OK",
+				first == ~0ull ? std::string() :
+								 fmt::format("; first: {} input of object {}, mask {:#x}, expected {:#x}", kLists[std::min<std::size_t>(first >> 56, kLists.size() - 1)],
+									 (first >> 24) & 0xFFFFFFFFu, p.firstMask.load(std::memory_order_relaxed), first & 0xFFFFFFu));
+		}
 		{
 			auto& ring = impl->ringStats;
 			const auto frames = std::max<std::uint64_t>(ring.frames, 1);
@@ -1015,7 +1025,7 @@ namespace DCLF
 		for (std::size_t i = 0; i < readback.roots.size(); ++i) {
 			const auto bits = readback.roots[i].bits;
 			const auto* node = static_cast<const RE::NiAVObject*>(a_tables.fadeRootNode[base + i]);
-			if (node && snapshot && base + i < snapshot->size() && (bits & kFadeRootOwned) && !(bits & kFadeRootStoodIn)) {
+			if (node && snapshot && base + i < snapshot->size() && !(bits & kFadeRootStoodIn)) {
 				readback.nodes[i] = (*snapshot)[base + i];
 				readback.engine[i] = 1;
 				readback.nodeCentres.resize(readback.roots.size());

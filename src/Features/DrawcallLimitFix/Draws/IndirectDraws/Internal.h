@@ -1819,7 +1819,7 @@ namespace DCLF
 				std::uint32_t rasterFlags = 0;
 				std::uint64_t vertexLayout = 0;
 				bool operator==(const ShadowShare&) const = default;
-				/** @brief Its key under a_mode (a key slot's, Lookups::shadowSlots), false when it does not draw in the mode. */
+				/** @brief Its key slot's key under a_mode (Lookups::shadowSlots: the base technique), false when it does not draw in the mode. */
 				bool KeyOf(std::uint32_t a_mode, ShadowPipelineKey& a_key) const;
 			};
 			// The same per shadow and occlusion mode and caster key: every draw an object of the scene can cast in the mode, the set's
@@ -2969,6 +2969,50 @@ namespace DCLF
 			return (a_tables.objects[a_object].flags & kObjectNoShadow) ? 0u : (a_tables.shadowTechnique[a_object] | ModeBitsOf(a_mode));
 		}
 
+		/** @brief The view types a set phase mask takes part in (kView*). */
+		inline std::uint32_t ViewBitsOf(std::uint8_t a_phases)
+		{
+			std::uint32_t bits = 0;
+			bits |= (a_phases & kSetMain) ? kViewMain : 0u;
+			bits |= (a_phases & kSetCaster) ? (kViewSunCaster | kViewSpotCaster) : 0u;
+			bits |= (a_phases & kSetCasterPoint) ? kViewPointCaster : 0u;
+			bits |= (a_phases & kSetOccluderSky) ? kViewSkyOccluder : 0u;
+			bits |= (a_phases & kSetOccluderPrecipitation) ? kViewPrecipOccluder : 0u;
+			bits |= (a_phases & kSetReflection) ? kViewReflection : 0u;
+			return bits;
+		}
+		/**
+		 * @brief An input's view mask (DrawInput::ViewWords::mask): the view types of the object's applied phases (Tables::setPhases),
+		 * and kViewMainCull for a main candidate (every input of the main payloads).
+		 */
+		inline std::uint32_t ViewMaskOf(const SceneStore::Tables& a_tables, std::size_t a_object, bool a_mainCandidate)
+		{
+			const std::uint8_t phases = a_object < a_tables.setPhases.size() ? a_tables.setPhases[a_object] : std::uint8_t{ 0 };
+			return ViewBitsOf(phases) | (a_mainCandidate ? kViewMainCull : 0u);
+		}
+		/** @brief The view bits a shadow or occlusion view draws: its mode's, a clamped view's split by whether it is the sun's. */
+		inline std::uint32_t ShadowViewBits(std::uint32_t a_mode, bool a_sun)
+		{
+			if (IsOcclusionMode(a_mode))
+				return OcclusionOfMode(a_mode) == kOcclusionSky ? kViewSkyOccluder : kViewPrecipOccluder;
+			if (a_mode == kParabolicShadowMode)
+				return kViewPointCaster;
+			return a_sun ? kViewSunCaster : kViewSpotCaster;
+		}
+
+		/**
+		 * @brief The technique object a_object's key slot names under mode a_mode (Lookups::shadowSlots): an occlusion view's own, or
+		 * its caster technique without any mode's bits - one slot for every caster mode. 0: none.
+		 */
+		inline std::uint32_t BaseTechnique(const SceneStore::Tables& a_tables, std::uint32_t a_mode, std::size_t a_object)
+		{
+			if (IsOcclusionMode(a_mode)) {
+				const auto& column = a_tables.occlusionTechnique[OcclusionOfMode(a_mode)];
+				return a_object < column.size() ? column[a_object] : 0u;
+			}
+			return (a_tables.objects[a_object].flags & kObjectNoShadow) ? 0u : a_tables.shadowTechnique[a_object];
+		}
+
 		/** @brief The techniques of the occlusion views among a_modeUsed object a_object draws into, ORed (its record, and whether alpha-tested). */
 		inline std::uint32_t OcclusionTechniques(const SceneStore::Tables& a_tables, const std::array<bool, kShadowModeCount>& a_modeUsed, std::size_t a_object)
 		{
@@ -3730,9 +3774,9 @@ namespace DCLF
 			std::uint64_t lookups = 0;
 			std::uint32_t generation = 0;
 			std::shared_ptr<const void> version;
-			std::vector<std::optional<RowBuckets>> rows;
+			std::array<std::vector<std::optional<RowBuckets>>, kShadowModeCount> rows;  // by mode, then state
 		} shadowRowBuckets;
-		const RowBuckets& ShadowRowBuckets(std::uint32_t a_state, const Lookups& a_lookups, const ShadowIndirectState& a_indirect);
+		const RowBuckets& ShadowRowBuckets(std::uint32_t a_mode, std::uint32_t a_state, const Lookups& a_lookups, const ShadowIndirectState& a_indirect);
 		DrawBoundStore drawBound;
 		/** @brief drawBound brought up to date with a_tables' change log (render thread, the reserves). */
 		void UpdateDrawBound(const SceneStore::Tables& a_tables);
@@ -3784,8 +3828,7 @@ namespace DCLF
 		 * @brief Step 6e E3b, the builds ahead: the coordinator builds the main payloads with the publication they draw (BuildAhead),
 		 * from what the frame's start posted (AheadContext: the resources, the inputs' frame part, prepared by PrepareMainInputs). Its
 		 * journals keep what the payload ring's entries lack (ringHolders, step 6e E5): the frame's producer sends each entry that. The
-		 * frames that install the publication commit them (installedDraws); one that cannot - none built, other resources, other
-		 * frame slots - is built at the epoch with rows of its own (fallbackPayload), counted.
+		 * frames that install the publication commit them (installedDraws); only CS_DCLF_BINDLESS_PARITY builds at the epoch.
 		 */
 		struct DrawPublication
 		{
@@ -3823,6 +3866,18 @@ namespace DCLF
 		std::uint64_t aheadKicked = 0;               // the coordinator's
 		std::atomic<std::uint64_t> aheadDone{ 0 };   // the last task done
 		/** @brief The builds' task: a publication's stream views and main payloads (on the pool, in order). */
+		/**
+		 * @brief CS_DCLF_PERSISTENT_PARITY (U3): every input of a publication's payloads against its object's view mask (ViewMaskOf), and
+		 * every input of a list against the list's view types (a list holding an object the mask leaves out of it). Run by the builds
+		 * ahead (one at a time); the report takes the counts.
+		 */
+		void CheckViewMasks(const DrawPublication& a_draws, const SceneStore::Tables& a_tables);
+		struct ViewMaskParity
+		{
+			std::atomic<std::uint64_t> checks{ 0 }, inputs{ 0 }, differ{ 0 };
+			// The first that differed: (list << 56) | (object << 24) | expected mask; and its mask.
+			std::atomic<std::uint64_t> first{ ~0ull }, firstMask{ 0 };
+		} viewMaskParity;
 		std::shared_ptr<const DrawPublication> RunAhead(std::shared_ptr<const SceneStore::Tables> a_tables, const AheadContext& a_context, const Lookups& a_lookups,
 			std::uint32_t a_generation, std::uint32_t a_frame, std::shared_ptr<const SunCandidates> a_sunCandidates, std::shared_ptr<const SunCandidates> a_lightCandidates);
 		/** @brief Every builds' task kicked done (teardown, the toggle, a load screen). */
@@ -3830,6 +3885,29 @@ namespace DCLF
 		/** @brief Teardown, the toggle, a load screen: the fade write-back task done (never per frame). */
 		void WaitFadeWriteBack();
 		std::shared_ptr<const DrawPublication> installedDraws;  // the frame's
+		/**
+		 * @brief The pipeline slots the installed publication's members can draw with: its tables'. A revision that covers it was made at or
+		 * after its commit, so its latch holds them (ReserveMainLatch, ReserveReflection); the newest tables may name more, which no member
+		 * of the frame uses.
+		 */
+		std::uint32_t InstalledPipelineSlots() const
+		{
+			return installedDraws && installedDraws->tables ? static_cast<std::uint32_t>(installedDraws->tables->pipelines.size()) : 0u;
+		}
+		/**
+		 * @brief CS_DCLF_REVISION_PARITY, at a latch clamp: whether a member of the installed publication draws with a pipeline slot at or past
+		 * a_slots (its draws are dropped). A slot only a non-member names (an object added since the revision's join, a render-thread
+		 * republish's tables) loses nothing.
+		 */
+		bool MemberPastSlots(std::uint32_t a_slots) const
+		{
+			if (!installedDraws || !installedDraws->tables)
+				return false;
+			for (const auto& object : installedDraws->tables->objects)
+				if ((object.flags & kObjectMember) && object.pipelineIndex != Lookups::kNone && object.pipelineIndex >= a_slots)
+					return true;
+			return false;
+		}
 		/**
 		 * @brief Step 6e E4: the payload ring. Each frame the epochs read one entry - the installed publication's payload buffers
 		 * (object records, extras rows, geometry table, the rows' tables, each segment's inputs) - which the frame's producer

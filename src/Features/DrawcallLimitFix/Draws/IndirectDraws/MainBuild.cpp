@@ -674,7 +674,7 @@ namespace DCLF::Draws
 		const auto& object = tables.objects[o];
 		if (object.flags & kObjectNoBindings) {
 			// A cull-only candidate: its bounds for the culling, nothing to draw (the input the loop writes for one).
-			a_input = { 0, 0, object.geometryIndex, object.flags, {}, 0.0f,
+			a_input = { 0, 0, object.geometryIndex, object.flags, { ViewMaskOf(tables, o, true) },
 				o, 0 };
 			SetFadeRow(a_input, tables, o);
 			return 0;
@@ -693,7 +693,7 @@ namespace DCLF::Draws
 		const bool drawable = InSet(o) && blocks.setIndex != Lookups::kNone && pair != r.pairs.end() && pair->second.ok && !(decal && PartitionsOf(tables, o));
 		// The pair's slot is its rows (RowsOf).
 		a_input = { drawable ? blocks.setIndex : 0u, drawable ? pair->second.slot : 0u, object.geometryIndex, object.flags | (drawable ? kInputDrawable : 0u),
-			{}, 0.0f, o, ordinal, partitions, FaceStreamGeometry(tables, o, in.addresses.facePositions) };
+			{ ViewMaskOf(tables, o, true) }, o, ordinal, partitions, FaceStreamGeometry(tables, o, in.addresses.facePositions) };
 		if (depthOnly)
 			SetFadeRow(a_input, tables, o);
 		if (!drawable)
@@ -756,7 +756,7 @@ namespace DCLF::Draws
 	{
 		const auto& object = tables.objects[o];
 		// The record's flags carry no kInputDrawable (the epoch's): undrawable. The stream and fade row stay none (~0u).
-		return { 0, 0, object.geometryIndex < in.addresses.fit.geometryRows ? object.geometryIndex : 0u, object.flags, {}, 0.0f, o, tables.decalOrdinal[o] };
+		return { 0, 0, object.geometryIndex < in.addresses.fit.geometryRows ? object.geometryIndex : 0u, object.flags, { ViewMaskOf(tables, o, true) }, o, tables.decalOrdinal[o] };
 	}
 
 	void MainBuild::RegionRemove(std::uint32_t o)
@@ -1225,7 +1225,7 @@ namespace DCLF::Draws
 			// with.
 			if (depthOnly) {
 				drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags,
-					{}, 0.0f,
+					{ ViewMaskOf(tables, o, true) },
 					static_cast<std::uint32_t>(o), 0 });
 				SetFadeRow(drawInputs.back(), tables, o);
 			}
@@ -1254,7 +1254,7 @@ namespace DCLF::Draws
 		if (decalGroup) {
 			decalSlot.inputs = &drawInputs;
 			decalSlot.blank = { 0, 0, object.geometryIndex, object.flags,
-				{}, 0.0f,
+				{ ViewMaskOf(tables, o, true) },
 				static_cast<std::uint32_t>(o), tables.decalOrdinal[o] };
 		}
 		const auto& blocks = pipelineBlocks[object.pipelineIndex];
@@ -1276,7 +1276,7 @@ namespace DCLF::Draws
 			// verdict at all.
 			if (depthOnly) {
 				drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags,
-					{}, 0.0f,
+					{ ViewMaskOf(tables, o, true) },
 					static_cast<std::uint32_t>(o), 0 });
 				SetFadeRow(drawInputs.back(), tables, o);
 			}
@@ -1318,7 +1318,7 @@ namespace DCLF::Draws
 			decalSlot.inputs = nullptr;  // drawn: the blank is not needed
 			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex,
 				object.flags | kInputDrawable,
-				{}, 0.0f,
+				{ ViewMaskOf(tables, o, true) },
 				static_cast<std::uint32_t>(o), ordinal, 0, streamIndex });
 			decalTemplates[decalGroup - 1][ordinal] = sequence;
 			++out.decalsDrawn;
@@ -1329,7 +1329,7 @@ namespace DCLF::Draws
 				out.objectState[o] = kObjectStateDrawable;
 			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex,
 				object.flags | kInputDrawable,
-				{}, 0.0f,
+				{ ViewMaskOf(tables, o, true) },
 				static_cast<std::uint32_t>(o), 0, partitions, streamIndex });
 			if (depthOnly)
 				SetFadeRow(drawInputs.back(), tables, o);

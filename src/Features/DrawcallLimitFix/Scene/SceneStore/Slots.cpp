@@ -53,8 +53,6 @@ namespace DCLF
 		HandBack(treeOwners);
 		HandBack(fadeRootOwners);
 		tables.Clear();
-		fadeRootObjects.Clear();
-		fadeOwnershipFlips.clear();
 		ClearFaceRegions();
 		// Drop material binding owners on world/device reset without permitting
 		// an old worker snapshot to match a newly empty lookup generation.

@@ -189,19 +189,19 @@ namespace DCLF::Draws
 			const auto& classStates = a_in.modeRasterStates[m].Of(volumetricOnly);
 			if (classStates.empty())
 				return 0;
-			const std::uint32_t technique = ModeTechnique(a_tables, m, o);
+			const std::uint32_t technique = BaseTechnique(a_tables, m, o);
 			const ShadowPipelineKey key{ technique, (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u,
 				VertexLayoutOf(a_tables.geometries[object.geometryIndex].vertexDesc) };
 			const auto slotIt = a_lookups.shadowSlots.find(key);
 			if (slotIt == a_lookups.shadowSlots.end())
 				return wait("no key slot for technique", technique);
 			for (const std::uint32_t state : classStates)
-				if (a_lookups.ShadowMapPipeline(state, slotIt->second) == Lookups::kNone)
+				if (a_lookups.ShadowMapPipeline(m, state, slotIt->second) == Lookups::kNone)
 					return wait("no pipeline under state", state);
 			if (IsFaceObject(a_tables, o) || (key.vertexLayout & kPositionInSecondStream))
 				return 3;
 			a_input = { slotIt->second, record, object.geometryIndex, InputFlagsOf(m, object.flags),
-				{}, 0.0f, o, 0, PartitionsOf(a_tables, o), ~0u, FadeRootOf(a_tables, o) };
+				{ ViewMaskOf(a_tables, o, false) }, o, 0, PartitionsOf(a_tables, o), ~0u, FadeRootOf(a_tables, o) };
 			return 1;
 		};
 		auto removeEntry = [&](ShadowKept::Mode& a_mode, std::uint32_t o) {
@@ -358,14 +358,13 @@ namespace DCLF::Draws
 				const std::uint32_t streamIndex = FaceStreamGeometry(a_tables, o, a_in.addresses.facePositions);
 				if (streamIndex == ~0u)
 					continue;  // no positions this walk: no input, the engine's
-				const std::uint32_t technique = ModeTechnique(a_tables, m, o);
-				const ShadowPipelineKey key{ technique, (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u,
+				const ShadowPipelineKey key{ BaseTechnique(a_tables, m, o), (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u,
 					VertexLayoutOf(a_tables.geometries[object.geometryIndex].vertexDesc) };
 				const auto slotIt = a_lookups.shadowSlots.find(key);
 				if (slotIt == a_lookups.shadowSlots.end())
 					continue;
 				list.push_back({ slotIt->second, k.objectRecord[o], object.geometryIndex, (object.flags & ~kObjectDecal) | kInputDrawable,
-					{}, 0.0f, o, 0, PartitionsOf(a_tables, o), streamIndex, FadeRootOf(a_tables, o) });
+					{ ViewMaskOf(a_tables, o, false) }, o, 0, PartitionsOf(a_tables, o), streamIndex, FadeRootOf(a_tables, o) });
 			}
 			mode.faces.resize(keptFaces);
 			a_out.regionInputs[m] = mode.inputs.View();
@@ -766,7 +765,7 @@ namespace DCLF::Draws
 				if (classStates.empty())
 					memberSkip.armed = false;
 				const std::uint32_t technique = ModeTechnique(a_tables, m, o);
-				const ShadowPipelineKey key{ technique, (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u,
+				const ShadowPipelineKey key{ BaseTechnique(a_tables, m, o), (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u,
 					VertexLayoutOf(a_tables.geometries[object.geometryIndex].vertexDesc) };
 				const auto slotIt = a_lookups.shadowSlots.find(key);
 				if (slotIt == a_lookups.shadowSlots.end()) {
@@ -778,7 +777,7 @@ namespace DCLF::Draws
 				// without the pipeline would leave the caster to nobody (the set's readiness covers it: IndirectDraws::PhaseReady).
 				bool deferred = false, missing = false;
 				for (const std::uint32_t state : classStates) {
-					if (a_lookups.ShadowMapPipeline(state, slotIt->second) == Lookups::kNone) {
+					if (a_lookups.ShadowMapPipeline(m, state, slotIt->second) == Lookups::kNone) {
 						// Not resolved yet, or resolved to nothing: which of the two is in shadowPipelines.
 						const auto pipelineIt = a_lookups.shadowPipelines.find({ technique, key.rasterFlags, key.vertexLayout, state });
 						(pipelineIt == a_lookups.shadowPipelines.end() ? deferred : missing) = true;
@@ -800,7 +799,7 @@ namespace DCLF::Draws
 				// The sun's entry rule (kCullSunEntry): BuildDraws tests the entry's sphere, carried in the fade row, against the
 				// frame's full-frustum processes in the latch block - so the input does not change with the frame's planes.
 				inputs.push_back({ slotIt->second, objectRecord[o], object.geometryIndex, InputFlagsOf(m, object.flags),
-					{}, 0.0f, static_cast<std::uint32_t>(o), 0,
+					{ ViewMaskOf(a_tables, o, false) }, static_cast<std::uint32_t>(o), 0,
 					PartitionsOf(a_tables, static_cast<std::uint32_t>(o)), streamIndex, FadeRootOf(a_tables, static_cast<std::uint32_t>(o)) });
 				memberSkip.armed = false;
 			}

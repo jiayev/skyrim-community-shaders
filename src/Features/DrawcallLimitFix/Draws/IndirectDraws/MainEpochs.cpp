@@ -695,7 +695,44 @@ namespace DCLF
 			}
 			out->shadow = std::move(payload);
 		}
+		if (PersistentParityEnabled() && ParityDue(a_frame))
+			CheckViewMasks(*out, *a_tables);
 		return out;
+	}
+
+	void IndirectDraws::Impl::CheckViewMasks(const DrawPublication& a_draws, const SceneStore::Tables& a_tables)
+	{
+		ZoneScopedN("CS.DCLF.ViewMaskParity");
+		auto& p = viewMaskParity;
+		std::uint64_t inputs = 0, differ = 0;
+		// a_list: 0 Z-prepass, 1 colour, 2 + mode a shadow mode's.
+		auto check = [&](std::uint32_t a_list, const DrawInput& a_input, bool a_main, std::uint32_t a_listBits) {
+			++inputs;
+			const std::uint32_t expected = ViewMaskOf(a_tables, a_input.objectIndex, a_main);
+			if (a_input.view.mask == expected && (a_input.view.mask & a_listBits))
+				return;
+			++differ;
+			std::uint64_t none = ~0ull;
+			if (p.first.compare_exchange_strong(none, (std::uint64_t(a_list) << 56) | (std::uint64_t(a_input.objectIndex & 0xFFFFFFFFu) << 24) | (expected & 0xFFFFFFu)))
+				p.firstMask.store(a_input.view.mask, std::memory_order_relaxed);
+		};
+		for (const std::size_t j : { kAsyncZPrepass, kAsyncColour }) {
+			const auto& payload = a_draws.payloads[j];
+			if (!payload)
+				continue;
+			const std::uint32_t list = j == kAsyncZPrepass ? 0u : 1u;
+			for (std::size_t i = 0; i < payload->resident.Count(); ++i)
+				check(list, *payload->resident.At(i), true, kViewMainCull);
+			for (const auto& input : payload->inputList)
+				check(list, input, true, kViewMainCull);
+		}
+		if (const auto& shadowPayload = a_draws.shadow)
+			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
+				if (shadowPayload->inputs.modeUsed[m])
+					shadowPayload->ForEachInput(m, [&](const DrawInput& a_input) { check(2 + m, a_input, false, ShadowViewBits(m, true) | ShadowViewBits(m, false)); });
+		p.checks.fetch_add(1, std::memory_order_relaxed);
+		p.inputs.fetch_add(inputs, std::memory_order_relaxed);
+		p.differ.fetch_add(differ, std::memory_order_relaxed);
 	}
 
 	std::uint64_t IndirectDraws::TakeStreamsRefused()

@@ -215,8 +215,7 @@ namespace DCLF
 		setLagged.clear();
 		// Readiness moved, by source: anything the lookups resolve is a new version of them (Lookups::NextVersion), the shadow lookups
 		// have their own generation, the constants their stamp, the scene buffers their fit serial. A waiting slot is taken again when
-		// a source it waits on moved (SetWaitCause), or any moved for one waiting on something else; one waiting on its occluder's
-		// fade root by that root's servicing (fadeOwnershipFlips, above).
+		// a source it waits on moved (SetWaitCause), or any moved for one waiting on something else.
 		const std::array<std::uint64_t, kWaitSources> readiness{ (std::uint64_t(lookupsView.versionCounter) << 32) ^ lookupsView.generation, lookupsView.shadowGeneration,
 			tables.constantsStamp, IndirectDraws::Get().SceneFitSerial() };
 		std::uint8_t moved = 0;
@@ -243,13 +242,6 @@ namespace DCLF
 			for (const std::uint32_t slot : setWaiting)
 				QueueSet(slot);
 		}
-		// Fade roots became DCLF's to service or stopped being: an occluder under one is ready only while it is (PhaseReady). The
-		// objects listed under each root that flipped are taken again: its occluders leave, its waiting ones may join.
-		for (const std::uint32_t root : std::exchange(fadeOwnershipFlips, {}))
-			if (root < fadeRootObjects.lists.size())
-				for (const std::uint32_t slot : fadeRootObjects.lists[root])
-					QueueSet(slot);
-		setFadeOwnership = fadeOwnershipSerial;
 		// The frame globals a membership pass reads changed: this frame's accumulate phase binds every resident again
 		// (BindByMembership), so none of them is a member this frame.
 		const bool rebindAll = live && frameMembershipWitness != membershipWitness;
