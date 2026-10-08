@@ -48,6 +48,8 @@ namespace
 	constexpr float kToggleHoverAlpha = 0.8f;
 	constexpr float kInactiveHoverAlpha = 0.25f;
 	constexpr float kMenuShortcutScale = 0.85f;
+	/// Help note wrap width in font sizes; a window-edge wrap (0) collapses on the popup's first auto-size frame.
+	constexpr float kHelpNoteWrapFontScale = 30.0f;
 
 	Util::ConfirmationPopup deleteSceneChangesConfirmation;
 
@@ -999,7 +1001,7 @@ void EditorWindow::RenderUI()
 				ImGui::BulletText("%s", T(TKEY("shortcut_esc"), "Esc: Close editor"));
 				ImGui::Separator();
 				ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("scene_settings_greyed_label"), "Why are some settings greyed?"));
-				ImGui::PushTextWrapPos(0.0f);
+				ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetFontSize() * kHelpNoteWrapFontScale);
 				ImGui::TextUnformatted(T(TKEY("scene_settings_greyed_note"),
 					"Greyed settings cannot be overridden on this page. Some cannot be overridden by any scene; others need a different kind, such as a location override."));
 				ImGui::PopTextWrapPos();
