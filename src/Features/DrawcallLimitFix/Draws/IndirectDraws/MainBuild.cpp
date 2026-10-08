@@ -135,6 +135,11 @@ namespace DCLF::Draws
 			// An entry's draws, with the region's totals.
 			void RegionSetDraws(std::uint32_t i, std::uint8_t a_draws);
 			void RegionRemove(std::uint32_t o);
+			/**
+			 * @brief A decal's blank input: undrawable, so BuildDrawsCS writes its slot as a zero-count draw, and naming no row past the
+			 * scene's buffers (a geometry row past them is the first's; no second stream).
+			 */
+			DrawInput DecalBlank(std::uint32_t o) const;
 			void RegionUpsert(std::uint32_t o);
 			void RegionTake(std::uint32_t o);
 			/** @brief The entries the change log names since the region's last build, or every slot on a resync. */
@@ -333,13 +338,8 @@ namespace DCLF::Draws
 				// (Growths): the decals past them wait for it.
 				decalCount[group] = std::min(tables.decalCount[group], in.addresses.sequenceDecals);
 			}
-			// A decal past the scene's buffers (ObjectFits) has no input, so its group's range ends before it: every slot of the
-			// range is written each frame (its draw executes all of them).
-			if (!TablesFit(tables, in.addresses.fit))
-				for (std::uint32_t o = 0; o < tables.objects.size() && o < tables.decalOrdinal.size(); ++o)
-					if (const std::uint32_t group = ObjectDecalGroup(tables.objects[o].flags); group && !(tables.objects[o].flags & kObjectFree) &&
-																							tables.decalOrdinal[o] < decalCount[group - 1] && !ObjectFits(tables, o, in.addresses.fit))
-						decalCount[group - 1] = tables.decalOrdinal[o];
+			// A decal past the scene's buffers (ObjectFits) keeps its slot with a blank input (DecalBlank): the range is not cut
+			// there, which would take every decal after it out of the frame while the set claims them.
 			for (std::uint32_t group = 0; group < kDecalGroups; ++group)
 				decalTemplates[group].resize(decalCount[group]);
 		}
@@ -648,7 +648,8 @@ namespace DCLF::Draws
 		const auto& object = tables.objects[o];
 		if (object.flags & (kObjectFree | kObjectShadowOnly))
 			return false;
-		if (!ObjectFits(tables, o, in.addresses.fit))
+		// A decal past the buffers is an entry still, blank (RegionEntry), so its group's range keeps every slot written.
+		if (!ObjectFits(tables, o, in.addresses.fit) && !(ObjectDecalGroup(object.flags) && !depthOnly))
 			return false;
 		if (object.flags & kObjectNoBindings)
 			return wholeScene && depthOnly && object.geometryIndex < tables.geometries.size();
@@ -676,6 +677,10 @@ namespace DCLF::Draws
 			a_input = { 0, 0, object.geometryIndex, object.flags, {}, 0.0f,
 				o, 0 };
 			SetFadeRow(a_input, tables, o);
+			return 0;
+		}
+		if (ObjectDecalGroup(object.flags) && !ObjectFits(tables, o, in.addresses.fit)) {
+			a_input = DecalBlank(o);
 			return 0;
 		}
 		const auto& blocks = pipelineBlocks[object.pipelineIndex];
@@ -745,6 +750,13 @@ namespace DCLF::Draws
 		r.draws = r.draws - RegionDraws(r.drawsOf[i]) + RegionDraws(a_draws);
 		r.decals = r.decals - (r.drawsOf[i] == kRegionDecal ? 1 : 0) + (a_draws == kRegionDecal ? 1 : 0);
 		r.drawsOf[i] = a_draws;
+	}
+
+	DrawInput MainBuild::DecalBlank(std::uint32_t o) const
+	{
+		const auto& object = tables.objects[o];
+		// The record's flags carry no kInputDrawable (the epoch's): undrawable. The stream and fade row stay none (~0u).
+		return { 0, 0, object.geometryIndex < in.addresses.fit.geometryRows ? object.geometryIndex : 0u, object.flags, {}, 0.0f, o, tables.decalOrdinal[o] };
 	}
 
 	void MainBuild::RegionRemove(std::uint32_t o)
@@ -1197,9 +1209,12 @@ namespace DCLF::Draws
 				Skipped(Skip::CandidateOnly);
 			return;
 		}
-		// Past what the scene's buffers hold (their growth outstanding): no input names it, not even a culling one. A decal past
-		// them is past its group's range too (decalCount ends before it), so no slot of the range is left unwritten.
+		// Past what the scene's buffers hold (their growth outstanding): no input names it, not even a culling one, but a decal's
+		// blank, which writes its slot of the group's range as a zero-count draw and reads nothing past the buffers (DecalBlank).
 		if (!ObjectFits(tables, o, in.addresses.fit)) {
+			if (const std::uint32_t group = ObjectDecalGroup(object.flags);
+				group && !depthOnly && o < tables.decalOrdinal.size() && tables.decalOrdinal[o] < decalCount[group - 1])
+				drawInputs.push_back(DecalBlank(o));
 			Skipped(Skip::Capacity);
 			return;
 		}

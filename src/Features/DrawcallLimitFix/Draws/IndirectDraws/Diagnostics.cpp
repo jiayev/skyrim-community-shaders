@@ -415,7 +415,6 @@ namespace DCLF
 				}
 			}
 			bool damaged = false;
-			const std::uint32_t undrawnBefore = counts.withheldUndrawn;
 			for (std::size_t o = 0; o < snapshot.flags.size(); ++o) {
 				const std::uint32_t word = words[o];
 				const bool current = (word >> 4) == stamp;
@@ -554,8 +553,6 @@ namespace DCLF
 						(flags & 2) ? "bound" : "not bound", withheld ? ", in the set" : "", (flags & 8) ? ", RECORD DISAGREES" : "");
 				}
 			}
-			if (counts.withheldUndrawn > undrawnBefore + 50)
-				logger::info("[DCLF] set parity, frame {}: {} drawn by nobody; {}", snapshot.frame, counts.withheldUndrawn - undrawnBefore, snapshot.payloads);
 			context->Unmap(snapshot.staging.get(), 0);
 			setParityStaging.push_back(std::move(snapshot.staging));
 			if (frustum)
@@ -570,9 +567,10 @@ namespace DCLF
 					counts.colourUnpublished, counts.withheldUndrawn, counts.alphaWithheldUndrawn, counts.withheldCulled, counts.outsideDrawn, counts.recordDisagrees,
 					double(counts.depthDrawnTotal) / counts.frames, double(counts.colourDrawnTotal) / counts.frames,
 					counts.depthOnly || counts.colourOnly || counts.withheldUndrawn || counts.outsideDrawn || counts.recordDisagrees ? " <- SET PARITY" : " <- OK");
-				logger::info("[DCLF] set parity over {} frames: members rejected with their live bound in view: {} by the frustum{}; {} by the fade test (owned roots faded out), "
-							 "{} of all of them skinned",
-					counts.frames, counts.rejectedInView, counts.rejectedInView ? " <- REJECTED IN VIEW" : " <- OK", counts.fadeHiddenInView, counts.skinnedInView);
+				// Counted, not flagged: the frustum's few are a bound at the view's edge or a far LOD block's, the fade test's legitimate.
+				logger::info("[DCLF] set parity over {} frames: members rejected with their live bound in view: {} by the frustum, {} by the fade test (owned roots faded "
+							 "out), {} of all of them skinned",
+					counts.frames, counts.rejectedInView, counts.fadeHiddenInView, counts.skinnedInView);
 				logger::info("[DCLF] set parity over {} frames: the registration hooks' main claims against the set: {} claimed outside it (drawn by nobody), {} members "
 							 "not claimed (drawn twice){}",
 					counts.frames, counts.claimedOutside, counts.unclaimedMembers, counts.claimedOutside || counts.unclaimedMembers ? " <- CLAIMS" : " <- OK");
@@ -630,49 +628,6 @@ namespace DCLF
 		// The frame the epochs drew (their visibility stamps), not the one the payloads were built in (step 6e E3b).
 		snapshot.frame = store.GetFrame();
 		snapshot.framesLeft = 3;
-		// TEMP: the payloads' resident regions, logged with a frame whose objects nobody drew.
-		{
-			auto describe = [&](const MainPayload& a_payload) {
-				std::array<std::uint32_t, 4> states{};  // drawable, decal, absent, skipped
-				for (const auto state : a_payload.objectState)
-					++states[state == kObjectStateDrawable ? 0 : state == kObjectStateDecal ? 1 : state == kObjectStateAbsent ? 2 : 3];
-				return fmt::format("objects {} (drawable {}, decal {}, absent {}, skipped {}), inputs {}, resident {} version {} (uploaded {}/{}), resyncs {} reasons {:#x}, "
-								   "region draws {}, capacity skips {}",
-					a_payload.objectState.size(), states[0], states[1], states[2], states[3], a_payload.inputList.size(), a_payload.resident.Count(),
-					a_payload.resident.Version(), a_resources->residentUploaded[0], a_resources->residentUploaded[1], a_payload.residentResyncs,
-					a_payload.residentResyncReasons, a_payload.residentDraws, a_payload.skipped[static_cast<std::size_t>(IndirectDraws::Skip::Capacity)]);
-			};
-			snapshot.payloads = fmt::format("depth: {}; colour: {}", describe(a_depth), describe(a_colour));
-			{
-				const auto draws = installedDraws;
-				const bool own = draws && draws->payloads[kAsyncColour].get() == &a_colour;
-				std::uint32_t skippedClaimed = 0;
-				if (const auto set = PassCapture::Get().CurrentSet())
-					for (std::size_t o = 0; o < a_colour.objectState.size() && o < store.GetTables().objectGeometry.size(); ++o)
-						if (a_colour.objectState[o] == static_cast<std::uint8_t>(IndirectDraws::Skip::Capacity) && (set->PhasesOf(store.GetTables().objectGeometry[o]) & kSetMain))
-							++skippedClaimed;
-				snapshot.payloads += fmt::format("; colour payload the installed publication's {}, its tables the accepted ones {}, capacity-skipped and claimed {}", own,
-					draws && draws->tables == store.AcceptedTables(), skippedClaimed);
-			}
-			{
-				const auto& f = a_colour.inputs.addresses.fit;
-				const auto& pf = postedFit[0];
-				snapshot.payloads += fmt::format("; colour fit objects {} geometry {} extras {} trees {} fadeRoots {} rows {}/{}; posted objects {} geometry {} extras {} trees {} fadeRoots {} rows {}/{}",
-					f.objects, f.geometryRows, f.extraRows, f.trees, f.fadeRoots, a_colour.inputs.addresses.recordCapacity, a_colour.inputs.addresses.pipelineCapacity,
-					pf.objects, pf.geometryRows, pf.extraRows, pf.trees, pf.fadeRoots, postedRows[0], postedRows[1]);
-				const auto& t = store.GetTables();
-				std::uint32_t shown = 0;
-				for (std::uint32_t o = 0; o < t.objects.size() && o < a_colour.objectState.size() && shown < 4; ++o) {
-					if (a_colour.objectState[o] != static_cast<std::uint8_t>(IndirectDraws::Skip::Capacity) || !(store.SetPhasesOf(static_cast<std::int32_t>(o)) & kSetMain))
-						continue;
-					++shown;
-					const auto& r = t.objects[o];
-					snapshot.payloads += fmt::format("; object {}: material {} pipeline {} geometry {} extras {} tree {} fadeRoot {} fits {}", o, r.materialIndex, r.pipelineIndex,
-						r.geometryIndex, o < t.extraOffset.size() ? t.extraOffset[o] : 0u, o < t.objectTree.size() ? t.objectTree[o] : 0u,
-						o < t.objectFadeRoot.size() ? t.objectFadeRoot[o] : 0u, ObjectFits(t, o, f));
-				}
-			}
-		}
 		snapshot.depthState = a_depth.objectState;
 		snapshot.colourState = a_colour.objectState;
 		// Only a publication's tables: the coordinator's own (none accepted yet) are not the render thread's to hold.

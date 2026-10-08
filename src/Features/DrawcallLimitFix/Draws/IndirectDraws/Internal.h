@@ -4550,7 +4550,6 @@ namespace DCLF
 			// Per object, its geometry's phases in the claims the registration hooks withhold by (PassCapture::CurrentSet): the main
 			// claim must be the frame's set exactly, or an object is drawn by nobody (claimed, not in the set) or twice.
 			std::vector<std::uint8_t> claims;
-			std::string payloads;  // TEMP: the two payloads' resident regions and inputs, for a frame drawn by nobody
 		};
 		std::deque<SetParityFrame> setParityFrames;
 		std::vector<winrt::com_ptr<ID3D11Buffer>> setParityStaging;  // released stagings, reused
