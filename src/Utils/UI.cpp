@@ -259,7 +259,7 @@ namespace Util
 	void HelpMarker(const char* a_desc)
 	{
 		ImGui::AlignTextToFramePadding();
-		TextUnformattedDisabled("(?)");
+		TextUnformattedDisabled(kHelpMarkerLabel);
 		AddTooltip(a_desc, ImGuiHoveredFlags_DelayShort);
 	}
 

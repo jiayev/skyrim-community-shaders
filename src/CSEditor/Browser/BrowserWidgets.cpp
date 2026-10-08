@@ -474,6 +474,12 @@ namespace BrowserUI
 			ImGui::SetCursorPosX(target);
 	}
 
+	void HelpMarkerRight(const char* text)
+	{
+		RightAlign(ImGui::CalcTextSize(Util::kHelpMarkerLabel).x);
+		Util::HelpMarker(text);
+	}
+
 	SelectionAction SelectionFooter(size_t selected, size_t selectedShown, const char* clearTooltip)
 	{
 		assert(selectedShown <= selected);

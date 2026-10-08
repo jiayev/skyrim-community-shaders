@@ -844,6 +844,8 @@ void EditorWindow::RenderUI()
 			if (ImGui::BeginMenu(T(TKEY("file"), "File"))) {
 				if (MenuItemWithShortcutSubtext(T(TKEY("save"), "Save"), "Ctrl+S"))
 					SaveAll();
+				Util::AddTooltip(T(TKEY("save_tooltip"),
+					"Saves your edited widgets and scene settings on this PC. To share them, use Export Preset."));
 
 				// Save individual widgets submenu
 				if (ImGui::BeginMenu(T(TKEY("save_open_widget"), "Save Widget"))) {
@@ -868,9 +870,7 @@ void EditorWindow::RenderUI()
 				const bool canExport = ScenePresetExport::CanExport();
 				if (MenuItemWithShortcutSubtext(T(TKEY("export_preset"), "Export Preset..."), "Ctrl+Shift+S", canExport))
 					ScenePresetExport::Open();
-				Util::AddTooltip(T(TKEY("scene_page_export_tooltip"),
-									 "Export scene settings as a preset, or update an existing pack's metadata and artwork."),
-					Util::kTooltipWhenDisabled);
+				Util::AddTooltip(ScenePresetExport::GetSummary(), Util::kTooltipWhenDisabled);
 
 				ImGui::Separator();
 				for (auto* collection : GetWidgetCollections())
@@ -1074,7 +1074,7 @@ void EditorWindow::RenderUI()
 				ImGui::PopStyleVar(2);
 				const std::string exportTooltip = std::format("{} (Ctrl+Shift+S)\n{}", T(TKEY("export_preset"), "Export Preset..."),
 					canExport ?
-						T(TKEY("scene_page_export_tooltip"), "Export scene settings as a preset, or update an existing pack's metadata and artwork.") :
+						ScenePresetExport::GetSummary() :
 						T(TKEY("export_preset_empty_tooltip"), "Nothing to export yet: author scene settings, save form edits, or load Post Processing or an Effects 11 preset first."));
 				Util::AddTooltip(exportTooltip.c_str(), Util::kTooltipWhenDisabled);
 			}

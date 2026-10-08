@@ -194,8 +194,9 @@ namespace
 		DrawLayerTooltip(layer, link.destination);
 	}
 
-	/** @brief Breadcrumb of the stack: the current layer as an accent chip, the rest links to their pages. */
-	void DrawStack(Layer current, bool interior, const std::string& featureShortName)
+	/** @brief Breadcrumb of the stack: the current layer as an accent chip, the rest links to their pages.
+	 *  @param note What an edit on the current layer does, added to its chip's tooltip. */
+	void DrawStack(Layer current, bool interior, const std::string& featureShortName, const std::string& note)
 	{
 		const auto& style = ImGui::GetStyle();
 		const ImVec4 accent = Util::Colors::GetAccent();
@@ -216,7 +217,7 @@ namespace
 			ImGui::PushID(static_cast<int>(layer));
 			if (layer == current) {
 				BrowserUI::Chip(LayerName(layer), LayerName(layer), {}, nullptr, &accent);
-				Util::AddTooltip(LayerTooltip(layer));
+				Util::AddTooltip(std::format("{}\n\n{}", LayerTooltip(layer), note).c_str());
 			} else {
 				ImGui::AlignTextToFramePadding();
 				DrawLayerLink(layer, ResolveLink(layer, featureShortName), featureShortName);
@@ -330,6 +331,9 @@ namespace
 		Util::DrawInlineIndicatorDot(ImGui::GetColorU32(Util::Colors::GetInfo()), true);
 		ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
 		ImGui::TextUnformatted(T(TKEY("layer_overridden_by"), "Overridden here by:"));
+		Util::AddTooltip(T(TKEY("layer_override_hint"),
+			"Blue settings show the value a scene layer applies. Changing one here only previews it until you leave "
+			"this feature; change it on that layer to keep it."));
 
 		ImGui::Indent();
 		for (const auto& winner : winners) {
@@ -345,11 +349,6 @@ namespace
 			Util::AddTooltip(T(TKEY("layer_override_link_tooltip"), "Open this layer with the feature selected, to change the value it applies."));
 		}
 		ImGui::Unindent();
-
-		Util::Text::WrappedSecondary("%s",
-			T(TKEY("layer_override_hint"),
-				"Blue settings show the value a scene layer applies. Changing one here only previews it until you leave "
-				"this feature; change it on that layer to keep it."));
 	}
 
 	/** @brief What an edit on a scene layer does, naming the period, weather or place it applies to. */
@@ -390,8 +389,7 @@ namespace
 
 void SceneLayerHeader::DrawBase(const std::string& featureShortName)
 {
-	DrawStack(Layer::Base, Util::IsInterior(), featureShortName);
-	Util::Text::WrappedSecondary("%s",
+	DrawStack(Layer::Base, Util::IsInterior(), featureShortName,
 		T(TKEY("layer_note_base"),
 			"Applies everywhere. The scene layers to the right override it while they match, and the narrowest one wins."));
 	DrawE11Handoff(featureShortName);
@@ -415,8 +413,7 @@ void SceneLayerHeader::DrawScene(const SceneContextId& context, const std::strin
 	const Layer layer = LayerOf(context.type);
 	// A location applies indoors and out, so it shows the stack the player is in now.
 	const bool interior = layer == Layer::Interior || (layer == Layer::Location && Util::IsInterior());
-	DrawStack(layer, interior, featureShortName);
-	Util::Text::WrappedSecondary("%s", DescribeSceneLayer(*manager, context).c_str());
+	DrawStack(layer, interior, featureShortName, DescribeSceneLayer(*manager, context));
 	DrawE11Handoff(featureShortName);
 }
 

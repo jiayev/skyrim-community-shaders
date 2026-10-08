@@ -438,9 +438,7 @@ namespace
 					ScenePresetExport::Open();
 			}
 		}
-		Util::AddTooltip(T("cs_editor.scene_page_export_tooltip",
-							 "Export scene settings as a preset, or update an existing pack's metadata and artwork."),
-			Util::kTooltipWhenDisabled);
+		Util::AddTooltip(ScenePresetExport::GetSummary(), Util::kTooltipWhenDisabled);
 	}
 
 	/** @brief What applies now with links into the CS Editor, or a hint while no save is loaded. */
@@ -518,7 +516,10 @@ void SceneManager::DrawSettings()
 			T("feature.scene_manager.location_transition_reset_tooltip", "Return to the default duration.")))
 		SetLocationTransitionSeconds(kDefaultLocationTransitionSeconds);
 
-	if (ImGui::CollapsingHeader(T("feature.scene_manager.overwrites.title", "Feature Overwrites"), ImGuiTreeNodeFlags_DefaultOpen))
+	const bool overwritesOpen = ImGui::CollapsingHeader(T("feature.scene_manager.overwrites.title", "Feature Overwrites"), ImGuiTreeNodeFlags_DefaultOpen);
+	Util::AddTooltip(T("feature.scene_manager.overwrites.title_tooltip",
+		"Files that set feature settings at startup: your own exports, files shipped by mods, and those of applied preset packs."));
+	if (overwritesOpen)
 		FeatureOverwritesPanel::Draw();
 	if (Util::ShowDebugSections() && ImGui::CollapsingHeader(T("feature.scene_manager.debug", "Debug")))
 		DrawDebug(*this);

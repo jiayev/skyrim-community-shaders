@@ -390,7 +390,6 @@
     "cs_editor.scene_export_include_pp_tooltip": "将当前后期处理设置保存到预设包中，在预设页面应用时即可加载。这也是创建后期处理预设的方法。",
     "cs_editor.scene_export_no_form_edits": "没有可包含的表单修改。",
     "cs_editor.scene_export_nothing": "暂无可导出的内容：请编辑场景设置、修改表单，或勾选要包含的基础设置。",
-    "cs_editor.scene_export_scope_baseline": "将下方勾选功能的基础设置导出为基础预设。",
     "cs_editor.scene_export_type_baseline": "基础预设",
     "cs_editor.scene_export_type_baseline_tooltip": "仅包含勾选功能的基础设置，不含场景层或 Effects 11 文件。",
     "cs_editor.scene_export_version_tooltip": "格式为“主版本.次版本.修订号”。在预设页面中，0.0.x 标记为 Alpha，0.x.x 标记为 Beta，1.0.0 及以上为正式版。",

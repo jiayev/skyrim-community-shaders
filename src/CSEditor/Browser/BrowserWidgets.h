@@ -140,6 +140,9 @@ namespace BrowserUI
 	/** @brief Moves the cursor on the current line so the next `width` pixels end at the right edge. */
 	void RightAlign(float width);
 
+	/** @brief Util::HelpMarker at the right edge of the current line, for a dialog's guide. */
+	void HelpMarkerRight(const char* text);
+
 	/** @brief What the user asked of a SelectionFooter. */
 	enum class SelectionAction
 	{

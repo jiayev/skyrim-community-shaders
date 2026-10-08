@@ -939,10 +939,14 @@ void SceneSettingsUI::DrawLocationBrowser()
 
 	ImGui::Spacing();
 	BrowserUI::SectionLabel(T(TKEY("location_add_from_here"), "Add from where you are"));
+	Util::AddTooltip(T(TKEY("location_add_from_here_tooltip"),
+		"The places the player is standing in, outermost first. Where listed places overlap, the narrowest one wins."));
 	DrawLocationChain();
 
 	ImGui::Spacing();
 	BrowserUI::SectionLabel(T(TKEY("location_add_any"), "Add any place"));
+	Util::AddTooltip(T(TKEY("location_add_any_tooltip"),
+		"Every place the game defines, so you can add one without travelling there."));
 	DrawLocationPicker();
 }
 

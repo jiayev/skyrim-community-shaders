@@ -187,7 +187,9 @@ namespace
 
 		const auto tooltip = std::format("{}\n{}", T(TKEY("baseline_export"), "Export Baseline Preset..."),
 			T(TKEY("baseline_export_tooltip"),
-				"Saves base settings as a preset you can apply on the Presets page."));
+				"Saves the base settings of the features you tick as a Baseline preset, applied from the Presets page. "
+				"Scene layers are left out.\n"
+				"For a file loaded at every game start instead, use Export Feature Overwrite beside a feature's settings."));
 		if (BrowserUI::IconButton("##BaseSettingsExport", SceneActionIcons::kExport, tooltip.c_str()))
 			ScenePresetExport::OpenBaseline(selectedFeature);
 	}

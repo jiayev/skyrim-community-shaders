@@ -80,7 +80,10 @@ namespace
 	{
 		if (Icons::LabeledButton("##export", Icons::FA(ICON_FA_FILE_EXPORT), T(TKEY("export.button"), "Export Settings")))
 			FeatureOverwritesPanel::BeginExport();
-		Util::AddTooltip(T(TKEY("export.toolbar_tooltip"), "Saves settings of one or more features as overwrite files loaded at startup."));
+		Util::AddTooltip(T(TKEY("export.toolbar_tooltip"),
+			"Writes settings of one or more features to files of their own: Overrides files loaded at every game start, "
+			"or a Baseline preset pack. Scene layers are left out.\n"
+			"For a full preset with scene layers, use Export Preset in the CS Editor (Ctrl+Shift+S)."));
 
 		auto count = static_cast<size_t>(std::ranges::count_if(rows, [](const OverwriteRow& row) { return row.enabled && !row.unknownKeys.empty(); }));
 		notAppliedOnly &= count != 0;

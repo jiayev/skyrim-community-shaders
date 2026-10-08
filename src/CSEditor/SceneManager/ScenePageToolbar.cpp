@@ -156,7 +156,9 @@ namespace
 	{
 		// A page holding entries always has somewhere to offer them, so destinations are never walked just to grey the button.
 		const std::string tooltip = ActionTooltip(T(TKEY("scene_page_copy"), "Copy"),
-			T(TKEY("scene_page_copy_tooltip"), "Copies settings between this page and another context."));
+			T(TKEY("scene_page_copy_tooltip"),
+				"Copies settings between this page and other times of day, interiors, weathers or locations, with a "
+				"preview before anything changes."));
 		ImGui::BeginDisabled(!a_hasEntries && !SceneCopyModal::HasSources(a_context));
 		if (BrowserUI::IconButton("##ScenePageCopy", SceneActionIcons::kCopy, tooltip.c_str()))
 			SceneCopyModal::Open(a_context);
