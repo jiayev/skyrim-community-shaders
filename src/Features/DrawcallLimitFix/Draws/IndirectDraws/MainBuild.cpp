@@ -12,7 +12,7 @@ namespace DCLF::Draws
 		{
 			std::uint32_t setIndex = Lookups::kNone;
 			std::span<const std::uint8_t> vsTable, psTable;
-			const Lookups::RegisterUsageBits* usage = nullptr;
+			std::array<const Lookups::RegisterUsageBits*, 2> usage{};  // per segment (kAsyncColour, kAsyncZPrepass): its variant's
 			std::uint32_t shadowMaskIndex = Lookups::kNone;
 			std::uint64_t tables = 0;  // TablesHash of its constant tables
 			bool rowOk = false;        // its pipeline row's blocks fit (MainRows)
@@ -44,28 +44,40 @@ namespace DCLF::Draws
 			return -1;
 		}
 
+		/** @brief The segment a build's payloads are made from first: the colour segment's when it is built (its skips are the report's). */
+		std::size_t PrimarySegment(const std::array<const MainInputs*, 2>& a_in) { return a_in[kAsyncColour] ? kAsyncColour : kAsyncZPrepass; }
+
 		/**
-		 * @brief One build of a main segment's payload (BuildMainPayload). Its members are what the build's parts share;
+		 * @brief One build of the main segments' payloads (BuildMainPayloads). Its members are what the build's parts share;
 		 * Run calls the parts in order: the pipelines' blocks, the per-object states, the object records, the resident region,
 		 * the object loop (each draw's record through AssembleRecord), then the kept stores. Both segments draw the frame's DCLF
 		 * set (kObjectMember) and nothing else: every other object is the engine's in the main camera's views.
+		 *
+		 * The segments read one list (U4a): every main candidate once, its view mask saying which segment takes it (MainMaskOf:
+		 * kDepthViewBits, kColourViewBits), and drawable only when its pair can be drawn by every segment built (ResolvePair), so a
+		 * member is drawn by both or by neither. The build writes the primary segment's payload; the other's is a copy of it with
+		 * its own inputs (Finish).
 		 */
 		class MainBuild
 		{
 		public:
-			MainBuild(const MainInputs& a_in, const SceneStore::Tables& a_tables, const FrameTables& a_frame, const Lookups& a_lookups, MainPayload& a_out, MainRows& a_rows,
-				BuildCache* a_cache, std::shared_ptr<const StreamViews> a_streams) :
-				in(a_in), tables(a_tables), frame(a_frame), lookups(a_lookups), out(a_out), rows(a_rows), cache(a_cache), streams(std::move(a_streams))
+			MainBuild(const std::array<const MainInputs*, 2>& a_in, const SceneStore::Tables& a_tables, const FrameTables& a_frame, const Lookups& a_lookups,
+				const std::array<MainPayload*, 2>& a_out, MainRows& a_rows, BuildCache* a_cache, std::shared_ptr<const StreamViews> a_streams) :
+				segmentIn(a_in), segmentOut(a_out), primary(PrimarySegment(a_in)), in(*a_in[primary]), tables(a_tables), frame(a_frame), lookups(a_lookups),
+				out(*a_out[primary]), rows(a_rows), cache(a_cache), streams(std::move(a_streams))
 			{}
 
 			void Run();
 
 		private:
-			const MainInputs& in;
+			const std::array<const MainInputs*, 2> segmentIn;  // per segment (kAsyncColour, kAsyncZPrepass): its inputs, or none when not built
+			const std::array<MainPayload*, 2> segmentOut;
+			const std::size_t primary;
+			const MainInputs& in;  // the primary segment's
 			const SceneStore::Tables& tables;
 			const FrameTables& frame;  // the frame's PerGeometry blocks
 			const Lookups& lookups;
-			MainPayload& out;
+			MainPayload& out;  // the primary segment's
 			MainRows& rows;
 			BuildCache* cache;
 			std::shared_ptr<const StreamViews> streams;  // the frame's (StreamViews), or none: the build packs its own geometry slots
@@ -74,15 +86,15 @@ namespace DCLF::Draws
 			decltype(MainPayload::inputList)& drawInputs = out.inputList;
 			decltype(MainPayload::decalCount)& decalCount = out.decalCount;
 			decltype(MainPayload::decalTemplates)& decalTemplates = out.decalTemplates;
-			const bool depthOnly = in.depthOnly;
+			const bool colourBuilt = segmentIn[kAsyncColour] != nullptr;
 			const std::uint32_t frameNumber = in.frameNumber;
 			const bool bindlessParity = in.bindlessParity;
 			const decltype(MainInputs::eye)& eye = in.eye;
 			const decltype(MainInputs::previousEye)& previousEye = in.previousEye;
 			static constexpr auto renderFlags = SceneStore::kMainPassRenderFlags;
 
-			// The frame registers' blocks (FrameRegisters).
-			std::array<std::uint64_t, kConstantBufferRegisters> frameVS{}, framePS{};
+			// The frame registers' blocks (FrameRegisters), per segment.
+			std::array<std::array<std::uint64_t, kConstantBufferRegisters>, 2> frameVS{}, framePS{};
 			std::uint64_t sharedLightBlock = 0, frameLightingBlock = 0;
 			// Per pipeline: its set index, constant tables and register usage, and whether its row is whole.
 			std::vector<PipelineBlocks> pipelineBlocks;
@@ -106,6 +118,11 @@ namespace DCLF::Draws
 			void PrepareObjects();
 			void Skipped(Skip a_reason);
 			void Mark(std::size_t a_part);
+			/** @brief The segments built, as bits (1 << kAsyncColour, 1 << kAsyncZPrepass): what the pairs' verdicts are of. */
+			std::uint8_t Segments() const
+			{
+				return static_cast<std::uint8_t>((segmentIn[kAsyncColour] ? 1u << kAsyncColour : 0u) | (segmentIn[kAsyncZPrepass] ? 1u << kAsyncZPrepass : 0u));
+			}
 			// In the frame's set (SceneStore::CommitSet): the only objects either segment draws.
 			bool InSet(std::uint32_t o) const { return o < tables.objects.size() && (tables.objects[o].flags & kObjectMember); }
 
@@ -216,11 +233,16 @@ namespace DCLF::Draws
 		// what the constants check below rejects for a pipeline that reads it.
 		frameVS = {};
 		framePS = {};
-		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
-			if ((in.vsFrameMask >> slot) & 1)
-				frameVS[slot] = in.addresses.frameConstants + FrameSlotOffset(false, slot);
-			if ((in.psFrameMask >> slot) & 1)
-				framePS[slot] = in.addresses.frameConstants + FrameSlotOffset(true, slot);
+		for (std::size_t j = 0; j < segmentIn.size(); ++j) {
+			if (!segmentIn[j])
+				continue;
+			const auto& segment = *segmentIn[j];
+			for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
+				if ((segment.vsFrameMask >> slot) & 1)
+					frameVS[j][slot] = segment.addresses.frameConstants + FrameSlotOffset(false, slot);
+				if ((segment.psFrameMask >> slot) & 1)
+					framePS[j][slot] = segment.addresses.frameConstants + FrameSlotOffset(true, slot);
+			}
 		}
 		sharedLightBlock = in.addresses.frameConstants + std::uint64_t(kFrameSlotSharedLight) * kFrameSlotBytes;
 		frameLightingBlock = in.addresses.frameConstants + std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes;
@@ -245,7 +267,8 @@ namespace DCLF::Draws
 			blocks.setIndex = entry.setIndex;
 			blocks.vsTable = entry.vsTable;
 			blocks.psTable = entry.psTable;
-			blocks.usage = &entry.usage[depthOnly ? kDepthVariant : kColorVariant];
+			blocks.usage[kAsyncColour] = &entry.usage[kColorVariant];
+			blocks.usage[kAsyncZPrepass] = &entry.usage[kDepthVariant];
 			blocks.shadowMaskIndex = entry.shadowMaskIndex;
 			blocks.tables = TablesHash(blocks.vsTable, blocks.psTable);
 			WritePipelineRow(static_cast<std::uint32_t>(p), blocks);
@@ -332,7 +355,7 @@ namespace DCLF::Draws
 
 		// Everything before the loop: the per-epoch maps and the object records.
 		Mark(6);
-		if (!depthOnly) {
+		if (colourBuilt) {
 			for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
 				// The sequence buffer's decal ranges hold them all (ReserveMainSequences), but while their growth is outstanding
 				// (Growths): the decals past them wait for it.
@@ -399,7 +422,6 @@ namespace DCLF::Draws
 		WriteMaterialRow(m, p, blocks);
 		const auto& material = rows.materials[m];
 		const auto& pipeline = rows.pipelines[p];
-		const auto& usage = *blocks.usage;
 		Mark(1);
 		// The row was packed with its technique's constant tables; a pipeline of the same slot with others would read it wrong.
 		if (material.tables != blocks.tables) {
@@ -412,59 +434,81 @@ namespace DCLF::Draws
 			resolved.missingTexture = material.missingTexture;
 			return fail(Skip::Texture);
 		}
-		// Textures: the material row's (t0-t15 but t14, the features'), the pipeline row's (t14), the frame record's (the rest).
-		for (std::uint32_t t = 0; t < kTextureRegisters; ++t) {
-			if (!usage.UsesTexture(t))
-				continue;
-			bool given = true;
-			if (t == kShadowMaskSlot)
-				given = pipeline.shadowMask;
-			else if (t < kPixelTextureSlots)
-				given = (material.textures >> t) & 1;
-			else if (const int f = FeatureMaterialSlot(t); f >= 0)
-				given = (material.features >> f) & 1;
-			else if (t == kObjectBufferRegister || t == kExtrasBufferRegister || t == kTreeWindRegister || t == kPlacementBufferRegister || t == kPaletteBufferRegister ||
-					 t == kShadingBufferRegister)
-				given = true;
-			else if (depthOnly)
-				// The Z-prepass has no frame textures bound yet (its frame record binds the null texture), but for the character
-				// light's noise, which only shades: the depth variant's output never reads it.
-				given = t == kCharacterLightRegister;
-			else
-				out.frameRegisters[t / 64] |= 1ull << (t % 64);  // the commit resolves it into the frame record
-			if (!given) {
-				resolved.missingTexture = t;
-				return fail(Skip::Texture);
-			}
-		}
-		for (std::uint32_t sampler = 0; sampler < kSamplerRegisters; ++sampler) {
-			if (!((usage.samplers >> sampler) & 1))
-				continue;
-			const bool given = sampler == kShadowMaskSlot ? pipeline.shadowMaskSampler : ((material.samplers >> sampler) & 1) != 0;
-			if (!given)
-				return fail(Skip::Sampler);
-		}
-		// Constant buffers: the rows' (b0, b1, b2, b4), the pass's (the frame slots, PS b3 and b13).
-		bool constantsOk = true;
-		for (std::uint32_t r = 0; r < kConstantBufferRegisters; ++r) {
-			const bool rowRegister = r == kPerTechnique || r == kPerMaterial || r == kPerGeometry || r == 4;
-			const bool rowsOk = r == kPerMaterial ? material.blocksOk : pipeline.blocksOk;
-			if ((usage.vertexConstants >> r) & 1) {
-				if (rowRegister ? !rowsOk : !frameVS[r]) {
-					constantsOk = false;
-					out.missingVertexConstants |= 1u << r;
+		// What segment j's variant reads against what the rows and its frame give: false after fail() recorded why.
+		auto reads = [&](std::size_t j) {
+			const auto& usage = *blocks.usage[j];
+			const bool depthOnly = j == kAsyncZPrepass;
+			// Textures: the material row's (t0-t15 but t14, the features'), the pipeline row's (t14), the frame record's (the rest).
+			for (std::uint32_t t = 0; t < kTextureRegisters; ++t) {
+				if (!usage.UsesTexture(t))
+					continue;
+				bool given = true;
+				if (t == kShadowMaskSlot)
+					given = pipeline.shadowMask;
+				else if (t < kPixelTextureSlots)
+					given = (material.textures >> t) & 1;
+				else if (const int f = FeatureMaterialSlot(t); f >= 0)
+					given = (material.features >> f) & 1;
+				else if (t == kObjectBufferRegister || t == kExtrasBufferRegister || t == kTreeWindRegister || t == kPlacementBufferRegister || t == kPaletteBufferRegister ||
+						 t == kShadingBufferRegister)
+					given = true;
+				else if (depthOnly)
+					// The Z-prepass has no frame textures bound yet (its frame record binds the null texture), but for the character
+					// light's noise, which only shades: the depth variant's output never reads it.
+					given = t == kCharacterLightRegister;
+				else
+					out.frameRegisters[t / 64] |= 1ull << (t % 64);  // the commit resolves it into the frame record
+				if (!given) {
+					resolved.missingTexture = t;
+					fail(Skip::Texture);
+					return false;
 				}
 			}
-			if ((usage.pixelConstants >> r) & 1) {
-				const bool pass = r == 3 || r == kFrameLightingRegister;
-				if (rowRegister ? !rowsOk : !(pass || framePS[r])) {
-					constantsOk = false;
-					out.missingPixelConstants |= 1u << r;
+			for (std::uint32_t sampler = 0; sampler < kSamplerRegisters; ++sampler) {
+				if (!((usage.samplers >> sampler) & 1))
+					continue;
+				const bool given = sampler == kShadowMaskSlot ? pipeline.shadowMaskSampler : ((material.samplers >> sampler) & 1) != 0;
+				if (!given) {
+					fail(Skip::Sampler);
+					return false;
 				}
 			}
+			// Constant buffers: the rows' (b0, b1, b2, b4), the pass's (the frame slots, PS b3 and b13).
+			bool constantsOk = true;
+			for (std::uint32_t r = 0; r < kConstantBufferRegisters; ++r) {
+				const bool rowRegister = r == kPerTechnique || r == kPerMaterial || r == kPerGeometry || r == 4;
+				const bool rowsOk = r == kPerMaterial ? material.blocksOk : pipeline.blocksOk;
+				if ((usage.vertexConstants >> r) & 1) {
+					if (rowRegister ? !rowsOk : !frameVS[j][r]) {
+						constantsOk = false;
+						out.missingVertexConstants |= 1u << r;
+					}
+				}
+				if ((usage.pixelConstants >> r) & 1) {
+					const bool pass = r == 3 || r == kFrameLightingRegister;
+					if (rowRegister ? !rowsOk : !(pass || framePS[j][r])) {
+						constantsOk = false;
+						out.missingPixelConstants |= 1u << r;
+					}
+				}
+			}
+			if (!constantsOk)
+				fail(Skip::Constants);
+			return constantsOk;
+		};
+		// The one list draws a member in both segments or in neither: every built segment's variant must be given what it reads, the
+		// colour segment's first (its skip is the report's).
+		if (colourBuilt && !reads(kAsyncColour))
+			return;
+		if (segmentIn[kAsyncZPrepass] && !reads(kAsyncZPrepass)) {
+			// Drawable in colour alone: before the one list, its colour draw would have tested EQUAL against depth nobody wrote.
+			static std::atomic<std::uint32_t> logged{ 0 };
+			if (colourBuilt && logged.fetch_add(1, std::memory_order_relaxed) < 8)
+				logger::info("[DCLF] main pair (material {}, pipeline {}): its colour variant is given what it reads, its depth variant not ({}): neither segment "
+							 "draws it <- SEGMENT SPLIT",
+					m, p, kSkipNames[resolved.skipReason]);
+			return;
 		}
-		if (!constantsOk)
-			return fail(Skip::Constants);
 		if (!rowsFit)
 			return fail(Skip::Capacity);
 		resolved.recordIndex = RowsOf(p, m);
@@ -649,19 +693,20 @@ namespace DCLF::Draws
 		if (object.flags & (kObjectFree | kObjectShadowOnly))
 			return false;
 		// A decal past the buffers is an entry still, blank (RegionEntry), so its group's range keeps every slot written.
-		if (!ObjectFits(tables, o, in.addresses.fit) && !(ObjectDecalGroup(object.flags) && !depthOnly))
+		if (!ObjectFits(tables, o, in.addresses.fit) && !ObjectDecalGroup(object.flags))
 			return false;
+		// A cull-only candidate (the depth segment's: MainMaskOf).
 		if (object.flags & kObjectNoBindings)
-			return wholeScene && depthOnly && object.geometryIndex < tables.geometries.size();
+			return wholeScene && object.geometryIndex < tables.geometries.size();
 		if (object.pipelineIndex >= pipelineBlocks.size() || object.pipelineIndex >= tables.pipelines.size() || object.geometryIndex >= tables.geometries.size())
 			return false;
 		const auto& geometry = tables.geometries[object.geometryIndex];
 		if (!geometry.vertexAddress || !geometry.indexAddress)
 			return false;
-		// A decal: the colour segment's alone, with its ordinal in its group's range (OrderDecals, which logs a change for every
-		// decal it moves). One of several partitions is an entry too, never drawable (RegionEntry).
+		// A decal: the colour segment's alone (MainMaskOf), with its ordinal in its group's range (OrderDecals, which logs a change for
+		// every decal it moves; none without the colour segment). One of several partitions is an entry too, never drawable (RegionEntry).
 		if (const std::uint32_t group = ObjectDecalGroup(object.flags))
-			if (depthOnly || o >= tables.decalOrdinal.size() || tables.decalOrdinal[o] >= decalCount[group - 1])
+			if (o >= tables.decalOrdinal.size() || tables.decalOrdinal[o] >= decalCount[group - 1])
 				return false;
 		// A face shape, or a pipeline reading its position from the second stream: only with its positions' stream.
 		const bool needsStream = IsFaceObject(tables, o) || (tables.pipelines[object.pipelineIndex].vertexLayout & kPositionInSecondStream);
@@ -674,8 +719,7 @@ namespace DCLF::Draws
 		const auto& object = tables.objects[o];
 		if (object.flags & kObjectNoBindings) {
 			// A cull-only candidate: its bounds for the culling, nothing to draw (the input the loop writes for one).
-			a_input = { 0, 0, object.geometryIndex, object.flags, { ViewMaskOf(tables, o, true) },
-				o, 0 };
+			a_input = { 0, 0, object.geometryIndex, object.flags, { MainMaskOf(tables, o) }, o, 0 };
 			SetFadeRow(a_input, tables, o);
 			return 0;
 		}
@@ -693,9 +737,8 @@ namespace DCLF::Draws
 		const bool drawable = InSet(o) && blocks.setIndex != Lookups::kNone && pair != r.pairs.end() && pair->second.ok && !(decal && PartitionsOf(tables, o));
 		// The pair's slot is its rows (RowsOf).
 		a_input = { drawable ? blocks.setIndex : 0u, drawable ? pair->second.slot : 0u, object.geometryIndex, object.flags | (drawable ? kInputDrawable : 0u),
-			{ ViewMaskOf(tables, o, true) }, o, ordinal, partitions, FaceStreamGeometry(tables, o, in.addresses.facePositions) };
-		if (depthOnly)
-			SetFadeRow(a_input, tables, o);
+			{ MainMaskOf(tables, o) }, o, ordinal, partitions, FaceStreamGeometry(tables, o, in.addresses.facePositions) };
+		SetFadeRow(a_input, tables, o);  // the depth segment's (the colour segment reads none)
 		if (!drawable)
 			return 0;
 		return decal ? kRegionDecal : static_cast<std::uint8_t>(PartitionDraws(partitions));
@@ -756,7 +799,7 @@ namespace DCLF::Draws
 	{
 		const auto& object = tables.objects[o];
 		// The record's flags carry no kInputDrawable (the epoch's): undrawable. The stream and fade row stay none (~0u).
-		return { 0, 0, object.geometryIndex < in.addresses.fit.geometryRows ? object.geometryIndex : 0u, object.flags, { ViewMaskOf(tables, o, true) }, o, tables.decalOrdinal[o] };
+		return { 0, 0, object.geometryIndex < in.addresses.fit.geometryRows ? object.geometryIndex : 0u, object.flags, { MainMaskOf(tables, o) }, o, tables.decalOrdinal[o] };
 	}
 
 	void MainBuild::RegionRemove(std::uint32_t o)
@@ -832,7 +875,7 @@ namespace DCLF::Draws
 		// What the buffer holds is the version it was sent: what changes from here on is sent alone.
 		r.inputs.BeginBuild(in.residentUploaded);
 		// Why, by reason (the report's): the log, the segment, the tables shrunk, the scope, the buffers' fit.
-		const std::array<bool, kResyncReasons> reasons{ !r.cursor.Continues(tables.changeLog, in.tablesGeneration), r.depth != depthOnly,
+		const std::array<bool, kResyncReasons> reasons{ !r.cursor.Continues(tables.changeLog, in.tablesGeneration), r.segments != Segments(),
 			r.indexOf.size() > tables.objects.size(), r.wholeScene != wholeScene, r.fit != in.addresses.fit };
 		const bool resync = std::find(reasons.begin(), reasons.end(), true) != reasons.end();
 		if (resync) {
@@ -844,7 +887,7 @@ namespace DCLF::Draws
 			r.fit = in.addresses.fit;
 			r.decalCount = decalCount;
 			r.cursor.Restart(in.tablesGeneration);
-			r.depth = depthOnly;
+			r.segments = Segments();
 			r.wholeScene = wholeScene;
 			r.indexOf.assign(tables.objects.size(), kNoRegion);
 			++out.residentResyncs;
@@ -921,7 +964,11 @@ namespace DCLF::Draws
 		// and their owners (in the region's bundle). Which pairs could have changed follows from events: the material logs, the
 		// pairs new since the last build, the pipelines whose half moved; everything when the frame's half moved or a log
 		// cannot be read on.
-		const std::uint64_t frameWitness = (std::uint64_t(in.vsFrameMask) << 32) ^ std::uint64_t(in.psFrameMask) ^ (depthOnly ? (1ull << 63) : 0ull) ^ 1ull;
+		std::uint64_t frameWitness = 0xcbf29ce484222325ull ^ Segments();
+		for (const auto* segment : segmentIn)
+			if (segment)
+				frameWitness = (frameWitness ^ ((std::uint64_t(segment->vsFrameMask) << 32) | segment->psFrameMask)) * 0x100000001b3ull;
+		frameWitness |= 1;
 		bool everyPair = frameWitness != r.frameWitness;
 		r.frameWitness = frameWitness;
 		if (!r.materialCursor.Continues(tables.materialLog, in.tablesGeneration) || !r.lookupCursor.Continues(lookups.materialLog, lookups.logGeneration)) {
@@ -1084,8 +1131,8 @@ namespace DCLF::Draws
 				if (!known || draws != r.drawsOf[i] || std::memcmp(&expected, &inputs[i], sizeof(DrawInput)) != 0 || r.indexOf[o] != i) {
 					// The first few, with why.
 					if (out.residentParityMismatches++ < 6)
-						logger::info("[DCLF] {} region parity: entry {} object {}: {} (resident {}, flags {:#x} vs {:#x}, pipeline {} vs {}, record {} vs {}, draws {} vs {}, indexOf {})",
-							depthOnly ? "depth" : "colour", i, o, !known ? "not eligible" : "differs", o < tables.residentSlot.size() ? tables.residentSlot[o] : 9,
+						logger::info("[DCLF] main region parity: entry {} object {}: {} (resident {}, flags {:#x} vs {:#x}, pipeline {} vs {}, record {} vs {}, draws {} vs {}, indexOf {})",
+							i, o, !known ? "not eligible" : "differs", o < tables.residentSlot.size() ? tables.residentSlot[o] : 9,
 							inputs[i].flags, expected.flags, inputs[i].pipelineIndex, expected.pipelineIndex, inputs[i].recordIndex, expected.recordIndex, r.drawsOf[i], draws,
 							o < r.indexOf.size() ? r.indexOf[o] : ~0u);
 				}
@@ -1124,13 +1171,8 @@ namespace DCLF::Draws
 			const auto flags = o < tables.objects.size() ? tables.objects[o].flags : kObjectFree;
 			const bool inRegion = o < r.indexOf.size() && r.indexOf[o] != kNoRegion;
 			const bool isCandidate = !(flags & kObjectFree) && (flags & (kObjectNoBindings | kObjectShadowOnly));
-			bool loop = false;
-			if (!inRegion && !(flags & (kObjectFree | kObjectShadowOnly))) {
-				if (flags & kObjectNoBindings)
-					loop = depthOnly;  // the depth segment's cull-only input, where the region has no room
-				else
-					loop = !(depthOnly && ObjectDecalGroup(flags));  // decals are the colour segment's alone
-			}
+			// The one list holds every segment's candidates: cull-only ones and decals too (their masks say whose).
+			const bool loop = !inRegion && !(flags & (kObjectFree | kObjectShadowOnly));
 			if (loop && r.loopIndex[o] == kNoRegion) {
 				r.loopIndex[o] = static_cast<std::uint32_t>(r.loopList.size());
 				r.loopList.push_back(o);
@@ -1213,30 +1255,27 @@ namespace DCLF::Draws
 		// blank, which writes its slot of the group's range as a zero-count draw and reads nothing past the buffers (DecalBlank).
 		if (!ObjectFits(tables, o, in.addresses.fit)) {
 			if (const std::uint32_t group = ObjectDecalGroup(object.flags);
-				group && !depthOnly && o < tables.decalOrdinal.size() && tables.decalOrdinal[o] < decalCount[group - 1])
+				group && o < tables.decalOrdinal.size() && tables.decalOrdinal[o] < decalCount[group - 1])
 				drawInputs.push_back(DecalBlank(o));
 			Skipped(Skip::Capacity);
 			return;
 		}
 		if (object.flags & kObjectNoBindings) {
 			// A culling candidate with no material or pipeline entry; its indices are meaningless.
-			// The depth segment still submits it cull-only, with its bounds: that is what the tables
-			// carry the whole tracked set for, and what the culling is measured against the engine
-			// with.
-			if (depthOnly) {
-				drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags,
-					{ ViewMaskOf(tables, o, true) },
-					static_cast<std::uint32_t>(o), 0 });
-				SetFadeRow(drawInputs.back(), tables, o);
-			}
+			// The depth segment still submits it cull-only, with its bounds (MainMaskOf): that is what
+			// the tables carry the whole tracked set for, and what the culling is measured against the
+			// engine with.
+			drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags, { MainMaskOf(tables, o) }, static_cast<std::uint32_t>(o), 0 });
+			SetFadeRow(drawInputs.back(), tables, o);
 			if (!region)
 				Skipped(Skip::CandidateOnly);
 			return;
 		}
-		// Decals never reach the depth segment: they are not occluders, and they are drawn by the
-		// colour segment's second pass (BuildDrawsCS.hlsl, MainOpaquePass::Record).
+		// Decals never reach the depth segment (MainMaskOf): they are not occluders, and they are drawn
+		// by the colour segment's second pass (BuildDrawsCS.hlsl, MainOpaquePass::Record). Without the
+		// colour segment, no decal has a slot (decalCount).
 		const std::uint32_t decalGroup = ObjectDecalGroup(object.flags);
-		if (decalGroup && (depthOnly || o >= tables.decalOrdinal.size() || tables.decalOrdinal[o] >= decalCount[decalGroup - 1]))
+		if (decalGroup && (o >= tables.decalOrdinal.size() || tables.decalOrdinal[o] >= decalCount[decalGroup - 1]))
 			return;
 		// A decal that cannot be drawn this epoch must still reach BuildDraws, so that its slot is
 		// written as a zero-count draw rather than left holding whatever a previous frame put there.
@@ -1253,9 +1292,7 @@ namespace DCLF::Draws
 		} decalSlot;
 		if (decalGroup) {
 			decalSlot.inputs = &drawInputs;
-			decalSlot.blank = { 0, 0, object.geometryIndex, object.flags,
-				{ ViewMaskOf(tables, o, true) },
-				static_cast<std::uint32_t>(o), tables.decalOrdinal[o] };
+			decalSlot.blank = { 0, 0, object.geometryIndex, object.flags, { MainMaskOf(tables, o) }, static_cast<std::uint32_t>(o), tables.decalOrdinal[o] };
 		}
 		const auto& blocks = pipelineBlocks[object.pipelineIndex];
 		if (blocks.setIndex == Lookups::kNone) {
@@ -1273,11 +1310,9 @@ namespace DCLF::Draws
 		if (!InSet(o)) {
 			// Cull-only: the object still goes to the culling, because the depth segment is where the verdict for every
 			// candidate is decided and published, and a candidate left out here would reach the colour segment with no
-			// verdict at all.
-			if (depthOnly) {
-				drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags,
-					{ ViewMaskOf(tables, o, true) },
-					static_cast<std::uint32_t>(o), 0 });
+			// verdict at all. A decal's is its slot's blank (decalSlot).
+			if (!decalGroup) {
+				drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags, { MainMaskOf(tables, o) }, static_cast<std::uint32_t>(o), 0 });
 				SetFadeRow(drawInputs.back(), tables, o);
 			}
 			Skipped(Skip::NotInSet);
@@ -1316,9 +1351,7 @@ namespace DCLF::Draws
 		if (decalGroup) {
 			const std::uint32_t ordinal = tables.decalOrdinal[o];
 			decalSlot.inputs = nullptr;  // drawn: the blank is not needed
-			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex,
-				object.flags | kInputDrawable,
-				{ ViewMaskOf(tables, o, true) },
+			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex, object.flags | kInputDrawable, { MainMaskOf(tables, o) },
 				static_cast<std::uint32_t>(o), ordinal, 0, streamIndex });
 			decalTemplates[decalGroup - 1][ordinal] = sequence;
 			++out.decalsDrawn;
@@ -1327,12 +1360,9 @@ namespace DCLF::Draws
 		} else {
 			if (o < out.objectState.size())
 				out.objectState[o] = kObjectStateDrawable;
-			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex,
-				object.flags | kInputDrawable,
-				{ ViewMaskOf(tables, o, true) },
+			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex, object.flags | kInputDrawable, { MainMaskOf(tables, o) },
 				static_cast<std::uint32_t>(o), 0, partitions, streamIndex });
-			if (depthOnly)
-				SetFadeRow(drawInputs.back(), tables, o);
+			SetFadeRow(drawInputs.back(), tables, o);
 			if (!partitions) {
 				sequences.push_back(sequence);
 			} else {
@@ -1366,12 +1396,42 @@ namespace DCLF::Draws
 		out.materialRows = rows.material.View();
 		out.pipelineRows = rows.pipeline.View();
 		Mark(5);
+		// The other segment's payload: the same list, rows and templates (one scene), with its own inputs. The build's one-off counts are
+		// the primary's alone, so the commits count them once; the depth variant resolves no frame textures (ResolvePair).
+		for (std::size_t j = 0; j < segmentOut.size(); ++j) {
+			if (j == primary || !segmentOut[j] || !segmentIn[j])
+				continue;
+			auto& other = *segmentOut[j];
+			other = out;
+			other.inputs = *segmentIn[j];
+			if (j == kAsyncZPrepass)
+				other.frameRegisters = {};
+			other.residentResyncs = other.residentResyncReasons = other.residentDecalRetakes = 0;
+			other.residentParityChecks = other.residentParityMismatches = other.residentMissing = 0;
+			other.residentPairsChecked = other.residentPairsStale = 0;
+			other.bindlessParityChecks = other.bindlessParityMismatches = other.rowTableConflicts = 0;
+			other.materialRowsWritten = other.pipelineRowsWritten = 0;
+			other.partMs = {};
+		}
+	}
+
+	void BuildMainPayloads(const std::array<const MainInputs*, 2>& a_in, const SceneStore::Tables& a_tables, const FrameTables& a_frame, const Lookups& a_lookups,
+		const std::array<MainPayload*, 2>& a_out, MainRows& a_rows, BuildCache* a_cache, std::shared_ptr<const StreamViews> a_streams)
+	{
+		if (!a_in[kAsyncColour] && !a_in[kAsyncZPrepass])
+			return;
+		MainBuild(a_in, a_tables, a_frame, a_lookups, a_out, a_rows, a_cache, std::move(a_streams)).Run();
 	}
 
 	void BuildMainPayload(const MainInputs& a_in, const SceneStore::Tables& a_tables, const FrameTables& a_frame, const Lookups& a_lookups, MainPayload& a_out,
 		MainRows& a_rows, BuildCache* a_cache, std::shared_ptr<const StreamViews> a_streams)
 	{
-		MainBuild(a_in, a_tables, a_frame, a_lookups, a_out, a_rows, a_cache, std::move(a_streams)).Run();
+		const std::size_t j = a_in.depthOnly ? kAsyncZPrepass : kAsyncColour;
+		std::array<const MainInputs*, 2> in{};
+		std::array<MainPayload*, 2> out{};
+		in[j] = &a_in;
+		out[j] = &a_out;
+		BuildMainPayloads(in, a_tables, a_frame, a_lookups, out, a_rows, a_cache, std::move(a_streams));
 	}
 }
 

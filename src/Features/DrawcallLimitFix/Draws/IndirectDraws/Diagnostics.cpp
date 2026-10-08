@@ -177,7 +177,7 @@ namespace DCLF
 			a = {};
 		}
 		if (auto& p = impl->viewMaskParity; p.checks.load(std::memory_order_relaxed)) {
-			static constexpr std::array<const char*, 2 + kShadowModeCount> kLists{ "Z-prepass", "colour", "plain", "clamped", "paraboloid", "sky occlusion", "precipitation" };
+			static constexpr std::array<const char*, 2 + kShadowModeCount> kLists{ "main", "main drawable", "plain", "clamped", "paraboloid", "sky occlusion", "precipitation" };
 			const auto first = p.first.exchange(~0ull);
 			const auto differ = p.differ.exchange(0);
 			text += fmt::format("[DCLF] view mask parity (U3): {} publications, {} inputs, {} with a mask other than their object's or outside their list's views{}{}\n",
@@ -706,7 +706,8 @@ namespace DCLF
 		readback.framesLeft = 3;
 		// The CPU's side of the sun test, over the same frame's colour inputs and the same planes.
 		auto sunTest = [&](const DrawInput& input) {
-			if (!(input.flags & kObjectSunTest) || !(sunUpload.sunState & kSunTestOn))
+			// The colour segment's inputs of the one main list (its view bits, as BuildDrawsCS tests them first).
+			if (!(input.view.mask & kColourViewBits) || !(input.flags & kObjectSunTest) || !(sunUpload.sunState & kSunTestOn))
 				return;
 			++readback.sunCpuTested;
 			bool inside = false;

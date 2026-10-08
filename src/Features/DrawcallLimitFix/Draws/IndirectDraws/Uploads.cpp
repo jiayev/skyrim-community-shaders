@@ -689,14 +689,15 @@ namespace DCLF
 		BuildDrawsLatch latch{};
 		latch.placementsIndex = FrameValues::Get().PlacementsIndex();
 		if (ring)
-			RingLatch(ringFrame, job, latch);
+			RingLatch(ringFrame, latch);
 		latch.dispatch[0] = (inputCount + 63) / 64;
 		latch.dispatch[1] = 1;
 		latch.dispatch[2] = 1;
 		latch.drawCount = inputCount;
 		latch.cullFlags = hasViewProj ? shape.cullMode : 0u;
-		// Every main input is a candidate (the colour segment's undrawable decals among them, which write their slot's blank).
-		latch.viewBits = kViewMainCull;
+		// The one main list (U4a): the depth segment culls every candidate, the colour segment draws the members and writes every
+		// decal's slot (an undrawable one's blank).
+		latch.viewBits = depthOnly ? kDepthViewBits : kColourViewBits;
 		// The frame number, not the epoch: the depth segment publishes and the colour segment reads within one
 		// frame, so the stamp has to be the thing they share.
 		latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;  // 28 bits: BuildDrawsCS keeps flags below it

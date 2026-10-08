@@ -268,11 +268,11 @@ namespace DCLF
 				latch.dispatch[2] = 1;
 				latch.drawCount = inputs;
 				latch.cullFlags = 1;  // the frustum alone, near plane included
-				latch.viewBits = kViewReflection;  // the depth segment's inputs: the reflection phase's members
+				latch.viewBits = kViewReflection;  // the main list's: the reflection phase's members
 				latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;
 				latch.placementsIndex = FrameValues::Get().PlacementsIndex();
 				// The depth inputs the last Z-prepass commit read: its ring entry's, when it read one (step 6e E4).
-				Impl::RingLatch(impl->ringDepth, kAsyncZPrepass, latch);
+				Impl::RingLatch(impl->ringDepth, latch);
 				FoldEyeIntoViewProj(face.viewProj, face.eye, latch.viewProj);
 				latch.bucketMapOffset = region + ReflectionLatchLayout::MapOffset();
 				latch.bucketTableOffset = region + layout.TableOffset(f);
