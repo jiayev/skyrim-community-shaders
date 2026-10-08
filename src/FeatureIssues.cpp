@@ -904,29 +904,22 @@ namespace FeatureIssues
 
 		bool LoadPersistentTestState()
 		{
-			const auto stateFilePath = GetTestStateFilePath();
-			if (!std::filesystem::exists(stateFilePath)) {
+			const auto document = Util::FileHelpers::ReadJsonObject(GetTestStateFilePath(), "persistent test state");
+			if (!document) {
 				return false;
 			}
 
 			try {
-				std::ifstream file(stateFilePath);
-				if (!file) {
-					return false;
-				}
-
-				nlohmann::json stateData;
-				file >> stateData;
-
+				const auto& stateData = *document;
 				s_activeTestInis.clear();
 				if (stateData.contains("testInis") && stateData["testInis"].is_array()) {
 					for (const auto& testData : stateData["testInis"]) {
 						TestIniInfo testInfo;
-						testInfo.testIniPath = testData["testIniPath"].get<std::string>();
-						testInfo.isNewFile = testData["isNewFile"].get<bool>();
-						testInfo.testType = testData["testType"].get<std::string>();
-						testInfo.featureName = testData["featureName"].get<std::string>();
-						testInfo.originalVersion = testData["originalVersion"].get<std::string>();
+						testInfo.testIniPath = testData.at("testIniPath").get<std::string>();
+						testInfo.isNewFile = testData.at("isNewFile").get<bool>();
+						testInfo.testType = testData.at("testType").get<std::string>();
+						testInfo.featureName = testData.at("featureName").get<std::string>();
+						testInfo.originalVersion = testData.at("originalVersion").get<std::string>();
 
 						s_activeTestInis.push_back(testInfo);
 					}
@@ -962,12 +955,10 @@ namespace FeatureIssues
 					std::chrono::system_clock::now().time_since_epoch())
 				                           .count();
 
-				std::ofstream file(stateFilePath);
-				if (!file) {
+				if (!Util::FileHelpers::WriteJsonAtomically(stateFilePath, stateData, 2, "persistent test state")) {
 					return false;
 				}
 
-				file << stateData.dump(2);
 				logger::debug("Saved {} test INI records to persistent state", s_activeTestInis.size());
 				return true;
 			} catch (const std::exception& e) {

@@ -24,16 +24,6 @@ void Widget::Save()
 {
 	SaveSettings();
 	const auto file = GetSaveFilePath();
-	const auto filePath = std::filesystem::path(file).parent_path();
-
-	if (!std::filesystem::exists(filePath) || !std::filesystem::is_directory(filePath)) {
-		try {
-			std::filesystem::create_directories(filePath);
-		} catch (const std::filesystem::filesystem_error& e) {
-			logger::warn("Error creating directory during Save ({}) : {}\n", filePath.string(), e.what());
-			return;
-		}
-	}
 
 	// Checked before touching the file so a null document can never replace saved data.
 	if (js.is_null()) {
@@ -69,73 +59,35 @@ void Widget::Load(bool showNotification)
 		return;
 	}
 
-	// File exists, load from it
-	std::ifstream settingsFile(filePath);
+	const auto notify = [&](const std::string& message, const ImVec4& color) {
+		if (showNotification)
+			EditorWindow::GetSingleton()->ShowNotification(message, color);
+	};
 
-	if (!settingsFile.good() || !settingsFile.is_open()) {
+	std::string error;
+	auto document = Util::FileHelpers::ReadJsonFile(filePath, "editor widget settings", 0, &error);
+	if (!document && error.empty()) {
 		logger::warn("Failed to open settings file: {}", filePath);
-		if (showNotification) {
-			EditorWindow::GetSingleton()->ShowNotification(
-				std::format("Failed to open file for {}", GetEditorID()),
-				Util::Colors::GetWarning(),
-				3.0f);
-		}
+		notify(std::format("Failed to open file for {}", GetEditorID()), Util::Colors::GetWarning());
 		return;
 	}
 
+	const bool loaded = document && !document->is_null();
+	js = loaded ? std::move(*document) : json();
 	try {
-		settingsFile >> js;
-		settingsFile.close();
-
-		// Validate that we loaded valid JSON
-		if (js.is_null()) {
-			logger::warn("{}: Loaded JSON is null, file may be empty or invalid", filePath);
-			if (showNotification) {
-				EditorWindow::GetSingleton()->ShowNotification(
-					std::format("Invalid file for {} - resetting to vanilla", GetEditorID()),
-					Util::Colors::GetWarning(),
-					3.0f);
-			}
-			js = json();
-			LoadSettings();
-			return;
-		}
-
 		LoadSettings();
-
-		if (showNotification) {
-			EditorWindow::GetSingleton()->ShowNotification(
-				std::format("Loaded saved settings for {}", GetEditorID()),
-				Util::Colors::GetSuccess(),
-				3.0f);
-		}
-
-	} catch (const nlohmann::json::parse_error& e) {
-		logger::error("Error parsing settings for file ({}) : {}\n", filePath, e.what());
-		logger::error("Parse error at byte {}: {}", e.byte, e.what());
-		settingsFile.close();
-		if (showNotification) {
-			EditorWindow::GetSingleton()->ShowNotification(
-				std::format("Parse error for {} - resetting to vanilla", GetEditorID()),
-				Util::Colors::GetError(),
-				3.0f);
-		}
-		js = json();
-		LoadSettings();
-		return;
 	} catch (const std::exception& e) {
-		logger::error("Unexpected error loading settings file ({}) : {}\n", filePath, e.what());
-		settingsFile.close();
-		if (showNotification) {
-			EditorWindow::GetSingleton()->ShowNotification(
-				std::format("Error loading {} - resetting to vanilla", GetEditorID()),
-				Util::Colors::GetError(),
-				3.0f);
-		}
+		logger::error("Unexpected error loading settings file ({}) : {}", filePath, e.what());
+		notify(std::format("Error loading {} - resetting to vanilla", GetEditorID()), Util::Colors::GetError());
 		js = json();
 		LoadSettings();
 		return;
 	}
+
+	if (loaded)
+		notify(std::format("Loaded saved settings for {}", GetEditorID()), Util::Colors::GetSuccess());
+	else
+		notify(std::format("Parse error for {} - resetting to vanilla", GetEditorID()), Util::Colors::GetError());
 }
 
 void Widget::Delete()

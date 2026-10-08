@@ -265,20 +265,13 @@ const char* UnifiedPresetCatalog::GetPresetTypeName(PresetType type)
 json UnifiedPresetCatalog::ReadPackManifest(const std::filesystem::path& packRoot, std::string* outError)
 {
 	const auto manifestPath = GetPackManifestPath(packRoot);
-	std::ifstream in(manifestPath);
-	if (!in)
-		return json::object();
-
 	std::string error;
-	try {
-		auto manifest = json::parse(in);
-		if (manifest.is_object())
-			return manifest;
+	if (auto manifest = Util::FileHelpers::ReadJsonFile(manifestPath, "preset pack manifest", 0, &error)) {
+		if (manifest->is_object())
+			return std::move(*manifest);
 		error = T("menu.presets.manifest_not_object", "not a JSON object");
-	} catch (const json::exception& e) {
-		error = e.what();
 	}
-	if (outError)
+	if (outError && !error.empty())
 		*outError = I18n::GetSingleton()->Format("menu.presets.invalid_manifest",
 			{ { "file", manifestPath.filename().string() }, { "error", error } }, "Invalid {file}: {error}");
 	return json::object();
@@ -331,17 +324,14 @@ void UnifiedPresetCatalog::LoadActiveState()
 {
 	activePackId.clear();
 	baselinePackIds.clear();
-	const auto path = GetPresetsRealPath() / kActiveStateFileName;
-	std::ifstream in(path);
-	if (!in)
+	const auto state = Util::FileHelpers::ReadJsonObject(GetPresetsRealPath() / kActiveStateFileName, "active pack state");
+	if (!state)
 		return;
 	try {
-		json j;
-		in >> j;
-		activePackId = j.value("activePackId", "");
+		activePackId = state->value("activePackId", "");
 		if (!IsPackFolderId(activePackId))
 			activePackId.clear();
-		if (const auto ids = j.find(kBaselinePackIdsKey); ids != j.end() && ids->is_array()) {
+		if (const auto ids = state->find(kBaselinePackIdsKey); ids != state->end() && ids->is_array()) {
 			for (const auto& id : *ids) {
 				if (id.is_string() && IsPackFolderId(id.get_ref<const std::string&>()) && !IsBaselineEnabled(id.get<std::string>()))
 					baselinePackIds.push_back(id.get<std::string>());
@@ -355,7 +345,6 @@ void UnifiedPresetCatalog::LoadActiveState()
 
 void UnifiedPresetCatalog::SaveActiveState() const
 {
-	Util::FileHelpers::EnsureDirectoryExists(GetPresetsRealPath());
 	const auto path = GetPresetsRealPath() / kActiveStateFileName;
 	try {
 		json j;

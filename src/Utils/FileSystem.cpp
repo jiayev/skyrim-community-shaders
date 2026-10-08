@@ -453,17 +453,50 @@ namespace Util
 			return WriteFileAtomically(path, serialized, context);
 		}
 
-		std::optional<nlohmann::json> ReadJsonFile(const std::filesystem::path& path, std::string_view context)
+		namespace
+		{
+			/** @brief Logs why a JSON file was rejected and hands the reason to the caller when requested. */
+			void ReportReadFailure(const std::filesystem::path& path, std::string_view context, std::string reason, std::string* error)
+			{
+				logger::warn("Could not read {} '{}': {}", context, path.string(), reason);
+				if (error)
+					*error = std::move(reason);
+			}
+		}
+
+		template <class Json>
+		std::optional<Json> ReadJsonFile(const std::filesystem::path& path, std::string_view context, std::uintmax_t maxBytes, std::string* error)
 		{
 			std::ifstream file(path);
 			if (!file.is_open())
 				return std::nullopt;
+			if (maxBytes) {
+				std::error_code ec;
+				const auto size = std::filesystem::file_size(path, ec);
+				if (ec || size > maxBytes) {
+					ReportReadFailure(path, context, ec ? ec.message() : std::format("{} bytes exceeds the {} byte limit", size, maxBytes), error);
+					return std::nullopt;
+				}
+			}
 			try {
-				return nlohmann::json::parse(file);
+				return Json::parse(file);
 			} catch (const std::exception& e) {
-				logger::warn("Could not read {} '{}': {}", context, path.string(), e.what());
+				ReportReadFailure(path, context, e.what(), error);
 				return std::nullopt;
 			}
+		}
+
+		template std::optional<nlohmann::json> ReadJsonFile<nlohmann::json>(const std::filesystem::path&, std::string_view, std::uintmax_t, std::string*);
+		template std::optional<nlohmann::ordered_json> ReadJsonFile<nlohmann::ordered_json>(const std::filesystem::path&, std::string_view, std::uintmax_t, std::string*);
+
+		std::optional<nlohmann::json> ReadJsonObject(const std::filesystem::path& path, std::string_view context, std::uintmax_t maxBytes, std::string* error)
+		{
+			auto document = ReadJsonFile(path, context, maxBytes, error);
+			if (document && !document->is_object()) {
+				ReportReadFailure(path, context, "root is not a JSON object", error);
+				return std::nullopt;
+			}
+			return document;
 		}
 	}
 }
@@ -522,53 +555,11 @@ std::vector<SettingsDiffEntry> Util::FileSystem::DiffJson(const nlohmann::json& 
 
 std::vector<SettingsDiffEntry> Util::FileSystem::LoadJsonDiff(const std::filesystem::path& userPath, const std::filesystem::path& testPath, float epsilon)
 {
-	std::vector<SettingsDiffEntry> diffEntries;
-
-	try {
-		if (!std::filesystem::exists(userPath)) {
-			logger::warn("User config file does not exist: {}", userPath.string());
-			return diffEntries;
-		}
-
-		if (!std::filesystem::exists(testPath)) {
-			logger::warn("Test config file does not exist: {}", testPath.string());
-			return diffEntries;
-		}
-
-		std::ifstream userFile(userPath);
-		std::ifstream testFile(testPath);
-
-		if (!userFile.is_open()) {
-			logger::warn("Failed to open user config file: {}", userPath.string());
-			return diffEntries;
-		}
-
-		if (!testFile.is_open()) {
-			logger::warn("Failed to open test config file: {}", testPath.string());
-			return diffEntries;
-		}
-
-		nlohmann::json userJson, testJson;
-
-		try {
-			userFile >> userJson;
-		} catch (const std::exception& e) {
-			logger::warn("Failed to parse user config JSON from '{}': {}", userPath.string(), e.what());
-			return diffEntries;
-		}
-
-		try {
-			testFile >> testJson;
-		} catch (const std::exception& e) {
-			logger::warn("Failed to parse test config JSON from '{}': {}", testPath.string(), e.what());
-			return diffEntries;
-		}
-
-		// Use shared diffing logic
-		return DiffJson(userJson, testJson, epsilon);
-	} catch (const std::exception& e) {
-		logger::warn("Failed to load JSON diff from '{}' and '{}': {}", userPath.string(), testPath.string(), e.what());
+	const auto userJson = FileHelpers::ReadJsonFile(userPath, "user config");
+	const auto testJson = FileHelpers::ReadJsonFile(testPath, "test config");
+	if (!userJson || !testJson) {
+		logger::warn("Could not load JSON diff from '{}' and '{}'", userPath.string(), testPath.string());
+		return {};
 	}
-
-	return diffEntries;
+	return DiffJson(*userJson, *testJson, epsilon);
 }

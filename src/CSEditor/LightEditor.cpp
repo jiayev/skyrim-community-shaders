@@ -19,7 +19,6 @@
 
 #include <array>
 #include <filesystem>
-#include <fstream>
 #include <numbers>
 #include <regex>
 #include <sstream>
@@ -214,17 +213,11 @@ static std::filesystem::path LPConfigFilePath(const std::string& configPath)
  */
 static bool LoadConfigArray(const std::string& configPath, nlohmann::ordered_json& out)
 {
-	const auto filePath = LPConfigFilePath(configPath);
-	std::ifstream in(filePath);
-	if (!in.is_open())
+	auto config = Util::FileHelpers::ReadJsonFile<nlohmann::ordered_json>(LPConfigFilePath(configPath), "Light Placer config");
+	if (!config || !config->is_array())
 		return false;
-	try {
-		in >> out;
-	} catch (const nlohmann::json::parse_error& e) {
-		logger::warn("[LightEditor] Failed to parse {}: {}", filePath.string(), e.what());
-		return false;
-	}
-	return out.is_array();
+	out = std::move(*config);
+	return true;
 }
 
 /** @brief Lower-cases and forward-slashes a model path so casing/separator variants compare equal. */
@@ -1132,8 +1125,11 @@ void LightEditor::DrawInspector(const ImVec2& size)
 	ImGui::EndChild();
 }
 
-static constexpr std::string_view kPopupPrefsPath =
-	R"(Data\SKSE\Plugins\CommunityShaders\LightEditorPrefs.json)";
+/** @brief Light editor add-popup preferences file. */
+static std::filesystem::path GetPopupPrefsPath()
+{
+	return Util::PathHelpers::GetCommunityShaderPath() / "LightEditorPrefs.json";
+}
 
 void LightEditor::SavePopupPrefs() const
 {
@@ -1143,20 +1139,15 @@ void LightEditor::SavePopupPrefs() const
 	j["addLighSearch"] = addLighSearch;
 	j["addPopupMode"] = addPopupMode;
 	j["addLightSubMode"] = addLightSubMode;
-	Util::FileHelpers::WriteFileAtomically(kPopupPrefsPath, j.dump(1, '\t'), "light editor prefs");
+	Util::FileHelpers::WriteFileAtomically(GetPopupPrefsPath(), j.dump(1, '\t'), "light editor prefs");
 }
 
 void LightEditor::LoadPopupPrefs()
 {
-	std::ifstream in(kPopupPrefsPath.data());
-	if (!in.is_open())
+	const auto prefs = Util::FileHelpers::ReadJsonFile<nlohmann::ordered_json>(GetPopupPrefsPath(), "light editor prefs");
+	if (!prefs)
 		return;
-	nlohmann::ordered_json j;
-	try {
-		in >> j;
-	} catch (...) {
-		return;
-	}
+	const auto& j = *prefs;
 	if (auto it = j.find("addConfigSearch"); it != j.end() && it->is_string()) {
 		auto s = it->get<std::string>();
 		std::strncpy(addConfigSearch, s.c_str(), sizeof(addConfigSearch) - 1);
@@ -1742,19 +1733,10 @@ bool LightEditor::AddBulbToConfig()
 	const auto filePath = LPConfigFilePath(configPath);
 
 	// Create the config if it doesn't exist yet (LoadConfigArray would reject a missing file).
-	nlohmann::ordered_json configArray = nlohmann::ordered_json::array();
-	{
-		std::ifstream in(filePath);
-		if (in.is_open()) {
-			try {
-				in >> configArray;
-			} catch (const nlohmann::json::parse_error& e) {
-				logger::warn("[LightEditor] Failed to parse {} when adding bulb: {}", filePath.string(), e.what());
-				return false;
-			}
-		}
-	}
-	if (!configArray.is_array())
+	std::string error;
+	auto configArray = Util::FileHelpers::ReadJsonFile<nlohmann::ordered_json>(filePath, "Light Placer config", 0, &error)
+	                       .value_or(nlohmann::ordered_json::array());
+	if (!error.empty() || !configArray.is_array())
 		return false;
 
 	nlohmann::ordered_json newEntry;

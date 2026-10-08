@@ -356,21 +356,12 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 
 	// Attempt to load the config file
 	auto tryLoadConfig = [&](const std::string& path) -> bool {
-		std::ifstream i(path);
 		logger::info("Attempting to open config file: {}", path);
-		if (!i.is_open()) {
-			logger::warn("Unable to open config file: {}", path);
+		auto config = Util::FileHelpers::ReadJsonObject(path, "config");
+		if (!config)
 			return false;
-		}
-		try {
-			i >> settings;
-			i.close();
-			return true;
-		} catch (const nlohmann::json::parse_error& e) {
-			logger::warn("Error parsing json config file ({}) : {}\n", path, e.what());
-			i.close();
-			return false;
-		}
+		settings = std::move(*config);
+		return true;
 	};
 
 	// LOADING ORDER: Default → User → Overrides → User Overrides (.user files)
@@ -390,24 +381,12 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 
 	// Step 2: Apply user settings on top of defaults (user preferences)
 	if (a_configMode == ConfigMode::USER) {
-		json userSettings;
-		std::ifstream userFile(userConfigFilePath);
-		if (userFile.is_open()) {
-			try {
-				userFile >> userSettings;
-				userFile.close();
-
-				// Merge user settings on top of defaults
-				for (auto& [key, value] : userSettings.items()) {
-					settings[key] = value;
-				}
-				logger::info("Applied user settings from: {}", userConfigFilePath);
-			} catch (const nlohmann::json::parse_error& e) {
-				logger::warn("Error parsing user config file: {}", e.what());
-				userFile.close();
-			}
+		if (const auto userSettings = Util::FileHelpers::ReadJsonObject(userConfigFilePath, "user config")) {
+			for (const auto& [key, value] : userSettings->items())
+				settings[key] = value;
+			logger::info("Applied user settings from: {}", userConfigFilePath);
 		} else {
-			logger::info("No user config file found at: {}", userConfigFilePath);
+			logger::info("No usable user config at: {}", userConfigFilePath);
 		}
 	}
 
@@ -690,13 +669,6 @@ void State::LoadFromJson(nlohmann::json& settings)
 void State::Save(ConfigMode a_configMode)
 {
 	std::string configPath = GetConfigPath(a_configMode);
-
-	try {
-		std::filesystem::create_directories(Util::PathHelpers::GetCommunityShaderPath());
-	} catch (const std::filesystem::filesystem_error& e) {
-		logger::warn("Error creating directory during Save ({}) : {}\n", Util::PathHelpers::GetCommunityShaderPath().string(), e.what());
-		return;
-	}
 
 	// Serialize fully before touching the file: a throwing feature must not truncate the config.
 	json settings;

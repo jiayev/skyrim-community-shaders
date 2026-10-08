@@ -59,14 +59,8 @@ namespace
 	/** @brief Parses an override file without the discovery-time filename and sanitization passes. */
 	bool ReadOverrideDocument(const std::filesystem::path& path, json& document)
 	{
-		std::error_code ec;
-		const auto size = std::filesystem::file_size(path, ec);
-		if (ec || size == 0 || size > MAX_OVERRIDE_FILE_SIZE) {
-			return false;
-		}
-
-		auto parsed = Util::FileHelpers::ReadJsonFile(path, "override file");
-		if (!parsed || !parsed->is_object())
+		auto parsed = Util::FileHelpers::ReadJsonObject(path, "override file", MAX_OVERRIDE_FILE_SIZE);
+		if (!parsed)
 			return false;
 		document = std::move(*parsed);
 		return true;
@@ -365,71 +359,21 @@ std::filesystem::path SettingsOverrideManager::GetOverridesDirectory() const
 
 json SettingsOverrideManager::LoadAppliedOverridesTracking() const
 {
-	json appliedOverrides;
-	try {
-		auto trackingPath = GetAppliedOverridesTrackingPath();
+	constexpr std::uintmax_t MAX_TRACKING_FILE_SIZE = 10 * 1024 * 1024;
+	auto appliedOverrides = Util::FileHelpers::ReadJsonObject(GetAppliedOverridesTrackingPath(), "applied overrides tracking", MAX_TRACKING_FILE_SIZE);
+	if (!appliedOverrides)
+		return json::object();
 
-		// Check if file exists and is reasonable size
-		std::error_code ec;
-		if (!std::filesystem::exists(trackingPath, ec)) {
-			logger::info("Applied overrides tracking file does not exist yet: {}", trackingPath.string());
-			return appliedOverrides;
+	// Each entry maps "<feature>_hash" to the string hash of the overrides it was saved against.
+	for (auto it = appliedOverrides->begin(); it != appliedOverrides->end();) {
+		if (it.key().ends_with("_hash") && it.value().is_string()) {
+			++it;
+			continue;
 		}
-
-		auto fileSize = std::filesystem::file_size(trackingPath, ec);
-		if (ec) {
-			logger::info("Could not get size of applied overrides tracking file: {}", trackingPath.string());
-			return appliedOverrides;
-		}
-
-		// Limit tracking file size to prevent abuse
-		constexpr size_t MAX_TRACKING_FILE_SIZE = 10 * 1024 * 1024;  // 10MB
-		if (fileSize > MAX_TRACKING_FILE_SIZE) {
-			logger::info("Applied overrides tracking file too large ({}KB), ignoring: {}", fileSize / 1024, trackingPath.string());
-			return appliedOverrides;
-		}
-
-		std::ifstream file(trackingPath);
-		if (file.is_open()) {
-			try {
-				file >> appliedOverrides;
-
-				// Validate the loaded JSON structure
-				if (!appliedOverrides.is_object()) {
-					logger::info("Applied overrides tracking file contains invalid data structure, resetting");
-					appliedOverrides = json::object();
-				} else {
-					// Validate each tracking entry - must be string hash with "_hash" key suffix
-					auto it = appliedOverrides.begin();
-					while (it != appliedOverrides.end()) {
-						const std::string& key = it.key();
-						const auto& value = it.value();
-
-						// Valid format: simple string hash for "_hash" keys
-						if (key.ends_with("_hash") && value.is_string()) {
-							++it;
-							continue;
-						}
-
-						// Invalid entry
-						logger::info("Invalid tracking entry for '{}', removing", key);
-						it = appliedOverrides.erase(it);
-					}
-				}
-			} catch (const json::parse_error& e) {
-				logger::info("Parse error in applied overrides tracking file: {} at byte {}", e.what(), e.byte);
-				appliedOverrides = json::object();
-			} catch (const json::exception& e) {
-				logger::info("JSON error reading applied overrides tracking file: {}", e.what());
-				appliedOverrides = json::object();
-			}
-		}
-	} catch (const std::filesystem::filesystem_error& e) {
-		logger::info("Filesystem error loading applied overrides tracking: {}", e.what());
-	} catch (const std::exception& e) {
-		logger::info("Error loading applied overrides tracking: {}", e.what());
+		logger::info("Invalid tracking entry for '{}', removing", it.key());
+		it = appliedOverrides->erase(it);
 	}
-	return appliedOverrides;
+	return std::move(*appliedOverrides);
 }
 
 void SettingsOverrideManager::SaveAppliedOverridesTracking(const json& appliedOverrides) const
@@ -442,9 +386,6 @@ void SettingsOverrideManager::SaveAppliedOverridesTracking(const json& appliedOv
 		}
 
 		auto trackingPath = GetAppliedOverridesTrackingPath();
-
-		// Create directory if it doesn't exist
-		std::filesystem::create_directories(trackingPath.parent_path());
 
 		// Create a backup of existing file before overwriting
 		std::error_code ec;
@@ -1061,43 +1002,13 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 		return false;
 	}
 
-	auto userFilePath = GetUserOverridesDirectory() / (featureName + ".user.json");
-
-	std::error_code ec;
-	if (!std::filesystem::exists(userFilePath, ec)) {
+	json userJson;
+	if (!ReadOverrideDocument(GetUserOverridesDirectory() / (featureName + ".user.json"), userJson))
 		return false;
-	}
 
-	try {
-		auto fileSize = std::filesystem::file_size(userFilePath, ec);
-		if (ec || fileSize == 0 || fileSize > 1024 * 1024) {
-			logger::info("User override file invalid size: {}", userFilePath.string());
-			return false;
-		}
-
-		std::ifstream file(userFilePath);
-		if (!file.is_open()) {
-			return false;
-		}
-
-		json userJson;
-		file >> userJson;
-		file.close();
-
-		if (!userJson.is_object()) {
-			logger::info("User override file is not a JSON object: {}", userFilePath.string());
-			return false;
-		}
-
-		// Merge user settings on top
-		MergeJson(featureJson, userJson);
-		logger::info("Loaded user override for {}", featureName);
-		return true;
-
-	} catch (const std::exception& e) {
-		logger::info("Error loading user override for {}: {}", featureName, e.what());
-		return false;
-	}
+	MergeJson(featureJson, userJson);
+	logger::info("Loaded user override for {}", featureName);
+	return true;
 }
 
 bool SettingsOverrideManager::SaveUserOverride(const std::string& featureName, const json& currentSettings, const json& overrideSettings)
@@ -1119,10 +1030,7 @@ bool SettingsOverrideManager::SaveUserOverride(const std::string& featureName, c
 	}
 
 	try {
-		auto userDir = GetUserOverridesDirectory();
-		std::filesystem::create_directories(userDir);
-
-		auto userFilePath = userDir / (featureName + ".user.json");
+		auto userFilePath = GetUserOverridesDirectory() / (featureName + ".user.json");
 
 		if (!Util::FileHelpers::WriteJsonAtomically(userFilePath, currentSettings, 1, "user override")) {
 			return false;
@@ -1269,7 +1177,8 @@ void SettingsOverrideManager::CleanupStaleUserOverrides()
 			tracking[trackingKey] = currentHash;
 		}
 
-		SaveAppliedOverridesTracking(tracking);
+		if (!tracking.empty())
+			SaveAppliedOverridesTracking(tracking);
 
 	} catch (const std::exception& e) {
 		logger::info("Error during user override cleanup: {}", e.what());

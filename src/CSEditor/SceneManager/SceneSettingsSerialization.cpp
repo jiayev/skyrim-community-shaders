@@ -5,7 +5,6 @@
 
 #include <cmath>
 #include <filesystem>
-#include <fstream>
 
 using namespace SceneSettingsInternal;
 
@@ -377,23 +376,15 @@ void SceneSettingsManager::LoadAllUserSettings()
 	}
 
 	try {
-		std::ifstream file(path);
-		if (!file.is_open()) {
-			userSettingsDocumentLoaded = true;
-			userSettingsDocumentWritable = false;
-			logger::error("[SceneSettings] Could not open SceneManager.json for reading");
-			return;
-		}
-
-		json data = json::parse(file, nullptr, false);
+		const auto document = Util::FileHelpers::ReadJsonObject(path, "SceneManager.json");
 		userSettingsDocumentLoaded = true;
-		preservedUserSettingsRoot = data;
-		if (!data.is_object()) {
-			userSettingsDocumentWritable = false;
-			logger::error("[SceneSettings] SceneManager.json must contain a valid JSON object; automatic saves are blocked");
+		userSettingsDocumentWritable = document.has_value();
+		preservedUserSettingsRoot = document.value_or(json::object());
+		if (!document) {
+			logger::error("[SceneSettings] SceneManager.json is not a readable JSON object; automatic saves are blocked");
 			return;
 		}
-		userSettingsDocumentWritable = true;
+		const json& data = *document;
 		FeatureSettingsCache featureSettingsCache;
 
 		userTimeOfDayTransitionHours = ReadTimeOfDayTransitionHours(data, "SceneManager.json");

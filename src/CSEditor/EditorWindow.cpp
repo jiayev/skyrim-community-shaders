@@ -1776,43 +1776,40 @@ void EditorWindow::ShowSettingsWindow()
 	ImGui::End();
 }
 
+/** @brief Path of the editor's own settings file in the CommunityShaders folder. */
+static std::filesystem::path GetEditorSettingsPath(const std::string& settingsFilename)
+{
+	return Util::PathHelpers::GetCommunityShaderPath() / (settingsFilename + ".json");
+}
+
 void EditorWindow::Save()
 {
 	// Favourites and status markers change through here; the browser rebuilds its rows from them.
 	m_formList.Invalidate();
 	SaveSettings();
-	const std::string filePath = Util::PathHelpers::GetCommunityShaderPath().string();
-	const std::string file = std::format("{}\\{}.json", filePath, settingsFilename);
+	const auto file = GetEditorSettingsPath(settingsFilename);
 
-	logger::info("Saving settings file: {}", file);
+	logger::info("Saving settings file: {}", file.string());
 
 	if (!Util::FileHelpers::WriteJsonAtomically(file, j, 1, "editor settings"))
-		logger::warn("Failed to write settings file: {}", file);
+		logger::warn("Failed to write settings file: {}", file.string());
 }
 
 void EditorWindow::Load()
 {
-	std::string filePath = std::format("{}\\{}.json", Util::PathHelpers::GetCommunityShaderPath().string(), settingsFilename);
+	const auto path = GetEditorSettingsPath(settingsFilename);
+	// No settings file yet: keep the defaults untouched.
+	if (!std::filesystem::exists(path))
+		return;
 
-	std::ifstream settingsFile(filePath);
-
-	if (!std::filesystem::exists(filePath)) {
-		// Does not have any settings so just return.
+	std::string error;
+	auto settings = Util::FileHelpers::ReadJsonFile(path, "editor settings", 0, &error);
+	if (!settings && error.empty()) {
+		logger::warn("Failed to open settings file: {}", path.string());
 		return;
 	}
-
-	if (!settingsFile.good() || !settingsFile.is_open()) {
-		logger::warn("Failed to load settings file: {}", filePath);
-		return;
-	}
-
-	try {
-		j << settingsFile;
-		settingsFile.close();
-	} catch (const nlohmann::json::parse_error& e) {
-		logger::warn("Error parsing settings for file ({}) : {}\n", filePath, e.what());
-		settingsFile.close();
-	}
+	if (settings)
+		j = std::move(*settings);
 	LoadSettings();
 }
 

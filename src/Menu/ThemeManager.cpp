@@ -19,7 +19,6 @@
 #include <ctime>
 #include <filesystem>
 #include <format>
-#include <fstream>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -799,14 +798,6 @@ size_t ThemeManager::DiscoverThemes()
 					continue;
 				}
 
-				// Check file size
-				auto fileSize = entry.file_size();
-				if (fileSize > MAX_FILE_SIZE) {
-					logger::warn("Theme file too large, skipping: {} ({}MB)",
-						entry.path().filename().string(), fileSize / (1024 * 1024));
-					continue;
-				}
-
 				if (themes.size() >= MAX_THEMES) {
 					logger::warn("Maximum number of themes ({}) reached, skipping remaining files", MAX_THEMES);
 					break;
@@ -996,14 +987,7 @@ void ThemeManager::CreateDefaultThemeFiles()
 
 	// Only create a minimal default theme if no themes exist at all (rare fallback)
 	auto defaultThemeFile = themesDir / "Default.json";
-	try {
-		std::ofstream file(defaultThemeFile);
-		if (!file.is_open()) {
-			logger::warn("Failed to create default theme file: {}", defaultThemeFile.string());
-			return;
-		}
-
-		file << R"({
+	constexpr std::string_view defaultTheme = R"({
 	"DisplayName": "Default Theme",
 	"Description": "Default community shaders theme",
 	"Version": "1.0",
@@ -1021,11 +1005,8 @@ void ThemeManager::CreateDefaultThemeFiles()
 	}
 })";
 
-		file.close();
+	if (Util::FileHelpers::WriteFileAtomically(defaultThemeFile, defaultTheme, "default theme file"))
 		logger::info("Created default theme file: {}", defaultThemeFile.string());
-	} catch (const std::exception& e) {
-		logger::warn("Failed to create default theme file: {}", e.what());
-	}
 }
 
 std::unique_ptr<ThemeManager::ThemeInfo> ThemeManager::LoadThemeFile(const std::filesystem::path& filePath)
@@ -1035,48 +1016,36 @@ std::unique_ptr<ThemeManager::ThemeInfo> ThemeManager::LoadThemeFile(const std::
 	themeInfo->filePath = filePath.string();
 	themeInfo->lastModified = GetFileModTime(filePath);
 
-	try {
-		std::ifstream file(filePath);
-		if (!file.is_open()) {
-			logger::warn("Failed to open theme file: {}", filePath.string());
-			return themeInfo;
-		}
-
-		json data;
-		file >> data;
-
-		if (!ValidateThemeData(data)) {
-			logger::warn("Invalid theme data in file: {}", filePath.string());
-			return themeInfo;
-		}
-
-		themeInfo->themeData = data;
-
-		// Extract metadata
-		if (data.contains("DisplayName") && data["DisplayName"].is_string()) {
-			themeInfo->displayName = data["DisplayName"].get<std::string>();
-		} else {
-			themeInfo->displayName = themeInfo->name;
-		}
-
-		if (data.contains("Description") && data["Description"].is_string()) {
-			themeInfo->description = data["Description"].get<std::string>();
-		}
-
-		if (data.contains("Version") && data["Version"].is_string()) {
-			themeInfo->version = data["Version"].get<std::string>();
-		}
-
-		if (data.contains("Author") && data["Author"].is_string()) {
-			themeInfo->author = data["Author"].get<std::string>();
-		}
-
-		themeInfo->isValid = true;
-
-	} catch (const std::exception& e) {
-		logger::warn("Error parsing theme file {}: {}", filePath.string(), e.what());
+	const auto document = Util::FileHelpers::ReadJsonFile(filePath, "theme file", MAX_FILE_SIZE);
+	if (!document)
+		return themeInfo;
+	if (!ValidateThemeData(*document)) {
+		logger::warn("Invalid theme data in file: {}", filePath.string());
+		return themeInfo;
 	}
 
+	const json& data = *document;
+	themeInfo->themeData = data;
+
+	if (data.contains("DisplayName") && data["DisplayName"].is_string()) {
+		themeInfo->displayName = data["DisplayName"].get<std::string>();
+	} else {
+		themeInfo->displayName = themeInfo->name;
+	}
+
+	if (data.contains("Description") && data["Description"].is_string()) {
+		themeInfo->description = data["Description"].get<std::string>();
+	}
+
+	if (data.contains("Version") && data["Version"].is_string()) {
+		themeInfo->version = data["Version"].get<std::string>();
+	}
+
+	if (data.contains("Author") && data["Author"].is_string()) {
+		themeInfo->author = data["Author"].get<std::string>();
+	}
+
+	themeInfo->isValid = true;
 	return themeInfo;
 }
 
