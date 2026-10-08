@@ -157,7 +157,8 @@ namespace
 
 	int GetTickState(size_t ticked, size_t total)
 	{
-		return ticked == 0 ? kTickNone : ticked == total ? kTickAll : kTickSome;
+		return ticked == 0 ? kTickNone : ticked == total ? kTickAll :
+		                                                   kTickSome;
 	}
 
 	bool IsRemoved(const FeatureExport& entry, size_t index)
@@ -292,7 +293,7 @@ namespace
 				ImGui::OpenPopup(kPickerId);
 		}
 		Util::AddTooltip(names.empty() ? T(TKEY("export.existing_none_tooltip"), "Nothing exported under a name yet.") :
-		                                 T(TKEY("export.existing_tooltip"), "Pick a name already in use to add to its file."),
+										 T(TKEY("export.existing_tooltip"), "Pick a name already in use to add to its file."),
 			Util::kTooltipWhenDisabled);
 		if (ImGui::BeginPopup(kPickerId)) {
 			for (const auto& name : names)
@@ -582,15 +583,15 @@ namespace
 	void DrawButtons(const ExportCounts& counts)
 	{
 		const auto name = Util::FileHelpers::SanitizeFileName(target.name);
-		const char* blocker = name.empty()           ? T(TKEY("export.blocked_name"), "Enter a name first.") :
-		                      counts.Ticked() == 0   ? T(TKEY("export.blocked_ticks"), "Tick the settings to export.") :
-		                      counts.unreadable      ? T(TKEY("export.blocked_unreadable"), "A destination file cannot be read. Fix or remove it first.") :
-		                      counts.Changes() == 0  ? T(TKEY("export.blocked_unchanged"), "The file already holds these values.") :
-		                                               nullptr;
+		const char* blocker = name.empty()          ? T(TKEY("export.blocked_name"), "Enter a name first.") :
+		                      counts.Ticked() == 0  ? T(TKEY("export.blocked_ticks"), "Tick the settings to export.") :
+		                      counts.unreadable     ? T(TKEY("export.blocked_unreadable"), "A destination file cannot be read. Fix or remove it first.") :
+		                      counts.Changes() == 0 ? T(TKEY("export.blocked_unchanged"), "The file already holds these values.") :
+		                                              nullptr;
 		auto ticked = counts.Ticked();
 		auto files = counts.files;
 		const auto label = (files > 1 ? std::vformat(T(TKEY("export.count_files"), "Export {} to {} files"), std::make_format_args(ticked, files)) :
-		                                std::vformat(T(TKEY("export.count"), "Export {}"), std::make_format_args(ticked))) +
+										std::vformat(T(TKEY("export.count"), "Export {}"), std::make_format_args(ticked))) +
 		                   "###export";
 		{
 			const Util::DisableGuard blocked(blocker != nullptr);

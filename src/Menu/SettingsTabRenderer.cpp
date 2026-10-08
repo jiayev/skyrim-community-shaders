@@ -6,13 +6,13 @@
 #include <windows.h>
 
 #include "BackgroundBlur.h"
+#include "CursorLoader.h"
 #include "Features/ScreenshotFeature.h"
+#include "FontAtlasState.h"
 #include "FontSelector.h"
 #include "Fonts.h"
-#include "FontAtlasState.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
-#include "CursorLoader.h"
 #include "IconLoader.h"
 #include "Menu.h"
 #include "ShaderCache.h"
@@ -533,9 +533,9 @@ void SettingsTabRenderer::RenderBehaviorTab()
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T("menu.settings.use_custom_cursor_tooltip",
-				"Loads cursor PNGs from the active theme folder (Themes/<preset>/).\n"
-				"Supported files include cursor.png (arrow), cursor_text.png (typing), cursor_resize_ew.png, cursor_resize_ns.png, and more.\n"
-				"Missing types fall back to the default ImGui cursor. Configure per-type hotspots in theme JSON."));
+								  "Loads cursor PNGs from the active theme folder (Themes/<preset>/).\n"
+								  "Supported files include cursor.png (arrow), cursor_text.png (typing), cursor_resize_ew.png, cursor_resize_ns.png, and more.\n"
+								  "Missing types fall back to the default ImGui cursor. Configure per-type hotspots in theme JSON."));
 		}
 
 		if (themeSettings.UseCustomCursor) {

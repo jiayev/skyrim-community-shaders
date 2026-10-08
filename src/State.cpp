@@ -4,6 +4,8 @@
 
 #include <pystring/pystring.h>
 
+#include "CSEditor/SceneManager/SceneManager.h"
+#include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "Deferred.h"
 #include "FeatureIssues.h"
 #include "Features/CSEditor.h"
@@ -13,7 +15,6 @@
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/PerformanceOverlay.h"
-#include "CSEditor/SceneManager/SceneManager.h"
 #include "Features/PostProcessing.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
@@ -23,7 +24,6 @@
 #include "Features/Upscaling.h"
 #include "Features/VolumetricShadows.h"
 #include "Menu.h"
-#include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "PostProcessingMode.h"
 #include "SettingsOverrideManager.h"
 #include "ShaderCache.h"

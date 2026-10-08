@@ -767,7 +767,7 @@ namespace
 			Util::DrawIconCircle(center, radius, set && set->settingCount != 0 ? setColor : emptyColor, true);
 		}
 		Util::AddTooltip(row.flat ? T(TKEY("scene_copy_dots_flat_tooltip"), "One set covers every period.") :
-		                            T(TKEY("scene_copy_dots_tooltip"), "Filled periods hold settings."));
+									T(TKEY("scene_copy_dots_tooltip"), "Filled periods hold settings."));
 	}
 
 	/** @brief One scene: click highlights it, the tick box adds it to To's targets, double-click commits.
@@ -1174,7 +1174,7 @@ namespace
 		// Fetched after the direction chips, which drop the cached rows on a switch.
 		const auto& rows = session.rows.Get(revision, [&] {
 			return BuildRows(filters.direction == CopyDirection::From ? manager->GetCopySources(session.page) :
-			                                                            manager->GetCopyDestinations(session.page));
+																		manager->GetCopyDestinations(session.page));
 		});
 		DrawFilterRow();
 		const std::string query = session.search;

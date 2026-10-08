@@ -102,7 +102,6 @@ namespace Util
 			return GetCommunityShaderPath() / kUnifiedPresetsSubdir;
 		}
 
-
 		std::filesystem::path GetTranslationsPath()
 		{
 			return GetCommunityShaderPath() / "Translations";
@@ -258,7 +257,6 @@ namespace Util
 			}
 			return roots.front() / packId;
 		}
-
 
 		std::filesystem::path GetFeaturesRealPath()
 		{

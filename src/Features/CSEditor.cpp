@@ -3,10 +3,10 @@
 
 #define I18N_KEY_PREFIX "feature.cs_editor."
 
+#include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "Deferred.h"
 #include "Feature.h"
 #include "Menu.h"
-#include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/Game.h"

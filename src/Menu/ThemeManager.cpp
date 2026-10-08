@@ -3,8 +3,8 @@
 #include "ThemePresets.h"
 
 #include "BackgroundBlur.h"
-#include "Fonts.h"
 #include "FontAtlasState.h"
+#include "Fonts.h"
 #include "I18n/I18n.h"
 #include "IconsFontAwesome5.h"
 #include "IconsGameIcons.h"

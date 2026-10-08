@@ -92,7 +92,7 @@ namespace
 		if (BrowserUI::Chip("##notApplied", label.c_str(), Icons::FA(ICON_FA_TIMES), &warning, notAppliedOnly ? &warning : nullptr))
 			notAppliedOnly = !notAppliedOnly;
 		Util::AddTooltip(notAppliedOnly ? T("cs_editor.scene_copy_filter_clear_tooltip", "Click to list every setting again.") :
-		                                  T(TKEY("not_applied_tooltip"), "These name settings their feature does not have, so they are skipped. Click to list only them."));
+										  T(TKEY("not_applied_tooltip"), "These name settings their feature does not have, so they are skipped. Click to list only them."));
 	}
 
 	void DrawEnableToggle(const OverwriteRow& row)
@@ -105,7 +105,7 @@ namespace
 				actionFailed = !SettingsOverrideManager::GetSingleton()->SetOverrideEnabled(row.filePath, enabled);
 		}
 		Util::AddTooltip(isPack ? T(TKEY("enable_pack_tooltip"), "Part of a preset pack. Enable or disable the pack from the Presets page.") :
-		                          T(TKEY("enable_tooltip"), "Loads this overwrite at startup. Changes take effect on the next game start."),
+								  T(TKEY("enable_tooltip"), "Loads this overwrite at startup. Changes take effect on the next game start."),
 			Util::kTooltipWhenDisabled);
 	}
 

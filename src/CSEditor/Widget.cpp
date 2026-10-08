@@ -157,8 +157,8 @@ void Widget::Delete()
 
 		auto editorId = GetEditorID();
 		const char* message = FormEditSources::GetPackFormKeys().contains(GetFormKey()) ?
-			T(TKEY("deleted_reverted_to_preset"), "Deleted {} - reverted to preset values") :
-			T(TKEY("deleted_reverted_to_vanilla"), "Deleted {} - reverted to vanilla values");
+		                          T(TKEY("deleted_reverted_to_preset"), "Deleted {} - reverted to preset values") :
+		                          T(TKEY("deleted_reverted_to_vanilla"), "Deleted {} - reverted to vanilla values");
 		EditorWindow::GetSingleton()->ShowNotification(
 			std::vformat(message, std::make_format_args(editorId)),
 			Util::Colors::GetSuccess(),
@@ -301,17 +301,8 @@ bool Widget::BeginWidgetWindow(bool showApply, bool showSaveLoadRevert, bool sho
 	const auto typeIcon = WeatherTypeIcons::Resolve(weather);
 	const bool hasLeadingIcon = typeIcon.has_value();
 
-	bool result = Util::BeginWithCustomHeader(title.c_str(), &open,
-		[this, showApply, showSaveLoadRevert, showForceWeather, weather, searchId]() {
-			m_customHeaderActionsDrawn = DrawTitleBarActions(showApply, showSaveLoadRevert, showForceWeather, weather, true, searchId);
-		},
-		ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags,
-		hasLeadingIcon ?
-			[typeIcon](ImVec2 iconMin, float iconSize) {
-				WeatherTypeIcons::Draw(typeIcon, ImGui::GetWindowDrawList(), iconMin, iconSize,
-					ImGui::GetColorU32(ImGuiCol_Text));
-			} :
-			std::function<void(ImVec2, float)>{});
+	bool result = Util::BeginWithCustomHeader(title.c_str(), &open, [this, showApply, showSaveLoadRevert, showForceWeather, weather, searchId]() { m_customHeaderActionsDrawn = DrawTitleBarActions(showApply, showSaveLoadRevert, showForceWeather, weather, true, searchId); }, ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags, hasLeadingIcon ? [typeIcon](ImVec2 iconMin, float iconSize) { WeatherTypeIcons::Draw(typeIcon, ImGui::GetWindowDrawList(), iconMin, iconSize,
+																																																																																																		   ImGui::GetColorU32(ImGuiCol_Text)); } : std::function<void(ImVec2, float)>{});
 	UpdateWidgetTypeSize(GetWidgetTypeName());
 	return result;
 }
@@ -455,8 +446,8 @@ bool Widget::DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool s
 
 		const bool unsaved = HasUnsavedChanges();
 		const char* saveTooltip = unsaved ?
-			T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save.") :
-			T(TKEY("save_to_file"), "Save to file");
+		                              T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save.") :
+		                              T(TKEY("save_to_file"), "Save to file");
 		auto saveClick = [this]() { Save(); };
 		std::optional<ImVec4> unsavedColor;
 		if (unsaved) {
@@ -757,8 +748,8 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 
 	const bool unsaved = HasUnsavedChanges();
 	const char* saveTooltip = unsaved ?
-		T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save.") :
-		T(TKEY("save_to_file"), "Save to file");
+	                              T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save.") :
+	                              T(TKEY("save_to_file"), "Save to file");
 	ImVec4 unsavedSaveColor{};
 	if (unsaved && menu) {
 		unsavedSaveColor = menu->GetTheme().StatusPalette.Error;

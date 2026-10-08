@@ -19,10 +19,10 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "Menu/CursorLoader.h"
 #include "Menu/FontAtlasState.h"
 #include "ShaderCache.h"
 #include "State.h"
-#include "Menu/CursorLoader.h"
 #include "Util.h"
 
 #include "Features/PerformanceOverlay.h"
@@ -436,7 +436,6 @@ void OverlayRenderer::FinalizeImGuiFrame()
 	BackgroundBlur::RenderBackgroundBlur();
 
 	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-
 }
 
 void OverlayRenderer::RenderFirstTimeSetupOverlay()

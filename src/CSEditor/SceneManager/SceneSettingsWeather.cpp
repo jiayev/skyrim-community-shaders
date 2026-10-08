@@ -37,7 +37,7 @@ bool SceneSettingsManager::HasWeatherConfig(RE::FormID weatherId)
 
 	auto it = weatherSceneConfigs.find(weatherId);
 	return it != weatherSceneConfigs.end() && std::any_of(it->second.entries.begin(), it->second.entries.end(),
-		[](const auto& entry) { return IsNumericValue(entry.value); });
+												  [](const auto& entry) { return IsNumericValue(entry.value); });
 }
 
 void SceneSettingsManager::PrepareWeatherUserSettingsMutation(RE::FormID weatherId, bool replaceMalformedEntries)

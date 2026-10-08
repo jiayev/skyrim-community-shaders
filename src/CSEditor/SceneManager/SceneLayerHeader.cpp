@@ -313,7 +313,8 @@ namespace
 		ImGui::TableNextColumn();
 		if (row.settings != 0)
 			ImGui::TextUnformatted(I18n::GetSingleton()->Format(TKEY("summary_settings"),
-				{ { "count", std::to_string(row.settings) } }, "{count} settings").c_str());
+														   { { "count", std::to_string(row.settings) } }, "{count} settings")
+					.c_str());
 		else
 			Util::Text::Disabled("-");
 	}

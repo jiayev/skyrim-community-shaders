@@ -639,7 +639,6 @@ void WeatherWidget::SetWeatherValues()
 	}
 	weather->precipitationData = settings.precipitationData;
 	weather->referenceEffect = settings.referenceEffect;
-
 }
 
 void WeatherWidget::InitializeInheritFlags()
@@ -1703,9 +1702,10 @@ void WeatherWidget::NavigateToSearchResult(const SearchResult& result)
 {
 	if (result.tabName == WeatherTab::kSceneManager) {
 		SceneSettingsUI::OpenSceneContext({
-			.type = SceneSettingsManager::SceneContextType::Weather,
-			.weatherId = weather->GetFormID(),
-		}, result.settingId);
+											  .type = SceneSettingsManager::SceneContextType::Weather,
+											  .weatherId = weather->GetFormID(),
+										  },
+			result.settingId);
 		return;
 	}
 

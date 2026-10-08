@@ -80,7 +80,7 @@ std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopy
 		auto rejection = CopyRejection::None;
 		if (!setting)
 			rejection = destinationRules.requireNumeric && FindAllowedCatalogSetting(identity.featureShortName,
-			                                                   identity.settingPath, identity.settingKey) ?
+															   identity.settingPath, identity.settingKey) ?
 			                CopyRejection::NotBlendable :
 			                CopyRejection::NotInCatalog;
 		else if (!IsSettingAllowedForType(destinationRules.sceneType, identity.featureShortName,
@@ -97,8 +97,8 @@ std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopy
 		candidates.push_back({
 			.setting = identity,
 			.displayName = entry->displayName.empty() ?
-			                   GetSceneSettingDisplayName(identity.featureShortName, identity.settingPath, identity.settingKey) :
-			                   entry->displayName,
+		                       GetSceneSettingDisplayName(identity.featureShortName, identity.settingPath, identity.settingKey) :
+		                       entry->displayName,
 			.value = entry->value,
 			.destinationValue = conflicts ? std::optional{ destinationIt->second } : std::nullopt,
 			.rejection = rejection,
@@ -262,7 +262,7 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopyDesti
 	for (auto& target : GetAuthoredLocationTargets())
 		if (std::none_of(locationTargets.begin(), locationTargets.end(), [&](const auto& existing) {
 				return existing.type == target.type &&
-				       NormalizeLocationFormKey(existing.formKey) == NormalizeLocationFormKey(target.formKey);
+			           NormalizeLocationFormKey(existing.formKey) == NormalizeLocationFormKey(target.formKey);
 			}))
 			locationTargets.push_back(std::move(target));
 	for (const auto& target : locationTargets) {
@@ -271,7 +271,7 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopyDesti
 			.locationFormKey = target.formKey };
 		ForEachActiveSetContext(context, IsSceneTimeOfDayEnabled(context), [&](const SceneContextId& setContext) {
 			addDestination(setContext, AppendPeriodName(
-				std::format("{} / {}", GetCopyLocationTypeName(target.type), target.name), setContext.period));
+										   std::format("{} / {}", GetCopyLocationTypeName(target.type), target.name), setContext.period));
 		});
 	}
 
@@ -291,15 +291,16 @@ std::string SceneSettingsManager::GetSceneContextDisplayName(const SceneContextI
 		return GetCopyPeriodName(context.period);
 	case SceneContextType::Weather:
 		return AppendPeriodName(Util::GetFormDisplayName(context.weatherId), context.period);
-	case SceneContextType::Location: {
-		const auto* config = FindLocationConfig(context.locationType, context.locationFormKey);
-		// The form key is the fallback identity for targets the game never named.
-		const std::string* name = &context.locationFormKey;
-		if (config)
-			name = config->name.empty() ? &config->formKey : &config->name;
-		return AppendPeriodName(
-			std::format("{} / {}", GetCopyLocationTypeName(context.locationType), *name), context.period);
-	}
+	case SceneContextType::Location:
+		{
+			const auto* config = FindLocationConfig(context.locationType, context.locationFormKey);
+			// The form key is the fallback identity for targets the game never named.
+			const std::string* name = &context.locationFormKey;
+			if (config)
+				name = config->name.empty() ? &config->formKey : &config->name;
+			return AppendPeriodName(
+				std::format("{} / {}", GetCopyLocationTypeName(context.locationType), *name), context.period);
+		}
 	default:
 		return {};
 	}
@@ -364,18 +365,20 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsToContext(con
 	case SceneContextType::TimeOfDay:
 		destinationEntries = &GetEntriesMut(ContextSceneType(destination.type));
 		break;
-	case SceneContextType::Weather: {
-		auto configIt = weatherSceneConfigs.find(destination.weatherId);
-		destinationNeedsMaterialization = configIt == weatherSceneConfigs.end();
-		destinationEntries = destinationNeedsMaterialization ? &emptyDestinationEntries : &configIt->second.entries;
-		break;
-	}
-	case SceneContextType::Location: {
-		auto* config = FindLocationConfig(destination.locationType, destination.locationFormKey);
-		destinationNeedsMaterialization = !config;
-		destinationEntries = config ? &config->entries : &emptyDestinationEntries;
-		break;
-	}
+	case SceneContextType::Weather:
+		{
+			auto configIt = weatherSceneConfigs.find(destination.weatherId);
+			destinationNeedsMaterialization = configIt == weatherSceneConfigs.end();
+			destinationEntries = destinationNeedsMaterialization ? &emptyDestinationEntries : &configIt->second.entries;
+			break;
+		}
+	case SceneContextType::Location:
+		{
+			auto* config = FindLocationConfig(destination.locationType, destination.locationFormKey);
+			destinationNeedsMaterialization = !config;
+			destinationEntries = config ? &config->entries : &emptyDestinationEntries;
+			break;
+		}
 	default:
 		return {};
 	}
@@ -414,8 +417,8 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsToContext(con
 		lowerLayers = std::move(*resolvedLowerLayers);
 	}
 	const PeriodSettingMap* timeOfDayValues = destination.type == SceneContextType::Weather ?
-	                                             &BuildTimeOfDayValueGroups() :
-	                                             nullptr;
+	                                              &BuildTimeOfDayValueGroups() :
+	                                              nullptr;
 	// A flat weather entry spans every period, so it restores to the time of day playing now.
 	const auto timeOfDayPeriod = static_cast<int>(
 		destination.period == TimeOfDayPeriod::Count ? GetCurrentPeriod() : destination.period);
@@ -600,10 +603,11 @@ bool SceneSettingsManager::IsSceneContextAuthored(const SceneContextId& context)
 bool SceneSettingsManager::IsCurrentSceneContext(const SceneContextId& context) const
 {
 	switch (context.type) {
-	case SceneContextType::Weather: {
-		const auto* sky = globals::game::sky;
-		return sky && sky->currentWeather && sky->currentWeather->GetFormID() == context.weatherId;
-	}
+	case SceneContextType::Weather:
+		{
+			const auto* sky = globals::game::sky;
+			return sky && sky->currentWeather && sky->currentWeather->GetFormID() == context.weatherId;
+		}
 	case SceneContextType::Location:
 		return std::ranges::any_of(GetCurrentLocationTargets(), [&](const auto& target) {
 			return IsSameSceneContext(context, { .type = SceneContextType::Location,

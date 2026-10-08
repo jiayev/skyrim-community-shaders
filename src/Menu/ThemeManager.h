@@ -219,12 +219,12 @@ public:
 
 		// Search input constants
 		static constexpr float SEARCH_BASELINE_SCREEN_HEIGHT = 1440.0f;  // Search chrome is authored for 2K.
-		static constexpr float SEARCH_ICON_SIZE = 20.0f;              // Default search icon size
-		static constexpr float SEARCH_ICON_ALPHA = 0.7f;              // Default search icon opacity
-		static constexpr float SEARCH_ICON_OFFSET_X = 8.0f;           // Search icon offset from input edge
-		static constexpr float SEARCH_INPUT_PADDING_EXTRA = 14.0f;    // Extra input padding after icon
-		static constexpr float SEARCH_INPUT_FRAME_PADDING_Y = 6.0f;   // Search input vertical padding
-		static constexpr float SEARCH_ICON_STROKE_RATIO = 0.11f;      // Search icon stroke thickness relative to size
+		static constexpr float SEARCH_ICON_SIZE = 20.0f;                 // Default search icon size
+		static constexpr float SEARCH_ICON_ALPHA = 0.7f;                 // Default search icon opacity
+		static constexpr float SEARCH_ICON_OFFSET_X = 8.0f;              // Search icon offset from input edge
+		static constexpr float SEARCH_INPUT_PADDING_EXTRA = 14.0f;       // Extra input padding after icon
+		static constexpr float SEARCH_INPUT_FRAME_PADDING_Y = 6.0f;      // Search input vertical padding
+		static constexpr float SEARCH_ICON_STROKE_RATIO = 0.11f;         // Search icon stroke thickness relative to size
 		static constexpr float SEARCH_ICON_HANDLE_STROKE_RATIO = 0.105f;
 		static constexpr float COMBO_SEARCH_ICON_SIZE = 16.0f;     // Icon size for search inside combos
 		static constexpr float COMBO_SEARCH_ICON_ALPHA = 0.5f;     // Icon alpha for subtle appearance

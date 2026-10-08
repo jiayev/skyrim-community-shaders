@@ -5,9 +5,9 @@
 #include "SettingManager.h"
 #include "Utils/FileSystem.h"
 
+#include <Windows.h>
 #include <algorithm>
 #include <format>
-#include <Windows.h>
 
 namespace
 {

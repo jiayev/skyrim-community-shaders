@@ -16,9 +16,9 @@ public:
 	/** @brief Describes a clickable action icon shown in the header bar. */
 	struct ActionIcon
 	{
-		ID3D11ShaderResourceView* texture;  /**< @brief GPU texture for the icon image. */
-		const char* tooltip;                /**< @brief Tooltip text shown on hover. */
-		std::function<void()> callback;     /**< @brief Action invoked when the icon is clicked. */
+		ID3D11ShaderResourceView* texture; /**< @brief GPU texture for the icon image. */
+		const char* tooltip;               /**< @brief Tooltip text shown on hover. */
+		std::function<void()> callback;    /**< @brief Action invoked when the icon is clicked. */
 	};
 
 	/**

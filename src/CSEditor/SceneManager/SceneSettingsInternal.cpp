@@ -325,7 +325,7 @@ namespace SceneSettingsInternal
 		for (auto& part : selectorDefaults)
 			part = NormalizeDisplayPart(std::move(part));
 		while (!parts.empty() && !selectorDefaults.empty() &&
-		       Util::IEquals(parts.front(), selectorDefaults.front())) {
+			   Util::IEquals(parts.front(), selectorDefaults.front())) {
 			parts.erase(parts.begin());
 			selectorDefaults.erase(selectorDefaults.begin());
 			++rawOffset;
@@ -447,8 +447,9 @@ namespace SceneSettingsInternal
 		if (!reported.insert(signature).second)
 			return;
 
-		logger::warn("[SceneSettings] {}.{} clamped from {} to {} on apply; the value is outside the range "
-					 "its control allows. The scene entry keeps the authored value.",
+		logger::warn(
+			"[SceneSettings] {}.{} clamped from {} to {} on apply; the value is outside the range "
+			"its control allows. The scene entry keeps the authored value.",
 			featureShortName, setting.settingKey, authored.dump(), clamped.dump());
 	}
 
@@ -544,8 +545,8 @@ namespace SceneSettingsInternal
 			return T("feature.scene_manager.channel.all", "All");
 
 		auto componentIndex = static_cast<std::int8_t>(setting.aggregateCount > 1 ?
-		                                                     setting.serializedComponent - setting.aggregateStart :
-		                                                     setting.serializedComponent);
+														   setting.serializedComponent - setting.aggregateStart :
+														   setting.serializedComponent);
 		const auto* storedAll = FindStoredAllComponent(setting);
 		if (storedAll && storedAll->serializedComponent < setting.serializedComponent)
 			--componentIndex;
@@ -564,7 +565,8 @@ namespace SceneSettingsInternal
 		                       SplitCatalogPath(setting.settingPath) :
 		                       SplitCatalogPath(setting.serializedPath);
 		info.settingKey = std::string(info.controlType == SceneSettingControlType::Scalar ?
-		                                  setting.settingKey : setting.serializedKey);
+										  setting.settingKey :
+										  setting.serializedKey);
 		info.displayName = GetCatalogLeafDisplayName(setting);
 		info.componentDisplayName = GetCatalogComponentDisplayName(setting, info.controlType);
 		info.displayPath = GetCatalogContextPath(setting);
@@ -719,9 +721,9 @@ namespace SceneSettingsInternal
 	{
 		return SceneSettingsCatalog::IsSceneControllable(setting) &&
 		       !IsBlacklistedSceneSetting(
-			       std::string(setting.featureShortName),
-			       SplitCatalogPath(setting.settingPath),
-			       std::string(setting.settingKey));
+				   std::string(setting.featureShortName),
+				   SplitCatalogPath(setting.settingPath),
+				   std::string(setting.settingKey));
 	}
 
 	bool IsCatalogSettingAllowedByPolicy(const SceneSettingsCatalog::SettingMetadata& setting)
@@ -757,12 +759,12 @@ namespace SceneSettingsInternal
 					                            SceneSettingsCatalog::HasFlag(candidate.flags,
 													SceneSettingsCatalog::SettingFlag::Transitionable);
 					allowed.push_back(IsCatalogSettingAllowedByPolicy(candidate) && transitionable &&
-										  IsSettingAllowedBySceneTypePolicy(sceneType,
-											  std::string(candidate.featureShortName),
-											  SplitCatalogPath(candidate.settingPath),
-											  std::string(candidate.settingKey)) ?
-					                      1 :
-					                      0);
+											  IsSettingAllowedBySceneTypePolicy(sceneType,
+												  std::string(candidate.featureShortName),
+												  SplitCatalogPath(candidate.settingPath),
+												  std::string(candidate.settingKey)) ?
+										  1 :
+										  0);
 				}
 			}
 			return allowedByType;
@@ -927,7 +929,7 @@ namespace SceneSettingsInternal
 		}
 
 		if (requireNumeric && (!SceneSettingsCatalog::HasFlag(setting.flags, SceneSettingsCatalog::SettingFlag::Transitionable) ||
-			                      !IsNumericValue(featureValue) || !IsNumericValue(value) || !std::isfinite(value.get<float>())))
+								  !IsNumericValue(featureValue) || !IsNumericValue(value) || !std::isfinite(value.get<float>())))
 			return false;
 		if (!requireNumeric && !IsSceneSettingPrimitive(value))
 			return false;

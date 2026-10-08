@@ -1,5 +1,6 @@
 #include "Feature.h"
 
+#include "CSEditor/SceneManager/SceneManager.h"
 #include "FeatureIssues.h"
 #include "FeatureVersions.h"
 #include "Features/CSEditor.h"
@@ -25,7 +26,6 @@
 #include "Features/PostProcessing.h"
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
-#include "CSEditor/SceneManager/SceneManager.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"

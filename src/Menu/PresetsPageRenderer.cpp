@@ -118,9 +118,9 @@ namespace
 		const ImVec2 p0 = ImGui::GetItemRectMin();
 		const ImVec2 p1 = ImGui::GetItemRectMax();
 		ImDrawList* dl = ImGui::GetWindowDrawList();
-		const ImU32 bg = ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_ButtonActive :
-				ImGui::IsItemHovered()                                                     ? ImGuiCol_ButtonHovered :
-																							   ImGuiCol_Button);
+		const ImU32 bg = ImGui::GetColorU32(ImGui::IsItemActive()  ? ImGuiCol_ButtonActive :
+											ImGui::IsItemHovered() ? ImGuiCol_ButtonHovered :
+																	 ImGuiCol_Button);
 		dl->AddCircleFilled(ImVec2((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f), diameter * 0.5f, bg);
 		Icons::DrawCenteredGlyph(dl, p0, ImVec2(p1.x - p0.x, p1.y - p0.y), icon, ImGui::GetColorU32(ImGuiCol_Text));
 
@@ -261,7 +261,7 @@ void PresetsPageRenderer::RenderToolbar()
 		const char* csEditorTitle = T("menu.presets.open_cs_editor", "CS Editor");
 		const Icons::GlyphRef brush = Icons::FA(ICON_FA_PAINT_BRUSH);
 		const float buttonWidth = Icons::CalcGlyphSize(brush).x + style.ItemInnerSpacing.x +
-			ImGui::CalcTextSize(csEditorTitle).x + style.FramePadding.x * 2.0f;
+		                          ImGui::CalcTextSize(csEditorTitle).x + style.FramePadding.x * 2.0f;
 		ImGui::SameLine();
 		if (const float avail = ImGui::GetContentRegionAvail().x; avail > buttonWidth)
 			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonWidth);
@@ -494,10 +494,10 @@ void PresetsPageRenderer::RenderDetail()
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
 			ImGui::PushStyleColor(ImGuiCol_Button, theme.StatusPalette.InfoColor);
 			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(
-				std::min(1.0f, theme.StatusPalette.InfoColor.x + 0.1f),
-				std::min(1.0f, theme.StatusPalette.InfoColor.y + 0.1f),
-				std::min(1.0f, theme.StatusPalette.InfoColor.z + 0.1f),
-				1.0f));
+															  std::min(1.0f, theme.StatusPalette.InfoColor.x + 0.1f),
+															  std::min(1.0f, theme.StatusPalette.InfoColor.y + 0.1f),
+															  std::min(1.0f, theme.StatusPalette.InfoColor.z + 0.1f),
+															  1.0f));
 			ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.StatusPalette.InfoColor);
 			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.07f, 0.1f, 1.0f));
 			if (Util::ButtonWithFlash(T("menu.presets.apply", "Apply Preset")))
@@ -569,14 +569,14 @@ void PresetsPageRenderer::RenderDetail()
 	if (pack->hasCSPresets) {
 		ImGui::Spacing();
 		ImGui::TextDisabled("%s", T("menu.presets.cs_layer_note",
-			"Applying makes this pack's CS Presets the active scene layer, replacing the previous pack's."));
+									  "Applying makes this pack's CS Presets the active scene layer, replacing the previous pack's."));
 	}
 
 	if (pack->hasBaseline) {
 		ImGui::Spacing();
 		ImGui::TextDisabled("%s", T("menu.presets.baseline_layer_note",
-			"Baseline settings are feature defaults applied beneath the Scene Manager, independent of the active pack. "
-			"They win over saved settings until you change a value yourself."));
+									  "Baseline settings are feature defaults applied beneath the Scene Manager, independent of the active pack. "
+									  "They win over saved settings until you change a value yourself."));
 		if (!pack->baselineFeatures.empty()) {
 			ImGui::SeparatorText(T("menu.presets.baseline_features", "Baseline feature settings"));
 			for (const auto& featureName : pack->baselineFeatures) {
@@ -591,7 +591,7 @@ void PresetsPageRenderer::RenderDetail()
 			ImGui::Spacing();
 			ImGui::SeparatorText(T("menu.presets.baseline_boot", "Disable at boot"));
 			ImGui::TextDisabled("%s", T("menu.presets.baseline_boot_note",
-				"Applied when this Baseline pack is enabled. A game restart is still required for load/unload."));
+										  "Applied when this Baseline pack is enabled. A game restart is still required for load/unload."));
 			std::vector<std::pair<std::string, bool>> bootEntries(pack->disableAtBoot.begin(), pack->disableAtBoot.end());
 			std::ranges::sort(bootEntries, {}, &std::pair<std::string, bool>::first);
 			for (const auto& [featureName, disabled] : bootEntries) {
@@ -631,8 +631,8 @@ void PresetsPageRenderer::RenderDetail()
 				DrawRoundedImage(dl, reinterpret_cast<ImTextureID>(pack->screenshotSRVs[i].get()), p0, p1, style.FrameRounding);
 			if (isOpen || ImGui::IsItemHovered()) {
 				const ImU32 border = ImGui::ColorConvertFloat4ToU32(isOpen ?
-						theme.StatusPalette.InfoColor :
-						ImGui::GetStyleColorVec4(ImGuiCol_Border));
+																		theme.StatusPalette.InfoColor :
+																		ImGui::GetStyleColorVec4(ImGuiCol_Border));
 				dl->AddRect(p0, p1, border, style.FrameRounding, 0, style.FrameBorderSize + (isOpen ? 1.0f : 0.0f));
 			}
 			if (clicked) {

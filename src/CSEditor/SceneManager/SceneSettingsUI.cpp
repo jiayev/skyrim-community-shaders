@@ -312,7 +312,7 @@ namespace
 			ImGui::Checkbox(T(TKEY("interior_toggle"), "Interior"), &interiorEnabled);
 			ImGui::EndDisabled();
 			Util::AddTooltip(T(TKEY("interior_toggle_tooltip"),
-				"Shows whether interior settings are being edited. Follows the cell the player is in."),
+								 "Shows whether interior settings are being edited. Follows the cell the player is in."),
 				Util::kTooltipWhenDisabled);
 		}
 
@@ -659,7 +659,7 @@ namespace
 					{
 						Icons::FontGuard font(separator);
 						Util::Text::Disabled("%s", separator.utf8);
-		}
+					}
 					ImGui::SameLine();
 				} else {
 					ImGui::NewLine();
@@ -731,7 +731,7 @@ namespace
 			ImGui::PopID();
 		}
 
-			const std::string query = locationPicker.search;
+		const std::string query = locationPicker.search;
 		// The catalog runs to thousands of forms, so it is filtered only when the query or type changes.
 		if (changed || !locationPicker.matchesValid) {
 			locationPicker.matches.clear();
@@ -762,16 +762,16 @@ namespace
 		const ImVec2 tableSize{ 0.0f, ImGui::GetFrameHeightWithSpacing() * rows };
 		{
 			BrowserUI::RowShadeScope shade;
-		if (ImGui::BeginTable("LocationCatalog", 4, kLocationTableFlags | ImGuiTableFlags_ScrollY, tableSize)) {
-			ImGui::TableSetupScrollFreeze(0, 1);
+			if (ImGui::BeginTable("LocationCatalog", 4, kLocationTableFlags | ImGuiTableFlags_ScrollY, tableSize)) {
+				ImGui::TableSetupScrollFreeze(0, 1);
 				SetupLocationColumns(kLocationAddColumnWidth * scale, false);
-			ImGuiListClipper clipper;
-			clipper.Begin(static_cast<int>(locationPicker.matches.size()));
-			while (clipper.Step())
-				for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
-					DrawLocationAddRow(*manager, catalog[locationPicker.matches[row]]);
-			ImGui::EndTable();
-		}
+				ImGuiListClipper clipper;
+				clipper.Begin(static_cast<int>(locationPicker.matches.size()));
+				while (clipper.Step())
+					for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
+						DrawLocationAddRow(*manager, catalog[locationPicker.matches[row]]);
+				ImGui::EndTable();
+			}
 		}
 		Util::Text::Disabled("%s", I18n::GetSingleton()->Format(TKEY("location_result_count"),
 														   { { "shown", std::to_string(locationPicker.matches.size()) }, { "total", std::to_string(catalog.size()) } },
@@ -800,7 +800,7 @@ namespace
 		auto targets = manager->GetAuthoredLocationTargets();
 		if (targets.empty()) {
 			Util::Text::WrappedSecondary("%s", T(TKEY("location_list_empty"),
-				"No locations yet. Add one from where you are standing, or search for any place."));
+												   "No locations yet. Add one from where you are standing, or search for any place."));
 			return;
 		}
 
@@ -820,25 +820,25 @@ namespace
 			BrowserUI::RowShadeScope shade;
 			if (ImGui::BeginTable("AuthoredLocations", 5, kAuthoredLocationTableFlags)) {
 				SetupLocationColumns(actionWidth, true);
-		// The list is rebuilt from the manager each frame, so it is re-sorted each frame too.
-		SortLocationTargets(targets);
+				// The list is rebuilt from the manager each frame, so it is re-sorted each frame too.
+				SortLocationTargets(targets);
 
-		for (const auto& target : targets) {
-			ImGui::TableNextRow();
-			ImGui::PushID(target.formKey.c_str());
+				for (const auto& target : targets) {
+					ImGui::TableNextRow();
+					ImGui::PushID(target.formKey.c_str());
 
-			ImGui::TableNextColumn();
-			const bool opened = std::ranges::any_of(locationWindows, [&](const auto& window) {
+					ImGui::TableNextColumn();
+					const bool opened = std::ranges::any_of(locationWindows, [&](const auto& window) {
 						return window.open && IsSameLocationTarget(window.target, target);
-			});
-			DrawLocationTypeIcon(target);
-			if (Util::TableRowSelectable(target.name.c_str(), opened,
-					ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap) &&
-				ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-				OpenLocationWindow(target);
-			DrawLocationDetailColumns(target);
+					});
+					DrawLocationTypeIcon(target);
+					if (Util::TableRowSelectable(target.name.c_str(), opened,
+							ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap) &&
+						ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+						OpenLocationWindow(target);
+					DrawLocationDetailColumns(target);
 
-			ImGui::TableNextColumn();
+					ImGui::TableNextColumn();
 					if (std::ranges::any_of(here, [&](const auto& link) { return IsSameLocationTarget(link, target); })) {
 						Util::DrawInlineIndicatorDot(ImGui::GetColorU32(Util::Colors::GetSuccess()), true);
 						Util::AddTooltip(T(TKEY("location_here_tooltip"), "You are here: its settings apply now."));
@@ -856,9 +856,9 @@ namespace
 							false, ImGui::GetColorU32(ImVec4(error.x, error.y, error.z, 0.8f))))
 						RequestLocationRemoval(target);
 
-			ImGui::PopID();
-		}
-		ImGui::EndTable();
+					ImGui::PopID();
+				}
+				ImGui::EndTable();
 			}
 		}
 

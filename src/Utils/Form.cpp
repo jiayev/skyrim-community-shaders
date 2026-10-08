@@ -7,7 +7,8 @@ Util::SpidComponents Util::ParseSpid(const std::string& spid)
 	SpidComponents result;
 	auto tildePos = spid.find('~');
 	std::string_view hexPart = tildePos != std::string::npos ?
-	                               std::string_view(spid).substr(0, tildePos) : std::string_view(spid);
+	                               std::string_view(spid).substr(0, tildePos) :
+	                               std::string_view(spid);
 	if (tildePos != std::string::npos) {
 		result.pluginName = spid.substr(tildePos + 1);
 		if (result.pluginName.empty() || result.pluginName.contains('~'))

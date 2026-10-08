@@ -68,8 +68,8 @@ namespace
 
 		// Stretch like MenuItem and reserve room for the smaller shortcut column.
 		const float shortcutReserve = shortcutSize.x > 0.0f ?
-			shortcutSize.x + ImGui::GetStyle().ItemInnerSpacing.x * 2.0f :
-			0.0f;
+		                                  shortcutSize.x + ImGui::GetStyle().ItemInnerSpacing.x * 2.0f :
+		                                  0.0f;
 		if (shortcutReserve > 0.0f)
 			window->DC.CursorMaxPos.x = std::max(window->DC.CursorMaxPos.x, window->DC.CursorPos.x + ImGui::CalcTextSize(label, nullptr, true).x + shortcutReserve);
 
@@ -122,7 +122,7 @@ namespace
 		if (isActive || ImGui::IsItemHovered())
 			ImGui::GetWindowDrawList()->AddRectFilled(bb.Min, bb.Max,
 				ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_ButtonActive :
-										  (ImGui::IsItemHovered() ? ImGuiCol_ButtonHovered : ImGuiCol_Button)),
+														   (ImGui::IsItemHovered() ? ImGuiCol_ButtonHovered : ImGuiCol_Button)),
 				ImGui::GetStyle().FrameRounding);
 		Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), bb.Min, bb.GetSize(), glyph, glyphColor);
 		ImGui::PopStyleColor(3);
@@ -828,474 +828,474 @@ void EditorWindow::RenderUI()
 			ImGuiWindowFlags_NoNavFocus;
 
 		if (ImGui::Begin("##CSEditorActionBar", nullptr, kActionBarFlags)) {
-		// BeginMenu outside a MenuBar uses vertical layout: SpanAvailWidth + open-on-hover,
-		// so hovering anywhere on the bar opens File (Save/Close) and covers the icon row.
-		// Force horizontal layout so menus behave like a toolbar without ImGuiWindowFlags_MenuBar
-		// (which would reserve a second chrome strip under our custom-height bar).
-		// MenuBarAppending must also be set: otherwise FindBestWindowPosForPopup treats the
-		// dropdown as a side-child menu and parks it over this bar instead of below it.
-		ImGuiWindow* barWindow = ImGui::GetCurrentWindow();
-		const ImGuiLayoutType barLayoutBackup = barWindow->DC.LayoutType;
-		const bool menuBarAppendingBackup = barWindow->DC.MenuBarAppending;
-		barWindow->DC.LayoutType = ImGuiLayoutType_Horizontal;
-		barWindow->DC.MenuBarAppending = true;
-		ImGui::AlignTextToFramePadding();
+			// BeginMenu outside a MenuBar uses vertical layout: SpanAvailWidth + open-on-hover,
+			// so hovering anywhere on the bar opens File (Save/Close) and covers the icon row.
+			// Force horizontal layout so menus behave like a toolbar without ImGuiWindowFlags_MenuBar
+			// (which would reserve a second chrome strip under our custom-height bar).
+			// MenuBarAppending must also be set: otherwise FindBestWindowPosForPopup treats the
+			// dropdown as a side-child menu and parks it over this bar instead of below it.
+			ImGuiWindow* barWindow = ImGui::GetCurrentWindow();
+			const ImGuiLayoutType barLayoutBackup = barWindow->DC.LayoutType;
+			const bool menuBarAppendingBackup = barWindow->DC.MenuBarAppending;
+			barWindow->DC.LayoutType = ImGuiLayoutType_Horizontal;
+			barWindow->DC.MenuBarAppending = true;
+			ImGui::AlignTextToFramePadding();
 
-		if (ImGui::BeginMenu(T(TKEY("file"), "File"))) {
-			if (MenuItemWithShortcutSubtext(T(TKEY("save"), "Save"), "Ctrl+S"))
-				SaveAll();
+			if (ImGui::BeginMenu(T(TKEY("file"), "File"))) {
+				if (MenuItemWithShortcutSubtext(T(TKEY("save"), "Save"), "Ctrl+S"))
+					SaveAll();
 
-			// Save individual widgets submenu
-			if (ImGui::BeginMenu(T(TKEY("save_open_widget"), "Save Widget"))) {
-				bool hasOpen = false;
-				for (auto* collection : GetWidgetCollections())
-					hasOpen = WidgetFactory::DrawSaveWidgetMenuItems(*collection, hasOpen);
+				// Save individual widgets submenu
+				if (ImGui::BeginMenu(T(TKEY("save_open_widget"), "Save Widget"))) {
+					bool hasOpen = false;
+					for (auto* collection : GetWidgetCollections())
+						hasOpen = WidgetFactory::DrawSaveWidgetMenuItems(*collection, hasOpen);
 
-				if (currentCellLightingWidget && currentCellLightingWidget->IsOpen()) {
-					hasOpen = true;
-					if (ImGui::MenuItem(currentCellLightingWidget->GetEditorID().c_str()))
-						currentCellLightingWidget->Save();
+					if (currentCellLightingWidget && currentCellLightingWidget->IsOpen()) {
+						hasOpen = true;
+						if (ImGui::MenuItem(currentCellLightingWidget->GetEditorID().c_str()))
+							currentCellLightingWidget->Save();
+					}
+
+					if (!hasOpen)
+						ImGui::TextDisabled("%s", T(TKEY("no_open_widgets"), "No open widgets"));
+
+					ImGui::EndMenu();
 				}
 
-				if (!hasOpen)
-					ImGui::TextDisabled("%s", T(TKEY("no_open_widgets"), "No open widgets"));
+				ImGui::Separator();
+
+				const bool canExport = ScenePresetExport::CanExport();
+				if (MenuItemWithShortcutSubtext(T(TKEY("export_preset"), "Export Preset..."), "Ctrl+Shift+S", canExport))
+					ScenePresetExport::Open();
+				Util::AddTooltip(T(TKEY("scene_page_export_tooltip"),
+									 "Export scene settings as a preset, or update an existing pack's metadata and artwork."),
+					Util::kTooltipWhenDisabled);
+
+				ImGui::Separator();
+				for (auto* collection : GetWidgetCollections())
+					WidgetFactory::DrawCloseAllMenuItem(*collection);
+				ImGui::EndMenu();
+			}
+			ImGui::SameLine(0.0f, style.ItemSpacing.x);
+			if (ImGui::BeginMenu(T(TKEY("settings"), "Settings"))) {
+				if (ImGui::MenuItem(T(TKEY("general_settings"), "General Settings"))) {
+					showSettingsWindow = true;
+					settingsSelectedCategory = "General";
+				}
+				if (ImGui::MenuItem(T(TKEY("editor_flags"), "Editor Flags"))) {
+					showSettingsWindow = true;
+					settingsSelectedCategory = "Flags";
+				}
+				ImGui::Separator();
+
+				// Current cell lighting
+				auto player = RE::PlayerCharacter::GetSingleton();
+				if (player && player->parentCell && player->parentCell->IsInteriorCell()) {
+					if (ImGui::MenuItem(T(TKEY("edit_current_cell_lighting"), "Edit Current Cell Lighting"))) {
+						// Check if widget already exists
+						bool found = false;
+						if (currentCellLightingWidget && currentCellLightingWidget->cell == player->parentCell) {
+							currentCellLightingWidget->SetOpen(true);
+							found = true;
+						}
+
+						if (!found) {
+							// Create new widget for current cell
+							currentCellLightingWidget = std::make_unique<CellLightingWidget>(player->parentCell);
+							currentCellLightingWidget->CacheFormData();
+							currentCellLightingWidget->Load();
+							currentCellLightingWidget->SetOpen(true);
+						}
+					}
+				} else {
+					ImGui::BeginDisabled();
+					ImGui::MenuItem(T(TKEY("edit_current_cell_lighting"), "Edit Current Cell Lighting"));
+					ImGui::EndDisabled();
+					Util::AddTooltip(T(TKEY("interior_only_available"), "Only available in interior cells"), Util::kTooltipWhenDisabled);
+				}
+
+				ImGui::Separator();
+
+				if (ImGui::Checkbox(T(TKEY("auto_apply_changes"), "Auto-Apply Changes"), &settings.autoApplyChanges)) {
+					Save();
+				}
+				Util::AddTooltip(T(TKEY("auto_apply_changes_tooltip"), "Automatically apply weather changes to the game as you edit"));
+
+				if (ImGui::Checkbox(T(TKEY("enable_inherit_from_parent"), "Enable Inherit From Parent"), &settings.enableInheritFromParent)) {
+					Save();
+				}
+				Util::AddTooltip(T(TKEY("enable_inherit_tooltip"), "Show inherit from parent options in weather widgets"));
+				ImGui::EndMenu();
+			}
+			ImGui::SameLine(0.0f, style.ItemSpacing.x);
+			if (ImGui::BeginMenu(T(TKEY("window"), "Window"))) {
+				const bool hdrActive = globals::features::hdrDisplay.loaded && globals::features::hdrDisplay.settings.enableHDR;
+				if (hdrActive)
+					ImGui::BeginDisabled();
+				if (ImGui::Checkbox(T(TKEY("viewport"), "Viewport"), &settings.showViewport)) {
+					BackgroundBlur::SetCSEditorActive(settings.showViewport);
+					Save();
+				}
+				if (hdrActive) {
+					ImGui::EndDisabled();
+					Util::AddTooltip(T(TKEY("viewport_unavailable_hdr"), "Viewport is unavailable when HDR Display is enabled"), Util::kTooltipWhenDisabled);
+				}
+				if (ImGui::Checkbox(T(TKEY("palette"), "Palette"), &PaletteWindow::GetSingleton()->open)) {
+				}
+				if (ImGui::Checkbox(T(TKEY("weather_picker"), "Weather Picker"), &WeatherPickerWindow::GetSingleton()->open)) {
+				}
+				ImGui::Checkbox(T(TKEY("weather_debug"), "Weather Debug"), &showWeatherDebug);
+				Util::AddTooltip(T(TKEY("weather_debug_tooltip"), "Current and last weather details, plus rain & wetness analysis from other features"));
+				if (ImGui::Checkbox(T(TKEY("base_settings_window"), "Base Settings"), &settings.showFeaturesWindow))
+					Save();
+				Util::AddTooltip(T(TKEY("base_settings_window_tooltip"),
+					"Every feature's own settings, including Post Processing. They apply everywhere a scene layer does not "
+					"override them."));
+
+				// The editor, not Effects11Editor, owns restoring the main menu, hence Open/Close(false).
+				auto& effects11Editor = Effects11Editor::GetSingleton();
+				const bool effects11Loaded = globals::features::effects11.loaded;
+				bool effects11Open = effects11Editor.IsOpen();
+				ImGui::BeginDisabled(!effects11Loaded);
+				if (ImGui::Checkbox(T(TKEY("effects11_window"), "Effects 11"), &effects11Open))
+					effects11Open ? effects11Editor.Open(false) : effects11Editor.Close(false);
+				ImGui::EndDisabled();
+				if (!effects11Loaded)
+					Util::AddTooltip(T(TKEY("effects11_window_unavailable"), "Effects 11 is not loaded"), Util::kTooltipWhenDisabled);
+
+				if (ImGui::MenuItem(T(TKEY("reset_window_layout"), "Reset Window Layout"))) {
+					resetLayout = true;
+					Effects11Editor::GetSingleton().RequestLayoutReset();
+				}
+
+				ImGui::Separator();
+				ImGui::Text("%s", T(TKEY("open_widgets"), "Open Widgets:"));
+
+				int openCount = 0;
+				for (auto* collection : GetWidgetCollections())
+					openCount = WidgetFactory::DrawOpenWidgetMenuItems(*collection, openCount);
+
+				if (currentCellLightingWidget && currentCellLightingWidget->IsOpen()) {
+					++openCount;
+					if (ImGui::MenuItem(std::format("{}: {}", WidgetFactory::TranslateWidgetTypeName(currentCellLightingWidget->GetWidgetTypeName()), currentCellLightingWidget->GetEditorID()).c_str()))
+						ImGui::SetWindowFocus(currentCellLightingWidget->GetWindowTitle().c_str());
+				}
+
+				if (openCount == 0)
+					ImGui::TextDisabled("%s", T(TKEY("no_widgets_open"), "No widgets open"));
 
 				ImGui::EndMenu();
 			}
-
-			ImGui::Separator();
-
-			const bool canExport = ScenePresetExport::CanExport();
-			if (MenuItemWithShortcutSubtext(T(TKEY("export_preset"), "Export Preset..."), "Ctrl+Shift+S", canExport))
-				ScenePresetExport::Open();
-			Util::AddTooltip(T(TKEY("scene_page_export_tooltip"),
-								  "Export scene settings as a preset, or update an existing pack's metadata and artwork."),
-				Util::kTooltipWhenDisabled);
-
-			ImGui::Separator();
-			for (auto* collection : GetWidgetCollections())
-				WidgetFactory::DrawCloseAllMenuItem(*collection);
-			ImGui::EndMenu();
-		}
-		ImGui::SameLine(0.0f, style.ItemSpacing.x);
-		if (ImGui::BeginMenu(T(TKEY("settings"), "Settings"))) {
-			if (ImGui::MenuItem(T(TKEY("general_settings"), "General Settings"))) {
-				showSettingsWindow = true;
-				settingsSelectedCategory = "General";
+			ImGui::SameLine(0.0f, style.ItemSpacing.x);
+			if (ImGui::BeginMenu(T(TKEY("help"), "Help"))) {
+				ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("keyboard_shortcuts"), "Keyboard Shortcuts:"));
+				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_f"), "Ctrl+F: Focus search"));
+				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_s"), "Ctrl+S: Save local WIP"));
+				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_shift_s"), "Ctrl+Shift+S: Export preset"));
+				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_w"), "Ctrl+W: Close focused widget"));
+				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_z"), "Ctrl+Z: Undo"));
+				ImGui::BulletText("%s", T(TKEY("shortcut_enter"), "Enter: Open selected widget"));
+				ImGui::BulletText("%s", T(TKEY("shortcut_esc"), "Esc: Close editor"));
+				ImGui::Separator();
+				ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("scene_settings_greyed_label"), "Why are some settings greyed?"));
+				ImGui::PushTextWrapPos(0.0f);
+				ImGui::TextUnformatted(T(TKEY("scene_settings_greyed_note"),
+					"Greyed settings cannot be overridden on this page. Some cannot be overridden by any scene; others need a different kind, such as a location override."));
+				ImGui::PopTextWrapPos();
+				ImGui::Separator();
+				ImGui::Text("%s", T(TKEY("total_objects"), "Total Objects:"));
+				ImGui::BulletText(T(TKEY("weathers_count"), "Weathers: %d"), (int)weatherWidgets.size());
+				ImGui::BulletText(T(TKEY("lighting_count"), "Lighting: %d"), (int)lightingTemplateWidgets.size());
+				ImGui::BulletText(T(TKEY("imagespaces_count"), "ImageSpaces: %d"), (int)imageSpaceWidgets.size());
+				ImGui::EndMenu();
 			}
-			if (ImGui::MenuItem(T(TKEY("editor_flags"), "Editor Flags"))) {
-				showSettingsWindow = true;
-				settingsSelectedCategory = "Flags";
-			}
-			ImGui::Separator();
 
-			// Current cell lighting
-			auto player = RE::PlayerCharacter::GetSingleton();
-			if (player && player->parentCell && player->parentCell->IsInteriorCell()) {
-				if (ImGui::MenuItem(T(TKEY("edit_current_cell_lighting"), "Edit Current Cell Lighting"))) {
-					// Check if widget already exists
-					bool found = false;
-					if (currentCellLightingWidget && currentCellLightingWidget->cell == player->parentCell) {
-						currentCellLightingWidget->SetOpen(true);
-						found = true;
-					}
+			auto menu = globals::menu;
+			const auto& statusPalette = menu->GetTheme().StatusPalette;
+			const auto& textColor = menu->GetTheme().Palette.Text;
+			// One chrome size and one row Y for every icon button so scale changes move the bar as a unit.
+			const float iconSize = frameH;
+			const ImVec2 iconButtonSize(iconSize, iconSize);
 
-					if (!found) {
-						// Create new widget for current cell
-						currentCellLightingWidget = std::make_unique<CellLightingWidget>(player->parentCell);
-						currentCellLightingWidget->CacheFormData();
-						currentCellLightingWidget->Load();
-						currentCellLightingWidget->SetOpen(true);
-					}
+			const ImVec2 barPos = ImGui::GetWindowPos();
+			const float barMinY = barPos.y;
+			const float iconY = barMinY + (actionBarHeight - iconSize) * 0.5f;
+			const float textY = barMinY + Util::GetEditorChromeTextCursorOffsetY(actionBarHeight);
+
+			const ImVec4 enabledColor = statusPalette.SuccessColor;
+			const ImVec4 disabledColor = statusPalette.Error;
+			// Soft red for paused time lives in DrawTimePauseToggle / DrawPausedAwareGameHourSlider.
+
+			ImGui::SameLine();
+
+			// Undo: FA glyph (not theme PNG)
+			{
+				const bool canUndo = CanUndo();
+				ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, iconY));
+				ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+				ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+				{
+					auto _style = Util::TransparentIconButtonStyle();
+					ImGui::InvisibleButton("##GlobalUndo", iconButtonSize);
+					const ImRect bb(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+					if (ImGui::IsItemClicked() && canUndo)
+						PerformUndo();
+					ImVec4 undoCol = canUndo ? textColor : statusPalette.Disable;
+					if (!canUndo)
+						undoCol.w = 0.5f;
+					Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), bb.Min, bb.GetSize(),
+						Icons::FA(ICON_FA_UNDO), ImGui::GetColorU32(undoCol));
 				}
+				ImGui::PopStyleVar(2);
+				Util::AddTooltip(canUndo ? I18n::GetSingleton()->Format(TKEY("undo_states"), { { "count", std::to_string(undoStack.size()) } }, "Undo (Ctrl+Z) - {count} states").c_str() : T(TKEY("undo_no_changes"), "Undo (Ctrl+Z) - No changes to undo"));
+			}
+
+			// Export preset: the one on-screen entry to the universal export dialog. It covers every
+			// context, so it sits with the other editor-wide actions instead of on each scene page.
+			ImGui::SameLine(0.0f, style.ItemSpacing.x);
+			{
+				const bool canExport = ScenePresetExport::CanExport();
+				ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, iconY));
+				ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+				ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+				{
+					auto _style = Util::TransparentIconButtonStyle();
+					ImGui::InvisibleButton("##GlobalExportPreset", iconButtonSize);
+					const ImRect bb(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+					if (ImGui::IsItemClicked() && canExport)
+						ScenePresetExport::Open();
+					ImVec4 exportCol = canExport ? textColor : statusPalette.Disable;
+					if (!canExport)
+						exportCol.w = 0.5f;
+					Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), bb.Min, bb.GetSize(),
+						SceneActionIcons::kExport, ImGui::GetColorU32(exportCol));
+				}
+				ImGui::PopStyleVar(2);
+				const std::string exportTooltip = std::format("{} (Ctrl+Shift+S)\n{}", T(TKEY("export_preset"), "Export Preset..."),
+					canExport ?
+						T(TKEY("scene_page_export_tooltip"), "Export scene settings as a preset, or update an existing pack's metadata and artwork.") :
+						T(TKEY("export_preset_empty_tooltip"), "Nothing to export yet: author scene settings, save form edits, or load Post Processing or an Effects 11 preset first."));
+				Util::AddTooltip(exportTooltip.c_str(), Util::kTooltipWhenDisabled);
+			}
+
+			// Delete authored scene changes: global action, same row as Undo.
+			ImGui::SameLine(0.0f, style.ItemSpacing.x);
+			{
+				auto* sceneManager = globals::sceneSettingsManager;
+				const bool canDelete = sceneManager && sceneManager->HasAnyUserEntries();
+				ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, iconY));
+				ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+				ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+				{
+					auto _style = Util::TransparentIconButtonStyle();
+					ImGui::InvisibleButton("##DeleteSceneChanges", iconButtonSize);
+					const ImRect bb(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+					if (ImGui::IsItemClicked() && canDelete) {
+						deleteSceneChangesConfirmation.title = T(TKEY("scene_page_delete_changes_title"), "Delete changes");
+						deleteSceneChangesConfirmation.message = T(TKEY("scene_page_delete_changes_message"),
+							"Remove every setting you have authored, in every context, and let the installed preset drive the "
+							"scene?\n\nSettings you removed from the preset come back too. This cannot be undone.");
+						deleteSceneChangesConfirmation.confirmLabel = T(TKEY("scene_page_delete_changes"), "Delete Changes");
+						deleteSceneChangesConfirmation.cancelLabel = T(TKEY("cancel"), "Cancel");
+						deleteSceneChangesConfirmation.Request();
+					}
+					ImVec4 deleteCol = canDelete ? statusPalette.Error : statusPalette.Disable;
+					if (!canDelete)
+						deleteCol.w = 0.5f;
+					Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), bb.Min, bb.GetSize(),
+						SceneActionIcons::kDelete, ImGui::GetColorU32(deleteCol));
+				}
+				ImGui::PopStyleVar(2);
+				Util::AddTooltip(canDelete ?
+									 T(TKEY("scene_page_delete_changes_tooltip"),
+										 "Deletes your authored scene changes everywhere so the installed preset applies again.") :
+									 T(TKEY("scene_page_delete_changes_empty_tooltip"),
+										 "No authored scene changes to delete."),
+					Util::kTooltipWhenDisabled);
+			}
+
+			// Right-aligned items: X from the trailing edge; Y shares iconY / textY with the left cluster.
+			const float clipRight = barPos.x + ImGui::GetWindowSize().x - style.FramePadding.x;
+			const float barMinX = barPos.x;
+			const float barWidth = ImGui::GetWindowSize().x;
+			const float& itemSpacing = ImGui::GetStyle().ItemSpacing.x;
+			const float sliderWidth = kMenuBarSliderWidth * scale * 0.75f;
+			const float halfSliderWidth = sliderWidth * 0.5f;
+
+			float rightCursor = clipRight;
+
+			rightCursor -= iconSize;
+			const float xButtonX = rightCursor;
+
+			constexpr float kDividerThickness = 1.0f;
+			std::array<float, 2> dividerX{};
+			int dividerCount = 0;
+			rightCursor -= itemSpacing + kDividerThickness;
+			dividerX[dividerCount++] = rightCursor;
+
+			// Time scrubber split in half - game time and time speed
+			rightCursor -= itemSpacing + halfSliderWidth;
+			const float timeSpeedSliderX = rightCursor;
+
+			rightCursor -= itemSpacing + halfSliderWidth;
+			const float gameTimeSliderX = rightCursor;
+
+			rightCursor -= itemSpacing + iconSize;
+			const float pauseButtonX = rightCursor;
+
+			float freeCameraX = 0, playModeX = 0;
+			rightCursor -= itemSpacing + kDividerThickness;
+			dividerX[dividerCount++] = rightCursor;
+			rightCursor -= itemSpacing + iconSize;
+			playModeX = rightCursor;
+			rightCursor -= itemSpacing + iconSize;
+			freeCameraX = rightCursor;
+
+			// Preview mode status text
+			float previewStatusX = 0;
+			char previewStatusBuf[128] = {};
+			bool showPreviewStatus = previewMode != PreviewMode::None;
+			if (showPreviewStatus) {
+				std::string hotkey = Util::Input::KeyIdToString(menu->GetSettings().CSEditorToggleKey);
+				if (previewMode == PreviewMode::FreeCamera)
+					std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), T(TKEY("preview_free_camera"), " [ %s ] FREE CAMERA (Speed: %.0f)"), hotkey.c_str(), flySpeed);
+				else if (previewMode == PreviewMode::FreeCameraLocked)
+					std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), T(TKEY("preview_free_camera_locked"), " [ %s ] FREE CAMERA LOCKED"), hotkey.c_str());
+				else
+					std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), T(TKEY("preview_play_mode"), " [ %s ] PLAY MODE"), hotkey.c_str());
+				rightCursor -= itemSpacing + ImGui::CalcTextSize(previewStatusBuf).x;
+				previewStatusX = rightCursor;
+			}
+
+			// Weather lock + name, and period title, centered in the header
+			const bool weatherLocked = IsWeatherLocked();
+			RE::TESWeather* statusWeather = GetLockedWeather();
+			if (!statusWeather) {
+				if (auto* sky = RE::Sky::GetSingleton())
+					statusWeather = sky->currentWeather;
+			}
+			const char* weatherName = nullptr;
+			if (statusWeather)
+				weatherName = statusWeather->GetFormEditorID();
+			if (!weatherName || !*weatherName)
+				weatherName = statusWeather ? T(TKEY("unknown"), "Unknown") : nullptr;
+
+			char periodBuf[64];
+			std::snprintf(periodBuf, sizeof(periodBuf), "(%s)", TOD::GetPeriodName(TOD::GetActivePeriod()));
+			const float periodWidth = ImGui::CalcTextSize(periodBuf).x;
+
+			const float lockBadgeSize = Util::GetLockStatusBadgeSize();
+			const float weatherNameW = weatherName ? ImGui::CalcTextSize(weatherName).x : 0.0f;
+			const float weatherStatusGap = ImGui::GetStyle().ItemInnerSpacing.x;
+			const float weatherBlockW = weatherName ? (lockBadgeSize + weatherStatusGap + weatherNameW) : 0.0f;
+			const float centerClusterW = weatherBlockW + (weatherBlockW > 0.0f ? itemSpacing : 0.0f) + periodWidth;
+			const float centerClusterX = barMinX + (barWidth - centerClusterW) * 0.5f;
+
+			if (showPreviewStatus) {
+				ImGui::SetCursorScreenPos(ImVec2(previewStatusX, textY));
+				ImGui::TextColored(Util::GetPulsingColor(enabledColor), "%s", previewStatusBuf);
+			}
+
+			{
+				auto* drawList = ImGui::GetWindowDrawList();
+				const ImU32 dividerColor = ImGui::GetColorU32(ImGuiCol_Separator);
+				const float inset = actionBarHeight * 0.2f;
+				for (int i = 0; i < dividerCount; ++i)
+					drawList->AddLine({ dividerX[i], barMinY + inset }, { dividerX[i], barMinY + actionBarHeight - inset }, dividerColor, kDividerThickness);
+			}
+
+			float centerX = centerClusterX;
+			if (weatherName) {
+				const float badgeY = iconY + (iconSize - lockBadgeSize) * 0.5f;
+				ImGui::SetCursorScreenPos(ImVec2(centerX, badgeY));
+				if (Util::LockStatusBadgeButton("##ActionBarWeatherLock", weatherLocked,
+						weatherLocked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("force_this_weather"), "Force This Weather"))) {
+					if (weatherLocked)
+						UnlockWeather();
+					else if (statusWeather)
+						LockWeather(statusWeather);
+				}
+				centerX += lockBadgeSize + weatherStatusGap;
+				if (ImGuiWindow* window = ImGui::GetCurrentWindow())
+					window->DC.CurrLineTextBaseOffset = 0.0f;
+				ImGui::SetCursorScreenPos(ImVec2(centerX, textY));
+				ImGui::TextColored(weatherLocked ? enabledColor : disabledColor, "%s", weatherName);
+				centerX += weatherNameW + itemSpacing;
+				ImGui::SetCursorScreenPos(ImVec2(centerX, textY));
+				ImGui::TextUnformatted(periodBuf);
 			} else {
-				ImGui::BeginDisabled();
-				ImGui::MenuItem(T(TKEY("edit_current_cell_lighting"), "Edit Current Cell Lighting"));
-				ImGui::EndDisabled();
-				Util::AddTooltip(T(TKEY("interior_only_available"), "Only available in interior cells"), Util::kTooltipWhenDisabled);
+				ImGui::SetCursorScreenPos(ImVec2(centerX, textY));
+				ImGui::TextUnformatted(periodBuf);
 			}
 
-			ImGui::Separator();
+			// Toggle-style FA/Lucide/Tabler glyph button: same chrome as the old image toggles.
+			auto PlaceToggleIconButton = [&](const char* id, Icons::GlyphRef glyph, bool isActive, float posX, const ImVec4& activeColor) -> bool {
+				ImGui::SetCursorScreenPos(ImVec2(posX, iconY));
+				return DrawToggleIconButton(id, glyph, isActive, activeColor, iconButtonSize, ImGui::GetColorU32(textColor));
+			};
 
-			if (ImGui::Checkbox(T(TKEY("auto_apply_changes"), "Auto-Apply Changes"), &settings.autoApplyChanges)) {
-				Save();
-			}
-			Util::AddTooltip(T(TKEY("auto_apply_changes_tooltip"), "Automatically apply weather changes to the game as you edit"));
-
-			if (ImGui::Checkbox(T(TKEY("enable_inherit_from_parent"), "Enable Inherit From Parent"), &settings.enableInheritFromParent)) {
-				Save();
-			}
-			Util::AddTooltip(T(TKEY("enable_inherit_tooltip"), "Show inherit from parent options in weather widgets"));
-			ImGui::EndMenu();
-		}
-		ImGui::SameLine(0.0f, style.ItemSpacing.x);
-		if (ImGui::BeginMenu(T(TKEY("window"), "Window"))) {
-			const bool hdrActive = globals::features::hdrDisplay.loaded && globals::features::hdrDisplay.settings.enableHDR;
-			if (hdrActive)
-				ImGui::BeginDisabled();
-			if (ImGui::Checkbox(T(TKEY("viewport"), "Viewport"), &settings.showViewport)) {
-				BackgroundBlur::SetCSEditorActive(settings.showViewport);
-				Save();
-			}
-			if (hdrActive) {
-				ImGui::EndDisabled();
-				Util::AddTooltip(T(TKEY("viewport_unavailable_hdr"), "Viewport is unavailable when HDR Display is enabled"), Util::kTooltipWhenDisabled);
-			}
-			if (ImGui::Checkbox(T(TKEY("palette"), "Palette"), &PaletteWindow::GetSingleton()->open)) {
-			}
-			if (ImGui::Checkbox(T(TKEY("weather_picker"), "Weather Picker"), &WeatherPickerWindow::GetSingleton()->open)) {
-			}
-			ImGui::Checkbox(T(TKEY("weather_debug"), "Weather Debug"), &showWeatherDebug);
-			Util::AddTooltip(T(TKEY("weather_debug_tooltip"), "Current and last weather details, plus rain & wetness analysis from other features"));
-			if (ImGui::Checkbox(T(TKEY("base_settings_window"), "Base Settings"), &settings.showFeaturesWindow))
-				Save();
-			Util::AddTooltip(T(TKEY("base_settings_window_tooltip"),
-				"Every feature's own settings, including Post Processing. They apply everywhere a scene layer does not "
-				"override them."));
-
-			// The editor, not Effects11Editor, owns restoring the main menu, hence Open/Close(false).
-			auto& effects11Editor = Effects11Editor::GetSingleton();
-			const bool effects11Loaded = globals::features::effects11.loaded;
-			bool effects11Open = effects11Editor.IsOpen();
-			ImGui::BeginDisabled(!effects11Loaded);
-			if (ImGui::Checkbox(T(TKEY("effects11_window"), "Effects 11"), &effects11Open))
-				effects11Open ? effects11Editor.Open(false) : effects11Editor.Close(false);
-			ImGui::EndDisabled();
-			if (!effects11Loaded)
-				Util::AddTooltip(T(TKEY("effects11_window_unavailable"), "Effects 11 is not loaded"), Util::kTooltipWhenDisabled);
-
-			if (ImGui::MenuItem(T(TKEY("reset_window_layout"), "Reset Window Layout"))) {
-				resetLayout = true;
-				Effects11Editor::GetSingleton().RequestLayoutReset();
-			}
-
-			ImGui::Separator();
-			ImGui::Text("%s", T(TKEY("open_widgets"), "Open Widgets:"));
-
-			int openCount = 0;
-			for (auto* collection : GetWidgetCollections())
-				openCount = WidgetFactory::DrawOpenWidgetMenuItems(*collection, openCount);
-
-			if (currentCellLightingWidget && currentCellLightingWidget->IsOpen()) {
-				++openCount;
-				if (ImGui::MenuItem(std::format("{}: {}", WidgetFactory::TranslateWidgetTypeName(currentCellLightingWidget->GetWidgetTypeName()), currentCellLightingWidget->GetEditorID()).c_str()))
-					ImGui::SetWindowFocus(currentCellLightingWidget->GetWindowTitle().c_str());
-			}
-
-			if (openCount == 0)
-				ImGui::TextDisabled("%s", T(TKEY("no_widgets_open"), "No widgets open"));
-
-			ImGui::EndMenu();
-		}
-		ImGui::SameLine(0.0f, style.ItemSpacing.x);
-		if (ImGui::BeginMenu(T(TKEY("help"), "Help"))) {
-			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("keyboard_shortcuts"), "Keyboard Shortcuts:"));
-			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_f"), "Ctrl+F: Focus search"));
-			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_s"), "Ctrl+S: Save local WIP"));
-			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_shift_s"), "Ctrl+Shift+S: Export preset"));
-			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_w"), "Ctrl+W: Close focused widget"));
-			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_z"), "Ctrl+Z: Undo"));
-			ImGui::BulletText("%s", T(TKEY("shortcut_enter"), "Enter: Open selected widget"));
-			ImGui::BulletText("%s", T(TKEY("shortcut_esc"), "Esc: Close editor"));
-			ImGui::Separator();
-			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("scene_settings_greyed_label"), "Why are some settings greyed?"));
-			ImGui::PushTextWrapPos(0.0f);
-			ImGui::TextUnformatted(T(TKEY("scene_settings_greyed_note"),
-				"Greyed settings cannot be overridden on this page. Some cannot be overridden by any scene; others need a different kind, such as a location override."));
-			ImGui::PopTextWrapPos();
-			ImGui::Separator();
-			ImGui::Text("%s", T(TKEY("total_objects"), "Total Objects:"));
-			ImGui::BulletText(T(TKEY("weathers_count"), "Weathers: %d"), (int)weatherWidgets.size());
-			ImGui::BulletText(T(TKEY("lighting_count"), "Lighting: %d"), (int)lightingTemplateWidgets.size());
-			ImGui::BulletText(T(TKEY("imagespaces_count"), "ImageSpaces: %d"), (int)imageSpaceWidgets.size());
-			ImGui::EndMenu();
-		}
-
-		auto menu = globals::menu;
-		const auto& statusPalette = menu->GetTheme().StatusPalette;
-		const auto& textColor = menu->GetTheme().Palette.Text;
-		// One chrome size and one row Y for every icon button so scale changes move the bar as a unit.
-		const float iconSize = frameH;
-		const ImVec2 iconButtonSize(iconSize, iconSize);
-
-		const ImVec2 barPos = ImGui::GetWindowPos();
-		const float barMinY = barPos.y;
-		const float iconY = barMinY + (actionBarHeight - iconSize) * 0.5f;
-		const float textY = barMinY + Util::GetEditorChromeTextCursorOffsetY(actionBarHeight);
-
-		const ImVec4 enabledColor = statusPalette.SuccessColor;
-		const ImVec4 disabledColor = statusPalette.Error;
-		// Soft red for paused time lives in DrawTimePauseToggle / DrawPausedAwareGameHourSlider.
-
-		ImGui::SameLine();
-
-		// Undo: FA glyph (not theme PNG)
-		{
-			const bool canUndo = CanUndo();
-			ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, iconY));
-			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
 			{
-				auto _style = Util::TransparentIconButtonStyle();
-				ImGui::InvisibleButton("##GlobalUndo", iconButtonSize);
-				const ImRect bb(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-				if (ImGui::IsItemClicked() && canUndo)
-					PerformUndo();
-				ImVec4 undoCol = canUndo ? textColor : statusPalette.Disable;
-				if (!canUndo)
-					undoCol.w = 0.5f;
-				Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), bb.Min, bb.GetSize(),
-					Icons::FA(ICON_FA_UNDO), ImGui::GetColorU32(undoCol));
-			}
-			ImGui::PopStyleVar(2);
-			Util::AddTooltip(canUndo ? I18n::GetSingleton()->Format(TKEY("undo_states"), { { "count", std::to_string(undoStack.size()) } }, "Undo (Ctrl+Z) - {count} states").c_str() : T(TKEY("undo_no_changes"), "Undo (Ctrl+Z) - No changes to undo"));
-		}
-
-		// Export preset: the one on-screen entry to the universal export dialog. It covers every
-		// context, so it sits with the other editor-wide actions instead of on each scene page.
-		ImGui::SameLine(0.0f, style.ItemSpacing.x);
-		{
-			const bool canExport = ScenePresetExport::CanExport();
-			ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, iconY));
-			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
-			{
-				auto _style = Util::TransparentIconButtonStyle();
-				ImGui::InvisibleButton("##GlobalExportPreset", iconButtonSize);
-				const ImRect bb(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-				if (ImGui::IsItemClicked() && canExport)
-					ScenePresetExport::Open();
-				ImVec4 exportCol = canExport ? textColor : statusPalette.Disable;
-				if (!canExport)
-					exportCol.w = 0.5f;
-				Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), bb.Min, bb.GetSize(),
-					SceneActionIcons::kExport, ImGui::GetColorU32(exportCol));
-			}
-			ImGui::PopStyleVar(2);
-			const std::string exportTooltip = std::format("{} (Ctrl+Shift+S)\n{}", T(TKEY("export_preset"), "Export Preset..."),
-				canExport ?
-					T(TKEY("scene_page_export_tooltip"), "Export scene settings as a preset, or update an existing pack's metadata and artwork.") :
-					T(TKEY("export_preset_empty_tooltip"), "Nothing to export yet: author scene settings, save form edits, or load Post Processing or an Effects 11 preset first."));
-			Util::AddTooltip(exportTooltip.c_str(), Util::kTooltipWhenDisabled);
-		}
-
-		// Delete authored scene changes: global action, same row as Undo.
-		ImGui::SameLine(0.0f, style.ItemSpacing.x);
-		{
-			auto* sceneManager = globals::sceneSettingsManager;
-			const bool canDelete = sceneManager && sceneManager->HasAnyUserEntries();
-			ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, iconY));
-			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
-			{
-				auto _style = Util::TransparentIconButtonStyle();
-				ImGui::InvisibleButton("##DeleteSceneChanges", iconButtonSize);
-				const ImRect bb(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-				if (ImGui::IsItemClicked() && canDelete) {
-					deleteSceneChangesConfirmation.title = T(TKEY("scene_page_delete_changes_title"), "Delete changes");
-					deleteSceneChangesConfirmation.message = T(TKEY("scene_page_delete_changes_message"),
-						"Remove every setting you have authored, in every context, and let the installed preset drive the "
-						"scene?\n\nSettings you removed from the preset come back too. This cannot be undone.");
-					deleteSceneChangesConfirmation.confirmLabel = T(TKEY("scene_page_delete_changes"), "Delete Changes");
-					deleteSceneChangesConfirmation.cancelLabel = T(TKEY("cancel"), "Cancel");
-					deleteSceneChangesConfirmation.Request();
+				bool isActive = previewMode == PreviewMode::FreeCamera || previewMode == PreviewMode::FreeCameraLocked;
+				if (PlaceToggleIconButton("##FreeCamera", Icons::LC(ICON_LC_SCAN_EYE), isActive, freeCameraX, enabledColor)) {
+					if (isActive)
+						ExitPreviewMode();
+					else
+						EnterPreviewMode(PreviewMode::FreeCamera);
 				}
-				ImVec4 deleteCol = canDelete ? statusPalette.Error : statusPalette.Disable;
-				if (!canDelete)
-					deleteCol.w = 0.5f;
-				Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), bb.Min, bb.GetSize(),
-					SceneActionIcons::kDelete, ImGui::GetColorU32(deleteCol));
+				Util::AddTooltip(isActive ?
+									 T(TKEY("exit_free_camera"), "Exit Free Camera (right-click or Shift+End)") :
+									 T(TKEY("free_camera_scroll"), "Free Camera (scroll to adjust speed)"));
 			}
-			ImGui::PopStyleVar(2);
-			Util::AddTooltip(canDelete ?
-					T(TKEY("scene_page_delete_changes_tooltip"),
-						"Deletes your authored scene changes everywhere so the installed preset applies again.") :
-					T(TKEY("scene_page_delete_changes_empty_tooltip"),
-						"No authored scene changes to delete."),
-				Util::kTooltipWhenDisabled);
-		}
-
-		// Right-aligned items: X from the trailing edge; Y shares iconY / textY with the left cluster.
-		const float clipRight = barPos.x + ImGui::GetWindowSize().x - style.FramePadding.x;
-		const float barMinX = barPos.x;
-		const float barWidth = ImGui::GetWindowSize().x;
-		const float& itemSpacing = ImGui::GetStyle().ItemSpacing.x;
-		const float sliderWidth = kMenuBarSliderWidth * scale * 0.75f;
-		const float halfSliderWidth = sliderWidth * 0.5f;
-
-		float rightCursor = clipRight;
-
-		rightCursor -= iconSize;
-		const float xButtonX = rightCursor;
-
-		constexpr float kDividerThickness = 1.0f;
-		std::array<float, 2> dividerX{};
-		int dividerCount = 0;
-		rightCursor -= itemSpacing + kDividerThickness;
-		dividerX[dividerCount++] = rightCursor;
-
-		// Time scrubber split in half - game time and time speed
-		rightCursor -= itemSpacing + halfSliderWidth;
-		const float timeSpeedSliderX = rightCursor;
-
-		rightCursor -= itemSpacing + halfSliderWidth;
-		const float gameTimeSliderX = rightCursor;
-
-		rightCursor -= itemSpacing + iconSize;
-		const float pauseButtonX = rightCursor;
-
-		float freeCameraX = 0, playModeX = 0;
-		rightCursor -= itemSpacing + kDividerThickness;
-		dividerX[dividerCount++] = rightCursor;
-		rightCursor -= itemSpacing + iconSize;
-		playModeX = rightCursor;
-		rightCursor -= itemSpacing + iconSize;
-		freeCameraX = rightCursor;
-
-		// Preview mode status text
-		float previewStatusX = 0;
-		char previewStatusBuf[128] = {};
-		bool showPreviewStatus = previewMode != PreviewMode::None;
-		if (showPreviewStatus) {
-			std::string hotkey = Util::Input::KeyIdToString(menu->GetSettings().CSEditorToggleKey);
-			if (previewMode == PreviewMode::FreeCamera)
-				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), T(TKEY("preview_free_camera"), " [ %s ] FREE CAMERA (Speed: %.0f)"), hotkey.c_str(), flySpeed);
-			else if (previewMode == PreviewMode::FreeCameraLocked)
-				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), T(TKEY("preview_free_camera_locked"), " [ %s ] FREE CAMERA LOCKED"), hotkey.c_str());
-			else
-				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), T(TKEY("preview_play_mode"), " [ %s ] PLAY MODE"), hotkey.c_str());
-			rightCursor -= itemSpacing + ImGui::CalcTextSize(previewStatusBuf).x;
-			previewStatusX = rightCursor;
-		}
-
-		// Weather lock + name, and period title, centered in the header
-		const bool weatherLocked = IsWeatherLocked();
-		RE::TESWeather* statusWeather = GetLockedWeather();
-		if (!statusWeather) {
-			if (auto* sky = RE::Sky::GetSingleton())
-				statusWeather = sky->currentWeather;
-		}
-		const char* weatherName = nullptr;
-		if (statusWeather)
-			weatherName = statusWeather->GetFormEditorID();
-		if (!weatherName || !*weatherName)
-			weatherName = statusWeather ? T(TKEY("unknown"), "Unknown") : nullptr;
-
-		char periodBuf[64];
-		std::snprintf(periodBuf, sizeof(periodBuf), "(%s)", TOD::GetPeriodName(TOD::GetActivePeriod()));
-		const float periodWidth = ImGui::CalcTextSize(periodBuf).x;
-
-		const float lockBadgeSize = Util::GetLockStatusBadgeSize();
-		const float weatherNameW = weatherName ? ImGui::CalcTextSize(weatherName).x : 0.0f;
-		const float weatherStatusGap = ImGui::GetStyle().ItemInnerSpacing.x;
-		const float weatherBlockW = weatherName ? (lockBadgeSize + weatherStatusGap + weatherNameW) : 0.0f;
-		const float centerClusterW = weatherBlockW + (weatherBlockW > 0.0f ? itemSpacing : 0.0f) + periodWidth;
-		const float centerClusterX = barMinX + (barWidth - centerClusterW) * 0.5f;
-
-		if (showPreviewStatus) {
-			ImGui::SetCursorScreenPos(ImVec2(previewStatusX, textY));
-			ImGui::TextColored(Util::GetPulsingColor(enabledColor), "%s", previewStatusBuf);
-		}
-
-		{
-			auto* drawList = ImGui::GetWindowDrawList();
-			const ImU32 dividerColor = ImGui::GetColorU32(ImGuiCol_Separator);
-			const float inset = actionBarHeight * 0.2f;
-			for (int i = 0; i < dividerCount; ++i)
-				drawList->AddLine({ dividerX[i], barMinY + inset }, { dividerX[i], barMinY + actionBarHeight - inset }, dividerColor, kDividerThickness);
-		}
-
-		float centerX = centerClusterX;
-		if (weatherName) {
-			const float badgeY = iconY + (iconSize - lockBadgeSize) * 0.5f;
-			ImGui::SetCursorScreenPos(ImVec2(centerX, badgeY));
-			if (Util::LockStatusBadgeButton("##ActionBarWeatherLock", weatherLocked,
-					weatherLocked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("force_this_weather"), "Force This Weather"))) {
-				if (weatherLocked)
-					UnlockWeather();
-				else if (statusWeather)
-					LockWeather(statusWeather);
+			{
+				bool isActive = previewMode == PreviewMode::PlayMode;
+				if (PlaceToggleIconButton("##PlayMode", Icons::FA(ICON_FA_WALKING), isActive, playModeX, enabledColor)) {
+					if (isActive)
+						ExitPreviewMode();
+					else
+						EnterPreviewMode(PreviewMode::PlayMode);
+				}
+				Util::AddTooltip(isActive ?
+									 T(TKEY("exit_play_mode"), "Exit Play Mode (right-click or Shift+End)") :
+									 T(TKEY("play_mode_walk"), "Play Mode - Walk around normally"));
 			}
-			centerX += lockBadgeSize + weatherStatusGap;
-			if (ImGuiWindow* window = ImGui::GetCurrentWindow())
-				window->DC.CurrLineTextBaseOffset = 0.0f;
-			ImGui::SetCursorScreenPos(ImVec2(centerX, textY));
-			ImGui::TextColored(weatherLocked ? enabledColor : disabledColor, "%s", weatherName);
-			centerX += weatherNameW + itemSpacing;
-			ImGui::SetCursorScreenPos(ImVec2(centerX, textY));
-			ImGui::TextUnformatted(periodBuf);
-		} else {
-			ImGui::SetCursorScreenPos(ImVec2(centerX, textY));
-			ImGui::TextUnformatted(periodBuf);
-		}
 
-		// Toggle-style FA/Lucide/Tabler glyph button: same chrome as the old image toggles.
-		auto PlaceToggleIconButton = [&](const char* id, Icons::GlyphRef glyph, bool isActive, float posX, const ImVec4& activeColor) -> bool {
-			ImGui::SetCursorScreenPos(ImVec2(posX, iconY));
-			return DrawToggleIconButton(id, glyph, isActive, activeColor, iconButtonSize, ImGui::GetColorU32(textColor));
-		};
-
-		{
-			bool isActive = previewMode == PreviewMode::FreeCamera || previewMode == PreviewMode::FreeCameraLocked;
-			if (PlaceToggleIconButton("##FreeCamera", Icons::LC(ICON_LC_SCAN_EYE), isActive, freeCameraX, enabledColor)) {
-				if (isActive)
-					ExitPreviewMode();
-				else
-					EnterPreviewMode(PreviewMode::FreeCamera);
+			{
+				ImGui::SetCursorScreenPos(ImVec2(pauseButtonX, iconY));
+				DrawTimePauseToggle("##GlobalPauseTime", iconButtonSize);
+				Util::AddTooltip(IsTimePaused() ? T(TKEY("resume_time"), "Resume Time") : T(TKEY("pause_time"), "Pause Time"));
 			}
-			Util::AddTooltip(isActive ?
-					T(TKEY("exit_free_camera"), "Exit Free Camera (right-click or Shift+End)") :
-					T(TKEY("free_camera_scroll"), "Free Camera (scroll to adjust speed)"));
-		}
-		{
-			bool isActive = previewMode == PreviewMode::PlayMode;
-			if (PlaceToggleIconButton("##PlayMode", Icons::FA(ICON_FA_WALKING), isActive, playModeX, enabledColor)) {
-				if (isActive)
-					ExitPreviewMode();
-				else
-					EnterPreviewMode(PreviewMode::PlayMode);
+
+			auto calendar = Util::Climate::GetCalendar();
+			if (calendar && calendar->gameHour && calendar->timeScale) {
+				ImGui::SetCursorScreenPos(ImVec2(gameTimeSliderX, iconY));
+				ImGui::SetNextItemWidth(halfSliderWidth);
+				DrawPausedAwareGameHourSlider("##MenuBarGameTimeSlider");
+
+				ImGui::SetCursorScreenPos(ImVec2(timeSpeedSliderX, iconY));
+				ImGui::SetNextItemWidth(halfSliderWidth);
+				DrawTimeScaleSlider("##MenuBarTimeScaleSlider", calendar);
 			}
-			Util::AddTooltip(isActive ?
-					T(TKEY("exit_play_mode"), "Exit Play Mode (right-click or Shift+End)") :
-					T(TKEY("play_mode_walk"), "Play Mode - Walk around normally"));
-		}
 
-		{
-			ImGui::SetCursorScreenPos(ImVec2(pauseButtonX, iconY));
-			DrawTimePauseToggle("##GlobalPauseTime", iconButtonSize);
-			Util::AddTooltip(IsTimePaused() ? T(TKEY("resume_time"), "Resume Time") : T(TKEY("pause_time"), "Pause Time"));
-		}
+			// Close: white cross, no red fill
+			ImGui::SetCursorScreenPos(ImVec2(xButtonX, iconY));
+			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+			{
+				auto _style = Util::TransparentIconButtonStyle();
+				const bool closeClicked = ImGui::InvisibleButton("##ActionBarClose", iconButtonSize);
+				const ImRect closeBb(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+				if (ImGui::IsItemHovered())
+					Util::DrawRoundedButtonHighlight(closeBb, true, ImGui::IsItemActive(), ImGui::GetWindowDrawList());
+				Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), closeBb.Min, closeBb.GetSize(),
+					Icons::FA(ICON_FA_TIMES), ImGui::GetColorU32(textColor));
+				if (closeClicked)
+					open = false;
+			}
+			ImGui::PopStyleVar();
+			Util::AddTooltip(T(TKEY("close_cs_editor"), "Close CS Editor (Esc)"));
 
-		auto calendar = Util::Climate::GetCalendar();
-		if (calendar && calendar->gameHour && calendar->timeScale) {
-			ImGui::SetCursorScreenPos(ImVec2(gameTimeSliderX, iconY));
-			ImGui::SetNextItemWidth(halfSliderWidth);
-			DrawPausedAwareGameHourSlider("##MenuBarGameTimeSlider");
-
-			ImGui::SetCursorScreenPos(ImVec2(timeSpeedSliderX, iconY));
-			ImGui::SetNextItemWidth(halfSliderWidth);
-			DrawTimeScaleSlider("##MenuBarTimeScaleSlider", calendar);
-		}
-
-		// Close: white cross, no red fill
-		ImGui::SetCursorScreenPos(ImVec2(xButtonX, iconY));
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
-		{
-			auto _style = Util::TransparentIconButtonStyle();
-			const bool closeClicked = ImGui::InvisibleButton("##ActionBarClose", iconButtonSize);
-			const ImRect closeBb(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-			if (ImGui::IsItemHovered())
-				Util::DrawRoundedButtonHighlight(closeBb, true, ImGui::IsItemActive(), ImGui::GetWindowDrawList());
-			Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), closeBb.Min, closeBb.GetSize(),
-				Icons::FA(ICON_FA_TIMES), ImGui::GetColorU32(textColor));
-			if (closeClicked)
-				open = false;
-		}
-		ImGui::PopStyleVar();
-		Util::AddTooltip(T(TKEY("close_cs_editor"), "Close CS Editor (Esc)"));
-
-		barWindow->DC.LayoutType = barLayoutBackup;
-		barWindow->DC.MenuBarAppending = menuBarAppendingBackup;
+			barWindow->DC.LayoutType = barLayoutBackup;
+			barWindow->DC.MenuBarAppending = menuBarAppendingBackup;
 		}
 		ImGui::End();
 		ImGui::PopStyleColor(1);
@@ -2195,8 +2195,8 @@ bool EditorWindow::DrawPausedAwareGameHourSlider(const char* id)
 {
 	const bool isPaused = IsTimePaused();
 	const char* timeFormat = isPaused ?
-		T(TKEY("time_slider_paused"), "Time: %.2f (paused)") :
-		"Time: %.2f";
+	                             T(TKEY("time_slider_paused"), "Time: %.2f (paused)") :
+	                             "Time: %.2f";
 	if (isPaused)
 		ImGui::PushStyleColor(ImGuiCol_Text, Menu::GetSingleton()->GetTheme().StatusPalette.Error);
 	const bool drawn = DrawGameHourSlider(id, timeFormat);

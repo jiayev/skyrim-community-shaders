@@ -23,7 +23,7 @@ public:
 	/** @brief One discovered preset, valid or not. */
 	struct PresetInfo
 	{
-		std::string id;                  ///< Empty for Legacy; folder name or pack:id for library
+		std::string id;  ///< Empty for Legacy; folder name or pack:id for library
 		std::string displayName;
 		std::filesystem::path rootPath;  ///< Contains enbseries.ini + enbseries/
 		bool valid = true;

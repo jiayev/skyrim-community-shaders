@@ -1,8 +1,8 @@
 #include "CloudShadows.h"
 
+#include "../I18n/I18n.h"
 #include "Effects11.h"
 #include "Effects11/SettingManager.h"
-#include "../I18n/I18n.h"
 #include "Globals.h"
 #include "State.h"
 #include "Utils/D3D.h"

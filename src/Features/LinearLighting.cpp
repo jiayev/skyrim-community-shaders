@@ -48,8 +48,8 @@ void LinearLighting::DrawSettings()
 	const Mode mode = PostProcessingMode::Get();
 	const bool overridden = mode != Mode::PostProcessing;
 	const Util::LockedSection modeLock(overridden, mode == Mode::Effects11 ?
-	                                                   T(TKEY("overridden_by_effects11"), "Effects 11 overrides Linear Lighting.") :
-	                                                   T(TKEY("off_in_vanilla"), "Vanilla post processing turns Linear Lighting off."));
+													   T(TKEY("overridden_by_effects11"), "Effects 11 overrides Linear Lighting.") :
+													   T(TKEY("off_in_vanilla"), "Vanilla post processing turns Linear Lighting off."));
 
 	// A disabled checkbox never reports a click, so the saved setting survives the forced-off display.
 	bool linearLightingDisplay = settings.enableLinearLighting && !overridden;

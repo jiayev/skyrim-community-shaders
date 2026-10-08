@@ -182,9 +182,9 @@ namespace Icons
 		const ImVec2 max = ImGui::GetItemRectMax();
 		ImDrawList* dl = ImGui::GetWindowDrawList();
 
-		const ImU32 bg = ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_ButtonActive :
-				ImGui::IsItemHovered()                                                     ? ImGuiCol_ButtonHovered :
-																							   ImGuiCol_Button);
+		const ImU32 bg = ImGui::GetColorU32(ImGui::IsItemActive()  ? ImGuiCol_ButtonActive :
+											ImGui::IsItemHovered() ? ImGuiCol_ButtonHovered :
+																	 ImGuiCol_Button);
 		dl->AddRectFilled(min, max, bg, style.FrameRounding);
 
 		const float contentW = iconSize.x + gap + labelSize.x;

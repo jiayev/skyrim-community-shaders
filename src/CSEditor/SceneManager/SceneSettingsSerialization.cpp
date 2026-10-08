@@ -139,7 +139,8 @@ void SceneSettingsManager::SaveAllUserSettings()
 	// Weather entries (keyed by SPID)
 	if (weatherLoaded && ShouldSerializeUserSection(data, "weather", true, weatherUserSettingsModified)) {
 		json weatherObj = unresolvedWeatherUserSettings.is_object() ?
-		                      unresolvedWeatherUserSettings : json::object();
+		                      unresolvedWeatherUserSettings :
+		                      json::object();
 		for (const auto& [weatherId, config] : weatherSceneConfigs) {
 			if (weatherId == 0)
 				continue;
@@ -169,7 +170,8 @@ void SceneSettingsManager::SaveAllUserSettings()
 
 	if (locationLoaded && ShouldSerializeUserSection(data, "location", true, locationUserSettingsModified)) {
 		json locationObj = unresolvedLocationUserSettings.is_object() ?
-		                       unresolvedLocationUserSettings : json::object();
+		                       unresolvedLocationUserSettings :
+		                       json::object();
 		if (locationTransitionModified)
 			locationObj["transitionSeconds"] = locationTransitionSeconds;
 		for (const auto& [_, config] : locationSceneConfigs) {
@@ -325,7 +327,7 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 	WidenParsedIntegerToFloat(entry.featureShortName, entry.settingPath, entry.settingKey, entry.value);
 	WidenParsedIntegerToFloat(entry.featureShortName, entry.settingPath, entry.settingKey, entry.originalValue);
 	if (requireNumeric && (!IsNumericValue(entry.value) || !IsNumericValue(entry.originalValue) ||
-		!std::isfinite(entry.value.get<float>()))) {
+							  !std::isfinite(entry.value.get<float>()))) {
 		logger::warn("[SceneSettings] {} entry {} is not a finite float setting - skipping",
 			typeName, GetSettingLogName(entry.featureShortName, entry.settingPath, entry.settingKey));
 		return false;
@@ -338,7 +340,7 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 		return false;
 	if (entry.transitionSeconds &&
 		(!IsNumericValue(entry.value) || !FindAllowedCatalogSetting(
-			entry.featureShortName, entry.settingPath, entry.settingKey, true))) {
+											 entry.featureShortName, entry.settingPath, entry.settingKey, true))) {
 		logger::warn("[SceneSettings] {} entry {} has a transition on a discrete setting; applying it instantly",
 			typeName, GetSettingLogName(entry.featureShortName, entry.settingPath, entry.settingKey));
 		entry.transitionSeconds.reset();

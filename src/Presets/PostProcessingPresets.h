@@ -25,4 +25,5 @@ namespace PostProcessingPresets
 	 * @param packRoot Pack folder; the Baseline subfolder is created when missing.
 	 * @return Whether the file was written and passes the override validator.
 	 */
-	bool WriteBaseline(const std::filesystem::path& packRoot);}
+	bool WriteBaseline(const std::filesystem::path& packRoot);
+}

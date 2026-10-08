@@ -2,8 +2,8 @@
 
 #include "NativeMenu/Vendor/SystemMenuHook.h"
 
-#include "Globals.h"
 #include "CSEditor/SceneManager/SceneSettingsManager.h"
+#include "Globals.h"
 #include "I18n/I18n.h"
 #include "State.h"
 

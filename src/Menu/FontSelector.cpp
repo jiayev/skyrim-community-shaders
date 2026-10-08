@@ -64,9 +64,7 @@ namespace MenuFonts::Selector
 			std::string_view roleDisplayName,
 			int& familyIndex)
 		{
-			const char* familyPreview = catalog.families.empty()
-				? T("menu.settings.no_families", "No families")
-				: catalog.families[familyIndex].displayName.c_str();
+			const char* familyPreview = catalog.families.empty() ? T("menu.settings.no_families", "No families") : catalog.families[familyIndex].displayName.c_str();
 			const std::string familyLabel = std::format("{} Family##{}", roleDisplayName, roleIndex);
 
 			ImFontGuard rolePreviewFont(menu.GetFont(role));
@@ -120,9 +118,7 @@ namespace MenuFonts::Selector
 			std::string_view roleDisplayName,
 			int& styleIndex)
 		{
-			const char* stylePreview = selectedFamily.styles.empty()
-				? T("menu.settings.no_styles", "No styles")
-				: selectedFamily.styles[styleIndex].displayName.c_str();
+			const char* stylePreview = selectedFamily.styles.empty() ? T("menu.settings.no_styles", "No styles") : selectedFamily.styles[styleIndex].displayName.c_str();
 			const std::string styleLabel = std::format("{} Style##{}", roleDisplayName, roleIndex);
 
 			ImFontGuard rolePreviewFont(menu.GetFont(role));

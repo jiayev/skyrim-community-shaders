@@ -83,7 +83,7 @@ namespace LocationTypeIcons
 	inline constexpr Entry kHagravenNest{ "LocTypeHagravenNest", Icons::FA(ICON_FA_CROW), "Hagraven Nest" };
 	inline constexpr Entry kVampireLair{ "LocTypeVampireLair", Icons::GI(ICON_GI_FANGS), "Vampire Lair" };  // Game Icons: fangs by Skoll
 	inline constexpr Entry kWarlockLair{ "LocTypeWarlockLair", Icons::FA(ICON_FA_HAT_WIZARD), "Warlock Lair" };
-	inline constexpr Entry kWerewolfLair{ "LocTypeWerewolfLair", Icons::GI(ICON_GI_WOLF_HOWL), "Werewolf Lair" };  // Game Icons: wolf-howl by Lorc
+	inline constexpr Entry kWerewolfLair{ "LocTypeWerewolfLair", Icons::GI(ICON_GI_WOLF_HOWL), "Werewolf Lair" };      // Game Icons: wolf-howl by Lorc
 	inline constexpr Entry kWerebearLair{ "LocTypeWerebearLair", Icons::GI(ICON_GI_CAVE_ENTRANCE), "Werebear Lair" };  // Game Icons: cave-entrance by Delapouite
 	inline constexpr Entry kAnimalDen{ "LocTypeAnimalDen", Icons::FA(ICON_FA_PAW), "Animal Den" };
 	inline constexpr Entry kSprigganGrove{ "LocTypeSprigganGrove", Icons::FA(ICON_FA_LEAF), "Spriggan Grove" };
@@ -93,7 +93,7 @@ namespace LocationTypeIcons
 	// ---------------------------------------------------------------------------
 	// Waterborne
 	// ---------------------------------------------------------------------------
-	inline constexpr Entry kShip{ "LocTypeShip", Icons::GI(ICON_GI_SAILBOAT), "Ship" };  // Game Icons: sailboat by Delapouite
+	inline constexpr Entry kShip{ "LocTypeShip", Icons::GI(ICON_GI_SAILBOAT), "Ship" };                   // Game Icons: sailboat by Delapouite
 	inline constexpr Entry kShipwreck{ "LocTypeShipwreck", Icons::GI(ICON_GI_SHIP_WRECK), "Shipwreck" };  // Game Icons: ship-wreck by Delapouite
 
 	/** @brief Fallback when the keyword isn't a known LocType (or is mod-added). */

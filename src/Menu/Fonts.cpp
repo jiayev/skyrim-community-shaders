@@ -217,7 +217,8 @@ namespace MenuFonts
 		std::unordered_map<std::string, ImFont*> g_previewFontsByFile;
 
 		const ImWchar g_previewGlyphRanges[] = {
-			0x0020, 0x00FF,  // Basic Latin + Latin-1 Supplement
+			0x0020,
+			0x00FF,  // Basic Latin + Latin-1 Supplement
 			0,
 		};
 
@@ -277,7 +278,7 @@ namespace MenuFonts
 				}
 			}
 		}
-	done_loading:;
+done_loading:;
 	}
 
 	ImFont* GetPreviewFont(const std::string& file)
@@ -753,7 +754,7 @@ namespace Util
 				return nullptr;
 			}
 
-			for (const char* candidate : {"Regular", "Normal", "Book"}) {
+			for (const char* candidate : { "Regular", "Normal", "Book" }) {
 				const int idx = FindStyleIndex(family, candidate);
 				if (Util::IEquals(family.styles[idx].style, candidate)) {
 					return &family.styles[idx];
