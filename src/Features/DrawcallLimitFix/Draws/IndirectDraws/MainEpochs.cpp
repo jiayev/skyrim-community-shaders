@@ -367,8 +367,6 @@ namespace DCLF
 			shadow && shadow->scene ? SceneFitOf(*shadow->scene, shadow->objectCapacity) : SceneFit{} };
 		const std::array<std::uint32_t, 2> rows{ static_cast<std::uint32_t>(resources->materialRows.capacity), static_cast<std::uint32_t>(resources->pipelineRows.capacity) };
 		if (fit != postedFit || rows != postedRows) {
-			logger::info("[DCLF] TEMP fit posted at frame {}: fade roots {} -> {}, extras {} -> {}, rows {} -> {}", SceneStore::Get().GetFrame(), postedFit[0].fadeRoots, fit[0].fadeRoots,
-				postedFit[0].extraRows, fit[0].extraRows, postedRows[0], rows[0]);
 			postedFit = fit;
 			postedRows = rows;
 			++postedFitSerial;
@@ -583,10 +581,6 @@ namespace DCLF
 		auto slot = std::make_shared<Impl::AheadSlot>();
 		const std::uint64_t seq = ++s.aheadKicked;
 		// What the task reads that the coordinator or the frame write later is copied into it now: the context, the lookups.
-		if (s.aheadContext.build[kAsyncColour] && (s.aheadContext.inputs[kAsyncColour].addresses.fit != s.postedFit[0] || s.aheadContext.inputs[kAsyncColour].addresses.recordCapacity != s.postedRows[0]))
-			logger::info("[DCLF] TEMP build ahead {} at frame {}: context fade roots {} extras {} rows {}, posted {} {} {}", seq + 1, store.GetFrame(),
-				s.aheadContext.inputs[kAsyncColour].addresses.fit.fadeRoots, s.aheadContext.inputs[kAsyncColour].addresses.fit.extraRows,
-				s.aheadContext.inputs[kAsyncColour].addresses.recordCapacity, s.postedFit[0].fadeRoots, s.postedFit[0].extraRows, s.postedRows[0]);
 		auto job = [&s, slot, seq, tables = std::static_pointer_cast<const SceneStore::Tables>(std::move(a_tables)), context = s.aheadContext,
 						lookups = store.SharedLookups() ? store.SharedLookups() : std::make_shared<const Lookups>(store.CoordinatorLookups()), generation = store.GetTablesGeneration(),
 						frame = store.GetFrame(), sun = store.CoordinatorSunCandidates(), light = store.CoordinatorLightCandidates()](const auto&) mutable {
