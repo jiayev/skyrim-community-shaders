@@ -81,6 +81,58 @@ namespace DCLF
 		setQueue.push_back(a_slot);
 	}
 
+	void SceneStore::LeaveSet(std::uint32_t a_slot, std::uint8_t a_lost, bool a_partner)
+	{
+		if (a_slot < setPhasesNext.size() && (setPhasesNext[a_slot] & a_lost)) {
+			setPhasesNext[a_slot] &= static_cast<std::uint8_t>(~a_lost);
+			// The engine's copy is by geometry, a base's alone (CommitSet's apply).
+			// The claim is the slot's only while it owns the geometry's (another slot may hold it since).
+			if (const auto* geometry = a_slot < setGeometry.size() ? setGeometry[a_slot] : nullptr; geometry && setBuilding) {
+				const auto owner = setMemberSlot.find(geometry);
+				const bool owns = owner != setMemberSlot.end() && owner->second == a_slot;
+				if (setPhasesNext[a_slot]) {
+					if (owns)
+						setBuilding->phases.insert_or_assign(geometry, setPhasesNext[a_slot]);
+				} else {
+					if (owns) {
+						setMemberSlot.erase(owner);
+						setBuilding->phases.erase(geometry);
+					}
+					setGeometry[a_slot] = nullptr;
+				}
+				setSnapshotDirty = owns || setSnapshotDirty;
+			}
+			++setStats.leftAfterCommit;
+			QueueSet(a_slot);
+		}
+		if (!a_partner || !(a_lost & kSetMain) || a_slot >= tables.objects.size())
+			return;
+		const std::uint32_t partner = tables.IsLayer(a_slot) ? tables.layerBase[a_slot] : a_slot < tables.layerOf.size() ? tables.layerOf[a_slot] : kNoObjectSlot;
+		if (partner == kNoObjectSlot || partner >= tables.objects.size())
+			return;
+		constexpr std::uint8_t kMainPhases = kSetMain | kSetReflection;
+		if (PhasesIn(tables, partner) & kMainPhases) {
+			tables.setPhases[partner] &= static_cast<std::uint8_t>(~kMainPhases);
+			if (tables.objects[partner].flags & kObjectMember) {
+				tables.objects[partner].flags &= ~kObjectMember;
+				tables.NoteChange(partner, kChangeBindings);
+			}
+		}
+		LeaveSet(partner, kMainPhases, false);
+	}
+
+	void SceneStore::RefreshSetSnapshot()
+	{
+		if ((!setSnapshotDirty && setSnapshot) || !setBuilding)
+			return;
+		auto snapshot = std::make_shared<SetSnapshot>(*setBuilding);
+		snapshot->frame = frame;
+		snapshot->drawn = static_cast<std::uint8_t>(setPhaseMask);
+		setSnapshot = std::move(snapshot);
+		setSnapshotDirty = false;
+		++setStats.publications;
+	}
+
 	void SceneStore::CommitSet()
 	{
 		DCLF_FRAME_TRACE("CommitSet");  // TEMP frame trace
@@ -359,14 +411,7 @@ namespace DCLF
 		setStats.members += setMemberSlot.size();
 		setStats.waiting += setWaiting.size();
 
-		if (setSnapshotDirty || !setSnapshot) {
-			auto snapshot = std::make_shared<SetSnapshot>(*setBuilding);
-			snapshot->frame = frame;
-			snapshot->drawn = static_cast<std::uint8_t>(drawn);
-			setSnapshot = std::move(snapshot);
-			setSnapshotDirty = false;
-			++setStats.publications;
-		}
+		RefreshSetSnapshot();
 		// Where the log stood at this commit: the applied set's revocation reads from here (ApplySet).
 		setCommitCursor.Restart(tablesGeneration);
 		setCommitCursor.Advance(tables.changeLog);
@@ -430,6 +475,8 @@ namespace DCLF
 			}
 		}
 		setApply.clear();
+		// The commit's snapshot, with what left the set since it (LeaveSet).
+		RefreshSetSnapshot();
 		publicationClaims = setSnapshot;
 		// What changed since the applied commit (the rest of its walk, its accumulate phase's drops) is what RevokeUndrawnClaims
 		// checks next, before the publication.
@@ -501,8 +548,10 @@ namespace DCLF
 				++revokedStructureGeometries;
 			setPhasesApplied[a_slot] &= ~lost;
 			if (same) {
-				// Out of the set in what it no longer draws: the accumulate phase must not make it a member again.
+				// Out of the set in what it no longer draws: the accumulate phase must not make it a member again, and the next
+				// publication's claims (the commit's snapshot) must not either.
 				tables.setPhases[a_slot] &= ~lost;
+				LeaveSet(a_slot, lost);
 				if ((lost & kSetMain) && (tables.objects[a_slot].flags & kObjectMember)) {
 					tables.objects[a_slot].flags &= ~kObjectMember;
 					tables.NoteChange(a_slot, kChangeBindings);

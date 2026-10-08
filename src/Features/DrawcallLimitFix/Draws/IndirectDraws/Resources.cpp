@@ -562,8 +562,10 @@ namespace DCLF
 		// The draw-count buffer is read back for the culling counters whether or not parity is on: every counter word, as a
 		// counter that is always zero reads exactly like a clean result.
 		state->countD3D11 = WrapWords(*state->count, kCountWords * sizeof(std::uint32_t));
-		if (SetParityEnabled())
+		if (SetParityEnabled()) {
 			state->visibilityD3D11 = WrapWords(*state->visibility->Get(), std::uint64_t(state->objectCapacity) * sizeof(std::uint32_t));
+			state->frustumD3D11 = WrapWords(*state->frustum->Get(), std::uint64_t(state->objectCapacity) * sizeof(std::uint32_t));
+		}
 		state->frameConstants = DeviceBuffer(kFrameConstantBytes, "cs.dclf.frame-constants");
 		state->frameConstantsAddress = AddressOf(device, *state->frameConstants);
 
@@ -1269,6 +1271,8 @@ namespace DCLF
 					r.residentUploaded = {};  // the new input buffers hold no region
 					if (r.visibilityD3D11)
 						r.visibilityD3D11 = WrapWords(*r.visibility->Get(), std::uint64_t(r.objectCapacity) * sizeof(std::uint32_t));
+					if (r.frustumD3D11)
+						r.frustumD3D11 = WrapWords(*r.frustum->Get(), std::uint64_t(r.objectCapacity) * sizeof(std::uint32_t));
 				});
 			}
 		}

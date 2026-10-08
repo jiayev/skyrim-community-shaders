@@ -202,6 +202,8 @@ namespace DCLF
 		auto* event = new Event{};
 		event->type = EventType::Updated;
 		event->update = std::move(a_update);
+		if (!event->update.sequence)
+			event->update.sequence = SceneCapture::NextSequence();
 		Push(event);
 	}
 

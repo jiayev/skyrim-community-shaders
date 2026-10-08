@@ -938,6 +938,7 @@ namespace DCLF
 			};
 			std::shared_ptr<FoliageParity> foliage;
 			winrt::com_ptr<ID3D11Buffer> visibilityD3D11;              // CS_DCLF_SET_PARITY readback
+			winrt::com_ptr<ID3D11Buffer> frustumD3D11;                 // CS_DCLF_SET_PARITY readback (the fade test's drops)
 			// The per-frame constant blocks at fixed slots (FrameSlotOffset), so a build can name them before
 			// their contents exist.
 			std::shared_ptr<org::Buffer> frameConstants;
@@ -2247,6 +2248,9 @@ namespace DCLF
 			// a Skip reason, or kObjectStateAbsent when it never reached the inputs (CS_DCLF_SET_PARITY explains
 			// its mismatches with this).
 			std::vector<std::uint8_t> objectState;
+			// The culling's ViewProj (the latch's, the eye folded in) when the commit culled: set parity tests the live bounds with it.
+			std::array<float, 16> cullViewProj{};
+			bool culled = false;
 			std::array<std::uint32_t, kDecalGroups> decalCount{};
 			// The build's stats, merged into IndirectDraws::Stats by the commit.
 			std::array<std::uint32_t, static_cast<std::size_t>(IndirectDraws::Skip::Count)> skipped{};
@@ -4529,6 +4533,15 @@ namespace DCLF
 			// disagrees with the set.
 			std::vector<std::uint8_t> flags;
 			std::vector<const RE::BSGeometry*> geometry;
+			// The frustum stamps (the fade test's drops), and per set member whether its live bound is inside the depth build's
+			// frustum (the engine's verdict for it, occlusion and fading aside), with that bound: a rejection of one inside is not
+			// the culling's to make.
+			winrt::com_ptr<ID3D11Buffer> frustumStaging;
+			std::vector<std::uint8_t> inView;
+			std::vector<std::array<float, 4>> bound;
+			// Per object, its geometry's phases in the claims the registration hooks withhold by (PassCapture::CurrentSet): the main
+			// claim must be the frame's set exactly, or an object is drawn by nobody (claimed, not in the set) or twice.
+			std::vector<std::uint8_t> claims;
 		};
 		std::deque<SetParityFrame> setParityFrames;
 		std::vector<winrt::com_ptr<ID3D11Buffer>> setParityStaging;  // released stagings, reused
@@ -4545,6 +4558,12 @@ namespace DCLF
 			// third and withheld and GPU-culled on the second - a flicker, unless it really was hidden for that
 			// one frame. By the gap frame's verdict (occluded retest, rejected), and how many were trees.
 			std::uint32_t gaps = 0, gapsRetest = 0, gapsRejected = 0, gapsTree = 0, gapSamples = 0;
+			// Set members rejected while their live bound was in view: by the frustum (the bound the culling read was not the live
+			// one), by the fade test (a fade root DCLF owns, faded out), and how many of those were skinned.
+			std::uint32_t rejectedInView = 0, fadeHiddenInView = 0, skinnedInView = 0, inViewSamples = 0;
+			// The registration hooks' main claims against the frame's set: claimed and not in it (withheld from the engine and not
+			// drawn by DCLF), in it and not claimed (drawn by both).
+			std::uint32_t claimedOutside = 0, unclaimedMembers = 0, claimSamples = 0;
 		} setParity;
 		// Per geometry, the last two frames' state for the gap detector: 0 not kept, 1 kept and drawn by someone,
 		// 2 kept, withheld and GPU-culled (verdict in the high bits).

@@ -811,6 +811,8 @@ namespace DCLF
 			// A record bound again leaves the main phases of the coordinator's set first (a join never patches a member): the frame
 			// draws its old record from the snapshot meanwhile, and the next frame's start takes the claim back (RevokeClaims), as the
 			// walk's join used to before the frame read a snapshot (step 6c).
+			// The commit's decision too, applied or waiting for its application (LeaveSet).
+			LeaveSet(slot, kSetMain | kSetReflection);
 			if (PhasesIn(tables, slot) & (kSetMain | kSetReflection)) {
 				tables.setPhases[slot] &= static_cast<std::uint8_t>(~(kSetMain | kSetReflection));
 				if (tables.objects[slot].flags & kObjectMember) {
