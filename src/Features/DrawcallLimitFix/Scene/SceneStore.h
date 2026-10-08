@@ -712,7 +712,6 @@ namespace DCLF
 			// Objects the engine accumulated that the scene phase had left out of the tables, so the frame
 			// cannot draw them. One frame of staleness at most (the verdict is cleared for them); the gate
 			// is 0 in steady state.
-			std::uint32_t accumulatedWithoutRecord = 0;  // slots re-resolved in place: TriShape reallocated at its address, or references evicted
 			std::uint32_t geometriesAlive = 0, pipelinesAlive = 0, materialsAlive = 0;
 			// CS_DCLF_CLASSIFY_CACHE: objects served from the cached verdict, and - under `probe` - how
 			// many were recomputed and how many disagreed. Zero disagreements is the gate.

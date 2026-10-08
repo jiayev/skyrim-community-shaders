@@ -313,8 +313,7 @@ namespace DCLF
 		auto& store = SceneStore::Get();
 		RefreshMaterialLookups(store, store.GetTables(), true, store.GetProjectedTextures(), store.MutableLookups());
 		UpdateShadowCapability();
-		// The shadow lookups too (step 6e S1), for the capability's modes and the catalog: the builds ahead read them, and the epoch
-		// refreshes them only for a view the capability did not foresee (counted).
+		// The shadow lookups too (step 6e S1), for the capability's modes and the catalog: the builds ahead read them.
 		auto& views = impl->lastShadow;
 		if (!ActiveToggles().shadows || !views.known || !globals::game::utilityShader)
 			return;
@@ -322,7 +321,6 @@ namespace DCLF
 		if (tables.objects.empty() || tables.shadowTechnique.size() != tables.objects.size())
 			return;
 		RefreshShadowLookups(store, tables, views.modes, views.rasterStates, views.dsvFormat, impl->OcclusionFormats(), store.MutableLookups());
-		impl->shadowLookupsFor = views;
 	}
 
 	bool IndirectDraws::Impl::AheadUsable(const MainPayload& a_payload, const MainInputs& a_frame, const Resources& a_resources) const

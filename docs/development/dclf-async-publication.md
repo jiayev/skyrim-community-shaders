@@ -127,7 +127,8 @@ Phase 2 takes the upload recording and the post off the render thread; with them
 
 The late-join cancel is not removed yet. Callers still `Cancel` a late job before building inline over its payload, and
 `Cancel` waits for the running job, so a late join blocks. Removing it needs the inline builds gone (phase 6); the header
-says so. No join was late in any run.
+says so. No join was late in any run. (Closed 2026-10-08: the inline builds and the frame-job API are gone, see "A persistent
+scene for every view".)
 
 The 50 s run on the bridge matched Phase 0:
 - 1.15–1.22 ms of render-thread time a frame;
@@ -876,7 +877,8 @@ a forced growth, default r4g6: no losses, 0 epochs on own preparation in the who
   ("values past its latch").
 - Left: the Z-prepass bucket counts staged once at startup (969 values, benign); the reflection epoch's first 8 recordings fail at
   startup as "not replayable" (pre-existing, also in r4f1-3; the faces stay the engine's those frames). Next: R6, the
-  own-preparation path deleted (nothing reaches it now), then R5 and R7.
+  own-preparation path deleted (nothing reaches it now), then R5 and R7. R6 closed 2026-10-08 (P3 of "A persistent scene for
+  every view").
 
 **Parallel graph work, step 1: per-frame engine values out of the versions** (2026-10-06; motion runs m1 -> m14: carried 40
 units/frame through the worldspace on a slow turn, Tracy 35 s; bridge run fog1 with the persistent parity).
@@ -1542,6 +1544,60 @@ resident-draw, set and fade parity; motion m28/m29).
     3.6k, 1k, 7k, 4.5k). Left for F3c (no hook): node flag bits 11/12/20, rigid body motion, renames, dismember, geometry property
     and alpha swaps (LOD blocks), the property's fade node; the geometry alpha the LOD segment events name (evented). Standard
     parities as y41/m71.
+
+**A persistent scene for every view; incremental only; two modes** (2026-10-08; motion m112-m153, bridge y-runs, equip and
+fight e-runs, toggle runs). With DCLF's shadow views on, objects flickered at cell changes because the set's phases were
+re-derived every frame from what the last frame happened to draw: a shadow-casting point light coming or going flipped
+`kSetCasterPoint`, which resynced the whole set, requeued every object and handed every caster of that mode between the
+engine and DCLF. About 30 whole-scene resync, rescan or rebuild paths remained, about ten of them firing in normal play.
+The rework keeps a fully persistent scene for every view DCLF may draw (the main camera, the sun and spot shadow views, the
+point lights' paraboloids, the occlusion maps, the reflection), whichever views the engine asks for in a frame, and leaves
+two configurations: the main asynchronous path and parity. The invariants and their flags are in
+[dclf-architecture.md](./dclf-architecture.md), "Two modes: trusted, and parity".
+- *P0, prune.* `FrameTrace`, `SamePayload`, `StreamsSlot`, `AsyncWaitBudget`, AsyncWorker's frame-job API, the exclusion
+  probes and caches' census modes, and the legacy env modes (`MOVE_EVENTS=0`, `HIDDEN_EVENTS=0`, `LIST_FILTER=0`,
+  `TREE_LIST=0`, `LIGHT_LIST=0`, `LIGHT_EXCLUDE=0`, `DECAL_ORDER=engine`, `CS_DCLF_ASYNC` off/probe) deleted with their
+  branches.
+- *P1, phases as a capability.* `SetCapability` replaces `SetPhasesDrawn`: the toggles plus what DCLF has set up, recomputed
+  only at a toggle, a load, `failed` or setup's completion. The shadow rasterizer states are a catalog enumerated at setup
+  (the engine's solid-fill shadow states, the cascade clones' bias constants through `ShadowmapCascadeRasterizerFix`'s
+  accessor, the occlusion maps' states), and every mode's pipelines are requested for it, so no state appears mid-session.
+  A capability change after the first scene is `<- PHASES`.
+- *P2, every view served.* The shadow revision's shape covers every view slot; a slot with no view does no work. The shadow
+  depth targets are imported at setup, and withholding reads the capability, not the frame's views.
+- *P3, R6: no frame-level hand-overs or fallback builds; the commits trust their producers.* Every DCLF epoch (Z-prepass,
+  colour, shadow, occlusion, reflection) is revision-driven in ORG (`SetAsyncEpochs(epochs, revisionEpochs)`): no live ticket
+  preparation, and a submission carries the revision's recording. A commit writes the frame's values into the selected
+  revision's shape (latch, bucket plan, latched copies) and submits it; nothing is built, prepared or compared in the frame.
+  The own-preparation commits, `CS_DCLF_REVISIONS=0`, the fallback builds (but `CS_DCLF_BINDLESS_PARITY`'s) and the
+  published-shape plumbing went. The shapes are made at a join only when their inputs move (`RevisionShapesKey`, in groups:
+  growths, pipelines, lookups, main, shadow, casting bound, reflection). `CS_DCLF_REVISION_PARITY` makes the frame's own shape
+  around its frames and flags a difference (`<- REVISION`, `<- LATCH`, `<- SHAPE KEY`, `<- STALE`, `<- UNREVISED`). ORG:
+  in-flight slots are deferred for revision-driven epochs too (they had waited on the ticket, ~218 us a frame). Host-thread
+  ticket preparation 0.88 -> 0.37 ms a frame.
+- *P4, incremental only.* (a) The scene's draw bound is reserved from the coordinator's tables alone: 38-72 resyncs a window ->
+  0. (b) The candidate tables keep stable entry and geometry indices with per-entry versions (`CandidateTable`); a walk that
+  changed anything publishes a pooled snapshot written at the indices that moved. The consumers follow by version difference
+  (`ChangedEntries`): the cut plans again only the moved entries (`SyncCut`, pools compacted), the exclusions are translated to
+  the frame's candidates (`TranslateExclusion`), the light filter dirties the moved entries' nodes, the sun exclusion's cache
+  judges the moved entries again. Attach and detach events carry their ancestors, so a candidate whose subtree changed is
+  rewritten. The stand-in and the sun exclusion now apply on 300 of 300 frames in motion (were 133-175 and ~150). (c) The set's
+  commit requeues by cause: fade ownership by root (`fadeRootObjects`), waiting slots by the readiness source they wait on
+  (`setWaitCause`); CommitSet 228 -> 58 us a frame, 120-180 slots evaluated a commit (were 570-1,050). (d) `CheckObjectSlots`
+  and `ValidateSlice` are parity-only (`<- DETACH`). (e) The fade and structural event caps are gone; the switch hooks are
+  required at install. (f) A toggle withdraws the set until a publication committed under the new toggles is installed.
+  Parity: `<- CANDIDATES`, `<- CUT`, `<- COMMIT`.
+- *P5, cleanup.* The published-shape plumbing (`PublishShape`, `RecentShapes`, the segments' live shape atomics) and the
+  shadow commit's non-ring uploads deleted: an installed payload is always read from the frame's ring entry (the main
+  commit's non-ring path is `CS_DCLF_BINDLESS_PARITY`'s own build's). The shadow shapes' dependence on the casting bound is
+  narrowed to a bucket or a view outgrowing what the last made shapes hold (`ShadowShapesHold`): their capacities only grow, so
+  a bound they hold makes the same shapes. Counters no path increments any more removed.
+- *Open:* `<- CUT` seen twice early on (m144, m145), not since its message names the entry; `<- SUN EXCLUSION` for an FX
+  waterfall mesh under an excluded entry (the candidate rule treats effect-shader and fading geometry as non-casting); 57-85
+  occluders a commit wait on fade roots the cut does not service, so the occlusion maps' non-members are the engine's every
+  frame and the scene lists are put back whole (an ownership rule to decide); the change log's trims keep no reader registry
+  (none fell behind); `<- LATCH` for ~3 frames when equipping grows the pipeline count past the latch's power of two; the
+  lookups group still moves the shapes key at about a quarter of the joins in motion.
 
 ## Implemented foundations
 

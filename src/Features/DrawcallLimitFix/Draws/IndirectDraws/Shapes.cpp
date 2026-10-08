@@ -285,8 +285,8 @@ namespace DCLF
 			if (!layouts.empty() && (recent.empty() || recent.front() != layouts)) {
 				std::erase(recent, layouts);
 				recent.insert(recent.begin(), std::move(layouts));
-				if (recent.size() > RecentShapes<ShadowFrame>::kShapes)
-					recent.resize(RecentShapes<ShadowFrame>::kShapes);
+				if (recent.size() > Impl::kRecentOcclusionLayouts)
+					recent.resize(Impl::kRecentOcclusionLayouts);
 			}
 		}
 		// The shadow and reflection buffers for what the revisions' shapes name, reserved at every join (a growth asked for here is one
@@ -323,6 +323,11 @@ namespace DCLF
 		// The shapes are made again only when what they are made from moved (RevisionShapesKey): otherwise the revision sealed at this
 		// join keeps the last ones. CS_DCLF_REVISION_PARITY makes them around its frames whatever the key, and flags a change the key
 		// missed (AssembleRevision: <- SHAPE KEY).
+		if (impl->drawBound.shadowVersion != impl->shadowBoundChecked) {
+			impl->shadowBoundChecked = impl->drawBound.shadowVersion;
+			if (!impl->ShadowShapesHold(ShadowBoundsOf(impl->drawBound, store.GetLookups())))
+				++impl->shadowBoundOutgrown;
+		}
 		const auto key = impl->RevisionShapesKey(indirect, shadowIndirect, resourceHeap, samplerHeap);
 		const bool parityMake = RevisionParityEnabled() && (ParityDue(frameNumber) || ParityDue(frameNumber + 1));
 		impl->shapesKeyUnchanged = key == impl->revisionShapesKey;
@@ -532,7 +537,7 @@ namespace DCLF
 				raw(view);
 		}
 		group = kKeyBound;
-		mix(drawBound.shadowVersion);
+		mix(shadowBoundOutgrown);
 		// The reflection's: its resources, the faces' pipelines and tree LOD's.
 		group = kKeyReflection;
 		if (const auto& faces = reflection.resources) {
@@ -555,6 +560,34 @@ namespace DCLF
 		const auto pixel = SwitchValue(Switch::GBufferProbe);
 		mix(std::hash<std::string_view>{}(pixel));
 		return key;
+	}
+
+	bool IndirectDraws::Impl::ShadowShapesHold(const ShadowBounds& a_bounds) const
+	{
+		if (!shadow)
+			return true;
+		const std::uint32_t words = Growths::Get().RevisionSizing<ShadowSizing>(*shadow).bucketCountWords;
+		std::vector<std::uint64_t> need;
+		for (std::size_t kind = 0; kind < 2; ++kind)
+			for (const auto& shape : shadowParity.revisions[kind][0]) {
+				if (!shape || !shape->rows)
+					continue;
+				for (std::size_t v = 0; v < shape->views.size() && v < shape->rows->size(); ++v) {
+					const auto& view = shape->views[v];
+					const auto& row = (*shape->rows)[v];
+					if (row.pipelines.size() >= words || view.modeIndex >= kShadowModeCount || a_bounds.modeDraws[view.modeIndex] > view.capacity)
+						return false;
+					const auto& draws = a_bounds.keySlotDraws[view.modeIndex];
+					need.assign(view.buckets.size(), 0);
+					for (std::size_t k = 0; k < row.bucketOfSlot.size() && k < draws.size(); ++k)
+						if (const auto bucket = row.bucketOfSlot[k]; bucket != Lookups::kNone && bucket < need.size())
+							need[bucket] += draws[k];
+					for (std::size_t b = 0; b < need.size(); ++b)
+						if (need[b] > view.buckets[b].capacity)
+							return false;
+				}
+			}
+		return true;
 	}
 
 	void IndirectDraws::Impl::NoteShadowParity(bool a_occlusion, const ShadowFrame& a_frame, const std::vector<LatchedCopy>& a_layout, std::uint32_t a_frameNumber)

@@ -24,40 +24,38 @@ Skylighting's occlusion map.
 
 ## A frame, by thread
 
-The render thread drives everything; one worker thread (`Common/AsyncWorker`) runs the builds; the GPU runs the epochs.
+The render thread captures what only it can read and submits the epochs; it builds nothing. The scene is kept on DCLF's
+coordinator (`SceneScheduler`, a serialized lane) and its pool, and every frame draws the newest complete publication of
+it ([dclf-async-publication.md](./dclf-async-publication.md)).
 
-| Point in the frame | Render thread | Worker | GPU |
+| Point in the frame | Render thread | Coordinator and pool | GPU |
 | --- | --- | --- | --- |
-| `Main::Draw`, before the main cull (`BeginSceneFrame`) | Applies the scene events, then the **scene phase** (`SceneStore::BuildFrame(Scene)`): every tracked object's record, from the events since the last frame. A kept record's placement and palette are queued, and kicked to the worker at the end | **scene placement** | |
-| The engine's cull jobs | The engine registers the passes it keeps. `PassCapture` records every registration and **withholds** DCLF's objects. `PrimaryCull` stands in for DCLF's references inside the list jobs. | | |
-| `BeforeShadowMaps` | Joins the scene placement job (`SceneStore::JoinPlacements`), rebuilds the frame's shadow view list (`ShadowViews`) and kicks the shadow build | **shadow** build | |
+| `Main::Draw`, before the main cull (`BeginSceneFrame`) | Joins the last scene work, applies the toggles, hands the tables over, selects the newest scene revision (`SelectRevision`) and the newest publication it covers (`SelectPublication`), then installs its claims, list filter and sun exclusion, or withdraws the set (below). Kicks the frame's values (`FrameValues::Kick`: placements, palettes, shading, and the payload ring entry the epochs read) and the scene work | **Scene work**: the frame's events applied, the walk, the set's commit; then the publication, its payloads built ahead on the pool (`BuildAhead`), and the revision's shapes (`MakeRevisionShapes`) | The frame values' uploads, on the copy queue |
+| The engine's cull jobs | The engine registers the passes it keeps. `PassCapture` withholds DCLF's objects, `PrimaryCull` stands in for DCLF's references inside the list jobs, and the sun's cascades skip DCLF's entries | | |
+| `BeforeShadowMaps` | The **reflection epoch**; the frame's shadow views (`ShadowViews`), their coverage by the selected revision (`DecideShadowCoverage`) | | The water reflection's faces |
 | Each shadow view's `FinishAccumulating` | `CaptureShadowView`: where the engine drew, and with which constants | | The engine's own shadow draws |
-| `AfterShadowMaps` | Joins the shadow build and runs the **shadow epoch** | | Every captured view's casters, culled per view |
-| Skylighting's `RenderOcclusion` | `CaptureSkyOcclusion`, then the **sky epoch** | | The occlusion map |
-| `EarlyPrepass` | The **accumulate phase** (`BuildFrame(Accumulate)`): patches each record with what the main camera's registrations decided. Then the pipeline lookups, the hand-back of what DCLF cannot draw, and the Z-prepass kick. | **zprepass** build | |
+| `AfterShadowMaps` | The **shadow epoch**: the installed shadow payload committed into the revision's shape | | Every placement's casters, culled per view |
+| Skylighting's `RenderOcclusion` | The **occlusion epoch** | | The occlusion maps |
+| `EarlyPrepass` | Kicks the **accumulate work**; requests the shadow pipelines for the keys in use | **Accumulate work**: what the main camera's registrations decided | |
 | `Main_RenderDepth`, world drawn | `CaptureDepthPass`: the **Z-prepass epoch** | | DCLF's depth, the HZB, two-phase occlusion culling |
-| `Prepass` | Latches the accumulator, runs `RefreshFrameConstants` (the camera-dependent constants), kicks the colour build | **colour** build | |
-| The main pass's opaque batches start (`BeforeOpaquePass`) | `CaptureMainPass`: what the pass binds | | |
-| The opaque batches end (`AfterOpaquePass`) | `ExecuteColour`: the **colour epoch**, then the claims for the next frame | | The drawn set into the G-buffer, depth-tested EQUAL, then decals |
-| `Present` (`Reset`) | Joins what is left (`EndFrame`), applies the scene events, handles the menu toggle, writes the report | **primary feedback** decode | |
+| `Prepass` | Latches the accumulator and refreshes the camera-dependent constants | | |
+| The main pass's opaque batches (`BeforeOpaquePass`, `AfterOpaquePass`) | `CaptureMainPass`, then the **colour epoch** | | The drawn set into the G-buffer, depth-tested EQUAL, then decals |
+| `Present` (`Reset`) | Joins the scene work, closes the engine-read window, applies the events no scene work took, releases what it let go of, writes the report, handles the menu toggle | | |
 
-The scene placement job takes the kept records' placements and bone palettes (the engine's palette update is
-thread-safe: it locks the skin instance and runs once a frame), and the moving reference roots' bounds into their
-dependents' sun entries. A mover is queued only when the engine's move events named its reference or its category node
-this frame or the last (`MoveEvents`, `SceneStore::MoveReasonOf`). From its kick to its join the render thread writes none
-of those columns and no table grows, and the engine's work in that window (the main cull, the water reflections)
-moves no transform. A late join waits for it, or takes its items inline when it had not started; a walk-parity frame
-takes them inline before the parity reads the tables.
+Each epoch is submitted from the selected scene revision's recording (ORG's revision-driven epochs): the commit writes the
+frame's values into the revision's shape (its latch, bucket plan and latched copies) and reads its payload from the
+frame's ring entry. Nothing is built, prepared or checked in the frame.
 
-A build runs on the worker between its kick and its join. At the join the epoch checks that the job was built for
-exactly its own inputs (`SameInputs`, `SameShadowInputs`). If it was not, or the job is late, the render thread builds
-the payload itself.
+A frame's set is **withdrawn** (the engine draws everything, and the next covered frame installs the whole set again) only
+when no publication applies: startup until the first one, a toggle until a publication committed under the new toggles
+is installed, a load, or `failed`. Every other frame draws the
+installed publication's claims.
 
 ## The data
 
 ```
 engine writers ──events──▶ SceneStore tables ──change log──▶ kept stores ──▶ payload ──commit──▶ epoch (GPU)
- (hooks)                    (Scene/)                         (Draws/)        (worker)  (render thread)
+ (hooks)                    (Scene/, coordinator)            (Draws/)        (pool)    (render thread)
 ```
 
 1.  **Events.** Hooks on the engine's writers push events from whatever thread makes the change:
@@ -67,8 +65,8 @@ engine writers ──events──▶ SceneStore tables ──change log──▶
     -   a switch node's index changed;
     -   a material's value changed (`MaterialSources`).
 
-    The render thread drains them (`EventQueue`). Nothing about an object is re-read on a schedule: a change the
-    events miss is a defect, and the walk parity check finds it.
+    The render thread drains them into a batch (`EventQueue`), and the scene work applies it. Nothing about an object
+    is re-read on a schedule: a change the events miss is a defect, and the walk and mirror parity checks find it.
 2.  **Tables.** `SceneStore` holds a record per object, and shared tables of geometries, pipelines and materials
     (`SlotTable`: slots with generations and reference counts). Every change a write makes to the tables is appended
     to the change log (`Tables::changeLog`), with its causes.
@@ -86,9 +84,11 @@ engine writers ──events──▶ SceneStore tables ──change log──▶
     -   the shadow inputs per render mode and the shadow material rows (`ShadowKept`).
 5.  **Payload.** A build is a pure function from the tables and lookups to a payload: the rows it wrote, the draw
     inputs and the kept stores' changes. `BuildMainPayload` (`Draws/IndirectDraws/MainBuild.cpp`)
-    and `BuildShadowPayload` are the two builders. On the worker, the payload is also staged into an upload batch.
+    and `BuildShadowPayload` are the two builders. They run on the pool with each publication (`BuildAhead`); the
+    frame's producer copies what the payloads changed into the frame's payload ring entry.
 6.  **Commit and epoch.** On the render thread, the commit adds what only it has: the frame's constant buffers
-    (`ConstantMirror`), the per-frame textures and the latch. Then one render-graph epoch runs the GPU work:
+    (`ConstantMirror`), the per-frame textures and the latch, written into the selected revision's shape. Then the
+    revision's recording of the epoch runs the GPU work:
     -   `BuildDrawsCS` culls the inputs (frustum, and in the Z-prepass two-phase HZB occlusion) and writes the
         indirect draw sequences;
     -   the draw passes execute them;
@@ -210,13 +210,13 @@ Z-prepass depth 0.286 against 0.277 ms. The constant buffer was no faster on any
 
 ## Ownership: how the engine stops drawing DCLF's objects
 
-An object is withheld from the engine only after DCLF has drawn it. The claims are what the last epoch drew.
+An object is withheld from the engine only while the installed publication claims it, and the publication's payloads
+draw every claim. The set of phases DCLF claims for is a capability (the toggles and what DCLF has set up), not the views
+a frame happens to have.
 
 -   **Main pass.** `PassCapture` hooks `BSBatchRenderer::RegisterPass`. A claimed geometry's pass is recorded (the
-    accumulate phase reads it) but never reaches the batch renderer, so the native loop has nothing to draw. A pass
-    that is fading is not withheld, because the accumulate phase gives it no bindings. At `EarlyPrepass`, before the
-    depth and main passes, a withheld pass DCLF cannot draw this frame (no bindings, or its pipeline not built) is
-    handed back to the engine (`HandBackUndrawable`).
+    accumulate phase reads it) but never reaches the batch renderer, so the native loop has nothing to draw. An object
+    joins the set only once everything it is drawn with is ready (`PhaseReady`); one that is not waits, the engine's.
 -   **Shadow views.** The same, per shadow render mode, from the shadow build's claim sets. This includes the direct
     group insertions the registration makes without `RegisterPass`.
 -   **The sun's registrations.** `SunAccumulation` skips the registration of a claimed caster in the sun's
@@ -224,11 +224,11 @@ An object is withheld from the engine only after DCLF has drawn it. The claims a
 -   **The sun's culls.** The sun entry exclusion removes entries whose every object is DCLF's from the cascade culls'
     object arrays. The GPU applies the same entry rule to DCLF's inputs (`kCullSunEntry`).
 -   **The main camera's cull.** `PrimaryCull` stands in for DCLF's references inside the engine's list jobs. It keeps
-    the per-object state the cull maintains (fades, LOD, the tree clock's bit) and builds synthetic passes on the
-    worker, so the engine never traverses those references.
+    the per-object state the cull maintains (fades, LOD, the tree clock's bit), so the engine never traverses those
+    references. The cut it stands in with is kept per candidate entry, planned again only for the entries that moved.
 
-The menu's toggles (`Common/Toggles`) change all of this live. Switching DCLF off drains the worker, clears every
-claim and bypasses the capture.
+The menu's toggles (`Common/Toggles`) change all of this live: a toggle withdraws the set until a publication committed
+under the new toggles is installed. Switching DCLF off clears every claim and bypasses the capture.
 
 ## Where the code is
 
@@ -237,11 +237,11 @@ else is under `src/Features/DrawcallLimitFix/`:
 
 | Folder | What is in it |
 | --- | --- |
-| `Common/` | The switch registry (`Switches`) and the live toggles (`Toggles`), the worker (`AsyncWorker`), the event queue, and the building blocks of the kept state: `KeptState`, `SlotTable`, `FrameRecordPatches` |
+| `Common/` | The switch registry (`Switches`) and the live toggles (`Toggles`), the coordinator and pool (`SceneScheduler`; `AsyncWorker`'s scene lane until it is folded in), the event queue, the render-thread budget, and the building blocks of the kept state: `KeptState`, `SlotTable` |
 | `Engine/` | Everything that hooks or reads the engine directly: `PassCapture`, `PrimaryCull`, `SunAccumulation`, `ShadowViews`, `SceneTracker`, `FaceSnapshots`, `ConstantMirror`, `EngineStates`, and `EngineAccess.h` (the shared raw-access helpers) |
 | `Scene/` | `SceneStore` (interface `SceneStore.h`, implementation `SceneStore/`), the record layouts (`Records.h`), the lookups, and what a record is derived from: `MaterialSources`, `ConstantEvaluator`, `LightingConstants`, `LightingDescriptors`, `VertexInput` |
 | `Draws/` | `IndirectDraws` (interface `IndirectDraws.h`, statistics `IndirectDrawStats.h`, implementation `IndirectDraws/`), the pipelines (`DrawPipelines`), the SPIR-V programs (`ShaderPrograms`, `SpirvReflection`), and the game's buffers and textures as the graph sees them (`GpuResources`, `GpuTextures`) |
-| `Published/` | The asynchronous publication foundation, deliberately not wired in yet ([dclf-async-publication.md](./dclf-async-publication.md)) |
+| `Published/` | The scene graph the producers run on (`SceneGraph`, `PublishedSceneExecutor`), and the capture foundation ([dclf-async-publication.md](./dclf-async-publication.md)) |
 | `Diagnostics/` | Capture parity, the periodic report (`Report.cpp`), the open defects' probes and the test harness |
 
 Inside `SceneStore/` and `IndirectDraws/`, `Internal.h` is shared by that folder's files only:
@@ -254,6 +254,45 @@ Inside `SceneStore/` and `IndirectDraws/`, `Internal.h` is shared by that folder
 
 Includes within a folder use bare names. Includes across folders are rooted at `src/`
 (`Features/DrawcallLimitFix/Scene/SceneStore.h`).
+
+## Two modes: trusted, and parity
+
+DCLF runs in one of two configurations: the main path (asynchronous, persistent, every check off) and parity (the same path,
+with the parity switches observing it). A parity check never changes what is drawn, so a parity run draws exactly what a
+normal run draws.
+
+**The invariants.** Each has a flag a run must not show after its first scene.
+
+1.  **Capability, not occurrence.** The phases DCLF draws are the toggles plus what it has set up (the shadow state
+    catalog is enumerated at setup, so no state appears mid-session). Which views the engine asks for in a frame never
+    changes the set. A change outside a toggle, a load or `failed` is `<- PHASES`.
+2.  **Every view served.** Every view of a claimed phase is drawn from the persistent payload: the shadow revision's
+    shape covers every view slot, a slot without a view doing no work. A view not drawn while casters are withheld
+    from it is `<- HOLES`. Focus views (one actor's casters) are the engine's by design.
+3.  **Incremental only.** Every per-frame update is bounded by what changed: the candidate tables keep stable indices and
+    per-entry versions, and their consumers (the cut, the exclusions, the light filter) follow by version difference;
+    the set's commit evaluates only the slots an event or a readiness source named; the shapes are made again only when
+    what they are made from moves (`RevisionShapesKey`). Each has a parity counterpart that evaluates in full.
+4.  **No overflow fallbacks.** Event queues and logs grow; there are no caps.
+5.  **The normal path trusts its producers.** It does no comparison, re-derivation or rebuild of upstream work, and has no
+    fallback for a producer's mistake: a mistake shows as a visual error, which parity finds. The only checks it keeps are
+    O(1) memory-safety bounds (a CPU write clamped to the region it targets, counted). A GPU hazard on a freed or
+    undersized buffer is impossible by construction: versions move only at a revision's selection.
+
+**The flags** a parity run reports, each with its count and first instance:
+
+| Flag | Switch | What it means |
+| --- | --- | --- |
+| `<- PHASES`, `<- HOLES` | always | The capability changed outside a toggle, a load or `failed`; a view not drawn while casters were withheld from it |
+| `<- REVISION` | `CS_DCLF_REVISION_PARITY` | A commit's values differ from the revision's shape (latch, bucket plan, latched copies) |
+| `<- LATCH` | `CS_DCLF_REVISION_PARITY` | Values clamped to the revision's latch: the latch grew after the revision was made |
+| `<- SHAPE KEY` | `CS_DCLF_REVISION_PARITY` | Shapes made around a parity frame differ under an unchanged shapes key: an input the key does not name |
+| `<- STALE`, `<- UNREVISED`, `<- UNBUILT` | `CS_DCLF_REVISION_PARITY`; always | The installed payload built for other inputs; an epoch without the revision's recording; a publication without a payload for the resources |
+| `<- CANDIDATES` | `CS_DCLF_PERSISTENT_PARITY` | The candidate tables against a fresh build |
+| `<- CUT` | `CS_DCLF_PERSISTENT_PARITY` | The stand-in cut against a whole plan |
+| `<- COMMIT` | `CS_DCLF_SET_PARITY` | The set's incremental commit against a full evaluation |
+| `<- DETACH` | `CS_DCLF_PERSISTENT_PARITY` | The tables' slots against the tracked set (`CheckObjectSlots`, `ValidateSlice`) |
+| `<- SUN EXCLUSION` | `CS_DCLF_PERSISTENT_PARITY` | A caster the cascades skipped under an excluded entry that DCLF does not draw |
 
 ## Switches
 

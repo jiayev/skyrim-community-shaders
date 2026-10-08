@@ -106,10 +106,8 @@ namespace DCLF
 		struct Async
 		{
 			// Per epoch, since the last report (step 6e E3b, S1): committed the installed publication's payload (built ahead), or built
-			// at the epoch because no publication with draws was installed, none was built for it, or it was for other resources,
-			// frame slots or views.
-			std::uint32_t used = 0, builtInline = 0;
-			std::uint32_t notKicked = 0, late = 0, stale = 0;
+			// at the epoch (CS_DCLF_BINDLESS_PARITY); and, under CS_DCLF_REVISION_PARITY, payloads for other inputs than the frame's.
+			std::uint32_t used = 0, builtInline = 0, stale = 0;
 		};
 		std::array<Async, 3> async{};
 	};

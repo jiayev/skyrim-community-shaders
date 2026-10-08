@@ -126,7 +126,7 @@ namespace DCLF
 		std::uint32_t a_generation, CommitUploads& a_uploads)
 	{
 		ZoneScopedN("CS.DCLF.CommitSceneStreams");
-		// A commit that reads no ring entry (step 6e S3: a fallback build's): what the scene buffers lack of the frame's views.
+		// A commit that reads no ring entry (CS_DCLF_BINDLESS_PARITY's own build): what the scene buffers lack of the frame's views.
 		(void)a_generation;
 		const auto views = StreamsNow();
 		SceneStreams sent;

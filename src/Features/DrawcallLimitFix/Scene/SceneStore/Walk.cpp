@@ -334,7 +334,6 @@ namespace DCLF
 		stats.materialsValidated = stats.materialCacheStale = 0;
 		stats.classifyHits = stats.classifyChecked = stats.classifyDiffers = stats.castResolved = 0;
 		stats.derivedHits = stats.derivedChecked = stats.derivedDiffers = 0;
-		stats.accumulatedWithoutRecord = 0;
 		stats.decals = {};
 		stats.skinned = stats.boneRows = 0;
 		stats.projectedUV = stats.landBlend = 0;
@@ -421,8 +420,7 @@ namespace DCLF
 		//
 		// A verdict that is stale in the "eligible" direction costs nothing: the accumulate phase
 		// classifies again before it hands an object any bindings. A verdict stale the other way
-		// would leave an accumulated object without a record, so that phase clears the cache for it
-		// and counts it (stats.accumulatedWithoutRecord, the gate: 0 in steady state).
+		// would leave an accumulated object without a record, so that phase clears the cache for it.
 		// An NPC face shape (FaceSnapshots), resolved once: a tracked geometry's type and parent do not change.
 		if (!trackedEntry->faceShapeResolved) {
 			trackedEntry->faceShapeResolved = true;
