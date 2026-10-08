@@ -1659,17 +1659,12 @@ namespace DCLF::Draws
 		return result;
 	}
 
-	/** @brief The frame shape a shadow epoch's passes draw: the shadow views', or (a_sky) the occlusion views'. */
-	std::shared_ptr<const ShadowFrame> CurrentShadowFrame(const ShadowResources& a_resources, bool a_sky)
-	{
-		return (a_sky ? a_resources.occlusionFrame : a_resources.frame).load(std::memory_order_acquire);
-	}
-	/** @brief The shadow shape a_preparation prepares for: its revision's, else the published one. */
-	std::shared_ptr<const ShadowFrame> CurrentShadowFrame([[maybe_unused]] const org::PassPrepareContext& a_preparation, const ShadowResources& a_resources, bool a_sky)
+	/** @brief The shadow shape a_preparation prepares for: its revision's shadow views', or (a_sky) occlusion views', null without one. */
+	std::shared_ptr<const ShadowFrame> CurrentShadowFrame(const org::PassPrepareContext& a_preparation, [[maybe_unused]] const ShadowResources& a_resources, bool a_sky)
 	{
 		if (const auto* shapes = RevisionShapesOf(a_preparation))
 			return a_sky ? shapes->occlusion : shapes->shadow;
-		return CurrentShadowFrame(a_resources, a_sky);
+		return nullptr;
 	}
 
 	struct ShadowBuildBindings
@@ -2122,17 +2117,12 @@ namespace DCLF::Draws
 		bool sky = false;
 	};
 
-	/** @brief The shape the reflection epoch's passes draw (ExecuteReflection), null while it has none. */
-	std::shared_ptr<const ReflectionFrame> CurrentReflectionFrame(const ReflectionResources& a_resources)
-	{
-		return a_resources.frame.load(std::memory_order_acquire);
-	}
-	/** @brief The reflection shape a_preparation prepares for: its revision's, else the published one. */
-	std::shared_ptr<const ReflectionFrame> CurrentReflectionFrame([[maybe_unused]] const org::PassPrepareContext& a_preparation, const ReflectionResources& a_resources)
+	/** @brief The reflection shape a_preparation prepares for: its revision's, null without one. */
+	std::shared_ptr<const ReflectionFrame> CurrentReflectionFrame(const org::PassPrepareContext& a_preparation, [[maybe_unused]] const ReflectionResources& a_resources)
 	{
 		if (const auto* shapes = RevisionShapesOf(a_preparation))
 			return shapes->reflection;
-		return CurrentReflectionFrame(a_resources);
+		return nullptr;
 	}
 
 	struct ReflectionBuildBindings

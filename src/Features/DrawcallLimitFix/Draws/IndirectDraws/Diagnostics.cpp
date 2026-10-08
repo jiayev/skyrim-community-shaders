@@ -92,27 +92,6 @@ namespace DCLF
 			k.parity.Reset();
 		}
 		{
-			// The epochs' shapes (PublishShape): a new one, or one come back, is a recording the epoch may not hold yet.
-			std::string shapes;
-			auto shape = [&](const char* a_name, auto& a_recent) {
-				if (a_recent.same + a_recent.recent + a_recent.made)
-					shapes += fmt::format("{}{} {} same, {} came back, {} new", shapes.empty() ? "" : "; ", a_name, a_recent.same, a_recent.recent, a_recent.made);
-				a_recent.same = a_recent.recent = a_recent.made = 0;
-			};
-			if (impl->resources) {
-				shape("Z-prepass", impl->resources->recentShapes[kDepthShape]);
-				shape("colour", impl->resources->recentShapes[kColourShape]);
-			}
-			if (impl->shadow) {
-				shape("shadow", impl->shadow->recentShapes);
-				shape("occlusion", impl->shadow->recentOcclusionShapes);
-			}
-			if (impl->reflection.resources)
-				shape("reflection", impl->reflection.resources->recentShapes);
-			if (!shapes.empty())
-				text += fmt::format("[DCLF] epoch shapes: {}\n", shapes);
-		}
-		{
 			// R3c (a): the main shapes a scene revision makes at the join, against the commits' (Impl::ShapeParity).
 			auto& p = impl->shapeParity;
 			std::string segments;
@@ -188,16 +167,13 @@ namespace DCLF
 		static constexpr const char* kNames[3] = { "colour", "zprepass", "shadow" };
 		for (std::size_t i = 0; i < stats.async.size(); ++i) {
 			auto& a = stats.async[i];
-			if (!a.notKicked && !a.builtInline && !a.used)
+			if (!a.builtInline && !a.used)
 				continue;
-			text += fmt::format("[DCLF] {} epochs (6e E3b, S1): {} committed the payload built ahead with their publication, {} built at the epoch ({} no draws installed, "
-								"{} none built, {} for other resources, frame slots or views){}\n",
-				kNames[i], a.used, a.builtInline, a.notKicked, a.late, a.stale, a.builtInline ? " <- BUILT IN THE FRAME" : " <- OK");
+			text += fmt::format("[DCLF] {} epochs (6e E3b, S1): {} committed the payload built ahead with their publication, {} built at the epoch (bindless parity); "
+								"revision parity: {} payloads for other inputs than the frame's{}\n",
+				kNames[i], a.used, a.builtInline, a.stale, a.stale ? " <- STALE" : " <- OK");
 			if (i == kAsyncZPrepass)
 				text += fmt::format("[DCLF] frame slots supplied from an earlier capture (6e E5): {}\n", std::exchange(impl->frameSlotsCarried, 0));
-			if (i == kAsyncShadow)
-				text += fmt::format("[DCLF] shadow lookups refreshed at the epoch for views the frame's start's did not cover (6e S1): {}\n",
-					std::exchange(impl->shadowEpochRefreshes, 0));
 			a = {};
 		}
 		{

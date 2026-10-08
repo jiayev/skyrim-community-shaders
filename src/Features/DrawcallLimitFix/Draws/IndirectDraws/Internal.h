@@ -109,21 +109,6 @@ namespace DCLF
 			}
 		}
 
-		/**
-		 * @brief The last few distinct shapes a segment published (PublishShape), the most recent first: a frame the same as one
-		 * of them republishes it, generation and all, so the passes' revisions come back to what they were, and the epoch's kept
-		 * recording of that shape (ORG's recording reuse) is current again.
-		 */
-		template <class Frame>
-		struct RecentShapes
-		{
-			static constexpr std::size_t kShapes = 4;
-			std::array<std::shared_ptr<const Frame>, kShapes> shapes;
-			// Since the last report: frames that kept the published shape, came back to a recent one, or made a new one (each of
-			// the last two a recording the epoch may not hold yet).
-			std::uint64_t same = 0, recent = 0, made = 0;
-		};
-
 		// A draw's ExecuteIndirect max count: a power of two that only grows, so the recording settles while
 		// the preprocess memory stays near what the frame draws (the GPU count buffer says how many run).
 		inline std::uint32_t GrowCapacity(std::uint32_t a_current, std::uint32_t a_needed, std::uint32_t a_limit)
@@ -982,12 +967,6 @@ namespace DCLF
 			std::uint32_t hzbWidth = 0, hzbHeight = 0, hzbMips = 0;
 			std::uint32_t width = 0, height = 0;
 			bool lightLimitFix = false;  // LLF's graph buffers are registered (they are read at t35-t37)
-			// Per drawing segment (kDepthShape, kColourShape): the shape its passes record against, null while
-			// the segment has nothing to draw this epoch. published keeps the last one across the null.
-			std::array<std::atomic<std::shared_ptr<const PassFrame>>, 2> frames;
-			std::array<std::shared_ptr<const PassFrame>, 2> published;
-			std::array<RecentShapes<PassFrame>, 2> recentShapes;
-			std::uint64_t shapeGenerations = 0;
 			// Per frame slot, one BuildDrawsLatch (all BuildDraws dispatches of an epoch share the values), then the colour pass's
 			// cascades (latchLayout, grown by ReserveMainLatch).
 			std::shared_ptr<org::LatchBlock> latch;
@@ -1218,23 +1197,12 @@ namespace DCLF
 			std::uint64_t treeLodDraw = 0;
 		};
 
-		// The shape of the segment a pass serves, or null when that segment does not draw (or, without epochs,
-		// when the current segment is not a drawing one).
-		inline std::shared_ptr<const PassFrame> CurrentFrame(const Resources& a_resources, RenderGraphRuntime::Segment a_segment)
-		{
-			if (a_segment == RenderGraphRuntime::Segment::ZPrepass)
-				return a_resources.frames[kDepthShape].load(std::memory_order_acquire);
-			if (a_segment == RenderGraphRuntime::Segment::MainOpaque)
-				return a_resources.frames[kColourShape].load(std::memory_order_acquire);
-			return nullptr;
-		}
-
 		struct ShadowFrame;
 		struct ReflectionFrame;
 		/**
 		 * @brief The shapes a scene revision's recording of an epoch is prepared for (R3c; SceneRevision.cpp): what its passes read
-		 * from the preparation's host data (PassPrepareContext::preparationData) instead of the segments' published shapes. A
-		 * preparation without one (a live ticket) reads the published ones.
+		 * from the preparation's host data (PassPrepareContext::preparationData). A
+		 * preparation without one draws nothing: every DCLF epoch is submitted from a revision.
 		 */
 		struct RevisionShapes
 		{
@@ -1256,26 +1224,21 @@ namespace DCLF
 				return *shapes->scene;
 			return a_scene;
 		}
-		/** @brief The shape a_preparation prepares the segment's passes for: its revision's, else the published one. */
-		inline std::shared_ptr<const PassFrame> CurrentFrame(const org::PassPrepareContext& a_preparation, const Resources& a_resources, RenderGraphRuntime::Segment a_segment)
+		/** @brief The shape a_preparation prepares the segment's passes for: its revision's, null without one or for a segment that does not draw. */
+		inline std::shared_ptr<const PassFrame> CurrentFrame(const org::PassPrepareContext& a_preparation, [[maybe_unused]] const Resources& a_resources, RenderGraphRuntime::Segment a_segment)
 		{
 			if (const auto* shapes = RevisionShapesOf(a_preparation)) {
 				if (a_segment == RenderGraphRuntime::Segment::ZPrepass)
 					return shapes->main[kDepthShape];
 				if (a_segment == RenderGraphRuntime::Segment::MainOpaque)
 					return shapes->main[kColourShape];
-				return nullptr;
 			}
-			return CurrentFrame(a_resources, a_segment);
+			return nullptr;
 		}
 
 		static_assert(DrawPipelines::kMaxPipelines == 4096, "BuildDrawsCS.hlsl's kSortKeys");
 
 		/** @brief Whether BuildDraws runs in the segment (BuildDrawsPass::Prepare's conditions), which is when a sort follows it. */
-		inline bool BuildsDraws(const Resources& a_resources, RenderGraphRuntime::Segment a_segment)
-		{
-			return a_resources.buildDraws && a_resources.latch && a_resources.dispatchSignature && CurrentFrame(a_resources, a_segment);
-		}
 		inline bool BuildsDraws(const org::PassPrepareContext& a_preparation, const Resources& a_resources, RenderGraphRuntime::Segment a_segment)
 		{
 			return a_resources.buildDraws && a_resources.latch && a_resources.dispatchSignature && CurrentFrame(a_preparation, a_resources, a_segment);
@@ -1456,43 +1419,6 @@ namespace DCLF
 			}
 		};
 
-		/**
-		 * @brief Publishes a frame's shape: the one already published while nothing the recordings depend on changed, so the
-		 * passes reuse their invocations; one of the recent shapes when the frame is the same as it (a view's state that comes
-		 * back), so its recording is reused too; a_frame under a new generation otherwise. Kept in a_published for the next frame.
-		 */
-		template <class Frame>
-		void PublishShape(std::shared_ptr<Frame> a_frame, std::shared_ptr<const Frame>& a_published, std::atomic<std::shared_ptr<const Frame>>& a_current,
-			std::uint64_t& a_generations, RecentShapes<Frame>& a_recent)
-		{
-			if (a_published && a_published->SameShape(*a_frame)) {
-				a_current.store(a_published, std::memory_order_release);
-				++a_recent.same;
-				return;
-			}
-			auto& recent = a_recent.shapes;
-			std::shared_ptr<const Frame> published;
-			std::size_t found = recent.size();
-			for (std::size_t i = 0; i < recent.size() && found == recent.size(); ++i)
-				if (recent[i] && recent[i]->SameShape(*a_frame))
-					found = i;
-			if (found < recent.size()) {
-				published = recent[found];
-				++a_recent.recent;
-			} else {
-				++a_recent.made;
-				a_frame->generation = ++a_generations;
-				published = std::move(a_frame);
-				found = recent.size() - 1;
-			}
-			// The most recent first.
-			for (std::size_t i = found; i > 0; --i)
-				recent[i] = std::move(recent[i - 1]);
-			recent[0] = published;
-			a_published = published;
-			a_current.store(std::move(published), std::memory_order_release);
-		}
-
 		/** @brief The shadow views' graph resources: the main path's set, without targets or an HZB, per view slot. */
 		/**
 		 * @brief The shadow views' index pool: the index buffers of the geometry slots, copied into one DCLF buffer, so that the
@@ -1603,15 +1529,8 @@ namespace DCLF
 			std::array<std::shared_ptr<org::ExternalTextureResource>, kShadowDepthTargets> depth;
 			std::array<ID3D11Texture2D*, kShadowDepthTargets> depthTexture{};
 			std::array<std::uint32_t, kShadowDepthTargets> depthLayers{};
-			std::atomic<std::shared_ptr<const ShadowFrame>> frame;
-			std::shared_ptr<const ShadowFrame> published;  // survives a frame without views
-			// The occlusion maps: their own epoch's views (ExecuteOcclusion).
-			std::atomic<std::shared_ptr<const ShadowFrame>> occlusionFrame;
-			std::shared_ptr<const ShadowFrame> occlusionPublished;
-			RecentShapes<ShadowFrame> recentShapes, recentOcclusionShapes;
-			std::uint64_t shapeGenerations = 0;
 			// Per frame slot, one BuildDrawsLatch per view slot and the pipeline map rows (latchLayout); a new block when either
-			// grows. The passes read it from the published frame (ShadowFrame::latch).
+			// grows. The passes read it from the revision's frame (ShadowFrame::latch).
 			std::shared_ptr<org::LatchBlock> latch;
 			// Zeros, never written: the source the epochs' latched copies zero the views' counters from (a word per count and
 			// per bucket, as many as bucketCountWords; a new one when that grows).
@@ -1627,9 +1546,6 @@ namespace DCLF
 			};
 			std::vector<ViewLabel> labels;
 		};
-
-		// These passes run only in their own epoch (the shadow views' or Skylighting's).
-		std::shared_ptr<const ShadowFrame> CurrentShadowFrame(const ShadowResources& a_resources, bool a_sky);
 
 		// The main pass's bindings where its opaque batches start (DrawcallLimitFix::BeforeOpaquePass), or the depth pass's.
 		struct Capture
@@ -3567,10 +3483,6 @@ namespace DCLF
 			bool rebuildPending = false;
 			std::shared_ptr<const ComputeProgram> buildDraws;
 			rhi::CommandSignaturePtr dispatchSignature;
-			std::atomic<std::shared_ptr<const ReflectionFrame>> frame;
-			std::shared_ptr<const ReflectionFrame> published;
-			RecentShapes<ReflectionFrame> recentShapes;
-			std::uint64_t shapeGenerations = 0;
 		};
 
 		std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeReflectionExtension(std::shared_ptr<ReflectionResources> a_resources);
@@ -3765,8 +3677,7 @@ namespace DCLF
 		std::shared_ptr<const void> shadowExecutionOwner;  // reused by the sky epoch's copy of the shadow records
 		/**
 		 * @brief The capability's modes (occlusion maps included) with the catalog's states, and the shadow targets' format, which the
-		 * builds ahead and the frame's start's shadow lookups are for (UpdateShadowCapability). A mode or state the capability did not
-		 * foresee shows a frame late: the epoch builds its own meanwhile (ShadowAheadUsable).
+		 * builds ahead and the frame's start's shadow lookups are for (UpdateShadowCapability).
 		 */
 		struct LastShadow
 		{
@@ -3776,13 +3687,6 @@ namespace DCLF
 			bool known = false;
 			std::uint32_t loggedStale = 0;
 		} lastShadow;
-		// What the frame's shadow lookups were refreshed for at its start (RefreshShadowLookupsAtFrameStart), and the epochs that
-		// refreshed them again for other views (since the last report).
-		LastShadow shadowLookupsFor;
-		std::uint64_t shadowEpochRefreshes = 0;
-		/** @brief Whether the frame's shadow lookups were refreshed for these views' modes, states and format. */
-		bool ShadowLookupsCover(const std::array<bool, kShadowModeCount>& a_modes, const std::array<ModeRasterStates, kShadowModeCount>& a_states,
-			DXGI_FORMAT a_format) const;
 		/** @brief Whether the installed shadow payload can be committed by an epoch with the frame's inputs a_frame. */
 		bool ShadowAheadUsable(const ShadowPayload& a_payload, const ShadowInputs& a_frame) const;
 		void LogStaleShadow(const ShadowInputs& a_built, const ShadowInputs& a_frame);
@@ -3809,6 +3713,7 @@ namespace DCLF
 		 */
 		std::vector<ShadowViewLayout> PredictedOcclusion() const;
 		std::vector<std::vector<ShadowViewLayout>> recentOcclusionLayouts;
+		static constexpr std::size_t kRecentOcclusionLayouts = 4;
 		std::uint64_t occlusionUnrecorded = 0;  // maps left to the engine for want of the revision's shape, since the last report
 		/**
 		 * @brief The sequence buffers' reserves (render thread, before an epoch): each grown to hold every draw the scene's tracked
@@ -4004,11 +3909,6 @@ namespace DCLF
 		} ringHolders;
 		// The entry the frame's shadow commit read (none: its own buffers), which the occlusion epoch's latches name too.
 		RingFrame ringShadow;
-		/** @brief Whether a shadow commit of a_payload reads the frame's ring entry (the installed shadow payload, the entry filled for it). */
-		bool RingForShadow(const ShadowPayload& a_payload) const
-		{
-			return ringFrame.valid && ringFrame.shadow && ringFrame.draws && ringFrame.draws->shadow.get() == &a_payload;
-		}
 		/** @brief The ring's values into a shadow or occlusion view's latch, for its mode (none: the views' own buffers). */
 		static void ShadowRingLatch(const RingFrame& a_ring, std::uint32_t a_mode, BuildDrawsLatch& a_latch)
 		{
@@ -4502,7 +4402,7 @@ namespace DCLF
 			kKeyGroups
 		};
 		static constexpr std::array<const char*, kKeyGroups> kKeyGroupNames = { "growths", "pipelines", "lookups", "main latch and captures", "shadow latch and layouts",
-			"casting bound", "reflection" };
+			"casting bound outgrown", "reflection" };
 		using ShapesKey = std::array<std::uint64_t, kKeyGroups>;
 		ShapesKey RevisionShapesKey(const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect, const rhi::DescriptorHeapHandle& a_resourceHeap,
 			const rhi::DescriptorHeapHandle& a_samplerHeap) const;
@@ -4513,6 +4413,15 @@ namespace DCLF
 		// under an unchanged key (<- SHAPE KEY).
 		std::uint64_t shapesMade = 0, shapesKept = 0;
 		std::array<std::uint64_t, SceneRevisions::kEpochs> shapeKeyMisses{};
+		/**
+		 * @brief Whether the last made shadow and occlusion shapes hold a_bounds: every view's capacity and buckets at least what the
+		 * bound needs of them, and no row at the bucket words (TrimmedRow orders such a row by the draws). Their capacities only grow
+		 * (SizeShadowBuckets, GrowCapacity from the last made), so a shape made again from a bound they hold is the same shape.
+		 */
+		bool ShadowShapesHold(const ShadowBounds& a_bounds) const;
+		// The casting bound's version last checked against the shapes (drawBound.shadowVersion), and the times it outgrew them: what the
+		// shapes key names of the bound (kKeyBound), so a move of the bound alone keeps the shapes.
+		std::uint64_t shadowBoundChecked = ~0ull, shadowBoundOutgrown = 0;
 
 		void ReadCullCounters(const std::shared_ptr<Resources>& a_resources, IndirectDraws::Stats& a_stats, const MainPayload& a_payload);
 		/**

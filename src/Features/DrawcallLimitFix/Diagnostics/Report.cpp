@@ -415,9 +415,6 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			logger::info("[DCLF] shadow casters (last frame): {} of {} records would be drawn into a shadow map; not casters:{}; {} views this frame",
 				stats.shadowCasters, stats.objects, rejects.empty() ? " none" : rejects, DCLF::ShadowViews::Get().All().size());
 		}
-		if (stats.accumulatedWithoutRecord)
-			logger::warn("[DCLF] two-phase frame: {} objects the engine accumulated had no record from the scene phase, so they stayed native",
-				stats.accumulatedWithoutRecord);
 		timing = {};
 		store.ResetTimes();
 	}
