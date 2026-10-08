@@ -23,6 +23,7 @@
 
 #include <Windows.h>
 #include <algorithm>
+#include <array>
 #include <format>
 #include <fstream>
 #include <imgui.h>
@@ -132,8 +133,8 @@ namespace
 
 	bool IsImageExtension(const std::filesystem::path& path)
 	{
-		const auto ext = ToLower(path.extension().string());
-		return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp" || ext == ".bmp" || ext == ".dds";
+		static constexpr std::array<std::string_view, 6> kImageExtensions = { ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".dds" };
+		return std::ranges::contains(kImageExtensions, ToLower(path.extension().string()));
 	}
 
 	std::string InferDescriptionFromReadme(const std::filesystem::path& packRoot)

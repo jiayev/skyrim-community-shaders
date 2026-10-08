@@ -38,6 +38,7 @@ namespace
 	constexpr float kSectionLabelGap = 8.0f;
 	constexpr float kEmptyStateTopPad = 24.0f;
 	constexpr float kInlineBadgeFillAlpha = 0.22f;
+	constexpr float kDestructiveIconAlpha = 0.8f;
 	/// How far an inline badge's label moves from the tint toward the text colour, for legibility.
 	constexpr float kInlineBadgeLabelTowardText = 0.35f;
 
@@ -299,6 +300,11 @@ namespace BrowserUI
 		if (tooltip)
 			Util::AddTooltip(tooltip, Util::kTooltipWhenDisabled);
 		return clicked;
+	}
+
+	ImU32 DestructiveIconColor()
+	{
+		return WithAlpha(Util::Colors::GetError(), kDestructiveIconAlpha);
 	}
 
 	bool PaintedIconButton(const char* id, const IconPainter& icon, ImU32 color, const char* tooltip)

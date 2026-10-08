@@ -87,6 +87,9 @@ namespace BrowserUI
 	 */
 	bool IconButton(const char* id, Icons::GlyphRef glyph, const char* tooltip, bool active = false, ImU32 color = 0);
 
+	/** @brief Glyph colour for IconButtons that delete: the error colour, softened to sit quietly in a row. */
+	ImU32 DestructiveIconColor();
+
 	/** @brief IconButton variant for painted (non-font) icons such as the star and flag. */
 	bool PaintedIconButton(const char* id, const IconPainter& icon, ImU32 color, const char* tooltip);
 

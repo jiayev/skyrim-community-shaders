@@ -30,9 +30,7 @@ namespace LocationTypeIcons
 		std::string_view label;     ///< Short English label (editor-ID suffix, spaced)
 	};
 
-	// ---------------------------------------------------------------------------
 	// Settlements & holds
-	// ---------------------------------------------------------------------------
 	inline constexpr Entry kCity{ "LocTypeCity", Icons::LC(ICON_LC_CASTLE), "City" };
 	inline constexpr Entry kTown{ "LocTypeTown", Icons::FA(ICON_FA_HOME), "Town" };
 	inline constexpr Entry kSettlement{ "LocTypeSettlement", Icons::FA(ICON_FA_USERS), "Settlement" };
@@ -43,9 +41,7 @@ namespace LocationTypeIcons
 	inline constexpr Entry kHoldMajor{ "LocTypeHoldMajor", Icons::FA(ICON_FA_LANDMARK), "Hold Major" };
 	inline constexpr Entry kHoldMinor{ "LocTypeHoldMinor", Icons::FA(ICON_FA_MAP_MARKER_ALT), "Hold Minor" };
 
-	// ---------------------------------------------------------------------------
 	// Buildings & civic
-	// ---------------------------------------------------------------------------
 	inline constexpr Entry kHouse{ "LocTypeHouse", Icons::FA(ICON_FA_HOME), "House" };
 	inline constexpr Entry kPlayerHouse{ "LocTypePlayerHouse", Icons::FA(ICON_FA_HOUSE_USER), "Player House" };
 	inline constexpr Entry kDwelling{ "LocTypeDwelling", Icons::FA(ICON_FA_HOME), "Dwelling" };
@@ -59,18 +55,14 @@ namespace LocationTypeIcons
 	inline constexpr Entry kJail{ "LocTypeJail", Icons::GI(ICON_GI_HANDCUFFS), "Jail" };  // Game Icons: handcuffs by Lorc
 	inline constexpr Entry kCemetery{ "LocTypeCemetery", Icons::FA(ICON_FA_CROSS), "Cemetery" };
 
-	// ---------------------------------------------------------------------------
 	// Work sites & military
-	// ---------------------------------------------------------------------------
 	inline constexpr Entry kFarm{ "LocTypeFarm", Icons::FA(ICON_FA_CARROT), "Farm" };
 	inline constexpr Entry kLumberMill{ "LocTypeLumberMill", Icons::FA(ICON_FA_TREE), "Lumber Mill" };
 	inline constexpr Entry kMine{ "LocTypeMine", Icons::FA(ICON_FA_HARD_HAT), "Mine" };
 	inline constexpr Entry kMilitaryCamp{ "LocTypeMilitaryCamp", Icons::FA(ICON_FA_CAMPGROUND), "Military Camp" };
 	inline constexpr Entry kMilitaryFort{ "LocTypeMilitaryFort", Icons::FA(ICON_FA_CHESS_ROOK), "Military Fort" };
 
-	// ---------------------------------------------------------------------------
 	// Dungeons & hostile sites
-	// ---------------------------------------------------------------------------
 	inline constexpr Entry kDungeon{ "LocTypeDungeon", Icons::FA(ICON_FA_DUNGEON), "Dungeon" };
 	inline constexpr Entry kClearable{ "LocTypeClearable", Icons::FA(ICON_FA_SKULL_CROSSBONES), "Clearable" };
 	inline constexpr Entry kDraugrCrypt{ "LocTypeDraugrCrypt", Icons::FA(ICON_FA_SKULL), "Draugr Crypt" };
@@ -90,9 +82,7 @@ namespace LocationTypeIcons
 	inline constexpr Entry kDwarvenAutomatons{ "LocTypeDwarvenAutomatons", Icons::FA(ICON_FA_ROBOT), "Dwarven Automatons" };
 	inline constexpr Entry kOrcStronghold{ "LocTypeOrcStronghold", Icons::FA(ICON_FA_CHESS_ROOK), "Orc Stronghold" };
 
-	// ---------------------------------------------------------------------------
 	// Waterborne
-	// ---------------------------------------------------------------------------
 	inline constexpr Entry kShip{ "LocTypeShip", Icons::GI(ICON_GI_SAILBOAT), "Ship" };                   // Game Icons: sailboat by Delapouite
 	inline constexpr Entry kShipwreck{ "LocTypeShipwreck", Icons::GI(ICON_GI_SHIP_WRECK), "Shipwreck" };  // Game Icons: ship-wreck by Delapouite
 

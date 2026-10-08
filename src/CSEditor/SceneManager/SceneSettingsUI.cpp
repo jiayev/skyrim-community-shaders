@@ -39,13 +39,6 @@ namespace
 	/// reset the baseline, so time running at any timescale still re-couples the bar.
 	constexpr float kScrubEpsilon = 1e-3f;
 
-	/// Starting width of the weather tab's feature column at the baseline font size; the user can drag it.
-	constexpr float kFeatureListWidth = 180.0f;
-
-	/// The divider doubles as the resize grip, so the feature column and the panel share one border.
-	constexpr ImGuiTableFlags kFeatureLayoutFlags =
-		ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV;
-
 	/// The objects window nests its list inside the category list, so it reads as a sub-level.
 	constexpr float kNestedFeatureFontScale = 0.85f;
 
@@ -392,9 +385,9 @@ namespace
 		FeatureListPicker::Draw(features, selected,
 			{
 				.search = search,
-				.marker = [&context](const Feature& feature) { return ContextHasFeature(context, const_cast<Feature&>(feature).GetShortName()) ?
-			                                                              FeatureListPicker::Marker::Filled :
-			                                                              FeatureListPicker::Marker::None; },
+				.marker = [&context](const Feature& feature) {
+					const bool holdsSettings = ContextHasFeature(context, const_cast<Feature&>(feature).GetShortName());
+					return holdsSettings ? FeatureListPicker::Marker::Filled : FeatureListPicker::Marker::None; },
 				.markerTooltip = [](const Feature&, FeatureListPicker::Marker) { return T(TKEY("scene_feature_has_settings"), "Has settings on this page."); },
 			});
 	}
@@ -427,10 +420,10 @@ namespace
 	void DrawFeatureLayout(std::string& selectedFeature, std::string& featureSearch, bool transitionableOnly,
 		bool withPeriodBar, const SceneSettingsManager::SceneContextId& baseContext)
 	{
-		if (!ImGui::BeginTable("SceneFeatureLayout", 2, kFeatureLayoutFlags))
+		if (!ImGui::BeginTable("SceneFeatureLayout", 2, FeatureListPicker::kLayoutFlags))
 			return;
 
-		ImGui::TableSetupColumn("##Features", ImGuiTableColumnFlags_WidthFixed, kFeatureListWidth * Util::GetUIScale());
+		ImGui::TableSetupColumn("##Features", ImGuiTableColumnFlags_WidthFixed, FeatureListPicker::kColumnWidth * Util::GetUIScale());
 		ImGui::TableSetupColumn("##Body", ImGuiTableColumnFlags_WidthStretch);
 		ImGui::TableNextRow();
 
@@ -494,11 +487,16 @@ namespace
 		ImGui::SameLine(start + box);
 	}
 
+	bool IsSameLocationTarget(const SceneSettingsManager::LocationTarget& lhs, const SceneSettingsManager::LocationTarget& rhs)
+	{
+		return lhs.type == rhs.type && lhs.formKey == rhs.formKey;
+	}
+
 	/// Opens a location's editor window, focusing the existing one rather than opening a second.
 	LocationWindow& OpenLocationWindow(const SceneSettingsManager::LocationTarget& target)
 	{
 		auto existing = std::ranges::find_if(locationWindows, [&](const auto& window) {
-			return window.target.type == target.type && window.target.formKey == target.formKey;
+			return IsSameLocationTarget(window.target, target);
 		});
 		if (existing != locationWindows.end()) {
 			existing->open = true;
@@ -546,6 +544,13 @@ namespace
 
 		ImGui::TableNextColumn();
 		Util::Text::Secondary("%s", GetLocationTypeLabel(target.type));
+	}
+
+	/// What an add button promises, or why it is greyed once the place is listed.
+	const char* GetLocationAddTooltip(bool authored)
+	{
+		return authored ? T(TKEY("location_already_added"), "Already on your list.") :
+		                  T(TKEY("location_add_tooltip"), "Add to your locations");
 	}
 
 	/// Trailing icon action for an addable row: quiet until hovered, a check once the place is listed.
@@ -613,16 +618,9 @@ namespace
 		const bool authored = manager.IsLocationTargetAuthored(target.type, target.formKey);
 		if (DrawLocationAddButton(authored))
 			manager.AddLocationTarget(target);
-		Util::AddTooltip(authored ? T(TKEY("location_already_added"), "Already on your list.") :
-									T(TKEY("location_add_tooltip"), "Add to your locations"),
-			Util::kTooltipWhenDisabled);
+		Util::AddTooltip(GetLocationAddTooltip(authored), Util::kTooltipWhenDisabled);
 
 		ImGui::PopID();
-	}
-
-	bool IsSameLocationTarget(const SceneSettingsManager::LocationTarget& lhs, const SceneSettingsManager::LocationTarget& rhs)
-	{
-		return lhs.type == rhs.type && lhs.formKey == rhs.formKey;
 	}
 
 	using BrowserUI::SameLineIfFits;
@@ -680,7 +678,7 @@ namespace
 			ImGui::SameLine(0.0f, 0.0f);
 			ImGui::BeginDisabled(authored);
 			if (BrowserUI::IconButton("##add", authored ? SceneActionIcons::kAdded : SceneActionIcons::kAdd,
-					authored ? T(TKEY("location_already_added"), "Already on your list.") : T(TKEY("location_add_tooltip"), "Add to your locations"),
+					GetLocationAddTooltip(authored),
 					false, ImGui::GetColorU32(authored ? Util::Colors::GetSuccess() : Util::Colors::GetAccent())))
 				manager->AddLocationTarget(target);
 			ImGui::EndDisabled();
@@ -850,10 +848,9 @@ namespace
 						OpenLocationWindow(target);
 					ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
 					ImGui::SetNextItemAllowOverlap();
-					const ImVec4 error = Util::Colors::GetError();
 					if (BrowserUI::IconButton("##remove", SceneActionIcons::kDelete,
 							T(TKEY("location_remove_tooltip"), "Drops the location from the list along with the settings authored for it."),
-							false, ImGui::GetColorU32(ImVec4(error.x, error.y, error.z, 0.8f))))
+							false, BrowserUI::DestructiveIconColor()))
 						RequestLocationRemoval(target);
 
 					ImGui::PopID();

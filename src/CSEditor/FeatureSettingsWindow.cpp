@@ -37,12 +37,6 @@ namespace
 	constexpr float kWindowWidthRatio = 0.3f;
 	constexpr float kWindowHeightRatio = 0.6f;
 
-	/// Starting width of the feature column at the baseline font size; the user can drag it.
-	constexpr float kFeatureListWidth = 180.0f;
-
-	/// The divider doubles as the resize grip, so the feature column and the panel share one border.
-	constexpr ImGuiTableFlags kLayoutFlags = ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV;
-
 	/// Utility and Display hold editor and output plumbing, not scene look. Post Processing is pinned
 	/// above the categories instead, as the stack most edits start from.
 	constexpr std::array kExcludedCategories = { FeatureCategories::kUtility, FeatureCategories::kDisplay, FeatureCategories::kPostProcessing };
@@ -63,6 +57,7 @@ namespace
 		ImGui::SetNextWindowPos({ displaySize.x / 2.0f, displaySize.y / 2.0f }, layoutCond, { 0.5f, 0.5f });
 	}
 
+	/// Unlike Feature::FindFeatureByShortName, also finds features that are not loaded.
 	Feature* FindAnyFeatureByShortName(const std::string& shortName)
 	{
 		for (auto* feature : Feature::GetFeatureList()) {
@@ -141,6 +136,24 @@ namespace
 			FeatureOverwritesPanel::DrawExport();
 	}
 
+	/// Same dots as the main menu: filled while a scene overrides the feature here, hollow while its
+	/// scene settings apply somewhere else.
+	FeatureListPicker::Marker SceneMarker(const Feature& feature)
+	{
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto shortName = const_cast<Feature&>(feature).GetShortName();
+		if (!manager || !manager->HasAnySceneEntriesForFeature(shortName))
+			return FeatureListPicker::Marker::None;
+		return manager->IsFeatureSceneControlled(shortName) ? FeatureListPicker::Marker::Filled : FeatureListPicker::Marker::Hollow;
+	}
+
+	const char* SceneMarkerTooltip(const Feature&, FeatureListPicker::Marker marker)
+	{
+		return marker == FeatureListPicker::Marker::Filled ?
+		           T("menu.features.scene_indicator_overriding", "Scene Manager is overriding settings here. Blue settings show its values.") :
+		           T("menu.features.scene_indicator_configured", "Has Scene Manager settings for other times, weathers or locations.");
+	}
+
 	/** @brief Search bar, Post Processing pinned on top, then collapsible category groups. */
 	void DrawFeatureList()
 	{
@@ -155,25 +168,13 @@ namespace
 		if (selectedFeature.empty() && pinPostProcessing)
 			selectedFeature = postProcessing.GetShortName();
 
-		auto* manager = SceneSettingsManager::GetSingleton();
 		FeatureListPicker::Draw(features, selectedFeature,
 			{
 				.search = &featureSearch,
 				.categories = &categoryExpansion,
 				.pinned = pinPostProcessing ? std::span<Feature* const>(pinned) : std::span<Feature* const>(),
-				// Same dots as the main menu: filled while a scene overrides the feature here, hollow
-				// while its scene settings apply somewhere else.
-				.marker = [manager](const Feature& feature) {
-					const auto shortName = const_cast<Feature&>(feature).GetShortName();
-					if (!manager || !manager->HasAnySceneEntriesForFeature(shortName))
-						return FeatureListPicker::Marker::None;
-					return manager->IsFeatureSceneControlled(shortName) ? FeatureListPicker::Marker::Filled :
-				                                                          FeatureListPicker::Marker::Hollow; },
-				.markerTooltip = [](const Feature&, FeatureListPicker::Marker marker) { return marker == FeatureListPicker::Marker::Filled ?
-			                                                                                       T("menu.features.scene_indicator_overriding",
-																									   "Scene Manager is overriding settings here. Blue settings show its values.") :
-			                                                                                       T("menu.features.scene_indicator_configured",
-																									   "Has Scene Manager settings for other times, weathers or locations."); },
+				.marker = SceneMarker,
+				.markerTooltip = SceneMarkerTooltip,
 			});
 	}
 
@@ -207,8 +208,8 @@ namespace
 			if (ImGui::IsWindowDocked())
 				DrawBaselineExportButton(-1.0f);
 
-			if (ImGui::BeginTable("##FeaturesLayout", 2, kLayoutFlags)) {
-				ImGui::TableSetupColumn("##FeatureList", ImGuiTableColumnFlags_WidthFixed, kFeatureListWidth * Util::GetUIScale());
+			if (ImGui::BeginTable("##FeaturesLayout", 2, FeatureListPicker::kLayoutFlags)) {
+				ImGui::TableSetupColumn("##FeatureList", ImGuiTableColumnFlags_WidthFixed, FeatureListPicker::kColumnWidth * Util::GetUIScale());
 				ImGui::TableSetupColumn("##FeatureSettings", ImGuiTableColumnFlags_WidthStretch);
 				ImGui::TableNextRow();
 
