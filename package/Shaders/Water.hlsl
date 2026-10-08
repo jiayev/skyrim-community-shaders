@@ -795,7 +795,7 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 	return result;
 }
 
-float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection, float distanceFactor, float skylightingSpecular)
+float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection, float skylightingSpecular)
 {
 	if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Reflections))
 		return ReflectionColor.xyz * VarAmounts.y;
@@ -836,7 +836,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 	float4 ssrReflectionColorRaw = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUvDR);
 	float4 ssrReflectionColor = lerp(ssrReflectionColorBlurred, ssrReflectionColorRaw, ssrAmount * 0.7);
 	float3 finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
-	float ssrFraction = saturate(ssrReflectionColor.w * distanceFactor * ssrAmount);
+	float ssrFraction = saturate(ssrReflectionColor.w * ssrAmount);
 	reflectionColor = lerp(reflectionColor, finalSsrReflectionColor, ssrFraction);
 #			endif
 
@@ -970,10 +970,6 @@ float3 GetSunColor(float3 normal, float3 viewDirection, float3 worldPosition)
 #			include "LightLimitFix/LightLimitFix.hlsli"
 #		endif
 
-#		if defined(ISL) && defined(LIGHT_LIMIT_FIX)
-#			include "InverseSquareLighting/InverseSquareLighting.hlsli"
-#		endif
-
 #		if defined(IBL)
 #			include "IBL/IBL.hlsli"
 #		endif
@@ -1098,9 +1094,9 @@ PS_OUTPUT main(PS_INPUT input)
 #			else
 
 #				if defined(SKYLIGHTING)
-	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceFactor, skylightingSpecular);
+	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, skylightingSpecular);
 #				else
-	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceFactor, 1.0);
+	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, 1.0);
 #				endif
 
 	DiffuseOutput diffuseOutput = GetWaterDiffuseColor(input, normal, viewDirection, distanceMul, depthControl.y, fresnel, viewPosition, depth);
@@ -1144,15 +1140,7 @@ PS_OUTPUT main(PS_INPUT input)
 			float3 lightDirection = light.positionWS.xyz - input.WPosition.xyz;
 			float lightDist = length(lightDirection);
 
-#					if defined(ISL)
-			float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
-#					else
-			float intensityFactor = saturate(lightDist / light.radius);
-			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-#						if defined(ENABLE_LL)
-			intensityMultiplier = pow(intensityMultiplier, TransferFunctions::GAME_GAMMA);
-#						endif
-#					endif
+			float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light);
 
 			float3 normalizedLightDirection = normalize(lightDirection);
 

@@ -355,10 +355,6 @@ cbuffer AlphaTestRefCB : register(b11)
 #		include "LightLimitFix/LightLimitFix.hlsli"
 #	endif
 
-#	if defined(ISL) && defined(LIGHT_LIMIT_FIX)
-#		include "InverseSquareLighting/InverseSquareLighting.hlsli"
-#	endif
-
 #	define SampColorSampler SampBaseSampler
 
 #	if defined(SKYLIGHTING)
@@ -531,19 +527,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				LightLimitFix::Light light = LightLimitFix::lights[LightLimitFix::lightList[lightOffset + i]];
 				float3 lightVector = light.positionWS.xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightVector);
-#					if defined(ISL)
-				float attenuation = InverseSquareLighting::GetAttenuation(lightDist, light);
+				float attenuation = LightLimitFix::GetAttenuation(lightDist, light);
 				if (attenuation < 1e-5)
 					continue;
-#					else
-				float distanceFactor = saturate(lightDist / light.radius);
-				if (distanceFactor == 1)
-					continue;
-				float attenuation = 1 - distanceFactor * distanceFactor;
-#						if defined(ENABLE_LL)
-				attenuation = pow(attenuation, TransferFunctions::GAME_GAMMA);
-#						endif
-#					endif
 				float3 lightColor = Color::PointLight(light.color.xyz) * attenuation * light.fade;
 				float lightShadow = (light.lightFlags & LightLimitFix::LightFlags::Shadow) ? shadowColor[light.shadowLightIndex] : 1.0;
 				float3 lightDirection = lightVector / max(lightDist, EPSILON_DIVISION);
@@ -794,20 +780,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float3 lightDirection = light.positionWS.xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightDirection);
 
-#					if defined(ISL)
-				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
+				float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light);
 				if (intensityMultiplier < 1e-5)
 					continue;
-#					else
-				float intensityFactor = saturate(lightDist / light.radius);
-				if (intensityFactor == 1)
-					continue;
-
-				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-#						if defined(ENABLE_LL)
-				intensityMultiplier = pow(intensityMultiplier, TransferFunctions::GAME_GAMMA);
-#						endif
-#					endif
 
 				float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * light.fade;
 				float lightShadow = 1.0;
@@ -979,20 +954,9 @@ PS_OUTPUT main(PS_INPUT input)
 				float3 lightDirection = light.positionWS.xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightDirection);
 
-#				if defined(ISL)
-				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
+				float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light);
 				if (intensityMultiplier < 1e-5)
 					continue;
-#				else
-				float intensityFactor = saturate(lightDist / light.radius);
-				if (intensityFactor == 1)
-					continue;
-
-				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-#					if defined(ENABLE_LL)
-				intensityMultiplier = pow(intensityMultiplier, TransferFunctions::GAME_GAMMA);
-#					endif
-#				endif
 
 				float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * light.fade;
 

@@ -263,7 +263,7 @@ void Widget::ForceWeatherReinit(RE::TESWeather* weather)
 {
 	auto* sky = globals::game::sky;
 	if (weather && sky && sky->currentWeather == weather) {
-		sky->ForceWeather(weather, true);
+		Util::ForceWeather(sky, weather, true);
 		// An engaged lock owns the override slot; releasing it flickers the sky until the lock reasserts.
 		if (EditorWindow::GetSingleton()->IsWeatherLocked())
 			EditorWindow::MaintainWeatherLock();
