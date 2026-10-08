@@ -502,17 +502,16 @@ void DrawcallLimitFix::EarlyPrepass()
 	// requested here are admitted there.
 	auto& programs = DCLF::ShaderPrograms::Get();
 	auto& pipelines = DCLF::DrawPipelines::Get();
-	// The shadow views' programs: one Utility build per technique of the frame's casters, per render mode
-	// among the views the engine drew. Requested here, beside the Lighting builds, so they are compiled
-	// long before a shadow epoch would draw with them.
+	// The shadow views' programs: one Utility build per technique of the frame's casters, per render mode of the
+	// shadow capability (whichever views the engine asks for this frame). Requested here, beside the Lighting builds,
+	// so they are compiled long before a shadow epoch would draw with them.
 	if (auto* utility = globals::game::utilityShader; utility && programs.Enabled()) {
 		ZoneScopedN("CS.DCLF.Accumulate.ShadowPipelines");
-		std::uint32_t modeBits = 0;
-		for (const auto& view : DCLF::ShadowViews::Get().All()) {
-			// Clamped for cascades and spot lights, the paraboloid warp for point lights; the engine
-			// picks the render mode from the light, not from the descriptor (engine notes: shadow maps).
-			modeBits |= DCLF::ShadowModeBits(view.kind == DCLF::ShadowViews::Kind::Parabolic ? 0xFu : 0xEu);
-		}
+		// Clamped for cascades and spot lights, the paraboloid warp for point lights; the engine picks the render mode
+		// from the light, not from the descriptor (engine notes: shadow maps).
+		const std::uint8_t capability = DCLF::IndirectDraws::Get().ShadowCapability();
+		const std::uint32_t modeBits = ((capability & DCLF::kSetCaster) ? DCLF::ShadowModeBits(0xEu) : 0u) |
+		                               ((capability & DCLF::kSetCasterPoint) ? DCLF::ShadowModeBits(0xFu) : 0u);
 		const auto& tables = store.GetTables();
 		// The shadow map array the views draw into; its format is what a shadow pipeline is built for.
 		DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;
@@ -526,8 +525,8 @@ void DrawcallLimitFix::EarlyPrepass()
 				shadowFormat = desc.Format;
 			}
 		}
-		// Under every rasterizer state the mode's views have drawn with (DrawPipelines::ShadowRasterStateId):
-		// the states are only known once a view has been seen, so the first frame's are requested by the epoch.
+		// Under every rasterizer state of the mode's catalog (DrawPipelines::ShadowRasterStateId; IndirectDraws'
+		// UpdateShadowCapability registers them at setup).
 		for (const auto& key : tables.shadowKeysUsed) {
 			for (std::uint32_t mode : { 0xEu, 0xFu }) {
 				const std::uint32_t bits = DCLF::ShadowModeBits(mode);

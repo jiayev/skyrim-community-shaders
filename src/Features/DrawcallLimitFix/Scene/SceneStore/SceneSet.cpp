@@ -8,11 +8,11 @@
 
 namespace DCLF
 {
-	std::uint32_t SceneStore::SetPhasesDrawn()
+	std::uint32_t SceneStore::SetCapability()
 	{
-		// The main camera's passes are DCLF's whenever it runs; a shadow mode's views once its last shadow epoch drew them (a kind of
-		// view seen for the first time, or a frame it could not draw, leaves the next frame's casters of the mode to the engine).
-		return kSetMain | (ActiveToggles().shadows ? IndirectDraws::Get().ShadowPhasesDrawn() : 0u) |
+		// The main camera's passes are DCLF's whenever it runs; the shadow and occlusion views' once their setup is complete (each
+		// object then waits for its own pipelines: PhaseReady); the reflection's once its resources exist.
+		return kSetMain | (ActiveToggles().shadows ? IndirectDraws::Get().ShadowCapability() : 0u) |
 		       (IndirectDraws::Get().ReflectionDrawable() ? kSetReflection : 0u);
 	}
 
@@ -142,7 +142,7 @@ namespace DCLF
 		const std::size_t objects = tables.objects.size();
 		// A load screen: nothing is drawn, and the set is empty.
 		const bool live = sceneBuilt;
-		const std::uint32_t drawn = live ? SetPhasesDrawn() : 0u;
+		const std::uint32_t drawn = live ? SetCapability() : 0u;
 		// The commit's own copy: the records and Tables::setPhases take it at the next ApplySet.
 		auto& setPhases = setPhasesNext;
 		setQueueMark.resize(objects, 0);

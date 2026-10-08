@@ -2971,8 +2971,12 @@ namespace DCLF
 		void LeaveSet(std::uint32_t a_slot, std::uint8_t a_lost, bool a_partner = true);
 		/** @brief The claims' snapshot of setBuilding, made again when a commit or LeaveSet changed it. */
 		void RefreshSetSnapshot();
-		/** @brief The phases DCLF draws this frame (toggles, the render graph): an object's mask is its participation within them. */
-		static std::uint32_t SetPhasesDrawn();
+		/**
+		 * @brief The phases DCLF can draw (the toggles, and what it has set up: IndirectDraws::ShadowCapability, ReflectionDrawable): an
+		 * object's mask is its participation within them. A capability, not what a frame drew: it changes only on a toggle, a load,
+		 * a failure or a setup completing, so which views the engine asks for never changes the set.
+		 */
+		static std::uint32_t SetCapability();
 		/** @brief The phases an object takes part in among a_drawn, from its record (no readiness). */
 		std::uint8_t SetParticipation(std::uint32_t a_slot, std::uint32_t a_drawn) const;
 		/** @brief Whether everything the object's main phase draws with is ready; a_why: SetStats::waitingBy's index when not. */

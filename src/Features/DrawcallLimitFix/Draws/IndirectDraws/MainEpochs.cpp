@@ -300,8 +300,9 @@ namespace DCLF
 			return;
 		auto& store = SceneStore::Get();
 		RefreshMaterialLookups(store, store.GetTables(), true, store.GetProjectedTextures(), store.MutableLookups());
-		// The shadow lookups too (step 6e S1), for the last shadow epoch's views: the builds ahead read them, and the epoch refreshes
-		// them only for views of other modes, states or format (counted).
+		UpdateShadowCapability();
+		// The shadow lookups too (step 6e S1), for the capability's modes and the catalog: the builds ahead read them, and the epoch
+		// refreshes them only for a view the capability did not foresee (counted).
 		auto& views = impl->lastShadow;
 		if (!ActiveToggles().shadows || !views.known || !globals::game::utilityShader)
 			return;
