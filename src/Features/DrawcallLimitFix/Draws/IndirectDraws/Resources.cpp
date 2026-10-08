@@ -1529,19 +1529,26 @@ namespace DCLF
 	bool IndirectDraws::Impl::ImportShadowDepth(std::uint32_t a_index, std::uint32_t a_target)
 	{
 		auto* renderer = globals::game::renderer;
-		auto* host = RenderGraphRuntime::Get().Host();
-		if (!renderer || !host || !shadow || a_index >= kShadowDepthTargets)
+		if (!renderer)
 			return false;
 		const auto& data = renderer->GetDepthStencilData().depthStencils[a_target];
-		if (!data.texture || !data.views[0])
+		return ImportDepthTexture(a_index, data.texture, data.views[0], a_target);
+	}
+
+	bool IndirectDraws::Impl::ImportDepthTexture(std::uint32_t a_index, ID3D11Texture2D* a_texture, ID3D11DepthStencilView* a_view, std::uint32_t a_label)
+	{
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (!host || !shadow || a_index >= kShadowDepthTargets)
+			return false;
+		if (!a_texture || !a_view)
 			return ShadowNotReady(3, "the shadow map has no texture");
-		if (shadow->depth[a_index] && shadow->depthTexture[a_index] == data.texture)
+		if (shadow->depth[a_index] && shadow->depthTexture[a_index] == a_texture)
 			return true;
 		DxvkOrgInteropResourceInfo info{};
-		if (!RenderGraphRuntime::Get().DescribeResource(data.texture, info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
+		if (!RenderGraphRuntime::Get().DescribeResource(a_texture, info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
 			return ShadowNotReady(4, "the shadow map cannot be described");
 		D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
-		data.views[0]->GetDesc(&dsvDesc);
+		a_view->GetDesc(&dsvDesc);
 		org::TextureDescription desc{};
 		desc.format = rhi::helpers::ToRHI(dsvDesc.Format);
 		desc.channels = 1;
@@ -1553,11 +1560,11 @@ namespace DCLF
 		if (!imported)
 			return ShadowNotReady(5, "the shadow map could not be imported (not in the general layout?)");
 		shadow->depth[a_index] = std::move(imported);
-		shadow->depthTexture[a_index] = data.texture;
+		shadow->depthTexture[a_index] = a_texture;
 		shadow->depthLayers[a_index] = info.image.arrayLayers;
 		// A new resource for the passes to bind: the graph is rebuilt on the next epoch.
 		host->AddExtension(kShadowExtensionId, [state = shadow] { return MakeShadowExtension(state); });
-		logger::info("[DCLF] shadow map {} imported: {}x{}, {} slices, format {}", a_target, info.image.extent.width, info.image.extent.height,
+		logger::info("[DCLF] shadow map {} imported: {}x{}, {} slices, format {}", a_label, info.image.extent.width, info.image.extent.height,
 			info.image.arrayLayers, static_cast<int>(dsvDesc.Format));
 		return true;
 	}

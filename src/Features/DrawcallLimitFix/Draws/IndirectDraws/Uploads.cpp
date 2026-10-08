@@ -272,6 +272,19 @@ namespace DCLF
 					miss = R::kLatch;
 				else if (!RecordingAdmitted(*revisionRecordings, 0))
 					miss = R::kNotAdmitted;
+				if (miss == R::kCapacity) {
+					static std::uint32_t logged = 0;
+					if (logged++ < 16)
+						logger::warn("[DCLF] {} commit of frame {}: {} draws ({} sequences, {} resident) past the revision shape's capacity {} (its sequences {}; "
+									 "the scene's draw bound now {}, the commit's shape {}); decals fit {} <- CAPACITY",
+							depthOnly ? "Z-prepass" : "colour", a_store.GetFrame(), draws, a_payload.sequences.size(), a_payload.residentDraws, shape->drawCapacity,
+							shape->sequenceDraws, drawBound.Draws(), a_resources->published[latchedShape] ? a_resources->published[latchedShape]->drawCapacity : 0u, decalsFit);
+					if (!decalsFit && logged <= 16)
+						for (std::uint32_t group = 0; group < kDecalGroups; ++group)
+							logger::warn("[DCLF]   decal group {}: the commit's {}, the revision shape's capacity {} (its sequences {}), the tables' {} now, the commit's shape {}", group,
+								a_payload.decalCount[group], shape->decalCapacity[group], shape->sequenceDecals, a_store.GetTables().decalCount[group],
+								a_resources->published[latchedShape] ? a_resources->published[latchedShape]->decalCapacity[group] : 0u);
+				}
 				if (miss == R::kMisses)
 					revisionShape = std::move(shape);
 				else
@@ -649,10 +662,8 @@ namespace DCLF
 			if (decalCount[group] > a_resources->sequenceDecals)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} decals past the sequence buffer's {} per group", decalCount[group], a_resources->sequenceDecals));
 		// The shape (MakeMainShape), from this commit's inputs; a scene revision makes it from its own (MakeRevisionShapes). Its max
-		// counts hold this frame's draws whatever the bound says (a draw past the bound is the bound's defect, the parity's to show).
-		auto shapeIn = MainShapeInputsOf(*a_resources, depthOnly, tables, std::max(drawBound.Draws(), drawCount));
-		for (std::uint32_t group = 0; group < kDecalGroups; ++group)
-			shapeIn.decalBound[group] = std::max(shapeIn.decalBound[group], decalCount[group]);
+		// counts are the sequence buffer's ranges, which hold this frame's draws (checked above).
+		auto shapeIn = MainShapeInputsOf(*a_resources, depthOnly);
 		// Both epochs rasterise with the main pass's depth range; see Impl::mainMinDepth.
 		const bool useMainRange = mainMaxDepth > 0.0f;
 		shapeIn.viewport = { a_capture.viewportWidth, a_capture.viewportHeight, useMainRange ? mainMinDepth : a_capture.minDepth,

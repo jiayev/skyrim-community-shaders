@@ -191,7 +191,7 @@ namespace DCLF
 		 */
 		void MakeRevisionShapes();
 		/**
-		 * @brief Render thread, first at BeginSceneFrame, every frame: the graph's build point (CS_DCLF_REVISIONS). Its builds are explicit
+		 * @brief Render thread, first at BeginSceneFrame, every frame: the graph's build point. Its builds are explicit
 		 * (PersistentGraphHost::SetExplicitBuilds): an extension added or removed during a frame waits for this point, so the graph a
 		 * frame's revision was recorded on runs through that frame.
 		 */
@@ -210,7 +210,7 @@ namespace DCLF
 		 * every claim. True without revisions, or when none was made for that commit (no resources yet).
 		 */
 		bool SetApplicable(std::uint32_t a_commitFrame) const;
-		/** @brief Whether the frame's claims are a scene revision's (CS_DCLF_REVISIONS): a structural change after its join revokes one. */
+		/** @brief Whether the frame's claims are a scene revision's: a structural change after its join revokes one. */
 		bool RevisionClaims() const;
 		/** @brief The set committed at a_commitFrame was applied: the frame's claims are its (RevisionHoldsClaims). */
 		void NoteSetApplied(std::uint32_t a_commitFrame);

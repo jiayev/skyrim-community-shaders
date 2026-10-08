@@ -112,6 +112,24 @@ a destruction there and a creation on the render thread could change the world a
 queue and applied by whoever drains it. Posters never wait, and only readers (the memory view) do. Tracking tokens are
 created deferred. See ORG's README, "Resource tracking", and `tests/TrackingWorldTests.cpp`.
 
+### `NiNode::DetachChild2` jumps to 0x1 or 0x1E: a freed parent on a loader thread (2026-10-08)
+
+| | |
+| --- | --- |
+| Seen | 2026-10-08 12:37:54 (m119) and 13:22:16 (m124): motion runs, 26 s and about 40 s in. |
+| Thread | A loader thread (`BSStream`, an actor's model, a warp: `MovementMessageWarpToLocation`). |
+| Fault | Execute at 0x1 / 0x1E in `NiNode::DetachChild2` (`140d1d310`, 70291), which calls `this->DetachChild1`: the parent's vtable is garbage, so the parent was freed. RDX, the child: an actor's root (`BSFadeNode` "Skeleton.nif", a deer both times). DCLF's `DetachChild2` thunk (`SceneTracker.cpp`) is a stack-scan hit. |
+| When | Only since the persistent-views rework's P1 (the point lights' phase always the set's): 0 of about 45 earlier motion runs, 2 of 10 since. |
+
+**Suspected cause.** `LocalLightCull`'s point-light filter keyed its snapshots by raw category-node pointers and held none.
+P1 made the filter outlive the frames without DCLF-drawn paraboloid views (it was reset on them, `noClaims`), so its
+incremental selection - a node made dirty, the same exclusion - ran far more often, and rebuilt a dirty node from the raw
+pointer the last snapshot kept. A category node the engine had freed (a cell unloading) then had its freed child array read and
+references taken on garbage: the heap corrupted, the fault later and elsewhere, as in `PrimaryCull::EndFrame` below.
+
+**Fix under test.** Each `CategoryFilter` holds its node (`NiPointer`), released with the snapshot at Present; the dirty rebuild
+reads the held node, and the whole rebuild reads an entry's parent once.
+
 ### `SkyrimSE+14F79AA`: a material virtual call during a model load
 
 | | |

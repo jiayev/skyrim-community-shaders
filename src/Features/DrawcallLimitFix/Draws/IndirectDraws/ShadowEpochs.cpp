@@ -2,6 +2,7 @@
 #	include "Internal.h"
 #	include "Features/DrawcallLimitFix/Engine/LocalLightCull.h"
 #	include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
+#	include "Features/Skylighting.h"
 
 namespace DCLF
 {
@@ -2276,6 +2277,12 @@ namespace DCLF
 								i.occlusion[v].dsvFormat = desc.Format;
 								i.readyModes[OcclusionModeOf(v)] = true;
 							}
+							// Their targets, imported now rather than at their first draw (an import later is a graph build in play): the
+							// precipitation mask's the engine's own, Skylighting's map its own texture.
+							using T = RE::RENDER_TARGETS_DEPTHSTENCIL;
+							(void)i.ImportShadowDepth(OcclusionDepthTarget(kOcclusionPrecipitation), T::kPRECIPITATION_OCCLUSION_MAP);
+							if (auto* sky = globals::features::skylighting.texOcclusion)
+								(void)i.ImportDepthTexture(OcclusionDepthTarget(kOcclusionSky), sky->resource.get(), sky->dsv.get(), T::kPRECIPITATION_OCCLUSION_MAP);
 						}
 					i.NoteCapability(false, "the casters' and occlusion maps' modes and the catalog set up");
 				}

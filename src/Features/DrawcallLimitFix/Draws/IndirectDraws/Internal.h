@@ -1078,11 +1078,6 @@ namespace DCLF
 			bool depthOnly = false;
 			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // the sequence buffer's ranges (ReserveMainSequences)
 			std::uint64_t materialRows = 0, pipelineRows = 0;     // the rows' tables' addresses
-			// The draws the scene can produce (SceneDrawBound) and each decal group's, and the last shape's max counts, which only grow.
-			std::uint32_t drawBound = 0;
-			std::array<std::uint32_t, kDecalGroups> decalBound{};
-			std::uint32_t previousDraws = 0;
-			std::array<std::uint32_t, kDecalGroups> previousDecals{};
 			MainViewport viewport;
 			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
 			IndirectState indirect{};
@@ -1094,11 +1089,10 @@ namespace DCLF
 			LatchedList latched;                           // MainLatchedLayout, in its reserved block
 		};
 		/**
-		 * @brief The segment's resources' part of its shape's inputs: the ranges, the rows, the bounds, the latch, the cull mode. Not the
+		 * @brief The segment's resources' part of its shape's inputs: the ranges, the rows, the latch, the cull mode. Not the
 		 * descriptor heaps: the device's, read only inside an epoch (org::runtime::GetActiveSRVDescriptorHeap).
 		 */
-		MainShapeInputs MainShapeInputsOf(const Resources& a_resources, bool a_depthOnly, const SceneStore::Tables& a_tables, std::uint32_t a_drawBound,
-			bool a_revision = false);
+		MainShapeInputs MainShapeInputsOf(const Resources& a_resources, bool a_depthOnly, bool a_revision = false);
 		std::shared_ptr<PassFrame> MakeMainShape(const MainShapeInputs& a_in);
 
 		/** @brief The parts of a main shape the shape parity tells apart (MainShapeDifferences). */
@@ -3840,6 +3834,8 @@ namespace DCLF
 		}
 		bool SetupShadow();
 		bool ImportShadowDepth(std::uint32_t a_index, std::uint32_t a_target);
+		/** @brief ImportShadowDepth's import of a_texture, through the depth-stencil view a_view, as depth target a_index (a_label: for the log). */
+		bool ImportDepthTexture(std::uint32_t a_index, ID3D11Texture2D* a_texture, ID3D11DepthStencilView* a_view, std::uint32_t a_label);
 
 		// The volatile t16+ inputs retain a live import only while their register
 		// keeps naming that SRV. This bounds reuse without an age-based import cache.
@@ -4413,7 +4409,7 @@ namespace DCLF
 		/** @brief The scene work's join: the revision of MakeRevisionShapes' shapes, sealed (SceneRevisions). */
 		void AssembleRevision(std::uint32_t a_frame);
 		/**
-		 * @brief R3c (c), inside an epoch's commit, its shape made (CS_DCLF_REVISIONS): when the selected revision covers the frame
+		 * @brief R3c (c), inside an epoch's commit, its shape made: when the selected revision covers the frame
 		 * - its versions are the current ones, it has the epoch's recording, and a_match finds the commit's shape among its shapes
 		 * (SameShape: the latch blocks, layouts and addresses the commit wrote into are the recording's) - that recording is
 		 * submitted instead of the ticket's own preparation (PersistentGraphHost::UseEpochRecording). a_match: the shape's index
@@ -4422,7 +4418,7 @@ namespace DCLF
 		void ChooseRevisionRecording(std::uint32_t a_epoch, const std::function<std::size_t(const org::async::RevisionFragment&)>& a_match);
 		/**
 		 * @brief R3c (c): the selected revision's shape fragment and recordings for epoch a_epoch, when it has them and its versions are
-		 * current (CS_DCLF_REVISIONS); else false, the miss counted. A commit that writes its values into the shape (it covers the
+		 * current; else false, the miss counted. A commit that writes its values into the shape (it covers the
 		 * frame) submits a recording with SubmitRevisionRecording; one that does not counts why (NoteRevisionMiss).
 		 */
 		bool ActiveRevision(std::uint32_t a_epoch, std::shared_ptr<const org::async::RevisionFragment>& a_shape, std::shared_ptr<const RevisionRecordings>& a_recordings);

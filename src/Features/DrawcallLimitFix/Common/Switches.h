@@ -43,7 +43,6 @@ namespace DCLF
 		OrgAsyncEpochs,
 		OrgClosed,
 		OrgBatchSubmit,
-		Revisions,
 		OrgEarlyFlush,
 
 		// Parity checks: a live path against a from-scratch reference, logging each mismatch.
