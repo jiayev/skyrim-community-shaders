@@ -419,12 +419,12 @@ namespace DCLF
 		const ShadowPayload* shadow = draws->shadow.get();
 		// The geometry table: the main payloads' and the shadow payload's are the same (the publication's stream views and face streams).
 		std::uint64_t geometryRows = shadow ? shadow->geometries.Count() : 0;
-		// The main list: both segments' payloads hold the same one (BuildMainPayloads).
-		std::uint64_t inputs = 0;
-		if (newest) {
+		// The scene list (U4c): the region every payload of the publication holds, then the main payloads' frame inputs, then the shadow
+		// payload's.
+		if (newest)
 			geometryRows = std::max<std::uint64_t>(geometryRows, newest->geometryDraws.Count());
-			inputs = newest->resident.Count() + newest->inputList.size();
-		}
+		const std::uint64_t inputs = (newest ? newest->resident.Count() + newest->inputList.size() : shadow ? shadow->RegionCount() : 0) +
+		                             (shadow ? shadow->inputList.size() : 0);
 		bool grown = false;
 		auto ensure = [&](Impl::RingPart& a_part, std::uint64_t a_elements, std::uint32_t a_stride, const char* a_name, bool a_address) {
 			if (a_part.buffer && a_part.capacity >= a_elements)
@@ -455,9 +455,6 @@ namespace DCLF
 		ensure(entry.inputs, inputs * sizeof(DrawInput) / 4, 4, "inputs", false);
 		if (shadow) {
 			ensure(entry.shadowRows, shadow->materialRows.Count(), sizeof(ShadowMaterialRow), "shadow-rows", true);
-			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-				if (shadow->inputs.modeUsed[m])
-					ensure(entry.shadowInputs[m], shadow->ModeInputs(m) * sizeof(DrawInput) / 4, 4, fmt::format("shadow-inputs-{}", m).c_str(), false);
 		}
 		s.ringStats.grown += grown ? 1 : 0;
 		++s.ringStats.frames;
@@ -472,8 +469,7 @@ namespace DCLF
 		if (shadow) {
 			frame.shadow = true;
 			frame.shadowRows = entry.shadowRows.address;
-			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-				frame.shadowInputsIndex[m] = entry.shadowInputs[m].srvIndex;
+			frame.shadowInputsIndex = entry.inputs.srvIndex;  // the scene list (U4c)
 		}
 		frame.materialRows = entry.materialRows.address;
 		frame.pipelineRows = entry.pipelineRows.address;
@@ -510,19 +506,27 @@ namespace DCLF
 			EmitGeometryDraws(geometries, entry.geometries.held, sender(entry.geometries, Impl::kRingGeometries));
 			entry.geometries.held = geometries.Version();
 			holders.geometries.Set(r, entry.geometries.held);
-			// The shadow payload's rows and each used mode's inputs (step 6e S2).
+			// The shadow payload's rows (step 6e S2).
 			if (shadow) {
 				shadow->materialRows.Emit(entry.shadowRows.held, sender(entry.shadowRows, Impl::kRingShadowRows));
 				entry.shadowRows.held = shadow->materialRows.Version();
 				holders.shadowRows.Set(r, entry.shadowRows.held);
-				for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
-					if (!shadow->inputs.modeUsed[m])
-						continue;
-					auto& part = entry.shadowInputs[m];
-					EmitShadowInputs(*shadow, m, part.held, sender(part, Impl::kRingShadowInputs));
-					part.held = shadow->regionInputs[m].Version();
-					holders.shadowInputs[m].Set(r, part.held);
+			}
+			// The scene list (U4c): its region at the head (what changed since; every payload of the publication holds the same view), the
+			// main payloads' frame inputs after it, then the shadow payload's (whole).
+			{
+				auto& part = entry.inputs;
+				const auto& region = newest ? newest->resident : shadow->regionInputs;
+				region.Emit(part.held, sender(part, Impl::kRingResident));
+				part.held = region.Version();
+				holders.resident.Set(r, part.held);
+				std::size_t at = region.Count();
+				if (newest && !newest->inputList.empty()) {
+					sender(part, Impl::kRingFrameInputs)(newest->inputList.data(), newest->inputList.size() * sizeof(DrawInput), at * sizeof(DrawInput));
+					at += newest->inputList.size();
 				}
+				if (shadow && !shadow->inputList.empty())
+					sender(part, Impl::kRingShadowInputs)(shadow->inputList.data(), shadow->inputList.size() * sizeof(DrawInput), at * sizeof(DrawInput));
 			}
 			if (!newest) {
 				s.ringRuns += runs;
@@ -540,15 +544,6 @@ namespace DCLF
 				[](PipelineRow& a_row, std::uint64_t a_address) { PatchRowAddresses(a_row, a_address); }, sender(entry.pipelineRows, Impl::kRingPipelineRows));
 			entry.pipelineRows.held = newest->pipelineRows.Version();
 			holders.pipelineRows.Set(r, entry.pipelineRows.held);
-			// The main list, both segments': its resident region at the head (what changed since), the build's own after it (whole).
-			{
-				auto& part = entry.inputs;
-				newest->resident.Emit(part.held, sender(part, Impl::kRingResident));
-				part.held = newest->resident.Version();
-				holders.resident.Set(r, part.held);
-				if (!newest->inputList.empty())
-					sender(part, Impl::kRingFrameInputs)(newest->inputList.data(), newest->inputList.size() * sizeof(DrawInput), newest->resident.Count() * sizeof(DrawInput));
-			}
 			s.ringRuns += runs;
 			s.ringBytes += bytes;
 			for (std::size_t k = 0; k < partBytes.size(); ++k)
@@ -646,6 +641,9 @@ namespace DCLF
 		const auto& c = a_context;
 		if (!c.valid || !c.target || !c.target->scene)
 			return out;
+		// The scene list (U4c): the main build's region, into which the shadow build writes its words; its journal's build begins once a
+		// publication, with whichever writes first.
+		mainCache.region.begun = false;
 		// Both segments in one build: one list, read by each through its view bits (U4a).
 		std::array<MainInputs, 2> inputs;
 		std::array<const MainInputs*, 2> segmentIn{};
@@ -680,10 +678,9 @@ namespace DCLF
 			in.tablesHeld = from;
 			// The oldest versions the ring's entries hold: what the shadow journals keep changes back to (step 6e S2).
 			in.materialRowsHeld = ringHolders.shadowRows.Oldest();
-			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-				in.inputsHeld[m] = ringHolders.shadowInputs[m].Oldest();
+			in.inputsHeld = ringHolders.resident.Oldest();  // the scene list's region (U4c)
 			auto payload = AcquireShadowPayload();
-			BuildShadowPayload(in, *a_tables, a_lookups, *payload, out->streams, ShadowKeptState());
+			BuildShadowPayload(in, *a_tables, a_lookups, *payload, out->streams, ShadowKeptState(), BuildParityEnabled() ? nullptr : &mainCache.region);
 			// The publication holds the views; the payload, which the epochs may hold past it, does not.
 			payload->streams.reset();
 			if (PassCapture::ShadowWithholdingEnabled()) {
@@ -695,6 +692,22 @@ namespace DCLF
 			}
 			out->shadow = std::move(payload);
 		}
+		// Every payload of the publication holds the scene list's region as both builds left it (U4c): the shadow payload's view, taken
+		// after its words, or without it the main region's; and the shadow payload where its own frame inputs follow the main ones'.
+		{
+			KeptView<DrawInput> region;
+			if (out->shadow)
+				region = out->shadow->regionInputs;
+			else if (!BuildParityEnabled() && mainCache.region.begun)
+				region = mainCache.region.inputs.View();
+			for (const std::size_t j : { kAsyncZPrepass, kAsyncColour })
+				if (const auto& payload = out->payloads[j])
+					payload->resident = region;
+			if (out->shadow) {
+				const auto& main = out->payloads[kAsyncColour] ? out->payloads[kAsyncColour] : out->payloads[kAsyncZPrepass];
+				out->shadow->mainTail = main ? main->inputList.size() : 0;
+			}
+		}
 		if (PersistentParityEnabled() && ParityDue(a_frame))
 			CheckViewMasks(*out, *a_tables);
 		return out;
@@ -705,23 +718,14 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.ViewMaskParity");
 		auto& p = viewMaskParity;
 		std::uint64_t inputs = 0, differ = 0;
-		// a_list: 2 + mode a shadow mode's (0 and 1 are the main list's: undrawable, drawable).
-		auto check = [&](std::uint32_t a_list, const DrawInput& a_input, bool a_main, std::uint32_t a_listBits) {
-			++inputs;
-			const std::uint32_t expected = ViewMaskOf(a_tables, a_input.objectIndex, a_main);
-			if (a_input.view.mask == expected && (a_input.view.mask & a_listBits))
-				return;
-			++differ;
-			std::uint64_t none = ~0ull;
-			if (p.first.compare_exchange_strong(none, (std::uint64_t(a_list) << 56) | (std::uint64_t(a_input.objectIndex & 0xFFFFFFFFu) << 24) | (expected & 0xFFFFFFu)))
-				p.firstMask.store(a_input.view.mask, std::memory_order_relaxed);
-		};
-		// The main list (both segments read the same, U4a): every input taken by one of them, and a drawable one by both (the colour
-		// segment's bits, kViewMain or kViewDecal, and the depth segment's but for a decal).
+		// a_list: 0 and 1 the main part (undrawable, drawable), 2 + mode a shadow mode's.
+		// The main part (both segments read the same, U4a): every input taken by one of them, and a drawable one by both (the colour
+		// segment's bits, kViewMain or kViewDecal, and the depth segment's but for a decal). A scene entry's shadow bits are the shadow
+		// build's (U4c).
 		auto checkMain = [&](const DrawInput& a_input) {
 			++inputs;
 			const std::uint32_t expected = MainMaskOf(a_tables, a_input.objectIndex);
-			const std::uint32_t mask = a_input.view.mask;
+			const std::uint32_t mask = a_input.view.mask & kMainSideBits;
 			const bool decal = ObjectDecalGroup(a_input.flags) != 0;
 			const bool drawable = (a_input.flags & kInputDrawable) != 0;
 			if (mask == expected && (mask & (kDepthViewBits | kColourViewBits)) &&
@@ -733,15 +737,42 @@ namespace DCLF
 				p.firstMask.store(mask, std::memory_order_relaxed);
 		};
 		if (const auto& payload = a_draws.payloads[kAsyncColour] ? a_draws.payloads[kAsyncColour] : a_draws.payloads[kAsyncZPrepass]) {
-			for (std::size_t i = 0; i < payload->resident.Count(); ++i)
-				checkMain(*payload->resident.At(i));
+			// The scene list's region: an entry holds a main part, shadow words, or both; never neither.
+			for (std::size_t i = 0; i < payload->resident.Count(); ++i) {
+				const DrawInput& input = *payload->resident.At(i);
+				if (input.view.mask & kMainSideBits)
+					checkMain(input);
+				else if (!input.view.mask) {
+					++inputs;
+					++differ;
+				}
+			}
 			for (const auto& input : payload->inputList)
 				checkMain(input);
 		}
+		// The shadow list (U4b): an input's mask is the views of the modes that hold it (ModeViewBits), never outside its object's phases,
+		// with the key of each family it is drawn in.
 		if (const auto& shadowPayload = a_draws.shadow)
-			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-				if (shadowPayload->inputs.modeUsed[m])
-					shadowPayload->ForEachInput(m, [&](const DrawInput& a_input) { check(2 + m, a_input, false, ShadowViewBits(m, true) | ShadowViewBits(m, false)); });
+			shadowPayload->ForEachInput([&](const DrawInput& a_input) {
+				const std::uint32_t shadowMask = a_input.view.mask & ~kMainSideBits;
+				if (!shadowMask)
+					return;  // a scene entry's main part alone
+				++inputs;
+				const std::uint32_t phases = ViewMaskOf(a_tables, a_input.objectIndex, false);
+				std::uint32_t list = 0;
+				bool ok = (shadowMask & ~phases) == 0;
+				for (std::uint32_t m = 0; m < kShadowModeCount && ok; ++m)
+					if (shadowPayload->inputs.modeUsed[m] && (a_input.view.mask & ModeViewBits(m))) {
+						ok = ShadowKeyOf(m, a_input) != ~0u;
+						list = 2 + m;
+					}
+				if (ok)
+					return;
+				++differ;
+				std::uint64_t none = ~0ull;
+				if (p.first.compare_exchange_strong(none, (std::uint64_t(list) << 56) | (std::uint64_t(a_input.objectIndex & 0xFFFFFFFFu) << 24) | (phases & 0xFFFFFFu)))
+					p.firstMask.store(a_input.view.mask, std::memory_order_relaxed);
+			});
 		p.checks.fetch_add(1, std::memory_order_relaxed);
 		p.inputs.fetch_add(inputs, std::memory_order_relaxed);
 		p.differ.fetch_add(differ, std::memory_order_relaxed);

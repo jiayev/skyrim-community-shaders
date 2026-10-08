@@ -69,9 +69,8 @@ namespace DCLF
 		if (auto line = FrameData::Report(); !line.empty())
 			text += line + "\n";
 		if (auto& k = impl->shadowKept; k.builds) {
-			std::size_t entries = 0;
-			for (const auto& mode : k.modes)
-				entries += mode.inputs.Size();
+			// The objects it holds (their words are the scene list's entries', U4c; its own region only under CS_DCLF_BUILD_PARITY).
+			const std::size_t entries = static_cast<std::size_t>(std::count_if(k.heldModes.begin(), k.heldModes.end(), [](std::uint8_t a_modes) { return a_modes != 0; }));
 			const auto* rowsTable = impl->shadow ? &impl->shadow->materialRows : nullptr;
 			text += fmt::format(
 				"[DCLF] persistent shadow state: {} builds, {:.1f} entries and {:.1f} material rows written a build, {} entries and {} material rows held "

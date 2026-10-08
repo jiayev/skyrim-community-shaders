@@ -12,11 +12,49 @@ namespace DCLF::Draws
 		{
 			return a_object < a_tables.setPhases.size() && (a_tables.setPhases[a_object] & SetPhaseOfMode(a_mode)) != 0;
 		}
+
+		/** @brief The key slot of a_technique on a_object's geometry (Lookups::shadowSlots), or ~0u: none, or no slot yet. */
+		std::uint32_t KeySlotOf(const SceneStore::Tables& a_tables, const Lookups& a_lookups, std::uint32_t a_object, std::uint32_t a_technique)
+		{
+			if (!a_technique)
+				return ~0u;
+			const auto& object = a_tables.objects[a_object];
+			const ShadowPipelineKey key{ a_technique, (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u,
+				VertexLayoutOf(a_tables.geometries[object.geometryIndex].vertexDesc) };
+			const auto it = a_lookups.shadowSlots.find(key);
+			return it == a_lookups.shadowSlots.end() ? ~0u : it->second;
+		}
+
+		/**
+		 * @brief An object's input in the one shadow list (U4b): drawn by the views of the modes that hold it (a_modes, bit m; its mask
+		 * their ModeViewBits), by its caster key in a caster mode's (shadowKey; the pipeline word too) and its occlusion map's key in an
+		 * occlusion view (occlusionKey), with its material row (shadowRow; the rows' word too). Its flags keep the caster class, which
+		 * only the views of a class-split mode test (kCullCastersOnly, kCullVolumetricOnly).
+		 */
+		DrawInput ShadowEntry(const SceneStore::Tables& a_tables, const Lookups& a_lookups, std::uint32_t a_object, std::uint32_t a_record, std::uint8_t a_modes,
+			std::uint32_t a_stream)
+		{
+			const auto& object = a_tables.objects[a_object];
+			std::uint32_t mask = 0;
+			bool caster = false;
+			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
+				if ((a_modes >> m) & 1) {
+					mask |= ModeViewBits(m);
+					caster |= !IsOcclusionMode(m);
+				}
+			const std::uint32_t casterKey = caster ? KeySlotOf(a_tables, a_lookups, a_object, BaseTechnique(a_tables, kSunShadowMode, a_object)) : ~0u;
+			std::uint32_t occlusionKey[kOcclusionViews];
+			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+				occlusionKey[v] = ((a_modes >> OcclusionModeOf(v)) & 1) ? KeySlotOf(a_tables, a_lookups, a_object, BaseTechnique(a_tables, OcclusionModeOf(v), a_object)) : ~0u;
+			return { casterKey == ~0u ? 0u : casterKey, a_record, object.geometryIndex, (object.flags & ~kObjectDecal) | kInputDrawable,
+				{ mask, casterKey, { occlusionKey[0], occlusionKey[1] } }, a_object, 0, PartitionsOf(a_tables, a_object), a_stream, FadeRootOf(a_tables, a_object),
+				a_record };
+		}
 	}
 
 	/** @brief The kept path of BuildShadowPayload: the material rows and the inputs from the kept state (ShadowKept). */
 	void BuildKeptShadow(const ShadowInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out, ShadowKept& k,
-		const ShadowMaterialRow& a_plain)
+		const ShadowMaterialRow& a_plain, ResidentRegion* a_scene)
 	{
 		ZoneScopedN("CS.DCLF.BuildShadow.Kept");
 		const std::uint32_t objects = static_cast<std::uint32_t>(a_tables.objects.size());
@@ -25,12 +63,32 @@ namespace DCLF::Draws
 		const std::uint64_t build = ++k.build;
 		// What the buffers hold is the version they were sent: what changes from here on is sent alone.
 		k.rows.BeginBuild(a_in.materialRowsHeld);
-		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-			k.modes[m].inputs.BeginBuild(a_in.inputsHeld[m]);
+		// The scene list (U4c): the shadow words of the main build's region's entries, its journal begun by whichever build writes
+		// first; without one (CS_DCLF_BUILD_PARITY: the main build keeps no region), a region of its own.
+		if (a_scene)
+			a_scene->Begin(a_in.inputsHeld);
+		else
+			k.scene.inputs.BeginBuild(a_in.inputsHeld);
 		// The scene's buffers grown (what fits them moved: ObjectFits) reads every object again too.
 		bool resync = !k.cursor.Continues(a_tables.changeLog, a_in.tablesGeneration) || k.identity != a_in.addresses.identity || k.objectRecord.size() > objects ||
 		              k.fit != a_in.addresses.fit;
 		if (resync) {
+			// Its words out of the scene list first: every held object is taken again below.
+			if (a_scene) {
+				auto& r = *a_scene;
+				for (std::uint32_t i = static_cast<std::uint32_t>(r.sideOf.size()); i-- > 0;) {
+					if (!(r.sideOf[i] & kSideShadow))
+						continue;
+					if (r.sideOf[i] & kSideMain) {
+						DrawInput entry = r.inputs.Get()[i];
+						ClearShadowPart(entry);
+						r.sideOf[i] = kSideMain;
+						r.inputs.Set(i, entry);
+					} else {
+						r.RemoveEntry(r.inputs.Get()[i].objectIndex);
+					}
+				}
+			}
 			k.Reset();
 			k.cursor.Restart(a_in.tablesGeneration);
 			k.identity = a_in.addresses.identity;
@@ -157,11 +215,10 @@ namespace DCLF::Draws
 			}
 		};
 
-		// ---- The modes: a mode whose views' states changed is read again whole.
-		const bool entryOnGpu = true;  // the kept path runs only when the latch holds the sun's processes
-		(void)entryOnGpu;
-		auto evaluate = [&](std::uint32_t m, std::uint32_t o, DrawInput& a_input) -> int {
-			// 0: no input, 1: an input (a_input), 2: waiting (a pipeline or a texture), 3: the frame's list (a face).
+		// ---- The modes: which of them hold each object (heldModes), and the one list's entry from that (U4b). A mode whose views'
+		// states changed is read again whole.
+		auto evaluate = [&](std::uint32_t m, std::uint32_t o) -> int {
+			// 0: not held, 1: held (an entry of the region), 2: waiting (a pipeline or a texture), 3: the frame's list (a face).
 			const auto& object = a_tables.objects[o];
 			const bool occlusionMode = IsOcclusionMode(m);
 			if (object.flags & kObjectFree)
@@ -190,26 +247,15 @@ namespace DCLF::Draws
 			if (classStates.empty())
 				return 0;
 			const std::uint32_t technique = BaseTechnique(a_tables, m, o);
-			const ShadowPipelineKey key{ technique, (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u,
-				VertexLayoutOf(a_tables.geometries[object.geometryIndex].vertexDesc) };
-			const auto slotIt = a_lookups.shadowSlots.find(key);
-			if (slotIt == a_lookups.shadowSlots.end())
+			const std::uint32_t slot = KeySlotOf(a_tables, a_lookups, o, technique);
+			if (slot == ~0u)
 				return wait("no key slot for technique", technique);
 			for (const std::uint32_t state : classStates)
-				if (a_lookups.ShadowMapPipeline(m, state, slotIt->second) == Lookups::kNone)
+				if (a_lookups.ShadowMapPipeline(m, state, slot) == Lookups::kNone)
 					return wait("no pipeline under state", state);
-			if (IsFaceObject(a_tables, o) || (key.vertexLayout & kPositionInSecondStream))
+			if (IsFaceObject(a_tables, o) || (VertexLayoutOf(a_tables.geometries[object.geometryIndex].vertexDesc) & kPositionInSecondStream))
 				return 3;
-			a_input = { slotIt->second, record, object.geometryIndex, InputFlagsOf(m, object.flags),
-				{ ViewMaskOf(a_tables, o, false) }, o, 0, PartitionsOf(a_tables, o), ~0u, FadeRootOf(a_tables, o) };
 			return 1;
-		};
-		auto removeEntry = [&](ShadowKept::Mode& a_mode, std::uint32_t o) {
-			if (!a_mode.Holds(o))
-				return;
-			a_mode.Remove(o);
-			a_mode.membership = build;
-			++k.entriesWritten;
 		};
 		auto setMark = [](std::vector<std::uint32_t>& a_list, std::vector<std::uint8_t>& a_mark, std::uint32_t o, bool a_on) {
 			if (a_mark.size() <= o)
@@ -221,26 +267,86 @@ namespace DCLF::Draws
 				a_mark[o] = 0;  // dropped from the list at its next pass
 			}
 		};
+		if (k.heldModes.size() < objects)
+			k.heldModes.resize(objects, 0);
+		// The objects whose entry is written again after the modes: whose held modes or record may have moved.
+		std::vector<std::uint32_t> touched;
+		auto touch = [&](std::uint32_t o) {
+			if (k.touchedMark.size() <= o)
+				k.touchedMark.resize(std::size_t(o) + 1, 0);
+			if (!k.touchedMark[o]) {
+				k.touchedMark[o] = 1;
+				touched.push_back(o);
+			}
+		};
+		auto hold = [&](std::uint32_t m, std::uint32_t o, bool a_held) {
+			if (o < k.heldModes.size() && k.Holds(m, o) != a_held) {
+				k.heldModes[o] ^= static_cast<std::uint8_t>(1u << m);
+				k.modes[m].membership = build;
+			}
+			touch(o);
+		};
 		auto take = [&](std::uint32_t m, std::uint32_t o) {
 			auto& mode = k.modes[m];
-			mode.Cover(objects);
-			DrawInput input{};
-			const int result = o < a_tables.objects.size() ? evaluate(m, o, input) : 0;
+			const int result = o < objects ? evaluate(m, o) : 0;
 			setMark(mode.waiting, mode.waitingMark, o, result == 2);
 			const bool wasFace = o < mode.faceMark.size() && mode.faceMark[o];
 			setMark(mode.faces, mode.faceMark, o, result == 3);
 			if (wasFace != (result == 3))
 				mode.membership = build;
-			if (result != 1) {
-				removeEntry(mode, o);
+			hold(m, o, result == 1);
+		};
+		auto writeEntry = [&](std::uint32_t o) {
+			const std::uint8_t heldNow = o < k.heldModes.size() && o < objects ? k.heldModes[o] : std::uint8_t{ 0 };
+			if (a_scene) {
+				// The scene list (U4c): the entry's shadow words, its main part the main build's.
+				auto& r = *a_scene;
+				r.Cover(objects);
+				const std::uint32_t i = r.EntryOf(o);
+				if (!heldNow) {
+					if (i == kNoRegion || !(r.sideOf[i] & kSideShadow))
+						return;
+					if (r.sideOf[i] & kSideMain) {
+						DrawInput entry = r.inputs.Get()[i];
+						ClearShadowPart(entry);
+						r.sideOf[i] = kSideMain;
+						r.inputs.Set(i, entry);
+					} else {
+						r.RemoveEntry(o);
+					}
+					++k.entriesWritten;
+					return;
+				}
+				const DrawInput part = ShadowEntry(a_tables, a_lookups, o, k.objectRecord[o], heldNow, ~0u);
+				if (i == kNoRegion) {
+					DrawInput entry{};
+					SetShadowPart(entry, part, false);
+					r.AddEntry(o, entry, kSideShadow);
+					++k.entriesWritten;
+					return;
+				}
+				DrawInput entry = r.inputs.Get()[i];
+				SetShadowPart(entry, part, (r.sideOf[i] & kSideMain) != 0);
+				r.sideOf[i] |= kSideShadow;
+				if (r.inputs.Set(i, entry))
+					++k.entriesWritten;
 				return;
 			}
-			std::uint32_t i = mode.indexOf[o];
-			if (i == kNoRegion) {
-				mode.Add(o, input);
-				mode.membership = build;
+			auto& scene = k.scene;
+			scene.Cover(objects);
+			const std::uint8_t modes = o < k.heldModes.size() ? k.heldModes[o] : std::uint8_t{ 0 };
+			if (!modes || o >= objects) {
+				if (scene.Holds(o)) {
+					scene.Remove(o);
+					++k.entriesWritten;
+				}
+				return;
+			}
+			const DrawInput input = ShadowEntry(a_tables, a_lookups, o, k.objectRecord[o], modes, ~0u);
+			if (const std::uint32_t i = scene.indexOf[o]; i == kNoRegion) {
+				scene.Add(o, input);
 				++k.entriesWritten;
-			} else if (mode.inputs.Set(i, input)) {
+			} else if (scene.inputs.Set(i, input)) {
 				++k.entriesWritten;
 			}
 		};
@@ -321,14 +427,26 @@ namespace DCLF::Draws
 		}
 		a_out.bindingOwners.push_back(k.owners);
 		a_out.rowsWanted = static_cast<std::uint32_t>(k.slotMaterial.size());
+		for (const std::uint32_t o : changed)
+			touch(o);
+		// The scene list was emptied (the main build's resync, ResidentRegion::Reset): every held object's words again.
+		if (a_scene && k.sceneResets != a_scene->resets) {
+			k.sceneResets = a_scene->resets;
+			for (std::uint32_t o = 0; o < k.heldModes.size() && o < objects; ++o)
+				if (k.heldModes[o])
+					touch(o);
+		}
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
 			auto& mode = k.modes[m];
 			const ModeRasterStates states = a_in.modeUsed[m] ? a_in.modeRasterStates[m] : ModeRasterStates{};
 			if (!mode.active || mode.rasterStates != states) {
-				// A mode's views changed their states: every object again for it.
+				// A mode's views changed their states: every object again for it (none held while it has no views).
 				mode.Reset();
 				mode.active = true;
 				mode.rasterStates = states;
+				for (std::uint32_t o = 0; o < k.heldModes.size(); ++o)
+					if (k.Holds(m, o))
+						hold(m, o, false);
 				if (!states.Empty())
 					for (std::uint32_t o = 0; o < objects; ++o)
 						take(m, o);
@@ -345,35 +463,43 @@ namespace DCLF::Draws
 					take(m, o);
 				}
 			}
+		}
+		// Every touched object's entry, from the modes that hold it now.
+		for (const std::uint32_t o : touched) {
+			writeEntry(o);
+			k.touchedMark[o] = 0;
+		}
+		a_out.regionInputs = a_scene ? a_scene->inputs.View() : k.scene.inputs.View();
+		// The frame's list: the face shapes, with their positions of this walk, once each for every mode they are a face of.
+		std::vector<std::uint32_t> faceObjects;
+		ankerl::unordered_dense::map<std::uint32_t, std::uint8_t> faceModes;
+		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+			auto& mode = k.modes[m];
 			if (!a_in.modeUsed[m])
 				continue;
-			// The frame's list: the face shapes, with their positions of this walk.
-			auto& list = a_out.inputList[m];
 			std::size_t keptFaces = 0;
 			for (const std::uint32_t o : mode.faces) {
 				if (o >= mode.faceMark.size() || !mode.faceMark[o])
 					continue;
 				mode.faces[keptFaces++] = o;
-				const auto& object = a_tables.objects[o];
-				const std::uint32_t streamIndex = FaceStreamGeometry(a_tables, o, a_in.addresses.facePositions);
-				if (streamIndex == ~0u)
-					continue;  // no positions this walk: no input, the engine's
-				const ShadowPipelineKey key{ BaseTechnique(a_tables, m, o), (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u,
-					VertexLayoutOf(a_tables.geometries[object.geometryIndex].vertexDesc) };
-				const auto slotIt = a_lookups.shadowSlots.find(key);
-				if (slotIt == a_lookups.shadowSlots.end())
-					continue;
-				list.push_back({ slotIt->second, k.objectRecord[o], object.geometryIndex, (object.flags & ~kObjectDecal) | kInputDrawable,
-					{ ViewMaskOf(a_tables, o, false) }, o, 0, PartitionsOf(a_tables, o), streamIndex, FadeRootOf(a_tables, o) });
+				auto [it, fresh] = faceModes.try_emplace(o, std::uint8_t{ 0 });
+				if (fresh)
+					faceObjects.push_back(o);
+				it->second |= static_cast<std::uint8_t>(1u << m);
 			}
 			mode.faces.resize(keptFaces);
-			a_out.regionInputs[m] = mode.inputs.View();
 			a_out.membership[m] = mode.membership;
 			// The skip counters, as the loop kept them: what waits (only set members: a defect).
 			a_out.deferredPipelines += static_cast<std::uint32_t>(mode.waiting.size());
 			a_out.skippedPipeline += static_cast<std::uint32_t>(mode.waiting.size());
 			for (const std::uint32_t o : mode.waiting)
 				a_out.setWaiting += o < mode.waitingMark.size() && mode.waitingMark[o] ? 1 : 0;
+		}
+		for (const std::uint32_t o : faceObjects) {
+			const std::uint32_t streamIndex = FaceStreamGeometry(a_tables, o, a_in.addresses.facePositions);
+			if (streamIndex == ~0u)
+				continue;  // no positions this walk: no input, the engine's
+			a_out.inputList.push_back(ShadowEntry(a_tables, a_lookups, o, k.objectRecord[o], faceModes[o], streamIndex));
 		}
 		a_out.kept = true;
 		a_out.materialRows = k.rows.View();
@@ -527,7 +653,7 @@ namespace DCLF::Draws
 			ankerl::unordered_dense::map<std::uint32_t, DrawInput> keptInputs;
 			a_kept.ForEachInput(m, [&](const DrawInput& a_input) { keptInputs.emplace(a_input.objectIndex, a_input); });
 			std::size_t matched = 0;
-			for (const auto& input : reference.inputList[m]) {
+			reference.ForEachInput(m, [&](const DrawInput& input) {
 				++k.parity.checks;
 				const auto it = keptInputs.find(input.objectIndex);
 				if (it == keptInputs.end()) {
@@ -539,7 +665,7 @@ namespace DCLF::Draws
 					const char* why = record == ShadowKept::kNoRecord                        ? "no record" :
 					                  o < mode.waitingMark.size() && mode.waitingMark[o]      ? "waiting" :
 					                  o < mode.faceMark.size() && mode.faceMark[o]            ? "a face" :
-					                  mode.Holds(o)                                           ? "held" :
+					                  k.Holds(m, o)                                           ? "held" :
 					                                                                            "not held";
 					auto& count = k.missingBy[why];
 					if (!count++) {
@@ -549,26 +675,27 @@ namespace DCLF::Draws
 							input.recordIndex);
 					}
 					fail(o, fmt::format("mode {}: an input of the per-frame build only ({})", m, why));
-					continue;
+					return;
 				}
 				++matched;
-				DrawInput x = it->second, y = input;
-				const std::uint32_t xr = x.recordIndex, yr = y.recordIndex;
-				x.recordIndex = y.recordIndex = 0;
+				// What the shadow views read of the two (a scene entry's main part is the main build's: U4c).
+				const DrawInput x = ShadowPartOf(it->second), y = ShadowPartOf(input);
+				const std::uint32_t xr = it->second.shadowRow, yr = input.shadowRow;
 				if (std::memcmp(&x, &y, sizeof(DrawInput)) != 0) {
-					fail(input.objectIndex, fmt::format("mode {}: the input differs", m));
-					continue;
+					fail(input.objectIndex, fmt::format("mode {}: the input differs (mask {:#x} against {:#x}, flags {:#x} against {:#x})", m, x.view.mask, y.view.mask,
+												x.flags, y.flags));
+					return;
 				}
 				// The rows by value: the two builds number them differently.
 				const auto* a = a_kept.materialRows.At(xr);
 				const auto* b = reference.materialRows.At(yr);
 				if (!a || !b) {
 					fail(input.objectIndex, "a material row out of range");
-					continue;
+					return;
 				}
 				if (!(*a == *b))
 					fail(input.objectIndex, fmt::format("mode {}: its material row differs (kept {} against {})", m, xr, yr));
-			}
+			});
 			if (matched != keptInputs.size())
 				fail(~0u, fmt::format("mode {}: {} inputs of the kept build only", m, keptInputs.size() - matched));
 		}
@@ -588,24 +715,32 @@ namespace DCLF::Draws
 				std::uint64_t draws = 0;
 				auto& slots = a_out.keySlotDraws[m];
 				slots.clear();
+				std::uint32_t inputs = 0;
 				a_out.ForEachInput(m, [&](const DrawInput& a_input) {
+					const std::uint32_t key = ShadowKeyOf(m, a_input);
+					if (key == ~0u)
+						return;
+					++inputs;
 					const std::uint32_t inputDraws = PartitionDraws(a_input.partitions);
 					draws += inputDraws;
-					if (a_input.pipelineIndex >= slots.size())
-						slots.resize(std::size_t(a_input.pipelineIndex) + 1, 0u);
-					slots[a_input.pipelineIndex] += inputDraws;
+					if (key >= slots.size())
+						slots.resize(std::size_t(key) + 1, 0u);
+					slots[key] += inputDraws;
 				});
+				a_out.modeInputs[m] = inputs;
 				a_out.modeDraws[m] = static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX));
 			}
 		}
 	}
 
 	void BuildShadowPayload(const ShadowInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out,
-		std::shared_ptr<const StreamViews> a_streams, ShadowKept* a_kept)
+		std::shared_ptr<const StreamViews> a_streams, ShadowKept* a_kept, ResidentRegion* a_scene)
 	{
 		ZoneScopedN("CS.DCLF.BuildShadowPayload");
 		a_out.Reset();
 		a_out.inputs = a_in;
+		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
+			a_out.modeBits[m] = ModeViewBits(m);
 		if (a_lookups.sharedBindingBlock)
 			a_out.bindingOwners.push_back(a_lookups.sharedBindingBlock);
 		const std::uint64_t base = a_in.addresses.constants;
@@ -659,7 +794,7 @@ namespace DCLF::Draws
 		ShadowMaterialRow plain;
 		plain.diffuse = nullIndex;
 		if (a_kept) {
-			BuildKeptShadow(a_in, a_tables, a_lookups, a_out, *a_kept, plain);
+			BuildKeptShadow(a_in, a_tables, a_lookups, a_out, *a_kept, plain, a_scene);
 			CountModeDraws(a_out);
 			if (PersistentParityEnabled() && ParityDue(a_in.frameNumber))
 				CheckKeptShadow(a_in, a_tables, a_lookups, a_out, *a_kept);
@@ -729,10 +864,11 @@ namespace DCLF::Draws
 		a_out.rowsWanted += 1;  // row 0
 		a_out.materialRows = { std::make_shared<const std::vector<ShadowMaterialRow>>(std::move(rows)), {} };
 
-		// ---- The inputs per render mode among the captured views: every caster with a ready pipeline
-		// for its technique under that mode. The cascades share one set; a spot light has its own.
+		// ---- The modes among the captured views that draw each object: every caster with a ready pipeline for its technique under
+		// the mode. The cascades share one set; a spot light has its own. Then one input per object for all of them (U4b).
+		std::vector<std::uint8_t> heldModes(a_tables.objects.size(), 0);
+		std::vector<std::uint32_t> streams(a_tables.objects.size(), ~0u);
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
-			auto& inputs = a_out.inputList[m];
 			if (!a_in.modeUsed[m])
 				continue;
 			const bool occlusionMode = IsOcclusionMode(m);
@@ -798,12 +934,14 @@ namespace DCLF::Draws
 				}
 				// The sun's entry rule (kCullSunEntry): BuildDraws tests the entry's sphere, carried in the fade row, against the
 				// frame's full-frustum processes in the latch block - so the input does not change with the frame's planes.
-				inputs.push_back({ slotIt->second, objectRecord[o], object.geometryIndex, InputFlagsOf(m, object.flags),
-					{ ViewMaskOf(a_tables, o, false) }, static_cast<std::uint32_t>(o), 0,
-					PartitionsOf(a_tables, static_cast<std::uint32_t>(o)), streamIndex, FadeRootOf(a_tables, static_cast<std::uint32_t>(o)) });
+				heldModes[o] |= static_cast<std::uint8_t>(1u << m);
+				streams[o] = streamIndex;
 				memberSkip.armed = false;
 			}
 		}
+		for (std::uint32_t o = 0; o < heldModes.size(); ++o)
+			if (heldModes[o])
+				a_out.inputList.push_back(ShadowEntry(a_tables, a_lookups, o, objectRecord[o], heldModes[o], streams[o]));
 		CountModeDraws(a_out);
 	}
 }

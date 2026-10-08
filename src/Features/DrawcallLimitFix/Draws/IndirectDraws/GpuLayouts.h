@@ -585,9 +585,10 @@ namespace DCLF::Draws
 	// cullFlags: a clamped shadow view (0xE) pancakes casters in front of its near plane onto it
 	// (Utility.hlsl: RENDER_SHADOWMAP_CLAMPED), so the near plane rejects nothing there.
 	constexpr std::uint32_t kCullNoNearPlane = 0x200;
-	// cullFlags: which caster class a shadow view draws (kObjectVolumetricOnly). The mode's inputs hold both
+	// cullFlags: which caster class a shadow view draws (kObjectVolumetricOnly). The shadow list holds both
 	// classes; a view of the volumetric lighting copy draws the volumetric-only casters alone, every other
-	// shadow view everything else. Neither is set for the main camera.
+	// view of a class-split mode (VolumetricClass) everything else. Neither is set for the main camera, the
+	// paraboloids or the occlusion maps, which draw every class.
 	constexpr std::uint32_t kCullCastersOnly = 0x400;
 	constexpr std::uint32_t kCullVolumetricOnly = 0x800;
 	// cullFlags: a view of the sun (its cascades and their volumetric copies), which applies the sun's entry rule (sunEntryOffset).
@@ -599,4 +600,9 @@ namespace DCLF::Draws
 	// cameraRelatedUpdates (Precipitation::SetupMask's cull; FadeStateCS's state) draws nothing, in place of the shadow views'
 	// stood-in fading test. Set while the engine's fades are on (0x142032dfd).
 	constexpr std::uint32_t kCullFadeOnVisible = 0x4000;
+	// The key word a view reads of an input (BuildDrawsCS: KeyWord), in bits 16-17: 0 its pipeline word and its rows' word (the main
+	// segments, the reflection); otherwise a shadow view's, which reads the input's shadowRow for its material row - 1 a caster's key
+	// (DrawInput::ViewWords::shadowKey), 2 and 3 an occlusion map's (occlusionKey[0], [1]).
+	constexpr std::uint32_t kCullKeyShift = 16;
+	constexpr std::uint32_t kCullKeyCaster = 1u << kCullKeyShift;
 }

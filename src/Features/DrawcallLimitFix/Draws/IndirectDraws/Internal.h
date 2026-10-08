@@ -1520,7 +1520,7 @@ namespace DCLF
 			ShadowLatchLayout latchLayout;
 			// The kept shadow state's versions (ShadowKept) each mode's input buffer and the material rows hold: 0 when a build
 			// without the kept state wrote the buffer, or when the rows' backing is new.
-			std::array<std::uint64_t, kShadowModeCount> inputsUploaded{};
+			std::uint64_t inputsUploaded = 0;
 			std::uint64_t materialRowsHeld = 0;
 			std::uint64_t constantsAddress = 0;
 			std::shared_ptr<const ComputeProgram> buildDraws;
@@ -2295,7 +2295,7 @@ namespace DCLF
 			TablesHeld tablesHeld;  // ShadowResources::tablesHeld
 			// The versions of the kept shadow state the buffers hold (ShadowResources::inputsUploaded, materialRowsHeld): what the
 			// journals keep changes for.
-			std::array<std::uint64_t, kShadowModeCount> inputsHeld{};
+			std::uint64_t inputsHeld = 0;  // the shadow list's
 			std::uint64_t materialRowsHeld = 0;
 		};
 
@@ -2316,24 +2316,42 @@ namespace DCLF
 			// Per mode, the same by key slot (DrawInput::pipelineIndex): what sizes a view's buckets (ShadowBucket).
 			std::array<std::vector<std::uint32_t>, kShadowModeCount> keySlotDraws;
 			std::vector<std::uint32_t> objectRecord;  // per object: its material row, or ~0u when it cannot draw
-			std::array<std::vector<DrawInput>, kShadowModeCount> inputList;  // per render mode: the frame's own (after the kept region)
-			// The kept state (ShadowKept): per mode the region's inputs at the head of the mode's buffer, sent as what changed
-			// since the version the buffer holds.
+			// The one shadow list (U4b): an input per caster or occluder, for every mode it is drawn in at once, its view mask the
+			// views of those modes (ModeViewBits). The kept state's region (ShadowKept::scene) at the head of the buffer, sent as what
+			// changed since the version the buffer holds, then the frame's own (face shapes; everything without the kept state).
 			bool kept = false;
-			std::array<KeptView<DrawInput>, kShadowModeCount> regionInputs;
+			KeptView<DrawInput> regionInputs;
+			std::vector<DrawInput> inputList;
+			std::array<std::uint32_t, kShadowModeCount> modeBits{};    // per mode: its views' bits (ModeViewBits), what selects its inputs
+			std::array<std::uint32_t, kShadowModeCount> modeInputs{};  // per mode: its inputs (CountModeDraws)
 			// Per mode, the build version at which an object last joined or left its inputs (ShadowKept::Mode::membership);
 			// 0 without the kept state.
 			std::array<std::uint64_t, kShadowModeCount> membership{};
-			std::size_t RegionCount(std::uint32_t a_mode) const { return regionInputs[a_mode].Count(); }
-			std::size_t ModeInputs(std::uint32_t a_mode) const { return RegionCount(a_mode) + inputList[a_mode].size(); }
+			// The scene list (U4c): the main payloads' tail (their frame's own inputs) sits between the region and this one's, all one
+			// buffer; the shadow views scan all of it (their bits select their own).
+			std::size_t mainTail = 0;
+			std::size_t RegionCount() const { return regionInputs.Count(); }
+			/** @brief The list's inputs: what every view's dispatch scans (its view bits select its own). */
+			std::size_t Inputs() const { return RegionCount() + mainTail + inputList.size(); }
+			std::size_t ModeInputs(std::uint32_t a_mode) const { return modeInputs[a_mode]; }
+			template <class F>
+			void ForEachInput(F&& a_visit) const
+			{
+				if (regionInputs.elements)
+					for (const auto& input : *regionInputs.elements)
+						a_visit(input);
+				for (const auto& input : inputList)
+					a_visit(input);
+			}
+			/** @brief The mode's inputs: the list's whose mask has its views' bits. */
 			template <class F>
 			void ForEachInput(std::uint32_t a_mode, F&& a_visit) const
 			{
-				if (regionInputs[a_mode].elements)
-					for (const auto& input : *regionInputs[a_mode].elements)
-						a_visit(input);
-				for (const auto& input : inputList[a_mode])
-					a_visit(input);
+				const std::uint32_t bits = modeBits[a_mode];
+				ForEachInput([&](const DrawInput& a_input) {
+					if (a_input.view.mask & bits)
+						a_visit(a_input);
+				});
 			}
 			/** @brief The mode's inputs as one list (the diagnostics' copy). */
 			std::vector<DrawInput> Flat(std::uint32_t a_mode) const
@@ -2369,10 +2387,12 @@ namespace DCLF
 					slots.clear();
 				bindingOwners.clear();
 				objectRecord.clear();
-				for (auto& modeInputs : inputList)
-					modeInputs.clear();
+				inputList.clear();
 				kept = false;
 				regionInputs = {};
+				mainTail = 0;
+				modeBits = {};
+				modeInputs = {};
 				membership = {};
 				geometries.Reset();
 				streams.reset();
@@ -2731,6 +2751,64 @@ namespace DCLF
 		constexpr std::uint8_t RegionDraws(std::uint8_t a_draws) { return a_draws & 0x7F; }
 		constexpr std::uint64_t kNoPair = ~0ull;  // a region entry without bindings (a cull-only candidate)
 
+		// ---- The scene list (U4c): one entry per object, its main part the main build's and its shadow words the shadow build's.
+		// The view bits the main build writes of an entry (the main segments', the reflection's); the rest are the shadow build's.
+		constexpr std::uint32_t kMainSideBits = kViewMainCull | kViewMain | kViewDecal | kViewReflection;
+		// Which builds' parts an entry holds (ResidentRegion::sideOf).
+		constexpr std::uint8_t kSideMain = 1;
+		constexpr std::uint8_t kSideShadow = 2;
+		/** @brief A scene entry's main part from a_main (MainBuild::RegionEntry), its shadow words kept. */
+		inline void SetMainPart(DrawInput& a_entry, const DrawInput& a_main)
+		{
+			const DrawInput::ViewWords view = a_entry.view;
+			const std::uint32_t shadowRow = a_entry.shadowRow;
+			a_entry = a_main;
+			a_entry.view = view;
+			a_entry.view.mask = (a_main.view.mask & kMainSideBits) | (view.mask & ~kMainSideBits);
+			a_entry.shadowRow = shadowRow;
+		}
+		/** @brief A scene entry with no main part: what the main build wrote of it cleared (its object's fields stay). */
+		inline void ClearMainPart(DrawInput& a_entry)
+		{
+			a_entry.pipelineIndex = a_entry.recordIndex = a_entry.decalOrdinal = 0;
+			a_entry.fadeDistance = 0.0f;
+			a_entry.flags &= ~kInputDrawable;
+			a_entry.view.mask &= ~kMainSideBits;
+		}
+		/** @brief A scene entry's shadow words from a_shadow (ShadowEntry), its main part kept; with none, a_shadow's object fields too. */
+		inline void SetShadowPart(DrawInput& a_entry, const DrawInput& a_shadow, bool a_mainHeld)
+		{
+			if (!a_mainHeld) {
+				a_entry = a_shadow;
+				ClearMainPart(a_entry);
+				a_entry.view.mask = a_shadow.view.mask & ~kMainSideBits;
+				return;
+			}
+			const std::uint32_t mask = a_entry.view.mask;
+			a_entry.view = a_shadow.view;
+			a_entry.view.mask = (mask & kMainSideBits) | (a_shadow.view.mask & ~kMainSideBits);
+			a_entry.shadowRow = a_shadow.shadowRow;
+		}
+		/** @brief A scene entry with no shadow words: what the shadow build wrote of it cleared. */
+		inline void ClearShadowPart(DrawInput& a_entry)
+		{
+			a_entry.view.shadowKey = a_entry.view.occlusionKey[0] = a_entry.view.occlusionKey[1] = ~0u;
+			a_entry.shadowRow = 0;
+			a_entry.view.mask &= kMainSideBits;
+		}
+		/**
+		 * @brief A shadow input as the shadow views read it, for comparing two builds' (CheckKeptShadow): without what the main build
+		 * writes of a scene entry and without the row's number (the builds number them differently).
+		 */
+		inline DrawInput ShadowPartOf(DrawInput a_input)
+		{
+			a_input.pipelineIndex = a_input.recordIndex = a_input.decalOrdinal = a_input.shadowRow = a_input.inputReserved = 0;
+			a_input.fadeDistance = 0.0f;
+			a_input.flags &= ~(kInputDrawable | kObjectDecal);
+			a_input.view.mask &= ~kMainSideBits;
+			return a_input;
+		}
+
 		/** @brief CS_DCLF_RESIDENT_DRAW_PARITY=1: every 60 frames, each region entry written again from the tables and compared. */
 		inline bool ResidentDrawParityEnabled()
 		{
@@ -2852,13 +2930,56 @@ namespace DCLF
 			std::vector<std::uint8_t> candidate;   // per slot: a culling candidate only (no bindings, or shadow-only)
 			std::size_t candidates = 0;
 
+			// The scene list (U4c): per entry, which builds' parts it holds (kSideMain, kSideShadow). The shadow build writes its words
+			// into the entries (BuildKeptShadow) after the main build each publication; an entry stays while either holds it.
+			std::vector<std::uint8_t> sideOf;
+			std::uint64_t resets = 0;  // counts Reset: the shadow build writes its parts again after one (ShadowKept::sceneResets)
+			bool begun = false;        // this publication's build of the journal began (Begin; the builds ahead clear it)
+			bool MainHolds(std::size_t a_object) const
+			{
+				const std::uint32_t i = EntryOf(a_object);
+				return i != kNoRegion && (sideOf[i] & kSideMain);
+			}
+			/** @brief The publication's build of the inputs' journal, once whichever build writes first. */
+			void Begin(std::uint64_t a_oldestHeld)
+			{
+				if (!begun)
+					inputs.BeginBuild(a_oldestHeld);
+				begun = true;
+			}
+			/** @brief A new entry holding a_side's part, its columns with it. */
+			std::uint32_t AddEntry(std::uint32_t a_object, const DrawInput& a_input, std::uint8_t a_side)
+			{
+				const std::uint32_t i = Add(a_object, a_input);
+				pairOf.push_back(kNoPair);
+				drawsOf.push_back(0);
+				sideOf.push_back(a_side);
+				return i;
+			}
+			/** @brief The entry removed, its columns with it (the last entry's moved into its place). */
+			void RemoveEntry(std::uint32_t a_object)
+			{
+				const auto removal = Remove(a_object);
+				if (removal.at == kNoRegion)
+					return;
+				pairOf[removal.at] = pairOf[removal.from];
+				drawsOf[removal.at] = drawsOf[removal.from];
+				sideOf[removal.at] = sideOf[removal.from];
+				pairOf.pop_back();
+				drawsOf.pop_back();
+				sideOf.pop_back();
+			}
 			/** @brief Empty, for every slot to be read again; the inputs' journal counts on (KeptArray::Clear). */
 			void Reset()
 			{
 				auto kept = std::move(inputs);
+				const std::uint64_t resetsBefore = resets;
+				const bool begunBefore = begun;
 				*this = ResidentRegion{};
 				inputs = std::move(kept);
 				inputs.Clear();
+				resets = resetsBefore + 1;
+				begun = begunBefore;
 			}
 		};
 
@@ -3007,7 +3128,8 @@ namespace DCLF
 			const std::uint32_t flags = a_object < a_tables.objects.size() ? a_tables.objects[a_object].flags : 0u;
 			if (ObjectDecalGroup(flags))
 				return kViewDecal;
-			return (ViewMaskOf(a_tables, a_object, true) & ~kViewMain) | ((flags & kObjectMember) ? kViewMain : 0u);
+			// The main build's bits of a scene entry alone (kMainSideBits): the shadow views' are the shadow build's (U4c).
+			return (ViewMaskOf(a_tables, a_object, true) & kMainSideBits & ~kViewMain) | ((flags & kObjectMember) ? kViewMain : 0u);
 		}
 		/** @brief The view bits a shadow or occlusion view draws: its mode's, a clamped view's split by whether it is the sun's. */
 		inline std::uint32_t ShadowViewBits(std::uint32_t a_mode, bool a_sun)
@@ -3017,6 +3139,18 @@ namespace DCLF
 			if (a_mode == kParabolicShadowMode)
 				return kViewPointCaster;
 			return a_sun ? kViewSunCaster : kViewSpotCaster;
+		}
+		/** @brief Every view bit of a mode's views: what an input the mode holds carries in its mask (the one shadow list, U4b). */
+		inline std::uint32_t ModeViewBits(std::uint32_t a_mode) { return ShadowViewBits(a_mode, true) | ShadowViewBits(a_mode, false); }
+		/** @brief The key word a mode's views read (kCullKeyShift): a caster's key, or its occlusion map's. */
+		inline std::uint32_t KeyWordOf(std::uint32_t a_mode)
+		{
+			return (IsOcclusionMode(a_mode) ? 2u + OcclusionOfMode(a_mode) : 1u) << kCullKeyShift;
+		}
+		/** @brief The key slot a mode's views draw a shadow input by (KeyWordOf). */
+		inline std::uint32_t ShadowKeyOf(std::uint32_t a_mode, const DrawInput& a_input)
+		{
+			return IsOcclusionMode(a_mode) ? a_input.view.occlusionKey[OcclusionOfMode(a_mode)] : a_input.view.shadowKey;
 		}
 
 		/**
@@ -3124,7 +3258,8 @@ namespace DCLF
 			std::map<std::string, std::uint64_t> missingBy;
 			std::map<std::string, std::string> missingFirst;
 			std::vector<const RE::BSShaderMaterial*> objectMaterial;  // per object: the material its slot is held for
-			struct Mode : KeptRegion
+			// Per mode: what its views draw of the list (heldModes), and what waits. The inputs are the scene region's.
+			struct Mode
 			{
 				bool active = false;
 				ModeRasterStates rasterStates;
@@ -3135,32 +3270,28 @@ namespace DCLF
 				// The build version at which an object last joined or left the mode's inputs (the region or the faces): what
 				// the sun exclusion's reuse reads (BuildSunExclusion).
 				std::uint64_t membership = 0;
-				/** @brief Empty, for every object to be read again; the inputs' journal counts on. */
-				void Reset()
-				{
-					auto kept = std::move(inputs);
-					*this = Mode{};
-					inputs = std::move(kept);
-					inputs.Clear();
-				}
+				/** @brief Empty, for every object to be read again. */
+				void Reset() { *this = Mode{}; }
 			};
 			std::array<Mode, kShadowModeCount> modes;
+			// The one shadow list (U4b): an entry per object some mode holds, its mask the views of those modes.
+			KeptRegion scene;
+			std::vector<std::uint8_t> heldModes;  // per object: the modes whose region inputs it is (bit m)
+			std::vector<std::uint8_t> touchedMark;  // a build's scratch: the objects whose entry it writes again
+			std::uint64_t sceneResets = ~0ull;      // the scene region's resets its parts were written after (U4c)
+			bool Holds(std::uint32_t a_mode, std::uint32_t a_object) const { return a_object < heldModes.size() && ((heldModes[a_object] >> a_mode) & 1); }
 			/** @brief Empty, for every object to be read again; the journals count on and the report's counters stay. */
 			void Reset()
 			{
 				auto keptRows = std::move(rows);
-				std::array<Mode, kShadowModeCount> keptModes;
-				for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-					keptModes[m].inputs = std::move(modes[m].inputs);
+				auto keptInputs = std::move(scene.inputs);
 				const auto counters = std::tuple{ build, builds, entriesWritten, rowsWritten, resyncs };
 				auto keptParity = std::move(parity);
 				*this = ShadowKept{};
 				rows = std::move(keptRows);
 				rows.Clear();
-				for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
-					modes[m].inputs = std::move(keptModes[m].inputs);
-					modes[m].inputs.Clear();
-				}
+				scene.inputs = std::move(keptInputs);
+				scene.inputs.Clear();
 				std::tie(build, builds, entriesWritten, rowsWritten, resyncs) = counters;
 				parity = std::move(keptParity);
 			}
@@ -3170,26 +3301,12 @@ namespace DCLF
 		};
 
 		/**
-		 * @brief A mode's inputs into its buffer: the kept region's entries newer than the version the buffer holds (all of them
-		 * without the kept state), then the frame's own list after the region.
-		 */
-		template <class Emit>
-		void EmitShadowInputs(const ShadowPayload& a_payload, std::uint32_t a_mode, std::uint64_t a_held, Emit&& a_emit)
-		{
-			const std::size_t region = a_payload.RegionCount(a_mode);
-			a_payload.regionInputs[a_mode].Emit(a_held, a_emit);
-			const auto& list = a_payload.inputList[a_mode];
-			if (!list.empty())
-				a_emit(list.data(), list.size() * sizeof(DrawInput), region * sizeof(DrawInput));
-		}
-
-		/**
 		 * @brief The shadow epoch's frame-shared part and its per-mode inputs, from the tables and the lookups:
 		 * pure. The per-view blocks are the commit's, because the views are captured while the engine draws
 		 * them, after the build may have started.
 		 */
 		void BuildShadowPayload(const ShadowInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out,
-			std::shared_ptr<const StreamViews> a_streams = nullptr, ShadowKept* a_kept = nullptr);
+			std::shared_ptr<const StreamViews> a_streams = nullptr, ShadowKept* a_kept = nullptr, ResidentRegion* a_scene = nullptr);
 
 		/**
 		 * @brief CS_DCLF_PERSISTENT_PARITY: a kept shadow build against the same build made the per-frame way. Per used mode, the
@@ -3948,7 +4065,6 @@ namespace DCLF
 			RingPart inputs;  // the main list, both segments' (U4a)
 			// The shadow payload's (step 6e S2): its material rows and each mode's inputs (the occlusion maps' included).
 			RingPart shadowRows;
-			std::array<RingPart, kShadowModeCount> shadowInputs;
 			org::PersistentGraphHost::GpuPoint reuse;  // the last frame that read it
 		};
 		std::array<RingEntry, kPayloadRing> payloadRing;
@@ -3964,7 +4080,7 @@ namespace DCLF
 			std::uint64_t materialRows = 0, pipelineRows = 0;
 			bool shadow = false;  // the entry holds the publication's shadow payload
 			std::uint64_t shadowRows = 0;
-			std::array<std::uint32_t, kShadowModeCount> shadowInputsIndex{};
+			std::uint32_t shadowInputsIndex = 0;
 		};
 		RingFrame ringFrame;
 		// The last Z-prepass commit's (the reflection draws from the frame before's depth inputs): its entry, when it read one.
@@ -4001,7 +4117,6 @@ namespace DCLF
 			KeptHolders<kPayloadRing> objects, extras, geometries, materialRows, pipelineRows;
 			KeptHolders<kPayloadRing> resident;  // the main list's region
 			KeptHolders<kPayloadRing> shadowRows;
-			std::array<KeptHolders<kPayloadRing>, kShadowModeCount> shadowInputs;
 		} ringHolders;
 		// The entry the frame's shadow commit read (none: its own buffers), which the occlusion epoch's latches name too.
 		RingFrame ringShadow;
@@ -4011,7 +4126,7 @@ namespace DCLF
 			if (!a_ring.valid || !a_ring.shadow || a_mode >= kShadowModeCount)
 				return;
 			a_latch.payloadValid = 1;
-			a_latch.inputsIndex = a_ring.shadowInputsIndex[a_mode];
+			a_latch.inputsIndex = a_ring.shadowInputsIndex;
 			a_latch.geometriesIndex = a_ring.geometriesIndex;
 			a_latch.materialRowsLo = static_cast<std::uint32_t>(a_ring.shadowRows);
 			a_latch.materialRowsHi = static_cast<std::uint32_t>(a_ring.shadowRows >> 32);
