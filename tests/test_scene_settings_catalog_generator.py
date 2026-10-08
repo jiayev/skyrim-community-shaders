@@ -1307,6 +1307,46 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         self.assertEqual(enabled["type"], "Boolean")
         self.assertIn("SceneControllable", enabled["flags"])
 
+    def test_cinematic_camera_controls_have_owned_storage_and_serialized_paths(self):
+        entries = [entry for entry in self.entries
+                   if entry["feature"] == "PostProcessing" and
+                   entry["path"].split("/")[0] == "cinematic_camera"]
+        self.assertEqual(len(entries), 22)
+        for entry in entries:
+            with self.subTest(path=entry["path"], key=entry["key"]):
+                self.assertTrue(entry["addressable"])
+                self.assertTrue(entry["access"].startswith("cinematicCamera.settings."))
+                self.assertIn("SceneControllable", entry["flags"])
+                self.assertNotIn("Hidden", entry["flags"])
+        enabled = self.entries_by_id[("PostProcessing", "cinematic_camera", "Enabled")]
+        self.assertEqual(enabled["editorSemantic"], "Toggle")
+        for axis in ("x", "y"):
+            focus = self.entries_by_id[("PostProcessing", "cinematic_camera/Focus/ScreenPointUV", axis)]
+            self.assertEqual(focus["serializedPath"], "cinematic_camera/Focus")
+            self.assertEqual(focus["serializedKey"], "ScreenPointUV")
+            self.assertEqual(focus["displayScale"], 100.0)
+            self.assertEqual((focus["minimum"], focus["maximum"]), (0.0, 1.0))
+        with tempfile.TemporaryDirectory() as directory:
+            GENERATOR.write_catalog(entries, Path(directory))
+            adapters = (Path(directory) / "FeatureSceneSettingsAdapters.generated.cpp").read_text(encoding="utf-8")
+            self.assertIn("&typedFeature->cinematicCamera.settings.Enabled", adapters)
+            self.assertIn("&typedFeature->cinematicCamera.settings.Lens.FocalLengthMM", adapters)
+
+    def test_post_processing_lens_proxies_are_scene_controls(self):
+        for path, keys in (("Depth of Field/settings", ("FocalLength", "FNumber", "SensorWidthMM",
+                                                       "ManualFocusPlane", "TransitionSpeed",
+                                                       "BokehBladeCount", "BokehBladeRoundness",
+                                                       "HighlightShapeRotationAngle")),
+                           ("Camera/settings", ("FEFoV",)),
+                           ("Lens Flare/settings", ("ApertureBlades", "FStop", "ApertureRotation")),
+                           ("Physical Glare/settings", ("ApertureBlades", "FStop", "ApertureRotation")),
+                           ("Vignette/settings", ("FocalLength",))):
+            for key in keys:
+                with self.subTest(path=path, key=key):
+                    entry = self.entries_by_id[("PostProcessing", path, key)]
+                    self.assertIn("SceneControllable", entry["flags"])
+                    self.assertTrue(entry["sourceWidget"])
+
     def test_numeric_metadata_uses_raw_bounds_and_display_scale(self):
         percentage = self.entries_by_id[("GrassOptimizations", "", "EdgeFadeStart")]
         angle = self.entries_by_id[("Skylighting", "", "MaxZenith")]

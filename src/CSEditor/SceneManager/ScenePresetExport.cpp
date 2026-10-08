@@ -683,46 +683,36 @@ namespace
 		return info;
 	}
 
-	/** @brief Writes each ticked feature's base settings into the pack's Baseline folder. */
-	bool WriteBaselineFeatures(const std::string& packName)
+	bool CaptureBaselines(PresetExportInfo& info)
 	{
-		auto* overrides = SettingsOverrideManager::GetSingleton();
-		bool wroteAll = true;
-		for (const auto& shortName : baselineFeatures) {
-			auto* feature = Feature::FindFeatureByShortName(shortName);
-			if (!IsBaselineCandidate(feature))
-				continue;
-
-			json settings;
-			{
-				// The author's own values, not whatever scene layer is applying right now.
-				SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+		try {
+			SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+			auto names = baselineFeatures;
+			if (includePostProcessing && CanIncludePostProcessing()) {
+				names.push_back(PostProcessingPresets::kFeatureShortName);
+				info.replaceBaselines.insert(PostProcessingPresets::kFeatureShortName);
+			}
+			for (const auto& shortName : names) {
+				auto* feature = Feature::FindFeatureByShortName(shortName);
+				if (!feature || !feature->loaded)
+					return false;
+				json settings;
 				feature->SaveSettings(settings);
+				if (info.replaceBaselines.contains(shortName)) {
+					info.baselines[shortName] = std::move(settings);
+				} else {
+					std::vector<std::string> paths;
+					for (const auto& setting : Util::Settings::GetExportSettings(shortName, settings))
+						paths.push_back(setting.path);
+					info.baselines[shortName] = Util::Settings::SelectSettingPaths(settings, paths);
+				}
+				if (!feature->IsAlwaysEnabled())
+					info.disableAtBoot[shortName] = globals::state->IsFeatureDisabled(shortName);
 			}
-			std::vector<std::string> paths;
-			for (const auto& setting : Util::Settings::GetExportSettings(shortName, settings))
-				paths.push_back(setting.path);
-
-			if (!overrides->ExportSettings(packName, shortName, paths, settings, true)) {
-				logger::error("[ScenePresetExport] Could not write the Baseline settings of {} into '{}'", shortName, packName);
-				wroteAll = false;
-			}
-		}
-		return wroteAll;
-	}
-
-	/** @brief Records whether each exported feature loads at boot, so applying the pack restores it. */
-	void WriteBootStates(const std::string& packId)
-	{
-		auto& catalog = UnifiedPresetCatalog::GetSingleton();
-		auto names = baselineFeatures;
-		if (includePostProcessing && CanIncludePostProcessing())
-			names.push_back(PostProcessingPresets::kFeatureShortName);
-		for (const auto& shortName : names) {
-			auto* feature = Feature::FindFeatureByShortName(shortName);
-			if (!feature || feature->IsAlwaysEnabled())
-				continue;
-			catalog.SetPackFeatureDisabledAtBoot(packId, shortName, globals::state->IsFeatureDisabled(shortName));
+			return true;
+		} catch (const std::exception& e) {
+			logger::error("[ScenePresetExport] Could not capture base settings: {}", e.what());
+			return false;
 		}
 	}
 
@@ -984,17 +974,13 @@ void ScenePresetExport::Draw()
 
 	if (exportConfirmation.Draw()) {
 		auto sanitizedName = Util::FileHelpers::SanitizeFileName(form.name);
-		bool exported = manager->ExportPreset(BuildExportInfo(sanitizedName));
-		if (exported && includePostProcessing && CanIncludePostProcessing())
-			exported = PostProcessingPresets::WriteBaseline(Util::PathHelpers::GetUnifiedPackPath(sanitizedName));
-		if (exported)
-			exported = WriteBaselineFeatures(sanitizedName);
+		auto info = BuildExportInfo(sanitizedName);
+		const bool exported = CaptureBaselines(info) && manager->ExportPreset(info);
 		ReportExportResult(sanitizedName, exported);
-		// The Presets page lists the new or updated pack without a manual refresh.
-		UnifiedPresetCatalog::GetSingleton().Discover();
-		// After the scan: the boot states live in the manifest of a pack the catalog now knows.
-		if (exported)
-			WriteBootStates(sanitizedName);
+		if (exported) {
+			UnifiedPresetCatalog::GetSingleton().Discover();
+			SettingsOverrideManager::GetSingleton()->RefreshOverrides();
+		}
 		exportRequested = false;
 	} else if (!exportConfirmation.IsOpen()) {
 		exportRequested = false;

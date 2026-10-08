@@ -639,15 +639,15 @@ namespace Util
 	void DrawHdrSdrCapabilityPillAt(ImVec2 a_min, float a_rowHeight, bool a_supportsHDR, ImDrawList* a_drawList)
 	{
 		const char* label = a_supportsHDR ?
-			T("ui.badge.hdr", "HDR") :
-			T("ui.badge.sdr", "SDR");
+		                        T("ui.badge.hdr", "HDR") :
+		                        T("ui.badge.sdr", "SDR");
 
 		const ImVec4 bg = a_supportsHDR ?
-			ImVec4(0.40f, 0.58f, 0.78f, 0.30f) :
-			ImVec4(0.78f, 0.42f, 0.42f, 0.30f);
+		                      ImVec4(0.40f, 0.58f, 0.78f, 0.30f) :
+		                      ImVec4(0.78f, 0.42f, 0.42f, 0.30f);
 		const ImVec4 fg = a_supportsHDR ?
-			ImVec4(0.72f, 0.86f, 1.00f, 0.95f) :
-			ImVec4(1.00f, 0.72f, 0.72f, 0.95f);
+		                      ImVec4(0.72f, 0.86f, 1.00f, 0.95f) :
+		                      ImVec4(1.00f, 0.72f, 0.72f, 0.95f);
 
 		DrawBadgeAt(a_min, a_rowHeight, label, bg, fg, a_drawList);
 	}
@@ -853,14 +853,15 @@ namespace Util
 
 	constexpr float kPercentageScale = 1e2f;
 
-	bool PercentageSlider(const char* label, float* data, float lb, float ub, const char* format)
+	bool PercentageSlider(const char* label, float* data, float lb, float ub, const char* format, ImGuiSliderFlags flags)
 	{
 		// The slider binds a temporary, so name the member it stands for or scene authoring misses it.
 		SceneWidgetInterceptor::ProxyScope sceneProxy(data, kPercentageScale);
 
 		float percentageData = (*data) * kPercentageScale;
-		bool retval = ImGui::SliderFloat(label, &percentageData, lb, ub, format);
-		(*data) = percentageData / kPercentageScale;
+		bool retval = ImGui::SliderFloat(label, &percentageData, lb, ub, format, flags);
+		if (!SceneWidgetInterceptor::IsArmed())
+			(*data) = percentageData / kPercentageScale;
 		return retval;
 	}
 

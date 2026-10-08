@@ -1063,6 +1063,27 @@ def collect_serialized_settings_components(
     return components
 
 
+def collect_owned_settings_components(features, paths, feature_members):
+    components = []
+    for path in (path for path in paths if path.suffix == ".cpp"):
+        text = read_text(path)
+        for method in re.finditer(SAVE_SETTINGS_DEFINITION_RE, masked_text(path)):
+            owner = method.group(1)
+            if owner not in features:
+                continue
+            end = find_matching_brace(text, method.end() - 1)
+            body = text[method.end():end]
+            for saved in re.finditer(r"\b(\w+)\.SaveSettings\(\s*(\w+)\s*\)\s*;", body):
+                member, temporary = saved.groups()
+                child_type = feature_members.get(owner, {}).get(member)
+                persisted = re.search(
+                    rf'\b\w+\s*\[\s*"([^"\n]+)"\s*\]\s*=\s*{temporary}\s*;',
+                    body[saved.end():])
+                if child_type and persisted:
+                    components.append((owner, member, clean_type(child_type), persisted.group(1)))
+    return components
+
+
 def collect_component_persisted_controls(
         features: dict[str, dict[str, str]], settings_components):
     result = {}
@@ -4227,6 +4248,8 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
     features = collect_features([p for p in src_paths if p.suffix == ".h"])
     settings_components = collect_settings_components(features, src_paths)
     serialized_components = collect_serialized_settings_components(features, src_paths)
+    feature_members = collect_feature_member_fields([p for p in src_paths if p.suffix == ".h"], features)
+    owned_components = collect_owned_settings_components(features, src_paths, feature_members)
     component_persisted_controls = collect_component_persisted_controls(
         features, settings_components)
     settings_component_classes = {
@@ -4235,8 +4258,8 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
         for child in children
     }
     settings_component_classes.update(child.child_class for child in serialized_components)
+    settings_component_classes.update(child_type.split("::")[-1] for _, _, child_type, _ in owned_components)
     feature_fields = collect_feature_struct_fields([p for p in src_paths if p.suffix == ".h"], features)
-    feature_members = collect_feature_member_fields([p for p in src_paths if p.suffix == ".h"], features)
     component_fields = collect_feature_struct_fields(
         [p for p in src_paths if p.suffix == ".h"],
         {child_class: {} for child_class in settings_component_classes})
@@ -4704,6 +4727,26 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                 selector_key_prefix=(child.display_key,),
                 addressable=False, control_scope=child.control_scope),
             f"{child.child_class}::{clean_type(root_type).split('::')[-1]}", [], root_member)
+
+    for feature_class, member, child_type, key in owned_components:
+        child_class = child_type.split("::")[-1]
+        namespace = child_type.rsplit("::", 1)[0] if "::" in child_type else child_type
+        headers = [path for path in src_paths if path.suffix == ".h" and
+                   re.search(rf"\bnamespace\s+{re.escape(namespace)}\b", masked_text(path)) and
+                   class_body(path, child_class) is not None]
+        members = collect_feature_member_fields(headers, {child_class: {}}) if headers else component_members
+        sources = [header.with_suffix(".cpp") for header in headers if header.with_suffix(".cpp").exists()]
+        roots = collect_save_roots(sources) if sources else save_roots
+        root_member = roots.get(child_class, "")
+        root_type = members.get(child_class, {}).get(root_member, "")
+        full_type = root_type if "::" in root_type else f"{namespace}::{root_type}"
+        if not root_member or full_type not in macros:
+            discovery_errors.append(f"{child_type} has no discovered serialized settings root")
+            continue
+        emit_type(
+            CatalogContext(feature_class, child_class, json_path_prefix=(key,),
+                           display_path_prefix=(prettify(key),)),
+            full_type, [], f"{member}.{root_member}")
 
     if discovery_errors:
         raise ValueError("scene settings catalog discovery failed: " + "; ".join(sorted(set(discovery_errors))))

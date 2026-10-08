@@ -1,5 +1,6 @@
 #include "ColorGrading.h"
 
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "RasterPass.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -318,11 +319,16 @@ void ColorGrading::DrawSettings()
 
 	ImGui::Checkbox(T(TKEY("convert_linear_to_log_before_hdr_color_grading"), "Convert Linear to Log Before HDR Color Grading"), &settings.useLog);
 	if (settings.useLog) {
-		bool invertLog = settings.invertLog || settings.enableTonemap;
-		ImGui::BeginDisabled(settings.enableTonemap);
-		if (ImGui::Checkbox(T(TKEY("convert_log_to_linear_after_hdr_color_grading"), "Convert Log to Linear After HDR Color Grading"), &invertLog))
-			settings.invertLog = invertLog;
-		ImGui::EndDisabled();
+		{
+			bool invertLog = settings.invertLog;
+			if (settings.enableTonemap)
+				invertLog = true;
+			const SceneWidgetInterceptor::ProxyScope proxy(&settings.invertLog, 1.0f);
+			ImGui::BeginDisabled(settings.enableTonemap);
+			if (ImGui::Checkbox(T(TKEY("convert_log_to_linear_after_hdr_color_grading"), "Convert Log to Linear After HDR Color Grading"), &invertLog) && !SceneWidgetInterceptor::IsArmed())
+				settings.invertLog = invertLog;
+			ImGui::EndDisabled();
+		}
 		ImGui::Combo(T(TKEY("log_type"), "Log Type"), (int*)&settings.logType, "ACEScct\0ARRILogC4\0SonySLog3\0");
 	}
 
@@ -433,6 +439,7 @@ void ColorGrading::DrawSettings()
 		} else {
 			auto& tonemappers = TonemapperInfo::GetTonemappers();
 
+			ImGui::BeginDisabled(SceneWidgetInterceptor::IsArmed());
 			if (ImGui::BeginCombo(T(TKEY("tonemapper"), "Tonemapper"), tonemappers[tonemapperType].name.data(), ImGuiComboFlags_HeightLargest)) {
 				for (int i = 0; i < (int)tonemappers.size(); ++i) {
 					ImGui::PushID(i);
@@ -469,6 +476,7 @@ void ColorGrading::DrawSettings()
 				}
 				ImGui::EndCombo();
 			}
+			ImGui::EndDisabled();
 			ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
 			Util::DrawHdrSdrCapabilityPill(tonemappers[tonemapperType].supportsHDR);
 			ImGui::Spacing();
@@ -485,8 +493,10 @@ void ColorGrading::DrawSettings()
 				ImGui::Spacing();
 			}
 
+			ImGui::BeginDisabled(SceneWidgetInterceptor::IsArmed());
 			if (ImGui::Button(T(TKEY("reset"), "Reset"), { -1, 0 }))
 				settings.tonemapParams = tonemappers[tonemapperType].default_settings;
+			ImGui::EndDisabled();
 			ImGui::Spacing();
 
 			ImGui::PushID(tonemapperType);

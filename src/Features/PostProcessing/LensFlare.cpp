@@ -1,5 +1,6 @@
 #include "LensFlare.h"
 
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "Features/PostProcessing.h"
 #include "I18n/I18n.h"
 #include "ShaderCache.h"
@@ -91,22 +92,37 @@ void LensFlare::DrawSettings()
 		// aperture while active; show the effective values read-only.
 		const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr;
 
-		int apertureBlades = cam ? cam->ApertureBladeCount : settings.ApertureBlades;
-		float fStop = cam ? cam->FNumber : settings.FStop;
-		float apertureRotation = cam ? cam->ApertureBladeRotationDeg : settings.ApertureRotation;
+		int apertureBlades = settings.ApertureBlades;
+		if (cam)
+			apertureBlades = cam->ApertureBladeCount;
+		float fStop = settings.FStop;
+		if (cam)
+			fStop = cam->FNumber;
+		float apertureRotation = settings.ApertureRotation;
+		if (cam)
+			apertureRotation = cam->ApertureBladeRotationDeg;
 
 		ImGui::BeginDisabled(cam != nullptr);
-		ImGui::SliderInt(T("feature.post_processing.lens_flare.aperture_blades", "Aperture Blades"), &apertureBlades, 3, 10);
+		{
+			const SceneWidgetInterceptor::ProxyScope proxy(&settings.ApertureBlades, 1.0f);
+			ImGui::SliderInt(T("feature.post_processing.lens_flare.aperture_blades", "Aperture Blades"), &apertureBlades, 3, 10);
+		}
 		tooltip("Number of aperture blades for the procedural bokeh shape.");
 
-		ImGui::SliderFloat(T("feature.post_processing.lens_flare.f_stop", "F-Stop"), &fStop, 1.0f, 22.0f, "F%.1f");
+		{
+			const SceneWidgetInterceptor::ProxyScope proxy(&settings.FStop, 1.0f);
+			ImGui::SliderFloat(T("feature.post_processing.lens_flare.f_stop", "F-Stop"), &fStop, 1.0f, 22.0f, "F%.1f");
+		}
 		tooltip("Aperture f-number (e.g. F2.8). Smaller = larger aperture.\nControls the bokeh shape characteristics.");
 
-		ImGui::SliderFloat(T("feature.post_processing.lens_flare.aperture_rotation", "Aperture Rotation"), &apertureRotation, -180.0f, 180.0f, "%.1f deg");
+		{
+			const SceneWidgetInterceptor::ProxyScope proxy(&settings.ApertureRotation, 1.0f);
+			ImGui::SliderFloat(T("feature.post_processing.lens_flare.aperture_rotation", "Aperture Rotation"), &apertureRotation, -180.0f, 180.0f, "%.1f deg");
+		}
 		tooltip("Rotation of the procedural aperture.");
 		ImGui::EndDisabled();
 
-		if (!cam) {
+		if (!cam && !SceneWidgetInterceptor::IsArmed()) {
 			settings.ApertureBlades = apertureBlades;
 			settings.FStop = fStop;
 			settings.ApertureRotation = apertureRotation;
@@ -121,8 +137,10 @@ void LensFlare::DrawSettings()
 				if (resValues[i] == settings.FFTResolution)
 					curIdx = i;
 
+			ImGui::BeginDisabled(SceneWidgetInterceptor::IsArmed());
 			if (ImGui::Combo(T("feature.post_processing.lens_flare.fft_resolution", "FFT Resolution"), &curIdx, resNames, 4))
 				settings.FFTResolution = resValues[curIdx];
+			ImGui::EndDisabled();
 
 			tooltip("Resolution of the FFT convolution. Higher = sharper bokeh ghost shapes but more expensive.");
 		}
@@ -153,6 +171,7 @@ void LensFlare::DrawSettings()
 			}
 			ImGui::PopID();
 		}
+		ImGui::BeginDisabled(SceneWidgetInterceptor::IsArmed());
 		if (ImGui::Button(T("feature.post_processing.lens_flare.reset_ghosts_to_default", "Reset Ghosts to Default"))) {
 			GhostSettings defaults[NUM_GHOSTS] = {
 				{ { { 1.0f, 0.8f, 0.4f, 1.0f } }, -1.5f, true, 1.0f },
@@ -166,6 +185,7 @@ void LensFlare::DrawSettings()
 			};
 			std::memcpy(settings.Ghosts.data(), defaults, sizeof(settings.Ghosts));
 		}
+		ImGui::EndDisabled();
 		ImGui::TreePop();
 	}
 

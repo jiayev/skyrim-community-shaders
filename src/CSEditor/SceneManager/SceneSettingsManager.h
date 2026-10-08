@@ -210,6 +210,9 @@ public:
 		bool clearLogo = false;
 		bool clearCover = false;
 		bool clearScreenshots = false;
+		std::map<std::string, json> baselines;
+		std::set<std::string> replaceBaselines;
+		std::map<std::string, bool> disableAtBoot;
 	};
 
 	/** @brief Bakes every context's winning values into Presets/<Name>/, replacing its scene files and merging its manifest and artwork.
@@ -265,7 +268,7 @@ public:
 	bool IsActiveSceneSetting(const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey) const;
 	/** @brief Folds a feature's external edits at applied addresses into its baselines, then re-resolves. */
-	void CaptureExternalFeatureChanges(Feature* feature);
+	void CaptureExternalFeatureChanges(Feature* feature, bool sketch = false);
 
 	/// Whether the scene layer is currently driving this feature, so a settings UI without sketch
 	/// support must not offer its base settings: the next resolve would revert the edit.
@@ -1066,9 +1069,6 @@ private:
 
 	/// Feature settings as they were before the scene layer, so baselines cost one SaveSettings each.
 	std::map<std::string, json> featureBaseSnapshots;
-	/// The document each apply mutates in place, so a per-frame transition costs no SaveSettings
-	/// and no full copy of the feature's settings.
-	std::map<std::string, json> featureApplyDocuments;
 	std::set<std::string> appliedFeatureNames;
 	mutable std::set<std::string> configuredFeatureNamesCache;
 	mutable std::uint64_t configuredFeatureNamesRevision = std::numeric_limits<std::uint64_t>::max();
@@ -1217,9 +1217,9 @@ private:
 	static bool IsValidSceneContext(const SceneContextId& context);
 	/** @brief Context equality with location form keys normalized. */
 	static bool IsSameSceneContext(const SceneContextId& lhs, const SceneContextId& rhs);
-	/** @brief The winning entry per setting in one context, tombstoned settings dropped. */
+	/** @brief The winning entry per setting in one context; exports retain tombstones. */
 	static EffectiveContextEntries BuildEffectiveContextEntries(
-		const std::vector<SettingEntry>& contextEntries, const SceneContextId& context);
+		const std::vector<SettingEntry>& contextEntries, const SceneContextId& context, bool includeDeleted = false);
 	/** @brief The entry list backing a context, null when it has none. */
 	const std::vector<SettingEntry>* GetCopyContextEntries(const SceneContextId& context) const;
 	/** @brief Mutable GetCopyContextEntries, loading weather or location data first. */

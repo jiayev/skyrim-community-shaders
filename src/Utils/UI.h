@@ -540,7 +540,7 @@ namespace Util
 		bool m_treeNodeOpened;
 	};
 
-	bool PercentageSlider(const char* label, float* data, float lb = 0.f, float ub = 100.f, const char* format = "%.1f %%");
+	bool PercentageSlider(const char* label, float* data, float lb = 0.f, float ub = 100.f, const char* format = "%.1f %%", ImGuiSliderFlags flags = 0);
 
 	/**
 	 * Draws a 2-4 component float slider. Holding Shift edits all components from the first component.

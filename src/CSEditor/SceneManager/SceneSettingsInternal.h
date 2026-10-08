@@ -22,6 +22,7 @@ namespace SceneSettingsInternal
 	constexpr const char* kMetadataDescriptionKey = "description";
 	/// Per-setting location transition seconds, mirroring the setting tree under `_metadata`.
 	constexpr const char* kMetadataEntryTransitionsKey = "entryTransitions";
+	constexpr const char* kMetadataEntryDeletionsKey = "entryDeletions";
 	constexpr const char* kStatusKey = "status";
 	constexpr const char* kStatusDeleted = "deleted";
 	/// Picks a weather or location's saved set; also a mod's overwrite metadata key.
