@@ -294,7 +294,8 @@ namespace DCLF
 			std::array<std::array<float, 4>, 6> customPlanes{};
 			std::uint32_t customMask = 0;  // 0: no custom planes
 			std::uint32_t bit = 0;         // the accumulator's +0x164
-			bool captured = false;
+			bool captured = false;         // DCLF's volume is known (T2a: SunViews)
+			bool parityChecked = false;    // the parity compared it with the cascade cull's
 		};
 
 		/** @brief The frame's exclusion, as the registration thunks read it. */

@@ -1,6 +1,8 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Internal.h"
 #	include "Features/DrawcallLimitFix/Engine/LocalLightCull.h"
+#	include "Features/DrawcallLimitFix/Engine/LightViews.h"
+#	include "Features/DrawcallLimitFix/Engine/SunViews.h"
 #	include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
 #	include "Features/Skylighting.h"
 
@@ -731,6 +733,99 @@ namespace DCLF
 		}
 
 		/**
+		 * @brief A view's viewport and eye as DCLF computes them - the sun's (T2a: SunViews) or a local light's (T3a: LightViews),
+		 * from the camera the light's UpdateCamera set up: its port times the depth target's size. What CaptureViewTarget read from
+		 * the renderer's state is the parity's alone (a_parity, null when the parity is off). False without DCLF's view this frame
+		 * (the captured values stand, counted as missing).
+		 */
+		bool ApplyOwnViewport(PendingView& a_view, const SunViews::Cascade* a_cascade, std::uint32_t a_descriptor, std::uint32_t a_target, SunViews::Parity* a_parity)
+		{
+			if (a_parity)
+				++a_parity->views;
+			auto* texture = globals::game::renderer->GetDepthStencilData().depthStencils[a_target].texture;
+			if (!a_cascade || !texture) {
+				if (a_parity)
+					++a_parity->missing;
+				return false;
+			}
+			D3D11_TEXTURE2D_DESC desc{};
+			texture->GetDesc(&desc);
+			const auto port = SunViews::Viewport(a_cascade->port, desc.Width, desc.Height);
+			const RE::NiPoint3 eye{ a_cascade->eye[0], a_cascade->eye[1], a_cascade->eye[2] };
+			if (auto* p = a_parity) {
+				// The depth range against the camera state's (0x14202b130, FUN_140e57e10), which every draw's state flush starts from
+				// (FUN_140e4b5b0): the renderer's viewport holds the last draw's, less its depth bias's step (0x143286a80[bias]) when it
+				// had one - a per-draw state, not the view's.
+				static const REL::Relocation<const float*> cameraDepthRange{ REL::Offset(0x202b130) };
+				const float engineMin = cameraDepthRange.get()[0], engineMax = cameraDepthRange.get()[1];
+				if (port[0] != a_view.x || port[1] != a_view.y || port[2] != a_view.width || port[3] != a_view.height || engineMin != 0.0f || engineMax != 1.0f) {
+					++p->viewport;
+					p->Note("viewport", 1.0f, fmt::format("descriptor {}: ({} {}) {}x{}, the engine's ({} {}) {}x{} camera depth range {}-{}", a_descriptor, port[0], port[1],
+						port[2], port[3], a_view.x, a_view.y, a_view.width, a_view.height, engineMin, engineMax));
+				}
+				if (!SunViews::Close(eye.x, a_view.eye.x) || !SunViews::Close(eye.y, a_view.eye.y) || !SunViews::Close(eye.z, a_view.eye.z)) {
+					++p->eye;
+					p->Note("eye", (eye - a_view.eye).Length(),
+						fmt::format("descriptor {}: ({} {} {}), the engine's ({} {} {})", a_descriptor, eye.x, eye.y, eye.z, a_view.eye.x, a_view.eye.y, a_view.eye.z));
+				}
+			}
+			a_view.x = port[0];
+			a_view.y = port[1];
+			a_view.width = port[2];
+			a_view.height = port[3];
+			a_view.minDepth = 0.0f;
+			a_view.maxDepth = 1.0f;
+			a_view.eye = eye;
+			return true;
+		}
+
+		/**
+		 * @brief A view's VS_PerFrame block and caster volume as DCLF computes them (SunViews::Block, the caster planes UpdateCamera
+		 * wrote). a_parity: when CapturePerFrame took the engine's block for the parity (null otherwise).
+		 */
+		void ApplyOwnCamera(PendingView& a_view, const SunViews::Cascade& a_cascade, std::uint32_t a_descriptor, SunViews::Parity* a_parity)
+		{
+			std::array<std::byte, SunViews::kBlockBytes> block{};
+			SunViews::Block(a_cascade, block.data());
+			const auto* mine = reinterpret_cast<const float*>(block.data());
+			if (auto* p = a_parity) {
+				// The matrices the draws use: CameraView, CameraProj and CameraViewProj (c0-c11; Utility.hlsl's paraboloid modes read the
+				// view too), and the engine's caster volume.
+				const auto* theirs = reinterpret_cast<const float*>(a_view.perFrame.data());
+				float largest = 0.0f;
+				std::int32_t first = -1;
+				for (std::uint32_t i = 0; i < 48; ++i) {
+					if (!SunViews::Close(mine[i], theirs[i]) && first < 0)
+						first = static_cast<std::int32_t>(i);
+					largest = std::max(largest, std::abs(mine[i] - theirs[i]));
+				}
+				if (first >= 0) {
+					++p->viewProj;
+					const std::uint32_t row = static_cast<std::uint32_t>(first) / 4 * 4;
+					p->Note("matrices", largest, fmt::format("descriptor {}: c{} ({} {} {} {}), the engine's ({} {} {} {})", a_descriptor, row / 4, mine[row], mine[row + 1],
+						mine[row + 2], mine[row + 3], theirs[row], theirs[row + 1], theirs[row + 2], theirs[row + 3]));
+				}
+				SunViews::Planes captured;
+				for (std::uint32_t q = 0; q < 6; ++q)
+					for (std::uint32_t i = 0; i < 4; ++i)
+						captured.plane[q][i] = a_view.cullPlanes[q][i];
+				captured.mask = a_view.cullPlaneMask;
+				if (!SunViews::SamePlanes(a_cascade.caster, captured)) {
+					++p->casters;
+					p->Note("caster volume", 1.0f, fmt::format("descriptor {}: mask {:#x}, the engine's {:#x}", a_descriptor, a_cascade.caster.mask, captured.mask));
+				}
+			}
+			std::memcpy(a_view.perFrame.data(), block.data(), block.size());
+			a_view.perFrameBytes = static_cast<std::uint32_t>(block.size());
+			std::memcpy(a_view.viewProj.data(), mine + 32, sizeof(float) * 16);
+			a_view.hasViewProj = true;
+			for (std::uint32_t q = 0; q < 6; ++q)
+				for (std::uint32_t i = 0; i < 4; ++i)
+					a_view.cullPlanes[q][i] = a_cascade.caster.plane[q][i];
+			a_view.cullPlaneMask = a_cascade.caster.mask;
+		}
+
+		/**
 		 * @brief VS_PerFrame (b12) as the engine wrote it for the view, taken now because the next view rewrites it: from the
 		 * mirror, or from Community Shaders' copy of the same buffer (Globals: CacheFramebuffer) until the mirror has seen a
 		 * write. Its view-projection is what the view's draws use.
@@ -1072,6 +1167,22 @@ namespace DCLF
 		view.casterClass = volumetricCopy ? 1u : 0u;
 		view.sunView = shadowView->kind == ShadowViews::Kind::Directional;
 		CaptureViewTarget(view, target);
+		// The sun's and the local lights' viewport and eye are DCLF's (T2a, T3a: not a focus view); the renderer's, just read, are the
+		// parity's.
+		const std::uint32_t sceneFrame = SceneStore::Get().GetFrame();
+		const SunViews::Cascade* ownView = nullptr;
+		SunViews::Parity* ownParity = nullptr;
+		const bool localView = !view.sunView && !shadowView->focus &&
+		                       (shadowView->kind == ShadowViews::Kind::Frustum || shadowView->kind == ShadowViews::Kind::Parabolic);
+		if (view.sunView) {
+			ownView = SunViews::Get().CascadeOf(shadowView->descriptor, sceneFrame);
+			ownParity = &SunViews::Get().GetParity();
+		} else if (localView) {
+			ownView = LightViews::Get().CascadeOf(shadowView->light, shadowView->descriptor, sceneFrame);
+			ownParity = &LightViews::Get().GetParity();
+		}
+		const bool ownParityOn = SunViews::ParityEnabled();
+		const bool owned = (view.sunView || localView) && ApplyOwnViewport(view, ownView, shadowView->descriptor, target, ownParityOn ? ownParity : nullptr);
 		// Its placement's slot: one the setup foresaw, under the placement's state, and the frame's only view there. Anything else is a
 		// defect: the casters withheld from the view are a hole this frame.
 		{
@@ -1123,7 +1234,13 @@ namespace DCLF
 			// CameraPosAdjust. Left zero.
 			view.viewBlock[8] = view.viewBlock[9] = view.viewBlock[10] = 0.0f;
 		}
-		CapturePerFrame(view);
+		// The view-projection: the sun's and the local lights' DCLF's (T2a, T3a), the engine's block taken only for the parity; a focus
+		// view's the engine's.
+		const bool capturePerFrame = !owned || ownParityOn;
+		if (capturePerFrame)
+			CapturePerFrame(view);
+		if (owned)
+			ApplyOwnCamera(view, *ownView, shadowView->descriptor, ownParityOn ? ownParity : nullptr);
 		// The capture check: the block's CameraPosAdjust (c40) against the eye the renderer's state has for the view now.
 		{
 			static std::uint64_t views = 0, fallback = 0, differ = 0;
@@ -1886,23 +2003,50 @@ namespace DCLF
 		in.frameNumber = a_store.GetFrame();
 		in.modeUsed = a_modeUsed;
 		in.modeRasterStates = a_modeRasterStates;
-		// The sun's full-frustum planes, read on the render thread after the full-frustum cull has run
-		// (NiCamera::CalculateAndDrawShadowCasterLights precedes both the build's kick and the views).
-		if (auto* node = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr)
-			if (auto* sun = node->GetRuntimeData().sunShadowDirLight)
-				for (const auto& process : sun->GetShadowDirectionalLightRuntimeData().fullFrustumCullingProcessArray) {
-					if (!process)
-						continue;
-					const auto& planes = process->planes;
-					auto& out = in.sunEntryProcesses.emplace_back();
-					for (std::uint32_t p = 0; p < 6; ++p) {
-						out.planes[p][0] = planes.cullingPlanes[p].normal.x;
-						out.planes[p][1] = planes.cullingPlanes[p].normal.y;
-						out.planes[p][2] = planes.cullingPlanes[p].normal.z;
-						out.planes[p][3] = planes.cullingPlanes[p].constant;
+		// The sun's full-frustum planes (the entry rule, kCullSunEntry): DCLF's, what each process of the full-frustum cull tests as
+		// UpdateCamera set it up (T2a: SunViews); the processes' own planes after the cull are the parity's. The newest: this frame's at
+		// the shadow epoch, the last frame's for the build ahead (PostAheadContext, at the frame's start, before this frame's
+		// UpdateCamera) - as the engine's processes held them there.
+		if (const auto& sunViews = SunViews::Get().Current();
+			sunViews.valid && (sunViews.sceneFrame == in.frameNumber || sunViews.sceneFrame + 1 == in.frameNumber) && !sunViews.fullFrusta.empty()) {
+			for (const auto& mine : sunViews.fullFrusta) {
+				auto& out = in.sunEntryProcesses.emplace_back();
+				for (std::uint32_t p = 0; p < 6; ++p)
+					for (std::uint32_t i = 0; i < 4; ++i)
+						out.planes[p][i] = mine.plane[p][i];
+				out.mask = mine.mask;
+			}
+			if (SunViews::ParityEnabled())
+				if (auto* node = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr)
+					if (auto* sun = node->GetRuntimeData().sunShadowDirLight) {
+						auto& views = SunViews::Get();
+						std::size_t index = 0;
+						for (const auto& process : sun->GetShadowDirectionalLightRuntimeData().fullFrustumCullingProcessArray) {
+							if (!process)
+								continue;
+							SunViews::Planes engine;
+							for (std::uint32_t p = 0; p < 6; ++p)
+								engine.plane[p] = { process->planes.cullingPlanes[p].normal.x, process->planes.cullingPlanes[p].normal.y,
+									process->planes.cullingPlanes[p].normal.z, process->planes.cullingPlanes[p].constant };
+							engine.mask = process->planes.activePlanes.underlying() & 0x3Fu;
+							++views.GetParity().fullFrusta;
+							if (index >= sunViews.fullFrusta.size()) {
+								++views.GetParity().fullFrustumPlanes;
+								views.NoteDifference("full-frustum planes", 1.0f, fmt::format("process {}: DCLF has {} processes", index, sunViews.fullFrusta.size()));
+							} else if (!SunViews::SamePlanes(sunViews.fullFrusta[index], engine)) {
+								++views.GetParity().fullFrustumPlanes;
+								views.NoteDifference("full-frustum planes", 1.0f,
+									fmt::format("process {}: {}", index, SunViews::DescribePlanes(sunViews.fullFrusta[index], engine)));
+							}
+							++index;
+						}
 					}
-					out.mask = planes.activePlanes.underlying() & 0x3Fu;
-				}
+		} else if (SunViews::ParityEnabled()) {
+			++SunViews::Get().GetParity().missing;
+			const auto& current = SunViews::Get().Current();
+			SunViews::Get().NoteDifference("missing full frustum", 0.0f, fmt::format("inputs of frame {}, DCLF's views of frame {} (valid {}, {} processes)", in.frameNumber,
+				current.sceneFrame, current.valid, current.fullFrusta.size()));
+		}
 		in.sunCandidates = a_store.GetSunCandidates();
 		in.lightCandidates = a_store.GetLightCandidates();
 		in.addresses.constants = a_resources.constantsAddress;

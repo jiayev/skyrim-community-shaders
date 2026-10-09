@@ -32,6 +32,30 @@ namespace DCLF::Scene
 	};
 
 	/**
+	 * @brief Actor::SetAlpha (vfunc 0xE1, 0x1406c1a50; Actor's, Character's and PlayerCharacter's tables): the fadeAmount (+0x100) of
+	 * the actor's 3D root, and the player's first-person root too (fadeAmountEvents).
+	 */
+	template <class T>
+	struct ActorSetAlpha
+	{
+		static void thunk(RE::Actor* a_this, float a_alpha)
+		{
+			RE::NiAVObject* roots[2]{ a_this->Get3D1(false), a_this->Get3D1(true) };
+			float before[2]{};
+			for (std::uint32_t i = 0; i < 2; ++i)
+				before[i] = roots[i] ? Engine::At<float>(roots[i], 0x100) : 0.0f;
+			func(a_this, a_alpha);
+			for (std::uint32_t i = 0; i < 2; ++i)
+				if (roots[i] && Engine::At<float>(roots[i], 0x100) != before[i] && (i == 0 || roots[1] != roots[0]))
+					fadeAmountEvents.Push(roots[i]);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct ActorTable;
+	struct CharacterTable;
+	struct PlayerTable;
+
+	/**
 	 * @brief FUN_14147a430 (node, level): the LOD transition, the only writer of the fade node's LOD level (+0x152 & 0xF, the skin
 	 * partitions' row). The fade update (FUN_14147a160), BSLeafAnimNode::OnVisible and the feedback's fade service call it.
 	 */
@@ -768,6 +792,7 @@ namespace DCLF
 			propertyChanged.clear();
 			nodeChanged.clear();
 			fadeSnapEvents.Drain(keep);
+			fadeAmountEvents.Drain(keep);
 			lodSegmentEvents.Drain(keep);
 			moveEvents.Discard();
 			movedFrame.clear();
@@ -794,6 +819,7 @@ namespace DCLF
 		auto* attached = tracker.Drain();
 		batch.Append(attached);
 		fadeSnapEvents.Drain([&](const void* a_node) { batch.fadeSnaps.push_back(a_node); });
+		fadeAmountEvents.Drain([&](const void* a_node) { batch.fadeAmounts.push_back(a_node); });
 		DrainFadeEvents(batch.fades);
 		DrainPropertyEvents(batch.properties);
 		DrainNodeEvents(batch.nodes);
@@ -935,6 +961,9 @@ namespace DCLF
 		// Fade roots placed since their listing: their rows again from the node.
 		for (const void* node : batch->fadeSnaps)
 			ReseedFadeRoot(node);
+		// Actors' fadeAmount, written since: their rows' input (the GPU's state stands).
+		for (const void* node : batch->fadeAmounts)
+			RefreshFadeAmount(node);
 		// The fade nodes whose currentFade changed since the last apply (the delta walk re-evaluates their dependents).
 		fadeChanged.insert(fadeChanged.end(), batch->fades.begin(), batch->fades.end());
 		// The structural events (SceneEvents): properties whose flags, material or controllers changed, and nodes Havok
@@ -1081,6 +1110,9 @@ namespace DCLF
 		stl::detour_thunk<LodLevelUpdate>(REL::Offset(kLodLevelUpdate).address());
 		constexpr std::uintptr_t kFadeSnap = 0x147aa20;             // FUN_14147aa20: a fade node's placement snap
 		stl::detour_thunk<FadeSnap>(REL::Offset(kFadeSnap).address());
+		stl::write_vfunc<0xE1, ActorSetAlpha<ActorTable>>(RE::VTABLE_Actor[0]);
+		stl::write_vfunc<0xE1, ActorSetAlpha<CharacterTable>>(RE::VTABLE_Character[0]);
+		stl::write_vfunc<0xE1, ActorSetAlpha<PlayerTable>>(RE::VTABLE_PlayerCharacter[0]);
 		constexpr std::uintptr_t kFadeSetRange = 0x147a9b0;         // FUN_14147a9b0: a fade node's near and far
 		constexpr std::uintptr_t kFadeSetLodType = 0x147aa00;       // FUN_14147aa00: a fade node's LOD type
 		stl::detour_thunk<FadeSetRange>(REL::Offset(kFadeSetRange).address());
