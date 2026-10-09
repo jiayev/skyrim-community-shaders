@@ -255,7 +255,9 @@ public:
 		GrassSphereNormal = 1 << 3,
 		IsSun = 1 << 4,
 		SuppressExternalEmittance = 1 << 5,
-		AdditiveLighting = 1 << 6
+		AdditiveLighting = 1 << 6,
+		// 7 and 8 are reserved for the night sky flags
+		NoSkyScattering = 1 << 9  ///< Cloud layer drawn without Effects11 cloud scattering
 	};
 
 	/** @brief Bitflags describing extra feature-specific properties related to terrain displacement and material models. */

@@ -53,11 +53,20 @@ void State::UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass)
 void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
 {
 	permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsSun);
+	permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::NoSkyScattering);
 
 	if (!a_pass || !a_pass->shaderProperty)
 		return;
 
 	auto* skyProperty = static_cast<const RE::BSSkyShaderProperty*>(a_pass->shaderProperty);
+	if (skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_CLOUDS) {
+		// Bottled Shaders keeps cloud layer 28 out of the scattering
+		constexpr std::uint16_t kNoScatteringCloudLayer = 28;
+		auto* sky = globals::game::sky;
+		if (sky && sky->clouds && kNoScatteringCloudLayer < sky->clouds->numLayers &&
+			sky->clouds->clouds[kNoScatteringCloudLayer].get() == a_pass->geometry)
+			permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::NoSkyScattering);
+	}
 	if (skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_SUN ||
 		skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_SUN_GLARE) {
 		permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsSun);
