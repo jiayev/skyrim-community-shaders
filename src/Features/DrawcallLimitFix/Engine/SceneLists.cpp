@@ -1,4 +1,5 @@
 #include "PrimaryCull.h"
+#include "PortalViews.h"
 
 #include "EngineAccess.h"
 #include "PassCapture.h"
@@ -24,13 +25,13 @@ namespace DCLF
 		constexpr std::uintptr_t kSceneListCount = 0x338c868;  // std::uint32_t
 		constexpr std::uintptr_t kExtraList = 0x338c888;       // BSTArray<NiPointer<NiAVObject>>, culled by the first job only
 		constexpr std::uintptr_t kListProcesses = 0x338c8a0;   // BSGeometryListCullingProcess**, one per scene list
+		constexpr std::uintptr_t kSunOff = 0x338c911;          // set: the sun does not draw (no full-frustum cull reads the lists)
 		constexpr std::uintptr_t kBuildSceneLists = 0x64bc20;  // DrawWorld_BuildSceneLists, a job of Main::Draw's
 		constexpr std::uintptr_t kClearList = 0x64cf20;        // FUN_14064cf20(list): Main::Draw's ClearLists job, one list
 		constexpr std::uintptr_t kCullList = 0xe28f70;         // FUN_140e28f70(process, list, camera, skipHidden, jobs): every list cull
 		// In DrawWorld_BuildSceneLists: `mov rax, [rcx]; call [rax + 0x18]`, the object root's AsNode (ShadowSceneNode child 3).
 		constexpr std::uintptr_t kObjectRootAsNode = 0x64be5a;
 		constexpr std::array<std::uint8_t, 6> kObjectRootAsNodeBytes{ 0x48, 0x8B, 0x01, 0xFF, 0x50, 0x18 };
-		constexpr std::size_t kProcessPortalEntry = 0x30190;  // BSCullingProcess::portalGraphEntry
 		constexpr std::size_t kTesWorldSpace = 0x148;         // TES: the current worldspace (FUN_14019d200)
 		constexpr std::size_t kWorldSpaceFlags = 0xa0;        // byte; 0x40: the build skips category node 2
 		constexpr std::size_t kObjectFlags = 0xF4;
@@ -121,9 +122,9 @@ namespace DCLF
 		const std::uint32_t count = Global<std::uint32_t>(kSceneListCount);
 		if (!sceneNode || !processes || !processes[0] || !tes || !count || count > listSentinels.size())
 			return fail(1);
-		// The interior branch (and with no unbound space, the water's) does not walk the object root.
-		const auto* entry = At<const RE::BSPortalGraphEntry*>(processes[0], kProcessPortalEntry);
-		if (!entry || !entry->visibleUnboundSpace)
+		// The interior branch (and with no unbound space, the water's) does not walk the object root. Whether the walk reached
+		// unbound space is DCLF's walk's (T5b; PortalViews, after Main::Update's).
+		if (!PortalViews::Get().VisibleUnbound())
 			return fail(2);
 		if (tes->interiorCell)
 			return fail(3);
@@ -162,24 +163,27 @@ namespace DCLF
 			cutStats.entriesPlanned += changed.size();
 		}
 		// The exclusion this frame's full-frustum cull applies, for the same snapshot: a root out of the lists is out of
-		// the sun's cascades only when that exclusion takes it out too.
-		const auto exclusion = SunAccumulation::Get().PendingExclusion();
-		if (!exclusion || exclusion->candidates != cut.candidates || exclusion->excluded.size() != cut.plans.size()) {
+		// the sun's cascades only when that exclusion takes it out too. With the sun off (an interior) no full-frustum cull
+		// reads the lists, and no exclusion is needed (T5b).
+		const bool sunOff = Global<std::uint8_t>(kSunOff) != 0;
+		const auto exclusion = sunOff ? nullptr : SunAccumulation::Get().PendingExclusion();
+		if (!sunOff && (!exclusion || exclusion->candidates != cut.candidates || exclusion->excluded.size() != cut.plans.size())) {
 			++listStats.noExclusion;
 			return nullptr;
 		}
+		const std::uint64_t exclusionVersion = sunOff ? ~0ull : exclusion->version;
 		// Built again only when an entry's verdict may have moved: the cut's admissions and walks, or the exclusion's content.
 		const auto entries = static_cast<std::uint32_t>(cut.plans.size());
-		if (listFilterBuilt && listFilterBuilt->candidates == cut.candidates && filterCutVersion == cutVersion && filterExclusionVersion == exclusion->version &&
+		if (listFilterBuilt && listFilterBuilt->candidates == cut.candidates && filterCutVersion == cutVersion && filterExclusionVersion == exclusionVersion &&
 			listRemovable.size() == entries)
 			return listFilterBuilt;
 		filterCutVersion = cutVersion;
-		filterExclusionVersion = exclusion->version;
+		filterExclusionVersion = exclusionVersion;
 		bool changed = !listFilterBuilt || listFilterBuilt->candidates != cut.candidates || listRemovable.size() != entries;
 		listRemovable.resize(entries, 0);
 		for (std::uint32_t e = 0; e < entries; ++e) {
 			const std::uint8_t removable =
-				cut.plans[e] != EntryPlan::Rejected && cut.admitted[e] && !cut.walk[e] && !cut.mixed[e] && e < exclusion->excluded.size() && exclusion->excluded[e] ? 1 : 0;
+				cut.plans[e] != EntryPlan::Rejected && cut.admitted[e] && !cut.walk[e] && !cut.mixed[e] && (sunOff || (e < exclusion->excluded.size() && exclusion->excluded[e])) ? 1 : 0;
 			changed |= removable != listRemovable[e];
 			listRemovable[e] = removable;
 		}
@@ -550,6 +554,7 @@ namespace DCLF
 	void PrimaryCull::NoteListStructure(const RE::NiNode* a_parent, RE::NiAVObject* a_child, bool a_attached)
 	{
 		LocalLightCull::NoteStructure(a_parent, a_child, a_attached);
+		PortalViews::Get().NoteStructure(a_parent);
 		const auto* objectRoot = listObjectRoot.load(std::memory_order_acquire);
 		if (!a_parent || !objectRoot)
 			return;

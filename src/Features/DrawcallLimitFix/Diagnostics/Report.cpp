@@ -249,8 +249,9 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		if (draws.shortBuffers)
 			logger::warn("[DCLF] {} draws of the last epoch reach past their vertex or index buffer slice", draws.shortBuffers);
 		const auto& gpu = DCLF::GpuResources::Get().GetStats();
-		logger::info("[DCLF] game buffers for the render graph: {} stable, {} rejected; {} resolved so far in {:.1f} ms (slowest {:.3f} ms)", gpu.cached, gpu.rejected,
-			gpu.resolvedTotal, gpu.resolveMsTotal, gpu.resolveMsMax);
+		logger::info("[DCLF] game buffers for the render graph: {} stable, {} rejected; {} resolved so far in {:.1f} ms (slowest {:.3f} ms); parity: {} prefetched "
+					 "descriptions taken, {} of buffers the game had released by then (held by the prefetch's reference)",
+			gpu.cached, gpu.rejected, gpu.resolvedTotal, gpu.resolveMsTotal, gpu.resolveMsMax, gpu.prefetchTaken, gpu.prefetchReleased);
 		// Two halves, because they mean different things: outside kRuntimePassBits the derivation is meant
 		// to be exact and any difference is a defect; inside it the derivation is guessing at what
 		// GetRenderPasses computes per frame, and that number is what decides whether GetRenderPasses can

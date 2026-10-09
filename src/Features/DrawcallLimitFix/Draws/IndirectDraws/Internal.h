@@ -23,6 +23,7 @@
 #	include "Features/DrawcallLimitFix/Scene/LightingConstants.h"
 #	include "Features/DrawcallLimitFix/Scene/MaterialSources.h"
 #	include "Features/DrawcallLimitFix/Engine/PassCapture.h"
+#	include "Features/DrawcallLimitFix/Engine/PortalViews.h"
 #	include "Features/DrawcallLimitFix/Engine/PrimaryCull.h"
 #	include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 #	include "Features/DrawcallLimitFix/Draws/ShaderPrograms.h"
@@ -519,6 +520,7 @@ namespace DCLF
 		{
 			std::uint32_t objectCapacity = 0, geometryRows = 0, extraRows = 0, faceVertices = 0;
 			std::uint32_t treeCapacity = 0, fadeRootCapacity = 0, fadeEventCapacity = 0;
+			std::uint32_t portalWords = 0;  // the portal programs' words (PortalViews::Encoded)
 			std::uint32_t treeLodShapeCapacity = 0, treeLodMeshCapacity = 0;
 			bool operator==(const SceneSizing&) const = default;
 		};
@@ -572,19 +574,19 @@ namespace DCLF
 			// a frame), and CS_DCLF_FADE_PARITY's log (kFadeLogEntries roots from fadeLogBase, ~0u: none this frame).
 			Versioned fadeRoots, fadeStates;
 			std::shared_ptr<org::Buffer> fadeFrameBuffer, fadeLog;
-			std::shared_ptr<org::Buffer> fadeVisibility;  // the list processes' cull tests (Records.h, kFadeVisibilityLists blocks)
-			// What fadeVisibility holds, as the commits sent it (the parts of each block its counts use), and the buffer it is of.
-			std::vector<std::byte> fadeVisibilitySent;
-			const org::Buffer* fadeVisibilitySentTo = nullptr;
-			Versioned fadeRootLists;   // per root slot: its block (PrimaryCull::FadeRootLists)
+			// The main camera's portal programs (Records.h, kPortal*; PortalViews::Encoded), the depth commit's, and what the buffer
+			// holds as the commits sent it (the words that differ go up); a new version holds nothing.
+			Versioned portalPrograms;
+			std::vector<std::uint32_t> portalProgramsSent;
+			Versioned fadeRootPrograms;  // per root slot: its program (PortalViews::ProgramOf)
 			Versioned fadeAnimated;    // per root slot: the scene frame whose animation batch updated it
 			// What fadeAnimated holds, as the commits wrote it (the GPU only reads it): a frame's words go up in runs of the roots it
 			// stamped, runs closer than kFadeRunGap words merged, rather than a copy per root (about a hundred a frame at the bridge)
 			// or the span from the lowest to the highest (16 KB a frame in motion).
 			std::vector<std::uint32_t> fadeAnimatedMirror;
-			// What fadeRootLists holds, as the commits sent it: the lists go up in the runs that differ, not whole.
-			std::vector<std::uint32_t> fadeRootListsMirror;
-			std::uint64_t fadeRootListsHeld = ~0ull;      // the root and list versions it holds
+			// What fadeRootPrograms holds, as the commits sent it: the runs that differ go up, not the whole.
+			std::vector<std::uint32_t> fadeRootProgramsMirror;
+			std::uint64_t fadeRootProgramsHeld = ~0ull;  // the root and program versions it holds
 			// The states FadeStateCS publishes, one buffer per scene frame parity (the state rows are its own): the builds read the
 			// frame before's (FadeStatesReadIndex, through their latches). Zeroed once per backing (frameAheadZeroed): a zero
 			// generation is never a listing's, and the builds take the static row's state for it.
@@ -736,7 +738,7 @@ namespace DCLF
 		 */
 		template <class Uploads>
 		void UploadFadeRoots(const SceneStore::Tables& a_tables, std::uint32_t a_frame, const FadeFrame& a_inputs, std::uint32_t a_logBase, SceneBuffers& a_scene,
-			Uploads& a_uploads, const std::vector<std::byte>& a_visibility, std::uint32_t a_visibilityBlocks)
+			Uploads& a_uploads, const std::vector<std::uint32_t>& a_programs)
 		{
 			if (!a_scene.fadeState || !a_scene.fadeRoots)
 				return;
@@ -752,30 +754,22 @@ namespace DCLF
 			if (a_scene.fadeFrameNumber != a_frame) {
 				a_scene.fadeFrameNumber = a_frame;
 				a_scene.fadeFrame = a_inputs;
-				if (a_scene.fadeVisibility && a_visibilityBlocks && std::size_t(a_visibilityBlocks) * kFadeVisibilityBytes <= a_visibility.size()) {
-					// A block's header, the operators and plane sets its counts use, and the view planes: FadeStateCS reads no others
-					// (the counts bound the program it runs). Each part where it differs from what the buffer holds.
-					auto& sent = a_scene.fadeVisibilitySent;
-					if (a_scene.fadeVisibilitySentTo != a_scene.fadeVisibility.get() || sent.size() != a_visibility.size()) {
-						a_scene.fadeVisibilitySentTo = a_scene.fadeVisibility.get();
-						sent.assign(a_visibility.size(), std::byte{ 0xFF });
-					}
-					auto part = [&](std::size_t a_offset, std::size_t a_bytes) {
-						if (!a_bytes || std::memcmp(sent.data() + a_offset, a_visibility.data() + a_offset, a_bytes) == 0)
-							return;
-						std::memcpy(sent.data() + a_offset, a_visibility.data() + a_offset, a_bytes);
-						a_uploads(a_scene.fadeVisibility, a_visibility.data() + a_offset, a_bytes, a_offset);
-					};
-					for (std::uint32_t b = 0; b < a_visibilityBlocks; ++b) {
-						const std::size_t block = std::size_t(b) * kFadeVisibilityBytes;
-						std::uint32_t header[4];
-						std::memcpy(header, a_visibility.data() + block, sizeof(header));
-						const std::size_t ops = std::min<std::uint32_t>(header[1], kFadeVisibilityOps);
-						const std::size_t sets = std::min<std::uint32_t>(header[2], kFadeVisibilitySets);
-						part(block, kFadeVisibilityOpsOffset + ops * 16);
-						part(block + kFadeVisibilitySetsOffset, sets * kFadeVisibilitySetBytes);
-						part(block + kFadeVisibilityViewOffset, kFadeVisibilitySetBytes);
-					}
+				// The frame's portal programs (PortalViews::Encoded), the words that differ from what the buffer holds. Past the
+				// buffer's words (its growth is in flight), a header of no programs: the roots take the frustum alone that frame.
+				if (a_scene.portalPrograms) {
+					static const std::uint32_t kNone[kPortalHeaderBytes / 4]{};
+					const bool fits = a_programs.size() <= a_scene.portalWords;
+					const auto* words = fits ? a_programs.data() : kNone;
+					const std::size_t count = fits ? a_programs.size() : std::size(kNone);
+					auto& sent = a_scene.portalProgramsSent;
+					std::vector<std::uint32_t> differing;
+					for (std::uint32_t w = 0; w < count; ++w)
+						if (w >= sent.size() || sent[w] != words[w])
+							differing.push_back(w);
+					SendWordRuns(differing, [&](std::uint32_t a_first, std::uint32_t a_count) {
+						a_uploads(a_scene.portalPrograms, words + a_first, std::size_t(a_count) * sizeof(std::uint32_t), std::uint64_t(a_first) * sizeof(std::uint32_t));
+					});
+					sent.assign(words, words + count);
 				}
 				a_scene.fadeLogBase = a_logBase;
 			}
@@ -4705,9 +4699,9 @@ namespace DCLF
 			std::vector<std::array<float, 3>> nodeCentres;  // the nodes' world bound centres, read with them
 			std::vector<std::string> nodeNames;
 			std::vector<std::uint32_t> nodeFlags;
-			// What FadeStateCS was given that frame: the list blocks, each root's list and the radius it read (the sun entry row).
-			std::vector<std::byte> visibility;
-			std::vector<std::uint32_t> lists;
+			// What FadeStateCS was given that frame: the portal programs, each root's program and the radius it read (the sun entry row).
+			std::vector<std::uint32_t> programs;
+			std::vector<std::uint32_t> rootPrograms;
 			std::vector<float> radii, nodeRadii;  // the engine's world root camera when the nodes were read: position, lodAdjust
 		};
 		std::optional<FadeReadback> fadeReadback;

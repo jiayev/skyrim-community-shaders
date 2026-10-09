@@ -390,36 +390,25 @@ namespace DCLF
 	inline constexpr std::uint32_t kOcclusionSky = 0;
 	inline constexpr std::uint32_t kOcclusionPrecipitation = 1;
 
+
 	/**
-	 * @brief The main camera's cull test, as FadeStateCS repeats it for each root (the list processes' Process1, AE
-	 * 0x140e28390): the process's cull mode and flags, and its compound frustum (BSCompoundFrustum, the portal graph's portals
-	 * and occlusion planes), which Process1 evaluates (BSCompoundFrustum::Process, 0x140e320b0) before it runs the node's
-	 * OnVisible. The compound frustum exists only while a list job culls through it, and each list's process has its own
-	 * (its planes and portals are set up from its list's first entry): one block per list process (kFadeVisibilityLists), each
-	 * sampled by its job's first stand-in call (PrimaryCull::StandIn), else by the render thread after the jobs; a fade root
-	 * is tested against its entry's list's (PrimaryCull::FadeRootLists). Uploaded with the depth commit.
+	 * @brief The main camera's portal and occluder programs as DCLF's walk built them (Engine/PortalViews, T5a2), for FadeStateCS's
+	 * root test and the main view's member test (BuildDrawsCS): a ByteAddressBuffer uploaded with the depth commit.
 	 *
-	 * Layout (bytes): the header (mode, operator count, plane set count, first operator), then kFadeVisibilityOps operators
-	 * of four words (the engine's 12-byte {type, next if true, next if false}, padded; an operator of type 7 or 8 takes the
-	 * next record's first word as its plane set), then kFadeVisibilitySets plane sets (NiFrustumPlanes: six planes as
-	 * normal and constant, then the active mask).
+	 * Layout (bytes): the camera's view planes (NiFrustumPlanes: six {n, d}, the active mask at +96; kPortalSetBytes), then a header
+	 * {program count, 0, 0, 0}, then a directory entry per program (kPortalDirectoryBytes: flags, operator count, set count, first
+	 * operator, first operator record, first set, cull mode, 0), then the operator records (the engine's {type, next if true, next if
+	 * false}, padded to 16 bytes; a test's set index is the next record's first word, relative to the program's first set) and the
+	 * plane sets. Program 0 is unbound space; program 1 + i the portal graph's room i (graph +0x40). A root's program is
+	 * kPortalNoProgram when there is no walk this frame (the frustum alone).
 	 */
-	inline constexpr std::uint32_t kFadeVisibilityOps = 256;
-	inline constexpr std::uint32_t kFadeVisibilitySets = 64;
-	inline constexpr std::uint32_t kFadeVisibilityOpsOffset = 16;
-	inline constexpr std::uint32_t kFadeVisibilitySetsOffset = kFadeVisibilityOpsOffset + kFadeVisibilityOps * 16;
-	inline constexpr std::uint32_t kFadeVisibilitySetBytes = 112;
-	// Then the process's own view planes (NiCullingProcess::planes, +0x3C), which its sphere test uses (FUN_140d3ff10).
-	inline constexpr std::uint32_t kFadeVisibilityViewOffset = kFadeVisibilitySetsOffset + kFadeVisibilitySets * kFadeVisibilitySetBytes;
-	inline constexpr std::uint32_t kFadeVisibilityBytes = kFadeVisibilityViewOffset + kFadeVisibilitySetBytes;
-	inline constexpr std::uint32_t kFadeVisibilityLists = 16;       // blocks: one per list process (PrimaryCull's job slots)
-	inline constexpr std::uint32_t kFadeRootNoList = 0xFFFFFFFFu;  // a root no list job reached yet: the frustum alone
-	inline constexpr std::uint32_t kFadeVisibilityValid = 1u << 0;          // sampled this frame (else: the frustum alone)
-	inline constexpr std::uint32_t kFadeVisibilityCompound = 1u << 1;       // the compound frustum applies (cull mode not 3)
-	inline constexpr std::uint32_t kFadeVisibilitySkipView = 1u << 2;       // its skipViewFrustum: the frustum test is not made
-	inline constexpr std::uint32_t kFadeVisibilityIgnorePreprocess = 1u << 3;  // the process's ignorePreprocess, or cull mode 4
-	inline constexpr std::uint32_t kFadeVisibilityCullModeShift = 8;        // the process's cull mode (0-4)
-	inline constexpr std::uint32_t kFadeVisibilityViewPlanes = 1u << 4;     // the view planes are the process's (else the latch's)
+	inline constexpr std::uint32_t kPortalSetBytes = 112;
+	inline constexpr std::uint32_t kPortalHeaderBytes = kPortalSetBytes + 16;
+	inline constexpr std::uint32_t kPortalDirectoryBytes = 32;
+	inline constexpr std::uint32_t kPortalOpBytes = 16;
+	inline constexpr std::uint32_t kPortalNoProgram = 0xFFFFFFFFu;
+	inline constexpr std::uint32_t kPortalReached = 1u << 0;   // the walk reached it (else a room's children are not culled into)
+	inline constexpr std::uint32_t kPortalSkipView = 1u << 1;  // skipViewFrustum: the view test is not made
 
 	/**
 	 * @brief Fade roots on the GPU (FadeStateCS.hlsl; drawcall-limit-fix.md, "Fades on the GPU"). A member's fade node is

@@ -92,20 +92,8 @@ namespace DCLF
 		 * (NiCamera +0x184), for BuildDraws' fade test (kObjectFadeTest). Zero when the cut did not see a camera.
 		 */
 		std::array<float, 4> FadeEye() const { return fadeEye; }
-		/**
-		 * @brief The list processes' cull tests for FadeStateCS this frame: one block per list job slot (Records.h,
-		 * kFadeVisibilityBytes each), the first FadeVisibilityBlocks of them current after the list jobs.
-		 */
-		const std::vector<std::byte>& FadeVisibility() const { return fadeVisibility; }
-		std::uint32_t FadeVisibilityBlocks() const { return fadeVisibilityBlocks; }
-		/**
-		 * @brief Per fade root (by its node, SceneStore::Tables::fadeRootNode), the list job slot that culls its entry, whose
-		 * FadeVisibility block FadeStateCS tests it against (kFadeRootNoList: none yet). Render thread, after the list jobs.
-		 */
-		void FadeRootLists(const std::vector<const void*>& a_nodes, std::vector<std::uint32_t>& a_out) const;
-		/** @brief Changes when an entry's list slot does (or the snapshot): FadeRootLists' answer may then differ. */
+		/** @brief Whether a_node is an eligible entry's root of the cut's snapshot (the readback parity's description). */
 		bool IsEntry(const RE::NiAVObject* a_node) const { return cut.eligible.contains(a_node); }
-		std::uint64_t FadeRootListsVersion() const { return entrySlotsVersion.load(std::memory_order_relaxed); }
 		/**
 		 * @brief The animation job's fade updates since the list jobs before this frame's (render thread, after the list jobs): the
 		 * nodes and the inputs. FadeStateCS makes the same update on these roots before its cull test (Records.h, FadeFrame anim*).
@@ -113,11 +101,6 @@ namespace DCLF
 		void TakeAnimatedBatch(std::vector<const void*>& a_nodes, AnimatedFadeInputs& a_inputs);
 		/** @brief CS_DCLF_FADE_PARITY: the fade roots' nodes as the list jobs left them in a_frame (null: not taken that frame). */
 		const std::vector<FadeNodeState>* NodeSnapshot(std::uint32_t a_frame) const { return nodeSnapshotFrame == a_frame ? &nodeSnapshot : nullptr; }
-		/**
-		 * @brief FadeStateCS's EngineInView on one block, on the CPU: 1 in view, 0 culled, -1 when the block does not apply (the
-		 * shader then tests the latch's frustum); a_why names the test that decided it. For the parity checks.
-		 */
-		static int FadeVisibilityPort(const std::byte* a_block, const float a_centre[3], float a_radius, std::uint32_t a_nodeFlags, std::string& a_why);
 		/** @brief BSTreeNode::OnVisible's height test this frame, for BuildDraws (kObjectHeightTest): the base and the limit (+infinity: off). */
 		std::array<float, 2> TreeHeightTest() const { return treeHeight; }
 		/**
@@ -457,8 +440,7 @@ namespace DCLF
 			// The same by node, kept across snapshots with the set of DCLF members it was admitted with (MemberSignature): a root
 			// whose members changed (a decal attached, a part swapped) is admitted again only once the new ones are drawn.
 			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint64_t> admittedRoots;
-			std::vector<std::uint32_t> pendingAdmission;       // entries to check for admission (Admit): a new snapshot's, a member newly drawn, in view
-			std::vector<std::uint8_t> entrySlot;              // per entry index: the list job slot that culled it last (0xFF: none yet)
+			std::vector<std::uint32_t> pendingAdmission;       // entries to check for admission (RunAdmission): a new snapshot's, a member joined, a member not tracked yet
 			std::array<const RE::NiCullingProcess*, 16> processes{};  // the list processes this frame
 			std::uint32_t processCount = 0;
 		};
@@ -470,7 +452,6 @@ namespace DCLF
 		struct JobOut
 		{
 			std::vector<const RE::BSGeometry*> visible;
-			std::vector<std::uint32_t> pending;
 			std::uint64_t seen = 0, skipped = 0, visibleEntries = 0, notSettled = 0, notAdmitted = 0, walked = 0, walkMissed = 0;
 			std::uint64_t hidden = 0, engineMembers = 0, switchStale = 0, unselected = 0;
 			std::uint64_t unbound = 0;                      // DCLF geometries in view not bound yet, handed to the engine
@@ -518,11 +499,6 @@ namespace DCLF
 		std::array<float, 4> fadeEye{};  // FadeEye, captured in PrepareFrame
 		std::shared_ptr<const SetSnapshot> frameSet;  // the frame's set, for Owned (PrepareFrame)
 		std::array<float, 2> treeHeight{ 0.0f, std::numeric_limits<float>::infinity() };  // TreeHeightTest, captured in PrepareFrame
-		// FadeVisibility: a block per list job slot, sampled by each job's first stand-in call, else AfterListJobs.
-		std::vector<std::byte> fadeVisibility = std::vector<std::byte>(std::size_t(kFadeVisibilityLists) * kFadeVisibilityBytes);
-		std::uint32_t fadeVisibilityBlocks = 0;
-		std::atomic<std::uint32_t> sampledSlots{ 0 };       // this frame's sampled blocks, by slot bit
-		std::atomic<std::uint64_t> entrySlotsVersion{ 0 };  // FadeRootListsVersion
 		// The animation job's fade updates (FUN_1402cff60's call of FUN_14147a160, Hooks::AnimatedFade): the nodes since the last
 		// list jobs, with the inputs they were made with; at the list jobs' end they become the batch FadeStateCS applies before this
 		// frame's cull test (TakeAnimatedBatch).
@@ -533,9 +509,6 @@ namespace DCLF
 		// CS_DCLF_FADE_PARITY: the fade roots' nodes at the list jobs' end (before the next animation job), every 30th frame.
 		std::vector<FadeNodeState> nodeSnapshot;
 		std::uint32_t nodeSnapshotFrame = ~0u;
-		std::uint64_t visibilityOverflows = 0;  // frames whose compound frustum outgrew the block (the frustum alone that frame)
-		/** @brief A list job's first stand-in call, else AfterListJobs: its process's cull test into its slot's fadeVisibility block. */
-		void SampleFadeVisibility(const RE::NiCullingProcess* a_process, std::uint32_t a_slot);
 		std::uint64_t frameCounter = 0;
 		std::uint32_t fadePortCursor = 0;  // CheckFadePort's next entry
 		FadeState::PortCheck fadePort;      // its counts since the report

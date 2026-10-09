@@ -269,6 +269,24 @@ namespace DCLF
 		stats.filterTicks += Now() - start;
 	}
 
+	void SunAccumulation::ResetFrameSun()
+	{
+		bitsReady.store(false, std::memory_order_relaxed);
+		exclusionLive.store(false, std::memory_order_relaxed);
+		for (auto& cascade : frameState.cascades)
+			cascade = {};
+		frameState.cascadeCount = 0;
+		frameState.sunBits = 0;
+	}
+
+	void SunAccumulation::EndFullFrustumWindow()
+	{
+		// A frame whose full-frustum cull did not run (the sun does not draw: an interior) has no cascades and no exclusion:
+		// nothing of the last frame that ran it stays live.
+		if (!std::exchange(fullFrustumRan, false))
+			ResetFrameSun();
+	}
+
 	std::optional<bool> SunAccumulation::InSunCascades(const RE::NiBound& a_bound) const
 	{
 		// The cascades are captured only on a frame whose full-frustum cull applied the entry exclusion.
@@ -535,12 +553,8 @@ namespace DCLF
 			static void thunk(void* a_light, void* a_lists, void* a_arg)
 			{
 				auto& self = SunAccumulation::Get();
-				self.bitsReady.store(false, std::memory_order_relaxed);
-				self.exclusionLive.store(false, std::memory_order_relaxed);
-				for (auto& cascade : self.frameState.cascades)
-					cascade = {};
-				self.frameState.cascadeCount = 0;
-				self.frameState.sunBits = 0;
+				self.ResetFrameSun();
+				self.fullFrustumRan = true;
 				const std::int64_t start = Now();
 				func(a_light, a_lists, a_arg);
 				const std::int64_t ticks = Now() - start;

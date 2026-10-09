@@ -38,14 +38,15 @@ namespace DCLF
 			return std::wstring(a_value.begin(), a_value.end());
 		}
 
-		// CS_DCLF_SHADER_DEBUG=1 builds the SPIR-V with source-level debug info (for Nsight and
+		// The SPIR-V is built with source-level debug info by default for now (CS_DCLF_SHADER_DEBUG=0: without), so a GPU crash
+		// dump names the shader (Aftermath; and for Nsight and
 		// RenderDoc; the source is embedded, and SnapshotSources' copy is there for editing), still optimized. Part of the
 		// compile key, so the debug builds are cached beside the release ones. There is deliberately no
 		// -Od form: unoptimized code reads per-frame constant buffers (VS b6, PS b7) that the epochs do
 		// not supply, so every candidate is skipped and DCLF draws nothing.
 		bool ShaderDebug()
 		{
-			return SwitchEnabled(Switch::ShaderDebug);
+			return SwitchValue(Switch::ShaderDebug) != "0";
 		}
 
 		// The shader tree as the game sees it through MO2's virtual file system, copied to a real
@@ -363,6 +364,9 @@ namespace DCLF
 			// other inputs (PulledLightingSource).
 			if (a_pulled && a_sourceName == kSourcePath)
 				request.defines.push_back({ L"DCLF_PULLED_ROWS", L"1" });
+			// TEMP (the pulled stages' GPU fault, 2026-10-09): CS_DCLF_FETCH_GUARD, default on (Lighting.hlsl, DCLF_FETCH_GUARD).
+			if (a_pulled && !a_pixel && a_sourceName == kSourcePath && SwitchValue(Switch::FetchGuard) != "0")
+				request.defines.push_back({ L"DCLF_FETCH_GUARD", L"1" });
 			// CS_DCLF_FOLIAGE_PARITY: the colour pass's alpha-tested draws write what each pixel shows, and the Z-prepass's which of
 			// them owns its depth (Lighting.hlsl).
 			if (a_pixel && a_depthOnly == a_pulled && a_sourceName == kSourcePath && FoliageParityOn()) {

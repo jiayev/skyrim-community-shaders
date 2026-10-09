@@ -5264,7 +5264,7 @@ the extra list. So the object root's part of the lists is DCLF's:
 -   **Either way the engine's build still runs**, for the extra list and the camera's part. Its `AsNode` call on the
     object root (`0x14064be5a`, `mov rax,[rcx]; call [rax+0x18]`) is patched to return null, so it skips the walk.
 -   **Engine:** the engine's own build, filtered as above. Used in an interior or with no unbound space (its other
-    branches), and on parity frames. The lists are cleared first: `Main::Draw` clears them only at the frame's end,
+    branches; since T5b, indoors with the sun off, filtered without the sun's exclusion), and on parity frames. The lists are cleared first: `Main::Draw` clears them only at the frame's end,
     after the occlusion maps, so after a kept frame they still hold DCLF's build. Missing this put every root in
     twice and hung the render thread.
 
@@ -5338,7 +5338,8 @@ frustum lets through. `Process1` (`0x140e28390`, list processes recurse to geome
 -   The planes it deactivates on the way (a bound wholly inside one) change no outcome within a call, and `Process1`
     restores them around each node.
 
-So FadeStateCS repeats that test (`EngineInView`, `CompoundVisible`):
+So FadeStateCS repeats that test (`EngineInView`, `CompoundVisible`). (Since T5a the programs are DCLF's own, not sampled
+blocks: "The main camera's portals and occluders from DCLF".)
 -   **The block** (`Records.h`, `kFadeVisibility*`) holds the process's cull mode and flags, then the operator records
     and the plane sets, whole. The program references records past `freeOp` and sets past `freePlane`, so copying only
     the in-use counts broke the test.
@@ -6789,9 +6790,8 @@ view's draw for them. The engine's values are the parity's alone (`CS_DCLF_SET_P
         a corner of either inside the other's six planes, or one of 8 edges crossing a plane at a point inside the other
         five); a point light's sphere inside the camera's planes (`BSMultiBoundSphere::Func41`); a directional light always;
         then the lodFade cutoff (`0x1433dcfac <= (d^2 - r^2) * lodAdjust`). Each in the engine's operation order.
-    -   **The room test is a transitional engine read** (the user's choice): `FUN_140e14300` on the portal-graph entries
-        (`+0x30190`), sampled at the function's entry. The light's rooms are its last accumulation's. Removed with the portal
-        walk (T5).
+    -   **The room test** (`FUN_140e14300` on the portal-graph entries, `+0x30190`) was a transitional engine read, sampled
+        at the function's entry. Since T5a3 both sides are DCLF's: "The main camera's portals and occluders from DCLF".
     -   A kept light takes `shadowLightsAccum[slot]` and `maskIndex` (`+0x520`) from the 64-bit counter at `0x14338c904`
         (low: slot; high: mask index; the sun takes mask 0 and a slot per cascade). Each Accumulate advances the slot: 1 for a
         spot light, 2 for a two-hemisphere point light (its second slot is not written).
@@ -6840,6 +6840,202 @@ differ, 0 registrations under another root, 1,500 of 1,500 shadow views drawn, n
 `FocusToSlice` (m190) every focus view was left with withheld casters for want of a placement (`<- HOLES`). No spot light host met.
 T3d: s4 (interiors, point lights), e39 (focus views, the sun's volumetric copies), m192 (motion): 0 of 3,000 predictions per window
 differ, every shadow view drawn (0 not ready).
+
+## The occlusion maps' and reflection faces' views from DCLF (T4, 2026-10-09)
+
+The occlusion maps (Skylighting's sky map, the precipitation mask) and the water reflection's cube faces were drawn by DCLF
+already ("The occlusion maps, drawn by DCLF"; dclf-lod.md, "Water reflections"), but their views were captured after the
+engine's draws. Their views are now computed from the cameras the engine and Skylighting set up, before anything is
+drawn. The captures are the parity's alone (`CS_DCLF_SET_PARITY` or `CS_DCLF_PERSISTENT_PARITY`).
+
+-   **The occlusion maps (`IndirectDraws::OcclusionView`).** Skylighting calls `DrawcallLimitFix::OcclusionView(map)` once the
+    map's camera is set up (Precipitation's occlusion camera, after `SetupMask` or the projection alone; for the sky map
+    one quarter of its square), before `RenderMask`, on every frame the map renders.
+    -   DCLF computes the matrices and the eye (`SunViews::CameraMatrices`, `Block`), the viewport (the camera's port times
+        the map's size), depth range 0-1, target 10, slice 0, and back-face culling at the solid fill with no bias and no
+        scissor.
+    -   The parity, at `FinishAccumulating` (render mode 0x1C), compares the target, slice, rasterizer state, viewport and
+        format, c0-c11 and the eye: `occlusion views (T4 ...) <- OCCLUSION VIEW`. The renderer's viewport holds the last
+        draw's depth range less its bias step, so the parity compares the camera state's range (`0x14202b130`), as the
+        shadow views' does.
+-   **The reflection faces (`IndirectDraws::ReflectionFaceCamera`).** `ReflectionFaces` thunks the face's orientation
+    (`FUN_1414ed500` at `0x1414eda00`, inside the face render). At its return the camera faces the face, and nothing of
+    the face is culled or drawn. DCLF computes the face's VS_PerFrame block (`FaceBlock`), and takes its target from the
+    cube target's face view (slice = face index).
+    -   The face's block, as the engine uploads it for a face: c0-c15 (view, projection, view-projection, its unjittered
+        copy: no jitter for flags 8), c20 the projection's inverse and c24 the projection (FrameBuffer.hlsli names them the
+        other way round), c28-c39 the other inverses, c40 the eye. CameraPreviousViewProjUnjittered (c16) and
+        CameraPreviousPosAdjust (c41, fDRClampOffset included) are zero. FrameParams (c42) is the frame's. The dynamic
+        resolution parameters (c43, c44) come from the renderer state (`dynamicResolution*Ratio`, `fDRClampOffset`).
+    -   The parity, after the face's draws (`AfterFaceDraws`), compares every register (the computed inverses within 1e-3)
+        and the bound face: `reflection faces (T4 ...) <- FACE CAMERA`. Its first runs showed the c20/c24 order, the zero
+        c16 and c41, and that the mirror's last upload is not the frame's dynamic resolution: the first face of a frame
+        follows a view drawn without it.
+-   **No face cull of the tree LOD root.** `TESWaterReflections::Update` (`0x140520570`, called at `0x14052289c`) adds the
+    cube camera's roots before its face renders. Its add-root for LOD trees (`0x14052083f`, `0x14315b880`) is skipped
+    while the faces' tree LOD is DCLF's in a plain update of a covered frame (`ReflectionRootsOwned`): the engine neither
+    culls nor registers tree LOD there.
+-   **The LOD land and object roots stay the engine's (until T6).** The faces draw LOD chunks the main camera never
+    registers: terrain LOD under the loaded cells, which the faces need because they have no loaded terrain. DCLF builds
+    an object's bindings from its main-view registration, so those objects have none (`kObjectNoBindings`) and are not
+    reflection-phase members. Skipping their add-roots (`0x14052080d`, `0x140520826`) would leave holes in the
+    reflection in motion. The engine keeps culling them and DCLF withholds its members, as before.
+    -   The residue parity (every 30th update keeps every root) counts what the engine registers into the faces and DCLF
+        does not withhold, by root. Tree LOD: 0 (`<- REFLECTION RESIDUE` otherwise). LOD land and objects: reported as
+        T6's gate. m193-m197 (motion) had 46-325 passes a window (`Land`, `obj`, `objsnow`: tracked, no bindings, or
+        untracked); the bridge (y80-y83) had none.
+-   Measured: y83 (bridge) and y81 (bridge in rain: both maps), m197 (motion). Occlusion views: 0 of 300 differ per window
+    for both maps, texel parity as before (DCLF never farther). Face cameras: 0 of 600 differ, every face drawn. The tree
+    root was skipped in 290 of 300 updates (the rest are the residue parity's).
+
+## The main camera's portals and occluders from DCLF (T5a, 2026-10-09)
+
+**Before.** The main camera culls through compound frustums: the portal graph's rooms, portals and occluders
+([skyrim-engine-notes.md](./skyrim-engine-notes.md), "Portals, rooms and occluders"). DCLF read them from the engine's cull:
+`PrimaryCull` copied each list process's frustum into one of 16 blocks at the job's first stand-in call
+(`SampleFadeVisibility`), and mapped each root to the list job that culled its entry (`FadeRootLists`, `Cut::entrySlot`).
+FadeStateCS tested a root against its block. Two gaps followed:
+-   BuildDraws never applied the compound frustum to DCLF's own draws, only to whether a root's fade was serviced. DCLF drew
+    members behind occlusion planes, boxes and portals that the engine culls, and left them to the HZB.
+-   In a portal interior no root had a list slot (rooms are not the cut's entries), so every root got the frustum alone.
+
+**Now (T5a).**
+-   **`Engine/PortalViews`** ports the engine's walk (`FUN_1401a43c0`, `FUN_1414a41e0`) and the BSCompoundFrustum builders:
+    portals, occlusion planes and linked pairs, boxes with their silhouette hull, the program's finalisation. It runs every
+    frame on the render thread after the full-frustum cull (`PrimaryCull::AfterFullFrustum`), from the world camera and the
+    ShadowSceneNode's portal graph. What the engine keeps on the shapes (corners, edge flags, per-frame states, box sets) is
+    DCLF's own scratch: nothing is written to an engine object.
+-   **The programs on the GPU** (`Records.h`, `kPortal*`; `PortalPrograms.hlsli`): one buffer a frame with the view planes, a
+    directory (unbound space, then each of the graph's rooms with its cull mode) and the records; it grows with the encoding
+    (`ReserveSceneTables`). Each fade root's program is its nearest room ancestor's (`PortalViews::ProgramOf`), sent when the
+    roots change or a room's children do (the attach and detach detours, `NoteStructure`).
+-   **FadeStateCS** tests a root through its program (`EngineInView` -> `PortalTest`). **BuildDraws' first phase** (the main
+    camera) rejects a member whose root's program culls its bound, as the frustum does (an object with no fade root: the
+    frustum alone).
+-   Gone: `SampleFadeVisibility`, `FadeRootLists`, `Cut::entrySlot`, the 16 blocks and their constants.
+
+**Parity** (set or persistent parity: the `portal views` line, `<- PORTAL VIEW`): before the list jobs, DCLF's room set,
+each room's program (tokens, branches, first operator, `skipViewFrustum`, every set's mask and active planes) and unbound
+space's tokens against the engine's portal-graph entry; frames where the camera moved or turned after the engine's walk
+are counted apart; the boxes' corners and silhouette sets against the engine's (`+0x134`, `+0x54`, `+0xC4`). The fade
+visibility parity (`CS_DCLF_FADE_PARITY`) now tests DCLF's program (`PortalViews::Visible`, the CPU twin of
+`PortalTest`, on the uploaded words) against the engine's actual cull of each root.
+
+**Measured** (p1-p9; Dragonsreach, the Sleeping Giant Inn, motion through Riverwood's exterior):
+-   Interiors: every room program equal, up to 1,500 a window (rooms reached by several portals included), no room missing or
+    extra, the walks' room lists equal.
+-   Exteriors: unbound space's programs equal, the boxes' corners and sets equal (after the corner grouping fix below), the
+    view planes equal to the list process's own on every frame.
+-   Fade visibility parity: 0 of 46,000-48,000 a window on most windows; 1-3 differ on a few (below).
+-   Dragonsreach: about 45 more set members culled a frame (the set parity's "GPU-culled", 714k -> 728k a window).
+
+**Found on the way.** The box corners' grouping (`FUN_140e209e0`): corners 0 and 4 are `((X + C) + Y) +- Z`, which the
+decompiler showed otherwise for x; read from its disassembly (one ulp at Riverwood's coordinates moved a plane by 0.06).
+
+**Known differences** (counted, not fixed):
+-   **An occlusion plane other engine code rejected.** At the walk the engine skips a graph plane in state 2, a state the walk
+    itself never writes for planes; at DCLF's build every graph plane is in state 2 (another culler's test). DCLF tests the
+    plane against the camera instead: on 22 frames of one window it used a plane the engine did not. Reading that state
+    would be an engine cull read (policy 1).
+-   **Planes retired by a parent.** The engine retires a plane for a node's children once the parent is wholly inside it; a
+    root that pokes past its parent's bound then skips that plane. DCLF tests each root alone: 1-3 roots a window wholly
+    behind the near or a side plane that the engine still services (nothing of them is drawn).
+
+**A shadow light's rooms (T5a3).** `CalculateActiveShadowCasterLights` keeps a light only if its portal-graph entry shares a
+room with the world camera's (`FUN_140e14300`: both see unbound space, or a room in common). T3b read both entries; now both
+sides are DCLF's: the camera's is this frame's walk (`Frame::visibleUnbound`, `accumulated`), the light's
+`PortalViews::WalkLight`, a port of `FUN_1414a2530` -> `FUN_1414a6400`, kept per light (`LightSelection::lightRooms`):
+-   **Not walked** (the entry stays as it was, the constructor's: unbound space, no rooms): no graph or a graph with no rooms
+    (every exterior met), the NiLight hidden or its fade under 0.05, a light on an object node (`BSLight +0x130`).
+-   **Not portal-strict** (`+0x47`): unbound space, and every graph room whose bound meets the light's sphere (`CheckBound2`,
+    vfunc 0x41).
+-   **Portal-strict:** Traverse with frustums from every room holding the light camera's near point, each a first walk (so
+    `visibleUnboundSpace` is the last walk's), else from unbound space. The light's room process (`+0x128`) has its own
+    camera: an orthographic one at the light (frustum `-1 1 1 -1`, near 0.1, viewport `0 1 1 0.5`), read as a camera, with
+    the NiLight's rotation and position put on it as the walk does. No view planes are on (mask 0, plane 0 zero). The
+    portals' view test is the process's vfunc 0xD8, `BSParabolicCullingProcess::TestBaseVisibility2` (0x14151a120): the
+    portal's sphere {centre, larger half extent} within the light's radius; with `+0x30200` set (a shadow light's process)
+    either side of the light's plane.
+-   Shared with the main walk, as the engine's are on the shapes: the occluder states and box sets (this frame's), and the
+    edge flags. A light's walk starts from a copy of the flags and leaves it only when the light is kept
+    (`CommitLightWalk`): the engine walks a light only once kept.
+-   The engine tests its light entry as its last walk left it (when last kept); the parity (`light rooms`, `<- LIGHT ROOMS`)
+    compares DCLF's verdict and room set with the engine's at the function's entry, a light moved since its engine walk
+    apart, and checks the process is as assumed (no view planes, its vfunc 0xD8).
+
+Measured (q1-q5, the Sleeping Giant Inn: no rooms; Dragonsreach: walked, 300-900 tests a window): verdicts differ 0 in every
+window; the light selection parity 0. Room sets: ~630 a run differed while the walk had its own edge flags and ignored
+`+0x30200` (q1-q3: one light reached a room the engine's sphere test kept out); since, 1-2 a run (q4, q5), never a verdict.
+
+## Interiors' lists and the stand-in without the engine's verdicts (T5b, T5c, 2026-10-09)
+
+**Found:** indoors the sun does not draw (`0x14338c911`), so `CalculateAndDrawShadowCasterLights` runs no full-frustum cull
+and `SunAccumulation`'s exclusion is never made. The stand-in required it (`PrepareFrame`), and the list filter required its
+`excluded` bit. Yet the stand-in ran indoors on every frame: `exclusionLive` was cleared only by the full-frustum cull's hook,
+so it stayed set from the last exterior frame, with that frame's cascades (`InSunCascades` answered from them). A game
+loaded straight into an interior would never have stood in.
+
+**Now:**
+-   **DCLF's walk right after the engine's** (`PrimaryCull`'s `PortalWalk` hook on `Main::Update`'s call of `FUN_1401a43c0`,
+    0x14064685f; was `AfterFullFrustum`): from the camera the engine walked from, before the scene lists are built. The
+    portal parity's "camera moved after the engine's walk" frames are gone (0 in every window since).
+-   **The lists' branch from DCLF's walk:** `ListsKeepable` reads `PortalViews::VisibleUnbound()` (atomic, for the lists'
+    build job), not the list process's entry.
+-   **The sun's frame state cleared when its cull does not run:** `SunAccumulation::EndFullFrustumWindow` (at
+    `AfterFullFrustum`) clears the cascades, the exclusion and the sun's bits on a frame without the full-frustum cull.
+-   **The stand-in needs the exclusion only when the sun draws:** `PrepareFrame` runs the cut when the exclusion is live or
+    the sun is off (no cascades to take an entry out of).
+-   **The list filter indoors:** with the sun off no full-frustum cull reads the lists, so a root qualifies without the
+    exclusion (admitted, nothing to walk, no engine-drawn part). `unexcluded` counts only frames whose sun drew.
+-   **Admission by readiness alone (T5c):** an entry was checked for admission when the engine's `Process1` left it
+    `kAccumulated` (in view), an engine cull result. Now only events check it: a new snapshot's entries, an entry a member
+    joined the set in, and, retried each frame, an entry with a member not tracked yet (a stale snapshot during a load).
+    The stand-in reads nothing of the engine's verdict.
+
+What is left of the stand-in: an entry with engine-drawn parts (the engine culls it whole, for those parts' node), one with a
+member not bound (handed to the registration), one not yet admitted, and, in a portal interior, the roots under the rooms
+(the lists hold rooms, whose `OnVisible` recurses into them: one lookup each). Everything else is out of the lists.
+
+Measured (r1, r4: the Sleeping Giant Inn, Dragonsreach; r2, r3: Riverwood in motion; set and persistent parities):
+-   The Sleeping Giant Inn (no rooms): the roots the stand-in reaches fell from ~375 to 24-43 a frame, ~340 left out of the
+    lists; Dragonsreach (rooms): ~940-1,110 stood in through the rooms, as before.
+-   The parity frames' dry runs: 0 stand-in disagreements (1,790-11,900 roots); members lost while out 0; filtered frames
+    without the sun's exclusion 0.
+-   The exterior: the lists kept and rebuilt as before, ~2,385 roots left out; admission unchanged (~5 entries a frame not
+    yet admitted, against ~4 with the engine's verdict).
+-   No new parity finding (the open ones: the extras rows, `STALE MATERIAL`, `TREE WIND`, the start window's `FADE`).
+
+## Device faults in motion: the reflection faces drew the frame before's index pool (fixed, 2026-10-09)
+
+**Symptom.** In motion runs the device was lost now and then, about one run in two at the end: an MMU read fault in a
+vertex shader (`vertex_01`, Aftermath fingerprint `7667637325108608247`), seen since 10-02, always a few seconds after
+NPCs or cells streamed in. Aftermath's resource tracking (on: `DXVK_AFTERMATH_RESOURCE_TRACKING`) found no resource at the
+faulting address, live or destroyed: not a freed buffer, an address past one.
+
+**Finding it.**
+-   With `CS_DCLF_SHADER_DEBUG` on (now the default) the decoder (`aftermath-decode --spirv` over ORGModuleServices'
+    cache) named the shader as DCLF's: the pulled Lighting vertex stage, built without `DCLF_DEPTH_ONLY`, that is the
+    reflection faces' forward build.
+-   A fetch guard (`CS_DCLF_FETCH_GUARD`, TEMP, default on: `Lighting.hlsl`, `DCLF_FETCH_GUARD`) checks the sequence and
+    the fetch and, on a failure, reads a beacon address instead (`0x1D0000000000 + check << 36 + object << 12`), so the
+    page fault names the check. The next fault: `0x1d4001f27000`, check 4 (the vertex index past the vertex buffer's
+    size), object 7975.
+-   Disproved on the way: `GpuResources::Prefetch` described the game's buffers without a reference until `Acquire`
+    leased them, keyed by a pointer a released buffer's successor could reuse. It holds a reference now (a real hole), but
+    no prefetched buffer was released inside that window (0 of 13,546), and the fault recurred.
+
+**Cause.** The faces drew at `BeforeShadowMaps`, before any commit of the frame, while the index pool is brought to the
+frame's publication by its first commit that draws from it (the shadow commit at `AfterShadowMaps`, else the depth
+commit). So the faces drew the frame's scene list (its ring entry) against the index pool, depth inputs, object records and
+geometry rows as the frame before left them. A geometry slot the new publication gave another mesh, or a range the pool
+gave another slot, then drew another mesh's indices against its vertices, past their end. That is the live snapshot
+changing under the draws: one epoch's draws read two publications.
+
+**Fix.** The faces draw right after the depth commit (the depth pass's hook, `Segment::Reflection` after `ZPrepass` in the
+epoch order), which brings the pool and the scene's buffers to the frame's publication; the colour frame record they read
+is still the frame before's. Their staleness rule is now: this frame's depth commit, the frame before's colour commit.
+-   Measured: before, 4 of 7 motion runs (m196-m202) lost the device; after, 4 of 4 (m203-m206) did not, the faces drawn
+    as before (600 of 600 a window once settled), the bridge (y85) with 0 of 600 face cameras differing.
 
 ## Point lights' culls: the category filter, and the light candidates (2026-10-01)
 
@@ -7829,7 +8025,7 @@ where the tree rows changed since. What remains is inherent to the frame-ahead d
 - a tree whose row changes keeps the old wind for one frame.
 
 **ENGINE FADE: two engine paths FadeStateCS did not model.**
-- *A visibility block per list process.* Each scene list's culling process has its own view planes and compound frustum
+- *A visibility block per list process* (replaced by T5a's programs, "The main camera's portals and occluders from DCLF"). Each scene list's culling process has its own view planes and compound frustum
   (set up from its list's first entry). FadeStateCS tested every root against one sampled process.
   - `PrimaryCull` now samples one block per list job slot (`kFadeVisibilityLists`), on each job's first stand-in call.
   - It records each entry's slot (`Cut::entrySlot`).

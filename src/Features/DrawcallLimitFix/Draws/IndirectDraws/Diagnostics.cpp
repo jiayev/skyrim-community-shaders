@@ -1096,16 +1096,15 @@ namespace DCLF
 		readback.nodes.resize(readback.roots.size());
 		readback.engine.assign(readback.roots.size(), 0);
 		{
-			const auto& cull = PrimaryCull::Get();
-			readback.visibility.assign(cull.FadeVisibility().begin(), cull.FadeVisibility().begin() + std::size_t(cull.FadeVisibilityBlocks()) * kFadeVisibilityBytes);
-			std::vector<std::uint32_t> lists;
-			cull.FadeRootLists(a_tables.fadeRootNode, lists);
-			readback.lists.assign(readback.roots.size(), kFadeRootNoList);
+			const auto& portals = PortalViews::Get();
+			readback.programs = portals.Encoded();
+			readback.rootPrograms.assign(readback.roots.size(), kPortalNoProgram);
 			readback.radii.assign(readback.roots.size(), 0.0f);
 			readback.nodeRadii.assign(readback.roots.size(), 0.0f);
 			readback.nodeFlags.assign(readback.roots.size(), 0u);
 			for (std::size_t i = 0; i < readback.roots.size(); ++i) {
-				readback.lists[i] = base + i < lists.size() ? lists[base + i] : kFadeRootNoList;
+				if (const auto* root = base + i < a_tables.fadeRootNode.size() ? static_cast<const RE::NiAVObject*>(a_tables.fadeRootNode[base + i]) : nullptr)
+					readback.rootPrograms[i] = portals.ProgramOf(root);
 				const auto object = readback.roots[i].object;
 				const auto* entryNode = object < a_tables.sunEntryNode.size() ? a_tables.sunEntryNode[object] : nullptr;
 				const float entry = entryNode ? entryNode->worldBound.radius : -1.0f;
@@ -1229,13 +1228,10 @@ namespace DCLF
 						p.engineFirst += fmt::format("; at this frame's eye the metric is {}; FadeStateCS's before {} lastVisible {} (after {}), the engine's lastVisible {}",
 							now.metric, entry.before.metric, entry.before.lastVisible, g.lastVisible, n.lastVisible);
 						{
-							// FadeStateCS's test again, on what it was given: the root's list block, its centre and the radius it read.
-							const std::uint32_t list = done.lists[i];
-							std::string why = "no list: the latch's frustum";
-							int port = -2;
-							if (list != kFadeRootNoList && (std::size_t(list) + 1) * kFadeVisibilityBytes <= done.visibility.size())
-								port = PrimaryCull::FadeVisibilityPort(done.visibility.data() + std::size_t(list) * kFadeVisibilityBytes, entry.centre, done.radii[i],
-									done.nodeFlags[i], why);
+							// FadeStateCS's test again, on what it was given: the root's portal program, its centre and the radius it read.
+							const std::uint32_t list = done.rootPrograms[i];
+							std::string why;
+							const int port = PortalViews::Visible(done.programs, list, entry.centre, done.radii[i], done.nodeFlags[i], why);
 							{
 								// How far below its listed entry the root is (the cut lists entries; the engine culls a child after its parents).
 								const auto* node = static_cast<const RE::NiAVObject*>(SceneStore::Get().GetTables().fadeRootNode[entry.root]);
@@ -1246,8 +1242,8 @@ namespace DCLF
 								p.engineFirst += fmt::format("; {} below its entry '{}'", at ? fmt::format("{} levels", depth) : std::string("no entry"),
 									at && at->name.c_str() ? at->name.c_str() : "");
 							}
-							p.engineFirst += fmt::format("; its list {} ({} blocks), radius read {} (the node's {}), the test on those {} ({})",
-								static_cast<std::int32_t>(list), done.visibility.size() / kFadeVisibilityBytes, done.radii[i], done.nodeRadii[i], port, why);
+							p.engineFirst += fmt::format("; its portal program {}, radius read {} (the node's {}), the test on those {} ({})",
+								static_cast<std::int32_t>(list), done.radii[i], done.nodeRadii[i], port, why);
 						}
 						if (i < done.nodeCentres.size())
 							p.engineFirst += fmt::format("; the node '{}' centre ({:.0f} {:.0f} {:.0f}) at {:.0f}", done.nodeNames[i], done.nodeCentres[i][0], done.nodeCentres[i][1],

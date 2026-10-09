@@ -484,6 +484,34 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 	first.stride = vertexBuffer.w;
 	second.address = DCLFAddress(streamBuffer.xy);
 	second.stride = streamBuffer.w;
+#		if defined(DCLF_FETCH_GUARD)
+	// [TEMP] The pulled stages' GPU fault (2026-10-09): the sequence and the fetch checked before any read through them. A failed
+	// check reads a beacon address instead, so the device's page fault names it: 0x1D0000000000 + check << 36 + the object word's
+	// low 24 bits << 12. Checks: 1 the sequence's instance word is not this draw's instance (a slot not written for it); 2 a row's
+	// address is 0; 3 no vertex buffer address; 4 the vertex past its first stream's size; 5 past its second stream's size.
+	{
+		uint check = 0;
+		const uint instanceWord = vk::RawBufferLoad<uint>(sequence + 88);
+		if (instanceWord != a_instance)
+			check = 1;
+		else if (all(rows.xy == 0) || all(rows.zw == 0))
+			check = 2;
+		else if (all(vertexBuffer.xy == 0))
+			check = 3;
+		else if (uint64_t(index + 1) * vertexBuffer.w > uint64_t(vertexBuffer.z))
+			check = 4;
+		else if (uint64_t(index + 1) * streamBuffer.w > uint64_t(streamBuffer.z))
+			check = 5;
+		if (check != 0) {
+			const uint64_t beacon = 0x1D0000000000ull + (uint64_t(check) << 36) + (uint64_t(DCLFObjectWord & 0xFFFFFFu) << 12);
+			first.address = beacon;
+			second.address = beacon;
+			first.stride = 0;
+			second.stride = 0;
+			index = vk::RawBufferLoad<uint>(beacon);
+		}
+	}
+#		endif
 
 	VS_INPUT input;
 	input.Position = asfloat(vk::RawBufferLoad<uint4>(DCLFAttribute(0, index, first, second)));

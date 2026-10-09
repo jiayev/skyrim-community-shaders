@@ -1,3 +1,4 @@
+#include "DrawcallLimitFix/PortalPrograms.hlsli"
 // Drawcall Limit Fix: the fade roots' state on the GPU (drawcall-limit-fix.md, "Fades on the GPU"; Records.h, FadeRootStatic).
 //
 // The engine updates a BSFadeNode's fade and LOD state in its OnVisible, for the main camera's cull, whenever the node's bound
@@ -20,8 +21,8 @@ cbuffer FadeStateConstants : register(b0)
 	uint LogIndex;      // RWStructuredBuffer<FadeLogEntry> (CS_DCLF_FADE_PARITY)
 	uint OutIndex0;     // RWStructuredBuffer<FadeNodeState>: the published states of the even frames
 	uint OutIndex1;     // and of the odd
-	uint VisibilityIndex;  // ByteAddressBuffer: the list processes' cull tests (Records.h, kFadeVisibilityLists blocks)
-	uint RootListsIndex;   // StructuredBuffer<uint>: each root's block, the list process that culls its entry
+	uint ProgramsIndex;      // ByteAddressBuffer: the main camera's portal programs (Records.h, kPortal*; PortalPrograms.hlsli)
+	uint RootProgramsIndex;  // StructuredBuffer<uint>: each root's program (its room's; kPortalNoProgram: the frustum alone)
 	uint AnimatedIndex;    // StructuredBuffer<uint>: per root, the scene frame whose animation batch updated it
 	uint EventsIndex;      // RWStructuredBuffer<uint>: the write-back's events, after a count word (Records.h, FadeEvent)
 	uint ReportedIndex;    // RWStructuredBuffer<uint2>: per root, the generation and the milestone last reported
@@ -394,107 +395,21 @@ bool InView(float3 a_centre, float a_radius)
 }
 
 // The main camera's cull test for the root, as the list processes' Process1 (AE 0x140e28390) makes it before the node's
-// OnVisible: the node's always-draw and preprocessed flags, the process's cull mode, and with a compound frustum (the portal
-// graph's portals and occlusion planes) BSCompoundFrustum::Process (0x140e320b0) after the view test. Records.h,
-// kFadeVisibility*, has the block's layout; PrimaryCull::SampleFadeVisibility fills it.
+// OnVisible, through DCLF's portal programs (PortalPrograms.hlsli): the node's always-draw and preprocessed flags, its room's
+// cull mode, the view planes, then its room's (or unbound space's) compound frustum.
 static const uint kFadeRootAlwaysDraw = 1u << 20;
 static const uint kFadeRootPreprocessed = 1u << 21;
 static const uint kFadeRootPreprocessHidden = 1u << 22;
-static const uint kFadeVisibilityValid = 1u << 0;
-static const uint kFadeVisibilityCompound = 1u << 1;
-static const uint kFadeVisibilitySkipView = 1u << 2;
-static const uint kFadeVisibilityIgnorePreprocess = 1u << 3;
-static const uint kFadeVisibilityOpsOffset = 16;
-static const uint kFadeVisibilitySetsOffset = 16 + 256 * 16;
-static const uint kFadeVisibilitySetBytes = 112;
-static const uint kFadeVisibilityViewOffset = kFadeVisibilitySetsOffset + 64 * 112;
-static const uint kFadeVisibilityBytes = kFadeVisibilityViewOffset + 112;  // a block; one per list process
-static const uint kFadeVisibilityLists = 16;
-static const uint kFadeVisibilityViewPlanes = 1u << 4;
 
-// The process's own sphere test (FUN_140d3ff10): outside when the bound is wholly behind an active plane.
-bool ProcessInView(ByteAddressBuffer a_block, uint a_base, float3 a_centre, float a_radius)
+// The cull test of the root's program (kPortalNoProgram, or no programs: the frustum alone).
+bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits, uint a_program)
 {
-	const uint mask = a_block.Load(a_base + kFadeVisibilityViewOffset + 96u);
-	[unroll] for (uint p = 0; p < 6u; ++p) {
-		if ((mask & (1u << p)) == 0u)
-			continue;
-		const float4 plane = asfloat(a_block.Load4(a_base + kFadeVisibilityViewOffset + p * 16u));
-		const float d = ((plane.y * a_centre.y + plane.x * a_centre.x) + a_centre.z * plane.z) - plane.w;
-		if (d <= -a_radius)
-			return false;
-	}
-	return true;
-}
-
-// BSCompoundFrustum::Process: the operator program from its first operator. Type 2 accepts and 3 rejects; type 7 passes
-// unless the bound is wholly outside an active plane of its set; type 8 passes unless the bound is wholly inside every
-// active plane of its set; either goes to its record's next-if-true or next-if-false. The planes the engine deactivates
-// as it goes (a bound wholly inside one) change no outcome within one call.
-bool CompoundVisible(ByteAddressBuffer a_block, uint a_base, uint4 a_header, float3 a_centre, float a_radius)
-{
-	uint op = a_header.w;
-	[loop] for (uint step = 0; step < 512u; ++step) {
-		if (op >= a_header.y)
-			return true;
-		const uint3 record = a_block.Load3(a_base + kFadeVisibilityOpsOffset + op * 16u);
-		if (record.x == 2u)
-			return true;
-		if (record.x == 3u)
-			return false;
-		bool result = false;
-		if (record.x == 7u || record.x == 8u) {
-			const uint set = op + 1u < a_header.y ? a_block.Load(a_base + kFadeVisibilityOpsOffset + (op + 1u) * 16u) : 0xFFFFFFFFu;
-			if (set >= a_header.z)
-				return true;
-			const uint base = a_base + kFadeVisibilitySetsOffset + set * kFadeVisibilitySetBytes;
-			const uint mask = a_block.Load(base + 96u);
-			if (mask == 0u) {
-				result = record.x == 7u;
-			} else {
-				uint p = 0;
-				[loop] for (; p < 6u; ++p) {
-					if ((mask & (1u << p)) == 0u)
-						continue;
-					const float4 plane = asfloat(a_block.Load4(base + p * 16u));
-					// The engine's order: y, then x, then z, less the constant.
-					const float d = ((plane.y * a_centre.y + plane.x * a_centre.x) + a_centre.z * plane.z) - plane.w;
-					if (d <= -a_radius)
-						break;
-					if (record.x == 8u && d < a_radius)
-						break;
-				}
-				result = record.x == 7u ? p == 6u : p != 6u;
-			}
-		}
-		op = result ? record.y : record.z;
-	}
-	return true;
-}
-
-// The cull test of the list process that culls the root's entry (a_list: its block; kFadeRootNoList: the frustum alone).
-bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits, uint a_list)
-{
-	if (VisibilityIndex == 0 || a_list >= kFadeVisibilityLists)
+	if (ProgramsIndex == 0)
 		return InView(a_centre, a_radius);
-	ByteAddressBuffer block = ResourceDescriptorHeap[VisibilityIndex];
-	const uint base = a_list * kFadeVisibilityBytes;
-	const uint4 header = block.Load4(base);
-	if ((header.x & kFadeVisibilityValid) == 0u)
-		return InView(a_centre, a_radius);
-	if (a_radius == 0.0f && (a_rootBits & kFadeRootAlwaysDraw) == 0u)
-		return false;
-	const uint cullMode = (header.x >> 8) & 0xFFu;
-	if (cullMode == 2u)
-		return false;
-	if (cullMode == 1u || (a_rootBits & kFadeRootAlwaysDraw) != 0u)
-		return true;
-	if ((a_rootBits & kFadeRootPreprocessed) != 0u && (header.x & kFadeVisibilityIgnorePreprocess) == 0u)
-		return (a_rootBits & kFadeRootPreprocessHidden) == 0u;
-	const bool view = (header.x & kFadeVisibilityViewPlanes) != 0u ? ProcessInView(block, base, a_centre, a_radius) : InView(a_centre, a_radius);
-	if ((header.x & kFadeVisibilityCompound) != 0u)
-		return ((header.x & kFadeVisibilitySkipView) != 0u || view) && CompoundVisible(block, base, header, a_centre, a_radius);
-	return view;
+	ByteAddressBuffer programs = ResourceDescriptorHeap[ProgramsIndex];
+	const int test = PortalTest(programs, a_program, a_centre, a_radius, (a_rootBits & kFadeRootAlwaysDraw) != 0u, (a_rootBits & kFadeRootPreprocessed) != 0u,
+		(a_rootBits & kFadeRootPreprocessHidden) != 0u);
+	return test < 0 ? InView(a_centre, a_radius) : test != 0;
 }
 
 // The fade write-back (drawcall-limit-fix.md, "The fade write-back"): the engine reads a stood-in root's node (the tree LOD's
@@ -597,12 +512,12 @@ void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
 			FadeUpdate(state, root, centre, root.FadeAmount);
 		F = frame;
 	}
-	uint list = 0xFFFFFFFFu;
-	if (RootListsIndex != 0) {
-		StructuredBuffer<uint> rootLists = ResourceDescriptorHeap[RootListsIndex];
-		list = rootLists[index];
+	uint program = kPortalNoProgram;
+	if (RootProgramsIndex != 0) {
+		StructuredBuffer<uint> rootPrograms = ResourceDescriptorHeap[RootProgramsIndex];
+		program = rootPrograms[index];
 	}
-	if (EngineInView(centre, radius, root.Bits, list))
+	if (EngineInView(centre, radius, root.Bits, program))
 		state.Verdict = OnVisible(state, root, centre);
 	if (animated)
 		state.Verdict |= kFadeVerdictAnimated | (updates << 5);

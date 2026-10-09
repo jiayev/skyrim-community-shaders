@@ -10,7 +10,6 @@
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 #include "Features/DrawcallLimitFix/Scene/TreeLod.h"
 
 #include <span>
@@ -227,35 +226,34 @@ namespace DCLF
 		if (!set || !(set->drawn & kSetReflection) || !(set->PhasesOf(a_pass->geometry) & kSetReflection)) {
 			// The residue parity: tree LOD under the tree root, anything else but the sky under the LOD land and objects roots.
 			if (const auto watch = reflectionResidueWatch.load(std::memory_order_acquire); watch & (treeLod ? ReflectionFaces::kTreeRoot : ReflectionFaces::kLodRoots))
-				NoteReflectionResidue(a_pass);
+				NoteReflectionResidue(a_pass, treeLod);
 			return false;
 		}
 		reflectionWithheld.fetch_add(1, std::memory_order_relaxed);
 		return true;
 	}
 
-	void PassCapture::NoteReflectionResidue(const RE::BSRenderPass* a_pass)
+	void PassCapture::NoteReflectionResidue(const RE::BSRenderPass* a_pass, bool a_treeLod)
 	{
 		const auto* sky = RE::Sky::GetSingleton();
 		const RE::NiNode* skyRoot = sky ? sky->root.get() : nullptr;
 		for (const RE::NiAVObject* node = a_pass->geometry; node; node = node->parent)
 			if (node == skyRoot)
 				return;
-		if (reflectionResidue.fetch_add(1, std::memory_order_relaxed) == 0) {
+		if ((a_treeLod ? reflectionResidueTree : reflectionResidueLod).fetch_add(1, std::memory_order_relaxed) == 0) {
 			std::scoped_lock lock(reflectionResidueLock);
-			const auto* name = a_pass->geometry->name.c_str();
-			// What DCLF holds of it: its slot in the frame's tables (-1: none) and its set phases there.
-			const auto& store = SceneStore::Get();
-			const std::int32_t slot = store.FindObject(a_pass->geometry);
-			reflectionResidueFirst = fmt::format("'{}' (technique {:#x}, hint {}, slot {}, phases {:#x})", name ? name : "?", a_pass->passEnum,
-				static_cast<std::uint32_t>(a_pass->accumulationHint), slot, store.SetPhasesOf(slot));
+			if (reflectionResidueFirst.empty()) {
+				const auto* name = a_pass->geometry->name.c_str();
+				reflectionResidueFirst = fmt::format("'{}' (technique {:#x}, hint {})", name ? name : "?", a_pass->passEnum, static_cast<std::uint32_t>(a_pass->accumulationHint));
+			}
 		}
 	}
 
 	PassCapture::ReflectionResidue PassCapture::TakeReflectionResidue()
 	{
 		ReflectionResidue out;
-		out.passes = reflectionResidue.exchange(0, std::memory_order_relaxed);
+		out.lodPasses = reflectionResidueLod.exchange(0, std::memory_order_relaxed);
+		out.treePasses = reflectionResidueTree.exchange(0, std::memory_order_relaxed);
 		std::scoped_lock lock(reflectionResidueLock);
 		out.first = std::move(reflectionResidueFirst);
 		reflectionResidueFirst.clear();

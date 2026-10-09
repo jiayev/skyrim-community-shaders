@@ -3,6 +3,7 @@
 #include <chrono>
 #include <exception>
 
+#include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "RenderGraph/DxvkOrgInterop.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 
@@ -31,11 +32,17 @@ namespace DCLF
 			--stats.cached;
 		}
 
-		// Resolved by this frame's Prefetch.
+		// Resolved by this frame's Prefetch, under its reference: the description is still this buffer's.
 		if (const auto it = prefetched.find(a_buffer); it != prefetched.end()) {
 			std::optional<LeasedBuffer> lease;
-			if (it->second)
-				lease = Insert(a_buffer, *it->second);
+			auto& entry = it->second;
+			if (SwitchEnabled(Switch::SetParity) || SwitchEnabled(Switch::PersistentParity)) {
+				++stats.prefetchTaken;
+				entry.reference->AddRef();
+				stats.prefetchReleased += entry.reference->Release() == 1 ? 1u : 0u;
+			}
+			if (entry.buffer)
+				lease = Insert(a_buffer, std::move(entry.reference), *entry.buffer);
 			else
 				++stats.rejected;
 			prefetched.erase(it);
@@ -43,11 +50,13 @@ namespace DCLF
 		}
 
 		const auto start = std::chrono::steady_clock::now();
+		winrt::com_ptr<ID3D11Buffer> reference;
+		reference.copy_from(a_buffer);
 		DxvkOrgInteropResourceInfo info{};
 		const bool stable = RenderGraphRuntime::Get().DescribeResource(a_buffer, info) && info.kind == DXVK_ORG_INTEROP_RESOURCE_BUFFER && info.buffer.address != 0;
 		std::optional<LeasedBuffer> lease;
 		if (stable)
-			lease = Insert(a_buffer, Buffer{ reinterpret_cast<std::uint64_t>(info.buffer.buffer), info.buffer.offset, info.buffer.size, info.buffer.address });
+			lease = Insert(a_buffer, std::move(reference), Buffer{ reinterpret_cast<std::uint64_t>(info.buffer.buffer), info.buffer.offset, info.buffer.size, info.buffer.address });
 		else
 			++stats.rejected;
 		const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -59,18 +68,16 @@ namespace DCLF
 		return lease;
 	}
 
-	GpuResources::LeasedBuffer GpuResources::Insert(ID3D11Buffer* a_buffer, const Buffer& a_resolved)
+	GpuResources::LeasedBuffer GpuResources::Insert(ID3D11Buffer* a_buffer, winrt::com_ptr<ID3D11Buffer> a_reference, const Buffer& a_resolved)
 	{
 		Entry entry;
 		entry.buffer = a_resolved;
 		entry.generation = nextGeneration++;
 		if (!entry.generation)
 			std::terminate();
-		// The lease holds a reference for as long as it lives, so the address cannot be reused; its release queues
-		// the entry's removal.
-		winrt::com_ptr<ID3D11Buffer> reference;
-		reference.copy_from(a_buffer);
-		std::shared_ptr<const void> owner(new winrt::com_ptr<ID3D11Buffer>(std::move(reference)),
+		// The lease holds the reference the description was taken under for as long as it lives, so the address cannot be reused;
+		// its release queues the entry's removal.
+		std::shared_ptr<const void> owner(new winrt::com_ptr<ID3D11Buffer>(std::move(a_reference)),
 			[released = released, key = a_buffer](const winrt::com_ptr<ID3D11Buffer>* a_reference) {
 				delete a_reference;
 				const std::lock_guard lock(released->mutex);
@@ -92,7 +99,10 @@ namespace DCLF
 				continue;
 			if (const auto it = entries.find(buffer); it != entries.end() && !it->second.owner.expired())
 				continue;
-			prefetched.emplace(buffer, std::nullopt);  // named once; filled below
+			// Named once; described below, under this reference.
+			Prefetched entry;
+			entry.reference.copy_from(buffer);
+			prefetched.emplace(buffer, std::move(entry));
 			keys.push_back(buffer);
 			wanted.push_back(buffer);
 		}
@@ -110,7 +120,7 @@ namespace DCLF
 		for (std::size_t i = 0; i < keys.size(); ++i) {
 			const auto& info = infos[i];
 			if (SUCCEEDED(results[i]) && info.kind == DXVK_ORG_INTEROP_RESOURCE_BUFFER && info.buffer.address != 0)
-				prefetched[keys[i]] = Buffer{ reinterpret_cast<std::uint64_t>(info.buffer.buffer), info.buffer.offset, info.buffer.size, info.buffer.address };
+				prefetched[keys[i]].buffer = Buffer{ reinterpret_cast<std::uint64_t>(info.buffer.buffer), info.buffer.offset, info.buffer.size, info.buffer.address };
 		}
 		const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		++stats.prefetchBatches;

@@ -382,13 +382,16 @@ A DCLF native variant of the face, as for Skylighting's map, with the sky left t
   (`FUN_1414a90f0` at `0x1414edbf8`) is thunked: after it, with the face's colour target still bound,
   `IndirectDraws::CaptureReflectionFace` takes the face's slice (the render target view's array slice), the cube texture,
   and the face's VS_PerFrame (b12) from the mirror: its view-projection and its eye (CameraPosAdjust).
-- **One epoch a frame** (`Segment::Reflection`, first in the epoch order), at `BeforeShadowMaps`
-  (`IndirectDraws::ExecuteReflection`). `TESWaterReflections::Update` runs twice a frame and renders one face each (one
-  call of vfunc `0x35` per update), all before `BeforeShadowMaps` (the report's "captured after their frame's epoch" is
-  0), and nothing between the face render and the water reads the cube (`FUN_140e44c60` after it only restores four
-  renderer words; the cube has one mip). An epoch per update was two a frame: each epoch is a slot of the host's ring
-  (render-graph.md, "Frames in flight"). It draws only with the frame's ring entry (the scene list and its rows) and while
-  the colour commit whose frame record it reads is the frame before's, into the same backings (`Resources::committed`). The shape always has all six faces, so the recordings hold
+- **One epoch a frame** (`Segment::Reflection`, after the Z-prepass in the epoch order), right after the depth commit
+  (`IndirectDraws::ExecuteReflection`, from the depth pass's hook; until 2026-10-09 at `BeforeShadowMaps`, which drew the
+  frame's scene list against the frame before's index pool: drawcall-limit-fix.md, "Device faults in motion").
+  `TESWaterReflections::Update` runs twice a frame and renders one face each (one call of vfunc `0x35` per update), all
+  before the depth pass (the report's "captured after their frame's epoch" is 0), and nothing between the face render and
+  the water reads the cube (`FUN_140e44c60` after it only restores four renderer words; the cube has one mip). An epoch
+  per update was two a frame: each epoch is a slot of the host's ring (render-graph.md, "Frames in flight"). It draws only
+  with the frame's ring entry (the scene list and its rows), after this frame's depth commit (the index pool, the depth
+  inputs, the object records and geometry rows at the frame's publication), and while the colour commit whose frame
+  record it reads is the frame before's, into the same backings (`Resources::committed`). The shape always has all six faces, so the recordings hold
   across frames; a face the frame doesn't render culls and draws nothing (zero dispatch, no tree slots).
   - **Culling:** BuildDraws over the scene list's main part (its view bits `kViewReflection`) in its single phase, frustum
     only, one latched dispatch per face. The

@@ -369,9 +369,6 @@ void DrawcallLimitFix::BeforeShadowMaps()
 	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::BeforeShadowMaps);
 	if (!Running())
 		return;
-	// The frame's reflection faces (every TESWaterReflections::Update of the frame has run: two a frame, a face each), drawn by DCLF
-	// in one epoch, before the water reads the cube (dclf-lod.md, "Water reflections").
-	DCLF::IndirectDraws::Get().ExecuteReflection();
 	ScopedPerfEvent event("CS DCLF: shadow views");
 	const auto start = std::chrono::steady_clock::now();
 	// CS_DCLF_PERSISTENT_PARITY: the frame values' rows and palettes against the engine's now.
@@ -917,6 +914,12 @@ void DrawcallLimitFix::Hooks::Main_RenderDepth_WorldDrawn::thunk(void* a_accumul
 	// (kPOST_ZPREPASS_COPY), at the end of the pass, now includes DCLF's objects, and the first-person model's
 	// depth goes in after the world's, as it does natively, so there is nothing to refresh.
 	DCLF::IndirectDraws::Get().CaptureDepthPass();
+	// The frame's reflection faces (every TESWaterReflections::Update of the frame has run: two a frame, a face each), drawn by DCLF
+	// in one epoch, before the water reads the cube (dclf-lod.md, "Water reflections"): after the depth commit, which brought the
+	// index pool and the scene's buffers to the frame's publication, whose scene list the faces draw. Before it (at
+	// BeforeShadowMaps) they drew this frame's list against the frame before's pool: a slot the publication gave another geometry
+	// drew its old range's indices against its new vertices, past their end (a device fault).
+	DCLF::IndirectDraws::Get().ExecuteReflection();
 	if (DCLF::SceneStore::Get().GetTables().objects.size() >= 400)
 		globals::BeginDCLFDepthTrace(globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture);
 	// DCLF's epoch leaves the context's bindings to the engine's state tracking: rebind its targets for the

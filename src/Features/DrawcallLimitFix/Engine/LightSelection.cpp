@@ -2,6 +2,7 @@
 
 #include "EngineAccess.h"
 #include "LightViews.h"
+#include "PortalViews.h"
 #include "SunViews.h"
 
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
@@ -190,7 +191,9 @@ namespace DCLF
 
 	void LightSelection::SampleRooms()
 	{
-		rooms.clear();
+		// The parity's: the engine's room test at the function's entry (FUN_140e14300 on the entries), and where the light's
+		// entry was last walked from (its room process's camera, +0x128 -> +0x18).
+		engineRooms.clear();
 		auto* node = SceneNode();
 		const auto* processes = Global<const std::byte* const*>(kListProcesses);
 		const auto* cameraEntry = processes && processes[0] ? At<const void*>(processes[0], kPortalEntry) : nullptr;
@@ -203,8 +206,39 @@ namespace DCLF
 			const auto& descriptors = light->GetRuntimeData().shadowmapDescriptors;
 			const auto* process = descriptors.empty() ? nullptr : descriptors[0].cullingProcess;
 			const auto* entry = process ? At<const void*>(process, kPortalEntry) : nullptr;
-			rooms[light] = entry && cameraEntry && SharesRoom(entry, cameraEntry);
+			EngineRooms sample;
+			sample.shares = entry && cameraEntry && SharesRoom(entry, cameraEntry);
+			sample.entry = entry;
+			if (const auto* roomProcess = At<const std::byte*>(light, 0x128)) {
+				sample.roomEntry = At<const void*>(roomProcess, kPortalEntry);
+				if (const auto* camera = At<const std::byte*>(roomProcess, 0x18))
+					sample.walkedFrom = { At<float>(camera, 0xA0), At<float>(camera, 0xA4), At<float>(camera, 0xA8) };
+			}
+			if (entry) {
+				sample.visibleUnbound = At<std::uint8_t>(entry, 0x130) != 0;
+				const auto* list = At<const void* const*>(entry, 0x18);
+				for (std::uint32_t i = 0, n = list ? At<std::uint32_t>(entry, 0x28) : 0; i < n; ++i)
+					sample.rooms.push_back(list[i]);
+			}
+			engineRooms[light] = std::move(sample);
 		}
+	}
+
+	bool LightSelection::SharesRoomWithCamera(const RE::BSShadowLight* a_light)
+	{
+		// The engine's condition first: descriptor 0's culling process and its entry exist (allocation, not a cull); then the
+		// light's rooms as DCLF walks them now (PortalViews::WalkLight) against the world camera's this frame (T5a).
+		auto* light = const_cast<RE::BSShadowLight*>(a_light);
+		const auto& descriptors = light->GetRuntimeData().shadowmapDescriptors;
+		const auto* process = descriptors.empty() ? nullptr : descriptors[0].cullingProcess;
+		if (!process || !At<const void*>(process, kPortalEntry))
+			return false;
+		auto& portals = PortalViews::Get();
+		auto& rooms = lightRooms[a_light];
+		portals.WalkLight(a_light, rooms);
+		const bool shares = portals.SharesRoom(rooms);
+		roomVerdicts[a_light] = shares;
+		return shares;
 	}
 
 	void LightSelection::Select()
@@ -245,15 +279,17 @@ namespace DCLF
 			}
 		}
 		lastFocusHost = nullptr;
+		roomVerdicts.clear();
 		SunViews::Planes cameraPlanes;
 		SunViews::FrustumPlanes(const_cast<RE::NiCamera*>(camera)->GetRuntimeData2().viewFrustum, camera->world, cameraPlanes);
 		for (const auto& pointer : runtime.activeShadowLights) {
 			const auto* light = pointer.get();
 			if (!light || kept >= kMaxLights)
 				continue;
-			const auto room = rooms.find(light);
-			if (room == rooms.end() || !room->second || !Visible(*light, *camera, cameraPlanes))
+			if (!Visible(*light, *camera, cameraPlanes) || !SharesRoomWithCamera(light))
 				continue;
+			// Kept: the engine walks it now (FUN_1414a2530), its walk's edge flags left on the shapes.
+			PortalViews::Get().CommitLightWalk();
 			frame.locals.push_back({ light, slot, mask });
 			// The focus host: a light with the flag, or the first that can host (vfunc 0x20: directional, spot) while none has.
 			{
@@ -293,6 +329,13 @@ namespace DCLF
 			if (frame.sun)
 				live.insert_or_assign(frame.sun, focusFlags[frame.sun]);
 			focusFlags = std::move(live);
+		}
+		if (lightRooms.size() > 64) {
+			std::unordered_map<const RE::BSShadowLight*, PortalViews::LightRooms> live;
+			for (const auto& pointer : runtime.activeShadowLights)
+				if (const auto it = lightRooms.find(pointer.get()); it != lightRooms.end())
+					live.insert(std::move(*it));
+			lightRooms = std::move(live);
 		}
 		frame.valid = true;
 		// Their views, from the cameras their UpdateCamera has set up (T3a).
@@ -337,18 +380,19 @@ namespace DCLF
 							return "none";
 						auto* light = const_cast<RE::BSShadowLight*>(a_light);
 						const auto* niLight = light->light.get();
-						const auto room = rooms.find(a_light);
+						const auto room = roomVerdicts.find(a_light);
 						return fmt::format("{} ({}{}, room {})", static_cast<const void*>(a_light),
 							light->GetIsDirectionalLight() ? "directional" : light->GetIsFrustumLight() ? "spot" : light->GetIsParabolicLight() ? "point" : "other",
 							niLight ? fmt::format(" at ({:.0f} {:.0f} {:.0f}) r {:.0f}", niLight->world.translate.x, niLight->world.translate.y, niLight->world.translate.z,
 										  const_cast<RE::NiLight*>(niLight)->GetLightRuntimeData().radius.x) :
 									  "",
-							room == rooms.end() ? "unsampled" : room->second ? "shared" : "not shared");
+							room == roomVerdicts.end() ? "untested" : room->second ? "shared" : "not shared");
 					};
 					detail = fmt::format("slot {}: {}, the engine's {}", s, describe(ours), describe(engine));
 				}
 			}
 		}
+		CheckRooms(differ, detail);
 		// The focus flags of the drawn lights, and last frame's host as the engine left it.
 		{
 			p.focusHosts += frame.focusHosts.size();
@@ -394,9 +438,78 @@ namespace DCLF
 		}
 	}
 
+	void LightSelection::CheckRooms(bool& a_differ, std::string& a_detail)
+	{
+		// Every light DCLF tested for a room (T5a3) against the engine's verdict at the function's entry. The engine's light entry is
+		// its last walk's: a light that moved since (its room process's camera elsewhere) is tallied apart.
+		auto& p = parity;
+		for (const auto& [light, ours] : roomVerdicts) {
+			const auto sample = engineRooms.find(light);
+			if (sample == engineRooms.end())
+				continue;
+			const auto& engine = sample->second;
+			++p.roomTests;
+			const auto& walked = lightRooms[light];
+			++p.roomWalks[std::min<std::uint32_t>(walked.walk, 2)];
+			if (engine.entry != engine.roomEntry)
+				++p.roomEntriesApart;
+			if (walked.walk == PortalViews::kLightWalked) {
+				std::string why;
+				if (const auto* roomProcess = At<const void*>(light, 0x128); roomProcess && !PortalViews::Get().LightProcessAsAssumed(roomProcess, why)) {
+					++p.roomProcessesOther;
+					if (p.roomProcessFirst.empty())
+						p.roomProcessFirst = why;
+				}
+			}
+			const auto* niLight = const_cast<RE::BSShadowLight*>(light)->light.get();
+			const float moved = niLight ? std::max({ std::abs(engine.walkedFrom[0] - niLight->world.translate.x), std::abs(engine.walkedFrom[1] - niLight->world.translate.y),
+											  std::abs(engine.walkedFrom[2] - niLight->world.translate.z) }) :
+										  0.0f;
+			bool roomsEqual = walked.visibleUnbound == engine.visibleUnbound && walked.rooms.size() == engine.rooms.size();
+			for (std::size_t i = 0; roomsEqual && i < walked.rooms.size(); ++i)
+				roomsEqual = std::find(engine.rooms.begin(), engine.rooms.end(), walked.rooms[i]) != engine.rooms.end();
+			if (!roomsEqual) {
+				++(moved > 0.0f ? p.roomSetsMovedDiffer : p.roomSetsDiffer);
+				if (moved == 0.0f && p.roomSetsFirst.empty())
+			{
+				const auto names = [](const std::vector<const void*>& a_rooms) {
+					std::string out;
+					for (const void* room : a_rooms) {
+						const char* name = room ? static_cast<const RE::NiAVObject*>(room)->name.c_str() : nullptr;
+						out += fmt::format("{}{}", out.empty() ? "" : ", ", name && *name ? name : "?");
+					}
+					return out;
+				};
+				const auto* position = niLight ? &niLight->world.translate : nullptr;
+				p.roomSetsFirst = fmt::format("{} at ({:.0f} {:.0f} {:.0f}) r {:.0f} strict {} (walk {}, unbound {}, rooms [{}]), the engine's unbound {}, rooms [{}]",
+					static_cast<const void*>(light), position ? position->x : 0.0f, position ? position->y : 0.0f, position ? position->z : 0.0f,
+					niLight ? const_cast<RE::NiLight*>(niLight)->GetLightRuntimeData().radius.x : 0.0f, At<std::uint8_t>(light, 0x47), walked.walk, walked.visibleUnbound,
+					names(walked.rooms), engine.visibleUnbound, names(engine.rooms));
+			}
+			}
+			if (ours == engine.shares)
+				continue;
+			if (moved > 0.0f) {
+				++p.roomsMovedDiffer;
+				continue;
+			}
+			++p.roomsDiffer;
+			a_differ = true;
+			if (a_detail.empty())
+				a_detail = fmt::format("room test {} for {} (walk {}, unbound {}, {} rooms), the engine's {} (unbound {}, {} rooms)", ours, static_cast<const void*>(light), walked.walk,
+					walked.visibleUnbound, walked.rooms.size(), engine.shares, engine.visibleUnbound, engine.rooms.size());
+		}
+	}
+
 	void LightSelection::Report()
 	{
 		auto& p = parity;
+		logger::info("[DCLF] light rooms (T5a3: DCLF's walk of each tested light against the engine's entry): {} tests ({} not walked, {} by bounds, {} walked), {} on an "
+					 "entry apart from the room process's, {} room processes not as assumed{}; verdicts differ {} (+{} lights moved since the engine's walk), room sets "
+					 "differ {} (+{} moved){}{}",
+			p.roomTests, p.roomWalks[0], p.roomWalks[1], p.roomWalks[2], p.roomEntriesApart, p.roomProcessesOther,
+			p.roomProcessFirst.empty() ? "" : " (" + p.roomProcessFirst + ")", p.roomsDiffer, p.roomsMovedDiffer, p.roomSetsDiffer, p.roomSetsMovedDiffer,
+			p.roomsDiffer ? " <- LIGHT ROOMS" : " <- OK", p.roomSetsFirst.empty() ? "" : "; first set: " + p.roomSetsFirst);
 		logger::info("[DCLF] light selection (T3b, T3c: DCLF's choice of shadow lights and focus hosts against CalculateActiveShadowCasterLights'): {} frames, {} local "
 					 "lights kept, {} focus hosts; {} frames differ ({} slots, {} mask indices, {} counts, {} focus){}{}",
 			p.frames, p.kept, p.focusHosts, p.framesDiffer, p.slotsDiffer, p.masksDiffer, p.countsDiffer, p.focusDiffer, p.framesDiffer ? " <- LIGHT SELECTION" : " <- OK",
@@ -411,7 +524,8 @@ namespace DCLF
 			static void thunk()
 			{
 				auto& selection = LightSelection::Get();
-				selection.SampleRooms();
+				if (SunViews::ParityEnabled())
+					selection.SampleRooms();
 				func();
 				selection.Select();
 			}

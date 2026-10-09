@@ -1,4 +1,5 @@
 #include "PrimaryCull.h"
+#include "PortalViews.h"
 
 #include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
 #include "PassCapture.h"
@@ -30,6 +31,9 @@ namespace DCLF
 		// AE 1.6.1170 (module offsets).
 		constexpr std::uintptr_t kAfterFullFrustumCallSite = 0x14cbcea;  // CalculateAndDrawShadowCasterLights -> FUN_1414a0840, after either branch
 		constexpr std::uintptr_t kAfterFullFrustum = 0x14a0840;
+		constexpr std::uintptr_t kPortalWalkCallSite = 0x64685f;  // Main::Update -> FUN_1401a43c0, the main camera's portal walk
+		constexpr std::uintptr_t kPortalWalk = 0x1a43c0;
+		constexpr std::uintptr_t kSunOff = 0x338c911;  // set: the sun does not draw (no full-frustum cull, no cascades)
 		constexpr std::uintptr_t kListJobsFinishCallSite = 0x14cbf4d;  // ... -> JobList::Finish(scene list culling)
 		constexpr std::uintptr_t kListJobsFinish = 0xcf6810;
 		constexpr std::uintptr_t kProcess1 = 0xe28390;  // BSCullingProcess::Process1, the list processes' vtable slot 0x16
@@ -331,13 +335,12 @@ namespace DCLF
 		for (std::uint32_t i = 0; i < count; ++i) {
 			cut.processes[i] = processes[i];
 			auto& out = jobOut[i];
-			out = JobOut{ std::move(out.visible), std::move(out.pending) };
+			out = JobOut{ std::move(out.visible) };
 			out.visible.clear();
-			out.pending.clear();
 		}
-		// The stand-in (CS_DCLF_PRIMARY_EXCLUDE) needs the sun's entry exclusion live (its cascades captured) and a current
-		// snapshot; otherwise the engine culls every entry this frame, less what the leaf exclusion keeps from its
-		// registration. A member's local shadow lights are the GPU's (LocalShadowLights), so local shadows need nothing of
+		// The stand-in (CS_DCLF_PRIMARY_EXCLUDE) needs a current snapshot, and the sun's entry exclusion live (its cascades
+		// captured) unless the sun does not draw this frame (T5b: an interior, no cascades to take an entry out of); otherwise the
+		// engine culls every entry this frame, less what the leaf exclusion keeps from its registration. A member's local shadow lights are the GPU's (LocalShadowLights), so local shadows need nothing of
 		// the engine's cull.
 		if (!ActiveToggles().excludePrimaryEntries) {
 			if (!ownedFadeRoots.empty()) {
@@ -348,7 +351,7 @@ namespace DCLF
 			frameLive.store(true, std::memory_order_release);
 			return;
 		}
-		if (!candidates || !SunAccumulation::Get().ExclusionLive()) {
+		if (!candidates || !(SunAccumulation::Get().ExclusionLive() || Global<std::uint8_t>(kSunOff))) {
 			++(candidates ? cutStats.skippedPreconditions : cutStats.skippedStale);
 			liveStale = true;
 			fadeSkipped = true;
@@ -409,78 +412,6 @@ namespace DCLF
 		gpuSunFrame = true;
 	}
 
-	namespace
-	{
-		/**
-		 * @brief FadeStateCS's EngineInView on a block, on the CPU (the latch's frustum fallback aside: -1 when the block does
-		 * not apply), with a description of the test that decided it.
-		 */
-		int VisibilityPort(const std::byte* a_block, const float a_centre[3], float a_radius, std::uint32_t a_flags, std::string& a_why)
-		{
-			const auto word = [&](std::size_t a_offset) { std::uint32_t v; std::memcpy(&v, a_block + a_offset, 4); return v; };
-			const auto plane = [&](std::size_t a_offset) { std::array<float, 4> p; std::memcpy(p.data(), a_block + a_offset, 16); return p; };
-			const std::uint32_t header[4]{ word(0), word(4), word(8), word(12) };
-			if (!(header[0] & kFadeVisibilityValid))
-				return -1;
-			const bool alwaysDraw = (a_flags >> 11) & 1, preprocessed = (a_flags >> 12) & 1, hidden = (a_flags >> 20) & 1;
-			if (a_radius == 0.0f && !alwaysDraw)
-				return a_why = "zero radius", 0;
-			const std::uint32_t cullMode = (header[0] >> kFadeVisibilityCullModeShift) & 0xFF;
-			if (cullMode == 2)
-				return a_why = "cull mode 2", 0;
-			if (cullMode == 1 || alwaysDraw)
-				return a_why = "always", 1;
-			if (preprocessed && !(header[0] & kFadeVisibilityIgnorePreprocess))
-				return a_why = "preprocessed", hidden ? 0 : 1;
-			const auto d = [&](const std::array<float, 4>& p) { return ((p[1] * a_centre[1] + p[0] * a_centre[0]) + a_centre[2] * p[2]) - p[3]; };
-			bool view = true;
-			const std::uint32_t mask = word(kFadeVisibilityViewOffset + 96);
-			for (std::uint32_t p = 0; p < 6 && view; ++p)
-				if ((mask >> p) & 1)
-					if (d(plane(kFadeVisibilityViewOffset + p * 16)) <= -a_radius)
-						view = false, a_why = fmt::format("view plane {} (mask {:#x})", p, mask);
-			if (!(header[0] & kFadeVisibilityCompound))
-				return view ? (a_why = "view", 1) : 0;
-			if (!(header[0] & kFadeVisibilitySkipView) && !view)
-				return 0;
-			std::uint32_t op = header[3];
-			for (std::uint32_t step = 0; step < 512; ++step) {
-				if (op >= header[1])
-					return a_why = fmt::format("compound ran off at op {}", op), 1;
-				const std::uint32_t type = word(kFadeVisibilityOpsOffset + op * 16), yes = word(kFadeVisibilityOpsOffset + op * 16 + 4), no = word(kFadeVisibilityOpsOffset + op * 16 + 8);
-				if (type == 2)
-					return a_why = fmt::format("compound accepted at op {}", op), 1;
-				if (type == 3)
-					return a_why = fmt::format("compound rejected at op {}", op), 0;
-				bool result = false;
-				if (type == 7 || type == 8) {
-					const std::uint32_t set = op + 1 < header[1] ? word(kFadeVisibilityOpsOffset + (op + 1) * 16) : ~0u;
-					if (set >= header[2])
-						return a_why = fmt::format("compound set {} past {} at op {}", set, header[2], op), 1;
-					const std::size_t base = kFadeVisibilitySetsOffset + std::size_t(set) * kFadeVisibilitySetBytes;
-					const std::uint32_t setMask = word(base + 96);
-					if (!setMask) {
-						result = type == 7;
-					} else {
-						std::uint32_t p = 0;
-						for (; p < 6; ++p) {
-							if (!((setMask >> p) & 1))
-								continue;
-							const float distance = d(plane(base + p * 16));
-							if (distance <= -a_radius)
-								break;
-							if (type == 8 && distance < a_radius)
-								break;
-						}
-						result = type == 7 ? p == 6 : p != 6;
-					}
-				}
-				op = result ? yes : no;
-			}
-			return a_why = "compound loop", 1;
-		}
-	}
-
 	void PrimaryCull::NoteAnimatedFade(const void* a_node, const float* a_camera)
 	{
 		std::scoped_lock lock(animatedMutex);
@@ -502,68 +433,6 @@ namespace DCLF
 		a_nodes.swap(animatedBatch);
 		animatedBatch.clear();
 		a_inputs = std::exchange(batchInputs, {});
-	}
-
-	int PrimaryCull::FadeVisibilityPort(const std::byte* a_block, const float a_centre[3], float a_radius, std::uint32_t a_nodeFlags, std::string& a_why)
-	{
-		return VisibilityPort(a_block, a_centre, a_radius, a_nodeFlags, a_why);
-	}
-
-	void PrimaryCull::SampleFadeVisibility(const RE::NiCullingProcess* a_process, std::uint32_t a_slot)
-	{
-		if (a_slot >= kFadeVisibilityLists)
-			return;
-		// BSCullingProcess (AE): cullMode +0x30198, compoundFrustum +0x301A0; NiCullingProcess: ignorePreprocess +0x11F.
-		// BSCompoundFrustum: planes (BSTArray<NiFrustumPlanes>) +0x0, functionOperators (BSTArray of 12-byte records) +0x18,
-		// freePlane +0xB8, freeOp +0xBC, firstOp +0xC0, skipViewFrustum +0xC4.
-		auto* out = fadeVisibility.data() + std::size_t(a_slot) * kFadeVisibilityBytes;
-		std::memset(out, 0, kFadeVisibilityBytes);
-		const auto put = [&](std::size_t a_offset, const void* a_value, std::size_t a_bytes) { std::memcpy(out + a_offset, a_value, a_bytes); };
-		const std::uint32_t cullMode = At<std::uint32_t>(a_process, 0x30198);
-		std::uint32_t mode = kFadeVisibilityValid | (cullMode << kFadeVisibilityCullModeShift);
-		if (At<std::uint8_t>(a_process, 0x11F) || cullMode == 4)
-			mode |= kFadeVisibilityIgnorePreprocess;
-		std::uint32_t header[4]{ mode, 0, 0, 0 };
-		const auto* compound = At<const std::byte*>(a_process, 0x301A0);
-		const std::int32_t freeOp = compound ? At<std::int32_t>(compound, 0xBC) : 0;
-		if (compound && freeOp > 0 && cullMode != 3) {
-			const auto* ops = At<const std::uint32_t*>(compound, 0x18);
-			// The arrays whole: the program's records and plane sets are not all below freeOp and freePlane.
-			const std::uint32_t opCount = At<std::uint32_t>(compound, 0x18 + 0x10);
-			const auto* sets = At<const std::byte*>(compound, 0x0);
-			const std::uint32_t setCount = At<std::uint32_t>(compound, 0x10);
-			if (!ops || !sets || opCount > kFadeVisibilityOps || setCount > kFadeVisibilitySets) {
-				++visibilityOverflows;
-			} else {
-				header[0] |= kFadeVisibilityCompound | (At<std::uint8_t>(compound, 0xC4) ? kFadeVisibilitySkipView : 0u);
-				header[1] = opCount;
-				header[2] = setCount;
-				header[3] = At<std::uint32_t>(compound, 0xC0);
-				for (std::uint32_t o = 0; o < opCount; ++o)
-					put(kFadeVisibilityOpsOffset + o * 16, ops + o * 3, 12);
-				for (std::uint32_t s = 0; s < setCount; ++s)
-					put(kFadeVisibilitySetsOffset + s * kFadeVisibilitySetBytes, sets + s * 0x70, 0x64);
-			}
-		}
-		// The view test's planes: the process's own, as its sphere test reads them.
-		put(kFadeVisibilityViewOffset, reinterpret_cast<const std::byte*>(a_process) + 0x3C, 0x64);
-		header[0] |= kFadeVisibilityViewPlanes;
-		put(0, header, sizeof(header));
-	}
-
-	void PrimaryCull::FadeRootLists(const std::vector<const void*>& a_nodes, std::vector<std::uint32_t>& a_out) const
-	{
-		// A fade root is its entry's root or under it: the nearest ancestor the cut lists.
-		a_out.assign(a_nodes.size(), kFadeRootNoList);
-		for (std::size_t r = 0; r < a_nodes.size(); ++r) {
-			for (const auto* node = static_cast<const RE::NiAVObject*>(a_nodes[r]); node; node = node->parent) {
-				if (const auto it = cut.eligible.find(node); it != cut.eligible.end()) {
-					if (it->second < cut.entrySlot.size() && cut.entrySlot[it->second] != 0xFF)
-						a_out[r] = cut.entrySlot[it->second];
-					break;
-				}
-			}
-		}
 	}
 
 	bool PrimaryCull::Owned(const RE::BSGeometry& a_geometry) const
@@ -614,7 +483,6 @@ namespace DCLF
 		grow(cut.admitted, std::uint8_t(0));
 		grow(cut.mixed, std::uint8_t(0));
 		grow(cut.walk, std::uint8_t(0));
-		grow(cut.entrySlot, std::uint8_t(0xFF));
 		for (const std::uint32_t e : a_changed) {
 			// The entry as the cut had it, let go: its root's verdicts, its switches; its members' ranges become garbage.
 			if (const auto* old = cut.roots[e]) {
@@ -631,7 +499,6 @@ namespace DCLF
 			cut.switchBegin[e] = cut.switchEnd[e] = static_cast<std::uint32_t>(cut.switches.size());
 			cut.plans[e] = EntryPlan::Rejected;
 			cut.admitted[e] = cut.mixed[e] = cut.walk[e] = 0;
-			cut.entrySlot[e] = 0xFF;
 			const auto* root = e < capacity ? candidates.entryNodes[e] : nullptr;
 			cut.roots[e] = root;
 			if (!root)
@@ -672,13 +539,11 @@ namespace DCLF
 		cut.admitted.resize(capacity);
 		cut.mixed.resize(capacity);
 		cut.walk.resize(capacity);
-		cut.entrySlot.resize(capacity);
 		std::erase_if(cut.pendingAdmission, [capacity](std::uint32_t a_e) { return a_e >= capacity; });
 		std::erase_if(walkRefresh, [capacity](std::uint32_t a_e) { return a_e >= capacity; });
 		// The members' pool gathered again once more of it is garbage than live (each live member copied once per as many let go).
 		if (cutGarbage > cut.members.size() / 2)
 			CompactCut();
-		entrySlotsVersion.fetch_add(1, std::memory_order_relaxed);
 		++cutVersion;
 	}
 
@@ -799,15 +664,19 @@ namespace DCLF
 		if (!cut.candidates)
 			return;
 		bool admittedAny = false;
+		// Admission is by readiness, on events (T5c: no engine verdict): a new snapshot's entries and the entries a member joined the
+		// set in (OnSetChanged) are checked; one with a member not tracked (a stale snapshot's, during a load) again next frame.
+		std::vector<std::uint32_t> retry;
 		for (const std::uint32_t e : cut.pendingAdmission) {
 			if (e >= cut.admitted.size() || cut.admitted[e] || cut.plans[e] == EntryPlan::Rejected)
 				continue;
 			bool all = true;
 			for (std::uint32_t m = cut.memberBegin[e]; m < cut.memberEnd[e] && all; ++m) {
 				const auto* geometry = cut.members[m].geometry;
-				// A member no longer tracked may be gone: the entry waits for the snapshot that follows.
+				// A member no longer tracked may be gone: the entry waits for the snapshot that follows, or the next frame.
 				if (!store.IsTracked(geometry)) {
 					all = false;
+					retry.push_back(e);
 					break;
 				}
 				all = cut.members[m].engine || !MemberShown(m, cut.roots[e]) || MemberDrawable(cut.memberObject[m]);
@@ -819,7 +688,7 @@ namespace DCLF
 				admittedAny = true;
 			}
 		}
-		cut.pendingAdmission.clear();
+		cut.pendingAdmission = std::move(retry);
 		if (admittedAny) {
 			SyncFadeOwnership();
 			++cutVersion;
@@ -930,23 +799,12 @@ namespace DCLF
 
 	bool PrimaryCull::StandIn(int a_slot, RE::NiCullingProcess* a_process, RE::NiAVObject* a_object, std::int32_t a_arg)
 	{
-		// The compound frustum (portals, occlusion planes) exists only while a list job culls through it, and each list's
-		// process has its own: each job's first call samples its cull test for FadeStateCS (read by the render thread after
-		// the jobs' Finish).
-		if (const std::uint32_t bit = a_slot >= 0 && a_slot < static_cast<int>(kFadeVisibilityLists) ? 1u << a_slot : 0u;
-			bit && !(sampledSlots.load(std::memory_order_relaxed) & bit) && !(sampledSlots.fetch_or(bit, std::memory_order_acq_rel) & bit))
-			SampleFadeVisibility(a_process, static_cast<std::uint32_t>(a_slot));
 		if (!standInLive)
 			return false;
 		const auto it = cut.eligible.find(a_object);
 		if (it == cut.eligible.end())
 			return false;
 		const std::uint32_t e = it->second;
-		// The list that culls the entry, whose block its fade root is tested against (one job per entry and frame).
-		if (cut.entrySlot[e] != static_cast<std::uint8_t>(a_slot)) {
-			cut.entrySlot[e] = static_cast<std::uint8_t>(a_slot);
-			entrySlotsVersion.fetch_add(1, std::memory_order_relaxed);
-		}
 		const auto plan = cut.plans[e];
 		auto& out = jobOut[a_slot];
 		++out.seen;
@@ -964,10 +822,9 @@ namespace DCLF
 		if (fadeRoot && (At<std::uint8_t>(a_object, 0x153) & 0x70) != 0x20)
 			++out.notSettled;
 		if (!cut.admitted[e]) {
-			// The engine culls it this frame (less what the leaf exclusion keeps from its registration); Admit decides its admission.
+			// The engine culls it this frame (less what the leaf exclusion keeps from its registration). Its admission is by
+			// readiness alone (RunAdmission, on events), not by the engine's verdict.
 			EngineProcess1(a_process, a_object, a_arg);
-			if (a_object->GetFlags().any(RE::NiAVObject::Flag::kAccumulated))
-				out.pending.push_back(e);
 			++out.notAdmitted;
 			return true;
 		}
@@ -992,16 +849,16 @@ namespace DCLF
 			EngineProcess1(a_process, a_object, a_arg);
 			++out.mixed;
 			// CS_DCLF_FADE_PARITY: the engine's verdict (its OnVisible ran: the node's metric or last visible frame changed) against
-			// FadeStateCS's test on this job's block.
+			// FadeStateCS's test, DCLF's portal program of the root's room (PortalViews::Visible, on the words the GPU reads).
 			// (A settled node, its fades at 1, returns before updating anything: nothing tells.)
 			const bool settled = fadeRoot && (a_object->GetFlags().underlying() & kFlagFadeSettled) && At<float>(a_object, kFadeAmount) == 1.0f &&
 			                     At<float>(a_object, kCurrentFade) == 1.0f;
-			if (fadeRoot && !settled && a_slot >= 0 && a_slot < static_cast<int>(kFadeVisibilityLists) && SwitchEnabled(Switch::FadeParity)) {
+			if (fadeRoot && !settled && a_slot >= 0 && SwitchEnabled(Switch::FadeParity)) {
 				const bool engine = At<float>(a_object, 0x144) != metricBefore || At<std::int32_t>(a_object, kLastVisibleFrame) != visibleBefore;
 				const float centre[3]{ a_object->worldBound.center.x, a_object->worldBound.center.y, a_object->worldBound.center.z };
 				std::string why;
-				const int port = VisibilityPort(fadeVisibility.data() + std::size_t(a_slot) * kFadeVisibilityBytes, centre, a_object->worldBound.radius,
-					a_object->GetFlags().underlying(), why);
+				auto& portals = PortalViews::Get();
+				const int port = PortalViews::Visible(portals.Encoded(), portals.ProgramOf(a_object), centre, a_object->worldBound.radius, a_object->GetFlags().underlying(), why);
 				if (port >= 0) {
 					++out.visibilityChecked;
 					if ((port != 0) != engine && out.visibilityDiffer++ == 0)
@@ -1094,16 +951,6 @@ namespace DCLF
 				nodeSnapshot[r] = roots[r] ? FadeState::ReadNode(*static_cast<const RE::NiAVObject*>(roots[r])) : FadeNodeState{};
 			nodeSnapshotFrame = SceneStore::Get().GetFrame();
 		}
-		// The cull tests FadeStateCS repeats, per list process: a job that made no stand-in call this frame, the process's own.
-		{
-			const std::uint32_t sampled = sampledSlots.exchange(0, std::memory_order_acq_rel);
-			auto** processes = Global<RE::NiCullingProcess**>(kListProcesses);
-			const std::uint32_t count = processes ? std::min(Global<std::uint32_t>(kSceneListCount), kFadeVisibilityLists) : 0u;
-			for (std::uint32_t i = 0; i < count; ++i)
-				if (!(sampled & (1u << i)) && processes[i])
-					SampleFadeVisibility(processes[i], i);
-			fadeVisibilityBlocks = count;
-		}
 		if (!frameLive.exchange(false, std::memory_order_acq_rel))
 			return;
 		const std::int64_t start = Now();
@@ -1112,7 +959,6 @@ namespace DCLF
 		for (std::uint32_t i = 0; i < cut.processCount; ++i) {
 			auto& out = jobOut[i];
 			frameVisible.insert(frameVisible.end(), out.visible.begin(), out.visible.end());
-			cut.pendingAdmission.insert(cut.pendingAdmission.end(), out.pending.begin(), out.pending.end());
 			auto& s = cutStats;
 			s.seen += out.seen, s.skipped += out.skipped, s.visibleEntries += out.visibleEntries, s.notSettled += out.notSettled;
 			s.walked += out.walked;
@@ -1166,7 +1012,8 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.AfterFullFrustum");
 		frameLive.store(false, std::memory_order_relaxed);
 		gpuSunFrame = false;
-		if (ListsFiltered() && !SunAccumulation::Get().ExclusionLive())
+		SunAccumulation::Get().EndFullFrustumWindow();
+		if (ListsFiltered() && !SunAccumulation::Get().ExclusionLive() && !Global<std::uint8_t>(kSunOff))
 			++listStats.unexcluded;
 		// CS_DCLF_PARITY_BOTH: the engine culls and registers everything.
 		if (!PassCapture::ParityBoth())
@@ -1313,6 +1160,17 @@ namespace DCLF
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		/** @brief Main::Update's portal walk (FUN_1401a43c0): DCLF's walk right after it, from the same camera, before the lists are built. */
+		struct PortalWalk
+		{
+			static void thunk(void* a_tes, void* a_process)
+			{
+				func(a_tes, a_process);
+				PortalViews::Get().Build();
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		/** @brief CalculateAndDrawShadowCasterLights' call of FUN_1414a0840, right after the full-frustum cull. */
 		struct AfterFullFrustum
 		{
@@ -1344,7 +1202,7 @@ namespace DCLF
 		const auto base = REL::Module::get().base();
 		const auto afterFullFrustum = base + kAfterFullFrustumCallSite;
 		const auto finish = base + kListJobsFinishCallSite;
-		if (!CallsTo(afterFullFrustum, base + kAfterFullFrustum) || !CallsTo(finish, base + kListJobsFinish)) {
+		if (!CallsTo(afterFullFrustum, base + kAfterFullFrustum) || !CallsTo(finish, base + kListJobsFinish) || !CallsTo(base + kPortalWalkCallSite, base + kPortalWalk)) {
 			logger::warn("[DCLF] primary cull: the calls are not where expected; the engine keeps the primary's cull");
 			return;
 		}
@@ -1354,6 +1212,7 @@ namespace DCLF
 			logger::warn("[DCLF] primary cull: BSGeometryListCullingProcess::Process1 is not the engine's; the engine keeps the primary's cull");
 			return;
 		}
+		stl::write_thunk_call<Hooks::PortalWalk>(base + kPortalWalkCallSite);
 		stl::write_thunk_call<Hooks::AfterFullFrustum>(afterFullFrustum);
 		stl::write_thunk_call<Hooks::ListJobsFinish>(finish);
 		if (CallsTo(base + kAnimatedFadeCallSite, base + kFadeUpdate))
@@ -1427,8 +1286,8 @@ namespace DCLF
 			// LOD skins: records whose partitions BuildDraws picks by their root's level in FadeStateCS's state (T1b).
 			const auto& lodTables = SceneStore::Get().GetTables();
 			const auto lodSkins = std::count_if(lodTables.skinLodPartitions.begin(), lodTables.skinLodPartitions.end(), [](std::uint32_t a_word) { return a_word != 0; });
-			logger::info("[DCLF] fade roots: {} stood in; {} LOD skins (partitions by their root's level on the GPU); {:.0f} entries with engine-drawn parts culled by the engine a frame; compound frustum larger than the fade test's block on {} frames",
-				SceneStore::Get().StoodInFadeRoots(), lodSkins, mixedPerFrame, std::exchange(visibilityOverflows, 0));
+			logger::info("[DCLF] fade roots: {} stood in; {} LOD skins (partitions by their root's level on the GPU); {:.0f} entries with engine-drawn parts culled by the engine a frame",
+				SceneStore::Get().StoodInFadeRoots(), lodSkins, mixedPerFrame);
 		}
 	}
 }
