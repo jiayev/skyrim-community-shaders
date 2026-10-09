@@ -143,7 +143,7 @@ namespace DCLF
 		std::uint32_t cullDrawn = 0, cullRejected = 0, cullTested = 0;
 		// Before the culling: the sampled view's inputs of its caster class, and those dropped outside the sun's entry processes, at
 		// most the minimum radius, under a stood-in root fading.
-		std::uint32_t cullClass = 0, cullSunEntryOut = 0, cullMinRadius = 0, cullStoodInFading = 0;
+		std::uint32_t cullClass = 0, cullSunEntryOut = 0, cullMinRadius = 0, cullRootFading = 0;
 		std::uint32_t cullSampledView = ~0u, cullSampledMode = 0;
 		// The set's casters each render mode's inputs held at the last epoch, and set members a mode's build could not draw (a
 		// pipeline or a texture its readiness did not cover: a defect, the engine having withheld them), per report interval.

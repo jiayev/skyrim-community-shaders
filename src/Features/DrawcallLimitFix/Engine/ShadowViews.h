@@ -29,7 +29,7 @@ namespace DCLF
 		None,
 		NotLighting,    // not a BSLightingShaderProperty; the rule is that property's
 		DeclZero,       // DetermineUtilityShaderDecl() == 0
-		Faded,          // fadeNode->currentFade * material->materialAlpha < 1
+		Faded,          // material->materialAlpha < 1 (the fade node's share: the GPU's, RootFading)
 		Refraction,     // flags kTempRefraction (2) or kRefraction (15)
 		AlphaBlended,   // alpha blending, outside the decal exception
 		/**
@@ -95,11 +95,10 @@ namespace DCLF
 	}
 
 	/**
-	 * @brief The engine's verdict on whether an object casts into a shadow map. a_fadeOnGpu: its fade node is stood in
-	 * (SceneStore::FadeOnGpu), whose node is not its state: Faded then takes the material's alpha alone, and a shadow view's
-	 * BuildDraws drops the caster while the GPU's state fades it (kFadeRootStoodIn).
+	 * @brief The engine's verdict on whether an object casts into a shadow map. Faded takes the material's alpha alone: the fade
+	 * node's share is FadeStateCS's, and a shadow view's BuildDraws drops the caster while its root fades (T1a: never the node's).
 	 */
-	ShadowReject ShadowCasterReject(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry, bool a_fadeOnGpu);
+	ShadowReject ShadowCasterReject(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry);
 	/**
 	 * @brief Whether a Lighting property's own flags give it no shadow pass in any view, whatever the frame: the verdicts of
 	 * ShadowCasterReject that no fade, global or view changes (a rejected decal, refraction, alpha blending, a Utility

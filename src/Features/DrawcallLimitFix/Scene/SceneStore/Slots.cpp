@@ -52,6 +52,7 @@ namespace DCLF
 		// The listed nodes' references through the retirement chain with everything else the cleared tables named.
 		HandBack(treeOwners);
 		HandBack(fadeRootOwners);
+		fadeRootMembers.Clear();
 		tables.Clear();
 		ClearFaceRegions();
 		// Drop material binding owners on world/device reset without permitting
@@ -396,6 +397,7 @@ namespace DCLF
 			DropResidentSlot(slot, false);
 			++residentStats.released;
 		}
+		UnlistFadeRoot(slot);
 		tables.ResetObject(slot);
 		tables.RetireObject(slot);
 		if (tables.liveObjects)
@@ -417,6 +419,7 @@ namespace DCLF
 			DropResidentSlot(slot, false);
 			++residentStats.released;
 		}
+		UnlistFadeRoot(slot);
 		tables.ResetObject(slot);
 		tables.RetireObject(slot);
 		if (tables.liveObjects)
@@ -460,6 +463,7 @@ namespace DCLF
 				if (it->second.layerSlot == slot)
 					it->second.layerSlot = kNoObjectSlot;
 			}
+			UnlistFadeRoot(slot);
 			tables.ResetObject(slot);
 			tables.RetireObject(slot);
 		}

@@ -53,7 +53,7 @@ namespace DCLF
 		return decl;
 	}
 
-	ShadowReject ShadowCasterReject(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry, bool a_fadeOnGpu)
+	ShadowReject ShadowCasterReject(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry)
 	{
 		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_property);
 		if (!lighting || !a_geometry)
@@ -68,8 +68,8 @@ namespace DCLF
 		if (decal && !(decalLike && (flags & Bit(32)) && blended))
 			return decalLike ? ShadowReject::DecalNoZWrite : ShadowReject::DecalPointLight;
 		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(lighting->material);
-		const float fade = lighting->fadeNode && !a_fadeOnGpu ? const_cast<RE::BSFadeNode*>(lighting->fadeNode)->GetRuntimeData().currentFade : 1.0f;
-		if (material && fade * material->materialAlpha < 1.0f)
+		// The fade node's share (fade * materialAlpha < 1) is the GPU's: a shadow view drops a caster while its root fades (T1a).
+		if (material && material->materialAlpha < 1.0f)
 			return ShadowReject::Faded;
 		if (flags & 0x8004ull)
 			return ShadowReject::Refraction;

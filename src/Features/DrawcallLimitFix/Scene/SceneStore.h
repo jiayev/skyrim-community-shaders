@@ -2848,7 +2848,7 @@ namespace DCLF
 		struct ResidentCounted
 		{
 			static constexpr std::uint32_t kNone = ~0u;
-			std::uint32_t pipeline = kNone, material = kNone, fadeRoot = kNone;
+			std::uint32_t pipeline = kNone, material = kNone;
 			bool tree = false;
 		};
 		std::vector<ResidentCounted> residentCounted;  // by slot

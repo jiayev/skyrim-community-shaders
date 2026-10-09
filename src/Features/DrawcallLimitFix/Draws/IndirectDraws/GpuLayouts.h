@@ -84,7 +84,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kNoRecord = ~0u;
 	constexpr std::uint32_t kNoSkip = ~0u;
 	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested; a shadow view's [3] outside the sun's entry, [4] small, [5]
-	// stood-in fading, [16] of its caster class.
+	// under a fading root, [16] of its caster class.
 	constexpr std::uint32_t kCountWords = 28;
 	/** @brief A count buffer's worth of zeros: what an epoch uploads to reset the counters it appends through. */
 	inline constexpr std::uint32_t kZeroCounts[kCountWords] = {};
@@ -276,12 +276,12 @@ namespace DCLF::Draws
 		// its positions, which both payloads append after the geometry slots (FaceStreamGeometry), or ~0u.
 		std::uint32_t streamIndex = ~0u;
 		// The object's fade root slot (SceneStore::Tables::objectFadeRoot; FadeStateCS's state row), ~0u when it has none: the
-		// depth segment's first phase drops it while an owned root's OnVisible stops (kFadeRootOwned).
+		// depth segment's first phase drops it while its root's OnVisible stops, a shadow view while its root fades.
 		std::uint32_t fadeRoot = ~0u;
 		std::uint32_t shadowRow = 0;      // a caster's ShadowMaterialRow (U4: the one persistent list)
 		std::uint32_t inputReserved = 0;
-		// kObjectFadeTest (the depth segment's inputs, a root DCLF does not own): the fade-out distance
-		// (SceneStore::Tables::fadeDistance); the fade node's centre is the object record's.
+		// kObjectFadeTest (the depth segment's inputs, while the root's state has no OnVisible of the frame before): the
+		// fade-out distance (SceneStore::Tables::fadeDistance); the fade node's centre is the object record's.
 		float fadeDistance = 0.0f;
 	};
 	static_assert(sizeof(DrawInput) == 64);
@@ -598,7 +598,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kCullMinRadius = 0x2000;
 	// cullFlags: the occlusion map's view: an occluder under a fade root BSFadeNode::OnVisible stops at without
 	// cameraRelatedUpdates (Precipitation::SetupMask's cull; FadeStateCS's state) draws nothing, in place of the shadow views'
-	// stood-in fading test. Set while the engine's fades are on (0x142032dfd).
+	// fading test. Set while the engine's fades are on (0x142032dfd).
 	constexpr std::uint32_t kCullFadeOnVisible = 0x4000;
 	// The key word a view reads of an input (BuildDrawsCS: KeyWord), in bits 16-17: 0 its pipeline word and its rows' word (the main
 	// segments, the reflection); otherwise a shadow view's, which reads the input's shadowRow for its material row - 1 a caster's key

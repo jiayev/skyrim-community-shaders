@@ -667,7 +667,7 @@ namespace DCLF
 		// technique. It belongs here and nowhere else: every shadow view is rendered between this
 		// phase and the next, so a verdict taken later would arrive after the views that need it.
 		const auto* shadowProperty = data.shaderProperty.get();
-		const auto shadowReject = ShadowCasterReject(shadowProperty, geometry, FadeOnGpu(shadowProperty ? shadowProperty->fadeNode : nullptr));
+		const auto shadowReject = ShadowCasterReject(shadowProperty, geometry);
 		static_assert(static_cast<std::size_t>(ShadowReject::Count) <= std::tuple_size_v<decltype(stats.shadowRejects)>);
 		++stats.shadowRejects[static_cast<std::size_t>(shadowReject)];
 		ID3D11ShaderResourceView* shadowDiffuse = nullptr;
@@ -740,6 +740,7 @@ namespace DCLF
 		tables.shadowMaterial[objectId] = shadowMaterial;
 		tables.sceneFlags[objectId] = object.flags;
 		tables.objectGeometry[objectId] = geometry;
+		ListFadeRoot(objectId);
 		tables.objectIdentity[objectId] = trackedEntry->identity;
 		tables.objectGroup[objectId] = trackedEntry->groupIdentity;
 		// A member decal written again (an actor's part every frame, a subtree attached again) may have moved in the scene graph:
@@ -817,6 +818,7 @@ namespace DCLF
 		tables.shadowMaterial[slot] = nullptr;
 		tables.sceneFlags[slot] = object.flags;
 		tables.objectGeometry[slot] = a_geometry;
+		ListFadeRoot(slot);
 		tables.objectIdentity[slot] = a_tracked.identity;
 		tables.objectGroup[slot] = a_tracked.groupIdentity;
 		if (memberDecals.contains(slot))
@@ -1897,6 +1899,7 @@ namespace DCLF
 				if (const auto it = tracked.find(tables.objectGeometry[s]); it != tracked.end()) {
 					Schedule(it->first, it->second);
 				} else {
+					UnlistFadeRoot(s);
 					tables.ResetObject(s);
 					tables.RetireObject(s);
 					shadowSetsDirty = true;

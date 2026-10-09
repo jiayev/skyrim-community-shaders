@@ -57,8 +57,8 @@ cbuffer BuildDrawsConstants : register(b0)
 	uint PipelineRowsAddressLo;
 	uint PipelineRowsAddressHi;
 	// The depth segment's first phase and the shadow views: StructuredBuffer<FadeRootStatic> and StructuredBuffer<FadeNodeState>
-	// (FadeStateCS.hlsl; Records.h). The first phase drops an input under an owned root (kFadeRootOwned) while its root's
-	// OnVisible stops; a shadow view drops a caster under a stood-in root (kFadeRootStoodIn) while it fades. 0 elsewhere.
+	// (FadeStateCS.hlsl; Records.h). The first phase drops an input while its root's OnVisible stops; a shadow view drops a
+	// caster while its root fades. Every listed root's state is FadeStateCS's (T1a): DCLF's model, not the node's. 0 elsewhere.
 	uint FadeRootsIndex;
 	uint FadeStatesUnused;  // the states a dispatch reads are its latch's (FadeStatesIndex)
 	// A shadow view, and the depth segment's phases: RWByteAddressBuffer, the bucket counts, a word per bucket (BucketTableOffset). 0
@@ -101,22 +101,18 @@ struct FadeRootStatic
 	float LodScale;
 	uint Generation;
 };
-static const uint kFadeRootOwned = 1u << 18;
-static const uint kFadeRootStoodIn = 1u << 19;
 static const uint kFadeVerdictServiced = 1u << 2;
 static const uint kFadeVerdictDrawn = 1u << 3;
 static const uint kFadeFlagSettled = 1u << 15;
 
-// Whether a fade root slot (~0u: none) is stood in (kFadeRootStoodIn) and not fully faded in: its state row's fade, or the
-// static row's as listed until FadeStateCS's first update of a new generation.
-bool StoodInFading(uint a_root)
+// Whether a fade root slot (~0u: none) is not fully faded in: its state row's fade, or the static row's as listed until
+// FadeStateCS's first update of a new generation.
+bool RootFading(uint a_root)
 {
 	if (a_root == 0xFFFFFFFFu)
 		return false;
 	StructuredBuffer<FadeRootStatic> fadeRoots = ResourceDescriptorHeap[FadeRootsIndex];
 	const FadeRootStatic row = fadeRoots[a_root];
-	if ((row.Bits & kFadeRootStoodIn) == 0)
-		return false;
 	StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
 	const FadeNodeState state = fadeStates[a_root];
 	return (state.Generation == row.Generation ? state.CurrentFade : row.Initial.CurrentFade) < 1.0;
@@ -394,7 +390,7 @@ bool SunEntry() { return (CullFlags & 0x1000) != 0; }
 // nothing, as Skylighting::OcclusionTechnique has it.
 bool MinRadius() { return (CullFlags & 0x2000) != 0; }
 // The occlusion map's view (kCullFadeOnVisible): its occluders' fade roots as BSFadeNode::OnVisible tests them without
-// cameraRelatedUpdates (FadedOutOfOcclusion), instead of a shadow view's stood-in fading test.
+// cameraRelatedUpdates (FadedOutOfOcclusion), instead of a shadow view's fading test (RootFading).
 bool FadeOnVisible() { return (CullFlags & 0x4000) != 0; }
 // The key word a view reads of an input (GpuLayouts.h: kCullKeyShift): 0 its pipeline word and its rows' word (the main segments,
 // the reflection); otherwise a shadow view's, whose material row is the input's shadowRow - 1 a caster's key (ViewWords::shadowKey),
@@ -411,8 +407,8 @@ static const uint kObjectSunMiss = 1u << 31;
 static const uint kObjectLocalShadowShift = 26;
 static const uint kObjectLandscapeLights = 1u << 29;
 static const uint kObjectMember = 1u << 30;
-// A resident object under a fade root (Records.h): the depth segment's first phase drops it past its fade-out distance
-// unless it was in view last frame (FadeHidden).
+// An object under a fade root with a fade-out distance (Records.h): the depth segment's first phase drops it past that distance
+// unless it was in view last frame, where its root's state has no OnVisible of the frame before to go by.
 static const uint kObjectFadeTest = 1u << 27;
 // The object's fade root has faded out (Records.h): nothing of it is drawn, but its frustum stamp is still written, so the
 // feedback keeps servicing the root and it can fade back in.
@@ -441,7 +437,7 @@ static const uint kCountTested = 8;         // looked at by the culling at all
 // most the minimum radius, under a stood-in root fading (an occlusion map's view: under a root its OnVisible stops at).
 static const uint kCountSunEntryOut = 12;
 static const uint kCountMinRadius = 16;
-static const uint kCountStoodInFading = 20;
+static const uint kCountRootFading = 20;
 static const uint kCountCasterClass = 64;
 // Words 3-5 and 16 are free (they counted against the engine's own culling, which no longer marks the objects).
 static const uint kCountOccluded = 24;      // rejected by the HZB rather than by the frustum
@@ -467,7 +463,7 @@ static const uint kCountDecalsTested = 88;
 // The sun on the GPU: kObjectSunTest inputs the colour pass tested, and those that missed every cascade.
 static const uint kCountSunTested = 92;
 static const uint kCountSunMissed = 96;
-// The fade test: flagged inputs phase 1 found in the frustum, and those it dropped.
+// The fade test: inputs under a fade root phase 1 found in the frustum, and those it dropped.
 static const uint kCountFadeTested = 100;
 static const uint kCountFadeHidden = 104;
 
@@ -683,12 +679,12 @@ bool Occluded(float3 boundCentre, float boundRadius)
 		count.InterlockedAdd(kCountMinRadius, 1, scratch);
 		return;
 	}
-	// A shadow view's caster under a stood-in root, whose fade is FadeStateCS's alone: the engine casts no fading caster
-	// (ShadowReject::Faded, fade * materialAlpha < 1; the CPU's verdict took the material's alpha), nor one under a root
-	// faded out.
+	// A shadow view's caster under a fading root, whose fade is FadeStateCS's: the engine casts no fading caster
+	// (ShadowReject::Faded, fade * materialAlpha < 1; the CPU's verdict takes the material's alpha alone), nor one under a
+	// root faded out.
 	if (phase == kPhaseSingle && FadeRootsIndex != 0 &&
-		(FadeOnVisible() ? FadedOutOfOcclusion(inputs.Load(inputOffset + 48)) : StoodInFading(inputs.Load(inputOffset + 48)))) {
-		count.InterlockedAdd(kCountStoodInFading, 1, scratch);
+		(FadeOnVisible() ? FadedOutOfOcclusion(inputs.Load(inputOffset + 48)) : RootFading(inputs.Load(inputOffset + 48)))) {
+		count.InterlockedAdd(kCountRootFading, 1, scratch);
 		return;
 	}
 
@@ -758,31 +754,28 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	bool fadeHidden = false;
 	if (FrustumIndex != 0 && phase == kPhaseOne && !frustumRejected) {
 		RWByteAddressBuffer frustumStamps = ResourceDescriptorHeap[FrustumIndex];
-		// A member under a root DCLF owns: its root's OnVisible of the frame before or when last in view (FadeStateCS, a frame
-		// ahead), as the engine's cull would have decided whether to go on into the children.
+		// An input under a fade root: its root's OnVisible of the frame before (FadeStateCS, a frame ahead), as the engine's cull
+		// would have decided whether to go on into the children. Every listed root's (T1a): DCLF's state is authoritative.
 		const uint fadeRoot = inputs.Load(inputOffset + 48);
-		bool ownedFade = false;
+		bool serviced = false;
 		if (fadeRoot != 0xFFFFFFFFu && FadeRootsIndex != 0) {
 			StructuredBuffer<FadeRootStatic> fadeRoots = ResourceDescriptorHeap[FadeRootsIndex];
 			const FadeRootStatic rootRow = fadeRoots[fadeRoot];
-			ownedFade = (rootRow.Bits & kFadeRootOwned) != 0;
-			if (ownedFade) {
-				StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
-				const FadeNodeState fadeState = fadeStates[fadeRoot];
-				fadeHidden = fadeState.Generation == rootRow.Generation && (fadeState.Verdict & kFadeVerdictServiced) != 0 &&
-				             (fadeState.Verdict & kFadeVerdictDrawn) == 0;
+			StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
+			const FadeNodeState fadeState = fadeStates[fadeRoot];
+			serviced = fadeState.Generation == rootRow.Generation && (fadeState.Verdict & kFadeVerdictServiced) != 0;
+			if (serviced) {
+				fadeHidden = (fadeState.Verdict & kFadeVerdictDrawn) == 0;
 				count.InterlockedAdd(kCountFadeTested, 1, scratch);
 				if (fadeHidden)
 					count.InterlockedAdd(kCountFadeHidden, 1, scratch);
 			}
 		}
-		// A resident under a fade root (kObjectFadeTest), which nothing on the CPU services while it is out of view: past
-		// its fade-out distance, BSFadeNode::OnVisible snaps the fade of a root that was not in view last frame to 0, and
-		// keeps it at 0 once it has, so the draw is dropped. One that was in view and drawn fades out over frames in the
-		// engine; it is drawn until the feedback has the root fading and the entry leaves residency.
-		// The fade node's centre is the record's, its fade-out distance the input's (fade.w: structural).
+		// A root the update did not service (out of view then, or listed since): BSFadeNode::OnVisible snaps the fade of a root
+		// that was not in view last frame to 0 past its fade-out distance (kObjectFadeTest), and keeps it at 0 once it has, so
+		// the draw is dropped. The fade node's centre is the record's, its fade-out distance the input's (fade.w: structural).
 		const float4 fade = float4(ObjectRow(objectIndex, kObjectFadeNodeRow).xyz, asfloat(inputs.Load(inputOffset + 60)));
-		if (!ownedFade && (input.w & kObjectFadeTest) != 0 && fade.w != 0.0 && FadeEye.w != 0.0) {
+		if (!serviced && (input.w & kObjectFadeTest) != 0 && fade.w != 0.0 && FadeEye.w != 0.0) {
 			const uint previous = frustumStamps.Load(objectIndex * 4);
 			const bool wasInView = (previous & kFrustumStampMask) == ((VisibilityStamp - 1) & kFrustumStampMask);
 			const bool wasHidden = wasInView && (previous & kFrustumFadeHidden) != 0;
