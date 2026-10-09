@@ -4,9 +4,11 @@
 
 #include <array>
 #include <cstdint>
+#include <format>
+#include <string>
 #include <string_view>
 
-/// Fast non-cryptographic XXH3-128 hashing for in-process cache keys.
+/// Fast non-cryptographic XXH3-128 hashing for shader cache keys.
 namespace Util::ContentHash
 {
 	struct Hash128
@@ -15,6 +17,12 @@ namespace Util::ContentHash
 		uint64_t low = 0;
 
 		bool operator==(const Hash128&) const = default;
+
+		/** @brief 32 lowercase hex digits, high word first. */
+		std::string ToHex() const
+		{
+			return std::format("{:016x}{:016x}", high, low);
+		}
 	};
 
 	inline Hash128 HashBytes(const void* a_data, size_t a_size)
