@@ -80,7 +80,10 @@ float4 GetReflectionColor(
 				iterationDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV), 0).x;
 #	ifndef UNIFIED_WATER
 				if (iterationDepth > maxValidDepth) {
-					binaryMinRaySample = binaryRaySample;
+					if (iterationDepth < binaryRaySample.z)
+						binaryMaxRaySample = binaryRaySample;
+					else
+						binaryMinRaySample = binaryRaySample;
 					depthThicknessFactor = 0.0;
 					continue;
 				}
