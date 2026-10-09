@@ -1,17 +1,61 @@
 #include "LocalShadows.h"
 
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Engine/LightSelection.h"
+#include "Features/DrawcallLimitFix/Engine/LightViews.h"
+#include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 #include "State.h"
 
 namespace DCLF
 {
 	namespace
 	{
-		void StorePlanes(const RE::NiFrustumPlanes& a_planes, std::array<std::array<float, 4>, 12>& a_out, std::uint32_t a_first)
+		SunViews::Planes ToPlanes(const RE::NiFrustumPlanes& a_planes)
 		{
+			SunViews::Planes out;
 			for (std::uint32_t p = 0; p < 6; ++p) {
 				const auto& plane = a_planes.cullingPlanes[p];
-				a_out[a_first + p] = { plane.normal.x, plane.normal.y, plane.normal.z, plane.constant };
+				out.plane[p] = { plane.normal.x, plane.normal.y, plane.normal.z, plane.constant };
+			}
+			out.mask = a_planes.activePlanes.underlying() & 0x3Fu;
+			return out;
+		}
+
+		struct VolumeParity
+		{
+			std::uint64_t volumes = 0, differ = 0;
+			std::string first;
+		};
+		VolumeParity volumeParity;
+
+		/**
+		 * @brief The parity's: a descriptor's volume as LightViews has it against its culling process after the cull - its planes, and
+		 * its custom planes when it has them, both of which the volumes tested before T3b.
+		 */
+		void CheckVolume(const SunViews::Cascade& a_view, const RE::BSCullingProcess& a_process)
+		{
+			auto& p = volumeParity;
+			++p.volumes;
+			const auto& process = reinterpret_cast<const RE::NiCullingProcess&>(a_process);
+			// A zero plane leaves nothing outside: inactive.
+			const auto active = [](SunViews::Planes a_planes) {
+				for (std::uint32_t q = 0; q < 6; ++q)
+					if (a_planes.plane[q] == std::array<float, 4>{})
+						a_planes.mask &= ~(1u << q);
+				if (!a_planes.mask)
+					a_planes = {};
+				return a_planes;
+			};
+			const auto mine = active(a_view.cull);
+			const auto planes = active(ToPlanes(process.planes));
+			const bool same = SunViews::SamePlanes(mine, planes) &&
+			                  (!process.doCustomCullPlanes || SunViews::SamePlanes(mine, active(ToPlanes(process.customCullPlanes))));
+			if (!same && p.differ++ == 0)
+				p.first = SunViews::DescribePlanes(mine, planes);
+			if ((p.volumes % 3000) == 0) {
+				logger::info("[DCLF] local shadow volumes (T3b: LightViews' cull planes against the culling processes' after the cull): {} volumes, {} differ{}{}", p.volumes,
+					p.differ, p.differ ? " <- LOCAL SHADOW VOLUME" : " <- OK", p.first.empty() ? "" : "; first: " + p.first);
+				p = {};
 			}
 		}
 	}
@@ -19,21 +63,20 @@ namespace DCLF
 	LocalShadowLights LocalShadowLights::Sample()
 	{
 		LocalShadowLights out;
-		auto* node = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
-		if (!node)
+		// DCLF's selection (T3b): the lights CalculateActiveShadowCasterLights keeps, a light once (the sun's slots are the sun's),
+		// their mask indices, and per shadowmap descriptor what its cull tests (LightViews, T3a: Process2's planes).
+		const std::uint32_t sceneFrame = SceneStore::Get().GetFrame();
+		const auto* selection = LightSelection::Get().Current(sceneFrame);
+		if (!selection)
 			return out;
-		const auto& runtime = node->GetRuntimeData();
-		// shadowLightsAccum is the shadow-caster array the selection indexes by the mask's bits: the lights that accumulated
-		// this frame, a light once per bit it took (the sun once per cascade). activeShadowLights also holds the ones in
-		// range that did not, with a stale maskIndex.
-		const RE::BSShadowLight* previous = nullptr;
-		for (auto* shadowLight : runtime.shadowLightsAccum) {
-			if (!shadowLight || shadowLight == previous || shadowLight == runtime.sunShadowDirLight)
+		const bool parity = SunViews::ParityEnabled();
+		for (const auto& selected : selection->locals) {
+			if (selected.light == selection->sun)
 				continue;
-			previous = shadowLight;
+			auto* shadowLight = const_cast<RE::BSShadowLight*>(selected.light);
 			auto& data = shadowLight->GetRuntimeData();
 			Light sampled;
-			sampled.maskBit = 1u << (data.maskIndex & 31);
+			sampled.maskBit = 1u << (selected.maskIndex & 31);
 			sampled.affectsLand = Engine::At<std::uint8_t>(shadowLight, 0x61) != 0;
 			if (const auto* niLight = shadowLight->light.get()) {
 				sampled.center[0] = niLight->world.translate.x;
@@ -41,17 +84,20 @@ namespace DCLF
 				sampled.center[2] = niLight->world.translate.z;
 				sampled.radius = niLight->GetLightRuntimeData().radius.x;
 			}
-			for (const auto& descriptor : data.shadowmapDescriptors) {
+			for (std::uint32_t d = 0; d < data.shadowmapDescriptors.size(); ++d) {
+				const auto& descriptor = data.shadowmapDescriptors[d];
 				const auto* process = descriptor.cullingProcess;
 				if (!process || !descriptor.isEnabled)
 					continue;
+				const auto* view = LightViews::Get().CascadeOf(selected.light, d, sceneFrame);
+				if (!view)
+					continue;
 				Light::Volume volume;
-				StorePlanes(process->planes, volume.planes, 0);
-				volume.masks[0] = process->planes.activePlanes.underlying() & 0x3Fu;
-				if (process->doCustomCullPlanes) {
-					StorePlanes(process->customCullPlanes, volume.planes, 6);
-					volume.masks[1] = process->customCullPlanes.activePlanes.underlying() & 0x3Fu;
-				}
+				for (std::uint32_t q = 0; q < 6; ++q)
+					volume.planes[q] = view->cull.plane[q];
+				volume.masks[0] = view->cull.mask & 0x3Fu;
+				if (parity)
+					CheckVolume(*view, *process);
 				sampled.volumes.push_back(volume);
 			}
 			out.lights.push_back(std::move(sampled));

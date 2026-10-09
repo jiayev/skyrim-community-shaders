@@ -6765,6 +6765,47 @@ member never met them. Now, while `CS_DCLF_FADING` and `CS_DCLF_LOD_CROSSFADE` a
 Measured (m177 every parity, e36, forest-t1c, y78): DCLF's draws and every parity as before (record parity 0 of ~48,000
 differ, the fade root bits included); SPIR-V programs 99 of 99 built.
 
+## Shadow views and lights from DCLF (T2a, T3a, T3b, 2026-10-08/09)
+
+The shadow views' cameras and the choice of shadow lights are DCLF's: nothing reads a cull or the renderer's state at a
+view's draw for them. The engine's values are the parity's alone (`CS_DCLF_SET_PARITY` or `CS_DCLF_PERSISTENT_PARITY`).
+
+-   **The sun's views (T2a, `Engine/SunViews`).** Read at `BSShadowDirectionalLight::UpdateCamera`'s return: each cascade's
+    camera and caster volume, and the full-frustum camera. DCLF derives the view, projection and view-projection
+    (`SetCameraData`'s arithmetic), the eye, the viewport (the port times the target), and the planes each culling process
+    tests: `BSCullingProcess::Process2` leaves SetFrustum's planes, replaced whole by `customCullPlanes` when
+    `doCustomCullPlanes` (`SunViews::CullPlanes`). Used by the shadow epochs, the sun bits' cascades (`SunAccumulation`) and
+    the entry rule (`sunEntryProcesses`, one per full-frustum process; the build ahead takes the last frame's).
+    Parity `sun views ... <- SUN VIEW`. The viewport parity compares the camera state's depth range (`0x14202b130`): the
+    renderer's holds the last draw's, less its depth-bias step.
+-   **The local lights' views (T3a, `Engine/LightViews`).** The same arithmetic per descriptor of each spot and point light
+    (a point light's second hemisphere: descriptor 1). A point light's culling process (`BSParabolicCullingProcess`) culls
+    without planes (they stay zero), so its `cull` is none. Parity `light views ... <- LIGHT VIEW`.
+-   **Which lights (T3b, `Engine/LightSelection`).** `CalculateActiveShadowCasterLights` (`0x1414cc570`) ported, by detour:
+    -   It walks `activeShadowLights` (ShadowSceneNode `+0x148`, insertion order) and keeps a light while fewer than 4 are
+        kept (the sun counts when it draws: `0x14338c911` clear), its UpdateCamera's verdict is visible, and descriptor 0's
+        culling process shares a room with the world camera's list process.
+    -   The verdict is DCLF's: the NiLight not hidden; a spot light's frustum intersecting the world camera's (`FUN_14150aba0`:
+        a corner of either inside the other's six planes, or one of 8 edges crossing a plane at a point inside the other
+        five); a point light's sphere inside the camera's planes (`BSMultiBoundSphere::Func41`); a directional light always;
+        then the lodFade cutoff (`0x1433dcfac <= (d^2 - r^2) * lodAdjust`). Each in the engine's operation order.
+    -   **The room test is a transitional engine read** (the user's choice): `FUN_140e14300` on the portal-graph entries
+        (`+0x30190`), sampled at the function's entry. The light's rooms are its last accumulation's. Removed with the portal
+        walk (T5).
+    -   A kept light takes `shadowLightsAccum[slot]` and `maskIndex` (`+0x520`) from the 64-bit counter at `0x14338c904`
+        (low: slot; high: mask index; the sun takes mask 0 and a slot per cascade). Each Accumulate advances the slot: 1 for a
+        spot light, 2 for a two-hemisphere point light (its second slot is not written).
+    -   Used by LightViews (built for the kept lights at the return, from the cameras their UpdateCamera set up),
+        `ShadowViews::Rebuild` (DCLF's slots) and `LocalShadowLights` (DCLF's lights and mask indices, LightViews' cull
+        planes). Parities `light selection ... <- LIGHT SELECTION` and `local shadow volumes ... <- LOCAL SHADOW VOLUME`
+        (LightViews' planes against the processes' after the cull, a zero plane inactive).
+-   **Still the engine's:** the focus views (T3c), the scissor rectangle (`+0x544..`; no DCLF reader), the depth target,
+    slice and raster state at the draw (T7), and UpdateCamera itself (T2b, deferred to T7).
+
+Measured: T2a m183/m186 0 differences (3,600 full-frustum processes per 300 frames); T3a l1-l10 0 of ~1,200 local views per
+300 frames; T3b s2 (inn and Dragonsreach, point lights, no sun) and m189 (exterior motion, sun with local lights) 0 frames
+differ in slots, mask indices and counts, 0 of 3,000 volumes differ, 600 of 600 shadow views drawn. No spot light was met.
+
 ## Point lights' culls: the category filter, and the light candidates (2026-10-01)
 
 **The first attempt, a lent list** (replaced). A light that was not portal-strict was lent a list of the object root's

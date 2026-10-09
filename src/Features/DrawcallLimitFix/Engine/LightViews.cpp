@@ -60,35 +60,10 @@ namespace DCLF
 			const auto* process = static_cast<const RE::NiCullingProcess*>(descriptor.cullingProcess);
 			if (process && process->doCustomCullPlanes)
 				SunViews::CullPlanes(process, *camera, view.caster);
-			SunViews::CullPlanes(process, *camera, view.cull);
+			// A point light's process (BSParabolicCullingProcess) culls without planes: they stay zero, and nothing is outside them.
+			if (!const_cast<RE::BSShadowLight*>(a_light)->GetIsParabolicLight() || (process && process->doCustomCullPlanes))
+				SunViews::CullPlanes(process, *camera, view.cull);
 			view.valid = true;
 		}
-	}
-
-	struct LightViews::Hooks
-	{
-		/** @brief BSShadowFrustumLight::Accumulate (vfunc 9, 0x14151aa60) and BSShadowParabolicLight::Accumulate (0x14151b960). */
-		template <class T>
-		struct Accumulate
-		{
-			static void thunk(RE::BSShadowLight* a_light, std::uint32_t* a_count, std::uint32_t* a_arg2, RE::NiAVObject* a_arg3)
-			{
-				LightViews::Get().Update(a_light);
-				func(a_light, a_count, a_arg2, a_arg3);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-		struct Frustum;
-		struct Parabolic;
-	};
-
-	void LightViews::Install()
-	{
-		if (installed)
-			return;
-		stl::write_vfunc<0x9, Hooks::Accumulate<Hooks::Frustum>>(RE::VTABLE_BSShadowFrustumLight[0]);
-		stl::write_vfunc<0x9, Hooks::Accumulate<Hooks::Parabolic>>(RE::VTABLE_BSShadowParabolicLight[0]);
-		installed = true;
-		logger::info("[DCLF] light views: BSShadowFrustumLight and BSShadowParabolicLight Accumulate hooked (T3a)");
 	}
 }
