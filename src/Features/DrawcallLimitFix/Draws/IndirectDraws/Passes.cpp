@@ -1669,7 +1669,7 @@ namespace DCLF::Draws
 
 	struct ShadowBuildBindings
 	{
-		std::array<org::DeclaredViewToken, kShadowModeCount> inputs;
+		org::DeclaredViewToken inputs;
 		std::vector<org::DeclaredViewToken> sequences, count, bucketCounts;  // per view slot
 		org::DeclaredViewToken geometries, visibility, poolFirsts;
 		org::DeclaredViewToken fadeRoots;
@@ -1699,8 +1699,7 @@ namespace DCLF::Draws
 		{
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			ShadowBuildBindings bindings{};
-			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-				bindings.inputs[m] = a_builder.ShaderResource(*resources->inputs[m]).View();
+			bindings.inputs = a_builder.ShaderResource(*resources->inputs).View();
 			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
 				bindings.sequences.push_back(a_builder.UnorderedAccess(*resources->sequences[s]).View());
 				bindings.count.push_back(a_builder.UnorderedAccess(resources->count[s]).View());
@@ -1746,7 +1745,7 @@ namespace DCLF::Draws
 				dispatch.latchOffset = view.slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch));
 				auto& constants = dispatch.constants;
 				constants.latchIndex = frame->latch->SrvIndex();
-				constants.inputsIndex = CaptureViewIndex(a_preparation, a_bindings.inputs[view.modeIndex]);
+				constants.inputsIndex = CaptureViewIndex(a_preparation, a_bindings.inputs);
 				constants.geometriesIndex = geometriesIndex;
 				constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences[view.slot]);
 				constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count[view.slot]);
@@ -2535,8 +2534,7 @@ namespace DCLF::Draws
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.shadow.material-rows"), resources->materialRows.buffer);
 			RegisterSceneBuffers(a_graph, *resources->scene);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.shadow.visibility"), resources->visibility);
-			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.shadow.draw-inputs{}", m)), resources->inputs[m]);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.shadow.draw-inputs"), resources->inputs);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.shadow.view-blocks"), resources->viewBlocks.buffer);
 			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
 				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.shadow.sequences{}", s)), resources->sequences[s]);

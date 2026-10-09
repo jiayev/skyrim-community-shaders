@@ -267,11 +267,6 @@ namespace DCLF
 			impl->CommitMainPayload(capture, blocks, in, *payload, resources, store, stats, *frameOwners, revision);
 		}, frameOwners);
 		impl->committedPayload[jobIndex] = committed;
-		if (depthOnly) {
-			const bool ring = committed && impl->RingFor(*committed, kAsyncZPrepass);
-			impl->ringDepth = ring ? impl->ringFrame : Impl::RingFrame{};
-			impl->ringDepth.draws.reset();
-		}
 		impl->committedFrame[jobIndex] = store.GetFrame();
 		capture.Release();
 		++stats.epochs;

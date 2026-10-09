@@ -808,13 +808,12 @@ namespace DCLF
 			// draws its old record from the snapshot meanwhile, and the next frame's start takes the claim back (RevokeClaims), as the
 			// walk's join used to before the frame read a snapshot (step 6c).
 			// The commit's decision too, applied or waiting for its application (LeaveSet).
+			// The whole object leaves (U5: a claim is the whole object).
 			LeaveSet(slot, kSetMain | kSetReflection);
 			if (PhasesIn(tables, slot) & (kSetMain | kSetReflection)) {
-				tables.setPhases[slot] &= static_cast<std::uint8_t>(~(kSetMain | kSetReflection));
-				if (tables.objects[slot].flags & kObjectMember) {
-					tables.objects[slot].flags &= ~kObjectMember;
-					tables.NoteChange(slot, kChangeBindings);
-				}
+				tables.setPhases[slot] = 0;
+				tables.objects[slot].flags &= ~kObjectMember;
+				tables.NoteChange(slot, kChangeBindings);
 			}
 			++residentStats.membershipQueued;
 		}

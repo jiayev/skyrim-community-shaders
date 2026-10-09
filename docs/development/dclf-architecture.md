@@ -12,6 +12,15 @@ describes the present only.
 
 DCLF runs on Skyrim AE 1.6.1170 only. Every engine address in the code is that runtime's.
 
+## Standing policies
+
+1.  **DCLF will take over all culling on the GPU.** No design may rely on the engine's culling or registration results.
+    The places that still read them are transitional (the engine-culling roadmap removes them); nothing new reads them.
+2.  **No per-view lists.** The scene is one persistent list. What an object takes part in is a per-object bitmask of view
+    types, tested by each view's GPU cull; the CPU never builds a list or cut per view.
+3.  **The normal path trusts its producers.** Checks are parity-only observers; the build is incremental, with no caps or
+    fallbacks.
+
 ## What it does
 
 The game draws each object with its own draw calls, after culling it on the CPU. DCLF keeps a persistent table of
@@ -79,13 +88,14 @@ engine writers ──events──▶ SceneStore tables ──change log──▶
     names:
     -   the object records (`ObjectRecordStore`), bone rows (`BonesStore`) and geometry table (`GeometryStore`);
     -   the main pass's material and pipeline rows (`MainRows`), shared by the Z-prepass and colour builds;
-    -   the resident objects' draw inputs (`ResidentRegion`);
+    -   the scene list's entries (`ResidentRegion`, below);
     -   the drawn set (`DrawnMarks`);
-    -   the shadow inputs per render mode and the shadow material rows (`ShadowKept`).
+    -   the shadow state (which modes hold each object, what waits) and the shadow material rows (`ShadowKept`).
 5.  **Payload.** A build is a pure function from the tables and lookups to a payload: the rows it wrote, the draw
-    inputs and the kept stores' changes. `BuildMainPayload` (`Draws/IndirectDraws/MainBuild.cpp`)
-    and `BuildShadowPayload` are the two builders. They run on the pool with each publication (`BuildAhead`); the
-    frame's producer copies what the payloads changed into the frame's payload ring entry.
+    inputs and the kept stores' changes. `BuildMainPayloads` (`Draws/IndirectDraws/MainBuild.cpp`, both main segments
+    in one build) and `BuildShadowPayload` are the two builders. They run on the pool with each publication
+    (`BuildAhead`), the main build first; the frame's producer copies what the payloads changed into the frame's payload
+    ring entry.
 6.  **Commit and epoch.** On the render thread, the commit adds what only it has: the frame's constant buffers
     (`ConstantMirror`), the per-frame textures and the latch, written into the selected revision's shape. Then the
     revision's recording of the epoch runs the GPU work:
@@ -208,6 +218,30 @@ written by `BuildDrawsCS`; 8 push words and a 100-byte `DrawSequence`) was built
 same rows and the camera turning, two 60 s runs each: colour 1.03 against 1.02 ms, shadow views 1.98 against 1.94 ms,
 Z-prepass depth 0.286 against 0.277 ms. The constant buffer was no faster on any pass, so it was not kept.
 
+## The scene list and view masks
+
+Every view reads one list per publication: the frame's ring entry, laid out as `[entries | main frame inputs | shadow
+frame inputs]`.
+
+-   **One entry per object** (`ResidentRegion`, kept by the main build in `Impl::mainCache`). The main build writes its
+    main part: the pipeline and rows words, the flags (`kInputDrawable`), the decal ordinal and the main view bits
+    (`SetMainPart`). The shadow build then writes its words into the same entry: the caster key, each occlusion map's
+    key, the shadow material row and the shadow view bits (`SetShadowPart`). An entry stays while either part holds it
+    (`sideOf`). The frame inputs after the entries are what each build keeps out of them: decals without a slot, face
+    shapes and other second-stream positions.
+-   **The view mask** (`DrawInput::ViewWords::mask`, the `kView*` bits in `GpuLayouts.h`): what the object takes part in.
+    Main candidates carry `kViewMainCull`, members `kViewMain`, decals `kViewDecal` alone, LOD members
+    `kViewReflection`; a shadow entry carries the views of the modes that hold it (`ModeViewBits`).
+-   **A view is its bits.** Each view's latch names its view bits (`BuildDrawsLatch::viewBits`), and `BuildDrawsCS` drops
+    an input whose mask has none of them before reading anything else. The Z-prepass reads `kDepthViewBits`, the colour
+    pass `kColourViewBits`, a shadow view its mode's bit (the sun's and the spot lights' cascades apart), the occlusion
+    maps and the reflection theirs. A shadow view also names the key word it reads (`KeyWordOf`, cull flags bits 16-17):
+    the caster key or its occlusion map's key, with the shadow row for its material.
+-   **Main segments.** One build makes both segments' payloads (the colour segment's first, the Z-prepass's a copy with
+    its own inputs). A pair is drawable only when both segments' shader variants are given what they read, so a member
+    is drawn by both or by neither (`<- SEGMENT SPLIT` otherwise).
+-   **Every view scans the whole list.** Measured against the per-view lists (2026-10-08): no frame-rate cost.
+
 ## Ownership: how the engine stops drawing DCLF's objects
 
 An object is withheld from the engine only while the installed publication claims it, and the publication's payloads
@@ -215,8 +249,11 @@ draw every claim. The set of phases DCLF claims for is a capability (the toggles
 a frame happens to have.
 
 -   **Main pass.** `PassCapture` hooks `BSBatchRenderer::RegisterPass`. A claimed geometry's pass is recorded (the
-    accumulate phase reads it) but never reaches the batch renderer, so the native loop has nothing to draw. An object
-    joins the set only once everything it is drawn with is ready (`PhaseReady`); one that is not waits, the engine's.
+    accumulate phase reads it) but never reaches the batch renderer, so the native loop has nothing to draw. A claim is
+    the whole object: it joins the set in every phase it takes part in (`SetParticipation`) once everything every one
+    of them draws it with is ready (`MainReady`, `PhaseReady`), and leaves all of them together. One that is not ready
+    waits, the engine's in every view. An occlusion map with such an occluder is registered by the engine too
+    (`SetLacking`).
 -   **Shadow views.** The same, per shadow render mode, from the shadow build's claim sets. This includes the direct
     group insertions the registration makes without `RegisterPass`.
 -   **The sun's registrations.** `SunAccumulation` skips the registration of a claimed caster in the sun's

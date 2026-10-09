@@ -416,7 +416,7 @@ namespace DCLF
 		// in the graph as built (its import, at the epoch, is built at the next build point).
 		const auto& resources = impl->resources;
 		const std::uint32_t frame = SceneStore::Get().GetFrame();
-		// The faces draw from the frame before's main commits (ExecuteReflection), whose inputs name the main rows by address: not
+		// The faces draw from the frame's scene list and the frame before's colour frame record (ExecuteReflection): not
 		// after a frame whose main epochs were not submitted (no claims), nor once a growth of the rows was adopted since (this frame's
 		// selection), which leaves those addresses on a version nothing holds.
 		const bool inputs = resources && resources->committed[kDepthShape].frame == resources->committed[kColourShape].frame &&

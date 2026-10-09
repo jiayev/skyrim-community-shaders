@@ -709,27 +709,37 @@ namespace DCLF::Draws
 		 */
 		void CountModeDraws(ShadowPayload& a_out)
 		{
+			// One pass over the list for every used mode (each input's mask names the modes that hold it).
+			std::array<std::uint64_t, kShadowModeCount> draws{};
+			std::uint32_t used = 0, usedBits = 0;
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
-				if (!a_out.inputs.modeUsed[m])
-					continue;
-				std::uint64_t draws = 0;
-				auto& slots = a_out.keySlotDraws[m];
-				slots.clear();
-				std::uint32_t inputs = 0;
-				a_out.ForEachInput(m, [&](const DrawInput& a_input) {
+				a_out.keySlotDraws[m].clear();
+				a_out.modeInputs[m] = 0;
+				if (a_out.inputs.modeUsed[m]) {
+					used |= 1u << m;
+					usedBits |= a_out.modeBits[m];
+				}
+			}
+			a_out.ForEachInput([&](const DrawInput& a_input) {
+				if (!(a_input.view.mask & usedBits))
+					return;
+				const std::uint32_t inputDraws = PartitionDraws(a_input.partitions);
+				for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+					if (!((used >> m) & 1) || !(a_input.view.mask & a_out.modeBits[m]))
+						continue;
 					const std::uint32_t key = ShadowKeyOf(m, a_input);
 					if (key == ~0u)
-						return;
-					++inputs;
-					const std::uint32_t inputDraws = PartitionDraws(a_input.partitions);
-					draws += inputDraws;
+						continue;
+					++a_out.modeInputs[m];
+					draws[m] += inputDraws;
+					auto& slots = a_out.keySlotDraws[m];
 					if (key >= slots.size())
 						slots.resize(std::size_t(key) + 1, 0u);
 					slots[key] += inputDraws;
-				});
-				a_out.modeInputs[m] = inputs;
-				a_out.modeDraws[m] = static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX));
-			}
+				}
+			});
+			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
+				a_out.modeDraws[m] = static_cast<std::uint32_t>(std::min<std::uint64_t>(draws[m], UINT32_MAX));
 		}
 	}
 

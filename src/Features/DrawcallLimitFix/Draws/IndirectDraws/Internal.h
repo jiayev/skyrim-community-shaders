@@ -888,9 +888,10 @@ namespace DCLF
 			// The Z-prepass's bucket counts (MainSizing) and the index pool (the scene's).
 			std::array<Versioned, 2> zBucketCounts;
 			std::shared_ptr<IndexPool> pool;
-			// The Z-prepass segment's draw inputs: each main segment keeps its resident region at the head of its own buffer
-			// (the colour segment's is `inputs`), and the version of the region the buffer holds, per segment (0 Z-prepass,
-			// 1 colour), written by the commit that uploads it.
+			// The Z-prepass segment's draw inputs, for the commits that do not read the frame's ring entry (the scene list): a payload
+			// built at the epoch (CS_DCLF_BINDLESS_PARITY), one per segment and each with its own drawable bits, so each segment keeps
+			// its own buffer (the colour segment's is `inputs`), with the version of the region the buffer holds, per segment
+			// (0 Z-prepass, 1 colour), written by the commit that uploads it.
 			Versioned inputsDepth;
 			std::array<std::uint64_t, 2> residentUploaded{};
 			std::shared_ptr<const ComputeProgram> buildDraws;
@@ -1505,7 +1506,8 @@ namespace DCLF
 			GrowableRows materialRows;
 			// The scene's tables, every epoch's (SceneBuffers).
 			std::shared_ptr<SceneBuffers> scene;
-			std::array<Versioned, kShadowModeCount> inputs;               // per render mode
+			// The views' own inputs, which their dispatches bind: every commit's latch names the frame's ring entry (the scene list) instead.
+			Versioned inputs;
 			// Per view slot (the occlusion views', then the shadow views'), as many as the latch layout's viewSlots (Impl::ReserveShadowLatch):
 			// its sequence and count buffers, its sequence buffer's draws - grown before the epoch that uses the slot to hold
 			// every draw the scene can produce (Impl::ReserveShadowSequences) - and its counters' readback view. Render thread.
@@ -4083,9 +4085,6 @@ namespace DCLF
 			std::uint32_t shadowInputsIndex = 0;
 		};
 		RingFrame ringFrame;
-		// The last Z-prepass commit's (the reflection draws from the frame before's depth inputs): its entry, when it read one.
-		RingFrame ringDepth;
-		std::uint32_t ringDepthInputs = 0;
 		struct RingStats
 		{
 			std::uint64_t frames = 0, grown = 0, bytes = 0, runs = 0, committed = 0, shadowCommitted = 0;

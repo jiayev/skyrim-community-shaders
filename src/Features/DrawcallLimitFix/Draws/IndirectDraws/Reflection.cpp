@@ -188,7 +188,8 @@ namespace DCLF
 			return skip(0);
 		if (std::none_of(faces.begin(), faces.end(), [](const auto& a_face) { return a_face.captured; }))
 			return skip(2);
-		// What the faces draw from: the frame before's depth inputs and colour frame record, in the backings they were written to.
+		// What the faces draw from: the frame's scene list (its ring entry, as the shadow views'; U5: a member is the reflection's from
+		// the frame it joins), and the frame before's colour frame record, in the backing it was written to.
 		auto& store = SceneStore::Get();
 		const std::uint32_t frameNumber = store.GetFrame();
 		const auto main = impl->resources;
@@ -198,6 +199,12 @@ namespace DCLF
 			depthCommit.sceneGeneration != impl->scene->generation || depthCommit.objectCapacity != main->objectCapacity ||
 			depthCommit.rowsGeneration != main->MainRowsGeneration() || colourCommit.rowsGeneration != main->MainRowsGeneration())
 			return skip(3);
+		const auto& ring = impl->ringFrame;
+		const MainPayload* listed = ring.valid && ring.draws ? ring.draws->payloads[kAsyncZPrepass].get() : nullptr;
+		if (!listed)
+			return skip(3);
+		// The main part of the scene list: its region and the main frame inputs (the shadow frame inputs after them are no main input).
+		const auto listInputs = static_cast<std::uint32_t>(listed->resident.Count() + listed->inputList.size());
 		const auto indirect = GetIndirectState();
 		if (!indirect.valid || !impl->SetupReflection() || !impl->ImportReflectionCube(reflection.cube.get()))
 			return skip(4);
@@ -261,7 +268,7 @@ namespace DCLF
 			const bool treeRowBound = trees && reflection.treeOwned && treeRow.shapeSlots && TreeLodTextureBinding(treeRow, *owners);
 			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
 				const auto& face = faces[f];
-				const std::uint32_t inputs = face.captured ? depthCommit.inputs : 0u;
+				const std::uint32_t inputs = face.captured ? listInputs : 0u;
 				BuildDrawsLatch latch{};
 				latch.dispatch[0] = (inputs + 63) / 64;
 				latch.dispatch[1] = 1;
@@ -271,8 +278,8 @@ namespace DCLF
 				latch.viewBits = kViewReflection;  // the main list's: the reflection phase's members
 				latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;
 				latch.placementsIndex = FrameValues::Get().PlacementsIndex();
-				// The depth inputs the last Z-prepass commit read: its ring entry's, when it read one (step 6e E4).
-				Impl::RingLatch(impl->ringDepth, latch);
+				// The frame's scene list: its ring entry (step 6e E4).
+				Impl::RingLatch(ring, latch);
 				FoldEyeIntoViewProj(face.viewProj, face.eye, latch.viewProj);
 				latch.bucketMapOffset = region + ReflectionLatchLayout::MapOffset();
 				latch.bucketTableOffset = region + layout.TableOffset(f);

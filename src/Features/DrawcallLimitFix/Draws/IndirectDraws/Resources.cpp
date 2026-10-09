@@ -1285,8 +1285,7 @@ namespace DCLF
 				ShadowSizing next = base;
 				next.objectCapacity = objects;
 				std::vector<Growths::Part> parts{ { r.visibility, objects } };
-				for (auto& inputs : r.inputs)
-					parts.push_back({ inputs, inputWords() });
+				parts.push_back({ r.inputs, inputWords() });
 				// The new input buffers hold none of the kept state's inputs.
 				growths.Change<ShadowSizing>(r, std::move(next), std::move(parts), [&r] { r.inputsUploaded = {}; });
 			}
@@ -1331,8 +1330,7 @@ namespace DCLF
 		}
 		state->objectCapacity = scene->objectCapacity;
 		state->visibility = MakeVersioned(CreateWords(state->objectCapacity, true, "cs.dclf.shadow.visibility"));
-		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-			state->inputs[m] = MakeVersioned(CreateWords(std::uint64_t(state->objectCapacity) * sizeof(DrawInput) / 4, false, fmt::format("cs.dclf.shadow.draw-inputs{}", m).c_str()));
+		state->inputs = MakeVersioned(CreateWords(std::uint64_t(state->objectCapacity) * sizeof(DrawInput) / 4, false, "cs.dclf.shadow.draw-inputs"));
 		state->buildDraws = ComputeProgram::Load(device, { .source = kBuildDrawsShader, .constantWords = kBuildDrawsConstantWords });
 		if (!state->buildDraws) {
 			shadowSetupFailed = true;
