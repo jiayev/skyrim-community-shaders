@@ -461,28 +461,30 @@ namespace DCLF
 				}
 				logBase = NextFadeLog(a_store.GetFrame(), a_store.GetTables(), inputs);
 			}
-			auto& cull = PrimaryCull::Get();
-			UploadFadeRoots(a_store.GetTables(), a_store.GetFrame(), inputs, logBase, buffers, uploads, cull.FadeVisibility(), cull.FadeVisibilityBlocks());
+			UploadFadeRoots(a_store.GetTables(), a_store.GetFrame(), inputs, logBase, buffers, uploads, PortalViews::Get().Encoded());
 			a_store.FadeRootsSent(buffers.fadeRootsHeld);
-			// Each root's list block, when the roots or an entry's list changed (rarely: a new snapshot, a cell's lists).
+			// Each root's portal program (its room's), when the roots or a room's children changed, or the graph (PortalViews::ProgramOf).
 			const auto& rootTables = a_store.GetTables();
-			const std::uint64_t listsKey = rootTables.FadeRootsVersion() * 0x9E3779B97F4A7C15ull ^ cull.FadeRootListsVersion();
-			if (buffers.fadeRootLists && buffers.fadeRootListsHeld != listsKey && rootTables.fadeRootNode.size() <= buffers.fadeRootCapacity) {
-				std::vector<std::uint32_t> lists;
-				cull.FadeRootLists(rootTables.fadeRootNode, lists);
-				// The words that differ from what the buffer holds (all of them for a new buffer: fadeRootListsHeld reset).
-				auto& sent = buffers.fadeRootListsMirror;
-				if (buffers.fadeRootListsHeld == ~0ull)
+			auto& portals = PortalViews::Get();
+			const std::uint64_t programsKey = rootTables.FadeRootsVersion() * 0x9E3779B97F4A7C15ull ^ portals.ProgramsVersion();
+			if (buffers.fadeRootPrograms && buffers.fadeRootProgramsHeld != programsKey && rootTables.fadeRootNode.size() <= buffers.fadeRootCapacity) {
+				std::vector<std::uint32_t> programs(rootTables.fadeRootNode.size(), kPortalNoProgram);
+				for (std::size_t r = 0; r < programs.size(); ++r)
+					if (const auto* node = static_cast<const RE::NiAVObject*>(rootTables.fadeRootNode[r]))
+						programs[r] = portals.ProgramOf(node);
+				// The words that differ from what the buffer holds (all of them for a new buffer: fadeRootProgramsHeld reset).
+				auto& sent = buffers.fadeRootProgramsMirror;
+				if (buffers.fadeRootProgramsHeld == ~0ull)
 					sent.clear();
 				std::vector<std::uint32_t> differing;
-				for (std::uint32_t r = 0; r < lists.size(); ++r)
-					if (r >= sent.size() || sent[r] != lists[r])
+				for (std::uint32_t r = 0; r < programs.size(); ++r)
+					if (r >= sent.size() || sent[r] != programs[r])
 						differing.push_back(r);
 				SendWordRuns(differing, [&](std::uint32_t a_first, std::uint32_t a_count) {
-					uploads(buffers.fadeRootLists, lists.data() + a_first, std::size_t(a_count) * sizeof(std::uint32_t), std::uint64_t(a_first) * sizeof(std::uint32_t));
+					uploads(buffers.fadeRootPrograms, programs.data() + a_first, std::size_t(a_count) * sizeof(std::uint32_t), std::uint64_t(a_first) * sizeof(std::uint32_t));
 				});
-				sent = std::move(lists);
-				buffers.fadeRootListsHeld = listsKey;
+				sent = std::move(programs);
+				buffers.fadeRootProgramsHeld = programsKey;
 			}
 		}
 		// The streams as the tables hold them now, whichever frame's build this is (the ring entry's, filled by the producer).

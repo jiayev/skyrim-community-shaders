@@ -23,6 +23,9 @@ namespace DCLF
 	 * not remembered (the object's verdict is, SceneStore's UnstableBuffer).
 	 *
 	 * Render thread only, except that a lease may be released on any thread.
+	 *
+	 * Every description is taken under a reference on the buffer, held until a lease takes it over: a description is only the
+	 * buffer's while the buffer lives, and the key is the game's pointer, which a released buffer's successor may reuse.
 	 */
 	class GpuResources
 	{
@@ -51,6 +54,9 @@ namespace DCLF
 			std::uint64_t prefetchBatches = 0, prefetched = 0;  // batched resolutions, and the buffers they resolved
 			double resolveMsTotal = 0.0;
 			double resolveMsMax = 0.0;  // slowest single resolution
+			// CS_DCLF_SET_PARITY / CS_DCLF_PERSISTENT_PARITY, since the start: prefetched descriptions taken by Acquire, and those whose
+			// buffer the game had released by then (Prefetch's reference the last one): without it, a freed buffer's address.
+			std::uint64_t prefetchTaken = 0, prefetchReleased = 0;
 		};
 
 		static GpuResources& Get();
@@ -92,11 +98,17 @@ namespace DCLF
 			std::vector<ID3D11Buffer*> keys;
 		};
 
-		/** @brief A new entry for a resolved buffer, and its first lease. */
-		LeasedBuffer Insert(ID3D11Buffer* a_buffer, const Buffer& a_resolved);
+		/** @brief A new entry for a resolved buffer, held by a_reference (a reference on a_buffer), and its first lease. */
+		LeasedBuffer Insert(ID3D11Buffer* a_buffer, winrt::com_ptr<ID3D11Buffer> a_reference, const Buffer& a_resolved);
 		ankerl::unordered_dense::map<ID3D11Buffer*, Entry> entries;
-		// Prefetch's results until BeginFrame: the buffer as resolved, or nullopt when it cannot be made stable.
-		ankerl::unordered_dense::map<ID3D11Buffer*, std::optional<Buffer>> prefetched;
+		// Prefetch's results until BeginFrame: the buffer as resolved (nullopt when it cannot be made stable), under the reference
+		// Prefetch took before describing it.
+		struct Prefetched
+		{
+			winrt::com_ptr<ID3D11Buffer> reference;
+			std::optional<Buffer> buffer;
+		};
+		ankerl::unordered_dense::map<ID3D11Buffer*, Prefetched> prefetched;
 		std::shared_ptr<Released> released = std::make_shared<Released>();
 		std::uint64_t nextGeneration = 1;
 		Stats stats;

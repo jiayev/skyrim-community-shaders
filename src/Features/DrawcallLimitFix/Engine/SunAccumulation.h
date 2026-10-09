@@ -176,6 +176,11 @@ namespace DCLF
 		void GpuCascades(std::vector<GpuCascade>& a_out) const;
 		/** @brief Whether this frame's full-frustum cull applied the entry exclusion (its cascades will be captured). */
 		bool ExclusionLive() const { return exclusionLive.load(std::memory_order_acquire); }
+		/**
+		 * @brief Render thread, after the full-frustum cull's call site (either branch): on a frame it did not run, the cascades,
+		 * the exclusion and the sun's bits are cleared (they were the last frame's that ran it).
+		 */
+		void EndFullFrustumWindow();
 		/** @brief After the sun's Accumulate: every cascade's activeLightMask bit this frame. */
 		std::uint32_t SunBits() const { return frameState.sunBits; }
 		/**
@@ -322,6 +327,8 @@ namespace DCLF
 		// bits, as the engine's cascade registrations would have left them in its mask.
 		std::atomic<bool> bitsReady{ false };
 		std::atomic<bool> exclusionLive{ false };        // frameState.exclusion is set for this frame
+		bool fullFrustumRan = false;                     // render thread: the full-frustum cull ran since EndFullFrustumWindow
+		void ResetFrameSun();
 		std::atomic<std::uint32_t> stampCounter{ 0 };
 		BitStats bitStats;
 		std::vector<CascadeRegistration> claimedRegistrations;  // render thread (ClaimedRegistrations)

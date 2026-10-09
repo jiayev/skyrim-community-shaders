@@ -1,9 +1,12 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#include "PortalViews.h"
 
 namespace RE
 {
@@ -20,10 +23,11 @@ namespace DCLF
 	 * shadowLightsAccum (the sun one per cascade, each light's Accumulate one) and the next mask index (+0x520; the sun 0).
 	 *
 	 * What DCLF reads, and when:
-	 * - at the function's entry, each candidate's room test (FUN_140e14300 on the portal-graph entries, +0x30190): the light's
-	 *   rooms are its last accumulation's, and the world camera's this frame's portal walk's. A transitional engine read, the
-	 *   user's choice for T3b, removed with the portal walk (T5);
-	 * - at its return, everything else: the lights, their NiLights (hidden flag, position, radius), the world camera, and each
+	 * - at its return, everything. The room test is DCLF's since T5a3: FUN_140e14300 between the light's rooms as DCLF walks them
+	 *   now (PortalViews::WalkLight, kept per light) and the world camera's, this frame's PortalViews walk. The engine tests its
+	 *   entries as their last walks left them (a light's: when it was last kept, or moved as a dynamic light); those, sampled at
+	 *   the function's entry, are the parity's (`<- LIGHT ROOMS`), a light moved since its engine walk tallied apart.
+	 *   Also the lights, their NiLights (hidden flag, position, radius), the world camera, and each
 	 *   spot light's camera as its UpdateCamera set it up (as T2a and T3a read cameras). The visibility tests are DCLF's:
 	 *   FUN_14150aba0's frustum intersection for a spot light, BSMultiBoundSphere::Func41's sphere test for a point light, the
 	 *   lodFade cutoff (0x1433dcfac), each in the engine's operation order.
@@ -68,14 +72,29 @@ namespace DCLF
 		LightSelection() = default;
 		struct Hooks;
 		friend struct Hooks;
+		/** @brief Under the parities, at the function's entry: the engine's room tests and entries (EngineRooms). */
 		void SampleRooms();
+		/** @brief The engine's room condition for a candidate, from DCLF's walk (T5a3). */
+		bool SharesRoomWithCamera(const RE::BSShadowLight* a_light);
 		void Select();
 		void CheckParity();
+		void CheckRooms(bool& a_differ, std::string& a_detail);
 		void Report();
 
 		Frame frame;
-		// The candidates' room tests, sampled at the entry.
-		std::unordered_map<const RE::BSShadowLight*, bool> rooms;
+		// Each light's portal-graph entry as DCLF keeps it (a light not walked keeps its last), and this frame's room verdicts.
+		std::unordered_map<const RE::BSShadowLight*, PortalViews::LightRooms> lightRooms;
+		std::unordered_map<const RE::BSShadowLight*, bool> roomVerdicts;
+		// The parity's sample of the engine's entries.
+		struct EngineRooms
+		{
+			bool shares = false, visibleUnbound = false;
+			const void* entry = nullptr;      // descriptor 0's process's (the room test's)
+			const void* roomEntry = nullptr;  // the room process's (+0x128, the walk's)
+			std::array<float, 3> walkedFrom{};
+			std::vector<const void*> rooms;
+		};
+		std::unordered_map<const RE::BSShadowLight*, EngineRooms> engineRooms;
 		// The focus flag (+0x558) per light as DCLF writes it, and last frame's host (0x1433dcfb8).
 		std::unordered_map<const RE::BSShadowLight*, bool> focusFlags;
 		const RE::BSShadowLight* lastFocusHost = nullptr;
@@ -83,7 +102,10 @@ namespace DCLF
 		struct Parity
 		{
 			std::uint64_t frames = 0, kept = 0, slotsDiffer = 0, masksDiffer = 0, countsDiffer = 0, focusDiffer = 0, focusHosts = 0, framesDiffer = 0;
-			std::string first;
+			std::uint64_t roomTests = 0, roomEntriesApart = 0, roomsDiffer = 0, roomsMovedDiffer = 0, roomSetsDiffer = 0, roomSetsMovedDiffer = 0;
+			std::uint64_t roomWalks[3]{};  // by PortalViews::LightWalk
+			std::uint64_t roomProcessesOther = 0;  // walked lights whose room process is not as WalkLight assumes
+			std::string first, roomSetsFirst, roomProcessFirst;
 		};
 		Parity parity;
 		std::uint32_t reportFrames = 0;

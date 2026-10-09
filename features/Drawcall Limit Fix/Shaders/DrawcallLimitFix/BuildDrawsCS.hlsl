@@ -3,6 +3,7 @@
 // (ComputeProgram) for the render graph, with BasicRHI's descriptor-heap ABI; buffers are fetched from the descriptor heap by index.
 
 #include "DrawcallLimitFix/HzbTest.hlsli"
+#include "DrawcallLimitFix/PortalPrograms.hlsli"
 
 // Push constants: only what is fixed for a pass across executions (descriptor indices, addresses, the
 // culling phase, the HZB's shape). Everything that changes from one execution to the next is read from
@@ -61,13 +62,16 @@ cbuffer BuildDrawsConstants : register(b0)
 	// caster while its root fades; every drawing dispatch picks a LOD skin's partitions by its root's level (LodPartitions).
 	// Every listed root's state is FadeStateCS's (T1a, T1b): DCLF's model, not the node's. 0 where nothing is bound.
 	uint FadeRootsIndex;
-	uint FadeStatesUnused;  // the states a dispatch reads are its latch's (FadeStatesIndex)
+	// The depth segment's first phase (the main camera): ByteAddressBuffer, the portal programs (Records.h, kPortal*), and below
+	// StructuredBuffer<uint>, each fade root's program. A member whose root's program culls its bound is out of view. 0 elsewhere.
+	uint PortalProgramsIndex;
 	// A shadow view, and the depth segment's phases: RWByteAddressBuffer, the bucket counts, a word per bucket (BucketTableOffset). 0
 	// elsewhere.
 	uint BucketCountsIndex;
 	// A shadow view and the depth segment: ByteAddressBuffer, each geometry slot's first index in the index pool (IndexPool), ~0
 	// without one.
 	uint PoolFirstsIndex;
+	uint RootProgramsIndex;
 }
 
 // StructuredBuffer<FadeNodeState>: FadeStateCS's states as the frame before published them (the latch's fadeStatesIndex, read at
@@ -777,6 +781,16 @@ bool Occluded(float3 boundCentre, float boundRadius)
 		const float4 bound = ObjectRow(objectIndex, kObjectBoundRow);  // centre (world), radius
 		// Phase 2 has already had its frustum answer from phase 1 and only revisits occlusion.
 		frustumRejected = phase != kPhaseTwo && Culled(bound.xyz, bound.w);
+		// The portals and occluders the main camera culls through (its room's compound frustum, or unbound space's): the engine's
+		// Process1 on the member, after its root's (PortalPrograms.hlsli). An object with no fade root: the frustum alone.
+		if (!frustumRejected && phase == kPhaseOne && PortalProgramsIndex != 0 && RootProgramsIndex != 0) {
+			const uint portalRoot = inputs.Load(inputOffset + 48);
+			if (portalRoot != 0xFFFFFFFFu) {
+				StructuredBuffer<uint> rootPrograms = ResourceDescriptorHeap[RootProgramsIndex];
+				ByteAddressBuffer portalPrograms = ResourceDescriptorHeap[PortalProgramsIndex];
+				frustumRejected = PortalTest(portalPrograms, rootPrograms[portalRoot], bound.xyz, bound.w, false, false, false) == 0;
+			}
+		}
 		if (frustumRejected) {
 			count.InterlockedAdd(kCountCulled, 1, scratch);
 		} else if (CullMode() >= 2 && Occluded(bound.xyz, bound.w)) {

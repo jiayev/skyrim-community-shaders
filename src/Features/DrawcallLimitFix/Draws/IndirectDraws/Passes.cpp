@@ -695,6 +695,7 @@ namespace DCLF::Draws
 		org::DeclaredViewToken sortCounts, sortStaging, sortRanks;
 		org::DeclaredViewToken fadeRoots;
 		org::DeclaredViewToken bucketCounts, poolFirsts;  // the depth segment's buckets (Resources::zBucketCounts) and the pool's firsts
+		org::DeclaredViewToken portalPrograms, rootPrograms;  // the main camera's first phase: its portal programs, each root's
 	};
 
 	struct BuildDrawsFrame
@@ -735,6 +736,11 @@ namespace DCLF::Draws
 			bindings.visibility = a_builder.UnorderedAccess(*resources->visibility).View();
 			if (resources->frustum)
 				bindings.frustum = a_builder.UnorderedAccess(*resources->frustum).View();
+			// The main camera's first phase tests a member against its root's portal program (Records.h, kPortal*).
+			if (resources->frustum && resources->scene->portalPrograms && resources->scene->fadeRootPrograms) {
+				bindings.portalPrograms = a_builder.ShaderResource(*resources->scene->portalPrograms).View();
+				bindings.rootPrograms = a_builder.ShaderResource(*resources->scene->fadeRootPrograms).View();
+			}
 			// Every phase reads the fade roots' static rows (the first phase's fade verdicts, every phase's LOD skin partitions), and
 			// the states FadeStateCS published the frame before (its latch's; undeclared, as nothing this frame writes them:
 			// SceneBuffers::fadeStatesOut).
@@ -804,6 +810,11 @@ namespace DCLF::Draws
 			// The frustum stamps: the depth segment's first phase alone tests every candidate's frustum.
 			if (resources->frustum && phase == 1)
 				constants.frustumIndex = CaptureViewIndex(a_preparation, a_bindings.frustum);
+			// And the portal programs: a member whose root's program culls its bound is out of view, as the frustum's.
+			if (resources->frustum && phase == 1 && a_bindings.portalPrograms.layout && resources->scene->fadeRoots && resources->scene->fadeRootCount) {
+				constants.portalProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.portalPrograms);
+				constants.rootProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.rootPrograms);
+			}
 			// Every phase: the first phase's fade verdicts, and every phase's LOD skin partitions (LodPartitions).
 			if (resources->scene->fadeRoots && resources->scene->fadeRootCount) {
 				constants.fadeRootsIndex = CaptureViewIndex(a_preparation, a_bindings.fadeRoots);
@@ -1012,7 +1023,7 @@ namespace DCLF::Draws
 
 	struct FadeStateBindings
 	{
-		org::DeclaredViewToken roots, states, frame, log, visibility, rootLists, animated, events, reported;
+		org::DeclaredViewToken roots, states, frame, log, programs, rootPrograms, animated, events, reported;
 		std::array<org::DeclaredViewToken, 2> published;
 	};
 
@@ -1044,8 +1055,8 @@ namespace DCLF::Draws
 			for (std::uint32_t h = 0; h < 2; ++h)
 				bindings.published[h] = a_builder.UnorderedAccess(*scene.fadeStatesOut[h]).View();
 			bindings.frame = a_builder.ShaderResource(scene.fadeFrameBuffer).View();
-			bindings.visibility = a_builder.ShaderResource(scene.fadeVisibility).View();
-			bindings.rootLists = a_builder.ShaderResource(*scene.fadeRootLists).View();
+			bindings.programs = a_builder.ShaderResource(*scene.portalPrograms).View();
+			bindings.rootPrograms = a_builder.ShaderResource(*scene.fadeRootPrograms).View();
 			bindings.animated = a_builder.ShaderResource(*scene.fadeAnimated).View();
 			bindings.log = a_builder.UnorderedAccess(scene.fadeLog).View();
 			if (scene.fadeEvents) {
@@ -1079,9 +1090,9 @@ namespace DCLF::Draws
 			constants.rootsIndex = CaptureViewIndex(a_preparation, a_bindings.roots);
 			constants.statesIndex = CaptureViewIndex(a_preparation, a_bindings.states);
 			constants.frameIndex = CaptureViewIndex(a_preparation, a_bindings.frame);
-			constants.visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
+			constants.programsIndex = CaptureViewIndex(a_preparation, a_bindings.programs);
 			constants.logIndex = CaptureViewIndex(a_preparation, a_bindings.log);
-			constants.rootListsIndex = CaptureViewIndex(a_preparation, a_bindings.rootLists);
+			constants.rootProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.rootPrograms);
 			constants.animatedIndex = CaptureViewIndex(a_preparation, a_bindings.animated);
 			for (std::uint32_t h = 0; h < 2; ++h)
 				constants.outIndices[h] = CaptureViewIndex(a_preparation, a_bindings.published[h]);
@@ -2508,7 +2519,8 @@ namespace DCLF::Draws
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-states-out0"), a_scene.fadeStatesOut[0]);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-states-out1"), a_scene.fadeStatesOut[1]);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-frame"), a_scene.fadeFrameBuffer);
-			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-visibility"), a_scene.fadeVisibility);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.portal-programs"), a_scene.portalPrograms);
+			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-root-programs"), a_scene.fadeRootPrograms);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-log"), a_scene.fadeLog);
 			if (a_scene.fadeEvents) {
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-events"), a_scene.fadeEvents);

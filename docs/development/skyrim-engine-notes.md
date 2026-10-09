@@ -1218,7 +1218,72 @@ Decompiled 2026-10-01 for moving the fade and LOD state machine to the GPU.
     5.  renders the accumulator (`FUN_1414a90f0(camera, accumulator, 8)`), with the raster cull mode at 2.
 
     There is no depth prepass: the face is one forward pass, colour and depth together.
+-   **`Update`'s flags** (`+0x10`): bit 12 renders without the LOD roots (another root at `0x1431872c8`+0x100), bit 4 with
+    silhouettes (0x1B); without bit 12 and `bReflectSky` the faces suppress the sky (0x19). The add-roots are at
+    `0x14052080d` (LOD land, `0x14315b898`), `0x140520826` (LOD objects, `0x14315b8a0`), `0x14052083f` (LOD trees,
+    `0x14315b880`) and `0x140520854` (the sky). It renders 2 faces an update (6 under a menu, `0x140fa37b0`), the last
+    with clearRoots.
+-   **A face's VS_PerFrame** (measured, 2026-10-09): the camera's matrices without jitter; c20 holds the projection's
+    inverse and c24 the projection (FrameBuffer.hlsli's names are the other way round); c16
+    (CameraPreviousViewProjUnjittered) and c41 (CameraPreviousPosAdjust, fDRClampOffset in w) are zero; c42-c44 the
+    frame's (FrameParams, the dynamic resolution ratios).
 -   CS Dynamic Cubemaps draws no geometry: it is a compute pass over the main colour and depth.
+
+### Portals, rooms and occluders: the main camera's compound frustums
+
+Reverse engineered 2026-10-09 (Ghidra, AE); DCLF's port is `Engine/PortalViews` (T5a).
+
+-   **Who builds them.** `Main::Update` resets every occluder's state (`FUN_1401a4a00`: `+0x40` of the graph's and the
+    rooms' occluders), then `FUN_1401a43c0(TES, list[0])` walks the ShadowSceneNode's portal graph (`ssn+0x228`) from
+    the main camera into the one `BSPortalGraphEntry` every scene list's process shares (`+0x30190`). Lights
+    (`FUN_1414a2530` -> `FUN_1414a6400`/`7150`, the light's own process at `light+0x128`) and the water process walk into
+    their own entries. With no graph the entry is left as it was.
+-   **The start.** Every room (`graph+0x40`, in order) whose `QPointWithin` (vfunc `0x3F`) holds the camera's near-plane
+    centre (`eye + near * forward`) gets its own walk; only the first is flagged first (it clears
+    `visibleUnboundSpace`). With none, one walk from unbound space. `entry+0x30` is that first room.
+-   **The walk** (`FUN_1414a41e0`): a FIFO of rooms (null: unbound space, its portals the graph's list at `+0x28`).
+    Each pop finalizes the room's frustum and, for each portal not yet crossed (keyed by its shared node, `+0x128`):
+    the view-plane test (`BSOcclusionPlane::WithinFrustumDistFirst`, skipped when the frustum has `skipViewFrustum`),
+    then the frustum's program on the portal's quad. The room beyond (`+0x118`, else `+0x120`) is queued, unless it is
+    the start, and its frustum built from this one:
+    -   new: AND(this frustum's copy, with each set the portal lies wholly inside, no edge clipped, turned off; the portal's
+        set; the room's occluders). A parent of 26 operators or more is dropped (`skipViewFrustum` then);
+    -   reached again: the stream reopened as an OR (`FUN_140e334c0`) and the new path ORed in, the parent whole.
+-   **A portal's set** (`FUN_140e32710`): the quad's plane with the camera on its non-positive side, the four planes
+    through the camera and each edge, slot 1 the zero plane; all six on, or none when the camera is within 5 units of
+    the portal's plane. No near plane.
+-   **Occluders.** Unbound space and the start room take theirs at the walk's start (`FUN_140e32920`): a plane when its
+    quad meets the view, an occlusion box when the camera is outside it and it meets the view (`FUN_140e21750`). A room
+    reached through a portal takes boxes (if they pass the parent's program) and planes only in state 1, which nothing in
+    the walk sets: in the main camera's frustums the rooms' occlusion planes take no part. A plane is `8 s` (visible
+    unless wholly inside its set); a linked pair of planes (`+0xF8..+0x110`, the neighbour accepted, the camera on the
+    same side) is an AND/OR of four; a box is OR(not inside set 0, not inside set 1), its sets the silhouette's edge
+    planes (the corners projected at 1/1024 pixel, a quickhull of at most 6) and its faces turned away, refined against
+    the camera-relative frustum (`FUN_140e22220`).
+-   **The program.** Builders write tokens (4 AND, 5 OR, 6 close, `7 s` portal test, `8 s` occluder test);
+    `Finalize` (`FUN_140e33c70`) appends root, ACCEPT, REJECT and turns them into `{type, next if true, next if false}`
+    with the jumps threaded to tests. Only the 5 and 6 tokens and the merge clear `finalized`. Evaluation is
+    `BSCompoundFrustum::Process` (drawcall-limit-fix.md, "Roots with engine-drawn parts, culled by the engine").
+-   **Who reads them.** `CalculateAndDrawShadowCasterLights` finalizes `entry+0x68` (unbound space) and deep-copies it
+    into each list process (`+0x301A0`), without `skipViewFrustum`. `BSMultiBoundRoom::OnVisible` installs its room's
+    frustum for its children; a room not in the map is not culled into at all (unless the cull mode is 1 or 3).
+    `ShadowSceneNode::OnVisible` and `BSPortalSharedNode::OnVisible` build and use the portals' shared-node frustums
+    during the jobs.
+-   **State on the shapes** the walk reads and writes: corners (recomputed when dirty), each quad's edge-clipped flags
+    (`+0xF0..+0xF3`: whichever test ran last, across frames), the per-frame state, a box's silhouette sets. Frustums
+    from the static pool (`0x143284d00`, 32 slots) are not reset when taken: a portal's shared-node entry can hold stale
+    operators.
+-   **A shadow light's rooms** (`FUN_1414a2530` -> `FUN_1414a6400`; `CalculateActiveShadowCasterLights` walks a light only
+    once kept, after testing its entry: the test reads the light's last walk). Nothing with no graph rooms, the NiLight
+    hidden or its fade (`+0x134`) under 0.05, or the light on an object node (`BSLight +0x130`): the entry keeps what it had
+    (the constructor's: `visibleUnboundSpace` 1, no rooms). Otherwise the entry is cleared, then: not portal-strict
+    (`+0x47`), unbound space and every room whose bound meets the light's sphere (`CheckBound2`, vfunc 0x41); portal-strict,
+    `Traverse` (frustums for a shadow light) from every room holding the camera's near point, each with `isFirst` 1, else
+    from unbound space. The light's room process (`+0x128`) is a `BSParabolicCullingProcess` with its own orthographic
+    camera at the light (frustum `-1 1 1 -1`, near 0.1, viewport `0 1 1 0.5`; the walk puts the NiLight's rotation and
+    position on it), no view planes (mask 0), and a portal view test (vfunc 0xD8, `0x14151a120`) of the portal's sphere
+    {centre, larger half extent} against the light's radius (`+0x30224`), with `+0x30200` set passing either side of the
+    light's plane. The walk shares the shapes' occluder states and edge flags with the main camera's.
 
 ### Point lights' shadow culls
 

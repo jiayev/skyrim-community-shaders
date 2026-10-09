@@ -97,13 +97,13 @@ namespace DCLF
 		bool ReflectionTreeLodOwned() const { return reflectionTreeLodOwned.load(std::memory_order_acquire); }
 		/**
 		 * @brief The faces' residue parity (T4): render thread, at an update's start, the cube camera's roots (ReflectionFaces::RootBits)
-		 * whose add-roots DCLF would skip but this update keeps, 0 for none. While set, a pass registered into a face's renderer and not
-		 * withheld - a geometry under those roots the engine would still draw - is counted (the sky's are not).
+		 * to watch this update, which keeps them, 0 for none. While set, a pass registered into a face's renderer and not withheld - a
+		 * geometry under those roots the engine still draws - is counted, by root (the sky's are not).
 		 */
 		void WatchReflectionResidue(std::uint32_t a_roots) { reflectionResidueWatch.store(a_roots, std::memory_order_release); }
 		struct ReflectionResidue
 		{
-			std::uint32_t passes = 0;
+			std::uint32_t lodPasses = 0, treePasses = 0;  // under the LOD land and objects roots, under the tree root
 			std::string first;
 		};
 		/** @brief Since the last call. */
@@ -234,10 +234,10 @@ namespace DCLF
 		std::atomic<std::uint32_t> treeLodWithheld{ 0 };
 		std::atomic<bool> treeLodOwned{ false };
 		std::atomic<std::uint32_t> reflectionWithheld{ 0 }, reflectionTreeLodWithheld{ 0 };
-		std::atomic<std::uint32_t> reflectionResidueWatch{ 0 }, reflectionResidue{ 0 };
+		std::atomic<std::uint32_t> reflectionResidueWatch{ 0 }, reflectionResidueLod{ 0 }, reflectionResidueTree{ 0 };
 		std::mutex reflectionResidueLock;
 		std::string reflectionResidueFirst;  // under reflectionResidueLock
-		void NoteReflectionResidue(const RE::BSRenderPass* a_pass);
+		void NoteReflectionResidue(const RE::BSRenderPass* a_pass, bool a_treeLod);
 		std::atomic<bool> reflectionFace{ false }, reflectionTreeLodOwned{ false }, reflectionCovered{ true };
 		std::shared_ptr<const ankerl::unordered_dense::set<const RE::BSBatchRenderer*>> reflectionRenderers;
 		std::array<const void*, 2> reflectionAccumulators{};  // what reflectionRenderers was made from (render thread)

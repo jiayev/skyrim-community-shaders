@@ -227,23 +227,21 @@ namespace DCLF
 
 	std::uint32_t IndirectDraws::ReflectionRootsOwned(bool a_plain)
 	{
-		// The roots whose members DCLF's faces draw: LOD land and objects while the set draws the reflection phase and every object
-		// taking part in it is a member (SetLacking: none waits for its forward pipeline); LOD trees while the faces' tree LOD is DCLF's
-		// (PrepareReflection). Only in a plain update of a frame whose faces are DCLF's (DecideCoverage).
+		// The roots whose members DCLF's faces draw, in a plain update of a frame whose faces are DCLF's (DecideCoverage):
+		// - LOD trees while the faces' tree LOD is DCLF's (PrepareReflection): drawn from DCLF's mirror, no registration needed.
+		// - Not yet LOD land and objects (until T6): the faces draw LOD chunks the main camera never registers (terrain LOD under the
+		//   loaded cells: the faces have no loaded terrain), and an object DCLF has no registration of has no bindings
+		//   (kObjectNoBindings), so it is no reflection-phase member. Their roots stay; the members are withheld (PassCapture).
 		auto& reflection = impl->reflection;
 		auto& capture = PassCapture::Get();
 		capture.WatchReflectionResidue(0);
 		if (!a_plain || !ReflectionDrawable() || !impl->reflectionCovered || PassCapture::ParityBoth())
 			return 0;
-		std::uint32_t owned = 0;
-		if (const auto set = capture.CurrentSet(); set && (set->drawn & kSetReflection) && SceneStore::Get().SetLacking(kSetReflection) == 0)
-			owned |= ReflectionFaces::kLodRoots;
-		if (reflection.treeOwned)
-			owned |= ReflectionFaces::kTreeRoot;
-		// The residue parity: every 30th such update keeps its roots, and what the engine registers into its faces and DCLF does not
-		// withhold is counted (PassCapture::WatchReflectionResidue).
-		if (owned && SunViews::ParityEnabled() && reflection.residueUpdates++ % 30 == 0) {
-			capture.WatchReflectionResidue(owned);
+		const std::uint32_t owned = reflection.treeOwned ? ReflectionFaces::kTreeRoot : 0u;
+		// The residue parity: what the engine registers into the faces and DCLF does not withhold, by root: the LOD roots' on every
+		// 30th update (what skipping them would lose: T6's gate), the tree root's on every 30th of those that skip it (kept then).
+		if (SunViews::ParityEnabled() && reflection.residueUpdates++ % 30 == 0) {
+			capture.WatchReflectionResidue(ReflectionFaces::kLodRoots | owned);
 			return 0;
 		}
 		return owned;
@@ -341,13 +339,14 @@ namespace DCLF
 		if (std::none_of(faces.begin(), faces.end(), [](const auto& a_face) { return a_face.captured; }))
 			return skip(2);
 		// What the faces draw from: the frame's scene list (its ring entry, as the shadow views'; U5: a member is the reflection's from
-		// the frame it joins), and the frame before's colour frame record, in the backing it was written to.
+		// the frame it joins) with this frame's depth commit's index pool, depth inputs, object records and geometry rows - the frame's
+		// publication whole - and the frame before's colour frame record, in the backing it was written to.
 		auto& store = SceneStore::Get();
 		const std::uint32_t frameNumber = store.GetFrame();
 		const auto main = impl->resources;
 		const auto& depthCommit = main ? main->committed[kDepthShape] : Resources::Committed{};
 		const auto& colourCommit = main ? main->committed[kColourShape] : Resources::Committed{};
-		if (!main || !main->inputsDepth || !impl->scene || depthCommit.frame != colourCommit.frame || frameNumber - depthCommit.frame > 1 ||
+		if (!main || !main->inputsDepth || !impl->scene || depthCommit.frame != frameNumber || colourCommit.frame + 1 != frameNumber ||
 			depthCommit.sceneGeneration != impl->scene->generation || depthCommit.objectCapacity != main->objectCapacity ||
 			depthCommit.rowsGeneration != main->MainRowsGeneration() || colourCommit.rowsGeneration != main->MainRowsGeneration())
 			return skip(3);
@@ -534,11 +533,12 @@ namespace DCLF
 		const auto roots = ReflectionFaces::TakeRootStats();
 		const auto residue = PassCapture::Get().TakeReflectionResidue();
 		auto& parity = reflection.cameraParity;
-		text += fmt::format("[DCLF] reflection faces (T4: DCLF's cameras, the engine's LOD roots skipped): {} updates, {} without the LOD land and objects roots, {} without "
-							"the tree root; parity: {} faces, {} blocks and {} slices differ (registers {:#x}, largest {:.3g}){}{}, {} residue passes{}{}\n",
-			roots.updates, roots.lodSkipped, roots.treeSkipped, parity.faces, parity.blocks, parity.slices, parity.registers, parity.largest,
-			parity.blocks || parity.slices ? " <- FACE CAMERA" : (parity.faces ? " <- OK" : ""), parity.first.empty() ? "" : " (first: " + parity.first + ")", residue.passes,
-			residue.passes ? " <- REFLECTION RESIDUE" : "", residue.first.empty() ? "" : " (first: " + residue.first + ")");
+		text += fmt::format("[DCLF] reflection faces (T4: DCLF's cameras, the engine's tree LOD root skipped): {} updates, {} without the tree root; parity: {} faces, {} blocks "
+							"and {} slices differ (registers {:#x}, largest {:.3g}){}{}; residue: {} tree LOD passes{}, {} under the LOD land and objects roots (kept until "
+							"T6: no bindings without a registration){}\n",
+			roots.updates, roots.treeSkipped, parity.faces, parity.blocks, parity.slices, parity.registers, parity.largest,
+			parity.blocks || parity.slices ? " <- FACE CAMERA" : (parity.faces ? " <- OK" : ""), parity.first.empty() ? "" : " (first: " + parity.first + ")",
+			residue.treePasses, residue.treePasses ? " <- REFLECTION RESIDUE" : "", residue.lodPasses, residue.first.empty() ? "" : " (first: " + residue.first + ")");
 		parity = {};
 		reflection.facesCaptured = reflection.updates = reflection.epochs = reflection.facesDrawn = reflection.lateFaces = 0;
 		reflection.skipped = {};

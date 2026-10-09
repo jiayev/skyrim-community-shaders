@@ -67,6 +67,7 @@ namespace DCLF
 		PassStats,
 		Profile,
 		ShaderDebug,
+		FetchGuard,
 		ShaderSourceDir,
 		Eval,
 		TraceTexturePaths,

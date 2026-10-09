@@ -944,11 +944,11 @@ bool RenderGraphRuntime::Initialize()
 		// shape instead of being prepared again (a render-thread wait). Kept recordings carry no Tracy GPU zones: turn it off
 		// to profile the epochs' passes on the GPU with Tracy.
 		desc.reuseRecordings = !EnvEquals("CS_ORG_REUSE_RECORDINGS", "0");
-		// The segments in the order a frame runs them: the water reflection's faces (TESWaterReflections::Update), the shadow views at AfterShadowMaps, the Z-prepass at
-		// the depth pass, Skylighting's map, Light Limit Fix's culling at Prepass, the colour pass where the main
-		// pass's opaque batches end.
+		// The segments in the order a frame runs them: the shadow views at AfterShadowMaps, the Z-prepass at the depth pass, the water
+		// reflection's faces after it, Skylighting's map, Light Limit Fix's culling at Prepass, the colour pass where the main pass's
+		// opaque batches end.
 		if (EpochsEnabled())
-			desc.epochOrder = { EpochOf(Segment::Reflection), EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::SkyOcclusion), EpochOf(Segment::LightCulling),
+			desc.epochOrder = { EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::Reflection), EpochOf(Segment::SkyOcclusion), EpochOf(Segment::LightCulling),
 				EpochOf(Segment::MainOpaque) };
 		const bool closed = desc.closedExecutions;
 		state->host = std::make_unique<org::PersistentGraphHost>(std::move(desc));

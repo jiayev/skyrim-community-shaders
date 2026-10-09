@@ -960,8 +960,9 @@ namespace DCLF
 				buffers->fadeStatesOut[h] = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), h ? "cs.dclf.fade-states-out1" : "cs.dclf.fade-states-out0",
 					buffers->fadeStatesOutIndex[h], true));
 			buffers->fadeFrameBuffer = StructuredBuffer(1, sizeof(FadeFrame), "cs.dclf.fade-frame", unused);
-			buffers->fadeVisibility = CreateWords(kFadeVisibilityLists * kFadeVisibilityBytes / 4, false, "cs.dclf.fade-visibility");
-			buffers->fadeRootLists = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, sizeof(std::uint32_t), "cs.dclf.fade-root-lists", unused));
+			buffers->portalWords = smallStart ? kPortalHeaderBytes / 4 : 4096u;
+			buffers->portalPrograms = MakeVersioned(CreateWords(buffers->portalWords, false, "cs.dclf.portal-programs"));
+			buffers->fadeRootPrograms = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, sizeof(std::uint32_t), "cs.dclf.fade-root-programs", unused));
 			buffers->fadeAnimated = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, sizeof(std::uint32_t), "cs.dclf.fade-animated", unused));
 			buffers->fadeLog = StructuredBuffer(kFadeLogEntries, sizeof(FadeLogEntry), "cs.dclf.fade-log", unused, true);
 			// The write-back (FadeWriteBack): the event list, the roots' reported milestones, a host buffer per frame slot.
@@ -1186,7 +1187,7 @@ namespace DCLF
 		if (s.fadeRoots) {
 			grow("fade roots", next.fadeRootCapacity, a_tables.fadeRoots.size(), sizeof(FadeRootStatic) + sizeof(FadeNodeState),
 				[&](std::uint32_t a_rows, auto& a_parts) {
-					for (const auto* buffer : { &s.fadeRoots, &s.fadeRootLists, &s.fadeAnimated, &s.fadeStates })
+					for (const auto* buffer : { &s.fadeRoots, &s.fadeRootPrograms, &s.fadeAnimated, &s.fadeStates })
 						a_parts.push_back({ *buffer, a_rows });
 					if (s.fadeReported)
 						a_parts.push_back({ s.fadeReported, a_rows });
@@ -1198,10 +1199,15 @@ namespace DCLF
 						s.fadeStatesOutIndex[h] = s.fadeStatesOut[h]->Get()->GetSRVInfo(0).slot.index;
 					s.fadeRootsIndex = s.fadeRoots->Get()->GetSRVInfo(0).slot.index;
 					s.fadeRootsHeld = ~0ull;
-					s.fadeRootListsHeld = ~0ull;
+					s.fadeRootProgramsHeld = ~0ull;
 					s.fadeStatesOutZeroed = false;
 					s.fadeReportedZeroed = false;
 				});
+		}
+		// The portal programs, to the most a frame's encoding holds (the next frame's, if this one's outgrew them).
+		if (s.portalPrograms) {
+			grow("portal programs", next.portalWords, PortalViews::Get().Encoded().size(), sizeof(std::uint32_t),
+				[&](std::uint32_t a_words, auto& a_parts) { a_parts.push_back({ s.portalPrograms, a_words }); }, [&s] { s.portalProgramsSent.clear(); });
 		}
 		// The write-back's event list, to the most a frame appended past it; each slot's host buffer follows at its next recording.
 		if (s.fadeEvents && s.fadeWriteBack) {
