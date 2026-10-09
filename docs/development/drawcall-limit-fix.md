@@ -6765,7 +6765,7 @@ member never met them. Now, while `CS_DCLF_FADING` and `CS_DCLF_LOD_CROSSFADE` a
 Measured (m177 every parity, e36, forest-t1c, y78): DCLF's draws and every parity as before (record parity 0 of ~48,000
 differ, the fade root bits included); SPIR-V programs 99 of 99 built.
 
-## Shadow views and lights from DCLF (T2a, T3a, T3b, 2026-10-08/09)
+## Shadow views and lights from DCLF (T2a, T3a, T3b, T3c, 2026-10-08/09)
 
 The shadow views' cameras and the choice of shadow lights are DCLF's: nothing reads a cull or the renderer's state at a
 view's draw for them. The engine's values are the parity's alone (`CS_DCLF_SET_PARITY` or `CS_DCLF_PERSISTENT_PARITY`).
@@ -6799,12 +6799,33 @@ view's draw for them. The engine's values are the parity's alone (`CS_DCLF_SET_P
         `ShadowViews::Rebuild` (DCLF's slots) and `LocalShadowLights` (DCLF's lights and mask indices, LightViews' cull
         planes). Parities `light selection ... <- LIGHT SELECTION` and `local shadow volumes ... <- LOCAL SHADOW VOLUME`
         (LightViews' planes against the processes' after the cull, a zero plane inactive).
--   **Still the engine's:** the focus views (T3c), the scissor rectangle (`+0x544..`; no DCLF reader), the depth target,
-    slice and raster state at the draw (T7), and UpdateCamera itself (T2b, deferred to T7).
+-   **The focus shadows (T3c, `Engine/FocusViews`, LightSelection).** Drawn by DCLF (before: native).
+    -   Targets: `FUN_140647a20` (game side) fills `0x14332a488` ({distance, node} x `0x14332a498`): the player's 3D root, then
+        the nearest actors'. A scene input.
+    -   Host: a light with `drawFocusShadows` (`+0x558`) draws focus views 0..count-1. The sun when it draws and the setting
+        (`0x142032fd0`) and a target; else last frame's host (`0x1433dcfb8`) while a candidate, else the first kept light whose
+        vfunc 0x20 is true (directional, spot; not point). The flag persists across frames: LightSelection keeps its own.
+    -   Cameras: `BSShadowDirectionalLight::sub` (`0x1414f0480`, any host) aims an orthographic camera per target; read at its
+        return (FocusViews), SunViews' arithmetic, no caster volume.
+    -   Casters: the engine registers the target's subtree whole (`FUN_1414f0b90` -> `FUN_1414b5920`: non-hidden geometry under
+        non-hidden nodes, no cull). DCLF: the members whose fade root (the property's `fadeNode`) is the target's, a per-view
+        `BuildDrawsLatch::focusRoot` (root slot + 1) tested on the input's root word. The latch is 304 bytes.
+    -   The engine draws a focus view into a sub-rectangle sized from the target's distance (a new size most frames), while
+        DCLF's placements are whole slices recorded ahead. DCLF draws it over the whole slice with the sub-rectangle's viewport
+        transform folded into CameraProj/CameraViewProj (c4, c8, c12) and the culling's view-projection (`FocusToSlice`): the
+        same pixels; the rest of the slice is the focus view's alone and no receiver samples it.
+    -   Parities `focus views ... <- FOCUS VIEW` (cameras), `focus members ... <- FOCUS MEMBERS` (the engine's registrations
+        into a covered focus view against the target's fade root, in the registration hook), and the light selection's focus
+        flags and host.
+-   **Still the engine's:** the scissor rectangle (`+0x544..`; no DCLF reader), the depth target, slice and raster state at the
+    draw (T7), and UpdateCamera and sub themselves (T2b, deferred to T7).
 
 Measured: T2a m183/m186 0 differences (3,600 full-frustum processes per 300 frames); T3a l1-l10 0 of ~1,200 local views per
 300 frames; T3b s2 (inn and Dragonsreach, point lights, no sun) and m189 (exterior motion, sun with local lights) 0 frames
 differ in slots, mask indices and counts, 0 of 3,000 volumes differ, 600 of 600 shadow views drawn. No spot light was met.
+T3c: e38 (bridge, actors near, the sun hosting every frame for 900+ frames) 0 focus flags differ, 0 of 300 focus views per window
+differ, 0 registrations under another root, 1,500 of 1,500 shadow views drawn, no holes; m191 (motion, 7 focus frames) clean. Before
+`FocusToSlice` (m190) every focus view was left with withheld casters for want of a placement (`<- HOLES`). No spot light host met.
 
 ## Point lights' culls: the category filter, and the light candidates (2026-10-01)
 

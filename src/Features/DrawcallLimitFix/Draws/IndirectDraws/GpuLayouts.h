@@ -452,8 +452,14 @@ namespace DCLF::Draws
 		// The view types this dispatch draws (kView*): an input whose mask has none of them is not this view's. 0: no test.
 		std::uint32_t viewBits;
 		std::uint32_t materialRowsLo, materialRowsHi, pipelineRowsLo, pipelineRowsHi;
+		// A focus view (T3c): its target's fade root slot + 1, which an input's root word (+48) must name; kFocusRootNone: a target
+		// that is no listed root (no input's). 0: no test.
+		std::uint32_t focusRoot;
+		std::uint32_t pad[3];
 	};
-	static_assert(sizeof(BuildDrawsLatch) == 288 && offsetof(BuildDrawsLatch, payloadValid) == 256 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
+	// BuildDrawsLatch::focusRoot for a target that is no listed root: no input's root word is its - 1.
+	constexpr std::uint32_t kFocusRootNone = 0xFFFFFFFFu;
+	static_assert(sizeof(BuildDrawsLatch) == 304 && offsetof(BuildDrawsLatch, focusRoot) == 288 && offsetof(BuildDrawsLatch, payloadValid) == 256 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
 				  offsetof(BuildDrawsLatch, viewProj) == 32 && offsetof(BuildDrawsLatch, cullPlanes) == 96 &&
 				  offsetof(BuildDrawsLatch, pipelineMapOffset) == 192 && offsetof(BuildDrawsLatch, sunState) == 196 &&
 				  offsetof(BuildDrawsLatch, treeHeight) == 200 && offsetof(BuildDrawsLatch, fadeEye) == 208 &&

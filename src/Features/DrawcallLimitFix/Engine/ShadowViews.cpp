@@ -173,6 +173,7 @@ namespace DCLF
 		if (!selection)
 			return;
 		std::uint32_t lightIndex = 0;
+		std::vector<const RE::BSShadowLight*> focusAdded;
 		for (const auto* selected : selection->slots) {
 			auto* light = const_cast<RE::BSShadowLight*>(selected);
 			if (!light) {
@@ -218,8 +219,11 @@ namespace DCLF
 			};
 			for (std::uint32_t d = 0; d < data.shadowmapDescriptors.size(); ++d)
 				add(data.shadowmapDescriptors[d], d, false);
-			if (data.drawFocusShadows) {
-				for (std::uint32_t d = 0; d < 4; ++d)
+			// A focus host's focus views (T3c, DCLF's hosts and target count: Render draws descriptors 0..count-1), once per light.
+			if (std::find(selection->focusHosts.begin(), selection->focusHosts.end(), light) != selection->focusHosts.end() &&
+				std::find(focusAdded.begin(), focusAdded.end(), light) == focusAdded.end()) {
+				focusAdded.push_back(light);
+				for (std::uint32_t d = 0; d < selection->focusCount; ++d)
 					add(data.focusShadowmapDescriptors[d], d, true);
 			}
 			++lightIndex;
@@ -228,7 +232,7 @@ namespace DCLF
 		// DCLF's views: its candidates in the engine's order, within the slots its buffers hold (SetViewCapacity).
 		candidates = 0;
 		for (auto& view : views) {
-			const bool candidate = !view.focus && view.renderMode >= PassCapture::kFirstShadowMode &&
+			const bool candidate = view.renderMode >= PassCapture::kFirstShadowMode &&
 			                       view.renderMode < PassCapture::kFirstShadowMode + PassCapture::kShadowModes;
 			view.covered = candidate && candidates < viewCapacity;
 			candidates += candidate ? 1u : 0u;
@@ -236,13 +240,17 @@ namespace DCLF
 		// The shadow renderers by render mode, for the registration hook's withholding (the set's shadow phases): DCLF's views'.
 		// Published whole; the hook runs on the engine's registration threads.
 		auto renderers = std::make_shared<PassCapture::ShadowRendererMap>();
+		auto focus = std::make_shared<PassCapture::ShadowRendererMap>();  // the covered focus views' renderers, by focus descriptor (parity)
 		for (const auto& [batch, id] : batchToView) {
 			const auto& view = views[id];
 			if (!view.covered)
 				continue;
 			renderers->emplace(batch, static_cast<std::uint8_t>(view.renderMode - PassCapture::kFirstShadowMode));
+			if (view.focus)
+				focus->emplace(batch, static_cast<std::uint8_t>(view.descriptor));
 		}
 		PassCapture::Get().SetShadowBatchRenderers(std::move(renderers));
+		PassCapture::Get().SetFocusBatchRenderers(std::move(focus));
 	}
 
 	void ShadowViews::UncoverAll()
@@ -250,6 +258,7 @@ namespace DCLF
 		for (auto& view : views)
 			view.covered = false;
 		PassCapture::Get().SetShadowBatchRenderers(std::make_shared<PassCapture::ShadowRendererMap>());
+		PassCapture::Get().SetFocusBatchRenderers(std::make_shared<PassCapture::ShadowRendererMap>());
 	}
 
 	std::uint32_t ShadowViews::ViewOfAccumulator(const void* a_accumulator) const

@@ -18,6 +18,7 @@
 #include "DrawcallLimitFix/Engine/FaceSnapshots.h"
 #include "DrawcallLimitFix/Engine/SunAccumulation.h"
 #include "DrawcallLimitFix/Engine/SunViews.h"
+#include "DrawcallLimitFix/Engine/FocusViews.h"
 #include "DrawcallLimitFix/Engine/LightSelection.h"
 #include "DrawcallLimitFix/Engine/PrimaryCull.h"
 #include "Features/Skylighting.h"
@@ -116,6 +117,7 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::SunAccumulation::Get().Install();
 	DCLF::SunViews::Get().Install();
 	DCLF::LightSelection::Get().Install();
+	DCLF::FocusViews::Get().Install();
 	DCLF::PrimaryCull::Get().Install();
 	// DCLF's threads and its scene graph, before the first frame kicks a job (dclf-async-publication.md, "The design").
 	(void)DCLF::SceneScheduler::Graph();

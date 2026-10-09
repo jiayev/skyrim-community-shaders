@@ -1340,6 +1340,8 @@ namespace DCLF
 			// draws the volumetric-only casters alone.
 			std::uint32_t casterClass = 0;
 			bool sunView = false;  // the directional light's: its casters are its full-frustum entries' (kCullSunEntry)
+			bool focus = false;    // a focus shadow's (T3c): its casters are focusTarget's members (BuildDrawsLatch::focusRoot)
+			const void* focusTarget = nullptr;
 			float viewBlock[12] = {};  // PerTechnique: HighDetailRange, ParabolaParam, EyeDelta
 			std::array<std::byte, 1024> perFrame{};
 			std::uint32_t perFrameBytes = 0;

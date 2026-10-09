@@ -1,6 +1,7 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Internal.h"
 #	include "Features/DrawcallLimitFix/Engine/LocalLightCull.h"
+#	include "Features/DrawcallLimitFix/Engine/FocusViews.h"
 #	include "Features/DrawcallLimitFix/Engine/LightViews.h"
 #	include "Features/DrawcallLimitFix/Engine/SunViews.h"
 #	include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
@@ -826,6 +827,40 @@ namespace DCLF
 		}
 
 		/**
+		 * @brief A focus view (T3c) drawn over its whole slice: the engine draws it into a sub-rectangle its port sizes from the target's
+		 * distance (BSShadowDirectionalLight::sub), a new size most frames, while DCLF's placements are a slice's (recorded ahead). The
+		 * sub-rectangle's viewport transform moves into the projection - clip x' = x * sw/W + (sw + 2 sx)/W - 1, y' = y * sh/H + 1 -
+		 * (sh + 2 sy)/H, on CameraProj and CameraViewProj (c4, c8, c12) and the culling's view-projection - so the casters land on the
+		 * same pixels; what falls outside it lands in the rest of the slice, which the focus view alone draws into and no receiver
+		 * samples (its lightTransform maps the port).
+		 */
+		void FocusToSlice(PendingView& a_view, const SunViews::Cascade& a_cascade, std::uint32_t a_target)
+		{
+			auto* texture = globals::game::renderer->GetDepthStencilData().depthStencils[a_target].texture;
+			if (!texture)
+				return;
+			D3D11_TEXTURE2D_DESC desc{};
+			texture->GetDesc(&desc);
+			const float w = static_cast<float>(desc.Width), h = static_cast<float>(desc.Height);
+			// Renderer::UpdateViewPort's rectangle, unrounded.
+			const auto& port = a_cascade.port;
+			const float sx = port[0] * w, sy = (1.0f - port[2]) * h, sw = (port[1] - port[0]) * w, sh = (port[2] - port[3]) * h;
+			const float ax = sw / w, bx = (sw + 2.0f * sx) / w - 1.0f;
+			const float ay = sh / h, by = 1.0f - (sh + 2.0f * sy) / h;
+			auto* block = reinterpret_cast<float*>(a_view.perFrame.data());
+			for (const std::uint32_t c : { 4u, 8u, 12u }) {
+				float* row0 = block + c * 4;
+				float* row1 = row0 + 4;
+				const float* row3 = row0 + 12;
+				for (std::uint32_t i = 0; i < 4; ++i) {
+					row0[i] = ax * row0[i] + bx * row3[i];
+					row1[i] = ay * row1[i] + by * row3[i];
+				}
+			}
+			std::memcpy(a_view.viewProj.data(), block + 32, sizeof(float) * 16);
+		}
+
+		/**
 		 * @brief VS_PerFrame (b12) as the engine wrote it for the view, taken now because the next view rewrites it: from the
 		 * mirror, or from Community Shaders' copy of the same buffer (Globals: CacheFramebuffer) until the mirror has seen a
 		 * write. Its view-projection is what the view's draws use.
@@ -1109,11 +1144,6 @@ namespace DCLF
 			return notReady(ShadowNotReady::Tables);
 		if (a_renderMode < PassCapture::kFirstShadowMode || a_renderMode >= PassCapture::kFirstShadowMode + kShadowModeCount)
 			return notReady(ShadowNotReady::Tables);
-		// A focus shadow holds one actor's casters, not the scene's, and DCLF has no caster set for it: it stays native.
-		if (shadowView->focus) {
-			++shadowStats.focusSkipped;
-			return;
-		}
 		// Not DCLF's this frame (the revision has no shape for the placements yet, a mode not known at Rebuild): the engine drew it whole.
 		if (!shadowView->covered) {
 			++shadowStats.uncovered;
@@ -1165,10 +1195,10 @@ namespace DCLF
 		view.slice = slice;
 		view.rasterState = rasterState;
 		view.casterClass = volumetricCopy ? 1u : 0u;
-		view.sunView = shadowView->kind == ShadowViews::Kind::Directional;
+		view.sunView = shadowView->kind == ShadowViews::Kind::Directional && !shadowView->focus;
 		CaptureViewTarget(view, target);
-		// The sun's and the local lights' viewport and eye are DCLF's (T2a, T3a: not a focus view); the renderer's, just read, are the
-		// parity's.
+		// The sun's, the local lights' and the focus views' viewport and eye are DCLF's (T2a, T3a, T3c); the renderer's, just read, are
+		// the parity's.
 		const std::uint32_t sceneFrame = SceneStore::Get().GetFrame();
 		const SunViews::Cascade* ownView = nullptr;
 		SunViews::Parity* ownParity = nullptr;
@@ -1180,9 +1210,26 @@ namespace DCLF
 		} else if (localView) {
 			ownView = LightViews::Get().CascadeOf(shadowView->light, shadowView->descriptor, sceneFrame);
 			ownParity = &LightViews::Get().GetParity();
+		} else if (shadowView->focus) {
+			// A focus view's casters are its target's members (BuildDrawsLatch::focusRoot).
+			ownView = FocusViews::Get().CascadeOf(shadowView->light, shadowView->descriptor, sceneFrame);
+			ownParity = &FocusViews::Get().GetParity();
+			view.focusTarget = FocusViews::Get().TargetOf(shadowView->descriptor, sceneFrame);
+			view.focus = true;
 		}
 		const bool ownParityOn = SunViews::ParityEnabled();
-		const bool owned = (view.sunView || localView) && ApplyOwnViewport(view, ownView, shadowView->descriptor, target, ownParityOn ? ownParity : nullptr);
+		const bool owned = (view.sunView || localView || shadowView->focus) &&
+		                   ApplyOwnViewport(view, ownView, shadowView->descriptor, target, ownParityOn ? ownParity : nullptr);
+		// A focus view draws over its whole slice (FocusToSlice), the placement there.
+		if (owned && shadowView->focus)
+			if (auto* texture = globals::game::renderer->GetDepthStencilData().depthStencils[target].texture) {
+				D3D11_TEXTURE2D_DESC desc{};
+				texture->GetDesc(&desc);
+				view.x = 0;
+				view.y = 0;
+				view.width = desc.Width;
+				view.height = desc.Height;
+			}
 		// Its placement's slot: one the setup foresaw, under the placement's state, and the frame's only view there. Anything else is a
 		// defect: the casters withheld from the view are a hole this frame.
 		{
@@ -1208,7 +1255,9 @@ namespace DCLF
 		// process, and the accumulation's cull (FUN_1414f0920) tests it on top of the shadow camera's frustum. It
 		// is much tighter than the orthographic box: without it DCLF drew into the far cascade the casters of a
 		// whole slice's worth of terrain that no visible receiver can see a shadow from.
-		if (auto& lightData = const_cast<RE::BSShadowLight*>(shadowView->light)->GetRuntimeData(); shadowView->descriptor < lightData.shadowmapDescriptors.size()) {
+		// A focus view has no culling process (its descriptor indexes the focus array): no caster volume.
+		if (auto& lightData = const_cast<RE::BSShadowLight*>(shadowView->light)->GetRuntimeData();
+			!shadowView->focus && shadowView->descriptor < lightData.shadowmapDescriptors.size()) {
 			const auto* process = lightData.shadowmapDescriptors[shadowView->descriptor].cullingProcess;
 			if (process && process->doCustomCullPlanes) {
 				const auto& planes = process->customCullPlanes;
@@ -1234,13 +1283,15 @@ namespace DCLF
 			// CameraPosAdjust. Left zero.
 			view.viewBlock[8] = view.viewBlock[9] = view.viewBlock[10] = 0.0f;
 		}
-		// The view-projection: the sun's and the local lights' DCLF's (T2a, T3a), the engine's block taken only for the parity; a focus
-		// view's the engine's.
+		// The view-projection: DCLF's (T2a, T3a, T3c), the engine's block taken only for the parity.
 		const bool capturePerFrame = !owned || ownParityOn;
 		if (capturePerFrame)
 			CapturePerFrame(view);
 		if (owned)
 			ApplyOwnCamera(view, *ownView, shadowView->descriptor, ownParityOn ? ownParity : nullptr);
+		// A focus view over its slice, its sub-rectangle in the projection (after the parity compared the engine's).
+		if (owned && shadowView->focus)
+			FocusToSlice(view, *ownView, target);
 		// The capture check: the block's CameraPosAdjust (c40) against the eye the renderer's state has for the view now.
 		{
 			static std::uint64_t views = 0, fallback = 0, differ = 0;
@@ -1650,6 +1701,12 @@ namespace DCLF
 				latch.cullFlags = (view.hasViewProj ? (1u | (view.renderMode == 0xE ? kCullNoNearPlane : 0u)) : 0u) | classFlags |
 				                  (view.sunView ? kCullSunEntry : 0u) | KeyWordOf(view.modeIndex);
 				latch.viewBits = ShadowViewBits(view.modeIndex, view.sunView);
+				// A focus view: its target's members alone (their root slot + 1; a target that is no listed root draws none of DCLF's).
+				if (view.focus) {
+					const auto& rootIndex = store.GetTables().fadeRootIndex;
+					const auto root = view.focusTarget ? rootIndex.find(view.focusTarget) : rootIndex.end();
+					latch.focusRoot = root != rootIndex.end() ? root->second + 1 : kFocusRootNone;
+				}
 				latch.cullPlaneMask = view.cullPlaneMask;
 				std::memcpy(latch.cullPlanes, view.cullPlanes, sizeof(latch.cullPlanes));
 				latch.fadeStatesIndex = resources->scene->FadeStatesReadIndex(frameNumber);
