@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Scene/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 
+#include <bit>
 #include <cstring>
 
 #include "Deferred.h"
@@ -157,6 +158,7 @@ namespace DCLF
 	void ShadowViews::Clear()
 	{
 		views.clear();
+		captures.clear();
 		batchToView.clear();
 		accumulatorToView.clear();
 		valid = false;
@@ -228,6 +230,8 @@ namespace DCLF
 			}
 			++lightIndex;
 		}
+		PredictTargets();
+		captures.assign(views.size(), 0);
 		valid = true;
 		// DCLF's views: its candidates in the engine's order, within the slots its buffers hold (SetViewCapacity).
 		candidates = 0;
@@ -251,6 +255,88 @@ namespace DCLF
 		}
 		PassCapture::Get().SetShadowBatchRenderers(std::move(renderers));
 		PassCapture::Get().SetFocusBatchRenderers(std::move(focus));
+	}
+
+	void ShadowViews::PredictTargets()
+	{
+		// The engine's Renders, in their order (the views' own): BSShadowDirectionalLight::Render draws each cascade into target 2 at
+		// its index, after its volumetric lighting copy (target 3) when the dword 0x142033498 is 2; any host's focus views go to target
+		// 4 at 0x141ac07b0 + i. A spot light's descriptor 0 and a point light's hemisphere 0 keep the target and slice they hold;
+		// one with target -1 is given target 4 and the free mask's lowest set bit (0x142035798) by RenderShadowmap (0x1414f0cf0),
+		// which clears it. A point light's hemisphere 1 takes hemisphere 0's target and keeps its own slice. But RenderShadowmap binds
+		// the target only for a descriptor that clears (clearRenderTarget, +0xE8; the focus views always do): one that does not draws
+		// where the last draw bound - a point light's hemisphere 1 into hemisphere 0's slice.
+		using T = RE::RENDER_TARGETS_DEPTHSTENCIL;
+		const auto base = REL::Module::get().base();
+		std::uint32_t freeMask = *reinterpret_cast<const std::uint32_t*>(base + 0x2035798);
+		const bool volumetric = *reinterpret_cast<const std::uint32_t*>(base + 0x2033498) == 2;
+		const std::uint32_t focusBase = *reinterpret_cast<const std::uint32_t*>(base + 0x1ac07b0);
+		// Hemisphere 0's target, by light, for hemisphere 1; and the descriptors given a slice this frame (a light's views may repeat).
+		ankerl::unordered_dense::map<const RE::BSShadowLight*, std::uint32_t> firstTarget;
+		ankerl::unordered_dense::map<const void*, std::pair<std::uint32_t, std::uint32_t>> given;
+		// The target and slice the last clearing draw bound.
+		bool bound = false;
+		std::uint32_t boundTarget = 0, boundSlice = 0;
+		// A light's views repeat for each slot it takes (the sun's cascades); the engine renders them once, at the first.
+		ankerl::unordered_dense::map<const RE::BSShadowLight*, std::uint32_t> firstSlot;
+		bool repeat = false;
+		const auto draw = [&](View& a_view, bool a_clear) {
+			if (repeat)
+				return;
+			if (!a_clear && bound) {
+				a_view.drawTarget = boundTarget;
+				a_view.drawSlice = boundSlice;
+			}
+			bound = true;
+			boundTarget = a_view.drawTarget;
+			boundSlice = a_view.drawSlice;
+		};
+		for (auto& view : views) {
+			repeat = firstSlot.try_emplace(view.light, view.lightIndex).first->second != view.lightIndex;
+			auto& data = const_cast<RE::BSShadowLight*>(view.light)->GetRuntimeData();
+			if (view.focus) {
+				view.drawTarget = static_cast<std::uint32_t>(T::kSHADOWMAPS);
+				view.drawSlice = focusBase + view.descriptor;
+				draw(view, true);
+				continue;
+			}
+			if (view.descriptor >= data.shadowmapDescriptors.size())
+				continue;
+			const auto& descriptor = data.shadowmapDescriptors[view.descriptor];
+			if (view.kind == Kind::Directional) {
+				view.drawTarget = static_cast<std::uint32_t>(T::kSHADOWMAPS_ESRAM);
+				view.drawSlice = view.descriptor;
+				view.volumetricCopy = volumetric;
+				draw(view, descriptor.clearRenderTarget);
+				continue;
+			}
+			if (view.kind == Kind::Parabolic && view.descriptor == 1) {
+				const auto it = firstTarget.find(view.light);
+				view.drawTarget = it != firstTarget.end() ? it->second : static_cast<std::uint32_t>(descriptor.renderTarget);
+				view.drawSlice = descriptor.shadowmapIndex;
+				draw(view, descriptor.clearRenderTarget);
+				continue;
+			}
+			if (const auto it = given.find(&descriptor); it != given.end()) {
+				view.drawTarget = it->second.first;
+				view.drawSlice = it->second.second;
+			} else if (static_cast<std::int32_t>(descriptor.renderTarget) != -1) {
+				view.drawTarget = static_cast<std::uint32_t>(descriptor.renderTarget);
+				view.drawSlice = descriptor.shadowmapIndex;
+			} else {
+				std::uint32_t slice = 0;
+				if (freeMask) {
+					slice = static_cast<std::uint32_t>(std::countr_zero(freeMask));
+					freeMask &= ~(1u << slice);
+				}
+				view.drawTarget = static_cast<std::uint32_t>(T::kSHADOWMAPS);
+				view.drawSlice = slice;
+				given.emplace(&descriptor, std::make_pair(view.drawTarget, slice));
+			}
+			if (view.descriptor == 0)
+				firstTarget.try_emplace(view.light, view.drawTarget);
+			draw(view, descriptor.clearRenderTarget);
+		}
 	}
 
 	void ShadowViews::UncoverAll()
