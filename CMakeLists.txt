@@ -217,15 +217,11 @@ foreach(FEATURE_PATH ${FEATURE_CONFIG_FILES})
     string(STRIP "${CONFIG_VALUE}" CONFIG_VALUE)
     if(CONFIG_VALUE)
         string(
-            REGEX MATCH "[Vv]ersion = ([0-9]+)-([0-9]+)-([0-9]+)"
-            _
+            REGEX MATCH "[Vv]ersion[ \t]*=[ \t]*([0-9]+)-([0-9]+)-([0-9]+)"
+            _VERSION_MATCH
             "${CONFIG_VALUE}"
         )
-        if(
-            DEFINED CMAKE_MATCH_1
-            AND DEFINED CMAKE_MATCH_2
-            AND DEFINED CMAKE_MATCH_3
-        )
+        if(_VERSION_MATCH)
             set(ver_major ${CMAKE_MATCH_1})
             set(ver_minor ${CMAKE_MATCH_2})
             set(ver_patch ${CMAKE_MATCH_3})
