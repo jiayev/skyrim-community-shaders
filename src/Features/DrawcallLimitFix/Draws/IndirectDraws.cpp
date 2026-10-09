@@ -32,6 +32,7 @@ namespace DCLF
 	void IndirectDraws::CaptureShadowView(std::uint32_t, std::uint32_t) {}
 	void IndirectDraws::ExecuteShadowFrame() {}
 	void IndirectDraws::CaptureOcclusion(std::uint32_t) {}
+	void IndirectDraws::OcclusionView(std::uint32_t, const RE::NiCamera&) {}
 	bool IndirectDraws::OcclusionReady(std::uint32_t) const { return false; }
 	std::uint32_t IndirectDraws::ExecuteOcclusion(std::uint32_t) { return 0; }
 	void IndirectDraws::RefreshMainLookups() {}
@@ -44,6 +45,8 @@ namespace DCLF
 	void IndirectDraws::KickFadeWriteBack() {}
 	bool IndirectDraws::DecideTreeLod() { return false; }
 	void IndirectDraws::CaptureReflectionFace() {}
+	void IndirectDraws::ReflectionFaceCamera(const RE::NiCamera&, std::uint32_t) {}
+	std::uint32_t IndirectDraws::ReflectionRootsOwned(bool) { return 0; }
 	void IndirectDraws::PrepareReflection() {}
 	bool IndirectDraws::ReflectionDrawable() const { return false; }
 	void IndirectDraws::ExecuteReflection() {}

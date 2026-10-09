@@ -2,6 +2,7 @@
 #	include "Internal.h"
 
 #	include "Features/DrawcallLimitFix/Engine/ReflectionFaces.h"
+#	include "Features/DrawcallLimitFix/Engine/SunViews.h"
 #	include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
 
 namespace DCLF
@@ -42,52 +43,128 @@ namespace DCLF
 			}
 			return out;
 		}
+
+		/** @brief The inverse of a row-major 4x4 (cofactors, in double); zero when singular. */
+		std::array<float, 16> Inverse(const std::array<float, 16>& a_m)
+		{
+			std::array<double, 16> m{}, inv{};
+			for (std::uint32_t i = 0; i < 16; ++i)
+				m[i] = a_m[i];
+			inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
+			inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
+			inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
+			inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
+			inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
+			inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
+			inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
+			inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
+			inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+			inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
+			inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
+			inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
+			inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
+			inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
+			inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+			inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+			const double det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+			std::array<float, 16> out{};
+			if (det == 0.0)
+				return out;
+			for (std::uint32_t i = 0; i < 16; ++i)
+				out[i] = static_cast<float>(inv[i] / det);
+			return out;
+		}
+
+		/**
+		 * @brief VS_PerFrame (b12) for a face drawn through a_camera (T4), SunViews::kBlockBytes at a_out, as the engine uploads it for a
+		 * face (measured against its block at the face's draws, y80-y82):
+		 * - the camera's registers as SetCameraData builds them (the accumulator render's flags 8: no jitter, so the unjittered matrices
+		 *   are the others): CameraView, CameraProj, CameraViewProj and CameraViewProjUnjittered (SunViews::Block), CameraPosAdjust;
+		 * - c20 the projection's inverse and c24 the projection (the engine's order: FrameBuffer.hlsli names them the other way), c28
+		 *   the view's inverse, c32 the view-projection's, c36 the projection's;
+		 * - zero: CameraPreviousViewProjUnjittered (c16) and CameraPreviousPosAdjust (c41, fDRClampOffset in w included);
+		 * - the frame's: FrameParams (c42) as a_frame, the renderer's last upload, holds it; the dynamic resolution parameters (c43, c44)
+		 *   from the renderer state (State::dynamicResolution*Ratio, fDRClampOffset).
+		 */
+		void FaceBlock(const SunViews::Cascade& a_camera, std::span<const std::byte> a_frame, std::byte* a_out)
+		{
+			std::memcpy(a_out, a_frame.data(), SunViews::kBlockBytes);
+			std::array<std::byte, SunViews::kBlockBytes> camera{};
+			SunViews::Block(a_camera, camera.data());
+			auto* out = reinterpret_cast<float*>(a_out);
+			std::memcpy(out, camera.data(), 16 * 4 * sizeof(float));  // c0-c15
+			auto transposed = [&](std::uint32_t a_register, const std::array<float, 16>& a_m) {
+				for (std::uint32_t row = 0; row < 4; ++row)
+					for (std::uint32_t c = 0; c < 4; ++c)
+						out[a_register * 4 + row * 4 + c] = a_m[c * 4 + row];
+			};
+			// CameraPreviousViewProjUnjittered: zero for a face (y80's parity: the camera state the face's SetCameraData fills has none).
+			std::memset(out + 16 * 4, 0, 4 * 4 * sizeof(float));
+			const auto inverseProj = Inverse(a_camera.proj);
+			transposed(20, inverseProj);
+			transposed(24, a_camera.proj);
+			transposed(28, Inverse(a_camera.view));
+			transposed(32, Inverse(a_camera.viewProj));
+			transposed(36, inverseProj);
+			out[160] = a_camera.eye[0];
+			out[161] = a_camera.eye[1];
+			out[162] = a_camera.eye[2];
+			std::memset(out + 41 * 4, 0, 4 * sizeof(float));
+			if (auto* state = RE::BSGraphics::State::GetSingleton()) {
+				const auto& data = state->GetRuntimeData();
+				static auto* clampSetting = RE::GetINISetting("fDRClampOffset:Display");
+				const float clamp = clampSetting ? clampSetting->data.f : 0.0f;
+				const float w = data.dynamicResolutionWidthRatio, h = data.dynamicResolutionHeightRatio;
+				const float pw = data.dynamicResolutionPreviousWidthRatio, ph = data.dynamicResolutionPreviousHeightRatio;
+				const float c43[4] = { w, h, pw, ph };
+				const float c44[4] = { 1.0f / w, 1.0f / h, w - clamp, pw - clamp };
+				std::memcpy(out + 43 * 4, c43, sizeof(c43));
+				std::memcpy(out + 44 * 4, c44, sizeof(c44));
+			}
+		}
 	}
 
-	void IndirectDraws::CaptureReflectionFace()
+	void IndirectDraws::ReflectionFaceCamera(const RE::NiCamera& a_camera, std::uint32_t a_face)
 	{
-		// The face's colour target, as the engine's accumulator render left it bound: the cube target's face. Its depth target (6)
-		// is unbound by then, and DCLF's faces test against a depth of their own, cleared each face, at the engine's precision
-		// (D24S8, the faces' depth target's R24G8).
-		ID3D11RenderTargetView* view = nullptr;
-		globals::d3d::context->OMGetRenderTargets(1, &view, nullptr);
-		auto target = TargetOf(view);
-		if (view)
-			view->Release();
 		auto& reflection = impl->reflection;
+		reflection.orientedFace = a_face;
+		// The face for this update's epoch (ExecuteReflection): only a plain face render's, whose LOD the registrations withhold or
+		// whose LOD roots were not added (ReflectionRootsOwned).
+		if (!ReflectionFaces::Plain() || a_face >= kReflectionFaces)
+			return;
+		// The face's colour target, the engine's reflection cube target's face a_face; its depth DCLF's own, cleared each face, at the
+		// engine's precision (D24S8, the faces' depth target's R24G8).
+		auto* renderer = globals::game::renderer;
+		auto target = TargetOf(renderer ? renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS].cubeSideRTV[a_face] : nullptr);
 		const ForwardTargets targets{ target.format, DXGI_FORMAT_D24_UNORM_S8_UINT };
-		if (targets.colour == DXGI_FORMAT_UNKNOWN)
+		if (targets.colour == DXGI_FORMAT_UNKNOWN || !target.texture)
 			return;
 		if (!(reflection.targets == targets) && reflection.targets.colour != DXGI_FORMAT_UNKNOWN)
 			logger::info("[DCLF] reflection faces' targets changed: colour {} -> {}, depth {} -> {}", static_cast<int>(reflection.targets.colour),
 				static_cast<int>(targets.colour), static_cast<int>(reflection.targets.depth), static_cast<int>(targets.depth));
 		reflection.targets = targets;
 		++reflection.facesCaptured;
-		// The face for this update's epoch (ExecuteReflection): only a plain face render's, whose LOD the registrations withhold.
-		if (!ReflectionFaces::Plain() || target.face >= kReflectionFaces || !target.texture)
-			return;
 		if (reflection.executedFrame == SceneStore::Get().GetFrame())
 			++reflection.lateFaces;
-		auto& face = reflection.faces[target.face];
+		auto& face = reflection.faces[a_face];
 		face = {};
-		// VS_PerFrame (b12) as the engine wrote it for the face's camera (Draws::CapturePerFrame's rule): from the mirror, or from
-		// Community Shaders' copy of the same buffer until the mirror has seen a write. Its view-projection is camera-relative, and
-		// its CameraPosAdjust (c40) the eye.
+		// The frame's registers of VS_PerFrame (FaceBlock): the block as the renderer last uploaded it - from the mirror, or from
+		// Community Shaders' copy of the same buffer until the mirror has seen a write.
+		std::span<const std::byte> frame;
 		auto& mirror = ConstantMirror::Get();
 		if (auto* perFrame = *globals::game::perFrame.get()) {
 			mirror.Watch(perFrame);
-			const auto contents = mirror.Contents(perFrame);
-			if (contents.size() >= 164 * sizeof(float)) {
-				face.perFrameBytes = static_cast<std::uint32_t>(std::min<std::size_t>(contents.size(), face.perFrame.size()));
-				std::memcpy(face.perFrame.data(), contents.data(), face.perFrameBytes);
-			}
+			frame = mirror.Contents(perFrame);
 		}
-		if (!face.perFrameBytes) {
+		if (frame.size() < SunViews::kBlockBytes) {
 			const auto& cached = globals::game::frameBufferCached.data;
-			static_assert(sizeof(cached) >= 164 * sizeof(float) && sizeof(cached) <= kReflectionFaceBlockBytes);
-			face.perFrameBytes = sizeof(cached);
-			std::memcpy(face.perFrame.data(), &cached, sizeof(cached));
+			static_assert(sizeof(cached) >= SunViews::kBlockBytes);
+			frame = std::as_bytes(std::span(&cached, 1));
 		}
+		SunViews::Cascade view;
+		SunViews::CameraMatrices(a_camera, view);
+		FaceBlock(view, frame, face.perFrame.data());
+		face.perFrameBytes = SunViews::kBlockBytes;
 		const auto* floats = reinterpret_cast<const float*>(face.perFrame.data());
 		std::memcpy(face.viewProj.data(), floats + 32, sizeof(float) * 16);
 		face.eye = { floats[160], floats[161], floats[162] };
@@ -95,6 +172,81 @@ namespace DCLF
 		reflection.cube = std::move(target.texture);
 		reflection.width = target.width;
 		reflection.height = target.height;
+	}
+
+	void IndirectDraws::CaptureReflectionFace()
+	{
+		// The parity's half (T4): the face the engine has just drawn, as its accumulator render left it - the bound colour target's
+		// face and VS_PerFrame (b12) from the mirror - against DCLF's (ReflectionFaceCamera).
+		auto& reflection = impl->reflection;
+		const std::uint32_t f = reflection.orientedFace;
+		if (!SunViews::ParityEnabled() || !ReflectionFaces::Plain() || f >= kReflectionFaces || !reflection.faces[f].captured)
+			return;
+		const auto& face = reflection.faces[f];
+		auto& parity = reflection.cameraParity;
+		++parity.faces;
+		ID3D11RenderTargetView* bound = nullptr;
+		globals::d3d::context->OMGetRenderTargets(1, &bound, nullptr);
+		const auto target = TargetOf(bound);
+		if (bound)
+			bound->Release();
+		if (target.face != f || target.texture.get() != reflection.cube.get()) {
+			if (parity.slices++ == 0 && parity.first.empty())
+				parity.first = fmt::format("face {}: the engine drew into face {}", f, target.face);
+		}
+		auto* perFrame = *globals::game::perFrame.get();
+		const auto contents = perFrame ? ConstantMirror::Get().Contents(perFrame) : std::span<const std::byte>{};
+		if (contents.size() < SunViews::kBlockBytes)
+			return;
+		const auto* theirs = reinterpret_cast<const float*>(contents.data());
+		const auto* mine = reinterpret_cast<const float*>(face.perFrame.data());
+		// Every register within rounding but the inverses DCLF computes with arithmetic of its own (c20-c23, c32-c39: within 1e-3).
+		float largest = 0.0f;
+		std::int32_t first = -1;
+		for (std::uint32_t i = 0; i < SunViews::kBlockBytes / sizeof(float); ++i) {
+			const std::uint32_t c = i / 4;
+			const bool loose = (c >= 20 && c < 24) || (c >= 32 && c < 40);
+			const float d = std::abs(mine[i] - theirs[i]);
+			const bool same = loose ? d <= 1e-3f * std::max(1.0f, std::abs(theirs[i])) : SunViews::Close(mine[i], theirs[i]);
+			if (!same) {
+				largest = std::max(largest, d);
+				parity.registers |= 1ull << c;
+				if (first < 0)
+					first = static_cast<std::int32_t>(i);
+			}
+		}
+		if (first >= 0) {
+			parity.largest = std::max(parity.largest, largest);
+			if (parity.blocks++ == 0 && parity.first.empty()) {
+				const std::uint32_t row = static_cast<std::uint32_t>(first) / 4 * 4;
+				parity.first = fmt::format("face {}: c{} ({} {} {} {}), the engine's ({} {} {} {})", f, row / 4, mine[row], mine[row + 1], mine[row + 2], mine[row + 3], theirs[row],
+					theirs[row + 1], theirs[row + 2], theirs[row + 3]);
+			}
+		}
+	}
+
+	std::uint32_t IndirectDraws::ReflectionRootsOwned(bool a_plain)
+	{
+		// The roots whose members DCLF's faces draw: LOD land and objects while the set draws the reflection phase and every object
+		// taking part in it is a member (SetLacking: none waits for its forward pipeline); LOD trees while the faces' tree LOD is DCLF's
+		// (PrepareReflection). Only in a plain update of a frame whose faces are DCLF's (DecideCoverage).
+		auto& reflection = impl->reflection;
+		auto& capture = PassCapture::Get();
+		capture.WatchReflectionResidue(0);
+		if (!a_plain || !ReflectionDrawable() || !impl->reflectionCovered || PassCapture::ParityBoth())
+			return 0;
+		std::uint32_t owned = 0;
+		if (const auto set = capture.CurrentSet(); set && (set->drawn & kSetReflection) && SceneStore::Get().SetLacking(kSetReflection) == 0)
+			owned |= ReflectionFaces::kLodRoots;
+		if (reflection.treeOwned)
+			owned |= ReflectionFaces::kTreeRoot;
+		// The residue parity: every 30th such update keeps its roots, and what the engine registers into its faces and DCLF does not
+		// withhold is counted (PassCapture::WatchReflectionResidue).
+		if (owned && SunViews::ParityEnabled() && reflection.residueUpdates++ % 30 == 0) {
+			capture.WatchReflectionResidue(owned);
+			return 0;
+		}
+		return owned;
 	}
 
 	void IndirectDraws::PrepareReflection()
@@ -378,6 +530,16 @@ namespace DCLF
 							"{} the engine's (not covered), {} stale inputs, {} without resources, {} failed{}; last frame's registrations: {} member passes and {} tree LOD passes withheld (faces' tree LOD {})\n",
 			reflection.updates, reflection.epochs, reflection.facesDrawn, reflection.lateFaces, reflection.lateFaces ? " <- LATE FACES" : "", s[0], s[2], s[1], s[3], s[4], s[5],
 			s[5] ? " <- EPOCH FAILED" : "", capture.reflectionWithheld, capture.reflectionTreeLodWithheld, reflection.treeOwned ? "DCLF's" : "the engine's");
+		// T4: the faces' cameras against the engine's at their draws, and the LOD roots the engine did not cull.
+		const auto roots = ReflectionFaces::TakeRootStats();
+		const auto residue = PassCapture::Get().TakeReflectionResidue();
+		auto& parity = reflection.cameraParity;
+		text += fmt::format("[DCLF] reflection faces (T4: DCLF's cameras, the engine's LOD roots skipped): {} updates, {} without the LOD land and objects roots, {} without "
+							"the tree root; parity: {} faces, {} blocks and {} slices differ (registers {:#x}, largest {:.3g}){}{}, {} residue passes{}{}\n",
+			roots.updates, roots.lodSkipped, roots.treeSkipped, parity.faces, parity.blocks, parity.slices, parity.registers, parity.largest,
+			parity.blocks || parity.slices ? " <- FACE CAMERA" : (parity.faces ? " <- OK" : ""), parity.first.empty() ? "" : " (first: " + parity.first + ")", residue.passes,
+			residue.passes ? " <- REFLECTION RESIDUE" : "", residue.first.empty() ? "" : " (first: " + residue.first + ")");
+		parity = {};
 		reflection.facesCaptured = reflection.updates = reflection.epochs = reflection.facesDrawn = reflection.lateFaces = 0;
 		reflection.skipped = {};
 		return text;

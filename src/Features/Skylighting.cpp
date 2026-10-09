@@ -572,6 +572,7 @@ void Skylighting::RenderOcclusion()
 						if (auto* accumulator = precip->occlusionData.accumulator.get())
 							accumulator->camera = precip->occlusionData.camera.get();
 					}
+					dclf.OcclusionView(DrawcallLimitFix::kPrecipitationOcclusion);
 					auto& effect = precipObject->GetGeometryRuntimeData().shaderProperty;
 					auto shaderProp = effect.get();
 					auto particleShaderProperty = netimmerse_cast<RE::BSParticleShaderProperty*>(shaderProp);
@@ -662,6 +663,7 @@ void Skylighting::RenderOcclusion()
 						precip->SetupMask();
 					else if (auto* accumulator = precip->occlusionData.accumulator.get())
 						accumulator->camera = precip->occlusionData.camera.get();  // what SetupMask sets
+					dclf.OcclusionView(DrawcallLimitFix::kSkyOcclusion);
 				}
 
 				BSParticleShaderRainEmitter* rain = new BSParticleShaderRainEmitter;

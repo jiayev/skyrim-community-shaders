@@ -3799,12 +3799,16 @@ namespace DCLF
 		void ReadShadowCullCounters(std::uint32_t a_frame, IndirectDraws::ShadowStats& a_stats);
 		using PendingView = Draws::PendingView;
 		std::vector<PendingView> pendingViews;
-		// Per occlusion view (ExecuteOcclusion): the view as the engine's RenderMask set it up (CaptureOcclusion), the state and
-		// format its pipelines are built for, and the frame whose shadow commit uploaded its occluders.
+		// Per occlusion view (ExecuteOcclusion): the view as DCLF computes it from the map's camera (OcclusionView, T4), the state and
+		// format its pipelines are built for, and the frame whose shadow commit uploaded its occluders; the parity's tallies against
+		// the engine's view at its FinishAccumulating (CaptureOcclusion) since the last report.
 		struct OcclusionState
 		{
 			PendingView view;
 			std::uint32_t capturedFrame = ~0u;
+			std::uint32_t parityMaps = 0, parityDiffer = 0;
+			float parityLargest = 0.0f;
+			std::string parityFirst;
 			std::uint32_t rasterState = 0;
 			DXGI_FORMAT dsvFormat = DXGI_FORMAT_UNKNOWN;
 			std::uint32_t committedFrame = ~0u;
@@ -4183,7 +4187,7 @@ namespace DCLF
 			std::uint64_t readinessKey = 0;
 			rhi::PipelineHandle treePipeline{};
 			bool treeOwned = false;  // the faces' tree LOD is DCLF's this frame (PassCapture::SetReflectionTreeLodOwned)
-			// This update's faces (CaptureReflectionFace), until ExecuteReflection takes them.
+			// This update's faces (ReflectionFaceCamera, T4), until ExecuteReflection takes them.
 			struct Face
 			{
 				bool captured = false;
@@ -4193,6 +4197,18 @@ namespace DCLF
 				RE::NiPoint3 eye;
 			};
 			std::array<Face, kReflectionFaces> faces;
+			// The face the engine last oriented the camera to (ReflectionFaceCamera), for the parity at its draws; the updates whose
+			// LOD roots the residue parity kept.
+			std::uint32_t orientedFace = ~0u;
+			std::uint32_t residueUpdates = 0;
+			// The face cameras' parity (CaptureReflectionFace) since the last report: faces compared, differing (block, slice).
+			struct CameraParity
+			{
+				std::uint32_t faces = 0, blocks = 0, slices = 0;
+				std::uint64_t registers = 0;  // the registers (c0-c44) that differed, by bit
+				float largest = 0.0f;
+				std::string first;
+			} cameraParity;
 			winrt::com_ptr<ID3D11Texture2D> cube;  // the cube target the faces render into
 			std::uint32_t width = 0, height = 0;
 			std::shared_ptr<ReflectionResources> resources;
