@@ -75,6 +75,10 @@ encloses the mesh with a margin, so in one frame the mesh itself has usually not
 epoch (the pass on the build's critical path). Or `BuildDraws` applying the engine's re-entry snap to a root whose
 published state is long unseen.
 
+**Since T1a** (2026-10-08) the second is in place for the snap out by distance: the first phase applies the fade-out
+distance test (`kObjectFadeTest`) to every input whose root's published state has no serviced `OnVisible`, owned roots
+included (before, only to roots DCLF did not own). Not yet measured on the teleport route.
+
 ### Skylighting parity lags while roots start fading
 
 **What.** The engine's reference render of an occlusion map (`CS_DCLF_SKYLIGHT_PARITY`) culls stood-in roots by their

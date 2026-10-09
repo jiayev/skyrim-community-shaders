@@ -191,9 +191,9 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			if (shadow.views)
 				logger::info("{}", DCLF::IndirectDraws::Get().ShadowCapabilityReport());
 			if (shadow.cullTested || shadow.cullClass)
-				logger::info("[DCLF] shadow culling (view {} mode {:#x}, sampled): {} of the caster class, {} outside the sun's entry, {} small, {} stood-in fading; "
+				logger::info("[DCLF] shadow culling (view {} mode {:#x}, sampled): {} of the caster class, {} outside the sun's entry, {} small, {} under a fading root; "
 							 "{} tested, {} drawn, {} rejected by the frustum",
-					shadow.cullSampledView, shadow.cullSampledMode, shadow.cullClass, shadow.cullSunEntryOut, shadow.cullMinRadius, shadow.cullStoodInFading,
+					shadow.cullSampledView, shadow.cullSampledMode, shadow.cullClass, shadow.cullSunEntryOut, shadow.cullMinRadius, shadow.cullRootFading,
 					shadow.cullTested, shadow.cullDrawn, shadow.cullRejected);
 			if (shadow.sunEntryChecks)
 				logger::info("[DCLF] sun entry on the GPU: {} inputs checked against the CPU's verdict (sampled frames), {} differ{}", shadow.sunEntryChecks,
@@ -241,7 +241,7 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 												 draws.residentParityMismatches || draws.residentMissing || draws.residentPairsStale ? " <- RESIDENT DRAW PARITY" : " <- OK") :
 											 std::string());
 		if (draws.fadeTested)
-			logger::info("[DCLF] fade on the GPU (sampled frame): {} resident draws under a fade root in view, {} dropped by their root's fade; {} roots",
+			logger::info("[DCLF] fade on the GPU (sampled frame): {} draws under a fade root in view, {} dropped by their root's fade; {} roots",
 				draws.fadeTested, draws.fadeHidden, draws.fadeRoots);
 		if (draws.drawsWaiting)
 			logger::info("[DCLF] {} draws so far waited for the sequences' growth (past the current ones, dropped by BuildDraws)", draws.drawsWaiting);

@@ -1187,8 +1187,10 @@ namespace DCLF
 		if ((p.logs % 10) == 0) {
 			logger::info("[DCLF] fade state parity (FadeStateCS against the port): {} logs, {} root updates ({} in view, {} serviced); {} exact, {} within rounding, {} differ{}{}",
 				p.logs, p.updates, p.inView, p.serviced, p.exact, p.rounding, p.differ, p.differ ? " <- FADE STATE" : " <- OK", p.first.empty() ? "" : "; first: " + p.first);
-			logger::info("[DCLF] fade state of roots with engine-drawn parts (FadeStateCS against the engine's node): {} checked, {} exact, {} within rounding, {} differ{}{}",
-				p.engineChecked, p.engineExact, p.engineRounding, p.engineDiffer, p.engineDiffer ? " <- ENGINE FADE" : " <- OK",
+			// Informational since T1a: DCLF's state is authoritative for its members, and the engine's node differs where its own cull
+			// visits the root differently (an actor's bound, a root its cull never reaches).
+			logger::info("[DCLF] fade state of roots with engine-drawn parts (FadeStateCS against the engine's node, informational): {} checked, {} exact, {} within rounding, {} differ{}{}",
+				p.engineChecked, p.engineExact, p.engineRounding, p.engineDiffer, p.engineDiffer ? " (the engine's own cull; DCLF's state stands)" : "",
 				p.engineFirst.empty() ? "" : "; first: " + p.engineFirst);
 			p = {};
 		}

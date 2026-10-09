@@ -1998,7 +1998,7 @@ namespace DCLF
 				a_stats.cullTested = words[2];
 				a_stats.cullSunEntryOut = words[3];
 				a_stats.cullMinRadius = words[4];
-				a_stats.cullStoodInFading = words[5];
+				a_stats.cullRootFading = words[5];
 				a_stats.cullClass = words[16];
 				a_stats.cullSampledView = shadowCullReadback->view;
 				a_stats.cullSampledMode = shadowCullReadback->mode;

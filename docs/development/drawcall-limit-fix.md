@@ -6684,6 +6684,26 @@ about 200, all to the end of the run, to 3 within 15 s of the camera turning to 
 the stand-in off. The report: some tens to a few hundred milestones written every few seconds, a few dozen stale after a
 teleport, no join late, the job about a microsecond.
 
+## Every root's fade from FadeStateCS (T1a, 2026-10-08)
+
+Under the standing policy that DCLF does not rely on the engine's culling (dclf-architecture.md, "Standing policies"),
+DCLF's fade state is authoritative for every root it draws under, not only the roots it owns:
+-   **Every record lists its fade root** (`ListFadeRoot` at the walk's record write, `UnlistFadeRoot` when the slot is
+    released), not only residents: actors' and other per-frame members and shadow-only casters get FadeStateCS state.
+    The root's centre is any record that holds it (`fadeRootMembers`, kept by the listing itself).
+-   **Phase 1** drops an input by its root's serviced verdict (`kFadeVerdictServiced` without `kFadeVerdictDrawn`) for
+    every root. Where the published state did not service the root (out of view on that update, or listed since), the
+    fade-out distance test (`kObjectFadeTest`) applies, owned roots included.
+-   **Shadow views** drop a caster while its root fades (`RootFading`, was `StoodInFading`), any root; the CPU's
+    `ShadowCasterReject` takes the material's alpha alone and reads no node. The report's counter is "under a fading root".
+-   **The engine comparison** ("fade state of roots with engine-drawn parts") is informational: the engine's node differs
+    where its own cull visits a root differently (an actor's animated bound, a root its cull never reaches).
+
+Measured (m173: motion, every parity; e34: equip and fight): fade state parity against the port 0 differ; set, view-mask,
+commit and revision parities OK; the flags left (STALE MATERIAL, extras DIFFER, FADE VISIBILITY, RENDER THREAD) as in
+m172 and e33. Roots listed 3,971 to 3,978 in equip and fight (the actors'), and the engine comparison closer there
+(151 checked, 145 exact, 0 differ, against 153, 134, 4).
+
 ## Point lights' culls: the category filter, and the light candidates (2026-10-01)
 
 **The first attempt, a lent list** (replaced). A light that was not portal-strict was lent a list of the object root's

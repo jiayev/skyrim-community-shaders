@@ -528,8 +528,7 @@ namespace DCLF
 		{
 			if (!ShadowOnlyReason(a_reason))
 				return false;
-			// Its main pass is the engine's, so its fade root is never stood in: the node is its state.
-			const auto reject = ShadowCasterReject(a_geometry.GetGeometryRuntimeData().shaderProperty.get(), &a_geometry, false);
+			const auto reject = ShadowCasterReject(a_geometry.GetGeometryRuntimeData().shaderProperty.get(), &a_geometry);
 			return reject == ShadowReject::None || reject == ShadowReject::VolumetricOnly;
 		}
 		// Only columns the accumulator patch below can change. It never writes placement, geometry,
