@@ -2183,8 +2183,6 @@
     "feature.post_processing.do_f.target_focus": "目标对焦",
     "feature.post_processing.do_f.target_focus_focal_length": "目标对焦焦距",
     "feature.post_processing.do_f.transition_speed": "过渡速度",
-    "feature.post_processing.do_f.vanilla_compatibility": "原版兼容模式",
-    "feature.post_processing.do_f.vanilla_compatibility_desc": "使用 Community Shaders 景深匹配游戏的焦点、范围、强度和模糊模式，遵循游戏的景深开关及动态景深设置。水下效果仍由游戏处理。启用时接管镜头与散景控制，但不修改已保存的参数。",
     "feature.post_processing.do_f.view_resize": "视图缩放",
     "feature.post_processing.edit_settings_for_this_feature": "编辑此子功能的设置。",
     "feature.post_processing.enable_the_feature_to_see_its_settings": "启用该功能后才能查看设置。",
