@@ -179,6 +179,13 @@ namespace DCLF
 			 * and captured; the rest the engine draws alone, while DCLF's slots grow (Growths) for them.
 			 */
 			bool covered = false;
+			/**
+			 * @brief Where the engine will draw it (T3d), DCLF's prediction at Rebuild: the depth target (RENDER_TARGET_DEPTHSTENCIL) and
+			 * slice. A sun cascade with volumetricCopy is drawn twice, its volumetric lighting copy first (target 3, the same slice).
+			 */
+			std::uint32_t drawTarget = ~0u;
+			std::uint32_t drawSlice = 0;
+			bool volumetricCopy = false;
 		};
 
 		static ShadowViews& Get();
@@ -205,9 +212,18 @@ namespace DCLF
 		std::uint32_t ViewOfAccumulator(const void* a_accumulator) const;
 
 		const View* At(std::uint32_t a_id) const { return a_id < views.size() ? &views[a_id] : nullptr; }
+		/** @brief The view's captures so far this frame, then counts this one (a cascade's first, with its copy, is the copy's). */
+		std::uint32_t NextCapture(std::uint32_t a_id)
+		{
+			if (a_id >= captures.size())
+				return 0;
+			return captures[a_id]++;
+		}
 
 	private:
 		std::vector<View> views;
+		std::vector<std::uint32_t> captures;  // by view, this frame
+		void PredictTargets();
 		ankerl::unordered_dense::map<const RE::BSBatchRenderer*, std::uint32_t> batchToView;
 		ankerl::unordered_dense::map<const void*, std::uint32_t> accumulatorToView;
 		bool valid = false;

@@ -6765,7 +6765,7 @@ member never met them. Now, while `CS_DCLF_FADING` and `CS_DCLF_LOD_CROSSFADE` a
 Measured (m177 every parity, e36, forest-t1c, y78): DCLF's draws and every parity as before (record parity 0 of ~48,000
 differ, the fade root bits included); SPIR-V programs 99 of 99 built.
 
-## Shadow views and lights from DCLF (T2a, T3a, T3b, T3c, 2026-10-08/09)
+## Shadow views and lights from DCLF (T2a, T3a, T3b, T3c, T3d, 2026-10-08/09)
 
 The shadow views' cameras and the choice of shadow lights are DCLF's: nothing reads a cull or the renderer's state at a
 view's draw for them. The engine's values are the parity's alone (`CS_DCLF_SET_PARITY` or `CS_DCLF_PERSISTENT_PARITY`).
@@ -6817,8 +6817,20 @@ view's draw for them. The engine's values are the parity's alone (`CS_DCLF_SET_P
     -   Parities `focus views ... <- FOCUS VIEW` (cameras), `focus members ... <- FOCUS MEMBERS` (the engine's registrations
         into a covered focus view against the target's fade root, in the registration hook), and the light selection's focus
         flags and host.
--   **Still the engine's:** the scissor rectangle (`+0x544..`; no DCLF reader), the depth target, slice and raster state at the
-    draw (T7), and UpdateCamera and sub themselves (T2b, deferred to T7).
+-   **Each view's depth target and slice (T3d, `ShadowViews::PredictTargets`)**, predicted at Rebuild, before any Render; the
+    renderer's state at the 0x2A hook is the parity's (`shadow targets ... <- SHADOW TARGET`).
+    -   Directional: the volumetric copy first when the dword `0x142033498` is 2 (target 3, slice = cascade; a cascade's first
+        capture of the frame), then each cascade (target 2, slice = cascade). Focus views: target 4, slice `*0x141ac07b0` (4) + i.
+    -   Spot descriptor 0, point hemisphere 0: the target and slice the descriptor holds; target -1 takes target 4 and the free
+        mask's lowest set bit (dword `0x142035798`, cleared) in Render order (`RenderShadowmap`, 0x1414f0cf0). Allocations stay
+        across frames; vfunc 0x60 (a light not kept) gives them back. Point hemisphere 1: hemisphere 0's target, its own slice.
+    -   **RenderShadowmap binds the target only for a descriptor that clears** (`clearRenderTarget`, +0xE8; focus views always
+        do): one that does not draws where the last draw bound. A point light's hemisphere 1 does not clear, so it draws into
+        hemisphere 0's slice, not the slice it holds (which is stale). Predicting the held slice put two views on one placement
+        (s3: `<- HOLES`).
+    -   Reads at Rebuild: the descriptors' assignments and clear flags and the free mask: allocation state, not a cull.
+-   **Still the engine's:** the scissor rectangle (`+0x544..`; no DCLF reader), the raster state at the draw (T7), and
+    UpdateCamera and sub themselves (T2b, deferred to T7).
 
 Measured: T2a m183/m186 0 differences (3,600 full-frustum processes per 300 frames); T3a l1-l10 0 of ~1,200 local views per
 300 frames; T3b s2 (inn and Dragonsreach, point lights, no sun) and m189 (exterior motion, sun with local lights) 0 frames
@@ -6826,6 +6838,8 @@ differ in slots, mask indices and counts, 0 of 3,000 volumes differ, 600 of 600 
 T3c: e38 (bridge, actors near, the sun hosting every frame for 900+ frames) 0 focus flags differ, 0 of 300 focus views per window
 differ, 0 registrations under another root, 1,500 of 1,500 shadow views drawn, no holes; m191 (motion, 7 focus frames) clean. Before
 `FocusToSlice` (m190) every focus view was left with withheld casters for want of a placement (`<- HOLES`). No spot light host met.
+T3d: s4 (interiors, point lights), e39 (focus views, the sun's volumetric copies), m192 (motion): 0 of 3,000 predictions per window
+differ, every shadow view drawn (0 not ready).
 
 ## Point lights' culls: the category filter, and the light candidates (2026-10-01)
 

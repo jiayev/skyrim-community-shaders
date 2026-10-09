@@ -1149,11 +1149,31 @@ namespace DCLF
 			++shadowStats.uncovered;
 			return;
 		}
-		// Where the engine has just drawn: the target and slice come from the renderer's state, because the
-		// descriptor's own fields are filled only when the draw allocates them (engine notes: shadow maps).
+		// Where the engine draws the view: DCLF's prediction (ShadowViews::PredictTargets, T3d), a cascade's first capture of the frame
+		// its volumetric lighting copy's. The renderer's state, just set by the draw, is the parity's.
 		auto& shadowState = globals::game::shadowState->GetRuntimeData();
-		const std::uint32_t target = shadowState.depthStencil;
-		const std::uint32_t slice = shadowState.depthStencilSlice;
+		const std::uint32_t occurrence = ShadowViews::Get().NextCapture(a_viewId);
+		const bool copyDraw = shadowView->volumetricCopy && occurrence == 0;
+		const std::uint32_t target = copyDraw ? static_cast<std::uint32_t>(RE::RENDER_TARGETS_DEPTHSTENCIL::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM) : shadowView->drawTarget;
+		const std::uint32_t slice = shadowView->drawSlice;
+		if (SunViews::ParityEnabled()) {
+			static std::uint64_t checked = 0, differ = 0;
+			static std::string first;
+			++checked;
+			const std::uint32_t engineTarget = shadowState.depthStencil, engineSlice = shadowState.depthStencilSlice;
+			if (engineTarget != target || engineSlice != slice) {
+				if (differ++ == 0)
+					first = fmt::format("view {} ({}{}, light {} descriptor {}, capture {}): target {} slice {}, the engine's {} slice {}", a_viewId,
+						ShadowViews::KindName(shadowView->kind), shadowView->focus ? " focus" : "", shadowView->lightIndex, shadowView->descriptor, occurrence, target, slice,
+						engineTarget, engineSlice);
+			}
+			if (checked == 3000) {
+				logger::info("[DCLF] shadow targets (T3d: DCLF's predicted depth target and slice against the renderer's at the draw): {} views, {} differ{}{}", checked,
+					differ, differ ? " <- SHADOW TARGET" : " <- OK", first.empty() ? "" : "; first: " + first);
+				checked = differ = 0;
+				first.clear();
+			}
+		}
 		const std::uint32_t targetIndex = target == RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS_ESRAM                     ? 0u :
 		                                  target == RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS                           ? 1u :
 		                                  target == RE::RENDER_TARGETS_DEPTHSTENCIL::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM ? 2u :
