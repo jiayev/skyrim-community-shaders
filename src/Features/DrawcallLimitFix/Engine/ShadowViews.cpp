@@ -1,5 +1,7 @@
 #include "ShadowViews.h"
+#include "Features/DrawcallLimitFix/Engine/LightSelection.h"
 #include "Features/DrawcallLimitFix/Scene/FrameGlobals.h"
+#include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 
 #include <cstring>
 
@@ -164,15 +166,15 @@ namespace DCLF
 	void ShadowViews::Rebuild()
 	{
 		Clear();
-		auto* smState = globals::game::smState;
-		auto* node = smState ? smState->shadowSceneNode[0] : nullptr;
-		if (!node)
+		// DCLF's selection's slots (T3b): shadowLightsAccum as CalculateActiveShadowCasterLights fills it, the array
+		// GetShadowCasterLightArrayEntry indexes - the lights, in the sequence, the engine renders a moment later. None this frame
+		// (no selection ran): no views, and the engine draws them.
+		const auto* selection = LightSelection::Get().Current(SceneStore::Get().GetFrame());
+		if (!selection)
 			return;
-		auto& runtime = node->GetRuntimeData();
 		std::uint32_t lightIndex = 0;
-		// shadowLightsAccum is the array GetShadowCasterLightArrayEntry indexes, so this is the engine's
-		// own order: the same lights, in the same sequence, that it renders a moment later.
-		for (auto* light : runtime.shadowLightsAccum) {
+		for (const auto* selected : selection->slots) {
+			auto* light = const_cast<RE::BSShadowLight*>(selected);
 			if (!light) {
 				++lightIndex;
 				continue;
