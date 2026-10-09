@@ -404,6 +404,21 @@ namespace DCLF
 		tables.NoteFadeRoot(it->second);
 	}
 
+	void SceneStore::RefreshFadeAmount(const void* a_node)
+	{
+		// The key alone until it names a listed root, which the listing holds.
+		const auto it = tables.fadeRootIndex.find(a_node);
+		if (it == tables.fadeRootIndex.end())
+			return;
+		auto& row = tables.fadeRoots[it->second];
+		const float amount = Engine::At<float>(static_cast<const RE::NiAVObject*>(a_node), 0x100);
+		if (std::memcmp(&amount, &row.fadeAmount, sizeof(amount)) == 0)
+			return;
+		// An input, not state: the GPU's state row is kept, and FadeStateCS steps its amountFade toward it as the engine does.
+		row.fadeAmount = amount;
+		tables.NoteFadeRoot(it->second);
+	}
+
 	void SceneStore::UnlistTree(std::uint32_t a_slot)
 	{
 		if (a_slot >= tables.objectTree.size())

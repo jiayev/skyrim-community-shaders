@@ -3,6 +3,7 @@
 #include "EngineAccess.h"
 #include "PassCapture.h"
 #include "PrimaryCull.h"
+#include "SunViews.h"
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
@@ -392,6 +393,23 @@ namespace DCLF
 					self.frameState.cascades.resize(call.count);
 				const std::uint32_t frame = SceneStore::Get().GetFrame();
 				call.record = SwitchEnabled(Switch::SetParity) && (frame % 30) == 0;
+				// Each cascade's volume is DCLF's (T2a: SunViews, from the camera UpdateCamera set up): the cascade cull's own planes are
+				// the parity's (CascadeCull). A cascade without DCLF's stays unknown, its bit unset.
+				for (std::uint32_t i = 0; i < call.count; ++i) {
+					auto& cascade = self.frameState.cascades[i];
+					cascade = {};
+					if (const auto* mine = SunViews::Get().CascadeOf(call.descriptors[i], frame)) {
+						cascade.planes = mine->cull.plane;
+						cascade.planeMask = mine->cull.mask;
+						cascade.customPlanes = mine->caster.plane;
+						cascade.customMask = mine->caster.mask;
+						cascade.captured = true;
+					} else if (SunViews::ParityEnabled()) {
+						++SunViews::Get().GetParity().missing;
+						SunViews::Get().NoteDifference("missing cascade", 0.0f, fmt::format("Accumulate of frame {}, descriptor {}, DCLF's views of frame {} ({} cascades)", frame,
+							call.descriptors[i], SunViews::Get().Current().sceneFrame, SunViews::Get().Current().count));
+					}
+				}
 				currentCall = &call;
 				const std::int64_t start = Now();
 				func(a_light, a_count, a_arg2, a_arg3);
@@ -560,8 +578,7 @@ namespace DCLF
 					call->cascade = call->IndexOf(accumulator);
 					if (call->cascade >= 0) {
 						auto& cascade = self.frameState.cascades[call->cascade];
-						cascade = {};
-						// Accumulate has just set it: 1 << the shadow-light count.
+						// Accumulate has just set it: 1 << the shadow-light count (the light mask's bookkeeping, not a cull's).
 						cascade.bit = At<std::uint32_t>(accumulator, kAccumulatorLightBit);
 					}
 				}
@@ -611,13 +628,31 @@ namespace DCLF
 				auto& self = SunAccumulation::Get();
 				if (!call || call->cascade < 0 || !a_process)
 					return;
+				// The parity alone (T2a): the cascade's volume is DCLF's (Accumulate's start), checked once a cascade against the cull's.
 				auto& cascade = self.frameState.cascades[call->cascade];
-				if (cascade.captured || At<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>(a_fullProcess, kProcessObjectArray).empty())
+				if (!SunViews::ParityEnabled() || cascade.parityChecked || At<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>(a_fullProcess, kProcessObjectArray).empty())
 					return;
-				CopyPlanes(a_process->planes, cascade.planes, cascade.planeMask);
+				cascade.parityChecked = true;
+				auto& sun = SunViews::Get();
+				auto& p = sun.GetParity();
+				++p.cascades;
+				SunViews::Planes engine, mine;
+				CopyPlanes(a_process->planes, engine.plane, engine.mask);
+				mine.plane = cascade.planes;
+				mine.mask = cascade.planeMask;
+				if (!cascade.captured || !SunViews::SamePlanes(mine, engine)) {
+					++p.cascadePlanes;
+					sun.NoteDifference("cascade planes", 1.0f, fmt::format("cascade {}: {}", call->cascade, SunViews::DescribePlanes(mine, engine)));
+				}
+				SunViews::Planes engineCaster, mineCaster;
 				if (a_process->doCustomCullPlanes)
-					CopyPlanes(a_process->customCullPlanes, cascade.customPlanes, cascade.customMask);
-				cascade.captured = true;
+					CopyPlanes(a_process->customCullPlanes, engineCaster.plane, engineCaster.mask);
+				mineCaster.plane = cascade.customPlanes;
+				mineCaster.mask = cascade.customMask;
+				if (!SunViews::SamePlanes(mineCaster, engineCaster)) {
+					++p.cascadeCasters;
+					sun.NoteDifference("cascade caster planes", 1.0f, fmt::format("cascade {}: masks {:#x} {:#x}", call->cascade, mineCaster.mask, engineCaster.mask));
+				}
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};

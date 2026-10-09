@@ -4698,9 +4698,17 @@ namespace DCLF
 		{
 			std::uint64_t logs = 0, updates = 0, inView = 0, serviced = 0, exact = 0, rounding = 0, differ = 0;
 			std::uint64_t engineChecked = 0, engineExact = 0, engineRounding = 0, engineDiffer = 0;  // the GPU's state against the engine's node
-			std::string first, engineFirst;
+			// The log entries the check skipped, by why: not the row asked for, another frame's update, another listing's (or none).
+			std::uint64_t skippedRoot = 0, skippedFrame = 0, skippedGeneration = 0;
+			// The rows' inputs against the nodes (fadeAmount, +0x109): a node whose value held since the last check while its row
+			// differs has a writer DCLF has no event for.
+			std::uint64_t inputChecks = 0, inputRoots = 0, inputMoving = 0, inputDiffer = 0;
+			std::string first, engineFirst, skippedFirst, inputFirst;
 		};
 		FadeParity fadeParity;
+		// The nodes' fadeAmount and +0x109 at the last input check, by node.
+		ankerl::unordered_dense::map<const void*, std::pair<float, std::uint8_t>> fadeInputsSeen;
+		void CheckFadeInputs(const SceneStore::Tables& a_tables);
 
 		// CS_DCLF_SET_PARITY: one snapshot per frame in flight, read back a few frames later.
 		struct SetParityFrame
@@ -4749,7 +4757,10 @@ namespace DCLF
 			std::uint32_t gapsInView = 0, gapsNew = 0, gapsAfterNative = 0, gapsBeforeNative = 0;
 			// Set members rejected while their live bound was in view: by the frustum (the bound the culling read was not the live
 			// one), by the fade test (a fade root DCLF owns, faded out), and how many of those were skinned.
-			std::uint32_t rejectedInView = 0, fadeHiddenInView = 0, skinnedInView = 0, inViewSamples = 0;
+			std::uint32_t rejectedInView = 0, fadeHiddenInView = 0, skinnedInView = 0, inViewSamples = 0, fadeSamples = 0;
+			// Fade-rejected in view while the engine, still culling the root (not stood in), has its node fully faded in.
+			std::uint32_t fadeContradicted = 0, fadeContradictedLast = 0;
+			std::string fadeContradictedFirst;
 			// The registration hooks' main claims against the frame's set: claimed and not in it (withheld from the engine and not
 			// drawn by DCLF), in it and not claimed (drawn by both).
 			std::uint32_t claimedOutside = 0, unclaimedMembers = 0, claimSamples = 0;

@@ -1,8 +1,16 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Internal.h"
+#	include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
 
 namespace DCLF
 {
+	namespace
+	{
+		// CS_DCLF_FADE_PARITY's log window, every other one: a root the set parity last saw a member of rejected by the fade test with
+		// its live bound in view (CS_DCLF_SET_PARITY), so that its FadeStateCS state is logged against the port and the engine's node.
+		std::atomic<std::uint32_t> fadeLogFocus{ ~0u };
+	}
+
 	std::string IndirectDraws::AsyncReport()
 	{
 		std::string text = AsyncWorker::Get().Report() + AsyncWorker::Get().RenderWaitReport();
@@ -358,14 +366,31 @@ namespace DCLF
 					const bool fadeHidden = passedFrustum && (frustumWord & 0x80000000u);
 					if (verdict == 2 && frustum && !decal && (fadeHidden || !passedFrustum) && o < snapshot.inView.size() && snapshot.inView[o]) {
 						// Rejected as final with its live bound in view. By the frustum: the bound the culling read was not the live one,
-						// and the engine would have drawn it. By the fade test: an owned root FadeStateCS has faded out, counted (a far
-						// root fades out in view; the fade parities judge the fade).
+						// and the engine would have drawn it. By the fade test: a root FadeStateCS has faded out, counted (a far root
+						// fades out in view; the fade parities judge the fade), flagged where the engine's node has it fully faded in.
 						++(fadeHidden ? counts.fadeHiddenInView : counts.rejectedInView);
 						const auto* geometry = o < snapshot.geometry.size() ? snapshot.geometry[o] : nullptr;
 						const bool alive = geometry != nullptr;  // held by snapshot.tables
+						if (fadeHidden && alive) {
+							// The engine's verdict where it still runs the root's OnVisible (not stood in): its node fully faded in
+							// (currentFade and fadeAmount 1) draws the members. FadeStateCS models that node, so dropping them is a
+							// fade the engine does not have: a missed input or a port difference.
+							const auto& tables = *snapshot.tables;
+							const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
+							const auto* rootNode = root < tables.fadeRootNode.size() ? static_cast<const RE::NiAVObject*>(tables.fadeRootNode[root]) : nullptr;
+							const auto* fadeNode = rootNode ? const_cast<RE::NiAVObject*>(rootNode)->AsFadeNode() : nullptr;
+							if (fadeNode && root < tables.fadeRoots.size() && !(tables.fadeRoots[root].bits & kFadeRootStoodIn) &&
+								fadeNode->GetRuntimeData().currentFade == 1.0f && Engine::At<float>(rootNode, 0x100) == 1.0f) {
+								counts.fadeContradictedLast = snapshot.frame;
+								if (counts.fadeContradicted++ == 0)
+									counts.fadeContradictedFirst = fmt::format("frame {}: object {} '{}' under root {} '{}' (bits {:#x}, the row's fadeAmount {})", snapshot.frame, o,
+										geometry->name.c_str() ? geometry->name.c_str() : "", root, rootNode->name.c_str() ? rootNode->name.c_str() : "", tables.fadeRoots[root].bits,
+										tables.fadeRoots[root].fadeAmount);
+							}
+						}
 						const bool skinned = alive && geometry->GetGeometryRuntimeData().skinInstance;
 						counts.skinnedInView += skinned;
-						if (alive && !fadeHidden && counts.inViewSamples++ < 24) {
+						if (alive && (fadeHidden ? counts.fadeSamples++ < 24 : counts.inViewSamples++ < 24)) {
 							const RE::TESObjectREFR* owner = nullptr;
 							for (const RE::NiAVObject* node = geometry; node && !owner; node = node->parent)
 								owner = node->GetUserData();
@@ -385,6 +410,21 @@ namespace DCLF
 								rootNode && rootNode->name.c_str() ? rootNode->name.c_str() : "", root < tables.fadeRoots.size() ? tables.fadeRoots[root].bits : 0u,
 								fadeNode ? fadeNode->GetRuntimeData().currentFade : -1.0f,
 								stateName(o < snapshot.colourState.size() ? snapshot.colourState[o] : kObjectStateAbsent));
+							// The centre FadeStateCS tests the root at: its chosen member's placement row 8 (LodFadeNodeOf: the member's
+							// property's fade node), against the root node's own bound.
+							if (fadeHidden && root < tables.fadeRoots.size()) {
+								fadeLogFocus.store(root, std::memory_order_relaxed);
+								const std::uint32_t member = tables.fadeRoots[root].object;
+								const auto* memberGeometry = member < tables.objectGeometry.size() ? tables.objectGeometry[member] : nullptr;
+								const auto* property = memberGeometry ? memberGeometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
+								const auto row = LodFadeNodeOf(property);
+								const auto centre = rootNode ? rootNode->worldBound.center : RE::NiPoint3{};
+								logger::info("[DCLF] set parity, frame {}:   its root's centre for FadeStateCS: member {} '{}' row 8 ({:.0f} {:.0f} {:.0f} w {:.2f}), property fade node {}; "
+											 "the root node's bound ({:.0f} {:.0f} {:.0f}) r {:.0f}; listed near {:.0f} far {:.0f} radius {:.0f}",
+									snapshot.frame, member, memberGeometry && memberGeometry->name.c_str() ? memberGeometry->name.c_str() : "?", row[0], row[1], row[2], row[3],
+									property && property->fadeNode ? "present" : "none", centre.x, centre.y, centre.z, rootNode ? rootNode->worldBound.radius : -1.0f,
+									tables.fadeRoots[root].nearDistance, tables.fadeRoots[root].farDistance, tables.fadeRoots[root].radius);
+							}
 						}
 					}
 					if (verdict == 0 || verdict == 2) {
@@ -502,10 +542,13 @@ namespace DCLF
 					counts.colourUnpublished, counts.withheldUndrawn, counts.alphaWithheldUndrawn, counts.withheldCulled, counts.outsideDrawn, counts.recordDisagrees,
 					double(counts.depthDrawnTotal) / counts.frames, double(counts.colourDrawnTotal) / counts.frames,
 					counts.depthOnly || counts.colourOnly || counts.withheldUndrawn || counts.outsideDrawn || counts.recordDisagrees ? " <- SET PARITY" : " <- OK");
-				// Counted, not flagged: the frustum's few are a bound at the view's edge or a far LOD block's, the fade test's legitimate.
-				logger::info("[DCLF] set parity over {} frames: members rejected with their live bound in view: {} by the frustum, {} by the fade test (owned roots faded "
-							 "out), {} of all of them skinned",
-					counts.frames, counts.rejectedInView, counts.fadeHiddenInView, counts.skinnedInView);
+				// Counted, not flagged: the frustum's few are a bound at the view's edge or a far LOD block's, the fade test's a far root's
+				// fade. Flagged: a fade rejection the engine's own node, where its cull still runs, contradicts.
+				logger::info("[DCLF] set parity over {} frames: members rejected with their live bound in view: {} by the frustum, {} by the fade test (roots faded "
+							 "out), {} of all of them skinned; {} fade rejections the engine's node contradicts (the last at frame {}){}{}",
+					counts.frames, counts.rejectedInView, counts.fadeHiddenInView, counts.skinnedInView, counts.fadeContradicted, counts.fadeContradictedLast,
+					counts.fadeContradicted ? " <- FADE" : " <- OK",
+					counts.fadeContradictedFirst.empty() ? "" : "; first: " + counts.fadeContradictedFirst);
 				logger::info("[DCLF] set parity over {} frames: the registration hooks' main claims against the set: {} claimed outside it (drawn by nobody), {} members "
 							 "not claimed (drawn twice){}",
 					counts.frames, counts.claimedOutside, counts.unclaimedMembers, counts.claimedOutside || counts.unclaimedMembers ? " <- CLAIMS" : " <- OK");
@@ -982,13 +1025,69 @@ namespace DCLF
 		treeReadback = std::move(readback);
 	}
 
+	void IndirectDraws::Impl::CheckFadeInputs(const SceneStore::Tables& a_tables)
+	{
+		// Every listed root's row inputs against its node: FadeStateCS reads fadeAmount and +0x109 from the row, which the listing
+		// and the events write (Actor::SetAlpha's, the placement snap's). The tables are the last publication's, an event or two
+		// behind a value the engine steps each frame, so only a node that held its value since the last check is judged.
+		auto& p = fadeParity;
+		++p.inputChecks;
+		ankerl::unordered_dense::map<const void*, std::pair<float, std::uint8_t>> seen;
+		seen.reserve(a_tables.fadeRoots.size());
+		for (std::size_t r = 0; r < a_tables.fadeRoots.size() && r < a_tables.fadeRootNode.size(); ++r) {
+			const auto& row = a_tables.fadeRoots[r];
+			const auto* node = static_cast<const RE::NiAVObject*>(a_tables.fadeRootNode[r]);
+			if (!node || row.generation == 0)
+				continue;
+			++p.inputRoots;
+			const float amount = Engine::At<float>(node, 0x100);
+			const std::uint8_t flags109 = Engine::At<std::uint8_t>(node, 0x109) & 0x3;
+			seen.emplace(node, std::make_pair(amount, flags109));
+			// +0x109's bits the state reads: 0 (always fade out) and 1 (the LOD thresholds' radius scale).
+			const std::uint8_t rowFlags109 = static_cast<std::uint8_t>(row.bits >> kFadeRootBitsShift) & 0x3;
+			if (std::memcmp(&amount, &row.fadeAmount, sizeof(amount)) == 0 && flags109 == rowFlags109)
+				continue;
+			const auto previous = fadeInputsSeen.find(node);
+			if (previous == fadeInputsSeen.end() || std::memcmp(&previous->second.first, &amount, sizeof(amount)) != 0 || previous->second.second != flags109) {
+				++p.inputMoving;
+				continue;
+			}
+			++p.inputDiffer;
+			if (p.inputFirst.empty())
+				p.inputFirst = fmt::format("root {} '{}' (plan {}, bits {:#x}): fadeAmount {} (the node's {}), +0x109 {:#x} (the node's {:#x})", r,
+					node->name.c_str() ? node->name.c_str() : "", row.bits & kFadeRootPlanMask, row.bits, row.fadeAmount, amount, rowFlags109, flags109);
+		}
+		fadeInputsSeen = std::move(seen);
+		if ((p.inputChecks % 10) == 0) {
+			logger::info("[DCLF] fade inputs parity (the root rows' fadeAmount and +0x109 against the nodes): {} checks, {} roots, {} still moving, {} differ{}{}",
+				p.inputChecks, p.inputRoots, p.inputMoving, p.inputDiffer, p.inputDiffer ? " <- FADE INPUT" : " <- OK", p.inputFirst.empty() ? "" : "; first: " + p.inputFirst);
+			p.inputRoots = p.inputMoving = p.inputDiffer = 0;
+			p.inputFirst.clear();
+		}
+	}
+
 	std::uint32_t IndirectDraws::Impl::NextFadeLog(std::uint32_t a_frame, const SceneStore::Tables& a_tables, const FadeFrame& a_inputs)
 	{
-		if (!SwitchEnabled(Switch::FadeParity) || fadeReadback || (a_frame % 30) != 0 || a_tables.fadeRoots.empty())
+		if (!SwitchEnabled(Switch::FadeParity) || (a_frame % 30) != 0 || a_tables.fadeRoots.empty())
+			return ~0u;
+		CheckFadeInputs(a_tables);
+		if (fadeReadback)
 			return ~0u;
 		const auto count = static_cast<std::uint32_t>(a_tables.fadeRoots.size());
-		const std::uint32_t base = fadeLogCursor < count ? fadeLogCursor : 0u;
-		fadeLogCursor = base + kFadeLogEntries;
+		// The window starts at a live root: the slot table grows and frees rows, and FadeStateCS logs nothing for an empty one (a
+		// window of empty rows read back the last log written, and checked nothing). Every other window: the set parity's focus.
+		const auto live = [&](std::uint32_t a_row) { return a_row < count && a_tables.fadeRoots[a_row].generation != 0 && a_tables.fadeRoots[a_row].object != ~0u; };
+		static std::uint32_t turn = 0;
+		std::uint32_t base = ~0u;
+		if (const std::uint32_t focus = fadeLogFocus.exchange(~0u, std::memory_order_relaxed); (++turn & 1) && live(focus))
+			base = focus;
+		for (std::uint32_t step = 0, row = fadeLogCursor < count ? fadeLogCursor : 0u; base == ~0u && step < count; ++step, row = row + 1 < count ? row + 1 : 0u)
+			if (live(row)) {
+				base = row;
+				fadeLogCursor = row + kFadeLogEntries;
+			}
+		if (base == ~0u)
+			return ~0u;
 		FadeReadback readback;
 		readback.frame = a_frame;
 		readback.base = base;
@@ -1087,8 +1186,14 @@ namespace DCLF
 			const auto& entry = entries[i];
 			const auto& root = done.roots[i];
 			// Only what the pass did that frame, for the row it had.
-			if (entry.root != done.base + i || entry.after.frame != done.frame || entry.after.generation != root.generation || !root.generation)
+			if (entry.root != done.base + i || entry.after.frame != done.frame || entry.after.generation != root.generation || !root.generation) {
+				const bool rootSkip = entry.root != done.base + i, frameSkip = !rootSkip && entry.after.frame != done.frame;
+				++(rootSkip ? p.skippedRoot : frameSkip ? p.skippedFrame : p.skippedGeneration);
+				if (p.skippedFirst.empty())
+					p.skippedFirst = fmt::format("row {}: entry root {}, its update's frame {} (the log's {}), generation {} (the row's {})", done.base + i, entry.root,
+						entry.after.frame, done.frame, entry.after.generation, root.generation);
 				continue;
+			}
 			// A root the engine culls too: its OnVisible on the node and FadeStateCS's for the members, from the same state.
 			if (i < done.engine.size() && done.engine[i]) {
 				++p.engineChecked;
@@ -1187,12 +1292,16 @@ namespace DCLF
 		if ((p.logs % 10) == 0) {
 			logger::info("[DCLF] fade state parity (FadeStateCS against the port): {} logs, {} root updates ({} in view, {} serviced); {} exact, {} within rounding, {} differ{}{}",
 				p.logs, p.updates, p.inView, p.serviced, p.exact, p.rounding, p.differ, p.differ ? " <- FADE STATE" : " <- OK", p.first.empty() ? "" : "; first: " + p.first);
+			logger::info("[DCLF] fade state parity: log entries skipped: {} not the row asked for, {} another frame's update, {} another listing's{}", p.skippedRoot,
+				p.skippedFrame, p.skippedGeneration, p.skippedFirst.empty() ? "" : "; first: " + p.skippedFirst);
 			// Informational since T1a: DCLF's state is authoritative for its members, and the engine's node differs where its own cull
 			// visits the root differently (an actor's bound, a root its cull never reaches).
 			logger::info("[DCLF] fade state of roots with engine-drawn parts (FadeStateCS against the engine's node, informational): {} checked, {} exact, {} within rounding, {} differ{}{}",
 				p.engineChecked, p.engineExact, p.engineRounding, p.engineDiffer, p.engineDiffer ? " (the engine's own cull; DCLF's state stands)" : "",
 				p.engineFirst.empty() ? "" : "; first: " + p.engineFirst);
+			const auto inputs = std::make_tuple(p.inputChecks, p.inputRoots, p.inputMoving, p.inputDiffer, p.inputFirst);
 			p = {};
+			std::tie(p.inputChecks, p.inputRoots, p.inputMoving, p.inputDiffer, p.inputFirst) = inputs;
 		}
 	}
 

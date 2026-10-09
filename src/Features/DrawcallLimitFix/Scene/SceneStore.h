@@ -2578,6 +2578,8 @@ namespace DCLF
 		void UnlistFadeRoot(std::uint32_t a_slot);
 		/** @brief A switch event on a tree root's LOD switch: the root's kFadeRootTreeLod again (ApplySwitchEvents). */
 		void RefreshFadeRootSwitch(const RE::NiAVObject* a_switch);
+		/** @brief A fadeAmount event (Actor::SetAlpha): a listed root's fadeAmount again from its node, its state row kept. */
+		void RefreshFadeAmount(const void* a_node);
 		void CheckResidentParity();
 		/** @brief What a classification reads from the geometry, its properties and its material, hashed. */
 		static std::uint64_t ClassifyInputsOf(const RE::BSGeometry& a_geometry);

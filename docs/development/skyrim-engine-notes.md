@@ -1137,8 +1137,15 @@ Decompiled 2026-10-01 for moving the fade and LOD state machine to the GPU.
     All of it precedes DCLF's attach event, so a GPU state slot initialised from the node at join starts from it.
 -   **`fadeAmount` is `NiAVObject+0x100`**, not a fade node field. Its stores are spread over 375 functions, none of
     them a user of the fade globals; the named ones are `NiAVObject::ctor` and `Actor::SetAlpha` (actors, which are not
-    stood in). The script and enable/disable fades are not pinned down: a GPU fade table needs `fadeAmount` by event or
-    an input parity that names the writer it misses.
+    stood in).
+    -   **Actors fade in through it every frame.** `Actor::SetAlpha` (vfunc `0xE1`, `0x1406c1a50`) writes the actor's 3D
+        root's `+0x100` (and the player's first-person root's). `Actor::UpdateAlpha` (vfunc `0xE0`) calls it with
+        `ActorProcess`'s alpha (middle-high `+0x134`), which `FUN_1406eb630` steps from 0 to 1 while the fade state
+        (`+0x130`) is 1 or 3: after `ActorProcess::FadeIn` from `MoveToHigh`, `TESObjectREFR::Enable`, `Resurrect` and
+        `SetLifeState`. An actor listed mid-fade has a `fadeAmount` that changes for about a second afterwards.
+    -   DCLF follows it by event (`fadeAmountEvents`, `SceneStore::RefreshFadeAmount`). The fade parity's input check
+        (`fade inputs parity`, `<- FADE INPUT`) compares every listed root's row with its node and names a writer
+        without an event. The script and enable/disable fades of non-actors have shown none.
 -   **`BSFadeNodeCuller::Process1`** (`0x1414e9a50`, the tree manager's culler) writes only flags bits 12 and 20 from its
     own frustum test: not fade state.
 -   **The scene lists** (`0x14338c870`, count `0x14338c868`) are read by:

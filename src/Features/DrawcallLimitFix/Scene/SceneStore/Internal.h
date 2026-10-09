@@ -198,6 +198,15 @@ namespace DCLF
 		inline EventQueue<const void*> fadeSnapEvents;
 
 		/**
+		 * @brief fadeAmount events: Actor::SetAlpha (vfunc 0xE1, 0x1406c1a50) wrote an actor's 3D root's fadeAmount (+0x100), an input
+		 * of its fade root's static row (FadeRootStatic::fadeAmount). Actor::UpdateAlpha calls it each frame of an actor's fade
+		 * (FUN_1406eb630 steps ActorProcess's alpha from 0 to 1 after MoveToHigh, Enable or a resurrection), so an actor listed
+		 * mid-fade would keep the alpha it was listed with: FadeStateCS fades it toward that and drops its members. Identity only
+		 * (SceneStore::RefreshFadeAmount reads the listed node again).
+		 */
+		inline EventQueue<const void*> fadeAmountEvents;
+
+		/**
 		 * @brief SceneEvents: the delta walk's structural events (dclf-event-driven-tables.md, "Phase 3"), pushed
 		 * from the engine's writers on whichever thread runs them, ingested by the render thread (IngestEvents), applied by the scene work (ApplyEvents).
 		 *
@@ -582,6 +591,7 @@ namespace DCLF
 		SceneTracker::Event* head = nullptr;  // SceneTracker's attach and detach events
 		SceneTracker::Event* tail = nullptr;
 		std::vector<const void*> fadeSnaps;
+		std::vector<const void*> fadeAmounts;
 		std::vector<const RE::BSFadeNode*> fades;
 		std::vector<const void*> properties;
 		std::vector<RE::NiPointer<RE::NiAVObject>> nodes;
