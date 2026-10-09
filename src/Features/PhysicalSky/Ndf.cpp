@@ -583,11 +583,16 @@ NdfTextureSet NdfManager::GetNdf(const NdfSettings& settings, TextureManager& te
 	return { texHeight->srv.get(), texModeling->srv.get() };
 }
 
+CirrusSettings::CirrusSettings()
+{
+	weather.states.push_back({ { "value", CirrusWeatherState{} }, { "weight", 1.f } });
+}
+
 void CirrusMapManager::SetupResources()
 {
 	generationCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<GenerationParameters>());
-	texWeather = CreateNdfTexture(kDimension, DXGI_FORMAT_R16G16_FLOAT, "PhysicalSky::CirrusWeather", true);
-	texPatterns = CreateNdfTexture(kDimension, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::CirrusPatterns", true);
+	for (auto& texture : texWeather)
+		texture = CreateNdfTexture(kDimension, DXGI_FORMAT_R16G16_FLOAT, "PhysicalSky::CirrusWeather", true);
 	D3D11_SAMPLER_DESC desc{
 		.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
 		.AddressU = D3D11_TEXTURE_ADDRESS_WRAP,
@@ -609,16 +614,13 @@ void CirrusMapManager::CompileShaders()
 	for (auto& resource : outputResources)
 		resource = nullptr;
 	weatherProgram = nullptr;
-	patternsProgram = nullptr;
 	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\CirrusGenerate.cs.hlsl", {}, "cs_5_0", "generateWeather")))
 		weatherProgram.attach(raw);
-	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\CirrusGenerate.cs.hlsl", {}, "cs_5_0", "generatePatterns")))
-		patternsProgram.attach(raw);
 }
 
 bool CirrusMapManager::ShadersReady(const CirrusSettings&) const
 {
-	return weatherProgram && patternsProgram && generationCb && sampler && texWeather && texPatterns;
+	return weatherProgram && generationCb && sampler && texWeather[0] && texWeather[1];
 }
 
 CirrusTextureSet CirrusMapManager::GetTextures() const
@@ -630,78 +632,105 @@ bool CirrusMapManager::Update(const CirrusSettings& settings, TextureManager& te
 {
 	if (!ShadersReady(settings))
 		return false;
-	const std::array<std::string, 2> paths{ settings.weatherPath, settings.patternsPath };
-	for (const auto& path : paths)
-		textures.EnsureLoaded(path);
-	sourcePaths = paths;
-	std::array<ID3D11ShaderResourceView*, 6> sources = {};
-	std::copy(ndf.GetNoiseInputs().begin(), ndf.GetNoiseInputs().end(), sources.begin());
-	for (uint32_t i = 0; i < 2; ++i) {
-		auto* source = textures.Query(paths[i]);
-		if (NdfManager::IsTextureNdf(source, i == 0 ? 2u : 3u))
-			sources[i + 4] = source;
+	const std::string patternPath = "Data/Textures/PhysicalSky/cirrus.dds";
+	textures.EnsureLoaded(patternPath);
+	std::vector<CirrusWeatherState> states;
+	std::vector<float> weights;
+	for (const auto& endpoint : settings.weather.states) {
+		try {
+			const float weight = endpoint.at("weight").get<float>();
+			if (!std::isfinite(weight) || weight <= 0.f)
+				continue;
+			auto state = endpoint.at("value").get<CirrusWeatherState>();
+			textures.EnsureLoaded(state.localMap);
+			states.push_back(std::move(state));
+			weights.push_back(weight);
+		} catch (const nlohmann::json::exception&) {
+		}
 	}
-	if (!sources[4] && std::ranges::any_of(ndf.GetNoiseInputs(), [](auto* input) { return !input; }))
+	const float uvSize = settings.GetUvSize();
+	const auto key = nlohmann::json{ { "weather", settings.weather.states }, { "uvSize", uvSize } }.dump();
+	const auto weatherWind = ndf.GetWeatherOffset();
+	const float2 wind = { weatherWind.x / uvSize, weatherWind.y / uvSize };
+	if (generatedValid && generatedKey == key && generatedRevision == textures.revision && noiseRevision == ndf.GetRevision() &&
+		generatedWind.x == wind.x && generatedWind.y == wind.y)
 		return false;
+	const bool hadOutputs = bool(outputs);
+	outputs = {};
+	for (auto& resource : outputResources)
+		resource = nullptr;
+	auto* patterns = textures.Query(patternPath);
+	if (!NdfManager::IsTextureNdf(patterns, 3)) {
+		generatedValid = false;
+		return hadOutputs;
+	}
+	if (std::ranges::any_of(ndf.GetNoiseInputs(), [](auto* input) { return !input; })) {
+		generatedValid = false;
+		return hadOutputs;
+	}
 	auto* context = globals::d3d::context;
-	GenerationParameters data{
-		.weather = settings.weather,
-		.seed = settings.patternSeed,
-		.warp = FiniteClamp(settings.patternWarp, 0.f, 0.5f, 0.15f),
-		.detail = FiniteClamp(settings.patternDetail, 0.f, 1.f, 0.35f),
-		.windOffset = ndf.GetWeatherOffset()
-	};
-	for (uint32_t i = 0; i < 2; ++i) {
-		auto& layer = data.weather[i];
-		layer.noise = std::min(layer.noise, 4u);
-		layer.frequency = FiniteClamp(layer.frequency, 0.f, 64.f, 1.f);
-		layer.exponent = 1.f;
-		layer.padding0 = 0.f;
-		layer.offset.x = FiniteClamp(layer.offset.x, -10000.f, 10000.f, 0.f);
-		layer.offset.y = FiniteClamp(layer.offset.y, -10000.f, 10000.f, 0.f);
-		layer.padding1 = {};
-		SanitizeRange(layer.range);
-	}
-	if (generatedValid && generatedSources == sources && generatedRevision == textures.revision && noiseRevision == ndf.GetRevision() && std::memcmp(&data, &generatedData, sizeof(data)) == 0)
-		return false;
-	generationCb->Update(data);
 	auto* cb = generationCb->CB();
 	auto* samp = sampler.get();
 	winrt::com_ptr<ID3D11SamplerState> previousSampler;
 	context->CSGetSamplers(0, 1, previousSampler.put());
 	context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetSamplers(0, 1, &samp);
-	if (!sources[4]) {
-		auto* uav = texWeather->uav.get();
-		context->CSSetShaderResources(0, 4, sources.data());
+	context->CSSetShader(weatherProgram.get(), nullptr, 0);
+	ID3D11ShaderResourceView* previous = nullptr;
+	ID3D11ShaderResourceView* nullSrvs[6] = {};
+	uint32_t target = 0;
+	for (size_t i = 0; i < states.size(); ++i) {
+		const auto& state = states[i];
+		auto* local = textures.Query(state.localMap);
+		if (!NdfManager::IsTextureNdf(local, 3))
+			local = nullptr;
+		GenerationParameters data{
+			.weather = state.layers,
+			.windOffset = wind,
+			.localWeight = local ? FiniteClamp(state.localWeight, 0.f, 1.f, 0.f) : 0.f,
+			.localWindScale = FiniteClamp(state.localWindScale, 0.f, 16.f, 1.f),
+			.localBlendMode = std::min(state.localBlendMode, 1u),
+			.weight = weights[i],
+			.hasPrevious = previous ? 1u : 0u
+		};
+		for (auto& layer : data.weather) {
+			layer.noise = std::min(layer.noise, 4u);
+			layer.frequency = FiniteClamp(layer.frequency, 0.f, 64.f, 1.f);
+			layer.offset.x = FiniteClamp(layer.offset.x, -10000.f, 10000.f, 0.f);
+			layer.offset.y = FiniteClamp(layer.offset.y, -10000.f, 10000.f, 0.f);
+			SanitizeRange(layer.range);
+		}
+		generationCb->Update(data);
+		std::array<ID3D11ShaderResourceView*, 6> sources = {};
+		std::copy(ndf.GetNoiseInputs().begin(), ndf.GetNoiseInputs().end(), sources.begin());
+		sources[4] = local;
+		sources[5] = previous;
+		context->CSSetShaderResources(0, 6, sources.data());
+		auto* uav = texWeather[target]->uav.get();
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-		context->CSSetShader(weatherProgram.get(), nullptr, 0);
 		context->Dispatch((kDimension + 7u) >> 3, (kDimension + 7u) >> 3, 1);
 		uav = nullptr;
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-		context->GenerateMips(texWeather->srv.get());
+		context->CSSetShaderResources(0, 6, nullSrvs);
+		previous = texWeather[target]->srv.get();
+		target ^= 1u;
 	}
-	if (!sources[5]) {
-		auto* uav = texPatterns->uav.get();
-		context->CSSetUnorderedAccessViews(1, 1, &uav, nullptr);
-		context->CSSetShader(patternsProgram.get(), nullptr, 0);
-		context->Dispatch((kDimension + 7u) >> 3, (kDimension + 7u) >> 3, 1);
-		uav = nullptr;
-		context->CSSetUnorderedAccessViews(1, 1, &uav, nullptr);
-		context->GenerateMips(texPatterns->srv.get());
+	if (!previous) {
+		const float empty[4] = {};
+		context->ClearUnorderedAccessViewFloat(texWeather[0]->uav.get(), empty);
+		previous = texWeather[0]->srv.get();
 	}
-	ID3D11ShaderResourceView* nullSrvs[4] = {};
-	context->CSSetShaderResources(0, 4, nullSrvs);
+	context->GenerateMips(previous);
 	cb = nullptr;
 	samp = previousSampler.get();
 	context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetSamplers(0, 1, &samp);
 	context->CSSetShader(nullptr, nullptr, 0);
-	outputs = { sources[4] ? sources[4] : texWeather->srv.get(), sources[5] ? sources[5] : texPatterns->srv.get() };
+	outputs = { previous, patterns };
 	outputResources[0].copy_from(outputs.weather);
 	outputResources[1].copy_from(outputs.patterns);
-	generatedSources = sources;
-	generatedData = data;
+	generatedKey = key;
+	generatedWind = wind;
 	generatedRevision = textures.revision;
 	noiseRevision = ndf.GetRevision();
 	generatedValid = true;
@@ -710,56 +739,83 @@ bool CirrusMapManager::Update(const CirrusSettings& settings, TextureManager& te
 
 #define I18N_KEY_PREFIX "feature.physical_sky."
 
-void CirrusMapManager::DrawSettings(CirrusSettings& settings, TextureManager& textures)
+static bool DrawCirrusWeather(const char* label, CirrusNoiseLayer& layer)
+{
+	if (!ImGui::TreeNode(label))
+		return false;
+	bool changed = ImGui::DragFloat2(T(TKEY("ndf_input_interval"), "Input interval"), &layer.range.x, 0.01f, -1.f, 1.f);
+	changed |= ImGui::DragFloat2(T(TKEY("ndf_output_interval"), "Output interval"), &layer.range.z, 0.01f, 0.f, 1.f);
+	changed |= ImGui::DragFloat(T(TKEY("ndf_frequency"), "Frequency"), &layer.frequency, 0.05f, 0.f, 64.f);
+	changed |= ImGui::DragFloat2(T(TKEY("ndf_offset"), "Offset"), &layer.offset.x, 0.005f);
+	const char* slots[] = { "0", "1", "2", "3", T(TKEY("ndf_noise_slot_zero"), "Zero") };
+	int slot = static_cast<int>(std::min(layer.noise, 4u));
+	if (ImGui::Combo(T(TKEY("ndf_noise_slot"), "Noise slot"), &slot, slots, IM_ARRAYSIZE(slots))) {
+		layer.noise = static_cast<uint32_t>(slot);
+		changed = true;
+	}
+	ImGui::TreePop();
+	return changed;
+}
+
+static void DrawCirrusWeatherState(CirrusSettings& settings, TextureManager& textures)
+{
+	if (!ImGui::TreeNode(T(TKEY("cirrus_weather_settings"), "Cirrus weather")))
+		return;
+	ImGui::TextWrapped("%s", T(TKEY("cirrus_saved"), "Cirrus coverage, type and the optional local map are saved with Physical Sky settings."));
+	ImGui::TextWrapped("%s", T(TKEY("cirrus_shared_noise"), "Uses the four Cloud Map noise inputs."));
+	const nlohmann::json value = settings.weather;
+	CirrusWeatherState state;
+	if (SceneBlend::IsValid(value) && !value["states"].empty()) {
+		const auto endpoint = std::max_element(value["states"].begin(), value["states"].end(), [](const auto& lhs, const auto& rhs) {
+			return lhs["weight"].template get<float>() < rhs["weight"].template get<float>();
+		});
+		try {
+			state = (*endpoint)["value"].get<CirrusWeatherState>();
+		} catch (const nlohmann::json::exception&) {
+		}
+		if (value["states"].size() > 1)
+			ImGui::TextWrapped("%s", T(TKEY("cirrus_edit_mixed"), "Multiple weather states are stored. Editing captures the strongest endpoint as one weather state."));
+	}
+	bool changed = DrawCirrusWeather(T(TKEY("cirrus_coverage"), "Cirrus Coverage"), state.layers[0]);
+	changed |= DrawCirrusWeather(T(TKEY("cirrus_type"), "Cirrus Type"), state.layers[1]);
+	changed |= ImGui::InputText(T(TKEY("cirrus_local_map"), "Local coverage / type / mask RGB"), &state.localMap);
+	ImGui::TextWrapped("%s", T(TKEY("cirrus_local_hint"), "Optional linear RGB DDS: R coverage, G type, B blend mask. Repeats every 16384 m times Cirrus UV Size; leave the path empty for no local map."));
+	changed |= ImGui::SliderFloat(T(TKEY("cirrus_local_weight"), "Local map influence"), &state.localWeight, 0.f, 1.f);
+	changed |= ImGui::SliderFloat(T(TKEY("cirrus_local_wind"), "Local map wind scale"), &state.localWindScale, 0.f, 16.f);
+	const char* modes[] = { T(TKEY("local_ndf_interpolate"), "Interpolate"), T(TKEY("local_ndf_maximum"), "Maximum") };
+	int mode = static_cast<int>(std::min(state.localBlendMode, 1u));
+	if (ImGui::Combo(T(TKEY("cirrus_local_blend"), "Local map blend"), &mode, modes, 2)) {
+		state.localBlendMode = static_cast<uint32_t>(mode);
+		changed = true;
+	}
+	textures.EnsureLoaded(state.localMap);
+	if (!state.localMap.empty() && !NdfManager::IsTextureNdf(textures.Query(state.localMap), 3))
+		ImGui::TextColored({ 1, 0.3f, 0.2f, 1 }, "%s", T(TKEY("cirrus_local_missing"), "Missing or incompatible local map; using the generated coverage and type."));
+	if (changed) {
+		PhysicalSky::GetSingleton()->volMainHistoryValid = false;
+		settings.weather.states = nlohmann::json::array({ { { "value", state }, { "weight", 1.f } } });
+	}
+	ImGui::TreePop();
+}
+
+void CirrusMapManager::DrawSettings(CirrusSettings& cirrus, TextureManager& textures)
 {
 	ImGui::SeparatorText(T(TKEY("cirrus"), "Cirrus"));
-	ImGui::Checkbox(T(TKEY("enable_cirrus"), "Enable Cirrus"), &settings.enabled);
-	ImGui::SliderFloat(T(TKEY("cirrus_altitude"), "Cirrus Altitude"), &settings.altitude, 1.f, 24000.f, "%.0f m");
-	ImGui::SliderFloat(T(TKEY("cirrus_pattern_scale"), "Pattern Repeat Length"), &settings.patternScale, 100.f, 64000.f, "%.0f m", ImGuiSliderFlags_Logarithmic);
-	ImGui::SliderFloat(T(TKEY("cirrus_density_scale"), "Cirrus Density Scale"), &settings.densityScale, 0.f, 4.f, "%.3f");
-	ImGui::SliderFloat(T(TKEY("cirrus_lighting_scale"), "Cirrus Lighting Scale"), &settings.lightingScale, 0.f, 4.f, "%.3f");
-	const auto textureChoice = [&](const char* label, std::string& path, uint32_t channels) {
-		const char* generated = T(TKEY("ndf_type_procedural"), "Procedural");
-		if (ImGui::BeginCombo(label, path.empty() ? generated : path.c_str())) {
-			if (ImGui::Selectable(generated, path.empty()))
-				path.clear();
-			for (const auto& choice : textures.ListPaths())
-				if (ImGui::Selectable(choice.c_str(), path == choice))
-					path = choice;
-			ImGui::EndCombo();
-		}
-		if (!path.empty() && !NdfManager::IsTextureNdf(textures.Query(path), channels))
-			ImGui::TextColored({ 1, 0.3f, 0.2f, 1 }, "%s", T(TKEY("ndf_incompatible_texture"), "Missing or incompatible texture; using generated input (local influences are skipped)."));
-	};
+	ImGui::Checkbox(T(TKEY("enable_cirrus"), "Enable Cirrus"), &cirrus.enabled);
+	ImGui::SliderFloat(T(TKEY("cirrus_altitude"), "Cirrus Altitude"), &cirrus.altitude, 1.f, 24000.f, "%.0f m");
+	ImGui::SliderFloat(T(TKEY("cirrus_density_scale"), "Cirrus Density Scale"), &cirrus.densityScale, 0.f, 4.f, "%.3f");
+	ImGui::TextWrapped("%s", T(TKEY("cirrus_altitude_hint"), "Height controls the cloud sheet and its atmospheric lighting. It does not extend the low-cloud ray march."));
+	ImGui::SliderFloat(T(TKEY("cirrus_uv_size"), "Cirrus UV Size"), &cirrus.uvSize, 0.1f, 32.f, "%.2f x", ImGuiSliderFlags_Logarithmic);
+	ImGui::TextWrapped("%s", T(TKEY("cirrus_uv_size_hint"), "Larger values enlarge both weather and detail patterns without changing wind speed. At 1x, weather repeats every 16.384 km and details every 4.29 km."));
+	ImGui::TextUnformatted("Data/Textures/PhysicalSky/cirrus.dds");
+	textures.EnsureLoaded("Data/Textures/PhysicalSky/cirrus.dds");
+	if (!NdfManager::IsTextureNdf(textures.Query("Data/Textures/PhysicalSky/cirrus.dds"), 3))
+		ImGui::TextColored({ 1, 0.3f, 0.2f, 1 }, "%s", T(TKEY("cirrus_patterns_missing"), "Cirrus requires a linear RGB cirrus.dds. Missing or incompatible input disables cirrus only."));
 	if (ImGui::TreeNode(T(TKEY("cirrus_texture_inputs"), "Cirrus texture inputs"))) {
 		textures.DrawUI();
 		ImGui::TreePop();
 	}
-	textureChoice(T(TKEY("cirrus_weather_rg"), "Coverage / Type RG"), settings.weatherPath, 2);
-	textureChoice(T(TKEY("cirrus_patterns_rgb"), "Wispy / Round / Streaky RGB"), settings.patternsPath, 3);
-	if (!NdfManager::IsTextureNdf(textures.Query(settings.patternsPath), 3)) {
-		ImGui::InputScalar(T(TKEY("cirrus_pattern_seed"), "Pattern Seed"), ImGuiDataType_U32, &settings.patternSeed);
-		ImGui::SliderFloat(T(TKEY("cirrus_pattern_warp"), "Pattern Warp"), &settings.patternWarp, 0.f, 0.5f);
-		ImGui::SliderFloat(T(TKEY("cirrus_pattern_detail"), "Pattern Detail"), &settings.patternDetail, 0.f, 1.f);
-	}
-	if (NdfManager::IsTextureNdf(textures.Query(settings.weatherPath), 2))
-		return;
-	const char* labels[] = { T(TKEY("cirrus_coverage"), "Cirrus Coverage"), T(TKEY("cirrus_type"), "Cirrus Type") };
-	for (uint32_t i = 0; i < 2; ++i) {
-		if (!ImGui::TreeNode(labels[i]))
-			continue;
-		auto& layer = settings.weather[i];
-		ImGui::DragFloat2(T(TKEY("ndf_input_interval"), "Input interval"), &layer.range.x, 0.01f, -1.f, 1.f);
-		ImGui::DragFloat2(T(TKEY("ndf_output_interval"), "Output interval"), &layer.range.z, 0.01f, 0.f, 1.f);
-		ImGui::DragFloat(T(TKEY("ndf_frequency"), "Frequency"), &layer.frequency, 0.05f, 0.f, 64.f);
-		ImGui::DragFloat2(T(TKEY("ndf_offset"), "Offset"), &layer.offset.x, 0.005f);
-		const char* slots[] = { "0", "1", "2", "3", T(TKEY("ndf_noise_slot_zero"), "Zero") };
-		int slot = static_cast<int>(std::min(layer.noise, 4u));
-		if (ImGui::Combo(T(TKEY("ndf_noise_slot"), "Noise slot"), &slot, slots, IM_ARRAYSIZE(slots)))
-			layer.noise = static_cast<uint32_t>(slot);
-		ImGui::TextWrapped("%s", T(TKEY("cirrus_shared_noise"), "Uses the four Cloud Map noise inputs."));
-		ImGui::TreePop();
-	}
+	DrawCirrusWeatherState(cirrus, textures);
 }
 
 #undef I18N_KEY_PREFIX

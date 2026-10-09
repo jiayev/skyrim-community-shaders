@@ -42,8 +42,9 @@ current position. Speed or direction changes affect subsequent displacement,
 without re-evaluating earlier motion. Paused frames do not advance either state.
 
 The GPU receives displacement in game units. Density queries subtract it before
-converting to noise coordinates. NDF height/modeling, shape noise, its XY warp,
-and cirrus weather/patterns share this translation.
+converting to noise coordinates. NDF height/modeling, shape noise and its XY warp
+share this translation. Cirrus patterns use high-cloud displacement; cirrus
+weather uses its generator offset and is sampled without another translation.
 This shared transport of static weather maps is a project adaptation; the
 generator's weather offset remains a separate authoring input. It does not
 reproduce independently animated weather and detail wind fields.

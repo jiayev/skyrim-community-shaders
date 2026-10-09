@@ -190,17 +190,21 @@ and response exponent default to one, preserving the previous noise operation.
 Cirrus coverage and type select independently from the same four noise slots.
 They have their own frequency, offset and remap, without a power operation or a
 final output clamp. Defaults select slots 1 and 2. Weather offset uses 0.0001
-for cirrus and 0.00005 for the main map. Runtime wind still acts through density
-queries; generation does not advance time. Cirrus parameters occupy 128 bytes.
-Changes to a shared input regenerate both dependent maps. Pattern textures remain
-an independent optional input with a local procedural fallback.
+for cirrus and 0.00005 for the main map. Cirrus weather is sampled in world UV
+without a second runtime wind displacement; its pattern DDS uses high-cloud wind.
+Cirrus generation parameters occupy 96 bytes, including local RGB map blending
+and a stored weather-state weight. Shared input changes refresh dependent maps.
+Patterns are loaded from `Data/Textures/PhysicalSky/cirrus.dds`; no pattern generator
+is used. Complete cirrus weather states are saved with Physical Sky settings;
+multiple stored states blend their generated maps by weight.
 
 ## Optional resources and previews
 
 A missing/incompatible noise override uses that slot's procedural settings.
 An incomplete imported NDF pair falls back to procedural composition. Missing
 local influence inputs disable their corresponding weights; a missing mask acts
-as one. Missing cirrus weather/pattern inputs independently use generated maps.
+as one. Missing cirrus local maps preserve generated coverage/type; missing
+`cirrus.dds` disables cirrus without disabling the low clouds.
 Failed paths are cached rather than retried every frame; Load explicitly retries.
 
 Cloud Shape debugging provides scalar previews for both coverage branches,

@@ -36,7 +36,7 @@ the internal and boundary variation of that mass.
 | Cube history / traces            | `t23`–`t25` / `t26`–`t28` | transmittance, radiance, metadata |
 | Composed local height / modeling |             `t32` / `t33` | premultiplied RGBA16_FLOAT arrays |
 | Local modeling maximum floor     |                     `t34` | RGB floor, RGBA16_FLOAT array     |
-| Local endpoint weights / mode | `t35` | StructuredBuffer float4 |
+| Local endpoint weights / mode    |                     `t35` | StructuredBuffer float4           |
 
 Main reconstruction output is read at t29–t31 by the foreground refinement pass.
 See [local NDF assets](local-ndf.md) for finite world-space placement, alpha masks,
@@ -102,44 +102,48 @@ The separate R8 top/bottom assets feed runtime packing when packed LUTs are abse
 
 ## Cirrus inputs
 
-Cirrus is a two-dimensional spherical sheet. It shares the main NDF world UV
-and wind displacement, with an independent pattern repeat length (default
-`1 / 0.0002331` metres). It does not sample `NubisCloudShapeNoise.dds`.
+Cirrus uses a spherical sheet with a configurable physical altitude (default
+8000 m) and the shared cloud curvature radius. `cloudLayer.cirrus.uvSize` is a
+size multiplier, default 1 and limited to 0.1–32.
+The coverage/type field repeats every `16384 * uvSize` metres,
+independently of the low-cloud NDF scale. Pattern frequency is
+`0.0002331 / uvSize` per metre. Larger values enlarge both inputs without
+changing their relative scale. Pattern coordinates subtract the high-cloud
+wind displacement before scaling. Weather generation divides the shared
+weather offset by `uvSize` to preserve its world-space speed; rendering does
+not translate the weather field again. Changing the size rebuilds the weather
+map and invalidates cloud history.
 
-| Texture       | Channels                                                  |
-| ------------- | --------------------------------------------------------- |
-| Weather, t9   | R coverage, G type; remap outputs                         |
-| Patterns, t10 | R wispy, G round, B streaky; squared by the density query |
+| Texture                                     | Channels                                 |
+| ------------------------------------------- | ---------------------------------------- |
+| Generated weather, t9                       | R coverage, G type                       |
+| `Data/Textures/PhysicalSky/cirrus.dds`, t10 | R wispy, G round, B streaky              |
+| Optional local weather input                | R coverage, G type, B interpolation mask |
 
-Both default to local GPU generation. Weather uses two independently selectable
-slots from the four shared main-weather inputs, with signed remapping, frequency
-and offset. Defaults select the two Perlin slots.
-Output remap endpoints control coverage and type independently; they are project
-starting values, not a universal weather preset. No storm or local-influence
-pass participates.
+The fixed pattern DDS must be a linear 2D RGB-capable texture. It is sampled
+without channel repacking, procedural warping or an sRGB conversion, at mip 0
+with linear wrapping. Missing or incompatible patterns disable only cirrus;
+there is no procedural pattern fallback. The texture loader's Reload action
+retries the file after it has been replaced.
 
-The RGB pattern generator is a project-authored substitute: warped anisotropic
-gradient noise forms wispy/streaky patterns, with cellular round patterns. Seed,
-warp and detail are configurable. This generator is not an implementation of an
-original pattern-authoring algorithm. It supplies the channel meanings required
-by the Nubis cirrus profile; visual equivalence to authored patterns is not claimed.
+Coverage and type each select one of four shared weather noise inputs, apply
+frequency and offset, convert the sample to [-1, 1], then remap input/output
+intervals. There is no exponent. Optional local weather blends by its B mask
+and influence, or takes the component-wise maximum of RG times influence.
+The local map has an independent multiplier for the generator's wind offset.
+Storm modulation is not implemented.
 
-An external linear 2D DDS can replace the weather map (at least RG) or patterns
-(at least RGB), independently. Inputs are selected in Cirrus texture inputs;
-incompatible or missing inputs display a warning and use generated replacements. Generated weather is RG16_FLOAT and
-patterns are RGBA16_FLOAT, each 512 square with a mip chain.
+`cloudLayer.cirrus.weather` is a SceneBlend value containing complete weather
+states saved with Physical Sky settings. Multiple stored states blend their
+generated RG maps by weight, including separate noise slots, local DDS paths
+and blend modes. Editing captures the strongest endpoint as one weather state.
+A single active state needs one 512-square generation dispatch; additional
+states use alternating RG16_FLOAT targets. Unchanged inputs reuse the result.
+Only the final map receives mip generation. Altitude and density are saved under
+`cloudLayer.cirrus`; shared and per-layer brightness live under
+`cloudLayer.lighting`.
 
-Imported RGB patterns are sampled directly at mip 0 with linear wrapping:
-there is no resizing, channel repacking, sRGB conversion or procedural warp.
-Only the physical pattern repeat length and wind transform their UVs. Loading
-patterns bypasses the pattern generator; loading both maps bypasses all cirrus
-generation and does not require its compute programs. The density and lighting
-path is shared with local inputs, including the fixed factor 2 in density.
-A 1024-square BC7_UNORM pattern with one mip is accepted unchanged.
-
-Matching pattern data alone does not determine a weather state: coverage/type
-RG, world-to-field scale/offset, wind, density multiplier and lighting inputs
-also affect the result. Defaults do not infer these settings from image content.
+Debug shows the active weather, the fixed pattern DDS, and active local inputs.
 
 ## Generator lifecycle
 
@@ -164,7 +168,7 @@ its maps and invalidate cloud history. Disabled cirrus skips generation.
 -   low NDF settings: `src/Features/PhysicalSky/Ndf.h`
 -   DDS loading and bindings: `src/Features/PhysicalSky/VolumetricClouds.cpp`
 -   low NDF generator shader: `features/Physical Sky/Shaders/PhysicalSky/NdfGenerate.cs.hlsl`
--   cirrus weather/pattern generator: `features/Physical Sky/Shaders/PhysicalSky/CirrusGenerate.cs.hlsl`
+-   cirrus weather generator: `features/Physical Sky/Shaders/PhysicalSky/CirrusGenerate.cs.hlsl`
 -   density sampling: `features/Physical Sky/Shaders/PhysicalSky/Volumetrics.cs.hlsl`
 -   noise reconstruction: `features/Physical Sky/Shaders/PhysicalSky/CloudNoise.hlsli`
 
@@ -172,14 +176,15 @@ its maps and invalidate cloud history. Disabled cirrus skips generation.
 
 Cloud rendering can initialize without bundled cloud DDS files. Resolution order:
 
-| Resource                | Optional input                                       | Fallback                                      |
-| ----------------------- | ---------------------------------------------------- | --------------------------------------------- |
-| Shape noise             | `NubisCloudShapeNoise.dds` when DDS mode is selected | Local RGBA volume generator                   |
-| Vertical profile        | `NubisVerticalProfile.dds`                           | Runtime packed bottom/top profile             |
-| Vertical adjustment     | `NubisVerticalAdjustment.dds`                        | Runtime top expansion plus procedural GB warp |
-| Main weather            | Imported Height RG + Modeling RGB pair               | Procedural NDF                                |
-| Weather noise slots     | Per-slot DDS override                                | Local scalar noise generator                  |
-| Cirrus weather/patterns | Per-input DDS override                               | Shared weather noise / procedural patterns    |
+| Resource            | Optional input                                       | Fallback                                      |
+| ------------------- | ---------------------------------------------------- | --------------------------------------------- |
+| Shape noise         | `NubisCloudShapeNoise.dds` when DDS mode is selected | Local RGBA volume generator                   |
+| Vertical profile    | `NubisVerticalProfile.dds`                           | Runtime packed bottom/top profile             |
+| Vertical adjustment | `NubisVerticalAdjustment.dds`                        | Runtime top expansion plus procedural GB warp |
+| Main weather        | Imported Height RG + Modeling RGB pair               | Procedural NDF                                |
+| Weather noise slots | Per-slot DDS override                                | Local scalar noise generator                  |
+| Cirrus weather      | Optional local RGB map                               | Shared weather noise                          |
+| Cirrus patterns     | `cirrus.dds`                                         | Cirrus disabled                               |
 
 When packed LUTs are absent, `bottom_lut.dds` supplies bottom profile R and
 `top_lut.dds` supplies top expansion R. These scalar images use the presentation
