@@ -117,6 +117,11 @@ struct DrawcallLimitFix : Feature
 	 * filter left out are put back first.
 	 */
 	bool OcclusionNeedsEngine(OcclusionMap a_map);
+	/**
+	 * @brief T4: once the map's camera is set up (Precipitation's occlusion camera, after its projection: SetupMask or the
+	 * projection alone), before its RenderMask, on every frame the map renders: DCLF's view of it, computed from that camera.
+	 */
+	void OcclusionView(OcclusionMap a_map);
 	void DrawOcclusion();
 	/**
 	 * @brief CS_DCLF_SKYLIGHT_PARITY=1: every 120th frame a map is rendered both ways, the engine's first; CopyOcclusion(map, 0)

@@ -350,8 +350,8 @@ namespace DCLF
 			// Waiting for its application: decided again, for the geometry it holds now.
 			if (setApplyMark[a_slot])
 				markApply(a_slot);
-			// The occluder phases it takes part in and misses (SetLacking).
-			const std::uint8_t lacking = live ? static_cast<std::uint8_t>(SetParticipation(a_slot, drawn) & ~a_phases & (kSetOccluderSky | kSetOccluderPrecipitation)) : 0;
+			// The occluder and reflection phases it takes part in and misses (SetLacking).
+			const std::uint8_t lacking = live ? static_cast<std::uint8_t>(SetParticipation(a_slot, drawn) & ~a_phases & (kSetOccluderSky | kSetOccluderPrecipitation | kSetReflection)) : 0;
 			if (lacking != setLackingNext[a_slot]) {
 				setLackingNext[a_slot] = lacking;
 				markApply(a_slot);
@@ -508,8 +508,8 @@ namespace DCLF
 					joined.push_back(claimed);
 			}
 			if (lacking != setLacking[slot]) {
-				for (std::uint32_t v = 0; v < 2; ++v) {
-					const std::uint8_t bit = v ? kSetOccluderPrecipitation : kSetOccluderSky;
+				for (std::uint32_t v = 0; v < 3; ++v) {
+					const std::uint8_t bit = v == 2 ? kSetReflection : v ? kSetOccluderPrecipitation : kSetOccluderSky;
 					setLackingCount[v] += ((lacking & bit) ? 1u : 0u) - ((setLacking[slot] & bit) ? 1u : 0u);
 				}
 				setLacking[slot] = lacking;

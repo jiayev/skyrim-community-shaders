@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <span>
+#include <string>
 #include <vector>
 
 #include <ankerl/unordered_dense.h>
@@ -94,6 +95,19 @@ namespace DCLF
 		/** @brief Render thread, BeginSceneFrame: whether the frame's faces are DCLF's at all (IndirectDraws::DecideCoverage). */
 		void SetReflectionCovered(bool a_covered) { reflectionCovered.store(a_covered, std::memory_order_release); }
 		bool ReflectionTreeLodOwned() const { return reflectionTreeLodOwned.load(std::memory_order_acquire); }
+		/**
+		 * @brief The faces' residue parity (T4): render thread, at an update's start, the cube camera's roots (ReflectionFaces::RootBits)
+		 * whose add-roots DCLF would skip but this update keeps, 0 for none. While set, a pass registered into a face's renderer and not
+		 * withheld - a geometry under those roots the engine would still draw - is counted (the sky's are not).
+		 */
+		void WatchReflectionResidue(std::uint32_t a_roots) { reflectionResidueWatch.store(a_roots, std::memory_order_release); }
+		struct ReflectionResidue
+		{
+			std::uint32_t passes = 0;
+			std::string first;
+		};
+		/** @brief Since the last call. */
+		ReflectionResidue TakeReflectionResidue();
 
 		static constexpr std::uint32_t kShadowModes = 3;
 
@@ -220,6 +234,10 @@ namespace DCLF
 		std::atomic<std::uint32_t> treeLodWithheld{ 0 };
 		std::atomic<bool> treeLodOwned{ false };
 		std::atomic<std::uint32_t> reflectionWithheld{ 0 }, reflectionTreeLodWithheld{ 0 };
+		std::atomic<std::uint32_t> reflectionResidueWatch{ 0 }, reflectionResidue{ 0 };
+		std::mutex reflectionResidueLock;
+		std::string reflectionResidueFirst;  // under reflectionResidueLock
+		void NoteReflectionResidue(const RE::BSRenderPass* a_pass);
 		std::atomic<bool> reflectionFace{ false }, reflectionTreeLodOwned{ false }, reflectionCovered{ true };
 		std::shared_ptr<const ankerl::unordered_dense::set<const RE::BSBatchRenderer*>> reflectionRenderers;
 		std::array<const void*, 2> reflectionAccumulators{};  // what reflectionRenderers was made from (render thread)

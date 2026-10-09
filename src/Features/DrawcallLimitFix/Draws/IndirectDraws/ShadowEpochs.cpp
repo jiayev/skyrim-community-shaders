@@ -1342,43 +1342,62 @@ namespace DCLF
 		shadowStats.captureMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 	}
 
-	void IndirectDraws::CaptureOcclusion(std::uint32_t a_view)
+	void IndirectDraws::OcclusionView(std::uint32_t a_view, const RE::NiCamera& a_camera)
 	{
-		// The hook's half, as CaptureShadowView: where the engine's RenderMask has just drawn an occlusion map (the clear, and
-		// whatever SetupMask registered), with which camera and state. Taken whether or not DCLF draws the map this frame: the
-		// state and format are what next frame's build prepares the pipelines for.
+		// T4: the view as DCLF computes it, from the camera Skylighting has just set up for the map (Precipitation's occlusion camera,
+		// after its projection; for the sky map one quarter of its square, Skylighting's SetViewFrustum), before RenderMask draws it:
+		// - the matrices and the eye (SunViews' arithmetic, SetCameraData's), the viewport (its port times the map's size);
+		// - the target, depth target 10 (Skylighting's own texture swapped in while it draws the sky map), slice 0;
+		// - back-face culling at the solid fill, no depth bias and no scissor: the Utility shader's state for every pass but a two-sided
+		//   property's, whose key draws without culling (engine notes, shadow maps).
+		// Computed on every frame the map renders, whether or not DCLF draws it: the state and format are what next frame's build
+		// prepares the pipelines for. The engine's view at its FinishAccumulating hook is the parity's (CaptureOcclusion).
 		if (a_view >= kOcclusionViews || !ActiveToggles().shadows || failed || !SceneStore::OcclusionEnabled(a_view) || !impl->SetupShadow())
 			return;
-		auto& shadowState = globals::game::shadowState->GetRuntimeData();
-		const std::uint32_t target = shadowState.depthStencil;
-		// The renderer's state at this hook is what the view's last pass left, or whatever came before when nothing
-		// drew; the Utility shader sets the cull mode per pass (engine notes, shadow maps: 0 for a two-sided
-		// property, 1 otherwise). So the view's state is back-face culling at the renderer's fill, bias and scissor
-		// modes, and a two-sided occluder's key draws without culling, as a two-sided caster's does.
-		const std::uint32_t rasterState = EngineRasterStateId(shadowState.rasterStateFillMode, 1, shadowState.rasterStateDepthBiasMode,
-			shadowState.rasterStateScissorMode, kOcclusionRenderMode);
+		constexpr auto target = static_cast<std::uint32_t>(RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP);
+		const std::uint32_t rasterState = EngineRasterStateId(0, 1, 0, 0, kOcclusionRenderMode);
 		if (!rasterState || !impl->ImportShadowDepth(OcclusionDepthTarget(a_view), target))
 			return;
 		auto& occlusion = impl->occlusion[a_view];
 		const std::uint32_t mode = OcclusionModeOf(a_view);
 		if (!impl->readyModes[mode]) {
 			impl->readyModes[mode] = true;
-			impl->NoteCapability(impl->shadowCatalogBuilt, fmt::format("occlusion map {} captured before its setup", a_view));
+			impl->NoteCapability(impl->shadowCatalogBuilt, fmt::format("occlusion map {} set up before its setup", a_view));
 		}
 		if (const auto& states = impl->readyStates[mode].Of(false); !std::binary_search(states.begin(), states.end(), rasterState)) {
 			impl->readyStates[mode].Add(rasterState, false);
 			impl->NoteCapability(impl->shadowCatalogBuilt, fmt::format("occlusion map {} draws with rasterizer state {}, not in the catalog", a_view, rasterState));
 		}
+		const auto& depth = globals::game::renderer->GetDepthStencilData().depthStencils[target];
+		if (!depth.texture || !depth.views[0])
+			return;
 		auto& view = occlusion.view;
 		view = {};
 		view.viewId = ~0u;
 		view.renderMode = kOcclusionRenderMode;
-		view.modeIndex = OcclusionModeOf(a_view);
+		view.modeIndex = mode;
 		view.targetIndex = OcclusionDepthTarget(a_view);
-		view.slice = shadowState.depthStencilSlice;
+		view.slice = 0;
 		view.rasterState = rasterState;
-		CaptureViewTarget(view, target);
-		CapturePerFrame(view);
+		D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+		depth.views[0]->GetDesc(&dsvDesc);
+		view.dsvFormat = dsvDesc.Format;
+		D3D11_TEXTURE2D_DESC desc{};
+		depth.texture->GetDesc(&desc);
+		SunViews::Cascade camera;
+		SunViews::CameraMatrices(a_camera, camera);
+		const auto port = SunViews::Viewport(camera.port, desc.Width, desc.Height);
+		view.x = port[0];
+		view.y = port[1];
+		view.width = port[2];
+		view.height = port[3];
+		view.minDepth = 0.0f;
+		view.maxDepth = 1.0f;
+		view.eye = { camera.eye[0], camera.eye[1], camera.eye[2] };
+		SunViews::Block(camera, view.perFrame.data());
+		view.perFrameBytes = SunViews::kBlockBytes;
+		std::memcpy(view.viewProj.data(), reinterpret_cast<const float*>(view.perFrame.data()) + 32, sizeof(float) * 16);
+		view.hasViewProj = true;
 		occlusion.rasterState = rasterState;
 		if (view.dsvFormat != occlusion.dsvFormat) {
 			impl->NoteCapability(impl->shadowCatalogBuilt && occlusion.dsvFormat != DXGI_FORMAT_UNKNOWN,
@@ -1386,6 +1405,78 @@ namespace DCLF
 			occlusion.dsvFormat = view.dsvFormat;
 		}
 		occlusion.capturedFrame = SceneStore::Get().GetFrame();
+	}
+
+	void IndirectDraws::CaptureOcclusion(std::uint32_t a_view)
+	{
+		// The parity's half (T4): where the engine's RenderMask has just drawn the map (the clear, and whatever SetupMask registered),
+		// with which camera and state, against DCLF's view of it this frame (OcclusionView). The renderer's state here is what the
+		// view's last pass left, or whatever came before when nothing drew; the cull mode is the Utility shader's per pass, so only the
+		// fill, bias and scissor modes are compared.
+		if (a_view >= kOcclusionViews || !SunViews::ParityEnabled() || !ActiveToggles().shadows || failed || !SceneStore::OcclusionEnabled(a_view))
+			return;
+		auto& occlusion = impl->occlusion[a_view];
+		if (occlusion.capturedFrame != SceneStore::Get().GetFrame())
+			return;
+		auto& shadowState = globals::game::shadowState->GetRuntimeData();
+		const auto& mine = occlusion.view;
+		PendingView theirs;
+		const std::uint32_t target = shadowState.depthStencil;
+		CaptureViewTarget(theirs, target);
+		CapturePerFrame(theirs);
+		const std::uint32_t rasterState = EngineRasterStateId(shadowState.rasterStateFillMode, 1, shadowState.rasterStateDepthBiasMode, shadowState.rasterStateScissorMode,
+			kOcclusionRenderMode);
+		++occlusion.parityMaps;
+		// Every field compared; what differs is listed.
+		std::string what;
+		auto note = [&](std::string a_text) { what += (what.empty() ? "" : "; ") + a_text; };
+		float largest = 0.0f;
+		if (target != static_cast<std::uint32_t>(RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP) || shadowState.depthStencilSlice != mine.slice)
+			note(fmt::format("target {} slice {}", target, shadowState.depthStencilSlice));
+		if (rasterState != mine.rasterState)
+			note(fmt::format("rasterizer state {} (fill {}, bias {}, scissor {}), DCLF's {}", rasterState, shadowState.rasterStateFillMode, shadowState.rasterStateDepthBiasMode,
+				shadowState.rasterStateScissorMode, mine.rasterState));
+		// The depth range against the camera state's (0x14202b130), as the shadow views' parity: the renderer's viewport holds the last
+		// draw's, less its depth bias's step when it had one - a per-draw state, not the view's.
+		static const REL::Relocation<const float*> cameraDepthRange{ REL::Offset(0x202b130) };
+		const float engineMin = cameraDepthRange.get()[0], engineMax = cameraDepthRange.get()[1];
+		if (theirs.dsvFormat != mine.dsvFormat || theirs.x != mine.x || theirs.y != mine.y || theirs.width != mine.width || theirs.height != mine.height ||
+			engineMin != mine.minDepth || engineMax != mine.maxDepth)
+			note(fmt::format("viewport ({} {}) {}x{} {}-{} format {}, DCLF's ({} {}) {}x{} {}-{} format {}", theirs.x, theirs.y, theirs.width, theirs.height, engineMin, engineMax,
+				static_cast<int>(theirs.dsvFormat), mine.x, mine.y, mine.width, mine.height, mine.minDepth, mine.maxDepth, static_cast<int>(mine.dsvFormat)));
+		{
+			// The registers the depth draws read: CameraView, CameraProj, CameraViewProj (c0-c11), and the eye.
+			const auto* a = reinterpret_cast<const float*>(mine.perFrame.data());
+			const auto* b = reinterpret_cast<const float*>(theirs.perFrame.data());
+			std::int32_t first = -1;
+			for (std::uint32_t i = 0; i < 48; ++i) {
+				if (!SunViews::Close(a[i], b[i]) && first < 0)
+					first = static_cast<std::int32_t>(i);
+				largest = std::max(largest, std::abs(a[i] - b[i]));
+			}
+			for (std::uint32_t i = 160; i < 163; ++i) {
+				if (!SunViews::Close(a[i], b[i]) && first < 0)
+					first = static_cast<std::int32_t>(i);
+				largest = std::max(largest, std::abs(a[i] - b[i]));
+			}
+			if (first >= 0) {
+				const std::uint32_t row = static_cast<std::uint32_t>(first) / 4 * 4;
+				note(fmt::format("c{} ({} {} {} {}), the engine's ({} {} {} {})", row / 4, a[row], a[row + 1], a[row + 2], a[row + 3], b[row], b[row + 1], b[row + 2], b[row + 3]));
+			}
+		}
+		if (!what.empty()) {
+			occlusion.parityLargest = std::max(occlusion.parityLargest, largest);
+			if (occlusion.parityDiffer++ == 0)
+				occlusion.parityFirst = std::move(what);
+		}
+		if (occlusion.parityMaps == 300) {
+			logger::info("[DCLF] occlusion views (T4: DCLF's view of map {} from its camera against the engine's at RenderMask): {} maps, {} differ (largest {:.3g}){}{}", a_view,
+				occlusion.parityMaps, occlusion.parityDiffer, occlusion.parityLargest, occlusion.parityDiffer ? " <- OCCLUSION VIEW" : " <- OK",
+				occlusion.parityFirst.empty() ? "" : "; first: " + occlusion.parityFirst);
+			occlusion.parityMaps = occlusion.parityDiffer = 0;
+			occlusion.parityLargest = 0.0f;
+			occlusion.parityFirst.clear();
+		}
 	}
 
 	std::vector<ShadowViewLayout> IndirectDraws::Impl::PredictedOcclusion() const

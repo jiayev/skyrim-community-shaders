@@ -106,10 +106,19 @@ void DrawcallLimitFix::PostPostLoad()
 	// Capture at registration: where the set's members' passes are withheld from the views DCLF draws.
 	DCLF::PassCapture::Get().Install();
 	DCLF::ReflectionFaces::Install();
+	DCLF::ReflectionFaces::SetFaceOriented([](const RE::NiCamera& a_camera, std::uint32_t a_face) {
+		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ReflectionFace);
+		if (globals::features::drawcallLimitFix.Running())
+			DCLF::IndirectDraws::Get().ReflectionFaceCamera(a_camera, a_face);
+	});
 	DCLF::ReflectionFaces::SetAfterFaceDraws([] {
 		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ReflectionFace);
 		if (globals::features::drawcallLimitFix.Running())
 			DCLF::IndirectDraws::Get().CaptureReflectionFace();
+	});
+	DCLF::ReflectionFaces::SetRootsOwned([](bool a_plain) {
+		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ReflectionFace);
+		return globals::features::drawcallLimitFix.Running() ? DCLF::IndirectDraws::Get().ReflectionRootsOwned(a_plain) : 0u;
 	});
 	DCLF::InstallReflectionCensus();
 	DCLF::MaterialSources::Install();
@@ -673,6 +682,16 @@ bool DrawcallLimitFix::OcclusionReady(OcclusionMap a_map)
 	if (ready && set && (set->drawn & phase))
 		capture.SetOcclusionPhase(phase);
 	return ready;
+}
+
+void DrawcallLimitFix::OcclusionView(OcclusionMap a_map)
+{
+	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Occlusion);
+	auto* sky = globals::game::sky;
+	auto* precip = sky ? sky->precip : nullptr;
+	if (!Running() || !precip || !precip->occlusionData.camera)
+		return;
+	DCLF::IndirectDraws::Get().OcclusionView(a_map, *precip->occlusionData.camera);
 }
 
 void DrawcallLimitFix::DrawOcclusion()

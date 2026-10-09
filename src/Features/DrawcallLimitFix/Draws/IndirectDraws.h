@@ -177,6 +177,17 @@ namespace DCLF
 		 * members and tree LOD into the cube target.
 		 */
 		void CaptureReflectionFace();
+		/**
+		 * @brief T4: render thread, once the engine has oriented the cube camera to a face (ReflectionFaces::SetFaceOriented), before its
+		 * cull and draws: the face's view as DCLF computes it (SunViews' arithmetic on the camera; the face's slice of the cube target)
+		 * for this update's epoch. CaptureReflectionFace, after the face's draws, is then the parity's.
+		 */
+		void ReflectionFaceCamera(const RE::NiCamera& a_camera, std::uint32_t a_face);
+		/**
+		 * @brief T4: render thread, at a reflection update's start: the cube camera's LOD roots DCLF draws in its faces
+		 * (ReflectionFaces::RootBits), whose add-roots are skipped - the engine neither culls nor registers them.
+		 */
+		std::uint32_t ReflectionRootsOwned(bool a_plain);
 		void PrepareReflection();
 		bool ReflectionDrawable() const;
 		void ExecuteReflection();
@@ -261,12 +272,18 @@ namespace DCLF
 		/**
 		 * @brief The occlusion maps (Records.h, kOcclusionViews: Skylighting's sky map, the precipitation mask), drawn by DCLF
 		 * (Skylighting::RenderOcclusion's variant with DCLF running): the engine's RenderMask sets each view's camera and
-		 * clears its map, and CaptureOcclusion takes the view at its FinishAccumulating hook (render mode 0x1C);
+		 * clears its map; OcclusionView computes the view from the map's camera before it (T4), and CaptureOcclusion, at the
+		 * engine's FinishAccumulating hook (render mode 0x1C), is the parity's;
 		 * ExecuteOcclusion then draws every occluder of the frame's shadow build (the objects' Skylighting::OcclusionTechnique
 		 * for that map) into the views a_views names (a bit per view), GPU-culled, in one epoch, and returns the ones it drew.
 		 * OcclusionReady says whether a view can be drawn this frame; when it cannot, the engine's SetupMask registers them.
 		 */
 		void CaptureOcclusion(std::uint32_t a_view);
+		/**
+		 * @brief T4: render thread, once the map's camera is set up and before its RenderMask: the view as DCLF computes it from that
+		 * camera (DrawcallLimitFix::OcclusionView). CaptureOcclusion, at the engine's FinishAccumulating, is then the parity's.
+		 */
+		void OcclusionView(std::uint32_t a_view, const RE::NiCamera& a_camera);
 		bool OcclusionReady(std::uint32_t a_view) const;
 		std::uint32_t ExecuteOcclusion(std::uint32_t a_views);
 

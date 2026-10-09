@@ -1406,7 +1406,10 @@ namespace DCLF
 		 * must then register the map's scene, and its registration withholds the members (PassCapture). 0: every occluder DCLF knows
 		 * is drawn by DCLF, and the engine's cull of the map can be skipped.
 		 */
-		std::uint32_t SetLacking(std::uint8_t a_phase) const { return a_phase == kSetOccluderSky ? frameLackingCount[0] : a_phase == kSetOccluderPrecipitation ? frameLackingCount[1] : 0u; }
+		std::uint32_t SetLacking(std::uint8_t a_phase) const
+		{
+			return a_phase == kSetOccluderSky ? frameLackingCount[0] : a_phase == kSetOccluderPrecipitation ? frameLackingCount[1] : a_phase == kSetReflection ? frameLackingCount[2] : 0u;
+		}
 		/** @brief Whether a main-pass build can draw the object now: it has bindings and its pipeline is drawable. */
 		bool ObjectDrawable(std::int32_t a_object) const
 		{
@@ -2879,8 +2882,8 @@ namespace DCLF
 		// their last frame's main membership gives them the phase.
 		std::vector<std::uint8_t> setQueueMark;    // parallel to objects: in setQueue
 		std::vector<std::uint8_t> setRebinding;    // parallel to objects: this commit's, its binding is taken again this frame
-		std::vector<std::uint8_t> setLacking;      // parallel to objects: the occluder phases it takes part in and is no member of
-		std::array<std::uint32_t, 2> setLackingCount{};  // SetLacking's, per occlusion map
+		std::vector<std::uint8_t> setLacking;      // parallel to objects: the occluder and reflection phases it takes part in and is no member of
+		std::array<std::uint32_t, 3> setLackingCount{};  // SetLacking's: per occlusion map, then the reflection
 		std::vector<std::uint8_t> setPartialMark;  // per slot: out of the set with some of its phases ready (SetStats::partial)
 		std::uint32_t setPartialCount = 0;
 		// The last commit's decision, applied at the next ApplySet: each slot's phases and lacking phases, and the slots it changed
@@ -2903,7 +2906,7 @@ namespace DCLF
 			std::shared_ptr<Tables> tables;
 			std::shared_ptr<const SetSnapshot> claims;
 			std::vector<const RE::BSGeometry*> joined, left;
-			std::array<std::uint32_t, 2> lackingCount{};
+			std::array<std::uint32_t, 3> lackingCount{};
 			// What the frames that install it draw (IndirectDraws::BuildAhead, step 6e E3b): its stream views and main payloads.
 			std::shared_ptr<const void> draws;
 		};
@@ -2920,7 +2923,7 @@ namespace DCLF
 		std::vector<std::pair<std::vector<const RE::BSGeometry*>, std::vector<const RE::BSGeometry*>>> installNotes;
 		bool installPending = false;
 		std::shared_ptr<const SetSnapshot> notedClaims;
-		std::array<std::uint32_t, 2> frameLackingCount{};
+		std::array<std::uint32_t, 3> frameLackingCount{};
 		PublicationStats publicationStats;
 		std::vector<std::uint32_t> setApplyMark;  // parallel to objects: its index in setApply plus one, 0 when not in it
 		std::uint32_t setCommitFrame = 0;
