@@ -255,10 +255,13 @@ namespace DCLF
 			ActorValueIndex actorWetness;
 			// Skins of several partitions (CS_DCLF_SKIN_PARTITIONS): bit i draws partition i, walking the
 			// geometry slots' nextPartition links from the object's geometryIndex (partition 0). 0 for every
-			// other object, which draws its one geometry; kNoPartitions for a skin its LOD level draws nothing of. The scene
-			// phase sets it from the fade node's LOD level, the row GetRenderPasses gives the main pass and the shadow views
-			// alike, and rewrites it when the level changes (the fade watch: FUN_14147a430 writes the level).
+			// other object, which draws its one geometry; kNoPartitions for a skin no LOD level draws anything of. A LOD skin's
+			// (kMeshLOD under a fade node) is every level's partitions (row 3, the cumulative superset), narrowed by the draw.
 			std::vector<std::uint16_t> skinPartitions;            // parallel to objects
+			// A LOD skin's partitions per LOD level (SkinLodPartitionsOf: byte L, level L's row of the engine's table), 0 for any
+			// other object. BuildDraws picks the byte by the level in its fade root's FadeStateCS state (T1b): the node's level
+			// (+0x152), which GetRenderPasses reads, is never read; the record is written once, not at each level change.
+			std::vector<std::uint32_t> skinLodPartitions;         // parallel to objects
 			// No frame globals (the lighting, the fog, the character light's noise): the frame's capture (FrameCapture).
 			// The property whose lighting pass supplied each pipeline's per-frame constants, kept so
 			// RefreshFrameConstants can re-evaluate them once the main camera's state is current.
@@ -450,6 +453,7 @@ namespace DCLF
 				std::array<std::uint32_t, kOcclusionViews> occlusionTechnique{};
 				std::uint32_t sceneFlags = 0;
 				std::uint16_t skinPartitions = 0;
+				std::uint32_t skinLodPartitions = 0;
 				std::uint8_t shadowReject = 0, resident = 0, hasFadeNode = 0;
 			};
 			Columns ColumnsOf(std::uint32_t a_slot) const;
@@ -1252,9 +1256,12 @@ namespace DCLF
 		static std::uint32_t SkinPartitionMask(const RE::NiSkinInstance& a_skin, std::uint32_t a_lodRow);
 		/**
 		 * @brief Tables::skinPartitions for a geometry: 0 without a skin partition, kNoPartitions where its LOD row draws
-		 * none, the mask for a skin of several partitions, 0 for one of a single drawn partition.
+		 * none, the mask for a skin of several partitions, 0 for one of a single drawn partition. The row is 3 (every level's
+		 * partitions) whatever the node's level: a LOD skin's level is the draw's (SkinLodPartitionsOf).
 		 */
 		static std::uint16_t SkinPartitionsOf(const RE::BSGeometry& a_geometry);
+		/** @brief Tables::skinLodPartitions for a geometry: a kMeshLOD skin's masks per level (byte L: row L), 0 for any other. */
+		static std::uint32_t SkinLodPartitionsOf(const RE::BSGeometry& a_geometry);
 
 		/** @brief Index into GetTables().objects for this frame, or -1 when the geometry is not drawn by DCLF. */
 		std::int32_t FindObject(const RE::BSGeometry* a_geometry) const;

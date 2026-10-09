@@ -47,23 +47,19 @@ namespace DCLF
 		const auto* geometry = a_pass ? a_pass->geometry : nullptr;
 		if (!geometry)
 			return false;
-		// Accumulation hint 10 is always the native loop's: BSLightingShader::SetupGeometry draws it with the
-		// stencil dither (stencil mode 0xB, reference fade * 31) and, for a LOD cross-fade's single-level copy,
-		// MaterialData.z scaled by the fade node's cross-fade factor. Neither is modelled.
+		// Accumulation hint 10 (BSLightingShader::SetupGeometry: stencil mode 0xB, reference fade * 31; a LOD cross-fade's
+		// single-level copy with MaterialData.z scaled by the cross-fade factor) is DCLF's since T1c, while fades and cross-fades are.
 		if (a_pass->accumulationHint == 10)
-			return true;
+			return !(ActiveToggles().lodCrossfade && ActiveToggles().fading);
 		const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
 		const auto* fadeNode = property ? property->fadeNode : nullptr;
 		if (!fadeNode)
 			return false;
 		const auto& fade = fadeNode->GetRuntimeData();
-		// A fade the engine draws in an opaque group is DCLF's (CS_DCLF_FADING): the pass is registered as usual
-		// and the fade reaches the shader in MaterialData.z. One it draws blended (accumulation hint 9, drawn
-		// with the transparent objects after the composite) is not, and neither is a fading decal (hints 2 and
-		// 3). That one is a precaution, not a measurement: the decal probe's state mismatches turned out not to
-		// depend on the fade.
-		const auto hint = a_pass->accumulationHint;
-		if (fade.currentFade < 1.0f && (!ActiveToggles().fading || hint == 9 || hint == 2 || hint == 3))
+		// Every fade is DCLF's while CS_DCLF_FADING is on (T1c): the draw's alpha takes its root's FadeStateCS fade, a decal's
+		// (hints 2 and 3) included. A blended fade (hint 9, drawn blended after the composite) is drawn in its opaque group with
+		// that alpha: an approximation, untested (no blended fade occurs in the measured load order).
+		if (fade.currentFade < 1.0f && !ActiveToggles().fading)
 			return true;
 		// A LOD cross-fade (kMeshLOD, fade node LOD state +0x153 & 0x70 not 0x20) is not a fade of the object:
 		// GetRenderPasses (AE 1414adfb0) keeps its pass as it is - the new level, drawn as any settled object
@@ -113,6 +109,8 @@ namespace DCLF
 		stats.reflectionTreeLodWithheld = reflectionTreeLodWithheld.exchange(0, std::memory_order_relaxed);
 		stats.mainCrossfadeCopies = mainCrossfadeCopies.exchange(0, std::memory_order_relaxed);
 		stats.mainUnmodelledFades = mainUnmodelledFades.exchange(0, std::memory_order_relaxed);
+		stats.crossfadeTotal += stats.mainCrossfadeCopies;
+		stats.unmodelledTotal += stats.mainUnmodelledFades;
 		stats.occlusionWithheld = occlusionWithheld.exchange(0, std::memory_order_relaxed);
 		lastDrain = { entries.data(), count };
 		return lastDrain;
@@ -162,13 +160,18 @@ namespace DCLF
 		const auto set = std::atomic_load(&frameSet);
 		if (!set || !(set->PhasesOf(a_pass->geometry) & kSetMain))
 			return false;
-		// A LOD cross-fade's copy of the old level is another draw than the member's own: the engine's.
+		// A LOD cross-fade's copy (hint 10): DCLF draws it (T1c: the copy partitions BuildDraws adds while the root crosses), unless
+		// cross-fades are the engine's (CS_DCLF_LOD_CROSSFADE=0) or fades are (CS_DCLF_FADING=0).
 		if (a_pass->accumulationHint == 10) {
 			mainCrossfadeCopies.fetch_add(1, std::memory_order_relaxed);
+			if (ActiveToggles().lodCrossfade && ActiveToggles().fading) {
+				mainWithheld.fetch_add(1, std::memory_order_relaxed);
+				return true;
+			}
 			return false;
 		}
-		// A fade DCLF does not model (blended, or a decal's): the engine draws it, and the member leaves the set at the next commit
-		// until the fade ends (SceneStore::CommitSet).
+		// A fade DCLF does not model (with fades off): the engine draws it, and the member leaves the set at the next commit until
+		// the fade ends (SceneStore::CommitSet). With fades on every fade is DCLF's (T1c: the draw's alpha takes the GPU's fade).
 		if (FadingAtRegistration(a_pass)) {
 			unmodelledFades.Push(a_pass->geometry);
 			mainUnmodelledFades.fetch_add(1, std::memory_order_relaxed);

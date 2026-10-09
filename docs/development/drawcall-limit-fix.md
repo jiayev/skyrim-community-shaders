@@ -6704,6 +6704,67 @@ commit and revision parities OK; the flags left (STALE MATERIAL, extras DIFFER, 
 m172 and e33. Roots listed 3,971 to 3,978 in equip and fight (the actors'), and the engine comparison closer there
 (151 checked, 145 exact, 0 differ, against 153, 134, 4).
 
+## LOD skins' partitions from FadeStateCS's level (T1b, 2026-10-08)
+
+A `kMeshLOD` skin draws the partitions its fade node's LOD level selects (the engine's table row: `+0x152 & 0xF`, written
+only by `FUN_14147a430`; "LOD cross-fades" above). The walk read that level from the node and rewrote the record when the
+fade watch saw it change. Now the level is the GPU's:
+-   **The record** (`Tables::skinLodPartitions`, `SkinLodPartitionsOf`): the skin's mask for each level 0-3, a byte each.
+    `skinPartitions` holds row 3, every level's partitions (the table is cumulative), so draw counts and capacities cover
+    any level. Written once with the record, never at a level change.
+-   **The draw** (`DrawInput::lodPartitions`, was `inputReserved`; `LodPartitions` in BuildDrawsCS): every drawing
+    dispatch picks the byte by the level in its root's FadeStateCS state, the one the frame's builds read. The depth
+    phases, the colour segment (its latch now names the same published states) and the shadow views pick the same one;
+    a dispatch without the fade buffers (the reflection faces) draws row 3. Every BuildDraws pass declares the fade roots.
+-   **The fade watch's dependents** are listed only while DCLF's fades are off (`CS_DCLF_FADING=0`, whose
+    `Ineligible::Fading` reads the node): with T1a and T1b nothing in the walk reads a node's fade or level.
+-   The report's fade roots line counts the records with LOD masks ("LOD skins"; was a warning for stood-in ones).
+
+Measured (m175 motion, every parity; e35 equip and fight; forest-t1b): parities as in m173 and e34, set parity OK, the
+DCLF draw counts unchanged. Coverage is thin: this load order has almost no LOD skins (2 records in one m175 window,
+none in the others).
+
+A first build declared the fade roots only for the Z-prepass's first phase: every other phase's capture was a late-bound
+slot, every reflection recording failed, and with it every scene revision (m174: 144 draws).
+
+## Fades drawn by DCLF (T1c, 2026-10-08)
+
+**Untested.** In the measured load order and settings no LOD cross-fade, blended fade or fading decal occurs (m175, e35,
+forest-t1b, m176: 0 cross-fade copies and 0 fades DCLF did not model, summed over every frame), and only 2 LOD skins were
+ever seen. The parts below compile and pass every parity, and the scenes drawn look as before (forest-t1c, bridge y78),
+but nothing exercised the new draws. Built at the user's request (2026-10-08) so that no fade depends on the engine's
+registrations (policy 1); revisit with a load order or settings that produce them (LOD cross-fades on,
+screen-door off).
+
+What it replaces: the passes `PassCapture::FadingAtRegistration` gave the engine (every hint-10 pass; a fading decal; a
+blended fade), noticed only when the engine registered a member (`TakeUnmodelledFades`, `setFadeHeld`), so a stood-in
+member never met them. Now, while `CS_DCLF_FADING` and `CS_DCLF_LOD_CROSSFADE` are on:
+-   **Every draw's alpha takes its root's fade.** `GetRenderPasses` leaves `materialAlpha * currentFade` on the property and
+    `SetupGeometry` puts it in `MaterialData.z`. A member's shading row holds the material's alpha, and the Lighting
+    shader multiplies the root's FadeStateCS fade in (`DCLFAlphaFade`): the object record names the root
+    (`recordFlags` bits 8-31, `RecordFlagsOf`), the frame record binds the states the frame's builds read (t120,
+    `kFadeStatesRegister`) and the roots' static rows (t119, `kFadeRootsRegister`); a row of generation 0 (none bound, or
+    freed) is no fade. So a fading decal blends or tests with the faded alpha, and an alpha-tested member thins as the
+    engine's does. The Z-prepass reads the same row, so it tests the same alpha.
+-   **The cross-fade copy** (hint 10 with the single-level bit): while the root crosses (`+0x153 & 0x70` not `0x20` in
+    the state's `levels`), BuildDraws adds LOD byte L's partitions (the cumulative row L+1 less row L, from
+    `lodPartitions`) to a main view's draws, each marked in the object word (`kObjectCrossfadeCopy`, bit 30), whose alpha
+    is the cross-fade factor (`+0x14C`, the state's `blend`) instead of the fade.
+    -   The stencil test (mode `0xB`: reference `int(blend * 31)` GREATER than the stencil, 0 outside and a room's index + 1
+        inside) is taken as outside's: the copy is drawn while `int(blend * 31) > 0`. Inside it may draw where the engine's
+        would not.
+    -   The engine draws the copy in the G-buffer pass only (group 10, `FUN_1414b3390`, depth state not established); DCLF
+        draws it in both the Z-prepass and colour, so it writes depth where it covers.
+    -   A main member's hint-10 passes are withheld (`WithholdMain`).
+-   **Blended fades** (hint 9: drawn blended after the composite when the screen-door fade is off) are drawn in their
+    opaque group with the faded alpha. An approximation: DCLF has no blended pass.
+-   With either toggle off, the engine's passes and the set's hold (`setFadeHeld`) are as before.
+-   The report's main camera line sums the cross-fade copies and unmodelled fades the registrations met since the last
+    report (`PassCapture::TakeFadeTotals`).
+
+Measured (m177 every parity, e36, forest-t1c, y78): DCLF's draws and every parity as before (record parity 0 of ~48,000
+differ, the fade root bits included); SPIR-V programs 99 of 99 built.
+
 ## Point lights' culls: the category filter, and the light candidates (2026-10-01)
 
 **The first attempt, a lent list** (replaced). A light that was not portal-strict was lent a list of the object root's

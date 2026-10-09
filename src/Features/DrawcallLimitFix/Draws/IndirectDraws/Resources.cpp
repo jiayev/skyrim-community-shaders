@@ -954,7 +954,7 @@ namespace DCLF
 		if (buffers->fadeState) {
 			std::uint32_t unused = 0;
 			buffers->fadeRootCapacity = smallStart ? 4u : kInitialFadeRoots;
-			buffers->fadeRoots = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeRootStatic), "cs.dclf.fade-roots", unused));
+			buffers->fadeRoots = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeRootStatic), "cs.dclf.fade-roots", buffers->fadeRootsIndex));
 			buffers->fadeStates = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), "cs.dclf.fade-states", unused, true));
 			for (std::uint32_t h = 0; h < 2; ++h)
 				buffers->fadeStatesOut[h] = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), h ? "cs.dclf.fade-states-out1" : "cs.dclf.fade-states-out0",
@@ -1196,6 +1196,7 @@ namespace DCLF
 				[&s] {
 					for (std::uint32_t h = 0; h < 2; ++h)
 						s.fadeStatesOutIndex[h] = s.fadeStatesOut[h]->Get()->GetSRVInfo(0).slot.index;
+					s.fadeRootsIndex = s.fadeRoots->Get()->GetSRVInfo(0).slot.index;
 					s.fadeRootsHeld = ~0ull;
 					s.fadeRootListsHeld = ~0ull;
 					s.fadeStatesOutZeroed = false;

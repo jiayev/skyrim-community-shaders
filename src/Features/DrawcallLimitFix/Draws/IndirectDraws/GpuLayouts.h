@@ -270,7 +270,8 @@ namespace DCLF::Draws
 		std::uint32_t objectIndex;
 		std::uint32_t decalOrdinal;  // decals only: the slot in the group's range
 		// Skins of several partitions: bit i draws partition i (Tables::skinPartitions); 0 draws the one
-		// geometry, kNoPartitions nothing. Left 0 by every input that is not a skin.
+		// geometry, kNoPartitions nothing. Left 0 by every input that is not a skin. A LOD skin's is every level's
+		// partitions (lodPartitions narrows it).
 		std::uint32_t partitions;
 		// The second vertex stream of a face shape (or of a pipeline reading its position from it): the GeometryDraw holding
 		// its positions, which both payloads append after the geometry slots (FaceStreamGeometry), or ~0u.
@@ -279,7 +280,9 @@ namespace DCLF::Draws
 		// depth segment's first phase drops it while its root's OnVisible stops, a shadow view while its root fades.
 		std::uint32_t fadeRoot = ~0u;
 		std::uint32_t shadowRow = 0;      // a caster's ShadowMaterialRow (U4: the one persistent list)
-		std::uint32_t inputReserved = 0;
+		// A LOD skin's partitions per LOD level (Tables::skinLodPartitions): byte L the mask of level L (0-3), which BuildDraws
+		// picks by its fade root's level in FadeStateCS's state (T1b), in every view; 0: the partitions word as it is.
+		std::uint32_t lodPartitions = 0;
 		// kObjectFadeTest (the depth segment's inputs, while the root's state has no OnVisible of the frame before): the
 		// fade-out distance (SceneStore::Tables::fadeDistance); the fade node's centre is the object record's.
 		float fadeDistance = 0.0f;

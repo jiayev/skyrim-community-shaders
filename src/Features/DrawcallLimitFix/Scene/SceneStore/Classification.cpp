@@ -40,8 +40,21 @@ namespace DCLF
 		const auto* partitions = data.skinInstance ? data.skinInstance->skinPartition.get() : nullptr;
 		if (!partitions)
 			return 0;
-		const std::uint32_t mask = SkinPartitionMask(*data.skinInstance, LodRowOf(a_geometry, data.shaderProperty.get()));
+		// Row 3 (cumulative: every level's partitions), whatever the node's level; a LOD skin's draw narrows it (SkinLodPartitionsOf).
+		const std::uint32_t mask = SkinPartitionMask(*data.skinInstance, 3);
 		return static_cast<std::uint16_t>(!mask ? kNoPartitions : partitions->numPartitions > 1 ? mask : 0u);
+	}
+
+	std::uint32_t SceneStore::SkinLodPartitionsOf(const RE::BSGeometry& a_geometry)
+	{
+		const auto& data = a_geometry.GetGeometryRuntimeData();
+		const auto* property = data.shaderProperty.get();
+		if (!data.skinInstance || !data.skinInstance->skinPartition || !a_geometry.GetFlags().any(RE::NiAVObject::Flag::kMeshLOD) || !property || !property->fadeNode)
+			return 0;
+		std::uint32_t word = 0;
+		for (std::uint32_t level = 0; level < 4; ++level)
+			word |= (SkinPartitionMask(*data.skinInstance, level) & 0xFFu) << (8 * level);
+		return word;
 	}
 
 	RE::NiNode* SceneStore::FindCategoryNode(RE::NiAVObject* a_object, Ineligible* a_parentReason) const

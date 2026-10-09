@@ -977,6 +977,7 @@ namespace DCLF
 			a_column(a_left.faceStream, a_right.faceStream);
 			a_column(a_left.sceneFlags, a_right.sceneFlags);
 			a_column(a_left.skinPartitions, a_right.skinPartitions);
+			a_column(a_left.skinLodPartitions, a_right.skinLodPartitions);
 			a_column(a_left.shadowReject, a_right.shadowReject);
 			a_column(a_left.residentSlot, a_right.residentSlot);
 		};

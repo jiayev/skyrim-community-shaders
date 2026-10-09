@@ -563,8 +563,8 @@ namespace DCLF
 		// skin partitions' own buffers, one draw each (ClassifyStatic has checked every one).
 		const auto* skinPartitions = data.skinInstance ? data.skinInstance->skinPartition.get() : nullptr;
 		const RE::NiSkinPartition::Partition* skinPartition = skinPartitions ? &skinPartitions->partitions[0] : nullptr;
-		// Which of them the engine draws, from the fade node's LOD level as both of its pass builders read it. A skin the
-		// engine draws no partition of at this level stays a member that draws nothing (kNoPartitions).
+		// Which of them the engine draws: every LOD level's for a LOD skin, narrowed by the draw to its root's level (T1b,
+		// skinLodPartitions). A skin the engine draws no partition of at any level stays a member that draws nothing (kNoPartitions).
 		std::uint16_t partitionMask = SkinPartitionsOf(*geometry);
 		auto* triShape = skinPartition ? skinPartition->buffData : data.rendererData;
 		// Object LOD (dclf-lod.md): the ranges its hidden cells leave. Whole, the TriShape's own slot; none, a member that draws
@@ -769,6 +769,7 @@ namespace DCLF
 		if (trackedEntry->actorOwned)
 			tables.actorObjects.push_back(objectId);
 		tables.skinPartitions[objectId] = partitionMask;
+		tables.skinLodPartitions[objectId] = lodChain ? 0u : SkinLodPartitionsOf(*geometry);
 		if (!denseWalk) {
 			trackedEntry->objectStamp = objectStamp;
 			trackedEntry->objectId = objectId;
@@ -841,6 +842,7 @@ namespace DCLF
 		}
 		tables.actorWetness.Set(slot, 0, a_tracked.identity);
 		tables.skinPartitions[slot] = 0;
+		tables.skinLodPartitions[slot] = 0;
 		tables.draws[slot] = DrawTemplateOf(tables.geometries[geometrySlot], keepMember ? keptPipeline : 0);
 		if (denseWalk)
 			return;
@@ -1123,9 +1125,11 @@ namespace DCLF
 		skinnedObjects.push_back(a_geometry);
 		++stats.lightSkins;
 		const std::uint16_t partitionMask = SkinPartitionsOf(*a_geometry);
-		if (tables.skinPartitions[slot] != partitionMask)
+		const std::uint32_t lodPartitions = SkinLodPartitionsOf(*a_geometry);
+		if (tables.skinPartitions[slot] != partitionMask || tables.skinLodPartitions[slot] != lodPartitions)
 			tables.NoteChange(slot, kChangeSkin | kChangeStructure);
 		tables.skinPartitions[slot] = partitionMask;
+		tables.skinLodPartitions[slot] = lodPartitions;
 		++stats.skinned;
 		stats.boneRows += rows;
 		return true;
@@ -1412,7 +1416,8 @@ namespace DCLF
 		// Only a kept record needs the event: a per-frame one is written in full anyway, unless it only moves or only
 		// follows a switch.
 		const auto* property = a_geometry->GetGeometryRuntimeData().shaderProperty.get();
-		const RE::BSFadeNode* node = property && (!a_tracked.perFrame || a_tracked.lightTraits) ? property->fadeNode : nullptr;
+		// Since T1b only the fades-off verdict (Ineligible::Fading) reads the node in the walk: the fade and LOD level are the GPU's.
+		const RE::BSFadeNode* node = property && (!a_tracked.perFrame || a_tracked.lightTraits) && !ActiveToggles().fading ? property->fadeNode : nullptr;
 		if (node == a_tracked.fadeNode)
 			return;
 		UnlistFadeDependent(a_geometry, a_tracked);

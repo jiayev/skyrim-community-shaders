@@ -452,7 +452,7 @@ namespace DCLF::Draws
 				else if (const int f = FeatureMaterialSlot(t); f >= 0)
 					given = (material.features >> f) & 1;
 				else if (t == kObjectBufferRegister || t == kExtrasBufferRegister || t == kTreeWindRegister || t == kPlacementBufferRegister || t == kPaletteBufferRegister ||
-						 t == kShadingBufferRegister)
+						 t == kShadingBufferRegister || t == kFadeStatesRegister || t == kFadeRootsRegister)
 					given = true;
 				else if (depthOnly)
 					// The Z-prepass has no frame textures bound yet (its frame record binds the null texture), but for the character
@@ -740,7 +740,7 @@ namespace DCLF::Draws
 		// The pair's slot is its rows (RowsOf).
 		a_input = { drawable ? blocks.setIndex : 0u, drawable ? pair->second.slot : 0u, object.geometryIndex, object.flags | (drawable ? kInputDrawable : 0u),
 			{ MainMaskOf(tables, o) }, o, ordinal, partitions, FaceStreamGeometry(tables, o, in.addresses.facePositions) };
-		SetFadeRow(a_input, tables, o);  // the depth segment's (the colour segment reads none)
+		SetFadeRow(a_input, tables, o);
 		if (!drawable)
 			return 0;
 		return decal ? kRegionDecal : static_cast<std::uint8_t>(PartitionDraws(partitions));
