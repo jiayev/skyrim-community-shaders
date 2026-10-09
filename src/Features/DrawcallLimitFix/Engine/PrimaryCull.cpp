@@ -893,7 +893,6 @@ namespace DCLF
 		// its node left as the engine last updated it), its kAccumulated cleared once (its trees are TreeWindCS's: the tree clock
 		// need not advance them), and it is taken off the tree manager's animation list (TreeAnimation).
 		ownedFadeRoots.clear();
-		standInLodSkins = 0;
 		std::vector<SceneStore::OwnedFadeRoot> owned;
 		std::vector<const RE::NiAVObject*> animated;
 		for (std::uint32_t e = 0; e < cut.plans.size(); ++e) {
@@ -906,12 +905,6 @@ namespace DCLF
 			if (!cut.mixed[e]) {
 				std::atomic_ref<std::uint32_t>(At<std::uint32_t>(cut.roots[e], kObjectFlags)).fetch_and(~kFlagAccumulated, std::memory_order_relaxed);
 				animated.push_back(cut.roots[e]);
-				// A skin whose drawn partitions follow the node's LOD level (SceneStore::LodRowOf): read from a node that no
-				// longer changes. Counted, for the report.
-				for (std::uint32_t m = cut.memberBegin[e]; m < cut.memberEnd[e]; ++m)
-					if (const auto* geometry = cut.members[m].geometry; geometry && geometry->GetFlags().any(RE::NiAVObject::Flag::kMeshLOD) &&
-																	   geometry->GetGeometryRuntimeData().skinInstance)
-						++standInLodSkins;
 			}
 		}
 		SceneStore::Get().SetFadeRootsOwned(owned);
@@ -1431,8 +1424,11 @@ namespace DCLF
 					fadePort.differ ? " <- FADE PORT" : " <- OK", fadePort.first.empty() ? "" : "; first: " + fadePort.first);
 				fadePort = {};
 			}
-			logger::info("[DCLF] fade roots: {} stood in ({} of their members skins with LOD levels{}); {:.0f} entries with engine-drawn parts culled by the engine a frame; compound frustum larger than the fade test's block on {} frames",
-				SceneStore::Get().StoodInFadeRoots(), standInLodSkins, standInLodSkins ? " <- LOD SKINS" : "", mixedPerFrame, std::exchange(visibilityOverflows, 0));
+			// LOD skins: records whose partitions BuildDraws picks by their root's level in FadeStateCS's state (T1b).
+			const auto& lodTables = SceneStore::Get().GetTables();
+			const auto lodSkins = std::count_if(lodTables.skinLodPartitions.begin(), lodTables.skinLodPartitions.end(), [](std::uint32_t a_word) { return a_word != 0; });
+			logger::info("[DCLF] fade roots: {} stood in; {} LOD skins (partitions by their root's level on the GPU); {:.0f} entries with engine-drawn parts culled by the engine a frame; compound frustum larger than the fade test's block on {} frames",
+				SceneStore::Get().StoodInFadeRoots(), lodSkins, mixedPerFrame, std::exchange(visibilityOverflows, 0));
 		}
 	}
 }

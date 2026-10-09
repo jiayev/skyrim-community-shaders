@@ -352,7 +352,7 @@ namespace DCLF
 		const auto& object = a_tables.objects[a_objectIndex];
 		const auto& lights = a_tables.lights[a_objectIndex];
 		a_out.roomIndex = lights.roomIndex;
-		a_out.recordFlags = ((object.flags & kObjectBeastRace) ? kRecordBeastRace : 0u) | ((object.flags & kObjectAlphaBlended) ? kRecordAlphaBlended : 0u);
+		a_out.recordFlags = RecordFlagsOf(object.flags, a_objectIndex < a_tables.objectFadeRoot.size() ? a_tables.objectFadeRoot[a_objectIndex] : kNoFadeRoot);
 		// The same reference the native draw's AlphaTestRefBuffer carries: threshold / 255, and 0 when the
 		// object is not alpha tested (the shader's test is then compiled out anyway).
 		a_out.alphaTestRef = (object.flags & kObjectAlphaTest) ? ((object.flags >> kObjectAlphaThresholdShift) & 0xFF) / 255.0f : 0.0f;
@@ -391,7 +391,8 @@ namespace DCLF
 		auto& shading = a_out.shading;
 		shading.materialData[0] = envmap ? a_property.envmapLODFade : 0.0f;
 		shading.materialData[1] = specular ? a_property.specularLODFade : 0.0f;
-		// GetRenderPasses leaves materialAlpha * the fade node's currentFade on the property, for whichever camera called it last.
+		// GetRenderPasses leaves materialAlpha * the fade node's currentFade on the property, for whichever camera called it last. A
+		// member's is the material's alone: the draw multiplies its root's fade in (T1c, Lighting.hlsl DCLFAlphaFade).
 		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_property.material);
 		shading.materialData[2] = a_member && material ? material->materialAlpha : a_property.alpha;
 		shading.materialData[3] = 0.0f;

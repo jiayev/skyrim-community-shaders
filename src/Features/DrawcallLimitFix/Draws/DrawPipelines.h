@@ -161,6 +161,13 @@ namespace DCLF
 	 * the placements.
 	 */
 	inline constexpr std::uint32_t kShadingBufferRegister = kTextureRegisters - 7;
+	/**
+	 * @brief t120 and t119: FadeStateCS's states the frame's builds read (SceneBuffers::FadeStatesReadIndex) and the fade roots'
+	 * static rows, the pixel stage's: a draw's alpha takes its object's fade (T1c, Lighting.hlsl DCLFAlphaFade). The frame record
+	 * gives them; a record without them (none bound) reads generation 0, which is no fade.
+	 */
+	inline constexpr std::uint32_t kFadeStatesRegister = kTextureRegisters - 8;
+	inline constexpr std::uint32_t kFadeRootsRegister = kTextureRegisters - 9;
 
 	/**
 	 * @brief Everything one indirect draw binds, in GPU memory: its address is the draw's only push data,

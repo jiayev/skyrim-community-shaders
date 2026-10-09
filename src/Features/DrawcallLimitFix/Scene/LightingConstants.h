@@ -218,7 +218,9 @@ namespace DCLF
 		// record per-object: Light Limit Fix's room index (PS b3; its shadow bit mask is the draw's object word) and the alpha
 		// test reference (PS b11).
 		std::int32_t roomIndex;
-		std::uint32_t recordFlags;  // kRecordBeastRace
+		// kRecordBeastRace, kRecordAlphaBlended; bits 8-31 the object's fade root slot + 1 (0: none; kRecordFadeRootShift), by which
+		// the pixel stage reads FadeStateCS's fade (T1c: Lighting.hlsl, DCLFAlphaFade).
+		std::uint32_t recordFlags;
 		float alphaTestRef;
 		// The specular and envmap LOD fades the pass applies (kLodFadeSpecular, kLodFadeEnvmap, kLodFadeSsr): its pipeline's.
 		// The draw applies them, from the frame's camera (LodFadeFrame), only while the placement's fade node has them apply
@@ -271,6 +273,13 @@ namespace DCLF
 	inline constexpr std::uint32_t kRecordBeastRace = 1u << 0;
 	// ... and an alpha-tested object whose alpha property blends (kObjectAlphaBlended): the depth pass's reference (Utility.hlsl).
 	inline constexpr std::uint32_t kRecordAlphaBlended = 1u << 1;
+	inline constexpr std::uint32_t kRecordFadeRootShift = 8;
+	/** @brief BindlessObject::recordFlags of an object: its flags and its fade root slot (Tables::objectFadeRoot) + 1 in bits 8-31. */
+	inline std::uint32_t RecordFlagsOf(std::uint32_t a_objectFlags, std::uint32_t a_fadeRoot)
+	{
+		return ((a_objectFlags & kObjectBeastRace) ? kRecordBeastRace : 0u) | ((a_objectFlags & kObjectAlphaBlended) ? kRecordAlphaBlended : 0u) |
+		       (a_fadeRoot < (1u << (32 - kRecordFadeRootShift)) - 1 ? (a_fadeRoot + 1) << kRecordFadeRootShift : 0u);
+	}
 
 	/**
 	 * @brief One object's placement (DCLFPlacement in Common/DCLFObjects.hlsli, VS and PS t123): what a move changes, by object

@@ -66,6 +66,8 @@ namespace DCLF
 			// The main camera's views: a member's passes withheld; a member's LOD cross-fade copy (hint 10) and its fades DCLF does
 			// not model, left to the engine.
 			std::uint32_t mainWithheld = 0, mainCrossfadeCopies = 0, mainUnmodelledFades = 0;
+			// Since the last report (TakeFadeTotals): the frames' cross-fade copies and unmodelled fades, summed.
+			std::uint64_t crossfadeTotal = 0, unmodelledTotal = 0;
 			std::uint32_t occlusionWithheld = 0;  // the occlusion maps' registrations: members' passes withheld
 			std::uint32_t treeLodWithheld = 0;    // tree LOD's passes into the main camera's views, while DCLF draws it
 			// The water reflection's faces: reflection-phase members' passes, and tree LOD's while DCLF draws the faces' tree LOD.
@@ -122,6 +124,8 @@ namespace DCLF
 			const auto renderers = std::atomic_load(&mainRenderers);
 			return renderers && renderers->contains(a_batch);
 		}
+		/** @brief Report thread: the cross-fade copies and unmodelled fades summed since the last call (Stats::crossfadeTotal, unmodelledTotal). */
+		std::pair<std::uint64_t, std::uint64_t> TakeFadeTotals() { return { std::exchange(stats.crossfadeTotal, 0), std::exchange(stats.unmodelledTotal, 0) }; }
 		/**
 		 * @brief The geometries whose main-camera registration met a fade DCLF does not model since the last call (render thread,
 		 * SceneStore::CommitSet): their passes went to the engine, and they leave the set until the fade ends.

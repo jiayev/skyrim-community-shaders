@@ -58,7 +58,8 @@ cbuffer BuildDrawsConstants : register(b0)
 	uint PipelineRowsAddressHi;
 	// The depth segment's first phase and the shadow views: StructuredBuffer<FadeRootStatic> and StructuredBuffer<FadeNodeState>
 	// (FadeStateCS.hlsl; Records.h). The first phase drops an input while its root's OnVisible stops; a shadow view drops a
-	// caster while its root fades. Every listed root's state is FadeStateCS's (T1a): DCLF's model, not the node's. 0 elsewhere.
+	// caster while its root fades; every drawing dispatch picks a LOD skin's partitions by its root's level (LodPartitions).
+	// Every listed root's state is FadeStateCS's (T1a, T1b): DCLF's model, not the node's. 0 where nothing is bound.
 	uint FadeRootsIndex;
 	uint FadeStatesUnused;  // the states a dispatch reads are its latch's (FadeStatesIndex)
 	// A shadow view, and the depth segment's phases: RWByteAddressBuffer, the bucket counts, a word per bucket (BucketTableOffset). 0
@@ -116,6 +117,32 @@ bool RootFading(uint a_root)
 	StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
 	const FadeNodeState state = fadeStates[a_root];
 	return (state.Generation == row.Generation ? state.CurrentFade : row.Initial.CurrentFade) < 1.0;
+}
+
+// A LOD skin's partitions (DrawInput::lodPartitions, byte L the mask of LOD level L) at its root's level in FadeStateCS's state
+// (FUN_14147a430's level, +0x152 & 0xF), the row GetRenderPasses gives every view's pass; the input's partitions word (every
+// level's) without the state, or for any other input.
+//
+// a_copy: while the root crosses levels (+0x153 & 0x70 not 0x20), GetRenderPasses' hint-10 copy (T1c): the single-level row L,
+// LOD byte L alone (the cumulative row L+1 less row L), drawn with the cross-fade factor (+0x14C) on its alpha. Its stencil
+// test (mode 0xB: the reference int(blend * 31) GREATER than the stencil, which is 0 outside, a room's index + 1 inside) is
+// taken as outside's: drawn while int(blend * 31) > 0. A main view's alone (a_main): the shadow views' passes have no copy.
+uint LodPartitions(uint a_partitions, uint a_lod, uint a_root, bool a_main, out uint a_copy)
+{
+	a_copy = 0;
+	if (a_lod == 0 || a_root == 0xFFFFFFFFu || FadeRootsIndex == 0 || FadeStatesIndex == 0)
+		return a_partitions;
+	StructuredBuffer<FadeRootStatic> fadeRoots = ResourceDescriptorHeap[FadeRootsIndex];
+	const FadeRootStatic row = fadeRoots[a_root];
+	StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
+	FadeNodeState state = fadeStates[a_root];
+	if (state.Generation != row.Generation)
+		state = row.Initial;
+	const uint level = min(state.Levels & 0xFu, 3u);
+	const uint mask = (a_lod >> (8u * level)) & 0xFFu;
+	if (a_main && ((state.Levels >> 8) & 0x70u) != 0x20u && level < 3 && int(state.Blend * 31.0) > 0)
+		a_copy = ((a_lod >> (8u * (level + 1))) & 0xFFu) & ~mask;
+	return mask == 0 && a_copy == 0 ? (1u << 8) : mask;  // kNoPartitions (declared below)
 }
 
 // Whether BSFadeNode::OnVisible stops at a fade root slot (~0u: none) for a culling process without cameraRelatedUpdates
@@ -392,6 +419,9 @@ bool MinRadius() { return (CullFlags & 0x2000) != 0; }
 // The occlusion map's view (kCullFadeOnVisible): its occluders' fade roots as BSFadeNode::OnVisible tests them without
 // cameraRelatedUpdates (FadedOutOfOcclusion), instead of a shadow view's fading test (RootFading).
 bool FadeOnVisible() { return (CullFlags & 0x4000) != 0; }
+// A LOD cross-fade copy partition's draw (T1c: LodPartitions), in the object word's bit 30: the pixel stage takes the cross-fade factor
+// for its alpha instead of the fade (Lighting.hlsl, DCLFAlphaFade).
+static const uint kObjectCrossfadeCopy = 1u << 30;
 // The key word a view reads of an input (GpuLayouts.h: kCullKeyShift): 0 its pipeline word and its rows' word (the main segments,
 // the reflection); otherwise a shadow view's, whose material row is the input's shadowRow - 1 a caster's key (ViewWords::shadowKey),
 // 2 and 3 an occlusion map's (occlusionKey[0], [1]). The shadow list holds every mode's casters and occluders once (U4b).
@@ -854,9 +884,12 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	// One draw of the input's geometry, or - for a skin of several partitions - one per partition its mask
 	// names, walking the partitions' GeometryDraw links. Every draw is the same object: one record, one
 	// visibility word, one verdict.
-	const uint partitions = inputs.Load(inputOffset + 40);
-	if (partitions == kNoPartitions)
+	uint copyPartitions;
+	const uint basePartitions = LodPartitions(inputs.Load(inputOffset + 40), inputs.Load(inputOffset + 56), inputs.Load(inputOffset + 48), keyWord == 0, copyPartitions);
+	if (basePartitions == kNoPartitions)
 		return;
+	// A LOD skin's cross-fade copy partitions are drawn with the rest, each marked in its object word (kObjectCrossfadeCopy).
+	const uint partitions = basePartitions | copyPartitions;
 	// The second stream, the same for every partition: a face shape's positions are the whole shape's.
 	const uint streamIndex = inputs.Load(inputOffset + 44);
 	const uint4 stream = streamIndex != kNoStream ? geometries.Load4(streamIndex * kGeometryStride) : uint4(0, 0, 0, 0);
@@ -866,6 +899,7 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	[loop] for (uint partition = 0; partition < links && geometryIndex != kNoPartition; ++partition) {
 		const uint geometryOffset = geometryIndex * kGeometryStride;
 		if (chain || partitions == 0 || ((partitions >> partition) & 1) != 0) {
+			const uint drawWord = ((copyPartitions >> partition) & 1) != 0 ? (objectWord | kObjectCrossfadeCopy) : objectWord;
 			const uint4 vertexBuffer = geometries.Load4(geometryOffset);      // address lo, hi, size, stride
 			const uint4 indexBuffer = geometries.Load4(geometryOffset + 16);  // address lo, hi, size, index count
 			const uint firstIndex = geometries.Load(geometryOffset + 32);
@@ -886,7 +920,7 @@ bool Occluded(float3 boundCentre, float boundRadius)
 					uint drawn;
 					count.InterlockedAdd(phase == kPhaseTwo ? kCountDrawnPhaseTwo : kCountDrawn, 1, drawn);
 					ByteAddressBuffer poolFirsts = ResourceDescriptorHeap[PoolFirstsIndex];
-					StoreShadowSequence(sequences, bucket.x + slot, slot, rows, objectWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
+					StoreShadowSequence(sequences, bucket.x + slot, slot, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
 						firstIndex, poolFirsts.Load(geometryIndex * 4));
 				}
 			} else {
@@ -903,9 +937,9 @@ bool Occluded(float3 boundCentre, float boundRadius)
 					uint rank;
 					sortCounts.InterlockedAdd(key * 4, 1, rank);
 					ranks.Store(slot * 4, (key << kSortRankBits) | rank);
-					StoreSequence(staging, slot, pipeline, rows, objectWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+					StoreSequence(staging, slot, pipeline, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
 				} else {
-					StoreSequence(sequences, slot + (secondRange ? PhaseTwoBase : 0), pipeline, rows, objectWord, vertexBuffer,
+					StoreSequence(sequences, slot + (secondRange ? PhaseTwoBase : 0), pipeline, rows, drawWord, vertexBuffer,
 						secondStream, indexBuffer, indexBuffer.w, firstIndex);
 				}
 			}

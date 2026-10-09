@@ -16,6 +16,7 @@ namespace DCLF
 		lights.resize(a_count, ObjectLights{});
 		treeAnim.resize(a_count, ObjectTreeAnim{});
 		skinPartitions.resize(a_count, 0);
+		skinLodPartitions.resize(a_count, 0);
 		draws.resize(a_count, DrawSequence{});
 		boneOffset.resize(a_count, 0);
 		boneRows.resize(a_count, 0);
@@ -65,6 +66,7 @@ namespace DCLF
 		columns.faceStream = faceStream[a_slot];
 		columns.sceneFlags = sceneFlags[a_slot];
 		columns.skinPartitions = skinPartitions[a_slot];
+		columns.skinLodPartitions = skinLodPartitions[a_slot];
 		columns.shadowReject = shadowReject[a_slot];
 		columns.resident = residentSlot[a_slot];
 		return columns;
@@ -84,7 +86,7 @@ namespace DCLF
 			causes |= kChangeLights;
 		if (!same(a.tree, b.tree))
 			causes |= kChangeTree;
-		if (a.skinPartitions != b.skinPartitions || a.boneOffset != b.boneOffset || a.boneRows != b.boneRows)
+		if (a.skinPartitions != b.skinPartitions || a.skinLodPartitions != b.skinLodPartitions || a.boneOffset != b.boneOffset || a.boneRows != b.boneRows)
 			causes |= kChangeSkin;
 		if (a.extraOffset != b.extraOffset || !same(a.extras, b.extras))
 			causes |= kChangeExtras;
@@ -105,7 +107,7 @@ namespace DCLF
 		if (a.resident != b.resident)
 			causes |= kChangeMembership;
 		if (x.pipelineIndex != y.pipelineIndex || a.draw.pipelineIndex != b.draw.pipelineIndex || x.geometryIndex != y.geometryIndex ||
-			!same(geometryHalf(a.draw), geometryHalf(b.draw)) || a.skinPartitions != b.skinPartitions || a.shadowTechnique != b.shadowTechnique ||
+			!same(geometryHalf(a.draw), geometryHalf(b.draw)) || a.skinPartitions != b.skinPartitions || a.skinLodPartitions != b.skinLodPartitions || a.shadowTechnique != b.shadowTechnique ||
 			a.shadowReject != b.shadowReject || a.occlusionTechnique != b.occlusionTechnique)
 			causes |= kChangeStructure;
 		return causes;
@@ -160,6 +162,7 @@ namespace DCLF
 		lights[a_slot] = ObjectLights{};
 		treeAnim[a_slot] = ObjectTreeAnim{};
 		skinPartitions[a_slot] = 0;
+		skinLodPartitions[a_slot] = 0;
 		draws[a_slot] = DrawSequence{};
 		shadowTechnique[a_slot] = 0;
 		shadowReject[a_slot] = 0;
@@ -225,6 +228,7 @@ namespace DCLF
 			lights.clear();
 			treeAnim.clear();
 			skinPartitions.clear();
+			skinLodPartitions.clear();
 			draws.clear();
 			boneOffset.clear();
 			boneRows.clear();
@@ -323,6 +327,7 @@ namespace DCLF
 		fadeRootsJournal.Resync();
 		actorObjects.clear();
 		skinPartitions.clear();
+		skinLodPartitions.clear();
 		geometryTemplate.clear();
 		techniqueKeys.clear();
 		techniqueRow.clear();

@@ -590,6 +590,7 @@ namespace DCLF
 			// generation is never a listing's, and the builds take the static row's state for it.
 			std::array<Versioned, 2> fadeStatesOut;
 			std::array<std::uint32_t, 2> fadeStatesOutIndex{};
+			std::uint32_t fadeRootsIndex = 0;  // fadeRoots' descriptor (the frame record's t119: kFadeRootsRegister)
 			bool fadeStatesOutZeroed = false;
 			/** @brief The published states a frame's builds read: the frame before's (FadeStateCS writes by the frame's parity). */
 			std::uint32_t FadeStatesReadIndex(std::uint32_t a_frame) const { return fadeStatesOutIndex[(a_frame + 1) & 1]; }
@@ -2554,6 +2555,12 @@ namespace DCLF
 			return a_object < a_tables.skinPartitions.size() ? a_tables.skinPartitions[a_object] : 0u;
 		}
 
+		/** @brief A LOD skin's partitions per LOD level (Tables::skinLodPartitions), 0 for any other object. */
+		inline std::uint32_t LodPartitionsOf(const SceneStore::Tables& a_tables, std::uint32_t a_object)
+		{
+			return a_object < a_tables.skinLodPartitions.size() ? a_tables.skinLodPartitions[a_object] : 0u;
+		}
+
 		/**
 		 * @brief An object's fade root slot (Tables::objectFadeRoot), ~0u for none: a shadow input's, whose BuildDraws drops the
 		 * caster while a stood-in root fades (kFadeRootStoodIn). A member's root changes only with a noted change (ListFadeRoot).
@@ -2564,15 +2571,16 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief A depth-segment input's fade row: its fade root's slot (FadeStateCS's state, which an owned root's members
-		 * follow), and for the distance test of a root DCLF does not own (kObjectFadeTest), its fade-out distance. The node's
-		 * centre is its placement row's (BindlessPlacement::lodFadeNode, FrameValues); the slot and the distance only
-		 * change with its membership and bindings.
+		 * @brief A main input's fade row: its fade root's slot (FadeStateCS's state, which its members follow), a LOD skin's
+		 * partitions per level (picked by that state's level), and for the distance test (kObjectFadeTest) its fade-out
+		 * distance. The node's centre is its placement row's (BindlessPlacement::lodFadeNode, FrameValues); the slot and the
+		 * distance only change with its membership and bindings.
 		 */
 		inline void SetFadeRow(DrawInput& a_input, const SceneStore::Tables& a_tables, std::size_t a_object)
 		{
 			if (a_object < a_tables.objectFadeRoot.size())
 				a_input.fadeRoot = a_tables.objectFadeRoot[a_object];
+			a_input.lodPartitions = LodPartitionsOf(a_tables, static_cast<std::uint32_t>(a_object));
 			if (!(a_input.flags & (kObjectFadeTest | kObjectHeightTest)) || a_object >= a_tables.fadeDistance.size() || a_object >= a_tables.hasFadeNode.size())
 				return;
 			if (!a_tables.hasFadeNode[a_object])
@@ -2804,7 +2812,7 @@ namespace DCLF
 		 */
 		inline DrawInput ShadowPartOf(DrawInput a_input)
 		{
-			a_input.pipelineIndex = a_input.recordIndex = a_input.decalOrdinal = a_input.shadowRow = a_input.inputReserved = 0;
+			a_input.pipelineIndex = a_input.recordIndex = a_input.decalOrdinal = a_input.shadowRow = 0;
 			a_input.fadeDistance = 0.0f;
 			a_input.flags &= ~(kInputDrawable | kObjectDecal);
 			a_input.view.mask &= ~kMainSideBits;

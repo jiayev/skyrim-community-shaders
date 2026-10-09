@@ -544,7 +544,6 @@ namespace DCLF
 		// The fade roots DCLF services (SyncFadeOwnership: the admitted entries' with a fade plan), and whether a frame since
 		// the last applied one left every entry to the engine (their nodes are then seeded again).
 		std::vector<const RE::NiAVObject*> ownedFadeRoots;
-		std::uint32_t standInLodSkins = 0;  // stood-in members whose skin's partitions follow the LOD level (SyncFadeOwnership)
 		bool fadeSkipped = false;
 		/** @brief SceneStore::SetFadeRootsOwned from the current snapshot's admitted fade entries. */
 		void SyncFadeOwnership();

@@ -347,6 +347,11 @@ namespace DCLF
 			frameRecord.textures[kPaletteBufferRegister] = in.addresses.palettesIndex;
 			frameRecord.textures[kShadingBufferRegister] = in.addresses.shadingIndex;
 			frameRecord.textures[kTreeWindRegister] = in.addresses.treeWindIndex;
+			// The fades every draw's alpha takes (T1c): the states the frame's builds read, and the roots' static rows.
+			if (const auto& sceneBuffers = *a_resources->scene; sceneBuffers.fadeRoots && sceneBuffers.fadeRootsIndex) {
+				frameRecord.textures[kFadeStatesRegister] = sceneBuffers.FadeStatesReadIndex(frameNumber);
+				frameRecord.textures[kFadeRootsRegister] = sceneBuffers.fadeRootsIndex;
+			}
 			latched(a_resources->frameConstants, &frameRecord, sizeof(frameRecord), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
 		}
 		lap(2);
@@ -760,8 +765,9 @@ namespace DCLF
 			const auto treeHeight = PrimaryCull::Get().TreeHeightTest();
 			latch.treeHeight[0] = treeHeight[0];
 			latch.treeHeight[1] = treeHeight[1];
-			latch.fadeStatesIndex = a_resources->scene->FadeStatesReadIndex(frameNumber);
 		}
+		// Both segments: the states a LOD skin's level is read from (LodPartitions), the same for the depth and colour draws.
+		latch.fadeStatesIndex = a_resources->scene->FadeStatesReadIndex(frameNumber);
 		// The colour pass: this frame's cascades, for the synthetic passes' sun test, in the slot's region after the latch (the
 		// block holds them: ReserveMainLatch, before the shape). The sun's Accumulate has run.
 		const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();

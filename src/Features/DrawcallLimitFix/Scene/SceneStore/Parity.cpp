@@ -247,7 +247,7 @@ namespace DCLF
 			}
 			else if (!same(drawRecord, dense.draws[d]))
 				what = "the draw";
-			else if (slots.skinPartitions[s] != dense.skinPartitions[d] || slots.boneRows[s] != dense.boneRows[d])
+			else if (slots.skinPartitions[s] != dense.skinPartitions[d] || slots.skinLodPartitions[s] != dense.skinLodPartitions[d] || slots.boneRows[s] != dense.boneRows[d])
 				what = "the skin";
 			else if (slots.shadowTechnique[s] != dense.shadowTechnique[d] || slots.shadowReject[s] != dense.shadowReject[d])
 				what = "the shadow verdict";

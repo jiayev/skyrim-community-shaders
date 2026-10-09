@@ -735,9 +735,10 @@ namespace DCLF::Draws
 			bindings.visibility = a_builder.UnorderedAccess(*resources->visibility).View();
 			if (resources->frustum)
 				bindings.frustum = a_builder.UnorderedAccess(*resources->frustum).View();
-			// The depth segment's first phase reads the fade roots' static rows, and the states FadeStateCS published the frame before
-			// (its latch's; undeclared, as nothing this frame writes them: SceneBuffers::fadeStatesOut).
-			if (segment == RenderGraphRuntime::Segment::ZPrepass && fixedPhase != 2 && resources->scene->fadeRoots)
+			// Every phase reads the fade roots' static rows (the first phase's fade verdicts, every phase's LOD skin partitions), and
+			// the states FadeStateCS published the frame before (its latch's; undeclared, as nothing this frame writes them:
+			// SceneBuffers::fadeStatesOut).
+			if (resources->scene->fadeRoots)
 				bindings.fadeRoots = a_builder.ShaderResource(*resources->scene->fadeRoots).View();
 			// Phase 1 sees the HZB the previous frame left, phase 2 the one just rebuilt from this
 			// frame's depth. Both read the same resource; what differs is where they sit relative to
@@ -803,7 +804,8 @@ namespace DCLF::Draws
 			// The frustum stamps: the depth segment's first phase alone tests every candidate's frustum.
 			if (resources->frustum && phase == 1)
 				constants.frustumIndex = CaptureViewIndex(a_preparation, a_bindings.frustum);
-			if (phase == 1 && resources->scene->fadeRoots && resources->scene->fadeRootCount) {
+			// Every phase: the first phase's fade verdicts, and every phase's LOD skin partitions (LodPartitions).
+			if (resources->scene->fadeRoots && resources->scene->fadeRootCount) {
 				constants.fadeRootsIndex = CaptureViewIndex(a_preparation, a_bindings.fadeRoots);
 			}
 			if (resources->hzb && frame->cullMode >= 2 && frame->width && frame->height) {

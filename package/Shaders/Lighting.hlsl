@@ -900,10 +900,60 @@ float DCLFLodFadeAt(float a_metric, float a_start, float a_end)
 #	define DCLF_PS_LOD_FADES (DCLFLodFadeState.x != 0 ? DCLFLodFadeFlagsOf(DCLFObjectIndex) : 0)
 #	define DCLF_PS_LOD_METRIC (DCLFLodFades ? DCLFLodMetric(DCLFPlacements[DCLFObjectIndex].LodFadeNode.xyz, DCLFLodFades & 0xF) : 0)
 #	define DCLF_PS_SPECULAR_LOD_FADE DCLFLodFadeAt(DCLFLodMetricValue, DCLFLodFadeThresholds.x, DCLFLodFadeThresholds.y)
+// FadeStateCS's rows (Records.h, FadeNodeState and FadeRootStatic), the frame record's t120 and t119 (DrawPipelines.h,
+// kFadeStatesRegister, kFadeRootsRegister): the states the frame's builds read, and the roots' static rows.
+struct DCLFFadeNodeState
+{
+	uint Flags;
+	float CurrentFade;
+	float SnapRadius;
+	int LastVisible;
+	float AmountFade;
+	float Metric;
+	float PreviousMetric;
+	float Blend;
+	uint Levels;
+	uint Generation;
+	uint Verdict;
+	uint Frame;
+};
+struct DCLFFadeRootStatic
+{
+	DCLFFadeNodeState Initial;
+	float Radius;
+	float FadeAmount;
+	float NearDistance;
+	float FarDistance;
+	uint Object;
+	uint Bits;
+	float LodScale;
+	uint Generation;
+};
+StructuredBuffer<DCLFFadeNodeState> DCLFFadeStates : register(t120);
+StructuredBuffer<DCLFFadeRootStatic> DCLFFadeRoots : register(t119);
+// What GetRenderPasses and SetupGeometry put on a pass's alpha (MaterialData.z): the property's alpha times its fade node's
+// currentFade, and for a LOD cross-fade's copy (the draw's object word bit 30: BuildDrawsCS, kObjectCrossfadeCopy) the
+// cross-fade factor (+0x14C) instead. T1c: from the object's fade root (DCLFRecordFlags bits 8-31, its slot + 1) in
+// FadeStateCS's state; 1 without a root, or with a row the frame does not hold (generation 0: none bound, or freed).
+float DCLFAlphaFade(uint a_object, bool a_copy)
+{
+	const uint root = DCLFObjects[a_object].DCLFRecordFlags >> 8;
+	if (root == 0)
+		return 1;
+	const DCLFFadeRootStatic row = DCLFFadeRoots[root - 1];
+	if (row.Generation == 0)
+		return 1;
+	DCLFFadeNodeState state = DCLFFadeStates[root - 1];
+	if (state.Generation != row.Generation)
+		state = row.Initial;
+	return a_copy ? state.Blend : state.CurrentFade;
+}
+#	define DCLF_PS_CROSSFADE_COPY ((DCLFObjectWord & 0x40000000u) != 0)
 #	define DCLF_PS_MATERIAL_DATA float4(                                                                                                                 \
 		(DCLFLodFades & (1u << 5)) ? DCLFLodFadeAt(DCLFLodMetricValue, DCLFLodFadeThresholds.z, DCLFLodFadeThresholds.w) : DCLFShading[DCLFObjectIndex].MaterialData.x, \
 		(DCLFLodFades & (1u << 4)) ? DCLFSpecularLodFade : DCLFShading[DCLFObjectIndex].MaterialData.y,                                                             \
-		DCLFShading[DCLFObjectIndex].MaterialData.zw)
+		DCLFShading[DCLFObjectIndex].MaterialData.z * DCLFAlphaFade(DCLFObjectIndex, DCLF_PS_CROSSFADE_COPY),                                                     \
+		DCLFShading[DCLFObjectIndex].MaterialData.w)
 // Only the w of SSRParams is per-object; x, y and z stay in the per-pipeline buffer above.
 #	define DCLF_PS_SSR_SPECULAR ((DCLFLodFades & (1u << 4)) ? ((DCLFLodFades & (1u << 6)) ? DCLFSpecularLodFade : 0) : DCLFShading[DCLFObjectIndex].EmitColor.w)
 // ProjectedUV's three pixel parameters are per object too (the property's, plus two globals).

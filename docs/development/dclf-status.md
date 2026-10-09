@@ -10,7 +10,7 @@ code is organised, and the parity checks that validate it, is [dclf-architecture
 
 | | DCLF draws | Still native |
 | --- | --- | --- |
-| **Object classes** | Static rigid geometry, including TruePBR; trees; switch-node children; skinned bodies and armour; actors and faces (Facegen, hair, eyes); decals (opaque, and blended with supported blend modes); ProjectedUV; terrain (when Terrain Blending does not defer it); screen-door fades | Alpha-blended objects and refraction; blended fades (hint 9); a LOD cross-fade's old-level copy (hint 10); LOD terrain and objects; billboards; effect shaders; ParallaxOcc, MultilayerParallax and sparkle; skins beyond DCLF's limits; grass, water, sky, particles; first person |
+| **Object classes** | Static rigid geometry, including TruePBR; trees; switch-node children; skinned bodies and armour; actors and faces (Facegen, hair, eyes); decals (opaque, and blended with supported blend modes); ProjectedUV; terrain (when Terrain Blending does not defer it); fades, a LOD cross-fade's copy (hint 10) and fading decals (T1c; the copy and blended fades untested) | Alpha-blended objects and refraction; LOD terrain and objects; billboards; effect shaders; ParallaxOcc, MultilayerParallax and sparkle; skins beyond DCLF's limits; grass, water, sky, particles; first person |
 | **Views** | Main pass (colour, Z-prepass, decals); the sun's cascades and their volumetric copy; local shadow lights; Skylighting's occlusion map; the precipitation mask | The water cube map (LOD and sky only: no DCLF object reaches it); first person; the focus view; the local map |
 
 **What the engine still culls:**
@@ -79,11 +79,13 @@ draws.
         and the shadow caster rule. Done without a write-back: those views skip DCLF's entries, and the shadow rule
         reads the GPU's state (drawcall-limit-fix.md, "No fade write-back").
     -   The engine's "visible within the last 2 frames" snap means late visibility behaves as the engine does.
-    -   Blended fades (hint 9) stay native until DCLF draws them.
+    -   Done (T1a-T1c, drawcall-limit-fix.md, "Fades drawn by DCLF"): every draw's alpha takes its root's FadeStateCS fade.
+        Blended fades (hint 9) are drawn in their opaque group with that alpha: an approximation, untested.
 -   **LOD level and cross-fade.**
     -   The level comes from the same distance (`FUN_14147a430`: level `+0x152`, state `+0x153`, blend `+0x14C`).
     -   The LOD row picks the skin partitions, which DCLF already applies per object as a partition mask.
-    -   The cross-fade copy of the old level becomes a second, dithered draw emitted on the GPU.
+    -   Done (T1b, T1c): the level from FadeStateCS picks the partitions on the GPU; the copy is drawn as copy partitions
+        with the cross-fade factor on their alpha (untested: no cross-fade occurs in the measured load order).
 -   **The tree clock.**
     -   The tree manager advances a tree's animation time (`+0x164`) only when its `kAccumulated` bit is set,
         time-budgeted and under a mutex (`FUN_1404381e0`).
