@@ -231,6 +231,7 @@ State::TonemapOwner State::GetTonemapOwner()
 		tonemapOwner = TonemapOwner::kPostProcessing;
 	else
 		tonemapOwner = TonemapOwner::kVanilla;
+	postProcessing.UpdateVanillaEffects(*tonemapOwner == TonemapOwner::kPostProcessing);
 	return *tonemapOwner;
 }
 

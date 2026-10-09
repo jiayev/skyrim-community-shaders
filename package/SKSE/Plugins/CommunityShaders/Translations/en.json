@@ -1578,8 +1578,6 @@
     "feature.post_processing.do_f.target_focus": "Target Focus",
     "feature.post_processing.do_f.target_focus_focal_length": "Target Focus Focal Length",
     "feature.post_processing.do_f.transition_speed": "Transition Speed",
-    "feature.post_processing.do_f.vanilla_compatibility": "Vanilla Compatibility Mode",
-    "feature.post_processing.do_f.vanilla_compatibility_desc": "Matches the game's focus, range, strength and blur modes using Community Shaders DoF. Follows the game's DoF toggle and dynamic DoF settings. Underwater effects remain handled by the game. Overrides lens and bokeh controls without changing their saved values.",
     "feature.post_processing.do_f.view_resize": "View Resize",
     "feature.post_processing.edit_settings_for_this_feature": "Edit settings for this feature.",
     "feature.post_processing.enable_the_feature_to_see_its_settings": "Enable the feature to see its settings.",

@@ -5,6 +5,7 @@
 #include <deque>
 #include <efsw/efsw.hpp>
 #include <functional>
+#include <span>
 #include <string_view>
 #include <unordered_set>
 #include <variant>
@@ -493,6 +494,7 @@ namespace SIE
 		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader& shader, uint32_t descriptor);
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader& shader,
 			uint32_t descriptor);
+		bool HasPixelShaders(RE::BSShader::Type type, std::span<const uint32_t> descriptors);
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 
