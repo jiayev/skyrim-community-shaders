@@ -85,6 +85,9 @@ namespace DCLF
 
 	void SceneStore::LeaveSet(std::uint32_t a_slot, std::uint8_t a_lost, bool a_partner)
 	{
+		// A claim is the whole object (U5): losing any phase it holds loses all of them.
+		if (a_slot < setPhasesNext.size() && (setPhasesNext[a_slot] & a_lost))
+			a_lost = setPhasesNext[a_slot];
 		if (a_slot < setPhasesNext.size() && (setPhasesNext[a_slot] & a_lost)) {
 			setPhasesNext[a_slot] &= static_cast<std::uint8_t>(~a_lost);
 			// The engine's copy is by geometry, a base's alone (CommitSet's apply).
@@ -113,12 +116,11 @@ namespace DCLF
 		if (partner == kNoObjectSlot || partner >= tables.objects.size())
 			return;
 		constexpr std::uint8_t kMainPhases = kSetMain | kSetReflection;
+		// The partner leaves whole (U5).
 		if (PhasesIn(tables, partner) & kMainPhases) {
-			tables.setPhases[partner] &= static_cast<std::uint8_t>(~kMainPhases);
-			if (tables.objects[partner].flags & kObjectMember) {
-				tables.objects[partner].flags &= ~kObjectMember;
-				tables.NoteChange(partner, kChangeBindings);
-			}
+			tables.setPhases[partner] = 0;
+			tables.objects[partner].flags &= ~kObjectMember;
+			tables.NoteChange(partner, kChangeBindings);
 		}
 		LeaveSet(partner, kMainPhases, false);
 	}
@@ -206,13 +208,6 @@ namespace DCLF
 					QueueSet(change.slot);
 		}
 		setCursor.Advance(tables.changeLog);
-		// The reflection's joiners of the last commit, whose main membership is now a frame old.
-		std::swap(setLagged, setLaggedNext);
-		setLaggedNext.clear();
-		for (const std::uint32_t slot : setLagged)
-			if (slot < objects)
-				QueueSet(slot);
-		setLagged.clear();
 		// Readiness moved, by source: anything the lookups resolve is a new version of them (Lookups::NextVersion), the shadow lookups
 		// have their own generation, the constants their stamp, the scene buffers their fit serial. A waiting slot is taken again when
 		// a source it waits on moved (SetWaitCause), or any moved for one waiting on something else.
@@ -293,14 +288,17 @@ namespace DCLF
 
 		// The set parity's pass (below) decides every slot again without the commit's side effects (counters, causes, lags).
 		bool parityPass = false;
-		// One slot's phases now, each with its readiness (0: not a member); a_wait: it takes part in a phase it is not ready for.
-		auto wanted = [&](std::uint32_t a_slot, bool& a_wait) -> std::uint8_t {
+		// One slot's phases now (0: not a member): every phase it takes part in when it is ready for all of them, none otherwise (U5: a
+		// claim is the whole object); a_wait: it takes part in a phase it is not ready for. a_partial: some of its phases were ready
+		// (what the per-phase claims would have drawn; the report counts them).
+		auto wanted = [&](std::uint32_t a_slot, bool& a_wait, bool* a_partial = nullptr) -> std::uint8_t {
 			a_wait = false;
 			if (a_slot < setWaitCause.size() && !parityPass)
 				setWaitCause[a_slot] = 0;
 			if (!live || a_slot >= objects)
 				return 0;
-			std::uint8_t phases = SetParticipation(a_slot, drawn);
+			const std::uint8_t participation = SetParticipation(a_slot, drawn);
+			std::uint8_t phases = participation;
 			if (!phases)
 				return 0;
 			auto waiting = [&](std::uint32_t a_why) {
@@ -330,26 +328,23 @@ namespace DCLF
 				if (!main)
 					phases &= ~kSetMain;
 			}
-			// The reflection's faces draw from the last frame's depth inputs (IndirectDraws::ExecuteReflection): a member of the main
-			// phase now and in the claims in effect (an application can wait for its revision, so not the last commit's), whose
-			// pipeline slot's forward pipeline is ready. A joiner is the engine's for a frame.
-			if (phases & kSetReflection) {
-				const bool wasMain = a_slot < tables.setPhases.size() && (tables.setPhases[a_slot] & kSetMain) != 0;
-				if (!(phases & kSetMain) || !wasMain || !IndirectDraws::Get().PhaseReady(&tables, a_slot, kSetReflection)) {
-					if (phases & kSetMain) {
-						waiting(8);
-						if (!wasMain && !parityPass)
-							setLaggedNext.push_back(a_slot);
-					}
-					phases &= ~kSetReflection;
-				}
+			// The reflection's faces draw from the frame's scene list (IndirectDraws::ExecuteReflection): its pipeline slot's forward
+			// pipeline ready.
+			if ((phases & kSetReflection) && !IndirectDraws::Get().PhaseReady(&tables, a_slot, kSetReflection)) {
+				waiting(8);
+				phases &= ~kSetReflection;
 			}
 			for (const std::uint8_t phase : { kSetCaster, kSetCasterPoint, kSetOccluderSky, kSetOccluderPrecipitation })
 				if (std::uint32_t why = 7; (phases & phase) && !IndirectDraws::Get().PhaseReady(&tables, a_slot, phase, &why)) {
 					waiting(why);
 					phases &= ~phase;
 				}
-			return phases;
+			// Whole or nothing.
+			if (phases == participation)
+				return phases;
+			if (a_partial)
+				*a_partial = phases != 0;
+			return 0;
 		};
 		auto apply = [&](std::uint32_t a_slot, std::uint8_t a_phases, bool a_wait) {
 			// Waiting for its application: decided again, for the geometry it holds now.
@@ -398,18 +393,25 @@ namespace DCLF
 			// A base and its layer are main-phase members together: the engine's main passes of both are its geometry's. Either one
 			// waiting is enough for a readiness event to evaluate the two again.
 			const std::uint32_t partner = tables.IsLayer(slot) ? tables.layerBase[slot] : slot < tables.layerOf.size() ? tables.layerOf[slot] : kNoObjectSlot;
-			bool wait = false;
-			std::uint8_t phases = wanted(slot, wait);
+			bool wait = false, partial = false;
+			std::uint8_t phases = wanted(slot, wait, &partial);
+			if (setPartialMark.size() < objects)
+				setPartialMark.resize(objects, 0);
+			if ((setPartialMark[slot] != 0) != partial) {
+				setPartialMark[slot] = partial ? 1 : 0;
+				setPartialCount += partial ? 1u : std::uint32_t(-1);
+			}
 			if (partner != kNoObjectSlot && partner < objects) {
 				bool partnerWait = false;
 				std::uint8_t partnerPhases = wanted(partner, partnerWait);
+				// Members together, whole (U5).
 				if (!(phases & kSetMain) != !(partnerPhases & kSetMain)) {
 					++setStats.waitingBy[6];
 					// The waiting one is taken again with the other (whose verdict may change with any source).
 					setWaitCause[slot] |= kWaitOther;
 					setWaitCause[partner] |= kWaitOther;
-					phases &= ~(kSetMain | kSetReflection);
-					partnerPhases &= ~(kSetMain | kSetReflection);
+					phases = 0;
+					partnerPhases = 0;
 				}
 				apply(partner, partnerPhases, partnerWait);
 			}
@@ -429,7 +431,7 @@ namespace DCLF
 				if (partner != kNoObjectSlot && partner < objects) {
 					bool partnerWait = false;
 					if (!(phases & kSetMain) != !(wanted(partner, partnerWait) & kSetMain))
-						phases &= ~(kSetMain | kSetReflection);
+						phases = 0;
 				}
 				if (phases == setPhases[slot] && wait == (setWaitingMark[slot] != 0))
 					continue;
@@ -458,6 +460,7 @@ namespace DCLF
 		std::sort(setWaiting.begin(), setWaiting.end());
 		setWaiting.erase(std::unique(setWaiting.begin(), setWaiting.end()), setWaiting.end());
 		setStats.members += setMemberSlot.size();
+		setStats.partial += setPartialCount;
 		setStats.waiting += setWaiting.size();
 
 		RefreshSetSnapshot();
@@ -592,8 +595,9 @@ namespace DCLF
 				const std::uint8_t others = draws.FitsScene(&tables, a_slot, true) ? static_cast<std::uint8_t>(tables.setPhases[a_slot] & ~(kSetMain | kSetReflection)) : 0;
 				drawn = static_cast<std::uint8_t>((main ? (kSetMain | kSetReflection) : 0u) | others);
 			}
-			// A structural change since the last revocation (R3b): the shapes were made without it, so the claim goes whole.
-			const std::uint8_t lost = (same && a_structure) ? claimed : static_cast<std::uint8_t>(claimed & ~drawn);
+			// A structural change since the last revocation (R3b): the shapes were made without it, so the claim goes whole; and a claim
+			// is the whole object (U5), so one not drawn in any of its phases goes whole too.
+			const std::uint8_t lost = ((same && a_structure) || (claimed & ~drawn)) ? claimed : std::uint8_t{ 0 };
 			if (!lost)
 				return;
 			if (same && a_structure && !(claimed & ~drawn))
@@ -602,9 +606,10 @@ namespace DCLF
 			if (same) {
 				// Out of the set in what it no longer draws: the accumulate phase must not make it a member again, and the next
 				// publication's claims (the commit's snapshot) must not either.
-				tables.setPhases[a_slot] &= ~lost;
+				const bool held = tables.setPhases[a_slot] != 0;
+				tables.setPhases[a_slot] = 0;
 				LeaveSet(a_slot, lost);
-				if ((lost & kSetMain) && (tables.objects[a_slot].flags & kObjectMember)) {
+				if (held || (tables.objects[a_slot].flags & kObjectMember)) {
 					tables.objects[a_slot].flags &= ~kObjectMember;
 					tables.NoteChange(a_slot, kChangeBindings);
 				}

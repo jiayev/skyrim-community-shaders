@@ -1378,13 +1378,16 @@ namespace DCLF
 		{
 			std::uint64_t commits = 0, evaluated = 0, joined = 0, left = 0, readinessEvents = 0, resyncs = 0;
 			std::uint64_t members = 0, waiting = 0, rebinding = 0;  // summed over the commits
+			// Summed over the commits: the objects out of the set although some of their phases are ready (U5: a claim is the whole
+			// object), what per-phase claims would have drawn of them.
+			std::uint64_t partial = 0;
 			std::uint64_t publications = 0;
 			std::uint64_t patchedMember = 0;  // must be 0: the accumulate phase patched a member's binding (CommitSet keeps rebinds out)
 			std::uint64_t leftAfterCommit = 0;  // slots out of phases of the commit's decision after it (LeaveSet)
 			// Why a bound object waits, summed over the commits: its pipeline, its material, its pipeline's shadow mask, the shared
 			// lookups (samplers, null and projected textures), its geometry, its decal slot, its layer partner, its shadow pipelines
 			// or occlusion pipelines (or an alpha-tested caster's diffuse).
-			// The reflection phase (8): its forward pipeline, or the object was no main member at the last commit.
+			// The reflection phase (8): its forward pipeline.
 			std::array<std::uint64_t, 14> waitingBy{};
 			std::uint64_t waitingRequeued = 0;  // waiting slots taken again for a readiness source they wait on
 			std::uint64_t commitParityChecks = 0, commitParityDiffer = 0;  // CS_DCLF_SET_PARITY: full evaluations, slots that differed
@@ -2865,11 +2868,12 @@ namespace DCLF
 		std::vector<std::uint32_t> setQueue;
 		// Slots that joined the main phase at the last commit and take part in the reflection's: evaluated again at this one, when
 		// their last frame's main membership gives them the phase.
-		std::vector<std::uint32_t> setLagged, setLaggedNext;
 		std::vector<std::uint8_t> setQueueMark;    // parallel to objects: in setQueue
 		std::vector<std::uint8_t> setRebinding;    // parallel to objects: this commit's, its binding is taken again this frame
 		std::vector<std::uint8_t> setLacking;      // parallel to objects: the occluder phases it takes part in and is no member of
 		std::array<std::uint32_t, 2> setLackingCount{};  // SetLacking's, per occlusion map
+		std::vector<std::uint8_t> setPartialMark;  // per slot: out of the set with some of its phases ready (SetStats::partial)
+		std::uint32_t setPartialCount = 0;
 		// The last commit's decision, applied at the next ApplySet: each slot's phases and lacking phases, and the slots it changed
 		// with the geometry each held when the commit decided (a slot that holds another one at ApplySet takes nothing).
 		std::vector<std::uint8_t> setPhasesNext, setLackingNext;

@@ -69,10 +69,10 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		const auto set = store.TakeSetStats();
 		const double commits = std::max<double>(static_cast<double>(set.commits), 1.0);
 		const auto& capture = DCLF::PassCapture::Get().GetStats();
-		logger::info("[DCLF] DCLF set: {:.0f} members and {:.1f} bound objects waiting a frame over {} commits; {} joined, {} left, {} evaluated ({} readiness events taking {} waiting ones again, {} "
+		logger::info("[DCLF] DCLF set: {:.0f} members and {:.1f} bound objects waiting a frame ({:.1f} with some of their phases ready: whole-object claims) over {} commits; {} joined, {} left, {} evaluated ({} readiness events taking {} waiting ones again, {} "
 					 "resyncs), {} left while their binding was taken again, {} publications; waiting for: pipeline {}, material {}, shadow mask {}, shared lookups {}, "
-					 "geometry {}, decal slot {}, layer partner {}, shadow pipelines {}, reflection (forward pipeline or last frame's membership) {}, constants {}, scene buffers' growth {}, past the scene buffers (shadow) {}, a shadow diffuse not imported {}{}{}; members patched by the accumulate phase {}{}; {} left the commit's decision after it (LeaveSet); commit parity {} checks, {} slots differ{}",
-			set.members / commits, set.waiting / commits, set.commits, set.joined, set.left, set.evaluated, set.readinessEvents, set.waitingRequeued, set.resyncs, set.rebinding,
+					 "geometry {}, decal slot {}, layer partner {}, shadow pipelines {}, reflection (forward pipeline) {}, constants {}, scene buffers' growth {}, past the scene buffers (shadow) {}, a shadow diffuse not imported {}{}{}; members patched by the accumulate phase {}{}; {} left the commit's decision after it (LeaveSet); commit parity {} checks, {} slots differ{}",
+			set.members / commits, set.waiting / commits, set.partial / commits, set.commits, set.joined, set.left, set.evaluated, set.readinessEvents, set.waitingRequeued, set.resyncs, set.rebinding,
 			set.publications, set.waitingBy[0], set.waitingBy[1], set.waitingBy[2], set.waitingBy[3], set.waitingBy[4], set.waitingBy[5], set.waitingBy[6], set.waitingBy[7], set.waitingBy[8],
 			set.waitingBy[9], set.waitingBy[10], set.waitingBy[12], set.waitingBy[13], set.firstWaiting.empty() ? "" : "; first: ", set.firstWaiting, set.patchedMember, set.patchedMember ? " <- SET PATCHED" : "", set.leftAfterCommit, set.commitParityChecks, set.commitParityDiffer,
 			set.commitParityChecks ? (set.commitParityDiffer ? " <- COMMIT" : " <- OK") : "");

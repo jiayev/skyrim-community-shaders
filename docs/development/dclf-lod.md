@@ -361,10 +361,11 @@ A DCLF native variant of the face, as for Skylighting's map, with the sky left t
 - **Pipelines** (L5b). `FindForwardPipeline(program, targets, cull)`: the forward program's stages under the Z-prepass's
   layout (plain draws), the face's colour and depth formats, depth LESS_EQUAL with writes, front faces culled (none for a
   two-sided key), the engine's winding, no blending. Built once per distinct stages, targets and cull.
-- **Ownership: a set phase, `kSetReflection`** (SceneSet.h). A main member with a LOD technique (`LodLightingTechnique`: 9, 13,
-  15, 18) whose pipeline slot's forward pipeline is built (`PhaseReady`), and which was a main member at the last commit too:
-  it was drawable in the depth inputs the faces read. The phase is drawn while the faces' resources and a forward pipeline
-  exist (`IndirectDraws::ReflectionDrawable`) and the toggle is on (`CS_DCLF_REFLECTIONS`, live).
+- **Ownership: a set phase, `kSetReflection`** (SceneSet.h). An object with a LOD technique (`LodLightingTechnique`: 9, 13,
+  15, 18) takes part in it; it is a member (with every other phase it takes part in: claims are whole objects) once its
+  pipeline slot's forward pipeline is built (`PhaseReady`). The faces read the frame's scene list, so a joiner is drawn
+  from its first frame. The phase is drawn while the faces' resources and a forward pipeline exist
+  (`IndirectDraws::ReflectionDrawable`) and the toggle is on (`CS_DCLF_REFLECTIONS`, live).
   - **Withholding** (`PassCapture::WithholdReflection`): the cube camera's accumulators' batch renderers (`+0x1A0`, `+0x1A8`)
     withhold exactly the phase's members' passes, at the main modes' insertion points (RegisterPass, the group and list
     insertions of `FUN_1414b2330`). The engine keeps culling the LOD roots and drawing everything else: the sky, and any LOD
@@ -374,10 +375,7 @@ A DCLF native variant of the face, as for Skylighting's map, with the sky left t
   - **Tree LOD in the faces** is DCLF's (every tree LOD pass into the faces withheld) while the main view's is
     (`DecideTreeLod`), the last depth commit drew it, the forward tree pipeline is built and the phase is drawn
     (`PrepareReflection`).
-- **The one-frame lag, accepted.**
-  - A joiner of the main phase is the engine's in the faces for one frame (the phase needs last frame's membership), so no hole.
-  - An object that leaves the set is drawn by both for one frame: identical pixels, or a one-frame ghost of a detached LOD
-    block in the 256-pixel reflection.
+- **No lag for members** (since U5): the faces draw the frame's scene list, the members of the claims the frame withholds.
   - Tree LOD's tables are as the last depth commit left them: a block attached or detached this frame is a one-frame hole or
     ghost in the reflection.
 - **The capture** (`Engine/ReflectionFaces`). The face render (vfunc `0x35`) is flagged, and the face's accumulator render
@@ -389,10 +387,11 @@ A DCLF native variant of the face, as for Skylighting's map, with the sky left t
   call of vfunc `0x35` per update), all before `BeforeShadowMaps` (the report's "captured after their frame's epoch" is
   0), and nothing between the face render and the water reads the cube (`FUN_140e44c60` after it only restores four
   renderer words; the cube has one mip). An epoch per update was two a frame: each epoch is a slot of the host's ring
-  (render-graph.md, "Frames in flight"). It draws only while the depth and colour commits it reads are the frame
-  before's, into the same backings (`Resources::committed`). The shape always has all six faces, so the recordings hold
+  (render-graph.md, "Frames in flight"). It draws only with the frame's ring entry (the scene list and its rows) and while
+  the colour commit whose frame record it reads is the frame before's, into the same backings (`Resources::committed`). The shape always has all six faces, so the recordings hold
   across frames; a face the frame doesn't render culls and draws nothing (zero dispatch, no tree slots).
-  - **Culling:** BuildDraws over the depth inputs in its single phase, frustum only, one latched dispatch per face. The
+  - **Culling:** BuildDraws over the scene list's main part (its view bits `kViewReflection`) in its single phase, frustum
+    only, one latched dispatch per face. The
     latch's slots' map (`bucketMapOffset`, which BuildDrawsCS now reads whenever a latch names one) sends each LOD slot
     to the bucket of its forward pipeline and every other slot to none. The bucket tables give each face its range of
     one sequence buffer; the sequences are the Z-prepass's plain draws from the index pool.

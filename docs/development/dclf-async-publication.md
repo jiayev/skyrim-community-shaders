@@ -1599,6 +1599,41 @@ two configurations: the main asynchronous path and parity. The invariants and th
   (none fell behind); `<- LATCH` for ~3 frames when equipping grows the pipeline count past the latch's power of two; the
   lookups group still moves the shapes key at about a quarter of the joins in motion.
 
+## The unified scene (U0-U6, 2026-10-08)
+
+The standing policies (user, 2026-10-08): DCLF will take over all culling on the GPU, so no design may rely on the engine's
+culling or registration results; and no per-view rebuilds: one persistent scene, each object carrying a bitmask of the view
+types it takes part in, tested by each view's GPU cull. dclf-architecture.md, "The scene list and view masks", is the
+present; this is the record.
+
+- **U0.** The LATCH clamps count against the installed publication's pipeline slots (`InstalledPipelineSlots`), flagging
+  only a member past the latch (`MemberPastSlots`); the sun exclusion's parity line names the lost caster
+  (`DescribeSunCandidate`).
+- **U1.** `FadedOutOfOcclusion` reads FadeStateCS for every listed root; the occluder fade-root readiness and its
+  bookkeeping (`fadeRootObjects`, `kWaitFade`, reason 11) are gone. The occlusion maps became DCLF's on 300 of 300 frames at
+  rest. The wider fade parity shows FadeStateCS against nodes the engine stops visiting (`<- ENGINE FADE`): T1's.
+- **U2.** Mode-independent shadow keys: key slots by the base technique, the mode's bits in the map rows
+  (`Lookups::shadowMapRows[mode][state]`, `ShadowLatchLayout::MapRowOf`). Any row change moves `shadowGeneration`.
+- **U3.** `DrawInput::ViewWords` (mask, caster key, occlusion keys) and `shadowRow`; `BuildDrawsLatch::viewBits`; the mask
+  test first in BuildDrawsCS; `<- VIEW MASK` parity.
+- **U4a.** One build for both main segments (`BuildMainPayloads`), one list, a pair drawable only in both
+  (`<- SEGMENT SPLIT`), one ring part.
+- **U4b.** One shadow list: an entry per object for every mode holding it, the key word selected per view (cull flags bits
+  16-17, `KeyWordOf`); the class test only for class-split modes.
+- **U4c.** Main and shadow in one list: the shadow build writes its words into the main build's entries
+  (`SetMainPart`/`SetShadowPart`, `sideOf`); one ring part laid out `[entries | main frame inputs | shadow frame inputs]`.
+- **U5.** Whole-object claims: one readiness per object; every exit drops the whole object; the reflection reads the frame's
+  scene list (no lag). Cost, accepted: occlusion maps registered by the engine on 35-125 of 300 frames in motion (2-22
+  before), while 7-24 objects wait with some of their phases ready.
+- **U6.** One shadow fallback input buffer (was five); the shadow draw counts in one pass over the list.
+- **Measured** (motion, set parity only, Tracy, m154 against m170, 35 s): the main build 730 to 482 ms, CommitSet 205 to
+  144, the kept shadow build 141 to 85, the ring fill 522 to 382, the builds ahead 1367 to 1123. Frame rate (steady windows)
+  102.4 to 103.9-106.3 fps median: the whole-list scan per view costs nothing visible, so no GPU compaction pass. Per-pass
+  GPU time is not measurable today: the epochs replay revision recordings, which record no pass timestamps.
+- **Open:** one GPU page fault (m169, a vertex shader reading an unmapped address; not reproduced in m170, m171); the
+  `inputsDepth` buffer and the shadow build's own region stay for the parity builds that keep no shared list
+  (`CS_DCLF_BINDLESS_PARITY`, `CS_DCLF_BUILD_PARITY`); the engine-culling roadmap (T1-T7) in the plan.
+
 ## Implemented foundations
 
 - `ORGModuleServices::AsyncPrimitives` is a backend-independent header-only target.
