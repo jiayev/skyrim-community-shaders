@@ -134,7 +134,7 @@ namespace SharedData
 	struct SkylightingSettings
 	{
 		row_major float4x4 OcclusionViewProj;
-		float4 OcclusionDir;
+		float4 OcclusionSHBasis4Pi;  // SH basis of the occlusion direction, times 4 pi (Monte Carlo weight)
 
 		float4 PosOffset;   // xyz: cell origin in camera model space
 		uint4 ArrayOrigin;  // xyz: array origin
