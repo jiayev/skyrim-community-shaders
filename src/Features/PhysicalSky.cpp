@@ -93,27 +93,40 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	topExpansionScale,
 	densityScale)
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	CirrusSettings,
-	enabled, altitude, patternScale, densityScale, lightingScale, weatherPath, patternsPath,
-	weather, patternSeed, patternWarp, patternDetail)
+void to_json(nlohmann::json& j, const CirrusSettings& value)
+{
+	j = { { "enabled", value.enabled }, { "altitude", value.altitude }, { "uvSize", value.uvSize }, { "densityScale", value.densityScale }, { "weather", value.weather } };
+}
+
+void from_json(const nlohmann::json& j, CirrusSettings& value)
+{
+	value = {};
+	value.enabled = j.value("enabled", value.enabled);
+	value.altitude = j.value("altitude", value.altitude);
+	value.uvSize = j.value("uvSize", value.uvSize);
+	value.densityScale = j.value("densityScale", value.densityScale);
+	if (j.contains("weather") && SceneBlend::IsValid(j["weather"]))
+		value.weather = j["weather"].get<SceneBlend>();
+}
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudLightingSettings,
-	lightingScale,
+	brightness,
+	lowBrightness,
+	cirrusBrightness,
 	sunExtinction,
-	phaseForwardG,
-	phaseBackwardG,
-	phaseForwardWeight,
-	phaseBackwardWeight,
+	phasePrimaryG,
+	phaseSecondaryG,
+	phasePrimaryIntensity,
+	phaseSecondaryIntensity,
 	scatterVolumeStrength,
-	scatterVolumeDepth,
-	scatterVolumeHeight,
+	scatterVolumeDepthPower,
+	scatterVolumeHeightPower,
 	softScatteringStrength,
 	powderStrength,
 	ambientStrength,
 	ambientFloor,
-	ambientDensity,
+	ambientProfilePower,
 	ambientBase)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -923,22 +936,43 @@ void PhysicalSky::SettingsVolumetricClouds()
 
 	CirrusMapManager::DrawSettings(cirrus, ndfTexManager);
 
-	ImGui::SeparatorText(T(TKEY("lighting"), "Lighting"));
+	ImGui::SeparatorText(T(TKEY("cloud_lighting"), "Cloud Lighting"));
 	{
-		ImGui::SliderFloat(T(TKEY("cloud_lighting_scale"), "Lighting Response Scale"), &lighting.lightingScale, 0.0f, 4.0f, "%.3f");
+		if (!SceneWidgetInterceptor::IsArmed() && ImGui::Button(T(TKEY("cloud_lighting_reset"), "Reset Cloud Lighting"))) {
+			lighting = {};
+			volMainHistoryValid = false;
+		}
+		ImGui::SliderFloat(T(TKEY("cloud_brightness"), "All Cloud Brightness"), &lighting.brightness, 0.0f, 4.0f, "%.4f", ImGuiSliderFlags_Logarithmic);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("cloud_brightness_desc"), "Scales sunlight and ambient lighting for both low clouds and cirrus. One preserves the model response without extra brightness correction. Does not change opacity, shadows or exposure."));
+		ImGui::SliderFloat(T(TKEY("cloud_low_brightness"), "Low Cloud Relative Brightness"), &lighting.lowBrightness, 0.0f, 4.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_cirrus_brightness"), "Cirrus Relative Brightness"), &lighting.cirrusBrightness, 0.0f, 4.0f, "%.3f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("cloud_layer_brightness_desc"), "Layer brightness multiplies All Cloud Brightness. Cirrus retains its own thin-sheet response; equal settings do not imply equal visible brightness."));
+		ImGui::SeparatorText(T(TKEY("cloud_shared_lighting"), "Shared Sunlight and Ambient Lighting"));
 		ImGui::SliderFloat(T(TKEY("cloud_sun_extinction"), "Sun Extinction Scale"), &lighting.sunExtinction, 0.0f, 4.0f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_phase_forward_g"), "Forward Phase G"), &lighting.phaseForwardG, 0.0f, 0.95f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_phase_backward_g"), "Second Phase G"), &lighting.phaseBackwardG, -0.95f, 0.95f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_phase_forward_weight"), "Forward Phase Weight"), &lighting.phaseForwardWeight, 0.0f, 1.0f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_phase_backward_weight"), "Second Phase Weight"), &lighting.phaseBackwardWeight, 0.0f, 1.0f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_scatter_volume_strength"), "Scattering Volume Strength"), &lighting.scatterVolumeStrength, 0.0f, 1.0f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_scatter_volume_depth"), "Scattering Volume Depth"), &lighting.scatterVolumeDepth, 0.001f, 1.0f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_scatter_volume_height"), "Scattering Volume Height"), &lighting.scatterVolumeHeight, 0.0f, 4.0f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_soft_scattering_strength"), "Soft Scattering Strength"), &lighting.softScatteringStrength, 0.0f, 1.0f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_powder_strength"), "Powder Strength"), &lighting.powderStrength, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_phase_primary_g"), "Primary Phase G"), &lighting.phasePrimaryG, -0.95f, 0.95f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_phase_secondary_g"), "Secondary Phase G"), &lighting.phaseSecondaryG, -0.95f, 0.95f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_phase_primary_intensity"), "Primary Phase Intensity"), &lighting.phasePrimaryIntensity, 0.0f, 4.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_phase_secondary_intensity"), "Secondary Phase Intensity"), &lighting.phaseSecondaryIntensity, 0.0f, 4.0f, "%.3f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("cloud_phase_desc"), "Both layers share a broad lobe and a forward peak. The two intensities are independent response gains, not normalized blend weights. Positive G favors the sun direction; zero is isotropic; negative G favors the opposite direction."));
 		ImGui::SliderFloat(T(TKEY("cloud_ambient_strength"), "Ambient Response Strength"), &lighting.ambientStrength, 0.0f, 8.0f, "%.3f");
+		ImGui::SeparatorText(T(TKEY("cloud_low_scattering"), "Low Cloud Scattering"));
+		ImGui::TextWrapped("%s", T(TKEY("cloud_low_scattering_desc"), "These profile and scattering controls affect low clouds only. Cirrus uses its own sheet lighting with the shared phase, sun extinction and ambient strength above."));
+		ImGui::SliderFloat(T(TKEY("cloud_scatter_volume_strength"), "Scattering Volume Strength"), &lighting.scatterVolumeStrength, 0.0f, 4.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_scatter_volume_depth_power"), "Scattering Volume Transmittance Power"), &lighting.scatterVolumeDepthPower, 0.001f, 1.0f, "%.3f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("cloud_scatter_volume_depth_desc"), "Raises local solar transmission to this power. Smaller values let the multiple-scattering volume remain lit deeper inside clouds; this is not a distance or a phase anisotropy."));
+		ImGui::SliderFloat(T(TKEY("cloud_scatter_volume_height_power"), "Scattering Volume Height Power"), &lighting.scatterVolumeHeightPower, 0.0f, 4.0f, "%.3f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("cloud_scatter_volume_height_desc"), "Raises normalized cloud height to this power. Smaller values spread the scattering volume toward the cloud base; larger values concentrate it near the top."));
+		ImGui::SliderFloat(T(TKEY("cloud_soft_scattering_strength"), "Soft Scattering Strength"), &lighting.softScatteringStrength, 0.0f, 4.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_powder_strength"), "Powder Strength"), &lighting.powderStrength, 0.0f, 1.0f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_ambient_floor"), "Ambient Response Floor"), &lighting.ambientFloor, 0.0f, 1.0f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_ambient_density"), "Ambient Density Response"), &lighting.ambientDensity, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_ambient_profile_power"), "Ambient Profile Power"), &lighting.ambientProfilePower, 0.2f, 8.0f, "%.3f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("cloud_ambient_profile_desc"), "Actual exponent applied to (1 - eroded profile). The default 4.1 suppresses ambient light in dense profiles, with Ambient Response Floor setting the minimum response. Larger values darken dense profiles faster."));
 		ImGui::SliderFloat(T(TKEY("cloud_ambient_base"), "Ambient Base Response"), &lighting.ambientBase, 0.0f, 1.0f, "%.3f");
 	}
 
@@ -1022,6 +1056,16 @@ void PhysicalSky::SettingsDebug()
 			const auto cirrus = cirrusMapManager.GetTextures();
 			DrawDebugCloudTexture(cirrus.weather, "cirrusWeather", T(TKEY("debug_cirrus_weather"), "Active cirrus coverage / type"), debugScale);
 			DrawDebugCloudTexture(cirrus.patterns, "cirrusPatterns", T(TKEY("debug_cirrus_patterns"), "Active cirrus patterns"), debugScale);
+			for (const auto& endpoint : settings.cloudLayer.cirrus.weather.states) {
+				try {
+					const auto state = endpoint.at("value").get<CirrusWeatherState>();
+					if (!state.localMap.empty()) {
+						const auto id = std::format("cirrusLocal{}", state.localMap);
+						DrawDebugCloudTexture(ndfTexManager.Query(state.localMap), id.c_str(), T(TKEY("debug_cirrus_local"), "Cirrus local coverage / type / mask"), debugScale);
+					}
+				} catch (const nlohmann::json::exception&) {
+				}
+			}
 			if (ImGui::TreeNode(T(TKEY("debug_noise_sources"), "Generated and source textures"))) {
 				DrawDebugCloudTexture(cloudNoiseGenerator.Shape(), "generatedShape", T(TKEY("debug_generated_shape"), "Generated cloud shape noise"), debugScale);
 				DrawDebugCloudTexture(cloudNoiseGenerator.Adjustment(), "generatedAdjustment", T(TKEY("debug_generated_adjustment"), "Generated top expansion / warp LUT"), debugScale);

@@ -67,23 +67,23 @@ struct VolumetricCloudData
 	float topExpansion;
 	uint cirrusEnabled;
 	float cirrusAltitude;
-	float cirrusPatternFrequency;
+	float cirrusUvInvSize;
 	float cirrusDensityScale;
 	float cirrusLightingScale;
-	float lightingScale;
+	float lowLightingScale;
 	float sunExtinction;
-	float phaseForwardG;
-	float phaseBackwardG;
-	float phaseForwardWeight;
-	float phaseBackwardWeight;
+	float phasePrimaryG;
+	float phaseSecondaryG;
+	float phasePrimaryIntensity;
+	float phaseSecondaryIntensity;
 	float scatterVolumeStrength;
-	float scatterVolumeDepth;
-	float scatterVolumeHeight;
+	float scatterVolumeDepthPower;
+	float scatterVolumeHeightPower;
 	float softScatteringStrength;
 	float powderStrength;
 	float ambientStrength;
 	float ambientFloor;
-	float ambientDensity;
+	float ambientProfilePower;
 	float ambientBase;
 
 	float2 lowFrameDim;
@@ -593,8 +593,8 @@ struct VolumetricCloudResult
 float CirrusDensity(float2 position, out float profile)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float2 weather = saturate(TexCirrusWeather.SampleLevel(TileableSampler, LowNdfUV(position - info.cirrusWindOffset, info), 0));
-	const float3 patterns = TexCirrusPatterns.SampleLevel(TileableSampler, (position - info.cirrusWindOffset) * info.cirrusPatternFrequency, 0);
+	const float2 weather = saturate(TexCirrusWeather.SampleLevel(TileableSampler, position * (GAME_UNIT_TO_M / 16384.0 * info.cirrusUvInvSize) + 0.5, 0));
+	const float3 patterns = TexCirrusPatterns.SampleLevel(TileableSampler, (position - info.cirrusWindOffset) * (GAME_UNIT_TO_M * 0.0002331 * info.cirrusUvInvSize), 0);
 	const float3 squared = patterns * patterns;
 	profile = lerp(lerp(squared.b, squared.r, saturate(weather.y * 2.0)), squared.g, saturate(weather.y * 2.0 - 1.0));
 	profile = pow(max(profile, 1e-10), 1.9 - weather.x * 1.8) * saturate(weather.x * weather.x * weather.x * 2.0);
@@ -708,7 +708,8 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 	float cirrusDistance = sceneDistance;
 	bool cirrusPending = false;
 	if (info.cirrusEnabled != 0u) {
-		const float2 shell = IntersectSpherePair(planetEye, direction, info.planetRadius + info.cirrusAltitude);
+		const float3 cirrusEye = cloudEye + float3(0.0, 0.0, info.cloudCurvatureRadius);
+		const float2 shell = IntersectSpherePair(cirrusEye, direction, info.cloudCurvatureRadius + info.cirrusAltitude);
 		cirrusDistance = shell.x >= 0.0 ? shell.x : shell.y;
 		if (cirrusDistance >= 0.0)
 			result.cloud_depth = bounds.length > 0.0 || hasBoundaryDepth ? min(result.cloud_depth, cirrusDistance) : cirrusDistance;

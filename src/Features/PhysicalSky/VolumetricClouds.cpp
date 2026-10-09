@@ -162,7 +162,12 @@ float LowCloudSettings::GetShadowBottomKm(float bottomKm, float rangeKm, uint32_
 
 float CirrusSettings::GetAltitudeKm() const
 {
-	return (std::isfinite(altitude) ? std::clamp(altitude, 1.f, 24000.f) : 2048.f) * 0.001f;
+	return (std::isfinite(altitude) ? std::clamp(altitude, 1.f, 24000.f) : 8000.f) * 0.001f;
+}
+
+float CirrusSettings::GetUvSize() const
+{
+	return std::isfinite(uvSize) ? std::clamp(uvSize, 0.1f, 32.f) : 1.f;
 }
 
 void PhysicalSky::LoadCloudTextures()
@@ -690,8 +695,6 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	const auto localAltitude = localNdfManager.GetAltitude();
 	const float lowCloudTraceBottomKm = localAltitude.y > 0.f ? std::min(lowCloudBaseKm, localAltitude.x * 0.001f) : lowCloudBaseKm;
 	const float lowCloudTraceTopKm = localAltitude.y > 0.f ? std::max(lowCloudTopKm, (localAltitude.x + localAltitude.y) * 0.001f) : lowCloudTopKm;
-	const float traceBottomKm = cirrus.enabled ? std::min(lowCloudTraceBottomKm, cirrus.GetAltitudeKm()) : lowCloudTraceBottomKm;
-	const float traceTopKm = cirrus.enabled ? std::max(lowCloudTraceTopKm, cirrus.GetAltitudeKm()) : lowCloudTraceTopKm;
 
 	const uint32_t lowW = (renderW + 3u) / 4u;
 	const uint32_t lowH = (renderH + 3u) / 4u;
@@ -716,8 +719,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.bottomZ = cbData.zBottom,
 		.planetRadius = cbData.rPlanet,
 		.activeFrameDim = { static_cast<float>(renderW), static_cast<float>(renderH) },
-		.lowestCloudAltitude = KilometersToGameUnits(traceBottomKm),
-		.highestCloudAltitude = KilometersToGameUnits(traceTopKm),
+		.lowestCloudAltitude = KilometersToGameUnits(lowCloudTraceBottomKm),
+		.highestCloudAltitude = KilometersToGameUnits(lowCloudTraceTopKm),
 		.lowCloudBaseAltitude = KilometersToGameUnits(lowCloudBaseKm),
 		.lowCloudTopAltitude = KilometersToGameUnits(lowCloudTopKm),
 		.lowCloudTraceTopAltitude = KilometersToGameUnits(lowCloudTraceTopKm),
@@ -731,23 +734,23 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.topExpansion = std::clamp(low.topExpansionScale, 0.f, 1.f),
 		.cirrusEnabled = renderCirrus ? 1u : 0u,
 		.cirrusAltitude = KilometersToGameUnits(cirrus.GetAltitudeKm()),
-		.cirrusPatternFrequency = Util::Units::GAME_UNIT_TO_M / std::clamp(cirrus.patternScale, 100.f, 64000.f),
+		.cirrusUvInvSize = 1.f / cirrus.GetUvSize(),
 		.cirrusDensityScale = std::max(cirrus.densityScale, 0.f),
-		.cirrusLightingScale = std::max(cirrus.lightingScale, 0.f),
-		.lightingScale = std::max(lighting.lightingScale, 0.f),
+		.cirrusLightingScale = std::max(lighting.brightness, 0.f) * std::max(lighting.cirrusBrightness, 0.f) * 0.5f,
+		.lowLightingScale = std::max(lighting.brightness, 0.f) * std::max(lighting.lowBrightness, 0.f),
 		.sunExtinction = std::max(lighting.sunExtinction, 0.f),
-		.phaseForwardG = std::clamp(lighting.phaseForwardG, 0.f, 0.95f),
-		.phaseBackwardG = std::clamp(lighting.phaseBackwardG, -0.95f, 0.95f),
-		.phaseForwardWeight = std::max(lighting.phaseForwardWeight, 0.f),
-		.phaseBackwardWeight = std::max(lighting.phaseBackwardWeight, 0.f),
+		.phasePrimaryG = std::clamp(lighting.phasePrimaryG, -0.95f, 0.95f),
+		.phaseSecondaryG = std::clamp(lighting.phaseSecondaryG, -0.95f, 0.95f),
+		.phasePrimaryIntensity = std::max(lighting.phasePrimaryIntensity, 0.f),
+		.phaseSecondaryIntensity = std::max(lighting.phaseSecondaryIntensity, 0.f),
 		.scatterVolumeStrength = std::max(lighting.scatterVolumeStrength, 0.f),
-		.scatterVolumeDepth = std::clamp(lighting.scatterVolumeDepth, 0.001f, 1.f),
-		.scatterVolumeHeight = std::clamp(lighting.scatterVolumeHeight, 0.f, 4.f),
+		.scatterVolumeDepthPower = std::clamp(lighting.scatterVolumeDepthPower, 0.001f, 1.f),
+		.scatterVolumeHeightPower = std::clamp(lighting.scatterVolumeHeightPower, 0.f, 4.f),
 		.softScatteringStrength = std::max(lighting.softScatteringStrength, 0.f),
 		.powderStrength = std::clamp(lighting.powderStrength, 0.f, 1.f),
 		.ambientStrength = std::max(lighting.ambientStrength, 0.f),
 		.ambientFloor = std::clamp(lighting.ambientFloor, 0.f, 1.f),
-		.ambientDensity = std::clamp(lighting.ambientDensity, 0.f, 1.f),
+		.ambientProfilePower = std::clamp(lighting.ambientProfilePower, 0.2f, 8.f),
 		.ambientBase = std::clamp(lighting.ambientBase, 0.f, 1.f),
 		.lowFrameDim = { static_cast<float>(lowW), static_cast<float>(lowH) },
 		.historyValid = volMainHistoryValid ? 1u : 0u,

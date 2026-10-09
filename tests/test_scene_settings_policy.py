@@ -202,6 +202,11 @@ class SceneSettingsPolicyTests(unittest.TestCase):
             ("cloudLayer/low", "topExpansionScale"), ("cloudLayer/low", "curvatureRadius"),
             ("cloudLayer/low", "ndfAltitudeScale"),
             ("cloudLayer/cirrus", "densityScale"), ("cloudLayer/cirrus", "altitude"),
+            ("cloudLayer/lighting", "brightness"), ("cloudLayer/lighting", "lowBrightness"),
+            ("cloudLayer/lighting", "cirrusBrightness"), ("cloudLayer/lighting", "sunExtinction"),
+            ("cloudLayer/lighting", "phasePrimaryG"), ("cloudLayer/lighting", "phaseSecondaryG"),
+            ("cloudLayer/lighting", "phasePrimaryIntensity"), ("cloudLayer/lighting", "phaseSecondaryIntensity"),
+            ("cloudLayer/lighting", "ambientStrength"), ("cloudLayer/lighting", "softScatteringStrength"),
             ("cloudLayer/wind/lowVelocity", "x"), ("cloudLayer/wind/lowVelocity", "y"),
             ("cloudLayer/wind/highVelocity", "x"), ("cloudLayer/wind/highVelocity", "y"),
             ("cloudLayer/wind", "development"), ("cloudLayer/wind", "disturbance"),
@@ -231,7 +236,7 @@ class SceneSettingsPolicyTests(unittest.TestCase):
                 self.assertTrue(any(is_prefix(prefix, address) for prefix in location))
                 self.assertTrue(any(is_prefix(prefix, address) for prefix in time))
 
-    def test_physical_sky_cloud_optics_resources_and_quality_stay_global(self):
+    def test_physical_sky_resources_and_quality_stay_global(self):
         global_paths = [
             ("enableAllExteriorCells",), ("forceEnableAllInteriorCells",),
             ("fallbackZBottom",), ("planetRadius",), ("atmosphereRadius",),
@@ -242,7 +247,6 @@ class SceneSettingsPolicyTests(unittest.TestCase):
             ("aerosolType",), ("aerosolLoading",), ("aerosolHumidity",),
             ("cloudRelightMix",), ("cloudOriginalMix",),
             ("silverLiningMix",), ("silverLiningSpread",), ("cloudShadowRemapRange",),
-            ("cloudLayer", "lighting"), ("cloudLayer", "cirrus", "lightingScale"),
             ("cloudMap", "type"), ("cloudMap", "texture"),
             ("cloudMap", "procedural", "noise"), ("cloudMap", "procedural", "local"),
             ("cloudMap", "procedural", "localMaskPath"),

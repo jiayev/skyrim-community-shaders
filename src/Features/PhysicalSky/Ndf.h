@@ -233,39 +233,63 @@ struct LowCloudSettings
 	float GetShadowBottomKm(float bottomKm, float rangeKm, uint32_t resolution) const;
 };
 
+struct CirrusNoiseLayer
+{
+	uint32_t noise = 2;
+	float frequency = 1.f;
+	float2 offset = {};
+	float4 range = { -1.f, 1.f, 0.f, 1.f };
+};
+static_assert(sizeof(CirrusNoiseLayer) == 32);
+
+struct CirrusWeatherState
+{
+	std::array<CirrusNoiseLayer, 2> layers = { { { .noise = 1, .range = { -0.7f, 0.7f, 0.f, 0.6f } }, {} } };
+	std::string localMap;
+	float localWeight = 0.f;
+	float localWindScale = 1.f;
+	uint32_t localBlendMode = 0;
+};
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	CirrusNoiseLayer,
+	noise, frequency, offset, range)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	CirrusWeatherState,
+	layers, localMap, localWeight, localWindScale, localBlendMode)
+
 struct CirrusSettings
 {
+	CirrusSettings();
 	bool enabled = true;
-	float altitude = 2048.f;
-	float patternScale = 1.f / 0.0002331f;
+	float altitude = 8000.f;
+	float uvSize = 1.f;
 	float densityScale = 1.f;
-	float lightingScale = 0.5f;
-	std::string weatherPath;
-	std::string patternsPath;
-	std::array<NdfNoiseLayer, 2> weather = { { { .noise = 1, .range = { -0.7f, 0.7f, 0.f, 0.6f } }, { .noise = 2 } } };
-	uint32_t patternSeed = 1337;
-	float patternWarp = 0.15f;
-	float patternDetail = 0.35f;
+	SceneBlend weather;
 
 	float GetAltitudeKm() const;
+	float GetUvSize() const;
 };
 
 struct CloudLightingSettings
 {
-	float lightingScale = 0.36f;
+	float brightness = 1.f;
+	float lowBrightness = 1.f;
+	float cirrusBrightness = 1.f;
 	float sunExtinction = 1.f;
-	float phaseForwardG = 0.2f;
-	float phaseBackwardG = 0.9f;
-	float phaseForwardWeight = 1.f;
-	float phaseBackwardWeight = 0.25f;
+	float phasePrimaryG = 0.2f;
+	float phaseSecondaryG = 0.9f;
+	float phasePrimaryIntensity = 0.142f;
+	float phaseSecondaryIntensity = 0.125f;
 	float scatterVolumeStrength = 0.5f;
-	float scatterVolumeDepth = 0.04f;
-	float scatterVolumeHeight = 0.29f;
+	float scatterVolumeDepthPower = 0.05f;
+	float scatterVolumeHeightPower = 0.5f;
 	float softScatteringStrength = 1.f;
 	float powderStrength = 0.5f;
-	float ambientStrength = 3.6f;
-	float ambientFloor = 0.23f;
-	float ambientDensity = 0.5f;
+	float ambientStrength = 1.f;
+	float ambientFloor = 0.1f;
+	float ambientProfilePower = 4.1f;
 	float ambientBase = 1.f;
 };
 
@@ -302,31 +326,27 @@ struct CirrusMapManager
 	static void DrawSettings(CirrusSettings& settings, TextureManager& textures);
 	bool Update(const CirrusSettings& settings, TextureManager& textures, const NdfManager& ndf);
 	CirrusTextureSet GetTextures() const;
-	Texture2D* GetWeatherTexture() { return texWeather.get(); }
-	Texture2D* GetPatternsTexture() { return texPatterns.get(); }
 
 private:
 	static constexpr uint32_t kDimension = 512;
 	struct GenerationParameters
 	{
-		std::array<NdfNoiseLayer, 2> weather;
-		uint32_t seed;
-		float warp;
-		float detail;
-		float padding = 0.f;
+		std::array<CirrusNoiseLayer, 2> weather;
 		float2 windOffset = {};
-		float2 padding1 = {};
+		float localWeight = 0.f;
+		float localWindScale = 1.f;
+		uint32_t localBlendMode = 0;
+		float weight = 1.f;
+		uint32_t hasPrevious = 0;
+		float padding = 0.f;
 	};
-	static_assert(sizeof(GenerationParameters) == 128);
-	eastl::unique_ptr<Texture2D> texWeather;
-	eastl::unique_ptr<Texture2D> texPatterns;
+	static_assert(sizeof(GenerationParameters) == 96);
+	std::array<eastl::unique_ptr<Texture2D>, 2> texWeather;
 	eastl::unique_ptr<ConstantBuffer> generationCb;
 	winrt::com_ptr<ID3D11ComputeShader> weatherProgram;
-	winrt::com_ptr<ID3D11ComputeShader> patternsProgram;
 	winrt::com_ptr<ID3D11SamplerState> sampler;
-	std::array<std::string, 2> sourcePaths = {};
-	GenerationParameters generatedData = {};
-	std::array<ID3D11ShaderResourceView*, 6> generatedSources = {};
+	std::string generatedKey;
+	float2 generatedWind = {};
 	uint64_t generatedRevision = 0;
 	uint64_t noiseRevision = 0;
 	bool generatedValid = false;

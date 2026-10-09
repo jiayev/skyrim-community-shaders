@@ -49,8 +49,8 @@ float CloudLocalSunOcclusion(float3 pos, float3 viewDir, float height, float vie
 float CloudScatteringPhase(float cosine)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	return Phase::HG(cosine, info.phaseForwardG) * info.phaseForwardWeight +
-	       Phase::HG(cosine, info.phaseBackwardG) * info.phaseBackwardWeight;
+	return Phase::HG(cosine, info.phasePrimaryG) * info.phasePrimaryIntensity +
+	       Phase::HG(cosine, info.phaseSecondaryG) * info.phaseSecondaryIntensity;
 }
 
 struct CloudAmbient
@@ -111,9 +111,9 @@ float2 CloudLightResponse(float cosine, float height, float profile, float light
 	const float ambientHeight = pow(lerp(info.ambientBase, 1.0, height), pow(product, 0.3) * 1.8 + 0.2);
 	float ambient = ambientHeight * 1.68 * (1.0 - sqrt(product));
 	ambient *= lerp(pow(height, 0.25), 1.0, broadTransmission);
-	ambient *= pow(saturate(1.0 - erodedProfile), info.ambientDensity * 7.8 + 0.2);
+	ambient *= pow(saturate(1.0 - erodedProfile), info.ambientProfilePower);
 	ambient = max(info.ambientFloor, ambient) * info.ambientStrength;
-	const float volume = info.scatterVolumeStrength * 8.0 * pow(max(height, 1e-8), info.scatterVolumeHeight) * (1.0 - saturate((cosine - 0.5) * 2.0408163) * 0.75) * saturate(potential * 6.666667 - 0.11111112) * pow(product, 0.25) * exp(-opticalDepth * info.scatterVolumeDepth);
+	const float volume = info.scatterVolumeStrength * 8.0 * pow(max(height, 1e-8), info.scatterVolumeHeightPower) * (1.0 - saturate((cosine - 0.5) * 2.0408163) * 0.75) * saturate(potential * 6.666667 - 0.11111112) * pow(product, 0.25) * exp(-opticalDepth * info.scatterVolumeDepthPower);
 	const float soft = info.softScatteringStrength * 42.375 * (potential + lightDensity) * ((pow(softTransmission, 8.0 - productPower * 7.0) + pow(softTransmission, 16.0 - productPower * 14.0)) * 0.3 + pow(softTransmission, 32.0 - productPower * 28.0)) * lerp(bottomSquared, 1.0, saturate((cosine - 0.25) * 4.0));
 	const float powder = saturate((saturate((powderDensity - powderOffset + saturate((cosine - 0.3) * 1.4306152) * (1.0 - powderDensity)) / (1.0 - powderOffset)) + 0.333) * 0.7501876);
 	return float2((volume + soft) * 1.5 * lerp(1.0, powder, info.powderStrength), ambient);
@@ -129,7 +129,7 @@ float3 CloudLighting(float3 pos, float3 viewDir, float height, float profile, fl
 	const float3 planetPos = pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
 	const float3 sunlight = SampleAtmosphereLightTr(TexTransmittance, TransmittanceSampler, planetPos, info.dirlightDir) * GetCloudDirectionalLightColor();
 	const float3 ambientRadiance = CloudAmbientRadiance(planetPos, ambient);
-	return info.lightingScale * (response.x * phase * sunlight + response.y * ambientRadiance);
+	return info.lowLightingScale * (response.x * phase * sunlight + response.y * ambientRadiance);
 }
 
 #endif
