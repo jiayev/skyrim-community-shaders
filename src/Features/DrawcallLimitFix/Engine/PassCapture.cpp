@@ -2,7 +2,9 @@
 
 #include "Features/DrawcallLimitFix/Diagnostics/OpenDefectProbes.h"
 
+#include "FocusViews.h"
 #include "LocalLightCull.h"
+#include "SunViews.h"
 
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
@@ -235,6 +237,11 @@ namespace DCLF
 		std::atomic_store(&shadowRenderers, std::move(a_renderers));
 	}
 
+	void PassCapture::SetFocusBatchRenderers(std::shared_ptr<const ShadowRendererMap> a_renderers)
+	{
+		std::atomic_store(&focusRenderers, std::move(a_renderers));
+	}
+
 	bool PassCapture::ShadowModeOfBatch(const RE::BSBatchRenderer* a_batch, std::uint32_t& a_mode) const
 	{
 		const auto renderers = std::atomic_load(&shadowRenderers);
@@ -269,9 +276,14 @@ namespace DCLF
 	{
 		if (!a_pass || !a_pass->geometry)
 			return false;
-		// A shadow view's renderers: the set's casters. A pass into any other renderer (reflections, cubemaps, the focus shadows)
-		// is never withheld; the main camera's are WithholdMain's.
+		// A shadow view's renderers (the focus views' among them, T3c): the set's casters. A pass into any other renderer
+		// (reflections, cubemaps) is never withheld; the main camera's are WithholdMain's.
 		(void)a_fading;
+		// The parity's membership check: what the engine registers into a covered focus view against DCLF's rule (its target's fade root).
+		if (SunViews::ParityEnabled())
+			if (const auto focus = std::atomic_load(&focusRenderers); focus && !focus->empty())
+				if (const auto it = focus->find(a_batch); it != focus->end())
+					FocusViews::Get().NoteRegistration(it->second, a_pass->geometry);
 		std::uint32_t mode = 0;
 		std::uint8_t phase = 0;
 		if (const auto set = CastersForBatch(a_batch, &phase); set && ShadowModeOfBatch(a_batch, mode) && (set->PhasesOf(a_pass->geometry) & phase)) {

@@ -148,6 +148,8 @@ namespace DCLF
 		/** @brief Which batch renderers belong to shadow views, each with its view's render mode index. */
 		using ShadowRendererMap = ankerl::unordered_dense::map<const RE::BSBatchRenderer*, std::uint8_t>;
 		void SetShadowBatchRenderers(std::shared_ptr<const ShadowRendererMap> a_renderers);
+		/** @brief The covered focus views' renderers, by focus descriptor: the parity's membership check (FocusViews::NoteRegistration). */
+		void SetFocusBatchRenderers(std::shared_ptr<const ShadowRendererMap> a_renderers);
 		/** @brief Whether a_batch is a shadow view's batch renderer this frame, and its mode index. */
 		bool ShadowModeOfBatch(const RE::BSBatchRenderer* a_batch, std::uint32_t& a_mode) const;
 		/**
@@ -210,6 +212,7 @@ namespace DCLF
 		// The last drain (valid until the next frame's registrations).
 		std::span<const Entry> lastDrain;
 		std::shared_ptr<const ShadowRendererMap> shadowRenderers;
+		std::shared_ptr<const ShadowRendererMap> focusRenderers;
 		std::array<std::atomic<std::uint32_t>, kShadowModes> shadowWithheld{};
 		std::atomic<std::uint32_t> volumetricWithheld{ 0 };
 		std::atomic<std::uint32_t> directWithheld{ 0 };

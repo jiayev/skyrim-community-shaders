@@ -24,6 +24,9 @@ namespace DCLF
 		constexpr std::uintptr_t kLightCount = 0x338c900;       // the kept lights, the sun among them (the function's last store)
 		constexpr std::uintptr_t kSlotCounter = 0x338c904;      // the next shadowLightsAccum slot; the next mask index at +4
 		constexpr std::uintptr_t kLodFadeCutoff = 0x33dcfac;    // UpdateCamera's lodFade cutoff
+		constexpr std::uintptr_t kFocusShadows = 0x2032fd0;     // the focus shadows' setting byte
+		constexpr std::uintptr_t kFocusTargets = 0x332a498;     // the focus targets' count
+		constexpr std::uintptr_t kFocusHost = 0x33dcfb8;        // last frame's focus host (non-sun)
 		constexpr std::size_t kPortalEntry = 0x30190;           // a culling process's portal-graph entry
 		constexpr std::size_t kShadowMapCount = 0x140;          // BSShadowLight: its descriptors in use
 		constexpr std::uint32_t kMaxLights = 4;
@@ -214,6 +217,9 @@ namespace DCLF
 			return;
 		auto& runtime = node->GetRuntimeData();
 		std::uint32_t kept = 0, slot = 0, mask = 0;
+		// The focus shadows (T3c): on when the setting is and there is a target; the host found so far (0x14338c912).
+		const bool focusOn = Global<std::uint8_t>(kFocusShadows) != 0 && Global<std::uint32_t>(kFocusTargets) != 0;
+		bool focusFound = false;
 		if (!Global<std::uint8_t>(kSunOff) && runtime.sunShadowDirLight) {
 			frame.sun = runtime.sunShadowDirLight;
 			frame.sunSlots = At<std::uint32_t>(frame.sun, kShadowMapCount);
@@ -221,7 +227,24 @@ namespace DCLF
 			kept = 1;
 			slot = frame.sunSlots;
 			mask = 1;
+			// CalculateAndDrawShadowCasterLights sets the sun's flag to the setting; CalculateActiveShadowCasterLights makes it the host.
+			focusFlags[frame.sun] = focusOn;
+			if (focusOn) {
+				focusFound = true;
+				lastFocusHost = nullptr;
+			}
 		}
+		// No host yet: last frame's keeps it while it is a candidate - each candidate's flag is whether it is that one, and the
+		// running verdict is the last candidate's (the engine's loop, as it is).
+		if (focusOn && !focusFound && !runtime.activeShadowLights.empty()) {
+			for (const auto& pointer : runtime.activeShadowLights) {
+				if (const auto* light = pointer.get()) {
+					focusFound = light == lastFocusHost && !focusFound;
+					focusFlags[light] = focusFound;
+				}
+			}
+		}
+		lastFocusHost = nullptr;
 		SunViews::Planes cameraPlanes;
 		SunViews::FrustumPlanes(const_cast<RE::NiCamera*>(camera)->GetRuntimeData2().viewFrustum, camera->world, cameraPlanes);
 		for (const auto& pointer : runtime.activeShadowLights) {
@@ -232,6 +255,16 @@ namespace DCLF
 			if (room == rooms.end() || !room->second || !Visible(*light, *camera, cameraPlanes))
 				continue;
 			frame.locals.push_back({ light, slot, mask });
+			// The focus host: a light with the flag, or the first that can host (vfunc 0x20: directional, spot) while none has.
+			{
+				auto& flag = focusFlags[light];
+				auto* candidate = const_cast<RE::BSShadowLight*>(light);
+				if (flag || (!focusFound && (candidate->GetIsDirectionalLight() || candidate->GetIsFrustumLight()))) {
+					flag = true;
+					focusFound = true;
+					lastFocusHost = light;
+				}
+			}
 			// FUN_1414a3fb0 writes the light into one slot; its Accumulate takes one per hemisphere (BSShadowParabolicLight with two
 			// shadow maps: 2), one for a spot light, one per cascade for a directional one. The slots past the first keep what they
 			// held (not this frame's: a gap here).
@@ -243,6 +276,23 @@ namespace DCLF
 			slot += taken;
 			++mask;
 			++kept;
+		}
+		// The drawn lights' focus flags: their Render draws focus views 0..count-1.
+		frame.focusCount = std::min<std::uint32_t>(Global<std::uint32_t>(kFocusTargets), 4u);
+		if (frame.sun && focusFlags[frame.sun])
+			frame.focusHosts.push_back(frame.sun);
+		for (const auto& selected : frame.locals)
+			if (selected.light != frame.sun && focusFlags[selected.light])
+				frame.focusHosts.push_back(selected.light);
+		// Lights no longer candidates leave the map (a freed light's address may be reused).
+		if (focusFlags.size() > 64) {
+			std::unordered_map<const RE::BSShadowLight*, bool> live;
+			for (const auto& pointer : runtime.activeShadowLights)
+				if (const auto it = focusFlags.find(pointer.get()); it != focusFlags.end())
+					live.insert(*it);
+			if (frame.sun)
+				live.insert_or_assign(frame.sun, focusFlags[frame.sun]);
+			focusFlags = std::move(live);
 		}
 		frame.valid = true;
 		// Their views, from the cameras their UpdateCamera has set up (T3a).
@@ -299,6 +349,31 @@ namespace DCLF
 				}
 			}
 		}
+		// The focus flags of the drawn lights, and last frame's host as the engine left it.
+		{
+			p.focusHosts += frame.focusHosts.size();
+			const auto checkFocus = [&](const RE::BSShadowLight* a_light) {
+				const bool engine = const_cast<RE::BSShadowLight*>(a_light)->GetRuntimeData().drawFocusShadows;
+				const auto it = focusFlags.find(a_light);
+				const bool ours = it != focusFlags.end() && it->second;
+				if (engine != ours) {
+					++p.focusDiffer;
+					differ = true;
+					if (detail.empty())
+						detail = fmt::format("focus flag {} for {}, the engine's {}", ours, static_cast<const void*>(a_light), engine);
+				}
+			};
+			if (frame.sun)
+				checkFocus(frame.sun);
+			for (const auto& selected : frame.locals)
+				checkFocus(selected.light);
+			if (Global<const void*>(kFocusHost) != lastFocusHost) {
+				++p.focusDiffer;
+				differ = true;
+				if (detail.empty())
+					detail = fmt::format("focus host {}, the engine's {}", static_cast<const void*>(lastFocusHost), Global<const void*>(kFocusHost));
+			}
+		}
 		for (const auto& selected : frame.locals) {
 			const std::uint32_t engineMask = const_cast<RE::BSShadowLight*>(selected.light)->GetRuntimeData().maskIndex;
 			if (engineMask != selected.maskIndex) {
@@ -322,9 +397,9 @@ namespace DCLF
 	void LightSelection::Report()
 	{
 		auto& p = parity;
-		logger::info("[DCLF] light selection (T3b: DCLF's choice of shadow lights against CalculateActiveShadowCasterLights'): {} frames, {} local lights kept; {} frames "
-					 "differ ({} slots, {} mask indices, {} counts){}{}",
-			p.frames, p.kept, p.framesDiffer, p.slotsDiffer, p.masksDiffer, p.countsDiffer, p.framesDiffer ? " <- LIGHT SELECTION" : " <- OK",
+		logger::info("[DCLF] light selection (T3b, T3c: DCLF's choice of shadow lights and focus hosts against CalculateActiveShadowCasterLights'): {} frames, {} local "
+					 "lights kept, {} focus hosts; {} frames differ ({} slots, {} mask indices, {} counts, {} focus){}{}",
+			p.frames, p.kept, p.focusHosts, p.framesDiffer, p.slotsDiffer, p.masksDiffer, p.countsDiffer, p.focusDiffer, p.framesDiffer ? " <- LIGHT SELECTION" : " <- OK",
 			p.first.empty() ? "" : "; first: " + p.first);
 		p = {};
 	}

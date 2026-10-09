@@ -219,6 +219,8 @@ static uint BucketTableOffset;
 static uint BucketMapOffset;
 // The view types this dispatch draws (BuildDrawsLatch::viewBits, kView* in GpuLayouts.h); 0: every input.
 static uint ViewBits;
+// A focus view (BuildDrawsLatch::focusRoot): its target's fade root slot + 1, which the input's root word must name. 0: no test.
+static uint FocusRoot;
 
 // The placement row's rows the culling reads (LightingConstants.h, BindlessPlacement): the world bound, the sun entry's sphere,
 // the fade node's centre.
@@ -276,6 +278,7 @@ void LoadLatch()
 	const uint4 rows = latch.Load4(LatchOffset + 272);
 	const bool ring = payload.x != 0;
 	ViewBits = payload.w;
+	FocusRoot = latch.Load(LatchOffset + 288);
 	InputsBuffer = ring ? payload.y : InputsIndex;
 	GeometriesBuffer = ring ? payload.z : GeometriesIndex;
 	MaterialRowsLo = ring ? rows.x : MaterialRowsAddressLo;
@@ -662,6 +665,9 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	// The view types this dispatch draws (BuildDrawsLatch::viewBits) against what the object takes part in (DrawInput's view mask):
 	// the scene is one, a view is a mask. Before anything else of the input is read.
 	if (ViewBits != 0 && (inputs.Load(inputOffset + 16) & ViewBits) == 0)
+		return;
+	// A focus view's casters: its target's members (the engine registers the target's subtree whole).
+	if (FocusRoot != 0 && inputs.Load(inputOffset + 48) != FocusRoot - 1)
 		return;
 	const uint objectIndex = inputs.Load(inputOffset + 32);
 	// The view's key and rows' words (KeyWord): a shadow view's are the view words' key of its family and the shadow row.
