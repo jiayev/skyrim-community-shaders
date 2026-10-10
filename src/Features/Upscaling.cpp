@@ -536,6 +536,12 @@ void Upscaling::DataLoaded()
 	// The game defaults this to a non-zero value
 	static auto fDRClampOffset = RE::GetINISetting("fDRClampOffset:Display");
 	fDRClampOffset->data.f = 0.0f;
+
+	// unk88 keeps the dynamic-resolution viewport, which rounds the 16x1 lens flare visibility target to nothing
+	const auto& effects = RE::ImageSpaceManager::GetSingleton()->effects;
+	const auto visibilityIndex = RE::ImageSpaceManager::GetCurrentIndex(RE::ImageSpaceManager::ISLensFlareVisibility);
+	if (visibilityIndex < effects.size() && effects[visibilityIndex])
+		effects[visibilityIndex]->unk88 = false;
 }
 
 void Upscaling::Load()
@@ -1143,7 +1149,9 @@ void Upscaling::FrameLimiter()
 		HANDLE waitableObject = GetFrameLatencyWaitableObject();
 
 		// Wait for the next frame presentation slot
-		WaitForSingleObject(waitableObject, INFINITE);
+		// (bounded so a lost swapchain cannot block the render thread forever)
+		static constexpr DWORD kFrameLatencyWaitTimeoutMs = 1000;
+		WaitForSingleObject(waitableObject, kFrameLatencyWaitTimeoutMs);
 
 		if (settings.frameLimitMode) {
 			static constexpr int64_t kNanosecondsPerSecond = 1000000000LL;

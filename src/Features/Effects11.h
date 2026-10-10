@@ -73,7 +73,76 @@ public:
 
 		float VolumetricRaysDesaturation;
 		float3 VolumetricRaysColorFilter;
+
+		uint EnableCloudsScattering;
+		float SkyScatteringIntensity;
+		float SkyScatteringShadowAmount;
+		float SkyScatteringAmount;
+
+		float3 SkyScatteringColor;
+		float SkyScatteringDustDarkening;
+
+		float3 SkyScatteringDustTint;
+		float SkyScatteringDustVolume;
+
+		float3 SkyScatteringSunDirection;
+		float SkyScatteringSunVisibility;
+
+		float SkyScatteringHorizonRange;
+		float SkyScatteringAtmosphereThickness;
+		float SkyScatteringAirGlowIntensity;
+		float SkyScatteringAirGlowRange;
+
+		float SkyScatteringSunGlowIntensity;
+		float SkyScatteringSunGlowRange;
+		float SkyScatteringMoonGlowAmount;
+		float SkyScatteringMoonGlowRange;
+
+		float SkyScatteringSunIntensity;
+		float CloudsLightingSunIntensity;
+		float CloudsLightingMoonIntensity;
+		uint EnableCloudsLightingFromMoon;
+
+		uint CalculateCloudsEdgeFromScattering;
+		float CloudsLightingDesaturation;
+		float CloudsLightingForwardScattering;
+		float CloudsLightingDensity;
+
+		float3 CloudsColorFilter;
+		float CloudsIntensity;
+
+		float CloudsVertexAlphaBoost;
+		float CloudsEdgeClamp;
+		float CloudsEdgeFadePower;
+		float SunBillboardTan;
+
+		float MasserBillboardTan;
+		float SecundaBillboardTan;
+		float2 SkyScatteringPad0;
+
+		uint EnableWater;
+		float WaterWavesAmplitude;
+		float WaterMuddiness;
+		float WaterSunLightingMultiplier;
+
+		float WaterSunSpecularMultiplier;
+		float WaterFresnelMin;
+		float WaterFresnelMax;
+		float WaterFresnelMultiplier;
+
+		float WaterReflectionAmount;
+		float WaterPad0;
+		float WaterPad1;
+		float WaterPad2;
 	};
+	static_assert(sizeof(PerFrame) % 16 == 0);
+	static_assert(offsetof(PerFrame, EnableCloudsScattering) % 16 == 0);
+	static_assert(offsetof(PerFrame, SkyScatteringColor) % 16 == 0);
+	static_assert(offsetof(PerFrame, SkyScatteringDustTint) % 16 == 0);
+	static_assert(offsetof(PerFrame, SkyScatteringSunDirection) % 16 == 0);
+	static_assert(offsetof(PerFrame, SkyScatteringSunIntensity) % 16 == 0);
+	static_assert(offsetof(PerFrame, CloudsColorFilter) % 16 == 0);
+	static_assert(offsetof(PerFrame, MasserBillboardTan) % 16 == 0);
 
 	bool enableEffect = false;
 
@@ -94,7 +163,15 @@ public:
 	std::string raindropStatus;
 	void LoadRaindropTexture();
 
+	/** @brief Sun color after the preset's sun desaturation and filter, normalized to a peak of 1; tints the sky scattering. */
+	float3 scatteringSunColor = { 1.0f, 1.0f, 1.0f };
+	/** @brief Last sun direction used for sky scattering; held while the sun disc is hidden above the horizon. */
+	float3 scatteringSunDirection = { 0.0f, 0.0f, 1.0f };
+	bool hasScatteringSunDirection = false;
+
 	PerFrame GetCommonBufferData();
+	/** @brief Fills the [SKYSCATTERING] and cloud lighting fields of the per-frame buffer. */
+	void UpdateSkyScattering(PerFrame& a_data);
 
 	virtual void DrawSettings() override;
 	virtual void SetupResources() override;
@@ -123,11 +200,11 @@ public:
 	/** @brief True when the effect is on, the raindrop texture loaded, and RAIN "Enable" is set. */
 	bool IsRainEnabled();
 	bool HandleTonemapRender(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output);
-	/** @brief True when the effect chain replaced ISHDR this frame, leaving an SDR scene for HDR Display to expand. */
+	/** @brief True when the effect chain replaced ISHDR for the frame being presented, leaving an SDR scene for HDR Display to expand. */
 	bool ReplacedTonemapperThisFrame() const;
 
 private:
-	uint tonemapReplacedFrame = UINT32_MAX;  ///< frameCount when the effect chain last wrote the tonemap output
+	uint tonemapReplacedFrame = UINT32_MAX;  ///< frameCount at which the effect chain's last tonemap output gets presented
 
 	/** @brief Point light settings, resolved once per frame in CheckCommonData since OverridePointLightColor runs per light. */
 	struct PointLightingParams

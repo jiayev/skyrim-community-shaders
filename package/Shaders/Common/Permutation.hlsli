@@ -77,6 +77,8 @@ namespace Permutation
 		static const uint IsSun = (1 << 4);
 		static const uint SuppressExternalEmittance = (1 << 5);
 		static const uint AdditiveLighting = (1 << 6);
+		// 7 and 8 are reserved for the night sky flags
+		static const uint NoSkyScattering = (1 << 9);
 	}
 
 	namespace ExtraFeatureFlags

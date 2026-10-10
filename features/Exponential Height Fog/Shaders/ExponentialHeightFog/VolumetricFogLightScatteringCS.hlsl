@@ -18,7 +18,6 @@ RWTexture3D<float4> LightScattering : register(u0);
 #endif
 #if defined(LIGHT_LIMIT_FIX)
 #	include "LightLimitFix/LightLimitFix.hlsli"
-#	include "InverseSquareLighting/InverseSquareLighting.hlsli"
 #endif
 #if defined(PHYSICAL_SKY)
 #	include "PhysicalSky/Common.hlsli"
@@ -262,7 +261,7 @@ float ComputeLocalLightAttenuation(float distanceSqr, float cellRadius, LightLim
 		distance = sqrt(max(distanceSqr, cellRadius * cellRadius));
 	}
 
-	return InverseSquareLighting::GetAttenuation(distance, light);
+	return LightLimitFix::GetAttenuation(distance, light);
 }
 
 float3 AccumulateLocalLightScattering(
@@ -359,6 +358,7 @@ float4 ComputeLightScattering(uint3 coord, float3 cellOffset)
 	float3 skyScattering = ComputeSkyLightScattering(positionWS, viewDirection) *
 	                       materialScatteringAndExtinction.rgb;
 
+#if !defined(VOLUMETRIC_FOG_FAR_GRID)
 	float3 localScattering = AccumulateLocalLightScattering(
 		coord,
 		cellOffset,
@@ -366,6 +366,9 @@ float4 ComputeLightScattering(uint3 coord, float3 cellOffset)
 		viewDepth,
 		viewDirection,
 		materialScatteringAndExtinction.rgb);
+#else
+	float3 localScattering = 0.0f.xxx;
+#endif
 
 	float3 emissive = SharedData::exponentialHeightFogSettings.volumetricFogEmissive.rgb *
 	                  SharedData::exponentialHeightFogSettings.volumetricFogEmissive.a *
