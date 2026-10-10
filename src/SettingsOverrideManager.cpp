@@ -92,7 +92,8 @@ size_t SettingsOverrideManager::DiscoverOverrides()
 	// Overrides/ first, then each enabled pack in layering order: later files win merge conflicts.
 	DiscoverDirectory(GetOverridesDirectory(), {});
 	for (const auto& packId : UnifiedPresetCatalog::GetSingleton().GetBaselinePackIds()) {
-		DiscoverDirectory(Util::PathHelpers::GetUnifiedPackPath(packId) / UnifiedPresetCatalog::kBaselineSubdir, packId);
+		for (const auto& packPath : Util::PathHelpers::GetUnifiedPackPaths(packId))
+			DiscoverDirectory(packPath / UnifiedPresetCatalog::kBaselineSubdir, packId);
 	}
 
 	discovered = true;
@@ -1236,9 +1237,9 @@ std::filesystem::path SettingsOverrideManager::GetExportDestination(const std::s
 	if (safeName.empty()) {
 		return {};
 	}
-	// The real path, not the VFS one, so the export lands in a folder the user can actually write to.
+	// Pack exports resolve through the Data (VFS) path so new files land in the MO2 overwrite folder.
 	return toPresetPack ?
-	           UnifiedPresetCatalog::GetSingleton().GetPresetsRealPath() / safeName / UnifiedPresetCatalog::kBaselineSubdir / std::format("{}.json", featureName) :
+	           Util::PathHelpers::GetUnifiedPackPath(safeName) / UnifiedPresetCatalog::kBaselineSubdir / std::format("{}.json", featureName) :
 	           GetOverridesDirectory() / std::format("{}_{}.json", safeName, featureName);
 }
 

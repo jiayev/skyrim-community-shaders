@@ -262,7 +262,7 @@ public:
 	bool HasActiveSettingsForFeature(const std::string& featureShortName) const;
 	/// Whether a feature has any entry authored anywhere, in effect here or not.
 	bool HasAnySceneEntriesForFeature(const std::string& featureShortName) const;
-	/** @brief Whether the scene layer currently applies a value at this address. */
+	/** @brief Whether the scene layer currently applies a value at this address that differs from the base. */
 	bool IsActiveSceneSetting(std::string_view featureShortName,
 		std::string_view settingPath, std::string_view settingKey) const;
 	bool IsActiveSceneSetting(const std::string& featureShortName,
@@ -273,6 +273,8 @@ public:
 	/// Whether the scene layer is currently driving this feature, so a settings UI without sketch
 	/// support must not offer its base settings: the next resolve would revert the edit.
 	bool IsFeatureSceneControlled(const std::string& featureShortName) const;
+	/// Whether any applied value of the feature differs from its base, i.e. a layer is visibly overriding it.
+	bool IsFeatureOverridingBase(const std::string& featureShortName) const;
 
 	/// RAII suspend of the scene layer. Anything reading or writing a feature's *base* settings must
 	/// hold one, otherwise it captures an overridden value as if it were the user's choice.
@@ -722,6 +724,8 @@ public:
 	bool HasSketches(const std::string& featureShortName) const;
 	/// Keeps this feature's sketches alive through the next Update; without a retain from a drawn body they drop.
 	void RetainSketches(const std::string& featureShortName);
+	/** @brief Drops this feature's sketches now, leaving their values as its base and the scene resolving over them. */
+	void ReleaseSketches(const std::string& featureShortName);
 
 	/** @brief The context supplying an address's winning value: narrowest location link, else weather, else
 	 *  period or interior. Mid-blend the incoming side wins when it supplies one; null when no scene does. */

@@ -702,7 +702,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 
 	// A feature only authored for other scenes still gets a hollow dot, so its settings stay discoverable.
 	if (auto* sceneManager = globals::sceneSettingsManager; sceneManager->HasAnySceneEntriesForFeature(featureName)) {
-		const bool applying = sceneManager->IsFeatureSceneControlled(featureName);
+		const bool applying = sceneManager->IsFeatureOverridingBase(featureName);
 		ImGui::SameLine();
 		Util::DrawInlineIndicatorDot(ImGui::GetColorU32(Util::Colors::GetInfo()), applying);
 		if (auto _tt = Util::HoverTooltipWrapper())

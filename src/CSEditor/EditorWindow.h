@@ -254,6 +254,17 @@ public:
 	/** @brief Draw the full time controls panel (pause, game time, timescale). */
 	void DrawTimeControls();
 
+	/** @brief Which time periods the game-time slider segments. */
+	enum class TimePeriodSet : std::uint8_t
+	{
+		None,
+		Weather,  ///< Four sky colour times.
+		Scene     ///< Six scene periods.
+	};
+
+	/** @brief Sets the slider's periods when the current window is focused; the last focused editor surface wins. */
+	void ClaimTimePeriodSet(TimePeriodSet periodSet);
+
 	/** @brief Returns true if ESC should close the editor (no popup open and none just consumed ESC this frame). */
 	bool ShouldHandleEscapeKey();
 
@@ -470,6 +481,7 @@ private:
 
 	// Objects window (CS Editor Browser) state
 	std::string m_selectedCategory = "Weather";
+	TimePeriodSet timePeriodSet = TimePeriodSet::Weather;
 	std::string m_previousSelectedCategory = "Weather";
 	/// Set by SelectCategory; the objects window takes focus on its next Begin.
 	bool m_focusBrowser = false;

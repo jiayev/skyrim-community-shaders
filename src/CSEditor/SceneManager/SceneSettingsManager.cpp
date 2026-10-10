@@ -708,7 +708,20 @@ bool SceneSettingsManager::IsActiveSceneSetting(std::string_view featureShortNam
 bool SceneSettingsManager::IsActiveSceneSetting(const std::string& featureShortName,
 	const std::vector<std::string>& settingPath, const std::string& settingKey) const
 {
-	return appliedSettings.contains({ featureShortName, settingPath, settingKey });
+	const SettingAddress address{ featureShortName, settingPath, settingKey };
+	const auto applied = appliedSettings.find(address);
+	if (applied == appliedSettings.end())
+		return false;
+	const auto baseline = baselineSettings.find(address);
+	return baseline == baselineSettings.end() || !AppliedValuesEqual(applied->second, baseline->second);
+}
+
+bool SceneSettingsManager::IsFeatureOverridingBase(const std::string& featureShortName) const
+{
+	return std::ranges::any_of(appliedSettings, [&](const auto& item) {
+		return item.first.featureShortName == featureShortName &&
+		       IsActiveSceneSetting(item.first.featureShortName, item.first.settingPath, item.first.settingKey);
+	});
 }
 
 void SceneSettingsManager::CaptureExternalFeatureChanges(Feature* feature, bool sketch)
@@ -790,6 +803,12 @@ void SceneSettingsManager::RetainSketches(const std::string& featureShortName)
 {
 	if (HasSketches(featureShortName))
 		sketchesRetained = true;
+}
+
+void SceneSettingsManager::ReleaseSketches(const std::string& featureShortName)
+{
+	if (HasSketches(featureShortName))
+		DropSketches();
 }
 
 void SceneSettingsManager::DropSketches()

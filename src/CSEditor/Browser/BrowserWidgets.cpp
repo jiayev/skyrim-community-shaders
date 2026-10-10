@@ -400,12 +400,13 @@ namespace BrowserUI
 	{
 		ImGui::Dummy(ImVec2(0.0f, kEmptyStateTopPad * Util::GetUIScale()));
 		const float avail = ImGui::GetContentRegionAvail().x;
-		auto centredLine = [avail](const char* text, const ImVec4& color) {
+		const float wrapPosX = ImGui::GetCursorPosX() + avail;
+		auto centredLine = [avail, wrapPosX](const char* text, const ImVec4& color) {
 			const float width = ImGui::CalcTextSize(text).x;
 			if (width < avail)
 				ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - width) * 0.5f);
 			ImGui::PushStyleColor(ImGuiCol_Text, color);
-			ImGui::PushTextWrapPos(0.0f);
+			ImGui::PushTextWrapPos(wrapPosX);
 			ImGui::TextUnformatted(text);
 			ImGui::PopTextWrapPos();
 			ImGui::PopStyleColor();

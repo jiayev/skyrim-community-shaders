@@ -4289,7 +4289,7 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                   metadata_owners: tuple[str, ...] = (),
                   metadata_suffix_owners: tuple[str, ...] = (),
                   label_metadata_override=None,
-                  binding_override: ControlBinding | None = None,
+                  binding_override: BindingMatch | None = None,
                   component_label: str = "",
                   component_label_key: str = "",
                   aggregate_all: bool = False,
@@ -4329,8 +4329,8 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
             owners, setting_address, metadata_suffix_owners)
         binding = binding_match.binding if binding_match else None
         if binding_override:
-            binding = binding_override
-            binding_match = BindingMatch(binding, 0)
+            binding_match = binding_override
+            binding = binding_match.binding
         if label_metadata_override:
             (override_label, override_category, override_label_key,
              override_category_key, override_kind, override_minimum,
@@ -4407,8 +4407,11 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                 display_path[matching_index] = ui_category
                 display_path_keys[matching_index] = category_key
             else:
-                display_path.insert(heading_size, ui_category)
-                display_path_keys.insert(heading_size, category_key)
+                category_index = heading_size
+                if binding_match and not contextual:
+                    category_index = max(category_index, binding_match.matched_offset)
+                display_path.insert(category_index, ui_category)
+                display_path_keys.insert(category_index, category_key)
         display_path = [*context.display_path_prefix, *display_path]
         display_path_keys = [
             *("" for _ in context.display_path_prefix), *display_path_keys]
@@ -4534,7 +4537,7 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                     display_member_path=path if grouped else path + [field],
                     metadata_owners=metadata_owners,
                     metadata_suffix_owners=metadata_suffix_owners,
-                    binding_override=binding,
+                    binding_override=binding_match,
                     component_label=component_display.text,
                     component_label_key=component_display.key,
                     aggregate_all=bool(
@@ -4581,7 +4584,7 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                             display_member_path=path if grouped else path + [field],
                             metadata_owners=metadata_owners,
                             metadata_suffix_owners=metadata_suffix_owners,
-                            binding_override=binding,
+                            binding_override=binding_match,
                             force_hidden=binding is None,
                             aggregate_semantic=aggregate_semantic,
                             aggregate_start=aggregate_start,
@@ -4610,7 +4613,7 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                                 path + [field] if grouped else path + [field, str(element_index)]),
                             metadata_owners=metadata_owners,
                             metadata_suffix_owners=metadata_suffix_owners,
-                            binding_override=binding,
+                            binding_override=binding_match,
                             force_hidden=binding is None,
                             aggregate_semantic=aggregate_semantic,
                             aggregate_start=aggregate_start,

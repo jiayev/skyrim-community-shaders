@@ -4,6 +4,7 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).parents[1]
@@ -1746,6 +1747,46 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         }]
         GENERATOR.validate_entries(entries, 1, 1, 1)
         self.assertEqual(GENERATOR.required_entry_points(entries), ["SliderFloat"])
+
+    def test_suffix_bound_aggregates_preserve_parent_categories(self):
+        header = r'''
+struct Payload {
+    float3 vector;
+    std::array<float, 3> values;
+    std::array<float3, 2> vectors;
+};
+struct SyntheticFeature : Feature {
+    struct Settings { Payload outer; } settings;
+    std::string GetShortName() { return "Synthetic"; }
+    std::string GetName() { return "Synthetic Feature"; }
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Payload, vector, values, vectors)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SyntheticFeature::Settings, outer)
+'''
+        source = r'''
+void SyntheticFeature::SaveSettings(json& output) { output = settings; }
+'''
+        bindings = {}
+        for path in (("vector",), ("values",), ("vectors", "0"), ("vectors", "1")):
+            bindings[("Payload", path)] = GENERATOR.ControlBinding(
+                "Payload", path, GENERATOR.LocalizedText("Amount"),
+                GENERATOR.LocalizedText("Section", "feature.synthetic.section"),
+                "SliderFloat3", 0.0, 1.0, source_widget="SliderFloat3")
+        control_index = GENERATOR.ControlIndex(bindings, {}, {}, {}, set())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "src").mkdir()
+            (root / "src/SyntheticFeature.h").write_text(header, encoding="utf-8")
+            (root / "src/SyntheticFeature.cpp").write_text(source, encoding="utf-8")
+            with patch.object(GENERATOR, "collect_control_index", return_value=control_index):
+                entries = GENERATOR.build_entries(root)
+            GENERATOR.validate_entries(entries, 12)
+            self.assertEqual(len(entries), 12)
+            for entry in entries:
+                with self.subTest(path=entry["path"], key=entry["key"]):
+                    expected = "outer/Section/vectors" if entry["path"].startswith("outer/vectors/") else "outer/Section"
+                    self.assertEqual(entry["displayPath"], expected)
+                    self.assertEqual(entry["aggregateCount"], 3)
 
 
 if __name__ == "__main__":

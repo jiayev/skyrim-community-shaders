@@ -144,7 +144,7 @@ namespace
 		const auto shortName = const_cast<Feature&>(feature).GetShortName();
 		if (!manager || !manager->HasAnySceneEntriesForFeature(shortName))
 			return FeatureListPicker::Marker::None;
-		return manager->IsFeatureSceneControlled(shortName) ? FeatureListPicker::Marker::Filled : FeatureListPicker::Marker::Hollow;
+		return manager->IsFeatureOverridingBase(shortName) ? FeatureListPicker::Marker::Filled : FeatureListPicker::Marker::Hollow;
 	}
 
 	const char* SceneMarkerTooltip(const Feature&, FeatureListPicker::Marker marker)

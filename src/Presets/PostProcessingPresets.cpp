@@ -71,7 +71,6 @@ void PostProcessingPresets::MigrateLegacyPresets()
 	if (!std::filesystem::is_directory(legacyDir, ec))
 		return;
 
-	const auto presetsRoot = UnifiedPresetCatalog::GetSingleton().GetPresetsRealPath();
 	for (const auto& entry : std::filesystem::directory_iterator(legacyDir, ec)) {
 		const auto& source = entry.path();
 		if (!entry.is_regular_file(ec) || source.extension() != ".json" ||
@@ -82,7 +81,7 @@ void PostProcessingPresets::MigrateLegacyPresets()
 		const auto packId = Util::FileHelpers::SanitizeFileName(name);
 		if (packId.empty())
 			continue;
-		const auto packRoot = presetsRoot / packId;
+		const auto packRoot = Util::PathHelpers::GetUnifiedPackPath(packId);
 		if (std::filesystem::exists(packRoot, ec)) {
 			logger::info("[PostProcessingPresets] '{}' left in PostProcessing/: a preset named '{}' already exists", name, packId);
 			continue;

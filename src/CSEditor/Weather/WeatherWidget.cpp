@@ -151,6 +151,7 @@ void WeatherWidget::DrawWidget()
 
 		auto editorWindow = EditorWindow::GetSingleton();
 		auto& widgets = editorWindow->weatherWidgets;
+		editorWindow->ClaimTimePeriodSet(EditorWindow::TimePeriodSet::Weather);
 
 		// Sets the parent widget if settings have been loaded.
 		if (settings.parent != "None") {
@@ -399,6 +400,7 @@ void WeatherWidget::DrawWidget()
 		}
 
 		if (Util::BeginPillTabItem(T(TKEY("scene_manager"), WeatherTab::kSceneManager), nullptr, sceneManagerFlags)) {
+			EditorWindow::GetSingleton()->ClaimTimePeriodSet(EditorWindow::TimePeriodSet::Scene);
 			BeginScrollableContent("##SceneManagerScroll");
 			SceneSettingsUI::DrawWeatherSceneTab(weather ? weather->GetFormID() : 0);
 			EndScrollableContent();

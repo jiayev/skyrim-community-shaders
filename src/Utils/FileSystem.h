@@ -245,6 +245,10 @@ namespace Util
 		 *  which MO2 routes to its overwrite folder. */
 		std::filesystem::path GetUnifiedPackPath(const std::string& packId);
 
+		/** @brief Every scan root's folder for a pack, Data (VFS) first. MO2 can split one pack across the
+		 *  overwrite folder and the mod's real folder, where exports land. */
+		std::vector<std::filesystem::path> GetUnifiedPackPaths(const std::string& packId);
+
 		/**
 		 * Returns the real path to the Features directory containing feature INI files.
 		 * @return  <mod_root> / "Shaders" / "Features"

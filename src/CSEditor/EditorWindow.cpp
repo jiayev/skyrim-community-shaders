@@ -49,6 +49,10 @@ namespace
 	constexpr float kToggleHoverAlpha = 0.8f;
 	constexpr float kInactiveHoverAlpha = 0.25f;
 	constexpr float kMenuShortcutScale = 0.85f;
+	/// Game time slider width relative to the time speed slider in the toolbar.
+	constexpr float kMenuBarGameTimeWidthScale = 2.0f;
+	/// Help note wrap width in font sizes; a window-edge wrap (0) collapses on the popup's first auto-size frame.
+	constexpr float kHelpNoteWrapFontScale = 30.0f;
 
 	Util::ConfirmationPopup deleteSceneChangesConfirmation;
 
@@ -453,6 +457,9 @@ void EditorWindow::DrawBrowserPage()
 	}
 
 	const std::string id = category->id;
+	ClaimTimePeriodSet(id == "Weather"                            ? TimePeriodSet::Weather :
+					   id == "Locations" || id == "Scene Manager" ? TimePeriodSet::Scene :
+																	TimePeriodSet::None);
 	if (id == "Light Editor") {
 		lightEditor.DrawSettings();
 		return;
@@ -1008,7 +1015,7 @@ void EditorWindow::RenderUI()
 				ImGui::BulletText("%s", T(TKEY("shortcut_esc"), "Esc: Close editor"));
 				ImGui::Separator();
 				ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("scene_settings_greyed_label"), "Why are some settings greyed?"));
-				ImGui::PushTextWrapPos(0.0f);
+				ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetFontSize() * kHelpNoteWrapFontScale);
 				ImGui::TextUnformatted(T(TKEY("scene_settings_greyed_note"),
 					"Greyed settings cannot be overridden on this page. Some cannot be overridden by any scene; others need a different kind, such as a location override."));
 				ImGui::PopTextWrapPos();
@@ -1147,7 +1154,8 @@ void EditorWindow::RenderUI()
 			rightCursor -= itemSpacing + halfSliderWidth;
 			const float timeSpeedSliderX = rightCursor;
 
-			rightCursor -= itemSpacing + halfSliderWidth;
+			const float gameTimeSliderWidth = halfSliderWidth * kMenuBarGameTimeWidthScale;
+			rightCursor -= itemSpacing + gameTimeSliderWidth;
 			const float gameTimeSliderX = rightCursor;
 
 			rightCursor -= itemSpacing + iconSize;
@@ -1278,7 +1286,7 @@ void EditorWindow::RenderUI()
 			auto calendar = Util::Climate::GetCalendar();
 			if (calendar && calendar->gameHour && calendar->timeScale) {
 				ImGui::SetCursorScreenPos(ImVec2(gameTimeSliderX, iconY));
-				ImGui::SetNextItemWidth(halfSliderWidth);
+				ImGui::SetNextItemWidth(gameTimeSliderWidth);
 				DrawPausedAwareGameHourSlider("##MenuBarGameTimeSlider");
 
 				ImGui::SetCursorScreenPos(ImVec2(timeSpeedSliderX, iconY));
@@ -2173,12 +2181,107 @@ bool EditorWindow::MenuOpenCloseEventHandler::Register()
 	return true;
 }
 
+namespace
+{
+	constexpr float kHoursPerDay = 24.0f;
+	constexpr float kPeriodStripHeight = 3.0f;
+	constexpr float kPeriodDividerAlpha = 0.35f;
+	/// ImGui's slider inset of the grab travel from the frame edge (hardcoded in imgui_widgets.cpp).
+	constexpr float kSliderGrabPadding = 2.0f;
+
+	constexpr ImU32 kDawnColor = IM_COL32(125, 90, 180, 255);
+	constexpr ImU32 kSunriseColor = IM_COL32(230, 150, 75, 255);
+	constexpr ImU32 kDayColor = IM_COL32(240, 215, 90, 255);
+	constexpr ImU32 kSunsetColor = IM_COL32(230, 100, 75, 255);
+	constexpr ImU32 kDuskColor = IM_COL32(150, 80, 150, 255);
+	constexpr ImU32 kNightColor = IM_COL32(40, 55, 125, 255);
+
+	constexpr std::size_t kMaxPeriodSegments = 6;
+
+	/// A period's hour span; endHour exceeds 24 when the period wraps past midnight.
+	struct PeriodSegment
+	{
+		float startHour;
+		float endHour;
+		ImU32 color;
+	};
+
+	struct PeriodSegments
+	{
+		std::array<PeriodSegment, kMaxPeriodSegments> items{};
+		std::size_t count = 0;
+	};
+
+	PeriodSegments GetPeriodSegments(EditorWindow::TimePeriodSet periodSet)
+	{
+		PeriodSegments segments;
+		if (periodSet == EditorWindow::TimePeriodSet::Weather) {
+			const auto sky = globals::game::sky;
+			if (!sky || !sky->currentClimate)
+				return segments;
+			const auto day = Util::Climate::GetDayHours(*sky->currentClimate);
+			segments.items = { { { day.nightEnd, day.dayStart, kSunriseColor },
+				{ day.dayStart, day.dayEnd, kDayColor },
+				{ day.dayEnd, day.nightStart, kSunsetColor },
+				{ day.nightStart, day.nightEnd + kHoursPerDay, kNightColor } } };
+			segments.count = 4;
+		} else if (periodSet == EditorWindow::TimePeriodSet::Scene) {
+			constexpr std::array periodColors{ kDawnColor, kSunriseColor, kDayColor, kSunsetColor, kDuskColor, kNightColor };
+			static_assert(periodColors.size() == SceneSettingsManager::kPeriodCount);
+			const auto starts = SceneSettingsManager::GetPeriodStartHours();
+			for (std::size_t index = 0; index < starts.size(); ++index) {
+				const float endHour = index + 1 < starts.size() ? starts[index + 1] : starts.front() + kHoursPerDay;
+				segments.items[index] = { starts[index], endHour, periodColors[index] };
+			}
+			segments.count = starts.size();
+		}
+		return segments;
+	}
+
+	/** @brief Colour strip along the bottom of the slider frame, with a divider at each period start. */
+	void DrawPeriodStrip(const PeriodSegments& segments, float hourMax)
+	{
+		const ImVec2 frameMin = ImGui::GetItemRectMin();
+		const ImVec2 frameMax = ImGui::GetItemRectMax();
+		const float grabHalf = ImGui::GetStyle().GrabMinSize * 0.5f;
+		const float trackMin = frameMin.x + kSliderGrabPadding + grabHalf;
+		const float trackWidth = frameMax.x - frameMin.x - 2.0f * (kSliderGrabPadding + grabHalf);
+		auto hourToX = [&](float hour) { return trackMin + std::clamp(hour / hourMax, 0.0f, 1.0f) * trackWidth; };
+
+		auto* drawList = ImGui::GetWindowDrawList();
+		const ImU32 dividerColor = ImGui::GetColorU32(ImGuiCol_Text, kPeriodDividerAlpha);
+		// The first and last spans run to the frame edges rather than the grab travel limits.
+		auto stripX = [&](float hour) { return hour <= 0.0f ? frameMin.x : hour >= hourMax ? frameMax.x :
+			                                                                                 hourToX(hour); };
+		auto fillSpan = [&](float startHour, float endHour, ImU32 color) {
+			drawList->AddRectFilled(ImVec2(stripX(startHour), frameMax.y - kPeriodStripHeight), ImVec2(stripX(endHour), frameMax.y), color);
+		};
+
+		for (std::size_t index = 0; index < segments.count; ++index) {
+			const auto& segment = segments.items[index];
+			fillSpan(segment.startHour, std::min(segment.endHour, kHoursPerDay), segment.color);
+			if (segment.endHour > kHoursPerDay)
+				fillSpan(0.0f, segment.endHour - kHoursPerDay, segment.color);
+			const float dividerX = hourToX(segment.startHour);
+			drawList->AddLine(ImVec2(dividerX, frameMin.y), ImVec2(dividerX, frameMax.y - kPeriodStripHeight), dividerColor);
+		}
+	}
+}
+
+void EditorWindow::ClaimTimePeriodSet(TimePeriodSet periodSet)
+{
+	if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+		timePeriodSet = periodSet;
+}
+
 bool EditorWindow::DrawGameHourSlider(const char* label, const char* format)
 {
 	auto calendar = Util::Climate::GetCalendar();
 	if (!calendar || !calendar->gameHour)
 		return false;
 	const bool changed = ImGui::SliderFloat(label, &calendar->gameHour->value, 0.0f, kGameHourMax, format);
+	if (const auto segments = GetPeriodSegments(timePeriodSet); segments.count > 0)
+		DrawPeriodStrip(segments, kGameHourMax);
 	// Backward clock edits otherwise look like a midnight wrap and expire the weather override.
 	if (auto* sky = globals::game::sky; changed && sky && GetActiveLock())
 		sky->lastWeatherUpdate = calendar->gameHour->value;
