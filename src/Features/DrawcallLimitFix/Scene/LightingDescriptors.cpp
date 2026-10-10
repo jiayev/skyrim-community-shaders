@@ -343,8 +343,15 @@ namespace DCLF
 	{
 		a_out = {};
 		const void* node = AsTreeNode(a_property.fadeNode);
-		if (!node)
-			return nullptr;
+		if (node)
+			TreeStaticOfNode(node, a_out);
+		return node;
+	}
+
+	void TreeStaticOfNode(const void* a_node, TreeStatic& a_out)
+	{
+		a_out = {};
+		const void* node = a_node;
 		const auto* bytes = static_cast<const std::byte*>(node);
 		std::memcpy(a_out.position, bytes + 0xA0, sizeof(a_out.position));
 		a_out.leafFrequency = TreeNodeFloat(node, 0x160);
@@ -361,7 +368,6 @@ namespace DCLF
 		const bool bones = model && *reinterpret_cast<const void* const*>(model + 0xB8);
 		a_out.animated = bones && NearListSelectable(node) ? 1u : 0u;
 		a_out.modelAmplitude = a_out.animated ? *reinterpret_cast<const float*>(model + 0xB0) : 0.0f;
-		return node;
 	}
 
 	TreeWindFrame SampleTreeWindFrame()
@@ -544,8 +550,6 @@ namespace DCLF
 		// envmap LOD fades not run out: the draw fades those two by distance (LodFadeFrame), so the descriptor is the same
 		// at every distance. Where the accumulator holds a pass, only its per-frame bits are taken from it (below).
 		std::uint32_t derived = 0;
-		const float specularFade = a_property.specularLODFade;
-		const float envmapFade = a_property.envmapLODFade;
 		const Ineligible derivedReason = [&] {
 			// Without a fade node GetRenderPasses never computes the LOD fades, so the property fields the draw reads may be
 			// stale. Leave such objects native rather than guess.
@@ -630,8 +634,6 @@ namespace DCLF
 		a_out.projectedUV = (d & Bit(LightingFlag::ProjectedUV)) != 0;
 		a_out.vertex = vertex;
 		a_out.pixel = pixel;
-		a_out.specularLODFade = specularFade;
-		a_out.envmapLODFade = envmapFade;
 		return Ineligible::None;
 	}
 }

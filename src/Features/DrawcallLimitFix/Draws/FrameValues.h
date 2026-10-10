@@ -19,6 +19,7 @@ namespace org::runtime
 
 namespace DCLF
 {
+	struct FrameGlobals;
 	struct BindlessPlacement;
 	struct BindlessShading;
 
@@ -75,7 +76,8 @@ namespace DCLF
 		 */
 		using FrameUploads = std::function<void(org::runtime::IUploadService&)>;
 		bool Kick(std::shared_ptr<const SceneStore::PlacementPlan> a_plan, std::vector<SceneStore::ShadingItem> a_shading,
-			std::vector<SceneStore::WetnessValue> a_wetness, FrameUploads a_uploads = {});
+			std::vector<SceneStore::WetnessValue> a_wetness, std::vector<SceneStore::FadeSeedItem> a_seeds, std::vector<SceneStore::TreeSeedItem> a_treeSeeds,
+			std::shared_ptr<const FrameGlobals> a_globals, FrameUploads a_uploads = {});
 		/** @brief Render thread: a frame with no producer (DCLF not running): no batch waits for one. */
 		void Skip();
 		/** @brief Render thread, at Present: the GPU point of everything the frame submitted (its ring buffers' readers). */
@@ -86,6 +88,16 @@ namespace DCLF
 		std::uint32_t PalettesIndex() const { return paletteIndex; }
 		/** @brief Render thread: the descriptor of the shading buffer the current frame's draws read (0 before the first frame). */
 		std::uint32_t ShadingIndex() const { return shadingIndex; }
+		/**
+		 * @brief Render thread: the descriptor of the fade seeds the current frame reads (T6b1a: StructuredBuffer<FadeRootStatic>, two rows
+		 * a root slot: FadeSeedRow; 0 before the first frame). A root's seed is its node as the frame's start had it (StaticOf, at Kick).
+		 */
+		std::uint32_t FadeSeedsIndex() const { return seedsIndex; }
+		/** @brief Render thread: the tree seeds likewise (StructuredBuffer<TreeStatic>, two rows a tree slot: MergeTreeSeed). */
+		std::uint32_t TreeSeedsIndex() const { return treeSeedsIndex; }
+		const std::vector<TreeStatic>* TreeSeedsIfDone(bool a_wait = false) const;
+		/** @brief Render thread: the seed rows as the frame's producer left them, once it is done; a_wait (the fade parity's frames): waits for it. */
+		const std::vector<FadeRootStatic>* FadeSeedsIfDone(bool a_wait = false) const;
 		bool Available() const;
 
 		/**
@@ -111,6 +123,6 @@ namespace DCLF
 		~FrameValues();
 		struct Impl;
 		std::unique_ptr<Impl> impl;
-		std::uint32_t frameIndex = 0, paletteIndex = 0, shadingIndex = 0;
+		std::uint32_t frameIndex = 0, paletteIndex = 0, shadingIndex = 0, seedsIndex = 0, treeSeedsIndex = 0;
 	};
 }

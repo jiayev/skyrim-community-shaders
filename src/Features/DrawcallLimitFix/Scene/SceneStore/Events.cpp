@@ -11,9 +11,13 @@ namespace DCLF::Scene
 		static void thunk(RE::BSFadeNode* a_this, RE::NiCullingProcess* a_process, std::int32_t a_alphaGroup)
 		{
 			const float before = CurrentFade(a_this);
+			const std::uint8_t door = a_this->GetRuntimeData().unk154;
 			func(a_this, a_process, a_alphaGroup);
 			if (CurrentFade(a_this) != before)
 				PushFade(a_this);
+			// The values for the mirror (T6b1a).
+			if (CurrentFade(a_this) != before || a_this->GetRuntimeData().unk154 != door)
+				PushNodeUpdate(a_this, SceneCapture::NodeRecord::kFadeCurrent | SceneCapture::NodeRecord::kFadeDoor);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -23,9 +27,12 @@ namespace DCLF::Scene
 		static std::uint64_t thunk(RE::BSFadeNode* a_this, float a_fadeAmount, void* a_camera)
 		{
 			const float before = CurrentFade(a_this);
+			const std::uint8_t door = a_this->GetRuntimeData().unk154;
 			const auto result = func(a_this, a_fadeAmount, a_camera);
 			if (CurrentFade(a_this) != before)
 				PushFade(a_this);
+			if (CurrentFade(a_this) != before || a_this->GetRuntimeData().unk154 != door)
+				PushNodeUpdate(a_this, SceneCapture::NodeRecord::kFadeCurrent | SceneCapture::NodeRecord::kFadeDoor);
 			return result;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -46,8 +53,11 @@ namespace DCLF::Scene
 				before[i] = roots[i] ? Engine::At<float>(roots[i], 0x100) : 0.0f;
 			func(a_this, a_alpha);
 			for (std::uint32_t i = 0; i < 2; ++i)
-				if (roots[i] && Engine::At<float>(roots[i], 0x100) != before[i] && (i == 0 || roots[1] != roots[0]))
+				if (roots[i] && Engine::At<float>(roots[i], 0x100) != before[i] && (i == 0 || roots[1] != roots[0])) {
 					fadeAmountEvents.Push(roots[i]);
+					if (roots[i]->AsFadeNode())
+						PushNodeUpdate(roots[i], SceneCapture::NodeRecord::kFadeAmount);  // the mirror's value (T6b1a)
+				}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -65,8 +75,10 @@ namespace DCLF::Scene
 		{
 			const std::uint8_t before = a_this->GetRuntimeData().unk152 & 0xF;
 			func(a_this, a_level);
-			if ((a_this->GetRuntimeData().unk152 & 0xF) != before)
+			if ((a_this->GetRuntimeData().unk152 & 0xF) != before) {
 				PushFade(a_this);
+				PushNodeUpdate(a_this, SceneCapture::NodeRecord::kFadeLevel);
+			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -116,7 +128,7 @@ namespace DCLF::Scene
 			if (a_node) {
 				fadeSnapEvents.Push(a_node);
 				if (netimmerse_cast<RE::BSFadeNode*>(a_node))
-					PushNodeUpdate(a_node, kFadeStatics);
+					PushNodeUpdate(a_node, kFadeStatics | kFadeState);
 			}
 			return result;
 		}
@@ -130,7 +142,7 @@ namespace DCLF::Scene
 	{
 		auto* root = a_reference ? a_reference->Get3D() : nullptr;
 		if (auto* fade = root ? root->AsFadeNode() : nullptr) {
-			PushNodeUpdate(fade, kFadeStatics);
+			PushNodeUpdate(fade, kFadeStatics | kFadeState);
 			// CS_DCLF_MIRROR_WATCH: a placed node in the world, its statics just set, is watched for the next writer.
 			if (MirrorWatch::Enabled() && SceneCapture::InWorld(fade))
 				MirrorWatch::Arm(fade);
@@ -244,6 +256,57 @@ namespace DCLF::Scene
 					PushLeafUpdate(*geometry);
 			}
 			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_1402ad0e0 (land): a TESObjectLAND's quads' land blend, after the cell's attach: each quad geometry's landscape material
+	// takes its LOD blend textures (+0xF8, +0x100) and landBlendParams (+0x108). Each quad's property after the call (T6b1a).
+	struct LandBlendParams
+	{
+		static void thunk(RE::TESObjectLAND* a_land)
+		{
+			func(a_land);
+			const auto* loaded = a_land ? Engine::At<const RE::NiNode* const*>(a_land, 0x40) : nullptr;
+			if (!loaded)
+				return;
+			for (std::uint32_t quad = 0; quad < 4; ++quad) {
+				const auto* node = loaded[quad];
+				if (!node || node->GetChildren().empty() || !node->GetChildren()[0])
+					continue;
+				if (auto* geometry = node->GetChildren()[0]->AsGeometry())
+					PushPropertyUpdate(geometry->GetGeometryRuntimeData().shaderProperty.get(), SceneCapture::PropertyRecord::kLandBlend);
+			}
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_1414abd10 (object, visitor {params, colour, snow}): projected UV on every Lighting or grass property under the object,
+	// recursively (each child through the entry again): kProjectedUV and kSnow (SetFlags, their own events), then projectedUVParams
+	// and projectedUVColor stored inline. The geometry's property after the call (T6b1a).
+	struct PropertiesProjectedUV
+	{
+		static std::uint64_t thunk(RE::NiAVObject* a_object, void* a_visitor)
+		{
+			const auto result = func(a_object, a_visitor);
+			if (auto* geometry = a_object ? a_object->AsGeometry() : nullptr)
+				PushPropertyUpdate(geometry->GetGeometryRuntimeData().shaderProperty.get(), SceneCapture::PropertyRecord::kProjected);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// A BGSDecalNode's decal array edits (T6b1a; AE 1.6.1170): the append (FUN_1401fdfb0, from BSTempEffectGeometryDecal::Attach and
+	// the simple decals' attach), and the erases: a decal's or a reference's decals (FUN_1401fdc80 through FUN_1401fe020, from the decal
+	// manager), the geometry decal's update (FUN_1401fdcb0), and the two that erase and detach its 3D (FUN_1401fdd50, FUN_1401fde40).
+	// Each takes the node first; the node's decals after the call. The arguments past the node are passed through as they came.
+	template <int N>
+	struct DecalArrayEdit
+	{
+		static void thunk(RE::NiAVObject* a_node, void* a_1, void* a_2, void* a_3)
+		{
+			func(a_node, a_1, a_2, a_3);
+			PushNodeUpdate(a_node, SceneCapture::NodeRecord::kDecals);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -373,6 +436,9 @@ namespace DCLF::Scene
 				std::bit_cast<std::uint32_t>(a_property->envmapLODFade) != std::bit_cast<std::uint32_t>(envmap) ||
 				std::bit_cast<std::uint32_t>(a_property->alpha) != std::bit_cast<std::uint32_t>(alpha))
 				lodFadeEvents.Push(a_property);
+			// The alpha's value for the mirror (T6b1a).
+			if (std::bit_cast<std::uint32_t>(a_property->alpha) != std::bit_cast<std::uint32_t>(alpha))
+				PushPropertyUpdate(a_property, SceneCapture::PropertyRecord::kAlphaValue);
 			return passes;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -615,24 +681,39 @@ namespace DCLF::Scene
 		stl::detour_thunk<T>(reinterpret_cast<const std::uintptr_t*>(vtable.address())[a_slot]);
 	}
 
-	/** @brief One patched store: `mov dword ptr [base + 0x12c], value`, as the bytes read before patching. */
+	/**
+	 * @brief The fade resets (T6b1a): a fade node's currentFade (+0x130) stored inline, fully faded out (0) or in (1.0), with flag bit 14
+	 * (a frame bit the mirror does not hold) cleared or set after it: the cells' placements (FUN_1402bc1f0, the grid controller's on the
+	 * main thread, and FUN_1402bb690, a job's, after FUN_1402d5090's), the sky cell's (FUN_1402b9da0), the reference placement's own
+	 * branches that skip the snap (FUN_1402d1280), explosions' 3D (Explosion::Load3D) and others (every such store in the image: the
+	 * store-then-bit-14 pattern). The patched store's handler: the store, and the node's currentFade.
+	 */
+	void FadeResetStore(RE::NiAVObject* a_node, std::int32_t a_value)
+	{
+		*reinterpret_cast<std::int32_t*>(reinterpret_cast<std::byte*>(a_node) + 0x130) = a_value;
+		PushNodeUpdate(a_node, SceneCapture::NodeRecord::kFadeCurrent);
+	}
+
+	/** @brief One patched store: `mov dword ptr [base + offset], value`, as the bytes read before patching. */
 	struct SwitchStoreSite
 	{
 		std::uintptr_t offset;  // from the image base
-		std::array<std::uint8_t, 7> bytes;
+		std::array<std::uint8_t, 10> bytes;
 		std::uint8_t length;
 		int base;  // Xbyak::Operand register index
-		int value;
+		int value;               // kImmediate: the instruction's immediate, imm
+		std::uint32_t imm = 0;
+		static constexpr int kImmediate = -1;
 	};
 
 	/**
 	 * @brief The stubs the patched stores call: each loads (switch, value) into the first two argument registers
 	 * and joins a common body that saves every volatile register, the flags (a store sets none, so the code after
-	 * it may test flags set before it) and xmm0-5, calls SwitchIndexStore on an aligned stack, and restores them.
+	 * it may test flags set before it) and xmm0-5, calls the handler (SwitchIndexStore, FadeResetStore) on an aligned stack, and restores them.
 	 */
 	struct SwitchStoreStubs : Xbyak::CodeGenerator
 	{
-		SwitchStoreStubs(const std::vector<SwitchStoreSite>& a_sites, std::vector<std::size_t>& a_entries) :
+		SwitchStoreStubs(const std::vector<SwitchStoreSite>& a_sites, std::vector<std::size_t>& a_entries, std::uintptr_t a_handler) :
 			Xbyak::CodeGenerator(4096)
 		{
 			using namespace Xbyak::util;
@@ -650,7 +731,9 @@ namespace DCLF::Scene
 					mov(rcx, qword[rsp + slot]);
 				else
 					mov(rcx, Xbyak::Reg64(site.base));
-				if (const int slot = slotOf(site.value); slot >= 0)
+				if (site.value == SwitchStoreSite::kImmediate)
+					mov(edx, site.imm);
+				else if (const int slot = slotOf(site.value); slot >= 0)
 					mov(edx, dword[rsp + slot]);
 				else
 					mov(edx, Xbyak::Reg32(site.value));
@@ -668,7 +751,7 @@ namespace DCLF::Scene
 			sub(rsp, 0x80);
 			for (int i = 0; i < 6; ++i)
 				movdqu(ptr[rsp + 0x20 + 0x10 * i], Xbyak::Xmm(i));
-			mov(rax, reinterpret_cast<std::uintptr_t>(&SwitchIndexStore));
+			mov(rax, a_handler);
 			call(rax);
 			for (int i = 0; i < 6; ++i)
 				movdqu(Xbyak::Xmm(i), ptr[rsp + 0x20 + 0x10 * i]);
@@ -686,6 +769,52 @@ namespace DCLF::Scene
 		}
 	};
 
+	/** @brief Patches a_sites to call a_handler(base, value) in their place (after checking every site's bytes; none is patched when one differs). */
+	bool PatchStores(const std::vector<SwitchStoreSite>& a_sites, std::uintptr_t a_handler, const char* a_what)
+	{
+		const auto base = REL::Module::get().base();
+		for (const auto& site : a_sites) {
+			if (std::memcmp(reinterpret_cast<const void*>(base + site.offset), site.bytes.data(), site.length) != 0) {
+				logger::warn("[DCLF] {} not installed: the store at {:#x} is not the expected instruction", a_what, 0x140000000 + site.offset);
+				return false;
+			}
+		}
+		std::vector<std::size_t> entries;
+		SwitchStoreStubs stubs(a_sites, entries, a_handler);
+		auto* code = static_cast<std::uint8_t*>(SKSE::GetTrampoline().allocate(stubs.getSize()));
+		std::memcpy(code, stubs.getCode(), stubs.getSize());
+		for (std::size_t i = 0; i < a_sites.size(); ++i) {
+			const std::uintptr_t at = base + a_sites[i].offset;
+			std::array<std::uint8_t, 10> patch{ 0xE8, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90, 0x90 };
+			const auto displacement = static_cast<std::int32_t>(reinterpret_cast<std::intptr_t>(code + entries[i]) - static_cast<std::intptr_t>(at + 5));
+			std::memcpy(patch.data() + 1, &displacement, sizeof(displacement));
+			REL::safe_write(at, patch.data(), a_sites[i].length);
+		}
+		logger::info("[DCLF] {}: {} stores patched ({} bytes of stubs)", a_what, a_sites.size(), stubs.getSize());
+		return true;
+	}
+
+	bool InstallFadeResetStores()
+	{
+		using Xbyak::Operand;
+		constexpr int kImm = SwitchStoreSite::kImmediate;
+		constexpr std::uint32_t kOne = 0x3f800000;
+		const std::vector<SwitchStoreSite> sites{
+			{ 0x2bc344, { 0x44, 0x89, 0xa0, 0x30, 0x01, 0x00, 0x00 }, 7, Operand::RAX, Operand::R12 },  // FUN_1402bc1f0
+			{ 0x2bb8f5, { 0x44, 0x89, 0xa0, 0x30, 0x01, 0x00, 0x00 }, 7, Operand::RAX, Operand::R12 },  // FUN_1402bb690
+			{ 0x2c859f, { 0x44, 0x89, 0xb8, 0x30, 0x01, 0x00, 0x00 }, 7, Operand::RAX, Operand::R15 },  // FUN_1402c8420
+			{ 0x1ce552, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RAX, kImm, kOne },  // FUN_1401ce010
+			{ 0x28bbd0, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, 10, Operand::RAX, kImm, 0 },     // FUN_14028b9d0
+			{ 0x2b9e89, { 0xc7, 0x87, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RDI, kImm, kOne },  // FUN_1402b9da0 (sky cell)
+			{ 0x2d1f2c, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RAX, kImm, kOne },  // FUN_1402d1280
+			{ 0x2d20dd, { 0xc7, 0x83, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RBX, kImm, kOne },  // FUN_1402d1280
+			{ 0x2e3c27, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RAX, kImm, kOne },  // Explosion::Load3D
+			{ 0x7d4791, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RAX, kImm, kOne },  // FUN_1407d4440
+			{ 0x7ee6ec, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RAX, kImm, kOne },  // FUN_1407ee3e0
+		};
+		return PatchStores(sites, reinterpret_cast<std::uintptr_t>(&FadeResetStore), "fade resets");
+	}
+
 	bool InstallSwitchStores()
 	{
 		using Xbyak::Operand;
@@ -701,26 +830,7 @@ namespace DCLF::Scene
 			{ 0x1e937c, { 0x89, 0x8f, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RDI, Operand::RCX },  // harvest (FUN_1401e8ef0)
 			{ 0x1e94ef, { 0x89, 0x8b, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RBX, Operand::RCX },  // harvestable 3D (FUN_1401e9450)
 		};
-		const auto base = REL::Module::get().base();
-		for (const auto& site : sites) {
-			if (std::memcmp(reinterpret_cast<const void*>(base + site.offset), site.bytes.data(), site.length) != 0) {
-				logger::warn("[DCLF] switch events not installed: the store at {:#x} is not the expected instruction", 0x140000000 + site.offset);
-				return false;
-			}
-		}
-		std::vector<std::size_t> entries;
-		SwitchStoreStubs stubs(sites, entries);
-		auto* code = static_cast<std::uint8_t*>(SKSE::GetTrampoline().allocate(stubs.getSize()));
-		std::memcpy(code, stubs.getCode(), stubs.getSize());
-		for (std::size_t i = 0; i < sites.size(); ++i) {
-			const std::uintptr_t at = base + sites[i].offset;
-			std::array<std::uint8_t, 7> patch{ 0xE8, 0, 0, 0, 0, 0x90, 0x90 };
-			const auto displacement = static_cast<std::int32_t>(reinterpret_cast<std::intptr_t>(code + entries[i]) - static_cast<std::intptr_t>(at + 5));
-			std::memcpy(patch.data() + 1, &displacement, sizeof(displacement));
-			REL::safe_write(at, patch.data(), sites[i].length);
-		}
-		logger::info("[DCLF] switch events: {} index stores patched ({} bytes of stubs)", sites.size(), stubs.getSize());
-		return true;
+		return PatchStores(sites, reinterpret_cast<std::uintptr_t>(&SwitchIndexStore), "switch events");
 	}
 }
 
@@ -840,6 +950,7 @@ namespace DCLF
 			categoryCapturePending = event->type == SceneTracker::EventType::Detached;
 		if (a_frameStart) {
 			CaptureCategories(std::exchange(categoryCapturePending, false));
+			CaptureMirrorRequests(batch);
 			ProbeMirror(batch);
 		}
 		// Tree LOD's mirror is the render thread's (DecideTreeLod reads it at the frame's start).
@@ -915,6 +1026,9 @@ namespace DCLF
 			addSource = rescanned ? TrackSource::Rescan : TrackSource::AttachEvent;
 			RefreshCategoryNodes(sawDetach || rescanned);
 			addSource = TrackSource::AttachEvent;
+			// The subtrees the mirror had no chain for last time: the render thread captured them at this frame's start (T6b1b).
+			for (const auto& root : std::exchange(pendingSubtrees, {}))
+				AddSubtree(root.get(), SubtreeSource::Retry);
 		}
 
 		{
@@ -1000,6 +1114,7 @@ namespace DCLF
 			{
 				func(a_shape, a_segment);
 				lodSegmentEvents.Push(a_shape);
+				PushGeometryUpdate(a_shape, SceneCapture::GeometryRecord::kSegments);  // T6b1a
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -1009,6 +1124,7 @@ namespace DCLF
 			{
 				func(a_shape, a_segment);
 				lodSegmentEvents.Push(a_shape);
+				PushGeometryUpdate(a_shape, SceneCapture::GeometryRecord::kSegments);  // T6b1a
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -1018,6 +1134,7 @@ namespace DCLF
 			{
 				func(a_shape);
 				lodSegmentEvents.Push(a_shape);
+				PushGeometryUpdate(a_shape, SceneCapture::GeometryRecord::kSegments);  // T6b1a
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -1139,6 +1256,16 @@ namespace DCLF
 		stl::detour_thunk<PropertiesSetFadeNode>(REL::Offset(kPropertiesSetFadeNode).address());
 		constexpr std::uintptr_t kLandSetupProperties = 0x2ad800;  // FUN_1402ad800: a land's quads' landscape properties
 		stl::detour_thunk<LandSetupProperties>(REL::Offset(kLandSetupProperties).address());
+		constexpr std::uintptr_t kLandBlendParams = 0x2ad0e0;  // FUN_1402ad0e0: a land's quads' LOD blend (T6b1a)
+		stl::detour_thunk<LandBlendParams>(REL::Offset(kLandBlendParams).address());
+		constexpr std::uintptr_t kPropertiesProjectedUV = 0x14abd10;  // FUN_1414abd10: projected UV on the properties under an object (T6b1a)
+		stl::detour_thunk<PropertiesProjectedUV>(REL::Offset(kPropertiesProjectedUV).address());
+		// A decal node's array edits (T6b1a): DecalArrayEdit.
+		stl::detour_thunk<DecalArrayEdit<0>>(REL::Offset(0x1fdfb0).address());
+		stl::detour_thunk<DecalArrayEdit<1>>(REL::Offset(0x1fdc80).address());
+		stl::detour_thunk<DecalArrayEdit<2>>(REL::Offset(0x1fdcb0).address());
+		stl::detour_thunk<DecalArrayEdit<3>>(REL::Offset(0x1fdd50).address());
+		stl::detour_thunk<DecalArrayEdit<4>>(REL::Offset(0x1fde40).address());
 		constexpr std::uintptr_t kCellPlaceReference = 0x2d1280;    // FUN_1402d1280: a reference's 3D placed in its cell
 		constexpr std::uintptr_t kCellPlaceReferenceAt = 0x2d5090;  // FUN_1402d5090: the same, another path
 		stl::detour_thunk<CellPlaceReference>(REL::Offset(kCellPlaceReference).address());
@@ -1158,6 +1285,9 @@ namespace DCLF
 		// (an unsupported build) DCLF cannot run.
 		if (!InstallSwitchStores())
 			stl::report_and_fail("Drawcall Limit Fix: the switch nodes' hooks could not be installed (an unsupported game build)");
+		// The mirror's currentFade (T6b1a): the cells' inline resets.
+		if (!InstallFadeResetStores())
+			stl::report_and_fail("Drawcall Limit Fix: the fade resets' hooks could not be installed (an unsupported game build)");
 		{
 			// NiSwitchNode's own child edits (NiNode vtable slots 0x35, 0x37-0x3C, as SceneTracker's).
 			DetourSwitchSlot<SwitchAttachChild>(0x35);
@@ -1225,6 +1355,7 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.Scene.Mirror");
 		mirror.BeginBatch();
 		const bool parity = SwitchEnabled(Switch::MirrorParity);
+		mirrorReadParity = parity;
 		auto apply = [&](const SceneTracker::Event* a_head) {
 			for (const auto* event = a_head; event; event = event->next) {
 				if (event->type == SceneTracker::EventType::Attached) {
@@ -1242,6 +1373,7 @@ namespace DCLF
 		};
 		apply(a_batch.mirrorHead);
 		apply(a_batch.head);
+		apply(a_batch.mirrorLate);
 		if (!parity)
 			return;
 		// The objects the batch's events without values named: a field the probe finds different on one of them has a hook that
@@ -1256,8 +1388,7 @@ namespace DCLF
 					mirrorEventKeys.insert(key);
 			}
 		};
-		add(a_batch.fadeSnaps);
-		add(a_batch.switches);
+		// Not the fade snaps: their updates carry the fade node's values (FadeSnap; a node that is not a fade node has no fade fields).
 		add(a_batch.lodSegments);
 		add(a_batch.mirrorNamed);
 		if (a_batch.probe)
@@ -1273,6 +1404,8 @@ namespace DCLF
 			MirrorWatch::ArmProperty(property);
 		if (const void* alpha = mirrorWatchAlpha.exchange(nullptr, std::memory_order_acq_rel))
 			MirrorWatch::ArmAlpha(alpha);
+		if (const void* node = mirrorWatchNode.exchange(nullptr, std::memory_order_acq_rel))
+			MirrorWatch::ArmCurrent(node);
 		ZoneScopedN("CS.DCLF.Ingest.ProbeMirror");
 		// A slice of the tracked set, live (the render thread at the frame's start: the update done, before the culls): each
 		// geometry's records and its ancestors' up to the world's root, each object once. A tracked geometry is held by its entry.
@@ -1303,6 +1436,8 @@ namespace DCLF
 				mirrorWatchRequest.store(property, std::memory_order_release);
 			if (const void* alpha = mirror.TakeMissedAlpha())
 				mirrorWatchAlpha.store(alpha, std::memory_order_release);
+			if (const void* node = mirror.TakeMissedNode())
+				mirrorWatchNode.store(node, std::memory_order_release);
 			mirrorProbe.reset();
 		}
 		mirrorEventKeys.clear();
@@ -1395,12 +1530,16 @@ namespace DCLF
 			switchResync = true;
 		for (auto& pending : switchPending) {
 			auto* node = pending.node.get();
-			auto* switchNode = node ? node->AsSwitchNode() : nullptr;
+			// The mirror's (T6b1b: the switch's stores carry its index).
+			const auto* record = node ? mirror.Node(node) : nullptr;
 			// Only the scene the tables cover: a switch still loading is brought up to date by its attach (AddSubtree).
-			if (!switchNode || !FindCategoryNode(node, nullptr))
+			if (!record || !(record->kind & SceneCapture::kKindSwitch) || !FindCategoryNode(node, nullptr))
 				continue;
-			if (!pending.structural && SwitchIndexOf(node) == pending.before)
+			if (!pending.structural && record->switchIndex == pending.before)
 				continue;
+			++mirrorReads.reads[static_cast<std::size_t>(MirrorRead::SwitchEvent)];
+			if (mirrorReadParity && !a_full)
+				CheckTrackedBelow(MirrorRead::SwitchEvent, node);
 			++delta.switchChanges;
 			if (switchesApplied.size() < kMaxSwitchChanges)
 				switchesApplied.push_back(node);
@@ -1410,9 +1549,9 @@ namespace DCLF
 			if (a_full)
 				continue;
 			// Every entry under it: which of them the switch draws is a classification input (ClassifyFrame).
-			VisitSubtree(node, [&](RE::NiAVObject& a_object) {
-				if (auto* geometry = a_object.AsGeometry())
-					if (const auto entry = tracked.find(geometry); entry != tracked.end()) {
+			VisitMirrorSubtree(mirror, node, [&](const void* a_key, const SceneCapture::NodeRecord& a_record) {
+				if (a_record.kind & SceneCapture::kKindGeometry)
+					if (const auto entry = tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(a_key))); entry != tracked.end()) {
 						Reclassify(entry->first, entry->second);
 						++delta.switchReclassified;
 					}
@@ -1432,9 +1571,14 @@ namespace DCLF
 		// walked, as AddSubtree does.
 		if (!a_node || !FindCategoryNode(a_node, nullptr))
 			return;
+		// The mirror's (T6b1b): FindCategoryNode found its record.
+		const auto* record = mirror.Node(a_node);
 		// An actor's entries are evaluated every frame anyway, and its sun entry is never tested.
-		if (const auto* reference = a_node->GetUserData(); reference && reference->GetFormType() == RE::FormType::ActorCharacter)
+		if (record->userData && record->formType == static_cast<std::uint8_t>(RE::FormType::ActorCharacter))
 			return;
+		++mirrorReads.reads[static_cast<std::size_t>(MirrorRead::NodeEvent)];
+		if (mirrorReadParity)
+			CheckTrackedBelow(MirrorRead::NodeEvent, a_node);
 		// Written every frame already, placement included: a record written in full, or one the light path moves.
 		auto placedEveryFrame = [](const Tracked& a_tracked) {
 			return a_tracked.perFrame && (!a_tracked.lightTraits || (a_tracked.lightTraits & (kTraitMoves | kTraitRootMoves)));
@@ -1442,7 +1586,10 @@ namespace DCLF
 		// Every sun entry node above it: its bound takes this node in, and its motion may have changed. A root already
 		// known to move has its bound taken by the root pass (QueueRoots) whenever its reference has a move event, which
 		// this one is (DrainMoveEvents).
-		for (const RE::NiAVObject* object = a_node; object; object = object->parent) {
+		for (const void* key = a_node; key;) {
+			const auto* object = static_cast<const RE::NiAVObject*>(key);
+			const auto* at = mirror.Node(key);
+			key = at ? at->parent : nullptr;
 			if (!rootDependents.contains(object))
 				continue;
 			if (const auto motion = rootMotion.find(object); motion != rootMotion.end() && motion->second)
@@ -1450,11 +1597,22 @@ namespace DCLF
 			ScheduleRoot(object);
 		}
 		// Every entry below it: its placement, and its traits (a body or controller it did not have when classified).
-		VisitSubtree(a_node, [&](RE::NiAVObject& a_object) {
-			if (auto* geometry = a_object.AsGeometry())
-				if (const auto entry = tracked.find(geometry); entry != tracked.end() && !placedEveryFrame(entry->second) && PlacementMatters(entry->second))
+		VisitMirrorSubtree(mirror, a_node, [&](const void* a_key, const SceneCapture::NodeRecord& a_record) {
+			if (a_record.kind & SceneCapture::kKindGeometry)
+				if (const auto entry = tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(a_key)));
+					entry != tracked.end() && !placedEveryFrame(entry->second) && PlacementMatters(entry->second))
 					Reclassify(entry->first, entry->second);
 			return true;
 		});
+	}
+
+	void SceneStore::CheckTrackedBelow(MirrorRead a_read, RE::NiAVObject* a_root)
+	{
+		const auto r = static_cast<std::size_t>(a_read);
+		++mirrorReads.checked[r];
+		const auto [live, mirrored] = TrackedBelow(mirror, a_root, tracked);
+		if (live != mirrored && mirrorReads.differ[r]++ == 0)
+			mirrorReads.first[r] = fmt::format("'{}' {}: {} tracked geometries below by the mirror, {} live", a_root->name.c_str() ? a_root->name.c_str() : "",
+				static_cast<const void*>(a_root), mirrored.size(), live.size());
 	}
 }

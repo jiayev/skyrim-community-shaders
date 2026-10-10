@@ -56,10 +56,44 @@ namespace DCLF
 		return true;
 	}
 
-	const RE::BSRenderPass* SceneStore::TemplatePassOf(RE::BSShaderProperty* a_property) const
+	const RE::BSRenderPass* SceneStore::RegisteredTemplatePassOf(RE::BSShaderProperty* a_property) const
 	{
 		const auto* pass = a_property ? FindLightingPass(a_property) : nullptr;
 		return pass ? pass : frameLightingPass;
+	}
+
+	const RE::BSRenderPass* SceneStore::TemplatePassOf(const Tables& a_view, std::uint32_t a_pipeline)
+	{
+		auto* property = a_pipeline < a_view.geometryTemplate.size() ? a_view.geometryTemplate[a_pipeline] : nullptr;
+		const std::uint32_t object = a_pipeline < a_view.geometryTemplateObject.size() ? a_view.geometryTemplateObject[a_pipeline] : kNoObjectSlot;
+		const auto* geometry = object < a_view.objectGeometry.size() && object < a_view.objects.size() && !(a_view.objects[object].flags & kObjectFree) ?
+		                           a_view.objectGeometry[object] :
+		                           nullptr;
+		auto* shader = ConstantEvaluator::Get().GetLightingShader();
+		auto* sceneNode = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
+		if (!property || !geometry || !shader || !sceneNode)
+			return nullptr;
+		auto& runtime = sceneNode->GetRuntimeData();
+		RE::BSLight* sun = runtime.sunLight;
+		RE::BSLight* shadow = runtime.sunShadowDirLight;
+		if (!shadow)
+			for (const auto& light : runtime.activeShadowLights)
+				if ((shadow = light.get()))
+					break;
+		if (!sun || !sun->light)
+			return nullptr;
+		templateLights.fill(shadow && shadow->light ? shadow : sun);
+		templateLights[0] = sun;
+		syntheticTemplate = {};
+		syntheticTemplate.shader = shader;
+		syntheticTemplate.shaderProperty = property;
+		syntheticTemplate.geometry = const_cast<RE::BSGeometry*>(geometry);
+		// The sun alone, as the engine's main passes carry it (PS NumLightNumShadowLight is the pass's light count less the sun,
+		// with Light Limit Fix's lights the GPU's); the rest of the array only keeps SetupGeometry's descriptor-count reads in bounds.
+		syntheticTemplate.numLights = 1;
+		syntheticTemplate.numShadowLights = 0;
+		syntheticTemplate.sceneLights = templateLights.data();
+		return &syntheticTemplate;
 	}
 
 	void SceneStore::DrainCapture()
@@ -70,11 +104,20 @@ namespace DCLF
 		// Always drained: the capture buffer is fixed-capacity and a frame that does not drain it overflows. The main
 		// camera's registrations are no source of bindings (scene membership is); the diagnostics read them.
 		const auto entries = capture.Drain();
-		// The BSLightingShader instance, from any Lighting pass the frame registered (step 6e F2: the render thread's, not the walk's).
-		if (auto& evaluator = ConstantEvaluator::Get(); !evaluator.HasLightingShader())
+		// The BSLightingShader instance (T6): the engine's own (0x14338ca00, written by its constructor; the shader GetRenderPasses gives a Lighting pass), not
+		// learned from a registration. The parity's: any Lighting pass the frame registered names the same one.
+		auto& evaluator = ConstantEvaluator::Get();
+		if (!evaluator.HasLightingShader()) {
+			static const REL::Relocation<RE::BSShader**> lightingShader{ REL::Offset(0x338ca00) };
+			if (auto* shader = *lightingShader.get(); shader && shader->shaderType.get() == RE::BSShader::Type::Lighting)
+				evaluator.SetLightingShader(shader);
+		}
+		if (evaluator.HasLightingShader())
 			for (const auto& entry : entries)
 				if (entry.pass && entry.pass->shader && entry.pass->shader->shaderType.get() == RE::BSShader::Type::Lighting) {
-					evaluator.SetLightingShader(entry.pass->shader);
+					if (entry.pass->shader != evaluator.GetLightingShader() && residentStats.lightingShaderDiffers++ == 0)
+						logger::warn("[DCLF] the Lighting shader the registrations use ({}) is not the engine's instance DCLF evaluates with ({}) <- LIGHTING SHADER",
+							static_cast<const void*>(entry.pass->shader), static_cast<const void*>(evaluator.GetLightingShader()));
 					break;
 				}
 		frameLightingPass = nullptr;
@@ -88,14 +131,101 @@ namespace DCLF
 			Scene::ProbeDecalOrder(entries, mainBatchRenderers);
 		// Eligible objects DCLF has not bound that the engine registered: a scene event DCLF missed (a record not written
 		// again, a verdict not taken again). The tracked set is the coordinator's: checked by the accumulate work (CheckRegistrations).
+		// T6: the reflection residue's geometries, classified by the accumulate work (ClassifyResidue).
+		auto residue = capture.TakeReflectionResidueGeometries();
+		capturedResidue.insert(capturedResidue.end(), residue.begin(), residue.end());
 		capturedRegistrations.clear();
 		for (const auto& entry : entries)
 			if (entry.geometry && mainBatchRenderers.contains(entry.batch) && !entry.fading)
 				capturedRegistrations.push_back({ entry.geometry, entry.hint });
 	}
 
+	void SceneStore::ClassifyResidue()
+	{
+		// What the engine registered into the reflection faces under the LOD land and objects roots that is no reflection member:
+		// untracked, tracked but ineligible (by reason), eligible but not bound, or bound but not in the reflection phase.
+		std::scoped_lock lock(residueClassesLock);
+		for (const auto* geometry : std::exchange(capturedResidue, {})) {
+			const auto it = tracked.find(const_cast<RE::BSGeometry*>(geometry));
+			std::size_t kind;
+			if (it == tracked.end())
+				kind = kResidueUntracked;
+			else if (it->second.candidateReason != Ineligible::None)
+				kind = static_cast<std::size_t>(it->second.candidateReason);
+			else if (const std::int32_t slot = FindObject(geometry); !ResidentObject(slot))
+				kind = kResidueUnbound;
+			else
+				kind = (PhasesIn(tables, static_cast<std::uint32_t>(slot)) & kSetReflection) ? kResidueReflection : kResidueNotReflection;
+			++residueClasses.counts[kind];
+			// How long a geometry stays in the residue (distinct geometries, and those seen on 10 frames or more this window).
+			if (auto& seen = residueClasses.seen[geometry]; seen.frame != frame) {
+				seen.frame = frame;
+				if (++seen.frames == 10)
+					++residueClasses.persistent;
+			}
+			if (TimelineEnabled())
+				StageResidue(geometry, it == tracked.end() ? nullptr : &it->second);
+			if (residueClasses.first[kind].empty() && it != tracked.end()) {
+				const auto* parent = geometry->parent;
+				residueClasses.first[kind] = fmt::format("'{}' under '{}' ({})", geometry->name.c_str() ? geometry->name.c_str() : "",
+					parent && parent->name.c_str() ? parent->name.c_str() : "", geometry->GetRTTI() && geometry->GetRTTI()->name ? geometry->GetRTTI()->name : "?");
+			}
+		}
+	}
+
+	void SceneStore::StageResidue(const RE::BSGeometry* a_geometry, const Tracked* a_entry)
+	{
+		// Under residueClassesLock (ClassifyResidue's).
+		auto& classes = residueClasses;
+		std::size_t stage = kStageUntracked;
+		if (a_entry) {
+			if (a_entry->candidateReason == Ineligible::Hidden) {
+				bool hiddenNow = false;
+				const auto [shown, site] = LastShowOnChain(*a_geometry, *a_entry, hiddenNow);
+				stage = hiddenNow ? kStageHiddenNow : kStageHiddenStale;
+				if (!hiddenNow) {
+					++classes.staleSites[site];
+					if (shown)
+						++classes.sinceShow[AgeBucket(frame - shown)];
+				}
+			} else if (a_entry->candidateReason != Ineligible::None) {
+				stage = kStageIneligible;
+			} else if (const std::int32_t slot = FindObject(a_geometry); slot < 0) {
+				stage = kStageNoRecord;
+			} else if (!ResidentObject(slot)) {
+				stage = kStageUnbound;
+				++classes.unboundBy[a_entry->bindFailFrame >= a_entry->writtenFrame ? a_entry->bindFail : 0];
+				++classes.unboundJoin[a_entry->accumulateReasonFrame >= a_entry->writtenFrame ? static_cast<std::size_t>(a_entry->accumulateReason) : 0];
+			} else if (const auto s = static_cast<std::uint32_t>(slot); PhasesIn(tables, s) & kSetReflection) {
+				stage = kStageApplied;
+			} else if (s < setWaitCause.size() && setWaitCause[s]) {
+				stage = kStageWaiting;
+				++classes.waitingBy[s < setWaitWhy.size() ? std::min<std::size_t>(setWaitWhy[s], classes.waitingBy.size() - 1) : 0];
+			} else {
+				stage = kStageNotReflection;
+			}
+			++classes.ages[stage][AgeBucket(frame - a_entry->trackedFrame)];
+		}
+		++classes.stages[stage];
+		if (classes.stageFirst[stage].empty()) {
+			const auto* parent = a_geometry->parent;
+			classes.stageFirst[stage] = fmt::format("'{}' under '{}'{}", a_geometry->name.c_str() ? a_geometry->name.c_str() : "",
+				parent && parent->name.c_str() ? parent->name.c_str() : "",
+				a_entry ? fmt::format(" (tracked {}, written {}, bound {}, joined {}, frame {})", a_entry->trackedFrame, a_entry->writtenFrame, a_entry->boundFrame,
+							  a_entry->memberFrame, frame) :
+						  std::string());
+		}
+	}
+
+	SceneStore::ResidueClasses SceneStore::TakeResidueClasses()
+	{
+		std::scoped_lock lock(residueClassesLock);
+		return std::exchange(residueClasses, {});
+	}
+
 	void SceneStore::CheckRegistrations()
 	{
+		ClassifyResidue();
 		for (const auto& entry : capturedRegistrations) {
 			const auto it = tracked.find(const_cast<RE::BSGeometry*>(entry.geometry));
 			if (it == tracked.end() || it->second.candidateReason != Ineligible::None || ResidentObject(FindObject(entry.geometry)))
@@ -224,11 +354,14 @@ namespace DCLF
 		inSceneTask = a_task;
 		holdPrimaryNotes = true;
 		holdLostMembers = true;
+		const auto workStart = std::chrono::steady_clock::now();
 		RecycleRetired();
 		DropWrittenMaterials();
 		BuildAccumulatePhase();
 		// The set applied and the tables published with it (step 6e E3), for the next frame's start to install.
 		PublishScene();
+		[[maybe_unused]] const double workMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - workStart).count();
+		TracyPlot("CS.DCLF.AccumulateWorkMs", workMs);
 		holdLostMembers = false;
 		holdPrimaryNotes = false;
 		inSceneTask = false;
@@ -268,7 +401,7 @@ namespace DCLF
 				if (frameTables.geometryConstantsValid[slot])
 					continue;
 				GeometryConstants constants{};
-				const auto* templatePass = TemplatePassOf(view.geometryTemplate[slot]);
+				const auto* templatePass = TemplatePassOf(view, slot);
 				if (!templatePass || !evaluator.EvaluateGeometry(*templatePass, view.pipelines[slot].passDescriptor, kMainPassRenderFlags, constants))
 					continue;
 				frameTables.geometryConstants[slot] = constants;
@@ -366,11 +499,6 @@ namespace DCLF
 			Ineligible reason = Ineligible::None;
 			if (derivedHit && !derivedProbe) {
 				descriptors = derived.descriptors;
-				// The LOD fades are this frame's GetRenderPasses' (the property's fields, as ClassifyStatic reads them for an
-				// accumulated object), not the cached derivation's.
-				const auto& lightingProperty = *static_cast<const RE::BSLightingShaderProperty*>(property);
-				descriptors.specularLODFade = lightingProperty.specularLODFade;
-				descriptors.envmapLODFade = lightingProperty.envmapLODFade;
 				++stats.derivedHits;
 			} else {
 				reason = layer ? ClassifyLayer(*geometry, &descriptors, accumulated) : ClassifyStatic(*geometry, &descriptors, accumulated, &castCache);
@@ -486,6 +614,7 @@ namespace DCLF
 					tables.MarkPipelineUsed(pipelineSlot);
 					joinMarkedPipelines.push_back(pipelineSlot);
 					tables.geometryTemplate[pipelineSlot] = property;
+					tables.geometryTemplateObject[pipelineSlot] = objectId;
 				}
 				timer.Add(BuildPart::DedupHit);
 			} else {
@@ -511,6 +640,7 @@ namespace DCLF
 					tables.MarkPipelineUsed(pipelineIt->second);
 					joinMarkedPipelines.push_back(pipelineIt->second);
 					tables.geometryTemplate[pipelineIt->second] = property;
+					tables.geometryTemplateObject[pipelineIt->second] = objectId;
 				}
 				if (newPipeline) {
 					timer.Add(BuildPart::Dedup);
@@ -519,6 +649,7 @@ namespace DCLF
 					// Its PerGeometry values (the engine's SetupGeometry from the template's lighting pass) are the frame's
 					// (FrameTables): evaluated by the render thread for a slot whose key or binding is new.
 					tables.geometryTemplate[slot] = property;
+					tables.geometryTemplateObject[slot] = objectId;
 
 					tables.pipelineTechnique[slot] = TechniqueRowFor(descriptors.pass);
 					stats.shadowMaskPipelines += tables.TechniqueShadowMask(slot) ? 1 : 0;
@@ -662,8 +793,7 @@ namespace DCLF
 				}
 				patch.lights.roomIndex = trackedEntry->roomIndex;
 			}
-			if (patch.flags & kObjectTreeAnim)
-				DeriveTreeAnim(*property, patch.tree);
+			// A tree's wind: TreeWindCS's from its listing, and until its entry the shading row's (FrameValues, T6b1a): none in the record.
 			timer.Add(BuildPart::CapturePatch);
 			if (descriptors.pass & kPassAdditionalAlphaMask) {
 				if (fadingThisFrame++ == 0)
@@ -793,8 +923,23 @@ namespace DCLF
 			}
 			AccumulatedPass pass;
 			const auto* layerProperty = layer ? netimmerse_cast<const RE::BSLightingShaderProperty*>(LayerPropertyOf(*geometry)) : nullptr;
-			if (layer ? !layerProperty || !primary.MembershipLayerPass(geometry, *layerProperty, pass) : !primary.MembershipPass(geometry, pass))
+			if (layer ? !layerProperty || !primary.MembershipLayerPass(geometry, *layerProperty, pass) : !primary.MembershipPass(geometry, pass)) {
+				// T6b0: dropped from the queue, bound only when written again.
+				if (TimelineEnabled() && !layer) {
+					const std::uint8_t why = primary.LastSyntheticFail();
+					trackedIt->second.bindFail = why;
+					trackedIt->second.bindFailFrame = frame;
+					std::scoped_lock lock(residueClassesLock);
+					++timelineStats.bindFailures[why];
+					if (timelineStats.bindFailFirst.empty()) {
+						const auto* material = data.shaderProperty ? static_cast<const RE::BSLightingShaderMaterialBase*>(data.shaderProperty->material) : nullptr;
+						timelineStats.bindFailFirst = fmt::format("'{}' under '{}' ({}, material alpha {:.3f}, alpha property {})", geometry->name.c_str() ? geometry->name.c_str() : "",
+							geometry->parent && geometry->parent->name.c_str() ? geometry->parent->name.c_str() : "", PrimaryCull::kSyntheticFailNames[why],
+							material ? material->materialAlpha : -1.0f, data.alphaProperty ? data.alphaProperty->alphaFlags : 0xFFFF);
+					}
+				}
 				continue;
+			}
 			// A fade node's objects carry its fade-out distance for BuildDraws' fade test, which measures from the node's centre
 			// (Tables::lodFade, SetFadeRow). A tree's also take its height test.
 			if (const auto* fadeNode = data.shaderProperty ? data.shaderProperty->fadeNode : nullptr) {

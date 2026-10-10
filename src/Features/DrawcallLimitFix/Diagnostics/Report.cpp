@@ -8,6 +8,7 @@
 #include "Features/DrawcallLimitFix/Draws/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Common/RenderThreadBudget.h"
+#include "Features/DrawcallLimitFix/Engine/ImportTimings.h"
 #include "Features/DrawcallLimitFix/Engine/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
@@ -18,6 +19,11 @@
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "State.h"
+
+namespace DCLF::Scene
+{
+	std::string TakeHiddenSiteReport();
+}
 
 void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 {
@@ -352,6 +358,30 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			const auto installs = store.TakePublicationStats();
 			logger::info("[DCLF] scene publications (6e E3): {} installed ({} skipped past), {} frames kept the installed one whole, {:.2f} waiting a frame", installs.installed,
 				installs.skipped, installs.kept, installs.pending / std::max(1.0, double(installs.installed + installs.kept)));
+			if (DCLF::SceneStore::TimelineEnabled()) {
+				// T6b0: the frames from an event to the set, and from the set's commit to the frame that installs it.
+				auto histogram = [](const auto& a_buckets) {
+					std::string text;
+					for (std::size_t b = 0; b < a_buckets.size(); ++b)
+						if (a_buckets[b])
+							text += fmt::format("{}{}:{}", text.empty() ? "" : " ", DCLF::SceneStore::kAgeBucketNames[b], a_buckets[b]);
+					return text.empty() ? std::string("-") : text;
+				};
+				const auto timeline = store.TakeTimelineStats();
+				logger::info("[DCLF] latency (T6b0, frames): {} joins ({} first since tracked), {} bindings; attach to join {}; record to binding {}; record to join {}; "
+							 "a show to its join {}; commit to installation (by geometries joined) {}",
+					timeline.joins, timeline.firstJoins, timeline.bound, histogram(timeline.attachToMember), histogram(timeline.writtenToBound),
+					histogram(timeline.writtenToMember), histogram(timeline.showToMember), histogram(installs.installDelay));
+				std::string failures;
+				for (std::size_t w = 1; w < timeline.bindFailures.size(); ++w)
+					if (timeline.bindFailures[w])
+						failures += fmt::format("{}{} {}", failures.empty() ? "" : ", ", DCLF::PrimaryCull::kSyntheticFailNames[w], timeline.bindFailures[w]);
+				if (!failures.empty())
+					logger::info("[DCLF] membership passes that gave none (T6b0: dropped, bound only when written again): {}; first: {}", failures, timeline.bindFailFirst);
+				logger::info("[DCLF] hidden bit stores (T6b0, shown/hidden): {}", DCLF::Scene::TakeHiddenSiteReport());
+				if (const auto line = DCLF::ImportTimings::TakeReport(kReportInterval); !line.empty())
+					logger::info("{}", line);
+			}
 		}
 		{
 			// The "scene tables" zone by sub-zone (ScenePart). The four event parts are the scene work's (ApplyEvents), except
@@ -378,8 +408,8 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 					traits.empty() ? "-" : traits, stats.lightPlaced / tablesFrames, stats.moveEvents / tablesFrames, DCLF::SceneStore::MoveEventsLive() ? "" : ", not installed",
 					stats.lightSkins / tablesFrames, stats.perFrameRelookups, timing.sceneTablesFrames);
 				if (stats.verdictsChecked || stats.verdictsSkipped)
-					logger::info("[DCLF] actor frame verdicts per frame: {:.0f} taken again, {:.0f} left for want of a hidden event ({:.0f} hidden events{}); {} changed with no event{}{}",
-						stats.verdictsChecked / tablesFrames, stats.verdictsSkipped / tablesFrames, stats.hiddenEvents / tablesFrames,
+					logger::info("[DCLF] actor frame verdicts per frame: {:.0f} taken again, {:.0f} left for want of a hidden event ({:.0f} hidden events, {:.1f} statics classified again for one{}); {} changed with no event{}{}",
+						stats.verdictsChecked / tablesFrames, stats.verdictsSkipped / tablesFrames, stats.hiddenEvents / tablesFrames, stats.hiddenRetaken / tablesFrames,
 						DCLF::SceneStore::HiddenEventsLive() ? "" : ", not installed", stats.verdictsMissed, stats.verdictsMissed ? " <- MISSED; first: " : " <- OK",
 						stats.firstVerdictMissed);
 				if (stats.inputRereads[0] || stats.inputRereads[1]) {

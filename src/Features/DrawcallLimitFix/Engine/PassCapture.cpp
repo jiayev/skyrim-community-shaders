@@ -240,6 +240,11 @@ namespace DCLF
 		for (const RE::NiAVObject* node = a_pass->geometry; node; node = node->parent)
 			if (node == skyRoot)
 				return;
+		if (!a_treeLod) {
+			std::scoped_lock lock(reflectionResidueLock);
+			if (reflectionResidueGeometries.size() < 4096)
+				reflectionResidueGeometries.push_back(a_pass->geometry);
+		}
 		if ((a_treeLod ? reflectionResidueTree : reflectionResidueLod).fetch_add(1, std::memory_order_relaxed) == 0) {
 			std::scoped_lock lock(reflectionResidueLock);
 			if (reflectionResidueFirst.empty()) {
@@ -247,6 +252,12 @@ namespace DCLF
 				reflectionResidueFirst = fmt::format("'{}' (technique {:#x}, hint {})", name ? name : "?", a_pass->passEnum, static_cast<std::uint32_t>(a_pass->accumulationHint));
 			}
 		}
+	}
+
+	std::vector<const RE::BSGeometry*> PassCapture::TakeReflectionResidueGeometries()
+	{
+		std::scoped_lock lock(reflectionResidueLock);
+		return std::exchange(reflectionResidueGeometries, {});
 	}
 
 	PassCapture::ReflectionResidue PassCapture::TakeReflectionResidue()

@@ -19,6 +19,7 @@
 #include "DrawcallLimitFix/Engine/SunAccumulation.h"
 #include "DrawcallLimitFix/Engine/SunViews.h"
 #include "DrawcallLimitFix/Engine/FocusViews.h"
+#include "DrawcallLimitFix/Engine/ImportTimings.h"
 #include "DrawcallLimitFix/Engine/LightSelection.h"
 #include "DrawcallLimitFix/Engine/PrimaryCull.h"
 #include "Features/Skylighting.h"
@@ -128,6 +129,8 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::LightSelection::Get().Install();
 	DCLF::FocusViews::Get().Install();
 	DCLF::PrimaryCull::Get().Install();
+	if (DCLF::SwitchEnabled(DCLF::Switch::Timeline))
+		DCLF::ImportTimings::Install();
 	// DCLF's threads and its scene graph, before the first frame kicks a job (dclf-async-publication.md, "The design").
 	(void)DCLF::SceneScheduler::Graph();
 	Hooks::Install();
@@ -336,7 +339,8 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// plan and named slots while the frame runs, and waited for by the GPU; the wetness captured here (Skin's cache is the render
 	// thread's). Before the scene work, which makes the next plan.
 	// With them, the payload ring entry the frame's epochs read (step 6e E4), filled from the installed publication before the signal.
-	if (!DCLF::FrameValues::Get().Kick(store.TakePlacementPlan(), store.TakeShadingItems(), store.CaptureWetness(), draws.PrepareFrameUploads()))
+	if (!DCLF::FrameValues::Get().Kick(store.TakePlacementPlan(), store.TakeShadingItems(), store.CaptureWetness(), store.TakeFadeSeeds(), store.TakeTreeSeeds(), store.FrameGlobalsOfFrame(),
+			draws.PrepareFrameUploads()))
 		draws.DropFrameUploads();
 	// The frame's scene work: the walk and the set's commit, for the next frame's claims. On DCLF's coordinator while
 	// the engine culls (SceneStore::KickSceneTask), joined by the first reader that needs it: everything the walk reads is final

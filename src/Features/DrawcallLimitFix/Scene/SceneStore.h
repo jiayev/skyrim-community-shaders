@@ -266,6 +266,7 @@ namespace DCLF
 			// The property whose lighting pass supplied each pipeline's per-frame constants, kept so
 			// RefreshFrameConstants can re-evaluate them once the main camera's state is current.
 			std::vector<RE::BSShaderProperty*> geometryTemplate;  // parallel to pipelines
+			std::vector<std::uint32_t> geometryTemplateObject;    // parallel to pipelines: the member whose property the template is (T6)
 			// The PerTechnique values (and the technique's filter modes and shadow mask), one row per TechniqueKey - what
 			// EvaluateTechnique reads of a pass descriptor - which every pipeline of the key shares (pipelineTechnique).
 			// RefreshFrameConstants evaluates each used row once a frame and writes it only when it differs, versioning its
@@ -595,6 +596,7 @@ namespace DCLF
 			{
 				a_column(pipelines);
 				a_column(geometryTemplate);
+				a_column(geometryTemplateObject, kNoObjectSlot);
 				a_column(pipelineTechnique);
 				a_column(permutations);
 				a_column(pipelineBindingVersion);
@@ -758,6 +760,7 @@ namespace DCLF
 			// Hidden events drained; actor frame verdicts taken again and left alone; on parity frames, verdicts that
 			// changed with no event (the first named).
 			std::uint64_t hiddenEvents = 0, verdictsChecked = 0, verdictsSkipped = 0, verdictsMissed = 0;
+			std::uint64_t hiddenRetaken = 0;  // statics classified again for a hidden event on their chain (T6b4)
 			std::string firstVerdictMissed;
 			// CS_DCLF_INPUT_WATCH: per input component (kInputComponentNames), the re-reads that found it changed; per kind
 			// of re-read (classify, shading), the re-reads that found any change; the first such change named.
@@ -818,6 +821,7 @@ namespace DCLF
 			stats.lightPlaced = stats.lightSkins = 0;
 			stats.moveEvents = stats.perFrameRelookups = 0;
 			stats.hiddenEvents = stats.verdictsChecked = stats.verdictsSkipped = stats.verdictsMissed = 0;
+			stats.hiddenRetaken = 0;
 			stats.firstVerdictMissed.clear();
 			stats.inputChanged = {};
 			stats.inputRereads = stats.inputRereadsChanged = {};
@@ -840,6 +844,8 @@ namespace DCLF
 
 		/** @brief Whether CS_DCLF_PROFILE is on: the per-part timing in BuildFrame. Read once. */
 		static bool ProfileEnabled();
+		/** @brief CS_DCLF_TIMELINE (T6b0): the stage timelines, the residue by stage, the latency histograms and the import share. */
+		static bool TimelineEnabled();
 
 		static SceneStore& Get();
 
@@ -929,6 +935,7 @@ namespace DCLF
 			std::uint64_t parityChecks = 0, parityChecked = 0, parityPass = 0, parityRecord = 0;
 			std::uint64_t parityPending = 0;  // residents whose fade root is fading: the feedback's next decode ends them
 			std::uint64_t registeredUnbound = 0;  // main-pass registrations of eligible objects DCLF has not bound (DrainCapture)
+			std::uint64_t lightingShaderDiffers = 0;  // T6 parity: a registered Lighting pass whose shader is not the engine instance DCLF uses
 			std::string registeredUnboundFirst;
 		};
 		ResidentStats TakeResidentStats() { return std::exchange(residentStats, {}); }
@@ -1074,6 +1081,8 @@ namespace DCLF
 		struct PublicationStats
 		{
 			std::uint64_t installed = 0, kept = 0, skipped = 0, pending = 0;
+			// T6b0: the frames from a publication's commit to its installation, by the geometries it joined (kAgeBuckets).
+			std::array<std::uint64_t, 8> installDelay{};
 		};
 		PublicationStats TakePublicationStats() { return std::exchange(publicationStats, PublicationStats{}); }
 		/**
@@ -1514,7 +1523,7 @@ namespace DCLF
 		/** @brief The frame a tracked geometry was added, and how; false when it is not tracked. */
 		bool GetTrackInfo(const RE::BSGeometry* a_geometry, std::uint32_t& a_frame, TrackSource& a_source) const;
 		/** @brief The category node an object hangs under, or null (diagnostics). */
-		RE::NiNode* CategoryNodeOf(RE::NiAVObject* a_object) const { return FindCategoryNode(a_object, nullptr); }
+		RE::NiNode* CategoryNodeOf(RE::NiAVObject* a_object) const { return FindCategoryNodeLive(a_object, nullptr); }
 		/**
 		 * @brief The frame a category node was found, and why the refresh that found it ran (0 signature change,
 		 * 1 forced by a detach or rescan); false when unknown (diagnostics).
@@ -1595,6 +1604,24 @@ namespace DCLF
 			bool member = false;      // a resident record's (SampleShading's a_member)
 			bool actor = false;       // owned by an actor: its wetness is CaptureWetness's; else zero
 		};
+		/**
+		 * @brief T6b1a: a fade root whose seed FrameValues samples (FadeState::StaticOf) in the frame that first draws its generation, into
+		 * its seed row (FadeSeedRow): listed, reseeded by a placement snap, or owned. Holds the node.
+		 */
+		struct FadeSeedItem
+		{
+			RE::NiPointer<RE::NiAVObject> node;
+			std::uint32_t root = kNoFadeRoot;
+			std::uint32_t generation = 0;
+			std::uint32_t row = 0;
+		};
+		/** @brief Render thread, with the scene work joined (the frame's start): the seeds requested since the last take. */
+		std::vector<FadeSeedItem> TakeFadeSeeds() { return std::exchange(fadeSeedRequests, {}); }
+		/** @brief T6b1a: a listed tree node whose values FrameValues' tree seeds take at the frame's start (row: 2 * slot + seedOdd). */
+		using TreeSeedItem = FadeSeedItem;
+		std::vector<TreeSeedItem> TakeTreeSeeds() { return std::exchange(treeSeedRequests, {}); }
+		/** @brief Render thread: the frame's engine globals (FrameValues binds them for the seeds' LOD scale). */
+		const std::shared_ptr<const FrameGlobals>& FrameGlobalsOfFrame() const { return frameGlobals; }
 		/** @brief One actor-owned slot's wetness, as the frame's start captured it (Skin::GetWetness). */
 		struct WetnessValue
 		{
@@ -1651,6 +1678,13 @@ namespace DCLF
 			// When and how it was added (diagnostics, GetTrackInfo).
 			std::uint32_t trackedFrame = 0;
 			TrackSource trackedBy = TrackSource::AttachEvent;
+			// T6b0: the frames its record was last taken anew (a slot), it was last bound (made resident: CS_DCLF_TIMELINE) and it last
+			// joined the set (CS_DCLF_TIMELINE). 0: never.
+			std::uint32_t writtenFrame = 0, boundFrame = 0, memberFrame = 0;
+			// T6b0: its last membership pass that gave none (PrimaryCull::LastSyntheticFail), with the frame; a record so left is bound
+			// only when written again.
+			std::uint32_t bindFailFrame = 0;
+			std::uint8_t bindFail = 0;
 
 			/**
 			 * @brief A cached "this object cannot be drawn", and the witnesses that keep it honest.
@@ -1828,7 +1862,7 @@ namespace DCLF
 		 * geometry's userData); an actor's is its cell's container, never tested; a geometry without a
 		 * reference (a terrain block) has its nearest BSMultiBoundNode.
 		 */
-		static void ResolveSunEntry(Tracked& a_tracked, const RE::BSGeometry& a_geometry);
+		void ResolveSunEntry(Tracked& a_tracked, const RE::BSGeometry& a_geometry);
 
 		/**
 		 * @brief The sun entries whose whole content DCLF can take out of the engine's cascade culls (SunCandidates,
@@ -1954,17 +1988,91 @@ namespace DCLF
 			ankerl::unordered_dense::map<const RE::NiAVObject*, Root> roots;
 		};
 		/** @brief Render thread, at ingestion (not while a load screen is up): the newest CategoryCapture, made when a_force or the signature moved. */
+		struct EventBatch;
 		void CaptureCategories(bool a_force);
+		/** @brief Render thread, the frame's start: the tracked geometries the mirror lacked (mirrorCaptureRequests), into a_batch's mirror events. */
+		void CaptureMirrorRequests(EventBatch& a_batch);
 		std::shared_ptr<const CategoryCapture> categoryCapture;
 		std::uint64_t categoryCaptures = 0;       // render thread: the last capture's generation
 		std::uint64_t categoryAppliedGeneration = 0;  // the scene work: the capture RefreshCategoryNodes last diffed against
 		// Render thread, since the last report: the frame captures' time (FrameGlobals, CaptureCategories), the category captures
 		// made, and the frames.
 		std::uint64_t captureNs = 0, categoryCaptureNs = 0, categoryCapturesMade = 0, captureFrames = 0;
+		std::uint64_t categoryMirrorCaptures = 0, categoryMirrorRecords = 0;  // T6b1a: CaptureCategories' captures for the mirror
+		// T6b1a: tracked geometries the mirror held no record of (AddGeometry), captured by the render thread at the next frame's start.
+		std::vector<RE::NiPointer<RE::NiAVObject>> mirrorCaptureRequests;
 		// The signature the category set was last rebuilt for.
 		std::uint64_t categorySignature = 0;
-		RE::NiNode* FindCategoryNode(RE::NiAVObject* a_object, Ineligible* a_parentReason) const;
-		void AddSubtree(RE::NiAVObject* a_root);
+		/**
+		 * @brief The category node a_object hangs under (null for none), and the strongest parent reason on the way: the mirror's
+		 * chain (T6b1b), the scene as the applied batch left it. The pointer is a key (never read through). CS_DCLF_MIRROR_PARITY
+		 * checks it against the live chain (MirrorReads).
+		 */
+		RE::NiNode* FindCategoryNode(RE::NiAVObject* a_object, Ineligible* a_parentReason, bool* a_unmirrored = nullptr) const;
+		/** @brief The same from the live parent chain: the parities' and the diagnostics' (the object alive). */
+		RE::NiNode* FindCategoryNodeLive(RE::NiAVObject* a_object, Ineligible* a_parentReason) const;
+		/**
+		 * @brief T6b1b: the lane's reads ported to the mirror, each checked against the live read under CS_DCLF_MIRROR_PARITY (the
+		 * object alive: the lane holds it). Counted per read since the last report: checked, differing, and the reads that found no
+		 * record on the way (the mirror lacking an object the lane names).
+		 */
+		enum class MirrorRead : std::uint8_t
+		{
+			CategoryNode,
+			Subtree,
+			SwitchEvent,
+			NodeEvent,
+			HiddenChain,
+			MoveKey,
+			LightEntry,
+			SunEntry,
+			kCount
+		};
+		static constexpr std::array<const char*, static_cast<std::size_t>(MirrorRead::kCount)> kMirrorReadNames{ "category node", "subtree", "switch event", "node event",
+			"hidden chain", "move key", "light entry", "sun entry" };
+		/** @brief A mirror read's check: counts it, and a difference (a_describe() its first) when a_differ. */
+		template <class Describe>
+		void NoteMirrorRead(MirrorRead a_read, bool a_differ, Describe&& a_describe) const
+		{
+			const auto r = static_cast<std::size_t>(a_read);
+			++mirrorReads.checked[r];
+			if (a_differ && mirrorReads.differ[r]++ == 0)
+				mirrorReads.first[r] = a_describe();
+		}
+		/** @brief The mirror's parent of a_key (null: none, or no record). */
+		const void* MirrorParent(const void* a_key) const
+		{
+			const auto* record = mirror.Node(a_key);
+			return record ? record->parent : nullptr;
+		}
+		/** @brief The T6b1b check of a walk below a_root: the tracked geometries the mirror gives against the live ones. */
+		void CheckTrackedBelow(MirrorRead a_read, RE::NiAVObject* a_root);
+		/** @brief The geometries under a_root as the mirror's children give them, each with the parent reasons below a_reason, in the walk's order. */
+		void MirrorSubtree(const void* a_root, Ineligible a_reason, std::vector<std::pair<RE::BSGeometry*, Ineligible>>& a_out, bool& a_unmirrored) const;
+		struct MirrorReadStats
+		{
+			std::array<std::uint64_t, static_cast<std::size_t>(MirrorRead::kCount)> reads{}, checked{}, differ{}, unmirrored{};
+			std::array<std::string, static_cast<std::size_t>(MirrorRead::kCount)> first;
+		};
+		mutable MirrorReadStats mirrorReads;
+		bool mirrorReadParity = false;  // CS_DCLF_MIRROR_PARITY, read once
+		std::string MirrorReadReport();
+		/**
+		 * @brief Tracks the geometries under a_root (a category node above it). One the mirror holds no chain for (an attach no hook
+		 * captured) is captured by the render thread at the next frame's start (mirrorCaptureRequests) and tried again after that batch
+		 * (pendingSubtrees, once). An attach event's root the mirror has no chain for was out of the world at its attach (its world
+		 * attach brings its own event): not tried again.
+		 */
+		enum class SubtreeSource : std::uint8_t
+		{
+			AttachEvent,
+			CategoryWalk,
+			Retry,
+		};
+		void AddSubtree(RE::NiAVObject* a_root, SubtreeSource a_source = SubtreeSource::AttachEvent);
+		std::vector<RE::NiPointer<RE::NiAVObject>> pendingSubtrees;
+		std::vector<RE::BSGeometry*> validationSuspects;  // ValidateSlice's: keys, checked again only while tracked
+		std::uint64_t subtreesPended = 0, subtreesDropped = 0;  // since the last report: waiting for the mirror, and still without a chain after
 		void AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason);
 		void ValidateSlice();
 		/** @brief The main camera's batch renderers, for the diagnostics' filter of the capture. Cheap; every frame. */
@@ -1982,7 +2090,83 @@ namespace DCLF
 		 */
 		const RE::BSRenderPass* frameLightingPass = nullptr;
 		/** @brief The pass a pipeline's template evaluates from: the property's own Lighting pass, else the frame's. */
-		const RE::BSRenderPass* TemplatePassOf(RE::BSShaderProperty* a_property) const;
+		/**
+		 * @brief The pass a pipeline's PerGeometry block is evaluated with (T6): a synthetic one, of no registration. The template
+		 * member's geometry and property, the Lighting shader, and the frame's lights SetupGeometry reads: the sun first
+		 * (ShadowSceneNode::sunLight), then a shadow light for every further one the descriptor counts (FUN_1414df650 reads
+		 * sceneLights[1..n] by the descriptor's counts, a shadow light's mask index at +0x520; numLights 1). Only per-object outputs read them,
+		 * which every DCLF draw overrides. Null without a template member or the lights. Render thread; valid until the next call.
+		 */
+		const RE::BSRenderPass* TemplatePassOf(const Tables& a_view, std::uint32_t a_pipeline);
+		/** @brief The parity's: a Lighting pass the engine built for a_property (its last GetRenderPasses), else the frame's registered one. */
+		const RE::BSRenderPass* RegisteredTemplatePassOf(RE::BSShaderProperty* a_property) const;
+		RE::BSRenderPass syntheticTemplate{};
+		std::array<RE::BSLight*, 8> templateLights{};
+
+	public:
+		/** @brief The reflection residue's classes (T6): Ineligible's reasons, then these. */
+		static constexpr std::size_t kResidueUntracked = static_cast<std::size_t>(Ineligible::Count), kResidueUnbound = kResidueUntracked + 1,
+									 kResidueNotReflection = kResidueUntracked + 2, kResidueReflection = kResidueUntracked + 3, kResidueKinds = kResidueUntracked + 4;
+		static constexpr std::size_t kAgeBuckets = 8;
+		static constexpr std::array<const char*, kAgeBuckets> kAgeBucketNames{ "0", "1", "2", "3", "4-7", "8-15", "16-63", "64+" };
+		static constexpr std::size_t AgeBucket(std::uint32_t a_frames)
+		{
+			return a_frames < 4 ? a_frames : a_frames < 8 ? 4 : a_frames < 16 ? 5 : a_frames < 64 ? 6 : 7;
+		}
+		/** @brief The furthest stage a residue geometry reached (T6b0). */
+		enum ResidueStage : std::uint8_t
+		{
+			kStageUntracked,
+			kStageIneligible,     // a verdict other than hidden
+			kStageHiddenNow,      // hidden, and its chain is hidden now
+			kStageHiddenStale,    // hidden, and its chain is shown now: a show the verdict was not taken again for
+			kStageNoRecord,       // eligible, no record
+			kStageUnbound,        // a record, not bound
+			kStageWaiting,        // bound, waiting for readiness (waitingBy)
+			kStageNotReflection,  // bound, not waiting, no reflection phase
+			kStageApplied,        // a reflection member in the coordinator's tables, not installed yet
+			kStageCount
+		};
+		static constexpr std::array<const char*, kStageCount> kStageNames{ "untracked", "ineligible", "hidden", "hidden, shown since", "no record", "a record, unbound",
+			"bound, waiting", "bound, no reflection phase", "a member, not installed" };
+		struct ResidueClasses
+		{
+			std::array<std::uint64_t, kResidueKinds> counts{};
+			std::array<std::string, kResidueKinds> first;
+			struct Seen
+			{
+				std::uint32_t frame = ~0u, frames = 0;
+			};
+			ankerl::unordered_dense::map<const void*, Seen> seen;
+			std::uint64_t persistent = 0;
+			// T6b0 (CS_DCLF_TIMELINE): by the furthest stage reached, with the frames since it was tracked (kAgeBuckets).
+			std::array<std::uint64_t, kStageCount> stages{};
+			std::array<std::array<std::uint64_t, kAgeBuckets>, kStageCount> ages{};
+			std::array<std::string, kStageCount> stageFirst;
+			std::array<std::uint64_t, 14> waitingBy{};  // kStageWaiting: SetStats::waitingBy's reasons
+			std::array<std::uint64_t, 6> unboundBy{};   // kStageUnbound: its last membership pass's failure (0: none failed)
+			// kStageUnbound: the accumulate join's verdict that left it without bindings since its record (Tracked::accumulateReason).
+			std::array<std::uint64_t, static_cast<std::size_t>(Ineligible::Count)> unboundJoin{};
+			// kStageHiddenStale: the store of the last show on its chain (HiddenStoreSiteAt's index; ~0u: none seen), and the frames since.
+			ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> staleSites;
+			std::array<std::uint64_t, kAgeBuckets> sinceShow{};
+		};
+		/** @brief Render thread, the reflection report: the classes since the last call. */
+		ResidueClasses TakeResidueClasses();
+		/** @brief T6b0: the frames from an event to the set, by geometry joining (kAgeBuckets), since the last call. */
+		struct TimelineStats
+		{
+			std::array<std::uint64_t, kAgeBuckets> attachToMember{};  // a geometry's first join since it was tracked
+			std::array<std::uint64_t, kAgeBuckets> writtenToBound{};  // a record taken anew to its binding
+			std::array<std::uint64_t, kAgeBuckets> writtenToMember{};  // a record taken anew to its join
+			std::array<std::uint64_t, kAgeBuckets> showToMember{};  // a stale hidden verdict's show (its chain's last) to its join
+			std::uint64_t joins = 0, firstJoins = 0, bound = 0;
+			std::array<std::uint64_t, 6> bindFailures{};  // membership passes that gave none, by PrimaryCull::LastSyntheticFail
+			std::string bindFailFirst;
+		};
+		TimelineStats TakeTimelineStats();
+
+	private:
 		/** @brief A cheap hash of everything RefreshCategoryNodes reads to find category nodes. */
 		std::uint64_t CategorySignature() const;
 		// a_accumulated: the frame's registered pass, whose captured fade state then stands in for the live one.
@@ -2078,7 +2262,6 @@ namespace DCLF
 		std::uint64_t roomMapGeneration = ~0ull;
 		// Render thread: the first ingestion after a load catches up every switch in the world (CatchUpSwitches).
 		bool worldCatchUpPending = false;
-		struct EventBatch;
 		bool categoryCapturePending = false;
 		/**
 		 * @brief The scene mirror (step 6e F3): the hooks' records, applied by the scene work in event order (ApplyMirrorEvents).
@@ -2097,6 +2280,7 @@ namespace DCLF
 		SceneMirror::KeySet mirrorEventKeys;
 		SceneMirror::FieldMap mirrorEventFields;
 		std::atomic<const void*> mirrorWatchRequest{ nullptr };
+		std::atomic<const void*> mirrorWatchNode{ nullptr };      // CS_DCLF_MIRROR_WATCH=parity:current: a fade node found stale in its currentFade
 		std::atomic<const void*> mirrorWatchAlpha{ nullptr };     // ... and its stale alpha property  // the scene work's stale property for the render thread's watch  // the scene work's: the fields the batch's updates carried (step 6e F3b)  // render thread: the next frame start's capture is forced (a detach ingested, a load's end)
 		std::vector<RE::NiAVObject*> attachedRoots;  // the ingestion's attached subtrees, for CatchUpSwitches (scratch)
 		// Render thread, since the last report: switches caught up at ingestion (by switch event, under an attached subtree or the
@@ -2323,6 +2507,25 @@ namespace DCLF
 			std::uint32_t hint = 0;
 		};
 		std::vector<CapturedRegistration> capturedRegistrations;
+		std::vector<const RE::BSGeometry*> capturedResidue;  // DrainCapture -> ClassifyResidue
+		std::mutex residueClassesLock;
+		ResidueClasses residueClasses;  // under residueClassesLock
+		TimelineStats timelineStats;    // under residueClassesLock
+		// T6b0: a node's last show (hidden events, DrainHiddenEvents) -> {frame, the store's index}; pruned by age.
+		ankerl::unordered_dense::map<const void*, std::pair<std::uint32_t, std::uint32_t>> unhideKeys;
+		// T6b1a: the fade roots' seed requests (TakeFadeSeeds), and a row's coordinator half from the mirror (the seed brings the rest).
+		std::vector<FadeSeedItem> fadeSeedRequests;
+		std::vector<FadeSeedItem> treeSeedRequests;
+		FadeRootStatic FadeRootFromMirror(const void* a_node);
+		/** @brief A new generation for root a_root's row, its seed row toggled, and its seed requested. */
+		void RequestFadeSeed(std::uint32_t a_root, FadeRootStatic& a_row);
+		/** @brief T6b0: the last show on a_geometry's chain up to its category node {frame, store}, or {0, ~0u}; and whether the chain is hidden now. */
+		std::pair<std::uint32_t, std::uint32_t> LastShowOnChain(const RE::BSGeometry& a_geometry, const Tracked& a_entry, bool& a_hiddenNow) const;
+		/** @brief T6b0: a slot joined the set (CommitSet): its geometry's timeline stamped and the latency counted. */
+		void NoteTimelineJoin(std::uint32_t a_slot);
+		/** @brief T6b0: a residue geometry's furthest stage into residueClasses (ClassifyResidue's, under its lock). */
+		void StageResidue(const RE::BSGeometry* a_geometry, const Tracked* a_entry);
+		void ClassifyResidue();
 		void CheckRegistrations();
 		/** @brief The coordinator's residency of a slot (IsMember is the frame's). */
 		bool ResidentObject(std::int32_t a_object) const { return a_object >= 0 && IsResidentSlot(static_cast<std::uint32_t>(a_object)); }
@@ -2497,6 +2700,7 @@ namespace DCLF
 		struct PlacementStats
 		{
 			std::uint64_t roots = 0, stillRoots = 0, rootsGated = 0;
+			std::uint64_t fadeRootsUnmirrored = 0;  // T6b1a: fade roots listed with no mirror record (FadeRootFromMirror)
 		} placementStats;
 		/** @brief The walk's plan item for an entry with a record (its slot and layer row, its resolved sun entry, its palette block). */
 		PlacementPlan::Item PlanItemOf(RE::BSGeometry* a_geometry, Tracked& a_tracked);
@@ -2528,7 +2732,7 @@ namespace DCLF
 			const auto it = movedFrame.find(a_key);
 			return it != movedFrame.end() && frame - it->second <= 1;
 		}
-		static const void* MoveKeyOf(const RE::BSGeometry& a_geometry, const RE::NiNode* a_categoryNode);
+		const void* MoveKeyOf(const RE::BSGeometry& a_geometry, const RE::NiNode* a_categoryNode) const;
 		/**
 		 * @brief Whether a reference root's subtree holds anything that moves (a controller, a non-fixed rigid body, a
 		 * skin): the root's bound is then not fixed, and it is the sun entry of every geometry under it. Walked once per
@@ -2619,6 +2823,9 @@ namespace DCLF
 			std::uint64_t frames = 0, full = 0, samples = 0, changed = 0, checks = 0, pipelinesChecked = 0, techniquesChecked = 0, techniquesDiffer = 0,
 						  lightingVersions = 0, lightingChecked = 0, lightingDiffer = 0;
 			std::string lightingFirst;
+			// T6: the synthetic template's evaluation against the registered one's, where the engine registered one.
+			std::uint64_t templateChecked = 0, templateDiffer = 0, templateLightingDiffer = 0, templateMissing = 0;
+			std::string templateFirst;
 			std::array<std::array<std::uint64_t, 64>, 2> differ{};
 			std::string first;
 		} geometryStats;
@@ -3043,6 +3250,7 @@ namespace DCLF
 		}
 		std::array<std::uint64_t, kWaitSources> setReadiness{ ~0ull, ~0ull, ~0ull, ~0ull };
 		std::vector<std::uint8_t> setWaitCause;  // by slot: what it waits on (its last evaluation's), when waiting
+		std::vector<std::uint8_t> setWaitWhy;    // by slot: the first reason (SetStats::waitingBy's index) of its last wait (T6b0)
 		std::uint64_t setShadowModes = ~0ull;      // the shadow modes and states caster readiness was last taken under
 		std::uint32_t setPhaseMask = ~0u;          // the phases DCLF draws (toggles) the last commit evaluated with
 		std::shared_ptr<SetSnapshot> setBuilding;  // the next publication, kept up to date by each commit
@@ -3096,7 +3304,7 @@ namespace DCLF
 		struct DeltaStats
 		{
 			std::uint32_t walks = 0, full = 0;
-			std::uint64_t evaluated = 0, perFrame = 0, pending = 0, property = 0, node = 0, roots = 0, fade = 0, geometryDirty = 0, settling = 0, restored = 0, moved = 0, kept = 0;
+			std::uint64_t evaluated = 0, perFrame = 0, pending = 0, property = 0, node = 0, roots = 0, fade = 0, geometryDirty = 0, restored = 0, moved = 0, kept = 0;
 			std::uint64_t propertyEvents = 0, nodeEvents = 0, reread = 0;
 			std::uint64_t facePublished = 0, faceUpdated = 0, faceWritten = 0;
 			std::uint64_t switchEvents = 0, switchChanges = 0, switchCatchUps = 0, switchReclassified = 0, attachCatchUps = 0;

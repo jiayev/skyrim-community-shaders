@@ -57,7 +57,82 @@ namespace DCLF
 		return word;
 	}
 
-	RE::NiNode* SceneStore::FindCategoryNode(RE::NiAVObject* a_object, Ineligible* a_parentReason) const
+	RE::NiNode* SceneStore::FindCategoryNode(RE::NiAVObject* a_object, Ineligible* a_parentReason, bool* a_unmirrored) const
+	{
+		constexpr auto kRead = static_cast<std::size_t>(MirrorRead::CategoryNode);
+		++mirrorReads.reads[kRead];
+		Ineligible reason = Ineligible::None;
+		RE::NiNode* found = nullptr;
+		bool unmirrored = false;
+		const void* top = a_object;
+		const SceneCapture::NodeRecord* record = a_object ? mirror.Node(a_object) : nullptr;
+		unmirrored = a_object && !record;
+		const void* key = record ? record->parent : nullptr;
+		for (std::uint32_t depth = 0; key && depth < kMaxParentDepth; ++depth) {
+			auto* node = static_cast<RE::NiNode*>(const_cast<void*>(key));
+			if (categoryNodes.contains(node)) {
+				found = node;
+				break;
+			}
+			const auto* parent = mirror.Node(key);
+			if (!parent) {
+				unmirrored = true;
+				break;
+			}
+			// ParentReason's, from the record's kind (the capture's casts).
+			const Ineligible here = (parent->kind & SceneCapture::kKindSwitch)  ? Ineligible::Switch :
+			                        (parent->kind & SceneCapture::kKindOrdered) ? Ineligible::UnsupportedParent :
+			                        (parent->kind & SceneCapture::kKindBillboard) ? Ineligible::Billboard :
+			                                                                         Ineligible::None;
+			reason = CombineParentReasons(reason, here);
+			top = key;
+			key = parent->parent;
+		}
+		// A root the portal graph draws with no parent at all (alwaysRenderChildren): filed under its graph's shared portal node.
+		if (!found && !key && !unmirrored && top && !alwaysRenderRoots.empty())
+			if (const auto it = alwaysRenderRoots.find(static_cast<const RE::NiAVObject*>(top)); it != alwaysRenderRoots.end())
+				found = it->second.category;
+		if (unmirrored)
+			++mirrorReads.unmirrored[kRead];
+		if (a_unmirrored)
+			*a_unmirrored = unmirrored;
+		if (mirrorReadParity && a_object) {
+			++mirrorReads.checked[kRead];
+			Ineligible liveReason = Ineligible::None;
+			const auto* live = FindCategoryNodeLive(a_object, &liveReason);
+			if (live != found || (found && liveReason != reason)) {
+				if (mirrorReads.differ[kRead]++ == 0)
+					mirrorReads.first[kRead] = fmt::format("'{}' {}: mirror {} (reason {}), live {} (reason {}){}", a_object->name.c_str() ? a_object->name.c_str() : "",
+						static_cast<const void*>(a_object), static_cast<const void*>(found), static_cast<int>(reason), static_cast<const void*>(live), static_cast<int>(liveReason),
+						unmirrored ? ", a record missing on the way" : "");
+			}
+		}
+		if (found && a_parentReason)
+			*a_parentReason = reason;
+		return found;
+	}
+
+	std::string SceneStore::MirrorReadReport()
+	{
+		auto& m = mirrorReads;
+		std::string text;
+		for (std::size_t r = 0; r < m.reads.size(); ++r) {
+			if (!m.reads[r])
+				continue;
+			text += fmt::format("{}{} {} reads ({} with a record missing){}", text.empty() ? "" : "; ", kMirrorReadNames[r], m.reads[r], m.unmirrored[r],
+				m.checked[r] ? fmt::format(", {} checked, {} differ{}{}", m.checked[r], m.differ[r], m.differ[r] ? ": " : "", m.first[r]) : std::string());
+		}
+		bool differ = false;
+		for (const auto n : m.differ)
+			differ |= n != 0;
+		const bool checked = std::ranges::any_of(m.checked, [](auto n) { return n != 0; });
+		m = {};
+		if (text.empty())
+			return {};
+		return fmt::format("[DCLF] mirror reads (T6b1b): {}{}\n", text, checked ? (differ ? " <- MIRROR READ" : " <- OK") : "");
+	}
+
+	RE::NiNode* SceneStore::FindCategoryNodeLive(RE::NiAVObject* a_object, Ineligible* a_parentReason) const
 	{
 		Ineligible reason = Ineligible::None;
 		const RE::NiAVObject* top = a_object;
@@ -130,6 +205,42 @@ namespace DCLF
 			}
 		}
 		return hash.value;
+	}
+
+	void SceneStore::CaptureMirrorRequests(EventBatch& a_batch)
+	{
+		// T6b1a: what the scene work tracked that the mirror holds no record of (an attach no hook captured: the references the engine
+		// moves into multibounds), captured from its highest ancestor the mirror lacks. Render thread, the frame's start: the scene work
+		// is joined, the mirror idle.
+		if (mirrorCaptureRequests.empty())
+			return;
+		ZoneScopedN("CS.DCLF.Ingest.MirrorRequests");
+		ankerl::unordered_dense::set<const RE::NiAVObject*> captured;
+		for (const auto& geometry : std::exchange(mirrorCaptureRequests, {})) {  // a geometry, or (AddSubtree) a subtree's root
+			if (!geometry || mirror.Node(geometry.get()))
+				continue;
+			const RE::NiAVObject* top = geometry.get();
+			bool covered = false;
+			for (const RE::NiAVObject* at = geometry.get(); at; at = at->parent) {
+				if (captured.contains(at)) {
+					covered = true;
+					break;
+				}
+				top = at;
+				if (!at->parent || mirror.Node(at->parent))
+					break;
+			}
+			if (covered || !captured.insert(top).second)
+				continue;
+			if (auto records = SceneCapture::CaptureAttached(*top)) {
+				categoryMirrorRecords += records->nodes.size();
+				++categoryMirrorCaptures;
+				auto* event = new SceneTracker::Event{};
+				event->type = SceneTracker::EventType::Attached;
+				event->captured = std::move(records);
+				a_batch.AppendLate(event);
+			}
+		}
 	}
 
 	void SceneStore::CaptureCategories(bool a_force)
@@ -292,16 +403,16 @@ namespace DCLF
 			categoryFound[node] = { frame, cause };
 			for (auto& child : node->GetChildren()) {
 				if (child)
-					AddSubtree(child.get());
+					AddSubtree(child.get(), SubtreeSource::CategoryWalk);
 			}
 		}
 		// Roots of a graph whose shared node appeared now are walked here too (FindCategoryNode finds them through it).
 		for (const auto& [root, entry] : alwaysRenderRoots) {
 			if (std::find(added.begin(), added.end(), entry.category) != added.end())
-				AddSubtree(entry.root.get());
+				AddSubtree(entry.root.get(), SubtreeSource::CategoryWalk);
 		}
 		for (auto* root : addedRoots)
-			AddSubtree(root);
+			AddSubtree(root, SubtreeSource::CategoryWalk);
 		addSource = previousSource;
 	}
 
@@ -309,25 +420,58 @@ namespace DCLF
 	{
 		if (!a_tracked.sunEntryResolved) {
 			a_tracked.sunEntryResolved = true;
+			// The mirror's chain (T6b1b): the reference's root, or the multibound above.
+			++mirrorReads.reads[static_cast<std::size_t>(MirrorRead::SunEntry)];
+			const auto* record = mirror.Node(&a_geometry);
+			const void* entry = nullptr;
+			if (const void* reference = record ? record->userData : nullptr) {
+				if (record->formType != static_cast<std::uint8_t>(RE::FormType::ActorCharacter)) {
+					const void* root = &a_geometry;
+					for (const void* node = record->parent; node;) {
+						const auto* at = mirror.Node(node);
+						if (!at || at->userData != reference)
+							break;
+						root = node;
+						node = at->parent;
+					}
+					entry = root;
+				}
+			} else if (record) {
+				static const REL::Relocation<const RE::NiRTTI*> multiBound{ RE::BSMultiBoundNode::Ni_RTTI };
+				for (const void* node = record->parent; node;) {
+					const auto* at = mirror.Node(node);
+					if (!at)
+						break;
+					if (at->rtti == multiBound.get()) {
+						entry = node;
+						break;
+					}
+					node = at->parent;
+				}
+			}
+			// Live, not the mirror's (OwnRoot takes a reference on it: AddSubtree's reason); the mirror's checked.
+			const RE::NiAVObject* live = nullptr;
 			auto* geometry = const_cast<RE::BSGeometry*>(&a_geometry);
 			if (auto* reference = geometry->GetUserData()) {
 				// An actor's entry is its cell's container, which the full-frustum cull never tests.
-				if (reference->GetFormType() == RE::FormType::ActorCharacter) {
-					a_tracked.sunEntryNode = nullptr;
-				} else {
+				if (reference->GetFormType() != RE::FormType::ActorCharacter) {
 					const RE::NiAVObject* root = geometry;
 					for (auto* node = geometry->parent; node && node->GetUserData() == reference; node = node->parent)
 						root = node;
-					a_tracked.sunEntryNode = root;
+					live = root;
 				}
 			} else {
 				static const REL::Relocation<const RE::NiRTTI*> multiBound{ RE::BSMultiBoundNode::Ni_RTTI };
 				for (auto* node = geometry->parent; node; node = node->parent)
 					if (node->GetRTTI() == multiBound.get()) {
-						a_tracked.sunEntryNode = node;
+						live = node;
 						break;
 					}
 			}
+			a_tracked.sunEntryNode = live;
+			if (mirrorReadParity)
+				NoteMirrorRead(MirrorRead::SunEntry, live != entry, [&] { return fmt::format("'{}' {}: mirror {}, live {}", a_geometry.name.c_str() ? a_geometry.name.c_str() : "",
+					static_cast<const void*>(&a_geometry), entry, static_cast<const void*>(live)); });
 		}
 	}
 
@@ -355,6 +499,9 @@ namespace DCLF
 		entry.roomMapGeneration = 0;
 		entry.geometry.reset(a_geometry);
 		entry.categoryNode = a_categoryNode;
+		// The mirror holds no record of it (an attach no hook captured): the render thread captures it at the next frame's start (T6b1a).
+		if (!mirror.Node(a_geometry))
+			mirrorCaptureRequests.emplace_back(a_geometry);
 		entry.parentReason = a_parentReason;
 		// Attached (again): its classification stands no more, and every other entry reading the same sun entry node is
 		// evaluated again, since that node's bound takes this one in now (dclf-event-driven-tables.md, "Phase 3").
@@ -391,29 +538,56 @@ namespace DCLF
 	const RE::NiAVObject* SceneStore::LightEntryOf(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const
 	{
 		// The category node's child it hangs from: an actor's root is its light entry, whatever is under it (carried items too).
+		// The mirror's chain (T6b1b).
 		if (const auto* category = a_tracked.categoryNode) {
-			const RE::NiAVObject* root = &a_geometry;
-			for (const auto* node = a_geometry.parent; node && node != category; node = node->parent)
+			++mirrorReads.reads[static_cast<std::size_t>(MirrorRead::LightEntry)];
+			const void* root = &a_geometry;
+			for (const void* node = MirrorParent(&a_geometry); node && node != category; node = MirrorParent(node))
 				root = node;
-			if (root != &a_geometry && root->parent == category)
-				if (const auto* reference = root->GetUserData(); reference && reference->GetFormType() == RE::FormType::ActorCharacter)
-					return root;
+			const auto* record = root != &a_geometry ? mirror.Node(root) : nullptr;
+			const bool actorRoot = record && record->parent == category && record->userData && record->formType == static_cast<std::uint8_t>(RE::FormType::ActorCharacter);
+			// Live, not the mirror's (OwnRoot takes a reference on it: AddSubtree's reason); the mirror's checked.
+			const RE::NiAVObject* live = &a_geometry;
+			for (const auto* node = a_geometry.parent; node && node != category; node = node->parent)
+				live = node;
+			const auto* reference = live != &a_geometry && live->parent == category ? live->GetUserData() : nullptr;
+			const bool liveActor = reference && reference->GetFormType() == RE::FormType::ActorCharacter;
+			if (mirrorReadParity)
+				NoteMirrorRead(MirrorRead::LightEntry, liveActor != actorRoot || (actorRoot && live != root), [&] {
+					return fmt::format("'{}' {}: mirror {} (actor {}), live {} (actor {})", a_geometry.name.c_str() ? a_geometry.name.c_str() : "", static_cast<const void*>(&a_geometry), root,
+						actorRoot, static_cast<const void*>(live), liveActor);
+				});
+			if (liveActor)
+				return live;
 		}
 		return a_tracked.sunEntryNode && !IsCategoryNode(a_tracked.sunEntryNode) ? a_tracked.sunEntryNode : nullptr;
 	}
 
-	void SceneStore::AddSubtree(RE::NiAVObject* a_root)
+	void SceneStore::AddSubtree(RE::NiAVObject* a_root, SubtreeSource a_source)
 	{
 		// The attach event is drained a frame or more after it was queued, so its node can already be gone
 		// (a cell transition releases the subtree). Walking it then dereferences null.
 		if (!a_root)
 			return;
 		Ineligible reasonAbove = Ineligible::None;
-		RE::NiNode* category = FindCategoryNode(a_root, &reasonAbove);
-		if (!category)
+		bool unmirrored = false;
+		RE::NiNode* category = FindCategoryNode(a_root, &reasonAbove, &unmirrored);
+		if (!category) {
+			if (unmirrored && a_source == SubtreeSource::CategoryWalk) {
+				++subtreesPended;
+				mirrorCaptureRequests.emplace_back(a_root);
+				pendingSubtrees.emplace_back(a_root);
+			} else if (unmirrored && a_source == SubtreeSource::Retry) {
+				++subtreesDropped;
+			}
 			return;
+		}
 
-		// Walk down, carrying what the nodes between the category node and the leaf make of it (ParentReason).
+		// Walk down, carrying what the nodes between the category node and the leaf make of it (ParentReason). Live, not the
+		// mirror's: each geometry found becomes a reference (AddGeometry), and the mirror can still name one the engine has detached
+		// and freed since the batch (its detach event the next batch's). The references move to the render thread's ingestion first
+		// (T6b1c); the mirror's walk is checked meanwhile.
+		std::vector<std::pair<RE::BSGeometry*, Ineligible>> live;
 		std::vector<std::pair<RE::NiAVObject*, Ineligible>> stack;
 		stack.emplace_back(a_root, reasonAbove);
 		while (!stack.empty()) {
@@ -422,16 +596,60 @@ namespace DCLF
 			if (!object)
 				continue;
 			if (auto* geometry = object->AsGeometry()) {
-				AddGeometry(geometry, category, reason);
+				live.emplace_back(geometry, reason);
 				continue;
 			}
 			if (auto* node = object->AsNode()) {
 				// Its switches' selected children were caught up at ingestion (CatchUpSwitches).
 				const Ineligible below = CombineParentReasons(reason, ParentReason(node));
-				for (auto& child : node->GetChildren()) {
+				for (auto& child : node->GetChildren())
 					if (child)
 						stack.emplace_back(child.get(), below);
-				}
+			}
+		}
+		if (mirrorReadParity) {
+			constexpr auto kRead = static_cast<std::size_t>(MirrorRead::Subtree);
+			++mirrorReads.reads[kRead];
+			std::vector<std::pair<RE::BSGeometry*, Ineligible>> found;
+			bool lacking = false;
+			MirrorSubtree(a_root, reasonAbove, found, lacking);
+			if (lacking)
+				++mirrorReads.unmirrored[kRead];
+			NoteMirrorRead(MirrorRead::Subtree, live != found, [&] {
+				return fmt::format("'{}' {}: mirror {} geometries, live {}{}", a_root->name.c_str() ? a_root->name.c_str() : "", static_cast<const void*>(a_root), found.size(),
+					live.size(), lacking ? ", a record missing on the way" : "");
+			});
+		}
+		for (const auto& [geometry, reason] : live)
+			AddGeometry(geometry, category, reason);
+	}
+
+	void SceneStore::MirrorSubtree(const void* a_root, Ineligible a_reason, std::vector<std::pair<RE::BSGeometry*, Ineligible>>& a_out, bool& a_unmirrored) const
+	{
+		std::vector<std::pair<const void*, Ineligible>> stack;
+		stack.emplace_back(a_root, a_reason);
+		while (!stack.empty()) {
+			auto [key, reason] = stack.back();
+			stack.pop_back();
+			const auto* record = mirror.Node(key);
+			if (!record) {
+				a_unmirrored = true;
+				continue;
+			}
+			if (record->kind & SceneCapture::kKindGeometry) {
+				a_out.emplace_back(static_cast<RE::BSGeometry*>(const_cast<void*>(key)), reason);
+				continue;
+			}
+			if (record->kind & SceneCapture::kKindNode) {
+				// Its switches' selected children were caught up at ingestion (CatchUpSwitches).
+				const Ineligible here = (record->kind & SceneCapture::kKindSwitch)  ? Ineligible::Switch :
+				                        (record->kind & SceneCapture::kKindOrdered) ? Ineligible::UnsupportedParent :
+				                        (record->kind & SceneCapture::kKindBillboard) ? Ineligible::Billboard :
+				                                                                         Ineligible::None;
+				const Ineligible below = CombineParentReasons(reason, here);
+				for (const void* child : record->children)
+					if (child)
+						stack.emplace_back(child, below);
 			}
 		}
 	}

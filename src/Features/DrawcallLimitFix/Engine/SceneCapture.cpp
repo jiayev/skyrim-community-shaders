@@ -3,6 +3,8 @@
 #include "Features/DrawcallLimitFix/Diagnostics/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Scene/FadeState.h"
+#include "Features/SubsurfaceScattering.h"
+#include "Globals.h"
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
 
 #include <atomic>
@@ -32,6 +34,50 @@ namespace DCLF::SceneCapture
 				return false;
 			auto* entity = static_cast<RE::hkpEntity*>(static_cast<RE::hkReferencedObject*>(ni->body->referencedObject.get()));
 			return entity && entity->motion.type.get() != RE::hkpMotion::MotionType::kFixed;
+		}
+
+		// T6b1a's extras, read on the capturing thread (a hook's or the probe's), never the scene work's.
+		std::int32_t BsxOf(const RE::NiNode& a_node)
+		{
+			static const RE::BSFixedString name{ "BSX" };
+			const auto* extra = const_cast<RE::NiNode&>(a_node).GetExtraData(name);
+			return extra ? static_cast<std::int32_t>(static_cast<const RE::BSXFlags*>(extra)->value) : -1;
+		}
+
+		std::int64_t AnisotropicOf(const RE::BSGeometry& a_geometry)
+		{
+			static const RE::BSFixedString name{ "AnisotropicAlphaMaterial" };
+			const auto* extra = const_cast<RE::BSGeometry&>(a_geometry).GetExtraData(name);
+			if (!extra)
+				return GeometryRecord::kNoExtra;
+			if (const_cast<RE::NiExtraData*>(extra)->GetRTTI() != globals::rtti::NiIntegerExtraDataRTTI.get())
+				return GeometryRecord::kWrongExtra;
+			return static_cast<std::uint32_t>(static_cast<const RE::NiIntegerExtraData*>(extra)->value);
+		}
+
+		bool EmittanceOf(const RE::TESObjectREFR& a_reference)
+		{
+			const auto* source = a_reference.extraList.GetByType<RE::ExtraEmittanceSource>();
+			return source && source->source;
+		}
+
+		bool BeastOf(const RE::TESObjectREFR& a_reference)
+		{
+			const auto& sss = globals::features::subsurfaceScattering;
+			if (!sss.loaded || !sss.isBeastRaceKeyword)
+				return true;
+			if (auto* actor = const_cast<RE::TESObjectREFR&>(a_reference).As<RE::Actor>())
+				if (auto* race = actor->GetRace())
+					return race->HasKeyword(sss.isBeastRaceKeyword);
+			return true;
+		}
+
+		// A fade node's per-frame state: currentFade (+0x130), the LOD level (+0x152 & 0xF), the screen-door byte (+0x154).
+		void CaptureFadeState(const RE::NiAVObject& a_node, NodeRecord& a_out)
+		{
+			a_out.currentFade = At<float>(&a_node, 0x130);
+			a_out.fadeLevel = At<std::uint8_t>(&a_node, 0x152) & 0xF;
+			a_out.fadeDoor = At<std::uint8_t>(&a_node, 0x154);
 		}
 
 		bool TriShapeType(std::uint8_t a_type)
@@ -73,12 +119,18 @@ namespace DCLF::SceneCapture
 		d |= controllers != a_o.controllers ? kControllers : 0u;
 		d |= body != a_o.body ? kBody : 0u;
 		d |= children != a_o.children ? kChildren : 0u;
-		d |= (switchIndex != a_o.switchIndex || switchFlags != a_o.switchFlags || switchCurrent != a_o.switchCurrent) ? kSwitch : 0u;
+		d |= (switchIndex != a_o.switchIndex || switchFlags != a_o.switchFlags || switchCurrent != a_o.switchCurrent || switchChild != a_o.switchChild) ? kSwitch : 0u;
+		d |= (bsx != a_o.bsx || emittance != a_o.emittance || beast != a_o.beast) ? kExtra : 0u;
+		d |= std::bit_cast<std::uint32_t>(currentFade) != std::bit_cast<std::uint32_t>(a_o.currentFade) ? kFadeCurrent : 0u;
+		d |= fadeLevel != a_o.fadeLevel ? kFadeLevel : 0u;
+		d |= fadeDoor != a_o.fadeDoor ? kFadeDoor : 0u;
+		d |= std::bit_cast<std::uint32_t>(fadeAmount) != std::bit_cast<std::uint32_t>(a_o.fadeAmount) ? kFadeAmount : 0u;
 		d |= std::bit_cast<std::uint32_t>(fadeNear) != std::bit_cast<std::uint32_t>(a_o.fadeNear) ? kFadeNear : 0u;
 		d |= std::bit_cast<std::uint32_t>(fadeFar) != std::bit_cast<std::uint32_t>(a_o.fadeFar) ? kFadeFar : 0u;
 		d |= fade109 != a_o.fade109 ? kFade109 : 0u;
 		d |= fadeType != a_o.fadeType ? kFadeType : 0u;
 		d |= treeLodSwitch != a_o.treeLodSwitch ? kTreeLodSwitch : 0u;
+		d |= decals != a_o.decals ? kDecals : 0u;
 		return d;
 	}
 
@@ -98,6 +150,9 @@ namespace DCLF::SceneCapture
 		d |= property != a_o.property ? kProperty : 0u;
 		d |= alpha != a_o.alpha ? kAlpha : 0u;
 		d |= (layerProperty != a_o.layerProperty || altIndexBuffer != a_o.altIndexBuffer || altPrimCount != a_o.altPrimCount) ? kLayer : 0u;
+		d |= anisotropic != a_o.anisotropic ? kExtra : 0u;
+		d |= std::memcmp(multiParams.data(), a_o.multiParams.data(), sizeof(multiParams)) != 0 ? kMultiParams : 0u;
+		d |= segments != a_o.segments ? kSegments : 0u;
 		return d;
 	}
 
@@ -112,12 +167,17 @@ namespace DCLF::SceneCapture
 		d |= fadeNode != a_o.fadeNode ? kFadeNode : 0u;
 		d |= emissive != a_o.emissive ? kEmissive : 0u;
 		d |= controllers != a_o.controllers ? kControllers : 0u;
+		d |= std::bit_cast<std::uint32_t>(alpha) != std::bit_cast<std::uint32_t>(a_o.alpha) ? kAlphaValue : 0u;
+		d |= std::memcmp(projected.data(), a_o.projected.data(), sizeof(projected)) != 0 ? kProjected : 0u;
+		d |= std::memcmp(landBlend.data(), a_o.landBlend.data(), sizeof(landBlend)) != 0 ? kLandBlend : 0u;
+		d |= shadowPasses != a_o.shadowPasses ? kShadowPasses : 0u;
 		return d;
 	}
 
 	std::uint32_t AlphaRecord::Differ(const AlphaRecord& a_o) const
 	{
-		return (flags != a_o.flags ? kFlags : 0u) | (threshold != a_o.threshold ? kThreshold : 0u);
+		return (flags != a_o.flags ? kFlags : 0u) | (threshold != a_o.threshold ? kThreshold : 0u) | (rtti != a_o.rtti ? kRtti : 0u) |
+		       (controllers != a_o.controllers ? kControllers : 0u);
 	}
 
 	void NodeRecord::Assign(const NodeRecord& a_o, std::uint32_t a_f)
@@ -147,7 +207,21 @@ namespace DCLF::SceneCapture
 			switchIndex = a_o.switchIndex;
 			switchFlags = a_o.switchFlags;
 			switchCurrent = a_o.switchCurrent;
+			switchChild = a_o.switchChild;
 		}
+		if (a_f & kExtra) {
+			bsx = a_o.bsx;
+			emittance = a_o.emittance;
+			beast = a_o.beast;
+		}
+		if (a_f & kFadeCurrent)
+			currentFade = a_o.currentFade;
+		if (a_f & kFadeLevel)
+			fadeLevel = a_o.fadeLevel;
+		if (a_f & kFadeDoor)
+			fadeDoor = a_o.fadeDoor;
+		if (a_f & kFadeAmount)
+			fadeAmount = a_o.fadeAmount;
 		if (a_f & kFadeNear)
 			fadeNear = a_o.fadeNear;
 		if (a_f & kFadeFar)
@@ -158,6 +232,8 @@ namespace DCLF::SceneCapture
 			fadeType = a_o.fadeType;
 		if (a_f & kTreeLodSwitch)
 			treeLodSwitch = a_o.treeLodSwitch;
+		if (a_f & kDecals)
+			decals = a_o.decals;
 		if (a_f & kName)
 			name = a_o.name;
 		updatedFrame = Frame();
@@ -194,6 +270,12 @@ namespace DCLF::SceneCapture
 			altIndexBuffer = a_o.altIndexBuffer;
 			altPrimCount = a_o.altPrimCount;
 		}
+		if (a_f & kExtra)
+			anisotropic = a_o.anisotropic;
+		if (a_f & kMultiParams)
+			multiParams = a_o.multiParams;
+		if (a_f & kSegments)
+			segments = a_o.segments;
 	}
 
 	void PropertyRecord::Assign(const PropertyRecord& a_o, std::uint32_t a_f)
@@ -219,6 +301,14 @@ namespace DCLF::SceneCapture
 			emissive = a_o.emissive;
 		if (a_f & kControllers)
 			controllers = a_o.controllers;
+		if (a_f & kAlphaValue)
+			alpha = a_o.alpha;
+		if (a_f & kProjected)
+			projected = a_o.projected;
+		if (a_f & kLandBlend)
+			landBlend = a_o.landBlend;
+		if (a_f & kShadowPasses)
+			shadowPasses = a_o.shadowPasses;
 		writer = 2;
 		writtenFrame = Frame();
 	}
@@ -229,6 +319,41 @@ namespace DCLF::SceneCapture
 			flags = a_o.flags;
 		if (a_f & kThreshold)
 			threshold = a_o.threshold;
+		if (a_f & kRtti)
+			rtti = a_o.rtti;
+		if (a_f & kControllers)
+			controllers = a_o.controllers;
+	}
+
+	namespace
+	{
+		bool IsDecalNode(RE::NiAVObject& a_object)
+		{
+			static const REL::Relocation<const RE::NiRTTI*> decalNode{ RE::BGSDecalNode::Ni_RTTI };
+			return a_object.GetRTTI() == decalNode.get();
+		}
+
+		void CaptureDecals(const RE::NiAVObject& a_node, NodeRecord& r)
+		{
+			r.decals.clear();
+			for (const auto& decal : static_cast<const RE::BGSDecalNode&>(a_node).GetRuntimeData().decals)
+				r.decals.push_back(decal ? decal->Get3D() : nullptr);
+		}
+
+		void CaptureSwitch(const RE::NiNode& a_node, NodeRecord& r)
+		{
+			// NiSwitchNode (AE 1.6.1170): flags +0x128, index +0x12C, revID +0x134, childRevID's data +0x140 and capacity +0x148.
+			r.switchFlags = At<std::uint16_t>(&a_node, 0x128);
+			r.switchIndex = At<std::int32_t>(&a_node, 0x12C);
+			const auto revID = At<std::uint32_t>(&a_node, 0x134);
+			const auto* childRevID = At<const std::uint32_t*>(&a_node, 0x140);
+			const auto capacity = At<std::uint16_t>(&a_node, 0x148);
+			r.switchCurrent = r.switchIndex >= 0 && childRevID && static_cast<std::uint32_t>(r.switchIndex) < capacity &&
+			                  static_cast<std::uint32_t>(r.switchIndex) < a_node.GetChildren().capacity() && childRevID[r.switchIndex] == revID;
+			r.switchChild = nullptr;
+			if (r.switchIndex >= 0 && static_cast<std::uint32_t>(r.switchIndex) < a_node.GetChildren().capacity())
+				r.switchChild = a_node.GetChildren()[static_cast<std::uint16_t>(r.switchIndex)].get();
+		}
 	}
 
 	NodeRecord CaptureNodeFields(const RE::NiAVObject& a_object, std::uint32_t a_fields)
@@ -249,6 +374,17 @@ namespace DCLF::SceneCapture
 			r.fade109 = At<std::uint8_t>(&a_object, 0x109) & ~kFade109FrameBits;
 			r.fadeType = At<std::uint8_t>(&a_object, 0x153) & 0xF;
 		}
+		if (a_fields & (F::kFadeCurrent | F::kFadeLevel | F::kFadeDoor))
+			CaptureFadeState(a_object, r);
+		if (a_fields & F::kFadeAmount)
+			r.fadeAmount = At<float>(&a_object, 0x100);
+		// T6b1a: a switch's index store or child edit (the caller's node is a switch).
+		if (a_fields & F::kSwitch)
+			if (const auto* node = object.AsNode())
+				CaptureSwitch(*node, r);
+		// T6b1a: a decal node's array edit.
+		if ((a_fields & F::kDecals) && IsDecalNode(object))
+			CaptureDecals(a_object, r);
 		return r;
 	}
 
@@ -269,6 +405,8 @@ namespace DCLF::SceneCapture
 			r.userData = reference;
 			r.formType = static_cast<std::uint8_t>(reference->GetFormType());
 			r.actor = const_cast<RE::TESObjectREFR*>(reference)->IsActor();
+			r.emittance = EmittanceOf(*reference);
+			r.beast = BeastOf(*reference);
 		}
 		if (object.AsGeometry()) {
 			r.kind |= kKindGeometry;
@@ -278,19 +416,18 @@ namespace DCLF::SceneCapture
 		if (!node)
 			return r;
 		r.kind |= kKindNode;
-		for (const auto& child : node->GetChildren())
-			if (child)
-				r.children.push_back(child.get());
-		if (auto* switchNode = node->AsSwitchNode()) {
+		const auto& children = node->GetChildren();
+		for (std::uint16_t i = 0; i < children.free_idx(); ++i)
+			r.children.push_back(children[i].get());
+		while (!r.children.empty() && !r.children.back())
+			r.children.pop_back();
+		if (IsDecalNode(object)) {
+			r.kind |= kKindDecalNode;
+			CaptureDecals(a_object, r);
+		}
+		if (node->AsSwitchNode()) {
 			r.kind |= kKindSwitch;
-			// NiSwitchNode (AE 1.6.1170): flags +0x128, index +0x12C, revID +0x134, childRevID's data +0x140 and capacity +0x148.
-			r.switchFlags = At<std::uint16_t>(switchNode, 0x128);
-			r.switchIndex = At<std::int32_t>(switchNode, 0x12C);
-			const auto revID = At<std::uint32_t>(switchNode, 0x134);
-			const auto* childRevID = At<const std::uint32_t*>(switchNode, 0x140);
-			const auto capacity = At<std::uint16_t>(switchNode, 0x148);
-			r.switchCurrent = r.switchIndex >= 0 && childRevID && static_cast<std::uint32_t>(r.switchIndex) < capacity &&
-			                  static_cast<std::uint32_t>(r.switchIndex) < node->GetChildren().capacity() && childRevID[r.switchIndex] == revID;
+			CaptureSwitch(*node, r);
 		}
 		r.kind |= netimmerse_cast<RE::NiBillboardNode*>(node) ? kKindBillboard : 0u;
 		r.kind |= netimmerse_cast<RE::BSOrderedNode*>(node) ? kKindOrdered : 0u;
@@ -305,6 +442,9 @@ namespace DCLF::SceneCapture
 			r.fade109 = At<std::uint8_t>(node, 0x109) & ~kFade109FrameBits;
 			r.fadeType = At<std::uint8_t>(node, 0x153) & 0xF;
 			r.treeLodSwitch = FadeState::TreeLodSwitch(*node);
+			r.bsx = BsxOf(*node);
+			CaptureFadeState(*node, r);
+			r.fadeAmount = At<float>(node, 0x100);
 		}
 		return r;
 	}
@@ -365,7 +505,17 @@ namespace DCLF::SceneCapture
 			r.altIndexBuffer = multi.altIndexBuffer ? *reinterpret_cast<ID3D11Buffer* const*>(multi.altIndexBuffer) : nullptr;
 			r.altPrimCount = multi.altPrimCount;
 			r.layerProperty = multi.additionalShaderProperty.get();
+			std::memcpy(r.multiParams.data(), &multi.materialProjection, 16 * sizeof(float));
+			r.multiParams[16] = multi.materialParams.red;
+			r.multiParams[17] = multi.materialParams.green;
+			r.multiParams[18] = multi.materialParams.blue;
+			r.multiParams[19] = multi.materialParams.alpha;
+			r.multiParams[20] = multi.materialScale;
+			r.multiParams[21] = multi.normalDampener;
 		}
+		r.anisotropic = AnisotropicOf(a_geometry);
+		if (r.type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape))
+			LodSegments::DrawnRanges(&a_geometry, r.segments);
 		return r;
 	}
 
@@ -383,7 +533,12 @@ namespace DCLF::SceneCapture
 		r.controllers = property.GetControllers() != nullptr;
 		if (const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(&a_property)) {
 			r.lighting = true;
+			r.shadowPasses = lighting->shadowMapOrMaskPasses.head != nullptr;
+			r.alpha = a_property.alpha;  // a Lighting property's (MaterialModelOf): GetRenderPasses' update carries it
 			r.emissive = lighting->emissiveColor;
+			const auto& params = lighting->projectedUVParams;
+			const auto& colour = lighting->projectedUVColor;
+			r.projected = { params.red, params.green, params.blue, params.alpha, colour.red, colour.green, colour.blue, colour.alpha };
 			if (const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_property.material)) {
 				r.materialAlpha = material->materialAlpha;
 				const auto* texture = material->diffuseTexture ? material->diffuseTexture->rendererTexture : nullptr;
@@ -394,6 +549,11 @@ namespace DCLF::SceneCapture
 				const bool pbr = a_property.flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting) &&
 				                 (feature == RE::BSShaderMaterial::Feature::kDefault || feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend);
 				r.glints = pbr && static_cast<const BSLightingShaderMaterialPBR*>(a_property.material)->glintParameters.enabled;
+				// The land blend's material (WriteObjectExtras: techniques 8 and 19, the landscape materials).
+				if (feature == RE::BSShaderMaterial::Feature::kMultiTexLand || feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend) {
+					const auto& blend = static_cast<const RE::BSLightingShaderMaterialLandscape*>(material)->landBlendParams;
+					r.landBlend = { blend.red, blend.green, blend.blue, blend.alpha };
+				}
 			}
 		}
 		return r;
@@ -405,6 +565,8 @@ namespace DCLF::SceneCapture
 		r.key = &a_alpha;
 		r.flags = a_alpha.alphaFlags;
 		r.threshold = a_alpha.alphaThreshold;
+		r.rtti = const_cast<RE::NiAlphaProperty&>(a_alpha).GetRTTI();
+		r.controllers = const_cast<RE::NiAlphaProperty&>(a_alpha).GetControllers() != nullptr;
 		return r;
 	}
 

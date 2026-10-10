@@ -144,6 +144,12 @@ namespace DCLF
 				if (firstPerson && firstPerson != thirdPerson)
 					g->cullHidden.emplace_back(firstPerson, true);
 			}
+			// The water objects' shapes as they are now: TESWaterReflections::Update hides them around the cube map's faces too, and
+			// restores them after.
+			if (auto* water = RE::TESWaterSystem::GetSingleton())
+				for (const auto& object : water->waterObjects)
+					if (object && object->shape)
+						g->cullHidden.emplace_back(object->shape.get(), Hidden(object->shape.get()));
 			std::sort(g->cullHidden.begin(), g->cullHidden.end());
 		}
 		g->membershipWitness = PrimaryCull::MembershipWitness(*g);

@@ -77,6 +77,8 @@ cbuffer BuildDrawsConstants : register(b0)
 // StructuredBuffer<FadeNodeState>: FadeStateCS's states as the frame before published them (the latch's fadeStatesIndex, read at
 // the top of main).
 static uint FadeStatesIndex;
+// StructuredBuffer<FadeRootStatic>: the frame's fade seeds (T6b1a: the latch's fadeSeedsIndex; FrameValues, two rows a slot).
+static uint FadeSeedsIndex;
 
 // FadeStateCS.hlsl's rows, as Records.h lays them out.
 struct FadeNodeState
@@ -110,8 +112,23 @@ static const uint kFadeVerdictServiced = 1u << 2;
 static const uint kFadeVerdictDrawn = 1u << 3;
 static const uint kFadeFlagSettled = 1u << 15;
 
-// Whether a fade root slot (~0u: none) is not fully faded in: its state row's fade, or the static row's as listed until
-// FadeStateCS's first update of a new generation.
+// A root's state until FadeStateCS's first update of its generation (T6b1a): its seed's, the node as the frame's values sampled it
+// (Records.h, FadeSeedRow), else the row's (the coordinator's, from its mirror).
+FadeNodeState SeedState(uint a_root, FadeRootStatic a_row)
+{
+	if (FadeSeedsIndex != 0) {
+		StructuredBuffer<FadeRootStatic> seeds = ResourceDescriptorHeap[FadeSeedsIndex];
+		uint count, stride;
+		seeds.GetDimensions(count, stride);
+		const uint at = 2u * a_root + ((a_row.Bits & (1u << 23)) != 0u ? 1u : 0u);
+		if (at < count && seeds[at].Generation == a_row.Generation)
+			return seeds[at].Initial;
+	}
+	return a_row.Initial;
+}
+
+// Whether a fade root slot (~0u: none) is not fully faded in: its state row's fade, or its seed's until FadeStateCS's first update
+// of a new generation.
 bool RootFading(uint a_root)
 {
 	if (a_root == 0xFFFFFFFFu)
@@ -120,7 +137,7 @@ bool RootFading(uint a_root)
 	const FadeRootStatic row = fadeRoots[a_root];
 	StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
 	const FadeNodeState state = fadeStates[a_root];
-	return (state.Generation == row.Generation ? state.CurrentFade : row.Initial.CurrentFade) < 1.0;
+	return (state.Generation == row.Generation ? state.CurrentFade : SeedState(a_root, row).CurrentFade) < 1.0;
 }
 
 // A LOD skin's partitions (DrawInput::lodPartitions, byte L the mask of LOD level L) at its root's level in FadeStateCS's state
@@ -141,7 +158,7 @@ uint LodPartitions(uint a_partitions, uint a_lod, uint a_root, bool a_main, out 
 	StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
 	FadeNodeState state = fadeStates[a_root];
 	if (state.Generation != row.Generation)
-		state = row.Initial;
+		state = SeedState(a_root, row);
 	const uint level = min(state.Levels & 0xFu, 3u);
 	const uint mask = (a_lod >> (8u * level)) & 0xFFu;
 	if (a_main && ((state.Levels >> 8) & 0x70u) != 0x20u && level < 3 && int(state.Blend * 31.0) > 0)
@@ -162,7 +179,7 @@ bool FadedOutOfOcclusion(uint a_root)
 	StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
 	FadeNodeState state = fadeStates[a_root];
 	if (state.Generation != row.Generation)
-		state = row.Initial;
+		state = SeedState(a_root, row);
 	if ((state.Flags & kFadeFlagSettled) != 0 && row.FadeAmount == 1.0 && state.CurrentFade == 1.0)
 		return false;
 	return !(state.CurrentFade > 0.0) || row.FadeAmount == 0.0;
@@ -278,6 +295,7 @@ void LoadLatch()
 	BucketMapOffset = latch.Load(LatchOffset + 248);
 	FadeStatesIndex = latch.Load(LatchOffset + 240);
 	PlacementsIndex = latch.Load(LatchOffset + 252);
+	FadeSeedsIndex = latch.Load(LatchOffset + 292);
 	const uint4 payload = latch.Load4(LatchOffset + 256);
 	const uint4 rows = latch.Load4(LatchOffset + 272);
 	const bool ring = payload.x != 0;

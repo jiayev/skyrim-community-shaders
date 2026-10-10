@@ -25,6 +25,7 @@ namespace DCLF
 			latch.drawCount = a_inputs;
 			latch.visibilityStamp = a_frame & 0x0FFFFFFFu;  // 28 bits: BuildDrawsCS keeps flags below it
 			latch.placementsIndex = FrameValues::Get().PlacementsIndex();
+			latch.fadeSeedsIndex = FrameValues::Get().FadeSeedsIndex();
 			FoldEyeIntoViewProj(a_view.viewProj, a_view.eye, latch.viewProj);
 			return latch;
 		}
@@ -1870,6 +1871,7 @@ namespace DCLF
 				record.textures[kExtrasBufferRegister] = impl->ringShadow.extrasIndex;
 				record.textures[kPlacementBufferRegister] = in.addresses.placementsIndex;
 				record.textures[kPaletteBufferRegister] = in.addresses.palettesIndex;
+				record.textures[kShadingBufferRegister] = in.addresses.shadingIndex;
 				record.textures[kTreeWindRegister] = in.addresses.treeWindIndex;
 				constexpr std::size_t recordEnd = kShadowFrameRecordOffset + sizeof(DrawBindings);
 				if (bytes.size() < recordEnd)
@@ -2223,6 +2225,7 @@ namespace DCLF
 		in.addresses.extrasIndex = a_resources.scene->extrasIndex;
 		in.addresses.placementsIndex = FrameValues::Get().PlacementsIndex();
 		in.addresses.palettesIndex = FrameValues::Get().PalettesIndex();
+		in.addresses.shadingIndex = FrameValues::Get().ShadingIndex();
 		in.addresses.treeWindIndex = a_resources.scene->TreeWindReadIndex(a_store.GetFrame());
 		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.scene->facePositionsAddress : 0;
 		in.addresses.recordCapacity = a_resources.materialRows.capacity;

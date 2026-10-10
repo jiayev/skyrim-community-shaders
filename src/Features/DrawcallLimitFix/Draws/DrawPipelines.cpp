@@ -68,11 +68,12 @@ namespace DCLF
 		// Push data. The DCLF_BINDLESS builds declare a cbuffer here to read the object index out of it;
 		// the address words beside it are still consumed by the layout's indirect ranges, not by a shader.
 		constexpr std::uint32_t kRecordAddressBinding = kDrawPushBinding;
-		// The texture registers the vertex stage may declare: the palettes, the placement rows, the trees' wind, the character light's
-		// noise (pixel only, but in the run), the extras and the per-object record buffer.
+		// The texture registers the vertex stage may declare: the shading rows (a tree's wind until its entry: T6b1a), the palettes, the
+		// placement rows, the trees' wind, the character light's noise (pixel only, but in the run), the extras and the per-object record
+		// buffer.
 		constexpr std::uint32_t kObjectBufferBinding = kBindingShiftT + kObjectBufferRegister;
-		constexpr std::uint32_t kVertexTextureBinding = kBindingShiftT + kPaletteBufferRegister;
-		constexpr std::uint32_t kVertexTextureCount = kObjectBufferRegister - kPaletteBufferRegister + 1;
+		constexpr std::uint32_t kVertexTextureBinding = kBindingShiftT + kShadingBufferRegister;
+		constexpr std::uint32_t kVertexTextureCount = kObjectBufferRegister - kShadingBufferRegister + 1;
 		constexpr std::uint32_t kDescriptorHeapBindings = 1000000;  // DXC's ResourceDescriptorHeap bindings (BasicRHI maps them)
 
 		bool InRange(std::uint32_t a_binding, std::uint32_t a_first, std::uint32_t a_count)
@@ -705,9 +706,9 @@ namespace DCLF
 				first = t + 1;
 			}
 			mainRanges.push_back(fromFrameRecord(range(kBindingShiftT + first, kTextureRegisters - first, pixelStage, index, offsetof(DrawBindings, textures) + 4 * std::size_t{ first })));
-			// The vertex stage's buffers (the palettes up to the object records), from the frame record.
+			// The vertex stage's buffers (the shading rows up to the object records), from the frame record.
 			mainRanges.push_back(fromFrameRecord(range(kVertexTextureBinding, kVertexTextureCount, rhi::ShaderStage::Vertex, index,
-				offsetof(DrawBindings, textures) + 4 * std::size_t{ kPaletteBufferRegister })));
+				offsetof(DrawBindings, textures) + 4 * std::size_t{ kShadingBufferRegister })));
 			return mainRanges;
 			};
 			const auto mainRanges = buildRanges(false);
@@ -759,7 +760,7 @@ namespace DCLF
 			shadowRanges.push_back(fromShadowFrameRecord(range(kBindingShiftT + 1, kTextureRegisters - 1, pixelStage, index, offsetof(DrawBindings, textures) + 4)));
 			shadowRanges.push_back(fromShadowFrameRecord(range(kBindingShiftS, kSamplerRegisters, pixelStage, index, offsetof(DrawBindings, samplers), true)));
 			shadowRanges.push_back(fromShadowFrameRecord(range(kVertexTextureBinding, kVertexTextureCount, rhi::ShaderStage::Vertex, index,
-				offsetof(DrawBindings, textures) + 4 * std::size_t{ kPaletteBufferRegister })));
+				offsetof(DrawBindings, textures) + 4 * std::size_t{ kShadingBufferRegister })));
 			const rhi::PipelineLayoutDesc shadowDesc{ .ranges = rhi::Span<rhi::LayoutBindingRange>{ shadowRanges.data(), static_cast<std::uint32_t>(shadowRanges.size()) },
 				.pushConstants = { shadowPush, 2u }, .staticSamplers = {}, .flags = rhi::PF_AllowInputAssembler };
 			if (device.CreatePipelineLayout(shadowDesc, shadowLayout) != rhi::Result::Ok) {

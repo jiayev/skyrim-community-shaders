@@ -108,6 +108,8 @@ namespace DCLF
 		};
 		/** @brief Since the last call. */
 		ReflectionResidue TakeReflectionResidue();
+		/** @brief The residue's geometries under the LOD land and objects roots since the last call (pointers only: not dereferenced), for their classification. */
+		std::vector<const RE::BSGeometry*> TakeReflectionResidueGeometries();
 
 		static constexpr std::uint32_t kShadowModes = 3;
 
@@ -237,6 +239,7 @@ namespace DCLF
 		std::atomic<std::uint32_t> reflectionResidueWatch{ 0 }, reflectionResidueLod{ 0 }, reflectionResidueTree{ 0 };
 		std::mutex reflectionResidueLock;
 		std::string reflectionResidueFirst;  // under reflectionResidueLock
+		std::vector<const RE::BSGeometry*> reflectionResidueGeometries;  // under reflectionResidueLock
 		void NoteReflectionResidue(const RE::BSRenderPass* a_pass, bool a_treeLod);
 		std::atomic<bool> reflectionFace{ false }, reflectionTreeLodOwned{ false }, reflectionCovered{ true };
 		std::shared_ptr<const ankerl::unordered_dense::set<const RE::BSBatchRenderer*>> reflectionRenderers;

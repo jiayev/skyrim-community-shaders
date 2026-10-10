@@ -26,6 +26,15 @@ namespace DCLF
 		residentPatches.push_back(a_patch);
 		if (a_slot < tables.residentSlot.size())
 			tables.residentSlot[a_slot] = 1;
+		// T6b0: the binding's time from the record.
+		if (TimelineEnabled() && a_slot < tables.objectGeometry.size() && !tables.IsLayer(a_slot))
+			if (const auto it = tracked.find(const_cast<RE::BSGeometry*>(tables.objectGeometry[a_slot])); it != tracked.end() && it->second.slot == a_slot) {
+				it->second.boundFrame = frame;
+				std::scoped_lock lock(residueClassesLock);
+				++timelineStats.bound;
+				if (it->second.writtenFrame)
+					++timelineStats.writtenToBound[AgeBucket(frame - it->second.writtenFrame)];
+			}
 	}
 
 	void SceneStore::DropResidentSlot(std::uint32_t a_slot, bool a_restore)
@@ -193,8 +202,10 @@ namespace DCLF
 		// A member's property is its pipeline's lighting template, read again every frame: the property is the engine's, and a
 		// swap of it rewrites the member only when an event names it.
 		for (std::uint32_t p = 0; p < pipelineMembers.lists.size(); ++p)
-			if (const std::uint32_t slot = pipelineMembers.First(p); slot != ~0u && p < tables.geometryTemplate.size())
+			if (const std::uint32_t slot = pipelineMembers.First(p); slot != ~0u && p < tables.geometryTemplate.size()) {
 				tables.geometryTemplate[p] = SlotProperty(slot);
+				tables.geometryTemplateObject[p] = slot;
+			}
 		// A tree's wind is TreeWindCS's from here (Records.h, TreeStatic): nothing is taken from the tree nodes per frame.
 	}
 
@@ -203,8 +214,13 @@ namespace DCLF
 		const bool tree = a_slot < tables.objects.size() && (tables.objects[a_slot].flags & kObjectTreeAnim);
 		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
 		const auto* property = tree && geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
+		// The tree node from the mirror (its property's fade node, a BSTreeNode); its values are the seed's, which the render thread takes
+		// at the frame's start (T6b1a: the scene work reads no engine memory, and runs no engine code).
 		TreeStatic row;
-		const void* node = property ? TreeStaticOf(*property, row) : nullptr;
+		const void* node = nullptr;
+		if (const auto* record = property ? mirror.Property(property) : nullptr; record && record->fadeNode)
+			if (const auto* fade = mirror.Node(record->fadeNode); fade && (fade->kind & SceneCapture::kKindTree))
+				node = record->fadeNode;
 		if (tables.objectTree.size() <= a_slot) {
 			tables.NoteTreesWrite();
 			tables.objectTree.resize(std::size_t(a_slot) + 1, kNoTree);
@@ -236,12 +252,14 @@ namespace DCLF
 				tables.treeNode.push_back(nullptr);
 			}
 			row.generation = ++tables.treeGenerations;
+			row.seedOdd = (tables.trees[t].seedOdd & 1u) ^ 1u;
 			tables.trees[t] = row;
 			tables.treeNode[t] = node;
 			// Owned while listed (step 6e E3: a published version that names it keeps it, through the retirement chain).
 			if (treeOwners.size() <= t)
 				treeOwners.resize(std::size_t(t) + 1);
 			treeOwners[t].reset(const_cast<RE::NiAVObject*>(static_cast<const RE::NiAVObject*>(node)));
+			treeSeedRequests.push_back({ treeOwners[t], t, row.generation, 2 * t + row.seedOdd });
 			it->second = t;
 			++tables.treesVersion;
 		}
@@ -283,19 +301,22 @@ namespace DCLF
 				tables.fadeRootRefs.push_back(0);
 				tables.fadeRootNode.push_back(nullptr);
 			}
-			auto row = FadeState::StaticOf(*node);
+			// The coordinator's half from the mirror; the node's state and values are the seed's, sampled by FrameValues in the frame
+			// that first draws the generation (T6b1a: the scene work reads no engine memory).
+			auto row = FadeRootFromMirror(node);
 			row.object = a_slot;
-			row.generation = ++tables.fadeRootGenerations;
+			row.bits |= tables.fadeRoots[r].bits & kFadeRootSeedOdd;
 			if (const auto owned = fadeRootOwned.find(node); owned != fadeRootOwned.end())
 				row.bits |= kFadeRootOwned | (owned->second ? kFadeRootStoodIn : 0u);
-			tables.fadeRoots[r] = row;
 			tables.fadeRootNode[r] = node;
 			// Owned while listed (step 6e E3: a published version that names it keeps it, through the retirement chain).
 			if (fadeRootOwners.size() <= r)
 				fadeRootOwners.resize(std::size_t(r) + 1);
 			fadeRootOwners[r].reset(const_cast<RE::NiAVObject*>(node));
-			if (const auto* lodSwitch = FadeState::TreeLodSwitch(*node))
-				tables.fadeRootSwitch.insert_or_assign(lodSwitch, r);
+			RequestFadeSeed(r, row);
+			tables.fadeRoots[r] = row;
+			if (const auto* record = mirror.Node(node); record && record->treeLodSwitch)
+				tables.fadeRootSwitch.insert_or_assign(record->treeLodSwitch, r);
 			it->second = r;
 			tables.NoteFadeRoot(r);
 		}
@@ -343,12 +364,14 @@ namespace DCLF
 			return;
 		auto& row = tables.fadeRoots[it->second];
 		if (a_owned) {
-			// From here the GPU's state is the members': it starts from the node as the engine left it.
+			// From here the GPU's state is the members': it starts from the node as the engine left it (the seed, sampled in the frame
+			// that first draws the new generation).
 			const std::uint32_t object = row.object;
-			row = FadeState::StaticOf(*node);
+			const std::uint32_t odd = row.bits & kFadeRootSeedOdd;
+			row = FadeRootFromMirror(node);
 			row.object = object;
-			row.generation = ++tables.fadeRootGenerations;
-			row.bits |= kFadeRootOwned | (a_standIn ? kFadeRootStoodIn : 0u);
+			row.bits |= odd | kFadeRootOwned | (a_standIn ? kFadeRootStoodIn : 0u);
+			RequestFadeSeed(it->second, row);
 		} else {
 			row.bits &= ~(kFadeRootOwned | kFadeRootStoodIn);
 		}
@@ -376,12 +399,46 @@ namespace DCLF
 			return;
 		auto& row = tables.fadeRoots[it->second];
 		const std::uint32_t object = row.object;
-		const std::uint32_t kept = row.bits & (kFadeRootOwned | kFadeRootStoodIn);
-		row = FadeState::StaticOf(*static_cast<const RE::NiAVObject*>(a_node));
+		const std::uint32_t kept = row.bits & (kFadeRootOwned | kFadeRootStoodIn | kFadeRootSeedOdd);
+		row = FadeRootFromMirror(a_node);
 		row.object = object;
-		row.generation = ++tables.fadeRootGenerations;
 		row.bits |= kept;
+		RequestFadeSeed(it->second, row);
 		tables.NoteFadeRoot(it->second);
+	}
+
+	FadeRootStatic SceneStore::FadeRootFromMirror(const void* a_node)
+	{
+		// What the coordinator's row holds of the node (CheckFadeInputs, the builds' state until the seed's): the fade's range, +0x109,
+		// the fadeAmount, the tree LOD switch's selection; and the state as far as the mirror holds it (the fade and the levels), the
+		// builds' until FadeStateCS's first update. The plan here is a guess (the seed's bits are the node's).
+		FadeRootStatic row;
+		const auto* node = mirror.Node(a_node);
+		if (!node) {
+			// Its geometry tracked this frame by a walk the mirror's captures lag (CaptureMirrorRequests takes it next frame), or a
+			// property's fade node outside the world: the seed brings the node's values.
+			++placementStats.fadeRootsUnmirrored;
+			return row;
+		}
+		row.initial.currentFade = node->currentFade;
+		row.initial.levels = node->fadeLevel | (std::uint32_t(node->fadeType) << 8);
+		row.fadeAmount = node->fadeAmount;
+		row.nearDistance = node->fadeNear;
+		row.farDistance = node->fadeFar;
+		row.bits = (std::uint32_t(node->fade109) << kFadeRootBitsShift) |
+		           ((node->kind & SceneCapture::kKindTree) ? (kFadeRootTree | kFadeRootTreeThresholds) : kFadeRootFade);
+		if (node->treeLodSwitch)
+			if (const auto* lodSwitch = mirror.Node(node->treeLodSwitch); lodSwitch && lodSwitch->switchIndex > 0)
+				row.bits |= kFadeRootTreeLod;
+		return row;
+	}
+
+	void SceneStore::RequestFadeSeed(std::uint32_t a_root, FadeRootStatic& a_row)
+	{
+		a_row.bits ^= kFadeRootSeedOdd;
+		a_row.generation = ++tables.fadeRootGenerations;
+		if (a_root < fadeRootOwners.size() && fadeRootOwners[a_root])
+			fadeSeedRequests.push_back({ fadeRootOwners[a_root], a_root, a_row.generation, static_cast<std::uint32_t>(FadeSeedRow(a_root, a_row.bits)) });
 	}
 
 	void SceneStore::ApplyReseedOwnedFadeRoots()
@@ -396,7 +453,9 @@ namespace DCLF
 		if (it == tables.fadeRootSwitch.end() || it->second >= tables.fadeRoots.size() || !tables.fadeRootNode[it->second])
 			return;
 		auto& row = tables.fadeRoots[it->second];
-		const bool selected = FadeState::TreeLodSelected(*static_cast<const RE::NiAVObject*>(tables.fadeRootNode[it->second]));
+		// The mirror's (T6b1a: the switch's stores carry its index, applied before the switch events).
+		const auto* lodSwitch = mirror.Node(a_switch);
+		const bool selected = lodSwitch && lodSwitch->switchIndex > 0;
 		if (selected == ((row.bits & kFadeRootTreeLod) != 0))
 			return;
 		// An input, not state: the row changes without a new generation, so the GPU's state row is kept.
@@ -411,7 +470,11 @@ namespace DCLF
 		if (it == tables.fadeRootIndex.end())
 			return;
 		auto& row = tables.fadeRoots[it->second];
-		const float amount = Engine::At<float>(static_cast<const RE::NiAVObject*>(a_node), 0x100);
+		// The mirror's (T6b1a: Actor::SetAlpha's update carries it, applied before this batch's structural events).
+		const auto* record = mirror.Node(a_node);
+		if (!record)
+			return;
+		const float amount = record->fadeAmount;
 		if (std::memcmp(&amount, &row.fadeAmount, sizeof(amount)) == 0)
 			return;
 		// An input, not state: the GPU's state row is kept, and FadeStateCS steps its amountFade toward it as the engine does.

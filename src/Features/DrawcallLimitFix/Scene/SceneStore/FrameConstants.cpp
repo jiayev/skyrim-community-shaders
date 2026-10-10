@@ -463,8 +463,7 @@ namespace DCLF
 				// in the block for the constant-buffer path and the parity checks, but no DCLF_BINDLESS draw reads them there
 				// (frameLighting; kPSBindlessGeometryUnread), and neither the template object's own values, so only what such a
 				// draw reads versions the pipeline (SameBindlessGeometry). The template's pass is looked up only to evaluate.
-				auto* property = view.geometryTemplate[i];
-				auto templatePassOf = [&]() { return TemplatePassOf(property); };
+				auto templatePassOf = [&]() { return TemplatePassOf(view, static_cast<std::uint32_t>(i)); };
 				const bool writesEye = WritesEyePosition(view.pipelines[i].passDescriptor);
 				const bool full = !constantsRefreshed || !frameTables.geometryConstantsValid[i] || (writesEye && !eyeSample.valid);
 				auto& held = frameTables.geometryConstants[i];
@@ -515,6 +514,30 @@ namespace DCLF
 					if (templatePass && evaluator.EvaluateGeometry(*templatePass, view.pipelines[i].passDescriptor, kMainPassRenderFlags, reference)) {
 						CheckFrameGeometry(static_cast<std::uint32_t>(i), reference, held);
 						lightingReferences.emplace_back(static_cast<std::uint32_t>(i), reference);
+						// T6: against the evaluation from a pass the engine registered for the template's property (or the frame's).
+						if (const auto* registered = RegisteredTemplatePassOf(view.geometryTemplate[i])) {
+							GeometryConstants engine;
+							if (evaluator.EvaluateGeometry(*registered, view.pipelines[i].passDescriptor, kMainPassRenderFlags, engine)) {
+								++geometryStats.templateChecked;
+								// PS NumLightNumShadowLight.x is the registered pass's own point lights (its object's, the sun not counted):
+								// per object, and unread with Light Limit Fix (only .y, the shadow lights, is).
+								const std::uint32_t lightCount = LightingPSLayout().offset[kPSNumLights];
+								engine.ps.floats[lightCount] = reference.ps.floats[lightCount];
+								const bool own = SameBindlessGeometry(engine, reference);
+								FrameLighting engineLighting{};
+								std::uint32_t engineWritten = 0;
+								MergeFrameLighting(engine.ps, engineLighting, engineWritten);
+								const bool lighting = MatchesFrameLighting(reference.ps, engineLighting, nullptr);
+								if (!own || !lighting) {
+									++(own ? geometryStats.templateLightingDiffer : geometryStats.templateDiffer);
+									if (geometryStats.templateFirst.empty())
+										geometryStats.templateFirst = fmt::format("pipeline {} (descriptor {:#x}): {}", i, view.pipelines[i].passDescriptor,
+											own ? std::string("frame lighting") : BindlessGeometryDifferences(engine, reference));
+								}
+							}
+						} else {
+							++geometryStats.templateMissing;
+						}
 					}
 				}
 			}
@@ -723,7 +746,8 @@ namespace DCLF
 			++sp.slots;
 			BindlessShading now = (*rows)[o];
 			SampleShading(*property, tables.pipelines[tables.objects[o].pipelineIndex].passDescriptor, IsResidentSlot(o), now);
-			if (std::memcmp(&now, &(*rows)[o], sizeof(now)) != 0)
+			// The tree's wind is the row's as the slot was named (a member's until its tree's entry: T6b1a), not kept current: not compared.
+			if (std::memcmp(&now, &(*rows)[o], offsetof(BindlessShading, treeParams)) != 0)
 				changed.push_back(o);
 		}
 		// A write after the walk took the events (the animation job runs the controllers alongside the render thread; the culls'

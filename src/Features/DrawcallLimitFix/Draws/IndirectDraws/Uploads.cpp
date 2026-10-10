@@ -1,6 +1,8 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Internal.h"
 
+#	include "Features/DrawcallLimitFix/Engine/SceneTracker.h"
+
 namespace DCLF
 {
 	namespace
@@ -695,6 +697,7 @@ namespace DCLF
 		// waited for the slot): what the BuildDraws dispatches of the segment read instead of push constants.
 		BuildDrawsLatch latch{};
 		latch.placementsIndex = FrameValues::Get().PlacementsIndex();
+		latch.fadeSeedsIndex = FrameValues::Get().FadeSeedsIndex();
 		if (ring)
 			RingLatch(ringFrame, latch);
 		latch.dispatch[0] = (inputCount + 63) / 64;
@@ -959,6 +962,9 @@ namespace DCLF
 				flags.fetch_and(~kFadeFlagMask, std::memory_order_relaxed);
 				flags.fetch_or(store.flags, std::memory_order_relaxed);
 				*reinterpret_cast<float*>(node + 0x130) = store.fade;
+				// The mirror's value (T6b1a): an update, not a fade event.
+				constexpr std::uint32_t kFields = SceneCapture::NodeRecord::kFadeCurrent;
+				SceneTracker::Get().PushUpdate(SceneCapture::Update{ kFields, SceneCapture::CaptureNodeFields(*static_cast<const RE::NiAVObject*>(store.node), kFields) });
 			}
 			writeBack.applied.fetch_add(stores->stores.size(), std::memory_order_relaxed);
 			writeBack.storeNs.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()),

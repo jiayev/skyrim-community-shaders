@@ -1,6 +1,7 @@
 #include "MirrorWatch.h"
 
 #include "Features/DrawcallLimitFix/Common/Switches.h"
+#include "Features/DrawcallLimitFix/Engine/SceneCapture.h"
 
 #include <TlHelp32.h>
 
@@ -190,6 +191,15 @@ namespace DCLF::MirrorWatch
 
 	void ArmNode(const RE::NiAVObject* a_node)
 	{
+		// current:<name> (T6b1a): a fade node at its world attach's capture, its currentFade (+0x130) and screen-door byte (+0x154).
+		constexpr std::string_view kCurrentPrefix = "current:";
+		if (a_node && Enabled() && !armed.load(std::memory_order_acquire) && Value().starts_with(kCurrentPrefix)) {
+			if (const_cast<RE::NiAVObject*>(a_node)->AsFadeNode() && Matches(*a_node, std::string_view(Value()).substr(kCurrentPrefix.size()))) {
+				const auto* fade = reinterpret_cast<const std::byte*>(a_node);
+				ArmSlots(*a_node, { Slot{ fade + 0x130, "current fade" }, Slot{ fade + 0x154, "screen door" }, Slot{}, Slot{} });
+			}
+			return;
+		}
 		if (!a_node || !Enabled() || armed.load(std::memory_order_acquire) || !Value().starts_with(kNodePrefix))
 			return;
 		if (!Matches(*a_node, std::string_view(Value()).substr(kNodePrefix.size())))
@@ -236,6 +246,29 @@ namespace DCLF::MirrorWatch
 									  Slot{ n > 2 ? partitions + 8 : nullptr, "partition 2" } });
 			return;
 		}
+		// projected:<name>, land:<name> (T6b1a): the property's projected UV parameters, or its landscape material's land blend, from the
+		// world attach's capture on.
+		constexpr std::string_view kProjectedPrefix = "projected:";
+		constexpr std::string_view kLandPrefix = "land:";
+		const bool projected = Value().starts_with(kProjectedPrefix);
+		if (projected || Value().starts_with(kLandPrefix)) {
+			if (!Matches(*a_geometry, std::string_view(Value()).substr(projected ? kProjectedPrefix.size() : kLandPrefix.size())))
+				return;
+			const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_geometry->GetGeometryRuntimeData().shaderProperty.get());
+			if (!lighting)
+				return;
+			if (projected) {
+				ArmSlots(*a_geometry, { Slot{ &lighting->projectedUVParams.red, "params.r" }, Slot{ &lighting->projectedUVParams.green, "params.g" },
+										  Slot{ &lighting->projectedUVParams.alpha, "params.a" }, Slot{ &lighting->projectedUVColor.red, "colour.r" } });
+			} else if (const auto* material = static_cast<const RE::BSLightingShaderMaterialLandscape*>(lighting->material)) {
+				const auto feature = const_cast<RE::BSLightingShaderMaterialLandscape*>(material)->GetFeature();
+				if (feature != RE::BSShaderMaterial::Feature::kMultiTexLand && feature != RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend)
+					return;
+				ArmSlots(*a_geometry, { Slot{ &material->landBlendParams.red, "land blend.r" }, Slot{ &material->landBlendParams.green, "land blend.g" },
+										  Slot{ &material->landBlendParams.blue, "land blend.b" }, Slot{ &material->landBlendParams.alpha, "land blend.a" } });
+			}
+			return;
+		}
 		if (!Value().starts_with(kGeometryPrefix) || !Matches(*a_geometry, std::string_view(Value()).substr(kGeometryPrefix.size())))
 			return;
 		const auto* property = reinterpret_cast<const std::byte*>(a_geometry->GetGeometryRuntimeData().shaderProperty.get());
@@ -243,18 +276,59 @@ namespace DCLF::MirrorWatch
 								  Slot{ property ? property + 0x60 : nullptr, "property fade node" } });
 	}
 
+	std::uint32_t PropertyFields()
+	{
+		using F = SceneCapture::PropertyRecord::Field;
+		if (!Enabled())
+			return 0;
+		const auto& value = Value();
+		return value == "parity" ? F::kFlags : value == "parity:alpha" ? F::kAlphaValue : value == "parity:projected" ? F::kProjected : value == "parity:land" ? F::kLandBlend : 0u;
+	}
+
 	void ArmProperty(const void* a_property)
 	{
-		if (!a_property || !Enabled() || Value() != "parity" || armed.load(std::memory_order_acquire))
+		using F = SceneCapture::PropertyRecord::Field;
+		const std::uint32_t fields = PropertyFields();
+		if (!a_property || !fields || armed.load(std::memory_order_acquire))
 			return;
 		const auto* base = static_cast<const std::byte*>(a_property);
-		ArmSlots(fmt::format("property {}", a_property),
-			{ Slot{ base + 0x38, "flags (low)" }, Slot{ base + 0x3C, "flags (high)" }, Slot{ base + 0x60, "fade node" }, Slot{ base + 0x78, "material" } });
+		const auto& property = *static_cast<const RE::BSShaderProperty*>(a_property);
+		if (fields == F::kAlphaValue) {
+			ArmSlots(fmt::format("property {} alpha", a_property), { Slot{ &property.alpha, "alpha" }, Slot{}, Slot{}, Slot{} });
+		} else if (fields == F::kProjected) {
+			const auto& params = static_cast<const RE::BSLightingShaderProperty&>(property).projectedUVParams;
+			const auto& colour = static_cast<const RE::BSLightingShaderProperty&>(property).projectedUVColor;
+			ArmSlots(fmt::format("property {} projected UV", a_property),
+				{ Slot{ &params.red, "params.r" }, Slot{ &params.blue, "params.b" }, Slot{ &params.alpha, "params.a" }, Slot{ &colour.red, "colour.r" } });
+		} else if (fields == F::kLandBlend) {
+			const auto* material = static_cast<const RE::BSLightingShaderMaterialLandscape*>(property.material);
+			if (!material)
+				return;
+			const auto& blend = material->landBlendParams;
+			ArmSlots(fmt::format("property {} material {} land blend", a_property, static_cast<const void*>(material)),
+				{ Slot{ &blend.red, "land blend.r" }, Slot{ &blend.green, "land blend.g" }, Slot{ &blend.blue, "land blend.b" }, Slot{ &blend.alpha, "land blend.a" } });
+		} else {
+			ArmSlots(fmt::format("property {}", a_property),
+				{ Slot{ base + 0x38, "flags (low)" }, Slot{ base + 0x3C, "flags (high)" }, Slot{ base + 0x60, "fade node" }, Slot{ base + 0x78, "material" } });
+		}
+	}
+
+	bool CurrentFromParity()
+	{
+		return Enabled() && Value() == "parity:current";
+	}
+
+	void ArmCurrent(const void* a_node)
+	{
+		if (!a_node || !CurrentFromParity() || armed.load(std::memory_order_acquire))
+			return;
+		const auto* fade = static_cast<const std::byte*>(a_node);
+		ArmSlots(*static_cast<const RE::NiAVObject*>(a_node), { Slot{ fade + 0x130, "current fade" }, Slot{ fade + 0x154, "screen door" }, Slot{}, Slot{} });
 	}
 
 	void ArmAlpha(const void* a_alpha)
 	{
-		if (!a_alpha || !Enabled() || Value() != "parity" || armed.load(std::memory_order_acquire))
+		if (!a_alpha || !Enabled() || !Value().starts_with("parity") || armed.load(std::memory_order_acquire))
 			return;
 		const auto* base = static_cast<const std::byte*>(a_alpha);
 		// The threshold (+0x32) has its writer's event (FUN_1414ab770): the flags only.

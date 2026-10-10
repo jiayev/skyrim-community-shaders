@@ -65,8 +65,6 @@ namespace DCLF
 		std::uint32_t pixel = 0;
 		std::uint32_t rawVertex = 0;  // descriptors BeginTechnique receives, before State::ModifyShaderLookup
 		std::uint32_t rawPixel = 0;
-		float specularLODFade = 1.0f;  // what GetRenderPasses stores in the property for the PS constants
-		float envmapLODFade = 1.0f;
 		std::uint32_t derivedPass = 0;  // the pass descriptor derived from the property (kNotDerived if it cannot be)
 		// Which technique produced Ineligible::Technique, so coverage can be widened against a histogram
 		// rather than a guess. kRefractionReject marks the refraction rejection, which is not a technique.
@@ -294,6 +292,8 @@ namespace DCLF
 	void DeriveTreeAnim(const RE::BSShaderProperty& a_property, ObjectTreeAnim& a_out);
 
 	/** @brief The BSTreeNode a property's fade node downcasts to, and its static row and clock now; null when there is none. */
+	/** @brief A BSTreeNode's values into a_out (TreeStaticOf's, from the node itself: the render thread's tree seeds, T6b1a). */
+	void TreeStaticOfNode(const void* a_node, TreeStatic& a_out);
 	const void* TreeStaticOf(const RE::BSShaderProperty& a_property, TreeStatic& a_out);
 	/** @brief The frame's tree clock inputs (render thread, any time after Main::Update). */
 	TreeWindFrame SampleTreeWindFrame();

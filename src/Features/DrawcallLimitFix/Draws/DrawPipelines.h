@@ -156,9 +156,9 @@ namespace DCLF
 	 */
 	inline constexpr std::uint32_t kPaletteBufferRegister = kTextureRegisters - 6;
 	/**
-	 * @brief t121: the objects' shading rows (DCLFShading, Common/DCLFObjects.hlsli; BindlessShading; FrameValues), the pixel stage's:
-	 * MaterialData, EmitColor, SSRParams.w, the emissive multiplier and the wetness, by object slot. The frame record gives it, like
-	 * the placements.
+	 * @brief t121: the objects' shading rows (DCLFShading, Common/DCLFObjects.hlsli; BindlessShading; FrameValues), read by both stages:
+	 * MaterialData, EmitColor, SSRParams.w, the emissive multiplier and the wetness, and a tree's wind until its entry (the vertex
+	 * stage's, T6b1a), by object slot. The frame record gives it, like the placements; the lowest of the vertex stage's registers.
 	 */
 	inline constexpr std::uint32_t kShadingBufferRegister = kTextureRegisters - 7;
 	/**

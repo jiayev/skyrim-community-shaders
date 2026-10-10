@@ -16,8 +16,17 @@ namespace DCLF::MirrorWatch
 	void ArmGeometry(const RE::BSGeometry* a_geometry);
 	/** @brief node:<name>: a node at its world attach's capture, its collision object (+0x40) and flags (+0xF4, the frame's bits ignored). */
 	void ArmNode(const RE::NiAVObject* a_node);
-	/** @brief parity: a shader property the mirror parity found stale (its flags, both dwords, and its fade node). Render thread. */
+	/**
+	 * @brief parity: a shader property the mirror parity found stale (its flags, both dwords, and its fade node). Render thread.
+	 * parity:alpha, parity:projected, parity:land (T6b1a): one found stale in that field, its dwords (BSShaderProperty::alpha;
+	 * projectedUVParams; the landscape material's landBlendParams).
+	 */
 	void ArmProperty(const void* a_property);
+	/** @brief The property record fields (PropertyRecord::Field) whose staleness arms the watch: kFlags for parity, 0 when off. */
+	std::uint32_t PropertyFields();
+	/** @brief parity:current (T6b1a): a fade node the mirror parity found stale in its currentFade (+0x130, and +0x154). Render thread. */
+	void ArmCurrent(const void* a_node);
+	bool CurrentFromParity();
 	/** @brief parity: an alpha property the mirror parity found stale (its flags and threshold). Render thread. */
 	void ArmAlpha(const void* a_alpha);
 	/** @brief The report (empty when nothing), and the disarm when it is due. Render thread. */

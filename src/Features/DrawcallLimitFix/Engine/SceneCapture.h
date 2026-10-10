@@ -6,6 +6,8 @@
 #include <variant>
 #include <vector>
 
+#include "Features/DrawcallLimitFix/Scene/LodSegments.h"
+
 struct ID3D11Buffer;
 
 namespace DCLF::SceneCapture
@@ -34,6 +36,7 @@ namespace DCLF::SceneCapture
 		kKindFadeNode = 1u << 6,
 		kKindFaceGen = 1u << 7,
 		kKindTree = 1u << 8,
+		kKindDecalNode = 1u << 9,  // T6b1a: a BGSDecalNode (its RTTI exactly: what its OnVisible is)
 	};
 
 	struct NodeRecord
@@ -56,10 +59,17 @@ namespace DCLF::SceneCapture
 			kFadeType = 1u << 13,    // the LOD type (+0x153 & 0xF)
 			kTreeLodSwitch = 1u << 14,
 			kName = 1u << 15,        // for the logs only: not compared (Differ)
-			kFieldCount = 16,
+			kExtra = 1u << 16,       // T6b1a: a fade node's BSX flags; the reference's emittance source; an actor's race keyword (BeastRaceFace)
+			kFadeCurrent = 1u << 17, // T6b1a: a fade node's currentFade (+0x130): the cull's and the fade update's, every frame while it fades
+			kFadeLevel = 1u << 18,   // T6b1a: its LOD level (+0x152 & 0xF): FUN_14147a430's
+			kFadeDoor = 1u << 19,    // T6b1a: its screen-door byte (+0x154)
+			kFadeAmount = 1u << 20,  // T6b1a: a fade node's fadeAmount (+0x100): Actor::SetAlpha's
+			kDecals = 1u << 21,      // T6b1a: a decal node's decals' 3D, in its array's order (the decal array's edits)
+			kFieldCount = 22,
 		};
 		static constexpr std::array<const char*, kFieldCount> kFieldNames{ "parent", "rtti", "kind", "hidden", "flags", "user data", "controllers",
-			"body", "children", "switch", "fade near", "fade far", "fade +0x109", "fade type", "tree LOD switch", "name" };
+			"body", "children", "switch", "fade near", "fade far", "fade +0x109", "fade type", "tree LOD switch", "name", "extra", "current fade", "LOD level",
+			"screen door", "fade amount", "decals" };
 
 		// The flag bits a record holds besides kHidden: those the scene work reads that hold still between their writers. A
 		// geometry's kMeshLOD (12, set by its loader). Not records (FrameValues', step F4): the bits the frame's culls and updates
@@ -78,10 +88,24 @@ namespace DCLF::SceneCapture
 		bool actor = false;
 		bool controllers = false;
 		bool body = false;
-		std::vector<const void*> children;  // a node's non-null children, in order
+		// A node's children by slot (T6b1a: the engine's slots, which do not move, a null slot null; no trailing null): what its
+		// OnVisible visits, and in that order.
+		std::vector<const void*> children;
 		std::int32_t switchIndex = -1;
 		std::uint16_t switchFlags = 0;
 		bool switchCurrent = false;
+		const void* switchChild = nullptr;  // children[switchIndex]
+		// A decal node's decals' 3D (BSTempEffect::Get3D, null for none), in its array's order: its OnVisible culls them last to first,
+		// and not its children (T6b1a).
+		std::vector<const void*> decals;
+		// kExtra (T6b1a). bsx: the BSX extra data's value on a fade node, -1 none. emittance: the reference (userData) has an
+		// ExtraEmittanceSource with a source. beast: BeastRaceFace's answer for the reference (true without an actor or a race).
+		std::int32_t bsx = -1;
+		bool emittance = false;
+		bool beast = true;
+		float currentFade = 1.0f;
+		std::uint8_t fadeLevel = 0, fadeDoor = 0;
+		float fadeAmount = 1.0f;
 		float fadeNear = 0.0f, fadeFar = 0.0f;
 		std::uint8_t fade109 = 0, fadeType = 0;
 		const void* treeLodSwitch = nullptr;
@@ -108,9 +132,13 @@ namespace DCLF::SceneCapture
 			kProperty = 1u << 4,
 			kAlpha = 1u << 5,
 			kLayer = 1u << 6,       // the additional property, the alt index buffer and its count
-			kFieldCount = 7,
+			kExtra = 1u << 7,       // T6b1a: the AnisotropicAlphaMaterial extra data (ExtendedTranslucency::MaterialModelOf)
+			kMultiParams = 1u << 8, // T6b1a: a multi-index shape's material projection, parameters, scale and normal dampener
+			kSegments = 1u << 9,    // T6b1a: a sub-index shape's drawn ranges (LodSegments::DrawnRanges)
+			kFieldCount = 10,
 		};
-		static constexpr std::array<const char*, kFieldCount> kFieldNames{ "type", "renderer", "skin", "dismember", "property", "alpha", "layer" };
+		static constexpr std::array<const char*, kFieldCount> kFieldNames{ "type", "renderer", "skin", "dismember", "property", "alpha", "layer", "extra",
+			"multi-index parameters", "segments" };
 
 		struct Partition
 		{
@@ -141,6 +169,14 @@ namespace DCLF::SceneCapture
 		const void* layerProperty = nullptr;
 		ID3D11Buffer* altIndexBuffer = nullptr;
 		std::uint32_t altPrimCount = 0;
+		// kExtra: the extra data's value (an NiIntegerExtraData's), kNoExtra none, kWrongExtra another type.
+		static constexpr std::int64_t kNoExtra = -1, kWrongExtra = -2;
+		std::int64_t anisotropic = kNoExtra;
+		// kMultiParams: materialProjection (16), materialParams (4), materialScale, normalDampener.
+		std::array<float, 22> multiParams{};
+		// kSegments: what the engine's draw of a sub-index shape draws now (compared by triangles: the draw's rebuild of the runs moves
+		// their starts, not their triangles).
+		std::vector<LodSegments::Range> segments;
 
 		// The capture that took it (SceneCapture::NextSequence at its start): not compared.
 		std::uint64_t sequence = 0;
@@ -161,10 +197,14 @@ namespace DCLF::SceneCapture
 			kFadeNode = 1u << 5,
 			kEmissive = 1u << 6,
 			kControllers = 1u << 7,
-			kFieldCount = 8,
+			kAlphaValue = 1u << 8,  // T6b1a: BSShaderProperty::alpha, a Lighting property's (1 for any other)
+			kProjected = 1u << 9,   // T6b1a: projectedUVParams and projectedUVColor
+			kLandBlend = 1u << 10,  // T6b1a: a landscape material's landBlendParams
+			kShadowPasses = 1u << 11,  // T6b1a: whether a Lighting property's shadow pass list (shadowMapOrMaskPasses) has a head
+			kFieldCount = 12,
 		};
 		static constexpr std::array<const char*, kFieldCount> kFieldNames{ "rtti", "flags", "material", "material alpha", "material other", "fade node",
-			"emissive", "controllers" };
+			"emissive", "controllers", "alpha", "projected UV", "land blend", "shadow passes" };
 
 		const void* key = nullptr;
 		const void* rtti = nullptr;
@@ -178,6 +218,10 @@ namespace DCLF::SceneCapture
 		const void* fadeNode = nullptr;
 		const void* emissive = nullptr;
 		bool controllers = false;
+		float alpha = 1.0f;
+		std::array<float, 8> projected{};  // projectedUVParams, projectedUVColor
+		std::array<float, 4> landBlend{};
+		bool shadowPasses = false;
 
 		// The capture that took it (SceneCapture::NextSequence at its start): not compared.
 		std::uint64_t sequence = 0;
@@ -196,13 +240,17 @@ namespace DCLF::SceneCapture
 		{
 			kFlags = 1u << 0,
 			kThreshold = 1u << 1,
-			kFieldCount = 2,
+			kRtti = 1u << 2,         // T6b1a
+			kControllers = 1u << 3,  // T6b1a
+			kFieldCount = 4,
 		};
-		static constexpr std::array<const char*, kFieldCount> kFieldNames{ "flags", "threshold" };
+		static constexpr std::array<const char*, kFieldCount> kFieldNames{ "flags", "threshold", "rtti", "controllers" };
 
 		const void* key = nullptr;
 		std::uint16_t flags = 0;
 		std::uint8_t threshold = 0;
+		const void* rtti = nullptr;
+		bool controllers = false;
 
 		// The capture that took it (SceneCapture::NextSequence at its start): not compared.
 		std::uint64_t sequence = 0;

@@ -10,6 +10,12 @@ namespace DCLF
 		if (tracked.empty())
 			return;
 		std::vector<RE::BSGeometry*> stale;
+		// The entries are the mirror's (the scene as the applied batch left it), the check live: a geometry detached since the batch's
+		// ingestion differs until the next batch's detach erases it. A suspect still tracked and still differing a batch later is a
+		// detach the events missed (T6b1b).
+		for (auto* geometry : std::exchange(validationSuspects, {}))
+			if (const auto it = tracked.find(geometry); it != tracked.end() && FindCategoryNodeLive(geometry, nullptr) != it->second.categoryNode)
+				stale.push_back(geometry);
 		const std::size_t size = tracked.size();
 		const std::size_t count = std::min(kValidationSlice, size);
 		for (std::size_t i = 0; i < count; ++i) {
@@ -17,8 +23,8 @@ namespace DCLF
 			// The map's storage is a dense vector, so the cursor walks it without hashing.
 			auto it = tracked.begin() + static_cast<std::ptrdiff_t>(validationCursor);
 			Ineligible reason = Ineligible::None;
-			if (FindCategoryNode(it->first, &reason) != it->second.categoryNode) {
-				stale.push_back(it->first);
+			if (FindCategoryNodeLive(it->first, &reason) != it->second.categoryNode) {
+				validationSuspects.push_back(it->first);
 			} else if (it->second.parentReason != reason) {
 				it->second.parentReason = reason;
 				it->second.candidateFrame = 0;
@@ -70,6 +76,11 @@ namespace DCLF
 				static_cast<double>(g.lightingVersions) / g.frames, g.checks, g.pipelinesChecked, total, g.techniquesDiffer, g.techniquesChecked, g.lightingDiffer, g.lightingChecked,
 				g.checks ? (total || g.techniquesDiffer || g.lightingDiffer ? " <- DIFFER:" : " <- OK") : "", differ,
 				(total ? "; first: " + g.first : std::string()) + (g.lightingDiffer ? "; lighting: " + g.lightingFirst : std::string()));
+			if (g.templateChecked || g.templateMissing)
+				text += fmt::format("[DCLF] pipeline templates (T6: the synthetic pass against a registered one's evaluation): {} checked ({} with none registered), {} differ "
+									"in the bindless draw's values, {} in the frame lighting{}{}\n",
+					g.templateChecked, g.templateMissing, g.templateDiffer, g.templateLightingDiffer, g.templateDiffer || g.templateLightingDiffer ? " <- TEMPLATE" : " <- OK",
+					g.templateFirst.empty() ? "" : "; first: " + g.templateFirst);
 			g = {};
 		}
 		if (auto& sp = shadingParity; sp.frames) {
@@ -113,6 +124,7 @@ namespace DCLF
 			c = { std::move(c.snapshot), c.cursor };
 		}
 		text += mirror.Report();
+		text += MirrorReadReport();
 		text += MirrorWatch::TakeReport(frame);
 		if (const auto c = SceneCapture::TakeCounters(); c.attaches || c.outOfWorld)
 			text += fmt::format("[DCLF] scene capture (6e F3): {} attaches in the world captured ({} records, {:.1f} us in all; {} on the main thread, {:.1f} us), {} out of the "
@@ -120,11 +132,12 @@ namespace DCLF
 				c.attaches, c.records, static_cast<double>(c.ns) / 1000.0, c.mainThread, static_cast<double>(c.mainThreadNs) / 1000.0, c.outOfWorld);
 		if (captureFrames) {
 			const auto unscoped = FrameGlobals::TakeUnscopedReads();
-			text += fmt::format("[DCLF] frame capture (6e F2): render thread {:.1f} us/frame for the globals, {:.1f} us/frame for the categories ({} captures made); "
-								"{} reads off the render thread with no frame's capture bound{}\n",
-				static_cast<double>(captureNs) / 1000.0 / captureFrames, static_cast<double>(categoryCaptureNs) / 1000.0 / captureFrames, categoryCapturesMade, unscoped,
-				unscoped ? " <- UNSCOPED GLOBALS" : " <- OK");
-			captureNs = categoryCaptureNs = categoryCapturesMade = captureFrames = 0;
+			text += fmt::format("[DCLF] frame capture (6e F2): render thread {:.1f} us/frame for the globals, {:.1f} us/frame for the categories ({} captures made; {} subtrees the mirror lacked captured, {} records; "
+								"{} subtrees waited for the mirror, {} dropped with no chain after); {} reads off the render thread with no frame's capture bound{}\n",
+				static_cast<double>(captureNs) / 1000.0 / captureFrames, static_cast<double>(categoryCaptureNs) / 1000.0 / captureFrames, categoryCapturesMade, categoryMirrorCaptures, categoryMirrorRecords,
+				subtreesPended, subtreesDropped, unscoped, unscoped ? " <- UNSCOPED GLOBALS" : " <- OK");
+			captureNs = categoryCaptureNs = categoryCapturesMade = captureFrames = 0; categoryMirrorCaptures = categoryMirrorRecords = 0;
+			subtreesPended = subtreesDropped = 0;
 		}
 		if (auto& t = delta; t.walks) {
 			const double n = t.walks;
@@ -138,9 +151,9 @@ namespace DCLF
 				lightTable.index.size(), lightTable.nodes.size(), std::exchange(lightTable.entriesWritten, 0), std::exchange(lightTable.snapshots, 0),
 				candidateParity.checks, candidateParity.mismatches, candidateParity.checks ? (candidateParity.mismatches ? " <- CANDIDATES" : " <- OK") : "");
 			candidateParity = {};
-			text += fmt::format("[DCLF] scene delta: {} walks ({} full), evaluated {:.0f}/frame (max {}; per-frame {:.0f}, of them {:.0f} kept by the light path and {:.0f} moved by it; pending {:.0f}, fade {:.1f}, property {:.1f}, node {:.1f}, sun entry node {:.1f}, geometry {:.1f}), settling {:.1f}, lapsed {:.0f}, {:.0f} live slots; events per frame: {:.1f} property, {:.1f} node; {:.2f} inputs re-read changed; switch events {:.2f}/frame: {:.2f} changed, {:.2f} caught up by the render thread at ingestion ({:.2f} under attached subtrees or the world after a load; {:.2f} us/frame), {:.1f} entries classified again; face publications {:.1f}/frame: {:.1f} streams updated in place, {:.2f} shapes written\n",
+			text += fmt::format("[DCLF] scene delta: {} walks ({} full), evaluated {:.0f}/frame (max {}; per-frame {:.0f}, of them {:.0f} kept by the light path and {:.0f} moved by it; pending {:.0f}, fade {:.1f}, property {:.1f}, node {:.1f}, sun entry node {:.1f}, geometry {:.1f}), lapsed {:.0f}, {:.0f} live slots; events per frame: {:.1f} property, {:.1f} node; {:.2f} inputs re-read changed; switch events {:.2f}/frame: {:.2f} changed, {:.2f} caught up by the render thread at ingestion ({:.2f} under attached subtrees or the world after a load; {:.2f} us/frame), {:.1f} entries classified again; face publications {:.1f}/frame: {:.1f} streams updated in place, {:.2f} shapes written\n",
 				t.walks, t.full, t.evaluated / n, t.evaluatedMax, t.perFrame / n, t.kept / n, t.moved / n, t.pending / n, t.fade / n, t.property / n, t.node / n, t.roots / n,
-				t.geometryDirty / n, t.settling / n, t.restored / n, t.live / n, t.propertyEvents / n, t.nodeEvents / n, t.reread / n,
+				t.geometryDirty / n, t.restored / n, t.live / n, t.propertyEvents / n, t.nodeEvents / n, t.reread / n,
 				t.switchEvents / n, t.switchChanges / n, t.switchCatchUps / n, t.attachCatchUps / n, catchUpUs, t.switchReclassified / n, t.facePublished / n, t.faceUpdated / n,
 				t.faceWritten / n);
 			if (rootMotion.size() > (1u << 16))

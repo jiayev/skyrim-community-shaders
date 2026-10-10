@@ -7005,6 +7005,124 @@ Measured (r1, r4: the Sleeping Giant Inn, Dragonsreach; r2, r3: Riverwood in mot
     yet admitted, against ~4 with the engine's verdict).
 -   No new parity finding (the open ones: the extras rows, `STALE MATERIAL`, `TREE WIND`, the start window's `FADE`).
 
+## Constants without registrations (T6a, 2026-10-09)
+
+**Before.** Two inputs of the constant evaluation (`ConstantEvaluator`) came from the engine's registrations of the frame:
+the `BSLightingShader` instance (learned from any captured Lighting pass), and each pipeline's template pass for
+`SetupGeometry` (the template property's own pass list, its last `GetRenderPasses`, else any Lighting pass the main camera
+registered with lights: another object's geometry, property and lights). Where nothing was registered (the Sleeping Giant
+Inn: 155 of 225 pipelines a window), a pipeline's PerGeometry block was not evaluated at all.
+
+**Now:**
+-   **The shader:** the engine's instance (`0x14338ca00`, written by `BSLightingShader`'s constructor; `GetRenderPasses` gives
+    it to a Lighting pass). A registered Lighting pass naming another one logs `<- LIGHTING SHADER`.
+-   **The template pass is synthetic** (`SceneStore::TemplatePassOf(view, pipeline)`): the template member's geometry and
+    property (`Tables::geometryTemplateObject`, set with `geometryTemplate` at the joins and by `KeepResidentsAlive`), the
+    Lighting shader, and the lights `SetupGeometry` reads: `ShadowSceneNode::sunLight` first, `numLights` 1, no shadow
+    lights. `FUN_1414df650` reads `sceneLights[1..n]` by the descriptor's light counts, not `numLights` (and a shadow light's
+    mask index, `+0x520`): the rest of the array is a real shadow light (the sun's, else an active one), so those reads stay
+    in objects. Only per-object outputs read them, and every DCLF draw overrides those.
+-   **Parity** (`pipeline templates`, `<- TEMPLATE`, on persistent parity frames): each pipeline's synthetic evaluation
+    against one from a registered pass, in what a bindless draw reads and in the frame lighting. PS `NumLightNumShadowLight.x`
+    is the registered pass's own point lights (its object's): per object, unread with Light Limit Fix (only `.y` is), and
+    not compared.
+-   The LOD fades were already the GPU's (`LodMetricOf`, the draw's fade word).
+
+Found on the way: with `numLights` set to the array's size the synthetic pass gave `NumLightNumShadowLight.x` 7 (the
+engine's main passes carry the sun alone).
+
+Measured (t5, t6: Riverwood in motion; t7: the Sleeping Giant Inn, Dragonsreach; set and persistent parities): 0 differ in
+every window (264-603 pipelines checked a window); the frame lighting equal; no new parity finding.
+
+**The reflection residue is not about registrations.** `DCLF builds an object's bindings from its main-view registration`
+(T4's note) no longer holds: membership binds from DCLF's synthetic passes. The residue parity now classifies each pass the
+engine registers into a face that is no reflection member (`ClassifyResidue`, on the scene task, by pointer):
+-   about 60% `hidden` (LOD land chunks and LOD objects DCLF's tables still hold hidden), about 40% `eligible, unbound`
+    (LOD land chunks attached or shown since, not bound yet), a few bound but not yet reflection members;
+-   16-63 distinct geometries a window, almost none in the residue on 10 frames or more: a few frames each, as cells load in
+    motion.
+
+So the residue is the scene pipeline's latency for objects the engine shows or attaches (a frame or more from the event to a
+binding), which the engine's face cull covers. Skipping the add-roots needs that latency gone: an object bound before it is
+first drawn (hidden objects keeping their records, the hidden state a per-object bit of the frame), which the main camera
+needs as well once the engine's cull no longer covers it (T7).
+
+## Where an object's time goes, and what the reflection residue is (T6b0, 2026-10-09)
+
+`CS_DCLF_TIMELINE=1` (observers only; nothing it adds changes a decision):
+-   **Stage stamps** on `Tracked`: `writtenFrame` (a record taken anew), `boundFrame` (made resident), `memberFrame` (joined
+    the set), with `trackedFrame` (the attach). Report line `latency (T6b0, frames)`: attach to join, record to binding,
+    record to join, a show to its join, and commit to installation (`PublicationStats::installDelay`, by geometries joined).
+-   **The residue by stage** (`StageResidue`, under the residue watch, which the switch turns on): untracked, ineligible,
+    hidden (chain hidden now), hidden but shown since, no record, a record unbound (with the membership pass's failure,
+    `PrimaryCull::LastSyntheticFail`, and the accumulate join's verdict, `Tracked::accumulateReason`), bound and waiting
+    (`setWaitWhy`), bound with no reflection phase, a member not installed.
+-   **Hidden events carry their store**: the stubs pass the site's index (`HiddenEvent::site`, `HiddenStoreSiteAt`); shows and
+    hides counted per store (`hidden bit stores`), and each node's last show kept 600 frames (`unhideKeys`) to name what showed
+    a residue object.
+-   **The engine's import work by thread** (`Engine/ImportTimings`): detours, each a Tracy zone, on the grid controller, the
+    BSTaskPool drain, a reference's finish, the I/O completion pump, the LOD swaps' drain and a block's retirement.
+-   Tracy plots `CS.DCLF.SceneWorkMs`, `CS.DCLF.AccumulateWorkMs`, `CS.DCLF.InstallDelayFrames`.
+
+Measured (u1-u3: Riverwood in motion, 60 s, set parity):
+-   **The residue is not latency.** ~4,000-4,400 passes a run under the LOD roots: 61-62% `hidden, shown since` (LOD object
+    blocks and land chunks DCLF holds hidden that the engine has shown: `FUN_1405103e0` at 0x140510697, the terrain's
+    `FUN_140509b50` at 0x140509b59, or earlier than the 600 frames kept), 37% `a record, unbound` (1,444 of 1,465 in u3: the
+    accumulate join found the chain hidden and dropped the join; no membership pass failed), ~1% readiness (waiting, no
+    reflection phase yet, a member not installed). Nearly all of it older than 64 frames since tracked.
+-   **One cause:** a static's hidden bit is followed only where an entry lists the node (`hiddenDependents`, actors' light
+    path). A static hidden at its walk keeps no record and nothing takes it again when shown; one hidden at its join keeps a
+    record never bound. Both stay until another event rewrites them. T6b4 (hidden objects keep their records, the hidden
+    state a per-object bit) removes both.
+-   **Latency** (all three runs alike): attach to join 3% the same frame, 65% the next, ~20% 2-15 frames (readiness), 11%
+    64+ (the load at the start); record to binding 68% the same frame, 31% the next; commit to installation 39-47% one frame,
+    24-32% two, ~20% three, 7-10% four to seven (the builds ahead the installation waits for). An attach is drawn two to four
+    frames later: one frame to the commit, one to three more to the installation.
+-   **The main thread's import work** is the grid controller alone: 0.01-0.08 ms a frame in motion. The I/O pump (0.1-1.5 ms
+    a frame), the references' finishes, the LOD drains and the block retirements (up to 24 a frame) all ran on job threads.
+    Banning import work from the main thread would gain nothing measurable.
+-   **Hidden stores:** ~80-110 changes a frame, nearly all `TESWaterReflections::Update` (0x140520a8c shows, 0x14052068c
+    hides): the player's 3D and every water object's node hidden around the cube map's faces and restored after. That is a
+    hide scoped to one view, not a scene change, which T6b4's per-object bit must not publish.
+-   No new parity finding; no device loss.
+
+## A static's hidden bit followed by events (T6b4, 2026-10-09)
+
+**Before.** The hidden events (`HiddenStores`) reached only actors' light-path entries: only they listed their chains
+(`hiddenDependents`). A static took its hidden verdict at its walk and kept it until another event. Hidden then shown (LOD
+blocks and land chunks are shown after their attach), it had no record and was never taken again; shown at its walk but
+hidden at its accumulate join, it kept a record never bound; and one hidden after it joined kept its claim. T6b0 measured the
+first two as ~99% of the reflection residue (and so of what the main camera would miss with the engine's cull gone).
+
+**Now:**
+-   **Every entry lists its chain** (`ListHiddenChain`, at its classification, once: the graph above a tracked geometry does
+    not change while it is tracked; a full walk lists anew), from the leaf up to its category node, the category node left
+    out: thousands of entries share it, and `Unlist` is a linear find.
+-   **An event on a listed node classifies the statics under it again** (`DrainHiddenEvents`: `candidateFrame` cleared, into
+    `pendingEvaluation`, once per entry); an actor's light-path entry takes its frame verdict again as before
+    (`hiddenEventFrame`). An event on a category node (`categoryNodes`) takes every entry under it.
+-   **The water objects' shapes are captured with the frame** (`FrameGlobals::cullHidden`), as the player's 3D is:
+    `TESWaterReflections::Update` hides them around the cube map's faces and restores them after, so a read during the
+    faces sees the scene's state.
+-   Report: `statics classified again for one` beside the hidden events.
+
+**Not done, and why:** the plan's other half, hidden objects keeping their records and bindings with the hidden state a bit
+`BuildDrawsCS` tests. The bit would travel in the same publication as membership, so it could not be faster; and a hidden
+member keeping its claim would leave a shown object undrawn by both until the publication (the engine withholds it, DCLF's
+bit still hides it), where leaving the set lets the engine draw it meanwhile. With the events, a show is classified and
+written on the frame its event drains and bound by the next; the rest is the pipeline's latency (T6b3, T6b5).
+
+Measured (v1: Riverwood in motion; v2: the Sleeping Giant Inn, Dragonsreach; timeline, set and walk parities):
+-   **The reflection residue: 64 passes in the run (4,000-4,400 before)**, none hidden: records attached 0-1 frames before
+    and not bound yet, bound and waiting two frames, joined the frame before and without the reflection phase yet. Readiness
+    latency only.
+-   Statics classified again for a hidden event: 6-21 a frame in motion, 5 indoors.
+-   Walk parity: 0 stale verdicts in motion. Indoors, two windows with a stale hidden verdict on an NPC's equipment
+    (`Shield:0`, a broom), per-frame entries: the behaviour graph's visibility flips during the scene work, followed a frame
+    late ("The hidden flip race, named", `dclf-event-driven-tables.md`).
+-   Commit to installation: 76% one frame, 14% two (u1-u3: 39-47%, 24-32%); attach to join unchanged (64% the next frame).
+-   No new parity finding; no device loss.
+
 ## Device faults in motion: the reflection faces drew the frame before's index pool (fixed, 2026-10-09)
 
 **Symptom.** In motion runs the device was lost now and then, about one run in two at the end: an MMU read fault in a
