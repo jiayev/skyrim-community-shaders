@@ -21,8 +21,8 @@ namespace DCLF
 	/**
 	 * @brief Captures each lighting pass as the engine registers it with a batch renderer.
 	 *
-	 * The main camera's registrations are no source of DCLF's bindings (scene membership is): the diagnostics read them
-	 * (SceneStore::DrainCapture, the decal order probe). A member of the DCLF set (SceneSet.h) has its passes withheld from the
+	 * The main camera's registrations are no source of anything DCLF draws (scene membership and the mirror are): only the parity
+	 * reads them (SceneStore::DrainCapture under CS_DCLF_PERSISTENT_PARITY, the decal order probe; T6b2c step 8). A member of the DCLF set (SceneSet.h) has its passes withheld from the
 	 * main camera's views (the Z-prepass's accumulator and the main one) at every insertion point of their registrations, and
 	 * the shadow views' registrations are withheld for the casters DCLF draws.
 	 *

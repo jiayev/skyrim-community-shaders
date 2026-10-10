@@ -12,7 +12,10 @@
 
 #include "Features/DrawcallLimitFix/Common/AsyncWorker.h"
 #include "Features/DrawcallLimitFix/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Scene/MaterialBindings.h"
+#include "Features/DrawcallLimitFix/Scene/SharedBindings.h"
 #include "Features/DrawcallLimitFix/Scene/MaterialPort.h"
+#include "Features/DrawcallLimitFix/Scene/MaterialSources.h"
 #include "Features/DrawcallLimitFix/Scene/GeometryPort.h"
 #include "Features/DrawcallLimitFix/Scene/MaterialPortParity.h"
 #include "Features/DrawcallLimitFix/Scene/SceneMirror.h"
@@ -24,6 +27,9 @@
 #include "Features/DrawcallLimitFix/Published/SceneIdentity.h"
 #include "Features/DrawcallLimitFix/Common/SlotTable.h"
 #include "Features/DrawcallLimitFix/Common/Retirement.h"
+#include "Features/DrawcallLimitFix/Common/EventQueue.h"
+#include "Features/DrawcallLimitFix/Common/LatestSlot.h"
+#include "Features/DrawcallLimitFix/Common/PublicationLog.h"
 #include "LightingDescriptors.h"
 #include "LocalShadows.h"
 #include "ConstantEvaluator.h"
@@ -42,6 +48,7 @@ namespace DCLF
 	struct FrameGlobals;
 	struct PartTimer;
 	struct SunCandidates;
+	struct PipelineCatalog;
 
 	/**
 	 * @brief The parts of SceneStore::BuildFrame, each measuring one thing.
@@ -193,17 +200,17 @@ namespace DCLF
 			// the frame's floats into it. A consumer that kept something derived from the record compares this
 			// instead of the record's 2.3 KB.
 			std::vector<std::uint32_t> materialVersion;
-			// Parallel to materials: new whenever the record's frame floats (MaterialSources' frame components, the texture transform,
-			// the character light's modes) are written by the frame's post (step 6e B, CS_DCLF_FRAME_FLOATS=published), the record's
-			// own values kept: a row is written again, its record not evaluated again.
+			// Parallel to materials: new whenever the record's frame floats (MaterialSources' frame components, the texture transform)
+			// are written by the scene work (T6b2c step 7: RefreshMaterialSignatures, RefreshMaterialTransforms), the record's own values
+			// kept: a row is written again, its record not evaluated again.
 			std::vector<std::uint32_t> materialFrameVersion;
 			// Versions the builds' kept bindings key on (IndirectDraws' PersistentBindings), each new (NextVersion) whenever
 			// what it covers is written with a different value: per pipeline its PerGeometry floats and what its pairs' records
 			// read of it (the key, the permutation), the technique's being its row's (TechniqueRow); per
-			// material slot the frame's floats (RefreshFrameMaterials, RefreshTextureTransforms). materialVersion covers the
+			// material slot the frame's floats (RefreshMaterialSignatures, RefreshMaterialTransforms). materialVersion covers the
 			// rest of a material.
 			std::vector<std::uint32_t> pipelineBindingVersion;    // parallel to pipelines
-			// The frame-sourced components, texture transforms and writer re-evaluations are the frame's (FrameTables).
+			// The frame-sourced components, texture transforms and writer re-evaluations are the scene work's (T6b2c step 7).
 			std::uint32_t versionCounter = 0;
 			std::uint32_t NextVersion() { return ++versionCounter; }
 			// No shading (MaterialData, EmitColor, SSRParams.w, the emissive multiplier, the wetness): FrameValues' rows
@@ -257,6 +264,28 @@ namespace DCLF
 			// by an actor (actorObjects lists those that are). The values are FrameValues' (CaptureWetness); these, who has one.
 			std::vector<std::uint32_t> actorObjects;  // sorted by object index (the walk sorts it)
 			ActorValueIndex actorWetness;
+			// T6b3a: every membership write of actorWetness, in order, for the render thread's own index (CaptureWetness samples and fans
+			// out there): the coordinator moves them onto the publication log (PublicationDeltas::actorWetness). Every write goes through
+			// SetActorWetness or ClearActorWetness.
+			struct ActorWetnessChange
+			{
+				std::uint32_t slot = 0;
+				std::uint64_t group = 0, identity = 0;
+				bool resetValue = false;
+				bool clear = false;  // the index cleared (the slot ignored)
+			};
+			std::vector<ActorWetnessChange> actorWetnessChanges;
+			void SetActorWetness(std::uint32_t a_slot, std::uint64_t a_group, std::uint64_t a_identity, bool a_resetValue = false)
+			{
+				actorWetness.Set(a_slot, a_group, a_identity, a_resetValue);
+				actorWetnessChanges.push_back({ a_slot, a_group, a_identity, a_resetValue, false });
+			}
+			void ClearActorWetness()
+			{
+				actorWetness.Clear();
+				actorWetnessChanges.clear();
+				actorWetnessChanges.push_back({ 0, 0, 0, false, true });
+			}
 			// Skins of several partitions (CS_DCLF_SKIN_PARTITIONS): bit i draws partition i, walking the
 			// geometry slots' nextPartition links from the object's geometryIndex (partition 0). 0 for every
 			// other object, which draws its one geometry; kNoPartitions for a skin no LOD level draws anything of. A LOD skin's
@@ -273,16 +302,17 @@ namespace DCLF
 			std::vector<std::uint32_t> geometryTemplateObject;    // parallel to pipelines: the member whose property the template is (T6)
 			// The PerTechnique values (and the technique's filter modes and shadow mask), one row per TechniqueKey - what
 			// EvaluateTechnique reads of a pass descriptor - which every pipeline of the key shares (pipelineTechnique).
-			// RefreshFrameConstants evaluates each used row once a frame and writes it only when it differs, versioning its
-			// floats (constantsVersion) and its bindings (bindingVersion) apart. Rows are never freed: there are a few dozen.
-			// The rows' keys (TechniqueKey); their constants are the frame's (FrameTables::techniques, by row).
+			// The coordinator evaluates a row when it is made (TechniqueRowFor) and every row again when its frame's TechniqueInputs move
+			// (RefreshTechniqueRows, T6b2c), writing it only where it differs, versioning its floats (constantsVersion) and its bindings
+			// (bindingVersion) apart. Rows are never freed: there are a few dozen.
+			// The rows' keys (TechniqueKey); their constants are techniqueConstants (by row).
 			std::vector<std::uint32_t> techniqueKeys;
 			ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> techniqueRow;  // TechniqueKey -> row
 			std::vector<std::uint32_t> pipelineTechnique;  // parallel to pipelines: its row
-			// The constants the builds pack into the pipeline rows (step 6e A): the render thread's evaluations (EvaluateGeometry of a
-			// pipeline's template pass, EvaluateTechnique of a row's key; engine code) posted with the key they were made for and
-			// applied by the coordinator (ApplyConstantsPosts), published with the tables: a change is drawn a frame or two late, as a
-			// join. A pipeline's block holds its own values (what a DCLF_BINDLESS draw reads of it; the frame's globals are the frame
+			// The constants the builds pack into the pipeline rows (step 6e A): the render thread's pipeline blocks (GeometryPort) posted
+			// with the key they were made for and applied by the coordinator (ApplyConstantsPosts), and the technique rows the coordinator
+			// writes itself (EvaluateTechnique from its frame's FrameGlobals, T6b2c), published with the tables: a change is drawn with
+			// the next publication, as a join. A pipeline's block holds its own values (what a DCLF_BINDLESS draw reads of it; the frame's globals are the frame
 			// blocks'). A pipeline, or its technique row, without them is not drawable (MainReady, MainBuild::PackPipelines).
 			struct PipelineConstantsRow
 			{
@@ -297,6 +327,8 @@ namespace DCLF
 			{
 				TechniqueConstants value{};
 				std::uint32_t constantsVersion = 0, bindingVersion = 0;  // the floats', the bindings' (filter modes, the shadow mask)
+				std::uint32_t passDescriptor = 0;  // a pass descriptor of the row's key (the first): what it is evaluated again for
+				TechniqueInputs inputs{};          // the frame sample its last write was made from (the parity's: late or differ)
 				bool valid = false;
 			};
 			std::vector<TechniqueConstantsRow> techniqueConstants;  // parallel to techniqueKeys
@@ -506,8 +538,8 @@ namespace DCLF
 			// rather than per caster.
 			std::vector<ID3D11ShaderResourceView*> shadowTextureSet;
 			ankerl::unordered_dense::set<ID3D11ShaderResourceView*> shadowTextureSeen;
-			// Membership transitions produced only when the shadow dependency index changes.
-			// False removes the old import owner; true requests the successor.
+			// Membership transitions produced only when the shadow dependency index changes, for the scene work's shadow texture
+			// bindings (SceneStore::UpdateSharedBindings): false lets the binding go, true asks for it.
 			std::vector<std::pair<ID3D11ShaderResourceView*, bool>> shadowTextureChanges;
 			void TakeShadowTextureChanges(std::vector<std::pair<ID3D11ShaderResourceView*, bool>>& a_out)
 			{
@@ -563,8 +595,6 @@ namespace DCLF
 				std::fill(usedMaterialBits.begin(), usedMaterialBits.end(), 0);
 				std::fill(usedPipelineBits.begin(), usedPipelineBits.end(), 0);
 			}
-			std::vector<std::uint32_t> retiredMaterialSlots;
-			std::vector<std::uint32_t> retiredPipelineSlots;
 			void MarkMaterialUsed(std::uint32_t a_slot);
 			void MarkPipelineUsed(std::uint32_t a_slot);
 			void SetMaterialUsed(std::uint32_t a_slot, bool a_used)
@@ -581,8 +611,6 @@ namespace DCLF
 				else if (a_slot / 64 < usedPipelineBits.size())
 					usedPipelineBits[a_slot / 64] &= ~(1ull << (a_slot % 64));
 			}
-			void TakeRetiredMaterialSlots(std::vector<std::uint32_t>& a_out) { a_out.clear(); a_out.swap(retiredMaterialSlots); }
-			void TakeRetiredPipelineSlots(std::vector<std::uint32_t>& a_out) { a_out.clear(); a_out.swap(retiredPipelineSlots); }
 			bool PipelineUsed(std::size_t a_slot) const { return BitSet(usedPipelineBits, a_slot); }
 			bool PipelineAlive(std::size_t a_slot) const { return pipelineSlots.Alive(a_slot); }
 			// Each table's columns: a_column(vector, initial value...) for every vector parallel to it.
@@ -647,8 +675,8 @@ namespace DCLF
 				kRetiredExtras,     // slot: the block's row offset
 				kRetiredBones,      // slot: the block's offset, extra: its rows
 				kRetiredFaceStream,
-				kRetiredMaterialLookup,  // a material slot's lookups to drop (retiredMaterialSlots)
-				kRetiredPipelineLookup,  // likewise a pipeline slot's (retiredPipelineSlots)
+				kRetiredMaterialLookup,  // a material slot's bindings to drop (SceneStore::RetireMaterialBinding)
+				kRetiredPipelineLookup,  // a pipeline slot's lookups to drop (its mask binding: SceneStore::RetireMaskBinding)
 				kRetiredGeometrySlot,    // a SlotTable's slot; extra: its generation when freed
 				kRetiredMaterialSlot,
 				kRetiredPipelineSlot,
@@ -806,12 +834,11 @@ namespace DCLF
 			std::uint32_t materialCacheEntries = 0;
 			std::uint32_t materialCacheEvicted = 0;
 			std::uint32_t materialEvictedMember = 0;  // of them, slots a membership resident had been bound to (materialMember)
-			// MaterialSources: materials written this frame, and what became of their slots; the live
-			// evaluations the frame-sourced components were taken from (one per signature).
+			// T6b2c step 7, the scene work's last pass (RefreshMaterialRecords): the materials captured since the one before, the slots'
+			// records they rewrote, the materials a rewrite could not evaluate yet (asked again), the signature samples.
 			std::uint32_t materialWrites = 0;
 			std::uint32_t materialsRewritten = 0;
-			std::uint32_t materialsDropped = 0;
-			std::uint32_t materialsHeld = 0;  // referenced slots whose write could not be evaluated yet: kept, asked again
+			std::uint32_t materialsHeld = 0;
 			std::uint32_t frameMaterialSamples = 0;
 		};
 
@@ -853,18 +880,21 @@ namespace DCLF
 		static SceneStore& Get();
 
 		/**
-		 * @brief Render thread, the scene work joined (Present, and the frame's start before the kick): the frame's ingestion
-		 * (dclf-async-publication.md, "Step 5: ingestion"). The engine's queues - attach and detach, fade snaps, fades, property
-		 * and node events, switch events, object LOD's segment writes - drained into the pending batch in push order, and tree
-		 * LOD's mirror (DecideTreeLod reads it next). Nothing is walked or evaluated. While a load screen is up the queues and
-		 * the batch are discarded instead, and the first frame after the load rescans.
+		 * @brief Render thread (Present, and the frame's start before the kick): the frame's ingestion (dclf-async-publication.md, "Step
+		 * 5: ingestion"). The engine's queues - attach and detach, fade snaps, fades, property and node events, switch events, object
+		 * LOD's segment writes - drained into the render thread's batch in push order, and tree LOD's mirror (DecideTreeLod reads it
+		 * next); at the frame's start the batch is posted to the coordinator (T6b3a: eventBatches, no shared batch). Nothing is walked or
+		 * evaluated. While a load screen is up the queues and the batch are discarded instead, a marker is posted once (the coordinator
+		 * drops what the load invalidates: ApplyLoading), and the first frame after the load rescans.
 		 */
 		void IngestEvents(bool a_frameStart = false);
+		/** @brief Render thread: the batch ingested so far posted to the coordinator (T6b3a; none: nothing), before its pass or Present's apply. */
+		void PostIngested();
 		/**
-		 * @brief The pending batch applied to the scene state: the category refresh, the attached subtrees walked and the detached
-		 * entries erased, the validation slice, the structural events. The scene work's first part (RunSceneWork, on the
-		 * coordinator), or the render thread's at Present for a batch no scene work took (EventsUnapplied). What it lets go of is
-		 * handed back (HandBack).
+		 * @brief The posted batches applied to the scene state, each in order (one a pass while the kicks stay): the category refresh, the
+		 * attached subtrees walked and the detached entries erased, the validation slice, the structural events. The scene work's first part
+		 * (RunSceneWork, on the coordinator), or the render thread's at Present for a batch no scene work took (EventsUnapplied: the batch
+		 * posted first). What it lets go of is handed back (HandBack).
 		 */
 		void ApplyEvents();
 		/** @brief Render thread at Present, after IngestEvents: the batch has waited through a Present. */
@@ -872,13 +902,11 @@ namespace DCLF
 		/** @brief Render thread at Present: a batch has waited a whole frame for scene work that did not run (menus, switched off). */
 		bool EventsUnapplied() const;
 		/**
-		 * @brief Render thread at Present, the read window closed: the engine references the joins took from the scene work
-		 * (TakeHandedBack), released (dropping the last one runs the engine's destructors, which belong on its main thread). T6b1d:
-		 * the scene work may still run; what it let go of since its last join waits for the next join.
+		 * @brief Render thread at Present, the read window closed: the material references and applied batches the coordinator let go of
+		 * (T6b3a: pushed where it let go of them; its engine references go to EngineReleases), released (dropping the last one runs the
+		 * engine's destructors, which belong on its main thread).
 		 */
 		void ReleaseHandedBack();
-		/** @brief Render thread, the scene work joined: what it let go of, moved to the render thread's for the next Present. */
-		void TakeHandedBack();
 		/**
 		 * @brief Hooks the engine's writers the delta walk takes events from: BSFadeNode::currentFade's, the shader
 		 * properties' flags and materials, Havok's node transforms and the controllers' targets.
@@ -934,7 +962,7 @@ namespace DCLF
 		{
 			std::uint64_t joined = 0, failed = 0, rewritten = 0, released = 0, frames = 0, resident = 0;
 			std::uint64_t membershipQueued = 0;  // records BindByMembership handed a pass
-			std::uint64_t materialWaits = 0, materialsServed = 0;  // joins that waited for a material record, records the render thread served
+			std::uint64_t materialWaits = 0, materialsServed = 0;  // joins that waited for a material capture, captures the render thread served
 			std::uint64_t materialsStale = 0;  // T6b1b: requests whose property had another material at the serve (the swap's event not applied yet)
 			std::uint64_t membershipKept = 0;    // members written again whose binding stands
 			std::uint64_t layerUnpaired = 0;     // a base or a layer that joined without the other, and left again
@@ -944,8 +972,22 @@ namespace DCLF
 			std::uint64_t registeredUnbound = 0;  // main-pass registrations of eligible objects DCLF has not bound (DrainCapture)
 			std::uint64_t lightingShaderDiffers = 0;  // T6 parity: a registered Lighting pass whose shader is not the engine instance DCLF uses
 			std::string registeredUnboundFirst;
+			// The registration parity (T6b2c step 8, CS_DCLF_PERSISTENT_PARITY): the frames whose registrations were observed, and the
+			// main camera's registrations checked (CheckRegistrations). 0 frames: not observed (the normal path reads none).
+			std::uint64_t registrationFrames = 0, registrationsChecked = 0;
 		};
 		ResidentStats TakeResidentStats() { return std::exchange(residentStats, {}); }
+		/**
+		 * @brief The accumulate work's frame inputs (T6b2c step 8), since the last call: LightLimitFix's room map and the pipeline frame
+		 * the render thread posted (latest wins) and the scene lane took, and the PerGeometry blocks the coordinator made from the
+		 * pipeline frame (MakeNewPipelineConstants) or could not make yet (no frame taken: the slot waited).
+		 */
+		struct AccumulateInputStats
+		{
+			std::uint64_t roomMapsPosted = 0, roomMapsTaken = 0, pipelineFramesPosted = 0, pipelineFramesTaken = 0;
+			std::uint64_t pipelineBlocksMade = 0, pipelineBlocksWaited = 0;
+		};
+		AccumulateInputStats TakeAccumulateInputStats();
 
 		/**
 		 * @brief Whether a load screen is up, i.e. the scene graph is being rebuilt under us.
@@ -998,25 +1040,19 @@ namespace DCLF
 		 *
 		 * Call from Prepass. The Z-prepass epoch runs in between and so uses the previous frame's values
 		 * for these - harmless only for what the vertex position does not depend on: World is patched per
-		 * object at epoch time with that epoch's own eye. Terrain LOD's HighDetailRange moves vertices, so it is
-		 * camera-independent and taken before the Z-prepass too (RefreshLodTechniqueRanges).
+		 * object at epoch time with that epoch's own eye. Terrain LOD's HighDetailRange moves vertices: it is a technique
+		 * row's (the coordinator's, T6b2c), so both epochs of a frame draw the one value of the frame's tables.
+		 *
+		 * The technique rows are not evaluated here (RefreshTechniqueRows); the frame's fog is, from the frame's sample.
 		 */
 		void RefreshFrameConstants();
-		/**
-		 * @brief Terrain LOD's HighDetailRange in its technique rows (LodHighDetailRange), before the Z-prepass build is kicked.
-		 *
-		 * The vertex shader lowers the LOD land inside it, so the Z-prepass and the colour pass must draw a frame with the same
-		 * range: a vertex lowered in one and not the other fails the colour pass's EQUAL test, and the triangle is not shaded
-		 * (dclf-lod.md, "Terrain LOD"). The terrain manager writes it in Main::Update; RefreshFrameConstants evaluates the
-		 * same value again.
-		 */
-		void RefreshLodTechniqueRanges();
 
 		/**
 		 * @brief The four textures the engine binds for a ProjectedUV draw (pixel slots 3, 8, 10 and 11:
 		 * the projected diffuse, normal and detail maps and the projection noise), as SetupGeometry left
 		 * them at a native draw. They are globals of the engine, changed only by the ReloadProjectedUVTextures
-		 * console command, so one capture stands; it is refreshed by every native projected draw seen.
+		 * console command, so one capture stands; it is refreshed by every native projected draw seen. A capture whose views changed is
+		 * posted to the scene work with a reference on each (SharedBindings::projectedPosted), which asks for their bindings.
 		 */
 		struct ProjectedTextures
 		{
@@ -1038,81 +1074,126 @@ namespace DCLF
 		void Clear();
 
 		/**
-		 * @brief The tables as the frame reads them (step 6c): the snapshot it accepted at its start, equal to the coordinator's
-		 * tables there and held still while the scene work changes those (FrameView). Render thread and the frame's builds.
+		 * @brief The tables as the frame reads them (step 6c): the installed publication's (immutable), the newest taken while none is
+		 * installed, empty before the first (T6b3a: never the coordinator's). Render thread and the frame's builds.
 		 */
 		const Tables& GetTables() const { return FrameView(); }
-		/** @brief The coordinator's tables (the scene work's, the next publication's): the revision made for the next frame reads them. */
-		const Tables& GetSceneTables() const
-		{
-			GuardFrameAccess("GetSceneTables");
-			return tables;
-		}
 		/** @brief The frame's per-frame engine values (FrameTables): render thread, and the frame's builds kicked after its writes. */
 		const FrameTables& GetFrameTables() const { return frameTables; }
-		/** @brief Render thread, the coordinator idle (the frame's start): the frame's values sized and keyed to the tables, before any build. */
+		/** @brief Render thread, the frame's start: the frame's values sized and keyed to the frame's tables, before any build. */
 		void SyncFrameTables()
 		{
 			const Tables& view = FrameView();
-			frameTables.SyncPipelines(view.pipelines, view.pipelineBindingVersion, tablesGeneration);
-			frameTables.SyncTechniques(view.techniqueKeys.size());
-			SyncFrameMaterials();
+			frameTables.SyncPipelines(view.pipelines, view.pipelineBindingVersion, frameTablesGeneration);
 		}
-		/** @brief Render thread, the accumulate work joined: the PerGeometry blocks of pipelines that have none (new, or a slot reused). */
-		void RefreshNewPipelineConstants();
 		/**
-		 * @brief Render thread, BeginSceneFrame (the scene work joined): the newest published tables snapshot accepted for the frame
-		 * (dclf-async-publication.md, "Step 6"). Immutable while held. Null before the first publication.
+		 * @brief What the snapshot builder reserves a scene revision's capacities for and assembles it from (IndirectDraws, Impl::
+		 * MakeRevision; T6b3b): a publication's tables and lookups (immutable), with its counts. The snapshot carries the revision with the
+		 * publication it was made from. Its Reserve* walk the tables' logs and columns (the draw bound, the index pool), so the request
+		 * carries the tables, not only their counts.
 		 */
+		struct RevisionRequest
+		{
+			std::uint64_t publication = 0;  // the publication's sequence
+			// The scene frame of the commit it applies and the coordinator's pass that published it (T6b3b): what the snapshot builder's
+			// revision counts its frame by (MakeRevision's a_frame).
+			std::uint32_t commitFrame = 0;
+			std::uint64_t passSerial = 0;
+			std::uint32_t tablesGeneration = 0;
+			std::shared_ptr<const Tables> tables;
+			std::shared_ptr<const Lookups> lookups;
+			// The catalog those lookups were resolved from: the revision's pipeline sets (named explicitly by MakeRevision), so a revision is
+			// its publication's alone.
+			std::shared_ptr<const PipelineCatalog> catalog;
+			// The counts the latch and the shadow reservations size by: the pipeline slots, and the shadow key slots the lookups resolved
+			// with the keys the tables' casters and occluders use.
+			std::uint32_t pipelines = 0;
+			std::size_t shadowSlotKeys = 0, shadowKeys = 0;
+		};
 		/**
-		 * @brief Render thread, the frame's start, the scene work joined and the revision selected (step 6e E3): the newest publication
-		 * a_applicable(its commit frame) takes (IndirectDraws::SetApplicable), with the ones before it, becomes the installed one and
-		 * its tables the frame's; none: the installed one stands, tables and claims together. A change after the last publication is
-		 * published first (the coordinator is idle).
+		 * @brief A publication of the scene (step 6e E3; T6b3a: complete and immutable): everything a frame reads of the scene, made by the
+		 * coordinator (PublishScene) and handed to the snapshot builder (IndirectDraws::PostSnapshotWork, T6b3b), which posts it with its
+		 * draws and its revision as one snapshot; the render thread adopts the newest snapshot whole (HandOverAtFrameStart installs its
+		 * publication). The claims' changes and the frame inputs each publication's pass made (the placement plan, the shading names, the
+		 * seed requests, the switches, the retired imports) travel on the publication log (PublicationDeltas), so a publication the builder
+		 * skipped loses none of them.
 		 */
-		void SelectPublication(const std::function<bool(std::uint32_t, const std::shared_ptr<const void>&)>& a_applicable);
-		/** @brief Render thread, after SelectPublication and the coverage decision: the installed publication's claims made the frame's. */
+		struct ScenePublication
+		{
+			std::uint64_t sequence = 0;
+			std::uint32_t commitFrame = 0;        // the scene frame of the commit it applies (CommitSet's; stats and the install delay)
+			std::uint32_t togglesGeneration = 0;  // the toggles that commit was made under (FrameInputs): the toggle reinstall waits for one
+			std::uint32_t tablesGeneration = 0;   // the tables' generation (GetTablesGeneration while it is the frame's)
+			std::shared_ptr<const Tables> tables;
+			std::shared_ptr<const SetSnapshot> claims;
+			std::array<std::uint32_t, 3> lackingCount{};
+			// T6b2c step 5: the lookups the draws were built with, parallel to the tables, and the catalog they were resolved from, whose
+			// set versions the frames that install it bind (DrawPipelines::HoldCatalog; a revision names its request's explicitly).
+			std::shared_ptr<const Lookups> lookups;
+			std::shared_ptr<const PipelineCatalog> catalog;
+			// The sun and light candidates as its pass left them (UpdateSunCandidates, UpdateLightCandidates), with their generations.
+			std::shared_ptr<const SunCandidates> sunCandidates, lightCandidates;
+			std::uint32_t sunGeneration = 0, lightGeneration = 0;
+			std::uint64_t lightEntriesAppeared = 0;
+			// The category nodes as its pass left them (immutable, copied again only when the set changed, a cell attach or detach): what the
+			// point lights' culls ask of the frame (IsCategoryNode), never the coordinator's set. The light entries change with every
+			// tracked root, so they travel as changes on the publication log instead (PublicationDeltas::lightEntries).
+			std::shared_ptr<const ankerl::unordered_dense::set<RE::NiNode*>> categoryNodes;
+			// The scene revision's request (the snapshot builder's, T6b3b).
+			RevisionRequest revision;
+		};
+		/**
+		 * @brief Render thread, EarlyPrepass (T6b2c step 8): the accumulate work's frame inputs posted (LightLimitFix's room map, latest
+		 * wins: PostRoomMap) and the parity's observers of the frame's registrations (the capture drained, DrainCapture; the members'
+		 * light masks, PrimaryCull::CheckLightMasks). No scene work: the scene lane takes the inputs (TakeAccumulateInputs).
+		 */
+		void PostAccumulateInputs();
+		/**
+		 * @brief Render thread, Prepass (RefreshFrameConstants): the frame's pipeline sample with a sun, posted latest-wins for the
+		 * coordinator's new pipelines' PerGeometry blocks (MakeNewPipelineConstants).
+		 */
+		void PostPipelineFrame(const GeometryPort::PipelineFrame& a_frame);
+		/** @brief Render thread, after HandOverAtFrameStart and the coverage decision: the installed publication's claims made the frame's. */
 		void InstallClaims();
 		/** @brief Whether a publication is installed (none: the frame has no claims, WithdrawSet). */
 		bool HasInstalled() const { return installed != nullptr; }
-		/** @brief The installed publication's draws (IndirectDraws::BuildAhead), null without one. */
-		std::shared_ptr<const void> InstalledDraws() const { return installed ? installed->draws : nullptr; }
 		/** @brief Whether the scene work is out (kicked, not joined): nothing of the coordinator's may be touched by the frame. */
 		bool SceneTaskInFlight() const { return sceneTaskInFlight.load(std::memory_order_relaxed); }
-		/** @brief The coordinator: its copy of the lookups, as the frame's start refreshed them (TakeLookupsView). */
-		const Lookups& CoordinatorLookups() const { return lookupsView; }
-		/** @brief The coordinator's lookups as an immutable copy (the builds ahead hold it), made again only when they changed. */
-		const std::shared_ptr<const Lookups>& SharedLookups() const { return lookupsShared; }
-		/** @brief The installed publication's commit frame (IndirectDraws::NoteSetApplied). */
-		std::uint32_t InstalledCommitFrame() const { return installed ? installed->commitFrame : 0u; }
+		/** @brief The installed publication's sequence, 0 without one. */
+		std::uint64_t InstalledSequence() const { return installed ? installed->sequence : 0u; }
+		/** @brief The toggles generation the installed publication's commit was made under (the toggle reinstall), 0 without one. */
+		std::uint32_t InstalledToggles() const { return installed ? installed->togglesGeneration : 0u; }
 		struct PublicationStats
 		{
-			std::uint64_t installed = 0, kept = 0, skipped = 0, pending = 0;
+			// Publications installed with an adopted snapshot (and those the builder skipped past), frames whose snapshot brought no newer one.
+			std::uint64_t installed = 0, kept = 0, skipped = 0;
 			// T6b0: the frames from a publication's commit to its installation, by the geometries it joined (kAgeBuckets).
 			std::array<std::uint64_t, 8> installDelay{};
 		};
 		PublicationStats TakePublicationStats() { return std::exchange(publicationStats, PublicationStats{}); }
 		/**
-		 * @brief Render thread, the frame's start with the scene work joined (step 6c): what passes between the frame and the
-		 * coordinator, both ways. To the frame: the retired slots and imports, the texture changes, the switches applied, the sun
-		 * and light candidates. To the coordinator: the fade roots the depth commit holds, PrimaryCull's fade ownership, the lookups
-		 * the commit judges readiness by (a copy), a reset of the lookups the scene work asked for.
+		 * @brief Render thread, the frame's start (T6b3b: no coordinator state read; the join is not needed): a_adopted, the publication of
+		 * the snapshot the frame adopted (IndirectDraws::AdoptSnapshot; null: none yet), installed when newer than the installed one - the
+		 * publication log walked up to it (the frame inputs: the placement plans, shading names, seed requests, switches applied, retired
+		 * imports, the actors' wetness membership; then the claims' changes), its tables, lookups and catalog the frame's (DrawPipelines::
+		 * HoldCatalog), the replaced one back to the coordinator - and the sun and light candidates the installed one's, and the held
+		 * PrimaryCull notes delivered. What goes to the coordinator (the fade roots the depth commit holds, PrimaryCull's fade ownership and
+		 * reseed, the pipeline blocks) is posted where it is made and taken at the coordinator's next pass (TakeCoordinatorInputs).
 		 */
-		void HandOverAtFrameStart();
-		/** @brief Render thread, the frame's start after the lookups' refresh: the coordinator's copy of them (lookupsView). */
-		void TakeLookupsView();
+		void HandOverAtFrameStart(std::shared_ptr<const void> a_adopted);
 		/** @brief Coordinator state read by the frame while the scene work ran (GuardFrameAccess), since the last call: count, first name. */
 		struct ConstantsPostStats
 		{
-			std::uint64_t pipelinesPosted = 0, techniquesPosted = 0, pipelinesApplied = 0, techniquesApplied = 0, stale = 0;
-			std::uint64_t recordsPosted = 0, framesPosted = 0, recordsApplied = 0, framesApplied = 0, materialsStale = 0;
+			std::uint64_t pipelinesPosted = 0, pipelinesApplied = 0, stale = 0;
+			// The coordinator's technique rows (T6b2c): evaluations (new rows, the frame inputs moved), the rows written, the inputs' moves.
+			std::uint64_t techniquesEvaluated = 0, techniquesWritten = 0, techniqueInputsMoved = 0;
 		};
 		ConstantsPostStats TakeConstantsPostStats() { return std::exchange(constantsPostStats, ConstantsPostStats{}); }
 		std::pair<std::uint64_t, const char*> TakeFrameAccessViolations() { return { frameAccessViolations.exchange(0), frameAccessFirst.exchange(nullptr) }; }
-		const std::shared_ptr<Tables>& AcceptedTables() const { return acceptedTables; }
+		const std::shared_ptr<const Tables>& AcceptedTables() const { return acceptedTables; }
 		struct TablesPublication
 		{
-			std::uint64_t published = 0, reused = 0, made = 0, republished = 0;  // republished: at the accept, the copy was not the tables
+			std::uint64_t published = 0, reused = 0, made = 0, republished = 0;  // republished: at a scene pass's start (T6b3a), the last copy was not the tables
 			double ms = 0.0, maxMs = 0.0;
 			// 6d, replay: the material records written again (their version moved) against the slots, and the time the rest took
 			// (copied whole still); the replay's parity (CS_DCLF_PERSISTENT_PARITY, every 60 publications) against the tables.
@@ -1125,6 +1206,10 @@ namespace DCLF
 			std::uint64_t geometriesReplayed = 0, geometrySlots = 0, geometryWholeCopies = 0, parityGeometries = 0, parityGeometriesDiffer = 0;
 			std::uint64_t treesKept = 0, fadeRootsKept = 0, parityFamiliesDiffer = 0;  // publications that kept the family (its stamp stood)
 			std::size_t pool = 0;
+			// T6b2c step 5, the lookups each publication carries (PublishLookups): copied (a new Snapshot), or the last one shared again
+			// (unchanged since); the chunks written again since the last copy (SharedChunks, each a chunk's copy), and the copies' time.
+			std::uint64_t lookupsCopied = 0, lookupsShared = 0, lookupsChunks = 0;
+			double lookupsMs = 0.0, lookupsMaxMs = 0.0;
 		};
 		/** @brief Render thread, the scene work joined: the retirement chain's counts since the last call, and what waits in it now. */
 		std::string TakeRetirementReport()
@@ -1135,10 +1220,10 @@ namespace DCLF
 		}
 		TablesPublication TakeTablesPublication() { return std::exchange(tablesPublication, TablesPublication{ .pool = tablesPool.size() }); }
 		/**
-		 * @brief Render thread, the depth commit (the scene task joined): its fade root rows hold a_held (Tables::fadeRootsJournal's
-		 * version): the journal forgets what it has, and the next write opens a new version.
+		 * @brief Render thread, the depth commit: its fade root rows hold a_held (Tables::fadeRootsJournal's version), posted latest-wins
+		 * (T6b3a): at its next pass the coordinator's journal forgets what it has, and the next write opens a new version.
 		 */
-		void FadeRootsSent(std::uint64_t a_held) { fadeRootsSentHeld = a_held; }
+		void FadeRootsSent(std::uint64_t a_held) { fadeRootsSentPosted.store(a_held, std::memory_order_release); }
 		/**
 		 * @brief The frame's globals the engine's evaluations give (RefreshFrameConstants, at Prepass): no column of the tables, a
 		 * capture of the frame each commit latches into its frame blocks.
@@ -1154,15 +1239,12 @@ namespace DCLF
 			// The frame's fog (FrameFog, LightingConstants.h): what the DCLF_BINDLESS vertex stage reads (VS b13) instead of each
 			// technique row's, which keep the fog they were made with.
 			std::array<float, 12> fog{};
-			// The character light's noise this frame (MaterialSources::CharacterLightView, from a character-light signature's live
-			// sample): the frame record's kCharacterLightRegister. Null while no character-light material is drawn.
+			// The character light's noise this frame (MaterialSources::FrameCharacterLightView, from the frame's FrameGlobals sample at
+			// Prepass): the frame record's kCharacterLightRegister. The last one kept while the sample has none (a cell loading).
 			ID3D11ShaderResourceView* characterLightView = nullptr;
 		};
 		/** @brief Render thread: the frame's capture (latched by every commit). */
 		const FrameCapture& GetFrameCapture() const { return frameCapture; }
-		void TakeRetiredMaterialSlots(std::vector<std::uint32_t>& a_out) { a_out.clear(); a_out.swap(frameRetiredMaterialSlots); }
-		void TakeRetiredPipelineSlots(std::vector<std::uint32_t>& a_out) { a_out.clear(); a_out.swap(frameRetiredPipelineSlots); }
-		void TakeShadowTextureChanges(std::vector<std::pair<ID3D11ShaderResourceView*, bool>>& a_out) { a_out.clear(); a_out.swap(frameShadowTextureChanges); }
 		const Stats& GetStats() const { return stats; }
 		/** @brief The screen-door fading objects given bindings since the last call, and in how many frames. */
 		std::pair<std::uint32_t, std::uint32_t> TakeFadingDrawn()
@@ -1171,16 +1253,26 @@ namespace DCLF
 			stats.fadingDrawn = stats.fadingFrames = 0;
 			return result;
 		}
-		std::uint32_t GetFrame() const { return frame; }
+		/**
+		 * @brief The frame number: the render thread's (BeginFrame), or on a scene work thread the coordinator's (T6b3a: sceneFrame, the
+		 * frame inputs' it last took; the same as the render thread's while the joins stay). Inline scene work runs with both equal.
+		 */
+		std::uint32_t GetFrame() const { return sceneWorkThread ? sceneFrame : frame; }
+		/** @brief The coordinator's passes since the start (T6b3a): what a once-a-pass rule counts once the passes leave the frames. */
+		std::uint64_t PassSerial() const { return passSerial; }
 		/**
 		 * @brief The PerMaterial float positions refreshed every frame in the records without a new version
 		 * (MaterialSources): the build repacks them into a reused group. PS: the shader object's and the
-		 * engine globals' (RefreshFrameMaterials); VS: TexcoordOffset (RefreshTextureTransforms).
+		 * engine globals' (RefreshMaterialSignatures); VS: TexcoordOffset (RefreshMaterialTransforms).
 		 */
 		const std::vector<std::uint32_t>& GetMaterialPatchedFloats() const;
 		const std::vector<std::uint32_t>& GetMaterialPatchedVSFloats() const;
-		/** @brief Bumped whenever the slot tables are reset or every cached verdict is dropped (InvalidateVerdicts). */
-		std::uint32_t GetTablesGeneration() const { return tablesGeneration; }
+		/**
+		 * @brief The frame's tables' generation (T6b3a: the publication's they are, 0 before the first): the coordinator's moves whenever
+		 * the slot tables are reset or every cached verdict is dropped (InvalidateVerdicts), and a publication carries the one it was made
+		 * at. Render thread; the coordinator reads its own (tablesGeneration).
+		 */
+		std::uint32_t GetTablesGeneration() const { return frameTablesGeneration; }
 		/** @brief The sun entries DCLF can take out of the cascade culls (UpdateSunCandidates), and their generation now. */
 		std::shared_ptr<const SunCandidates> GetSunCandidates() const { return frameSunCandidates; }
 		std::uint32_t GetSunCandidatesGeneration() const { return frameSunGeneration; }
@@ -1200,17 +1292,19 @@ namespace DCLF
 		 * lights' filter cut for holding none (LocalLightCull) is judged again when it moves.
 		 */
 		std::uint64_t GetLightEntriesAppeared() const { return frameLightEntriesAppeared; }
-		/** @brief Render thread: whether a node is a light entry (LightDependentsOf). */
+		/**
+		 * @brief The frame (the point lights' culls): whether a node is a light entry (LightDependentsOf's rule: a key with tracked
+		 * geometries, not a category node). T6b3a: the render thread's set, kept from the publication log's changes up to the newest
+		 * publication taken (written only at the frame's start); never the coordinator's.
+		 */
 		bool IsLightEntry(const RE::NiAVObject* a_node) const
 		{
-			GuardFrameAccess("IsLightEntry");
-			return LightDependentsOf(a_node) != nullptr;
+			return frameLightEntrySet.contains(a_node) && !IsCategoryNode(a_node);
 		}
-		/** @brief Render thread: whether a node is one of the cells' category nodes DCLF tracks (RefreshCategoryNodes). */
+		/** @brief The frame: whether a node is one of the cells' category nodes DCLF tracks (RefreshCategoryNodes; the newest publication's set). */
 		bool IsCategoryNode(const RE::NiAVObject* a_node) const
 		{
-			GuardFrameAccess("IsCategoryNode");
-			return categoryNodes.contains(static_cast<RE::NiNode*>(const_cast<RE::NiAVObject*>(a_node)));
+			return frameCategoryNodes && frameCategoryNodes->contains(static_cast<RE::NiNode*>(const_cast<RE::NiAVObject*>(a_node)));
 		}
 		std::uint32_t GetLightCandidatesGeneration() const { return frameLightGeneration; }
 		/**
@@ -1221,11 +1315,15 @@ namespace DCLF
 		/** @brief Whether DCLF draws the occlusion view (kOcclusion*): its toggle, and Skylighting, whose hook drives both maps. */
 		static bool OcclusionEnabled(std::uint32_t a_view);
 		/**
-		 * @brief The pre-resolved service results an epoch's build reads (Lookups.h). Filled by the render
-		 * thread: the pipeline entries at EarlyPrepass, the descriptor entries inside an epoch's preparation.
+		 * @brief The frame's lookups (Lookups.h), read by its epochs and diagnostics: the installed publication's, the newest published
+		 * while none is installed (as the frame's tables), empty before the first (T6b2c step 5). Made by the scene lane, immutable.
 		 */
-		const Lookups& GetLookups() const { return lookups; }
-		Lookups& MutableLookups() { return lookups; }
+		const Lookups& GetLookups() const { return frameLookups ? *frameLookups : EmptyLookups(); }
+		static const Lookups& EmptyLookups()
+		{
+			static const Lookups empty;
+			return empty;
+		}
 
 		/**
 		 * @brief An NiSwitchNode's own fields, read at their AE offsets (NiSwitchNode::OnVisible, AE 140d29700):
@@ -1307,7 +1405,7 @@ namespace DCLF
 		 */
 		bool PipelineDrawable(std::uint32_t a_pipeline) const
 		{
-			return PipelineDrawableIn(FrameView(), lookups, a_pipeline);
+			return PipelineDrawableIn(FrameView(), GetLookups(), a_pipeline);
 		}
 		/** @brief A slot's set phases in given tables (the coordinator's: its own), 0 past the column (sized when the set is applied). */
 		static std::uint8_t PhasesIn(const Tables& a_tables, std::uint32_t a_slot) { return a_slot < a_tables.setPhases.size() ? a_tables.setPhases[a_slot] : std::uint8_t{ 0 }; }
@@ -1338,8 +1436,8 @@ namespace DCLF
 		 * lacking counts, and its snapshot published as the engine's claims (PassCapture). Main::Draw (BeginSceneFrame), before the
 		 * frame's events. A slot freed or given to another geometry since the commit (an event at Present) takes no phase.
 		 *
-		 * With scene revisions (R3c) it is called only once the selected revision was made at or after the commit (IndirectDraws::
-		 * SetApplicable): the frame's claims are then always within the revision's set. Until then the last applied claims stand,
+		 * With scene snapshots (T6b3b) the claims applied are the adopted snapshot's publication's, whose revision was made from the same
+		 * publication: the frame's claims are always within the revision's set. Until then the last applied claims stand,
 		 * and the commits in between merge into one application (setApply, by slot, its geometry the latest commit's).
 		 */
 		void ApplySet();
@@ -1361,12 +1459,12 @@ namespace DCLF
 		 * walk (PrimaryCull's full-frustum hook; every later DCLF hook joins too). It starts with the frame's events (ApplyEvents),
 		 * which the render thread ingested before the kick (IngestEvents).
 		 *
-		 * Render thread, in order: BeginFrame (the frame number, the published sun candidates' generation), ApplySet, the frame's
-		 * ingestion, what the frame's claims need (the filters), then KickSceneTask. Between the kick and JoinSceneTask
-		 * nothing on the render thread or the engine's threads reads the store but GetFrame, GetPublishedSunGeneration and the
-		 * immutable publications (the set snapshot, the filters). What the walk has for other modules is held and handed over at
-		 * the join (FinishSceneWork): PrimaryCull's hidden keys and lost members, and the claims whose record stopped drawing; the
-		 * engine references it let go of, at Present (ReleaseHandedBack).
+		 * Render thread, in order: BeginFrame (the frame number, the frame's globals, the frame inputs posted), the publication
+		 * selected and its claims installed, the frame's ingestion posted, what the frame's claims need (the filters), then
+		 * KickSceneTask. T6b3a: the frame reads only its own state, the immutable publications and the log; what the walk has for
+		 * other modules is a message: PrimaryCull's hidden keys and lost members (primaryNotes, delivered at the joins and the frame's
+		 * start), the claims' changes and the frame inputs (the publication log), the engine references it let go of (released at
+		 * Present: ReleaseHandedBack, EngineReleases).
 		 */
 		void BeginFrame();
 		/** @brief Coordinator (or inline): the scene work itself. a_task: on the coordinator (its placements take read leases). */
@@ -1374,18 +1472,18 @@ namespace DCLF
 		/** @brief Render thread: runs a_work on the coordinator (a_name: the job's, as the wait report shows it), joined by JoinSceneTask. */
 		void KickSceneTask(std::function<void()> a_work, const char* a_name = "scene");
 		/**
-		 * @brief EarlyPrepass, render thread, the scene work joined: the accumulate phase's render-thread half (step 6b). The
-		 * registrations drained (diagnostics; the frame's lighting pass), the material evaluations the last joins asked for
-		 * (ServeMaterialRequests: SetupMaterial is the engine's), the material writes, texture transforms and validation slice.
+		 * @brief EarlyPrepass, render thread: the accumulate phase's render-thread half (step 6b), now the material tail alone (T6b2c
+		 * step 7's): the material captures the last joins asked for (ServeMaterialRequests), the material writes, texture transforms
+		 * and validation slice. The registrations and the frame inputs are PostAccumulateInputs' (step 8).
 		 */
 		void PrepareAccumulatePhase();
 		/**
 		 * @brief The accumulate phase's joins on the coordinator (a_task) or inline: membership bound, residents kept, decals ordered;
-		 * then the tables published (PublishTables). What it drops of PrimaryCull's and the new pipelines' PerGeometry blocks are the
-		 * join's (FinishSceneWork).
+		 * the new pipelines' PerGeometry blocks made from the posted pipeline frame (MakeNewPipelineConstants, T6b2c step 8); then the
+		 * tables published (PublishTables). What it drops of PrimaryCull's is held (primaryNotes).
 		 */
 		void RunAccumulateWork(bool a_task);
-		/** @brief Render thread: waits for the scene task if one runs, then FinishSceneWork. Cheap when there is none. */
+		/** @brief Render thread: waits for the scene task if one runs, then the held PrimaryCull notes delivered. Cheap when there is none. */
 		void JoinSceneTask();
 		/**
 		 * @brief Render thread at Present (T6b1d: the scene work is not waited for there): joined when it has ended (true), else left
@@ -1475,8 +1573,8 @@ namespace DCLF
 			const RE::NiAVObject* node = nullptr;
 			bool standIn = false;  // kFadeRootStoodIn: no engine-drawn part
 		};
-		/** @brief Render thread (PrimaryCull): applied to the coordinator's state at the next frame's start (HandOverAtFrameStart). */
-		void SetFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned) { pendingFadeOwned = a_owned; }
+		/** @brief Render thread (PrimaryCull): posted latest-wins, applied at the coordinator's next scene pass (TakeCoordinatorInputs). */
+		void SetFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned) { fadeOwnedPosted.Post(std::make_unique<std::vector<OwnedFadeRoot>>(a_owned)); }
 		void ApplyFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned);
 		/**
 		 * @brief Render thread: whether the fade node's state is the GPU's alone (a stood-in root, kFadeRootStoodIn): the engine
@@ -1505,7 +1603,7 @@ namespace DCLF
 			return static_cast<std::size_t>(std::count_if(fadeRootOwned.begin(), fadeRootOwned.end(), [](const auto& a_root) { return a_root.second; }));
 		}
 		/** @brief PrimaryCull: after frames the engine culled every entry (its OnVisible ran on the nodes), every owned root again from its node. */
-		void ReseedOwnedFadeRoots() { pendingFadeReseed = true; }
+		void ReseedOwnedFadeRoots() { fadeReseedPosted.store(true, std::memory_order_release); }
 		void ApplyReseedOwnedFadeRoots();
 		/** @brief A listed fade root's row from its node again (a new generation: the GPU's state restarts from it), owned bits kept. */
 		void ReseedFadeRoot(const void* a_node);
@@ -1522,8 +1620,17 @@ namespace DCLF
 		/** @brief Tree LOD's mirror of the engine's groups (TreeLod.h): the depth commit uploads what it changed. Render thread. */
 		TreeLod::Mirror& TreeLodMirror() { return treeLod; }
 
-		/** @brief True when the geometry sits under a tracked category node (used by coverage checks). */
+		/** @brief True when the geometry sits under a tracked category node (used by coverage checks). The coordinator's set. */
 		bool IsTracked(const RE::BSGeometry* a_geometry) const;
+		/**
+		 * @brief Render thread (T6b3a): whether the installed publication claims the geometry, so it is alive while the frame holds that
+		 * publication (its tables name it: the retirement chain keeps what a held publication names). PrimaryCull's liveness check for the
+		 * claims' changes (NoteSetChanges), in place of the coordinator's tracked set.
+		 */
+		bool HeldByInstalled(const RE::BSGeometry* a_geometry) const
+		{
+			return installed && installed->claims && installed->claims->phases.contains(a_geometry);
+		}
 		/** @brief Object LOD: the index ranges a tracked BSSubIndexTriShape draws (its visible segments' runs), or null. */
 		const std::vector<LodSegments::Range>* LodRangesOf(const RE::BSGeometry* a_shape) const
 		{
@@ -1635,11 +1742,11 @@ namespace DCLF
 			std::uint32_t generation = 0;
 			std::uint32_t row = 0;
 		};
-		/** @brief Render thread, with the scene work joined (the frame's start): the seeds requested since the last take. */
-		std::vector<FadeSeedItem> TakeFadeSeeds() { return std::exchange(fadeSeedRequests, {}); }
+		/** @brief Render thread, the frame's start: the seeds requested since the last take (the publication log's, HandOverAtFrameStart). */
+		std::vector<FadeSeedItem> TakeFadeSeeds() { return std::exchange(frameFadeSeeds, {}); }
 		/** @brief T6b1a: a listed tree node whose values FrameValues' tree seeds take at the frame's start (row: 2 * slot + seedOdd). */
 		using TreeSeedItem = FadeSeedItem;
-		std::vector<TreeSeedItem> TakeTreeSeeds() { return std::exchange(treeSeedRequests, {}); }
+		std::vector<TreeSeedItem> TakeTreeSeeds() { return std::exchange(frameTreeSeeds, {}); }
 		/** @brief Render thread: the frame's engine globals (FrameValues binds them for the seeds' LOD scale). */
 		const std::shared_ptr<const FrameGlobals>& FrameGlobalsOfFrame() const { return frameGlobals; }
 		/** @brief One actor-owned slot's wetness, as the frame's start captured it (Skin::GetWetness). */
@@ -1648,24 +1755,31 @@ namespace DCLF
 			std::uint32_t slot = kNoObjectSlot;
 			std::array<float, 4> value{};
 		};
-		/** @brief Render thread, with the scene task joined: the slots named since the last take, once. */
-		std::vector<ShadingItem> TakeShadingItems() { return std::exchange(shadingNamed, {}); }
-		/** @brief Render thread, with the scene task joined: the slots named for the next frame, not taken (diagnostics). */
-		const std::vector<ShadingItem>& PeekShadingItems() const { return shadingNamed; }
+		/** @brief Render thread, the frame's start: the slots named since the last take, once (the publication log's). */
+		std::vector<ShadingItem> TakeShadingItems() { return std::exchange(frameShading, {}); }
 		/**
-		 * @brief Render thread, at the frame's start with the scene task joined: every actor's wetness (Skin::GetWetness, whose first
-		 * call a frame advances the actor's fade and is not thread-safe), fanned out to the meshes whose value changed or that joined.
+		 * @brief Render thread (diagnostics, the parities' inline scene work): the slots named for the next frame, not taken: those the
+		 * publication log holds past the frame's cursor, then those the coordinator has named since its last publication.
+		 */
+		std::vector<ShadingItem> PeekShadingItems() const;
+		/**
+		 * @brief Render thread, at the frame's start: every actor's wetness (Skin::GetWetness, whose first call a frame advances the
+		 * actor's fade and is not thread-safe), fanned out to the meshes whose value changed or that joined. T6b3a: the actors' membership
+		 * is the render thread's own index (frameActorWetness), kept from the log's changes; the geometries are the newest publication's.
 		 */
 		std::vector<WetnessValue> CaptureWetness();
-		/** @brief Render thread, with the scene task joined: the plan its last walk made, once (null when no walk ran since). */
-		std::shared_ptr<const PlacementPlan> TakePlacementPlan() { return std::exchange(placementPlanReady, nullptr); }
-		/** @brief Render thread, with the scene task joined: the plan its last walk made, not taken (diagnostics). */
+		/**
+		 * @brief Render thread, the frame's start: the plans the walks made since the last take, oldest first (the publication log's;
+		 * FrameValues samples every one's written slots and draws with the newest).
+		 */
+		std::vector<std::shared_ptr<const PlacementPlan>> TakePlacementPlans() { return std::exchange(framePlans, {}); }
+		/** @brief Render thread (diagnostics, the parities' inline scene work): the plan the last walk made, not published yet. */
 		const PlacementPlan* PeekPlacementPlan() const { return placementPlanReady.get(); }
 
 	private:
-		std::vector<std::shared_ptr<const void>> retiredImports;  // TakeRetiredImports
-		// The slots named for the next frame's shading sample (ShadingItem): by the walk and the accumulate phase, taken at the frame's
-		// start (TakeShadingItems). Every slot when the shading events are not installed.
+		std::vector<std::shared_ptr<const void>> retiredImports;  // the coordinator's, into the publication log (TakeRetiredImports)
+		// The slots named for the next frame's shading sample (ShadingItem): by the walk and the accumulate phase, into the publication
+		// log (TakeShadingItems). Every slot when the shading events are not installed.
 		std::vector<ShadingItem> shadingNamed;
 		FrameCapture frameCapture;  // GetFrameCapture
 		FrameTables frameTables;    // GetFrameTables: the frame's values, out of the tables (render thread)
@@ -2003,25 +2117,34 @@ namespace DCLF
 			ankerl::unordered_dense::map<const RE::NiAVObject*, Root> roots;
 			// T6b1c: the category nodes new to the scene work's set (all of them before a rescan): their children's keys.
 			ankerl::unordered_dense::map<const RE::NiNode*, std::vector<const RE::NiAVObject*>> children;
+			// T6b1c: every node and geometry under its new category nodes and new roots, held for the scene work's references (copies of
+			// these) until the coordinator has applied a newer capture. T6b3a: in the capture (no list the two threads share); "new" is
+			// against the capture the coordinator applied last, so each capture pins all it names.
+			std::vector<RE::NiPointer<RE::NiRefObject>> pins;
 		};
-		// T6b1c: every node and geometry under the newest capture's new category nodes and new roots, held for the scene work's references
-		// (copies of these) until it has applied the capture: the render thread lets go at the next frame's start, so nothing is kept
-		// alive past the engine's release longer than that.
-		std::vector<RE::NiPointer<RE::NiRefObject>> categoryPins;
 		/** @brief Render thread, at ingestion (not while a load screen is up): the newest CategoryCapture, made when a_force or the signature moved. */
 		struct EventBatch;
 		void CaptureCategories(bool a_force, EventBatch& a_batch);
 		/** @brief Render thread, the frame's start: the tracked geometries the mirror lacked (mirrorCaptureRequests), into a_batch's mirror events. */
 		void CaptureMirrorRequests(EventBatch& a_batch);
-		std::shared_ptr<const CategoryCapture> categoryCapture;
-		std::uint64_t categoryCaptures = 0;       // render thread: the last capture's generation
-		std::uint64_t categoryAppliedGeneration = 0;  // the scene work: the capture RefreshCategoryNodes last diffed against
+		std::shared_ptr<const CategoryCapture> categoryCapture;  // render thread: the newest made
+		// Render thread (T6b3a): the captures made and not yet superseded by one the coordinator applied, oldest first. Their pins and
+		// nodes are dropped here (the render thread's), once the coordinator has let go of its copy and moved categoryAppliedGeneration on.
+		std::deque<std::shared_ptr<const CategoryCapture>> categoryCapturesHeld;
+		// Render thread -> the coordinator (latest wins), and the coordinator's taken copy (RefreshCategoryNodes diffs against it).
+		LatestSlot<std::shared_ptr<const CategoryCapture>> categoryPosted;
+		std::shared_ptr<const CategoryCapture> categoryTaken;
+		std::uint64_t categoryCaptures = 0;  // render thread: the last capture's generation
+		// The coordinator's: the capture RefreshCategoryNodes last diffed against (stored after it let go of the one before); the render
+		// thread reads it to know which captures it may let go of and what is new against the coordinator's set.
+		std::atomic<std::uint64_t> categoryAppliedGeneration{ 0 };
 		// Render thread, since the last report: the frame captures' time (FrameGlobals, CaptureCategories), the category captures
 		// made, and the frames.
 		std::uint64_t captureNs = 0, categoryCaptureNs = 0, categoryCapturesMade = 0, captureFrames = 0;
 		std::uint64_t categoryMirrorCaptures = 0, categoryMirrorRecords = 0;  // T6b1a: CaptureCategories' captures for the mirror
 		// T6b1a: tracked geometries the mirror held no record of (AddGeometry), captured by the render thread at the next frame's start.
-		std::vector<RE::NiPointer<RE::NiAVObject>> mirrorCaptureRequests;
+		// T6b3a: a lock-free queue (the coordinator pushes, the render thread drains), not a list the two threads share.
+		EventQueue<RE::NiPointer<RE::NiAVObject>, 256> mirrorCaptureRequests;
 		// The signature the category set was last rebuilt for.
 		std::uint64_t categorySignature = 0;
 		/**
@@ -2178,23 +2301,46 @@ namespace DCLF
 		 */
 		std::uint32_t OcclusionTechniqueOf(const SceneCapture::LeafView& a_leaf, bool a_skylighting) const;
 		void ValidateSlice();
-		/** @brief The main camera's batch renderers, for the diagnostics' filter of the capture. Cheap; every frame. */
+		/** @brief The main camera's batch renderers, for the parity's filter of the capture (DrainCapture, observed frames only). */
 		bool RefreshMainBatchRenderers();
 		/**
-		 * @brief Drains the capture: the frame's lighting pass (below), and the diagnostics (registered eligible objects DCLF has
-		 * not bound, the decal order probe).
+		 * @brief Render thread, EarlyPrepass: drains the capture every frame (its fixed-capacity buffer, the withholding counters, the
+		 * reflection residue), and only while observed (CS_DCLF_PERSISTENT_PARITY; the decal order probe its own switch) reads what
+		 * was registered: the Lighting shader parity, the frame's lighting pass (below), the registrations CheckRegistrations checks.
+		 * The normal path reads none of it (T6b2c step 8).
 		 */
 		void DrainCapture();
+		/** @brief Render thread, the frame's start (BeginFrame, the coordinator idle): the engine's BSLightingShader instance, once. */
+		void CaptureLightingShader();
+		// Render thread (DrainCapture) -> the accumulate work (CheckRegistrations), ordered by the kick: this frame's registrations
+		// were observed, so capturedRegistrations holds them.
+		bool registrationsObserved = false;
+		/** @brief Render thread (PostAccumulateInputs): LightLimitFix's room map copied and posted when its generation moves. */
+		void PostRoomMap();
+		/** @brief The accumulate work, first: the frame inputs posted since its last pass (room map, pipeline frame), latest wins. */
+		void TakeAccumulateInputs();
+		/** @brief The accumulate work, after the joins: a used pipeline without a current PerGeometry block made from the pipeline frame. */
+		void MakeNewPipelineConstants();
+		// The accumulate work's frame inputs (T6b2c step 8): render thread -> scene lane, latest wins (a pointer swap each way; a post
+		// the scene lane never took is freed by the next post or by the take, on whichever thread: plain memory, nothing of the engine's
+		// or the GPU's).
+		std::atomic<std::shared_ptr<const GeometryPort::PipelineFrame>> pipelineFramePosted;
+		std::shared_ptr<const GeometryPort::PipelineFrame> scenePipelineFrame;  // the scene lane's: the newest taken
+		struct AccumulateInputCounters
+		{
+			std::atomic<std::uint64_t> roomMapsPosted{ 0 }, roomMapsTaken{ 0 }, pipelineFramesPosted{ 0 }, pipelineFramesTaken{ 0 };
+			std::atomic<std::uint64_t> pipelineBlocksMade{ 0 }, pipelineBlocksWaited{ 0 };
+		} accumulateInputStats;
 		/**
 		 * @brief A Lighting pass the main camera registered this frame with its light list (FindLightingPass's test), valid
-		 * until the frame's accumulator is cleared. A member's property has no main-camera pass (the engine does not register
-		 * it), so a pipeline's PerGeometry block is evaluated from this pass under its own descriptor: what differs per object
-		 * is overridden per draw, and the rest is the frame's or the descriptor's.
+		 * until the frame's accumulator is cleared: the template parity's fallback reference (RegisteredTemplatePassOf). Set only on
+		 * observed frames (DrainCapture); null otherwise.
 		 */
 		const RE::BSRenderPass* frameLightingPass = nullptr;
 		/** @brief The pass a pipeline's template evaluates from: the property's own Lighting pass, else the frame's. */
 		/**
-		 * @brief The pass a pipeline's PerGeometry block is evaluated with (T6): a synthetic one, of no registration. The template
+		 * @brief The pass the parity evaluates a pipeline's PerGeometry block with (T6; since T6b2b the block is GeometryPort's, so this
+		 * is CS_DCLF_PERSISTENT_PARITY's reference alone): a synthetic one, of no registration. The template
 		 * member's geometry and property, the Lighting shader, and the frame's lights SetupGeometry reads: the sun first
 		 * (ShadowSceneNode::sunLight), then a shadow light for every further one the descriptor counts (FUN_1414df650 reads
 		 * sceneLights[1..n] by the descriptor's counts, a shadow light's mask index at +0x520; numLights 1). Only per-object outputs read them,
@@ -2347,7 +2493,8 @@ namespace DCLF
 		MaterialPort::ParityStats materialPortParity;
 		std::optional<MaterialPort::MaterialFrame> materialPortFrame;
 		std::uint32_t materialPortFrameNumber = ~0u;
-		// T6b2b: the pipeline template port against the template's evaluation (persistent-parity frames), and its frame's sample.
+		// T6b2b: the pipeline template port against the template's evaluation (persistent-parity frames), and the frame sample the held
+		// blocks were made from (RefreshFrameConstants' last with a sun; posted to the coordinator too, PostPipelineFrame).
 		struct GeometryPortParity
 		{
 			std::uint64_t checked = 0, differ = 0, uncovered = 0;
@@ -2355,10 +2502,118 @@ namespace DCLF
 		} geometryPortParity;
 		std::optional<GeometryPort::PipelineFrame> geometryPortFrame;
 		std::uint32_t geometryPortFrameNumber = ~0u;
-		void CheckMaterialPort(const RE::BSShaderMaterial* a_material, std::uint32_t a_pass, const MaterialRecord& a_port, const MaterialPort::MaterialSnapshot& a_snapshot);
+		void CheckMaterialPort(const RE::BSShaderMaterial* a_material, std::uint32_t a_pass, const MaterialRecord& a_port, const MaterialPort::MaterialSnapshot& a_snapshot,
+			const MaterialRecord* a_engine = nullptr);
 		/**
-		 * @brief T6b2a: a material record from the port (render thread: the material read now, the frame's sources sampled at the frame's
-		 * first record), the engine's SetupMaterial never run; under CS_DCLF_PERSISTENT_PARITY checked against it (CheckMaterialPort).
+		 * @brief T6b2a: the scene work's material captures (MaterialPort::captures: a material's writer, an attach's leaf, a request), the
+		 * newest per material, each with the reference its capture took; one unused for kMaterialSnapshotFrames frames is let go (its
+		 * reference to the render thread's releases). The join makes a record from one at once (MaterialPort::Evaluate, the frame's
+		 * sources in FrameGlobals); a material with none is asked of the render thread (materialRequestQueue: ServeMaterialRequests
+		 * captures it at EarlyPrepass).
+		 */
+		struct HeldMaterial
+		{
+			std::unique_ptr<MaterialPort::HeldSnapshot> held;
+			std::uint32_t frame = 0;  // taken or used
+		};
+		static constexpr std::uint32_t kMaterialSnapshotFrames = 8;
+		ankerl::unordered_dense::map<const RE::BSShaderMaterial*, HeldMaterial> materialSnapshots;
+		struct MaterialSnapshotStats
+		{
+			std::uint64_t captured = 0, replaced = 0, stale = 0, aged = 0, made = 0, uncovered = 0, requested = 0;
+		} materialSnapshotStats;
+		/** @brief The scene work (ApplyEvents): the captures pushed since the last call, the newest kept; the render thread's answers to requests. */
+		void DrainMaterialCaptures();
+		/** @brief A capture's reference, to the render thread's releases (materialsHandedBack). */
+		void HandBackHeld(std::unique_ptr<MaterialPort::HeldSnapshot>&& a_held);
+		/**
+		 * @brief T6b2c step 7: the material records kept by the scene work (FrameConstants.cpp), each scene pass after the captures are
+		 * drained, from its frame's sources (FrameGlobals::Current().material), no engine read:
+		 * - a material captured since the last pass (its writer's, its attach's, a request's): every slot of it evaluated again from the
+		 *   capture (MaterialPort::Evaluate), its own values written where they differ (RewriteCapturedMaterials);
+		 * - the frame-sourced components: per signature, one port evaluation of a kept capture (a probe, pure data) against the frame's
+		 *   sources, written into every slot of the signature when it moves (RefreshMaterialSignatures);
+		 * - TexcoordOffset: a material captured or keyed is watched while its two buffers differ (and two passes after), the frame's
+		 *   buffer written into its slots (RefreshMaterialTransforms).
+		 * The tables' versions and material log carry the writes to the bindings and the publication. Replaces the render thread's
+		 * frame copies (FrameTables' materials), their posts and the coordinator's inbox.
+		 */
+		void RefreshMaterialRecords();
+		void RewriteCapturedMaterials();
+		void RefreshMaterialSignatures();
+		void RefreshMaterialTransforms();
+		/** @brief The scene work: a slot's record made (a join) or written from a_snapshot: listed under its signature, its material watched. */
+		void NoteMaterialRecord(std::uint32_t a_slot, const MaterialPort::MaterialSnapshot& a_snapshot);
+		void WatchMaterialTransforms(const RE::BSShaderMaterial* a_material, const MaterialPort::MaterialSnapshot& a_snapshot);
+		/** @brief The tables reset (ResetSlotTables): the signatures' slot lists, the watch and the retries dropped. */
+		void ResetMaterialRecords();
+		// The materials whose capture DrainMaterialCaptures kept since the last RefreshMaterialRecords, and those a rewrite could not
+		// evaluate yet (an Advanced Skin key not set up: asked again while their capture is held).
+		std::vector<const RE::BSShaderMaterial*> materialsCaptured;
+		std::vector<const RE::BSShaderMaterial*> materialRewritesPending;
+		struct MaterialSignature
+		{
+			std::vector<std::uint32_t> slots;      // listed when keyed (materialSignatureListed), dropped as the list is walked
+			MaterialPort::MaterialSnapshot probe;  // a capture of one of its materials (pure data: no pointer in it is followed)
+			std::uint32_t probePass = 0;
+			bool probeValid = false;
+			bool probeFailed = false;  // its last evaluation failed (an Advanced Skin key not set up): the next slot noted replaces it
+			MaterialRecord applied;  // the frame components last written into its slots
+			bool appliedValid = false;
+		};
+		ankerl::unordered_dense::map<std::uint32_t, MaterialSignature> materialSignatures;
+		std::vector<std::uint32_t> materialSignatureListed;  // per material slot: its signature + 1, 0 when unlisted
+		struct TransformWatch
+		{
+			MaterialSources::TextureTransforms transforms;  // the newest capture's
+			std::uint32_t frame = 0;                         // the pass it was captured or keyed
+		};
+		ankerl::unordered_dense::map<const RE::BSShaderMaterial*, TransformWatch> transformWatch;
+		struct MaterialRecordStats
+		{
+			std::uint64_t passes = 0, captured = 0, rewritten = 0, retried = 0, uncovered = 0, samples = 0, applications = 0, slotsApplied = 0,
+						  transformsWatched = 0, transformsWritten = 0;
+		} materialRecordStats;
+		// T6b2c: the material slots' texture bindings, the scene work's (MaterialBindings; SceneStore/MaterialBindings.cpp).
+		MaterialBindings materialBindings;
+		/**
+		 * @brief The scene work, after the records' writers (RefreshMaterialRecords, the joins): the answers drained (the slots waiting on
+		 * them written), then the slots whose record changed (the tables' material log) and the slots newly used, each resolved.
+		 */
+		void UpdateMaterialBindings();
+		/** @brief The scene work: a used slot's entry written from its record, its views' bindings asked for where none is known. */
+		void ResolveMaterialBinding(std::uint32_t a_slot);
+		/** @brief The scene lane, before a commit or a publication: the entries written since the last call, each a new version, logged. */
+		void VersionMaterialBindings();
+		/** @brief A view's binding: answered in this drain, cached from an earlier answer, else asked for (pending; a_slot waits on it). */
+		GpuTextures::Binding MaterialViewBinding(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag, std::uint32_t a_slot);
+		/** @brief The scene work: a material slot's retirement came back (no publication names it): its entry dropped. */
+		void RetireMaterialBinding(std::uint32_t a_slot);
+		/** @brief The tables reset (ResetSlotTables): every entry and request dropped; an answer to an earlier request is stale. */
+		void ResetMaterialBindings();
+		// T6b2c: the shared, projected, shadow mask and shadow texture bindings, the scene work's (SharedBindings; SceneStore/SharedBindings.cpp).
+		SharedBindings sharedBindings;
+		/**
+		 * @brief The scene work, after the technique rows' refresh: the answers drained, then the fixed bindings and the projected capture
+		 * taken where they are new, each used pipeline's technique mask resolved, and the shadow textures the dependency index added or
+		 * removed since the last pass (Tables::shadowTextureChanges) asked for or let go.
+		 */
+		void UpdateSharedBindings();
+		/** @brief A view's binding: answered in this drain, cached from an earlier answer (here or the material bindings'), else asked for. */
+		GpuTextures::Binding SharedViewBinding(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag, SharedBindings::Kind a_kind);
+		/** @brief The scene work: the projected entries from the capture they are for, the pending ones asked for. */
+		void ResolveProjectedBindings(std::uint32_t a_textures);
+		/** @brief The scene work: a used pipeline's technique mask entry from its row. */
+		void ResolveMaskBinding(std::uint32_t a_slot, ID3D11ShaderResourceView* a_frameMask);
+		/** @brief The scene work: a shadow texture's entry from an answer or a known binding, asked for when there is none. */
+		void ResolveShadowTextureBinding(ID3D11ShaderResourceView* a_view);
+		/** @brief The scene work: a pipeline slot's lookups retirement came back (no publication names it): its mask entry dropped. */
+		void RetireMaskBinding(std::uint32_t a_slot);
+		/** @brief The tables reset (ResetSlotTables): every entry and request dropped (but the render thread's posted capture). */
+		void ResetSharedBindings();
+		/**
+		 * @brief T6b2a: a material record from the port (the caller's thread reads the material now; the frame's sources from FrameGlobals),
+		 * the engine's SetupMaterial never run; under CS_DCLF_PERSISTENT_PARITY checked against it (CheckMaterialPort).
 		 */
 		bool PortMaterial(const RE::BSShaderMaterial* a_material, std::uint32_t a_pass, MaterialRecord& a_out);
 		ankerl::unordered_dense::set<RE::NiNode*> categoryNodes;
@@ -2378,14 +2633,45 @@ namespace DCLF
 		// Set while a load screen is up, so the first frame after it rebuilds the tracked set from
 		// scratch instead of trusting anything discovered across the load (ProcessEvents).
 		bool rescanPending = false;
-		// The frame's membership witness (PrimaryCull::SampleMembershipWitness), sampled by the render thread at the frame's start
-		// (BeginFrame) and read by the scene work's commit and the accumulate phase's binds (step 6e F1: frame globals are
-		// captured, never read by the scene work).
-		std::uint32_t frameMembershipWitness = 0;
-		// The frame's engine globals (FrameGlobals::Capture at BeginFrame): what the scene work's tasks read (KickSceneTask binds it).
+		// The frame's engine globals (FrameGlobals::Capture at BeginFrame): the render thread's (FrameValues binds them for its seeds).
 		std::shared_ptr<const FrameGlobals> frameGlobals;
-		// LightLimitFix's room map (its room nodes' indices), copied by the render thread when its generation moves
-		// (PrepareAccumulatePhase): the accumulate phase reads the copy, never the map the render thread swaps.
+		/**
+		 * @brief What the coordinator's passes take of the frame (T6b3a), posted latest-wins by the render thread after BeginFrame's
+		 * capture and taken at the start of each scene pass (TakeFrameInputs): the engine globals the passes read (FrameGlobals::Scope),
+		 * the frame number (sceneFrame), the membership witness the commit and the accumulate phase's binds read (step 6e F1: frame
+		 * globals are captured, never read by the scene work), the toggles generation and the verdicts generation (a toggle that enters
+		 * the classification: the coordinator drops its cached verdicts, InvalidateVerdicts). The kick still orders the post before the
+		 * pass while it stays; the pass reads only what it took.
+		 */
+		struct FrameInputs
+		{
+			std::shared_ptr<const FrameGlobals> globals;
+			std::uint32_t frame = 0;
+			std::uint32_t membershipWitness = 0;
+			std::uint32_t togglesGeneration = 0;
+			std::uint32_t verdictsGeneration = 0;
+		};
+		LatestSlot<FrameInputs> frameInputsSlot;
+		FrameInputs sceneInputs;              // the coordinator's: the newest taken
+		std::uint32_t verdictsRequested = 0;  // render thread: bumped by each request to drop the cached verdicts
+		std::uint32_t verdictsApplied = 0;    // the coordinator's: the requests it has applied
+		/** @brief Render thread, after BeginFrame's capture: the frame's inputs posted for the coordinator. */
+		void PostFrameInputs();
+		/** @brief The coordinator, first in each scene pass: the newest frame inputs taken (sceneInputs, sceneFrame), the verdicts dropped when asked. */
+		void TakeFrameInputs();
+		// The coordinator's frame number (the frame inputs' it last took) and its passes: GetFrame on a scene work thread, PassSerial.
+		std::uint32_t sceneFrame = 0;
+		std::uint64_t passSerial = 0;
+		// LightLimitFix's room map (its room nodes' indices), copied by the render thread when its generation moves and posted, latest
+		// wins (PostRoomMap, T6b2c step 8); the accumulate work takes it (TakeAccumulateInputs) and reads only its own copy (roomMap,
+		// roomMapGeneration: the scene lane's), never the map the render thread swaps.
+		struct RoomMapInput
+		{
+			std::shared_ptr<const ankerl::unordered_dense::map<const RE::NiNode*, int>> map;
+			std::uint64_t generation = 0;
+		};
+		std::atomic<std::shared_ptr<const RoomMapInput>> roomMapPosted;
+		std::uint64_t roomMapPostedGeneration = ~0ull;  // render thread: the generation last posted
 		std::shared_ptr<const ankerl::unordered_dense::map<const RE::NiNode*, int>> roomMap;
 		std::uint64_t roomMapGeneration = ~0ull;
 		// Render thread: the first ingestion after a load catches up every switch in the world (CatchUpSwitches).
@@ -2424,9 +2710,10 @@ namespace DCLF
 		// to date by replay); a snapshot just made is copied whole once.
 		std::vector<std::uint8_t> tablesPoolReplayable;
 		std::vector<std::uint8_t> replaySlotMarks;  // scratch: the object slots a replay copied
-		// The accepted snapshot is the frame's alone (the pool writes no snapshot anyone holds): the frame's start writes the set into
-		// it as into the tables (WriteBoth), so the two stay equal there.
-		std::shared_ptr<Tables> publishedTables, acceptedTables;
+		// The last published snapshot (the coordinator's), and the one the frame accepted (the render thread's: its installed
+		// publication's, the newest taken while none is installed). The pool writes no snapshot anyone holds.
+		std::shared_ptr<Tables> publishedTables;
+		std::shared_ptr<const Tables> acceptedTables;
 		// Step 6c: the scene work in flight (kicked, not joined) and its lane's thread; a frame-side read of the coordinator's state
 		// meanwhile is a defect, counted and named (GuardFrameAccess).
 		std::atomic<bool> sceneTaskInFlight{ false };
@@ -2445,70 +2732,85 @@ namespace DCLF
 		}
 
 	private:
-		// The frame's copies, taken at its start (HandOverAtFrameStart).
+		// The frame's copies (the render thread's), taken at its start from the newest publication taken and the publication log
+		// (HandOverAtFrameStart).
 		std::shared_ptr<const SunCandidates> frameSunCandidates, frameLightCandidates;
 		std::uint32_t frameSunGeneration = 0, frameLightGeneration = 0;
 		std::uint64_t frameLightEntriesAppeared = 0;
+		std::uint32_t frameTablesGeneration = 0;  // the frame's tables' (GetTablesGeneration)
 		std::vector<const RE::NiAVObject*> frameSwitchChanges;
 		bool frameSwitchResync = true;
-		std::vector<std::uint32_t> frameRetiredMaterialSlots, frameRetiredPipelineSlots;
-		std::vector<std::pair<ID3D11ShaderResourceView*, bool>> frameShadowTextureChanges;
+		bool switchResyncNext = false;  // IngestEvents' loading branch: PrimaryCull reads every switch again from the next frame's start
 		std::vector<std::shared_ptr<const void>> frameRetiredImports;
-		// To the coordinator, at the next frame's start.
-		std::optional<std::uint64_t> fadeRootsSentHeld;
-		std::optional<std::vector<SceneStore::OwnedFadeRoot>> pendingFadeOwned;
-		bool pendingFadeReseed = false;
-		bool lookupsResetPending = false;
-		// The frame's constant evaluations for the coordinator (step 6e A): posted by the render thread (PostPipelineConstants,
-		// PostTechniqueConstants), handed over at the frame's start (HandOverAtFrameStart), applied by the scene work
-		// (ApplyConstantsPosts) where the slot still holds what they were made for.
+		std::vector<std::shared_ptr<const PlacementPlan>> framePlans;
+		std::vector<ShadingItem> frameShading;
+		std::vector<FadeSeedItem> frameFadeSeeds, frameTreeSeeds;
+		// The newest publication's category nodes (IsCategoryNode), and the coordinator's last copy with whether its set changed since
+		// (copied again at the next publication: PublishScene).
+		std::shared_ptr<const ankerl::unordered_dense::set<RE::NiNode*>> frameCategoryNodes, publishedCategoryNodes;
+		bool nodeSetsDirty = true;  // the coordinator's: the category nodes changed
+		// The light entries (IsLightEntry): a key of lightDependents gaining its first geometry, losing its last, or every key gone, as
+		// the coordinator's changes (onto the log: PublicationDeltas::lightEntries) and the render thread's set kept from them. Copying the
+		// whole set at each change (a root tracked or untracked: every frame in motion) lengthened the accumulate pass.
+		struct LightEntryChange
+		{
+			const RE::NiAVObject* node = nullptr;
+			std::int8_t kind = 0;  // 1 added, -1 removed, 0 every entry cleared
+		};
+		std::vector<LightEntryChange> lightEntryChanges;               // the coordinator's, since the last publication
+		ankerl::unordered_dense::set<const RE::NiAVObject*> frameLightEntrySet;  // the render thread's
+		/** @brief The coordinator: whether a node is one of its category nodes (its own set; the frame reads IsCategoryNode). */
+		bool CategoryNodeOwn(const RE::NiAVObject* a_node) const
+		{
+			return categoryNodes.contains(static_cast<RE::NiNode*>(const_cast<RE::NiAVObject*>(a_node)));
+		}
+		// CaptureWetness's actor index (T6b3a): the membership the coordinator's walks set (Tables::actorWetnessChanges, through the log),
+		// the values and the fan-out the render thread's.
+		ActorValueIndex frameActorWetness;
+		// To the coordinator (T6b3a: posted where they are made, taken at its next scene pass: TakeCoordinatorInputs). The fade root rows
+		// the depth commit holds (latest wins), PrimaryCull's fade ownership (a whole set: latest wins) and its reseed of every owned root.
+		static constexpr std::uint64_t kNoFadeRootsSent = ~0ull;
+		std::atomic<std::uint64_t> fadeRootsSentPosted{ kNoFadeRootsSent };
+		LatestSlot<std::vector<SceneStore::OwnedFadeRoot>> fadeOwnedPosted;
+		std::atomic<bool> fadeReseedPosted{ false };
+		/** @brief The coordinator, first in its scene pass: what the render thread posted for it since (above), applied in that order. */
+		void TakeCoordinatorInputs();
+		// The frame's pipeline blocks for the coordinator (step 6e A): posted by the render thread (PostPipelineConstants) through a
+		// lock-free queue (T6b3a), applied by the scene work (ApplyConstantsPosts) where the slot still holds what they were made for. The
+		// technique rows are the coordinator's own (RefreshTechniqueRows).
 		struct PipelineConstantsPost
 		{
 			std::uint32_t slot = 0, binding = 0, generation = 0;
 			PipelineKey key{};
 			GeometryConstants constants{};
 		};
-		struct TechniqueConstantsPost
-		{
-			std::uint32_t row = 0, key = 0, generation = 0;
-			TechniqueConstants value{};
-		};
-		std::vector<PipelineConstantsPost> pipelineConstantsPosted, pipelineConstantsInbox;
-		// The frame's material records for the coordinator (step 6e B): a writer event's re-evaluation (the record), and the frame
-		// floats of a slot that changed them (its frame record: the coordinator takes its frame part, CopyFrameComponents). Applied
-		// where the slot still holds the key they were made for.
-		struct MaterialPost
-		{
-			std::uint32_t slot = 0, generation = 0;
-			bool frameFloats = false;  // the frame part alone
-			std::pair<const RE::BSShaderMaterial*, std::uint32_t> key{};
-			MaterialRecord record;
-		};
-		std::vector<MaterialPost> materialPosted, materialInbox;
-		std::vector<std::uint32_t> frameFloatsDirty;      // render thread: slots whose frame floats changed this frame
-		std::vector<std::uint8_t> frameFloatsDirtyMark;  // parallel to the frame's materials
-		void PostMaterialRecord(std::uint32_t a_slot);
-		void NoteFrameFloats(std::uint32_t a_slot);
-		void PostFrameFloats();
-		void ApplyMaterialPosts();
-		std::vector<TechniqueConstantsPost> techniqueConstantsPosted, techniqueConstantsInbox;
+		EventQueue<std::unique_ptr<PipelineConstantsPost>, 256> pipelineConstantsPosted;
+		// The material records are the scene work's own (T6b2c step 7: RefreshMaterialRecords): nothing posted.
 		ConstantsPostStats constantsPostStats;
 		void PostPipelineConstants(std::uint32_t a_slot);
-		void PostTechniqueConstants(std::uint32_t a_row);
 		void ApplyConstantsPosts();
-		// The lookups as the coordinator's set judges readiness by them (MainReady, the readiness witness): copied at the frame's
-		// start when they moved.
-		Lookups lookupsView;
-		std::shared_ptr<const Lookups> lookupsShared;
-		std::array<std::uint64_t, 3> lookupsViewKey{ ~0ull, ~0ull, ~0ull };
-		const Tables& FrameView() const { return acceptedTables ? *acceptedTables : tables; }
-		/** @brief A write of the frame's start (the set applied, withdrawn or revoked): to the tables and to the frame's snapshot alike. */
-		template <class F>
-		void WriteBoth(F&& a_write)
+		// T6b2c: the technique rows' witness, the coordinator's - the frame inputs (FrameGlobals: TechniqueInputs, SetupTechniqueDescriptor's
+		// bytes) every row was last evaluated against. The fog is left out: a row keeps the fog it was made with (KeepTechniqueFog).
+		struct TechniqueWitness
 		{
-			a_write(tables);
-			if (acceptedTables)
-				a_write(*acceptedTables);
+			TechniqueInputs inputs{};
+			std::uint8_t byte12 = 0, byte7 = 0;
+			bool valid = false;
+		} techniqueWitness;
+		/**
+		 * @brief The coordinator, at the start of each scene work pass (its frame's FrameGlobals bound): when the frame's technique inputs
+		 * differ from the witness, every technique row evaluated again (EvaluateTechniqueRow). New rows are evaluated where they are made
+		 * (TechniqueRowFor), after this, from the same sample.
+		 */
+		void RefreshTechniqueRows();
+		/** @brief The coordinator: a technique row from its frame's sample, written and versioned where it differs (a new row in full). */
+		void EvaluateTechniqueRow(std::uint32_t a_row);
+		/** @brief The frame's tables (T6b3a): the accepted publication's, empty immutable tables before the first (never the coordinator's). */
+		const Tables& FrameView() const { return acceptedTables ? *acceptedTables : EmptyTables(); }
+		static const Tables& EmptyTables()
+		{
+			static const Tables empty;
+			return empty;
 		}
 		// The change log's position at the last commit (CommitSet): what the applied set's revocation checks from.
 		LogCursor setCommitCursor;
@@ -2603,6 +2905,8 @@ namespace DCLF
 			~MaterialReference() { reset(); }
 			/** @brief Takes a reference on a_material (null: none), then drops the one held. */
 			void reset(RE::BSShaderMaterial* a_material = nullptr);
+			/** @brief Takes over a count already taken on a_material (a HeldSnapshot's); holds none before. */
+			void Adopt(RE::BSShaderMaterial* a_material) { material = a_material; }
 			explicit operator bool() const { return material != nullptr; }
 
 		private:
@@ -2613,21 +2917,10 @@ namespace DCLF
 		// reference events and table resets release it at the safe capture boundary.
 		std::vector<MaterialReference> materialOwners;
 		/**
-		 * @brief The frame-sourced components of every record drawn this frame (MaterialSources): one live
-		 * evaluation per signature at Prepass - the engine globals, the character light's t11 - copied into every
-		 * record of that signature (MaterialSources: not IBLParams, which no stage reads). At Prepass, not
-		 * EarlyPrepass: they are the frame's lighting state, and sampling them earlier left them a fraction of a
-		 * frame behind the native draws during a fast lighting transition. Nothing depth-only reads them.
+		 * @brief Render thread, Prepass: the character light's view this frame (FrameCapture::characterLightView) from the frame's sample
+		 * (MaterialSources::FrameCharacterLightView). The records' frame components are the scene work's (RefreshMaterialSignatures).
 		 */
-		void RefreshFrameMaterials();
-		/** @brief End of the accumulate phase: this frame's TexcoordOffset into every record drawn this frame. */
-		void RefreshTextureTransforms();
-		/**
-		 * @brief End of the accumulate phase: the materials written since the last frame (MaterialSources).
-		 * A slot drawn this frame is re-evaluated; any other slot of such a material is dropped, as is its
-		 * cache entry, so its next use evaluates it afresh.
-		 */
-		void ProcessMaterialWrites();
+		void RefreshCharacterLightView();
 		// The main renderers' registrations of the frame (DrainCapture), for the accumulate work's diagnostics (CheckRegistrations).
 		struct CapturedRegistration
 		{
@@ -2657,20 +2950,12 @@ namespace DCLF
 		void CheckRegistrations();
 		/** @brief The coordinator's residency of a slot (IsMember is the frame's). */
 		bool ResidentObject(std::int32_t a_object) const { return a_object >= 0 && IsResidentSlot(static_cast<std::uint32_t>(a_object)); }
+		// Render thread, CS_DCLF_CAPTURE_PARITY alone: the materials written since the last frame (MaterialSources::Drain, at
+		// ValidateMaterialSlice), for its diagnostics. The records follow the writes' captures on the scene work.
 		ankerl::unordered_dense::set<const RE::BSShaderMaterial*> writtenMaterials;
-		// The materials written since the coordinator last looked (ProcessMaterialWrites, the render thread): their slots no object
-		// references are dropped by the coordinator (DropWrittenMaterials), whose the references are. All of them after an overflow.
-		std::vector<const RE::BSShaderMaterial*> materialWritesPosted;
-		bool materialWritesAll = false;
-		void DropWrittenMaterials();
-		// The frame's material copies (FrameTables::materials): kept in step with the tables, each listed for the frame's work, and
-		// held (the frame evaluates their materials on the render thread).
-		void SyncFrameMaterials();
-		void ListFrameMaterial(std::uint32_t a_slot);
-		std::vector<MaterialReference> frameMaterialOwners;
 
 	public:
-		/** @brief The materials this frame's accumulate phase drained as written (diagnostics). */
+		/** @brief CS_DCLF_CAPTURE_PARITY: the materials this frame drained as written (diagnostics; empty without the switch). */
 		const ankerl::unordered_dense::set<const RE::BSShaderMaterial*>& GetWrittenMaterials() const { return writtenMaterials; }
 
 	private:
@@ -2680,11 +2965,72 @@ namespace DCLF
 		std::uint32_t materialValidationCursor = 0;
 		static constexpr std::uint32_t kMaterialValidationsPerFrame = 8;
 		static constexpr std::uint32_t kMaterialValidationStride = 4;
+		/**
+		 * @brief The parity's suspects (render thread, CS_DCLF_PERSISTENT_PARITY): an installed slot whose record differed from the
+		 * engine's evaluation in a part (its own values but IBLParams, its frame components, its TexcoordOffset). The publication lags
+		 * the frame (a record is made from the captures and the sample of a frame or two before), so a suspect is evaluated live every
+		 * frame from then on (its history) and judged once kMaterialLateFrames have passed: a part the installed record then agrees with
+		 * any of the history in was late (the producers delivered a value the material had); a part it agrees with none of is a miss
+		 * (STALE, or the frame parts' differ), in motion too: a frozen record falls out of a moving material's history.
+		 */
+		enum class MaterialPart : std::uint8_t
+		{
+			Own,
+			Frame,
+			Transform
+		};
+		static constexpr std::uint32_t kMaterialParts = 3;
+		struct MaterialSuspect
+		{
+			std::pair<const RE::BSShaderMaterial*, std::uint32_t> key{};
+			std::uint32_t frame = 0;     // first seen
+			std::uint8_t parts = 0;      // 1 << MaterialPart, the parts that differed
+			std::uint32_t version = 0;   // the installed record's Tables::materialVersion when first seen
+			std::vector<MaterialRecord> history;  // the live evaluations since, one a frame
+		};
+		ankerl::unordered_dense::map<std::uint32_t, MaterialSuspect> materialSuspects;  // by slot
+		static constexpr std::uint32_t kMaterialLateFrames = 4;
+		/** @brief Whether a record and a live evaluation differ in a_part (pure). */
+		static bool MaterialPartDiffers(MaterialPart a_part, const MaterialRecord& a_record, const MaterialRecord& a_live, std::uint32_t a_pass);
+		/** @brief Pure: the first variable a_part differs in ("PS 34.y 0.2 -> 0.3", "t11"), for the report. */
+		static std::string DescribePartDifference(MaterialPart a_part, const MaterialRecord& a_record, const MaterialRecord& a_live, std::uint32_t a_pass);
+		/** @brief Render thread, parity: an installed slot's record against a_live in every part; a differing slot becomes a suspect. */
+		void JudgeMaterial(std::uint32_t a_slot, const std::pair<const RE::BSShaderMaterial*, std::uint32_t>& a_key, const MaterialRecord& a_record,
+			const MaterialRecord& a_live);
+		/** @brief Render thread, parity: every suspect evaluated live into its history, the due ones judged against the installed record. */
+		void SampleMaterialSuspects();
+		/** @brief Render thread, parity: the port of a live capture of the slot's material against a_engine (CheckMaterialPort). */
+		void CheckSlotPort(const std::pair<const RE::BSShaderMaterial*, std::uint32_t>& a_key, const MaterialRecord& a_engine);
+		LogCursor materialParityCursor;  // the installed tables' material log, read by the parity (the slots written since)
 		std::uint32_t frame = 0;
 		std::uint32_t tablesGeneration = 0;
 		std::uint32_t materialVersions = 0;  // the last Tables::materialVersion handed out
 
+		// T6b2c step 5: the lookups (Lookups.h), the scene lane's: written by its bindings where they are made (MaterialBindings,
+		// SharedBindings) and resolved against the pipeline lane's newest catalog before each commit and publication (ResolveLookups),
+		// which the set's readiness reads and each publication carries. The render thread reads them only with the coordinator idle.
 		Lookups lookups;
+		LookupsResolveState lookupsResolve;
+		std::shared_ptr<const PipelineCatalog> lookupsCatalog;  // the catalog `lookups` were last resolved against
+		// The last publication's lookups (shared again while unchanged: Lookups::ChangeKey), with their catalog; the chunk copies counted.
+		std::shared_ptr<const Lookups> publishedLookups;
+		std::shared_ptr<const PipelineCatalog> publishedCatalog;
+		std::array<std::uint64_t, 6> publishedLookupsKey{};
+		std::uint64_t lookupsChunkCopies = 0;
+		// The frame's (render thread, HandOverAtFrameStart): the installed publication's lookups and catalog, the newest published while none
+		// is installed.
+		std::shared_ptr<const Lookups> frameLookups;
+		std::shared_ptr<const PipelineCatalog> frameCatalog;
+		/**
+		 * @brief The scene lane, before a commit (CommitSet) or a publication (PublishScene), with its bindings written: the material
+		 * entries versioned (VersionMaterialBindings), then the pipeline entries and the shadow pipelines resolved against the pipeline
+		 * lane's newest catalog (DrawPipelines::TakeCatalog; IndirectDraws::ResolveLookups), which becomes lookupsCatalog.
+		 */
+		void ResolveLookups();
+		/** @brief The scene lane, publishing: the lookups as an immutable copy with their catalog (the last copy again if unchanged). */
+		void PublishLookups();
+		/** @brief The lookups made new (the tables reset): a new instance, its generations past the last, its versions continuing. */
+		void ResetLookups();
 		// Frame state the scene phase reads once and the accumulate phase reuses, so that both halves of
 		// one frame see the same answer even though they run either side of the shadow maps.
 		bool sceneBuilt = false;  // the scene phase ran and the records are this frame's
@@ -2870,7 +3216,7 @@ namespace DCLF
 		bool MovedRecently(const void* a_key) const
 		{
 			const auto it = movedFrame.find(a_key);
-			return it != movedFrame.end() && frame - it->second <= 1;
+			return it != movedFrame.end() && sceneFrame - it->second <= 1;
 		}
 		const void* MoveKeyOf(const RE::BSGeometry& a_geometry, const RE::NiNode* a_categoryNode) const;
 		/**
@@ -2949,13 +3295,20 @@ namespace DCLF
 		 * phase's start, before anything of the frame writes.
 		 */
 		void CheckChangeLog();
-		// The material frame components and texture transforms (RefreshFrameMaterials, RefreshTextureTransforms).
+		// The material parity (render thread, CS_DCLF_PERSISTENT_PARITY: ValidateMaterialSlice): the installed records against the engine's
+		// evaluation, by part, through the suspects. The upkeep's own counters are the scene work's (materialRecordStats).
 		struct MaterialFrameStats
 		{
-			std::uint64_t frames = 0, samples = 0, applications = 0, slotsApplied = 0, pending = 0, transformsWatched = 0, checks = 0, slotsChecked = 0,
-						  componentsDiffer = 0, transformsDiffer = 0;
+			std::uint64_t checks = 0, slotsChecked = 0, written = 0, componentsDiffer = 0, transformsDiffer = 0;
+			std::array<std::uint64_t, 3> suspected{}, late{};  // by MaterialPart
+			std::array<std::string, 3> lateFirst{};            // the first late difference of each part (what moved)
+			// Own values the window did not hold although the producers rewrote the record within it (its materialVersion moved): a
+			// covered writer animating the material faster than the publication follows it within kMaterialLateFrames, not a missed one.
+			std::uint64_t lagging = 0;
+			std::string laggingFirst;
 			std::string first;
 		} materialFrameStats;
+		/** @brief Render thread, Prepass, CS_DCLF_PERSISTENT_PARITY: the used sets against the slots the installed records name. */
 		void CheckMaterialFrame();
 		// The pipelines' PerGeometry blocks (RefreshFrameConstants): full evaluations, frame samples, and the parity's findings.
 		struct GeometryStats
@@ -2963,13 +3316,17 @@ namespace DCLF
 			std::uint64_t frames = 0, full = 0, samples = 0, changed = 0, checks = 0, pipelinesChecked = 0, techniquesChecked = 0, techniquesDiffer = 0,
 						  lightingVersions = 0, lightingChecked = 0, lightingDiffer = 0;
 			std::string lightingFirst;
+			// T6b2c: a technique row against the live sample that differs because the sample moved since the row's write (the
+			// publication's lag: counted apart, not as differ), and the first real difference.
+			std::uint64_t techniquesLate = 0;
+			std::string techniqueFirst;
 			// T6: the synthetic template's evaluation against the registered one's, where the engine registered one.
 			std::uint64_t templateChecked = 0, templateDiffer = 0, templateLightingDiffer = 0, templateMissing = 0;
 			std::string templateFirst;
 			std::array<std::array<std::uint64_t, 64>, 2> differ{};
 			std::string first;
 		} geometryStats;
-		/** @brief The technique row of a pass descriptor's TechniqueKey (Tables::techniqueKeys), made when new (the frame evaluates it). */
+		/** @brief The coordinator: the technique row of a pass descriptor's TechniqueKey (Tables::techniqueKeys), made and evaluated when new. */
 		std::uint32_t TechniqueRowFor(std::uint32_t a_passDescriptor);
 		void CheckFrameGeometry(std::uint32_t a_pipeline, const GeometryConstants& a_reference, const GeometryConstants& a_held);
 		// The first RefreshFrameConstants evaluates every pipeline in full and resamples every slot's shading. The full
@@ -2977,9 +3334,6 @@ namespace DCLF
 		// pipeline does not write, such as AmbientSpecularTintAndFresnelPower: pipelines made later are evaluated where
 		// they are written (WriteObject), which does not publish lighting.
 		bool constantsRefreshed = false;
-		// The new pipelines' full evaluations since the last RefreshFrameConstants (RefreshNewPipelineConstants): merged into the
-		// frame lighting where nothing else wrote it, so a component only a later pipeline writes is published too.
-		std::vector<ConstantBlock> lightingSeeds;
 		bool shadingNamedAll = false;  // NameShadingEvents named every slot once
 		// CS_DCLF_PERSISTENT_PARITY: every 60 frames every drawn slot's shading as the engine has it now against the frame's rows
 		// (FrameValues), at Prepass: a difference is named for the next frame (an event the walk took), its event is queued (taken
@@ -3121,18 +3475,24 @@ namespace DCLF
 		std::vector<const void*> propertyChanged;
 		std::vector<RE::NiPointer<RE::NiAVObject>> nodeChanged;
 		// Ingestion (IngestEvents): the queues' events since the last apply, oldest first (Internal.h).
-		std::shared_ptr<EventBatch> ingested;
-		// The references the scene work let go of, and its applied batches (their tracker events hold subtrees): released at
-		// Present (ReleaseHandedBack). Written by the scene work, cleared by the render thread with it joined.
-		std::vector<RE::NiPointer<RE::NiRefObject>> handedBack;
+		// T6b3a: the render thread's batch (IngestEvents fills it), posted to the coordinator at the frame's start (eventBatches;
+		// ApplyEvents applies each in order) or applied by Present when two Presents went unapplied. A load screen's ingestion posts a
+		// marker instead (EventBatch::loading, once a load): the coordinator drops what the load invalidates.
+		std::shared_ptr<EventBatch> ingesting;
+		EventQueue<std::shared_ptr<EventBatch>, 64> eventBatches;
+		bool loadingPosted = false;  // render thread: the load's marker is posted
+		/** @brief The coordinator (ApplyEvents' start): what a load screen invalidated dropped (IngestEvents' loading branch's, T6b3a). */
+		void ApplyLoading();
+		/** @brief The coordinator: one posted batch applied (ApplyEvents' body, once a batch). */
+		void ApplyBatch(std::shared_ptr<EventBatch> a_batch);
+		bool rescanCaptureAll = false;  // render thread: a load's marker posted, so the next category capture pins every category node
+		// The engine references the scene work let go of go to EngineReleases (T6b3a), and its applied batches (their tracker events hold
+		// subtrees) here: released at Present (ReleaseHandedBack), pushed where they are let go (RecycleRetired), never handed over.
+		EventQueue<std::shared_ptr<EventBatch>, 64> batchesReleased;
 		// The tree and fade-root nodes the tables list (Tables::treeNode, fadeRootNode), owned while listed: unlisted, they go
 		// through the retirement chain (a kept publication still walks them).
 		std::vector<RE::NiPointer<RE::NiAVObject>> treeOwners, fadeRootOwners;
-		std::vector<std::shared_ptr<EventBatch>> spentBatches;
-		// The render thread's (T6b1d): what the joins took of handedBack, spentBatches and materialsHandedBack, released at Present.
-		std::vector<RE::NiPointer<RE::NiRefObject>> releasing;
 		std::uint64_t presentsJoined = 0, presentsRunning = 0;  // TryJoinSceneTask's
-		std::vector<std::shared_ptr<EventBatch>> releasingBatches;
 		template <class T>
 		void HandBack(RE::NiPointer<T>&& a_reference)
 		{
@@ -3246,27 +3606,53 @@ namespace DCLF
 		std::vector<const RE::BSGeometry*> setGeometryNext;
 		bool setWithdrawn = false;  // the frame's claims (WithdrawSet), until the next installation
 		/**
-		 * @brief A publication of the scene (step 6e E3): the tables the coordinator published with its set applied, the claims (the
-		 * set's snapshot less what the revocation took back), the main claims' changes against the publication before it, the lacking
-		 * counts, and the commit it applies. Made by PublishScene, installed whole by the frame's start (SelectPublication).
+		 * @brief What one publication's passes made for the frame and the frame's start takes (T6b3a), carried by the publication log in
+		 * the publication's order: the main claims' changes against the publication before it (taken up to the installed one), and the
+		 * frame inputs (taken up to the newest one taken): the walks' placement plans, the slots named for their shading, the fade and
+		 * tree seed requests, the switches the walks applied (switchResync: PrimaryCull reads them all), the import leases of the geometry
+		 * slots cleared, and the actors' wetness membership changes.
 		 */
-		struct ScenePublication
+		struct PublicationDeltas
 		{
-			std::uint64_t sequence = 0;
-			std::uint32_t commitFrame = 0;
-			std::shared_ptr<Tables> tables;
-			std::shared_ptr<const SetSnapshot> claims;
+			std::uint64_t publication = 0;  // its publication's sequence
+			std::uint32_t commitFrame = 0;  // that publication's commit (the install delay)
 			std::vector<const RE::BSGeometry*> joined, left;
-			std::array<std::uint32_t, 3> lackingCount{};
-			// What the frames that install it draw (IndirectDraws::BuildAhead, step 6e E3b): its stream views and main payloads.
-			std::shared_ptr<const void> draws;
+			std::vector<std::shared_ptr<const PlacementPlan>> plans;
+			std::vector<ShadingItem> shading;
+			std::vector<FadeSeedItem> fadeSeeds, treeSeeds;
+			std::vector<const RE::NiAVObject*> switches;
+			bool switchResync = false;
+			std::vector<std::shared_ptr<const void>> retiredImports;
+			std::vector<Tables::ActorWetnessChange> actorWetness;
+			std::vector<LightEntryChange> lightEntries;
 		};
-		/** @brief The coordinator: ApplySet, RevokeUndrawnClaims, PublishTables, and the publication queued. */
+		/**
+		 * @brief The coordinator: ApplySet, RevokeUndrawnClaims, PublishTables, then the publication's deltas onto the log and the publication
+		 * to the snapshot builder (IndirectDraws::PostSnapshotWork; in that order: whoever adopts the publication finds its node).
+		 */
 		void PublishScene();
-		std::deque<std::shared_ptr<ScenePublication>> publications;  // made, not installed (oldest first)
-		std::shared_ptr<ScenePublication> installed;                  // the frame's
+		/** @brief The coordinator: what its passes made for the frame since the last publication, moved into a_deltas (the log's node). */
+		void TakeDeltas(PublicationDeltas& a_deltas);
+		/** @brief The coordinator: whether a pass since the last publication made anything for the frame (the republish at a pass's start). */
+		bool DeltasPending() const;
+		PublicationLog<PublicationDeltas> publicationLog;  // the coordinator -> the frame's start (every one)
+		// The render thread's: the installed publication (the adopted snapshot's, HandOverAtFrameStart).
+		std::shared_ptr<const ScenePublication> installed;
+		/** @brief Render thread: the installed publication, null before the first. */
+		std::shared_ptr<const ScenePublication> Newest() const { return installed; }
+		// The render thread's cursors into the log: the frame inputs taken and the claims' changes taken (both up to the installed one,
+		// the claims' never past the frame inputs'). Null: the log's first node.
+		PublicationLog<PublicationDeltas>::Node* deltasCursor = nullptr;
+		PublicationLog<PublicationDeltas>::Node* notesCursor = nullptr;
+		/** @brief Render thread: the replaced or skipped publication back to the coordinator, which drops it (retiredPublications). */
+		void ReturnPublication(std::shared_ptr<const ScenePublication>&& a_publication);
+		// The render thread's leases the coordinator drops (T6b3a: retirement off the render thread), at the start of its passes.
+		EventQueue<std::shared_ptr<const ScenePublication>, 64> retiredPublications;
+		/** @brief The coordinator, at the start of its passes: the leases the render thread gave back, dropped. */
+		void DropReturnedPublications();
 		std::uint64_t publicationSequence = 0;
-		std::uint32_t publicationCommitFrame = 0;  // the commit the next publication applies
+		std::uint32_t publicationCommitFrame = 0;    // the commit the next publication applies
+		std::uint32_t publicationCommitToggles = 0;  // the toggles generation that commit was made under
 		std::shared_ptr<const SetSnapshot> publicationClaims;
 		std::vector<const RE::BSGeometry*> publicationJoined, publicationLeft;
 		// The frame's: the installed publications' claim changes not told to PrimaryCull yet, whether one is waiting, the claims it was
@@ -3278,6 +3664,7 @@ namespace DCLF
 		PublicationStats publicationStats;
 		std::vector<std::uint32_t> setApplyMark;  // parallel to objects: its index in setApply plus one, 0 when not in it
 		std::uint32_t setCommitFrame = 0;
+		std::uint32_t setCommitToggles = 0;  // the toggles generation of the frame inputs the last commit was made under
 		// The claims as applied (the frame's), kept apart from Tables::setPhases, which a freed slot clears: what RevokeUndrawnClaims
 		// checks the records against, with the geometry each base slot is claimed under.
 		std::vector<std::uint8_t> setPhasesApplied;
@@ -3297,17 +3684,34 @@ namespace DCLF
 		 * tables' change log since ApplySet.
 		 */
 		void RevokeUndrawnClaims();
-		/** @brief Render thread, after the scene work (the task's or inline): the held hand-overs, the revocations, the kicks. */
-		void FinishSceneWork();
-		/** @brief Render thread, after the accumulate work: its dropped members to PrimaryCull, its new pipelines evaluated. */
-		void FinishAccumulateWork();
-		/** @brief Render thread, the coordinator idle: the joins' material evaluations (SetupMaterial), for the next joins. */
+		/**
+		 * @brief What the scene work tells PrimaryCull (render-thread state), held while it runs (T6b3a: a lock-free queue the render
+		 * thread drains at the joins and the frame's start, in the order the work made them): a hidden store's key (the kept scene lists
+		 * built again), a member the accumulate phase dropped, every residency ended.
+		 */
+		struct PrimaryNote
+		{
+			enum class Kind : std::uint8_t
+			{
+				HiddenKey,
+				MemberLost,
+				AllMembersLost
+			};
+			Kind kind = Kind::HiddenKey;
+			const void* key = nullptr;  // the hidden store's key, or the member's geometry (keys: nothing is dereferenced)
+		};
+		EventQueue<PrimaryNote> primaryNotes;
+		/** @brief Render thread (the joins, the frame's start): the held notes to PrimaryCull. */
+		void DeliverPrimaryNotes();
+		/**
+		 * @brief Render thread, EarlyPrepass (a frame input, T6b2c step 7): the captures the joins asked for (materialRequestQueue),
+		 * each read off the property the join held, onto MaterialPort::captures; every request answered (materialRequestsAnswered).
+		 */
 		void ServeMaterialRequests();
-		bool accumulateWorkPending = false;  // RunAccumulateWork ran; FinishAccumulateWork has not
-		bool holdLostMembers = false;        // RunAccumulateWork: the members it drops are held for PrimaryCull (lostMembersHeld)
-		std::vector<const RE::BSGeometry*> lostMembersHeld;
-		// A join whose material record the engine has not evaluated yet asks for it and waits a frame (bindRetry). Requests
-		// hold the material; a served record is taken by the next join (its reference moves into the slot's owner).
+		bool holdLostMembers = false;  // RunAccumulateWork: the members it drops are held for PrimaryCull (primaryNotes)
+		// A join whose material has no capture held (MaterialPort::captures: its writer's, its attach's; one unused for
+		// kMaterialSnapshotFrames is let go) asks the render thread for one and waits (bindRetry). The scene work can read no
+		// property's material: the render thread's capture at EarlyPrepass is the capture point for it.
 		struct MaterialRequest
 		{
 			// T6b1b: the property the join read the material of (its entry's, held), not the material: the render thread takes the
@@ -3316,24 +3720,24 @@ namespace DCLF
 			const RE::BSShaderMaterial* material = nullptr;
 			std::uint32_t pass = 0;
 		};
-		struct MaterialServed
+		// The scene work's requests to the render thread, and its answers back (the material, captured or stale): lock-free both ways.
+		struct MaterialAnswer
 		{
-			MaterialReference owner;
-			MaterialRecord record;
-			bool valid = false;
-			std::uint32_t frame = 0;
+			const RE::BSShaderMaterial* material = nullptr;
+			bool captured = false;  // false: the property held another material by then (the request stale)
 		};
-		std::vector<MaterialRequest> materialRequests;
-		ankerl::unordered_dense::set<std::pair<const RE::BSShaderMaterial*, std::uint32_t>> materialRequested;
-		ankerl::unordered_dense::map<std::pair<const RE::BSShaderMaterial*, std::uint32_t>, MaterialServed> materialsServed;
-		std::vector<MaterialReference> materialsHandedBack;  // released at Present (TakeHandedBack, ReleaseHandedBack)
-		std::vector<MaterialReference> releasingMaterials;
+		EventQueue<MaterialRequest> materialRequestQueue;
+		EventQueue<MaterialAnswer> materialRequestsAnswered;
+		ankerl::unordered_dense::set<const RE::BSShaderMaterial*> materialRequested;  // the scene work's: asked, not answered yet
+		// The material references the coordinator let go of (RecycleRetired, HandBackHeld), released at Present (ReleaseHandedBack; T6b3a:
+		// pushed where they are let go, never handed over at a join).
+		EventQueue<MaterialReference> materialsReleased;
 		/**
 		 * @brief What the coordinator let go of that a published version of the tables may still name (step 6e E3): the slots
 		 * (Tables::retiring, the SlotTables'), the geometry slots' buffer owners, the material slots' engine references and every
 		 * engine reference handed back. Each publication holds the chain's node opened with it (Tables::retirementHold); a batch comes
 		 * back once no publication up to it lives, and RecycleRetired puts its slots on their free lists and its references where
-		 * they were released before (retiredImports, materialsHandedBack, handedBack).
+		 * they were released before (retiredImports; materialsReleased, EngineReleases, batchesReleased).
 		 */
 		struct RetiredBatch
 		{
@@ -3358,12 +3762,9 @@ namespace DCLF
 		// The scene task (KickSceneTask): its job, and what the work holds for the render thread while it runs.
 		std::shared_ptr<void> sceneTask;  // AsyncWorker::JobHandle
 		bool sceneTaskFailedLogged = false;
-		bool sceneWorkPending = false;  // RunSceneWork ran; FinishSceneWork has not
 		bool inSceneTask = false;       // RunSceneWork on the coordinator
-		bool holdPrimaryNotes = false;  // RunSceneWork: PrimaryCull's notes are held until FinishSceneWork
-		std::vector<const void*> hiddenKeysHeld;
-		bool allMembersLostHeld = false;
-		std::uint32_t publishedSunGeneration = 0;
+		bool holdPrimaryNotes = false;  // the scene work's passes: PrimaryCull's notes are held (primaryNotes)
+		std::uint32_t publishedSunGeneration = 0;  // render thread: the newest publication's sun generation as the frame took it
 		std::vector<const RE::BSGeometry*> setGeometry;  // parallel to objects: the geometry a base member is published under
 		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> setMemberSlot;  // published geometry -> its slot
 		// Members whose registration met a fade DCLF does not model (PassCapture::TakeUnmodelledFades): out of the set until it ends.
@@ -3509,8 +3910,6 @@ namespace DCLF
 		 * the returned first (Tables::kSlotFree when one cannot be resolved), each keyed by its range's first segment record.
 		 */
 		std::uint32_t ResolveLodRangeSlots(const SceneCapture::GeometryRecord& a_geometry, const std::vector<LodSegments::Range>& a_ranges, PartTimer& a_timer);
-		/** @brief Capture a new material slot; false when nothing can be evaluated. */
-		bool EvaluateMaterialForSlot(const RE::BSShaderMaterial* a_material, std::uint32_t a_pass, MaterialRecord& a_record);
 
 		/** @brief Consume reference changes; retire unused materials and expire idle geometry/pipeline slots before capture. */
 		void SweepSlots();
@@ -3523,12 +3922,18 @@ namespace DCLF
 
 	public:
 		/**
-		 * @brief Drops every cached classification verdict and derivation: a live toggle that enters the
+		 * @brief Render thread (T6b3a: a message): every cached classification verdict and derivation is to be dropped - a live toggle
+		 * that enters the classification (Toggles.h) changed, or the feature came back on - by the coordinator at its next scene pass
+		 * (the frame inputs' verdicts generation: InvalidateVerdicts).
+		 */
+		void RequestVerdictsInvalidated() { ++verdictsRequested; }
+
+	private:
+		/**
+		 * @brief The coordinator: drops every cached classification verdict and derivation: a live toggle that enters the
 		 * classification (Toggles.h) changed, and the caches witness the object rather than the switches.
 		 */
 		void InvalidateVerdicts();
-
-	private:
 
 		/** @brief After the loop: every object with bindings names live slots of this frame, or is neutralised. */
 		void CheckObjectSlots(bool a_resolveBuffers);
@@ -3538,7 +3943,10 @@ namespace DCLF
 		 * persistent tables; every frame, so it is a probe and not a mode.
 		 */
 		void ProbeSlots(bool a_resolveBuffers);
-		/** @brief Re-evaluates a few live materials a frame against what their slots serve. */
+		/**
+		 * @brief Render thread, CS_DCLF_PERSISTENT_PARITY (the parity observer): a few installed records a frame (every used one on a
+		 * parity frame) against the engine's evaluation, in every part (JudgeMaterial), and the suspects due judged again.
+		 */
 		void ValidateMaterialSlice();
 		Stats stats;
 	};

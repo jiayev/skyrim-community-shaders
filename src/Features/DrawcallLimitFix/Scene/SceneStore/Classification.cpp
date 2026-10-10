@@ -270,11 +270,16 @@ namespace DCLF
 		// T6b1a: what the scene work tracked that the mirror holds no record of (an attach no hook captured: the references the engine
 		// moves into multibounds), captured from its highest ancestor the mirror lacks. Render thread, the frame's start: the scene work
 		// is joined, the mirror idle.
-		if (mirrorCaptureRequests.empty())
+		std::vector<RE::NiPointer<RE::NiAVObject>> requests;
+		mirrorCaptureRequests.Drain([&requests](RE::NiPointer<RE::NiAVObject>&& a_request) { requests.push_back(std::move(a_request)); });
+		if (requests.empty())
 			return;
 		ZoneScopedN("CS.DCLF.Ingest.MirrorRequests");
+		// T6b3a: the mirror is the coordinator's, read here as the frame start's join leaves it (left for T6b3c: the requests served from
+		// what the coordinator finds the mirror lacks); a read while the scene work runs is counted and named.
+		GuardFrameAccess("CaptureMirrorRequests");
 		ankerl::unordered_dense::set<const RE::NiAVObject*> captured;
-		for (const auto& geometry : std::exchange(mirrorCaptureRequests, {})) {  // a geometry, or (AddSubtree) a subtree's root
+		for (const auto& geometry : requests) {  // a geometry, or (AddSubtree) a subtree's root
 			if (!geometry || mirror.Node(geometry.get()))
 				continue;
 			const RE::NiAVObject* top = geometry.get();
@@ -308,9 +313,11 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.Ingest.CaptureCategories");
 		const auto start = std::chrono::steady_clock::now();
 		const auto timed = [&] { categoryCaptureNs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()); };
-		// The pins of a capture the scene work has applied are let go (T6b1c).
-		if (categoryCapture && categoryCapture->generation == categoryAppliedGeneration)
-			categoryPins.clear();
+		// The captures one the coordinator has applied supersedes are let go, their pins with them (T6b1c; T6b3a: the coordinator let go
+		// of its copy before it moved the generation on, so these drops are the render thread's, as an engine reference's must be).
+		const std::uint64_t applied = categoryAppliedGeneration.load(std::memory_order_acquire);
+		while (categoryCapturesHeld.size() > 1 && categoryCapturesHeld.front()->generation < applied)
+			categoryCapturesHeld.pop_front();
 		const std::uint64_t signature = CategorySignature();
 		if (!a_force && categoryCapture && signature == categoryCapture->signature)
 			return timed();
@@ -384,23 +391,29 @@ namespace DCLF
 		capture->held.reserve(current.size());
 		for (auto* node : current)
 			capture->held.emplace_back(node);
-		// What the scene work will walk (T6b1c): the category nodes new to its set (the scene work is joined: its set is readable here;
-		// a rescan pending makes every one new), their children's keys and their subtrees held, and the subtrees of the roots new to it.
+		// What the scene work will walk (T6b1c): the category nodes new to its set, their children's keys and their subtrees held, and
+		// the subtrees of the roots new to it. T6b3a: its set is the capture it applied last (RefreshCategoryNodes makes them equal), read
+		// here from the render thread's own copy, never the coordinator's; none applied yet, or a rescan pending, makes every one new.
 		{
-			const bool all = rescanPending;
+			const CategoryCapture* base = nullptr;
+			for (const auto& held : categoryCapturesHeld)
+				if (held->generation == applied)
+					base = held.get();
+			const bool all = rescanCaptureAll || !base;
+			auto& pins = capture->pins;
 			auto pinSubtree = [&](RE::NiAVObject* a_root) {
 				std::vector<RE::NiAVObject*> stack{ a_root };
 				while (!stack.empty()) {
 					auto* object = stack.back();
 					stack.pop_back();
-					categoryPins.emplace_back(object);
+					pins.emplace_back(object);
 					// A geometry's properties too (T6b1b: what its entry holds).
 					if (auto* geometry = object->AsGeometry()) {
 						const auto& data = geometry->GetGeometryRuntimeData();
 						for (RE::NiRefObject* property : { static_cast<RE::NiRefObject*>(data.shaderProperty.get()), static_cast<RE::NiRefObject*>(LayerPropertyOf(*geometry)),
 								 static_cast<RE::NiRefObject*>(data.alphaProperty.get()) })
 							if (property)
-								categoryPins.emplace_back(property);
+								pins.emplace_back(property);
 					}
 					if (auto* node = object->AsNode())
 						for (auto& child : node->GetChildren())
@@ -409,7 +422,7 @@ namespace DCLF
 				}
 			};
 			for (auto* node : current) {
-				if (!all && categoryNodes.contains(node))
+				if (!all && base->nodes.contains(node))
 					continue;
 				auto& keys = capture->children[node];
 				for (auto& child : node->GetChildren())
@@ -419,7 +432,7 @@ namespace DCLF
 					}
 			}
 			for (const auto& [root, entry] : currentRoots)
-				if (all || !alwaysRenderRoots.contains(root) || !categoryNodes.contains(entry.category))
+				if (all || !base->roots.contains(root) || !base->nodes.contains(entry.category))
 					pinSubtree(entry.root.get());
 		}
 		// The portal graph's parentless roots, the mirror's world from now on (T6b1b): each new one captured whole, each gone dropped
@@ -449,20 +462,28 @@ namespace DCLF
 						a_batch.AppendLate(event);
 					}
 		}
+		// Held until one the coordinator applied supersedes it, and posted (latest wins: a newer capture names every node new to the set
+		// the coordinator applied last, so one it never takes loses nothing).
+		categoryCapturesHeld.push_back(capture);
+		categoryPosted.Post(std::make_unique<std::shared_ptr<const CategoryCapture>>(capture));
 		categoryCapture = std::move(capture);
+		rescanCaptureAll = false;
 		timed();
 	}
 
 	void SceneStore::RefreshCategoryNodes(bool a_force)
 	{
-		// The render thread's capture (CaptureCategories): diffed again when it is new, or forced (the rescan after a load).
-		const auto* capture = categoryCapture.get();
-		if (!capture || (!a_force && capture->generation == categoryAppliedGeneration))
+		// The render thread's capture (CaptureCategories, posted: T6b3a), the newest taken: diffed again when it is new, or forced (the rescan
+		// after a load). Taking one lets go of the one before, which the render thread still holds (it waits for the generation below).
+		if (auto taken = categoryPosted.Take())
+			categoryTaken = std::move(*taken);
+		const auto* capture = categoryTaken.get();
+		if (!capture || (!a_force && capture->generation == categoryAppliedGeneration.load(std::memory_order_relaxed)))
 			return;
 		const std::uint8_t cause = a_force ? 1 : 0;
-		categoryAppliedGeneration = capture->generation;
-		// Its pins (T6b1c): held until the render thread's next frame start (the scene work joined then).
-		for (const auto& pin : categoryPins) {
+		categoryAppliedGeneration.store(capture->generation, std::memory_order_release);
+		// Its pins (T6b1c): held by the capture until the render thread lets go of it (after a newer one is applied).
+		for (const auto& pin : capture->pins) {
 			batchPins.insert_or_assign(pin.get(), pin.get());
 			++referenceStats.pins;
 		}
@@ -522,6 +543,7 @@ namespace DCLF
 				added.push_back(node);
 		}
 		categoryNodes = current;
+		nodeSetsDirty = true;  // the publication's copy made again (IsCategoryNode)
 		for (auto& [root, entry] : alwaysRenderRoots)
 			HandBack(std::move(entry.root));
 		// Copies of the capture's references (the scene work never makes one from a key).
@@ -533,7 +555,7 @@ namespace DCLF
 		if (addSource != TrackSource::Rescan)
 			addSource = TrackSource::CategoryAppeared;
 		for (auto* node : added) {
-			categoryFound[node] = { frame, cause };
+			categoryFound[node] = { sceneFrame, cause };
 			// The capture's keys of its children (T6b1c: not read here).
 			const auto keys = capture->children.find(node);
 			if (keys == capture->children.end()) {
@@ -749,7 +771,7 @@ namespace DCLF
 			entry.faceShapeResolved = false;
 		}
 		if (inserted) {
-			entry.trackedFrame = frame;
+			entry.trackedFrame = sceneFrame;
 			entry.trackedBy = addSource;
 		}
 		entry.identity = identity.member;
@@ -774,7 +796,7 @@ namespace DCLF
 		entry.categoryNode = a_categoryNode;
 		// The mirror holds no record of it (an attach no hook captured): the render thread captures it at the next frame's start (T6b1a).
 		if (!mirror.Node(a_geometry))
-			mirrorCaptureRequests.emplace_back(a_geometry);
+			mirrorCaptureRequests.Push(RE::NiPointer<RE::NiAVObject>(a_geometry));
 		entry.parentReason = a_parentReason;
 		// Attached (again): its classification stands no more, and every other entry reading the same sun entry node is
 		// evaluated again, since that node's bound takes this one in now (dclf-event-driven-tables.md, "Phase 3").
@@ -799,6 +821,8 @@ namespace DCLF
 			if (const auto* lightEntry = LightEntryOf(entry, *a_geometry, a_live); lightEntry && OwnRoot(lightEntry, a_live)) {
 				auto& dependents = lightDependents[lightEntry];
 				lightEntriesAppeared += dependents.empty() ? 1 : 0;
+				if (dependents.empty())
+					lightEntryChanges.push_back({ lightEntry, 1 });  // a light entry new to the frame's set (IsLightEntry, through the log)
 				dependents.push_back(a_geometry);
 				entry.lightRoot = lightEntry;
 				MarkLightEntryDirty(lightEntry);
@@ -825,14 +849,14 @@ namespace DCLF
 			if (!a_live && !mirrorReadParity) {
 				if (actorRoot)
 					return static_cast<const RE::NiAVObject*>(root);
-				return a_tracked.sunEntryNode && !IsCategoryNode(a_tracked.sunEntryNode) ? a_tracked.sunEntryNode : nullptr;
+				return a_tracked.sunEntryNode && !CategoryNodeOwn(a_tracked.sunEntryNode) ? a_tracked.sunEntryNode : nullptr;
 			}
 			// The check under a lease (T6b1d).
 			const auto lease = a_live ? EngineReadWindow::Lease() : LiveCheckLease(MirrorRead::LightEntry);
 			if (!a_live && !lease) {
 				if (actorRoot)
 					return static_cast<const RE::NiAVObject*>(root);
-				return a_tracked.sunEntryNode && !IsCategoryNode(a_tracked.sunEntryNode) ? a_tracked.sunEntryNode : nullptr;
+				return a_tracked.sunEntryNode && !CategoryNodeOwn(a_tracked.sunEntryNode) ? a_tracked.sunEntryNode : nullptr;
 			}
 			const RE::NiAVObject* live = &a_geometry;
 			for (const auto* node = a_geometry.parent; node && node != category; node = node->parent)
@@ -852,7 +876,7 @@ namespace DCLF
 			if (a_live ? liveActor : actorRoot)
 				return a_live ? live : static_cast<const RE::NiAVObject*>(root);
 		}
-		return a_tracked.sunEntryNode && !IsCategoryNode(a_tracked.sunEntryNode) ? a_tracked.sunEntryNode : nullptr;
+		return a_tracked.sunEntryNode && !CategoryNodeOwn(a_tracked.sunEntryNode) ? a_tracked.sunEntryNode : nullptr;
 	}
 
 	void SceneStore::AddSubtree(RE::NiAVObject* a_root, SubtreeSource a_source)
@@ -869,7 +893,7 @@ namespace DCLF
 				// Its reference a pin's copy (the capture's): never one made from a key.
 				if (auto root = Pinned(static_cast<const RE::NiAVObject*>(a_root))) {
 					++subtreesPended;
-					mirrorCaptureRequests.push_back(root);
+					mirrorCaptureRequests.Push(root);
 					pendingSubtrees.push_back(std::move(root));
 				} else {
 					++subtreesDropped;

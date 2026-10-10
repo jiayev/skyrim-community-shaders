@@ -54,12 +54,25 @@ namespace DCLF
 			text += fmt::format("[DCLF] change log: {:.1f} changes a frame, by column: {} ({} entries held)\n", static_cast<double>(total) / n,
 				causes.empty() ? "-" : causes, tables.changeLog.Size());
 		}
-		if (auto& m = materialFrameStats; m.frames) {
-			const double n = static_cast<double>(m.frames);
+		// T6b2c step 7: the material records kept by the scene work (RefreshMaterialRecords), per scene pass.
+		if (auto& r = materialRecordStats; r.passes) {
+			const double n = static_cast<double>(r.passes);
+			text += fmt::format("[DCLF] material records (the scene work's, from captures and the frame's sources): {:.1f} captures applied, {:.2f} records "
+								"rewritten, {} rewrites waiting on a later frame's sources, {} uncovered; {:.1f} signature samples, {:.2f} applications to "
+								"{:.1f} slots; {:.1f} watched transforms, {:.2f} written a pass{}\n",
+				r.captured / n, r.rewritten / n, r.retried, r.uncovered, r.samples / n, r.applications / n, r.slotsApplied / n, r.transformsWatched / n,
+				r.transformsWritten / n, r.uncovered ? " <- MATERIAL PORT" : "");
+			r = {};
+		}
+		if (auto& m = materialFrameStats; m.slotsChecked) {
 			const auto differ = m.componentsDiffer + m.transformsDiffer;
-			text += fmt::format("[DCLF] material frame components: {:.1f} samples, {:.2f} applications to {:.1f} slots, {:.1f} pending slots and {:.1f} watched transforms a frame; parity {} checks, {} slots, {} frame components and {} transforms differ{}{}\n",
-				m.samples / n, m.applications / n, m.slotsApplied / n, m.pending / n, m.transformsWatched / n, m.checks, m.slotsChecked, m.componentsDiffer, m.transformsDiffer,
-				m.checks ? (differ ? " <- DIFFER; first: " : " <- OK") : "", differ ? m.first : std::string());
+			text += fmt::format("[DCLF] material parity (the installed records against the engine's evaluation, render thread): {} full checks, {} slots ({} "
+								"written since the last frame); suspected own/frame/transform {}/{}/{}, late after a {}-frame window {}/{}/{} (own: {}; frame: {}; "
+								"transform: {}); own lagging a covered writer (rewritten within the window, none of its values) {} ({}); {} frame components and "
+								"{} transforms differ (own values: the materials line's stale){}{}\n",
+				m.checks, m.slotsChecked, m.written, m.suspected[0], m.suspected[1], m.suspected[2], kMaterialLateFrames, m.late[0], m.late[1], m.late[2],
+				m.lateFirst[0].empty() ? "-" : m.lateFirst[0], m.lateFirst[1].empty() ? "-" : m.lateFirst[1], m.lateFirst[2].empty() ? "-" : m.lateFirst[2],
+				m.lagging, m.laggingFirst.empty() ? "-" : m.laggingFirst, m.componentsDiffer, m.transformsDiffer, differ ? " <- DIFFER; first: " : " <- OK", differ ? m.first : std::string());
 			m = {};
 		}
 		if (auto& g = geometryStats; g.frames) {
@@ -71,11 +84,12 @@ namespace DCLF
 						total += g.differ[stage][v];
 						differ += fmt::format(" {}{}={}", stage ? "PS" : "VS", v, g.differ[stage][v]);
 					}
-			text += fmt::format("[DCLF] pipeline constants: {:.2f} full geometry evaluations and {:.2f} frame samples a frame, {:.1f} pipelines changed, frame lighting changed {:.2f}; parity {} checks, {} pipelines, {} geometry variables, {} of {} technique blocks and {} of {} frame lightings differ{}{}{}\n",
+			text += fmt::format("[DCLF] pipeline constants: {:.2f} full geometry evaluations and {:.2f} frame samples a frame, {:.1f} pipelines changed, frame lighting changed {:.2f}; parity {} checks, {} pipelines, {} geometry variables, {} of {} technique blocks ({} more late: the sample moved since the row's write) and {} of {} frame lightings differ{}{}{}\n",
 				static_cast<double>(g.full) / g.frames, static_cast<double>(g.samples) / g.frames, static_cast<double>(g.changed) / g.frames,
-				static_cast<double>(g.lightingVersions) / g.frames, g.checks, g.pipelinesChecked, total, g.techniquesDiffer, g.techniquesChecked, g.lightingDiffer, g.lightingChecked,
-				g.checks ? (total || g.techniquesDiffer || g.lightingDiffer ? " <- DIFFER:" : " <- OK") : "", differ,
-				(total ? "; first: " + g.first : std::string()) + (g.lightingDiffer ? "; lighting: " + g.lightingFirst : std::string()));
+				static_cast<double>(g.lightingVersions) / g.frames, g.checks, g.pipelinesChecked, total, g.techniquesDiffer, g.techniquesChecked, g.techniquesLate,
+				g.lightingDiffer, g.lightingChecked, g.checks ? (total || g.techniquesDiffer || g.lightingDiffer ? " <- DIFFER:" : " <- OK") : "", differ,
+				(total ? "; first: " + g.first : std::string()) + (g.lightingDiffer ? "; lighting: " + g.lightingFirst : std::string()) +
+					(g.techniquesDiffer ? "; technique: " + g.techniqueFirst : std::string()));
 			if (g.templateChecked || g.templateMissing)
 				text += fmt::format("[DCLF] pipeline templates (T6: the synthetic pass against a registered one's evaluation): {} checked ({} with none registered), {} differ "
 									"in the bindless draw's values, {} in the frame lighting{}{}\n",
@@ -98,6 +112,56 @@ namespace DCLF
 				dp.checks, dp.decals, dp.differ, dp.differ ? " <- DIFFER; first: " : " <- OK", dp.first, dp.staleKeys, dp.unordered,
 				dp.staleKeys ? "; first stale: " : "", dp.staleFirst);
 			dp = {};
+		}
+		if (auto& ms = materialSnapshotStats; ms.captured || ms.made || ms.requested) {
+			text += fmt::format("[DCLF] material captures (T6b2a: the scene work's records): {} captured ({} replacing an older one, {} older than the held one), {} "
+								"let go unused, {} held; {} records made by the scene work, {} uncovered, {} asked of the render thread{}\n",
+				ms.captured, ms.replaced, ms.stale, ms.aged, materialSnapshots.size(), ms.made, ms.uncovered, ms.requested, ms.uncovered ? " <- MATERIAL PORT" : "");
+			ms = {};
+		}
+		// T6b2c: the material bindings the scene work makes (the frame's start reads this, and the scene lane's lookups, with the scene work
+		// joined).
+		if (auto& mb = materialBindings; mb.stats.requested || mb.stats.answered || mb.stats.versioned || !mb.inFlight.empty()) {
+			std::size_t waiting = 0, holding = 0;
+			Tables::ForEachBit(tables.usedMaterialBits, [&](std::uint32_t a_slot) {
+				if (a_slot < lookups.materials.size() && lookups.materials[a_slot].key.first) {
+					waiting += lookups.materials[a_slot].resolved ? 0 : 1;
+					holding += a_slot < mb.held.size() && mb.held[a_slot] ? 1 : 0;
+				}
+			});
+			const auto& bs = mb.stats;
+			text += fmt::format("[DCLF] material bindings (T6b2c: the scene work's): {} views requested, {} answered ({} rejected, {} stale), {} served from the "
+								"answers kept ({} kept); {} entries resolved, {} retired, {} changes versioned into the scene lane's lookups; pending now: {} views "
+								"requested and not answered, {} used slots waiting, {} holding their previous view\n",
+				bs.requested, bs.answered, bs.rejected, bs.stale, bs.cached, mb.cache.size(), bs.resolved, bs.retired, bs.versioned, mb.inFlight.size(), waiting, holding);
+			mb.stats = {};
+		}
+		// T6b2c: the shared, projected, mask and shadow texture bindings the scene work makes (read the same way).
+		if (auto& sb = sharedBindings; sb.stats.fixedPublished || sb.stats.projectedCaptures || sb.stats.shadowAdded || sb.stats.shadowRemoved ||
+										 sb.stats.writtenShared || sb.stats.writtenMasks || sb.stats.writtenShadow || !sb.inFlight.empty()) {
+			// What is still asked for now, by the kinds waiting on each view in flight; the projected textures and masks waiting, by entry.
+			std::array<std::size_t, SharedBindings::kKinds> waitingByKind{};
+			for (const auto& waitingView : sb.inFlight)
+				for (std::uint32_t kind = 0; kind < SharedBindings::kKinds; ++kind)
+					waitingByKind[kind] += (waitingView.second >> kind) & 1;
+			std::size_t masksWaiting = 0;
+			Tables::ForEachBit(tables.usedPipelineBits, [&](std::uint32_t a_slot) {
+				if (a_slot < sb.masks.size() && sb.masks[a_slot].wanted && !sb.masks[a_slot].settled)
+					++masksWaiting;
+			});
+			const auto& ss = sb.stats;
+			std::string byKind;
+			for (std::uint32_t kind = 0; kind < SharedBindings::kKinds; ++kind)
+				byKind += fmt::format("; {}: {} views requested, {} answered ({} rejected), {} served from the answers kept, {} in flight now", SharedBindings::kKindNames[kind],
+					ss.requested[kind], ss.answered[kind], ss.rejected[kind], ss.cached[kind], waitingByKind[kind]);
+			text += fmt::format("[DCLF] shared bindings (T6b2c: the scene work's): fixed (null, samplers) {} ({} taken); projected: {} captures taken, {} textures "
+								"pending; masks: {} used waiting, {} passes holding the previous view, {} rows naming a view the frame does not hold{}; shadow "
+								"textures: {} added, {} removed, {} in the index, {} pending; {} stale answers; changes written into the scene lane's lookups: "
+								"shared {}, masks {}, shadow textures {}{}\n",
+				sb.fixed ? "published" : "not published yet", ss.fixedPublished, ss.projectedCaptures, std::popcount(sb.projectedPending), masksWaiting,
+				ss.masksHeld, ss.masksUnheld, ss.masksUnheld ? " <- MASK UNHELD" : "", ss.shadowAdded, ss.shadowRemoved, sb.shadowTextures.size(),
+				sb.shadowPending, ss.stale, ss.writtenShared, ss.writtenMasks, ss.writtenShadow, byKind);
+			sb.stats = {};
 		}
 		if (auto& mp = materialPortParity; mp.checked || mp.uncovered) {
 			text += fmt::format("[DCLF] material port (T6b2a: the port against the engine's evaluation): {} records, {} differ (VS {}, PS {}, textures {}, address {}, "
@@ -328,7 +392,7 @@ namespace DCLF
 				}
 				const auto copies = std::count_if(perFrameSet.begin(), perFrameSet.end(), [&](const PerFrameItem& a_item) { return a_item.geometry == geometry; });
 				walkParity.firstStale = fmt::format("'{}' kept {} ({} frames old, per-frame {} (listed {}, {} copies in the set), traits {:X}, light {:X}, evaluated this walk {}) now {}; chain:{}",
-					geometry->name.c_str() ? geometry->name.c_str() : "?", kIneligibleNames[static_cast<std::size_t>(entry.candidateReason)], frame - entry.candidateFrame,
+					geometry->name.c_str() ? geometry->name.c_str() : "?", kIneligibleNames[static_cast<std::size_t>(entry.candidateReason)], sceneFrame - entry.candidateFrame,
 					entry.perFrame, entry.perFrameListed, copies, PerFrameTraits(entry, *geometry), entry.lightTraits, evaluated.contains(geometry),
 					kIneligibleNames[static_cast<std::size_t>(it->second)], chain);
 			}
@@ -353,7 +417,7 @@ namespace DCLF
 				++walkParity.staleTraits;
 				if (walkParity.firstStaleTraits.empty())
 					walkParity.firstStaleTraits = fmt::format("'{}' {} traits {:X} now {:X} ({} frames since classified)", geometry->name.c_str() ? geometry->name.c_str() : "?",
-						entry.perFrame ? "per-frame with" : "kept, no", entry.lightTraits, traits, frame - entry.candidateFrame);
+						entry.perFrame ? "per-frame with" : "kept, no", entry.lightTraits, traits, sceneFrame - entry.candidateFrame);
 			}
 		}
 		if (!denseIndex.empty())
@@ -438,13 +502,13 @@ namespace DCLF
 						for (std::uint32_t bits = missing; bits; bits &= bits - 1)
 							names += fmt::format("{}{}", names.empty() ? "" : "+", kChangeCauseNames[std::countr_zero(bits)]);
 						const auto* geometry = tables.objectGeometry[slot];
-						c.first = fmt::format("frame {}: slot {} '{}' changed {} with no log entry for it", frame, slot,
+						c.first = fmt::format("frame {}: slot {} '{}' changed {} with no log entry for it", sceneFrame, slot,
 							geometry && geometry->name.c_str() ? geometry->name.c_str() : "?", names);
 					}
 				}
 			}
 		}
-		if (ParityDue(frame)) {
+		if (ParityDue(sceneFrame)) {
 			c.snapshot.resize(tables.objects.size());
 			for (std::uint32_t slot = 0; slot < tables.objects.size(); ++slot)
 				c.snapshot[slot] = tables.ColumnsOf(slot);

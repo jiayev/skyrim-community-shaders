@@ -415,7 +415,6 @@ namespace DCLF
 		};
 		inline EventQueue<SwitchEvent> switchEvents;
 		constexpr std::size_t kSwitchIndex = 0x12C;
-		constexpr std::size_t kMaxSwitchChanges = 1u << 14;
 
 		inline std::int32_t& SwitchIndexOf(RE::NiAVObject* a_switch)
 		{
@@ -612,8 +611,8 @@ namespace DCLF
 			return reject == ShadowReject::None || reject == ShadowReject::VolumetricOnly;
 		}
 		// Only columns the accumulator patch below can change. It never writes placement, geometry,
-		// bones, wetness or shadow inputs. Extras contents are unchanged unless their offset changes
-		// (allocate/free), which already invalidates them. Skin-mask changes are noted before the patch.
+		// bones, wetness or shadow inputs. Extras contents the patch rewrites in a kept block are noted by the patch itself
+		// (kChangeExtras: an offset change is noted here). Skin-mask changes are noted before the patch.
 		struct AccumulateSnapshot
 		{
 			std::uint32_t flags, material, pipeline, drawPipeline, extras;
@@ -669,6 +668,9 @@ namespace DCLF
 		std::vector<SwitchEvent> switches;
 		std::vector<const void*> lodSegments;
 		std::uint32_t presents = 0;  // the Presents that ingested into it (EventsUnapplied)
+		// T6b3a: a load screen's marker (IngestEvents' loading branch posts one, empty): the coordinator drops what the load invalidated
+		// (SceneStore::ApplyLoading).
+		bool loading = false;
 		// Step 6e F3: the attach and detach events a load screen's ingestions carried, for the mirror alone (oldest first, applied
 		// before the batch's own), and the frame start's parity probe (CS_DCLF_MIRROR_PARITY).
 		SceneTracker::Event* mirrorHead = nullptr;

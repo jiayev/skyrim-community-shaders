@@ -41,14 +41,14 @@ namespace DCLF
 		++timelineStats.joins;
 		if (!entry.memberFrame) {
 			++timelineStats.firstJoins;
-			++timelineStats.attachToMember[AgeBucket(frame - entry.trackedFrame)];
+			++timelineStats.attachToMember[AgeBucket(sceneFrame - entry.trackedFrame)];
 		}
 		if (entry.writtenFrame)
-			++timelineStats.writtenToMember[AgeBucket(frame - entry.writtenFrame)];
+			++timelineStats.writtenToMember[AgeBucket(sceneFrame - entry.writtenFrame)];
 		// A show on its chain since its last join: what its join waited on.
 		if (shown && shown > entry.memberFrame)
-			++timelineStats.showToMember[AgeBucket(frame - shown)];
-		entry.memberFrame = frame;
+			++timelineStats.showToMember[AgeBucket(sceneFrame - shown)];
+		entry.memberFrame = sceneFrame;
 	}
 
 	SceneStore::TimelineStats SceneStore::TakeTimelineStats()

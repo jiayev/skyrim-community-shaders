@@ -1,6 +1,8 @@
 #include "MaterialSources.h"
+#include "MaterialPort.h"
 
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
+#include "Features/DrawcallLimitFix/Common/Switches.h"
 
 #include <bit>
 
@@ -45,20 +47,21 @@ namespace DCLF::MaterialSources
 		constexpr std::uint32_t kVSTexcoordOffset = 11;
 		constexpr std::uint32_t kCharacterLightSlot = 11;
 
-		// ---- The write queue (EventQueue): drained by the render thread once a frame; a producer never blocks.
+		// ---- The write queue (EventQueue): CS_DCLF_CAPTURE_PARITY's diagnostics alone, drained by the render thread once a frame; a
+		// producer never blocks. The records follow the writes' captures (MaterialPort::PushCapture), not this queue.
 		EventQueue<const RE::BSShaderMaterial*, 8192>& GetQueue()
 		{
 			static EventQueue<const RE::BSShaderMaterial*, 8192> queue;
 			return queue;
 		}
+		bool WritesQueued()
+		{
+			static const bool queued = SwitchEnabled(Switch::CaptureParity);
+			return queued;
+		}
 		EventQueue<const void*, 8192>& ShadingQueue()
 		{
 			static EventQueue<const void*, 8192> queue;
-			return queue;
-		}
-		EventQueue<const RE::BSShaderMaterial*, 8192>& TransformQueue()
-		{
-			static EventQueue<const RE::BSShaderMaterial*, 8192> queue;
 			return queue;
 		}
 		// The same events for the kept shadow build (ShadowKept), which runs before the main pass drains its own.
@@ -103,7 +106,7 @@ namespace DCLF::MaterialSources
 
 		// BSLightingShaderPropertyFloatController::Update (AE 14150dde0, vtable slot 0x27). Type 0xb writes the
 		// property's emissive multiplier (per-object shading, resampled every frame at Prepass) and types above
-		// 0x13 the texture-transform buffers (ApplyTextureTransform, every frame); every other type a material field.
+		// 0x13 the texture-transform buffers (captured for the scene work's transform watch); every other type a material field.
 		struct FloatControllerUpdate
 		{
 			static void thunk(RE::NiTimeController* a_this, void* a_data)
@@ -122,7 +125,10 @@ namespace DCLF::MaterialSources
 					func(a_this, a_data);
 					if (property->material != material || offset0 != material->texCoordOffset[0] || offset1 != material->texCoordOffset[1] ||
 						scale0 != material->texCoordScale[0] || scale1 != material->texCoordScale[1]) {
-						TransformQueue().Push(material);
+						// T6b2c step 7: the buffers as written, for the scene work's records (its transform watch). The property's material
+						// now: alive, the property holding it (a swap during the update may have let `material` go; its slots follow the
+						// swap's event).
+						MaterialPort::PushCapture(property->material);
 						ShadowTransformQueue().Push(material);
 					}
 				} else if (type <= 0x13 && type != 0xb && property && property->material && ControllerDestinationTablesKnown()) {
@@ -276,7 +282,10 @@ namespace DCLF::MaterialSources
 	{
 		if (!a_material)
 			return;
-		GetQueue().Push(a_material);
+		if (WritesQueued())
+			GetQueue().Push(a_material);
+		// T6b2a: the material as written, for the scene work's records.
+		MaterialPort::PushCapture(a_material);
 	}
 
 	bool Drain(ankerl::unordered_dense::set<const RE::BSShaderMaterial*>& a_out)
@@ -289,11 +298,6 @@ namespace DCLF::MaterialSources
 	void DrainShadingChanges(std::vector<const void*>& a_out)
 	{
 		ShadingQueue().Drain([&](const void* a_property) { a_out.push_back(a_property); });
-	}
-
-	void DrainTransformChanges(ankerl::unordered_dense::set<const RE::BSShaderMaterial*>& a_out)
-	{
-		TransformQueue().Drain([&](const RE::BSShaderMaterial* a_material) { a_out.insert(a_material); });
 	}
 
 	void DrainShadowTransformChanges(std::vector<const RE::BSShaderMaterial*>& a_out)
@@ -398,5 +402,52 @@ namespace DCLF::MaterialSources
 				a_record.vs.floats[positions[c]] = values[c];
 			}
 		return changed;
+	}
+
+	void KeepUnreadFloats(const MaterialRecord& a_from, MaterialRecord& a_to)
+	{
+		constexpr std::uint32_t kPSIBLParams = 29;
+		const auto& layout = LightingPSLayout();
+		for (std::uint32_t c = 0; c < layout.size[kPSIBLParams]; ++c)
+			a_to.ps.floats[layout.offset[kPSIBLParams] + c] = a_from.ps.floats[layout.offset[kPSIBLParams] + c];
+	}
+
+	TextureTransforms TextureTransformsOf(const MaterialPort::MaterialSnapshot& a_snapshot)
+	{
+		// BSShaderMaterial's texCoordOffset (+0xc) and texCoordScale (+0x1c), 8 bytes a buffer (MaterialPortVanilla's and
+		// MaterialPortFeature's TexcoordOffset read the same fields).
+		constexpr std::size_t kOffset = 0xc, kScale = 0x1c;
+		TextureTransforms out;
+		for (std::size_t b = 0; b < out.buffers.size(); ++b)
+			out.buffers[b] = { a_snapshot.At<float>(kOffset + b * 8), a_snapshot.At<float>(kOffset + b * 8 + 4), a_snapshot.At<float>(kScale + b * 8),
+				a_snapshot.At<float>(kScale + b * 8 + 4) };
+		return out;
+	}
+
+	bool ApplyTextureTransform(const TextureTransforms& a_transforms, std::uint32_t a_buffer, MaterialRecord& a_record)
+	{
+		const auto& values = a_transforms.buffers[a_buffer & 1];
+		const auto& positions = FrameVSFloats();
+		bool changed = false;
+		for (std::size_t c = 0; c < positions.size() && c < values.size(); ++c)
+			if (a_record.vs.Written(positions[c])) {
+				changed |= std::bit_cast<std::uint32_t>(a_record.vs.floats[positions[c]]) != std::bit_cast<std::uint32_t>(values[c]);
+				a_record.vs.floats[positions[c]] = values[c];
+			}
+		return changed;
+	}
+
+	ID3D11ShaderResourceView* FrameCharacterLightView(const MaterialPort::MaterialFrame& a_frame)
+	{
+		// What SetupMaterial binds at t11 (MaterialPortVanilla: the render target at 0x142033db0 while not negative; TruePBR's hook:
+		// the character light image space texture's), from the frame's sample: no engine read.
+		const auto& vanilla = a_frame.vanilla;
+		if (vanilla.characterLightTarget >= 0 && static_cast<std::uint32_t>(vanilla.characterLightTarget) < MaterialPort::kVanillaRenderTargets)
+			if (auto* view = vanilla.renderTargetViews[static_cast<std::size_t>(vanilla.characterLightTarget)])
+				return view;
+		const auto& feature = a_frame.feature;
+		if (feature.characterLightTarget >= 0 && static_cast<std::uint32_t>(feature.characterLightTarget) < MaterialPort::kFeatureRenderTargets)
+			return feature.renderTargetViews[static_cast<std::size_t>(feature.characterLightTarget)];
+		return nullptr;
 	}
 }

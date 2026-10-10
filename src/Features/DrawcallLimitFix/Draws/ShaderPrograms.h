@@ -38,7 +38,13 @@ namespace DCLF
 	 * build uses (ShaderCache::GetCompileDefines), plus DCLF_ORG. Artifacts are content-addressed on the
 	 * source, every shader file under Data/Shaders and the defines, and cached on disk.
 	 *
-	 * Program publication is render-thread only. The stage cache also accepts CS compilation workers.
+	 * The compiles run on DCLF's build executor (BuildExecutor.h). Each stage's completion callback pushes its key to a
+	 * lock-free queue, which the consumer drains: the entries waiting for the stage are told, and an entry whose stages have
+	 * all completed gets its program. Nothing polls a compile.
+	 *
+	 * One consumer owns the programs (T6b2c steps 4 and 9): the pipeline lane (BuildExecutor.h, WakePipelineLane), which a completion
+	 * wakes: every kind's entries (Find, FindShadow, FindTreeLod, FindForward, FindForwardTreeLod) are made and finished on it
+	 * (UpdateLane). The stage cache also accepts CS compilation workers.
 	 */
 	class ShaderPrograms
 	{
@@ -80,10 +86,16 @@ namespace DCLF
 		static std::string OnDemandStages(std::uint8_t a_stages);
 
 		/**
-		 * @brief The key's program once both stages compiled; requests them on first call. Null otherwise.
+		 * @brief The pipeline lane: the key's program once its stages compiled; requests them on first call. Null otherwise.
 		 * @param a_onDemand Set to the stages this call requested that no precompile had (kOnDemand*), 0 otherwise.
+		 * @param a_failed Set when the program can never be made (a stage failed, or its source is missing).
 		 */
-		const Program* Find(const PipelineKey& a_key, RE::BSShader& a_lighting, std::uint8_t* a_onDemand = nullptr);
+		const Program* Find(const PipelineKey& a_key, RE::BSShader& a_lighting, std::uint8_t* a_onDemand = nullptr, bool* a_failed = nullptr);
+		/** @brief Which Lighting program a key draws with (Find's entries, UpdateLane's ids): its vertex and pixel descriptors. */
+		static std::uint64_t LightingProgramId(const PipelineKey& a_key)
+		{
+			return (static_cast<std::uint64_t>(a_key.vertexDescriptor) << 32) | a_key.pixelDescriptor;
+		}
 
 		/**
 		 * @brief SPIR-V builds of one Utility technique, for a shadow view's draws.
@@ -100,24 +112,25 @@ namespace DCLF
 			std::vector<std::byte> pixel;
 		};
 		/**
-		 * @brief The Utility technique's programs, or null while they build. Programs are never freed: the pointer stays
-		 * valid for the process (pipeline builds keep it).
+		 * @brief The pipeline lane: the Utility technique's programs, or null while they build. Programs are never freed: the
+		 * pointer stays valid for the process (pipeline builds keep it).
 		 * @param a_allowRequest False returns null for an unseen technique without starting its builds.
+		 * @param a_failed Set when the programs can never be made (a stage failed, or its source is missing).
 		 */
 		const ShadowProgram* FindShadow(std::uint32_t a_technique, RE::BSShader& a_utility, bool a_allowRequest = true, bool* a_requested = nullptr,
-			std::uint8_t* a_onDemand = nullptr);
+			std::uint8_t* a_onDemand = nullptr, bool* a_failed = nullptr);
 
 		/**
 		 * @brief Tree LOD's programs (dclf-lod.md, "Tree LOD: the draws"): `Data/Shaders/DistantTree.hlsl`'s pulled builds
 		 * (DCLF_PULLED), the colour technique (deferred) and the depth technique, each a vertex and a pixel stage. Requested on the
-		 * first call; null until all four are compiled. Never freed.
+		 * first call; null until all four are compiled. Never freed. The pipeline lane's, as the other Find* below; a_failed as Find's.
 		 */
 		struct TreeLodProgram
 		{
 			std::vector<std::byte> vertex, pixel;            // DistantTreeBlock, deferred
 			std::vector<std::byte> depthVertex, depthPixel;  // Depth (RENDER_DEPTH)
 		};
-		const TreeLodProgram* FindTreeLod(RE::BSShader& a_distantTree);
+		const TreeLodProgram* FindTreeLod(RE::BSShader& a_distantTree, bool* a_failed = nullptr);
 
 		/**
 		 * @brief A forward view's program (the water reflection's cube map faces: dclf-lod.md, "Water reflections"): one forward
@@ -130,25 +143,59 @@ namespace DCLF
 			std::vector<std::byte> vertex, pixel;
 		};
 		/** @brief The Lighting forward program of these descriptors, requesting it; null until both stages are compiled. Never freed. */
-		const ForwardProgram* FindForward(std::uint32_t a_vertexDescriptor, std::uint32_t a_pixelDescriptor, RE::BSShader& a_lighting);
+		const ForwardProgram* FindForward(std::uint32_t a_vertexDescriptor, std::uint32_t a_pixelDescriptor, RE::BSShader& a_lighting, bool* a_failed = nullptr);
+		/** @brief Which forward program a pair of descriptors draws with (FindForward's entries, UpdateLane's ids). */
+		static std::uint64_t ForwardProgramId(std::uint32_t a_vertexDescriptor, std::uint32_t a_pixelDescriptor)
+		{
+			return (static_cast<std::uint64_t>(a_vertexDescriptor) << 32) | a_pixelDescriptor;
+		}
 		/** @brief Tree LOD's forward program: DistantTree's DistantTreeBlock technique with AlphaTest and without Deferred, pulled. */
-		const ForwardProgram* FindForwardTreeLod(RE::BSShader& a_distantTree);
+		const ForwardProgram* FindForwardTreeLod(RE::BSShader& a_distantTree, bool* a_failed = nullptr);
 
-		/** @brief Collects finished compilations (call once per frame). */
-		void Update();
+		/** @brief The programs one UpdateLane made or failed, by kind, so the lane retries the keys that waited on them. */
+		struct Finished
+		{
+			std::vector<std::uint64_t> lighting;  // LightingProgramId
+			std::vector<std::uint32_t> shadow;    // Utility techniques
+			std::vector<std::uint64_t> forward;   // ForwardProgramId
+			bool treeLod = false, forwardTreeLod = false;
 
-		// CS compilation workers request the same stage futures used by runtime programs.
+			bool Empty() const { return lighting.empty() && shadow.empty() && forward.empty() && !treeLod && !forwardTreeLod; }
+			void Clear()
+			{
+				lighting.clear();
+				shadow.clear();
+				forward.clear();
+				treeLod = forwardTreeLod = false;
+			}
+		};
+		/** @brief The pipeline lane: admits the compilations that completed since the last call, and appends the programs now made or failed to a_finished. */
+		void UpdateLane(Finished& a_finished);
+
+		// CS compilation workers request the same stages the runtime programs use, and wait for them (on the stage, not a future).
 		// Requests before ORG initialization are retained until StartPrecompile.
 		void Precompile(const RE::BSShader& a_shader, bool a_pixel, std::uint32_t a_descriptor);
 		void StartPrecompile();
 
-		const Stats& GetStats() const { return stats; }
+		/** @brief Any thread: the pipeline lane's counters (relaxed reads, for the report). */
+		Stats GetStats() const
+		{
+			Stats result;
+			result.requested = laneStats.requested.load(std::memory_order_relaxed);
+			result.ready = laneStats.ready.load(std::memory_order_relaxed);
+			result.failed = laneStats.failed.load(std::memory_order_relaxed);
+			result.fromCache = laneStats.fromCache.load(std::memory_order_relaxed);
+			result.shadowRequested = laneStats.shadowRequested.load(std::memory_order_relaxed);
+			result.shadowReady = laneStats.shadowReady.load(std::memory_order_relaxed);
+			result.shadowFailed = laneStats.shadowFailed.load(std::memory_order_relaxed);
+			return result;
+		}
 
 	private:
 		ShaderPrograms();
 		~ShaderPrograms();
 
-		struct Entry;  // compilation futures; defined with the compiler (ShaderPrograms.cpp)
+		struct Entry;  // the program's stages; defined with the compiler (ShaderPrograms.cpp)
 		struct ShadowEntry;
 		struct StageCache;
 		std::unique_ptr<StageCache> stages;
@@ -171,7 +218,14 @@ namespace DCLF
 		std::uint64_t sourceFingerprint = 0, pulledFingerprint = 0, utilityFingerprint = 0, distantTreeFingerprint = 0;
 		bool sourcesLoaded = false;
 		std::atomic<bool> sourcesMissing{ false };
-		std::uint32_t loggedFailures = 0;
-		Stats stats;
+		std::atomic<std::uint32_t> loggedFailures{ 0 };
+		// The pipeline lane's (requested and ready: the Lighting programs'; failed and fromCache: every kind's but the Utility programs',
+		// which count apart), read by GetStats on any thread.
+		struct LaneStats
+		{
+			std::atomic<std::uint32_t> requested{ 0 }, ready{ 0 }, failed{ 0 }, fromCache{ 0 };
+			std::atomic<std::uint32_t> shadowRequested{ 0 }, shadowReady{ 0 }, shadowFailed{ 0 };
+		};
+		LaneStats laneStats;
 	};
 }

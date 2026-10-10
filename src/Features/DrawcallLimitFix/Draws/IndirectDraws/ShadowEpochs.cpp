@@ -191,7 +191,7 @@ namespace DCLF
 			const auto count = static_cast<std::uint32_t>(a_tables.geometries.size());
 			// Revision mode: the pool grows at the join (Impl::ReserveIndexPool) and is adopted with the revision that names it; a
 			// range that does not fit until then waits (an unclaimed geometry's: the claims' were asked room for). Else it grows here.
-			const bool deferred = Growths::Deferred();
+			const bool deferred = Growths::OwnerDeferred();
 			std::vector<std::array<std::uint32_t, 4>> copies;
 			std::vector<std::uint32_t> changed;
 			bool allFirsts = false;
@@ -606,11 +606,11 @@ namespace DCLF
 		frame->resourceHeap = a_in.resourceHeap;
 		frame->samplerHeap = a_in.samplerHeap;
 		frame->indirect = a_in.indirect;
-		frame->latch = a_resources.latch;
-		frame->viewBlocksOffset = a_resources.latchLayout.ViewBlockOffset(0);
-		frame->zeros = a_resources.zeros;
+		frame->latch = a_in.latch;
+		frame->viewBlocksOffset = a_in.latchLayout.ViewBlockOffset(0);
+		frame->zeros = a_in.zeros;
 		frame->latched = a_in.latched;
-		frame->latchLayout = a_resources.latchLayout;
+		frame->latchLayout = a_in.latchLayout;
 		const ShadowSizing& sizing = a_in.sizing ? *a_in.sizing : a_resources;
 		// Each view's row within the bucket counts the sizing has (TrimmedRow): what the shape draws and routes by.
 		std::vector<RowBuckets> rows;
@@ -1406,6 +1406,8 @@ namespace DCLF
 			occlusion.dsvFormat = view.dsvFormat;
 		}
 		occlusion.capturedFrame = SceneStore::Get().GetFrame();
+		// A revision input: the occlusion maps' layout as captured (PredictedOcclusion).
+		impl->PostRevisionInputs();
 	}
 
 	void IndirectDraws::CaptureOcclusion(std::uint32_t a_view)
@@ -1538,7 +1540,7 @@ namespace DCLF
 			else
 				++shadowStats.occlusionNotReady[v];
 		}
-		const auto indirect = GetShadowIndirectState();
+		const auto indirect = FrameShadowIndirectState();
 		if (!drawable || !indirect.valid) {
 			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
 				shadowStats.occlusionNotReady[v] += (drawable & (1u << v)) ? 1 : 0;
@@ -1644,7 +1646,7 @@ namespace DCLF
 		auto* utility = globals::game::utilityShader;
 		if (!pipelines.Enabled() || !utility || !impl->shadow || impl->shadowPlacements.empty())
 			return notReady(ShadowNotReady::Setup);
-		const auto indirect = GetShadowIndirectState();
+		const auto indirect = FrameShadowIndirectState();
 		if (!indirect.valid) {
 			impl->ShadowNotReady(6, "no shadow pipeline in the set yet");
 			return notReady(ShadowNotReady::Pipelines);
@@ -1688,7 +1690,6 @@ namespace DCLF
 		}
 		double prepareMs = 0.0, inputsMs = 0.0, blocksMs = 0.0, bodyMs = 0.0;
 
-		impl->ReserveShadowRows();
 		ShadowInputs in = impl->PrepareShadowInputs(store, *resources, modeUsed, modeRasterStates);
 		// The selected revision's shape for the placements and its recording (DecideShadowCoverage covered the views), and the installed
 		// publication's payload: trusted, nothing is built or checked here (CS_DCLF_REVISION_PARITY does that). The epoch's views are
@@ -1760,7 +1761,9 @@ namespace DCLF
 			TracyCZoneN(shadowCommitZone, "CS.DCLF.ShadowInputs.CommitShared", true);
 			const auto inputsStart = std::chrono::steady_clock::now();
 			// What the next frame's Reserve grows the rows to.
-			impl->shadowRowsWanted = payload.rowsWanted;
+			// A revision input: the revision code grows the rows for it (ReserveShadowRows).
+			if (std::exchange(impl->shadowRowsWanted, payload.rowsWanted) != payload.rowsWanted)
+				impl->PostRevisionInputs();
 			shadowStats.waitingRows = payload.waitingRows;
 			auto& scene = *resources->scene;
 			shadowStats.faceUploads += UploadFaceStreams(payload.faceStreams, scene.facePositions, scene.faceUploaded, uploads, scene.faceVertices);
@@ -1966,17 +1969,24 @@ namespace DCLF
 		in.indirect = a_indirect;
 		in.views = a_layouts;
 		for (const auto& layout : a_layouts)
-			in.rows.push_back(ShadowRowBuckets(layout.modeIndex, layout.rasterState, a_store.GetLookups(), a_indirect));
+			in.rows.push_back(ShadowRowBuckets(parityRowBuckets, layout.modeIndex, layout.rasterState, a_store.GetLookups(), a_indirect));
 		in.payload = &a_payload;
-		const auto bounds = ShadowBoundsOf(drawBound, a_store.GetLookups());
-		in.bounds = &bounds;
+		// The casting bound the producer sized its newest shadow shapes from (MadeShapes::bounds): the draw bound is its own.
+		const auto bounds = TakeMadeShapes().bounds;
+		in.bounds = bounds.get();
 		in.previous = a_revision;
+		// The latch, its layout and the zeros the revision's shape holds (the producer's): no commit has one of its own.
+		if (a_revision) {
+			in.latch = a_revision->latch;
+			in.latchLayout = a_revision->latchLayout;
+			in.zeros = a_revision->zeros;
+		}
 		std::vector<LatchedCopy> latchedLayout;
 		if (!sky) {
 			latchedLayout = ShadowLatchedLayout(a_resources);
 			in.latched.copies = latchedLayout;
-			if (!latchedLayout.empty())
-				in.latched.latch = a_resources.latchedBlock;
+			if (!latchedLayout.empty() && a_revision)
+				in.latched.latch = a_revision->latched.latch;
 		}
 		const auto own = MakeShadowShape(a_resources, in);
 		shadowParity.resourceHeap = in.resourceHeap;
@@ -1990,9 +2000,10 @@ namespace DCLF
 		++revisions.parityChecks[a_epoch];
 	}
 
-	const RowBuckets& IndirectDraws::Impl::ShadowRowBuckets(std::uint32_t a_mode, std::uint32_t a_state, const Lookups& a_lookups, const ShadowIndirectState& a_indirect)
+	const RowBuckets& IndirectDraws::Impl::ShadowRowBuckets(RowBucketsCache& a_cache, std::uint32_t a_mode, std::uint32_t a_state, const Lookups& a_lookups,
+		const ShadowIndirectState& a_indirect)
 	{
-		auto& cache = shadowRowBuckets;
+		auto& cache = a_cache;
 		if (cache.lookups != a_lookups.instance || cache.generation != a_lookups.shadowGeneration || cache.version != a_indirect.version) {
 			cache.lookups = a_lookups.instance;
 			cache.generation = a_lookups.shadowGeneration;
@@ -2085,12 +2096,13 @@ namespace DCLF
 		return shape;
 	}
 
-	void IndirectDraws::Impl::ReserveIndexPool(const SceneStore::Tables& a_tables, std::uint32_t a_generation)
+	void IndirectDraws::Impl::ReserveIndexPool(SceneBuffers& a_scene, const SceneStore::Tables& a_tables, std::uint32_t a_generation)
 	{
-		if (!scene || !scene->pool)
+		if (!a_scene.pool)
 			return;
-		auto& p = *scene->pool;
-		auto& b = p.bound;
+		auto& p = *a_scene.pool;
+		// The producer's bound (kept from the geometry log by the revision code alone).
+		auto& b = producer.poolBound;
 		// Every slot's indices as the tables have them, kept from the geometry log.
 		const auto count = static_cast<std::uint32_t>(a_tables.geometries.size());
 		auto take = [&](std::uint32_t a_slot) {
@@ -2148,21 +2160,22 @@ namespace DCLF
 			return;
 		logger::info("[DCLF] index pool: {} indices, {} slots and {} copies grown to {}, {} and {} ({} MB){}", base.capacity, base.firstsCapacity, base.copiesCapacity,
 			next.capacity, next.firstsCapacity, next.copiesCapacity, std::uint64_t(next.capacity) * 2 >> 20, Growths::Deferred() ? ", as graph work" : "");
-		growths.Change<PoolSizing>(p, std::move(next), std::move(parts), [&p, indices] {
+		growths.Change<PoolSizing>(p, a_scene.pool, std::move(next), std::move(parts), [&p, indices] {
 			++p.layout;
 			p.relayout = p.relayout || indices;
 		});
 	}
 
-	void IndirectDraws::Impl::ReserveShadowRows()
+	void IndirectDraws::Impl::ReserveShadowRows(ShadowResources& a_shadow, std::uint32_t a_wanted)
 	{
-		// What the last build wanted, with a quarter more: the table grows ahead of the scene, not a frame behind it.
-		if (!shadow || !shadowRowsWanted)
+		// What the last build wanted (posted: RevisionInputs::shadowRowsWanted), with a quarter more: the table grows ahead of the scene,
+		// not a frame behind it.
+		if (!a_wanted)
 			return;
 		// Graph work in revision mode, with nothing to fill: a new version holds no row, and the commit after its adoption sends the
 		// table whole (materialRowsHeld 0). Until then the build leaves the rows past the current one waiting (rowsWanted).
 		const RowsCapture whole;
-		shadow->materialRows.Reserve(shadowRowsWanted + shadowRowsWanted / 4, [state = shadow.get()](std::uint64_t) { state->materialRowsHeld = 0; }, &whole);
+		a_shadow.materialRows.Reserve(a_wanted + a_wanted / 4, [state = &a_shadow](std::uint64_t) { state->materialRowsHeld = 0; }, &whole);
 	}
 
 	ShadowInputs IndirectDraws::Impl::PrepareShadowInputs(const SceneStore& a_store, const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
@@ -2452,8 +2465,8 @@ namespace DCLF
 		if (placements.empty() || !plainState)
 			return false;
 		shadowPlacements = std::move(placements);
-		ReserveShadowLatch(static_cast<std::uint32_t>(shadowPlacements.size()), shadow->latchLayout.keySlots, DrawPipelines::Get().ShadowRasterStateCount(),
-			shadow->latchLayout.sunProcesses);
+		// A revision input: the next revision reserves the shadow latch and the slots for them (ReserveShadowLatch, the revision code's).
+		PostRevisionInputs();
 		logger::info("[DCLF] shadow view placements: {} (slots {} to {})", shadowPlacements.size(), shadowPlacements.front().slot, shadowPlacements.back().slot);
 		return true;
 	}
@@ -2531,7 +2544,7 @@ namespace DCLF
 					              0;
 			}
 		}
-		// What the builds ahead and the frame's start's shadow lookups are for: the capability's modes, the catalog, the targets' format.
+		// What the builds ahead and the scene lane's shadow lookups are for (PostLookupInputs): the capability's modes, the catalog, the targets' format.
 		auto& views = i.lastShadow;
 		views.known = phases != 0;
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
@@ -2560,16 +2573,16 @@ namespace DCLF
 		return impl->shadowReadinessSerial;
 	}
 
-	bool IndirectDraws::PhaseReady(const void* a_tables, std::uint32_t a_slot, std::uint8_t a_phase, std::uint32_t* a_why) const
+	bool IndirectDraws::PhaseReady(const void* a_tables, const Lookups& a_lookups, std::uint32_t a_slot, std::uint8_t a_phase, std::uint32_t* a_why) const
 	{
 		auto no = [a_why](std::uint32_t a_reason) {
 			if (a_why)
 				*a_why = a_reason;
 			return false;
 		};
-		const auto& store = SceneStore::Get();
 		const auto& tables = *static_cast<const SceneStore::Tables*>(a_tables);
-		const auto& lookups = store.GetLookups();
+		// The scene lane's lookups, as its commit judges readiness by them (T6b2c step 5).
+		const auto& lookups = a_lookups;
 		if (a_phase == kSetReflection)
 			return impl->ReflectionPhaseReady(tables, a_slot) || no(8);
 		if (a_slot >= tables.objects.size() || a_slot >= tables.shadowTechnique.size())

@@ -9,6 +9,8 @@
 #include <span>
 #include <string>
 #include <bit>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "Features/DrawcallLimitFix/Scene/ConstantEvaluator.h"
@@ -195,12 +197,26 @@ namespace DCLF
 		bool UsesTexture(std::uint32_t a_register) const { return (textures[a_register / 64] >> (a_register % 64)) & 1; }
 	};
 
+	/**
+	 * @brief A Lighting pipeline's constant tables (Lookups::Pipeline::vsTable, psTable), which the builds pack its constant groups by:
+	 * per Lighting variable (ShaderConstants::LightingVS, LightingPS), its offset in floats in its block (PerTechnique, PerMaterial or
+	 * PerGeometry), 0 where the stage has none (offset 0 counts only for a group's first variable: LightingConstants.cpp, OffsetOf).
+	 * What Community Shaders' ShaderCache makes of the game's shader objects (constantTable, ReflectConstantBuffers), made by the
+	 * pipeline lane of DCLF's own modules (SPIR-V reflection, T6b2c): the stages the builds feed. Fixed per built pipeline.
+	 */
+	struct ConstantTables
+	{
+		std::vector<std::uint8_t> vs, ps;  // kLightingVSVariables, kLightingPSVariables entries
+	};
+
+	struct Lookups;
+
 	/** @brief Pipeline variants of a key: the main pass's (color, depth test EQUAL) and DCLF's own Z-prepass (depth only, LESS, writes). */
 	inline constexpr std::uint32_t kColorVariant = 0;
 	inline constexpr std::uint32_t kDepthVariant = 1;
 	inline constexpr std::uint32_t kVariantCount = 2;
 	/**
-	 * @brief The shadow views' pipeline classes (DrawPipelines::ShadowDiscards): a pixel stage that cannot defer the depth test,
+	 * @brief The shadow views' pipeline classes (ShadowIndirectState::discards): a pixel stage that cannot defer the depth test,
 	 * and one that can (an alpha test's discard). A view draws the first class's pipelines, then the second's.
 	 */
 	inline constexpr std::uint32_t kShadowDepthOnly = 0;
@@ -219,6 +235,28 @@ namespace DCLF
 		bool operator==(const ForwardTargets&) const = default;
 	};
 
+	/**
+	 * @brief A forward view's pipeline, as asked of the pipeline lane (DrawPipelines::RequestForward): a Lighting forward program's
+	 * descriptors (ShaderPrograms::FindForward: the main pipeline's vertex descriptor, its pixel descriptor without Deferred) and
+	 * whether it draws two-sided, or tree LOD's forward program (kForwardTreeLod, the descriptors 0). Built for the forward targets
+	 * (DrawPipelines::SetForwardTargets), culling front faces unless two-sided: a cube face's projection mirrors the image, and the
+	 * engine culls front faces there (dclf-lod.md, "The state").
+	 */
+	struct ForwardPipelineKey
+	{
+		static constexpr std::uint32_t kForwardTwoSided = 1, kForwardTreeLod = 2;
+		std::uint32_t vertexDescriptor = 0, pixelDescriptor = 0;
+		std::uint32_t flags = 0;  // kForward*
+
+		bool operator==(const ForwardPipelineKey&) const = default;
+	};
+	static_assert(std::has_unique_object_representations_v<ForwardPipelineKey>);
+	struct ForwardPipelineKeyHash
+	{
+		using is_avalanching = void;
+		std::uint64_t operator()(const ForwardPipelineKey& a_key) const noexcept { return ankerl::unordered_dense::detail::wyhash::hash(&a_key, sizeof(a_key)); }
+	};
+
 	/** @brief Render target and depth formats of the native main (deferred) pass. */
 	struct TargetFormats
 	{
@@ -227,6 +265,82 @@ namespace DCLF
 		DXGI_FORMAT depth = DXGI_FORMAT_UNKNOWN;
 
 		bool operator==(const TargetFormats&) const = default;
+	};
+
+	/**
+	 * @brief What the pipeline lane has made of the Lighting and the shadow keys asked for (T6b2c steps 4 and 6): immutable,
+	 * published whole by the lane after each pass that changed it, latest-wins (DrawPipelines::TakeCatalog).
+	 *
+	 * A key's set index is handed out only once a published set version holds its pipeline, and setVersion is that version (or a
+	 * later one of the same generation, which holds every index an earlier one did): the indices and the set agree by construction.
+	 * The frame that takes the catalog binds this version (GetIndirectState), so its lookups' indices are the set's. The shadow
+	 * views' set is the same again (shadowEntries, shadowSetVersion; GetShadowIndirectState).
+	 *
+	 * Tree LOD's and the forward views' pipelines (T6b2c step 9: treeLod, forwardEntries) are no set's: each is a pipeline the lane keeps
+	 * for the process once built, so the frame resolves them from its catalog alone (TreeLodPipelinesOf, ForwardPipelineOf).
+	 */
+	struct PipelineCatalog
+	{
+		static constexpr std::uint32_t kNone = ~0u;
+		struct Entry
+		{
+			std::uint32_t setIndex = kNone;  // kNone while its build is pending, and for good once failed
+			bool failed = false;
+			std::array<RegisterUsage, kVariantCount> usage{};  // by variant, once setIndex is
+			std::shared_ptr<const ConstantTables> tables;      // once setIndex is: its stages' (built with it)
+		};
+		// Every key the lane has requested a build for, or found failed (one still waiting on its program or an input is absent).
+		ankerl::unordered_dense::map<PipelineKey, Entry, PipelineKeyHash> entries;
+		std::uint32_t generation = 0;         // the main set's: a target change starts a new set, and every index of the last is stale
+		std::uint32_t targetsGeneration = 0;  // the render thread's target generation the set is built for (DrawPipelines::Generation)
+		std::uint64_t revision = 0;           // new with each publication
+		std::shared_ptr<const void> setVersion;  // the main set version holding every setIndex above (DrawPipelines.cpp, SetVersion)
+
+		struct ShadowEntry
+		{
+			std::uint32_t setIndex = kNone;  // kNone while its build is pending, and for good once failed
+			bool failed = false;
+		};
+		// Every shadow view key (a technique with its mode's bits, under a view rasterizer state) the lane has requested a build for,
+		// or found failed.
+		ankerl::unordered_dense::map<ShadowPipelineKey, ShadowEntry, ShadowPipelineKeyHash> shadowEntries;
+		std::uint32_t shadowGeneration = 0;                 // the shadow set's: a format change starts a new set
+		DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;     // the shadow map format the set is built for (DrawPipelines::SetShadowInputs)
+		std::shared_ptr<const void> shadowSetVersion;       // the shadow set version holding every setIndex of shadowEntries
+
+		// Tree LOD's two pipelines (DrawPipelines::RequestTreeLod), of the targets of targetsGeneration: built (DrawPipelines.cpp,
+		// TreeLodBuilt), or failed (its program for good, its build until the next target change). Neither while it waits.
+		struct TreeLodEntry
+		{
+			std::shared_ptr<const void> pipelines;
+			bool failed = false;
+		};
+		TreeLodEntry treeLod;
+		struct ForwardEntry
+		{
+			std::shared_ptr<const void> pipeline;  // once built (an rhi::PipelinePtr)
+			bool program = false;                  // its program is compiled
+			bool failed = false;                   // its program or its build failed, for good
+		};
+		// Every forward view key (DrawPipelines::RequestForward) whose program the lane has, or found failed, built for forwardTargets.
+		ankerl::unordered_dense::map<ForwardPipelineKey, ForwardEntry, ForwardPipelineKeyHash> forwardEntries;
+		ForwardTargets forwardTargets;  // the forward targets the lane has (DrawPipelines::SetForwardTargets)
+
+		const Entry* Find(const PipelineKey& a_key) const
+		{
+			const auto it = entries.find(a_key);
+			return it == entries.end() ? nullptr : &it->second;
+		}
+		const ShadowEntry* FindShadow(const ShadowPipelineKey& a_key) const
+		{
+			const auto it = shadowEntries.find(a_key);
+			return it == shadowEntries.end() ? nullptr : &it->second;
+		}
+		const ForwardEntry* FindForward(const ForwardPipelineKey& a_key) const
+		{
+			const auto it = forwardEntries.find(a_key);
+			return it == forwardEntries.end() ? nullptr : &it->second;
+		}
 	};
 
 	/**
@@ -241,19 +355,15 @@ namespace DCLF
 	 * register outside the layout, or a vertex input the layout cannot supply, fails; its objects stay
 	 * native. Ready pipelines get the next index of the set, which is what DrawSequence::pipelineIndex holds.
 	 *
-	 * Render thread only.
+	 * One owner (T6b2c steps 4, 6 and 9). The pipeline lane (BuildExecutor.h) owns the main set, the shadow views' set, tree LOD's
+	 * pipelines and the forward views': it takes the requests (RequestLighting, RequestShadow, RequestTreeLod, RequestForward), the
+	 * programs (ShaderPrograms::Find, FindShadow, FindTreeLod, FindForward, FindForwardTreeLod) and the builds' completions, admits
+	 * them, publishes the set versions and then the catalog (PipelineCatalog). What it needs of the render thread reaches it as the
+	 * frame's inputs (SetTargetFormats, CaptureEngineStates, SetShadowInputs, ShadowRasterStateId, SetTreeLodInputs,
+	 * SetForwardTargets: the targets, the engine's state objects it asked for, the winding, the shadow map format, the Utility shader,
+	 * the view rasterizer states, the DistantTree shader and the forward views' targets). The render thread only posts, and reads
+	 * the catalog its frame took (FrameCatalog).
 	 */
-	/**
-	 * @brief The shadow views' program for a technique (mode bits included), requesting it, and a warning for each stage the
-	 * request starts that no precompile had (on demand). a_casterKey (no mode bits) and a_occlusion name the casters that need
-	 * it (SceneStore::DescribeShadowKeyUsers). The rest as ShaderPrograms::FindShadow.
-	 */
-	const ShaderPrograms::ShadowProgram* RequestShadowProgram(std::uint32_t a_technique, const ShadowPipelineKey& a_casterKey, std::uint32_t a_occlusion,
-		RE::BSShader& a_utility, bool a_allowRequest = true, bool* a_requested = nullptr);
-	/** @brief DrawPipelines::FindShadow, and a warning for each build it starts (every pipeline is built at runtime). */
-	std::uint32_t RequestShadowPipeline(const ShadowPipelineKey& a_viewKey, const ShaderPrograms::ShadowProgram& a_program, DXGI_FORMAT a_format,
-		const ShadowPipelineKey& a_casterKey, std::uint32_t a_occlusion);
-
 	class DrawPipelines
 	{
 	public:
@@ -274,103 +384,145 @@ namespace DCLF
 			// Set versions (DrawPipelines.cpp, SetVersion): published with new pipelines, and frames whose admissions
 			// waited because every version was still held.
 			std::uint32_t setPublishes = 0, setWaits = 0, shadowSetPublishes = 0, shadowSetWaits = 0;
+			// Tree LOD's pipeline pairs and the forward views' pipelines (the lane's, this target generation's), and the frames whose tree
+			// LOD or forward view wanted one its catalog did not have yet (NoteFrameWaits: they draw natively meanwhile).
+			std::uint32_t treeLodRequested = 0, treeLodReady = 0, treeLodFailed = 0;
+			std::uint32_t forwardRequested = 0, forwardReady = 0, forwardFailed = 0;
+			std::uint32_t treeLodWaits = 0, forwardWaits = 0;
 		};
 
 		static DrawPipelines& Get();
 
 		bool Enabled() const;
 
-		/** @brief The native main pass's targets; pipelines are rebuilt when they change. */
+		/** @brief Render thread: the native main pass's targets; pipelines are rebuilt when they change (the lane, from its inputs). */
 		void SetTargetFormats(const TargetFormats& a_formats);
 		bool HasTargetFormats() const { return targets.colorCount != 0; }
 		const TargetFormats& Targets() const { return targets; }
 
 		/**
-		 * @brief The key's index in the pipeline set, or kNotReady. Requests the pipeline on the first call
-		 * once the program is compiled.
+		 * @brief Any thread: asks the pipeline lane for the key's program and pipeline. Once per key is enough: the lane keeps every key
+		 * asked for, and builds them all again after a target change. a_slot names the pipeline slot that asked, for the on-demand
+		 * warnings.
 		 */
-		std::uint32_t Find(const PipelineKey& a_key, const ShaderPrograms::Program& a_program, bool* a_requested = nullptr);
+		void RequestLighting(const PipelineKey& a_key, std::uint32_t a_slot);
+		/**
+		 * @brief The one consumer (the scene lane, SceneStore::ResolveLookups, T6b2c step 5): the newest catalog the lane published since
+		 * the last call, null when there is none newer (the caller keeps the last). Its lookups are resolved from it and published with it.
+		 */
+		std::shared_ptr<const PipelineCatalog> TakeCatalog();
+		/**
+		 * @brief Render thread, the frame's start (SceneStore::HandOverAtFrameStart): the catalog the installed publication's lookups were
+		 * resolved from, held for the frame (FrameCatalog, FrameIndirectState and FrameShadowIndirectState read it). The frame's alone:
+		 * a revision names its request's catalog explicitly.
+		 */
+		void HoldCatalog(std::shared_ptr<const PipelineCatalog> a_catalog) { heldCatalog = std::move(a_catalog); }
+		/** @brief The frame's catalog (HoldCatalog), null before the first. */
+		const std::shared_ptr<const PipelineCatalog>& HeldCatalog() const { return heldCatalog; }
 
 		/**
-		 * @brief The shadow key's index in the shadow pipeline set, or kNotReady.
+		 * @brief Any thread: asks the pipeline lane for a shadow view key's program and pipeline (its index arrives in a later catalog:
+		 * PipelineCatalog::shadowEntries). Once per key is enough: the lane keeps every key asked for, and builds them all again after
+		 * a format change. a_casterKey (no mode bits) and a_occlusion name the casters that need it, for the on-demand warnings.
 		 *
-		 * A separate set from the main pass's: its pipelines write depth alone, into the engine's shadow
-		 * map format, with the rasterizer state of the view (the key's viewState, which must be registered)
-		 * and no colour attachment (engine notes: shadow maps).
-		 * @param a_depthFormat the shadow map array's format; pipelines are rebuilt if it changes.
+		 * A separate set from the main pass's: its pipelines write depth alone, into the shadow map format (SetShadowInputs), with
+		 * the rasterizer state of the view (the key's viewState, ShadowRasterStateId) and no colour attachment (engine notes: shadow
+		 * maps).
 		 */
-		std::uint32_t FindShadow(const ShadowPipelineKey& a_key, const ShaderPrograms::ShadowProgram& a_program, DXGI_FORMAT a_depthFormat,
-			bool* a_requested = nullptr);
+		void RequestShadow(const ShadowPipelineKey& a_viewKey, const ShadowPipelineKey& a_casterKey, std::uint32_t a_occlusion);
 		/**
-		 * @brief For the on-demand build warnings: the pipeline already requested whose key is nearest a_key (fewest differing
-		 * bits), with the fields that differ, or why there is none (the set was recreated, and by what).
+		 * @brief Render thread: the shadow views' frame inputs of the lane: the shadow map array's format (the depth-stencil view's;
+		 * the shadow pipelines are rebuilt if it changes) and the Utility shader whose techniques the programs build. Posted when
+		 * either changes.
 		 */
-		std::string NearestKey(const PipelineKey& a_key) const;
-		std::string NearestShadowKey(const ShadowPipelineKey& a_key) const;
+		void SetShadowInputs(DXGI_FORMAT a_format, RE::BSShader& a_utility);
 
 		/**
-		 * @brief The id (1 and up, as many as the views have) of a shadow view's rasterizer state, registering it
+		 * @brief Render thread: the id (1 and up, as many as the views have) of a shadow view's rasterizer state, registering it
 		 * the first time; 0 when the state has something a pipeline cannot express (no depth clipping,
 		 * wireframe). Views with equal states share the id and so their pipelines.
 		 *
 		 * The state is the one the engine binds for the view, read from its table while the view is drawn
 		 * (IndirectDraws::CaptureShadowView): Community Shaders' ShadowmapCascadeRasterizerFix swaps in
 		 * per-cascade copies with their own depth bias for exactly that window, and the volumetric copy draws
-		 * without culling. Remembers the render modes each id was seen in, for ShadowRasterStateModes.
+		 * without culling. The registry is the render thread's (an id is used as soon as it is returned); a new
+		 * state goes to the pipeline lane with the frame's inputs, which builds a key of that id once it has it.
+		 * a_renderMode names the view's mode in the log.
 		 */
 		std::uint32_t ShadowRasterStateId(const D3D11_RASTERIZER_DESC& a_desc, std::uint32_t a_renderMode);
 
 		/** @brief How many shadow view rasterizer states are registered (ids 1 to this). */
 		std::uint32_t ShadowRasterStateCount() const;
 
-		/** @brief The registered ids seen with a render mode, ascending. */
-		std::vector<std::uint32_t> ShadowRasterStatesOfMode(std::uint32_t a_renderMode) const;
-
-		/** @brief Adds finished pipelines to the set (call once per frame). */
-		void Update();
-
 		/**
-		 * @brief Tree LOD's two pipelines (dclf-lod.md, "Tree LOD: the draws"), both under the Z-prepass's layout (pulled: the
-		 * draw's push data holds the draw row's address): the Z-prepass's (DistantTree's depth technique, depth LESS with writes)
-		 * and the colour pass's (its deferred technique, depth EQUAL, the engine's opaque write mode 1). Both draw two-sided, as
-		 * the engine's do. Requested on the first call with the program; false until built, and again after a target change.
+		 * @brief Render thread: asks the pipeline lane for tree LOD's two pipelines (dclf-lod.md, "Tree LOD: the draws"), both under the
+		 * Z-prepass's layout (pulled: the draw's push data holds the draw row's address): the Z-prepass's (DistantTree's depth
+		 * technique, depth LESS with writes) and the colour pass's (its deferred technique, depth EQUAL, the engine's opaque write
+		 * mode 1). Both draw two-sided, as the engine's do. Once is enough: the lane builds them again after a target change. They
+		 * arrive in a later catalog (PipelineCatalog::treeLod; TreeLodPipelinesOf), once the DistantTree shader (SetTreeLodInputs), the
+		 * targets, the winding and the opaque write mode's state are among the lane's inputs.
 		 */
-		bool FindTreeLod(const ShaderPrograms::TreeLodProgram& a_program, struct TreeLodPipelines& a_out);
-
-		/** @brief Forward pipelines: requested, built, failed (FindForwardPipeline). */
-		struct ForwardStats
+		void RequestTreeLod();
+		/** @brief Render thread: the DistantTree shader whose programs tree LOD's pipelines build (a frame input of the lane; posted when it changes). */
+		void SetTreeLodInputs(RE::BSShader& a_distantTree);
+		/**
+		 * @brief Render thread: asks the pipeline lane for a forward view's pipeline (ForwardPipelineKey): the forward program's pulled
+		 * stages, the forward targets, depth LESS_EQUAL with writes, the key's cull, the engine's winding, no blending. Once per key is
+		 * enough (repeats are dropped here). It arrives in a later catalog (PipelineCatalog::forwardEntries; ForwardPipelineOf).
+		 */
+		void RequestForward(const ForwardPipelineKey& a_key);
+		/** @brief Render thread: the forward views' targets (a frame input of the lane; posted when they change, every forward pipeline built again). */
+		void SetForwardTargets(const ForwardTargets& a_targets);
+		/** @brief Render thread: a frame whose tree LOD, or whose forward view, waited for a pipeline its catalog did not have (Stats). */
+		void NoteFrameWaits(bool a_treeLod, bool a_forward)
 		{
-			std::uint32_t requested = 0, ready = 0, failed = 0;
-		};
-		const ForwardStats& GetForwardStats() const { return forwardStats; }
+			stats.treeLodWaits += a_treeLod ? 1u : 0u;
+			stats.forwardWaits += a_forward ? 1u : 0u;
+		}
 
 		/**
-		 * @brief Reads the engine's rasterizer and blend state objects behind the state bits of these keys
-		 * (decals: Records.h PipelineRasterFlags), so that Find can build them.
+		 * @brief Render thread: reads the engine's rasterizer and blend state objects behind the state bits the pipeline lane asked for
+		 * (decals: Records.h PipelineRasterFlags) and the opaque groups' write modes, and the engine's winding, and hands what is
+		 * new to the lane with the frame's inputs (a request and its reply).
 		 *
 		 * Call inside the deferred pass: Community Shaders swaps the engine's blend table for its deferred
 		 * variants between StartDeferred and ResetBlendStates, and those are what a native decal draw in the
 		 * G-buffer uses. Read outside that window the same index names the forward state. A key whose
 		 * state has not been captured yet is simply not ready; nothing is guessed.
 		 */
-		void CaptureEngineStates(std::span<const PipelineKey> a_keys);
+		void CaptureEngineStates();
 
-		/** @brief The registers of a variant of the pipeline at a set index (one Find returned). */
-		const RegisterUsage& Usage(std::uint32_t a_index, std::uint32_t a_variant = kColorVariant) const { return usage[a_index][a_variant]; }
 
-		/** @brief The registers of the shadow pipeline at a shadow set index (one FindShadow returned). */
-		const RegisterUsage& ShadowUsage(std::uint32_t a_index) const { return shadowUsage[a_index]; }
-		/**
-		 * @brief Whether the shadow pipeline at a set index is of the discarding class (kShadowDiscards): its pixel stage can
-		 * discard or export depth, so the hardware tests its fragments' depth after shading them. A view draws the other class
-		 * first, so that these fragments meet the opaque casters' depth.
-		 */
-		bool ShadowDiscards(std::uint32_t a_index) const { return a_index < shadowDiscards.size() && shadowDiscards[a_index] != 0; }
-
-		/** @brief Increments whenever the set is recreated (target change): indices from before are stale. */
+		/** @brief Render thread: increments whenever the targets change (the lane recreates the main set for them). */
 		std::uint32_t Generation() const { return generation; }
+		/**
+		 * @brief Render thread: the shadow map format as last posted (SetShadowInputs), which a catalog's shadow set must be built for
+		 * (GetShadowIndirectState). A frame input: a revision reads its inputs' copy.
+		 */
+		DXGI_FORMAT ShadowFormat() const;
 
-		const Stats& GetStats() const { return stats; }
+		/** @brief Any thread: the render thread's counters with the lane's (relaxed reads, for the report). */
+		Stats GetStats() const;
+
+		/** @brief CS_DCLF_PERSISTENT_PARITY: the catalog's constant tables against Community Shaders' (CheckConstantTables). */
+		struct ConstantTableParity
+		{
+			std::uint32_t checks = 0;       // parity frames
+			std::uint32_t entries = 0;      // resolved pipeline entries compared
+			std::uint32_t uncached = 0;     // of them, ShaderCache had no shader object for yet (not compared)
+			std::uint32_t variables = 0;    // variables in both tables, compared
+			std::uint32_t differ = 0;       // of them, at another offset
+			std::uint32_t catalogOnly = 0;  // in DCLF's table alone (its stage reads one the game's does not declare)
+			std::uint32_t cacheOnly = 0;    // in ShaderCache's alone (DCLF_BINDLESS's own blocks, or a block the stage never reads)
+			std::string first, catalogOnlyFirst;
+		};
+		/**
+		 * @brief Render thread, a parity frame: each resolved entry's tables (the frame's lookups, from the catalog) against the game's
+		 * shader objects' (ShaderCache, which takes its lock and may start a compile: an observer only, never what the builds read).
+		 */
+		void CheckConstantTables(const RE::BSShader& a_lighting, const Lookups& a_lookups);
+		/** @brief Render thread: what CheckConstantTables found since the last call. */
+		ConstantTableParity TakeConstantTableParity() { return std::exchange(tableParity, {}); }
 
 	private:
 		DrawPipelines();
@@ -379,16 +531,23 @@ namespace DCLF
 		struct Impl;
 		std::unique_ptr<Impl> impl;
 		TargetFormats targets;
-		std::vector<std::array<RegisterUsage, kVariantCount>> usage;  // by set index, then variant
-		std::vector<RegisterUsage> shadowUsage;                       // by shadow set index
-		std::vector<std::uint8_t> shadowDiscards;                     // by shadow set index: ShadowDiscards
-		std::vector<std::uint64_t> shadowLayouts;                     // by shadow set index: its key's vertex layout
+		std::shared_ptr<const PipelineCatalog> heldCatalog;          // the frame's (HoldCatalog: the installed publication's)
 		std::uint32_t generation = 0;
 		Stats stats;
-		ForwardStats forwardStats;
+		ConstantTableParity tableParity;
 
-		friend struct IndirectState GetIndirectState();
-		friend struct ForwardPipelineAccess;  // FindForwardPipeline (DrawPipelinesRhi.h)
-		friend struct ShadowIndirectState GetShadowIndirectState();
+		friend struct IndirectState GetIndirectState(const PipelineCatalog&, std::uint32_t);
+		friend struct ForwardPipelineAccess;  // TreeLodPipelinesOf (DrawPipelinesRhi.h)
+		friend struct ShadowIndirectState GetShadowIndirectState(const PipelineCatalog&, DXGI_FORMAT);
 	};
+
+	/**
+	 * @brief Render thread: the frame's catalog, the one its tree LOD and forward views resolve their pipelines from (DecideTreeLod,
+	 * PrepareReflection): the installed publication's, whose lookups were resolved from it (DrawPipelines::HoldCatalog, at HandOverAtFrameStart,
+	 * before both), the same FrameIndirectState and FrameShadowIndirectState bind. The one place that names where it comes from.
+	 */
+	inline const PipelineCatalog* FrameCatalog()
+	{
+		return DrawPipelines::Get().HeldCatalog().get();
+	}
 }

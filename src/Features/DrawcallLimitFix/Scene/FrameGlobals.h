@@ -6,6 +6,11 @@
 #include <utility>
 #include <vector>
 
+#include <d3d11.h>
+#include <winrt/base.h>
+
+#include "Features/DrawcallLimitFix/Scene/MaterialPortFrame.h"
+
 namespace RE
 {
 	class NiAVObject;
@@ -75,6 +80,11 @@ namespace DCLF
 		std::uint32_t membershipWitness = 0;
 		// SetupTechnique's inputs (T6b2c).
 		TechniqueInputs technique;
+		// A reference on technique.shadowMask, taken with the sample: the technique rows name it, and the scene work asks for its binding
+		// (SceneStore::UpdateSharedBindings) while its frame's capture is held, so the view outlives the request.
+		winrt::com_ptr<ID3D11ShaderResourceView> shadowMaskHeld;
+		// SetupMaterial's per-frame sources (T6b2a: the scene work's material records).
+		MaterialPort::MaterialFrame material;
 
 		/** @brief Render thread, the frame's start: the frame's capture, which Current() hands the render thread from now on. */
 		static std::shared_ptr<const FrameGlobals> Capture();

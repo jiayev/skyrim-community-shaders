@@ -71,6 +71,13 @@ namespace DCLF::Draws
 			host->NoteNewVersions();
 	}
 
+	ShadowLatchLayout InitialShadowLatchLayout()
+	{
+		const bool smallSlots = SwitchValue(Switch::TableStart) == "small";
+		return { smallSlots ? 2u : kInitialShadowViewSlots, smallSlots ? 16u : kInitialShadowKeySlots, smallSlots ? 1u : kInitialShadowRasterStates,
+			smallSlots ? 1u : kInitialSunProcesses };
+	}
+
 	bool GrowableRows::Create(std::uint32_t a_stride, std::uint32_t a_rows, const char* a_name)
 	{
 		auto* host = RenderGraphRuntime::Get().Host();
@@ -87,7 +94,7 @@ namespace DCLF::Draws
 
 	bool GrowableRows::Reserve(std::uint32_t a_rows, const std::function<void(std::uint64_t)>& a_adopted, const RowsCapture* a_capture)
 	{
-		if (!buffer || a_rows <= capacity)
+		if (!buffer)
 			return false;
 		auto* host = RenderGraphRuntime::Get().Host();
 		if (!host)
@@ -95,15 +102,17 @@ namespace DCLF::Draws
 		const auto device = host->GetDesc().device;
 		auto& graphGrowths = Growths::Get();
 		const bool deferred = a_capture && Growths::Deferred();
-		// What a growth in flight asks for counts as held: asked again only past it.
-		const std::uint32_t asked = deferred ? static_cast<std::uint32_t>(graphGrowths.Asked(buffer) / stride) : 0u;
-		if (a_rows <= asked)
+		// The rows the newest growth holds or asks for (a growth in flight counts as held: asked again only past it), as the reserving
+		// side knows them (Growths::Held: never the capacity the frame's adoption writes), else the first backing's.
+		const std::uint64_t held = deferred ? graphGrowths.Held(buffer) : 0;
+		const std::uint32_t current = held ? static_cast<std::uint32_t>(held / stride) : capacity;
+		if (a_rows <= current)
 			return false;
 		// Doubling, so that a table filling up grows a handful of times, not every frame.
-		std::uint32_t rows = std::max(capacity, asked);
+		std::uint32_t rows = std::max(current, 1u);
 		while (rows < a_rows)
 			rows *= 2;
-		logger::info("[DCLF] {}: {} rows grown to {} ({} KB){}", name, capacity, rows, std::uint64_t(rows) * stride / 1024, deferred ? ", as graph work" : "");
+		logger::info("[DCLF] {}: {} rows grown to {} ({} KB){}", name, current, rows, std::uint64_t(rows) * stride / 1024, deferred ? ", as graph work" : "");
 		++growths;
 		if (!deferred) {
 			// A new version: the old one stays as it was for whatever holds it, and is released through ORG's deletion queue after.
@@ -128,7 +137,7 @@ namespace DCLF::Draws
 				a_fills.push_back({ 0, { { bytes->data(), bytes->size() } } });
 				a_contents = std::move(bytes);
 			};
-		graphGrowths.Post(nullptr, nullptr, { std::move(part) },
+		graphGrowths.Post(nullptr, std::weak_ptr<const void>(life), nullptr, { std::move(part) },
 			[this, device, rows, held = a_capture->held, life = std::weak_ptr<int>(life), a_adopted] {
 				if (life.expired())
 					return;
@@ -143,9 +152,10 @@ namespace DCLF::Draws
 
 	std::uint64_t GrowableRows::RevisionAddress() const
 	{
-		if (const auto ready = buffer ? Growths::Get().Ready(buffer) : nullptr)
+		// The version a revision made now names: a ready growth's, adopted or not (the producer's record), else the first backing's.
+		if (const auto named = buffer ? Growths::Get().Named(buffer) : nullptr)
 			if (auto* host = RenderGraphRuntime::Get().Host())
-				return AddressOf(host->GetDesc().device, *ready->buffer);
+				return AddressOf(host->GetDesc().device, *named->buffer);
 		return address;
 	}
 
@@ -157,14 +167,27 @@ namespace DCLF::Draws
 
 	std::uint64_t Growths::Asked(const Versioned& a_buffer) const
 	{
-		for (auto it = entries.rbegin(); it != entries.rend(); ++it)
+		const std::uint64_t through = adoptedPublished.load(std::memory_order_acquire);
+		for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
+			if ((*it)->adoptedSeen || (*it)->serial <= through)
+				continue;
 			for (const auto& part : (*it)->parts)
 				if (part.buffer == a_buffer)
-					return part.elements ? std::uint64_t(part.elements) * 4 : part.bytes;
+					return part.Bytes();
+		}
 		return 0;
 	}
 
-	void Growths::Post(const void* a_owner, std::shared_ptr<const void> a_sizing, std::vector<Part> a_parts, std::function<void()> a_adopted)
+	std::uint64_t Growths::Held(const Versioned& a_buffer) const
+	{
+		for (auto it = entries.rbegin(); it != entries.rend(); ++it)
+			for (const auto& part : (*it)->parts)
+				if (part.buffer == a_buffer)
+					return part.Bytes();
+		return 0;
+	}
+
+	void Growths::Post(const void* a_owner, std::weak_ptr<const void> a_life, std::shared_ptr<const void> a_sizing, std::vector<Part> a_parts, std::function<void()> a_adopted)
 	{
 		std::erase_if(a_parts, [](const Part& a_part) { return !a_part.buffer; });
 		if (!Deferred()) {
@@ -179,15 +202,18 @@ namespace DCLF::Draws
 			return;
 		}
 		auto entry = std::make_shared<Entry>();
+		entry->serial = ++serial;
 		entry->owner = a_owner;
+		entry->life = std::move(a_life);
 		entry->sizing = std::move(a_sizing);
 		entry->parts = std::move(a_parts);
 		entry->adopted = std::move(a_adopted);
 		++requested;
 		// Graph work: the producer (the preparation pool) makes the versions and queues their fills (none for a buffer written whole
 		// by its users); ready once those copies complete. A version is pending: no queue uses it before its adoption, and every
-		// preparation for a revision that names it resolves it (ORG lowers a pass's resolvers as groups).
-		auto* host = RenderGraphRuntime::Get().Host();
+		// preparation for a revision that names it resolves it (ORG lowers a pass's resolvers as groups). The uploader is the one the
+		// frame posted (never the host's, which a build replaces on the owner's thread).
+		const auto uploader = uploads.lock();
 		std::vector<org::services::VersionGrowthRequest> requests;
 		for (const auto& part : entry->parts) {
 			auto& request = requests.emplace_back();
@@ -195,7 +221,7 @@ namespace DCLF::Draws
 			request.elements = part.elements;
 			request.bytes = part.bytes;
 			request.contentsOf = part.contents;
-			request.uploads = part.contents && host ? host->RetainUploads() : nullptr;
+			request.uploads = part.contents ? uploader : nullptr;
 		}
 		Published::GrowthWork work;
 		work.produce = [requests = std::move(requests)] {
@@ -214,12 +240,55 @@ namespace DCLF::Draws
 				entry->error = a_error.empty() ? std::string("a growth made the wrong versions") : std::move(a_error);
 				entry->state.store(Entry::kFailed, std::memory_order_release);
 			}
+			// The builder waits for it (no revision is sealed while a change is pending).
+			WakeSnapshotBuilder();
 		};
 		if (!SceneScheduler::Graph().PostGrowth(std::move(work))) {
 			entry->error = "the scene graph refused it";
 			entry->state.store(Entry::kFailed, std::memory_order_release);
 		}
 		entries.push_back(std::move(entry));
+	}
+
+	void Growths::Prune()
+	{
+		// What the frame adopted since (AdoptNamed): seen adopted, it is the producer's record of its owner's sizing and its buffers'
+		// versions until a newer adopted change covers it (its owner and every buffer of it), or its owner is gone.
+		const std::uint64_t through = adoptedPublished.load(std::memory_order_acquire);
+		bool any = false;
+		for (const auto& entry : entries)
+			if (!entry->adoptedSeen && entry->serial <= through) {
+				entry->adoptedSeen = true;
+				any = true;
+			}
+		if (any)
+			++stamp;
+		auto covered = [&](std::size_t a_at) {
+			const auto& entry = *entries[a_at];
+			auto coveredLater = [&](auto&& a_matches) {
+				for (std::size_t later = a_at + 1; later < entries.size(); ++later)
+					if (entries[later]->adoptedSeen && entries[later]->Alive() && a_matches(*entries[later]))
+						return true;
+				return false;
+			};
+			if (entry.owner && !coveredLater([&](const Entry& a_later) { return a_later.owner == entry.owner; }))
+				return false;
+			for (const auto& part : entry.parts)
+				if (!coveredLater([&](const Entry& a_later) {
+						return std::any_of(a_later.parts.begin(), a_later.parts.end(), [&](const Part& a_part) { return a_part.buffer == part.buffer; });
+					}))
+					return false;
+			return true;
+		};
+		std::vector<bool> drop(entries.size(), false);
+		for (std::size_t e = 0; e < entries.size(); ++e)
+			drop[e] = !entries[e]->Alive() || (entries[e]->adoptedSeen && covered(e));
+		std::vector<std::shared_ptr<Entry>> kept;
+		kept.reserve(entries.size());
+		for (std::size_t e = 0; e < entries.size(); ++e)
+			if (!drop[e])
+				kept.push_back(std::move(entries[e]));
+		entries = std::move(kept);
 	}
 
 	bool Growths::Settle()
@@ -249,7 +318,7 @@ namespace DCLF::Draws
 				if (failuresLogged++ < 8) {
 					std::uint64_t bytes = 0;
 					for (const auto& part : a_entry->parts)
-						bytes += part.elements ? std::uint64_t(part.elements) * 4 : part.bytes;
+						bytes += part.Bytes();
 					logger::error("[DCLF] a growth of {} buffers ({} KB) failed: {}", a_entry->parts.size(), bytes / 1024, a_entry->error);
 				}
 				return true;
@@ -259,6 +328,20 @@ namespace DCLF::Draws
 	}
 
 	std::shared_ptr<const org::BufferVersion> Growths::Ready(const Versioned& a_buffer) const
+	{
+		const std::uint64_t through = adoptedPublished.load(std::memory_order_acquire);
+		for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
+			const auto& entry = **it;
+			if (!entry.ready || entry.adoptedSeen || entry.serial <= through)
+				continue;
+			for (std::size_t i = 0; i < entry.parts.size() && i < entry.versions.size(); ++i)
+				if (entry.parts[i].buffer == a_buffer)
+					return entry.versions[i];
+		}
+		return nullptr;
+	}
+
+	std::shared_ptr<const org::BufferVersion> Growths::Named(const Versioned& a_buffer) const
 	{
 		for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
 			const auto& entry = **it;
@@ -271,31 +354,40 @@ namespace DCLF::Draws
 		return nullptr;
 	}
 
-	void Growths::Sealed(std::uint64_t a_sequence)
+	std::shared_ptr<const Growths::NamedChanges> Growths::Naming() const
 	{
+		// Every ready change not seen adopted: the ones named by an earlier revision too (the frame skips what it adopted already), so
+		// a revision selected after others were passed over adopts theirs with its own.
+		auto named = std::make_shared<NamedChanges>();
+		const std::uint64_t through = adoptedPublished.load(std::memory_order_acquire);
 		for (const auto& entry : entries)
-			if (entry->ready && !entry->namedBy)
-				entry->namedBy = a_sequence;
+			if (entry->ready && !entry->adoptedSeen && entry->serial > through && entry->Alive())
+				named->entries.push_back(entry);
+		return named;
 	}
 
-	bool Growths::AdoptSelected(std::uint64_t a_sequence)
+	bool Growths::AdoptNamed(const NamedChanges& a_named)
 	{
 		// In request order: a later change of the same owner or buffer builds on an earlier one.
 		bool any = false;
-		std::erase_if(entries, [&](const auto& a_entry) {
-			if (!a_entry->namedBy || a_entry->namedBy > a_sequence)
-				return false;
-			for (std::size_t i = 0; i < a_entry->parts.size() && i < a_entry->versions.size(); ++i)
-				a_entry->parts[i].buffer->Adopt(a_entry->versions[i]);
-			if (a_entry->adopted)
-				a_entry->adopted();
-			++adopted;
+		for (const auto& entry : a_named.entries) {
+			if (!entry || entry->serial <= adoptedThrough)
+				continue;
+			adoptedThrough = entry->serial;
+			// A change whose owner is gone adopts nothing: its consequences would write into it.
+			if (!entry->Alive())
+				continue;
+			for (std::size_t i = 0; i < entry->parts.size() && i < entry->versions.size(); ++i)
+				entry->parts[i].buffer->Adopt(entry->versions[i]);
+			if (entry->adopted)
+				entry->adopted();
+			adopted.fetch_add(1, std::memory_order_relaxed);
 			any = true;
-			return true;
-		});
+		}
+		// The producer takes it in at its next make (Prune): its records, and the stamp.
+		adoptedPublished.store(adoptedThrough, std::memory_order_release);
 		if (!any)
 			return false;
-		++stamp;
 		VersionRegistry::Get().Changed();
 		if (auto* host = RenderGraphRuntime::Get().Host())
 			host->NoteNewVersions();
@@ -304,9 +396,11 @@ namespace DCLF::Draws
 
 	std::string Growths::Report()
 	{
-		if (!requested && !adopted && !failed && entries.empty() && atOnce.empty())
+		const auto outstanding = std::count_if(entries.begin(), entries.end(), [](const auto& a_entry) { return !a_entry->adoptedSeen; });
+		const std::uint64_t adoptedCount = adopted.exchange(0, std::memory_order_relaxed);
+		if (!requested && !adoptedCount && !failed && !outstanding && atOnce.empty())
 			return {};
-		auto text = fmt::format("[DCLF] growths as graph work: {} requested, {} adopted, {} failed, {} outstanding", requested, adopted, failed, entries.size());
+		auto text = fmt::format("[DCLF] growths as graph work: {} requested, {} adopted, {} failed, {} outstanding", requested, adoptedCount, failed, outstanding);
 		if (!atOnce.empty()) {
 			text += "; adopted at once:";
 			for (const auto& [name, count] : atOnce)
@@ -314,7 +408,7 @@ namespace DCLF::Draws
 			text.pop_back();
 		}
 		text += '\n';
-		requested = adopted = failed = 0;
+		requested = failed = 0;
 		atOnce.clear();
 		return text;
 	}
@@ -406,22 +500,22 @@ namespace DCLF::Draws
 			return static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX));
 		}
 
-		/** @brief A shadow view slot's buffers for every slot up to a_slots (small: a slot's sequences grow the first time a view uses it). */
-		void AddShadowViewSlots(ShadowResources& a_state, std::uint32_t a_slots)
+		/**
+		 * @brief The frame: a shadow view slot's buffers for every slot up to a_slots, at a_draws sequences of each class and a_words bucket
+		 * counts (the sizing the revision code asked them at: its newest change's, ShadowSlotsRequest), small: a slot's sequences grow the
+		 * first time a view uses it. Render thread: the passes declare them (a graph build), and the counters' readback views are D3D11's.
+		 */
+		void AddShadowViewSlots(ShadowResources& a_state, std::uint32_t a_slots, std::uint32_t a_draws, std::uint32_t a_words)
 		{
-			if (!a_state.sequenceDraws)
-				a_state.sequenceDraws = 64u;
-			// At the size asked for (ShadowSizing::sequenceDraws): what an outstanding growth makes the others.
-			const std::uint32_t draws = Growths::Get().LatestSizing<ShadowSizing>(a_state).sequenceDraws;
+			const std::uint32_t draws = a_draws;
 			for (auto s = static_cast<std::uint32_t>(a_state.sequences.size()); s < a_slots; ++s) {
 				a_state.sequences.push_back(MakeVersioned(CreateWords(kShadowClasses * std::uint64_t(draws) * sizeof(DrawSequence) / 4, true,
 					fmt::format("cs.dclf.shadow.sequences{}", s).c_str())));
 				a_state.count.push_back(CreateWords(kCountWords, true, fmt::format("cs.dclf.shadow.draw-count{}", s).c_str()));
 				a_state.countD3D11.push_back(WrapWords(*a_state.count.back(), kCountWords * sizeof(std::uint32_t)));
-				a_state.bucketCounts.push_back(MakeVersioned(CreateWords(std::max(Growths::Get().LatestSizing<ShadowSizing>(a_state).bucketCountWords, 64u), true,
+				a_state.bucketCounts.push_back(MakeVersioned(CreateWords(std::max(a_words, 64u), true,
 					fmt::format("cs.dclf.shadow.bucket-counts{}", s).c_str())));
 			}
-			a_state.bucketCountWords = std::max(a_state.bucketCountWords, 64u);
 		}
 
 		/** @brief Room for a_needed, doubling from a_current. */
@@ -505,6 +599,7 @@ namespace DCLF
 		state->sequenceDraws = smallTables ? 64u : kInitialSequenceDraws;
 		state->sequenceDecals = smallTables ? 16u : kInitialDecalDraws;
 		state->sequences = MakeVersioned(CreateWords(SequenceSlots(state->sequenceDraws, state->sequenceDecals) * sizeof(DrawSequence) / 4, true, "cs.dclf.sequences"));
+		state->askedSequenceDraws.store(state->sequenceDraws, std::memory_order_relaxed);
 		state->count = CreateWords(kCountWords, true, "cs.dclf.draw-count");
 		// One word per object in the frame's tables: what the depth segment's culling decided, read by
 		// the colour segment so that it draws exactly the same set.
@@ -539,9 +634,7 @@ namespace DCLF
 		state->dispatchSignature = CreateDispatchSignature(device, state->buildDraws->layout->GetHandle());
 		if (!state->dispatchSignature)
 			return NotReady(7, "the BuildDraws dispatch signature could not be created");
-		state->latchLayout.cascades = SwitchValue(Switch::TableStart) == "small" ? 1u : kInitialSunCascades;
-		state->latchLayout.shadowVolumes = SwitchValue(Switch::TableStart) == "small" ? 1u : kInitialShadowVolumes;
-		state->latch = std::make_shared<org::LatchBlock>("cs.dclf.latch", state->latchLayout.Bytes(), host->FrameSlots());
+		// The latch is the revision producer's (RevisionLatches::main): no resource of these.
 		// The phase-1 and colour draws executed grouped by pipeline: BuildDraws appends in whatever order its threads
 		// finish, which made nearly every sequence of the indirect draw switch pipeline.
 		state->sort = DrawSort::Create(device, state->sequenceDraws);
@@ -692,18 +785,26 @@ namespace DCLF
 		formats = targets;
 		width = target.Width;
 		height = target.Height;
+		// The faces draw from the main pass's resources: theirs from now on, before the graph is built for the new ones (the frame's,
+		// never the revision code's).
+		if (reflection.resources) {
+			reflection.resources->main = state;
+			reflection.resources->rebuildPending = true;
+		}
+		// A revision input (T6b3b b2a): the main resources and their generation.
+		PostRevisionInputs();
 		// The graph is rebuilt with the new resources on its next epoch.
 		host->AddExtension(kExtensionId, [state] { return MakeMainOpaqueExtension(state); });
 		logger::info("[DCLF] Main-pass graph resources: {} targets {}x{}, depth format {}", targets.colorCount, width, height, static_cast<int>(targets.depth));
 		return true;
 	}
 
-	void IndirectDraws::Impl::UpdateDrawBound(const SceneStore::Tables& a_tables)
+	void IndirectDraws::Impl::UpdateDrawBound(const SceneStore::Tables& a_tables, std::uint32_t a_generation)
 	{
-		auto& s = drawBound;
+		auto& s = producer.drawBound;
 		const std::size_t count = a_tables.objects.size();
 		const bool partitioned = a_tables.skinPartitions.size() >= count;
-		const std::uint32_t generation = SceneStore::Get().GetTablesGeneration();
+		const std::uint32_t generation = a_generation;  // the tables' own (T6b3a: the publication's, MakeRevisionShapes' request)
 		constexpr auto kNoPipeline = DrawBoundStore::kNoPipeline;
 		auto set = [&](std::size_t a_slot) {
 			const auto [produced, pipeline] = DrawShareOf(a_tables, a_slot, partitioned);
@@ -763,7 +864,7 @@ namespace DCLF
 		}
 		s.cursor.Advance(a_tables.changeLog);
 		// CS_DCLF_PERSISTENT_PARITY: the kept bound against a scan.
-		if (PersistentParityEnabled() && ParityDue(SceneStore::Get().GetFrame())) {
+		if (PersistentParityEnabled() && ParityDue(producer.frame)) {
 			std::vector<std::uint32_t> perPipeline;
 			const std::uint32_t scanned = SceneDrawBound(a_tables, &perPipeline);
 			bool same = scanned == s.Draws();
@@ -791,12 +892,11 @@ namespace DCLF
 		}
 	}
 
-	void IndirectDraws::Impl::ReserveMainSequences(const SceneStore::Tables& a_tables)
+	void IndirectDraws::Impl::ReserveMainSequences(Resources& a_resources, const SceneStore::Tables& a_tables, std::uint32_t a_generation)
 	{
-		if (!resources)
-			return;
-		auto& r = *resources;
-		UpdateDrawBound(a_tables);
+		auto& r = a_resources;
+		UpdateDrawBound(a_tables, a_generation);
+		const auto& drawBound = producer.drawBound;
 		std::uint32_t draws = drawBound.Draws();
 		// The sizing this builds on (a change in flight's, else the current one), and the change it makes: the sequences, the
 		// bucket layout and their counts move together, when a revision naming them is selected (Growths::Change; at once without).
@@ -835,8 +935,8 @@ namespace DCLF
 				for (auto& counts : r.zBucketCounts)
 					parts.push_back({ counts, next.zBucketCountWords });
 			}
-			// The latch is no versioned buffer (a commit writes into the revision's when it fits): grown now.
-			ReserveMainLatch(r, r.latchLayout.cascades, r.latchLayout.shadowVolumes, buckets);
+			// The latch is no versioned buffer (a commit writes into the revision's when it fits): grown now (the producer's).
+			ReserveMainLatch(producer.latches.mainLayout.cascades, producer.latches.mainLayout.shadowVolumes, buckets);
 		}
 		std::uint32_t decals = 0;
 		for (std::uint32_t group = 0; group < kDecalGroups; ++group)
@@ -849,21 +949,28 @@ namespace DCLF
 		// table holds those once it is adopted.
 		RowsCapture materials, pipelines;
 		const bool deferred = Growths::Deferred();
-		if (deferred && committedMaterialRows.elements) {
-			materials.held = committedMaterialRows.Version();
-			materials.bytes = [rows = committedMaterialRows](std::uint64_t a_address) { return CapturedMainRows(rows, a_address); };
+		// The last main commit's rows as it posted them (committedRowsSlot, taken at the make's start: never the commit's state).
+		const auto& committed = producer.committedRows;
+		if (deferred && committed.materials.elements) {
+			materials.held = committed.materials.Version();
+			materials.bytes = [rows = committed.materials](std::uint64_t a_address) { return CapturedMainRows(rows, a_address); };
 		}
-		if (deferred && committedPipelineRows.elements) {
-			pipelines.held = committedPipelineRows.Version();
-			pipelines.bytes = [rows = committedPipelineRows](std::uint64_t a_address) { return CapturedMainRows(rows, a_address); };
+		if (deferred && committed.pipelines.elements) {
+			pipelines.held = committed.pipelines.Version();
+			pipelines.bytes = [rows = committed.pipelines](std::uint64_t a_address) { return CapturedMainRows(rows, a_address); };
 		}
 		r.materialRows.Reserve(materialSlots + materialSlots / 4, [&r](std::uint64_t a_held) { r.materialRowsHeld = a_held; }, &materials);
 		// CS_DCLF_TEST_ROWS_GROWTH: both grown at that frame, whatever they hold (a growth's fill, mid-run, under claims).
 		std::uint32_t forced = 0;
-		if (const auto& at = SwitchValue(Switch::TestRowsGrowth); !at.empty() && SceneStore::Get().GetFrame() == static_cast<std::uint32_t>(std::strtoul(at.c_str(), nullptr, 10)))
+		if (const auto& at = SwitchValue(Switch::TestRowsGrowth); !at.empty() && producer.frame == static_cast<std::uint32_t>(std::strtoul(at.c_str(), nullptr, 10)))
 			forced = 1;
-		r.materialRows.Reserve(forced ? r.materialRows.capacity + 1 : 0u, [&r](std::uint64_t a_held) { r.materialRowsHeld = a_held; }, &materials);
-		r.pipelineRows.Reserve(std::max(pipelineSlots + pipelineSlots / 4, forced ? r.pipelineRows.capacity + 1 : 0u), [&r](std::uint64_t a_held) { r.pipelineRowsHeld = a_held; }, &pipelines);
+		// The rows the tables hold or ask for, as the revision code knows them (Growths::Held), else the first backings'.
+		const auto heldRows = [](const GrowableRows& a_rows) {
+			const std::uint64_t held = Growths::Get().Held(a_rows.buffer);
+			return held ? static_cast<std::uint32_t>(held / a_rows.stride) : a_rows.capacity;
+		};
+		r.materialRows.Reserve(forced ? heldRows(r.materialRows) + 1 : 0u, [&r](std::uint64_t a_held) { r.materialRowsHeld = a_held; }, &materials);
+		r.pipelineRows.Reserve(std::max(pipelineSlots + pipelineSlots / 4, forced ? heldRows(r.pipelineRows) + 1 : 0u), [&r](std::uint64_t a_held) { r.pipelineRowsHeld = a_held; }, &pipelines);
 		if (draws > next.sequenceDraws || decals > next.sequenceDecals) {
 			const std::uint32_t newDraws = Doubled(next.sequenceDraws, draws), newDecals = Doubled(next.sequenceDecals, decals);
 			const std::uint64_t slots = SequenceSlots(newDraws, newDecals);
@@ -881,26 +988,27 @@ namespace DCLF
 		}
 		if (next == base)
 			return;
-		growths.Change<MainSizing>(r, std::move(next), std::move(parts), [&r] {
+		// What a commit past the adopted ranges is checked against (draws waiting for this change, or a defect of the bound).
+		r.askedSequenceDraws.store(next.sequenceDraws, std::memory_order_release);
+		growths.Change<MainSizing>(r, producer.inputs.main, std::move(next), std::move(parts), [&r] {
 			if (r.sequencesD3D11)
 				r.sequencesD3D11 = WrapWords(*r.sequences->Get(), SequenceSlots(r.sequenceDraws, r.sequenceDecals) * sizeof(DrawSequence));
 		});
 	}
 
-	void IndirectDraws::Impl::ReserveShadowSequences(const SceneStore::Tables& a_tables, std::uint32_t a_slots, std::uint32_t a_first)
+	void IndirectDraws::Impl::ReserveShadowSequences(ShadowResources& a_shadow, const SceneStore::Tables& a_tables, std::uint32_t a_generation, std::uint32_t a_slots,
+		std::uint32_t a_first)
 	{
-		if (!shadow)
-			return;
 		(void)a_slots;
 		(void)a_first;
-		UpdateDrawBound(a_tables);
-		const std::uint32_t draws = drawBound.Draws();
+		UpdateDrawBound(a_tables, a_generation);
+		const std::uint32_t draws = producer.drawBound.Draws();
 		CheckSequenceLimits("a shadow view", draws, false);
 		// Every slot's sequences, one change (ShadowSizing::sequenceDraws), built on the one outstanding: adopted with the revision
 		// that names it. Until then a view's draws are its claims', which the sizing they were claimed by holds (the seal waits for
 		// the change): the scene bound is only what the shapes size ahead for (MakeShadowShape).
 		auto& growths = Growths::Get();
-		const ShadowSizing& base = growths.LatestSizing<ShadowSizing>(*shadow);
+		const ShadowSizing& base = growths.LatestSizing<ShadowSizing>(a_shadow);
 		if (draws <= base.sequenceDraws)
 			return;
 		// Twice the bound: a view's buckets each hold every draw their key slots can produce, grown by doubling (ShadowBucket).
@@ -908,11 +1016,13 @@ namespace DCLF
 		next.sequenceDraws = Doubled(base.sequenceDraws, draws);
 		const std::uint64_t bytes = std::uint64_t(kShadowClasses) * next.sequenceDraws * sizeof(DrawSequence);
 		std::vector<Growths::Part> parts;
-		for (auto& sequences : shadow->sequences)
-			parts.push_back({ sequences, static_cast<std::uint32_t>(bytes / 4) });
+		// Every slot the frame made, as it posted them (RevisionInputs::shadowSlots).
+		if (const auto& slotBuffers = producer.inputs.shadowSlots)
+			for (const auto& sequences : slotBuffers->sequences)
+				parts.push_back({ sequences, static_cast<std::uint32_t>(bytes / 4) });
 		logger::info("[DCLF] shadow sequences: {} draws a slot grown to {} ({} slots, {} KB each){}", base.sequenceDraws, next.sequenceDraws, parts.size(), bytes / 1024,
 			Growths::Deferred() ? ", as graph work" : "");
-		growths.Change<ShadowSizing>(*shadow, std::move(next), std::move(parts));
+		growths.Change<ShadowSizing>(a_shadow, producer.inputs.shadow, std::move(next), std::move(parts));
 	}
 
 	bool IndirectDraws::Impl::EnsureSceneBuffers(rhi::Device a_device)
@@ -1020,20 +1130,22 @@ namespace DCLF
 		return true;
 	}
 
-	void IndirectDraws::Impl::ReserveShadowLatch(std::uint32_t a_views, std::uint32_t a_keys, std::uint32_t a_rasterStates, std::uint32_t a_sunProcesses)
+	void IndirectDraws::Impl::ReserveShadowLatch(ShadowResources& a_shadow, std::uint32_t a_views, std::uint32_t a_keys, std::uint32_t a_rasterStates,
+		std::uint32_t a_sunProcesses)
 	{
 		auto* host = RenderGraphRuntime::Get().Host();
-		if (!shadow || !host)
+		auto& latches = producer.latches;
+		if (!host || !latches.shadow)
 			return;
-		auto& r = *shadow;
-		ShadowLatchLayout layout = r.latchLayout;
+		auto& r = a_shadow;
+		ShadowLatchLayout layout = latches.shadowLayout;
 		const std::uint32_t slots = kFirstShadowViewSlot + a_views;
 		const bool newSlots = slots > layout.viewSlots;
 		if (newSlots) {
-			// The slots' own buffers, made now (no revision names them before one names the view blocks below), and the latch.
+			// The slots' own buffers are the frame's to make (ShadowSlotsRequest, below: the passes declare them, so the graph is built
+			// again); the latch is this code's. No revision names them before one names the view blocks below.
 			layout.viewSlots = Doubled(layout.viewSlots, slots);
-			AddShadowViewSlots(r, layout.viewSlots);
-			logger::info("[DCLF] shadow view slots: {} grown to {}", r.latchLayout.viewSlots, layout.viewSlots);
+			logger::info("[DCLF] shadow view slots: {} grown to {}", latches.shadowLayout.viewSlots, layout.viewSlots);
 		}
 		// The view blocks for them, rewritten whole by every epoch that uses a slot (nothing to fill): one change (ShadowSizing::
 		// viewSlots), adopted with the revision that names it. Until then the frame's views past the slots stay the engine's.
@@ -1041,8 +1153,9 @@ namespace DCLF
 			ShadowSizing next = growths.LatestSizing<ShadowSizing>(r);
 			next.viewSlots = layout.viewSlots;
 			const std::uint64_t bytes = std::uint64_t(next.viewSlots) * kShadowViewSlotBytes;
-			logger::info("[DCLF] shadow view blocks: {} slots grown to {}{}", r.viewBlocks.capacity, next.viewSlots, Growths::Deferred() ? ", as graph work" : "");
-			growths.Change<ShadowSizing>(r, std::move(next), { { r.viewBlocks.buffer, 0, bytes } }, [&r, host, slots = layout.viewSlots] {
+			logger::info("[DCLF] shadow view blocks: {} slots grown to {}{}", growths.LatestSizing<ShadowSizing>(r).viewSlots, next.viewSlots,
+				Growths::Deferred() ? ", as graph work" : "");
+			growths.Change<ShadowSizing>(r, producer.inputs.shadow, std::move(next), { { r.viewBlocks.buffer, 0, bytes } }, [&r, host, slots = layout.viewSlots] {
 				r.viewBlocks.capacity = slots;
 				r.viewBlocks.address = AddressOf(host->GetDesc().device, *r.viewBlocks.buffer->Get());
 				++r.viewBlocks.generation;
@@ -1050,7 +1163,7 @@ namespace DCLF
 		}
 		if (a_keys > layout.keySlots) {
 			layout.keySlots = Doubled(layout.keySlots, a_keys);
-			logger::info("[DCLF] shadow key slots: {} grown to {}", r.latchLayout.keySlots, layout.keySlots);
+			logger::info("[DCLF] shadow key slots: {} grown to {}", latches.shadowLayout.keySlots, layout.keySlots);
 		}
 		// A word per bucket, and a view has at most a bucket per key slot: every slot's counts, one change (ShadowSizing), adopted
 		// with the revision that names it. Until then the shapes' buckets stay within the words there are (TrimmedRow).
@@ -1059,41 +1172,48 @@ namespace DCLF
 			ShadowSizing next = base;
 			next.bucketCountWords = layout.keySlots;
 			std::vector<Growths::Part> parts;
-			for (auto& counts : r.bucketCounts)
-				parts.push_back({ counts, next.bucketCountWords });
+			// Every slot the frame made, as it posted them (RevisionInputs::shadowSlots); one it makes for the request below is made at this size.
+			if (const auto& slotBuffers = producer.inputs.shadowSlots)
+				for (const auto& counts : slotBuffers->bucketCounts)
+					parts.push_back({ counts, next.bucketCountWords });
 			logger::info("[DCLF] shadow bucket counts: {} words a slot grown to {}{}", base.bucketCountWords, next.bucketCountWords,
 				Growths::Deferred() ? ", as graph work" : "");
-			growths.Change<ShadowSizing>(r, std::move(next), std::move(parts));
+			growths.Change<ShadowSizing>(r, producer.inputs.shadow, std::move(next), std::move(parts));
 		}
 		// The latched copies' zeros (ShadowLatchedCopiesPass): a view's draw count and its bucket counts, as many as asked for.
 		if (const std::uint32_t zeroBytes = std::max<std::uint32_t>(growths.LatestSizing<ShadowSizing>(r).bucketCountWords * 4, sizeof(kZeroCounts));
-			!r.zeros || r.zeros->Stride() < zeroBytes)
-			r.zeros = std::make_shared<org::LatchBlock>("cs.dclf.shadow.zeros", zeroBytes, 1);
+			!latches.shadowZeros || latches.shadowZeros->Stride() < zeroBytes)
+			latches.shadowZeros = org::LatchBlock::Create("cs.dclf.shadow.zeros", zeroBytes, 1);
 		if (a_rasterStates > layout.rasterStates) {
 			layout.rasterStates = Doubled(layout.rasterStates, a_rasterStates);
-			logger::info("[DCLF] shadow view rasterizer state rows: {} grown to {}", r.latchLayout.rasterStates, layout.rasterStates);
+			logger::info("[DCLF] shadow view rasterizer state rows: {} grown to {}", latches.shadowLayout.rasterStates, layout.rasterStates);
 		}
 		if (a_sunProcesses > layout.sunProcesses) {
 			layout.sunProcesses = Doubled(layout.sunProcesses, a_sunProcesses);
-			logger::info("[DCLF] sun full-frustum processes: {} grown to {}", r.latchLayout.sunProcesses, layout.sunProcesses);
+			logger::info("[DCLF] sun full-frustum processes: {} grown to {}", latches.shadowLayout.sunProcesses, layout.sunProcesses);
 		}
-		if (layout == r.latchLayout)
+		if (layout == latches.shadowLayout)
 			return;
-		r.latchLayout = layout;
+		latches.shadowLayout = layout;
 		// Every execution writes its frame slot's region whole (the views' latches, the map rows of their states, the sun's
-		// processes), and a block
-		// frames in flight still read stays alive in the frames they prepared.
-		r.latch = std::make_shared<org::LatchBlock>("cs.dclf.shadow.latch", layout.Bytes(), host->FrameSlots());
-		// The passes declare every slot's buffers: the graph is built again, with them, on this epoch.
-		if (newSlots)
-			host->AddExtension(kShadowExtensionId, [state = shadow] { return MakeShadowExtension(state); });
+		// processes), and a block frames in flight still read stays alive in the frames they prepared (their shapes hold it).
+		latches.shadow = org::LatchBlock::Create("cs.dclf.shadow.latch", layout.Bytes(), host->FrameSlots());
+		// The slots' buffers, at the sizing the changes above leave (the newest: a slot made now holds what it says once adopted),
+		// asked of the frame, which makes them and the graph's build that declares them (ServeRevisionRequests: an extension is
+		// the owner's). No revision is sealed until that build (AssembleRevision: the build asked for).
+		if (newSlots) {
+			const ShadowSizing& latest = growths.LatestSizing<ShadowSizing>(r);
+			shadowSlotsSlot.Post(std::make_unique<ShadowSlotsRequest>(ShadowSlotsRequest{ layout.viewSlots, latest.sequenceDraws, std::max(latest.bucketCountWords, 64u) }));
+			producer.buildWanted = producer.inputs.buildGeneration + 1;
+		}
 	}
 
-	void IndirectDraws::Impl::ReserveMainLatch(Resources& a_resources, std::uint32_t a_cascades, std::uint32_t a_shadowVolumes, std::uint32_t a_buckets)
+	void IndirectDraws::Impl::ReserveMainLatch(std::uint32_t a_cascades, std::uint32_t a_shadowVolumes, std::uint32_t a_buckets)
 	{
 		auto* host = RenderGraphRuntime::Get().Host();
-		auto& layout = a_resources.latchLayout;
-		if (!host || (a_cascades <= layout.cascades && a_shadowVolumes <= layout.shadowVolumes && a_buckets <= layout.buckets))
+		auto& latches = producer.latches;
+		auto& layout = latches.mainLayout;
+		if (!host || !latches.main || (a_cascades <= layout.cascades && a_shadowVolumes <= layout.shadowVolumes && a_buckets <= layout.buckets))
 			return;
 		if (a_buckets > layout.buckets) {
 			const std::uint32_t grown = Doubled(std::max(layout.buckets, 64u), a_buckets);
@@ -1111,15 +1231,15 @@ namespace DCLF
 			layout.shadowVolumes = grown;
 		}
 		// Every execution writes its frame slot's region whole; the frames in flight keep the old block (PassFrame::latch).
-		a_resources.latch = std::make_shared<org::LatchBlock>("cs.dclf.latch", a_resources.latchLayout.Bytes(), host->FrameSlots());
+		latches.main = org::LatchBlock::Create("cs.dclf.latch", layout.Bytes(), host->FrameSlots());
 	}
 
-	void IndirectDraws::Impl::ReserveSceneTables(const SceneStore::Tables& a_tables)
+	void IndirectDraws::Impl::ReserveSceneTables(SceneBuffers& a_scene, const SceneStore::Tables& a_tables)
 	{
 		auto* host = RenderGraphRuntime::Get().Host();
-		if (!scene || !host)
+		if (!host)
 			return;
-		auto& s = *scene;
+		auto& s = a_scene;
 		const auto device = host->GetDesc().device;
 		// One change of the scene's sizing and the buffers that grow with it (Growths::Change: adopted with the revision that names
 		// it, at once without revisions), built on the change in flight if there is one. Doubling, so a scene filling up grows a
@@ -1206,7 +1326,7 @@ namespace DCLF
 		}
 		// The portal programs, to the most a frame's encoding holds (the next frame's, if this one's outgrew them).
 		if (s.portalPrograms) {
-			grow("portal programs", next.portalWords, PortalViews::Get().Encoded().size(), sizeof(std::uint32_t),
+			grow("portal programs", next.portalWords, producer.inputs.portalWords, sizeof(std::uint32_t),
 				[&](std::uint32_t a_words, auto& a_parts) { a_parts.push_back({ s.portalPrograms, a_words }); }, [&s] { s.portalProgramsSent.clear(); });
 		}
 		// The write-back's event list, to the most a frame appended past it; each slot's host buffer follows at its next recording.
@@ -1221,8 +1341,9 @@ namespace DCLF
 		}
 		// Tree LOD's tables, by the mirror's shape and mesh slots. A new backing holds nothing: every slot and mesh again.
 		if (s.treeLodCull) {
+			// The mirror's slots as the frame posted them; its MarkAllChanged is the adoption's (the frame's).
 			auto& mirror = SceneStore::Get().TreeLodMirror();
-			grow("tree LOD shape slots", next.treeLodShapeCapacity, mirror.ShapeSlots(), sizeof(TreeLod::ShapeRow) + TreeLod::kMaxGroupInstances * (sizeof(TreeLod::Instance) + 4),
+			grow("tree LOD shape slots", next.treeLodShapeCapacity, producer.inputs.treeLodShapeSlots, sizeof(TreeLod::ShapeRow) + TreeLod::kMaxGroupInstances * (sizeof(TreeLod::Instance) + 4),
 				[&](std::uint32_t a_rows, auto& a_parts) {
 					a_parts.push_back({ s.treeLodShapes, TreeLodShapeWords(a_rows) });
 					a_parts.push_back({ s.treeLodInstances, TreeLodInstanceWords(a_rows) });
@@ -1234,7 +1355,7 @@ namespace DCLF
 					s.treeLodVisibleAddress = AddressOf(device, *s.treeLodVisible->Get());
 					mirror.MarkAllChanged();
 				});
-			grow("tree LOD mesh slots", next.treeLodMeshCapacity, mirror.MeshSlots(), sizeof(TreeLod::MeshRow),
+			grow("tree LOD mesh slots", next.treeLodMeshCapacity, producer.inputs.treeLodMeshSlots, sizeof(TreeLod::MeshRow),
 				[&](std::uint32_t a_rows, auto& a_parts) { a_parts.push_back({ s.treeLodMeshes, TreeLodMeshWords(a_rows) }); },
 				[&s, &mirror, device] {
 					s.treeLodMeshesAddress = AddressOf(device, *s.treeLodMeshes->Get());
@@ -1248,7 +1369,7 @@ namespace DCLF
 				s.faceUploaded.clear();  // every region again
 			});
 		if (!(next == base))
-			growths.Change<SceneSizing>(s, next, std::move(parts), [&s, consequences = std::move(consequences)] {
+			growths.Change<SceneSizing>(s, producer.inputs.scene, next, std::move(parts), [&s, consequences = std::move(consequences)] {
 				for (const auto& consequence : consequences)
 					consequence();
 				++s.generation;
@@ -1259,14 +1380,16 @@ namespace DCLF
 
 	void IndirectDraws::Impl::ReserveObjectBuffers()
 	{
-		if (!scene)
+		// The revision code's: its inputs' resources.
+		const auto& inputs = producer.inputs;
+		if (!inputs.scene)
 			return;
 		// The scene's objects as its newest change has them: the per-object buffers change with it.
 		auto& growths = Growths::Get();
-		const std::uint32_t objects = growths.LatestSizing<SceneSizing>(*scene).objectCapacity;
+		const std::uint32_t objects = growths.LatestSizing<SceneSizing>(*inputs.scene).objectCapacity;
 		const auto inputWords = [&] { return static_cast<std::uint32_t>(std::uint64_t(objects) * sizeof(DrawInput) / 4); };
-		if (resources) {
-			auto& r = *resources;
+		if (inputs.main) {
+			auto& r = *inputs.main;
 			const MainSizing& base = growths.LatestSizing<MainSizing>(r);
 			if (base.objectCapacity < objects) {
 				MainSizing next = base;
@@ -1276,7 +1399,7 @@ namespace DCLF
 					parts.push_back({ r.frustum, objects });
 				if (r.inputsDepth)
 					parts.push_back({ r.inputsDepth, inputWords() });
-				growths.Change<MainSizing>(r, std::move(next), std::move(parts), [&r] {
+				growths.Change<MainSizing>(r, inputs.main, std::move(next), std::move(parts), [&r] {
 					r.residentUploaded = {};  // the new input buffers hold no region
 					if (r.visibilityD3D11)
 						r.visibilityD3D11 = WrapWords(*r.visibility->Get(), std::uint64_t(r.objectCapacity) * sizeof(std::uint32_t));
@@ -1285,8 +1408,8 @@ namespace DCLF
 				});
 			}
 		}
-		if (shadow) {
-			auto& r = *shadow;
+		if (inputs.shadow) {
+			auto& r = *inputs.shadow;
 			const ShadowSizing& base = growths.LatestSizing<ShadowSizing>(r);
 			if (base.objectCapacity < objects) {
 				ShadowSizing next = base;
@@ -1294,7 +1417,7 @@ namespace DCLF
 				std::vector<Growths::Part> parts{ { r.visibility, objects } };
 				parts.push_back({ r.inputs, inputWords() });
 				// The new input buffers hold none of the kept state's inputs.
-				growths.Change<ShadowSizing>(r, std::move(next), std::move(parts), [&r] { r.inputsUploaded = {}; });
+				growths.Change<ShadowSizing>(r, inputs.shadow, std::move(next), std::move(parts), [&r] { r.inputsUploaded = {}; });
 			}
 		}
 	}
@@ -1325,13 +1448,15 @@ namespace DCLF
 			return ShadowNotReady(2, "no device address for the face positions");
 		}
 		state->scene = scene;
-		// CS_DCLF_TABLE_START=small: room for Skylighting's map and one view, and a few key slots.
+		// The first view slots' buffers, as many as the shadow latch's first layout names (the latch itself is the revision producer's:
+		// RevisionLatches::shadow, made at that layout).
 		const bool smallSlots = SwitchValue(Switch::TableStart) == "small";
-		state->latchLayout = { smallSlots ? 2u : kInitialShadowViewSlots, smallSlots ? 16u : kInitialShadowKeySlots, smallSlots ? 1u : kInitialShadowRasterStates,
-			smallSlots ? 1u : kInitialSunProcesses };
-		AddShadowViewSlots(*state, state->latchLayout.viewSlots);
-		state->viewSlots = state->latchLayout.viewSlots;
-		if (!state->viewBlocks.Create(static_cast<std::uint32_t>(kShadowViewSlotBytes), state->latchLayout.viewSlots, "cs.dclf.shadow.view-blocks")) {
+		const auto firstLayout = InitialShadowLatchLayout();
+		state->sequenceDraws = 64u;
+		state->bucketCountWords = 64u;
+		AddShadowViewSlots(*state, firstLayout.viewSlots, state->sequenceDraws, state->bucketCountWords);
+		state->viewSlots = firstLayout.viewSlots;
+		if (!state->viewBlocks.Create(static_cast<std::uint32_t>(kShadowViewSlotBytes), firstLayout.viewSlots, "cs.dclf.shadow.view-blocks")) {
 			shadowSetupFailed = true;
 			return ShadowNotReady(2, "no device address for the shadow view blocks");
 		}
@@ -1354,7 +1479,6 @@ namespace DCLF
 			shadowSetupFailed = true;
 			return ShadowNotReady(1, "the index pool's copy program could not be created");
 		}
-		state->latch = std::make_shared<org::LatchBlock>("cs.dclf.shadow.latch", state->latchLayout.Bytes(), host->FrameSlots());
 		state->constantsAddress = AddressOf(device, *state->constants);
 		if (!state->constantsAddress) {
 			shadowSetupFailed = true;
@@ -1363,7 +1487,20 @@ namespace DCLF
 		shadow = state;
 		host->AddExtension(kShadowExtensionId, [state] { return MakeShadowExtension(state); });
 		logger::info("[DCLF] shadow view graph resources created");
+		PostRevisionInputs();
 		return true;
+	}
+
+	void IndirectDraws::Impl::ServeRevisionRequests()
+	{
+		// Shadow view slots the revision code asked for: their buffers made here (render thread), at the sizes asked, and the graph built
+		// again with them at the build point (an extension is the owner's); the revision code waits for that build.
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (const auto request = shadowSlotsSlot.Take(); request && host && shadow && request->slots > shadow->sequences.size()) {
+			AddShadowViewSlots(*shadow, request->slots, request->sequenceDraws, request->bucketCountWords);
+			host->AddExtension(kShadowExtensionId, [state = shadow] { return MakeShadowExtension(state); });
+			PostRevisionInputs();
+		}
 	}
 
 	bool IndirectDraws::Impl::SetupReflection()
@@ -1388,10 +1525,10 @@ namespace DCLF
 			return false;
 		}
 		state->count = CreateWords(kCountWords, true, "cs.dclf.reflection.draw-count");
-		// Made at the size the main sizing's newest change plans for (ReserveReflection grows them after): a growth of the main
-		// sizing already adopted - or in flight - finds the faces' buffers holding its plan.
+		// Made at the size the main sizing adopted plans for (the frame's: a growth in flight is the revision code's, whose
+		// ReserveReflection grows them for it before any revision names them).
 		ReflectionPlan plan;
-		PlanReflectionBuckets(Growths::Get().LatestSizing<MainSizing>(*resources), r.slotPipelines, plan);
+		PlanReflectionBuckets(*resources, r.slotPipelines, plan);
 		state->bucketCountWords = Doubled(16u, static_cast<std::uint32_t>(plan.buckets.size()));
 		for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
 			state->bucketCounts[f] = MakeVersioned(CreateWords(state->bucketCountWords, true, fmt::format("cs.dclf.reflection.bucket-counts{}", f).c_str()));
@@ -1400,43 +1537,49 @@ namespace DCLF
 		}
 		state->sequenceDraws = Doubled(64u, plan.draws);
 		state->sequences = MakeVersioned(CreateWords(std::uint64_t(kReflectionFaces) * state->sequenceDraws * sizeof(DrawSequence) / 4, true, "cs.dclf.reflection.sequences"));
+		// The faces' tree LOD lists, for the scene's shape slots as adopted, made here with the rest (the passes the cube's import
+		// declares bind them); their growth to a change of the scene's in flight is the revision code's (ReserveReflection).
+		if (scene->treeLodCull) {
+			state->treeShapeCapacity = scene->treeLodShapeCapacity;
+			const std::uint32_t words = TreeLod::kVisibleHeaderWords + state->treeShapeCapacity * TreeLod::kMaxGroupInstances;
+			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
+				state->treeVisible[f] = MakeVersioned(CreateWords(words, true, fmt::format("cs.dclf.reflection.tree-visible{}", f).c_str()));
+				state->treeVisibleAddress[f] = AddressOf(device, *state->treeVisible[f]->Get());
+			}
+		}
 		state->faceBlocks = DeviceBuffer(std::uint64_t(kReflectionFaces) * kReflectionFaceBlockBytes, "cs.dclf.reflection.face-blocks");
 		state->faceBlocksAddress = AddressOf(device, *state->faceBlocks);
-		state->latchLayout = { 64, 4 };
-		state->latch = std::make_shared<org::LatchBlock>("cs.dclf.reflection.latch", state->latchLayout.Bytes(), host->FrameSlots());
 		if (!state->faceBlocksAddress || std::any_of(state->treeRowsAddress.begin(), state->treeRowsAddress.end(), [](std::uint64_t a) { return !a; })) {
 			r.setupFailed = true;
 			logger::warn("[DCLF] The reflection faces' buffers have no device address; the faces stay native");
 			return false;
 		}
 		r.resources = std::move(state);
-		ReserveReflection(0, 0, 0);
+		// Its latch and zeros are the revision code's (ReserveReflection, at the next make: none of its shapes before it).
 		logger::info("[DCLF] reflection face graph resources created");
+		PostRevisionInputs();
 		return true;
 	}
 
-	void IndirectDraws::Impl::ReserveReflection(std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws, bool a_epoch)
+	void IndirectDraws::Impl::ReserveReflection(ReflectionResources& a_faces, SceneBuffers* a_scene, std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws)
 	{
 		auto* host = RenderGraphRuntime::Get().Host();
-		if (!reflection.resources || !host)
+		auto& latches = producer.latches;
+		if (!host || !latches.reflection)
 			return;
-		auto& r = *reflection.resources;
+		auto& r = a_faces;
 		auto device = host->GetDesc().device;
-		bool rebuild = false;
-		// The main pass's resources the faces draw from: recreated, the passes bind the new ones.
-		if (r.main != resources) {
-			r.main = resources;
-			rebuild = true;
-		}
-		ReflectionLatchLayout layout = r.latchLayout;
+		// The main pass's resources the faces draw from are the frame's to set (Setup), and their first tree lists (SetupReflection);
+		// the latch is this code's.
+		ReflectionLatchLayout layout = latches.reflectionLayout;
 		if (a_slots > layout.slots)
 			layout.slots = Doubled(layout.slots, a_slots);
 		if (a_buckets > layout.buckets)
 			layout.buckets = Doubled(layout.buckets, a_buckets);
-		if (!(layout == r.latchLayout)) {
+		if (!(layout == latches.reflectionLayout)) {
 			// A new block: a frame in flight keeps reading its own (ReflectionFrame::latch).
-			r.latchLayout = layout;
-			r.latch = std::make_shared<org::LatchBlock>("cs.dclf.reflection.latch", layout.Bytes(), host->FrameSlots());
+			latches.reflectionLayout = layout;
+			latches.reflection = org::LatchBlock::Create("cs.dclf.reflection.latch", layout.Bytes(), host->FrameSlots());
 			logger::info("[DCLF] reflection latch: {} pipeline slots, {} buckets", layout.slots, layout.buckets);
 		}
 		// The buffers: one change of the reflection's sizing (ReflectionSizing), built on the one outstanding, adopted with the revision
@@ -1452,44 +1595,34 @@ namespace DCLF
 				parts.push_back({ counts, next.bucketCountWords });
 		}
 		// The latched copies' zeros: the draw count and a face's bucket counts, as many as asked for.
-		if (const std::uint32_t zeroBytes = std::max<std::uint32_t>(next.bucketCountWords * 4, sizeof(kZeroCounts)); !r.zeros || r.zeros->Stride() < zeroBytes)
-			r.zeros = std::make_shared<org::LatchBlock>("cs.dclf.reflection.zeros", zeroBytes, 1);
+		if (const std::uint32_t zeroBytes = std::max<std::uint32_t>(next.bucketCountWords * 4, sizeof(kZeroCounts));
+			!latches.reflectionZeros || latches.reflectionZeros->Stride() < zeroBytes)
+			latches.reflectionZeros = org::LatchBlock::Create("cs.dclf.reflection.zeros", zeroBytes, 1);
 		if (a_draws > next.sequenceDraws) {
 			next.sequenceDraws = Doubled(next.sequenceDraws, a_draws);
 			parts.push_back({ r.sequences, static_cast<std::uint32_t>(std::uint64_t(kReflectionFaces) * next.sequenceDraws * sizeof(DrawSequence) / 4) });
 			logger::info("[DCLF] reflection sequences: {} draws a face{}", next.sequenceDraws, Growths::Deferred() ? ", as graph work" : "");
 		}
 		// The faces' tree LOD lists hold every record of the scene's shape slots (the cull's phase 1 alone: no retest list), as the
-		// scene's newest change has them. A face's first list is made now: no revision names it before one names this change.
-		if (scene && scene->treeLodCull) {
-			if (const std::uint32_t shapes = growths.LatestSizing<SceneSizing>(*scene).treeLodShapeCapacity; next.treeShapeCapacity != shapes) {
+		// scene's newest change has them: grown with it (their first ones are the frame's, SetupReflection).
+		if (a_scene && a_scene->treeLodCull && r.treeVisible[0]) {
+			if (const std::uint32_t shapes = growths.LatestSizing<SceneSizing>(*a_scene).treeLodShapeCapacity; next.treeShapeCapacity != shapes) {
 				const std::uint32_t words = TreeLod::kVisibleHeaderWords + shapes * TreeLod::kMaxGroupInstances;
-				for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
+				for (std::uint32_t f = 0; f < kReflectionFaces; ++f)
 					if (r.treeVisible[f])
 						parts.push_back({ r.treeVisible[f], words });
-					else {
-						r.treeVisible[f] = MakeVersioned(CreateWords(words, true, fmt::format("cs.dclf.reflection.tree-visible{}", f).c_str()));
-						r.treeVisibleAddress[f] = AddressOf(device, *r.treeVisible[f]->Get());
-						rebuild = true;
-					}
-				}
 				next.treeShapeCapacity = shapes;
 				newTrees = true;
 			}
 		}
 		if (!(next == base))
-			growths.Change<ReflectionSizing>(r, std::move(next), std::move(parts), [&r, device, newTrees] {
+			growths.Change<ReflectionSizing>(r, producer.inputs.reflection, std::move(next), std::move(parts), [&r, device, newTrees] {
 				for (std::uint32_t f = 0; f < kReflectionFaces; ++f)
 					if (r.treeVisible[f])
 						r.treeVisibleAddress[f] = AddressOf(device, *r.treeVisible[f]->Get());
 				// The tree passes are declared for the lists the faces have: built again with them (ReserveReflection, the epoch's).
 				r.rebuildPending = r.rebuildPending || newTrees;
 			});
-		r.rebuildPending = r.rebuildPending || rebuild;
-		if (a_epoch && r.rebuildPending && r.cube) {
-			r.rebuildPending = false;
-			host->AddExtension(kReflectionExtensionId, [state = reflection.resources] { return MakeReflectionExtension(state); });
-		}
 	}
 
 	bool IndirectDraws::Impl::ImportReflectionCube(ID3D11Texture2D* a_texture)
@@ -1530,6 +1663,8 @@ namespace DCLF
 		r.height = info.image.extent.height;
 		host->AddExtension(kReflectionExtensionId, [state = reflection.resources] { return MakeReflectionExtension(state); });
 		logger::info("[DCLF] reflection cube imported: {}x{}, {} faces, format {}", r.width, r.height, info.image.arrayLayers, static_cast<int>(reflection.targets.colour));
+		// A revision input: the faces' size.
+		PostRevisionInputs();
 		return true;
 	}
 

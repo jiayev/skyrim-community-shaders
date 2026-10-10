@@ -55,20 +55,13 @@ namespace DCLF
 		fadeRootMembers.Clear();
 		tables.Clear();
 		ClearFaceRegions();
-		// Drop material binding owners on world/device reset without permitting
-		// an old worker snapshot to match a newly empty lookup generation.
-		// The lookups are the frame's (step 6c): the scene work posts the reset for the next frame's start.
-		if (inSceneTask) {
-			lookupsResetPending = true;
-		} else {
-			const auto lookupGeneration = lookups.generation;
-			const auto shadowGeneration = lookups.shadowGeneration;
-			const auto lookupVersion = lookups.versionCounter;
-			lookups = Lookups{};
-			lookups.generation = lookupGeneration + 1;
-			lookups.shadowGeneration = shadowGeneration + 1;
-			lookups.versionCounter = lookupVersion;
-		}
+		// The scene work's material and shared bindings (T6b2c) with the tables they were made for, and the lookups they are written into.
+		ResetMaterialBindings();
+		ResetSharedBindings();
+		// Drop material binding owners on world/device reset without permitting an old worker snapshot to match a newly empty lookup
+		// generation. The lookups are the scene lane's (T6b2c step 5): made new here, whichever thread runs the coordinator's work; the
+		// frame keeps the installed publication's until a newer one is installed.
+		ResetLookups();
 		for (auto& [geometry, entry] : tracked) {
 			entry.slot = kNoObjectSlot;
 			entry.layerSlot = kNoObjectSlot;
@@ -77,6 +70,8 @@ namespace DCLF
 		pipelineIndex.clear();
 		materialIndex.clear();
 		materialDependents.clear();
+		// The scene work's record upkeep (T6b2c step 7) named the cleared slots.
+		ResetMaterialRecords();
 		materialOwners.clear();
 		bindQueue.clear();
 		membershipWitness = ~0u;
@@ -121,7 +116,7 @@ namespace DCLF
 					o, geometry && geometry->name.c_str() ? geometry->name.c_str() : "?", what,
 					object.geometryIndex, object.geometryIndex < tables.geometryLastUsed.size() ? tables.geometryLastUsed[object.geometryIndex] : ~0u,
 					object.pipelineIndex, tables.PipelineUsed(object.pipelineIndex), object.materialIndex, tables.MaterialUsed(object.materialIndex),
-					IsResidentSlot(static_cast<std::uint32_t>(o)), frame);
+					IsResidentSlot(static_cast<std::uint32_t>(o)), sceneFrame);
 			}
 			// Neutralised: nothing downstream may draw from slots no member holds. Its record is no
 			// longer the scene phase's, so the next delta walk writes it again.
@@ -164,7 +159,7 @@ namespace DCLF
 		}
 		if (a_resolveBuffers) {
 			for (std::uint32_t slot = 0; slot < tables.geometries.size(); ++slot) {
-				if (tables.geometryLastUsed[slot] != frame || tables.geometryLayerKey[slot])
+				if (tables.geometryLastUsed[slot] != sceneFrame || tables.geometryLayerKey[slot])
 					continue;
 				++geometriesProbed;
 				const auto& record = tables.geometries[slot];
@@ -183,9 +178,9 @@ namespace DCLF
 						triShape ? static_cast<const void*>(triShape->vertexBuffer) : nullptr, triShape ? static_cast<const void*>(triShape->indexBuffer) : nullptr);
 			}
 		}
-		if (materialDiffers || geometryDiffers || frame < 12) {
+		if (materialDiffers || geometryDiffers || sceneFrame < 12) {
 			++logged;
-			logger::info("[DCLF] slot probe frame {}: {} of {} used materials differ, {} of {} used geometries differ{}{}", frame, materialDiffers, materialsProbed,
+			logger::info("[DCLF] slot probe frame {}: {} of {} used materials differ, {} of {} used geometries differ{}{}", sceneFrame, materialDiffers, materialsProbed,
 				geometryDiffers, geometriesProbed, first.empty() ? "" : "; first: ", first);
 		}
 	}
@@ -309,7 +304,7 @@ namespace DCLF
 						if (logged++ < 10)
 							logger::error("[DCLF] material slot {} drained while object {} '{}' (flags {:#x}, member {}) is bound to it, frame {}", a_slot, o,
 								tables.objectGeometry[o] && tables.objectGeometry[o]->name.c_str() ? tables.objectGeometry[o]->name.c_str() : "", tables.objects[o].flags,
-								IsResidentSlot(o), frame);
+								IsResidentSlot(o), sceneFrame);
 					}
 			ClearMaterialSlot(a_slot);
 			++stats.materialCacheEvicted;

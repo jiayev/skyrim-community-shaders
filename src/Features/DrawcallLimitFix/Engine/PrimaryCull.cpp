@@ -448,9 +448,10 @@ namespace DCLF
 		auto& store = SceneStore::Get();
 		// A geometry that joins the set is no longer main-registered, so nothing would read and clear the bits a shadow light
 		// wrote into its mask while it was the engine's: cleared once here, and kept 0 from now on by SunAccumulation
-		// (ClearOwnedMask). Only tracked ones are touched, so they are alive.
+		// (ClearOwnedMask). Only those the installed publication claims are touched (T6b3a: held by it, so alive; the coordinator's
+		// tracked set is not the frame's to read).
 		for (const auto* geometry : a_joined)
-			if (store.IsTracked(geometry))
+			if (store.HeldByInstalled(geometry))
 				if (const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get())
 					if (void* lightData = At<void*>(property, kPropertyLightData))
 						At<std::uint32_t>(lightData, kLightDataActiveMask) = 0;
@@ -1269,6 +1270,13 @@ namespace DCLF
 				logger::info("[DCLF] scene membership: {:.0f} objects bound a frame ({} frames); {} records queued, {} joined, {} failed ({} the engine's pass, {} no record, {} a frame verdict, {} material or extras; {} waited for a material record, {} served, {} stale), {} rewritten ({} kept their binding), {} released, {} layers or bases unpaired; {} registrations of eligible objects not bound{}{}",
 					r.resident / rf, r.frames, r.membershipQueued, r.joined, r.failed, r.failedBy[0], r.failedBy[1], r.failedBy[2], r.failedBy[3], r.materialWaits, r.materialsServed, r.materialsStale, r.rewritten, r.membershipKept, r.released,
 					r.layerUnpaired, r.registeredUnbound, r.registeredUnboundFirst.empty() ? "" : ", first ", r.registeredUnboundFirst);
+				// The capture drain is an observer (T6b2c step 8): the registrations above are counted only on the frames it observed.
+				if (r.registrationFrames)
+					logger::info("[DCLF] registration parity (the capture drain, an observer): {} frames observed, {} main-camera registrations checked, {} of eligible objects DCLF has not bound, {} Lighting passes of another shader{}",
+						r.registrationFrames, r.registrationsChecked, r.registeredUnbound, r.lightingShaderDiffers,
+						r.lightingShaderDiffers ? " <- LIGHTING SHADER" : (r.registeredUnbound ? "" : " <- OK"));
+				else
+					logger::info("[DCLF] registration parity: not observed (CS_DCLF_PERSISTENT_PARITY off); the normal path reads no registration");
 				if (r.parityChecks)
 					logger::info("[DCLF] resident parity: {} checks, {} records compared, {} passes differ, {} records differ ({} not compared: the root fading, leaving at the next decode){}",
 						r.parityChecks, r.parityChecked, r.parityPass, r.parityRecord, r.parityPending, r.parityPass || r.parityRecord ? " <- RESIDENT PARITY" : " <- OK");

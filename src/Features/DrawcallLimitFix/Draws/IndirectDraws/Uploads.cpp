@@ -110,7 +110,7 @@ namespace DCLF
 			return streamViews;
 		if (!resources || !resources->scene || tables.objects.empty())
 			return nullptr;
-		if (store.SceneTaskInFlight() || aheadDone.load(std::memory_order_acquire) < aheadKicked) {
+		if (store.SceneTaskInFlight() || aheadDone.load(std::memory_order_acquire) < aheadKicked.load(std::memory_order_acquire)) {
 			++streamsRefused;
 			return nullptr;
 		}
@@ -147,7 +147,7 @@ namespace DCLF
 		const ExtrasOut& extras = views->extras;
 		sent.extraRows = extras.Rows();
 		ExtrasStore* extrasParity = PersistentParityEnabled() ? &extrasStore : nullptr;
-		sent.extraRowsSent = EmitExtras(extras, a_scene.held.extras, extrasParity, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+		sent.extraRowsSent = EmitExtras(extras, a_scene.held.extras, extrasParity ? &extrasParity->uploaded : nullptr, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 			a_uploads(a_scene.extras, a_data, a_bytes, a_offset);
 		}, a_scene.extraRows);
 		if (extrasParity && ParityDue(a_frame) && extras.Rows() <= a_scene.extraRows)
@@ -527,8 +527,8 @@ namespace DCLF
 			if (a_payload.pipelineRows.Count() <= a_resources->pipelineRows.capacity)
 				a_resources->pipelineRowsHeld = a_payload.pipelineRows.Version();
 		}
-		committedMaterialRows = a_payload.materialRows;
-		committedPipelineRows = a_payload.pipelineRows;
+		// What a deferred growth of the rows' tables is filled with: posted for the revision code (it reads its copy, never this commit's).
+		committedRowsSlot.Post(std::make_unique<CommittedRows>(CommittedRows{ a_payload.materialRows, a_payload.pipelineRows }));
 		// The upload sent the resident region when the buffer held another version of it, and the object records.
 		if (!ring)
 			a_resources->residentUploaded[depthOnly && a_resources->inputsDepth ? 0 : 1] = a_payload.resident.Version();
@@ -597,7 +597,7 @@ namespace DCLF
 		// them is a defect of that bound, never a draw to drop - unless their growth is outstanding (Growths), when the draws past
 		// them wait for it (BuildDrawsCS drops a slot past its range).
 		if (drawCount > a_resources->sequenceDraws) {
-			if (drawCount > Growths::Get().LatestSizing<MainSizing>(*a_resources).sequenceDraws)
+			if (drawCount > a_resources->askedSequenceDraws.load(std::memory_order_acquire))
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} draws past the sequence buffer's {} (the scene's draw bound missed them)", drawCount, a_resources->sequenceDraws));
 			a_stats.drawsWaiting += drawCount - a_resources->sequenceDraws;
 		}
@@ -846,7 +846,7 @@ namespace DCLF
 		using R = SceneRevisions;
 		const bool depthOnly = a_epoch == kDepthShape;
 		const auto& tables = a_store.GetTables();
-		const auto indirect = GetIndirectState();
+		const auto indirect = FrameIndirectState();
 		// The commit's own shape, as its frame's inputs make it (MakeMainShape), for the shape parity.
 		ZBucketPlan plan;
 		if (depthOnly && a_resources->pool)
@@ -856,7 +856,11 @@ namespace DCLF
 			blockSizes.vs[slot] = static_cast<std::uint32_t>(a_blocks.vs[slot].size());
 			blockSizes.ps[slot] = static_cast<std::uint32_t>(a_blocks.ps[slot].size());
 		}
-		auto in = MainShapeInputsOf(*a_resources, depthOnly);
+		auto in = MainShapeInputsOf(*a_resources, depthOnly, ActiveToggles().cullMode);
+		in.probe = SwitchValue(Switch::GBufferProbe);
+		// The latch and the latched copies' block are the revision's shape's (the producer's): no commit has one of its own.
+		in.latch = a_shape.latch;
+		in.latchLayout = a_shape.latchLayout;
 		const bool mainRange = mainMaxDepth > 0.0f;
 		const MainViewport viewport{ a_capture.viewportWidth, a_capture.viewportHeight, mainRange ? mainMinDepth : a_capture.minDepth,
 			mainRange ? mainMaxDepth : a_capture.maxDepth };
@@ -868,7 +872,7 @@ namespace DCLF
 		in.zPlan = std::make_shared<const ZBucketPlan>(plan);
 		in.latched.copies = MainLatchedLayout(*a_resources, depthOnly, blockSizes, plan.Buckets());
 		if (!in.latched.copies.empty())
-			in.latched.latch = a_resources->latchedBlocks[a_epoch];
+			in.latched.latch = a_shape.latched.latch;
 		NoteShapeParity(a_epoch, *MakeMainShape(in), in.latched.copies, a_store.GetFrame());
 		// What the revision's shape must hold for the frame (what a commit would have checked before writing into it).
 		const auto& active = revisions.active;
@@ -885,7 +889,7 @@ namespace DCLF
 		else if (!a_shape.latch)
 			miss = R::kNoRecording;
 		else if (!indirect.valid || !a_shape.indirect.valid || !SameHandle(a_shape.indirect.layout, indirect.layout) || !SameHandle(a_shape.resourceHeap, in.resourceHeap) ||
-				 !SameHandle(a_shape.samplerHeap, in.samplerHeap) || (a_shape.indirect.version != indirect.version && !RevisionHoldsClaims()))
+				 !SameHandle(a_shape.samplerHeap, in.samplerHeap) || a_shape.indirect.version != indirect.version)
 			miss = R::kPipelines;
 		else if (!(MainViewport{ a_shape.width, a_shape.height, a_shape.minDepth, a_shape.maxDepth } == viewport)) {
 			miss = R::kViewport;
@@ -928,16 +932,24 @@ namespace DCLF
 		auto* buffers = impl->scene.get();
 		// A frame without claims (SceneStore::WithdrawSet) is the engine's whole: its tree LOD too.
 		if (buffers && buffers->treeLodCull && ActiveToggles().lodTrees && SceneStore::Get().TreeLodMirror().Size() && !SceneStore::Get().SetWithdrawn()) {
-			auto* shader = Engine::Global<RE::BSShader*>(0x33dcd10);  // the BSDistantTreeShader
-			const auto* program = shader ? ShaderPrograms::Get().FindTreeLod(*shader) : nullptr;
+			// Its programs and pipelines are the pipeline lane's (T6b2c step 9): asked for once, with the DistantTree shader as a frame
+			// input, and read from the frame's catalog. Until that catalog has them, the engine draws tree LOD.
+			auto& drawPipelines = DrawPipelines::Get();
+			if (auto* shader = Engine::Global<RE::BSShader*>(0x33dcd10)) {  // the BSDistantTreeShader
+				drawPipelines.SetTreeLodInputs(*shader);
+				drawPipelines.RequestTreeLod();
+			}
+			const auto* catalog = FrameCatalog();
 			const auto* texture = Engine::Global<RE::NiSourceTexture*>(0x33dcd18);  // its tree LOD atlas (UploadTreeLod)
 			TreeLodPipelines pipelines;
-			if (program && DrawPipelines::Get().FindTreeLod(*program, pipelines) && texture && texture->rendererTexture && texture->rendererTexture->resourceView) {
+			const bool built = TreeLodPipelinesOf(catalog, pipelines);
+			if (built && texture && texture->rendererTexture && texture->rendererTexture->resourceView) {
 				const auto published = buffers->treeLodPipelines.load(std::memory_order_acquire);
 				if (!published || !SameHandle(published->depth, pipelines.depth) || !SameHandle(published->colour, pipelines.colour))
 					buffers->treeLodPipelines.store(std::make_shared<const TreeLodPipelines>(pipelines), std::memory_order_release);
 				owned = true;
 			}
+			drawPipelines.NoteFrameWaits(!built && !(catalog && catalog->treeLod.failed), false);
 		}
 		impl->treeLodOwned = owned;
 		PassCapture::Get().SetTreeLodOwned(owned);

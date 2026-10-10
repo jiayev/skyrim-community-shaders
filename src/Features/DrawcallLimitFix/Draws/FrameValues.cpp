@@ -596,7 +596,7 @@ namespace DCLF
 		return runtime.Host() && runtime.FrameWaitTimeline();
 	}
 
-	bool FrameValues::Kick(std::shared_ptr<const SceneStore::PlacementPlan> a_plan, std::vector<SceneStore::ShadingItem> a_shading,
+	bool FrameValues::Kick(std::vector<std::shared_ptr<const SceneStore::PlacementPlan>> a_plans, std::vector<SceneStore::ShadingItem> a_shading,
 		std::vector<SceneStore::WetnessValue> a_wetness, std::vector<SceneStore::FadeSeedItem> a_seeds, std::vector<SceneStore::TreeSeedItem> a_treeSeeds,
 		std::shared_ptr<const FrameGlobals> a_globals, FrameUploads a_uploads)
 	{
@@ -633,12 +633,13 @@ namespace DCLF
 		auto timeline = RenderGraphRuntime::Get().FrameWaitTimeline();
 		auto uploads = host ? host->RetainUploads() : nullptr;
 		if (!host || !timeline || !uploads || !uploads->HasDedicatedStreamingQueue()) {
-			// The plan waits for the first producer (its written slots are sampled once, by one): a startup's first frames precede the
+			// The plans wait for the first producer (their written slots are sampled once, by one): a startup's first frames precede the
 			// upload queue (the graph's first build makes it).
-			if (a_plan) {
-				s.unsampled.push_back(a_plan);
-				s.plan = std::move(a_plan);
-			}
+			for (auto& plan : a_plans)
+				if (plan) {
+					s.unsampled.push_back(plan);
+					s.plan = std::move(plan);
+				}
 			if (host)
 				host->SetFrameWaitValue(0);
 			if (!s.unavailableLogged && s.seq) {
@@ -647,10 +648,13 @@ namespace DCLF
 			}
 			return false;
 		}
-		if (a_plan) {
-			s.unsampled.push_back(a_plan);
-			s.plan = std::move(a_plan);
-		}
+		// Every plan the publication log brought since the last frame (T6b3a: more than one when the frame's start took several
+		// publications), oldest first: each one's written slots sampled, the newest drawn with.
+		for (auto& plan : a_plans)
+			if (plan) {
+				s.unsampled.push_back(plan);
+				s.plan = std::move(plan);
+			}
 		// The plans done producers read, released here (the newest stays with s.plan): their references are the engine's to drop.
 		const auto finished = s.done.load(std::memory_order_acquire);
 		while (!s.plans.empty() && s.plans.front().first <= finished)
@@ -885,7 +889,7 @@ namespace DCLF
 		return values;
 	}
 	bool FrameValues::Available() const { return false; }
-	bool FrameValues::Kick(std::shared_ptr<const SceneStore::PlacementPlan>, std::vector<SceneStore::ShadingItem>, std::vector<SceneStore::WetnessValue>,
+	bool FrameValues::Kick(std::vector<std::shared_ptr<const SceneStore::PlacementPlan>>, std::vector<SceneStore::ShadingItem>, std::vector<SceneStore::WetnessValue>,
 		std::vector<SceneStore::FadeSeedItem>, std::vector<SceneStore::TreeSeedItem>, std::shared_ptr<const FrameGlobals>, FrameUploads) { return false; }
 	const std::vector<TreeStatic>* FrameValues::TreeSeedsIfDone(bool) const { return nullptr; }
 	const std::vector<FadeRootStatic>* FrameValues::FadeSeedsIfDone(bool) const { return nullptr; }

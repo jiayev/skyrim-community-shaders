@@ -36,6 +36,7 @@
 #	include "RE/N/NiCamera.h"
 #	include "Features/DrawcallLimitFix/Common/Toggles.h"
 #	include <ORGModuleServices/Async/RevisionAssembly.h>
+#	include <ORGModuleServices/Async/SerializedTaskPump.h>
 #	include "Features/DrawcallLimitFix/Common/Switches.h"
 #	include "Features/DrawcallLimitFix/Common/SceneScheduler.h"
 #	include "Features/DrawcallLimitFix/Scene/VertexInput.h"
@@ -77,6 +78,8 @@
 #	include <optional>
 #	include <cstring>
 
+#	include "Features/DrawcallLimitFix/Common/EventQueue.h"
+#	include "Features/DrawcallLimitFix/Common/LatestSlot.h"
 #	include "GpuLayouts.h"
 #	include "Versioned.h"
 #	include "GrowableRows.h"
@@ -242,7 +245,7 @@ namespace DCLF
 			rhi::DescriptorHeapHandle resourceHeap{};
 			rhi::DescriptorHeapHandle samplerHeap{};
 			IndirectState indirect{};
-			// The latch block the epoch wrote (Resources::latch): a colour epoch with more cascades than it holds makes a new one
+			// The latch block the epoch wrote (the revision producer's, RevisionLatches::main): one holding fewer cascades than asked for is replaced
 			// (ReserveMainLatch), and a frame in flight keeps reading its own.
 			std::shared_ptr<const org::LatchBlock> latch;
 			// The Z-prepass's plain draws (MainOpaquePass): a call per bucket, a group of pipeline slots sharing a depth pipeline. Phase
@@ -870,6 +873,9 @@ namespace DCLF
 
 		struct Resources : MainSizing
 		{
+			// The draws the newest change of the sequences asks for (ReserveMainSequences, the revision code's; this sizing's at first):
+			// what a commit past the adopted ranges is checked against - draws waiting for that change, or a defect of the bound.
+			std::atomic<std::uint32_t> askedSequenceDraws{ 0 };
 			std::vector<FrameBuffer> frameBuffers;
 			// The main pass's rows (DrawPipelines.h, kMaterialRowBytes / kPipelineRowBytes), one table each for both segments,
 			// indexed by the scene's material and pipeline slots; grown before an epoch to the tables' slot counts
@@ -923,10 +929,9 @@ namespace DCLF
 			// The per-frame constant blocks at fixed slots (FrameSlotOffset), so a build can name them before
 			// their contents exist.
 			std::shared_ptr<org::Buffer> frameConstants;
-			// The commits' latched copies (MainLatchedCopiesPass): per segment (kDepthShape, kColourShape) a latch block of its own -
-			// both commits write in the same frame slot, and the first one's copies may not have run when the second writes - and the
-			// targets the passes declared, which a commit's LatchedUploads take; anything else is staged.
-			std::array<std::shared_ptr<org::LatchBlock>, 2> latchedBlocks;
+			// The targets the passes declared for the commits' latched copies (MainLatchedCopiesPass), which a commit's LatchedUploads
+			// take; anything else is staged. The copies' blocks, per segment (kDepthShape, kColourShape), are the revision producer's
+			// (RevisionLatches::mainLatched), held by the shapes (PassFrame::latched).
 			std::atomic<std::shared_ptr<const std::vector<const void*>>> latchedTargets;  // LatchedTarget::key
 			std::uint64_t frameConstantsAddress = 0;
 			// The zeroed StrictLightData block every bindless draw's b3 reads (kFrameSlotSharedLight): constant, so sent once, by the
@@ -963,10 +968,8 @@ namespace DCLF
 			std::uint32_t hzbWidth = 0, hzbHeight = 0, hzbMips = 0;
 			std::uint32_t width = 0, height = 0;
 			bool lightLimitFix = false;  // LLF's graph buffers are registered (they are read at t35-t37)
-			// Per frame slot, one BuildDrawsLatch (all BuildDraws dispatches of an epoch share the values), then the colour pass's
-			// cascades (latchLayout, grown by ReserveMainLatch).
-			std::shared_ptr<org::LatchBlock> latch;
-			MainLatchLayout latchLayout;
+			// The latch block (per frame slot, one BuildDrawsLatch, then the colour pass's cascades) is the revision producer's
+			// (RevisionLatches::main, grown by ReserveMainLatch), held by the shapes (PassFrame::latch, latchLayout).
 			rhi::CommandSignaturePtr dispatchSignature;
 			// The sort by pipeline of phase 1's and the colour segment's sequences (one view); null when it is off.
 			std::shared_ptr<DrawSort> sort;
@@ -1057,17 +1060,18 @@ namespace DCLF
 			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
 			IndirectState indirect{};
 			std::uint32_t cullMode = 0;
-			std::shared_ptr<const org::LatchBlock> latch;  // the main latch (ReserveMainLatch)
+			std::string_view probe;                        // CS_DCLF_GBUFFER_PROBE's value (a revision's: its inputs')
+			std::shared_ptr<const org::LatchBlock> latch;  // the main latch (the revision producer's: ReserveMainLatch)
 			MainLatchLayout latchLayout;                   // its layout
 			std::vector<PassFrame::ZCall> zCalls;          // the depth segment's (PlanZBuckets)
 			std::shared_ptr<const ZBucketPlan> zPlan;      // the plan they are the calls of
 			LatchedList latched;                           // MainLatchedLayout, in its reserved block
 		};
 		/**
-		 * @brief The segment's resources' part of its shape's inputs: the ranges, the rows, the latch, the cull mode. Not the
-		 * descriptor heaps: the device's, read only inside an epoch (org::runtime::GetActiveSRVDescriptorHeap).
+		 * @brief The segment's resources' part of its shape's inputs: the ranges, the rows, the cull mode (a_cullMode: the toggles', as
+		 * the caller has them). Not the latch (the revision producer's, which the caller names) nor the descriptor heaps (the graph's).
 		 */
-		MainShapeInputs MainShapeInputsOf(const Resources& a_resources, bool a_depthOnly, bool a_revision = false);
+		MainShapeInputs MainShapeInputsOf(const Resources& a_resources, bool a_depthOnly, std::uint32_t a_cullMode, bool a_revision = false);
 		std::shared_ptr<PassFrame> MakeMainShape(const MainShapeInputs& a_in);
 
 		/** @brief The parts of a main shape the shape parity tells apart (MainShapeDifferences). */
@@ -1237,7 +1241,8 @@ namespace DCLF
 		/** @brief Whether BuildDraws runs in the segment (BuildDrawsPass::Prepare's conditions), which is when a sort follows it. */
 		inline bool BuildsDraws(const org::PassPrepareContext& a_preparation, const Resources& a_resources, RenderGraphRuntime::Segment a_segment)
 		{
-			return a_resources.buildDraws && a_resources.latch && a_resources.dispatchSignature && CurrentFrame(a_preparation, a_resources, a_segment);
+			const auto frame = a_resources.buildDraws && a_resources.dispatchSignature ? CurrentFrame(a_preparation, a_resources, a_segment) : nullptr;
+			return frame && frame->latch;
 		}
 
 		/**
@@ -1395,7 +1400,7 @@ namespace DCLF
 			rhi::DescriptorHeapHandle samplerHeap{};
 			ShadowIndirectState indirect{};
 			std::vector<ShadowFrameView> views;
-			// The latch block the views' values were written to (ShadowResources::latch, replaced when the slots grow): read by
+			// The latch block the views' values were written to (RevisionLatches::shadow, replaced when the slots grow): read by
 			// the passes' preparation from here, on whichever thread prepares them.
 			std::shared_ptr<const org::LatchBlock> latch;
 			// The latched copies' sources (ShadowLatchedCopiesPass): the views' blocks at viewBlocksOffset of the latch's slot region
@@ -1495,6 +1500,9 @@ namespace DCLF
 			bool operator==(const ShadowSizing&) const = default;
 		};
 
+		/** @brief The shadow latch's first layout (CS_DCLF_TABLE_START=small: room for Skylighting's map and one view, and a few key slots). */
+		ShadowLatchLayout InitialShadowLatchLayout();
+
 		struct ShadowResources : ShadowSizing
 		{
 			std::shared_ptr<org::Buffer> constants;
@@ -1516,7 +1524,6 @@ namespace DCLF
 			std::vector<winrt::com_ptr<ID3D11Buffer>> countD3D11;
 			// The view slots' blocks (kShadowViewSlotBytes a row: b0, b12), written by each epoch's commit.
 			GrowableRows viewBlocks;
-			ShadowLatchLayout latchLayout;
 			// The kept shadow state's versions (ShadowKept) each mode's input buffer and the material rows hold: 0 when a build
 			// without the kept state wrote the buffer, or when the rows' backing is new.
 			std::uint64_t inputsUploaded = 0;
@@ -1528,14 +1535,9 @@ namespace DCLF
 			std::array<std::shared_ptr<org::ExternalTextureResource>, kShadowDepthTargets> depth;
 			std::array<ID3D11Texture2D*, kShadowDepthTargets> depthTexture{};
 			std::array<std::uint32_t, kShadowDepthTargets> depthLayers{};
-			// Per frame slot, one BuildDrawsLatch per view slot and the pipeline map rows (latchLayout); a new block when either
-			// grows. The passes read it from the revision's frame (ShadowFrame::latch).
-			std::shared_ptr<org::LatchBlock> latch;
-			// Zeros, never written: the source the epochs' latched copies zero the views' counters from (a word per count and
-			// per bucket, as many as bucketCountWords; a new one when that grows).
-			std::shared_ptr<org::LatchBlock> zeros;
-			// The shadow commit's latched values (LatchedUploads): their block, and the targets the pass declared (the constants).
-			std::shared_ptr<org::LatchBlock> latchedBlock;
+			// The latch block (per frame slot, one BuildDrawsLatch per view slot and the pipeline map rows), the counters' zeros and the
+			// commit's latched values' block are the revision producer's (RevisionLatches: shadow, shadowZeros, shadowLatched), held by
+			// the shapes (ShadowFrame::latch, zeros, latched). The targets the latched-copies pass declared (the constants):
 			std::atomic<std::shared_ptr<const std::vector<const void*>>> latchedTargets;  // LatchedTarget::key
 			rhi::CommandSignaturePtr dispatchSignature;
 			// This frame's views as the engine named them (render thread), for the culling readback's report.
@@ -1850,9 +1852,21 @@ namespace DCLF
 		{
 			LogCursor cursor;
 			ChangeJournal rows;
-			std::vector<float> uploaded;  // CS_DCLF_PERSISTENT_PARITY: the rows as uploaded
+			std::vector<float> uploaded;  // CS_DCLF_PERSISTENT_PARITY: the scene buffers' rows as uploaded (CommitSceneStreams)
 			std::uint64_t updates = 0, rowsSent = 0, resyncs = 0;
-			ParityCounter parity;
+			ParityCounter parity;  // the scene buffers' check (CommitSceneStreams)
+			std::string first;     // its first differing row since the report (row, as uploaded, the tables')
+			/**
+			 * @brief CS_DCLF_PERSISTENT_PARITY: the payload ring entries' checks, each entry's mirror against the view it was filled
+			 * from (their producer's, on the uploader's thread). Lock-free: the counts are atomic, and the first differing row's text
+			 * is written by the one producer that claims it (firstState 0 -> 1) and taken by the report once written (2 -> 0).
+			 */
+			struct RingParity
+			{
+				std::atomic<std::uint64_t> checks{ 0 }, mismatches{ 0 };
+				std::atomic<std::uint32_t> firstState{ 0 };  // 0 none, 1 being written, 2 written
+				std::string first;
+			} ring;
 		};
 
 		/** @brief A build's view of the rows: the tables' array, with the store's changes (version 0: sent whole). */
@@ -1871,10 +1885,11 @@ namespace DCLF
 
 		/**
 		 * @brief The uploads of a build's rows a buffer at a_held lacks (the changed runs, else all of them), clipped to the buffer
-		 * (a_bufferRows: what is past it waits for its growth).
+		 * (a_bufferRows: what is past it waits for its growth). a_mirror (CS_DCLF_PERSISTENT_PARITY): that buffer's rows as uploaded,
+		 * written with them.
 		 */
 		template <class Emit>
-		std::size_t EmitExtras(const ExtrasOut& a_out, std::uint64_t a_held, ExtrasStore* a_parity, Emit&& a_emit, std::uint32_t a_bufferRows = ~0u)
+		std::size_t EmitExtras(const ExtrasOut& a_out, std::uint64_t a_held, std::vector<float>* a_mirror, Emit&& a_emit, std::uint32_t a_bufferRows = ~0u)
 		{
 			const std::uint32_t rows = std::min(a_out.Rows(), a_bufferRows);
 			if (!rows || !a_out.extras)
@@ -1882,26 +1897,66 @@ namespace DCLF
 			std::size_t sent = 0;
 			a_out.changes.ForEachRun(a_held, rows, [&](std::uint64_t a_first, std::uint64_t a_count) {
 				a_emit(a_out.Row(a_first), std::size_t(a_count) * 16, std::size_t(a_first) * 16);
-				if (a_parity) {
-					if (a_parity->uploaded.size() < std::size_t(rows) * 4)
-						a_parity->uploaded.resize(std::size_t(rows) * 4, 0.0f);
-					std::memcpy(&a_parity->uploaded[std::size_t(a_first) * 4], a_out.Row(a_first), std::size_t(a_count) * 16);
+				if (a_mirror) {
+					if (a_mirror->size() < std::size_t(rows) * 4)
+						a_mirror->resize(std::size_t(rows) * 4, 0.0f);
+					std::memcpy(&(*a_mirror)[std::size_t(a_first) * 4], a_out.Row(a_first), std::size_t(a_count) * 16);
 				}
 				sent += static_cast<std::size_t>(a_count);
 			});
 			return sent;
 		}
 
-		/** @brief CS_DCLF_PERSISTENT_PARITY: the rows the buffer holds, as uploaded, against the tables' now. */
-		inline void CheckExtras(ExtrasStore& a_store, const ExtrasOut& a_out)
+		/**
+		 * @brief CS_DCLF_PERSISTENT_PARITY: one buffer's rows as uploaded (a_mirror) against the view it was sent from. A mirror
+		 * shorter than the view's rows differs (rows the buffer was never sent). a_first, when given, gets the first difference.
+		 */
+		inline bool CompareExtras(const std::vector<float>& a_mirror, const ExtrasOut& a_out, std::string* a_first)
 		{
 			const std::uint32_t rows = a_out.Rows();
-			if (a_store.uploaded.size() < std::size_t(rows) * 4)
-				return;
-			bool same = true;
-			for (std::uint32_t row = 0; row < rows && same; ++row)
-				same = std::memcmp(&a_store.uploaded[std::size_t(row) * 4], a_out.Row(row), 16) == 0;
+			if (a_mirror.size() < std::size_t(rows) * 4) {
+				if (a_first)
+					*a_first = fmt::format("{} rows (version {}), the mirror holds {}: rows never sent", rows, a_out.Version(), a_mirror.size() / 4);
+				return false;
+			}
+			for (std::uint32_t row = 0; row < rows; ++row) {
+				const float* u = &a_mirror[std::size_t(row) * 4];
+				const float* t = a_out.Row(row);
+				if (std::memcmp(u, t, 16) == 0)
+					continue;
+				if (a_first)
+					*a_first = fmt::format("row {} of {} (version {}): uploaded ({} {} {} {}), tables ({} {} {} {})", row, rows, a_out.Version(), u[0], u[1], u[2], u[3],
+						t[0], t[1], t[2], t[3]);
+				return false;
+			}
+			return true;
+		}
+
+		/** @brief CS_DCLF_PERSISTENT_PARITY: the scene buffers' rows, as uploaded (ExtrasStore::uploaded), against the view sent. */
+		inline void CheckExtras(ExtrasStore& a_store, const ExtrasOut& a_out)
+		{
+			std::string first;
+			const bool same = CompareExtras(a_store.uploaded, a_out, a_store.first.empty() ? &first : nullptr);
+			if (!same && a_store.first.empty())
+				a_store.first = "scene buffers: " + first;
 			a_store.parity.Check(same);
+		}
+
+		/** @brief CS_DCLF_PERSISTENT_PARITY: a payload ring entry's rows, as uploaded (a_mirror), against the view it was filled from. */
+		inline void CheckRingExtras(ExtrasStore::RingParity& a_parity, const std::vector<float>& a_mirror, const ExtrasOut& a_out, std::uint32_t a_entry)
+		{
+			const bool wantFirst = a_parity.firstState.load(std::memory_order_relaxed) == 0;
+			std::string first;
+			const bool same = CompareExtras(a_mirror, a_out, wantFirst ? &first : nullptr);
+			a_parity.checks.fetch_add(1, std::memory_order_relaxed);
+			if (same)
+				return;
+			a_parity.mismatches.fetch_add(1, std::memory_order_relaxed);
+			std::uint32_t none = 0;
+			if (wantFirst && a_parity.firstState.compare_exchange_strong(none, 1, std::memory_order_acquire)) {
+				a_parity.first = fmt::format("payload ring entry {}: {}", a_entry, first);
+				a_parity.firstState.store(2, std::memory_order_release);
+			}
 		}
 
 		/**
@@ -2445,6 +2500,10 @@ namespace DCLF
 			std::uint64_t materialRows = 0, viewBlocks = 0;
 			std::shared_ptr<const ShadowFrame> previous;  // the last published shape: its slots' capacities only grow
 			LatchedList latched;
+			// The latch block, its layout and the counters' zeros (the revision producer's, RevisionLatches; a commit's parity names its
+			// revision's).
+			std::shared_ptr<const org::LatchBlock> latch, zeros;
+			ShadowLatchLayout latchLayout;
 		};
 		std::shared_ptr<ShadowFrame> MakeShadowShape(const ShadowResources& a_resources, const ShadowShapeInputs& a_in);
 		/**
@@ -3322,16 +3381,32 @@ namespace DCLF
 		void CheckKeptShadow(const ShadowInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, const ShadowPayload& a_kept, ShadowKept& k);
 
 		/**
-		 * @brief Resolves the descriptor entries an epoch's build reads (render thread, descriptor service
-		 * active): the null texture, the sampler table, the projected textures, and every material slot used
-		 * this frame. Material slots retain their exact imported bindings until a
-		 * replacement or slot-retirement event releases them.
+		 * @brief What the shadow pipelines are resolved for that only the frame knows (T6b2c step 5): the capability's modes with their
+		 * views' rasterizer states, and the targets' formats. Posted by the frame's start when it changes (IndirectDraws::PostLookupInputs),
+		 * read by the scene lane (latest wins); `enabled` false while DCLF draws no shadow view (the shadow pipelines then stand as they are).
 		 */
-		void RefreshMaterialLookups(SceneStore& a_store, const SceneStore::Tables& a_tables, bool a_members, const SceneStore::ProjectedTextures& a_projected, Lookups& a_lookups);
+		struct ShadowLookupInputs
+		{
+			bool enabled = false;
+			std::array<bool, kShadowModeCount> modes{};
+			std::array<ModeRasterStates, kShadowModeCount> rasterStates{};
+			DXGI_FORMAT dsvFormat = DXGI_FORMAT_UNKNOWN;
+			std::array<DXGI_FORMAT, kOcclusionViews> occlusionFormats{};
 
-		/** @brief The shadow epoch's entries: the alpha-tested casters' diffuse textures, and the pipelines of the modes in use. */
-		void RefreshShadowLookups(SceneStore& a_store, const SceneStore::Tables& a_tables, const std::array<bool, kShadowModeCount>& a_modeUsed,
-			const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates, DXGI_FORMAT a_dsvFormat, const std::array<DXGI_FORMAT, kOcclusionViews>& a_occlusionFormats,
+			bool operator==(const ShadowLookupInputs&) const = default;
+		};
+
+		/**
+		 * @brief The scene lane (T6b2c step 5): the pipeline entries of every pipeline slot a_tables use - the set index, the constant tables
+		 * and the register usage, as a_catalog has them - each key asked of the pipeline lane once. Written only where they differ.
+		 */
+		void ResolvePipelineLookups(const SceneStore::Tables& a_tables, const PipelineCatalog* a_catalog, Lookups& a_lookups);
+
+		/**
+		 * @brief The scene lane (T6b2c step 5): the shadow pipelines of the modes in use (a_inputs), asked of the pipeline lane and resolved
+		 * from a_catalog alone, which is published with a_lookups (GetShadowIndirectState of a_catalog binds its set).
+		 */
+		void ResolveShadowLookups(const SceneStore::Tables& a_tables, const PipelineCatalog* a_catalog, const ShadowLookupInputs& a_inputs, LookupsResolveState& a_state,
 			Lookups& a_lookups);
 
 		// The resident region's resync reasons (MainBuild::UpdateRegionEntries): log, segment, shrunk, scope, fit.
@@ -3433,7 +3508,7 @@ namespace DCLF
 		class LatchedUploads
 		{
 		public:
-			/** @brief a_block: the segment's latch block (Resources::latchedBlocks), written at a_slot, replaced by a larger one when full. */
+			/** @brief a_block: a latch block of the caller's, written at a_slot, replaced by a larger one when full (a commit writing into a revision's shape uses the layout form). */
 			LatchedUploads(const std::atomic<std::shared_ptr<const std::vector<const void*>>>& a_targets, CommitUploads& a_fallback,
 				std::shared_ptr<org::LatchBlock>& a_block, std::uint32_t a_slot, std::uint32_t a_slots) :
 				targets(a_targets.load(std::memory_order_acquire)), fallback(a_fallback), block(&a_block), slot(a_slot), slots(a_slots)
@@ -3612,7 +3687,7 @@ namespace DCLF
 			rhi::CommandSignatureHandle treeSignature{};
 			std::uint32_t treeGroups = 0;
 			// The latched copies' sources (ReflectionLatchedCopiesPass): the faces' values at facesOffset of the latch's slot region
-			// (ReflectionLatchLayout::FaceOffset(0)), and the zeros (ReflectionResources::zeros).
+			// (ReflectionLatchLayout::FaceOffset(0)), and the zeros (RevisionLatches::reflectionZeros).
 			std::uint32_t facesOffset = 0;
 			std::shared_ptr<const org::LatchBlock> zeros;
 			// Not compared (implied by the latch block and the buckets): what a commit writing its values into this shape writes them
@@ -3645,13 +3720,11 @@ namespace DCLF
 		{
 			// The main pass's (its depth inputs, rows, visibility, frame constants) and, through it, the scene's.
 			std::shared_ptr<Resources> main;
-			std::shared_ptr<org::LatchBlock> latch;
-			ReflectionLatchLayout latchLayout;
+			// The latch block and the zeros the latched copies zero the draw count and the faces' bucket counts from are the revision
+			// producer's (RevisionLatches: reflection, reflectionZeros), held by the shapes (ReflectionFrame::latch, zeros).
 			Versioned sequences;
 			std::shared_ptr<org::Buffer> count;
 			std::array<Versioned, kReflectionFaces> bucketCounts;
-			// Zeros, never written: what the latched copies zero the draw count and the faces' bucket counts from.
-			std::shared_ptr<org::LatchBlock> zeros;
 			std::shared_ptr<org::Buffer> faceBlocks;  // kReflectionFaceBlockBytes per face
 			std::uint64_t faceBlocksAddress = 0;
 			// DCLF's depth for the faces, cleared per face, and the engine's cube target, with a render target view per face.
@@ -3700,8 +3773,154 @@ namespace DCLF
 			std::uint64_t materialRows = 0, pipelineRows = 0;
 			// The reflection's sizing the shape is for: a revision's (Growths::RevisionSizing), else the resources' own.
 			const ReflectionSizing* sizing = nullptr;
+			// The latch block, its layout and the zeros (the revision producer's, RevisionLatches; a commit's parity names its revision's).
+			std::shared_ptr<const org::LatchBlock> latch, zeros;
+			ReflectionLatchLayout latchLayout;
+			// The main pass's frame constants (the colour segment's, which the faces' push data names) and a face's size (the cube's).
+			std::uint64_t frameConstantsAddress = 0;
+			std::uint32_t width = 0, height = 0;
 		};
 		std::shared_ptr<ReflectionFrame> MakeReflectionShape(const ReflectionResources& a_resources, const ReflectionShapeInputs& a_in);
+
+		/**
+		 * @brief The faces' forward key of a_tables' pipeline slot a_slot (a LOD slot's: its vertex descriptor, its pixel descriptor
+		 * without Deferred, front faces culled unless two-sided), false for a slot the faces do not draw.
+		 */
+		bool ReflectionForwardKey(const SceneStore::Tables& a_tables, std::size_t a_slot, ForwardPipelineKey& a_key);
+		/**
+		 * @brief The faces' pipelines a_catalog has for a_tables (PrepareReflection's rule, without its requests): per pipeline slot, a LOD
+		 * slot's forward pipeline for a_targets (invalid: another slot, or not built), and tree LOD's forward pipeline (a_trees: the
+		 * toggle). None while a_on is false. Pure: the frame's are of its catalog and tables, a revision's of its request's.
+		 */
+		void ReflectionPipelinesOf(const PipelineCatalog* a_catalog, const SceneStore::Tables& a_tables, const ForwardTargets& a_targets, bool a_on, bool a_trees,
+			std::vector<rhi::PipelineHandle>& a_slots, rhi::PipelineHandle& a_tree);
+
+		/**
+		 * @brief The shadow view slots' buffers the frame made (AddShadowViewSlots), as it last posted them (RevisionInputs::shadowSlots):
+		 * what the revision code grows and counts the slots by, never the frame's lists.
+		 */
+		struct ShadowSlotBuffers
+		{
+			std::vector<Versioned> sequences, bucketCounts;
+		};
+		/**
+		 * @brief The revision code's request for shadow view slots (ReserveShadowLatch): the frame makes their buffers at these sizes and
+		 * the graph's build that declares them (Impl::ServeRevisionRequests), latest wins (each holds every slot asked for).
+		 */
+		struct ShadowSlotsRequest
+		{
+			std::uint32_t slots = 0, sequenceDraws = 0, bucketCountWords = 0;
+		};
+
+		/**
+		 * @brief T6b3b b2a: what a scene revision reads of the frame, as the render thread last posted it (Impl::PostRevisionInputs, at
+		 * each place a value is captured: BuildPoint, Setup, BeforeShadowMaps, the occlusion views, the shadow placements, the main
+		 * epochs' captures, the parity's first commits, PrepareReflection; and, while the revision is made on the render thread, before
+		 * each make). Immutable once posted, latest wins (Impl::revisionInputsSlot); the revision code reads its copy and its request
+		 * alone, never the frame's state. generation moves with every post; the generations it carries (the graph's build, the targets,
+		 * the shadow format, the toggles, the main resources) are what a snapshot's adoption compares (b3).
+		 */
+		struct RevisionInputs
+		{
+			std::uint64_t generation = 0;
+			// The graph resources (Setup replaces the main ones mid-frame; the shadow views' and the reflection's are made once), and the
+			// main ones' generation (moves when Setup makes new ones).
+			std::shared_ptr<Resources> main;
+			std::uint64_t mainGeneration = 0;
+			std::shared_ptr<ShadowResources> shadow;
+			std::shared_ptr<ReflectionResources> reflection;
+			std::shared_ptr<SceneBuffers> scene;
+			// BuildPoint: the graph's build (PersistentGraphHost::BuildGeneration) and the heaps every recording binds (the graph's own).
+			std::uint64_t buildGeneration = 0;
+			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
+			// The pipeline generations a catalog's sets must be built for (GetIndirectState, GetShadowIndirectState, TreeLodPipelinesOf).
+			std::uint32_t targetsGeneration = 0;
+			DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;
+			// The toggles (the cull mode, the reflections and tree LOD, the occlusion maps), their generation, and the switches read.
+			ToggleSet toggles{};
+			std::uint32_t togglesGeneration = 0;
+			std::string gbufferProbe;  // CS_DCLF_GBUFFER_PROBE
+			bool claims = false;       // IndirectDraws::RevisionClaims
+			std::uint32_t shadowRasterStates = 0;  // DrawPipelines::ShadowRasterStateCount
+			// BeforeShadowMaps: the shadow views' candidates (ShadowViews::Candidates, the last Rebuild's). The occlusion maps' layout
+			// as last captured (Impl::PredictedOcclusion: the enabled maps'), and the shadow views' placements (BuildShadowPlacements).
+			std::uint32_t shadowCandidates = 0;
+			std::vector<ShadowViewLayout> occlusionLayouts;
+			std::vector<ShadowViewLayout> shadowPlacements;
+			// The main epochs' captures (Impl::ShapeParity: per segment, whether one has run, its viewport and its frame blocks' sizes),
+			// and whether a shadow or occlusion commit and a reflection commit have run (ShadowParity::known, ReflectionParity::known).
+			std::array<bool, 2> mainKnown{};
+			std::array<MainViewport, 2> viewport{};
+			std::array<FrameBlockSizes, 2> blockSizes{};
+			bool shadowKnown = false, reflectionKnown = false;
+			// The faces' targets (PrepareReflection), what their pipelines are resolved for from the request's catalog, and a face's size
+			// (the cube's import, ImportReflectionCube).
+			ForwardTargets reflectionTargets;
+			std::uint32_t reflectionWidth = 0, reflectionHeight = 0;
+			// What the scene tables' reserve sizes by besides the tables (ReserveSceneTables): the portal programs' words a frame's
+			// encoding takes (PortalViews::Encoded), and tree LOD's mirror's shape and mesh slots. The shadow material rows the last
+			// shadow build wanted (ReserveShadowRows).
+			std::uint32_t portalWords = 0, treeLodShapeSlots = 0, treeLodMeshSlots = 0;
+			std::uint32_t shadowRowsWanted = 0;
+			// The shadow view slots' buffers (made by the frame: ServeRevisionRequests, SetupShadow).
+			std::shared_ptr<const ShadowSlotBuffers> shadowSlots;
+			// The host's owner-thread state the revision code needs: whether async (revision-driven) epochs run (AssembleRevision records
+			// for them), and its uploader (a growth's fills: Growths::uploads; weak, so no post outlives a graph).
+			bool asyncEpochs = false;
+			std::weak_ptr<org::runtime::IUploadService> uploads;
+		};
+
+		/**
+		 * @brief The revision producer's latches (T6b3b b2a: made by the revision code alone, Create'd off the host's world so its thread
+		 * may make them; ReserveMainLatch, ReserveShadowLatch, ReserveReflection, ReserveLatchedBlock), held by the shapes it makes: a
+		 * commit writes into the selected revision's shape's latch, and its parity names that shape's. A frame in flight keeps the block
+		 * its shape holds; one replaced here drops with the last shape holding it.
+		 */
+		struct RevisionLatches
+		{
+			// The main epochs': the latch (a BuildDrawsLatch, the bucket map and tables, the cascades and shadow volumes), and per segment
+			// (kDepthShape, kColourShape) the latched copies' block.
+			std::shared_ptr<org::LatchBlock> main;
+			MainLatchLayout mainLayout;
+			std::array<std::shared_ptr<org::LatchBlock>, 2> mainLatched;
+			// The shadow and occlusion epochs': the latch, its layout (made with the shadow resources' first slots: SetupShadow), the
+			// counters' zeros and the shadow commit's latched values' block.
+			std::shared_ptr<org::LatchBlock> shadow, shadowZeros, shadowLatched;
+			ShadowLatchLayout shadowLayout;
+			// The reflection's: the latch, its layout and the zeros.
+			std::shared_ptr<org::LatchBlock> reflection, reflectionZeros;
+			ReflectionLatchLayout reflectionLayout;
+		};
+
+		/**
+		 * @brief The shapes the revision producer made (MakeRevisionShapes), the newest make's and the one before, with the frames they
+		 * were made for: what AssembleRevision assembles from (the newest), and, posted to the frame (Impl::madeSlot, latest wins: each
+		 * post holds both), what the shape parity compares the commits' own shapes with. bounds: the scene's casting bound the newest
+		 * shadow shapes were sized from (the shadow parity's commit shapes are sized from it too).
+		 */
+		struct MadeShapes
+		{
+			std::array<std::array<std::shared_ptr<const PassFrame>, 2>, 2> main;  // per segment
+			std::array<std::array<std::uint32_t, 2>, 2> mainFrames{ { { ~0u, ~0u }, { ~0u, ~0u } } };
+			std::array<std::array<std::vector<std::shared_ptr<const ShadowFrame>>, 2>, 2> shadow;  // per epoch (shadow, occlusion), a shape per layout
+			std::array<std::array<std::uint32_t, 2>, 2> shadowFrames{ { { ~0u, ~0u }, { ~0u, ~0u } } };
+			std::array<std::shared_ptr<const ReflectionFrame>, 2> reflection;
+			std::array<std::uint32_t, 2> reflectionFrames{ ~0u, ~0u };
+			std::shared_ptr<const ShadowBounds> bounds;
+		};
+
+		/**
+		 * @brief Per view rasterizer state, its map row's buckets (BucketsOfRow), kept while what they are made from holds: the lookups
+		 * (a map row changes only with their shadow generation) and the shadow pipeline set (its count and classes). One per user: the
+		 * revision producer's, and the shadow parity's (the commits' own shapes).
+		 */
+		struct RowBucketsCache
+		{
+			std::uint64_t lookups = 0;
+			std::uint32_t generation = 0;
+			std::shared_ptr<const void> version;
+			std::array<std::vector<std::optional<RowBuckets>>, kShadowModeCount> rows;  // by mode, then state
+		};
 
 		/**
 		 * @brief The versions of every versioned buffer (VersionRegistry) as a scene revision names them (R3c): a preparation for the
@@ -3710,14 +3929,15 @@ namespace DCLF
 		struct VersionSet final : org::IResourceVersions
 		{
 			std::vector<std::pair<const void*, std::shared_ptr<const org::BufferVersion>>> versions;  // by VersionedBuffer::Key
+			std::vector<std::weak_ptr<org::VersionedBuffer>> buffers;  // by versions' order: what Current compares (the frame's)
 			std::uint64_t changes = 0;  // VersionRegistry::changes when it was taken: the versions are current while that holds
 			std::shared_ptr<const org::BufferVersion> Find(const org::VersionedBuffer& a_buffer) const noexcept override;
 			/**
-			 * @brief Render thread: the registry's buffers' current versions, but a ready growth's where it has one (Growths::Ready):
-			 * such a set is not current until its selection adopts them, so it takes a value of its own (VersionRegistry::next).
+			 * @brief The revision code: the registry's buffers' current versions, but a ready growth's where it has one (Growths::Ready):
+			 * such a set is not current until its selection adopts them, so it takes a value of its own (VersionRegistry::Next).
 			 */
 			static std::shared_ptr<const VersionSet> Snapshot();
-			/** @brief Whether these are the registry's buffers' current versions, every one. */
+			/** @brief The frame: whether these are the set's buffers' current versions, every one. */
 			bool Current() const;
 		};
 
@@ -3768,9 +3988,14 @@ namespace DCLF
 	struct IndirectDraws::Impl
 	{
 		std::shared_ptr<Resources> resources;
-		// The main rows the last main commit sent (its payload's kept views): what a deferred growth of their tables is filled with.
-		KeptView<MaterialRow> committedMaterialRows;
-		KeptView<PipelineRow> committedPipelineRows;
+		// The main rows the last main commit sent (its payload's kept views): what a deferred growth of their tables is filled with,
+		// posted for the revision code (ReserveMainSequences reads its copy, RevisionProducer::committedRows).
+		struct CommittedRows
+		{
+			KeptView<MaterialRow> materials;
+			KeptView<PipelineRow> pipelines;
+		};
+		LatestSlot<CommittedRows> committedRowsSlot;
 		// What the resources were created for; a change rebuilds them (and the graph).
 		TargetFormats formats{};
 		std::uint32_t width = 0, height = 0;
@@ -3809,7 +4034,7 @@ namespace DCLF
 			std::uint32_t inputs = 0, skipped = 0;
 		};
 		std::array<OcclusionState, kOcclusionViews> occlusion;
-		/** @brief The occlusion views' formats, for RefreshShadowLookups. */
+		/** @brief The occlusion views' formats, for the scene lane's shadow pipelines (PostLookupInputs). */
 		std::array<DXGI_FORMAT, kOcclusionViews> OcclusionFormats() const
 		{
 			std::array<DXGI_FORMAT, kOcclusionViews> viewFormats{};
@@ -3867,7 +4092,7 @@ namespace DCLF
 		std::shared_ptr<const void> shadowExecutionOwner;  // reused by the sky epoch's copy of the shadow records
 		/**
 		 * @brief The capability's modes (occlusion maps included) with the catalog's states, and the shadow targets' format, which the
-		 * builds ahead and the frame's start's shadow lookups are for (UpdateShadowCapability).
+		 * builds ahead and the scene lane's shadow lookups are for (UpdateShadowCapability, PostLookupInputs).
 		 */
 		struct LastShadow
 		{
@@ -3877,6 +4102,10 @@ namespace DCLF
 			bool known = false;
 			std::uint32_t loggedStale = 0;
 		} lastShadow;
+		// What the scene lane's shadow pipelines are resolved for (T6b2c step 5): posted by the frame's start when it changes (PostLookupInputs:
+		// postedShadowLookups, the render thread's), taken by the scene lane (ResolveLookups), latest wins.
+		std::atomic<std::shared_ptr<const ShadowLookupInputs>> shadowLookupInputs;
+		ShadowLookupInputs postedShadowLookups;
 		/** @brief Whether the installed shadow payload can be committed by an epoch with the frame's inputs a_frame. */
 		bool ShadowAheadUsable(const ShadowPayload& a_payload, const ShadowInputs& a_frame) const;
 		void LogStaleShadow(const ShadowInputs& a_built, const ShadowInputs& a_frame);
@@ -3898,11 +4127,10 @@ namespace DCLF
 		std::uint64_t shadowUnrecorded = 0;
 		/**
 		 * @brief The occlusion maps' layout as their last captures drew (CaptureOcclusion, taken whether DCLF draws a map or not): what
-		 * a revision makes the occlusion epoch's shapes for (recentOcclusionLayouts, newest first), and what OcclusionReady asks the
-		 * selected revision to have a shape for.
+		 * a revision makes the occlusion epoch's shapes for (RevisionProducer::recentOcclusionLayouts, newest first; posted with the
+		 * revision inputs), and what OcclusionReady asks the selected revision to have a shape for.
 		 */
 		std::vector<ShadowViewLayout> PredictedOcclusion() const;
-		std::vector<std::vector<ShadowViewLayout>> recentOcclusionLayouts;
 		static constexpr std::size_t kRecentOcclusionLayouts = 4;
 		std::uint64_t occlusionUnrecorded = 0;  // maps left to the engine for want of the revision's shape, since the last report
 		/**
@@ -3910,36 +4138,28 @@ namespace DCLF
 		 * objects can produce (SceneDrawBound, kept in drawBound). A bound over the device's max sequence count, or over the sort's rank field,
 		 * is a hard failure.
 		 */
+		/** @brief A view rasterizer state's map row's buckets, from a_cache (the revision producer's, or the shadow parity's). */
+		static const RowBuckets& ShadowRowBuckets(RowBucketsCache& a_cache, std::uint32_t a_mode, std::uint32_t a_state, const Lookups& a_lookups,
+			const ShadowIndirectState& a_indirect);
+		RowBucketsCache parityRowBuckets;  // the shadow parity's (CheckShadowRevision: the commits' own shapes)
+		/** @brief The producer's draw bound brought up to date with a_tables' change log (the revision code: the reserves). */
+		void UpdateDrawBound(const SceneStore::Tables& a_tables, std::uint32_t a_generation);
+		/** @brief The revision code: a_resources' sequences, bucket layout and rows grown to a_tables (a growth, Growths::Change). */
+		void ReserveMainSequences(Resources& a_resources, const SceneStore::Tables& a_tables, std::uint32_t a_generation);
+		/** @brief The revision code: the index pool's room for every geometry the tables have (a growth, Growths::Change). */
+		void ReserveIndexPool(SceneBuffers& a_scene, const SceneStore::Tables& a_tables, std::uint32_t a_generation);
+		void ReserveShadowSequences(ShadowResources& a_shadow, const SceneStore::Tables& a_tables, std::uint32_t a_generation, std::uint32_t a_slots, std::uint32_t a_first = 0);
+		/** @brief The revision code: grows the shadow material rows' table to a_wanted (the last build's, posted) and a quarter more. */
+		void ReserveShadowRows(ShadowResources& a_shadow, std::uint32_t a_wanted);
 		/**
-		 * @brief Per view rasterizer state, its map row's buckets (BucketsOfRow), kept while what they are made from holds: the
-		 * lookups (a map row changes only with their shadow generation) and the published shadow pipeline set (its count and
-		 * classes). Render thread: the shadow and occlusion epochs' views.
+		 * @brief The revision code: view slots for Skylighting's map and a_views views, and pipeline map rows of a_keys key slots: more
+		 * slots are more buffers, which the shadow passes declare, so the graph is built again; either growth is a new latch block
+		 * (the producer's, RevisionLatches).
 		 */
-		struct
-		{
-			std::uint64_t lookups = 0;
-			std::uint32_t generation = 0;
-			std::shared_ptr<const void> version;
-			std::array<std::vector<std::optional<RowBuckets>>, kShadowModeCount> rows;  // by mode, then state
-		} shadowRowBuckets;
-		const RowBuckets& ShadowRowBuckets(std::uint32_t a_mode, std::uint32_t a_state, const Lookups& a_lookups, const ShadowIndirectState& a_indirect);
-		DrawBoundStore drawBound;
-		/** @brief drawBound brought up to date with a_tables' change log (render thread, the reserves). */
-		void UpdateDrawBound(const SceneStore::Tables& a_tables);
-		void ReserveMainSequences(const SceneStore::Tables& a_tables);
-		/** @brief At the join: the index pool's room for every geometry the tables have (a growth, Growths::Change). */
-		void ReserveIndexPool(const SceneStore::Tables& a_tables, std::uint32_t a_generation);
-		void ReserveShadowSequences(const SceneStore::Tables& a_tables, std::uint32_t a_slots, std::uint32_t a_first = 0);
-		/** @brief Grows the shadow material rows' table to what the last build wanted (render thread, before the inputs are taken). */
-		void ReserveShadowRows();
-		/**
-		 * @brief View slots for Skylighting's map and a_views views, and pipeline map rows of a_keys key slots, before the epoch:
-		 * more slots are more buffers, which the shadow passes declare, so the graph is built again; either growth is a new
-		 * latch block.
-		 */
-		void ReserveShadowLatch(std::uint32_t a_views, std::uint32_t a_keys, std::uint32_t a_rasterStates, std::uint32_t a_sunProcesses);
-		// The main latch block's cascade region: a new block when the frame has more cascades than it holds.
-		static void ReserveMainLatch(Resources& a_resources, std::uint32_t a_cascades, std::uint32_t a_shadowVolumes, std::uint32_t a_buckets = 0);
+		void ReserveShadowLatch(ShadowResources& a_shadow, std::uint32_t a_views, std::uint32_t a_keys, std::uint32_t a_rasterStates, std::uint32_t a_sunProcesses);
+		// The revision code: the producer's main latch (RevisionLatches::main): a new block when it holds fewer cascades, shadow volumes
+		// or buckets than asked for.
+		void ReserveMainLatch(std::uint32_t a_cascades, std::uint32_t a_shadowVolumes, std::uint32_t a_buckets = 0);
 		std::uint32_t shadowRowsWanted = 0;  // the last shadow build's (ShadowPayload::rowsWanted)
 		ShadowInputs PrepareShadowInputs(const SceneStore& a_store, const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
 			const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates) const;
@@ -3992,24 +4212,136 @@ namespace DCLF
 			bool shadow = false;
 			ShadowInputs shadowInputs;
 			std::shared_ptr<ShadowResources> shadowTarget;
-		} aheadContext;  // render thread at the frame's start, read by the coordinator
+		} aheadContext;  // the render thread's, made at the frame's start (PostAheadContext)
 		// The fits the builds ahead are made against (the main builds', the shadow build's), posted with aheadContext; changes counted.
+		// The render thread's (PostFit).
 		std::array<SceneFit, 2> postedFit{};
 		std::array<std::uint32_t, 2> postedRows{};  // the main material and pipeline rows' capacities (MainBuild::ResolvePair's rowsFit)
 		std::uint64_t postedFitSerial = 0;
 		void PostFit();
-		std::vector<std::shared_ptr<MainPayload>> payloadPool;  // the builds' task's
 		/**
-		 * @brief A publication's draws as its builds' task makes them (BuildAhead): one task at a time, in publication order, on
-		 * the preparation pool, never joined - the frame's start installs a publication only once they are done (DrawsReady).
+		 * @brief T6b3a: what the frame's start posts for the coordinator, immutable once posted (latest wins): the ahead context and the
+		 * fits with their serial. The coordinator takes it at each pass's start (TakeAheadContext) and reads only its copy (BuildAhead,
+		 * FitsScene, SceneFitSerial).
 		 */
-		struct AheadSlot
+		struct AheadPost
 		{
-			std::atomic<bool> done{ false };
-			std::shared_ptr<const DrawPublication> result;
+			AheadContext context;
+			std::array<SceneFit, 2> fit{};
+			std::array<std::uint32_t, 2> rows{};
+			std::uint64_t fitSerial = 0;
 		};
-		std::uint64_t aheadKicked = 0;               // the coordinator's
-		std::atomic<std::uint64_t> aheadDone{ 0 };   // the last task done
+		LatestSlot<AheadPost> aheadSlot;
+		AheadPost aheadTaken;  // the coordinator's
+		/** @brief Render thread: the context and the fits as they are now, posted (a_fit: PostFit first, the resources there). */
+		void PostAhead(bool a_fit = true);
+		std::vector<std::shared_ptr<MainPayload>> payloadPool;  // the builds' task's
+		// The builds ahead posted (PostSnapshotWork, the coordinator: each work item's number) and done (the snapshot builder: the number
+		// of the item it built, which covers the ones it skipped). The frame's fallback streams are refused while one is outstanding.
+		std::atomic<std::uint64_t> aheadKicked{ 0 };
+		std::atomic<std::uint64_t> aheadDone{ 0 };
+		std::atomic<bool> aheadRunning{ false };  // a build ahead running now (WaitAhead)
+
+		/**
+		 * @brief T6b3b: what the coordinator hands the snapshot builder (PostSnapshotWork): a publication and what its draws are built from
+		 * as the coordinator had them (its copy of the frame's ahead context, its frame, the candidates). Latest wins (snapshotWorkSlot).
+		 */
+		struct SnapshotWork
+		{
+			std::shared_ptr<const SceneStore::ScenePublication> publication;
+			AheadContext context;
+			std::uint32_t frame = 0;
+			std::shared_ptr<const SunCandidates> sun, light;
+			std::uint64_t aheadNumber = 0;  // aheadKicked when posted
+		};
+		/**
+		 * @brief T6b3b: a complete scene snapshot (the builder's, posted to snapshotSlot, adopted whole by the frame's start: AdoptSnapshot):
+		 * a publication, its draws built ahead, and its revision whole - versions, each epoch's shape and recordings, the growths it names -
+		 * with the generations it was built for, which the adoption compares, and what its build took.
+		 */
+		struct SceneSnapshot
+		{
+			std::uint64_t serial = 0;
+			std::shared_ptr<const SceneStore::ScenePublication> publication;
+			std::shared_ptr<const DrawPublication> draws;
+			org::async::RevisionAssembler::Lease revision;
+			// The builder's verdict on its draws: both main payloads, built for the main resources it was built for (or the epochs build
+			// their own: CS_DCLF_BINDLESS_PARITY). Without, its frames have no claims (DecideCoverage).
+			bool drawsComplete = false;
+			// The generations: the graph's build its recordings are of, the targets and shadow format its pipeline sets are for, the main
+			// resources' (RevisionInputs::mainGeneration). Its commit's toggles are its publication's.
+			std::uint64_t buildGeneration = 0, mainGeneration = 0;
+			std::uint32_t targetsGeneration = 0;
+			DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;
+		};
+		/** @brief One snapshot build's times (the builder's, drained by the report): its draws (0 when they were kept), shapes, recordings. */
+		struct SnapshotTiming
+		{
+			double aheadMs = 0.0, shapesMs = 0.0, recordingsMs = 0.0;
+			bool ahead = false;
+		};
+		LatestSlot<SnapshotWork> snapshotWorkSlot;  // the coordinator -> the builder
+		LatestSlot<SceneSnapshot> snapshotSlot;     // the builder -> the frame's start
+		// The frame's: the adopted snapshot, and whether the newest it found was stale (its frames have no claims until a current one).
+		std::shared_ptr<const SceneSnapshot> adoptedSnapshot;
+		bool snapshotStale = false;
+		// Snapshots the frame replaced, back to the builder, which drops them (nothing of a snapshot is released on the render thread).
+		EventQueue<std::shared_ptr<const SceneSnapshot>, 64> retiredSnapshots;
+		/**
+		 * @brief The builder's state (SnapshotPass: one pass at a time, on the pool, woken by every post it takes, a revision's completion,
+		 * a growth settled, the frame's inputs and a retired snapshot): the work item it builds, its draws, the revision it waits for.
+		 */
+		struct SnapshotBuilder
+		{
+			enum class Stage : std::uint8_t
+			{
+				Idle,        // a snapshot of work stands (or none yet): made again when the frame's inputs move
+				Ahead,       // a new work item: its draws to build
+				Make,        // its revision to make (again)
+				Waiting,     // made, none sealed (a growth or a build pending): made again when woken
+				Recordings,  // sealed: its recordings awaited (the assembler's completion wakes the builder)
+			};
+			Stage stage = Stage::Idle;
+			std::unique_ptr<SnapshotWork> work;
+			std::shared_ptr<const DrawPublication> draws;
+			std::uint64_t sealed = 0;  // the revision sealed for work
+			std::uint64_t serial = 0, lastPublication = 0;
+			std::chrono::steady_clock::time_point sealedAt{};
+			SnapshotTiming timing;
+		} snapshotBuilder;
+		std::atomic<bool> snapshotInputsMoved{ false };  // the frame posted revision inputs since the builder's last make
+		std::atomic<bool> producerReportWanted{ false };
+		LatestSlot<std::string> producerReportSlot;      // the builder's report lines, for the frame's report
+		std::string producerReport;                      // the frame's: the newest taken
+		// The builder's counters (atomic: the report's exchange), and its builds' times (drained by the report).
+		std::atomic<std::uint64_t> snapshotsBuilt{ 0 }, snapshotsCoalesced{ 0 }, snapshotsWithoutDraws{ 0 };
+		EventQueue<SnapshotTiming, 256> snapshotTimings;
+		// The frame's counters since the last report: adopted, frames adopting nothing new, stale by kind, the frames from a publication's
+		// commit to its adoption.
+		enum SnapshotStale : std::size_t
+		{
+			kStaleBuild,
+			kStaleTargets,
+			kStaleShadowFormat,
+			kStaleToggles,
+			kStaleMain,
+			kStaleKinds
+		};
+		std::uint64_t snapshotsAdopted = 0, snapshotFramesKept = 0;
+		std::array<std::uint64_t, kStaleKinds> snapshotsStale{};
+		std::vector<std::uint32_t> adoptionLatency;
+		/** @brief The snapshot builder's pump (configured once, never destroyed: a function-local static). */
+		org::async::SerializedTaskPump& SnapshotPump();
+		/** @brief The builder's pass (SnapshotPump's drain): see SnapshotBuilder. */
+		void SnapshotPass();
+		/** @brief The builder: the work item's draws, built ahead (RunAhead), and the builds ahead done up to its number. */
+		void BuildSnapshotDraws();
+		/** @brief The builder: the snapshot of its work item, draws and the completed revision a_revision, posted for the frame. */
+		void PostSnapshot(org::async::RevisionAssembler::Lease a_revision);
+		/** @brief The builder's report lines (its counters reset): the revisions, the growths, the shapes made, the draw bound. */
+		std::string ProducerReport();
+		/** @brief The frame's report lines of the snapshots, and the builder's last. */
+		std::string SnapshotReport();
 		/** @brief The builds' task: a publication's stream views and main payloads (on the pool, in order). */
 		/**
 		 * @brief CS_DCLF_PERSISTENT_PARITY (U3): every input of a publication's payloads against its object's view mask (ViewMaskOf), and
@@ -4069,9 +4401,16 @@ namespace DCLF
 			std::uint64_t address = 0;
 			std::uint64_t held = 0;  // the version it holds (the producer's)
 		};
+		/** @brief The extras rows' part, with its rows as uploaded (CS_DCLF_PERSISTENT_PARITY: its producer's, CheckRingExtras). */
+		struct RingExtrasPart : RingPart
+		{
+			std::vector<float> uploaded;
+		};
 		struct RingEntry
 		{
-			RingPart objects, extras, geometries, materialRows, pipelineRows;
+			RingPart objects;
+			RingExtrasPart extras;
+			RingPart geometries, materialRows, pipelineRows;
 			RingPart inputs;  // the main list, both segments' (U4a)
 			// The shadow payload's (step 6e S2): its material rows and each mode's inputs (the occlusion maps' included).
 			RingPart shadowRows;
@@ -4222,7 +4561,7 @@ namespace DCLF
 		 * @brief The reflection's resources grown before its epoch: the latch for a_slots pipeline slots and a_buckets buckets, the
 		 * sequences for a_draws a face, the faces' tree LOD lists for the scene's shape slots.
 		 */
-		void ReserveReflection(std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws, bool a_epoch = false);
+		void ReserveReflection(ReflectionResources& a_faces, SceneBuffers* a_scene, std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws);
 		/** @brief The engine's cube target imported (again when it changes). */
 		bool ImportReflectionCube(ID3D11Texture2D* a_texture);
 		/** @brief The scene tables, created once (render thread). False when they have no device address. */
@@ -4232,7 +4571,7 @@ namespace DCLF
 		 * Render thread, before a build's inputs are taken: the tables are final for the frame from the scene phase on, so the
 		 * first call of a frame does any growing and the builds after it see the capacities they are built against.
 		 */
-		void ReserveSceneTables(const SceneStore::Tables& a_tables);
+		void ReserveSceneTables(SceneBuffers& a_scene, const SceneStore::Tables& a_tables);
 		/** @brief The main and shadow resources' per-object buffers grown to the scene's object capacity. */
 		void ReserveObjectBuffers();
 		ObjectRecordStore objectStore;
@@ -4423,10 +4762,8 @@ namespace DCLF
 		 */
 		struct ShapeParity
 		{
-			// Per segment, the revisions made at this frame's join and at the frame before's, and those frames.
-			std::array<std::array<std::shared_ptr<const PassFrame>, 2>, 2> revisions;
-			std::array<std::array<std::uint32_t, 2>, 2> revisionFrames{ { { ~0u, ~0u }, { ~0u, ~0u } } };
-			// What the segment's last commit captured, which the next revision's shape is made with.
+			// The revisions it compares with are the producer's (MadeShapes, taken from madeSlot). What the segment's last commit
+			// captured, which the next revision's shape is made with (posted: RevisionInputs).
 			std::array<bool, 2> known{};
 			std::array<MainViewport, 2> viewport{};
 			std::array<FrameBlockSizes, 2> blockSizes{};
@@ -4449,9 +4786,7 @@ namespace DCLF
 		 */
 		struct ReflectionParity
 		{
-			std::array<std::shared_ptr<const ReflectionFrame>, 2> revisions;
-			std::array<std::uint32_t, 2> revisionFrames{ ~0u, ~0u };
-			bool known = false;
+			bool known = false;  // a reflection commit has run (posted: RevisionInputs::reflectionKnown)
 			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
 			std::array<ShapeParity::Counts, 2> counts{};  // differ: kShapePipelines (anything)
 			std::uint32_t logged = 0;
@@ -4484,11 +4819,8 @@ namespace DCLF
 				kFields
 			};
 			static constexpr std::array<const char*, kFields> kFieldNames = { "capacity", "buckets", "push", "rows", "latch", "latched copies", "heaps", "pipelines" };
-			bool known = false;
+			bool known = false;  // a shadow or occlusion commit has run (posted: RevisionInputs::shadowKnown)
 			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
-			// Per epoch (shadow, occlusion): the revisions made at this frame's join and the frame before's, a shape per layout.
-			std::array<std::array<std::vector<std::shared_ptr<const ShadowFrame>>, 2>, 2> revisions;
-			std::array<std::array<std::uint32_t, 2>, 2> revisionFrames{ { { ~0u, ~0u }, { ~0u, ~0u } } };
 			struct Counts
 			{
 				std::uint64_t compared = 0, same = 0, missing = 0;
@@ -4499,6 +4831,66 @@ namespace DCLF
 			std::uint32_t logged = 0;
 		} shadowParity;
 		void NoteShadowParity(bool a_occlusion, const ShadowFrame& a_frame, const std::vector<LatchedCopy>& a_layout, std::uint32_t a_frameNumber);
+		/**
+		 * @brief T6b3b b2a: the shapes the revision producer made, as it last posted them (madeSlot: each post holds its newest two
+		 * makes), and the frame's copy the shape parity compares with (TakeMadeShapes, at each Note*Parity).
+		 */
+		LatestSlot<MadeShapes> madeSlot;
+		MadeShapes parityMade;
+		const MadeShapes& TakeMadeShapes()
+		{
+			madeSlot.TakeInto(parityMade);
+			return parityMade;
+		}
+
+		/**
+		 * @brief T6b3b b2a: what the scene revision's producer owns (MakeRevision, AssembleRevision, the reserves): nothing of it is read
+		 * or written by the frame's epochs, and it reads nothing of theirs - its inputs (RevisionInputs, taken from revisionInputsSlot at
+		 * each make) and its request alone. What the frame's parity compares with is posted (madeSlot); its report reads the counters.
+		 */
+		struct RevisionProducer
+		{
+			RevisionInputs inputs;
+			std::uint32_t frame = 0;  // the frame the make is for (MakeRevision's a_frame)
+			RevisionLatches latches;
+			MadeShapes made;
+			// The occlusion maps' layouts drawn lately (newest first, kRecentOcclusionLayouts): a revision makes a shape for each.
+			std::vector<std::vector<ShadowViewLayout>> recentOcclusionLayouts;
+			// The scene's draw bound (UpdateDrawBound) and the index pool's (ReserveIndexPool), kept from the tables' logs.
+			DrawBoundStore drawBound;
+			IndexPool::Bound poolBound;
+			RowBucketsCache rowBuckets;
+			// The last main commit's rows (committedRowsSlot, taken at the make's start).
+			CommittedRows committedRows;
+			// The graph build a request of the frame's needs (ShadowSlotsRequest: the inputs' build generation it must reach, 0 none): no
+			// revision is sealed before it (AssembleRevision), its recordings would be of the graph without what it declares.
+			std::uint64_t buildWanted = 0;
+		} producer;
+		/** @brief Render thread: the newest RevisionInputs posted, latest wins; the producer takes it at each make's start. */
+		LatestSlot<RevisionInputs> revisionInputsSlot;
+		RevisionInputs postedInputs;  // the render thread's: what it last posted
+		std::shared_ptr<const ShadowSlotBuffers> postedShadowSlots;  // the render thread's: the slots' buffers as last posted
+		/**
+		 * @brief The revision code's requests of the owner thread's (T6b3b b2a): shadow view slots, whose buffers the passes declare
+		 * (ShadowSlotsRequest). The frame serves them (ServeRevisionRequests: the buffers made, the extension added, the inputs posted)
+		 * after each make while the revision is made on the render thread, and at the build point before its build.
+		 */
+		LatestSlot<ShadowSlotsRequest> shadowSlotsSlot;
+		void ServeRevisionRequests();
+		/**
+		 * @brief Render thread: the revision inputs as the frame has them now, posted when anything moved (generation and, for the main
+		 * resources, mainGeneration with them). Called where each value is captured, and before each make while the revision is made
+		 * on the render thread (b2a).
+		 */
+		void PostRevisionInputs();
+		/**
+		 * @brief The revision code (T6b3b b2a: on the render thread still, b2b's producer job): a scene revision's shapes for a_request
+		 * (a SceneStore::RevisionRequest), reserved and made from it and the producer's inputs alone, then assembled (AssembleRevision).
+		 * a_frame: the frame the make is for (the shape parity's and the report's; b2b passes the publication's commitFrame).
+		 */
+		void MakeRevision(const SceneStore::RevisionRequest& a_request, std::uint32_t a_frame);
+		/** @brief The revision code: the producer's latches made at their first sizes once their resources are (RevisionLatches). */
+		void EnsureRevisionLatches();
 
 		/**
 		 * @brief R3c (b), the scene revisions (SceneRevision.cpp), assembled and selected but not drawn with yet. At the scene work's
@@ -4506,42 +4898,40 @@ namespace DCLF
 		 * while the shape is the same) and each epoch's recording, which requires exactly its shape and the versions: an epoch whose
 		 * shape and versions are unchanged inherits the last one's, and any other is recorded for the revision on ORG's host thread
 		 * (PersistentGraphHost::RequestEpochRecording; a live epoch's recording is made but never admitted). BeginSceneFrame takes the
-		 * newest complete revision (SelectRevision). Render thread, but for the recordings' completions (the host's thread).
+		 * newest complete revision with its snapshot (AdoptSnapshot; T6b3b: assembled and collected by the snapshot builder). Render thread, but for the recordings' completions (the host's thread).
 		 */
 		struct SceneRevisions
 		{
 			static constexpr std::uint32_t kEpochs = 5;  // kDepthShape, kColourShape, shadow, occlusion, reflection
-			static constexpr std::uint32_t kVersionsSlot = 0, kShapeSlot = 1, kRecordingSlot = kShapeSlot + kEpochs, kSlots = kRecordingSlot + kEpochs;
+			// The growths slot (T6b3b b2a): the changes the revision names (Growths::NamedChanges), adopted by the frame with its selection.
+			static constexpr std::uint32_t kVersionsSlot = 0, kShapeSlot = 1, kRecordingSlot = kShapeSlot + kEpochs, kGrowthsSlot = kRecordingSlot + kEpochs,
+										   kSlots = kGrowthsSlot + 1;
 			static constexpr std::array<RenderGraphRuntime::Segment, kEpochs> kSegments = { RenderGraphRuntime::Segment::ZPrepass, RenderGraphRuntime::Segment::MainOpaque,
 				RenderGraphRuntime::Segment::ShadowView, RenderGraphRuntime::Segment::SkyOcclusion, RenderGraphRuntime::Segment::Reflection };
 			static constexpr std::array<const char*, kEpochs> kNames = { "Z-prepass", "colour", "shadow", "occlusion", "reflection" };
-			org::async::RevisionAssembler assembler{ kSlots };
+			// The snapshot builder's (Begin, Seal, Collect and, as the exchange's only consumer, TrySelect and AcquireActive: T6b3b). A
+			// revision's completion (its last recording, on ORG's host thread) wakes the builder.
+			org::async::RevisionAssembler assembler{ kSlots, [] { WakeSnapshotBuilder(); } };
 			std::uint64_t versionChanges = ~0ull;  // VersionRegistry::changes the versions fragment was made at
 			std::uint64_t graphBuilds = ~0ull;     // and the host's graph build (PersistentGraphHost::BuildGeneration)
 			std::uint64_t growthStamp = ~0ull;     // and Growths::stamp (the ready growths it names)
-			// G2: a growth still pending at this join (Growths::Settle): no revision is sealed, so the commit's claims wait (SetApplicable).
+			// G2: a growth still pending at this make (Growths::Settle): no revision is sealed (the builder makes it again when woken).
 			bool growthPending = false;
 			std::uint64_t growthWaits = 0;  // joins that sealed nothing for it, since the last report
-			// Per sequence (a ring), the scene frame whose join made it: the selected revision's age.
-			std::array<std::pair<std::uint64_t, std::uint32_t>, 64> madeAt{};
-			std::uint64_t selected = 0;
-			// Since the last report: drafts sealed, published, selections, the frames between a selected revision's join and its
-			// selection; per epoch the shapes that changed, the recordings requested, refused (no async epochs), recorded (a request
-			// whose every shape is recorded) and failed, and the shapes recorded.
-			std::uint64_t sealed = 0, published = 0, selections = 0, selectedAge = 0, versionSets = 0, sealFailures = 0;
+			std::uint64_t buildWaits = 0;   // makes that sealed nothing for a graph build asked of the frame (RevisionProducer::buildWanted)
+			// The builder's, since the last report: drafts sealed, version sets made; per epoch the shapes that changed, the recordings
+			// requested, refused (no async epochs), recorded (a request whose every shape is recorded) and failed, and the shapes recorded.
+			std::uint64_t sealed = 0, versionSets = 0, sealFailures = 0;
 			struct Epoch
 			{
 				std::uint64_t changed = 0, requested = 0, refused = 0;
-				std::atomic<std::uint64_t> recorded = 0, failed = 0, shapes = 0;
+				// The completions' (ORG's host thread): recorded, failed, dropped by a graph build (or recorded on another: asked again).
+				std::atomic<std::uint64_t> recorded = 0, failed = 0, dropped = 0, shapes = 0;
 			};
 			std::array<Epoch, kEpochs> epochs;
 			std::atomic<std::uint32_t> failuresLogged = 0;
-			// The selected revision, for the frame's epochs (SelectRevision), and the scene frame whose join made it.
+			// The frame's from here on. The adopted snapshot's revision, for the frame's epochs (AdoptSnapshot).
 			org::async::RevisionAssembler::Lease active;
-			std::uint32_t activeFrame = ~0u;
-			// The frame of the last revision sealed, and of the commit whose set the frame's claims are (SetApplicable, NoteSetApplied).
-			std::uint32_t sealedFrame = ~0u, claimsFrame = ~0u;
-			std::uint64_t setsHeld = 0;  // publications passed over at a frame's start: their commit's revision not selected yet (since the last report)
 			// Per epoch since the last report: commits that submitted the selected revision's recording, and what the revision parity
 			// (CS_DCLF_REVISION_PARITY) found the revision's shape lacked for the frame, by kind (NoteRevisionMiss).
 			enum Miss : std::uint32_t
@@ -4578,8 +4968,13 @@ namespace DCLF
 			// Per epoch, the inputs (versions, shape) whose recording failed: not asked for again until they change.
 			std::array<std::pair<std::shared_ptr<const org::async::RevisionFragment>, std::shared_ptr<const org::async::RevisionFragment>>, kEpochs> failedFor;
 		} revisions;
-		/** @brief The scene work's join: the revision of MakeRevisionShapes' shapes, sealed (SceneRevisions). */
+		/** @brief The builder: the revision of MakeRevision's shapes, sealed (SceneRevisions); none while a growth or a build it needs is pending. */
 		void AssembleRevision(std::uint32_t a_frame);
+		/**
+		 * @brief The recording requests not completed yet (AssembleRevision counts each up, its completion down, on ORG's host thread or
+		 * a build's): what the build point gives unsubmitted tickets back for (BuildPoint), never the assembler's pending list.
+		 */
+		std::atomic<std::uint32_t> recordingsOutstanding{ 0 };
 		/**
 		 * @brief CS_DCLF_REVISION_PARITY: the selected revision's shape fragment and recordings for epoch a_epoch, when it has them and its
 		 * versions are current; else false, the miss counted (NoteRevisionMiss).
@@ -4608,11 +5003,6 @@ namespace DCLF
 		 */
 		std::shared_ptr<const ShadowFrame> ShadowRevisionFor(std::uint32_t a_epoch, const ShadowFrame& a_own, const ShadowPayload& a_payload, const ShadowIndirectState& a_indirect,
 			std::size_t a_sunProcesses, std::shared_ptr<const RevisionRecordings>& a_recordings, std::size_t& a_variant);
-		/**
-		 * @brief Whether the selected revision's pipeline set holds every pipeline the frame's claims draw with, though a newer set
-		 * is published: the sets only append (DrawPipelines' versions), and the claims were committed before the revision was made.
-		 */
-		bool RevisionHoldsClaims() const;
 		std::string RevisionReport();
 		/**
 		 * @brief What the revisions' shapes are made from (MakeRevisionShapes), hashed: the growths, the pipeline sets, the heaps, the
@@ -4634,8 +5024,8 @@ namespace DCLF
 		static constexpr std::array<const char*, kKeyGroups> kKeyGroupNames = { "growths", "pipelines", "lookups", "main latch and captures", "shadow latch and layouts",
 			"casting bound outgrown", "reflection" };
 		using ShapesKey = std::array<std::uint64_t, kKeyGroups>;
-		ShapesKey RevisionShapesKey(const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect, const rhi::DescriptorHeapHandle& a_resourceHeap,
-			const rhi::DescriptorHeapHandle& a_samplerHeap) const;
+		ShapesKey RevisionShapesKey(const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect, const Lookups& a_lookups, std::size_t a_pipelines,
+			std::span<const rhi::PipelineHandle> a_slotPipelines, rhi::PipelineHandle a_treePipeline, const TreeLodPipelines* a_treeLod) const;
 		ShapesKey revisionShapesKey{};
 		std::array<std::uint64_t, kKeyGroups> shapesMadeBy{};  // since the last report: makes by the group whose inputs moved
 		bool shapesKeyUnchanged = false;  // this join's key is the last made's (a parity make: any shape it changes is the key's miss)

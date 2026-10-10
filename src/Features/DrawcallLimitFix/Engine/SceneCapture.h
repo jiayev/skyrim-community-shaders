@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <d3d11.h>
+#include <winrt/base.h>
 #include <cstdint>
 #include <memory>
 #include <variant>
@@ -219,6 +221,9 @@ namespace DCLF::SceneCapture
 		std::uint32_t feature = 0;
 		bool glints = false;
 		const void* diffuseView = nullptr;
+		// A reference on diffuseView, taken with the capture (where the material, and so its texture, holds it): a texture swap may
+		// free the view before the scene work asks for its binding (SharedBindings). Not compared; assigned with diffuseView.
+		winrt::com_ptr<ID3D11ShaderResourceView> diffuseHeld;
 		const void* fadeNode = nullptr;
 		const void* emissive = nullptr;
 		bool controllers = false;

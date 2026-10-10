@@ -68,7 +68,7 @@ namespace DCLF
 			const bool resolveBuffers = gpu.Enabled();
 			frameResolveBuffers = resolveBuffers;
 			if (resolveBuffers != graphWasActive) {
-				logger::info("[DCLF] tables frame {}: the render graph is {} (slots alive {} geometries / {} pipelines / {} materials)", frame,
+				logger::info("[DCLF] tables frame {}: the render graph is {} (slots alive {} geometries / {} pipelines / {} materials)", sceneFrame,
 					resolveBuffers ? "active from this frame" : "inactive from this frame", stats.geometriesAlive, stats.pipelinesAlive, stats.materialsAlive);
 				graphWasActive = resolveBuffers;
 			}
@@ -100,7 +100,7 @@ namespace DCLF
 		}
 		PublishPlacementPlan();
 		const bool walkParityOn = SwitchEnabled(Switch::WalkParity);
-		if (walkParityOn && ParityDue(frame)) {
+		if (walkParityOn && ParityDue(sceneFrame)) {
 			DCLF_SCENE_PART(WalkParity, "CS.DCLF.Scene.WalkParity");
 			CheckWalkParity();
 		}
@@ -428,7 +428,7 @@ namespace DCLF
 	bool SceneStore::WriteObject(RE::BSGeometry* geometry, Tracked& a_tracked, PartTimer& timer, Ineligible& a_bucket)
 	{
 		// CS_DCLF_PERSISTENT_PARITY's frames: the cached verdict is used and *also* recomputed, and the two compared.
-		const bool classifyProbe = SwitchEnabled(Switch::PersistentParity) && ParityDue(frame, 17);
+		const bool classifyProbe = SwitchEnabled(Switch::PersistentParity) && ParityDue(sceneFrame, 17);
 		// CS_DCLF_COVERAGE_PROBE=1: which shader the uncovered objects actually use.
 		const bool coverageProbe = SwitchEnabled(Switch::CoverageProbe);
 		auto* trackedEntry = &a_tracked;
@@ -504,7 +504,7 @@ namespace DCLF
 				reason = ClassifyFrame(entry);
 				// A verdict the frame changed is a classification: EvaluateRound takes the entry's traits again.
 				if (reason != trackedEntry->candidateReason)
-					trackedEntry->candidateFrame = frame;
+					trackedEntry->candidateFrame = sceneFrame;
 				trackedEntry->candidateReason = reason;
 			}
 			++stats.ineligible[static_cast<std::size_t>(reason)];
@@ -553,7 +553,7 @@ namespace DCLF
 			if (denseWalk) {
 				referenceReasons[geometry] = reason;
 			} else {
-				trackedEntry->candidateFrame = frame;
+				trackedEntry->candidateFrame = sceneFrame;
 				trackedEntry->candidateReason = reason;
 				trackedEntry->classifyInputs = ClassifyInputsOf(*geometry);
 				StoreInputComponents(*trackedEntry, *geometry);
@@ -793,7 +793,7 @@ namespace DCLF
 			tables.treeAnim[objectId] = ObjectTreeAnim{};
 			tables.fadeDistance[objectId] = 0.0f;
 		}
-		tables.actorWetness.Set(objectId, trackedEntry->actorOwned ? trackedEntry->groupIdentity : 0,
+		tables.SetActorWetness(objectId, trackedEntry->actorOwned ? trackedEntry->groupIdentity : 0,
 			trackedEntry->identity);
 		if (trackedEntry->actorOwned)
 			tables.actorObjects.push_back(objectId);
@@ -871,7 +871,7 @@ namespace DCLF
 			tables.treeAnim[slot] = ObjectTreeAnim{};
 			tables.fadeDistance[slot] = 0.0f;
 		}
-		tables.actorWetness.Set(slot, 0, a_tracked.identity);
+		tables.SetActorWetness(slot, 0, a_tracked.identity);
 		tables.skinPartitions[slot] = 0;
 		tables.skinLodPartitions[slot] = 0;
 		tables.draws[slot] = DrawTemplateOf(tables.geometries[geometrySlot], keepMember ? keptPipeline : 0);
@@ -1067,11 +1067,11 @@ namespace DCLF
 			if (!staleGeometry)
 				geometryIt = geometryIndex.emplace(a_source.key, slot).first;
 			a_timer.Add(BuildPart::Resolve);
-		} else if (resolveBuffers && tables.geometryLastUsed[geometryIt->second] != frame) {
+		} else if (resolveBuffers && tables.geometryLastUsed[geometryIt->second] != sceneFrame) {
 			// First use of the slot this frame: the Touch above already kept the references alive.
 			a_timer.Add(BuildPart::DedupHit);
 		}
-		tables.geometryLastUsed[geometryIt->second] = frame;
+		tables.geometryLastUsed[geometryIt->second] = sceneFrame;
 		return geometryIt->second;
 	}
 
@@ -1346,7 +1346,9 @@ namespace DCLF
 			// A candidate losing a geometry (a cell unloading frees the entry after its geometries) is written again at the walk's
 			// candidates update; until then the snapshots that name it hold its node.
 			MarkLightEntryDirty(a_tracked.lightRoot);
-			Unlist(lightDependents, a_tracked.lightRoot, a_geometry);
+			// Its last dependent gone: out of the frame's light entries (IsLightEntry, through the log).
+			if (!Unlist(lightDependents, a_tracked.lightRoot, a_geometry))
+				lightEntryChanges.push_back({ a_tracked.lightRoot, -1 });
 			ReleaseRootOwner(a_tracked.lightRoot);
 			a_tracked.lightRoot = nullptr;
 		}
@@ -1565,7 +1567,7 @@ namespace DCLF
 		// The verdict's inputs are the hidden bits on its chain, which have events (hiddenDependents), a switch's
 		// selection, taken every frame here, and the toggles and fades, which classify it again. Without an event it
 		// stands; a parity frame takes it again anyway and counts a change no event announced.
-		const bool announced = a_tracked.hiddenEventFrame == frame || a_tracked.parentReason == Ineligible::Switch || !hiddenGating || a_tracked.hiddenChain.empty();
+		const bool announced = a_tracked.hiddenEventFrame == sceneFrame || a_tracked.parentReason == Ineligible::Switch || !hiddenGating || a_tracked.hiddenChain.empty();
 		if (!announced && !hiddenWitness) {
 			++stats.verdictsSkipped;
 			return true;
@@ -1678,7 +1680,7 @@ namespace DCLF
 					tables.NoteWrite(entry.slot, columnsBefore);
 				} else {
 					tables.NoteChange(entry.slot, kChangeAll);
-					entry.writtenFrame = frame;  // T6b0
+					entry.writtenFrame = sceneFrame;  // T6b0
 				}
 			}
 			// What its sun entry's candidacy reads (SunEntryAllows), and what the entry's snapshot row holds of it (its object, whether the
@@ -1696,7 +1698,7 @@ namespace DCLF
 			}
 			ListDependents(geometry, entry);
 			// Classified now: a new entry, or an event took its classification again.
-			if (entry.candidateFrame == frame) {
+			if (entry.candidateFrame == sceneFrame) {
 				// Per frame only when a frame can change its record: a face shape (classified every frame), an entry
 				// under a switch, or one whose verdict lets it have a record, with inputs that change every frame. An
 				// entry left out by its verdict is taken again when the verdict is due, like any other.
@@ -1919,7 +1921,7 @@ namespace DCLF
 		staleGeometrySlots.clear();
 		if (resolveBuffers && !geometryResolvedLastWalk) {
 			for (std::uint32_t g = 0; g < tables.geometries.size(); ++g) {
-				if (!tables.geometrySlots.Alive(g) || tables.geometryLastUsed[g] == frame)
+				if (!tables.geometrySlots.Alive(g) || tables.geometryLastUsed[g] == sceneFrame)
 					continue;  // free, or written this frame (resolved by the write)
 				if (!tables.geometries[g].vertexAddress)
 					staleGeometrySlots.push_back(g);
@@ -1995,7 +1997,7 @@ namespace DCLF
 		}
 		RefreshShadowSets(false);
 		const bool shadowIndexParity = SwitchEnabled(Switch::PersistentParity);
-		if (shadowIndexParity && ParityDue(frame, 15)) {
+		if (shadowIndexParity && ParityDue(sceneFrame, 15)) {
 			const auto textures = tables.shadowTextureSet;
 			const auto shadowKeys = tables.shadowKeysUsed;
 			const auto occlusionKeys = tables.occlusionKeysUsed;
@@ -2010,7 +2012,7 @@ namespace DCLF
 			if (textures != tables.shadowTextureSet || shadowKeys != tables.shadowKeysUsed || occlusionKeys != tables.occlusionKeysUsed ||
 				casters != stats.shadowCasters || rejects != stats.shadowRejects)
 				logger::error("[DCLF] incremental shadow dependencies disagreed with same-table full reconstruction (frame {}, stale inputs {}, textures {}->{}, shadow keys {}->{}, sky keys {}->{}, precipitation keys {}->{}, casters {}->{}, rejects {}->{})",
-					frame, staleInputs, textures.size(), tables.shadowTextureSet.size(), shadowKeys.size(), tables.shadowKeysUsed.size(), occlusionKeys[kOcclusionSky].size(),
+					sceneFrame, staleInputs, textures.size(), tables.shadowTextureSet.size(), shadowKeys.size(), tables.shadowKeysUsed.size(), occlusionKeys[kOcclusionSky].size(),
 					tables.occlusionKeysUsed[kOcclusionSky].size(), occlusionKeys[kOcclusionPrecipitation].size(), tables.occlusionKeysUsed[kOcclusionPrecipitation].size(),
 					casters, stats.shadowCasters, rejects[0], stats.shadowRejects[0]);
 		}

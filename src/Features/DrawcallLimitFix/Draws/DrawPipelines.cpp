@@ -3,29 +3,41 @@
 // volk must precede every Vulkan header in this translation unit.
 #	include <rhi_interop_vulkan.h>
 
+#	include "BuildExecutor.h"
 #	include "DrawPipelines.h"
 #	include "DrawPipelinesRhi.h"
 #	include "Features/DrawcallLimitFix/Engine/EngineStates.h"
+#	include "Features/DrawcallLimitFix/Common/EventQueue.h"
+#	include "Features/DrawcallLimitFix/Common/LatestSlot.h"
 #	include "Features/DrawcallLimitFix/Common/Switches.h"
 
 #	include "RenderGraph/RenderGraphRuntime.h"
 #	include "SpirvReflection.h"
+#	include "Features/DrawcallLimitFix/Scene/LightingConstants.h"
+#	include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
+#	include "Features/DrawcallLimitFix/Scene/Lookups.h"
 #	include "Features/DrawcallLimitFix/Scene/VertexInput.h"
 #	include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 #	include "ShaderCache.h"
+
+#	include <Tracy/Tracy.hpp>
 
 #	include <OpenRenderGraph/PersistentGraphHost.h>
 #	include <ORGModuleServices/PipelineService.h>
 #	include <rhi_helpers.h>
 
-#	include <future>
+#	include <algorithm>
+#	include <atomic>
+#	include <limits>
 #	include <stdexcept>
+#	include <string_view>
 
 namespace DCLF
 {
 	namespace
 	{
-		constexpr std::uint32_t kMaxInFlight = 4;  // pipeline builds running at once (each is a thread)
+		// The pipeline lane's frame inputs (render thread -> lane) and its catalogs (lane -> the scene lane) go through a LatestSlot
+		// (Common/LatestSlot.h).
 
 		/**
 		 * @brief Whether a fragment program can keep a depth-writing draw from testing depth before it shades: it discards
@@ -199,6 +211,67 @@ namespace DCLF
 			}
 		}
 
+		// The Lighting variables by index (ShaderConstants::LightingVS, LightingPS), named as ShaderCache.cpp's GetVariableIndices
+		// matches the game's shaders' cbuffer variables by.
+		constexpr std::string_view kLightingVSNames[] = { "World", "PreviousWorld", "EyePosition", "LandBlendParams", "TreeParams", "WindTimers", "TextureProj",
+			"IndexScale", "WorldMapOverlayParameters", "LeftEyeCenter", "RightEyeCenter", "TexcoordOffset", "HighDetailRange", "FogParam", "FogNearColor", "FogFarColor",
+			"Bones" };
+		constexpr std::string_view kLightingPSNames[] = { "NumLightNumShadowLight", "PointLightPosition", "PointLightColor", "DirLightDirection", "DirLightColor",
+			"DirectionalAmbient", "AmbientSpecularTintAndFresnelPower", "MaterialData", "EmitColor", "AlphaTestRef", "ShadowLightMaskSelect", "VPOSOffset",
+			"ProjectedUVParams", "ProjectedUVParams2", "ProjectedUVParams3", "SplitDistance", "SSRParams", "WorldMapOverlayParametersPS", "AmbientColor", "FogColor",
+			"ColourOutputClamp", "EnvmapData", "ParallaxOccData", "TintColor", "LODTexParams", "SpecularColor", "SparkleParams", "MultiLayerParallaxData",
+			"LightingEffectParams", "IBLParams", "LandscapeTexture1to4IsSnow", "LandscapeTexture5to6IsSnow", "LandscapeTexture1to4IsSpecPower",
+			"LandscapeTexture5to6IsSpecPower", "SnowRimLightParameters", "CharacterLightParams", "PBRFlags", "PBRParams1", "LandscapeTexture2PBRParams",
+			"LandscapeTexture3PBRParams", "LandscapeTexture4PBRParams", "LandscapeTexture5PBRParams", "LandscapeTexture6PBRParams", "PBRParams2",
+			"LandscapeTexture1GlintParameters", "LandscapeTexture2GlintParameters", "LandscapeTexture3GlintParameters", "LandscapeTexture4GlintParameters",
+			"LandscapeTexture5GlintParameters", "LandscapeTexture6GlintParameters", "MaterialObjectRGBScale" };
+		static_assert(std::size(kLightingVSNames) == kLightingVSVariables && std::size(kLightingPSNames) == kLightingPSVariables);
+
+		std::span<const std::string_view> LightingNames(bool a_pixel)
+		{
+			return a_pixel ? std::span<const std::string_view>(kLightingPSNames) : std::span<const std::string_view>(kLightingVSNames);
+		}
+
+		/**
+		 * @brief A stage's constant table (ConstantTables) from its modules: each Lighting variable their PerTechnique, PerMaterial or
+		 * PerGeometry block has, at its offset in floats, as ShaderCache's ReflectConstantBuffers makes it of a game shader's D3D
+		 * reflection; 0 where none has it. The modules are one stage's builds of one permutation (the colour and the Z-prepass pixel
+		 * stages), compiled from the same declarations (Lighting.hlsl places every member with packoffset), so a variable two of them
+		 * have is at one offset. The pulled stages declare no blocks: they read the rows these tables pack (PulledLightingSource).
+		 */
+		std::vector<std::uint8_t> ConstantTableOf(std::initializer_list<const SpirvReflection*> a_modules, bool a_pixel, const PipelineKey& a_key)
+		{
+			static std::atomic<std::uint32_t> logged{ 0 };
+			const auto names = LightingNames(a_pixel);
+			std::vector<std::uint8_t> table(names.size(), 0);
+			std::vector<std::uint8_t> found(names.size(), 0);
+			for (const auto* module : a_modules) {
+				for (const auto& member : module->blockMembers) {
+					if (member.block != "PerTechnique" && member.block != "PerMaterial" && member.block != "PerGeometry")
+						continue;
+					const auto it = std::find(names.begin(), names.end(), member.name);
+					if (it == names.end()) {
+						if (logged.fetch_add(1, std::memory_order_relaxed) < kMaxLoggedFailures)
+							logger::warn("[DCLF] Constant tables: {} {} member {} is no Lighting variable (VS {:08X} PS {:08X}); left out", a_pixel ? "PS" : "VS",
+								member.block, member.name, a_key.vertexDescriptor, a_key.pixelDescriptor);
+						continue;
+					}
+					const auto variable = static_cast<std::size_t>(it - names.begin());
+					const std::uint32_t offset = member.offset / 4;
+					if (offset > std::numeric_limits<std::uint8_t>::max() || (found[variable] && table[variable] != offset)) {
+						if (logged.fetch_add(1, std::memory_order_relaxed) < kMaxLoggedFailures)
+							logger::error("[DCLF] Constant tables: {} {} at float {} ({}) cannot be a table entry (VS {:08X} PS {:08X})", a_pixel ? "PS" : "VS", member.name,
+								offset, found[variable] ? fmt::format("another stage has it at {}", table[variable]) : std::string("beyond 255"), a_key.vertexDescriptor,
+								a_key.pixelDescriptor);
+						continue;
+					}
+					table[variable] = static_cast<std::uint8_t>(offset);
+					found[variable] = 1;
+				}
+			}
+			return table;
+		}
+
 		bool SameSemantic(std::string_view a_left, std::string_view a_right)
 		{
 			return a_left.size() == a_right.size() && std::equal(a_left.begin(), a_left.end(), a_right.begin(), [](char a, char b) { return std::toupper(static_cast<unsigned char>(a)) == std::toupper(static_cast<unsigned char>(b)); });
@@ -269,10 +342,25 @@ namespace DCLF
 	{
 		struct Entry
 		{
-			std::shared_future<org::services::PipelineArtifact> future;
 			std::uint32_t index = kNotReady;  // handed out once a published set version holds the pipeline
 			std::uint32_t slot = kNotReady;   // its index in the sets, from its admission
 			bool failed = false;
+		};
+		/** @brief A key asked of the pipeline lane (DrawPipelines::RequestLighting), with the pipeline slot that asked. */
+		struct LightingRequest
+		{
+			PipelineKey key{};
+			std::uint32_t slot = ~0u;
+		};
+		/**
+		 * @brief A shadow view key asked of the pipeline lane (DrawPipelines::RequestShadow), with the casters that asked: their key
+		 * slot's key (no mode bits, no view state) and their occlusion view (~0u for a shadow view's), for the on-demand warnings.
+		 */
+		struct ShadowRequest
+		{
+			ShadowPipelineKey viewKey{};
+			ShadowPipelineKey casterKey{};
+			std::uint32_t occlusion = ~0u;
 		};
 
 		/**
@@ -296,7 +384,8 @@ namespace DCLF
 			std::vector<std::uint32_t> zGroupOf, zGroupFirst;
 			std::uint32_t applied = 0;
 		};
-		// The shadow views' pipelines, versioned the same way: their plain draws bind each by its index (ShadowIndirectState).
+		// The shadow views' pipelines, versioned the same way (the lane's too): their plain draws bind each by its index
+		// (ShadowIndirectState).
 		struct ShadowSetVersion
 		{
 			// The pipelines of [0, applied), held for as long as a recording holds the version (ShadowIndirectState::pipelines),
@@ -383,43 +472,15 @@ namespace DCLF
 		// The Z-prepass's plain draws (IndirectState::zPipelines): their layout and a DrawSequence tail's signature.
 		rhi::PipelineLayoutPtr zLayout;
 		rhi::CommandSignaturePtr zDrawSignature;
-		// Tree LOD (FindTreeLod): its draw's signature, a plain DrawInstanced under zLayout; its pipelines' build, and the builds a
-		// target change replaced (kept: a frame in flight may still draw with them).
+		// Tree LOD (RequestTreeLod): its draw's signature, a plain DrawInstanced under zLayout. Its pipelines are the lane's (Lane::TreeLod).
 		rhi::CommandSignaturePtr treeLodDrawSignature;
-		std::shared_future<org::services::PipelineArtifact> treeLodFuture;
-		org::services::PipelinePayload treeLod;
-		std::vector<org::services::PipelinePayload> treeLodRetired;
-		bool treeLodFailed = false;
 		struct TreeLodBuilt
 		{
 			rhi::PipelinePtr depth, colour;
 		};
-		/*
-		 * The forward views' pipelines (FindForwardPipeline), by what builds them: the stages (their SPIR-V's hashes and sizes), the
-		 * targets and the cull. Kept for the process, as the main set's are until a target change: a frame in flight may draw with
-		 * any of them.
-		 */
-		struct ForwardKey
-		{
-			std::uint64_t vertex = 0, pixel = 0;
-			std::uint32_t vertexBytes = 0, pixelBytes = 0;
-			std::uint32_t colour = 0, depth = 0, cull = 0, pad = 0;
-
-			bool operator==(const ForwardKey&) const = default;
-		};
-		static_assert(std::has_unique_object_representations_v<ForwardKey>);
-		struct ForwardKeyHash
-		{
-			using is_avalanching = void;
-			std::uint64_t operator()(const ForwardKey& a_key) const noexcept { return ankerl::unordered_dense::detail::wyhash::hash(&a_key, sizeof(a_key)); }
-		};
-		struct ForwardEntry
-		{
-			std::shared_future<org::services::PipelineArtifact> future;
-			org::services::PipelinePayload payload;
-			bool failed = false;
-		};
-		ankerl::unordered_dense::map<ForwardKey, ForwardEntry, ForwardKeyHash> forward;
+		// The render thread's: what it has asked of the lane already (RequestTreeLod, RequestForward), so it asks each once.
+		bool treeLodAsked = false;
+		ankerl::unordered_dense::set<ForwardPipelineKey, ForwardPipelineKeyHash> forwardAsked;
 		rhi::PipelineLayoutHandle ShadowLayout() const { return shadowLayout->GetHandle(); }
 		// The shadow views' plain indirect draw (ShadowIndirectState::drawSignature): a DrawSequence's last words read as an
 		// indexed draw from the index pool (BuildDrawsCS, StoreShadowSequence), whose vertex stage pulls its vertices.
@@ -427,16 +488,59 @@ namespace DCLF
 		bool supported = false;
 		bool attempted = false;
 		org::services::PipelineService service;
-		ankerl::unordered_dense::map<PipelineKey, Entry, PipelineKeyHash> entries;
-		std::string recreatedBy, shadowRecreatedBy;  // the last recreation of each set, for NearestKey's warnings
-		// The shadow views' own set: one pipeline per (Utility technique, vertex layout, raster state),
-		// depth only, into the engine's shadow map format.
-		ankerl::unordered_dense::map<ShadowPipelineKey, Entry, ShadowPipelineKeyHash> shadowEntries;
-		Versions<ShadowSetVersion> shadowVersions;
-		std::vector<org::services::PipelinePayload> shadowSetPipelines;
-		DXGI_FORMAT shadowDepthFormat = DXGI_FORMAT_UNKNOWN;
-		// The shadow views' rasterizer states, by id - 1 (ShadowRasterStateId), and the render modes each was
-		// seen with (bit mode - 0xC).
+		/*
+		 * The builds' completions: each build's callback pushes its artifact (on the thread that built it, or at once on the
+		 * requesting thread for a pipeline the service already holds) and wakes the pipeline lane, which drains them. A completion
+		 * carries the generation it was requested in (the main set's for the main set and tree LOD, the shadow set's, the forward
+		 * pipelines'): one from before a target or format change is dropped.
+		 */
+		struct MainDone
+		{
+			PipelineKey key;
+			std::uint32_t generation = 0;
+			org::services::PipelineArtifact artifact;
+		};
+		struct ShadowDone
+		{
+			ShadowPipelineKey key;
+			std::uint32_t generation = 0;
+			org::services::PipelineArtifact artifact;
+		};
+		struct TreeLodDone
+		{
+			std::uint32_t generation = 0;
+			org::services::PipelineArtifact artifact;
+		};
+		struct ForwardDone
+		{
+			ForwardPipelineKey key;
+			std::uint32_t generation = 0;
+			org::services::PipelineArtifact artifact;
+		};
+		struct Completions
+		{
+			EventQueue<MainDone, 1024> main;
+			EventQueue<ShadowDone, 1024> shadow;
+			EventQueue<TreeLodDone, 16> treeLod;
+			EventQueue<ForwardDone, 256> forward;
+			// The pipeline lane's requests (RequestLighting, RequestShadow, RequestForward, RequestTreeLod: a flag, once is enough), and
+			// its requests to the render thread: the engine state bits it needs read (CaptureEngineStates replies with the frame's inputs).
+			EventQueue<LightingRequest, 1024> requests;
+			EventQueue<ShadowRequest, 1024> shadowRequests;
+			EventQueue<ForwardPipelineKey, 256> forwardRequests;
+			std::atomic<bool> treeLodRequest{ false };
+			EventQueue<std::uint32_t, 64> stateRequests;
+		};
+		// Never freed: a build may complete while the process tears down.
+		Completions* completions = new Completions;
+
+		// The builds run on DCLF's preparation pool (BuildExecutor.h), not a thread each.
+		Impl() { service.Configure(BuildSubmitter()); }
+
+		// The shadow views' own set (one pipeline per Utility technique, vertex layout and view rasterizer state, depth only, into
+		// the engine's shadow map format) is the pipeline lane's: Lane::Shadow. The rasterizer states' registry is the render
+		// thread's: by id - 1 (ShadowRasterStateId); the lane builds from the states posted with the frame's inputs
+		// (FrameInput::shadowStates).
 		struct ShadowRasterState
 		{
 			float depthBias = 0.0f;
@@ -467,9 +571,7 @@ namespace DCLF
 			return engineFrontCCW;
 		}
 		std::optional<bool> engineFrontCCW;
-		std::vector<std::uint32_t> shadowRasterStateModes;
 		std::uint32_t loggedShadowRasterFailures = 0;
-		std::uint32_t shadowInFlight = 0;
 		// What a build produces: the pipelines of both variants and the registers the shaders read.
 		struct Built
 		{
@@ -482,6 +584,7 @@ namespace DCLF
 			// is (ZPipelineKey), by which the pipelines that build the same one share it.
 			rhi::PipelinePtr pulledDepth;
 			ZPipelineKey zKey;
+			std::shared_ptr<const ConstantTables> tables;  // a main pipeline's stages' (ConstantTableOf)
 		};
 
 		/**
@@ -582,14 +685,199 @@ namespace DCLF
 			return state;
 		}
 
-		Versions<SetVersion> versions;
-		std::vector<org::services::PipelinePayload> setPipelines;  // index -> Built, admitted (not necessarily published)
-		// The admitted pipelines' Z-prepass groups: by index, each pipeline's (its Built::zKey's, numbered as first admitted),
-		// and by group, its first pipeline.
-		std::vector<std::uint32_t> zGroupOf, zGroupFirst;
-		ankerl::unordered_dense::map<ZPipelineKey, std::uint32_t, ZPipelineKeyHash> zGroups;
-		std::uint32_t inFlight = 0;
-		std::uint32_t loggedFailures = 0;
+		/**
+		 * @brief The frame's inputs to the pipeline lane (render thread -> lane, latest-wins, PostInput): what its builds need that
+		 * only the render thread can read. Each post is whole, so the lane never sees half of one.
+		 */
+		struct FrameInput
+		{
+			TargetFormats targets;
+			std::uint32_t targetsGeneration = 0;  // DrawPipelines::generation, whose targets these are
+			// The engine states the render thread read (CaptureEngineStates), by RasterStateBits: every one asked for, valid or not.
+			std::shared_ptr<const ankerl::unordered_dense::map<std::uint32_t, EngineState>> states;
+			std::optional<bool> frontCCW;      // EngineFrontCCW, once the engine's table holds a state
+			RE::BSShader* lighting = nullptr;  // the Lighting shader the programs' defines are of (ConstantEvaluator)
+			// The shadow views' (SetShadowInputs, ShadowRasterStateId): the Utility shader their programs build, the shadow map format
+			// their pipelines draw into, and the registered view rasterizer states (by id - 1; append-only, so a newer list holds every
+			// id an older one did).
+			RE::BSShader* utility = nullptr;
+			DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;
+			std::shared_ptr<const std::vector<ShadowRasterState>> shadowStates;
+			// Tree LOD's (SetTreeLodInputs): the DistantTree shader its programs and the forward tree program build. The forward views'
+			// (SetForwardTargets): the targets their pipelines draw into.
+			RE::BSShader* distantTree = nullptr;
+			ForwardTargets forwardTargets;
+		};
+		LatestSlot<FrameInput> inputSlot;
+		FrameInput renderInput;                       // render thread: what it posts, as last posted
+		std::vector<std::uint32_t> pendingStateBits;  // render thread: asked for by the lane, not readable yet (no deferred pass yet)
+		LatestSlot<PipelineCatalog> catalogSlot;      // lane -> the scene lane (TakeCatalog)
+
+		/** @brief Render thread: posts the frame's inputs as they are now (the owner's targets with them) and wakes the lane. */
+		void PostInput(const DrawPipelines& a_owner)
+		{
+			renderInput.targets = a_owner.targets;
+			renderInput.targetsGeneration = a_owner.generation;
+			inputSlot.Post(std::make_unique<FrameInput>(renderInput));
+			WakePipelineLane();
+		}
+
+		/**
+		 * @brief The pipeline lane's own state (T6b2c step 4): touched only by its passes (DrainLane), one at a time on DCLF's
+		 * coordinator, but its counters, which the report reads.
+		 */
+		struct Lane
+		{
+			std::shared_ptr<const FrameInput> input;  // the newest taken
+			std::uint32_t generation = 0;             // the main set's (PipelineCatalog::generation)
+			// The keys requested from the service, or failed for good (their program), and how many failed.
+			ankerl::unordered_dense::map<PipelineKey, Entry, PipelineKeyHash> entries;
+			std::uint32_t failedEntries = 0;
+			// Every key asked for, with the slot that first asked: requested again whole after a target change.
+			ankerl::unordered_dense::map<PipelineKey, std::uint32_t, PipelineKeyHash> asked;
+			// The keys waiting on their program (by ShaderPrograms::LightingProgramId), retried when UpdateLane finishes it; and the
+			// keys waiting on an input (the targets, the winding, an engine state, the set's room), retried when the inputs change.
+			ankerl::unordered_dense::map<std::uint64_t, std::vector<PipelineKey>> programWaiters;
+			std::vector<PipelineKey> blocked;
+			ankerl::unordered_dense::set<std::uint32_t> statesAsked;  // engine state bits asked of the render thread
+			ShaderPrograms::Finished finishedPrograms;               // UpdateLane's, per pass (every kind's)
+			Versions<SetVersion> versions;
+			std::vector<org::services::PipelinePayload> setPipelines;  // index -> Built, admitted (not necessarily published)
+			// The admitted pipelines' Z-prepass groups: by index, each pipeline's (its Built::zKey's, numbered as first admitted),
+			// and by group, its first pipeline.
+			std::vector<std::uint32_t> zGroupOf, zGroupFirst;
+			ankerl::unordered_dense::map<ZPipelineKey, std::uint32_t, ZPipelineKeyHash> zGroups;
+			std::vector<std::array<RegisterUsage, kVariantCount>> usage;  // by set index, then variant
+			std::vector<std::shared_ptr<const ConstantTables>> constantTables;  // by set index
+			std::string recreatedBy;  // the set's last recreation, for NearestKey's warnings
+			std::uint32_t loggedFailures = 0;
+			std::uint64_t revision = 0;
+			bool dirty = false;  // the catalog to publish at the end of the pass
+			struct Counters
+			{
+				std::atomic<std::uint32_t> requested{ 0 }, ready{ 0 }, failed{ 0 }, zPipelines{ 0 }, zDepthOnly{ 0 }, setPublishes{ 0 }, setWaits{ 0 };
+			};
+			Counters counters;
+			/**
+			 * @brief The shadow views' set (T6b2c step 6), kept as the main set is: keyed by the view key (ShadowPipelineKey with its
+			 * mode's bits and its view state), built for the inputs' shadow map format, published in its own set versions.
+			 */
+			struct Shadow
+			{
+				std::uint32_t generation = 0;  // PipelineCatalog::shadowGeneration: a format change starts a new set
+				ankerl::unordered_dense::map<ShadowPipelineKey, Entry, ShadowPipelineKeyHash> entries;
+				std::uint32_t failedEntries = 0;
+				// Every key asked for, with the casters that first asked: requested again whole after a format change.
+				ankerl::unordered_dense::map<ShadowPipelineKey, ShadowRequest, ShadowPipelineKeyHash> asked;
+				// The keys waiting on their program (by Utility technique), retried when UpdateLane finishes it; and the keys waiting on
+				// an input (the Utility shader, the format, their view state, the set's room), retried when the inputs change.
+				ankerl::unordered_dense::map<std::uint32_t, std::vector<ShadowPipelineKey>> programWaiters;
+				std::vector<ShadowPipelineKey> blocked;
+				Versions<ShadowSetVersion> versions;
+				// By index, admitted (not necessarily published): the pipeline, its key's vertex layout and its class (kShadowDiscards).
+				std::vector<org::services::PipelinePayload> setPipelines;
+				std::vector<std::uint64_t> layouts;
+				std::vector<std::uint8_t> discards;
+				std::string recreatedBy;  // the set's last recreation, for NearestShadowKey's warnings
+				std::uint32_t loggedFailures = 0;
+				struct Counters
+				{
+					std::atomic<std::uint32_t> requested{ 0 }, ready{ 0 }, failed{ 0 }, setPublishes{ 0 }, setWaits{ 0 };
+				};
+				Counters counters;
+			};
+			Shadow shadow;
+			/**
+			 * @brief Tree LOD's two pipelines (T6b2c step 9), built for the main set's targets: again with each new main set
+			 * (RecreateMainSet), their completion dropped by the main set's generation.
+			 */
+			struct TreeLod
+			{
+				bool asked = false;          // RequestTreeLod has arrived: built from here on, for every generation
+				bool requested = false;      // this generation's build is queued (its completion: Completions::treeLod)
+				bool failed = false;         // this generation's build failed, or the program did
+				bool programFailed = false;  // for good
+				org::services::PipelinePayload built;
+				// Earlier generations' builds, kept for the process: a recording may still draw with them.
+				std::vector<org::services::PipelinePayload> retired;
+				struct Counters
+				{
+					std::atomic<std::uint32_t> requested{ 0 }, ready{ 0 }, failed{ 0 };
+				};
+				Counters counters;
+			};
+			TreeLod treeLod;
+			/**
+			 * @brief The forward views' pipelines (T6b2c step 9), keyed as asked (ForwardPipelineKey), built for the inputs' forward
+			 * targets: again with new ones (RecreateForward). Every built pipeline is kept for the process (no set: a recording binds
+			 * each by its handle).
+			 */
+			struct Forward
+			{
+				std::uint32_t generation = 0;  // a forward targets change starts them over
+				struct Entry
+				{
+					org::services::PipelinePayload built;
+					bool requested = false;  // its build is queued, or done
+					bool failed = false;     // its program or its build failed, for good (this generation)
+				};
+				// The keys whose program the lane has (and so their pipeline requested), or found failed.
+				ankerl::unordered_dense::map<ForwardPipelineKey, Entry, ForwardPipelineKeyHash> entries;
+				// Every key asked for: requested again whole after a targets change.
+				ankerl::unordered_dense::set<ForwardPipelineKey, ForwardPipelineKeyHash> asked;
+				// The keys waiting on their program (by ShaderPrograms::ForwardProgramId, the forward tree's by kTreeProgram), retried when
+				// UpdateLane finishes it; and the keys waiting on an input (the targets, the winding, the shader), retried when the inputs change.
+				static constexpr std::uint64_t kTreeProgram = ~0ull;
+				ankerl::unordered_dense::map<std::uint64_t, std::vector<ForwardPipelineKey>> programWaiters;
+				std::vector<ForwardPipelineKey> blocked;
+				std::vector<org::services::PipelinePayload> retired;  // earlier targets' builds, kept for the process
+				std::uint32_t loggedFailures = 0;
+				struct Counters
+				{
+					std::atomic<std::uint32_t> requested{ 0 }, ready{ 0 }, failed{ 0 };
+				};
+				Counters counters;
+			};
+			Forward forward;
+		};
+		Lane lane;
+
+		/** @brief The lane's pass (SetPipelineLaneDrain). */
+		static void DrainLaneThunk();
+		void DrainLane();
+		/** @brief The lane: requests a_key's program and then its pipeline, or parks it until what it lacks arrives. */
+		void TryRequest(const PipelineKey& a_key);
+		/** @brief The lane: the main pass's targets changed; every key is built again into a new set. */
+		void RecreateMainSet(const TargetFormats& a_from, const TargetFormats& a_to);
+		/** @brief The lane: the builds that completed, admitted, published in a set version, and their indices handed out. */
+		void AdmitLane();
+		/** @brief The lane: requests a shadow view key's program and then its pipeline, or parks it until what it lacks arrives. */
+		void TryRequestShadow(const ShadowPipelineKey& a_key);
+		/** @brief The lane: the shadow map format changed; every shadow key is built again into a new set. */
+		void RecreateShadowSet(DXGI_FORMAT a_from, DXGI_FORMAT a_to);
+		/** @brief The lane: AdmitLane for the shadow views' set. */
+		void AdmitShadow();
+		/** @brief The lane: requests tree LOD's program and then its pipelines once asked for, or leaves them until what they lack arrives. */
+		void TryRequestTreeLod();
+		/** @brief The lane: requests a forward key's program and then its pipeline, or parks it until what it lacks arrives. */
+		void TryRequestForward(const ForwardPipelineKey& a_key);
+		/** @brief The lane: the forward targets changed; every forward key is built again. */
+		void RecreateForward(const ForwardTargets& a_from, const ForwardTargets& a_to);
+		/** @brief The lane: tree LOD's and the forward pipelines' builds that completed. */
+		void AdmitTreeLodAndForward();
+		void PublishCatalog();
+		/** @brief The lane: NearestKey for a shadow view key, among the shadow keys requested. */
+		std::string NearestShadowKey(const ShadowPipelineKey& a_key) const;
+		/**
+		 * @brief The lane, for the on-demand build warnings: the pipeline already requested whose key is nearest a_key (fewest
+		 * differing bits), with the fields that differ, or why there is none (the set was recreated, and by what).
+		 */
+		std::string NearestKey(const PipelineKey& a_key) const;
+		static std::string DescribeKey(const PipelineKey& a_key)
+		{
+			return fmt::format("VS {:08X} PS {:08X} pass {:08X} ({}), raster {:X}, vertex layout {:016X}", a_key.vertexDescriptor, a_key.pixelDescriptor,
+				a_key.passDescriptor, LightingTechniqueName((a_key.passDescriptor >> 24) & 0x3f), a_key.rasterFlags, a_key.vertexLayout);
+		}
 
 		bool Initialize()
 		{
@@ -793,7 +1081,7 @@ namespace DCLF
 			return true;
 		}
 
-		/** @brief Tree LOD's pipelines (DrawPipelines::FindTreeLod). */
+		/** @brief Tree LOD's pipelines (TryRequestTreeLod). */
 		static org::services::PipelinePayload BuildTreeLod(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const ShaderPrograms::TreeLodProgram* a_program,
 			TargetFormats a_targets, rhi::BlendState a_blend, bool a_frontCCW)
 		{
@@ -844,7 +1132,7 @@ namespace DCLF
 			return built;
 		}
 
-		/** @brief A forward view's pipeline (FindForwardPipeline). */
+		/** @brief A forward view's pipeline (TryRequestForward). */
 		static org::services::PipelinePayload BuildForward(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const ShaderPrograms::ForwardProgram* a_program,
 			ForwardTargets a_targets, rhi::CullMode a_cull, bool a_frontCCW)
 		{
@@ -905,6 +1193,8 @@ namespace DCLF
 			AddUsage(pixel, true, built->usage[kColorVariant]);
 			AddUsage(vertex, false, built->usage[kDepthVariant]);
 			AddUsage(depthPixel, true, built->usage[kDepthVariant]);
+			// The tables its constant groups are packed by (T6b2c): its own stages', fixed with it.
+			built->tables = std::make_shared<const ConstantTables>(ConstantTables{ ConstantTableOf({ &vertex }, false, a_key), ConstantTableOf({ &pixel, &depthPixel }, true, a_key) });
 
 			const rhi::SubobjLayout layout{ a_layout };
 			const rhi::SubobjShader vertexShader{ rhi::ShaderStage::Vertex, { a_program->vertex.data(), static_cast<std::uint32_t>(a_program->vertex.size()) }, "main" };
@@ -1106,7 +1396,10 @@ namespace DCLF
 
 	DrawPipelines::DrawPipelines() :
 		impl(std::make_unique<Impl>())
-	{}
+	{
+		// The pipeline lane's pass, named once this is whole (a pass that runs meanwhile waits for Get's construction).
+		SetPipelineLaneDrain(&Impl::DrainLaneThunk);
+	}
 
 	DrawPipelines::~DrawPipelines() = default;
 
@@ -1127,59 +1420,166 @@ namespace DCLF
 		if (a_formats == targets || a_formats.colorCount == 0 || a_formats.depth == DXGI_FORMAT_UNKNOWN)
 			return;
 		if (HasTargetFormats()) {
-			// Every pipeline depends on the targets: start over (in-flight builds finish and are dropped).
+			// Every pipeline depends on the targets: start over (queued builds finish, and the new generation drops their completions).
 			auto describe = [](const TargetFormats& a_formats) {
 				std::string text;
 				for (std::uint32_t i = 0; i < a_formats.colorCount; ++i)
 					text += fmt::format("{} ", static_cast<int>(a_formats.colors[i]));
 				return text + fmt::format("depth {}", static_cast<int>(a_formats.depth));
 			};
-			logger::info("[DCLF] Main pass targets changed ({} -> {}); rebuilding {} indirect pipelines", describe(targets), describe(a_formats), impl->setPipelines.size());
+			// The main set and tree LOD's pipelines are the pipeline lane's: it rebuilds them from the inputs posted below
+			// (RecreateMainSet). Until the frame's catalog is of the new targets, GetIndirectState has no set and TreeLodPipelinesOf no
+			// pipelines (its generation is behind this one).
+			logger::info("[DCLF] Main pass targets changed ({} -> {}); the indirect pipelines and tree LOD's are built again", describe(targets), describe(a_formats));
 			++stats.targetChanges;
-			impl->entries.clear();
-			impl->versions.Retire();
-			impl->setPipelines.clear();
-			impl->zGroupOf.clear();
-			impl->zGroupFirst.clear();
-			impl->zGroups.clear();
-			usage.clear();
 			++generation;
-			impl->inFlight = 0;
-			stats.requested = stats.ready = stats.failed = stats.zPipelines = stats.zDepthOnly = 0;
-			impl->recreatedBy = fmt::format("main pass targets {} -> {}", describe(targets), describe(a_formats));
-			if (impl->treeLod)
-				impl->treeLodRetired.push_back(std::move(impl->treeLod));
-			impl->treeLod = {};
-			impl->treeLodFuture = {};
-			impl->treeLodFailed = false;
 		}
 		targets = a_formats;
+		if (Enabled())
+			impl->PostInput(*this);
 	}
 
-	const ShaderPrograms::ShadowProgram* RequestShadowProgram(std::uint32_t a_technique, const ShadowPipelineKey& a_casterKey, std::uint32_t a_occlusion,
-		RE::BSShader& a_utility, bool a_allowRequest, bool* a_requested)
+	void DrawPipelines::RequestLighting(const PipelineKey& a_key, std::uint32_t a_slot)
 	{
-		std::uint8_t onDemand = 0;
-		const auto* program = ShaderPrograms::Get().FindShadow(a_technique, a_utility, a_allowRequest, a_requested, &onDemand);
-		if (onDemand)
-			logger::warn("[DCLF] on-demand SPIR-V compile: Utility {} of technique {:08X} that no precompile requested ({}): raster {:X}, vertex layout {:016X}; used by {}",
-				ShaderPrograms::OnDemandStages(onDemand), a_technique,
-				SIE::ShaderCache::Instance().IsCompiling() ? "Community Shaders' compile workers still busy" : "Community Shaders' compile workers idle",
-				a_casterKey.rasterFlags, a_casterKey.vertexLayout, SceneStore::Get().DescribeShadowKeyUsers(a_casterKey, a_occlusion));
-		return program;
+		impl->completions->requests.Push({ a_key, a_slot });
+		WakePipelineLane();
 	}
 
-	std::uint32_t RequestShadowPipeline(const ShadowPipelineKey& a_viewKey, const ShaderPrograms::ShadowProgram& a_program, DXGI_FORMAT a_format,
-		const ShadowPipelineKey& a_casterKey, std::uint32_t a_occlusion)
+	void DrawPipelines::RequestTreeLod()
 	{
-		auto& pipelines = DrawPipelines::Get();
-		bool requested = false;
-		const std::uint32_t index = pipelines.FindShadow(a_viewKey, a_program, a_format, &requested);
-		if (requested)
-			logger::warn("[DCLF] on-demand pipeline build: shadow technique {:08X}, raster {:X}, vertex layout {:016X}, view state {}, format {}; used by {}; {}",
-				a_viewKey.technique, a_viewKey.rasterFlags, a_viewKey.vertexLayout, a_viewKey.viewState, static_cast<int>(a_format),
-				SceneStore::Get().DescribeShadowKeyUsers(a_casterKey, a_occlusion), pipelines.NearestShadowKey(a_viewKey));
-		return index;
+		if (impl->treeLodAsked)
+			return;
+		impl->treeLodAsked = true;
+		impl->completions->treeLodRequest.store(true, std::memory_order_release);
+		WakePipelineLane();
+	}
+
+	void DrawPipelines::SetTreeLodInputs(RE::BSShader& a_distantTree)
+	{
+		auto& input = impl->renderInput;
+		if (input.distantTree == &a_distantTree || !Enabled())
+			return;
+		input.distantTree = &a_distantTree;
+		impl->PostInput(*this);
+	}
+
+	void DrawPipelines::RequestForward(const ForwardPipelineKey& a_key)
+	{
+		if (!impl->forwardAsked.insert(a_key).second)
+			return;
+		impl->completions->forwardRequests.Push(a_key);
+		WakePipelineLane();
+	}
+
+	void DrawPipelines::SetForwardTargets(const ForwardTargets& a_targets)
+	{
+		auto& input = impl->renderInput;
+		if (a_targets.colour == DXGI_FORMAT_UNKNOWN || a_targets.depth == DXGI_FORMAT_UNKNOWN || input.forwardTargets == a_targets || !Enabled())
+			return;
+		input.forwardTargets = a_targets;
+		impl->PostInput(*this);
+	}
+
+	std::shared_ptr<const PipelineCatalog> DrawPipelines::TakeCatalog()
+	{
+		// The scene lane's (T6b2c step 5): what the lane published since the last call, null when nothing newer.
+		return std::shared_ptr<const PipelineCatalog>(impl->catalogSlot.Take());
+	}
+
+	DrawPipelines::Stats DrawPipelines::GetStats() const
+	{
+		Stats result = stats;
+		const auto& counters = impl->lane.counters;
+		result.requested = counters.requested.load(std::memory_order_relaxed);
+		result.ready = counters.ready.load(std::memory_order_relaxed);
+		result.failed = counters.failed.load(std::memory_order_relaxed);
+		result.zPipelines = counters.zPipelines.load(std::memory_order_relaxed);
+		result.zDepthOnly = counters.zDepthOnly.load(std::memory_order_relaxed);
+		result.setPublishes = counters.setPublishes.load(std::memory_order_relaxed);
+		result.setWaits = counters.setWaits.load(std::memory_order_relaxed);
+		const auto& shadowCounters = impl->lane.shadow.counters;
+		result.shadowRequested = shadowCounters.requested.load(std::memory_order_relaxed);
+		result.shadowReady = shadowCounters.ready.load(std::memory_order_relaxed);
+		result.shadowFailed = shadowCounters.failed.load(std::memory_order_relaxed);
+		result.shadowSetPublishes = shadowCounters.setPublishes.load(std::memory_order_relaxed);
+		result.shadowSetWaits = shadowCounters.setWaits.load(std::memory_order_relaxed);
+		const auto& treeCounters = impl->lane.treeLod.counters;
+		result.treeLodRequested = treeCounters.requested.load(std::memory_order_relaxed);
+		result.treeLodReady = treeCounters.ready.load(std::memory_order_relaxed);
+		result.treeLodFailed = treeCounters.failed.load(std::memory_order_relaxed);
+		const auto& forwardCounters = impl->lane.forward.counters;
+		result.forwardRequested = forwardCounters.requested.load(std::memory_order_relaxed);
+		result.forwardReady = forwardCounters.ready.load(std::memory_order_relaxed);
+		result.forwardFailed = forwardCounters.failed.load(std::memory_order_relaxed);
+		return result;
+	}
+
+	void DrawPipelines::CheckConstantTables(const RE::BSShader& a_lighting, const Lookups& a_lookups)
+	{
+		auto& parity = tableParity;
+		++parity.checks;
+		auto& cache = SIE::ShaderCache::Instance();
+		// A table entry as a byte (Community Shaders' are int8_t, read unsigned by the engine), 0 past its end.
+		auto at = [](const auto& a_table, std::uint32_t a_variable) -> std::uint32_t {
+			return a_variable < a_table.size() ? static_cast<std::uint8_t>(a_table[a_variable]) : 0u;
+		};
+		for (const auto& entry : a_lookups.pipelines) {
+			if (entry.setIndex == Lookups::kNone)
+				continue;
+			++parity.entries;
+			const auto* vs = cache.GetVertexShader(a_lighting, entry.key.vertexDescriptor);
+			const auto* ps = cache.GetPixelShader(a_lighting, entry.key.pixelDescriptor);
+			if (!vs || !ps) {
+				++parity.uncached;
+				continue;
+			}
+			for (const bool pixel : { false, true }) {
+				const auto names = LightingNames(pixel);
+				const auto* groups = pixel ? kPSGroups : kVSGroups;
+				const auto* firsts = pixel ? kPSFirstVariable : kVSFirstVariable;
+				for (std::uint32_t v = 0; v < names.size(); ++v) {
+					// Offset 0 is also what a table holds for a variable the stage lacks: it counts only for its group's first.
+					std::uint32_t first = ~0u;
+					for (std::uint32_t group = 0; group < 3; ++group)
+						if ((groups[group] >> v) & 1)
+							first = firsts[group];
+					const std::uint32_t ours = at(pixel ? entry.psTable : entry.vsTable, v);
+					const std::uint32_t theirs = pixel ? at(ps->constantTable, v) : at(vs->constantTable, v);
+					const bool inOurs = ours != 0 || v == first, inTheirs = theirs != 0 || v == first;
+					auto describe = [&] {
+						return fmt::format("VS {:08X} PS {:08X}: {} {} at {}, ShaderCache {}", entry.key.vertexDescriptor, entry.key.pixelDescriptor, pixel ? "PS" : "VS",
+							names[v], ours, theirs);
+					};
+					if (inOurs && inTheirs) {
+						++parity.variables;
+						if (ours != theirs && parity.differ++ == 0)
+							parity.first = describe();
+					} else if (inOurs) {
+						if (parity.catalogOnly++ == 0)
+							parity.catalogOnlyFirst = describe();
+					} else if (inTheirs) {
+						++parity.cacheOnly;
+					}
+				}
+			}
+		}
+	}
+
+	void DrawPipelines::RequestShadow(const ShadowPipelineKey& a_viewKey, const ShadowPipelineKey& a_casterKey, std::uint32_t a_occlusion)
+	{
+		impl->completions->shadowRequests.Push({ a_viewKey, a_casterKey, a_occlusion });
+		WakePipelineLane();
+	}
+
+	void DrawPipelines::SetShadowInputs(DXGI_FORMAT a_format, RE::BSShader& a_utility)
+	{
+		auto& input = impl->renderInput;
+		// The format of a view the engine has drawn (a typeless resource's view format): unknown until then, and not posted.
+		if (a_format == DXGI_FORMAT_UNKNOWN || (input.shadowFormat == a_format && input.utility == &a_utility) || !Enabled())
+			return;
+		input.shadowFormat = a_format;
+		input.utility = &a_utility;
+		impl->PostInput(*this);
 	}
 
 	namespace
@@ -1199,11 +1599,11 @@ namespace DCLF
 		};
 	}
 
-	std::string DrawPipelines::NearestKey(const PipelineKey& a_key) const
+	std::string DrawPipelines::Impl::NearestKey(const PipelineKey& a_key) const
 	{
 		const PipelineKey* nearest = nullptr;
 		KeyDifference best;
-		for (const auto& [key, entry] : impl->entries) {
+		for (const auto& [key, entry] : lane.entries) {
 			if (key == a_key)
 				continue;
 			KeyDifference difference;
@@ -1218,15 +1618,15 @@ namespace DCLF
 			}
 		}
 		if (!nearest)
-			return impl->recreatedBy.empty() ? std::string("the first pipeline") : fmt::format("no other pipeline since the set was recreated ({})", impl->recreatedBy);
+			return lane.recreatedBy.empty() ? std::string("the first pipeline") : fmt::format("no other pipeline since the set was recreated ({})", lane.recreatedBy);
 		return fmt::format("nearest requested pipeline differs in {}", best.fields);
 	}
 
-	std::string DrawPipelines::NearestShadowKey(const ShadowPipelineKey& a_key) const
+	std::string DrawPipelines::Impl::NearestShadowKey(const ShadowPipelineKey& a_key) const
 	{
 		const ShadowPipelineKey* nearest = nullptr;
 		KeyDifference best;
-		for (const auto& [key, entry] : impl->shadowEntries) {
+		for (const auto& [key, entry] : lane.shadow.entries) {
 			if (key == a_key)
 				continue;
 			KeyDifference difference;
@@ -1240,240 +1640,725 @@ namespace DCLF
 			}
 		}
 		if (!nearest)
-			return impl->shadowRecreatedBy.empty() ? std::string("the first shadow pipeline") :
-			                                         fmt::format("no other shadow pipeline since the set was recreated ({})", impl->shadowRecreatedBy);
+			return lane.shadow.recreatedBy.empty() ? std::string("the first shadow pipeline") :
+			                                         fmt::format("no other shadow pipeline since the set was recreated ({})", lane.shadow.recreatedBy);
 		return fmt::format("nearest requested shadow pipeline differs in {}", best.fields);
 	}
 
-	std::uint32_t DrawPipelines::Find(const PipelineKey& a_key, const ShaderPrograms::Program& a_program, bool* a_requested)
+	namespace
 	{
-		if (a_requested)
-			*a_requested = false;
-		if (!HasTargetFormats() || !Enabled())
-			return kNotReady;
-		if (auto it = impl->entries.find(a_key); it != impl->entries.end())
-			return it->second.index;
-		if (impl->inFlight >= kMaxInFlight || impl->setPipelines.size() >= kMaxPipelines)
-			return kNotReady;  // asked again next frame
-		// A key with engine state bits needs that state captured first (CaptureEngineStates); until then
-		// it is not ready and nothing is requested, so the object simply stays native.
-		Impl::EngineState state{};
+		/** @brief The casters a shadow request names (Impl::ShadowRequest), for the on-demand warnings. */
+		std::string DescribeShadowCasters(const ShadowPipelineKey& a_casterKey, std::uint32_t a_occlusion)
+		{
+			return fmt::format("for the casters of key technique {:08X}, raster {:X}, vertex layout {:016X} ({})", a_casterKey.technique, a_casterKey.rasterFlags,
+				a_casterKey.vertexLayout, a_occlusion == ~0u ? std::string("the shadow views") : fmt::format("occlusion view {}", a_occlusion));
+		}
+	}
+
+	void DrawPipelines::Impl::DrainLaneThunk()
+	{
+		DrawPipelines::Get().impl->DrainLane();
+	}
+
+	void DrawPipelines::Impl::DrainLane()
+	{
+		ZoneScopedN("CS.DCLF.PipelineLane");
+		auto& l = lane;
+		auto& s = l.shadow;
+		auto& f = l.forward;
+		// The frame's inputs: new targets start the main set (and tree LOD's) over, a new shadow map format the shadow set, new forward
+		// targets the forward pipelines; anything new may unpark the keys waiting on an input.
+		bool inputsChanged = false;
+		if (auto input = inputSlot.Take()) {
+			if (l.input && l.input->targets.colorCount != 0 && !(l.input->targets == input->targets))
+				RecreateMainSet(l.input->targets, input->targets);
+			if (l.input && l.input->shadowFormat != DXGI_FORMAT_UNKNOWN && input->shadowFormat != l.input->shadowFormat)
+				RecreateShadowSet(l.input->shadowFormat, input->shadowFormat);
+			if (l.input && l.input->forwardTargets.colour != DXGI_FORMAT_UNKNOWN && !(l.input->forwardTargets == input->forwardTargets))
+				RecreateForward(l.input->forwardTargets, input->forwardTargets);
+			l.input = std::shared_ptr<const FrameInput>(std::move(input));
+			inputsChanged = true;
+			l.dirty = true;  // the catalog names the targets' generation, the shadow format and the forward targets
+		}
+		// The keys asked for: each once (the lane keeps them, and builds them again after a target or format change).
+		completions->requests.Drain([&](LightingRequest&& a_request) {
+			if (l.asked.try_emplace(a_request.key, a_request.slot).second)
+				TryRequest(a_request.key);
+		});
+		completions->shadowRequests.Drain([&](ShadowRequest&& a_request) {
+			if (s.asked.try_emplace(a_request.viewKey, a_request).second)
+				TryRequestShadow(a_request.viewKey);
+		});
+		completions->forwardRequests.Drain([&](ForwardPipelineKey&& a_key) {
+			if (f.asked.insert(a_key).second)
+				TryRequestForward(a_key);
+		});
+		if (completions->treeLodRequest.exchange(false, std::memory_order_acq_rel))
+			l.treeLod.asked = true;
+		if (inputsChanged) {
+			for (const auto& key : std::exchange(l.blocked, {}))
+				TryRequest(key);
+			for (const auto& key : std::exchange(s.blocked, {}))
+				TryRequestShadow(key);
+			for (const auto& key : std::exchange(f.blocked, {}))
+				TryRequestForward(key);
+		}
+		// Tree LOD's waits on nothing a list holds: tried every pass (it returns at once when it is requested, built or failed).
+		TryRequestTreeLod();
+		// The programs finished since the last pass: their keys go on to their pipelines (or fail with them). Again until none is: a
+		// program a request above found complete at once (every stage cached) is finished with no completion to wake the lane.
+		auto& finished = l.finishedPrograms;
+		for (;;) {
+			finished.Clear();
+			ShaderPrograms::Get().UpdateLane(finished);
+			if (finished.Empty())
+				break;
+			for (const std::uint64_t id : finished.lighting) {
+				const auto waiting = l.programWaiters.find(id);
+				if (waiting == l.programWaiters.end())
+					continue;
+				const auto keys = std::move(waiting->second);
+				l.programWaiters.erase(waiting);
+				for (const auto& key : keys)
+					TryRequest(key);
+			}
+			for (const std::uint32_t technique : finished.shadow) {
+				const auto waiting = s.programWaiters.find(technique);
+				if (waiting == s.programWaiters.end())
+					continue;
+				const auto keys = std::move(waiting->second);
+				s.programWaiters.erase(waiting);
+				for (const auto& key : keys)
+					TryRequestShadow(key);
+			}
+			auto retryForward = [&](std::uint64_t a_program) {
+				const auto waiting = f.programWaiters.find(a_program);
+				if (waiting == f.programWaiters.end())
+					return;
+				const auto keys = std::move(waiting->second);
+				f.programWaiters.erase(waiting);
+				for (const auto& key : keys)
+					TryRequestForward(key);
+			};
+			for (const std::uint64_t id : finished.forward)
+				retryForward(id);
+			if (finished.forwardTreeLod)
+				retryForward(Lane::Forward::kTreeProgram);
+			if (finished.treeLod)
+				TryRequestTreeLod();
+		}
+		AdmitLane();
+		AdmitShadow();
+		AdmitTreeLodAndForward();
+		if (l.dirty)
+			PublishCatalog();
+		// The service's own bookkeeping: completed builds become its active pipelines (a later request for one completes at once).
+		service.PublishReady(0);
+	}
+
+	void DrawPipelines::Impl::TryRequest(const PipelineKey& a_key)
+	{
+		auto& l = lane;
+		if (l.entries.contains(a_key))
+			return;  // requested, or failed for good
+		const auto* input = l.input.get();
+		if (!input || !input->lighting || input->targets.colorCount == 0 || input->targets.depth == DXGI_FORMAT_UNKNOWN || !input->frontCCW || !input->states ||
+			!layout || !zLayout) {
+			l.blocked.push_back(a_key);
+			return;
+		}
+		const auto asked = l.asked.find(a_key);
+		const std::uint32_t slot = asked != l.asked.end() ? asked->second : ~0u;
+		// Everything built here is built at runtime, which a complete precompile and cache would avoid: each build a request starts is
+		// logged with the key, the slot that asked for it and its nearest relative, to find what the precompile misses.
+		std::uint8_t onDemand = 0;
+		bool programFailed = false;
+		const auto* program = ShaderPrograms::Get().Find(a_key, *input->lighting, &onDemand, &programFailed);
+		if (onDemand)
+			logger::warn("[DCLF] on-demand SPIR-V compile: Lighting {} that no precompile requested ({}), for pipeline slot {}: {}", ShaderPrograms::OnDemandStages(onDemand),
+				SIE::ShaderCache::Instance().IsCompiling() ? "Community Shaders' compile workers still busy" : "Community Shaders' compile workers idle", slot,
+				DescribeKey(a_key));
+		if (programFailed) {
+			// Its objects stay native (they wait for a set index that never comes).
+			l.entries.try_emplace(a_key).first->second.failed = true;
+			++l.failedEntries;
+			l.dirty = true;
+			return;
+		}
+		if (!program) {
+			l.programWaiters[ShaderPrograms::LightingProgramId(a_key)].push_back(a_key);
+			return;
+		}
+		// The set's capacity, counting the builds still queued (every requested entry that has not failed takes a slot).
+		if (l.entries.size() - l.failedEntries >= kMaxPipelines) {
+			l.blocked.push_back(a_key);
+			return;
+		}
+		// The engine's state behind the key's state bits, as the render thread read it in the deferred pass (CaptureEngineStates): asked
+		// for once, and the key parked until the reply. A state that cannot be expressed keeps its objects native.
+		const auto& states = *input->states;
+		auto stateOf = [&](std::uint32_t a_bits) -> const EngineState* {
+			if (const auto it = states.find(a_bits); it != states.end())
+				return &it->second;
+			if (l.statesAsked.insert(a_bits).second)
+				completions->stateRequests.Push(a_bits);
+			l.blocked.push_back(a_key);
+			return nullptr;
+		};
+		EngineState state{};
 		if (const auto bits = RasterStateBits(a_key.rasterFlags)) {
-			const auto it = impl->engineStates.find(bits);
-			if (it == impl->engineStates.end() || !it->second.valid)
-				return kNotReady;
-			state = it->second;
+			const auto* found = stateOf(bits);
+			if (!found || !found->valid)
+				return;
+			state = *found;
 		} else {
-			// An opaque key: the blend state of its group's write mode, from the engine's own state object (read once, after the
-			// deferred pass has made its variants).
-			if (!DeferredBlendState(0, 0, Impl::kOpaqueWriteMode, 0))
-				return kNotReady;
+			// An opaque key: the blend state of its group's write mode, from the engine's own state object.
 			constexpr std::uint32_t kDoAlphaTest = 1u << 20;
 			// LOD (LODLand 9, LODObjects 13, LODObjectHD 15, LODLandNoise 18) is drawn in write mode 1 alpha-tested or not: the
 			// engine's main-pass draws of it all take it (dclf-lod.md, the census), so the G-buffer's alphas keep what lies beneath,
 			// as the native draw leaves them.
 			const std::uint32_t technique = (a_key.passDescriptor >> 24) & 0x3f;
 			const bool lod = technique == 9 || technique == 13 || technique == 15 || technique == 18;
-			const std::uint32_t writeMode = (a_key.pixelDescriptor & kDoAlphaTest) && !lod ? Impl::kAlphaTestedWriteMode : Impl::kOpaqueWriteMode;
-			const std::uint32_t opaqueBits = writeMode << kRasterWriteModeShift;
-			auto it = impl->engineStates.find(opaqueBits);
-			if (it == impl->engineStates.end()) {
-				std::string error;
-				auto read = impl->ReadEngineState(opaqueBits, error);
-				if (!read.valid && impl->loggedStateFailures++ < kMaxLoggedFailures)
-					logger::warn("[DCLF] opaque write mode {} state cannot be read: {}; its objects stay native", writeMode, error);
-				else if (read.valid)
-					logger::info("[DCLF] opaque write mode {}: rt0 mask {:X}, rt1 mask {:X}", writeMode, static_cast<unsigned>(read.blend.attachments[0].writeMask),
-						static_cast<unsigned>(read.blend.attachments[1].writeMask));
-				it = impl->engineStates.emplace(opaqueBits, read).first;
-			}
-			if (!it->second.valid)
-				return kNotReady;
-			state.blend = it->second.blend;
+			const std::uint32_t writeMode = (a_key.pixelDescriptor & kDoAlphaTest) && !lod ? kAlphaTestedWriteMode : kOpaqueWriteMode;
+			const auto* found = stateOf(writeMode << kRasterWriteModeShift);
+			if (!found || !found->valid)
+				return;
+			state.blend = found->blend;
 			state.blendOnly = true;
 		}
-
+		const auto& inputTargets = input->targets;
 		org::services::PipelineRecipe recipe;
 		recipe.id = fmt::format("dclf.lighting.{:08X}.{:08X}.{:08X}.{:X}.{:016X}", a_key.vertexDescriptor, a_key.pixelDescriptor, a_key.passDescriptor, a_key.rasterFlags,
 			a_key.vertexLayout);
 		recipe.shaderKey = PipelineKeyHash{}(a_key);
-		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&targets, sizeof(targets));
+		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&inputTargets, sizeof(inputTargets));
 		// And the blend state, whose write masks are the engine's (an opaque key's too): a build cached with other masks is another pipeline.
 		recipe.fixedFunctionKey ^= ankerl::unordered_dense::detail::wyhash::hash(&state.blend, sizeof(state.blend)) * 0x9E3779B97F4A7C15ull;
-		const auto frontCCW = impl->EngineFrontCCW();
-		if (!frontCCW)
-			return kNotReady;
-		recipe.build = [device = impl->device, layout = impl->layout->GetHandle(), zLayout = impl->zLayout->GetHandle(), key = a_key, program = &a_program, formats = targets,
-							state, frontCCW = *frontCCW] {
-			return Impl::Build(device, layout, zLayout, key, program, formats, state, frontCCW);
+		recipe.build = [device = device, layout = layout->GetHandle(), zLayout = zLayout->GetHandle(), key = a_key, program, formats = inputTargets, state,
+							frontCCW = *input->frontCCW] {
+			return Build(device, layout, zLayout, key, program, formats, state, frontCCW);
 		};
-		auto& entry = impl->entries[a_key];
-		entry.future = impl->service.Request(std::move(recipe));
-		++impl->inFlight;
-		++stats.requested;
-		if (a_requested)
-			*a_requested = true;
-		return kNotReady;
+		l.entries.try_emplace(a_key);
+		(void)service.Request(std::move(recipe), [completions = completions, key = a_key, generation = l.generation](const org::services::PipelineArtifact& a_artifact) {
+			completions->main.Push({ key, generation, a_artifact });
+			WakePipelineLane();
+		});
+		l.counters.requested.fetch_add(1, std::memory_order_relaxed);
+		logger::warn("[DCLF] on-demand pipeline build: Lighting pipeline slot {}: {}; {}", slot, DescribeKey(a_key), NearestKey(a_key));
 	}
 
-	bool DrawPipelines::FindTreeLod(const ShaderPrograms::TreeLodProgram& a_program, TreeLodPipelines& a_out)
+	void DrawPipelines::Impl::RecreateMainSet(const TargetFormats& a_from, const TargetFormats& a_to)
 	{
-		if (!HasTargetFormats() || !Enabled() || !impl->treeLodDrawSignature || impl->treeLodFailed)
-			return false;
-		if (impl->treeLod) {
-			const auto* built = static_cast<const Impl::TreeLodBuilt*>(impl->treeLod.get());
-			a_out = TreeLodPipelines{ built->depth->GetHandle(), built->colour->GetHandle(), impl->treeLodDrawSignature->GetHandle() };
-			return true;
-		}
-		if (impl->treeLodFuture.valid()) {
-			if (impl->treeLodFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
-				return false;
-			// A copy: the future may hold the last reference to its state.
-			const auto artifact = impl->treeLodFuture.get();
-			impl->treeLodFuture = {};
+		auto& l = lane;
+		auto describe = [](const TargetFormats& a_formats) {
+			std::string text;
+			for (std::uint32_t i = 0; i < a_formats.colorCount; ++i)
+				text += fmt::format("{} ", static_cast<int>(a_formats.colors[i]));
+			return text + fmt::format("depth {}", static_cast<int>(a_formats.depth));
+		};
+		// Every pipeline depends on the targets: start over (queued builds finish, and the new generation drops their completions).
+		logger::info("[DCLF] pipeline lane: main pass targets {} -> {}; rebuilding {} indirect pipelines", describe(a_from), describe(a_to), l.setPipelines.size());
+		l.entries.clear();
+		l.failedEntries = 0;
+		l.versions.Retire();
+		l.setPipelines.clear();
+		l.zGroupOf.clear();
+		l.zGroupFirst.clear();
+		l.zGroups.clear();
+		l.usage.clear();
+		l.constantTables.clear();
+		++l.generation;
+		for (auto* counter : { &l.counters.requested, &l.counters.ready, &l.counters.failed, &l.counters.zPipelines, &l.counters.zDepthOnly })
+			counter->store(0, std::memory_order_relaxed);
+		l.recreatedBy = fmt::format("main pass targets {} -> {}", describe(a_from), describe(a_to));
+		// Every key asked for, requested again once the new inputs are in (DrainLane retries the parked keys).
+		l.programWaiters.clear();
+		l.blocked.clear();
+		l.blocked.reserve(l.asked.size());
+		for (const auto& [key, slot] : l.asked)
+			l.blocked.push_back(key);
+		// Tree LOD's pipelines are of the targets too: built again (TryRequestTreeLod, every pass), the last kept for the process.
+		auto& t = l.treeLod;
+		if (t.built)
+			t.retired.push_back(std::move(t.built));
+		t.built = {};
+		t.requested = false;
+		t.failed = t.programFailed;
+		for (auto* counter : { &t.counters.requested, &t.counters.ready, &t.counters.failed })
+			counter->store(0, std::memory_order_relaxed);
+		t.counters.failed.store(t.programFailed ? 1u : 0u, std::memory_order_relaxed);
+		l.dirty = true;
+	}
+
+	void DrawPipelines::Impl::AdmitLane()
+	{
+		auto& l = lane;
+		// The builds that completed since the last pass, admitted in completion order. One from an earlier generation (before a target
+		// change) is dropped: its entry went with the set.
+		completions->main.Drain([&](MainDone&& a_done) {
+			if (a_done.generation != l.generation)
+				return;
+			const auto& key = a_done.key;
+			const auto& artifact = a_done.artifact;
+			const auto found = l.entries.find(key);
+			if (found == l.entries.end())
+				return;
+			auto& entry = found->second;
+			l.dirty = true;
 			if (!artifact) {
-				impl->treeLodFailed = true;
-				logger::warn("[DCLF] tree LOD's pipelines failed: {}; tree LOD stays native", artifact.error);
-				return false;
+				entry.failed = true;
+				++l.failedEntries;
+				l.counters.failed.fetch_add(1, std::memory_order_relaxed);
+				if (l.loggedFailures++ < kMaxLoggedFailures)
+					logger::warn("[DCLF] Indirect pipeline VS {:08X} PS {:08X} layout {:016X} failed: {}", key.vertexDescriptor, key.pixelDescriptor, key.vertexLayout, artifact.error);
+				return;
 			}
-			impl->treeLod = artifact.payload;
-			logger::info("[DCLF] tree LOD pipelines ready");
-			return FindTreeLod(a_program, a_out);
+			const auto* built = static_cast<const Built*>(artifact.payload.get());
+			entry.slot = static_cast<std::uint32_t>(l.setPipelines.size());
+			const auto [group, added] = l.zGroups.try_emplace(built->zKey, static_cast<std::uint32_t>(l.zGroupFirst.size()));
+			if (added) {
+				l.zGroupFirst.push_back(entry.slot);
+				l.counters.zPipelines.fetch_add(1, std::memory_order_relaxed);
+				if (built->zKey.pixel == 0)
+					l.counters.zDepthOnly.fetch_add(1, std::memory_order_relaxed);
+			}
+			l.zGroupOf.push_back(group->second);
+			l.setPipelines.push_back(artifact.payload);
+			l.usage.push_back(built->usage);
+			l.constantTables.push_back(built->tables);
+		});
+		// Publish the admitted pipelines (SetVersion), then hand out the indices the published version holds.
+		const auto admitted = static_cast<std::uint32_t>(l.setPipelines.size());
+		if (!admitted)
+			return;
+		auto pipelineAt = [&](std::uint32_t a_variant) {
+			return [&, a_variant](std::uint32_t a_index) {
+				return static_cast<const Built*>(l.setPipelines[a_index].get())->pipelines[a_variant]->GetHandle();
+			};
+		};
+		const auto result = l.versions.Publish(admitted, [&](SetVersion& a_version) {
+			for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
+				if (!ApplyToSet(a_version.sets[variant], a_version.applied, admitted, variant == kDepthVariant ? "DCLF indirect pipelines (depth)" : "DCLF indirect pipelines",
+						pipelineAt(variant), [&] { return CreateSignature(a_version, variant); }))
+					return false;
+			}
+			a_version.pipelines.assign(l.setPipelines.begin(), l.setPipelines.begin() + admitted);
+			a_version.zGroupOf.assign(l.zGroupOf.begin(), l.zGroupOf.begin() + admitted);
+			// A group's first pipeline is admitted before any other of it: the groups of [0, admitted) are a prefix.
+			const auto groups = static_cast<std::size_t>(std::ranges::lower_bound(l.zGroupFirst, admitted) - l.zGroupFirst.begin());
+			a_version.zGroupFirst.assign(l.zGroupFirst.begin(), l.zGroupFirst.begin() + static_cast<std::ptrdiff_t>(groups));
+			return true;
+		});
+		using Result = decltype(result);
+		if (result == Result::Published)
+			l.counters.setPublishes.fetch_add(1, std::memory_order_relaxed);
+		if (result == Result::Waiting)
+			l.counters.setWaits.fetch_add(1, std::memory_order_relaxed);
+		const bool published = result == Result::Current || result == Result::Published;
+		if (published && l.versions.handedOut != admitted) {
+			l.versions.handedOut = admitted;
+			for (auto& [key, entry] : l.entries) {
+				if (entry.index == kNotReady && entry.slot != kNotReady) {
+					entry.index = entry.slot;
+					l.counters.ready.fetch_add(1, std::memory_order_relaxed);
+				}
+			}
+			l.dirty = true;
+		} else if (result == Result::Failed && !l.versions.failureLogged) {
+			l.versions.failureLogged = true;
+			logger::warn("[DCLF] Could not publish the indirect pipeline sets ({} pipelines admitted)", admitted);
 		}
-		// The opaque write mode's blend (the engine's tree LOD colour draws are in write mode 1), as an opaque Lighting key's.
-		const std::uint32_t opaqueBits = Impl::kOpaqueWriteMode << kRasterWriteModeShift;
-		auto state = impl->engineStates.find(opaqueBits);
-		if (state == impl->engineStates.end() || !state->second.valid)
-			return false;  // read by the first opaque Lighting key (Find)
-		const auto frontCCW = impl->EngineFrontCCW();
-		if (!frontCCW)
-			return false;
+	}
+
+	void DrawPipelines::Impl::TryRequestShadow(const ShadowPipelineKey& a_key)
+	{
+		auto& s = lane.shadow;
+		if (s.entries.contains(a_key))
+			return;  // requested, or failed for good
+		// A view rasterizer state a pipeline cannot express has no id (ShadowRasterStateId's 0): its views stay native.
+		if (a_key.viewState == 0) {
+			s.entries.try_emplace(a_key).first->second.failed = true;
+			++s.failedEntries;
+			lane.dirty = true;
+			return;
+		}
+		// The view's rasterizer state reaches the lane with the inputs after the render thread registered it (ShadowRasterStateId).
+		const auto* input = lane.input.get();
+		if (!input || !input->utility || input->shadowFormat == DXGI_FORMAT_UNKNOWN || !input->shadowStates || a_key.viewState > input->shadowStates->size() ||
+			!shadowLayout || !shadowDrawSignature) {
+			s.blocked.push_back(a_key);
+			return;
+		}
+		const auto asked = s.asked.find(a_key);
+		const std::string casters = asked != s.asked.end() ? DescribeShadowCasters(asked->second.casterKey, asked->second.occlusion) : std::string("for no recorded caster");
+		// As TryRequest: each build a request starts is logged with the casters that asked for it and its nearest relative.
+		std::uint8_t onDemand = 0;
+		bool programFailed = false;
+		const auto* program = ShaderPrograms::Get().FindShadow(a_key.technique, *input->utility, true, nullptr, &onDemand, &programFailed);
+		if (onDemand)
+			logger::warn("[DCLF] on-demand SPIR-V compile: Utility {} of technique {:08X} that no precompile requested ({}), {}", ShaderPrograms::OnDemandStages(onDemand),
+				a_key.technique, SIE::ShaderCache::Instance().IsCompiling() ? "Community Shaders' compile workers still busy" : "Community Shaders' compile workers idle",
+				casters);
+		if (programFailed) {
+			// Its casters stay native in the views of this key (they wait for a set index that never comes).
+			s.entries.try_emplace(a_key).first->second.failed = true;
+			++s.failedEntries;
+			lane.dirty = true;
+			return;
+		}
+		if (!program) {
+			s.programWaiters[a_key.technique].push_back(a_key);
+			return;
+		}
+		// The set's capacity, counting the builds still queued.
+		if (s.entries.size() - s.failedEntries >= kMaxPipelines) {
+			s.blocked.push_back(a_key);
+			return;
+		}
+		const ShadowRasterState rasterState = (*input->shadowStates)[a_key.viewState - 1];
+		const DXGI_FORMAT depthFormat = input->shadowFormat;
+		org::services::PipelineRecipe recipe;
+		recipe.id = fmt::format("dclf.shadow.{:08X}.{:X}.{:016X}.{}", a_key.technique, a_key.rasterFlags, a_key.vertexLayout, a_key.viewState);
+		recipe.shaderKey = ShadowPipelineKeyHash{}(a_key);
+		recipe.fixedFunctionKey = static_cast<std::uint64_t>(depthFormat);
+		recipe.build = [device = device, layout = ShadowLayout(), key = a_key, program, depthFormat, rasterState] {
+			return BuildShadow(device, layout, key, program, depthFormat, rasterState);
+		};
+		s.entries.try_emplace(a_key);
+		(void)service.Request(std::move(recipe), [completions = completions, key = a_key, generation = s.generation](const org::services::PipelineArtifact& a_artifact) {
+			completions->shadow.Push({ key, generation, a_artifact });
+			WakePipelineLane();
+		});
+		s.counters.requested.fetch_add(1, std::memory_order_relaxed);
+		logger::warn("[DCLF] on-demand pipeline build: shadow technique {:08X}, raster {:X}, vertex layout {:016X}, view state {}, format {}, {}; {}", a_key.technique,
+			a_key.rasterFlags, a_key.vertexLayout, a_key.viewState, static_cast<int>(depthFormat), casters, NearestShadowKey(a_key));
+	}
+
+	void DrawPipelines::Impl::RecreateShadowSet(DXGI_FORMAT a_from, DXGI_FORMAT a_to)
+	{
+		auto& s = lane.shadow;
+		// The shadow maps were recreated in another format: every shadow pipeline depended on it (queued builds finish, and the new
+		// generation drops their completions).
+		logger::info("[DCLF] pipeline lane: shadow map format {} -> {}; rebuilding {} shadow pipelines", static_cast<int>(a_from), static_cast<int>(a_to),
+			s.setPipelines.size());
+		s.entries.clear();
+		s.failedEntries = 0;
+		s.versions.Retire();
+		s.setPipelines.clear();
+		s.layouts.clear();
+		s.discards.clear();
+		++s.generation;
+		for (auto* counter : { &s.counters.requested, &s.counters.ready, &s.counters.failed })
+			counter->store(0, std::memory_order_relaxed);
+		s.recreatedBy = fmt::format("shadow map format {} -> {}", static_cast<int>(a_from), static_cast<int>(a_to));
+		// Every key asked for, requested again once the new inputs are in (DrainLane retries the parked keys).
+		s.programWaiters.clear();
+		s.blocked.clear();
+		s.blocked.reserve(s.asked.size());
+		for (const auto& [key, request] : s.asked)
+			s.blocked.push_back(key);
+		lane.dirty = true;
+	}
+
+	void DrawPipelines::Impl::AdmitShadow()
+	{
+		auto& s = lane.shadow;
+		// As AdmitLane: the builds that completed, admitted in completion order; one from before a format change is dropped.
+		completions->shadow.Drain([&](ShadowDone&& a_done) {
+			if (a_done.generation != s.generation)
+				return;
+			const auto& key = a_done.key;
+			const auto& artifact = a_done.artifact;
+			const auto found = s.entries.find(key);
+			if (found == s.entries.end())
+				return;
+			auto& entry = found->second;
+			lane.dirty = true;
+			if (!artifact) {
+				entry.failed = true;
+				++s.failedEntries;
+				s.counters.failed.fetch_add(1, std::memory_order_relaxed);
+				if (s.loggedFailures++ < kMaxLoggedFailures)
+					logger::warn("[DCLF] shadow pipeline technique {:08X} layout {:016X} failed: {}", key.technique, key.vertexLayout, artifact.error);
+				return;
+			}
+			const auto* built = static_cast<const Built*>(artifact.payload.get());
+			entry.slot = static_cast<std::uint32_t>(s.setPipelines.size());
+			s.setPipelines.push_back(artifact.payload);
+			s.layouts.push_back(key.vertexLayout);
+			s.discards.push_back(built->discards ? 1 : 0);
+		});
+		// Publish the admitted pipelines (ShadowSetVersion), then hand out the indices the published version holds.
+		const auto admitted = static_cast<std::uint32_t>(s.setPipelines.size());
+		if (!admitted)
+			return;
+		const auto result = s.versions.Publish(admitted, [&](ShadowSetVersion& a_version) {
+			a_version.pipelines.assign(s.setPipelines.begin(), s.setPipelines.begin() + admitted);
+			a_version.layouts.assign(s.layouts.begin(), s.layouts.begin() + admitted);
+			a_version.discards.assign(s.discards.begin(), s.discards.begin() + admitted);
+			return true;
+		});
+		using Result = decltype(result);
+		if (result == Result::Published)
+			s.counters.setPublishes.fetch_add(1, std::memory_order_relaxed);
+		if (result == Result::Waiting)
+			s.counters.setWaits.fetch_add(1, std::memory_order_relaxed);
+		const bool published = result == Result::Current || result == Result::Published;
+		if (published && s.versions.handedOut != admitted) {
+			s.versions.handedOut = admitted;
+			for (auto& [key, entry] : s.entries) {
+				if (entry.index == kNotReady && entry.slot != kNotReady) {
+					entry.index = entry.slot;
+					s.counters.ready.fetch_add(1, std::memory_order_relaxed);
+				}
+			}
+			lane.dirty = true;
+		} else if (result == Result::Failed && !s.versions.failureLogged) {
+			s.versions.failureLogged = true;
+			logger::warn("[DCLF] Could not publish the shadow pipeline set ({} pipelines admitted)", admitted);
+		}
+	}
+
+	void DrawPipelines::Impl::TryRequestTreeLod()
+	{
+		auto& t = lane.treeLod;
+		if (!t.asked || t.requested || t.built || t.failed)
+			return;
+		// What it lacks arrives with the frame's inputs (DrainLane tries again each pass) or with its program (Finished::treeLod).
+		const auto* input = lane.input.get();
+		if (!input || !input->distantTree || input->targets.colorCount == 0 || input->targets.depth == DXGI_FORMAT_UNKNOWN || !input->frontCCW || !input->states ||
+			!zLayout || !treeLodDrawSignature)
+			return;
+		// The opaque write mode's blend (the engine's tree LOD colour draws are in write mode 1), as an opaque Lighting key's: read
+		// unasked in the deferred pass (CaptureEngineStates). One that cannot be expressed keeps tree LOD native.
+		const auto state = input->states->find(kOpaqueWriteMode << kRasterWriteModeShift);
+		if (state == input->states->end())
+			return;
+		if (!state->second.valid) {
+			t.failed = true;
+			t.counters.failed.fetch_add(1, std::memory_order_relaxed);
+			lane.dirty = true;
+			logger::warn("[DCLF] tree LOD's pipelines cannot be built: the opaque write mode's state cannot be read; tree LOD stays native");
+			return;
+		}
+		bool programFailed = false;
+		const auto* program = ShaderPrograms::Get().FindTreeLod(*input->distantTree, &programFailed);
+		if (programFailed) {
+			t.failed = t.programFailed = true;
+			t.counters.failed.fetch_add(1, std::memory_order_relaxed);
+			lane.dirty = true;
+			return;
+		}
+		if (!program)
+			return;
+		const auto& inputTargets = input->targets;
+		const auto blend = state->second.blend;
 		org::services::PipelineRecipe recipe;
 		recipe.id = "dclf.tree-lod";
-		recipe.shaderKey = ankerl::unordered_dense::detail::wyhash::hash(a_program.vertex.data(), a_program.vertex.size()) ^
-		                   ankerl::unordered_dense::detail::wyhash::hash(a_program.pixel.data(), a_program.pixel.size()) * 0x9E3779B97F4A7C15ull ^
-		                   ankerl::unordered_dense::detail::wyhash::hash(a_program.depthPixel.data(), a_program.depthPixel.size());
-		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&targets, sizeof(targets)) ^
-		                          ankerl::unordered_dense::detail::wyhash::hash(&state->second.blend, sizeof(state->second.blend)) * 0x9E3779B97F4A7C15ull;
-		recipe.build = [device = impl->device, zLayout = impl->zLayout->GetHandle(), program = &a_program, formats = targets, blend = state->second.blend,
-							frontCCW = *frontCCW] {
-			return Impl::BuildTreeLod(device, zLayout, program, formats, blend, frontCCW);
+		recipe.shaderKey = ankerl::unordered_dense::detail::wyhash::hash(program->vertex.data(), program->vertex.size()) ^
+		                   ankerl::unordered_dense::detail::wyhash::hash(program->pixel.data(), program->pixel.size()) * 0x9E3779B97F4A7C15ull ^
+		                   ankerl::unordered_dense::detail::wyhash::hash(program->depthPixel.data(), program->depthPixel.size());
+		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&inputTargets, sizeof(inputTargets)) ^
+		                          ankerl::unordered_dense::detail::wyhash::hash(&blend, sizeof(blend)) * 0x9E3779B97F4A7C15ull;
+		recipe.build = [device = device, zLayout = zLayout->GetHandle(), program, formats = inputTargets, blend, frontCCW = *input->frontCCW] {
+			return BuildTreeLod(device, zLayout, program, formats, blend, frontCCW);
 		};
-		impl->treeLodFuture = impl->service.Request(std::move(recipe));
-		return false;
+		t.requested = true;
+		(void)service.Request(std::move(recipe), [completions = completions, generation = lane.generation](const org::services::PipelineArtifact& a_artifact) {
+			completions->treeLod.Push({ generation, a_artifact });
+			WakePipelineLane();
+		});
+		t.counters.requested.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	void DrawPipelines::Impl::TryRequestForward(const ForwardPipelineKey& a_key)
+	{
+		auto& f = lane.forward;
+		if (f.entries.contains(a_key))
+			return;  // requested, or failed for good
+		const bool tree = (a_key.flags & ForwardPipelineKey::kForwardTreeLod) != 0;
+		const auto* input = lane.input.get();
+		if (!input || input->forwardTargets.colour == DXGI_FORMAT_UNKNOWN || input->forwardTargets.depth == DXGI_FORMAT_UNKNOWN || !input->frontCCW ||
+			!(tree ? input->distantTree : input->lighting) || !zLayout) {
+			f.blocked.push_back(a_key);
+			return;
+		}
+		bool programFailed = false;
+		const auto* program = tree ? ShaderPrograms::Get().FindForwardTreeLod(*input->distantTree, &programFailed) :
+		                             ShaderPrograms::Get().FindForward(a_key.vertexDescriptor, a_key.pixelDescriptor, *input->lighting, &programFailed);
+		if (programFailed) {
+			// Its objects stay out of the reflection phase (the engine draws them in the faces).
+			f.entries.try_emplace(a_key).first->second.failed = true;
+			f.counters.failed.fetch_add(1, std::memory_order_relaxed);
+			lane.dirty = true;
+			return;
+		}
+		if (!program) {
+			f.programWaiters[tree ? Lane::Forward::kTreeProgram : ShaderPrograms::ForwardProgramId(a_key.vertexDescriptor, a_key.pixelDescriptor)].push_back(a_key);
+			return;
+		}
+		const ForwardTargets forwardTargets = input->forwardTargets;
+		const auto cull = (a_key.flags & ForwardPipelineKey::kForwardTwoSided) ? rhi::CullMode::None : rhi::CullMode::Front;
+		auto hash = [](const std::vector<std::byte>& a_module) { return ankerl::unordered_dense::detail::wyhash::hash(a_module.data(), a_module.size()); };
+		org::services::PipelineRecipe recipe;
+		recipe.id = tree ? std::string("dclf.forward.tree-lod") : fmt::format("dclf.forward.{:08X}.{:08X}.{:X}", a_key.vertexDescriptor, a_key.pixelDescriptor, a_key.flags);
+		recipe.shaderKey = hash(program->vertex) ^ hash(program->pixel) * 0x9E3779B97F4A7C15ull;
+		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&forwardTargets, sizeof(forwardTargets)) ^
+		                          static_cast<std::uint64_t>(cull) * 0x9E3779B97F4A7C15ull;
+		recipe.build = [device = device, zLayout = zLayout->GetHandle(), program, forwardTargets, cull, frontCCW = *input->frontCCW] {
+			return BuildForward(device, zLayout, program, forwardTargets, cull, frontCCW);
+		};
+		f.entries.try_emplace(a_key).first->second.requested = true;
+		(void)service.Request(std::move(recipe), [completions = completions, key = a_key, generation = f.generation](const org::services::PipelineArtifact& a_artifact) {
+			completions->forward.Push({ key, generation, a_artifact });
+			WakePipelineLane();
+		});
+		f.counters.requested.fetch_add(1, std::memory_order_relaxed);
+		lane.dirty = true;  // its program is the catalog's now
+	}
+
+	void DrawPipelines::Impl::RecreateForward(const ForwardTargets& a_from, const ForwardTargets& a_to)
+	{
+		auto& f = lane.forward;
+		// Every forward pipeline depends on the targets: start over (queued builds finish, and the new generation drops their
+		// completions). The built ones are kept for the process: a recording may still draw with them.
+		logger::info("[DCLF] pipeline lane: forward targets colour {} depth {} -> colour {} depth {}; rebuilding {} forward pipelines", static_cast<int>(a_from.colour),
+			static_cast<int>(a_from.depth), static_cast<int>(a_to.colour), static_cast<int>(a_to.depth), f.entries.size());
+		for (auto& entry : f.entries)
+			if (entry.second.built)
+				f.retired.push_back(std::move(entry.second.built));
+		f.entries.clear();
+		++f.generation;
+		for (auto* counter : { &f.counters.requested, &f.counters.ready, &f.counters.failed })
+			counter->store(0, std::memory_order_relaxed);
+		// Every key asked for, requested again once the new inputs are in (DrainLane retries the parked keys).
+		f.programWaiters.clear();
+		f.blocked.assign(f.asked.begin(), f.asked.end());
+		lane.dirty = true;
+	}
+
+	void DrawPipelines::Impl::AdmitTreeLodAndForward()
+	{
+		auto& t = lane.treeLod;
+		completions->treeLod.Drain([&](TreeLodDone&& a_done) {
+			if (a_done.generation != lane.generation)
+				return;  // from before a target change (RecreateMainSet)
+			lane.dirty = true;
+			if (!a_done.artifact) {
+				t.failed = true;
+				t.counters.failed.fetch_add(1, std::memory_order_relaxed);
+				logger::warn("[DCLF] tree LOD's pipelines failed: {}; tree LOD stays native", a_done.artifact.error);
+				return;
+			}
+			t.built = a_done.artifact.payload;
+			t.counters.ready.fetch_add(1, std::memory_order_relaxed);
+			logger::info("[DCLF] tree LOD pipelines ready");
+		});
+		auto& f = lane.forward;
+		completions->forward.Drain([&](ForwardDone&& a_done) {
+			if (a_done.generation != f.generation)
+				return;  // from before a forward targets change (RecreateForward)
+			const auto found = f.entries.find(a_done.key);
+			if (found == f.entries.end())
+				return;
+			auto& entry = found->second;
+			lane.dirty = true;
+			if (!a_done.artifact) {
+				entry.failed = true;
+				f.counters.failed.fetch_add(1, std::memory_order_relaxed);
+				if (f.loggedFailures++ < kMaxLoggedFailures)
+					logger::warn("[DCLF] forward pipeline VS {:08X} PS {:08X} flags {:X} failed: {}", a_done.key.vertexDescriptor, a_done.key.pixelDescriptor, a_done.key.flags,
+						a_done.artifact.error);
+				return;
+			}
+			entry.built = a_done.artifact.payload;
+			f.counters.ready.fetch_add(1, std::memory_order_relaxed);
+		});
+	}
+
+	void DrawPipelines::Impl::PublishCatalog()
+	{
+		auto& l = lane;
+		auto catalog = std::make_unique<PipelineCatalog>();
+		catalog->entries.reserve(l.entries.size());
+		for (const auto& [key, entry] : l.entries) {
+			PipelineCatalog::Entry out;
+			out.failed = entry.failed;
+			if (entry.index != kNotReady) {
+				out.setIndex = entry.index;
+				out.usage = l.usage[entry.index];
+				out.tables = l.constantTables[entry.index];
+			}
+			catalog->entries.emplace(key, out);
+		}
+		catalog->generation = l.generation;
+		catalog->targetsGeneration = l.input ? l.input->targetsGeneration : 0;
+		catalog->revision = ++l.revision;
+		// The version the indices above were handed out of, or a later one of the generation (published only grows within one).
+		catalog->setVersion = l.versions.published.load();
+		// The shadow views' set, likewise.
+		const auto& s = l.shadow;
+		catalog->shadowEntries.reserve(s.entries.size());
+		for (const auto& [key, entry] : s.entries) {
+			PipelineCatalog::ShadowEntry out;
+			out.failed = entry.failed;
+			out.setIndex = entry.index != kNotReady ? entry.index : PipelineCatalog::kNone;
+			catalog->shadowEntries.emplace(key, out);
+		}
+		catalog->shadowGeneration = s.generation;
+		catalog->shadowFormat = l.input ? l.input->shadowFormat : DXGI_FORMAT_UNKNOWN;
+		catalog->shadowSetVersion = s.versions.published.load();
+		// Tree LOD's pipelines (of the targets of targetsGeneration) and the forward views' (of forwardTargets): each kept by the lane.
+		catalog->treeLod.pipelines = l.treeLod.built;
+		catalog->treeLod.failed = l.treeLod.failed;
+		const auto& f = l.forward;
+		catalog->forwardEntries.reserve(f.entries.size());
+		for (const auto& [key, entry] : f.entries) {
+			PipelineCatalog::ForwardEntry out;
+			out.pipeline = entry.built;
+			out.program = entry.requested;
+			out.failed = entry.failed;
+			catalog->forwardEntries.emplace(key, out);
+		}
+		catalog->forwardTargets = l.input ? l.input->forwardTargets : ForwardTargets{};
+		catalogSlot.Post(std::move(catalog));
+		l.dirty = false;
 	}
 
 	struct ForwardPipelineAccess
 	{
-		static DrawPipelines::Impl& Impl(DrawPipelines& a_pipelines) { return *a_pipelines.impl; }
-		static DrawPipelines::ForwardStats& Stats(DrawPipelines& a_pipelines) { return a_pipelines.forwardStats; }
-		static org::services::PipelinePayload Build(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const ShaderPrograms::ForwardProgram* a_program,
-			ForwardTargets a_targets, rhi::CullMode a_cull, bool a_frontCCW)
+		static bool TreeLod(const PipelineCatalog* a_catalog, std::uint32_t a_targetsGeneration, TreeLodPipelines& a_out)
 		{
-			return DrawPipelines::Impl::BuildForward(a_device, a_zLayout, a_program, a_targets, a_cull, a_frontCCW);
+			auto& drawPipelines = DrawPipelines::Get();
+			const auto& impl = *drawPipelines.impl;
+			// Built for the targets drawn into: none once they changed after the catalog's were built for them (as GetIndirectState:
+			// its generation is behind the caller's).
+			if (!a_catalog || !a_catalog->treeLod.pipelines || a_catalog->targetsGeneration != a_targetsGeneration || !impl.treeLodDrawSignature)
+				return false;
+			const auto* built = static_cast<const DrawPipelines::Impl::TreeLodBuilt*>(a_catalog->treeLod.pipelines.get());
+			a_out = TreeLodPipelines{ built->depth->GetHandle(), built->colour->GetHandle(), impl.treeLodDrawSignature->GetHandle() };
+			return true;
 		}
 	};
 
-	rhi::PipelineHandle FindForwardPipeline(const ShaderPrograms::ForwardProgram& a_program, const ForwardTargets& a_targets, rhi::CullMode a_cull)
+	bool TreeLodPipelinesOf(const PipelineCatalog* a_catalog, TreeLodPipelines& a_out)
 	{
-		auto& pipelines = DrawPipelines::Get();
-		auto& impl = ForwardPipelineAccess::Impl(pipelines);
-		auto& stats = ForwardPipelineAccess::Stats(pipelines);
-		if (!pipelines.Enabled() || !impl.zLayout || a_targets.colour == DXGI_FORMAT_UNKNOWN || a_targets.depth == DXGI_FORMAT_UNKNOWN)
-			return {};
-		auto hash = [](const std::vector<std::byte>& a_module) { return ankerl::unordered_dense::detail::wyhash::hash(a_module.data(), a_module.size()); };
-		typename std::remove_reference_t<decltype(impl.forward)>::key_type key;
-		key.vertex = hash(a_program.vertex);
-		key.pixel = hash(a_program.pixel);
-		key.vertexBytes = static_cast<std::uint32_t>(a_program.vertex.size());
-		key.pixelBytes = static_cast<std::uint32_t>(a_program.pixel.size());
-		key.colour = static_cast<std::uint32_t>(a_targets.colour);
-		key.depth = static_cast<std::uint32_t>(a_targets.depth);
-		key.cull = static_cast<std::uint32_t>(a_cull);
-		auto [it, inserted] = impl.forward.try_emplace(key);
-		auto& entry = it->second;
-		if (entry.payload)
-			return (*static_cast<const rhi::PipelinePtr*>(entry.payload.get()))->GetHandle();
-		if (entry.failed)
-			return {};
-		if (entry.future.valid()) {
-			if (entry.future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
-				return {};
-			// A copy: the future may hold the last reference to its state.
-			const auto artifact = entry.future.get();
-			entry.future = {};
-			if (!artifact) {
-				entry.failed = true;
-				++stats.failed;
-				logger::warn("[DCLF] a forward pipeline failed: {}", artifact.error);
-				return {};
-			}
-			entry.payload = artifact.payload;
-			++stats.ready;
-			return (*static_cast<const rhi::PipelinePtr*>(entry.payload.get()))->GetHandle();
-		}
-		const auto frontCCW = impl.EngineFrontCCW();
-		if (!frontCCW)
-			return {};
-		org::services::PipelineRecipe recipe;
-		recipe.id = "dclf.forward";
-		recipe.shaderKey = key.vertex ^ key.pixel * 0x9E3779B97F4A7C15ull;
-		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&key.colour, 3 * sizeof(std::uint32_t));
-		recipe.build = [device = impl.device, zLayout = impl.zLayout->GetHandle(), program = &a_program, targets = a_targets, cull = a_cull, frontCCW = *frontCCW] {
-			return ForwardPipelineAccess::Build(device, zLayout, program, targets, cull, frontCCW);
-		};
-		entry.future = impl.service.Request(std::move(recipe));
-		++stats.requested;
-		return {};
+		return ForwardPipelineAccess::TreeLod(a_catalog, DrawPipelines::Get().Generation(), a_out);
 	}
 
-	std::uint32_t DrawPipelines::FindShadow(const ShadowPipelineKey& a_key, const ShaderPrograms::ShadowProgram& a_program, DXGI_FORMAT a_depthFormat,
-		bool* a_requested)
+	bool TreeLodPipelinesOf(const PipelineCatalog* a_catalog, std::uint32_t a_targetsGeneration, TreeLodPipelines& a_out)
 	{
-		if (a_requested)
-			*a_requested = false;
-		if (a_depthFormat == DXGI_FORMAT_UNKNOWN || !Enabled())
-			return kNotReady;
-		if (impl->shadowDepthFormat != a_depthFormat) {
-			if (impl->shadowDepthFormat != DXGI_FORMAT_UNKNOWN) {
-				// The shadow maps were recreated in another format: every pipeline depended on it.
-				logger::info("[DCLF] shadow map format changed ({} -> {}); rebuilding {} shadow pipelines",
-					static_cast<int>(impl->shadowDepthFormat), static_cast<int>(a_depthFormat), impl->shadowSetPipelines.size());
-				impl->shadowEntries.clear();
-				impl->shadowVersions.Retire();
-				impl->shadowSetPipelines.clear();
-				shadowUsage.clear();
-				shadowDiscards.clear();
-				shadowLayouts.clear();
-				impl->shadowInFlight = 0;
-				stats.shadowRequested = stats.shadowReady = stats.shadowFailed = 0;
-				impl->shadowRecreatedBy = fmt::format("shadow map format {} -> {}", static_cast<int>(impl->shadowDepthFormat), static_cast<int>(a_depthFormat));
-			}
-			impl->shadowDepthFormat = a_depthFormat;
-		}
-		if (auto it = impl->shadowEntries.find(a_key); it != impl->shadowEntries.end())
-			return it->second.index;
-		if (impl->shadowInFlight >= kMaxInFlight || impl->shadowSetPipelines.size() >= kMaxPipelines)
-			return kNotReady;
-		// The view's rasterizer state: every shadow pipeline is built for one (ShadowRasterStateId).
-		const std::uint32_t stateId = a_key.viewState;
-		if (stateId == 0 || stateId > impl->shadowRasterStates.size())
-			return kNotReady;
-		const Impl::ShadowRasterState state = impl->shadowRasterStates[stateId - 1];
-		org::services::PipelineRecipe recipe;
-		recipe.id = fmt::format("dclf.shadow.{:08X}.{:X}.{:016X}.{}", a_key.technique, a_key.rasterFlags, a_key.vertexLayout, a_key.viewState);
-		recipe.shaderKey = ShadowPipelineKeyHash{}(a_key);
-		recipe.fixedFunctionKey = static_cast<std::uint64_t>(a_depthFormat);
-		recipe.build = [device = impl->device, layout = impl->ShadowLayout(), key = a_key, program = &a_program, format = a_depthFormat, state] {
-			return Impl::BuildShadow(device, layout, key, program, format, state);
-		};
-		auto& entry = impl->shadowEntries[a_key];
-		entry.future = impl->service.Request(std::move(recipe));
-		++impl->shadowInFlight;
-		++stats.shadowRequested;
-		if (a_requested)
-			*a_requested = true;
-		return kNotReady;
+		return ForwardPipelineAccess::TreeLod(a_catalog, a_targetsGeneration, a_out);
+	}
+
+	rhi::PipelineHandle ForwardPipelineOf(const PipelineCatalog* a_catalog, const ForwardPipelineKey& a_key, const ForwardTargets& a_targets)
+	{
+		if (!a_catalog || !(a_catalog->forwardTargets == a_targets))
+			return {};
+		const auto* entry = a_catalog->FindForward(a_key);
+		if (!entry || !entry->pipeline)
+			return {};
+		return (*static_cast<const rhi::PipelinePtr*>(entry->pipeline.get()))->GetHandle();
 	}
 
 	std::uint32_t DrawPipelines::ShadowRasterStateId(const D3D11_RASTERIZER_DESC& a_desc, std::uint32_t a_renderMode)
@@ -1491,18 +2376,17 @@ namespace DCLF
 		state.slopeScaledDepthBias = a_desc.SlopeScaledDepthBias;
 		state.cull = a_desc.CullMode == D3D11_CULL_NONE ? rhi::CullMode::None : a_desc.CullMode == D3D11_CULL_FRONT ? rhi::CullMode::Front : rhi::CullMode::Back;
 		state.frontCCW = a_desc.FrontCounterClockwise != FALSE;
-		const std::uint32_t modeBit = a_renderMode >= 0xC && a_renderMode < 0xC + 32 ? 1u << (a_renderMode - 0xC) : 0u;
 		auto& states = impl->shadowRasterStates;
-		for (std::size_t i = 0; i < states.size(); ++i) {
-			if (states[i] == state) {
-				impl->shadowRasterStateModes[i] |= modeBit;
+		for (std::size_t i = 0; i < states.size(); ++i)
+			if (states[i] == state)
 				return static_cast<std::uint32_t>(i + 1);
-			}
-		}
 		states.push_back(state);
-		impl->shadowRasterStateModes.push_back(modeBit);
 		logger::info("[DCLF] shadow view rasterizer state {} (mode {:#x}): depth bias {} (clamp {}, slope {}), cull {}, front {}", states.size(), a_renderMode,
 			state.depthBias, state.depthBiasClamp, state.slopeScaledDepthBias, static_cast<int>(a_desc.CullMode), a_desc.FrontCounterClockwise ? "CCW" : "CW");
+		// The pipeline lane builds a key of this id once the id reaches it with the frame's inputs (its keys wait for it meanwhile).
+		impl->renderInput.shadowStates = std::make_shared<const std::vector<Impl::ShadowRasterState>>(states);
+		if (Enabled())
+			impl->PostInput(*this);
 		return static_cast<std::uint32_t>(states.size());
 	}
 
@@ -1511,165 +2395,72 @@ namespace DCLF
 		return static_cast<std::uint32_t>(impl->shadowRasterStates.size());
 	}
 
-	std::vector<std::uint32_t> DrawPipelines::ShadowRasterStatesOfMode(std::uint32_t a_renderMode) const
+	void DrawPipelines::CaptureEngineStates()
 	{
-		std::vector<std::uint32_t> ids;
-		if (a_renderMode < 0xC || a_renderMode >= 0xC + 32)
-			return ids;
-		for (std::size_t i = 0; i < impl->shadowRasterStateModes.size(); ++i)
-			if (impl->shadowRasterStateModes[i] & (1u << (a_renderMode - 0xC)))
-				ids.push_back(static_cast<std::uint32_t>(i + 1));
-		return ids;
-	}
-
-	void DrawPipelines::CaptureEngineStates(std::span<const PipelineKey> a_keys)
-	{
+		if (!Enabled())
+			return;
+		// The state bits the pipeline lane asked for since the last call: read here (the deferred pass), or kept for a later one.
+		impl->completions->stateRequests.Drain([&](std::uint32_t&& a_bits) { impl->pendingStateBits.push_back(a_bits); });
+		bool changed = false;
+		// The engine's winding and the Lighting shader, once each is known.
+		auto& input = impl->renderInput;
+		if (!input.frontCCW)
+			if (const auto frontCCW = impl->EngineFrontCCW()) {
+				input.frontCCW = frontCCW;
+				changed = true;
+			}
+		if (auto* lighting = ConstantEvaluator::Get().GetLightingShader(); lighting != input.lighting) {
+			input.lighting = lighting;
+			changed = true;
+		}
 		// The deferred pass's blend states (DeferredBlendState) exist from its first frame: until then nothing is read, so no
 		// state is recorded as unreadable for good.
-		if (!DeferredBlendState(0, 0, 10, 0))
-			return;
-		for (const auto& key : a_keys) {
-			const auto bits = RasterStateBits(key.rasterFlags);
-			if (!bits || impl->engineStates.contains(bits))
-				continue;
-			std::string error;
-			auto state = impl->ReadEngineState(bits, error);
-			if (!state.valid && impl->loggedStateFailures++ < kMaxLoggedFailures)
-				logger::warn("[DCLF] pipeline state {:05X} cannot be built: {}; its objects stay native", bits, error);
-			else if (state.valid)
-				logger::info("[DCLF] pipeline state {:05X}: depth bias {} (clamp {}, slope {}), blend rt0 {} mask {:X}, rt1 {} mask {:X}",
-					bits, state.depthBias, state.depthBiasClamp, state.slopeScaledDepthBias, state.blend.attachments[0].enable ? "on" : "off",
-					static_cast<unsigned>(state.blend.attachments[0].writeMask), state.blend.attachments[1].enable ? "on" : "off",
-					static_cast<unsigned>(state.blend.attachments[1].writeMask));
-			impl->engineStates.emplace(bits, state);
-		}
-	}
-
-	void DrawPipelines::Update()
-	{
-		if (!impl->supported)
-			return;
-		for (auto& [key, entry] : impl->entries) {
-			if (entry.index != kNotReady || entry.failed || !entry.future.valid() || entry.future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
-				continue;
-			--impl->inFlight;
-			// A copy: the future may hold the last reference to its state (PipelineService::PublishReady drops its own).
-			const auto artifact = entry.future.get();
-			entry.future = {};
-			if (!artifact) {
-				entry.failed = true;
-				++stats.failed;
-				if (impl->loggedFailures++ < kMaxLoggedFailures)
-					logger::warn("[DCLF] Indirect pipeline VS {:08X} PS {:08X} layout {:016X} failed: {}", key.vertexDescriptor, key.pixelDescriptor, key.vertexLayout, artifact.error);
-				continue;
-			}
-			const auto* built = static_cast<const Impl::Built*>(artifact.payload.get());
-			entry.slot = static_cast<std::uint32_t>(impl->setPipelines.size());
-			const auto [group, added] = impl->zGroups.try_emplace(built->zKey, static_cast<std::uint32_t>(impl->zGroupFirst.size()));
-			if (added) {
-				impl->zGroupFirst.push_back(entry.slot);
-				++stats.zPipelines;
-				stats.zDepthOnly += built->zKey.pixel == 0;
-			}
-			impl->zGroupOf.push_back(group->second);
-			impl->setPipelines.push_back(artifact.payload);
-			usage.push_back(built->usage);
-		}
-		// Publish the admitted pipelines (Impl::SetVersion), then hand out the indices the published version holds.
-		const auto admitted = static_cast<std::uint32_t>(impl->setPipelines.size());
-		if (admitted) {
-			auto pipelineAt = [&](std::uint32_t a_variant) {
-				return [&, a_variant](std::uint32_t a_index) {
-					return static_cast<const Impl::Built*>(impl->setPipelines[a_index].get())->pipelines[a_variant]->GetHandle();
-				};
+		if (DeferredBlendState(0, 0, 10, 0)) {
+			auto read = [&](std::uint32_t a_bits, bool a_opaque) {
+				if (impl->engineStates.contains(a_bits))
+					return;
+				std::string error;
+				auto state = impl->ReadEngineState(a_bits, error);
+				if (a_opaque) {
+					const std::uint32_t writeMode = RasterWriteMode(a_bits);
+					if (!state.valid && impl->loggedStateFailures++ < kMaxLoggedFailures)
+						logger::warn("[DCLF] opaque write mode {} state cannot be read: {}; its objects stay native", writeMode, error);
+					else if (state.valid)
+						logger::info("[DCLF] opaque write mode {}: rt0 mask {:X}, rt1 mask {:X}", writeMode, static_cast<unsigned>(state.blend.attachments[0].writeMask),
+							static_cast<unsigned>(state.blend.attachments[1].writeMask));
+				} else if (!state.valid && impl->loggedStateFailures++ < kMaxLoggedFailures) {
+					logger::warn("[DCLF] pipeline state {:05X} cannot be built: {}; its objects stay native", a_bits, error);
+				} else if (state.valid) {
+					logger::info("[DCLF] pipeline state {:05X}: depth bias {} (clamp {}, slope {}), blend rt0 {} mask {:X}, rt1 {} mask {:X}",
+						a_bits, state.depthBias, state.depthBiasClamp, state.slopeScaledDepthBias, state.blend.attachments[0].enable ? "on" : "off",
+						static_cast<unsigned>(state.blend.attachments[0].writeMask), state.blend.attachments[1].enable ? "on" : "off",
+						static_cast<unsigned>(state.blend.attachments[1].writeMask));
+				}
+				impl->engineStates.emplace(a_bits, state);
+				changed = true;
 			};
-			const auto result = impl->versions.Publish(admitted, [&](Impl::SetVersion& a_version) {
-				for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
-					if (!impl->ApplyToSet(a_version.sets[variant], a_version.applied, admitted,
-							variant == kDepthVariant ? "DCLF indirect pipelines (depth)" : "DCLF indirect pipelines", pipelineAt(variant),
-							[&] { return impl->CreateSignature(a_version, variant); }))
-						return false;
-				}
-				a_version.pipelines.assign(impl->setPipelines.begin(), impl->setPipelines.begin() + admitted);
-				a_version.zGroupOf.assign(impl->zGroupOf.begin(), impl->zGroupOf.begin() + admitted);
-				// A group's first pipeline is admitted before any other of it: the groups of [0, admitted) are a prefix.
-				const auto groups = static_cast<std::size_t>(std::ranges::lower_bound(impl->zGroupFirst, admitted) - impl->zGroupFirst.begin());
-				a_version.zGroupFirst.assign(impl->zGroupFirst.begin(), impl->zGroupFirst.begin() + static_cast<std::ptrdiff_t>(groups));
-				return true;
-			});
-			using Result = decltype(result);
-			stats.setPublishes += result == Result::Published;
-			stats.setWaits += result == Result::Waiting;
-			const bool published = result == Result::Current || result == Result::Published;
-			if (published && impl->versions.handedOut != admitted) {
-				impl->versions.handedOut = admitted;
-				for (auto& [key, entry] : impl->entries) {
-					if (entry.index == kNotReady && entry.slot != kNotReady) {
-						entry.index = entry.slot;
-						++stats.ready;
-					}
-				}
-			} else if (result == Result::Failed && !impl->versions.failureLogged) {
-				impl->versions.failureLogged = true;
-				logger::warn("[DCLF] Could not publish the indirect pipeline sets ({} pipelines admitted)", admitted);
-			}
+			// The opaque groups' write modes (every opaque Lighting key's blend, and tree LOD's), unasked; then what the lane asked for.
+			for (const std::uint32_t writeMode : { Impl::kOpaqueWriteMode, Impl::kAlphaTestedWriteMode })
+				read(writeMode << kRasterWriteModeShift, true);
+			for (const std::uint32_t bits : std::exchange(impl->pendingStateBits, {}))
+				read(bits, false);  // the opaque modes are read above
 		}
-		for (auto& [key, entry] : impl->shadowEntries) {
-			if (entry.index != kNotReady || entry.failed || !entry.future.valid() || entry.future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
-				continue;
-			--impl->shadowInFlight;
-			// A copy: the future may hold the last reference to its state (PipelineService::PublishReady drops its own).
-			const auto artifact = entry.future.get();
-			entry.future = {};
-			if (!artifact) {
-				entry.failed = true;
-				++stats.shadowFailed;
-				if (impl->loggedFailures++ < kMaxLoggedFailures)
-					logger::warn("[DCLF] shadow pipeline technique {:08X} layout {:016X} failed: {}", key.technique, key.vertexLayout, artifact.error);
-				continue;
-			}
-			const auto* built = static_cast<const Impl::Built*>(artifact.payload.get());
-			entry.slot = static_cast<std::uint32_t>(impl->shadowSetPipelines.size());
-			impl->shadowSetPipelines.push_back(artifact.payload);
-			shadowUsage.push_back(built->usage[kColorVariant]);
-			shadowDiscards.push_back(built->discards ? 1 : 0);
-			shadowLayouts.push_back(key.vertexLayout);
+		if (changed) {
+			input.states = std::make_shared<const decltype(impl->engineStates)>(impl->engineStates);
+			impl->PostInput(*this);
 		}
-		const auto shadowAdmitted = static_cast<std::uint32_t>(impl->shadowSetPipelines.size());
-		if (shadowAdmitted) {
-			const auto result = impl->shadowVersions.Publish(shadowAdmitted, [&](Impl::ShadowSetVersion& a_version) {
-				a_version.pipelines.assign(impl->shadowSetPipelines.begin(), impl->shadowSetPipelines.begin() + shadowAdmitted);
-				a_version.layouts.assign(shadowLayouts.begin(), shadowLayouts.begin() + shadowAdmitted);
-				a_version.discards.assign(shadowDiscards.begin(), shadowDiscards.begin() + shadowAdmitted);
-				return true;
-			});
-			using Result = decltype(result);
-			stats.shadowSetPublishes += result == Result::Published;
-			stats.shadowSetWaits += result == Result::Waiting;
-			const bool published = result == Result::Current || result == Result::Published;
-			if (published && impl->shadowVersions.handedOut != shadowAdmitted) {
-				impl->shadowVersions.handedOut = shadowAdmitted;
-				for (auto& [key, entry] : impl->shadowEntries) {
-					if (entry.index == kNotReady && entry.slot != kNotReady) {
-						entry.index = entry.slot;
-						++stats.shadowReady;
-					}
-				}
-			} else if (result == Result::Failed && !impl->shadowVersions.failureLogged) {
-				impl->shadowVersions.failureLogged = true;
-				logger::warn("[DCLF] Could not publish the shadow pipeline set ({} pipelines admitted)", shadowAdmitted);
-			}
-		}
-		impl->service.PublishReady(0);
 	}
 
-	ShadowIndirectState GetShadowIndirectState()
+	ShadowIndirectState GetShadowIndirectState(const PipelineCatalog& a_catalog, DXGI_FORMAT a_shadowFormat)
 	{
-		const auto& impl = *DrawPipelines::Get().impl;
+		// The shadow set version of a_catalog, the one its shadow lookups' indices are of (the scene lane resolved them from it). None once
+		// the shadow map format is not the one that catalog's set was built for (SetShadowInputs): its pipelines draw into the old one.
+		const auto& pipelines = DrawPipelines::Get();
+		const auto& impl = *pipelines.impl;
 		ShadowIndirectState state;
-		auto version = impl.shadowVersions.published.load();
-		if (!impl.layout || !version)
+		if (!a_catalog.shadowSetVersion || a_catalog.shadowFormat != a_shadowFormat || !impl.layout || !impl.shadowLayout)
 			return state;
+		auto version = std::static_pointer_cast<const DrawPipelines::Impl::ShadowSetVersion>(a_catalog.shadowSetVersion);
 		state.layout = impl.ShadowLayout();
 		state.pipelines.reserve(version->pipelines.size());
 		for (const auto& payload : version->pipelines)
@@ -1682,13 +2473,16 @@ namespace DCLF
 		return state;
 	}
 
-	IndirectState GetIndirectState()
+	IndirectState GetIndirectState(const PipelineCatalog& a_catalog, std::uint32_t a_targetsGeneration)
 	{
-		const auto& impl = *DrawPipelines::Get().impl;
+		// The set version of a_catalog, the one its lookups' indices are of. None once the targets are not the ones that catalog's set was
+		// built for (SetTargetFormats): its pipelines draw into the old ones.
+		const auto& pipelines = DrawPipelines::Get();
+		const auto& impl = *pipelines.impl;
 		IndirectState state;
-		auto version = impl.versions.published.load();
-		if (!version || !impl.layout)
+		if (!a_catalog.setVersion || a_catalog.targetsGeneration != a_targetsGeneration || !impl.layout)
 			return state;
+		auto version = std::static_pointer_cast<const DrawPipelines::Impl::SetVersion>(a_catalog.setVersion);
 		for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
 			state.sets[variant] = version->sets[variant]->GetHandle();
 			state.signatures[variant] = version->signatures[variant]->GetHandle();
@@ -1703,6 +2497,23 @@ namespace DCLF
 		state.layout = impl.layout->GetHandle();
 		state.valid = true;
 		return state;
+	}
+
+	IndirectState FrameIndirectState()
+	{
+		const auto* catalog = FrameCatalog();
+		return catalog ? GetIndirectState(*catalog, DrawPipelines::Get().Generation()) : IndirectState{};
+	}
+
+	ShadowIndirectState FrameShadowIndirectState()
+	{
+		const auto* catalog = FrameCatalog();
+		return catalog ? GetShadowIndirectState(*catalog, DrawPipelines::Get().ShadowFormat()) : ShadowIndirectState{};
+	}
+
+	DXGI_FORMAT DrawPipelines::ShadowFormat() const
+	{
+		return impl->renderInput.shadowFormat;
 	}
 }
 
@@ -1726,24 +2537,18 @@ namespace DCLF
 
 	bool DrawPipelines::Enabled() const { return false; }
 	void DrawPipelines::SetTargetFormats(const TargetFormats& a_formats) { targets = a_formats; }
-	std::uint32_t DrawPipelines::Find(const PipelineKey&, const ShaderPrograms::Program&, bool*) { return kNotReady; }
-	std::uint32_t DrawPipelines::FindShadow(const ShadowPipelineKey&, const ShaderPrograms::ShadowProgram&, DXGI_FORMAT, bool*) { return kNotReady; }
-	std::string DrawPipelines::NearestKey(const PipelineKey&) const { return {}; }
-	const ShaderPrograms::ShadowProgram* RequestShadowProgram(std::uint32_t a_technique, const ShadowPipelineKey&, std::uint32_t, RE::BSShader& a_utility,
-		bool a_allowRequest, bool* a_requested)
-	{
-		return ShaderPrograms::Get().FindShadow(a_technique, a_utility, a_allowRequest, a_requested);
-	}
-	std::uint32_t RequestShadowPipeline(const ShadowPipelineKey&, const ShaderPrograms::ShadowProgram&, DXGI_FORMAT, const ShadowPipelineKey&, std::uint32_t)
-	{
-		return DrawPipelines::kNotReady;
-	}
-	std::string DrawPipelines::NearestShadowKey(const ShadowPipelineKey&) const { return {}; }
+	void DrawPipelines::RequestLighting(const PipelineKey&, std::uint32_t) {}
+	std::shared_ptr<const PipelineCatalog> DrawPipelines::TakeCatalog() { return nullptr; }
+	DrawPipelines::Stats DrawPipelines::GetStats() const { return stats; }
+	void DrawPipelines::RequestShadow(const ShadowPipelineKey&, const ShadowPipelineKey&, std::uint32_t) {}
+	void DrawPipelines::SetShadowInputs(DXGI_FORMAT, RE::BSShader&) {}
 	std::uint32_t DrawPipelines::ShadowRasterStateId(const D3D11_RASTERIZER_DESC&, std::uint32_t) { return 0; }
-	std::vector<std::uint32_t> DrawPipelines::ShadowRasterStatesOfMode(std::uint32_t) const { return {}; }
-	void DrawPipelines::Update() {}
-	bool DrawPipelines::FindTreeLod(const ShaderPrograms::TreeLodProgram&, TreeLodPipelines&) { return false; }
-	void DrawPipelines::CaptureEngineStates(std::span<const PipelineKey>) {}
+	void DrawPipelines::RequestTreeLod() {}
+	void DrawPipelines::SetTreeLodInputs(RE::BSShader&) {}
+	void DrawPipelines::RequestForward(const ForwardPipelineKey&) {}
+	void DrawPipelines::SetForwardTargets(const ForwardTargets&) {}
+	void DrawPipelines::CaptureEngineStates() {}
+	void DrawPipelines::CheckConstantTables(const RE::BSShader&, const Lookups&) {}
 }
 
 #endif

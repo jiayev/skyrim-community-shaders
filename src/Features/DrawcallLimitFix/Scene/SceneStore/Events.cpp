@@ -887,11 +887,19 @@ namespace DCLF
 			// VK_ERROR_DEVICE_LOST on the teleport, which is exactly what happened when this branch cleared
 			// eagerly. The entries hold NiPointers, so holding them across the load is the safe direction,
 			// and the rescan replaces them on a normal frame.
-			rescanPending = true;
+			// T6b3a: what the load invalidates of the coordinator's (the rescan, the drained events not yet applied, the move events) is
+			// dropped by the coordinator, told by a marker batch posted once a load (ApplyLoading): nothing of its state is written here.
+			if (!std::exchange(loadingPosted, true)) {
+				auto marker = std::make_shared<EventBatch>();
+				marker->loading = true;
+				eventBatches.Push(std::move(marker));
+			}
+			// The first category capture after the load pins every category node (the coordinator rescans them all).
+			rescanCaptureAll = true;
 			// The set does not survive a load: it names geometry from the cell being torn down, and withholds its passes from the
 			// engine. Nothing is withheld until the next commit publishes the set again.
 			PassCapture::Get().PublishSet(nullptr);
-			ingested.reset();
+			ingesting.reset();
 			// The mirror's (step 6e F3): carried to the next batch, which applies them before its own. The tracking takes none.
 			if (!loadingCarry)
 				loadingCarry = std::make_shared<EventBatch>();
@@ -900,39 +908,31 @@ namespace DCLF
 			// parity.
 			auto& named = loadingCarry->mirrorNamed;
 			auto keep = [&named](const void* a_key) { named.push_back(a_key); };
+			// The queues the render thread drains (the LOD fade, emittance and move events are the coordinator's: ApplyLoading).
 			{
 				std::vector<const RE::BSFadeNode*> fades;
 				DrainFadeEvents(fades);
 				std::vector<const void*> keys;
 				DrainPropertyEvents(keys);
-				DrainLodFadeEvents(keys);
-				DrainEmittanceEvents(keys);
 				std::vector<RE::NiPointer<RE::NiAVObject>> nodes;
 				DrainNodeEvents(nodes);
 			}
-			fadeChanged.clear();
-			propertyChanged.clear();
-			nodeChanged.clear();
 			fadeSnapEvents.Drain(keep);
 			fadeAmountEvents.Drain(keep);
 			lodSegmentEvents.Drain(keep);
-			moveEvents.Discard();
-			movedFrame.clear();
-			batchHidden.clear();
 			// The switches are brought up to date at the first ingestion after the load (CatchUpSwitches); PrimaryCull reads them all
-			// again.
+			// again from the next frame's start.
 			worldCatchUpPending = true;
 			categoryCapturePending = true;
 			switchEvents.Drain([&keep](SwitchEvent&& a_event) { keep(a_event.node.get()); });
-			switchPending.clear();
-			switchPendingIndex.clear();
-			switchResync = true;
+			switchResyncNext = true;
 			return;
 		}
+		loadingPosted = false;
 		// The drain alone: pointer moves into the batch, in push order. Everything that walks or evaluates is ApplyEvents'.
-		if (!ingested)
-			ingested = std::make_shared<EventBatch>();
-		auto& batch = *ingested;
+		if (!ingesting)
+			ingesting = std::make_shared<EventBatch>();
+		auto& batch = *ingesting;
 		if (loadingCarry) {
 			batch.AppendMirror(std::exchange(loadingCarry->mirrorHead, nullptr));
 			batch.mirrorNamed = std::move(loadingCarry->mirrorNamed);
@@ -971,41 +971,126 @@ namespace DCLF
 
 	void SceneStore::NoteEventsPresent()
 	{
-		if (ingested)
-			++ingested->presents;
+		if (ingesting)
+			++ingesting->presents;
 	}
 
 	bool SceneStore::EventsUnapplied() const
 	{
-		return ingested && ingested->presents > 1;
+		return ingesting && ingesting->presents > 1;
 	}
 
-	void SceneStore::TakeHandedBack()
+	void SceneStore::PostIngested()
 	{
-		auto append = [](auto& a_to, auto& a_from) {
-			if (a_to.empty())
-				a_to.swap(a_from);
-			else
-				std::ranges::move(a_from, std::back_inserter(a_to));
-			a_from.clear();
-		};
-		append(releasing, handedBack);
-		append(releasingBatches, spentBatches);
-		append(releasingMaterials, materialsHandedBack);
+		// T6b3a: the render thread's batch handed to the coordinator whole (it applies the posted batches in order, ApplyEvents).
+		if (ingesting)
+			eventBatches.Push(std::move(ingesting));
+		ingesting.reset();
 	}
 
 	void SceneStore::ReleaseHandedBack()
 	{
-		releasing.clear();
-		releasingBatches.clear();
-		releasingMaterials.clear();
+		// What the coordinator let go of since the last Present (T6b3a: pushed where it let go of them, so a pass still running adds to
+		// the next Present's): its engine references are EngineReleases' (released right after this, at Present too).
+		materialsReleased.Drain([](MaterialReference&& a_material) { MaterialReference released = std::move(a_material); });
+		batchesReleased.Drain([](std::shared_ptr<EventBatch>&& a_batch) { const auto released = std::move(a_batch); });
+	}
+
+	void SceneStore::HandBackHeld(std::unique_ptr<MaterialPort::HeldSnapshot>&& a_held)
+	{
+		if (!a_held || !a_held->reference)
+			return;
+		MaterialReference reference;
+		reference.Adopt(std::exchange(a_held->reference, nullptr));
+		materialsReleased.Push(std::move(reference));
+	}
+
+	void SceneStore::DrainMaterialCaptures()
+	{
+		auto& s = materialSnapshotStats;
+		MaterialPort::captures.Drain([&](std::unique_ptr<MaterialPort::HeldSnapshot>&& a_held) {
+			++s.captured;
+			const RE::BSShaderMaterial* material = a_held->reference;
+			auto& entry = materialSnapshots[a_held->reference];
+			if (entry.held && entry.held->sequence > a_held->sequence) {
+				++s.stale;
+				HandBackHeld(std::move(a_held));
+				return;
+			}
+			if (entry.held) {
+				++s.replaced;
+				HandBackHeld(std::move(entry.held));
+			}
+			entry.held = std::move(a_held);
+			entry.frame = sceneFrame;
+			// T6b2c step 7: its slots' records are evaluated again from it (RefreshMaterialRecords).
+			materialsCaptured.push_back(material);
+		});
+		// The render thread's answers to the joins' requests (ServeMaterialRequests): the join may ask for the material again. A served
+		// request's capture was pushed before its answer.
+		materialRequestsAnswered.Drain([&](MaterialAnswer&& a_answer) {
+			materialRequested.erase(a_answer.material);
+			++(a_answer.captured ? residentStats.materialsServed : residentStats.materialsStale);
+		});
+		for (auto it = materialSnapshots.begin(); it != materialSnapshots.end();) {
+			if (sceneFrame - it->second.frame > kMaterialSnapshotFrames) {
+				++s.aged;
+				HandBackHeld(std::move(it->second.held));
+				it = materialSnapshots.erase(it);
+			} else {
+				++it;
+			}
+		}
 	}
 
 	void SceneStore::ApplyEvents()
 	{
-		auto batch = std::exchange(ingested, nullptr);
-		if (!batch)
-			batch = std::make_shared<EventBatch>();
+		// T6b3a: the batches the render thread posted, each applied in order (one a pass while the kicks stay; none: an empty one, as
+		// before). A load's marker drops what the load invalidated first (ApplyLoading).
+		std::vector<std::shared_ptr<EventBatch>> batches;
+		eventBatches.Drain([&batches](std::shared_ptr<EventBatch>&& a_batch) {
+			if (a_batch)
+				batches.push_back(std::move(a_batch));
+		});
+		bool applied = false;
+		for (auto& batch : batches) {
+			if (batch->loading) {
+				ApplyLoading();
+				continue;
+			}
+			ApplyBatch(std::move(batch));
+			applied = true;
+		}
+		if (!applied)
+			ApplyBatch(std::make_shared<EventBatch>());
+	}
+
+	void SceneStore::ApplyLoading()
+	{
+		// IngestEvents' loading branch, the coordinator's half (T6b3a): the first frame after the load rescans; what was drained and not
+		// applied, and the queues only the coordinator drains, are discarded.
+		rescanPending = true;
+		{
+			std::vector<const void*> keys;
+			DrainLodFadeEvents(keys);
+			DrainEmittanceEvents(keys);
+		}
+		fadeChanged.clear();
+		propertyChanged.clear();
+		nodeChanged.clear();
+		moveEvents.Discard();
+		movedFrame.clear();
+		batchHidden.clear();
+		switchPending.clear();
+		switchPendingIndex.clear();
+		switchResync = true;
+	}
+
+	void SceneStore::ApplyBatch(std::shared_ptr<EventBatch> a_batch)
+	{
+		// T6b2a: the material captures first: a batch's attach names materials its leaves' captures pushed before it.
+		DrainMaterialCaptures();
+		auto batch = std::move(a_batch);
 		const bool rescanned = rescanPending;
 		if (rescanPending) {
 			// RefreshCategoryNodes treats every category node as newly appeared and walks it, which is
@@ -1023,6 +1108,7 @@ namespace DCLF
 			++trackedLayout;
 			sceneIdentity.Reset();
 			categoryNodes.clear();
+			nodeSetsDirty = true;
 			for (auto& [root, entry] : alwaysRenderRoots)
 				HandBack(std::move(entry.root));
 			alwaysRenderRoots.clear();
@@ -1032,6 +1118,7 @@ namespace DCLF
 			propertyDependents.clear();
 			rootDependents.clear();
 			lightDependents.clear();
+			lightEntryChanges.push_back({ nullptr, 0 });
 			ReleaseRootOwners();
 			rootReference.clear();
 			referenceRoot.clear();
@@ -1097,7 +1184,7 @@ namespace DCLF
 			// CS_DCLF_PERSISTENT_PARITY: a slice of the tracked geometries checked for a detach the events missed (each one found is dropped,
 			// and flagged). The normal path trusts the detach events (invariant 5).
 			DCLF_SCENE_PART(Validate, "CS.DCLF.Scene.Validate");
-			if (SwitchEnabled(Switch::PersistentParity) && std::exchange(validatedFrame, frame) != frame)
+			if (SwitchEnabled(Switch::PersistentParity) && std::exchange(validatedFrame, sceneFrame) != sceneFrame)
 				ValidateSlice();
 		}
 		DCLF_SCENE_PART(StructuralEvents, "CS.DCLF.Scene.StructuralEvents");
@@ -1243,7 +1330,7 @@ namespace DCLF
 				SampleLodRanges(*it->first, true);
 		}
 		// CS_DCLF_PERSISTENT_PARITY: every tracked shape's ranges against its live state (once a frame: Present may apply too).
-		if (lodRanges.empty() || !SwitchEnabled(Switch::PersistentParity) || !ParityDue(frame) || std::exchange(lodParityFrame, frame) == frame)
+		if (lodRanges.empty() || !SwitchEnabled(Switch::PersistentParity) || !ParityDue(sceneFrame) || std::exchange(lodParityFrame, sceneFrame) == sceneFrame)
 			return;
 		++lodSegmentStats.checks;
 		std::vector<LodSegments::Range> live;
@@ -1481,6 +1568,9 @@ namespace DCLF
 		if (const void* node = mirrorWatchNode.exchange(nullptr, std::memory_order_acq_rel))
 			MirrorWatch::ArmCurrent(node);
 		ZoneScopedN("CS.DCLF.Ingest.ProbeMirror");
+		// T6b3a: the tracked set is the coordinator's, read here (CS_DCLF_MIRROR_PARITY alone) as the frame start's join leaves it; a read
+		// while the scene work runs is counted and named.
+		GuardFrameAccess("ProbeMirror");
 		// A slice of the tracked set, live (the render thread at the frame's start: the update done, before the culls): each
 		// geometry's records and its ancestors' up to the world's root, each object once. A tracked geometry is held by its entry.
 		constexpr std::size_t kSlice = 256;
@@ -1615,10 +1705,7 @@ namespace DCLF
 			if (mirrorReadParity && !a_full)
 				CheckTrackedBelow(MirrorRead::SwitchEvent, node);
 			++delta.switchChanges;
-			if (switchesApplied.size() < kMaxSwitchChanges)
-				switchesApplied.push_back(node);
-			else
-				switchResync = true;
+			switchesApplied.push_back(node);
 			RefreshFadeRootSwitch(node);
 			if (a_full)
 				continue;

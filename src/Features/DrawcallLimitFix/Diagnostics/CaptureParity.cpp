@@ -272,7 +272,8 @@ namespace DCLF
 	bool CaptureParity::CompareMaterial(const RE::BSGeometry* a_geometry, std::uint32_t a_materialIndex)
 	{
 		const auto& tables = SceneStore::Get().GetTables();
-		const auto& record = SceneStore::Get().GetFrameTables().materials[a_materialIndex];
+		// The installed publication's record (T6b2c step 7: the scene work's): what the draws pack.
+		const auto& record = tables.materials[a_materialIndex];
 		const bool frameCharacterLight = MaterialSources::FrameCharacterLight(tables.materialSlotKey[a_materialIndex].second);
 		auto* vs = *globals::game::currentVertexShader;
 		auto* ps = *globals::game::currentPixelShader;
@@ -380,7 +381,10 @@ namespace DCLF
 	{
 		const auto& tables = SceneStore::Get().GetTables();
 		const auto& object = tables.objects[a_objectIndex];
-		const auto& technique = SceneStore::Get().GetFrameTables().techniques[tables.pipelineTechnique[object.pipelineIndex]].value;
+		// The frame's tables' row (the coordinator's, T6b2c): what the draws pack.
+		if (!tables.TechniqueConstantsValid(object.pipelineIndex))
+			return true;
+		const auto& technique = tables.TechniqueOf(object.pipelineIndex).value;
 		// SetupTechnique writes VPOSOffset after it unmaps the buffer (engine notes, SetupTechnique); with
 		// DXVK the memory stays mapped and the draw sees the late write, so compare what is there now.
 		for (auto& stage : snapshots) {
@@ -407,7 +411,7 @@ namespace DCLF
 				Slot(1, kPerTechnique), reinterpret_cast<ID3D11Resource*>(ps->constantBuffers[kPerTechnique].buffer), kPSFogColor, kPSGroups[kPerTechnique], 0);
 
 		// Filter modes of the slots the material binds: the one SetupMaterial sets, else the technique's.
-		const auto& material = SceneStore::Get().GetFrameTables().materials[object.materialIndex];
+		const auto& material = tables.materials[object.materialIndex];
 		const auto& state = globals::game::shadowState->GetRuntimeData();
 		if (technique.shadowMask) {
 			const auto* native = reinterpret_cast<const ID3D11ShaderResourceView*>(state.PSTexture[kShadowMaskSlot]);
@@ -495,7 +499,7 @@ namespace DCLF
 
 		// t71 and t74 as State::Draw bound them from the pending binding the SetupMaterial hook left.
 		if (!(object.flags & kObjectNoBindings) && object.materialIndex < tables.materials.size()) {
-			const auto& expected = SceneStore::Get().GetFrameTables().materials[object.materialIndex].featureTextures;
+			const auto& expected = tables.materials[object.materialIndex].featureTextures;
 			if (expected[0] || expected[1]) {
 				std::array<ID3D11ShaderResourceView*, kFeatureMaterialTextures> native{};
 				for (std::uint32_t f = 0; f < kFeatureMaterialTextures; ++f)

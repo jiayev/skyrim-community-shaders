@@ -743,7 +743,7 @@ namespace DCLF
 		ankerl::unordered_dense::set<RE::BSGeometry*> retake;
 		ankerl::unordered_dense::set<const void*> categoryEvents;
 		auto announce = [&](RE::BSGeometry* a_geometry, Tracked& a_entry) {
-			a_entry.hiddenEventFrame = frame;
+			a_entry.hiddenEventFrame = sceneFrame;
 			if (!(a_entry.lightTraits & kTraitActor))
 				retake.insert(a_geometry);
 		};
@@ -753,10 +753,10 @@ namespace DCLF
 			const void* a_key = a_event.key;
 			// T6b0: the node's last show, for the residue's stale hidden verdicts.
 			if (timeline && !a_event.hidden)
-				unhideKeys[a_key] = { frame, a_event.site };
+				unhideKeys[a_key] = { sceneFrame, a_event.site };
 			// A cell's or a category node's: the kept scene lists are built again (held while the scene list job may run).
 			if (holdPrimaryNotes)
-				hiddenKeysHeld.push_back(a_key);
+				primaryNotes.Push({ PrimaryNote::Kind::HiddenKey, a_key });
 			else
 				primary.NoteHiddenKey(a_key);
 			if (categoryNodes.contains(static_cast<RE::NiNode*>(const_cast<void*>(a_key))))
@@ -779,9 +779,9 @@ namespace DCLF
 				pendingEvaluation.push_back(geometry);
 			}
 		stats.hiddenRetaken += retake.size();
-		if (timeline && frame % 300 == 0)
-			std::erase_if(unhideKeys, [&](const auto& a_key) { return frame - a_key.second.first > 600; });
-		hiddenGating = hiddenEventsInstalled && frame > moveUngatedThrough;
-		hiddenWitness = hiddenGating && (SwitchEnabled(Switch::WalkParity) || SwitchEnabled(Switch::PersistentParity)) && ParityDue(frame);
+		if (timeline && sceneFrame % 300 == 0)
+			std::erase_if(unhideKeys, [&](const auto& a_key) { return sceneFrame - a_key.second.first > 600; });
+		hiddenGating = hiddenEventsInstalled && sceneFrame > moveUngatedThrough;
+		hiddenWitness = hiddenGating && (SwitchEnabled(Switch::WalkParity) || SwitchEnabled(Switch::PersistentParity)) && ParityDue(sceneFrame);
 	}
 }
