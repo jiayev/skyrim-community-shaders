@@ -307,38 +307,43 @@ namespace DCLF
 
 	void IndirectDraws::PrepareReflection()
 	{
-		// The forward programs and pipelines of every LOD pipeline slot the frame's objects use, and tree LOD's, for the faces'
-		// targets once a face has been seen: requested here, ready a few frames later. The slots whose pipeline is ready are the
-		// reflection phase's readiness (PhaseReady): a change of them is a readiness event for the set.
+		// The forward pipelines of every LOD pipeline slot the frame's objects use, and tree LOD's, for the faces' targets: asked of the
+		// pipeline lane here (T6b2c step 9: each key once, the targets a frame input) and read from the frame's catalog, ready a few
+		// frames later. The slots whose pipeline is ready are the reflection phase's readiness (PhaseReady): a change of them is a
+		// readiness event for the set. A slot without one is no reflection-phase member meanwhile (the engine draws it in the faces).
 		auto& reflection = impl->reflection;
 		// The faces' targets, known before any face is drawn: the engine's reflection cube target's face views (a face's capture
 		// checks them), so the reflection phase is the set's from the start rather than from the first face.
 		if (reflection.targets.colour == DXGI_FORMAT_UNKNOWN)
 			if (auto* renderer = globals::game::renderer)
-				if (auto* face = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS].cubeSideRTV[0])
+				if (auto* face = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS].cubeSideRTV[0]) {
 					reflection.targets = { TargetOf(face).format, DXGI_FORMAT_D24_UNORM_S8_UINT };
-		auto* lighting = ConstantEvaluator::Get().GetLightingShader();
-		const bool on = reflection.targets.colour != DXGI_FORMAT_UNKNOWN && ActiveToggles().reflections && !failed && lighting;
+					// A revision input: the targets the faces' pipelines are resolved for (from a revision's request's catalog).
+					impl->PostRevisionInputs();
+				}
+		const bool on = reflection.targets.colour != DXGI_FORMAT_UNKNOWN && ActiveToggles().reflections && !failed;
+		auto& drawPipelines = DrawPipelines::Get();
+		if (on)
+			drawPipelines.SetForwardTargets(reflection.targets);
+		const auto* catalog = FrameCatalog();
 		const auto& tables = SceneStore::Get().GetTables();
 		std::uint32_t slots = 0, programs = 0, pipelines = 0;
+		bool waited = false;
 		std::uint64_t key = 0;
 		reflection.slotPipelines.assign(on ? tables.pipelines.size() : 0, rhi::PipelineHandle{});
 		for (std::size_t p = 0; on && p < tables.pipelines.size(); ++p) {
-			if (!tables.PipelineUsed(p))
-				continue;
-			const auto& pipelineKey = tables.pipelines[p];
-			if (!LodLightingTechnique(pipelineKey.passDescriptor))
+			ForwardPipelineKey forwardKey;
+			if (!ReflectionForwardKey(tables, p, forwardKey))
 				continue;
 			++slots;
-			const auto* program = ShaderPrograms::Get().FindForward(pipelineKey.vertexDescriptor, pipelineKey.pixelDescriptor & ~kLightingPixelDeferred, *lighting);
-			if (!program)
+			drawPipelines.RequestForward(forwardKey);
+			const auto* entry = catalog ? catalog->FindForward(forwardKey) : nullptr;
+			programs += entry && entry->program ? 1u : 0u;
+			const auto pipeline = ForwardPipelineOf(catalog, forwardKey, reflection.targets);
+			if (!pipeline.valid()) {
+				waited |= !(entry && entry->failed);
 				continue;
-			++programs;
-			// A cube face's projection mirrors the image: the engine culls front faces there (dclf-lod.md, "The state").
-			const auto cull = (pipelineKey.rasterFlags & kRasterTwoSided) ? rhi::CullMode::None : rhi::CullMode::Front;
-			const auto pipeline = FindForwardPipeline(*program, reflection.targets, cull);
-			if (!pipeline.valid())
-				continue;
+			}
 			++pipelines;
 			reflection.slotPipelines[p] = pipeline;
 			key = key * 0x100000001b3ull ^ (p + 1);
@@ -348,9 +353,15 @@ namespace DCLF
 			++impl->shadowReadinessSerial;
 		}
 		reflection.treePipeline = {};
-		if (auto* distantTree = Engine::Global<RE::BSShader*>(0x33dcd10); on && distantTree && ActiveToggles().lodTrees)
-			if (const auto* program = ShaderPrograms::Get().FindForwardTreeLod(*distantTree))
-				reflection.treePipeline = FindForwardPipeline(*program, reflection.targets, rhi::CullMode::Front);
+		if (on && ActiveToggles().lodTrees) {
+			// Its program is built of the DistantTree shader DecideTreeLod posts.
+			const ForwardPipelineKey treeKey{ 0, 0, ForwardPipelineKey::kForwardTreeLod };
+			drawPipelines.RequestForward(treeKey);
+			reflection.treePipeline = ForwardPipelineOf(catalog, treeKey, reflection.targets);
+			const auto* entry = catalog ? catalog->FindForward(treeKey) : nullptr;
+			waited |= !reflection.treePipeline.valid() && impl->treeLodOwned && !(entry && entry->failed);
+		}
+		drawPipelines.NoteFrameWaits(false, waited);
 		reflection.lodSlots = slots;
 		reflection.programsReady = programs;
 		reflection.pipelinesReady = pipelines;
@@ -363,6 +374,33 @@ namespace DCLF
 		reflection.treeOwned = ReflectionDrawable() && impl->reflectionCovered && reflection.treeReady && impl->treeLodOwned && scene && scene->treeLodRow.shapeSlots &&
 		                       scene->treeLodPipelines.load(std::memory_order_acquire);
 		PassCapture::Get().SetReflectionTreeLodOwned(reflection.treeOwned);
+	}
+
+	bool Draws::ReflectionForwardKey(const SceneStore::Tables& a_tables, std::size_t a_slot, ForwardPipelineKey& a_key)
+	{
+		if (a_slot >= a_tables.pipelines.size() || !a_tables.PipelineUsed(a_slot))
+			return false;
+		const auto& pipelineKey = a_tables.pipelines[a_slot];
+		if (!LodLightingTechnique(pipelineKey.passDescriptor))
+			return false;
+		// The main pipeline's vertex descriptor and its pixel descriptor without Deferred; front faces culled unless two-sided.
+		a_key = ForwardPipelineKey{ pipelineKey.vertexDescriptor, pipelineKey.pixelDescriptor & ~kLightingPixelDeferred,
+			(pipelineKey.rasterFlags & kRasterTwoSided) ? ForwardPipelineKey::kForwardTwoSided : 0u };
+		return true;
+	}
+
+	void Draws::ReflectionPipelinesOf(const PipelineCatalog* a_catalog, const SceneStore::Tables& a_tables, const ForwardTargets& a_targets, bool a_on, bool a_trees,
+		std::vector<rhi::PipelineHandle>& a_slots, rhi::PipelineHandle& a_tree)
+	{
+		a_slots.assign(a_on ? a_tables.pipelines.size() : 0, rhi::PipelineHandle{});
+		a_tree = {};
+		if (!a_on)
+			return;
+		for (std::size_t p = 0; p < a_tables.pipelines.size(); ++p)
+			if (ForwardPipelineKey key; ReflectionForwardKey(a_tables, p, key))
+				a_slots[p] = ForwardPipelineOf(a_catalog, key, a_targets);
+		if (a_trees)
+			a_tree = ForwardPipelineOf(a_catalog, ForwardPipelineKey{ 0, 0, ForwardPipelineKey::kForwardTreeLod }, a_targets);
 	}
 
 	bool IndirectDraws::ReflectionDrawable() const
@@ -414,7 +452,7 @@ namespace DCLF
 			return skip(3);
 		// The main part of the scene list: its region and the main frame inputs (the shadow frame inputs after them are no main input).
 		const auto listInputs = static_cast<std::uint32_t>(listed->resident.Count() + listed->inputList.size());
-		const auto indirect = GetIndirectState();
+		const auto indirect = FrameIndirectState();
 		if (!indirect.valid || !impl->SetupReflection() || !impl->ImportReflectionCube(reflection.cube.get()))
 			return skip(4);
 		// Not DCLF's this frame (no claims, or the cube was imported since the graph was built): the engine rendered the faces whole.
@@ -543,6 +581,13 @@ namespace DCLF
 		in.map = std::make_shared<const std::vector<std::uint32_t>>(plan.map);
 		in.materialRows = faces.main->materialRows.address;
 		in.pipelineRows = faces.main->pipelineRows.address;
+		// The latch, its layout and the zeros the revision's shape holds (the producer's): no commit has one of its own.
+		in.latch = a_shape.latch;
+		in.latchLayout = a_shape.latchLayout;
+		in.zeros = a_shape.zeros;
+		in.frameConstantsAddress = faces.main->frameConstantsAddress;
+		in.width = faces.width;
+		in.height = faces.height;
 		if (a_treeLod) {
 			in.tree = reflection.treePipeline;
 			in.treeSignature = a_treeLod->drawSignature;
@@ -560,7 +605,7 @@ namespace DCLF
 			miss = R::kNoRecording;
 		else if (!SameHandle(a_shape.resourceHeap, own->resourceHeap) || !SameHandle(a_shape.samplerHeap, own->samplerHeap) ||
 				 !SameHandle(a_shape.indirect.zLayout, a_indirect.zLayout) || !SameHandle(a_shape.indirect.zDrawSignature, a_indirect.zDrawSignature) ||
-				 (a_shape.indirect.version != a_indirect.version && !RevisionHoldsClaims()))
+				 a_shape.indirect.version != a_indirect.version)
 			miss = R::kPipelines;
 		else if (a_shape.width != own->width || a_shape.height != own->height)
 			miss = R::kViewport;
@@ -577,13 +622,14 @@ namespace DCLF
 	std::string IndirectDraws::ReflectionReport()
 	{
 		auto& reflection = impl->reflection;
-		const auto& forward = DrawPipelines::Get().GetForwardStats();
+		const auto forward = DrawPipelines::Get().GetStats();
 		const auto& capture = PassCapture::Get().GetStats();
 		const auto& s = reflection.skipped;
 		std::string text = fmt::format("[DCLF] reflection faces: {} captured (targets colour {}, depth {}); {} LOD pipeline slots, {} forward programs and {} forward pipelines ready, "
 									   "tree LOD's {}; forward pipelines {} requested, {} built, {} failed{}\n",
 			reflection.facesCaptured, static_cast<int>(reflection.targets.colour), static_cast<int>(reflection.targets.depth), reflection.lodSlots, reflection.programsReady,
-			reflection.pipelinesReady, reflection.treeReady ? "ready" : "not ready", forward.requested, forward.ready, forward.failed, forward.failed ? " <- FAILED" : "");
+			reflection.pipelinesReady, reflection.treeReady ? "ready" : "not ready", forward.forwardRequested, forward.forwardReady, forward.forwardFailed,
+			forward.forwardFailed ? " <- FAILED" : "");
 		text += fmt::format("[DCLF] reflection faces drawn: {} frames, {} epochs, {} faces drawn, {} captured after their frame's epoch{}; not drawn: {} not the set's, {} without faces, "
 							"{} the engine's (not covered), {} stale inputs, {} without resources, {} failed{}; last frame's registrations: {} member passes and {} tree LOD passes withheld (faces' tree LOD {})\n",
 			reflection.updates, reflection.epochs, reflection.facesDrawn, reflection.lateFaces, reflection.lateFaces ? " <- LATE FACES" : "", s[0], s[2], s[1], s[3], s[4], s[5],

@@ -141,7 +141,7 @@ namespace DCLF
 		impl->pending.reset();
 		auto& pipelines = DrawPipelines::Get();
 		auto* lighting = ConstantEvaluator::Get().GetLightingShader();
-		if (failed || !lighting || !pipelines.Enabled() || !GetIndirectState().valid) {
+		if (failed || !lighting || !pipelines.Enabled() || !FrameIndirectState().valid) {
 			capture.Release();
 			return;
 		}
@@ -184,6 +184,9 @@ namespace DCLF
 		{
 			auto& parity = impl->shapeParity;
 			const std::size_t shape = depthOnly ? kDepthShape : kColourShape;
+			const MainViewport viewportBefore = parity.viewport[shape];
+			const FrameBlockSizes sizesBefore = parity.blockSizes[shape];
+			const bool knownBefore = parity.known[shape];
 			const bool mainRange = impl->mainMaxDepth > 0.0f;
 			parity.viewport[shape] = { capture.viewportWidth, capture.viewportHeight, mainRange ? impl->mainMinDepth : capture.minDepth,
 				mainRange ? impl->mainMaxDepth : capture.maxDepth };
@@ -193,10 +196,13 @@ namespace DCLF
 				sizes.ps[slot] = std::max(sizes.ps[slot], static_cast<std::uint32_t>(blocks.ps[slot].size()));
 			}
 			parity.known[shape] = true;
+			// Revision inputs (T6b3b b2a): posted when they moved.
+			if (!knownBefore || !(viewportBefore == parity.viewport[shape]) || !(sizesBefore == parity.blockSizes[shape]))
+				impl->PostRevisionInputs();
 		}
 		// The frame slots the epoch supplies, and the Z-prepass's vertex inputs the colour epoch replays: what the builds ahead are made
 		// for (PostAheadContext). Taken on a frame without claims too, so the first publication's payloads are built before any frame
-		// is DCLF's (DrawsReady waits for them).
+		// is DCLF's (a snapshot without them gives the frame no claims).
 		auto& masks = impl->epochMasks[jobIndex];
 		masks.vsMask = blocks.vsMask;
 		masks.psMask = blocks.psMask;
@@ -212,7 +218,7 @@ namespace DCLF
 			return;
 		}
 		// The selected revision's shape and recording (DecideCoverage covered the main epochs), and the installed publication's
-		// payload (DrawsReady held it back until it had one for each epoch): trusted, nothing is built or checked here. A payload built
+		// payload (a snapshot without one for each epoch gives the frame no claims: DecideCoverage): trusted, nothing is built or checked here. A payload built
 		// for other main resources (made at this frame's Setup: a new render size) names their buffers: the frame is not submitted.
 		const auto revision = impl->RevisionOf(static_cast<std::uint32_t>(depthOnly ? kDepthShape : kColourShape));
 		const bool bindlessParity = SwitchEnabled(Switch::BindlessParity);
@@ -239,7 +245,7 @@ namespace DCLF
 		}
 		auto frameOwners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(segment, [&](org::RenderGraph&) {
-			// The lookups hold still for the whole frame (refreshed at its start alone, step 6e C).
+			// The lookups hold still for the whole frame: the installed publication's (T6b2c step 5), which its payloads were built with.
 			const auto& lookups = store.GetLookups();
 			in.lookupGeneration = lookups.generation;
 			// CS_DCLF_REVISION_PARITY: the installed payload against the frame's inputs (what it was built for). It observes only.
@@ -301,23 +307,6 @@ namespace DCLF
 			logger::error("[DCLF] The main-pass epoch failed; the render graph is disabled");
 	}
 
-	void IndirectDraws::RefreshMainLookups()
-	{
-		if (!impl || failed)
-			return;
-		auto& store = SceneStore::Get();
-		RefreshMaterialLookups(store, store.GetTables(), true, store.GetProjectedTextures(), store.MutableLookups());
-		UpdateShadowCapability();
-		// The shadow lookups too (step 6e S1), for the capability's modes and the catalog: the builds ahead read them.
-		auto& views = impl->lastShadow;
-		if (!ActiveToggles().shadows || !views.known || !globals::game::utilityShader)
-			return;
-		const auto& tables = store.GetTables();
-		if (tables.objects.empty() || tables.shadowTechnique.size() != tables.objects.size())
-			return;
-		RefreshShadowLookups(store, tables, views.modes, views.rasterStates, views.dsvFormat, impl->OcclusionFormats(), store.MutableLookups());
-	}
-
 	bool IndirectDraws::Impl::AheadUsable(const MainPayload& a_payload, const MainInputs& a_frame, const Resources& a_resources) const
 	{
 		// Built for these resources, this segment and these frame slots (a change of them shows a frame late: built here meanwhile).
@@ -332,17 +321,21 @@ namespace DCLF
 	{
 		auto& c = impl->aheadContext;
 		c = {};
-		if (failed || !impl->resources || !impl->resources->scene)
+		if (failed || !impl->resources || !impl->resources->scene) {
+			// The cleared context, the fits as they stood (the coordinator builds nothing ahead from it).
+			if (impl)
+				impl->PostAhead(false);
 			return;
+		}
 		auto* lighting = ConstantEvaluator::Get().GetLightingShader();
 		// Under the bindless parity the builds read the eye the Z-prepass epoch captures: built at the epochs.
-		if (!lighting || !DrawPipelines::Get().Enabled() || !GetIndirectState().valid || SwitchEnabled(Switch::BindlessParity)) {
-			impl->PostFit();
+		if (!lighting || !DrawPipelines::Get().Enabled() || !FrameIndirectState().valid || SwitchEnabled(Switch::BindlessParity)) {
+			impl->PostAhead();
 			return;
 		}
 		auto& store = SceneStore::Get();
-		// The capacities the builds are made against are the scene work's join's (MakeRevisionShapes reserves them from the coordinator's
-		// tables, the only tables the kept draw bound follows).
+		// The capacities the builds are made against are the frame's first join's (MakeRevisionShapes reserves them from the newest
+		// publication's tables, T6b3a; the only tables the kept draw bound follows).
 		for (const std::size_t j : { kAsyncZPrepass, kAsyncColour }) {
 			const auto& masks = impl->epochMasks[j];
 			// The frame slots the epochs last supplied; the colour build replays the Z-prepass's vertex inputs.
@@ -352,17 +345,35 @@ namespace DCLF
 			c.build[j] = true;
 		}
 		c.target = impl->resources;
-		// The shadow payload's (step 6e S1), for the last epoch's views; the lookups the frame's start refreshed for them.
+		// The shadow payload's (step 6e S1), for the last epoch's views; the shadow lookups the scene lane resolves for them (PostLookupInputs).
 		const auto& tables = store.GetTables();
 		if (ActiveToggles().shadows && impl->shadow && impl->lastShadow.known && globals::game::utilityShader && !tables.objects.empty() &&
 			tables.shadowTechnique.size() == tables.objects.size()) {
-			impl->ReserveShadowRows();
 			c.shadowInputs = impl->PrepareShadowInputs(store, *impl->shadow, impl->lastShadow.modes, impl->lastShadow.rasterStates);
 			c.shadowTarget = impl->shadow;
 			c.shadow = true;
 		}
 		c.valid = c.build[kAsyncZPrepass] || c.build[kAsyncColour] || c.shadow;
-		impl->PostFit();
+		impl->PostAhead();
+	}
+
+	void IndirectDraws::Impl::PostAhead(bool a_fit)
+	{
+		// T6b3a: immutable once posted, latest wins; the coordinator takes it at its passes' start (TakeAheadContext).
+		if (a_fit)
+			PostFit();
+		auto post = std::make_unique<AheadPost>();
+		post->context = aheadContext;
+		post->fit = postedFit;
+		post->rows = postedRows;
+		post->fitSerial = postedFitSerial;
+		aheadSlot.Post(std::move(post));
+	}
+
+	void IndirectDraws::TakeAheadContext()
+	{
+		if (impl)
+			impl->aheadSlot.TakeInto(impl->aheadTaken);
 	}
 
 	void IndirectDraws::Impl::PostFit()
@@ -382,17 +393,19 @@ namespace DCLF
 	{
 		if (!impl)
 			return true;
+		// The coordinator's copy of the posted fits (T6b3a: TakeAheadContext), never the render thread's.
+		const auto& posted = impl->aheadTaken;
 		const auto& tables = *static_cast<const SceneStore::Tables*>(a_tables);
-		if (a_slot >= tables.objects.size() || !ObjectFits(tables, a_slot, impl->postedFit[a_shadow ? 1 : 0]))
+		if (a_slot >= tables.objects.size() || !ObjectFits(tables, a_slot, posted.fit[a_shadow ? 1 : 0]))
 			return false;
 		// The main pair's rows (MainBuild::ResolvePair: a row past its table waits for its growth).
 		const auto& object = tables.objects[a_slot];
-		return a_shadow || (object.flags & kObjectNoBindings) || (object.materialIndex < impl->postedRows[0] && object.pipelineIndex < impl->postedRows[1]);
+		return a_shadow || (object.flags & kObjectNoBindings) || (object.materialIndex < posted.rows[0] && object.pipelineIndex < posted.rows[1]);
 	}
 
 	std::uint64_t IndirectDraws::SceneFitSerial() const
 	{
-		return impl ? impl->postedFitSerial : 0;
+		return impl ? impl->aheadTaken.fitSerial : 0;
 	}
 
 	std::function<void(org::runtime::IUploadService&)> IndirectDraws::PrepareFrameUploads()
@@ -469,7 +482,15 @@ namespace DCLF
 		frame.materialRows = entry.materialRows.address;
 		frame.pipelineRows = entry.pipelineRows.address;
 		// The producer's part: the entry brought up to the publication, once the frame that last read it is done on the GPU.
-		return [&s, draws = std::move(draws), &entry, r, reuse = entry.reuse](org::runtime::IUploadService& a_uploads) {
+		// CS_DCLF_PERSISTENT_PARITY: the entry keeps its extras rows as uploaded, checked on the parity's frames against the view it
+		// was filled from. Over kPayloadRing consecutive frames from each parity frame, so every entry is checked (the entries rotate
+		// one a frame, and the parity's period is a multiple of their count: one frame alone would check the same entry each time).
+		const bool extrasMirror = PersistentParityEnabled();
+		const std::uint32_t parityFrame = SceneStore::Get().GetFrame();
+		bool extrasCheck = false;
+		for (std::uint32_t k = 0; k < Impl::kPayloadRing && extrasMirror && !extrasCheck; ++k)
+			extrasCheck = ParityDue(parityFrame, k);
+		return [&s, draws = std::move(draws), &entry, r, reuse = entry.reuse, extrasMirror, extrasCheck](org::runtime::IUploadService& a_uploads) {
 			ZoneScopedN("CS.DCLF.PayloadRing.Fill");
 			if (!reuse.Reached() && !reuse.Wait(10000))
 				throw std::runtime_error("the frame that last read the payload ring entry did not complete on the GPU");
@@ -492,9 +513,11 @@ namespace DCLF
 			views.objects.Emit(entry.objects.held, sender(entry.objects, Impl::kRingObjects));
 			entry.objects.held = views.objects.Version();
 			holders.objects.Set(r, entry.objects.held);
-			EmitExtras(views.extras, entry.extras.held, nullptr, sender(entry.extras, Impl::kRingExtras));
+			EmitExtras(views.extras, entry.extras.held, extrasMirror ? &entry.extras.uploaded : nullptr, sender(entry.extras, Impl::kRingExtras));
 			entry.extras.held = views.extras.Version();
 			holders.extras.Set(r, entry.extras.held);
+			if (extrasCheck)
+				CheckRingExtras(s.extrasStore.ring, entry.extras.uploaded, views.extras, r);
 			const MainPayload* newest = draws->payloads[kAsyncColour] ? draws->payloads[kAsyncColour].get() : draws->payloads[kAsyncZPrepass].get();
 			const ShadowPayload* shadow = draws->shadow.get();
 			const auto& geometries = newest ? newest->geometryDraws : shadow->geometries;
@@ -552,69 +575,69 @@ namespace DCLF
 			impl->ringFrame = {};
 	}
 
-	void IndirectDraws::InstallDraws(std::shared_ptr<const void> a_draws)
+	void IndirectDraws::PostSnapshotWork(std::shared_ptr<const void> a_publication)
 	{
-		if (!impl)
+		if (!impl || !a_publication)
 			return;
-		const auto slot = std::static_pointer_cast<const Impl::AheadSlot>(std::move(a_draws));
-		impl->installedDraws = slot && slot->done.load(std::memory_order_acquire) ? slot->result : nullptr;
-	}
-
-	bool IndirectDraws::DrawsReady(const std::shared_ptr<const void>& a_draws) const
-	{
-		// A publication without draws (DCLF failed, none asked for) draws nothing of DCLF's: nothing to wait for.
-		const auto* slot = static_cast<const Impl::AheadSlot*>(a_draws.get());
-		if (!slot)
-			return true;
-		if (!slot->done.load(std::memory_order_acquire))
-			return false;
-		// The epochs build nothing (CS_DCLF_BINDLESS_PARITY aside): a publication is installed only with both main payloads, built for
-		// the main resources as they are (until the frame slots are known, at startup, or for resources since replaced, it has none).
-		if (failed || SwitchEnabled(Switch::BindlessParity))
-			return true;
-		const auto& built = slot->result;
-		const auto* resources = impl->resources.get();
-		for (const std::size_t j : { kAsyncZPrepass, kAsyncColour })
-			if (!built || !built->payloads[j] || built->payloads[j]->inputs.addresses.identity != resources)
-				return false;
-		return true;
-	}
-
-	std::shared_ptr<const void> IndirectDraws::BuildAhead(std::shared_ptr<const void> a_tables)
-	{
-		if (!impl || failed || !a_tables)
-			return nullptr;
 		auto& s = *impl;
+		auto publication = std::static_pointer_cast<const SceneStore::ScenePublication>(std::move(a_publication));
+		if (failed) {
+			// No draws and no revision: the publication alone (its tables and claims; DCLF draws nothing, DecideCoverage).
+			auto snapshot = std::make_unique<Impl::SceneSnapshot>();
+			snapshot->publication = std::move(publication);
+			snapshot->drawsComplete = true;
+			s.snapshotSlot.Post(std::move(snapshot));
+			return;
+		}
 		auto& store = SceneStore::Get();
-		auto slot = std::make_shared<Impl::AheadSlot>();
-		const std::uint64_t seq = ++s.aheadKicked;
-		// What the task reads that the coordinator or the frame write later is copied into it now: the context, the lookups.
-		auto job = [&s, slot, seq, tables = std::static_pointer_cast<const SceneStore::Tables>(std::move(a_tables)), context = s.aheadContext,
-						lookups = store.SharedLookups() ? store.SharedLookups() : std::make_shared<const Lookups>(store.CoordinatorLookups()), generation = store.GetTablesGeneration(),
-						frame = store.GetFrame(), sun = store.CoordinatorSunCandidates(), light = store.CoordinatorLightCandidates()](const auto&) mutable {
-			// One at a time, in publication order: each builds on the stores and rows the one before left.
-			for (auto finished = s.aheadDone.load(std::memory_order_acquire); finished + 1 < seq; finished = s.aheadDone.load(std::memory_order_acquire))
-				s.aheadDone.wait(finished, std::memory_order_acquire);
+		// What the builds ahead read that the coordinator or the frame write later is copied now: the context (the coordinator's copy of
+		// the frame's post, TakeAheadContext), the frame, the candidates. The tables and lookups are the publication's, immutable.
+		auto work = std::make_unique<Impl::SnapshotWork>();
+		work->publication = std::move(publication);
+		work->context = s.aheadTaken.context;
+		work->frame = store.GetFrame();
+		work->sun = store.CoordinatorSunCandidates();
+		work->light = store.CoordinatorLightCandidates();
+		work->aheadNumber = s.aheadKicked.fetch_add(1, std::memory_order_acq_rel) + 1;
+		// Latest wins: one the builder has not taken yet is replaced (dropped here, on the coordinator, as a returned publication is).
+		s.snapshotWorkSlot.Post(std::move(work));
+		(void)s.SnapshotPump();
+		WakeSnapshotBuilder();
+	}
+
+	void IndirectDraws::Impl::BuildSnapshotDraws()
+	{
+		auto& b = snapshotBuilder;
+		auto& work = *b.work;
+		const auto start = std::chrono::steady_clock::now();
+		const auto& publication = *work.publication;
+		std::shared_ptr<const DrawPublication> built;
+		aheadRunning.store(true, std::memory_order_release);
+		if (publication.tables && publication.lookups) {
 			try {
-				slot->result = s.RunAhead(std::move(tables), context, *lookups, generation, frame, std::move(sun), std::move(light));
+				built = RunAhead(publication.tables, work.context, *publication.lookups, publication.tablesGeneration, work.frame, work.sun, work.light);
 			} catch (const std::exception& e) {
 				static std::atomic<std::uint32_t> logged{ 0 };
 				if (logged++ < 4)
-					logger::error("[DCLF] builds ahead {} failed: {}; its frames draw what the epochs build", seq, e.what());
+					logger::error("[DCLF] builds ahead of publication {} failed: {}; its snapshot draws nothing", publication.sequence, e.what());
 			}
-			slot->done.store(true, std::memory_order_release);
-			s.aheadDone.store(seq, std::memory_order_release);
-			s.aheadDone.notify_all();
-		};
-		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), PublishedSceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "builds ahead", std::move(job)))
-			stl::report_and_fail("Drawcall Limit Fix: the builds ahead were refused by DCLF's executor");
-		return slot;
+		}
+		aheadRunning.store(false, std::memory_order_release);
+		aheadRunning.notify_all();
+		// The builds ahead done up to this item's number: the ones it replaced included.
+		aheadDone.store(work.aheadNumber, std::memory_order_release);
+		aheadDone.notify_all();
+		b.draws = std::move(built);
+		b.timing.ahead = true;
+		b.timing.aheadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 	}
 
 	void IndirectDraws::Impl::WaitAhead()
 	{
-		for (auto finished = aheadDone.load(std::memory_order_acquire); finished < aheadKicked; finished = aheadDone.load(std::memory_order_acquire))
-			aheadDone.wait(finished, std::memory_order_acquire);
+		// The build ahead running now (teardown, the toggle, a load screen): one the builder has not started reads nothing until it does,
+		// and the frame's fallback streams are refused until it is done (aheadDone).
+		while (aheadRunning.load(std::memory_order_acquire))
+			aheadRunning.wait(true, std::memory_order_acquire);
 	}
 
 	std::shared_ptr<const IndirectDraws::Impl::DrawPublication> IndirectDraws::Impl::RunAhead(std::shared_ptr<const SceneStore::Tables> a_tables,
@@ -630,9 +653,8 @@ namespace DCLF
 		// what the oldest ring entry lacks.
 		const TablesHeld from{ holders.objects.Oldest(), holders.extras.Oldest(), holders.geometries.Oldest() };
 		out->streams = MakeStreamViews(objectStore, extrasStore, geometryStore, from, a_tables, *a_tables, a_generation, a_frame);
-		// CS_DCLF_PERSISTENT_PARITY: the extras rows against the tables' (the commits that read the ring send none, step 6e S3).
-		if (PersistentParityEnabled() && ParityDue(a_frame))
-			CheckExtras(extrasStore, out->streams->extras);
+		// CS_DCLF_PERSISTENT_PARITY: the extras rows are checked by each buffer that holds them, as it is sent them (the ring's
+		// producer, CommitSceneStreams).
 		const auto& c = a_context;
 		if (!c.valid || !c.target || !c.target->scene)
 			return out;

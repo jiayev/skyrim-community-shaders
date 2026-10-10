@@ -83,12 +83,10 @@ struct DrawcallLimitFix : Feature
 	ankerl::unordered_dense::map<std::uint64_t, std::uint32_t> drawCensus;
 	std::uint32_t drawCensusFrames = 0;
 	/**
-	 * @brief The pipeline slot's SPIR-V program and indirect pipeline: its set index, or DrawPipelines::kNotReady, requesting
-	 * what is missing. Each build a request starts is logged as a warning (on demand: the precompile missed it).
+	 * @brief The frame's start, the publication installed: what the scene lane's lookups need of the frame (IndirectDraws::PostLookupInputs),
+	 * and the constant tables' parity against the installed lookups (T6b2c step 5: the lookups are made and published by the scene lane).
 	 */
-	static std::uint32_t RequestLightingPipeline(std::uint32_t a_slot, RE::BSShader& a_lighting);
-	/** @brief The frame's start: the Lighting programs and pipelines, and the main lookups, refreshed once (step 6e C). */
-	static void RefreshFrameLookups();
+	static void PrepareFrameLookups();
 
 	/** @brief The main camera's native draws since the last report, and the set members' among them (LEAK, must be 0). */
 	struct LeakStats
@@ -229,16 +227,16 @@ private:
 	// report interval; and the views this frame's Ready calls said DCLF draws (DrawOcclusion's epoch draws them).
 	std::array<std::uint32_t, 2> occlusionNativeFrames{};
 	std::array<std::uint32_t, 2> occlusionEngineFrames{};
-	// The toggles' generation last seen at a frame's start, and the first scene frame whose commit is under them (BeginSceneFrame).
+	// The toggles' generation at the frame's start (BeginSceneFrame): a publication whose commit was made under older toggles is not
+	// installed (T6b3a: the publication carries its commit's generation; the toggle reinstall waits for one made under these).
 	std::uint32_t toggleGeneration = 0;
-	std::uint32_t toggleCommitFrame = 0;  // frames the engine registered the map's non-members (OcclusionNeedsEngine)
 	std::uint32_t occlusionWanted = 0;
 	std::uint32_t occlusionParityWaiting = 0;  // the maps whose engine render was kept this frame (CopyOcclusion stage 0)
 	/** @brief The periodic report (DrawcallLimitFix/Report.cpp): every kReportInterval frames. */
 	void ReportStats(std::uint32_t a_frame);
 	/** @brief The frame's reports, the scene work joined (they read its stats): at Present, or the next frame's start (T6b1d). */
 	void ReportFrame();
-	bool reportPending = false;  // Present found the scene work running: its reports wait for the frame start's join
+	bool reportPending = false;  // Present found the scene work running: its reports wait for the next join (the frame start's, or Present's)
 	static constexpr std::uint32_t kReportInterval = 300;
 	LeakStats leaks;  // since the last report
 };

@@ -154,6 +154,8 @@ namespace DCLF
 		}
 		g->membershipWitness = PrimaryCull::MembershipWitness(*g);
 		g->technique = SampleTechniqueInputs();
+		g->shadowMaskHeld.copy_from(g->technique.shadowMask);  // the renderer's target holds it now: alive
+		g->material = MaterialPort::SampleFrame();
 		recent[recentNext++ % recent.size()] = latest;
 		latest = g;
 		return g;

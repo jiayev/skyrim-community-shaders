@@ -11,8 +11,8 @@ namespace DCLF::GeometryPort
 	/**
 	 * @brief The per-frame inputs of a pipeline's PerGeometry block (T6b2): what BSLightingShader::SetupGeometry (AE 0x1414dd040)
 	 * writes that is neither the object's nor fixed by the pass descriptor, as the engine would compute it now. Sampled by the
-	 * render thread at the frame's start (cheap global reads), after which nothing of the engine is read: PipelineGeometryConstants
-	 * is a pure function of a descriptor and this.
+	 * render thread once a frame at Prepass (cheap global reads; SamplePipelineFrame), after which nothing of the engine is read:
+	 * PipelineGeometryConstants is a pure function of a descriptor and this.
 	 *
 	 * Only the main view's case: Community Shaders' world-space patch (Hooks.cpp, AE SetupGeometry+0x71 "and r15d, 0") is assumed,
 	 * so the model-space branches (D3DXVec3TransformNormal of the sun, the transformed ambient) never run.
@@ -56,7 +56,11 @@ namespace DCLF::GeometryPort
 		bool SamePipelineInputs(const PipelineFrame& a_other) const;
 	};
 
-	/** @brief This frame's (render thread, the frame's start, inside the engine-read window: SampleExtrasFrame's point). */
+	/**
+	 * @brief This frame's (render thread, inside the engine-read window). Sampled at Prepass (SceneStore::RefreshFrameConstants), not
+	 * the frame's start: the eye is the current accumulator's and posAdjust the shadow state's, which are the main camera's only
+	 * there (at EarlyPrepass and before they still belong to the shadow-map camera; DrawcallLimitFix::Prepass).
+	 */
 	PipelineFrame SamplePipelineFrame();
 
 	/**
@@ -72,6 +76,22 @@ namespace DCLF::GeometryPort
 	 * False when a_frame has no sun (the template pass would not exist).
 	 */
 	bool PipelineGeometryConstants(std::uint32_t a_passDescriptor, std::uint32_t a_renderFlags, const PipelineFrame& a_frame, GeometryConstants& a_out);
+
+	/**
+	 * @brief What of a pipeline's block moves every frame, written in place from a_frame by PipelineGeometryConstants' rules: PS
+	 * DirLightDirection, DirLightColor, DirectionalAmbient, PS AmbientSpecularTintAndFresnelPower (AmbientSpecular passes, with Engine
+	 * Fixes' patch) and VS EyePosition (PassWritesEyePosition, with an accumulator). The rest (the light counts, SSRParams.xyz, the
+	 * world map rows) moves only with PipelineFrame::SamePipelineInputs, so a block made from a frame with the same pipeline inputs is
+	 * then a's own. Nothing without a sun (PipelineGeometryConstants would not make the block either).
+	 */
+	void RefreshFrameValues(std::uint32_t a_passDescriptor, const PipelineFrame& a_frame, GeometryConstants& a_inOut);
+
+	/**
+	 * @brief Whether SetupGeometry (0x1414dd040) writes VS EyePosition for a pass descriptor: its rule on the raw technique, so True
+	 * PBR's hook (TruePBR.cpp: a TruePbr pass gains AmbientSpecular, 0x20000) included. LightingConstants.h's WritesEyePosition reads
+	 * the pass descriptor, which has no AmbientSpecular for a TruePbr pass, so it misses those.
+	 */
+	bool PassWritesEyePosition(std::uint32_t a_passDescriptor);
 
 	/**
 	 * @brief The frame lighting rows (FrameLighting, LightingConstants.h: DirLightDirection, DirLightColor, DirectionalAmbient,

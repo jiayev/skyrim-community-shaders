@@ -20,6 +20,9 @@ namespace org::runtime
 
 namespace DCLF
 {
+	struct Lookups;
+	struct LookupsResolveState;
+	struct PipelineCatalog;
 
 	/**
 	 * @brief DCLF's objects drawn by the render graph with indirect command streams, into the main pass's own
@@ -84,11 +87,11 @@ namespace DCLF
 		 * @brief Render thread, SceneStore::CommitSet: whether the object is ready for a shadow phase (SetPhaseOfMode's): its Utility
 		 * pipeline under every rasterizer state of the catalog in each of the phase's modes of the capability, and an alpha-tested
 		 * caster's diffuse imported. Part of the set's readiness (SceneSet.h). a_tables: the commit's SceneStore::Tables
-		 * (the coordinator's: the frame's view may hold another object in the slot).
+		 * (the coordinator's: the frame's view may hold another object in the slot); a_lookups: the coordinator's (the scene lane's).
 		 */
 		/** a_why (optional), when not: SceneStore::SetStats::waitingBy's index (7 shadow pipeline, 12 past the scene buffers, 13 the alpha
 		 * test's diffuse not imported). */
-		bool PhaseReady(const void* a_tables, std::uint32_t a_slot, std::uint8_t a_phase, std::uint32_t* a_why = nullptr) const;
+		bool PhaseReady(const void* a_tables, const Lookups& a_lookups, std::uint32_t a_slot, std::uint8_t a_phase, std::uint32_t* a_why = nullptr) const;
 		/** @brief Changes when the capability's modes or the catalog's rasterizer states that PhaseReady reads change: at setup. */
 		std::uint64_t ShadowReadinessSerial() const;
 		/**
@@ -97,11 +100,17 @@ namespace DCLF
 		 * frame's start posted with their context, PostAheadContext): the main builds' (a_shadow false) or the shadow build's. One past
 		 * them has no input until their growth (ObjectFits), so a member must wait for it: claimed, it would be drawn by nobody. The
 		 * buffers only grow, and a build ahead takes a context posted at or after the commit's. a_tables: the caller's
-		 * SceneStore::Tables (the coordinator's own in CommitSet and the revocation, not the frame's view).
+		 * SceneStore::Tables (the coordinator's own in CommitSet and the revocation, not the frame's view). T6b3a: the coordinator's copy
+		 * of the posted fits (TakeAheadContext), never the render thread's.
 		 */
 		bool FitsScene(const void* a_tables, std::uint32_t a_slot, bool a_shadow) const;
 		/** @brief Changes when FitsScene's fits do (a growth of the scene buffers): the slots waiting for one are taken again. */
 		std::uint64_t SceneFitSerial() const;
+		/**
+		 * @brief The coordinator, at the start of each pass (T6b3a): the ahead context and the fits the frame's start posted since
+		 * (latest wins), the copy BuildAhead, FitsScene and SceneFitSerial read.
+		 */
+		void TakeAheadContext();
 
 		/**
 		 * @brief What the main pass binds (buffers, views, targets, viewport), for this frame's colour epoch: where its opaque
@@ -129,28 +138,48 @@ namespace DCLF
 		/** @brief Where the main pass's opaque batches end: the colour pass, against the depth above. */
 		void ExecuteColour();
 
-		/** @brief Render thread, the frame's start: the main material and shared lookups refreshed (step 6e C), against the frame's tables. */
-		void RefreshMainLookups();
 		/**
-		 * @brief The coordinator, publishing the scene (SceneStore::PublishScene, step 6e E3b): the publication's stream views and the
-		 * Z-prepass and colour payloads, built from a_tables (its SceneStore::Tables) with what the frame's start posted
-		 * (PostAheadContext) and staged for the buffers as the publication before leaves them. The frames that install it commit
-		 * them: no build, no join in the frame.
+		 * @brief Render thread, the frame's start with the scene work joined: what the scene lane's lookups are made from that only the
+		 * frame has (T6b2c step 5): the import context and the fixed bindings (GpuTextures::PublishImportContext), the shadow capability
+		 * (UpdateShadowCapability), the pipeline lane's shadow inputs (DrawPipelines::SetShadowInputs), and the shadow views' modes, states
+		 * and formats the shadow pipelines are resolved for, through a latest-wins slot (ResolveLookups reads it).
 		 */
-		std::shared_ptr<const void> BuildAhead(std::shared_ptr<const void> a_tables);
-		/** @brief Render thread: whether a publication's draws (BuildAhead's) are done, so the frame may install it. */
-		bool DrawsReady(const std::shared_ptr<const void>& a_draws) const;
-		/** @brief Render thread, the frame's start (the coordinator idle): what the next builds ahead take from the frame (resources, masks). */
+		void PostLookupInputs();
+		/**
+		 * @brief The scene lane (SceneStore::ResolveLookups): a_lookups' pipeline entries (set index, constant tables, register usage) and
+		 * shadow pipelines (shadowPipelines, shadowSlots, shadowMapRows) resolved from a_tables (its SceneStore::Tables) and a_catalog alone,
+		 * each key not asked of the pipeline lane yet asked (DrawPipelines::RequestLighting, RequestShadow); the shadow pipelines for the
+		 * views the frame's start last posted (PostLookupInputs). Reads no engine state and no render-thread service.
+		 */
+		void ResolveLookups(const void* a_tables, const PipelineCatalog* a_catalog, Lookups& a_lookups, LookupsResolveState& a_state);
+		/**
+		 * @brief The coordinator, publishing the scene (SceneStore::PublishScene; T6b3b): a_publication (its SceneStore::ScenePublication)
+		 * handed to the snapshot builder with what its draws are built from (the frame's last ahead context, PostAheadContext; the frame
+		 * and the candidates as the coordinator has them). The builder (on DCLF's preparation pool, one snapshot at a time, from the newest
+		 * publication) builds its stream views and payloads (step 6e E3b), makes and records its scene revision, and posts the complete
+		 * snapshot for the frame (AdoptSnapshot). Latest wins: a publication a newer one replaced before the builder took it is skipped.
+		 */
+		void PostSnapshotWork(std::shared_ptr<const void> a_publication);
+		/**
+		 * @brief Render thread, the frame's start, after the build point (T6b3b): the newest snapshot the builder posted, adopted whole -
+		 * its revision's growths and versions, its revision the frame's, its draws the frame's - unless it is stale for what it could not
+		 * know ahead (the graph's build its recordings were made on, the targets, the shadow format, its commit's toggles older than
+		 * a_togglesGeneration, the main resources), when the frame has no claims until the builder's next. Returns the adopted snapshot's
+		 * publication (a SceneStore::ScenePublication: SceneStore::HandOverAtFrameStart installs it when newer), null before the first.
+		 */
+		std::shared_ptr<const void> AdoptSnapshot(std::uint32_t a_togglesGeneration);
+		/**
+		 * @brief Render thread, the frame's start: what the next builds ahead take from the frame (resources, masks) and the fits, posted
+		 * for the coordinator (T6b3a: a latest-wins slot it takes at its passes' start, TakeAheadContext).
+		 */
 		void PostAheadContext();
 		/**
-		 * @brief Render thread, the frame's start, after InstallDraws: the payload ring entry the frame's epochs read, made to hold
-		 * the installed payloads, and what fills it (FrameValues' job runs it before the frame's signal, step 6e E4). Empty: none.
+		 * @brief Render thread, the frame's start, after AdoptSnapshot: the payload ring entry the frame's epochs read, made to hold
+		 * the adopted snapshot's payloads, and what fills it (FrameValues' job runs it before the frame's signal, step 6e E4). Empty: none.
 		 */
 		std::function<void(org::runtime::IUploadService&)> PrepareFrameUploads();
 		/** @brief Render thread: the frame's producer did not run (FrameValues::Kick refused): its epochs read no ring entry. */
 		void DropFrameUploads();
-		/** @brief Render thread, the frame's start: the installed publication's draws (SceneStore::InstalledDraws), the frame's. */
-		void InstallDraws(std::shared_ptr<const void> a_draws);
 
 		/**
 		 * @brief Render thread, at the end of the scene tables: the fade write-back's events read back since the last kick (and any
@@ -161,17 +190,17 @@ namespace DCLF
 		void KickFadeWriteBack();
 		/**
 		 * @brief Render thread, at the frame's first DCLF point, after the scene events (the tree LOD mirror's drain) and before the
-		 * main camera's cull: whether DCLF draws tree LOD this frame - its toggle on, its programs, pipelines and tables built, the
-		 * engine's tree LOD texture there. The registrations withhold the engine's tree LOD passes on it (PassCapture), and the
-		 * depth commit draws on it (UploadTreeLod).
+		 * main camera's cull: whether DCLF draws tree LOD this frame - its toggle on, its pipelines in the frame's catalog (asked of the
+		 * pipeline lane here: DrawPipelines::RequestTreeLod), its tables built, the engine's tree LOD texture there. The registrations
+		 * withhold the engine's tree LOD passes on it (PassCapture), and the depth commit draws on it (UploadTreeLod).
 		 */
 		bool DecideTreeLod();
 		/**
 		 * @brief The water reflection's faces (dclf-lod.md, "Water reflections"). CaptureReflectionFace: render thread, at a face's
 		 * accumulator render's end (ReflectionFaces::InFace), after the engine's draws: the face's targets, and in a plain face render
 		 * the face's camera for this update's epoch. PrepareReflection: render thread, once a frame, after DecideTreeLod: the forward
-		 * programs and pipelines of the LOD pipeline slots in use, and tree LOD's, for those targets (the reflection phase's
-		 * readiness), and whether the faces' tree LOD is DCLF's. ReflectionDrawable: the set draws the reflection phase (SceneStore::
+		 * pipelines of the LOD pipeline slots in use, and tree LOD's, for those targets, asked of the pipeline lane and read from the
+		 * frame's catalog (the reflection phase's readiness), and whether the faces' tree LOD is DCLF's. ReflectionDrawable: the set draws the reflection phase (SceneStore::
 		 * SetCapability). ExecuteReflection: render thread, once a frame at BeforeShadowMaps, after the frame's reflection updates
 		 * (TESWaterReflections::Update runs twice a frame, a face each): one epoch drawing the frame's faces' reflection-phase
 		 * members and tree LOD into the cube target.
@@ -198,35 +227,26 @@ namespace DCLF
 		 */
 
 		/**
-		 * @brief Render thread, at the scene work's join (SceneStore::FinishSceneWork): the main segments' shapes as a scene revision
-		 * made now would have them (R3c), with the capacities reserved for the tables as they are; compared with the commits' own
-		 * (Impl::ShapeParity). Counts only: nothing draws with them yet.
+		 * @brief Render thread (T6b3b b2a): what a scene revision reads of the frame (Impl::RevisionInputs), posted when it moved. Called
+		 * where a value is captured outside IndirectDraws: after the shadow views' Rebuild (their candidates, BeforeShadowMaps).
 		 */
-		void MakeRevisionShapes();
+		void NoteRevisionInputs();
 		/**
 		 * @brief Render thread, first at BeginSceneFrame, every frame: the graph's build point. Its builds are explicit
 		 * (PersistentGraphHost::SetExplicitBuilds): an extension added or removed during a frame waits for this point, so the graph a
-		 * frame's revision was recorded on runs through that frame.
+		 * frame's revision was recorded on runs through that frame. It also serves what the snapshot builder asked of the owner thread
+		 * (shadow view slots) and posts the frame's revision inputs.
 		 */
 		void BuildPoint();
-		/** @brief Render thread, BeginSceneFrame: the newest complete scene revision selected (Impl::SceneRevisions; counts only). */
-		void SelectRevision();
 		/**
-		 * @brief Render thread, BeginSceneFrame, after SelectRevision: whether the selected revision covers the frame's main epochs - it has
-		 * their recordings, of the graph as built now (strict epochs). False: the frame has no claims (SceneStore::WithdrawSet) and DCLF
-		 * draws nothing. Also decides the other epochs' coverage (Impl::EpochCovered). True without revisions.
+		 * @brief Render thread, BeginSceneFrame, after AdoptSnapshot: whether the adopted snapshot covers the frame's main epochs - it is not
+		 * stale, its draws are for the main resources, and its revision has their recordings, of the graph as built now (strict epochs).
+		 * False: the frame has no claims (SceneStore::WithdrawSet) and DCLF draws nothing. Also decides the other epochs' coverage
+		 * (Impl::EpochCovered). True without revisions.
 		 */
 		bool DecideCoverage();
-		/**
-		 * @brief Render thread, BeginSceneFrame, after SelectRevision: whether the set committed at a_commitFrame may become the
-		 * frame's claims (SceneStore::ApplySet) - the selected revision was made at or after it, so its shapes and pipelines hold
-		 * every claim. True without revisions, or when none was made for that commit (no resources yet).
-		 */
-		bool SetApplicable(std::uint32_t a_commitFrame) const;
 		/** @brief Whether the frame's claims are a scene revision's: a structural change after its join revokes one. */
 		bool RevisionClaims() const;
-		/** @brief The set committed at a_commitFrame was applied: the frame's claims are its (RevisionHoldsClaims). */
-		void NoteSetApplied(std::uint32_t a_commitFrame);
 		/** @brief Since the last call: the stream views a fallback wanted while the coordinator or the builds task ran (none made). */
 		std::uint64_t TakeStreamsRefused();
 

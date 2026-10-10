@@ -616,10 +616,11 @@ skyrim-engine-notes.md has the details: "Terrain LOD: registration, constants an
 - **Classification and shading.** `IsLodLand` (a `BSTriShape` with `kLODLandscape`) lets the land through
   `DeriveLightingDescriptors`, and LODLand and LODLandNoise are supported techniques under the toggle. The pipelines
   take write mode 1, as for object LOD. Terrain LOD never casts (`ShadowReject::Lod`).
-- **Technique constants** (`EvaluateTechnique`, once a frame): bilinear filtering on slots 0 and 1, and `HighDetailRange`:
-  the loaded grid's centre, absolute (the vertex shader takes the draw's eye off it). It moves vertices, so the Z-prepass
-  and the colour pass must draw a frame with the same value: it is taken once, before the Z-prepass build is kicked
-  (`RefreshLodTechniqueRanges`, `HoldLodHighDetailRange`), and the colour pass's evaluation serves the held value. The grid
+- **Technique constants** (`EvaluateTechnique`, the coordinator's technique rows, T6b2c): bilinear filtering on slots 0 and 1,
+  and `HighDetailRange`: the loaded grid's centre, absolute (the vertex shader takes the draw's eye off it). It moves vertices,
+  so the Z-prepass and the colour pass must draw a frame with the same value: it is sampled once at the frame's start
+  (`FrameGlobals::technique`), the coordinator writes the LOD land's rows from that sample when it moves
+  (`RefreshTechniqueRows`), and both passes read the rows of the frame's tables (one publication). The grid
   can move between the two in one frame (a load finishing after a teleport): with each pass reading the globals, about
   600,000 pixels of terrain LOD failed the colour pass's EQUAL test for one frame.
 - **`PreviousWorld`** (`DrawnPreviousWorld`, the shared contract): the record's previous transform is the current one for

@@ -2495,6 +2495,25 @@ Validation, full featureset: a Riverwood run and a tour to Whiterun and Dragonsr
 or execution sets; 54 main and 50 shadow publishes on the tour, 0 frames waited, every pipeline in its set. Timing
 unchanged (colour pass 1.541 against 1.542 ms).
 
+**The main set on the pipeline lane** (T6b2c step 4). The Lighting programs and the main set are no longer the render
+thread's: the pipeline lane (`BuildExecutor.h`, a `SerializedTaskPump` on DCLF's coordinator) takes the keys asked of it
+(`DrawPipelines::RequestLighting`, once per key), requests their programs (`ShaderPrograms::Find`) and pipelines, and is
+woken by their completions (`ShaderPrograms::UpdateLane`, `Impl::AdmitLane`); it admits, publishes a set version and
+only then hands out indices, as `Update` did. What it needs of the render thread arrives latest-wins as the frame's inputs
+(`Impl::FrameInput`: the targets and their generation, the engine states it asked for and the opaque write modes, read in
+the deferred pass by `CaptureEngineStates`, the winding, the Lighting shader). After each pass that changed something it
+publishes an immutable `PipelineCatalog` (each key's set index, failure and register usage, the set's generation and the
+set version that holds the indices). The frame's start takes the newest (`TakeCatalog`), refreshes the pipeline lookups
+from it, and binds its set version for the whole frame (`GetIndirectState`), so the lookups' indices and the set agree by
+construction; a target change after the catalog's set was built leaves the frame without a set, as before. Retired
+versions are dropped by the lane. The shadow set followed (T6b2c step 6): the lane owns the Utility programs and the shadow
+views' set the same way (`RequestShadow`, `Impl::TryRequestShadow`, `AdmitShadow`), its inputs the shadow map format and the
+Utility shader (`SetShadowInputs`) and the view rasterizer states, which the render thread still registers
+(`ShadowRasterStateId`: an id is used the moment it is returned) and posts as they are added. The catalog carries the shadow
+entries, generation, format and set version; `RefreshShadowLookups` asks for each view key once and resolves the shadow
+lookups from the frame's catalog alone, and `GetShadowIndirectState` binds that catalog's shadow set. EarlyPrepass requests
+nothing any more. Tree LOD's and the forward pipelines stay on the render thread (`Update`).
+
 The colour pass alone, focused, nvperf, on against off: the whole colour pass (preprocesses included) 1.58-1.64 against
 2.09-2.12 ms, SMs active 86 against 66 %; its main draws 0.97-0.99 against 1.21 ms, the opaque decals 0.048 against
 0.25 ms, the blended decals 0.39 against 0.59 ms, and the four zero-count calls 0.006 against 0.66-1.06 ms. GPU event
@@ -3925,9 +3944,9 @@ writes, and where it comes from. `MaterialSources` keeps each kind of input curr
 
 | Input | Rule | Where |
 | --- | --- | --- |
-| The material's own fields | re-evaluated when something writes the material | `ProcessMaterialWrites`, end of the accumulate phase |
-| `TexcoordOffset` | computed every frame from the material's two texture-transform buffers at the engine's selector | `RefreshTextureTransforms`, end of the accumulate phase (the Z-prepass reads it) |
-| Shader object and globals: `IBLParams`, PS 6, `SnowRimLightParameters`, `CharacterLightParams`, `LODTexParams.z`, `LandscapeTexture5to6IsSnow.zw` | one live evaluation per signature (the pass flags that decide which of them are written), copied into every record with that signature | `RefreshFrameMaterials`, Prepass |
+| The material's own fields | re-evaluated when something writes the material (its capture at the writer) | `RewriteCapturedMaterials`, on the scene work (T6b2c step 7) |
+| `TexcoordOffset` | computed every frame from the material's two texture-transform buffers at the engine's selector | `RefreshMaterialTransforms`, on the scene work, from the frame's sampled buffer index (T6b2c step 7) |
+| Shader object and globals: `IBLParams`, PS 6, `SnowRimLightParameters`, `CharacterLightParams`, `LODTexParams.z`, `LandscapeTexture5to6IsSnow.zw` | one live evaluation per signature (the pass flags that decide which of them are written), copied into every record with that signature | `RefreshMaterialSignatures`, on the scene work (a probe per signature against the frame's sources, T6b2c step 7) |
 | t11 (the character light's render target) | with the frame components; a change gives the record a new version | the same |
 
 **The write events.** Hooks push the written material into a bounded lock-free ring. Every producer is a

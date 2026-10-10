@@ -265,7 +265,7 @@ namespace DCLF
 	const std::vector<RE::BSGeometry*>* SceneStore::LightDependentsOf(const RE::NiAVObject* a_root) const
 	{
 		const auto it = lightDependents.find(a_root);
-		if (it == lightDependents.end() || it->second.empty() || IsCategoryNode(a_root))
+		if (it == lightDependents.end() || it->second.empty() || CategoryNodeOwn(a_root))
 			return nullptr;
 		return &it->second;
 	}
@@ -331,10 +331,10 @@ namespace DCLF
 		// A snapshot for every walk that moved an entry (and the first): the readers bring themselves up to it entry by entry.
 		if (lightTable.changed || !lightCandidates)
 			lightCandidates = PublishCandidates(lightTable, lightCandidatesGeneration);
-		if (SwitchEnabled(Switch::PersistentParity) && ParityDue(frame, 7)) {
+		if (SwitchEnabled(Switch::PersistentParity) && ParityDue(sceneFrame, 7)) {
 			++candidateParity.checks;
 			if (auto why = CheckCandidateTable(lightTable, lightCandidateSet, false); !why.empty() && candidateParity.mismatches++ < 8)
-				logger::warn("[DCLF] light candidates parity at frame {}: {} <- CANDIDATES", frame, why);
+				logger::warn("[DCLF] light candidates parity at frame {}: {} <- CANDIDATES", sceneFrame, why);
 		}
 		(void)changed;
 	}
@@ -418,7 +418,7 @@ namespace DCLF
 		const auto* exclusion = lightCandidates.get();
 		std::uint32_t entries = 0, kept = 0;
 		for (const auto& [root, dependents] : lightDependents) {
-			if (dependents.empty() || IsCategoryNode(root))
+			if (dependents.empty() || CategoryNodeOwn(root))
 				continue;
 			++entries;
 			if (lightCandidateSet.contains(root))
@@ -561,10 +561,10 @@ namespace DCLF
 		// A snapshot for every walk that moved an entry (and the first): the readers bring themselves up to it entry by entry.
 		if (sunTable.changed || !sunCandidates)
 			sunCandidates = PublishCandidates(sunTable, sunCandidatesGeneration);
-		if (SwitchEnabled(Switch::PersistentParity) && ParityDue(frame, 7)) {
+		if (SwitchEnabled(Switch::PersistentParity) && ParityDue(sceneFrame, 7)) {
 			++candidateParity.checks;
 			if (auto why = CheckCandidateTable(sunTable, sunCandidateSet, true); !why.empty() && candidateParity.mismatches++ < 8)
-				logger::warn("[DCLF] sun candidates parity at frame {}: {} <- CANDIDATES", frame, why);
+				logger::warn("[DCLF] sun candidates parity at frame {}: {} <- CANDIDATES", sceneFrame, why);
 		}
 		(void)changed;
 	}

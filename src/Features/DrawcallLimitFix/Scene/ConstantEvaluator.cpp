@@ -372,25 +372,11 @@ namespace DCLF
 		return RunStandIn(kPerGeometry, a_passDescriptor, a_out.vs, a_out.ps, call);
 	}
 
-	namespace
-	{
-		// The frame's range, held from the Z-prepass's refresh (HoldLodHighDetailRange) to the next.
-		std::array<float, 4> heldLodRange{};
-		bool lodRangeHeld = false;
-	}
-
-	void HoldLodHighDetailRange()
-	{
-		// The frame's sample (T6b2c): the technique rows' value too.
-		heldLodRange = FrameGlobals::Current().technique.highDetailRange;
-		lodRangeHeld = true;
-	}
-
 	void LodHighDetailRange(float* a_out)
 	{
-		// The grid can move between the Z-prepass and the colour pass of one frame (a load finishing after a teleport): both draw
-		// with the range the Z-prepass took, or a lowered vertex fails the colour pass's EQUAL test.
-		const auto& range = lodRangeHeld ? heldLodRange : FrameGlobals::Current().technique.highDetailRange;
+		// The frame's sample (T6b2c). The draws take theirs from the technique rows of the frame's tables (the coordinator's, from the
+		// sample of the frame that published them), so the Z-prepass and the colour pass of a frame draw the same range.
+		const auto& range = FrameGlobals::Current().technique.highDetailRange;
 		std::memcpy(a_out, range.data(), sizeof(range));
 	}
 

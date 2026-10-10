@@ -182,6 +182,7 @@ void DrawcallLimitFix::Reset()
 		// T6b1d: the scene work is not waited for here. It reads the mirror alone (its observers' live reads take leases), so it may run
 		// beside the engine's update; what reads its state below needs a join: here when it has ended, else at the next frame's start.
 		const bool joined = store.TryJoinSceneTask();
+		// T6b3b: no revision is made here: the snapshot builder makes each publication's draws and revision off the render thread.
 		// The engine's next update follows Present: no worker may be inside its memory from here (EngineReadWindow).
 		{
 			DCLF::RenderThreadBudget::Part boundary(DCLF::RenderThreadBudget::Bucket::EngineBoundary);
@@ -196,16 +197,17 @@ void DrawcallLimitFix::Reset()
 		if (joined) {
 			ReportFrame();
 			// The frame's ingestion (the scene work applies it); a batch no scene work took in a whole frame (menus, switched off) is
-			// applied here, so the queues never wait longer.
+			// posted and applied here (the scene work joined), so the queues never wait longer.
 			store.IngestEvents();
 			store.NoteEventsPresent();
-			if (store.EventsUnapplied())
+			if (store.EventsUnapplied()) {
+				store.PostIngested();
 				store.ApplyEvents();
-			store.TakeHandedBack();
+			}
 		} else {
-			reportPending = Running();
+			reportPending = reportPending || Running();
 		}
-		// What the joins took of the scene work's references: dropped on the engine's main thread with nothing reading them any more.
+		// What the scene work let go of (T6b3a: pushed where it let go): dropped on the engine's main thread with nothing reading them.
 		store.ReleaseHandedBack();
 		DCLF::EngineReleases::Release();
 		timing.eventsMs += MillisecondsSince(start);
@@ -247,7 +249,7 @@ void DrawcallLimitFix::SetActive(bool a_active)
 	capture.SetBypassed(!a_active);
 	capture.PublishSet(nullptr);
 	if (a_active)
-		DCLF::SceneStore::Get().InvalidateVerdicts();
+		DCLF::SceneStore::Get().RequestVerdictsInvalidated();
 	logger::info("[DCLF] {} from the menu", a_active ? "Switched on" : "Switched off; the game renders natively");
 }
 
@@ -284,52 +286,50 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// registration jobs have finished.
 	auto& store = DCLF::SceneStore::Get();
 	// Nothing of the last frame's work may still run: joined here when Present found it running (T6b1d), with the reports it held.
-	store.JoinSceneTask();
-	if (reportPending)
+	// T6b3a: the join guards nothing of the frame's start any more (messages, the publication slot and its log); CS_DCLF_FRAME_JOIN=0
+	// skips it to show that (GuardFrameAccess and the lane's engine accesses stay 0). The reports read the coordinator's stats: they
+	// wait for a join.
+	const bool frameJoin = DCLF::SwitchValue(DCLF::Switch::FrameJoin) != "0";
+	if (frameJoin)
+		store.JoinSceneTask();
+	if (reportPending && frameJoin)
 		ReportFrame();
 	// The frame's toggles, before anything reads them. A change that enters the classification drops the
-	// cached verdicts, so the next frame classifies every object under the new switches.
+	// cached verdicts, so the next frame classifies every object under the new switches (T6b3a: the coordinator drops them at its
+	// next pass, told by the frame inputs).
 	if (DCLF::Toggles::Get().BeginFrame())
-		store.InvalidateVerdicts();
+		store.RequestVerdictsInvalidated();
 	// A toggle (P4f): the claims committed before it are another capability's (a view DCLF no longer draws, a phase it now does). The
-	// frames are the engine's from here until a publication committed under the new toggles is installed: withdraw, the capability
-	// (RefreshFrameLookups), the full commit (the set's capability change), reinstall.
-	if (const std::uint32_t toggles = DCLF::Toggles::Get().Generation(); toggles != toggleGeneration) {
-		toggleGeneration = toggles;
-		toggleCommitFrame = store.GetFrame() + 1;
-	}
+	// frames are the engine's from here until a publication committed under the new toggles is installed (its commit's toggles
+	// generation, which the frame inputs carry to the coordinator): withdraw, the capability (PrepareFrameLookups), the full commit (the
+	// set's capability change), reinstall.
+	toggleGeneration = DCLF::Toggles::Get().Generation();
 	ScopedPerfEvent event("CS DCLF: scene tables");
-	// What the frame's claims need, from the last walk's state, before the scene work is kicked (the coordinator is idle here):
-	// the frame number, the last commit's set as the frame's (the claims the registration withholds by, and the records this
-	// frame draws), the point lights' filter, the main renderers, tree LOD's and the reflection's preparation, and the roots
-	// this frame's scene lists leave out (before Main::Draw queues their build).
+	// What the frame's claims need, from the last publication, before the scene work is kicked: the frame number and the frame
+	// inputs posted, the last commit's set as the frame's (the claims the registration withholds by, and the records this frame
+	// draws), the point lights' filter, the main renderers, tree LOD's and the reflection's preparation, and the roots this frame's
+	// scene lists leave out (before Main::Draw queues their build).
 	store.BeginFrame();
-	// What passes between the frame and the coordinator (step 6c), with the scene work joined: then the tables the last scene work
-	// published, for the frame (a pointer swap; every frame reader reads them).
-	store.HandOverAtFrameStart();
+	// T6b3b: the newest complete snapshot the builder posted, adopted whole - its revision (versions, shapes, recordings, the growths
+	// it names), its draws (built ahead with its publication) and its publication (the tables with the set applied and its claims,
+	// installed here with the log walked up to it, its tables, lookups and catalog the frame's). The one check is the generation
+	// compare for what a snapshot cannot know ahead (the graph's build, the targets, the shadow format, the toggles, the main
+	// resources): a stale one is not adopted and the frame is the engine's until the builder's next. Then what the coordinator made for
+	// the frame (the held PrimaryCull notes); nothing of the coordinator's is read.
+	auto& draws = DCLF::IndirectDraws::Get();
+	store.HandOverAtFrameStart(draws.AdoptSnapshot(toggleGeneration));
 	// The candidate entries changed since the sun exclusion's snapshot leave it (the engine culls them); the rest stand.
 	DCLF::SunAccumulation::Get().BeginFrame(store.GetSunCandidates());
-	// The newest complete scene revision (R3c), then the newest scene publication it covers - the tables with the set applied and
-	// its claims, made whole by the coordinator (step 6e E3: made at or after the commit it applies); until one is, the installed
-	// one stands, tables and claims together. A frame the selected revision does not cover - none selected yet, or its recordings
-	// are of the graph before the build point built - has no claims: the engine draws everything, and the next covered frame
-	// installs the whole set again.
-	auto& draws = DCLF::IndirectDraws::Get();
-	draws.SelectRevision();
-	// Its draws too (step 6e E3b: built ahead on the pool, never waited for): a publication whose builds are not done waits.
-	store.SelectPublication([&draws, this](std::uint32_t a_commitFrame, const std::shared_ptr<const void>& a_draws) {
-		return a_commitFrame >= toggleCommitFrame && draws.SetApplicable(a_commitFrame) && draws.DrawsReady(a_draws);
-	});
 	store.SyncFrameTables();
-	RefreshFrameLookups();
-	if (!draws.DecideCoverage() || !store.HasInstalled() || store.InstalledCommitFrame() < toggleCommitFrame) {
+	PrepareFrameLookups();
+	// A frame the adopted snapshot does not cover - none yet, its recordings of the graph before the build point built, its draws not for
+	// the main resources, a stale one passed over - has no claims: the engine draws everything, and the next covered frame installs the
+	// whole set again.
+	if (!draws.DecideCoverage() || !store.HasInstalled() || store.InstalledToggles() < toggleGeneration)
 		store.WithdrawSet();
-	} else {
+	else
 		store.InstallClaims();
-		draws.NoteSetApplied(store.InstalledCommitFrame());
-	}
-	// What the frame's epochs commit (step 6e E3b: built ahead with the publication), and what the next builds ahead take from it.
-	draws.InstallDraws(store.InstalledDraws());
+	// What the next builds ahead take from the frame.
 	draws.PostAheadContext();
 	// The stood-in fade roots' write-back: the stores the last task found, made here (engine writes are the render thread's, step 6e
 	// F1), then the next task on DCLF's executor, never joined (step 6e S4), finding the next ones from the frame's snapshot.
@@ -340,20 +340,23 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	{
 		const auto eventsStart = std::chrono::steady_clock::now();
 		store.IngestEvents(true);
+		// To the coordinator, whose pass kicked below applies it first (T6b3a: a posted batch, no shared one).
+		store.PostIngested();
 		timing.eventsMs += MillisecondsSince(eventsStart);
 	}
 	DCLF::LocalLightCull::SelectFrame(store.GetFrame());
 	DCLF::PassCapture::Get().RefreshMainRenderers();
 	// Tree LOD's for the frame, before the main camera's cull registers its passes (dclf-lod.md, "Tree LOD: the draws").
 	DCLF::IndirectDraws::Get().DecideTreeLod();
-	// The water reflection's forward programs and pipelines (dclf-lod.md, "Water reflections").
+	// The water reflection's forward pipelines, asked of the pipeline lane and read from the frame's catalog (dclf-lod.md, "Water
+	// reflections").
 	DCLF::IndirectDraws::Get().PrepareReflection();
 	DCLF::PrimaryCull::Get().PublishListFilter();
 	// The frame's values (FrameValues): the placements and the shading the frame draws with, made on the pool from the last walk's
 	// plan and named slots while the frame runs, and waited for by the GPU; the wetness captured here (Skin's cache is the render
 	// thread's). Before the scene work, which makes the next plan.
 	// With them, the payload ring entry the frame's epochs read (step 6e E4), filled from the installed publication before the signal.
-	if (!DCLF::FrameValues::Get().Kick(store.TakePlacementPlan(), store.TakeShadingItems(), store.CaptureWetness(), store.TakeFadeSeeds(), store.TakeTreeSeeds(), store.FrameGlobalsOfFrame(),
+	if (!DCLF::FrameValues::Get().Kick(store.TakePlacementPlans(), store.TakeShadingItems(), store.CaptureWetness(), store.TakeFadeSeeds(), store.TakeTreeSeeds(), store.FrameGlobalsOfFrame(),
 			draws.PrepareFrameUploads()))
 		draws.DropFrameUploads();
 	// The frame's scene work: the walk and the set's commit, for the next frame's claims. On DCLF's coordinator while
@@ -396,6 +399,8 @@ void DrawcallLimitFix::BeforeShadowMaps()
 	// the capture's attribution, the withholding, the epochs - identifies a view by this list.
 	DCLF::ShadowViews::Get().SetViewCapacity(DCLF::ActiveToggles().shadows ? DCLF::IndirectDraws::Get().ShadowViewCapacity() : UINT32_MAX);
 	DCLF::ShadowViews::Get().Rebuild();
+	// The shadow views' candidates: a scene revision's input (its main latch holds a cascade and a shadow volume each).
+	DCLF::IndirectDraws::Get().NoteRevisionInputs();
 	if (DCLF::ActiveToggles().shadows)
 		DCLF::IndirectDraws::Get().DecideShadowCoverage();
 	// The shadow epoch commits the installed publication's shadow payload (built ahead with it, step 6e S1).
@@ -416,94 +421,21 @@ void DrawcallLimitFix::AfterShadowMaps()
 	DCLF::IndirectDraws::Get().ExecuteShadowFrame();
 }
 
-void DrawcallLimitFix::RefreshFrameLookups()
+void DrawcallLimitFix::PrepareFrameLookups()
 {
-	// The frame's start (step 6e C), with the scene work joined and the tables accepted: the main lookups - the Lighting programs and
-	// pipelines (requested, admitted), the pipeline entries, the material and shared bindings - are refreshed here alone, so they hold
-	// still for the whole frame: the frame's builds and the coordinator's work read them as they are. A texture an epoch imports is
-	// taken at the next frame's start (its members wait for it, as they did).
+	// The frame's start (step 6e C), with the scene work joined and the publication installed. The lookups are the scene lane's (T6b2c
+	// step 5): written by its bindings where they are made, resolved against the pipeline lane's newest catalog before each commit and
+	// publication (SceneStore::ResolveLookups), and published with that catalog. The frame reads the installed publication's
+	// (SceneStore::GetLookups) and holds its catalog (SelectPublication: DrawPipelines::HoldCatalog), whose set versions FrameIndirectState
+	// and FrameShadowIndirectState bind and tree LOD and the forward views resolve from (FrameCatalog), so the indices it resolves and the
+	// sets it binds agree. What is left here is what only the frame has: the scene lane's inputs (PostLookupInputs).
 	auto& store = DCLF::SceneStore::Get();
-	auto& programs = DCLF::ShaderPrograms::Get();
-	auto& pipelines = DCLF::DrawPipelines::Get();
-	if (auto* lighting = DCLF::ConstantEvaluator::Get().GetLightingShader(); lighting && programs.Enabled()) {
-		ZoneScopedN("CS.DCLF.Accumulate.Pipelines");
-		TracyCZoneN(requestZone, "CS.DCLF.Accumulate.RequestLighting", true);
-		const auto& tables = store.GetTables();
-		for (std::size_t p = 0; p < tables.pipelines.size(); ++p) {
-			if (tables.PipelineUsed(p))
-				RequestLightingPipeline(static_cast<std::uint32_t>(p), *lighting);
-		}
-		TracyCZoneEnd(requestZone);
-		TracyCZoneN(updateZone, "CS.DCLF.Accumulate.PublishPipelines", true);
-		programs.Update();
-		pipelines.Update();
-		TracyCZoneEnd(updateZone);
-		TracyCZoneN(lookupZone, "CS.DCLF.Accumulate.PipelineLookups", true);
-		// The pipeline lookups a build reads (Lookups.h): the set index of every pipeline the frame's tables use, its shaders'
-		// constant tables and its register usage, after Update has admitted the finished builds.
-		auto& lookups = store.MutableLookups();
-		if (lookups.pipelineSetGeneration != pipelines.Generation()) {
-			// The set was recreated (a target change): every index a build may hold is stale.
-			lookups.pipelineSetGeneration = pipelines.Generation();
-			++lookups.generation;
-			++lookups.shadowGeneration;
-			lookups.shadowRefreshDue = true;
-		}
-		lookups.pipelines.resize(tables.pipelines.size());
-		auto& cache = SIE::ShaderCache::Instance();
-		for (std::size_t p = 0; p < tables.pipelines.size(); ++p) {
-			auto& entry = lookups.pipelines[p];
-			if (!tables.PipelineUsed(p)) {
-				if (entry.setIndex != DCLF::Lookups::kNone)
-					entry.version = lookups.NextVersion();
-				entry.setIndex = DCLF::Lookups::kNone;
-				continue;
-			}
-			const auto& key = tables.pipelines[p];
-			const std::uint32_t setIndex = RequestLightingPipeline(static_cast<std::uint32_t>(p), *lighting);
-			auto* vs = cache.GetVertexShader(*lighting, key.vertexDescriptor);
-			auto* ps = cache.GetPixelShader(*lighting, key.pixelDescriptor);
-			const std::uint32_t resolved = (setIndex != DCLF::DrawPipelines::kNotReady && vs && ps) ? setIndex : DCLF::Lookups::kNone;
-			// Written only where it differs, so an entry's version is new only when it changed.
-			bool changed = false;
-			if (!(entry.key == key)) {
-				entry.key = key;
-				entry.setIndex = DCLF::Lookups::kNone;
-				entry.shadowMaskIndex = DCLF::Lookups::kNone;
-				changed = true;
-			}
-			if (entry.setIndex != DCLF::Lookups::kNone && entry.setIndex != resolved)
-				++lookups.generation;  // a build may hold the old index
-			changed |= entry.setIndex != resolved;
-			entry.setIndex = resolved;
-			if (resolved != DCLF::Lookups::kNone) {
-				auto assign = [&](std::vector<std::uint8_t>& a_table, const auto& a_source) {
-					if (!std::equal(a_table.begin(), a_table.end(), a_source.begin(), a_source.end())) {
-						a_table.assign(a_source.begin(), a_source.end());
-						changed = true;
-					}
-				};
-				assign(entry.vsTable, vs->constantTable);
-				assign(entry.psTable, ps->constantTable);
-				for (std::uint32_t variant = 0; variant < 2; ++variant) {
-					const auto& usage = pipelines.Usage(resolved, variant);
-					auto& bits = entry.usage[variant];
-					changed |= bits.vertexConstants != usage.vertexConstants || bits.pixelConstants != usage.pixelConstants || bits.textures != usage.textures ||
-					           bits.samplers != usage.samplers;
-					bits.vertexConstants = usage.vertexConstants;
-					bits.pixelConstants = usage.pixelConstants;
-					bits.textures = usage.textures;
-					bits.samplers = usage.samplers;
-				}
-			}
-			if (changed)
-				entry.version = lookups.NextVersion();
-		}
-		TracyCZoneEnd(lookupZone);
-	}
-
-	DCLF::IndirectDraws::Get().RefreshMainLookups();
-	store.TakeLookupsView();
+	// CS_DCLF_PERSISTENT_PARITY: the frame's constant tables against the game's shader objects' (ShaderCache: an observer only, as it takes
+	// its lock and may start a compile), for every entry the installed lookups resolved.
+	if (auto* lighting = DCLF::ConstantEvaluator::Get().GetLightingShader();
+		lighting && DCLF::ShaderPrograms::Get().Enabled() && DCLF::SwitchEnabled(DCLF::Switch::PersistentParity) && DCLF::ParityDue(store.GetFrame()))
+		DCLF::DrawPipelines::Get().CheckConstantTables(*lighting, store.GetLookups());
+	DCLF::IndirectDraws::Get().PostLookupInputs();
 }
 
 void DrawcallLimitFix::EarlyPrepass()
@@ -522,9 +454,10 @@ void DrawcallLimitFix::EarlyPrepass()
 	auto& store = DCLF::SceneStore::Get();
 	ScopedPerfEvent event("CS DCLF: accumulator tables and pipelines");
 	const auto start = std::chrono::steady_clock::now();
-	// The accumulate phase (step 6b): what only the render thread may run (the registrations drained, the engine's material
-	// evaluations), then the joins on the coordinator, which publish the tables. Joined here for now: the Z-prepass kick and the
-	// lookups below still read the live tables (step 6c moves them onto the published snapshot).
+	// The accumulate phase (step 6b): the render thread posts the accumulate work's frame inputs (LightLimitFix's room map) and runs
+	// the parity's observers of the frame's registrations (T6b2c step 8: the capture drained, nothing of the normal path reads it),
+	// then the material tail (step 7's), then the joins on the coordinator, which publish the tables.
+	store.PostAccumulateInputs();
 	store.PrepareAccumulatePhase();
 	if (SceneWorkInline()) {
 		store.RunAccumulateWork(false);
@@ -537,54 +470,8 @@ void DrawcallLimitFix::EarlyPrepass()
 	timing.buildMs += buildMs;
 	timing.buildMaxMs = std::max(timing.buildMaxMs, buildMs);
 	++timing.frames;
-	// The Lighting programs and pipelines, and the main lookups, are the frame's start's (RefreshFrameLookups): the shadow views'
-	// requested here are admitted there.
-	auto& programs = DCLF::ShaderPrograms::Get();
-	auto& pipelines = DCLF::DrawPipelines::Get();
-	// The shadow views' programs: one Utility build per technique of the frame's casters, per render mode of the
-	// shadow capability (whichever views the engine asks for this frame). Requested here, beside the Lighting builds,
-	// so they are compiled long before a shadow epoch would draw with them.
-	if (auto* utility = globals::game::utilityShader; utility && programs.Enabled()) {
-		ZoneScopedN("CS.DCLF.Accumulate.ShadowPipelines");
-		// Clamped for cascades and spot lights, the paraboloid warp for point lights; the engine picks the render mode
-		// from the light, not from the descriptor (engine notes: shadow maps).
-		const std::uint8_t capability = DCLF::IndirectDraws::Get().ShadowCapability();
-		const std::uint32_t modeBits = ((capability & DCLF::kSetCaster) ? DCLF::ShadowModeBits(0xEu) : 0u) |
-		                               ((capability & DCLF::kSetCasterPoint) ? DCLF::ShadowModeBits(0xFu) : 0u);
-		const auto& tables = store.GetTables();
-		// The shadow map array the views draw into; its format is what a shadow pipeline is built for.
-		DXGI_FORMAT shadowFormat = DXGI_FORMAT_UNKNOWN;
-		if (auto* renderer = globals::game::renderer) {
-			const auto& depthStencils = renderer->GetDepthStencilData().depthStencils;
-			// The depth-stencil view's format, not the texture's: the texture is typeless (R16_TYPELESS)
-			// and a pipeline is built against the view it renders through (D16_UNORM), as the epoch does.
-			if (auto* view = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS_ESRAM].views[0]) {
-				D3D11_DEPTH_STENCIL_VIEW_DESC desc{};
-				view->GetDesc(&desc);
-				shadowFormat = desc.Format;
-			}
-		}
-		// Under every rasterizer state of the mode's catalog (DrawPipelines::ShadowRasterStateId; IndirectDraws'
-		// UpdateShadowCapability registers them at setup).
-		for (const auto& key : tables.shadowKeysUsed) {
-			for (std::uint32_t mode : { 0xEu, 0xFu }) {
-				const std::uint32_t bits = DCLF::ShadowModeBits(mode);
-				if (!(modeBits & bits))
-					continue;
-				const auto* program = DCLF::RequestShadowProgram(key.technique | bits, key, ~0u, *utility);
-				if (!program)
-					continue;
-				for (const std::uint32_t state : pipelines.ShadowRasterStatesOfMode(mode)) {
-					const DCLF::ShadowPipelineKey viewKey{ key.technique | bits, key.rasterFlags, key.vertexLayout, state };
-					DCLF::RequestShadowPipeline(viewKey, *program, shadowFormat, key, ~0u);
-				}
-			}
-		}
-	}
-
-
-	// Terrain LOD's HighDetailRange moves vertices: the Z-prepass draws with this frame's, as the colour pass does.
-	DCLF::SceneStore::Get().RefreshLodTechniqueRanges();
+	// The Lighting and the shadow views' programs and pipelines are the pipeline lane's (T6b2c steps 4 and 6), asked for by the
+	// scene lane's lookups (SceneStore::ResolveLookups), which take what it published.
 }
 
 namespace
@@ -865,34 +752,6 @@ void DrawcallLimitFix::ReportDrawCensus()
 	drawCensusFrames = 0;
 }
 
-std::uint32_t DrawcallLimitFix::RequestLightingPipeline(std::uint32_t a_slot, RE::BSShader& a_lighting)
-{
-	// Everything built here is built at runtime, which a complete precompile and cache would avoid: each build a request
-	// starts is logged with the key, the objects that need it and its nearest relative, to find what the precompile misses.
-	const auto& store = DCLF::SceneStore::Get();
-	const auto& key = store.GetTables().pipelines[a_slot];
-	auto& programs = DCLF::ShaderPrograms::Get();
-	auto& pipelines = DCLF::DrawPipelines::Get();
-	const auto describeKey = [&] {
-		return fmt::format("VS {:08X} PS {:08X} pass {:08X} ({}), raster {:X}, vertex layout {:016X}", key.vertexDescriptor, key.pixelDescriptor, key.passDescriptor,
-			DCLF::LightingTechniqueName((key.passDescriptor >> 24) & 0x3f), key.rasterFlags, key.vertexLayout);
-	};
-	std::uint8_t onDemand = 0;
-	const auto* program = programs.Find(key, a_lighting, &onDemand);
-	if (onDemand)
-		logger::warn("[DCLF] on-demand SPIR-V compile: Lighting {} that no precompile requested ({}), for pipeline slot {}: {}; used by {}",
-			DCLF::ShaderPrograms::OnDemandStages(onDemand), SIE::ShaderCache::Instance().IsCompiling() ? "Community Shaders' compile workers still busy" : "Community Shaders' compile workers idle",
-			a_slot, describeKey(), store.DescribePipelineUsers(a_slot));
-	if (!program)
-		return DCLF::DrawPipelines::kNotReady;
-	bool requested = false;
-	const std::uint32_t setIndex = pipelines.Find(key, *program, &requested);
-	if (requested)
-		logger::warn("[DCLF] on-demand pipeline build: Lighting pipeline slot {}: {}; used by {}; {}", a_slot, describeKey(), store.DescribePipelineUsers(a_slot),
-			pipelines.NearestKey(key));
-	return setIndex;
-}
-
 void DrawcallLimitFix::NoteNativePass(const RE::BSRenderPass* a_pass, std::uint32_t a_technique)
 {
 	if (!Running() || !a_pass || !a_pass->geometry || DCLF::PassCapture::ParityBoth())
@@ -1089,9 +948,9 @@ bool DrawcallLimitFix::CaptureMainPass()
 	DCLF::DrawPipelines::Get().SetTargetFormats(formats);
 	// What the main pass binds, for this frame's indirect draws (run before the composite).
 	DCLF::IndirectDraws::Get().CaptureMainPass();
-	// The engine's state objects behind any key that carries state bits (decals), read here
-	// because this is inside the deferred pass, where the blend table holds the deferred variants.
-	DCLF::DrawPipelines::Get().CaptureEngineStates(store.GetTables().pipelines);
+	// The engine's state objects the pipeline lane asked for (decals' state bits, the opaque write modes), read here because this is
+	// inside the deferred pass, where the blend table holds the deferred variants.
+	DCLF::DrawPipelines::Get().CaptureEngineStates();
 	return true;
 }
 

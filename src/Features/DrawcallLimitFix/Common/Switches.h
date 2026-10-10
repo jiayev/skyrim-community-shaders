@@ -61,6 +61,7 @@ namespace DCLF
 		ParityBoth,
 		CapturePointParity,
 		SkylightParity,
+		FrameJoin,
 
 		// Diagnostics: stats, shader debugging, and the probes of open investigations (dclf-open-defects.md).
 		Stats,

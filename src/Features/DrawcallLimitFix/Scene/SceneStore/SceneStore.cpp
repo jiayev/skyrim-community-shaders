@@ -17,7 +17,8 @@ namespace DCLF
 		++trackedLayout;
 		sceneIdentity.Reset();
 		categoryNodes.clear();
-		categoryAppliedGeneration = 0;
+		nodeSetsDirty = true;
+		categoryAppliedGeneration.store(0, std::memory_order_release);
 		alwaysRenderRoots.clear();
 		ResetSlotTables();
 		InvalidateObjectIndices();
@@ -31,7 +32,6 @@ namespace DCLF
 		perFrameSet.clear();
 		pendingEvaluation.clear();
 		memberDecals.clear();
-		frameTables.materialEvaluationsPending.clear();
 		NoteDecalsCleared();
 		fadeChanged.clear();
 		fadeDependents.clear();
@@ -42,6 +42,7 @@ namespace DCLF
 		propertyDependents.clear();
 		rootDependents.clear();
 		lightDependents.clear();
+		lightEntryChanges.push_back({ nullptr, 0 });
 		ReleaseRootOwners();
 		rootReference.clear();
 		referenceRoot.clear();

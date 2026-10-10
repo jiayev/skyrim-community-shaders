@@ -5,9 +5,14 @@
 #include <cstdint>
 #include <cstring>
 
+#include <memory>
+
+#include <d3d11.h>
+#include <winrt/base.h>
+
+#include "Features/DrawcallLimitFix/Common/EventQueue.h"
 #include "Features/DrawcallLimitFix/Scene/ConstantEvaluator.h"
-#include "Features/DrawcallLimitFix/Scene/MaterialPortFeature.h"
-#include "Features/DrawcallLimitFix/Scene/MaterialPortVanilla.h"
+#include "Features/DrawcallLimitFix/Scene/MaterialPortFrame.h"
 
 struct ID3D11ShaderResourceView;
 
@@ -79,15 +84,31 @@ namespace DCLF
 			bool HasTexture(std::uint16_t a_offset) const { return At<const void*>(a_offset) != nullptr; }
 		};
 
-		/** @brief The per-frame sources SetupMaterial reads (sampled by the render thread at the frame's start). */
-		struct MaterialFrame
-		{
-			VanillaFrame vanilla;  // MaterialPortVanilla.h
-			FeatureFrame feature;  // MaterialPortFeature.h
-		};
-
 		/** @brief Any thread that may read the material (its writer, or the render thread): the snapshot of a_material. */
 		bool Capture(const RE::BSShaderMaterial& a_material, MaterialSnapshot& a_out);
+
+		/**
+		 * @brief T6b2a: a snapshot on its way to the scene work, with a reference on the material its capture took (the material's
+		 * count, InterlockedIncrement: any thread, the material alive where it is captured). The scene work hands the reference on: to a
+		 * material slot, or to the render thread's releases (the engine's release is its); never dropped where it lands.
+		 */
+		struct HeldSnapshot
+		{
+			MaterialSnapshot snapshot;
+			std::uint64_t sequence = 0;                 // SceneCapture::NextSequence before the read: the newer of two wins
+			RE::BSShaderMaterial* reference = nullptr;  // one count, the holder's
+			// A reference on each of the snapshot's views, taken with the capture (where the material, and so its textures, is alive):
+			// a texture its writer swaps out may be freed before the scene work asks for its binding (GpuTextures::Request takes its own
+			// from these), so the views are held while the snapshot is.
+			std::array<winrt::com_ptr<ID3D11ShaderResourceView>, kMaxTextureFields> views;
+		};
+		/** @brief The captures for the scene work (SceneStore::DrainMaterialCaptures, its one consumer). */
+		inline EventQueue<std::unique_ptr<HeldSnapshot>> captures;
+		/**
+		 * @brief Any thread where a_material is alive and readable (a material writer after its write: MaterialSources::NoteWritten;
+		 * an attach's capture of a leaf; the render thread for a request): its snapshot, with a reference, onto `captures`.
+		 */
+		void PushCapture(const RE::BSShaderMaterial* a_material);
 
 		/** @brief Render thread, the frame's start: the frame's sources. */
 		MaterialFrame SampleFrame();

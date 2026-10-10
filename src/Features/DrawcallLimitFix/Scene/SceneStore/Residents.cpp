@@ -29,11 +29,11 @@ namespace DCLF
 		// T6b0: the binding's time from the record.
 		if (TimelineEnabled() && a_slot < tables.objectGeometry.size() && !tables.IsLayer(a_slot))
 			if (const auto it = tracked.find(const_cast<RE::BSGeometry*>(tables.objectGeometry[a_slot])); it != tracked.end() && it->second.slot == a_slot) {
-				it->second.boundFrame = frame;
+				it->second.boundFrame = sceneFrame;
 				std::scoped_lock lock(residueClassesLock);
 				++timelineStats.bound;
 				if (it->second.writtenFrame)
-					++timelineStats.writtenToBound[AgeBucket(frame - it->second.writtenFrame)];
+					++timelineStats.writtenToBound[AgeBucket(sceneFrame - it->second.writtenFrame)];
 			}
 	}
 
@@ -57,7 +57,7 @@ namespace DCLF
 			if (!holdPrimaryNotes)
 				PrimaryCull::Get().NoteMemberLost(tables.objectGeometry[a_slot]);
 			else if (holdLostMembers)
-				lostMembersHeld.push_back(tables.objectGeometry[a_slot]);
+				primaryNotes.Push({ PrimaryNote::Kind::MemberLost, tables.objectGeometry[a_slot] });
 		}
 		if (a_slot < tables.residentSlot.size()) {
 			tables.residentSlot[a_slot] = 0;
@@ -77,7 +77,7 @@ namespace DCLF
 	{
 		residentMaintenanceDirty = true;
 		if (holdPrimaryNotes)
-			allMembersLostHeld = true;
+			primaryNotes.Push({ PrimaryNote::Kind::AllMembersLost, nullptr });
 		else
 			PrimaryCull::Get().NoteAllMembersLost();
 		memberDecals.clear();

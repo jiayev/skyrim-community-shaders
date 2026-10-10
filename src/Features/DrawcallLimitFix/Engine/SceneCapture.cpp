@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Diagnostics/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Scene/MaterialPort.h"
 #include "Features/DrawcallLimitFix/Scene/FadeState.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Globals.h"
@@ -298,6 +299,7 @@ namespace DCLF::SceneCapture
 			feature = a_o.feature;
 			glints = a_o.glints;
 			diffuseView = a_o.diffuseView;
+			diffuseHeld = a_o.diffuseHeld;
 		}
 		if (a_f & kFadeNode)
 			fadeNode = a_o.fadeNode;
@@ -553,6 +555,7 @@ namespace DCLF::SceneCapture
 				r.materialAlpha = material->materialAlpha;
 				const auto* texture = material->diffuseTexture ? material->diffuseTexture->rendererTexture : nullptr;
 				r.diffuseView = texture ? texture->resourceView : nullptr;
+				r.diffuseHeld.copy_from(static_cast<ID3D11ShaderResourceView*>(const_cast<void*>(r.diffuseView)));
 				const auto feature = const_cast<RE::BSLightingShaderMaterialBase*>(material)->GetFeature();
 				r.feature = static_cast<std::uint32_t>(feature);
 				// LightingDescriptors' PBR test (Community Shaders' GetRenderPasses: TruePBR.cpp).
@@ -590,10 +593,20 @@ namespace DCLF::SceneCapture
 			for (const void* property : { g.property, g.layerProperty, g.alpha })
 				if (property)
 					a_pins->emplace_back(static_cast<RE::NiRefObject*>(const_cast<void*>(property)));
-		if (g.property)
+		// T6b2a: a Lighting property's material, for the scene work's records (the property holds it here): an attach's or a swap's
+		// (a_pins). A material shared by several leaves is pushed by each; the scene work keeps the newest.
+		auto pushMaterial = [&](const PropertyRecord& a_property) {
+			if (a_pins && a_property.lighting && a_property.material)
+				MaterialPort::PushCapture(static_cast<const RE::BSShaderMaterial*>(a_property.material));
+		};
+		if (g.property) {
 			a_out.properties.push_back(CaptureProperty(*static_cast<const RE::BSShaderProperty*>(g.property)));
-		if (g.layerProperty)
+			pushMaterial(a_out.properties.back());
+		}
+		if (g.layerProperty) {
 			a_out.properties.push_back(CaptureProperty(*static_cast<const RE::BSShaderProperty*>(g.layerProperty)));
+			pushMaterial(a_out.properties.back());
+		}
 		if (g.alpha)
 			a_out.alphas.push_back(CaptureAlpha(*static_cast<const RE::NiAlphaProperty*>(g.alpha)));
 	}

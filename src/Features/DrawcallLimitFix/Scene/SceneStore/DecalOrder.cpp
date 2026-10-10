@@ -324,7 +324,7 @@ namespace DCLF
 		if (!keptDecals)
 			keptDecals = std::make_shared<KeptDecalOrder>();
 		auto& kept = keptDecals->entries;
-		const bool parity = SwitchEnabled(Switch::PersistentParity) && ParityDue(frame);
+		const bool parity = SwitchEnabled(Switch::PersistentParity) && ParityDue(sceneFrame);
 		if (!decalsRebuild && decalsChanged.empty() && !parity)
 			return;
 		if (tables.decalOrdinal.size() != tables.objects.size())

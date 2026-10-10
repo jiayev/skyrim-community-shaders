@@ -12,6 +12,7 @@ namespace DCLF
 
 		// Opcodes, decorations and storage classes from the SPIR-V specification.
 		constexpr std::uint16_t kOpName = 5;
+		constexpr std::uint16_t kOpMemberName = 6;
 		constexpr std::uint16_t kOpExtInstImport = 11;
 		constexpr std::uint16_t kOpExtInst = 12;
 		constexpr std::uint16_t kOpFunction = 54;
@@ -24,9 +25,11 @@ namespace DCLF
 		constexpr std::uint16_t kOpTypePointer = 32;
 		constexpr std::uint16_t kOpVariable = 59;
 		constexpr std::uint16_t kOpDecorate = 71;
+		constexpr std::uint16_t kOpMemberDecorate = 72;
 
 		constexpr std::uint32_t kDecorationBuiltIn = 11;
 		constexpr std::uint32_t kDecorationLocation = 30;
+		constexpr std::uint32_t kDecorationOffset = 35;
 		constexpr std::uint32_t kDecorationBinding = 33;
 		constexpr std::uint32_t kDecorationDescriptorSet = 34;
 
@@ -49,13 +52,22 @@ namespace DCLF
 			bool referenced = false;  // named by an instruction in a function body
 			bool nonSemantic = false;  // an OpExtInstImport of a NonSemantic.* set
 			std::string name;
+			// A struct type's members, by index: their names (OpMemberName) and byte offsets (Offset; kNone where it has none).
+			std::vector<std::string> memberNames;
+			std::vector<std::uint32_t> memberOffsets;
 		};
+
+		std::string LiteralString(const std::uint32_t* a_words, std::size_t a_wordCount)
+		{
+			return std::string(reinterpret_cast<const char*>(a_words), strnlen(reinterpret_cast<const char*>(a_words), a_wordCount * 4));
+		}
 	}
 
 	bool SpirvReflection::Parse(std::span<const std::byte> a_spirv)
 	{
 		inputs.clear();
 		bindings.clear();
+		blockMembers.clear();
 		if (a_spirv.size() < kHeaderWords * 4 || a_spirv.size() % 4 != 0)
 			return false;
 		std::vector<std::uint32_t> words(a_spirv.size() / 4);
@@ -94,6 +106,20 @@ namespace DCLF
 			case kOpName:
 				if (auto* id = count >= 3 ? at(operands[0]) : nullptr)
 					id->name.assign(reinterpret_cast<const char*>(operands + 1), strnlen(reinterpret_cast<const char*>(operands + 1), (count - 2) * 4));
+				break;
+			case kOpMemberName:
+				if (auto* id = count >= 4 ? at(operands[0]) : nullptr) {
+					if (id->memberNames.size() <= operands[1])
+						id->memberNames.resize(std::size_t(operands[1]) + 1);
+					id->memberNames[operands[1]] = LiteralString(operands + 2, count - 3);
+				}
+				break;
+			case kOpMemberDecorate:
+				if (auto* id = count >= 5 && operands[2] == kDecorationOffset ? at(operands[0]) : nullptr) {
+					if (id->memberOffsets.size() <= operands[1])
+						id->memberOffsets.resize(std::size_t(operands[1]) + 1, kNone);
+					id->memberOffsets[operands[1]] = operands[3];
+				}
 				break;
 			case kOpDecorate:
 				if (auto* id = count >= 3 ? at(operands[0]) : nullptr) {
@@ -173,6 +199,15 @@ namespace DCLF
 				semantic.resize(digits);
 				inputs.push_back({ std::move(semantic), index, id.location });
 				continue;
+			}
+			// A constant buffer's members, whether the code reads them or not: the layout is the declaration's.
+			if (id.storage == kStorageUniform && !id.name.empty()) {
+				const Id* pointer = at(id.type);
+				if (const Id* block = pointer ? at(pointer->type) : nullptr) {
+					for (std::size_t m = 0; m < block->memberNames.size(); ++m)
+						if (!block->memberNames[m].empty() && m < block->memberOffsets.size() && block->memberOffsets[m] != kNone)
+							blockMembers.push_back({ id.name, block->memberNames[m], block->memberOffsets[m] });
+				}
 			}
 			if (id.binding == kNone || !id.referenced)
 				continue;

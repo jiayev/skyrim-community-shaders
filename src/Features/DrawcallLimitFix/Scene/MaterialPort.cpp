@@ -1,6 +1,7 @@
 #include "MaterialPort.h"
 
 #include "Features/DrawcallLimitFix/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Engine/SceneCapture.h"
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
@@ -42,6 +43,30 @@ namespace DCLF::MaterialPort
 		for (std::uint32_t i = 0; i < count && i < kMaxTextureFields; ++i)
 			a_out.textures[a_out.textureCount++] = { fields[i], ViewOf(a_out.At<const void*>(fields[i])) };
 		return true;
+	}
+
+	void PushCapture(const RE::BSShaderMaterial* a_material)
+	{
+		if (!a_material)
+			return;
+		// BSIntrusiveRefCounted's count (+0x8), taken only from an owned material: one being built (its count 0, a writer's
+		// CopyMembers before the material manager holds it) is not captured here; its attach or a request captures it.
+		auto* count = reinterpret_cast<volatile LONG*>(reinterpret_cast<std::byte*>(const_cast<RE::BSShaderMaterial*>(a_material)) + 0x8);
+		for (LONG now = *count;;) {
+			if (now <= 0)
+				return;
+			const LONG seen = InterlockedCompareExchange(count, now + 1, now);
+			if (seen == now)
+				break;
+			now = seen;
+		}
+		auto held = std::make_unique<HeldSnapshot>();
+		held->reference = const_cast<RE::BSShaderMaterial*>(a_material);
+		held->sequence = SceneCapture::NextSequence();
+		Capture(*a_material, held->snapshot);  // uncovered (no class known): the scene work keeps the material native, by its reason
+		for (std::uint32_t i = 0; i < held->snapshot.textureCount; ++i)
+			held->views[i].copy_from(held->snapshot.textures[i].view);
+		captures.Push(std::move(held));
 	}
 
 	MaterialFrame SampleFrame()

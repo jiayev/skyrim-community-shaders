@@ -10,6 +10,7 @@
 #	include "RenderGraph/RenderGraphRuntime.h"
 
 #	include <OpenRenderGraph/PersistentGraphHost.h>
+#	include <Render/BindingTable.h>
 #	include <Render/Runtime/DescriptorServiceAccess.h>
 #	include <Render/Runtime/IDescriptorService.h>
 #	include <rhi_helpers.h>
@@ -17,7 +18,6 @@
 
 #	include <atomic>
 #	include <chrono>
-#	include <condition_variable>
 #	include <cstdlib>
 #	include <mutex>
 #	include <format>
@@ -207,7 +207,6 @@ namespace DCLF
 		{
 			std::array<std::atomic<std::uint32_t>, static_cast<std::size_t>(Reject::Count)> rejected{};
 			std::atomic<std::uint32_t> unsupportedLayouts{ 0 };
-			std::atomic<std::uint32_t> pending{ 0 };  // queued for the import thread, not settled yet
 			std::atomic<std::uint64_t> importedAsync{ 0 };
 		};
 		// Everything an import needs, owned, so the import thread can make it outside any epoch: the descriptor service is
@@ -219,20 +218,38 @@ namespace DCLF
 			rhi::Device device;
 			std::shared_ptr<const void> deviceOwner;
 		};
-		struct Request
+		// The import thread's work: a Request to answer.
+		struct Work
 		{
-			std::shared_ptr<Entry> entry;
-			ImportContext context;
-			std::shared_ptr<Counters> counters;
 			std::uint32_t sourceTag = ~0u;
+			winrt::com_ptr<ID3D11ShaderResourceView> view;  // the request's reference on its view
+			Replies* replies = nullptr;
+			std::uint64_t cookie = 0;
 		};
-		// The import thread's queue. The thread shares it, so the last owner only signals it and never joins.
+		// What a Request is answered with, published by the render thread (PublishImportContext): immutable.
+		struct Published
+		{
+			ImportContext context;
+			std::shared_ptr<Registry> registry;
+			std::shared_ptr<Counters> counters;
+			std::shared_ptr<const FixedBindings> fixed;  // never null
+		};
+		// The import thread's queue (lock-free, many producers, the thread its one consumer) and its wake. The thread shares it, so the
+		// last owner only signals it and never joins.
 		struct Importer
 		{
-			std::mutex mutex;
-			std::condition_variable wake;
-			std::vector<Request> queue;
-			bool stop = false;
+			EventQueue<Work, 1024> queue;
+			std::atomic<std::uint64_t> wake{ 0 };
+			std::atomic<bool> stop{ false };
+			std::atomic<std::shared_ptr<const Published>> published;
+			std::atomic<std::uint32_t> requestsPending{ 0 };  // Request: not answered yet
+			std::atomic<std::uint64_t> requestsAnswered{ 0 };
+
+			void Notify()
+			{
+				wake.fetch_add(1, std::memory_order_release);
+				wake.notify_one();
+			}
 		};
 		enum class Found
 		{
@@ -254,16 +271,13 @@ namespace DCLF
 		~Impl()
 		{
 			if (importer) {
-				{
-					std::scoped_lock lock(importer->mutex);
-					importer->stop = true;
-				}
-				importer->wake.notify_one();
+				importer->stop.store(true, std::memory_order_release);
+				importer->Notify();
 			}
 		}
 
 		// The descriptor service: the epoch's while one prepares, else the graph's own, retained (its heap allocation is locked), as
-		// the import thread makes its imports outside any epoch. The lookups are refreshed at the frame's start (step 6e C).
+		// the import thread makes its imports outside any epoch. The lookups are the scene lane's (T6b2c step 5).
 		static org::runtime::IDescriptorService* ServiceNow(std::shared_ptr<org::runtime::IDescriptorService>& a_retained)
 		{
 			if (auto* active = org::runtime::GetActiveDescriptorService())
@@ -290,8 +304,8 @@ namespace DCLF
 		}
 
 		// The registry's answer for a view; under its lock. The registry holds entries weakly: an import in flight is owned by
-		// whoever asked for it (RequestBinding's owner) and by the import thread, and goes when neither holds it any more.
-		Found Find(Registry& a_registry, ID3D11ShaderResourceView* a_view, Binding& a_binding)
+		// the import thread, and an import goes when nobody holds it any more.
+		static Found Find(Registry& a_registry, ID3D11ShaderResourceView* a_view, Binding& a_binding)
 		{
 			const auto found = a_registry.entries.find(a_view);
 			if (found == a_registry.entries.end())
@@ -406,49 +420,107 @@ namespace DCLF
 			a_entry.state.store(a_reject == Reject::None ? State::Ready : State::Rejected, std::memory_order_release);
 		}
 
+		// An import's binding as a Request is answered with: the entry's, or kInvalid with no owner when it was rejected.
+		static Binding AnswerOf(const std::shared_ptr<Entry>& a_entry, Reject a_reject)
+		{
+			if (a_reject != Reject::None || a_entry->index == kInvalid)
+				return { kInvalid, {} };
+			return { a_entry->index, a_entry };
+		}
+
+		static void Answered(Importer& a_importer, Replies& a_replies, ID3D11ShaderResourceView* a_view, std::uint64_t a_cookie, Binding a_binding)
+		{
+			Reply reply;
+			reply.view = a_view;
+			reply.cookie = a_cookie;
+			reply.binding = std::move(a_binding);
+			a_replies.Push(std::move(reply));
+			a_importer.requestsPending.fetch_sub(1, std::memory_order_relaxed);
+			a_importer.requestsAnswered.fetch_add(1, std::memory_order_relaxed);
+		}
+
+		// The import thread: a Request answered from the registry, or by importing the view now. The registry holds no entry pending
+		// but the one this thread is importing (ResolveBinding registers only what it has imported).
+		static void Answer(Importer& a_importer, Work& a_work, const Published& a_published)
+		{
+			ZoneScopedN("CS.DCLF.Texture.Answer");
+			auto* key = a_work.view.get();
+			if (!key) {
+				Answered(a_importer, *a_work.replies, nullptr, a_work.cookie, a_published.fixed->null);
+				return;
+			}
+			auto& table = *a_published.registry;
+			Binding binding{ kInvalid, {} };
+			std::shared_ptr<Entry> entry;
+			{
+				std::scoped_lock lock(table.mutex);
+				if (Find(table, key, binding) == Found::Unknown) {
+					entry = a_published.context.cleanup->Make<Entry>();
+					entry->view = std::move(a_work.view);  // the request's reference: the SRV stays alive (its address unused) while imported
+					entry->registry = a_published.registry;
+					entry->key = key;
+					entry->serial = ++table.nextSerial;
+					auto& slot = table.entries[key];
+					slot = {};
+					slot.live = entry;
+					slot.serial = entry->serial;
+				}
+			}
+			if (entry) {
+				Reject reject = Reject::Import;
+				try {
+					reject = Import(*entry, a_published.context, *a_published.counters, a_work.sourceTag);
+				} catch (const std::exception& e) {
+					logger::error("[DCLF] A game texture could not be imported; its draws stay native: {}", e.what());
+				}
+				if (reject == Reject::None)
+					a_published.counters->importedAsync.fetch_add(1, std::memory_order_relaxed);
+				Settle(*entry, reject, *a_published.counters);
+				if (reject != Reject::None) {
+					std::scoped_lock lock(table.mutex);
+					if (const auto found = table.entries.find(key); found != table.entries.end() && found->second.serial == entry->serial)
+						found->second.rejected = entry;
+				}
+				binding = AnswerOf(entry, reject);
+			}
+			Answered(a_importer, *a_work.replies, key, a_work.cookie, std::move(binding));
+		}
+
 		static void RunImporter(Importer& a_importer)
 		{
 #	if defined(TRACY_ENABLE)
 			tracy::SetThreadName("CS DCLF texture import");
 #	endif
-			std::vector<Request> batch;
+			// Requests that came before the render thread published a context (PublishImportContext wakes the thread).
+			std::vector<Work> parked;
 			for (;;) {
-				{
-					std::unique_lock lock(a_importer.mutex);
-					a_importer.wake.wait(lock, [&] { return a_importer.stop || !a_importer.queue.empty(); });
-					if (a_importer.stop)
-						return;
-					batch.swap(a_importer.queue);
+				const std::uint64_t observed = a_importer.wake.load(std::memory_order_acquire);
+				if (a_importer.stop.load(std::memory_order_acquire))
+					return;
+				const auto published = a_importer.published.load(std::memory_order_acquire);
+				bool worked = false;
+				if (published && !parked.empty()) {
+					for (auto& work : parked)
+						Answer(a_importer, work, *published);
+					parked.clear();
+					worked = true;
 				}
-				for (auto& request : batch) {
-					ZoneScopedN("CS.DCLF.Texture.ImportAsync");
-					Reject reject = Reject::Import;
-					try {
-						reject = Import(*request.entry, request.context, *request.counters, request.sourceTag);
-					} catch (const std::exception& e) {
-						logger::error("[DCLF] A game texture could not be imported; its draws stay native: {}", e.what());
-					}
-					if (reject == Reject::None)
-						request.counters->importedAsync.fetch_add(1, std::memory_order_relaxed);
-					Settle(*request.entry, reject, *request.counters);
-					request.counters->pending.fetch_sub(1, std::memory_order_relaxed);
-				}
-				// The thread's references: an import nobody asks for any more (its material went away meanwhile) goes here.
-				batch.clear();
+				// The work's references (an import nobody asks for any more, its material gone meanwhile) are let go here.
+				worked |= a_importer.queue.Drain([&](Work&& a_work) {
+					if (published)
+						Answer(a_importer, a_work, *published);
+					else
+						parked.push_back(std::move(a_work));
+				}) != 0;
+				if (!worked)
+					a_importer.wake.wait(observed, std::memory_order_acquire);
 			}
 		}
 
-		void Queue(Request&& a_request)
+		void Queue(Work&& a_work)
 		{
-			if (!importer) {
-				importer = std::make_shared<Importer>();
-				std::thread([state = importer] { RunImporter(*state); }).detach();
-			}
-			{
-				std::scoped_lock lock(importer->mutex);
-				importer->queue.push_back(std::move(a_request));
-			}
-			importer->wake.notify_one();
+			importer->queue.Push(std::move(a_work));
+			importer->Notify();
 		}
 	};
 
@@ -457,6 +529,9 @@ namespace DCLF
 	{
 		impl->samplers.fill(kInvalid);
 		impl->samplerFailed.fill(false);
+		// The import thread from the start, so any thread may queue for it (Request) without a lazy start to race on.
+		impl->importer = std::make_shared<Impl::Importer>();
+		std::thread([state = impl->importer] { Impl::RunImporter(*state); }).detach();
 	}
 
 	GpuTextures::~GpuTextures() = default;
@@ -495,7 +570,11 @@ namespace DCLF
 			entry->view.copy_from(a_view);
 			entry->registry = registry;
 			entry->key = a_view;
+			const auto reject = Impl::Import(*entry, context, *impl->counters, a_sourceTag);
+			Impl::Settle(*entry, reject, *impl->counters);
 			{
+				// Registered settled, never pending: a pending entry is one whose import is queued for the import thread, which a
+				// Request that finds it waits on (Impl::Answer). The import thread may have imported the view meanwhile: both are valid.
 				ZoneScopedN("CS.DCLF.Texture.Import.Register");
 				std::scoped_lock lock(registry->mutex);
 				entry->serial = ++registry->nextSerial;
@@ -503,55 +582,71 @@ namespace DCLF
 				slot = {};
 				slot.live = entry;
 				slot.serial = entry->serial;
+				if (reject != Reject::None)
+					slot.rejected = entry;
 			}
-			const auto reject = Impl::Import(*entry, context, *impl->counters, a_sourceTag);
-			Impl::Settle(*entry, reject, *impl->counters);
-			if (reject != Reject::None) {
-				std::scoped_lock lock(registry->mutex);
-				if (const auto found = registry->entries.find(a_view); found != registry->entries.end() && found->second.serial == entry->serial)
-					found->second.rejected = entry;
+			if (reject != Reject::None)
 				return { kInvalid, {} };
-			}
 			return { entry->index, entry };
 		}
 	}
 
-	GpuTextures::Binding GpuTextures::RequestBinding(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag)
+	void GpuTextures::Request(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag, Replies& a_replies, std::uint64_t a_cookie)
 	{
-		ZoneScopedN("CS.DCLF.Texture.RequestBinding");
-		if (!a_view)
-			return NullBinding();
-		auto registry = impl->registry;
-		if (registry) {
-			Binding binding;
-			std::scoped_lock lock(registry->mutex);
-			if (impl->Find(*registry, a_view, binding) != Impl::Found::Unknown)
-				return binding;
-		}
+		Impl::Work work;
+		work.view.copy_from(a_view);  // the caller's view is alive here; the request holds it until the import does, or it is answered
+		work.sourceTag = a_sourceTag;
+		work.replies = &a_replies;
+		work.cookie = a_cookie;
+		impl->importer->requestsPending.fetch_add(1, std::memory_order_relaxed);
+		impl->Queue(std::move(work));
+	}
+
+	void GpuTextures::PublishImportContext()
+	{
 		Impl::ImportContext context;
 		if (!Impl::MakeContext(context))
-			return { kInvalid, {}, true };
+			return;
 		impl->cleanup = context.cleanup;
-		if (!registry)
-			impl->registry = registry = context.cleanup->Make<Impl::Registry>();
-		auto entry = context.cleanup->Make<Impl::Entry>();
-		entry->view.copy_from(a_view);  // the SRV stays alive (and its address unused) while it is imported
-		entry->registry = registry;
-		entry->key = a_view;
-		{
-			std::scoped_lock lock(registry->mutex);
-			entry->serial = ++registry->nextSerial;
-			auto& slot = registry->entries[a_view];
-			slot = {};
-			slot.live = entry;
-			slot.serial = entry->serial;
-		}
-		impl->counters->pending.fetch_add(1, std::memory_order_relaxed);
-		// The caller owns the import from here on (as does the import thread until it settles): it keeps the owner with
-		// the view it asked for, and asks again for the index.
-		Binding binding{ kInvalid, entry, true };
-		impl->Queue({ std::move(entry), std::move(context), impl->counters, a_sourceTag });
-		return binding;
+		if (!impl->registry)
+			impl->registry = context.cleanup->Make<Impl::Registry>();
+		// The fixed bindings, made here once each (the samplers read the engine's table, a render thread read): the scene work takes
+		// them from the publication (Fixed), never makes them.
+		FixedBindings fixed;
+		fixed.null = NullBinding();
+		for (std::uint32_t address = 0; address < kAddressModes; ++address)
+			for (std::uint32_t filter = 0; filter < kFilterModes; ++filter)
+				fixed.samplers[address * kFilterModes + filter] = SamplerBinding(address, filter);
+		auto same = [](const Binding& a_a, const Binding& a_b) { return a_a.index == a_b.index && a_a.owner == a_b.owner; };
+		auto& importer = *impl->importer;
+		const auto current = importer.published.load(std::memory_order_acquire);
+		const bool sameFixed = current && same(current->fixed->null, fixed.null) &&
+		                       std::equal(fixed.samplers.begin(), fixed.samplers.end(), current->fixed->samplers.begin(), same);
+		if (current && sameFixed && current->context.service == context.service && current->context.cleanup == context.cleanup &&
+			current->context.deviceOwner == context.deviceOwner && current->registry == impl->registry && current->counters == impl->counters)
+			return;
+		auto next = std::make_shared<Impl::Published>();
+		next->context = std::move(context);
+		next->registry = impl->registry;
+		next->counters = impl->counters;
+		next->fixed = sameFixed ? current->fixed : std::make_shared<const FixedBindings>(std::move(fixed));
+		importer.published.store(std::move(next), std::memory_order_release);
+		// The requests parked for want of a context.
+		importer.Notify();
+	}
+
+	std::shared_ptr<const GpuTextures::FixedBindings> GpuTextures::Fixed() const
+	{
+		const auto published = impl->importer->published.load(std::memory_order_acquire);
+		return published ? published->fixed : nullptr;
+	}
+
+	std::shared_ptr<const void> GpuTextures::Seal(std::vector<std::shared_ptr<const void>> a_owners) const
+	{
+		const auto published = impl->importer->published.load(std::memory_order_acquire);
+		if (!published)
+			return {};  // nothing was answered yet, so nothing holds an owner
+		return org::ExecutionResourceLease::Create(published->context.cleanup, std::move(a_owners)).Owner();
 	}
 
 	std::uint32_t GpuTextures::NullIndex()
@@ -627,8 +722,9 @@ namespace DCLF
 		for (std::size_t i = 0; i < result.rejected.size(); ++i)
 			result.rejected[i] = counters.rejected[i].load(std::memory_order_relaxed);
 		result.unsupportedLayouts = counters.unsupportedLayouts.load(std::memory_order_relaxed);
-		result.importsPending = counters.pending.load(std::memory_order_relaxed);
 		result.importedAsync = counters.importedAsync.load(std::memory_order_relaxed);
+		result.requestsPending = impl->importer->requestsPending.load(std::memory_order_relaxed);
+		result.requestsAnswered = impl->importer->requestsAnswered.load(std::memory_order_relaxed);
 		if (const auto registry = impl->registry) {
 			result.cached = registry->liveCount.load(std::memory_order_relaxed);
 			std::scoped_lock lock(registry->mutex);
@@ -670,6 +766,18 @@ namespace DCLF
 		return textures;
 	}
 	GpuTextures::Binding GpuTextures::ResolveBinding(ID3D11ShaderResourceView*, std::uint32_t) { return {}; }
+	void GpuTextures::Request(ID3D11ShaderResourceView* a_view, std::uint32_t, Replies& a_replies, std::uint64_t a_cookie)
+	{
+		// No render graph, no import: every view is answered rejected.
+		Reply reply;
+		reply.view = a_view;
+		reply.cookie = a_cookie;
+		reply.binding = { kInvalid, {} };
+		a_replies.Push(std::move(reply));
+	}
+	void GpuTextures::PublishImportContext() {}
+	std::shared_ptr<const GpuTextures::FixedBindings> GpuTextures::Fixed() const { return nullptr; }
+	std::shared_ptr<const void> GpuTextures::Seal(std::vector<std::shared_ptr<const void>>) const { return {}; }
 	std::uint32_t GpuTextures::NullIndex() { return kInvalid; }
 	GpuTextures::Binding GpuTextures::NullBinding() { return {}; }
 	std::uint32_t GpuTextures::Sampler(std::uint32_t, std::uint32_t) { return kInvalid; }

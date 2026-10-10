@@ -147,7 +147,7 @@ namespace DCLF
 
 	void SceneStore::Tables::ResetObject(std::uint32_t a_slot)
 	{
-		actorWetness.Set(a_slot, 0, 0);
+		SetActorWetness(a_slot, 0, 0);
 		const auto before = ColumnsOf(a_slot);
 		FreeExtras(a_slot);
 		FreeBones(a_slot);
@@ -220,7 +220,7 @@ namespace DCLF
 	void SceneStore::Tables::ClearFrame(bool a_keepObjects)
 	{
 		if (!a_keepObjects) {
-			actorWetness.Clear();
+			ClearActorWetness();
 			objects.clear();
 			objectGeometry.clear();
 			objectIdentity.clear();
@@ -280,7 +280,7 @@ namespace DCLF
 
 	void SceneStore::Tables::Clear()
 	{
-		actorWetness.Clear();
+		ClearActorWetness();
 		auto clear = [](auto& a_column, auto&&...) { a_column.clear(); };
 		GeometryColumns(clear);
 		PipelineColumns(clear);
@@ -290,8 +290,6 @@ namespace DCLF
 		materialSlots.Clear();
 		usedMaterialBits.clear();
 		usedPipelineBits.clear();
-		retiredMaterialSlots.clear();
-		retiredPipelineSlots.clear();
 		shadowTextureChanges.clear();
 		objects.clear();
 		setPhases.clear();

@@ -64,8 +64,9 @@ namespace DCLF
 		static bool SampleSlot(const SceneStore::Tables& a_tables, std::uint32_t a_slot, BindlessPlacement& a_out);
 
 		/**
-		 * @brief Render thread, at the scene's start (the engine's update done, the window open): the frame's producer, from a_plan
-		 * when the last walk made one (else the newest before it), the slots named for their shading (a_shading, the newest last) and
+		 * @brief Render thread, at the scene's start (the engine's update done, the window open): the frame's producer, from a_plans
+		 * (the walks' plans the publication log brought since the last frame, oldest first: each one's written slots sampled, the newest
+		 * drawn with; none: the newest before them), the slots named for their shading (a_shading, the newest last) and
 		 * the wetness captured (a_wetness). Sets the host's frame wait to its sequence number. False when it cannot run (no render
 		 * graph, no dedicated upload queue): the frame waits for nothing, and its draws have no rows; what it was handed waits for the
 		 * first producer.
@@ -75,7 +76,7 @@ namespace DCLF
 		 * frame's epochs read), on the producer's thread and the dedicated uploader. A throw is logged; the signal always goes.
 		 */
 		using FrameUploads = std::function<void(org::runtime::IUploadService&)>;
-		bool Kick(std::shared_ptr<const SceneStore::PlacementPlan> a_plan, std::vector<SceneStore::ShadingItem> a_shading,
+		bool Kick(std::vector<std::shared_ptr<const SceneStore::PlacementPlan>> a_plans, std::vector<SceneStore::ShadingItem> a_shading,
 			std::vector<SceneStore::WetnessValue> a_wetness, std::vector<SceneStore::FadeSeedItem> a_seeds, std::vector<SceneStore::TreeSeedItem> a_treeSeeds,
 			std::shared_ptr<const FrameGlobals> a_globals, FrameUploads a_uploads = {});
 		/** @brief Render thread: a frame with no producer (DCLF not running): no batch waits for one. */

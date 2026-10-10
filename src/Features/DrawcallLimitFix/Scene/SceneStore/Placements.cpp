@@ -10,7 +10,7 @@ namespace DCLF
 		movedKeys[0].clear();
 		stats.moveEvents += moveEvents.Drain([&](const void* a_key) {
 			if (a_key != std::exchange(last, a_key)) {
-				movedFrame[a_key] = frame;
+				movedFrame[a_key] = sceneFrame;
 				movedKeys[0].push_back(a_key);
 			}
 		});
@@ -24,15 +24,15 @@ namespace DCLF
 			if (!key)
 				key = FindCategoryNode(node.get(), nullptr);
 			if (key) {
-				movedFrame[key] = frame;
+				movedFrame[key] = sceneFrame;
 				movedKeys[0].push_back(key);
 			}
 		}
 		if (a_full)
-			moveUngatedThrough = frame + 1;
-		if ((frame & 0xFF) == 0)
-			std::erase_if(movedFrame, [&](const auto& a_entry) { return frame - a_entry.second > 1; });
-		moveGating = MoveEventsLive() && frame > moveUngatedThrough;
+			moveUngatedThrough = sceneFrame + 1;
+		if ((sceneFrame & 0xFF) == 0)
+			std::erase_if(movedFrame, [&](const auto& a_entry) { return sceneFrame - a_entry.second > 1; });
+		moveGating = MoveEventsLive() && sceneFrame > moveUngatedThrough;
 	}
 
 	const void* SceneStore::MoveKeyOf(const RE::BSGeometry& a_geometry, const RE::NiNode* a_categoryNode) const

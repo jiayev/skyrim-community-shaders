@@ -114,6 +114,29 @@ namespace DCLF::GeometryPort
 		{
 			return &a_block.floats[a_layout.offset[a_variable]];
 		}
+
+		/**
+		 * @brief The frame's lighting and eye into a block for a raw technique: PS DirLightDirection, DirLightColor, DirectionalAmbient
+		 * (every pass), PS AmbientSpecularTintAndFresnelPower (AmbientSpecular passes, with Engine Fixes' patch), VS EyePosition (the
+		 * passes that write it, with an accumulator). What moves every frame; the rest of the block moves with SamePipelineInputs.
+		 */
+		void WriteFrameValues(std::uint32_t a_raw, const PipelineFrame& a_frame, GeometryConstants& a_out)
+		{
+			const auto& vsLayout = LightingVSLayout();
+			const auto& psLayout = LightingPSLayout();
+			// The sun and the ambient, every pass (xyz of the two float3s; the w the engine leaves).
+			std::memcpy(VariableAt(a_out.ps, psLayout, kPSDirLightColor), a_frame.dirLightColor, sizeof(a_frame.dirLightColor));
+			std::memcpy(VariableAt(a_out.ps, psLayout, kPSDirLightDirection), a_frame.dirLightDirection, sizeof(a_frame.dirLightDirection));
+			std::memcpy(VariableAt(a_out.ps, psLayout, kPSDirectionalAmbient), a_frame.directionalAmbient, sizeof(a_frame.directionalAmbient));
+			// EyePosition, xyz, for the passes that write it (with True PBR's AmbientSpecular: LightingConstants.h's WritesEyePosition
+			// does not see that).
+			if (WritesEye(a_raw) && a_frame.eye)
+				std::memcpy(VariableAt(a_out.vs, vsLayout, kVSEyePosition), a_frame.eyePosition, sizeof(a_frame.eyePosition));
+			// AmbientSpecularTintAndFresnelPower, all four, for AmbientSpecular passes (the raw technique's: True PBR's hook adds it),
+			// where Engine Fixes' patch writes it.
+			if ((a_raw & kAmbientSpecular) && a_frame.ambientSpecularFix)
+				std::memcpy(VariableAt(a_out.ps, psLayout, kPSAmbientSpecular), a_frame.ambientSpecular, sizeof(a_frame.ambientSpecular));
+		}
 	}
 
 	bool PipelineFrame::SamePipelineInputs(const PipelineFrame& a_other) const
@@ -189,10 +212,8 @@ namespace DCLF::GeometryPort
 		const auto& psLayout = LightingPSLayout();
 		const std::uint32_t raw = RawTechniqueOf(a_passDescriptor);
 
-		// The sun and the ambient, every pass (xyz of the two float3s; the w the engine leaves).
-		std::memcpy(VariableAt(a_out.ps, psLayout, kPSDirLightColor), a_frame.dirLightColor, sizeof(a_frame.dirLightColor));
-		std::memcpy(VariableAt(a_out.ps, psLayout, kPSDirLightDirection), a_frame.dirLightDirection, sizeof(a_frame.dirLightDirection));
-		std::memcpy(VariableAt(a_out.ps, psLayout, kPSDirectionalAmbient), a_frame.directionalAmbient, sizeof(a_frame.directionalAmbient));
+		// The sun, the ambient, the eye and the ambient specular (RefreshFrameValues' part).
+		WriteFrameValues(raw, a_frame, a_out);
 
 		// NumLightNumShadowLight.xy (0x1414dda7c): the raw technique's light counts, bits 3-5 (0: True PBR's hook) and 6-8 (the
 		// descriptor's shadow lights). Then both point light arrays zeroed (0x70 bytes each: the layout's shared scratch). The point
@@ -204,24 +225,26 @@ namespace DCLF::GeometryPort
 		for (const std::uint32_t v : { kPSPointLightPosition, kPSPointLightColor })
 			std::fill_n(VariableAt(a_out.ps, psLayout, v), psLayout.size[v], 0.0f);
 
-		// EyePosition, xyz, for the passes that write it (with True PBR's AmbientSpecular: WritesEyePosition does not see that).
-		if (WritesEye(raw) && a_frame.eye)
-			std::memcpy(VariableAt(a_out.vs, vsLayout, kVSEyePosition), a_frame.eyePosition, sizeof(a_frame.eyePosition));
-
 		// The world map rows (0x1414de0b1), WorldMap passes only.
 		if (raw & kWorldMap) {
 			std::memcpy(VariableAt(a_out.vs, vsLayout, kVSWorldMapOverlay), a_frame.worldMapVS, sizeof(a_frame.worldMapVS));
 			std::memcpy(VariableAt(a_out.ps, psLayout, kPSWorldMapOverlay), a_frame.worldMapPS, sizeof(a_frame.worldMapPS));
 		}
 
-		// AmbientSpecularTintAndFresnelPower, all four, for AmbientSpecular passes (the raw technique's: True PBR's hook adds it), where
-		// Engine Fixes' patch writes it.
-		if ((raw & kAmbientSpecular) && a_frame.ambientSpecularFix)
-			std::memcpy(VariableAt(a_out.ps, psLayout, kPSAmbientSpecular), a_frame.ambientSpecular, sizeof(a_frame.ambientSpecular));
-
 		// SSRParams.xyz, every pass; w (the specular LOD fade) is the object's.
 		std::memcpy(VariableAt(a_out.ps, psLayout, kPSSSRParams), a_frame.ssrParams, sizeof(a_frame.ssrParams));
 		return true;
+	}
+
+	void RefreshFrameValues(std::uint32_t a_passDescriptor, const PipelineFrame& a_frame, GeometryConstants& a_inOut)
+	{
+		if (a_frame.sun)
+			WriteFrameValues(RawTechniqueOf(a_passDescriptor), a_frame, a_inOut);
+	}
+
+	bool PassWritesEyePosition(std::uint32_t a_passDescriptor)
+	{
+		return WritesEye(RawTechniqueOf(a_passDescriptor));
 	}
 
 	void MergeFrameLighting(const PipelineFrame& a_frame, std::array<float, 24>& a_out, std::uint32_t& a_written)

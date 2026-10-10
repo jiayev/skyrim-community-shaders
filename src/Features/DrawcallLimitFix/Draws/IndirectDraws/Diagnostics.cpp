@@ -142,17 +142,29 @@ namespace DCLF
 			}
 			text += fmt::format("[DCLF] shape parity (R3c): {}\n", segments);
 			text += impl->RevisionReport();
+			// T6b3b: the snapshots (the frame's counters, the builder's times) and the builder's own lines (the revisions, the growths,
+			// the shapes made, the draw bound), composed in its pass and taken here.
+			text += impl->SnapshotReport();
 		}
-		if (auto& bound = impl->drawBound; bound.updates) {
-			text += fmt::format("[DCLF] scene draw bound: {} updates, {:.1f} slots changed an update, {} draws over {} slots, {} resyncs; parity {} checked, {} differ{}\n",
-				bound.updates, static_cast<double>(bound.changes) / bound.updates, bound.draws, bound.produced.size(), bound.resyncs, bound.parity.checks,
-				bound.parity.mismatches, bound.parity.Verdict(true));
-			bound.updates = bound.changes = bound.resyncs = 0;
-			bound.parity.Reset();
-		}
-		if (auto* store = &impl->extrasStore; store->updates) {
-			text += fmt::format("[DCLF] persistent extras rows: {} updates, {} resyncs; parity {} checked, {} differ{}\n", store->updates, store->resyncs,
-				store->parity.checks, store->parity.mismatches, store->parity.Verdict());
+		if (auto* store = &impl->extrasStore; store->updates || store->ring.checks.load(std::memory_order_relaxed)) {
+			// Each buffer that holds the rows checks its own mirror: the scene buffers (CommitSceneStreams), the payload ring's entries
+			// (their producer, lock-free: ExtrasStore::RingParity).
+			auto& ring = store->ring;
+			const auto ringChecks = ring.checks.exchange(0, std::memory_order_relaxed);
+			const auto ringMismatches = ring.mismatches.exchange(0, std::memory_order_relaxed);
+			std::string ringFirst;
+			if (ring.firstState.load(std::memory_order_acquire) == 2) {
+				ringFirst = std::move(ring.first);
+				ring.first.clear();
+				ring.firstState.store(0, std::memory_order_release);
+			}
+			std::string first = store->first;
+			if (!ringFirst.empty())
+				first += (first.empty() ? "" : "; ") + ringFirst;
+			text += fmt::format("[DCLF] persistent extras rows: {} updates, {} resyncs; scene buffers parity {} checked, {} differ{}; payload ring parity {} checked, {} differ{}{}{}\n",
+				store->updates, store->resyncs, store->parity.checks, store->parity.mismatches, store->parity.Verdict(), ringChecks, ringMismatches,
+				!ringChecks ? "" : ringMismatches ? " <- DIFFER" : " <- OK", first.empty() ? "" : "; first: ", first);
+			store->first.clear();
 			store->updates = store->resyncs = 0;
 			store->parity.Reset();
 		}

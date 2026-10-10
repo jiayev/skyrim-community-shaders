@@ -922,7 +922,7 @@ per frame and waited for by the GPU. No scene work is time-sliced or resumed on 
 | AfterFullFrustum | join; PrimaryCull's hidden keys and lost members; RevokeUndrawnClaims; MakeRevisionShapes; fade write-back and early shadow kicks | P (notes and claims); producers; E (fade stores) |
 | BeforeShadowMaps | ExecuteReflection (commit); placement join (writes records); KickSceneStreams (stages records); ShadowViews::Rebuild; coverage; KickShadowBuild (sun planes, modes) | P + FV; FV; producer (structure) + FV (placements); capture; P; producer (camera parts to the GPU or FV) |
 | AfterShadowMaps | ExecuteShadowFrame | P + FV |
-| EarlyPrepass | placement join; BuildFrame(Accumulate) (membership binding from the registrations); pipeline and program requests; pipeline lookups (`MutableLookups`); shadow program requests; RefreshLodTechniqueRanges; KickZPrepassBuild | FV; I (the registrations captured); Lookups producer; FV (frame block); producer |
+| EarlyPrepass | placement join; BuildFrame(Accumulate) (membership binding from the registrations); pipeline and program requests; pipeline lookups (`MutableLookups`); shadow program requests; KickZPrepassBuild | FV; I (the registrations captured); Lookups producer; FV (frame block); producer |
 | Occlusion hooks | set, SetLacking | P |
 | Prepass | LatchAccumulator; RefreshFrameConstants (technique rows, frame lighting, material frame components); KickSceneStreams; KickColourBuild; reports | capture; FV (frame blocks); producer; coordinator task |
 | Z-prepass, colour, reflection, occlusion, shadow epochs | commits: payloads, `GetTables` (frame fog and lighting, LOD fade, face streams), lookups | P + FV |
@@ -1728,6 +1728,12 @@ resident-draw, set and fade parity; motion m28/m29).
     - **The technique's inputs** (T6b2c step 1): what SetupTechnique reads of the engine (fog, the shadow mask target, the INI
       clamps, the LOD range) is sampled into `FrameGlobals::technique` at the frame's start; `EvaluateTechnique` is pure, the LOD
       range's hold the same sample. The technique parity compares against a live sample at Prepass.
+    - **The technique rows on the coordinator** (T6b2c step 2): the scene work writes `Tables::techniqueConstants` itself, a row
+      when it is made (`TechniqueRowFor`) and every row when its frame's sample moves (`RefreshTechniqueRows`; the witness is the
+      sample but the fog, which a row keeps from its making, and SetupTechniqueDescriptor's bytes). The render thread's evaluations,
+      `PostTechniqueConstants` and its inbox, and `RefreshLodTechniqueRanges` are gone: both epochs of a frame read HighDetailRange
+      from the frame's tables. The render thread keeps the frame fog (`FrameCapture::fog`, from `FrameGlobals::Current()`) and the
+      parity, which counts a row the live sample moved past since its write as late, not differ.
     - **Found on the way:**
       - MaterialData.x (the envmap LOD fade, property `+0x104`) is SetupGeometry's for techniques 1, 0xb and 0x10; DCLF wrote it for
         1 alone, so eyes' and multilayer parallax's environment maps drew at 0 (`SampleShading`).
@@ -1744,6 +1750,397 @@ resident-draw, set and fade parity; motion m28/m29).
     material's SpecularColor written between the snapshot and the evaluation); the pipeline template port 0 differ in every window
     once the Engine Fixes patch was detected; technique blocks 0 differ against the live sample; with the exclusion's rule, no pass
     under an excluded entry in the interiors (w86) and the point lights' culls still skipping 72% of the entries visited.
+  - *T6b2, the producers moved* (2026-10-10, w88-w93; subagents in parallel by file):
+    - **Material records on the scene work.** A material's capture (`MaterialPort::PushCapture`: its writer after a write,
+      `MaterialSources::NoteWritten`; an attach's or a swap's leaf, `SceneCapture::CaptureLeaf` with pins; the render thread for a
+      request) carries a reference taken on the capturing thread (the material's count, only from a material already owned: one being
+      built has count 0 and is captured at its attach) through a lock-free queue (`MaterialPort::captures`). The scene work keeps the
+      newest per material (`DrainMaterialCaptures`, `materialSnapshots`; unused for 8 frames, let go: references to the render
+      thread's releases) and the join makes the record at once from it with the frame's sources (`FrameGlobals::material`), the slot
+      taking its own count. A material with none is asked of the render thread, which captures it (`ServeMaterialRequests` runs no
+      evaluation). The joins wait for the first frame whose sources know the Lighting shader; an Advanced Skin key not set up yet
+      retries (a load's 7,562 joins failed the port once and never retried: w88's ~300 stuck partial objects).
+    - **The pipeline template port is the producer** (`RefreshNewPipelineConstants`, `RefreshFrameConstants`: the port's blocks,
+      the frame values refreshed in place, the frame lighting merged from the port's frame; sampled at Prepass, the one point the
+      current accumulator is the main camera's). The engine's evaluation is the parity only.
+    - **Compiles as events.** ORG's ShaderCompiler and PipelineService take completion callbacks and a submitter (the prepared
+      patch, applied); both submit onto DCLF's preparation pool (`Draws/BuildExecutor`: at most half its workers, one task a dispatch,
+      never refused). Completions go into lock-free queues `ShaderPrograms::Update`/`DrawPipelines::Update` drain (no future polled);
+      `kMaxInFlight` and the one-Utility-technique-a-frame limit are gone.
+    - **The Lighting programs and pipelines on the pipeline lane** (T6b2c step 4): requested, admitted and published by a
+      `SerializedTaskPump` on the coordinator that their completions wake (`BuildExecutor.h`; drawcall-limit-fix.md, "The main
+      set on the pipeline lane"); the frame's start takes the lane's immutable `PipelineCatalog` and its set version together.
+      The render thread still refreshes the lookups from it (`RefreshFrameLookups`) and reads CS's constant tables when an entry
+      resolves; the shadow set, tree LOD and the forward pipelines are still its own.
+    - **The shadow set on the pipeline lane** (T6b2c steps 4 and 6): the Utility programs (`ShaderPrograms::FindShadow`, now
+      `LaneOf` the lane, finished by `UpdateLane`) and the shadow views' set (`Impl::Lane::Shadow`: `TryRequestShadow`,
+      `AdmitShadow`, `RecreateShadowSet` on a format change) are the lane's, published in the same `PipelineCatalog`
+      (`shadowEntries`, `shadowGeneration`, `shadowFormat`, `shadowSetVersion`). Their frame inputs ride the same slot: the shadow
+      map format and the Utility shader (`SetShadowInputs`, from `RefreshMainLookups`) and the registered view rasterizer states.
+      `ShadowRasterStateId` stays on the render thread (capture and the state catalog use an id the moment it is returned) and
+      posts the append-only list when it grows; a key whose state has not arrived waits. `RefreshShadowLookups` asks for each view
+      key once (`Lookups::shadowRequested`, `DrawPipelines::RequestShadow`) and resolves `shadowPipelines` and `shadowMapRows`
+      from the frame's catalog alone (a failed key is final; a new shadow generation clears the indices), and
+      `GetShadowIndirectState` binds that catalog's shadow set version, so the indices a frame resolves and the set it binds
+      agree. EarlyPrepass's shadow requests are gone (step 6). The on-demand warnings name the casters' key and view, not
+      `DescribeShadowKeyUsers` (the scene's, not the lane's to read). One shadow set format: a mode whose views draw into
+      another resolves nothing (before, the set was rebuilt back and forth).
+    - **Material texture bindings on the scene work** (T6b2c, before step 5): where the scene work makes or changes a material
+      slot's record (the joins, `ApplyMaterialPosts`: the tables' material log) or a slot becomes used, it asks for the record's views
+      (`SceneStore::UpdateMaterialBindings`, `MaterialBindings`). `GpuTextures::Request` queues onto the import thread's lock-free
+      queue (an `EventQueue` replacing its mutex and condition variable; woken by an atomic); the import thread answers from the
+      registry, waits on a `RequestBinding` import that is pending, or imports the view with the context the render thread published at
+      the frame's start (`PublishImportContext`: the graph's retained descriptor service, the cleanup queue, the registry, the null
+      descriptor). Each answer is an event in the scene work's queue, drained by its next pass, the scene work being kicked, not woken,
+      like its other inputs. The scene work writes each slot's indices, owners and binding block (`GpuTextures::Seal`), holding a
+      resolved slot's previous view while its new one is asked for, and keeps answered owners weakly so a known view resolves in the
+      pass that needs it. The render thread no longer calls `RequestBinding` for materials: at the frame's start, with the scene work
+      joined, `ApplyMaterialBindings` copies the entries that changed into its lookups, each with a new version and a `materialLog`
+      entry (retired slots too, now the scene work's: `RetireMaterialBinding`). Once the publication carries the lookups, the same
+      entries go into the lookups the scene work publishes. The registry's lock is now taken only by the render thread
+      (`ResolveBinding`, `RequestBinding` for projected, shadow and mask textures) and the import thread; `ResolveBinding` registers an
+      entry only once it is imported, so a pending entry always has its import queued. Owners' last releases run on the cleanup queue
+      wherever they are dropped (`ResourceCleanupQueue::Make`). The views a request names are the material snapshot's, and a writer's
+      texture swap can free one before the import thread takes its reference: each held snapshot (`MaterialPort::HeldSnapshot`)
+      keeps a reference on its views, taken with the capture while the material holds them, and released with the snapshot.
+      Measured (w96-w99): no crash; every view asked for answered (0 stale, 0 pending at the end), every main and shadow pipeline
+      in the set; the flags as before.
+    - **Shared, projected, mask and shadow texture bindings on the scene work** (T6b2c, before step 5): the rest of the lookups'
+      bindings, made the same way (`SharedBindings`, `SceneStore::UpdateSharedBindings`, each scene and accumulate pass after the
+      technique rows): asked for with `GpuTextures::Request` where the need arises, answered into the scene work's queue, written by
+      it. The null descriptor and the samplers are made once by the render thread (the samplers read the engine's table) and published
+      with the import context (`GpuTextures::Fixed`, immutable); the scene work reads them. The projected textures, captured at a
+      native ProjectedUV draw, reach it through a latest-wins slot (`SharedBindings::projectedPosted`) whose capture holds a reference
+      on each view. A used pipeline's technique mask comes from its row, whose view is the frame sample's shadow mask target, held by
+      the frame's capture (`FrameGlobals::shadowMaskHeld`) while the scene work asks for it. The shadow textures follow the dependency
+      index the walk keeps (`Tables::shadowTextureChanges`, no longer handed to the frame): asked for when added, let go when removed,
+      as early as the walk records them (the render thread asked a frame later). Answers are shared across kinds and with the material
+      bindings' kept answers. At the frame's start `ApplySharedBindings` copies the shared entries and the masks into the lookups where
+      they differ (compared, not logged: new lookups and a re-keyed pipeline entry's emptied mask are copied the same way), and the shadow
+      refresh's `ApplyShadowTextureBindings` copies the changed shadow textures (all of them into new lookups), each with the
+      generation, shadow generation and version bumps the render thread's refresh made. Pipeline slot retirements now drop the mask on
+      the scene work (`RetireMaskBinding`). The render thread calls no `RequestBinding` any more (removed, with the import thread's
+      waiters); the registry's lock is `ResolveBinding`'s (the frame textures) and the import thread's. The shadow pipeline indices stay
+      on the render thread: they must come from the catalog the frame binds (`GetShadowIndirectState`), which only the lookups published
+      as one unit with their catalog can guarantee off it. What is left for step 5: the pipeline entries (`setIndex`, the constant tables,
+      the register usage) and the shadow pipeline indices, then one scene-owned `Lookups` published, `ApplyMaterialBindings`,
+      `ApplySharedBindings`, `ApplyShadowTextureBindings`, `TakeLookupsView` and `RefreshFrameLookups` gone.
+    - **Constant tables from SPIR-V reflection** (T6b2c step 4's second half): a pipeline entry's `vsTable`/`psTable` (per Lighting
+      variable, its offset in floats in PerTechnique, PerMaterial or PerGeometry; 0 for absent, which counts only for a group's first
+      variable: `OffsetOf`) were Community Shaders' `constantTable`, which `ShaderCache` makes by D3D reflection of the game's
+      shader against its variable names, read through `GetVertexShader`/`GetPixelShader` on the render thread. The pipeline lane
+      now makes them with the build (`DrawPipelines.cpp`, `ConstantTableOf`) from DCLF's own modules: `SpirvReflection` reads the
+      Uniform blocks' members (`OpMemberName`, `OpMemberDecorate Offset`; DXC keeps the names, and every member of a block it keeps),
+      the colour vertex stage for the VS table, the colour and Z-prepass pixel stages for the PS one (the pulled stages declare no
+      blocks: they read the rows these tables pack). The catalog entry carries them (`PipelineCatalog::Entry::tables`, beside
+      `usage`), fixed per built entry; `RefreshFrameLookups` copies them in where they differ and no longer calls ShaderCache. The
+      layouts agree where both have a variable (Lighting.hlsl places every member with `packoffset`, and ORG compiles with
+      `-fvk-use-dx-layout`), but DCLF's tables hold less: `DCLF_BINDLESS` takes World, PreviousWorld, the land blend, tree and
+      ProjectedUV variables and the fog and frame lighting out of the blocks, and DXC drops a block a stage never reads (DCLF's
+      vertex stage often reads no PerGeometry at all). Those variables are no longer packed; the blocks shrink to what DCLF's
+      stages read. ShaderCache's tables are the parity (`CheckConstantTables`, CS_DCLF_PERSISTENT_PARITY): `[DCLF] constant
+      tables` counts the variables in both and those at another offset (`<- CONSTANT TABLE`), the entries ShaderCache has no
+      shader for yet, and the variables in one table only (ShaderCache's alone expected; DCLF's alone means DCLF reads one the
+      game's shader lacks, which was packed as zero before).
+    - **The lookups in the publication** (T6b2c step 5): the scene lane owns the one `Lookups` (`SceneStore::lookups`). Its bindings
+      write straight in where they are made (`ResolveMaterialBinding`, `ResolveMaskBinding`, `ResolveProjectedBindings`, the fixed
+      bindings, `ResolveShadowTextureBinding`, the retirements), with the generation and version bumps the frame's Apply copies made;
+      before each commit and each publication `SceneStore::ResolveLookups` versions and logs the material entries written since
+      (`VersionMaterialBindings`; the log trimmed at 32k entries, a reader behind starts again), takes the pipeline lane's newest
+      catalog (`DrawPipelines::TakeCatalog`, now the lane's alone, latest wins) and resolves against it the pipeline entries and the
+      shadow pipelines (`IndirectDraws::ResolveLookups`: `ResolvePipelineLookups`, `ResolveShadowLookups`, pure but for the one-time
+      requests). The shadow views' modes, rasterizer states and formats reach it through a latest-wins slot the frame's start posts when
+      they change (`IndirectDraws::PostLookupInputs`, which also publishes the import context, updates the shadow capability and posts
+      `SetShadowInputs`). `PublishScene` carries an immutable `shared_ptr<const Lookups>` with the catalog it was resolved from, and
+      the builds ahead build from that copy. `SelectPublication` makes the installed publication's lookups and catalog the frame's (the
+      newest published while none is installed, as for the tables), and `DrawPipelines::HoldCatalog` holds that catalog for
+      `GetIndirectState`, `GetShadowIndirectState` and `FrameCatalog` (tree LOD, the forward views): the indices a frame resolves, the
+      sets it binds and the tables they are parallel to are one publication's. The set's readiness (`MainReady`, `PhaseReady`, the
+      readiness witness) reads the lane's own lookups as the pass resolved them. A publication copies little: the pipeline and
+      material entries are `SharedChunks` (64 entries a chunk, copy-on-write by a stamp the copy moves, never by a reference count),
+      so a copy shares every chunk not written since the last, and copies the maps, the small tables and the log whole; unchanged
+      lookups (`Lookups::ChangeKey`) publish the last copy again. A copy keeps the instance, the generations, the versions and the
+      log's generation, so a kept binding or a log cursor carries from one publication to the next. Owners in a retired copy drop
+      wherever its last holder lets go; each is a cleanup-queue owner (`ResourceCleanupQueue::Make`, `ExecutionResourceLease`), so
+      no destruction runs there. The frame does nothing for the lookups but the constant tables' parity against the installed ones
+      (`CheckConstantTables`, CS_DCLF_PERSISTENT_PARITY). Gone: `RefreshFrameLookups`' loop (now `PrepareFrameLookups`),
+      `RefreshMainLookups`, `RefreshMaterialLookups`, `RefreshShadowLookups`, `ApplyMaterialBindings`, `ApplySharedBindings`,
+      `ApplyShadowTextureBindings`, `TakeLookupsView`, `lookupsView`, `lookupsShared`, `CoordinatorLookups`, `SharedLookups`,
+      `MutableLookups`, the posted lookups reset. `[DCLF] tables published` counts the lookups copied (with the chunks written again
+      and the copy's time) and shared again.
+    - **Found:** the extras rows parity compared a mirror only the scene-buffer path fed (frozen once the payload ring takes over):
+      each ring entry keeps its own mirror now, checked where it uploads. A kept extras block rewritten in place by the accumulate
+      patch (a re-bind moving ProjectedUV/LandBlend or the technique) was never journaled (`kChangeExtras`): noted now.
+    - **Tree LOD and the forward pipelines on the pipeline lane** (T6b2c step 9): the last programs and pipelines the render thread
+      requested, built, admitted and polled (`ShaderPrograms::FindTreeLod`, `FindForward`, `FindForwardTreeLod`, `Update`;
+      `DrawPipelines::FindTreeLod`, `FindForwardPipeline`, `Update`) are the lane's. `ShaderPrograms` has one consumer: one
+      completions queue, one waiting map, every kind finished by `UpdateLane` (`ShaderPrograms::Finished`). The render thread posts:
+      `DecideTreeLod` the DistantTree shader (`SetTreeLodInputs`, a frame input) and `RequestTreeLod` (once, a flag);
+      `PrepareReflection` the faces' targets (`SetForwardTargets`) and each LOD slot's `ForwardPipelineKey` (its vertex descriptor,
+      its pixel descriptor without Deferred, two-sided or not; tree LOD's forward key by a flag) through `RequestForward` (each key
+      once). The lane builds tree LOD's pair from its inputs (targets, winding, the opaque write mode's state) with the main set's
+      generation, again at each `RecreateMainSet`, and the forward pipelines for its forward targets (`RecreateForward` on a change);
+      completions wake it, and the service's `PublishReady` runs at the end of its pass. The catalog gains `treeLod` (the built pair,
+      or failed) and `forwardEntries` with `forwardTargets` (additive). Neither is a set: the lane keeps every built pipeline for the
+      process (earlier generations' too), so the frame resolves them from its catalog alone (`TreeLodPipelinesOf`, which also checks the
+      catalog's `targetsGeneration` as `GetIndirectState` does; `ForwardPipelineOf`, which checks the targets), through one accessor
+      for the frame's catalog (`FrameCatalog`). Until a catalog has them the engine draws: tree LOD stays the engine's (no passes
+      withheld), and a LOD slot without its forward pipeline is no reflection-phase member (the engine draws it in the faces). The
+      `indirect pipelines` report line counts them (requested, built, failed, frames waited). `programs.Update()`/`pipelines.Update()`
+      are gone from `RefreshFrameLookups`; `ShadowRasterStatesOfMode` (unused since the shadow move) is gone with its mode bits.
+    Measured (w92, w93): no crash; the material port 0 differ but t11's frame flips (now excluded whole, as records take t11 from the
+    frame); the geometry port, technique blocks and frame lightings 0 differ; the extras rows parity clean over 20 ring checks;
+    partial waits back to 12-20; one walk window (the EdgeBlood01 decal record seen since w12).
+    - **`PrepareAccumulatePhase`'s rest off the frame** (T6b2c step 8): what was left after the material tail is now frame inputs
+      and parity observers (`SceneStore::PostAccumulateInputs`, EarlyPrepass). The capture drain still runs every frame, because
+      the buffer has a fixed capacity and the drain also takes the withholding counters. Only under CS_DCLF_PERSISTENT_PARITY (or the decal order
+      probe) does it read what was registered: `RefreshMainBatchRenderers`, the Lighting shader parity, `frameLightingPass` (the
+      template parity's fallback) and the registrations `CheckRegistrations` checks (`registrationsObserved`; the names under a
+      lease). Nothing in the normal path read them: the joins bind from membership and the mirror (`BindByMembership` fills
+      `accumulatedPasses`). The one thing it consumed was the Lighting shader instance, which is read from its fixed address and is
+      now captured at the frame's start before `FrameGlobals::Capture` (`CaptureLightingShader`), so the scene lane reads it only
+      after its kick. `CheckLightMasks` stays at EarlyPrepass as the parity it was. Light Limit Fix's room map is copied on the
+      render thread when its generation moves and posted latest-wins (`PostRoomMap`, `roomMapPosted`). The accumulate work takes
+      it first (`TakeAccumulateInputs`) and reads only its own copy. `RefreshNewPipelineConstants` is gone. Its `SyncPipelines`
+      duplicated the frame start's (the accepted view does not move within a frame). The builds draw from
+      `Tables::pipelineConstants`, so the frame's copy of a new slot was only a staging copy for its post. Prepass now posts its
+      pipeline sample with a sun (`PostPipelineFrame`), and the coordinator makes the block of every used pipeline without a
+      current one after the joins (`MakeNewPipelineConstants`, pure port), so the block is in the publication that makes the slot
+      drawable. Prepass still makes a slot new to the frame's tables whole from its own sample and posts it, which supersedes the
+      coordinator's block within two frames. Target formats and the engine's blend, raster and depth states needed nothing more:
+      `SetTargetFormats` and `CaptureEngineStates` (BeforeOpaquePass, the deferred pass) already post them through the pipeline
+      lane's slot, the states read on the lane's request, and the decal bias rides `FrameGlobals`. The render thread's EarlyPrepass
+      is now `PostAccumulateInputs`, the material tail (step 7's) and the accumulate kick (T6b3's to remove). New log lines:
+      `[DCLF] registration parity (the capture drain, an observer): ...` (or `... not observed ...`) and `[DCLF] accumulate frame
+      inputs (T6b2c step 8): ...`.
+    - **The material tail on the scene work** (T6b2c step 7): the render thread's frame copies of the material records
+      (`FrameTables`' material half, `SyncFrameMaterials`, `frameMaterialOwners`), what it wrote into them, and the posts and inbox
+      that carried the result back (`PostMaterialRecord`, `PostFrameFloats`, `ApplyMaterialPosts`) are gone. The builds always
+      drew `Tables::materials` from the installed publication, so the copies only staged the posts, a frame or more late. The scene
+      work now keeps the records itself, each scene pass after `ApplyEvents`, from captures and its frame's `FrameGlobals`, with no
+      engine read (`RefreshMaterialRecords`, FrameConstants.cpp). (a) A written material: its writer's capture (`NoteWritten`'s
+      `PushCapture`) is the newest held snapshot. Every slot of the material is evaluated again from it (`MaterialPort::Evaluate`).
+      Its own values are written where they differ, and its frame parts are kept (`RewriteCapturedMaterials`, which replaces
+      `ProcessMaterialWrites`). A slot whose Advanced Skin key is not set up yet keeps its record and is retried. `DropWrittenMaterials`
+      is gone: unreferenced slots drain on their last reference (`SweepSlots`), and every slot of a captured material is evaluated
+      again. (b) The frame components: each signature keeps a probe, a held capture of one of its materials (pure data). The probe is
+      evaluated once a pass against the frame's sources, and the result is written into the signature's slots when it moves
+      (`RefreshMaterialSignatures`, replacing Prepass's `RefreshFrameMaterials`). (c) TexcoordOffset: the float controller's
+      texture-transform write now captures the material (it fed `TransformQueue`, now gone). Its two buffers are watched from the
+      capture, or from a join that keys the material, until both buffers agree and two passes have gone. Meanwhile the frame's buffer
+      (`textureTransformBuffer`) is written into the material's slots (`RefreshMaterialTransforms`, replacing `RefreshTextureTransforms`).
+      Being drawn from the publication, a scrolling UV now lags one frame instead of two. The render thread keeps two things for
+      materials. First, a frame input: `ServeMaterialRequests` captures a material the joins asked for, read off the property the join
+      held. The scene work cannot read a property's material, and an attach's capture is let go after `kMaterialSnapshotFrames` unused.
+      The request and its answer go through lock-free queues (`materialRequestQueue`, `materialRequestsAnswered`). The served/stale
+      counts are taken from the answers on the scene work, and `materialsServed` is gone. Second, the character light's view, now
+      read from the frame's sample at Prepass (`MaterialSources::FrameCharacterLightView`, `RefreshCharacterLightView`). The parity is
+      `ValidateMaterialSlice`, CS_DCLF_PERSISTENT_PARITY only. It checks the installed records against the engine's evaluation in three
+      parts: own values (but IBLParams), frame components and transform. Because the publication lags, a differing slot becomes a
+      suspect and is evaluated live every frame for `kMaterialLateFrames` (4). A part the installed record then matches in any of those
+      evaluations was late; a part it matches in none of them is a miss (`STALE material` or differ). That works in motion: a frozen
+      record falls out of a moving material's window. The w104 first cut instead re-judged "has the live value moved since", which
+      counted 97,390 of 102,568 parts as moving. The likely cause is IBLParams (PS 29), which the Own part compared. It drifts with the
+      time of day, so it moved in exteriors and not in interiors (w105: 0 moving). No Lighting stage reads it, the record keeps its
+      first evaluation's (a rewrite now keeps it too: `MaterialSources::KeepUnreadFloats`), and the port parity already leaves it out.
+      Before step 7 the draws did not use the frame's own frame components either: the builds read `Tables::materials` from the
+      publication, and `FrameTables`' copies reached it through the posts a frame later. The report names the first late difference of
+      each part, so a run shows what actually moves. The T6b2a material port parity is back on the render thread
+      (`CheckSlotPort`). For the slots the installed material log names since the last frame, the slice's cursor and the full checks,
+      it compares the port of a live capture against the same engine evaluation (`CheckMaterialPort`); an Advanced Skin key not set up
+      is skipped. `EvaluateMaterialForSlot` had no callers and is gone. `CheckMaterialFrame` keeps only the used-set check. CS_DCLF_CAPTURE_PARITY's
+      written-materials diagnostic drains a write queue that is fed only under that switch. Log lines: `[DCLF] material records (the
+      scene work's, from captures and the frame's sources): ...`, which replaces `material frame components`, and `[DCLF] material
+      parity (the installed records against the engine's evaluation, render thread): ...`. The `materials (last frame)` line now
+      reads `the scene work's last pass (T6b2c step 7): N captured (...)`, and the frame-evaluations line drops its material posts.
+  - *T6b3a: messages and an immutable publication, the kicks kept* (2026-10-10; written, not built or run yet). After it the frame's
+    start reads nothing of the coordinator's: what the two share outside a publication is a message, a latest-wins slot or part of
+    the publication. The kicks and joins stay (T6b3c removes them); behaviour is meant to be the same, with the differences named.
+    - **The publication.** `ScenePublication` (public, immutable) carries the tables, lookups, catalog, claims, draws, lacking counts,
+      the sun and light candidates with their generations, the category nodes (copied again only when they changed), `tablesGeneration`, the toggles generation its commit was made under, a `RevisionRequest` and a `sequence`.
+      `PublishScene` posts it to a `LatestSlot` (`Common/LatestSlot.h`, promoted from `DrawPipelines.cpp`; a raw pointer exchange).
+      The render thread is its only taker: `MakeRevisionForNewest`, at Present and the frame's start, takes what was posted and makes a
+      revision from the newest whenever it is new (joined or not: the request is immutable), else once a frame, so every publication
+      pending has had its revision. The render thread keeps the pending ones (oldest first) and the installed one; `SelectPublication` installs the
+      newest applicable as before (`SetApplicable`, `DrawsReady`, and `togglesGeneration >= ` the frame's toggles generation, which
+      replaces `toggleCommitFrame`). The pending list stays because `SetApplicable` lags the newest publication by the revision's
+      latency: installing only the newest would install nothing in motion. A publication the slot replaced before any take is lost
+      as a candidate (its notes are not: the log). The render thread's republish is gone: the coordinator publishes at a scene pass's
+      start when its tables moved since its last publication or a pass left frame inputs unpublished (`tables published`' count,
+      now not a render-thread cost), so a change Present applied (menus) is selectable a frame later than before.
+    - **The publication log** (`Common/PublicationLog.h`, forward-linked, one producer, one consumer). Each publication's node
+      carries its claims' changes (joined, left) and the frame inputs its passes made: the placement plans, the shading names, the
+      fade and tree seed requests, the switches applied (`kMaxSwitchChanges` gone: no cap), the retired imports and the actors'
+      wetness membership changes, and the light entries' changes (a key of `lightDependents` gaining its first geometry or losing its
+      last), which the render thread keeps its own set from (`IsLightEntry`). The frame's start walks the frame inputs up to the newest publication taken
+      (`HandOverAtFrameStart`; FrameValues takes every plan, `Kick` now takes the list) and the claims' changes up to the installed
+      one (`SelectPublication`, as every publication up to the chosen one contributed before), and frees what both cursors passed.
+    - **Revisions by publication.** `MakeRevisionShapes(request)` reserves and assembles from the publication's request: its tables
+      and lookups (immutable) with the counts (pipelines, shadow key slots, shadow keys). The reservations walk the tables' logs and
+      columns (`UpdateDrawBound`, `ReserveIndexPool`), so the request carries the tables, not counts alone. `SetApplicable`,
+      `NoteSetApplied` and `RevisionHoldsClaims` compare publication sequences (`sealedPublication`, `activePublication`,
+      `claimsPublication`) where they compared commit frames. A revision is its publication's alone: `MakeRevisionShapes` makes the
+      shapes from the request's lookups and holds the request's catalog for the call (`GetIndirectState`, `GetShadowIndirectState`),
+      not the frame's installed lookups and catalog.
+    - **Messages.** The engine references `RecycleRetired` hands back go straight to `EngineReleases`, the material references and
+      applied batches to lock-free queues drained at Present (`ReleaseHandedBack`); `TakeHandedBack` is gone. PrimaryCull's held
+      notes are an `EventQueue<PrimaryNote>` drained at the joins and the frame's start (`DeliverPrimaryNotes`). The fade roots the
+      depth commit holds, PrimaryCull's fade ownership and reseed (latest wins) and the pipeline blocks (a queue) are taken at the
+      next scene pass's start (`TakeCoordinatorInputs`, `ApplyConstantsPosts`). The frame's start posts `FrameInputs` (the globals,
+      the frame number, the membership witness, the toggles generation, the verdicts generation: a toggle that enters the
+      classification is now a message the coordinator applies with `InvalidateVerdicts`); the passes take them (`sceneFrame`,
+      `passSerial`; `GetFrame()` on a scene work thread is `sceneFrame`). The ahead context and the scene fits are an immutable post
+      the coordinator takes at each pass's start (`TakeAheadContext`; `FitsScene`, `SceneFitSerial`, `BuildAhead` read its copy).
+      Ingestion posts its batch (`PostIngested`); a load screen posts one marker the coordinator applies (`ApplyLoading`: the rescan,
+      the drained events, the move, LOD fade and emittance queues it alone drains). The category capture carries its pins and is
+      posted; "new" is against the capture the coordinator applied last, read from the render thread's own copy
+      (`categoryAppliedGeneration`). The mirror's capture requests are a queue. The replaced and passed-over publications go back to
+      the coordinator, which drops them (`retiredPublications`).
+    - **Found beyond the plan.** `CaptureWetness` updated the coordinator's `Tables::actorWetness` from the render thread: its
+      membership is now recorded (`SetActorWetness`) and replayed into the render thread's own index from the log. `ingested` was a
+      batch both threads wrote. `CaptureCategories` read the coordinator's category set, and `RefreshCategoryNodes` the render
+      thread's pins.
+    - **Gone:** `GetSceneTables`, `GetSceneLookups`, `FrameView`'s fallback to the coordinator's tables (empty tables before the first
+      publication), `WriteBoth`, `FinishSceneWork`, `FinishAccumulateWork`, `toggleCommitFrame`, `InstalledCommitFrame`. Render-thread
+      readers of the frame's tables take the publication's generation (`GetTablesGeneration`), so the frame's tables and generation
+      are one publication's (a pipeline block posted against an older generation is dropped until the new one is installed).
+    - **Left, named:** `CaptureMirrorRequests` reads the coordinator's mirror and `ProbeMirror` (CS_DCLF_MIRROR_PARITY) its tracked set:
+      both counted by `GuardFrameAccess` when the scene work may run. The reports read the coordinator's stats at a join (Present's,
+      or the frame's start's when present). `IsTracked` in PrimaryCull's admission and walk refresh (during the frame, as before; the
+      claims' changes use `HeldByInstalled`). `FindObject` and `Classify` read the coordinator's entries under the inline parities.
+    - **The check:** `CS_DCLF_FRAME_JOIN=0` (parity) skips the frame's start join; the reports then wait for Present's join. Expected:
+      `[DCLF] step 6c: ... <- FRAME ACCESS` absent (CS_DCLF_STATS), `<- LANE ENGINE ACCESS` absent, sequences above 0, the set clean.
+    Measured (w108, w110 with the join skipped, w109/w111 interiors): no crash, no frame access, no lane engine access, the set and walk
+    parities clean, interiors installing 300 of 300; but motion kept the installed publication more often than w106 (21-60 frames of
+    300 against 7-35, waiting 0.10-0.37 against 0.03-0.21), and some scrolling-UV transforms were older than the material parity's
+    four frames. The paths that decide an install are the same as before (one publication and one revision a frame, sequences
+    mapping one to one to commit frames); what changed in motion alone was the coordinator's cost: `PublishScene` copied every light
+    entry each time one appeared or went (every frame while roots stream), lengthening the accumulate pass, so Present joined it less
+    often and the revision moved to the frame's start. That was wrong (w112, after a fix for it: Present joined 300 of 300, every
+    revision was made at Present, every kept frame waited for its revision, and a coverage-by-content rule never applied). The defect
+    was in the revisions: since T6b3a 7-29 sealed revisions a report were never published (superseded: two completing between two
+    selections), against 0-2 before, and as many frames waited. A revision's shapes were made from the publication's tables but the
+    frame's installed lookups and catalog (the bucket plans, the shadow rows, the casting bound, the shapes key and the pipeline sets).
+    That pairing lags by one publication while every frame installs, a steady offset; a frame that keeps its publication pairs the next
+    revision with lookups two behind, so its plans and rows change, it asks for new recordings and is late itself: a loop that sustains
+    once started (startup superseded about 200 revisions at once). What started it more often since T6b3a is not proven (the revision's
+    inputs read as equal to before); the loop is removed rather than its trigger. Fixed: a revision
+    is its publication's alone (its tables, lookups and catalog: `RevisionRequest::catalog`), so its shapes no longer follow what the
+    frame has installed, and the frame that installs a publication commits against the shapes made for it. The coverage rule is gone
+    (it never applied). Kept from the first fix: the light entries as the log's changes, revisions made for a new publication at
+    Present joined or not, and the waits line `[DCLF] publication waits (T6b3a): kept for: none newer taken N, toggles N, revision not
+    selected N, draws not built N; an older one installed while the newest waited for: ...; revisions made at Present N (scene work still
+    running N), at the frame's start N`.
+  - *T6b3b, phase b2a: the revision code made thread-independent, the kicks kept* (2026-10-10; written, not built or run yet). The
+    revision is still made on the render thread (`MakeRevisionShapes` at Present and the frame's start), and `SelectRevision`, the
+    gates and the frame-side make stay; what changed is that the revision code (`Impl::MakeRevision`, `AssembleRevision`, the
+    reserves) now reads only its request and a posted copy of the frame's inputs, and shares no mutable state with the epochs, so
+    b2b moves the call into the producer job and nothing else. Behaviour is meant to be w114's, with the differences named.
+    - **Explicit catalog.** `GetIndirectState(catalog, targetsGeneration)` and `GetShadowIndirectState(catalog, shadowFormat)` (and
+      `TreeLodPipelinesOf(catalog, targetsGeneration, ...)`) take what they were made for; the frame's epochs call
+      `FrameIndirectState()` / `FrameShadowIndirectState()` (the held catalog, `DrawPipelines::Generation`, `ShadowFormat`). The
+      `HoldCatalog` swap and `CatalogRestore` in the revision are gone: it names its request's catalog. The faces' forward pipelines
+      come from it too (`ReflectionPipelinesOf`, PrepareReflection's rule without its requests).
+    - **The producer's latches.** The main latch and its latched-copies blocks, the shadow latch, its zeros and latched block, and the
+      reflection's latch and zeros left the resources for `RevisionLatches` (the producer's), made with ORG's new
+      `LatchBlock::Create` (ECS registration suppressed, as `VersionedBuffer::MakeStructured`: any thread). The shapes hold them; a
+      commit's parity names the revision's shape's (`CheckMainRevision`, `CheckShadowRevision`, `CheckReflectionRevision`), and the
+      index pool passes take `PoolOffset` from the shape's layout instead of the resources' (a race with the reserve before). The main
+      latch is no longer remade per main resources. `BuildShadowPlacements` no longer reserves the shadow latch (the revision does).
+    - **The inputs.** `RevisionInputs` (one immutable post, generation-stamped, latest wins: `revisionInputsSlot`) holds the main,
+      shadow, reflection and scene resources (the main ones' generation moves at `Setup`), the graph's build and heaps, the targets
+      and shadow-format generations, the toggles and their generation, `CS_DCLF_GBUFFER_PROBE`, the claims flag, the raster state
+      count, the shadow candidates, the occlusion layouts (`PredictedOcclusion`), the placements, the main epochs' viewport, block
+      sizes and `known`, the shadow and reflection parities' `known`, the faces' targets and size, the portal words, tree LOD's mirror
+      slots, the shadow rows wanted, the shadow slots' buffers, and the host's owner-thread state the revision used to read
+      (whether async epochs run, its uploader, weakly). `Growths::Deferred` reads a flag the posts set (the commits' index pool
+      asks the host itself: `OwnerDeferred`). `PostRevisionInputs` gathers and posts it when anything moved, at
+      `BuildPoint`, `Setup`, `SetupShadow`, `SetupReflection`, `ImportReflectionCube`, after `ShadowViews::Rebuild` (`NoteRevisionInputs`), `OcclusionView`,
+      `BuildShadowPlacements`, the main epochs' capture, the parities' first commits, `PrepareReflection`, a new `rowsWanted`, and,
+      while the make is the render thread's, before each make (which keeps b2a's inputs the frame's of that moment).
+      `RevisionShapesKey` keys on them (and the main resources' identity, the latch no longer implying it, and the faces' size, which
+      it missed before). The frame number is
+      `MakeRevision`'s argument (the frame's here; b2b passes the request's `commitFrame`, which `RevisionRequest` now carries with
+      the coordinator's `passSerial`): using `commitFrame` now would move the shape parity's lag matching and `selectedAge`.
+    - **Shared diagnostics.** The draw bound, the index pool's bound, the row-buckets cache, the recent occlusion layouts and the
+      shapes made are the producer's (`RevisionProducer`); the parity has its own row-buckets cache and compares with the shapes the
+      producer posts (`madeSlot`: each post holds its last two makes, so the lag-0/lag-1 matching is unchanged), the shadow parity's
+      commit shape sized from the bound the producer's shapes were (`MadeShapes::bounds`).
+    - **Growths.** Producer side: `Post` (with the owner's life), `Settle`, `Prune`, `RevisionSizing`, `LatestSizing`, `Ready`,
+      `Named`, `Asked`, `Held`, `Naming`. A sealed revision carries the ready changes it names by value (a growths fragment,
+      `kGrowthsSlot`); the frame adopts the ones it has not (`AdoptNamed`: versions, sizing, consequences, `Changed`,
+      `NoteNewVersions`) and publishes how far (`adoptedPublished`), which the next make takes in first (`Prune`: the stamp, and the
+      last adopted change per owner or buffer kept as the producer's record, so it never reads an owner's sizing or a table's
+      capacity or address the frame writes at adoption). A change whose owner is gone is dropped and never adopted (before, its
+      consequence could write into a freed owner). `GrowableRows::Reserve` sizes from `Held`; `ReserveShadowRows` is the revision's
+      (the shadow rows wanted posted); the last main commit's rows are posted (`committedRowsSlot`); the commit checks its draws
+      against `Resources::askedSequenceDraws` (the newest asked, an atomic the reserve sets) instead of `LatestSizing`.
+      `SetupReflection` sizes from the adopted main sizing and makes the first tree lists itself.
+    - **VersionRegistry.** Buffers register from any thread on an MPSC queue (`registered`), which `Snapshot` drains into its own
+      list; a set carries its buffers, so `Current` (the frame's) reads only the set. `changes` stays the frame's (`Changed`,
+      `SetChanges`), published for the revision code (`Published`); `next` is an atomic.
+    - **The owner thread's work.** New shadow view slots are asked of the frame (`ShadowSlotsRequest`, sized at the newest sizing),
+      which makes their buffers and adds the extension (`ServeRevisionRequests`, after the make and at `BuildPoint`); no revision is
+      sealed until the inputs carry the build (`buildWanted`, counted in the growth line as `for a graph build asked of the frame`),
+      whose recordings the build would have superseded anyway. The dead `a_epoch` extension path of `ReserveReflection` and its
+      `r.main` write are gone: `Setup` points the faces at new main resources before the graph is built for them (before, the
+      reflection's passes could be declared with the old ones; a fix).
+    - **ORG, recordings across a build.** `RequestEpochRecording` pushes onto a queue of the host's lifetime and wakes the host's
+      thread through a wake that no build destroys, never touching `m_async`; `StopAsync` completes every request not recorded with
+      `EpochRecordingDropped`; the recording carries its `buildGeneration`. DCLF treats a dropped one, or one recorded on another
+      build than its versions', as no recording (counted `dropped by a graph build`, not failed): the fragment fails, and the next
+      make asks again once (its versions change with the build). `BuildPoint` gives tickets back while `recordingsOutstanding` (an
+      atomic the completions count down) is non-zero, not while the assembler has pending revisions.
+    - **Left for b2b.** The assembler's `Begin`/`Seal` stay with the revision code and `Collect`/`TrySelect`/`AcquireActive` with the
+      frame (`SelectRevision`): `Collect` is documented coordinator-only and must move with the make (the frame then only selects).
+      The report reads the producer's counters (`Growths::Report`, the draw bound, the shapes made) from the render thread. Slots a
+      later growth reaches before the frame serves their request would be made at the request's size. `GetFrame()` outside the
+      revision code is unchanged.
+    b2a was validated (w116 motion, w117 interiors: w114's counts, set parity clean, 1 recording dropped by a graph build, 10 makes
+    waiting for a growth, interiors 300 of 300) after one build fix (C4459: locals named `last`).
+  - *T6b3b, phases b2b+b3: complete snapshots, adopted unconditionally* (2026-10-10; written, not built or run yet). The state "a
+    publication without its revision" is gone: the frame adopts snapshots, each a publication with its draws and its revision whole.
+    - **The snapshot builder.** `PublishScene` appends the deltas and hands the publication to `IndirectDraws::PostSnapshotWork`, which
+      copies what its draws are built from on the coordinator (the coordinator's ahead context, its frame, the candidates) into a
+      `SnapshotWork` and posts it to a latest-wins slot. The builder is a `SerializedTaskPump` on DCLF's preparation pool (lock-free,
+      level-triggered; never destroyed), woken by a work post, the frame's revision inputs, a revision's completion (the assembler's
+      notify, from ORG's host thread), a growth settled (its `done`), a retired snapshot and the report. One snapshot in flight
+      (`SnapshotBuilder`): take the newest work (the ones it replaced counted as coalesced; their log deltas reach the frame with it),
+      build its draws (`RunAhead`, which marks the builds ahead done up to its number), make its revision (`MakeRevision` with the
+      publication's `commitFrame`; Begin and Seal inside), then wait for that revision without a thread: each completion wakes the
+      builder, whose pass collects (`Collect`, and as the exchange's only consumer `TrySelect`/`AcquireActive`); complete, it posts
+      the `SceneSnapshot` (publication, draws, revision lease, the builder's draws verdict, the build, targets, shadow-format and
+      main-resources generations it was made for). A failed or dropped recording makes the revision again (a failed epoch has none
+      until its inputs change; a dropped one is asked again when the inputs carry the new build: once per build). Nothing sealed: a
+      growth or a build it asked for is pending (made again at the next wake; the build's inputs post is one), or there is nothing to
+      make a revision of yet (no main resources, failed), when the publication alone is posted so the frame has tables and a catalog.
+      Idle, the snapshot is made again whenever the frame's revision inputs move (a capture, a toggle, a build, new resources): the
+      frame-start make's place. Shadow slots and the graph's build are asked of the frame as in b2a (`ServeRevisionRequests`, now at
+      `BuildPoint` alone); the builder waits for the build, never the frame.
+    - **Adoption.** At the frame's start, after `BuildPoint` and `BeginFrame`: `AdoptSnapshot` takes the newest snapshot and adopts it -
+      `AdoptNamed` for its growths, `SetChanges` when its version set is every buffer's current versions, `rv.active` its revision,
+      `installedDraws` its draws - and `HandOverAtFrameStart(publication)` installs its publication when newer (the log walked to it, the
+      claims' notes, its tables, lookups and catalog the frame's, `HoldCatalog`, the replaced one back to the coordinator), then the
+      candidates. The one check is the generation compare: the graph's build (its recordings'), the targets, the shadow format, the main
+      resources, and its commit's toggles; a stale one is retired, the frame has no claims (`DecideCoverage`), and the builder is told to
+      make it again (but for toggles, which wait for the coordinator's publication under them). `DecideCoverage` also requires the
+      builder's draws verdict. The replaced snapshot goes back to the builder (`retiredSnapshots`), after the frame's own references
+      moved, so nothing of a snapshot is released on the render thread.
+    - **Gone:** `MakeRevisionForNewest` and its Present and frame-start calls, `TakePublications`, `pendingPublications`,
+      `publicationSlot`, `SelectPublication` and `PublicationWait`, `ScenePublication::draws`, `InstalledDraws`, `BuildAhead` and its
+      `AheadSlot`, `DrawsReady`, `InstallDraws`, `SelectRevision`, `SetApplicable`, `NoteSetApplied`, `RevisionHoldsClaims` (the parities
+      compare against the snapshot's own revision), `MakeRevisionShapes` with its post-before-make and immediate serve, `rv.madeAt`,
+      `sealedPublication`, `claimsPublication`, `setsHeld`, `published`/`selections`/`selectedAge`, and the `publication waits` line.
+    - **Reports.** The builder's lines (revision shapes, scene revisions, growths, the draw bound) are composed in its pass when the
+      report asks and printed by the next (a report behind); `Growths::adopted` is atomic. New: `[DCLF] scene snapshots (T6b3b): N
+      built, N publications coalesced by the builder, N adopted, N frames adopting nothing new; passed over as stale: build N, targets N,
+      shadow format N, toggles N, main resources N; built without draws for the main resources N` and `[DCLF] snapshot builds (ms,
+      avg/p95/max): draws ahead A/P/M (N built), shapes ..., recordings wait ...; commit to adoption (frames): p50 N, p95 N, max N`;
+      `[DCLF] scene publications (T6b3b: installed with their snapshot): N installed (N skipped past by the builder), N frames whose
+      snapshot brought no newer one`.
+    - **Left:** the coordinator's kicks and joins (T6b3c, d). `RunAhead`'s stores and the extras/geometry parities the report reads
+      are the builder's (as the builds ahead were the pool's). `StreamsNow` is refused while a work item is outstanding, the recordings
+      wait included.
 
 **A persistent scene for every view; incremental only; two modes** (2026-10-08; motion m112-m153, bridge y-runs, equip and
 fight e-runs, toggle runs). With DCLF's shadow views on, objects flickered at cell changes because the set's phases were

@@ -1,4 +1,5 @@
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 
 #include "Features/ExtendedTranslucency.h"
 #include "Features/SubsurfaceScattering.h"
@@ -80,6 +81,9 @@ namespace DCLF
 		return pass ? pass : frameLightingPass;
 	}
 
+	// T6b2b: the parity's alone (RefreshFrameConstants' persistent-parity reference); the blocks are GeometryPort's. With it, outside
+	// parity nothing reads Tables::geometryTemplateObject, syntheticTemplate or templateLights (droppable once the parity is retired;
+	// geometryTemplate also feeds RegisteredTemplatePassOf, the T6 check, and the slot check's "pipeline without a template").
 	const RE::BSRenderPass* SceneStore::TemplatePassOf(const Tables& a_view, std::uint32_t a_pipeline)
 	{
 		auto* property = a_pipeline < a_view.geometryTemplate.size() ? a_view.geometryTemplate[a_pipeline] : nullptr;
@@ -114,22 +118,47 @@ namespace DCLF
 		return &syntheticTemplate;
 	}
 
+	void SceneStore::CaptureLightingShader()
+	{
+		// The BSLightingShader instance (T6): the engine's own (0x14338ca00, written by its constructor; the shader GetRenderPasses gives
+		// a Lighting pass), not learned from a registration. Read at the frame's start with the coordinator idle, before the frame's
+		// globals (MaterialPort's sources read it) and the scene work's kick, so the scene lane reads only what was set before its kick.
+		auto& evaluator = ConstantEvaluator::Get();
+		if (evaluator.HasLightingShader())
+			return;
+		static const REL::Relocation<RE::BSShader**> lightingShader{ REL::Offset(0x338ca00) };
+		if (auto* shader = *lightingShader.get(); shader && shader->shaderType.get() == RE::BSShader::Type::Lighting)
+			evaluator.SetLightingShader(shader);
+	}
+
 	void SceneStore::DrainCapture()
 	{
 		auto& capture = PassCapture::Get();
 		if (!capture.Installed())
 			return;
-		// Always drained: the capture buffer is fixed-capacity and a frame that does not drain it overflows. The main
-		// camera's registrations are no source of bindings (scene membership is); the diagnostics read them.
+		// Always drained: the capture buffer is fixed-capacity and a frame that does not drain it overflows, and the drain takes the
+		// frame's withholding counters (the report's). The main camera's registrations are no source of anything DCLF draws (scene
+		// membership and the mirror are; T6b2c step 8): what follows is the parity's (CS_DCLF_PERSISTENT_PARITY) and the decal order
+		// probe's, and nothing else reads them.
 		const auto entries = capture.Drain();
-		// The BSLightingShader instance (T6): the engine's own (0x14338ca00, written by its constructor; the shader GetRenderPasses gives a Lighting pass), not
-		// learned from a registration. The parity's: any Lighting pass the frame registered names the same one.
-		auto& evaluator = ConstantEvaluator::Get();
-		if (!evaluator.HasLightingShader()) {
-			static const REL::Relocation<RE::BSShader**> lightingShader{ REL::Offset(0x338ca00) };
-			if (auto* shader = *lightingShader.get(); shader && shader->shaderType.get() == RE::BSShader::Type::Lighting)
-				evaluator.SetLightingShader(shader);
+		// The reflection residue's geometries (T6), classified by the accumulate work (ClassifyResidue). Its watch is its own gate (the
+		// sun views' parity or the timeline: IndirectDraws::ReflectionRootsOwned); taken every frame so it never accumulates.
+		auto residue = capture.TakeReflectionResidueGeometries();
+		capturedResidue.insert(capturedResidue.end(), residue.begin(), residue.end());
+		frameLightingPass = nullptr;
+		capturedRegistrations.clear();
+		registrationsObserved = SwitchEnabled(Switch::PersistentParity);
+		const bool probe = SwitchValue(Switch::DecalOrderProbe) == "1";
+		if ((!registrationsObserved && !probe) || !RefreshMainBatchRenderers()) {
+			registrationsObserved = false;
+			return;
 		}
+		if (probe)
+			Scene::ProbeDecalOrder(entries, mainBatchRenderers);
+		if (!registrationsObserved)
+			return;
+		// The parity's: any Lighting pass the frame registered names the engine's instance DCLF evaluates with (CaptureLightingShader).
+		auto& evaluator = ConstantEvaluator::Get();
 		if (evaluator.HasLightingShader())
 			for (const auto& entry : entries)
 				if (entry.pass && entry.pass->shader && entry.pass->shader->shaderType.get() == RE::BSShader::Type::Lighting) {
@@ -138,21 +167,16 @@ namespace DCLF
 							static_cast<const void*>(entry.pass->shader), static_cast<const void*>(evaluator.GetLightingShader()));
 					break;
 				}
-		frameLightingPass = nullptr;
+		// The frame's registered lighting pass: the template parity's fallback reference (RegisteredTemplatePassOf, persistent-parity
+		// frames at Prepass).
 		for (const auto& entry : entries)
 			if (entry.pass && mainBatchRenderers.contains(entry.batch) && entry.pass->shader &&
 				entry.pass->shader->shaderType.get() == RE::BSShader::Type::Lighting && entry.pass->numLights > 0 && entry.pass->sceneLights) {
 				frameLightingPass = entry.pass;
 				break;
 			}
-		if (SwitchValue(Switch::DecalOrderProbe) == "1")
-			Scene::ProbeDecalOrder(entries, mainBatchRenderers);
 		// Eligible objects DCLF has not bound that the engine registered: a scene event DCLF missed (a record not written
 		// again, a verdict not taken again). The tracked set is the coordinator's: checked by the accumulate work (CheckRegistrations).
-		// T6: the reflection residue's geometries, classified by the accumulate work (ClassifyResidue).
-		auto residue = capture.TakeReflectionResidueGeometries();
-		capturedResidue.insert(capturedResidue.end(), residue.begin(), residue.end());
-		capturedRegistrations.clear();
 		for (const auto& entry : entries)
 			if (entry.geometry && mainBatchRenderers.contains(entry.batch) && !entry.fading)
 				capturedRegistrations.push_back({ entry.geometry, entry.hint });
@@ -176,8 +200,8 @@ namespace DCLF
 				kind = (PhasesIn(tables, static_cast<std::uint32_t>(slot)) & kSetReflection) ? kResidueReflection : kResidueNotReflection;
 			++residueClasses.counts[kind];
 			// How long a geometry stays in the residue (distinct geometries, and those seen on 10 frames or more this window).
-			if (auto& seen = residueClasses.seen[geometry]; seen.frame != frame) {
-				seen.frame = frame;
+			if (auto& seen = residueClasses.seen[geometry]; seen.frame != sceneFrame) {
+				seen.frame = sceneFrame;
 				if (++seen.frames == 10)
 					++residueClasses.persistent;
 			}
@@ -204,7 +228,7 @@ namespace DCLF
 				if (!hiddenNow) {
 					++classes.staleSites[site];
 					if (shown)
-						++classes.sinceShow[AgeBucket(frame - shown)];
+						++classes.sinceShow[AgeBucket(sceneFrame - shown)];
 				}
 			} else if (a_entry->candidateReason != Ineligible::None) {
 				stage = kStageIneligible;
@@ -222,7 +246,7 @@ namespace DCLF
 			} else {
 				stage = kStageNotReflection;
 			}
-			++classes.ages[stage][AgeBucket(frame - a_entry->trackedFrame)];
+			++classes.ages[stage][AgeBucket(sceneFrame - a_entry->trackedFrame)];
 		}
 		++classes.stages[stage];
 		if (classes.stageFirst[stage].empty()) {
@@ -230,7 +254,7 @@ namespace DCLF
 			classes.stageFirst[stage] = fmt::format("'{}' under '{}'{}", a_geometry->name.c_str() ? a_geometry->name.c_str() : "",
 				parent && parent->name.c_str() ? parent->name.c_str() : "",
 				a_entry ? fmt::format(" (tracked {}, written {}, bound {}, joined {}, frame {})", a_entry->trackedFrame, a_entry->writtenFrame, a_entry->boundFrame,
-							  a_entry->memberFrame, frame) :
+							  a_entry->memberFrame, sceneFrame) :
 						  std::string());
 		}
 	}
@@ -244,14 +268,22 @@ namespace DCLF
 	void SceneStore::CheckRegistrations()
 	{
 		ClassifyResidue();
+		// The registration parity (T6b2c step 8): only while the render thread observed the frame's registrations (DrainCapture); the
+		// normal path reads none of them.
+		if (!registrationsObserved)
+			return;
+		++residentStats.registrationFrames;
+		residentStats.registrationsChecked += capturedRegistrations.size();
 		for (const auto& entry : capturedRegistrations) {
 			const auto it = tracked.find(const_cast<RE::BSGeometry*>(entry.geometry));
 			if (it == tracked.end() || it->second.candidateReason != Ineligible::None || ResidentObject(FindObject(entry.geometry)))
 				continue;
 			++residentStats.registeredUnbound;
+			// The names are the engine's: read under a lease (the scene lane), skipped without one.
 			if (residentStats.registeredUnboundFirst.empty())
-				residentStats.registeredUnboundFirst = fmt::format("'{}' under '{}' (hint {})", entry.geometry->name.c_str() ? entry.geometry->name.c_str() : "",
-					entry.geometry->parent && entry.geometry->parent->name.c_str() ? entry.geometry->parent->name.c_str() : "", entry.hint);
+				if (const EngineReadWindow::Lease lease; lease)
+					residentStats.registeredUnboundFirst = fmt::format("'{}' under '{}' (hint {})", entry.geometry->name.c_str() ? entry.geometry->name.c_str() : "",
+						entry.geometry->parent && entry.geometry->parent->name.c_str() ? entry.geometry->parent->name.c_str() : "", entry.hint);
 		}
 	}
 
@@ -282,19 +314,23 @@ namespace DCLF
 		tables.draws[objectId].pipelineIndex = a_patch.pipeline;
 		tables.lights[objectId] = a_patch.lights;
 		tables.treeAnim[objectId] = a_patch.tree;
+		bool extrasWritten = false;
 		if (a_patch.projectedUV || a_patch.landBlend) {
 			stats.projectedUV += a_patch.projectedUV ? 1 : 0;
 			stats.landBlend += a_patch.landBlend ? 1 : 0;
 			if (tables.extraOffset[objectId] == kNoExtraRows)
 				tables.extraOffset[objectId] = tables.AllocateExtras();
-			// Its static parts (the frame's are the draw's: ExtrasFrame), noted with the patch's other columns.
-			WriteObjectExtras(objectId);
+			// Its static parts (the frame's are the draw's: ExtrasFrame). A kept block's rows rewritten in place (a re-bind that moved
+			// kObjectProjectedUV/LandBlend or the technique) change no offset: noted below, or the uploads would never send them.
+			extrasWritten = WriteObjectExtras(objectId);
 		} else {
 			tables.FreeExtras(objectId);
 		}
 		// A membership join: the column goes into the same before/after journal as the other value-only writes.
 		tables.residentSlot[objectId] = 1;
 		before.NoteWrite(tables, objectId);
+		if (extrasWritten)
+			tables.NoteChange(objectId, kChangeExtras);
 		// Its shading, sampled by the next frame's values (the record joins the set then at the earliest).
 		NameShading(objectId, true);
 		if (a_patch.decalKey) {
@@ -304,73 +340,138 @@ namespace DCLF
 		}
 	}
 
+	void SceneStore::PostAccumulateInputs()
+	{
+		ZoneScopedN("CS.DCLF.Accumulate.Inputs");
+		// The capture drained (always: its buffer is fixed-capacity, and the drain takes the frame's withholding counters); what the
+		// registrations say is the parity's alone (DrainCapture).
+		DrainCapture();
+		// CS_DCLF_PERSISTENT_PARITY: the owned members' light masks, read off the engine's light data after the registration jobs.
+		if (SwitchEnabled(Switch::PersistentParity))
+			PrimaryCull::Get().CheckLightMasks();
+		// The accumulate work's frame input: Light Limit Fix's room map, posted when its generation moves.
+		PostRoomMap();
+	}
+
+	void SceneStore::PostRoomMap()
+	{
+		// Light Limit Fix's map is the render thread's (it swaps it at its own point), so it is read here and only the copy is posted.
+		auto& lightFix = globals::features::lightLimitFix;
+		if (!lightFix.loaded)
+			return;
+		const std::uint64_t generation = lightFix.GetRoomMapGeneration();
+		if (generation == roomMapPostedGeneration)
+			return;
+		auto map = std::make_shared<ankerl::unordered_dense::map<const RE::NiNode*, int>>();
+		map->reserve(lightFix.roomNodes.size());
+		for (const auto& [node, index] : lightFix.roomNodes)
+			map->emplace(node, index);
+		auto input = std::make_shared<RoomMapInput>();
+		input->map = std::move(map);
+		input->generation = generation;
+		roomMapPosted.store(std::shared_ptr<const RoomMapInput>(std::move(input)), std::memory_order_release);
+		roomMapPostedGeneration = generation;
+		accumulateInputStats.roomMapsPosted.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	void SceneStore::PostPipelineFrame(const GeometryPort::PipelineFrame& a_frame)
+	{
+		pipelineFramePosted.store(std::make_shared<const GeometryPort::PipelineFrame>(a_frame), std::memory_order_release);
+		accumulateInputStats.pipelineFramesPosted.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	void SceneStore::TakeAccumulateInputs()
+	{
+		// Latest wins: a post the render thread replaced before this pass took it is dropped there (nothing in either holds the engine's).
+		if (auto posted = roomMapPosted.exchange(nullptr, std::memory_order_acq_rel)) {
+			roomMap = posted->map;
+			roomMapGeneration = posted->generation;
+			accumulateInputStats.roomMapsTaken.fetch_add(1, std::memory_order_relaxed);
+		}
+		if (auto posted = pipelineFramePosted.exchange(nullptr, std::memory_order_acq_rel)) {
+			scenePipelineFrame = std::move(posted);
+			accumulateInputStats.pipelineFramesTaken.fetch_add(1, std::memory_order_relaxed);
+		}
+	}
+
+	void SceneStore::MakeNewPipelineConstants()
+	{
+		// T6b2c step 8: a used pipeline without a current block (a new slot, a slot keyed again, a post dropped) gets one here, on the
+		// coordinator, from the newest pipeline frame the render thread posted (Prepass's sample with a sun, PostPipelineFrame): the
+		// port is pure. The render thread makes the slot's block again from its own sample once its frame shows the slot (Prepass:
+		// RefreshFrameConstants, a slot new to the frame's tables made whole and posted), which supersedes this one; until then this
+		// one draws. Without a sample yet (the session's first frames, or no sun since) nothing is made and the slot waits as before.
+		if (!scenePipelineFrame) {
+			for (std::size_t word = 0; word < tables.usedPipelineBits.size(); ++word)
+				for (std::uint64_t remaining = tables.usedPipelineBits[word]; remaining; remaining &= remaining - 1)
+					if (const std::size_t p = word * 64 + static_cast<std::size_t>(std::countr_zero(remaining)); p < tables.pipelines.size() && !tables.PipelineConstantsCurrent(p))
+						accumulateInputStats.pipelineBlocksWaited.fetch_add(1, std::memory_order_relaxed);
+			return;
+		}
+		bool wrote = false;
+		for (std::size_t word = 0; word < tables.usedPipelineBits.size(); ++word)
+			for (std::uint64_t remaining = tables.usedPipelineBits[word]; remaining; remaining &= remaining - 1) {
+				const std::size_t p = word * 64 + static_cast<std::size_t>(std::countr_zero(remaining));
+				if (p >= tables.pipelines.size() || p >= tables.pipelineConstants.size() || p >= tables.pipelineBindingVersion.size() || tables.PipelineConstantsCurrent(p))
+					continue;
+				GeometryConstants constants{};
+				if (!GeometryPort::PipelineGeometryConstants(tables.pipelines[p].passDescriptor, kMainPassRenderFlags, *scenePipelineFrame, constants))
+					continue;
+				auto& row = tables.pipelineConstants[p];
+				row.constants = constants;
+				row.key = tables.pipelines[p];
+				row.binding = tables.pipelineBindingVersion[p];
+				row.version = tables.NextVersion();
+				row.valid = true;
+				wrote = true;
+				accumulateInputStats.pipelineBlocksMade.fetch_add(1, std::memory_order_relaxed);
+			}
+		if (wrote)
+			tables.NoteConstantsWrite();
+	}
+
+	SceneStore::AccumulateInputStats SceneStore::TakeAccumulateInputStats()
+	{
+		auto& c = accumulateInputStats;
+		AccumulateInputStats s;
+		s.roomMapsPosted = c.roomMapsPosted.exchange(0, std::memory_order_relaxed);
+		s.roomMapsTaken = c.roomMapsTaken.exchange(0, std::memory_order_relaxed);
+		s.pipelineFramesPosted = c.pipelineFramesPosted.exchange(0, std::memory_order_relaxed);
+		s.pipelineFramesTaken = c.pipelineFramesTaken.exchange(0, std::memory_order_relaxed);
+		s.pipelineBlocksMade = c.pipelineBlocksMade.exchange(0, std::memory_order_relaxed);
+		s.pipelineBlocksWaited = c.pipelineBlocksWaited.exchange(0, std::memory_order_relaxed);
+		return s;
+	}
+
 	/**
-	 * @brief The accumulator half of the frame, at EarlyPrepass.
-	 *
-	 * The main camera's passes are complete only once Main_RenderShadowMaps returns, so everything that
-	 * depends on them is here: the capture drain, the membership joins' pipeline and material slots, the
-	 * per-frame lighting template, the shading and light lists and the decal order. It patches the records
-	 * BuildScenePhase appended, in place and by object index.
+	 * @brief The accumulator half of the frame's render-thread work, at EarlyPrepass: the material part, a frame input and a parity
+	 * observer (T6b2c step 7). The records are the scene work's (RefreshMaterialRecords: the writers' captures, the frame components,
+	 * the texture transforms); the frame inputs and the other observers are PostAccumulateInputs' (step 8); the joins are the
+	 * accumulate work's, on the scene lane.
 	 */
 	void SceneStore::PrepareAccumulatePhase()
 	{
 		ZoneScopedN("CS.DCLF.Accumulate.Prepare");
-		// The engine's registrations are drained for the diagnostics (and the frame's lighting pass, TemplatePassOf's fallback).
-		RefreshMainBatchRenderers();
-		DrainCapture();
 		if (!sceneBuilt)
 			return;  // a load screen, or the feature installed mid-frame: nothing to patch
-		SyncFrameMaterials();
-		PrimaryCull::Get().CheckLightMasks();
-		// LightLimitFix's room map, for the joins (a copy: the render thread swaps the map itself).
-		if (auto& lightFix = globals::features::lightLimitFix; lightFix.loaded && lightFix.GetRoomMapGeneration() != roomMapGeneration) {
-			auto copy = std::make_shared<ankerl::unordered_dense::map<const RE::NiNode*, int>>();
-			copy->reserve(lightFix.roomNodes.size());
-			for (const auto& [node, index] : lightFix.roomNodes)
-				copy->emplace(node, index);
-			roomMap = std::move(copy);
-			roomMapGeneration = lightFix.GetRoomMapGeneration();
-		}
-		// What only the render thread may run, ahead of the joins: the engine's SetupMaterial for the materials the last joins
-		// asked for, and the material tail (writer events, texture transforms, the validation slice), which evaluate materials too.
+		// The frame input: the captures the joins asked for (a material no writer or attach captured lately), read where the engine
+		// reads its materials. The parity observer: the installed records against the engine's evaluation (CS_DCLF_PERSISTENT_PARITY).
 		ServeMaterialRequests();
-		// The frame's own work on its snapshot (step 6c): the new pipelines' blocks and technique rows (the last accumulate phase's,
-		// now in the snapshot), then the material tail.
-		RefreshNewPipelineConstants();
-		ProcessMaterialWrites();
-		RefreshTextureTransforms();
 		ValidateMaterialSlice();
 	}
 
 	void SceneStore::ServeMaterialRequests()
 	{
-		// A served record no join took within two frames (its object left, or bound another way): let go.
-		for (auto it = materialsServed.begin(); it != materialsServed.end();) {
-			if (frame - it->second.frame > 2) {
-				materialsHandedBack.push_back(std::move(it->second.owner));
-				it = materialsServed.erase(it);
-			} else {
-				++it;
-			}
-		}
-		for (auto& request : std::exchange(materialRequests, {})) {
-			const auto key = std::pair{ request.material, request.pass };
-			materialRequested.erase(key);
-			// The material's reference taken here, off the property the join read (T6b1b: the scene work makes none): a property with
-			// another material now was swapped after the join's batch, and the request is stale (the join asks again after the swap's).
-			if (!request.property || request.property->material != request.material) {
-				++residentStats.materialsStale;
-				continue;
-			}
-			MaterialServed served;
-			served.owner.reset(const_cast<RE::BSShaderMaterial*>(request.material));
-			served.valid = EvaluateMaterialForSlot(request.material, request.pass, served.record);
-			served.frame = frame;
-			++residentStats.materialsServed;
-			if (const auto it = materialsServed.find(key); it != materialsServed.end())
-				materialsHandedBack.push_back(std::move(it->second.owner));
-			materialsServed.insert_or_assign(key, std::move(served));
-		}
+		materialRequestQueue.Drain([&](MaterialRequest&& a_request) {
+			// A material the scene work holds no capture of (T6b2a): captured here, off the property the join read (it holds the
+			// property, the property its material), for the scene work's next pass. A property with another material now was swapped
+			// after the join's batch: the request is stale (the join asks again after the swap's). Answered either way, so the join may
+			// ask again; the property's reference is dropped here, on the render thread.
+			const bool current = a_request.property && a_request.property->material == a_request.material;
+			if (current)
+				MaterialPort::PushCapture(a_request.material);
+			materialRequestsAnswered.Push(MaterialAnswer{ a_request.material, current });
+		});
 	}
 
 	void SceneStore::RunAccumulateWork(bool a_task)
@@ -379,9 +480,24 @@ namespace DCLF
 		holdPrimaryNotes = true;
 		holdLostMembers = true;
 		const auto workStart = std::chrono::steady_clock::now();
+		// T6b3a: the frame inputs (none newer than the scene pass took, while the kicks stay) and the leases given back.
+		TakeFrameInputs();
+		IndirectDraws::Get().TakeAheadContext();
+		++passSerial;
+		DropReturnedPublications();
 		RecycleRetired();
-		DropWrittenMaterials();
+		// The technique rows to this frame's sample (T6b2c), before the joins make new ones from it.
+		RefreshTechniqueRows();
+		// The frame inputs the render thread posted (T6b2c step 8): the room map the joins read, the pipeline frame the blocks are made from.
+		TakeAccumulateInputs();
 		BuildAccumulatePhase();
+		// The joins' new pipelines' PerGeometry blocks (T6b2c step 8: the coordinator's, from the posted pipeline frame), before the
+		// publication, which they make drawable.
+		MakeNewPipelineConstants();
+		// The joins' new material records asked for their bindings (T6b2c), and the answers since the frame's walk.
+		UpdateMaterialBindings();
+		// The joins' pipelines' masks, the walk's shadow textures, and the answers (T6b2c).
+		UpdateSharedBindings();
 		// The set applied and the tables published with it (step 6e E3), for the next frame's start to install.
 		PublishScene();
 		[[maybe_unused]] const double workMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - workStart).count();
@@ -389,51 +505,6 @@ namespace DCLF
 		holdLostMembers = false;
 		holdPrimaryNotes = false;
 		inSceneTask = false;
-		accumulateWorkPending = true;
-	}
-
-	void SceneStore::FinishAccumulateWork()
-	{
-		auto& primary = PrimaryCull::Get();
-		if (std::exchange(allMembersLostHeld, false))
-			primary.NoteAllMembersLost();
-		for (const auto* geometry : lostMembersHeld)
-			primary.NoteMemberLost(geometry);
-		lostMembersHeld.clear();
-	}
-
-	void SceneStore::RefreshNewPipelineConstants()
-	{
-		const Tables& view = FrameView();
-		frameTables.SyncPipelines(view.pipelines, view.pipelineBindingVersion, tablesGeneration);
-		frameTables.SyncTechniques(view.techniqueKeys.size());
-		auto& evaluator = ConstantEvaluator::Get();
-		for (std::size_t word = 0; word < view.usedPipelineBits.size(); ++word)
-			for (std::uint64_t remaining = view.usedPipelineBits[word]; remaining; remaining &= remaining - 1) {
-				const std::uint32_t slot = static_cast<std::uint32_t>(word * 64 + std::countr_zero(remaining));
-				if (slot >= view.pipelines.size())
-					continue;
-				// Its technique row, new: evaluated once (RefreshFrameConstants keeps it a frame's).
-				if (auto& row = frameTables.techniques[view.pipelineTechnique[slot]]; !row.valid) {
-					EvaluateTechnique(view.pipelines[slot].passDescriptor, row.value);
-					row.evaluated = frame;
-					row.constantsVersion = frameTables.NextVersion();
-					row.bindingVersion = frameTables.NextVersion();
-					row.valid = true;
-					PostTechniqueConstants(view.pipelineTechnique[slot]);
-				}
-				if (frameTables.geometryConstantsValid[slot])
-					continue;
-				GeometryConstants constants{};
-				const auto* templatePass = TemplatePassOf(view, slot);
-				if (!templatePass || !evaluator.EvaluateGeometry(*templatePass, view.pipelines[slot].passDescriptor, kMainPassRenderFlags, constants))
-					continue;
-				frameTables.geometryConstants[slot] = constants;
-				frameTables.geometryConstantsValid[slot] = 1;
-				lightingSeeds.push_back(constants.ps);
-				frameTables.pipelineConstantsVersion[slot] = frameTables.NextVersion();
-				PostPipelineConstants(slot);
-			}
 	}
 
 	void SceneStore::BuildAccumulatePhase()
@@ -461,7 +532,7 @@ namespace DCLF
 		const std::uint32_t biasWitness = decalBiasMode[1] | (decalBiasMode[2] << 8) | (decalBiasMode[3] << 16);
 		const bool lightLimitFixLoaded = globals::features::lightLimitFix.loaded;
 		// CS_DCLF_PERSISTENT_PARITY's frames: the cached derivation is served and also recomputed, and the two compared.
-		const bool derivedProbe = SwitchEnabled(Switch::PersistentParity) && ParityDue(frame, 13);
+		const bool derivedProbe = SwitchEnabled(Switch::PersistentParity) && ParityDue(sceneFrame, 13);
 		const bool derivationStats = SwitchEnabled(Switch::DeriveProbe);
 
 		// What this phase has anything to do with: the frame's membership joins (BindByMembership). Every other
@@ -545,7 +616,7 @@ namespace DCLF
 			if (reason != Ineligible::None) {
 				if (!layer) {
 					trackedEntry->accumulateReason = reason;
-					trackedEntry->accumulateReasonFrame = frame;
+					trackedEntry->accumulateReasonFrame = sceneFrame;
 				}
 				// Eligible for a record but not for bindings: it stays native, which is what its scene record
 				// already says (kObjectNoBindings).
@@ -712,38 +783,56 @@ namespace DCLF
 				auto materialIt = materialIndex.find(std::pair{ material, descriptors.pass });
 				if (materialIt == materialIndex.end()) {
 					timer.Add(BuildPart::Dedup);
-					// The record is the engine's SetupMaterial, which only the render thread runs (ServeMaterialRequests): asked for, and
-					// the join waits for it, staying native meanwhile. No shader instance yet (nothing drawn so far) asks again.
-					const auto materialKey = std::pair{ material, descriptors.pass };
-					const auto served = materialsServed.find(materialKey);
-					if (served == materialsServed.end() || !served->second.valid) {
-						if (served != materialsServed.end()) {
-							materialsHandedBack.push_back(std::move(served->second.owner));
-							materialsServed.erase(served);
-						}
-						if (materialRequested.insert(materialKey).second) {
+					// The record is the material port's (T6b2a), from the material's capture (MaterialPort::captures: its writer's, its
+					// attach's) and the frame's sources. A material with no capture is asked of the render thread (materialRequestQueue:
+					// ServeMaterialRequests captures it), once until it answers, and the join waits for it, staying native meanwhile.
+					auto& ms = materialSnapshotStats;
+					const auto held = materialSnapshots.find(material);
+					if (held == materialSnapshots.end() || !held->second.held) {
+						if (materialRequested.insert(material).second) {
 							MaterialRequest request;
 							request.property.reset(property);
 							request.material = material;
 							request.pass = descriptors.pass;
-							materialRequests.push_back(std::move(request));
+							materialRequestQueue.Push(std::move(request));
+							++ms.requested;
 						}
 						bindRetry.push_back(objectId);
 						++residentStats.materialWaits;
 						derived.valid = false;
 						return;
 					}
-					MaterialRecord record = served->second.record;
+					held->second.frame = sceneFrame;
+					MaterialRecord record;
+					if (!MaterialPort::Evaluate(held->second.held->snapshot, descriptors.pass, FrameGlobals::Current().material, record)) {
+						// An input the frame's sources do not have yet (Advanced Skin's textures for a key it has not set up): again with a
+						// later frame's. Else a class the port does not cover: native, by its reason (counted).
+						derived.valid = false;
+						if (!MaterialPort::FeatureHooksCovered(held->second.held->snapshot, FrameGlobals::Current().material.feature)) {
+							bindRetry.push_back(objectId);
+							++residentStats.materialWaits;
+							return;
+						}
+						++ms.uncovered;
+						return;
+					}
+					++ms.made;
+					// A record holds no view of the character light's t11 (the frame's: MaterialSources::ApplyFrameComponents).
+					MaterialSources::StripFrameViews(record, descriptors.pass);
 					const std::uint32_t slot = AllocateMaterialSlot();
 					materialOwners.resize(tables.materials.size());
-					materialOwners[slot] = std::move(served->second.owner);
-					materialsServed.erase(served);
+					// Its own reference, a second count on the capture's material (alive: the capture holds one).
+					if (materialOwners[slot])
+						materialsReleased.Push(std::move(materialOwners[slot]));
+					materialOwners[slot].reset(const_cast<RE::BSShaderMaterial*>(material));
 					tables.materials[slot] = record;
 					tables.materialVersion[slot] = ++materialVersions;
 					tables.NoteMaterial(slot);
 					tables.materialSlotKey[slot] = std::pair{ material, descriptors.pass };
 					materialIt = materialIndex.emplace(std::pair{ material, descriptors.pass }, slot).first;
 					ListMaterialDependent(material, slot);
+					// Its signature's frame components and its texture transforms follow from here (T6b2c step 7).
+					NoteMaterialRecord(slot, held->second.held->snapshot);
 					timer.Add(BuildPart::MaterialEval);
 				}
 				materialSlot = materialIt->second;
@@ -855,7 +944,7 @@ namespace DCLF
 			++residentStats.failed;
 			const auto entry = tracked.find(const_cast<RE::BSGeometry*>(geometry));
 			const auto cause = entry == tracked.end() || entry->second.objectStamp != objectStamp ? 1u :                  // no record
-			                   entry->second.accumulateReasonFrame == frame ? 2u :                                          // a verdict of the frame
+			                   entry->second.accumulateReasonFrame == sceneFrame ? 2u :                                          // a verdict of the frame
 			                   3u;                                                                                          // material, or extras rows
 			++residentStats.failedBy[cause];
 			// A member whose binding could not be taken again is not bound any more.
@@ -882,12 +971,12 @@ namespace DCLF
 		KeepResidentsAlive();
 		++residentStats.frames;
 		residentStats.resident += residents.size();
-		if (ResidentParityEnabled() && ParityDue(frame) && !residents.empty())
+		if (ResidentParityEnabled() && ParityDue(sceneFrame) && !residents.empty())
 			CheckResidentParity();
 		{
 			// CS_DCLF_PERSISTENT_PARITY: no bound object references a slot that is not live. Slots are freed only when nothing references
 			// them (their reference counts), which this checks; the normal path trusts them (invariant 5).
-			if (SwitchEnabled(Switch::PersistentParity) && (slotsFreedThisFrame || ParityDue(frame)))
+			if (SwitchEnabled(Switch::PersistentParity) && (slotsFreedThisFrame || ParityDue(sceneFrame)))
 				CheckObjectSlots(frameResolveBuffers);
 			slotsFreedThisFrame = false;
 		}
@@ -920,14 +1009,16 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.Accumulate.BindByMembership");
 		// The frame globals a membership pass reads changed (the static sun bits, the fade distances): every resident is bound
 		// again from this frame's.
-		if (const std::uint32_t witness = frameMembershipWitness; witness != membershipWitness) {
+		if (const std::uint32_t witness = sceneInputs.membershipWitness; witness != membershipWitness) {
 			bindQueue.insert(bindQueue.end(), residents.begin(), residents.end());
 			EndAllResidency();
 			membershipWitness = witness;
 		}
 		// Material records are the engine's SetupMaterial through its Lighting shader, which exists only once the engine has drawn
 		// with it: until then the queue waits (the records at load are the whole scene).
-		if (!ConstantEvaluator::Get().HasLightingShader())
+		// T6b2a: the material records come from the frame's sources (FrameGlobals), which know the Lighting shader only from the frame
+		// after it was found: the joins wait for that frame (else every record of the load would fail the port).
+		if (!ConstantEvaluator::Get().HasLightingShader() || !FrameGlobals::Current().material.vanilla.sampled || !FrameGlobals::Current().material.vanilla.shaderKnown)
 			return;
 		auto& primary = PrimaryCull::Get();
 		// The joins that waited for a material record, again.
@@ -959,7 +1050,7 @@ namespace DCLF
 				if (TimelineEnabled() && !layer) {
 					const std::uint8_t why = primary.LastSyntheticFail();
 					trackedIt->second.bindFail = why;
-					trackedIt->second.bindFailFrame = frame;
+					trackedIt->second.bindFailFrame = sceneFrame;
 					std::scoped_lock lock(residueClassesLock);
 					++timelineStats.bindFailures[why];
 					if (timelineStats.bindFailFirst.empty()) {

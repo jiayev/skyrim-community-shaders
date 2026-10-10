@@ -2570,8 +2570,9 @@ namespace DCLF::Draws
 					.Epoch(epoch));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.shadow.index-pool",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources->pool, [shadow = resources](const org::PassPrepareContext& a_preparation) {
+					// The latch and its layout the revision's shape holds (the producer's).
 					const auto frame = CurrentShadowFrame(a_preparation, *shadow, false);
-					return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, shadow->latchLayout.PoolOffset() };
+					return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, frame ? frame->latchLayout.PoolOffset() : 0u };
 				})))
 					.PreferQueue(org::QueueKind::Graphics)
 					.Epoch(epoch));
@@ -2802,8 +2803,9 @@ namespace DCLF::Draws
 			// the ranges and the draws read them.
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.index-pool",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources->pool, [main = resources](const org::PassPrepareContext& a_preparation) {
+					// The latch and its layout the revision's shape holds (the producer's).
 					const auto frame = CurrentFrame(a_preparation, *main, RenderGraphRuntime::Segment::ZPrepass);
-					return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, main->latchLayout.PoolOffset() };
+					return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, frame ? frame->latchLayout.PoolOffset() : 0u };
 				})))
 					.PreferQueue(org::QueueKind::Graphics)
 					.Epoch(depth));

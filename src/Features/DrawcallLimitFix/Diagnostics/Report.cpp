@@ -129,9 +129,19 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			shaders.requested, shaders.ready, shaders.fromCache, shaders.failed, shaders.shadowRequested, shaders.shadowReady, shaders.shadowFailed);
 		const auto& indirect = DCLF::DrawPipelines::Get().GetStats();
 		logger::info("[DCLF] indirect pipelines: {} requested, {} in the set, {} failed ({} Z-prepass pipelines, {} without a pixel stage); target changes {}; shadow: {} requested, {} in the set, {} failed; "
-					 "set versions published {} (waited {} frames), shadow {} (waited {})",
+					 "set versions published {} (waited {} frames), shadow {} (waited {}); tree LOD (lane): {} requested, {} built, {} failed{}, frames waited {}; forward (lane): {} "
+					 "requested, {} built, {} failed{}, frames waited {}",
 			indirect.requested, indirect.ready, indirect.failed, indirect.zPipelines, indirect.zDepthOnly, indirect.targetChanges, indirect.shadowRequested, indirect.shadowReady, indirect.shadowFailed,
-			indirect.setPublishes, indirect.setWaits, indirect.shadowSetPublishes, indirect.shadowSetWaits);
+			indirect.setPublishes, indirect.setWaits, indirect.shadowSetPublishes, indirect.shadowSetWaits, indirect.treeLodRequested, indirect.treeLodReady, indirect.treeLodFailed,
+			indirect.treeLodFailed ? " <- FAILED" : "", indirect.treeLodWaits, indirect.forwardRequested, indirect.forwardReady, indirect.forwardFailed,
+			indirect.forwardFailed ? " <- FAILED" : "", indirect.forwardWaits);
+		// T6b2c: the constant tables the builds pack by are the lane's (DCLF's modules reflected); ShaderCache's are the parity's.
+		if (const auto ct = DCLF::DrawPipelines::Get().TakeConstantTableParity(); ct.checks)
+			logger::info("[DCLF] constant tables (T6b2c: DCLF's modules' against ShaderCache's): {} checks, {} entries ({} without ShaderCache's shaders yet), {} "
+						 "variables in both, {} at another offset{}{}; in one table only: {} DCLF's (a variable the game's shader lacks{}), {} ShaderCache's (DCLF_BINDLESS's "
+						 "own blocks, a block the stage never reads)",
+				ct.checks, ct.entries, ct.uncached, ct.variables, ct.differ, ct.differ ? " <- CONSTANT TABLE; first: " : " <- OK", ct.first, ct.catalogOnly,
+				ct.catalogOnly ? "; first: " + ct.catalogOnlyFirst : std::string(), ct.cacheOnly);
 		const auto& draws = DCLF::IndirectDraws::Get().GetStats();
 		std::string skipped;
 		for (std::size_t i = 0; i < draws.skipped.size(); ++i) {
@@ -147,10 +157,11 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		if (!missing.empty())
 			skipped += " (missing" + missing + ")";
 		const auto& textures = DCLF::GpuTextures::Get().GetStats();
-		logger::info("[DCLF] indirect draws (last frame): {} candidates built from {} material rows, skipped:{}; {:.1f} MB uploaded, {:.3f} ms CPU; {} epochs, {} not ready; textures {} live in {} registry slots, {} cleanup pending, rejected {}/{}/{}, {} samplers; imports: {} made off the render thread, {} in flight",
+		logger::info("[DCLF] indirect draws (last frame): {} candidates built from {} material rows, skipped:{}; {:.1f} MB uploaded, {:.3f} ms CPU; {} epochs, {} not ready; textures {} live in {} registry slots, {} cleanup pending, rejected {}/{}/{}, {} samplers; imports: {} made off the render thread; requests (the scene work's): {} answered, {} not answered yet",
 			draws.drawn, draws.records, skipped, draws.uploadBytes / 1048576.0,
 			draws.cpuMs, draws.epochs, draws.notReady, textures.cached, textures.registrySlots, textures.cleanupPending,
-			textures.rejected[1], textures.rejected[2], textures.rejected[3], textures.samplers, textures.importedAsync, textures.importsPending);
+			textures.rejected[1], textures.rejected[2], textures.rejected[3], textures.samplers, textures.importedAsync,
+			textures.requestsAnswered, textures.requestsPending);
 		// A register a pipeline reads that the commit does not supply rejects every pair of that pipeline: its members are
 		// withheld from the engine and drawn by nobody.
 		if (const auto constants = draws.skipped[static_cast<std::size_t>(DCLF::DrawSkip::Constants)])
@@ -316,8 +327,8 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		}
 		// The material cache and its standing alarm. materialCacheStale must be 0: it is the count of
 		// entries that were re-evaluated live and disagreed with what the cache would have served.
-		logger::info("[DCLF] materials (last frame): {} evaluated; {} written ({} re-evaluated, {} dropped, {} held for another evaluation), {} frame samples; slots {} alive (+{} retired on last reference, {} of them a member's); validated {}, stale {}{}",
-			stats.materialsEvaluated, stats.materialWrites, stats.materialsRewritten, stats.materialsDropped, stats.materialsHeld,
+		logger::info("[DCLF] materials (last frame): {} evaluated; the scene work's last pass (T6b2c step 7): {} captured ({} records rewritten, {} materials held for another evaluation), {} signature samples; slots {} alive (+{} retired on last reference, {} of them a member's); validated {}, stale {}{}",
+			stats.materialsEvaluated, stats.materialWrites, stats.materialsRewritten, stats.materialsHeld,
 			stats.frameMaterialSamples,
 			stats.materialCacheEntries, stats.materialCacheEvicted, stats.materialEvictedMember, stats.materialsValidated, stats.materialCacheStale,
 			stats.materialCacheStale ? " <- STALE MATERIAL" : "");
@@ -331,11 +342,16 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			stats.attachedEvents, stats.detachedEvents, stats.detachMoves, stats.validationDrops, stats.validationDrops ? " <- DETACH" : "", timing.eventsMs / frames,
 			(timing.sceneMs + timing.buildMs) / frames, timing.sceneMs / frames, timing.sceneMaxMs, timing.buildMs / frames, timing.buildMaxMs,
 			parts);
-		if (const auto posts = store.TakeConstantsPostStats(); posts.pipelinesPosted || posts.techniquesPosted || posts.stale || posts.recordsPosted || posts.framesPosted)
-			logger::info("[DCLF] frame evaluations published (step 6e A, B): {} pipeline blocks and {} technique rows posted, {} and {} applied, {} dropped; {} material "
-						 "records (writer events) and {} slots' frame floats posted, {} and {} applied, {} dropped (the slot held another key)",
-				posts.pipelinesPosted, posts.techniquesPosted, posts.pipelinesApplied, posts.techniquesApplied, posts.stale, posts.recordsPosted, posts.framesPosted,
-				posts.recordsApplied, posts.framesApplied, posts.materialsStale);
+		if (const auto posts = store.TakeConstantsPostStats();
+			posts.pipelinesPosted || posts.techniquesEvaluated || posts.stale)
+			logger::info("[DCLF] frame evaluations published (step 6e A): {} pipeline blocks posted, {} applied, {} dropped; technique rows (the coordinator's, "
+						 "T6b2c): {} evaluated, {} written, the inputs moved {} times; material records: the scene work's (T6b2c step 7), none posted",
+				posts.pipelinesPosted, posts.pipelinesApplied, posts.stale, posts.techniquesEvaluated, posts.techniquesWritten, posts.techniqueInputsMoved);
+		// The accumulate work's frame inputs (T6b2c step 8): render thread -> scene lane, latest wins.
+		if (const auto inputs = store.TakeAccumulateInputStats(); inputs.roomMapsPosted || inputs.pipelineFramesPosted || inputs.pipelineBlocksMade || inputs.pipelineBlocksWaited)
+			logger::info("[DCLF] accumulate frame inputs (T6b2c step 8): room map {} posted, {} taken; pipeline frame {} posted, {} taken; {} new pipelines' blocks made by "
+						 "the coordinator, {} waited for a pipeline frame",
+				inputs.roomMapsPosted, inputs.roomMapsTaken, inputs.pipelineFramesPosted, inputs.pipelineFramesTaken, inputs.pipelineBlocksMade, inputs.pipelineBlocksWaited);
 		if (const auto [violations, first] = store.TakeFrameAccessViolations(); violations)
 			logger::error("[DCLF] step 6c: {} reads of the coordinator's state from the frame while the scene work ran (first: {}) <- FRAME ACCESS", violations,
 				first ? first : "?");
@@ -345,8 +361,10 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			if (const auto [joined, running] = store.TakePresentJoins(); joined || running)
 				logger::info("[DCLF] Present (T6b1d: never waits for the scene work): {} joined it, {} found it running (joined at the next frame's start)", joined, running);
 		if (const auto publication = store.TakeTablesPublication(); publication.published) {
-			logger::info("[DCLF] tables published (step 6): {} snapshots ({} written again, {} made, pool {}), {:.3f} ms each on the coordinator (max {:.3f}); {} published on the render thread at the frame's start (tables changed after the coordinator's last publication: events applied at Present, a frame without accumulate work){}",
-				publication.published, publication.reused, publication.made, publication.pool, publication.ms / publication.published, publication.maxMs, publication.republished, publication.republished ? " <- RENDER THREAD" : "");
+			logger::info("[DCLF] tables published (step 6): {} snapshots ({} written again, {} made, pool {}), {:.3f} ms each on the coordinator (max {:.3f}); {} published by the coordinator at a scene pass's start (T6b3a: its tables changed after its last publication - events applied at Present, a frame without accumulate work - or a pass's frame inputs were not published yet){}; lookups with them (T6b2c step 5): {} copied ({} chunks written again since, {:.3f} ms a copy, max {:.3f}), {} the last copy shared again (unchanged)",
+				publication.published, publication.reused, publication.made, publication.pool, publication.ms / publication.published, publication.maxMs, publication.republished, "",
+				publication.lookupsCopied, publication.lookupsChunks, publication.lookupsMs / std::max<std::uint64_t>(publication.lookupsCopied, 1), publication.lookupsMaxMs,
+				publication.lookupsShared);
 			const double n = double(publication.published);
 			const std::uint64_t differ = publication.parityDiffer + publication.parityObjectsDiffer + publication.parityLogsDiffer + publication.parityGeometriesDiffer +
 			                             publication.parityFamiliesDiffer;
@@ -361,8 +379,10 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				publication.parityChecks ? (differ ? " <- REPLAY DIFFERS" : " <- OK") : "");
 			logger::info("[DCLF] retirement (6e E3: nothing freed while a publication names it): {}", store.TakeRetirementReport());
 			const auto installs = store.TakePublicationStats();
-			logger::info("[DCLF] scene publications (6e E3): {} installed ({} skipped past), {} frames kept the installed one whole, {:.2f} waiting a frame", installs.installed,
-				installs.skipped, installs.kept, installs.pending / std::max(1.0, double(installs.installed + installs.kept)));
+			// T6b3b: a publication is installed with the snapshot that carries it (the snapshots' own counters: IndirectDraws' report).
+			logger::info("[DCLF] scene publications (T6b3b: installed with their snapshot): {} installed ({} skipped past by the builder), {} frames whose snapshot brought "
+						 "no newer one",
+				installs.installed, installs.skipped, installs.kept);
 			if (DCLF::SceneStore::TimelineEnabled()) {
 				// T6b0: the frames from an event to the set, and from the set's commit to the frame that installs it.
 				auto histogram = [](const auto& a_buckets) {
