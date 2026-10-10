@@ -1485,6 +1485,8 @@ void PhysicalSky::ReflectionsPrepass()
 	if (cbData.enabled) {
 		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get() };
 		globals::d3d::context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
+		ID3D11ShaderResourceView* shadowSrv = texShadowVolume ? texShadowVolume->srv.get() : nullptr;
+		globals::d3d::context->PSSetShaderResources(112, 1, &shadowSrv);
 		if (texVolCubeTr && texVolCubeLum) {
 			std::array<ID3D11ShaderResourceView*, 2> volCubeSrvs = { texVolCubeTr->srv.get(), texVolCubeLum->srv.get() };
 			globals::d3d::context->PSSetShaderResources(114, (uint)volCubeSrvs.size(), volCubeSrvs.data());
