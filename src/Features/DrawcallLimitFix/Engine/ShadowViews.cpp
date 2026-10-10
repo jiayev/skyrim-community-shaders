@@ -56,23 +56,21 @@ namespace DCLF
 		return decl;
 	}
 
-	ShadowReject ShadowCasterReject(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry)
+	ShadowReject ShadowCasterReject(const SceneCapture::LeafView& a_leaf)
 	{
-		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_property);
-		if (!lighting || !a_geometry)
+		const auto* lighting = SceneCapture::LeafView::Lighting(a_leaf.property);
+		if (!lighting || !a_leaf.geometry)
 			return ShadowReject::NotLighting;
-		const std::uint64_t flags = lighting->flags.underlying();
-		if (IsLodObject(*lighting, *a_geometry) || IsLodLand(*lighting, *a_geometry))
+		const std::uint64_t flags = lighting->flags;
+		if (IsLodObject(flags, a_leaf.Type()) || IsLodLand(flags, a_leaf.Type()))
 			return ShadowReject::Lod;
-		const auto* alpha = a_geometry->GetGeometryRuntimeData().alphaProperty.get();
-		const bool blended = alpha && (alpha->alphaFlags & 1);
+		const bool blended = a_leaf.AlphaBlending();
 		const bool decal = (flags & (Bit(26) | Bit(27))) != 0;
 		const bool decalLike = decal && (flags & Bit(18));
 		if (decal && !(decalLike && (flags & Bit(32)) && blended))
 			return decalLike ? ShadowReject::DecalNoZWrite : ShadowReject::DecalPointLight;
-		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(lighting->material);
 		// The fade node's share (fade * materialAlpha < 1) is the GPU's: a shadow view drops a caster while its root fades (T1a).
-		if (material && material->materialAlpha < 1.0f)
+		if (lighting->materialAlpha < 1.0f)
 			return ShadowReject::Faded;
 		if (flags & 0x8004ull)
 			return ShadowReject::Refraction;
@@ -91,16 +89,15 @@ namespace DCLF
 		return ShadowReject::None;
 	}
 
-	bool CastsNoShadow(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry)
+	bool CastsNoShadow(const SceneCapture::LeafView& a_leaf)
 	{
-		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_property);
-		if (!lighting || !a_geometry)
+		const auto* lighting = SceneCapture::LeafView::Lighting(a_leaf.property);
+		if (!lighting || !a_leaf.geometry)
 			return false;
-		if (IsLodObject(*lighting, *a_geometry) || IsLodLand(*lighting, *a_geometry))
+		const std::uint64_t flags = lighting->flags;
+		if (IsLodObject(flags, a_leaf.Type()) || IsLodLand(flags, a_leaf.Type()))
 			return true;  // Lod
-		const std::uint64_t flags = lighting->flags.underlying();
-		const auto* alpha = a_geometry->GetGeometryRuntimeData().alphaProperty.get();
-		const bool blended = alpha && (alpha->alphaFlags & 1);
+		const bool blended = a_leaf.AlphaBlending();
 		const bool decal = (flags & (Bit(26) | Bit(27))) != 0;
 		const bool decalLike = decal && (flags & Bit(18));
 		if (decal && !(decalLike && (flags & Bit(32)) && blended))
@@ -112,15 +109,14 @@ namespace DCLF
 		return UtilityShaderDecl(flags) == 0;
 	}
 
-	std::uint32_t ShadowUtilityTechnique(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry)
+	std::uint32_t ShadowUtilityTechnique(const SceneCapture::LeafView& a_leaf)
 	{
-		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_property);
-		if (!lighting || !a_geometry)
+		const auto* lighting = SceneCapture::LeafView::Lighting(a_leaf.property);
+		if (!lighting || !a_leaf.geometry)
 			return 0;
-		const std::uint64_t flags = lighting->flags.underlying();
+		const std::uint64_t flags = lighting->flags;
 		std::uint32_t technique = UtilityShaderDecl(flags);
-		const auto* alpha = a_geometry->GetGeometryRuntimeData().alphaProperty.get();
-		if (alpha && (alpha->alphaFlags & (1u << 9)))
+		if (a_leaf.AlphaTesting())
 			technique |= 0x80;
 		if (flags & (Bit(34) | Bit(63)))
 			technique |= 0x8000000;

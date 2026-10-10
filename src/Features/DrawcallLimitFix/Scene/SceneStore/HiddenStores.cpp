@@ -503,9 +503,11 @@ namespace DCLF::Scene
 			const bool hidden = (*reinterpret_cast<const volatile std::uint32_t*>(static_cast<const std::byte*>(a_object) + 0xF4) & 1u) != 0;
 			if (siteCounts)
 				siteCounts[a_site][hidden ? 1 : 0].fetch_add(1, std::memory_order_relaxed);
-			hiddenEvents.Push(HiddenEvent{ a_object, a_site, hidden });
-			// The store just made (the stubs call after it): the hidden bit's value for the mirror (step 6e F3b).
-			PushNodeUpdate(static_cast<const RE::NiAVObject*>(a_object), SceneCapture::NodeRecord::kHidden);
+			// The store just made (the stubs call after it): the hidden bit's value for the mirror (step 6e F3b), and the hidden event with it
+			// (T6b1b: one queue, so the event and the mirror's bit are the same batch's; DrainHiddenEvents).
+			SceneCapture::Update update{ SceneCapture::NodeRecord::kHidden, SceneCapture::CaptureNodeFields(*static_cast<const RE::NiAVObject*>(a_object), SceneCapture::NodeRecord::kHidden) };
+			update.hiddenSite = a_site;
+			SceneTracker::Get().PushUpdate(std::move(update));
 		}
 
 		/**
@@ -712,7 +714,8 @@ namespace DCLF
 			a_tracked.hiddenChain.push_back(object);
 			hiddenDependents[object].push_back(a_geometry);
 		}
-		if (mirrorReadParity) {
+		if (mirrorReadParity)
+			if (const auto lease = LiveCheckLease(MirrorRead::HiddenChain)) {
 			std::vector<const void*> live;
 			for (const RE::NiAVObject* object = a_geometry; object && object != a_tracked.categoryNode; object = object->parent)
 				live.push_back(object);
@@ -744,7 +747,9 @@ namespace DCLF
 			if (!(a_entry.lightTraits & kTraitActor))
 				retake.insert(a_geometry);
 		};
-		stats.hiddenEvents += hiddenEvents.Drain([&](HiddenEvent&& a_event) {
+		// The applied batches' hidden stores (their mirror updates: ApplyMirrorEvents), in order.
+		stats.hiddenEvents += batchHidden.size();
+		for (const auto& a_event : std::exchange(batchHidden, {})) {
 			const void* a_key = a_event.key;
 			// T6b0: the node's last show, for the residue's stale hidden verdicts.
 			if (timeline && !a_event.hidden)
@@ -758,11 +763,11 @@ namespace DCLF
 				categoryEvents.insert(a_key);
 			const auto dependents = hiddenDependents.find(a_key);
 			if (dependents == hiddenDependents.end())
-				return;
+				continue;
 			for (auto* geometry : dependents->second)
 				if (const auto entry = tracked.find(geometry); entry != tracked.end())
 					announce(entry->first, entry->second);
-		});
+		}
 		// A category node's: every entry under it (rare: a cell's nodes).
 		if (!categoryEvents.empty())
 			for (auto& [geometry, entry] : tracked)

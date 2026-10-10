@@ -918,7 +918,7 @@ namespace DCLF
 			lodSegmentEvents.Drain(keep);
 			moveEvents.Discard();
 			movedFrame.clear();
-			hiddenEvents.Discard();
+			batchHidden.clear();
 			// The switches are brought up to date at the first ingestion after the load (CatchUpSwitches); PrimaryCull reads them all
 			// again.
 			worldCatchUpPending = true;
@@ -980,11 +980,25 @@ namespace DCLF
 		return ingested && ingested->presents > 1;
 	}
 
+	void SceneStore::TakeHandedBack()
+	{
+		auto append = [](auto& a_to, auto& a_from) {
+			if (a_to.empty())
+				a_to.swap(a_from);
+			else
+				std::ranges::move(a_from, std::back_inserter(a_to));
+			a_from.clear();
+		};
+		append(releasing, handedBack);
+		append(releasingBatches, spentBatches);
+		append(releasingMaterials, materialsHandedBack);
+	}
+
 	void SceneStore::ReleaseHandedBack()
 	{
-		handedBack.clear();
-		spentBatches.clear();
-		materialsHandedBack.clear();
+		releasing.clear();
+		releasingBatches.clear();
+		releasingMaterials.clear();
 	}
 
 	void SceneStore::ApplyEvents()
@@ -1000,6 +1014,9 @@ namespace DCLF
 			for (auto& [geometry, entry] : tracked) {
 				ReleaseObjectSlot(entry);
 				HandBack(std::move(entry.geometry));
+				HandBack(std::move(entry.property));
+				HandBack(std::move(entry.layerProperty));
+				HandBack(std::move(entry.faceHeadRef));
 			}
 			tracked.clear();
 			ClearFaceShapes();
@@ -1112,6 +1129,25 @@ namespace DCLF
 
 		stats.tracked = static_cast<std::uint32_t>(tracked.size());
 		stats.categoryNodes = static_cast<std::uint32_t>(categoryNodes.size());
+		// The tracked geometries its captures and leaf updates named: their properties as the mirror has them now, held from its pins
+		// (T6b1b).
+		for (const auto* head : { batch->mirrorHead, batch->head, batch->mirrorLate })
+			for (const auto* event = head; event; event = event->next) {
+				const SceneCapture::Records* records = event->type == SceneTracker::EventType::Attached ? event->captured.get() :
+				                                       event->type == SceneTracker::EventType::Updated ? event->update.leaf.get() :
+				                                                                                         nullptr;
+				if (records)
+					for (const auto& geometry : records->geometries)
+						if (const auto it = tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(geometry.key))); it != tracked.end()) {
+							HoldProperties(it->second);
+							// Written without its records (none then): again, now the mirror has them.
+							if (std::exchange(it->second.leafWaiting, false)) {
+								it->second.candidateFrame = 0;
+								pendingEvaluation.push_back(it->first);
+								++leafStats.rescheduled;
+							}
+						}
+			}
 		// Its tracker events (and the switch events folded into a pending entry) hold engine references - the detached subtrees a
 		// published version of the tables may still name: through the retirement chain (step 6e E3).
 		retirement.Open().events.push_back(std::move(batch));
@@ -1186,8 +1222,9 @@ namespace DCLF
 
 	void SceneStore::SampleLodRanges(const RE::BSGeometry& a_shape, bool a_event)
 	{
-		std::vector<LodSegments::Range> next;
-		LodSegments::DrawnRanges(&a_shape, next);
+		// The record's (T6b1b: its segment events carry them, LodSegments::DrawnRanges at the write).
+		const auto* record = mirror.Geometry(&a_shape);
+		std::vector<LodSegments::Range> next = record ? record->segments : std::vector<LodSegments::Range>{};
 		auto& ranges = lodRanges[&a_shape];
 		// Changed by an event: its record again this frame (its range slots and their chain, WriteObject).
 		if (a_event && next != ranges) {
@@ -1211,6 +1248,10 @@ namespace DCLF
 		++lodSegmentStats.checks;
 		std::vector<LodSegments::Range> live;
 		for (const auto& [shape, ranges] : lodRanges) {
+			// An item's lease (T6b1d: the scene work may run beside the engine's update).
+			const EngineReadWindow::Lease lease;
+			if (!lease)
+				break;
 			++lodSegmentStats.shapes;
 			LodSegments::DrawnRanges(shape, live);
 			if (live == ranges)
@@ -1371,15 +1412,15 @@ namespace DCLF
 		mirror.BeginBatch();
 		const bool parity = SwitchEnabled(Switch::MirrorParity);
 		mirrorReadParity = parity;
-		// The batch's pins (T6b1c): its attach captures' references, by key, for the scene work's references while it applies it.
+		// The batch's pins (T6b1c): its attach captures' references and its leaf updates' (T6b1b), by key, for the scene work's
+		// references while it applies it.
 		batchPins.clear();
 		for (const auto* head : { a_batch.mirrorHead, a_batch.head, a_batch.mirrorLate })
-			for (const auto* event = head; event; event = event->next)
+			for (const auto* event = head; event; event = event->next) {
 				if (event->type == SceneTracker::EventType::Attached && event->captured)
-					for (const auto& pin : event->captured->pins) {
-						batchPins.insert_or_assign(pin.get(), &pin);
-						++referenceStats.pins;
-					}
+					PinBatch(event->captured->pins);
+				PinBatch(event->pins);
+			}
 		auto apply = [&](const SceneTracker::Event* a_head) {
 			for (const auto* event = a_head; event; event = event->next) {
 				if (event->type == SceneTracker::EventType::Attached) {
@@ -1396,6 +1437,10 @@ namespace DCLF
 					const auto [type, key] = mirror.Update(event->update);
 					if (parity && key)
 						mirrorEventFields[SceneMirror::Key(key, type)] |= event->update.fields;
+					// A hidden store's event (T6b1b): DrainHiddenEvents', the same batch's as the mirror's bit.
+					if (event->update.hiddenSite != ~0u)
+						if (const auto* record = std::get_if<SceneCapture::NodeRecord>(&event->update.record))
+							batchHidden.push_back({ record->key, event->update.hiddenSite, (record->flags & 1u) != 0 });
 				}
 			}
 		};
@@ -1637,6 +1682,9 @@ namespace DCLF
 
 	void SceneStore::CheckTrackedBelow(MirrorRead a_read, RE::NiAVObject* a_root)
 	{
+		const auto lease = LiveCheckLease(a_read);
+		if (!lease)
+			return;
 		const auto [live, mirrored] = TrackedBelow(mirror, a_root, tracked);
 		NoteMirrorRead(a_read, live != mirrored, [&] {
 			return fmt::format("'{}' {}: {} tracked geometries below by the mirror, {} live", a_root->name.c_str() ? a_root->name.c_str() : "", static_cast<const void*>(a_root),

@@ -73,7 +73,8 @@ namespace DCLF
 		auto it = tracked.find(a_geometry);
 		if (it == tracked.end())
 			return Ineligible::NotTriShape;
-		const Ineligible reason = ClassifyStatic(*a_geometry, nullptr);
+		// The render thread's diagnostics (CaptureParity): the live records.
+		const Ineligible reason = ClassifyStatic(SceneCapture::LiveLeaf(*a_geometry).view, nullptr);
 		return reason != Ineligible::None ? reason : ClassifyFrame(it->second);
 	}
 

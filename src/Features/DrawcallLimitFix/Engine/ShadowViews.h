@@ -15,6 +15,11 @@ namespace RE
 	class BSShaderAccumulator;
 }
 
+namespace DCLF::SceneCapture
+{
+	struct LeafView;
+}
+
 namespace DCLF
 {
 	/**
@@ -67,11 +72,15 @@ namespace DCLF
 	const char* ShadowRejectName(ShadowReject a_reason);
 
 	/** @brief Object LOD: a BSSubIndexTriShape whose Lighting property has the LOD object flags (dclf-lod.md). */
-	inline bool IsLodObject(const RE::BSLightingShaderProperty& a_property, const RE::BSGeometry& a_geometry)
+	inline bool IsLodObject(std::uint64_t a_flags, std::uint8_t a_type)
 	{
 		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
-		return const_cast<RE::BSGeometry&>(a_geometry).GetType().get() == RE::BSGeometry::Type::kSubIndexTriShape &&
-		       a_property.flags.any(Flag::kLODObjects, Flag::kHDLODObjects);
+		return a_type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape) &&
+		       (a_flags & (static_cast<std::uint64_t>(Flag::kLODObjects) | static_cast<std::uint64_t>(Flag::kHDLODObjects)));
+	}
+	inline bool IsLodObject(const RE::BSLightingShaderProperty& a_property, const RE::BSGeometry& a_geometry)
+	{
+		return IsLodObject(a_property.flags.underlying(), static_cast<std::uint8_t>(const_cast<RE::BSGeometry&>(a_geometry).GetType().get()));
 	}
 
 	/**
@@ -82,10 +91,14 @@ namespace DCLF
 	inline const RE::NiTransform& DrawnPreviousWorld(const RE::BSGeometry& a_geometry);
 
 	/** @brief Terrain LOD: a BSTriShape whose Lighting property has the LOD landscape flag (dclf-lod.md, "Terrain LOD"). */
-	inline bool IsLodLand(const RE::BSLightingShaderProperty& a_property, const RE::BSGeometry& a_geometry)
+	inline bool IsLodLand(std::uint64_t a_flags, std::uint8_t a_type)
 	{
 		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
-		return const_cast<RE::BSGeometry&>(a_geometry).GetType().get() == RE::BSGeometry::Type::kTriShape && a_property.flags.all(Flag::kLODLandscape);
+		return a_type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kTriShape) && (a_flags & static_cast<std::uint64_t>(Flag::kLODLandscape));
+	}
+	inline bool IsLodLand(const RE::BSLightingShaderProperty& a_property, const RE::BSGeometry& a_geometry)
+	{
+		return IsLodLand(a_property.flags.underlying(), static_cast<std::uint8_t>(const_cast<RE::BSGeometry&>(a_geometry).GetType().get()));
 	}
 
 	inline const RE::NiTransform& DrawnPreviousWorld(const RE::BSGeometry& a_geometry)
@@ -98,14 +111,14 @@ namespace DCLF
 	 * @brief The engine's verdict on whether an object casts into a shadow map. Faded takes the material's alpha alone: the fade
 	 * node's share is FadeStateCS's, and a shadow view's BuildDraws drops the caster while its root fades (T1a: never the node's).
 	 */
-	ShadowReject ShadowCasterReject(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry);
+	ShadowReject ShadowCasterReject(const SceneCapture::LeafView& a_leaf);
 	/**
 	 * @brief Whether a Lighting property's own flags give it no shadow pass in any view, whatever the frame: the verdicts of
 	 * ShadowCasterReject that no fade, global or view changes (a rejected decal, refraction, alpha blending, a Utility
 	 * declaration of 0).
 	 * Its entry can leave every shadow cull; only its activeLightMask bits are wanted, which DCLF writes.
 	 */
-	bool CastsNoShadow(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry);
+	bool CastsNoShadow(const SceneCapture::LeafView& a_leaf);
 
 	/**
 	 * @brief The Utility technique the engine derives for a caster, without the view's mode bits.
@@ -113,7 +126,7 @@ namespace DCLF
 	 * `DetermineUtilityShaderDecl()` with the alpha-test bit and the property-flag bits; a view adds its
 	 * own mode bits (`ShadowModeBits`), and the pass the engine registers is this plus 0x2B.
 	 */
-	std::uint32_t ShadowUtilityTechnique(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry);
+	std::uint32_t ShadowUtilityTechnique(const SceneCapture::LeafView& a_leaf);
 
 	/** @brief The technique bits one accumulator render mode contributes (0xC RenderDepth .. 0xF Pb). */
 	std::uint32_t ShadowModeBits(std::uint32_t a_renderMode);

@@ -1,4 +1,5 @@
 #include "LightingConstants.h"
+#include "Features/DrawcallLimitFix/Engine/EngineReadWindow.h"
 
 #include <bit>
 
@@ -150,6 +151,7 @@ namespace DCLF
 
 	ExtrasFrame SampleExtrasFrame()
 	{
+		EngineReadWindow::Touch("SampleExtrasFrame");
 		ExtrasFrame frame;
 		auto at = [](std::uintptr_t a_offset) { return *reinterpret_cast<const float*>(REL::Offset(a_offset).address()); };
 		// BSLightingShader::SetupGeometry, techniques 8 and 19 (engine notes: per-object constants): a blend between two
@@ -405,7 +407,10 @@ namespace DCLF
 	{
 		// BSLightingShader::SetupGeometry (engine notes): which components it writes depends on the pass.
 		const bool specular = (a_pass & 0x200u) != 0;              // the pass descriptor's Specular
-		const bool envmap = ((a_pass >> 24) & 0x3f) == 1;          // the Envmap technique
+		// MaterialData.x (property +0x104, envmapLODFade): SetupGeometry's cases 1, 0xb and 0x10 (Envmap, MultilayerParallax, Eye;
+		// 1414dd040), which Lighting.hlsl's environment map reads under ENVMAP, MULTI_LAYER_PARALLAX and EYE.
+		const std::uint32_t technique = (a_pass >> 24) & 0x3f;
+		const bool envmap = technique == 1 || technique == 0xb || technique == 0x10;
 		auto& shading = a_out.shading;
 		shading.materialData[0] = envmap ? a_property.envmapLODFade : 0.0f;
 		shading.materialData[1] = specular ? a_property.specularLODFade : 0.0f;

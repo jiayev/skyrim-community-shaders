@@ -178,7 +178,10 @@ void DrawcallLimitFix::Reset()
 		return;
 	{
 		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Present);
-		DCLF::SceneStore::Get().JoinSceneTask();
+		auto& store = DCLF::SceneStore::Get();
+		// T6b1d: the scene work is not waited for here. It reads the mirror alone (its observers' live reads take leases), so it may run
+		// beside the engine's update; what reads its state below needs a join: here when it has ended, else at the next frame's start.
+		const bool joined = store.TryJoinSceneTask();
 		// The engine's next update follows Present: no worker may be inside its memory from here (EngineReadWindow).
 		{
 			DCLF::RenderThreadBudget::Part boundary(DCLF::RenderThreadBudget::Bucket::EngineBoundary);
@@ -190,21 +193,19 @@ void DrawcallLimitFix::Reset()
 		// What the frame submitted: the GPU point its frame values' buffer is free again after.
 		DCLF::FrameValues::Get().EndFrame();
 		DCLF::FrameData::EndFrame();
-		// The reports, with the scene work joined (they read its stats).
-		if (Running()) {
-			const std::uint32_t frame = DCLF::SceneStore::Get().GetFrame();
-			DCLF::SunAccumulation::Get().Report(frame, kReportInterval);
-			DCLF::PrimaryCull::Get().Report(frame, kReportInterval);
-			ReportStats(frame);
+		if (joined) {
+			ReportFrame();
+			// The frame's ingestion (the scene work applies it); a batch no scene work took in a whole frame (menus, switched off) is
+			// applied here, so the queues never wait longer.
+			store.IngestEvents();
+			store.NoteEventsPresent();
+			if (store.EventsUnapplied())
+				store.ApplyEvents();
+			store.TakeHandedBack();
+		} else {
+			reportPending = Running();
 		}
-		// The frame's ingestion (the scene work applies it); a batch no scene work took in a whole frame (menus, switched off) is
-		// applied here, so the queues never wait longer. Then what the scene work let go of: the engine's references, dropped on its
-		// main thread with nothing reading them any more.
-		auto& store = DCLF::SceneStore::Get();
-		store.IngestEvents();
-		store.NoteEventsPresent();
-		if (store.EventsUnapplied())
-			store.ApplyEvents();
+		// What the joins took of the scene work's references: dropped on the engine's main thread with nothing reading them any more.
 		store.ReleaseHandedBack();
 		DCLF::EngineReleases::Release();
 		timing.eventsMs += MillisecondsSince(start);
@@ -213,6 +214,17 @@ void DrawcallLimitFix::Reset()
 		UpdateActive();
 	}
 	DCLF::RenderThreadBudget::Get().EndFrame();
+}
+
+void DrawcallLimitFix::ReportFrame()
+{
+	reportPending = false;
+	if (!Running())
+		return;
+	const std::uint32_t frame = DCLF::SceneStore::Get().GetFrame();
+	DCLF::SunAccumulation::Get().Report(frame, kReportInterval);
+	DCLF::PrimaryCull::Get().Report(frame, kReportInterval);
+	ReportStats(frame);
 }
 
 void DrawcallLimitFix::UpdateActive()
@@ -271,8 +283,10 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// build reads off the material itself. The accumulator's half follows at EarlyPrepass, once the
 	// registration jobs have finished.
 	auto& store = DCLF::SceneStore::Get();
-	// Nothing of the last frame's work may still run (it was joined by the frame's hooks, at the latest at Present).
+	// Nothing of the last frame's work may still run: joined here when Present found it running (T6b1d), with the reports it held.
 	store.JoinSceneTask();
+	if (reportPending)
+		ReportFrame();
 	// The frame's toggles, before anything reads them. A change that enters the classification drops the
 	// cached verdicts, so the next frame classifies every object under the new switches.
 	if (DCLF::Toggles::Get().BeginFrame())

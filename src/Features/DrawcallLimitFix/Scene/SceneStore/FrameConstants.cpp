@@ -102,7 +102,7 @@ namespace DCLF
 				continue;
 			const auto key = f.materialKeys[entry.representative];
 			MaterialRecord live;
-			if (!evaluator.EvaluateMaterial(key.first, key.second, live))
+			if (!PortMaterial(key.first, key.second, live))
 				continue;
 			++stats.frameMaterialSamples;
 			++m.samples;
@@ -321,7 +321,7 @@ namespace DCLF
 			// The frame's record, evaluated again in place (the frame holds the material: frameMaterialOwners). One that cannot be
 			// evaluated now keeps its last record, which its objects go on drawing with, and is asked again next frame.
 			MaterialRecord live;
-			if (canEvaluate && evaluator.EvaluateMaterial(key.first, key.second, live)) {
+			if (canEvaluate && PortMaterial(key.first, key.second, live)) {
 				// Its frame-sourced components (and the character light's t11, which records hold no view of) are the frame's,
 				// kept by RefreshFrameMaterials: only the material's own values are compared and rewritten.
 				MaterialSources::CopyFrameComponents(f.materials[slot], live, key.second);
@@ -443,10 +443,11 @@ namespace DCLF
 					if (floats || binding || !row.valid)
 						PostTechniqueConstants(view.pipelineTechnique[i]);
 					row.valid = true;
-					// CS_DCLF_PERSISTENT_PARITY: the row against a second evaluation, once a frame.
+					// CS_DCLF_PERSISTENT_PARITY: the row against a second evaluation, once a frame, from the engine's values now (T6b2c: the
+					// row's are the frame start's sample).
 					if (geometryParityFrame) {
 						TechniqueConstants reference;
-						EvaluateTechnique(view.pipelines[i].passDescriptor, reference);
+						EvaluateTechnique(view.pipelines[i].passDescriptor, SampleTechniqueInputs(), reference);
 						KeepTechniqueFog(row.value, reference);
 						++geometryStats.techniquesChecked;
 						if (!sameFloats(reference.vs, row.value.vs) || !sameFloats(reference.ps, row.value.ps) || reference.filterModes != row.value.filterModes ||
@@ -513,6 +514,22 @@ namespace DCLF
 					const auto* templatePass = templatePassOf();
 					if (templatePass && evaluator.EvaluateGeometry(*templatePass, view.pipelines[i].passDescriptor, kMainPassRenderFlags, reference)) {
 						CheckFrameGeometry(static_cast<std::uint32_t>(i), reference, held);
+						// T6b2b: the port from the frame's sources sampled here (where the reference runs), against the reference.
+						if (geometryPortFrameNumber != frame || !geometryPortFrame) {
+							geometryPortFrame = GeometryPort::SamplePipelineFrame();
+							geometryPortFrameNumber = frame;
+						}
+						auto& gp = geometryPortParity;
+						GeometryConstants port;
+						if (!GeometryPort::PipelineGeometryConstants(view.pipelines[i].passDescriptor, kMainPassRenderFlags, *geometryPortFrame, port)) {
+							if (gp.uncovered++ == 0 && gp.first.empty())
+								gp.first = fmt::format("uncovered: pipeline {} (pass {:08X})", i, view.pipelines[i].passDescriptor);
+						} else {
+							++gp.checked;
+							if (auto difference = GeometryPort::Differences(port, reference); !difference.empty())
+								if (gp.differ++ == 0 || gp.first.starts_with("uncovered"))
+									gp.first = fmt::format("pipeline {} (pass {:08X}): {}", i, view.pipelines[i].passDescriptor, difference);
+						}
 						lightingReferences.emplace_back(static_cast<std::uint32_t>(i), reference);
 						// T6: against the evaluation from a pass the engine registered for the template's property (or the frame's).
 						if (const auto* registered = RegisteredTemplatePassOf(view.geometryTemplate[i])) {
@@ -573,7 +590,11 @@ namespace DCLF
 		++shadingParity.frames;
 		if (SwitchEnabled(Switch::PersistentParity) && ParityDue(frame) && lodFadeEventsInstalled) {
 			auto& ep = extrasParity;
-			const auto frameInputs = SampleExtrasFrame();
+			// The engine's globals and routines under leases, an item each (T6b1d: the scene work may run beside the engine's update).
+			const auto frameInputs = [] {
+				const EngineReadWindow::Lease lease;
+				return lease ? SampleExtrasFrame() : ExtrasFrame{};
+			}();
 			std::array<float, kExtraRows * 4> reference{}, completed{};
 			for (std::uint32_t o = 0; o < tables.objects.size() && o < tables.objectGeometry.size(); ++o) {
 				if ((tables.objects[o].flags & (kObjectFree | kObjectNoBindings)) || !(tables.objects[o].flags & (kObjectProjectedUV | kObjectLandBlend)) ||
@@ -585,7 +606,8 @@ namespace DCLF
 					++ep.staleStatic;
 					std::memcpy(held, before.data(), sizeof(before));
 				}
-				if (!ReferenceExtras(o, reference.data()))
+				const EngineReadWindow::Lease lease;
+				if (!lease || !ReferenceExtras(o, reference.data()))
 					continue;
 				BindlessPlacement placement;
 				if (!FrameValues::SampleSlot(tables, o, placement))
@@ -804,21 +826,23 @@ namespace DCLF
 			return false;
 		const auto& object = tables.objects[a_object];
 		const auto* geometry = tables.objectGeometry[a_object];
-		const auto* property = static_cast<const RE::BSLightingShaderProperty*>(SlotProperty(a_object));
-		if (!geometry || !property || (object.flags & kObjectNoBindings))
+		// The records (T6b1b): the slot's property's (its layer's for a layer slot) and the geometry's.
+		const auto leaf = geometry ? mirror.Leaf(geometry) : SceneCapture::LeafView{};
+		const auto* property = tables.IsLayer(a_object) ? leaf.layer : leaf.property;
+		if (!geometry || !leaf || !property || (object.flags & kObjectNoBindings))
 			return false;
 		// What of the rows is the object's alone (CompleteExtras adds the frame's): the land blend's material offset; how its
 		// TextureProj is made, and a multi-index shape's own; the ProjectedUV parameters.
 		std::array<float, kExtraRows * 4> rows{};
 		if (object.flags & kObjectLandBlend) {
-			const auto* material = static_cast<const RE::BSLightingShaderMaterialLandscape*>(property->material);
-			rows[kExtraRowLandBlend * 4 + 0] = material ? material->landBlendParams.red : 0.0f;
-			rows[kExtraRowLandBlend * 4 + 1] = material ? material->landBlendParams.green : 0.0f;
+			rows[kExtraRowLandBlend * 4 + 0] = property->landBlend[0];  // the landscape material's landBlendParams
+			rows[kExtraRowLandBlend * 4 + 1] = property->landBlend[1];
 		}
 		if (object.flags & kObjectProjectedUV) {
-			const auto* multiIndex = const_cast<RE::BSGeometry*>(geometry)->GetType().get() == RE::BSGeometry::Type::kMultiIndexTriShape ?
-			                             &static_cast<const RE::BSMultiIndexTriShape*>(geometry)->GetMultiIndexTrishapeRuntimeData() :
-			                             nullptr;
+			// A multi-index shape's parameters (GeometryRecord::multiParams: materialProjection, materialParams, materialScale,
+			// normalDampener).
+			const bool multiIndex = leaf.Type() == static_cast<std::uint8_t>(RE::BSGeometry::Type::kMultiIndexTriShape);
+			const auto& m = leaf.geometry->multiParams;
 			const std::uint32_t technique = (tables.pipelines[object.pipelineIndex].passDescriptor >> 24) & 0x3f;
 			if (!(object.flags & kObjectLandBlend))
 				rows[kExtraRowLandBlend * 4] = multiIndex ? kTextureProjShape : technique == 1 ? kTextureProjProjection : kTextureProjWorld;
@@ -826,32 +850,31 @@ namespace DCLF
 			// materialProjection's columns, as stored.
 			if (multiIndex) {
 				float* proj = rows.data() + kExtraRowTextureProj * 4;
-				const auto& shapeProjection = multiIndex->materialProjection;
 				for (std::uint32_t r = 0; r < 3; ++r) {
-					proj[r * 4 + 0] = shapeProjection.m[0][r];
-					proj[r * 4 + 1] = shapeProjection.m[1][r];
-					proj[r * 4 + 2] = shapeProjection.m[2][r];
-					proj[r * 4 + 3] = shapeProjection.m[3][r];
+					proj[r * 4 + 0] = m[0 * 4 + r];  // materialProjection.m[column][row], as stored
+					proj[r * 4 + 1] = m[1 * 4 + r];
+					proj[r * 4 + 2] = m[2 * 4 + r];
+					proj[r * 4 + 3] = m[3 * 4 + r];
 				}
 			}
 			// The pixel parameters (FUN_1414e00c0): the property's projectedUVParams folded by its w, its projectedUVColor (a
 			// multi-index shape's materialParams, normalDampener and materialScale); the globals are the frame's (ExtrasFrame).
-			const auto& params = multiIndex ? multiIndex->materialParams : property->projectedUVParams;
-			const auto& colour = property->projectedUVColor;
+			const std::array<float, 4> params = multiIndex ? std::array<float, 4>{ m[16], m[17], m[18], m[19] } :
+			                                                 std::array<float, 4>{ property->projected[0], property->projected[1], property->projected[2], property->projected[3] };
 			float* out = rows.data() + kExtraRowProjectedParams * 4;
-			const float fade = 1.0f - params.alpha;
-			out[0] = fade * params.red;
+			const float fade = 1.0f - params[3];
+			out[0] = fade * params[0];
 			out[1] = 0.0f;  // never written by the engine
-			out[2] = params.blue;
-			out[3] = fade * params.green + params.alpha;
+			out[2] = params[2];
+			out[3] = fade * params[1] + params[3];
 			if (multiIndex) {
-				out[4] = multiIndex->normalDampener;
-				out[5] = multiIndex->materialScale;
+				out[4] = m[21];  // normalDampener
+				out[5] = m[20];  // materialScale
 			} else {
-				out[4] = colour.red;
-				out[5] = colour.green;
-				out[6] = colour.blue;
-				out[7] = colour.alpha;
+				out[4] = property->projected[4];  // projectedUVColor
+				out[5] = property->projected[5];
+				out[6] = property->projected[6];
+				out[7] = property->projected[7];
 			}
 		}
 		float* held = &tables.extraRows[std::size_t(tables.extraOffset[a_object]) * 4];
@@ -864,6 +887,7 @@ namespace DCLF
 
 	bool SceneStore::ReferenceExtras(std::uint32_t a_object, float* a_out)
 	{
+		EngineReadWindow::Touch("SceneStore::ReferenceExtras");
 		const auto& object = tables.objects[a_object];
 		const auto* geometry = a_object < tables.objectGeometry.size() ? tables.objectGeometry[a_object] : nullptr;
 		const auto* property = static_cast<const RE::BSLightingShaderProperty*>(SlotProperty(a_object));
@@ -966,7 +990,7 @@ namespace DCLF
 	{
 		// Called only on a materialIndex miss. The persistent slot holds the result;
 		// writer events update that record and frame captures patch shared inputs.
-		if (!ConstantEvaluator::Get().EvaluateMaterial(a_material, a_pass, a_record)) {
+		if (!PortMaterial(a_material, a_pass, a_record)) {
 			++stats.ineligible[static_cast<std::size_t>(Ineligible::NotLightingShader)];
 			--stats.ineligible[static_cast<std::size_t>(Ineligible::None)];
 			return false;
@@ -975,6 +999,52 @@ namespace DCLF
 		MaterialSources::StripFrameViews(a_record, a_pass);
 		++stats.materialsEvaluated;
 		return true;
+	}
+
+	bool SceneStore::PortMaterial(const RE::BSShaderMaterial* a_material, std::uint32_t a_pass, MaterialRecord& a_out)
+	{
+		if (!a_material)
+			return false;
+		if (materialPortFrameNumber != frame || !materialPortFrame) {
+			materialPortFrame = MaterialPort::SampleFrame();
+			materialPortFrameNumber = frame;
+		}
+		MaterialPort::MaterialSnapshot snapshot;
+		if (!MaterialPort::Capture(*a_material, snapshot) || !MaterialPort::Evaluate(snapshot, a_pass, *materialPortFrame, a_out)) {
+			auto& p = materialPortParity;
+			if (p.uncovered++ == 0 && p.first.empty())
+				p.first = fmt::format("uncovered: material {} (feature {}, {}), pass {:08X}", fmt::ptr(a_material), snapshot.feature, snapshot.pbr ? "PBR" : "vanilla", a_pass);
+			return false;
+		}
+		if (SwitchEnabled(Switch::PersistentParity))
+			CheckMaterialPort(a_material, a_pass, a_out, snapshot);
+		return true;
+	}
+
+	void SceneStore::CheckMaterialPort(const RE::BSShaderMaterial* a_material, std::uint32_t a_pass, const MaterialRecord& a_port, const MaterialPort::MaterialSnapshot& a_snapshot)
+	{
+		// The observer: the engine's SetupMaterial (the stand-in evaluation), at the same point, against the port's record.
+		auto& p = materialPortParity;
+		MaterialRecord engine;
+		if (!ConstantEvaluator::Get().EvaluateMaterial(a_material, a_pass, engine))
+			return;
+		++p.checked;
+		// IBLParams (PS 29): the shader object's, which moves within a frame (the port's is the frame's first record's), and which no
+		// Lighting stage reads (MaterialSources): counted apart, not compared.
+		constexpr std::uint32_t kPSIBLParams = 29;
+		const auto& ps = LightingPSLayout();
+		MaterialRecord port = a_port;
+		for (std::uint32_t c = 0; c < ps.size[kPSIBLParams]; ++c) {
+			const std::uint32_t f = ps.offset[kPSIBLParams] + c;
+			if (!port.ps.SameBits(engine.ps, f)) {
+				++p.iblDrift;
+				port.ps.floats[f] = engine.ps.floats[f];
+			}
+		}
+		if (auto difference = MaterialPort::DescribeDifference(port, engine, &p.kinds); !difference.empty())
+			if (p.differ++ == 0 || p.first.starts_with("uncovered"))
+				p.first = fmt::format("material {} (feature {}, {}), pass {:08X}: {}", fmt::ptr(a_material), a_snapshot.feature, a_snapshot.pbr ? "PBR" : "vanilla", a_pass,
+					difference);
 	}
 
 	void SceneStore::NoteStaleMaterial(std::uint32_t a_slot, const std::pair<const RE::BSShaderMaterial*, std::uint32_t>& a_key,

@@ -9,6 +9,14 @@ namespace DCLF
 		return a_property->fadeNode->GetRuntimeData().unk152 & 0xF;
 	}
 
+	std::uint32_t SceneStore::LodRowOf(const SceneCapture::LeafView& a_leaf, const SceneCapture::PropertyRecord* a_property)
+	{
+		const auto* fadeNode = a_property && a_property->fadeNode ? a_leaf.FadeNodeOf(a_property) : nullptr;
+		if (!a_leaf.node || !(a_leaf.node->flags & static_cast<std::uint32_t>(RE::NiAVObject::Flag::kMeshLOD)) || !fadeNode)
+			return 3;
+		return fadeNode->fadeLevel;
+	}
+
 	std::uint32_t SceneStore::LodRowOf(const RE::BSRenderPass& a_pass)
 	{
 		return a_pass.LODMode.index + (a_pass.LODMode.singleLevel ? 4u : 0u);
@@ -34,26 +42,40 @@ namespace DCLF
 		return mask;
 	}
 
-	std::uint16_t SceneStore::SkinPartitionsOf(const RE::BSGeometry& a_geometry)
+	std::uint32_t SceneStore::SkinPartitionMask(const SceneCapture::GeometryRecord& a_geometry, std::uint32_t a_lodRow)
 	{
-		const auto& data = a_geometry.GetGeometryRuntimeData();
-		const auto* partitions = data.skinInstance ? data.skinInstance->skinPartition.get() : nullptr;
-		if (!partitions)
+		if (!a_geometry.skinPartition || a_lodRow >= 8)
 			return 0;
-		// Row 3 (cumulative: every level's partitions), whatever the node's level; a LOD skin's draw narrows it (SkinLodPartitionsOf).
-		const std::uint32_t mask = SkinPartitionMask(*data.skinInstance, 3);
-		return static_cast<std::uint16_t>(!mask ? kNoPartitions : partitions->numPartitions > 1 ? mask : 0u);
+		// The shown flags (a dismember skin's, the record's: none for another skin, or a dismember skin without its array).
+		const auto& shown = a_geometry.shown;
+		std::uint32_t mask = 0;
+		for (std::uint32_t i = 0; i < a_geometry.partitions.size() && i < kMaxSkinPartitions; ++i) {
+			if (i < shown.size() && !shown[i])
+				continue;
+			const std::uint32_t lodByte = a_geometry.partitions[i].lodByte;
+			if (lodByte <= 2 && kPartitionLodTable[a_lodRow * 3 + lodByte])
+				mask |= 1u << i;
+		}
+		return mask;
 	}
 
-	std::uint32_t SceneStore::SkinLodPartitionsOf(const RE::BSGeometry& a_geometry)
+	std::uint16_t SceneStore::SkinPartitionsOf(const SceneCapture::GeometryRecord& a_geometry)
 	{
-		const auto& data = a_geometry.GetGeometryRuntimeData();
-		const auto* property = data.shaderProperty.get();
-		if (!data.skinInstance || !data.skinInstance->skinPartition || !a_geometry.GetFlags().any(RE::NiAVObject::Flag::kMeshLOD) || !property || !property->fadeNode)
+		if (!a_geometry.skin || !a_geometry.skinPartition)
+			return 0;
+		// Row 3 (cumulative: every level's partitions), whatever the node's level; a LOD skin's draw narrows it (SkinLodPartitionsOf).
+		const std::uint32_t mask = SkinPartitionMask(a_geometry, 3);
+		return static_cast<std::uint16_t>(!mask ? kNoPartitions : a_geometry.partitions.size() > 1 ? mask : 0u);
+	}
+
+	std::uint32_t SceneStore::SkinLodPartitionsOf(const SceneCapture::LeafView& a_leaf)
+	{
+		if (!a_leaf || !a_leaf.geometry->skin || !a_leaf.geometry->skinPartition || !(a_leaf.node->flags & static_cast<std::uint32_t>(RE::NiAVObject::Flag::kMeshLOD)) ||
+			!a_leaf.property || !a_leaf.property->fadeNode)
 			return 0;
 		std::uint32_t word = 0;
 		for (std::uint32_t level = 0; level < 4; ++level)
-			word |= (SkinPartitionMask(*data.skinInstance, level) & 0xFFu) << (8 * level);
+			word |= (SkinPartitionMask(*a_leaf.geometry, level) & 0xFFu) << (8 * level);
 		return word;
 	}
 
@@ -68,7 +90,8 @@ namespace DCLF
 			++mirrorReads.unmirrored[kRead];
 		if (a_unmirrored)
 			*a_unmirrored = unmirrored;
-		if (mirrorReadParity && a_object) {
+		if (mirrorReadParity && a_object)
+			if (const auto lease = LiveCheckLease(MirrorRead::CategoryNode)) {
 			Ineligible liveReason = Ineligible::None;
 			const auto* live = FindCategoryNodeLive(a_object, &liveReason);
 			NoteMirrorRead(MirrorRead::CategoryNode, live != found || (found && liveReason != reason), [&] {
@@ -152,8 +175,9 @@ namespace DCLF
 		for (std::size_t r = 0; r < m.reads.size(); ++r) {
 			if (!m.reads[r])
 				continue;
-			text += fmt::format("{}{} {} reads ({} with a record missing){}", text.empty() ? "" : "; ", kMirrorReadNames[r], m.reads[r], m.unmirrored[r],
-				m.checked[r] ? fmt::format(", {} checked, {} lagged a batch, {} differ{}{}", m.checked[r], m.lagged[r], m.differ[r], m.differ[r] ? ": " : "", m.first[r]) : std::string());
+			text += fmt::format("{}{} {} reads ({} with a record missing){}{}", text.empty() ? "" : "; ", kMirrorReadNames[r], m.reads[r], m.unmirrored[r],
+				m.checked[r] ? fmt::format(", {} checked, {} lagged a batch, {} differ{}{}", m.checked[r], m.lagged[r], m.differ[r], m.differ[r] ? ": " : "", m.first[r]) : std::string(),
+				m.refused[r] ? fmt::format(", {} checks skipped outside the read window", m.refused[r]) : std::string());
 		}
 		bool differ = false;
 		for (const auto n : m.differ)
@@ -167,6 +191,7 @@ namespace DCLF
 
 	RE::NiNode* SceneStore::FindCategoryNodeLive(RE::NiAVObject* a_object, Ineligible* a_parentReason) const
 	{
+		EngineReadWindow::Touch("SceneStore::FindCategoryNodeLive");
 		Ineligible reason = Ineligible::None;
 		const RE::NiAVObject* top = a_object;
 		RE::NiNode* node = a_object ? a_object->parent : nullptr;
@@ -369,6 +394,14 @@ namespace DCLF
 					auto* object = stack.back();
 					stack.pop_back();
 					categoryPins.emplace_back(object);
+					// A geometry's properties too (T6b1b: what its entry holds).
+					if (auto* geometry = object->AsGeometry()) {
+						const auto& data = geometry->GetGeometryRuntimeData();
+						for (RE::NiRefObject* property : { static_cast<RE::NiRefObject*>(data.shaderProperty.get()), static_cast<RE::NiRefObject*>(LayerPropertyOf(*geometry)),
+								 static_cast<RE::NiRefObject*>(data.alphaProperty.get()) })
+							if (property)
+								categoryPins.emplace_back(property);
+					}
 					if (auto* node = object->AsNode())
 						for (auto& child : node->GetChildren())
 							if (child)
@@ -430,7 +463,7 @@ namespace DCLF
 		categoryAppliedGeneration = capture->generation;
 		// Its pins (T6b1c): held until the render thread's next frame start (the scene work joined then).
 		for (const auto& pin : categoryPins) {
-			batchPins.insert_or_assign(pin.get(), &pin);
+			batchPins.insert_or_assign(pin.get(), pin.get());
 			++referenceStats.pins;
 		}
 		categorySignature = capture->signature;
@@ -461,11 +494,13 @@ namespace DCLF
 				}
 				// Filed under a root (its walk up ends without reaching the category node): stale when the root left.
 				if (removedRoot && alwaysRenderRoots.size()) {
-					const RE::NiAVObject* top = geometry;
-					while (top->parent && top->parent != entry.categoryNode)
-						top = top->parent;
-					if (!top->parent && alwaysRenderRoots.contains(top)) {
-						const auto it = currentRoots.find(top);
+					// The mirror's chain (T6b1b).
+					const void* top = geometry;
+					const void* parent = MirrorParent(top);
+					for (; parent && parent != entry.categoryNode; parent = MirrorParent(top))
+						top = parent;
+					if (!parent && alwaysRenderRoots.contains(static_cast<const RE::NiAVObject*>(top))) {
+						const auto it = currentRoots.find(static_cast<const RE::NiAVObject*>(top));
 						if (it == currentRoots.end() || it->second.category != entry.categoryNode)
 							stale.push_back(geometry);
 					}
@@ -558,8 +593,14 @@ namespace DCLF
 			// The mirror's chain (T6b1b): the reference's root, or the multibound above.
 			++mirrorReads.reads[static_cast<std::size_t>(MirrorRead::SunEntry)];
 			const void* entry = MirrorSunEntry(&a_geometry);
-			// The mirror's (its root pinned by the attach's capture: T6b1c), or on a live walk's path the live chain's; the other checked.
+			// The mirror's (its root pinned by the attach's capture: T6b1c), or on a live walk's path the live chain's; the other checked
+			// (under a lease, T6b1d).
 			if (!a_live && !mirrorReadParity) {
+				a_tracked.sunEntryNode = static_cast<const RE::NiAVObject*>(entry);
+				return;
+			}
+			const auto lease = a_live ? EngineReadWindow::Lease() : LiveCheckLease(MirrorRead::SunEntry);
+			if (!a_live && !lease) {
 				a_tracked.sunEntryNode = static_cast<const RE::NiAVObject*>(entry);
 				return;
 			}
@@ -589,6 +630,87 @@ namespace DCLF
 		}
 	}
 
+	std::uint32_t SceneStore::OcclusionTechniqueOf(const SceneCapture::LeafView& a_leaf, bool a_skylighting) const
+	{
+		using enum RE::BSShaderProperty::EShaderPropertyFlag;
+		using enum RE::BSUtilityShader::Flags;
+		const auto* property = SceneCapture::LeafView::Lighting(a_leaf.property);
+		if (!property || !a_leaf.geometry)
+			return 0;
+		const auto any = [&](auto... a_flags) { return (property->flags & (static_cast<std::uint64_t>(a_flags) | ...)) != 0; };
+		if (a_skylighting ? any(kSkinned) && !any(kTreeAnim) : any(kSkinned))
+			return 0;
+		if (a_skylighting && a_leaf.node->userData) {
+			// The nearest fade node above it (AsFadeNode's: the record's kind), its BSX flags.
+			const SceneCapture::NodeRecord* fadeNode = nullptr;
+			for (const auto* record = a_leaf.parent; record && !fadeNode; record = record->parent ? mirror.Node(record->parent) : nullptr)
+				fadeNode = (record->kind & SceneCapture::kKindFadeNode) ? record : nullptr;
+			using Bsx = RE::BSXFlags::Flag;
+			constexpr auto kRejected = static_cast<std::int32_t>(Bsx::kRagdoll) | static_cast<std::int32_t>(Bsx::kEditorMarker) | static_cast<std::int32_t>(Bsx::kDynamic) |
+			                           static_cast<std::int32_t>(Bsx::kAddon) | static_cast<std::int32_t>(Bsx::kNeedsTransformUpdate) |
+			                           static_cast<std::int32_t>(Bsx::kMagicShaderParticles) | static_cast<std::int32_t>(Bsx::kLights) |
+			                           static_cast<std::int32_t>(Bsx::kBreakable) | static_cast<std::int32_t>(Bsx::kSearchedBreakable);
+			if (fadeNode && fadeNode->bsx != -1 && (fadeNode->bsx & kRejected))
+				return 0;
+		}
+		const bool valid = a_skylighting ? any(kZBufferWrite) && !any(kRefraction, kTempRefraction, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal) :
+		                                   any(kZBufferWrite) && !any(kRefraction, kTempRefraction, kMultiTextureLandscape, kNoLODLandBlend, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal);
+		if (!valid)
+			return 0;
+		stl::enumeration<RE::BSUtilityShader::Flags> technique;
+		technique.set(RenderDepth);
+		if (any(kVertexColors))
+			technique.set(Vc);
+		if (a_leaf.AlphaTesting()) {
+			technique.set(Texture);
+			technique.set(AlphaTest);
+		}
+		if (any(kLODObjects, kHDLODObjects))
+			technique.set(LodObject);
+		if (any(kTreeAnim))
+			technique.set(TreeAnim);
+		return technique.underlying();
+	}
+
+	const RE::NiNode* SceneStore::RoomNodeOf(const void* a_object) const
+	{
+		// Light Limit Fix's room (GetParentRoomNode): the nearest node from the object up that is a BSMultiBoundRoom or a
+		// BSPortalSharedNode, by its RTTI. The mirror's chain (T6b1b).
+		static const auto* roomRtti = REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSMultiBoundRoom }.get();
+		static const auto* portalRtti = REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSPortalSharedNode }.get();
+		for (const void* key = a_object; key;) {
+			const auto* record = mirror.Node(key);
+			if (!record)
+				return nullptr;
+			if (record->rtti == roomRtti || record->rtti == portalRtti)
+				return static_cast<const RE::NiNode*>(key);
+			key = record->parent;
+		}
+		return nullptr;
+	}
+
+	void SceneStore::HoldProperties(Tracked& a_entry)
+	{
+		const auto* record = mirror.Geometry(a_entry.geometry.get());
+		auto hold = [&](RE::NiPointer<RE::BSShaderProperty>& a_held, const void* a_key) {
+			if (a_held.get() == a_key)
+				return;
+			// The event that named it (an attach's capture, a leaf update) holds it: the batch's pin.
+			auto next = a_key ? Pinned(static_cast<const RE::BSShaderProperty*>(a_key)) : nullptr;
+			if (a_key && !next) {
+				++referenceStats.propertiesRefused;
+				if (referenceStats.firstPropertyRefused.empty())
+					referenceStats.firstPropertyRefused = fmt::format("property {} of geometry {}", a_key, static_cast<const void*>(a_entry.geometry.get()));
+			} else if (next) {
+				++referenceStats.properties;
+			}
+			HandBack(std::move(a_held));
+			a_held = std::move(next);
+		};
+		hold(a_entry.property, record ? record->property : nullptr);
+		hold(a_entry.layerProperty, record ? record->Layer() : nullptr);
+	}
+
 	void SceneStore::AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason, bool a_live)
 	{
 		// Its reference first (T6b1c): the entry's own when tracked already, else the batch's pin, else (a live walk's) the pointer.
@@ -615,8 +737,11 @@ namespace DCLF
 		const auto [it, inserted] = tracked.try_emplace(a_geometry);
 		trackedLayout += inserted ? 1 : 0;
 		auto& entry = it->second;
-		const auto* owner = a_geometry->GetUserData();
-		const auto* actorOwner = owner && owner->GetFormType() == RE::FormType::ActorCharacter ? owner : nullptr;
+		// Its node's record (T6b1b): the reference, an actor's.
+		const auto* record = mirror.Node(a_geometry);
+		const auto* actorOwner = record && record->userData && record->formType == static_cast<std::uint8_t>(RE::FormType::ActorCharacter) ?
+		                             static_cast<const RE::TESObjectREFR*>(record->userData) :
+		                             nullptr;
 		const auto identity = sceneIdentity.Attach(a_geometry, actorOwner);
 		if (identity.replaced) {
 			ReleaseObjectSlot(entry);
@@ -630,9 +755,22 @@ namespace DCLF
 		entry.identity = identity.member;
 		entry.groupIdentity = identity.group;
 		entry.actorOwner = actorOwner;
-		entry.roomNode = globals::features::lightLimitFix.GetRoomNode(a_geometry);
+		entry.roomNode = RoomNodeOf(a_geometry);
 		entry.roomMapGeneration = 0;
 		entry.geometry = std::move(reference);
+		HoldProperties(entry);
+		// A face shape's head (a dynamic shape under a BSFaceGenNiNode, the mirror's): held from the batch's pins (T6b1b).
+		{
+			const auto* parent = record && record->parent ? mirror.Node(record->parent) : nullptr;
+			const auto* g = mirror.Geometry(a_geometry);
+			const bool face = parent && (parent->kind & SceneCapture::kKindFaceGen) && g && g->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kDynamicTriShape);
+			const auto* head = face ? static_cast<const RE::BSFaceGenNiNode*>(record->parent) : nullptr;
+			if (entry.faceHeadRef.get() != head) {
+				HandBack(std::move(entry.faceHeadRef));
+				if (head && !(entry.faceHeadRef = Pinned(head)))
+					++referenceStats.refused;
+			}
+		}
 		entry.categoryNode = a_categoryNode;
 		// The mirror holds no record of it (an attach no hook captured): the render thread captures it at the next frame's start (T6b1a).
 		if (!mirror.Node(a_geometry))
@@ -650,7 +788,9 @@ namespace DCLF
 				entry.sunEntryNode = nullptr;
 			if (entry.sunEntryNode) {
 				rootDependents[entry.sunEntryNode].push_back(a_geometry);
-				if (const auto* rootRef = entry.sunEntryNode->GetUserData(); rootRef && rootReference.try_emplace(entry.sunEntryNode, rootRef).second)
+				const auto* rootRecord = mirror.Node(entry.sunEntryNode);  // its reference, the mirror's
+				if (const auto* rootRef = rootRecord ? static_cast<const RE::TESObjectREFR*>(rootRecord->userData) : nullptr;
+					rootRef && rootReference.try_emplace(entry.sunEntryNode, rootRef).second)
 					referenceRoot[rootRef] = entry.sunEntryNode;
 				entry.listedRoot = entry.sunEntryNode;
 				dirtyRoots.push_back(entry.sunEntryNode);
@@ -665,7 +805,7 @@ namespace DCLF
 			}
 		}
 		// Object LOD: its drawn ranges from now on, by its segment events (lodSegmentEvents).
-		if (a_geometry->GetType().get() == RE::BSGeometry::Type::kSubIndexTriShape)
+		if (const auto* g = mirror.Geometry(a_geometry); g && g->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape))
 			SampleLodRanges(*a_geometry, false);
 		pendingEvaluation.push_back(a_geometry);
 	}
@@ -683,6 +823,13 @@ namespace DCLF
 			const bool actorRoot = record && record->parent == category && record->userData && record->formType == static_cast<std::uint8_t>(RE::FormType::ActorCharacter);
 			// The mirror's (its root pinned by the attach's capture: T6b1c), or on a live walk's path the live chain's; the other checked.
 			if (!a_live && !mirrorReadParity) {
+				if (actorRoot)
+					return static_cast<const RE::NiAVObject*>(root);
+				return a_tracked.sunEntryNode && !IsCategoryNode(a_tracked.sunEntryNode) ? a_tracked.sunEntryNode : nullptr;
+			}
+			// The check under a lease (T6b1d).
+			const auto lease = a_live ? EngineReadWindow::Lease() : LiveCheckLease(MirrorRead::LightEntry);
+			if (!a_live && !lease) {
 				if (actorRoot)
 					return static_cast<const RE::NiAVObject*>(root);
 				return a_tracked.sunEntryNode && !IsCategoryNode(a_tracked.sunEntryNode) ? a_tracked.sunEntryNode : nullptr;
@@ -743,7 +890,8 @@ namespace DCLF
 			MirrorSubtree(a_root, reasonAbove, found, lacking);
 			if (lacking)
 				++mirrorReads.unmirrored[static_cast<std::size_t>(MirrorRead::Subtree)];
-			if (mirrorReadParity) {
+			if (mirrorReadParity)
+				if (const auto lease = LiveCheckLease(MirrorRead::Subtree)) {
 				std::vector<std::pair<RE::BSGeometry*, Ineligible>> live;
 				std::vector<std::pair<RE::NiAVObject*, Ineligible>> stack;
 				stack.emplace_back(a_root, reasonAbove);
@@ -831,15 +979,17 @@ namespace DCLF
 		}
 	}
 
-	Ineligible SceneStore::ClassifyStatic(RE::BSGeometry& a_geometry, LightingDescriptors* a_descriptors, const AccumulatedPass* a_accumulated,
-		RE::BSLightingShaderProperty** a_castCache)
+	Ineligible SceneStore::ClassifyStatic(const SceneCapture::LeafView& a_leaf, LightingDescriptors* a_descriptors, const AccumulatedPass* a_accumulated)
 	{
+		if (!a_leaf)
+			return Ineligible::NotTriShape;
+		const auto& g = *a_leaf.geometry;
 		// An NPC face shape (a dynamic shape under a BSFaceGenNiNode) takes the checks below like any shape. Its
 		// positions are not in its buffers but in FaceSnapshots: the walk gives every record of one its stream
 		// (SceneStore::Tracked::faceShape), whatever the verdict, and the draws bind it as the second stream.
-		const auto type = a_geometry.GetType().get();
-		const bool face = type == RE::BSGeometry::Type::kDynamicTriShape && FaceSnapshots::Enabled() && a_geometry.parent &&
-		                  netimmerse_cast<RE::BSFaceGenNiNode*>(a_geometry.parent);
+		const auto type = static_cast<RE::BSGeometry::Type>(g.type);
+		const bool face = type == RE::BSGeometry::Type::kDynamicTriShape && FaceSnapshots::Enabled() && a_leaf.parent &&
+		                  (a_leaf.parent->kind & SceneCapture::kKindFaceGen);
 		// A BSMultiIndexTriShape (cave walls, rocks with a snow layer) draws every pass but one as a tri-shape: its renderer data and
 		// its triangle count (FUN_1414f2ad0, type 7). The exception is the additional property's main-pass layer (accumulation
 		// hint 12), drawn from its second index list: DCLF's layer object (Tracked::layerSlot, ClassifyLayer). The shadow modes
@@ -851,8 +1001,8 @@ namespace DCLF
 		// TES::lodLandRoot; LOD without its toggle. Any other sub-index shape is not one DCLF draws.
 		bool lodObject = false;
 		if (type == RE::BSGeometry::Type::kSubIndexTriShape) {
-			const auto* lodProperty = netimmerse_cast<RE::BSLightingShaderProperty*>(a_geometry.GetGeometryRuntimeData().shaderProperty.get());
-			if (lodProperty && IsLodObject(*lodProperty, a_geometry)) {
+			const auto* lodProperty = SceneCapture::LeafView::Lighting(a_leaf.property);
+			if (lodProperty && IsLodObject(lodProperty->flags, g.type)) {
 				if (!ActiveToggles().lodObjects)
 					return Ineligible::Lod;
 				lodObject = true;
@@ -863,8 +1013,7 @@ namespace DCLF
 				return Ineligible::NotTriShape;
 		}
 
-		auto& data = a_geometry.GetGeometryRuntimeData();
-		if (auto* skin = data.skinInstance.get()) {
+		if (g.skin) {
 			if (!ActiveToggles().skinned)
 				return Ineligible::Skinned;
 			// The skinned path (engine notes: skinning): a NiSkinInstance, or with CS_DCLF_SKIN_PARTITIONS a
@@ -874,53 +1023,43 @@ namespace DCLF
 			// SkinPartitionMask's, per frame.
 			static const REL::Relocation<const RE::NiRTTI*> niSkinInstance{ RE::NiSkinInstance::Ni_RTTI };
 			static const REL::Relocation<const RE::NiRTTI*> dismemberSkinInstance{ RE::BSDismemberSkinInstance::Ni_RTTI };
-			const bool dismember = skin->GetRTTI() == dismemberSkinInstance.get();
-			if (skin->GetRTTI() != niSkinInstance.get() && !dismember)
+			const bool dismember = g.skinRtti == dismemberSkinInstance.get();
+			if (g.skinRtti != niSkinInstance.get() && !dismember)
 				return Ineligible::SkinShape;
-			auto* partition = skin->skinPartition.get();
-			auto* skinData = skin->skinData.get();
-			if (!partition || !skinData || partition->numPartitions == 0 || skinData->GetBoneCount() == 0 || skinData->GetBoneCount() * 3 > 240)
+			const auto partitions = static_cast<std::uint32_t>(g.partitions.size());
+			if (!g.skinPartition || !g.skinData || partitions == 0 || g.boneCount == 0 || g.boneCount * 3 > 240)
 				return Ineligible::SkinShape;
-			if ((partition->numPartitions > 1 || dismember) && !ActiveToggles().skinPartitions)
+			if ((partitions > 1 || dismember) && !ActiveToggles().skinPartitions)
 				return Ineligible::SkinShape;
-			if (partition->numPartitions > kMaxSkinPartitions)
+			if (partitions > kMaxSkinPartitions)
 				return Ineligible::SkinShape;
 			// The engine indexes the dismember flags by partition; a flag array of another length is not one it
 			// could have drawn from either.
-			if (dismember) {
-				const auto& flags = static_cast<const RE::BSDismemberSkinInstance*>(skin)->GetRuntimeData();
-				if (flags.partitions && static_cast<std::uint32_t>(flags.numPartitions) != partition->numPartitions)
-					return Ineligible::SkinShape;
-			}
+			if (dismember && !g.shown.empty() && g.shown.size() != partitions)
+				return Ineligible::SkinShape;
 			// Every partition is drawn with the first one's pipeline, so they share its vertex layout; a LOD
 			// byte past 2 would index the next row of the engine's table.
-			const auto& first = partition->partitions[0];
-			for (std::uint32_t i = 0; i < partition->numPartitions; ++i) {
-				const auto& p = partition->partitions[i];
-				if (!p.buffData || !p.buffData->vertexBuffer || !p.buffData->indexBuffer)
+			const auto& first = g.partitions[0];
+			for (const auto& p : g.partitions) {
+				if (!p.vertexBuffer || !p.indexBuffer)
 					return Ineligible::NoRendererData;
-				if (!first.buffData || std::bit_cast<std::uint64_t>(p.buffData->vertexDesc) != std::bit_cast<std::uint64_t>(first.buffData->vertexDesc) ||
-					(p.pad42 & 0xFF) > 2)
+				if (p.vertexDesc != first.vertexDesc || p.lodByte > 2)
 					return Ineligible::SkinShape;
 			}
-		} else if (!data.rendererData || !data.rendererData->vertexBuffer || !data.rendererData->indexBuffer) {
+		} else if (!g.rendererData || !g.vertexBuffer || !g.indexBuffer) {
 			return Ineligible::NoRendererData;
 		}
 
-		// The caller may already know what this property is (see Tracked::castProperty); the cast is a walk
-		// of dependent RTTI pointer loads, which is the part of this function that neither a memo nor the
-		// reads BuildFrame makes later can remove.
-		auto* property = a_castCache ? *a_castCache : netimmerse_cast<RE::BSLightingShaderProperty*>(data.shaderProperty.get());
+		const auto* property = SceneCapture::LeafView::Lighting(a_leaf.property);
 		if (!property)
 			return Ineligible::NotLightingShader;
 
-		// GetRenderPasses treats material alpha below one as transparent.
-		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(property->material);
-		if (material && material->materialAlpha < 1.0f)
+		// GetRenderPasses treats material alpha below one as transparent (the record's: 1 without a material).
+		if (property->materialAlpha < 1.0f)
 			return Ineligible::AlphaBlend;
 
 		LightingDescriptors descriptors;
-		const Ineligible reason = DeriveLightingDescriptors(*property, a_geometry, a_accumulated, descriptors);
+		const Ineligible reason = DeriveLightingDescriptors(*property, a_leaf, a_accumulated, descriptors);
 		if (a_descriptors) {
 			if (reason == Ineligible::None) {
 				*a_descriptors = descriptors;
@@ -933,26 +1072,24 @@ namespace DCLF
 		}
 		if (!multiIndex || reason != Ineligible::None)
 			return reason;
-		const auto* additional = static_cast<const RE::BSMultiIndexTriShape&>(a_geometry).GetMultiIndexTrishapeRuntimeData().additionalShaderProperty.get();
-		if (!additional)
+		if (!g.layerProperty)
 			return Ineligible::None;  // nothing but its own passes: a tri-shape
-		return ActiveToggles().layers && ClassifyLayer(a_geometry, nullptr, nullptr) == Ineligible::None ? Ineligible::None : Ineligible::MultiIndex;
+		return ActiveToggles().layers && ClassifyLayer(a_leaf, nullptr, nullptr) == Ineligible::None ? Ineligible::None : Ineligible::MultiIndex;
 	}
 
-	Ineligible SceneStore::ClassifyLayer(const RE::BSGeometry& a_geometry, LightingDescriptors* a_descriptors, const AccumulatedPass* a_accumulated)
+	Ineligible SceneStore::ClassifyLayer(const SceneCapture::LeafView& a_leaf, LightingDescriptors* a_descriptors, const AccumulatedPass* a_accumulated)
 	{
 		// The layer's passes are GetRenderPasses of the additional property for this geometry (FUN_1414b2330): the geometry's
 		// alpha property and skin, the layer's flags and material.
-		const auto* layer = netimmerse_cast<const RE::BSLightingShaderProperty*>(LayerPropertyOf(a_geometry));
+		const auto* layer = SceneCapture::LeafView::Lighting(a_leaf.layer);
 		if (!layer)
 			return Ineligible::NotLightingShader;
-		if (a_geometry.GetGeometryRuntimeData().skinInstance)
+		if (a_leaf.Skinned())
 			return Ineligible::Skinned;  // a skinned layer is not modelled
-		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(layer->material);
-		if (material && material->materialAlpha < 1.0f)
+		if (layer->materialAlpha < 1.0f)
 			return Ineligible::AlphaBlend;
 		LightingDescriptors descriptors;
-		const Ineligible reason = DeriveLightingDescriptors(*layer, a_geometry, a_accumulated, descriptors, true);
+		const Ineligible reason = DeriveLightingDescriptors(*layer, a_leaf, a_accumulated, descriptors, true);
 		if (a_descriptors) {
 			if (reason == Ineligible::None)
 				*a_descriptors = descriptors;
@@ -1005,6 +1142,16 @@ namespace DCLF
 		return IsHidden(a_object);
 	}
 
+	bool SceneStore::HiddenForWalk(const void* a_object, const SceneCapture::NodeRecord& a_record) const
+	{
+		const auto& cullHidden = FrameGlobals::Current().cullHidden;
+		const auto* object = static_cast<const RE::NiAVObject*>(a_object);
+		const auto it = std::lower_bound(cullHidden.begin(), cullHidden.end(), object, [](const auto& a_entry, const RE::NiAVObject* a_key) { return a_entry.first < a_key; });
+		if (it != cullHidden.end() && it->first == object)
+			return it->second;
+		return (a_record.flags & static_cast<std::uint32_t>(RE::NiAVObject::Flag::kHidden)) != 0;
+	}
+
 	Ineligible SceneStore::ClassifyFrame(const Tracked& a_tracked, const AccumulatedPass* a_accumulated) const
 	{
 		const bool underSwitch = a_tracked.parentReason == Ineligible::Switch;
@@ -1014,29 +1161,29 @@ namespace DCLF
 			return a_tracked.parentReason;
 
 		// App-culled or hidden anywhere between the leaf and its category node; part of an actor; under a
-		// switch node that does not draw this branch.
+		// switch node that does not draw this branch. The mirror's chain (T6b1b).
 		const bool actors = ActiveToggles().actors;
-		const RE::NiAVObject* child = nullptr;
-		for (const RE::NiAVObject* object = a_tracked.geometry.get(); object; child = object, object = object->parent) {
-			if (HiddenForWalk(object))
+		const void* child = nullptr;
+		const void* key = a_tracked.geometry.get();
+		for (const auto* record = mirror.Node(key); record; child = key, key = record->parent, record = key ? mirror.Node(key) : nullptr) {
+			if (HiddenForWalk(key, *record))
 				return Ineligible::Hidden;
-			if (object == a_tracked.categoryNode)
+			if (key == a_tracked.categoryNode)
 				break;
-			if (underSwitch && child) {
-				if (auto* switchNode = const_cast<RE::NiAVObject*>(object)->AsSwitchNode(); switchNode && !SwitchSelects(*switchNode, child))
-					return Ineligible::Switch;
-			}
-			if (!actors)
-				if (auto* ref = object->GetUserData(); ref && ref->IsActor())
-					return Ineligible::Actor;
+			if (underSwitch && child && (record->kind & SceneCapture::kKindSwitch) && !SwitchSelects(*record, child))
+				return Ineligible::Switch;
+			if (!actors && record->userData && record->actor)
+				return Ineligible::Actor;
 		}
 
 		// Fading: a membership pass is built from the settled state (the fade is the feedback's). Without one (the scene
 		// phase, for the shadow views) a fade is only the native loop's when fades are not DCLF's at all; the shadow views
-		// skip faded casters themselves (ShadowReject::Faded).
-		auto* property = a_tracked.geometry->GetGeometryRuntimeData().shaderProperty.get();
-		const bool fading = !a_accumulated && !ActiveToggles().fading && property && property->fadeNode &&
-		                    property->fadeNode->GetRuntimeData().currentFade < 1.0f;
+		// skip faded casters themselves (ShadowReject::Faded). The fade node's currentFade, its record's.
+		bool fading = false;
+		if (!a_accumulated && !ActiveToggles().fading) {
+			const auto leaf = mirror.Leaf(a_tracked.geometry.get());
+			fading = leaf.fadeNode && leaf.fadeNode->currentFade < 1.0f;
+		}
 		if (fading)
 			return Ineligible::Fading;
 

@@ -781,7 +781,7 @@ namespace DCLF
 				++notInTables;
 				if (!notInTablesBy[static_cast<std::uint8_t>(reason)]++)
 					notInTablesFirst[static_cast<std::uint8_t>(reason)] = Describe(geometry);
-			} else if (SceneStore::ClassifyStatic(*geometry, nullptr) == Ineligible::None) {
+			} else if (SceneStore::ClassifyStatic(SceneCapture::LiveLeaf(*geometry).view, nullptr) == Ineligible::None) {
 				if (auto* category = store.CategoryNodeOf(geometry)) {
 					++untrackedEligible;  // followed below and reported with its parents and what tracked it (ResolveUntracked)
 					const std::uint32_t frame = store.GetFrame();
@@ -855,7 +855,7 @@ namespace DCLF
 				}
 			} else {
 				// Untracked and not statically eligible: by the verdict, and the first of each named.
-				const auto reason = static_cast<std::uint8_t>(SceneStore::ClassifyStatic(*geometry, nullptr));
+				const auto reason = static_cast<std::uint8_t>(SceneStore::ClassifyStatic(SceneCapture::LiveLeaf(*geometry).view, nullptr));
 				if (!untrackedBy[reason]++)
 					untrackedFirst[reason] = fmt::format("{} hint {}", Describe(geometry), a_pass->accumulationHint);
 			}

@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include "Features/DrawcallLimitFix/Scene/FrameGlobals.h"
+
 struct ID3D11ShaderResourceView;
 
 namespace DCLF
@@ -119,11 +121,21 @@ namespace DCLF
 	 * posAdjust; DCLF's vertex shader takes the draw's eye off it), and its half extents less 15 (dclf-lod.md, "Terrain LOD").
 	 */
 	void LodHighDetailRange(float* a_out);
-	/** @brief Takes the frame's HighDetailRange now (RefreshLodTechniqueRanges, before the Z-prepass): LodHighDetailRange serves it until the next call. */
+	/**
+	 * @brief Takes the frame's HighDetailRange (RefreshLodTechniqueRanges, before the Z-prepass: the frame's sample, so every reader of
+	 * the frame agrees): LodHighDetailRange serves it until the next call.
+	 */
 	void HoldLodHighDetailRange();
 
-	/** @brief Evaluates SetupTechnique's writes for a pass descriptor from the current frame's fog and settings. */
-	void EvaluateTechnique(std::uint32_t a_passDescriptor, TechniqueConstants& a_out);
+	/** @brief Render thread (the frame's start, FrameGlobals::Capture; the parity): what SetupTechnique reads of the engine now. */
+	TechniqueInputs SampleTechniqueInputs();
+	/** @brief Pure (T6b2c): SetupTechnique's writes for a pass descriptor from sampled inputs. */
+	void EvaluateTechnique(std::uint32_t a_passDescriptor, const TechniqueInputs& a_inputs, TechniqueConstants& a_out);
+	/** @brief EvaluateTechnique from the frame's sample (FrameGlobals::Current().technique). */
+	inline void EvaluateTechnique(std::uint32_t a_passDescriptor, TechniqueConstants& a_out)
+	{
+		EvaluateTechnique(a_passDescriptor, FrameGlobals::Current().technique, a_out);
+	}
 
 	/**
 	 * @brief What EvaluateTechnique reads of a pass descriptor (the technique, and whether the shadow mask is bound):

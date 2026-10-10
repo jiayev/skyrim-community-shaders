@@ -38,6 +38,7 @@ namespace DCLF
 		// One word: the lease is counted and the window seen open in the same step, so Close cannot miss it.
 		if (state.fetch_add(1, std::memory_order_acq_rel) & kOpen) {
 			held = true;
+			++heldHere;
 			return;
 		}
 		state.fetch_sub(1, std::memory_order_acq_rel);
@@ -46,16 +47,29 @@ namespace DCLF
 
 	EngineReadWindow::Lease::~Lease()
 	{
-		if (held)
+		if (held) {
+			--heldHere;
 			state.fetch_sub(1, std::memory_order_release);
+		}
+	}
+
+	void EngineReadWindow::NoteUnleased(const char* a_site)
+	{
+		if (unleased.fetch_add(1, std::memory_order_relaxed) == 0)
+			unleasedFirst.store(a_site, std::memory_order_relaxed);
 	}
 
 	std::string EngineReadWindow::Report()
 	{
-		if (!closes)
+		// T6b1d: the scene work's accesses without a lease (any is a defect).
+		const std::uint64_t lane = unleased.exchange(0, std::memory_order_relaxed);
+		const char* laneFirst = unleasedFirst.exchange(nullptr, std::memory_order_relaxed);
+		if (!closes && !lane)
 			return {};
-		auto line = fmt::format("[DCLF] engine-read window: {} closes, {} of them waited for items in flight ({:.1f} us in all, max {:.1f} us); {} leases refused (work left for the next window)",
-			closes, closesWaited, waitedUs, waitedMaxUs, refused.exchange(0, std::memory_order_relaxed));
+		auto line = fmt::format("[DCLF] engine-read window: {} closes, {} of them waited for items in flight ({:.1f} us in all, max {:.1f} us); {} leases refused (work left for the next window); "
+								"scene work engine accesses without a lease {}{}{}",
+			closes, closesWaited, waitedUs, waitedMaxUs, refused.exchange(0, std::memory_order_relaxed), lane, lane ? " <- LANE ENGINE ACCESS; first: " : " <- OK",
+			laneFirst ? laneFirst : "");
 		closes = closesWaited = 0;
 		waitedUs = waitedMaxUs = 0.0;
 		return line;

@@ -21,8 +21,10 @@ namespace DCLF
 			auto run = [&](std::size_t a_begin, std::size_t a_end) {
 				ZoneScopedN("CS.DCLF.Scene.SunCandidates.Verdicts");
 				const bool marked = std::exchange(SceneStore::sceneWorkThread, true);
+				const bool engineMarked = std::exchange(EngineReadWindow::sceneWork, true);
 				for (std::size_t i = a_begin; i < a_end; ++i)
 					a_out[i] = a_verdict(i);
+				EngineReadWindow::sceneWork = engineMarked;
 				SceneStore::sceneWorkThread = marked;
 			};
 			if (a_parallel)
@@ -251,13 +253,13 @@ namespace DCLF
 		++lightCandidatesGeneration;
 	}
 
-	bool SceneStore::LightEntryAllows(const Tracked& a_tracked, const RE::BSGeometry& a_geometry, bool a_switchNodes)
+	bool SceneStore::LightEntryAllows(const Tracked& a_tracked, const RE::BSGeometry& a_geometry, bool a_switchNodes) const
 	{
 		// What the sun's rule allows (the caster rule gives an alpha-blended or fading property no shadow pass, the paraboloid's as
 		// the cascades'), and any geometry without a Lighting property. The lights' bits of every geometry are LocalLightCull's.
 		if (SunEntryAllows(a_tracked, a_switchNodes))
 			return true;
-		return a_tracked.candidateFrame != 0 && !netimmerse_cast<const RE::BSLightingShaderProperty*>(a_geometry.GetGeometryRuntimeData().shaderProperty.get());
+		return a_tracked.candidateFrame != 0 && !SceneCapture::LeafView::Lighting(mirror.Leaf(&a_geometry).property);  // T6b1b: the mirror's
 	}
 
 	const std::vector<RE::BSGeometry*>* SceneStore::LightDependentsOf(const RE::NiAVObject* a_root) const
@@ -337,24 +339,34 @@ namespace DCLF
 		(void)changed;
 	}
 
-	bool SceneStore::SunEntryAllows(const Tracked& a_tracked, bool a_switchNodes)
+	bool SceneStore::SunEntryAllows(const Tracked& a_tracked, bool a_switchNodes) const
 	{
 		// A table object: its shadow is the shadow epoch's (the set decides, per frame), or the caster rule rejects it.
 		if (a_tracked.slot != kNoObjectSlot)
 			return true;
 		if (a_tracked.candidateFrame == 0)
 			return false;
+		// The verdicts are the snapshot's; the exclusion is a promise about the culls that run a frame or two later (as BuildSunExclusion
+		// counts a faded record a caster). A fading non-member blocks its entry: its fade advances only in the culls the exclusion would
+		// skip. A hidden part of an actor blocks it too: the behaviour graph shows and hides an actor's parts during Main::Draw (a
+		// shield's BShkVisibilityController, every 150-360 ms), and a shown part with no record would cast into no shadow until the next
+		// candidates (seen in interiors, w71/w80: a soldier's shield symbol). Until hidden objects keep their records (T6b4's rest).
 		switch (a_tracked.candidateReason) {
 		case Ineligible::NotLightingShader:  // no class but Lighting casts into the cascades (measured)
-		case Ineligible::Hidden:             // the cull skips app-culled nodes
 		case Ineligible::AlphaBlend:         // the caster rule: no pass for an alpha-blended property
-		case Ineligible::Fading:             // ... nor for a fade below one
 			return true;
+		case Ineligible::Hidden:  // the cull skips app-culled nodes: a static's hidden bit changes by its events alone
+		{
+			const auto leaf = a_tracked.geometry ? mirror.Leaf(a_tracked.geometry.get()) : SceneCapture::LeafView{};
+			return !(leaf.node && leaf.node->userData && leaf.node->formType == static_cast<std::uint8_t>(RE::FormType::ActorCharacter));
+		}
+		case Ineligible::Fading:
+			return false;
 		case Ineligible::Switch:  // an unselected child: the switch node culls only the selected one
 			return a_switchNodes;
 		default:
 			// A property no shadow view takes, whatever the frame (refraction, for one: a fire's embers, a stream's surface).
-			return a_tracked.geometry && CastsNoShadow(a_tracked.geometry->GetGeometryRuntimeData().shaderProperty.get(), a_tracked.geometry.get());
+			return a_tracked.geometry && CastsNoShadow(mirror.Leaf(a_tracked.geometry.get()));  // T6b1b: the mirror's
 		}
 	}
 
@@ -364,10 +376,10 @@ namespace DCLF
 		if (it == tracked.end() || !it->second.geometry)
 			return "not tracked";
 		const auto& entry = it->second;
-		const auto* property = entry.geometry->GetGeometryRuntimeData().shaderProperty.get();
+		const auto leaf = mirror.Leaf(entry.geometry.get());
+		const auto* rtti = leaf.property ? static_cast<const RE::NiRTTI*>(leaf.property->rtti) : nullptr;
 		return fmt::format("{}, {} (classified at frame {}), {} property, caster rule {}", entry.slot != kNoObjectSlot ? "record" : "no record",
-			kIneligibleNames[static_cast<std::size_t>(entry.candidateReason)], entry.candidateFrame, property && property->GetRTTI() ? property->GetRTTI()->name : "no",
-			ShadowRejectName(ShadowCasterReject(property, entry.geometry.get())));
+			kIneligibleNames[static_cast<std::size_t>(entry.candidateReason)], entry.candidateFrame, rtti ? rtti->name : "no", ShadowRejectName(ShadowCasterReject(leaf)));
 	}
 
 	std::string SceneStore::CoverageCensus() const
@@ -377,17 +389,19 @@ namespace DCLF
 			std::uint32_t count = 0;
 			std::string example;
 		};
-		auto techniqueOf = [](const RE::BSGeometry& a_geometry) -> std::string {
-			const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_geometry.GetGeometryRuntimeData().shaderProperty.get());
+		// The mirror's records (T6b1b).
+		auto techniqueOf = [&](const RE::BSGeometry& a_geometry) -> std::string {
+			const auto* lighting = SceneCapture::LeafView::Lighting(mirror.Leaf(&a_geometry).property);
 			if (!lighting)
 				return "not lighting";
-			const std::uint64_t flags = lighting->flags.underlying();
+			const std::uint64_t flags = lighting->flags;
 			return std::string(LightingTechniqueName((flags & 0x8004ull) ? 63u : SelectLightingTechnique(flags)));
 		};
 		auto describe = [&](const RE::BSGeometry& a_geometry, const Tracked& a_tracked) {
-			const auto* property = a_geometry.GetGeometryRuntimeData().shaderProperty.get();
-			return fmt::format("{} {} {}, shadow {}, {}", a_geometry.GetRTTI() ? a_geometry.GetRTTI()->name : "?", kIneligibleNames[static_cast<std::size_t>(a_tracked.candidateReason)], techniqueOf(a_geometry),
-				ShadowRejectName(ShadowCasterReject(property, &a_geometry)), a_tracked.slot != kNoObjectSlot ? "record" : "no record");
+			const auto leaf = mirror.Leaf(&a_geometry);
+			const auto* rtti = leaf.node ? static_cast<const RE::NiRTTI*>(leaf.node->rtti) : nullptr;
+			return fmt::format("{} {} {}, shadow {}, {}", rtti ? rtti->name : "?", kIneligibleNames[static_cast<std::size_t>(a_tracked.candidateReason)], techniqueOf(a_geometry),
+				ShadowRejectName(ShadowCasterReject(leaf)), a_tracked.slot != kNoObjectSlot ? "record" : "no record");
 		};
 		auto exampleOf = [](const RE::BSGeometry& a_geometry, const RE::NiAVObject* a_entry) {
 			return fmt::format("'{}' under '{}'", a_geometry.name.c_str() ? a_geometry.name.c_str() : "", a_entry && a_entry->name.c_str() ? a_entry->name.c_str() : "");
@@ -463,19 +477,19 @@ namespace DCLF
 		return text;
 	}
 
-	bool SceneStore::PrimaryEntryAllows(const Tracked& a_tracked, const RE::BSGeometry& a_geometry)
+	bool SceneStore::PrimaryEntryAllows(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const
 	{
 		if (a_tracked.slot == kNoObjectSlot || a_tracked.candidateFrame == 0 || a_tracked.candidateReason != Ineligible::None)
 			return false;
-		const auto* property = a_geometry.GetGeometryRuntimeData().shaderProperty.get();
-		if (!property)
+		// The mirror's records (T6b1b).
+		const auto leaf = mirror.Leaf(&a_geometry);
+		if (!leaf.property)
 			return false;
 		// A decal is a member like any other (its group from the settled state); the blended decal group is DCLF's too.
-		const bool decal = (property->flags.underlying() & 0xc000000ull) != 0;
+		const bool decal = (leaf.property->flags & 0xc000000ull) != 0;
 		if (decal && !ActiveToggles().decals)
 			return false;
-		const auto* alpha = a_geometry.GetGeometryRuntimeData().alphaProperty.get();
-		return decal || !(alpha && (alpha->alphaFlags & 1));
+		return decal || !leaf.AlphaBlending();
 	}
 
 	void SceneStore::UpdateSunCandidates(bool a_full)

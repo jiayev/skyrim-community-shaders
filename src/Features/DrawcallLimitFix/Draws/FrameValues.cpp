@@ -1,5 +1,7 @@
 #include "FrameValues.h"
 
+#include "Features/DrawcallLimitFix/Common/EngineReleases.h"
+
 #include "Features/DrawcallLimitFix/Common/KeptState.h"
 #include "Features/DrawcallLimitFix/Engine/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Scene/LightingConstants.h"
@@ -306,8 +308,21 @@ namespace DCLF
 			for (const auto& item : (*it)->written)
 				list(item, true);
 		// Last: a slot listed above is a newer item's.
-		const auto carried = std::move(settling);
+		// The items carried from the last producer (their references copies: the plan they came from may be gone, and these the last
+		// ones): handed to the render thread when done with (EngineReleases, at Present), never dropped here.
+		auto carried = std::move(settling);
 		settling.clear();
+		struct HandOver
+		{
+			std::vector<Plan::Item>& items;
+			~HandOver()
+			{
+				for (auto& item : items) {
+					EngineReleases::Push(RE::NiPointer<RE::NiRefObject>(std::move(item.geometry)));
+					EngineReleases::Push(RE::NiPointer<RE::NiRefObject>(std::move(item.sunEntryNode)));
+				}
+			}
+		} handOver{ carried };
 		for (const auto& item : carried)
 			list(item, true);
 		auto& executor = SceneScheduler::Executor();

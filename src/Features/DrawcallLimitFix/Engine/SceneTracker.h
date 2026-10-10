@@ -42,6 +42,10 @@ namespace DCLF
 			// are planned again (their subtrees changed: SceneStore::sunEntriesForced).
 			std::vector<const void*> ancestors;
 			SceneCapture::Update update;
+			// T6b1b: an update's own references (a leaf update's new properties: what the scene work holds its geometry's by), taken on
+			// the writer's thread. The event's, not the update's: the mirror keeps copies of updates, whose last release would be the
+			// scene work's. Released with the batch, on the render thread.
+			std::vector<RE::NiPointer<RE::NiRefObject>> pins;
 		};
 
 		static SceneTracker& Get();
@@ -64,7 +68,7 @@ namespace DCLF
 		void PushDetached(RE::NiAVObject* a_child);
 		/** @brief A hook's values (after its write, on the writer's thread): one stack with the attaches and detaches, so an address a
 		 * detach let go and an attach took again is never given an earlier object's values. */
-		void PushUpdate(SceneCapture::Update&& a_update);
+		void PushUpdate(SceneCapture::Update&& a_update, std::vector<RE::NiPointer<RE::NiRefObject>>&& a_pins = {});
 
 		static void CollectGeometry(RE::NiAVObject* a_root, std::vector<RE::BSGeometry*>& a_out, std::vector<const void*>* a_nodes = nullptr);
 

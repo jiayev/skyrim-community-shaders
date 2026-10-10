@@ -213,12 +213,11 @@ namespace DCLF
 	{
 		const bool tree = a_slot < tables.objects.size() && (tables.objects[a_slot].flags & kObjectTreeAnim);
 		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
-		const auto* property = tree && geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
 		// The tree node from the mirror (its property's fade node, a BSTreeNode); its values are the seed's, which the render thread takes
 		// at the frame's start (T6b1a: the scene work reads no engine memory, and runs no engine code).
 		TreeStatic row;
 		const void* node = nullptr;
-		if (const auto* record = property ? mirror.Property(property) : nullptr; record && record->fadeNode)
+		if (const auto* record = tree && geometry ? mirror.Leaf(geometry).property : nullptr; record && record->fadeNode)
 			if (const auto* fade = mirror.Node(record->fadeNode); fade && (fade->kind & SceneCapture::kKindTree))
 				node = record->fadeNode;
 		if (tables.objectTree.size() <= a_slot) {
@@ -274,8 +273,9 @@ namespace DCLF
 		if (denseWalk)
 			return;
 		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
-		const auto* property = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
-		const RE::NiAVObject* node = property ? property->fadeNode : nullptr;
+		// Its property's fade node (T6b1b: the mirror's).
+		const auto* property = geometry ? mirror.Leaf(geometry).property : nullptr;
+		const auto* node = property ? static_cast<const RE::NiAVObject*>(property->fadeNode) : nullptr;
 		if (tables.objectFadeRoot.size() <= a_slot) {
 			tables.NoteFadeRootsWrite();
 			tables.objectFadeRoot.resize(std::size_t(a_slot) + 1, kNoFadeRoot);
@@ -512,14 +512,14 @@ namespace DCLF
 				continue;
 			// A root the engine updates that has started to fade: its pass is not compared. A stood-in root's node is not its
 			// state (FadeOnGpu), and its members' passes are the settled state's.
-			if (const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
-				property && property->fadeNode && !FadeOnGpu(property->fadeNode) && property->fadeNode->GetRuntimeData().currentFade < 1.0f) {
+			if (const auto leaf = mirror.Leaf(geometry);
+				leaf.fadeNode && !FadeOnGpu(static_cast<const RE::NiAVObject*>(leaf.property->fadeNode)) && leaf.fadeNode->currentFade < 1.0f) {
 				++residentStats.parityPending;
 				continue;
 			}
 			++residentStats.parityChecked;
 			AccumulatedPass fresh;
-			const bool built = PrimaryCull::FreshSyntheticPass(*geometry, fresh);
+			const bool built = PrimaryCull::FreshSyntheticPass(*geometry, mirror.Leaf(geometry), fresh);
 			const bool passSame = built && fresh.technique == patch.pass.technique && fresh.subPass == patch.pass.subPass && fresh.hint == patch.pass.hint &&
 			                      fresh.lodRow == patch.pass.lodRow && fresh.sunTest == patch.pass.sunTest;
 			const auto& object = tables.objects[slot];

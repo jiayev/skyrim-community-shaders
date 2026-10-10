@@ -142,6 +142,7 @@ namespace DCLF::SceneCapture
 
 		struct Partition
 		{
+			const void* rendererData = nullptr;  // T6b1b: its buffData (a geometry slot's key)
 			ID3D11Buffer* vertexBuffer = nullptr;
 			ID3D11Buffer* indexBuffer = nullptr;
 			std::uint64_t vertexDesc = 0;
@@ -167,6 +168,7 @@ namespace DCLF::SceneCapture
 		const void* property = nullptr;
 		const void* alpha = nullptr;
 		const void* layerProperty = nullptr;
+		const void* altIndexList = nullptr;  // T6b1b: the second index list itself (its first qword the buffer: the layer's slot key)
 		ID3D11Buffer* altIndexBuffer = nullptr;
 		std::uint32_t altPrimCount = 0;
 		// kExtra: the extra data's value (an NiIntegerExtraData's), kNoExtra none, kWrongExtra another type.
@@ -183,6 +185,8 @@ namespace DCLF::SceneCapture
 
 		std::uint32_t Differ(const GeometryRecord& a_other) const;
 		void Assign(const GeometryRecord& a_from, std::uint32_t a_fields);
+		/** @brief The layer the engine draws (LayerPropertyOf's): the additional property, with an alt index buffer and its count. */
+		const void* Layer() const { return altIndexBuffer && altPrimCount ? layerProperty : nullptr; }
 	};
 
 	struct PropertyRecord
@@ -270,10 +274,47 @@ namespace DCLF::SceneCapture
 		std::uint64_t sequence = 0;
 		// T6b1c: an attach's capture (CaptureAttached) holds every node and geometry it recorded, ancestors included, taken on the
 		// capturing thread while the engine's attach holds them: the scene work makes its references from these (SceneStore::Pinned),
-		// never from a key. Released with the batch, on the render thread (ReleaseHandedBack). A probe's or a leaf update's holds none.
+		// never from a key. Released with the batch, on the render thread (ReleaseHandedBack). A probe's or a leaf update's holds none
+		// (a leaf update's event holds its own: SceneTracker::Event::pins). With the nodes, each geometry's properties (T6b1b).
 		bool pinning = false;
-		std::vector<RE::NiPointer<RE::NiAVObject>> pins;
+		std::vector<RE::NiPointer<RE::NiRefObject>> pins;
 		bool Empty() const { return nodes.empty(); }
+	};
+
+	/**
+	 * @brief T6b1b: a geometry's records as the classification and the record's writer read them: the mirror's on the scene work
+	 * (SceneMirror::Leaf), a live capture's on the render thread (LiveLeaf). Null where the geometry names none (or the mirror holds none).
+	 */
+	struct LeafView
+	{
+		const NodeRecord* node = nullptr;          // the geometry's node half
+		const NodeRecord* parent = nullptr;        // its parent's
+		const GeometryRecord* geometry = nullptr;
+		const PropertyRecord* property = nullptr;  // its shader property's
+		const PropertyRecord* layer = nullptr;     // the layer the engine draws (GeometryRecord::Layer)
+		const AlphaRecord* alpha = nullptr;
+		const NodeRecord* fadeNode = nullptr;      // its shader property's fade node's
+		const NodeRecord* layerFadeNode = nullptr; // its layer's fade node's
+		explicit operator bool() const { return node && geometry; }
+		/** @brief a_property's fade node's record (a_property the leaf's property or layer). */
+		const NodeRecord* FadeNodeOf(const PropertyRecord* a_property) const { return a_property == property ? fadeNode : a_property == layer ? layerFadeNode : nullptr; }
+		std::uint8_t Type() const { return geometry ? geometry->type : 0; }
+		bool Skinned() const { return geometry && geometry->skin; }
+		// NiAlphaProperty::GetAlphaBlending, GetAlphaTesting.
+		bool AlphaBlending() const { return alpha && (alpha->flags & 1u); }
+		bool AlphaTesting() const { return alpha && (alpha->flags & (1u << 9)); }
+		/** @brief a_property when it is a BSLightingShaderProperty's (netimmerse_cast's answer), else null. */
+		static const PropertyRecord* Lighting(const PropertyRecord* a_property) { return a_property && a_property->lighting ? a_property : nullptr; }
+	};
+
+	/** @brief A geometry's records captured live and held, with their view: for a reader on the render thread. */
+	struct LiveLeaf
+	{
+		explicit LiveLeaf(const RE::BSGeometry& a_geometry);
+		LiveLeaf(const LiveLeaf&) = delete;
+		LiveLeaf& operator=(const LiveLeaf&) = delete;
+		Records records;
+		LeafView view;
 	};
 
 	/**
@@ -291,6 +332,8 @@ namespace DCLF::SceneCapture
 		std::shared_ptr<const Records> leaf;
 		// NextSequence after the write (SceneTracker::PushUpdate takes it): an update numbered before a capture's start is in it.
 		std::uint64_t sequence = 0;
+		// T6b1b: a patched hidden store's (the hidden event rides in its mirror update, one queue: HiddenStoreSiteAt's index), else ~0u.
+		std::uint32_t hiddenSite = ~0u;
 	};
 
 	/**
@@ -307,8 +350,8 @@ namespace DCLF::SceneCapture
 	GeometryRecord CaptureGeometry(const RE::BSGeometry& a_geometry);
 	PropertyRecord CaptureProperty(const RE::BSShaderProperty& a_property);
 	AlphaRecord CaptureAlpha(const RE::NiAlphaProperty& a_alpha);
-	/** @brief The geometry's records (its node, itself, its properties) into a_out. */
-	void CaptureLeaf(const RE::BSGeometry& a_geometry, Records& a_out);
+	/** @brief The geometry's records (its node, itself, its properties) into a_out, and with a_pins its properties held there. */
+	void CaptureLeaf(const RE::BSGeometry& a_geometry, Records& a_out, std::vector<RE::NiPointer<RE::NiRefObject>>* a_pins = nullptr);
 
 	/** @brief Whether a_object is reached from Main::WorldRootNode by its parent chain. */
 	bool InWorld(const RE::NiAVObject* a_object);
