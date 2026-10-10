@@ -1544,6 +1544,96 @@ resident-draw, set and fade parity; motion m28/m29).
     3.6k, 1k, 7k, 4.5k). Left for F3c (no hook): node flag bits 11/12/20, rigid body motion, renames, dismember, geometry property
     and alpha swaps (LOD blocks), the property's fade node; the geometry alpha the LOD segment events name (evented). Standard
     parities as y41/m71.
+  - *F3c, T6b1a: the records complete* (2026-10-09, w1-w11). An inventory of the lane's reads (T6b1's) found that it reads
+    nothing from the mirror yet, and that the mirror's fields cover about 80% of its read sites; the parity was 0 in every window
+    for what the records held (w1). Added, each with the parity's check:
+    - node: a fade node's BSX flags, the reference's emittance source, BeastRaceFace's race keyword (kExtra); the switch's
+      selected child (the children list skips null slots); a fade node's currentFade, LOD level and screen-door byte
+      (kFadeCurrent, kFadeLevel, kFadeDoor), carried by the fade watch's two detours, the LOD transition, the placement snap,
+      the cell's placement and DCLF's own fade write-back (`KickFadeWriteBack`, which told nobody);
+    - geometry: the AnisotropicAlphaMaterial extra data, a multi-index shape's projection parameters, a sub-index shape's drawn
+      ranges (`LodSegments::DrawnRanges`, carried by the three segment hooks);
+    - property: a Lighting property's alpha (GetRenderPasses' hook, which pushed only a key), the projected UV parameters (a new
+      detour on `FUN_1414abd10`, the visitor that sets kProjectedUV and then stores them), a landscape material's
+      landBlendParams (a new detour on `FUN_1402ad0e0`, the land's LOD blend after the cell's attach), the shadow pass list's
+      head;
+    - alpha property: its RTTI and controllers.
+    Found with `CS_DCLF_MIRROR_WATCH` (new modes: `parity:alpha|projected|land`, armed by a stale field; `projected:<name>`,
+    `land:<name>`, `current:<name>`, armed at the world attach): the projected UV and land blend writes come once, on the
+    attaching thread, right after the attach's capture; a watch armed a frame later sees freed memory reused.
+    Measured: motion (w10) 0 missed in every window; currentFade "evented" 5-91 in some windows (unnamed fade nodes 1 -> 0,
+    named by an event without the value: open); interiors (w11) 0 but the first window (72: the sky's clouds' currentFade,
+    written by the sky at its start; not DCLF's objects). Left for T6b1a: the reads that are the frame's (fade roots' and
+    trees' statics, the settle check's transforms, decal nodes: FrameValues' sampling) and GetRenderPasses' LOD fades.
+  - *F3c, T6b1a, the frame's values* (2026-10-09, w12-w26). What the scene work read that holds still nowhere:
+    - **The settle check** (EvaluateRound's `world` against `previousWorld`, which wrote a static again until its first update) is
+      FrameValues': a written slot whose transforms differ is sampled again by the next producers until they agree
+      (`FrameValues::Impl::settling`; a newer item for the slot takes its place).
+    - **The LOD fades the join copied** into the descriptors were read by nothing: deleted (the draw's fades are the GPU's).
+    - **Fade roots' seeds.** A root's row is the coordinator's half (object, generation, fadeAmount, the owned, stood-in and tree
+      LOD bits, and from the mirror the range, +0x109 and the state as far as it holds it) and the seed's (`FadeState::StaticOf`,
+      taken by the render thread at `FrameValues::Kick`, the frame's start, before its culls update the node: the state FadeStateCS's
+      first update of the generation steps from). FrameValues uploads the seeds (two rows a slot: `kFadeRootSeedOdd`, toggled by
+      every listing, reseed and ownership, so a new seed never writes the row the installed generation reads); the latch carries
+      their descriptor (`fadeSeedsIndex`). FadeStateCS merges the seed of the row's generation (`MergeSeed`, Records.h
+      `MergeFadeSeed`), and skips a root whose seed is not there yet; the builds seed a state from it until FadeStateCS's first
+      update. A seed sampled by the producer, during the frame, was a step ahead of the engine (its cull had updated the node).
+    - **Trees' seeds** likewise (`TreeStaticOfNode` at Kick, the engine's `FUN_14147d640` on the render thread; `seedOdd`; the wind
+      frame row carries the descriptor; TreeWindCS merges and skips). A member's wind until its tree's entry is the shading row's
+      (`BindlessShading::treeParams`, `windTimers`: `DeriveTreeAnim` under FrameValues' lease, with the frame's globals bound), no
+      longer the record's from the join; the vertex stage maps t121 (the shading rows) for it, and the shadow frame records bind it.
+    - **The mirror's fadeAmount** (Actor::SetAlpha's update): `RefreshFadeAmount` reads it.
+    - **What the mirror lacked**: a geometry the category walk tracks with no record (the references the engine moves into
+      multibounds came by no attach a hook captured, or after the frame start's capture) is captured by the render thread at the
+      next frame's start from its highest ancestor the mirror lacks (`CaptureMirrorRequests`): a frame's lag, which the seeds bridge.
+    Measured (w25, w26: motion and the interiors, every parity): fade state 0 differ (23 and 30 windows), tree wind 0 differ (57),
+    mirror missed only the sky's clouds' currentFade (written by the placement snap at the start; not DCLF's objects; open), walk
+    parity 0, no new finding. Found on the way: the parity's merge aliased its input (`MergeFadeSeed(root, ..., root)`) and took the
+    seed's fadeAmount; the shading parity compared the tree fields, which are the row's as named (not kept current).
+    Left for T6b1a: decal nodes (`BGSDecalNode`'s decals, `Get3D`), the tree LOD switch's selection (`RefreshFadeRootSwitch`: switch
+    events carry no value), the currentFade "evented" residue.
+  - *F3c, T6b1a, the rest* (2026-10-09, w27-w33). The mirror now holds everything the lane reads but the transforms and bounds:
+    - **Switches carry their value.** The index stores (`SwitchIndexStore`) and NiSwitchNode's child edits push the switch's fields
+      (`kSwitch`: index, flags, current, child) on any thread; the tracking's event stays render-thread only. `RefreshFadeRootSwitch`
+      reads the mirror.
+    - **Children by slot.** A node record's children are the engine's slots (a null slot null, no trailing null; a detach nulls its
+      slot): what OnVisible visits, so the decal order's keys (`VisitIndex`) can be the mirror's, and `children[switchIndex]` is the
+      switch's child.
+    - **Decal nodes** (`kKindDecalNode`, `decals`: each decal's `Get3D`, in the array's order). The array's writers are BGSDecalNode's
+      own (AE 1.6.1170): the append `FUN_1401fdfb0` (from `BSTempEffectGeometryDecal::Attach`, after its 3D's attach, and the simple
+      decals') and the erases `FUN_1401fdc80` (through `FUN_1401fe020`, the decal manager's), `FUN_1401fdcb0` (the geometry decal's
+      update), `FUN_1401fdd50` and `FUN_1401fde40` (erase and detach): detoured, each pushes the node's decals after the call.
+    - **The fade resets.** The "evented" currentFade residue was the parity's classing (a node a fade snap had named stayed named,
+      though `FadeSnap`'s update carries the values: no longer named) over real misses: inline stores of +0x130, 0 or 1.0, with flag
+      bit 14 cleared or set after them, outside every hooked function — the cells' placements (`FUN_1402bc1f0`, the grid
+      controller's; `FUN_1402bb690`, a job's: after `FUN_1402d5090`'s own push), the sky cell's (`FUN_1402b9da0`: the clouds) and
+      others. A scan of the image for the pattern (a store to +0x130 just before an `or`/`and` of bit 14 at +0xF4) found 11; all are
+      patched (`InstallFadeResetStores`, the switch stores' stubs with an immediate form), the two in `FUN_1402d1280` too. Found
+      with `CS_DCLF_MIRROR_WATCH=parity:current` (new: a node the parity finds stale) and `current:<name>` (armed at its capture).
+    Measured (w32, w33: motion and the interiors, every parity): mirror parity 0 missed and 0 evented in every window, fade state and
+    tree wind 0 differ, walk parity 0, the set clean, no new finding. Seen once in w28/w29, not since: a node's `body` (Havok's motion,
+    a book and a soul gem picked up) missed for one probe.
+  - *F4, T6b1b: the first reads ported* (2026-10-09, w34-w37). The lane's structural reads that yield keys read the mirror: the
+    category node (`FindCategoryNode`; the live chain is `FindCategoryNodeLive`, the parities' and diagnostics'), the switch events
+    (the switch's kind and index, the entries below it), the node events (the reference's form type, the root dependents above, the
+    entries below), the hidden chain, the move keys. Each is checked against the live read under `CS_DCLF_MIRROR_PARITY`
+    (`MirrorReads`, the "mirror reads" line: reads, checked, differing, and reads that found no record on the way).
+    - **A key is not a reference.** The mirror can name an object the engine has detached and freed since the batch (its detach
+      event is the next batch's). A read whose result the lane turns into a reference — the subtree walk's geometries (`AddGeometry`
+      takes each), the sun and light entries (`OwnRoot`) — stays live until the render thread takes the references at ingestion
+      (T6b1c): the mirror subtree walk, tracking from it, crashed (w36: a geometry freed since, its last release on a FrameValues
+      worker, in Havok's teardown). Those three are checked against the mirror meanwhile (0 differ).
+    - **The category walk's subtrees the mirror lacks** (an attach no hook captured: the multibounds' references) are captured by the
+      render thread at the next frame's start and tracked after that batch (`pendingSubtrees`; once). The render thread's captures are
+      applied after the batch's own events (`mirrorLate`): taken after them, a detach among them must not undo them (w34: node
+      children missed when they were applied first). An attach event's root the mirror has no chain for was out of the world at its
+      attach, and is not tried again (its world attach brings an event).
+    - **ValidateSlice** (the persistent parity's missed-detach check) compares the live chain with entries now the mirror's: a
+      geometry detached since the batch differs until the next batch's detach erases it, so a geometry is dropped only when it still
+      differs a batch later.
+    Measured (w35, w37: motion, every parity): every ported read 0 differ but one window of w37, where a precipitation splash
+    (`PCloudSplash07`) the mirror holds under a category node had left it live with no detach event (the validation's two drops are
+    the same object: a detach no hook sees; open); the set, walk and mirror parities clean.
 
 **A persistent scene for every view; incremental only; two modes** (2026-10-08; motion m112-m153, bridge y-runs, equip and
 fight e-runs, toggle runs). With DCLF's shadow views on, objects flickered at cell changes because the set's phases were

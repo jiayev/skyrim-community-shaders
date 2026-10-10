@@ -1,5 +1,7 @@
 #include "Internal.h"
 
+#include "Features/DrawcallLimitFix/Engine/ImportTimings.h"
+
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Common/AsyncWorker.h"
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
@@ -153,7 +155,9 @@ namespace DCLF
 		setLackingNext.resize(objects, 0);
 		setApplyMark.resize(objects, 0);
 		setWaitCause.resize(objects, 0);
+		setWaitWhy.resize(objects, 0);
 		setCommitFrame = frame;
+		const bool timeline = TimelineEnabled();
 		// A slot whose phases or lacking phases this commit changed, for ApplySet, with the geometry it holds now (an earlier commit's
 		// entry not yet applied takes this one's geometry: the decision is now for it).
 		setGeometryNext.resize(objects, nullptr);
@@ -305,6 +309,8 @@ namespace DCLF
 				a_wait = true;
 				if (parityPass)
 					return;
+				if (!setWaitCause[a_slot])
+					setWaitWhy[a_slot] = static_cast<std::uint8_t>(a_why);
 				setWaitCause[a_slot] |= WaitCauseOf(a_why);
 				++setStats.waitingBy[a_why];
 				if (setStats.firstWaiting.empty())
@@ -368,6 +374,8 @@ namespace DCLF
 			markApply(a_slot);  // the record's kObjectMember and Tables::setPhases, at ApplySet
 			if (!before || !a_phases)
 				++(a_phases ? setStats.joined : setStats.left);
+			if (timeline && !before && a_phases)
+				NoteTimelineJoin(a_slot);
 			// The engine's copy is by geometry, a base's alone: a layer draws its base's geometry and is a member with it.
 			if (tables.IsLayer(a_slot))
 				return;
@@ -699,8 +707,12 @@ namespace DCLF
 				break;
 			}
 		if (chosen < publications.size()) {
-			for (std::size_t i = 0; i <= chosen; ++i)
+			for (std::size_t i = 0; i <= chosen; ++i) {
+				// T6b0: a commit's time to its installation, by the geometries it joined.
+				publicationStats.installDelay[AgeBucket(frame - publications[i]->commitFrame)] += publications[i]->joined.size();
 				installNotes.emplace_back(std::move(publications[i]->joined), std::move(publications[i]->left));
+			}
+			TracyPlot("CS.DCLF.InstallDelayFrames", static_cast<std::int64_t>(frame - publications[chosen]->commitFrame));
 			installed = publications[chosen];
 			publications.erase(publications.begin(), publications.begin() + static_cast<std::ptrdiff_t>(chosen) + 1);
 			installPending = true;
@@ -751,6 +763,7 @@ namespace DCLF
 		const auto captureStart = std::chrono::steady_clock::now();
 		frameGlobals = FrameGlobals::Capture();
 		SceneCapture::SetMainThread(::GetCurrentThreadId());
+		ImportTimings::NoteMainThread(::GetCurrentThreadId());
 		SceneCapture::SetFrame(frame);
 		captureNs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - captureStart).count());
 		++captureFrames;
@@ -763,6 +776,7 @@ namespace DCLF
 		// held for the join, and the references they let go of are released at Present.
 		inSceneTask = a_task;
 		holdPrimaryNotes = true;
+		const auto workStart = std::chrono::steady_clock::now();
 		// What no publication names any more, back on the free lists before anything allocates.
 		RecycleRetired();
 		ApplyEvents();
@@ -773,6 +787,8 @@ namespace DCLF
 		EndSceneFrame();
 		// The mirror's parity (step 6e F3), with the frame's events all drained.
 		CheckMirror();
+		[[maybe_unused]] const double workMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - workStart).count();
+		TracyPlot("CS.DCLF.SceneWorkMs", workMs);
 		holdPrimaryNotes = false;
 		inSceneTask = false;
 		sceneWorkPending = true;

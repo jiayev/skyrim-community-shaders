@@ -1385,6 +1385,26 @@ AE 1.6.1170. These are the choke points `SceneStore::InstallSceneEvents` detours
 -   **`BSFadeNode::currentFade`** is written in the cull by `BSFadeNode::OnVisible` (vtable slot `0x34`,
     `0x141479f50`): directly for one LOD mode, and through the fade update `FUN_14147a160` otherwise.
     `FUN_1402cff60` calls that update outside a cull.
+
+    Eleven more writes store it inline, outside any function DCLF hooks: 0 or 1.0, followed by clearing or setting
+    flag bit 14 (`0x4000` at `+0xF4`, a frame bit):
+    -   the cells' placements: `FUN_1402bc1f0` (from the grid controller, on the main thread) and `FUN_1402bb690`
+        (a job's), each after `FUN_1402d5090`;
+    -   the sky cell's: `FUN_1402b9da0` (the clouds);
+    -   two branches of `FUN_1402d1280` that skip the snap;
+    -   `Explosion::Load3D`, `FUN_1401ce010`, `FUN_14028b9d0`, `FUN_1402c8420`, `FUN_1407d4440` and `FUN_1407ee3e0`.
+
+    A scan of the image for that pattern finds exactly these eleven (2026-10-09; DCLF patches them,
+    `InstallFadeResetStores`).
+-   **`BGSDecalNode::decals`** (`+0x128`, `BSTArray<NiPointer<BSTempEffect>>`) has one append and four erases, all of
+    them BGSDecalNode's own:
+    -   append: `FUN_1401fdfb0`. `BSTempEffectGeometryDecal::Attach` calls it after attaching the decal's 3D to its node.
+    -   erases:
+        -   `FUN_1401fdc80`, through `FUN_1401fe020`, from the decal manager;
+        -   `FUN_1401fdcb0`, from `BSTempEffectGeometryDecal::Update`;
+        -   `FUN_1401fdd50` and `FUN_1401fde40`, which also detach the decal's 3D.
+
+    `BGSDecalNode::OnVisible` (`0x1401fdf10`) culls each decal's `Get3D` from last to first, and not the node's children.
 -   **`BSShaderProperty::SetFlags(flag, set)`** (`0x14147bee0`) sets or clears one bit of the 64-bit flags. It sets
     `lastRenderPassState = 0x7fffffff` when the bit changes, which makes `GetRenderPasses` rebuild the pass list.
     Community Shaders' own in-place flag writes are in `TruePBR`'s `LoadBinary`, before the property is attached.
@@ -1495,3 +1515,38 @@ when the terrain manager places it, so `previousWorld` is wrong for LOD and the 
 
 **Textures.** The LOD diffuse maps (`Textures\Terrain\<world>\<world>.<level>.<x>.<y>.DDS`) can be
 `DXGI_FORMAT_B8G8R8X8_UNORM`.
+
+## Where the engine imports the world: threads (2026-10-09)
+
+Ghidra, AE 1.6.1170; measured by DCLF's capture (`dclf-async-publication.md`: world attaches came from loader and job threads,
+never the main thread, in motion).
+
+-   **Loader threads** (`BSTaskManagerThread::Func2` 0x140dfe5f0, the IOManager's six): `QueuedReference` (and Actor,
+    Character, Tree) slot 24 `FUN_14018e180` runs `ref->Load3D(true)` (vfunc +0x350): the NIF, the model, a parentless
+    subtree.
+-   **The completion pump** `FUN_140e014e0(IOManager)` finishes queued tasks (vfunc +0x30) on a time budget: from `Job_IO`
+    (0x1406d3060, in the "Main render scene" job list: a job thread), or directly from `Main::Update` (0x140646467) in menu
+    mode; the loading screen drains through `FUN_140e01800`. `QueuedReference`'s finish (0x14018e770) -> `FUN_1401a0920`:
+    the 3D installed (`FUN_1402e5380`), the reference placed in its cell (`FUN_1402d1280` -> `AttachChild` into the
+    category node, `FUN_1402d21f0`), an actor added to the process lists.
+-   **`ShouldUseTaskQueue`** (0x1406d1ee0, ~130 sites): while other job threads run, shared-state work (attach into a live
+    parent, Havok add/remove: tasks 4, 0x32, 0x46) is queued to BSTaskPool and drained by `Main::Update` at its end
+    (`FUN_140654880` -> `BSTaskPool_HandleTask` 0x140656f30, a quiet point).
+-   **Main thread proper:** the grid controller `FUN_14019b0b0` (cell attach and detach, synchronous `Load3D` fallbacks,
+    the terrain update at grid changes), the BSTaskPool drain, the menu and load-screen pumps.
+-   **LOD:** `BGSQueued{Object,Terrain}{Upgrade,Downgrade,InitialLoad}::Func2` (object upgrade `0x140513320`, terrain
+    upgrade `0x140512c90`) run from the drain `FUN_140513840` at the end of the terrain manager update `FUN_14050e430`:
+    `Job_Partial_Terrain_Manager_Update` (0x1406d3880, "Main update cells": a job thread) or the grid controller (main).
+    An upgrade in one call attaches the new blocks (`FUN_1404fda90` / `FUN_140509550`), shows them (`FUN_140e310b0`) and
+    retires the old block (`FUN_140510a10` -> detach `FUN_1404fd970` and release `FUN_140501d00`; terrain
+    `FUN_140509770`/`FUN_14050d170`).
+-   **Measured** (DCLF's `CS_DCLF_TIMELINE`, Riverwood in motion): the main thread's share is the grid controller's 0.01-0.08
+    ms a frame; the I/O pump, the references' finishes, the LOD drains and the block retirements ran on job threads only.
+-   **`TESWaterReflections::Update`** (0x140520570) sets kHidden on the player's 3D and on every water object's node
+    (`TESWaterSystem` +0x20, count +0x30) before the cube map's faces and restores it after (0x14052068c / 0x140520a8c): a
+    hide scoped to the faces, every frame the faces update.
+-   **LOD shows:** `FUN_1405103e0` (store at 0x140510697) shows object LOD blocks and `FUN_140509b50` (0x140509b59) terrain
+    blocks, outside the attach.
+-   **Moving the rest off the main thread** meets Havok world edits, unsynchronised `ProcessLists`/`GarbageCollector`
+    inserts, the per-reference owner lock (`+0x88`) and the grid controller's ordering; the main thread mostly waits on
+    these jobs already.

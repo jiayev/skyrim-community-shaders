@@ -1,5 +1,9 @@
 #include "SceneMirror.h"
 
+#include <fmt/ranges.h>
+
+#include "Features/DrawcallLimitFix/Diagnostics/MirrorWatch.h"
+
 namespace DCLF
 {
 	namespace
@@ -117,10 +121,15 @@ namespace DCLF
 	void SceneMirror::Detach(const void* a_root, std::span<RE::BSGeometry* const> a_geometries, std::span<const void* const> a_nodes)
 	{
 		++detached;
-		// The root leaves its parent's children (the engine's detach, which the hook ran before).
+		// The root leaves its parent's children (the engine's detach, which the hook ran before): its slot null, the trailing nulls
+		// trimmed (the capture's).
 		if (const auto root = nodes.find(a_root); root != nodes.end())
-			if (const auto parent = nodes.find(root->second.parent); parent != nodes.end())
-				std::erase(parent->second.children, a_root);
+			if (const auto parent = nodes.find(root->second.parent); parent != nodes.end()) {
+				auto& children = parent->second.children;
+				std::replace(children.begin(), children.end(), a_root, static_cast<const void*>(nullptr));
+				while (!children.empty() && !children.back())
+					children.pop_back();
+			}
 		for (const auto* geometry : a_geometries) {
 			if (const auto it = geometries.find(geometry); it != geometries.end()) {
 				Use(it->second.property, it->second.layerProperty, it->second.alpha, -1);
@@ -228,7 +237,7 @@ namespace DCLF
 			Apply(*a_update.leaf);
 			--applied;
 		}
-		for (std::uint32_t f = 0; f < 16; ++f)
+		for (std::uint32_t f = 0; f < kMaxFields; ++f)
 			updated[type][f] += (a_update.fields >> f) & 1u;
 		return { type, key };
 	}
@@ -278,7 +287,7 @@ namespace DCLF
 			const auto fields = a_eventFields.find(pendingKey);
 			const bool late = a_eventKeys.contains(key) || (fields != a_eventFields.end() && (fields->second & p.fields) == p.fields);
 			auto& into = late ? t.late[p.type] : t.missed[p.type];
-			for (std::uint32_t f = 0; f < 16; ++f)
+			for (std::uint32_t f = 0; f < kMaxFields; ++f)
 				if (p.fields & (1u << f)) {
 					++into[f];
 					if (!late && t.firstMissedBy[p.type][f].empty()) {
@@ -296,7 +305,7 @@ namespace DCLF
 			if (!late)
 				for (std::uint32_t b = 0; b < 32; ++b)
 					t.flagBitsMissed[b] += (p.flagBits >> b) & 1u;
-			if (!late && p.type == 2 && (p.fields & PropertyRecord::kFlags))
+			if (!late && p.type == 2 && (p.fields & MirrorWatch::PropertyFields()))
 				missedProperty = key;
 			if (!late && p.type == 3)
 				missedAlpha = key;
@@ -328,6 +337,10 @@ namespace DCLF
 						a_mirror->updatedFrame, a_live.capturedFrame);
 				if (differ & NodeRecord::kFlags)
 					what += fmt::format(" (flags {:#x} -> {:#x})", a_mirror->flags, a_live.flags);
+				if (differ & (NodeRecord::kFadeCurrent | NodeRecord::kFadeLevel | NodeRecord::kFadeDoor))
+					what += fmt::format(" (current fade {} -> {}, LOD level {} -> {}, screen door {} -> {}; captured frame {} thread {}, updated frame {}, probed frame {})",
+						a_mirror->currentFade, a_live.currentFade, a_mirror->fadeLevel, a_live.fadeLevel, a_mirror->fadeDoor, a_live.fadeDoor, a_mirror->capturedFrame,
+						a_mirror->thread, a_mirror->updatedFrame, a_live.capturedFrame);
 				if (differ & NodeRecord::kBody) {
 					// Diagnostic (the parity's, F3): the live chain NonFixedBody reads, from the probe's key (alive: the probe just read it).
 					const auto* node = static_cast<const RE::NiAVObject*>(a_live.key);
@@ -351,11 +364,18 @@ namespace DCLF
 						a_mirror->flags, a_live.flags, a_mirror->flags ^ a_live.flags, a_mirror->capturedFrame, a_mirror->thread, a_mirror->sequence,
 						a_mirror->writer == 1 ? "a capture" : a_mirror->writer == 2 ? "an update" : "?", a_mirror->writtenFrame, SceneCapture::Frame(),
 						SceneCapture::NextSequence());
+				if (differ & (PropertyRecord::kAlphaValue | PropertyRecord::kProjected | PropertyRecord::kLandBlend))
+					what += fmt::format(" (alpha {} -> {}, projected [{}] -> [{}], land blend [{}] -> [{}]; captured frame {} thread {}, last written by {} at frame {}; now frame {})",
+						a_mirror->alpha, a_live.alpha, fmt::join(a_mirror->projected, " "), fmt::join(a_live.projected, " "), fmt::join(a_mirror->landBlend, " "),
+						fmt::join(a_live.landBlend, " "), a_mirror->capturedFrame, a_mirror->thread, a_mirror->writer == 1 ? "a capture" : a_mirror->writer == 2 ? "an update" : "?",
+						a_mirror->writtenFrame, SceneCapture::Frame());
 			}
+			if (a_type == 0 && (differ & NodeRecord::kFadeCurrent) && MirrorWatch::CurrentFromParity())
+				missedNode = a_live.key;
 			if (named.contains(a_live.key)) {
 				for (std::uint32_t b = 0; b < 32; ++b)
 					t.flagBitsEvented[b] += (a_flagBits >> b) & 1u;
-				for (std::uint32_t f = 0; f < 16; ++f)
+				for (std::uint32_t f = 0; f < kMaxFields; ++f)
 					if (differ & (1u << f))
 						++t.evented[a_type][f];
 				if (t.firstEvented.empty())
@@ -398,7 +418,7 @@ namespace DCLF
 		auto line = [&](const char* a_label, const auto& a_counts) {
 				std::string out;
 				for (std::size_t type = 0; type < kTypes; ++type) {
-					for (std::uint32_t f = 0; f < 16; ++f) {
+					for (std::uint32_t f = 0; f < kMaxFields; ++f) {
 						if (!a_counts[type][f])
 							continue;
 						const char* name = type == 0 ? (f < NodeRecord::kFieldCount ? NodeRecord::kFieldNames[f] : "?") :
@@ -428,7 +448,7 @@ namespace DCLF
 			if (!bits.empty())
 				text += fmt::format("[DCLF] mirror parity, node flag bits that differed (missed/evented): {}\n", bits);
 			for (std::size_t type = 0; type < kTypes; ++type)
-				for (std::uint32_t f = 0; f < 16; ++f)
+				for (std::uint32_t f = 0; f < kMaxFields; ++f)
 					if (!t.firstMissedBy[type][f].empty())
 						text += fmt::format("[DCLF] mirror parity, first missed {} field {}: {}\n", kTypeNames[type], f, t.firstMissedBy[type][f]);
 			t = {};

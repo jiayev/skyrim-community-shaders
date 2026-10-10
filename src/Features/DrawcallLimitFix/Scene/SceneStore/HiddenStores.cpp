@@ -494,16 +494,23 @@ namespace DCLF::Scene
 			return sites;
 		}
 
-		void PushHidden(const void* a_object)
+		// Per patched store: the bit cleared ([0]) and set ([1]), since the last report (T6b0's unhide attribution).
+		std::unique_ptr<std::array<std::atomic<std::uint64_t>, 2>[]> siteCounts;
+
+		void PushHidden(const void* a_object, std::uint32_t a_site)
 		{
-			hiddenEvents.Push(a_object);
+			// The stub calls after the store: bit 0 is the value it left (a racing writer's at worst, which pushes its own event).
+			const bool hidden = (*reinterpret_cast<const volatile std::uint32_t*>(static_cast<const std::byte*>(a_object) + 0xF4) & 1u) != 0;
+			if (siteCounts)
+				siteCounts[a_site][hidden ? 1 : 0].fetch_add(1, std::memory_order_relaxed);
+			hiddenEvents.Push(HiddenEvent{ a_object, a_site, hidden });
 			// The store just made (the stubs call after it): the hidden bit's value for the mirror (step 6e F3b).
 			PushNodeUpdate(static_cast<const RE::NiAVObject*>(a_object), SceneCapture::NodeRecord::kHidden);
 		}
 
 		/**
 		 * @brief The stubs the patched stores call. Each reads the dword before, runs the original instruction, and
-		 * compares bit 0: when it changed, the object's address goes to hiddenEvents through a common body that saves
+		 * compares bit 0: when it changed, the object's address and the site's index go to hiddenEvents through a common body that saves
 		 * every volatile register and xmm0-5 on an aligned stack. The flags are then restored as they were before the
 		 * store and an `or` or `and` runs once more, which leaves the value as it is (both are idempotent) and gives the
 		 * code after it the flags it expects; a `mov` sets none, and is not run again, so a concurrent writer's value is
@@ -512,7 +519,7 @@ namespace DCLF::Scene
 		struct HiddenStoreStubs : Xbyak::CodeGenerator
 		{
 			HiddenStoreStubs(const std::vector<HiddenStoreSite>& a_sites, std::vector<std::size_t>& a_entries) :
-				Xbyak::CodeGenerator(a_sites.size() * 96 + 256)
+				Xbyak::CodeGenerator(a_sites.size() * 112 + 256)
 			{
 				using namespace Xbyak::util;
 				Xbyak::Label common;
@@ -545,9 +552,12 @@ namespace DCLF::Scene
 					ret();
 					L(changed);
 					push(rcx);
+					push(rdx);
 					if (site.base != Operand::RCX)
 						mov(rcx, base);
+					mov(edx, static_cast<std::uint32_t>(a_entries.size() - 1));
 					call(common);
+					pop(rdx);
 					pop(rcx);
 					jmp(back, T_NEAR);
 				}
@@ -587,6 +597,36 @@ namespace DCLF::Scene
 		std::vector<std::size_t> stubEntries;
 	}
 
+	std::uintptr_t HiddenStoreSiteAt(std::uint32_t a_index)
+	{
+		return a_index < HiddenStoreSites().size() ? 0x140000000 + HiddenStoreSites()[a_index].offset : 0;
+	}
+
+	std::string TakeHiddenSiteReport()
+	{
+		if (!siteCounts)
+			return {};
+		struct Row
+		{
+			std::uint32_t site;
+			std::uint64_t shown, hidden;
+		};
+		std::vector<Row> rows;
+		std::uint64_t shown = 0, hidden = 0;
+		for (std::uint32_t i = 0; i < HiddenStoreSites().size(); ++i) {
+			const Row row{ i, siteCounts[i][0].exchange(0, std::memory_order_relaxed), siteCounts[i][1].exchange(0, std::memory_order_relaxed) };
+			shown += row.shown;
+			hidden += row.hidden;
+			if (row.shown || row.hidden)
+				rows.push_back(row);
+		}
+		std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.shown != b.shown ? a.shown > b.shown : a.hidden > b.hidden; });
+		std::string text = fmt::format("{} shown, {} hidden by {} stores", shown, hidden, rows.size());
+		for (std::size_t i = 0; i < rows.size() && i < 12; ++i)
+			text += fmt::format("{}{:#x} {}/{}", i ? ", " : ": ", HiddenStoreSiteAt(rows[i].site), rows[i].shown, rows[i].hidden);
+		return text;
+	}
+
 	std::uintptr_t HiddenStoreSiteOf(std::uintptr_t a_address)
 	{
 		if (!stubCode || a_address < stubCode || stubEntries.empty())
@@ -610,6 +650,7 @@ namespace DCLF::Scene
 			}
 		}
 		std::vector<std::size_t> entries;
+		siteCounts = std::make_unique<std::array<std::atomic<std::uint64_t>, 2>[]>(sites.size());
 		HiddenStoreStubs stubs(sites, entries);
 		// Its own block, just past the module's image: the shared trampoline is too small for these, and every site's
 		// `call rel32` must reach it.
@@ -659,13 +700,26 @@ namespace DCLF
 
 	void SceneStore::ListHiddenChain(RE::BSGeometry* a_geometry, Tracked& a_tracked)
 	{
-		UnlistHiddenChain(a_geometry, a_tracked);
-		// ClassifyFrame's walk: the leaf up to its category node, both included.
-		for (const RE::NiAVObject* object = a_geometry; object; object = object->parent) {
+		// The scene graph above a tracked geometry does not change while it is tracked: listed once (a full walk lists anew).
+		if (!a_tracked.hiddenChain.empty())
+			return;
+		// ClassifyFrame's walk: the leaf up to its category node, the category node left out (thousands of entries share it: its
+		// events are taken by categoryNode, DrainHiddenEvents).
+		// The mirror's chain (T6b1b).
+		++mirrorReads.reads[static_cast<std::size_t>(MirrorRead::HiddenChain)];
+		for (const void* key = a_geometry; key && key != a_tracked.categoryNode; key = MirrorParent(key)) {
+			const auto* object = static_cast<const RE::NiAVObject*>(key);
 			a_tracked.hiddenChain.push_back(object);
 			hiddenDependents[object].push_back(a_geometry);
-			if (object == a_tracked.categoryNode)
-				break;
+		}
+		if (mirrorReadParity) {
+			std::size_t at = 0;
+			bool differ = false;
+			for (const RE::NiAVObject* object = a_geometry; object && object != a_tracked.categoryNode; object = object->parent, ++at)
+				differ |= at >= a_tracked.hiddenChain.size() || a_tracked.hiddenChain[at] != object;
+			differ |= at != a_tracked.hiddenChain.size();
+			NoteMirrorRead(MirrorRead::HiddenChain, differ, [&] { return fmt::format("'{}' {}: {} objects by the mirror, {} live", a_geometry->name.c_str() ? a_geometry->name.c_str() : "",
+				static_cast<const void*>(a_geometry), a_tracked.hiddenChain.size(), at); });
 		}
 	}
 
@@ -680,19 +734,48 @@ namespace DCLF
 	{
 		// A node's key only: an entry listing it is announced, and the address is never read.
 		auto& primary = PrimaryCull::Get();
-		stats.hiddenEvents += hiddenEvents.Drain([&](const void* a_key) {
+		const bool timeline = TimelineEnabled();
+		// T6b4: a static whose chain had an event is classified again (its hidden verdict, and a record or none with it); an actor's
+		// light-path entry takes its frame verdict again (ActorRecordKept). Once per entry, after the drain.
+		ankerl::unordered_dense::set<RE::BSGeometry*> retake;
+		ankerl::unordered_dense::set<const void*> categoryEvents;
+		auto announce = [&](RE::BSGeometry* a_geometry, Tracked& a_entry) {
+			a_entry.hiddenEventFrame = frame;
+			if (!(a_entry.lightTraits & kTraitActor))
+				retake.insert(a_geometry);
+		};
+		stats.hiddenEvents += hiddenEvents.Drain([&](HiddenEvent&& a_event) {
+			const void* a_key = a_event.key;
+			// T6b0: the node's last show, for the residue's stale hidden verdicts.
+			if (timeline && !a_event.hidden)
+				unhideKeys[a_key] = { frame, a_event.site };
 			// A cell's or a category node's: the kept scene lists are built again (held while the scene list job may run).
 			if (holdPrimaryNotes)
 				hiddenKeysHeld.push_back(a_key);
 			else
 				primary.NoteHiddenKey(a_key);
+			if (categoryNodes.contains(static_cast<RE::NiNode*>(const_cast<void*>(a_key))))
+				categoryEvents.insert(a_key);
 			const auto dependents = hiddenDependents.find(a_key);
 			if (dependents == hiddenDependents.end())
 				return;
 			for (auto* geometry : dependents->second)
 				if (const auto entry = tracked.find(geometry); entry != tracked.end())
-					entry->second.hiddenEventFrame = frame;
+					announce(entry->first, entry->second);
 		});
+		// A category node's: every entry under it (rare: a cell's nodes).
+		if (!categoryEvents.empty())
+			for (auto& [geometry, entry] : tracked)
+				if (categoryEvents.contains(entry.categoryNode))
+					announce(geometry, entry);
+		for (auto* geometry : retake)
+			if (const auto entry = tracked.find(geometry); entry != tracked.end()) {
+				entry->second.candidateFrame = 0;  // Reclassify, scheduled with the pending ones (DeltaWalk)
+				pendingEvaluation.push_back(geometry);
+			}
+		stats.hiddenRetaken += retake.size();
+		if (timeline && frame % 300 == 0)
+			std::erase_if(unhideKeys, [&](const auto& a_key) { return frame - a_key.second.first > 600; });
 		hiddenGating = hiddenEventsInstalled && frame > moveUngatedThrough;
 		hiddenWitness = hiddenGating && (SwitchEnabled(Switch::WalkParity) || SwitchEnabled(Switch::PersistentParity)) && ParityDue(frame);
 	}

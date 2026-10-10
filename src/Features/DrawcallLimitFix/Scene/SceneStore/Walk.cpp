@@ -1630,10 +1630,12 @@ namespace DCLF
 			// What the write changed (Tables::changeLog); a slot taken anew is new in everything. Its row is FrameValues' next frame.
 			if (written && entry.slot != kNoObjectSlot) {
 				WalkPlan().written.push_back(PlanItemOf(geometry, entry));
-				if (entry.slot == slotBefore)
+				if (entry.slot == slotBefore) {
 					tables.NoteWrite(entry.slot, columnsBefore);
-				else
+				} else {
 					tables.NoteChange(entry.slot, kChangeAll);
+					entry.writtenFrame = frame;  // T6b0
+				}
 			}
 			// What its sun entry's candidacy reads (SunEntryAllows), and what the entry's snapshot row holds of it (its object, whether the
 			// primary cut may give it a synthetic pass: PrimaryEntryAllows), any of which a write may change.
@@ -1657,10 +1659,8 @@ namespace DCLF
 				std::uint32_t traits = 0;
 				std::tie(entry.perFrame, entry.lightTraits) = PerFrameOf(entry, *geometry, entry.candidateReason, traits);
 				entry.moveKey = MoveKeyOf(*geometry, entry.categoryNode);
-				if (entry.lightTraits & kTraitActor)
-					ListHiddenChain(geometry, entry);
-				else if (!entry.hiddenChain.empty())
-					UnlistHiddenChain(geometry, entry);
+				// Every entry's chain (T6b4): a static's hidden bit is followed by events as an actor's is.
+				ListHiddenChain(geometry, entry);
 				entry.switchNode = nullptr;
 				entry.switchChild = nullptr;
 				if (entry.lightTraits & kTraitSwitch) {
@@ -1688,12 +1688,8 @@ namespace DCLF
 					StoreInputComponents(entry, *geometry);
 				}
 				ListFadeDependent(geometry, entry);
-				// A static's previous transform is its current one from its second update on; until then it is
-				// written again.
-				if (!entry.perFrame && !SameTransform(geometry->world, DrawnPreviousWorld(*geometry))) {
-					pendingEvaluation.push_back(geometry);
-					++delta.settling;
-				}
+				// A static's previous transform is its current one from its second update on: FrameValues samples its row again until
+				// then (T6b1a; the scene work reads no transform).
 			} else {
 				UnlistFadeDependent(geometry, entry);
 			}
@@ -1743,6 +1739,7 @@ namespace DCLF
 			buckets = {};
 			for (auto& [geometry, entry] : tracked) {
 				entry.perFrameListed = false;
+				entry.hiddenChain.clear();  // hiddenDependents cleared above: listed anew at classification
 				entry.bucket = Tracked::kNoBucket;
 				entry.fadeNode = nullptr;
 				entry.listedProperty = nullptr;

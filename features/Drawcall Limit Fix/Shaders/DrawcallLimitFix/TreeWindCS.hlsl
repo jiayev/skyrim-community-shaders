@@ -28,7 +28,7 @@ struct TreeWindFrameRow
 	uint TreeCount;    // tree slots
 	uint ObjectCount;  // members (unused)
 	uint Frame;
-	uint RowPadding;
+	uint TreeSeedsIndex;  // T6b1a: StructuredBuffer<TreeStatic>, FrameValues' tree seeds (two rows a slot)
 	float DeltaTime;
 	float CameraX;
 	float CameraY;
@@ -55,7 +55,8 @@ struct TreeStatic
 	float Amplitude;
 	uint Generation;
 	uint Animated;
-	uint2 Padding;
+	uint SeedOdd;  // T6b1a: which of the slot's two seed rows holds its generation's
+	uint Padding;
 };
 
 struct TreeClock
@@ -113,7 +114,22 @@ float Distance2(float3 a_position)
 		const uint slot = entry - 1;
 		StructuredBuffer<TreeStatic> trees = ResourceDescriptorHeap[TreesIndex];
 		RWStructuredBuffer<TreeClock> clocks = ResourceDescriptorHeap[ClocksIndex];
-		const TreeStatic tree = trees[slot];
+		TreeStatic tree = trees[slot];
+		// T6b1a: the node's values are its seed's (Records.h, MergeTreeSeed: keep the two the same); none of the listing's generation yet:
+		// no clock step and no entry this frame (a member draws with its shading row's until there is one).
+		{
+			if (W.TreeSeedsIndex == 0)
+				return;
+			StructuredBuffer<TreeStatic> seeds = ResourceDescriptorHeap[W.TreeSeedsIndex];
+			uint count, stride;
+			seeds.GetDimensions(count, stride);
+			const uint at = 2u * slot + (tree.SeedOdd & 1u);
+			if (at >= count || seeds[at].Generation != tree.Generation)
+				return;
+			const uint odd = tree.SeedOdd;
+			tree = seeds[at];
+			tree.SeedOdd = odd;
+		}
 		TreeClock clock = clocks[slot];
 		if (clock.Generation != tree.Generation) {
 			clock.Timer = tree.Timer;

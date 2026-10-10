@@ -41,6 +41,26 @@ namespace DCLF
 		return true;
 	}
 
+	std::string BindlessGeometryDifferences(const GeometryConstants& a_a, const GeometryConstants& a_b)
+	{
+		std::string out;
+		for (std::uint32_t stage = 0; stage < 2; ++stage) {
+			const auto& layout = stage ? LightingPSLayout() : LightingVSLayout();
+			const std::uint64_t read = (stage ? kPSGroups[kPerGeometry] & ~kPSBindlessGeometryUnread : kVSGroups[kPerGeometry] & ~kVSBindlessGeometryUnread);
+			const auto& a = stage ? a_a.ps : a_a.vs;
+			const auto& b = stage ? a_b.ps : a_b.vs;
+			for (std::uint32_t v = 0; v < layout.count; ++v)
+				if (((read >> v) & 1) && std::memcmp(&a.floats[layout.offset[v]], &b.floats[layout.offset[v]], layout.size[v] * sizeof(float)) != 0) {
+					std::string values;
+					for (std::uint32_t c = 0; c < std::min<std::uint32_t>(layout.size[v], 4); ++c)
+						values += fmt::format("{}{:#x}/{:#x}", c ? " " : "", std::bit_cast<std::uint32_t>(a.floats[layout.offset[v] + c]),
+							std::bit_cast<std::uint32_t>(b.floats[layout.offset[v] + c]));
+					out += fmt::format("{}{}{} [{}]", out.empty() ? "" : ", ", stage ? "PS" : "VS", v, values);
+				}
+		}
+		return out;
+	}
+
 	namespace
 	{
 		/** @brief Each frame lighting component: its float in a PerGeometry PS block and its index in FrameLighting. */
@@ -219,10 +239,9 @@ namespace DCLF
 		std::memcpy(&constants.ps.floats[psLayout.offset[kPSMaterialData]], shading.materialData, sizeof(shading.materialData));
 		std::memcpy(&constants.ps.floats[psLayout.offset[kPSEmitColor]], shading.emitColor, sizeof(shading.emitColor));
 		constants.ps.floats[psLayout.offset[kPSSSRParams] + 3] = shading.ssrSpecular;
-		if ((object.flags & kObjectTreeAnim) && a_objectIndex < a_tables.treeAnim.size()) {
-			const auto& tree = a_tables.treeAnim[a_objectIndex];
-			std::memcpy(&constants.vs.floats[vsLayout.offset[kVSTreeParams]], tree.treeParams, sizeof(tree.treeParams));
-			std::memcpy(&constants.vs.floats[vsLayout.offset[kVSWindTimers]], tree.windTimers, 2 * sizeof(float));
+		if (object.flags & kObjectTreeAnim) {
+			std::memcpy(&constants.vs.floats[vsLayout.offset[kVSTreeParams]], a_shading.treeParams, sizeof(a_shading.treeParams));
+			std::memcpy(&constants.vs.floats[vsLayout.offset[kVSWindTimers]], a_shading.windTimers, 2 * sizeof(float));
 		}
 		// The extras rows, as the draw completes them. ProjectedUVParams.y is never written by the engine, so it keeps whatever the
 		// template left - the unwritten sentinel.
@@ -309,10 +328,9 @@ namespace DCLF
 			static_cast<std::uint32_t>(std::size(shading.materialData)));
 		write(a_psOut, a_offsets.psEmitColor, a_offsets.psEmitColorSize, shading.emitColor,
 			static_cast<std::uint32_t>(std::size(shading.emitColor)));
-		if ((object.flags & kObjectTreeAnim) && a_objectIndex < a_tables.treeAnim.size()) {
-			const auto& tree = a_tables.treeAnim[a_objectIndex];
-			write(a_vsOut, a_offsets.vsTreeParams, a_offsets.vsTreeParamsSize, tree.treeParams, 4);
-			write(a_vsOut, a_offsets.vsWindTimers, a_offsets.vsWindTimersSize, tree.windTimers, 2);
+		if (object.flags & kObjectTreeAnim) {
+			write(a_vsOut, a_offsets.vsTreeParams, a_offsets.vsTreeParamsSize, a_shading.treeParams, 4);
+			write(a_vsOut, a_offsets.vsWindTimers, a_offsets.vsWindTimersSize, a_shading.windTimers, 2);
 		}
 		if (const float* rows = ExtraRowsOf(a_tables, a_objectIndex)) {
 			if (object.flags & kObjectLandBlend)
@@ -407,6 +425,14 @@ namespace DCLF
 		shading.emitColor[2] = emissive ? emissive->blue * mult : 0.0f;
 		shading.ssrSpecular = ((SceneStore::kMainPassRenderFlags & 2) ? 0.0f : 1.0f) * (specular ? a_property.specularLODFade : 0.0f);
 		a_out.padding[0] = a_out.padding[1] = 0u;
+		// The tree's wind, as SetupGeometry's case 0xc makes it now (T6b1a: was the accumulate phase's, from the node).
+		ObjectTreeAnim tree{};
+		if (a_property.flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kTreeAnim))
+			DeriveTreeAnim(a_property, tree);
+		std::memcpy(a_out.treeParams, tree.treeParams, sizeof(a_out.treeParams));
+		a_out.windTimers[0] = tree.windTimers[0];
+		a_out.windTimers[1] = tree.windTimers[1];
+		a_out.windTimers[2] = a_out.windTimers[3] = 0.0f;
 	}
 
 	std::uint32_t PackedPositionOf(const StageLayout& a_layout, std::span<const std::uint8_t> a_table, std::uint64_t a_variables, std::uint32_t a_firstVariable,

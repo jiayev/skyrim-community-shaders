@@ -823,7 +823,13 @@ namespace DCLF
 				++checked;
 				const bool nodeless = sample.tree == kNodelessTree;
 				// The tree's static row, while the node is still listed under the same slot.
-				const TreeStatic* row = !nodeless && sample.tree < tables.trees.size() && tables.treeNode[sample.tree] == sample.node ? &tables.trees[sample.tree] : nullptr;
+				// T6b1a: the row TreeWindCS takes, its seed's values (FrameValues' tree seeds) with the coordinator's generation.
+				TreeStatic merged;
+				const auto* treeSeeds = FrameValues::Get().TreeSeedsIfDone(true);
+				const TreeStatic* row = !nodeless && sample.tree < tables.trees.size() && tables.treeNode[sample.tree] == sample.node && treeSeeds &&
+				                                MergeTreeSeed(tables.trees[sample.tree], treeSeeds->data(), treeSeeds->size(), sample.tree, merged) ?
+				                            &merged :
+				                            nullptr;
 				const float leafFrequency = nodeless ? 1.0f : row ? row->leafFrequency : tree[3];
 				if (tree[0] != 0.0f || tree[1] != in.windMagnitude || tree[3] != leafFrequency) {
 					if (paramsDiffer++ == 0 && first.empty())
@@ -937,6 +943,9 @@ namespace DCLF
 				for (const auto& member : tables.treeObjects)
 					next.members.emplace_back(member.object, member.tree);
 				next.rows = tables.trees;
+				if (const auto* treeSeeds = FrameValues::Get().TreeSeedsIfDone(true))
+					for (std::size_t t = 0; t < next.rows.size(); ++t)
+						MergeTreeSeed(next.rows[t], treeSeeds->data(), treeSeeds->size(), static_cast<std::uint32_t>(t), next.rows[t]);
 				next.generations.reserve(tables.trees.size());
 				for (const auto& row : tables.trees)
 					next.generations.push_back(row.generation);
@@ -957,7 +966,7 @@ namespace DCLF
 						if (node && nearNodes.contains(node)) {
 							next.nearList[t] = 1;
 							++next.nearListed;
-							next.nearLargestModel = std::max(next.nearLargestModel, std::abs(tables.trees[t].modelAmplitude));
+							next.nearLargestModel = std::max(next.nearLargestModel, std::abs(next.rows[t].modelAmplitude));
 						}
 					}
 				}
@@ -1034,8 +1043,13 @@ namespace DCLF
 		++p.inputChecks;
 		ankerl::unordered_dense::map<const void*, std::pair<float, std::uint8_t>> seen;
 		seen.reserve(a_tables.fadeRoots.size());
+		// The rows FadeStateCS updates with (T6b1a): +0x109 is the seed's (the node's as the frame's values sampled it), fadeAmount the
+		// coordinator's. A root whose seed is not there yet is left out.
+		const auto* seeds = FrameValues::Get().FadeSeedsIfDone(true);
 		for (std::size_t r = 0; r < a_tables.fadeRoots.size() && r < a_tables.fadeRootNode.size(); ++r) {
-			const auto& row = a_tables.fadeRoots[r];
+			FadeRootStatic row;
+			if (!seeds || !MergeFadeSeed(a_tables.fadeRoots[r], seeds->data(), seeds->size(), static_cast<std::uint32_t>(r), row))
+				continue;
 			const auto* node = static_cast<const RE::NiAVObject*>(a_tables.fadeRootNode[r]);
 			if (!node || row.generation == 0)
 				continue;
@@ -1092,6 +1106,10 @@ namespace DCLF
 		readback.frame = a_frame;
 		readback.base = base;
 		readback.roots.assign(a_tables.fadeRoots.begin() + base, a_tables.fadeRoots.begin() + std::min(count, base + kFadeLogEntries));
+		// The rows FadeStateCS updates with (T6b1a): the seeds' node values with the coordinator's inputs (MergeFadeSeed).
+		if (const auto* seeds = FrameValues::Get().FadeSeedsIfDone(true))
+			for (std::size_t i = 0; i < readback.roots.size(); ++i)
+				MergeFadeSeed(readback.roots[i], seeds->data(), seeds->size(), static_cast<std::uint32_t>(base + i), readback.roots[i]);
 		readback.inputs = a_inputs;
 		readback.nodes.resize(readback.roots.size());
 		readback.engine.assign(readback.roots.size(), 0);

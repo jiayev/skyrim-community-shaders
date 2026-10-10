@@ -348,9 +348,26 @@ namespace DCLF
 		float amplitude = 1.0f;
 		std::uint32_t generation = 0;  // new for every listing: the clock row takes the values above again
 		std::uint32_t animated = 0;    // a model is attached (the manager advances only such a node)
-		std::uint32_t padding[2]{};
+		// T6b1a: which of the slot's two seed rows (FrameValues' tree seeds, 2 * slot + this) holds its generation's: the values above
+		// are the seed's, the node as the frame's start had it; the coordinator's row holds the generation and this.
+		std::uint32_t seedOdd = 0;
+		std::uint32_t padding = 0;
 	};
 	static_assert(sizeof(TreeStatic) == 48);
+	/**
+	 * @brief The row TreeWindCS takes a tree from: its seed (the node's values when listed) with the coordinator's generation. False while
+	 * no seed of the row's generation is there (TreeWindCS.hlsl: keep the two the same).
+	 */
+	inline bool MergeTreeSeed(const TreeStatic& a_row, const TreeStatic* a_seeds, std::size_t a_seedCount, std::uint32_t a_slot, TreeStatic& a_out)
+	{
+		const std::size_t at = 2ull * a_slot + (a_row.seedOdd & 1u);
+		if (!a_seeds || at >= a_seedCount || a_seeds[at].generation != a_row.generation)
+			return false;
+		TreeStatic merged = a_seeds[at];  // a_out may be a_row
+		merged.seedOdd = a_row.seedOdd;
+		a_out = merged;
+		return true;
+	}
 
 	struct TreeClock
 	{
@@ -482,6 +499,34 @@ namespace DCLF
 	// FadeStateCS runs the same update for its DCLF members (CS_DCLF_FADE_PARITY compares the two).
 	inline constexpr std::uint32_t kFadeRootStoodIn = 1u << 19;
 	inline constexpr std::uint32_t kNoFadeRoot = ~0u;
+	// T6b1a: which of the slot's two seed rows (FrameValues' fade seeds, 2 * slot + this bit) holds its generation's. Every listing
+	// and reseed toggles it, so a new seed never overwrites the row the installed tables' generation still reads.
+	inline constexpr std::uint32_t kFadeRootSeedOdd = 1u << 23;
+	// The bits the seed holds (the node's, as FrameValues samples it in the frame) and those the coordinator's row holds (its inputs).
+	inline constexpr std::uint32_t kFadeRootNodeBits = kFadeRootPlanMask | (0xFFu << kFadeRootBitsShift) | kFadeRootTreeThresholds | kFadeRootAlwaysDraw |
+	                                                   kFadeRootPreprocessed | kFadeRootPreprocessHidden;
+	inline constexpr std::uint32_t kFadeRootCoordinatorBits = kFadeRootTreeLod | kFadeRootOwned | kFadeRootStoodIn | kFadeRootSeedOdd;
+	/** @brief A root slot's seed row in FrameValues' fade seeds (kFadeRootSeedOdd). */
+	inline constexpr std::size_t FadeSeedRow(std::uint32_t a_slot, std::uint32_t a_bits) { return 2ull * a_slot + ((a_bits & kFadeRootSeedOdd) ? 1u : 0u); }
+	/**
+	 * @brief The row FadeStateCS updates with (and BuildDrawsCS seeds a state from): the seed's - the node's state, radius, range,
+	 * bits and LOD scale as FrameValues sampled them in the frame - with the coordinator's object, generation, fadeAmount and bits.
+	 * False while no seed of the row's generation is there (FadeStateCS.hlsl's MergeSeed: keep the two the same).
+	 */
+	inline bool MergeFadeSeed(const FadeRootStatic& a_root, const FadeRootStatic* a_seeds, std::size_t a_seedCount, std::uint32_t a_slot, FadeRootStatic& a_out)
+	{
+		const std::size_t at = FadeSeedRow(a_slot, a_root.bits);
+		if (!a_seeds || at >= a_seedCount || a_seeds[at].generation != a_root.generation)
+			return false;
+		// a_out may be a_root.
+		FadeRootStatic merged = a_seeds[at];
+		merged.object = a_root.object;
+		merged.generation = a_root.generation;
+		merged.fadeAmount = a_root.fadeAmount;
+		merged.bits = (a_seeds[at].bits & kFadeRootNodeBits) | (a_root.bits & kFadeRootCoordinatorBits);
+		a_out = merged;
+		return true;
+	}
 
 	/** @brief The frame's inputs to the fade update: the main camera and the engine's fade globals (AE addresses). */
 	struct FadeFrame

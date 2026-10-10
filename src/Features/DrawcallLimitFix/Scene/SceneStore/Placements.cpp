@@ -16,9 +16,11 @@ namespace DCLF
 		});
 		// A node event names a node: the reference above it, or its category node when no node up to it has one.
 		for (const auto& node : nodeChanged) {
+			// The mirror's chain (T6b1b).
 			const void* key = nullptr;
-			for (const RE::NiAVObject* object = node.get(); object && !key; object = object->parent)
-				key = object->GetUserData();
+			for (const void* at = node.get(); at && !key; at = MirrorParent(at))
+				if (const auto* record = mirror.Node(at))
+					key = record->userData;
 			if (!key)
 				key = FindCategoryNode(node.get(), nullptr);
 			if (key) {
@@ -33,16 +35,31 @@ namespace DCLF
 		moveGating = MoveEventsLive() && frame > moveUngatedThrough;
 	}
 
-	const void* SceneStore::MoveKeyOf(const RE::BSGeometry& a_geometry, const RE::NiNode* a_categoryNode)
+	const void* SceneStore::MoveKeyOf(const RE::BSGeometry& a_geometry, const RE::NiNode* a_categoryNode) const
 	{
-		const void* key = nullptr;
-		for (const RE::NiAVObject* object = &a_geometry; object && object != a_categoryNode; object = object->parent) {
-			const void* reference = object->GetUserData();
-			if (!reference)
-				continue;
-			if (key && key != reference)
-				return nullptr;
-			key = reference;
+		// The mirror's chain (T6b1b).
+		++mirrorReads.reads[static_cast<std::size_t>(MirrorRead::MoveKey)];
+		auto keyOf = [&](auto&& a_parent, auto&& a_reference) -> const void* {
+			const void* key = nullptr;
+			for (const void* object = &a_geometry; object && object != a_categoryNode; object = a_parent(object)) {
+				const void* reference = a_reference(object);
+				if (!reference)
+					continue;
+				if (key && key != reference)
+					return nullptr;
+				key = reference;
+			}
+			return key;
+		};
+		const void* key = keyOf([&](const void* a_key) { return MirrorParent(a_key); }, [&](const void* a_key) -> const void* {
+			const auto* record = mirror.Node(a_key);
+			return record ? record->userData : nullptr;
+		});
+		if (mirrorReadParity) {
+			const void* live = keyOf([](const void* a_key) -> const void* { return static_cast<const RE::NiAVObject*>(a_key)->parent; },
+				[](const void* a_key) -> const void* { return static_cast<const RE::NiAVObject*>(a_key)->GetUserData(); });
+			NoteMirrorRead(MirrorRead::MoveKey, live != key, [&] { return fmt::format("'{}' {}: mirror {}, live {}", a_geometry.name.c_str() ? a_geometry.name.c_str() : "",
+				static_cast<const void*>(&a_geometry), key, live); });
 		}
 		return key;
 	}
@@ -142,6 +159,8 @@ namespace DCLF
 				p.rootsGated);
 		if (!writers.empty())
 			line += fmt::format("{}move writers' calls: {}", line.empty() ? "[DCLF] placement plan: " : "; ", writers);
+		if (p.fadeRootsUnmirrored)
+			line += fmt::format("{}{} fade roots listed with no mirror record yet (their seeds hold the node's values)", line.empty() ? "[DCLF] placement plan: " : "; ", p.fadeRootsUnmirrored);
 		p = {};
 		return line;
 	}

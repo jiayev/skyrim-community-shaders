@@ -96,6 +96,8 @@ namespace DCLF
 
 	/** @brief Whether two PerGeometry evaluations agree in everything a DCLF_BINDLESS draw reads from the pipeline's block. */
 	bool SameBindlessGeometry(const GeometryConstants& a_a, const GeometryConstants& a_b);
+	/** @brief The variables SameBindlessGeometry finds different, as "VS<i>" / "PS<i>" with both values' first floats. */
+	std::string BindlessGeometryDifferences(const GeometryConstants& a_a, const GeometryConstants& a_b);
 
 	/**
 	 * @brief The frame lighting rows a PerGeometry PS block writes, into a_out where a_written (a bit per float) does not
@@ -259,8 +261,12 @@ namespace DCLF
 		// engine's constants (ObjectGeometryConstants); the shader reads none.
 		std::uint32_t written;
 		std::uint32_t padding[2];
+		// T6b1a: SetupGeometry's TreeParams and WindTimers (xy) for a TreeAnim property, from its tree node as the frame has it
+		// (DeriveTreeAnim): what a member draws with until TreeWindCS's entry of its tree's listing (DCLFObjects.hlsli, DCLFTreeParamsOf).
+		float treeParams[4];
+		float windTimers[4];
 	};
-	static_assert(sizeof(BindlessShading) == 64);
+	static_assert(sizeof(BindlessShading) == 96);
 
 	/**
 	 * @brief An object's shading from its Lighting property now (BSLightingShader::SetupGeometry's MaterialData, EmitColor and

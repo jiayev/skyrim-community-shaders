@@ -5,6 +5,11 @@
 #	include "Features/DrawcallLimitFix/Engine/SunViews.h"
 #	include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
 
+namespace DCLF::Scene
+{
+	std::uintptr_t HiddenStoreSiteAt(std::uint32_t a_index);
+}
+
 namespace DCLF
 {
 	/*
@@ -225,13 +230,66 @@ namespace DCLF
 		}
 	}
 
+	namespace
+	{
+		/** @brief T6b0: the residue by the furthest stage its geometries reached, with their ages since tracked and the stale verdicts' shows. */
+		std::string ResidueStageReport(const SceneStore::ResidueClasses& a_classes)
+		{
+			std::uint64_t total = 0;
+			for (const auto count : a_classes.stages)
+				total += count;
+			if (!total)
+				return {};
+			auto histogram = [](const auto& a_buckets) {
+				std::string text;
+				for (std::size_t b = 0; b < a_buckets.size(); ++b)
+					if (a_buckets[b])
+						text += fmt::format("{}{}:{}", text.empty() ? "" : " ", SceneStore::kAgeBucketNames[b], a_buckets[b]);
+				return text.empty() ? std::string("-") : text;
+			};
+			std::string text = fmt::format("[DCLF] residue by stage (T6b0): {} passes", total);
+			for (std::size_t s = 0; s < SceneStore::kStageCount; ++s) {
+				if (!a_classes.stages[s])
+					continue;
+				text += fmt::format("; {} {} ({:.0f}%, frames since tracked {})", a_classes.stages[s], SceneStore::kStageNames[s], 100.0 * a_classes.stages[s] / total,
+					histogram(a_classes.ages[s]));
+				if (s == SceneStore::kStageWaiting) {
+					std::string why;
+					for (std::size_t w = 0; w < a_classes.waitingBy.size(); ++w)
+						if (a_classes.waitingBy[w])
+							why += fmt::format("{}{}:{}", why.empty() ? "" : " ", w, a_classes.waitingBy[w]);
+					text += " [reasons " + why + "]";
+				}
+				if (s == SceneStore::kStageUnbound) {
+					std::string why;
+					for (std::size_t w = 0; w < a_classes.unboundBy.size(); ++w)
+						if (a_classes.unboundBy[w])
+							why += fmt::format("{}{} {}", why.empty() ? "" : ", ", w ? PrimaryCull::kSyntheticFailNames[w] : "no failed membership pass", a_classes.unboundBy[w]);
+					for (std::size_t r = 0; r < a_classes.unboundJoin.size(); ++r)
+						if (a_classes.unboundJoin[r])
+							why += fmt::format("; join verdict {} {}", r ? kIneligibleNames[r] : "none", a_classes.unboundJoin[r]);
+					text += " [" + why + "]";
+				}
+				if (s == SceneStore::kStageHiddenStale) {
+					std::string sites;
+					for (const auto& [site, count] : a_classes.staleSites)
+						sites += fmt::format("{}{} {}", sites.empty() ? "" : ", ", site == ~0u ? std::string("no show seen") : fmt::format("{:#x}", Scene::HiddenStoreSiteAt(site)), count);
+					text += fmt::format(" [last show by: {}; frames since it {}]", sites, histogram(a_classes.sinceShow));
+				}
+				if (!a_classes.stageFirst[s].empty())
+					text += " (first: " + a_classes.stageFirst[s] + ")";
+			}
+			return text + "\n";
+		}
+	}
+
 	std::uint32_t IndirectDraws::ReflectionRootsOwned(bool a_plain)
 	{
 		// The roots whose members DCLF's faces draw, in a plain update of a frame whose faces are DCLF's (DecideCoverage):
 		// - LOD trees while the faces' tree LOD is DCLF's (PrepareReflection): drawn from DCLF's mirror, no registration needed.
-		// - Not yet LOD land and objects (until T6): the faces draw LOD chunks the main camera never registers (terrain LOD under the
-		//   loaded cells: the faces have no loaded terrain), and an object DCLF has no registration of has no bindings
-		//   (kObjectNoBindings), so it is no reflection-phase member. Their roots stay; the members are withheld (PassCapture).
+		// - Not yet LOD land and objects (until T6b): the LOD chunks and objects the engine shows or attaches in motion take DCLF a
+		//   few frames to bind (ClassifyResidue: hidden in its tables, or not bound yet), and meanwhile they are no reflection-phase
+		//   members. Their roots stay; the members are withheld (PassCapture).
 		auto& reflection = impl->reflection;
 		auto& capture = PassCapture::Get();
 		capture.WatchReflectionResidue(0);
@@ -239,8 +297,8 @@ namespace DCLF
 			return 0;
 		const std::uint32_t owned = reflection.treeOwned ? ReflectionFaces::kTreeRoot : 0u;
 		// The residue parity: what the engine registers into the faces and DCLF does not withhold, by root: the LOD roots' on every
-		// 30th update (what skipping them would lose: T6's gate), the tree root's on every 30th of those that skip it (kept then).
-		if (SunViews::ParityEnabled() && reflection.residueUpdates++ % 30 == 0) {
+		// 30th update (what skipping them would lose: T6b's gate), the tree root's on every 30th of those that skip it (kept then).
+		if ((SunViews::ParityEnabled() || SceneStore::TimelineEnabled()) && reflection.residueUpdates++ % 30 == 0) {
 			capture.WatchReflectionResidue(ReflectionFaces::kLodRoots | owned);
 			return 0;
 		}
@@ -429,6 +487,7 @@ namespace DCLF
 				latch.viewBits = kViewReflection;  // the main list's: the reflection phase's members
 				latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;
 				latch.placementsIndex = FrameValues::Get().PlacementsIndex();
+				latch.fadeSeedsIndex = FrameValues::Get().FadeSeedsIndex();
 				// The frame's scene list: its ring entry (step 6e E4).
 				Impl::RingLatch(ring, latch);
 				FoldEyeIntoViewProj(face.viewProj, face.eye, latch.viewProj);
@@ -532,13 +591,32 @@ namespace DCLF
 		// T4: the faces' cameras against the engine's at their draws, and the LOD roots the engine did not cull.
 		const auto roots = ReflectionFaces::TakeRootStats();
 		const auto residue = PassCapture::Get().TakeReflectionResidue();
+		std::string residueKinds, residueStages;
+		{
+			const auto classes = SceneStore::Get().TakeResidueClasses();
+			for (std::size_t k = 0; k < SceneStore::kResidueKinds; ++k) {
+				if (!classes.counts[k])
+					continue;
+				const std::string_view name = k < SceneStore::kResidueUntracked ? kIneligibleNames[k] :
+				                              k == SceneStore::kResidueUntracked ? "untracked" :
+				                              k == SceneStore::kResidueUnbound   ? "eligible, unbound" :
+				                              k == SceneStore::kResidueNotReflection ? "bound, not a reflection member" :
+				                                                                       "a reflection member";
+				residueKinds += fmt::format("{}{} {}{}", residueKinds.empty() ? " [" : "; ", classes.counts[k], name, classes.first[k].empty() ? "" : " (" + classes.first[k] + ")");
+			}
+			if (!residueKinds.empty())
+				residueKinds += fmt::format("; {} geometries, {} of them on 10 frames or more]", classes.seen.size(), classes.persistent);
+			if (SceneStore::TimelineEnabled())
+				residueStages = ResidueStageReport(classes);
+		}
 		auto& parity = reflection.cameraParity;
 		text += fmt::format("[DCLF] reflection faces (T4: DCLF's cameras, the engine's tree LOD root skipped): {} updates, {} without the tree root; parity: {} faces, {} blocks "
 							"and {} slices differ (registers {:#x}, largest {:.3g}){}{}; residue: {} tree LOD passes{}, {} under the LOD land and objects roots (kept until "
-							"T6: no bindings without a registration){}\n",
+							"T6b){}{}\n",
 			roots.updates, roots.treeSkipped, parity.faces, parity.blocks, parity.slices, parity.registers, parity.largest,
 			parity.blocks || parity.slices ? " <- FACE CAMERA" : (parity.faces ? " <- OK" : ""), parity.first.empty() ? "" : " (first: " + parity.first + ")",
-			residue.treePasses, residue.treePasses ? " <- REFLECTION RESIDUE" : "", residue.lodPasses, residue.first.empty() ? "" : " (first: " + residue.first + ")");
+			residue.treePasses, residue.treePasses ? " <- REFLECTION RESIDUE" : "", residue.lodPasses, residue.first.empty() ? "" : " (first: " + residue.first + ")", residueKinds);
+		text += residueStages;
 		parity = {};
 		reflection.facesCaptured = reflection.updates = reflection.epochs = reflection.facesDrawn = reflection.lateFaces = 0;
 		reflection.skipped = {};

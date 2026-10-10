@@ -120,7 +120,8 @@ namespace DCLF::Draws
 	// TreeWindCS.hlsl's frame row (StructuredBuffer, one row).
 	struct TreeWindFrameRow
 	{
-		std::uint32_t treeCount = 0, objectCount = 0, frame = 0, padding = 0;
+		std::uint32_t treeCount = 0, objectCount = 0, frame = 0;
+		std::uint32_t treeSeedsIndex = 0;  // T6b1a: FrameValues::TreeSeedsIndex (the frame's ring buffer)
 		TreeWindFrame inputs{};
 		std::uint32_t padding2[2]{};
 	};
@@ -458,11 +459,14 @@ namespace DCLF::Draws
 		// A focus view (T3c): its target's fade root slot + 1, which an input's root word (+48) must name; kFocusRootNone: a target
 		// that is no listed root (no input's). 0: no test.
 		std::uint32_t focusRoot;
-		std::uint32_t pad[3];
+		// T6b1a: the frame's fade seeds (FrameValues::FadeSeedsIndex: StructuredBuffer<FadeRootStatic>, FadeSeedRow), the frame's ring
+		// buffer, so the latch's: a root's node values and state seed its first update (FadeStateCS) and the builds' state until it.
+		std::uint32_t fadeSeedsIndex;
+		std::uint32_t pad[2];
 	};
 	// BuildDrawsLatch::focusRoot for a target that is no listed root: no input's root word is its - 1.
 	constexpr std::uint32_t kFocusRootNone = 0xFFFFFFFFu;
-	static_assert(sizeof(BuildDrawsLatch) == 304 && offsetof(BuildDrawsLatch, focusRoot) == 288 && offsetof(BuildDrawsLatch, payloadValid) == 256 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
+	static_assert(sizeof(BuildDrawsLatch) == 304 && offsetof(BuildDrawsLatch, focusRoot) == 288 && offsetof(BuildDrawsLatch, fadeSeedsIndex) == 292 && offsetof(BuildDrawsLatch, payloadValid) == 256 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
 				  offsetof(BuildDrawsLatch, viewProj) == 32 && offsetof(BuildDrawsLatch, cullPlanes) == 96 &&
 				  offsetof(BuildDrawsLatch, pipelineMapOffset) == 192 && offsetof(BuildDrawsLatch, sunState) == 196 &&
 				  offsetof(BuildDrawsLatch, treeHeight) == 200 && offsetof(BuildDrawsLatch, fadeEye) == 208 &&

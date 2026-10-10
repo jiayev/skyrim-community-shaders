@@ -91,6 +91,7 @@ namespace DCLF
 		ShadowMapProbe,
 		GBufferProbe,
 		ShadowDebugOutput,
+		Timeline,
 
 		// Test harness: scripted input for unattended runs.
 		TestCommands,

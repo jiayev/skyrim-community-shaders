@@ -60,6 +60,7 @@ namespace DCLF
 		/** @brief The last missed property's key (its flags differed with no event), taken: CS_DCLF_MIRROR_WATCH=parity arms on it. */
 		const void* TakeMissedProperty() { return std::exchange(missedProperty, nullptr); }
 		const void* TakeMissedAlpha() { return std::exchange(missedAlpha, nullptr); }
+		const void* TakeMissedNode() { return std::exchange(missedNode, nullptr); }
 
 	private:
 		template <class T>
@@ -88,11 +89,13 @@ namespace DCLF
 		std::uint64_t replayed = 0, stale = 0, superseded = 0;
 		const void* missedProperty = nullptr;
 		const void* missedAlpha = nullptr;
+		const void* missedNode = nullptr;  // a fade node stale in its currentFade (missed or evented), for CS_DCLF_MIRROR_WATCH=parity:current
 		std::pair<std::uint8_t, const void*> UpdateRecord(const SceneCapture::Update& a_update);
 		void Replay(std::uintptr_t a_key, std::uint64_t a_after);
 
 		// The parity, by record type (node, geometry, property, alpha) and field.
 		static constexpr std::size_t kTypes = 4;
+		static constexpr std::uint32_t kMaxFields = 32;  // a record's fields at most (their bits)
 		struct Pending
 		{
 			std::uint8_t type = 0;
@@ -107,14 +110,14 @@ namespace DCLF
 		struct Tally
 		{
 			std::uint64_t probes = 0, checked = 0, absent = 0;
-			std::array<std::array<std::uint64_t, 16>, kTypes> evented{}, late{}, missed{};
+			std::array<std::array<std::uint64_t, kMaxFields>, kTypes> evented{}, late{}, missed{};
 			std::string firstAbsent, firstMissed, firstEvented;
 			// Per type and field, the first missed object; per node flag bit, how often it differed (missed, evented).
-			std::array<std::array<std::string, 16>, kTypes> firstMissedBy;
+			std::array<std::array<std::string, kMaxFields>, kTypes> firstMissedBy;
 			std::array<std::uint64_t, 32> flagBitsMissed{}, flagBitsEvented{};
 		} tally;
 		std::uint64_t applied = 0, detached = 0, updates = 0, updatesUnheld = 0;
 		// The updates applied, by record type and field.
-		std::array<std::array<std::uint64_t, 16>, kTypes> updated{};
+		std::array<std::array<std::uint64_t, kMaxFields>, kTypes> updated{};
 	};
 }

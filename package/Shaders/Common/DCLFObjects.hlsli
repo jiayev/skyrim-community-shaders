@@ -51,6 +51,10 @@ struct DCLFShadingRow
 	float EmissiveMult;
 	uint DCLFShadingWritten;  // the CPU's (which components the pass writes)
 	uint2 DCLFShadingPadding;
+	// T6b1a: TreeParams and WindTimers (xy) for a TreeAnim property, from its tree node as the frame has it: what a member draws with
+	// until TreeWindCS's entry of its tree's listing (DCLFTreeParamsOf).
+	float4 DCLFShadingTreeParams;
+	float4 DCLFShadingWindTimers;
 };
 
 // The object's placement (LightingConstants.h, BindlessPlacement), by the same index: what a move changes.
@@ -113,11 +117,9 @@ StructuredBuffer<DCLFPlacement> DCLFPlacements : register(t123);
 StructuredBuffer<float4> DCLFPalettes : register(t122);
 // The per-object extras rows (IndirectDraws: kExtrasBufferRegister), at DCLFExtraOffset.
 StructuredBuffer<float4> DCLFExtras : register(t126);
-#	if defined(PSHADER)
-// The frame's shading rows (IndirectDraws: kShadingBufferRegister; FrameValues), by the object index: the pixel stage's alone
-// (the vertex stage's layout does not map t121).
+// The frame's shading rows (IndirectDraws: kShadingBufferRegister; FrameValues), by the object index: both stages (the vertex stage's
+// for a tree's wind until its entry, T6b1a).
 StructuredBuffer<DCLFShadingRow> DCLFShading : register(t121);
-#	endif
 // The trees' wind (IndirectDraws: kTreeWindRegister; TreeWindCS.hlsl): three rows an entry, TreeParams, WindTimers and the
 // listing's generation (x), the
 // nodeless entry first and tree slot s at entry s + 1, as the compute queue made them the frame before (it writes this
@@ -242,13 +244,13 @@ bool DCLFTreeWindEntry(uint a_object, out uint a_entry)
 float4 DCLFTreeParamsOf(uint a_object)
 {
 	uint entry;
-	return DCLFTreeWindEntry(a_object, entry) ? DCLFTreeWind[entry * 3u] : DCLFObjects[a_object].DCLFTreeParams;
+	return DCLFTreeWindEntry(a_object, entry) ? DCLFTreeWind[entry * 3u] : DCLFShading[a_object].DCLFShadingTreeParams;
 }
 
 float2 DCLFWindTimersOf(uint a_object)
 {
 	uint entry;
-	return DCLFTreeWindEntry(a_object, entry) ? DCLFTreeWind[entry * 3u + 1u].xy : DCLFObjects[a_object].DCLFWindTimers.xy;
+	return DCLFTreeWindEntry(a_object, entry) ? DCLFTreeWind[entry * 3u + 1u].xy : DCLFShading[a_object].DCLFShadingWindTimers.xy;
 }
 
 #endif  // DCLF_BINDLESS

@@ -295,6 +295,7 @@ namespace DCLF
 		freed += tables.pipelineSlots.DrainUnreferenced([&](std::uint32_t a_slot) {
 			pipelineIndex.erase(tables.pipelines[a_slot]);
 			tables.geometryTemplate[a_slot] = nullptr;
+			tables.geometryTemplateObject[a_slot] = kNoObjectSlot;
 			tables.UnmarkPipeline(a_slot);
 			tables.Retire(Tables::kRetiredPipelineLookup, a_slot);
 		});

@@ -64,6 +64,53 @@ namespace DCLF
 			}
 		}
 
+		/**
+		 * @brief VisitSubtree's walk over the mirror (T6b1b): a_visit(key, record) for a_root and every object below it the mirror
+		 * holds, depth first, bounded as VisitSubtree is, until it returns false. True when a record was missing on the way.
+		 */
+		template <class Visit>
+		bool VisitMirrorSubtree(const SceneMirror& a_mirror, const void* a_root, Visit&& a_visit)
+		{
+			constexpr std::size_t kMaxEventNodes = 4096;
+			bool missing = false;
+			std::vector<const void*> stack{ a_root };
+			for (std::size_t visited = 0; !stack.empty() && visited < kMaxEventNodes; ++visited) {
+				const void* key = stack.back();
+				stack.pop_back();
+				const auto* record = a_mirror.Node(key);
+				if (!record) {
+					missing = true;
+					continue;
+				}
+				if (!a_visit(key, *record))
+					return missing;
+				for (const void* child : record->children)
+					if (child)
+						stack.push_back(child);
+			}
+			return missing;
+		}
+
+		/** @brief The tracked geometries below a_root, live (VisitSubtree) and by the mirror: the T6b1b check's. */
+		template <class Tracked>
+		std::pair<std::vector<const void*>, std::vector<const void*>> TrackedBelow(const SceneMirror& a_mirror, RE::NiAVObject* a_root, const Tracked& a_tracked)
+		{
+			std::pair<std::vector<const void*>, std::vector<const void*>> out;
+			VisitSubtree(a_root, [&](RE::NiAVObject& a_object) {
+				if (auto* geometry = a_object.AsGeometry(); geometry && a_tracked.contains(geometry))
+					out.first.push_back(geometry);
+				return true;
+			});
+			VisitMirrorSubtree(a_mirror, a_root, [&](const void* a_key, const SceneCapture::NodeRecord& a_record) {
+				if ((a_record.kind & SceneCapture::kKindGeometry) && a_tracked.contains(static_cast<RE::BSGeometry*>(const_cast<void*>(a_key))))
+					out.second.push_back(a_key);
+				return true;
+			});
+			std::ranges::sort(out.first);
+			std::ranges::sort(out.second);
+			return out;
+		}
+
 		/** @brief A 64-bit FNV-1a hash over values folded in one at a time: the input signatures' hash. */
 		struct Fnv1a
 		{
@@ -150,6 +197,12 @@ namespace DCLF
 				SceneTracker::Get().PushUpdate(SceneCapture::Update{ a_fields, SceneCapture::CaptureAlpha(*a_alpha) });
 		}
 
+		inline void PushGeometryUpdate(const RE::BSGeometry* a_geometry, std::uint32_t a_fields)
+		{
+			if (a_geometry)
+				SceneTracker::Get().PushUpdate(SceneCapture::Update{ a_fields, SceneCapture::CaptureGeometry(*a_geometry) });
+		}
+
 		/** @brief A geometry whose property or alpha a writer swapped: its leaf, applied as a capture when the mirror holds it. */
 		inline void PushLeafUpdate(const RE::BSGeometry& a_geometry)
 		{
@@ -168,6 +221,8 @@ namespace DCLF
 		// A fade node's statics (near and far, +0x109, the LOD type).
 		constexpr std::uint32_t kFadeStatics = SceneCapture::NodeRecord::kFadeNear | SceneCapture::NodeRecord::kFadeFar |
 		                                       SceneCapture::NodeRecord::kFade109 | SceneCapture::NodeRecord::kFadeType;
+		// Its per-frame state (T6b1a): currentFade, the LOD level, the screen-door byte.
+		constexpr std::uint32_t kFadeState = SceneCapture::NodeRecord::kFadeCurrent | SceneCapture::NodeRecord::kFadeLevel | SceneCapture::NodeRecord::kFadeDoor;
 
 		inline EventQueue<const RE::BSFadeNode*> fadeEvents;
 
@@ -310,9 +365,19 @@ namespace DCLF
 		 * thread at the delta walk. An actor entry's frame verdict is taken again only on the frame a node on its chain
 		 * had one (SceneStore::hiddenDependents), and on parity frames for all of them (the witness).
 		 */
-		inline EventQueue<const void*> hiddenEvents;
+		struct HiddenEvent
+		{
+			const void* key = nullptr;
+			std::uint32_t site = 0;  // the patched store's index (HiddenStoreSiteAt)
+			bool hidden = false;     // the bit's value after the store
+		};
+		inline EventQueue<HiddenEvent> hiddenEvents;
 		inline bool hiddenEventsInstalled = false;
 		bool InstallHiddenStores();
+		/** @brief The patched store at a_index (its address in the image), or 0. */
+		std::uintptr_t HiddenStoreSiteAt(std::uint32_t a_index);
+		/** @brief T6b0: the stores that changed the bit since the last call, by site: shown and hidden counts, most shows first. */
+		std::string TakeHiddenSiteReport();
 		/** @brief The patched store (its address in the image) whose stub holds a_address, or 0 (HiddenWatch's report). */
 		std::uintptr_t HiddenStoreSiteOf(std::uintptr_t a_address);
 
@@ -374,13 +439,18 @@ namespace DCLF
 			auto& index = SwitchIndexOf(a_switch);
 			const std::int32_t before = index;
 			index = a_index;
-			if (before != a_index)
+			if (before != a_index) {
+				// T6b1a: the mirror's value, on any thread (a value, no reference; a switch the mirror does not hold is captured whole
+				// at its attach); the tracking's event on the render thread alone.
+				PushNodeUpdate(a_switch, SceneCapture::NodeRecord::kSwitch);
 				PushSwitch(a_switch, before, false);
+			}
 		}
 
 		/** @brief After one of NiSwitchNode's own child edits (its vtable's implementations). */
 		inline void PushSwitchStructural(RE::NiNode* a_switch)
 		{
+			PushNodeUpdate(a_switch, SceneCapture::NodeRecord::kSwitch);
 			PushSwitch(a_switch, SwitchIndexOf(a_switch), true);
 		}
 
@@ -602,6 +672,10 @@ namespace DCLF
 		// before the batch's own), and the frame start's parity probe (CS_DCLF_MIRROR_PARITY).
 		SceneTracker::Event* mirrorHead = nullptr;
 		SceneTracker::Event* mirrorTail = nullptr;
+		// T6b1b: the render thread's captures at the frame's start (CaptureMirrorRequests), applied after the batch's own events: taken
+		// after them, a detach among them must not undo what they hold.
+		SceneTracker::Event* mirrorLate = nullptr;
+		SceneTracker::Event* mirrorLateTail = nullptr;
 		std::unique_ptr<SceneCapture::Records> probe;
 		// The objects a load screen's discarded events named (the parity counts them named: their writers have hooks).
 		std::vector<const void*> mirrorNamed;
@@ -613,6 +687,7 @@ namespace DCLF
 		{
 			SceneTracker::FreeEvents(head);
 			SceneTracker::FreeEvents(mirrorHead);
+			SceneTracker::FreeEvents(mirrorLate);
 		}
 
 		void AppendMirror(SceneTracker::Event* a_events)
@@ -622,6 +697,12 @@ namespace DCLF
 			(mirrorTail ? mirrorTail->next : mirrorHead) = a_events;
 			for (mirrorTail = a_events; mirrorTail->next;)
 				mirrorTail = mirrorTail->next;
+		}
+
+		void AppendLate(SceneTracker::Event* a_event)
+		{
+			(mirrorLateTail ? mirrorLateTail->next : mirrorLate) = a_event;
+			mirrorLateTail = a_event;
 		}
 
 		void Append(SceneTracker::Event* a_events)

@@ -400,6 +400,34 @@ bool InView(float3 a_centre, float a_radius)
 static const uint kFadeRootAlwaysDraw = 1u << 20;
 static const uint kFadeRootPreprocessed = 1u << 21;
 static const uint kFadeRootPreprocessHidden = 1u << 22;
+// T6b1a: the seeds (FrameValues' fade seeds, the latch's fadeSeedsIndex: two rows a slot, this bit picks the generation's).
+static const uint kFadeRootSeedOdd = 1u << 23;
+static const uint kFadeRootNodeBits = kFadeRootPlanMask | (0xFFu << kFadeRootBitsShift) | kFadeRootTreeThresholds | kFadeRootAlwaysDraw | kFadeRootPreprocessed |
+                                      kFadeRootPreprocessHidden;
+
+// The row the update takes (Records.h, MergeFadeSeed: keep the two the same): the seed's node values and state, as the frame's
+// values sampled the node, with the coordinator's object, generation, fadeAmount and bits. False: no seed of its generation yet.
+bool MergeSeed(uint a_slot, inout FadeRootStatic a_root)
+{
+	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+	const uint seedsIndex = latch.Load(LatchOffset + 292);
+	if (seedsIndex == 0)
+		return false;
+	StructuredBuffer<FadeRootStatic> seeds = ResourceDescriptorHeap[seedsIndex];
+	uint count, stride;
+	seeds.GetDimensions(count, stride);
+	const uint at = 2u * a_slot + ((a_root.Bits & kFadeRootSeedOdd) != 0u ? 1u : 0u);
+	if (at >= count)
+		return false;
+	FadeRootStatic seed = seeds[at];
+	if (seed.Generation != a_root.Generation)
+		return false;
+	seed.Object = a_root.Object;
+	seed.FadeAmount = a_root.FadeAmount;
+	seed.Bits = (seed.Bits & kFadeRootNodeBits) | (a_root.Bits & ~kFadeRootNodeBits);
+	a_root = seed;
+	return true;
+}
 
 // The cull test of the root's program (kPortalNoProgram, or no programs: the frustum alone).
 bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits, uint a_program)
@@ -463,10 +491,11 @@ void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
 		return;
 	StructuredBuffer<FadeRootStatic> roots = ResourceDescriptorHeap[RootsIndex];
 	RWStructuredBuffer<FadeNodeState> states = ResourceDescriptorHeap[StatesIndex];
-	const FadeRootStatic root = roots[index];
+	FadeRootStatic root = roots[index];
 	RWStructuredBuffer<FadeNodeState> published = ResourceDescriptorHeap[(F.SceneFrame & 1u) != 0 ? OutIndex1 : OutIndex0];
 	FadeNodeState state = states[index];
-	if (root.Object == kNoObject || root.Generation == 0) {
+	// No root, or (T6b1a) its seed not sampled yet: not updated this frame.
+	if (root.Object == kNoObject || root.Generation == 0 || !MergeSeed(index, root)) {
 		published[index] = state;
 		return;
 	}

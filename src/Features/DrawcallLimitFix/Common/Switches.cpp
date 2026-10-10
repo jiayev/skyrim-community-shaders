@@ -125,6 +125,8 @@ namespace DCLF
 			{ ShadowMapProbe, "CS_DCLF_SHADOWMAP_PROBE", D, N, false, "1: the shadow maps' contents (open defect)" },
 			{ GBufferProbe, "CS_DCLF_GBUFFER_PROBE", D, N, false, "x,y: the G-buffer at a pixel after DCLF's colour epoch (open defect)" },
 			{ ShadowDebugOutput, "CS_DCLF_SHADOW_DEBUG_OUTPUT", D, N, false, "1: Lighting.hlsl writes the sun's shadow terms into the diffuse target (open defect)" },
+			{ Timeline, "CS_DCLF_TIMELINE", D, N, false,
+				"1: T6b0's measurements: objects' stage timelines, the reflection residue by furthest stage, unhides by store, join and install latency, the engine's import share by thread" },
 
 			{ TestCommands, "CS_DCLF_TEST_COMMANDS", T, N, false, "<frame>:<console command>;...: console commands at given frames" },
 			{ TestMove, "CS_DCLF_TEST_MOVE", T, N, false, "<start>:<end>:<units per frame>;...: carries the player forward" },

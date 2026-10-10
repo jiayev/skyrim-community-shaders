@@ -1059,13 +1059,25 @@ namespace DCLF
 		return StaticShadowBits(a_geometry, true, a_property);
 	}
 
+	namespace
+	{
+		thread_local std::uint8_t syntheticFail = 0;
+	}
+
+	std::uint8_t PrimaryCull::LastSyntheticFail()
+	{
+		return syntheticFail;
+	}
+
 	bool PrimaryCull::SyntheticPass(const RE::BSGeometry& a_geometry, std::uint32_t a_derivedPass, AccumulatedPass& a_out, bool a_sunOnGpu,
 		const RE::BSLightingShaderProperty* a_layer)
 	{
+		syntheticFail = 1;
 		if (a_derivedPass == kNotDerived)
 			return false;
 		const RE::BSShaderProperty* property = a_layer ? a_layer : a_geometry.GetGeometryRuntimeData().shaderProperty.get();
 		const auto* lighting = a_layer ? a_layer : netimmerse_cast<const RE::BSLightingShaderProperty*>(property);
+		syntheticFail = 2;
 		if (!lighting)
 			return false;
 		const std::uint64_t flags = lighting->flags.underlying();
@@ -1080,9 +1092,11 @@ namespace DCLF
 		// A layer takes no shadow bits (measured: its passes never carry ShadowDir or DefShadow): its property's light mask never
 		// names the sun, the registrations writing masks on the main property alone (FUN_1414b2140).
 		const std::uint32_t sun = a_layer ? 0u : a_sunOnGpu ? SunShadowStatic(a_geometry) : SunShadowBits(a_geometry);
+		syntheticFail = 3;
 		if (sun == ~0u)
 			return false;
 		std::uint32_t hint = 0;
+		syntheticFail = a_layer ? 4 : 5;
 		if (a_layer) {
 			// Every pass of a layer: hint 12 (FUN_1414b2330). A translucent one is not modelled.
 			if (translucent)
@@ -1098,6 +1112,7 @@ namespace DCLF
 			hint = 11;  // TreeAnim
 		else if (!(sun & 0x2000u))
 			hint = 15;  // opaque with no sun shadow work
+		syntheticFail = 0;
 		a_out = {};
 		a_out.subPass = PassCapture::SubPassOf(&a_geometry, flags);
 		a_out.technique = DrawnPassDescriptor((a_derivedPass & ~kShadowBits) | sun, a_out.subPass);

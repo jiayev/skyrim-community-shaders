@@ -108,6 +108,9 @@ namespace DCLF
 		 * derived pass descriptor with the sun's bits, the batch list, the accumulation hint and the LOD row. False for
 		 * what it does not model (translucent or fading objects, an unknown cascade test, a descriptor not derived).
 		 */
+		/** @brief T6b0: why this thread's last SyntheticPass gave none (kSyntheticFailNames' index; 0: it gave one). */
+		static std::uint8_t LastSyntheticFail();
+		static constexpr std::array<const char*, 6> kSyntheticFailNames{ "-", "not derived", "not lighting", "sun bits", "translucent layer", "translucent" };
 		static bool SyntheticPass(const RE::BSGeometry& a_geometry, std::uint32_t a_derivedPass, AccumulatedPass& a_out, bool a_sunOnGpu = false,
 			const RE::BSLightingShaderProperty* a_layer = nullptr);
 

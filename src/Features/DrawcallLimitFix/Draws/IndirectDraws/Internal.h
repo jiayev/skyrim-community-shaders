@@ -841,7 +841,7 @@ namespace DCLF
 			}
 			// The frame row (TreeWindFrameRow), every Z-prepass commit: the pass's invocation is prepared ahead of it.
 			if (a_frameRow && a_scene.treeFrameBuffer) {
-				const TreeWindFrameRow row{ a_scene.treeCount, 0, a_scene.treeFrame, 0, a_scene.treeInputs, {} };
+				const TreeWindFrameRow row{ a_scene.treeCount, 0, a_scene.treeFrame, FrameValues::Get().TreeSeedsIndex(), a_scene.treeInputs, {} };
 				a_uploads(a_scene.treeFrameBuffer, &row, sizeof(row), 0);
 			}
 		}
