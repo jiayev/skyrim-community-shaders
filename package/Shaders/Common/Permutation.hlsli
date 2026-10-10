@@ -79,6 +79,7 @@ namespace Permutation
 		static const uint AdditiveLighting = (1 << 6);
 		static const uint IsEye = (1 << 7);
 		static const uint SourceAlphaBlend = (1 << 8);
+		static const uint NoSkyScattering = (1 << 9);
 	}
 
 	namespace ExtraFeatureFlags

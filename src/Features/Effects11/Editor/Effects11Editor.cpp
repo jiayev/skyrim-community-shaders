@@ -70,7 +70,9 @@ namespace
 		{ "PARTICLE", Group::Lighting },
 		{ "LIGHTSPRITE", Group::Lighting },
 		{ "FIRE", Group::Lighting },
+		{ "WATER", Group::Lighting },
 		{ "SKY", Group::Sky },
+		{ "SKYSCATTERING", Group::Sky },
 		{ "PROCEDURALSUN", Group::Sky },
 		{ "SUNGLARE", Group::Sky },
 		{ "CLOUDSHADOWS", Group::Sky },
@@ -78,6 +80,7 @@ namespace
 		{ "VOLUMETRICRAYS", Group::Atmosphere },
 		{ "GAMEVOLUMETRICRAYS", Group::Atmosphere },
 		{ "ADAPTATION", Group::Camera },
+		{ "DEPTHOFFIELD", Group::Camera },
 		{ "BLOOM", Group::Camera },
 		{ "LENS", Group::Camera },
 		{ "RAIN", Group::Rain },
@@ -138,8 +141,12 @@ namespace
 			return { T("feature.effects11.category.lightsprite", "Light Sprites"), T("feature.effects11.category.lightsprite_desc", "Brightness of glow sprites around light sources.") };
 		if (a_category == "FIRE")
 			return { T("feature.effects11.category.fire", "Fire"), T("feature.effects11.category.fire_desc", "Brightness and contrast of fire.") };
+		if (a_category == "WATER")
+			return { T("feature.effects11.category.water", "Water"), T("feature.effects11.category.water_desc", "Water color, waves, fresnel, sun response and reflections.") };
 		if (a_category == "SKY")
 			return { T("feature.effects11.category.sky", "Sky"), T("feature.effects11.category.sky_desc", "Sky gradient, clouds, sun, moon and stars.") };
+		if (a_category == "SKYSCATTERING")
+			return { T("feature.effects11.category.skyscattering", "Sky Scattering"), T("feature.effects11.category.skyscattering_desc", "Atmospheric scattering for the sky and cloud lighting.") };
 		if (a_category == "PROCEDURALSUN")
 			return { T("feature.effects11.category.proceduralsun", "Procedural Sun"), T("feature.effects11.category.proceduralsun_desc", "Size, edge and glow of the procedural sun disk.") };
 		if (a_category == "SUNGLARE")
@@ -154,6 +161,8 @@ namespace
 			return { T("feature.effects11.category.gamevolumetricrays", "Game Volumetric Rays"), T("feature.effects11.category.gamevolumetricrays_desc", "Adjustments to the game's own god rays.") };
 		if (a_category == "ADAPTATION")
 			return { T("feature.effects11.category.adaptation", "Adaptation"), T("feature.effects11.category.adaptation_desc", "Eye adaptation: how fast and how far exposure follows scene brightness.") };
+		if (a_category == "DEPTHOFFIELD")
+			return { T("feature.effects11.category.depthoffield", "Depth of Field"), T("feature.effects11.category.depthoffield_desc", "How fast focus and aperture follow the scene.") };
 		if (a_category == "BLOOM")
 			return { T("feature.effects11.category.bloom", "Bloom"), T("feature.effects11.category.bloom_desc", "Overall bloom amount handed to the shaders.") };
 		if (a_category == "LENS")
@@ -223,6 +232,8 @@ namespace
 		if (a_setting.category != "EFFECT")
 			return nullptr;
 		auto& effectManager = EffectManager::GetSingleton();
+		if (a_setting.key == "EnableDepthOfField")
+			return &effectManager.enbDepthOfField;
 		if (a_setting.key == "EnableBloom")
 			return &effectManager.enbBloom;
 		if (a_setting.key == "EnableLens")
@@ -248,6 +259,7 @@ namespace
 		const auto& ids = effectManager.ids;
 		return {
 			{ &effectManager.enbEffect, kInvalidSettingID, T("feature.effects11.editor.file_effect", "Main Effect") },
+			{ &effectManager.enbDepthOfField, ids.useDepthOfField, T("feature.effects11.editor.file_depthoffield", "Depth of Field") },
 			{ &effectManager.enbBloom, ids.useBloom, T("feature.effects11.editor.file_bloom", "Bloom") },
 			{ &effectManager.enbLens, ids.useLens, T("feature.effects11.editor.file_lens", "Lens") },
 			{ &effectManager.enbAdaptation, ids.useAdaptation, T("feature.effects11.editor.file_adaptation", "Adaptation") },
@@ -1479,7 +1491,7 @@ void Effects11Editor::DrawLauncher()
 {
 	auto& effectManager = EffectManager::GetSingleton();
 	auto& settingManager = SettingManager::GetSingleton();
-	const auto& menuSettings = globals::menu->GetSettings();
+	auto& menuSettings = globals::menu->GetSettings();
 	const bool presetLoaded = effectManager.IsPresetLoaded();
 
 	if (presetLoaded)
@@ -1501,7 +1513,7 @@ void Effects11Editor::DrawLauncher()
 		Open(true);
 	if (!menuSettings.Effects11EditorKey.empty()) {
 		ImGui::SameLine();
-		ImGui::AlignTextToFramePadding();
+		ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (buttonSize.y - ImGui::GetTextLineHeight()) * 0.5f);
 		const auto hotkey = I18n::GetSingleton()->Format(TKEY("editor_hotkey"),
 			{ { "key", Util::Input::KeyIdToString(menuSettings.Effects11EditorKey) } }, "Hotkey: {key}");
 		Util::TextUnformattedDisabled(hotkey.c_str());
@@ -1529,6 +1541,12 @@ void Effects11Editor::DrawLauncher()
 		ImGui::PopStyleColor();
 		Util::AddTooltip(T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save."));
 	}
+
+	ImGui::SeparatorText(T("menu.settings.tab_keybindings", "Keybindings"));
+	Util::InputComboWidget(T("menu.settings.effects11_editor_key", "Effects 11 Editor Key:"), menuSettings.Effects11EditorKey,
+		globals::menu->settingEffects11EditorKey, "Change##Effects11EditorKey");
+	Util::InputComboWidget(T("menu.settings.effects11_toggle_key", "Effects 11 Toggle Key:"), menuSettings.Effects11ToggleKey,
+		globals::menu->settingEffects11ToggleKey, "Change##Effects11ToggleKey");
 
 	if (!effectManager.enbEffect.IsFilePresent())
 		return;
