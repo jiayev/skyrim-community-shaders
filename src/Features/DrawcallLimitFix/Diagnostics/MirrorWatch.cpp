@@ -137,6 +137,12 @@ namespace DCLF::MirrorWatch
 
 		bool Matches(const RE::NiAVObject& a_object, std::string_view a_name)
 		{
+			// Alternatives separated by '|' (T6b1b).
+			if (const auto bar = a_name.find('|'); bar != std::string_view::npos)
+				return Matches(a_object, a_name.substr(0, bar)) || Matches(a_object, a_name.substr(bar + 1));
+			// A trailing '*' matches a prefix (T6b1b).
+			if (!a_name.empty() && a_name.back() == '*')
+				return a_object.name.c_str() && std::string_view(a_object.name.c_str()).starts_with(a_name.substr(0, a_name.size() - 1));
 			return a_name.empty() || (a_object.name.c_str() && a_name == a_object.name.c_str());
 		}
 
@@ -200,6 +206,15 @@ namespace DCLF::MirrorWatch
 			}
 			return;
 		}
+		// parent:<name> (T6b1b): an object at its world attach's capture, its parent pointer (+0x30, both dwords).
+		constexpr std::string_view kParentPrefix = "parent:";
+		if (a_node && Enabled() && !armed.load(std::memory_order_acquire) && Value().starts_with(kParentPrefix)) {
+			if (Matches(*a_node, std::string_view(Value()).substr(kParentPrefix.size()))) {
+				const auto* base = reinterpret_cast<const std::byte*>(a_node);
+				ArmSlots(*a_node, { Slot{ base + 0x30, "parent (low)" }, Slot{ base + 0x34, "parent (high)" }, Slot{}, Slot{} });
+			}
+			return;
+		}
 		if (!a_node || !Enabled() || armed.load(std::memory_order_acquire) || !Value().starts_with(kNodePrefix))
 			return;
 		if (!Matches(*a_node, std::string_view(Value()).substr(kNodePrefix.size())))
@@ -231,6 +246,11 @@ namespace DCLF::MirrorWatch
 	{
 		if (!a_geometry || !Enabled() || armed.load(std::memory_order_acquire))
 			return;
+		// parent:<name> watches geometries too (a particle system is one).
+		if (Value().starts_with("parent:")) {
+			ArmNode(a_geometry);
+			return;
+		}
 		const auto* base = reinterpret_cast<const std::byte*>(a_geometry);
 		if (Value().starts_with(kSkinPrefix)) {
 			// A dismember skin's first partitions (editorVisible is each Data's first byte; 4 bytes each).

@@ -268,6 +268,11 @@ namespace DCLF::SceneCapture
 		std::vector<AlphaRecord> alphas;
 		// NextSequence at the capture's start: an update numbered after it may have written after the capture read the object.
 		std::uint64_t sequence = 0;
+		// T6b1c: an attach's capture (CaptureAttached) holds every node and geometry it recorded, ancestors included, taken on the
+		// capturing thread while the engine's attach holds them: the scene work makes its references from these (SceneStore::Pinned),
+		// never from a key. Released with the batch, on the render thread (ReleaseHandedBack). A probe's or a leaf update's holds none.
+		bool pinning = false;
+		std::vector<RE::NiPointer<RE::NiAVObject>> pins;
 		bool Empty() const { return nodes.empty(); }
 	};
 
@@ -307,6 +312,12 @@ namespace DCLF::SceneCapture
 
 	/** @brief Whether a_object is reached from Main::WorldRootNode by its parent chain. */
 	bool InWorld(const RE::NiAVObject* a_object);
+	/**
+	 * @brief The parentless roots the portal graph draws (alwaysRenderChildren: no parent, under no world root), which InWorld counts as
+	 * the world's from now on (T6b1b: the mirror holds what the scene work tracks under them). Render thread (CaptureCategories); the
+	 * hooks' threads read the set lock-free. A set replaced is kept (a few dozen pointers a cell's graph): a reader may still hold it.
+	 */
+	void SetDrawnRoots(std::vector<const RE::NiAVObject*> a_roots);
 	/**
 	 * @brief The hook's capture of an attach (on the attaching thread, after the engine's call): every object under a_root and the
 	 * ancestors up to the world's root (their children lists changed). Null when a_root is not in the world: a subtree still being

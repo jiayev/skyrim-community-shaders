@@ -59,7 +59,19 @@ namespace DCLF
 			const void* live = keyOf([](const void* a_key) -> const void* { return static_cast<const RE::NiAVObject*>(a_key)->parent; },
 				[](const void* a_key) -> const void* { return static_cast<const RE::NiAVObject*>(a_key)->GetUserData(); });
 			NoteMirrorRead(MirrorRead::MoveKey, live != key, [&] { return fmt::format("'{}' {}: mirror {}, live {}", a_geometry.name.c_str() ? a_geometry.name.c_str() : "",
-				static_cast<const void*>(&a_geometry), key, live); });
+				static_cast<const void*>(&a_geometry), key, live); }, [this, geometry = static_cast<const void*>(&a_geometry), a_categoryNode, live] {
+				const void* now = nullptr;
+				for (const void* at : MirrorChain(geometry, a_categoryNode)) {
+					const auto* record = mirror.Node(at);
+					const void* reference = record ? record->userData : nullptr;
+					if (!reference)
+						continue;
+					if (now && now != reference)
+						return live == nullptr;
+					now = reference;
+				}
+				return now == live;
+			});
 		}
 		return key;
 	}

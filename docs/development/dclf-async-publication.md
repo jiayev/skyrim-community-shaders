@@ -1634,6 +1634,33 @@ resident-draw, set and fade parity; motion m28/m29).
     Measured (w35, w37: motion, every parity): every ported read 0 differ but one window of w37, where a precipitation splash
     (`PCloudSplash07`) the mirror holds under a category node had left it live with no detach event (the validation's two drops are
     the same object: a detach no hook sees; open); the set, walk and mirror parities clean.
+  - *F4, T6b1c: references from pins* (2026-10-09, w38-w57). The scene work makes no engine reference from a key:
+    - **Pins.** An attach's capture (`CaptureAttached`, on the attaching thread while the engine's attach holds its objects) holds
+      every node and geometry it records, its ancestors included (`Records::pins`); the batch keeps them until the render thread
+      releases it at Present. The scene work's references are copies of these (`SceneStore::Pinned`, by key, while it applies the
+      batch): a tracked geometry's (`AddGeometry`), a sun or light entry's (`OwnRoot`). A probe's capture and a leaf update's hold
+      none (the mirror keeps copies of updates: their last release would be the scene work's).
+    - **The walks are the mirror's.** `AddSubtree` walks the mirror's children on every path; the sun and light entries are the
+      mirror's chains. A geometry the mirror names that nothing pins is refused: the live scene no longer has it there (its event the
+      next batch's), which the next batch confirms (the mirror reads' "unpinned geometry": all lagged in w53-w57).
+    - **The category walk** (cells new to the scene work's set) reads nothing live: the render thread's category capture lists each
+      new category node's children's keys and holds every object under them and under the new portal roots (`categoryPins`), let go
+      at the next frame's start once the scene work has applied the capture.
+    - **The portal graph's parentless roots** count as the world's (`SceneCapture::SetDrawnRoots`, read lock-free by the capture
+      threads): each new one is captured whole, each gone dropped; what attaches under them is captured like the rest (w39: 13 of
+      their subtrees were dropped while the mirror lacked them).
+    - **Writers found on the way.** `NiAVObject::SetCollisionObject` (`FUN_140e8bd40`, a loader's clutter getting its body after
+      its capture: the mirror's `body`) is detoured; the node classes that implement the child edits themselves
+      (`BSParticleSystemManager`'s, which move world-space particle systems; `BGSDecalNode`'s detaches and sets; `BSFaceGenNiNode`'s
+      attach: 8 implementations) are detoured with NiNode's thunks (the waterfalls' splash particles left the mirror stale).
+    - **Stale records.** An attach out of the world naming an object the mirror holds means it left the world by no detach a hook saw
+      (or its memory is another object's now): the record and its subtree are evicted (`SceneMirror::Evict`). Lights and cameras are
+      the only ones seen (ShadowSceneNode's queued light removal detaches by no hooked function); anything else is flagged.
+    - **The mirror reads' check** defers a difference to the next batch (the live read is later than the batch): the mirror agreeing
+      then, the read lagged; not, it differs.
+    Measured (w56, w57: motion and the interiors, every parity): no crash, every reference from a pin, every ported read 0 differ,
+    fade state and tree wind 0 differ, the set clean, the walk parity's one difference a blood decal's record (seen in w12 and w27:
+    not new); the mirror parity clean.
 
 **A persistent scene for every view; incremental only; two modes** (2026-10-08; motion m112-m153, bridge y-runs, equip and
 fight e-runs, toggle runs). With DCLF's shadow views on, objects flickered at cell changes because the set's phases were

@@ -369,6 +369,18 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	// FUN_140e8bd40 (node, collision object): NiAVObject::SetCollisionObject (+0x40), from bhkWorld::InitHavok and FUN_140e8c600 after
+	// the node's world attach (a loader's clutter: its body comes after the capture). The node's body after the call (T6b1b).
+	struct SetCollisionObject
+	{
+		static void thunk(RE::NiAVObject* a_node, RE::NiCollisionObject* a_collision)
+		{
+			func(a_node, a_collision);
+			PushNodeUpdate(a_node, SceneCapture::NodeRecord::kBody);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	// FUN_14147c1e0 (object, flag, set, Lighting only): one shader property flag set or cleared on every geometry's property under the
 	// object, recursively (each child through the entry again), stored inline (not SetFlags): AIProcess::Update3DModel_Impl gives an
 	// actor's 3D kCharacterLighting, the sky, explosions. The property's flags after the call, per geometry.
@@ -949,7 +961,7 @@ namespace DCLF
 		for (const auto* event = attached; event && !categoryCapturePending; event = event->next)
 			categoryCapturePending = event->type == SceneTracker::EventType::Detached;
 		if (a_frameStart) {
-			CaptureCategories(std::exchange(categoryCapturePending, false));
+			CaptureCategories(std::exchange(categoryCapturePending, false), batch);
 			CaptureMirrorRequests(batch);
 			ProbeMirror(batch);
 		}
@@ -1103,6 +1115,8 @@ namespace DCLF
 		// Its tracker events (and the switch events folded into a pending entry) hold engine references - the detached subtrees a
 		// published version of the tables may still name: through the retirement chain (step 6e E3).
 		retirement.Open().events.push_back(std::move(batch));
+		// Its pins name the retired batch's references: no reference is made from them after the apply (T6b1c).
+		batchPins.clear();
 	}
 
 	namespace
@@ -1250,6 +1264,7 @@ namespace DCLF
 		stl::detour_thunk<AlphasSetThreshold>(REL::Offset(kAlphasSetThreshold).address());
 		constexpr std::uintptr_t kReleaseCollisionObject = 0xe880e0;  // FUN_140e880e0: a node's collision object released (a walk's visit)
 		stl::detour_thunk<ReleaseCollisionObject>(REL::Offset(kReleaseCollisionObject).address());
+		stl::detour_thunk<SetCollisionObject>(REL::Offset(0xe8bd40).address());  // FUN_140e8bd40: NiAVObject::SetCollisionObject
 		constexpr std::uintptr_t kPropertiesSetFlag = 0x147c1e0;  // FUN_14147c1e0: a shader flag on the properties under an object
 		stl::detour_thunk<PropertiesSetFlag>(REL::Offset(kPropertiesSetFlag).address());
 		constexpr std::uintptr_t kPropertiesSetFadeNode = 0x147c690;  // FUN_14147c690: the properties' fade node under an object
@@ -1356,11 +1371,24 @@ namespace DCLF
 		mirror.BeginBatch();
 		const bool parity = SwitchEnabled(Switch::MirrorParity);
 		mirrorReadParity = parity;
+		// The batch's pins (T6b1c): its attach captures' references, by key, for the scene work's references while it applies it.
+		batchPins.clear();
+		for (const auto* head : { a_batch.mirrorHead, a_batch.head, a_batch.mirrorLate })
+			for (const auto* event = head; event; event = event->next)
+				if (event->type == SceneTracker::EventType::Attached && event->captured)
+					for (const auto& pin : event->captured->pins) {
+						batchPins.insert_or_assign(pin.get(), &pin);
+						++referenceStats.pins;
+					}
 		auto apply = [&](const SceneTracker::Event* a_head) {
 			for (const auto* event = a_head; event; event = event->next) {
 				if (event->type == SceneTracker::EventType::Attached) {
 					if (event->captured)
 						mirror.Apply(*event->captured);
+					else if (event->node && mirror.Node(event->node.get()))
+						// Attached out of the world, yet held (T6b1b): its record is stale (the event holds the object: its name is safe).
+						mirror.Evict(event->node.get(), fmt::format("'{}' {}", event->node->name.c_str() ? event->node->name.c_str() : "",
+															 const_cast<RE::NiAVObject*>(event->node.get())->GetRTTI() ? const_cast<RE::NiAVObject*>(event->node.get())->GetRTTI()->name : "?"));
 				} else if (event->type == SceneTracker::EventType::Detached) {
 					if (event->detachedRoot)
 						mirror.Detach(event->detachedRoot, event->removed, event->removedNodes);
@@ -1374,6 +1402,7 @@ namespace DCLF
 		apply(a_batch.mirrorHead);
 		apply(a_batch.head);
 		apply(a_batch.mirrorLate);
+		RecheckDeferredReads();
 		if (!parity)
 			return;
 		// The objects the batch's events without values named: a field the probe finds different on one of them has a hook that
@@ -1608,11 +1637,20 @@ namespace DCLF
 
 	void SceneStore::CheckTrackedBelow(MirrorRead a_read, RE::NiAVObject* a_root)
 	{
-		const auto r = static_cast<std::size_t>(a_read);
-		++mirrorReads.checked[r];
 		const auto [live, mirrored] = TrackedBelow(mirror, a_root, tracked);
-		if (live != mirrored && mirrorReads.differ[r]++ == 0)
-			mirrorReads.first[r] = fmt::format("'{}' {}: {} tracked geometries below by the mirror, {} live", a_root->name.c_str() ? a_root->name.c_str() : "",
-				static_cast<const void*>(a_root), mirrored.size(), live.size());
+		NoteMirrorRead(a_read, live != mirrored, [&] {
+			return fmt::format("'{}' {}: {} tracked geometries below by the mirror, {} live", a_root->name.c_str() ? a_root->name.c_str() : "", static_cast<const void*>(a_root),
+				mirrored.size(), live.size());
+		}, [this, key = static_cast<const void*>(a_root), live] {
+			// The mirror's walk again, the live list as tracked then (what was tracked since is not the read's).
+			std::vector<const void*> now;
+			VisitMirrorSubtree(mirror, key, [&](const void* a_key, const SceneCapture::NodeRecord& a_record) {
+				if ((a_record.kind & SceneCapture::kKindGeometry) && std::ranges::binary_search(live, a_key))
+					now.push_back(a_key);
+				return true;
+			});
+			std::ranges::sort(now);
+			return now == live;
+		});
 	}
 }

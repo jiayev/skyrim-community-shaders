@@ -37,6 +37,11 @@ namespace DCLF
 		/** @brief A detached subtree: its root (taken off its parent's children) and every object under it. */
 		void Detach(const void* a_root, std::span<RE::BSGeometry* const> a_geometries, std::span<const void* const> a_nodes);
 		/**
+		 * @brief T6b1b: a record whose object an event names attached out of the world: it left the world by no detach a hook saw (or its
+		 * memory is another object's now), so it and every record under it go. a_what names the new object for the report.
+		 */
+		void Evict(const void* a_key, std::string_view a_what);
+		/**
 		 * @brief A hook's values into the record, when the mirror holds one (an object out of the world has none). Returns the
 		 * record's type and key (a geometry named by its skin resolved), the key null when the mirror holds none.
 		 */
@@ -117,6 +122,8 @@ namespace DCLF
 			std::array<std::uint64_t, 32> flagBitsMissed{}, flagBitsEvented{};
 		} tally;
 		std::uint64_t applied = 0, detached = 0, updates = 0, updatesUnheld = 0;
+		std::uint64_t evictions = 0, evictedRecords = 0, lightEvictions = 0;  // lights: ShadowSceneNode's queued removal, no detach
+		std::string firstEviction;
 		// The updates applied, by record type and field.
 		std::array<std::array<std::uint64_t, kMaxFields>, kTypes> updated{};
 	};

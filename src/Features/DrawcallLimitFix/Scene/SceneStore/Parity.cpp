@@ -125,6 +125,11 @@ namespace DCLF
 		}
 		text += mirror.Report();
 		text += MirrorReadReport();
+		if (auto& r = referenceStats; r.pins || r.live || r.refused) {
+			text += fmt::format("[DCLF] references (T6b1c): {} pins in the batches' captures; {} references made from pins, {} from a live walk's pointers, {} refused (no pin){}\n",
+				r.pins, r.pinned, r.live, r.refused, " (a refusal is checked after the next batch: the mirror reads' \"unpinned geometry\")");
+			r = {};
+		}
 		text += MirrorWatch::TakeReport(frame);
 		if (const auto c = SceneCapture::TakeCounters(); c.attaches || c.outOfWorld)
 			text += fmt::format("[DCLF] scene capture (6e F3): {} attaches in the world captured ({} records, {:.1f} us in all; {} on the main thread, {:.1f} us), {} out of the "
@@ -133,11 +138,11 @@ namespace DCLF
 		if (captureFrames) {
 			const auto unscoped = FrameGlobals::TakeUnscopedReads();
 			text += fmt::format("[DCLF] frame capture (6e F2): render thread {:.1f} us/frame for the globals, {:.1f} us/frame for the categories ({} captures made; {} subtrees the mirror lacked captured, {} records; "
-								"{} subtrees waited for the mirror, {} dropped with no chain after); {} reads off the render thread with no frame's capture bound{}\n",
+								"{} subtrees waited for the mirror, {} dropped with no chain after; {} new category nodes without the capture's children); {} reads off the render thread with no frame's capture bound{}\n",
 				static_cast<double>(captureNs) / 1000.0 / captureFrames, static_cast<double>(categoryCaptureNs) / 1000.0 / captureFrames, categoryCapturesMade, categoryMirrorCaptures, categoryMirrorRecords,
-				subtreesPended, subtreesDropped, unscoped, unscoped ? " <- UNSCOPED GLOBALS" : " <- OK");
+				subtreesPended, subtreesDropped, categoryChildrenMissing, unscoped, unscoped || categoryChildrenMissing ? " <- CAPTURE" : " <- OK");
 			captureNs = categoryCaptureNs = categoryCapturesMade = captureFrames = 0; categoryMirrorCaptures = categoryMirrorRecords = 0;
-			subtreesPended = subtreesDropped = 0;
+			subtreesPended = subtreesDropped = categoryChildrenMissing = 0;
 		}
 		if (auto& t = delta; t.walks) {
 			const double n = t.walks;
