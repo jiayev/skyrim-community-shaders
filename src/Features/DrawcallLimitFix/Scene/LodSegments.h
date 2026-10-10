@@ -5,6 +5,8 @@
 #include <cstring>
 #include <vector>
 
+#include "Features/DrawcallLimitFix/Engine/EngineReadWindow.h"
+
 namespace DCLF::LodSegments
 {
 	/**
@@ -60,6 +62,7 @@ namespace DCLF::LodSegments
 	 */
 	inline void DrawnRanges(const void* a_shape, std::vector<Range>& a_out)
 	{
+		EngineReadWindow::Touch("LodSegments::DrawnRanges");
 		a_out.clear();
 		auto add = [&](std::uint32_t a_first, std::uint32_t a_triangles, const void* a_key) {
 			if (!a_triangles)
@@ -91,8 +94,12 @@ namespace DCLF::LodSegments
 	}
 
 	/** @brief Whether a_ranges are the shape's whole index list in one range: drawn as the TriShape's own geometry slot. */
+	inline bool Whole(std::uint32_t a_triangles, const std::vector<Range>& a_ranges)
+	{
+		return a_ranges.size() == 1 && a_ranges[0].firstIndex == 0 && a_ranges[0].indexCount == a_triangles * 3u;
+	}
 	inline bool Whole(const void* a_shape, const std::vector<Range>& a_ranges)
 	{
-		return a_ranges.size() == 1 && a_ranges[0].firstIndex == 0 && a_ranges[0].indexCount == At<std::uint16_t>(a_shape, kTriangleCount) * 3u;
+		return Whole(At<std::uint16_t>(a_shape, kTriangleCount), a_ranges);
 	}
 }

@@ -11,6 +11,13 @@
 #include <string>
 #include <vector>
 
+namespace DCLF::SceneCapture
+{
+	struct LeafView;
+	struct NodeRecord;
+	struct PropertyRecord;
+}
+
 #include <ankerl/unordered_dense.h>
 
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
@@ -68,23 +75,24 @@ namespace DCLF
 		 * ~0u when the cascades are not known this frame. The engine's rule (dclf-gpu-driven-frame.md, "Phase 1, step 2"),
 		 * with the sun's mask replaced by the cascade test.
 		 */
-		static std::uint32_t SunShadowBits(const RE::BSGeometry& a_geometry, const RE::BSLightingShaderProperty* a_property = nullptr);
+		static std::uint32_t SunShadowBits(const RE::BSGeometry& a_geometry, const SceneCapture::LeafView& a_leaf, const SceneCapture::PropertyRecord* a_property = nullptr);
 		/**
 		 * @brief The bits SunShadowBits gives a geometry whose bound meets a cascade: what depends on the object and
 		 * the frame's globals alone. The GPU makes the cascade test (kObjectSunTest).
 		 */
-		static std::uint32_t SunShadowStatic(const RE::BSGeometry& a_geometry, const RE::BSLightingShaderProperty* a_property = nullptr);
+		static std::uint32_t SunShadowStatic(const SceneCapture::LeafView& a_leaf, const SceneCapture::PropertyRecord* a_property = nullptr);
 		/** @brief CS_DCLF_RESIDENT_PARITY: the synthetic pass built from scratch (no cache), for SceneStore's comparison. */
-		static bool FreshSyntheticPass(const RE::BSGeometry& a_geometry, AccumulatedPass& a_out);
+		static bool FreshSyntheticPass(const RE::BSGeometry& a_geometry, const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out);
 		/**
 		 * @brief The pass SceneStore binds an object with by scene membership: a synthetic pass from the object alone (render
-		 * thread; derived descriptors cached per geometry), false where one cannot model it (decals, fading or translucent).
+		 * thread; derived descriptors cached per geometry), false where one cannot model it (decals, fading or translucent). T6b1b:
+		 * from the geometry's records (a_leaf: the mirror's).
 		 */
-		bool MembershipPass(const RE::BSGeometry* a_geometry, AccumulatedPass& a_out);
-		/** @brief MembershipPass for the geometry's layer (LayerPropertyOf, a_layer): the pass of its property with hint 12. */
-		bool MembershipLayerPass(const RE::BSGeometry* a_geometry, const RE::BSLightingShaderProperty& a_layer, AccumulatedPass& a_out);
+		bool MembershipPass(const RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out);
+		/** @brief MembershipPass for the geometry's layer (LayerPropertyOf: a_leaf's layer): the pass of its property with hint 12. */
+		bool MembershipLayerPass(const RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out);
 		/** @brief A fade root's fade-out distance for BuildDraws' fade test (kObjectFadeTest), 0 when it has none. */
-		static float MembershipFadeDistance(const RE::NiAVObject* a_root) { return FadeDistanceOf(a_root); }
+		static float MembershipFadeDistance(const SceneCapture::NodeRecord& a_root) { return FadeDistanceOf(a_root); }
 		/** @brief The frame globals a membership pass reads (the static sun bits, the fade distances): a change rebinds them all. */
 		static std::uint32_t MembershipWitness(const FrameGlobals& a_globals);
 		/**
@@ -111,8 +119,8 @@ namespace DCLF
 		/** @brief T6b0: why this thread's last SyntheticPass gave none (kSyntheticFailNames' index; 0: it gave one). */
 		static std::uint8_t LastSyntheticFail();
 		static constexpr std::array<const char*, 6> kSyntheticFailNames{ "-", "not derived", "not lighting", "sun bits", "translucent layer", "translucent" };
-		static bool SyntheticPass(const RE::BSGeometry& a_geometry, std::uint32_t a_derivedPass, AccumulatedPass& a_out, bool a_sunOnGpu = false,
-			const RE::BSLightingShaderProperty* a_layer = nullptr);
+		static bool SyntheticPass(const RE::BSGeometry& a_geometry, const SceneCapture::LeafView& a_leaf, std::uint32_t a_derivedPass, AccumulatedPass& a_out,
+			bool a_sunOnGpu = false, const SceneCapture::PropertyRecord* a_layer = nullptr);
 
 		/** @brief This frame's members in view under the entries the list jobs stood in for (nothing registered them). */
 		const std::vector<const RE::BSGeometry*>& StoodInMembers() const { return frameVisible; }
@@ -251,7 +259,7 @@ namespace DCLF
 		 * below BSFadeNode::OnVisible's fade-out threshold. > 0: against the distance times the camera's LOD factor; < 0:
 		 * against the distance times a constant, folded in; 0: the root never fades out by distance.
 		 */
-		static float FadeDistanceOf(const RE::NiAVObject* a_root);
+		static float FadeDistanceOf(const SceneCapture::NodeRecord& a_root);
 		PrimaryCull() = default;
 
 		struct Hooks;

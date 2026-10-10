@@ -32,6 +32,13 @@ namespace DCLF
 
 	PassCapture::PassCapture() = default;
 
+	std::uint32_t PassCapture::SubPassOf(bool a_alphaTesting, std::uint64_t a_propertyFlags)
+	{
+		if (a_propertyFlags & kFlagList4)
+			return 4;
+		return ((a_propertyFlags & kFlagList2) ? 2u : 0u) | (a_alphaTesting ? 1u : 0u);
+	}
+
 	std::uint32_t PassCapture::SubPassOf(const RE::BSGeometry* a_geometry, std::uint64_t a_propertyFlags)
 	{
 		if (a_propertyFlags & kFlagList4)

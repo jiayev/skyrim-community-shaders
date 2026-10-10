@@ -1,5 +1,6 @@
 #include "Internal.h"
 
+#include "Features/ExtendedTranslucency.h"
 #include "Features/SubsurfaceScattering.h"
 
 namespace DCLF
@@ -11,17 +12,34 @@ namespace DCLF
 		 * (kFace or kFaceGenRGBTint), from its actor's race keyword, and set without an actor or a race. Lighting.hlsl reads it
 		 * under SKIN alone, so it is nothing for any other property.
 		 */
-		bool BeastRaceFace(const RE::BSShaderProperty& a_property, RE::BSGeometry& a_geometry)
+		bool BeastRaceFace(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf)
 		{
-			using enum RE::BSShaderProperty::EShaderPropertyFlag;
+			// The records' (T6b1b): the geometry's reference's answer is its node record's (CaptureNode: BeastOf).
+			using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 			const auto& sss = globals::features::subsurfaceScattering;
-			if (!sss.loaded || !sss.isBeastRaceKeyword || !a_property.flags.any(kFace, kFaceGenRGBTint))
+			if (!sss.loaded || !sss.isBeastRaceKeyword || !(a_property.flags & (static_cast<std::uint64_t>(Flag::kFace) | static_cast<std::uint64_t>(Flag::kFaceGenRGBTint))))
 				return false;
-			if (auto* userData = a_geometry.GetUserData())
-				if (auto* actor = userData->As<RE::Actor>())
-					if (auto* race = actor->GetRace())
-						return race->HasKeyword(sss.isBeastRaceKeyword);
-			return true;
+			return a_leaf.node->beast;
+		}
+
+		/** @brief ExtendedTranslucency::MaterialModelOf, from the records (T6b1b). */
+		std::uint32_t TranslucencyModelOf(const SceneCapture::LeafView& a_leaf)
+		{
+			using Model = ExtendedTranslucency::MaterialModel;
+			const auto* alpha = a_leaf.alpha && a_leaf.alpha->rtti == globals::rtti::NiAlphaPropertyRTTI.get() ? a_leaf.alpha : nullptr;
+			const auto* light = a_leaf.property && a_leaf.property->rtti == globals::rtti::BSLightingShaderPropertyRTTI.get() ? a_leaf.property : nullptr;
+			// Only blended geometry: an alpha property that blends, or a Lighting property's alpha below one.
+			if (!(light && light->alpha < 0.999f) && (!alpha || !(alpha->flags & 1u)))
+				return Model::DescriptorDisabled;
+			const auto value = a_leaf.geometry->anisotropic;
+			if (value == SceneCapture::GeometryRecord::kNoExtra) {
+				const auto& feature = globals::features::extendedTranslucency;
+				return !feature.settings.SkinnedOnly || a_leaf.geometry->skin ? Model::DescriptorUseDefault : Model::DescriptorDisabled;
+			}
+			if (value == SceneCapture::GeometryRecord::kWrongExtra)
+				return Model::DescriptorDisabled;
+			const auto material = static_cast<std::uint32_t>(value) & ExtendedTranslucency::ExtraFeatureDescriptorMask;
+			return material == Model::Disabled ? Model::DescriptorDisabled : material;
 		}
 	}
 
@@ -338,9 +356,15 @@ namespace DCLF
 		for (auto& request : std::exchange(materialRequests, {})) {
 			const auto key = std::pair{ request.material, request.pass };
 			materialRequested.erase(key);
+			// The material's reference taken here, off the property the join read (T6b1b: the scene work makes none): a property with
+			// another material now was swapped after the join's batch, and the request is stale (the join asks again after the swap's).
+			if (!request.property || request.property->material != request.material) {
+				++residentStats.materialsStale;
+				continue;
+			}
 			MaterialServed served;
+			served.owner.reset(const_cast<RE::BSShaderMaterial*>(request.material));
 			served.valid = EvaluateMaterialForSlot(request.material, request.pass, served.record);
-			served.owner = std::move(request.owner);
 			served.frame = frame;
 			++residentStats.materialsServed;
 			if (const auto it = materialsServed.find(key); it != materialsServed.end())
@@ -468,16 +492,16 @@ namespace DCLF
 			auto& object = tables.objects[objectId];
 			const std::uint32_t geometrySlot = object.geometryIndex;
 
-			auto& data = geometry->GetGeometryRuntimeData();
-			auto* property = layer ? LayerPropertyOf(*geometry) : data.shaderProperty.get();
-			if (!property)
+			// The mirror's records (T6b1b), and the entry's held property (its reference: the template's, a material request's).
+			const auto leaf = mirror.Leaf(geometry);
+			const auto* propertyRecord = layer ? leaf.layer : leaf.property;
+			auto* property = trackedEntry->HeldProperty(layer);
+			if (!propertyRecord || !property || propertyRecord->key != property)
 				return;
 			auto* witnessProperty = property;
-			const auto* witnessMaterial = witnessProperty ? witnessProperty->material : nullptr;
-			const std::uint8_t fadeState = FadeStateOf(witnessProperty);
-			RE::BSLightingShaderProperty* castCache = layer ? netimmerse_cast<RE::BSLightingShaderProperty*>(property) :
-			                                          trackedEntry->castProperty == witnessProperty ? trackedEntry->castResult : nullptr;
-			const bool alphaBelowOne = witnessMaterial && static_cast<const RE::BSLightingShaderMaterialBase*>(witnessMaterial)->materialAlpha < 1.0f;
+			const auto* witnessMaterial = static_cast<const RE::BSShaderMaterial*>(propertyRecord->material);
+			const std::uint8_t fadeState = FadeStateOf(propertyRecord);
+			const bool alphaBelowOne = propertyRecord->materialAlpha < 1.0f;  // 1 without a material, or for any but a Lighting property
 
 			// The positive derivation, cached (Tracked::Derived): for an accumulated object whose
 			// witnesses all match and whose slots still carry the keys they were derived for, the
@@ -501,7 +525,7 @@ namespace DCLF
 				descriptors = derived.descriptors;
 				++stats.derivedHits;
 			} else {
-				reason = layer ? ClassifyLayer(*geometry, &descriptors, accumulated) : ClassifyStatic(*geometry, &descriptors, accumulated, &castCache);
+				reason = layer ? ClassifyLayer(leaf, &descriptors, accumulated) : ClassifyStatic(leaf, &descriptors, accumulated);
 			}
 			timer.Add(BuildPart::ClassifyStatic);
 			// Per frame whether or not the derivation was cached: hidden, part of an actor and fading are
@@ -541,7 +565,9 @@ namespace DCLF
 					lodFadeSample = SampleLodFadeFrame();
 					lodFadeSampled = true;
 				}
-				if (const auto node = LodFadeNodeOf(property); LodFadesApply(node) && lodFadeSample.fadesOn != 0.0f) {
+				// The live property and fade node under a lease (T6b1d: the scene work may run beside the engine's update).
+				const EngineReadWindow::Lease lease;
+				if (const auto node = lease ? LodFadeNodeOf(property) : decltype(LodFadeNodeOf(property)){}; lease && LodFadesApply(node) && lodFadeSample.fadesOn != 0.0f) {
 					++stats.lodFadeChecked;
 					const float metric = LodMetricOf(lodFadeSample, node);
 					const float engineMetric = std::bit_cast<float>(property->fadeNode->GetRuntimeData().unk144);
@@ -618,10 +644,12 @@ namespace DCLF
 				}
 				timer.Add(BuildPart::DedupHit);
 			} else {
-				const bool twoSided = property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kTwoSided);
+				using PropertyFlag = RE::BSShaderProperty::EShaderPropertyFlag;
+				const bool twoSided = (propertyRecord->flags & static_cast<std::uint64_t>(PropertyFlag::kTwoSided)) != 0;
 				// A layer's draws apply no alpha property (render flags 0x41, engine notes).
-				const auto* alpha = layer ? nullptr : data.alphaProperty.get();
-				const bool alphaTest = alpha && alpha->GetAlphaTesting();
+				const auto* alpha = layer ? nullptr : leaf.alpha;
+				const bool alphaTest = alpha && (alpha->flags & (1u << 9));      // GetAlphaTesting
+				const bool alphaBlending = alpha && (alpha->flags & 1u);         // GetAlphaBlending
 
 				// A decal's key carries the engine's fixed-function state indices as well (Records.h): the
 				// depth-bias mode from the frame, blend and write modes from the alpha property (derived with
@@ -630,7 +658,7 @@ namespace DCLF
 				if (descriptors.decalGroup)
 					rasterFlags |= PackDecalRasterFlags(descriptors.decalGroup, decalBiasMode[descriptors.decalGroup & 3], descriptors.decalBlendMode, descriptors.decalWriteMode);
 				if (globals::features::extendedTranslucency.loaded)
-					rasterFlags |= ((ExtendedTranslucency::MaterialModel::DescriptorDisabled ^ ExtendedTranslucency::MaterialModelOf(geometry)) & 7u) << kRasterTranslucencyShift;
+					rasterFlags |= ((ExtendedTranslucency::MaterialModel::DescriptorDisabled ^ TranslucencyModelOf(leaf)) & 7u) << kRasterTranslucencyShift;
 				key = PipelineKey{ descriptors.vertex, descriptors.pixel, rasterFlags, descriptors.pass,
 					VertexLayoutOf(tables.geometries[geometrySlot].vertexDesc) };
 				auto pipelineIt = pipelineIndex.find(key);
@@ -661,7 +689,8 @@ namespace DCLF
 					// AdditiveLighting (State::UpdateLightingShaderPermutation): a pass whose alpha property blends onto the target
 					// (destination ONE). Only a blended decal (group 2) applies its alpha property, and its key carries the blend
 					// mode, which the blend functions decide: the same for every object of the key.
-					if (descriptors.decalGroup == 2 && alpha && alpha->GetAlphaBlending() && alpha->GetDestBlendMode() == RE::NiAlphaProperty::AlphaFunction::kOne)
+					if (descriptors.decalGroup == 2 && alphaBlending &&
+						static_cast<RE::NiAlphaProperty::AlphaFunction>((alpha->flags >> 5) & 0xF) == RE::NiAlphaProperty::AlphaFunction::kOne)  // GetDestBlendMode
 						permutation.extraShaderDescriptor |= static_cast<std::uint32_t>(State::ExtraShaderDescriptors::AdditiveLighting);
 					// Extended Translucency's material model, as its SetupGeometry hook sets it (the key carries it):
 					// disabled for opaque geometry, the default or the mesh's own for blended geometry.
@@ -679,7 +708,7 @@ namespace DCLF
 				joinMarkedPipelines.push_back(pipelineSlot);
 
 				// Material state as the engine's SetupMaterial produces it for this pass descriptor.
-				const auto* material = property->material;
+				const auto* material = witnessMaterial;
 				auto materialIt = materialIndex.find(std::pair{ material, descriptors.pass });
 				if (materialIt == materialIndex.end()) {
 					timer.Add(BuildPart::Dedup);
@@ -694,7 +723,7 @@ namespace DCLF
 						}
 						if (materialRequested.insert(materialKey).second) {
 							MaterialRequest request;
-							request.owner.reset(const_cast<RE::BSShaderMaterial*>(material));
+							request.property.reset(property);
 							request.material = material;
 							request.pass = descriptors.pass;
 							materialRequests.push_back(std::move(request));
@@ -722,14 +751,16 @@ namespace DCLF
 				joinMarkedMaterials.push_back(materialSlot);
 				timer.Add(BuildPart::DedupHit);
 
+				// ExternalEmittance::ShouldSuppress: interior, the property's kExternalEmittance, its reference without an emittance source.
+				const bool suppress = interior && (propertyRecord->flags & static_cast<std::uint64_t>(PropertyFlag::kExternalEmittance)) && !leaf.node->emittance;
 				staticFlags = (alphaTest ? kObjectAlphaTest : 0u) | (twoSided ? kObjectTwoSided : 0u) |
-				              (ExternalEmittance::ShouldSuppress(interior, property, geometry) ? kObjectSuppressExternalEmittance : 0u) |
+				              (suppress ? kObjectSuppressExternalEmittance : 0u) |
 				              (descriptors.technique == kTechniqueTreeAnim ? kObjectTreeAnim : 0u) |
-				              (alphaTest ? static_cast<std::uint32_t>(alpha->alphaThreshold) << kObjectAlphaThresholdShift : 0u) |
-				              (alphaTest && alpha->GetAlphaBlending() ? kObjectAlphaBlended : 0u) |
+				              (alphaTest ? static_cast<std::uint32_t>(alpha->threshold) << kObjectAlphaThresholdShift : 0u) |
+				              (alphaTest && alphaBlending ? kObjectAlphaBlended : 0u) |
 				              (descriptors.decalGroup ? kObjectDecal | (descriptors.decalGroup << kObjectDecalGroupShift) : 0u) |
-				              ((property->flags.underlying() & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u) |
-				              (BeastRaceFace(*property, *geometry) ? kObjectBeastRace : 0u);
+				              ((propertyRecord->flags & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u) |
+				              (BeastRaceFace(*propertyRecord, leaf) ? kObjectBeastRace : 0u);
 				{
 					if (derivedHit && derivedProbe) {
 						++stats.derivedChecked;
@@ -916,14 +947,14 @@ namespace DCLF
 				continue;
 			// A member written again keeps its binding while what the binding reads is the same (the derivation cache's
 			// witnesses): a skin, a face or a mover is written every frame for its transform, bones or stream alone.
-			const auto& data = geometry->GetGeometryRuntimeData();
-			if (IsResidentSlot(slot) && MemberBindingStands(slot, *geometry, trackedIt->second)) {
+			if (IsResidentSlot(slot) && MemberBindingStands(slot, trackedIt->second)) {
 				++residentStats.membershipKept;
 				continue;
 			}
 			AccumulatedPass pass;
-			const auto* layerProperty = layer ? netimmerse_cast<const RE::BSLightingShaderProperty*>(LayerPropertyOf(*geometry)) : nullptr;
-			if (layer ? !layerProperty || !primary.MembershipLayerPass(geometry, *layerProperty, pass) : !primary.MembershipPass(geometry, pass)) {
+			// The mirror's records (T6b1b).
+			const auto leaf = mirror.Leaf(geometry);
+			if (layer ? !primary.MembershipLayerPass(geometry, leaf, pass) : !primary.MembershipPass(geometry, leaf, pass)) {
 				// T6b0: dropped from the queue, bound only when written again.
 				if (TimelineEnabled() && !layer) {
 					const std::uint8_t why = primary.LastSyntheticFail();
@@ -932,20 +963,18 @@ namespace DCLF
 					std::scoped_lock lock(residueClassesLock);
 					++timelineStats.bindFailures[why];
 					if (timelineStats.bindFailFirst.empty()) {
-						const auto* material = data.shaderProperty ? static_cast<const RE::BSLightingShaderMaterialBase*>(data.shaderProperty->material) : nullptr;
-						timelineStats.bindFailFirst = fmt::format("'{}' under '{}' ({}, material alpha {:.3f}, alpha property {})", geometry->name.c_str() ? geometry->name.c_str() : "",
-							geometry->parent && geometry->parent->name.c_str() ? geometry->parent->name.c_str() : "", PrimaryCull::kSyntheticFailNames[why],
-							material ? material->materialAlpha : -1.0f, data.alphaProperty ? data.alphaProperty->alphaFlags : 0xFFFF);
+						timelineStats.bindFailFirst = fmt::format("'{}' under '{}' ({}, material alpha {:.3f}, alpha property {})", leaf.node && leaf.node->name ? leaf.node->name : "",
+							leaf.parent && leaf.parent->name ? leaf.parent->name : "", PrimaryCull::kSyntheticFailNames[why],
+							leaf.property && leaf.property->material ? leaf.property->materialAlpha : -1.0f, leaf.alpha ? leaf.alpha->flags : 0xFFFF);
 					}
 				}
 				continue;
 			}
 			// A fade node's objects carry its fade-out distance for BuildDraws' fade test, which measures from the node's centre
 			// (Tables::lodFade, SetFadeRow). A tree's also take its height test.
-			if (const auto* fadeNode = data.shaderProperty ? data.shaderProperty->fadeNode : nullptr) {
-				pass.fadeDistance = PrimaryCull::MembershipFadeDistance(fadeNode);
-				const auto* rtti = fadeNode->GetRTTI();
-				pass.heightTest = rtti && rtti->name && std::strcmp(rtti->name, "BSTreeNode") == 0;
+			if (const auto* fadeNode = leaf.fadeNode) {
+				pass.fadeDistance = PrimaryCull::MembershipFadeDistance(*fadeNode);
+				pass.heightTest = (fadeNode->kind & SceneCapture::kKindTree) != 0;
 			}
 			(layer ? accumulatedLayerPasses : accumulatedPasses).insert_or_assign(geometry, pass);
 			(layer ? residentLayerJoining : residentJoining).insert(geometry);
@@ -964,15 +993,18 @@ namespace DCLF
 		}
 	}
 
-	bool SceneStore::MemberBindingStands(std::uint32_t a_slot, const RE::BSGeometry& a_geometry, const Tracked& a_entry) const
+	bool SceneStore::MemberBindingStands(std::uint32_t a_slot, const Tracked& a_entry) const
 	{
 		const bool layer = tables.IsLayer(a_slot);
 		const auto& derived = layer ? a_entry.layerDerived : a_entry.derived;
-		const auto* property = layer ? LayerPropertyOf(a_geometry) : a_geometry.GetGeometryRuntimeData().shaderProperty.get();
-		const auto* material = property ? property->material : nullptr;
-		const bool alphaBelowOne = material && static_cast<const RE::BSLightingShaderMaterialBase*>(material)->materialAlpha < 1.0f;
+		// The mirror's records (T6b1b).
+		const auto leaf = mirror.Leaf(a_entry.geometry.get());
+		const auto* record = layer ? leaf.layer : leaf.property;
+		const auto* property = record ? static_cast<const RE::BSShaderProperty*>(record->key) : nullptr;
+		const auto* material = record ? static_cast<const RE::BSShaderMaterial*>(record->material) : nullptr;
+		const bool alphaBelowOne = record && record->materialAlpha < 1.0f;
 		return derived.valid && derived.generation == tablesGeneration && derived.geometrySlot == tables.objects[a_slot].geometryIndex &&
-		       derived.property == property && derived.material == material && derived.fadeState == FadeStateOf(property) &&
+		       derived.property == property && derived.material == material && derived.fadeState == FadeStateOf(record) &&
 		       derived.alphaBelowOne == alphaBelowOne && derived.interior == frameInterior && derived.pipelineSlot == tables.objects[a_slot].pipelineIndex &&
 		       derived.materialSlot == tables.objects[a_slot].materialIndex;
 	}

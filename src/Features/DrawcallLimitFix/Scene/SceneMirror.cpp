@@ -324,6 +324,22 @@ namespace DCLF
 		return it != alphas.end() ? &it->second.record : nullptr;
 	}
 
+	SceneCapture::LeafView SceneMirror::Leaf(const void* a_key) const
+	{
+		SceneCapture::LeafView view;
+		view.node = Node(a_key);
+		view.geometry = Geometry(a_key);
+		if (!view.node || !view.geometry)
+			return view;
+		view.parent = view.node->parent ? Node(view.node->parent) : nullptr;
+		view.property = view.geometry->property ? Property(view.geometry->property) : nullptr;
+		view.layer = view.geometry->Layer() ? Property(view.geometry->Layer()) : nullptr;
+		view.alpha = view.geometry->alpha ? Alpha(view.geometry->alpha) : nullptr;
+		view.fadeNode = view.property && view.property->fadeNode ? Node(view.property->fadeNode) : nullptr;
+		view.layerFadeNode = view.layer && view.layer->fadeNode ? Node(view.layer->fadeNode) : nullptr;
+		return view;
+	}
+
 	void SceneMirror::Check(const Records& a_probe, const KeySet& a_eventKeys, const FieldMap& a_eventFields)
 	{
 		auto& t = tally;

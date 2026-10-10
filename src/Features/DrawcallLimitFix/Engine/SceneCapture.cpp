@@ -2,6 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Diagnostics/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Scene/FadeState.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Globals.h"
@@ -95,7 +96,7 @@ namespace DCLF::SceneCapture
 				if (a_out.pinning)
 					a_out.pins.emplace_back(const_cast<RE::NiAVObject*>(object));
 				if (const auto* geometry = const_cast<RE::NiAVObject*>(object)->AsGeometry()) {
-					CaptureLeaf(*geometry, a_out);
+					CaptureLeaf(*geometry, a_out, a_out.pinning ? &a_out.pins : nullptr);
 					MirrorWatch::ArmGeometry(geometry);
 					continue;
 				}
@@ -151,7 +152,7 @@ namespace DCLF::SceneCapture
 		d |= shown != a_o.shown ? kDismember : 0u;
 		d |= property != a_o.property ? kProperty : 0u;
 		d |= alpha != a_o.alpha ? kAlpha : 0u;
-		d |= (layerProperty != a_o.layerProperty || altIndexBuffer != a_o.altIndexBuffer || altPrimCount != a_o.altPrimCount) ? kLayer : 0u;
+		d |= (layerProperty != a_o.layerProperty || altIndexList != a_o.altIndexList || altIndexBuffer != a_o.altIndexBuffer || altPrimCount != a_o.altPrimCount) ? kLayer : 0u;
 		d |= anisotropic != a_o.anisotropic ? kExtra : 0u;
 		d |= std::memcmp(multiParams.data(), a_o.multiParams.data(), sizeof(multiParams)) != 0 ? kMultiParams : 0u;
 		d |= segments != a_o.segments ? kSegments : 0u;
@@ -269,6 +270,7 @@ namespace DCLF::SceneCapture
 			alpha = a_o.alpha;
 		if (a_f & kLayer) {
 			layerProperty = a_o.layerProperty;
+			altIndexList = a_o.altIndexList;
 			altIndexBuffer = a_o.altIndexBuffer;
 			altPrimCount = a_o.altPrimCount;
 		}
@@ -360,6 +362,7 @@ namespace DCLF::SceneCapture
 
 	NodeRecord CaptureNodeFields(const RE::NiAVObject& a_object, std::uint32_t a_fields)
 	{
+		EngineReadWindow::Touch("SceneCapture::CaptureNodeFields");
 		using F = NodeRecord::Field;
 		auto& object = const_cast<RE::NiAVObject&>(a_object);
 		NodeRecord r;
@@ -392,6 +395,7 @@ namespace DCLF::SceneCapture
 
 	NodeRecord CaptureNode(const RE::NiAVObject& a_object)
 	{
+		EngineReadWindow::Touch("SceneCapture::CaptureNode");
 		auto& object = const_cast<RE::NiAVObject&>(a_object);
 		NodeRecord r;
 		r.key = &a_object;
@@ -453,6 +457,7 @@ namespace DCLF::SceneCapture
 
 	GeometryRecord CaptureGeometry(const RE::BSGeometry& a_geometry)
 	{
+		EngineReadWindow::Touch("SceneCapture::CaptureGeometry");
 		auto& geometry = const_cast<RE::BSGeometry&>(a_geometry);
 		const auto& data = a_geometry.GetGeometryRuntimeData();
 		GeometryRecord r;
@@ -482,6 +487,7 @@ namespace DCLF::SceneCapture
 					const auto& p = partition->partitions[i];
 					GeometryRecord::Partition out;
 					if (p.buffData) {
+						out.rendererData = p.buffData;
 						out.vertexBuffer = reinterpret_cast<ID3D11Buffer*>(p.buffData->vertexBuffer);
 						out.indexBuffer = reinterpret_cast<ID3D11Buffer*>(p.buffData->indexBuffer);
 						out.vertexDesc = std::bit_cast<std::uint64_t>(p.buffData->vertexDesc);
@@ -504,6 +510,7 @@ namespace DCLF::SceneCapture
 		r.alpha = data.alphaProperty.get();
 		if (r.type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kMultiIndexTriShape)) {
 			const auto& multi = static_cast<const RE::BSMultiIndexTriShape&>(a_geometry).GetMultiIndexTrishapeRuntimeData();
+			r.altIndexList = multi.altIndexBuffer;
 			r.altIndexBuffer = multi.altIndexBuffer ? *reinterpret_cast<ID3D11Buffer* const*>(multi.altIndexBuffer) : nullptr;
 			r.altPrimCount = multi.altPrimCount;
 			r.layerProperty = multi.additionalShaderProperty.get();
@@ -523,6 +530,7 @@ namespace DCLF::SceneCapture
 
 	PropertyRecord CaptureProperty(const RE::BSShaderProperty& a_property)
 	{
+		EngineReadWindow::Touch("SceneCapture::CaptureProperty");
 		auto& property = const_cast<RE::BSShaderProperty&>(a_property);
 		PropertyRecord r;
 		r.key = &a_property;
@@ -563,6 +571,7 @@ namespace DCLF::SceneCapture
 
 	AlphaRecord CaptureAlpha(const RE::NiAlphaProperty& a_alpha)
 	{
+		EngineReadWindow::Touch("SceneCapture::CaptureAlpha");
 		AlphaRecord r;
 		r.key = &a_alpha;
 		r.flags = a_alpha.alphaFlags;
@@ -572,17 +581,50 @@ namespace DCLF::SceneCapture
 		return r;
 	}
 
-	void CaptureLeaf(const RE::BSGeometry& a_geometry, Records& a_out)
+	void CaptureLeaf(const RE::BSGeometry& a_geometry, Records& a_out, std::vector<RE::NiPointer<RE::NiRefObject>>* a_pins)
 	{
 		a_out.nodes.push_back(CaptureNode(a_geometry));
 		a_out.geometries.push_back(CaptureGeometry(a_geometry));
 		const auto& g = a_out.geometries.back();
+		if (a_pins)
+			for (const void* property : { g.property, g.layerProperty, g.alpha })
+				if (property)
+					a_pins->emplace_back(static_cast<RE::NiRefObject*>(const_cast<void*>(property)));
 		if (g.property)
 			a_out.properties.push_back(CaptureProperty(*static_cast<const RE::BSShaderProperty*>(g.property)));
 		if (g.layerProperty)
 			a_out.properties.push_back(CaptureProperty(*static_cast<const RE::BSShaderProperty*>(g.layerProperty)));
 		if (g.alpha)
 			a_out.alphas.push_back(CaptureAlpha(*static_cast<const RE::NiAlphaProperty*>(g.alpha)));
+	}
+
+	LiveLeaf::LiveLeaf(const RE::BSGeometry& a_geometry)
+	{
+		EngineReadWindow::Touch("SceneCapture::LiveLeaf");
+		CaptureLeaf(a_geometry, records);
+		const auto& g = records.geometries.back();
+		const RE::NiAVObject* parent = a_geometry.parent;
+		const auto* property = static_cast<const RE::BSShaderProperty*>(g.property);
+		const RE::NiAVObject* fadeNode = property ? property->fadeNode : nullptr;
+		const auto* layer = static_cast<const RE::BSShaderProperty*>(g.Layer());
+		const RE::NiAVObject* layerFadeNode = layer ? layer->fadeNode : nullptr;
+		if (parent)
+			records.nodes.push_back(CaptureNode(*parent));
+		if (fadeNode)
+			records.nodes.push_back(CaptureNode(*fadeNode));
+		if (layerFadeNode)
+			records.nodes.push_back(CaptureNode(*layerFadeNode));
+		// The view, once the records hold still.
+		view.node = &records.nodes[0];
+		view.parent = parent ? &records.nodes[1] : nullptr;
+		view.fadeNode = fadeNode ? &records.nodes[parent ? 2 : 1] : nullptr;
+		view.layerFadeNode = layerFadeNode ? &records.nodes.back() : nullptr;
+		view.geometry = &g;
+		for (const auto& p : records.properties) {
+			view.property = !view.property && p.key == g.property ? &p : view.property;
+			view.layer = p.key == g.Layer() ? &p : view.layer;
+		}
+		view.alpha = records.alphas.empty() ? nullptr : &records.alphas.front();
 	}
 
 	namespace
@@ -603,6 +645,7 @@ namespace DCLF::SceneCapture
 
 	bool InWorld(const RE::NiAVObject* a_object)
 	{
+		EngineReadWindow::Touch("SceneCapture::InWorld");
 		const auto* root = static_cast<const RE::NiAVObject*>(RE::Main::WorldRootNode());
 		const RE::NiAVObject* top = nullptr;
 		for (std::uint32_t depth = 0; root && a_object && depth <= kMaxDepth; ++depth, a_object = a_object->parent) {

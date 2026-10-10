@@ -195,19 +195,30 @@ namespace DCLF
 
 		// A retired record is freed once a morph stage has completed after its retirement: every job that could
 		// have found it belonged to a stage that has joined since.
+		/** @brief a_record's references into released (T6b1b), then the record freed. */
+		void Free(Record* a_record)
+		{
+			released.emplace_back(std::move(a_record->head));
+			for (auto& shape : a_record->shapes)
+				released.emplace_back(std::move(shape.shape));
+			delete a_record;
+		}
+
 		void FreeRetired()
 		{
 			const auto completed = stagesCompleted.load(std::memory_order_acquire);
 			std::erase_if(retired, [&](Record* a_record) {
 				if (a_record->retiredAtStage >= completed)
 					return false;
-				delete a_record;
+				Free(a_record);
 				++stats.freed;
 				return true;
 			});
 		}
 
 		std::vector<Record::Shape> scratch;
+		std::vector<ShapeInput> inputs;
+		std::vector<RE::NiPointer<RE::NiRefObject>> released;  // the freed records' references (TakeReleased)
 	};
 
 	FaceSnapshots::FaceSnapshots() :
@@ -338,13 +349,23 @@ namespace DCLF
 		d.live.clear();
 	}
 
-	FaceSnapshots::ShapeView FaceSnapshots::Shape(RE::BSDynamicTriShape& a_shape, RE::BSFaceGenNiNode& a_head)
+	FaceSnapshots::ShapeView FaceSnapshots::Shape(const RE::BSGeometry* a_shape, RE::BSFaceGenNiNode* a_head, const std::function<void(std::vector<ShapeInput>&)>& a_shapes)
 	{
 		auto& d = *impl;
-		auto* record = d.Lookup(&a_head);
+		if (!a_head)
+			return {};
+		auto* record = d.Lookup(a_head);
 		if (!record || record->seenWalk != d.walk) {
-			// The first shape of the head this walk: its record against the head's shapes as they are now.
-			Impl::ShapesOf(a_head, d.scratch);
+			// The first shape of the head this walk: its record against the head's shapes as the caller has them now.
+			d.inputs.clear();
+			a_shapes(d.inputs);
+			d.scratch.clear();
+			std::uint32_t offset = 0;
+			for (const auto& input : d.inputs) {
+				d.scratch.push_back({ RE::NiPointer<RE::BSDynamicTriShape>(input.shape), offset, input.vertexCount });
+				offset += input.vertexCount * 4;
+			}
+			d.inputs.clear();
 			if (!record || !d.Matches(*record, d.scratch)) {
 				if (d.scratch.empty()) {
 					if (record) {
@@ -355,7 +376,7 @@ namespace DCLF
 				}
 				auto* rebuilt = new Impl::Record();
 				rebuilt->recordId = d.nextRecordId++;
-				rebuilt->head.reset(&a_head);
+				rebuilt->head.reset(a_head);
 				rebuilt->shapes = d.scratch;
 				for (const auto& shape : rebuilt->shapes)
 					rebuilt->floats += shape.vertexCount * 4;
@@ -368,8 +389,8 @@ namespace DCLF
 					d.Retire(record);
 					++d.stats.rebuilt;
 				}
-				if (!d.Insert(&a_head, rebuilt)) {
-					delete rebuilt;
+				if (!d.Insert(a_head, rebuilt)) {
+					d.Free(rebuilt);
 					return {};
 				}
 				d.live.push_back(rebuilt);
@@ -384,13 +405,25 @@ namespace DCLF
 		if (generation == 0)
 			return {};
 		for (const auto& shape : record->shapes) {
-			if (shape.shape.get() != &a_shape)
+			if (shape.shape.get() != a_shape)
 				continue;
 			auto owner = record->storage.Acquire(record->readSlot);
 			const float* positions = owner->data() + shape.offset;
 			return { positions, shape.vertexCount, generation, std::move(owner) };
 		}
 		return {};
+	}
+
+	void FaceSnapshots::TakeReleased(std::vector<RE::NiRefObject*>& a_out)
+	{
+		auto& d = *impl;
+		for (auto& reference : d.released)
+			if (auto* object = reference.get()) {
+				object->IncRefCount();  // the caller's count, the reference's let go (never the last)
+				reference.reset();
+				a_out.push_back(object);
+			}
+		d.released.clear();
 	}
 
 	FaceSnapshots::HeadView FaceSnapshots::HeadSnapshot(const RE::BSFaceGenNiNode& a_head)

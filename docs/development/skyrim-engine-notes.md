@@ -640,6 +640,19 @@ Sources:
 -   **Where DCLF saw staleness:** every value DCLF found stale in its material records (TexcoordOffset, t11,
     IBLParams) is an **M** field written after the record was taken, or an **S/G/R** source that changes
     per frame. No other kind of source exists in this function.
+-   **SSE Engine Fixes moves PS 6.** Its `BSLightingAmbientSpecular` fix (EngineFixesSkyrim64,
+    `src/fixes/bslightingambientspecular.h`; `bBSLightingAmbientSpecular` in its toml, on by default):
+    -   NOPs 0x20 bytes of `SetupMaterial` at ID 107298 `+0x8CF`, its AmbientSpecular write;
+    -   puts a `jmp5` in `SetupGeometry` (ID 107300, `0x1414dd040`) over its Specular test,
+        `test dword [r13+0x94], 0x200`, into code that, for an AmbientSpecular pass, copies the 16 bytes at
+        `0x14203315c` into PerGeometry PS 6. In 1.6.1170 that test is at `+0x1271` (`0x1414de2b1`); the
+        current source says `+0x1293`, and the installed build patched neither there nor the source's
+        guess, so the offset varies by build: DCLF finds the patch by the instruction (the jmp5 followed by
+        the test's last six bytes).
+    -   With True PBR's SetupGeometry hook (which adds AmbientSpecular to every TruePbr pass), every
+        PBR pass's PerGeometry block then carries PS 6 (exteriors measured `(0, 0, 0, 1)`).
+    -   DCLF's material port detects the NOPs at ID 107298 `+0x8CF` (measured present in 1.6.1170).
+    -   `Lighting.hlsl` declares `AmbientSpecularTintAndFresnelPower` without reading it.
 ### Material writers, and the texture-transform buffers
 
 -   **Two texture-transform buffers.** A material keeps two sets of UV offset and scale

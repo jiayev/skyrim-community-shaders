@@ -142,35 +142,36 @@ namespace DCLF
 		return SceneStore::ReadSwitch(*a_switch).index;
 	}
 
-	bool PrimaryCull::FreshSyntheticPass(const RE::BSGeometry& a_geometry, AccumulatedPass& a_out)
+	bool PrimaryCull::FreshSyntheticPass(const RE::BSGeometry& a_geometry, const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out)
 	{
-		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_geometry.GetGeometryRuntimeData().shaderProperty.get());
+		const auto* lighting = SceneCapture::LeafView::Lighting(a_leaf.property);
 		if (!lighting)
 			return false;
 		LightingDescriptors descriptors;
-		if (DeriveLightingDescriptors(*lighting, a_geometry, nullptr, descriptors) != Ineligible::None)
+		if (DeriveLightingDescriptors(*lighting, a_leaf, nullptr, descriptors) != Ineligible::None)
 			return false;
-		if (!SyntheticPass(a_geometry, descriptors.derivedPass, a_out, true))
+		if (!SyntheticPass(a_geometry, a_leaf, descriptors.derivedPass, a_out, true))
 			return false;
 		a_out.resident = true;
 		return true;
 	}
 
-	float PrimaryCull::FadeDistanceOf(const RE::NiAVObject* a_root)
+	float PrimaryCull::FadeDistanceOf(const SceneCapture::NodeRecord& a_root)
 	{
+		// The fade node's record (T6b1b): its LOD type and fade distances.
 		// The frame's globals (step 6e F2: the scene work reads the frame's capture, never the engine's).
 		const auto& g = FrameGlobals::Current();
 		// No fade update at all, or no distance term in the fade value (FUN_14147b110 returns 1).
 		if (!g.fadesOn || !g.fadeLodUpdates)
 			return 0.0f;
-		const std::uint32_t type = At<std::uint8_t>(a_root, 0x153) & 0xF;
+		const std::uint32_t type = a_root.fadeType;
 		// Type 8 fades gradually even from out of view (FUN_14147a160), and OnVisible's type-6 branch never fades out
 		// (ServiceFade): the engine draws either on the frame it comes into view, as the member is.
 		if (type == 8 || (type == 6 && g.fadeSpecialA == g.fadeSpecialB))
 			return 0.0f;
 		const float mult = g.fadeDistanceMult;
-		const float nearDistance = mult * At<float>(a_root, kFadeNear);
-		const float farDistance = mult * At<float>(a_root, kFadeFar);
+		const float nearDistance = mult * a_root.fadeNear;
+		const float farDistance = mult * a_root.fadeFar;
 		if (!(farDistance > nearDistance))
 			return 0.0f;  // the fade value never falls below 1
 		// The fade value 1 - (x - near) / (far - near), x the scaled distance, reaches the threshold at x = limit.
@@ -197,35 +198,37 @@ namespace DCLF
 		return witness;
 	}
 
-	bool PrimaryCull::MembershipPass(const RE::BSGeometry* a_geometry, AccumulatedPass& a_out)
+	bool PrimaryCull::MembershipPass(const RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out)
 	{
-		const auto* property = a_geometry->GetGeometryRuntimeData().shaderProperty.get();
-		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(property);
+		const auto* lighting = SceneCapture::LeafView::Lighting(a_leaf.property);
 		if (!lighting)
 			return false;
 		auto& cached = derivedCache[a_geometry];
-		const std::uint8_t fadeState = FadeStateOf(property);
-		if (cached.property != property || cached.material != lighting->material || cached.flags != lighting->flags.underlying() || cached.fadeState != fadeState) {
+		const std::uint8_t fadeState = FadeStateOf(lighting);
+		if (cached.property != lighting->key || cached.material != lighting->material || cached.flags != lighting->flags || cached.fadeState != fadeState) {
 			LightingDescriptors descriptors;
-			const auto reason = DeriveLightingDescriptors(*lighting, *a_geometry, nullptr, descriptors);
-			cached = { property, lighting->material, lighting->flags.underlying(), fadeState, reason == Ineligible::None ? descriptors.derivedPass : kNotDerived };
+			const auto reason = DeriveLightingDescriptors(*lighting, a_leaf, nullptr, descriptors);
+			cached = { lighting->key, lighting->material, lighting->flags, fadeState, reason == Ineligible::None ? descriptors.derivedPass : kNotDerived };
 		}
-		if (!SyntheticPass(*a_geometry, cached.derivedPass, a_out, true))
+		if (!SyntheticPass(*a_geometry, a_leaf, cached.derivedPass, a_out, true))
 			return false;
 		a_out.resident = true;
 		return true;
 	}
 
-	bool PrimaryCull::MembershipLayerPass(const RE::BSGeometry* a_geometry, const RE::BSLightingShaderProperty& a_layer, AccumulatedPass& a_out)
+	bool PrimaryCull::MembershipLayerPass(const RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out)
 	{
+		const auto* layer = SceneCapture::LeafView::Lighting(a_leaf.layer);
+		if (!layer)
+			return false;
 		auto& cached = layerDerivedCache[a_geometry];
-		const std::uint8_t fadeState = FadeStateOf(&a_layer);
-		if (cached.property != &a_layer || cached.material != a_layer.material || cached.flags != a_layer.flags.underlying() || cached.fadeState != fadeState) {
+		const std::uint8_t fadeState = FadeStateOf(layer);
+		if (cached.property != layer->key || cached.material != layer->material || cached.flags != layer->flags || cached.fadeState != fadeState) {
 			LightingDescriptors descriptors;
-			const auto reason = DeriveLightingDescriptors(a_layer, *a_geometry, nullptr, descriptors, true);
-			cached = { &a_layer, a_layer.material, a_layer.flags.underlying(), fadeState, reason == Ineligible::None ? descriptors.derivedPass : kNotDerived };
+			const auto reason = DeriveLightingDescriptors(*layer, a_leaf, nullptr, descriptors, true);
+			cached = { layer->key, layer->material, layer->flags, fadeState, reason == Ineligible::None ? descriptors.derivedPass : kNotDerived };
 		}
-		if (!SyntheticPass(*a_geometry, cached.derivedPass, a_out, true, &a_layer))
+		if (!SyntheticPass(*a_geometry, a_leaf, cached.derivedPass, a_out, true, layer))
 			return false;
 		a_out.resident = true;
 		return true;
@@ -1044,19 +1047,19 @@ namespace DCLF
 		fadePortCursor = entries ? (fadePortCursor + 64) % entries : 0;
 	}
 
-	std::uint32_t PrimaryCull::SunShadowBits(const RE::BSGeometry& a_geometry, const RE::BSLightingShaderProperty* a_property)
+	std::uint32_t PrimaryCull::SunShadowBits(const RE::BSGeometry& a_geometry, const SceneCapture::LeafView& a_leaf, const SceneCapture::PropertyRecord* a_property)
 	{
 		const auto inCascades = SunAccumulation::Get().InSunCascades(a_geometry.worldBound);
 		if (!inCascades)
 			return ~0u;
 		// Out of every cascade it loses ShadowDir only: a local shadow light may still give it DefShadow (the draw decides).
-		return *inCascades ? SunShadowStatic(a_geometry, a_property) : SunShadowStatic(a_geometry, a_property) & ~0x2000u;
+		return *inCascades ? SunShadowStatic(a_leaf, a_property) : SunShadowStatic(a_leaf, a_property) & ~0x2000u;
 	}
 
-	std::uint32_t PrimaryCull::SunShadowStatic(const RE::BSGeometry& a_geometry, const RE::BSLightingShaderProperty* a_property)
+	std::uint32_t PrimaryCull::SunShadowStatic(const SceneCapture::LeafView& a_leaf, const SceneCapture::PropertyRecord* a_property)
 	{
 		// The settled state's, as the synthetic pass is: a member's fade is the GPU's (and a stood-in root's node is not it).
-		return StaticShadowBits(a_geometry, true, a_property);
+		return StaticShadowBits(a_leaf, true, a_property);
 	}
 
 	namespace
@@ -1069,29 +1072,27 @@ namespace DCLF
 		return syntheticFail;
 	}
 
-	bool PrimaryCull::SyntheticPass(const RE::BSGeometry& a_geometry, std::uint32_t a_derivedPass, AccumulatedPass& a_out, bool a_sunOnGpu,
-		const RE::BSLightingShaderProperty* a_layer)
+	bool PrimaryCull::SyntheticPass(const RE::BSGeometry& a_geometry, const SceneCapture::LeafView& a_leaf, std::uint32_t a_derivedPass, AccumulatedPass& a_out,
+		bool a_sunOnGpu, const SceneCapture::PropertyRecord* a_layer)
 	{
 		syntheticFail = 1;
 		if (a_derivedPass == kNotDerived)
 			return false;
-		const RE::BSShaderProperty* property = a_layer ? a_layer : a_geometry.GetGeometryRuntimeData().shaderProperty.get();
-		const auto* lighting = a_layer ? a_layer : netimmerse_cast<const RE::BSLightingShaderProperty*>(property);
+		// The records (T6b1b: the mirror's).
+		const auto* lighting = SceneCapture::LeafView::Lighting(a_layer ? a_layer : a_leaf.property);
 		syntheticFail = 2;
 		if (!lighting)
 			return false;
-		const std::uint64_t flags = lighting->flags.underlying();
-		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(lighting->material);
-		const auto* alphaProperty = a_geometry.GetGeometryRuntimeData().alphaProperty.get();
-		const bool blended = alphaProperty && (alphaProperty->alphaFlags & 1);
+		const std::uint64_t flags = lighting->flags;
+		const bool blended = a_leaf.AlphaBlending();
 		// The object's settled state, not its current fade: GetRenderPasses (1414adfb0) draws a screen-door fade of an
 		// unblended, fully opaque material as the plain opaque pass with alpha = materialAlpha, and a member's fade is the
 		// GPU's (FadeStateCS). Translucent objects take hints 1 and 9 (blended, sorted); not modelled.
-		const bool translucent = (material ? material->materialAlpha : 1.0f) < 1.0f || blended;
+		const bool translucent = lighting->materialAlpha < 1.0f || blended;
 		// On the GPU (a_sunOnGpu): the bits the object takes inside a cascade, and BuildDraws drops them on a miss.
 		// A layer takes no shadow bits (measured: its passes never carry ShadowDir or DefShadow): its property's light mask never
 		// names the sun, the registrations writing masks on the main property alone (FUN_1414b2140).
-		const std::uint32_t sun = a_layer ? 0u : a_sunOnGpu ? SunShadowStatic(a_geometry) : SunShadowBits(a_geometry);
+		const std::uint32_t sun = a_layer ? 0u : a_sunOnGpu ? SunShadowStatic(a_leaf) : SunShadowBits(a_geometry, a_leaf);
 		syntheticFail = 3;
 		if (sun == ~0u)
 			return false;
@@ -1114,11 +1115,11 @@ namespace DCLF
 			hint = 15;  // opaque with no sun shadow work
 		syntheticFail = 0;
 		a_out = {};
-		a_out.subPass = PassCapture::SubPassOf(&a_geometry, flags);
+		a_out.subPass = PassCapture::SubPassOf(a_leaf.AlphaTesting(), flags);
 		a_out.technique = DrawnPassDescriptor((a_derivedPass & ~kShadowBits) | sun, a_out.subPass);
 		a_out.passEnum = a_out.technique + 0x4800002Du;
 		a_out.hint = hint;
-		a_out.lodRow = SceneStore::LodRowOf(a_geometry, property);
+		a_out.lodRow = SceneStore::LodRowOf(a_leaf, lighting);
 		a_out.sunTest = a_sunOnGpu && (sun & 0x2000u) != 0;
 		return true;
 	}
@@ -1265,8 +1266,8 @@ namespace DCLF
 			{
 				const auto r = SceneStore::Get().TakeResidentStats();
 				const double rf = std::max<double>(static_cast<double>(r.frames), 1.0);
-				logger::info("[DCLF] scene membership: {:.0f} objects bound a frame ({} frames); {} records queued, {} joined, {} failed ({} the engine's pass, {} no record, {} a frame verdict, {} material or extras; {} waited for a material record, {} served), {} rewritten ({} kept their binding), {} released, {} layers or bases unpaired; {} registrations of eligible objects not bound{}{}",
-					r.resident / rf, r.frames, r.membershipQueued, r.joined, r.failed, r.failedBy[0], r.failedBy[1], r.failedBy[2], r.failedBy[3], r.materialWaits, r.materialsServed, r.rewritten, r.membershipKept, r.released,
+				logger::info("[DCLF] scene membership: {:.0f} objects bound a frame ({} frames); {} records queued, {} joined, {} failed ({} the engine's pass, {} no record, {} a frame verdict, {} material or extras; {} waited for a material record, {} served, {} stale), {} rewritten ({} kept their binding), {} released, {} layers or bases unpaired; {} registrations of eligible objects not bound{}{}",
+					r.resident / rf, r.frames, r.membershipQueued, r.joined, r.failed, r.failedBy[0], r.failedBy[1], r.failedBy[2], r.failedBy[3], r.materialWaits, r.materialsServed, r.materialsStale, r.rewritten, r.membershipKept, r.released,
 					r.layerUnpaired, r.registeredUnbound, r.registeredUnboundFirst.empty() ? "" : ", first ", r.registeredUnboundFirst);
 				if (r.parityChecks)
 					logger::info("[DCLF] resident parity: {} checks, {} records compared, {} passes differ, {} records differ ({} not compared: the root fading, leaving at the next decode){}",

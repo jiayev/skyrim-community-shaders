@@ -212,6 +212,8 @@ namespace DCLF
 		 * field once the passes stop reaching a batch renderer at all.
 		 */
 		static std::uint32_t SubPassOf(const RE::BSGeometry* a_geometry, std::uint64_t a_propertyFlags);
+		/** @brief SubPassOf from the alpha property's testing bit (T6b1b: a record's). */
+		static std::uint32_t SubPassOf(bool a_alphaTesting, std::uint64_t a_propertyFlags);
 
 	private:
 		PassCapture();

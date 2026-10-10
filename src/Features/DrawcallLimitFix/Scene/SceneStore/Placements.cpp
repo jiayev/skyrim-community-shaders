@@ -55,7 +55,8 @@ namespace DCLF
 			const auto* record = mirror.Node(a_key);
 			return record ? record->userData : nullptr;
 		});
-		if (mirrorReadParity) {
+		if (mirrorReadParity)
+			if (const auto lease = LiveCheckLease(MirrorRead::MoveKey)) {
 			const void* live = keyOf([](const void* a_key) -> const void* { return static_cast<const RE::NiAVObject*>(a_key)->parent; },
 				[](const void* a_key) -> const void* { return static_cast<const RE::NiAVObject*>(a_key)->GetUserData(); });
 			NoteMirrorRead(MirrorRead::MoveKey, live != key, [&] { return fmt::format("'{}' {}: mirror {}, live {}", a_geometry.name.c_str() ? a_geometry.name.c_str() : "",

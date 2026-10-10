@@ -67,6 +67,8 @@ namespace DCLF
 		 * ignores the job's result when it lands.
 		 */
 		WaitResult Wait(const JobHandle& a_handle, std::chrono::microseconds a_budget);
+		/** @brief Whether a job has ended (done, failed or cancelled), never waiting; an empty handle has. */
+		static bool Ended(const JobHandle& a_handle);
 
 		/** @brief Drops the queued jobs, then waits (unbounded) for the running one. Teardown, the live toggle, a load screen. */
 		void Drain();

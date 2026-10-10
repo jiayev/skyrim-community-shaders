@@ -236,6 +236,9 @@ private:
 	std::uint32_t occlusionParityWaiting = 0;  // the maps whose engine render was kept this frame (CopyOcclusion stage 0)
 	/** @brief The periodic report (DrawcallLimitFix/Report.cpp): every kReportInterval frames. */
 	void ReportStats(std::uint32_t a_frame);
+	/** @brief The frame's reports, the scene work joined (they read its stats): at Present, or the next frame's start (T6b1d). */
+	void ReportFrame();
+	bool reportPending = false;  // Present found the scene work running: its reports wait for the frame start's join
 	static constexpr std::uint32_t kReportInterval = 300;
 	LeakStats leaks;  // since the last report
 };

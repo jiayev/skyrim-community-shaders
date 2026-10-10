@@ -1661,6 +1661,89 @@ resident-draw, set and fade parity; motion m28/m29).
     Measured (w56, w57: motion and the interiors, every parity): no crash, every reference from a pin, every ported read 0 differ,
     fade state and tree wind 0 differ, the set clean, the walk parity's one difference a blood decal's record (seen in w12 and w27:
     not new); the mirror parity clean.
+  - *F4, T6b1b: the value reads* (2026-10-09/10, w58-w65). The scene work reads the geometries' values from the mirror:
+    - **The leaf.** `SceneMirror::Leaf` gives a geometry's records together (`SceneCapture::LeafView`: its node, parent, geometry,
+      property, drawn layer, alpha and the properties' fade nodes). The classification (`ClassifyStatic`, `ClassifyLayer`,
+      `DeriveLightingDescriptors`, `StaticShadowBits`, `FadeStateOf`), the record's writer (`WriteObject`, `WriteLayer`: flags, skin
+      rows, the shadow and occlusion verdicts, the diffuse view), the membership pass (`PrimaryCull::MembershipPass`, `SyntheticPass`,
+      the LOD row, the sub-pass, the fade distance), the join (`BindByMembership`'s accumulate patch: the pipeline key, the material
+      key, Extended Translucency's model, external emittance, the beast race), the per-frame verdict (`ClassifyFrame`: the hidden
+      chain, a switch's selection, an actor's part, the fade), the input witnesses, dependents and traits, the geometry slots (the
+      TriShapes' and the skin partitions' buffers and counts, the LOD ranges, the layer's second index list), the skin partition masks,
+      the extras rows, the tree and fade-root lists, the room node, the decal order's keys and the face snapshots' shape lists are the
+      records'. RTTI casts are the records' `lighting`, `kind` and `rtti`; Skylighting's occlusion rule is ported
+      (`OcclusionTechniqueOf`, the nearest fade node's BSX walked up the mirror). A record written while the mirror holds no leaf (an
+      attach no hook captured) waits for the capture's batch (`leafWaiting`: none in w58-w65).
+    - **Property references from pins.** An attach's capture and a leaf update (a property swap) also hold the geometry's properties
+      (the update's event holds its own: `SceneTracker::Event::pins`; the mirror keeps copies of updates). A tracked geometry holds its
+      shader and layer properties as the mirror names them (`Tracked::property`, `layerProperty`, `HoldProperties` after each batch
+      that names it): `SlotProperty`, the shading samples and the pipelines' templates are these. A material request carries the
+      property and the render thread takes the material's reference when the property still has it (else the request is stale: none
+      seen). A face shape holds its head from the pins (`faceHeadRef`); the face records' references are copies, and a freed record's
+      go back through the retirement chain (`FaceSnapshots::TakeReleased`), not the scene work.
+    - **One queue for the hidden stores.** A hidden store's event rides in its mirror update (`Update::hiddenSite`), so the event
+      and the mirror's bit are the same batch's: with two queues drained at different points, an actor's part changed verdict a
+      frame before or after its event (w62's "changed with no event"), which the live reads had hidden.
+    - **Left live:** the parity observers (the mirror reads' live comparisons, the extras parity's engine routines, the LOD segment
+      parity, the coverage census), the derivation's LOD fade diagnostics, and the render thread's own (ingestion's switch catch-up,
+      the probes, the captures, FrameValues' samples). T6b1d moves the observers out of the scene work before the joins go.
+    Measured (w64, w65: motion and the interiors, every parity): no crash, the walk parity clean in every window, fade state and tree
+    wind 0 differ, the set clean, no stale material request, no property without a pin, face snapshots and the decal order clean;
+    only the known open flags (extras rows, `STALE MATERIAL`, `FADE`, the animated objects' `FADE VISIBILITY` frustum misses seen
+    since w50).
+  - *F4, T6b1d: the Present join out* (2026-10-10, w66-w69). Present no longer waits for the scene work:
+    - **Present.** `TryJoinSceneTask` joins the scene work only when it has ended; otherwise it runs on beside the engine's update and is
+      joined at the next frame's start, which holds the frame's reports for it (`reportPending`). The ingestion at Present (menus) and
+      the reports run only when Present joined.
+    - **References.** Each join moves what the scene work let go of (`handedBack`, `spentBatches`, `materialsHandedBack`) to the
+      render thread's lists (`TakeHandedBack`); Present releases those, the read window closed. What the scene work drops after its
+      last join waits for the next one.
+    - **Observers.** The scene work's live reads are parity observers alone, each under an engine-read lease (an item each): the
+      mirror reads' live checks (`LiveCheckLease`; refused, skipped and counted), the extras parity, the LOD segment parity and the
+      derivation's LOD fade diagnostic.
+    - **The guard.** The engine's read paths (`SceneCapture`'s captures, `LiveLeaf`, `InWorld`, `FindCategoryNodeLive`,
+      `ReferenceExtras`, `SampleExtrasFrame`, `LodSegments::DrawnRanges`) `Touch` the window; on a scene work thread
+      (`EngineReadWindow::sceneWork`) without a lease the access is counted and named (`<- LANE ENGINE ACCESS`). Not caught:
+      plain field reads of pinned objects (the names in diagnostic strings).
+    - **The frame-start join stays** (moved to T6b3): what passes between the frame and the scene work (the set handed over, the
+      publication selected, the lookups refreshed, the kicks) needs it until the mailbox replaces it.
+    Measured (w66-w69: motion and the interiors with every parity, motion on the normal path): no crash, no lane engine access, no
+    refused lease, no frame access; the walk parity clean but for one window's blood decal record (seen in w12, w27); the set clean;
+    only the known open flags. Present found the scene work running 85 times in 7,200 on the normal path (w69), never with the
+    parities (their frames finish before it); the render thread's waits 0.006 ms a frame (the frame start's join).
+  - *T6b2: the constants ported* (2026-10-10, w70-w87; the ports written by subagents in parallel, integrated and measured here):
+    - **The material port** (`Scene/MaterialPort.h`): `MaterialPort::Evaluate` makes SetupMaterial's record from a
+      `MaterialSnapshot` (the material's bytes, its class, its textures' views: `Capture`) and a `MaterialFrame` (the shader object's,
+      the globals' and the render targets' values: `SampleFrame`). The parts: vanilla SetupMaterial 1414dc310 (`MaterialPortVanilla`,
+      every technique and flag path, the class table by vtable with each class's size from its Create), TruePBR's replacement and its
+      hand-back to vanilla, Advanced Skin's feature textures (`MaterialPortFeature`; TerrainHelper's t92-t97 and TruePBR landscape's
+      t80-t91 are outside the record, as the stand-in never captured them). The record's producer on the render thread
+      (`SceneStore::PortMaterial`: the new slots, the written materials, the frame components' samples); the engine's evaluation runs
+      only as the parity (`CheckMaterialPort`, CS_DCLF_PERSISTENT_PARITY, `<- MATERIAL PORT`). IBLParams (PS 29, the shader object's,
+      unread by the Lighting stages) moves within a frame: counted apart, not compared.
+    - **The pipeline template port** (`Scene/GeometryPort.h`): SetupGeometry's per-pipeline part (the sun, the ambient, the light
+      counts, the eye, SSRParams, the world map rows) from a sampled `PipelineFrame`; no per-pipeline value depends on the template
+      object. SSE Engine Fixes' BSLightingAmbientSpecular fix writes PS 6 in SetupGeometry (and NOPs SetupMaterial's write): ported,
+      the patch found by its instruction (engine notes). The parity `<- GEOMETRY PORT` against the template's evaluation.
+    - **The technique's inputs** (T6b2c step 1): what SetupTechnique reads of the engine (fog, the shadow mask target, the INI
+      clamps, the LOD range) is sampled into `FrameGlobals::technique` at the frame's start; `EvaluateTechnique` is pure, the LOD
+      range's hold the same sample. The technique parity compares against a live sample at Prepass.
+    - **Found on the way:**
+      - MaterialData.x (the envmap LOD fade, property `+0x104`) is SetupGeometry's for techniques 1, 0xb and 0x10; DCLF wrote it for
+        1 alone, so eyes' and multilayer parallax's environment maps drew at 0 (`SampleShading`).
+      - FrameValues' carried items (copies of the plan's references, the settle check) were dropped on a pool thread: an engine
+        destructor there crashed w76. They go to `EngineReleases` now.
+      - The light exclusion (`<- LIGHT EXCLUSION`, interiors): an excluded actor entry whose hidden part (a shield the behaviour graph
+        shows during Main::Draw) had no record cast into no point light's shadow for a frame or two; the one-queue hidden events
+        widened that window. A hidden part of an actor and a fading non-member now block their entry (`SunEntryAllows`), until
+        hidden objects keep their records (T6b4's rest).
+    - **ORG** (prepared, not applied): ShaderCompiler and PipelineService gain completion callbacks and a configurable executor
+      (`ServiceSubmit`), tested standalone against DXC; applied with the coordinator's pipelines, together with DCLF's pool as the
+      executor (the default becomes a thread per request).
+    Measured (w79-w87, motion and interiors, every parity): the material port 0 differ in every window but one (an animated
+    material's SpecularColor written between the snapshot and the evaluation); the pipeline template port 0 differ in every window
+    once the Engine Fixes patch was detected; technique blocks 0 differ against the live sample; with the exclusion's rule, no pass
+    under an excluded entry in the interiors (w86) and the point lights' culls still skipping 72% of the entries visited.
 
 **A persistent scene for every view; incremental only; two modes** (2026-10-08; motion m112-m153, bridge y-runs, equip and
 fight e-runs, toggle runs). With DCLF's shadow views on, objects flickered at cell changes because the set's phases were

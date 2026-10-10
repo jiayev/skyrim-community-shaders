@@ -99,6 +99,18 @@ namespace DCLF
 				dp.staleKeys ? "; first stale: " : "", dp.staleFirst);
 			dp = {};
 		}
+		if (auto& mp = materialPortParity; mp.checked || mp.uncovered) {
+			text += fmt::format("[DCLF] material port (T6b2a: the port against the engine's evaluation): {} records, {} differ (VS {}, PS {}, textures {}, address {}, "
+								"filter {}, written {}, feature {}), {} uncovered; IBLParams moved within the frame {} (unread){}{}\n",
+				mp.checked, mp.differ, mp.kinds[0], mp.kinds[1], mp.kinds[2], mp.kinds[3], mp.kinds[4], mp.kinds[5], mp.kinds[6], mp.uncovered, mp.iblDrift,
+				mp.differ || mp.uncovered ? " <- MATERIAL PORT; first: " : " <- OK", mp.first);
+			mp = {};
+		}
+		if (auto& gp = geometryPortParity; gp.checked || gp.uncovered) {
+			text += fmt::format("[DCLF] pipeline template port (T6b2b: the port against the template's evaluation): {} pipelines, {} differ, {} uncovered{}{}\n", gp.checked,
+				gp.differ, gp.uncovered, gp.differ || gp.uncovered ? " <- GEOMETRY PORT; first: " : " <- OK", gp.first);
+			gp = {};
+		}
 		if (auto& ep = extrasParity; ep.objects) {
 			text += fmt::format("[DCLF] extras parity (the draw's completion against the engine's routines): {} objects, {} differ, largest difference {}, {} static rows "
 								"stale with no event{}{}\n",
@@ -125,10 +137,17 @@ namespace DCLF
 		}
 		text += mirror.Report();
 		text += MirrorReadReport();
-		if (auto& r = referenceStats; r.pins || r.live || r.refused) {
-			text += fmt::format("[DCLF] references (T6b1c): {} pins in the batches' captures; {} references made from pins, {} from a live walk's pointers, {} refused (no pin){}\n",
-				r.pins, r.pinned, r.live, r.refused, " (a refusal is checked after the next batch: the mirror reads' \"unpinned geometry\")");
+		if (auto& r = referenceStats; r.pins || r.live || r.refused || r.properties || r.propertiesRefused) {
+			text += fmt::format("[DCLF] references (T6b1c): {} pins in the batches' captures; {} references made from pins, {} from a live walk's pointers, {} refused (no pin){}; "
+								"{} tracked geometries' properties held anew, {} with no pin{}{}\n",
+				r.pins, r.pinned, r.live, r.refused, " (a refusal is checked after the next batch: the mirror reads' \"unpinned geometry\")", r.properties, r.propertiesRefused,
+				r.propertiesRefused ? " <- UNPINNED PROPERTY; first: " : "", r.firstPropertyRefused);
 			r = {};
+		}
+		if (auto& l = leafStats; l.missing || l.rescheduled) {
+			text += fmt::format("[DCLF] leaves (T6b1b): {} records written while the mirror held no records of the geometry, {} evaluated again when a capture named it\n",
+				l.missing, l.rescheduled);
+			l = {};
 		}
 		text += MirrorWatch::TakeReport(frame);
 		if (const auto c = SceneCapture::TakeCounters(); c.attaches || c.outOfWorld)

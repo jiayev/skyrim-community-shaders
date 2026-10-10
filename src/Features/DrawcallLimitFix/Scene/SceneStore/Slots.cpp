@@ -381,10 +381,12 @@ namespace DCLF
 
 	RE::BSShaderProperty* SceneStore::SlotProperty(std::uint32_t a_slot) const
 	{
-		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
+		auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
 		if (!geometry)
 			return nullptr;
-		return tables.IsLayer(a_slot) ? LayerPropertyOf(*geometry) : geometry->GetGeometryRuntimeData().shaderProperty.get();
+		// Its entry's held property (T6b1b: the mirror's), not the live geometry's.
+		const auto it = tracked.find(geometry);
+		return it != tracked.end() ? it->second.HeldProperty(tables.IsLayer(a_slot)) : nullptr;
 	}
 
 	void SceneStore::ReleaseLayerSlot(Tracked& a_entry)
@@ -438,6 +440,9 @@ namespace DCLF
 			sceneIdentity.Detach(a_geometry);
 			lodRanges.erase(a_geometry);
 			HandBack(std::move(it->second.geometry));
+			HandBack(std::move(it->second.property));
+			HandBack(std::move(it->second.layerProperty));
+			HandBack(std::move(it->second.faceHeadRef));
 			tracked.erase(it);
 			++trackedLayout;
 		}

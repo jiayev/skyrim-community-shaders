@@ -153,6 +153,7 @@ namespace DCLF
 			std::sort(g->cullHidden.begin(), g->cullHidden.end());
 		}
 		g->membershipWitness = PrimaryCull::MembershipWitness(*g);
+		g->technique = SampleTechniqueInputs();
 		recent[recentNext++ % recent.size()] = latest;
 		latest = g;
 		return g;

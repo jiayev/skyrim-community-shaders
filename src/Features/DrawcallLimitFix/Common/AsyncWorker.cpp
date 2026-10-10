@@ -189,6 +189,11 @@ namespace DCLF
 		}
 	}
 
+	bool AsyncWorker::Ended(const JobHandle& a_handle)
+	{
+		return !a_handle.job || a_handle.job->Ended();
+	}
+
 	void AsyncWorker::Drain()
 	{
 		ZoneScopedN("CS.DCLF.Worker.Drain");

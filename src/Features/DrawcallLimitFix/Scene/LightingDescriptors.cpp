@@ -10,6 +10,7 @@
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Scene/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Engine/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Engine/SceneCapture.h"
 
 namespace DCLF
 {
@@ -103,11 +104,11 @@ namespace DCLF
 		}
 	}
 
-	std::uint8_t FadeStateOf(const RE::BSShaderProperty* a_property)
+	std::uint8_t FadeStateOf(const SceneCapture::PropertyRecord* a_property)
 	{
 		if (!a_property)
 			return 0;
-		const std::uint64_t f = a_property->flags.underlying();
+		const std::uint64_t f = a_property->flags;
 		if (!(f & (Bit(Flag::kSpecular) | Bit(Flag::kMultiIndexSnow) | Bit(Flag::kEnvMap))))
 			return 0;
 		return a_property->fadeNode ? 0 : kFadeNoNode;
@@ -123,24 +124,23 @@ namespace DCLF
 		return data.additionalShaderProperty.get();
 	}
 
-	std::uint32_t StaticShadowBits(const RE::BSGeometry& a_geometry, bool a_settled, const RE::BSLightingShaderProperty* a_property)
+	std::uint32_t StaticShadowBits(const SceneCapture::LeafView& a_leaf, bool a_settled, const SceneCapture::PropertyRecord* a_property)
 	{
 		// The frame's globals (FrameGlobals: the main accumulator's deferred-shadow byte, no ShadowDir, screen-door fades).
 		const auto& g = FrameGlobals::Current();
-		const auto* lighting = a_property ? a_property : netimmerse_cast<const RE::BSLightingShaderProperty*>(a_geometry.GetGeometryRuntimeData().shaderProperty.get());
+		const auto* lighting = SceneCapture::LeafView::Lighting(a_property ? a_property : a_leaf.property);
 		if (!lighting || !g.accumulator)
 			return 0;
-		const std::uint64_t flags = lighting->flags.underlying();
-		const auto* fadeNode = lighting->fadeNode;
+		const std::uint64_t flags = lighting->flags;
+		// Its fade node's record (the leaf's).
+		const auto* fadeNode = lighting->fadeNode ? a_leaf.FadeNodeOf(lighting) : nullptr;
 		// a_settled: fully faded in, whatever the node holds (a member's pass, whose fade is the GPU's).
-		const float fade = fadeNode && !a_settled ? fadeNode->GetRuntimeData().currentFade : 1.0f;
-		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(lighting->material);
-		const float alpha = (material ? material->materialAlpha : 1.0f) * fade;
-		const auto* alphaProperty = a_geometry.GetGeometryRuntimeData().alphaProperty.get();
-		const bool blended = alphaProperty && (alphaProperty->alphaFlags & 1);
+		const float fade = fadeNode && !a_settled ? fadeNode->currentFade : 1.0f;
+		const float alpha = lighting->materialAlpha * fade;  // the record's materialAlpha: 1 without a material
+		const bool blended = a_leaf.AlphaBlending();
 		// GetRenderPasses: local_164, local_167, local_165/local_168 and local_158.
 		const bool translucent = alpha < 1.0f || blended;
-		const bool screenDoor = g.screenDoorFades && fadeNode && fadeNode->GetRuntimeData().unk154 && fade < 1.0f &&
+		const bool screenDoor = g.screenDoorFades && fadeNode && fadeNode->fadeDoor && fade < 1.0f &&
 		                        !(flags & (1ull << 19));
 		constexpr std::uint64_t kOpaqueClasses = 0x800c000000ull;
 		const bool eligible = !translucent || (screenDoor && !blended) || (flags & kOpaqueClasses);
@@ -149,7 +149,7 @@ namespace DCLF
 			deferred = deferred && !((alpha < 1.0f || blended || (flags & (1ull << 33))) && !(flags & kOpaqueClasses));
 		bool shadowDir = deferred && eligible && !g.noSunShadowDir;
 		bool defShadow = deferred;
-		if (!(flags & 0x800c000100ull) && !lighting->shadowMapOrMaskPasses.head)
+		if (!(flags & 0x800c000100ull) && !lighting->shadowPasses)
 			shadowDir = defShadow = false;
 		return (shadowDir ? 0x2000u : 0u) | (defShadow ? 0x4000u : 0u) | (defShadow && !shadowDir ? 0x40u : 0u);
 	}
@@ -443,11 +443,12 @@ namespace DCLF
 		 * The function also picks mode 1 for a non-blending property when the shader property's alpha is
 		 * below 1 (a fading object); that case is not eligible here, so it is not modelled.
 		 */
-		std::uint32_t AlphaBlendModeOf(const RE::NiAlphaProperty& a_alpha)
+		std::uint32_t AlphaBlendModeOf(const SceneCapture::AlphaRecord& a_alpha)
 		{
+			// NiAlphaProperty::GetSrcBlendMode, GetDestBlendMode: the flags' bits 1-4 and 5-8.
 			using Function = RE::NiAlphaProperty::AlphaFunction;
-			const auto source = a_alpha.GetSrcBlendMode();
-			const auto dest = a_alpha.GetDestBlendMode();
+			const auto source = static_cast<Function>((a_alpha.flags >> 1) & 0xF);
+			const auto dest = static_cast<Function>((a_alpha.flags >> 5) & 0xF);
 			if (source == Function::kSrcAlpha && dest == Function::kInvSrcAlpha)
 				return 1;
 			if ((source == Function::kSrcAlpha && dest == Function::kOne) || (source == Function::kOne && dest == Function::kOne) ||
@@ -461,18 +462,19 @@ namespace DCLF
 		}
 	}
 
-	Ineligible DeriveLightingDescriptors(const RE::BSLightingShaderProperty& a_property, const RE::BSGeometry& a_geometry,
+	Ineligible DeriveLightingDescriptors(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf,
 		const AccumulatedPass* a_accumulated, LightingDescriptors& a_out, bool a_layer)
 	{
-		std::uint64_t f = a_property.flags.underlying();
+		std::uint64_t f = a_property.flags;
 
 		// Terrain LOD (a land block's BSTriShape) is DCLF's with its toggle; object LOD (a BSSubIndexTriShape: dclf-lod.md) with its
 		// own, drawn by the ranges its hidden cells leave (LodSegments).
-		if ((f & Bit(Flag::kLODLandscape)) && !(ActiveToggles().lodTerrain && IsLodLand(a_property, a_geometry)))
+		if ((f & Bit(Flag::kLODLandscape)) && !(ActiveToggles().lodTerrain && IsLodLand(a_property.flags, a_leaf.Type())))
 			return Ineligible::Lod;
-		if ((f & (Bit(Flag::kLODObjects) | Bit(Flag::kHDLODObjects))) && !(ActiveToggles().lodObjects && IsLodObject(a_property, a_geometry)))
+		if ((f & (Bit(Flag::kLODObjects) | Bit(Flag::kHDLODObjects))) && !(ActiveToggles().lodObjects && IsLodObject(a_property.flags, a_leaf.Type())))
 			return Ineligible::Lod;
-		const auto* alpha = a_geometry.GetGeometryRuntimeData().alphaProperty.get();
+		const auto* alpha = a_leaf.alpha;
+		const bool blending = a_leaf.AlphaBlending();
 		if (a_layer) {
 			// A multi-index shape's layer (engine notes, "The main modes' registration"): every pass of its property goes into
 			// geometry group 2 with hint 12, whatever its flags, and FUN_1414b3bb0 draws that group after the opaque decals
@@ -499,11 +501,9 @@ namespace DCLF
 			// 2 + (alpha < 1 or blending), with the material's alpha (the fade is the feedback's).
 			if (!ActiveToggles().decals || !(f & Bit(Flag::kZBufferTest)))
 				return Ineligible::Decal;
-			const auto* decalMaterial = static_cast<const RE::BSLightingShaderMaterialBase*>(a_property.material);
-			const std::uint32_t hint = a_accumulated ? a_accumulated->hint :
-			                           ((decalMaterial && decalMaterial->materialAlpha < 1.0f) || (alpha && alpha->GetAlphaBlending())) ? 3u : 2u;
+			const std::uint32_t hint = a_accumulated ? a_accumulated->hint : (a_property.materialAlpha < 1.0f || blending) ? 3u : 2u;
 			if (hint == 2) {
-				if (alpha && alpha->GetAlphaBlending())
+				if (blending)
 					return Ineligible::Decal;  // not measured in this group; the state would be a guess
 				a_out.decalGroup = 1;
 				a_out.decalBlendMode = 0;
@@ -511,7 +511,7 @@ namespace DCLF
 			} else if (hint == 3) {
 				// The fading case (alpha < 1 without blending) takes blend mode 1 in the engine and is
 				// also what Ineligible::Fading covers; it is left to the native loop.
-				if (!alpha || !alpha->GetAlphaBlending())
+				if (!blending)
 					return Ineligible::Decal;
 				const std::uint32_t blendMode = AlphaBlendModeOf(*alpha);
 				if (blendMode == 0)
@@ -526,7 +526,7 @@ namespace DCLF
 		// kSkinned selects the SKINNED permutation, whose vertex shader wants a palette; with the switch on
 		// the palette comes from the geometry's skin instance (SceneStore), so a skinned property without
 		// one would draw from nothing and stays native.
-		if ((f & Bit(Flag::kSkinned)) && !(ActiveToggles().skinned && a_geometry.GetGeometryRuntimeData().skinInstance))
+		if ((f & Bit(Flag::kSkinned)) && !(ActiveToggles().skinned && a_leaf.Skinned()))
 			return Ineligible::Skinned;
 		if ((f & Bit(Flag::kProjectedUV)) && !ActiveToggles().projectedUv)
 			return Ineligible::ProjectedUV;
@@ -543,7 +543,7 @@ namespace DCLF
 
 		// Blended geometry is drawn after the deferred composite, forward and sorted; the one exception is
 		// the engine's blended decal group, which blends inside the G-buffer pass and is handled above.
-		if (alpha && alpha->GetAlphaBlending() && a_out.decalGroup != 2 && !a_layer)
+		if (blending && a_out.decalGroup != 2 && !a_layer)
 			return Ineligible::AlphaBlend;
 
 		// The descriptor derived from the property, as GetRenderPasses builds it for an opaque object with its specular and
@@ -585,7 +585,7 @@ namespace DCLF
 			if (f & Bit(Flag::kAnisotropicLighting))
 				d |= Bit(LightingFlag::AnisoLighting);
 			// GetRenderPasses (1414adfb0) gives every decal without kMultiIndexSnow DoAlphaTest, whatever its alpha property.
-			if ((alpha && alpha->GetAlphaTesting()) ||
+			if (a_leaf.AlphaTesting() ||
 				((f & (Bit(Flag::kDecal) | Bit(Flag::kDynamicDecal))) && !(f & Bit(Flag::kMultiIndexSnow))))
 				d |= Bit(LightingFlag::DoAlphaTest);
 			if (f & Bit(Flag::kCharacterLighting))
@@ -593,14 +593,13 @@ namespace DCLF
 
 			// Community Shaders' GetRenderPasses hook (TruePBR.cpp): PBR materials swap Specular for TruePbr,
 			// and glint turns on AnisoLighting.
-			const auto* material = a_property.material;
-			const bool isPbr = (f & Bit(Flag::kVertexLighting)) && material &&
-			                   (material->GetFeature() == RE::BSShaderMaterial::Feature::kDefault ||
-								   material->GetFeature() == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend);
+			const auto feature = static_cast<RE::BSShaderMaterial::Feature>(a_property.feature);
+			const bool isPbr = (f & Bit(Flag::kVertexLighting)) && a_property.material &&
+			                   (feature == RE::BSShaderMaterial::Feature::kDefault || feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend);
 			if (isPbr) {
 				d |= Bit(LightingFlag::TruePbr);
 				d &= ~Bit(LightingFlag::Specular);
-				if (static_cast<const BSLightingShaderMaterialPBR*>(material)->glintParameters.enabled)
+				if (a_property.glints)
 					d |= Bit(LightingFlag::AnisoLighting);
 			}
 			derived = d;
@@ -617,7 +616,7 @@ namespace DCLF
 			// engine's LOD fades were taken at, and the shadow bits are StaticShadowBits', which the draw decides per frame.
 			// A layer's pass has no shadow bits: ShadowDir is the property's light mask naming the sun, and the registrations write
 			// masks on the main property alone (FUN_1414b2140), so DefShadow goes too (LayerShadowBits).
-			d = (derived & ~kRegisteredPassBits) | (a_accumulated->technique & kRegisteredPassBits) | (a_layer ? 0u : StaticShadowBits(a_geometry, false, &a_property));
+			d = (derived & ~kRegisteredPassBits) | (a_accumulated->technique & kRegisteredPassBits) | (a_layer ? 0u : StaticShadowBits(a_leaf, false, &a_property));
 			// The screen-door fade: Lighting.hlsl discards against a 4x4 screen pattern and MaterialData.z, so
 			// the object stays opaque and the Z-prepass (which keeps the alpha test) dithers identically.
 			if ((d & Bit(LightingFlag::AdditionalAlphaMask)) && !ActiveToggles().fading)

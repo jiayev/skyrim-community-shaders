@@ -6,6 +6,12 @@
 
 #include "Records.h"  // ObjectTreeAnim
 
+namespace DCLF::SceneCapture
+{
+	struct PropertyRecord;
+	struct LeafView;
+}
+
 namespace DCLF
 {
 	/** @brief Why an object stays on the native render loop. */
@@ -96,7 +102,7 @@ namespace DCLF
 	 * fade-sensitive flag (specular, envmap) but no fade node, which leaves it native; 0 otherwise. The LOD metric is not
 	 * read: the fades it produces are the draw's (LodFadeFrame), so the derived technique does not depend on the camera.
 	 */
-	std::uint8_t FadeStateOf(const RE::BSShaderProperty* a_property);
+	std::uint8_t FadeStateOf(const SceneCapture::PropertyRecord* a_property);
 
 	/**
 	 * @brief Pass descriptor bits GetRenderPasses sets from per-frame engine state rather than from the
@@ -116,9 +122,10 @@ namespace DCLF
 	 * DefShadow without ShadowDir one shadow light in the count, which is what makes the technique bind the shadow mask (the
 	 * pixel stage drops the count). The draw then decides per frame (BuildDrawsCS): ShadowDir when its bound meets a
 	 * cascade (kObjectSunTest), DefShadow when that or a local shadow light reaches it (LocalShadowLights).
-	 * a_property: the property whose pass it is (a multi-index layer's), null for the geometry's own.
+	 * a_property: the property whose pass it is (a multi-index layer's), null for the geometry's own. T6b1b: the records' (the mirror's
+	 * on the scene work), the fade node's currentFade and screen-door byte its record's.
 	 */
-	std::uint32_t StaticShadowBits(const RE::BSGeometry& a_geometry, bool a_settled, const RE::BSLightingShaderProperty* a_property = nullptr);
+	std::uint32_t StaticShadowBits(const SceneCapture::LeafView& a_leaf, bool a_settled, const SceneCapture::PropertyRecord* a_property = nullptr);
 	/** @brief A multi-index shape's layer passes' accumulation hint (FUN_1414b2330), which their pass draw reads (FUN_1414f2ad0). */
 	inline constexpr std::uint32_t kLayerHint = 12;
 	/**
@@ -318,7 +325,9 @@ namespace DCLF
 	 * present it gives the bits the property does not (kRegisteredPassBits); without it the derivation's guesses for them
 	 * stand.
 	 * @param a_layer a_property is the geometry's layer (LayerPropertyOf), whose passes the engine draws with hint 12.
+	 *
+	 * T6b1b: from the records (a Lighting property's, the geometry's leaf: the mirror's on the scene work, LiveLeaf's elsewhere).
 	 */
-	Ineligible DeriveLightingDescriptors(const RE::BSLightingShaderProperty& a_property, const RE::BSGeometry& a_geometry,
+	Ineligible DeriveLightingDescriptors(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf,
 		const AccumulatedPass* a_accumulated, LightingDescriptors& a_out, bool a_layer = false);
 }

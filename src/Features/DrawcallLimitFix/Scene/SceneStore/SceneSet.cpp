@@ -257,7 +257,7 @@ namespace DCLF
 			if (entry == tracked.end() || (tables.IsLayer(slot) ? entry->second.layerSlot : entry->second.slot) != slot || entry->second.objectStamp != objectStamp ||
 				entry->second.candidateReason != Ineligible::None)
 				continue;
-			if (!MemberBindingStands(slot, *geometry, entry->second)) {
+			if (!MemberBindingStands(slot, entry->second)) {
 				setRebinding[slot] = 1;
 				QueueSet(slot);
 			}
@@ -275,8 +275,9 @@ namespace DCLF
 		});
 		for (auto it = setFadeHeld.begin(); it != setFadeHeld.end();) {
 			const auto entry = tracked.find(const_cast<RE::BSGeometry*>(*it));
-			const auto* property = entry != tracked.end() ? entry->first->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
-			const bool fading = property && property->fadeNode && property->fadeNode->GetRuntimeData().currentFade < 1.0f;
+			// Its fade node's currentFade, the mirror's (T6b1b).
+			const auto* fadeNode = entry != tracked.end() ? mirror.Leaf(entry->first).fadeNode : nullptr;
+			const bool fading = fadeNode && fadeNode->currentFade < 1.0f;
 			if (entry != tracked.end() && fading) {
 				++it;
 				continue;
@@ -1255,15 +1256,19 @@ namespace DCLF
 
 	void SceneStore::KickSceneTask(std::function<void()> a_work, const char* a_name)
 	{
-		// The scene's lane (step 6c): the frame's builds never queue behind it. Joined at Present (or the next frame's start).
+		// The scene's lane (step 6c): the frame's builds never queue behind it. Joined at the next frame's start, or at Present when it
+		// has ended by then (T6b1d: never waited for there).
 		sceneTaskInFlight.store(true, std::memory_order_relaxed);
 		sceneTask = std::static_pointer_cast<void>(std::make_shared<AsyncWorker::JobHandle>(
 			AsyncWorker::Get().SubmitScene(a_name, [this, work = std::move(a_work), globals = frameGlobals](std::stop_token) {
 				sceneLaneThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 				sceneWorkThread = true;
+				// T6b1d: no engine memory without a lease (EngineReadWindow::Touch counts the rest).
+				const bool marked = std::exchange(EngineReadWindow::sceneWork, true);
 				// The frame's engine globals, never the engine's (step 6e F2).
 				FrameGlobals::Scope scope(globals);
 				work();
+				EngineReadWindow::sceneWork = marked;
 			})));
 	}
 
@@ -1277,6 +1282,18 @@ namespace DCLF
 		}
 		sceneTaskInFlight.store(false, std::memory_order_relaxed);
 		FinishSceneWork();
+		TakeHandedBack();
+	}
+
+	bool SceneStore::TryJoinSceneTask()
+	{
+		if (const auto job = std::static_pointer_cast<AsyncWorker::JobHandle>(sceneTask); job && !AsyncWorker::Ended(*job)) {
+			++presentsRunning;
+			return false;
+		}
+		++presentsJoined;
+		JoinSceneTask();
+		return true;
 	}
 
 	void SceneStore::FinishSceneWork()

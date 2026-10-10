@@ -2,11 +2,13 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
 namespace RE
 {
+	class NiRefObject;
 	class BSDynamicTriShape;
 	class BSFaceGenNiNode;
 	class BSGeometry;
@@ -96,7 +98,23 @@ namespace DCLF
 		 * changed) and returns the shape's positions in the head's snapshot. Empty while the head has none:
 		 * the engine then draws every shape of it.
 		 */
-		ShapeView Shape(RE::BSDynamicTriShape& a_shape, RE::BSFaceGenNiNode& a_head);
+		/**
+		 * @brief One of a head's shapes as the caller lists them (T6b1b: the scene work's: the mirror's children of the head, each its
+		 * tracked entry's reference and its record's vertex count).
+		 */
+		struct ShapeInput
+		{
+			RE::BSDynamicTriShape* shape = nullptr;  // the caller holds a reference (the record's is a copy)
+			std::uint32_t vertexCount = 0;
+		};
+		/** a_head: held by the caller (the record's reference is a copy). a_shapes: the head's dynamic shapes, asked for only when the record
+		 * is checked (its first shape this walk). */
+		ShapeView Shape(const RE::BSGeometry* a_shape, RE::BSFaceGenNiNode* a_head, const std::function<void(std::vector<ShapeInput>&)>& a_shapes);
+		/**
+		 * @brief The references the records freed since the last call held (their heads and shapes), one count each now the caller's: it
+		 * lets them go where an engine object's last release may run (T6b1b: not the scene work).
+		 */
+		void TakeReleased(std::vector<RE::NiRefObject*>& a_out);
 		/**
 		 * @brief A registered shape's positions in its head's current snapshot, without registering anything: a publication's
 		 * update of a kept face stream. Empty when the head has no record or no snapshot, or the record does not hold the shape.

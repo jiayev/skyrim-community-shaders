@@ -11,8 +11,28 @@ namespace RE
 	class NiAVObject;
 }
 
+struct ID3D11ShaderResourceView;
+
 namespace DCLF
 {
+	/**
+	 * @brief What SetupTechnique reads of the engine (T6b2c): sampled by the render thread at the frame's start (SampleTechniqueInputs,
+	 * ConstantEvaluator.cpp), so EvaluateTechnique is a function of the pass descriptor and the frame's sample alone.
+	 */
+	struct TechniqueInputs
+	{
+		std::array<float, 4> highDetailRange{};  // LodHighDetailRange's value (0x2033094, less the margin 0x1ad28d0 in z and w)
+		ID3D11ShaderResourceView* shadowMask = nullptr;  // kSHADOW_MASK's view
+		std::uint32_t shadowMaskFilter = 0;              // t14's filter mode (iShadowMaskQuarter)
+		bool shadowMaskSized = false;                    // its texture exists: shadowMaskInverseSize holds 1/width, 1/height
+		std::array<float, 2> shadowMaskInverseSize{};
+		bool fog = false;  // the scene graph's fog property (FUN_1414dfad0)
+		float fogNear = 0.0f, fogFar = 0.0f, fogPower = 0.0f, fogClamp = 0.0f;
+		std::array<float, 3> fogNearColor{}, fogFarColor{};
+		float invFrameBufferRange = 0.0f;
+		std::array<float, 3> colourClamp{ 1.0f, 1.0f, 1.0f };  // fLightingOutputColourClampPost{Lit,Env,Spec}
+	};
+
 	/**
 	 * @brief The engine's frame globals the scene reads (step 6e F2), captured by the render thread at the frame's start
 	 * (BeginSceneFrame: the engine's update done, before the culls), immutable after.
@@ -53,6 +73,8 @@ namespace DCLF
 		std::vector<std::pair<const RE::NiAVObject*, bool>> cullHidden;
 		// PrimaryCull::MembershipWitness of the values above.
 		std::uint32_t membershipWitness = 0;
+		// SetupTechnique's inputs (T6b2c).
+		TechniqueInputs technique;
 
 		/** @brief Render thread, the frame's start: the frame's capture, which Current() hands the render thread from now on. */
 		static std::shared_ptr<const FrameGlobals> Capture();

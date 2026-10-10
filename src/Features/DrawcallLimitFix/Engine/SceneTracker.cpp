@@ -240,13 +240,14 @@ namespace DCLF
 		Push(event);
 	}
 
-	void SceneTracker::PushUpdate(SceneCapture::Update&& a_update)
+	void SceneTracker::PushUpdate(SceneCapture::Update&& a_update, std::vector<RE::NiPointer<RE::NiRefObject>>&& a_pins)
 	{
 		if (!installed || stopped.load(std::memory_order_acquire))
 			return;
 		auto* event = new Event{};
 		event->type = EventType::Updated;
 		event->update = std::move(a_update);
+		event->pins = std::move(a_pins);
 		if (!event->update.sequence)
 			event->update.sequence = SceneCapture::NextSequence();
 		Push(event);

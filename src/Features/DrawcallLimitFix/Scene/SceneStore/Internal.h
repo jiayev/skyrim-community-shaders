@@ -211,11 +211,13 @@ namespace DCLF
 			const auto sequence = SceneCapture::NextSequence();
 			SceneCapture::Update update{ G::kProperty | G::kAlpha | G::kLayer, SceneCapture::CaptureGeometry(a_geometry) };
 			auto leaf = std::make_shared<SceneCapture::Records>();
-			SceneCapture::CaptureLeaf(a_geometry, *leaf);
+			// Its properties held by the event (T6b1b: the scene work's references to them are copies).
+			std::vector<RE::NiPointer<RE::NiRefObject>> pins;
+			SceneCapture::CaptureLeaf(a_geometry, *leaf, &pins);
 			leaf->sequence = sequence;
 			update.leaf = std::move(leaf);
 			update.sequence = sequence;
-			SceneTracker::Get().PushUpdate(std::move(update));
+			SceneTracker::Get().PushUpdate(std::move(update), std::move(pins));
 		}
 
 		// A fade node's statics (near and far, +0x109, the LOD type).
@@ -371,7 +373,6 @@ namespace DCLF
 			std::uint32_t site = 0;  // the patched store's index (HiddenStoreSiteAt)
 			bool hidden = false;     // the bit's value after the store
 		};
-		inline EventQueue<HiddenEvent> hiddenEvents;
 		inline bool hiddenEventsInstalled = false;
 		bool InstallHiddenStores();
 		/** @brief The patched store at a_index (its address in the image), or 0. */
@@ -603,11 +604,11 @@ namespace DCLF
 			return a_reason == Ineligible::Technique || a_reason == Ineligible::UnsupportedParent || a_reason == Ineligible::MultiIndex;
 		}
 
-		inline bool ShadowOnlyCaster(Ineligible a_reason, RE::BSGeometry& a_geometry)
+		inline bool ShadowOnlyCaster(Ineligible a_reason, const SceneCapture::LeafView& a_leaf)
 		{
 			if (!ShadowOnlyReason(a_reason))
 				return false;
-			const auto reject = ShadowCasterReject(a_geometry.GetGeometryRuntimeData().shaderProperty.get(), &a_geometry);
+			const auto reject = ShadowCasterReject(a_leaf);
 			return reject == ShadowReject::None || reject == ShadowReject::VolumetricOnly;
 		}
 		// Only columns the accumulator patch below can change. It never writes placement, geometry,

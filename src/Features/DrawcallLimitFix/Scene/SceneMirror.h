@@ -54,6 +54,8 @@ namespace DCLF
 		const SceneCapture::GeometryRecord* Geometry(const void* a_key) const;
 		const SceneCapture::PropertyRecord* Property(const void* a_key) const;
 		const SceneCapture::AlphaRecord* Alpha(const void* a_key) const;
+		/** @brief T6b1b: a geometry's records (its node, parent, properties, alpha and fade node), null where the mirror holds none. */
+		SceneCapture::LeafView Leaf(const void* a_key) const;
 
 		/**
 		 * @brief The parity: the last probe's pending differences resolved by this batch's event keys (late or missed), then this

@@ -287,8 +287,8 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			stats.geometriesAlive, stats.pipelinesAlive, stats.materialsAlive, stats.slotsSwept, stats.geometriesRefreshed,
 			stats.slotViolations, stats.slotViolations ? " <- SLOT VIOLATION" : "");
 		if (stats.classifyHits || stats.classifyChecked)
-			logger::info("[DCLF] classification cache (last frame): {} served from the cache, {} recomputed and compared, {} differ{}; RTTI casts walked {}",
-				stats.classifyHits, stats.classifyChecked, stats.classifyDiffers, stats.classifyDiffers ? " <- STALE" : "", stats.castResolved);
+			logger::info("[DCLF] classification cache (last frame): {} served from the cache, {} recomputed and compared, {} differ{}",
+				stats.classifyHits, stats.classifyChecked, stats.classifyDiffers, stats.classifyDiffers ? " <- STALE" : "");
 		// The Stage 4c gate. A pipeline's per-frame lighting template must come from an object the engine
 		// itself kept; anything else hands a culled object's scene light list to the visible objects drawn
 		// on that pipeline, which is the blown-out interior lighting defect.
@@ -339,6 +339,11 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		if (const auto [violations, first] = store.TakeFrameAccessViolations(); violations)
 			logger::error("[DCLF] step 6c: {} reads of the coordinator's state from the frame while the scene work ran (first: {}) <- FRAME ACCESS", violations,
 				first ? first : "?");
+		// Once a frame number (a load holds the number still while Presents go on).
+		static std::uint32_t presentJoinsFrame = ~0u;
+		if (std::exchange(presentJoinsFrame, frame) != frame)
+			if (const auto [joined, running] = store.TakePresentJoins(); joined || running)
+				logger::info("[DCLF] Present (T6b1d: never waits for the scene work): {} joined it, {} found it running (joined at the next frame's start)", joined, running);
 		if (const auto publication = store.TakeTablesPublication(); publication.published) {
 			logger::info("[DCLF] tables published (step 6): {} snapshots ({} written again, {} made, pool {}), {:.3f} ms each on the coordinator (max {:.3f}); {} published on the render thread at the frame's start (tables changed after the coordinator's last publication: events applied at Present, a frame without accumulate work){}",
 				publication.published, publication.reused, publication.made, publication.pool, publication.ms / publication.published, publication.maxMs, publication.republished, publication.republished ? " <- RENDER THREAD" : "");

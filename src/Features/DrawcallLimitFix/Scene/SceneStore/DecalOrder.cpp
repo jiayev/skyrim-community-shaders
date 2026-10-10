@@ -109,23 +109,47 @@ namespace DCLF
 			return Miss::NoRoot;
 		}
 
+		/** @brief VisitIndex from the parent's record (T6b1b): a decal node's decals (its record's, in array order), else its children by slot. */
+		std::uint32_t VisitIndex(const SceneCapture::NodeRecord& a_parent, const void* a_child)
+		{
+			if (a_parent.kind & SceneCapture::kKindDecalNode) {
+				const auto& decals = a_parent.decals;
+				for (std::uint32_t j = 0; j < decals.size(); ++j)
+					if (decals[j] && decals[j] == a_child)
+						return static_cast<std::uint32_t>(decals.size()) - 1 - j;
+				return ~0u;
+			}
+			for (std::uint32_t i = 0; i < a_parent.children.size(); ++i)
+				if (a_parent.children[i] == a_child)
+					return i;
+			return ~0u;
+		}
+
 		/**
 		 * @brief The order the scene gives a_geometry, without the frame's lists: whether a BSOrderedNode groups it, and its
 		 * visit positions from the top of the scene graph down (NiNode slots do not move; a BGSDecalNode visits its decals
-		 * last to first). Within a reference this is the registration's order exactly.
+		 * last to first). Within a reference this is the registration's order exactly. The mirror's chain (T6b1b).
 		 */
-		bool SceneKeyOf(const RE::BSGeometry* a_geometry, OrderKey& a_out)
+		bool SceneKeyOf(const SceneMirror& a_mirror, const void* a_geometry, OrderKey& a_out)
 		{
 			static const REL::Relocation<const RE::NiRTTI*> orderedNode{ RE::BSOrderedNode::Ni_RTTI };
 			a_out = {};
-			Miss miss = Miss::None;
-			for (const RE::NiAVObject* object = a_geometry; object && object->parent; object = object->parent) {
-				if (object->parent->GetRTTI() == orderedNode.get())
+			for (const void* key = a_geometry; key;) {
+				const auto* record = a_mirror.Node(key);
+				if (!record)
+					return false;
+				if (!record->parent)
+					break;
+				const auto* parent = a_mirror.Node(record->parent);
+				if (!parent)
+					return false;
+				if (parent->rtti == orderedNode.get())
 					a_out.ordered = true;
-				const std::uint32_t at = VisitIndex(*object->parent, object, miss);
+				const std::uint32_t at = VisitIndex(*parent, key);
 				if (at == ~0u)
 					return false;
 				a_out.path.push_back(at);
+				key = record->parent;
 			}
 			std::reverse(a_out.path.begin(), a_out.path.end());
 			return true;
@@ -259,12 +283,18 @@ namespace DCLF
 			return text;
 		}
 
-		const RE::NiAVObject* DecalNodeOf(const RE::NiAVObject* a_object)
+		/** @brief The BGSDecalNode above a_object (its record's kind: the RTTI exactly), the mirror's chain (T6b1b). */
+		const RE::NiAVObject* DecalNodeOf(const SceneMirror& a_mirror, const void* a_object)
 		{
-			static const REL::Relocation<const RE::NiRTTI*> decalNode{ RE::BGSDecalNode::Ni_RTTI };
-			for (const auto* node = a_object ? a_object->parent : nullptr; node; node = node->parent)
-				if (node->GetRTTI() == decalNode.get())
-					return node;
+			const auto* record = a_object ? a_mirror.Node(a_object) : nullptr;
+			for (const void* key = record ? record->parent : nullptr; key;) {
+				const auto* node = a_mirror.Node(key);
+				if (!node)
+					return nullptr;
+				if (node->kind & SceneCapture::kKindDecalNode)
+					return static_cast<const RE::NiAVObject*>(key);
+				key = node->parent;
+			}
 			return nullptr;
 		}
 		// Draw order within a chain: registered later is drawn earlier (RegisterPass prepends); the object last, for stability.
@@ -305,8 +335,8 @@ namespace DCLF
 			const auto* geometry = a_object < tables.objectGeometry.size() ? tables.objectGeometry[a_object] : nullptr;
 			if (!geometry)
 				return false;
-			a_out = { a_chain, {}, a_object, DecalNodeOf(geometry) };
-			SceneKeyOf(geometry, a_out.key);
+			a_out = { a_chain, {}, a_object, DecalNodeOf(mirror, geometry) };
+			SceneKeyOf(mirror, geometry, a_out.key);
 			return true;
 		};
 		auto whole = [&] {
