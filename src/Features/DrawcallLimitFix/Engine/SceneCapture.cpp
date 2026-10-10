@@ -92,6 +92,8 @@ namespace DCLF::SceneCapture
 			while (!stack.empty()) {
 				const auto* object = stack.back();
 				stack.pop_back();
+				if (a_out.pinning)
+					a_out.pins.emplace_back(const_cast<RE::NiAVObject*>(object));
 				if (const auto* geometry = const_cast<RE::NiAVObject*>(object)->AsGeometry()) {
 					CaptureLeaf(*geometry, a_out);
 					MirrorWatch::ArmGeometry(geometry);
@@ -583,12 +585,34 @@ namespace DCLF::SceneCapture
 			a_out.alphas.push_back(CaptureAlpha(*static_cast<const RE::NiAlphaProperty*>(g.alpha)));
 	}
 
+	namespace
+	{
+		std::atomic<const std::vector<const RE::NiAVObject*>*> drawnRoots{ nullptr };
+		std::vector<std::unique_ptr<const std::vector<const RE::NiAVObject*>>> drawnRootSets;  // render thread: every set published
+	}
+
+	void SetDrawnRoots(std::vector<const RE::NiAVObject*> a_roots)
+	{
+		std::ranges::sort(a_roots);
+		if (const auto* current = drawnRoots.load(std::memory_order_acquire); current ? *current == a_roots : a_roots.empty())
+			return;
+		auto set = std::make_unique<const std::vector<const RE::NiAVObject*>>(std::move(a_roots));
+		drawnRoots.store(set.get(), std::memory_order_release);
+		drawnRootSets.push_back(std::move(set));
+	}
+
 	bool InWorld(const RE::NiAVObject* a_object)
 	{
 		const auto* root = static_cast<const RE::NiAVObject*>(RE::Main::WorldRootNode());
-		for (std::uint32_t depth = 0; root && a_object && depth <= kMaxDepth; ++depth, a_object = a_object->parent)
+		const RE::NiAVObject* top = nullptr;
+		for (std::uint32_t depth = 0; root && a_object && depth <= kMaxDepth; ++depth, a_object = a_object->parent) {
 			if (a_object == root)
 				return true;
+			top = a_object;
+		}
+		// A portal graph's parentless root (SetDrawnRoots).
+		if (const auto* roots = drawnRoots.load(std::memory_order_acquire); roots && top && !top->parent)
+			return std::ranges::binary_search(*roots, top);
 		return false;
 	}
 
@@ -601,10 +625,13 @@ namespace DCLF::SceneCapture
 		const auto start = std::chrono::steady_clock::now();
 		auto out = std::make_unique<Records>();
 		out->sequence = NextSequence();
+		out->pinning = true;
 		Visit(a_root, *out);
 		// The ancestors: their children lists changed (the parent's), and a record is wanted for every node a chain walks.
-		for (const auto* ancestor = a_root.parent; ancestor; ancestor = ancestor->parent)
+		for (const auto* ancestor = a_root.parent; ancestor; ancestor = ancestor->parent) {
 			out->nodes.push_back(CaptureNode(*ancestor));
+			out->pins.emplace_back(const_cast<RE::NiNode*>(ancestor));
+		}
 		NoteCapture(out->nodes.size() + out->geometries.size() + out->properties.size() + out->alphas.size(),
 			static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()));
 		return out;

@@ -1862,7 +1862,9 @@ namespace DCLF
 		 * geometry's userData); an actor's is its cell's container, never tested; a geometry without a
 		 * reference (a terrain block) has its nearest BSMultiBoundNode.
 		 */
-		void ResolveSunEntry(Tracked& a_tracked, const RE::BSGeometry& a_geometry);
+		void ResolveSunEntry(Tracked& a_tracked, const RE::BSGeometry& a_geometry, bool a_live = false);
+		/** @brief ResolveSunEntry's from the mirror alone. */
+		const void* MirrorSunEntry(const void* a_geometry) const;
 
 		/**
 		 * @brief The sun entries whose whole content DCLF can take out of the engine's cascade culls (SunCandidates,
@@ -1899,7 +1901,7 @@ namespace DCLF
 		 * node's child, whose reference is an actor: an actor has no sun entry), else its sun entry unless that is a category
 		 * node (a cell's or a room's multibound node, which holds other entries).
 		 */
-		const RE::NiAVObject* LightEntryOf(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const;
+		const RE::NiAVObject* LightEntryOf(const Tracked& a_tracked, const RE::BSGeometry& a_geometry, bool a_live) const;
 		/**
 		 * @brief Whether a tracked geometry lets its light entry leave the point lights' culls. A table object: the exclusion
 		 * decides (BuildSunExclusion). Any other must give the light's registration no pass: what the sun's rule allows
@@ -1986,10 +1988,16 @@ namespace DCLF
 				RE::NiNode* category = nullptr;
 			};
 			ankerl::unordered_dense::map<const RE::NiAVObject*, Root> roots;
+			// T6b1c: the category nodes new to the scene work's set (all of them before a rescan): their children's keys.
+			ankerl::unordered_dense::map<const RE::NiNode*, std::vector<const RE::NiAVObject*>> children;
 		};
+		// T6b1c: every node and geometry under the newest capture's new category nodes and new roots, held for the scene work's references
+		// (copies of these) until it has applied the capture: the render thread lets go at the next frame's start, so nothing is kept
+		// alive past the engine's release longer than that.
+		std::vector<RE::NiPointer<RE::NiAVObject>> categoryPins;
 		/** @brief Render thread, at ingestion (not while a load screen is up): the newest CategoryCapture, made when a_force or the signature moved. */
 		struct EventBatch;
-		void CaptureCategories(bool a_force);
+		void CaptureCategories(bool a_force, EventBatch& a_batch);
 		/** @brief Render thread, the frame's start: the tracked geometries the mirror lacked (mirrorCaptureRequests), into a_batch's mirror events. */
 		void CaptureMirrorRequests(EventBatch& a_batch);
 		std::shared_ptr<const CategoryCapture> categoryCapture;
@@ -2026,18 +2034,18 @@ namespace DCLF
 			MoveKey,
 			LightEntry,
 			SunEntry,
+			Reference,  // T6b1c: a geometry the mirror's walk found with no pin (lagged: the live scene no longer has it there)
 			kCount
 		};
 		static constexpr std::array<const char*, static_cast<std::size_t>(MirrorRead::kCount)> kMirrorReadNames{ "category node", "subtree", "switch event", "node event",
-			"hidden chain", "move key", "light entry", "sun entry" };
-		/** @brief A mirror read's check: counts it, and a difference (a_describe() its first) when a_differ. */
-		template <class Describe>
-		void NoteMirrorRead(MirrorRead a_read, bool a_differ, Describe&& a_describe) const
+			"hidden chain", "move key", "light entry", "sun entry", "unpinned geometry" };
+		/** @brief A mirror read's check: counts it; a difference (a_describe() it) is checked again after the next batch (DeferredRead). */
+		template <class Describe, class Recheck>
+		void NoteMirrorRead(MirrorRead a_read, bool a_differ, Describe&& a_describe, Recheck&& a_recheck) const
 		{
-			const auto r = static_cast<std::size_t>(a_read);
-			++mirrorReads.checked[r];
-			if (a_differ && mirrorReads.differ[r]++ == 0)
-				mirrorReads.first[r] = a_describe();
+			++mirrorReads.checked[static_cast<std::size_t>(a_read)];
+			if (a_differ)
+				deferredReads.push_back({ a_read, a_describe(), std::function<bool()>(std::forward<Recheck>(a_recheck)) });
 		}
 		/** @brief The mirror's parent of a_key (null: none, or no record). */
 		const void* MirrorParent(const void* a_key) const
@@ -2051,10 +2059,34 @@ namespace DCLF
 		void MirrorSubtree(const void* a_root, Ineligible a_reason, std::vector<std::pair<RE::BSGeometry*, Ineligible>>& a_out, bool& a_unmirrored) const;
 		struct MirrorReadStats
 		{
-			std::array<std::uint64_t, static_cast<std::size_t>(MirrorRead::kCount)> reads{}, checked{}, differ{}, unmirrored{};
+			std::array<std::uint64_t, static_cast<std::size_t>(MirrorRead::kCount)> reads{}, checked{}, lagged{}, differ{}, unmirrored{};
 			std::array<std::string, static_cast<std::size_t>(MirrorRead::kCount)> first;
 		};
 		mutable MirrorReadStats mirrorReads;
+		/**
+		 * @brief A read the check found differing: the mirror is the scene as the batch left it, the live read is later (what changed
+		 * since is the next batch's). Checked again after the next batch (a_recheck: whether the mirror now gives what the live read
+		 * gave, from the mirror and the values it captured alone): agreeing, it lagged; differing still, it is counted (TakeDeferredReads).
+		 */
+		struct DeferredRead
+		{
+			MirrorRead read;
+			std::string what;
+			std::function<bool()> recheck;
+		};
+		mutable std::vector<DeferredRead> deferredReads;
+		void RecheckDeferredReads();
+		/** @brief FindCategoryNode's chain, the mirror's alone (no counting, no check). */
+		RE::NiNode* MirrorCategoryNode(const void* a_object, Ineligible& a_reason, bool& a_unmirrored) const;
+		/** @brief The mirror's chain from a_from up to a_stop (left out) or its top. */
+		std::vector<const void*> MirrorChain(const void* a_from, const void* a_stop) const
+		{
+			std::vector<const void*> chain;
+			for (const void* key = a_from; key && key != a_stop && chain.size() <= kMaxParentDepthForChains; key = MirrorParent(key))
+				chain.push_back(key);
+			return chain;
+		}
+		static constexpr std::size_t kMaxParentDepthForChains = 64;
 		bool mirrorReadParity = false;  // CS_DCLF_MIRROR_PARITY, read once
 		std::string MirrorReadReport();
 		/**
@@ -2072,8 +2104,32 @@ namespace DCLF
 		void AddSubtree(RE::NiAVObject* a_root, SubtreeSource a_source = SubtreeSource::AttachEvent);
 		std::vector<RE::NiPointer<RE::NiAVObject>> pendingSubtrees;
 		std::vector<RE::BSGeometry*> validationSuspects;  // ValidateSlice's: keys, checked again only while tracked
-		std::uint64_t subtreesPended = 0, subtreesDropped = 0;  // since the last report: waiting for the mirror, and still without a chain after
-		void AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason);
+		std::uint64_t subtreesPended = 0, subtreesDropped = 0;
+		std::uint64_t categoryChildrenMissing = 0;  // a new category node the capture listed no children of (T6b1c: should not be)  // since the last report: waiting for the mirror, and still without a chain after
+		/**
+		 * @brief Tracks a_geometry under a_categoryNode. Its reference is the batch's pin of it (T6b1c), or with a_live a live walk's
+		 * pointer (the category walk's, until the render thread's category capture pins); without either it is left out (counted).
+		 */
+		void AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason, bool a_live);
+		/**
+		 * @brief T6b1c: the applied batch's pins by key (its attach captures', SceneCapture::Records::pins), valid while the scene work
+		 * applies it; and a reference made from one (null: no pin). Counted since the last report: references made from pins, from a live
+		 * walk's pointers, and refused for want of a pin.
+		 */
+		ankerl::unordered_dense::map<const void*, const RE::NiPointer<RE::NiAVObject>*> batchPins;
+		template <class T>
+		RE::NiPointer<T> Pinned(const T* a_key)
+		{
+			if (const auto it = batchPins.find(a_key); it != batchPins.end()) {
+				++referenceStats.pinned;
+				return RE::NiPointer<T>(static_cast<T*>(it->second->get()));
+			}
+			return nullptr;
+		}
+		struct ReferenceStats
+		{
+			std::uint64_t pins = 0, pinned = 0, live = 0, refused = 0;
+		} referenceStats;
 		void ValidateSlice();
 		/** @brief The main camera's batch renderers, for the diagnostics' filter of the capture. Cheap; every frame. */
 		bool RefreshMainBatchRenderers();
@@ -3290,7 +3346,8 @@ namespace DCLF
 		 * made from a key, which may name a node already gone.
 		 */
 		ankerl::unordered_dense::map<const RE::NiAVObject*, RE::NiPointer<RE::NiAVObject>> rootOwners;
-		void OwnRoot(const RE::NiAVObject* a_root);
+		/** @brief Owns a_root while a dependents list names it: from the batch's pin (a_live: a live walk's pointer, the category walk's). */
+		bool OwnRoot(const RE::NiAVObject* a_root, bool a_live);
 		/** @brief Hands the root's reference back once neither dependents list names it. */
 		void ReleaseRootOwner(const RE::NiAVObject* a_root);
 		void ReleaseRootOwners();

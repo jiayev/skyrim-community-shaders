@@ -1405,6 +1405,18 @@ AE 1.6.1170. These are the choke points `SceneStore::InstallSceneEvents` detours
         -   `FUN_1401fdd50` and `FUN_1401fde40`, which also detach the decal's 3D.
 
     `BGSDecalNode::OnVisible` (`0x1401fdf10`) culls each decal's `Get3D` from last to first, and not the node's children.
+-   **Child edits outside `NiNode`'s implementations.** These node classes implement the child edits themselves, so a
+    detour of `NiNode`'s vtable slots `0x35` and `0x37`–`0x3C` misses them:
+    -   `BSParticleSystemManager`: attach, detaches and `SetAt2`; it moves world-space particle systems, such as the
+        waterfalls' splash and smoke;
+    -   `BGSDecalNode`: detaches and sets; its decal erases call `DetachChild1` directly;
+    -   `BSFaceGenNiNode`: attach.
+
+    DCLF detours all eight (2026-10-09).
+-   **`NiAVObject::SetCollisionObject`** (`FUN_140e8bd40`, `+0x40`) is called by `bhkWorld::InitHavok` and
+    `FUN_140e8c600`, after the node's world attach.
+-   **Lights and cameras** under the world root leave without a hooked detach. `ShadowSceneNode::RemoveLight`
+    (`0x1414a1120`) only queues the light (`lightQueueRemove`), and the queue's processing detaches it by other means.
 -   **`BSShaderProperty::SetFlags(flag, set)`** (`0x14147bee0`) sets or clears one bit of the 64-bit flags. It sets
     `lastRenderPassState = 0x7fffffff` when the bit changes, which makes `GetRenderPasses` rebuild the pass list.
     Community Shaders' own in-place flag writes are in `TruePBR`'s `LoadBinary`, before the property is attached.

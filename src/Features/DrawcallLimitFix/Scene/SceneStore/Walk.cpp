@@ -1340,10 +1340,21 @@ namespace DCLF
 		}
 	}
 
-	void SceneStore::OwnRoot(const RE::NiAVObject* a_root)
+	bool SceneStore::OwnRoot(const RE::NiAVObject* a_root, bool a_live)
 	{
-		if (auto& owner = rootOwners[a_root]; !owner)
+		auto& owner = rootOwners[a_root];
+		if (owner)
+			return true;
+		// The batch's pin (T6b1c), or a live walk's pointer; never a key alone.
+		if (!(owner = Pinned(a_root)) && a_live) {
+			++referenceStats.live;
 			owner.reset(const_cast<RE::NiAVObject*>(a_root));
+		}
+		if (owner)
+			return true;
+		++referenceStats.refused;
+		rootOwners.erase(a_root);
+		return false;
 	}
 
 	void SceneStore::ReleaseRootOwner(const RE::NiAVObject* a_root)

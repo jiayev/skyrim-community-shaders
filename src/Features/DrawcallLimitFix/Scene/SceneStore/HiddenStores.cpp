@@ -713,13 +713,13 @@ namespace DCLF
 			hiddenDependents[object].push_back(a_geometry);
 		}
 		if (mirrorReadParity) {
-			std::size_t at = 0;
-			bool differ = false;
-			for (const RE::NiAVObject* object = a_geometry; object && object != a_tracked.categoryNode; object = object->parent, ++at)
-				differ |= at >= a_tracked.hiddenChain.size() || a_tracked.hiddenChain[at] != object;
-			differ |= at != a_tracked.hiddenChain.size();
+			std::vector<const void*> live;
+			for (const RE::NiAVObject* object = a_geometry; object && object != a_tracked.categoryNode; object = object->parent)
+				live.push_back(object);
+			const bool differ = !std::ranges::equal(live, a_tracked.hiddenChain);
 			NoteMirrorRead(MirrorRead::HiddenChain, differ, [&] { return fmt::format("'{}' {}: {} objects by the mirror, {} live", a_geometry->name.c_str() ? a_geometry->name.c_str() : "",
-				static_cast<const void*>(a_geometry), a_tracked.hiddenChain.size(), at); });
+				static_cast<const void*>(a_geometry), a_tracked.hiddenChain.size(), live.size()); },
+				[this, key = static_cast<const void*>(a_geometry), category = static_cast<const void*>(a_tracked.categoryNode), live] { return MirrorChain(key, category) == live; });
 		}
 	}
 

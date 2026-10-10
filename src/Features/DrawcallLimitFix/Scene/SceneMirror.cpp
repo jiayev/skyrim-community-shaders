@@ -146,6 +146,52 @@ namespace DCLF
 		}
 	}
 
+	void SceneMirror::Evict(const void* a_key, std::string_view a_what)
+	{
+		const auto* root = Node(a_key);
+		if (!root)
+			return;
+		std::vector<RE::BSGeometry*> geometriesBelow;
+		std::vector<const void*> nodesBelow;
+		std::vector<const void*> stack{ a_key };
+		while (!stack.empty()) {
+			const void* key = stack.back();
+			stack.pop_back();
+			const auto* record = Node(key);
+			if (!record)
+				continue;
+			if (record->kind & SceneCapture::kKindGeometry)
+				geometriesBelow.push_back(static_cast<RE::BSGeometry*>(const_cast<void*>(key)));
+			else
+				nodesBelow.push_back(key);
+			for (const void* child : record->children)
+				if (child)
+					stack.push_back(child);
+		}
+		// The RTTI is static data: its name is safe to read; the record's own name may not be.
+		const auto* rtti = static_cast<const RE::NiRTTI*>(root->rtti);
+		// A light (NiPointLight, NiSpotLight, NiAmbientLight, NiDirectionalLight) leaves by ShadowSceneNode's queued removal, which
+		// detaches it by no hooked function, and a camera likewise; DCLF draws neither, so they are counted apart.
+		if (rtti && rtti->name && std::string_view(rtti->name).starts_with("Ni") &&
+			(std::string_view(rtti->name).ends_with("Light") || std::string_view(rtti->name) == "NiCamera")) {
+			++lightEvictions;
+			Detach(a_key, geometriesBelow, nodesBelow);
+			--detached;
+			return;
+		}
+		++evictions;
+		evictedRecords += geometriesBelow.size() + nodesBelow.size();
+		if (firstEviction.empty()) {
+			std::size_t depth = 0;
+			for (const void* at = root->parent; at && depth < 64; at = Node(at) ? Node(at)->parent : nullptr)
+				++depth;
+			firstEviction = fmt::format("{} held as a {} {} deep (captured frame {}, {} records under it), now {}", a_key, rtti && rtti->name ? rtti->name : "?", depth,
+				root->capturedFrame, geometriesBelow.size() + nodesBelow.size(), a_what);
+		}
+		Detach(a_key, geometriesBelow, nodesBelow);
+		--detached;
+	}
+
 	std::pair<std::uint8_t, const void*> SceneMirror::TypeOf(const SceneCapture::Update& a_update)
 	{
 		return std::visit(
@@ -410,6 +456,11 @@ namespace DCLF
 			"no record of)\n",
 			nodes.size(), geometries.size(), properties.size(), alphas.size(), std::exchange(applied, 0), std::exchange(detached, 0), std::exchange(updates, 0),
 			std::exchange(updatesUnheld, 0));
+		if (lightEvictions)
+			text += fmt::format("[DCLF] scene mirror evictions (T6b1b): {} lights and cameras named by an attach out of the world (detached by no hook)\n", std::exchange(lightEvictions, 0));
+		if (evictions)
+			text += fmt::format("[DCLF] scene mirror evictions (T6b1b): {} records named by an attach out of the world ({} records with them: left the world by no detach a hook saw) <- MIRROR EVICTED; first: {}\n",
+				std::exchange(evictions, 0), std::exchange(evictedRecords, 0), std::exchange(firstEviction, {}));
 		text += fmt::format(
 			"[DCLF] scene mirror order (6e F3c): {} updates replayed after a capture numbered before them, {} skipped as older than their record's capture, {} "
 			"records a capture left to a newer one\n",

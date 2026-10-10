@@ -21,7 +21,8 @@ namespace DCLF
 			return a_index < children.free_idx() ? children[static_cast<std::uint16_t>(a_index)].get() : nullptr;
 		}
 
-		struct AttachChild
+		template <int N>
+		struct AttachChildAt
 		{
 			static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child, bool a_firstAvail)
 			{
@@ -32,7 +33,8 @@ namespace DCLF
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct DetachChild1
+		template <int N>
+		struct DetachChild1At
 		{
 			static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child, RE::NiPointer<RE::NiAVObject>& a_out)
 			{
@@ -43,7 +45,8 @@ namespace DCLF
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct DetachChild2
+		template <int N>
+		struct DetachChild2At
 		{
 			static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child)
 			{
@@ -54,7 +57,8 @@ namespace DCLF
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct DetachChildAt1
+		template <int N>
+		struct DetachChildAt1At
 		{
 			static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiPointer<RE::NiAVObject>& a_out)
 			{
@@ -65,7 +69,8 @@ namespace DCLF
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct DetachChildAt2
+		template <int N>
+		struct DetachChildAt2At
 		{
 			static void thunk(RE::NiNode* a_this, std::uint32_t a_index)
 			{
@@ -76,7 +81,8 @@ namespace DCLF
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct SetAt1
+		template <int N>
+		struct SetAt1At
 		{
 			static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiAVObject* a_child, RE::NiPointer<RE::NiAVObject>& a_out)
 			{
@@ -93,7 +99,8 @@ namespace DCLF
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct SetAt2
+		template <int N>
+		struct SetAt2At
 		{
 			static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiAVObject* a_child)
 			{
@@ -117,6 +124,35 @@ namespace DCLF
 			const auto target = reinterpret_cast<const std::uintptr_t*>(vtable.address())[a_slot];
 			stl::detour_thunk<T>(target);
 		}
+
+		/**
+		 * @brief A node class's own implementation of a slot (T6b1b): detoured when it is not NiNode's (BSParticleSystemManager's child
+		 * edits, which move world-space particle systems; BGSDecalNode's detaches and sets; BSFaceGenNiNode's attach), and not detoured
+		 * already. One that calls NiNode's reports the edit twice: an attach tracked again, a detach whose records are gone.
+		 */
+		template <class T>
+		void DetourOverride(const REL::VariantID& a_vtable, std::size_t a_slot, std::vector<std::uintptr_t>& a_done)
+		{
+			REL::Relocation<std::uintptr_t> base{ RE::VTABLE_NiNode[0] };
+			REL::Relocation<std::uintptr_t> vtable{ a_vtable };
+			const auto target = reinterpret_cast<const std::uintptr_t*>(vtable.address())[a_slot];
+			if (target == reinterpret_cast<const std::uintptr_t*>(base.address())[a_slot] || std::ranges::find(a_done, target) != a_done.end())
+				return;
+			a_done.push_back(target);
+			stl::detour_thunk<T>(target);
+		}
+
+		template <int N>
+		void DetourOverrides(const REL::VariantID& a_vtable, std::vector<std::uintptr_t>& a_done)
+		{
+			DetourOverride<AttachChildAt<N>>(a_vtable, kAttachChild, a_done);
+			DetourOverride<DetachChild1At<N>>(a_vtable, kDetachChild1, a_done);
+			DetourOverride<DetachChild2At<N>>(a_vtable, kDetachChild2, a_done);
+			DetourOverride<DetachChildAt1At<N>>(a_vtable, kDetachChildAt1, a_done);
+			DetourOverride<DetachChildAt2At<N>>(a_vtable, kDetachChildAt2, a_done);
+			DetourOverride<SetAt1At<N>>(a_vtable, kSetAt1, a_done);
+			DetourOverride<SetAt2At<N>>(a_vtable, kSetAt2, a_done);
+		}
 	}
 
 	SceneTracker& SceneTracker::Get()
@@ -132,13 +168,21 @@ namespace DCLF
 
 		// Detour the NiNode implementations rather than the NiNode vtable, so every node class
 		// that inherits them (BSFadeNode, BSMultiBoundNode, BSLeafAnimNode, ...) is covered.
-		DetourNiNodeSlot<AttachChild>(kAttachChild);
-		DetourNiNodeSlot<DetachChild1>(kDetachChild1);
-		DetourNiNodeSlot<DetachChild2>(kDetachChild2);
-		DetourNiNodeSlot<DetachChildAt1>(kDetachChildAt1);
-		DetourNiNodeSlot<DetachChildAt2>(kDetachChildAt2);
-		DetourNiNodeSlot<SetAt1>(kSetAt1);
-		DetourNiNodeSlot<SetAt2>(kSetAt2);
+		DetourNiNodeSlot<AttachChildAt<0>>(kAttachChild);
+		DetourNiNodeSlot<DetachChild1At<0>>(kDetachChild1);
+		DetourNiNodeSlot<DetachChild2At<0>>(kDetachChild2);
+		DetourNiNodeSlot<DetachChildAt1At<0>>(kDetachChildAt1);
+		DetourNiNodeSlot<DetachChildAt2At<0>>(kDetachChildAt2);
+		DetourNiNodeSlot<SetAt1At<0>>(kSetAt1);
+		DetourNiNodeSlot<SetAt2At<0>>(kSetAt2);
+		// The node classes that override them (T6b1b: a particle system the manager moved was missed).
+		{
+			std::vector<std::uintptr_t> done;
+			DetourOverrides<1>(RE::VTABLE_BSParticleSystemManager[0], done);
+			DetourOverrides<2>(RE::VTABLE_BGSDecalNode[0], done);
+			DetourOverrides<3>(RE::VTABLE_BSFaceGenNiNode[0], done);
+			logger::info("[DCLF] scene tracking: {} node classes' own child edits detoured", done.size());
+		}
 
 		installed = true;
 		logger::info("[DCLF] Scene tracking hooks installed");
