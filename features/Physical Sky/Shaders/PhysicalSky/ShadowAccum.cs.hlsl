@@ -48,7 +48,6 @@ float3 GetVolumetricCloudTransmittance(float3 posWorldRel)
 struct ShadowRayData
 {
 	float2 endSplitDistances;
-	float2 startSplitDistances;
 	float2 viewOriginZW;
 	float2 viewDirectionZW;
 	float3 lightOrigin[2];
@@ -60,7 +59,6 @@ ShadowRayData BuildShadowRay(float3 dir)
 	const DirectionalShadowLightData light = DirectionalShadowLights[0];
 	ShadowRayData ray;
 	ray.endSplitDistances = light.EndSplitDistances;
-	ray.startSplitDistances = light.StartSplitDistances;
 	ray.viewOriginZW = mul(FrameBuffer::CameraViewProj, float4(0, 0, 0, 1)).zw;
 	ray.viewDirectionZW = mul(FrameBuffer::CameraViewProj, float4(dir, 0)).zw;
 	[unroll] for (uint cascade = 0; cascade < 2; ++cascade)
@@ -86,10 +84,7 @@ float SampleShadow(float3 posWorldRel, float distance, ShadowRayData ray)
 		[branch] if (ray.endSplitDistances.y > 0.0 &&
 					 shadowMapDepth < ray.endSplitDistances.y)
 		{
-			float cascadeSelect = saturate(
-				(shadowMapDepth - ray.startSplitDistances.y) /
-				(ray.endSplitDistances.x - ray.startSplitDistances.y));
-			uint cascadeIndex = uint(cascadeSelect);
+			uint cascadeIndex = shadowMapDepth >= ray.endSplitDistances.x ? 1u : 0u;
 
 			float3 positionLS = ray.lightOrigin[cascadeIndex] + distance * ray.lightDirection[cascadeIndex];
 			float4 depths = TexDirectShadows.GatherRed(SampTr, float3(saturate(positionLS.xy), cascadeIndex), 0);
