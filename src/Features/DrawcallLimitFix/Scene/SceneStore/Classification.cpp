@@ -883,6 +883,9 @@ namespace DCLF
 		if (const auto* g = mirror.Geometry(a_geometry); g && g->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape))
 			SampleLodRanges(*a_geometry, false);
 		pendingEvaluation.push_back(a_geometry);
+		// T6b5: under a LOD gate's root (its gate applied before this attach reached the tracking, or a subtree added after it): tagged.
+		if (!gateOfRoot.empty())
+			TagGateAbove(a_geometry, entry);
 	}
 
 	const RE::NiAVObject* SceneStore::LightEntryOf(const Tracked& a_tracked, const RE::BSGeometry& a_geometry, bool a_live) const
@@ -1224,7 +1227,8 @@ namespace DCLF
 		const auto it = std::lower_bound(cullHidden.begin(), cullHidden.end(), object, [](const auto& a_entry, const RE::NiAVObject* a_key) { return a_entry.first < a_key; });
 		if (it != cullHidden.end() && it->first == object)
 			return it->second;
-		return (a_record.flags & static_cast<std::uint32_t>(RE::NiAVObject::Flag::kHidden)) != 0;
+		// T6b5: a gated LOD block's own hide is the gate's (SceneMirror::SetGated), not the scene's: every other hide on the chain counts.
+		return (a_record.flags & static_cast<std::uint32_t>(RE::NiAVObject::Flag::kHidden)) != 0 && !mirror.Gated(a_object);
 	}
 
 	Ineligible SceneStore::ClassifyFrame(const Tracked& a_tracked, const AccumulatedPass* a_accumulated) const

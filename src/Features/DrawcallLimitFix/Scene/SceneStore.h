@@ -1172,6 +1172,9 @@ namespace DCLF
 			std::uint64_t sequence = 0;
 			std::uint32_t commitFrame = 0;        // the scene frame of the commit it applies (CommitSet's; stats and the install delay)
 			std::uint32_t togglesGeneration = 0;  // the toggles that commit was made under (FrameInputs): the toggle reinstall waits for one
+			// T6b5: the LOD gates' forced releases its pass's events were complete for (FrameInputs::lodForcedGeneration): an older one may
+			// claim the outgoing blocks a forced release detached, and the frames withdraw until one built after it is installed.
+			std::uint64_t lodForcedGeneration = 0;
 			std::uint32_t tablesGeneration = 0;   // the tables' generation (GetTablesGeneration while it is the frame's)
 			std::shared_ptr<const Tables> tables;
 			std::shared_ptr<const SetSnapshot> claims;
@@ -1214,6 +1217,16 @@ namespace DCLF
 		std::uint64_t InstalledSequence() const { return installed ? installed->sequence : 0u; }
 		/** @brief The toggles generation the installed publication's commit was made under (the toggle reinstall), 0 without one. */
 		std::uint32_t InstalledToggles() const { return installed ? installed->togglesGeneration : 0u; }
+		/** @brief T6b5: the LOD gates' forced-release generation the installed publication was built for, and the frame's (BeginFrame's read). */
+		std::uint64_t InstalledLodForced() const { return installed ? installed->lodForcedGeneration : 0u; }
+		std::uint64_t FrameLodForced() const { return frameLodForced; }
+		/**
+		 * @brief T6b5, render thread, the frame's start after InstallClaims or WithdrawSet (before the culls): the LOD gates the installed
+		 * publications flipped, released (LodGates::Flip: the incoming blocks shown and the outgoing hidden in the frame whose claims are
+		 * post-swap; a withdrawn frame's too, every later publication being post-swap), then the coordinator woken for their outcomes. Under
+		 * the set or persistent parity, the installed claims checked against each flip (<- GATE HOLE, <- GATE COVERAGE).
+		 */
+		void ReleaseGates();
 		struct PublicationStats
 		{
 			// Publications installed with an adopted snapshot (and those the builder skipped past), frames whose snapshot brought no newer one.
@@ -1999,6 +2012,13 @@ namespace DCLF
 			// ListFadeRoot), never a reference made from the mirror's key.
 			RE::NiPointer<RE::NiAVObject> fadeNodeRef;
 			const void* fadeNodeRequested = nullptr;  // T6b3e: the fade node key asked of the render thread (FadeNodeRequest), until answered
+			// T6b5: the LOD gate whose roots it hangs under (its token; 0: none) and on which side (kGateIncoming, kGateOutgoing), until the
+			// gate's outcome; an outgoing block's geometry held out of the set after its gate flipped, until its detach erases the entry; and
+			// whether any gate ever tagged it (the residue's "shown with no gate").
+			std::uint64_t gate = 0;
+			std::uint8_t gateSide = 0;
+			bool gateHeldOut = false;
+			bool gateSeen = false;
 			// Owned by an actor (its GetUserData is an ActorCharacter): Advanced Skin gives its draws the actor's
 			// wetness (Tables::skinWetness). Resolved once, by the walk.
 			bool actorOwned = false;
@@ -2548,10 +2568,11 @@ namespace DCLF
 			kStageWaiting,        // bound, waiting for readiness (waitingBy)
 			kStageNotReflection,  // bound, not waiting, no reflection phase
 			kStageApplied,        // a reflection member in the coordinator's tables, not installed yet
+			kStageUngated,        // T6b5: shown since, not ready, and no LOD gate ever tagged it (a show the gates do not cover)
 			kStageCount
 		};
 		static constexpr std::array<const char*, kStageCount> kStageNames{ "untracked", "ineligible", "hidden", "hidden, shown since", "no record", "a record, unbound",
-			"bound, waiting", "bound, no reflection phase", "a member, not installed" };
+			"bound, waiting", "bound, no reflection phase", "a member, not installed", "shown with no gate" };
 		struct ResidueClasses
 		{
 			std::array<std::uint64_t, kResidueKinds> counts{};
@@ -2825,8 +2846,11 @@ namespace DCLF
 			std::uint32_t membershipWitness = 0;
 			std::uint32_t togglesGeneration = 0;
 			std::uint32_t verdictsGeneration = 0;
+			std::uint64_t lodForcedGeneration = 0;  // T6b5: LodGates::ForcedGeneration at the frame's start (ScenePublication's)
 		};
 		LatestSlot<FrameInputs> frameInputsSlot;
+		std::uint64_t frameLodForced = 0;     // T6b5, render thread: the frame's LodGates::ForcedGeneration (BeginFrame)
+		std::uint64_t publishedLodForced = 0; // T6b5, the coordinator's: the generation of its last publication (NotePublished)
 		FrameInputs sceneInputs;              // the coordinator's: the newest taken
 		std::uint32_t verdictsRequested = 0;  // render thread: bumped by each request to drop the cached verdicts
 		std::uint32_t verdictsApplied = 0;    // the coordinator's: the requests it has applied
@@ -4108,6 +4132,15 @@ namespace DCLF
 		// withdrawal applies its setPhasesNext to); and whether the claims are withdrawn (WithdrawSet) until the next ApplySet.
 		std::vector<const RE::BSGeometry*> setGeometryNext;
 		bool setWithdrawn = false;  // the frame's claims (WithdrawSet), until the next installation
+		/** @brief T6b5: a LOD gate flipped by a commit (UpdateGates), released by the frame installing its publication (ReleaseGates). */
+		struct GateFlip
+		{
+			std::uint64_t token = 0;
+			std::vector<std::pair<const RE::BSGeometry*, std::uint8_t>> incoming;  // the incoming base geometries claimed, with the flip's phases
+			std::vector<const RE::BSGeometry*> outgoing;                          // the outgoing base geometries dropped
+			std::uint64_t requestNs = 0, flipNs = 0;                              // its event's push, the flip (steady clock)
+			std::uint32_t requestFrame = 0, flipFrame = 0;                        // the render thread's frames then (SceneCapture::Frame)
+		};
 		/**
 		 * @brief What one publication's passes made for the frame and the frame's start takes (T6b3a), carried by the publication log in
 		 * the publication's order: the main claims' changes against the publication before it (taken up to the installed one), and the
@@ -4132,7 +4165,123 @@ namespace DCLF
 			std::vector<std::shared_ptr<const void>> retiredImports;
 			std::vector<Tables::ActorWetnessChange> actorWetness;
 			std::vector<LightEntryChange> lightEntries;
+			std::vector<GateFlip> gateFlips;  // T6b5: the LOD gates its commits flipped (ReleaseGates)
 		};
+
+		/**
+		 * @brief T6b5: the LOD gates (Engine/LodGates.h; dclf-async-publication.md, "T6b5"), the coordinator's. A gate opens with its event
+		 * (ApplyGateEvent): its incoming roots gated in the mirror (their own hide not the scene's), the tracked geometries under its roots
+		 * tagged (a walk of the mirror per root; later arrivals by AddGeometry). The commit holds a gated incoming slot's phases out of the set
+		 * (GateWithhold: stored per slot with its readiness), and flips the gate in the commit that finds every incoming geometry a whole
+		 * member or ineligible and every root mirrored (UpdateGates): the held phases applied, the outgoing blocks' dropped and held out until
+		 * their detach, the flip carried by the publication (PublicationDeltas::gateFlips) to the frame that installs it (ReleaseGates). The
+		 * gate retires with its outcome (ApplyGateOutcomes: flipped, or forced by a safety path on the engine side).
+		 */
+		static constexpr std::uint8_t kGateIncoming = 1, kGateOutgoing = 2;
+		struct LodGate
+		{
+			enum class State : std::uint8_t
+			{
+				Open,     // the incoming withheld, the outgoing members
+				Flipped,  // the flip published: the incoming applied, the outgoing held out (Tracked::gateHeldOut); waiting for its outcome
+			};
+			State state = State::Open;
+			std::vector<const void*> incoming, outgoing;  // the roots (keys: the blocks' nodes), less those detached since
+			ankerl::unordered_dense::set<RE::BSGeometry*> incomingGeometries, outgoingGeometries;  // the tracked ones tagged (keys)
+			std::uint32_t pending = 0;     // incoming geometries neither whole members nor ineligible (UpdateGates)
+			std::uint32_t unmirrored = 0;  // incoming roots, or nodes under them, the mirror lacks a record of
+			std::uint64_t stampNs = 0;     // its event's push (the request), steady clock
+			std::uint32_t stampFrame = 0;
+			std::uint64_t flipNs = 0;
+			std::uint32_t flipFrame = 0;
+		};
+		struct GateSlot
+		{
+			const RE::BSGeometry* geometry = nullptr;  // the gated geometry the commit last evaluated the slot for
+			std::uint8_t phases = 0;                   // its phases then (the held ones while its gate is open)
+			bool ready = false;                        // whole: its phases all it takes part in, not waiting
+		};
+		struct GateOutcome
+		{
+			std::uint64_t token = 0;
+			bool forced = false;
+		};
+		struct GateStats
+		{
+			std::uint64_t opened = 0, flipped = 0, retiredFlipped = 0, retiredForced = 0, forcedOpen = 0, unknownOutcomes = 0, superseded = 0;
+			std::uint64_t rootsDetached = 0, taggedIncoming = 0, taggedOutgoing = 0, heldOut = 0, emptyIncoming = 0;
+			// Flips deferred for an incoming record the next publication claims first (UpdateGates); under the parities, flipped incoming
+			// geometries the flip's own publication does not claim (TakeDeltas: the coordinator's side of <- GATE HOLE).
+			std::uint64_t structureDeferred = 0, publishHoles = 0;
+			std::string firstPublishHole;
+			std::vector<double> requestToFlipMs;
+			std::vector<std::uint32_t> requestToFlipFrames;
+		};
+		ankerl::unordered_dense::map<std::uint64_t, LodGate> lodGates;     // by token
+		struct GateRoot
+		{
+			std::uint64_t token = 0;
+			std::uint8_t side = 0;  // kGateIncoming, kGateOutgoing
+		};
+		ankerl::unordered_dense::map<const void*, GateRoot> gateOfRoot;     // a root (incoming or outgoing) -> its gate
+		std::vector<GateSlot> gateSlots;                                     // by object slot
+		std::vector<GateFlip> gateFlipsMade;                                 // since the last publication (TakeDeltas)
+		std::vector<GateOutcome> gateOutcomesHeld;                           // taken, not applied yet (TakeGateOutcomes)
+		std::uint32_t gateHeldOutCount = 0;                                  // entries with Tracked::gateHeldOut
+		// Slots a gate's tag or retirement wants evaluated again, queued by the next commit at its start (a QueueSet after a commit's queue
+		// ran would be dropped with it: UpdateGates tags inside the commit).
+		std::vector<std::uint32_t> gateQueued;
+		GateStats gateStats;
+		/**
+		 * @brief The coordinator, ApplyMirrorEvents: a Gate event (SceneTracker::EventType::Gate, in order with the batch's other events) opens
+		 * its gate: its token, its roots (keys), its push stamp.
+		 */
+		void ApplyGateEvent(std::uint64_t a_token, std::span<const void* const> a_incoming, std::span<const void* const> a_outgoing, std::uint64_t a_stampNs,
+			std::uint32_t a_stampFrame);
+		/** @brief The coordinator, ApplyMirrorEvents: a detach in the world; the gates' roots among a_root and a_nodes leave their gates. */
+		void NoteGateRootsDetached(const void* a_root, std::span<const void* const> a_nodes);
+		/** @brief The tracked geometries the mirror holds under a_root tagged on a_token's a_side; whether the mirror lacked a record there. */
+		bool TagGateRoot(std::uint64_t a_token, const void* a_root, std::uint8_t a_side);
+		/** @brief AddGeometry: a_geometry tagged when a gate's root is on its mirror chain (up to its category node). */
+		void TagGateAbove(RE::BSGeometry* a_geometry, Tracked& a_entry);
+		void TagGate(RE::BSGeometry* a_geometry, Tracked& a_entry, std::uint64_t a_token, std::uint8_t a_side);
+		/** @brief Off its gate (EraseTracked, a retag, the outcome) and no longer held out. */
+		void UntagGate(RE::BSGeometry* a_geometry, Tracked& a_entry);
+		/** @brief The rescan (ApplyBatch): the gates' tags dropped with the entries (the rescan's adds tag again). */
+		void ResetGateTags();
+		/** @brief CommitSet: a_slot's phases as applied (0 for a gated incoming slot whose gate is open, or one held out), recorded per slot. */
+		std::uint8_t GateWithhold(std::uint32_t a_slot, std::uint8_t a_phases, bool a_wait, std::uint32_t a_drawn, bool a_live);
+		/** @brief GateWithhold's verdict alone (the set parity's): whether the commit applies 0 to a_slot for a gate. */
+		bool GateWithholds(std::uint32_t a_slot) const;
+		/** @brief Whether a gated incoming geometry is ready: ineligible for a verdict of the gate's time, or every slot of it whole. */
+		bool GateGeometryReady(const RE::BSGeometry* a_geometry, const Tracked& a_entry) const;
+		/**
+		 * @brief CommitSet, after its queue: the open gates' pending counts taken again, and those ready (every root mirrored, every incoming
+		 * geometry ready, a live scene) flipped: the slots and phases to apply into a_apply, the flip onto gateFlipsMade.
+		 */
+		void UpdateGates(bool a_live, std::vector<std::pair<std::uint32_t, std::uint8_t>>& a_apply);
+		/** @brief The coordinator, before CollectEvents: LodGates' outcomes posted so far, held (gateOutcomesHeld). */
+		void TakeGateOutcomes();
+		/**
+		 * @brief The coordinator, after the batch: the held outcomes applied - each gate retired, its tags and gated roots cleared (a forced one's
+		 * incoming classified again and committed with their own phases) - unless a_applied is false (a load screen's pass: its events carried).
+		 */
+		void ApplyGateOutcomes(bool a_applied);
+		void RetireGate(std::uint64_t a_token, bool a_forced);
+		/** @brief The coordinator's report line (ReportCoordinator), empty without any gate activity; resets the counts. */
+		std::string GateReport();
+		// T6b5, render thread: the flips of the publications installed since the last ReleaseGates (HandOverAtFrameStart), and the releases'
+		// counts and observers.
+		std::vector<GateFlip> frameGateReleases;
+		struct GateReleaseStats
+		{
+			std::uint64_t released = 0, refused = 0, checked = 0, holes = 0, coverage = 0, withdrawn = 0;
+			std::vector<double> flipToReleaseMs, requestToReleaseMs;
+			std::vector<std::uint32_t> flipToReleaseFrames;
+			std::string firstHole, firstCoverage;
+			std::uint32_t interval = 0;
+			bool any = false;
+		} gateReleaseStats;
 		/**
 		 * @brief The coordinator: ApplySet, RevokeUndrawnClaims, PublishTables, then the publication's deltas onto the log and the publication
 		 * to the snapshot builder (IndirectDraws::PostSnapshotWork; in that order: whoever adopts the publication finds its node).

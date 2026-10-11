@@ -16,4 +16,30 @@ namespace DCLF::ImportTimings
 	void NoteMainThread(std::uint32_t a_thread);
 	/** @brief Since the last call, over a_frames frames: per entry point, calls and ms a frame on the main thread and on the others. */
 	std::string TakeReport(std::uint32_t a_frames);
+
+	/** @brief Whether Install ran (the LOD entries' scopes time only then). */
+	bool Installed();
+
+	/**
+	 * @brief The LOD swaps' drain (FUN_140513840) and a node's block retirement (FUN_140510a10) have one detour each, LodGates' (T6b5:
+	 * their bodies gate the swaps; LodGates::InstallDetours, called by Install too): they time through this scope, a no-op until
+	 * Install ran.
+	 */
+	enum class LodEntry : std::uint8_t
+	{
+		Drain,
+		Retire
+	};
+	class LodScope
+	{
+	public:
+		explicit LodScope(LodEntry a_entry);
+		~LodScope();
+		LodScope(const LodScope&) = delete;
+		LodScope& operator=(const LodScope&) = delete;
+
+	private:
+		LodEntry entry;
+		std::int64_t start = 0;  // 0: not timed
+	};
 }

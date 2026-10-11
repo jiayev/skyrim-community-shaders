@@ -47,6 +47,26 @@ the image does not change. It is still a parity gap.
 **Fix:** build opaque pipelines from the engine's blend state for their write mode, as decal pipelines
 already do (`DrawPipelines::ReadEngineState`).
 
+## Parity issues deferred while the scene pipeline's structure lands (T6b, 2026-10-11)
+
+Found in validation runs and left for a cleanup pass once the structure is in place (plan `hazy-percolating-canyon.md`).
+
+-   **Reflection residue under the LOD roots rose with the LOD gates (T6b5).** Baseline w150: mostly 0 a window (max 18);
+    w154: 17-83 in every window, almost all "bound, not a reflection member" ('Land' under 'chunk', 'obj'/'objsnow'). Suspected:
+    outgoing blocks the engine reuses (a held handle attached again as a node's current block: "23 reused" a window) stay
+    `gateHeldOut` and are drawn natively; the scene report's "held out now" stays at 6-22. Unconfirmed; the fix is an event when a
+    held block is reattached or kept at release (Outcome) that makes it a member again. Also check that forced and superseded
+    gates leave nothing withheld. Blocks T6b6's gate (residue 0).
+-   **LOD gates' known effects of a hold:** both terrain levels' LOD water registered during a hold; a held block's segments
+    are not updated; the map's hide-all is handled by flushing. Not measured visually.
+-   **Gate coverage:** "neither level shown" at release is the engine's own hide of LOD under the loaded cells
+    (`FUN_140512160`), counted apart; any `<- GATE COVERAGE` left names the store that hid the block.
+-   **`<- MIRROR`:** a missed collision-body writer ('SoulGemPetty01' body true -> false without an event).
+-   **`<- UNPINNED FADE NODE`:** fires for requests in flight at the report; should fire only for one unanswered across reports.
+-   **Long-standing flags:** `<- CUT`, extras `<- DIFFER`, the PS25 `<- MATERIAL PORT` race, `<- TEMPLATE` (PS16), `<- FADE`,
+    `<- PORTAL VIEW`, NO CASCADES.
+-   **T6b2's gate coverage runs** (snow, LOD, skin) not done.
+
 ## Accepted differences
 
 Differences from the engine that are known, measured and left as they are, with the reason. Each one names what would

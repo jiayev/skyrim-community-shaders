@@ -1575,3 +1575,76 @@ never the main thread, in motion).
 -   **Moving the rest off the main thread** meets Havok world edits, unsynchronised `ProcessLists`/`GarbageCollector`
     inserts, the per-reference owner lock (`+0x88`) and the grid controller's ordering; the main thread mostly waits on
     these jobs already.
+
+## LOD swaps and their gates
+
+Ghidra, AE 1.6.1170 (2026-10-11); the bytes of every site DCLF patches read from the binary. DCLF's side is
+`Engine/LodGates.{h,cpp}` (T6b5, `CS_DCLF_LOD_GATES`).
+
+**The quadtree node** (`0x50` bytes): `+0x00` the manager, `+0x08` the terrain block handle, `+0x10` the object block handle,
+`+0x18` the tree handle, `+0x20`/`+0x28` the map's fixed-level terrain/object handles, `+0x30` the children (four contiguous
+nodes, or null), `+0x38` the parent (not verified here), `+0x40` flags: the level is `(flags >> 21) & 0x3FC` (4 to 32); bit 0 skips a node's
+retirement in `FUN_140510c20`; object bits `0x20` unloaded, `0x80` this level attached, `0x40` the children's; terrain `2`/`4`/`8`
+likewise; `0x4000`/`0x8000` the node inside the two grid radii (`FUN_14050fe10`, every update).
+
+**A handle**: `+0x0C` state and references (state bits `0x70000000`; loaded is state 3 or 4, the test
+`((s & 0x70000000) + 0xD0000000) & 0xEFFFFFFF == 0`; the last reference moves `0x30000001` to `0x40000000` and frees it), `+0x28`
+the block. A block is cached per node: a swap back while a reference lives finds the same handle.
+- **Object block**: `+0x00` its quadtree node, `+0x08` its `NiNode` (attached to the LOD root `0x14315b8a0`), `+0x11` attached.
+  Attach `FUN_1404fda90(block)` (only when `+0x11` is 0: `AttachChild`, the segments shown whole, `Update`); detach
+  `FUN_1404fd970(block)` (`DetachChild` through vfunc `+0x1c0`, `+0x11` cleared). Release one reference `FUN_140501d00(handle)`.
+- **Terrain block**: `+0x08` the land node and `+0x10` the water node (the nodes its show and hide store to), `+0x18` the
+  container attached to the level node (`FUN_14050e830(level)`), `+0x20` loaded, `+0x21` attached, `+0x22` water registered.
+  Attach `FUN_140509550(block)` (only loaded, unattached, with a container: the container attached, the water node detached from
+  it and registered, `FUN_1405253a0`); detach `FUN_140509770(block)` (unregisters the water, `FUN_1405254d0`). Release
+  `FUN_14050d170(handle)`.
+
+**Retirement** `FUN_140510a10(node, bits)` (memory context `0x55` in the TLS block at `+0x768`): bit 1 terrain (detach when loaded
+and the node's `(flags & 0x7F800000) <= 0x4000000`, release when non-null, flags `|= 2`), bit 2 objects (detach when loaded,
+release, flags `|= 0x20`), `0x10` the map's handles, 4 trees. A null handle skips both its detach and its release: taking the
+handle from the node first leaves the block attached and shown, its reference the taker's. `FUN_140510c20(node, bits)` runs it on
+the node (unless flags bit 0) and recurses into every descendant (the call at `0x140510c3a`). Other callers retire without a
+replacement: `FUN_1405103e0` (objects out of range, `0x140510499`/`0x140510534`, children through `FUN_140510c20`), the terrain
+update `FUN_140510110`, `FUN_140510730`, `FUN_1405139b0`, `FUN_140513ea0`, a worldspace's unload `FUN_14050fb70` (`0x3F`).
+
+**The swaps** (vtable `Func2`s), run by the drain `FUN_140513840` (vfunc `+0x10` per queued swap), called at `0x14050e7c8` at the
+end of the terrain manager update `FUN_14050e430` under its recursive `BSSpinLock` `0x14315b8c8` (taken at `0x14050e5c4`, released
+after the drain), on a job thread (`Job_Partial_Terrain_Manager_Update`) or the main thread (the grid controller, `0x14019bcbf`);
+also from the map's `FUN_14050f1b0` (drained to empty).
+
+| swap | attach | retire |
+| --- | --- | --- |
+| object upgrade `0x140513320` | each ready child's block, `0x14051339a` (`E8 F1 A6 FE FF`); its handle into the child's `+0x10` | `FUN_140510a10(parent, 2)` at `0x14051340c` (`E8 FF D5 FF FF`; `MOV EDX,2` at `0x140513407`) |
+| terrain upgrade `0x140512c90` | each child's block (no state test), `0x140512ceb` (`E8 60 68 FF FF`) | `FUN_140510a10(parent, 1)` at `0x140512d57` (`E8 B4 DC FF FF`) |
+| object downgrade `0x140513600` | the parent's block, `0x140513615` (`E8 76 A4 FE FF`); a different old parent handle released | `FUN_140510c20(child, 2)` per child at `0x140513671` (`E8 AA D5 FF FF`), four calls |
+| terrain downgrade `0x140512f40` | the parent's block, `0x140512f55` (`E8 F6 65 FF FF`) | `FUN_140510c20(child, 1)` per child at `0x140512fb1` (`E8 6A DC FF FF`) |
+
+**Shows and hides**: app-cull, bit 0 of `NiAVObject` `+0xF4`. Objects: `FUN_1405103e0` every update for a node with `0x80` (show at
+`0x140510697`, `AND`; hide at `0x1405106a4`, `OR`). Terrain: `FUN_140510110` -> `FUN_140509b50` (shows `+0x08` and `+0x10`,
+`0x140509b59`/`0x140509b69`) and `FUN_140509b20` (hides, `0x140509b29`/`0x140509b39`). The map: `FUN_140511680` (to the fixed
+levels: attach and show, `0x1405117d0`; hide `0x140511808`), `FUN_140511860` (back: `0x14051192d`, `0x140511972`, detaching the
+fixed-level blocks unless they are the node's own), `FUN_140511b40(node, show)` (every block, `MOV` at `0x140511c00`; from the
+world map `FUN_1409892e0`/`FUN_140989440`). All of these are HiddenStores' patched stores.
+
+**What tears the quadtree down** (where held blocks must go first):
+- `FUN_14050ed60` (the manager deactivated: `FUN_140510c20(root, 0x2F/0x3F)`, the three block caches reset): from a worldspace's
+  unload `FUN_14050e250` (its first call, `0x14050e2a4`; from `0x140304a5b`; then `FUN_14050fb70` per node and the node arrays
+  freed), from `FUN_14050e430` switching managers (`0x14050e612`), and from cell transitions (`FUN_1401a59a0`, `FUN_140648cd0`,
+  `FUN_14064a680`, `FUN_1401adce0`).
+- `FUN_14050e430`'s LOD-off branch (`*manager != 0`): `FUN_140511860(root)` when active, then the cache flushes
+  `FUN_1405099a0(0)` and `FUN_1404fdca0(0)` (a tail `jmp` at `0x14050e490`), outside the lock. The map's `FUN_140988c80`/
+  `FUN_140988ea0` call both flushes too.
+- `FUN_14050e430`'s early return when it is the current manager (`0x14315b6a8`) and either its `+0x36` byte is 0 or its
+  worldspace's `+0xa0` bit `0x40` is set (an interior, LOD hidden): the LOD roots hidden (`0x14315b8a0`, `0x14315b898`, the trees' root) and a tail `jmp` to
+  `FUN_140509950(0)` at `0x14050e4e4` (`E9 67 B4 FF FF`); no lock, no drain.
+- The full rebuild: `FUN_14050f790(manager, root, .., .., 1)` at `0x14050e7ae` (`E8 DD 0F 00 00`; the manager's first update or
+  one asked for, `*param_3 & 1`). Not every `FUN_14050f790(.., 1)`: the round-robin node update (`0x14050e6d1`) passes the node's
+  `0x8000` bit, set for every node near the player.
+
+**DCLF's gate** (T6b5): the attaches hide the incoming blocks first (only an unattached block: a reused one stays shown); the
+swap's retirement call runs `FUN_140510a10` through a detour that takes each loaded, attached outgoing handle from its node (the
+engine skips detach and release); the HiddenStores stubs at the four show stores (`0x140510697`, `0x140509b59`, `0x140509b69`,
+`0x1405117d0`) skip a pending incoming node's show; the render thread's flip stores the app-cull bits; the next drain's head (under
+the lock) detaches and releases the held blocks through the functions above, or only drops the reference when the node references
+the handle again. Everything above that tears the quadtree down flushes the gates first. Known effects of a hold: both terrain
+levels' LOD water registered; a held object block's segments are not refreshed.

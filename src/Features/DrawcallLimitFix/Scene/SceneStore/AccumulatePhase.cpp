@@ -1,6 +1,7 @@
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Common/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Engine/LodGates.h"
 
 #include <cassert>
 
@@ -267,6 +268,9 @@ namespace DCLF
 			} else {
 				stage = kStageNotReflection;
 			}
+			// T6b5: a LOD geometry the engine shows before DCLF is ready, that no gate ever held: a show path the gates do not cover.
+			if ((stage == kStageHiddenStale || stage == kStageNoRecord || stage == kStageUnbound || stage == kStageWaiting) && !a_entry->gateSeen && LodGates::Enabled())
+				stage = kStageUngated;
 			++classes.ages[stage][AgeBucket(sceneFrame - a_entry->trackedFrame)];
 		}
 		++classes.stages[stage];

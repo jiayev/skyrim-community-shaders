@@ -1,5 +1,7 @@
 #include "ImportTimings.h"
 
+#include "LodGates.h"
+
 #include <Tracy/Tracy.hpp>
 
 namespace DCLF::ImportTimings
@@ -98,29 +100,34 @@ namespace DCLF::ImportTimings
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		// FUN_140513840(queue)
-		struct LodDrain
-		{
-			static void thunk(std::uintptr_t a1)
-			{
-				ZoneScopedN("CS.DCLF.Import.LodDrain");
-				Scope scope(kLodDrain);
-				func(a1);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
+		// The LOD drain (FUN_140513840) and a node's block retirement (FUN_140510a10) are detoured once, by LodGates (T6b5 gates the swaps
+		// in their bodies): they time through LodScope.
+	}
 
-		// FUN_140510a10(quadtree node, which blocks)
-		struct LodRetire
-		{
-			static void thunk(std::uintptr_t a1, std::uint32_t a2)
-			{
-				ZoneScopedN("CS.DCLF.Import.LodRetire");
-				Scope scope(kLodRetire);
-				func(a1, a2);
-			}
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
+	LodScope::LodScope(LodEntry a_entry) :
+		entry(a_entry)
+	{
+		if (!installed)
+			return;
+		LARGE_INTEGER now;
+		QueryPerformanceCounter(&now);
+		start = now.QuadPart;
+	}
+
+	LodScope::~LodScope()
+	{
+		if (!start)
+			return;
+		LARGE_INTEGER now;
+		QueryPerformanceCounter(&now);
+		auto& counter = counters[entry == LodEntry::Drain ? kLodDrain : kLodRetire][::GetCurrentThreadId() == mainThread.load(std::memory_order_relaxed) ? 1 : 0];
+		counter.calls.fetch_add(1, std::memory_order_relaxed);
+		counter.ticks.fetch_add(static_cast<std::uint64_t>(now.QuadPart - start), std::memory_order_relaxed);
+	}
+
+	bool Installed()
+	{
+		return installed;
 	}
 
 	void Install()
@@ -132,8 +139,8 @@ namespace DCLF::ImportTimings
 		stl::detour_thunk<TaskDrain>(base + kOffsets[kTaskDrain]);
 		stl::detour_thunk<ReferenceFinish>(base + kOffsets[kReferenceFinish]);
 		stl::detour_thunk<IoPump>(base + kOffsets[kIoPump]);
-		stl::detour_thunk<LodDrain>(base + kOffsets[kLodDrain]);
-		stl::detour_thunk<LodRetire>(base + kOffsets[kLodRetire]);
+		// One detour per function, shared with the gates (whose bodies these are): installed by whichever comes first.
+		LodGates::InstallDetours();
 		installed = true;
 		logger::info("[DCLF] import timings (T6b0): the engine's {} import entry points detoured", static_cast<std::size_t>(kEntries));
 	}

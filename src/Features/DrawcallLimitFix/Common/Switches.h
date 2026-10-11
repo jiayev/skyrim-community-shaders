@@ -33,6 +33,7 @@ namespace DCLF
 		LodObjects,
 		LodTerrain,
 		LodTrees,
+		LodGates,
 		Shadows,
 		SunSkip,
 		SunExclude,

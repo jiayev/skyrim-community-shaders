@@ -1,5 +1,7 @@
 #include "Internal.h"
 
+#include "Features/DrawcallLimitFix/Engine/LodGates.h"
+
 namespace DCLF::Scene
 {
 	namespace
@@ -494,8 +496,18 @@ namespace DCLF::Scene
 			return sites;
 		}
 
-		// Per patched store: the bit cleared ([0]) and set ([1]), since the last report (T6b0's unhide attribution).
+		// Per patched store: the bit cleared ([0]) and set ([1]), since the last report (T6b0's unhide attribution). One more row past the
+		// stores, at HiddenStoreSites().size(): the LOD gates' own (LodGates' flips and forced releases, PushGateHidden).
 		std::unique_ptr<std::array<std::atomic<std::uint64_t>, 2>[]> siteCounts;
+
+		// T6b5: the engine's LOD show stores, each with a veto in front of its stub (LodGates): an object FUN_1405103e0 shows every update,
+		// a terrain block's two nodes (FUN_140509b50), the map's fixed-level object block (FUN_140511680). The veto must be in the stub:
+		// PushHidden runs after the store, so a check there would push an event for a show the store already made.
+		constexpr std::array<std::uint32_t, 4> kLodShowSites{ 0x510697, 0x509b59, 0x509b69, 0x5117d0 };
+		bool IsLodShowSite(std::uint32_t a_offset)
+		{
+			return std::ranges::find(kLodShowSites, a_offset) != kLodShowSites.end();
+		}
 
 		void PushHidden(const void* a_object, std::uint32_t a_site)
 		{
@@ -503,6 +515,10 @@ namespace DCLF::Scene
 			const bool hidden = (*reinterpret_cast<const volatile std::uint32_t*>(static_cast<const std::byte*>(a_object) + 0xF4) & 1u) != 0;
 			if (siteCounts)
 				siteCounts[a_site][hidden ? 1 : 0].fetch_add(1, std::memory_order_relaxed);
+			// T6b5's coverage observer: the engine's own LOD hides (an object's update, a terrain block's two nodes) after a gate's flip.
+			if (hidden && a_site < HiddenStoreSites().size())
+				if (const auto offset = HiddenStoreSites()[a_site].offset; offset == 0x5106a4 || offset == 0x509b29 || offset == 0x509b39)
+					LodGates::NoteEngineHide(a_object, offset);
 			// The store just made (the stubs call after it): the hidden bit's value for the mirror (step 6e F3b), and the hidden event with it
 			// (T6b1b: one queue, so the event and the mirror's bit are the same batch's; DrainHiddenEvents).
 			SceneCapture::Update update{ SceneCapture::NodeRecord::kHidden, SceneCapture::CaptureNodeFields(*static_cast<const RE::NiAVObject*>(a_object), SceneCapture::NodeRecord::kHidden) };
@@ -517,14 +533,19 @@ namespace DCLF::Scene
 		 * store and an `or` or `and` runs once more, which leaves the value as it is (both are idempotent) and gives the
 		 * code after it the flags it expects; a `mov` sets none, and is not run again, so a concurrent writer's value is
 		 * never stored over.
+		 *
+		 * T6b5: a LOD show store's stub (kLodShowSites) starts with the gates' veto: while a gate is open (LodGates::OpenGates, one
+		 * compare), LodGates::Vetoes through a second common body that saves the same registers and leaves its answer in ZF (restoring
+		 * registers sets no flags); a vetoed store returns at once, run neither time and with no event: the object stays hidden, as its
+		 * gate wants until the flip. The code after each of the four reads no flags (a `jmp`, a load, a `ret`, a `jmp`).
 		 */
 		struct HiddenStoreStubs : Xbyak::CodeGenerator
 		{
 			HiddenStoreStubs(const std::vector<HiddenStoreSite>& a_sites, std::vector<std::size_t>& a_entries) :
-				Xbyak::CodeGenerator(a_sites.size() * 112 + 256)
+				Xbyak::CodeGenerator(a_sites.size() * 112 + kLodShowSites.size() * 64 + 512)
 			{
 				using namespace Xbyak::util;
-				Xbyak::Label common;
+				Xbyak::Label common, vetoCommon;
 				auto original = [&](const HiddenStoreSite& a_site) {
 					for (std::uint8_t i = 0; i < a_site.length; ++i)
 						db(a_site.bytes[i]);
@@ -533,6 +554,25 @@ namespace DCLF::Scene
 					a_entries.push_back(getSize());
 					const Xbyak::Reg64 base(site.base);
 					Xbyak::Label changed, back;
+					if (IsLodShowSite(site.offset)) {
+						Xbyak::Label proceed;
+						pushf();
+						push(rax);
+						mov(rax, reinterpret_cast<std::uintptr_t>(&LodGates::OpenGates()));
+						cmp(dword[rax], 0);
+						pop(rax);
+						je(proceed, T_NEAR);
+						push(rcx);
+						if (site.base != Operand::RCX)
+							mov(rcx, base);
+						call(vetoCommon);
+						pop(rcx);
+						jz(proceed, T_NEAR);  // ZF: not vetoed
+						popf();
+						ret();
+						L(proceed);
+						popf();
+					}
 					pushf();
 					sub(rsp, 8);
 					push(rax);
@@ -589,6 +629,34 @@ namespace DCLF::Scene
 				pop(rdx);
 				pop(rax);
 				ret();
+				// The veto's: rcx holds the object (the caller saved it); every other volatile register and xmm0-5 kept, the answer in ZF.
+				L(vetoCommon);
+				push(rax);
+				push(rdx);
+				push(r8);
+				push(r9);
+				push(r10);
+				push(r11);
+				push(rbx);
+				mov(rbx, rsp);
+				and_(rsp, ~std::uint32_t(0xF));
+				sub(rsp, 0x80);
+				for (int i = 0; i < 6; ++i)
+					movdqu(ptr[rsp + 0x20 + 0x10 * i], Xbyak::Xmm(i));
+				mov(rax, reinterpret_cast<std::uintptr_t>(&LodGates::Vetoes));
+				call(rax);
+				test(al, al);
+				for (int i = 0; i < 6; ++i)
+					movdqu(Xbyak::Xmm(i), ptr[rsp + 0x20 + 0x10 * i]);
+				mov(rsp, rbx);
+				pop(rbx);
+				pop(r11);
+				pop(r10);
+				pop(r9);
+				pop(r8);
+				pop(rdx);
+				pop(rax);
+				ret();
 			}
 		};
 	}
@@ -597,6 +665,18 @@ namespace DCLF::Scene
 	{
 		std::uintptr_t stubCode = 0;
 		std::vector<std::size_t> stubEntries;
+	}
+
+	void PushGateHidden(const RE::NiAVObject* a_object)
+	{
+		// T6b5: LodGates' own app-cull stores (a flip, a forced release's unhide), as a patched store's event: the row past the stores.
+		if (hiddenEventsInstalled && a_object)
+			PushHidden(a_object, static_cast<std::uint32_t>(HiddenStoreSites().size()));
+	}
+
+	bool HiddenStoresLive()
+	{
+		return hiddenEventsInstalled;
 	}
 
 	std::uintptr_t HiddenStoreSiteAt(std::uint32_t a_index)
@@ -615,7 +695,7 @@ namespace DCLF::Scene
 		};
 		std::vector<Row> rows;
 		std::uint64_t shown = 0, hidden = 0;
-		for (std::uint32_t i = 0; i < HiddenStoreSites().size(); ++i) {
+		for (std::uint32_t i = 0; i <= HiddenStoreSites().size(); ++i) {
 			const Row row{ i, siteCounts[i][0].exchange(0, std::memory_order_relaxed), siteCounts[i][1].exchange(0, std::memory_order_relaxed) };
 			shown += row.shown;
 			hidden += row.hidden;
@@ -625,7 +705,8 @@ namespace DCLF::Scene
 		std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.shown != b.shown ? a.shown > b.shown : a.hidden > b.hidden; });
 		std::string text = fmt::format("{} shown, {} hidden by {} stores", shown, hidden, rows.size());
 		for (std::size_t i = 0; i < rows.size() && i < 12; ++i)
-			text += fmt::format("{}{:#x} {}/{}", i ? ", " : ": ", HiddenStoreSiteAt(rows[i].site), rows[i].shown, rows[i].hidden);
+			text += rows[i].site == HiddenStoreSites().size() ? fmt::format("{}LOD gates {}/{}", i ? ", " : ": ", rows[i].shown, rows[i].hidden) :
+			                                                     fmt::format("{}{:#x} {}/{}", i ? ", " : ": ", HiddenStoreSiteAt(rows[i].site), rows[i].shown, rows[i].hidden);
 		return text;
 	}
 
@@ -652,7 +733,7 @@ namespace DCLF::Scene
 			}
 		}
 		std::vector<std::size_t> entries;
-		siteCounts = std::make_unique<std::array<std::atomic<std::uint64_t>, 2>[]>(sites.size());
+		siteCounts = std::make_unique<std::array<std::atomic<std::uint64_t>, 2>[]>(sites.size() + 1);  // + the LOD gates' row
 		HiddenStoreStubs stubs(sites, entries);
 		// Its own block, just past the module's image: the shared trampoline is too small for these, and every site's
 		// `call rel32` must reach it.
