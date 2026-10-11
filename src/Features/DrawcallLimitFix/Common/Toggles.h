@@ -36,6 +36,9 @@ namespace DCLF
 		bool projectedUv = false;
 		// terrain, the MTLand and MTLandLODBlend techniques (MtLandEnabled adds the Terrain Blending condition);
 		bool mtLand = false;
+		// T7c1: while Terrain Blending holds the terrain, the terrain (its groups 1 and 2: Records.h, ObjectTerrainGroup), drawn as
+		// that feature draws it;
+		bool tbTerrain = false;
 		// a leaf under an NiSwitchNode, in the frames every switch on its path selects it (trees, harvestables);
 		bool switchNodes = false;
 		// object LOD (TES::lodLandRoot's BSSubIndexTriShape blocks): tracked under the LOD root, drawn by their visible segments;

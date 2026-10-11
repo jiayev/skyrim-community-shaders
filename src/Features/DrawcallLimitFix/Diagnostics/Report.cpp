@@ -1,5 +1,6 @@
 #include "Features/DrawcallLimitFix.h"
 #include "Features/DrawcallLimitFix/Diagnostics/HiddenWatch.h"
+#include "Features/DrawcallLimitFix/Diagnostics/RegistrationCensus.h"
 
 #include "Deferred.h"
 #include "CaptureParity.h"
@@ -28,6 +29,15 @@ namespace DCLF::Scene
 void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 {
 	auto& store = DCLF::SceneStore::Get();
+	// CS_DCLF_CENSUS (T7a): the passes the engine kept since the last frame, classified here (Present), reported every interval.
+	if (DCLF::RegistrationCensus::Enabled()) {
+		DCLF::RegistrationCensus::Collect();
+		if ((frame % kReportInterval) == 0) {
+			std::istringstream censusLines(DCLF::RegistrationCensus::TakeReport());
+			for (std::string line; std::getline(censusLines, line);)
+				logger::info("{}", line);
+		}
+	}
 	// DCLF's render-thread time, by what the asynchronous scene leaves on it (RenderThreadBudget): always reported.
 	if ((frame % kReportInterval) == 0)
 		if (const auto line = DCLF::RenderThreadBudget::Get().Report(); !line.empty())
@@ -212,6 +222,12 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			logger::info("[DCLF] sun on the GPU (sampled frame): {} synthetic draws tested, {} missed every cascade; the CPU over the same inputs: {} tested, {} missed{}",
 				draws.sunTested, draws.sunMissed, draws.sunCpuTested, draws.sunCpuMissed,
 				(draws.sunTested == draws.sunCpuTested && draws.sunMissed == draws.sunCpuMissed) ? " <- OK" : " <- DIFFERS");
+		if (draws.terrainNearTested || draws.terrainCpuTested)
+			logger::info("[DCLF] terrain under Terrain Blending (sampled frame): {} group 1 inputs, {} near (its terrain depth, and offset into the main depth){}",
+				draws.terrainNearTested, draws.terrainNear,
+				!draws.terrainCpu ? std::string() :
+				fmt::format("; the CPU over the same inputs: {} tested, {} near{}", draws.terrainCpuTested, draws.terrainCpuNear,
+					(draws.terrainNearTested == draws.terrainCpuTested && draws.terrainNear == draws.terrainCpuNear) ? " <- OK" : " <- TB NEAR"));
 		if (draws.residentInputs || draws.residentResyncs)
 			logger::info("[DCLF] persistent draws (last frame, colour): {} kept inputs, {} sequences, {} pairs, {} not drawable; since the start {} region "
 						 "versions uploaded, {} resyncs (log {}, segment {}, shrunk {}, scope {}, fit {}), {} decal count moves; parity {} entries checked, {} differ, {} missing{}",

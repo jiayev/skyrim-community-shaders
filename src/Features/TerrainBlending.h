@@ -66,6 +66,12 @@ public:
 	bool renderTerrainDepth = false;
 	bool renderAltTerrain = false;
 
+	/**
+	 * @brief The terrain depth pass's reach: a terrain block whose bound comes within this of the eye is drawn into the terrain depth,
+	 * and offset into the main depth (Hooks::BSBatchRenderer__RenderPassImmediately). Drawcall Limit Fix's GPU test is the same.
+	 */
+	static constexpr float kTerrainDepthDistance = 1024.0f;
+
 	RE::NiPoint3 eyePosition;
 
 	struct RenderPass

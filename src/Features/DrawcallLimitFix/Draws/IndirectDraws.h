@@ -199,6 +199,26 @@ namespace DCLF
 		 */
 		void KickFadeWriteBack();
 		/**
+		 * @brief T7b1, render thread, at the frame's start: the visibility readback's batches harvested and not yet decoded (the depth
+		 * commit hands its own at once) handed to the decode task on DCLF's executor, never joined; the batches the last task decoded let
+		 * go of (drawcall-limit-fix.md, "T7b1: visibility events"). Writes no engine memory.
+		 */
+		void KickVisibilityReadback();
+		/**
+		 * @brief T7b2, the main thread at Main::Update's entry (no list cull, cell animation or animation job runs: the last frame's cycle
+		 * was waited for, this one's job lists are not started): the kAccumulated writes the decoder prepared, made on the stood-in roots
+		 * and their geometry with atomic read-modify-writes ("T7b2: kAccumulated written by DCLF"). a_stoodIn(root): whether the cut still
+		 * stands in for the root (PrimaryCull's own set: a write for a root it no longer stands in for is left). a_live false (DCLF does
+		 * not run): the writes are dropped, and the next decode writes everything again.
+		 */
+		void WriteAccumulated(bool a_live, const std::function<bool(const void*)>& a_stoodIn);
+		/** @brief T7b2, render thread: a camera cut in a_frame (PrimaryCull): every stood-in root visible until a batch of a_frame or later. */
+		void NoteCameraCut(std::uint32_t a_frame);
+		/** @brief T7b2, any thread: the next decode writes every stood-in root and geometry, not only the changes (the engine wrote them). */
+		void RequestAccumulatedRefresh();
+		/** @brief T7b2's line, and the <- ACCUMULATED and <- ANIM RATE observers' (CS_DCLF_ACCUMULATED_PARITY) since the last call. */
+		std::string VisibilityReport();
+		/**
 		 * @brief Render thread, at the frame's first DCLF point, after the scene events (the tree LOD mirror's drain) and before the
 		 * main camera's cull: whether DCLF draws tree LOD this frame - its toggle on, its pipelines in the frame's catalog (asked of the
 		 * pipeline lane here: DrawPipelines::RequestTreeLod), its tables built, the engine's tree LOD texture there. The registrations

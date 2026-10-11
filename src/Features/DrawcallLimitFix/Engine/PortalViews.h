@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -111,6 +112,76 @@ namespace DCLF
 		void NoteStructure(const RE::NiNode* a_parent);
 
 		/**
+		 * @brief What the main view sees, as Main::IsRoomVisible's (0x140649f20) keys (T7b3): the rooms of this frame's walk, and the
+		 * portal shared nodes the engine's portal-graph entry holds after the frame's scene lists (the walk's crossed portals' and
+		 * every portal of a room it popped: DrawWorld_BuildSceneLists' AddVisibilityToMap). Immutable once published; built at Build
+		 * (render thread) only after PublishVisibleSets.
+		 */
+		struct VisibleSet
+		{
+			/** @brief Per graph (shared by the sets of one): its rooms, and each portal's shared node with the portal's two rooms. */
+			struct GraphKeys
+			{
+				const void* graph = nullptr;
+				std::uint64_t signature = 0;  // the room and portal counts it was built from
+				ankerl::unordered_dense::set<const void*> rooms;
+				ankerl::unordered_dense::map<const void*, std::array<const void*, 2>> shared;  // a null room: unbound space
+			};
+			struct Keys
+			{
+				ankerl::unordered_dense::set<const void*> rooms;
+				ankerl::unordered_dense::set<const void*> shared;
+			};
+			enum Kind : std::uint8_t
+			{
+				kNoKey,  // a null key: true
+				kRoom,
+				kShared,
+				kOther,  // not one of the graph's rooms or shared nodes (or no graph): true, as the engine's for any other node
+			};
+			struct Answer
+			{
+				bool visible = true;
+				Kind kind = kNoKey;
+			};
+
+			std::uint64_t generation = 0;
+			std::uint32_t sceneFrame = ~0u;
+			std::shared_ptr<const GraphKeys> graph;  // null: no walk this frame
+			Keys current;
+			Keys previous;  // the previous set's current (the parity's frame alignment)
+
+			/**
+			 * @brief Main::IsRoomVisible on keys alone (no engine read): a room, when in the walk's rooms; a shared node, when held or
+			 * when either of its portal's rooms is. a_previous answers from the previous walk's keys.
+			 */
+			Answer Visible(const void* a_key, bool a_previous = false) const;
+		};
+
+		/**
+		 * @brief A reader's hold on the newest VisibleSet (any thread, lock-free: a reader count and an atomic pointer; MSVC's
+		 * std::atomic<std::shared_ptr> takes a lock). The set is not freed while held; null before the first publish.
+		 */
+		class VisibleSetHold
+		{
+		public:
+			VisibleSetHold();
+			~VisibleSetHold();
+			VisibleSetHold(const VisibleSetHold&) = delete;
+			VisibleSetHold& operator=(const VisibleSetHold&) = delete;
+			const VisibleSet* get() const { return set; }
+			const VisibleSet* operator->() const { return set; }
+			explicit operator bool() const { return set != nullptr; }
+
+		private:
+			const VisibleSet* set = nullptr;
+		};
+		/** @brief From now on, Build publishes a VisibleSet every frame (RoomVisibility's install; nothing is built otherwise). */
+		void PublishVisibleSets() { publishVisible.store(true, std::memory_order_release); }
+		/** @brief The newest set's generation (any thread): a hold whose set is older raced a publish. */
+		std::uint64_t VisibleGeneration() const { return visibleGeneration.load(std::memory_order_acquire); }
+
+		/**
 		 * @brief A shadow light's rooms, as its own portal-graph entry holds them (T5a3): FUN_1414a2530 -> FUN_1414a6400 ported.
 		 * Kept per light by the caller: a light the engine does not walk keeps its entry as it was (the constructor's: unbound
 		 * space seen, no rooms).
@@ -213,6 +284,9 @@ namespace DCLF
 
 		/** @brief Under the parities: this frame's programs against the engine's portal-graph entry (before the list jobs). */
 		void CheckParity();
+		/** @brief The end of every Build: the encoded words and (after PublishVisibleSets) the VisibleSet and its parity's report. */
+		void AfterBuild();
+		void PublishVisible();
 
 		Frame frame;
 		Camera camera;
@@ -229,6 +303,17 @@ namespace DCLF
 		std::atomic<std::uint64_t> structure{ 0 };          // NoteStructure
 		std::vector<std::uint32_t> encoded;                 // Encoded
 		std::atomic<bool> visibleUnbound{ true };           // VisibleUnbound (the entry's constructor's)
+
+		// The VisibleSets (T7b3): the published one (the readers' pointer, owned here), and the replaced ones, freed at a publish
+		// that sees no reader (a reader counts itself before it loads the pointer, so one that may hold a replaced set is seen).
+		std::atomic<bool> publishVisible{ false };
+		std::atomic<const VisibleSet*> visibleSet{ nullptr };
+		std::atomic<std::uint32_t> visibleReaders{ 0 };
+		std::atomic<std::uint64_t> visibleGeneration{ 0 };
+		std::shared_ptr<const VisibleSet> visibleOwned;
+		std::vector<std::shared_ptr<const VisibleSet>> visibleRetired;
+		std::shared_ptr<const VisibleSet::GraphKeys> graphKeys;  // the current graph's, reused while its counts hold
+		std::uint32_t visibleReports = 0;
 
 		/** @brief BSParabolicCullingProcess's view test (TestBaseVisibility3, 0x14151a050) for a light's walk. */
 		struct Parabolic

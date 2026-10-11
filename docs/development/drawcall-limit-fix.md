@@ -29,7 +29,9 @@ Static rigid geometry:
 -   a `BSLightingShaderProperty`;
 -   a technique DCLF supports: None, Envmap, Glowmap or Parallax, including TruePBR materials;
 -   no alpha blending, no decal flags, no LOD flags, no projected UV and no refraction;
--   not under a `BSOrderedNode`; under an `NiSwitchNode` only while the switch selects it, and part of an actor only with `CS_DCLF_ACTORS` (see "Trees and actors").
+-   under an `NiSwitchNode` only while the switch selects it, and part of an actor only with `CS_DCLF_ACTORS` (see "Trees and actors");
+-   under a `BSOrderedNode` only when opaque (T7c0; see "Ordered nodes");
+-   terrain, with Terrain Blending on, only with `CS_DCLF_TB_TERRAIN` (T7c1; see "Terrain under Terrain Blending").
 
 Per frame it must also:
 -   be visible, meaning not app-culled or hidden up to its tracked root;
@@ -2331,6 +2333,333 @@ So the two largest classes are the two that need new architecture, and the two t
 machinery are worth ~86 draws a frame between them. That is the trade to decide before any of it is
 built, and it is not what either the tracked counts or the drawn counts say on their own.
 
+## T7a census: what the engine still draws, by view and class
+
+The counts above are old, from before trees, LOD, the shadow views and the reflection faces were DCLF's. T7 stops the
+engine's scene culls, and that needs the residue measured again: every pass the engine still draws, in every view.
+`CS_DCLF_CENSUS=1` (a diagnostic, off by default) does it (`Diagnostics/RegistrationCensus.*`).
+
+**What it counts.** Every pass a registration hook (`PassCapture`: `RegisterPass`, the main and shadow modes' direct
+group insertions, the occlusion maps' one) hands on to a batch renderer, of any shader. Withheld passes are not counted:
+the census is what the engine draws, not what it registers. Without the switch the hooks test one static flag and do
+nothing else.
+
+**Where the work runs.** The hooks run on the engine's registration threads (the scene list jobs, the render thread).
+Each one pushes the pass's geometry (as a reference), its batch renderer, its shader type, accumulation hint and fade
+verdict onto a lock-free `EventQueue`, which spills rather than dropping anything. Collect drains the queue on the render
+thread at Present, from the report, and releases the references there. The classification happens there, and so do all
+the reads of the geometry; nothing is read on DCLF's threads. The window's maps grow as needed and have no cap.
+
+**Views.** By batch renderer: the Z-prepass's accumulator (`main depth`), the main camera's (`main`), first person's
+(`0x14338c820`), the frame's shadow views by kind (`sun cascades`, `spot shadows`, `point shadows`, `focus shadows`, from
+`ShadowViews`, covered or not), the `reflection faces`, the occlusion maps by phase. Any other batch renderer is
+`other #k`, numbered by when it was first seen in the session (the local map, the water reflection, a menu's 3D, a
+geometry group's renderer of an accumulator the census does not know). The top names tell which view it is.
+
+**Classes.** A geometry whose shader property is a `BSLightingShaderProperty` gets DCLF's class, whatever its pass's
+shader is (the shadow views' passes are Utility's):
+
+-   a member of the view's phase in a view that withholds that phase is `MEMBER drawn by the engine`, a defect. The
+    exceptions `WithholdMain` makes are their own classes: a LOD cross-fade copy, a fade DCLF does not model, and
+    `parity both`;
+-   otherwise the reason it is not DCLF's, the coordinator's verdict (`SceneStore::CensusVerdictOf`): the `Ineligible`
+    name (`kIneligibleNames`, with the per-frame ones: hidden, a switch's branch, actor, fading), `untracked, <static
+    verdict>` (the live leaf's), `eligible, no record`, `eligible, a record, unbound`, or `eligible, bound, not a member of
+    the view's phase` (bound since the frame's set, or a member of another phase). While the scene work runs inline (the
+    parities: `CS_DCLF_PERSISTENT_PARITY`, `CS_DCLF_WALK_PARITY`, the capture parity), no scene pass can run beside the
+    frame, so Collect reads it directly.
+-   **T7c0: the coordinator's verdicts in asynchronous mode.** The coordinator's state cannot be read from the frame then
+    (`GuardFrameAccess`), so the census asks for it. Collect gathers the distinct non-member Lighting geometries it saw
+    since its last request, each pinned (a reference taken on the render thread), and posts them
+    (`SceneStore::PostCensusRequest`, a lock-free slot). No wake: the frame's own scene pass takes the request after its
+    joins (`AnswerCensus`, at the end of `BuildAccumulatePhase`), looks each geometry up by pointer in its tracked set
+    (nothing of the engine is read), and posts the verdicts with the pins back (`TakeCensusReply`). A later Collect takes
+    the reply and keeps each verdict with its pin, so the address stays that geometry's while the verdict is kept. The pins
+    are released on the render thread when a verdict is replaced or pruned; no engine reference is released on a DCLF
+    thread. Only one request is in flight. The next one, posted once the reply is taken, carries everything seen
+    meanwhile, so a geometry seen on every frame gets a verdict a frame or two old. A verdict older than 8 Collects is not
+    used, and is pruned at the window's end. If a request goes unanswered for a whole window (DCLF switched off), what
+    waited for the next one is released.
+-   **The live approximation** is used only until a reply arrives, and its classes are marked `(live approximation)`. It
+    is built from the frame's own copies: tracked means under one of the newest publication's category nodes, then the
+    live leaf's static verdict (`ClassifyStatic` on `LiveLeaf`), then a billboard node (or an ordered node over a blended
+    leaf) between the leaf and its category node, then a record in the installed tables (`eligible, a record, not a
+    member` or `eligible, no record`). The per-frame verdicts show up as `eligible, ...` there. The report's first line
+    says how many non-member passes had the coordinator's verdict and how many the approximation. None of this runs
+    without `CS_DCLF_CENSUS`.
+
+Any other geometry's class is its pass's shader type and the geometry's RTTI (`Effect: BSTriShape`, `Water: BSTriShape`,
+`Particle: NiParticleSystem`, ...). A pass is attributed when its class is named: every Lighting class is named, and so
+is any other class with a known shader type and an RTTI. `no shader` and an unknown type are not.
+
+**The report**, every report interval (300 frames), with or without `CS_DCLF_STATS`:
+
+```
+[DCLF] census (T7a) over 300 frames: <P> passes the engine kept (<P/300> a frame), <G> geometries; <A>% attributed to a
+  named class <- OK | <- UNATTRIBUTED (gate 95%); <D> member passes drawn by the engine <- OK | <- DEFECT; first: ...;
+  Lighting verdicts the coordinator's (scene work inline) | the coordinator's replies for <R> of <N> non-member passes
+  (<k> replies, <g> geometries answered), the live approximation for <N-R> (no reply yet: those classes marked so; ...)
+[DCLF] census view <view>: <P> passes (<p> a frame), <G> geometries; by class (passes/geometries): <class> <p>/<g>, ...
+[DCLF] census class <class>: <P> passes (<p> a frame), <G> geometries; in <view> <p>, ...; top: '<name>' under '<parent>' x<n>, ...
+```
+
+One line per view and one per class, most passes first. Each class line lists the five geometries with the most passes
+in the window. Geometries are counted by address, so a geometry released and another made at the same address within a
+window counts once. T7a's gate is at least 95% attributed and no `MEMBER drawn by the engine`. T7c ranks its Lighting
+classes by what this report counts.
+
+### Ordered nodes (T7c0)
+
+A `BSOrderedNode` orders its leaves' blended passes and nothing else, so its opaque leaves are main-phase eligible like
+any other leaf. Its blended ones stay `UnsupportedParent`, for T7d. From the AE executable:
+
+-   **The cull.** The node's `OnVisible` (`0x141503970`) opens a new group of the culling process (an atomic increment of
+    `+0x301f0`) and culls its children into it. `AppendVirtual` queues them on the process's groups (`+0x301d8`) instead of
+    `objectArray`.
+-   **The registration.** `ProcessJob` (`0x140e28af0`) registers the plain appends, then each group's geometries between
+    the accumulator's vfuncs `0x140` and `0x148`, through `FUN_1414b2140` with the group. The main modes' registration
+    (`FUN_1414b2330`) gives the group to a hint 1 pass alone (blended: `FUN_1414f50b0` into the group's list). An opaque
+    pass (hint 0, `RegisterPass`) and the decal groups go where they would under any node.
+-   **So** the engine draws an ordered node's opaque leaves in its normal opaque path, and DCLF drawing them in its opaque
+    epoch matches. Hay is the common case: about 1.7 passes a frame outdoors and 3.2 indoors in the census.
+
+**Where the rule lives:**
+
+-   `ParentReason` still marks the leaf `UnsupportedParent`. `ClassifyFrame` rejects it only when the mirror's leaf blends
+    (`OrderedLeaf`: the alpha property blends or the material alpha is below one).
+-   Most blended leaves get `AlphaBlend` from the static verdict first. The rule catches what passes that verdict: a
+    blended decal now, T7d's blended Lighting later.
+-   **Combining parent reasons.** A billboard now outranks a switch, which outranks an ordered node. Before, an ordered node
+    outranked both. The billboard's verdict holds whatever the leaf is. Under both a switch and an ordered node, the
+    leaf's verdict is the switch's, and `ClassifyFrame`'s per-frame walk up the chain applies the ordered-node test when
+    it passes the node.
+-   **What changed for billboards.** A billboard under an ordered node used to be a shadow-only caster. It is now
+    `Billboard`, which is right, since a billboard turns to each culling camera.
+
+### Terrain under Terrain Blending (T7c1)
+
+With Terrain Blending on, the census's `technique` class outdoors is the terrain blocks: that feature holds every Lighting
+pass of a `kMultiTextureLandscape` property and replays it after the opaque pass, so `MtLandEnabled()` kept MTLand native.
+T7c1 draws it as Terrain Blending does, under `CS_DCLF_TB_TERRAIN` (a live toggle, default on, needing `CS_DCLF_MTLAND`;
+off restores the old classification exactly: MTLand `technique`, the meshes `terrain-no-blend`).
+
+**What Terrain Blending does** (`TerrainBlending.cpp`):
+
+-   **Depth.** Its `Main_RenderDepth` hook clears its terrain depth (a copy of the main depth's description), and in the
+    depth pass its `RenderPassImmediately` hook draws a terrain pass whose bound comes within `kTerrainDepthDistance` (1024)
+    of its eye twice: into its terrain depth with the pass's own vertex stage, then into the main depth with Utility's
+    `OFFSET_DEPTH` stage (clip z + 10; `State.cpp`'s `TerrainShaderHacks` alternates the two). A farther block goes into the
+    main depth alone. After the pass it blends the two depths (`BlendPrepassDepths`) and copies the main depth into its
+    terrain depth. Its hook wraps DCLF's (see "The ghost background"), so DCLF's Z-prepass is inside it, before the blend.
+-   **Colour.** The main pass's terrain passes are held and replayed after the opaque groups and before the engine's
+    blended decals (`Deferred::Hooks::Main_RenderWorld_BlendedDecals`), with blend mode 1, write mode 1, `LESS_EQUAL` with
+    depth writes, and its terrain depth as t55 (the pixel stage's mask, `TerrainBlending.hlsli`). Then the passes of meshes
+    flagged `kNoTransparencyMultiSample` (its opt-out), with blending off and depth `EQUAL`.
+
+**DCLF's side:**
+
+-   **Classification** (`DeriveLightingDescriptors`). While Terrain Blending holds the terrain, a `kMultiTextureLandscape`
+    property gets terrain group 1, a `kNoTransparencyMultiSample` one group 2 (the flags in the order its hook tests them;
+    a decal or a layer with either stays `terrain-no-blend`). The group is in the object flags' bits 20-21 without
+    `kObjectDecal` (`ObjectTerrainGroup`) and in the raster key's bits 24-25 (`kRasterTerrainGroupShift`), with the blend
+    and write modes Terrain Blending sets (group 1: 1 and 1; group 2: 0 and 1), read back from the engine's state tables
+    like a decal's. Terrain Blending switched on or off drops the cached verdicts, as a classification toggle does.
+-   **Pipelines** (`DrawPipelines.cpp`). A terrain key's depth variant is an opaque one (no bias); its colour variant takes
+    the engine's blend and tests `LESS_EQUAL` with writes (group 1) or `EQUAL` (group 2). A group 1 slot's Z-prepass key
+    holds `terrainNear`, so its depth group holds no other slot.
+-   **Depth** (`PlanZBuckets`, `BuildDrawsCS.hlsl`, `MainOpaquePass`). A group 1 depth group's bucket has a twin right after
+    it, as large; the slots' map marks the pair (`kBucketTerrainPair`). Both phases test each such draw against the latch's
+    `terrainNear` (Terrain Blending's eye as its hook took it, and the distance) exactly as `TerrainBlending.cpp` does:
+    `distance(centre, eye) - radius <= 1024` sends it to the twin. The twin's call is drawn into the main depth with the
+    offset (`kZDrawPushOffsetDepth`, a push word the pulled Lighting vertex stage adds to its clip z, so no second shader is
+    built), then again, after the main depth's pass, in a "DCLF terrain depth" pass on Terrain Blending's terrain depth,
+    imported once at resource setup (`Resources::terrainDepth`). A far block is an ordinary depth draw. There is no
+    per-view list: membership is still the view mask, and the near test is per draw on the GPU.
+-   **Colour.** The colour segment appends each group's draws, outside the sort, to its own range of phase 2's (which the
+    colour segment does not otherwise use), through its own count word (28, 29, zeroed by the colour commit). The ranges
+    are `MainSizing::terrainCapacity`, grown to a power of two past every draw the groups' slots can produce, and the shape
+    records them (`PassFrame::terrainCapacity`, compared as a capacity). The second pass draws them after the opaque decals
+    and the layers and before the blended decals: terrain, then the no-blend meshes. t55 is named in the frame record (the
+    colour commit resolves Terrain Blending's terrain depth view there, rather than whatever was bound at the capture).
+-   **Terrain Blending itself is unchanged** but for its distance constant: DCLF withholds its members' passes at
+    registration (`PassCapture`), so its hooks never see them, and its replay draws only what is left native.
+-   **Sizing.** The depth twins add their capacity to the phase ranges and a word each to the bucket counts and tables
+    (`ReserveMainSequences` counts a twin per group 1 slot); the terrain ranges' sum is held within `sequenceDraws`.
+
+**The observer** (`<- TB NEAR`, under `CS_DCLF_SET_PARITY`): depth phase 1 counts its group 1 inputs and the near ones (count
+words 30, 31); the culling readback repeats the test on the CPU over the same frame's depth inputs, with the bounds from the
+geometry and the eye and distance the latch had, and the report prints both: `terrain under Terrain Blending (sampled
+frame): ... <- OK | <- TB NEAR`. The build parity (`CS_DCLF_BUILD_PARITY`) reads the terrain ranges with the draws'.
+
+**Gate** (not run yet): the census's `Block` passes in the main and depth views at 0 with Terrain Blending on, the target
+probe matching with the toggle on and off, `<- TB NEAR` OK, three motion runs without device loss.
+
+## T7b1: visibility events (kAccumulated as DCLF's output, an observer)
+
+The engine's main-camera cull leaves `kAccumulated` (flag bit 26) on what passed it, and its readers need it once the culls
+stop (`skyrim-engine-notes.md`, "Engine side effects of the culls (T7a)" and "T7b0"): the animated references' update reads
+it on `ref->Get3D()`, the tree clock on the tree's `BSLeafAnimNode`, the dynamic lights' receivers on every level down to
+the geometry. Only the main camera's scene-list processes and the water cull set it (BuildSceneLists only on cell roots).
+T7b1 makes DCLF's own verdicts into that output, read back without a stall, and compares them with the engine's bit while
+the engine still culls. It writes nothing into the engine (T7b2 does, at `Main::Update`'s entry).
+
+-   **The GPU side** (`VisibilityEventsCS.hlsl`, `VisibilityEventsPass`, in the depth epoch after both phases). A root's verdict
+    is FadeStateCS's `kFadeVerdictInView` (the list processes' `Process1` test through the root's portal program) of this
+    frame's update; an object's is depth phase 1's frustum stamp (`cs.dclf.frustum`: this frame's, and not fade-hidden). One
+    thread per root slot, then per object slot, compares the verdict with the slot's reported word and appends only changes
+    `{slot, generation, kind, bits}` (bit 0 visible, bit 1 reserved for T7b2's InMargin) after a header (count, scene frame).
+    A root's word is keyed by its listing's generation (a new listing reports when in view); an object slot has no GPU
+    generation, so its word is the slot's and the host resolves the occupant with the frame's tables. A change that does not
+    fit leaves its word, so it is appended again next frame, and the count past the capacity grows the list
+    (`ReserveSceneTables`, "visibility events"). Nothing is dropped and nothing is capped. No camera (`lodAdjust` 0) or no
+    depth build: the words stand.
+-   **The readback** (`VisibilityReadback`, `VisibilityReadbackPass`, `Draws/IndirectDraws/Visibility.cpp`). The depth epoch is
+    revision-driven (`persistent-epochs.md`), so its passes are recorded once per ring slot for each revision and the
+    recordings are replayed every frame. No code in a pass's `Record` runs per frame. The first build put the slot
+    choice in `Record`, so only frames that recorded produced a batch: 59 of 300 in motion, none in interiors. So the copy
+    is fixed: the list goes whole into the host buffer of its frame slot (`RecordingContext::FrameSlot()`) in the staging set
+    of the revision's list capacity. A growth adds a set (the revision code's thread, before any revision names it).
+    Sets are kept, since a kept recording may name any of them. The depth commit arms its frame slot with the frame and its
+    `AcceptedTables()` (`ArmVisibilityReadback`). When the slot comes round again, the commit harvests the slot's last
+    execution first. The host has already waited for that execution and has not submitted the next, so the buffer is
+    complete and not yet rewritten, and DCLF waits for nothing. The commit copies the buffer whose header names the armed
+    frame (count events) into a heap batch. The frame-start wake (`KickVisibilityReadback`) hands the waiting batches, in
+    frame order, to one decode task on DCLF's executor. Batches are never dropped: they wait as long as needed. A frame
+    whose epoch did not run is counted as missed; the GPU appends its unreported changes again. Only the render thread
+    lets go of a batch's tables, so engine references are never released on DCLF threads. (`FadeEventReadbackPass` reads
+    its buffer in `Record` too, so it sees only recording frames; T7b6 moves it onto this scheme.)
+-   **The decoder** keeps `RootVisibility {generation, visible, lastFrame}` and the objects' verdicts by DCLF's slots,
+    applying each batch against its frame's tables (generation check for roots, an occupant for objects, `appliedFrame` per
+    slot). A new backing of the reported words (a growth) zeroes them in the commit and starts the decoder again with that
+    frame (`Slot::reset`).
+-   **The observer** (`<- ACCUMULATED`, `CS_DCLF_ACCUMULATED_PARITY=1`, a parity, off by default; since T7b2 the readback and the
+    decoder are the normal path, and off only the observer and its sampling are gone; before T7b2, off, none of the above
+    exists: no buffer, no pass, no wake). `SideEffects::SampleAccumulated` (`Engine/SideEffects.*`) samples the bit on the
+    frame's fade roots and geometries on the render thread right after the list jobs' Finish (`PrimaryCull::AfterListJobs`), a
+    safe point. Samples are kept until the decode reaches their frame and compared there exactly: same frame, no margin,
+    no hysteresis. Roots the cut stood in for (admitted, unmixed: the engine's cull never visits them) are counted aside.
+    So are roots DCLF has no verdict for that frame (FadeStateCS did not update the listing: no seed, or no member drawn;
+    event bit 2) and DCLF's alone on an app-culled (`kHidden`) root, which the engine's cull does not reach.
+    A frame whose batch overflowed is left out, because some verdicts arrive a frame late.
+
+The report comes every report interval:
+
+```
+[DCLF] accumulated (T7b1): <f> frames compared (<i> left out: a batch past its buffer; <u> samples no batch reached; <m> slots moved),
+  engine-culled roots <both> / <DCLF's alone> / <the engine's alone> / <neither>, geometry ... (<s> of the engine's alone stale under a
+  failed root); stood-in roots ..., geometry ...; aside: roots with no DCLF verdict <a> set by the engine / <b> not, <h> DCLF's alone on an
+  app-culled root; readback <b> batches, <e> events (<x> stale), <o> past their list, <m> arms missed, <s> staging sets (+<g>), event list <c>,
+  <w> wakes busy, decode <t> us <- OK | <- ACCUMULATED DIFFER | <- NOT COMPARED; first ...: '<name>' (frame <f>)
+```
+
+T7b1's gate is 0 differ on the engine-culled roots and geometry. Expected differences to read before chasing any: an
+object that is not a depth candidate is never stamped, so DCLF says out of view. A geometry under a root the engine
+failed keeps the bit of the last cull that reached it (the "stale" count). Water
+shapes and non-fade entry roots are not compared: DCLF has no verdict for them yet. Not yet run in game.
+
+## T7b2: kAccumulated written by DCLF (the stood-in roots)
+
+The cut stands in for admitted, unmixed entries, so no engine cull reaches their roots and their `kAccumulated` is stale.
+`SyncFadeOwnership` used to clear it once. That kept the tree clock off DCLF's trees. It also took every stood-in reference that
+never fades off `FUN_1402cff60`'s "accumulated" path, so the reference froze (`dclf-open-defects.md`). T7b2 writes the bit itself,
+from the GPU visibility T7b1 reads back, and removes the clear.
+
+-   **The readback is the normal path.** `VisibilityEventsCS`, the readback and the decoder always exist (`Resources.cpp`: no
+    switch). `CS_DCLF_ACCUMULATED_PARITY` gates only the observers (`<- ACCUMULATED`, `<- ANIM RATE`). The depth commit that
+    harvests a batch dispatches the decode at once (`ArmVisibilityReadback`), not at the next frame's start. A batch for frame F
+    is harvested when its frame slot comes round. Its writes then reach the next `Main::Update`'s entry.
+-   **The rule** (the decoder, `PrepareWrites`, from the newest batch's tables). For each root with `kFadeRootStoodIn` in those
+    tables, and each geometry under such a root (not a layer), the bit is set when any of these hold:
+    -   the slot was in view in either of the last two decoded frames: in view now, or gone out (`outFrame`) after the frame before
+        the newest;
+    -   a root's listing has no verdict yet: a new listing, one listed again (owning a root gives it a new generation), or no seed;
+    -   a camera cut has no batch of its frame or later decoded yet.
+
+    Otherwise the bit is cleared. Only changes from what was last asked for are written. The record is per root listing and per
+    object occupant, and is forgotten when a root stops being stood in, so a return writes again. A full write (every stood-in
+    root and geometry) follows a reset of the reported words, a cut's first batch, and a refresh request. `PrimaryCull` requests a
+    refresh on a frame whose preconditions fail (the engine culls the stood-in roots itself); the main thread requests one when
+    DCLF does not run. InMargin stays reserved: `VisibilityEventsPass` binds no camera planes. The two-frame window covers going out
+    of view. Coming into view, the write lags the GPU verdict by the readback's frame slots plus one frame.
+-   **The camera cut** (`PrimaryCull::PrepareFrame`, from the list processes' camera it already reads for `fadeEye`). A move of
+    more than 256 units in one frame, or a turn of more than 30 degrees (the relative rotation's trace), counts as a cut.
+    `IndirectDraws::NoteCameraCut` stores its frame. At the next `Main::Update` entry, the main thread sets every stood-in root and
+    its geometry in the newest written tables. It then makes only the sets of batches older than the cut. The decoder's full write
+    at the first batch of the cut's frame or later puts the clears back.
+-   **The write** (`IndirectDraws::WriteAccumulated`, from `PrimaryCull::AtUpdateEntry`, from `Main_Update_Entry`: Main::Update's
+    first call, AE `0x140645ede` -> `FUN_140cfd280`, the thread stages' events reset, checked as a call at install). It runs on the
+    main thread before the job lists start (`0x14064613f`) and after the last frame's cycle was waited for (`0x14064694d`). No list
+    cull, `Job_Cell_animations` or `UpdateAnimationJob` runs then (`skyrim-engine-notes.md`, "T7b0"), and every reader sees the bit
+    in the same frame. Each write is an atomic read-modify-write on `+0xF4` (`fetch_or`/`fetch_and`), skipped when the bit is
+    already right. It applies only while `PrimaryCull` still stands in for the write's root (`standInRoots`, pointer compares).
+    The writes hold their batch's tables, so no node is let go before the write (the fade write-back's ownership). The main thread
+    keeps the newest and lets the older go. DCLF's threads read and write no engine memory.
+-   **Trees.** The tree clock reads the `BSLeafAnimNode`'s bit. The clock stays off DCLF's trees because `TreeAnimation::SetOwned`
+    takes the stood-in roots off the tree manager's list, which the clear never did on its own. `UpdateAnimationJob` skips trees.
+-   **Not written:** the nodes between a root and its geometry (the receivers test every level). They keep the bit of the last
+    engine cull before the stand-in. Stood-in roots have no engine-drawn parts, so no engine draw depends on their receivers.
+-   **`<- ANIM RATE`** (`CS_DCLF_ACCUMULATED_PARITY`; `SideEffects::InstallAnimRate`). `FUN_1402cff60` is detoured at its three
+    calls (`UpdateAnimationJob` `0x1402c73f6`, the managed nodes `0x1402b4230`, `FUN_1402b52e0` `0x1402b5382`). At
+    `Main::Update`'s entry, after the writes, the main thread publishes the stood-in roots and their bit as an immutable map. The
+    next entry lets it go: the cycle has ended, so no gate reads it. Per site, for each stood-in root the gate reaches, it counts:
+    -   never fading (no fade node, ignore-fade, zero radius or flag 29: the case the clear froze) against fading;
+    -   rejected, and rejected never fading;
+    -   written out of view, and how many of those were updated by their own fade step;
+    -   written visible but fully faded out;
+    -   **differ**: written visible, rejected, and not faded out.
+
+The report comes every report interval:
+
+```
+[DCLF] accumulated writes (T7b2): <n> write lists made at Main::Update's entry (<f> full), <s> set, <c> cleared, <u> already so,
+  <l> left (no longer stood in), <h> clears held by a camera cut (<k> cuts, <r> roots set by them); <t> us on the main thread
+[DCLF] anim rate (T7b2): <p> predictions, <r> stood-in roots a frame (<v> written visible); <site>: <n> stood-in calls (<a> never
+  fading, <b> fading), <j> rejected (<jn> never fading), ... <d> differ <- OK | <- ANIM RATE | <- NOT COMPARED; first: <node> (<site>)
+```
+
+T7b2's gates: `<- ANIM RATE` differ at 0. Rejected never-fading stood-in roots are only those written out of view: before T7b2,
+every never-fading stood-in root was rejected. `<- ACCUMULATED`'s stood-in classes now compare DCLF's verdict with its own written
+bit, a few frames late. Built; not yet run in game.
+
+## T7b3: Main::IsRoomVisible against PortalViews (an observer)
+
+`Main::IsRoomVisible` answers from the portal-graph entry the scene cull fills, so once the culls stop
+(T7f) its answer must come from DCLF (`skyrim-engine-notes.md`, "Engine side effects of the culls (T7a)").
+T7b3 puts DCLF's answer beside the engine's while the engine still culls.
+
+-   **`PortalViews::VisibleSet`**: the keys the engine's entry holds once the frame's lists are built.
+    These are the walk's rooms and the shared nodes of the portals it crossed (Traverse adds both), plus
+    the shared node of every portal of every room the walk popped (`DrawWorld_BuildSceneLists`). Each set
+    also keeps the previous set's keys and the graph's tables: its rooms, and each shared node with its
+    portal's two rooms. The tables are rebuilt only when the graph or its room and portal counts change.
+    `Build` makes a set at the end of each frame's walk, and only after `PublishVisibleSets`.
+-   **Publication, lock-free.** The set is published through an atomic pointer with a generation. A reader
+    (`VisibleSetHold`) counts itself and then loads the pointer. A publish frees the sets it replaced only
+    when it sees no reader. MSVC's `std::atomic<std::shared_ptr>` takes a lock, so it is not used.
+-   **The detour** (`Engine/RoomVisibility.*`, `CS_DCLF_ROOM_PARITY=1`, a parity, off by default). It
+    replaces the function's three calls (managed nodes, `Actor::UpdateRefLight`, `FUN_140771520`, all on
+    job threads), each checked as a `call` at install. It returns the engine's answer and compares it with
+    `VisibleSet::Visible`, which uses only keys and reads no engine memory. The node's name is read only
+    for the first difference. Without the switch nothing is installed and no set is built.
+-   **Frame alignment.** None is needed. The engine's map gains its shared nodes in the same frame
+    (`BuildSceneLists`, in `Main::Draw` after `Main::Update`'s walk). Before that, a shared node of a popped
+    room's portal is still visible through its room. A call during a publish (a generation change) is not
+    compared. A difference that the previous set's keys would have matched is counted on its own: this
+    separates "the caller ran before the walk" from a real mismatch.
+-   **T7f's hook point**: `RoomVisibility::DclfAnswer(key)`.
+
+The report comes every 300 published sets:
+
+```
+[DCLF] room visibility (T7b3: ...): <n> calls (<a> before any set, <b> across a publish: not compared); rooms <r> (<x> DCLF only,
+  <y> engine only), shared nodes <s> (...), other keys <o> (<z> engine only: not in DCLF's graph), no key <k>;
+  <d> differences, <p> of them as the previous walk's <- OK | <- ROOM; first: <kind> <key> "<name>" (scene frame <f>), ...
+```
+
+T7b3's gate is `<- ROOM` at 0. "Other keys, engine only" counts rooms and shared nodes missing from DCLF's
+graph tables, such as frames with no graph, when the engine's map is empty. Every other node gets true from
+both the engine and DCLF. Not yet run in game.
+
 ## Decals: a second draw pass, and a single culling phase
 
 The ranking put decals first at 181 drawn a frame in the Whiterun exterior, and the feasibility read said
@@ -4395,7 +4724,8 @@ off).
 
 -   **Which reasons:**
     -   `Technique`: the Utility technique does not depend on the lighting technique.
-    -   `UnsupportedParent`: a `BSOrderedNode` only orders blended draws.
+    -   `UnsupportedParent`: a blended leaf under a `BSOrderedNode`, which only orders blended draws (since T7c0 an opaque
+        one is main-phase eligible: "Ordered nodes").
     -   Not billboards: `NiBillboardNode` turns to the culling camera, which for a shadow view is the light's.
 -   **Where it is skipped:** the accumulate phase and the main epochs skip it (not even a culling candidate),
     and so does the `CS_DCLF_ONLY_ELIGIBLE` parity mode.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <span>
@@ -16,8 +17,9 @@ namespace DCLF::LodGates
 	 * @brief T6b5: the engine's LOD swaps gated on DCLF's readiness (CS_DCLF_LOD_GATES, on by default).
 	 *
 	 * The object and terrain Upgrade/Downgrade Func2s (AE 1.6.1170; skyrim-engine-notes.md, "LOD swaps and their gates") attach the
-	 * incoming blocks and retire the outgoing in one call, on a job thread or the main thread, under the terrain manager's lock. A
-	 * gate:
+	 * incoming blocks and retire the outgoing in one call, on a job thread or the main thread, under the terrain manager's lock; the
+	 * InitialLoad Func2s attach a node's first level where nothing above it is loaded (a gate with no outgoing; under a load screen
+	 * they pass through: the full rebuild flushed every gate and DCLF withdraws). A gate:
 	 * - the incoming blocks are hidden (app-cull) before their attach (when not attached already), and kept hidden by vetoing the
 	 *   engine's show stores (HiddenStores' stubs, Vetoes);
 	 * - the outgoing blocks' handles are taken from their quadtree nodes inside FUN_140510a10 (its detour, in the swap's retirement
@@ -33,7 +35,9 @@ namespace DCLF::LodGates
 	 * Gates are lock-free: each gate's state is one atomic, the swapping thread and Flip racing by compare-exchange (a forced release
 	 * on unload, LOD off, the interior early return, a full rebuild, the map or DCLF stopping wins or loses as one; so does a later swap
 	 * that retires a gate's pending blocks, which supersedes it). The engine-side structures are the terrain manager's lock's, as the
-	 * quadtree they mirror; DCLF adds no lock. Forced releases bump ForcedGeneration and post Outcome{token, true}.
+	 * quadtree they mirror; DCLF adds no lock. Forced releases bump ForcedGeneration and post Outcome{token, true}. A held block the
+	 * engine reuses (reattached by a later swap while its gate lives, or referenced by its node again at its release) posts
+	 * Outcome{token, false, kept}: Flip leaves a reattached block shown (the two race per block by compare-exchange on its handoff).
 	 */
 
 	/**
@@ -78,11 +82,17 @@ namespace DCLF::LodGates
 	 */
 	bool Flip(std::uint64_t a_token);
 
-	/** @brief What became of a gate, for the coordinator (SceneWake::Gate wakes it). */
+	/**
+	 * @brief What became of a gate, for the coordinator (SceneWake::Gate wakes it), or of one of its held outgoing blocks: kept names a
+	 * block the engine reused (a quadtree node references its handle again: reattached while its gate lived, or found so at its release)
+	 * by its root keys (the object block's NiNode; the terrain block's land and water nodes), with the gate that held it. The block stays
+	 * attached as the node's current one, so the scene stops holding its geometries out (Tracked::gateHeldOut) and commits them again.
+	 */
 	struct Outcome
 	{
 		std::uint64_t token = 0;
 		bool forced = false;  // released by a safety path without a flip: the coordinator drops the gate's state
+		std::array<const void*, 2> kept{};  // non-null: not the gate's retirement but a held block of it kept by the engine
 	};
 	/** @brief The coordinator: takes every outcome posted since the last call, oldest first (MPSC). */
 	void DrainOutcomes(void (*a_visit)(void*, const Outcome&), void* a_context);

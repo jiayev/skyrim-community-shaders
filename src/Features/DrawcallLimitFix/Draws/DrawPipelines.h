@@ -53,6 +53,11 @@ namespace DCLF
 	 */
 	inline constexpr std::uint32_t kZDrawPushSequences = 0;
 	/*
+	 * T7c1: and in the word the shadow views' vertex layout takes, Terrain Blending's depth offset (Utility.hlsl, OFFSET_DEPTH): 1 for a
+	 * terrain group 1 twin bucket's call into the main depth (MainOpaquePass), which the pulled Lighting vertex stage adds to its clip z.
+	 */
+	inline constexpr std::uint32_t kZDrawPushOffsetDepth = 4;
+	/*
 	 * A shadow view's plain draw's push words (in the draw's range, kDrawPushBinding): its first sequence's address, which the
 	 * vertex stage indexes by its instance (Utility.hlsl, DCLF_PULLED); the material rows' table, an address the layout's b1
 	 * and t0 ranges may resolve though the stages read the draw's row themselves; and the pipeline's vertex layout.

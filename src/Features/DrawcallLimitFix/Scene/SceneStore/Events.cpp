@@ -2,6 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Diagnostics/MirrorWatch.h"
+#include <cassert>
 
 
 namespace DCLF::Scene
@@ -1221,13 +1222,12 @@ namespace DCLF
 			// T6b3e: their references handed back first (the retry list may be a root's last holder: never released on the pump, a throw
 			// included); the retirement chain holds them through the pass, AddSubtree walking the keys.
 			auto retry = std::exchange(pendingSubtrees, {});
-			std::vector<RE::NiAVObject*> retryRoots;
+			std::vector<std::pair<RE::NiAVObject*, SubtreeSource>> retryRoots;
 			retryRoots.reserve(retry.size());
 			for (const auto& root : retry)
-				retryRoots.push_back(root.get());
+				retryRoots.emplace_back(root.get(), SubtreeSource::Retry);
 			HandBack(retry);
-			for (auto* root : retryRoots)
-				AddSubtree(root, SubtreeSource::Retry);
+			AddSubtrees(retryRoots);
 			// T6b3e: the fade nodes the render thread pinned for entries that had none (FadeNodeRequest).
 			ApplyFadeNodeAnswers();
 		}
@@ -1238,6 +1238,27 @@ namespace DCLF
 			// objects between containers (a cell's dynamic and static nodes, as their physics wakes and sleeps) with a detach and
 			// an attach, which is a move. Its entry, slot and binding stay; the attach has evaluated it again (AddGeometry).
 			std::vector<RE::BSGeometry*> detached;
+			// T6b3e e5: the attaches' subtrees prepared first (PrepareSubtrees: pure over the batch's mirror, on the pool from
+			// kSubtreeFanoutMin), each merged below at its event, in event order. Every attach of the batch read the mirror as the whole
+			// batch left it already (ApplyMirrorEvents ran first; the detaches are applied after the loop), so an attach a later detach or
+			// attach of the same subtree follows prepares what its serial walk found: event order is the merges' alone (the tracked set's
+			// insertion order, the identities, the dependents lists), and they keep it. Under CS_DCLF_FANOUT=0 (and the mirror-read
+			// parity) each is prepared and merged at its event (AddSubtree, the reference).
+			std::vector<std::pair<RE::NiAVObject*, SubtreeSource>> attached;
+			if (!categoryNodes.empty())
+				for (const auto* event = batch->head; event; event = event->next)
+					if (!event->mirrorOnly && event->type == SceneTracker::EventType::Attached)
+						attached.emplace_back(event->node.get(), SubtreeSource::AttachEvent);
+			const std::uint32_t subtreeMode = attached.empty() ? 0 : FanoutMode(attached.size(), false, kSubtreeFanoutMin);
+			if (!attached.empty()) {
+				++fanoutStats.subtreeRounds;
+				fanoutStats.subtreeRoots += attached.size();
+			}
+			[[maybe_unused]] const std::uint64_t mirrorWrites = mirror.Writes();
+			if (subtreeMode != 0)
+				PrepareSubtrees(attached, subtreeMode, subtreePreps);
+			std::size_t nextPrep = 0;
+			double mergeMs = 0.0;
 			for (auto* event = batch->head; event; event = event->next) {
 				// The render thread's captures are the mirror's alone (T6b3d: SceneTracker::PushCaptured).
 				if (event->mirrorOnly)
@@ -1251,12 +1272,24 @@ namespace DCLF
 					}
 				if (event->type == SceneTracker::EventType::Attached) {
 					++stats.attachedEvents;
-					if (!categoryNodes.empty())
-						AddSubtree(event->node.get());
+					if (!categoryNodes.empty()) {
+						if (subtreeMode == 0) {
+							AddSubtree(event->node.get());
+						} else {
+							const auto mergeStart = std::chrono::steady_clock::now();
+							MergeSubtree(subtreePreps[nextPrep++]);
+							mergeMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mergeStart).count();
+						}
+					}
 				} else if (event->type == SceneTracker::EventType::Detached) {
 					++stats.detachedEvents;
 					detached.insert(detached.end(), event->removed.begin(), event->removed.end());
 				}
+			}
+			if (subtreeMode != 0) {
+				assert(nextPrep == subtreePreps.size() && mirror.Writes() == mirrorWrites);
+				AddScenePartMs(ScenePart::SubtreesMerge, mergeMs);
+				fanoutStats.subtreeMergeMs += mergeMs;
 			}
 			for (auto* geometry : detached) {
 				// Only a tracked geometry is known to be alive (its entry holds it) and so safe to walk up from.

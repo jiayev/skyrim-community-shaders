@@ -23,6 +23,7 @@
 #include "DrawcallLimitFix/Engine/LodGates.h"
 #include "DrawcallLimitFix/Engine/LightSelection.h"
 #include "DrawcallLimitFix/Engine/PrimaryCull.h"
+#include "DrawcallLimitFix/Engine/RoomVisibility.h"
 #include "Features/Skylighting.h"
 
 #include <filesystem>
@@ -37,6 +38,7 @@
 #include "DrawcallLimitFix/Engine/PassCapture.h"
 #include "DrawcallLimitFix/Engine/ReflectionFaces.h"
 #include "DrawcallLimitFix/Scene/SceneStore.h"
+#include "DrawcallLimitFix/Scene/LightingDescriptors.h"
 #include "DrawcallLimitFix/Engine/SceneTracker.h"
 #include "DrawcallLimitFix/Common/Switches.h"
 #include "RenderGraph/RenderGraphRuntime.h"
@@ -133,6 +135,8 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::LightSelection::Get().Install();
 	DCLF::FocusViews::Get().Install();
 	DCLF::PrimaryCull::Get().Install();
+	// T7b3, CS_DCLF_ROOM_PARITY: Main::IsRoomVisible's answers against PortalViews' VisibleSet (an observer; nothing installed without it).
+	DCLF::RoomVisibility::Install();
 	if (DCLF::SwitchEnabled(DCLF::Switch::Timeline))
 		DCLF::ImportTimings::Install();
 	// T6b5, CS_DCLF_LOD_GATES (on unless 0): the engine's LOD swaps gated on DCLF's claims (skyrim-engine-notes.md, "LOD swaps and their
@@ -265,6 +269,14 @@ void DrawcallLimitFix::SetActive(bool a_active)
 	logger::info("[DCLF] {} from the menu", a_active ? "Switched on" : "Switched off; the game renders natively");
 }
 
+void DrawcallLimitFix::Hooks::Main_Update_Entry::thunk(void* a_stages)
+{
+	func(a_stages);
+	auto& feature = globals::features::drawcallLimitFix;
+	if (feature.installed)
+		DCLF::PrimaryCull::Get().AtUpdateEntry(feature.Running());
+}
+
 std::int64_t DrawcallLimitFix::Hooks::Main_Draw_Early::thunk(void* a_main)
 {
 	const auto result = func(a_main);
@@ -306,7 +318,12 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// The frame's toggles, before anything reads them. A change that enters the classification drops the
 	// cached verdicts, so the next frame classifies every object under the new switches (T6b3a: the coordinator drops them at its
 	// next pass, told by the frame inputs).
-	if (DCLF::Toggles::Get().BeginFrame())
+	// T7c1: so does Terrain Blending switched on or off, which moves the terrain and its no-blend meshes between their terrain
+	// groups and the native loop (LightingDescriptors, TerrainBlendingDefersTerrain): no cached derivation witnesses it.
+	static bool terrainDefersSeen = DCLF::TerrainBlendingDefersTerrain();
+	const bool terrainDefers = DCLF::TerrainBlendingDefersTerrain();
+	const bool togglesClassify = DCLF::Toggles::Get().BeginFrame();
+	if (togglesClassify || terrainDefers != std::exchange(terrainDefersSeen, terrainDefers))
 		store.RequestVerdictsInvalidated();
 	// A toggle (P4f): the claims committed before it are another capability's (a view DCLF no longer draws, a phase it now does). The
 	// frames are the engine's from here until a publication committed under the new toggles is installed (its commit's toggles
@@ -353,6 +370,8 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// The stood-in fade roots' write-back: the stores the last task found, made here (engine writes are the render thread's, step 6e
 	// F1), then the next task on DCLF's executor, never joined (step 6e S4), finding the next ones from the frame's snapshot.
 	DCLF::IndirectDraws::Get().KickFadeWriteBack();
+	// T7b1 (CS_DCLF_ACCUMULATED_PARITY alone): the visibility readbacks the GPU is done with, decoded on DCLF's executor, never joined.
+	DCLF::IndirectDraws::Get().KickVisibilityReadback();
 	// T6b3d: what the coordinator's passes asked of the render thread, served, and its captures posted for them (not while a load screen
 	// is up: the passes drain the engine's queues into the mirror's carry then) - the switch catch-ups (engine writes, before the culls),
 	// the category capture, the mirror's capture requests and parity probe, tree LOD's mirror. The engine's queues are the coordinator's
@@ -882,6 +901,12 @@ void DrawcallLimitFix::Hooks::Install()
 		logger::warn("[DCLF] the geometry groups' pass draw is not where expected; their passes stay native (terrain LOD among them)");
 	stl::write_thunk_call<Main_Draw_Early>(REL::RelocationID(35560, 36559).address() + 0xD3);
 	logger::info("[DCLF] scene phase hook installed on Main::Draw");
+	// T7b2: the stood-in roots' kAccumulated, written at Main::Update's entry.
+	constexpr std::uintptr_t kUpdateEntryCall = 0x645ede, kStagesReset = 0xcfd280;
+	if (DCLF::Engine::CallsTo(REL::Offset(kUpdateEntryCall).address(), REL::Offset(kStagesReset).address()))
+		stl::write_thunk_call<Main_Update_Entry>(REL::Offset(kUpdateEntryCall).address());
+	else
+		logger::warn("[DCLF] Main::Update's first call is not where expected; the stood-in roots' kAccumulated is not written (T7b2)");
 	logger::info("[DCLF] Native pass hooks installed");
 }
 

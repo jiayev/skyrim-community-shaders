@@ -118,6 +118,8 @@ namespace DCLF
 		EvaluateMerge,     // MergeEntry over the round, in order, on the scene lane
 		JoinsFanout,       // the joins' evaluations (EvaluateJoinPre over the bind queue, EvaluateJoin over the joins)
 		JoinsMerge,        // the joins' merges, in order
+		SubtreesFanout,    // T6b3e e5: the subtrees' prepares (PrepareSubtrees: on the preparation pool from 16 roots, CS_DCLF_FANOUT=2)
+		SubtreesMerge,     // T6b3e e5: their merges (MergeSubtree), in event order
 		Count
 	};
 
@@ -125,7 +127,7 @@ namespace DCLF
 		"category nodes", "attach/detach", "validate", "structural events", "prologue", "sweep slots", "cull hidden bits",
 		"schedule", "switch events", "evaluate", "geometry scan", "later rounds", "shadow sets",
 		"object sweep", "sun candidates", "face walk", "walk parity", "shading", "placement plan", "joins", "commit", "publish",
-		"evaluate (fan-out)", "evaluate merge", "joins (fan-out)", "joins merge"
+		"evaluate (fan-out)", "evaluate merge", "joins (fan-out)", "joins merge", "subtrees (fan-out)", "subtrees merge"
 	};
 
 	/** @brief T6b3e: a part measured inside another (the fan-outs' halves), left out of the parts' sum. */
@@ -2417,7 +2419,67 @@ namespace DCLF
 		 * @brief Tracks a_geometry under a_categoryNode. Its reference is the batch's pin of it (T6b1c), or with a_live a live walk's
 		 * pointer (the category walk's, until the render thread's category capture pins); without either it is left out (counted).
 		 */
-		void AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason, bool a_live);
+		struct GeometryPrep;
+		void AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason, bool a_live, const GeometryPrep& a_prep);
+		// T6b3e e5: AddSubtree as a prepare (pure over the batch's frozen mirror, any thread under a ShardScope) and a merge in event order.
+		/**
+		 * @brief T6b3e e5: what AddGeometry reads of the mirror for one geometry, prepared: its record's actor owner, Light Limit Fix's room
+		 * node, a face shape's head, whether the mirror holds its node, whether it is a sub-index shape, and (resolved: not under the
+		 * mirror-read parity, whose live checks are the merge's) its sun entry (ResolveSunEntry's read) and LightEntryOf's actor root.
+		 * Keys alone: no reference is made or dropped in a prepare.
+		 */
+		struct GeometryPrep
+		{
+			RE::BSGeometry* geometry = nullptr;
+			Ineligible reason = Ineligible::None;  // what the nodes between the category node and it make of it (MirrorSubtree's)
+			const RE::TESObjectREFR* actorOwner = nullptr;
+			const RE::NiNode* roomNode = nullptr;
+			const RE::BSFaceGenNiNode* faceHead = nullptr;
+			bool mirrored = false;
+			bool subIndex = false;
+			bool resolved = false;
+			const void* sunEntry = nullptr;
+			const RE::NiAVObject* lightActorRoot = nullptr;
+		};
+		/** @brief T6b3e e5: one subtree's prepare (PrepareSubtree): its category node (none: nothing tracked), and its geometries in walk order. */
+		struct SubtreePrep
+		{
+			RE::NiAVObject* root = nullptr;
+			SubtreeSource source = SubtreeSource::AttachEvent;
+			RE::NiNode* category = nullptr;
+			bool unmirrored = false;  // FindCategoryNode found a record missing on the way up
+			std::vector<GeometryPrep> geometries;
+		};
+		/** @brief T6b3e e5: a_root's prepare: FindCategoryNode, MirrorSubtree (and its mirror-read parity check), each geometry's. Const. */
+		void PrepareSubtree(RE::NiAVObject* a_root, SubtreeSource a_source, SubtreePrep& a_out) const;
+		/** @brief T6b3e e5: one geometry's prepare under a_category (PrepareSubtree's, and AddSubtree's). Const. */
+		void PrepareGeometry(RE::BSGeometry* a_geometry, Ineligible a_reason, const RE::NiNode* a_category, GeometryPrep& a_out) const;
+		/** @brief T6b3e e5: a prepared subtree's merge (the pending retry, capture requests, AddGeometry for each), in event order. */
+		void MergeSubtree(SubtreePrep& a_prep);
+		/**
+		 * @brief T6b3e e5: a_roots' prepares into a_out (by CS_DCLF_FANOUT: 1 on this thread, 2 on the preparation pool in chunks of
+		 * kSubtreeGrain from kSubtreeFanoutMin roots; CS_DCLF_FANOUT_PARITY prepares again here and compares), timed as `subtrees (fan-out)`.
+		 * The caller merges them in order (MergeSubtree) after it; nothing between may write the mirror, the category nodes or the portal
+		 * roots (asserted by the caller's witnesses).
+		 */
+		void PrepareSubtrees(const std::vector<std::pair<RE::NiAVObject*, SubtreeSource>>& a_roots, std::uint32_t a_mode, std::vector<SubtreePrep>& a_out);
+		/**
+		 * @brief T6b3e e5: a_roots tracked as AddSubtree tracks each, in order: by CS_DCLF_FANOUT, 0 each prepared and merged before the next
+		 * (the reference), else all prepared (PrepareSubtrees) then merged in order. Under the mirror-read parity as 0.
+		 */
+		void AddSubtrees(const std::vector<std::pair<RE::NiAVObject*, SubtreeSource>>& a_roots);
+		/** @brief T6b3e e5, CS_DCLF_FANOUT_PARITY: the first field two prepares of one subtree differ in, or null. */
+		static const char* SubtreeDifference(const SubtreePrep& a_left, const SubtreePrep& a_right);
+		// A subtree's prepare is a whole walk (one root to hundreds of geometries): chunks of a few roots, the pool from 16.
+		static constexpr std::size_t kSubtreeGrain = 4;
+		static constexpr std::size_t kSubtreeFanoutMin = 16;
+		std::vector<SubtreePrep> subtreePreps;
+		/** @brief T6b3e e5: a_ms into a nested scene part's sums (the pass's and the frame's), timed by hand like e4's halves. */
+		void AddScenePartMs(ScenePart a_part, double a_ms)
+		{
+			stats.scenePartMs[static_cast<std::size_t>(a_part)] += a_ms;
+			stats.scenePartFrameMs[static_cast<std::size_t>(a_part)] += a_ms;
+		}
 		/**
 		 * @brief T6b1c: the applied batch's pins by key (its attach captures' and leaf updates' (T6b1b: with the properties), the category
 		 * capture's), valid while the scene work applies it; and a reference made from one (null: no pin). Counted since the last report:
@@ -2610,7 +2672,48 @@ namespace DCLF
 		};
 		TimelineStats TakeTimelineStats();
 
+		/**
+		 * @brief T7c0: the coordinator's verdict on a geometry the census (CS_DCLF_CENSUS) saw the engine draw: tracked, and if so its
+		 * verdict this frame (ReasonThisFrame: hidden, switch, actor, fading and the static ones), its record, its residency and its
+		 * phases in the coordinator's tables. By pointer: nothing of the geometry is read (the request's pins keep the address its own).
+		 */
+		struct CensusVerdict
+		{
+			bool tracked = false;
+			bool record = false;    // a record (FindObject)
+			bool resident = false;  // bound (ResidentObject)
+			Ineligible reason = Ineligible::None;
+			std::uint8_t phases = 0;  // PhasesIn of its record, the coordinator's tables
+		};
+		/**
+		 * @brief T7c0: the census's question (render thread, Collect -> the next scene pass: AnswerCensus) and its answer (the pass -> the
+		 * render thread's next Collect). One in flight at a time: the census posts the next only once it took the reply, carrying every
+		 * geometry seen since. The pins (taken on the render thread) travel back with the reply, so they are let go of on the render thread.
+		 */
+		struct CensusRequest
+		{
+			std::vector<RE::NiPointer<RE::BSGeometry>> geometries;
+		};
+		struct CensusReply
+		{
+			std::vector<RE::NiPointer<RE::BSGeometry>> geometries;
+			std::vector<CensusVerdict> verdicts;  // parallel to geometries
+			std::uint32_t sceneFrame = 0;         // the pass's
+		};
+		/** @brief The coordinator's thread (AnswerCensus), or the render thread while the passes run inline (the parities): a's verdict. */
+		CensusVerdict CensusVerdictOf(const RE::BSGeometry* a_geometry) const;
+		/** @brief Render thread (the census's Collect): the request posted for the next scene pass (T6b3d: no wake, the frame's pass takes it). */
+		void PostCensusRequest(std::shared_ptr<CensusRequest> a_request) { censusRequestPosted.store(std::move(a_request), std::memory_order_release); }
+		/** @brief Render thread (the census's Collect): the reply posted since the last call, or null. */
+		std::shared_ptr<CensusReply> TakeCensusReply() { return censusReplyPosted.exchange(nullptr, std::memory_order_acq_rel); }
+
 	private:
+		// T7c0: the census's request and reply (above); null while none waits. Only a census run posts either.
+		std::atomic<std::shared_ptr<CensusRequest>> censusRequestPosted;
+		std::atomic<std::shared_ptr<CensusReply>> censusReplyPosted;
+		/** @brief The scene pass, after the joins (BuildAccumulatePhase): the census's request answered, its pins moved into the reply. */
+		void AnswerCensus();
+
 		/** @brief A cheap hash of everything RefreshCategoryNodes reads to find category nodes. */
 		std::uint64_t CategorySignature() const;
 		// a_accumulated: the frame's registered pass, whose captured fade state then stands in for the live one.
@@ -3809,8 +3912,13 @@ namespace DCLF
 		bool MergeWrite(RE::BSGeometry* a_geometry, Tracked& a_tracked, EvalResult& a_result, PartTimer& a_timer, Ineligible& a_bucket);
 		/** @brief T6b3e: a chunk's counters into the store's (in chunk order), its warnings logged. */
 		void MergeCounters(EvalCounters& a_counters);
-		/** @brief T6b3e: the mode a round of a_count entries runs in (CS_DCLF_FANOUT, the parities, the pass's thread); a_joins: the joins'. */
-		std::uint32_t FanoutMode(std::size_t a_count, bool a_joins) const;
+		/** @brief T6b3e: a chunk's mirror-read counts into the store's (MergeCounters', and e5's prepares'). */
+		void MergeMirrorReads(MirrorReadStats& a_counts);
+		/**
+		 * @brief T6b3e: the mode a round of a_count entries runs in (CS_DCLF_FANOUT, the parities, the pass's thread); a_joins: the joins';
+		 * the pool from a_least (e5's subtrees: kSubtreeFanoutMin).
+		 */
+		std::uint32_t FanoutMode(std::size_t a_count, bool a_joins, std::size_t a_least = kFanoutMinEntries) const;
 		/** @brief T6b3e: what a pass's evaluations read in place of the live toggles and Terrain Blending (BuildScenePhase takes it). */
 		struct PassSnapshot
 		{
@@ -3829,6 +3937,10 @@ namespace DCLF
 			std::uint64_t joinRounds = 0, joinParallelRounds = 0, joinEntries = 0;
 			std::uint64_t parityRounds = 0, parityEntries = 0, parityDiffers = 0;
 			std::uint64_t lightMissed = 0;  // light-path entries KeepSkin's table half wrote in full at the merge
+			// e5: AddSubtrees' calls, roots and geometries (every mode), those prepared on the pool, and the prepares' and merges' times
+			// (modes 1 and 2: mode 0 interleaves them).
+			std::uint64_t subtreeRounds = 0, subtreeParallelRounds = 0, subtreeRoots = 0, subtreeParallelRoots = 0, subtreeGeometries = 0;
+			double subtreePrepareMs = 0.0, subtreeMergeMs = 0.0;
 			std::string parityFirst;
 		} fanoutStats;
 		/** @brief Its report line (empty when no round ran), the counters reset. */
@@ -4205,11 +4317,14 @@ namespace DCLF
 		{
 			std::uint64_t token = 0;
 			bool forced = false;
+			std::array<const void*, 2> kept{};  // non-null: a held block of the gate the engine reused (LodGates::Outcome::kept), by its roots
 		};
 		struct GateStats
 		{
 			std::uint64_t opened = 0, flipped = 0, retiredFlipped = 0, retiredForced = 0, forcedOpen = 0, unknownOutcomes = 0, superseded = 0;
 			std::uint64_t rootsDetached = 0, taggedIncoming = 0, taggedOutgoing = 0, heldOut = 0, emptyIncoming = 0;
+			// Kept notices (ApplyGateKept): taken; geometries released from their hold-out (requeued) and outgoing tags dropped before a flip.
+			std::uint64_t keptNotices = 0, keptCleared = 0, keptUntagged = 0;
 			// Flips deferred for an incoming record the next publication claims first (UpdateGates); under the parities, flipped incoming
 			// geometries the flip's own publication does not claim (TakeDeltas: the coordinator's side of <- GATE HOLE).
 			std::uint64_t structureDeferred = 0, publishHoles = 0;
@@ -4268,6 +4383,12 @@ namespace DCLF
 		 */
 		void ApplyGateOutcomes(bool a_applied);
 		void RetireGate(std::uint64_t a_token, bool a_forced);
+		/**
+		 * @brief ApplyGateOutcomes: a_token's held block under a_roots reused by the engine (the node's current block again): the roots off
+		 * the gate's outgoing, and the tracked geometries under them that the gate tags as outgoing or holds out untagged, the held-out ones'
+		 * slots committed again (gateQueued). Geometries a later gate tags are that gate's.
+		 */
+		void ApplyGateKept(std::uint64_t a_token, const std::array<const void*, 2>& a_roots);
 		/** @brief The coordinator's report line (ReportCoordinator), empty without any gate activity; resets the counts. */
 		std::string GateReport();
 		// T6b5, render thread: the flips of the publications installed since the last ReleaseGates (HandOverAtFrameStart), and the releases'

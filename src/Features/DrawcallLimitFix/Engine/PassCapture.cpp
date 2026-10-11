@@ -1,6 +1,7 @@
 #include "PassCapture.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/OpenDefectProbes.h"
+#include "Features/DrawcallLimitFix/Diagnostics/RegistrationCensus.h"
 
 #include "FocusViews.h"
 #include "LocalLightCull.h"
@@ -344,9 +345,19 @@ namespace DCLF
 		return false;
 	}
 
+	void PassCapture::NoteKept(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint8_t a_site, bool a_fading, std::uint8_t a_occlusionPhase) const
+	{
+		// The census's per-pass values, read here as the pass registers (the frame's end has neither the pass, a pooled object, nor
+		// these states): the fade verdict, and whether the reflection faces withhold now (WithholdReflection's own gates).
+		const bool face = reflectionFace.load(std::memory_order_acquire) && reflectionCovered.load(std::memory_order_acquire);
+		RegistrationCensus::Note(a_batch, a_pass, static_cast<RegistrationCensus::Site>(a_site),
+			static_cast<std::uint8_t>((a_fading ? RegistrationCensus::kFading : 0) | (face ? RegistrationCensus::kReflectionFace : 0)), a_occlusionPhase);
+	}
+
 	namespace
 	{
 		thread_local std::uint32_t passesOnThisThread = 0;
+		constexpr auto Census(RegistrationCensus::Site a_site) { return static_cast<std::uint8_t>(a_site); }
 	}
 
 	std::uint32_t PassCapture::PassesOnThisThread()
@@ -371,8 +382,11 @@ namespace DCLF
 			const bool withheld = capture.WithholdMain(a_this, a_pass) || capture.WithholdReflection(a_this, a_pass) || capture.Withhold(a_this, a_pass, fading);
 			capture.Record(a_this, a_pass, a_techniqueID, fading, withheld);
 			LocalLightCull::NoteRegistration(a_this, a_pass, withheld);
-			if (!withheld)
-				func(a_this, a_pass, a_techniqueID);
+			if (withheld)
+				return;
+			if (RegistrationCensus::Enabled())
+				capture.NoteKept(a_this, a_pass, Census(RegistrationCensus::Site::RegisterPass), fading);
+			func(a_this, a_pass, a_techniqueID);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -406,6 +420,8 @@ namespace DCLF
 			LocalLightCull::NoteRegistration(a_batch, a_pass, withheld, 8);
 			if (withheld)
 				return;
+			if (RegistrationCensus::Enabled() && !capture.bypassed.load(std::memory_order_acquire))
+				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::Volumetric), FadingAtRegistration(a_pass));
 			func(a_batch, a_pass, a_group, a_arg);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -429,6 +445,8 @@ namespace DCLF
 			LocalLightCull::NoteRegistration(a_batch, a_pass, withheld, Hint);
 			if (withheld)
 				return;
+			if (RegistrationCensus::Enabled() && !capture.bypassed.load(std::memory_order_acquire))
+				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::ShadowDirect), FadingAtRegistration(a_pass));
 			func(a_batch, a_pass, a_group, a_arg);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -450,6 +468,8 @@ namespace DCLF
 			auto& capture = PassCapture::Get();
 			if (!capture.bypassed.load(std::memory_order_acquire) && (capture.WithholdMain(a_batch, a_pass) || capture.WithholdReflection(a_batch, a_pass)))
 				return;
+			if (RegistrationCensus::Enabled() && !capture.bypassed.load(std::memory_order_acquire))
+				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::MainGroup), FadingAtRegistration(a_pass));
 			func(a_batch, a_pass, a_group, a_arg);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -464,6 +484,8 @@ namespace DCLF
 			auto& capture = PassCapture::Get();
 			if (!capture.bypassed.load(std::memory_order_acquire) && (capture.WithholdMain(a_batch, a_pass) || capture.WithholdReflection(a_batch, a_pass)))
 				return;
+			if (RegistrationCensus::Enabled() && !capture.bypassed.load(std::memory_order_acquire))
+				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::MainList), FadingAtRegistration(a_pass));
 			func(a_batch, a_pass, a_list);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -486,6 +508,8 @@ namespace DCLF
 					capture.occlusionWithheld.fetch_add(1, std::memory_order_relaxed);
 					return;
 				}
+			if (RegistrationCensus::Enabled() && !capture.bypassed.load(std::memory_order_acquire))
+				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::Occlusion), FadingAtRegistration(a_pass), phase);
 			func(a_batch, a_pass, a_group, a_arg);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

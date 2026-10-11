@@ -1729,7 +1729,7 @@ namespace DCLF
 		}
 	}
 
-	std::uint32_t SceneStore::FanoutMode(std::size_t a_count, bool a_joins) const
+	std::uint32_t SceneStore::FanoutMode(std::size_t a_count, bool a_joins, std::size_t a_least) const
 	{
 		// The mirror-read parity's live checks note their leases and differences on the pass's own thread, and the joins' derive probe
 		// samples the LOD fade frame lazily and reads live properties under a lease: both interleaved, as the walk was.
@@ -1738,7 +1738,7 @@ namespace DCLF
 		const std::uint32_t configured = ConfiguredFanout();
 		// The pool only from the scene lane (ParallelFor waits: never on the render thread, where the parities run the pass inline), and
 		// only for a round worth the chunks.
-		if (configured == 2 && (!inSceneTask || a_count < kFanoutMinEntries))
+		if (configured == 2 && (!inSceneTask || a_count < a_least))
 			return 1;
 		return configured;
 	}
@@ -2038,17 +2038,23 @@ namespace DCLF
 			stats.partMs[p] += c.partMs[p];
 		for (std::size_t k = 0; k < c.evaluateKindMs.size(); ++k)
 			stats.evaluateKindMs[k] += c.evaluateKindMs[k];
+		MergeMirrorReads(c.mirror);
+	}
+
+	void SceneStore::MergeMirrorReads(MirrorReadStats& a_counts)
+	{
 		// The store's own counts (never a sink: the merge runs on the pass's thread).
 		auto& m = mirrorReads;
+		const auto& c = a_counts;
 		for (std::size_t i = 0; i < m.reads.size(); ++i) {
-			m.reads[i] += c.mirror.reads[i];
-			m.checked[i] += c.mirror.checked[i];
-			m.lagged[i] += c.mirror.lagged[i];
-			m.differ[i] += c.mirror.differ[i];
-			m.unmirrored[i] += c.mirror.unmirrored[i];
-			m.refused[i] += c.mirror.refused[i];
-			if (m.first[i].empty() && !c.mirror.first[i].empty())
-				m.first[i] = std::move(c.mirror.first[i]);
+			m.reads[i] += c.reads[i];
+			m.checked[i] += c.checked[i];
+			m.lagged[i] += c.lagged[i];
+			m.differ[i] += c.differ[i];
+			m.unmirrored[i] += c.unmirrored[i];
+			m.refused[i] += c.refused[i];
+			if (m.first[i].empty() && !c.first[i].empty())
+				m.first[i] = std::move(a_counts.first[i]);
 		}
 	}
 
@@ -2281,13 +2287,16 @@ namespace DCLF
 	std::string SceneStore::FanoutReport()
 	{
 		auto& f = fanoutStats;
-		if (!f.rounds && !f.joinRounds)
+		if (!f.rounds && !f.joinRounds && !f.subtreeRounds)
 			return {};
 		auto line = fmt::format(
 			"[DCLF] scene fan-out (T6b3e, CS_DCLF_FANOUT={}, {} pool workers): walk rounds {} ({} on the pool), entries {} ({} on the pool, {} chunks), "
 			"light-path entries written in full at the merge {}; join rounds {} ({} on the pool), joins {}",
 			ConfiguredFanout(), SceneScheduler::PreparationWorkers(), f.rounds, f.parallelRounds, f.entries, f.parallelEntries, f.chunks, f.lightMissed, f.joinRounds,
 			f.joinParallelRounds, f.joinEntries);
+		// e5: AddSubtrees' prepares (the pool from kSubtreeFanoutMin roots) and merges; their times in modes 1 and 2.
+		line += fmt::format("; subtree rounds {} ({} on the pool), roots {} ({} on the pool), geometries {}, prepare {:.2f} ms, merge {:.2f} ms", f.subtreeRounds,
+			f.subtreeParallelRounds, f.subtreeRoots, f.subtreeParallelRoots, f.subtreeGeometries, f.subtreePrepareMs, f.subtreeMergeMs);
 		if (f.parityRounds)
 			line += fmt::format("; parity (CS_DCLF_FANOUT_PARITY): {} rounds, {} entries, {} differ{}{}", f.parityRounds, f.parityEntries, f.parityDiffers,
 				f.parityDiffers ? " <- FANOUT; first: " : " <- OK", f.parityFirst);

@@ -126,6 +126,7 @@ namespace DCLF
 									"(their batches its or the next's); event list {} events\n",
 					applied, static_cast<double>(storeNs) / 1000.0, stale, busy, writeBack.capacity.load(std::memory_order_relaxed));
 		}
+		text += VisibilityReport();
 		text += ReflectionReport();
 		if (impl->scene && impl->scene->treeLodCull && impl->scene->treeLodUploads) {
 			auto& scene = *impl->scene;
@@ -756,6 +757,11 @@ namespace DCLF
 					a_stats.fadeRoots = scene->fadeRootCount;
 				a_stats.sunCpuTested = cullReadback->sunCpuTested;
 				a_stats.sunCpuMissed = cullReadback->sunCpuMissed;
+				a_stats.terrainNearTested = words[kCountTerrainNearTestedWord];
+				a_stats.terrainNear = words[kCountTerrainNearWord];
+				a_stats.terrainCpu = cullReadback->terrainCpu;
+				a_stats.terrainCpuTested = cullReadback->terrainCpuTested;
+				a_stats.terrainCpuNear = cullReadback->terrainCpuNear;
 				context->Unmap(cullReadback->count.get(), 0);
 			}
 			cullReadback.reset();
@@ -793,11 +799,30 @@ namespace DCLF
 				inside = InSunCascade(sunCascades[c], center, bound.radius);
 			readback.sunCpuMissed += inside ? 0 : 1;
 		};
+		// T7c1, CS_DCLF_SET_PARITY (<- TB NEAR): Terrain Blending's near test over the same frame's terrain group 1 inputs of the depth
+		// segment's first phase, with the eye and distance its latch had (terrainNearUpload), as TerrainBlending.cpp tests a pass.
+		readback.terrainCpu = SetParityEnabled() && terrainNearUpload[3] > 0.0f;
+		auto terrainTest = [&](const DrawInput& input) {
+			if (!readback.terrainCpu || !(input.view.mask & kDepthViewBits) || ObjectTerrainGroup(input.flags) != 1)
+				return;
+			++readback.terrainCpuTested;
+			const auto& tablesNow = SceneStore::Get().GetTables();
+			const auto* geometry = input.objectIndex < tablesNow.objectGeometry.size() ? tablesNow.objectGeometry[input.objectIndex] : nullptr;
+			if (!geometry)
+				return;
+			const auto& bound = geometry->worldBound;
+			const RE::NiPoint3 eye{ terrainNearUpload[0], terrainNearUpload[1], terrainNearUpload[2] };
+			readback.terrainCpuNear += bound.center.GetDistance(eye) - bound.radius <= terrainNearUpload[3] ? 1 : 0;
+		};
 		if (a_payload.resident.elements)
-			for (const auto& input : *a_payload.resident.elements)
+			for (const auto& input : *a_payload.resident.elements) {
 				sunTest(input);
-		for (const auto& input : a_payload.inputList)
+				terrainTest(input);
+			}
+		for (const auto& input : a_payload.inputList) {
 			sunTest(input);
+			terrainTest(input);
+		}
 		cullReadback = std::move(readback);
 	}
 
@@ -1368,6 +1393,12 @@ namespace DCLF
 			const std::uint32_t culled = static_cast<const std::uint32_t*>(countMap.pData)[1];
 			const auto* gpuSequences = static_cast<const DrawSequence*>(sequencesMap.pData);
 			std::vector<DrawSequence> built(gpuSequences, gpuSequences + std::min<std::size_t>(count, parity->sequenceDraws));
+			// T7c1: and the terrain groups' draws, from their ranges in phase 2's (BuildDrawsCS appends them there, not to the draws').
+			for (std::uint32_t group = 0; group < kTerrainGroups; ++group) {
+				const std::uint32_t appended = std::min(static_cast<const std::uint32_t*>(countMap.pData)[kCountTerrainGroupWord + group], parity->terrainCapacity[group]);
+				const auto* range = gpuSequences + std::size_t(parity->sequenceDraws) + (group == 0 ? 0u : parity->terrainCapacity[0]);
+				built.insert(built.end(), range, range + appended);
+			}
 			// The local shadow lights BuildDraws selected, from each object word, against the CPU's selection; then out of the word,
 			// which the CPU's templates do not carry.
 			std::size_t localChecked = 0, localDiffering = 0;
@@ -1495,6 +1526,7 @@ namespace DCLF
 		readback.count = staging(a_resources->countD3D11.get());
 		readback.sequenceDraws = a_resources->sequenceDraws;
 		readback.sequenceDecals = a_resources->sequenceDecals;
+		readback.terrainCapacity = a_resources->terrainCapacity;
 		// The templates cover every candidate; the gate drops the ones the engine culled before BuildDraws
 		// writes a sequence for them, and it is a pure per-object flag test, so the expectation can apply it
 		// exactly. Frustum culling cannot be predicted here, which is why parity and culling are separate

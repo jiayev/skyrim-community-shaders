@@ -71,9 +71,9 @@ objects are out of the walks.
 | `activeLightMask` for residue objects | light accumulations | the main pass | unchanged: the engine still culls the residue |
 | `BSFadeNode::currentFade`, and `+0x13C` (last visible frame) | `BSFadeNode::OnVisible`, main camera only (`cameraRelatedUpdates`), via `FUN_14147a160` / `FUN_14147b110` | DCLF's fading, the shadow caster rule; `+0x13C` only by the fade and LOD code | Call the engine's own fade functions from a worker for DCLF's visible nodes (see "Reverse-engineering answers"). |
 | Leaf and tree animation | `BSLeafAnimNode::OnVisible` → `FUN_14147a430`; `BSTreeNode::OnVisible` (LOD flags at `+0x153`) | the animation and tree LOD | Call the same functions from a worker for the nodes DCLF found visible last frame (GPU visibility readback). Check their thread-safety: the engine already calls them from cull jobs. |
-| `NiAVObject::kAccumulated` (flags bit 26) | `Process1`, when the process has `updateAccumulateFlag` | only the tree animation clock (`FUN_1404381e0`) | DCLF sets it on the trees it found visible, or advances their `+0x164` itself. |
+| `NiAVObject::kAccumulated` (flags bit 26) | `Process1`, when the process has `updateAccumulateFlag` | the tree animation clock (`FUN_1404381e0`), `UpdateAnimationJob` and the managed-nodes update (`FUN_1402cff60`), the dynamic lights' receiver gathering (`FUN_141509520`, the previous frame's bit) (T7a, `skyrim-engine-notes.md`) | DCLF sets it on every root it found visible (a GPU visibility readback, a frame late). |
 | `lastAccumulatedFrameCount` | `FUN_1414b2a60` | `Actor::ModifyAnimationUpdateData`, only for actors whose root is `kNotVisible` | none for what DCLF draws; noted for M1 |
-| Multibound frustum cache | `BSMultiBoundNode::OnVisible` | the same frame's cull | none |
+| Multibound frustum cache | `BSMultiBoundNode::OnVisible` | the same frame's cull; the tree manager's list (`FUN_140437e50`: a tree is visited only when its multibound result is 1) (T7a) | the tree multibounds' result, or the list loop ported |
 
 **Not cull-driven, so safe:**
 

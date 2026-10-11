@@ -863,6 +863,7 @@ namespace DCLF
 	{
 		impl->WaitAhead();
 		impl->WaitFadeWriteBack();
+		impl->WaitVisibilityReadback();
 		impl->streamViews.reset();
 		AsyncWorker::Get().Drain();
 	}

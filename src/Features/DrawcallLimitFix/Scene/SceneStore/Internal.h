@@ -513,10 +513,11 @@ namespace DCLF
 			record.flags = kObjectFree | kObjectNoBindings | kObjectNoShadow;
 			return record;
 		}
-		// What a node between a leaf and its category node makes of the leaf. An ordered node depends on draw
-		// order, which does not survive being drawn out of the native loop. A billboard turns to the camera in
+		// What a node between a leaf and its category node makes of the leaf. A billboard turns to the camera in
 		// the main cull (NiBillboardNode::OnVisible), after the scene walk read its world transform. A switch
-		// node draws one child at a time: Switch marks the leaf for the per-frame test (SwitchSelects).
+		// node draws one child at a time: Switch marks the leaf for the per-frame test (SwitchSelects). An ordered
+		// node orders its leaves' blended passes alone (T7c0: OrderedLeaf), whose draw order does not survive being
+		// drawn out of the native loop: UnsupportedParent marks the leaf for ClassifyFrame's test of its leaf.
 		inline Ineligible ParentReason(RE::NiNode* a_node)
 		{
 			if (a_node->AsSwitchNode())
@@ -533,14 +534,29 @@ namespace DCLF
 		// AE 1.6.1170 at 0x14202a030, where nothing writes it: level n draws the LOD bytes below n, and
 		// single-level n draws LOD byte n alone.
 		constexpr std::array<std::uint8_t, 24> kPartitionLodTable{ 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0 };
-		// The stronger of two parent reasons: an unsupported parent outranks a billboard, which outranks a
-		// switch (the only one decided per frame).
+		// The stronger of two parent reasons: a billboard (whatever its leaf) outranks a switch (decided per frame), which
+		// outranks an ordered node (decided by the leaf: T7c0). ClassifyFrame's chain walk finds an ordered node under a
+		// switch's verdict itself.
 		inline Ineligible CombineParentReasons(Ineligible a_lhs, Ineligible a_rhs)
 		{
-			for (const auto reason : { Ineligible::UnsupportedParent, Ineligible::Billboard, Ineligible::Switch })
+			for (const auto reason : { Ineligible::Billboard, Ineligible::Switch, Ineligible::UnsupportedParent })
 				if (a_lhs == reason || a_rhs == reason)
 					return reason;
 			return Ineligible::None;
+		}
+		/**
+		 * @brief T7c0: whether a BSOrderedNode above a_leaf orders its draws (UnsupportedParent): its passes are blended. The node's
+		 * OnVisible (0x141503970) opens a new group of the culling process (+0x301f0) and culls its children into it (AppendVirtual);
+		 * the list process registers each group's geometries with the group (ProcessJob, 0x140e28af0: the accumulator's vfuncs 0x140
+		 * and 0x148 around FUN_1414b2140), and the main modes' registration (FUN_1414b2330) gives the group only to a hint 1 pass
+		 * (blended: FUN_1414f50b0 into the group's list). Every other pass (an opaque one's hint 0 through RegisterPass, the decal
+		 * groups) goes where it would under any node, so an opaque leaf is drawn in the normal opaque path and is DCLF's like any.
+		 * A blended leaf AlphaBlend's static verdict rejects first; what passes it (a blended decal; T7d's blended Lighting) stays.
+		 */
+		inline bool OrderedLeaf(const SceneCapture::LeafView& a_leaf)
+		{
+			const auto* lighting = SceneCapture::LeafView::Lighting(a_leaf.property);
+			return a_leaf.AlphaBlending() || (lighting && lighting->materialAlpha < 1.0f);
 		}
 		// The frame's globals (kPSFrameGeometry, kVSEyePosition: LightingConstants.h). EyePosition is written only for some
 		// passes (WritesEyePosition); every other pass leaves whatever the constant buffer last held there, which no draw
@@ -607,7 +623,8 @@ namespace DCLF
 		 * (the engine's cascade draws with DCLF on) and reverse engineered per reason:
 		 * - Technique: the lighting technique is outside the main pass's set (the terrain's landscape blocks);
 		 *   a shadow view draws the Utility technique, which ShadowUtilityTechnique derives from the property.
-		 * - UnsupportedParent: under a BSOrderedNode (hay), which orders blended draws and nothing else.
+		 * - UnsupportedParent: a blended leaf under a BSOrderedNode (OrderedLeaf), which orders blended draws and nothing else
+		 *   (T7c0: an opaque one is main-phase eligible).
 		 * - MultiIndex: a BSMultiIndexTriShape, whose shadow passes draw as a tri-shape's (ClassifyStatic).
 		 * Not a billboard: NiBillboardNode turns to the culling camera, which for a shadow view is the light's.
 		 */

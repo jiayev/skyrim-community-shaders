@@ -45,6 +45,11 @@ namespace DCLF
 	std::function<void(org::runtime::IUploadService&)> IndirectDraws::PrepareFrameUploads() { return {}; }
 	void IndirectDraws::DropFrameUploads() {}
 	void IndirectDraws::KickFadeWriteBack() {}
+	void IndirectDraws::KickVisibilityReadback() {}
+	void IndirectDraws::WriteAccumulated(bool, const std::function<bool(const void*)>&) {}
+	void IndirectDraws::NoteCameraCut(std::uint32_t) {}
+	void IndirectDraws::RequestAccumulatedRefresh() {}
+	std::string IndirectDraws::VisibilityReport() { return {}; }
 	bool IndirectDraws::DecideTreeLod() { return false; }
 	void IndirectDraws::CaptureReflectionFace() {}
 	void IndirectDraws::ReflectionFaceCamera(const RE::NiCamera&, std::uint32_t) {}

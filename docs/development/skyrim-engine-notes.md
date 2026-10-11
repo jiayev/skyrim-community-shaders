@@ -1342,6 +1342,209 @@ Reverse engineered 2026-10-09 (Ghidra, AE); DCLF's port is `Engine/PortalViews` 
     `ShadowSceneNode`'s call it directly. `NiAVObject::Cull` (`0x140d1c570`) skips a hidden object (flag bit 0), else
     calls the process's `Process1` (vfunc `0xB0`).
 
+## Engine side effects of the culls (T7a)
+
+Reverse engineered 2026-10-11 (Ghidra, AE 1.6.1170) for DCLF's T7 stage, which stops the engine's scene culls
+(`DrawWorld_BuildSceneLists`, the list jobs' `Process1`, the registrations). Method: every instruction in `.text` that
+tests, sets or clears bits 20, 22 or 26 of `NiAVObject::flags` (`+0xF4`), as an immediate on the field or on a register
+loaded from it, plus every reference to `gFrameCounter` (`0x14328cc6c`). Items marked *unverified* were not confirmed.
+
+### Writer/reader table
+
+| State | Writer (address, function) | Reader (address, function) | Meaning | If the scene cull stops |
+| --- | --- | --- | --- | --- |
+| `kNotVisible` (bit 20), actor 3D roots | `0x140729ba3`, `0x140729bb2` `HighActorCuller::Operate` (no 3D bound, or the occluder test `FUN_1414a8ba0` fails); `0x1414e9af0` set / `0x1414e9b02` clear `BSFadeNodeCuller::Process1` (6-plane frustum; also sets bit 12, preprocessed). Run from `FUN_1406452c0` (Main::Draw's camera setup, `0x1406453db`) over the high actors, gated by `bPreCullActors:General` (`0x142012a18`) | `0x1406a37b4` `Actor::ModifyAnimationUpdateData`; `0x14069eaab` `0x14069ea90` (Ghidra names it `Actor::UpdateFadeSettings`; it sets `bhkCharacterController` flag `0x40000`); `0x14077105b` `FUN_140771000` (`Job_Ragdoll_post_physics`: IK/look-at only when visible); `0x140776744` `UpdateRagdollPostPhysics`; `0x140771670` `FUN_140771520` (actor update: detection/process update gated on visible or `Main::IsRoomVisible`); `0x1407644db` `FUN_140764310` (VATS); `0x14064d481` `FUN_14064d3b0` (visible high actors sorted by distance, same Main::Draw step); `BSCullingProcess::Process1` (`0x140e28390`) and `BSParabolicCullingProcess::Process1` (a bit-12 node is culled when bit 20 is set, without a test); `0x1414c95c8` `FUN_1414c9560` (*unverified*: picks a random visible node) | the actor pre-cull's "off screen" | **nothing**: not a scene-cull write. It needs the main camera (`Process1`'s frustum set up in Main::Draw before the lists) and the occluder states that `Main::Update` resets |
+| `BSShaderProperty::lastAccumulatedFrameCount` (`+0x80`) | `0x1414b2aef` `FUN_1414b2a60` (render modes `0xC`-`0x11`: the depth prepass accumulator `0x14338c828` and the shadow maps); `0x1414b2924` `FUN_1414b2810` (modes `0x12`, `0x13`); `0x1414b27bc` `FUN_1414b2790` (mode `0x17`). The main modes (`FUN_1414b2330`, 0-11) do not write it | `0x1406a37ef` `Actor::ModifyAnimationUpdateData` (only for a `kNotVisible` root without race flag bit 7: visible when `gFrameCounter - skin property +0x80 < fMaxFrameCounterDifferenceToConsiderVisible:Animation`, default 0.0667, so in effect equal; the skin property is `MiddleHighProcessData +0x178`); `BSLightingShaderProperty::GetRenderPasses_ShadowMapOrMask` (`0x1414af0fb`) and `BSGrassShaderProperty::GetRenderPasses_LocalMap` (`0x1414afb9a`): a stale stamp empties the property's pass queue (`FUN_14147b7e0`) | "this property was registered this frame" | the depth prepass's registration stops stamping, so an off-screen actor that still casts shadows keeps the stamp only from the shadow registrations; the actor branch is reached only when `kNotVisible` is set, which DCLF does not change. The pass-queue reset is self-contained (no registration, no `GetRenderPasses`) |
+| `kRenderUse` (bit 22) | set: `0x1414a30b8` `BSGeometry::sub` (`0x1414a2fc0`), `0x1414a335c` `FUN_1414a31f0`, `0x1414a344c` `FUN_1414a33e0` (the `ShadowSceneNode` light assignment, after `FUN_1414fcea0` finalizes the geometry's light data), `0x140dd45a5` `BSStripParticleSystem::Do_UpdateSystem`; kept/cleared: `0x140d47c6d`/`0x140d47c73` `NiGeometry::UpdateWorldBound`, `0x140d37ef1`/`0x140d37ef7` `BSDynamicTriShape::UpdateWorldBound` (cleared when the bound moved) | those two `UpdateWorldBound`s; `0x1402cf1ec` `FUN_1402cf080` (on a fade root, from the managed-nodes update `FUN_1402b41a0`: re-place the reference in its cell, `FUN_1402c43f0(cell, ref, 1, 0)`, then clear at `0x1402cf23f`) | geometry: "light assignment valid for this bound"; fade root: a re-place request (*unverified*: no fade-root setter was found) | **nothing**: no cull writes it |
+| `kAccumulated` (bit 26) | set/clear: `BSCullingProcess::Process1` (`0x140e2854b`/`0x140e28560`, `0x140e2863a`/`0x140e28654`, compound-frustum path), `FUN_140d3ff10` (`0x140d3ffec`/`0x140d40001`, the frustum test), `NiCullingProcess::Process1` (`0x140d40160`/`0x140d40189`), `BSParabolicCullingProcess::Process1` and `FUN_141519fe0` (only with `updateAccumulateFlag`); set on every listed root by `DrawWorld_BuildSceneLists` (`0x14064bef9`, `0x14064c16a`) | `0x140438316` `FUN_1404381e0` (tree wind clock); **`0x1402cff98` `FUN_1402cff60`**, the animated-reference visibility test used by `UpdateAnimationJob` (`0x1402c73f6`) and the managed-nodes update (`FUN_1402b41a0`, `0x1402b4230`; `FUN_1402b52e0`); **`0x141509571`/`0x1415095d2` `FUN_141509520`, `0x141509646` `FUN_141509620`, `0x14150a87e`, `0x14150a9b5`, `0x14150aa1f` `FUN_14150a840`**, the light receiver gathering under `FUN_1414a2530` | "passed the last cull" | animated references (controllers, managed nodes) stop updating unless fading; **dynamic lights** (`BSLight +0x46`) stop collecting receivers; trees' wind stops |
+| `BSMultiBoundShape +0x10` (cull result 0 stale, 1 in, 2 out) and `BSMultiBoundNode::lastAccumTime` | `BSMultiBoundNode::OnVisible` (`0x140e2d710`), any process with cull mode other than 1 and 3 | the same frame's later culls; `FUN_140437e50` (`0x140437e50`, tree manager in `Main::Update`): a tree is visited only when its multibound's result is 1 | per-frame multibound cache | the tree list's distance/LOD loop skips every tree (the list was empty at Riverwood) |
+| Portal graph entry (`list process 0 +0x30190`) | `FUN_1401a43c0` (`Main::Update`, the walk); `DrawWorld_BuildSceneLists` (`BSPortalGraphEntry::ClearVisibility` with no graph, and `AddVisibilityToMap` for each crossed portal's shared node) | `Main::IsRoomVisible` (`0x140649f20`) from the managed-nodes update (`0x1402b4268`), `Actor::UpdateRefLight` (`0x1402e1282`) and `FUN_140771520` (`0x140771687`); the shadow caster selection (`CalculateActiveShadowCasterLights`, `FUN_140e14300` on it); the scene list jobs | "which rooms and portal shared nodes the main camera sees" | the shared-node entries stop being added: `IsRoomVisible` of a `BSPortalSharedNode` turns false, and references under it stop animating. The room walk itself is `Main::Update`'s |
+| Fade/LOD state (`+0x130`, `+0x13C`, `+0x140`, `+0x144`/`+0x148`, `+0x14C`, `+0x152`/`+0x153`, flags 14/15/27) | the three `OnVisible`s ("Fade state"); also **`FUN_1402cff60`**, which calls `FUN_14147a160` itself for a non-accumulated, unsettled fade root, and the placement snap `FUN_14147aa20` | `GetRenderPasses` (`+0x144`), the Lighting shader's fade, `FUN_1402cff60` (`+0x130 > 0`), `HighActorCuller::Operate` (actor root `+0x130`, flag bit 2 of `Actor +0x274`), `BSTreeNode` LOD (`+0x153`, `+0x14C`), the fade and LOD functions themselves (`+0x13C`) | fade and leaf/tree LOD | fades freeze; animated references then re-run the fade update from `FUN_1402cff60` |
+| Light receivers (`BSLight` lists, the geometry's light data and `activeLightMask`) | `FUN_1414a1540` per `ShadowSceneNode` from `FUN_1414a2170` (Main::Draw, after the list build, before the cull jobs) and `CalculateActiveShadowCasterLights` (`0x1414cc7c9`), through `FUN_1414a2530` → `FUN_1414a7150` / `FUN_1414a6400` | the main and shadow registrations, the Lighting shader | a dynamic light takes a geometry only when it is `kAccumulated`, `kAlwaysDraw` (bit 11), or the light is on an object (`+0x130`): the previous frame's cull | dynamic lights light nothing the engine still draws |
+
+### `Main::IsRoomVisible` and its callers (T7b3)
+
+`Main::IsRoomVisible(main, node)` (`0x140649f20`, RELOCATION_ID 35608/36618) returns true in these cases:
+
+-   no node;
+-   the node is neither a `BSMultiBoundRoom` nor a `BSPortalSharedNode` (two `GetRTTI` calls);
+-   there is no portal-graph entry (`*0x14338c8a0 +0x30190`, the scene lists' first process).
+
+Otherwise the answer is the entry's visibility map (`FUN_140e14460`, a lookup under the read lock `0x1432846c8`). A
+shared node that is not in the map is also visible when its portal (`+0x140`) has its entrance or exit room
+(`+0x118`, `+0x120`) in the map.
+
+**What fills the map.** The walk (`FUN_1401a43c0`, `Main::Update`, after the actor updates) clears it
+(`ClearVisibility`) only when there is a graph. `Traverse` (`FUN_1414a41e0`) then adds each room it reaches, and each
+portal it crosses as the portal's shared node, with an empty frustum. `DrawWorld_BuildSceneLists`, in `Main::Draw` in
+the same frame, adds the shared node of every portal of each room on `multiBoundRoomAccumList`
+(`BuildSharedCompoundFrustum`), so nothing arrives a frame late. Before the lists those shared nodes answer through
+their portal's room. With no graph, the lists clear the map instead.
+
+**Callers.** These are the only direct calls; the other references are chained unwind entries. Each passes the parent
+(`+0x30`) of a reference's 3D.
+
+-   `0x1402b4268` in `FUN_1402b41a0`, the managed-nodes update: `UpdateManagedNodesJob` and `UpdateAnimatedRefsJob`
+    from `Job_Cell_animations`. It is reached only after `FUN_1402cff60` passes, and false skips the node's update.
+-   `0x1402e1282` in `Actor::UpdateRefLight`, a virtual function: false skips the reference's light extra.
+-   `0x140771687` in `FUN_140771520`, the actor update: only when the 3D is not `kNotVisible`; it feeds the
+    detection and process update gate.
+
+### Routes that do not go through the scene lists
+
+-   **`ShadowSceneNode` children** (set in the world's init, `FUN_140643060`, `SetAt` vfunc `0x1E0`): 0-3 there, 5 the
+    `BSParticleSystemManager` (`0x140643b23`), 6 the grass root (`GrassManager::ctor`, `0x1402010c0`, `kAlwaysDraw`).
+    The lists take children 0 and 1 and child 2's first four children (the extra list) and child 3 (the object
+    root). So **particles and grass are not in the lists**; their main-camera cull was not found (*unverified*).
+-   **Water** is in the lists (cell category 6, and the water system's node in list 0 for interiors). Its reflections
+    use the water system's own processes (`FUN_140644f60`, `0x14338c648`).
+-   **First person** has its own cull (`Main::unk_FPCulling`, `0x140645d30`: process `0x14338c640`, accumulator
+    `0x14338c820`, the first-person root unhidden around it).
+-   **`BSFadeNodeCuller::Process1`** and **`HighActorCuller`** are separate cullers and keep running.
+-   **Not written by any cull:** `kRenderUse`, `kNotVisible`, face morphing, the skin palette.
+
+### What DCLF must produce before the culls stop
+
+1.  `kAccumulated` on every root and geometry it found visible last frame (the GPU visibility readback), or at least
+    on animated references, trees and the receivers of dynamic lights.
+2.  The `BSPortalSharedNode` entries of the main portal graph entry (`AddVisibilityToMap`), or a hook on
+    `Main::IsRoomVisible` answered from `PortalViews`.
+3.  The multibound cache result for tree multibounds (or `FUN_140437e50`'s list ported).
+4.  Fade/LOD write-back for every root, and a check that `FUN_1402cff60`'s second fade update does not double-step a
+    root DCLF fades.
+5.  Light receivers for dynamic lights if any engine-drawn residue or engine reader of the lights' lists remains.
+
+### T7b0: who sets kAccumulated, where the readers look, and when they run
+
+Reverse engineered 2026-10-11 (Ghidra and capstone, AE 1.6.1170). It corrects two T7a rows: the receiver gathering also
+reads the bit in `FUN_14150a610`, and `IsRoomVisible` of a shared node falls back to its rooms.
+
+-   **Which processes set the bit (`updateAccumulateFlag`, `NiCullingProcess +0x11D`).** The base constructor
+    (`FUN_140d3fc90`) stores the dword `+0x11C` = 1, so the flag starts false. Only three places write the byte:
+    -   `FUN_14063eb50` (scene creation) at `0x14063f0be` (`mov word [rbx+0x11C], 0x101`), on every scene-list process
+        (`DAT_14338c8a0[i]`, the main camera's `BSGeometryListCullingProcess`es). Their `Process1` sets and clears the
+        bit on every node it reaches: the listed reference roots, their child nodes, and the geometry.
+    -   The same function at `0x14063f27e`, on the water system's process `0x14338c648` (the main camera, which Main::Update
+        sets up). `FUN_140644f60` -> `FUN_140521c80` culls the water shapes with it.
+    -   `FUN_1414bf9f0` (from `FUN_1414bf320`/`FUN_1414bf510`) copies the cull context's `+0x62` into the static processes
+        `0x14332bda0`/`0x14335bfa0` (mode 0). The context constructor `0x1414bf2b0` zeroes `+0x62`, and none of the
+        17 callers sets it. Mode 1 uses the context's own process: list process 0 in `FirstListAccumulationJob`, and
+        the sun's processes in `FUN_141511f30`, which keep the default.
+
+    So the bit is set by **the main camera's scene-list culls, the water cull, and BuildSceneLists**. These do not set
+    it: the sun (`FUN_141511f30` writes only `+0x11C`, at `0x14151202b`), point-light parabolic culls
+    (`BSShadowParabolicLight::Accumulate`, mode 0), first person (`0x14338c640`, only `+0x11C`, at `0x14063f307`),
+    the cube map, precipitation, the local map (`FUN_140972590`, mode 0), `BSFadeNodeCuller` and `HighActorCuller`.
+    `DrawWorld_BuildSceneLists` sets the bit only on the cell roots (the object root's children, or the interior's
+    `cell3D`: `0x14064bef9`, `0x14064c16a`), never on a reference root.
+-   **Where each reader looks.**
+    -   `FUN_1402cff60(obj)`: `obj` is the reference's 3D root, `ref->Get3D()` (vfunc `0x380`; `0x1402e5770` reads
+        `loadedData +0x68`), in `UpdateAnimationJob` (`0x1402c73f6`), `FUN_1402b52e0` and `FUN_1402b41a0`. The fade
+        node is `obj->AsFadeNode()` (vfunc `0x28`), so it is the same root, or null when the root is not a `BSFadeNode`.
+        The logic:
+        1.  Fade `+0x109 & 0x24`: true.
+        2.  Root bit 26 set: true, unless the fade node's `currentFade` (`+0x130`) <= 0.
+        3.  Otherwise, with root bit 29 set: true only when the fade node's bound radius (`+0xF0`) is 0.
+        4.  Otherwise, a fade node with radius != 0 and fade flags bit 15 clear (not kIgnoreFade) runs
+            `FUN_14147a160(fade, fadeAmount, main camera)` and returns `currentFade > 0`.
+        5.  Anything else: false.
+
+        `FUN_1402b41a0` also asks `Main::IsRoomVisible(root->parent)` unless fade `+0x109` has bit 2 or bit 5 (it clears
+        bit 5 afterwards). It skips roots whose parent is the cell's Dynamic category node (`cell3D` child 4).
+        `UpdateAnimationJob` and `FUN_1402b52e0` skip actors (form type `0x3E`) and trees (base form type `0x26`). They
+        iterate the loaded cell's reference array (`loadedData +0x40`, count `+0x50`) and call `UpdateAnimation(delta)`
+        (vfunc `0x3E8`, `FUN_1402f75a0`). `FUN_1402b41a0` calls the root's vfunc `0x168` (the selective downward
+        update) instead.
+    -   The tree wind clock (`FUN_1404381e0`, `0x140438316`) reads each `BSLeafAnimNode` in the manager's animation list:
+        a node inside the tree's model, not the reference root.
+    -   The receiver gathering reads **every level**, for a dynamic light (`param_4`) that is not on an object
+        (`+0x130`):
+        -   `FUN_141509520`: the node it is given, then that node's geometry;
+        -   `FUN_14150a840`: the `ShadowSceneNode` children's multibound children and their children;
+        -   `FUN_14150a610` (`0x14150a7c2`): each child before recursing into it. Missed by T7a.
+
+        A geometry is collected only when the bit is set on it and on every node above it, from the cell root down. A
+        `kAlwaysDraw` node (bit 11) passes without it.
+-   **Order within a frame.** The serving thread (`JobListManager::ServingThread::Func2`) runs the stage job lists that
+    `SetupJobLists` builds from the table at `0x142011920` (`{function, name}` pairs), in order. Their `JobListEnd` entries
+    synchronise with the main thread through `BSThreadStagesManager` events (group 0: the jobs'; group 1: the main
+    thread's; all reset at `Main::Update`'s start). The stages are `Main update cells`, `update player`,
+    `prepare render`, `render scene`, `render 1st person`, `render end` and `post render`. In Main::Update:
+    1.  `0x14064613f` `FUN_1405fc180` starts the cycle, only when not in a menu or paused. `Main update cells` runs `Job_TES_animation`
+        (`UpdateAnimationJob` batches on job list 7) on workers.
+    2.  `0x140646176` the tree manager `FUN_140437d40` (`FUN_140437e50`, then `FUN_1404381e0`), on the main thread,
+        concurrently with step 1.
+    3.  `0x140646187` `WaitForJobTask(0, 0x18)`: `UpdateAnimationJob` is done. **It never overlaps Main::Draw.**
+    4.  `0x1406466cf`-`0x1406466f9` main events 1-4: `update player` and then `prepare render` run. Their actor
+        animation (`ProcessActorAnimSG` -> `FUN_140771520` -> `IsRoomVisible`) waits on no later main event.
+    5.  `0x1406467f1` the occluder reset, then `0x14064685f` the room walk `FUN_1401a43c0`.
+    6.  `0x140646937` `FUN_140643c00` -> `FUN_140644360` -> Main::Draw (`0x14064447d`):
+        -   `0x140644583` `FUN_1406452c0` (DCLF's BeginSceneFrame, `+0xD3`);
+        -   the `BuildSceneLists` job (queued `0x1406445ff`, begun `0x14064461a`, finished `0x14064462e`), with the
+            water cull `FUN_140644f60` beside it;
+        -   `0x140644644` `FUN_1414a2170`, the light assignment;
+        -   `0x140644674` `CalculateAndDrawShadowCasterLights`: the sun cull (`0x1414cbcb6`), then **main event 5**
+            (`0x1414cbcd4`), then the primary's list cull jobs (`First`/`ListAccumulationJob`, begun `0x1414cbf3c`,
+            alongside `CalculateActiveShadowCasterLights` `0x1414cbf41`, finished `0x1414cbf4d`).
+
+        `render scene`'s `Job_Wait_For_Shadow_Culling` (`0x1406d2800`, `WaitForJobTask(1, 5)`) releases
+        **`Job_Cell_animations`** (`FUN_14019c0f0`). That runs `UpdateManagedNodesJob` (exteriors) or
+        `UpdateAnimatedRefsJob` (interiors), then `FUN_1402b3d90` -> `FUN_1402b41a0`, on workers, concurrently with the
+        primary list culls and the rest of Main::Draw.
+    7.  `0x14064694d` `FUN_1405fc210` waits for the whole cycle, so no stage crosses into the next frame.
+-   **Which frame's bit each reader sees, and the earliest main-thread write it sees in the same frame:**
+
+    | Reader | Sees | Write before |
+    | --- | --- | --- |
+    | `UpdateAnimationJob` | frame N-1's culls | `0x14064613f`. A write between that and `0x140646187` races the workers; a write at BeginSceneFrame is seen in frame N+1, the engine's own lag |
+    | Tree clock `FUN_1404381e0` | frame N-1's | `0x140646176` (main thread) |
+    | Light assignment `FUN_1414a2170` | cell roots N's (BuildSceneLists), everything below N-1's | `0x140644644`: BeginSceneFrame works, before the list job starts |
+    | Shadow-light gathering in `CalculateActiveShadowCasterLights` | mixed: it runs alongside N's list culls | `0x1414cbf41`: BeginSceneFrame works |
+    | Managed nodes (`FUN_1402b41a0` via `Job_Cell_animations`) | mixed N-1/N: from event 5, alongside the list culls that rewrite the roots | `0x1414cbcd4`: BeginSceneFrame works |
+
+    One write at Main::Update's entry (before `0x14064613f`) reaches every reader in the same frame. BeginSceneFrame
+    reaches every reader but the first two, which see it one frame later, as they see the engine's culls. The engine
+    writes the flags word with plain read-modify-writes on job threads (`Process1`). A write while a list cull or
+    `Job_Cell_animations` runs can lose bits, or make the cull lose them.
+-   **`Main::IsRoomVisible` (`0x140649f20`).** It is true for a null node, or any node that is not a `BSMultiBoundRoom`
+    or `BSPortalSharedNode`, or when list process 0's entry (`*DAT_14338c8a0 +0x30190`) is null. Otherwise it looks the
+    node up in the entry's visibility map (`FUN_140e14460`: key a node pointer, value a compound frustum, under the
+    global lock `0x1432846c8`). A shared node that is not in the map is still visible when its portal (`+0x140`) has an
+    entrance (`+0x118`) or exit (`+0x120`) room in the map.
+    -   **Who inserts.** The room walk (`FUN_1414a41e0`, from `FUN_1401a43c0`) inserts the rooms: the start room, and
+        each room reached through a portal. BuildSceneLists (`0x14064c432`, through `BuildSharedCompoundFrustum`,
+        `0x1414a4b1d`) inserts the shared node of every portal of a room in `multiBoundRoomAccumList`. So do
+        `ShadowSceneNode::OnVisible` (`0x1414a0606`) and `BSPortalSharedNode::OnVisible` during the culls. Because of the
+        fallback, losing BuildSceneLists' inserts leaves `IsRoomVisible` of a shared node true while an adjacent room
+        is visible (T7a's "turns false" is wrong). Rooms come only from the walk, which `Main::Update` keeps running.
+    -   **Callers.**
+        -   The managed-nodes update (`0x1402b4268`, workers, after event 5): it sees this frame's walk and BuildSceneLists.
+        -   `FUN_140771520` (`0x140771687`, from `ProcessActorAnimSG` and `FUN_1407394b0`, `prepare render` workers): not
+            ordered against the walk at `0x14064685f`. It can see the last frame's map or a partly rebuilt one.
+        -   `Actor::UpdateRefLight` (`0x1402e1282`, virtual): thread *unverified*.
+    -   **`FUN_140e14300(a, b)`** (`CalculateActiveShadowCasterLights`, `0x1414cc76f`) reads only the entries' room arrays
+        (`+0x18`, count `+0x28`) and `visibleUnboundSpace` (`+0x130`), which the walk writes. It does not use the map,
+        so it needs no shared nodes.
+    -   A `PortalViews`-backed hook needs the rooms the walk would insert. For a shared node, it can answer "either
+        portal room visible".
+-   **The stood-in clear (`SyncFadeOwnership`, `PrimaryCull.cpp:769-790`).** For an admitted, unmixed fade root it clears
+    bit 26 once. No list process reaches the root afterwards (it is out of the lists), and BuildSceneLists and DCLF's
+    `ListUpkeep` set only cell roots, so the bit stays clear. In `FUN_1402cff60` that moves the root from step 2 to
+    steps 3-5:
+    -   Fade `+0x109 & 0x24`: unaffected.
+    -   A fading root (radius != 0, kIgnoreFade clear, bit 29 clear): `FUN_14147a160` runs on the node from the job
+        threads, in `UpdateAnimationJob` and again in the managed-nodes update (the `AnimatedFade` hook observes it).
+        `+0x13C` is no longer refreshed by an `OnVisible`, so the fade snaps to its end rather than stepping. The
+        reference animates whenever `currentFade > 0`: within fade distance it animates on and off screen and does not
+        freeze. But the engine writes the node's fade state again, against DCLF's write-back.
+    -   **A never-fading root (kIgnoreFade, set at attach for references that never fade), a zero-radius one, or one
+        with bit 29**: false. `UpdateAnimation` and the managed-node downward update both stop, so the object
+        (windmill sails, water wheels, flags, Dwemer machinery: any non-actor, non-tree reference in the cell's
+        animated array) **freezes in its last pose** from admission until the entry leaves admission.
+
+    It is an existing defect for the never-fade case. T7b2's live writes (or not clearing the bit) fix it, and a count
+    of admitted roots in the animated array by case (kIgnoreFade vs fading) measures it.
+
 ## The material database: how a material is shared and released
 
 `BSShaderProperty::SetMaterial` (`0x14147bff0`) never stores the material it is given. It asks the material manager
@@ -1618,6 +1821,18 @@ also from the map's `FUN_14050f1b0` (drained to empty).
 | terrain upgrade `0x140512c90` | each child's block (no state test), `0x140512ceb` (`E8 60 68 FF FF`) | `FUN_140510a10(parent, 1)` at `0x140512d57` (`E8 B4 DC FF FF`) |
 | object downgrade `0x140513600` | the parent's block, `0x140513615` (`E8 76 A4 FE FF`); a different old parent handle released | `FUN_140510c20(child, 2)` per child at `0x140513671` (`E8 AA D5 FF FF`), four calls |
 | terrain downgrade `0x140512f40` | the parent's block, `0x140512f55` (`E8 F6 65 FF FF`) | `FUN_140510c20(child, 1)` per child at `0x140512fb1` (`E8 6A DC FF FF`) |
+| object initial load `0x140513740` | the node's own block, `0x140513789` (`E8 02 A3 FE FF`); its handle into the node's `+0x10` first (a different old one released), flags `&= ~0x160`, `\|= 0x80` | none |
+| terrain initial load `0x140513080` | the item's block, `0x140513091` (`E8 BA 64 FF FF`), then its handle into the node's `+0x08`, flags `&= ~0x1A`, `\|= 4` | none |
+
+**The initial loads** (vtables `0x1418690d8` objects, `0x141869030` terrain; `Func2` at `+0x10`). Queued by the per-node
+dispatch `FUN_140513820` -> `FUN_140513ea0` (objects) / `FUN_1405139b0` (terrain) for a node marked unloaded (`0x20` / `2`) when
+neither its parent's level is attached nor any ancestor holds a loaded handle: the first level of an area with nothing above it
+loaded (every node at a worldspace's load; in play, an area coming into LOD range or back after the out-of-range retirement). With
+an ancestor loaded the same dispatch queues an upgrade of that ancestor instead. Neither is queued while `TES` (`0x1431872c8`)
+`+0x137` or `+0x138` is set (the same two bytes refuse a load screen in `FUN_1401a1150`). Under a load screen (`DAT_14315b6a0`,
+set by `FUN_1401a1150(1, ..)` as it opens the "Loading Menu", cleared by its close after one last `FUN_14050e430(.., 1)`: a full
+rebuild) the dispatch first retires the node's subtree (`FUN_140510c20(node, bits)`) and the ancestors up to the manager's level.
+Nothing is retired by the `Func2` itself, and its attach is shown (the update's show stores keep it so).
 
 **Shows and hides**: app-cull, bit 0 of `NiAVObject` `+0xF4`. Objects: `FUN_1405103e0` every update for a node with `0x80` (show at
 `0x140510697`, `AND`; hide at `0x1405106a4`, `OR`). Terrain: `FUN_140510110` -> `FUN_140509b50` (shows `+0x08` and `+0x10`,
@@ -1646,5 +1861,9 @@ swap's retirement call runs `FUN_140510a10` through a detour that takes each loa
 engine skips detach and release); the HiddenStores stubs at the four show stores (`0x140510697`, `0x140509b59`, `0x140509b69`,
 `0x1405117d0`) skip a pending incoming node's show; the render thread's flip stores the app-cull bits; the next drain's head (under
 the lock) detaches and releases the held blocks through the functions above, or only drops the reference when the node references
-the handle again. Everything above that tears the quadtree down flushes the gates first. Known effects of a hold: both terrain
+the handle again. Everything above that tears the quadtree down flushes the gates first. The initial loads' attaches are gated too
+outside a load screen (a gate with no outgoing, emitted right after the attach); under one they pass through (the full rebuild
+flushed every gate before that drain). A held block the engine attaches again (a swap back finds the cached handle) races the flip
+per block: before the flip hides it, it stays shown as the node's current block and the scene is told (a kept notice); after,
+it is the swapping gate's incoming. Known effects of a hold: both terrain
 levels' LOD water registered; a held object block's segments are not refreshed.

@@ -1,5 +1,6 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Internal.h"
+#	include "Features/TerrainBlending.h"
 
 namespace DCLF::Draws
 {
@@ -733,6 +734,16 @@ namespace DCLF
 			state->nativeDepth = ImportImage(device, info.image, depthDesc, "DCLF native depth");
 			if (!state->nativeDepth)
 				return NotReady(11, "the main-pass depth could not be imported");
+			// T7c1: Terrain Blending's terrain depth, a copy of the main depth's description (TerrainBlending::SetupResources), imported
+			// once with the same view formats: the Z-prepass draws the near terrain blocks into it as that feature's depth hook does.
+			if (const auto& terrainBlending = globals::features::terrainBlending; terrainBlending.loaded && terrainBlending.terrainDepth.texture) {
+				DxvkOrgInteropResourceInfo terrainInfo{};
+				if (!RenderGraphRuntime::Get().DescribeResource(terrainBlending.terrainDepth.texture, terrainInfo) || terrainInfo.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
+					return NotReady(12, "Terrain Blending's terrain depth cannot be described");
+				state->terrainDepth = ImportImage(device, terrainInfo.image, depthDesc, "DCLF terrain blending depth");
+				if (!state->terrainDepth)
+					return NotReady(12, "Terrain Blending's terrain depth could not be imported");
+			}
 		}
 
 		// The hierarchical depth buffer.
@@ -929,7 +940,29 @@ namespace DCLF
 			} else if (!next.zBucketFirst.empty()) {
 				draws = std::max(draws, next.zBucketFirst.back() + next.zBucketCapacity.back());
 			}
-			const auto buckets = static_cast<std::uint32_t>(next.zBucketCapacity.size());
+			// T7c1: a terrain group 1 slot's bucket has a twin as large for its near blocks (PlanZBuckets), in the same phase ranges and
+			// with a count word and table entry of its own; and the colour segment's terrain groups take ranges of phase 2's (GpuLayouts.h,
+			// kTerrainGroups), each holding every draw its slots can produce - kept while they fit and grown to a power of two past them,
+			// like a bucket, so that the calls recorded over them change only then.
+			std::uint64_t terrainTwins = 0, terrainSlots = 0;
+			std::array<std::uint64_t, kTerrainGroups> terrainDraws{};
+			for (std::uint32_t p = 0; p < slots && p < a_tables.pipelines.size(); ++p) {
+				const std::uint32_t group = RasterTerrainGroup(a_tables.pipelines[p].rasterFlags);
+				if (!group)
+					continue;
+				terrainDraws[group - 1] += drawBound.PipelineDraws(p);
+				if (group == 1) {
+					terrainTwins += next.zBucketCapacity[p];
+					++terrainSlots;
+				}
+			}
+			for (std::uint32_t g = 0; g < kTerrainGroups; ++g)
+				if (terrainDraws[g] > next.terrainCapacity[g])
+					next.terrainCapacity[g] = static_cast<std::uint32_t>(std::bit_ceil(std::min<std::uint64_t>(terrainDraws[g], 1u << 31)));
+			const std::uint64_t phaseDraws = (next.zBucketFirst.empty() ? 0ull : std::uint64_t(next.zBucketFirst.back()) + next.zBucketCapacity.back()) + terrainTwins;
+			const std::uint64_t terrainRange = std::uint64_t(next.terrainCapacity[0]) + next.terrainCapacity[1];
+			draws = static_cast<std::uint32_t>(std::min<std::uint64_t>(std::max<std::uint64_t>({ draws, phaseDraws, terrainRange }), UINT32_MAX));
+			const auto buckets = static_cast<std::uint32_t>(next.zBucketCapacity.size() + terrainSlots);
 			if (buckets > next.zBucketCountWords) {
 				next.zBucketCountWords = Doubled(std::max(next.zBucketCountWords, 64u), buckets);
 				for (auto& counts : r.zBucketCounts)
@@ -1090,6 +1123,27 @@ namespace DCLF
 				writeBack->next = std::make_unique<std::atomic<std::shared_ptr<org::Buffer>>[]>(slots);
 				writeBack->capacity.store(buffers->fadeEventCapacity, std::memory_order_release);
 				buffers->fadeWriteBack = std::move(writeBack);
+			}
+			// T7b1/T7b2 (the normal path: T7b2 writes the stood-in roots' kAccumulated from it): the visibility events, each root's and
+			// object slot's reported verdict, and the readback's staging set for the list (VisibilityReadback: a host buffer per frame
+			// slot; a growth adds the next list's).
+			if (auto* host = RenderGraphRuntime::Get().Host()) {
+				buffers->visibilityEventsProgram = ComputeProgram::Load(a_device, { .source = kVisibilityEventsShader, .constantWords = kVisibilityEventsConstantWords });
+				if (buffers->visibilityEventsProgram) {
+					buffers->visibilityEventCapacity = smallStart ? 4u : kInitialVisibilityEvents;
+					buffers->visibilityEvents = MakeVersioned(CreateWords(VisibilityEventBytes(buffers->visibilityEventCapacity) / 4, true, "cs.dclf.visibility-events"));
+					buffers->visibilityRootReported = MakeVersioned(
+						StructuredBuffer(buffers->fadeRootCapacity, 2 * sizeof(std::uint32_t), "cs.dclf.visibility-root-reported", unused, true));
+					buffers->visibilityObjectReported = MakeVersioned(
+						StructuredBuffer(buffers->objectCapacity, sizeof(std::uint32_t), "cs.dclf.visibility-object-reported", unused, true));
+					auto readback = std::make_shared<VisibilityReadback>();
+					readback->frameSlots = host->FrameSlots();
+					readback->armed.resize(readback->frameSlots);
+					readback->AddSet(buffers->visibilityEventCapacity);
+					buffers->visibilityReadback = std::move(readback);
+				} else {
+					logger::warn("[DCLF] The visibility events program could not be created; the stood-in roots' kAccumulated is not written (T7b2)");
+				}
 			}
 		} else {
 			logger::warn("[DCLF] The fade state program could not be created; fades stay the CPU's");
@@ -1265,10 +1319,15 @@ namespace DCLF
 				consequences.push_back(std::move(a_adopted));
 		};
 		grow("object records", next.objectCapacity, a_tables.objects.size(), sizeof(BindlessObject),
-			[&](std::uint32_t a_rows, auto& a_parts) { a_parts.push_back({ s.objects, a_rows }); },
+			[&](std::uint32_t a_rows, auto& a_parts) {
+				a_parts.push_back({ s.objects, a_rows });
+				if (s.visibilityObjectReported)
+					a_parts.push_back({ s.visibilityObjectReported, a_rows });
+			},
 			[&s] {
 				s.objectsIndex = s.objects->Get()->GetSRVInfo(0).slot.index;
 				s.held.objects = 0;
+				s.visibilityReportedZeroed = false;
 			});
 		// The slots, then one row per face stream (AppendFaceStreams).
 		grow("geometry rows", next.geometryRows, a_tables.geometries.size() + a_tables.faceStreams.size(), sizeof(GeometryDraw),
@@ -1311,6 +1370,8 @@ namespace DCLF
 						a_parts.push_back({ *buffer, a_rows });
 					if (s.fadeReported)
 						a_parts.push_back({ s.fadeReported, a_rows });
+					if (s.visibilityRootReported)
+						a_parts.push_back({ s.visibilityRootReported, a_rows });
 					for (std::uint32_t h = 0; h < 2; ++h)
 						a_parts.push_back({ s.fadeStatesOut[h], a_rows });
 				},
@@ -1322,6 +1383,7 @@ namespace DCLF
 					s.fadeRootProgramsHeld = ~0ull;
 					s.fadeStatesOutZeroed = false;
 					s.fadeReportedZeroed = false;
+					s.visibilityReportedZeroed = false;
 				});
 		}
 		// The portal programs, to the most a frame's encoding holds (the next frame's, if this one's outgrew them).
@@ -1338,6 +1400,16 @@ namespace DCLF
 					for (std::size_t i = 0; i < writeBack.readback.size(); ++i)
 						writeBack.next[i].store(org::Buffer::CreateShared(rhi::HeapType::Readback, FadeWriteBack::BytesFor(s.fadeEventCapacity)), std::memory_order_release);
 				});
+		}
+		// T7b1's event list, to the most a batch had past it (the slots it left out append again), with the staging set the revisions
+		// sized for it copy into (made here, before any revision names the capacity).
+		if (s.visibilityEvents && s.visibilityReadback) {
+			grow("visibility events", next.visibilityEventCapacity, s.visibilityReadback->wanted.load(std::memory_order_acquire), sizeof(VisibilityEvent),
+				[&](std::uint32_t a_rows, auto& a_parts) {
+					a_parts.push_back({ s.visibilityEvents, static_cast<std::uint32_t>(VisibilityEventBytes(a_rows) / 4) });
+					s.visibilityReadback->AddSet(a_rows);
+				},
+				nullptr);
 		}
 		// Tree LOD's tables, by the mirror's shape and mesh slots. A new backing holds nothing: every slot and mesh again.
 		if (s.treeLodCull) {
