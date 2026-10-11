@@ -593,6 +593,16 @@ namespace DCLF::SceneCapture
 			for (const void* property : { g.property, g.layerProperty, g.alpha })
 				if (property)
 					a_pins->emplace_back(static_cast<RE::NiRefObject*>(const_cast<void*>(property)));
+		// T6b3e: the property's fade node too (the scene work's tree and fade-root owners are copies of the entry's: Tracked::fadeNodeRef),
+		// pinned only when it is on the geometry's chain now (the property's field names the BSFadeNode above it; one off the chain is not
+		// known to be alive here).
+		if (a_pins && g.property)
+			if (const auto* fadeNode = static_cast<const RE::BSShaderProperty*>(g.property)->fadeNode)
+				for (const RE::NiAVObject* at = a_geometry.parent; at; at = at->parent)
+					if (at == fadeNode) {
+						a_pins->emplace_back(const_cast<RE::NiAVObject*>(at));
+						break;
+					}
 		// T6b2a: a Lighting property's material, for the scene work's records (the property holds it here): an attach's or a swap's
 		// (a_pins). A material shared by several leaves is pushed by each; the scene work keeps the newest.
 		auto pushMaterial = [&](const PropertyRecord& a_property) {

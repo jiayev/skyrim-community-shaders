@@ -161,7 +161,8 @@ namespace DCLF
 	{
 		// TexcoordOffset: the frame reads one of a material's two buffers (FrameGlobals' textureTransformBuffer, flipped every frame by
 		// Main::Update), and a controller's write captures it (MaterialSources). A material is watched from its capture or keying until two
-		// passes have gone and both buffers agree; meanwhile its slots take the frame's buffer.
+		// frames have gone (T6b3d: frames, not passes - the buffer flips once a frame) and both buffers agree; meanwhile its slots take the
+		// frame's buffer.
 		auto& r = materialRecordStats;
 		const std::uint32_t buffer = FrameGlobals::Current().material.vanilla.textureTransformBuffer & 1;
 		r.transformsWatched += transformWatch.size();

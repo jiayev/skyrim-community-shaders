@@ -8,51 +8,6 @@ namespace DCLF
 		return store;
 	}
 
-	void SceneStore::Clear()
-	{
-		placementPlan.reset();
-		placementPlanReady.reset();
-		tracked.clear();
-		ClearFaceShapes();
-		++trackedLayout;
-		sceneIdentity.Reset();
-		categoryNodes.clear();
-		nodeSetsDirty = true;
-		categoryAppliedGeneration.store(0, std::memory_order_release);
-		alwaysRenderRoots.clear();
-		ResetSlotTables();
-		InvalidateObjectIndices();
-		// They hold raw pointers into game allocations now that they outlive the frame, so the teardown
-		// paths have to drop them rather than leave them to the next BuildFrame.
-		geometryIndex.clear();
-		pipelineIndex.clear();
-		materialIndex.clear();
-		validationCursor = 0;
-		fullEvaluation = true;
-		perFrameSet.clear();
-		pendingEvaluation.clear();
-		memberDecals.clear();
-		NoteDecalsCleared();
-		fadeChanged.clear();
-		fadeDependents.clear();
-		fadeRootOwned.clear();
-		propertyChanged.clear();
-		nodeChanged.clear();
-		dirtyRoots.clear();
-		propertyDependents.clear();
-		rootDependents.clear();
-		lightDependents.clear();
-		lightEntryChanges.push_back({ nullptr, 0 });
-		ReleaseRootOwners();
-		rootReference.clear();
-		referenceRoot.clear();
-		rootMotion.clear();
-		movingRoots.clear();
-		hiddenDependents.clear();
-		DropSunCandidates();
-		buckets = {};
-	}
-
 	std::int32_t SceneStore::FindObject(const RE::BSGeometry* a_geometry) const
 	{
 		GuardFrameAccess("FindObject");

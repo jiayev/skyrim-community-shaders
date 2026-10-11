@@ -1,6 +1,9 @@
 #include "SceneTracker.h"
 
 #include "PrimaryCull.h"
+#include "Features/DrawcallLimitFix/Common/SceneWake.h"
+
+#include <chrono>
 
 namespace DCLF
 {
@@ -190,9 +193,55 @@ namespace DCLF
 
 	void SceneTracker::Push(Event* a_event)
 	{
+		// T6b3d: stamped for the latency histograms (the scene pump's), then the pump woken for what moves latency (the source decided
+		// before the push: the event is the consumer's after it): an attach in the world, a detach, a hidden bit, a leaf swapped, a
+		// property's or an alpha's values (WakeScenePass holds these during the frame's render). A node's or a geometry's values
+		// (transforms, the cull's fade state, a switch's index, segments) wake nothing: the frame's next pass takes them.
+		SceneWake source = SceneWake::Count;
+		switch (a_event->type) {
+		case EventType::Attached:
+			// In the world alone (its capture: CaptureAttached captures only what is): a loader's subtree attached out of the world wakes
+			// nothing (w130: 488 of 827 attach passes changed nothing); its world attach does. The event still goes to the mirror.
+			if (a_event->captured)
+				source = SceneWake::Attach;
+			break;
+		case EventType::Detached:
+			source = SceneWake::Detach;
+			break;
+		case EventType::Updated:
+			if (a_event->update.hiddenSite != ~0u)
+				source = SceneWake::Hidden;
+			else if (a_event->update.leaf)
+				source = SceneWake::Leaf;
+			else if (std::holds_alternative<SceneCapture::PropertyRecord>(a_event->update.record))
+				source = SceneWake::PropertyUpdate;
+			else if (std::holds_alternative<SceneCapture::AlphaRecord>(a_event->update.record))
+				source = SceneWake::AlphaUpdate;
+			break;
+		}
+		// Only what wakes is stamped: the latencies measure what is meant to reach the frame at once, not what the frame's own pass takes.
+		if (source != SceneWake::Count) {
+			a_event->stampNs = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			a_event->stampFrame = SceneCapture::Frame();
+		}
 		a_event->next = head.load(std::memory_order_relaxed);
 		while (!head.compare_exchange_weak(a_event->next, a_event, std::memory_order_release, std::memory_order_relaxed)) {
 		}
+		if (source != SceneWake::Count)
+			WakeScenePass(source);
+	}
+
+	void SceneTracker::PushCaptured(Event* a_event, bool a_fillOnly)
+	{
+		if (!a_event)
+			return;
+		if (stopped.load(std::memory_order_acquire)) {
+			delete a_event;
+			return;
+		}
+		a_event->mirrorOnly = true;
+		a_event->mirrorFill = a_fillOnly;
+		Push(a_event);
 	}
 
 	void SceneTracker::Stop()

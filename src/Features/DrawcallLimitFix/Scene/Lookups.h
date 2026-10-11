@@ -243,6 +243,12 @@ namespace DCLF
 		std::uint32_t pipelineSetGeneration = ~0u;
 		// The shadow set generation the indices above are of (PipelineCatalog::shadowGeneration, the catalog published with them).
 		std::uint32_t shadowSetGeneration = ~0u;
+		// The shadow views' modes and rasterizer states the shadow pipelines above were resolved for (IndirectDraws' ShadowLookupInputs, as
+		// the frame's start posted them; null: no shadow view drawn), immutable: what the set commit's shadow readiness reads
+		// (IndirectDraws::PhaseReady), never the render thread's own lists. shadowInputsSerial moves whenever they are replaced (unique
+		// across instances: IndirectDraws::ResolveLookups), which takes the set's members and waiting slots again (SceneStore::CommitSet).
+		std::shared_ptr<const void> shadowInputs;
+		std::uint64_t shadowInputsSerial = 0;
 		// The builds' kept bindings (IndirectDraws' PersistentBindings) key on versions rather than on the entries: a
 		// pipeline's and a material's own (Pipeline::version, Material::version), and this one for the entries every
 		// record reads (the null texture, the samplers, the projected textures). Unique across all of them.

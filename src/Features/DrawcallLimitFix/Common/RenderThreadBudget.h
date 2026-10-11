@@ -24,7 +24,8 @@ namespace DCLF
 	public:
 		enum class Bucket : std::uint8_t
 		{
-			Accept,          // taking the newest publication
+			Exchange,        // T6b3d: the frame's start's exchange with the scene: the snapshot taken and adopted, its publication installed
+			SceneCaptures,   // T6b3d: the frame's start's engine captures and requests for the scene (globals, categories, mirror, switches)
 			Capture,         // copying state only the render thread can read: D3D11 bindings, constant mirrors, view state
 			Submit,          // ORG's submission proper: the ticket, the queue submission, the stream's close
 			OrgOverhead,     // ORG's other render-thread work in an epoch: releases, the ticket's check, upload recording, flushes

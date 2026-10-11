@@ -39,6 +39,7 @@ namespace DCLF
 	void IndirectDraws::PostLookupInputs() {}
 	void IndirectDraws::ResolveLookups(const void*, const PipelineCatalog*, Lookups&, LookupsResolveState&) {}
 	void IndirectDraws::PostSnapshotWork(std::shared_ptr<const void>) {}
+	void IndirectDraws::NoteEventAdoption(double, std::uint32_t) {}
 	std::shared_ptr<const void> IndirectDraws::AdoptSnapshot(std::uint32_t) { return nullptr; }
 	void IndirectDraws::PostAheadContext() {}
 	std::function<void(org::runtime::IUploadService&)> IndirectDraws::PrepareFrameUploads() { return {}; }
@@ -50,6 +51,7 @@ namespace DCLF
 	std::uint32_t IndirectDraws::ReflectionRootsOwned(bool) { return 0; }
 	void IndirectDraws::PrepareReflection() {}
 	bool IndirectDraws::ReflectionDrawable() const { return false; }
+	bool IndirectDraws::ReflectionSlotReady(const void*, const PipelineCatalog*, std::uint32_t) const { return false; }
 	void IndirectDraws::ExecuteReflection() {}
 	std::string IndirectDraws::ReflectionReport() { return {}; }
 	void IndirectDraws::NoteRevisionInputs() {}

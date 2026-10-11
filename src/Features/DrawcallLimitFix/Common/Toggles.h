@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <utility>
 
 namespace DCLF
 {
@@ -133,6 +134,27 @@ namespace DCLF
 		std::atomic<std::uint32_t> generation{ 0 };
 	};
 
-	/** @brief The toggles in force for the current frame (Toggles::Active); any thread. */
-	inline ToggleSet ActiveToggles() { return Toggles::Get().Active(); }
+	/**
+	 * @brief T6b3e: a thread's snapshot of the active set, which ActiveToggles reads in its place while installed (ToggleSnapshotScope):
+	 * a scene pass's evaluations read the set the pass took at its start on whichever thread they run, though the render thread may
+	 * change the active one meanwhile.
+	 */
+	inline thread_local const ToggleSet* activeToggleSnapshot = nullptr;
+
+	/** @brief The toggles in force for the current frame (Toggles::Active), or this thread's snapshot of them (T6b3e); any thread. */
+	inline ToggleSet ActiveToggles() { return activeToggleSnapshot ? *activeToggleSnapshot : Toggles::Get().Active(); }
+
+	/** @brief T6b3e: a_set is this thread's ActiveToggles while the scope lives (null: the active set). */
+	class ToggleSnapshotScope
+	{
+	public:
+		explicit ToggleSnapshotScope(const ToggleSet* a_set) :
+			previous(std::exchange(activeToggleSnapshot, a_set)) {}
+		~ToggleSnapshotScope() { activeToggleSnapshot = previous; }
+		ToggleSnapshotScope(const ToggleSnapshotScope&) = delete;
+		ToggleSnapshotScope& operator=(const ToggleSnapshotScope&) = delete;
+
+	private:
+		const ToggleSet* previous;
+	};
 }

@@ -8,7 +8,8 @@ namespace DCLF
 {
 	namespace
 	{
-		constexpr const char* kBucketNames[] = { "accept", "capture", "submit", "ORG overhead", "engine boundary", "other" };
+		constexpr const char* kBucketNames[] = { "scene exchange (snapshot taken and adopted)", "scene captures (globals, categories, mirror, switch catch-ups)",
+			"capture", "submit", "ORG overhead", "engine boundary", "other" };
 		constexpr const char* kSiteNames[] = { "Present", "scene frame", "BeforeShadowMaps", "AfterShadowMaps (shadow epoch)", "shadow view capture",
 			"occlusion", "EarlyPrepass", "Prepass", "Z-prepass", "BeforeOpaquePass", "AfterOpaquePass (colour epoch)", "reflection face" };
 		static_assert(std::size(kBucketNames) == static_cast<std::size_t>(RenderThreadBudget::Bucket::Count));

@@ -42,6 +42,7 @@ namespace DCLF
 
 	void SceneMirror::Apply(const Records& a_records)
 	{
+		++writes;
 		ApplyCapture(a_records);
 		if (replaying || !a_records.sequence)
 			return;
@@ -120,6 +121,7 @@ namespace DCLF
 
 	void SceneMirror::Detach(const void* a_root, std::span<RE::BSGeometry* const> a_geometries, std::span<const void* const> a_nodes)
 	{
+		++writes;
 		++detached;
 		// The root leaves its parent's children (the engine's detach, which the hook ran before): its slot null, the trailing nulls
 		// trimmed (the capture's).
@@ -148,6 +150,7 @@ namespace DCLF
 
 	void SceneMirror::Evict(const void* a_key, std::string_view a_what)
 	{
+		++writes;
 		const auto* root = Node(a_key);
 		if (!root)
 			return;
@@ -214,6 +217,7 @@ namespace DCLF
 
 	std::pair<std::uint8_t, const void*> SceneMirror::Update(const SceneCapture::Update& a_update)
 	{
+		++writes;
 		++updates;
 		const auto result = UpdateRecord(a_update);
 		// Kept by the key it names (a geometry named by its skin, by its key once resolved).
@@ -290,6 +294,7 @@ namespace DCLF
 
 	void SceneMirror::Clear()
 	{
+		++writes;
 		nodes.clear();
 		recent.clear();
 		geometries.clear();

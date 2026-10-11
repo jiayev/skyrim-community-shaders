@@ -56,6 +56,11 @@ namespace DCLF
 		const SceneCapture::AlphaRecord* Alpha(const void* a_key) const;
 		/** @brief T6b1b: a geometry's records (its node, parent, properties, alpha and fade node), null where the mirror holds none. */
 		SceneCapture::LeafView Leaf(const void* a_key) const;
+		/**
+		 * @brief T6b3e: the record writes so far (Apply, Detach, Evict, Update, Clear), never reset: the scene pass's evaluations read the
+		 * mirror from the pool and assert it unchanged across them (it is written by ApplyEvents alone).
+		 */
+		std::uint64_t Writes() const { return writes; }
 
 		/**
 		 * @brief The parity: the last probe's pending differences resolved by this batch's event keys (late or missed), then this
@@ -92,6 +97,7 @@ namespace DCLF
 		};
 		ankerl::unordered_dense::map<std::uintptr_t, std::vector<Recent>> recent;
 		std::uint64_t batch = 0;
+		std::uint64_t writes = 0;  // Writes()
 		bool replaying = false;
 		std::uint64_t replayed = 0, stale = 0, superseded = 0;
 		const void* missedProperty = nullptr;

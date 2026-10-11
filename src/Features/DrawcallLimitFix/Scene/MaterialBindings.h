@@ -7,6 +7,7 @@
 #include <ankerl/unordered_dense.h>
 
 #include "Features/DrawcallLimitFix/Common/KeptState.h"
+#include "Features/DrawcallLimitFix/Common/SceneWake.h"
 #include "Features/DrawcallLimitFix/Draws/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Scene/Lookups.h"
 
@@ -62,7 +63,7 @@ namespace DCLF
 		std::vector<std::uint64_t> usedSeen;
 		LogCursor cursor;  // the tables' material log
 		std::uint64_t cookie = 1;  // the requests' since the last reset: an answer with another is stale
-		GpuTextures::Replies replies;
+		GpuTextures::Replies replies{ &WakeSceneTextureReply };  // T6b3d: an answer wakes the scene pump
 		Stats stats;
 
 		void MarkChanged(std::uint32_t a_slot)

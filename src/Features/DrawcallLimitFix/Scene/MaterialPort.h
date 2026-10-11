@@ -11,6 +11,7 @@
 #include <winrt/base.h>
 
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
+#include "Features/DrawcallLimitFix/Common/SceneWake.h"
 #include "Features/DrawcallLimitFix/Scene/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Scene/MaterialPortFrame.h"
 
@@ -103,6 +104,8 @@ namespace DCLF
 			std::array<winrt::com_ptr<ID3D11ShaderResourceView>, kMaxTextureFields> views;
 		};
 		/** @brief The captures for the scene work (SceneStore::DrainMaterialCaptures, its one consumer). */
+		// T6b3d: no wake of its own: a requested capture's answer wakes the pass (ServeMaterialRequests), a writer's (controllers write
+		// every frame) waits for the frame's pass, an attach's comes with the attach's event.
 		inline EventQueue<std::unique_ptr<HeldSnapshot>> captures;
 		/**
 		 * @brief Any thread where a_material is alive and readable (a material writer after its write: MaterialSources::NoteWritten;

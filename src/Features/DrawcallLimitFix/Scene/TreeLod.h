@@ -197,7 +197,7 @@ namespace DCLF::TreeLod
 		void MarkAllChanged();
 		/**
 		 * @brief The changed shape slots and mesh slots since the last call, each once. Leases the new meshes' buffers first
-		 * (GpuResources): a mesh that cannot be leased draws nothing, and its shapes' rows name mesh slot ~0u.
+		 * (GpuResources::Frame, the render thread's): a mesh that cannot be leased draws nothing, and its shapes' rows name mesh slot ~0u.
 		 */
 		void TakeChanges(std::vector<std::uint32_t>& a_slots, std::vector<std::uint32_t>& a_meshes);
 		/** @brief A shape slot's row (count 0 when free) and records. */

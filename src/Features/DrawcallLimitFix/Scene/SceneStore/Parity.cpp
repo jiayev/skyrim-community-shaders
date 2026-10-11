@@ -64,48 +64,6 @@ namespace DCLF
 				r.transformsWritten / n, r.uncovered ? " <- MATERIAL PORT" : "");
 			r = {};
 		}
-		if (auto& m = materialFrameStats; m.slotsChecked) {
-			const auto differ = m.componentsDiffer + m.transformsDiffer;
-			text += fmt::format("[DCLF] material parity (the installed records against the engine's evaluation, render thread): {} full checks, {} slots ({} "
-								"written since the last frame); suspected own/frame/transform {}/{}/{}, late after a {}-frame window {}/{}/{} (own: {}; frame: {}; "
-								"transform: {}); own lagging a covered writer (rewritten within the window, none of its values) {} ({}); {} frame components and "
-								"{} transforms differ (own values: the materials line's stale){}{}\n",
-				m.checks, m.slotsChecked, m.written, m.suspected[0], m.suspected[1], m.suspected[2], kMaterialLateFrames, m.late[0], m.late[1], m.late[2],
-				m.lateFirst[0].empty() ? "-" : m.lateFirst[0], m.lateFirst[1].empty() ? "-" : m.lateFirst[1], m.lateFirst[2].empty() ? "-" : m.lateFirst[2],
-				m.lagging, m.laggingFirst.empty() ? "-" : m.laggingFirst, m.componentsDiffer, m.transformsDiffer, differ ? " <- DIFFER; first: " : " <- OK", differ ? m.first : std::string());
-			m = {};
-		}
-		if (auto& g = geometryStats; g.frames) {
-			std::string differ;
-			std::uint64_t total = 0;
-			for (std::uint32_t stage = 0; stage < 2; ++stage)
-				for (std::uint32_t v = 0; v < 64; ++v)
-					if (g.differ[stage][v]) {
-						total += g.differ[stage][v];
-						differ += fmt::format(" {}{}={}", stage ? "PS" : "VS", v, g.differ[stage][v]);
-					}
-			text += fmt::format("[DCLF] pipeline constants: {:.2f} full geometry evaluations and {:.2f} frame samples a frame, {:.1f} pipelines changed, frame lighting changed {:.2f}; parity {} checks, {} pipelines, {} geometry variables, {} of {} technique blocks ({} more late: the sample moved since the row's write) and {} of {} frame lightings differ{}{}{}\n",
-				static_cast<double>(g.full) / g.frames, static_cast<double>(g.samples) / g.frames, static_cast<double>(g.changed) / g.frames,
-				static_cast<double>(g.lightingVersions) / g.frames, g.checks, g.pipelinesChecked, total, g.techniquesDiffer, g.techniquesChecked, g.techniquesLate,
-				g.lightingDiffer, g.lightingChecked, g.checks ? (total || g.techniquesDiffer || g.lightingDiffer ? " <- DIFFER:" : " <- OK") : "", differ,
-				(total ? "; first: " + g.first : std::string()) + (g.lightingDiffer ? "; lighting: " + g.lightingFirst : std::string()) +
-					(g.techniquesDiffer ? "; technique: " + g.techniqueFirst : std::string()));
-			if (g.templateChecked || g.templateMissing)
-				text += fmt::format("[DCLF] pipeline templates (T6: the synthetic pass against a registered one's evaluation): {} checked ({} with none registered), {} differ "
-									"in the bindless draw's values, {} in the frame lighting{}{}\n",
-					g.templateChecked, g.templateMissing, g.templateDiffer, g.templateLightingDiffer, g.templateDiffer || g.templateLightingDiffer ? " <- TEMPLATE" : " <- OK",
-					g.templateFirst.empty() ? "" : "; first: " + g.templateFirst);
-			g = {};
-		}
-		if (auto& sp = shadingParity; sp.frames) {
-			text += fmt::format("[DCLF] shading (sampled at the frame's start for the slots its events name): {:.1f} LOD fade events, {:.1f} emittance events, {:.1f} "
-								"named a frame; parity at Prepass against the frame's rows: {} checks, {} slots compared, changed since the frame's start: {} named for "
-								"the next frame, {} queued, {} missed{}{}; wetness {} meshes, {} differ{}\n",
-				static_cast<double>(sp.lodFadeEvents) / sp.frames, static_cast<double>(sp.emittanceEvents) / sp.frames, static_cast<double>(sp.resampled) / sp.frames, sp.checks,
-				sp.slots, sp.named, sp.late, sp.missing, sp.checks ? (sp.missing ? " <- MISSED; first: " : " <- OK") : "", sp.first, sp.wetness, sp.wetnessDiffer,
-				sp.wetness ? (sp.wetnessDiffer ? " <- DIFFER" : " <- OK") : "");
-			sp = {};
-		}
 		if (auto& dp = decalOrderParity; dp.checks) {
 			text += fmt::format("[DCLF] decal order parity (the kept order against one made whole): {} checks, {} decals, {} differ{}{}; {} kept keys stale, "
 								"{} neighbours the whole order does not hold{}{}\n",
@@ -170,17 +128,6 @@ namespace DCLF
 				mp.differ || mp.uncovered ? " <- MATERIAL PORT; first: " : " <- OK", mp.first);
 			mp = {};
 		}
-		if (auto& gp = geometryPortParity; gp.checked || gp.uncovered) {
-			text += fmt::format("[DCLF] pipeline template port (T6b2b: the port against the template's evaluation): {} pipelines, {} differ, {} uncovered{}{}\n", gp.checked,
-				gp.differ, gp.uncovered, gp.differ || gp.uncovered ? " <- GEOMETRY PORT; first: " : " <- OK", gp.first);
-			gp = {};
-		}
-		if (auto& ep = extrasParity; ep.objects) {
-			text += fmt::format("[DCLF] extras parity (the draw's completion against the engine's routines): {} objects, {} differ, largest difference {}, {} static rows "
-								"stale with no event{}{}\n",
-				ep.objects, ep.differ, ep.maxDifference, ep.staleStatic, ep.differ || ep.staleStatic ? " <- DIFFER" : " <- OK", ep.differ ? "; first: " + ep.first : std::string());
-			ep = {};
-		}
 		if (auto& l = lodSegmentStats; l.events || l.checks || !lodRanges.empty()) {
 			std::size_t partial = 0;
 			for (const auto& [shape, ranges] : lodRanges) {
@@ -192,8 +139,6 @@ namespace DCLF
 				l.checks ? (l.differ ? " <- LOD SEGMENTS; first: " : " <- OK") : "", l.first);
 			l = {};
 		}
-		if (treeLod.Size() || TreeLod::installed)
-			text += treeLod.Report();
 		if (auto& c = changeParity; c.checks || c.skipped) {
 			text += fmt::format("[DCLF] change log parity: {} checks ({} skipped), {} slots compared, {} changed, {} changed with no log entry{}{}\n", c.checks, c.skipped, c.slots,
 				c.changed, c.missing, c.missing ? " <- MISSING; first: " : " <- OK", c.first);
@@ -206,6 +151,13 @@ namespace DCLF
 								"{} tracked geometries' properties held anew, {} with no pin{}{}\n",
 				r.pins, r.pinned, r.live, r.refused, " (a refusal is checked after the next batch: the mirror reads' \"unpinned geometry\")", r.properties, r.propertiesRefused,
 				r.propertiesRefused ? " <- UNPINNED PROPERTY; first: " : "", r.firstPropertyRefused);
+			// T6b3e: the fade nodes the tree and fade-root owners are copied from: pins, root owners, the render thread's answers.
+			if (r.fadeNodes || r.fadeNodesRefused || r.fadeRootsUnowned || r.fadeNodesAnswered || r.fadeNodesAnsweredNone)
+				text += fmt::format("[DCLF] fade node references (T6b3e): {} held anew from pins, {} with no pin ({} copied from a root owner, {} asked of the render "
+									"thread: {} answered, {} answered none), {} tree or fade roots left unlisted for want of one (until an answer){}{}{}\n",
+					r.fadeNodes, r.fadeNodesRefused, r.fadeNodesFromRoots, r.fadeNodesRequested, r.fadeNodesAnswered, r.fadeNodesAnsweredNone, r.fadeRootsUnowned,
+					r.fadeNodesRequested > r.fadeNodesAnswered + r.fadeNodesAnsweredNone || r.fadeNodesAnsweredNone ? " <- UNPINNED FADE NODE" : " <- OK",
+					r.fadeNodeFirst.empty() ? "" : "; first without a pin or a root owner: ", r.fadeNodeFirst);
 			r = {};
 		}
 		if (auto& l = leafStats; l.missing || l.rescheduled) {
@@ -213,18 +165,15 @@ namespace DCLF
 				l.missing, l.rescheduled);
 			l = {};
 		}
-		text += MirrorWatch::TakeReport(frame);
 		if (const auto c = SceneCapture::TakeCounters(); c.attaches || c.outOfWorld)
 			text += fmt::format("[DCLF] scene capture (6e F3): {} attaches in the world captured ({} records, {:.1f} us in all; {} on the main thread, {:.1f} us), {} out of the "
 								"world left to their world attach\n",
 				c.attaches, c.records, static_cast<double>(c.ns) / 1000.0, c.mainThread, static_cast<double>(c.mainThreadNs) / 1000.0, c.outOfWorld);
-		if (captureFrames) {
-			const auto unscoped = FrameGlobals::TakeUnscopedReads();
-			text += fmt::format("[DCLF] frame capture (6e F2): render thread {:.1f} us/frame for the globals, {:.1f} us/frame for the categories ({} captures made; {} subtrees the mirror lacked captured, {} records; "
-								"{} subtrees waited for the mirror, {} dropped with no chain after; {} new category nodes without the capture's children); {} reads off the render thread with no frame's capture bound{}\n",
-				static_cast<double>(captureNs) / 1000.0 / captureFrames, static_cast<double>(categoryCaptureNs) / 1000.0 / captureFrames, categoryCapturesMade, categoryMirrorCaptures, categoryMirrorRecords,
-				subtreesPended, subtreesDropped, categoryChildrenMissing, unscoped, unscoped || categoryChildrenMissing ? " <- CAPTURE" : " <- OK");
-			captureNs = categoryCaptureNs = categoryCapturesMade = captureFrames = 0; categoryMirrorCaptures = categoryMirrorRecords = 0;
+		// T6b3d: the coordinator's half of the frame capture's line (the subtrees its passes waited for, the category nodes it took).
+		if (subtreesPended || subtreesDropped || categoryChildrenMissing) {
+			text += fmt::format("[DCLF] subtrees (T6b1c, the coordinator's): {} waited for the mirror, {} dropped with no chain after; {} new category nodes without the "
+								"capture's children{}\n",
+				subtreesPended, subtreesDropped, categoryChildrenMissing, categoryChildrenMissing ? " <- CAPTURE" : " <- OK");
 			subtreesPended = subtreesDropped = categoryChildrenMissing = 0;
 		}
 		if (auto& t = delta; t.walks) {
@@ -251,6 +200,78 @@ namespace DCLF
 		return text;
 	}
 
+	std::string SceneStore::FrameSceneReport()
+	{
+		// T6b3d: what the render thread keeps (its parities and captures), reported from the frame: nothing of the coordinator's.
+		std::string text;
+		if (auto& m = materialFrameStats; m.slotsChecked) {
+			const auto differ = m.componentsDiffer + m.transformsDiffer;
+			text += fmt::format("[DCLF] material parity (the installed records against the engine's evaluation, render thread): {} full checks, {} slots ({} "
+								"written since the last frame); suspected own/frame/transform {}/{}/{}, late after a {}-frame window {}/{}/{} (own: {}; frame: {}; "
+								"transform: {}); own lagging a covered writer (rewritten within the window, none of its values) {} ({}); {} frame components and "
+								"{} transforms differ (own values: the materials line's stale){}{}\n",
+				m.checks, m.slotsChecked, m.written, m.suspected[0], m.suspected[1], m.suspected[2], kMaterialLateFrames, m.late[0], m.late[1], m.late[2],
+				m.lateFirst[0].empty() ? "-" : m.lateFirst[0], m.lateFirst[1].empty() ? "-" : m.lateFirst[1], m.lateFirst[2].empty() ? "-" : m.lateFirst[2],
+				m.lagging, m.laggingFirst.empty() ? "-" : m.laggingFirst, m.componentsDiffer, m.transformsDiffer, differ ? " <- DIFFER; first: " : " <- OK", differ ? m.first : std::string());
+			m = {};
+		}
+		if (auto& g = geometryStats; g.frames) {
+			std::string differ;
+			std::uint64_t total = 0;
+			for (std::uint32_t stage = 0; stage < 2; ++stage)
+				for (std::uint32_t v = 0; v < 64; ++v)
+					if (g.differ[stage][v]) {
+						total += g.differ[stage][v];
+						differ += fmt::format(" {}{}={}", stage ? "PS" : "VS", v, g.differ[stage][v]);
+					}
+			text += fmt::format("[DCLF] pipeline constants: {:.2f} full geometry evaluations and {:.2f} frame samples a frame, {:.1f} pipelines changed, frame lighting changed {:.2f}; parity {} checks, {} pipelines, {} geometry variables, {} of {} technique blocks ({} more late: the sample moved since the row's write) and {} of {} frame lightings differ{}{}{}\n",
+				static_cast<double>(g.full) / g.frames, static_cast<double>(g.samples) / g.frames, static_cast<double>(g.changed) / g.frames,
+				static_cast<double>(g.lightingVersions) / g.frames, g.checks, g.pipelinesChecked, total, g.techniquesDiffer, g.techniquesChecked, g.techniquesLate,
+				g.lightingDiffer, g.lightingChecked, g.checks ? (total || g.techniquesDiffer || g.lightingDiffer ? " <- DIFFER:" : " <- OK") : "", differ,
+				(total ? "; first: " + g.first : std::string()) + (g.lightingDiffer ? "; lighting: " + g.lightingFirst : std::string()) +
+					(g.techniquesDiffer ? "; technique: " + g.techniqueFirst : std::string()));
+			if (g.templateChecked || g.templateMissing)
+				text += fmt::format("[DCLF] pipeline templates (T6: the synthetic pass against a registered one's evaluation): {} checked ({} with none registered), {} differ "
+									"in the bindless draw's values, {} in the frame lighting{}{}\n",
+					g.templateChecked, g.templateMissing, g.templateDiffer, g.templateLightingDiffer, g.templateDiffer || g.templateLightingDiffer ? " <- TEMPLATE" : " <- OK",
+					g.templateFirst.empty() ? "" : "; first: " + g.templateFirst);
+			g = {};
+		}
+		if (auto& sp = shadingParity; sp.frames) {
+			text += fmt::format("[DCLF] shading (sampled at the frame's start for the slots its events name): {:.1f} LOD fade events, {:.1f} emittance events, {:.1f} "
+								"named a frame; parity at Prepass against the frame's rows: {} checks, {} slots compared, changed since the frame's start: {} named for "
+								"the next frame, {} queued, {} missed{}{}; wetness {} meshes, {} differ{}\n",
+				static_cast<double>(sp.lodFadeEvents) / sp.frames, static_cast<double>(sp.emittanceEvents) / sp.frames, static_cast<double>(sp.resampled) / sp.frames, sp.checks,
+				sp.slots, sp.named, sp.late, sp.missing, sp.checks ? (sp.missing ? " <- MISSED; first: " : " <- OK") : "", sp.first, sp.wetness, sp.wetnessDiffer,
+				sp.wetness ? (sp.wetnessDiffer ? " <- DIFFER" : " <- OK") : "");
+			sp = {};
+		}
+		if (auto& gp = geometryPortParity; gp.checked || gp.uncovered) {
+			text += fmt::format("[DCLF] pipeline template port (T6b2b: the port against the template's evaluation): {} pipelines, {} differ, {} uncovered{}{}\n", gp.checked,
+				gp.differ, gp.uncovered, gp.differ || gp.uncovered ? " <- GEOMETRY PORT; first: " : " <- OK", gp.first);
+			gp = {};
+		}
+		if (auto& ep = extrasParity; ep.objects) {
+			text += fmt::format("[DCLF] extras parity (the draw's completion against the engine's routines): {} objects, {} differ, largest difference {}, {} static rows "
+								"stale with no event{}{}\n",
+				ep.objects, ep.differ, ep.maxDifference, ep.staleStatic, ep.differ || ep.staleStatic ? " <- DIFFER" : " <- OK", ep.differ ? "; first: " + ep.first : std::string());
+			ep = {};
+		}
+		if (treeLod.Size() || TreeLod::installed)
+			text += treeLod.Report();
+		text += MirrorWatch::TakeReport(frame);
+		if (captureFrames) {
+			const auto unscoped = FrameGlobals::TakeUnscopedReads();
+			text += fmt::format("[DCLF] frame capture (6e F2): render thread {:.1f} us/frame for the globals, {:.1f} us/frame for the categories ({} captures made; {} subtrees the "
+								"mirror lacked captured, {} records); {} reads off the render thread with no frame's capture bound{}\n",
+				static_cast<double>(captureNs) / 1000.0 / captureFrames, static_cast<double>(categoryCaptureNs) / 1000.0 / captureFrames, categoryCapturesMade, categoryMirrorCaptures,
+				categoryMirrorRecords, unscoped, unscoped ? " <- CAPTURE" : " <- OK");
+			captureNs = categoryCaptureNs = categoryCapturesMade = captureFrames = 0;
+			categoryMirrorCaptures = categoryMirrorRecords = 0;
+		}
+		return text;
+	}
+
 	void SceneStore::CheckWalkParity()
 	{
 		// The slot walk has just run. Everything a second walk overwrites is kept and restored, so the frame goes on
@@ -267,8 +288,8 @@ namespace DCLF
 		const auto savedFaceRegions = faceRegions;
 		const auto savedFaceRegionFree = faceRegionFree;
 		const auto savedFaceRegionTop = faceRegionTop;
-		const auto savedTreeOwners = treeOwners;
-		const auto savedFadeRootOwners = fadeRootOwners;
+		// The tree and fade-root owners are not saved: the dense walk lists neither (ListTree, ListFadeRoot: denseWalk), and copies of
+		// them would be references the pump drops (T6b3e).
 		// What the delta walk evaluated (BuildFullOrder below overwrites scheduledWalk), for the stale verdicts' report.
 		ankerl::unordered_dense::set<const RE::BSGeometry*> evaluated;
 		for (const auto& [geometry, entry] : tracked)
@@ -285,8 +306,6 @@ namespace DCLF
 		faceRegions = savedFaceRegions;
 		faceRegionFree = savedFaceRegionFree;
 		faceRegionTop = savedFaceRegionTop;
-		treeOwners = savedTreeOwners;
-		fadeRootOwners = savedFadeRootOwners;
 		const Tables dense = std::move(tables);
 		tables = slots;
 		objectStamp = savedStamp;
@@ -391,8 +410,8 @@ namespace DCLF
 						break;
 				}
 				const auto copies = std::count_if(perFrameSet.begin(), perFrameSet.end(), [&](const PerFrameItem& a_item) { return a_item.geometry == geometry; });
-				walkParity.firstStale = fmt::format("'{}' kept {} ({} frames old, per-frame {} (listed {}, {} copies in the set), traits {:X}, light {:X}, evaluated this walk {}) now {}; chain:{}",
-					geometry->name.c_str() ? geometry->name.c_str() : "?", kIneligibleNames[static_cast<std::size_t>(entry.candidateReason)], sceneFrame - entry.candidateFrame,
+				walkParity.firstStale = fmt::format("'{}' kept {} ({} passes old, per-frame {} (listed {}, {} copies in the set), traits {:X}, light {:X}, evaluated this walk {}) now {}; chain:{}",
+					geometry->name.c_str() ? geometry->name.c_str() : "?", kIneligibleNames[static_cast<std::size_t>(entry.candidateReason)], PassStamp() - entry.candidateFrame,
 					entry.perFrame, entry.perFrameListed, copies, PerFrameTraits(entry, *geometry), entry.lightTraits, evaluated.contains(geometry),
 					kIneligibleNames[static_cast<std::size_t>(it->second)], chain);
 			}
@@ -416,8 +435,8 @@ namespace DCLF
 					continue;
 				++walkParity.staleTraits;
 				if (walkParity.firstStaleTraits.empty())
-					walkParity.firstStaleTraits = fmt::format("'{}' {} traits {:X} now {:X} ({} frames since classified)", geometry->name.c_str() ? geometry->name.c_str() : "?",
-						entry.perFrame ? "per-frame with" : "kept, no", entry.lightTraits, traits, sceneFrame - entry.candidateFrame);
+					walkParity.firstStaleTraits = fmt::format("'{}' {} traits {:X} now {:X} ({} passes since classified)", geometry->name.c_str() ? geometry->name.c_str() : "?",
+						entry.perFrame ? "per-frame with" : "kept, no", entry.lightTraits, traits, PassStamp() - entry.candidateFrame);
 			}
 		}
 		if (!denseIndex.empty())
@@ -508,7 +527,7 @@ namespace DCLF
 				}
 			}
 		}
-		if (ParityDue(sceneFrame)) {
+		if (PassParityDue()) {
 			c.snapshot.resize(tables.objects.size());
 			for (std::uint32_t slot = 0; slot < tables.objects.size(); ++slot)
 				c.snapshot[slot] = tables.ColumnsOf(slot);

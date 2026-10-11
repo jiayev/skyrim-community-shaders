@@ -11,6 +11,106 @@ namespace DCLF
 		std::atomic<std::uint32_t> fadeLogFocus{ ~0u };
 	}
 
+	std::string IndirectDraws::Impl::StoresReport()
+	{
+		// The snapshot builder's (its pass, with ProducerReport): the stores RunAhead writes, read and reset here alone - the render thread's
+		// report never touches them. The tables' capacities as the producer knows them (Growths::Held: never the capacity the frame's
+		// adoption writes), else their first backing's.
+		std::string text;
+		const auto rowsOf = [](const GrowableRows& a_rows) {
+			const std::uint64_t held = a_rows.buffer && a_rows.stride ? Growths::Get().Held(a_rows.buffer) : 0;
+			return held ? static_cast<std::uint32_t>(held / a_rows.stride) : a_rows.capacity;
+		};
+		const auto& mainState = producer.inputs.main;
+		const auto& shadowState = producer.inputs.shadow;
+		if (auto& rows = mainRows; rows.builds) {
+			text += fmt::format("[DCLF] main rows: {} builds; a build: {:.1f} material and {:.1f} pipeline rows written; {} material and {} pipeline rows held "
+								"(tables {} and {} rows), {} resyncs; material rows written again by what moved: record {}, frame values {}, lookup {}, shared {}, "
+								"technique bindings {}, projected {}, constant tables {}\n",
+				rows.builds, double(rows.materialsWritten) / rows.builds, double(rows.pipelinesWritten) / rows.builds, rows.material.Size(), rows.pipeline.Size(),
+				mainState ? rowsOf(mainState->materialRows) : 0u, mainState ? rowsOf(mainState->pipelineRows) : 0u, rows.resyncs,
+				rows.keyMoved[0], rows.keyMoved[1], rows.keyMoved[2], rows.keyMoved[3], rows.keyMoved[4], rows.keyMoved[5], rows.keyMoved[6] + rows.keyMoved[7]);
+			rows.builds = rows.materialsWritten = rows.pipelinesWritten = rows.resyncs = 0;
+			rows.keyMoved = {};
+		}
+		if (auto* store = &objectStore; store->updates) {
+			text += fmt::format("[DCLF] persistent object records: {} updates, {:.1f} records rewritten an update, {} records held, {} resyncs, {} collisions; parity {} checked, {} differ{}\n",
+				store->updates, static_cast<double>(store->rewritten) / store->updates, store->records.Size(), store->resyncs, store->collisions, store->parity.checks,
+				store->parity.mismatches, store->collisions && store->parity.checks ? std::string(" <- DIFFER") : store->parity.Verdict(true));
+			std::string causes;
+			for (std::uint32_t c = 0; c < kChangeCauseCount; ++c)
+				if (store->byCause[c])
+					causes += fmt::format("{}{} {}", causes.empty() ? "" : ", ", kChangeCauseNames[c], store->byCause[c]);
+			text += fmt::format("[DCLF] object record updates by what changed: {} only placements and palettes, {} structural{}{}\n", store->streamOnly,
+				store->structural, causes.empty() ? "" : " (by cause: ", causes.empty() ? "" : causes + ")");
+			store->streamOnly = store->structural = 0;
+			store->byCause = {};
+			store->updates = store->rewritten = store->resyncs = store->collisions = 0;
+			store->parity.Reset();
+		}
+		if (auto& k = shadowKept; k.builds) {
+			// The objects it holds (their words are the scene list's entries', U4c; its own region only under CS_DCLF_BUILD_PARITY).
+			const std::size_t entries = static_cast<std::size_t>(std::count_if(k.heldModes.begin(), k.heldModes.end(), [](std::uint8_t a_modes) { return a_modes != 0; }));
+			const auto* rowsTable = shadowState ? &shadowState->materialRows : nullptr;
+			text += fmt::format(
+				"[DCLF] persistent shadow state: {} builds, {:.1f} entries and {:.1f} material rows written a build, {} entries and {} material rows held "
+				"(table {} rows, grown {} times), {} resyncs; parity {} inputs checked, {} differ{}\n",
+				k.builds, static_cast<double>(k.entriesWritten) / k.builds, static_cast<double>(k.rowsWritten) / k.builds, entries, k.rows.Size(),
+				rowsTable ? rowsOf(*rowsTable) : 0u, rowsTable ? rowsTable->growths : 0u, k.resyncs, k.parity.checks, k.parity.mismatches, k.parity.Verdict(true));
+			// Counted by its reserves (the producer's: ReserveShadowRows).
+			if (shadowState)
+				shadowState->materialRows.growths = 0;
+			if (!k.missingBy.empty()) {
+				std::string why;
+				for (const auto& [reason, count] : k.missingBy)
+					why += fmt::format("{}{} {} (first {})", why.empty() ? "" : ", ", reason, count, k.missingFirst[reason]);
+				text += fmt::format("[DCLF] persistent shadow state: inputs of the per-frame build only, by why: {}\n", why);
+				k.missingBy.clear();
+				k.missingFirst.clear();
+			}
+			k.builds = k.entriesWritten = k.rowsWritten = k.resyncs = 0;
+			k.parity.Reset();
+		}
+		if (auto* store = &extrasStore; store->updates || store->ring.checks.load(std::memory_order_relaxed)) {
+			// Each buffer that holds the rows checks its own mirror: the scene buffers (CommitSceneStreams), the payload ring's entries
+			// (their producer, lock-free: ExtrasStore::RingParity).
+			auto& ring = store->ring;
+			const auto ringChecks = ring.checks.exchange(0, std::memory_order_relaxed);
+			const auto ringMismatches = ring.mismatches.exchange(0, std::memory_order_relaxed);
+			std::string ringFirst;
+			if (ring.firstState.load(std::memory_order_acquire) == 2) {
+				ringFirst = std::move(ring.first);
+				ring.first.clear();
+				ring.firstState.store(0, std::memory_order_release);
+			}
+			std::string first = store->first;
+			if (!ringFirst.empty())
+				first += (first.empty() ? "" : "; ") + ringFirst;
+			text += fmt::format("[DCLF] persistent extras rows: {} updates, {} resyncs; scene buffers parity {} checked, {} differ{}; payload ring parity {} checked, {} differ{}{}{}\n",
+				store->updates, store->resyncs, store->parity.checks, store->parity.mismatches, store->parity.Verdict(), ringChecks, ringMismatches,
+				!ringChecks ? "" : ringMismatches ? " <- DIFFER" : " <- OK", first.empty() ? "" : "; first: ", first);
+			store->first.clear();
+			store->updates = store->resyncs = 0;
+			store->parity.Reset();
+		}
+		if (auto* store = &geometryStore; store->updates) {
+			text += fmt::format("[DCLF] persistent geometry table: {} updates, {:.2f} slots repacked an update, {} slots held, {} resyncs; parity {} checked, {} differ{}\n",
+				store->updates, static_cast<double>(store->rewritten) / store->updates, store->packed.Size(), store->resyncs, store->parity.checks, store->parity.mismatches,
+				store->parity.Verdict(true));
+			store->updates = store->rewritten = store->resyncs = 0;
+			store->parity.Reset();
+		}
+		for (auto* cache : { &sunExclusionCache, &parabolicExclusionCache }) {
+			if (auto& c = *cache; c.builds) {
+				text += fmt::format("[DCLF] {} exclusion: {} builds, {} reused ({} of them for newer candidates, the entries that moved judged again); parity {} checked, {} differ{}\n", cache == &sunExclusionCache ? "sun" : "paraboloid",
+					c.builds, c.reused, c.translated, c.parity.checks, c.parity.mismatches, c.parity.Verdict());
+				c.builds = c.reused = c.translated = 0;
+				c.parity.Reset();
+			}
+		}
+		return text;
+	}
+
 	std::string IndirectDraws::AsyncReport()
 	{
 		std::string text = AsyncWorker::Get().Report() + AsyncWorker::Get().RenderWaitReport();
@@ -47,57 +147,12 @@ namespace DCLF
 				}
 			}
 		}
-		if (auto& rows = impl->mainRows; rows.builds) {
-			text += fmt::format("[DCLF] main rows: {} builds; a build: {:.1f} material and {:.1f} pipeline rows written; {} material and {} pipeline rows held "
-								"(tables {} and {} rows), {} resyncs; material rows written again by what moved: record {}, frame values {}, lookup {}, shared {}, "
-								"technique bindings {}, projected {}, constant tables {}\n",
-				rows.builds, double(rows.materialsWritten) / rows.builds, double(rows.pipelinesWritten) / rows.builds, rows.material.Size(), rows.pipeline.Size(),
-				impl->resources ? impl->resources->materialRows.capacity : 0u, impl->resources ? impl->resources->pipelineRows.capacity : 0u, rows.resyncs,
-				rows.keyMoved[0], rows.keyMoved[1], rows.keyMoved[2], rows.keyMoved[3], rows.keyMoved[4], rows.keyMoved[5], rows.keyMoved[6] + rows.keyMoved[7]);
-			rows.builds = rows.materialsWritten = rows.pipelinesWritten = rows.resyncs = 0;
-			rows.keyMoved = {};
-		}
-		if (auto* store = &impl->objectStore; store->updates) {
-			text += fmt::format("[DCLF] persistent object records: {} updates, {:.1f} records rewritten an update, {} records held, {} resyncs, {} collisions; parity {} checked, {} differ{}\n",
-				store->updates, static_cast<double>(store->rewritten) / store->updates, store->records.Size(), store->resyncs, store->collisions, store->parity.checks,
-				store->parity.mismatches, store->collisions && store->parity.checks ? std::string(" <- DIFFER") : store->parity.Verdict(true));
-			std::string causes;
-			for (std::uint32_t c = 0; c < kChangeCauseCount; ++c)
-				if (store->byCause[c])
-					causes += fmt::format("{}{} {}", causes.empty() ? "" : ", ", kChangeCauseNames[c], store->byCause[c]);
-			text += fmt::format("[DCLF] object record updates by what changed: {} only placements and palettes, {} structural{}{}\n", store->streamOnly,
-				store->structural, causes.empty() ? "" : " (by cause: ", causes.empty() ? "" : causes + ")");
-			store->streamOnly = store->structural = 0;
-			store->byCause = {};
-			store->updates = store->rewritten = store->resyncs = store->collisions = 0;
-			store->parity.Reset();
-		}
+		// The builds' stores (main rows, object records, shadow state, extras rows, geometry table, exclusions) are the snapshot builder's:
+		// their lines are composed in its pass (Impl::StoresReport, with the producer's report) and printed with it, a report behind.
 		if (auto line = FrameValues::Get().Report(); !line.empty())
 			text += line + "\n";
 		if (auto line = FrameData::Report(); !line.empty())
 			text += line + "\n";
-		if (auto& k = impl->shadowKept; k.builds) {
-			// The objects it holds (their words are the scene list's entries', U4c; its own region only under CS_DCLF_BUILD_PARITY).
-			const std::size_t entries = static_cast<std::size_t>(std::count_if(k.heldModes.begin(), k.heldModes.end(), [](std::uint8_t a_modes) { return a_modes != 0; }));
-			const auto* rowsTable = impl->shadow ? &impl->shadow->materialRows : nullptr;
-			text += fmt::format(
-				"[DCLF] persistent shadow state: {} builds, {:.1f} entries and {:.1f} material rows written a build, {} entries and {} material rows held "
-				"(table {} rows, grown {} times), {} resyncs; parity {} inputs checked, {} differ{}\n",
-				k.builds, static_cast<double>(k.entriesWritten) / k.builds, static_cast<double>(k.rowsWritten) / k.builds, entries, k.rows.Size(),
-				rowsTable ? rowsTable->capacity : 0u, rowsTable ? rowsTable->growths : 0u, k.resyncs, k.parity.checks, k.parity.mismatches, k.parity.Verdict(true));
-			if (impl->shadow)
-				impl->shadow->materialRows.growths = 0;
-			if (!k.missingBy.empty()) {
-				std::string why;
-				for (const auto& [reason, count] : k.missingBy)
-					why += fmt::format("{}{} {} (first {})", why.empty() ? "" : ", ", reason, count, k.missingFirst[reason]);
-				text += fmt::format("[DCLF] persistent shadow state: inputs of the per-frame build only, by why: {}\n", why);
-				k.missingBy.clear();
-				k.missingFirst.clear();
-			}
-			k.builds = k.entriesWritten = k.rowsWritten = k.resyncs = 0;
-			k.parity.Reset();
-		}
 		{
 			// R3c (a): the main shapes a scene revision makes at the join, against the commits' (Impl::ShapeParity).
 			auto& p = impl->shapeParity;
@@ -145,43 +200,6 @@ namespace DCLF
 			// T6b3b: the snapshots (the frame's counters, the builder's times) and the builder's own lines (the revisions, the growths,
 			// the shapes made, the draw bound), composed in its pass and taken here.
 			text += impl->SnapshotReport();
-		}
-		if (auto* store = &impl->extrasStore; store->updates || store->ring.checks.load(std::memory_order_relaxed)) {
-			// Each buffer that holds the rows checks its own mirror: the scene buffers (CommitSceneStreams), the payload ring's entries
-			// (their producer, lock-free: ExtrasStore::RingParity).
-			auto& ring = store->ring;
-			const auto ringChecks = ring.checks.exchange(0, std::memory_order_relaxed);
-			const auto ringMismatches = ring.mismatches.exchange(0, std::memory_order_relaxed);
-			std::string ringFirst;
-			if (ring.firstState.load(std::memory_order_acquire) == 2) {
-				ringFirst = std::move(ring.first);
-				ring.first.clear();
-				ring.firstState.store(0, std::memory_order_release);
-			}
-			std::string first = store->first;
-			if (!ringFirst.empty())
-				first += (first.empty() ? "" : "; ") + ringFirst;
-			text += fmt::format("[DCLF] persistent extras rows: {} updates, {} resyncs; scene buffers parity {} checked, {} differ{}; payload ring parity {} checked, {} differ{}{}{}\n",
-				store->updates, store->resyncs, store->parity.checks, store->parity.mismatches, store->parity.Verdict(), ringChecks, ringMismatches,
-				!ringChecks ? "" : ringMismatches ? " <- DIFFER" : " <- OK", first.empty() ? "" : "; first: ", first);
-			store->first.clear();
-			store->updates = store->resyncs = 0;
-			store->parity.Reset();
-		}
-		if (auto* store = &impl->geometryStore; store->updates) {
-			text += fmt::format("[DCLF] persistent geometry table: {} updates, {:.2f} slots repacked an update, {} slots held, {} resyncs; parity {} checked, {} differ{}\n",
-				store->updates, static_cast<double>(store->rewritten) / store->updates, store->packed.Size(), store->resyncs, store->parity.checks, store->parity.mismatches,
-				store->parity.Verdict(true));
-			store->updates = store->rewritten = store->resyncs = 0;
-			store->parity.Reset();
-		}
-		for (auto* cache : { &impl->sunExclusionCache, &impl->parabolicExclusionCache }) {
-			if (auto& c = *cache; c.builds) {
-				text += fmt::format("[DCLF] {} exclusion: {} builds, {} reused ({} of them for newer candidates, the entries that moved judged again); parity {} checked, {} differ{}\n", cache == &impl->sunExclusionCache ? "sun" : "paraboloid",
-					c.builds, c.reused, c.translated, c.parity.checks, c.parity.mismatches, c.parity.Verdict());
-				c.builds = c.reused = c.translated = 0;
-				c.parity.Reset();
-			}
 		}
 		static constexpr const char* kNames[3] = { "colour", "zprepass", "shadow" };
 		for (std::size_t i = 0; i < stats.async.size(); ++i) {

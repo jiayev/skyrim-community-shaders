@@ -708,7 +708,7 @@ namespace DCLF
 		// ClassifyFrame's walk: the leaf up to its category node, the category node left out (thousands of entries share it: its
 		// events are taken by categoryNode, DrainHiddenEvents).
 		// The mirror's chain (T6b1b).
-		++mirrorReads.reads[static_cast<std::size_t>(MirrorRead::HiddenChain)];
+		++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::HiddenChain)];
 		for (const void* key = a_geometry; key && key != a_tracked.categoryNode; key = MirrorParent(key)) {
 			const auto* object = static_cast<const RE::NiAVObject*>(key);
 			a_tracked.hiddenChain.push_back(object);
@@ -743,7 +743,7 @@ namespace DCLF
 		ankerl::unordered_dense::set<RE::BSGeometry*> retake;
 		ankerl::unordered_dense::set<const void*> categoryEvents;
 		auto announce = [&](RE::BSGeometry* a_geometry, Tracked& a_entry) {
-			a_entry.hiddenEventFrame = sceneFrame;
+			a_entry.hiddenEventFrame = PassStamp();
 			if (!(a_entry.lightTraits & kTraitActor))
 				retake.insert(a_geometry);
 		};
@@ -782,6 +782,6 @@ namespace DCLF
 		if (timeline && sceneFrame % 300 == 0)
 			std::erase_if(unhideKeys, [&](const auto& a_key) { return sceneFrame - a_key.second.first > 600; });
 		hiddenGating = hiddenEventsInstalled && sceneFrame > moveUngatedThrough;
-		hiddenWitness = hiddenGating && (SwitchEnabled(Switch::WalkParity) || SwitchEnabled(Switch::PersistentParity)) && ParityDue(sceneFrame);
+		hiddenWitness = hiddenGating && (SwitchEnabled(Switch::WalkParity) || SwitchEnabled(Switch::PersistentParity)) && PassParityDue();
 	}
 }

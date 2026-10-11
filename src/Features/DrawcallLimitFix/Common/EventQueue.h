@@ -26,6 +26,12 @@ namespace DCLF
 			for (std::size_t i = 0; i < Capacity; ++i)
 				cells[i].sequence.store(i, std::memory_order_relaxed);
 		}
+		/** @brief T6b3d: a_onPush is called after every push, on the pushing thread (a consumer's wake: WakeScenePropertyEvent and the like). */
+		explicit EventQueue(void (*a_onPush)()) :
+			EventQueue()
+		{
+			onPush = a_onPush;
+		}
 		// The queues live as long as the process, and what they hold at its end (engine objects' references among them) is
 		// left alone: nothing may release engine objects while the process is torn down.
 		~EventQueue() = default;
@@ -35,36 +41,21 @@ namespace DCLF
 		/** @brief Any thread. */
 		void Push(T a_value)
 		{
-			std::uint64_t position = head.load(std::memory_order_relaxed);
-			for (;;) {
-				auto& cell = cells[position & (Capacity - 1)];
-				const std::uint64_t sequence = cell.sequence.load(std::memory_order_acquire);
-				const auto difference = static_cast<std::int64_t>(sequence) - static_cast<std::int64_t>(position);
-				if (difference == 0) {
-					if (head.compare_exchange_weak(position, position + 1, std::memory_order_relaxed)) {
-						cell.value = std::move(a_value);
-						cell.sequence.store(position + 1, std::memory_order_release);
-						return;
-					}
-				} else if (difference < 0) {
-					// Full: spilled, never dropped.
-					auto* node = new Spill{ std::move(a_value), spill.load(std::memory_order_relaxed) };
-					while (!spill.compare_exchange_weak(node->next, node, std::memory_order_release, std::memory_order_relaxed)) {
-					}
-					spilled.fetch_add(1, std::memory_order_relaxed);
-					return;
-				} else {
-					position = head.load(std::memory_order_relaxed);
-				}
-			}
+			PushOnly(std::move(a_value));
+			if (onPush)
+				onPush();
 		}
 
-		/** @brief The one consumer: every event pushed before the call, oldest first (a_visit(T&&)). Returns how many. */
+		/**
+		 * @brief The one consumer: every event pushed before the call, oldest first (a_visit(T&&)). Returns how many. Bounded by the
+		 * ring's head at the call (T6b3d): a producer extending the queue meanwhile is the next drain's, so a drain always ends.
+		 */
 		template <class F>
 		std::size_t Drain(F&& a_visit)
 		{
 			std::size_t count = 0;
-			for (;;) {
+			const std::uint64_t bound = head.load(std::memory_order_acquire);
+			for (; tail != bound;) {
 				auto& cell = cells[tail & (Capacity - 1)];
 				if (cell.sequence.load(std::memory_order_acquire) != tail + 1)
 					break;
@@ -97,6 +88,32 @@ namespace DCLF
 		std::uint64_t Spilled() const { return spilled.load(std::memory_order_relaxed); }
 
 	private:
+		void PushOnly(T a_value)
+		{
+			std::uint64_t position = head.load(std::memory_order_relaxed);
+			for (;;) {
+				auto& cell = cells[position & (Capacity - 1)];
+				const std::uint64_t sequence = cell.sequence.load(std::memory_order_acquire);
+				const auto difference = static_cast<std::int64_t>(sequence) - static_cast<std::int64_t>(position);
+				if (difference == 0) {
+					if (head.compare_exchange_weak(position, position + 1, std::memory_order_relaxed)) {
+						cell.value = std::move(a_value);
+						cell.sequence.store(position + 1, std::memory_order_release);
+						return;
+					}
+				} else if (difference < 0) {
+					// Full: spilled, never dropped.
+					auto* node = new Spill{ std::move(a_value), spill.load(std::memory_order_relaxed) };
+					while (!spill.compare_exchange_weak(node->next, node, std::memory_order_release, std::memory_order_relaxed)) {
+					}
+					spilled.fetch_add(1, std::memory_order_relaxed);
+					return;
+				} else {
+					position = head.load(std::memory_order_relaxed);
+				}
+			}
+		}
+
 		struct Cell
 		{
 			std::atomic<std::uint64_t> sequence{ 0 };
@@ -112,5 +129,6 @@ namespace DCLF
 		std::uint64_t tail = 0;  // the consumer's
 		std::atomic<Spill*> spill{ nullptr };
 		std::atomic<std::uint64_t> spilled{ 0 };
+		void (*onPush)() = nullptr;  // set at construction, before the queue is shared
 	};
 }

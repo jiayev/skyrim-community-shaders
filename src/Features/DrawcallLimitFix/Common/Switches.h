@@ -16,6 +16,7 @@ namespace DCLF
 		Dclf,
 		AsyncPriority,
 		Workers,
+		Fanout,
 		Precompile,
 		Cull,
 		Skinned,
@@ -62,6 +63,7 @@ namespace DCLF
 		CapturePointParity,
 		SkylightParity,
 		FrameJoin,
+		FanoutParity,
 
 		// Diagnostics: stats, shader debugging, and the probes of open investigations (dclf-open-defects.md).
 		Stats,
@@ -93,6 +95,7 @@ namespace DCLF
 		GBufferProbe,
 		ShadowDebugOutput,
 		Timeline,
+		ReleaseGuard,
 
 		// Test harness: scripted input for unattended runs.
 		TestCommands,

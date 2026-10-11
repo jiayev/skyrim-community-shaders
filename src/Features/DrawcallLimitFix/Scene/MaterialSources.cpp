@@ -2,6 +2,7 @@
 #include "MaterialPort.h"
 
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
+#include "Features/DrawcallLimitFix/Common/SceneWake.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 
 #include <bit>
@@ -61,6 +62,8 @@ namespace DCLF::MaterialSources
 		}
 		EventQueue<const void*, 8192>& ShadingQueue()
 		{
+			// T6b3d: the scene pass drains it (NameShadingEvents) for the next frame's shading sample: per-frame, so it wakes no pass (the next
+			// frame input's takes it).
 			static EventQueue<const void*, 8192> queue;
 			return queue;
 		}

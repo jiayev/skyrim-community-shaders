@@ -2141,6 +2141,376 @@ resident-draw, set and fade parity; motion m28/m29).
     - **Left:** the coordinator's kicks and joins (T6b3c, d). `RunAhead`'s stores and the extras/geometry parities the report reads
       are the builder's (as the builds ahead were the pool's). `StreamsNow` is refused while a work item is outstanding, the recordings
       wait included.
+    - **Finding: a snapshot was not self-consistent** (2026-10-10; the fix written, not built or run yet). About one run in 13 lost the
+      Vulkan device (Aftermath: `Error_DMA_PageFault`, a read, a VA with no resource, a vertex shader active). The builder built the
+      draws first, from the ahead context, then made the revision; the revision's `VersionSet` names ready, unadopted growth versions,
+      but the draws embedded the context's face positions address (`AppendFaceStreams`' face-stream rows in the geometry table,
+      `SetSequenceStream`), of the version current when the frame posted the context. Adoption (`AdoptNamed`) made the growth's
+      version current, and the frame committed draws still naming the old one. Only payload identity was checked (the face positions
+      compare of `AheadUsable` runs under `CS_DCLF_REVISION_PARITY` alone). Once the old version's holders went (the previous
+      snapshot's set, the growth records `Prune` drops, older recordings), the deletion queue freed it about 24 submissions later,
+      while corrected draws took 4-8 frames: the windows overlapped now and then, and a vertex shader read face positions from freed
+      memory. The fix, in the spirit of "the snapshot is complete and self-consistent":
+      - *(a) One consistent build.* The builder makes the revision first, then builds the draws (while the recordings are made) with
+        every embedded address of a versioned buffer taken from the sealed set (`rv.sealedVersions`, `NamedVersionAddress`: the version
+        the set names, else the current one). A later make that names other versions builds them again (`DrawsEmbedFacePositions`);
+        the publication-only snapshot builds them from the context. The audit of what the draws embed: the face positions (main and
+        shadow geometry tables' face rows, the CPU templates' second stream) are the only versioned address. The rows' tables, the
+        objects and extras descriptors are the payload ring's (the frame's own buffers: the commits write the ring entry's addresses
+        and indices over the build's); the frame constants and shadow constants are the resources' plain buffers (payload identity);
+        placements, palettes, shading and tree wind indices are written by the commits from the frame's own inputs; the capacities and
+        fits are bounds, never above what the revision names (the context is the frame's adopted state).
+      - *(b) Pinning.* Every epoch's frame owners hold the adopted snapshot (main, shadow (and the occlusion epoch reusing them),
+        reflection), released on ORG's host thread after the slot completes, through the cleanup queue: the builder's drop of a
+        replaced snapshot is a CPU drop alone. The reflection epoch also holds its scene list payloads' `bindingOwners` and the ring
+        entry's draws (before, only the same frame's Z-prepass execution held them).
+      - *(c) A guard, unconditional.* `DecideCoverage` compares the adopted draws' face positions with the current version's
+        (`SceneBuffers::facePositionsAddress`, once the versions are current); a mismatch withdraws the frame and wakes the builder:
+        `[DCLF] snapshot draws: N frames withdrawn for draws embedding another face positions version than the current one <- STALE
+        DRAWS; growth adoption to draws embedding it (frames): N growths, p50 N, max N` (0 withdrawn by construction, and 0 frames).
+  - *T6b3c: one pass - walk, joins, commit, publish* (2026-10-10; written, not built or run yet). The frame's two scene passes (the
+    frame start's walk and commit, EarlyPrepass's joins and publication) are one, still kicked at the frame's start: a record bound in a
+    pass is committed and published in it (it was bound at N, committed at N+1 and published at N+1's EarlyPrepass).
+    - **The pass** (`RunSceneWork`): the frame inputs, the ahead context, the returned publications, the coordinator's inputs and the
+      joins' (`TakeAccumulateInputs`: the room map, the pipeline frame, the capture's drain), `RecycleRetired`, `ApplyEvents`, the
+      constants posts, the technique rows, the material records and bindings, the walk, then the joins (`BuildAccumulatePhase`,
+      `MakeNewPipelineConstants`, the material and shared bindings, `ResolveLookups`), `CommitSet`, `PublishScene` (the snapshot
+      builder handed the publication), `CheckMirror`. Gone: `RunAccumulateWork`, the EarlyPrepass kick and its inline variant. The
+      technique rows, `RecycleRetired` and `TakeFrameInputs` run once a frame, and `passSerial` advances with `sceneFrame`.
+    - **EarlyPrepass posts and serves**, and reads nothing of the coordinator's outside the parities (which run the pass inline):
+      `PostAccumulateInputs` (the room map; the capture drained into a `RegistrationDrain` posted latest-wins for the next pass,
+      `PostRegistrationDrain`, a post no pass took handing its residue to the next; the light-mask parity) and `PrepareAccumulatePhase`
+      (`ServeMaterialRequests`, `ValidateMaterialSlice`; its `sceneBuilt` test, a coordinator read, gone). The registrations and the
+      reflection residue were vectors both threads wrote, ordered by the accumulate kick (`capturedRegistrations`, `capturedResidue`,
+      `registrationsObserved`): with the pass at the frame's start, EarlyPrepass would write them while it runs. `CheckRegistrations`
+      now judges the last frame's registrations against this pass's walk, before its joins (a record the last pass bound counts as
+      bound). The residue carries its names, read by the render thread at the drain (`CapturedResidue::names`): the pass classifying it
+      runs past a Present that may have released an untracked geometry, and nothing of it is dereferenced there. The material round
+      trip is the same or shorter: a join asks in pass N, the render thread serves at EarlyPrepass N (N+1 when the pass's joins end
+      after it), and the next pass applies the answers and captures.
+    - **CommitSet.** The rebinding loop (the commit reading `bindQueue`, `setRebinding`) and `rebindAll` are gone: the joins run first
+      and own both. A record bound again leaves before the commit (`LeaveSet`, the applied phases cleared, `kChangeBindings`), and the
+      commit, finding it in its queue and on the change log, takes it back when ready: its claim is kept through the rebind (the old
+      record draws from the installed snapshot until the publication with the new one; before, it left for a frame and the engine drew
+      it). A moved membership witness makes every resident leave the same way before `EndAllResidency` (the commit's `rebindAll` kept
+      them all out for one commit). Two fixes the order needed. `LeaveSet` marks its slot for `ApplySet` (`MarkSetApply`, the commit's
+      `markApply` made a member): a slot the joins took out and the commit left out shows no change at the commit (its phases are
+      already 0), and no revocation reads changes from before the commit, so its claim would have left the snapshot with no `left` note
+      and `setPhasesApplied` stayed stale. And a resident whose binding does not stand and whose membership pass fails is dropped
+      (`DropResidentSlot(slot, true)`, the failed joins' rule), where the commit's rebinding rule used to keep it out. The claims' notes
+      stay consistent: `ApplySet` compares the applied claim with the committed one, so a leave and a rejoin in one pass note nothing,
+      a leave alone notes `left`.
+    - **The republish** at a pass's start is gone (`DeltasPending`, `TablesPublication::republished`): every pass ends with a
+      publication, which carries what Present's `ApplyEvents` applied while no pass ran (menus, load screens); a frame whose start does
+      not run adopts nothing, so nothing waits for it.
+    - **Diagnostics.** The `scene tables CPU per frame` line gains the parts `joins`, `commit` and `publish`; `timing.sceneMs` and
+      `sceneTablesMs` are the whole pass's, `timing.buildMs` EarlyPrepass's posts and serving (the `CPU per frame` labels say so);
+      `CS.DCLF.AccumulateWorkMs` is gone. The set line's rebinding count is the members the joins bound again before the commit, and its
+      `LeaveSet` count includes the joins' leaves. The T6b0 `attach to join` and `record to join` should lose a frame (0 when ready);
+      `commit to installation` and `commit to adoption` keep their meaning (the commit's frame is the pass's, as before).
+    - **Risks.** The persistent parity's observers inside the joins (the derived probe's live LOD fade reads, `CheckResidentParity`,
+      `CheckObjectSlots`) run inline at the frame's start instead of EarlyPrepass, against the engine as it is there (`currentFade`
+      before the main cull). The commit sees the joins' new pipelines and records, so members join a frame earlier and
+      `members patched by the accumulate phase` must stay 0. The joins and the publication lengthen the pass that Present tries to join.
+  - *T6b3d: the pump; the joins out* (2026-10-10; w122-w130: parity and normal path run after each revision; the last wake revision written, not run yet). The
+    scene pass is no longer kicked or joined by the frame: a `SerializedTaskPump` (the coordinator's pump, `Scene/SceneStore/ScenePump.cpp`,
+    a new file) runs `RunSceneWork` on the scene lane when one of its producers wakes it with an input, any number of times a frame
+    (bursts) or none (menus).
+    - **The lane.** The pump dispatches onto `SceneScheduler::SceneLane()` (its `Coordinator` class), not `Executor()`'s coordinator: the
+      lane is the scene work's alone (step 6c), so a long pass never holds up the coordinator's jobs (AsyncWorker's, the frame's builds),
+      and its thread is above the engine's job threads as the scene work's was. One pass at a time, level-triggered, lock-free; a wake
+      while a pass runs queues exactly one more (the pump's epoch).
+    - **Wakes, by source** (`Common/SceneWake.h`: `WakeScenePass(SceneWake)`, any thread, after the push it announces; a bit per source
+      the pass takes at its start, with a fence pair, so a producer whose bit is set does no atomic RMW). The frame-input pass is the
+      backbone (`FrameInput`, once a frame; the frame's start folds its posts into one wake: `ScenePassWakeBatch`). Besides it a pass runs
+      only for an input wanted before it: from the tracker's stack `Attach` (in the world alone: its capture), `Detach`, `Hidden`, `Leaf`
+      (a property or alpha swapped), `PropertyUpdate` and `AlphaUpdate` (their values); `PropertyEvent` (flags, material, controller,
+      emittance), `SwitchEvent`; `MaterialAnswer` (a requested capture answered: what a waiting join needs), `TextureReply`, `Catalog`;
+      `LoadMarker`, `LoadDrain` (once a Present and frame start under a load screen, when the engine events' wakes are held:
+      `SetScenePassLoading`); `Capture` (the render thread's category capture and mirror probe). The hidden, leaf, value and property
+      sources wake only outside the frame's render (`EngineReadWindow::IsOpen`, Main::Draw to Present): inside it the engine sets and
+      undoes them for its own views - `GetRenderPasses` (the LOD fade hook) leaves each registering camera's alpha on the property and
+      pushes its value whenever it differs, the reflection faces hide the water around them (`TESWaterReflections::Update`), Main::Draw
+      hides the first-person skeleton (FrameGlobals' `cullHidden` lists both) - so the frame's next pass takes them; such pushes are counted
+      (`TakeScenePassDeferred`). Every event is still pushed: the mirror applies them all in order; only the wake is decided. No wake from
+      what the frame's own pass takes anyway: the per-frame queues (moves, fades, fade snaps and amounts, node transforms and controllers,
+      LOD fades, emittance, shading), object LOD's segment writes (the terrain manager refreshes them as the camera moves, mostly to the
+      ranges held: `SampleLodRanges` finds no change), the tracker's node and geometry value updates (transforms, the cull's fade state, a
+      switch's index, segments), an attach out of the world (a loader's subtree: its world attach wakes), the material writers' captures
+      (`MaterialPort::captures` has no hook: controllers write every frame; a requested capture's answer wakes), the render thread's
+      mid-frame posts (the registration drain, the room map, the pipeline frame and blocks, the fade posts), a retirement returned, a
+      returned publication, the snapshot builder. Only the waking tracker events are stamped, so the latencies measure what is meant to
+      reach the frame at once. Measured before the last revision (w130, passes woken / of them changed nothing; a pass counts under each
+      source it took): frame input 300/18, attach 827/488, detach 256/2, hidden 3262/2256, leaf swap 515/363, property values 1346/1004,
+      property event 1039/794, LOD segment 611/354, material answer 25/0, texture reply 105/19, catalog 10/4, captures 116/9; 18 passes a
+      frame (w127: 31), 0.24-0.28 ms a pass.
+    - **A pass** (`ScenePass`, then `RunSceneWork`): the reasons taken, the frame inputs taken (the frame's globals bound; none before the
+      first frame), the returned publications dropped and the retired batches recycled, the coordinator's and the joins' inputs, the
+      category capture and the mirror probe taken (before the drains, so every event older than a capture is applied first), then
+      `CollectEvents` drains every engine queue up to where it stood at that moment (the tracker by one exchange; `EventQueue::Drain` is
+      now bounded by the ring's head at its call, so a producer extending a queue is the next drain's and a drain always ends) and
+      `ApplyEvents` applies the load markers, then the batch; then the walk, the joins, the commit and the publication as in T6b3c.
+      While DCLF does not run (not loaded, switched off: `SetScenePassMode`) a pass applies the events alone, as Present did. A pass
+      that throws is caught (a throw out of the drain would close the pump for good) and counted.
+    - **Per-frame work once a frame input** (`DeltaWalk`: `perFrameFrame`, `perFrameWalked`). The per-frame entries (actors, faces,
+      movers, switches, animated shading) are walked by the first pass of a frame input alone; a later pass of the same frame takes what
+      its events schedule. Their plan's movers are the last per-frame walk's: a later walk that wrote nothing makes no plan (the frame
+      draws with the last one's movers and roots), one that wrote slots carries `lastMovers` (those still recorded in the slots they were
+      listed with). `Tables::actorObjects`, a per-walk list, is kept through a walk that does not take the actors.
+    - **A pass that changed nothing publishes nothing** (`PublicationNeeded`, `PublishKey`): a pass publishes when, since the last
+      publication, the tables moved (their logs' ends, the version counter, the constants, trees and fade roots stamps, the sizes, the
+      generation), the lookups or their catalog, the candidates' generations, the commit's toggles generation or applied pipeline blocks,
+      the commit applied something or its claims snapshot is dirty, the category nodes, a delta is pending (plans, shading names, seeds,
+      switches, retired imports, wetness, light entries), or it took a coordinator input for the frame (`publishForced`). The
+      hold-back of the first version (`PublicationWanted`, `NoteSnapshotWorkTaken`, `SnapshotWorkPending`) is gone: the builder coalesces
+      what is published during a build, and a publication costs 0.03 ms (w124).
+    - **The builder: one build in flight** (`SnapshotPass`). The first revision paced it by the frame's takes (the next build started
+      only once the frame took the last snapshot): w127 showed it held a publication made after the frame-N take for the frame-N+1 take,
+      adopted at N+2 (event to publication p95 1 frame, event to adoption p50 2, p95 2-4; frames whose snapshot brought no newer one 7-46
+      a report against parity's 1-19). Now the builder starts its next build as soon as it is idle, from the newest publication (the work
+      slot holds only one newer than the posted snapshot's), everything published during a build coalesced into it; a posted snapshot the
+      frame has not taken is replaced by the newer complete one, and the frame takes the newest. The build's own time is the rate
+      (publications come only on a change: w127 4-8 a frame), and an unchanged revision is cheap (its recordings kept).
+    - **w124, what it showed (normal path, before the revision).** 20-35 passes a frame (at most 121 in one), events a pass p50 0-2 (the
+      moves, not counted there, woke most), 5300-8300 publications and as many snapshots built a report (the frame adopted ~290), frames
+      adopting nothing new 10-44 a report (w122: 1-14): every pass walked the ~500-700 per-frame entries, wrote them, and so published and
+      built. The first report (a load) ran 88857 passes under the load screen, a pass a push. **The set did not collapse**: w124's set
+      line matches w122's (parity, one pass a frame) report for report - members 7931/8206/6993/4593/3269/3727 (w122) against
+      6412/8197/6931/4511/3252/3703 (w124), live slots 8036/8226/7008/4602/3271 against 7975/8218/6945/4520/3253, persistent sequences
+      7398/7860/4933/2945/2719 against 7396/7570/4959/3038/2717, tracked 11860 -> 5272 in both: the motion route leaves the dense area
+      (12k tracked geometries) for a sparse one (5k) and comes back. The two reports read as a collapse are w124's last two (members 4232
+      and 2008, 409 and 388 joined): there the engine itself attached far less than in w122 at the same reports - the hooks' own counters,
+      which no pass touches, read `262 attaches in the world captured ... 2080 out of the world` and `491 ... 6893` against w122's 2333 /
+      34953 and 1831 / 19343, the attach events +2336 and +7390 against w122's ~+37000 and +21000 - while the detaches went on, so the
+      tracked set fell 9644 -> 5155 -> 3782 (w122: 10887 -> 10342 -> 9138) and the members with it (the route's timing differs between
+      runs: the frames counted reach other places). Nothing in the pass stamps made a verdict stale (the stamps mark "classified/written/announced in this walk", which only
+      the same walk reads; `MemberBindingStands`, the commit's readiness and the sweep read no frame or pass stamp). The leave causes are now
+      reported to show it in a parity-free run.
+    - **The mirror's `<- MIRROR` miss ('SHIELD': hidden, w122 and w128; w125, w126, w129 0).** A request's capture fills only the
+      records the mirror lacks (`SceneTracker::PushCaptured(event, true)`, `Event::mirrorFill`, `ApplyMirrorEvents`), as before T6b3d
+      (the first version re-captured every ancestor at the frame's start and applied it whole). w128 missed the same node again with it,
+      so that was not the mechanism; open: an actor's shield node's hidden bit written by a store no patched site covers (the equip
+      code), which the probe's slices sample now and then. CS_DCLF_HIDDEN_WATCH names the writer of a watched node's bit.
+    - **Removed:** `KickSceneTask`, `JoinSceneTask`, `TryJoinSceneTask`, the frame-start and Present joins, `SceneWorkInline`'s kick,
+      `IngestEvents` (the frame start's and Present's), Present's `ApplyEvents` for menus, `PostIngested`, `ingesting`,
+      `NoteEventsPresent`, `EventsUnapplied`, `EventBatch::presents` and `mirrorLate`, `TakePresentJoins` and the `Present (T6b1d)` line,
+      `reportPending`, the `CS_DCLF_FRAME_JOIN` switch's use, `timing.sceneTables*`.
+    - **What stays at the frame** (render-thread captures and requests, `ServeFrameRequests`, not while a load screen is up): the switch
+      catch-ups (`CatchUpSwitches`, engine writes) from the passes' requests (`switchCatchUps`: a pass's attached roots and switch events,
+      references copied while its batch held them, dropped on the render thread) and the world after a load; the category capture (forced
+      when its signature moved, a load ended, or a pass drained a detach: `categoryDetachSeen`), its portal roots' captures pushed onto the
+      tracker's stack before the post, mirror-only (`SceneTracker::PushCaptured`, `Event::mirrorOnly`: applied in order with the hooks'
+      events, never a tracking attach or detach); the mirror's capture requests, captured without reading the mirror and filling what it
+      lacks (the `GuardFrameAccess("CaptureMirrorRequests")` read gone); the mirror probe from a slice the coordinator posts once a frame
+      (`PostMirrorProbeRequest`, each geometry held by the request; `GuardFrameAccess("ProbeMirror")` gone), its records posted for the
+      next pass; `treeLod.Drain` (explicit). While DCLF does not run the frame start serves the catch-ups and tree LOD alone. The loading
+      branch (`NoteLoadingScreen`, at Present and the frame's start) raises `loadingSeen`, posts the marker once, withdraws the set
+      (`PublishSet(nullptr)`), flags the next frame's world catch-up and forced capture, and wakes one draining pass a call; the passes
+      drain into the mirror's carry while it holds (the carry is the coordinator's now), the references the discarded node and switch
+      events hold going to Present (`batchesReleased`). References are released at Present as before (`EngineReleases`,
+      `materialsReleased`, `batchesReleased`).
+    - **Parity mode** (the `SceneWorkInline` switches): the wakes are dropped and the frame's start runs the pass inline
+      (`RunScenePassInline`: `TryRunInline`, or after a pass the lane started ends), then delivers the held PrimaryCull notes; the
+      render-thread observers keep their placement. A Present with no frame start since the last (menus, load screens) runs one inline
+      pass applying the events alone (`ApplyEventsInline`: Present's apply before T6b3d). The normal path never waits.
+    - **Once a pass, or once a frame** (`PassStamp`, `PassParityDue`): the coordinator's parities sample every 60th pass
+      (`ParityDue(passSerial, k)`: the set's 23, the walk's 17 and 15, the walk parity, the joins' derived probe 13, the resident parity,
+      `CheckObjectSlots`, the candidates' 7, `DecalOrder`, `CheckChangeLog`, the hidden witness, `ApplyLodSegmentEvents`), so a burst
+      does not repeat them and a frame without a pass does not skip them; `ValidateSlice` and the LOD parity run once a pass (one batch a
+      pass). "This walk" marks are pass stamps: `candidateFrame` (classified in this walk), `hiddenEventFrame` (announced in this pass),
+      `geometryLastUsed` (the slot written in this walk), `accumulateReasonPass` (a join failed for this pass's verdict); each is read only
+      by the walk or joins of the same pass, so a pass without the entry finds an older stamp and treats it as not new, never as stale.
+      Kept on frames: the per-frame walk (`perFrameFrame`), `accumulateReasonFrame` and the T6b0 stamps (compared with `writtenFrame`),
+      `materialSnapshots`' aging, `transformWatch` (the texture transform buffer flips once a frame: "two frames", the comment fixed),
+      `residueClasses.seen` (persistence counted once a frame), `movedFrame` and `MovedRecently` ("this frame or the last"); `movedKeys`
+      turns over when the pass's frame moves on, and `movedFrame` is pruned every 256 frames seen. An idle pass's batch, holding no
+      reference, is dropped instead of retired.
+    - **Reports.** The coordinator logs its own lines from its pass when its `sceneFrame` crosses `kReportInterval`
+      (`ReportCoordinator`): the pump line, the set, its leave causes and the revocations, the scene membership (moved from PrimaryCull's
+      report: the joins' statistics), and under CS_DCLF_STATS the scene report's coordinator half (`SceneReport`), the walk's statistics,
+      the tables published, the replay and the retirement, the T6b0 event stages, the scene pass CPU by part and the light path (per
+      pass), the shadow casters; it resets its own times. The frame's report (`ReportStats`, at Present once a frame number) reads only the
+      frame's state and atomics: the render-thread half of the scene report (`FrameSceneReport`: the material parity, the pipeline
+      constants and templates, the shading and extras parities, tree LOD, the mirror watch, the frame capture), the installs and the
+      commit-to-installation histogram, and a `render thread scene CPU per frame` line. The `[DCLF] scene tables CPU per frame` line is
+      now `[DCLF] scene pass CPU (T6b3d: the coordinator's, per whole pass)`.
+    - **Diagnostics.** `[DCLF] scene pump (T6b3d): N passes over N frames (X a frame, at most N in one, N frames without one); N whole (N
+      walks took the per-frame entries, N their events alone), N
+      applying the events alone (DCLF not running), N under a load screen, N inline (the parities), N threw; pass ms (avg/p95/max) A/P/M;
+      events a pass (p50/p95/max) ...; N publications, N passes changed nothing (none published); event to publication: ms (p50/p95/max)
+      ..., frames (p50/p95/max) ...` (the oldest waking tracker event applied and not yet published, carried by each publication), and
+      `[DCLF] scene pump wakes by source (T6b3d: passes woken / of them changed nothing): frame input N/N, attach N/N, detach N/N, hidden
+      N/N, leaf swap N/N, property values N/N, alpha values N/N, property event N/N, switch N/N, material answer N/N, texture reply N/N,
+      catalog N/N, load marker N/N, load drain N/N, captures N/N, none N/N` (a pass counts under every source it took; only the sources
+      that woke one are listed), and `[DCLF] scene pump pushes inside the frame's render, not woken (T6b3d: the frame's next pass takes
+      them): hidden N, leaf swap N, property values N, alpha values N, property event N`. `[DCLF] set
+      leaves by cause (T6b3d): N left; scene not built N, no phase to take part in (freed, ineligible, phases off) N, not bound (the joins
+      dropped its membership) N, waiting N (by the waiting-for index: i N, ...), its layer partner or a phase of the whole object N`. In
+      the snapshot lines: `[DCLF] event to adoption (T6b3d: the oldest event a publication carried, to the frame installing it; frames from
+      the frame counter at the push - an event of the update before frame N carries N-1, so 1 is the least - to the adopting frame): N
+      adoptions; ms p50 .., p95 .., max ..; frames p50 .., p95 .., max ..` (the publications the builder skipped past included: their log
+      nodes carry their stamps), beside `commit to adoption`. The render-thread budget splits the frame start's scene cost: `scene exchange
+      (snapshot taken and adopted)` (`AdoptSnapshot`, `HandOverAtFrameStart`, `SyncFrameTables`, the coverage decision and the claims)
+      and `scene captures (globals, categories, mirror, switch catch-ups)` (`BeginFrame`'s capture, `ServeFrameRequests`); the `accept`
+      bucket is gone.
+    - **Risks.** Load screens: the marker and `loadingSeen` are posted from the render thread; a pass that read `loadingSeen` before it
+      rose applies one batch of the load's first events (as an ingestion just before the load did). Menus: the passes run for events,
+      answers and posts (whole passes while DCLF runs), publishing only what changed. Bursts: a burst's later passes take their events
+      alone; the per-frame entries wait for the next frame input. A missed change key (a table write that moves none of `PublishKey`'s
+      words) would leave a publication unmade until the next change; the set and walk parities and the frame's adoption counts show it.
+      First frame: the pump starts at PostPostLoad and applies events alone until the first frame's `SetScenePassMode`; a pass before the
+      first frame inputs binds empty globals. A switch catch-up waits for the next frame's start after the pass that drained its event.
+      PrimaryCull's `IsTracked` still reads the coordinator's tracked set during the frame (named in T6b3a).
+    - **To watch in a run:** `<- FRAME ACCESS` and `<- LANE ENGINE ACCESS` absent; the set and walk parities clean; the `scene pump` line
+      (passes a frame, walks with the per-frame entries ~1 a frame, passes that changed nothing, publications a frame, pass ms), the
+      `wakes by source` line (well under half of each source's passes changing nothing; a source whose passes mostly change nothing is one
+      to take off the wakes) and the `pushes inside the frame's render` line (what the render-time toggles amount to), `scene snapshots` (built about
+      once per publication burst; frames adopting nothing new near parity's), `event to publication` and `event to adoption` (the T6b3
+      gate: adoption p95 at most 1 frame in motion), the
+      set's leave causes against w122's at the same report, the mirror parity's missed count, and the budget's `scene exchange` against
+      `scene captures`.
+  - *T6b3e: the fan-out* (2026-10-10; written, not built or run yet; e0-e4, e5 left). The walk's rounds and the joins are an evaluation
+    (pure, on the preparation pool for a burst) and a merge (in order, on the scene lane); the per-frame part of the placement plan is
+    the frame-input pass's alone. Shape first: the evaluations are fanned out, the merges kept as the serial walk wrote, latency not tuned.
+    - **e0, the plan's roots once a frame input** (`PublishPlacementPlan`). `QueueRoots` (every moving root's move events, every move
+      key's still root: 33-50% of a steady pass) runs only in the walk that took the per-frame entries; a later walk of the same frame
+      plans only what its events wrote. Without a write it makes no plan (FrameValues keeps the last one's movers and roots, as T6b3d left
+      it); with one, its plan carries the per-frame walk's movers and roots (`lastMovers`, `lastRoots`: keys and slots), each item kept
+      while its entry holds the slot it was listed with, its references copied again from the entry and the root owner. The
+      `placement plan: roots` line now counts the per-frame walks' roots alone.
+    - **e1, the prerequisites.** PrimaryCull's `derivedCache` and `layerDerivedCache` (never erased) are gone: `MembershipPass` and
+      `MembershipLayerPass` are static and pure, take the cached `MembershipDerived` by const reference and return a `Membership` (the
+      pass, the entry to store, and `LastSyntheticFail` taken right after the synthetic pass on the thread that made it; 2, "not lighting",
+      without a Lighting property, where the thread's stale value was read before); the entry lives in `Tracked::membershipDerived` and
+      `membershipLayerDerived`, stored by the merge. Counters: one `EvalCounters` per chunk (kFanoutGrain = 64 entries, indexed by
+      begin / 64, so independent of the thread) holding the walk's `stats` fields (ineligible, technique and property rejects, the classify
+      cache's hits, checks and differences, the actor verdicts, the input watch's re-reads), `leafStats.missing`, `delta.reread`, a
+      `partMs` for the chunk's `PartTimer`, the evaluation's `evaluateKindMs`, the mirror reads, and a memo of `RootMovesNow`; merged in
+      chunk order (`MergeCounters`), a first string taken only where the store has none, the classify cache's warning logged there for the
+      walk's first difference. Every mirror-read count goes through `MirrorReads()`, the thread's `mirrorReadSink` (a chunk's) or the
+      store's. `ShardScope` (Internal.h), one per chunk: the pass's snapshot of the toggles (`ActiveToggles` reads a thread's
+      `activeToggleSnapshot`, Toggles.h) and of `TerrainBlendingDefersTerrain` (`terrainDefersSnapshot`), taken at `BuildScenePhase`'s start
+      (`passSnapshot`; `OcclusionEnabled` follows the toggles) and held by the lane over the walk and the joins too; on a pool thread also
+      the pass's frame globals (`passGlobals`, what `ScenePass` binds) and the scene work's flags, as `DirtyVerdicts`. Switches:
+      `CS_DCLF_FANOUT` (0 interleaved, the reference; 1 evaluated then merged on the lane; 2, the default, the pool from 128 entries, on
+      the lane only: inline passes, the parities', run as 1) and `CS_DCLF_FANOUT_PARITY`. Forced to 0: the walk's rounds under the
+      mirror-read parity (its live checks note and lease on the lane), the joins under `CS_DCLF_DERIVE_PROBE`. New scene parts, nested in
+      `evaluate`, `later rounds` and `joins` (`ScenePartNested`: out of the parts' sum): `evaluate (fan-out)`, `evaluate merge`, `joins
+      (fan-out)`, `joins merge`. `SceneMirror::Writes()` counts its record writes (never reset) for the contract's assertion.
+    - **e2, the walk's rounds** (`EvaluateRound`; Walk.cpp). `EvaluateEntry` (const) tries the light path (the first round) and
+      otherwise runs `EvaluateWrite` (WriteObject's classification and the record's slot-free inputs) and `EvaluateClassified` (an entry
+      classified in this walk: its traits without the root's motion, `mayRecord`, its sun entry as the merge's PerFrameOf will find it -
+      the resolved one, else `MirrorSunEntry` - with that root's `RootMovesNow`, its move key, and `ShadingInputsOf` where the merge may
+      store it). It reads the frozen mirror, the entry's own `Tracked`, `lodRanges`, the walk's stamps (`walkSerial`, `objectStamp`,
+      `PassStamp`), `denseWalk`, `hiddenGating`/`hiddenWitness` and the snapshot; no table, slot, `geometryIndex`, `rootMotion`, dependents
+      list, face state or other entry, and writes only its `EvalResult` (a `TrackedDelta`: verdict, candidate frame and reason, classify
+      inputs, input components, face shape, actor ownership; the light path's verdict with KeepSkin's record half and the HiddenWatch nodes;
+      the classification, shadow-only, partition mask and LOD chain, palette rows, shadow reject and technique, the diffuse sampled, the
+      occlusion techniques, the skin LOD word). `MergeEntry` in index order: the HiddenWatch arm, the light path's tail (KeepSkin's slot half:
+      the slot's skinned flag and palette rows; failing it, the entry is written in full, its evaluation made there, counted as `light-path
+      entries written in full at the merge`), then `MergeWrite` (the delta, `ListFaceShape`, `ResolveFace`, the geometry slots, the object
+      slot, bones, the shadow texture list, the keys, `ResolveSunEntry`, the face stream, fade root, decal, columns, actors, `bindQueue`,
+      `WriteLayer`) and EvaluateRound's tail (bucket, release, plan, change log, sun and light dirty, shadow dirty slots, `ListDependents`,
+      `PerFrameMerge`: `rootMotion` when it holds the root, else the evaluation's fresh value inserted with `movingRoots`, then
+      `PerFrameFrom`; the move key, `ListHiddenChain`, the per-frame set, the shading inputs, the fade dependents). `DenseWalk` keeps
+      `WriteObject`, now the same evaluation then merge. Every round uses the helper; `ParallelFor` grain 64 when a round has 128 entries.
+    - **e3, the joins** (AccumulatePhase.cpp). `BindByMembership`: `EvaluateJoinPre` per queue element (the skip tests, the binding
+      standing - `MemberBindingStands` reads the slot's indices, which nothing writes before the merges - the membership pass with the
+      entry's cache, the fade distance and height test); the merge stores the cache entry, drops a failed member, records the timeline's
+      failure (under `residueClassesLock` as before), queues the join and leaves the set. A `Kept` element whose slot an earlier element's
+      failure dropped meanwhile (a layer leaves with its base) is evaluated again at its merge, as the serial loop found it. The join:
+      `EvaluateJoin` (the held property's check, the cache's witnesses, the classification and descriptors when the witnesses fail or the
+      persistent parity's probe is due, `ClassifyFrame`, a classified join's pipeline key - the geometry slots are the walk's, frozen
+      through the joins, asserted - and static flags, the room index from the read-only room map); the merge: the cache's slot half (a slot
+      allocated or keyed by an earlier merge; failing it with its witnesses held, the join is classified there), the hit and miss paths'
+      slots, `materialRequested`/`bindRetry`, the snapshots and `MaterialPort::Evaluate`, the derived store and its warning, the derive
+      probe, the patch, `MarkResidentSlot`, `residentJoining`. `MakeNewPipelineConstants` stays after the joins, serial.
+    - **e4, the ordered streaming merge** (mode 2, the walk's rounds). One shard a chunk, claimed by the pool's helpers and the lane; the
+      lane merges chunk k as soon as its flag is set, evaluating an unclaimed shard meanwhile or waiting on the flag. Safe under e2's
+      contract alone (a merge writes its own entries, the tables and lists, none of which an evaluation reads; the mirror's writes and
+      `trackedLayout` asserted unchanged across the round). A chunk that throws stops the merges; the claimed ones finish, then the
+      exception is the pass's. A pass due for `CS_DCLF_FANOUT_PARITY` evaluates every chunk first. The joins are not streamed: a join
+      merge writes the entry a layer's evaluation reads (the room index), and a queue's duplicate slot's flags.
+    - **Engine references off the render thread (w136 crash and audit).** A pass released the last reference of a first-person weapon's
+      node in `ApplyLoading` (`nodeChanged.clear()`): the engine's destructor took its collision object out of Havok on the pump. Fixed:
+      `ApplyLoading` hands `nodeChanged` and `switchPending`'s nodes back; the plan carries keys and slots alone (`CarriedItem`,
+      `CarriedRoot`: e0's `lastMovers`/`lastRoots` held `NiPointer`s across passes), its references copied again from the entries
+      (`PlanItemOf`) and `rootOwners` when carried (`Tables::objectsRetired` and the unchecked copy are gone); the retried subtrees are
+      handed back before they are walked; `ResetSlotTables` sends `materialOwners` through the retirement chain as `ClearMaterialSlot`
+      does; the tree and fade-root owners are copied from `Tracked::fadeNodeRef`, the property's fade node held from the batch's pins
+      (`HoldProperties`; an attach's capture pins every ancestor), never `reset()` from a mirror key (a root without one is left
+      unlisted: `[DCLF] fade node references (T6b3e): N held anew from pins, N with no pin, N tree or fade roots left unlisted for want of
+      one`, `<- UNPINNED FADE NODE`); FrameValues' producer pushes its shading items' properties to `EngineReleases` after `Run`; a
+      throwing pass hands its batches to `batchesReleased` (`BatchUnwindGuard` in `CollectEvents` and `ApplyBatch`; the switch catch-up's
+      copies to `EngineReleases`); FaceSnapshots moves the scratch's copies into `released` when an insert fails; `ListTree` has the
+      dense walk's guard and the walk parity no longer copies the owners; the dead `SceneStore::Clear` is gone.
+    - **The fade node's pin (w140-w143: 295-813 roots a run unlisted, `<- UNPINNED FADE NODE`).** The engine sets a property's fade node
+      after its geometry's attach (`FUN_14147c690` from `FUN_14147bf70`, hooked as `PropertiesSetFadeNode`), and that hook pushed a
+      property update with no pin, so an entry attached before it found no reference (its attach capture had the field null) and later
+      held none. The hook now pushes a leaf update (`PushLeafUpdate`: the leaf's records with their pins, which `HoldProperties` takes),
+      and `CaptureLeaf` pins the property's fade node with the properties whenever it is on the geometry's live chain (never one off it,
+      not known alive). The observer line stays; its target is 0 left unlisted.
+      w144-w148 kept the same numbers (5125/373/293 in parity, ~3700/~490/~350 normal; interiors 0): by the code, what is left is a fade
+      node not on its geometry's chain at all (to be confirmed by the line's named cases, below). `FUN_14147bf70` (the setter's caller) runs from `BSFadeNode::CreateClone`,
+      `BSTreeNode::CreateClone`, `BSLeafAnimNode::CreateClone` and the 3D loads: a clone sharing its source's properties points them at the
+      newest clone's fade node, so the other instances' properties name a node of another reference, which neither their capture nor
+      the chain check pins. Now (`AcquireFadeNode`, from `HoldProperties` and, when the mirror names a node the entry does not hold, from
+      `HeldFadeNode`): the pin, else that node's root owner when it is a tracked reference's root (`rootOwners`: a held reference), else
+      the render thread is asked (`FadeNodeRequest`, once a key): at the frame's start it reads the geometry's property where
+      GetRenderPasses reads it, and for a geometry in the world whose property still names the node (it draws with it: alive) takes the
+      reference and posts it back (`FadeNodeAnswer`, waking a pass); `ApplyFadeNodeAnswers` stores it in the entry and lists the slots'
+      fade root and a member's tree. The line: `[DCLF] fade node references (T6b3e): N held anew from pins, N with no pin (N copied from a
+      root owner, N asked of the render thread: N answered, N answered none), N tree or fade roots left unlisted for want of one (until an
+      answer) <- OK`, with the first four without a pin or root owner named (geometry, node name, address, kind, a reference's or not,
+      on or off the geometry's mirror chain, where wanted, the batch's pins): `<- UNPINNED FADE NODE` when a request went unanswered or an
+      answer was none. The unlisted count is now a frame or two per such object, until its answer.
+    - **The set commit parity on the lane (`'Land'`, `'obj'`: phases 0x21 kept, 0x0 now, waiting now; before T6b3e too).** The commit's
+      reflection readiness (`PhaseReady(kSetReflection)` -> `ReflectionPhaseReady`) read `Reflection::slotPipelines`, which the render
+      thread's `PrepareReflection` assigns whole every frame (value-initialised, then filled) from the frame's tables and catalog: on the
+      lane the read raced the assignment (a reallocation, or the window where every handle is null), so the parity's full evaluation, a
+      moment after the commit's, found members' pipelines missing; inline (the render thread runs the pass) it cannot. The commit now asks
+      `IndirectDraws::ReflectionSlotReady(tables, lookupsCatalog, slot)`: the slot's forward pipeline in the lane's own catalog (the one
+      its publication carries and the revision resolves the faces' pipelines from), for the faces' targets. Still read from the render
+      thread on the lane: the shadow branch's `readyModes`/`readyStates` (grown on the render thread when a mode or raster state is first
+      seen; ShadowEpochs.cpp).
+    - **GpuResources by thread domain (crash: null `AddRef` in `Acquire`'s prefetched branch, from tree LOD's `TakeChanges` at the
+      main epoch).** One registry served two threads, its `entries`, `prefetched` and `stats` unsynchronized: the scene work (the pass's
+      prologue `BeginFrame`, `PrefetchGeometryBuffers`, `ResolveGeometrySource` in the merges, the persistent parity's slot check and
+      `ProbeSlots` - all on the lane, or the render thread for an inline pass; never on the pool) and the render thread (tree LOD's
+      mesh leases in `TreeLod::Mirror::TakeChanges`). Since T6b3d a mid-frame pass raced the depth commit. Now one instance per domain,
+      each its maps' only user: `GpuResources::Scene()` and `GpuResources::Frame()` (`Get()` is gone); a buffer both lease is
+      resolved by each under its own reference. The release queue (any thread: a lease's last drop) is an `EventQueue`, drained by the
+      owner's `BeginFrame` (Frame's runs at each `TakeChanges`); generations come from one shared atomic; the counters are relaxed
+      atomics the owner writes and the report reads (`GetStats` by value; the report's line gains tree LOD's). The stopgap null guard
+      is gone. Tree LOD's mirror is the render thread's throughout (`Drain` in `ServeFrameRequests`, `DecideTreeLod`, `TakeChanges`
+      and the rows at the depth commit, `MarkAllChanged` at the adoption, the slot counts in `PostRevisionInputs`, its report).
+    - **The release guard** (`CS_DCLF_RELEASE_GUARD=1`, `ReleaseGuard` in EngineReadWindow.h/.cpp): `NiRefObject::DeleteThis` (AE
+      0x140d27520, `RELOCATION_ID(69177, 70538)`: the refcount-zero path of every class that keeps the base's) is replaced, its bytes
+      checked, by the same call with a count when the thread is the scene lane (`EngineReadWindow::sceneWork`) or one of DCLF's executor
+      threads (marked at their start). The coordinator's report: `[DCLF] release guard (T6b3e, CS_DCLF_RELEASE_GUARD): engine objects'
+      last releases on DCLF's threads: scene lane N, executor/pool N (N without a class name) <- OK` (or `<- LANE ENGINE RELEASE; first:
+      class X, last: class Y`). An observer; classes with their own DeleteThis are not seen.
+    - **Left: e5** (`AddSubtree` by attach root): the attach loop (Events.cpp) and `RefreshCategoryNodes`' loop with a prepare over the
+      events (`MirrorCategoryNode`, `MirrorSubtree`, and per geometry its actor owner, room node, face head, `MirrorSunEntry`, the light
+      entry's mirror walk and sub-index type, counted into chunk sinks) and the merge in event order (`pendingSubtrees`, capture requests,
+      `AddGeometry`'s writes - `tracked.try_emplace` sets slot order - identity, pins, held properties, dependents, own root,
+      `SampleLodRanges`, `pendingEvaluation`); serial under the mirror-read parity; from 16 events.
+    - **Log lines.** `[DCLF] scene fan-out (T6b3e, CS_DCLF_FANOUT=N, N pool workers): walk rounds N (N on the pool), entries N (N on the
+      pool, N chunks), light-path entries written in full at the merge N; join rounds N (N on the pool), joins N` and, under the parity,
+      `; parity (CS_DCLF_FANOUT_PARITY): N rounds, N entries, N differ <- OK` (or `<- FANOUT; first: walk round from N, entry N 'name':
+      field`, `bind queue, element N: field`, `joins, element N: field`), with the pump's lines. The scene pass CPU line's parts gain the
+      four nested ones.
+    - **Risks.** A read the contract missed (an evaluation reading what a merge writes) is a race in mode 2 alone: `CS_DCLF_FANOUT=1` and
+      0 are the A/B, the fan-out parity compares evaluations (not merges), and the walk and set parities judge the result. `ModifyShaderLookup`
+      and the features' settings (Terrain Blending's excepted, snapshotted) are read from the pool as the lane read them. The classify
+      cache's and actor verdicts' first names come from the first chunk with one (the walk's order). The joins' derive probe and the mirror
+      parity run interleaved. The light path's skin falls through at the merge (`light-path entries written in full`), which evaluates on
+      the lane.
+    - **To watch in a run:** the fan-out line's `<- OK` under `CS_DCLF_FANOUT_PARITY=1`; the walk, set and commit parities clean against a
+      `CS_DCLF_FANOUT=0` run's; `evaluate (fan-out)` against `evaluate merge` and `joins (fan-out)` against `joins merge` in the scene
+      pass CPU line at a cell load; the pass ms with `CS_DCLF_WORKERS` 1, 2, 4 and 8 at the same load. The walk and persistent parities
+      (and the capture parity) run the pass inline on the render thread, where nothing fans out (mode 1): under them the decomposition is
+      checked, the pool is not; the pool's own check is the fan-out parity with the set parity, which keep the pass on the lane.
 
 **A persistent scene for every view; incremental only; two modes** (2026-10-08; motion m112-m153, bridge y-runs, equip and
 fight e-runs, toggle runs). With DCLF's shadow views on, objects flickered at cell changes because the set's phases were

@@ -331,7 +331,7 @@ namespace DCLF
 		// A snapshot for every walk that moved an entry (and the first): the readers bring themselves up to it entry by entry.
 		if (lightTable.changed || !lightCandidates)
 			lightCandidates = PublishCandidates(lightTable, lightCandidatesGeneration);
-		if (SwitchEnabled(Switch::PersistentParity) && ParityDue(sceneFrame, 7)) {
+		if (SwitchEnabled(Switch::PersistentParity) && PassParityDue(7)) {
 			++candidateParity.checks;
 			if (auto why = CheckCandidateTable(lightTable, lightCandidateSet, false); !why.empty() && candidateParity.mismatches++ < 8)
 				logger::warn("[DCLF] light candidates parity at frame {}: {} <- CANDIDATES", sceneFrame, why);
@@ -561,7 +561,7 @@ namespace DCLF
 		// A snapshot for every walk that moved an entry (and the first): the readers bring themselves up to it entry by entry.
 		if (sunTable.changed || !sunCandidates)
 			sunCandidates = PublishCandidates(sunTable, sunCandidatesGeneration);
-		if (SwitchEnabled(Switch::PersistentParity) && ParityDue(sceneFrame, 7)) {
+		if (SwitchEnabled(Switch::PersistentParity) && PassParityDue(7)) {
 			++candidateParity.checks;
 			if (auto why = CheckCandidateTable(sunTable, sunCandidateSet, true); !why.empty() && candidateParity.mismatches++ < 8)
 				logger::warn("[DCLF] sun candidates parity at frame {}: {} <- CANDIDATES", sceneFrame, why);

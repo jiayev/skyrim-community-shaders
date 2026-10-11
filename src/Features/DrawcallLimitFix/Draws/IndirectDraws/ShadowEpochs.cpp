@@ -1747,6 +1747,10 @@ namespace DCLF
 			++impl->ringStats.shadowCommitted;
 			// Copied: a frame that keeps the publication commits the payload again.
 			*frameOwners = payload.bindingOwners;
+			// T6b3b: the adopted snapshot whole (its versions, its draws, what they embed), until this execution (and the occlusion epoch's,
+			// which reuses these owners) retires.
+			if (impl->adoptedSnapshot)
+				frameOwners->push_back(impl->adoptedSnapshot);
 			// The cleared geometry slots' buffers, held until this execution retires (SceneStore::TakeRetiredImports).
 			for (auto& owner : store.TakeRetiredImports())
 				frameOwners->push_back(std::move(owner));
@@ -2593,17 +2597,23 @@ namespace DCLF
 		// Within the scene buffers the shadow build ahead is made against (FitsScene): past them it has no input until their growth.
 		if (!FitsScene(&tables, a_slot, true))
 			return no(12);
+		// The modes and rasterizer states the lane's lookups were resolved for (Lookups::shadowInputs: the frame's start's post, immutable),
+		// never the render thread's readyModes and readyStates, which it grows when it first sees a mode or a state. None yet: its shadow
+		// pipelines are not resolved, and the caster waits.
+		const auto* inputs = static_cast<const ShadowLookupInputs*>(lookups.shadowInputs.get());
+		if (!inputs)
+			return no(7);
 		// An occluder under a fade node is culled by the node's fade as FadeStateCS keeps it for every listed root (BuildDrawsCS,
 		// FadedOutOfOcclusion): nothing of the engine's cull is waited for.
 		// The shadow build's rule (BuildKeptShadow's evaluate): every view of the object's class in each of the phase's modes drawn
 		// has its pipeline, and an alpha-tested technique's diffuse is imported.
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
-			if (SetPhaseOfMode(m) != a_phase || !impl->readyModes[m])
+			if (SetPhaseOfMode(m) != a_phase || !inputs->modes[m])
 				continue;
 			const std::uint32_t technique = ModeTechnique(tables, m, a_slot);
 			if (!technique)
 				continue;
-			const auto& states = impl->readyStates[m].Of(VolumetricClass(m, object.flags));
+			const auto& states = inputs->rasterStates[m].Of(VolumetricClass(m, object.flags));
 			if (states.empty())
 				continue;
 			const ShadowPipelineKey key{ BaseTechnique(tables, m, a_slot), (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u,

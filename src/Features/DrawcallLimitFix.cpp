@@ -77,7 +77,8 @@ namespace
 
 	/**
 	 * @brief The scene work on the render thread: the parities that read the store from the engine's hooks while the work would
-	 * run (capture parity's face draws, the walk and persistent parities).
+	 * run (capture parity's face draws, the walk and persistent parities). T6b3d: the pump's wakes are dropped then, and the frame's
+	 * start runs the pass itself (SceneStore::RunScenePassInline), so those observers keep their placement.
 	 */
 	bool SceneWorkInline()
 	{
@@ -104,6 +105,8 @@ void DrawcallLimitFix::PostPostLoad()
 	}
 	DCLF::SceneTracker::Get().Install();
 	DCLF::SceneStore::InstallSceneEvents();
+	// T6b3e, CS_DCLF_RELEASE_GUARD: the engine's last releases on DCLF's threads counted (an observer).
+	DCLF::ReleaseGuard::Install();
 	// Capture at registration: where the set's members' passes are withheld from the views DCLF draws.
 	DCLF::PassCapture::Get().Install();
 	DCLF::ReflectionFaces::Install();
@@ -135,6 +138,10 @@ void DrawcallLimitFix::PostPostLoad()
 	(void)DCLF::SceneScheduler::Graph();
 	Hooks::Install();
 	installed = true;
+	// T6b3d: the coordinator's pump, from here woken by its producers (the hooks above push from now on); its passes apply the events
+	// alone until the first frame runs DCLF (SetScenePassMode).
+	DCLF::SceneStore::Get().SetScenePassMode(false, SceneWorkInline());
+	DCLF::SceneStore::Get().StartScenePump();
 	// The switches this process actually sees, once. Several reports below are gated on them, so without
 	// this a silent log is indistinguishable from a switch that never reached the game - which is exactly
 	// what happened when they came from the environment alone (see Switches.h).
@@ -160,6 +167,8 @@ void DrawcallLimitFix::SetupResources()
 	                                                           RenderGraphRuntime::Get().GetDisabledReason();
 	installed = false;
 	DCLF::SceneTracker::Get().Stop();
+	// The scene passes apply what the hooks still push (the scene queues: kept bounded), and nothing else.
+	DCLF::SceneStore::Get().SetScenePassMode(false, false);
 	DCLF::PassCapture::Get().SetBypassed(true);
 	logger::warn("[DCLF] Forced off: the render graph is unavailable ({}); the game renders natively", unavailableReason);
 }
@@ -179,9 +188,8 @@ void DrawcallLimitFix::Reset()
 	{
 		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Present);
 		auto& store = DCLF::SceneStore::Get();
-		// T6b1d: the scene work is not waited for here. It reads the mirror alone (its observers' live reads take leases), so it may run
-		// beside the engine's update; what reads its state below needs a join: here when it has ended, else at the next frame's start.
-		const bool joined = store.TryJoinSceneTask();
+		// T6b3d: nothing of the coordinator's is joined or read here. Its pump runs a scene pass whenever a producer wakes it (it reads the
+		// mirror alone, its observers' live reads take leases, so it may run beside the engine's update); the queues are its alone.
 		// T6b3b: no revision is made here: the snapshot builder makes each publication's draws and revision off the render thread.
 		// The engine's next update follows Present: no worker may be inside its memory from here (EngineReadWindow).
 		{
@@ -194,19 +202,15 @@ void DrawcallLimitFix::Reset()
 		// What the frame submitted: the GPU point its frame values' buffer is free again after.
 		DCLF::FrameValues::Get().EndFrame();
 		DCLF::FrameData::EndFrame();
-		if (joined) {
-			ReportFrame();
-			// The frame's ingestion (the scene work applies it); a batch no scene work took in a whole frame (menus, switched off) is
-			// posted and applied here (the scene work joined), so the queues never wait longer.
-			store.IngestEvents();
-			store.NoteEventsPresent();
-			if (store.EventsUnapplied()) {
-				store.PostIngested();
-				store.ApplyEvents();
-			}
-		} else {
-			reportPending = reportPending || Running();
-		}
+		// The frame's reports (T6b3d: the frame's own state alone; the coordinator logs its own lines from its pass).
+		ReportFrame();
+		// A load screen (in menus too): its marker posted once and the set withdrawn; the coordinator's passes drain the queues into the
+		// mirror's carry meanwhile (T6b3d: the queues' one consumer).
+		store.NoteLoadingScreen();
+		// Under the parities the passes run inline at the frame's start alone: with no frame since the last Present (menus, load screens),
+		// one applying the events alone runs here, so the queues do not wait for a frame (Present's apply before T6b3d).
+		if (const bool frameRan = std::exchange(sceneFrameRan, false); SceneWorkInline() && !frameRan)
+			store.ApplyEventsInline();
 		// What the scene work let go of (T6b3a: pushed where it let go): dropped on the engine's main thread with nothing reading them.
 		store.ReleaseHandedBack();
 		DCLF::EngineReleases::Release();
@@ -220,10 +224,13 @@ void DrawcallLimitFix::Reset()
 
 void DrawcallLimitFix::ReportFrame()
 {
-	reportPending = false;
 	if (!Running())
 		return;
+	// Once a frame number (T6b3d: every Present reports, and a menu or a load holds the number still while Presents go on).
 	const std::uint32_t frame = DCLF::SceneStore::Get().GetFrame();
+	static std::uint32_t reportedFrame = ~0u;
+	if (std::exchange(reportedFrame, frame) == frame)
+		return;
 	DCLF::SunAccumulation::Get().Report(frame, kReportInterval);
 	DCLF::PrimaryCull::Get().Report(frame, kReportInterval);
 	ReportStats(frame);
@@ -240,7 +247,8 @@ void DrawcallLimitFix::UpdateActive()
 void DrawcallLimitFix::SetActive(bool a_active)
 {
 	switchedOn = a_active;
-	DCLF::SceneStore::Get().JoinSceneTask();
+	// T6b3d: nothing to join; the passes apply the events alone while off (the tracked set stays current), whole again once on.
+	DCLF::SceneStore::Get().SetScenePassMode(Running(), SceneWorkInline());
 	if (!a_active)
 		DCLF::IndirectDraws::Get().DrainAsync();
 	auto& capture = DCLF::PassCapture::Get();
@@ -270,30 +278,27 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// The graph's build point, every frame (loaded or not): an extension added or removed during the last frame is built here, before
 	// anything decides what the frame's recordings cover.
 	DCLF::IndirectDraws::Get().BuildPoint();
+	auto& store = DCLF::SceneStore::Get();
+	const bool inline_ = SceneWorkInline();
 	if (!Running()) {
+		// T6b3d: the passes apply the events alone while DCLF does not run (the tracked set stays current), and the switch catch-ups they
+		// ask for are still served (engine writes: Present's ingestion ran them before), as tree LOD's mirror is drained.
+		if (installed) {
+			store.SetScenePassMode(false, inline_);
+			if (!store.NoteLoadingScreen())
+				store.ServeFrameRequests(false);
+		}
 		// No frame values: nothing this frame submits waits for them.
 		DCLF::FrameValues::Get().Skip();
 		return false;
 	}
 	// The engine's update is done: workers may read its scene graph until Present (EngineReadWindow).
 	DCLF::EngineReadWindow::Open();
-	// The scene half of the tables, before the main camera's cull: everything the walk reads is final from
-	// Main::Draw on (the world update is done, and the palette update's frame counter moves only at
-	// Renderer::End), except what is written between here and BeforeShadowMaps: BSFadeNode::currentFade (the
-	// main cull), whose changes reach the walk as fade events; a billboard's rotation (the main cull), which
-	// keeps billboards native (SceneStore::FindCategoryNode); and animated texture transforms, which the shadow
-	// build reads off the material itself. The accumulator's half follows at EarlyPrepass, once the
-	// registration jobs have finished.
-	auto& store = DCLF::SceneStore::Get();
-	// Nothing of the last frame's work may still run: joined here when Present found it running (T6b1d), with the reports it held.
-	// T6b3a: the join guards nothing of the frame's start any more (messages, the publication slot and its log); CS_DCLF_FRAME_JOIN=0
-	// skips it to show that (GuardFrameAccess and the lane's engine accesses stay 0). The reports read the coordinator's stats: they
-	// wait for a join.
-	const bool frameJoin = DCLF::SwitchValue(DCLF::Switch::FrameJoin) != "0";
-	if (frameJoin)
-		store.JoinSceneTask();
-	if (reportPending && frameJoin)
-		ReportFrame();
+	// T6b3d: the coordinator's pump runs the scene passes (the events, the walk, the joins, the commit, the publication) whenever its
+	// producers wake it; nothing of it is kicked or joined here. The frame's posts below (the frame inputs, the ahead context, the
+	// captures, the fade write-back's) wake it once, when this scope ends: one pass takes them all.
+	DCLF::ScenePassWakeBatch wakes;
+	store.SetScenePassMode(true, inline_);
 	// The frame's toggles, before anything reads them. A change that enters the classification drops the
 	// cached verdicts, so the next frame classifies every object under the new switches (T6b3a: the coordinator drops them at its
 	// next pass, told by the frame inputs).
@@ -305,43 +310,49 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// set's capability change), reinstall.
 	toggleGeneration = DCLF::Toggles::Get().Generation();
 	ScopedPerfEvent event("CS DCLF: scene tables");
-	// What the frame's claims need, from the last publication, before the scene work is kicked: the frame number and the frame
-	// inputs posted, the last commit's set as the frame's (the claims the registration withholds by, and the records this frame
-	// draws), the point lights' filter, the main renderers, tree LOD's and the reflection's preparation, and the roots this frame's
-	// scene lists leave out (before Main::Draw queues their build).
-	store.BeginFrame();
-	// T6b3b: the newest complete snapshot the builder posted, adopted whole - its revision (versions, shapes, recordings, the growths
-	// it names), its draws (built ahead with its publication) and its publication (the tables with the set applied and its claims,
-	// installed here with the log walked up to it, its tables, lookups and catalog the frame's). The one check is the generation
-	// compare for what a snapshot cannot know ahead (the graph's build, the targets, the shadow format, the toggles, the main
-	// resources): a stale one is not adopted and the frame is the engine's until the builder's next. Then what the coordinator made for
-	// the frame (the held PrimaryCull notes); nothing of the coordinator's is read.
+	// The frame number, the frame's globals captured and the frame inputs posted (an engine capture: the budget's scene captures).
+	{
+		DCLF::RenderThreadBudget::Part captures(DCLF::RenderThreadBudget::Bucket::SceneCaptures);
+		store.BeginFrame();
+	}
 	auto& draws = DCLF::IndirectDraws::Get();
-	store.HandOverAtFrameStart(draws.AdoptSnapshot(toggleGeneration));
+	{
+		// The exchange (T6b3d: the budget's scene exchange). T6b3b: the newest complete snapshot the builder posted, adopted whole - its
+		// revision (versions, shapes, recordings, the growths it names), its draws (built ahead with its publication) and its publication
+		// (the tables with the set applied and its claims, installed here with the log walked up to it, its tables, lookups and catalog
+		// the frame's). The one check is the generation compare for what a snapshot cannot know ahead (the graph's build, the targets, the
+		// shadow format, the toggles, the main resources): a stale one is not adopted and the frame is the engine's until the builder's
+		// next. Then what the coordinator made for the frame (the held PrimaryCull notes); nothing of the coordinator's is read.
+		DCLF::RenderThreadBudget::Part exchange(DCLF::RenderThreadBudget::Bucket::Exchange);
+		store.HandOverAtFrameStart(draws.AdoptSnapshot(toggleGeneration));
+		store.SyncFrameTables();
+	}
 	// The candidate entries changed since the sun exclusion's snapshot leave it (the engine culls them); the rest stand.
 	DCLF::SunAccumulation::Get().BeginFrame(store.GetSunCandidates());
-	store.SyncFrameTables();
 	PrepareFrameLookups();
-	// A frame the adopted snapshot does not cover - none yet, its recordings of the graph before the build point built, its draws not for
-	// the main resources, a stale one passed over - has no claims: the engine draws everything, and the next covered frame installs the
-	// whole set again.
-	if (!draws.DecideCoverage() || !store.HasInstalled() || store.InstalledToggles() < toggleGeneration)
-		store.WithdrawSet();
-	else
-		store.InstallClaims();
+	{
+		// A frame the adopted snapshot does not cover - none yet, its recordings of the graph before the build point built, its draws not
+		// for the main resources, a stale one passed over - has no claims: the engine draws everything, and the next covered frame installs
+		// the whole set again.
+		DCLF::RenderThreadBudget::Part exchange(DCLF::RenderThreadBudget::Bucket::Exchange);
+		if (!draws.DecideCoverage() || !store.HasInstalled() || store.InstalledToggles() < toggleGeneration)
+			store.WithdrawSet();
+		else
+			store.InstallClaims();
+	}
 	// What the next builds ahead take from the frame.
 	draws.PostAheadContext();
 	// The stood-in fade roots' write-back: the stores the last task found, made here (engine writes are the render thread's, step 6e
 	// F1), then the next task on DCLF's executor, never joined (step 6e S4), finding the next ones from the frame's snapshot.
 	DCLF::IndirectDraws::Get().KickFadeWriteBack();
-	// The frame's ingestion: the engine's queues drained into the batch the scene work applies first (ApplyEvents, on the
-	// coordinator). The references it lets go of - detached subtrees among them, whose last drop runs the engine's destructors - are
-	// handed back and released at Present (dclf-async-publication.md, "Step 5: ingestion").
+	// T6b3d: what the coordinator's passes asked of the render thread, served, and its captures posted for them (not while a load screen
+	// is up: the passes drain the engine's queues into the mirror's carry then) - the switch catch-ups (engine writes, before the culls),
+	// the category capture, the mirror's capture requests and parity probe, tree LOD's mirror. The engine's queues are the coordinator's
+	// alone (its passes drain them, each up to where it stood at the pass's start).
 	{
 		const auto eventsStart = std::chrono::steady_clock::now();
-		store.IngestEvents(true);
-		// To the coordinator, whose pass kicked below applies it first (T6b3a: a posted batch, no shared one).
-		store.PostIngested();
+		if (!store.NoteLoadingScreen())
+			store.ServeFrameRequests(true);
 		timing.eventsMs += MillisecondsSince(eventsStart);
 	}
 	DCLF::LocalLightCull::SelectFrame(store.GetFrame());
@@ -352,36 +363,19 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// reflections").
 	DCLF::IndirectDraws::Get().PrepareReflection();
 	DCLF::PrimaryCull::Get().PublishListFilter();
-	// The frame's values (FrameValues): the placements and the shading the frame draws with, made on the pool from the last walk's
-	// plan and named slots while the frame runs, and waited for by the GPU; the wetness captured here (Skin's cache is the render
-	// thread's). Before the scene work, which makes the next plan.
+	// The frame's values (FrameValues): the placements and the shading the frame draws with, made on the pool from the plans and named
+	// slots the installed publications carried while the frame runs, and waited for by the GPU; the wetness captured here (Skin's cache
+	// is the render thread's).
 	// With them, the payload ring entry the frame's epochs read (step 6e E4), filled from the installed publication before the signal.
 	if (!DCLF::FrameValues::Get().Kick(store.TakePlacementPlans(), store.TakeShadingItems(), store.CaptureWetness(), store.TakeFadeSeeds(), store.TakeTreeSeeds(), store.FrameGlobalsOfFrame(),
 			draws.PrepareFrameUploads()))
 		draws.DropFrameUploads();
-	// The frame's scene work: the walk and the set's commit, for the next frame's claims. On DCLF's coordinator while
-	// the engine culls (SceneStore::KickSceneTask), joined by the first reader that needs it: everything the walk reads is final
-	// from Main::Draw on (the world update is done, and the palette update's frame counter moves only at Renderer::End), except
-	// BSFadeNode::currentFade (the main cull), whose changes reach the walk as fade events; a billboard's rotation (the main cull),
-	// which keeps billboards native (SceneStore::FindCategoryNode); and animated texture transforms, which the shadow build reads
-	// off the material itself. The accumulator's half follows at EarlyPrepass, once the registration jobs have finished.
-	const bool inline_ = SceneWorkInline();
-	auto work = [this, &store, inline_] {
-		const auto start = std::chrono::steady_clock::now();
-		store.RunSceneWork(!inline_);
-		const double ms = MillisecondsSince(start);
-		timing.sceneMs += ms;
-		timing.sceneMaxMs = std::max(timing.sceneMaxMs, ms);
-		timing.sceneTablesMs += ms;
-		timing.sceneTablesMaxMs = std::max(timing.sceneTablesMaxMs, ms);
-		++timing.sceneTablesFrames;
-	};
-	if (inline_) {
-		work();
-		store.JoinSceneTask();
-	} else {
-		store.KickSceneTask(std::move(work));
-	}
+	// Under the parities the scene pass runs here, inline (T6b3d: SceneStore::RunScenePassInline - the pump's wakes are dropped then), so
+	// the render thread's observers (the mirror's leases, the validation slice, the extras and LOD parities) keep their placement; the
+	// normal path never waits for a pass.
+	if (inline_)
+		store.RunScenePassInline();
+	sceneFrameRan = true;
 	return true;
 }
 
@@ -423,7 +417,7 @@ void DrawcallLimitFix::AfterShadowMaps()
 
 void DrawcallLimitFix::PrepareFrameLookups()
 {
-	// The frame's start (step 6e C), with the scene work joined and the publication installed. The lookups are the scene lane's (T6b2c
+	// The frame's start (step 6e C), the publication installed (T6b3d: nothing of the scene's passes is joined). The lookups are the scene lane's (T6b2c
 	// step 5): written by its bindings where they are made, resolved against the pipeline lane's newest catalog before each commit and
 	// publication (SceneStore::ResolveLookups), and published with that catalog. The frame reads the installed publication's
 	// (SceneStore::GetLookups) and holds its catalog (SelectPublication: DrawPipelines::HoldCatalog), whose set versions FrameIndirectState
@@ -444,28 +438,19 @@ void DrawcallLimitFix::EarlyPrepass()
 	if (!Running())
 		return;
 
-	// The tables are built here, from Main_RenderShadowMaps, rather than in Prepass from StartDeferred.
-	// Both DCLF epochs then read the same generation: the Z-prepass runs inside Main_RenderDepth, after this and
-	// before Prepass, and the per-object visibility verdicts it writes are applied by index in the colour epoch.
-	//
-	// This is only possible because the accumulator is already complete here - the cull job finishes
-	// before the shadow maps (Main::Draw) - and because the tables read the latched accumulator rather
-	// than `currentAccumulator`, which is not set this early.
+	// From Main_RenderShadowMaps, once the registration jobs have finished (the cull job finishes before the shadow maps): what the
+	// frame registered is drained here. The tables are no longer built here (T6b3c): the joins read the mirror and the membership
+	// passes, not the registrations, and run in the frame start's scene pass.
 	auto& store = DCLF::SceneStore::Get();
 	ScopedPerfEvent event("CS DCLF: accumulator tables and pipelines");
 	const auto start = std::chrono::steady_clock::now();
-	// The accumulate phase (step 6b): the render thread posts the accumulate work's frame inputs (LightLimitFix's room map) and runs
-	// the parity's observers of the frame's registrations (T6b2c step 8: the capture drained, nothing of the normal path reads it),
-	// then the material tail (step 7's), then the joins on the coordinator, which publish the tables.
+	// The joins' frame inputs, posted for the next scene pass (T6b3c: the joins, the commit and the publication are the frame start's
+	// one pass; nothing is kicked here): LightLimitFix's room map and the capture's drain (T6b2c step 8: the registrations the parity
+	// observes and the reflection residue; nothing of the normal path reads them), the parity's light-mask observer, then the material
+	// tail (step 7's: the captures the last joins asked for, answered for the next pass). Outside the parities (whose switches run the
+	// scene pass inline: SceneWorkInline) nothing here reads the coordinator's state.
 	store.PostAccumulateInputs();
 	store.PrepareAccumulatePhase();
-	if (SceneWorkInline()) {
-		store.RunAccumulateWork(false);
-		store.JoinSceneTask();
-	} else {
-		// Behind the frame's walk on the scene's lane; joined at Present. Its tables are published for the next frame.
-		store.KickSceneTask([&store] { store.RunAccumulateWork(true); }, "accumulate");
-	}
 	const double buildMs = MillisecondsSince(start);
 	timing.buildMs += buildMs;
 	timing.buildMaxMs = std::max(timing.buildMaxMs, buildMs);

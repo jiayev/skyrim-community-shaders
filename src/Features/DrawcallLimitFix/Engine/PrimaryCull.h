@@ -84,13 +84,25 @@ namespace DCLF
 		/** @brief CS_DCLF_RESIDENT_PARITY: the synthetic pass built from scratch (no cache), for SceneStore's comparison. */
 		static bool FreshSyntheticPass(const RE::BSGeometry& a_geometry, const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out);
 		/**
-		 * @brief The pass SceneStore binds an object with by scene membership: a synthetic pass from the object alone (render
-		 * thread; derived descriptors cached per geometry), false where one cannot model it (decals, fading or translucent). T6b1b:
-		 * from the geometry's records (a_leaf: the mirror's).
+		 * @brief A membership pass's answer (T6b3e): the pass when ok, why there is none otherwise (LastSyntheticFail's, taken right
+		 * after the synthetic pass on the thread that made it), and the derivation cache entry for the caller to store.
 		 */
-		bool MembershipPass(const RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out);
+		struct Membership
+		{
+			bool ok = false;
+			std::uint8_t fail = 0;
+			MembershipDerived derived;
+			AccumulatedPass pass;
+		};
+		/**
+		 * @brief The pass SceneStore binds an object with by scene membership: a synthetic pass from the object alone, none where one
+		 * cannot model it (decals, fading or translucent). T6b1b: from the geometry's records (a_leaf: the mirror's). T6b3e: pure (any
+		 * thread with the frame's globals bound): the derived descriptor comes from a_cached when its witnesses match, and the entry to
+		 * store comes back in the answer (SceneStore keeps it in the tracked entry: Tracked::membershipDerived).
+		 */
+		static Membership MembershipPass(const RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, const MembershipDerived& a_cached);
 		/** @brief MembershipPass for the geometry's layer (LayerPropertyOf: a_leaf's layer): the pass of its property with hint 12. */
-		bool MembershipLayerPass(const RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out);
+		static Membership MembershipLayerPass(const RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, const MembershipDerived& a_cached);
 		/** @brief A fade root's fade-out distance for BuildDraws' fade test (kObjectFadeTest), 0 when it has none. */
 		static float MembershipFadeDistance(const SceneCapture::NodeRecord& a_root) { return FadeDistanceOf(a_root); }
 		/** @brief The frame globals a membership pass reads (the static sun bits, the fade distances): a change rebinds them all. */
@@ -540,17 +552,5 @@ namespace DCLF
 		std::uint32_t sampledWitnessFrame = ~0u;
 		/** @brief List jobs and render thread: a member of the frame's set with the main phase (SceneStore::SetPhasesOf). */
 		bool MemberDrawable(std::int32_t a_object) const;
-
-		/** @brief The derived pass descriptor per geometry, recomputed when what it reads changes. */
-		struct DerivedEntry
-		{
-			const void* property = nullptr;
-			const void* material = nullptr;
-			std::uint64_t flags = 0;
-			std::uint8_t fadeState = 0;
-			std::uint32_t derivedPass = kNotDerived;
-		};
-		ankerl::unordered_dense::map<const RE::BSGeometry*, DerivedEntry> derivedCache;
-		ankerl::unordered_dense::map<const RE::BSGeometry*, DerivedEntry> layerDerivedCache;  // the layers' (MembershipLayerPass)
 	};
 }

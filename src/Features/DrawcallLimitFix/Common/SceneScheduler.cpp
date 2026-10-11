@@ -1,6 +1,7 @@
 #include "SceneScheduler.h"
 
 #include "Switches.h"
+#include "Features/DrawcallLimitFix/Engine/EngineReadWindow.h"
 
 #include <Windows.h>
 
@@ -25,6 +26,8 @@ namespace DCLF
 		// Never destroyed: joining threads in a DLL's static destruction (under the loader lock, after ExitProcess has ended
 		// them) is not something to rely on.
 		static auto* executor = new PublishedSceneExecutor(PreparationWorkers(), [](org::async::TaskClass a_class, unsigned a_index) {
+			// T6b3e: one of DCLF's threads, for the release guard (CS_DCLF_RELEASE_GUARD).
+			ReleaseGuard::MarkThread(2);
 			if (a_class.domain == PublishedSceneExecutor::Coordinator.domain) {
 				SetThreadDescription(GetCurrentThread(), L"CS DCLF coordinator");
 				// The engine's job threads run at normal priority; the frame's jobs are joined by the render thread, so the
@@ -44,6 +47,7 @@ namespace DCLF
 		// Never destroyed, as Executor(). The executor takes at least one preparation worker; the lane's is idle (the walk's parallel
 		// loops use Executor()'s).
 		static auto* lane = new PublishedSceneExecutor(1, [](org::async::TaskClass a_class, unsigned) {
+			ReleaseGuard::MarkThread(a_class.domain == PublishedSceneExecutor::Coordinator.domain ? 1 : 2);  // T6b3e: the release guard's
 			if (a_class.domain != PublishedSceneExecutor::Coordinator.domain) {
 				SetThreadDescription(GetCurrentThread(), L"CS DCLF scene (idle)");
 				return;

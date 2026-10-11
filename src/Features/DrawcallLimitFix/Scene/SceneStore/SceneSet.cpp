@@ -114,6 +114,10 @@ namespace DCLF
 			}
 			++setStats.leftAfterCommit;
 			QueueSet(a_slot);
+			// For the application too: a slot the next commit leaves out (its phases already 0 there: no change to mark) still reaches
+			// ApplySet, which notes its claim left (T6b3c: the joins' leaves come before the commit, so no revocation after it sees them).
+			if (a_slot < tables.objects.size())
+				MarkSetApply(a_slot);
 		}
 		if (!a_partner || !(a_lost & kSetMain) || a_slot >= tables.objects.size())
 			return;
@@ -128,6 +132,22 @@ namespace DCLF
 			tables.NoteChange(partner, kChangeBindings);
 		}
 		LeaveSet(partner, kMainPhases, false);
+	}
+
+	void SceneStore::MarkSetApply(std::uint32_t a_slot)
+	{
+		const std::size_t objects = tables.objects.size();
+		if (setApplyMark.size() < objects)
+			setApplyMark.resize(objects, 0);
+		if (setGeometryNext.size() < objects)
+			setGeometryNext.resize(objects, nullptr);
+		setGeometryNext[a_slot] = tables.objectGeometry[a_slot];
+		if (const std::uint32_t at = setApplyMark[a_slot]) {
+			setApply[at - 1].second = tables.objectGeometry[a_slot];
+			return;
+		}
+		setApply.emplace_back(a_slot, tables.objectGeometry[a_slot]);
+		setApplyMark[a_slot] = static_cast<std::uint32_t>(setApply.size());
 	}
 
 	void SceneStore::RefreshSetSnapshot()
@@ -154,7 +174,6 @@ namespace DCLF
 		auto& setPhases = setPhasesNext;
 		setQueueMark.resize(objects, 0);
 		setWaitingMark.resize(objects, 0);
-		setRebinding.resize(objects, 0);
 		setLackingNext.resize(objects, 0);
 		setApplyMark.resize(objects, 0);
 		setWaitCause.resize(objects, 0);
@@ -162,18 +181,9 @@ namespace DCLF
 		setCommitFrame = sceneFrame;
 		setCommitToggles = sceneInputs.togglesGeneration;
 		const bool timeline = TimelineEnabled();
-		// A slot whose phases or lacking phases this commit changed, for ApplySet, with the geometry it holds now (an earlier commit's
-		// entry not yet applied takes this one's geometry: the decision is now for it).
+		// A slot whose phases or lacking phases this commit changed, for ApplySet (MarkSetApply).
 		setGeometryNext.resize(objects, nullptr);
-		auto markApply = [&](std::uint32_t a_slot) {
-			setGeometryNext[a_slot] = tables.objectGeometry[a_slot];
-			if (const std::uint32_t at = setApplyMark[a_slot]) {
-				setApply[at - 1].second = tables.objectGeometry[a_slot];
-				return;
-			}
-			setApply.emplace_back(a_slot, tables.objectGeometry[a_slot]);
-			setApplyMark[a_slot] = static_cast<std::uint32_t>(setApply.size());
-		};
+		auto markApply = [&](std::uint32_t a_slot) { MarkSetApply(a_slot); };
 		if (!setBuilding)
 			setBuilding = std::make_shared<SetSnapshot>();
 
@@ -236,8 +246,9 @@ namespace DCLF
 				}
 		}
 		// The shadow views' modes and rasterizer states changed: a member's casting may need pipelines it has not got, so every
-		// member and waiting slot is taken again (rare: a kind of view seen for the first time).
-		if (const std::uint64_t modes = IndirectDraws::Get().ShadowReadinessSerial(); modes != setShadowModes) {
+		// member and waiting slot is taken again (rare: a kind of view seen for the first time). The lane's lookups' own record of them
+		// (Lookups::shadowInputsSerial, replaced with the inputs their shadow pipelines are resolved for), never the render thread's.
+		if (const std::uint64_t modes = lookups.shadowInputsSerial; modes != setShadowModes) {
 			setShadowModes = modes;
 			for (std::uint32_t slot = 0; slot < objects; ++slot)
 				if (setPhases[slot] & ~kSetMain)
@@ -245,27 +256,10 @@ namespace DCLF
 			for (const std::uint32_t slot : setWaiting)
 				QueueSet(slot);
 		}
-		// The frame globals a membership pass reads changed: this frame's accumulate phase binds every resident again
-		// (BindByMembership), so none of them is a member this frame.
-		const bool rebindAll = live && sceneInputs.membershipWitness != membershipWitness;
-		if (rebindAll)
-			for (const std::uint32_t slot : residents)
-				QueueSet(slot);
-		// The records the walk wrote this frame whose binding does not stand: this frame's accumulate phase binds them again
-		// (BindByMembership's rule), with slots that may not be ready, so they leave before it does.
-		for (const std::uint32_t slot : bindQueue) {
-			if (slot >= objects || !IsResidentSlot(slot))
-				continue;
-			auto* geometry = tables.objectGeometry[slot];
-			const auto entry = geometry ? tracked.find(geometry) : tracked.end();
-			if (entry == tracked.end() || (tables.IsLayer(slot) ? entry->second.layerSlot : entry->second.slot) != slot || entry->second.objectStamp != objectStamp ||
-				entry->second.candidateReason != Ineligible::None)
-				continue;
-			if (!MemberBindingStands(slot, entry->second)) {
-				setRebinding[slot] = 1;
-				QueueSet(slot);
-			}
-		}
+		// T6b3c: the joins ran before this commit in the same pass, so what they bound again is bound, and what they could not is no
+		// resident: a membership witness that moved (every resident bound again) and a record whose binding did not stand are the joins'
+		// (BindByMembership: LeaveSet and the change log queue them here), and the commit decides them from what they have now. The
+		// rebinding rule that kept them out while the commit ran first is gone.
 		// Fades DCLF does not model (PassCapture::FadingAtRegistration: blended, or a decal's): the registrations that met one in
 		// a member, and the members whose fade has ended since.
 		PassCapture::Get().TakeUnmodelledFades([&](const RE::BSGeometry* a_geometry) {
@@ -326,10 +320,6 @@ namespace DCLF
 			// no binding).
 			if (phases & kSetMain) {
 				bool main = IsResidentSlot(a_slot);
-				if (main && (rebindAll || setRebinding[a_slot])) {
-					setStats.rebinding += parityPass ? 0 : 1;
-					main = false;
-				}
 				if (const auto* geometry = tables.objectGeometry[a_slot]; main && geometry && setFadeHeld.contains(geometry))
 					main = false;
 				if (std::uint32_t why = 0; main && !MainReady(a_slot, why)) {
@@ -340,8 +330,10 @@ namespace DCLF
 					phases &= ~kSetMain;
 			}
 			// The reflection's faces draw from the frame's scene list (IndirectDraws::ExecuteReflection): its pipeline slot's forward
-			// pipeline ready.
-			if ((phases & kSetReflection) && !IndirectDraws::Get().PhaseReady(&tables, lookups, a_slot, kSetReflection)) {
+			// pipeline ready. T6b3e: in the catalog the lane's lookups were resolved against (the publication's, which the revision's faces
+			// resolve their pipelines from), not the render thread's per-frame list (PhaseReady's reflection branch: assigned whole every
+			// frame by PrepareReflection while the lane read it: the set commit parity's 'Land' members, 0x21 kept, waiting now).
+			if ((phases & kSetReflection) && !IndirectDraws::Get().ReflectionSlotReady(&tables, lookupsCatalog.get(), a_slot)) {
 				waiting(8);
 				phases &= ~kSetReflection;
 			}
@@ -379,6 +371,18 @@ namespace DCLF
 			markApply(a_slot);  // the record's kObjectMember and Tables::setPhases, at ApplySet
 			if (!before || !a_phases)
 				++(a_phases ? setStats.joined : setStats.left);
+			// T6b3d: why it left (the report's leave causes).
+			if (before && !a_phases && !parityPass) {
+				const std::uint8_t participation = live ? SetParticipation(a_slot, drawn) : std::uint8_t{ 0 };
+				const std::size_t cause = !live                                                    ? 0 :
+				                          !participation                                           ? 1 :
+				                          ((participation & kSetMain) && !IsResidentSlot(a_slot))  ? 2 :
+				                          (a_slot < setWaitCause.size() && setWaitCause[a_slot])   ? 3 :
+				                                                                                     4;
+				++setStats.leftBy[cause];
+				if (cause == 3 && a_slot < setWaitWhy.size())
+					++setStats.leftWaiting[(std::min<std::size_t>)(setWaitWhy[a_slot], setStats.leftWaiting.size() - 1)];
+			}
 			if (timeline && !before && a_phases)
 				NoteTimelineJoin(a_slot);
 			// The engine's copy is by geometry, a base's alone: a layer draws its base's geometry and is a member with it.
@@ -430,10 +434,9 @@ namespace DCLF
 			}
 			apply(slot, phases, wait);
 		}
-		// (Before the queue's marks are cleared: a slot this commit took again while its binding is (setRebinding) is decided as it was.)
-		// CS_DCLF_SET_PARITY, every 60th commit: every slot's phases and waiting decided again, against what the commit's queue (its
-		// events and requeues by cause) left: a slot the requeues missed differs.
-		if (SwitchEnabled(Switch::SetParity) && ParityDue(sceneFrame, 23)) {
+		// CS_DCLF_SET_PARITY, every 60th commit (T6b3d: by passes, one commit a pass): every slot's phases and waiting decided again,
+		// against what the commit's queue (its events and requeues by cause) left: a slot the requeues missed differs.
+		if (SwitchEnabled(Switch::SetParity) && PassParityDue(23)) {
 			parityPass = true;
 			std::uint32_t differ = 0;
 			std::string first;
@@ -463,10 +466,8 @@ namespace DCLF
 		}
 		setStats.evaluated += setQueue.size();
 		for (const std::uint32_t slot : setQueue)
-			if (slot < objects) {
+			if (slot < objects)
 				setQueueMark[slot] = 0;
-				setRebinding[slot] = 0;
-			}
 		setQueue.clear();
 		std::erase_if(setWaiting, [&](std::uint32_t a_slot) { return a_slot >= setWaitingMark.size() || !setWaitingMark[a_slot]; });
 		// Dropped once: a slot can be pushed again after it left and came back within one commit.
@@ -542,8 +543,9 @@ namespace DCLF
 		// The commit's snapshot, with what left the set since it (LeaveSet).
 		RefreshSetSnapshot();
 		publicationClaims = setSnapshot;
-		// What changed since the applied commit (the rest of its walk, its accumulate phase's drops) is what RevokeUndrawnClaims
-		// checks next, before the publication.
+		// What changed since the applied commit is what RevokeUndrawnClaims checks next, before the publication: since T6b3c the commit
+		// follows the walk and the joins in the same pass, so that is this application's own notes (what came before the commit, the
+		// commit read).
 		if (setCommitCursor.Continues(tables.changeLog, tablesGeneration)) {
 			revokeCursor = setCommitCursor;
 		} else {
@@ -723,9 +725,22 @@ namespace DCLF
 		revision.shadowKeys = tables.shadowKeysUsed.size();
 		for (const auto& used : tables.occlusionKeysUsed)
 			revision.shadowKeys += used.size();
+		// T6b3d: the oldest event applied since the last publication (ApplyBatch), carried for its adoption's latency (the snapshot
+		// report), and its time to this publication (the pump's report).
+		publication->eventNs = std::exchange(unpublishedNs, 0);
+		publication->eventFrame = std::exchange(unpublishedFrame, 0u);
+		if (publication->eventNs) {
+			const auto nowNs = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			const std::uint32_t frameNow = SceneCapture::Frame();
+			pumpStats.publishMs.push_back(nowNs > publication->eventNs ? static_cast<double>(nowNs - publication->eventNs) / 1.0e6 : 0.0);
+			pumpStats.publishFrames.push_back(frameNow >= publication->eventFrame ? frameNow - publication->eventFrame : 0u);
+		}
+		++pumpStats.published;
 		// The deltas first: whoever adopts the publication finds its node on the log.
 		deltas.publication = publication->sequence;
 		deltas.commitFrame = publication->commitFrame;
+		deltas.eventNs = publication->eventNs;
+		deltas.eventFrame = publication->eventFrame;
 		publicationLog.Append(std::move(deltas));
 		// To the snapshot builder (T6b3b): its draws built ahead (step 6e E3b) and its revision made and recorded off the render thread,
 		// posted to the frame whole; a publication it skips (a newer one arrived first) loses nothing of the log.
@@ -736,6 +751,10 @@ namespace DCLF
 	{
 		a_deltas.joined = std::exchange(publicationJoined, {});
 		a_deltas.left = std::exchange(publicationLeft, {});
+		// The plans of the passes that held their publication back first (T6b3d), then the last walk's.
+		for (auto& held : placementPlansHeld)
+			a_deltas.plans.push_back(std::move(held));
+		placementPlansHeld.clear();
 		if (placementPlanReady)
 			a_deltas.plans.push_back(std::exchange(placementPlanReady, nullptr));
 		a_deltas.shading = std::exchange(shadingNamed, {});
@@ -747,13 +766,6 @@ namespace DCLF
 		a_deltas.retiredImports = std::exchange(retiredImports, {});
 		a_deltas.actorWetness = std::exchange(tables.actorWetnessChanges, {});
 		a_deltas.lightEntries = std::exchange(lightEntryChanges, {});
-	}
-
-	bool SceneStore::DeltasPending() const
-	{
-		return !publicationJoined.empty() || !publicationLeft.empty() || placementPlanReady || !shadingNamed.empty() || !fadeSeedRequests.empty() ||
-		       !treeSeedRequests.empty() || !switchesApplied.empty() || switchResync || !retiredImports.empty() || !tables.actorWetnessChanges.empty() ||
-		       !lightEntryChanges.empty();
 	}
 
 	void SceneStore::ReturnPublication(std::shared_ptr<const ScenePublication>&& a_publication)
@@ -799,7 +811,7 @@ namespace DCLF
 
 	void SceneStore::BeginFrame()
 	{
-		// Switch events are taken on the render thread only (PushSwitch); ApplyEvents runs on the coordinator.
+		// Switch events are taken on the render thread only (PushSwitch); the passes drain and apply them on the coordinator.
 		switchEventThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 		++frame;
 		// The frame's engine globals (step 6e F2), before anything of the frame reads them; the scene work's passes take them with the
@@ -813,7 +825,8 @@ namespace DCLF
 		SceneCapture::SetFrame(frame);
 		captureNs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - captureStart).count());
 		++captureFrames;
-		// What the coordinator's passes take of the frame (T6b3a): posted after the capture, before the kick.
+		// What the coordinator's passes take of the frame (T6b3a): posted after the capture; the post wakes the pump (T6b3d: folded with
+		// the frame start's other posts, ScenePassWakeBatch).
 		PostFrameInputs();
 	}
 
@@ -822,16 +835,19 @@ namespace DCLF
 		auto inputs = std::make_unique<FrameInputs>();
 		inputs->globals = frameGlobals;
 		inputs->frame = frame;
-		// The membership witness, sampled here (PrimaryCull reads the same sample this frame): the commit's and the binds'.
+		// The membership witness, sampled here (PrimaryCull reads the same sample this frame): the binds' (BindByMembership, T6b3c: the
+		// commit after them reads none).
 		inputs->membershipWitness = PrimaryCull::Get().SampleMembershipWitness();
 		inputs->togglesGeneration = Toggles::Get().Generation();
 		inputs->verdictsGeneration = verdictsRequested;
 		frameInputsSlot.Post(std::move(inputs));
+		WakeScenePass(SceneWake::FrameInput);
 	}
 
 	void SceneStore::TakeFrameInputs()
 	{
-		// Latest wins: a pass that finds none keeps the last ones it took (the accumulate pass, after its frame's scene pass).
+		// Latest wins: a pass that finds none keeps the last ones it took (T6b3d: passes between frames, a burst's after the first; the
+		// pump's drain takes them first, for the frame's globals: ScenePass).
 		if (!frameInputsSlot.TakeInto(sceneInputs))
 			return;
 		sceneFrame = sceneInputs.frame;
@@ -846,18 +862,26 @@ namespace DCLF
 	{
 		// In the order the frame's start applied them before (T6b3a): the fade roots the depth commit holds, PrimaryCull's fade
 		// ownership, its reseed of every owned root.
-		if (const std::uint64_t held = fadeRootsSentPosted.exchange(kNoFadeRootsSent, std::memory_order_acq_rel); held != kNoFadeRootsSent)
+		// T6b3d: each one taken publishes (PublicationNeeded: publishForced), whatever its own writes stamp.
+		if (const std::uint64_t held = fadeRootsSentPosted.exchange(kNoFadeRootsSent, std::memory_order_acq_rel); held != kNoFadeRootsSent) {
 			tables.fadeRootsJournal.BeginBuild(held);
-		if (const auto owned = fadeOwnedPosted.Take())
+			publishForced = true;
+		}
+		if (const auto owned = fadeOwnedPosted.Take()) {
 			ApplyFadeRootsOwned(*owned);
-		if (fadeReseedPosted.exchange(false, std::memory_order_acq_rel))
+			publishForced = true;
+		}
+		if (fadeReseedPosted.exchange(false, std::memory_order_acq_rel)) {
 			ApplyReseedOwnedFadeRoots();
+			publishForced = true;
+		}
 	}
 
 	void SceneStore::RunSceneWork(bool a_task)
 	{
-		// The frame's events, which the render thread ingested and posted before the kick (BeginSceneFrame): what they drop of
-		// PrimaryCull's is held (primaryNotes), and the references they let go of are released at Present.
+		// T6b3c: one pass - the events, the walk, the joins, the commit, the publication - so a record bound in it is committed and
+		// published in it. T6b3d: the coordinator's pump runs it when a producer woke it (ScenePass), any number of times a frame; what
+		// its events drop of PrimaryCull's is held (primaryNotes), and the references they let go of are released at Present.
 		inSceneTask = a_task;
 		holdPrimaryNotes = true;
 		const auto workStart = std::chrono::steady_clock::now();
@@ -867,39 +891,77 @@ namespace DCLF
 		IndirectDraws::Get().TakeAheadContext();
 		++passSerial;
 		DropReturnedPublications();
-		// The coordinator's tables moved since its last publication (events Present applied, a frame whose accumulate work did not run),
-		// or a pass made something for the frame since: published at this pass's start, after what the render thread posted for it
-		// (as the frame's start published it before, with the coordinator idle).
-		const bool republish = !publishedTables || publishedTables->changeLog.End() != tables.changeLog.End() ||
-		                       publishedTables->versionCounter != tables.versionCounter || publishedTables->objects.size() != tables.objects.size() ||
-		                       publishedTables->pipelines.size() != tables.pipelines.size() || publishedTables->materials.size() != tables.materials.size() ||
-		                       !setApply.empty() || DeltasPending();
-		TakeCoordinatorInputs();
-		if (republish) {
-			++tablesPublication.republished;
-			PublishScene();
-		}
 		// What no publication names any more, back on the free lists before anything allocates.
 		RecycleRetired();
-		ApplyEvents();
+		// While DCLF does not run (not loaded, switched off) the pass applies the events alone (Present's apply before T6b3d), so the
+		// tracked set is current the moment it runs again; the frame's posts wait for a whole pass.
+		const bool full = passesFull.load(std::memory_order_acquire);
+		if (full) {
+			// No publication at the pass's start (T6b3c): the pass ends with one, which carries what changed since the last.
+			TakeCoordinatorInputs();
+			// The joins' frame inputs the render thread posted at an EarlyPrepass (T6b2c step 8, T6b3c): the room map the joins read,
+			// the pipeline frame the blocks are made from, the capture's drain the registration observer and the residue read.
+			TakeAccumulateInputs();
+		}
+		// T6b3d: the render thread's posts the drains must follow (the category capture; the mirror probe, CollectEvents' first), then the
+		// engine's queues drained up to where each stood now, and applied.
+		TakeCategoryCapture();
+		ApplyEvents(CollectEvents());
+		if (!full) {
+			++pumpStats.eventsOnly;
+			holdPrimaryNotes = false;
+			inSceneTask = false;
+			return;
+		}
 		ApplyConstantsPosts();
-		// The technique rows to this frame's sample (T6b2c: the coordinator's, from its FrameGlobals).
+		// The technique rows to the pass's sample (T6b2c: the coordinator's, from its FrameGlobals; a witness, so a pass of the same frame
+		// finds nothing moved), before the joins make new ones from it.
 		RefreshTechniqueRows();
 		// The material records (T6b2c step 7): the captured materials' slots evaluated again, the frame components and the texture
-		// transforms to this frame's sample, all from the captures ApplyEvents drained and the frame's FrameGlobals.
+		// transforms to the pass's sample, all from the captures ApplyEvents drained and the frame's FrameGlobals.
 		RefreshMaterialRecords();
 		// The material bindings (T6b2c): the answers since the last pass, and the records the rewrites changed.
 		UpdateMaterialBindings();
 		// The shared, projected, mask and shadow texture bindings (T6b2c): the answers, the technique rows' masks, the last walk's textures.
 		UpdateSharedBindings();
 		BuildFrame(Phase::Scene);
-		// The lookups the commit judges readiness by (T6b2c step 5): the walk's pipelines and shadow keys resolved against the pipeline
-		// lane's newest catalog, the material entries written since versioned.
-		ResolveLookups();
-		CommitSet();
-		EndSceneFrame();
-		// The mirror's parity (step 6e F3), with the frame's events all drained.
+		// The joins (T6b3c: after the walk, in the same pass): the records the walk wrote bound by membership, and what the members it
+		// drops of PrimaryCull's held (primaryNotes) from here to the publication.
+		holdLostMembers = true;
+		{
+			DCLF_SCENE_PART(Joins, "CS.DCLF.Scene.Joins");
+			BuildFrame(Phase::Accumulate);
+			// The joins' new pipelines' PerGeometry blocks (T6b2c step 8: the coordinator's, from the posted pipeline frame), before the
+			// commit judges them (MainReady: the constants) and the publication, which they make drawable.
+			MakeNewPipelineConstants();
+			// The joins' new material records asked for their bindings (T6b2c), and the answers since the walk.
+			UpdateMaterialBindings();
+			// The joins' pipelines' masks, the walk's shadow textures, and the answers (T6b2c).
+			UpdateSharedBindings();
+			// The lookups the commit judges readiness by (T6b2c step 5): the walk's and the joins' pipelines and shadow keys resolved
+			// against the pipeline lane's newest catalog, the material entries written since versioned.
+			ResolveLookups();
+		}
+		{
+			// The set's commit after the joins: their leaves (LeaveSet) and their writes are on the change log it reads.
+			DCLF_SCENE_PART(Commit, "CS.DCLF.Scene.Commit");
+			CommitSet();
+		}
+		{
+			// The set applied and the tables published with it (step 6e E3), handed to the snapshot builder for a frame's start to adopt.
+			// T6b3d: only when something changed since the last publication (PublicationNeeded); the builder, paced by the frame's takes,
+			// coalesces the publications made meanwhile into one build (latest wins: their log deltas reach the frame with it).
+			DCLF_SCENE_PART(Publish, "CS.DCLF.Scene.Publish");
+			if (PublicationNeeded()) {
+				PublishScene();
+				NotePublished();
+			}
+		}
+		holdLostMembers = false;
+		// The mirror's parity (step 6e F3), with the pass's events all drained; the next probe asked of the render thread.
 		CheckMirror();
+		PostMirrorProbeRequest();
+		EndSceneFrame();
 		[[maybe_unused]] const double workMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - workStart).count();
 		TracyPlot("CS.DCLF.SceneWorkMs", workMs);
 		holdPrimaryNotes = false;
@@ -1014,6 +1076,8 @@ namespace DCLF
 			const std::uint64_t sequence = adopted->sequence;
 			Log::Node* note = notesCursor ? notesCursor : publicationLog.First();
 			Log::Node* const bound = deltasCursor ? deltasCursor : publicationLog.First();
+			std::uint64_t oldestNs = 0;
+			std::uint32_t oldestFrame = 0;
 			while (note != bound) {
 				Log::Node* next = Log::Next(note);
 				if (!next || next->value.publication > sequence)
@@ -1023,8 +1087,17 @@ namespace DCLF
 				// T6b0: a commit's time to its installation, by the geometries it joined.
 				publicationStats.installDelay[AgeBucket(frame - deltas.commitFrame)] += deltas.joined.size();
 				installNotes.emplace_back(std::move(deltas.joined), std::move(deltas.left));
+				// T6b3d: the oldest event these publications carried (the ones the builder skipped past included).
+				if (deltas.eventNs && (!oldestNs || deltas.eventNs < oldestNs)) {
+					oldestNs = deltas.eventNs;
+					oldestFrame = deltas.eventFrame;
+				}
 			}
 			notesCursor = note;
+			if (oldestNs) {
+				const auto nowNs = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+				IndirectDraws::Get().NoteEventAdoption(nowNs > oldestNs ? static_cast<double>(nowNs - oldestNs) / 1.0e6 : 0.0, frame >= oldestFrame ? frame - oldestFrame : 0u);
+			}
 			publicationLog.Release(note);
 			TracyPlot("CS.DCLF.InstallDelayFrames", static_cast<std::int64_t>(frame - adopted->commitFrame));
 			// The publications the builder skipped past, and the replaced one back to the coordinator, which drops it.
@@ -1482,49 +1555,5 @@ namespace DCLF
 		const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		publication.ms += ms;
 		publication.maxMs = std::max(publication.maxMs, ms);
-	}
-
-	void SceneStore::KickSceneTask(std::function<void()> a_work, const char* a_name)
-	{
-		// The scene's lane (step 6c): the frame's builds never queue behind it. Joined at the next frame's start, or at Present when it
-		// has ended by then (T6b1d: never waited for there).
-		sceneTaskInFlight.store(true, std::memory_order_relaxed);
-		sceneTask = std::static_pointer_cast<void>(std::make_shared<AsyncWorker::JobHandle>(
-			AsyncWorker::Get().SubmitScene(a_name, [this, work = std::move(a_work)](std::stop_token) {
-				sceneLaneThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
-				sceneWorkThread = true;
-				// T6b1d: no engine memory without a lease (EngineReadWindow::Touch counts the rest).
-				const bool marked = std::exchange(EngineReadWindow::sceneWork, true);
-				// The frame's engine globals, never the engine's (step 6e F2): the frame inputs' it takes from their slot (T6b3a; the pass
-				// takes them again, which finds none newer).
-				TakeFrameInputs();
-				FrameGlobals::Scope scope(sceneInputs.globals);
-				work();
-				EngineReadWindow::sceneWork = marked;
-			})));
-	}
-
-	void SceneStore::JoinSceneTask()
-	{
-		if (auto job = std::static_pointer_cast<AsyncWorker::JobHandle>(std::exchange(sceneTask, nullptr))) {
-			// The frame's work must be done before anything reads the store: no budget, no inline fallback.
-			const auto result = AsyncWorker::Get().Wait(*job, std::chrono::hours(1));
-			if (result == AsyncWorker::WaitResult::Failed && !std::exchange(sceneTaskFailedLogged, true))
-				logger::error("[DCLF] the scene task threw; the frame's tables are whatever it left");
-		}
-		sceneTaskInFlight.store(false, std::memory_order_relaxed);
-		// What the work held for PrimaryCull, now (T6b3a: a queue; the frame's start drains it too, so the join is not what delivers it).
-		DeliverPrimaryNotes();
-	}
-
-	bool SceneStore::TryJoinSceneTask()
-	{
-		if (const auto job = std::static_pointer_cast<AsyncWorker::JobHandle>(sceneTask); job && !AsyncWorker::Ended(*job)) {
-			++presentsRunning;
-			return false;
-		}
-		++presentsJoined;
-		JoinSceneTask();
-		return true;
 	}
 }

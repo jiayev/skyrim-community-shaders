@@ -320,6 +320,7 @@ namespace DCLF
 		draft.Set(R::kGrowthsSlot, RevisionFragment::MakeReady(Growths::Get().Naming()));
 		try {
 			(void)rv.assembler.Seal(std::move(draft));
+			rv.sealedVersions = versions;
 			++rv.sealed;
 		} catch (const std::exception& error) {
 			if (rv.sealFailures++ < 4)
@@ -505,8 +506,27 @@ namespace DCLF
 		const auto& active = rv.active;
 		const auto& versionsFragment = active ? active->Fragment(R::kVersionsSlot) : nullptr;
 		const auto versions = versionsFragment ? versionsFragment->Value<VersionSet>() : nullptr;
-		const bool snapshot = impl->adoptedSnapshot && impl->adoptedSnapshot->drawsComplete && !impl->snapshotStale;
-		if (host && snapshot && versions && versions->changes == VersionRegistry::Get().changes)
+		bool snapshot = impl->adoptedSnapshot && impl->adoptedSnapshot->drawsComplete && !impl->snapshotStale;
+		const bool current = host && snapshot && versions && versions->changes == VersionRegistry::Get().changes;
+		// T6b3b, the guard (unconditional, one compare a payload): the adopted draws embed the face positions of the version current now
+		// (the one the revision names: BuildSnapshotDraws builds them so). A snapshot whose draws embed another would have its vertex
+		// shaders read a version nothing holds: its frames are withdrawn, and the builder makes the snapshot again.
+		if (current && impl->scene && impl->adoptedSnapshot->draws) {
+			if (!Impl::DrawsEmbedFacePositions(*impl->adoptedSnapshot->draws, impl->scene->facePositionsAddress)) {
+				if (impl->staleDraws++ == 0)
+					logger::warn("[DCLF] the adopted snapshot's draws of frame {} embed face positions of another version than the current one: withdrawn <- STALE DRAWS",
+						SceneStore::Get().GetFrame());
+				snapshot = false;
+				impl->snapshotInputsMoved.store(true, std::memory_order_release);
+				WakeSnapshotBuilder();
+			} else if (impl->growthAdoptedFrame != ~0u) {
+				// The first frame whose draws embed the versions a growth's adoption made current.
+				const std::uint32_t frameNow = SceneStore::Get().GetFrame();
+				impl->growthToDraws.push_back(frameNow >= impl->growthAdoptedFrame ? frameNow - impl->growthAdoptedFrame : 0u);
+				impl->growthAdoptedFrame = ~0u;
+			}
+		}
+		if (current && snapshot)
 			for (std::uint32_t e = 0; e < R::kEpochs; ++e) {
 				// An epoch's recordings are all of the build its versions were made at (AssembleRevision asks for them again after one).
 				const auto recordings = active->Get<RevisionRecordings>(R::kRecordingSlot + e);
@@ -634,6 +654,11 @@ namespace DCLF
 					}
 					continue;
 				}
+				// T6b3d (w127: the pacing by the frame's takes held a publication made after the frame's take for the next take, a frame
+				// late): one build in flight, the next started as soon as the builder is idle, from the newest publication (the work slot
+				// holds only one newer than the posted snapshot's) - everything published meanwhile coalesced into it. A posted snapshot the
+				// frame has not taken is replaced by the newer complete one; the build's own time is the rate (publications come only on a
+				// change), and an unchanged revision is cheap (its recordings kept).
 				// The newest work, replacing the current one (latest wins: the publications it skipped are coalesced; their log deltas
 				// reach the frame with it).
 				if (auto next = snapshotWorkSlot.Take()) {
@@ -644,14 +669,11 @@ namespace DCLF
 					b.work = std::move(next);
 					b.draws.reset();
 					b.timing = {};
-					b.stage = Stage::Ahead;
+					b.stage = Stage::Make;
 				}
 				if (!b.work || !b.work->publication)
 					return;
-				if (b.stage == Stage::Ahead) {
-					BuildSnapshotDraws();
-					b.stage = Stage::Make;
-				} else if (b.stage == Stage::Idle) {
+				if (b.stage == Stage::Idle) {
 					// A snapshot of the work stands: made again when the frame's inputs moved (a graph build, a capture, a toggle, new
 					// resources), so its revision is the frame's as it is now.
 					if (!snapshotInputsMoved.exchange(false, std::memory_order_acq_rel))
@@ -668,13 +690,26 @@ namespace DCLF
 				if (rv.assembler.LatestSequence() != before) {
 					b.sealed = rv.assembler.LatestSequence();
 					b.sealedAt = std::chrono::steady_clock::now();
+					// The draws, for exactly the versions the sealed revision names (its adoption makes them current): built now, while its
+					// recordings are made, or again after a make that names other versions than the ones they embed (a growth became ready
+					// meanwhile). One consistent build: a snapshot never pairs draws and a revision of different versions.
+					const auto* versions = rv.sealedVersions.get();
+					const Versioned* positions = nullptr;
+					if (const auto& target = b.work->context.target; target && target->scene)
+						positions = &target->scene->facePositions;
+					else if (const auto& shadowTarget = b.work->context.shadowTarget; shadowTarget && shadowTarget->scene)
+						positions = &shadowTarget->scene->facePositions;
+					if (!b.draws || (positions && !DrawsEmbedFacePositions(*b.draws, NamedVersionAddress(versions, *positions))))
+						BuildSnapshotDraws(versions);
 					b.stage = Stage::Recordings;
 					continue;
 				}
 				// None sealed. Without what a revision is made of (no main resources yet, no claims): the publication alone, so the frame has
-				// its tables and catalog (its epochs then capture what the next revision needs). Else a growth or a build it asked for is
-				// pending: made again when woken.
+				// its tables and catalog (its epochs then capture what the next revision needs; its draws, without a revision, draw nothing:
+				// DecideCoverage). Else a growth or a build it asked for is pending: made again when woken.
 				if (!producer.inputs.claims || !producer.inputs.main) {
+					if (!b.draws)
+						BuildSnapshotDraws(nullptr);
 					PostSnapshot(nullptr);
 					b.stage = Stage::Idle;
 					return;
@@ -768,7 +803,8 @@ namespace DCLF
 		std::shared_ptr<const Impl::SceneSnapshot> snapshot(std::move(taken));
 		if (const auto& lease = snapshot->revision) {
 			if (const auto named = lease->Get<Growths::NamedChanges>(Impl::SceneRevisions::kGrowthsSlot))
-				(void)Growths::Get().AdoptNamed(*named);
+				if (Growths::Get().AdoptNamed(*named) && s.growthAdoptedFrame == ~0u)
+					s.growthAdoptedFrame = SceneStore::Get().GetFrame();
 			if (const auto versions = lease->Get<VersionSet>(Impl::SceneRevisions::kVersionsSlot); versions && versions->Current())
 				VersionRegistry::Get().SetChanges(versions->changes);
 		}
@@ -781,11 +817,19 @@ namespace DCLF
 			s.adoptionLatency.push_back(frameNow >= publication->commitFrame ? frameNow - publication->commitFrame : 0u);
 		}
 		// The replaced one back to the builder last, once nothing of the frame's holds it alone: its release is the builder's.
-		if (auto replaced = std::exchange(s.adoptedSnapshot, snapshot)) {
+		if (auto replaced = std::exchange(s.adoptedSnapshot, snapshot))
 			s.retiredSnapshots.Push(std::move(replaced));
-			WakeSnapshotBuilder();
-		}
+		// T6b3d: the slot is free (a builder idle with inputs moved remakes for the frame as it is now).
+		WakeSnapshotBuilder();
 		return snapshot->publication;
+	}
+
+	void IndirectDraws::NoteEventAdoption(double a_ms, std::uint32_t a_frames)
+	{
+		if (!impl)
+			return;
+		impl->eventAdoptionMs.push_back(a_ms);
+		impl->eventAdoptionFrames.push_back(a_frames);
 	}
 
 	std::string IndirectDraws::Impl::SnapshotReport()
@@ -812,6 +856,30 @@ namespace DCLF
 		text += fmt::format("[DCLF] snapshot builds (ms, avg/p95/max): draws ahead {} ({} built), shapes {}, recordings wait {}; commit to adoption (frames): p50 {}, p95 {}, "
 							"max {}\n",
 			Spread(ahead), aheadBuilt, Spread(shapes), Spread(recordings), percentile(50), percentile(95), adoptionLatency.empty() ? 0u : adoptionLatency.back());
+		// T6b3d: from the oldest event a publication carried to the frame that installed it (the publications the builder skipped past
+		// included: SceneStore::HandOverAtFrameStart walks their log nodes).
+		if (!eventAdoptionMs.empty()) {
+			std::sort(eventAdoptionFrames.begin(), eventAdoptionFrames.end());
+			const auto framesAt = [this](std::size_t a_percent) {
+				return eventAdoptionFrames[(std::min)(eventAdoptionFrames.size() - 1, eventAdoptionFrames.size() * a_percent / 100)];
+			};
+			std::vector<double> sorted = eventAdoptionMs;
+			std::sort(sorted.begin(), sorted.end());
+			const auto msAt = [&sorted](std::size_t a_percent) { return sorted[(std::min)(sorted.size() - 1, sorted.size() * a_percent / 100)]; };
+			text += fmt::format("[DCLF] event to adoption (T6b3d: the oldest event a publication carried, to the frame installing it): {} adoptions; ms p50 {:.2f}, "
+								"p95 {:.2f}, max {:.2f}; frames p50 {}, p95 {}, max {}\n",
+				eventAdoptionMs.size(), msAt(50), msAt(95), sorted.back(), framesAt(50), framesAt(95), eventAdoptionFrames.back());
+			eventAdoptionMs.clear();
+			eventAdoptionFrames.clear();
+		}
+		// The guard's (DecideCoverage) and the growths' adoption to the first draws embedding their versions.
+		std::sort(growthToDraws.begin(), growthToDraws.end());
+		text += fmt::format("[DCLF] snapshot draws: {} frames withdrawn for draws embedding another face positions version than the current one{}; growth adoption "
+							"to draws embedding it (frames): {} growths, p50 {}, max {}\n",
+			staleDraws, staleDraws ? " <- STALE DRAWS" : "", growthToDraws.size(), growthToDraws.empty() ? 0u : growthToDraws[growthToDraws.size() / 2],
+			growthToDraws.empty() ? 0u : growthToDraws.back());
+		staleDraws = 0;
+		growthToDraws.clear();
 		snapshotsAdopted = snapshotFramesKept = 0;
 		snapshotsStale = {};
 		adoptionLatency.clear();
@@ -865,6 +933,8 @@ namespace DCLF
 			bound.updates = bound.changes = bound.resyncs = 0;
 			bound.parity.Reset();
 		}
+		// The stores the builds write (the builder's alone; before, the frame's report read and reset them while a build ran).
+		text += StoresReport();
 		return text;
 	}
 

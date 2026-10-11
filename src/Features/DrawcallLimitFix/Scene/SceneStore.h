@@ -29,7 +29,9 @@
 #include "Features/DrawcallLimitFix/Common/Retirement.h"
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
 #include "Features/DrawcallLimitFix/Common/LatestSlot.h"
+#include "Features/DrawcallLimitFix/Common/SceneWake.h"
 #include "Features/DrawcallLimitFix/Common/PublicationLog.h"
+#include "Features/DrawcallLimitFix/Common/Toggles.h"
 #include "LightingDescriptors.h"
 #include "LocalShadows.h"
 #include "ConstantEvaluator.h"
@@ -82,9 +84,10 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief The sub-zones of the scene tables (DrawcallLimitFix::BeginSceneFrame): the events applied (ApplyEvents) and the scene phase,
-	 * block by block. Each is a Tracy zone and a sum in Stats::scenePartMs, reported under CS_DCLF_STATS. The first
-	 * evaluation round's split by entry (EvaluateKind) is measured only under CS_DCLF_PROFILE.
+	 * @brief The sub-zones of the scene tables (DrawcallLimitFix::BeginSceneFrame): the events applied (ApplyEvents), the scene phase
+	 * block by block, and (T6b3c, one pass) the joins, the commit and the publication. Each is a Tracy zone and a sum in
+	 * Stats::scenePartMs, reported under CS_DCLF_STATS. The first evaluation round's split by entry (EvaluateKind) is measured only
+	 * under CS_DCLF_PROFILE.
 	 */
 	enum class ScenePart : std::uint32_t
 	{
@@ -107,14 +110,29 @@ namespace DCLF
 		WalkParity,        // CheckWalkParity (CS_DCLF_WALK_PARITY only)
 		Shading,           // NameShadingEvents: the shading events' slots named for FrameValues
 		Placements,        // PublishPlacementPlan: the roots taken, and the walk's plan for FrameValues
+		Joins,             // T6b3c, the pass's joins: BuildAccumulatePhase, the new pipelines' blocks, the bindings, the lookups resolved
+		Commit,            // T6b3c: CommitSet, after the joins
+		Publish,           // T6b3c: PublishScene (the set applied, the claims revoked, the tables and lookups published)
+		// T6b3e, inside the parts above (ScenePartNested): the evaluation rounds' and the joins' two halves, every round's.
+		EvaluateFanout,    // EvaluateEntry over the round (on the preparation pool from 128 entries, CS_DCLF_FANOUT=2)
+		EvaluateMerge,     // MergeEntry over the round, in order, on the scene lane
+		JoinsFanout,       // the joins' evaluations (EvaluateJoinPre over the bind queue, EvaluateJoin over the joins)
+		JoinsMerge,        // the joins' merges, in order
 		Count
 	};
 
 	inline constexpr std::array<const char*, static_cast<std::size_t>(ScenePart::Count)> kScenePartNames{
 		"category nodes", "attach/detach", "validate", "structural events", "prologue", "sweep slots", "cull hidden bits",
 		"schedule", "switch events", "evaluate", "geometry scan", "later rounds", "shadow sets",
-		"object sweep", "sun candidates", "face walk", "walk parity", "shading", "placement plan"
+		"object sweep", "sun candidates", "face walk", "walk parity", "shading", "placement plan", "joins", "commit", "publish",
+		"evaluate (fan-out)", "evaluate merge", "joins (fan-out)", "joins merge"
 	};
+
+	/** @brief T6b3e: a part measured inside another (the fan-outs' halves), left out of the parts' sum. */
+	inline constexpr bool ScenePartNested(std::size_t a_part)
+	{
+		return a_part >= static_cast<std::size_t>(ScenePart::EvaluateFanout);
+	}
 
 	/** @brief What the first evaluation round did with an entry, for its per-entry timing (CS_DCLF_PROFILE). */
 	enum class EvaluateKind : std::uint32_t
@@ -169,10 +187,10 @@ namespace DCLF
 	/**
 	 * @brief The render thread's view of the static scene content Drawcall Limit Fix can draw.
 	 *
-	 * The render thread ingests the engine's events (IngestEvents, at Present and at the frame's start) and the scene work
-	 * applies them (ApplyEvents: SceneTracker's events and the loaded-cell changes); BuildFrame's scene phase (BeginSceneFrame, at Main::Draw,
-	 * before the main camera's cull) refreshes the tracked geometries' records, and its accumulate phase
-	 * (EarlyPrepass, once the cull job is done) patches the half of each record the main camera's accumulator decides.
+	 * T6b3d: the coordinator's pump (the scene lane) drains the engine's events and applies them (CollectEvents, ApplyEvents:
+	 * SceneTracker's events and the loaded-cell changes) in each scene pass, woken by its producers; the pass's walk refreshes the
+	 * tracked geometries' records and its joins patch the half of each record the main camera's accumulator decides, then it commits
+	 * the set and publishes. The render thread adopts the newest snapshot at the frame's start and serves the pass's requests.
 	 *
 	 * Tracked content is everything under the Static, Dynamic, MultiBound and Actor category nodes of attached cells
 	 * (engine notes: cell 3D category nodes; an interior moves its actors into its rooms). Terrain, markers and water
@@ -565,7 +583,7 @@ namespace DCLF
 			 * its slots, and KeepResidentsAlive sets them again from the residents whenever membership changed, so a slot
 			 * leaves the set with its last member and a drained one leaves it at once. Being in the set is what certifies the
 			 * raw engine pointers a slot holds (a pipeline's lighting template, a material's key) for evaluation; CheckObjectSlots
-			 * holds every bound record to it. geometryLastUsed is the walk's: the frame that last wrote the geometry slot. The
+			 * holds every bound record to it. geometryLastUsed is the walk's: the pass that last wrote the geometry slot (T6b3d: PassStamp). The
 			 * keys are kept per slot so a freed slot can find its map entry, and so a cached slot index can be checked
 			 * against what it was derived for.
 			 */
@@ -880,27 +898,51 @@ namespace DCLF
 		static SceneStore& Get();
 
 		/**
-		 * @brief Render thread (Present, and the frame's start before the kick): the frame's ingestion (dclf-async-publication.md, "Step
-		 * 5: ingestion"). The engine's queues - attach and detach, fade snaps, fades, property and node events, switch events, object
-		 * LOD's segment writes - drained into the render thread's batch in push order, and tree LOD's mirror (DecideTreeLod reads it
-		 * next); at the frame's start the batch is posted to the coordinator (T6b3a: eventBatches, no shared batch). Nothing is walked or
-		 * evaluated. While a load screen is up the queues and the batch are discarded instead, a marker is posted once (the coordinator
-		 * drops what the load invalidates: ApplyLoading), and the first frame after the load rescans.
+		 * @brief T6b3d, render thread (PostPostLoad, once DCLF is installed): the coordinator's pump configured and its wakes allowed
+		 * (WakeScenePass, by source). From here the scene passes (RunSceneWork) run on the scene lane whenever a producer wakes the pump: an
+		 * engine event pushed, an answer, a catalog, a retirement returned, a frame input posted; never kicked or joined by the frame.
 		 */
-		void IngestEvents(bool a_frameStart = false);
-		/** @brief Render thread: the batch ingested so far posted to the coordinator (T6b3a; none: nothing), before its pass or Present's apply. */
-		void PostIngested();
+		void StartScenePump();
 		/**
-		 * @brief The posted batches applied to the scene state, each in order (one a pass while the kicks stay): the category refresh, the
-		 * attached subtrees walked and the detached entries erased, the validation slice, the structural events. The scene work's first part
-		 * (RunSceneWork, on the coordinator), or the render thread's at Present for a batch no scene work took (EventsUnapplied: the batch
-		 * posted first). What it lets go of is handed back (HandBack).
+		 * @brief T6b3d, render thread (every frame's start, and the menu's toggle): a_full - DCLF runs (loaded and switched on): the passes
+		 * do their whole work; else they apply the events alone, so the tracked set stays current (what Present's apply did). a_inline -
+		 * the parities that observe the store from the render thread (CS_DCLF_PERSISTENT_PARITY, CS_DCLF_WALK_PARITY, the capture
+		 * parity): the producers' wakes are dropped and the frame's start runs the pass itself (RunScenePassInline).
 		 */
-		void ApplyEvents();
-		/** @brief Render thread at Present, after IngestEvents: the batch has waited through a Present. */
-		void NoteEventsPresent();
-		/** @brief Render thread at Present: a batch has waited a whole frame for scene work that did not run (menus, switched off). */
-		bool EventsUnapplied() const;
+		void SetScenePassMode(bool a_full, bool a_inline);
+		/**
+		 * @brief T6b3d, render thread, the frame's start under the parities (SetScenePassMode's a_inline): one scene pass run here
+		 * (SerializedTaskPump::TryRunInline), or, while a pass the lane started still runs (a wake from before the switch), after it ends
+		 * (a wait, the parities' alone), so the render thread's observers (the mirror's leases, the validation slice, the extras and LOD
+		 * parities) keep their placement. Then the notes it held for PrimaryCull, delivered.
+		 */
+		void RunScenePassInline();
+		/**
+		 * @brief T6b3d, render thread at Present under the parities, when no frame's start ran since the last Present (menus, load
+		 * screens): one inline pass applying the events alone (Present's apply before T6b3d), so the queues do not wait for a frame.
+		 */
+		void ApplyEventsInline();
+		/** @brief Whether a scene pass runs now (the pump not idle): a frame-side fallback that reads what the pass writes refuses then. */
+		bool SceneTaskInFlight() const;
+		/**
+		 * @brief T6b3d, render thread, at Present and the frame's start (in menus too): whether a load screen is up. Nothing may walk the
+		 * scene graph while one is: the first time a load is seen a marker is posted (the coordinator drops what the load invalidates:
+		 * ApplyLoading; its passes drain the queues into the mirror's carry, the tracking discarding them), the set is withdrawn
+		 * (PassCapture::PublishSet(nullptr)), and the first frame after the load catches every switch up and captures every category
+		 * node. Also where the switch events' thread is recorded (PushSwitch).
+		 */
+		bool NoteLoadingScreen();
+		/**
+		 * @brief T6b3d, render thread, the frame's start, not while a load screen is up: the coordinator's requests served and the render
+		 * thread's captures posted - the switch catch-ups (engine writes: the attached roots and switch events the passes drained, the world
+		 * after a load), the category capture (when its signature moved or a pass saw a detach), the mirror's capture requests (captured
+		 * with their chains, onto the tracker's stack, mirror-only), the mirror parity's probe (CS_DCLF_MIRROR_PARITY), tree LOD's mirror.
+		 * a_running false (DCLF does not run: no frame start of its own): the switch catch-ups and tree LOD's mirror alone, as Present's
+		 * ingestion served them before.
+		 */
+		void ServeFrameRequests(bool a_running);
+		/** @brief Coordinator reports' interval (DrawcallLimitFix::kReportInterval's): the coordinator reports as its frame crosses it. */
+		static constexpr std::uint32_t kReportInterval = 300;
 		/**
 		 * @brief Render thread at Present, the read window closed: the material references and applied batches the coordinator let go of
 		 * (T6b3a: pushed where it let go of them; its engine references go to EngineReleases), released (dropping the last one runs the
@@ -978,7 +1020,7 @@ namespace DCLF
 		};
 		ResidentStats TakeResidentStats() { return std::exchange(residentStats, {}); }
 		/**
-		 * @brief The accumulate work's frame inputs (T6b2c step 8), since the last call: LightLimitFix's room map and the pipeline frame
+		 * @brief The joins' frame inputs (T6b2c step 8), since the last call: LightLimitFix's room map and the pipeline frame
 		 * the render thread posted (latest wins) and the scene lane took, and the PerGeometry blocks the coordinator made from the
 		 * pipeline frame (MakeNewPipelineConstants) or could not make yet (no frame taken: the slot waited).
 		 */
@@ -1003,8 +1045,9 @@ namespace DCLF
 		 * The shadow views are drawn before the main camera's passes exist (engine notes: shadow maps),
 		 * so the tables are built in two halves. Scene runs before the shadow maps and holds everything
 		 * that does not depend on the accumulator - the object records a shadow epoch reads. Accumulate
-		 * runs at EarlyPrepass, once the registration jobs have finished, and patches those records with
-		 * what the main pass draws them with. Object indices are fixed from Scene onwards.
+		 * (the joins) patches those records with what the main pass draws them with: from the mirror and the
+		 * membership passes, not the registrations, so since T6b3c it follows Scene in the same scene pass.
+		 * Object indices are fixed from Scene onwards.
 		 */
 		enum class Phase : std::uint32_t
 		{
@@ -1015,8 +1058,16 @@ namespace DCLF
 		/** @brief Rebuilds one half of the CPU tables from the tracked set. */
 		void BuildFrame(Phase a_phase);
 
-		/** @brief The `[DCLF] scene delta`, change log and scene parity report lines since the last call, or empty. */
+		/**
+		 * @brief The `[DCLF] scene delta`, change log and scene parity report lines since the last call, or empty. T6b3d: the coordinator's
+		 * (ReportCoordinator, in its pass); the render thread's own lines are FrameSceneReport's.
+		 */
 		std::string SceneReport();
+		/**
+		 * @brief T6b3d, render thread (the frame's report): the report lines of what the render thread keeps - the material parity, the
+		 * pipeline constants and templates, the shading parity, the extras parity, tree LOD's mirror, the mirror watch, the frame capture.
+		 */
+		std::string FrameSceneReport();
 
 		/**
 		 * @brief Latches the main camera's accumulator, from a point in the frame where it is identifiable.
@@ -1070,8 +1121,6 @@ namespace DCLF
 		 */
 		static constexpr std::uint32_t kMainPassRenderFlags = 0x41;
 
-		/** @brief Drops everything (feature disabled or game unloaded). */
-		void Clear();
 
 		/**
 		 * @brief The tables as the frame reads them (step 6c): the installed publication's (immutable), the newest taken while none is
@@ -1141,11 +1190,15 @@ namespace DCLF
 			std::shared_ptr<const ankerl::unordered_dense::set<RE::NiNode*>> categoryNodes;
 			// The scene revision's request (the snapshot builder's, T6b3b).
 			RevisionRequest revision;
+			// T6b3d: the oldest event it is the first publication of (SceneTracker::Event::stampNs, stampFrame; 0: none), for the
+			// event-to-adoption latency (IndirectDraws' snapshot report).
+			std::uint64_t eventNs = 0;
+			std::uint32_t eventFrame = 0;
 		};
 		/**
-		 * @brief Render thread, EarlyPrepass (T6b2c step 8): the accumulate work's frame inputs posted (LightLimitFix's room map, latest
-		 * wins: PostRoomMap) and the parity's observers of the frame's registrations (the capture drained, DrainCapture; the members'
-		 * light masks, PrimaryCull::CheckLightMasks). No scene work: the scene lane takes the inputs (TakeAccumulateInputs).
+		 * @brief Render thread, EarlyPrepass (T6b2c step 8): the joins' frame inputs posted (LightLimitFix's room map, latest wins:
+		 * PostRoomMap; the capture's drain, PostRegistrationDrain) and the parity's observers of the frame's registrations (the members'
+		 * light masks, PrimaryCull::CheckLightMasks). No scene work: the next scene pass takes the inputs (TakeAccumulateInputs, T6b3c).
 		 */
 		void PostAccumulateInputs();
 		/**
@@ -1157,8 +1210,6 @@ namespace DCLF
 		void InstallClaims();
 		/** @brief Whether a publication is installed (none: the frame has no claims, WithdrawSet). */
 		bool HasInstalled() const { return installed != nullptr; }
-		/** @brief Whether the scene work is out (kicked, not joined): nothing of the coordinator's may be touched by the frame. */
-		bool SceneTaskInFlight() const { return sceneTaskInFlight.load(std::memory_order_relaxed); }
 		/** @brief The installed publication's sequence, 0 without one. */
 		std::uint64_t InstalledSequence() const { return installed ? installed->sequence : 0u; }
 		/** @brief The toggles generation the installed publication's commit was made under (the toggle reinstall), 0 without one. */
@@ -1193,7 +1244,7 @@ namespace DCLF
 		const std::shared_ptr<const Tables>& AcceptedTables() const { return acceptedTables; }
 		struct TablesPublication
 		{
-			std::uint64_t published = 0, reused = 0, made = 0, republished = 0;  // republished: at a scene pass's start (T6b3a), the last copy was not the tables
+			std::uint64_t published = 0, reused = 0, made = 0;
 			double ms = 0.0, maxMs = 0.0;
 			// 6d, replay: the material records written again (their version moved) against the slots, and the time the rest took
 			// (copied whole still); the replay's parity (CS_DCLF_PERSISTENT_PARITY, every 60 publications) against the tables.
@@ -1211,7 +1262,7 @@ namespace DCLF
 			std::uint64_t lookupsCopied = 0, lookupsShared = 0, lookupsChunks = 0;
 			double lookupsMs = 0.0, lookupsMaxMs = 0.0;
 		};
-		/** @brief Render thread, the scene work joined: the retirement chain's counts since the last call, and what waits in it now. */
+		/** @brief The coordinator (T6b3d: its report): the retirement chain's counts since the last call, and what waits in it now. */
 		std::string TakeRetirementReport()
 		{
 			const auto s = std::exchange(retirementStats, RetirementStats{});
@@ -1223,7 +1274,11 @@ namespace DCLF
 		 * @brief Render thread, the depth commit: its fade root rows hold a_held (Tables::fadeRootsJournal's version), posted latest-wins
 		 * (T6b3a): at its next pass the coordinator's journal forgets what it has, and the next write opens a new version.
 		 */
-		void FadeRootsSent(std::uint64_t a_held) { fadeRootsSentPosted.store(a_held, std::memory_order_release); }
+		void FadeRootsSent(std::uint64_t a_held)
+		{
+			fadeRootsSentPosted.store(a_held, std::memory_order_release);
+			// T6b3d: no wake: the frame's next pass takes it.
+		}
 		/**
 		 * @brief The frame's globals the engine's evaluations give (RefreshFrameConstants, at Prepass): no column of the tables, a
 		 * capture of the frame each commit latches into its frame blocks.
@@ -1255,11 +1310,19 @@ namespace DCLF
 		}
 		/**
 		 * @brief The frame number: the render thread's (BeginFrame), or on a scene work thread the coordinator's (T6b3a: sceneFrame, the
-		 * frame inputs' it last took; the same as the render thread's while the joins stay). Inline scene work runs with both equal.
+		 * frame inputs' it last took; T6b3d: behind the render thread's by the pump's lag, and the same for every pass of a burst). Inline
+		 * scene work runs with both equal.
 		 */
 		std::uint32_t GetFrame() const { return sceneWorkThread ? sceneFrame : frame; }
 		/** @brief The coordinator's passes since the start (T6b3a): what a once-a-pass rule counts once the passes leave the frames. */
 		std::uint64_t PassSerial() const { return passSerial; }
+		/**
+		 * @brief T6b3d: the pass as a 32-bit stamp for the per-entry "this pass" marks (Tracked::candidateFrame, hiddenEventFrame,
+		 * Tables::geometryLastUsed): never 0 ("never") nor Tables::kSlotFree, unique over 2^32 - 2 passes.
+		 */
+		std::uint32_t PassStamp() const { return static_cast<std::uint32_t>(passSerial % 0xFFFFFFFEull) + 1u; }
+		/** @brief T6b3d: a once-a-pass parity's turn (ParityDue by passes: every 60th pass, with a_offset as ParityDue's). */
+		bool PassParityDue(std::uint32_t a_offset = 0) const { return passSerial % 60 == a_offset; }
 		/**
 		 * @brief The PerMaterial float positions refreshed every frame in the records without a new version
 		 * (MaterialSources): the build repacks them into a reused group. PS: the shader object's and the
@@ -1454,44 +1517,33 @@ namespace DCLF
 		std::uint32_t SetCommitFrame() const { return setCommitFrame; }
 
 		/**
-		 * @brief The frame's scene work on DCLF's coordinator (dclf-async-publication.md, "Phase 3"): the walk (its placements
-		 * inline, under EngineReadWindow leases) and the set's commit, from Main::Draw to the first reader that needs this frame's
-		 * walk (PrimaryCull's full-frustum hook; every later DCLF hook joins too). It starts with the frame's events (ApplyEvents),
-		 * which the render thread ingested before the kick (IngestEvents).
+		 * @brief The frame's start (render thread): the frame number, the frame's globals captured, the frame inputs posted for the
+		 * coordinator (T6b3d: a message that wakes its pump; nothing is kicked or joined).
 		 *
-		 * Render thread, in order: BeginFrame (the frame number, the frame's globals, the frame inputs posted), the publication
-		 * selected and its claims installed, the frame's ingestion posted, what the frame's claims need (the filters), then
-		 * KickSceneTask. T6b3a: the frame reads only its own state, the immutable publications and the log; what the walk has for
-		 * other modules is a message: PrimaryCull's hidden keys and lost members (primaryNotes, delivered at the joins and the frame's
-		 * start), the claims' changes and the frame inputs (the publication log), the engine references it let go of (released at
-		 * Present: ReleaseHandedBack, EngineReleases).
+		 * Render thread, in order: BeginFrame, the newest snapshot adopted and its publication installed, its claims installed, the
+		 * coordinator's requests served and the captures posted (ServeFrameRequests), what the frame's claims need (the filters). The
+		 * frame reads only its own state, the immutable publications and the log; what the passes have for other modules is a message:
+		 * PrimaryCull's hidden keys and lost members (primaryNotes, delivered at the frame's start), the claims' changes and the frame
+		 * inputs (the publication log), the engine references they let go of (released at Present: ReleaseHandedBack, EngineReleases).
 		 */
 		void BeginFrame();
-		/** @brief Coordinator (or inline): the scene work itself. a_task: on the coordinator (its placements take read leases). */
-		void RunSceneWork(bool a_task);
-		/** @brief Render thread: runs a_work on the coordinator (a_name: the job's, as the wait report shows it), joined by JoinSceneTask. */
-		void KickSceneTask(std::function<void()> a_work, const char* a_name = "scene");
 		/**
-		 * @brief EarlyPrepass, render thread: the accumulate phase's render-thread half (step 6b), now the material tail alone (T6b2c
-		 * step 7's): the material captures the last joins asked for (ServeMaterialRequests), the material writes, texture transforms
-		 * and validation slice. The registrations and the frame inputs are PostAccumulateInputs' (step 8).
+		 * @brief The coordinator's pass (T6b3d: the pump's drain, ScenePass, on the scene lane; or inline under the parities): the frame
+		 * inputs and the posts taken, the engine's queues drained up to where each stood at the pass's start (CollectEvents) and applied,
+		 * the walk, the joins (membership bound, residents kept, decals ordered, the new pipelines' PerGeometry blocks and the bindings),
+		 * the set's commit, then the publication (PublishScene: the set applied, the tables and lookups published, the snapshot builder
+		 * handed the publication) - held back while the builder has not taken the last one (one publication per builder take, the
+		 * passes between coalescing into it). Any number of passes a frame (bursts, or none in menus). While DCLF does not run (not
+		 * loaded, switched off) a pass applies the events alone. What it drops of PrimaryCull's is held (primaryNotes). a_task: on the
+		 * lane (its placements take read leases).
+		 */
+		void RunSceneWork(bool a_task);
+		/**
+		 * @brief EarlyPrepass, render thread: the material tail (T6b2c step 7's): the material captures the last joins asked for
+		 * (ServeMaterialRequests, answered for the next scene pass), the material writes and the validation slice. The registrations and
+		 * the frame inputs are PostAccumulateInputs' (step 8). Reads nothing of the coordinator's (T6b3c: the scene pass may run).
 		 */
 		void PrepareAccumulatePhase();
-		/**
-		 * @brief The accumulate phase's joins on the coordinator (a_task) or inline: membership bound, residents kept, decals ordered;
-		 * the new pipelines' PerGeometry blocks made from the posted pipeline frame (MakeNewPipelineConstants, T6b2c step 8); then the
-		 * tables published (PublishTables). What it drops of PrimaryCull's is held (primaryNotes).
-		 */
-		void RunAccumulateWork(bool a_task);
-		/** @brief Render thread: waits for the scene task if one runs, then the held PrimaryCull notes delivered. Cheap when there is none. */
-		void JoinSceneTask();
-		/**
-		 * @brief Render thread at Present (T6b1d: the scene work is not waited for there): joined when it has ended (true), else left
-		 * running for the next frame's start (false). Never waits.
-		 */
-		bool TryJoinSceneTask();
-		/** @brief Since the last call: the Presents that joined the scene work, and those that found it running (T6b1d). */
-		std::pair<std::uint64_t, std::uint64_t> TakePresentJoins() { return { std::exchange(presentsJoined, 0), std::exchange(presentsRunning, 0) }; }
 		/** @brief The sun candidates' generation as the frame's claims were installed (BeginFrame): the engine's hooks in the window. */
 		std::uint32_t GetPublishedSunGeneration() const { return publishedSunGeneration; }
 		/** @brief Claims revoked mid-frame since the last call (RevokeUndrawnClaims): geometries, and the phases taken back. */
@@ -1521,6 +1573,11 @@ namespace DCLF
 			// or occlusion pipelines (or an alpha-tested caster's diffuse).
 			// The reflection phase (8): its forward pipeline.
 			std::array<std::uint64_t, 14> waitingBy{};
+			// T6b3d: why a member left (its commit's verdict): the scene not built (a load), no phase to take part in (its record freed or
+			// ineligible now, its phases off), not bound (its membership dropped: the joins), waiting (by waitingBy's index: leftWaiting),
+			// its layer partner or a phase of the whole object not ready.
+			std::array<std::uint64_t, 5> leftBy{};
+			std::array<std::uint64_t, 14> leftWaiting{};
 			std::uint64_t waitingRequeued = 0;  // waiting slots taken again for a readiness source they wait on
 			std::uint64_t commitParityChecks = 0, commitParityDiffer = 0;  // CS_DCLF_SET_PARITY: full evaluations, slots that differed
 			std::string firstWaiting;
@@ -1574,7 +1631,11 @@ namespace DCLF
 			bool standIn = false;  // kFadeRootStoodIn: no engine-drawn part
 		};
 		/** @brief Render thread (PrimaryCull): posted latest-wins, applied at the coordinator's next scene pass (TakeCoordinatorInputs). */
-		void SetFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned) { fadeOwnedPosted.Post(std::make_unique<std::vector<OwnedFadeRoot>>(a_owned)); }
+		void SetFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned)
+		{
+			fadeOwnedPosted.Post(std::make_unique<std::vector<OwnedFadeRoot>>(a_owned));
+			// T6b3d: no wake: the frame's next pass takes it.
+		}
 		void ApplyFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned);
 		/**
 		 * @brief Render thread: whether the fade node's state is the GPU's alone (a stood-in root, kFadeRootStoodIn): the engine
@@ -1603,7 +1664,11 @@ namespace DCLF
 			return static_cast<std::size_t>(std::count_if(fadeRootOwned.begin(), fadeRootOwned.end(), [](const auto& a_root) { return a_root.second; }));
 		}
 		/** @brief PrimaryCull: after frames the engine culled every entry (its OnVisible ran on the nodes), every owned root again from its node. */
-		void ReseedOwnedFadeRoots() { fadeReseedPosted.store(true, std::memory_order_release); }
+		void ReseedOwnedFadeRoots()
+		{
+			fadeReseedPosted.store(true, std::memory_order_release);
+			// T6b3d: no wake: the frame's next pass takes it.
+		}
 		void ApplyReseedOwnedFadeRoots();
 		/** @brief A listed fade root's row from its node again (a new generation: the GPU's state restarts from it), owned bits kept. */
 		void ReseedFadeRoot(const void* a_node);
@@ -1795,6 +1860,29 @@ namespace DCLF
 		void NameShadingKeys(const std::vector<const void*>& a_keys, std::vector<std::uint32_t>* a_slots);
 		// The walk's placement plan (PlacementPlan): filled by its rounds and PublishPlacementPlan, ready once the walk is done.
 		std::shared_ptr<PlacementPlan> placementPlan, placementPlanReady;
+		// T6b3d: plans no publication took yet, oldest first: the next publication carries them all (TakeDeltas), as the frame takes every
+		// plan (a plan makes its pass publish: DeltasPending; kept for a pass that threw before its publication).
+		std::vector<std::shared_ptr<PlacementPlan>> placementPlansHeld;
+		// T6b3d: the per-frame entries are walked once a frame input (DeltaWalk): the frame the last such walk was for, whether this walk
+		// took them, and the movers that walk listed (a later walk of the same frame's plan carries them: PublishPlacementPlan).
+		std::uint32_t perFrameFrame = ~0u;
+		bool perFrameWalked = true;
+		// T6b3e: keys and slots only, never references: a reference kept across passes would be released by the pass that drops it (a
+		// load, the next per-frame walk), on the pump's thread, where an engine destructor must not run. A carrying plan copies its
+		// references again from the entries and the root owners (PublishPlacementPlan).
+		struct CarriedItem
+		{
+			const RE::BSGeometry* geometry = nullptr;
+			std::uint32_t slot = kNoObjectSlot;
+		};
+		std::vector<CarriedItem> lastMovers;
+		// T6b3e (e0): the roots that walk listed (QueueRoots: the per-frame work), carried likewise, with their dependents.
+		struct CarriedRoot
+		{
+			const RE::NiAVObject* root = nullptr;
+			std::vector<CarriedItem> dependents;
+		};
+		std::vector<CarriedRoot> lastRoots;
 		struct Tracked
 		{
 			RE::NiPointer<RE::BSGeometry> geometry;
@@ -1893,7 +1981,7 @@ namespace DCLF
 			 * it, as the full classification last found it, with the frame it was found on. It stands until one of
 			 * the delta walk's events takes it again (dclf-event-driven-tables.md, "Phase 3").
 			 */
-			std::uint32_t candidateFrame = 0;  // 0: never classified
+			std::uint32_t candidateFrame = 0;  // the pass that classified it (T6b3d: PassStamp, "classified in this walk"); 0: never classified
 			Ineligible candidateReason = Ineligible::None;
 			// An NPC face shape: a BSDynamicTriShape under a BSFaceGenNiNode, whose positions are FaceSnapshots'.
 			// Resolved once, by the walk.
@@ -1906,6 +1994,11 @@ namespace DCLF
 			// T6b1b: a dynamic shape under a BSFaceGenNiNode (the mirror's parent): the head, held from the batch's pins at its attach (the
 			// face snapshot's record's reference is a copy).
 			RE::NiPointer<RE::BSFaceGenNiNode> faceHeadRef;
+			// T6b3e: its property's fade node (the property record's fadeNode: the BSFadeNode or BSTreeNode above it), held from the pins of
+			// the event that named the property (HoldProperties): what the listed tree and fade-root owners are copied from (ListTree,
+			// ListFadeRoot), never a reference made from the mirror's key.
+			RE::NiPointer<RE::NiAVObject> fadeNodeRef;
+			const void* fadeNodeRequested = nullptr;  // T6b3e: the fade node key asked of the render thread (FadeNodeRequest), until answered
 			// Owned by an actor (its GetUserData is an ActorCharacter): Advanced Skin gives its draws the actor's
 			// wetness (Tables::skinWetness). Resolved once, by the walk.
 			bool actorOwned = false;
@@ -1913,7 +2006,8 @@ namespace DCLF
 			// The accumulate phase's verdict when it left the object without bindings, and the frame it did so
 			// (ReasonThisFrame).
 			Ineligible accumulateReason = Ineligible::None;
-			std::uint32_t accumulateReasonFrame = 0;
+			std::uint32_t accumulateReasonFrame = 0;  // the frame (T6b0's timeline compares it with writtenFrame)
+			std::uint64_t accumulateReasonPass = 0;   // T6b3d: the pass (a join failed for a verdict of this pass)
 			// Its index in this walk's tables, valid while objectStamp equals SceneStore::objectStamp. Kept here
 			// rather than in a geometry -> index map rebuilt by every walk: the map's insert was ~0.12 us an object,
 			// and every consumer already has the entry (the accumulate phase) or looks it up by the same key.
@@ -1934,6 +2028,9 @@ namespace DCLF
 			std::uint32_t layerSlot = kNoObjectSlot;
 			Derived layerDerived;
 			const void* listedLayerProperty = nullptr;  // the layer's property in propertyDependents
+			// T6b3e: its membership passes' derived descriptors, the base's and the layer's (PrimaryCull::MembershipPass, which returns the
+			// entry BindByMembership stores here): PrimaryCull's per-geometry maps, which nothing erased, moved into the entry they belong to.
+			MembershipDerived membershipDerived, membershipLayerDerived;
 			// The delta walk's. perFrame: inputs that change from frame to frame (PerFrameTraits: owned by an actor,
 			// skinned, a face shape, under a switch, or a controller or a non-fixed rigid body on its chain), so the
 			// delta walk evaluates it every frame; set at an evaluation that classified it, and kept. scheduledWalk:
@@ -1955,7 +2052,7 @@ namespace DCLF
 			// An actor's light-path entry: the nodes from it up to its category node, listed in hiddenDependents, and the
 			// frame one of them last had a hidden-bit event (DrainHiddenEvents).
 			std::vector<const RE::NiAVObject*> hiddenChain;
-			std::uint32_t hiddenEventFrame = 0;
+			std::uint32_t hiddenEventFrame = 0;  // T6b3d: the pass (PassStamp) whose batch announced a hidden event on its chain
 			// kTraitAnimatedShading: what the record read from the animated shader and alpha properties when it was
 			// last written in full (ShadingInputsOf); the light path writes it in full again when they differ.
 			std::uint64_t shadingInputs = 0;
@@ -2122,11 +2219,25 @@ namespace DCLF
 			// against the capture the coordinator applied last, so each capture pins all it names.
 			std::vector<RE::NiPointer<RE::NiRefObject>> pins;
 		};
-		/** @brief Render thread, at ingestion (not while a load screen is up): the newest CategoryCapture, made when a_force or the signature moved. */
+		/**
+		 * @brief Render thread, the frame's start (not while a load screen is up): the newest CategoryCapture, made when a_force or the
+		 * signature moved, and posted (categoryPosted); the portal roots it finds new or gone pushed onto the tracker's stack, mirror-only
+		 * (SceneTracker::PushCaptured), before the post: a pass that takes the post drains them first.
+		 */
 		struct EventBatch;
-		void CaptureCategories(bool a_force, EventBatch& a_batch);
-		/** @brief Render thread, the frame's start: the tracked geometries the mirror lacked (mirrorCaptureRequests), into a_batch's mirror events. */
-		void CaptureMirrorRequests(EventBatch& a_batch);
+		struct BatchUnwindGuard;  // T6b3e: a batch to the render thread on a throw (Internal.h)
+		void CaptureCategories(bool a_force);
+		/**
+		 * @brief Render thread, the frame's start: what the coordinator found the mirror lacking (mirrorCaptureRequests, each held by its
+		 * request) captured with its chain up to the world's root (SceneCapture::CaptureAttached) and pushed onto the tracker's stack,
+		 * mirror-only. T6b3d: the mirror is not read here (the coordinator asked because it lacked the record).
+		 */
+		void CaptureMirrorRequests();
+		/** @brief T6b3d, the coordinator, first in its pass (before the drains): the newest category capture posted, taken. */
+		void TakeCategoryCapture();
+		// T6b3d: a pass drained a detach (the coordinator -> the render thread): the next frame start's category capture is forced (a
+		// detach can take a category node with it before the signature sees its cell go).
+		std::atomic<bool> categoryDetachSeen{ false };
 		std::shared_ptr<const CategoryCapture> categoryCapture;  // render thread: the newest made
 		// Render thread (T6b3a): the captures made and not yet superseded by one the coordinator applied, oldest first. Their pins and
 		// nodes are dropped here (the render thread's), once the coordinator has let go of its copy and moved categoryAppliedGeneration on.
@@ -2145,6 +2256,29 @@ namespace DCLF
 		// T6b1a: tracked geometries the mirror held no record of (AddGeometry), captured by the render thread at the next frame's start.
 		// T6b3a: a lock-free queue (the coordinator pushes, the render thread drains), not a list the two threads share.
 		EventQueue<RE::NiPointer<RE::NiAVObject>, 256> mirrorCaptureRequests;
+		/**
+		 * @brief T6b3e: a fade node the coordinator holds no reference to (no pin, no root owner: a property whose fade node is not on its
+		 * geometry's chain, set by another instance's clone of a shared model), asked of the render thread. It reads the geometry's property
+		 * live where the engine reads it (the frame's start), checks the property still names that node and the geometry is in the world
+		 * (the engine draws it with that node: alive), takes a reference and posts it back (fadeNodeAnswers). The request holds the geometry.
+		 */
+		struct FadeNodeRequest
+		{
+			RE::NiPointer<RE::BSGeometry> geometry;
+			const void* fadeNode = nullptr;
+		};
+		struct FadeNodeAnswer
+		{
+			const RE::BSGeometry* geometry = nullptr;  // a key
+			const void* fadeNode = nullptr;            // the requested key
+			RE::NiPointer<RE::NiAVObject> node;        // null: the property names another node now, or the geometry left the world
+		};
+		EventQueue<FadeNodeRequest, 256> fadeNodeRequests;
+		EventQueue<FadeNodeAnswer, 256> fadeNodeAnswers;
+		/** @brief T6b3e, render thread, the frame's start (ServeFrameRequests): the fade node requests answered. */
+		void ServeFadeNodeRequests();
+		/** @brief T6b3e, the coordinator (ApplyBatch): the answers into their entries (Tracked::fadeNodeRef), each entry written again. */
+		void ApplyFadeNodeAnswers();
 		// The signature the category set was last rebuilt for.
 		std::uint64_t categorySignature = 0;
 		/**
@@ -2179,7 +2313,7 @@ namespace DCLF
 		template <class Describe, class Recheck>
 		void NoteMirrorRead(MirrorRead a_read, bool a_differ, Describe&& a_describe, Recheck&& a_recheck) const
 		{
-			++mirrorReads.checked[static_cast<std::size_t>(a_read)];
+			++MirrorReads().checked[static_cast<std::size_t>(a_read)];
 			if (a_differ)
 				deferredReads.push_back({ a_read, a_describe(), std::function<bool()>(std::forward<Recheck>(a_recheck)) });
 		}
@@ -2201,7 +2335,7 @@ namespace DCLF
 		{
 			EngineReadWindow::Lease lease;
 			if (!lease)
-				++mirrorReads.refused[static_cast<std::size_t>(a_read)];
+				++MirrorReads().refused[static_cast<std::size_t>(a_read)];
 			return lease;
 		}
 		struct MirrorReadStats
@@ -2210,6 +2344,12 @@ namespace DCLF
 			std::array<std::string, static_cast<std::size_t>(MirrorRead::kCount)> first;
 		};
 		mutable MirrorReadStats mirrorReads;
+		/**
+		 * @brief T6b3e: where this thread counts its mirror reads: an evaluation chunk's counters (EvalCounters::mirror, installed by its
+		 * ShardScope, merged in chunk order), else the store's. Every count goes through MirrorReads().
+		 */
+		static inline thread_local MirrorReadStats* mirrorReadSink = nullptr;
+		MirrorReadStats& MirrorReads() const { return mirrorReadSink ? *mirrorReadSink : mirrorReads; }
 		/**
 		 * @brief A read the check found differing: the mirror is the scene as the batch left it, the live read is later (what changed
 		 * since is the next batch's). Checked again after the next batch (a_recheck: whether the mirror now gives what the live read
@@ -2284,6 +2424,13 @@ namespace DCLF
 		{
 			std::uint64_t pins = 0, pinned = 0, live = 0, refused = 0;
 			std::uint64_t properties = 0, propertiesRefused = 0;  // T6b1b: a tracked geometry's properties held anew, and with no pin
+			std::uint64_t fadeNodes = 0, fadeNodesRefused = 0;   // T6b3e: their fade nodes held anew, and with no pin
+			// T6b3e: of the refused, copied from a root owner (the node is another tracked reference's root), asked of the render thread, and
+			// its answers: held, or none (the property names another node now, or the geometry left the world); the first few named.
+			std::uint64_t fadeNodesFromRoots = 0, fadeNodesRequested = 0, fadeNodesAnswered = 0, fadeNodesAnsweredNone = 0;
+			std::uint32_t fadeNodeNamed = 0;
+			std::string fadeNodeFirst;
+			std::uint64_t fadeRootsUnowned = 0;                  // T6b3e: a tree or fade root left unlisted for want of its entry's reference
 			std::string firstPropertyRefused;
 		} referenceStats;
 		/** @brief T6b1b: a_entry's properties as the mirror's geometry record names them, each held anew from the batch's pins. */
@@ -2303,25 +2450,52 @@ namespace DCLF
 		void ValidateSlice();
 		/** @brief The main camera's batch renderers, for the parity's filter of the capture (DrainCapture, observed frames only). */
 		bool RefreshMainBatchRenderers();
+		// The main renderers' registrations of the frame (DrainCapture), for the scene pass's diagnostics (CheckRegistrations).
+		struct CapturedRegistration
+		{
+			const RE::BSGeometry* geometry = nullptr;
+			std::uint32_t hint = 0;
+		};
+		// A reflection residue geometry (DrainCapture -> ClassifyResidue) with its names, read by the render thread at the drain: the
+		// scene pass classifies it a frame later (T6b3c), past a Present that may have released it, so it dereferences none untracked.
+		struct CapturedResidue
+		{
+			const RE::BSGeometry* geometry = nullptr;
+			std::string names;  // "'name' under 'parent' (RTTI)"
+		};
+		/**
+		 * @brief Render thread (DrainCapture, EarlyPrepass) -> the next scene pass (TakeAccumulateInputs, T6b3c): the frame's
+		 * reflection residue and, while observed, its registrations. Latest wins, but for the residue: a post no pass took carries its
+		 * residue into the next post (PostRegistrationDrain), so every residue geometry is classified once.
+		 */
+		struct RegistrationDrain
+		{
+			std::vector<CapturedResidue> residue;
+			std::vector<CapturedRegistration> registrations;
+			bool observed = false;  // the frame's registrations were observed (CS_DCLF_PERSISTENT_PARITY), so registrations holds them
+		};
 		/**
 		 * @brief Render thread, EarlyPrepass: drains the capture every frame (its fixed-capacity buffer, the withholding counters, the
 		 * reflection residue), and only while observed (CS_DCLF_PERSISTENT_PARITY; the decal order probe its own switch) reads what
-		 * was registered: the Lighting shader parity, the frame's lighting pass (below), the registrations CheckRegistrations checks.
-		 * The normal path reads none of it (T6b2c step 8).
+		 * was registered: the Lighting shader parity, the frame's lighting pass (below), the registrations CheckRegistrations checks,
+		 * into a_drain. The normal path reads none of it (T6b2c step 8).
 		 */
-		void DrainCapture();
+		void DrainCapture(RegistrationDrain& a_drain);
+		/** @brief Render thread (PostAccumulateInputs): the drain posted for the next scene pass, an unread post's residue carried in. */
+		void PostRegistrationDrain(std::shared_ptr<RegistrationDrain> a_drain);
 		/** @brief Render thread, the frame's start (BeginFrame, the coordinator idle): the engine's BSLightingShader instance, once. */
 		void CaptureLightingShader();
-		// Render thread (DrainCapture) -> the accumulate work (CheckRegistrations), ordered by the kick: this frame's registrations
-		// were observed, so capturedRegistrations holds them.
-		bool registrationsObserved = false;
+		// Render thread (PostRegistrationDrain) -> the scene pass (TakeAccumulateInputs): the newest drain not taken yet. The pass's
+		// own: the newest taken (CheckRegistrations, ClassifyResidue), null until the first.
+		std::atomic<std::shared_ptr<const RegistrationDrain>> registrationDrainPosted;
+		std::shared_ptr<const RegistrationDrain> registrationDrain;
 		/** @brief Render thread (PostAccumulateInputs): LightLimitFix's room map copied and posted when its generation moves. */
 		void PostRoomMap();
-		/** @brief The accumulate work, first: the frame inputs posted since its last pass (room map, pipeline frame), latest wins. */
+		/** @brief The scene pass, before the walk (T6b3c): the frame inputs posted since its last pass (room map, pipeline frame, drain). */
 		void TakeAccumulateInputs();
-		/** @brief The accumulate work, after the joins: a used pipeline without a current PerGeometry block made from the pipeline frame. */
+		/** @brief The scene pass, after the joins: a used pipeline without a current PerGeometry block made from the pipeline frame. */
 		void MakeNewPipelineConstants();
-		// The accumulate work's frame inputs (T6b2c step 8): render thread -> scene lane, latest wins (a pointer swap each way; a post
+		// The joins' frame inputs (T6b2c step 8): render thread -> scene lane, latest wins (a pointer swap each way; a post
 		// the scene lane never took is freed by the next post or by the take, on whichever thread: plain memory, nothing of the engine's
 		// or the GPU's).
 		std::atomic<std::shared_ptr<const GeometryPort::PipelineFrame>> pipelineFramePosted;
@@ -2566,7 +2740,7 @@ namespace DCLF
 		struct TransformWatch
 		{
 			MaterialSources::TextureTransforms transforms;  // the newest capture's
-			std::uint32_t frame = 0;                         // the pass it was captured or keyed
+			std::uint32_t frame = 0;                         // the frame it was captured or keyed (T6b3d: a frame, not a pass)
 		};
 		ankerl::unordered_dense::map<const RE::BSShaderMaterial*, TransformWatch> transformWatch;
 		struct MaterialRecordStats
@@ -2640,8 +2814,9 @@ namespace DCLF
 		 * capture and taken at the start of each scene pass (TakeFrameInputs): the engine globals the passes read (FrameGlobals::Scope),
 		 * the frame number (sceneFrame), the membership witness the commit and the accumulate phase's binds read (step 6e F1: frame
 		 * globals are captured, never read by the scene work), the toggles generation and the verdicts generation (a toggle that enters
-		 * the classification: the coordinator drops its cached verdicts, InvalidateVerdicts). The kick still orders the post before the
-		 * pass while it stays; the pass reads only what it took.
+		 * the classification: the coordinator drops its cached verdicts, InvalidateVerdicts). T6b3d: the post is a message that wakes the
+		 * pump (folded with the frame start's other posts: ScenePassWakeBatch); a pass reads only what it took, and keeps the last it took
+		 * while none newer is posted (passes between frames).
 		 */
 		struct FrameInputs
 		{
@@ -2663,7 +2838,7 @@ namespace DCLF
 		std::uint32_t sceneFrame = 0;
 		std::uint64_t passSerial = 0;
 		// LightLimitFix's room map (its room nodes' indices), copied by the render thread when its generation moves and posted, latest
-		// wins (PostRoomMap, T6b2c step 8); the accumulate work takes it (TakeAccumulateInputs) and reads only its own copy (roomMap,
+		// wins (PostRoomMap, T6b2c step 8); the scene pass takes it (TakeAccumulateInputs) and reads only its own copy (roomMap,
 		// roomMapGeneration: the scene lane's), never the map the render thread swaps.
 		struct RoomMapInput
 		{
@@ -2674,7 +2849,8 @@ namespace DCLF
 		std::uint64_t roomMapPostedGeneration = ~0ull;  // render thread: the generation last posted
 		std::shared_ptr<const ankerl::unordered_dense::map<const RE::NiNode*, int>> roomMap;
 		std::uint64_t roomMapGeneration = ~0ull;
-		// Render thread: the first ingestion after a load catches up every switch in the world (CatchUpSwitches).
+		// Render thread: the first frame's start after a load catches up every switch in the world (CatchUpSwitches), and its category
+		// capture is forced (as one after a pass saw a detach: categoryDetachSeen).
 		bool worldCatchUpPending = false;
 		bool categoryCapturePending = false;
 		/**
@@ -2684,11 +2860,29 @@ namespace DCLF
 		 */
 		SceneMirror mirror;
 		void ApplyMirrorEvents(const EventBatch& a_batch);
-		void ProbeMirror(EventBatch& a_batch);
+		/**
+		 * @brief T6b3d, render thread, the frame's start (CS_DCLF_MIRROR_PARITY): the slice the coordinator asked for (PostMirrorProbeRequest:
+		 * tracked geometries, each held by the request) captured live with their chains up to the world's root, and posted
+		 * (mirrorProbePosted) for the next pass, which takes it before its drains (so every event older than the capture is applied
+		 * first, and every newer one names its object: CheckMirror leaves those out).
+		 */
+		void ProbeMirror();
+		/** @brief T6b3d, the coordinator, once a frame (CS_DCLF_MIRROR_PARITY): the next slice of the tracked set asked of the render thread. */
+		void PostMirrorProbeRequest();
 		void CheckMirror();
-		// Render thread: a load screen's attach and detach events, for the mirror (the next ingestion's batch takes them).
+		// The coordinator's (T6b3d): a load screen's attach and detach events, for the mirror (the first pass after the load takes them).
 		std::shared_ptr<EventBatch> loadingCarry;
 		std::size_t mirrorProbeCursor = 0;
+		// T6b3d: the mirror probe's slice, the coordinator -> the render thread (each geometry held: the render thread drops them), the
+		// records back (they hold nothing), and whether one is asked and not served (one at a time, once a frame: mirrorProbeFrame).
+		struct MirrorProbeRequest
+		{
+			std::vector<RE::NiPointer<RE::BSGeometry>> geometries;
+		};
+		EventQueue<std::shared_ptr<MirrorProbeRequest>, 16> mirrorProbeRequests;
+		LatestSlot<SceneCapture::Records> mirrorProbePosted;
+		std::atomic<bool> mirrorProbeAsked{ false };
+		std::uint32_t mirrorProbeFrame = ~0u;
 		// The scene work: the applied batch's probe, and the objects the frame's events named (the parity's).
 		std::unique_ptr<SceneCapture::Records> mirrorProbe;
 		SceneMirror::KeySet mirrorEventKeys;
@@ -2714,8 +2908,9 @@ namespace DCLF
 		// publication's, the newest taken while none is installed). The pool writes no snapshot anyone holds.
 		std::shared_ptr<Tables> publishedTables;
 		std::shared_ptr<const Tables> acceptedTables;
-		// Step 6c: the scene work in flight (kicked, not joined) and its lane's thread; a frame-side read of the coordinator's state
-		// meanwhile is a defect, counted and named (GuardFrameAccess).
+		// Step 6c, T6b3d: whether passes may run beside the frame (the pump started and its passes not inline: from then on, at any
+		// moment) and the lane's thread; a frame-side read of the coordinator's state then is a defect, counted and named
+		// (GuardFrameAccess).
 		std::atomic<bool> sceneTaskInFlight{ false };
 		std::atomic<std::uint32_t> sceneLaneThread{ 0 };
 		mutable std::atomic<std::uint64_t> frameAccessViolations{ 0 };
@@ -2740,7 +2935,7 @@ namespace DCLF
 		std::uint32_t frameTablesGeneration = 0;  // the frame's tables' (GetTablesGeneration)
 		std::vector<const RE::NiAVObject*> frameSwitchChanges;
 		bool frameSwitchResync = true;
-		bool switchResyncNext = false;  // IngestEvents' loading branch: PrimaryCull reads every switch again from the next frame's start
+		bool switchResyncNext = false;  // NoteLoadingScreen: PrimaryCull reads every switch again from the next frame's start
 		std::vector<std::shared_ptr<const void>> frameRetiredImports;
 		std::vector<std::shared_ptr<const PlacementPlan>> framePlans;
 		std::vector<ShadingItem> frameShading;
@@ -2784,7 +2979,7 @@ namespace DCLF
 			PipelineKey key{};
 			GeometryConstants constants{};
 		};
-		EventQueue<std::unique_ptr<PipelineConstantsPost>, 256> pipelineConstantsPosted;
+		EventQueue<std::unique_ptr<PipelineConstantsPost>, 256> pipelineConstantsPosted;  // T6b3d: no wake (the frame's next pass takes them)
 		// The material records are the scene work's own (T6b2c step 7: RefreshMaterialRecords): nothing posted.
 		ConstantsPostStats constantsPostStats;
 		void PostPipelineConstants(std::uint32_t a_slot);
@@ -2921,14 +3116,6 @@ namespace DCLF
 		 * (MaterialSources::FrameCharacterLightView). The records' frame components are the scene work's (RefreshMaterialSignatures).
 		 */
 		void RefreshCharacterLightView();
-		// The main renderers' registrations of the frame (DrainCapture), for the accumulate work's diagnostics (CheckRegistrations).
-		struct CapturedRegistration
-		{
-			const RE::BSGeometry* geometry = nullptr;
-			std::uint32_t hint = 0;
-		};
-		std::vector<CapturedRegistration> capturedRegistrations;
-		std::vector<const RE::BSGeometry*> capturedResidue;  // DrainCapture -> ClassifyResidue
 		std::mutex residueClassesLock;
 		ResidueClasses residueClasses;  // under residueClassesLock
 		TimelineStats timelineStats;    // under residueClassesLock
@@ -2944,8 +3131,8 @@ namespace DCLF
 		std::pair<std::uint32_t, std::uint32_t> LastShowOnChain(const RE::BSGeometry& a_geometry, const Tracked& a_entry, bool& a_hiddenNow) const;
 		/** @brief T6b0: a slot joined the set (CommitSet): its geometry's timeline stamped and the latency counted. */
 		void NoteTimelineJoin(std::uint32_t a_slot);
-		/** @brief T6b0: a residue geometry's furthest stage into residueClasses (ClassifyResidue's, under its lock). */
-		void StageResidue(const RE::BSGeometry* a_geometry, const Tracked* a_entry);
+		/** @brief T6b0: a residue geometry's furthest stage into residueClasses (ClassifyResidue's, under its lock); a_names: the drain's. */
+		void StageResidue(const RE::BSGeometry* a_geometry, const std::string& a_names, const Tracked* a_entry);
 		void ClassifyResidue();
 		void CheckRegistrations();
 		/** @brief The coordinator's residency of a slot (IsMember is the frame's). */
@@ -3093,7 +3280,14 @@ namespace DCLF
 		void DeltaWalk();
 		/** @brief Lays out the whole tracked set in `order` (a full evaluation, the parity's dense walk). */
 		void BuildFullOrder();
-		/** @brief One entry of the scene walk: writes its record at its slot; false when it gets none this frame. */
+		// T6b3e: the walk's evaluation and merge halves (defined with EvaluateRound).
+		struct EvalCounters;
+		struct TrackedDelta;
+		struct EvalResult;
+		/**
+		 * @brief One entry of the scene walk: writes its record at its slot; false when it gets none this frame. T6b3e: its evaluation
+		 * (EvaluateWrite) then its merge (MergeWrite), one after the other (the dense walk's).
+		 */
 		bool WriteObject(RE::BSGeometry* a_geometry, Tracked& a_tracked, PartTimer& a_timer, Ineligible& a_bucket);
 		/**
 		 * @brief The entry's layer record, written after its base record (a_base): the base's placement, the second index list,
@@ -3114,6 +3308,8 @@ namespace DCLF
 			kTraitRootMoves = 1u << 6,        // its reference root's subtree moves (RootMoves)
 		};
 		std::uint32_t PerFrameTraits(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const;
+		/** @brief T6b3e: PerFrameTraits from the entry's face shape, actor ownership and category node as its evaluation has them. */
+		std::uint32_t PerFrameTraitsOf(bool a_faceShape, bool a_actorOwned, const RE::NiNode* a_categoryNode, const RE::BSGeometry& a_geometry) const;
 		/**
 		 * @brief Whether an entry with this verdict is evaluated every frame (Tracked::perFrame), and its light path's
 		 * traits (Tracked::lightTraits); a_traits gets its traits. a_freshMotion: walk parity's, which takes the reference
@@ -3132,15 +3328,16 @@ namespace DCLF
 		/**
 		/**
 		 * @brief Whether a kept record's skin stays as written: skinning on, its partitions drawn, its palette the
-		 * record's size. Notes a partition mask that changed; the palette itself is the scene placement job's.
+		 * record's size. Notes a partition mask that changed; the palette itself is the scene placement job's. T6b3e: the merge's half,
+		 * the record's skin and rows (and the toggle) being the evaluation's (EvalResult::lightSkin): the slot's flags and palette rows.
 		 */
-		bool KeepSkin(RE::BSGeometry* a_geometry, Tracked& a_tracked);
+		bool KeepSkin(RE::BSGeometry* a_geometry, Tracked& a_tracked, const EvalResult& a_result);
 		/** @brief A kept record of a moving static: its transforms, its bound and its sun entry, nothing else. */
 		/**
 		 * @brief Whether an actor's record, written in an earlier frame, is what WriteObject would write again but for
 		 * its placement and palette: its classification inputs (ClassifyInputsOf) and its verdict are unchanged.
 		 */
-		bool ActorRecordKept(RE::BSGeometry& a_geometry, Tracked& a_tracked);
+		bool ActorRecordKept(const RE::BSGeometry& a_geometry, const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out) const;
 		/** @brief A face shape's snapshot and region this walk (FaceSnapshots); false without one. */
 		bool ResolveFace(RE::BSGeometry& a_geometry, const Tracked& a_tracked, FaceSnapshots::ShapeView& a_face, std::uint32_t& a_region);
 		/** @brief Appends a face shape's entry to this walk's faceStreams and points its slot at it. */
@@ -3192,6 +3389,9 @@ namespace DCLF
 		// The keys with a move event this frame and the last (movedKeys[0] this frame's): QueueRoots takes the bound of a root
 		// whose reference had one, whatever RootMoves says (the cells' update passes recompute a still root's bound).
 		std::array<std::vector<const void*>, 2> movedKeys;
+		// T6b3d: movedKeys turn over once a frame (the frame they were drained in, not a pass: a burst's passes add to this frame's), and
+		// movedFrame is pruned once 256 frames went by (a frame a pass may not see).
+		std::uint32_t movedKeysFrame = 0, movedPruneFrame = 0;
 		bool moveGating = false;
 		std::uint32_t moveUngatedThrough = 0;
 		void DrainMoveEvents(bool a_full);
@@ -3224,7 +3424,7 @@ namespace DCLF
 		 * skin): the root's bound is then not fixed, and it is the sun entry of every geometry under it. Walked once per
 		 * root, and again after an event under it (ScheduleRoot).
 		 */
-		bool RootMoves(const RE::NiAVObject* a_root);
+		bool RootMoves(const RE::NiAVObject* a_root, const bool* a_now = nullptr);
 		bool RootMovesNow(const RE::NiAVObject* a_root) const;
 		ankerl::unordered_dense::map<const RE::NiAVObject*, bool> rootMotion;
 		/** @brief Lists an evaluated entry under its properties; UnlistDependents takes it off every list. */
@@ -3269,6 +3469,17 @@ namespace DCLF
 		/** @brief The member's fade root (Tables::fadeRoots): listed when it joins, released with its last member. */
 		void ListFadeRoot(std::uint32_t a_slot);
 		void UnlistFadeRoot(std::uint32_t a_slot);
+		/**
+		 * @brief T6b3e: the reference a newly listed tree or fade root's owner is copied from: the slot's entry's fade node (Tracked::
+		 * fadeNodeRef, held from pins) when it is a_node; else null, and the root is not listed (counted: fadeRootsUnowned).
+		 */
+		RE::NiPointer<RE::NiAVObject> HeldFadeNode(std::uint32_t a_slot, const void* a_node);
+		/**
+		 * @brief T6b3e: a_entry's fade node reference for a_node (Tracked::fadeNodeRef): the batch's pin, else a root owner's copy (the node is
+		 * a tracked reference's root), else asked of the render thread (FadeNodeRequest, once a key) and named in the report (a_path: where
+		 * it was wanted). True when held now.
+		 */
+		bool AcquireFadeNode(Tracked& a_entry, const void* a_node, const char* a_path);
 		/** @brief A switch event on a tree root's LOD switch: the root's kFadeRootTreeLod again (ApplySwitchEvents). */
 		void RefreshFadeRootSwitch(const RE::NiAVObject* a_switch);
 		/** @brief A fadeAmount event (Actor::SetAlpha): a listed root's fadeAmount again from its node, its state row kept. */
@@ -3279,7 +3490,8 @@ namespace DCLF
 		/** @brief CS_DCLF_INPUT_WATCH: what ClassifyInputsOf and ShadingInputsOf hash, by component (kInputComponentNames). */
 		std::array<std::uint64_t, 12> InputComponentsOf(const RE::BSGeometry& a_geometry) const;
 		/** @brief CS_DCLF_INPUT_WATCH: a re-read of kind a_kind (0 classify, 1 shading) that found the hash changed or not. */
-		void NoteInputReread(Tracked& a_tracked, const RE::BSGeometry& a_geometry, std::uint32_t a_kind, bool a_changed);
+		void NoteInputReread(const Tracked& a_tracked, const RE::BSGeometry& a_geometry, std::uint32_t a_kind, bool a_changed, EvalCounters& a_counters,
+			TrackedDelta& a_delta) const;
 		void StoreInputComponents(Tracked& a_tracked, const RE::BSGeometry& a_geometry);
 		void MoveBucket(Tracked& a_tracked, Ineligible a_bucket);
 		void ListFadeDependent(RE::BSGeometry* a_geometry, Tracked& a_tracked);
@@ -3289,6 +3501,75 @@ namespace DCLF
 		 * as residents, which the engine's registrations and the lapse leave alone until the record is written again.
 		 */
 		void BindByMembership();
+		/**
+		 * @brief T6b3e: one bind queue element's evaluation (BindByMembership's JoinPre, pure over the tables as the joins found them, the
+		 * mirror and the entry): skipped, its binding standing, or its membership pass (the derivation cache entry to store with it, why
+		 * none, its fade distance and height test). The merge, in queue order, stores the cache entry, leaves the set, drops a failed
+		 * member and queues the join.
+		 */
+		struct JoinPre
+		{
+			enum class Kind : std::uint8_t
+			{
+				Skip,    // not a record to bind (free, shadow only, another entry's slot, not this walk's record, not a verdict of None)
+				Kept,    // a member whose binding stands (MemberBindingStands)
+				Failed,  // no membership pass (PrimaryCull::LastSyntheticFail's reason in fail)
+				Pass,    // a membership pass: joined by BuildAccumulatePhase
+			};
+			Kind kind = Kind::Skip;
+			RE::BSGeometry* geometry = nullptr;
+			bool layer = false;
+			SceneCapture::LeafView leaf;
+			MembershipDerived derived;  // the cache entry the pass leaves (Tracked::membershipDerived or membershipLayerDerived)
+			AccumulatedPass pass;
+			std::uint8_t fail = 0;
+		};
+		/** @brief T6b3e: bind queue element a_slot evaluated (pure). */
+		void EvaluateJoinPre(std::uint32_t a_slot, JoinPre& a_out) const;
+		/** @brief T6b3e, CS_DCLF_FANOUT_PARITY: the first field two JoinPre evaluations differ in, or null. */
+		static const char* JoinPreDifference(const JoinPre& a_left, const JoinPre& a_right);
+		/**
+		 * @brief T6b3e: one membership join's evaluation (BuildAccumulatePhase's, pure: the mirror, the entry, the tables as the joins
+		 * found them, the room map): the held property's check, the derivation cache's witnesses (not its slots: the merge's), the
+		 * classification and its descriptors, the pipeline key and static flags of a classified join, the room index. a_classify: classify
+		 * even where the cache's witnesses hold (the merge's, when the cache's slots are gone).
+		 */
+		struct JoinResult
+		{
+			enum class Kind : std::uint8_t
+			{
+				Skip,      // the mirror's property is not the held one (a swap not applied yet)
+				Rejected,  // a verdict of this frame (the classification or ClassifyFrame) leaves it without bindings
+				Joined,    // bound: the merge patches it
+			};
+			Kind kind = Kind::Skip;
+			SceneCapture::LeafView leaf;
+			RE::BSShaderProperty* property = nullptr;        // the entry's held property: the template's, a material request's
+			const RE::BSShaderMaterial* material = nullptr;  // the record's material (the witness, the material slot's key)
+			std::uint8_t fadeState = 0;
+			bool alphaBelowOne = false;
+			std::uint32_t geometrySlot = 0;
+			bool derivedWitness = false;  // the derivation cache's witnesses hold
+			bool classified = false;      // ClassifyStatic or ClassifyLayer ran: descriptors, key and static flags are this join's
+			Ineligible reason = Ineligible::None;
+			LightingDescriptors descriptors;
+			PipelineKey key{};
+			std::uint32_t staticFlags = 0;
+			bool roomSet = false;  // Light Limit Fix's room index taken again (the room map moved on since the entry's)
+			int roomIndex = -1;
+		};
+		void EvaluateJoin(const OrderEntry& a_entry, bool a_classify, JoinResult& a_out) const;
+		/** @brief T6b3e, CS_DCLF_FANOUT_PARITY: the first field two join evaluations differ in, or null. */
+		static const char* JoinDifference(const JoinResult& a_left, const JoinResult& a_right);
+		/**
+		 * @brief T6b3e: a_count evaluations a_evaluate(index, result) into a_results, by chunks of kFanoutGrain on the pool (a_pool:
+		 * FanoutMode's 2) or on this thread; CS_DCLF_FANOUT_PARITY compares a second, serial evaluation (a_difference), a_what naming the
+		 * round in its report. Defined in AccumulatePhase.cpp, its only user.
+		 */
+		template <class Result, class Evaluate, class Difference>
+		void EvaluateJoins(const char* a_what, std::size_t a_count, bool a_pool, std::vector<Result>& a_results, Evaluate&& a_evaluate, Difference&& a_difference);
+		std::vector<JoinPre> joinPres;
+		std::vector<JoinResult> joinResults;
 		/**
 		 * @brief CS_DCLF_CHANGE_LOG_PARITY=1: every 60 frames each slot's columns are kept, and a frame later every slot
 		 * whose columns changed in between must be in the log for that frame with the causes that changed. At the scene
@@ -3356,7 +3637,7 @@ namespace DCLF
 			std::uint64_t events = 0, changed = 0, checks = 0, shapes = 0, differ = 0;
 			std::string first;
 		} lodSegmentStats;
-		std::uint32_t lodParityFrame = 0;
+		std::uint32_t lodParityFrame = 0;  // T6b3d: the pass (PassStamp) whose batch ran the parity: once a pass
 		// Tree LOD (dclf-lod.md, L4): the engine's tree LOD groups and their instance records, by events (TreeLod.h).
 		TreeLod::Mirror treeLod;
 		void SampleLodRanges(const RE::BSGeometry& a_shape, bool a_event);
@@ -3371,7 +3652,163 @@ namespace DCLF
 		std::array<std::uint64_t, kChangeCauseCount> reportedChangeCounts{};
 		/** @brief After the delta walk's evaluations: the geometry slots of the slots it kept, and the shadow sets. */
 		void FinishDeltaWalk(PartTimer& a_timer);
+		/**
+		 * @brief One round of the walk (T6b3e: the fan-out): every entry of `order` from a_first evaluated (EvaluateEntry: pure, into
+		 * evalResults), then merged in index order (MergeEntry: the slots, the columns, the change log, the plan, the dependents). By
+		 * CS_DCLF_FANOUT: 0 each entry evaluated and merged before the next (the walk as it was: the reference), 1 every entry
+		 * evaluated then merged, on the scene lane, 2 (default) the evaluations on the preparation pool in chunks of kFanoutGrain from
+		 * kFanoutMinEntries entries (fewer: as 1), each chunk merged as soon as it is ready while later ones are evaluated (the ordered
+		 * streaming merge; under CS_DCLF_FANOUT_PARITY's passes every chunk first). Under the mirror-read parity the round runs as 0 (its
+		 * live checks note on the lane).
+		 */
 		void EvaluateRound(PartTimer& a_timer, std::size_t a_first);
+
+		// T6b3e: the fan-out's grain (one chunk's entries, one EvalCounters each) and the least entries a round fans out for.
+		static constexpr std::size_t kFanoutGrain = 64;
+		static constexpr std::size_t kFanoutMinEntries = 128;
+		/**
+		 * @brief T6b3e: an evaluation chunk's counters (a chunk: kFanoutGrain entries from its first; its index begin / kFanoutGrain, so
+		 * they do not depend on the thread that ran it). Merged into the store's in chunk order before the round's merges
+		 * (MergeCounters): a first string is taken only where the store has none yet, so the first named is the first in `order`, as the
+		 * serial walk named it; the rate-limited warnings are logged there.
+		 */
+		struct EvalCounters
+		{
+			std::array<std::uint32_t, static_cast<std::size_t>(Ineligible::Count)> ineligible{};
+			std::array<std::uint32_t, 64> techniqueRejects{};
+			std::map<const RE::NiRTTI*, std::uint32_t> propertyRejects;
+			std::uint32_t rejectedBlended = 0, rejectedOpaque = 0, rejectedOpaqueAlphaTest = 0;
+			std::uint32_t classifyHits = 0, classifyChecked = 0, classifyDiffers = 0;
+			std::string classifyDiffersFirst;  // the classify cache's warning for its first difference here
+			std::uint64_t verdictsChecked = 0, verdictsSkipped = 0, verdictsMissed = 0;
+			std::string firstVerdictMissed;
+			std::array<std::uint64_t, 12> inputChanged{};
+			std::array<std::uint64_t, 2> inputRereads{}, inputRereadsChanged{};
+			std::string firstInputChange;
+			std::uint64_t leafMissing = 0;  // leafStats.missing
+			std::uint64_t reread = 0;       // delta.reread
+			std::array<double, static_cast<std::size_t>(BuildPart::Count)> partMs{};  // the chunk's PartTimer (CS_DCLF_PROFILE)
+			std::array<double, static_cast<std::size_t>(EvaluateKind::Count)> evaluateKindMs{};
+			MirrorReadStats mirror;  // the mirror reads counted here (mirrorReadSink)
+			ankerl::unordered_dense::map<const RE::NiAVObject*, bool> rootMotion;  // RootMovesNow's answers in this chunk
+		};
+		/** @brief T6b3e: what an evaluation decided for its entry's Tracked, applied by its merge (MergeWrite) as WriteObject wrote it. */
+		struct TrackedDelta
+		{
+			bool faceShapeSet = false, faceShape = false;      // the face shape resolved (once)
+			bool actorOwnedSet = false, actorOwned = false;    // owned by an actor, resolved (once)
+			bool verdictSet = false;                           // the static verdict's cache
+			Tracked::StaticVerdict verdict;
+			bool candidateSet = false;                         // classified (or its frame verdict changed)
+			std::uint32_t candidateFrame = 0;
+			Ineligible candidateReason = Ineligible::None;
+			bool classifyInputsSet = false;
+			std::uint64_t classifyInputs = 0;
+			bool inputComponentsSet = false;                   // CS_DCLF_INPUT_WATCH's components, the last stored
+			std::array<std::uint64_t, 12> inputComponents{};
+		};
+		/**
+		 * @brief T6b3e: one entry's evaluation (EvaluateEntry), for its merge. Everything in it was read from the frozen mirror, the entry's
+		 * own Tracked, lodRanges, categoryNodes, the walk's stamps and the pass's snapshot (ShardScope): no table, slot, face, root motion
+		 * or other entry. Compared field by field under CS_DCLF_FANOUT_PARITY (FanoutDifference).
+		 */
+		struct EvalResult
+		{
+			enum class Write : std::uint8_t
+			{
+				None,      // the light path kept it (no write)
+				NoLeaf,    // the mirror holds no leaf yet: leafWaiting
+				Rejected,  // its verdict gives it no record
+				Record,    // a record, its slot-free inputs below; the merge resolves the face, the geometry and the slots
+			};
+			EvaluateKind kind = EvaluateKind::Event;
+			// The light path (the first round): kept, recorded, and KeepSkin's table half left to the merge (the record's rows and
+			// partitions); the nodes ActorRecordKept arms for CS_DCLF_HIDDEN_WATCH.
+			bool light = false;
+			bool lightRecorded = false;
+			bool lightSkin = false;
+			std::uint32_t skinRows = 0;
+			std::uint16_t skinPartitions = 0;
+			std::uint32_t skinLodPartitions = 0;
+			bool armHiddenWatch = false;
+			std::array<const RE::NiAVObject*, 4> hiddenWatch{};
+			// The write (WriteObject's evaluation).
+			Write write = Write::None;
+			TrackedDelta delta;
+			SceneCapture::LeafView leaf;
+			Ineligible reason = Ineligible::None;  // its bucket
+			bool shadowOnly = false;
+			bool faceShape = false;        // a face shape with FaceSnapshots on: its snapshot is the merge's (ResolveFace)
+			bool referenceReason = false;  // the dense walk's: reason into referenceReasons
+			// The record's inputs with no slot in them.
+			std::uint16_t partitionMask = 0;
+			bool lodChain = false;
+			bool skinCandidate = false;  // skinned with the toggle on: in this walk's skinnedObjects
+			std::uint32_t boneRows = 0;  // its palette's rows, 0 without one (or past 240)
+			std::uint8_t shadowReject = 0;
+			std::uint32_t shadowTechnique = 0;
+			const RE::BSShaderMaterial* shadowMaterial = nullptr;  // the alpha-tested techniques' diffuse (the property record's)
+			ID3D11ShaderResourceView* shadowDiffuse = nullptr;
+			std::array<std::uint32_t, kOcclusionViews> occlusion{};
+			std::uint32_t skinLodWord = 0;  // SkinLodPartitionsOf (0 for a LOD chain)
+			// An entry classified in this walk: its per-frame traits without its root's motion (PerFrameFrom's input), whether its verdict
+			// may give it a record, its sun entry as the merge's PerFrameOf will find it and that root's motion now, its move key.
+			bool classified = false;
+			std::uint32_t traits = 0;
+			bool mayRecord = false;
+			const RE::NiAVObject* rootCandidate = nullptr;
+			bool rootMovesNow = false;
+			const void* moveKey = nullptr;
+			// ShadingInputsOf, taken when the merge may store it (the traits an animated shading or actor entry has).
+			bool shadingInputsSet = false;
+			std::uint64_t shadingInputs = 0;
+		};
+		/** @brief T6b3e, CS_DCLF_FANOUT_PARITY: the first field two evaluations of one entry differ in, or null when they agree. */
+		static const char* FanoutDifference(const EvalResult& a_left, const EvalResult& a_right);
+		/** @brief T6b3e: entry a_index of `order` evaluated (a_light: the first round, which tries the light path). Pure: reads only. */
+		void EvaluateEntry(std::size_t a_index, bool a_light, EvalCounters& a_counters, EvalResult& a_out, PartTimer& a_timer) const;
+		/** @brief T6b3e: WriteObject's evaluation half (the classification and the record's slot-free inputs), into a_out. */
+		void EvaluateWrite(RE::BSGeometry* a_geometry, const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out, PartTimer& a_timer) const;
+		/**
+		 * @brief T6b3e: an entry classified in this walk (its candidateFrame as its merge leaves it is the pass's), its bookkeeping's
+		 * evaluation: the per-frame traits without the root's motion, whether its verdict may give it a record, its sun entry and that
+		 * root's motion now (the chunk's memo), its move key; and its shading inputs where the merge may store them.
+		 */
+		void EvaluateClassified(RE::BSGeometry* a_geometry, const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out) const;
+		/** @brief T6b3e: PerFrameOf at the merge, from the evaluation's traits and root motion (rootMotion holds the root first: RootMoves). */
+		std::pair<bool, std::uint32_t> PerFrameMerge(const Tracked& a_tracked, const EvalResult& a_result);
+		/** @brief T6b3e: PerFrameOf's verdict from the traits (its root's motion in them), the verdict and whether it may give a record. */
+		static std::pair<bool, std::uint32_t> PerFrameFrom(std::uint32_t a_traits, Ineligible a_reason, bool a_mayRecord);
+		/** @brief T6b3e: entry a_index's merge, after the evaluations of its round (a_profileKinds: its EvaluateKind timed). */
+		void MergeEntry(std::size_t a_index, bool a_profileKinds, EvalResult& a_result, PartTimer& a_timer);
+		/** @brief T6b3e: WriteObject's merge half: a_result's Tracked delta, then the face, the geometry slots and the record. */
+		bool MergeWrite(RE::BSGeometry* a_geometry, Tracked& a_tracked, EvalResult& a_result, PartTimer& a_timer, Ineligible& a_bucket);
+		/** @brief T6b3e: a chunk's counters into the store's (in chunk order), its warnings logged. */
+		void MergeCounters(EvalCounters& a_counters);
+		/** @brief T6b3e: the mode a round of a_count entries runs in (CS_DCLF_FANOUT, the parities, the pass's thread); a_joins: the joins'. */
+		std::uint32_t FanoutMode(std::size_t a_count, bool a_joins) const;
+		/** @brief T6b3e: what a pass's evaluations read in place of the live toggles and Terrain Blending (BuildScenePhase takes it). */
+		struct PassSnapshot
+		{
+			ToggleSet toggles;
+			bool terrainDefers = false;
+		};
+		PassSnapshot passSnapshot;
+		std::shared_ptr<const FrameGlobals> passGlobals;  // the frame globals the pass binds (ScenePass), bound on the pool too
+		struct ShardScope;
+		std::vector<EvalResult> evalResults;
+		std::vector<EvalCounters> evalCounters;
+		/** @brief T6b3e: the fan-out since the report (ReportCoordinator). */
+		struct FanoutStats
+		{
+			std::uint64_t rounds = 0, parallelRounds = 0, entries = 0, parallelEntries = 0, chunks = 0;
+			std::uint64_t joinRounds = 0, joinParallelRounds = 0, joinEntries = 0;
+			std::uint64_t parityRounds = 0, parityEntries = 0, parityDiffers = 0;
+			std::uint64_t lightMissed = 0;  // light-path entries KeepSkin's table half wrote in full at the merge
+			std::string parityFirst;
+		} fanoutStats;
+		/** @brief Its report line (empty when no round ran), the counters reset. */
+		std::string FanoutReport();
 		/** @brief A slot's inputs to the frame's shadow sets (the casters' textures and pipelines). */
 		struct ShadowInputs
 		{
@@ -3411,7 +3848,7 @@ namespace DCLF
 		std::vector<PerFrameItem> perFrameSet;
 		std::uint64_t trackedLayout = 0;
 		std::uint64_t perFrameLayout = ~0ull;
-		std::uint32_t validatedFrame = ~0u;
+		std::uint32_t validatedFrame = ~0u;  // T6b3d: the pass (PassStamp) that ran the validation slice: once a pass
 		std::vector<RE::BSGeometry*> pendingEvaluation;
 		// CS_DCLF_DERIVE_PROBE's LOD fade parity: the frame's inputs, sampled once a frame when first needed.
 		LodFadeFrame lodFadeSample;
@@ -3474,25 +3911,92 @@ namespace DCLF
 		// The structural events (SceneEvents in SceneStore.cpp), applied at ApplyEvents: properties by key, nodes held.
 		std::vector<const void*> propertyChanged;
 		std::vector<RE::NiPointer<RE::NiAVObject>> nodeChanged;
-		// Ingestion (IngestEvents): the queues' events since the last apply, oldest first (Internal.h).
-		// T6b3a: the render thread's batch (IngestEvents fills it), posted to the coordinator at the frame's start (eventBatches;
-		// ApplyEvents applies each in order) or applied by Present when two Presents went unapplied. A load screen's ingestion posts a
-		// marker instead (EventBatch::loading, once a load): the coordinator drops what the load invalidates.
-		std::shared_ptr<EventBatch> ingesting;
-		EventQueue<std::shared_ptr<EventBatch>, 64> eventBatches;
+		// T6b3d: the engine's queues are the coordinator's alone (one consumer): each pass drains them up to where each stood at its start
+		// (CollectEvents) into its own batch, and applies it (ApplyEvents). A load screen's marker (EventBatch::loading, posted once a load
+		// by NoteLoadingScreen, which raises loadingSeen first) makes the coordinator drop what the load invalidates (ApplyLoading); while
+		// loadingSeen holds, a pass drains the queues into the mirror's carry (loadingCarry) and discards them for the tracking.
+		EventQueue<std::shared_ptr<EventBatch>, 64> eventBatches{ &WakeSceneLoadMarker };
+		std::atomic<bool> loadingSeen{ false };
 		bool loadingPosted = false;  // render thread: the load's marker is posted
-		/** @brief The coordinator (ApplyEvents' start): what a load screen invalidated dropped (IngestEvents' loading branch's, T6b3a). */
+		/**
+		 * @brief T6b3d, the coordinator, in its pass after the posts are taken: the engine's queues (the tracker's stack, the fade snaps and
+		 * amounts, the fades, the property, node and switch events, object LOD's segments) drained, each up to where it stood at the call,
+		 * into the pass's batch (null while a load screen is up: into the carry, the references the discarded events hold to Present),
+		 * with the render thread's mirror probe; the switch catch-ups the batch asks for posted to the render thread (switchCatchUps).
+		 */
+		std::shared_ptr<EventBatch> CollectEvents();
+		/**
+		 * @brief The coordinator: the load markers posted since applied (ApplyLoading), then a_batch (none: an empty one) - the category
+		 * refresh, the attached subtrees walked and the detached entries erased, the validation slice, the structural events. What it lets
+		 * go of is handed back (HandBack).
+		 */
+		void ApplyEvents(std::shared_ptr<EventBatch> a_batch);
+		/** @brief The coordinator (ApplyEvents' start): what a load screen invalidated dropped (NoteLoadingScreen's marker, T6b3a). */
 		void ApplyLoading();
-		/** @brief The coordinator: one posted batch applied (ApplyEvents' body, once a batch). */
+		/** @brief The coordinator: one batch applied (ApplyEvents' body). */
 		void ApplyBatch(std::shared_ptr<EventBatch> a_batch);
 		bool rescanCaptureAll = false;  // render thread: a load's marker posted, so the next category capture pins every category node
+		/**
+		 * @brief T6b3d: what CatchUpSwitches needs of a pass's batch (the attached roots, its switch events), the coordinator -> the render
+		 * thread, served at the frame's start (engine writes). Each holds references (copies of the batch's, made while the batch holds
+		 * them), dropped on the render thread.
+		 */
+		struct SwitchCatchUp;
+		EventQueue<std::shared_ptr<SwitchCatchUp>, 64> switchCatchUps;
+		/**
+		 * @brief T6b3d: the scene pump. passesFull: SetScenePassMode's (render thread -> the passes). The rest is the
+		 * coordinator's: the oldest stamp applied and not yet published, what the last publication was made from (PublishKey: a pass that
+		 * changed none of it publishes nothing), and the report's samples (ReportCoordinator).
+		 */
+		std::atomic<bool> passesFull{ false };
+		std::uint64_t unpublishedNs = 0;
+		std::uint32_t unpublishedFrame = 0;
+		struct PublishKey
+		{
+			std::array<std::uint64_t, 18> words{};
+			std::array<std::uint64_t, 6> lookups{};
+			const void* catalog = nullptr;
+			bool operator==(const PublishKey&) const = default;
+		};
+		PublishKey publishedKey;
+		bool publishedKeyValid = false;
+		bool publishForced = false;  // an input the coordinator took for the frame (TakeCoordinatorInputs) publishes
+		/** @brief What a publication is made from, now (the tables' logs, stamps and sizes, the lookups, the catalog, the candidates). */
+		PublishKey CurrentPublishKey() const;
+		/** @brief The deltas the next publication carries (the log's node): any pending. */
+		bool DeltasPending() const;
+		/** @brief The coordinator, at a pass's publication point: whether anything changed since the last publication (else none). */
+		bool PublicationNeeded();
+		/** @brief The coordinator, after PublishScene: the key it was made from. */
+		void NotePublished();
+		struct PumpStats
+		{
+			std::vector<double> passMs;                // a pass's whole time, each pass
+			std::vector<std::uint32_t> passEvents;     // the tracker events and queue entries a pass drained
+			std::vector<double> publishMs;             // the oldest unpublished event to its publication (ms)
+			std::vector<std::uint32_t> publishFrames;  // the same in the render thread's frames
+			std::uint64_t passes = 0, eventsOnly = 0, loading = 0, unchanged = 0, published = 0, inlinePasses = 0, failed = 0;
+			// The passes by what woke them (SceneWake, a pass counting under each source it took; the last: none - an inline pass, a burst's
+			// continuation) and those of them that published nothing; the walks that took the per-frame entries (once a frame) and those
+			// that did not.
+			std::array<std::uint64_t, static_cast<std::size_t>(SceneWake::Count) + 1> bySource{}, unchangedBySource{};
+			std::uint64_t perFrameWalks = 0, eventWalks = 0;
+			double fullMs = 0.0, fullMaxMs = 0.0;  // the whole passes' (not events alone): the scene pass CPU line's
+			// The sceneFrames the passes saw since the report (the first, the last), the frames that had one, the most in one frame.
+			std::uint32_t firstFrame = 0, lastFrame = 0, framesWithPass = 0, passesThisFrame = 0, maxPassesInFrame = 0;
+			bool any = false;
+		} pumpStats;
+		std::uint32_t reportedInterval = 0;  // the coordinator's: the last kReportInterval its report ran for (sceneFrame / kReportInterval)
+		/** @brief The coordinator, at a pass's end when its sceneFrame crossed kReportInterval: its own report lines (T6b3d), logged. */
+		void ReportCoordinator();
+		/** @brief The pump's drain (the lane, or RunScenePassInline): the thread marked, the frame's globals bound, one RunSceneWork. */
+		void ScenePass(bool a_inline);
 		// The engine references the scene work let go of go to EngineReleases (T6b3a), and its applied batches (their tracker events hold
 		// subtrees) here: released at Present (ReleaseHandedBack), pushed where they are let go (RecycleRetired), never handed over.
 		EventQueue<std::shared_ptr<EventBatch>, 64> batchesReleased;
 		// The tree and fade-root nodes the tables list (Tables::treeNode, fadeRootNode), owned while listed: unlisted, they go
 		// through the retirement chain (a kept publication still walks them).
 		std::vector<RE::NiPointer<RE::NiAVObject>> treeOwners, fadeRootOwners;
-		std::uint64_t presentsJoined = 0, presentsRunning = 0;  // TryJoinSceneTask's
 		template <class T>
 		void HandBack(RE::NiPointer<T>&& a_reference)
 		{
@@ -3592,7 +4096,6 @@ namespace DCLF
 		// Slots that joined the main phase at the last commit and take part in the reflection's: evaluated again at this one, when
 		// their last frame's main membership gives them the phase.
 		std::vector<std::uint8_t> setQueueMark;    // parallel to objects: in setQueue
-		std::vector<std::uint8_t> setRebinding;    // parallel to objects: this commit's, its binding is taken again this frame
 		std::vector<std::uint8_t> setLacking;      // parallel to objects: the occluder and reflection phases it takes part in and is no member of
 		std::array<std::uint32_t, 3> setLackingCount{};  // SetLacking's: per occlusion map, then the reflection
 		std::vector<std::uint8_t> setPartialMark;  // per slot: out of the set with some of its phases ready (SetStats::partial)
@@ -3616,6 +4119,10 @@ namespace DCLF
 		{
 			std::uint64_t publication = 0;  // its publication's sequence
 			std::uint32_t commitFrame = 0;  // that publication's commit (the install delay)
+			// T6b3d: that publication's oldest event (ScenePublication::eventNs, eventFrame): the frame installing it, or one after it the
+			// builder skipped past to, measures the event to its adoption.
+			std::uint64_t eventNs = 0;
+			std::uint32_t eventFrame = 0;
 			std::vector<const RE::BSGeometry*> joined, left;
 			std::vector<std::shared_ptr<const PlacementPlan>> plans;
 			std::vector<ShadingItem> shading;
@@ -3633,8 +4140,6 @@ namespace DCLF
 		void PublishScene();
 		/** @brief The coordinator: what its passes made for the frame since the last publication, moved into a_deltas (the log's node). */
 		void TakeDeltas(PublicationDeltas& a_deltas);
-		/** @brief The coordinator: whether a pass since the last publication made anything for the frame (the republish at a pass's start). */
-		bool DeltasPending() const;
 		PublicationLog<PublicationDeltas> publicationLog;  // the coordinator -> the frame's start (every one)
 		// The render thread's: the installed publication (the adopted snapshot's, HandOverAtFrameStart).
 		std::shared_ptr<const ScenePublication> installed;
@@ -3647,6 +4152,7 @@ namespace DCLF
 		/** @brief Render thread: the replaced or skipped publication back to the coordinator, which drops it (retiredPublications). */
 		void ReturnPublication(std::shared_ptr<const ScenePublication>&& a_publication);
 		// The render thread's leases the coordinator drops (T6b3a: retirement off the render thread), at the start of its passes.
+		// T6b3d: no wake: the frame returns them at its start, whose frame-input post brings the pass that drops them.
 		EventQueue<std::shared_ptr<const ScenePublication>, 64> retiredPublications;
 		/** @brief The coordinator, at the start of its passes: the leases the render thread gave back, dropped. */
 		void DropReturnedPublications();
@@ -3708,7 +4214,7 @@ namespace DCLF
 		 * each read off the property the join held, onto MaterialPort::captures; every request answered (materialRequestsAnswered).
 		 */
 		void ServeMaterialRequests();
-		bool holdLostMembers = false;  // RunAccumulateWork: the members it drops are held for PrimaryCull (primaryNotes)
+		bool holdLostMembers = false;  // RunSceneWork, from the joins on: the members it drops are held for PrimaryCull (primaryNotes)
 		// A join whose material has no capture held (MaterialPort::captures: its writer's, its attach's; one unused for
 		// kMaterialSnapshotFrames is let go) asks the render thread for one and waits (bindRetry). The scene work can read no
 		// property's material: the render thread's capture at EarlyPrepass is the capture point for it.
@@ -3727,7 +4233,7 @@ namespace DCLF
 			bool captured = false;  // false: the property held another material by then (the request stale)
 		};
 		EventQueue<MaterialRequest> materialRequestQueue;
-		EventQueue<MaterialAnswer> materialRequestsAnswered;
+		EventQueue<MaterialAnswer> materialRequestsAnswered{ &WakeSceneMaterialAnswer };
 		ankerl::unordered_dense::set<const RE::BSShaderMaterial*> materialRequested;  // the scene work's: asked, not answered yet
 		// The material references the coordinator let go of (RecycleRetired, HandBackHeld), released at Present (ReleaseHandedBack; T6b3a:
 		// pushed where they are let go, never handed over at a join).
@@ -3759,10 +4265,8 @@ namespace DCLF
 		void RecycleRetired();
 		std::vector<std::uint32_t> bindRetry;                // joins that waited for a material, bound again next phase
 
-		// The scene task (KickSceneTask): its job, and what the work holds for the render thread while it runs.
-		std::shared_ptr<void> sceneTask;  // AsyncWorker::JobHandle
-		bool sceneTaskFailedLogged = false;
-		bool inSceneTask = false;       // RunSceneWork on the coordinator
+		// The scene pass (RunSceneWork): what it holds for the render thread while it runs.
+		bool inSceneTask = false;       // RunSceneWork on the lane (not inline)
 		bool holdPrimaryNotes = false;  // the scene work's passes: PrimaryCull's notes are held (primaryNotes)
 		std::uint32_t publishedSunGeneration = 0;  // render thread: the newest publication's sun generation as the frame took it
 		std::vector<const RE::BSGeometry*> setGeometry;  // parallel to objects: the geometry a base member is published under
@@ -3808,13 +4312,19 @@ namespace DCLF
 		/** @brief Queues a slot for the next commit. */
 		void QueueSet(std::uint32_t a_slot);
 		/**
-		 * @brief A slot taken out of phases of the applied set after its commit (the accumulate phase binding it again, a claim
-		 * revoked): out of the commit's decision and the snapshot the claims are made from too, and queued, so the next commit
-		 * decides it again from what it has now. Without this the commit's copy keeps the phases: its next decision of the same
-		 * phases is no change, the record stays out of them and the claims keep them, and nobody draws it. A base and its layer
-		 * leave the main phases together, the applied tables too (CommitSet's rule: the claim is the base geometry's).
+		 * @brief A slot taken out of phases of the applied set after its commit (the joins binding it again before this pass's commit,
+		 * a claim revoked after it): out of the commit's decision and the snapshot the claims are made from too, queued, so the next
+		 * commit decides it again from what it has now, and marked for ApplySet (MarkSetApply), so a slot that commit leaves out still
+		 * reaches the claims' notes. Without this the commit's copy keeps the phases: its next decision of the same phases is no change,
+		 * the record stays out of them and the claims keep them, and nobody draws it. A base and its layer leave the main phases
+		 * together, the applied tables too (CommitSet's rule: the claim is the base geometry's).
 		 */
 		void LeaveSet(std::uint32_t a_slot, std::uint8_t a_lost, bool a_partner = true);
+		/**
+		 * @brief A slot whose committed phases or lacking phases changed, for the next ApplySet, with the geometry it holds now (an entry
+		 * not applied yet takes this one's geometry: the decision is now for it).
+		 */
+		void MarkSetApply(std::uint32_t a_slot);
 		/** @brief The claims' snapshot of setBuilding, made again when a commit or LeaveSet changed it. */
 		void RefreshSetSnapshot();
 		/**
