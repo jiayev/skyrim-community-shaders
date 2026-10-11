@@ -191,8 +191,8 @@ static const uint kDCLFGeometryBlock = 768;
 #		endif
 uint DCLFMaterialTextureIndex(uint a_register)
 {
-	// MaterialRowHeader: two addresses, textures[16], samplers[16], features (t71, t74).
-	const uint slot = a_register == 71 ? 32 : a_register == 74 ? 33 : a_register;
+	// MaterialRowHeader: two addresses, textures[16], samplers[16], features (t71, t74, then TruePBR's t80-t91: kFeatureMaterialRegisters).
+	const uint slot = a_register == 71 ? 32 : a_register == 74 ? 33 : a_register >= 80 ? 34 + (a_register - 80) : a_register;
 	return vk::RawBufferLoad<uint>(DCLFMaterialRowAddress + kDCLFMaterialRowHeader + 16 + 4 * slot, 4);
 }
 uint DCLFMaterialSamplerIndex(uint a_register)

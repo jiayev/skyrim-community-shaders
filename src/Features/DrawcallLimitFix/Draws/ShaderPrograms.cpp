@@ -83,8 +83,8 @@ namespace DCLF
 		 * the rows' addresses in its push data (DrawPipelines.cpp, the main layout), read from the rows its sequence names instead
 		 * (Common/DCLFObjects.hlsli, DCLFMaterialRowAddress and DCLFPipelineRowAddress). A plain draw call binds once for draws
 		 * of many pipeline slots (the Z-prepass's buckets are its depth pipelines'), so nothing it binds may be a row's:
-		 * - the material row's: the PerMaterial blocks (b1), the material textures (t0-t15 but t14, and the features' t71 and
-		 *   t74) and their samplers (s0-s15 but s14);
+		 * - the material row's: the PerMaterial blocks (b1), the material textures (t0-t15 but t14, and the features' t71, t74
+		 *   and t80-t91) and their samplers (s0-s15 but s14);
 		 * - the pipeline row's: the PerTechnique blocks (b0), the PerGeometry template (b2) and the shadow mask (t14, s14); its
 		 *   permutation block (b4) is Permutation.hlsli's (DCLF_PULLED_ROWS).
 		 * A block's members become statics, which its function (DCLFPer<Block>Statics) assigns from the row; a texture or sampler

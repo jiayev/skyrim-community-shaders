@@ -973,7 +973,7 @@ namespace DCLF
 					}
 				}
 			}
-			// Textures: t0-t15 from the material row but the shadow mask (t14, the pipeline row's); the features' (t71, t74) from the
+			// Textures: t0-t15 from the material row but the shadow mask (t14, the pipeline row's); the features' (t71, t74, t80-t91) from the
 			// material row; every other register from the frame record. Samplers likewise.
 			const auto index = rhi::LayoutRangeSource::IndirectIndex;
 			const auto pixelStage = rhi::ShaderStage::Pixel;

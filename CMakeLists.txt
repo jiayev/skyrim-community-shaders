@@ -146,6 +146,13 @@ message("\tBuild branch: ${GIT_BRANCH}")
 # #######################################################################################################################
 include(XSEPlugin)
 
+# The crash dump helper (tools/crash-dump-helper): the plugin starts it at load and it writes CommunityShaders.dmp from
+# outside the game (XSEPlugin.cpp, StartCrashDumpHelper). Shipped beside the DLL in SKSE/Plugins.
+add_executable(CommunityShadersCrashDump ${CMAKE_SOURCE_DIR}/tools/crash-dump-helper/main.cpp)
+target_compile_features(CommunityShadersCrashDump PRIVATE cxx_std_23)
+target_link_libraries(CommunityShadersCrashDump PRIVATE dbghelp)
+add_dependencies(${PROJECT_NAME} CommunityShadersCrashDump)
+
 # #######################################################################################################################
 # # Find dependencies
 # #######################################################################################################################
@@ -726,6 +733,7 @@ install(
 ]]
 )
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION SKSE/Plugins COMPONENT SKSE)
+install(TARGETS CommunityShadersCrashDump RUNTIME DESTINATION SKSE/Plugins COMPONENT SKSE)
 install(
     FILES $<TARGET_PDB_FILE:${PROJECT_NAME}>
     DESTINATION SKSE/Plugins
@@ -1158,7 +1166,11 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_PDB_FILE:${PROJECT_NAME}>"
             "${AIO_DIR}/SKSE/Plugins/$<TARGET_PDB_FILE_NAME:${PROJECT_NAME}>"
-        COMMENT "Copying built DLL and PDB to AIO package"
+        COMMAND
+            ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:CommunityShadersCrashDump>"
+            "${AIO_DIR}/SKSE/Plugins/$<TARGET_FILE_NAME:CommunityShadersCrashDump>"
+        COMMENT "Copying built DLL, PDB and crash dump helper to AIO package"
         VERBATIM
     )
     if(NVPERF_SUPPORT)
@@ -1357,7 +1369,11 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     ${CMAKE_COMMAND} -E copy_if_different
                     $<TARGET_PDB_FILE:${PROJECT_NAME}>
                     "${DEPLOY_TARGET}/SKSE/Plugins/$<TARGET_PDB_FILE_NAME:${PROJECT_NAME}>"
-                COMMENT "Copy plugin DLL/PDB to ${DEPLOY_TARGET}/SKSE/Plugins"
+                COMMAND
+                    ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:CommunityShadersCrashDump>
+                    "${DEPLOY_TARGET}/SKSE/Plugins/$<TARGET_FILE_NAME:CommunityShadersCrashDump>"
+                COMMENT "Copy plugin DLL/PDB and the crash dump helper to ${DEPLOY_TARGET}/SKSE/Plugins"
                 VERBATIM
             )
 

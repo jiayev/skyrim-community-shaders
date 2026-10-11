@@ -122,6 +122,19 @@ Found in validation runs and left for a cleanup pass once the structure is in pl
 -   **`<- TREE MANAGER` coverage:** the tree list compared only 0-1 BSTreeNode a frame at Riverwood (all skipped both ways); the
     animation list's clock compared 3 nodes in a window (most leaf roots are not DCLF's). Needs a cell with BSTreeNode trees.
 
+-   **Intermittent vertex-stage page faults at load (2026-10-11):** two device losses a few seconds after a load, both Aftermath
+    `vertex_01`, not reproduced in the next runs: w167 at the main menu ("Shader Instruction Error", DCLF idle), and still-fix-on
+    5 s into gameplay (MMU fault reading VA 0, fingerprint 5766533646317074780). Unattributed (shader debug info not written).
+-   **Capture parity indexed the tables by a lookup from another snapshot** (`OnFaceLightingDraw`, a CPU crash under
+    `CS_DCLF_CAPTURE_PARITY`): now skipped when the index is past the tables (face and native paths).
+
+-   **Use-after-free in actor teardown on a save load (2026-10-11, unattributed):** loading a save after going through a door,
+    a job thread in `Actor::Predestroy` -> `FUN_140720830` (the middle-high process data, `+0x278`) -> `FUN_14021ca60`/`FUN_14021d140`
+    destroyed a pool entry's object (keyed by a `BSLightingShaderProperty`) that was already freed (its first qword a free-list
+    link). DCLF holds property and material references, but nothing ties it yet: reproduce with `CS_DCLF_RELEASE_GUARD=1` and
+    with DCLF off. The crash then hung the game in Community Shaders' in-process `MiniDumpWriteDump` (a suspended thread held
+    the heap lock); the dump is now written out of process (`tools/crash-dump-helper`, `CS_TEST_CRASH` to test it).
+
 ## Accepted differences
 
 Differences from the engine that are known, measured and left as they are, with the reason. Each one names what would
@@ -223,6 +236,45 @@ full trees have since unloaded, which DCLF does not reproduce.
 -   **See it.** With DCLF's tree LOD off, teleport away from a forest and look back at it: an engine bug shows as gaps in
     the LOD forest where trees were loaded, lasting until the block is refilled for another reason. Then compare with
     DCLF's tree LOD on.
+
+## Resolved: shadowed terrain drawn black under Terrain Blending (T7c1; fixed 2026-10-11, validated: probe matches the engine path, screenshot lit)
+
+**Symptom.** With DCLF drawing the terrain under Terrain Blending (`CS_DCLF_TB_TERRAIN`, default on), shadowed terrain
+was completely black. With DCLF off, or `CS_DCLF_TB_TERRAIN=0` (the engine draws the terrain), it kept its ambient light.
+
+**Measured** (`CS_DCLF_TARGET_PROBE` at a terrain pixel: the G-buffer after DCLF's colour epoch against the engine path
+after Terrain Blending's replay; pixel permutation MULTI_TEXTURE LANDSCAPE DEFERRED TRUE_PBR, TERRAIN_BLENDING). The
+normals (rt2.xy) matched. DCLF's draw wrote Albedo (rt3), Reflectance (rt5), Masks (rt6) and Diffuse (rt0) as 0, and
+glossiness (rt2.z) 0.96 where native wrote 0.287.
+
+**Cause.** TruePBR's landscape `SetupMaterial` binds each tile's displacement (t80-t85) and RMAOS (t86-t91) through its
+own `extendedRendererState`, not the engine's sixteen slots. DCLF's material record (`MaterialRecord`) held only the
+sixteen slots and Advanced Skin's t71/t74, so the material port (`MaterialPortFeature.cpp`, `Landscape`) wrote the
+colour and normal tiles and dropped the other twelve. Those registers fell through to the frame record, which holds
+whatever was bound when the frame was captured: nothing. A full-PBR tile (`PBRFlags` bit per tile) therefore sampled
+RMAOS as 0. Every output in the probe follows from that, in `Lighting.hlsl`:
+- roughness `clamp(0, MinRoughness, ...)`, so glossiness `1 - roughness` is about 0.96;
+- AO 0: `PBR::GetIndirectLobeWeights` multiplies the diffuse lobe by `MultiBounceAO(baseColor, 0)` = 0 and the specular
+  lobe by `SpecularOcclusion(..., 0)` = 0. The Albedo target is that diffuse lobe (`outputAlbedo`) and Reflectance is
+  that specular lobe, so both are 0. Masks.z is the luminance of the ambient times `outputAlbedo`, so it is 0 too.
+- In shadow, ambient is the only light and it is multiplied by the albedo, so Diffuse is 0: black only where shadowed.
+
+The colour tiles were bound correctly (t0-t5, the same views as the engine's). The albedo was 0 only because of the AO.
+
+**Fix.** TruePBR's twelve slots are now feature textures: `kFeatureMaterialRegisters` is t71, t74, then t80-t91
+(`ConstantEvaluator.h`). The rest of the path was already driven by that table and follows it: the material bindings, the
+material row's `features`, the layout's ranges, the pulled shaders and `DCLFMaterialTextureIndex` (`DCLFObjects.hlsli`,
+which now maps t80-t91 to words 34-45). `Landscape` writes each tile's displacement (default black) and RMAOS (default
+white) from the snapshot's views, as TruePBR's hook does. The snapshot had already captured them (`PBRTextureFields`).
+`EvaluateFeatureHooks` now writes only Advanced Skin's entries. The stand-in (`RunStandIn`) saves TruePBR's pending
+state (`TruePBR::Get/SetExtendedTextures`), clears it for the call, collects what the call set into the engine's record,
+and restores it. The material port parity therefore compares the twelve views, and the evaluation no longer leaves them
+pending for the next native draw. Capture parity has a TruePBR line (`TruePBR texture parity`: t80-t91 at the native
+landscape draws against the record). The feature binding parity no longer counts these registers as per-frame bindings.
+
+**What to check.** The probe at the same pixel should match native: glossiness about 0.29, and Albedo, Reflectance, Masks.z
+and Diffuse non-zero in shadow. `TruePBR texture parity OK` and `material port` without feature-texture differences
+under the parity switches.
 
 ## Resolved: DCLF's draws carry the TAA / upscaler jitter
 

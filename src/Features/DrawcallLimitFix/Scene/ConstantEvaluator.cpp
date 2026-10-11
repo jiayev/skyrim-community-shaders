@@ -13,6 +13,7 @@
 #include "FrameAnnotations.h"
 #include "Features/Skin.h"
 #include "State.h"
+#include "TruePBR.h"
 
 namespace DCLF
 {
@@ -22,6 +23,11 @@ namespace DCLF
 		constexpr std::size_t kSetupGeometrySlot = 6;
 		constexpr std::uint32_t kPerMaterial = 1;
 		constexpr std::uint32_t kPerGeometry = 2;
+
+		// featureTextures' entries are Advanced Skin's two, then TruePBR's slots in register order.
+		static_assert(std::tuple_size_v<Skin::MaterialTextures> == kSkinFeatureTextures);
+		static_assert(kTruePBRFeatureTextures + TruePBR::NumExtendedTextures == kFeatureMaterialTextures &&
+					  kFeatureMaterialRegisters[kTruePBRFeatureTextures] == TruePBR::FirstExtendedTexture);
 
 		using ShadowStateData = std::remove_reference_t<decltype(RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData())>;
 
@@ -238,6 +244,12 @@ namespace DCLF
 		// would bind the evaluated material's textures.
 		auto& skin = globals::features::skin;
 		const auto savedSkinTextures = skin.loaded ? skin.GetPendingTextures() : Skin::PendingTextures{};
+		// TruePBR's landscape hook leaves its t80-t91 views pending for the next State::Draw the same way: saved and restored, and
+		// nothing pending during the call, so that what is pending after it is what the call set (EvaluateMaterial's Collect).
+		auto& truePBR = globals::features::truePBR;
+		const auto savedTruePBRTextures = truePBR.loaded ? truePBR.GetExtendedTextures() : TruePBR::ExtendedTextures{};
+		if (truePBR.loaded)
+			truePBR.SetExtendedTextures({ savedTruePBRTextures.views, 0 });
 		// Every constant buffer slot, not just the evaluated level. Restoring only a_level was an
 		// assumption about which slots the shader functions touch, and the audit disproved it: a stand-in
 		// SetupGeometry leaves a buffer bound at PS slot 7 that was not bound before (a feature hook binds
@@ -282,6 +294,8 @@ namespace DCLF
 		globals::state->permutationData = savedPermutation;
 		if (skin.loaded)
 			skin.SetPendingTextures(savedSkinTextures);
+		if (truePBR.loaded)
+			truePBR.SetExtendedTextures(savedTruePBRTextures);
 		context->VSSetConstantBuffers(0, kConstantBufferSlots, savedVS.data());
 		context->PSSetConstantBuffers(0, kConstantBufferSlots, savedPS.data());
 		for (auto* buffer : savedVS) {
@@ -338,7 +352,14 @@ namespace DCLF
 				out->featureTextures = {};
 				if (auto& skin = globals::features::skin; skin.loaded) {
 					if (const auto textures = skin.MaterialTexturesOf(static_cast<const RE::BSLightingShaderMaterialBase*>(material)))
-						out->featureTextures = *textures;
+						std::copy_n(textures->begin(), kSkinFeatureTextures, out->featureTextures.begin());
+				}
+				// TruePBR's, the slots its hook set during the call (RunStandIn leaves none pending before it).
+				if (auto& truePBR = globals::features::truePBR; truePBR.loaded) {
+					const auto pending = truePBR.GetExtendedTextures();
+					for (std::uint32_t i = 0; i < TruePBR::NumExtendedTextures; ++i)
+						if ((pending.modified >> i) & 1)
+							out->featureTextures[kTruePBRFeatureTextures + i] = pending.views[i];
 				}
 			}
 		};
