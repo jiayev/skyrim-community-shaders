@@ -2511,6 +2511,72 @@ resident-draw, set and fade parity; motion m28/m29).
       pass CPU line at a cell load; the pass ms with `CS_DCLF_WORKERS` 1, 2, 4 and 8 at the same load. The walk and persistent parities
       (and the capture parity) run the pass inline on the render thread, where nothing fans out (mode 1): under them the decomposition is
       checked, the pool is not; the pool's own check is the fan-out parity with the set parity, which keep the pass on the lane.
+  - *T6b5, the scene side: objects ready before the engine shows its LOD swaps* (2026-10-11; written, not built or run yet; the engine
+    side, `Engine/LodGates.cpp`, by its own change). The interface is `Engine/LodGates.h`. The engine side hides a swap's incoming blocks
+    before their attach and vetoes the engine's shows, keeps the outgoing attached and shown, and calls `LodGates::CaptureGate` after the
+    attaches. The scene side holds the swap until every geometry under the incoming roots is a whole member or ineligible, then publishes
+    the post-swap claims with a flip, which the frame adopting them releases.
+    - **Producer.** `CaptureGate` -> `SceneTracker::PushGate`: an `EventType::Gate` on the swapping thread's stack. It is ordered after
+      the incoming blocks' attaches, carries the token and the outgoing root keys, and pins the incoming roots in `Event::pins` (released
+      with the batch on the render thread). It wakes the pump as `SceneWake::Gate`, always, like an attach in the world.
+    - **Mirror.** `ApplyMirrorEvents` applies the event in order (`ApplyGateEvent`). Each incoming root is gated in the mirror
+      (`SceneMirror::SetGated`), a key set beside the records: a capture replaces a record whole, and the mirror parity compares records
+      alone. `HiddenForWalk(key, record)` ignores a gated node's own kHidden, and every other hide still counts. So a gated block's
+      geometries are classified, written, bound and joined while the engine keeps the block hidden.
+    - **Gates** (`SceneStore::LodGate`, `lodGates` by token, `gateOfRoot` by root with its side; `Scene/SceneStore/Gates.cpp`).
+      - The event walks the mirror once per root (`TagGateRoot`, `MirrorSubtree`) and tags the tracked geometries (`Tracked::gate`,
+        `gateSide`). `AddGeometry` tags later arrivals by the nearest gate root on their mirror chain (`TagGateAbove`).
+      - An incoming tag reclassifies the geometry. Its slots are queued for the next commit (`gateQueued`), with their earlier gate
+        record cleared.
+      - A root the mirror lacks counts as `unmirrored` and is walked again at each commit until it has a record.
+      - A detached root leaves its gate (`NoteGateRootsDetached`), and `EraseTracked` untags. An open gate left with no incoming root
+        never flips (the engine side's forced release retires it).
+    - **Withholding and the flip** (`CommitSet`).
+      - A gated incoming slot's phases, as the commit decided them (partner rule included), are stored with their readiness in
+        `gateSlots` (`GateWithhold`), and the commit applies 0 while the gate is open. Ready means whole: the phases equal the
+        participation, and the slot is not waiting.
+      - After the queue, `UpdateGates` recounts each open gate's `pending`: a geometry is ready when it was classified since its tag
+        with its leaf's records, and is either ineligible with no record or has every slot ready.
+      - A gate flips when `pending` and `unmirrored` are both 0, it has an incoming root, and the scene is live:
+        - the incoming slots get their stored phases;
+        - the outgoing slots get 0 and are held out (`Tracked::gateHeldOut`) until their detach erases them;
+        - a `GateFlip` (incoming base geometries with their phases, outgoing geometries, the stamps) goes onto `PublicationDeltas::gateFlips`.
+      - A ready gate whose incoming records were written since the last publication waits one more commit (w152 fix). That
+        publication revokes structurally changed slots' claims whole (`RevokeUndrawnClaims`, R3b) and claims them only at the next one,
+        so a flip in the pass that wrote the records was released with every incoming geometry unclaimed (`<- GATE HOLE`, claimed 0x0
+        against flipped 0x21). `UpdateGates` reads `revokeCursor`'s unread `kStructureCauses` once, when a gate is otherwise ready.
+        Under the parities, `TakeDeltas` checks each flip against its own publication's claims (`<- GATE HOLE (publication)`), which
+        separates a coordinator-side loss from a hand-over one.
+      - `DeltasPending` counts the flips, so a flip always publishes. With no gate and nothing held out, the commit does no gate work
+        (`gatesLive`). The set commit parity applies the same withholding (`GateWithholds`).
+    - **Release.** `HandOverAtFrameStart` collects the flips of the publications it installs into `frameGateReleases`.
+      `SceneStore::ReleaseGates` runs in `BeginSceneFrame` right after `InstallClaims`/`WithdrawSet`, before the culls, and in a withdrawn
+      frame too (every later publication is post-swap). It calls `LodGates::Flip` for each flip, then wakes the pump (`SceneWake::Gate`).
+    - **Outcomes.** The coordinator takes `LodGates::DrainOutcomes` before `CollectEvents`, so an outcome's gate events are in that
+      batch or an earlier one, and applies them after the batch. A load screen's pass (its events carried) holds them for the next pass.
+      - A flipped outcome retires the gate: its roots are ungated (the engine's show arrived as the root's hidden event first) and its
+        tags cleared. The outgoing stay held out.
+      - A forced outcome on an open gate also reclassifies the incoming and re-commits them with their own phases.
+      - The engine side's forced releases call `WakeSceneGate()` after posting.
+    - **Forced generation.** `BeginFrame` reads `LodGates::ForcedGeneration()` once a frame into `FrameInputs::lodForcedGeneration`. The
+      coordinator stamps each publication with the generation of the inputs its pass took before its drains (`ScenePublication::lodForcedGeneration`).
+      A generation the last publication was not built for forces one (`PublicationNeeded`). `BeginSceneFrame` withdraws while
+      `InstalledLodForced() < FrameLodForced()`, beside the toggles compare.
+    - **Observers.**
+      - Under `CS_DCLF_SET_PARITY` or `CS_DCLF_PERSISTENT_PARITY`, `ReleaseGates` checks the installed claims against each flip:
+        an incoming geometry not claimed with the flip's phases is `<- GATE HOLE` (a later publication's legitimate change reads as
+        one too); an outgoing geometry still claimed is `<- GATE COVERAGE`.
+      - The coordinator's line `[DCLF] LOD gates (T6b5): N opened, N flipped, N retired flipped, N forced (N before their flip), ...;
+        request to flip: ms, frames; now N open (oldest X ms), N flipped awaiting their release's outcome; blockers: unmirrored roots N,
+        unclassified N, no record N, not bound N, waiting (by the set's waiting-for index) ..., a phase short or its layer partner N`.
+      - The render thread's line `[DCLF] LOD gate releases (T6b5): N released, N refused, N in a withdrawn frame; flip to release: ms,
+        frames; request to release ms; checked N: ...`, followed by `LodGates::TakeReport` once a report interval.
+      - Residue stage `shown with no gate` (`kStageUngated`, `CS_DCLF_TIMELINE`): a LOD residue geometry no gate ever tagged that is
+        hidden-stale, unrecorded, unbound or waiting.
+    - **To watch in a run:** gates flip, so the blockers drain and the oldest open gate stays small; `<- GATE HOLE` and `<- GATE
+      COVERAGE` at 0 under the set parity; the `shown with no gate` stage (the show paths the gates miss); a blocker class that never
+      drains. A binding that needs the engine's own registration of a hidden block would show as "not bound", and the gate would hold
+      until it is forced.
 
 **A persistent scene for every view; incremental only; two modes** (2026-10-08; motion m112-m153, bridge y-runs, equip and
 fight e-runs, toggle runs). With DCLF's shadow views on, objects flickered at cell changes because the set's phases were

@@ -37,11 +37,12 @@ namespace DCLF
 		LoadMarker,      // a load screen's marker
 		LoadDrain,       // a Present or frame start under a load screen (the queues drained once a call)
 		Capture,         // the render thread's captures for the pass (the category capture, the mirror probe)
+		Gate,            // T6b5: a LOD gate captured (the tracker's Gate event), or its outcome posted (LodGates: a flip, a forced release)
 		Count
 	};
 	inline constexpr std::array<const char*, static_cast<std::size_t>(SceneWake::Count)> kSceneWakeNames{ "frame input", "attach", "detach",
 		"hidden", "leaf swap", "property values", "alpha values", "property event", "switch", "material answer", "texture reply",
-		"catalog", "load marker", "load drain", "captures" };
+		"catalog", "load marker", "load drain", "captures", "LOD gate" };
 
 	/**
 	 * @brief A producer's wake (any thread, after the push it announces). Lock-free and cheap when its source is already pending (one
@@ -56,6 +57,11 @@ namespace DCLF
 	inline void WakeSceneMaterialAnswer() { WakeScenePass(SceneWake::MaterialAnswer); }
 	inline void WakeSceneTextureReply() { WakeScenePass(SceneWake::TextureReply); }
 	inline void WakeSceneLoadMarker() { WakeScenePass(SceneWake::LoadMarker); }
+	/**
+	 * @brief T6b5: a LOD gate's outcome posted (LodGates' forced releases call it after the post; the render thread's flips are woken by
+	 * SceneStore::ReleaseGates). Not an engine event for the load screen's hold: the first pass after a load takes the outcomes.
+	 */
+	inline void WakeSceneGate() { WakeScenePass(SceneWake::Gate); }
 	/** @brief Render thread (SceneStore::NoteLoadingScreen): a load screen is up (the engine events' wakes held), or not. */
 	void SetScenePassLoading(bool a_loading);
 	/** @brief Since the last call: the pushes each source made inside the frame's render (no wake: the frame's next pass took them). */

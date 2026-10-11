@@ -1,6 +1,7 @@
 #include "Internal.h"
 
 #include "Features/DrawcallLimitFix/Engine/ImportTimings.h"
+#include "Features/DrawcallLimitFix/Engine/LodGates.h"
 
 #include "Features/DrawcallLimitFix/Draws/DrawPipelines.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
@@ -186,6 +187,11 @@ namespace DCLF
 		auto markApply = [&](std::uint32_t a_slot) { MarkSetApply(a_slot); };
 		if (!setBuilding)
 			setBuilding = std::make_shared<SetSnapshot>();
+		// T6b5: LOD gates open or outgoing blocks held out (none: the commit does no gate work).
+		const bool gatesLive = !lodGates.empty() || gateHeldOutCount != 0;
+		for (const std::uint32_t slot : gateQueued)
+			QueueSet(slot);
+		gateQueued.clear();
 
 		// What can have changed an object's membership, as events: the change log since the last commit (every write of a record,
 		// its residency or its bindings, whoever made it), the waiting slots when a lookup they wait for moved, a new set of
@@ -430,9 +436,23 @@ namespace DCLF
 					phases = 0;
 					partnerPhases = 0;
 				}
+				// T6b5: a gated incoming block's phases held for its flip (GateWithhold), an outgoing one's dropped after it.
+				if (gatesLive)
+					partnerPhases = GateWithhold(partner, partnerPhases, partnerWait, drawn, live);
 				apply(partner, partnerPhases, partnerWait);
 			}
+			if (gatesLive)
+				phases = GateWithhold(slot, phases, wait, drawn, live);
 			apply(slot, phases, wait);
+		}
+		// T6b5: the gates whose incoming geometries are all members or ineligible now flip in this commit - their held phases applied, their
+		// outgoing blocks' dropped - and ride the publication to the frame that adopts it (PublicationDeltas::gateFlips).
+		if (gatesLive) {
+			std::vector<std::pair<std::uint32_t, std::uint8_t>> flipped;
+			UpdateGates(live, flipped);
+			for (const auto& [slot, phases] : flipped)
+				if (slot < objects)
+					apply(slot, phases, false);
 		}
 		// CS_DCLF_SET_PARITY, every 60th commit (T6b3d: by passes, one commit a pass): every slot's phases and waiting decided again,
 		// against what the commit's queue (its events and requeues by cause) left: a slot the requeues missed differs.
@@ -449,6 +469,9 @@ namespace DCLF
 					if (!(phases & kSetMain) != !(wanted(partner, partnerWait) & kSetMain))
 						phases = 0;
 				}
+				// T6b5: the gates' withholding, as the commit applies it (an observer: nothing recorded).
+				if (gatesLive && GateWithholds(slot))
+					phases = 0;
 				if (phases == setPhases[slot] && wait == (setWaitingMark[slot] != 0))
 					continue;
 				if (!differ++) {
@@ -694,6 +717,8 @@ namespace DCLF
 		publication->sequence = ++publicationSequence;
 		publication->commitFrame = publicationCommitFrame;
 		publication->togglesGeneration = publicationCommitToggles;
+		// T6b5: the LOD gates' forced releases this pass's events are complete for (the frame inputs' generation, taken before its drains).
+		publication->lodForcedGeneration = sceneInputs.lodForcedGeneration;
 		publication->tablesGeneration = tablesGeneration;
 		publication->tables = publishedTables;
 		publication->claims = publicationClaims ? publicationClaims : std::make_shared<const SetSnapshot>();
@@ -766,6 +791,18 @@ namespace DCLF
 		a_deltas.retiredImports = std::exchange(retiredImports, {});
 		a_deltas.actorWetness = std::exchange(tables.actorWetnessChanges, {});
 		a_deltas.lightEntries = std::exchange(lightEntryChanges, {});
+		// T6b5: the gates the commits flipped since (their claims are this publication's). Under the parities, checked against those claims
+		// as revoked (the coordinator's side of ReleaseGates' <- GATE HOLE: a hole here is the commit's or the revocation's, one only there the
+		// hand-over's).
+		if (!gateFlipsMade.empty() && (SwitchEnabled(Switch::SetParity) || SwitchEnabled(Switch::PersistentParity)))
+			for (const auto& flip : gateFlipsMade)
+				for (const auto& [geometry, phases] : flip.incoming)
+					if (const std::uint8_t claimed = publicationClaims ? publicationClaims->PhasesOf(geometry) : std::uint8_t{ 0 }; claimed != phases) {
+						++gateStats.publishHoles;
+						if (gateStats.firstPublishHole.empty())
+							gateStats.firstPublishHole = fmt::format("gate {}: geometry {} claimed {:#x}, flipped {:#x}", flip.token, static_cast<const void*>(geometry), claimed, phases);
+					}
+		a_deltas.gateFlips = std::exchange(gateFlipsMade, {});
 	}
 
 	void SceneStore::ReturnPublication(std::shared_ptr<const ScenePublication>&& a_publication)
@@ -823,6 +860,9 @@ namespace DCLF
 		SceneCapture::SetMainThread(::GetCurrentThreadId());
 		ImportTimings::NoteMainThread(::GetCurrentThreadId());
 		SceneCapture::SetFrame(frame);
+		// T6b5: the LOD gates' forced releases so far, once a frame: the frame inputs carry it to the coordinator, and the frame withdraws its
+		// claims while the installed publication was built for an older one (DrawcallLimitFix::BeginSceneFrame).
+		frameLodForced = LodGates::ForcedGeneration();
 		captureNs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - captureStart).count());
 		++captureFrames;
 		// What the coordinator's passes take of the frame (T6b3a): posted after the capture; the post wakes the pump (T6b3d: folded with
@@ -840,6 +880,7 @@ namespace DCLF
 		inputs->membershipWitness = PrimaryCull::Get().SampleMembershipWitness();
 		inputs->togglesGeneration = Toggles::Get().Generation();
 		inputs->verdictsGeneration = verdictsRequested;
+		inputs->lodForcedGeneration = frameLodForced;
 		frameInputsSlot.Post(std::move(inputs));
 		WakeScenePass(SceneWake::FrameInput);
 	}
@@ -906,7 +947,15 @@ namespace DCLF
 		// T6b3d: the render thread's posts the drains must follow (the category capture; the mirror probe, CollectEvents' first), then the
 		// engine's queues drained up to where each stood now, and applied.
 		TakeCategoryCapture();
-		ApplyEvents(CollectEvents());
+		// T6b5: the LOD gates' outcomes taken before the tracker's stack is (an outcome is posted after its gate's events: the batch below
+		// holds them), applied after the batch - but a load screen's (its events carried, not applied), whose outcomes wait for the next.
+		TakeGateOutcomes();
+		{
+			auto batch = CollectEvents();
+			const bool applied = batch != nullptr;
+			ApplyEvents(std::move(batch));
+			ApplyGateOutcomes(applied);
+		}
 		if (!full) {
 			++pumpStats.eventsOnly;
 			holdPrimaryNotes = false;
@@ -1087,6 +1136,8 @@ namespace DCLF
 				// T6b0: a commit's time to its installation, by the geometries it joined.
 				publicationStats.installDelay[AgeBucket(frame - deltas.commitFrame)] += deltas.joined.size();
 				installNotes.emplace_back(std::move(deltas.joined), std::move(deltas.left));
+				// T6b5: the gates these claims flipped, released by the frame installing them (ReleaseGates).
+				append(frameGateReleases, deltas.gateFlips);
 				// T6b3d: the oldest event these publications carried (the ones the builder skipped past included).
 				if (deltas.eventNs && (!oldestNs || deltas.eventNs < oldestNs)) {
 					oldestNs = deltas.eventNs;

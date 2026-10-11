@@ -1200,6 +1200,8 @@ namespace DCLF
 			hiddenDependents.clear();
 			DropSunCandidates();
 			buckets = {};
+			// T6b5: the gates' tags were the entries'; the rescan's adds tag them again (AddGeometry, by the gates' roots).
+			ResetGateTags();
 		}
 
 		ApplyMirrorEvents(*batch);
@@ -1631,8 +1633,14 @@ namespace DCLF
 						mirror.Evict(event->node.get(), fmt::format("'{}' {}", event->node->name.c_str() ? event->node->name.c_str() : "",
 															 const_cast<RE::NiAVObject*>(event->node.get())->GetRTTI() ? const_cast<RE::NiAVObject*>(event->node.get())->GetRTTI()->name : "?"));
 				} else if (event->type == SceneTracker::EventType::Detached) {
+					// T6b5: a gate's root among the detached (the gate goes on without it), before its records go.
+					if (event->detachedRoot && !gateOfRoot.empty())
+						NoteGateRootsDetached(event->detachedRoot, event->removedNodes);
 					if (event->detachedRoot)
 						mirror.Detach(event->detachedRoot, event->removed, event->removedNodes);
+				} else if (event->type == SceneTracker::EventType::Gate) {
+					// T6b5: in order after its incoming blocks' attaches (their captures applied above): the gate opened.
+					ApplyGateEvent(event->gateToken, event->gateIncoming, event->gateOutgoing, event->stampNs, event->stampFrame);
 				} else {
 					const auto [type, key] = mirror.Update(event->update);
 					if (parity && key)

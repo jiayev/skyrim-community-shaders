@@ -20,6 +20,7 @@
 #include "DrawcallLimitFix/Engine/SunViews.h"
 #include "DrawcallLimitFix/Engine/FocusViews.h"
 #include "DrawcallLimitFix/Engine/ImportTimings.h"
+#include "DrawcallLimitFix/Engine/LodGates.h"
 #include "DrawcallLimitFix/Engine/LightSelection.h"
 #include "DrawcallLimitFix/Engine/PrimaryCull.h"
 #include "Features/Skylighting.h"
@@ -134,6 +135,9 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::PrimaryCull::Get().Install();
 	if (DCLF::SwitchEnabled(DCLF::Switch::Timeline))
 		DCLF::ImportTimings::Install();
+	// T6b5, CS_DCLF_LOD_GATES (on unless 0): the engine's LOD swaps gated on DCLF's claims (skyrim-engine-notes.md, "LOD swaps and their
+	// gates"). Shares the LOD drain's and the retirement's detours with the import timings.
+	DCLF::LodGates::Install([] { return globals::features::drawcallLimitFix.Running(); });
 	// DCLF's threads and its scene graph, before the first frame kicks a job (dclf-async-publication.md, "The design").
 	(void)DCLF::SceneScheduler::Graph();
 	Hooks::Install();
@@ -333,12 +337,16 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	{
 		// A frame the adopted snapshot does not cover - none yet, its recordings of the graph before the build point built, its draws not
 		// for the main resources, a stale one passed over - has no claims: the engine draws everything, and the next covered frame installs
-		// the whole set again.
+		// the whole set again. T6b5: likewise a publication built before a LOD gate's forced release (it may claim the outgoing blocks that
+		// release detached): withdrawn until one built for the frame's forced generation is installed.
 		DCLF::RenderThreadBudget::Part exchange(DCLF::RenderThreadBudget::Bucket::Exchange);
-		if (!draws.DecideCoverage() || !store.HasInstalled() || store.InstalledToggles() < toggleGeneration)
+		if (!draws.DecideCoverage() || !store.HasInstalled() || store.InstalledToggles() < toggleGeneration || store.InstalledLodForced() < store.FrameLodForced())
 			store.WithdrawSet();
 		else
 			store.InstallClaims();
+		// T6b5: the LOD gates the installed publications flipped, released before the culls (the incoming shown, the outgoing hidden, in the
+		// frame whose claims are post-swap; a withdrawn frame's too).
+		store.ReleaseGates();
 	}
 	// What the next builds ahead take from the frame.
 	draws.PostAheadContext();

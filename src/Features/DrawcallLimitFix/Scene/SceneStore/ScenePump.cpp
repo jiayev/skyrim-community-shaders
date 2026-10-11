@@ -289,7 +289,7 @@ namespace DCLF
 	{
 		return !publicationJoined.empty() || !publicationLeft.empty() || placementPlanReady || !placementPlansHeld.empty() || !shadingNamed.empty() ||
 		       !fadeSeedRequests.empty() || !treeSeedRequests.empty() || !switchesApplied.empty() || switchResync || !retiredImports.empty() ||
-		       !tables.actorWetnessChanges.empty() || !lightEntryChanges.empty();
+		       !tables.actorWetnessChanges.empty() || !lightEntryChanges.empty() || !gateFlipsMade.empty();
 	}
 
 	SceneStore::PublishKey SceneStore::CurrentPublishKey() const
@@ -311,8 +311,9 @@ namespace DCLF
 		// snapshot), the deltas the frame takes (plans, shading, seeds, switches, imports, wetness, light entries), the category nodes, the
 		// toggles its commit was made under, or an input the coordinator took for the frame. A pass that changed none publishes nothing: the
 		// snapshot of the last publication stands.
+		// T6b5: a LOD gate's forced release the last publication was not built for publishes too (the frames withdraw until one is).
 		const bool needed = !publishedKeyValid || publishForced || !setApply.empty() || setSnapshotDirty || nodeSetsDirty || DeltasPending() ||
-		                    !(CurrentPublishKey() == publishedKey);
+		                    sceneInputs.lodForcedGeneration != publishedLodForced || !(CurrentPublishKey() == publishedKey);
 		if (!needed)
 			++pumpStats.unchanged;
 		return needed;
@@ -323,6 +324,7 @@ namespace DCLF
 		publishedKey = CurrentPublishKey();
 		publishedKeyValid = true;
 		publishForced = false;
+		publishedLodForced = sceneInputs.lodForcedGeneration;
 	}
 
 	void SceneStore::ServeFrameRequests(bool a_running)
@@ -419,6 +421,9 @@ namespace DCLF
 			// T6b3e, CS_DCLF_RELEASE_GUARD: the engine's last releases on DCLF's threads (any is a defect).
 			if (const auto releases = ReleaseGuard::Report(); !releases.empty())
 				logger::info("{}", releases);
+			// T6b5: the LOD gates (opened, flipped, retired; the open ones' age and what they wait for).
+			if (const auto gates = GateReport(); !gates.empty())
+				logger::info("{}", gates);
 		}
 		const std::uint64_t wholePasses = ps.passes - ps.eventsOnly;
 		const double fullPasses = std::max<double>(1.0, static_cast<double>(wholePasses));

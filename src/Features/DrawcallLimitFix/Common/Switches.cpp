@@ -68,6 +68,8 @@ namespace DCLF
 			{ LodObjects, "CS_DCLF_LOD_OBJECTS", F, Reduced::UnlessOne, false, "0: object LOD stays native and untracked (live toggle's seed)" },
 			{ LodTerrain, "CS_DCLF_LOD_TERRAIN", F, Reduced::UnlessOne, false, "0: terrain LOD stays native (live toggle's seed)" },
 			{ LodTrees, "CS_DCLF_LOD_TREES", F, Reduced::UnlessOne, false, "0: tree LOD stays native (live toggle's seed)" },
+			{ LodGates, "CS_DCLF_LOD_GATES", F, Reduced::Zero, false,
+				"0: the engine's LOD swaps ungated (T6b5: by default an object or terrain LOD swap keeps the outgoing level shown, and the incoming hidden, until DCLF's claims cover the incoming)" },
 			{ Shadows, "CS_DCLF_SHADOWS", F, Reduced::UnlessOne, false, "0: DCLF does not draw the shadow views (live toggle's seed)" },
 			{ SunSkip, "CS_DCLF_SUN_SKIP", F, Reduced::UnlessOne, false, "0: the engine keeps culling and registering the sun's casters (live toggle's seed)" },
 			{ SunExclude, "CS_DCLF_SUN_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the sun's culls (live toggle's seed)" },

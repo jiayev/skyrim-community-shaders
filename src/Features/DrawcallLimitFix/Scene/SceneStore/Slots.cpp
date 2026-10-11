@@ -437,6 +437,9 @@ namespace DCLF
 			UnlistFadeDependent(it->first, it->second);
 			UnlistDependents(it->first, it->second, true);
 			UnlistFaceShape(it->first, it->second);
+			// T6b5: off its LOD gate (an outgoing block's geometries leave here, by their detach after the flip).
+			if (it->second.gate || it->second.gateHeldOut)
+				UntagGate(it->first, it->second);
 			sceneIdentity.Detach(a_geometry);
 			lodRanges.erase(a_geometry);
 			HandBack(std::move(it->second.geometry));

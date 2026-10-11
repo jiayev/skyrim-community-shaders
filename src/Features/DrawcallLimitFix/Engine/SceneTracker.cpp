@@ -1,5 +1,6 @@
 #include "SceneTracker.h"
 
+#include "LodGates.h"
 #include "PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Common/SceneWake.h"
 
@@ -218,6 +219,10 @@ namespace DCLF
 			else if (std::holds_alternative<SceneCapture::AlphaRecord>(a_event->update.record))
 				source = SceneWake::AlphaUpdate;
 			break;
+		case EventType::Gate:
+			// T6b5: always (its incoming blocks are withheld from the claims and hidden from the engine until the coordinator flips it).
+			source = SceneWake::Gate;
+			break;
 		}
 		// Only what wakes is stamped: the latencies measure what is meant to reach the frame at once, not what the frame's own pass takes.
 		if (source != SceneWake::Count) {
@@ -289,6 +294,29 @@ namespace DCLF
 		Push(event);
 	}
 
+	void SceneTracker::PushGate(std::uint64_t a_token, std::span<RE::NiAVObject* const> a_incoming, std::span<RE::NiAVObject* const> a_outgoing)
+	{
+		if (!a_token || stopped.load(std::memory_order_acquire))
+			return;
+		auto* event = new Event{};
+		event->type = EventType::Gate;
+		event->gateToken = a_token;
+		// The incoming roots pinned here, while the swap holds them (released with the batch, on the render thread: never on the scene
+		// work); the outgoing are named alone (the engine side holds their handles until their detach at a LOD drain after the flip).
+		event->gateIncoming.reserve(a_incoming.size());
+		event->pins.reserve(a_incoming.size());
+		for (auto* root : a_incoming)
+			if (root) {
+				event->gateIncoming.push_back(root);
+				event->pins.emplace_back(root);
+			}
+		event->gateOutgoing.reserve(a_outgoing.size());
+		for (auto* root : a_outgoing)
+			if (root)
+				event->gateOutgoing.push_back(root);
+		Push(event);
+	}
+
 	void SceneTracker::PushUpdate(SceneCapture::Update&& a_update, std::vector<RE::NiPointer<RE::NiRefObject>>&& a_pins)
 	{
 		if (!installed || stopped.load(std::memory_order_acquire))
@@ -348,6 +376,16 @@ namespace DCLF
 						stack.push_back(child.get());
 				}
 			}
+		}
+	}
+
+	namespace LodGates
+	{
+		void CaptureGate(std::uint64_t a_token, std::span<RE::NiAVObject* const> a_incoming, std::span<RE::NiAVObject* const> a_outgoing)
+		{
+			// The scene side of the gate (T6b5): an event on the swapping thread's stack, ordered after the attaches it follows; the
+			// coordinator opens the gate when it applies it (SceneStore::ApplyGateEvent).
+			SceneTracker::Get().PushGate(a_token, a_incoming, a_outgoing);
 		}
 	}
 }

@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace DCLF
@@ -25,6 +26,7 @@ namespace DCLF
 			Attached,
 			Detached,
 			Updated,  // step 6e F3b: a hook's values for the mirror (update), in the same order as the attaches and detaches
+			Gate,     // T6b5: a LOD swap's gate (LodGates::CaptureGate), after the incoming blocks' attaches on the swapping thread
 		};
 
 		struct Event
@@ -58,6 +60,11 @@ namespace DCLF
 			// publication and event-to-adoption latencies.
 			std::uint64_t stampNs = 0;
 			std::uint32_t stampFrame = 0;
+			// T6b5, a Gate's: its token (LodGates', from 1), the incoming roots (the blocks' nodes: keys, each held by a pin in `pins` until
+			// the batch is released on the render thread) and the outgoing roots (keys: attached and shown until the flip, held by the engine
+			// side's stolen handles).
+			std::uint64_t gateToken = 0;
+			std::vector<const void*> gateIncoming, gateOutgoing;
 		};
 
 		static SceneTracker& Get();
@@ -86,6 +93,11 @@ namespace DCLF
 		 * requests) onto the same stack, marked mirror-only (Event::mirrorOnly). The stack owns a_event from here.
 		 */
 		void PushCaptured(Event* a_event, bool a_fillOnly = false);
+		/**
+		 * @brief T6b5 (LodGates::CaptureGate): a LOD swap's gate, on the swapping thread under the terrain manager's lock, after the incoming
+		 * blocks' attaches (one stack with them: the gate is applied after their captures). The incoming roots are pinned by the event.
+		 */
+		void PushGate(std::uint64_t a_token, std::span<RE::NiAVObject* const> a_incoming, std::span<RE::NiAVObject* const> a_outgoing);
 
 		static void CollectGeometry(RE::NiAVObject* a_root, std::vector<RE::BSGeometry*>& a_out, std::vector<const void*>* a_nodes = nullptr);
 

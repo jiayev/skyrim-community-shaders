@@ -63,6 +63,23 @@ namespace DCLF
 		std::uint64_t Writes() const { return writes; }
 
 		/**
+		 * @brief T6b5: a LOD gate's incoming root (SceneStore::ApplyGateEvent; cleared at the gate's outcome or its root's detach). Its own
+		 * kHidden is the gate's - the engine side hides the block before its attach and vetoes the engine's shows until the flip - so the
+		 * scene's hidden test ignores that one bit (SceneStore::HiddenForWalk): the blocks are classified, written, bound and committed
+		 * while hidden. Kept beside the records, not in them: a capture replaces a record whole, and the parity compares records alone.
+		 */
+		void SetGated(const void* a_key, bool a_gated)
+		{
+			++writes;
+			if (a_gated)
+				gated.insert(a_key);
+			else
+				gated.erase(a_key);
+		}
+		bool Gated(const void* a_key) const { return !gated.empty() && gated.contains(a_key); }
+		std::size_t GatedCount() const { return gated.size(); }
+
+		/**
 		 * @brief The parity: the last probe's pending differences resolved by this batch's event keys (late or missed), then this
 		 * probe against the mirror (a difference whose object an event of the probe's batch named is evented, else pending).
 		 */
@@ -98,6 +115,7 @@ namespace DCLF
 		ankerl::unordered_dense::map<std::uintptr_t, std::vector<Recent>> recent;
 		std::uint64_t batch = 0;
 		std::uint64_t writes = 0;  // Writes()
+		KeySet gated;              // T6b5: SetGated
 		bool replaying = false;
 		std::uint64_t replayed = 0, stale = 0, superseded = 0;
 		const void* missedProperty = nullptr;
