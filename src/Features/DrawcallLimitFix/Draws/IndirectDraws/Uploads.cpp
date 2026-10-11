@@ -1,5 +1,6 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Internal.h"
+#	include "Features/TerrainBlending.h"
 
 #	include "Features/DrawcallLimitFix/Engine/SceneTracker.h"
 
@@ -251,10 +252,18 @@ namespace DCLF
 			frameTextureBindings = {};
 			frameTextureGeneration = textures.Generation();
 		}
+		// T7c1: Terrain Blending's mask (TerrainBlending.hlsli, t55), which its terrain's pixel stage reads, is that feature's terrain depth -
+		// bound by its replay after this epoch (RenderTerrainBlendingPasses), so named here rather than captured. By the colour epoch it
+		// holds the main depth as the Z-prepass left it (TerrainBlending::BlendPrepassDepths copies it there).
+		constexpr std::uint32_t kTerrainBlendingMaskRegister = 55;
+		const auto& terrainBlending = globals::features::terrainBlending;
+		auto* const terrainMask = TerrainBlendingDefersTerrain() ? terrainBlending.terrainDepth.depthSRV : nullptr;
 		for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters && !depthOnly; ++t) {
 			auto& held = frameTextureBindings[t];
 			// The character light's noise is the frame's view (FrameCapture::characterLightView), not a captured register.
-			auto* const view = t == kCharacterLightRegister ? a_store.GetFrameCapture().characterLightView : a_capture.psViews[t];
+			auto* const view = t == kCharacterLightRegister ? a_store.GetFrameCapture().characterLightView :
+			                   (t == kTerrainBlendingMaskRegister && terrainMask) ? terrainMask :
+			                                                                         a_capture.psViews[t];
 			if (!view) {
 				if (held.view)
 					held = {};
@@ -465,6 +474,8 @@ namespace DCLF
 			}
 			UploadFadeRoots(a_store.GetTables(), a_store.GetFrame(), inputs, logBase, buffers, uploads, PortalViews::Get().Encoded());
 			a_store.FadeRootsSent(buffers.fadeRootsHeld);
+			// T7b1 (CS_DCLF_ACCUMULATED_PARITY): the visibility events' count and the frame's readback slot.
+			ArmVisibilityReadback(a_store, buffers, uploads);
 			// Each root's portal program (its room's), when the roots or a room's children changed, or the graph (PortalViews::ProgramOf).
 			const auto& rootTables = a_store.GetTables();
 			auto& portals = PortalViews::Get();
@@ -512,6 +523,8 @@ namespace DCLF
 			decalWords = { a_payload.decalCount[0], a_payload.decalCount[1], 0u, 0u, a_payload.decalCount[2] };
 			latched(a_resources->count, decalWords.data(), 4 * sizeof(std::uint32_t), kCountDecalGroupWord * sizeof(std::uint32_t));
 			latched(a_resources->count, &decalWords[4], sizeof(std::uint32_t), kCountDecalLayerWord * sizeof(std::uint32_t));
+			// T7c1: the terrain groups' counts, which their draws append through (BuildDrawsCS).
+			latched(a_resources->count, kZeroCounts, kTerrainGroups * sizeof(std::uint32_t), kCountTerrainGroupWord * sizeof(std::uint32_t));
 		}
 		if (!ring)
 			UploadMainPayload(a_payload, *a_resources, uploads);
@@ -770,6 +783,20 @@ namespace DCLF
 			const auto treeHeight = PrimaryCull::Get().TreeHeightTest();
 			latch.treeHeight[0] = treeHeight[0];
 			latch.treeHeight[1] = treeHeight[1];
+			// T7c1: Terrain Blending's near test (TerrainBlending.cpp, its depth hook), with its eye as it took it at the depth pass's
+			// start, for the terrain group 1 draws' twin buckets (BuildDrawsCS, kBucketTerrainPair). None while it does not hold the terrain.
+			if (TerrainBlendingDefersTerrain()) {
+				const auto& terrainEye = terrainBlending.eyePosition;
+				latch.terrainNear[0] = terrainEye.x;
+				latch.terrainNear[1] = terrainEye.y;
+				latch.terrainNear[2] = terrainEye.z;
+				latch.terrainNear[3] = TerrainBlending::kTerrainDepthDistance;
+			}
+			std::copy(std::begin(latch.terrainNear), std::end(latch.terrainNear), terrainNearUpload.begin());
+		} else {
+			// T7c1: the terrain groups' ranges this shape records their draws over.
+			latch.terrainCapacity[0] = shape.terrainCapacity[0];
+			latch.terrainCapacity[1] = shape.terrainCapacity[1];
 		}
 		// Both segments: the states a LOD skin's level is read from (LodPartitions), the same for the depth and colour draws.
 		latch.fadeStatesIndex = a_resources->scene->FadeStatesReadIndex(frameNumber);

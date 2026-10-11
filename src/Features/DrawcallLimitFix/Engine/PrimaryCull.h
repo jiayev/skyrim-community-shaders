@@ -112,6 +112,15 @@ namespace DCLF
 		 * (NiCamera +0x184), for BuildDraws' fade test (kObjectFadeTest). Zero when the cut did not see a camera.
 		 */
 		std::array<float, 4> FadeEye() const { return fadeEye; }
+		/**
+		 * @brief T7b2, the main thread at Main::Update's entry (DrawcallLimitFix's hook; the safe point: the last frame's job cycle was
+		 * waited for, this one's not started, so no list cull, cell animation or animation job writes the flags): the stood-in roots'
+		 * and their geometry's kAccumulated written from DCLF's visibility (IndirectDraws::WriteAccumulated), every reader seeing it this
+		 * frame (skyrim-engine-notes.md, "T7b0"). a_running false: the writes are dropped.
+		 */
+		void AtUpdateEntry(bool a_running);
+		/** @brief Whether the cut stands in for a_root now (admitted, unmixed: SyncFadeOwnership's set). Render (main) thread. */
+		bool StoodIn(const void* a_root) const { return standInRoots.contains(a_root); }
 		/** @brief Whether a_node is an eligible entry's root of the cut's snapshot (the readback parity's description). */
 		bool IsEntry(const RE::NiAVObject* a_node) const { return cut.eligible.contains(a_node); }
 		/**
@@ -541,6 +550,13 @@ namespace DCLF
 		// the last applied one left every entry to the engine (their nodes are then seeded again).
 		std::vector<const RE::NiAVObject*> ownedFadeRoots;
 		bool fadeSkipped = false;
+		// T7b2: the roots the cut stands in for (ownedFadeRoots without engine-drawn parts), whose kAccumulated DCLF writes
+		// (AtUpdateEntry), and the stood-in list the <- ANIM RATE prediction is made from.
+		ankerl::unordered_dense::set<const void*> standInRoots;
+		std::vector<const void*> standInList;
+		// T7b2's camera cut test (PrepareFrame, the list processes' camera): the last frame's position and rotation.
+		std::array<float, 12> cutCamera{};
+		bool cutCameraKnown = false;
 		/** @brief SceneStore::SetFadeRootsOwned from the current snapshot's admitted fade entries. */
 		void SyncFadeOwnership();
 		/** @brief Cut::walk of entry a_e, from its members now (render thread, between the jobs). */

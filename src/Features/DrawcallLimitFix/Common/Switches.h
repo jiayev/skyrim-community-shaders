@@ -28,6 +28,7 @@ namespace DCLF
 		Fading,
 		LodCrossfade,
 		MtLand,
+		TbTerrain,
 		ProjectedUv,
 		SwitchNodes,
 		LodObjects,
@@ -65,6 +66,8 @@ namespace DCLF
 		SkylightParity,
 		FrameJoin,
 		FanoutParity,
+		AccumulatedParity,
+		RoomParity,
 
 		// Diagnostics: stats, shader debugging, and the probes of open investigations (dclf-open-defects.md).
 		Stats,
@@ -79,6 +82,7 @@ namespace DCLF
 		DrawCensus,
 		TreeLodAudit,
 		ReflectionCensus,
+		Census,
 		DeriveProbe,
 		SlotProbe,
 		DecalOrderProbe,

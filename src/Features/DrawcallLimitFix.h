@@ -168,6 +168,18 @@ private:
 		};
 
 		/**
+		 * @brief Main::Update's first call (AE 0x140645ea0 +0x3E, FUN_140cfd280: the thread stages' events reset), on the main thread
+		 * before the frame's job lists start (0x14064613f) and after the last frame's cycle was waited for (0x14064694d): T7b2's
+		 * kAccumulated writes (PrimaryCull::AtUpdateEntry), the one point every reader sees in the same frame (skyrim-engine-notes.md,
+		 * "T7b0").
+		 */
+		struct Main_Update_Entry
+		{
+			static void thunk(void* a_stages);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		/**
 		 * @brief BSShaderAccumulator::FinishAccumulatingPreResolveDepth (vfunc 0x2A): a shadow view's draw.
 		 * After the native draws of the view, DCLF's epoch culls the frame's casters and draws them into the
 		 * same slice (CS_DCLF_SHADOWS=1).

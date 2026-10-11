@@ -540,6 +540,10 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 
 	DCLFVertexObjectStatics();
 	VS_OUTPUT vsout = DCLFShade(input);
+	// T7c1: Terrain Blending's depth offset (Utility.hlsl, OFFSET_DEPTH) for a near terrain block's draw into the main depth, pushed per
+	// call in the word a shadow view's vertex layout takes (DrawPipelines.h, kZDrawPushOffsetDepth): 0 for every other Z-prepass call.
+	if (DCLFVertexLayout.x != 0)
+		vsout.Position.z += 10.0;
 	vsout.DCLFDraw = rows.zwxy;
 	vsout.DCLFDrawObject = DCLFObjectWord;
 	return vsout;

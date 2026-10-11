@@ -288,6 +288,43 @@ namespace DCLF
 		return std::exchange(residueClasses, {});
 	}
 
+	SceneStore::CensusVerdict SceneStore::CensusVerdictOf(const RE::BSGeometry* a_geometry) const
+	{
+		// The tracked entry by pointer (ClassifyResidue's): its verdict this pass - the joins' if they made one this pass, else the walk's
+		// (ReasonThisFrame, by the coordinator's frame) - then its record, residency and phases. Nothing of the geometry is read.
+		CensusVerdict out;
+		const auto it = tracked.find(const_cast<RE::BSGeometry*>(a_geometry));
+		if (it == tracked.end())
+			return out;
+		out.tracked = true;
+		const auto& entry = it->second;
+		out.reason = entry.accumulateReasonFrame == sceneFrame && entry.accumulateReason != Ineligible::None ? entry.accumulateReason : entry.candidateReason;
+		if (const std::int32_t slot = FindObject(a_geometry); slot >= 0) {
+			out.record = true;
+			out.resident = ResidentObject(slot);
+			out.phases = PhasesIn(tables, static_cast<std::uint32_t>(slot));
+		}
+		return out;
+	}
+
+	void SceneStore::AnswerCensus()
+	{
+		// T7c0 (CS_DCLF_CENSUS): the geometries the census saw the engine draw, each with the coordinator's verdict - what the render
+		// thread cannot read while the passes run beside the frame (GuardFrameAccess). The pins go back with the reply: the render thread
+		// lets go of them (engine references are never released on DCLF's threads). One request in flight (the census posts the next once
+		// it took this reply), so the reply slot is empty here.
+		auto request = censusRequestPosted.exchange(nullptr, std::memory_order_acq_rel);
+		if (!request)
+			return;
+		auto reply = std::make_shared<CensusReply>();
+		reply->sceneFrame = sceneFrame;
+		reply->verdicts.reserve(request->geometries.size());
+		for (const auto& geometry : request->geometries)
+			reply->verdicts.push_back(CensusVerdictOf(geometry.get()));
+		reply->geometries = std::move(request->geometries);
+		censusReplyPosted.store(std::move(reply), std::memory_order_release);
+	}
+
 	void SceneStore::CheckRegistrations()
 	{
 		ClassifyResidue();
@@ -1038,6 +1075,8 @@ namespace DCLF
 		stats.materialsAlive = static_cast<std::uint32_t>(tables.materialSlots.AliveCount());
 		stats.materialCacheEntries = static_cast<std::uint32_t>(tables.materialSlots.AliveCount());
 		TracyCZoneEnd(statsZone);
+		// T7c0: the census's question, after the joins (the verdicts and the residency this pass leaves). Only a census run posts one.
+		AnswerCensus();
 	}
 
 	void SceneStore::BindByMembership()
@@ -1263,6 +1302,10 @@ namespace DCLF
 			std::uint32_t rasterFlags = twoSided ? kRasterTwoSided : 0u;
 			if (descriptors.decalGroup)
 				rasterFlags |= PackDecalRasterFlags(descriptors.decalGroup, decalBiasMode[descriptors.decalGroup & 3], descriptors.decalBlendMode, descriptors.decalWriteMode);
+			// T7c1: a terrain group's state, as Terrain Blending's replay sets it: blend mode 1 and write mode 1 for the terrain, blending
+			// off and write mode 1 left for the no-blend meshes after it (Records.h, PackTerrainRasterFlags).
+			if (descriptors.terrainGroup)
+				rasterFlags |= PackTerrainRasterFlags(descriptors.terrainGroup, descriptors.terrainGroup == 1 ? 1u : 0u, 1u);
 			if (globals::features::extendedTranslucency.loaded)
 				rasterFlags |= ((ExtendedTranslucency::MaterialModel::DescriptorDisabled ^ TranslucencyModelOf(r.leaf)) & 7u) << kRasterTranslucencyShift;
 			// The geometry slots are the walk's (the joins resolve none: frozen until the merges are done).
@@ -1276,6 +1319,7 @@ namespace DCLF
 			                (alphaTest ? static_cast<std::uint32_t>(alpha->threshold) << kObjectAlphaThresholdShift : 0u) |
 			                (alphaTest && alphaBlending ? kObjectAlphaBlended : 0u) |
 			                (descriptors.decalGroup ? kObjectDecal | (descriptors.decalGroup << kObjectDecalGroupShift) : 0u) |
+			                (descriptors.terrainGroup << kObjectTerrainGroupShift) |
 			                ((propertyRecord->flags & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u) |
 			                (BeastRaceFace(*propertyRecord, r.leaf) ? kObjectBeastRace : 0u);
 		}
@@ -1332,6 +1376,7 @@ namespace DCLF
 			{ "descriptors", ld.technique == rd.technique && ld.pass == rd.pass && ld.vertex == rd.vertex && ld.pixel == rd.pixel && ld.rawVertex == rd.rawVertex &&
 			                     ld.rawPixel == rd.rawPixel && ld.derivedPass == rd.derivedPass && ld.rejectedTechnique == rd.rejectedTechnique &&
 			                     ld.decalGroup == rd.decalGroup && ld.decalBlendMode == rd.decalBlendMode && ld.decalWriteMode == rd.decalWriteMode &&
+			                     ld.terrainGroup == rd.terrainGroup &&
 			                     ld.projectedUV == rd.projectedUV },
 			{ "key", l.key == r.key },
 			{ "staticFlags", l.staticFlags == r.staticFlags },

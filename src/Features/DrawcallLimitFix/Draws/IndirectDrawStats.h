@@ -69,6 +69,10 @@ namespace DCLF
 		// flagged inputs and how many missed every cascade, against the CPU's count over the same inputs and
 		// planes (the same test in C++).
 		std::uint32_t sunTested = 0, sunMissed = 0, sunCpuTested = 0, sunCpuMissed = 0;
+		// T7c1, sampled likewise: the depth segment's first phase's terrain group 1 inputs and those within Terrain Blending's near
+		// distance, against the CPU's test over the same inputs (CS_DCLF_SET_PARITY: terrainCpu).
+		std::uint32_t terrainNearTested = 0, terrainNear = 0, terrainCpuTested = 0, terrainCpuNear = 0;
+		bool terrainCpu = false;
 		// The fade test (kObjectFadeTest), sampled likewise: resident inputs the depth segment's first phase found in the
 		// frustum under a fade root, and those it dropped past their fade-out distance.
 		std::uint32_t fadeTested = 0, fadeHidden = 0;

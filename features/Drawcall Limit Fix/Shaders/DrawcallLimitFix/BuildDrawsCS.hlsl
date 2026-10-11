@@ -242,6 +242,11 @@ static uint BucketMapOffset;
 static uint ViewBits;
 // A focus view (BuildDrawsLatch::focusRoot): its target's fade root slot + 1, which the input's root word must name. 0: no test.
 static uint FocusRoot;
+// T7c1, the depth segment while Terrain Blending holds the terrain (BuildDrawsLatch::terrainNear): its eye, and in w its near distance;
+// w 0: no terrain test.
+static float4 TerrainNear;
+// T7c1, the colour segment: the terrain groups' ranges past PhaseTwoBase (BuildDrawsLatch::terrainCapacity), group 2's after group 1's.
+static uint2 TerrainCapacity;
 
 // The placement row's rows the culling reads (LightingConstants.h, BindlessPlacement): the world bound, the sun entry's sphere,
 // the fade node's centre.
@@ -301,6 +306,8 @@ void LoadLatch()
 	const bool ring = payload.x != 0;
 	ViewBits = payload.w;
 	FocusRoot = latch.Load(LatchOffset + 288);
+	TerrainNear = asfloat(latch.Load4(LatchOffset + 304));
+	TerrainCapacity = latch.Load2(LatchOffset + 296);
 	InputsBuffer = ring ? payload.y : InputsIndex;
 	GeometriesBuffer = ring ? payload.z : GeometriesIndex;
 	MaterialRowsLo = ring ? rows.x : MaterialRowsAddressLo;
@@ -478,6 +485,14 @@ static const uint kObjectVolumetricOnly = 1u << 23;
 // that overlapping decals are drawn in the engine's order every frame.
 static const uint kObjectDecal = 1u << 7;
 static const uint kObjectDecalGroupShift = 20;
+// T7c1: the same bits without kObjectDecal are a terrain group (Records.h, ObjectTerrainGroup): 1 Terrain Blending's terrain, 2 the
+// meshes it redraws after it. The colour segment appends each group's draws to its own range (in phase 2's, which the colour segment
+// does not otherwise use: GpuLayouts.h, kTerrainGroups), drawn after the opaque and decal groups; the depth segment sends
+// a group 1 draw whose bound reaches within Terrain Blending's near distance to its bucket's twin (kBucketTerrainPair).
+uint TerrainGroup(uint a_flags) { return (a_flags & kObjectDecal) != 0 ? 0 : (a_flags >> kObjectDecalGroupShift) & 3; }
+static const uint kBucketTerrainPair = 0x80000000u;
+// TerrainBlending.cpp's test, exactly: a block is in its terrain depth unless its bound's nearest point is past the distance.
+bool TerrainNearOf(float4 a_bound) { return distance(a_bound.xyz, TerrainNear.xyz) - a_bound.w <= TerrainNear.w; }
 // Set by the epoch rather than by the object: this input carries a usable bindings record, so a sequence
 // may be written for it. The depth segment submits an input for EVERY candidate so that the culling covers
 // them all and the published visibility is complete, but it only builds records for the ones it is allowed
@@ -521,6 +536,11 @@ static const uint kCountSunMissed = 96;
 // The fade test: inputs under a fade root phase 1 found in the frustum, and those it dropped.
 static const uint kCountFadeTested = 100;
 static const uint kCountFadeHidden = 104;
+// T7c1: the terrain groups' draws (their draws' counts, zeroed by the colour commit), then phase 1's terrain group 1 inputs and those
+// it found near (GpuLayouts.h, kCountTerrainGroupWord).
+static const uint kCountTerrainGroup1 = 112;
+static const uint kCountTerrainNearTested = 120;
+static const uint kCountTerrainNear = 124;
 
 // The frustum stamp's word: the stamp in the low 28 bits (the latch's), and whether the fade test dropped the object in
 // that frame. The visibility feedback compares the low bits (PrimaryCull::ConsumeFeedback).
@@ -746,6 +766,14 @@ bool Occluded(float3 boundCentre, float boundRadius)
 		return;
 	}
 
+	// T7c1: the <- TB NEAR observer's tally - phase 1's terrain group 1 inputs, culled or not, and those within the near distance - which
+	// the CPU repeats over the same inputs (IndirectDraws::Impl::ReadCullCounters).
+	if (phase == kPhaseOne && TerrainNear.w > 0.0 && TerrainGroup(input.w) == 1) {
+		count.InterlockedAdd(kCountTerrainNearTested, 1, scratch);
+		if (TerrainNearOf(ObjectRow(objectIndex, kObjectBoundRow)))
+			count.InterlockedAdd(kCountTerrainNear, 1, scratch);
+	}
+
 	// Decals: single-phase, fixed slot. Every decal input writes its slot, culled or not, so nothing a
 	// previous frame left there can be executed: a culled or undrawable decal writes the same sequence
 	// with an index count of zero, which the indirect draw fetches and skips.
@@ -904,6 +932,16 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	}
 	if (pipeline == kNoPipeline || bucketKey == kNoPipeline)
 		return;
+	// T7c1: a terrain group 1 slot's bucket and its twin (PlanZBuckets): a near block's draws go to the twin, which MainOpaquePass
+	// draws into Terrain Blending's terrain depth and, offset, into the main depth; a far block's to the bucket, the main depth alone -
+	// as Terrain Blending's depth hook draws them.
+	if ((bucketKey & kBucketTerrainPair) != 0) {
+		bucketKey &= ~kBucketTerrainPair;
+		if (TerrainNear.w > 0.0 && TerrainNearOf(ObjectRow(objectIndex, kObjectBoundRow)))
+			bucketKey += 1;
+	}
+	// T7c1: the colour segment's terrain groups append to their own ranges, outside the sort (TerrainGroup).
+	const uint terrainGroup = phase == kPhaseColour && keyWord == 0 ? TerrainGroup(input.w) : 0;
 	// Phase 2's sequences are few and draw from their own range; they are not sorted.
 	const bool secondRange = phase == kPhaseTwo;
 	const bool sorted = SortCountsIndex != 0 && !secondRange;
@@ -961,6 +999,13 @@ bool Occluded(float3 boundCentre, float boundRadius)
 					StoreShadowSequence(sequences, bucket.x + slot, slot, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
 						firstIndex, poolFirsts.Load(geometryIndex * 4));
 				}
+			} else if (terrainGroup != 0) {
+				// A terrain group's range (GpuLayouts.h, kTerrainGroups), which holds every draw its group's slots can produce.
+				count.InterlockedAdd(kCountTerrainGroup1 + (terrainGroup - 1) * 4, 1, slot);
+				if (slot >= (terrainGroup == 1 ? TerrainCapacity.x : TerrainCapacity.y))
+					return;
+				StoreSequence(sequences, PhaseTwoBase + (terrainGroup == 1 ? 0 : TerrainCapacity.x) + slot, pipeline, rows, drawWord, vertexBuffer,
+					secondStream, indexBuffer, indexBuffer.w, firstIndex);
 			} else {
 				count.InterlockedAdd(secondRange ? kCountDrawnPhaseTwo : kCountDrawn, 1, slot);
 				if (slot >= PhaseTwoBase)

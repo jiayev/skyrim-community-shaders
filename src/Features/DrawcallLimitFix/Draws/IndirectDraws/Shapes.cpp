@@ -22,12 +22,19 @@ namespace DCLF
 					continue;
 				const std::uint32_t group = groups[entry.setIndex];
 				auto& bucket = groupBucket[group];
+				// T7c1: a terrain group 1 slot's group (its depth pipeline's key holds no other: DrawPipelines.cpp, ZPipelineKey) has a twin
+				// bucket right after its own, as large, for its near blocks (BuildDrawsCS, kBucketTerrainPair; MainOpaquePass).
+				const bool terrain = RasterTerrainGroup(keys[p].rasterFlags) == 1;
 				if (bucket == kNoBucket) {
 					bucket = a_out.Buckets();
 					a_out.calls.push_back({ bucket, 0u, 0u, a_indirect.zPipelines[group] });
+					if (terrain)
+						a_out.calls.push_back({ bucket + 1, 0u, 0u, a_indirect.zPipelines[group], true });
 				}
 				a_out.calls[bucket].capacity += a_resources.zBucketCapacity[p];
-				a_out.map[p] = bucket;
+				if (terrain)
+					a_out.calls[bucket + 1].capacity += a_resources.zBucketCapacity[p];
+				a_out.map[p] = terrain ? (bucket | kBucketTerrainPair) : bucket;
 			}
 			const std::uint32_t buckets = a_out.Buckets();
 			a_out.table.assign(std::size_t(buckets) * 4, 0u);
@@ -83,6 +90,7 @@ namespace DCLF
 			if (!a_depthOnly) {
 				add(a_resources.count.get(), 4 * sizeof(std::uint32_t), kCountDecalGroupWord * sizeof(std::uint32_t));
 				add(a_resources.count.get(), sizeof(std::uint32_t), kCountDecalLayerWord * sizeof(std::uint32_t));
+				add(a_resources.count.get(), kTerrainGroups * sizeof(std::uint32_t), kCountTerrainGroupWord * sizeof(std::uint32_t));
 			}
 			if (a_depthOnly && a_resources.pool && a_buckets)
 				for (const auto& counts : a_resources.zBucketCounts)
@@ -112,6 +120,7 @@ namespace DCLF
 			const MainSizing& sizing = a_revision ? Growths::Get().RevisionSizing<MainSizing>(a_resources) : a_resources;
 			in.sequenceDraws = sizing.sequenceDraws;
 			in.sequenceDecals = sizing.sequenceDecals;
+			in.terrainCapacity = sizing.terrainCapacity;
 			in.materialRows = a_revision ? a_resources.materialRows.RevisionAddress() : a_resources.materialRows.address;
 			in.pipelineRows = a_revision ? a_resources.pipelineRows.RevisionAddress() : a_resources.pipelineRows.address;
 			in.cullMode = a_cullMode;
@@ -132,6 +141,9 @@ namespace DCLF
 			frame->drawCapacity = a_in.sequenceDraws;
 			for (std::uint32_t group = 0; group < kDecalGroups; ++group)
 				frame->decalCapacity[group] = a_in.depthOnly ? 0u : a_in.sequenceDecals;
+			// T7c1: the terrain groups' ranges, the colour segment's alone (BuildDrawsCS appends them there).
+			if (!a_in.depthOnly)
+				frame->terrainCapacity = a_in.terrainCapacity;
 			frame->width = a_in.viewport.width;
 			frame->height = a_in.viewport.height;
 			frame->minDepth = a_in.viewport.minDepth;
@@ -162,7 +174,7 @@ namespace DCLF
 				if (a_differs)
 					out |= 1u << a_field;
 			};
-			note(kShapeCapacity, a.drawCapacity != b.drawCapacity || a.decalCapacity != b.decalCapacity);
+			note(kShapeCapacity, a.drawCapacity != b.drawCapacity || a.decalCapacity != b.decalCapacity || a.terrainCapacity != b.terrainCapacity);
 			note(kShapeSequences, a.sequenceDraws != b.sequenceDraws || a.sequenceDecals != b.sequenceDecals);
 			note(kShapeRows, a.materialRows != b.materialRows || a.pipelineRows != b.pipelineRows);
 			note(kShapeViewport, a.width != b.width || a.height != b.height || a.minDepth != b.minDepth || a.maxDepth != b.maxDepth);

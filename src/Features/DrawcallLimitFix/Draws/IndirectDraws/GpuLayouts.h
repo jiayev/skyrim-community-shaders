@@ -85,7 +85,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kNoSkip = ~0u;
 	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested; a shadow view's [3] outside the sun's entry, [4] small, [5]
 	// under a fading root, [16] of its caster class.
-	constexpr std::uint32_t kCountWords = 28;
+	constexpr std::uint32_t kCountWords = 32;
 	/** @brief A count buffer's worth of zeros: what an epoch uploads to reset the counters it appends through. */
 	inline constexpr std::uint32_t kZeroCounts[kCountWords] = {};
 	// The sun's bits on the GPU: the colour dispatch's inputs with kObjectSunTest, and those that missed every cascade.
@@ -100,6 +100,12 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kCountDecalsCulledWord = 21;
 	constexpr std::uint32_t kCountDecalsTestedWord = 22;
 	constexpr std::uint32_t kCountDecalLayerWord = 27;  // group 3 (the multi-index layers)
+	// T7c1: the terrain groups' draws (Records.h, ObjectTerrainGroup), which the colour segment appends to their ranges and their
+	// draws read (zeroed by the colour commit), and the depth segment's first phase's group 1 inputs and those it found near (the
+	// <- TB NEAR observer's). Byte offsets must match BuildDrawsCS.hlsl.
+	constexpr std::uint32_t kCountTerrainGroupWord = 28;  // group 1 at word 28, group 2 at word 29
+	constexpr std::uint32_t kCountTerrainNearTestedWord = 30;
+	constexpr std::uint32_t kCountTerrainNearWord = 31;
 	// Byte offsets of the count words the indirect draws read; they must match BuildDrawsCS.hlsl.
 	constexpr std::uint64_t kCountDrawnPhaseTwoBytes = 68;
 	constexpr const char* kBuildDrawsShader = "DrawcallLimitFix/BuildDrawsCS.hlsl";
@@ -238,6 +244,42 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kFadeStateConstantWords = sizeof(FadeStateConstants) / 4;
 	constexpr std::uint32_t kFadeStateGroup = 64;
 	constexpr std::uint32_t kInitialFadeRoots = 4096;
+	// VisibilityEventsCS.hlsl (T7b1, CS_DCLF_ACCUMULATED_PARITY): the main camera's per-root and per-object visibility as change
+	// events. Its constants: the buffers' indices, the event list's capacity, and the threads (the root slots, then the object slots).
+	constexpr const char* kVisibilityEventsShader = "DrawcallLimitFix/VisibilityEventsCS.hlsl";
+	struct VisibilityEventsConstants
+	{
+		std::uint32_t rootsIndex = 0, statesIndex = 0, frameIndex = 0, frustumIndex = 0;
+		std::uint32_t rootReportedIndex = 0, objectReportedIndex = 0, eventsIndex = 0, eventCapacity = 0;
+		std::uint32_t rootSlots = 0, objectSlots = 0;
+		std::uint32_t padding[2]{};
+	};
+	static_assert(sizeof(VisibilityEventsConstants) == 48);
+	constexpr std::uint32_t kVisibilityEventsConstantWords = sizeof(VisibilityEventsConstants) / 4;
+	constexpr std::uint32_t kVisibilityEventsGroup = 64;
+	/**
+	 * @brief One event of the list (VisibilityEventsCS.hlsl): a slot whose verdict changed from the one last reported. A root's
+	 * generation is its listing's (FadeRootStatic::generation); an object's is 0 (the slot's occupant is the frame's tables').
+	 */
+	struct VisibilityEvent
+	{
+		std::uint32_t slot;
+		std::uint32_t generation;
+		std::uint32_t kind;  // kVisibilityKind*
+		std::uint32_t bits;  // kVisibilityBit*
+	};
+	static_assert(sizeof(VisibilityEvent) == 16);
+	constexpr std::uint32_t kVisibilityKindRoot = 0, kVisibilityKindObject = 1;
+	constexpr std::uint32_t kVisibilityBitVisible = 1u << 0;   // a root: InView (its kAccumulated); an object: stamped, not fade-hidden
+	constexpr std::uint32_t kVisibilityBitInMargin = 1u << 1;  // reserved: InView against widened planes (not implemented; T7b2 uses the last two frames and listing defaults)
+	constexpr std::uint32_t kVisibilityBitVerdict = 1u << 2;   // a root: FadeStateCS updated its listing this frame (else no DCLF verdict)
+	// The list's header: the count appended (past the capacity: what the list grows to), the scene frame; two words spare.
+	constexpr std::uint32_t kVisibilityEventHeaderWords = 4;
+	constexpr std::uint32_t kInitialVisibilityEvents = 4096;
+	inline constexpr std::uint64_t VisibilityEventBytes(std::uint32_t a_events)
+	{
+		return (kVisibilityEventHeaderWords + std::uint64_t(a_events) * 4) * sizeof(std::uint32_t);
+	}
 	// HzbCS.hlsl's constants (Internal.h, HzbConstants): the source, its valid and padded extents, the levels written and
 	// their descriptors.
 	constexpr std::uint32_t kHzbConstantWords = 24;
@@ -320,6 +362,17 @@ namespace DCLF::Draws
 	constexpr std::uint32_t DecalCountWord(std::uint32_t a_range) { return a_range < 2 ? kCountDecalGroupWord + a_range : kCountDecalLayerWord; }
 	/** @brief The main sequence buffer's slots for a_draws per draw range and a_decals per decal group. */
 	constexpr std::uint64_t SequenceSlots(std::uint32_t a_draws, std::uint32_t a_decals) { return 2ull * a_draws + std::uint64_t(kDecalGroups) * a_decals; }
+	/*
+	 * T7c1: the terrain groups' colour draws (Records.h, ObjectTerrainGroup), after the decal groups' opaque ranges and before the
+	 * blended one, each appended through its own count word. They take phase 2's range, which the colour segment does not use
+	 * (the depth segment's draws from it are done by then): group 1 from its start, group 2 after group 1's capacity
+	 * (MainSizing::terrainCapacity: every draw the group's pipeline slots can produce, grown to a power of two past it, and the two
+	 * together within the range: ReserveMainSequences). BuildDraws reads the capacities from its latch (terrainCapacity).
+	 */
+	constexpr std::uint32_t kTerrainGroups = 2;
+	// BuildDrawsLatch::bucketMapOffset's entries: a terrain group 1 slot's bucket (PlanZBuckets), whose twin, the next bucket, takes the
+	// slot's near blocks (BuildDrawsLatch::terrainNear).
+	constexpr std::uint32_t kBucketTerrainPair = 1u << 31;
 
 #pragma pack(push, 4)
 	struct GeometryDraw
@@ -462,11 +515,18 @@ namespace DCLF::Draws
 		// T6b1a: the frame's fade seeds (FrameValues::FadeSeedsIndex: StructuredBuffer<FadeRootStatic>, FadeSeedRow), the frame's ring
 		// buffer, so the latch's: a root's node values and state seed its first update (FadeStateCS) and the builds' state until it.
 		std::uint32_t fadeSeedsIndex;
-		std::uint32_t pad[2];
+		// T7c1, the colour segment: the terrain groups' ranges past phase 2's base (MainSizing::terrainCapacity, the shape's), group 2's
+		// starting at group 1's capacity. 0 elsewhere.
+		std::uint32_t terrainCapacity[2];
+		// T7c1, the depth segment while Terrain Blending holds the terrain: its eye (TerrainBlending::eyePosition) and its near distance
+		// (TerrainBlending::kTerrainDepthDistance) in w. A terrain group 1 draw whose bound reaches within it goes to its slot's twin
+		// bucket (kBucketTerrainPair), drawn into Terrain Blending's terrain depth and, offset, into the main depth (MainOpaquePass). w 0:
+		// no terrain test.
+		float terrainNear[4];
 	};
 	// BuildDrawsLatch::focusRoot for a target that is no listed root: no input's root word is its - 1.
 	constexpr std::uint32_t kFocusRootNone = 0xFFFFFFFFu;
-	static_assert(sizeof(BuildDrawsLatch) == 304 && offsetof(BuildDrawsLatch, focusRoot) == 288 && offsetof(BuildDrawsLatch, fadeSeedsIndex) == 292 && offsetof(BuildDrawsLatch, payloadValid) == 256 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
+	static_assert(sizeof(BuildDrawsLatch) == 320 && offsetof(BuildDrawsLatch, terrainNear) == 304 && offsetof(BuildDrawsLatch, terrainCapacity) == 296 && offsetof(BuildDrawsLatch, focusRoot) == 288 && offsetof(BuildDrawsLatch, fadeSeedsIndex) == 292 && offsetof(BuildDrawsLatch, payloadValid) == 256 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
 				  offsetof(BuildDrawsLatch, viewProj) == 32 && offsetof(BuildDrawsLatch, cullPlanes) == 96 &&
 				  offsetof(BuildDrawsLatch, pipelineMapOffset) == 192 && offsetof(BuildDrawsLatch, sunState) == 196 &&
 				  offsetof(BuildDrawsLatch, treeHeight) == 200 && offsetof(BuildDrawsLatch, fadeEye) == 208 &&

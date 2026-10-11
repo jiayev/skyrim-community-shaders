@@ -1,6 +1,7 @@
 #include "PortalViews.h"
 
 #include "EngineAccess.h"
+#include "RoomVisibility.h"
 #include "SunViews.h"
 #include "Features/DrawcallLimitFix/Scene/Records.h"
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
@@ -1304,11 +1305,11 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.PortalViews");
 		frame.valid = false;
 		frame.sceneFrame = SceneStore::Get().GetFrame();
-		// Whatever this frame builds (nothing: no programs), the words FadeStateCS, BuildDraws and the checks read.
+		// Whatever this frame builds (nothing: no programs), the words FadeStateCS, BuildDraws and the checks read, and the VisibleSet.
 		struct EncodeOnExit
 		{
 			PortalViews& self;
-			~EncodeOnExit() { self.Encode(self.encoded); }
+			~EncodeOnExit() { self.AfterBuild(); }
 		} encodeOnExit{ *this };
 		const auto* sceneGraph = Global<const std::byte*>(kWorldSceneGraph);
 		const auto* cam = sceneGraph ? At<const std::byte*>(sceneGraph, 0x128) : nullptr;
@@ -1903,6 +1904,109 @@ namespace DCLF
 		static const std::uintptr_t roomVtable = RE::VTABLE_BSMultiBoundRoom[0].address();
 		if (a_parent && *reinterpret_cast<const std::uintptr_t*>(a_parent) == roomVtable)
 			structure.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	// ---- The VisibleSet (T7b3) ----
+
+	PortalViews::VisibleSet::Answer PortalViews::VisibleSet::Visible(const void* a_key, bool a_previous) const
+	{
+		// Main::IsRoomVisible (0x140649f20): true for no node, for a node that is neither a room nor a shared node, and with no
+		// entry; else the entry's map holds it, or (a shared node) its portal's entrance or exit room (+0x140 -> +0x118, +0x120).
+		if (!a_key)
+			return { true, kNoKey };
+		if (!graph)
+			return { true, kOther };
+		const Keys& keys = a_previous ? previous : current;
+		if (graph->rooms.contains(a_key))
+			return { keys.rooms.contains(a_key), kRoom };
+		const auto it = graph->shared.find(a_key);
+		if (it == graph->shared.end())
+			return { true, kOther };
+		const auto& [a, b] = it->second;
+		return { keys.shared.contains(a_key) || (a && keys.rooms.contains(a)) || (b && keys.rooms.contains(b)), kShared };
+	}
+
+	PortalViews::VisibleSetHold::VisibleSetHold()
+	{
+		// Counted before the load (both sequentially consistent): a publish that replaces this set then sees the count.
+		auto& self = PortalViews::Get();
+		self.visibleReaders.fetch_add(1, std::memory_order_seq_cst);
+		set = self.visibleSet.load(std::memory_order_seq_cst);
+	}
+
+	PortalViews::VisibleSetHold::~VisibleSetHold()
+	{
+		PortalViews::Get().visibleReaders.fetch_sub(1, std::memory_order_release);
+	}
+
+	void PortalViews::AfterBuild()
+	{
+		Encode(encoded);
+		if (!publishVisible.load(std::memory_order_acquire))
+			return;
+		PublishVisible();
+		if (++visibleReports >= 300) {
+			visibleReports = 0;
+			RoomVisibility::Report();
+		}
+	}
+
+	void PortalViews::PublishVisible()
+	{
+		ZoneScopedN("CS.DCLF.PortalViews.VisibleSet");
+		// No walk this frame (no graph or camera): no graph, so every key answers true.
+		const void* graph = frame.valid ? frame.graph : nullptr;
+		if (graph) {
+			// The graph's rooms and portals by count: a cell's attach or detach changes them without a new graph.
+			const auto* rooms = At<const void* const*>(graph, kGraphRooms);
+			const std::uint32_t roomCount = rooms ? At<std::uint32_t>(graph, kGraphRoomCount) : 0;
+			std::uint64_t signature = (static_cast<std::uint64_t>(roomCount) << 32) ^ ListCount(graph, kGraphPortals);
+			for (std::uint32_t i = 0; i < roomCount; ++i)
+				if (rooms[i])
+					signature = signature * 0x100000001B3ull ^ ListCount(rooms[i], kRoomPortals);
+			if (!graphKeys || graphKeys->graph != graph || graphKeys->signature != signature) {
+				auto keys = std::make_shared<VisibleSet::GraphKeys>();
+				keys->graph = graph;
+				keys->signature = signature;
+				const auto addPortal = [&](const void* a_portal) {
+					if (const void* shared = a_portal ? At<const void*>(a_portal, kPortalShared) : nullptr)
+						keys->shared.try_emplace(shared, std::array<const void*, 2>{ At<const void*>(a_portal, kPortalRoomA), At<const void*>(a_portal, kPortalRoomB) });
+				};
+				ForList(graph, kGraphPortals, addPortal);
+				for (std::uint32_t i = 0; i < roomCount; ++i)
+					if (rooms[i]) {
+						keys->rooms.insert(rooms[i]);
+						ForList(rooms[i], kRoomPortals, addPortal);
+					}
+				graphKeys = std::move(keys);
+			}
+		}
+		auto set = std::make_shared<VisibleSet>();
+		set->generation = visibleGeneration.load(std::memory_order_relaxed) + 1;
+		set->sceneFrame = frame.sceneFrame;
+		if (visibleOwned)
+			set->previous = visibleOwned->current;
+		if (graph) {
+			set->graph = graphKeys;
+			// The map after the frame's lists: the walk's rooms and crossed portals' shared nodes (Traverse adds both), then every
+			// portal of each room it popped (DrawWorld_BuildSceneLists over multiBoundRoomAccumList: BuildSharedCompoundFrustum).
+			set->current.rooms.insert(frame.roomKeys.begin(), frame.roomKeys.end());
+			set->current.shared.insert(crossed.begin(), crossed.end());
+			for (const void* room : frame.accumulated)
+				ForList(room, kRoomPortals, [&](const void* a_portal) {
+					if (const void* shared = a_portal ? At<const void*>(a_portal, kPortalShared) : nullptr)
+						set->current.shared.insert(shared);
+				});
+		}
+		const std::uint64_t generation = set->generation;
+		if (visibleOwned)
+			visibleRetired.push_back(std::move(visibleOwned));
+		visibleOwned = std::move(set);
+		visibleSet.store(visibleOwned.get(), std::memory_order_seq_cst);
+		visibleGeneration.store(generation, std::memory_order_release);
+		// A reader counted now may hold any retired set; with none, nothing can.
+		if (visibleReaders.load(std::memory_order_seq_cst) == 0)
+			visibleRetired.clear();
 	}
 
 	void PortalViews::Report()

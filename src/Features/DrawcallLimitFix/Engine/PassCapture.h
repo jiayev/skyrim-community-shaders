@@ -36,6 +36,9 @@ namespace DCLF
 	 * built on the `gJobList_SceneListAccumCulling` job list, so this is called concurrently. Entries go
 	 * into a fixed-capacity buffer with an atomic cursor; the render thread drains it once per frame and
 	 * is the only reader. Overflow is counted and makes the frame fall back to the accumulator walk.
+	 *
+	 * Under CS_DCLF_CENSUS every hook also notes each pass it hands on to the engine, of any shader, for T7a's census
+	 * (RegistrationCensus.h); without it the hooks test one static flag.
 	 */
 	class PassCapture
 	{
@@ -95,6 +98,12 @@ namespace DCLF
 		/** @brief Render thread, BeginSceneFrame: whether the frame's faces are DCLF's at all (IndirectDraws::DecideCoverage). */
 		void SetReflectionCovered(bool a_covered) { reflectionCovered.store(a_covered, std::memory_order_release); }
 		bool ReflectionTreeLodOwned() const { return reflectionTreeLodOwned.load(std::memory_order_acquire); }
+		/** @brief Whether a_batch is one of the reflection faces' batch renderers (SetReflectionCamera): the census's view (T7a). */
+		bool IsReflectionRenderer(const RE::BSBatchRenderer* a_batch) const
+		{
+			const auto renderers = std::atomic_load(&reflectionRenderers);
+			return renderers && renderers->contains(a_batch);
+		}
 		/**
 		 * @brief The faces' residue parity (T4): render thread, at an update's start, the cube camera's roots (ReflectionFaces::RootBits)
 		 * to watch this update, which keeps them, 0 for none. While set, a pass registered into a face's renderer and not withheld - a
@@ -279,6 +288,8 @@ namespace DCLF
 		struct Hook;
 		friend struct Hook;
 		void Record(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint32_t a_technique, bool a_fading, bool a_withheld);
+		/** @brief CS_DCLF_CENSUS (T7a): a pass the hook hands on to the engine, noted for the census (RegistrationCensus::Note). */
+		void NoteKept(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint8_t a_site, bool a_fading, std::uint8_t a_occlusionPhase = 0) const;
 		bool Withhold(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, bool a_fading);
 	};
 }

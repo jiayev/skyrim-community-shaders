@@ -26,7 +26,7 @@ namespace DCLF
 		AlphaBlend,          // transparency
 		Decal,               // decal batches
 		ProjectedUV,         // snow/moss projection
-		UnsupportedParent,   // under a BSOrderedNode
+		UnsupportedParent,   // a blended leaf under a BSOrderedNode (its opaque children are eligible: T7c0)
 		Hidden,              // app-culled or hidden this frame (per frame)
 		Fading,              // fade node not fully faded in (per frame)
 		Actor,               // part of an actor's 3D (carried items; interiors keep actors in the rooms)
@@ -35,7 +35,7 @@ namespace DCLF
 		SkinShape,           // skinned, but not a shape the skinned path takes: dismember instance, several partitions, too many bones
 		Billboard,           // under an NiBillboardNode: the main cull turns it to the camera
 		Switch,              // under an NiSwitchNode that does not select it this frame (or CS_DCLF_SWITCH_NODES off)
-		TerrainNoBlend,      // Terrain Blending redraws it after its terrain (kNoTransparencyMultiSample)
+		TerrainNoBlend,      // Terrain Blending redraws it after its terrain (kNoTransparencyMultiSample): CS_DCLF_TB_TERRAIN off, or a decal
 		MultiIndex,          // BSMultiIndexTriShape otherwise eligible: its main pass is the engine's (the snow layer), its shadow a tri-shape's
 		Count
 	};
@@ -83,6 +83,10 @@ namespace DCLF
 		std::uint32_t decalGroup = 0;
 		std::uint32_t decalBlendMode = 0;
 		std::uint32_t decalWriteMode = 0;
+		// T7c1 (CS_DCLF_TB_TERRAIN, while Terrain Blending holds the terrain): 0, or the terrain group (Records.h,
+		// ObjectTerrainGroup) - 1 for a kMultiTextureLandscape block, 2 for a kNoTransparencyMultiSample mesh - as that
+		// feature's hook sorts the passes it holds (TerrainBlending.cpp, BSBatchRenderer__RenderPassImmediately).
+		std::uint32_t terrainGroup = 0;
 		// The pass descriptor's ProjectedUV bit (CS_DCLF_PROJECTED_UV): the object needs the per-object
 		// texture matrix and pixel parameters, and the projected textures on its pipeline.
 		bool projectedUV = false;
@@ -322,9 +326,10 @@ namespace DCLF
 	TreeWindFrame SampleTreeWindFrame();
 
 	/**
-	 * @brief The MTLand and MTLandLODBlend techniques (terrain) are eligible when the mtLand toggle is on - unless
-	 * Terrain Blending is on and DCLF is drawing into the frame, because that feature intercepts every
-	 * terrain pass and redraws it blended with its own depth state, which an opaque owned draw would break.
+	 * @brief The MTLand and MTLandLODBlend techniques (terrain) are eligible when the mtLand toggle is on - and, while
+	 * Terrain Blending holds the terrain (it intercepts every terrain pass and redraws it blended with its own depth
+	 * state, which an opaque draw would break), when the tbTerrain toggle is on too (T7c1): DCLF then draws it as that
+	 * feature does, in terrain group 1 (LightingDescriptors::terrainGroup).
 	 */
 	bool MtLandEnabled();
 	/** @brief Whether Terrain Blending draws its terrain after the opaque pass, into a frame DCLF draws in (or this thread's snapshot). */

@@ -1452,6 +1452,13 @@ resident-draw, set and fade parity; motion m28/m29).
     light's paraboloids or an occlusion map that come and go find their inputs built). y33, m65: in-frame builds only in the first
     frames (none built yet), set parity 0, every parity 0 but FrameValues' known 2 rows, the render-thread waits' one site the
     accumulate join at Present (0.001-0.12 ms/frame). AsyncWorker now runs only the scene lane (F).
+  - *T7b1: the visibility readback the same way* (2026-10-11, `CS_DCLF_ACCUMULATED_PARITY` only; drawcall-limit-fix.md, "T7b1:
+    visibility events"). The decode is a task on DCLF's executor, posted at the frame's start when none runs and never joined.
+    DrainAsync waits for it. The persistent depth epoch replays its recordings, so the copy is fixed per frame slot. The
+    depth commit harvests the slot's last execution when the slot comes round again: the host has waited for it already,
+    so DCLF never waits. Batches are heap allocations that wait in frame order; none is dropped. Only the render thread
+    lets go of their tables. `FadeEventReadbackPass` reads in `Record` and so misses replayed frames; T7b6 moves it onto
+    this scheme.
 - **F: the scene lane reads no engine memory** (decided 2026-10-07). The scene lane is joined at Present (and at the frame's start)
   because it reads the engine's scene graph live, and runs engine code on it, while the engine's next update writes and frees that
   memory (the m59 crash in RefreshCategoryNodes; the hidden flips after the drain). The lane takes no read leases: every engine field
@@ -2369,7 +2376,7 @@ resident-draw, set and fade parity; motion m28/m29).
       gate: adoption p95 at most 1 frame in motion), the
       set's leave causes against w122's at the same report, the mirror parity's missed count, and the budget's `scene exchange` against
       `scene captures`.
-  - *T6b3e: the fan-out* (2026-10-10; written, not built or run yet; e0-e4, e5 left). The walk's rounds and the joins are an evaluation
+  - *T6b3e: the fan-out* (2026-10-10; e0-e4 built and run w134-w151; e5 written 2026-10-11, not built or run yet). The walk's rounds and the joins are an evaluation
     (pure, on the preparation pool for a burst) and a merge (in order, on the scene lane); the per-frame part of the placement plan is
     the frame-input pass's alone. Shape first: the evaluations are fanned out, the merges kept as the serial walk wrote, latency not tuned.
     - **e0, the plan's roots once a frame input** (`PublishPlacementPlan`). `QueueRoots` (every moving root's move events, every move
@@ -2490,16 +2497,37 @@ resident-draw, set and fade parity; motion m28/m29).
       threads (marked at their start). The coordinator's report: `[DCLF] release guard (T6b3e, CS_DCLF_RELEASE_GUARD): engine objects'
       last releases on DCLF's threads: scene lane N, executor/pool N (N without a class name) <- OK` (or `<- LANE ENGINE RELEASE; first:
       class X, last: class Y`). An observer; classes with their own DeleteThis are not seen.
-    - **Left: e5** (`AddSubtree` by attach root): the attach loop (Events.cpp) and `RefreshCategoryNodes`' loop with a prepare over the
-      events (`MirrorCategoryNode`, `MirrorSubtree`, and per geometry its actor owner, room node, face head, `MirrorSunEntry`, the light
-      entry's mirror walk and sub-index type, counted into chunk sinks) and the merge in event order (`pendingSubtrees`, capture requests,
-      `AddGeometry`'s writes - `tracked.try_emplace` sets slot order - identity, pins, held properties, dependents, own root,
-      `SampleLodRanges`, `pendingEvaluation`); serial under the mirror-read parity; from 16 events.
+    - **e5, `AddSubtree` by root** (Classification.cpp, Events.cpp). `AddSubtree` is a prepare and a merge. `PrepareSubtree` (const, any
+      thread under a ShardScope) does `FindCategoryNode` and `MirrorSubtree` (with the mirror-read parity's live subtree check, which only
+      runs on the lane) and, for each geometry, `PrepareGeometry`. That reads the geometry's record: whether it is mirrored, its actor
+      owner, `RoomNodeOf`, a face shape's head and whether it is a sub-index shape. Outside the mirror-read parity it also reads
+      `MirrorSunEntry` and LightEntryOf's actor root. The result is a `SubtreePrep` of `GeometryPrep`s holding keys only: no reference is
+      made or dropped and no engine memory is read. `MergeSubtree` runs on the lane in event order. With no category node it does the
+      pending retry and capture request (the category walk) or the dropped count (a retry). Otherwise it calls `AddGeometry` (now given
+      the `GeometryPrep`) for each geometry. That call does the pin or refusal, `tracked.try_emplace` (slot order), the identity,
+      `HoldProperties`, the face head's pin, the capture request, `UnlistDependents`, the sun entry (the prepare's value, the read counted
+      here as ResolveSunEntry counted it; `ResolveSunEntry` itself under the mirror-read parity), `OwnRoot`, the root and light
+      dependents (the prepare's actor root, else the sun entry when it is no category node's own; `LightEntryOf` under the parity),
+      `SampleLodRanges`, `pendingEvaluation` and T6b5's gate tagging, unchanged. **Ordering:** `ApplyMirrorEvents` applies the whole
+      batch's mirror before any subtree is tracked, `RefreshCategoryNodes` stores the category nodes and portal roots before its walks,
+      and the detaches are applied after the attach loop. So the serial code already walked every attach against one frozen state, and an
+      attach that a later detach or attach of the same root follows got what its prepare now gets. Event order matters only to the merges
+      (insertion order, identities, dependents lists), and they keep it. No serial segments are needed. Witnesses (asserted): `mirror.Writes()`,
+      and the category-node and portal-root counts, are unchanged from the prepares to the last merge. Three sites: `RefreshCategoryNodes`
+      (its roots listed in walk order, then `AddSubtrees`), the retry list (`AddSubtrees`), and the attach loop (all prepared first, each
+      merged at its event, so the sun candidates' marks stay interleaved as before). `CS_DCLF_FANOUT`: 0 runs `AddSubtree` at each root
+      (the reference); 1 prepares everything then merges, on the lane; 2 uses the pool (`ParallelFor`, grain `kSubtreeGrain` = 4 roots,
+      from `kSubtreeFanoutMin` = 16; `FanoutMode` gained the threshold argument). Under the mirror-read parity, and inline, the modes are
+      0 and 1 as before. Mirror reads go to one `MirrorReadStats` per chunk (begin / 4), merged in chunk order (`MergeMirrorReads`, split
+      out of `MergeCounters`). `CS_DCLF_FANOUT_PARITY` (mode 2, the parity passes) prepares again on the lane and compares field by field
+      (`SubtreeDifference`, as an observer). New nested scene parts: `subtrees (fan-out)` and `subtrees merge`.
     - **Log lines.** `[DCLF] scene fan-out (T6b3e, CS_DCLF_FANOUT=N, N pool workers): walk rounds N (N on the pool), entries N (N on the
-      pool, N chunks), light-path entries written in full at the merge N; join rounds N (N on the pool), joins N` and, under the parity,
-      `; parity (CS_DCLF_FANOUT_PARITY): N rounds, N entries, N differ <- OK` (or `<- FANOUT; first: walk round from N, entry N 'name':
-      field`, `bind queue, element N: field`, `joins, element N: field`), with the pump's lines. The scene pass CPU line's parts gain the
-      four nested ones.
+      pool, N chunks), light-path entries written in full at the merge N; join rounds N (N on the pool), joins N; subtree rounds N (N on
+      the pool), roots N (N on the pool), geometries N, prepare N ms, merge N ms` (e5: every `AddSubtrees` call and attach batch, the
+      times in modes 1 and 2) and, under the parity, `; parity (CS_DCLF_FANOUT_PARITY): N rounds, N entries, N differ <- OK` (or
+      `<- FANOUT; first: walk round from N, entry N 'name': field`, `bind queue, element N: field`, `joins, element N: field`, `subtrees
+      (attach events|category walk|retry), root N 0x...: field`). The pump's lines follow. The scene pass CPU line's parts gain the six
+      nested ones.
     - **Risks.** A read the contract missed (an evaluation reading what a merge writes) is a race in mode 2 alone: `CS_DCLF_FANOUT=1` and
       0 are the A/B, the fan-out parity compares evaluations (not merges), and the walk and set parities judge the result. `ModifyShaderLookup`
       and the features' settings (Terrain Blending's excepted, snapshotted) are read from the pool as the lane read them. The classify
@@ -2511,6 +2539,10 @@ resident-draw, set and fade parity; motion m28/m29).
       pass CPU line at a cell load; the pass ms with `CS_DCLF_WORKERS` 1, 2, 4 and 8 at the same load. The walk and persistent parities
       (and the capture parity) run the pass inline on the render thread, where nothing fans out (mode 1): under them the decomposition is
       checked, the pool is not; the pool's own check is the fan-out parity with the set parity, which keep the pass on the lane.
+      e5: the `subtree rounds` and `roots ... on the pool` counts at a cell load and after a load screen's rescan (thousands of roots in
+      one `RefreshCategoryNodes`); `subtrees (fan-out)` against `subtrees merge`; the tracked count, `attach/detach` and `category nodes`
+      the same as in a `CS_DCLF_FANOUT=0` run; the mirror reads line's `subtree`, `sun entry` and `light entry` counts unchanged against
+      mode 0.
   - *T6b5, the scene side: objects ready before the engine shows its LOD swaps* (2026-10-11; written, not built or run yet; the engine
     side, `Engine/LodGates.cpp`, by its own change). The interface is `Engine/LodGates.h`. The engine side hides a swap's incoming blocks
     before their attach and vetoes the engine's shows, keeps the outgoing attached and shown, and calls `LodGates::CaptureGate` after the
@@ -2558,6 +2590,29 @@ resident-draw, set and fade parity; motion m28/m29).
         tags cleared. The outgoing stay held out.
       - A forced outcome on an open gate also reclassifies the incoming and re-commits them with their own phases.
       - The engine side's forced releases call `WakeSceneGate()` after posting.
+    - **Reused held blocks** (2026-10-11; written, not built or run yet). The engine attaches a held outgoing block again when a swap
+      back finds its cached handle; it stays attached as the node's current block and no detach ever erases its entries, so a hold-out
+      left on it kept its geometries drawn natively for good (the LOD residue rise, w154).
+      - Engine side: a held block's `handoff` is raced by compare-exchange (seq_cst) between the reattach (`OnAttach`, `kOwned` ->
+        `kReattached`) and the flip (`Flip`, `kOwned` -> `kFlipHidden`, before its hide). The reattach that wins leaves the block shown
+        (the flip skips it) and posts a kept notice; one that loses (the flip hid it) makes it the swapping gate's incoming, as before.
+        At the release, a handle its node references again posts a kept notice too, unless a later gate holds the block pending
+        (that gate's tags take it over); a block hidden by the flip and current again with no gate pending (an attach no thunk saw)
+        is counted, its visibility left to the engine's own update.
+      - The notice is `LodGates::Outcome::kept` (the block's root keys, with the gate that held it) on the outcome stack, posted after
+        the gate's event, so in order with the retirements. `ApplyGateKept` takes the roots off the gate's outgoing (an open gate's
+        flip no longer holds them out) and, in one mirror walk per notice, untags each tracked geometry under them that the gate tags
+        as outgoing or that a retirement left held out with no gate; the held-out ones' slots go to `gateQueued` for the next commit.
+        A later gate's tag is that gate's. Idempotent (a reattach and its release may both post).
+      - Forced and superseded gates, audited: an open gate forced reclassifies and re-commits its incoming and never held out its
+        outgoing; a gate flipped on the scene side but forced on the engine side (its flip never ran) leaves its outgoing held out
+        only until their detach erases them (the forced release detaches), a kept notice (reused), or a later gate's tag (Supersede's
+        move into the swapping gate retags them as that gate's outgoing, which clears the hold-out).
+    - **Initial loads** (written, not built or run yet). `BGSQueued{Object,Terrain}InitialLoad::Func2` attach a node's first level
+      where nothing above it is loaded (skyrim-engine-notes.md, "LOD swaps and their gates"): at a worldspace's load, and in play when
+      an area comes into LOD range. Outside a load screen (`DAT_14315b6a0`) their attaches are gated like the swaps' (pre-hidden,
+      vetoed) and the gate, with no outgoing, is emitted right after the attach. Under a load screen they pass through: its last LOD
+      update is a full rebuild, which flushes every gate before that drain, and DCLF withdraws there.
     - **Forced generation.** `BeginFrame` reads `LodGates::ForcedGeneration()` once a frame into `FrameInputs::lodForcedGeneration`. The
       coordinator stamps each publication with the generation of the inputs its pass took before its drains (`ScenePublication::lodForcedGeneration`).
       A generation the last publication was not built for forces one (`PublicationNeeded`). `BeginSceneFrame` withdraws while
@@ -2573,7 +2628,10 @@ resident-draw, set and fade parity; motion m28/m29).
         frames; request to release ms; checked N: ...`, followed by `LodGates::TakeReport` once a report interval.
       - Residue stage `shown with no gate` (`kStageUngated`, `CS_DCLF_TIMELINE`): a LOD residue geometry no gate ever tagged that is
         hidden-stale, unrecorded, unbound or waiting.
-    - **To watch in a run:** gates flip, so the blockers drain and the oldest open gate stays small; `<- GATE HOLE` and `<- GATE
+    - **To watch in a run:** the engine line's "N reattached before their flip, N kept notices" and the coordinator's "reused
+      blocks: N kept notices, N geometries released from their hold-out" track the engine's "N reused", and "held out now" falls to
+      near 0 between swaps; "N reused still hidden by the flip with no gate pending" at 0; "N initial loads" opening in motion and
+      flipping like the swaps; gates flip, so the blockers drain and the oldest open gate stays small; `<- GATE HOLE` and `<- GATE
       COVERAGE` at 0 under the set parity; the `shown with no gate` stage (the show paths the gates miss); a blocker class that never
       drains. A binding that needs the engine's own registration of a hidden block would show as "not bound", and the gate would hold
       until it is forced.

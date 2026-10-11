@@ -352,7 +352,7 @@ namespace DCLF
 		// Before the tracker's stack is drained (CollectEvents): every outcome taken here was posted after its gate's events were pushed.
 		if (!LodGates::Enabled() && lodGates.empty())
 			return;
-		LodGates::DrainOutcomes([this](const LodGates::Outcome& a_outcome) { gateOutcomesHeld.push_back(GateOutcome{ a_outcome.token, a_outcome.forced }); });
+		LodGates::DrainOutcomes([this](const LodGates::Outcome& a_outcome) { gateOutcomesHeld.push_back(GateOutcome{ a_outcome.token, a_outcome.forced, a_outcome.kept }); });
 	}
 
 	void SceneStore::ApplyGateOutcomes(bool a_applied)
@@ -361,6 +361,11 @@ namespace DCLF
 		if (!a_applied || gateOutcomesHeld.empty())
 			return;
 		for (const auto& outcome : gateOutcomesHeld) {
+			// A kept notice (in order with the retirements: its gate's flip outcome may come before it or after it).
+			if (outcome.kept[0]) {
+				ApplyGateKept(outcome.token, outcome.kept);
+				continue;
+			}
 			if (!lodGates.contains(outcome.token)) {
 				++gateStats.unknownOutcomes;
 				continue;
@@ -419,10 +424,54 @@ namespace DCLF
 		lodGates.erase(it);
 	}
 
+	void SceneStore::ApplyGateKept(std::uint64_t a_token, const std::array<const void*, 2>& a_roots)
+	{
+		// The engine reused a held outgoing block: it stays attached as its node's current block, drawn by the engine while DCLF holds it
+		// out, and no detach will ever erase its entries. Its gate may still be open (reattached before the flip: the flip must not hold it
+		// out), flipped, or retired already (the flip's outcome came first: the hold-out stays on entries with no gate).
+		++gateStats.keptNotices;
+		const auto gate = lodGates.find(a_token);
+		std::vector<std::pair<RE::BSGeometry*, Ineligible>> found;
+		for (const void* root : a_roots) {
+			if (!root)
+				continue;
+			if (const auto at = gateOfRoot.find(root); at != gateOfRoot.end() && at->second.token == a_token && at->second.side == kGateOutgoing) {
+				gateOfRoot.erase(at);
+				if (gate != lodGates.end())
+					std::erase(gate->second.outgoing, root);
+			}
+			// One walk of the mirror per notice (the gate's own tag walk, TagGateRoot): a root the mirror lost was detached, its entries erased.
+			found.clear();
+			bool lacking = false;
+			MirrorSubtree(root, Ineligible::None, found, lacking);
+			for (const auto& [geometry, reason] : found) {
+				const auto it = tracked.find(geometry);
+				if (it == tracked.end())
+					continue;
+				auto& entry = it->second;
+				// This gate's outgoing tag, or a hold-out its retirement left (no gate tags it); a later gate's tag is that gate's.
+				const bool ours = entry.gate == a_token && entry.gateSide == kGateOutgoing;
+				if (!ours && !(entry.gate == 0 && entry.gateHeldOut))
+					continue;
+				const bool heldOut = entry.gateHeldOut;
+				UntagGate(it->first, entry);
+				if (!heldOut) {
+					++gateStats.keptUntagged;
+					continue;
+				}
+				// Held out by the flip (0 applied to its slots): committed again with its own phases.
+				++gateStats.keptCleared;
+				for (const std::uint32_t slot : { entry.slot, entry.layerSlot })
+					if (slot != kNoObjectSlot)
+						gateQueued.push_back(slot);
+			}
+		}
+	}
+
 	std::string SceneStore::GateReport()
 	{
 		auto& s = gateStats;
-		if (!s.opened && !s.retiredFlipped && !s.retiredForced && lodGates.empty() && !gateHeldOutCount && !s.unknownOutcomes)
+		if (!s.opened && !s.retiredFlipped && !s.retiredForced && lodGates.empty() && !gateHeldOutCount && !s.unknownOutcomes && !s.keptNotices)
 			return {};
 		// The open gates: their oldest request, and what their pending incoming geometries wait for (the blockers).
 		const std::uint64_t now = GateNowNs();
@@ -472,7 +521,9 @@ namespace DCLF
 			unmirrored, unclassified, noRecord, unbound, waiting.empty() ? "-" : waiting, partial);
 		if (noIncoming)
 			text += fmt::format("; {} open gates lost every incoming root (waiting for a forced release)", noIncoming);
-		text += fmt::format("; {} flips deferred for an incoming record not published yet", s.structureDeferred);
+		text += fmt::format("; {} flips deferred for an incoming record not published yet; reused blocks: {} kept notices, {} geometries released from their "
+							"hold-out (committed again), {} outgoing tags dropped before their flip",
+			s.structureDeferred, s.keptNotices, s.keptCleared, s.keptUntagged);
 		if (s.publishHoles)
 			text += fmt::format("; {} flipped incoming geometries not claimed by the flip's own publication, first {} <- GATE HOLE (publication)", s.publishHoles,
 				s.firstPublishHole);

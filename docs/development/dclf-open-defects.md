@@ -47,6 +47,32 @@ the image does not change. It is still a parity gap.
 **Fix:** build opaque pipelines from the engine's blend state for their write mode, as decal pipelines
 already do (`DrawPipelines::ReadEngineState`).
 
+## Stood-in animated references that never fade freeze (found by T7b0, 2026-10-11; fixed by T7b2, pending validation)
+
+`SyncFadeOwnership` (`Engine/PrimaryCull.cpp` ~773-790) clears kAccumulated (bit 26) on the roots DCLF stands in for, and nothing
+sets it again while they are stood in. `FUN_1402cff60` (`UpdateAnimationJob`'s and the managed nodes' gate, on `ref->Get3D()`)
+then takes its "not accumulated" path (`skyrim-engine-notes.md`, "T7b0"):
+
+-   **Roots that never fade** (ignore-fade set at attach, zero radius, or bit 29): the gate returns false, `UpdateAnimation` and
+    the managed-node update stop, and the object freezes in its last pose while it is admitted (non-actor, non-tree references in
+    the cell's animated array: windmill sails, water wheels, flags, Dwemer machinery - examples, not confirmed against flags).
+-   **Fading roots:** the engine runs `FUN_14147a160` on the node from job threads twice a frame; with `+0x13C` no longer
+    refreshed the fade snaps to its end, written over DCLF's write-back (the `AnimatedFade` hook sees it).
+
+Fix: T7b2 (kAccumulated written by DCLF from its GPU visibility, at Main::Update's entry, in place of the clear;
+`drawcall-limit-fix.md`, "T7b2"). The clear is removed, and the tree clock stays off DCLF's trees through the tree list removal
+(`TreeAnimation::SetOwned`). It is built but not run in game. To validate: `CS_DCLF_ACCUMULATED_PARITY=1`. `<- ANIM RATE` must
+show 0 differ, never-fading stood-in calls rejected only when written out of view, and the never-fading against fading counts. A
+fading root DCLF writes out of view still runs `FUN_14147a160` from the gate over DCLF's write-back (T7b4, `<- FADE DOUBLE`).
+
+## The fade write-back reads its events only on frames that record a revision (found by T7b1, 2026-10-11)
+
+`FadeEventReadbackPass` (`Draws/IndirectDraws/Passes.cpp`) reads its buffer in `Record`. The depth epoch is revision-driven
+(each ring slot recorded once per revision and replayed: `extern/OpenRenderGraph/docs/persistent-epochs.md`), so on replayed frames
+no fade events are read back and the write-back sees only the recording frames' events (T7b1's visibility readback had the same
+flaw: 59 of 300 frames in motion, none in interiors). Fix: T7b6, the fade events moved onto the visibility readback's scheme (a
+fixed per-frame-slot copy, harvested when the slot is armed again).
+
 ## Parity issues deferred while the scene pipeline's structure lands (T6b, 2026-10-11)
 
 Found in validation runs and left for a cleanup pass once the structure is in place (plan `hazy-percolating-canyon.md`).
@@ -54,9 +80,18 @@ Found in validation runs and left for a cleanup pass once the structure is in pl
 -   **Reflection residue under the LOD roots rose with the LOD gates (T6b5).** Baseline w150: mostly 0 a window (max 18);
     w154: 17-83 in every window, almost all "bound, not a reflection member" ('Land' under 'chunk', 'obj'/'objsnow'). Suspected:
     outgoing blocks the engine reuses (a held handle attached again as a node's current block: "23 reused" a window) stay
-    `gateHeldOut` and are drawn natively; the scene report's "held out now" stays at 6-22. Unconfirmed; the fix is an event when a
-    held block is reattached or kept at release (Outcome) that makes it a member again. Also check that forced and superseded
-    gates leave nothing withheld. Blocks T6b6's gate (residue 0).
+    `gateHeldOut` and are drawn natively; the scene report's "held out now" stays at 6-22. The fix is written (2026-10-11, not built
+    or run yet): a kept notice (`LodGates::Outcome::kept`) at a reattach before the flip and at a release that finds the handle
+    reused, which `ApplyGateKept` turns into members again; forced and superseded gates audited (dclf-async-publication.md, T6b5).
+    To confirm: "held out now" near 0 between swaps, the residue back to the w150 baseline. Blocks T6b6's gate (residue 0).
+-   **T7a census: member passes drawn by the engine (`<- DEFECT`).** w159: 506-7,793 a window, all in the sun cascades
+    (first: 'leaves', 'Block (1, 0)'). Async mode judges membership from the frame's set, so this may be the census reading the
+    set's phases against the cascade (shadow members by phase); confirm before treating it as a withholding gap.
+-   **T7b1 `<- ACCUMULATED DIFFER`** (w159): on compared frames, roots the engine alone sets are effect and untracked roots
+    ('FXAmbWaterfallSalmon01.nif') and geometry the engine alone sets is mostly stale under a root the engine failed; 'Emerald'
+    is DCLF's alone every frame. (The readback's missing batches are structural and being fixed.)
+-   **T7b3 room parity** compared no rooms or shared nodes in the interiors run (every call a non-room parent): needs an interior
+    with portals (Dragonsreach was in w160; check the run reached it).
 -   **LOD gates' known effects of a hold:** both terrain levels' LOD water registered during a hold; a held block's segments
     are not updated; the map's hide-all is handled by flushing. Not measured visually.
 -   **Gate coverage:** "neither level shown" at release is the engine's own hide of LOD under the loaded cells

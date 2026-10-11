@@ -174,6 +174,9 @@ namespace DCLF
 			std::uint32_t vertexBytes = 0, pixelBytes = 0;
 			std::uint32_t cull = 0, depthWrite = 0, depthFunc = 0;
 			std::uint32_t depthBias = 0, depthBiasClamp = 0, slopeScaledDepthBias = 0;  // the floats' bits
+			// T7c1: 1 for terrain group 1 (Records.h, RasterTerrainGroup), whose bucket has a twin for its near blocks (PlanZBuckets):
+			// such a group holds no other slot.
+			std::uint32_t terrainNear = 0, padding = 0;
 
 			bool operator==(const ZPipelineKey&) const = default;
 		};
@@ -1211,6 +1214,12 @@ namespace DCLF
 			// multi-index layer (group 3, the engine's group 2: depth mode 3) writes its depth from its colour draw, after its
 			// host is shaded, as the engine does: no depth variant of it is drawn (the decal depth pass is group 1's alone).
 			const std::uint32_t decalGroup = a_state.valid ? RasterDecalGroup(a_key.rasterFlags) : 0u;
+			// T7c1: a terrain group's key carries the engine's blend for its modes (Records.h, PackTerrainRasterFlags) and nothing of
+			// a decal's depth: its depth variant is an opaque one, without bias, and its colour variant tests as Terrain Blending's
+			// replay does - group 1 (the terrain) LESS_EQUAL with depth writes (TerrainBlending::terrainDepthStencilState), group 2
+			// (the meshes after it) EQUAL.
+			const std::uint32_t terrainGroup = RasterTerrainGroup(a_key.rasterFlags);
+			const bool engineDepth = a_state.valid && terrainGroup == 0;
 			for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
 				const bool depthOnly = variant == kDepthVariant;
 				rhi::SubobjRaster raster{};
@@ -1219,7 +1228,7 @@ namespace DCLF
 				// integer DepthBias goes through as the constant factor: the main depth is D24S8, for which
 				// Vulkan's default representation is the least representable value of the format, which is
 				// exactly what D3D11 (and DXVK, which forces it for UNORM formats) means by it.
-				if (a_state.valid && (!depthOnly || decalGroup == 1)) {
+				if (engineDepth && (!depthOnly || decalGroup == 1)) {
 					raster.rs.depthBias = a_state.depthBias;
 					raster.rs.depthBiasClamp = a_state.depthBiasClamp;
 					raster.rs.slopeScaledDepthBias = a_state.slopeScaledDepthBias;
@@ -1234,9 +1243,9 @@ namespace DCLF
 				// stored depth is whatever lies behind it, so LESS_EQUAL would pass those fragments and run the full
 				// lighting shader before they discard; EQUAL rejects them. A decal (a key with engine state) keeps
 				// LESS_EQUAL: it draws with a depth bias over the surface beneath, which EQUAL never passes.
-				depth.ds.depthWrite = depthOnly ? decalGroup != 2 : decalGroup == 3;
-				depth.ds.depthFunc = depthOnly ? (a_state.valid ? rhi::CompareOp::LessEqual : rhi::CompareOp::Less) :
-				                                 (a_state.valid ? rhi::CompareOp::LessEqual : rhi::CompareOp::Equal);
+				depth.ds.depthWrite = depthOnly ? decalGroup != 2 : (decalGroup == 3 || terrainGroup == 1);
+				depth.ds.depthFunc = depthOnly ? (engineDepth ? rhi::CompareOp::LessEqual : rhi::CompareOp::Less) :
+				                                 ((engineDepth || terrainGroup == 1) ? rhi::CompareOp::LessEqual : rhi::CompareOp::Equal);
 				rhi::SubobjBlend blend{};
 				rhi::SubobjRTVs targets{};
 				if (!depthOnly) {
@@ -1272,6 +1281,7 @@ namespace DCLF
 				zKey.depthBias = std::bit_cast<std::uint32_t>(static_cast<float>(raster.rs.depthBias));
 				zKey.depthBiasClamp = std::bit_cast<std::uint32_t>(raster.rs.depthBiasClamp);
 				zKey.slopeScaledDepthBias = std::bit_cast<std::uint32_t>(raster.rs.slopeScaledDepthBias);
+				zKey.terrainNear = terrainGroup == 1 ? 1u : 0u;
 				const rhi::SubobjLayout zLayout{ a_zLayout };
 				const rhi::SubobjShader pulledVertexShader{ rhi::ShaderStage::Vertex,
 					{ a_program->pulledVertex.data(), static_cast<std::uint32_t>(a_program->pulledVertex.size()) }, "main" };

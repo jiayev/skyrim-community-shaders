@@ -50,6 +50,10 @@ namespace DCLF::LodGates
 			kObjectDowngradeRetire = 0x513671,   // ...: FUN_140510c20(child, 2), once per child
 			kTerrainDowngradeAttach = 0x512f55,  // BGSQueuedTerrainDowngrade::Func2: FUN_140509550(parent block)
 			kTerrainDowngradeRetire = 0x512fb1,  // ...: FUN_140510c20(child, 1), once per child
+			// The InitialLoad Func2s (vtables 0x1418690d8 objects, 0x141869030 terrain; queued by FUN_140513ea0 / FUN_1405139b0 for an
+			// unloaded node with no loaded block above it): the node's own block attached, nothing retired (a gate with no outgoing).
+			kObjectInitialAttach = 0x513789,   // BGSQueuedObjectInitialLoad::Func2 (0x140513740): FUN_1404fda90(node's block)
+			kTerrainInitialAttach = 0x513091,  // BGSQueuedTerrainInitialLoad::Func2 (0x140513080): FUN_140509550(item's block)
 			// Forced releases at call sites: FUN_14050e430's early return with the LOD roots hidden (a tail `jmp` to FUN_140509950),
 			// and its full rebuild FUN_14050f790(manager, root, .., 1).
 			kRootsHiddenReturn = 0x50e4e4,
@@ -71,6 +75,7 @@ namespace DCLF::LodGates
 			kLodVisibleTest = 0x512160,  // FUN_140512160(node, cell, objects): the update's show test (the coverage observer's)
 			// Data.
 			kManagerLock = 0x315b8c8,  // DAT_14315b8c8: the terrain manager's recursive BSSpinLock, held around the drain
+			kLoadScreen = 0x315b6a0,   // DAT_14315b6a0: the load screen up (FUN_1401a1150's open sets it; its close runs the LOD's full update, then clears it)
 			kTlsIndex = 0x35f0878,     // the module's TLS index: +0x768 in its block is the memory context id FUN_140510a10 sets to 0x55
 		};
 
@@ -80,7 +85,7 @@ namespace DCLF::LodGates
 			std::array<std::uint8_t, 5> bytes;
 		};
 		// Read from the binary (Ghidra, AE 1.6.1170): each a rel32 `call` (`jmp` for the early return) to the function named above.
-		constexpr std::array<CallSite, 10> kCallSites{ {
+		constexpr std::array<CallSite, 12> kCallSites{ {
 			{ kObjectUpgradeAttach, { 0xE8, 0xF1, 0xA6, 0xFE, 0xFF } },
 			{ kObjectUpgradeRetire, { 0xE8, 0xFF, 0xD5, 0xFF, 0xFF } },
 			{ kTerrainUpgradeAttach, { 0xE8, 0x60, 0x68, 0xFF, 0xFF } },
@@ -89,6 +94,8 @@ namespace DCLF::LodGates
 			{ kObjectDowngradeRetire, { 0xE8, 0xAA, 0xD5, 0xFF, 0xFF } },
 			{ kTerrainDowngradeAttach, { 0xE8, 0xF6, 0x65, 0xFF, 0xFF } },
 			{ kTerrainDowngradeRetire, { 0xE8, 0x6A, 0xDC, 0xFF, 0xFF } },
+			{ kObjectInitialAttach, { 0xE8, 0x02, 0xA3, 0xFE, 0xFF } },
+			{ kTerrainInitialAttach, { 0xE8, 0xBA, 0x64, 0xFF, 0xFF } },
 			{ kRootsHiddenReturn, { 0xE9, 0x67, 0xB4, 0xFF, 0xFF } },
 			{ kFullRebuild, { 0xE8, 0xDD, 0x0F, 0x00, 0x00 } },
 		} };
@@ -235,11 +242,17 @@ namespace DCLF::LodGates
 		};
 		constexpr std::uint64_t Word(std::uint64_t a_token, State a_state) { return (a_token << 3) | a_state; }
 
+		/**
+		 * @brief A held block's fate while its gate lives. The swapping thread's reattach and the render thread's flip race for an owned
+		 * block by compare-exchange (seq_cst): exactly one wins, so the flip never hides a block the engine just made a node's current one
+		 * again, and a reattach after the flip's hide makes it a later gate's incoming (that gate's flip shows it).
+		 */
 		enum Handoff : std::uint8_t
 		{
 			kOwned = 0,
-			kReattached = 1,  // attached again by a swap while its gate was open (the engine reused it): the flip leaves it shown
+			kReattached = 1,  // attached again by a swap before the flip reached it (the engine reused it): the flip leaves it shown
 			kHandedOff = 2,   // stolen again by a later gate (from its node, after a reattach): that gate owns its visibility
+			kFlipHidden = 3,  // hidden by its gate's flip
 		};
 
 		struct Block
@@ -247,18 +260,20 @@ namespace DCLF::LodGates
 			std::uintptr_t block = 0;   // the handle's +0x28
 			std::uintptr_t handle = 0;  // held: the stolen handle, whose reference DCLF owns; incoming: 0 (the attach sees the block only)
 			std::uintptr_t node = 0;    // held: the quadtree node it was taken from (the reuse check)
+			std::uint64_t token = 0;    // held: the gate holding it (Emit's; its kept notice names it), 0 for a pending block held past a flip
 			Kind kind = Kind::Object;
 			std::array<RE::NiAVObject*, 2> nodes{};  // the app-cull nodes
 			std::atomic<std::uint8_t> handoff{ kOwned };  // held, while its gate lives: Handoff
 
 			Block() = default;
 			Block(const Block& a_other) :
-				block(a_other.block), handle(a_other.handle), node(a_other.node), kind(a_other.kind), nodes(a_other.nodes), handoff(a_other.handoff.load(std::memory_order_relaxed)) {}
+				block(a_other.block), handle(a_other.handle), node(a_other.node), token(a_other.token), kind(a_other.kind), nodes(a_other.nodes), handoff(a_other.handoff.load(std::memory_order_relaxed)) {}
 			Block& operator=(const Block& a_other)
 			{
 				block = a_other.block;
 				handle = a_other.handle;
 				node = a_other.node;
+				token = a_other.token;
 				kind = a_other.kind;
 				nodes = a_other.nodes;
 				handoff.store(a_other.handoff.load(std::memory_order_relaxed), std::memory_order_relaxed);
@@ -356,7 +371,8 @@ namespace DCLF::LodGates
 		struct Counters
 		{
 			std::atomic<std::uint64_t> opened{ 0 }, flipped{ 0 }, flipMisses{ 0 }, forced{ 0 }, superseded{ 0 }, held{ 0 }, released{ 0 }, reused{ 0 },
-				handedOff{ 0 }, deferred{ 0 }, vetoes{ 0 }, orphansShown{ 0 }, coverageBoth{ 0 }, coverageNeither{ 0 }, coverageEngineHid{ 0 }, engineRehides{ 0 };
+				handedOff{ 0 }, deferred{ 0 }, vetoes{ 0 }, orphansShown{ 0 }, coverageBoth{ 0 }, coverageNeither{ 0 }, coverageEngineHid{ 0 }, engineRehides{ 0 },
+				reattached{ 0 }, reusedHidden{ 0 }, kept{ 0 }, initialOpened{ 0 }, initialLoadScreen{ 0 };
 			std::array<std::atomic<std::uint64_t>, static_cast<std::size_t>(Flush::Count)> flushes{};
 			std::atomic<std::int64_t> flipTicks{ 0 }, flipTicksMax{ 0 }, releaseTicks{ 0 }, releaseTicksMax{ 0 };
 			std::atomic<std::uint64_t> flipFrames{ 0 }, releases{ 0 };
@@ -388,6 +404,20 @@ namespace DCLF::LodGates
 			auto* node = new OutcomeNode{ a_outcome, outcomes.load(std::memory_order_relaxed) };
 			while (!outcomes.compare_exchange_weak(node->next, node, std::memory_order_release, std::memory_order_relaxed)) {
 			}
+		}
+
+		/**
+		 * @brief A held block the engine reused (a node's current block again): the scene drops its gate's hold on the block's geometries
+		 * (outgoing tag, gateHeldOut) and commits them again. Posted after the gate's own event (the gate opened before it held anything),
+		 * so the coordinator meets it in that event's batch or a later one. Idempotent on the scene side.
+		 */
+		void PostKept(std::uint64_t a_token, const std::array<RE::NiAVObject*, 2>& a_nodes)
+		{
+			if (!a_token || !a_nodes[0])
+				return;
+			PostOutcome({ a_token, false, { a_nodes[0], a_nodes[1] } });
+			counters.kept.fetch_add(1, std::memory_order_relaxed);
+			WakeSceneGate();
 		}
 
 		struct OpenedNode
@@ -585,8 +615,10 @@ namespace DCLF::LodGates
 		 * @brief A held block's release, as FUN_140510a10 would have run it at the swap: detached when loaded and attached (a terrain block
 		 * when its node's level allows, as the engine's test), then the reference released. Reuse: a quadtree node references the
 		 * handle again (the engine's swap back found the block DCLF still held; a block is cached per node, so its own node's slot or that
-		 * node's map slot is the only place) - only DCLF's reference goes, and the block stays attached and shown. While a flip is in
-		 * progress the release waits for a later drain (its nodes may be the flip's), unless a forced flush already waited the flip out.
+		 * node's map slot is the only place) - only DCLF's reference goes, and the block stays attached as the node's current one: the
+		 * scene is told (PostKept) unless a later gate holds it pending (reattached after the flip hid it: that gate's tags take it over).
+		 * While a flip is in progress the release waits for a later drain (its nodes may be the flip's), unless a forced flush already
+		 * waited the flip out.
 		 */
 		void ReleaseHeld(EngineSide& a_side, const Block& a_block, bool a_force)
 		{
@@ -603,9 +635,13 @@ namespace DCLF::LodGates
 				counters.handedOff.fetch_add(1, std::memory_order_relaxed);
 			} else if (reused) {
 				counters.reused.fetch_add(1, std::memory_order_relaxed);
-				// Attached again while its gate was open: the engine shows it; a flip that raced the reattach may have hidden it.
-				if (handoff == kReattached)
-					Unhide(a_block.nodes);
+				if (!a_side.pending.contains(a_block.block)) {
+					// Hidden by the flip and current again with no gate pending: a reattach no thunk saw (every gated attach makes it a later
+					// gate's incoming). Its visibility stays the engine's (its own update's show stores are not vetoed); counted.
+					if (handoff == kFlipHidden && a_block.nodes[0] && IsHidden(a_block.nodes[0]))
+						counters.reusedHidden.fetch_add(1, std::memory_order_relaxed);
+					PostKept(a_block.token, a_block.nodes);
+				}
 			} else if (HandleReady(a_block.handle) && At<std::uintptr_t>(a_block.handle, 0x28) == a_block.block && Attached(a_block.block, a_block.kind)) {
 				if (a_block.kind == Kind::Object)
 					EngineCall(kDetachObject)(a_block.block);
@@ -740,8 +776,10 @@ namespace DCLF::LodGates
 						site ? fmt::format("{:#x}", 0x140000000ull + site) : std::string("none seen"),
 						wanted < 0 ? "-" : wanted ? "show" : "hide (the loaded cells)");
 			}
+			// The outgoing the flip owned (a reattached block is the engine's current one again; a handed-off one a later gate's).
 			for (const auto& block : a_gate.outgoing)
-				if (block.handoff.load(std::memory_order_relaxed) == kOwned && block.nodes[0] && Attached(block.block, block.kind))
+				if (const auto handoff = block.handoff.load(std::memory_order_relaxed); (handoff == kFlipHidden || handoff == kOwned) && block.nodes[0] &&
+																						  Attached(block.block, block.kind))
 					outgoingShown += !IsHidden(block.nodes[0]);
 			const bool both = incomingShown && outgoingShown;
 			const bool neither = incoming && !incomingShown && !outgoingShown;
@@ -829,7 +867,8 @@ namespace DCLF::LodGates
 		 * @brief An incoming block's attach in a Func2: hidden before it when it was not attached (a block already attached and shown, a
 		 * reused one, must not go dark), the hide undone when the attach did nothing (FUN_140509550 attaches only a loaded terrain block).
 		 * No hidden event: the block is not in the world until the attach, whose capture reads the bit. A block attached already that a
-		 * gate holds: its gate open - reused while shown (the flip leaves it); its gate flipped - hidden by the flip, so incoming again.
+		 * gate holds: taken from the flip by compare-exchange on its handoff while the flip has not hidden it - reused while shown (the
+		 * flip leaves it, the scene is told: PostKept); hidden by the flip already - incoming again, this swap's gate shows it.
 		 */
 		template <class F>
 		void OnAttach(std::uintptr_t a_block, Kind a_kind, std::uint32_t a_retireCalls, F&& a_original)
@@ -869,12 +908,19 @@ namespace DCLF::LodGates
 				return;
 			const auto [gate, token] = it->second;
 			const auto word = gate->word.load(std::memory_order_acquire);
-			if (word == Word(token, kOpen)) {
-				for (auto& block : gate->outgoing)
-					if (block.block == a_block)
-						block.handoff.store(kReattached, std::memory_order_relaxed);
-			} else if (word == Word(token, kFlipping) || word == Word(token, kFlipped))
-				b.incoming.push_back(incoming);
+			if (word != Word(token, kOpen) && word != Word(token, kFlipping) && word != Word(token, kFlipped))
+				return;
+			for (auto& block : gate->outgoing) {
+				if (block.block != a_block)
+					continue;
+				auto handoff = static_cast<std::uint8_t>(kOwned);
+				if (block.handoff.compare_exchange_strong(handoff, kReattached, std::memory_order_seq_cst)) {
+					counters.reattached.fetch_add(1, std::memory_order_relaxed);
+					PostKept(token, block.nodes);
+				} else if (handoff == kFlipHidden)
+					b.incoming.push_back(incoming);
+				break;
+			}
 		}
 
 		/**
@@ -967,10 +1013,12 @@ namespace DCLF::LodGates
 				for (auto* node : block.nodes)
 					if (node)
 						gate->incomingNodes.push_back(node);
-			for (const auto& block : gate->outgoing)
+			for (auto& block : gate->outgoing) {
+				block.token = gate->token;
 				for (auto* node : block.nodes)
 					if (node)
 						gate->outgoingNodes.push_back(node);
+			}
 			gate->openedTicks = Ticks();
 			gate->openedFrame = SceneCapture::Frame();
 			gate->word.store(Word(gate->token, kOpen), std::memory_order_release);
@@ -1057,6 +1105,36 @@ namespace DCLF::LodGates
 		using TerrainUpgradeAttach = Attach<Kind::Terrain, 1>;
 		using ObjectDowngradeAttach = Attach<Kind::Object, 4>;
 		using TerrainDowngradeAttach = Attach<Kind::Terrain, 4>;
+
+		/**
+		 * @brief The InitialLoad Func2s' attach: a node's first level where no block above it is loaded (an area coming into LOD range in
+		 * play, or every node at a worldspace's load), nothing retired, so the gate (no outgoing) is emitted right after it. Under a load
+		 * screen (DAT_14315b6a0: the queuers then retire the node's subtree and ancestors first) the attach passes through: the load
+		 * screen's last LOD update is a full rebuild, which flushed every gate before its drain, and DCLF withdraws there.
+		 */
+		template <Kind K>
+		struct InitialAttach
+		{
+			static void thunk(std::uintptr_t a_block)
+			{
+				if (!Active() || *reinterpret_cast<const volatile std::uint8_t*>(Base() + kLoadScreen) != 0) {
+					if (Active())
+						counters.initialLoadScreen.fetch_add(1, std::memory_order_relaxed);
+					func(a_block);
+					return;
+				}
+				// No retirement call follows (expected 0): the build is this attach alone.
+				OnAttach(a_block, K, 0, [](std::uintptr_t a_at) { func(a_at); });
+				auto& b = build;
+				if (b.expected || b.incoming.empty())
+					return;
+				counters.initialOpened.fetch_add(1, std::memory_order_relaxed);
+				Emit(b);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+		using ObjectInitialAttach = InitialAttach<Kind::Object>;
+		using TerrainInitialAttach = InitialAttach<Kind::Terrain>;
 
 		// The Func2s' retirement calls: FUN_140510a10(parent, bits) in an upgrade, FUN_140510c20(child, bits) per child in a downgrade.
 		template <int Site>
@@ -1215,6 +1293,8 @@ namespace DCLF::LodGates
 		stl::write_thunk_call<TerrainUpgradeAttach>(Base() + kTerrainUpgradeAttach);
 		stl::write_thunk_call<ObjectDowngradeAttach>(Base() + kObjectDowngradeAttach);
 		stl::write_thunk_call<TerrainDowngradeAttach>(Base() + kTerrainDowngradeAttach);
+		stl::write_thunk_call<ObjectInitialAttach>(Base() + kObjectInitialAttach);
+		stl::write_thunk_call<TerrainInitialAttach>(Base() + kTerrainInitialAttach);
 		stl::write_thunk_call<SwapRetire<0>>(Base() + kObjectUpgradeRetire);
 		stl::write_thunk_call<SwapRetire<1>>(Base() + kTerrainUpgradeRetire);
 		stl::write_thunk_call<SwapRetire<2>>(Base() + kObjectDowngradeRetire);
@@ -1229,7 +1309,7 @@ namespace DCLF::LodGates
 		stl::detour_thunk<ObjectCacheFlush>(Base() + kObjectCacheFlush);
 		coverageObserver = SwitchEnabled(Switch::SetParity) || SwitchEnabled(Switch::PersistentParity);
 		installed = true;
-		logger::info("[DCLF] LOD gates (T6b5): {} call sites (the swaps', the early return's, the full rebuild's), the drain, the retirement and 6 forced paths' functions hooked{}", kCallSites.size(),
+		logger::info("[DCLF] LOD gates (T6b5): {} call sites (the swaps', the initial loads', the early return's, the full rebuild's), the drain, the retirement and 6 forced paths' functions hooked{}", kCallSites.size(),
 			coverageObserver ? "; the coverage invariant checked at each release (parity)" : "");
 	}
 
@@ -1316,11 +1396,16 @@ namespace DCLF::LodGates
 		openGates.fetch_sub(1, std::memory_order_acq_rel);
 		for (const auto& block : gate->incoming)
 			Unhide(block.nodes);
-		for (const auto& block : gate->outgoing)
-			if (block.handoff.load(std::memory_order_relaxed) == kOwned)
-				for (auto* node : block.nodes)
-					if (node && SetHidden(node, true))
-						Scene::PushGateHidden(node);
+		// Each owned outgoing block taken by compare-exchange before its hide: one the engine reattached first (OnAttach's exchange) is
+		// the node's current block again and stays shown; one handed off is a later gate's.
+		for (auto& block : gate->outgoing) {
+			auto handoff = static_cast<std::uint8_t>(kOwned);
+			if (!block.handoff.compare_exchange_strong(handoff, kFlipHidden, std::memory_order_seq_cst))
+				continue;
+			for (auto* node : block.nodes)
+				if (node && SetHidden(node, true))
+					Scene::PushGateHidden(node);
+		}
 		gate->flippedTicks = Ticks();
 		gate->flippedFrame = SceneCapture::Frame();
 		const auto ticks = gate->flippedTicks - gate->openedTicks;
@@ -1372,11 +1457,13 @@ namespace DCLF::LodGates
 			if (const auto count = take(counters.flushes[i]))
 				flushes += fmt::format("{}{} {}", flushes.empty() ? "" : ", ", kFlushNames[i], count);
 		return fmt::format(
-			"[DCLF] LOD gates (T6b5, over {} frames): {} opened, {} flipped ({} flips missed), {} forced ({} superseded; flushes: {}); {} blocks held, {} released "
-			"({} reused, {} handed off, {} deferred past a flip), {} orphans shown, {} shows vetoed; {} open, the oldest {} frames {:.1f} ms; request to flip "
-			"{:.1f} frames {:.2f} ms average, {:.2f} ms max; flip to release {:.2f} ms average, {:.2f} ms max{}",
-			a_frames, take(counters.opened), flipped, take(counters.flipMisses), take(counters.forced), take(counters.superseded), flushes.empty() ? "none" : flushes,
-			take(counters.held), take(counters.released), take(counters.reused), take(counters.handedOff), take(counters.deferred), take(counters.orphansShown),
+			"[DCLF] LOD gates (T6b5, over {} frames): {} opened ({} initial loads; {} initial loads under a load screen passed through), {} flipped ({} flips "
+			"missed), {} forced ({} superseded; flushes: {}); {} blocks held, {} released ({} reused, {} handed off, {} deferred past a flip), {} reattached "
+			"before their flip, {} kept notices to the scene, {} reused still hidden by the flip with no gate pending, {} orphans shown, {} shows vetoed; {} "
+			"open, the oldest {} frames {:.1f} ms; request to flip {:.1f} frames {:.2f} ms average, {:.2f} ms max; flip to release {:.2f} ms average, {:.2f} ms max{}",
+			a_frames, take(counters.opened), take(counters.initialOpened), take(counters.initialLoadScreen), flipped, take(counters.flipMisses), take(counters.forced),
+			take(counters.superseded), flushes.empty() ? "none" : flushes, take(counters.held), take(counters.released), take(counters.reused), take(counters.handedOff),
+			take(counters.deferred), take(counters.reattached), take(counters.kept), take(counters.reusedHidden), take(counters.orphansShown),
 			take(counters.vetoes), counters.open.load(std::memory_order_relaxed), counters.oldestFrames.load(std::memory_order_relaxed),
 			TicksToMs(counters.oldestTicks.load(std::memory_order_relaxed)), flipped ? static_cast<double>(flipFrames) / static_cast<double>(flipped) : 0.0,
 			flipped ? TicksToMs(flipTicks) / static_cast<double>(flipped) : 0.0, TicksToMs(flipMax), releases ? TicksToMs(releaseTicks) / static_cast<double>(releases) : 0.0,

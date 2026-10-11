@@ -1,6 +1,8 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Internal.h"
 
+#	include "Features/DrawcallLimitFix/Common/Toggles.h"
+#	include "Features/DrawcallLimitFix/Engine/LodGates.h"
 #	include "Features/DrawcallLimitFix/Engine/ReflectionFaces.h"
 #	include "Features/DrawcallLimitFix/Engine/SunViews.h"
 #	include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
@@ -288,17 +290,20 @@ namespace DCLF
 	{
 		// The roots whose members DCLF's faces draw, in a plain update of a frame whose faces are DCLF's (DecideCoverage):
 		// - LOD trees while the faces' tree LOD is DCLF's (PrepareReflection): drawn from DCLF's mirror, no registration needed.
-		// - Not yet LOD land and objects (until T6b): the LOD chunks and objects the engine shows or attaches in motion take DCLF a
-		//   few frames to bind (ClassifyResidue: hidden in its tables, or not bound yet), and meanwhile they are no reflection-phase
-		//   members. Their roots stay; the members are withheld (PassCapture).
+		// - LOD land and objects while the engine's LOD swaps are gated (T6b6; LodGates, T6b5) and both are DCLF's (the toggles): a
+		//   swap's incoming blocks are shown only by the frame whose claims hold them, so the faces never need the engine's
+		//   registrations of them. Ungated, the LOD chunks and objects the engine shows or attaches in motion take DCLF a few frames
+		//   to bind (ClassifyResidue) and their roots stay, the members withheld (PassCapture).
 		auto& reflection = impl->reflection;
 		auto& capture = PassCapture::Get();
 		capture.WatchReflectionResidue(0);
 		if (!a_plain || !ReflectionDrawable() || !impl->reflectionCovered || PassCapture::ParityBoth())
 			return 0;
-		const std::uint32_t owned = reflection.treeOwned ? ReflectionFaces::kTreeRoot : 0u;
-		// The residue parity: what the engine registers into the faces and DCLF does not withhold, by root: the LOD roots' on every
-		// 30th update (what skipping them would lose: T6b's gate), the tree root's on every 30th of those that skip it (kept then).
+		const auto toggles = ActiveToggles();
+		const bool lodOwned = LodGates::Enabled() && toggles.lodObjects && toggles.lodTerrain;
+		const std::uint32_t owned = (reflection.treeOwned ? ReflectionFaces::kTreeRoot : 0u) | (lodOwned ? ReflectionFaces::kLodRoots : 0u);
+		// The residue parity: what the engine registers into the faces and DCLF does not withhold, by root, on every 30th update (the
+		// roots kept then): the LOD roots' (what skipping them loses: any is a defect once they are owned) and the tree root's.
 		if ((SunViews::ParityEnabled() || SceneStore::TimelineEnabled()) && reflection.residueUpdates++ % 30 == 0) {
 			capture.WatchReflectionResidue(ReflectionFaces::kLodRoots | owned);
 			return 0;
@@ -666,10 +671,11 @@ namespace DCLF
 				residueStages = ResidueStageReport(classes);
 		}
 		auto& parity = reflection.cameraParity;
-		text += fmt::format("[DCLF] reflection faces (T4: DCLF's cameras, the engine's tree LOD root skipped): {} updates, {} without the tree root; parity: {} faces, {} blocks "
-							"and {} slices differ (registers {:#x}, largest {:.3g}){}{}; residue: {} tree LOD passes{}, {} under the LOD land and objects roots (kept until "
-							"T6b){}{}\n",
-			roots.updates, roots.treeSkipped, parity.faces, parity.blocks, parity.slices, parity.registers, parity.largest,
+		text += fmt::format("[DCLF] reflection faces (T4: DCLF's cameras, the engine's tree LOD root skipped; T6b6: its LOD land and objects roots while gated): {} updates, {} without the "
+							"tree root, {} without the LOD roots; parity: {} faces, {} blocks "
+							"and {} slices differ (registers {:#x}, largest {:.3g}){}{}; residue: {} tree LOD passes{}, {} under the LOD land and objects roots (kept on every "
+							"30th update){}{}\n",
+			roots.updates, roots.treeSkipped, roots.lodSkipped, parity.faces, parity.blocks, parity.slices, parity.registers, parity.largest,
 			parity.blocks || parity.slices ? " <- FACE CAMERA" : (parity.faces ? " <- OK" : ""), parity.first.empty() ? "" : " (first: " + parity.first + ")",
 			residue.treePasses, residue.treePasses ? " <- REFLECTION RESIDUE" : "", residue.lodPasses, residue.first.empty() ? "" : " (first: " + residue.first + ")", residueKinds);
 		text += residueStages;

@@ -63,6 +63,11 @@ namespace DCLF
 		kObjectProjectedUV = 1u << 18,
 		kObjectLandBlend = 1u << 19,
 		kObjectDecalGroupShift = 20,
+		// T7c1: the same two bits without kObjectDecal are a terrain group (CS_DCLF_TB_TERRAIN, while Terrain Blending holds the
+		// terrain): 1 = a kMultiTextureLandscape block, drawn after the opaque and decal groups with Terrain Blending's blend
+		// state, its near blocks' depth into Terrain Blending's terrain depth and, offset, into the main depth; 2 = a
+		// kNoTransparencyMultiSample mesh, drawn after the terrain testing EQUAL (ObjectTerrainGroup).
+		kObjectTerrainGroupShift = kObjectDecalGroupShift,
 		// The engine would draw no shadow-map pass for this object (ShadowViews.h: ShadowCasterReject),
 		// so no shadow view's culling may accept it. Decided by the scene phase, which is before any
 		// shadow view is drawn.
@@ -125,6 +130,8 @@ namespace DCLF
 
 	/** @brief ObjectFlags -> decal group (0 for anything that is not a decal). */
 	inline constexpr std::uint32_t ObjectDecalGroup(std::uint32_t a_flags) { return (a_flags & kObjectDecal) ? (a_flags >> kObjectDecalGroupShift) & 3u : 0u; }
+	/** @brief ObjectFlags -> terrain group (T7c1; 0 for a decal, or anything Terrain Blending does not hold). */
+	inline constexpr std::uint32_t ObjectTerrainGroup(std::uint32_t a_flags) { return (a_flags & kObjectDecal) ? 0u : (a_flags >> kObjectTerrainGroupShift) & 3u; }
 
 	/** @brief GeometryRecord::nextPartition: the last partition, or a TriShape that is not one. */
 	inline constexpr std::uint32_t kNoPartition = ~0u;
@@ -277,6 +284,10 @@ namespace DCLF
 		// geometry in the feature's SetupGeometry hook; it differs from disabled only for blended geometry (blended
 		// decals, such as NPC hairlines and beards), and it is the permutation's ExtraFeatureDescriptor.
 		kRasterTranslucencyShift = 21,
+		// T7c1: 2 bits, ObjectTerrainGroup. Group 1 (Terrain Blending's held terrain) carries the blend and write modes that
+		// feature draws its terrain with (1 and 1) and tests LESS_EQUAL with depth writes; group 2 (its no-blend meshes) the
+		// write mode it leaves for them (1), blending off, testing EQUAL. Neither takes a depth bias (DrawPipelines).
+		kRasterTerrainGroupShift = 24,
 	};
 	inline constexpr std::uint32_t kRasterTranslucencyMask = 7u << kRasterTranslucencyShift;
 
@@ -284,6 +295,7 @@ namespace DCLF
 	inline constexpr std::uint32_t RasterDepthBiasMode(std::uint32_t a_flags) { return (a_flags >> kRasterDepthBiasShift) & 15u; }
 	inline constexpr std::uint32_t RasterBlendMode(std::uint32_t a_flags) { return (a_flags >> kRasterBlendModeShift) & 7u; }
 	inline constexpr std::uint32_t RasterWriteMode(std::uint32_t a_flags) { return (a_flags >> kRasterWriteModeShift) & 15u; }
+	inline constexpr std::uint32_t RasterTerrainGroup(std::uint32_t a_flags) { return (a_flags >> kRasterTerrainGroupShift) & 3u; }
 	/** @brief Everything but the two-sided bit and the translucency model: what selects the engine's state objects. */
 	inline constexpr std::uint32_t RasterStateBits(std::uint32_t a_flags) { return a_flags & ~(kRasterTwoSided | kRasterTranslucencyMask); }
 	inline constexpr std::uint32_t RasterTranslucency(std::uint32_t a_flags) { return (a_flags & kRasterTranslucencyMask) >> kRasterTranslucencyShift; }
@@ -294,6 +306,15 @@ namespace DCLF
 	{
 		return ((a_group & 3u) << kRasterDecalGroupShift) | ((a_depthBiasMode & 15u) << kRasterDepthBiasShift) |
 		       ((a_blendMode & 7u) << kRasterBlendModeShift) | ((a_writeMode & 15u) << kRasterWriteModeShift);
+	}
+
+	/**
+	 * @brief Packs a terrain group's state (T7c1): the blend and write modes Terrain Blending's replay sets
+	 * (TerrainBlending::RenderTerrainBlendingPasses), read back from the engine's state tables like a decal's.
+	 */
+	inline constexpr std::uint32_t PackTerrainRasterFlags(std::uint32_t a_group, std::uint32_t a_blendMode, std::uint32_t a_writeMode)
+	{
+		return ((a_group & 3u) << kRasterTerrainGroupShift) | ((a_blendMode & 7u) << kRasterBlendModeShift) | ((a_writeMode & 15u) << kRasterWriteModeShift);
 	}
 
 	/**

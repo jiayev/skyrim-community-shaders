@@ -433,7 +433,8 @@ namespace DCLF
 
 	bool MtLandEnabled()
 	{
-		return ActiveToggles().mtLand && !TerrainBlendingDefersTerrain();
+		const auto toggles = ActiveToggles();
+		return toggles.mtLand && (!TerrainBlendingDefersTerrain() || toggles.tbTerrain);
 	}
 
 	namespace
@@ -532,11 +533,21 @@ namespace DCLF
 			return Ineligible::Skinned;
 		if ((f & Bit(Flag::kProjectedUV)) && !ActiveToggles().projectedUv)
 			return Ineligible::ProjectedUV;
-		// Terrain Blending holds these passes (a mesh opts out of the blend with this otherwise unused flag) and
-		// redraws them after its terrain, testing EQUAL, so the terrain does not blend over them. DCLF draws
-		// before that terrain (DrawcallLimitFix::AfterOpaquePass), so they stay native.
-		if ((f & Bit(Flag::kNoTransparencyMultiSample)) && TerrainBlendingDefersTerrain())
-			return Ineligible::TerrainNoBlend;
+		// Terrain Blending holds every Lighting pass of a kMultiTextureLandscape property and replays it after the opaque pass,
+		// blended over what lies beneath (its hook tests that flag first), and then the passes of a mesh that opts out of the
+		// blend with the otherwise unused kNoTransparencyMultiSample, testing EQUAL, so the terrain does not blend over them.
+		// T7c1: DCLF draws both as that feature does, in its terrain groups 1 and 2 after its opaque and decal groups (Records.h,
+		// ObjectTerrainGroup); without CS_DCLF_TB_TERRAIN the terrain stays native (MtLandEnabled: its technique), and so do the
+		// meshes, which DCLF would otherwise draw before the terrain blends over them. A decal or a layer has a group of its own.
+		if (TerrainBlendingDefersTerrain()) {
+			const bool terrain = (f & Bit(Flag::kMultiTextureLandscape)) != 0;
+			const bool noBlend = !terrain && (f & Bit(Flag::kNoTransparencyMultiSample));
+			if ((terrain || noBlend) && a_out.decalGroup)
+				return Ineligible::TerrainNoBlend;
+			if (noBlend && !ActiveToggles().tbTerrain)
+				return Ineligible::TerrainNoBlend;
+			a_out.terrainGroup = terrain ? 1u : noBlend ? 2u : 0u;
+		}
 		// Refraction has its own LOD fade that removes the object entirely; leave it to the game.
 		if (f & (Bit(Flag::kRefraction) | Bit(Flag::kTempRefraction))) {
 			a_out.rejectedTechnique = kRefractionReject;

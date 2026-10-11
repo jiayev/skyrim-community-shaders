@@ -10,6 +10,8 @@
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #include "SunAccumulation.h"
 #include "TreeAnimation.h"
+#include "SideEffects.h"
+#include <Tracy/Tracy.hpp>
 #include "LocalLightCull.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
@@ -50,7 +52,6 @@ namespace DCLF
 		// NiAVObject / BSFadeNode fields BSFadeNode::OnVisible (AE 0x141479f50) reads before its fade update.
 		constexpr std::size_t kObjectFlags = 0xF4;
 		constexpr std::uint32_t kFlagFadeSettled = 1u << 15;
-		constexpr std::uint32_t kFlagAccumulated = 1u << 26;  // NiAVObject::kAccumulated
 		constexpr std::size_t kFadeAmount = 0x100;
 		constexpr std::size_t kCurrentFade = 0x130;
 		constexpr std::size_t kLastVisibleFrame = 0x13C;
@@ -81,6 +82,10 @@ namespace DCLF
 		constexpr std::uintptr_t kFadeDefaultScale = 0x1ad2840;   // float: the scale when the type's divisor is not positive
 		constexpr std::uintptr_t kFadeOutThreshold = 0x2032e38;   // float: a faded-in node fades out below this fade value
 		constexpr std::uintptr_t kFadeDistanceMult = 0x2032e48;   // float: multiplies the node's near and far distances
+		// T7b2's camera cut: a frame's move past any locomotion (a sprinting horse moves ~20 units a frame at 60 fps), or a turn past
+		// 30 degrees (a fast mouse flick is ~15 a frame).
+		constexpr float kCutDistance = 256.0f;
+		constexpr float kCutTurnCosine = 0.8660254f;
 
 		using SceneList = RE::BSTArray<RE::NiPointer<RE::NiAVObject>>;
 
@@ -333,8 +338,25 @@ namespace DCLF
 		standInLive = false;
 		// The camera the fade roots' distances are measured from (BuildDraws' fade test).
 		fadeEye = {};
-		if (const auto* camera = processes && count ? processes[0]->camera : nullptr)
+		if (const auto* camera = processes && count ? processes[0]->camera : nullptr) {
 			fadeEye = { camera->world.translate.x, camera->world.translate.y, camera->world.translate.z, At<float>(camera, kCameraLodAdjust) };
+			// T7b2: a camera cut (a jump or a snap turn the frames between a GPU verdict and its write cannot follow): every stood-in root
+			// visible until a batch of this frame or later is decoded (IndirectDraws::NoteCameraCut). A turn's angle from the rotations'
+			// relative trace, axis-agnostic.
+			const auto& r = camera->world.rotate.entry;
+			const std::array<float, 12> now{ fadeEye[0], fadeEye[1], fadeEye[2], r[0][0], r[0][1], r[0][2], r[1][0], r[1][1], r[1][2], r[2][0], r[2][1], r[2][2] };
+			if (cutCameraKnown) {
+				const float dx = now[0] - cutCamera[0], dy = now[1] - cutCamera[1], dz = now[2] - cutCamera[2];
+				float trace = 0.0f;
+				for (std::uint32_t i = 3; i < 12; ++i)
+					trace += now[i] * cutCamera[i];
+				const float cosine = std::clamp((trace - 1.0f) * 0.5f, -1.0f, 1.0f);
+				if (dx * dx + dy * dy + dz * dz > kCutDistance * kCutDistance || cosine < kCutTurnCosine)
+					IndirectDraws::Get().NoteCameraCut(SceneStore::Get().GetFrame());
+			}
+			cutCamera = now;
+			cutCameraKnown = true;
+		}
 		// BSTreeNode::OnVisible's height test, as the list processes have it this frame (TreeAboveLimit).
 		const bool heightTest = processes && count && processes[0] && At<std::uint8_t>(processes[0], kProcessTreeHeightTest) && Global<std::uint8_t>(kTreeHeightTestOn);
 		treeHeight = { Global<float>(kTreeHeightBase), heightTest ? Global<float>(kTreeHeightLimit) : std::numeric_limits<float>::infinity() };
@@ -355,6 +377,8 @@ namespace DCLF
 		if (!ActiveToggles().excludePrimaryEntries) {
 			if (!ownedFadeRoots.empty()) {
 				ownedFadeRoots.clear();
+				standInRoots.clear();
+				standInList.clear();
 				SceneStore::Get().SetFadeRootsOwned({});
 				TreeAnimation::SetOwned({});
 			}
@@ -365,6 +389,9 @@ namespace DCLF
 			++(candidates ? cutStats.skippedPreconditions : cutStats.skippedStale);
 			liveStale = true;
 			fadeSkipped = true;
+			// T7b2: the engine culls the stood-in roots this frame and writes their kAccumulated itself; the next decode writes them all.
+			if (!ownedFadeRoots.empty())
+				IndirectDraws::Get().RequestAccumulatedRefresh();
 			frameLive.store(true, std::memory_order_release);
 			return;
 		}
@@ -770,9 +797,15 @@ namespace DCLF
 	{
 		// The admitted entries with a fade root, whose members' fade is FadeStateCS's from the next frame on. One with engine-drawn
 		// parts is culled by the engine, which updates its node itself; every other is stood in (its state is the GPU's alone,
-		// its node left as the engine last updated it), its kAccumulated cleared once (its trees are TreeWindCS's: the tree clock
-		// need not advance them), and it is taken off the tree manager's animation list (TreeAnimation).
+		// its node left as the engine last updated it) and taken off the tree manager's animation list (TreeAnimation: its trees are
+		// TreeWindCS's, so the tree clock, which reads the BSLeafAnimNode's kAccumulated, must not advance them as well).
+		// T7b2: its kAccumulated is DCLF's from here, written from the GPU's visibility at Main::Update's entry (AtUpdateEntry). It
+		// used to be cleared once here, which kept the tree clock off it but also stopped FUN_1402cff60 from animating every stood-in
+		// reference that never fades (dclf-open-defects.md); the tree list removal alone keeps the clock off. Until its first write
+		// it keeps the bit the engine's last cull left (a new listing is written visible: no verdict yet).
 		ownedFadeRoots.clear();
+		standInRoots.clear();
+		standInList.clear();
 		std::vector<SceneStore::OwnedFadeRoot> owned;
 		std::vector<const RE::NiAVObject*> animated;
 		for (std::uint32_t e = 0; e < cut.plans.size(); ++e) {
@@ -783,12 +816,25 @@ namespace DCLF
 			ownedFadeRoots.push_back(cut.roots[e]);
 			owned.push_back({ cut.roots[e], !cut.mixed[e] });
 			if (!cut.mixed[e]) {
-				std::atomic_ref<std::uint32_t>(At<std::uint32_t>(cut.roots[e], kObjectFlags)).fetch_and(~kFlagAccumulated, std::memory_order_relaxed);
+				standInRoots.insert(cut.roots[e]);
+				standInList.push_back(cut.roots[e]);
 				animated.push_back(cut.roots[e]);
 			}
 		}
 		SceneStore::Get().SetFadeRootsOwned(owned);
 		TreeAnimation::SetOwned(animated);
+	}
+
+	void PrimaryCull::AtUpdateEntry(bool a_running)
+	{
+		if (!installed)
+			return;
+		ZoneScopedN("CS.DCLF.AccumulatedWrites");
+		// The writes for roots the cut no longer stands in for are left: the engine's cull writes those this frame.
+		IndirectDraws::Get().WriteAccumulated(a_running, [this](const void* a_root) { return standInRoots.contains(a_root); });
+		// CS_DCLF_ACCUMULATED_PARITY (<- ANIM RATE): the stood-in roots and the bit they carry now, for this frame's animation gates.
+		if (a_running)
+			SideEffects::PublishAnimPrediction(standInList);
 	}
 
 	std::uint64_t PrimaryCull::MemberSignature(std::uint32_t a_e) const
@@ -962,6 +1008,15 @@ namespace DCLF
 				nodeSnapshot[r] = roots[r] ? FadeState::ReadNode(*static_cast<const RE::NiAVObject*>(roots[r])) : FadeNodeState{};
 			nodeSnapshotFrame = SceneStore::Get().GetFrame();
 		}
+		// CS_DCLF_ACCUMULATED_PARITY (T7b1): kAccumulated as this cull left it on the listed roots and their geometry, for the visibility
+		// decode's observer (SideEffects.h). A root the cut stood in for is not the engine cull's (its bit is DCLF's write: AtUpdateEntry).
+		if (SideEffects::AccumulatedParity())
+			SideEffects::SampleAccumulated(SceneStore::Get().GetFrame(), [this](const void* a_node) {
+				if (!standInLive)
+					return false;
+				const auto it = cut.eligible.find(static_cast<const RE::NiAVObject*>(a_node));
+				return it != cut.eligible.end() && it->second < cut.admitted.size() && cut.admitted[it->second] && !cut.mixed[it->second];
+			});
 		if (!frameLive.exchange(false, std::memory_order_acq_rel))
 			return;
 		const std::int64_t start = Now();
@@ -1247,6 +1302,8 @@ namespace DCLF
 		stl::write_vfunc<0x18, Hooks::AppendVirtual>(RE::VTABLE_BSGeometryListCullingProcess[0]);
 		InstallSceneLists();
 		TreeAnimation::Install();
+		// T7b2, CS_DCLF_ACCUMULATED_PARITY: <- ANIM RATE on FUN_1402cff60's calls (nothing installed without it).
+		SideEffects::InstallAnimRate();
 		LocalLightCull::Install();
 		REL::Relocation<std::uintptr_t> triShape{ RE::VTABLE_BSTriShape[0] };
 		geometryOnVisible = reinterpret_cast<const std::uintptr_t*>(triShape.address())[0x34];

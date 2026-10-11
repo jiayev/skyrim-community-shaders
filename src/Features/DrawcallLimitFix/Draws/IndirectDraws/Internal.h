@@ -25,6 +25,7 @@
 #	include "Features/DrawcallLimitFix/Engine/PassCapture.h"
 #	include "Features/DrawcallLimitFix/Engine/PortalViews.h"
 #	include "Features/DrawcallLimitFix/Engine/PrimaryCull.h"
+#	include "Features/DrawcallLimitFix/Engine/SideEffects.h"
 #	include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 #	include "Features/DrawcallLimitFix/Draws/ShaderPrograms.h"
 #	include "Features/DrawcallLimitFix/Engine/ShadowViews.h"
@@ -233,6 +234,8 @@ namespace DCLF
 			// ExecuteIndirect max counts (GrowCapacity, within the buffer's ranges): the phase-1/colour draws, and each decal group.
 			std::uint32_t drawCapacity = 0;
 			std::array<std::uint32_t, kDecalGroups> decalCapacity{};
+			// T7c1: each terrain group's (the colour segment's; MainSizing::terrainCapacity), group 1 from phase 2's base, group 2 after it.
+			std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
 			// The sequence buffer's ranges as the epoch sized it (Resources::sequenceDraws, sequenceDecals): its layout.
 			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
 			// The rows' tables' addresses (Resources::materialRows, pipelineRows), which a growth moves.
@@ -254,9 +257,12 @@ namespace DCLF
 			{
 				std::uint32_t bucket = 0, first = 0, capacity = 0;
 				rhi::PipelineHandle pipeline{};
+				// T7c1: a terrain group 1 bucket's twin, its near blocks (kBucketTerrainPair): drawn into the main depth with Terrain
+				// Blending's depth offset (kZDrawPushOffsetDepth), then into its terrain depth without (Resources::terrainDepth).
+				bool terrainNear = false;
 				bool operator==(const ZCall& o) const
 				{
-					return bucket == o.bucket && first == o.first && capacity == o.capacity && SameHandle(pipeline, o.pipeline);
+					return bucket == o.bucket && first == o.first && capacity == o.capacity && SameHandle(pipeline, o.pipeline) && terrainNear == o.terrainNear;
 				}
 			};
 			std::vector<ZCall> zCalls;
@@ -269,7 +275,8 @@ namespace DCLF
 
 			bool SameShape(const PassFrame& o) const
 			{
-				return zCalls == o.zCalls && latched == o.latched && drawCapacity == o.drawCapacity && decalCapacity == o.decalCapacity && sequenceDraws == o.sequenceDraws &&
+				return zCalls == o.zCalls && latched == o.latched && drawCapacity == o.drawCapacity && decalCapacity == o.decalCapacity &&
+				       terrainCapacity == o.terrainCapacity && sequenceDraws == o.sequenceDraws &&
 				       sequenceDecals == o.sequenceDecals && materialRows == o.materialRows && pipelineRows == o.pipelineRows && cullMode == o.cullMode &&
 				       probePixel == o.probePixel && probeX == o.probeX && probeY == o.probeY && width == o.width && height == o.height &&
 				       minDepth == o.minDepth && maxDepth == o.maxDepth && SameHandle(resourceHeap, o.resourceHeap) &&
@@ -515,6 +522,214 @@ namespace DCLF
 		};
 
 		/**
+		 * @brief T7b1's and T7b2's host side (drawcall-limit-fix.md, "T7b1: visibility events", "T7b2: kAccumulated written by DCLF"):
+		 * the event list (VisibilityEventsCS) read back without a stall, its decoder's state, and the kAccumulated writes it prepares for
+		 * the roots the cut stands in for. Part of the normal path; CS_DCLF_ACCUMULATED_PARITY adds the observers alone.
+		 *
+		 * The depth epoch is revision-driven (persistent-epochs.md, "Revision-driven epochs"): its passes are recorded once per ring slot
+		 * for a revision and the recordings are submitted again frame after frame, so nothing in a recording's Record runs per frame. The
+		 * readback is therefore recorded as a fixed copy: VisibilityReadbackPass copies the list into the host buffer of its frame slot
+		 * (RecordingContext::FrameSlot, the one per-frame input a recording has) in the staging set of the revision's list capacity. The
+		 * render thread arms each frame (ArmVisibilityReadback: the frame, its tables, by frame slot) and harvests the slot's last
+		 * execution when the slot comes round again: the depth commit runs after the host waited for the slot's previous execution, and
+		 * before the new one is submitted, so that buffer is complete and not yet written again (no wait of DCLF's own). The buffer whose
+		 * header names the armed frame is copied into a batch (the header's count of events, a few hundred at most in motion), and the
+		 * batches go to the decode task in frame order. Batches are heap allocations, as many as wait: none is dropped.
+		 *
+		 * The decoder (one task at a time, never joined) applies the batches in frame order to the verdicts it keeps by DCLF's slots, the
+		 * roots' by their listing's generation, against the tables of each batch's frame (held by its batch). It writes no engine memory
+		 * and reads none: from the newest batch's tables it prepares the kAccumulated writes of the stood-in roots (kFadeRootStoodIn) and
+		 * their geometry by the conservative rule (T7b2: in view in either of the last two decoded frames, no verdict yet, or a camera cut
+		 * not yet followed by a batch), only where they differ from what it last asked for (Writes, holding those tables, so no node is
+		 * let go before the write). The main thread makes them at Main::Update's entry (IndirectDraws::WriteAccumulated), the one point
+		 * every reader sees in the same frame and no cull or cell animation runs. With the engine's samples of the same frame
+		 * (SideEffects::SampleAccumulated) it is the <- ACCUMULATED observer. Decoded batches go back to the render thread, which names
+		 * their finds and lets go of their tables.
+		 */
+		struct VisibilityReadback
+		{
+			/** @brief A root slot's verdict, for the listing of its generation: any other generation's is none. */
+			struct RootVisibility
+			{
+				std::uint32_t generation = 0;
+				bool known = false;    // FadeStateCS updated the listing this frame (kVisibilityBitVerdict): it has a verdict
+				bool visible = false;
+				std::uint32_t lastFrame = 0;  // the last scene frame it was in view
+				std::uint32_t outFrame = 0;   // the scene frame it went out of view (T7b2: still in view in every decoded frame before it)
+			};
+			/** @brief An object slot's verdict: its occupant's in the tables of the frame it was decoded with. */
+			struct ObjectVisibility
+			{
+				bool visible = false;
+				std::uint32_t lastFrame = 0;
+				std::uint32_t outFrame = 0;
+			};
+			/**
+			 * @brief T7b2: kAccumulated writes the decoder prepared from one decode's newest batch, in its tables' slots, for the main
+			 * thread (Main::Update's entry). The tables hold every node named (their publication's retirement), so none is let go
+			 * before the write; only the main thread lets go of them.
+			 */
+			struct Writes
+			{
+				struct Write
+				{
+					void* node = nullptr;        // a stood-in fade root, or a geometry under one
+					const void* root = nullptr;  // its fade root (the cut's entry root): written only while the cut still stands in for it
+					bool set = false;
+				};
+				std::uint32_t frame = 0;  // the scene frame of the batch the writes follow
+				bool full = false;        // every stood-in root and geometry, not only the changes (a refresh, a reset, a cut's first batch after)
+				std::shared_ptr<const SceneStore::Tables> tables;
+				std::vector<Write> writes;
+				Writes* next = nullptr;
+			};
+			/** @brief What the decoder last asked the main thread to write for a root slot (by listing) or an object slot (by occupant). */
+			enum Written : std::uint8_t
+			{
+				kWrittenNone,
+				kWrittenClear,
+				kWrittenSet,
+			};
+			// The observer's finds the render thread names (Batch::firsts' categories).
+			enum Category : std::uint8_t
+			{
+				kRootDclfOnly,
+				kRootEngineOnly,
+				kGeometryDclfOnly,
+				kGeometryEngineOnly,
+				kCategories,
+			};
+			/**
+			 * @brief The host buffers of one list capacity, one per frame slot (the revisions sized for it copy into them). Append-only
+			 * (a growth adds one: Impl::ReserveSceneTables, the revision code's thread; read by the passes' preparation on the graph
+			 * host's thread and by the render thread), kept until the readback goes: a kept recording may name any of them.
+			 */
+			struct StagingSet
+			{
+				std::uint32_t events = 0;
+				std::vector<std::shared_ptr<org::Buffer>> buffers;  // by frame slot
+				StagingSet* next = nullptr;
+			};
+			/** @brief A frame's events, copied out of its frame slot's host buffer, and what the decoder found for the render thread. */
+			struct Batch
+			{
+				std::uint32_t frame = 0;
+				bool reset = false;     // the frame's commit zeroed the reported words: the decoder's verdicts start again
+				bool complete = true;   // every change fit (none of the frame's verdicts arrives a frame late)
+				std::shared_ptr<const SceneStore::Tables> tables;  // the frame's (the occupants); let go by the render thread alone
+				std::vector<VisibilityEvent> events;
+				std::vector<std::pair<std::uint8_t, const void*>> firsts;  // (category, node), named while `tables` holds the node
+				Batch* next = nullptr;
+			};
+			/** @brief What a frame slot's last arm was for (render thread). */
+			struct Armed
+			{
+				bool armed = false;
+				std::uint32_t frame = 0;
+				bool reset = false;
+				std::shared_ptr<const SceneStore::Tables> tables;
+			};
+
+			std::uint32_t frameSlots = 0;
+			std::atomic<StagingSet*> sets{ nullptr };
+			// The render thread's: each frame slot's arm, and the batches harvested and not yet handed to a task, in frame order.
+			std::vector<Armed> armed;
+			std::vector<Batch*> pending;
+			bool carryReset = false;  // a reset arm whose frame was missed: the next batch harvested starts the decoder again
+			// Decoded batches, back to the render thread (a lock-free stack: the task pushes, the wake takes them all).
+			std::atomic<Batch*> decoded{ nullptr };
+			// The largest count a batch had past its list: the list grows to it (the slots left out append again).
+			std::atomic<std::uint32_t> wanted{ 0 };
+			std::atomic<bool> running{ false };
+			// The decoder's alone (one task at a time; `running` orders them).
+			std::vector<RootVisibility> roots;
+			std::vector<ObjectVisibility> objects;
+			std::vector<std::uint32_t> rootApplied, objectApplied;  // per slot: the scene frame of the event last taken
+			// T7b2, the decoder's too: the last two scene frames decoded (the conservative rule's window), the cut its full write
+			// answered, and per slot what it last asked to write (a root's for its listing's generation, an object's for its occupant).
+			std::uint32_t decodedFrame = 0, previousDecodedFrame = 0, cutAnswered = 0;
+			std::vector<std::uint32_t> rootWrittenGeneration;
+			std::vector<std::uint8_t> rootWritten, objectWritten;
+			std::vector<const void*> objectWrittenGeometry;
+			// T7b2, any thread: a full write asked for (PrimaryCull: a frame the engine culled the stood-in roots itself, the main thread:
+			// writes dropped), and the scene frame of the last camera cut (the render thread's, PrimaryCull::AfterFullFrustum: from there
+			// every stood-in root is visible until a batch of that frame or later is decoded).
+			std::atomic<bool> refreshWanted{ true };
+			std::atomic<std::uint32_t> cutFrame{ 0 };
+			// The prepared writes, to the main thread (a lock-free stack: the task pushes, Main::Update's entry takes them all).
+			std::atomic<Writes*> writes{ nullptr };
+			// The main thread's: the newest writes' tables (a cut's writes take the stood-in roots from them), and the cut it wrote.
+			std::shared_ptr<const SceneStore::Tables> writtenTables;
+			std::uint32_t cutWritten = 0;
+			// T7b2, since the last report: writes made (set, cleared), found as wanted, left (the cut no longer stands in for the root;
+			// a clear older than a cut), the cut's own writes, full writes prepared, cuts, and the main thread's time.
+			std::atomic<std::uint64_t> writesSet{ 0 }, writesCleared{ 0 }, writesUnchanged{ 0 }, writesNotStoodIn{ 0 }, writesHeldByCut{ 0 };
+			std::atomic<std::uint64_t> cutWrites{ 0 }, fullWrites{ 0 }, cuts{ 0 }, writeNs{ 0 }, writeBatches{ 0 };
+			// Since the last report (any thread): the batches decoded and their events, events stale (another listing's, a slot left
+			// empty, older than one taken), batches past their list, arms whose slot's buffer did not hold their frame (the epoch did not
+			// run, or ran without the readback), staging sets added, wakes that found the last task running, and the decode's time ...
+			std::atomic<std::uint64_t> batches{ 0 }, events{ 0 }, stale{ 0 }, overflowed{ 0 }, missed{ 0 }, setsAdded{ 0 }, busy{ 0 }, decodeNs{ 0 };
+			// ... and the observer's: frames compared, frames left out (a batch past its list: some verdicts a frame late), samples whose
+			// frame no batch had, and per class (both in view, DCLF's alone, the engine's alone, neither) the roots and geometries the
+			// engine culled, and those it did not (stood in: the cut's admitted, unmixed entries). Aside from the gate: roots with no DCLF
+			// verdict this frame (not updated by FadeStateCS: no seed, no member drawn), and DCLF's alone on an app-culled (hidden) root,
+			// which the engine's cull does not reach. staleGeometry: the engine's alone whose root's bit is clear (the bit the last cull
+			// that reached it left).
+			struct Counts
+			{
+				std::atomic<std::uint64_t> both{ 0 }, dclfOnly{ 0 }, engineOnly{ 0 }, neither{ 0 };
+			};
+			Counts rootCounts, geometryCounts, stoodInRootCounts, stoodInGeometryCounts;
+			std::atomic<std::uint64_t> framesCompared{ 0 }, framesIncomplete{ 0 }, samplesUnmatched{ 0 }, moved{ 0 }, staleGeometry{ 0 };
+			std::atomic<std::uint64_t> noVerdictEngine{ 0 }, noVerdictNeither{ 0 }, hiddenDclfOnly{ 0 };
+			// The render thread's: the first finds' names since the last report, per category.
+			std::array<std::string, kCategories> firstNames;
+
+			static std::uint64_t BytesFor(std::uint32_t a_events) { return VisibilityEventBytes(a_events); }
+			/** @brief The staging set of a_events (the revision's list capacity), null if none was added for it. */
+			const StagingSet* SetFor(std::uint32_t a_events) const
+			{
+				for (const StagingSet* set = sets.load(std::memory_order_acquire); set; set = set->next)
+					if (set->events == a_events)
+						return set;
+				return nullptr;
+			}
+			/** @brief A staging set for a list of a_events (one thread at a time: the setup, then the growths' revision code). */
+			void AddSet(std::uint32_t a_events)
+			{
+				if (SetFor(a_events))
+					return;
+				auto* set = new StagingSet();
+				set->events = a_events;
+				for (std::uint32_t i = 0; i < frameSlots; ++i)
+					set->buffers.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, BytesFor(a_events)));
+				set->next = sets.load(std::memory_order_relaxed);
+				while (!sets.compare_exchange_weak(set->next, set, std::memory_order_release, std::memory_order_relaxed)) {}
+				setsAdded.fetch_add(1, std::memory_order_relaxed);
+			}
+			~VisibilityReadback()
+			{
+				for (StagingSet* set = sets.exchange(nullptr); set;) {
+					StagingSet* following = set->next;
+					delete set;
+					set = following;
+				}
+				for (Batch* batch = decoded.exchange(nullptr); batch;) {
+					Batch* following = batch->next;
+					delete batch;
+					batch = following;
+				}
+				for (Batch* batch : pending)
+					delete batch;
+				for (Writes* list = writes.exchange(nullptr); list;) {
+					Writes* following = list->next;
+					delete list;
+					list = following;
+				}
+			}
+		};
+
+		/**
 		 * @brief The scene tables' capacities (Impl::ReserveSceneTables), changed with their buffers' growth as one (Growths::Change):
 		 * what the commits send within and the builds bound their objects by (SceneFit). The palettes are FrameValues', in buffers of
 		 * the frame's own.
@@ -523,6 +738,7 @@ namespace DCLF
 		{
 			std::uint32_t objectCapacity = 0, geometryRows = 0, extraRows = 0, faceVertices = 0;
 			std::uint32_t treeCapacity = 0, fadeRootCapacity = 0, fadeEventCapacity = 0;
+			std::uint32_t visibilityEventCapacity = 0;  // T7b1's event list (0: no visibility readback)
 			std::uint32_t portalWords = 0;  // the portal programs' words (PortalViews::Encoded)
 			std::uint32_t treeLodShapeCapacity = 0, treeLodMeshCapacity = 0;
 			bool operator==(const SceneSizing&) const = default;
@@ -610,6 +826,13 @@ namespace DCLF
 			Versioned fadeEvents, fadeReported;
 			bool fadeReportedZeroed = false;
 			std::shared_ptr<FadeWriteBack> fadeWriteBack;
+			// T7b1 (CS_DCLF_ACCUMULATED_PARITY; null without it): the visibility events (VisibilityEventsCS: a header, then
+			// VisibilityEvents; the count zeroed by every depth commit), each root's and each object slot's last reported verdict
+			// (zeroed once per backing: visibilityReportedZeroed, which also starts the decoder again), and the host side.
+			Versioned visibilityEvents, visibilityRootReported, visibilityObjectReported;
+			bool visibilityReportedZeroed = false;
+			std::shared_ptr<const ComputeProgram> visibilityEventsProgram;
+			std::shared_ptr<VisibilityReadback> visibilityReadback;
 			// Tree LOD (dclf-lod.md, "Tree LOD: the draws"; Scene/TreeLod.h): the shape rows, the instance records (75 a shape
 			// slot), the mesh rows, the draw row and the visible list (the draw's arguments, then the culled records), every one read
 			// through its address by the draws' vertex stage. The depth commit uploads what the mirror changed (UploadTreeLod);
@@ -865,6 +1088,9 @@ namespace DCLF
 			// The sequence buffer's ranges (GpuLayouts.h, SequenceSlots): draws per draw range (phase 1 and colour, phase 2) and per
 			// decal group, holding every draw the scene can produce.
 			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
+			// T7c1: the colour segment's terrain groups' ranges, in phase 2's (GpuLayouts.h, kTerrainGroups): every draw each group's
+			// pipeline slots can produce, grown to a power of two past it; the two together within sequenceDraws.
+			std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
 			// The objects the per-object buffers hold (inputs, inputsDepth, visibility, frustum): the scene's object capacity, grown
 			// with it (ReserveObjectBuffers).
 			std::uint32_t objectCapacity = 0;
@@ -942,6 +1168,9 @@ namespace DCLF
 			std::uint32_t targetCount = 0;
 			std::array<std::shared_ptr<org::ExternalTextureResource>, kColorTargets> native;
 			std::shared_ptr<org::ExternalTextureResource> nativeDepth;
+			// T7c1: Terrain Blending's terrain depth (TerrainBlending::terrainDepth), imported once with the main depth's description,
+			// which the Z-prepass draws its near terrain blocks into (MainOpaquePass). Null without that feature.
+			std::shared_ptr<org::ExternalTextureResource> terrainDepth;
 			// CS_DCLF_GBUFFER_PROBE: one texel of every target, copied inside the epoch both before and
 			// after the colour draws. The copies are graph passes so the graph orders them against the
 			// draws; a D3D11 readback issued around the epoch is not ordered against ORG's submissions at
@@ -994,6 +1223,7 @@ namespace DCLF
 		{
 			std::array<org::DeclaredViewToken, kColorTargets> targets{};
 			org::DeclaredViewToken depth;
+			org::DeclaredViewToken terrainDepth;  // the Z-prepass's, with Terrain Blending (Resources::terrainDepth)
 			org::ResourceBindingToken sequences, count, materialRows, pipelineRows, objects, extras;
 			org::ResourceBindingToken lights, lightIndexList, lightGrid;
 			std::vector<org::ResourceBindingToken> frameBuffers;
@@ -1055,6 +1285,7 @@ namespace DCLF
 		{
 			bool depthOnly = false;
 			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // the sequence buffer's ranges (ReserveMainSequences)
+			std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};  // T7c1: the terrain groups' (MainSizing::terrainCapacity)
 			std::uint64_t materialRows = 0, pipelineRows = 0;     // the rows' tables' addresses
 			MainViewport viewport;
 			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
@@ -1189,6 +1420,8 @@ namespace DCLF
 			std::shared_ptr<const PassFrame> frame;
 			std::array<org::PreparedDescriptorReference, kColorTargets> targetViews{};
 			org::PreparedDescriptorReference depthView{};
+			org::PreparedDescriptorReference terrainDepthView{};  // T7c1: Terrain Blending's terrain depth (the Z-prepass's)
+			bool terrainDepth = false;
 			std::uint32_t targetCount = 0;
 			bool phaseTwo = false;
 			bool zPrepass = false;
@@ -4381,6 +4614,14 @@ namespace DCLF
 		void WaitAhead();
 		/** @brief Teardown, the toggle, a load screen: the fade write-back task done (never per frame). */
 		void WaitFadeWriteBack();
+		/**
+		 * @brief T7b1 (CS_DCLF_ACCUMULATED_PARITY), the depth commit (render thread, inside the epoch: the host has waited for the frame
+		 * slot's previous execution): that execution's events harvested from the slot's host buffer, the event list's count zeroed, the
+		 * reported words zeroed once per backing, and the frame slot armed for this frame (VisibilityReadback).
+		 */
+		void ArmVisibilityReadback(SceneStore& a_store, SceneBuffers& a_scene, CommitUploads& a_uploads);
+		/** @brief Teardown, the toggle, a load screen: the visibility decode task done (never per frame). */
+		void WaitVisibilityReadback();
 		std::shared_ptr<const DrawPublication> installedDraws;  // the frame's
 		/**
 		 * @brief The pipeline slots the installed publication's members can draw with: its tables'. A revision that covers it was made at or
@@ -4757,6 +4998,7 @@ namespace DCLF
 			// count of zero and is otherwise identical).
 			std::array<std::vector<DrawSequence>, kDecalGroups> expectedDecals;
 			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // the buffer's ranges when it was copied
+			std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};  // T7c1: and its terrain groups' (MainSizing::terrainCapacity)
 			std::uint32_t framesLeft = 0;
 			// By object: the local shadow lights the CPU selects with the volumes the epoch uploaded (LocalShadowLights), which
 			// BuildDraws put in the draw's object word (kObjectLocalShadowMask); none on the Z-prepass.
@@ -4773,10 +5015,14 @@ namespace DCLF
 			winrt::com_ptr<ID3D11Buffer> count;
 			std::uint32_t framesLeft = 0;
 			std::uint32_t sunCpuTested = 0, sunCpuMissed = 0;
+			// T7c1 (CS_DCLF_SET_PARITY): the CPU's terrain near test over the same frame's depth inputs, eye and distance (<- TB NEAR).
+			std::uint32_t terrainCpuTested = 0, terrainCpuNear = 0;
+			bool terrainCpu = false;
 		};
 		std::optional<CullReadback> cullReadback;
 		std::uint32_t cullEpochs = 0;
 		BuildDrawsLatch sunUpload{};  // the colour epoch's last latch
+		std::array<float, 4> terrainNearUpload{};  // T7c1: the depth epoch's last terrain near test (BuildDrawsLatch::terrainNear)
 		std::vector<SunAccumulation::GpuCascade> sunCascades;  // and the cascades its BuildDraws tested against
 		// The local shadow lights its BuildDraws selected against (LocalShadowLights), and their volumes as uploaded.
 		LocalShadowLights localShadows;

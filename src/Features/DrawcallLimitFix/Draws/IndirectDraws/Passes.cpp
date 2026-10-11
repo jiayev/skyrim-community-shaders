@@ -391,6 +391,9 @@ namespace DCLF::Draws
 				a_builder.ShaderResource(*resources->scene->facePositions, noViews);
 				bindings.pool = a_builder.IndexBuffer(*resources->pool->indices);
 				bindings.bucketCounts = a_builder.IndirectArguments(*resources->zBucketCounts[phaseTwo ? 1 : 0]).Resource();
+				// T7c1: Terrain Blending's terrain depth, which the near terrain blocks' twin buckets draw into after the main depth.
+				if (resources->terrainDepth)
+					bindings.terrainDepth = a_builder.DepthReadWrite(resources->terrainDepth).View();
 			} else {
 				// Read by the input assembler (the face draws' second stream), after the commit's uploads into it.
 				a_builder.VertexBuffer(*resources->scene->facePositions);
@@ -458,6 +461,10 @@ namespace DCLF::Draws
 			for (std::uint32_t i = 0; i < prepared.targetCount; ++i)
 				prepared.targetViews[i] = a_preparation.Capture(a_bindings.targets[i]);
 			prepared.depthView = a_preparation.Capture(a_bindings.depth);
+			if (prepared.zPrepass && resources->terrainDepth) {
+				prepared.terrainDepthView = a_preparation.Capture(a_bindings.terrainDepth);
+				prepared.terrainDepth = true;
+			}
 			return prepared;
 		}
 
@@ -541,14 +548,23 @@ namespace DCLF::Draws
 					a_words[0] = static_cast<std::uint32_t>(a_value);
 					a_words[1] = static_cast<std::uint32_t>(a_value >> 32);
 				};
-				for (const auto& call : frame.zCalls) {
-					const std::uint64_t first = (phaseBase + call.first) * sizeof(DrawSequence);
+				// A call's draws, its depth offset word set or not (kZDrawPushOffsetDepth).
+				auto drawCall = [&](const PassFrame::ZCall& a_call, bool a_offsetDepth) {
+					const std::uint64_t first = (phaseBase + a_call.first) * sizeof(DrawSequence);
 					std::uint32_t words[kDrawPushWords]{};
 					split(words + kZDrawPushSequences, sequencesAddress + first);
-					commands.BindPipeline(call.pipeline);
+					words[kZDrawPushOffsetDepth] = a_offsetDepth ? 1u : 0u;
+					commands.BindPipeline(a_call.pipeline);
 					commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);
-					commands.ExecuteIndirect(frame.indirect.zDrawSignature, sequences, first + kSequenceDrawOffset, counts, std::uint64_t(call.bucket) * sizeof(std::uint32_t),
-						call.capacity);
+					commands.ExecuteIndirect(frame.indirect.zDrawSignature, sequences, first + kSequenceDrawOffset, counts, std::uint64_t(a_call.bucket) * sizeof(std::uint32_t),
+						a_call.capacity);
+				};
+				// T7c1: a terrain group 1 bucket's twin (its near blocks) goes into the main depth with Terrain Blending's offset, as that
+				// feature's depth hook draws them the second time (TerrainBlending::TerrainShaderHacks, OFFSET_DEPTH).
+				bool terrainNear = false;
+				for (const auto& call : frame.zCalls) {
+					drawCall(call, call.terrainNear);
+					terrainNear = terrainNear || call.terrainNear;
 				}
 				// Tree LOD's depth: one instanced draw of the phase's culled records (TreeLodCullPass).
 				if (a_prepared.treeLod)
@@ -556,6 +572,24 @@ namespace DCLF::Draws
 				if (stats)
 					stats->End(commands, statsSlot, depthKind);
 				commands.EndPass();
+				// T7c1, "DCLF terrain depth": the twins again, without the offset, into Terrain Blending's terrain depth - the first of that
+				// feature's two draws of a near block - which its blend (TerrainBlending::BlendPrepassDepths) reads after this epoch.
+				if (terrainNear && a_prepared.terrainDepth) {
+					rhi::DepthAttachment terrainDepth = depth;
+					terrainDepth.dsv = a_recording.Resolve(a_prepared.terrainDepthView);
+					rhi::PassBeginInfo terrainBegin = begin;
+					terrainBegin.depth = &terrainDepth;
+					terrainBegin.debugName = "DCLF terrain depth";
+					commands.BeginPass(terrainBegin);
+					commands.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
+					commands.BindLayout(frame.indirect.zLayout);
+					commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
+					commands.SetIndexBuffer(rhi::IndexBufferView{ a_recording.Resolve(a_bindings.pool).GetHandle(), 0, 0, rhi::Format::R16_UInt });
+					for (const auto& call : frame.zCalls)
+						if (call.terrainNear)
+							drawCall(call, false);
+					commands.EndPass();
+				}
 				if (stats)
 					stats->Resolve(commands, statsSlot, depthKind);
 				return;
@@ -592,7 +626,27 @@ namespace DCLF::Draws
 				return (2 * std::uint64_t(frame.sequenceDraws) + std::uint64_t(a_group) * frame.sequenceDecals) * sizeof(DrawSequence);
 			};
 			auto decalCount = [](std::uint32_t a_group) { return std::uint64_t(DecalCountWord(a_group)) * sizeof(std::uint32_t); };
-			const bool anyDecals = frame.decalCapacity[0] || frame.decalCapacity[1] || frame.decalCapacity[2];
+			// T7c1: the terrain groups' ranges (GpuLayouts.h, kTerrainGroups), in phase 2's, and their count words.
+			auto terrainArguments = [&](std::uint32_t a_group) {
+				return (std::uint64_t(frame.sequenceDraws) + (a_group == 0 ? 0u : frame.terrainCapacity[0])) * sizeof(DrawSequence);
+			};
+			auto terrainCount = [](std::uint32_t a_group) { return std::uint64_t(kCountTerrainGroupWord + a_group) * sizeof(std::uint32_t); };
+			const bool anyTerrain = frame.terrainCapacity[0] || frame.terrainCapacity[1];
+			const bool anyDecals = frame.decalCapacity[0] || frame.decalCapacity[1] || frame.decalCapacity[2] || anyTerrain;
+			// The second pass's calls, in order: the opaque decals and the multi-index layers, then (T7c1) Terrain Blending's terrain
+			// and the meshes it redraws after it - as its replay follows the engine's opaque groups - then the blended decals.
+			auto secondPass = [&](auto&& a_call) {
+				for (const std::uint32_t group : kDecalDrawOrder) {
+					if (group == 1)
+						for (std::uint32_t terrain = 0; terrain < kTerrainGroups; ++terrain)
+							if (frame.terrainCapacity[terrain])
+								a_call(terrainArguments(terrain), terrainCount(terrain), frame.terrainCapacity[terrain],
+									terrain == 0 ? "cs.dclf.colour.terrain" : "cs.dclf.colour.terrain-no-blend");
+					if (frame.decalCapacity[group])
+						a_call(decalArguments(group), decalCount(group), frame.decalCapacity[group],
+							group == 0 ? "cs.dclf.colour.decals-opaque" : group == 2 ? "cs.dclf.colour.decals-layers" : "cs.dclf.colour.decals-blended");
+				}
+			};
 
 			// Every call below is preprocessed here, before the first pass: generated inside the pass
 			// instead, by NVIDIA's driver, each colour call cost a fixed ~170 us of idle GPU in these eight-target passes. The
@@ -612,9 +666,9 @@ namespace DCLF::Draws
 				state.EndPass();
 				if (anyDecals) {
 					beginDrawPass(state, decalBegin);
-					for (const std::uint32_t group : kDecalDrawOrder)
-						if (frame.decalCapacity[group])
-							commands.PreprocessIndirect(state, colourSignature, sequences, decalArguments(group), count, decalCount(group), frame.decalCapacity[group]);
+					secondPass([&](std::uint64_t a_arguments, std::uint64_t a_count, std::uint32_t a_capacity, const char*) {
+						commands.PreprocessIndirect(state, colourSignature, sequences, a_arguments, count, a_count, a_capacity);
+					});
 					state.EndPass();
 				}
 				state.End();
@@ -658,16 +712,17 @@ namespace DCLF::Draws
 			// group, the multi-index layers, then its blended group, each from its own fixed-slot range and its own count
 			// word. The pipelines test depth LESS_EQUAL with the engine's decal bias; only the layers write depth here (the
 			// opaque group's is already there, from the decal depth pass). Same attachments, all loaded.
+			// T7c1: before the blended group, Terrain Blending's terrain (blend mode 1, LESS_EQUAL with depth writes, its mask t55 the
+			// frame record's) and then its no-blend meshes (EQUAL), each appended to its own range, as that feature replays them after
+			// the opaque groups and before the engine's blended decals (Deferred::Hooks::Main_RenderWorld_BlendedDecals).
 			if (anyDecals) {
 				const bool decalPart = subRange("cs.dclf.colour.decals");
 				beginDrawPass(commands, decalBegin);
-				for (const std::uint32_t group : kDecalDrawOrder) {
-					if (!frame.decalCapacity[group])
-						continue;
-					const bool groupPart = subRange(group == 0 ? "cs.dclf.colour.decals-opaque" : group == 2 ? "cs.dclf.colour.decals-layers" : "cs.dclf.colour.decals-blended");
-					commands.ExecuteIndirect(colourSignature, sequences, decalArguments(group), count, decalCount(group), frame.decalCapacity[group]);
+				secondPass([&](std::uint64_t a_arguments, std::uint64_t a_count, std::uint32_t a_capacity, const char* a_name) {
+					const bool groupPart = subRange(a_name);
+					commands.ExecuteIndirect(colourSignature, sequences, a_arguments, count, a_count, a_capacity);
 					endSubRange(groupPart);
-				}
+				});
 				commands.EndPass();
 				endSubRange(decalPart);
 			}
@@ -1207,6 +1262,152 @@ namespace DCLF::Draws
 			a_recording.Commands().CopyBufferRegion(writeBack.readback[slot]->GetAPIResource().GetHandle(), 0, a_recording.Resolve(a_bindings.events).GetHandle(), 0,
 				FadeWriteBack::BytesFor(copied));
 			writeBack.filled[slot] = 1;
+		}
+
+	private:
+		std::shared_ptr<SceneBuffers> scene;
+	};
+
+	struct VisibilityEventsBindings
+	{
+		org::DeclaredViewToken roots, states, frame, frustum, rootReported, objectReported, events;
+	};
+
+	struct VisibilityEventsPrepared
+	{
+		std::shared_ptr<const ComputeProgram> program;
+		VisibilityEventsConstants constants{};
+		std::uint32_t groups = 0;
+	};
+
+	/**
+	 * @brief T7b1 (CS_DCLF_ACCUMULATED_PARITY): the main camera's visibility as change events (VisibilityEventsCS.hlsl), at the depth
+	 * segment's end, once both verdicts are this frame's - the roots' InView (FadeStatePass) and the objects' frustum stamps (depth phase
+	 * 1) - for VisibilityReadbackPass.
+	 */
+	class VisibilityEventsPass final : public org::TypedRenderGraphPass<VisibilityEventsPass, VisibilityEventsPrepared, VisibilityEventsBindings>
+	{
+	public:
+		explicit VisibilityEventsPass(std::shared_ptr<Resources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		VisibilityEventsBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			const auto& scene = *resources->scene;
+			VisibilityEventsBindings bindings{};
+			bindings.roots = a_builder.ShaderResource(*scene.fadeRoots).View();
+			bindings.states = a_builder.ShaderResource(*scene.fadeStates).View();
+			bindings.frame = a_builder.ShaderResource(scene.fadeFrameBuffer).View();
+			bindings.frustum = a_builder.ShaderResource(*resources->frustum).View();
+			bindings.rootReported = a_builder.UnorderedAccess(*scene.visibilityRootReported).View();
+			bindings.objectReported = a_builder.UnorderedAccess(*scene.visibilityObjectReported).View();
+			bindings.events = a_builder.UnorderedAccess(*scene.visibilityEvents).View();
+			return bindings;
+		}
+
+		// The buffers' layout and the depth segment's shape (the per-object buffers' versions). The frame, the root count and the camera
+		// are the fade frame row, which the depth commit uploads.
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass);
+			a_out.push_back(resources->scene->layout.load(std::memory_order_acquire));
+			a_out.push_back(frame ? frame->generation : 0);
+		}
+
+		VisibilityEventsPrepared Prepare(const VisibilityEventsBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		{
+			VisibilityEventsPrepared prepared{};
+			const auto& scene = *resources->scene;
+			const auto& sizing = SceneSizingOf(a_preparation, scene);
+			// Only with the staging set the readback of this sizing copies into (it holds the whole list): nothing is appended that the
+			// copy would leave out.
+			if (!scene.visibilityEventsProgram || !scene.visibilityReadback || !sizing.visibilityEventCapacity || !scene.visibilityReadback->SetFor(sizing.visibilityEventCapacity))
+				return prepared;
+			prepared.program = scene.visibilityEventsProgram;
+			auto& constants = prepared.constants;
+			constants.rootsIndex = CaptureViewIndex(a_preparation, a_bindings.roots);
+			constants.statesIndex = CaptureViewIndex(a_preparation, a_bindings.states);
+			constants.frameIndex = CaptureViewIndex(a_preparation, a_bindings.frame);
+			constants.frustumIndex = CaptureViewIndex(a_preparation, a_bindings.frustum);
+			constants.rootReportedIndex = CaptureViewIndex(a_preparation, a_bindings.rootReported);
+			constants.objectReportedIndex = CaptureViewIndex(a_preparation, a_bindings.objectReported);
+			constants.eventsIndex = CaptureViewIndex(a_preparation, a_bindings.events);
+			// The bound list's, which its staging set's buffers hold whole.
+			constants.eventCapacity = sizing.visibilityEventCapacity;
+			// Every root slot the buffers hold (the shader stops at the frame row's count), then every object slot - while the segment
+			// builds (without depth phase 1 no stamp is this frame's, and the words stand).
+			constants.rootSlots = sizing.fadeRootCapacity;
+			constants.objectSlots = BuildsDraws(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass) ? sizing.objectCapacity : 0u;
+			prepared.groups = (constants.rootSlots + constants.objectSlots + kVisibilityEventsGroup - 1) / kVisibilityEventsGroup;
+			return prepared;
+		}
+
+		static void Record(const VisibilityEventsBindings&, const VisibilityEventsPrepared& a_frame, org::PassRecordContext& a_recording)
+		{
+			if (!a_frame.program || !a_frame.groups)
+				return;
+			auto& commands = a_recording.Commands();
+			commands.BindLayout(a_frame.program->layout->GetHandle());
+			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
+			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kVisibilityEventsConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
+			commands.Dispatch(a_frame.groups, 1, 1);
+		}
+
+	private:
+		std::shared_ptr<Resources> resources;
+	};
+
+	struct VisibilityReadbackBindings
+	{
+		org::ResourceBindingToken events;
+	};
+	struct VisibilityReadbackPrepared
+	{
+		std::shared_ptr<VisibilityReadback> readback;  // holds the staging set
+		const VisibilityReadback::StagingSet* set = nullptr;  // the bound list's (the preparation's scene sizing)
+	};
+
+	/**
+	 * @brief T7b1: the frame's visibility events copied whole into the host buffer of the frame slot, in the staging set of the bound
+	 * list's capacity. A fixed copy: the depth epoch's recordings are made once per ring slot for a revision and submitted again every
+	 * frame (persistent-epochs.md), so the recording depends on the frame slot alone. The depth commit harvests the buffer when the slot
+	 * comes round again (Impl::ArmVisibilityReadback).
+	 */
+	class VisibilityReadbackPass final : public org::TypedRenderGraphPass<VisibilityReadbackPass, VisibilityReadbackPrepared, VisibilityReadbackBindings>
+	{
+	public:
+		explicit VisibilityReadbackPass(std::shared_ptr<SceneBuffers> a_scene) :
+			scene(std::move(a_scene)) {}
+
+		VisibilityReadbackBindings Declare(org::PassBuilder& a_builder)
+		{
+			VisibilityReadbackBindings bindings{};
+			bindings.events = a_builder.CopySource(*scene->visibilityEvents);
+			return bindings;
+		}
+
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
+		{
+			a_out.push_back(scene->layout.load(std::memory_order_acquire));
+		}
+
+		VisibilityReadbackPrepared Prepare(const VisibilityReadbackBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		{
+			const auto& readback = scene->visibilityReadback;
+			return { readback, readback ? readback->SetFor(SceneSizingOf(a_preparation, *scene).visibilityEventCapacity) : nullptr };
+		}
+
+		static void Record(const VisibilityReadbackBindings& a_bindings, const VisibilityReadbackPrepared& a_frame, org::PassRecordContext& a_recording)
+		{
+			if (!a_frame.set)
+				return;
+			const std::uint32_t frameSlot = a_recording.FrameSlot();
+			if (frameSlot >= a_frame.set->buffers.size())
+				return;
+			// The header and every event the list holds (VisibilityEventsPass appends no more than that).
+			a_recording.Commands().CopyBufferRegion(a_frame.set->buffers[frameSlot]->GetAPIResource().GetHandle(), 0, a_recording.Resolve(a_bindings.events).GetHandle(), 0,
+				VisibilityReadback::BytesFor(a_frame.set->events));
 		}
 
 	private:
@@ -2526,6 +2727,11 @@ namespace DCLF::Draws
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-events"), a_scene.fadeEvents);
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.fade-reported"), a_scene.fadeReported);
 			}
+			if (a_scene.visibilityEvents) {
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.visibility-events"), a_scene.visibilityEvents);
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.visibility-root-reported"), a_scene.visibilityRootReported);
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.visibility-object-reported"), a_scene.visibilityObjectReported);
+			}
 		}
 		if (a_scene.treeLodCull) {
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.tree-lod-shapes"), a_scene.treeLodShapes);
@@ -2739,6 +2945,8 @@ namespace DCLF::Draws
 				Register(a_graph, org::ResourceIdentifier(fmt::format("cs.dclf.native-target{}", i)), resources->native[i]);
 			if (resources->nativeDepth)
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.native-depth"), resources->nativeDepth);
+			if (resources->terrainDepth)
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.terrain-blending-depth"), resources->terrainDepth);
 			if (resources->hzb) {
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.hzb"), resources->hzb);
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.hzb-counter"), resources->hzbCounter);
@@ -2879,6 +3087,18 @@ namespace DCLF::Draws
 				a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.z.tree-lod-counts",
 					std::static_pointer_cast<org::RenderPass>(std::make_shared<TreeLodReadbackPass>(resources->scene)))
 						.Epoch(depth));
+			// T7b1 (CS_DCLF_ACCUMULATED_PARITY alone): the frame's visibility changes, after both phases (the roots' InView and the
+			// objects' frustum stamps are final), and their copy into the frame's readback slot (VisibilityReadback).
+			const auto& sceneBuffers = *resources->scene;
+			if (sceneBuffers.visibilityEventsProgram && sceneBuffers.visibilityReadback && sceneBuffers.fadeState && sceneBuffers.fadeRoots && resources->frustum) {
+				a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.visibility-events",
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<VisibilityEventsPass>(resources)))
+						.PreferQueue(org::QueueKind::Graphics)
+						.Epoch(depth));
+				a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.z.visibility-readback",
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<VisibilityReadbackPass>(resources->scene)))
+						.Epoch(depth));
+			}
 			if (resources->probe)
 				a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.z.probe-after",
 					std::static_pointer_cast<org::RenderPass>(std::make_shared<ProbePass>(resources, depthSegment, true)))
