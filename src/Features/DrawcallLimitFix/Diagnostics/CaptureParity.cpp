@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Scene/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Engine/PassCapture.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include "Deferred.h"
@@ -13,6 +14,7 @@
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 #include "Features/DrawcallLimitFix/Scene/MaterialSources.h"
 #include "State.h"
+#include "TruePBR.h"
 
 namespace DCLF
 {
@@ -499,10 +501,11 @@ namespace DCLF
 
 		// t71 and t74 as State::Draw bound them from the pending binding the SetupMaterial hook left.
 		if (!(object.flags & kObjectNoBindings) && object.materialIndex < tables.materials.size()) {
-			const auto& expected = tables.materials[object.materialIndex].featureTextures;
+			const auto& features = tables.materials[object.materialIndex].featureTextures;
+			const std::array<ID3D11ShaderResourceView*, kSkinFeatureTextures> expected{ features[0], features[1] };
 			if (expected[0] || expected[1]) {
-				std::array<ID3D11ShaderResourceView*, kFeatureMaterialTextures> native{};
-				for (std::uint32_t f = 0; f < kFeatureMaterialTextures; ++f)
+				std::array<ID3D11ShaderResourceView*, kSkinFeatureTextures> native{};
+				for (std::uint32_t f = 0; f < kSkinFeatureTextures; ++f)
 					a_context->PSGetShaderResources(kFeatureMaterialRegisters[f], 1, &native[f]);
 				++skinTextureChecks;
 				if (native != expected) {
@@ -539,6 +542,37 @@ namespace DCLF
 		}
 	}
 
+	void CaptureParity::CompareTruePBR(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, std::uint32_t a_objectIndex)
+	{
+		if (!globals::features::truePBR.loaded)
+			return;
+		const auto& tables = SceneStore::Get().GetTables();
+		const auto& object = tables.objects[a_objectIndex];
+		if ((object.flags & kObjectNoBindings) || object.materialIndex >= tables.materials.size())
+			return;
+		// t80-t91 as State::Draw bound them from the views TruePBR's landscape hook left pending (its other materials set none, and
+		// leave the previous draw's: not compared).
+		const auto& features = tables.materials[object.materialIndex].featureTextures;
+		const auto first = features.begin() + kTruePBRFeatureTextures;
+		if (std::none_of(first, features.end(), [](const auto* a_view) { return a_view != nullptr; }))
+			return;
+		std::array<ID3D11ShaderResourceView*, TruePBR::NumExtendedTextures> native{};
+		a_context->PSGetShaderResources(TruePBR::FirstExtendedTexture, TruePBR::NumExtendedTextures, native.data());
+		++truePBRTextureChecks;
+		for (std::uint32_t i = 0; i < TruePBR::NumExtendedTextures; ++i) {
+			if (native[i] != first[i]) {
+				++truePBRTextureMismatches;
+				NoteMismatch(fmt::format("{} TruePBR texture t{}: DCLF {}, native {}", Describe(a_geometry), TruePBR::FirstExtendedTexture + i, fmt::ptr(first[i]),
+					fmt::ptr(native[i])));
+				break;
+			}
+		}
+		for (auto* bound : native) {
+			if (bound)
+				bound->Release();
+		}
+	}
+
 	void CaptureParity::CompareFeatureBindings(ID3D11DeviceContext* a_context)
 	{
 		FeatureBindings current;
@@ -547,8 +581,15 @@ namespace DCLF
 		a_context->VSGetShaderResources(0, kResourceSlots, current.vsResources.data());
 		a_context->PSGetShaderResources(0, kResourceSlots, current.psResources.data());
 
-		// Skin's per-geometry textures (t71, t74, t75), bound for SKIN permutations only.
-		constexpr std::uint64_t kSkinResources = (1ull << (71 - 64)) | (1ull << (74 - 64)) | (1ull << (75 - 64));
+		// The features' per-material textures (kFeatureMaterialRegisters: Advanced Skin's t71 and t74, TruePBR's t80-t91; CompareSkin and
+		// CompareTruePBR check them) and Skin's per-geometry t75, bound for SKIN permutations only.
+		constexpr std::uint64_t kSkinResources = [] {
+			std::uint64_t bits = 1ull << (75 - 64);
+			for (const std::uint32_t t : kFeatureMaterialRegisters)
+				bits |= 1ull << (t - 64);
+			return bits;
+		}();
+		static_assert(kFeatureMaterialRegisters.front() >= 64 && kFeatureMaterialRegisters.back() < 128);
 		auto compare = [&](const auto& a_current, const auto& a_baseline, std::uint32_t a_first, std::uint64_t a_skip, const char* a_what,
 						   std::uint64_t a_skipHigh = 0) {
 			for (std::uint32_t slot = a_first; slot < a_current.size(); ++slot) {
@@ -699,6 +740,7 @@ namespace DCLF
 		}
 
 		CompareSkin(a_context, geometry, static_cast<std::uint32_t>(index));
+		CompareTruePBR(a_context, geometry, static_cast<std::uint32_t>(index));
 
 		CompareFeatureBindings(a_context);
 
@@ -734,6 +776,9 @@ namespace DCLF
 			return;
 		}
 		const auto& tables = store.GetTables();
+		// The lookup and the tables are not one snapshot: an index past the tables (empty between publications) is skipped.
+		if (static_cast<std::size_t>(index) >= tables.objects.size())
+			return;
 		const auto& object = tables.objects[index];
 		if (object.flags & kObjectNoBindings)
 			return;
@@ -866,8 +911,10 @@ namespace DCLF
 			return;
 		}
 
-		++checkedDraws;
 		const auto& tables = store.GetTables();
+		if (static_cast<std::size_t>(index) >= tables.objects.size())
+			return;  // the lookup is past the tables (not one snapshot with them)
+		++checkedDraws;
 		const auto& object = tables.objects[index];
 		if (object.flags & kObjectNoBindings)
 			return;  // a culling candidate only: no material or pipeline entry to compare against
@@ -1055,7 +1102,7 @@ namespace DCLF
 
 		const auto& stats = SceneStore::Get().GetStats();
 		const bool ok = mismatchedDraws == 0 && untrackedEligible == 0 && drawMismatches == 0 && permutationMismatches == 0 && lightMismatches == 0 &&
-		                skinTextureMismatches == 0 && skinWetnessMismatches == 0 && skinOwnerMismatches == 0;
+		                skinTextureMismatches == 0 && skinWetnessMismatches == 0 && skinOwnerMismatches == 0 && truePBRTextureMismatches == 0;
 		std::string flags;
 		for (auto value : renderFlagsSeen)
 			flags += fmt::format(" {:X}", value);
@@ -1112,6 +1159,8 @@ namespace DCLF
 		logger::info("[DCLF] skin parity {}: {} draws' t71/t74 checked, {} differ; {} draws' wetness checked ({} wet), {} differ, {} with a different actor ownership",
 			skinTextureMismatches == 0 && skinWetnessMismatches == 0 && skinOwnerMismatches == 0 ? "OK" : "MISMATCH", skinTextureChecks, skinTextureMismatches,
 			skinWetnessChecks, skinWetDraws, skinWetnessMismatches, skinOwnerMismatches);
+		logger::info("[DCLF] TruePBR texture parity {}: {} landscape draws' t80-t91 checked, {} differ", truePBRTextureMismatches == 0 ? "OK" : "MISMATCH",
+			truePBRTextureChecks, truePBRTextureMismatches);
 		std::string diffs;
 		static constexpr const char* kFieldNames[] = { "vertex", "pixel", "extra", "feature" };
 		for (const auto& [key, count] : permutationDiffs)
@@ -1170,6 +1219,7 @@ namespace DCLF
 		drawMismatches = drawsChecked = 0;
 		techniqueMismatches = inheritedFilters = permutationChecks = permutationMismatches = lightChecks = lightMismatches = 0;
 		skinTextureChecks = skinTextureMismatches = skinWetnessChecks = skinWetnessMismatches = skinWetDraws = skinOwnerMismatches = 0;
+		truePBRTextureChecks = truePBRTextureMismatches = 0;
 		permutationDiffs.clear();
 		unevaluated.clear();
 		bindingChanges.clear();

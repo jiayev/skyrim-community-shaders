@@ -128,7 +128,7 @@ namespace DCLF
 		bool EvaluateVanilla(const MaterialSnapshot& a_snapshot, std::uint32_t a_passDescriptor, const VanillaFrame& a_frame, MaterialRecord& a_out);
 		/** @brief TruePBR::BSLightingShader_SetupMaterial for CS's PBR materials (MaterialPortFeature.cpp). */
 		bool EvaluatePBR(const MaterialSnapshot& a_snapshot, std::uint32_t a_passDescriptor, const MaterialFrame& a_frame, MaterialRecord& a_out);
-		/** @brief Advanced Skin's and TerrainHelper's hooks: featureTextures and anything else they bind (MaterialPortFeature.cpp). */
+		/** @brief Advanced Skin's and TerrainHelper's hooks: featureTextures' Advanced Skin entries and anything else they bind (MaterialPortFeature.cpp). */
 		void EvaluateFeatureHooks(const MaterialSnapshot& a_snapshot, std::uint32_t a_passDescriptor, const FeatureFrame& a_frame, MaterialRecord& a_out);
 		/** @brief The vanilla classes' texture fields (offsets; a_count is set, not added to), for Capture (MaterialPortVanilla.cpp). */
 		void VanillaTextureFields(const RE::BSShaderMaterial& a_material, std::uint16_t* a_out, std::uint32_t& a_count);

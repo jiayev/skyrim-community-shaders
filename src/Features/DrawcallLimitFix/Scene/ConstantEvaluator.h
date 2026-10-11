@@ -17,11 +17,16 @@ namespace DCLF
 
 	/**
 	 * @brief Per-material textures a Community Shaders hook on SetupMaterial binds outside the engine's slots:
-	 * Advanced Skin's t71 (RFAOS) and t74 (wetness), Skin::MaterialTexturesOf. MaterialRecord::featureTextures
-	 * holds them in this order.
+	 * Advanced Skin's t71 (RFAOS) and t74 (wetness), Skin::MaterialTexturesOf; TruePBR's landscape displacement
+	 * (t80-t85) and RMAOS (t86-t91) layers, its extendedRendererState. MaterialRecord::featureTextures holds them
+	 * in this order.
 	 */
-	inline constexpr std::array<std::uint32_t, 2> kFeatureMaterialRegisters{ 71, 74 };
+	inline constexpr std::array<std::uint32_t, 14> kFeatureMaterialRegisters{ 71, 74, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91 };
 	inline constexpr std::uint32_t kFeatureMaterialTextures = static_cast<std::uint32_t>(kFeatureMaterialRegisters.size());
+	/** @brief Advanced Skin's entries of featureTextures (t71, t74): the first two. */
+	inline constexpr std::uint32_t kSkinFeatureTextures = 2;
+	/** @brief TruePBR's: its 12 slots (t80-t91) from this entry on, TruePBR::FirstExtendedTexture's first. */
+	inline constexpr std::uint32_t kTruePBRFeatureTextures = 2;
 	/** @brief The featureTextures entry of a pixel texture register, or -1. */
 	inline constexpr int FeatureMaterialSlot(std::uint32_t a_register)
 	{
@@ -30,6 +35,9 @@ namespace DCLF
 				return static_cast<int>(i);
 		return -1;
 	}
+	static_assert(FeatureMaterialSlot(71) == 0 && FeatureMaterialSlot(74) == 1 && FeatureMaterialSlot(80) == static_cast<int>(kTruePBRFeatureTextures) &&
+				  FeatureMaterialSlot(91) == static_cast<int>(kFeatureMaterialTextures) - 1);
+	static_assert(kFeatureMaterialTextures <= 32);  // a bit each in the build's row state (MainRows::MaterialState::features)
 
 	/** @brief Bit pattern of constant components the engine did not write (a quiet NaN no engine code produces; a signaling NaN would be quietened by float copies). */
 	inline constexpr std::uint32_t kUnwrittenBits = 0x7fdadbadu;  // quiet NaN: survives float copies unchanged

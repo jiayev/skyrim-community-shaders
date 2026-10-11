@@ -91,7 +91,7 @@ namespace DCLF
 	 *
 	 * A material row is a material slot's (SceneStore::Tables::materials, keyed {material, pass descriptor}): its PerMaterial
 	 * blocks (b1), packed through its technique's constant tables, and its textures and samplers - the material's, a
-	 * projected technique's projected textures (t3, t8, t10, t11), the features' (t71, t74). A pipeline row is a pipeline
+	 * projected technique's projected textures (t3, t8, t10, t11), the features' (kFeatureMaterialRegisters: t71, t74, t80-t91). A pipeline row is a pipeline
 	 * slot's: its technique blocks (b0), its PerGeometry template (b2), its permutation (b4), and its technique's shadow mask
 	 * (t14, s14), and its key's vertex layout.
 	 */
@@ -106,6 +106,8 @@ namespace DCLF
 		std::uint32_t features[kFeatureMaterialTextures]{};
 	};
 	static_assert(kMaterialRowHeader + sizeof(MaterialRowHeader) <= kMaterialRowBytes);
+	// DCLFMaterialTextureIndex (DCLFObjects.hlsli) reads the features from the 32nd word after the addresses, in register order.
+	static_assert(offsetof(MaterialRowHeader, features) == 16 + 4 * 32);
 	inline constexpr std::uint32_t kPipelineRowBytes = 2048;
 	inline constexpr std::uint32_t kPipelineRowTechniqueVS = 0, kPipelineRowTechniquePS = 256, kPipelineRowGeometryVS = 512, kPipelineRowGeometryPS = 768,
 								   kPipelineRowPermutation = 1280, kPipelineRowHeader = 1536;

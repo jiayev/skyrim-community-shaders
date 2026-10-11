@@ -1,5 +1,3 @@
-#include <dbghelp.h>
-
 #include "Deferred.h"
 #include "Features/RenderDoc.h"
 #include "Features/Upscaling.h"
@@ -24,6 +22,103 @@ bool Load();
 // load with no Windows Error Reporting record and no .dmp, which leaves nothing to analyse.
 // A vectored handler runs before any SEH frame swallows the fault, so it sees the exception
 // even when something downstream would otherwise turn it into a silent exit.
+//
+// The dump is written out of process, by CommunityShadersCrashDump.exe beside this DLL
+// (tools/crash-dump-helper), started once at load. MiniDumpWriteDump suspends every other
+// thread and then allocates from the process heap and takes loader locks: called in here, a
+// thread suspended while holding the heap's lock hung the game in the dump (2026-10-11). The
+// handler now only writes the faulting thread and its exception pointers into a shared
+// section, signals the helper and waits for it: no allocation, no lock.
+namespace
+{
+	// The section's layout, read by the helper (tools/crash-dump-helper/main.cpp, Shared).
+	struct CrashDumpShared
+	{
+		std::uint32_t threadId;
+		std::uint32_t pad;
+		std::uint64_t exceptionPointers;
+	};
+
+	struct CrashDumpHelper
+	{
+		HANDLE crash = nullptr;
+		HANDLE done = nullptr;
+		CrashDumpShared* shared = nullptr;
+	};
+	CrashDumpHelper crashDumpHelper;
+
+	// How long the faulting thread waits for the helper's dump before the exception goes on.
+	constexpr DWORD kCrashDumpWaitMs = 120000;
+
+	void StartCrashDumpHelper()
+	{
+		HMODULE module = nullptr;
+		GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			reinterpret_cast<LPCWSTR>(&StartCrashDumpHelper), &module);
+		wchar_t modulePath[MAX_PATH]{};
+		GetModuleFileNameW(module, modulePath, MAX_PATH);
+		const auto helper = std::filesystem::path{ modulePath }.parent_path() / L"CommunityShadersCrashDump.exe";
+		wchar_t gamePath[MAX_PATH]{};
+		GetModuleFileNameW(nullptr, gamePath, MAX_PATH);
+		const auto dump = std::filesystem::path{ gamePath }.parent_path() / L"CommunityShaders.dmp";
+		if (!std::filesystem::exists(helper)) {
+			logger::warn("[CRASH] {} is missing: crashes write no dump", helper.string());
+			return;
+		}
+
+		SECURITY_ATTRIBUTES inherit{ sizeof(inherit), nullptr, TRUE };
+		HANDLE process = nullptr;
+		DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &process,
+			PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_DUP_HANDLE | SYNCHRONIZE, TRUE, 0);
+		const HANDLE crash = CreateEventW(&inherit, TRUE, FALSE, nullptr);
+		const HANDLE done = CreateEventW(&inherit, TRUE, FALSE, nullptr);
+		const HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, &inherit, PAGE_READWRITE, 0, sizeof(CrashDumpShared), nullptr);
+		auto* shared = section ? static_cast<CrashDumpShared*>(MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, sizeof(CrashDumpShared))) : nullptr;
+		if (!process || !crash || !done || !shared) {
+			logger::warn("[CRASH] the crash dump helper's handles could not be made (error {}): crashes write no dump", GetLastError());
+			return;
+		}
+
+		// The helper inherits these four handles only, not every inheritable handle of the game.
+		HANDLE inherited[4]{ process, crash, done, section };
+		SIZE_T attributeBytes = 0;
+		InitializeProcThreadAttributeList(nullptr, 1, 0, &attributeBytes);
+		std::vector<std::byte> attributeStorage(attributeBytes);
+		auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributeStorage.data());
+		InitializeProcThreadAttributeList(attributes, 1, 0, &attributeBytes);
+		UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, sizeof(inherited), nullptr, nullptr);
+		STARTUPINFOEXW startup{};
+		startup.StartupInfo.cb = sizeof(startup);
+		startup.lpAttributeList = attributes;
+		std::wstring command = std::format(L"\"{}\" {} {} {} {} \"{}\"", helper.wstring(),
+			reinterpret_cast<std::uintptr_t>(process), reinterpret_cast<std::uintptr_t>(crash), reinterpret_cast<std::uintptr_t>(done),
+			reinterpret_cast<std::uintptr_t>(section), dump.wstring());
+		PROCESS_INFORMATION info{};
+		const BOOL started = CreateProcessW(helper.c_str(), command.data(), nullptr, nullptr, TRUE,
+			CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, &startup.StartupInfo, &info);
+		DeleteProcThreadAttributeList(attributes);
+		if (!started) {
+			logger::warn("[CRASH] {} could not be started (error {}): crashes write no dump", helper.string(), GetLastError());
+			return;
+		}
+		CloseHandle(info.hThread);
+		CloseHandle(info.hProcess);
+		crashDumpHelper = { crash, done, shared };
+		logger::info("[CRASH] crash dumps are written by {} (pid {}) to {}", helper.filename().string(), info.dwProcessId, dump.string());
+
+		// CS_TEST_CRASH=<seconds> (a development switch): a worker thread faults that long after load, to exercise the
+		// handler and the helper end to end.
+		if (const char* test = std::getenv("CS_TEST_CRASH"); test && *test) {
+			const int seconds = std::max(1, std::atoi(test));
+			logger::warn("[CRASH] CS_TEST_CRASH: a deliberate access violation in {} s", seconds);
+			std::thread([seconds] {
+				std::this_thread::sleep_for(std::chrono::seconds(seconds));
+				*static_cast<volatile int*>(nullptr) = 0;
+			}).detach();
+		}
+	}
+}
+
 static LONG CALLBACK CommunityShadersCrashDump(EXCEPTION_POINTERS* a_exception)
 {
 	if (!a_exception || !a_exception->ExceptionRecord)
@@ -44,22 +139,11 @@ static LONG CALLBACK CommunityShadersCrashDump(EXCEPTION_POINTERS* a_exception)
 		fmt::ptr(a_exception->ExceptionRecord->ExceptionAddress));
 	spdlog::default_logger()->flush();
 
-	wchar_t path[MAX_PATH]{};
-	GetModuleFileNameW(nullptr, path, MAX_PATH);
-	std::filesystem::path dump{ path };
-	dump = dump.parent_path() / L"CommunityShaders.dmp";
-
-	const HANDLE file = CreateFileW(dump.c_str(), GENERIC_WRITE, 0, nullptr,
-		CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-	if (file != INVALID_HANDLE_VALUE) {
-		MINIDUMP_EXCEPTION_INFORMATION info{};
-		info.ThreadId = GetCurrentThreadId();
-		info.ExceptionPointers = a_exception;
-		info.ClientPointers = FALSE;
-		MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file,
-			static_cast<MINIDUMP_TYPE>(MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory),
-			&info, nullptr, nullptr);
-		CloseHandle(file);
+	if (crashDumpHelper.shared) {
+		crashDumpHelper.shared->threadId = GetCurrentThreadId();
+		crashDumpHelper.shared->exceptionPointers = reinterpret_cast<std::uintptr_t>(a_exception);
+		SetEvent(crashDumpHelper.crash);
+		WaitForSingleObject(crashDumpHelper.done, kCrashDumpWaitMs);
 	}
 	return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -136,6 +220,7 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 	while (!REX::W32::IsDebuggerPresent()) {};
 #endif
 	InitializeLog();
+	StartCrashDumpHelper();
 	AddVectoredExceptionHandler(1, &CommunityShadersCrashDump);
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::VERSION.string());
 	ApplyDevEnvironmentFile();

@@ -2487,6 +2487,14 @@ off restores the old classification exactly: MTLand `technique`, the meshes `ter
 -   **Sizing.** The depth twins add their capacity to the phase ranges and a word each to the bucket counts and tables
     (`ReserveMainSequences` counts a twin per group 1 slot); the terrain ranges' sum is held within `sequenceDraws`.
 
+**TruePBR's landscape layers.** A TRUE_PBR landscape permutation also samples each tile's displacement (t80-t85) and
+RMAOS (t86-t91), which TruePBR's `SetupMaterial` binds through its own `extendedRendererState`. They are material
+feature textures (`kFeatureMaterialRegisters`, after Advanced Skin's t71 and t74), written by the port's `Landscape`
+from the snapshot's views (default black and white), and drawn from the material row like t0-t15. Before this they fell
+through to the frame record, which held nothing, so a full-PBR tile read RMAOS as 0: no AO, so no ambient (shadowed terrain
+was black), and roughness 0 (see "Resolved: shadowed terrain drawn black under Terrain Blending" in
+[dclf-open-defects.md](./dclf-open-defects.md)).
+
 **The observer** (`<- TB NEAR`, under `CS_DCLF_SET_PARITY`): depth phase 1 counts its group 1 inputs and the near ones (count
 words 30, 31); the culling readback repeats the test on the CPU over the same frame's depth inputs, with the bounds from the
 geometry and the eye and distance the latch had, and the report prints both: `terrain under Terrain Blending (sampled

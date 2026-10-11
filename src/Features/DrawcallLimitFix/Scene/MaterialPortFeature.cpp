@@ -155,6 +155,8 @@ namespace DCLF::MaterialPort
 				Texture(a_slot, a_view, a_address);
 				out.filterModes[a_slot] = a_filter;
 			}
+			// A feature's own slot (kFeatureMaterialRegisters): TruePBR's extendedRendererState.SetPSTexture.
+			void FeatureTexture(std::uint32_t a_entry, ID3D11ShaderResourceView* a_view) { out.featureTextures[a_entry] = a_view; }
 		};
 
 		ID3D11ShaderResourceView* RenderTargetView(const FeatureFrame& a_frame, std::int32_t a_index)
@@ -184,14 +186,17 @@ namespace DCLF::MaterialPort
 		void Landscape(const MaterialSnapshot& a_snapshot, const FeatureFrame& a_frame, Writer& a_write)
 		{
 			const auto& ps = ShaderConstants::LightingPS::Get();
-			// Every tile's slots, a missing texture by the default; the displacement and RMAOS layers go to TruePBR's own t80-t91
-			// (extendedRendererState), which the stand-in does not capture and MaterialRecord does not hold.
+			// Every tile's slots, a missing texture by the default; the displacement (black) and RMAOS (white) layers go to TruePBR's own
+			// t80-t91 (extendedRendererState: views only, sampled through the colour sampler, s0), MaterialRecord::featureTextures
+			// from kTruePBRFeatureTextures. Without them a full-PBR tile samples no RMAOS: AO 0 (no ambient), roughness 0.
 			const auto orDefault = [&](std::uint16_t a_offset, ID3D11ShaderResourceView* a_default) {
 				return a_snapshot.HasTexture(a_offset) ? a_snapshot.View(a_offset) : a_default;
 			};
 			for (std::uint32_t tile = 0; tile < kTiles; ++tile) {
 				a_write.Texture(tile, orDefault(Pointer(kLandBaseColor, tile), a_frame.defaultBlackView), kWrap, kAnisotropic);
 				a_write.Texture(kNormalStart + tile, orDefault(Pointer(kLandNormal, tile), a_frame.defaultNormalMapView), kWrap, kAnisotropic);
+				a_write.FeatureTexture(kTruePBRFeatureTextures + tile, orDefault(Pointer(kLandDisplacement, tile), a_frame.defaultBlackView));
+				a_write.FeatureTexture(kTruePBRFeatureTextures + kTiles + tile, orDefault(Pointer(kLandRmaos, tile), a_frame.defaultWhiteView));
 			}
 			if (a_snapshot.HasTexture(kLandOverlay))
 				a_write.Texture(13, a_snapshot.View(kLandOverlay), kClamp, kAnisotropic);
@@ -460,18 +465,24 @@ namespace DCLF::MaterialPort
 	void EvaluateFeatureHooks(const MaterialSnapshot& a_snapshot, std::uint32_t, const FeatureFrame& a_frame, MaterialRecord& a_out)
 	{
 		// Advanced Skin (Skin::MaterialTexturesOf, outermost on slot 4): FaceGen and FaceGenRGBTint materials only; no hash key, or
-		// no extra texture, binds black to both. TerrainHelper's t92-t97 and ExtraFeatureDescriptor bits are not in the record
-		// (the stand-in restores permutationData and does not capture its slots), so nothing of it is ported here.
-		a_out.featureTextures = {};
+		// no extra texture, binds black to both. Its entries only: TruePBR's (EvaluatePBR) are the rest. TerrainHelper's t92-t97 and
+		// ExtraFeatureDescriptor bits are not in the record (the stand-in restores permutationData and does not capture its slots; no
+		// shader samples t92-t97), so nothing of it is ported here.
+		const auto skin = [&](ID3D11ShaderResourceView* a_rfaos, ID3D11ShaderResourceView* a_wetness) {
+			a_out.featureTextures[0] = a_rfaos;
+			a_out.featureTextures[1] = a_wetness;
+		};
+		static_assert(kSkinFeatureTextures == 2);
+		skin(nullptr, nullptr);
 		if (!SkinApplies(a_snapshot, a_frame))
 			return;
 		const auto hashKey = a_snapshot.At<std::uint32_t>(kHashKey);
 		if (hashKey == 0) {
-			a_out.featureTextures = { a_frame.defaultBlackView, a_frame.defaultBlackView };
+			skin(a_frame.defaultBlackView, a_frame.defaultBlackView);
 			return;
 		}
 		if (const auto* textures = FindSkinTextures(a_frame, hashKey))
-			a_out.featureTextures = { textures->rfaos, textures->wetness };
+			skin(textures->rfaos, textures->wetness);
 		// A key Advanced Skin has not set up yet: left null (FeatureHooksCovered is false for it).
 	}
 

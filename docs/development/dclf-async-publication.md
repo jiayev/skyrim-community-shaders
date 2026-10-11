@@ -1724,7 +1724,7 @@ resident-draw, set and fade parity; motion m28/m29).
       the globals' and the render targets' values: `SampleFrame`). The parts: vanilla SetupMaterial 1414dc310 (`MaterialPortVanilla`,
       every technique and flag path, the class table by vtable with each class's size from its Create), TruePBR's replacement and its
       hand-back to vanilla, Advanced Skin's feature textures (`MaterialPortFeature`; TerrainHelper's t92-t97 and TruePBR landscape's
-      t80-t91 are outside the record, as the stand-in never captured them). The record's producer on the render thread
+      t80-t91 are outside the record, as the stand-in never captured them; T7c1 later put t80-t91 in it as feature textures). The record's producer on the render thread
       (`SceneStore::PortMaterial`: the new slots, the written materials, the frame components' samples); the engine's evaluation runs
       only as the parity (`CheckMaterialPort`, CS_DCLF_PERSISTENT_PARITY, `<- MATERIAL PORT`). IBLParams (PS 29, the shader object's,
       unread by the Lighting stages) moves within a frame: counted apart, not compared.

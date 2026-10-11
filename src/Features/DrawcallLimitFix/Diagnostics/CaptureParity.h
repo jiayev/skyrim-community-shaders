@@ -155,6 +155,9 @@ namespace DCLF
 		std::uint64_t skinWetnessMismatches = 0;
 		std::uint64_t skinWetDraws = 0;  // checked draws with sweat or water wetness (x or y)
 		std::uint64_t skinOwnerMismatches = 0;
+		// TruePBR: its landscape layers (PS t80-t91) against the material record.
+		std::uint64_t truePBRTextureChecks = 0;
+		std::uint64_t truePBRTextureMismatches = 0;
 		std::uint64_t permutationChecks = 0;
 		std::uint64_t permutationMismatches = 0;
 		// Bindings Community Shaders owns (constant buffers b3 and up, shader resources outside the
@@ -162,6 +165,7 @@ namespace DCLF
 		// frame, so that DCLF can bind them once per pass. Baseline = the frame's first eligible draw.
 		void CompareFeatureBindings(ID3D11DeviceContext* a_context);
 		void CompareSkin(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, std::uint32_t a_objectIndex);
+		void CompareTruePBR(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, std::uint32_t a_objectIndex);
 		static constexpr std::uint32_t kFirstFeatureConstantBuffer = 3;
 		static constexpr std::uint32_t kConstantBufferSlots = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
 		static constexpr std::uint32_t kResourceSlots = 128;

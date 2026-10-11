@@ -675,8 +675,8 @@ void TruePBR::GenerateShaderPermutations(RE::BSShader* shader)
 
 struct ExtendedRendererState
 {
-	static constexpr uint32_t NumPSTextures = 12;
-	static constexpr uint32_t FirstPSTexture = 80;
+	static constexpr uint32_t NumPSTextures = TruePBR::NumExtendedTextures;
+	static constexpr uint32_t FirstPSTexture = TruePBR::FirstExtendedTexture;
 
 	uint32_t PSResourceModifiedBits = 0;
 	std::array<ID3D11ShaderResourceView*, NumPSTextures> PSTexture;
@@ -1990,4 +1990,15 @@ void TruePBR::SetShaderResources(ID3D11DeviceContext* a_context)
 
 	// Reset modified bits
 	extendedRendererState.PSResourceModifiedBits = 0;
+}
+
+TruePBR::ExtendedTextures TruePBR::GetExtendedTextures() const
+{
+	return { extendedRendererState.PSTexture, extendedRendererState.PSResourceModifiedBits };
+}
+
+void TruePBR::SetExtendedTextures(const ExtendedTextures& a_textures)
+{
+	extendedRendererState.PSTexture = a_textures.views;
+	extendedRendererState.PSResourceModifiedBits = a_textures.modified;
 }
