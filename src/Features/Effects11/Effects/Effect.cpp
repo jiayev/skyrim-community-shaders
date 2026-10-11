@@ -301,8 +301,6 @@ bool Effect::Apply()
 
 void Effect::Unload()
 {
-	effect = nullptr;
-
 	techniques.clear();
 	variables.clear();
 	customTextureCache.clear();
@@ -318,6 +316,8 @@ void Effect::Unload()
 	sourceOrderMap.clear();
 
 	ClearVariableCache();
+
+	effect = nullptr;
 
 	filePresent = false;
 	errors.clear();
@@ -615,8 +615,9 @@ ID3D11ShaderResourceView* Effect::LoadTextureFromFile(const std::string& filenam
 
 	DirectX::ScratchImage image;
 	HRESULT hr = DirectX::LoadFromDDSFile(filepath.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, image);
+	// PNG color-space metadata must not add hardware sRGB decoding to preset LUT values.
 	if (FAILED(hr))
-		hr = DirectX::LoadFromWICFile(filepath.c_str(), DirectX::WIC_FLAGS_NONE, nullptr, image);
+		hr = DirectX::LoadFromWICFile(filepath.c_str(), DirectX::WIC_FLAGS_IGNORE_SRGB, nullptr, image);
 	if (SUCCEEDED(hr))
 		hr = DirectX::CreateShaderResourceView(device, image.GetImages(), image.GetImageCount(), image.GetMetadata(), srv.put());
 
