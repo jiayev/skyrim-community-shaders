@@ -8,6 +8,7 @@
 #include <imgui.h>
 
 #include "Profiler.h"
+#include "Utils/Game.h"
 #include "Utils/LegitProfiler.h"
 
 /**
@@ -85,21 +86,6 @@ private:
 	static inline float cachedMaxP99Ms = 0.0f;
 	static inline std::vector<GroupEntry> cachedGroups;
 
-
-	struct GraphState
-	{
-		ImGuiUtils::ProfilerGraph graph;
-		Util::GraphSampleGate gate;
-
-		// User-provided so the static members below can default-construct it in-class.
-		GraphState() :
-			graph(Profiler::kHistorySize) {}
-
-		/** @brief Records this frame's tasks (if the gate allows) and renders the graph. */
-		void Render(const std::vector<legit::ProfilerTask>& tasks, float baseLegendWidth, float baseHeight, float minFrameTimeSec);
-
-	static inline ImGuiUtils::ProfilerGraph gpuGraph{ Profiler::kHistorySize };
-
 	struct PassStatistics
 	{
 		float avgMs;
@@ -110,12 +96,19 @@ private:
 		float cpuP99Ms;
 	};
 
-	struct FeatureGraphState
+	struct GraphState
 	{
-		ImGuiUtils::ProfilerGraph graph{ Profiler::kHistorySize };
+		ImGuiUtils::ProfilerGraph graph;
+		Util::GraphSampleGate gate;
 		double lastStatisticsUpdate = -1.0;
 		std::unordered_map<std::string, PassStatistics> statistics;
 
+		// User-provided so the static members below can default-construct it in-class.
+		GraphState() :
+			graph(Profiler::kHistorySize) {}
+
+		/** @brief Records this frame's tasks (if the gate allows) and renders the graph. */
+		void Render(const std::vector<legit::ProfilerTask>& tasks, float baseLegendWidth, float baseHeight, float minFrameTimeSec);
 	};
 	static inline GraphState gpuGraph;
 	static inline std::unordered_map<std::string, GraphState> featureGraphs;
