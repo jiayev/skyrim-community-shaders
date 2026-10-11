@@ -188,6 +188,20 @@ namespace DCLF
 			if (changed)
 				setShape(4, std::move(kept));
 		}
+		// T7d: the forward epoch records the colour shape's forward passes (ForwardDrawPass), while CS_DCLF_FORWARD is on: its slot names
+		// the colour slot's shape (the same value, so a recording kept for it stays while the colour shape does); none while it is off.
+		{
+			const auto& colour = draft.Get(R::kShapeSlot + static_cast<std::uint32_t>(kColourShape));
+			const auto colourShape = colour && producer.inputs.toggles.forward ? colour->Value<PassFrame>() : nullptr;
+			const auto& current = draft.Get(R::kShapeSlot + R::kForwardEpoch);
+			const auto currentShape = current ? current->Value<PassFrame>() : nullptr;
+			if (colourShape != currentShape) {
+				if (colourShape)
+					setShape(R::kForwardEpoch, colourShape);
+				else
+					draft.Set(R::kShapeSlot + R::kForwardEpoch, nullptr);
+			}
+		}
 
 		// Each epoch's recording: kept while it requires exactly the draft's shape and versions; else requested for them. A failed
 		// one is dropped (the epoch has none in the revision) and not asked for again until its shape or the versions change.
@@ -229,7 +243,10 @@ namespace DCLF
 				data->shapes.scene = sceneSizing;
 				requests.push_back(std::move(data));
 			};
-			if (e < 2) {
+			if (e == R::kForwardEpoch) {
+				// T7d: the forward epoch's passes prepare against the colour shape (CurrentFrame's MainOpaque).
+				request([&](RevisionShapes& a_shapes) { a_shapes.main[kColourShape] = shapeFragment->Value<PassFrame>(); });
+			} else if (e < 2) {
 				request([&](RevisionShapes& a_shapes) { a_shapes.main[e] = shapeFragment->Value<PassFrame>(); });
 			} else if (e < 4) {
 				for (const auto& variant : shapeFragment->Value<ShadowVariants>()->shapes)
@@ -536,7 +553,9 @@ namespace DCLF
 		for (std::uint32_t e = 0; e < R::kEpochs; ++e)
 			rv.uncovered[e] += rv.covered[e] ? 0 : 1;
 		// The main epochs decide the frame's claims: without their recordings the frame is the engine's (SceneStore::WithdrawSet).
-		const bool main = rv.covered[kDepthShape] && rv.covered[kColourShape];
+		// T7d: with the forward toggle on, the forward epoch's too: its members' passes are withheld with the frame's claims, and only the
+		// forward epoch draws them (a frame without its recording would lose them).
+		const bool main = rv.covered[kDepthShape] && rv.covered[kColourShape] && (!ActiveToggles().forward || rv.covered[R::kForwardEpoch]);
 		rv.withdrawn += main ? 0 : 1;
 		// The faces' withholding (PassCapture), before the engine renders them: the claims stand and the cube the epoch draws into is
 		// in the graph as built (its import, at the epoch, is built at the next build point).

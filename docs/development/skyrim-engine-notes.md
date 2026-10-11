@@ -1148,6 +1148,14 @@ Decompiled 2026-10-01 for moving the fade and LOD state machine to the GPU.
         `currentFade` from the distance, `+0x134`, and `+0x13C` for types 1 and 4-6.
 
     All of it precedes DCLF's attach event, so a GPU state slot initialised from the node at join starts from it.
+-   **Who writes `+0x13C`** (checked 2026-10-11 for T7b4's `<- FADE DOUBLE`):
+    -   `BSFadeNode::OnVisible` (`0x141479f50`) stores the fade frame counter (`0x142032e50`) there after its fade update. It does so
+        only when the process has `cameraRelatedUpdates`, and skips both the update and the store with fades off or the node settled
+        at 1.
+    -   `FUN_14147a160` only reads it.
+
+    So a `+0x13C` that moved means an `OnVisible` stepped the fade. The animation gate `FUN_1402cff60` reads `currentFade > 0` from the
+    node right after its call of `FUN_14147a160` (`0x1402d0044`), so with that call skipped, the gate reads whatever the node holds.
 -   **`fadeAmount` is `NiAVObject+0x100`**, not a fade node field. Its stores are spread over 375 functions, none of
     them a user of the fade globals; the named ones are `NiAVObject::ctor` and `Actor::SetAlpha` (actors, which are not
     stood in).
@@ -1196,6 +1204,8 @@ Decompiled 2026-10-01 for moving the fade and LOD state machine to the GPU.
 -   **Which trees the tree list's loop visits.** `FUN_140437e50` skips a tree unless its first child's multibound
     (`AsMultiBoundNode`, `+0x128`, its shape at `+0x18`) has the cull result 1 (`+0x10`) from the last cull, or the
     process's cull mode is 3.
+    "Tree manager list (T7b5)" below has the loop's stores exactly (a near tree also gets the base LOD index, and the
+    near list decides whose bones animate).
 -   **The update time.** `FUN_140437d40` stores how long its last update took at `+0x7C`, in ms. The next update's
     budget is derived from it.
 -   **In one load order:** at Riverwood the tree list was empty and the animation list held 2,562 nodes. `+0x80` was
@@ -1544,6 +1554,66 @@ reads the bit in `FUN_14150a610`, and `IsRoomVisible` of a shared node falls bac
 
     It is an existing defect for the never-fade case. T7b2's live writes (or not clearing the bit) fix it, and a count
     of admitted roots in the animated array by case (kIgnoreFade vs fading) measures it.
+
+### Tree manager list (T7b5)
+
+Reverse engineered 2026-10-11 (Ghidra, AE 1.6.1170) for DCLF's port of the tree list loop. It corrects "The tree manager"
+above on the LOD stores and on which trees each list holds.
+
+-   **The update, `FUN_140437d40(manager, process, paused)`** (Main::Update `0x140646176`, main thread, concurrently with
+    `UpdateAnimationJob`). It runs only when `paused` is 0 and the manager's bytes `+0x1` and `+0x2` are set. It sets the
+    time budget: `DAT_14313fa80` ticks = `fRam142029504 * clamp(DAT_141ad28e8 - (frame time * DAT_141ad2a30 - +0x7C), 0,
+    _LAB_14200d688)`, 0 while `gSceneComplexCounter` is not 0, counted from `DAT_14313fa78` (`QueryPerformanceCounter`).
+    Then:
+    1.  `0x140437df1` `FUN_140437e50(manager, process)`, only when the process and its camera (`+0x18`) exist;
+    2.  `0x140437dfc` `FUN_1404381e0(manager, frame time)`;
+    3.  the near list emptied (`+0x48` = 0);
+    4.  `+0x7C` = the update's time in ms.
+-   **`FUN_140437e50`**, for each tree in the tree list (`+0x20`, size `+0x30`), read without the list's lock (`+0x10`). The
+    local `BSCullingProcess` it builds and gives the process's frustum (`+0x20`) is not used. The camera is the process's
+    camera's world translate (`+0xA0`).
+    1.  `FUN_14147d640(tree)`: the first child (`*(+0x118)`), its vfunc `0x30` (`AsMultiBoundNode`). Null: skipped.
+    2.  Visited when that node's `BSMultiBound` (`+0x128`) has a shape (`+0x18`) whose cull result (`+0x10`) is 1, or the
+        process's cull mode (`+0x30198`) is 3. A tree not visited gets no store: its `+0x158` and its switch keep the last
+        visit's.
+    3.  `+0x158` = the squared distance from the camera to the tree's world translate (`+0xA0`).
+    4.  **Near** when `manager +0x80 > +0x158` (strictly; a NaN is far): appended to the near list (`+0x38`, count `+0x48`).
+        The LOD switch (`+0x180`, a `NiSwitchNode`: its children's size `+0x124`, their slots `+0x122`) gets the base index
+        (`+0x12C`): 1 when `0x14200d640` is 0 and the switch has more than one child, else 0, stored only below the slot count.
+    5.  **Far**: the same store, then with `0x142032dfc` (the fade LOD updates, `FadeFrame::lodUpdates`) the last child
+        (`size - 1`), in range.
+
+    Then the near list is sorted by `+0x158`, nearest first (`FUN_140439820`, a quicksort: not stable). Past the first
+    `0x14200d670` (40), each tree at or past `+0x80 * 0x141ad2848` (0.25) gets the far stores (`FUN_140438840` is this tail
+    alone). The list is then cut to 40. With `0x14200d640` = 1 (the default), a near tree shows child 0 (the full model)
+    and a far one the last child.
+-   **`FUN_1404381e0` reads both lists**, and checks the budget every fourth entry (it stops past it; it starts neither loop
+    once the budget is spent).
+    -   The animation list (`+0x50`, size `+0x60`, under the lock `+0x18`): a node whose reference (userData, `+0xF8`) has a
+        base form (`+0x40`) and whose `kAccumulated` is set advances its clock (`+0x164 +=` frame time), refreshes `+0x158`,
+        and within `+0x80` takes the gust `+0x15C` = `FUN_140438950(manager +0x78 * clock, 3)` * the form's `+0xB0`. It is
+        counted at `+0x6C`.
+    -   The near list (under `+0x10`): a tree whose form has bone data (`+0xB8`) advances its clock, runs
+        `FUN_140438ed0` (the bones' wind over the tree's bone range `+0x174`/`+0x178` of `+0x1A0`, size `+0x1B0`, fewer while
+        `+0x144` fades), takes the gust, sets flag bit 4 (`0x10`) and calls vfunc `0x168` (the selective downward update): the
+        bones' world transforms. It is counted at `+0x68`. **The near list decides which trees' bones animate.**
+-   **Which list a node is on.** `FUN_140192e90` (a `QueuedTree`, the reference's 3D at `+0x2C8`) and `FUN_140192fd0` pick by
+    exact `NiRTTI`: `0x14332a2d8` (`BSTreeNode`, OnVisible `0x14147d3c0`, size `0x1B8`) to `FUN_140437200`, the tree list;
+    `0x14332a2c8` (`BSLeafAnimNode`, OnVisible `0x14147c9c0`, size `0x170`) to `FUN_1404376f0`, the animation list.
+    `FUN_140437200` also makes the node's fade type 4 (`FUN_14147aa00(node, 4)`) and sorts its bones (`+0x1A0`). The
+    animation add copies the form's `+0xB0`/`+0xB4` to `+0x15C`/`+0x160`. The listed node is the reference's 3D root (its
+    userData is the reference), so it is the fade root DCLF lists (T7b0's "a node inside the tree's model" is wrong).
+-   **What the culls feed it:** the multibound cache for the tree list (any cull with a mode other than 1 and 3 writes it, in
+    `BSMultiBoundNode::OnVisible`; the loop sees the last before `Main::Update`, normally the main camera's list cull of the
+    last scene frame), and `kAccumulated` for the animation list (the main camera's list culls). Nothing else of the cull.
+-   **DCLF's stand-in and the tree list.** `TreeAnimation` takes stood-in roots off the animation list only. A stood-in
+    `BSTreeNode` stays on the tree list, under a multibound no cull reaches, so its result stays the last cull's: stale
+    "in" keeps it visited (kept, its bones animated every frame within range), stale "out" freezes its bones. DCLF's
+    skinned draws of its bones read those transforms. `<- TREE MANAGER` counts these trees by their stale result.
+-   **For T7f** (the culls off), the tree list needs the visited verdict for every `BSTreeNode` from DCLF. Either DCLF writes
+    the multibound result (the shape's `+0x10`) at Main::Update's entry, or `FUN_140437e50` is replaced by DCLF's port,
+    `TreeList`'s `Decide`, with the same stores. The animation list needs `kAccumulated` on its non-stood-in roots (T7b2's
+    writes extended to them).
 
 ## The material database: how a material is shared and released
 

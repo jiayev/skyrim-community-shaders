@@ -72,6 +72,10 @@ cbuffer BuildDrawsConstants : register(b0)
 	// without one.
 	uint PoolFirstsIndex;
 	uint RootProgramsIndex;
+	// T7d, the colour segment: the forward range's staging half (BuildDrawsConstants::forwardBase, forwardCapacity), which a visible
+	// forward input's draws are appended to, each with its view depth in its firstInstance word (ForwardSortCS.hlsl sorts them).
+	uint ForwardBase;
+	uint ForwardCapacity;
 }
 
 // StructuredBuffer<FadeNodeState>: FadeStateCS's states as the frame before published them (the latch's fadeStatesIndex, read at
@@ -491,6 +495,11 @@ static const uint kObjectDecalGroupShift = 20;
 // a group 1 draw whose bound reaches within Terrain Blending's near distance to its bucket's twin (kBucketTerrainPair).
 uint TerrainGroup(uint a_flags) { return (a_flags & kObjectDecal) != 0 ? 0 : (a_flags >> kObjectDecalGroupShift) & 3; }
 static const uint kBucketTerrainPair = 0x80000000u;
+// T7d: a blended Lighting object the forward epoch draws (Records.h, kObjectForward). Like a decal it is no occluder and no depth
+// segment input (its view mask is kViewForward alone): the colour segment culls it once, here (the frustum, then the HZB the depth
+// segment rebuilt from this frame's depth), and appends each visible draw to the forward range's staging half with its view depth;
+// ForwardSortCS.hlsl writes them back to front into the sorted half, which the forward epoch draws after the deferred composite.
+static const uint kObjectForward = 0x80000000u;
 // TerrainBlending.cpp's test, exactly: a block is in its terrain depth unless its bound's nearest point is past the distance.
 bool TerrainNearOf(float4 a_bound) { return distance(a_bound.xyz, TerrainNear.xyz) - a_bound.w <= TerrainNear.w; }
 // Set by the epoch rather than by the object: this input carries a usable bindings record, so a sequence
@@ -541,6 +550,12 @@ static const uint kCountFadeHidden = 104;
 static const uint kCountTerrainGroup1 = 112;
 static const uint kCountTerrainNearTested = 120;
 static const uint kCountTerrainNear = 124;
+// T7d: the forward range's draws (the forward epoch's count, zeroed by the colour commit), then the forward inputs the colour segment
+// tested, those inside the frustum and those the HZB rejected (GpuLayouts.h, kCountForwardWord).
+static const uint kCountForward = 128;
+static const uint kCountForwardTested = 132;
+static const uint kCountForwardInView = 136;
+static const uint kCountForwardOccluded = 140;
 
 // The frustum stamp's word: the stamp in the low 28 bits (the latch's), and whether the fade test dropped the object in
 // that frame. The visibility feedback compares the low bits (PrimaryCull::ConsumeFeedback).
@@ -807,6 +822,29 @@ bool Occluded(float3 boundCentre, float boundRadius)
 		return;
 	}
 
+	// T7d: a forward input's culling, once, in the colour segment (kObjectForward); its visibility word as a decal's.
+	const bool forwardInput = keyWord == 0 && (input.w & kObjectForward) != 0;
+	if (forwardInput) {
+		if (phase != kPhaseColour || ForwardCapacity == 0)
+			return;  // the depth segment never submits one; a shape without the range has no forward draws
+		bool forwardCulled = !drawable;
+		if (drawable && CullMode() != 0) {
+			count.InterlockedAdd(kCountForwardTested, 1, scratch);
+			const float4 bound = ObjectRow(objectIndex, kObjectBoundRow);
+			forwardCulled = Culled(bound.xyz, bound.w);
+			if (!forwardCulled) {
+				count.InterlockedAdd(kCountForwardInView, 1, scratch);
+				if (CullMode() >= 2 && Occluded(bound.xyz, bound.w)) {
+					forwardCulled = true;
+					count.InterlockedAdd(kCountForwardOccluded, 1, scratch);
+				}
+			}
+		}
+		visibility.Store(objectIndex * 4, (VisibilityStamp << kVisibilityStampShift) | (forwardCulled ? kVisibilityRejectedFinal : (kVisibilityVisible | kVisibilityColourDrawn)));
+		if (forwardCulled)
+			return;
+	}
+
 	// Phase 2 only revisits what phase 1 provisionally rejected, and the colour segment tests nothing at
 	// all - it draws what the two phases decided. Reading the decision rather than repeating it is what
 	// keeps the depth and colour passes drawing the same set; the colour pass tests depth EQUAL, so an
@@ -817,7 +855,7 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	const uint verdict = publishedThisFrame ? (published & kVisibilityVerdictMask) : kVisibilityVisible;
 	if (phase == kPhaseTwo && !(publishedThisFrame && verdict == kVisibilityOccludedRetest))
 		return;
-	if (phase == kPhaseColour && verdict != kVisibilityVisible)
+	if (phase == kPhaseColour && !forwardInput && verdict != kVisibilityVisible)
 		return;
 
 	bool cullRejected = false, frustumRejected = false, occlusionRejected = false;
@@ -907,7 +945,7 @@ bool Occluded(float3 boundCentre, float boundRadius)
 			count.InterlockedAdd(kCountRescuedByPhaseTwo, 1, scratch);
 	}
 	// The colour segment marks what it draws, in the same word.
-	if (phase == kPhaseColour && draws) {
+	if (phase == kPhaseColour && draws && !forwardInput) {
 		if (publishedThisFrame)
 			visibility.InterlockedOr(objectIndex * 4, kVisibilityColourDrawn, scratch);
 		else
@@ -999,6 +1037,17 @@ bool Occluded(float3 boundCentre, float boundRadius)
 					StoreShadowSequence(sequences, bucket.x + slot, slot, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
 						firstIndex, poolFirsts.Load(geometryIndex * 4));
 				}
+			} else if (forwardInput) {
+				// T7d: the forward range's staging half, which holds every draw the forward slots can produce; the draw's view depth (the
+				// bound centre's clip w, the view axis distance: the engine's blended sort key, FUN_1414e8fc0) in its firstInstance word,
+				// which ForwardSortCS.hlsl reads and clears.
+				count.InterlockedAdd(kCountForward, 1, slot);
+				if (slot >= ForwardCapacity)
+					return;
+				StoreSequence(sequences, ForwardBase + slot, pipeline, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+				const float4 forwardBound = ObjectRow(objectIndex, kObjectBoundRow);
+				const float clipW = mul(ViewProj, float4(forwardBound.xyz, 1.0)).w;
+				sequences.Store((ForwardBase + slot) * kSequenceStride + 88, asuint(isnan(clipW) ? 0.0 : clipW));  // a NaN would break the rank
 			} else if (terrainGroup != 0) {
 				// A terrain group's range (GpuLayouts.h, kTerrainGroups), which holds every draw its group's slots can produce.
 				count.InterlockedAdd(kCountTerrainGroup1 + (terrainGroup - 1) * 4, 1, slot);

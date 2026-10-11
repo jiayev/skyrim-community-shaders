@@ -65,6 +65,8 @@ namespace DCLF
 			{ MtLand, "CS_DCLF_MTLAND", F, Reduced::UnlessOne, false, "0: terrain stays native (live toggle's seed)" },
 			{ TbTerrain, "CS_DCLF_TB_TERRAIN", F, Reduced::UnlessOne, false,
 				"0: terrain under Terrain Blending, and the meshes that feature redraws after it, stay native (T7c1; live toggle's seed)" },
+			{ Forward, "CS_DCLF_FORWARD", F, N, false,
+				"1: blended Lighting geometry drawn by DCLF's forward epoch (T7d: a GPU depth sort, back to front, before the engine's blended draws); unset or 0 it stays native (live toggle's seed, off by default)" },
 			{ ProjectedUv, "CS_DCLF_PROJECTED_UV", F, Reduced::UnlessOne, false, "0: projected-UV objects stay native (live toggle's seed)" },
 			{ SwitchNodes, "CS_DCLF_SWITCH_NODES", F, Reduced::UnlessOne, false, "0: objects under switch nodes stay native (live toggle's seed)" },
 			{ LodObjects, "CS_DCLF_LOD_OBJECTS", F, Reduced::UnlessOne, false, "0: object LOD stays native and untracked (live toggle's seed)" },
@@ -107,6 +109,8 @@ namespace DCLF
 				"1: T7b1/T7b2 observers: DCLF's decoded visibility against the engine's kAccumulated on the listed roots and their geometry, frame by frame (<- ACCUMULATED), and FUN_1402cff60's animation gate on the stood-in roots against DCLF's writes (<- ANIM RATE); off: the readback and the writes still run" },
 			{ RoomParity, "CS_DCLF_ROOM_PARITY", P, N, false,
 				"1: Main::IsRoomVisible's calls detoured, the engine's answer against PortalViews' VisibleSet, every 300 frames (T7b3; not installed otherwise)" },
+			{ TreeParity, "CS_DCLF_TREE_PARITY", P, N, false,
+				"1: the tree manager's list loop (FUN_140437e50) sampled after its call and compared, frame by frame in the visibility decode, with DCLF's port from its tables and verdicts (T7b5, <- TREE MANAGER; not installed otherwise)" },
 
 			{ Stats, "CS_DCLF_STATS", D, N, false, "1: the periodic report" },
 			{ PassStats, "CS_DCLF_PASS_STATS", D, N, false, "1: per-pass counts in the report" },

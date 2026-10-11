@@ -87,6 +87,11 @@ namespace DCLF
 		// ObjectTerrainGroup) - 1 for a kMultiTextureLandscape block, 2 for a kNoTransparencyMultiSample mesh - as that
 		// feature's hook sorts the passes it holds (TerrainBlending.cpp, BSBatchRenderer__RenderPassImmediately).
 		std::uint32_t terrainGroup = 0;
+		// T7d (CS_DCLF_FORWARD): a blended object the forward epoch draws (Records.h, kObjectForward), with the engine's alphaBlendMode
+		// for it (FUN_14150bc80: the alpha property's pair, or 0 for a material alpha below one without blending) and its depth flags.
+		bool forward = false;
+		std::uint32_t forwardBlendMode = 0;
+		bool forwardDepthTest = false, forwardDepthWrite = false;
 		// The pass descriptor's ProjectedUV bit (CS_DCLF_PROJECTED_UV): the object needs the per-object
 		// texture matrix and pixel parameters, and the projected textures on its pipeline.
 		bool projectedUV = false;
@@ -332,6 +337,9 @@ namespace DCLF
 	 * feature does, in terrain group 1 (LightingDescriptors::terrainGroup).
 	 */
 	bool MtLandEnabled();
+	/** @brief T7d: the engine's alphaBlendWriteMode for the blended group (FUN_1414b3390 sets 11 before FUN_1414b39d0's draws). */
+	inline constexpr std::uint32_t kForwardWriteMode = 11;
+
 	/** @brief Whether Terrain Blending draws its terrain after the opaque pass, into a frame DCLF draws in (or this thread's snapshot). */
 	bool TerrainBlendingDefersTerrain();
 	/**

@@ -236,6 +236,9 @@ namespace DCLF
 			std::array<std::uint32_t, kDecalGroups> decalCapacity{};
 			// T7c1: each terrain group's (the colour segment's; MainSizing::terrainCapacity), group 1 from phase 2's base, group 2 after it.
 			std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
+			// T7d: each half of the forward range (the colour segment's and the forward epoch's; MainSizing::forwardCapacity), after the
+			// terrain groups' ranges: the staging half BuildDraws appends to, then the sorted half the forward epoch draws.
+			std::uint32_t forwardCapacity = 0;
 			// The sequence buffer's ranges as the epoch sized it (Resources::sequenceDraws, sequenceDecals): its layout.
 			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
 			// The rows' tables' addresses (Resources::materialRows, pipelineRows), which a growth moves.
@@ -276,7 +279,7 @@ namespace DCLF
 			bool SameShape(const PassFrame& o) const
 			{
 				return zCalls == o.zCalls && latched == o.latched && drawCapacity == o.drawCapacity && decalCapacity == o.decalCapacity &&
-				       terrainCapacity == o.terrainCapacity && sequenceDraws == o.sequenceDraws &&
+				       terrainCapacity == o.terrainCapacity && forwardCapacity == o.forwardCapacity && sequenceDraws == o.sequenceDraws &&
 				       sequenceDecals == o.sequenceDecals && materialRows == o.materialRows && pipelineRows == o.pipelineRows && cullMode == o.cullMode &&
 				       probePixel == o.probePixel && probeX == o.probeX && probeY == o.probeY && width == o.width && height == o.height &&
 				       minDepth == o.minDepth && maxDepth == o.maxDepth && SameHandle(resourceHeap, o.resourceHeap) &&
@@ -325,6 +328,26 @@ namespace DCLF
 			std::uint32_t padding;
 		};
 		constexpr std::uint32_t kSortSequencesConstantWords = sizeof(SortSequencesConstants) / 4;
+		/**
+		 * @brief T7d: ForwardSortCS.hlsl's push constants: the forward range's staging half (BuildDraws appended the visible forward draws
+		 * there, each with its view depth in its firstInstance word) and its sorted half, which the forward epoch draws.
+		 */
+		struct ForwardSortConstants
+		{
+			std::uint32_t sequencesIndex;  // RWByteAddressBuffer: the main sequences
+			std::uint32_t countIndex;      // ByteAddressBuffer: the count words (kCountForwardWord)
+			std::uint32_t stagingBase;     // the staging half's first slot
+			std::uint32_t capacity;        // each half's slots (PassFrame::forwardCapacity)
+			std::uint32_t sequenceStride;  // bytes (sizeof(DrawSequence))
+			std::uint32_t padding[3];
+		};
+		constexpr std::uint32_t kForwardSortConstantWords = sizeof(ForwardSortConstants) / 4;
+		constexpr std::uint32_t kForwardSortGroup = 64;  // ForwardSortCS.hlsl's
+		/** @brief T7d: the forward range's staging half's first slot in a colour shape's sequences (after phase 2's terrain ranges). */
+		inline std::uint64_t ForwardStagingSlot(const PassFrame& a_frame)
+		{
+			return std::uint64_t(a_frame.sequenceDraws) + a_frame.terrainCapacity[0] + a_frame.terrainCapacity[1];
+		}
 		constexpr std::uint32_t kSortSequencesGroup = 64;  // SortSequencesCS.hlsl's
 		// A sort's rank word holds the pipeline in its top 12 bits and the rank below (BuildDrawsCS.hlsl, kSortRankBits): a
 		// draw range past this is a hard failure until the ranks get a word of their own.
@@ -455,9 +478,16 @@ namespace DCLF
 		 * before it wrote. Created with the first epoch's resources and kept across their recreation.
 		 */
 		/**
-		 * @brief The fade write-back's host side (drawcall-limit-fix.md, "The fade write-back"): the event list's readback per
-		 * frame slot, read when the slot comes round again (FadeEventReadbackPass, recording), and its events handed to the main
-		 * thread in batches through a lock-free stack (IndirectDraws::ApplyFadeWriteBack).
+		 * @brief The fade write-back's host side (drawcall-limit-fix.md, "The fade write-back", "T7b4/T7b6"): the event list read back
+		 * without a stall, and its events handed to the write-back task in batches through a lock-free stack.
+		 *
+		 * T7b6: the scheme of VisibilityReadback's (below). The depth epoch is revision-driven, so FadeEventReadbackPass records a fixed
+		 * copy of the whole list into the host buffer of its frame slot, in the staging set of the revision's list capacity; nothing is
+		 * chosen in its Record (which runs only on the frames that record a revision: the events of the replayed frames were lost). The
+		 * depth commit arms its frame slot with the frame (ArmFadeReadback, which also writes the list's header: count 0, the frame) and
+		 * harvests the slot's last execution first, when the slot comes round again: the host has waited for that execution and not
+		 * submitted the next, so DCLF waits for nothing. A frame whose epoch did not run is counted missed: FadeStateCS did not run
+		 * either, so nothing was reported and nothing is lost.
 		 */
 		struct FadeWriteBack
 		{
@@ -467,16 +497,27 @@ namespace DCLF
 				std::uint32_t frame = 0;  // the scene frame whose FadeStateCS appended them (the list's header)
 				Batch* next = nullptr;
 			};
-			// The recording's: a host buffer per frame slot, the events it holds, and whether it holds an execution's.
-			std::vector<std::shared_ptr<org::Buffer>> readback;
-			std::vector<std::uint32_t> readbackEvents;
-			std::vector<std::uint8_t> filled;
-			// A larger host buffer per slot once the list has grown (the render thread's), which the slot's next recording takes
-			// after reading the one it holds: no execution's events are lost to a growth.
-			std::unique_ptr<std::atomic<std::shared_ptr<org::Buffer>>[]> next;
-			// The events FadeStateCS may append: the fewest any slot's host buffer holds (never more than the list).
-			std::atomic<std::uint32_t> capacity{ 0 };
-			// The largest count a recording read past its buffer's events: the list grows to it (the roots it left out try again).
+			/**
+			 * @brief The host buffers of one list capacity, one per frame slot (the revisions sized for it copy into them). Append-only (a
+			 * growth adds one: Impl::ReserveSceneTables, before any revision names the capacity), kept until the write-back goes: a kept
+			 * recording may name any of them.
+			 */
+			struct StagingSet
+			{
+				std::uint32_t events = 0;
+				std::vector<std::shared_ptr<org::Buffer>> buffers;  // by frame slot
+				StagingSet* next = nullptr;
+			};
+			std::uint32_t frameSlots = 0;
+			std::atomic<StagingSet*> sets{ nullptr };
+			// The render thread's: each frame slot's last arm (whether, and the scene frame it was for).
+			struct Armed
+			{
+				bool armed = false;
+				std::uint32_t frame = 0;
+			};
+			std::vector<Armed> armed;
+			// The largest count a harvest read past its list: the list grows to it (the roots it left out try again).
 			std::atomic<std::uint32_t> wanted{ 0 };
 			std::atomic<Batch*> batches{ nullptr };
 			// The write-back task's (IndirectDraws::KickFadeWriteBack, step 6e S4: one at a time on DCLF's executor, never joined): per
@@ -495,14 +536,23 @@ namespace DCLF
 					void* node = nullptr;
 					std::uint32_t flags = 0;  // the fade bits (kFadeFlagMask) only
 					float fade = 0.0f;
+					// T7b4: a leaf or tree root's LOD state (+0x152, +0x153, +0x14C), written with the fade (lod false: a plain fade root's
+					// levels are the node's own, not written).
+					bool lod = false;
+					std::uint32_t levels = 0;
+					float blend = 0.0f;
 				};
 				std::shared_ptr<const SceneStore::Tables> tables;
 				std::vector<Store> stores;
 			};
 			std::atomic<Stores*> ready{ nullptr };
 			// Since the last report: milestones taken and written, stale, frames whose start found the last task still running, and
-			// the render thread's time making the stores.
-			std::atomic<std::uint64_t> applied{ 0 }, stale{ 0 }, busy{ 0 }, storeNs{ 0 };
+			// the main thread's time making the stores; T7b4: stores left because DCLF no longer writes the root (the engine's cull
+			// steps it again: one writer), and stores dropped because DCLF did not run.
+			std::atomic<std::uint64_t> applied{ 0 }, stale{ 0 }, busy{ 0 }, storeNs{ 0 }, notWritten{ 0 }, dropped{ 0 };
+			// T7b6, since the last report: frames harvested (and those with events), events, harvests past their list, arms whose slot's
+			// buffer did not hold their frame (the epoch did not run), and staging sets added.
+			std::atomic<std::uint64_t> harvested{ 0 }, harvestedWithEvents{ 0 }, events{ 0 }, overflowed{ 0 }, missed{ 0 }, setsAdded{ 0 };
 
 			void Push(Batch* a_batch)
 			{
@@ -517,8 +567,34 @@ namespace DCLF
 					delete b;
 					b = following;
 				}
+				for (StagingSet* set = sets.exchange(nullptr); set;) {
+					StagingSet* following = set->next;
+					delete set;
+					set = following;
+				}
 			}
-			static std::uint64_t BytesFor(std::uint32_t a_events) { return (kFadeEventHeaderWords + std::uint64_t(a_events) * 4) * sizeof(std::uint32_t); }
+			static std::uint64_t BytesFor(std::uint32_t a_events) { return (kFadeEventHeaderWords + std::uint64_t(a_events) * kFadeEventWords) * sizeof(std::uint32_t); }
+			/** @brief The staging set of a_events (the revision's list capacity), null if none was added for it. */
+			const StagingSet* SetFor(std::uint32_t a_events) const
+			{
+				for (const StagingSet* set = sets.load(std::memory_order_acquire); set; set = set->next)
+					if (set->events == a_events)
+						return set;
+				return nullptr;
+			}
+			/** @brief A staging set for a list of a_events (one thread at a time: the setup, then the growths' revision code). */
+			void AddSet(std::uint32_t a_events)
+			{
+				if (SetFor(a_events))
+					return;
+				auto* set = new StagingSet();
+				set->events = a_events;
+				for (std::uint32_t i = 0; i < frameSlots; ++i)
+					set->buffers.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, BytesFor(a_events)));
+				set->next = sets.load(std::memory_order_relaxed);
+				while (!sets.compare_exchange_weak(set->next, set, std::memory_order_release, std::memory_order_relaxed)) {}
+				setsAdded.fetch_add(1, std::memory_order_relaxed);
+			}
 		};
 
 		/**
@@ -1004,11 +1080,7 @@ namespace DCLF
 			a_scene.fadeFrame.sceneFrame = a_scene.fadeFrameNumber;
 			a_scene.fadeFrame.logBase = a_scene.fadeLogBase;
 			a_uploads(a_scene.fadeFrameBuffer, &a_scene.fadeFrame, sizeof(FadeFrame), 0);
-			// The write-back's count, for this execution's FadeStateCS to append from (its readback copies what it appended).
-			if (a_scene.fadeEvents) {
-				static constexpr std::uint32_t kZeroCount[kFadeEventHeaderWords]{};
-				a_uploads(a_scene.fadeEvents, kZeroCount, sizeof(kZeroCount), 0);
-			}
+			// The write-back's header (the count, and the frame its harvest matches) is ArmFadeReadback's (T7b6).
 		}
 
 		/**
@@ -1091,6 +1163,9 @@ namespace DCLF
 			// T7c1: the colour segment's terrain groups' ranges, in phase 2's (GpuLayouts.h, kTerrainGroups): every draw each group's
 			// pipeline slots can produce, grown to a power of two past it; the two together within sequenceDraws.
 			std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
+			// T7d: each half of the colour segment's forward range (GpuLayouts.h, kForwardSortShader), after the terrain ranges: every draw
+			// the forward pipeline slots can produce, grown to a power of two past it; the terrain ranges and both halves within sequenceDraws.
+			std::uint32_t forwardCapacity = 0;
 			// The objects the per-object buffers hold (inputs, inputsDepth, visibility, frustum): the scene's object capacity, grown
 			// with it (ReserveObjectBuffers).
 			std::uint32_t objectCapacity = 0;
@@ -1188,6 +1263,9 @@ namespace DCLF
 			// The explicit DGC preprocesses' state list of the colour segment's passes. The depth segment's draws are plain
 			// (PassFrame::zCalls).
 			std::shared_ptr<PreprocessStates> preprocessMain;
+			// T7d: the forward epoch's (ForwardDrawPass), which records in an epoch of its own; and the forward range's sort.
+			std::shared_ptr<PreprocessStates> preprocessForward;
+			std::shared_ptr<const ComputeProgram> forwardSort;
 			std::shared_ptr<org::PixelBuffer> hzb;
 			std::shared_ptr<const ComputeProgram> hzbProgram;
 			// The single-pass downsample's count of finished groups: zeroed by the first depth commit (hzbCounterZeroed,
@@ -1286,6 +1364,7 @@ namespace DCLF
 			bool depthOnly = false;
 			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // the sequence buffer's ranges (ReserveMainSequences)
 			std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};  // T7c1: the terrain groups' (MainSizing::terrainCapacity)
+			std::uint32_t forwardCapacity = 0;                    // T7d: each forward half's (MainSizing::forwardCapacity)
 			std::uint64_t materialRows = 0, pipelineRows = 0;     // the rows' tables' addresses
 			MainViewport viewport;
 			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
@@ -3051,7 +3130,7 @@ namespace DCLF
 
 		// ---- The scene list (U4c): one entry per object, its main part the main build's and its shadow words the shadow build's.
 		// The view bits the main build writes of an entry (the main segments', the reflection's); the rest are the shadow build's.
-		constexpr std::uint32_t kMainSideBits = kViewMainCull | kViewMain | kViewDecal | kViewReflection;
+		constexpr std::uint32_t kMainSideBits = kViewMainCull | kViewMain | kViewDecal | kViewForward | kViewReflection;
 		// Which builds' parts an entry holds (ResidentRegion::sideOf).
 		constexpr std::uint8_t kSideMain = 1;
 		constexpr std::uint8_t kSideShadow = 2;
@@ -3102,7 +3181,7 @@ namespace DCLF
 		{
 			a_input.pipelineIndex = a_input.recordIndex = a_input.decalOrdinal = a_input.shadowRow = 0;
 			a_input.fadeDistance = 0.0f;
-			a_input.flags &= ~(kInputDrawable | kObjectDecal);
+			a_input.flags &= ~(kInputDrawable | kObjectDecal | kObjectForward);
 			a_input.view.mask &= ~kMainSideBits;
 			return a_input;
 		}
@@ -3374,7 +3453,7 @@ namespace DCLF
 		/** @brief A shadow input's flags: the object's, as the mode's views test them (BuildDrawsCS's caster classes). */
 		inline std::uint32_t InputFlagsOf(std::uint32_t a_mode, std::uint32_t a_flags)
 		{
-			const std::uint32_t flags = (a_flags & ~kObjectDecal) | kInputDrawable;
+			const std::uint32_t flags = (a_flags & ~(kObjectDecal | kObjectForward)) | kInputDrawable;
 			return VolumetricClass(a_mode, a_flags) || IsOcclusionMode(a_mode) ? flags : flags & ~kObjectVolumetricOnly;
 		}
 
@@ -3426,6 +3505,10 @@ namespace DCLF
 			const std::uint32_t flags = a_object < a_tables.objects.size() ? a_tables.objects[a_object].flags : 0u;
 			if (ObjectDecalGroup(flags))
 				return kViewDecal;
+			// T7d: a forward object's is kViewForward alone (with its member bit): the colour segment's forward range, culled by no other
+			// view (never a depth segment input: it occludes nothing, as the engine's blended draws write no depth before the opaque ones).
+			if (flags & kObjectForward)
+				return kViewForward;
 			// The main build's bits of a scene entry alone (kMainSideBits): the shadow views' are the shadow build's (U4c).
 			return (ViewMaskOf(a_tables, a_object, true) & kMainSideBits & ~kViewMain) | ((flags & kObjectMember) ? kViewMain : 0u);
 		}
@@ -4615,6 +4698,12 @@ namespace DCLF
 		/** @brief Teardown, the toggle, a load screen: the fade write-back task done (never per frame). */
 		void WaitFadeWriteBack();
 		/**
+		 * @brief T7b6, the depth commit (render thread, inside the epoch: the host has waited for the frame slot's previous execution):
+		 * that execution's fade events harvested from the slot's host buffer (a batch for the write-back task), the event list's header
+		 * written (count 0, this frame), and the frame slot armed for this frame (FadeWriteBack).
+		 */
+		void ArmFadeReadback(SceneStore& a_store, SceneBuffers& a_scene, CommitUploads& a_uploads);
+		/**
 		 * @brief T7b1 (CS_DCLF_ACCUMULATED_PARITY), the depth commit (render thread, inside the epoch: the host has waited for the frame
 		 * slot's previous execution): that execution's events harvested from the slot's host buffer, the event list's count zeroed, the
 		 * reported words zeroed once per backing, and the frame slot armed for this frame (VisibilityReadback).
@@ -4889,6 +4978,13 @@ namespace DCLF
 		// The payloads the frame's main epochs committed (for the parities), by job.
 		std::array<const MainPayload*, 2> committedPayload{};
 		std::array<std::uint32_t, 2> committedFrame{};
+		// T7d: the forward epoch's (ExecuteForward), since the last report: frames it was reached for the main camera, epochs submitted, and
+		// why the rest were not (no colour epoch this frame, no forward recording in the revision, the epoch failed).
+		struct ForwardEpochStats
+		{
+			std::uint64_t reached = 0, epochs = 0, noColour = 0, noRecording = 0, failed = 0;
+			std::uint32_t submittedFrame = ~0u;
+		} forwardEpoch;
 		// CS_DCLF_BINDLESS_PARITY's payloads, built at the epoch (the parity's builds read the eye the Z-prepass captures).
 		std::array<MainPayload, 2> fallbackPayloads;
 		// Per main epoch since the last report: covered frames whose installed publication had no payload for the main resources
@@ -5018,6 +5114,10 @@ namespace DCLF
 			// T7c1 (CS_DCLF_SET_PARITY): the CPU's terrain near test over the same frame's depth inputs, eye and distance (<- TB NEAR).
 			std::uint32_t terrainCpuTested = 0, terrainCpuNear = 0;
 			bool terrainCpu = false;
+			// T7d (CS_DCLF_SET_PARITY): the engine's blended passes of members registered for the copied frame (PassCapture::
+			// TakeForwardRegistered), against its forward inputs in view (<- FORWARD).
+			std::uint32_t forwardEngine = 0;
+			bool forwardObserved = false;
 		};
 		std::optional<CullReadback> cullReadback;
 		std::uint32_t cullEpochs = 0;
@@ -5182,13 +5282,17 @@ namespace DCLF
 		 */
 		struct SceneRevisions
 		{
-			static constexpr std::uint32_t kEpochs = 5;  // kDepthShape, kColourShape, shadow, occlusion, reflection
+			// kDepthShape, kColourShape, shadow, occlusion, reflection, and T7d's forward (kForwardEpoch: the colour shape's passes of the
+			// forward segment, recorded from the same shape while CS_DCLF_FORWARD is on)
+			static constexpr std::uint32_t kEpochs = 6;
 			// The growths slot (T6b3b b2a): the changes the revision names (Growths::NamedChanges), adopted by the frame with its selection.
 			static constexpr std::uint32_t kVersionsSlot = 0, kShapeSlot = 1, kRecordingSlot = kShapeSlot + kEpochs, kGrowthsSlot = kRecordingSlot + kEpochs,
 										   kSlots = kGrowthsSlot + 1;
 			static constexpr std::array<RenderGraphRuntime::Segment, kEpochs> kSegments = { RenderGraphRuntime::Segment::ZPrepass, RenderGraphRuntime::Segment::MainOpaque,
-				RenderGraphRuntime::Segment::ShadowView, RenderGraphRuntime::Segment::SkyOcclusion, RenderGraphRuntime::Segment::Reflection };
-			static constexpr std::array<const char*, kEpochs> kNames = { "Z-prepass", "colour", "shadow", "occlusion", "reflection" };
+				RenderGraphRuntime::Segment::ShadowView, RenderGraphRuntime::Segment::SkyOcclusion, RenderGraphRuntime::Segment::Reflection,
+				RenderGraphRuntime::Segment::Forward };
+			static constexpr std::array<const char*, kEpochs> kNames = { "Z-prepass", "colour", "shadow", "occlusion", "reflection", "forward" };
+			static constexpr std::uint32_t kForwardEpoch = 5;
 			// The snapshot builder's (Begin, Seal, Collect and, as the exchange's only consumer, TrySelect and AcquireActive: T6b3b). A
 			// revision's completion (its last recording, on ORG's host thread) wakes the builder.
 			org::async::RevisionAssembler assembler{ kSlots, [] { WakeSnapshotBuilder(); } };

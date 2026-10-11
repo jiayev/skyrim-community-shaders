@@ -379,6 +379,7 @@ namespace DCLF
 				ownedFadeRoots.clear();
 				standInRoots.clear();
 				standInList.clear();
+				++standInVersion;
 				SceneStore::Get().SetFadeRootsOwned({});
 				TreeAnimation::SetOwned({});
 			}
@@ -389,6 +390,7 @@ namespace DCLF
 			++(candidates ? cutStats.skippedPreconditions : cutStats.skippedStale);
 			liveStale = true;
 			fadeSkipped = true;
+			fadeCutSkipped = true;
 			// T7b2: the engine culls the stood-in roots this frame and writes their kAccumulated itself; the next decode writes them all.
 			if (!ownedFadeRoots.empty())
 				IndirectDraws::Get().RequestAccumulatedRefresh();
@@ -806,6 +808,7 @@ namespace DCLF
 		ownedFadeRoots.clear();
 		standInRoots.clear();
 		standInList.clear();
+		++standInVersion;
 		std::vector<SceneStore::OwnedFadeRoot> owned;
 		std::vector<const RE::NiAVObject*> animated;
 		for (std::uint32_t e = 0; e < cut.plans.size(); ++e) {
@@ -832,9 +835,92 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.AccumulatedWrites");
 		// The writes for roots the cut no longer stands in for are left: the engine's cull writes those this frame.
 		IndirectDraws::Get().WriteAccumulated(a_running, [this](const void* a_root) { return standInRoots.contains(a_root); });
+		// T7b4: the fade write-back's stores, on the roots DCLF writes alone (the set the gate skips this frame, published below); one
+		// for a root the cut no longer stands in for is left, the engine's cull stepping it this frame.
+		std::vector<const void*> stored;
+		IndirectDraws::Get().WriteFadeStores(a_running, [this](const void* a_root) { return standInRoots.contains(a_root); },
+			SwitchEnabled(Switch::FadeParity) ? &stored : nullptr);
+		PublishFadeWriters(a_running, stored);
 		// CS_DCLF_ACCUMULATED_PARITY (<- ANIM RATE): the stood-in roots and the bit they carry now, for this frame's animation gates.
 		if (a_running)
 			SideEffects::PublishAnimPrediction(standInList);
+	}
+
+	void PrimaryCull::PublishFadeWriters(bool a_running, const std::vector<const void*>& a_stored)
+	{
+		// CS_DCLF_FADE_PARITY (<- FADE DOUBLE): the last entry's sample judged. A root DCLF writes whose +0x13C moved since was stepped by
+		// an engine OnVisible in that frame (the gate's fade update, FUN_14147a160, does not write it, and is skipped for these roots);
+		// a frame whose cut did not apply has the engine cull every root by design, and is counted aside.
+		const bool cutSkipped = std::exchange(fadeCutSkipped, false);
+		if (const auto sample = std::move(fadeDoubleSample)) {
+			std::uint64_t stepped = 0, steppedStored = 0;
+			for (std::size_t i = 0; i < sample->roots.size(); ++i) {
+				if (At<std::int32_t>(sample->roots[i], kLastVisibleFrame) == sample->lastVisible[i])
+					continue;
+				++stepped;
+				steppedStored += sample->stored[i];
+				if (!cutSkipped && fadeDoubleFirst.size() < 300) {
+					const auto* node = static_cast<const RE::NiAVObject*>(sample->roots[i]);
+					fadeDoubleFirst += fmt::format("{}'{}'{}", fadeDoubleFirst.empty() ? "" : ", ", node->name.c_str() ? node->name.c_str() : "?",
+						sample->stored[i] ? " (stored)" : "");
+				}
+			}
+			++fadeDoubleFrames;
+			fadeDoubleRoots += sample->roots.size();
+			if (cutSkipped) {
+				++fadeDoubleSkippedFrames;
+				fadeDoubleSkippedStepped += stepped;
+			} else {
+				fadeDoubleStepped += stepped;
+				fadeDoubleSteppedStored += steppedStored;
+			}
+		}
+		// The writer set: a new one only when the stood-in roots moved. The one it replaces is let go here: the last frame's cycle was
+		// waited for before this entry, so no gate reads it.
+		if (!a_running) {
+			delete fadeWriters.exchange(nullptr, std::memory_order_acq_rel);
+			fadeWritersVersion = 0;
+		} else if (fadeWritersVersion != standInVersion) {
+			delete fadeWriters.exchange(standInRoots.empty() ? nullptr : new FadeWriterSet(standInRoots.begin(), standInRoots.end()), std::memory_order_acq_rel);
+			fadeWritersVersion = standInVersion;
+		}
+		// This frame's sample, from the accepted tables (which hold every root they name until the next entry lets the sample go).
+		if (!a_running || !SwitchEnabled(Switch::FadeParity) || standInRoots.empty())
+			return;
+		const auto& tables = SceneStore::Get().AcceptedTables();
+		if (!tables)
+			return;
+		const ankerl::unordered_dense::set<const void*> stored(a_stored.begin(), a_stored.end());
+		auto sample = std::make_unique<FadeDoubleSample>();
+		sample->tables = tables;
+		for (std::size_t r = 0; r < tables->fadeRootNode.size() && r < tables->fadeRoots.size(); ++r) {
+			const void* node = tables->fadeRootNode[r];
+			if (!node || !(tables->fadeRoots[r].bits & kFadeRootStoodIn) || !standInRoots.contains(node))
+				continue;
+			sample->roots.push_back(node);
+			sample->lastVisible.push_back(At<std::int32_t>(node, kLastVisibleFrame));
+			sample->stored.push_back(static_cast<std::uint8_t>(stored.contains(node) ? 1 : 0));
+		}
+		fadeDoubleSample = std::move(sample);
+	}
+
+	std::string PrimaryCull::FadeWriterReport()
+	{
+		std::string text;
+		if (const auto skipped = gateFadeSkipped.exchange(0, std::memory_order_relaxed)) {
+			const auto* writers = fadeWriters.load(std::memory_order_acquire);
+			text += fmt::format("[DCLF] fade writers (T7b4): {} fade updates of the animation gate skipped on roots DCLF writes ({} roots in the set)\n", skipped,
+				writers ? writers->size() : 0);
+		}
+		if (!SwitchEnabled(Switch::FadeParity) || !fadeDoubleFrames)
+			return text;
+		text += fmt::format("[DCLF] fade double (T7b4): {} frames, {:.1f} roots DCLF writes a frame; {} stepped by an engine OnVisible as well ({} of them stored by DCLF "
+							"that frame); aside: {} frames the cut did not apply, {} stepped in them{}{}\n",
+			fadeDoubleFrames, double(fadeDoubleRoots) / double(fadeDoubleFrames), fadeDoubleStepped, fadeDoubleSteppedStored, fadeDoubleSkippedFrames,
+			fadeDoubleSkippedStepped, fadeDoubleStepped ? " <- FADE DOUBLE" : " <- OK", fadeDoubleFirst.empty() ? std::string() : "; first: " + fadeDoubleFirst);
+		fadeDoubleFrames = fadeDoubleRoots = fadeDoubleStepped = fadeDoubleSteppedStored = fadeDoubleSkippedFrames = fadeDoubleSkippedStepped = 0;
+		fadeDoubleFirst.clear();
+		return text;
 	}
 
 	std::uint64_t PrimaryCull::MemberSignature(std::uint32_t a_e) const
@@ -1168,8 +1254,10 @@ namespace DCLF
 			hint = kLayerHint;
 		} else if (flags & 0xc000000ull)
 			hint = translucent ? 3 : 2;  // the decal groups
-		else if (translucent)
+		else if (translucent && !ActiveToggles().forward)
 			return false;
+		else if (translucent)
+			hint = 1;  // T7d: the blended group (FUN_1414b2330's hint 1), drawn by the forward epoch
 		else if (flags & 0x8000000600000000ull)
 			hint = (~static_cast<std::uint32_t>(flags >> 33) & 1u) | 6u;
 		else if (flags & (1ull << 61))
@@ -1233,7 +1321,14 @@ namespace DCLF
 		{
 			static void thunk(void* a_node, float a_amount, const float* a_camera)
 			{
-				PrimaryCull::Get().NoteAnimatedFade(a_node, a_camera);
+				auto& cull = PrimaryCull::Get();
+				// FadeStateCS makes the same update on the GPU (the animated batch), for every root.
+				cull.NoteAnimatedFade(a_node, a_camera);
+				// T7b4: one writer. A root DCLF writes keeps the state the write-back gave its node; the gate then reads its currentFade.
+				if (cull.FadeWrittenByDclf(a_node)) {
+					cull.gateFadeSkipped.fetch_add(1, std::memory_order_relaxed);
+					return;
+				}
 				func(a_node, a_amount, a_camera);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;

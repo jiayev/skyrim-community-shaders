@@ -103,6 +103,12 @@ namespace DCLF
 		// Bound by scene membership (SceneStore::BindByMembership): drawn whenever the GPU finds it. Every record with bindings
 		// is a member; the rest are culling candidates (kObjectNoBindings).
 		kObjectMember = 1u << 30,
+		// T7d (CS_DCLF_FORWARD): a blended Lighting object, drawn by the forward epoch. Never an occluder: like a decal it is left
+		// out of the depth segment (its view mask is kViewForward alone), culled once by the colour segment's BuildDraws (frustum,
+		// then the HZB the depth segment rebuilt), appended to the forward range with its view depth, sorted back to front on the GPU
+		// (ForwardSortCS) and drawn by the forward epoch at the engine's blended point (FUN_1414b39d0), forward-shaded into the main
+		// target. Its key carries the forward state (kRasterForward).
+		kObjectForward = 1u << 31,
 	};
 
 	/** @brief The high bit of a draw's object-index word: the draw misses every sun cascade (kObjectSunTest). */
@@ -288,6 +294,13 @@ namespace DCLF
 		// feature draws its terrain with (1 and 1) and tests LESS_EQUAL with depth writes; group 2 (its no-blend meshes) the
 		// write mode it leaves for them (1), blending off, testing EQUAL. Neither takes a depth bias (DrawPipelines).
 		kRasterTerrainGroupShift = 24,
+		// T7d: a forward key (kObjectForward): the forward pixel stage (no Deferred) drawn after the deferred composite onto the main
+		// target alone - the first attachment blends as the engine's state for the key's blend and write modes says (FUN_14150bc80's
+		// mode from the alpha property, write mode 11 as FUN_1414b3390 leaves it), the G-buffer attachments are not written - with
+		// the depth state SetupGeometry derives from the property: tested (LESS_EQUAL) with kZBufferTest, written with kZBufferWrite.
+		kRasterForward = 1u << 26,
+		kRasterForwardDepthTest = 1u << 27,
+		kRasterForwardDepthWrite = 1u << 28,
 	};
 	inline constexpr std::uint32_t kRasterTranslucencyMask = 7u << kRasterTranslucencyShift;
 
@@ -315,6 +328,15 @@ namespace DCLF
 	inline constexpr std::uint32_t PackTerrainRasterFlags(std::uint32_t a_group, std::uint32_t a_blendMode, std::uint32_t a_writeMode)
 	{
 		return ((a_group & 3u) << kRasterTerrainGroupShift) | ((a_blendMode & 7u) << kRasterBlendModeShift) | ((a_writeMode & 15u) << kRasterWriteModeShift);
+	}
+
+	inline constexpr bool RasterForward(std::uint32_t a_flags) { return (a_flags & kRasterForward) != 0; }
+
+	/** @brief Packs a forward key's state (T7d): the engine's blend and write modes, and the property's depth flags. */
+	inline constexpr std::uint32_t PackForwardRasterFlags(std::uint32_t a_blendMode, std::uint32_t a_writeMode, bool a_depthTest, bool a_depthWrite)
+	{
+		return kRasterForward | ((a_blendMode & 7u) << kRasterBlendModeShift) | ((a_writeMode & 15u) << kRasterWriteModeShift) |
+		       (a_depthTest ? kRasterForwardDepthTest : 0u) | (a_depthWrite ? kRasterForwardDepthWrite : 0u);
 	}
 
 	/**
@@ -513,7 +535,8 @@ namespace DCLF
 	inline constexpr std::uint32_t kFadeRootPreprocessed = 1u << 21;
 	inline constexpr std::uint32_t kFadeRootPreprocessHidden = 1u << 22;
 	// An owned root with no engine-drawn part, which the stand-in culls in the engine's place: its state is FadeStateCS's alone,
-	// and its node keeps what the engine last left there (nothing writes the GPU's back). DCLF's own readers take the GPU's
+	// and its node takes the GPU's milestones and LOD levels from the fade write-back (FadeEvent; DCLF is its one writer since T7b4:
+	// the animation gate's fade update skips it, PrimaryCull::FadeWrittenByDclf). DCLF's own readers take the GPU's
 	// state (a shadow view's fading caster, BuildDrawsCS) or the settled one (ShadowCasterReject, the synthetic pass); the
 	// engine reads the node only on the frames it culls the root again, whose OnVisible starts from it (drawcall-limit-fix.md,
 	// "No fade write-back"). An owned root with engine-drawn parts is culled by the engine, whose OnVisible updates its node;
@@ -626,10 +649,11 @@ namespace DCLF
 	inline constexpr std::uint32_t kFadeLogEntries = 64;
 
 	/**
-	 * @brief The fade write-back (drawcall-limit-fix.md, "The fade write-back"): a stood-in root whose fade crossed a milestone
-	 * in FadeStateCS's update (faded out, fading, faded in), with the state the engine's readers of the node take from it.
-	 * The pass appends them after a header (the count, the scene frame, two of padding) in the event list; the host writes
-	 * them onto the nodes in frame order.
+	 * @brief The fade write-back (drawcall-limit-fix.md, "The fade write-back", "T7b4/T7b6"): a stood-in root whose fade crossed a
+	 * milestone in FadeStateCS's update (faded out, fading, faded in), or whose leaf LOD level or transition changed (T7b4), with the
+	 * state the engine's readers of the node take from it. The pass appends them after a header (the count, the scene frame - the
+	 * depth commit's, written whether or not anything is appended - and two of padding) in the event list; the host writes them onto
+	 * the nodes in frame order.
 	 */
 	struct FadeEvent
 	{
@@ -637,8 +661,12 @@ namespace DCLF
 		std::uint32_t generation = 0;  // its static row's: a slot listed again since is not the event's
 		std::uint32_t flags = 0;       // the state's (kFadeFlagMask)
 		float currentFade = 0.0f;
+		std::uint32_t levels = 0;      // T7b4: the state's +0x152 | +0x153 << 8 (FadeNodeState::levels)
+		float blend = 0.0f;            // T7b4: +0x14C, the LOD cross-fade
+		std::uint32_t padding[2]{};
 	};
-	static_assert(sizeof(FadeEvent) == 16);
+	static_assert(sizeof(FadeEvent) == 32);
+	inline constexpr std::uint32_t kFadeEventWords = sizeof(FadeEvent) / sizeof(std::uint32_t);
 	inline constexpr std::uint32_t kFadeEventHeaderWords = 4;
 	inline constexpr std::uint32_t kInitialFadeEvents = 1024;
 

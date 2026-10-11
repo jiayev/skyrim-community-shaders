@@ -27,6 +27,8 @@ namespace DCLF
 	void IndirectDraws::CheckCapturePoint() {}
 	void IndirectDraws::CaptureDepthPass() {}
 	void IndirectDraws::ExecuteColour() {}
+	void IndirectDraws::ExecuteForward() {}
+	std::string IndirectDraws::ForwardReport() { return {}; }
 	void IndirectDraws::ProbeTargets(const char*) {}
 	void IndirectDraws::RunEpoch(bool) {}
 	void IndirectDraws::BeginShadowFrame() {}
@@ -45,6 +47,7 @@ namespace DCLF
 	std::function<void(org::runtime::IUploadService&)> IndirectDraws::PrepareFrameUploads() { return {}; }
 	void IndirectDraws::DropFrameUploads() {}
 	void IndirectDraws::KickFadeWriteBack() {}
+	void IndirectDraws::WriteFadeStores(bool, const std::function<bool(const void*)>&, std::vector<const void*>*) {}
 	void IndirectDraws::KickVisibilityReadback() {}
 	void IndirectDraws::WriteAccumulated(bool, const std::function<bool(const void*)>&) {}
 	void IndirectDraws::NoteCameraCut(std::uint32_t) {}

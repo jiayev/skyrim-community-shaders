@@ -627,11 +627,17 @@ namespace DCLF
 			}
 		}
 		state->preprocessMain = PreprocessStates::Create(device, host->FrameSlots(), "the main segment");
+		// T7d: the forward epoch's explicit preprocesses record in an epoch of their own, so a state list of their own.
+		state->preprocessForward = PreprocessStates::Create(device, host->FrameSlots(), "the forward epoch");
 		state->inputs = MakeVersioned(CreateWords(std::uint64_t(state->objectCapacity) * sizeof(DrawInput) / 4, false, "cs.dclf.draw-inputs"));
 		state->inputsDepth = MakeVersioned(CreateWords(std::uint64_t(state->objectCapacity) * sizeof(DrawInput) / 4, false, "cs.dclf.draw-inputs-depth"));
 		state->buildDraws = ComputeProgram::Load(device, { .source = kBuildDrawsShader, .constantWords = kBuildDrawsConstantWords });
 		if (!state->buildDraws)
 			return NotReady(7, "the BuildDraws program could not be created");
+		// T7d: the forward range's sort (ForwardSortCS.hlsl). Without it the forward epoch draws nothing (its pass checks).
+		state->forwardSort = ComputeProgram::Load(device, { .source = kForwardSortShader, .constantWords = kForwardSortConstantWords });
+		if (!state->forwardSort)
+			logger::warn("[DCLF] the forward sort program could not be created: the forward epoch draws nothing");
 		state->dispatchSignature = CreateDispatchSignature(device, state->buildDraws->layout->GetHandle());
 		if (!state->dispatchSignature)
 			return NotReady(7, "the BuildDraws dispatch signature could not be created");
@@ -959,8 +965,16 @@ namespace DCLF
 			for (std::uint32_t g = 0; g < kTerrainGroups; ++g)
 				if (terrainDraws[g] > next.terrainCapacity[g])
 					next.terrainCapacity[g] = static_cast<std::uint32_t>(std::bit_ceil(std::min<std::uint64_t>(terrainDraws[g], 1u << 31)));
+			// T7d: the forward range (GpuLayouts.h): every draw the forward pipeline slots can produce, grown like the terrain ranges, twice
+			// over (the staging half BuildDraws appends to, the sorted half ForwardSortCS fills), after the terrain ranges in phase 2's.
+			std::uint64_t forwardDraws = 0;
+			for (std::uint32_t p = 0; p < slots && p < a_tables.pipelines.size(); ++p)
+				if (RasterForward(a_tables.pipelines[p].rasterFlags))
+					forwardDraws += drawBound.PipelineDraws(p);
+			if (forwardDraws > next.forwardCapacity)
+				next.forwardCapacity = static_cast<std::uint32_t>(std::bit_ceil(std::min<std::uint64_t>(forwardDraws, 1u << 30)));
 			const std::uint64_t phaseDraws = (next.zBucketFirst.empty() ? 0ull : std::uint64_t(next.zBucketFirst.back()) + next.zBucketCapacity.back()) + terrainTwins;
-			const std::uint64_t terrainRange = std::uint64_t(next.terrainCapacity[0]) + next.terrainCapacity[1];
+			const std::uint64_t terrainRange = std::uint64_t(next.terrainCapacity[0]) + next.terrainCapacity[1] + 2ull * next.forwardCapacity;
 			draws = static_cast<std::uint32_t>(std::min<std::uint64_t>(std::max<std::uint64_t>({ draws, phaseDraws, terrainRange }), UINT32_MAX));
 			const auto buckets = static_cast<std::uint32_t>(next.zBucketCapacity.size() + terrainSlots);
 			if (buckets > next.zBucketCountWords) {
@@ -1108,20 +1122,16 @@ namespace DCLF
 			buffers->fadeRootPrograms = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, sizeof(std::uint32_t), "cs.dclf.fade-root-programs", unused));
 			buffers->fadeAnimated = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, sizeof(std::uint32_t), "cs.dclf.fade-animated", unused));
 			buffers->fadeLog = StructuredBuffer(kFadeLogEntries, sizeof(FadeLogEntry), "cs.dclf.fade-log", unused, true);
-			// The write-back (FadeWriteBack): the event list, the roots' reported milestones, a host buffer per frame slot.
+			// The write-back (FadeWriteBack): the event list, the roots' reported milestones, and the readback's staging set for the list
+			// (T7b6: a host buffer per frame slot; a growth adds the next list's).
 			if (auto* host = RenderGraphRuntime::Get().Host()) {
 				buffers->fadeEventCapacity = smallStart ? 4u : kInitialFadeEvents;
 				buffers->fadeEvents = MakeVersioned(CreateWords(FadeWriteBack::BytesFor(buffers->fadeEventCapacity) / 4, true, "cs.dclf.fade-events"));
 				buffers->fadeReported = MakeVersioned(StructuredBuffer(buffers->fadeRootCapacity, 2 * sizeof(std::uint32_t), "cs.dclf.fade-reported", unused, true));
 				auto writeBack = std::make_shared<FadeWriteBack>();
-				const std::uint32_t slots = host->FrameSlots();
-				for (std::uint32_t i = 0; i < slots; ++i) {
-					writeBack->readback.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, FadeWriteBack::BytesFor(buffers->fadeEventCapacity)));
-					writeBack->readbackEvents.push_back(buffers->fadeEventCapacity);
-				}
-				writeBack->filled.assign(slots, 0u);
-				writeBack->next = std::make_unique<std::atomic<std::shared_ptr<org::Buffer>>[]>(slots);
-				writeBack->capacity.store(buffers->fadeEventCapacity, std::memory_order_release);
+				writeBack->frameSlots = host->FrameSlots();
+				writeBack->armed.resize(writeBack->frameSlots);
+				writeBack->AddSet(buffers->fadeEventCapacity);
 				buffers->fadeWriteBack = std::move(writeBack);
 			}
 			// T7b1/T7b2 (the normal path: T7b2 writes the stood-in roots' kAccumulated from it): the visibility events, each root's and
@@ -1391,15 +1401,15 @@ namespace DCLF
 			grow("portal programs", next.portalWords, producer.inputs.portalWords, sizeof(std::uint32_t),
 				[&](std::uint32_t a_words, auto& a_parts) { a_parts.push_back({ s.portalPrograms, a_words }); }, [&s] { s.portalProgramsSent.clear(); });
 		}
-		// The write-back's event list, to the most a frame appended past it; each slot's host buffer follows at its next recording.
+		// The write-back's event list, to the most a frame appended past it (the roots left out append again), with the staging set the
+		// revisions sized for it copy into (T7b6: made here, before any revision names the capacity).
 		if (s.fadeEvents && s.fadeWriteBack) {
-			auto& writeBack = *s.fadeWriteBack;
-			grow("fade events", next.fadeEventCapacity, writeBack.wanted.load(std::memory_order_acquire), sizeof(FadeEvent),
-				[&](std::uint32_t a_rows, auto& a_parts) { a_parts.push_back({ s.fadeEvents, static_cast<std::uint32_t>(FadeWriteBack::BytesFor(a_rows) / 4) }); },
-				[&s, &writeBack] {
-					for (std::size_t i = 0; i < writeBack.readback.size(); ++i)
-						writeBack.next[i].store(org::Buffer::CreateShared(rhi::HeapType::Readback, FadeWriteBack::BytesFor(s.fadeEventCapacity)), std::memory_order_release);
-				});
+			grow("fade events", next.fadeEventCapacity, s.fadeWriteBack->wanted.load(std::memory_order_acquire), sizeof(FadeEvent),
+				[&](std::uint32_t a_rows, auto& a_parts) {
+					a_parts.push_back({ s.fadeEvents, static_cast<std::uint32_t>(FadeWriteBack::BytesFor(a_rows) / 4) });
+					s.fadeWriteBack->AddSet(a_rows);
+				},
+				nullptr);
 		}
 		// T7b1's event list, to the most a batch had past it (the slots it left out append again), with the staging set the revisions
 		// sized for it copy into (made here, before any revision names the capacity).

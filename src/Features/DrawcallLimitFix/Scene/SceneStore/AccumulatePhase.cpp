@@ -814,7 +814,8 @@ namespace DCLF
 					// AdditiveLighting (State::UpdateLightingShaderPermutation): a pass whose alpha property blends onto the target
 					// (destination ONE). Only a blended decal (group 2) applies its alpha property, and its key carries the blend
 					// mode, which the blend functions decide: the same for every object of the key.
-					if (descriptors.decalGroup == 2 && alphaBlending &&
+					// T7d: and a forward object's, whose draw applies its alpha property too (FUN_1414b39d0's render flag 4).
+					if ((descriptors.decalGroup == 2 || descriptors.forward) && alphaBlending &&
 						static_cast<RE::NiAlphaProperty::AlphaFunction>((alpha->flags >> 5) & 0xF) == RE::NiAlphaProperty::AlphaFunction::kOne)  // GetDestBlendMode
 						permutation.extraShaderDescriptor |= static_cast<std::uint32_t>(State::ExtraShaderDescriptors::AdditiveLighting);
 					// Extended Translucency's material model, as its SetupGeometry hook sets it (the key carries it):
@@ -1306,6 +1307,9 @@ namespace DCLF
 			// off and write mode 1 left for the no-blend meshes after it (Records.h, PackTerrainRasterFlags).
 			if (descriptors.terrainGroup)
 				rasterFlags |= PackTerrainRasterFlags(descriptors.terrainGroup, descriptors.terrainGroup == 1 ? 1u : 0u, 1u);
+			// T7d: a forward key's state, as the engine's blended draw (FUN_1414b39d0) leaves it (Records.h, PackForwardRasterFlags).
+			if (descriptors.forward)
+				rasterFlags |= PackForwardRasterFlags(descriptors.forwardBlendMode, kForwardWriteMode, descriptors.forwardDepthTest, descriptors.forwardDepthWrite);
 			if (globals::features::extendedTranslucency.loaded)
 				rasterFlags |= ((ExtendedTranslucency::MaterialModel::DescriptorDisabled ^ TranslucencyModelOf(r.leaf)) & 7u) << kRasterTranslucencyShift;
 			// The geometry slots are the walk's (the joins resolve none: frozen until the merges are done).
@@ -1320,6 +1324,7 @@ namespace DCLF
 			                (alphaTest && alphaBlending ? kObjectAlphaBlended : 0u) |
 			                (descriptors.decalGroup ? kObjectDecal | (descriptors.decalGroup << kObjectDecalGroupShift) : 0u) |
 			                (descriptors.terrainGroup << kObjectTerrainGroupShift) |
+			                (descriptors.forward ? kObjectForward : 0u) |
 			                ((propertyRecord->flags & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u) |
 			                (BeastRaceFace(*propertyRecord, r.leaf) ? kObjectBeastRace : 0u);
 		}
@@ -1377,6 +1382,8 @@ namespace DCLF
 			                     ld.rawPixel == rd.rawPixel && ld.derivedPass == rd.derivedPass && ld.rejectedTechnique == rd.rejectedTechnique &&
 			                     ld.decalGroup == rd.decalGroup && ld.decalBlendMode == rd.decalBlendMode && ld.decalWriteMode == rd.decalWriteMode &&
 			                     ld.terrainGroup == rd.terrainGroup &&
+			                     ld.forward == rd.forward && ld.forwardBlendMode == rd.forwardBlendMode && ld.forwardDepthTest == rd.forwardDepthTest &&
+			                     ld.forwardDepthWrite == rd.forwardDepthWrite &&
 			                     ld.projectedUV == rd.projectedUV },
 			{ "key", l.key == r.key },
 			{ "staticFlags", l.staticFlags == r.staticFlags },

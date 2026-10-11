@@ -125,6 +125,73 @@ namespace DCLF
 		RunEpoch(false);
 	}
 
+	void IndirectDraws::ExecuteForward()
+	{
+		ZoneScopedN("CS.DCLF.ExecuteForward");
+		if (!impl || failed || !ActiveToggles().forward)
+			return;
+		auto& f = impl->forwardEpoch;
+		auto& store = SceneStore::Get();
+		const std::uint32_t frame = store.GetFrame();
+		// Once a frame (the engine's blended draw has two call sites: the camera under water draws it first, else after the water).
+		if (f.submittedFrame == frame)
+			return;
+		++f.reached;
+		// What it draws is what this frame's colour epoch built and sorted: nothing without it (no claims: the engine drew everything,
+		// the forward objects' passes included).
+		const MainPayload* colour = impl->committedPayload[kAsyncColour];
+		if (!colour || impl->committedFrame[kAsyncColour] != frame || store.SetWithdrawn()) {
+			++f.noColour;
+			return;
+		}
+		// The selected revision's forward recording (DecideCoverage required it for the frame's claims while the toggle is on).
+		const auto revision = impl->RevisionOf(Impl::SceneRevisions::kForwardEpoch);
+		if (!revision) {
+			++f.noRecording;
+			return;
+		}
+		const auto cleanup = RenderGraphRuntime::Get().Host() ? RenderGraphRuntime::Get().Host()->ResourceCleanup() : nullptr;
+		if (!cleanup) {
+			++f.failed;
+			return;
+		}
+		// Held until this execution retires (its draws read what the colour commit bound): the colour payload's bindings, the frame
+		// textures its frame record names, the adopted snapshot whole.
+		auto owners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
+		*owners = colour->bindingOwners;
+		for (const auto& held : impl->frameTextureBindings)
+			if (held.binding.owner)
+				owners->push_back(held.binding.owner);
+		if (impl->adoptedSnapshot)
+			owners->push_back(impl->adoptedSnapshot);
+		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::Forward, [&](org::RenderGraph&) {
+			impl->SubmitRevisionRecording(Impl::SceneRevisions::kForwardEpoch, *revision.recordings, 0);
+		}, owners);
+		if (!ok) {
+			++f.failed;
+			return;
+		}
+		f.submittedFrame = frame;
+		++f.epochs;
+	}
+
+	std::string IndirectDraws::ForwardReport()
+	{
+		if (!impl)
+			return {};
+		auto& f = impl->forwardEpoch;
+		if (!f.reached && !ActiveToggles().forward)
+			return {};
+		std::string text = fmt::format("[DCLF] forward epoch (T7d, CS_DCLF_FORWARD {}): reached {} frames, {} epochs; not submitted: {} without this frame's colour epoch, "
+									   "{} without a forward recording{}, {} failed{}\n",
+			ActiveToggles().forward ? "on" : "off", f.reached, f.epochs, f.noColour, f.noRecording, f.noRecording ? " <- NO FORWARD RECORDING" : "", f.failed,
+			f.failed ? " <- EPOCH FAILED" : "");
+		const std::uint32_t submitted = f.submittedFrame;
+		f = {};
+		f.submittedFrame = submitted;
+		return text;
+	}
+
 	void IndirectDraws::RunEpoch(bool a_depthOnly)
 	{
 		const auto segment = a_depthOnly ? RenderGraphRuntime::Segment::ZPrepass : RenderGraphRuntime::Segment::MainOpaque;

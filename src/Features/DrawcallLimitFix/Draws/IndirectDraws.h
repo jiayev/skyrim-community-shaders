@@ -144,6 +144,16 @@ namespace DCLF
 		void ExecuteColour();
 
 		/**
+		 * @brief T7d (CS_DCLF_FORWARD): the forward epoch, at the engine's blended draw (FUN_1414b39d0, after the deferred composite and
+		 * the water): the frame's visible forward objects (blended Lighting), sorted back to front by the colour epoch, drawn onto the
+		 * main target before the engine's own blended draws. Render thread; submits the selected revision's forward recording (nothing
+		 * is built or uploaded here: the colour commit wrote everything its draws read), and only after this frame's colour epoch.
+		 */
+		void ExecuteForward();
+		/** @brief T7d: the forward epoch's report line (ForwardReport), its counters reset. */
+		std::string ForwardReport();
+
+		/**
 		 * @brief Render thread, the frame's start with the scene work joined: what the scene lane's lookups are made from that only the
 		 * frame has (T6b2c step 5): the import context and the fixed bindings (GpuTextures::PublishImportContext), the shadow capability
 		 * (UpdateShadowCapability), the pipeline lane's shadow inputs (DrawPipelines::SetShadowInputs), and the shadow views' modes, states
@@ -193,11 +203,18 @@ namespace DCLF
 
 		/**
 		 * @brief Render thread, at the end of the scene tables: the fade write-back's events read back since the last kick (and any
-		 * the last job did not reach), written onto their roots' nodes on the worker (the "fade write-back" job;
-		 * drawcall-limit-fix.md, "The fade write-back"). A stood-in root's node is otherwise left as the engine last wrote it, and
-		 * the engine's readers of it (the tree LOD's crossfade, the occlusion maps' cull, its next listing) would take that.
+		 * the last task did not reach) judged on DCLF's executor into the stores WriteFadeStores makes (drawcall-limit-fix.md, "The
+		 * fade write-back", "T7b4/T7b6"). A stood-in root's node is otherwise left as the engine last wrote it, and the engine's
+		 * readers of it (the tree LOD's crossfade, the occlusion maps' cull, the animation gate, its next listing) would take that.
 		 */
 		void KickFadeWriteBack();
+		/**
+		 * @brief T7b4, the main thread at Main::Update's entry (T7b0's write point: no list cull, cell animation or animation job runs):
+		 * the stores the last write-back task found, made on the roots DCLF writes (a_written(root): PrimaryCull::FadeWrittenByDclf; a
+		 * store for any other root is left, the engine's cull stepping it itself). a_live false (DCLF does not run): dropped. a_stored
+		 * (CS_DCLF_FADE_PARITY's <- FADE DOUBLE, may be null): the roots stored.
+		 */
+		void WriteFadeStores(bool a_live, const std::function<bool(const void*)>& a_written, std::vector<const void*>* a_stored);
 		/**
 		 * @brief T7b1, render thread, at the frame's start: the visibility readback's batches harvested and not yet decoded (the depth
 		 * commit hands its own at once) handed to the decode task on DCLF's executor, never joined; the batches the last task decoded let

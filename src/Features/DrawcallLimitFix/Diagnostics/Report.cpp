@@ -228,6 +228,15 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				!draws.terrainCpu ? std::string() :
 				fmt::format("; the CPU over the same inputs: {} tested, {} near{}", draws.terrainCpuTested, draws.terrainCpuNear,
 					(draws.terrainNearTested == draws.terrainCpuTested && draws.terrainNear == draws.terrainCpuNear) ? " <- OK" : " <- TB NEAR"));
+		// T7d: the forward epoch's class, the colour segment's culling of it, and (CS_DCLF_SET_PARITY) what the engine's registration
+		// handed in for it that frame: every blended pass of a member the engine would draw is a forward input in view (its cull has no
+		// occlusion and a tighter bound than the box the GPU tests), so fewer in view than registered is a member DCLF dropped.
+		if (draws.forwardTested || draws.forwardDrawn || draws.forwardEngine)
+			logger::info("[DCLF] forward (T7d, sampled frame): {} forward inputs tested, {} in the frustum, {} occluded, {} draws sorted for the forward epoch{}",
+				draws.forwardTested, draws.forwardInView, draws.forwardOccluded, draws.forwardDrawn,
+				!draws.forwardObserved ? std::string() :
+				fmt::format("; the engine registered {} blended passes of members{}", draws.forwardEngine,
+					draws.forwardInView >= draws.forwardEngine ? " <- OK" : " <- FORWARD"));
 		if (draws.residentInputs || draws.residentResyncs)
 			logger::info("[DCLF] persistent draws (last frame, colour): {} kept inputs, {} sequences, {} pairs, {} not drawable; since the start {} region "
 						 "versions uploaded, {} resyncs (log {}, segment {}, shrunk {}, scope {}, fit {}), {} decal count moves; parity {} entries checked, {} differ, {} missing{}",

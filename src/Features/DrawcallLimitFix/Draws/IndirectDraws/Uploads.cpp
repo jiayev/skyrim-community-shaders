@@ -474,6 +474,8 @@ namespace DCLF
 			}
 			UploadFadeRoots(a_store.GetTables(), a_store.GetFrame(), inputs, logBase, buffers, uploads, PortalViews::Get().Encoded());
 			a_store.FadeRootsSent(buffers.fadeRootsHeld);
+			// T7b6: the fade events' header and the frame's readback slot (the slot's last execution harvested first).
+			ArmFadeReadback(a_store, buffers, uploads);
 			// T7b1 (CS_DCLF_ACCUMULATED_PARITY): the visibility events' count and the frame's readback slot.
 			ArmVisibilityReadback(a_store, buffers, uploads);
 			// Each root's portal program (its room's), when the roots or a room's children changed, or the graph (PortalViews::ProgramOf).
@@ -525,6 +527,8 @@ namespace DCLF
 			latched(a_resources->count, &decalWords[4], sizeof(std::uint32_t), kCountDecalLayerWord * sizeof(std::uint32_t));
 			// T7c1: the terrain groups' counts, which their draws append through (BuildDrawsCS).
 			latched(a_resources->count, kZeroCounts, kTerrainGroups * sizeof(std::uint32_t), kCountTerrainGroupWord * sizeof(std::uint32_t));
+			// T7d: the forward range's count (its draw's) and the forward culling's tallies (BuildDrawsCS).
+			latched(a_resources->count, kZeroCounts, 4 * sizeof(std::uint32_t), kCountForwardWord * sizeof(std::uint32_t));
 		}
 		if (!ring)
 			UploadMainPayload(a_payload, *a_resources, uploads);
@@ -983,32 +987,124 @@ namespace DCLF
 		return owned;
 	}
 
+	void IndirectDraws::WriteFadeStores(bool a_live, const std::function<bool(const void*)>& a_written, std::vector<const void*>* a_stored)
+	{
+		if (!impl->scene || !impl->scene->fadeWriteBack)
+			return;
+		auto& writeBack = *impl->scene->fadeWriteBack;
+		// The stores the last finished task found (step 6e F1). T7b4: made by the main thread at Main::Update's entry, the write point
+		// T7b0 found (no list cull, cell animation or animation job runs; every reader of the node - the animation gate, the tree LOD,
+		// the culls - sees them in this frame), and only on the roots DCLF still writes (a_written: the engine's cull steps any other
+		// itself, so one writer). Their snapshot is let go after, here.
+		std::unique_ptr<FadeWriteBack::Stores> stores{ writeBack.ready.exchange(nullptr, std::memory_order_acq_rel) };
+		if (!stores)
+			return;
+		// DCLF does not run: the engine culls every root this frame, and their nodes are its.
+		if (!a_live) {
+			writeBack.dropped.fetch_add(stores->stores.size(), std::memory_order_relaxed);
+			return;
+		}
+		ZoneScopedN("CS.DCLF.FadeWriteBack.Stores");
+		const auto start = std::chrono::steady_clock::now();
+		std::uint64_t applied = 0, notWritten = 0;
+		for (const auto& store : stores->stores) {
+			if (!a_written(store.node)) {
+				++notWritten;
+				continue;
+			}
+			// The fade, and the fade bits of the flags (atomically: the engine owns the others). The fade watch is not told: a
+			// stood-in root's dependents read its fade from FadeStateCS's state (SceneStore::MarkFadeRootOwned).
+			auto* node = static_cast<std::byte*>(store.node);
+			std::atomic_ref<std::uint32_t> flags(*reinterpret_cast<std::uint32_t*>(node + 0xF4));
+			flags.fetch_and(~kFadeFlagMask, std::memory_order_relaxed);
+			flags.fetch_or(store.flags, std::memory_order_relaxed);
+			*reinterpret_cast<float*>(node + 0x130) = store.fade;
+			// T7b4: a leaf or tree root's LOD state (the level, the transition and its blend: FUN_14147a430's, the only writer besides
+			// OnVisible, neither of which runs now).
+			std::uint32_t fields = SceneCapture::NodeRecord::kFadeCurrent;
+			if (store.lod) {
+				*reinterpret_cast<float*>(node + 0x14C) = store.blend;
+				*reinterpret_cast<std::uint8_t*>(node + 0x152) = static_cast<std::uint8_t>(store.levels);
+				*reinterpret_cast<std::uint8_t*>(node + 0x153) = static_cast<std::uint8_t>(store.levels >> 8);
+				fields |= SceneCapture::NodeRecord::kFadeLevel;
+			}
+			// The mirror's value (T6b1a): an update, not a fade event.
+			SceneTracker::Get().PushUpdate(SceneCapture::Update{ fields, SceneCapture::CaptureNodeFields(*static_cast<const RE::NiAVObject*>(store.node), fields) });
+			if (a_stored)
+				a_stored->push_back(store.node);
+			++applied;
+		}
+		writeBack.applied.fetch_add(applied, std::memory_order_relaxed);
+		writeBack.notWritten.fetch_add(notWritten, std::memory_order_relaxed);
+		writeBack.storeNs.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()),
+			std::memory_order_relaxed);
+	}
+
+	void IndirectDraws::Impl::ArmFadeReadback(SceneStore& a_store, SceneBuffers& a_scene, CommitUploads& a_uploads)
+	{
+		if (!a_scene.fadeWriteBack || !a_scene.fadeEvents)
+			return;
+		auto& writeBack = *a_scene.fadeWriteBack;
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (!host)
+			return;
+		const std::uint32_t frameSlot = host->CurrentFrameSlot();
+		if (frameSlot >= writeBack.armed.size())
+			return;
+		// The slot's last execution (the host has waited for it, and not submitted the next): its events, if its buffer holds the frame
+		// that armed it, in the staging set the execution's revision copied into (a growth's revisions copy into the next set; a buffer
+		// of another set holds an older frame).
+		if (auto& armed = writeBack.armed[frameSlot]; armed.armed) {
+			armed.armed = false;
+			bool found = false;
+			for (const auto* set = writeBack.sets.load(std::memory_order_acquire); set && !found; set = set->next) {
+				auto resource = set->buffers[frameSlot]->GetAPIResource();
+				void* mapped = nullptr;
+				resource.Map(&mapped);
+				if (!mapped)
+					continue;
+				const auto* words = static_cast<const std::uint32_t*>(mapped);
+				if (words[1] == armed.frame) {
+					found = true;
+					const std::uint32_t count = words[0];
+					const std::uint32_t events = std::min(count, set->events);
+					// The roots past the list's end report again next frame; the list grows to them (ReserveSceneTables).
+					if (count > set->events) {
+						std::uint32_t wanted = writeBack.wanted.load(std::memory_order_relaxed);
+						while (wanted < count && !writeBack.wanted.compare_exchange_weak(wanted, count, std::memory_order_release, std::memory_order_relaxed)) {}
+						writeBack.overflowed.fetch_add(1, std::memory_order_relaxed);
+					}
+					if (events) {
+						auto* batch = new FadeWriteBack::Batch();
+						batch->frame = armed.frame;
+						const auto* list = reinterpret_cast<const FadeEvent*>(words + kFadeEventHeaderWords);
+						batch->events.assign(list, list + events);
+						writeBack.Push(batch);
+						writeBack.harvestedWithEvents.fetch_add(1, std::memory_order_relaxed);
+						writeBack.events.fetch_add(events, std::memory_order_relaxed);
+					}
+					writeBack.harvested.fetch_add(1, std::memory_order_relaxed);
+				}
+				resource.Unmap(0, 0);
+			}
+			// The epoch did not run for that frame (or ran a revision without the readback): neither did FadeStateCS's report, so the
+			// changes it would have reported are reported by the next execution.
+			if (!found)
+				writeBack.missed.fetch_add(1, std::memory_order_relaxed);
+		}
+		// The header for this execution's FadeStateCS to append after: the count, and the frame its harvest matches.
+		const std::uint32_t header[kFadeEventHeaderWords]{ 0u, a_store.GetFrame(), 0u, 0u };
+		a_uploads(a_scene.fadeEvents, header, sizeof(header), 0);
+		auto& armed = writeBack.armed[frameSlot];
+		armed.armed = true;
+		armed.frame = a_store.GetFrame();
+	}
+
 	void IndirectDraws::KickFadeWriteBack()
 	{
 		if (!impl->scene || !impl->scene->fadeWriteBack)
 			return;
 		auto& writeBack = *impl->scene->fadeWriteBack;
-		// The stores the last finished task found (step 6e F1): engine writes are the render thread's, here at the frame's start, with
-		// the engine's update done and before the culls read the fades. Their snapshot is let go after.
-		if (std::unique_ptr<FadeWriteBack::Stores> stores{ writeBack.ready.exchange(nullptr, std::memory_order_acq_rel) }) {
-			ZoneScopedN("CS.DCLF.FadeWriteBack.Stores");
-			const auto start = std::chrono::steady_clock::now();
-			for (const auto& store : stores->stores) {
-				// The fade, and the fade bits of the flags (atomically: the engine owns the others). The fade watch is not told: a
-				// stood-in root's dependents read its fade from FadeStateCS's state (SceneStore::MarkFadeRootOwned).
-				auto* node = static_cast<std::byte*>(store.node);
-				std::atomic_ref<std::uint32_t> flags(*reinterpret_cast<std::uint32_t*>(node + 0xF4));
-				flags.fetch_and(~kFadeFlagMask, std::memory_order_relaxed);
-				flags.fetch_or(store.flags, std::memory_order_relaxed);
-				*reinterpret_cast<float*>(node + 0x130) = store.fade;
-				// The mirror's value (T6b1a): an update, not a fade event.
-				constexpr std::uint32_t kFields = SceneCapture::NodeRecord::kFadeCurrent;
-				SceneTracker::Get().PushUpdate(SceneCapture::Update{ kFields, SceneCapture::CaptureNodeFields(*static_cast<const RE::NiAVObject*>(store.node), kFields) });
-			}
-			writeBack.applied.fetch_add(stores->stores.size(), std::memory_order_relaxed);
-			writeBack.storeNs.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()),
-				std::memory_order_relaxed);
-		}
 		// One task at a time; one still running takes the new batches with it (or the next task does).
 		if (bool idle = false; !writeBack.running.compare_exchange_strong(idle, true, std::memory_order_acq_rel)) {
 			writeBack.busy.fetch_add(1, std::memory_order_relaxed);
@@ -1043,12 +1139,14 @@ namespace DCLF
 						continue;
 					}
 					state.appliedFrame[event.root] = batch->frame;
-					stores->stores.push_back({ const_cast<void*>(tables->fadeRootNode[event.root]), event.flags & kFadeFlagMask, event.currentFade });
+					const std::uint32_t plan = tables->fadeRoots[event.root].bits & kFadeRootPlanMask;
+					stores->stores.push_back({ const_cast<void*>(tables->fadeRootNode[event.root]), event.flags & kFadeFlagMask, event.currentFade,
+						plan == kFadeRootLeaf || plan == kFadeRootTree, event.levels, event.blend });
 				}
 				delete batch;
 			}
-			// What an earlier task found and no frame start has made yet goes first (a task runs only after the frame's start has taken
-			// the last one's, so this is only the toggle's drain).
+			// What an earlier task found and no Main::Update entry has made yet goes first (T7b4: the entry makes them, so a task that
+			// finishes after the next entry's exchange merges with what that entry found nothing of).
 			if (std::unique_ptr<FadeWriteBack::Stores> earlier{ state.ready.exchange(nullptr, std::memory_order_acq_rel) }) {
 				earlier->stores.insert(earlier->stores.end(), stores->stores.begin(), stores->stores.end());
 				earlier->tables = std::move(stores->tables);

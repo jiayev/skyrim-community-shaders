@@ -85,7 +85,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kNoSkip = ~0u;
 	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested; a shadow view's [3] outside the sun's entry, [4] small, [5]
 	// under a fading root, [16] of its caster class.
-	constexpr std::uint32_t kCountWords = 32;
+	constexpr std::uint32_t kCountWords = 36;
 	/** @brief A count buffer's worth of zeros: what an epoch uploads to reset the counters it appends through. */
 	inline constexpr std::uint32_t kZeroCounts[kCountWords] = {};
 	// The sun's bits on the GPU: the colour dispatch's inputs with kObjectSunTest, and those that missed every cascade.
@@ -106,6 +106,13 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kCountTerrainGroupWord = 28;  // group 1 at word 28, group 2 at word 29
 	constexpr std::uint32_t kCountTerrainNearTestedWord = 30;
 	constexpr std::uint32_t kCountTerrainNearWord = 31;
+	// T7d: the forward range's draws (the forward epoch's draw count; zeroed by the colour commit), then the colour segment's forward
+	// inputs it tested, those inside the frustum (the <- FORWARD observer's: what the engine's cull would register) and those the HZB
+	// rejected. Byte offsets must match BuildDrawsCS.hlsl and ForwardSortCS.hlsl.
+	constexpr std::uint32_t kCountForwardWord = 32;
+	constexpr std::uint32_t kCountForwardTestedWord = 33;
+	constexpr std::uint32_t kCountForwardInViewWord = 34;
+	constexpr std::uint32_t kCountForwardOccludedWord = 35;
 	// Byte offsets of the count words the indirect draws read; they must match BuildDrawsCS.hlsl.
 	constexpr std::uint64_t kCountDrawnPhaseTwoBytes = 68;
 	constexpr const char* kBuildDrawsShader = "DrawcallLimitFix/BuildDrawsCS.hlsl";
@@ -345,10 +352,11 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kViewPrecipOccluder = 1u << 6; // the precipitation mask
 	constexpr std::uint32_t kViewReflection = 1u << 7;     // the water reflection's faces
 	constexpr std::uint32_t kViewDecal = 1u << 8;          // a decal: the colour segment's fixed ordinal slots, and no other view's
+	constexpr std::uint32_t kViewForward = 1u << 9;        // T7d: a forward object: the colour segment's forward range, and no other view's
 	// The main segments' views of the one main list (U4a): the depth segment culls every candidate; the colour segment draws the
 	// members and writes every decal's slot (an undrawable one's blank).
 	constexpr std::uint32_t kDepthViewBits = kViewMainCull;
-	constexpr std::uint32_t kColourViewBits = kViewMain | kViewDecal;
+	constexpr std::uint32_t kColourViewBits = kViewMain | kViewDecal | kViewForward;
 	static_assert(offsetof(DrawInput, view) == 16 && offsetof(DrawInput, shadowRow) == 52 && offsetof(DrawInput, fadeDistance) == 60);
 	// The main sequence buffer's ranges (Resources::sequenceDraws, sequenceDecals): phase 1 and the colour segment's draws,
 	// then phase 2's (the CPU records where its draw starts, so the two need ranges fixed in advance rather than one shared
@@ -370,6 +378,14 @@ namespace DCLF::Draws
 	 * together within the range: ReserveMainSequences). BuildDraws reads the capacities from its latch (terrainCapacity).
 	 */
 	constexpr std::uint32_t kTerrainGroups = 2;
+	/*
+	 * T7d: the forward range (Records.h, kObjectForward), after the terrain groups' ranges in phase 2's: first the staging half, which the
+	 * colour segment's BuildDraws appends each visible forward draw to (its view depth in the sequence's firstInstance word, which nothing
+	 * executes there), then the sorted half, which ForwardSortCS fills back to front and the forward epoch draws (MainSizing::
+	 * forwardCapacity each: every draw the forward pipeline slots can produce, grown to a power of two past it; the terrain ranges and
+	 * both halves together within the range: ReserveMainSequences).
+	 */
+	constexpr const char* kForwardSortShader = "DrawcallLimitFix/ForwardSortCS.hlsl";
 	// BuildDrawsLatch::bucketMapOffset's entries: a terrain group 1 slot's bucket (PlanZBuckets), whose twin, the next bucket, takes the
 	// slot's near blocks (BuildDrawsLatch::terrainNear).
 	constexpr std::uint32_t kBucketTerrainPair = 1u << 31;
@@ -435,8 +451,12 @@ namespace DCLF::Draws
 		// A shadow view and the depth segment: each geometry slot's first index in the index pool (IndexPool::firsts). 0 elsewhere.
 		std::uint32_t poolFirstsIndex;
 		std::uint32_t rootProgramsIndex;
+		// T7d, the colour segment: the forward range's staging half (its first slot, past the terrain ranges, and its capacity: PassFrame::
+		// forwardCapacity), which the forward inputs' visible draws are appended to with their view depth. 0 capacity elsewhere.
+		std::uint32_t forwardBase;
+		std::uint32_t forwardCapacity;
 	};
-	static_assert(sizeof(BuildDrawsConstants) == 116);
+	static_assert(sizeof(BuildDrawsConstants) == 124);
 	constexpr std::uint32_t kBuildDrawsConstantWords = sizeof(BuildDrawsConstants) / 4;
 
 	/**

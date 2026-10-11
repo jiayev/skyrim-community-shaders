@@ -91,6 +91,7 @@ namespace DCLF
 				add(a_resources.count.get(), 4 * sizeof(std::uint32_t), kCountDecalGroupWord * sizeof(std::uint32_t));
 				add(a_resources.count.get(), sizeof(std::uint32_t), kCountDecalLayerWord * sizeof(std::uint32_t));
 				add(a_resources.count.get(), kTerrainGroups * sizeof(std::uint32_t), kCountTerrainGroupWord * sizeof(std::uint32_t));
+				add(a_resources.count.get(), 4 * sizeof(std::uint32_t), kCountForwardWord * sizeof(std::uint32_t));  // T7d
 			}
 			if (a_depthOnly && a_resources.pool && a_buckets)
 				for (const auto& counts : a_resources.zBucketCounts)
@@ -121,6 +122,7 @@ namespace DCLF
 			in.sequenceDraws = sizing.sequenceDraws;
 			in.sequenceDecals = sizing.sequenceDecals;
 			in.terrainCapacity = sizing.terrainCapacity;
+			in.forwardCapacity = sizing.forwardCapacity;
 			in.materialRows = a_revision ? a_resources.materialRows.RevisionAddress() : a_resources.materialRows.address;
 			in.pipelineRows = a_revision ? a_resources.pipelineRows.RevisionAddress() : a_resources.pipelineRows.address;
 			in.cullMode = a_cullMode;
@@ -142,8 +144,10 @@ namespace DCLF
 			for (std::uint32_t group = 0; group < kDecalGroups; ++group)
 				frame->decalCapacity[group] = a_in.depthOnly ? 0u : a_in.sequenceDecals;
 			// T7c1: the terrain groups' ranges, the colour segment's alone (BuildDrawsCS appends them there).
-			if (!a_in.depthOnly)
+			if (!a_in.depthOnly) {
 				frame->terrainCapacity = a_in.terrainCapacity;
+				frame->forwardCapacity = a_in.forwardCapacity;  // T7d: the colour segment's and the forward epoch's
+			}
 			frame->width = a_in.viewport.width;
 			frame->height = a_in.viewport.height;
 			frame->minDepth = a_in.viewport.minDepth;
@@ -174,7 +178,8 @@ namespace DCLF
 				if (a_differs)
 					out |= 1u << a_field;
 			};
-			note(kShapeCapacity, a.drawCapacity != b.drawCapacity || a.decalCapacity != b.decalCapacity || a.terrainCapacity != b.terrainCapacity);
+			note(kShapeCapacity, a.drawCapacity != b.drawCapacity || a.decalCapacity != b.decalCapacity || a.terrainCapacity != b.terrainCapacity ||
+			                          a.forwardCapacity != b.forwardCapacity);
 			note(kShapeSequences, a.sequenceDraws != b.sequenceDraws || a.sequenceDecals != b.sequenceDecals);
 			note(kShapeRows, a.materialRows != b.materialRows || a.pipelineRows != b.pipelineRows);
 			note(kShapeViewport, a.width != b.width || a.height != b.height || a.minDepth != b.minDepth || a.maxDepth != b.maxDepth);

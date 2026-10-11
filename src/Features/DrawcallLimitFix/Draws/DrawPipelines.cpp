@@ -1220,6 +1220,13 @@ namespace DCLF
 			// (the meshes after it) EQUAL.
 			const std::uint32_t terrainGroup = RasterTerrainGroup(a_key.rasterFlags);
 			const bool engineDepth = a_state.valid && terrainGroup == 0;
+			// T7d: a forward key (Records.h, kRasterForward) draws in the forward epoch, after the deferred composite, on the same eight
+			// attachments the colour pass has (so its pipelines live in the main set and execute through the colour signature): the
+			// forward pixel stage writes the main target alone, blended as the engine's state for its modes says, the G-buffer
+			// attachments masked off (the engine has them unbound there); its depth state is the property's (SetupGeometry: tested
+			// with kZBufferTest, written with kZBufferWrite). Its depth variant is never drawn (no forward input is a depth segment
+			// input), and writes nothing.
+			const bool forward = a_state.valid && RasterForward(a_key.rasterFlags);
 			for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
 				const bool depthOnly = variant == kDepthVariant;
 				rhi::SubobjRaster raster{};
@@ -1246,6 +1253,12 @@ namespace DCLF
 				depth.ds.depthWrite = depthOnly ? decalGroup != 2 : (decalGroup == 3 || terrainGroup == 1);
 				depth.ds.depthFunc = depthOnly ? (engineDepth ? rhi::CompareOp::LessEqual : rhi::CompareOp::Less) :
 				                                 ((engineDepth || terrainGroup == 1) ? rhi::CompareOp::LessEqual : rhi::CompareOp::Equal);
+				if (forward) {
+					const bool test = (a_key.rasterFlags & kRasterForwardDepthTest) != 0, write = (a_key.rasterFlags & kRasterForwardDepthWrite) != 0;
+					depth.ds.depthWrite = !depthOnly && write;
+					depth.ds.depthEnable = depthOnly || test || write;
+					depth.ds.depthFunc = (depthOnly || test) ? rhi::CompareOp::LessEqual : rhi::CompareOp::Always;
+				}
 				rhi::SubobjBlend blend{};
 				rhi::SubobjRTVs targets{};
 				if (!depthOnly) {
@@ -1254,6 +1267,12 @@ namespace DCLF
 					if (a_state.valid || a_state.blendOnly)
 						blend.bs = a_state.blend;
 					blend.bs.numAttachments = a_targets.colorCount;
+					// T7d: a forward key writes the main target (the first attachment) alone.
+					if (forward)
+						for (std::uint32_t i = 1; i < a_targets.colorCount && i < 8; ++i) {
+							blend.bs.attachments[i].enable = false;
+							blend.bs.attachments[i].writeMask = static_cast<rhi::ColorWriteEnable>(0);
+						}
 					targets.rt.count = a_targets.colorCount;
 					for (std::uint32_t i = 0; i < a_targets.colorCount; ++i)
 						targets.rt.formats[i] = rhi::helpers::ToRHI(a_targets.colors[i]);
