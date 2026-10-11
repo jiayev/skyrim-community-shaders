@@ -250,6 +250,22 @@ namespace DCLF
 		bool heightTest = false;
 	};
 
+	/**
+	 * @brief T6b3e: a membership pass's derived pass descriptor (PrimaryCull::MembershipPass), with what it was derived from (the
+	 * property record's key, material, flags and fade state): derived again when any of them differs. Kept in the geometry's tracked
+	 * entry (SceneStore::Tracked::membershipDerived), so it lives and dies with it; the pass returns the entry to store.
+	 */
+	struct MembershipDerived
+	{
+		const void* property = nullptr;
+		const void* material = nullptr;
+		std::uint64_t flags = 0;
+		std::uint8_t fadeState = 0;
+		std::uint32_t derivedPass = kNotDerived;
+
+		bool operator==(const MembershipDerived&) const = default;
+	};
+
 	inline constexpr std::uint32_t kPassDoAlphaTest = 1u << 20;           // pass descriptor DoAlphaTest
 	inline constexpr std::uint32_t kPassAdditionalAlphaMask = 1u << 23;  // pass descriptor AdditionalAlphaMask (screen-door fade)
 
@@ -311,8 +327,29 @@ namespace DCLF
 	 * terrain pass and redraws it blended with its own depth state, which an opaque owned draw would break.
 	 */
 	bool MtLandEnabled();
-	/** @brief Whether Terrain Blending draws its terrain after the opaque pass, into a frame DCLF draws in. */
+	/** @brief Whether Terrain Blending draws its terrain after the opaque pass, into a frame DCLF draws in (or this thread's snapshot). */
 	bool TerrainBlendingDefersTerrain();
+	/**
+	 * @brief T6b3e: TerrainBlendingDefersTerrain's answer as a scene pass took it at its start, read in its place on a thread that installed
+	 * it (TerrainBlendingSnapshotScope): the menu may switch Terrain Blending while the pass's evaluations run on the pool.
+	 */
+	inline thread_local const bool* terrainDefersSnapshot = nullptr;
+	/** @brief T6b3e: a_defers is this thread's TerrainBlendingDefersTerrain while the scope lives (null: the feature's). */
+	class TerrainBlendingSnapshotScope
+	{
+	public:
+		explicit TerrainBlendingSnapshotScope(const bool* a_defers) :
+			previous(terrainDefersSnapshot)
+		{
+			terrainDefersSnapshot = a_defers;
+		}
+		~TerrainBlendingSnapshotScope() { terrainDefersSnapshot = previous; }
+		TerrainBlendingSnapshotScope(const TerrainBlendingSnapshotScope&) = delete;
+		TerrainBlendingSnapshotScope& operator=(const TerrainBlendingSnapshotScope&) = delete;
+
+	private:
+		const bool* previous;
+	};
 
 	/**
 	 * @brief The vertex and pixel descriptors the native main (deferred) pass uses for this geometry, derived without

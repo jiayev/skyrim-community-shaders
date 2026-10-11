@@ -12,6 +12,7 @@
 #include <ankerl/unordered_dense.h>
 
 #include "Features/DrawcallLimitFix/Draws/GpuTextures.h"
+#include "Features/DrawcallLimitFix/Common/SceneWake.h"
 #include "Features/DrawcallLimitFix/Scene/Lookups.h"
 
 namespace DCLF
@@ -97,7 +98,7 @@ namespace DCLF
 		// The answers of the drain being applied (rejections included).
 		ankerl::unordered_dense::map<ID3D11ShaderResourceView*, GpuTextures::Binding> arrived;
 		std::uint64_t cookie = 1;  // the requests' since the last reset: an answer with another is stale
-		GpuTextures::Replies replies;
+		GpuTextures::Replies replies{ &WakeSceneTextureReply };  // T6b3d: an answer wakes the scene pump
 		Stats stats;
 	};
 }

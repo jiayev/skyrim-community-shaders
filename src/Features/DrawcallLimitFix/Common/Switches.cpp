@@ -50,6 +50,8 @@ namespace DCLF
 			{ Dclf, "CS_DCLF", F, Reduced::Zero, false, "0: DCLF does not install" },
 			{ AsyncPriority, "CS_DCLF_ASYNC_PRIORITY", F, N, false, "normal: the coordinator thread keeps normal priority instead of above normal" },
 			{ Workers, "CS_DCLF_WORKERS", F, N, false, "the preparation pool's threads (default hardware threads - 2, at least 1)" },
+			{ Fanout, "CS_DCLF_FANOUT", F, N, false,
+				"the scene pass's evaluation rounds and joins (T6b3e): 0 interleaved on the scene lane (the reference), 1 every entry evaluated then merged, on the lane; 2 (default) evaluated on the preparation pool from 128 entries, merged in order" },
 			{ Precompile, "CS_DCLF_PRECOMPILE", F, Reduced::Zero, false, "0: DCLF's SPIR-V programs compile on first use instead of alongside the engine's shaders" },
 			{ Cull, "CS_DCLF_CULL", F, Reduced::Cull, false, "off|frustum|occlusion (default): GPU culling, the live toggle's seed" },
 			{ Skinned, "CS_DCLF_SKINNED", F, Reduced::UnlessOne, false, "0: skinned objects stay native (live toggle's seed)" },
@@ -95,7 +97,8 @@ namespace DCLF
 			{ CapturePointParity, "CS_DCLF_CAPTURE_POINT_PARITY", P, N, false, "1: the colour epoch's captured bindings against the frame's first native lighting draw" },
 			{ SkylightParity, "CS_DCLF_SKYLIGHT_PARITY", P, N, false, "1: DCLF's Skylighting occlusion map against the engine's, texel by texel" },
 			{ FrameJoin, "CS_DCLF_FRAME_JOIN", P, N, false,
-				"0: the frame's start does not join the scene work (T6b3a's check that the join guards nothing: FRAME ACCESS and LANE ENGINE ACCESS stay 0); unset joins" },
+				"unused since T6b3d (the scene passes are the coordinator's pump's: nothing is joined); was T6b3a's check that the frame-start join guarded nothing" },
+			{ FanoutParity, "CS_DCLF_FANOUT_PARITY", P, N, false, "1: every 60th pass, the fanned-out evaluations (walk rounds and joins) made again on the scene lane and compared field by field (T6b3e)" },
 
 			{ Stats, "CS_DCLF_STATS", D, N, false, "1: the periodic report" },
 			{ PassStats, "CS_DCLF_PASS_STATS", D, N, false, "1: per-pass counts in the report" },
@@ -129,6 +132,8 @@ namespace DCLF
 			{ ShadowDebugOutput, "CS_DCLF_SHADOW_DEBUG_OUTPUT", D, N, false, "1: Lighting.hlsl writes the sun's shadow terms into the diffuse target (open defect)" },
 			{ Timeline, "CS_DCLF_TIMELINE", D, N, false,
 				"1: T6b0's measurements: objects' stage timelines, the reflection residue by furthest stage, unhides by store, join and install latency, the engine's import share by thread" },
+			{ ReleaseGuard, "CS_DCLF_RELEASE_GUARD", D, N, false,
+				"1: the engine objects' last releases on DCLF's threads (the scene lane, the pool) counted and named by class (NiRefObject::DeleteThis patched; T6b3e)" },
 
 			{ TestCommands, "CS_DCLF_TEST_COMMANDS", T, N, false, "<frame>:<console command>;...: console commands at given frames" },
 			{ TestMove, "CS_DCLF_TEST_MOVE", T, N, false, "<start>:<end>:<units per frame>;...: carries the player forward" },

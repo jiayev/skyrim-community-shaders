@@ -213,14 +213,11 @@ private:
 	// Render-thread CPU spent on scene capture, averaged over a report interval.
 	struct CaptureTiming
 	{
-		double eventsMs = 0.0;
-		double buildMs = 0.0;  // the accumulate phase, at EarlyPrepass
+		double eventsMs = 0.0;  // Present's, and the frame start's requests and captures (T6b3d: ServeFrameRequests)
+		double buildMs = 0.0;  // EarlyPrepass's posts and material serving
 		double buildMaxMs = 0.0;
-		double sceneMs = 0.0;  // the scene phase, before the shadow maps
+		double sceneMs = 0.0;  // BeforeShadowMaps' views (T6b3d: the scene passes are the coordinator's, timed by its pump)
 		double sceneMaxMs = 0.0;
-		double sceneTablesMs = 0.0;  // the "scene tables" zone at Main::Draw: ProcessEvents and the scene phase
-		double sceneTablesMaxMs = 0.0;
-		std::uint32_t sceneTablesFrames = 0;
 		std::uint32_t frames = 0;
 	} timing;
 	// Per occlusion view (DCLF::kOcclusionSky, kOcclusionPrecipitation), the maps left to the engine (DCLF not ready) per
@@ -230,13 +227,15 @@ private:
 	// The toggles' generation at the frame's start (BeginSceneFrame): a publication whose commit was made under older toggles is not
 	// installed (T6b3a: the publication carries its commit's generation; the toggle reinstall waits for one made under these).
 	std::uint32_t toggleGeneration = 0;
+	// T6b3d: a frame's start ran DCLF since the last Present (the parities' inline pass ran in it); Present applies the events inline
+	// when none did (SceneStore::ApplyEventsInline).
+	bool sceneFrameRan = false;
 	std::uint32_t occlusionWanted = 0;
 	std::uint32_t occlusionParityWaiting = 0;  // the maps whose engine render was kept this frame (CopyOcclusion stage 0)
 	/** @brief The periodic report (DrawcallLimitFix/Report.cpp): every kReportInterval frames. */
 	void ReportStats(std::uint32_t a_frame);
-	/** @brief The frame's reports, the scene work joined (they read its stats): at Present, or the next frame's start (T6b1d). */
+	/** @brief The frame's reports, at Present, once a frame number (T6b3d: the frame's own state alone; the coordinator logs its own lines). */
 	void ReportFrame();
-	bool reportPending = false;  // Present found the scene work running: its reports wait for the next join (the frame start's, or Present's)
 	static constexpr std::uint32_t kReportInterval = 300;
 	LeakStats leaks;  // since the last report
 };

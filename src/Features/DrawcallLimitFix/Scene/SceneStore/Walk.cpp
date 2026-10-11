@@ -1,5 +1,11 @@
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Diagnostics/HiddenWatch.h"
+#include "Features/DrawcallLimitFix/Common/SceneScheduler.h"
+
+#include <atomic>
+#include <cassert>
+#include <exception>
+#include <functional>
 
 namespace DCLF
 {
@@ -60,10 +66,14 @@ namespace DCLF
 			stats.materials = 0;
 			return;
 		}
+		// T6b3e: the toggles and Terrain Blending as the pass's evaluations read them, on the pool and here (ShardScope), the joins
+		// included (BuildAccumulatePhase binds the same): the render thread may switch either while the pass runs.
+		passSnapshot = { ActiveToggles(), TerrainBlendingDefersTerrain() };
+		ShardScope passScope(*this, false);
 		PartTimer timer(stats.partMs);
 		{
 			DCLF_SCENE_PART(Prologue, "CS.DCLF.Scene.Prologue");
-			auto& gpu = GpuResources::Get();
+			auto& gpu = GpuResources::Scene();
 			gpu.BeginFrame();
 			const bool resolveBuffers = gpu.Enabled();
 			frameResolveBuffers = resolveBuffers;
@@ -100,7 +110,7 @@ namespace DCLF
 		}
 		PublishPlacementPlan();
 		const bool walkParityOn = SwitchEnabled(Switch::WalkParity);
-		if (walkParityOn && ParityDue(sceneFrame)) {
+		if (walkParityOn && PassParityDue()) {
 			DCLF_SCENE_PART(WalkParity, "CS.DCLF.Scene.WalkParity");
 			CheckWalkParity();
 		}
@@ -425,32 +435,28 @@ namespace DCLF
 		}
 	}
 
-	bool SceneStore::WriteObject(RE::BSGeometry* geometry, Tracked& a_tracked, PartTimer& timer, Ineligible& a_bucket)
+	void SceneStore::EvaluateWrite(RE::BSGeometry* geometry, const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out, PartTimer& timer) const
 	{
+		// T6b3e: WriteObject's evaluation, pure (any thread under a ShardScope): what it decides for the entry goes into a_out's delta, its
+		// counts into a_counters, and everything that reads or writes a slot is the merge's (MergeWrite).
+		auto& c = a_counters;
+		auto& d = a_out.delta;
 		// CS_DCLF_PERSISTENT_PARITY's frames: the cached verdict is used and *also* recomputed, and the two compared.
-		const bool classifyProbe = SwitchEnabled(Switch::PersistentParity) && ParityDue(sceneFrame, 17);
+		const bool classifyProbe = SwitchEnabled(Switch::PersistentParity) && PassParityDue(17);
 		// CS_DCLF_COVERAGE_PROBE=1: which shader the uncovered objects actually use.
 		const bool coverageProbe = SwitchEnabled(Switch::CoverageProbe);
-		auto* trackedEntry = &a_tracked;
 		const auto& entry = a_tracked;
 		// Its records (T6b1b): the mirror's, never the live geometry's. None yet (an attach no hook captured, its capture requested at
-		// AddGeometry): written when the capture's batch names it (leafWaiting).
+		// AddGeometry): written when the capture's batch names it (leafWaiting, set by the merge).
 		const auto leaf = mirror.Leaf(geometry);
+		a_out.leaf = leaf;
 		if (!leaf) {
-			++leafStats.missing;
-			if (!denseWalk) {
-				trackedEntry->leafWaiting = true;
-				trackedEntry->candidateFrame = 0;
-			}
-			a_bucket = Ineligible::NoRendererData;
-			++stats.ineligible[static_cast<std::size_t>(a_bucket)];
-			return false;
+			++c.leafMissing;
+			a_out.write = EvalResult::Write::NoLeaf;
+			a_out.reason = Ineligible::NoRendererData;
+			++c.ineligible[static_cast<std::size_t>(a_out.reason)];
+			return;
 		}
-		// A member's record written again (an event, or its per-frame inputs): it stays a member with its binding if the
-		// write keeps it eligible in the same slot, and BindByMembership binds it again only if what the binding reads changed.
-		const bool wasMember = !denseWalk && a_tracked.slot != kNoObjectSlot && IsResidentSlot(a_tracked.slot);
-		if (wasMember)
-			++residentStats.rewritten;
 
 		// Eligibility, and nothing else. This phase needs no lighting descriptors - the pipeline and
 		// material belong to the accumulator's half - so the verdict is taken from Tracked's own
@@ -460,18 +466,17 @@ namespace DCLF
 		// classifies again before it hands an object any bindings. A verdict stale the other way
 		// would leave an accumulated object without a record, so that phase clears the cache for it.
 		// An NPC face shape (FaceSnapshots), resolved once: a tracked geometry's type and parent do not change.
-		if (!trackedEntry->faceShapeResolved) {
-			trackedEntry->faceShapeResolved = true;
-			trackedEntry->faceShape = leaf.Type() == static_cast<std::uint8_t>(RE::BSGeometry::Type::kDynamicTriShape) && leaf.parent &&
-			                          (leaf.parent->kind & SceneCapture::kKindFaceGen);
+		bool faceShapeOf = entry.faceShape;
+		if (!entry.faceShapeResolved) {
+			d.faceShapeSet = true;
+			d.faceShape = faceShapeOf = leaf.Type() == static_cast<std::uint8_t>(RE::BSGeometry::Type::kDynamicTriShape) && leaf.parent &&
+			                            (leaf.parent->kind & SceneCapture::kKindFaceGen);
 		}
-		if (trackedEntry->faceShape && !trackedEntry->faceHead)
-			ListFaceShape(geometry, *trackedEntry);
-		const bool faceShape = trackedEntry->faceShape && FaceSnapshots::Enabled();
+		const bool faceShape = faceShapeOf && FaceSnapshots::Enabled();
 		// Owned by an actor, as Skin::GetWetness decides it; resolved once, like the face shape.
-		if (!trackedEntry->actorOwnedResolved) {
-			trackedEntry->actorOwnedResolved = true;
-			trackedEntry->actorOwned = leaf.node->userData && leaf.node->formType == static_cast<std::uint8_t>(RE::FormType::ActorCharacter);
+		if (!entry.actorOwnedResolved) {
+			d.actorOwnedSet = true;
+			d.actorOwned = leaf.node->userData && leaf.node->formType == static_cast<std::uint8_t>(RE::FormType::ActorCharacter);
 		}
 		Ineligible reason;
 		bool shadowOnly = false;  // not the main pass's, but a caster the shadow epochs draw (kObjectShadowOnly)
@@ -480,20 +485,20 @@ namespace DCLF
 		// The dense rebuild (walk parity's reference) classifies from scratch and leaves the caches alone. With
 		// A classification stands until an event takes it again, except an actor's and any other per-frame entry
 		// written in full: its inputs are re-read every frame (Tracked::classifyInputs), as its record is.
-		const bool rereads = trackedEntry->perFrame && (!trackedEntry->lightTraits || (trackedEntry->lightTraits & kTraitActor));
-		bool cached = !denseWalk && !faceShape && trackedEntry->candidateFrame != 0;
+		const bool rereads = entry.perFrame && (!entry.lightTraits || (entry.lightTraits & kTraitActor));
+		bool cached = !denseWalk && !faceShape && entry.candidateFrame != 0;
 		// What a classification reads has events (properties, fades, hidden bits, attach and detach), each of which writes the
 		// entry in full; CS_DCLF_INPUT_WATCH reads the inputs again regardless, and counts a change no event announced.
 		if (cached && rereads && SwitchEnabled(Switch::InputWatch)) {
-			const bool changed = ClassifyInputsOf(*geometry) != trackedEntry->classifyInputs;
-			NoteInputReread(*trackedEntry, *geometry, 0, changed);
+			const bool changed = ClassifyInputsOf(*geometry) != entry.classifyInputs;
+			NoteInputReread(entry, *geometry, 0, changed, c, d);
 			if (changed) {
 				cached = false;
-				++delta.reread;
+				++c.reread;
 			}
 		}
 		if (cached) {
-			reason = trackedEntry->candidateReason;
+			reason = entry.candidateReason;
 			// Under a switch node the verdict follows the switch's selection, which changes (a harvested
 			// plant, a tree's variant) without anything the cache witnesses: the shadow views draw what
 			// this phase admits, so it is taken again every frame. Static verdicts other than None stand.
@@ -503,18 +508,21 @@ namespace DCLF
 			if ((entry.parentReason == Ineligible::Switch || rereads) && frameVerdict) {
 				reason = ClassifyFrame(entry);
 				// A verdict the frame changed is a classification: EvaluateRound takes the entry's traits again.
-				if (reason != trackedEntry->candidateReason)
-					trackedEntry->candidateFrame = sceneFrame;
-				trackedEntry->candidateReason = reason;
+				d.candidateSet = true;
+				d.candidateFrame = reason != entry.candidateReason ? PassStamp() : entry.candidateFrame;
+				d.candidateReason = reason;
 			}
-			++stats.ineligible[static_cast<std::size_t>(reason)];
-			a_bucket = reason;
+			++c.ineligible[static_cast<std::size_t>(reason)];
+			a_out.reason = reason;
 			shadowOnly = reason != Ineligible::None && !DeferredToAccumulate(reason) && ShadowOnlyCaster(reason, leaf);
-			if (reason != Ineligible::None && !DeferredToAccumulate(reason) && !shadowOnly)
-				return false;
+			a_out.shadowOnly = shadowOnly;
+			if (reason != Ineligible::None && !DeferredToAccumulate(reason) && !shadowOnly) {
+				a_out.write = EvalResult::Write::Rejected;
+				return;
+			}
 		} else {
 			LightingDescriptors descriptors;
-			auto& verdict = trackedEntry->verdict;
+			const auto& verdict = entry.verdict;
 			// The witnesses: the records' keys.
 			const auto* witnessRenderer = static_cast<const RE::BSGraphics::TriShape*>(leaf.geometry->rendererData);
 			const auto* witnessProperty = static_cast<const RE::BSShaderProperty*>(leaf.geometry->property);
@@ -525,25 +533,23 @@ namespace DCLF
 			                 verdict.fadeState == fadeState;
 			if (hit && !classifyProbe) {
 				reason = verdict.reason;
-				++stats.classifyHits;
+				++c.classifyHits;
 			} else {
 				reason = ClassifyStatic(leaf, &descriptors);
 				if (hit) {
-					// probe: the cache said one thing and the computation another, which is a defect.
-					++stats.classifyChecked;
-					if (reason != verdict.reason) {
-						++stats.classifyDiffers;
-						if (stats.classifyDiffers == 1)
-							logger::warn("[DCLF] classify cache: '{}' is cached as {} but recomputes as {}",
-								geometry->name.c_str() ? geometry->name.c_str() : "?",
-								kIneligibleNames[static_cast<std::size_t>(verdict.reason)], kIneligibleNames[static_cast<std::size_t>(reason)]);
-					}
+					// probe: the cache said one thing and the computation another, which is a defect (logged at the merge, once a walk).
+					++c.classifyChecked;
+					if (reason != verdict.reason && c.classifyDiffers++ == 0)
+						c.classifyDiffersFirst = fmt::format("[DCLF] classify cache: '{}' is cached as {} but recomputes as {}", geometry->name.c_str() ? geometry->name.c_str() : "?",
+							kIneligibleNames[static_cast<std::size_t>(verdict.reason)], kIneligibleNames[static_cast<std::size_t>(reason)]);
 					reason = verdict.reason;  // the cache is what the frame would have used
 				} else if (!denseWalk) {
+					d.verdictSet = true;
+					d.verdict = verdict;
 					if (CacheableVerdict(reason))
-						verdict = { true, reason, witnessRenderer, witnessProperty, witnessMaterial, fadeState };
+						d.verdict = { true, reason, witnessRenderer, witnessProperty, witnessMaterial, fadeState };
 					else
-						verdict.cached = false;
+						d.verdict.cached = false;
 				}
 			}
 			timer.Add(BuildPart::ClassifyStatic);
@@ -551,49 +557,47 @@ namespace DCLF
 				reason = ClassifyFrame(entry);
 			timer.Add(BuildPart::ClassifyFrame);
 			if (denseWalk) {
-				referenceReasons[geometry] = reason;
+				a_out.referenceReason = true;
 			} else {
-				trackedEntry->candidateFrame = sceneFrame;
-				trackedEntry->candidateReason = reason;
-				trackedEntry->classifyInputs = ClassifyInputsOf(*geometry);
-				StoreInputComponents(*trackedEntry, *geometry);
+				d.candidateSet = true;
+				d.candidateFrame = PassStamp();
+				d.candidateReason = reason;
+				d.classifyInputsSet = true;
+				d.classifyInputs = ClassifyInputsOf(*geometry);
+				// StoreInputComponents' (CS_DCLF_INPUT_WATCH).
+				if (SwitchEnabled(Switch::InputWatch)) {
+					d.inputComponentsSet = true;
+					d.inputComponents = InputComponentsOf(*geometry);
+				}
 			}
-			++stats.ineligible[static_cast<std::size_t>(reason)];
-			a_bucket = reason;
+			++c.ineligible[static_cast<std::size_t>(reason)];
+			a_out.reason = reason;
 			if (reason == Ineligible::Technique)
-				++stats.techniqueRejects[descriptors.rejectedTechnique & 63];
+				++c.techniqueRejects[descriptors.rejectedTechnique & 63];
 			if (coverageProbe && reason == Ineligible::NotLightingShader) {
-				++stats.propertyRejects[leaf.property ? static_cast<const RE::NiRTTI*>(leaf.property->rtti) : nullptr];
+				++c.propertyRejects[leaf.property ? static_cast<const RE::NiRTTI*>(leaf.property->rtti) : nullptr];
 				if (leaf.AlphaBlending()) {
-					++stats.rejectedBlended;
+					++c.rejectedBlended;
 				} else {
-					++stats.rejectedOpaque;
+					++c.rejectedOpaque;
 					if (leaf.AlphaTesting())
-						++stats.rejectedOpaqueAlphaTest;
+						++c.rejectedOpaqueAlphaTest;
 				}
 			}
 			shadowOnly = reason != Ineligible::None && !DeferredToAccumulate(reason) && ShadowOnlyCaster(reason, leaf);
-			if (reason != Ineligible::None && !DeferredToAccumulate(reason) && !shadowOnly)
-				return false;
+			a_out.shadowOnly = shadowOnly;
+			if (reason != Ineligible::None && !DeferredToAccumulate(reason) && !shadowOnly) {
+				a_out.write = EvalResult::Write::Rejected;
+				return;
+			}
 		}
 
+		// The record's inputs that name no slot: its face (resolved by the merge: FaceSnapshots' state is shared), skin, LOD ranges,
+		// palette rows, shadow and occlusion techniques.
+		a_out.write = EvalResult::Write::Record;
+		a_out.faceShape = faceShape;
 		const auto& g = *leaf.geometry;
-		// A face shape's positions: its head's snapshot (FaceSnapshots), and the region of the positions buffer
-		// the epochs upload them to. Every record of a face shape has them, whatever its verdict (a deferred decal
-		// included); without a snapshot the shape gets no record, and the engine draws it - and, the snapshot
-		// being the head's, every other shape of its head too.
-		FaceSnapshots::ShapeView face{};
-		std::uint32_t faceRegion = kNoFaceRegion;
-		// Without a snapshot it waits for its head's publication (ApplyFacePublications), which writes it again.
-		trackedEntry->faceWaiting = faceShape && !ResolveFace(*geometry, *trackedEntry, face, faceRegion);
-		if (trackedEntry->faceWaiting)
-			return false;
-		// Geometry, shared between every object drawing the same TriShape. A skinned shape draws its
-		// skin partitions' own buffers, one draw each (ClassifyStatic has checked every one).
-		// The record's (T6b1b).
-		const bool skinned = g.skin && g.skinPartition && !g.partitions.empty();
-		const SceneCapture::GeometryRecord::Partition* skinPartition = skinned ? &g.partitions[0] : nullptr;
-		// Which of them the engine draws: every LOD level's for a LOD skin, narrowed by the draw to its root's level (T1b,
+		// Which skin partitions the engine draws: every LOD level's for a LOD skin, narrowed by the draw to its root's level (T1b,
 		// skinLodPartitions). A skin the engine draws no partition of at any level stays a member that draws nothing (kNoPartitions).
 		std::uint16_t partitionMask = SkinPartitionsOf(g);
 		// Object LOD (dclf-lod.md): the ranges its hidden cells leave. Whole, the TriShape's own slot; none, a member that draws
@@ -604,6 +608,119 @@ namespace DCLF
 			partitionMask = static_cast<std::uint16_t>(kNoPartitions);
 		else if (lodChain)
 			partitionMask = static_cast<std::uint16_t>(kPartitionChain | std::min<std::size_t>(shapeRanges->size(), kPartitionChainCount));
+		a_out.partitionMask = partitionMask;
+		a_out.lodChain = lodChain;
+		// Skinning: the palette's rows from the skin data's bone count (SkinRowsOf, the record's; the merge places the block).
+		if (leaf.Skinned() && ActiveToggles().skinned) {
+			a_out.skinCandidate = true;
+			const std::uint32_t rows = leaf.geometry->skinData ? leaf.geometry->boneCount * 3 : 0u;
+			if (rows && rows <= 240)
+				a_out.boneRows = rows;
+		}
+		// Whether the engine would draw this object into a shadow map, and with which Utility technique (WriteObject's reasons).
+		using PropertyFlag = RE::BSShaderProperty::EShaderPropertyFlag;
+		const auto* shadowProperty = leaf.property;
+		const auto shadowReject = ShadowCasterReject(leaf);
+		a_out.shadowReject = static_cast<std::uint8_t>(shadowReject);
+		// An alpha-tested technique (bit 0x80) samples the diffuse: the property's record's material and diffuse view.
+		auto sampleDiffuse = [&]() {
+			if (a_out.shadowMaterial)
+				return;
+			if (shadowProperty && shadowProperty->material) {
+				a_out.shadowMaterial = static_cast<const RE::BSShaderMaterial*>(shadowProperty->material);
+				a_out.shadowDiffuse = static_cast<ID3D11ShaderResourceView*>(const_cast<void*>(shadowProperty->diffuseView));
+			}
+		};
+		if (shadowReject == ShadowReject::None || shadowReject == ShadowReject::VolumetricOnly) {
+			a_out.shadowTechnique = ShadowUtilityTechnique(leaf);
+			if (a_out.shadowTechnique & 0x80)
+				sampleDiffuse();
+		}
+		// The occlusion maps DCLF draws: LOD is no occluder of either (Precipitation::SetupMask culls the scene lists, which do not hold
+		// the LOD root).
+		constexpr std::uint64_t kLodFlags = static_cast<std::uint64_t>(PropertyFlag::kLODLandscape) | static_cast<std::uint64_t>(PropertyFlag::kLODObjects) |
+		                                    static_cast<std::uint64_t>(PropertyFlag::kHDLODObjects);
+		const bool lod = shadowProperty && (shadowProperty->flags & kLodFlags);
+		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
+			const std::uint32_t occlusion = OcclusionEnabled(v) && !lod ? OcclusionTechniqueOf(leaf, v == kOcclusionSky) : 0u;
+			a_out.occlusion[v] = occlusion;
+			if (occlusion & 0x80)
+				sampleDiffuse();
+		}
+		a_out.skinLodWord = lodChain ? 0u : SkinLodPartitionsOf(leaf);
+	}
+
+	bool SceneStore::MergeWrite(RE::BSGeometry* geometry, Tracked& a_tracked, EvalResult& a_result, PartTimer& timer, Ineligible& a_bucket)
+	{
+		auto* trackedEntry = &a_tracked;
+		const auto& r = a_result;
+		const auto& d = r.delta;
+		a_bucket = r.reason;
+		if (r.write == EvalResult::Write::NoLeaf) {
+			if (!denseWalk) {
+				trackedEntry->leafWaiting = true;
+				trackedEntry->candidateFrame = 0;
+			}
+			return false;
+		}
+		// A member's record written again (an event, or its per-frame inputs): it stays a member with its binding if the
+		// write keeps it eligible in the same slot, and BindByMembership binds it again only if what the binding reads changed.
+		const bool wasMember = !denseWalk && a_tracked.slot != kNoObjectSlot && IsResidentSlot(a_tracked.slot);
+		if (wasMember)
+			++residentStats.rewritten;
+		// What the evaluation decided for the entry (T6b3e: its TrackedDelta), as WriteObject wrote it.
+		if (d.faceShapeSet) {
+			trackedEntry->faceShapeResolved = true;
+			trackedEntry->faceShape = d.faceShape;
+		}
+		if (trackedEntry->faceShape && !trackedEntry->faceHead)
+			ListFaceShape(geometry, *trackedEntry);
+		if (d.actorOwnedSet) {
+			trackedEntry->actorOwnedResolved = true;
+			trackedEntry->actorOwned = d.actorOwned;
+		}
+		if (d.inputComponentsSet) {
+			if (!trackedEntry->inputComponents)
+				trackedEntry->inputComponents = std::make_unique<std::array<std::uint64_t, 12>>();
+			*trackedEntry->inputComponents = d.inputComponents;
+		}
+		if (d.verdictSet)
+			trackedEntry->verdict = d.verdict;
+		if (d.candidateSet) {
+			trackedEntry->candidateFrame = d.candidateFrame;
+			trackedEntry->candidateReason = d.candidateReason;
+		}
+		if (d.classifyInputsSet)
+			trackedEntry->classifyInputs = d.classifyInputs;
+		if (r.referenceReason)
+			referenceReasons[geometry] = r.reason;
+		if (r.write != EvalResult::Write::Record)
+			return false;
+
+		const auto& leaf = r.leaf;
+		const auto& g = *leaf.geometry;
+		const Ineligible reason = r.reason;
+		const bool shadowOnly = r.shadowOnly;
+		// A face shape's positions: its head's snapshot (FaceSnapshots), and the region of the positions buffer
+		// the epochs upload them to. Every record of a face shape has them, whatever its verdict (a deferred decal
+		// included); without a snapshot the shape gets no record, and the engine draws it - and, the snapshot
+		// being the head's, every other shape of its head too.
+		FaceSnapshots::ShapeView face{};
+		std::uint32_t faceRegion = kNoFaceRegion;
+		// Without a snapshot it waits for its head's publication (ApplyFacePublications), which writes it again.
+		trackedEntry->faceWaiting = r.faceShape && !ResolveFace(*geometry, *trackedEntry, face, faceRegion);
+		if (trackedEntry->faceWaiting)
+			return false;
+		// Geometry, shared between every object drawing the same TriShape. A skinned shape draws its
+		// skin partitions' own buffers, one draw each (ClassifyStatic has checked every one).
+		// The record's (T6b1b).
+		const bool skinned = g.skin && g.skinPartition && !g.partitions.empty();
+		const SceneCapture::GeometryRecord::Partition* skinPartition = skinned ? &g.partitions[0] : nullptr;
+		const std::uint16_t partitionMask = r.partitionMask;
+		const bool lodChain = r.lodChain;
+		// The ranges the evaluation found (lodRanges is written by the events alone, never during the walk).
+		const auto* shapeRanges = lodChain ? LodRangesOf(geometry) : nullptr;
+		assert(!lodChain || shapeRanges);
 		const std::uint32_t geometrySlot = lodChain ? ResolveLodRangeSlots(g, *shapeRanges, timer) : ResolveGeometrySlot(g, skinPartition, timer);
 		if (geometrySlot == Tables::kSlotFree) {
 			--stats.ineligible[static_cast<std::size_t>(reason)];
@@ -631,7 +748,7 @@ namespace DCLF
 			if (unstable) {
 				--stats.ineligible[static_cast<std::size_t>(reason)];
 				++stats.ineligible[static_cast<std::size_t>(Ineligible::UnstableBuffer)];
-			a_bucket = Ineligible::UnstableBuffer;
+				a_bucket = Ineligible::UnstableBuffer;
 				return false;
 			}
 			if (tables.geometries[previous].nextPartition != kNoPartition) {
@@ -664,15 +781,14 @@ namespace DCLF
 		// palette from the skin data's bone count (numMatrices = skinData +0x58), so the block is placed by the bone count here
 		// (step 6e F1: the scene work runs no engine code). A palette that is not that size is FrameValues' defect, counted.
 		std::uint32_t objectBoneRows = 0;
-		if (leaf.Skinned() && ActiveToggles().skinned) {
+		if (r.skinCandidate) {
 			timer.Add(BuildPart::Record);
 			skinnedObjects.push_back(geometry);
-			const std::uint32_t rows = leaf.geometry->skinData ? leaf.geometry->boneCount * 3 : 0u;  // SkinRowsOf, the record's
-			if (rows && rows <= 240) {
-				objectBoneRows = rows;
+			if (r.boneRows) {
+				objectBoneRows = r.boneRows;
 				object.flags |= kObjectSkinned;
 				++stats.skinned;
-				stats.boneRows += rows;
+				stats.boneRows += r.boneRows;
 			}
 			timer.Add(BuildPart::Skinning);
 		}
@@ -696,24 +812,12 @@ namespace DCLF
 		// technique. It belongs here and nowhere else: every shadow view is rendered between this
 		// phase and the next, so a verdict taken later would arrive after the views that need it.
 		const auto* shadowProperty = leaf.property;
-		const auto shadowReject = ShadowCasterReject(leaf);
+		const auto shadowReject = static_cast<ShadowReject>(r.shadowReject);
 		static_assert(static_cast<std::size_t>(ShadowReject::Count) <= std::tuple_size_v<decltype(stats.shadowRejects)>);
 		++stats.shadowRejects[static_cast<std::size_t>(shadowReject)];
-		ID3D11ShaderResourceView* shadowDiffuse = nullptr;
-		const RE::BSShaderMaterial* shadowMaterial = nullptr;
-		// An alpha-tested technique (bit 0x80) samples the diffuse: what the epochs' binding records name, read here so
-		// their builds never touch the property. The shadow views and the sky map share the one read.
-		auto sampleDiffuse = [&]() {
-			if (shadowMaterial)
-				return;
-			// The property's record: its material and the diffuse texture's view (CaptureProperty).
-			if (shadowProperty && shadowProperty->material) {
-				shadowMaterial = static_cast<const RE::BSShaderMaterial*>(shadowProperty->material);
-				shadowDiffuse = static_cast<ID3D11ShaderResourceView*>(const_cast<void*>(shadowProperty->diffuseView));
-				if (shadowDiffuse && tables.shadowTextureSeen.insert(shadowDiffuse).second)
-					tables.shadowTextureSet.push_back(shadowDiffuse);
-			}
-		};
+		// The alpha-tested techniques' diffuse (the evaluation's), listed once among the shadow textures.
+		if (r.shadowDiffuse && tables.shadowTextureSeen.insert(r.shadowDiffuse).second)
+			tables.shadowTextureSet.push_back(r.shadowDiffuse);
 		// The pipeline the technique draws with, listed once per key.
 		auto useKey = [&](std::vector<ShadowPipelineKey>& a_used, std::uint32_t a_technique) {
 			const ShadowPipelineKey key{ a_technique,
@@ -728,35 +832,21 @@ namespace DCLF
 			++stats.shadowCasters;
 			if (volumetricOnly)
 				object.flags |= kObjectVolumetricOnly;
-			const std::uint32_t shadowTechnique = ShadowUtilityTechnique(leaf);
-			tables.shadowTechnique[objectId] = shadowTechnique;
-			if (shadowTechnique & 0x80)
-				sampleDiffuse();
-			useKey(tables.shadowKeysUsed, shadowTechnique);
+			tables.shadowTechnique[objectId] = r.shadowTechnique;
+			useKey(tables.shadowKeysUsed, r.shadowTechnique);
 		} else {
 			object.flags |= kObjectNoShadow;
 			tables.shadowTechnique[objectId] = 0;
 		}
-		tables.shadowReject[objectId] = static_cast<std::uint8_t>(shadowReject);
+		tables.shadowReject[objectId] = r.shadowReject;
 		// The occlusion maps DCLF draws (Skylighting's sky map, the precipitation mask): whether and how this object draws into
-		// each, by Skylighting's rule for that map. Its size test (a bound radius of 32 or less draws nothing) is the view's
-		// BuildDraws' (kCullMinRadius), against the record's bound, so an animated actor's bound crossing it is no
+		// each, by Skylighting's rule for that map (the evaluation's). Its size test (a bound radius of 32 or less draws nothing) is
+		// the view's BuildDraws' (kCullMinRadius), against the record's bound, so an animated actor's bound crossing it is no
 		// classification input.
-		// LOD (the land and object blocks under the LOD root) is no occluder of either map: Precipitation::SetupMask culls the scene
-		// lists, which do not hold the LOD root, so the engine never draws it there.
-		constexpr std::uint64_t kLodFlags = static_cast<std::uint64_t>(PropertyFlag::kLODLandscape) | static_cast<std::uint64_t>(PropertyFlag::kLODObjects) |
-		                                    static_cast<std::uint64_t>(PropertyFlag::kHDLODObjects);
-		const bool lod = shadowProperty && (shadowProperty->flags & kLodFlags);
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
-			std::uint32_t occlusion = 0;
-			if (OcclusionEnabled(v) && !lod)
-				occlusion = OcclusionTechniqueOf(leaf, v == kOcclusionSky);
-			tables.occlusionTechnique[v][objectId] = occlusion;
-			if (occlusion) {
-				if (occlusion & 0x80)
-					sampleDiffuse();
-				useKey(tables.occlusionKeysUsed[v], occlusion);
-			}
+			tables.occlusionTechnique[v][objectId] = r.occlusion[v];
+			if (r.occlusion[v])
+				useKey(tables.occlusionKeysUsed[v], r.occlusion[v]);
 		}
 		ResolveSunEntry(*trackedEntry, *geometry);
 		tables.sunEntryNode[objectId] = trackedEntry->sunEntryNode;
@@ -765,8 +855,8 @@ namespace DCLF
 			PushFaceStream(*geometry, *trackedEntry, objectId, face, faceRegion);
 		else
 			tables.ClearFaceStream(objectId);
-		tables.shadowDiffuse[objectId] = shadowDiffuse;
-		tables.shadowMaterial[objectId] = shadowMaterial;
+		tables.shadowDiffuse[objectId] = r.shadowDiffuse;
+		tables.shadowMaterial[objectId] = r.shadowMaterial;
 		tables.sceneFlags[objectId] = object.flags;
 		tables.objectGeometry[objectId] = geometry;
 		ListFadeRoot(objectId);
@@ -798,7 +888,7 @@ namespace DCLF
 		if (trackedEntry->actorOwned)
 			tables.actorObjects.push_back(objectId);
 		tables.skinPartitions[objectId] = partitionMask;
-		tables.skinLodPartitions[objectId] = lodChain ? 0u : SkinLodPartitionsOf(leaf);
+		tables.skinLodPartitions[objectId] = r.skinLodWord;
 		if (!denseWalk) {
 			trackedEntry->objectStamp = objectStamp;
 			trackedEntry->objectId = objectId;
@@ -811,6 +901,19 @@ namespace DCLF
 		timer.Add(BuildPart::Record);
 		WriteLayer(geometry, leaf, *trackedEntry, objectId, a_bucket == Ineligible::None && !shadowOnly, keepHalf, timer);
 		return true;
+	}
+
+	bool SceneStore::WriteObject(RE::BSGeometry* geometry, Tracked& a_tracked, PartTimer& timer, Ineligible& a_bucket)
+	{
+		// T6b3e: the evaluation and its merge, one after the other (the dense walk: the same pair as the delta walk's rounds).
+		EvalCounters counters;
+		EvalResult result;
+		{
+			ShardScope scope(*this, false, &counters.mirror);
+			EvaluateWrite(geometry, a_tracked, counters, result, timer);
+		}
+		MergeCounters(counters);
+		return MergeWrite(geometry, a_tracked, result, timer, a_bucket);
 	}
 
 	void SceneStore::WriteLayer(RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, Tracked& a_tracked, std::uint32_t a_base, bool a_member, bool a_keepMember,
@@ -992,12 +1095,12 @@ namespace DCLF
 			if (g->altIndexList)
 				buffers.push_back(g->altIndexBuffer);
 		}
-		GpuResources::Get().Prefetch(buffers);
+		GpuResources::Scene().Prefetch(buffers);
 	}
 
 	std::uint32_t SceneStore::ResolveGeometrySource(const GeometrySource& a_source, PartTimer& a_timer)
 	{
-		auto& gpu = GpuResources::Get();
+		auto& gpu = GpuResources::Scene();
 		const bool resolveBuffers = frameResolveBuffers;
 		auto geometryIt = geometryIndex.find(a_source.key);
 		const bool newGeometry = geometryIt == geometryIndex.end();
@@ -1067,11 +1170,11 @@ namespace DCLF
 			if (!staleGeometry)
 				geometryIt = geometryIndex.emplace(a_source.key, slot).first;
 			a_timer.Add(BuildPart::Resolve);
-		} else if (resolveBuffers && tables.geometryLastUsed[geometryIt->second] != sceneFrame) {
+		} else if (resolveBuffers && tables.geometryLastUsed[geometryIt->second] != PassStamp()) {
 			// First use of the slot this frame: the Touch above already kept the references alive.
 			a_timer.Add(BuildPart::DedupHit);
 		}
-		tables.geometryLastUsed[geometryIt->second] = sceneFrame;
+		tables.geometryLastUsed[geometryIt->second] = PassStamp();
 		return geometryIt->second;
 	}
 
@@ -1133,40 +1236,37 @@ namespace DCLF
 			{ tables.occlusionTechnique[kOcclusionSky][a_slot], tables.occlusionTechnique[kOcclusionPrecipitation][a_slot] } };
 	}
 
-	bool SceneStore::KeepSkin(RE::BSGeometry* a_geometry, Tracked& a_tracked)
+	bool SceneStore::KeepSkin(RE::BSGeometry* a_geometry, Tracked& a_tracked, const EvalResult& a_result)
 	{
-		const auto* record = mirror.Geometry(a_geometry);  // T6b1b
+		// T6b3e: the record's skin, the toggle and the rows the engine's palette update gives it (the skin data's bone count:
+		// SkinRowsOf, the record's) are the evaluation's (EvaluateEntry's light path); the slot's half is here. FrameValues checks the
+		// palette after this frame's update.
 		const std::uint32_t slot = a_tracked.slot;
-		if (!record || !record->skin || !ActiveToggles().skinned || !(tables.objects[slot].flags & kObjectSkinned))
-			return false;
-		// The size the engine's palette update gives it (the skin data's bone count: SkinRowsOf, the record's); FrameValues checks it
-		// after this frame's.
-		const std::uint32_t rows = record->skinData ? record->boneCount * 3 : 0u;
-		if (!rows || rows > 240 || rows != tables.boneRows[slot])
+		const std::uint32_t rows = a_result.skinRows;
+		if (!(tables.objects[slot].flags & kObjectSkinned) || rows != tables.boneRows[slot])
 			return false;
 		skinnedObjects.push_back(a_geometry);
 		++stats.lightSkins;
-		const std::uint16_t partitionMask = SkinPartitionsOf(*record);
-		const std::uint32_t lodPartitions = SkinLodPartitionsOf(mirror.Leaf(a_geometry));
-		if (tables.skinPartitions[slot] != partitionMask || tables.skinLodPartitions[slot] != lodPartitions)
+		if (tables.skinPartitions[slot] != a_result.skinPartitions || tables.skinLodPartitions[slot] != a_result.skinLodPartitions)
 			tables.NoteChange(slot, kChangeSkin | kChangeStructure);
-		tables.skinPartitions[slot] = partitionMask;
-		tables.skinLodPartitions[slot] = lodPartitions;
+		tables.skinPartitions[slot] = a_result.skinPartitions;
+		tables.skinLodPartitions[slot] = a_result.skinLodPartitions;
 		++stats.skinned;
 		stats.boneRows += rows;
 		return true;
 	}
 
-	bool SceneStore::RootMoves(const RE::NiAVObject* a_root)
+	bool SceneStore::RootMoves(const RE::NiAVObject* a_root, const bool* a_now)
 	{
 		// Only a reference's root: a multibound's bound is its shape's, and an actor's entry is never tested (the mirror's record).
 		const auto* record = a_root ? mirror.Node(a_root) : nullptr;
 		if (!record || !record->userData)
 			return false;
-		// Kept until an event under the root forgets it (ScheduleRoot) or its last dependent leaves (UnlistDependents).
+		// Kept until an event under the root forgets it (ScheduleRoot) or its last dependent leaves (UnlistDependents). T6b3e: a_now, the
+		// root's motion as an evaluation found it this walk (RootMovesNow over the same mirror), when rootMotion does not hold it yet.
 		const auto [motion, inserted] = rootMotion.try_emplace(a_root, false);
 		if (inserted) {
-			motion->second = RootMovesNow(a_root);
+			motion->second = a_now ? *a_now : RootMovesNow(a_root);
 			// Its bound is taken by the root pass (QueueRoots), keyed by its reference's move events.
 			if (motion->second)
 				movingRoots.try_emplace(a_root, MovingRoot{ static_cast<const RE::TESObjectREFR*>(record->userData), FindCategoryNode(const_cast<RE::NiAVObject*>(a_root), nullptr) });
@@ -1230,27 +1330,32 @@ namespace DCLF
 		*a_tracked.inputComponents = InputComponentsOf(a_geometry);
 	}
 
-	void SceneStore::NoteInputReread(Tracked& a_tracked, const RE::BSGeometry& a_geometry, std::uint32_t a_kind, bool a_changed)
+	void SceneStore::NoteInputReread(const Tracked& a_tracked, const RE::BSGeometry& a_geometry, std::uint32_t a_kind, bool a_changed, EvalCounters& a_counters,
+		TrackedDelta& a_delta) const
 	{
 		if (!SwitchEnabled(Switch::InputWatch))
 			return;
-		++stats.inputRereads[a_kind];
+		auto& c = a_counters;
+		++c.inputRereads[a_kind];
 		if (!a_changed)
 			return;
-		++stats.inputRereadsChanged[a_kind];
+		++c.inputRereadsChanged[a_kind];
 		const auto now = InputComponentsOf(a_geometry);
-		if (!a_tracked.inputComponents)
+		// T6b3e: the components the entry holds as its evaluation has them (an earlier re-read of the same evaluation stored them).
+		const auto* stored = a_delta.inputComponentsSet ? &a_delta.inputComponents : a_tracked.inputComponents.get();
+		if (!stored)
 			return;
 		std::string changed;
 		for (std::size_t i = 0; i < now.size(); ++i)
-			if (now[i] != (*a_tracked.inputComponents)[i]) {
-				++stats.inputChanged[i];
-				if (stats.firstInputChange.empty())
-					changed += fmt::format("{}{} {:#x} -> {:#x}", changed.empty() ? "" : ", ", kInputComponentNames[i], (*a_tracked.inputComponents)[i], now[i]);
+			if (now[i] != (*stored)[i]) {
+				++c.inputChanged[i];
+				if (c.firstInputChange.empty())
+					changed += fmt::format("{}{} {:#x} -> {:#x}", changed.empty() ? "" : ", ", kInputComponentNames[i], (*stored)[i], now[i]);
 			}
-		if (stats.firstInputChange.empty() && !changed.empty())
-			stats.firstInputChange = fmt::format("'{}' ({}): {}", a_geometry.name.c_str() ? a_geometry.name.c_str() : "?", a_kind ? "shading" : "classify", changed);
-		*a_tracked.inputComponents = now;
+		if (c.firstInputChange.empty() && !changed.empty())
+			c.firstInputChange = fmt::format("'{}' ({}): {}", a_geometry.name.c_str() ? a_geometry.name.c_str() : "?", a_kind ? "shading" : "classify", changed);
+		a_delta.inputComponentsSet = true;
+		a_delta.inputComponents = now;
 	}
 
 	std::uint64_t SceneStore::ClassifyInputsOf(const RE::BSGeometry& a_geometry) const
@@ -1481,13 +1586,18 @@ namespace DCLF
 
 	std::uint32_t SceneStore::PerFrameTraits(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const
 	{
+		return PerFrameTraitsOf(a_tracked.faceShape, a_tracked.actorOwned, a_tracked.categoryNode, a_geometry);
+	}
+
+	std::uint32_t SceneStore::PerFrameTraitsOf(bool a_faceShape, bool a_actorOwned, const RE::NiNode* a_categoryNode, const RE::BSGeometry& a_geometry) const
+	{
 		// The movable set (dclf-event-driven-tables.md, "Reverse-engineering results"): a static reference never moves
 		// in place, so what moves is owned by an actor, animated by a controller, or simulated by Havok. A skin's
 		// palette, a face's snapshot and a switch's selection change without moving anything. A controller on the
 		// shader or alpha property animates the material alpha the shadow verdict reads.
 		std::uint32_t traits = 0;
-		traits |= a_tracked.faceShape ? kTraitFace : 0u;
-		traits |= a_tracked.actorOwned ? kTraitActor : 0u;
+		traits |= a_faceShape ? kTraitFace : 0u;
+		traits |= a_actorOwned ? kTraitActor : 0u;
 		// The mirror's records (T6b1b).
 		const auto leaf = mirror.Leaf(&a_geometry);
 		traits |= leaf.Skinned() ? kTraitSkin : 0u;
@@ -1501,7 +1611,7 @@ namespace DCLF
 				traits |= kTraitMoves;
 				break;
 			}
-			if (key == a_tracked.categoryNode)
+			if (key == a_categoryNode)
 				break;
 		}
 		return traits;
@@ -1527,36 +1637,56 @@ namespace DCLF
 				traits |= kTraitRootMoves;
 		}
 		a_traits = traits;
+		return PerFrameFrom(traits, a_reason, mayRecord);
+	}
+
+	std::pair<bool, std::uint32_t> SceneStore::PerFrameFrom(std::uint32_t a_traits, Ineligible a_reason, bool a_mayRecord)
+	{
 		// Per frame when a frame can change its record: its verdict lets it have one (or it is under a switch), and its
 		// inputs change every frame. A movable slot's chain is re-read every frame whatever its verdict, as the design has
 		// it: an actor's equipment is shown, hidden and swapped with no event of its own (walk parity caught a shield and a
 		// chopping axe left hidden), and a visibility controller hides and shows its node.
 		// A record whose only motion is its root's bound is not: the root pass takes the bound into its sun entry
 		// (QueueRoots), since nothing on its own chain moves.
+		const std::uint32_t traits = a_traits;
 		const bool frameVerdict = a_reason == Ineligible::Hidden || a_reason == Ineligible::Switch || a_reason == Ineligible::Actor;
-		const bool perFrame = (mayRecord && traits && traits != kTraitRootMoves && traits != kTraitFace) || (traits & kTraitActor) ||
+		const bool perFrame = (a_mayRecord && traits && traits != kTraitRootMoves && traits != kTraitFace) || (traits & kTraitActor) ||
 		                      (frameVerdict && (traits & kTraitMoves));
 		// The light path takes only a record's placement, palette, switch selection or shading, and for an actor's the exact
 		// recheck of its verdict inputs (ActorRecordKept); a face shape's positions follow its head's publications
 		// (ApplyFacePublications), not the walk. An entry it cannot have a record for is written in full, which re-reads its
 		// verdict.
-		const std::uint32_t light = perFrame && mayRecord &&
+		const std::uint32_t light = perFrame && a_mayRecord &&
 		                                    !(traits & ~(kTraitSwitch | kTraitMoves | kTraitRootMoves | kTraitAnimatedShading | kTraitSkin | kTraitActor | kTraitFace)) ?
 		                                traits :
 		                                0u;
 		return { perFrame, light };
 	}
 
-	bool SceneStore::ActorRecordKept(RE::BSGeometry& a_geometry, Tracked& a_tracked)
+	std::pair<bool, std::uint32_t> SceneStore::PerFrameMerge(const Tracked& a_tracked, const EvalResult& a_result)
+	{
+		// T6b3e: PerFrameOf from the evaluation's traits; the root's motion is rootMotion's when it holds the root (the merge's state,
+		// as RootMoves kept it), else the evaluation's fresh read of the same mirror for the root it expected, inserted here.
+		std::uint32_t traits = a_result.traits;
+		if (a_result.mayRecord && !(traits & (kTraitFace | kTraitActor)) && a_tracked.sunEntryNode) {
+			const bool* now = a_tracked.sunEntryNode == a_result.rootCandidate ? &a_result.rootMovesNow : nullptr;
+			if (RootMoves(a_tracked.sunEntryNode, now))
+				traits |= kTraitRootMoves;
+		}
+		return PerFrameFrom(traits, a_tracked.candidateReason, a_result.mayRecord);
+	}
+
+	bool SceneStore::ActorRecordKept(const RE::BSGeometry& a_geometry, const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out) const
 	{
 		// What WriteObject's cached branch reads for an entry it re-reads (`rereads`): the static verdict's inputs, and
 		// the frame's verdict when the cached one is a frame verdict. Equal inputs and the same verdict write the same
-		// record but for its placement and palette, which the light path takes (walk parity is the check).
+		// record but for its placement and palette, which the light path takes (walk parity is the check). T6b3e: an evaluation
+		// (pure): the counts into a_counters, the components and the watch's nodes into a_out.
 		if (SwitchEnabled(Switch::InputWatch)) {
 			const bool changed = ClassifyInputsOf(a_geometry) != a_tracked.classifyInputs;
-			NoteInputReread(a_tracked, a_geometry, 0, changed);
+			NoteInputReread(a_tracked, a_geometry, 0, changed, a_counters, a_out.delta);
 			if (changed) {
-				++delta.reread;
+				++a_counters.reread;
 				return false;
 			}
 		}
@@ -1567,185 +1697,602 @@ namespace DCLF
 		// The verdict's inputs are the hidden bits on its chain, which have events (hiddenDependents), a switch's
 		// selection, taken every frame here, and the toggles and fades, which classify it again. Without an event it
 		// stands; a parity frame takes it again anyway and counts a change no event announced.
-		const bool announced = a_tracked.hiddenEventFrame == sceneFrame || a_tracked.parentReason == Ineligible::Switch || !hiddenGating || a_tracked.hiddenChain.empty();
+		const bool announced = a_tracked.hiddenEventFrame == PassStamp() || a_tracked.parentReason == Ineligible::Switch || !hiddenGating || a_tracked.hiddenChain.empty();
 		if (!announced && !hiddenWitness) {
-			++stats.verdictsSkipped;
+			++a_counters.verdictsSkipped;
 			return true;
 		}
-		++stats.verdictsChecked;
+		++a_counters.verdictsChecked;
 		const Ineligible now = ClassifyFrame(a_tracked);
-		if (now != cached && !announced && !stats.verdictsMissed++)
-			stats.firstVerdictMissed = fmt::format("'{}' {} now {}", a_tracked.geometry->name.c_str() ? a_tracked.geometry->name.c_str() : "?",
+		if (now != cached && !announced && !a_counters.verdictsMissed++)
+			a_counters.firstVerdictMissed = fmt::format("'{}' {} now {}", a_tracked.geometry->name.c_str() ? a_tracked.geometry->name.c_str() : "?",
 				kIneligibleNames[static_cast<std::size_t>(cached)], kIneligibleNames[static_cast<std::size_t>(now)]);
-		// CS_DCLF_HIDDEN_WATCH: the chain's nearest four nodes, for the store that flips them next.
+		// CS_DCLF_HIDDEN_WATCH: the chain's nearest four nodes, for the store that flips them next (armed by the merge).
 		if (now != cached && !announced && HiddenWatch::Enabled()) {
-			std::array<const RE::NiAVObject*, 4> nodes{};
-			for (std::size_t i = 0; i < nodes.size() && i < a_tracked.hiddenChain.size(); ++i)
-				nodes[i] = static_cast<const RE::NiAVObject*>(a_tracked.hiddenChain[i]);
-			HiddenWatch::Arm(nodes);
+			a_out.armHiddenWatch = true;
+			for (std::size_t i = 0; i < a_out.hiddenWatch.size() && i < a_tracked.hiddenChain.size(); ++i)
+				a_out.hiddenWatch[i] = static_cast<const RE::NiAVObject*>(a_tracked.hiddenChain[i]);
 		}
 		return now == cached;
 	}
 
-	void SceneStore::EvaluateRound(PartTimer& a_timer, std::size_t a_first)
+	namespace
 	{
-		const bool profileKinds = a_first == 0 && ProfileEnabled();
-		for (std::size_t i = a_first; i < order.size(); ++i) {
-			RE::BSGeometry* geometry = order[i].geometry;
-			Tracked& entry = *order[i].tracked;
-			a_timer.Add(BuildPart::LoopTail);
-			// The entry's time by what the round does with it (EvaluateKind), from here to the end of the iteration.
-			EvaluateKind kind = entry.lightTraits && entry.perFrame ? EvaluateKind::Light :
-			                    !entry.perFrame                     ? EvaluateKind::Event :
-			                    entry.faceShape                     ? EvaluateKind::Face :
-			                    entry.actorOwned                    ? (entry.candidateReason == Ineligible::None ? EvaluateKind::Actor : EvaluateKind::ActorNoRecord) :
-			                                                          EvaluateKind::PerFrame;
-			const auto kindStart = profileKinds ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-			struct KindSample
+		/** @brief CS_DCLF_FANOUT, read once: 0 interleaved, 1 evaluated then merged on the lane, 2 (unset or anything else) on the pool. */
+		std::uint32_t ConfiguredFanout()
+		{
+			static const std::uint32_t configured = [] {
+				const auto& value = SwitchValue(Switch::Fanout);
+				return value == "0" ? 0u : value == "1" ? 1u : 2u;
+			}();
+			return configured;
+		}
+	}
+
+	std::uint32_t SceneStore::FanoutMode(std::size_t a_count, bool a_joins) const
+	{
+		// The mirror-read parity's live checks note their leases and differences on the pass's own thread, and the joins' derive probe
+		// samples the LOD fade frame lazily and reads live properties under a lease: both interleaved, as the walk was.
+		if (mirrorReadParity || (a_joins && SwitchEnabled(Switch::DeriveProbe)))
+			return 0;
+		const std::uint32_t configured = ConfiguredFanout();
+		// The pool only from the scene lane (ParallelFor waits: never on the render thread, where the parities run the pass inline), and
+		// only for a round worth the chunks.
+		if (configured == 2 && (!inSceneTask || a_count < kFanoutMinEntries))
+			return 1;
+		return configured;
+	}
+
+	void SceneStore::EvaluateEntry(std::size_t a_index, bool a_light, EvalCounters& a_counters, EvalResult& a_out, PartTimer& a_timer) const
+	{
+		RE::BSGeometry* geometry = order[a_index].geometry;
+		const Tracked& entry = *order[a_index].tracked;
+		auto& r = a_out;
+		a_timer.Add(BuildPart::LoopTail);
+		// The entry's time by what the round does with it (EvaluateKind): its evaluation's here, its merge's at the merge.
+		r.kind = entry.lightTraits && entry.perFrame ? EvaluateKind::Light :
+		         !entry.perFrame                     ? EvaluateKind::Event :
+		         entry.faceShape                     ? EvaluateKind::Face :
+		         entry.actorOwned                    ? (entry.candidateReason == Ineligible::None ? EvaluateKind::Actor : EvaluateKind::ActorNoRecord) :
+		                                               EvaluateKind::PerFrame;
+		const bool profileKinds = a_light && ProfileEnabled();
+		struct KindSample
+		{
+			EvalCounters* counters;
+			const EvaluateKind& kind;
+			std::chrono::steady_clock::time_point start;
+			~KindSample()
 			{
-				SceneStore::Stats* stats;
-				const EvaluateKind& kind;
-				std::chrono::steady_clock::time_point start;
-				~KindSample()
-				{
-					if (!stats)
-						return;
-					stats->evaluateKindMs[static_cast<std::size_t>(kind)] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-					++stats->evaluateKindCount[static_cast<std::size_t>(kind)];
-				}
-			} kindSample{ profileKinds ? &stats : nullptr, kind, kindStart };
-			// A static that only moves or follows a switch, whose classification stands: what the full walk would take
-			// again is the switch's verdict (WriteObject's cached branch) and the placement.
-			if (a_first == 0 && entry.lightTraits && entry.perFrame && entry.fullWalk != walkSerial && entry.candidateFrame != 0) {
-				const bool recorded = entry.slot != kNoObjectSlot && entry.objectStamp == objectStamp;
-				bool kept = true;
-				if (entry.lightTraits & kTraitActor) {
-					kept = recorded && ActorRecordKept(*geometry, entry);
-				} else if (entry.lightTraits & kTraitSwitch) {
-					// The selection is what changes (a harvested plant, a tree's LOD); the rest of the chain is a static's,
-					// fixed like any kept record's (dclf-event-driven-tables.md).
-					const bool verdictKept = (entry.candidateReason == Ineligible::None || entry.candidateReason == Ineligible::Switch) &&
-					                         (entry.candidateReason == Ineligible::None) == recorded;
-					const auto* switchRecord = entry.switchNode ? mirror.Node(entry.switchNode) : nullptr;  // T6b1b: the mirror's
-					if (verdictKept && switchRecord && ActiveToggles().switchNodes)
-						kept = SwitchSelects(*switchRecord, entry.switchChild) == (entry.candidateReason == Ineligible::None);
-					else
-						kept = verdictKept && ClassifyFrame(entry) == entry.candidateReason;
-				} else {
-					kept = recorded;
-				}
-				if (kept && (entry.lightTraits & (kTraitAnimatedShading | kTraitActor)) && SwitchEnabled(Switch::InputWatch)) {
-					kept = ShadingInputsOf(*geometry) == entry.shadingInputs;
-					NoteInputReread(entry, *geometry, 1, !kept);
-				}
-				// Last: it lists the skin only when the record is kept (an unselected switch child has none).
-				const bool keptSkin = kept && recorded && (entry.lightTraits & kTraitSkin);
-				if (keptSkin)
-					kept = KeepSkin(geometry, entry);
-				if (kept) {
-					for (std::uint32_t bit = 0; bit < stats.lightByTrait.size(); ++bit)
-						stats.lightByTrait[bit] += (entry.lightTraits >> bit) & 1u;
-					// Every walk lists the actors' records anew (Tables::actorObjects: wetness and capture parity read it).
-					if (recorded && entry.actorOwned)
-						tables.actorObjects.push_back(entry.slot);
-					// An actor's skeleton moves without a controller or a body on its chain (Havok's behaviour graph). Every
-					// recorded mover is FrameValues' each frame (its placement and palette).
-					if (recorded && (entry.lightTraits & (kTraitMoves | kTraitRootMoves | kTraitSkin | kTraitActor))) {
-						WalkPlan().movers.push_back(PlanItemOf(geometry, entry));
-						++stats.lightPlaced;
-						++delta.moved;
-					} else {
-						++delta.kept;
-					}
-					entry.movedWalk = walkSerial;  // not written in full: a later round may still write it
-					continue;
-				}
+				if (counters)
+					counters->evaluateKindMs[static_cast<std::size_t>(kind)] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 			}
-			if (kind == EvaluateKind::Light)
-				kind = EvaluateKind::LightMissed;
-			const ShadowInputs shadowBefore = ShadowInputsOf(entry.slot);
-			const bool hadSlot = entry.slot != kNoObjectSlot;
-			const std::uint32_t slotBefore = entry.slot;
-			const Tables::Columns columnsBefore = hadSlot ? tables.ColumnsOf(slotBefore) : Tables::Columns{};
-			const Ineligible reasonBefore = entry.candidateReason;
-			Ineligible bucket = Ineligible::Count;
-			const bool written = WriteObject(geometry, entry, a_timer, bucket);
-			MoveBucket(entry, bucket);
-			if (!written && entry.slot != kNoObjectSlot)
-				ReleaseObjectSlot(entry);
-			// What the write changed (Tables::changeLog); a slot taken anew is new in everything. Its row is FrameValues' next frame.
-			if (written && entry.slot != kNoObjectSlot) {
-				WalkPlan().written.push_back(PlanItemOf(geometry, entry));
-				if (entry.slot == slotBefore) {
-					tables.NoteWrite(entry.slot, columnsBefore);
-				} else {
-					tables.NoteChange(entry.slot, kChangeAll);
-					entry.writtenFrame = sceneFrame;  // T6b0
-				}
-			}
-			// What its sun entry's candidacy reads (SunEntryAllows), and what the entry's snapshot row holds of it (its object, whether the
-			// primary cut may give it a synthetic pass: PrimaryEntryAllows), any of which a write may change.
-			if (hadSlot != (entry.slot != kNoObjectSlot) || reasonBefore != entry.candidateReason || written) {
-				MarkSunEntryDirty(entry.sunEntryNode);
-				MarkLightEntryDirty(entry.lightRoot);
-			}
-			if (!(ShadowInputsOf(written ? entry.slot : kNoObjectSlot) == shadowBefore)) {
-				shadowSetsDirty = true;
-				if (slotBefore != kNoObjectSlot)
-					shadowDirtySlots.push_back(slotBefore);
-				if (written && entry.slot != kNoObjectSlot)
-					shadowDirtySlots.push_back(entry.slot);
-			}
-			ListDependents(geometry, entry);
-			// Classified now: a new entry, or an event took its classification again.
-			if (entry.candidateFrame == sceneFrame) {
-				// Per frame only when a frame can change its record: a face shape (classified every frame), an entry
-				// under a switch, or one whose verdict lets it have a record, with inputs that change every frame. An
-				// entry left out by its verdict is taken again when the verdict is due, like any other.
-				std::uint32_t traits = 0;
-				std::tie(entry.perFrame, entry.lightTraits) = PerFrameOf(entry, *geometry, entry.candidateReason, traits);
-				entry.moveKey = MoveKeyOf(*geometry, entry.categoryNode);
-				// Every entry's chain (T6b4): a static's hidden bit is followed by events as an actor's is.
-				ListHiddenChain(geometry, entry);
-				entry.switchNode = nullptr;
-				entry.switchChild = nullptr;
-				if (entry.lightTraits & kTraitSwitch) {
-					std::uint32_t switches = 0;
-					// ClassifyFrame's walk: every node below the category node (the mirror's chain, T6b1b).
-					const void* child = geometry;
-					const auto* leafRecord = mirror.Node(geometry);
-					for (const void* key = leafRecord ? leafRecord->parent : nullptr; key && key != entry.categoryNode;) {
-						const auto* record = mirror.Node(key);
-						if (!record)
-							break;
-						if (record->kind & SceneCapture::kKindSwitch) {
-							++switches;
-							entry.switchNode = static_cast<RE::NiSwitchNode*>(const_cast<void*>(key));
-							entry.switchChild = static_cast<const RE::NiAVObject*>(child);
-						}
-						child = key;
-						key = record->parent;
-					}
-					if (switches != 1)
-						entry.switchNode = nullptr;
-				}
-			}
-			if (entry.perFrame && !entry.perFrameListed) {
-				entry.perFrameListed = true;
-				perFrameSet.push_back({ geometry, &entry });
-			}
-			if (written) {
-				if (entry.lightTraits & (kTraitAnimatedShading | kTraitActor)) {
-					entry.shadingInputs = ShadingInputsOf(*geometry);
-					StoreInputComponents(entry, *geometry);
-				}
-				ListFadeDependent(geometry, entry);
-				// A static's previous transform is its current one from its second update on: FrameValues samples its row again until
-				// then (T6b1a; the scene work reads no transform).
+		} kindSample{ profileKinds ? &a_counters : nullptr, r.kind, profileKinds ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{} };
+		// A static that only moves or follows a switch, whose classification stands: what the full walk would take
+		// again is the switch's verdict (WriteObject's cached branch) and the placement.
+		if (a_light && entry.lightTraits && entry.perFrame && entry.fullWalk != walkSerial && entry.candidateFrame != 0) {
+			const bool recorded = entry.slot != kNoObjectSlot && entry.objectStamp == objectStamp;
+			bool kept = true;
+			if (entry.lightTraits & kTraitActor) {
+				kept = recorded && ActorRecordKept(*geometry, entry, a_counters, r);
+			} else if (entry.lightTraits & kTraitSwitch) {
+				// The selection is what changes (a harvested plant, a tree's LOD); the rest of the chain is a static's,
+				// fixed like any kept record's (dclf-event-driven-tables.md).
+				const bool verdictKept = (entry.candidateReason == Ineligible::None || entry.candidateReason == Ineligible::Switch) &&
+				                         (entry.candidateReason == Ineligible::None) == recorded;
+				const auto* switchRecord = entry.switchNode ? mirror.Node(entry.switchNode) : nullptr;  // T6b1b: the mirror's
+				if (verdictKept && switchRecord && ActiveToggles().switchNodes)
+					kept = SwitchSelects(*switchRecord, entry.switchChild) == (entry.candidateReason == Ineligible::None);
+				else
+					kept = verdictKept && ClassifyFrame(entry) == entry.candidateReason;
 			} else {
-				UnlistFadeDependent(geometry, entry);
+				kept = recorded;
+			}
+			if (kept && (entry.lightTraits & (kTraitAnimatedShading | kTraitActor)) && SwitchEnabled(Switch::InputWatch)) {
+				kept = ShadingInputsOf(*geometry) == entry.shadingInputs;
+				NoteInputReread(entry, *geometry, 1, !kept, a_counters, r.delta);
+			}
+			// Last: it lists the skin only when the record is kept (an unselected switch child has none). KeepSkin's record half: the
+			// skin, the toggle and the rows the engine's palette update gives it (the record's); its slot half is the merge's.
+			if (kept && recorded && (entry.lightTraits & kTraitSkin)) {
+				const auto* record = mirror.Geometry(geometry);  // T6b1b
+				const std::uint32_t rows = record && record->skinData ? record->boneCount * 3 : 0u;
+				kept = record && record->skin && ActiveToggles().skinned && rows && rows <= 240;
+				if (kept) {
+					r.lightSkin = true;
+					r.skinRows = rows;
+					r.skinPartitions = SkinPartitionsOf(*record);
+					r.skinLodPartitions = SkinLodPartitionsOf(mirror.Leaf(geometry));
+				}
+			}
+			if (kept) {
+				r.light = true;
+				r.lightRecorded = recorded;
+				return;
 			}
 		}
+		if (r.kind == EvaluateKind::Light)
+			r.kind = EvaluateKind::LightMissed;
+		EvaluateWrite(geometry, entry, a_counters, r, a_timer);
+		EvaluateClassified(geometry, entry, a_counters, r);
+	}
+
+	void SceneStore::EvaluateClassified(RE::BSGeometry* geometry, const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out) const
+	{
+		const auto& entry = a_tracked;
+		const auto& d = a_out.delta;
+		// The entry as its merge leaves it (MergeWrite applies the delta; a leaf the mirror lacks resets the classification).
+		const std::uint32_t candidateFrame = a_out.write == EvalResult::Write::NoLeaf ? (denseWalk ? entry.candidateFrame : 0u) :
+		                                     d.candidateSet                            ? d.candidateFrame :
+		                                                                                 entry.candidateFrame;
+		const Ineligible reason = d.candidateSet ? d.candidateReason : entry.candidateReason;
+		// Classified now: a new entry, or an event took its classification again.
+		a_out.classified = candidateFrame == PassStamp();
+		if (a_out.classified) {
+			// Per frame only when a frame can change its record (PerFrameOf): the traits from the face shape and actor ownership as the
+			// merge leaves them, the root's motion left to it (PerFrameMerge: rootMotion first), read fresh here for the root it will test.
+			a_out.traits = PerFrameTraitsOf(d.faceShapeSet ? d.faceShape : entry.faceShape, d.actorOwnedSet ? d.actorOwned : entry.actorOwned, entry.categoryNode, *geometry);
+			// An unselected switch child may get a record when its switch selects it: by event (ApplySwitchEvents), like any other verdict.
+			a_out.mayRecord = reason == Ineligible::None || DeferredToAccumulate(reason) || ShadowOnlyCaster(reason, a_out.leaf);
+			if (a_out.mayRecord && !(a_out.traits & (kTraitFace | kTraitActor))) {
+				// The sun entry PerFrameOf tests: the resolved one, or the one ResolveSunEntry resolves at the write (the mirror's).
+				a_out.rootCandidate = entry.sunEntryResolved ? entry.sunEntryNode : static_cast<const RE::NiAVObject*>(MirrorSunEntry(geometry));
+				if (a_out.rootCandidate) {
+					const auto [motion, inserted] = a_counters.rootMotion.try_emplace(a_out.rootCandidate, false);
+					if (inserted)
+						motion->second = RootMovesNow(a_out.rootCandidate);
+					a_out.rootMovesNow = motion->second;
+				}
+			}
+			a_out.moveKey = MoveKeyOf(*geometry, entry.categoryNode);
+		}
+		// What a written record of an animated shading or actor entry stores (Tracked::shadingInputs): the traits the merge may give it.
+		if ((a_out.traits | entry.lightTraits) & (kTraitAnimatedShading | kTraitActor)) {
+			a_out.shadingInputsSet = true;
+			a_out.shadingInputs = ShadingInputsOf(*geometry);
+		}
+	}
+
+	void SceneStore::MergeEntry(std::size_t a_index, bool a_profileKinds, EvalResult& a_result, PartTimer& a_timer)
+	{
+		RE::BSGeometry* geometry = order[a_index].geometry;
+		Tracked& entry = *order[a_index].tracked;
+		auto& r = a_result;
+		struct KindSample
+		{
+			SceneStore::Stats* stats;
+			const EvaluateKind& kind;
+			std::chrono::steady_clock::time_point start;
+			~KindSample()
+			{
+				if (!stats)
+					return;
+				stats->evaluateKindMs[static_cast<std::size_t>(kind)] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+				++stats->evaluateKindCount[static_cast<std::size_t>(kind)];
+			}
+		} kindSample{ a_profileKinds ? &stats : nullptr, r.kind, a_profileKinds ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{} };
+		// CS_DCLF_HIDDEN_WATCH: the nodes ActorRecordKept found changed with no event, for the store that flips them next.
+		if (r.armHiddenWatch)
+			HiddenWatch::Arm(r.hiddenWatch);
+		if (r.light) {
+			// The light path's re-reads stand (CS_DCLF_INPUT_WATCH's components), and KeepSkin's slot half decides the skin.
+			if (r.delta.inputComponentsSet) {
+				if (!entry.inputComponents)
+					entry.inputComponents = std::make_unique<std::array<std::uint64_t, 12>>();
+				*entry.inputComponents = r.delta.inputComponents;
+			}
+			if (!r.lightSkin || KeepSkin(geometry, entry, r)) {
+				for (std::uint32_t bit = 0; bit < stats.lightByTrait.size(); ++bit)
+					stats.lightByTrait[bit] += (entry.lightTraits >> bit) & 1u;
+				const bool recorded = r.lightRecorded;
+				// Every walk lists the actors' records anew (Tables::actorObjects: wetness and capture parity read it).
+				if (recorded && entry.actorOwned)
+					tables.actorObjects.push_back(entry.slot);
+				// An actor's skeleton moves without a controller or a body on its chain (Havok's behaviour graph). Every
+				// recorded mover is FrameValues' each frame (its placement and palette).
+				if (recorded && (entry.lightTraits & (kTraitMoves | kTraitRootMoves | kTraitSkin | kTraitActor))) {
+					WalkPlan().movers.push_back(PlanItemOf(geometry, entry));
+					++stats.lightPlaced;
+					++delta.moved;
+				} else {
+					++delta.kept;
+				}
+				entry.movedWalk = walkSerial;  // not written in full: a later round may still write it
+				return;
+			}
+			// The slot's flags or palette rows are not the record's: written in full, as the walk did, its evaluation made here (pure:
+			// the entry's Tracked is as the round's evaluations read it, but for the components applied above, which the delta holds).
+			++fanoutStats.lightMissed;
+			r.light = false;
+			if (r.kind == EvaluateKind::Light)
+				r.kind = EvaluateKind::LightMissed;
+			EvalCounters counters;
+			{
+				ShardScope scope(*this, false, &counters.mirror);
+				EvaluateWrite(geometry, entry, counters, r, a_timer);
+				EvaluateClassified(geometry, entry, counters, r);
+			}
+			MergeCounters(counters);
+		}
+		const ShadowInputs shadowBefore = ShadowInputsOf(entry.slot);
+		const bool hadSlot = entry.slot != kNoObjectSlot;
+		const std::uint32_t slotBefore = entry.slot;
+		const Tables::Columns columnsBefore = hadSlot ? tables.ColumnsOf(slotBefore) : Tables::Columns{};
+		const Ineligible reasonBefore = entry.candidateReason;
+		Ineligible bucket = Ineligible::Count;
+		const bool written = MergeWrite(geometry, entry, r, a_timer, bucket);
+		MoveBucket(entry, bucket);
+		if (!written && entry.slot != kNoObjectSlot)
+			ReleaseObjectSlot(entry);
+		// What the write changed (Tables::changeLog); a slot taken anew is new in everything. Its row is FrameValues' next frame.
+		if (written && entry.slot != kNoObjectSlot) {
+			WalkPlan().written.push_back(PlanItemOf(geometry, entry));
+			if (entry.slot == slotBefore) {
+				tables.NoteWrite(entry.slot, columnsBefore);
+			} else {
+				tables.NoteChange(entry.slot, kChangeAll);
+				entry.writtenFrame = sceneFrame;  // T6b0
+			}
+		}
+		// What its sun entry's candidacy reads (SunEntryAllows), and what the entry's snapshot row holds of it (its object, whether the
+		// primary cut may give it a synthetic pass: PrimaryEntryAllows), any of which a write may change.
+		if (hadSlot != (entry.slot != kNoObjectSlot) || reasonBefore != entry.candidateReason || written) {
+			MarkSunEntryDirty(entry.sunEntryNode);
+			MarkLightEntryDirty(entry.lightRoot);
+		}
+		if (!(ShadowInputsOf(written ? entry.slot : kNoObjectSlot) == shadowBefore)) {
+			shadowSetsDirty = true;
+			if (slotBefore != kNoObjectSlot)
+				shadowDirtySlots.push_back(slotBefore);
+			if (written && entry.slot != kNoObjectSlot)
+				shadowDirtySlots.push_back(entry.slot);
+		}
+		ListDependents(geometry, entry);
+		// Classified now: a new entry, or an event took its classification again.
+		if (entry.candidateFrame == PassStamp()) {
+			// Per frame only when a frame can change its record: a face shape (classified every frame), an entry
+			// under a switch, or one whose verdict lets it have a record, with inputs that change every frame. An
+			// entry left out by its verdict is taken again when the verdict is due, like any other. T6b3e: the evaluation's traits
+			// and move key (EvaluateClassified, which found the same classification).
+			assert(r.classified);
+			std::tie(entry.perFrame, entry.lightTraits) = PerFrameMerge(entry, r);
+			entry.moveKey = r.moveKey;
+			// Every entry's chain (T6b4): a static's hidden bit is followed by events as an actor's is.
+			ListHiddenChain(geometry, entry);
+			entry.switchNode = nullptr;
+			entry.switchChild = nullptr;
+			if (entry.lightTraits & kTraitSwitch) {
+				std::uint32_t switches = 0;
+				// ClassifyFrame's walk: every node below the category node (the mirror's chain, T6b1b).
+				const void* child = geometry;
+				const auto* leafRecord = mirror.Node(geometry);
+				for (const void* key = leafRecord ? leafRecord->parent : nullptr; key && key != entry.categoryNode;) {
+					const auto* record = mirror.Node(key);
+					if (!record)
+						break;
+					if (record->kind & SceneCapture::kKindSwitch) {
+						++switches;
+						entry.switchNode = static_cast<RE::NiSwitchNode*>(const_cast<void*>(key));
+						entry.switchChild = static_cast<const RE::NiAVObject*>(child);
+					}
+					child = key;
+					key = record->parent;
+				}
+				if (switches != 1)
+					entry.switchNode = nullptr;
+			}
+		}
+		if (entry.perFrame && !entry.perFrameListed) {
+			entry.perFrameListed = true;
+			perFrameSet.push_back({ geometry, &entry });
+		}
+		if (written) {
+			if (entry.lightTraits & (kTraitAnimatedShading | kTraitActor)) {
+				// The evaluation took them for the traits the entry can have here (EvaluateClassified).
+				assert(r.shadingInputsSet);
+				entry.shadingInputs = r.shadingInputs;
+				StoreInputComponents(entry, *geometry);
+			}
+			ListFadeDependent(geometry, entry);
+			// A static's previous transform is its current one from its second update on: FrameValues samples its row again until
+			// then (T6b1a; the scene work reads no transform).
+		} else {
+			UnlistFadeDependent(geometry, entry);
+		}
+	}
+
+	void SceneStore::MergeCounters(EvalCounters& a_counters)
+	{
+		// T6b3e: in chunk order. A first is taken where the store has none; the classify cache's warning is logged for the walk's first
+		// difference (BeginWalk resets the count), as WriteObject logged it.
+		auto& c = a_counters;
+		for (std::size_t i = 0; i < c.ineligible.size(); ++i)
+			stats.ineligible[i] += c.ineligible[i];
+		for (std::size_t i = 0; i < c.techniqueRejects.size(); ++i)
+			stats.techniqueRejects[i] += c.techniqueRejects[i];
+		for (const auto& [rtti, count] : c.propertyRejects)
+			stats.propertyRejects[rtti] += count;
+		stats.rejectedBlended += c.rejectedBlended;
+		stats.rejectedOpaque += c.rejectedOpaque;
+		stats.rejectedOpaqueAlphaTest += c.rejectedOpaqueAlphaTest;
+		stats.classifyHits += c.classifyHits;
+		stats.classifyChecked += c.classifyChecked;
+		if (c.classifyDiffers && !stats.classifyDiffers)
+			logger::warn("{}", c.classifyDiffersFirst);
+		stats.classifyDiffers += c.classifyDiffers;
+		stats.verdictsChecked += c.verdictsChecked;
+		stats.verdictsSkipped += c.verdictsSkipped;
+		if (c.verdictsMissed && !stats.verdictsMissed)
+			stats.firstVerdictMissed = std::move(c.firstVerdictMissed);
+		stats.verdictsMissed += c.verdictsMissed;
+		for (std::size_t i = 0; i < c.inputChanged.size(); ++i)
+			stats.inputChanged[i] += c.inputChanged[i];
+		for (std::size_t k = 0; k < c.inputRereads.size(); ++k) {
+			stats.inputRereads[k] += c.inputRereads[k];
+			stats.inputRereadsChanged[k] += c.inputRereadsChanged[k];
+		}
+		if (stats.firstInputChange.empty() && !c.firstInputChange.empty())
+			stats.firstInputChange = std::move(c.firstInputChange);
+		leafStats.missing += c.leafMissing;
+		delta.reread += c.reread;
+		for (std::size_t p = 0; p < c.partMs.size(); ++p)
+			stats.partMs[p] += c.partMs[p];
+		for (std::size_t k = 0; k < c.evaluateKindMs.size(); ++k)
+			stats.evaluateKindMs[k] += c.evaluateKindMs[k];
+		// The store's own counts (never a sink: the merge runs on the pass's thread).
+		auto& m = mirrorReads;
+		for (std::size_t i = 0; i < m.reads.size(); ++i) {
+			m.reads[i] += c.mirror.reads[i];
+			m.checked[i] += c.mirror.checked[i];
+			m.lagged[i] += c.mirror.lagged[i];
+			m.differ[i] += c.mirror.differ[i];
+			m.unmirrored[i] += c.mirror.unmirrored[i];
+			m.refused[i] += c.mirror.refused[i];
+			if (m.first[i].empty() && !c.mirror.first[i].empty())
+				m.first[i] = std::move(c.mirror.first[i]);
+		}
+	}
+
+	const char* SceneStore::FanoutDifference(const EvalResult& a_left, const EvalResult& a_right)
+	{
+		const auto& l = a_left;
+		const auto& r = a_right;
+		const auto& ld = l.delta;
+		const auto& rd = r.delta;
+		const auto leafSame = [](const SceneCapture::LeafView& a_a, const SceneCapture::LeafView& a_b) {
+			return a_a.node == a_b.node && a_a.parent == a_b.parent && a_a.geometry == a_b.geometry && a_a.property == a_b.property && a_a.layer == a_b.layer &&
+			       a_a.alpha == a_b.alpha && a_a.fadeNode == a_b.fadeNode && a_a.layerFadeNode == a_b.layerFadeNode;
+		};
+		const auto verdictSame = [](const Tracked::StaticVerdict& a_a, const Tracked::StaticVerdict& a_b) {
+			return a_a.cached == a_b.cached && a_a.reason == a_b.reason && a_a.rendererData == a_b.rendererData && a_a.property == a_b.property &&
+			       a_a.material == a_b.material && a_a.fadeState == a_b.fadeState;
+		};
+		const std::pair<const char*, bool> fields[] = {
+			{ "kind", l.kind == r.kind },
+			{ "light", l.light == r.light },
+			{ "lightRecorded", l.lightRecorded == r.lightRecorded },
+			{ "lightSkin", l.lightSkin == r.lightSkin },
+			{ "skinRows", l.skinRows == r.skinRows },
+			{ "skinPartitions", l.skinPartitions == r.skinPartitions },
+			{ "skinLodPartitions", l.skinLodPartitions == r.skinLodPartitions },
+			{ "armHiddenWatch", l.armHiddenWatch == r.armHiddenWatch },
+			{ "hiddenWatch", l.hiddenWatch == r.hiddenWatch },
+			{ "write", l.write == r.write },
+			{ "delta.faceShape", ld.faceShapeSet == rd.faceShapeSet && ld.faceShape == rd.faceShape },
+			{ "delta.actorOwned", ld.actorOwnedSet == rd.actorOwnedSet && ld.actorOwned == rd.actorOwned },
+			{ "delta.verdict", ld.verdictSet == rd.verdictSet && verdictSame(ld.verdict, rd.verdict) },
+			{ "delta.candidate", ld.candidateSet == rd.candidateSet && ld.candidateFrame == rd.candidateFrame && ld.candidateReason == rd.candidateReason },
+			{ "delta.classifyInputs", ld.classifyInputsSet == rd.classifyInputsSet && ld.classifyInputs == rd.classifyInputs },
+			{ "delta.inputComponents", ld.inputComponentsSet == rd.inputComponentsSet && ld.inputComponents == rd.inputComponents },
+			{ "leaf", leafSame(l.leaf, r.leaf) },
+			{ "reason", l.reason == r.reason },
+			{ "shadowOnly", l.shadowOnly == r.shadowOnly },
+			{ "faceShape", l.faceShape == r.faceShape },
+			{ "referenceReason", l.referenceReason == r.referenceReason },
+			{ "partitionMask", l.partitionMask == r.partitionMask },
+			{ "lodChain", l.lodChain == r.lodChain },
+			{ "skinCandidate", l.skinCandidate == r.skinCandidate },
+			{ "boneRows", l.boneRows == r.boneRows },
+			{ "shadowReject", l.shadowReject == r.shadowReject },
+			{ "shadowTechnique", l.shadowTechnique == r.shadowTechnique },
+			{ "shadowMaterial", l.shadowMaterial == r.shadowMaterial },
+			{ "shadowDiffuse", l.shadowDiffuse == r.shadowDiffuse },
+			{ "occlusion", l.occlusion == r.occlusion },
+			{ "skinLodWord", l.skinLodWord == r.skinLodWord },
+			{ "classified", l.classified == r.classified },
+			{ "traits", l.traits == r.traits },
+			{ "mayRecord", l.mayRecord == r.mayRecord },
+			{ "rootCandidate", l.rootCandidate == r.rootCandidate },
+			{ "rootMovesNow", l.rootMovesNow == r.rootMovesNow },
+			{ "moveKey", l.moveKey == r.moveKey },
+			{ "shadingInputs", l.shadingInputsSet == r.shadingInputsSet && l.shadingInputs == r.shadingInputs },
+		};
+		for (const auto& [name, same] : fields)
+			if (!same)
+				return name;
+		return nullptr;
+	}
+
+	void SceneStore::EvaluateRound(PartTimer& a_timer, std::size_t a_first)
+	{
+		if (a_first >= order.size())
+			return;
+		const std::size_t count = order.size() - a_first;
+		const bool light = a_first == 0;
+		const bool profileKinds = light && ProfileEnabled();
+		const std::uint32_t mode = FanoutMode(count, false);
+		auto& f = fanoutStats;
+		++f.rounds;
+		f.entries += count;
+		// The pass's snapshot (toggles, Terrain Blending) on this thread over both halves: its own evaluations and the merges' reads.
+		ShardScope passScope(*this, false);
+		if (mode == 0) {
+			// Each entry evaluated and merged before the next: the walk as it was (the reference).
+			EvalCounters counters;
+			for (std::size_t i = a_first; i < order.size(); ++i) {
+				EvalResult result;
+				{
+					ShardScope scope(*this, false, &counters.mirror);
+					EvaluateEntry(i, light, counters, result, a_timer);
+				}
+				MergeEntry(i, profileKinds, result, a_timer);
+			}
+			MergeCounters(counters);
+			return;
+		}
+		// Every entry evaluated (pure: the mirror, its own Tracked, the walk's stamps, the pass's snapshot), then merged in index
+		// order. The pool from kFanoutMinEntries entries on the lane (mode 2), chunk by chunk; the counters by chunk, so they and
+		// their firsts do not depend on the thread that ran a chunk.
+		const bool parallel = mode == 2;
+		const std::size_t chunks = (count + kFanoutGrain - 1) / kFanoutGrain;
+		evalResults.clear();
+		evalResults.resize(count);
+		evalCounters.clear();
+		evalCounters.resize(chunks);
+		f.parallelRounds += parallel ? 1 : 0;
+		f.parallelEntries += parallel ? count : 0;
+		f.chunks += chunks;
+		auto evaluate = [&](std::vector<EvalResult>& a_results, std::vector<EvalCounters>& a_counters, bool a_pool) {
+			auto body = [&](std::size_t a_begin, std::size_t a_end) {
+				auto& counters = a_counters[a_begin / kFanoutGrain];
+				ShardScope scope(*this, a_pool, &counters.mirror);
+				PartTimer timer(counters.partMs);
+				for (std::size_t i = a_begin; i < a_end; ++i)
+					EvaluateEntry(a_first + i, light, counters, a_results[i], timer);
+			};
+			if (a_pool) {
+				SceneScheduler::Executor().ParallelFor("CS.DCLF.Scene.Evaluate", count, kFanoutGrain, body);
+			} else {
+				for (std::size_t begin = 0; begin < count; begin += kFanoutGrain)
+					body(begin, std::min(count, begin + kFanoutGrain));
+			}
+		};
+		// The contract's witnesses: nothing writes the mirror or the tracked set while the evaluations read them.
+		[[maybe_unused]] const std::uint64_t mirrorWrites = mirror.Writes();
+		[[maybe_unused]] const std::uint64_t layout = trackedLayout;
+		const bool parity = parallel && SwitchEnabled(Switch::FanoutParity) && PassParityDue(11);
+		if (parallel && !parity) {
+			// e4, the ordered streaming merge: one shard a chunk, claimed by the pool's helpers and by this thread; chunk k is merged as
+			// soon as it is ready, this thread evaluating an unclaimed one meanwhile, or waiting on chunk k's flag when none is left. Safe
+			// under the evaluation's contract alone: a merge writes only its own entries' Tracked, the tables, the slots and the lists, none
+			// of which an evaluation reads (the mirror and the tracked set are unchanged: the witnesses above). A helper that starts after
+			// the round finds every chunk claimed and touches nothing but the shared state it holds.
+			ZoneScopedN("CS.DCLF.Scene.EvaluateStream");
+			struct Shards
+			{
+				explicit Shards(std::size_t a_chunks) :
+					ready(a_chunks), chunks(a_chunks) {}
+				std::atomic<std::size_t> next{ 0 };
+				std::vector<std::atomic<std::uint8_t>> ready;
+				std::size_t chunks = 0;
+				std::function<void(std::size_t)> run;
+				std::atomic<bool> failed{ false };
+				std::exception_ptr error;  // the first chunk's that threw (written before its ready flag)
+				void RunOne(std::size_t a_chunk)
+				{
+					try {
+						run(a_chunk);
+					} catch (...) {
+						bool expected = false;
+						if (failed.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+							error = std::current_exception();
+					}
+					ready[a_chunk].store(1, std::memory_order_release);
+					ready[a_chunk].notify_all();
+				}
+				void Work()
+				{
+					for (std::size_t chunk = next.fetch_add(1, std::memory_order_relaxed); chunk < chunks; chunk = next.fetch_add(1, std::memory_order_relaxed))
+						RunOne(chunk);
+				}
+			};
+			auto shards = std::make_shared<Shards>(chunks);
+			shards->run = [this, a_first, light, count, results = evalResults.data(), counters = evalCounters.data()](std::size_t a_chunk) {
+				const std::size_t begin = a_chunk * kFanoutGrain;
+				const std::size_t end = std::min(count, begin + kFanoutGrain);
+				auto& chunkCounters = counters[a_chunk];
+				ShardScope scope(*this, true, &chunkCounters.mirror);
+				PartTimer timer(chunkCounters.partMs);
+				for (std::size_t i = begin; i < end; ++i)
+					EvaluateEntry(a_first + i, light, chunkCounters, results[i], timer);
+			};
+			const std::size_t helpers = std::min<std::size_t>(chunks - 1, SceneScheduler::PreparationWorkers());
+			for (std::size_t h = 0; h < helpers; ++h)
+				if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), PublishedSceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "CS.DCLF.Scene.EvaluateShards",
+						[shards](const org::async::TaskContext&) { shards->Work(); }))
+					break;  // this thread takes what no helper does
+			const auto start = std::chrono::steady_clock::now();
+			double mergeMs = 0.0;
+			for (std::size_t k = 0; k < chunks; ++k) {
+				while (!shards->ready[k].load(std::memory_order_acquire)) {
+					if (const std::size_t chunk = shards->next.fetch_add(1, std::memory_order_relaxed); chunk < chunks)
+						shards->RunOne(chunk);
+					else
+						shards->ready[k].wait(0, std::memory_order_acquire);
+				}
+				// After a chunk threw, the claimed ones still finish (their results are this round's) and nothing more is merged.
+				if (shards->failed.load(std::memory_order_acquire))
+					continue;
+				const auto mergeStart = std::chrono::steady_clock::now();
+				MergeCounters(evalCounters[k]);
+				const std::size_t end = std::min(count, (k + 1) * kFanoutGrain);
+				for (std::size_t i = k * kFanoutGrain; i < end; ++i)
+					MergeEntry(a_first + i, profileKinds, evalResults[i], a_timer);
+				mergeMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mergeStart).count();
+			}
+			// The two halves' times: the merges', and the rest (this thread's evaluations and waits).
+			const double totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+			for (const auto& [part, ms] : { std::pair{ ScenePart::EvaluateMerge, mergeMs }, std::pair{ ScenePart::EvaluateFanout, std::max(0.0, totalMs - mergeMs) } }) {
+				stats.scenePartMs[static_cast<std::size_t>(part)] += ms;
+				stats.scenePartFrameMs[static_cast<std::size_t>(part)] += ms;
+			}
+			assert(mirror.Writes() == mirrorWrites && trackedLayout == layout);
+			if (shards->failed.load(std::memory_order_acquire))
+				std::rethrow_exception(shards->error);
+			return;
+		}
+		{
+			DCLF_SCENE_PART(EvaluateFanout, "CS.DCLF.Scene.EvaluateFanout");
+			evaluate(evalResults, evalCounters, parallel);
+		}
+		assert(mirror.Writes() == mirrorWrites && trackedLayout == layout);
+		// CS_DCLF_FANOUT_PARITY: the round evaluated again on the lane, one entry after another, and compared field by field (the
+		// second evaluation's counters dropped). The merges wait for both (a merge changes the entries it merged).
+		if (parity) {
+			std::vector<EvalResult> serial(count);
+			std::vector<EvalCounters> serialCounters(chunks);
+			evaluate(serial, serialCounters, false);
+			++f.parityRounds;
+			f.parityEntries += count;
+			for (std::size_t i = 0; i < count; ++i)
+				if (const char* field = FanoutDifference(evalResults[i], serial[i]); field && f.parityDiffers++ == 0) {
+					const auto* geometry = order[a_first + i].geometry;
+					f.parityFirst = fmt::format("walk round from {}, entry {} '{}': {}", a_first, a_first + i, geometry && geometry->name.c_str() ? geometry->name.c_str() : "?", field);
+				}
+		}
+		{
+			DCLF_SCENE_PART(EvaluateMerge, "CS.DCLF.Scene.EvaluateMerge");
+			for (auto& counters : evalCounters)
+				MergeCounters(counters);
+			for (std::size_t i = 0; i < count; ++i)
+				MergeEntry(a_first + i, profileKinds, evalResults[i], a_timer);
+		}
+	}
+
+	std::string SceneStore::FanoutReport()
+	{
+		auto& f = fanoutStats;
+		if (!f.rounds && !f.joinRounds)
+			return {};
+		auto line = fmt::format(
+			"[DCLF] scene fan-out (T6b3e, CS_DCLF_FANOUT={}, {} pool workers): walk rounds {} ({} on the pool), entries {} ({} on the pool, {} chunks), "
+			"light-path entries written in full at the merge {}; join rounds {} ({} on the pool), joins {}",
+			ConfiguredFanout(), SceneScheduler::PreparationWorkers(), f.rounds, f.parallelRounds, f.entries, f.parallelEntries, f.chunks, f.lightMissed, f.joinRounds,
+			f.joinParallelRounds, f.joinEntries);
+		if (f.parityRounds)
+			line += fmt::format("; parity (CS_DCLF_FANOUT_PARITY): {} rounds, {} entries, {} differ{}{}", f.parityRounds, f.parityEntries, f.parityDiffers,
+				f.parityDiffers ? " <- FANOUT; first: " : " <- OK", f.parityFirst);
+		f = {};
+		return line;
 	}
 
 	void SceneStore::DeltaWalk()
@@ -1755,6 +2302,21 @@ namespace DCLF
 			stats.scenePartFrameMs[static_cast<std::size_t>(ScenePart::Schedule)]);
 		TracyCZoneN(scheduleZone, "CS.DCLF.Scene.Schedule", true);
 		const bool full = fullEvaluation;
+		// T6b3d: the per-frame entries (actors, faces, movers, switches, animated shading) once a frame input: their inputs are the frame's
+		// (its globals, its move events), so a second pass of the same frame wrote the same records again, noted them on the change log
+		// and made a publication of nothing new (w124: 700 entries a walk, 25-35 walks a frame). A pass of the same frame takes what its
+		// events schedule alone; the movers stay the last per-frame walk's (PublishPlacementPlan).
+		perFrameWalked = full || perFrameFrame != sceneFrame;
+		if (perFrameWalked) {
+			perFrameFrame = sceneFrame;
+			++pumpStats.perFrameWalks;
+		} else {
+			++pumpStats.eventWalks;
+		}
+		// The actors the last per-frame walk listed (Tables::actorObjects, a per-walk list), kept through a walk that does not take them.
+		std::vector<std::uint32_t> keptActors;
+		if (!perFrameWalked)
+			keptActors = std::move(tables.actorObjects);
 		// Before a full evaluation drops the node events: they name movers too.
 		DrainMoveEvents(full);
 		DrainHiddenEvents();
@@ -1807,8 +2369,9 @@ namespace DCLF
 			};
 			// The addresses hold while no entry was added or erased since they were taken.
 			const bool addressesHold = perFrameLayout == trackedLayout;
-			stats.perFrameRelookups += addressesHold ? 0 : 1;
-			for (std::size_t i = 0; i < perFrameSet.size();) {
+			if (perFrameWalked)
+				stats.perFrameRelookups += addressesHold ? 0 : 1;
+			for (std::size_t i = 0; perFrameWalked && i < perFrameSet.size();) {
 				auto& item = perFrameSet[i];
 				if (!addressesHold) {
 					const auto it = tracked.find(item.geometry);
@@ -1827,7 +2390,8 @@ namespace DCLF
 				Schedule(item.geometry, *entry, false);
 				++i;
 			}
-			perFrameLayout = trackedLayout;
+			if (perFrameWalked)
+				perFrameLayout = trackedLayout;
 			count(delta.perFrame);
 			for (auto* geometry : pendingEvaluation)
 				if (const auto it = tracked.find(geometry); it != tracked.end())
@@ -1889,6 +2453,13 @@ namespace DCLF
 			tables.occlusionKeysUsed = std::move(keptOcclusionKeys);
 		}
 		FinishDeltaWalk(timer);
+		if (!keptActors.empty()) {
+			for (const std::uint32_t o : keptActors)
+				if (o < tables.objects.size() && tables.objectGeometry[o] && !(tables.objects[o].flags & kObjectFree))
+					tables.actorObjects.push_back(o);
+			std::sort(tables.actorObjects.begin(), tables.actorObjects.end());
+			tables.actorObjects.erase(std::unique(tables.actorObjects.begin(), tables.actorObjects.end()), tables.actorObjects.end());
+		}
 		if (full) {
 			DCLF_SCENE_PART(ObjectSweep, "CS.DCLF.Scene.ObjectSweep");
 			SweepObjectSlots();
@@ -1921,7 +2492,7 @@ namespace DCLF
 		staleGeometrySlots.clear();
 		if (resolveBuffers && !geometryResolvedLastWalk) {
 			for (std::uint32_t g = 0; g < tables.geometries.size(); ++g) {
-				if (!tables.geometrySlots.Alive(g) || tables.geometryLastUsed[g] == sceneFrame)
+				if (!tables.geometrySlots.Alive(g) || tables.geometryLastUsed[g] == PassStamp())
 					continue;  // free, or written this frame (resolved by the write)
 				if (!tables.geometries[g].vertexAddress)
 					staleGeometrySlots.push_back(g);
@@ -1997,7 +2568,7 @@ namespace DCLF
 		}
 		RefreshShadowSets(false);
 		const bool shadowIndexParity = SwitchEnabled(Switch::PersistentParity);
-		if (shadowIndexParity && ParityDue(sceneFrame, 15)) {
+		if (shadowIndexParity && PassParityDue(15)) {
 			const auto textures = tables.shadowTextureSet;
 			const auto shadowKeys = tables.shadowKeysUsed;
 			const auto occlusionKeys = tables.occlusionKeysUsed;

@@ -803,6 +803,20 @@ namespace DCLF
 			}
 		}
 	}
+
+	bool IndirectDraws::ReflectionSlotReady(const void* a_tables, const PipelineCatalog* a_catalog, std::uint32_t a_slot) const
+	{
+		// T6b3e: the faces' forward pipeline of the slot's pipeline as a_catalog has it for the faces' targets (ReflectionPipelinesOf's rule,
+		// which the revision's shapes resolve from their publication's catalog): the scene lane's commit's, from its own catalog, never the
+		// render thread's per-frame list (Reflection::slotPipelines, assigned whole by PrepareReflection while the lane read it).
+		const auto& tables = *static_cast<const SceneStore::Tables*>(a_tables);
+		const ForwardTargets targets = impl->reflection.LaneTargets();  // the published copy (the render thread writes `targets` at every face capture)
+		if (!a_catalog || targets.colour == DXGI_FORMAT_UNKNOWN || a_slot >= tables.objects.size())
+			return false;
+		const std::uint32_t p = tables.objects[a_slot].pipelineIndex;
+		ForwardPipelineKey key;
+		return p < tables.pipelines.size() && Draws::ReflectionForwardKey(tables, p, key) && ForwardPipelineOf(a_catalog, key, targets).valid();
+	}
 }
 
 #endif

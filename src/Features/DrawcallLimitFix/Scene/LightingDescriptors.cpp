@@ -425,6 +425,8 @@ namespace DCLF
 
 	bool TerrainBlendingDefersTerrain()
 	{
+		if (terrainDefersSnapshot)
+			return *terrainDefersSnapshot;
 		const auto& terrainBlending = globals::features::terrainBlending;
 		return terrainBlending.loaded && terrainBlending.settings.Enabled;
 	}

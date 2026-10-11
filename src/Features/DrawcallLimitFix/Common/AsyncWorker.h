@@ -10,9 +10,9 @@
 namespace DCLF
 {
 	/**
-	 * @brief The scene lane's host (SceneScheduler::SceneLane): the scene work and the accumulate work, submitted at the frame's
-	 * start and joined at Present and the next frame's start. The threading plan's F5 replaces the joins with an intent mailbox
-	 * and F6 deletes this class.
+	 * @brief The scene lane's host (SceneScheduler::SceneLane) for jobs submitted and joined by the render thread. T6b3d: the scene work
+	 * no longer is one (SceneStore's pump runs its passes on the lane, woken by their producers): SubmitScene has no caller left, and
+	 * the threading plan's F6 deletes this class.
 	 *
 	 * Render thread: SubmitScene, Wait, Drain and the stats. No mutex on its side: a job's state is one atomic, its end a
 	 * semaphore.

@@ -329,7 +329,9 @@ namespace DCLF::TreeLod
 
 	void Mirror::TakeChanges(std::vector<std::uint32_t>& a_slots, std::vector<std::uint32_t>& a_meshes)
 	{
-		auto& gpu = GpuResources::Get();
+		// The render thread's registry (GpuResources::Frame): the scene work leases the geometry slots' buffers from its own, on its thread.
+		auto& gpu = GpuResources::Frame();
+		gpu.BeginFrame();
 		// The new meshes' buffers, leased (they stay pinned while the mesh lives); a mesh that cannot be leased has no indices.
 		std::vector<std::uint32_t> pending;
 		for (const std::uint32_t slot : changedMeshes) {

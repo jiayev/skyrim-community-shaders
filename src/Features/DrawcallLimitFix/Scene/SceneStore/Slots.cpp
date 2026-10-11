@@ -72,6 +72,11 @@ namespace DCLF
 		materialDependents.clear();
 		// The scene work's record upkeep (T6b2c step 7) named the cleared slots.
 		ResetMaterialRecords();
+		// T6b3e: released at Present through the retirement chain, as ClearMaterialSlot's (the last reference deletes the engine's
+		// material: never on the pump, which runs this on a loading pass).
+		for (auto& owner : materialOwners)
+			if (owner)
+				retirement.Open().materials.push_back(std::move(owner));
 		materialOwners.clear();
 		bindQueue.clear();
 		membershipWitness = ~0u;
@@ -134,7 +139,7 @@ namespace DCLF
 		if (logged >= 40)
 			return;
 		auto& evaluator = ConstantEvaluator::Get();
-		auto& gpu = GpuResources::Get();
+		auto& gpu = GpuResources::Scene();
 		std::uint32_t materialDiffers = 0, geometryDiffers = 0, materialsProbed = 0, geometriesProbed = 0;
 		std::string first;
 		if (evaluator.HasLightingShader()) {
@@ -159,7 +164,7 @@ namespace DCLF
 		}
 		if (a_resolveBuffers) {
 			for (std::uint32_t slot = 0; slot < tables.geometries.size(); ++slot) {
-				if (tables.geometryLastUsed[slot] != sceneFrame || tables.geometryLayerKey[slot])
+				if (tables.geometryLastUsed[slot] != PassStamp() || tables.geometryLayerKey[slot])
 					continue;
 				++geometriesProbed;
 				const auto& record = tables.geometries[slot];
@@ -438,6 +443,7 @@ namespace DCLF
 			HandBack(std::move(it->second.property));
 			HandBack(std::move(it->second.layerProperty));
 			HandBack(std::move(it->second.faceHeadRef));
+			HandBack(std::move(it->second.fadeNodeRef));
 			tracked.erase(it);
 			++trackedLayout;
 		}

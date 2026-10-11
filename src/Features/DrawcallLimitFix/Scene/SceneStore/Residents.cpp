@@ -209,8 +209,28 @@ namespace DCLF
 		// A tree's wind is TreeWindCS's from here (Records.h, TreeStatic): nothing is taken from the tree nodes per frame.
 	}
 
+	RE::NiPointer<RE::NiAVObject> SceneStore::HeldFadeNode(std::uint32_t a_slot, const void* a_node)
+	{
+		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
+		const auto it = geometry ? tracked.find(const_cast<RE::BSGeometry*>(geometry)) : tracked.end();
+		if (it != tracked.end() && it->second.fadeNodeRef.get() == a_node)
+			return it->second.fadeNodeRef;
+		// The mirror names another node than the entry holds (a field no capture brought): taken now, as at a capture (AcquireFadeNode).
+		if (it != tracked.end()) {
+			HandBack(std::move(it->second.fadeNodeRef));
+			if (AcquireFadeNode(it->second, a_node, "a listing"))
+				return it->second.fadeNodeRef;
+		}
+		// Asked of the render thread: listed when its answer comes (ApplyFadeNodeAnswers).
+		++referenceStats.fadeRootsUnowned;
+		return nullptr;
+	}
+
 	void SceneStore::ListTree(std::uint32_t a_slot)
 	{
+		// The walk parity's dense walk restores the tables, not the owners kept beside them (as ListFadeRoot).
+		if (denseWalk)
+			return;
 		const bool tree = a_slot < tables.objects.size() && (tables.objects[a_slot].flags & kObjectTreeAnim);
 		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
 		// The tree node from the mirror (its property's fade node, a BSTreeNode); its values are the seed's, which the render thread takes
@@ -220,6 +240,10 @@ namespace DCLF
 		if (const auto* record = tree && geometry ? mirror.Leaf(geometry).property : nullptr; record && record->fadeNode)
 			if (const auto* fade = mirror.Node(record->fadeNode); fade && (fade->kind & SceneCapture::kKindTree))
 				node = record->fadeNode;
+		// T6b3e: a node not listed yet is owned from the entry's reference (pins), never from the key; without one, nodeless.
+		RE::NiPointer<RE::NiAVObject> owner;
+		if (node && !tables.treeIndex.contains(node) && !(owner = HeldFadeNode(a_slot, node)))
+			node = nullptr;
 		if (tables.objectTree.size() <= a_slot) {
 			tables.NoteTreesWrite();
 			tables.objectTree.resize(std::size_t(a_slot) + 1, kNoTree);
@@ -257,7 +281,7 @@ namespace DCLF
 			// Owned while listed (step 6e E3: a published version that names it keeps it, through the retirement chain).
 			if (treeOwners.size() <= t)
 				treeOwners.resize(std::size_t(t) + 1);
-			treeOwners[t].reset(const_cast<RE::NiAVObject*>(static_cast<const RE::NiAVObject*>(node)));
+			treeOwners[t] = std::move(owner);
 			treeSeedRequests.push_back({ treeOwners[t], t, row.generation, 2 * t + row.seedOdd });
 			it->second = t;
 			++tables.treesVersion;
@@ -276,6 +300,10 @@ namespace DCLF
 		// Its property's fade node (T6b1b: the mirror's).
 		const auto* property = geometry ? mirror.Leaf(geometry).property : nullptr;
 		const auto* node = property ? static_cast<const RE::NiAVObject*>(property->fadeNode) : nullptr;
+		// T6b3e: a root not listed yet is owned from the entry's reference (pins), never from the key; without one, not listed.
+		RE::NiPointer<RE::NiAVObject> owner;
+		if (node && !tables.fadeRootIndex.contains(node) && !(owner = HeldFadeNode(a_slot, node)))
+			node = nullptr;
 		if (tables.objectFadeRoot.size() <= a_slot) {
 			tables.NoteFadeRootsWrite();
 			tables.objectFadeRoot.resize(std::size_t(a_slot) + 1, kNoFadeRoot);
@@ -312,7 +340,7 @@ namespace DCLF
 			// Owned while listed (step 6e E3: a published version that names it keeps it, through the retirement chain).
 			if (fadeRootOwners.size() <= r)
 				fadeRootOwners.resize(std::size_t(r) + 1);
-			fadeRootOwners[r].reset(const_cast<RE::NiAVObject*>(node));
+			fadeRootOwners[r] = std::move(owner);
 			RequestFadeSeed(r, row);
 			tables.fadeRoots[r] = row;
 			if (const auto* record = mirror.Node(node); record && record->treeLodSwitch)

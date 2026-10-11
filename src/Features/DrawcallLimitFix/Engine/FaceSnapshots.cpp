@@ -391,6 +391,11 @@ namespace DCLF
 				}
 				if (!d.Insert(a_head, rebuilt)) {
 					d.Free(rebuilt);
+					// T6b3e: the scratch's copies too, into released (the render thread drops them: TakeReleased), never cleared here later
+					// as the last holders.
+					for (auto& shape : d.scratch)
+						d.released.emplace_back(std::move(shape.shape));
+					d.scratch.clear();
 					return {};
 				}
 				d.live.push_back(rebuilt);

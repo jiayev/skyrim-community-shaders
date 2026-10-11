@@ -9,7 +9,26 @@
 
 namespace DCLF
 {
-	GpuResources& GpuResources::Get()
+	namespace
+	{
+		// Shared by the instances: a generation names one import whichever instance made it.
+		std::atomic<std::uint64_t> nextGeneration{ 1 };
+
+		// The owner's writes to a counter only it writes: a load and a store, no read-modify-write.
+		template <class T, class U>
+		void Bump(std::atomic<T>& a_counter, U a_amount)
+		{
+			a_counter.store(a_counter.load(std::memory_order_relaxed) + static_cast<T>(a_amount), std::memory_order_relaxed);
+		}
+	}
+
+	GpuResources& GpuResources::Scene()
+	{
+		static GpuResources resources;
+		return resources;
+	}
+
+	GpuResources& GpuResources::Frame()
 	{
 		static GpuResources resources;
 		return resources;
@@ -29,22 +48,22 @@ namespace DCLF
 				return LeasedBuffer{ it->second.buffer, it->second.generation, std::move(owner) };
 			// Its last lease went (the removal is queued): a buffer at this address now is resolved as new.
 			entries.erase(it);
-			--stats.cached;
+			Bump(counters.cached, -1);
 		}
 
-		// Resolved by this frame's Prefetch, under its reference: the description is still this buffer's.
+		// Resolved by this pass's Prefetch, under its reference: the description is still this buffer's.
 		if (const auto it = prefetched.find(a_buffer); it != prefetched.end()) {
 			std::optional<LeasedBuffer> lease;
 			auto& entry = it->second;
 			if (SwitchEnabled(Switch::SetParity) || SwitchEnabled(Switch::PersistentParity)) {
-				++stats.prefetchTaken;
+				Bump(counters.prefetchTaken, 1);
 				entry.reference->AddRef();
-				stats.prefetchReleased += entry.reference->Release() == 1 ? 1u : 0u;
+				Bump(counters.prefetchReleased, entry.reference->Release() == 1 ? 1u : 0u);
 			}
 			if (entry.buffer)
 				lease = Insert(a_buffer, std::move(entry.reference), *entry.buffer);
 			else
-				++stats.rejected;
+				Bump(counters.rejected, 1);
 			prefetched.erase(it);
 			return lease;
 		}
@@ -58,13 +77,8 @@ namespace DCLF
 		if (stable)
 			lease = Insert(a_buffer, std::move(reference), Buffer{ reinterpret_cast<std::uint64_t>(info.buffer.buffer), info.buffer.offset, info.buffer.size, info.buffer.address });
 		else
-			++stats.rejected;
-		const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-		++stats.resolvedThisFrame;
-		++stats.resolvedTotal;
-		stats.resolveMs += ms;
-		stats.resolveMsTotal += ms;
-		stats.resolveMsMax = std::max(stats.resolveMsMax, ms);
+			Bump(counters.rejected, 1);
+		NoteResolve(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(), 1);
 		return lease;
 	}
 
@@ -72,22 +86,29 @@ namespace DCLF
 	{
 		Entry entry;
 		entry.buffer = a_resolved;
-		entry.generation = nextGeneration++;
+		entry.generation = nextGeneration.fetch_add(1, std::memory_order_relaxed);
 		if (!entry.generation)
 			std::terminate();
 		// The lease holds the reference the description was taken under for as long as it lives, so the address cannot be reused;
-		// its release queues the entry's removal.
+		// its release queues the entry's removal (any thread).
 		std::shared_ptr<const void> owner(new winrt::com_ptr<ID3D11Buffer>(std::move(a_reference)),
 			[released = released, key = a_buffer](const winrt::com_ptr<ID3D11Buffer>* a_reference) {
 				delete a_reference;
-				const std::lock_guard lock(released->mutex);
-				released->keys.push_back(key);
+				released->Push(key);
 			});
 		entry.owner = owner;
 		LeasedBuffer lease{ entry.buffer, entry.generation, std::move(owner) };
 		entries.emplace(a_buffer, std::move(entry));
-		++stats.cached;
+		Bump(counters.cached, 1);
 		return lease;
+	}
+
+	void GpuResources::NoteResolve(double a_ms, std::uint64_t a_buffers)
+	{
+		Bump(counters.resolvedTotal, a_buffers);
+		Bump(counters.resolveMsTotal, a_ms);
+		if (a_ms > counters.resolveMsMax.load(std::memory_order_relaxed))
+			counters.resolveMsMax.store(a_ms, std::memory_order_relaxed);
 	}
 
 	void GpuResources::Prefetch(std::span<ID3D11Buffer* const> a_buffers)
@@ -122,39 +143,48 @@ namespace DCLF
 			if (SUCCEEDED(results[i]) && info.kind == DXVK_ORG_INTEROP_RESOURCE_BUFFER && info.buffer.address != 0)
 				prefetched[keys[i]].buffer = Buffer{ reinterpret_cast<std::uint64_t>(info.buffer.buffer), info.buffer.offset, info.buffer.size, info.buffer.address };
 		}
-		const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-		++stats.prefetchBatches;
-		stats.prefetched += keys.size();
-		stats.resolvedThisFrame += static_cast<std::uint32_t>(keys.size());
-		stats.resolvedTotal += keys.size();
-		stats.resolveMs += ms;
-		stats.resolveMsTotal += ms;
-		stats.resolveMsMax = std::max(stats.resolveMsMax, ms);
+		Bump(counters.prefetchBatches, 1);
+		Bump(counters.prefetched, keys.size());
+		NoteResolve(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(), keys.size());
 	}
 
 	void GpuResources::BeginFrame()
 	{
-		stats.resolvedThisFrame = 0;
-		stats.resolveMs = 0.0;
 		prefetched.clear();
-		std::vector<ID3D11Buffer*> keys;
-		{
-			const std::lock_guard lock(released->mutex);
-			keys.swap(released->keys);
-		}
-		for (auto* key : keys) {
+		released->Drain([this](ID3D11Buffer*&& a_key) {
 			// A key resolved again since holds a live lease: that entry stays.
-			if (const auto it = entries.find(key); it != entries.end() && it->second.owner.expired()) {
+			if (const auto it = entries.find(a_key); it != entries.end() && it->second.owner.expired()) {
 				entries.erase(it);
-				--stats.cached;
+				Bump(counters.cached, -1);
 			}
-		}
+		});
+	}
+
+	GpuResources::Stats GpuResources::GetStats() const
+	{
+		Stats stats;
+		stats.cached = counters.cached.load(std::memory_order_relaxed);
+		stats.rejected = counters.rejected.load(std::memory_order_relaxed);
+		stats.resolvedTotal = counters.resolvedTotal.load(std::memory_order_relaxed);
+		stats.prefetchBatches = counters.prefetchBatches.load(std::memory_order_relaxed);
+		stats.prefetched = counters.prefetched.load(std::memory_order_relaxed);
+		stats.resolveMsTotal = counters.resolveMsTotal.load(std::memory_order_relaxed);
+		stats.resolveMsMax = counters.resolveMsMax.load(std::memory_order_relaxed);
+		stats.prefetchTaken = counters.prefetchTaken.load(std::memory_order_relaxed);
+		stats.prefetchReleased = counters.prefetchReleased.load(std::memory_order_relaxed);
+		return stats;
 	}
 
 	void GpuResources::Clear()
 	{
 		entries.clear();
 		prefetched.clear();
-		stats = {};
+		released->Discard();
+		for (auto* counter : { &counters.cached, &counters.rejected })
+			counter->store(0, std::memory_order_relaxed);
+		for (auto* counter : { &counters.resolvedTotal, &counters.prefetchBatches, &counters.prefetched, &counters.prefetchTaken, &counters.prefetchReleased })
+			counter->store(0, std::memory_order_relaxed);
+		counters.resolveMsTotal.store(0.0, std::memory_order_relaxed);
+		counters.resolveMsMax.store(0.0, std::memory_order_relaxed);
 	}
 }

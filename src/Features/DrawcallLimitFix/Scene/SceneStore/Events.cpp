@@ -404,8 +404,11 @@ namespace DCLF::Scene
 		static void thunk(RE::BSFadeNode** a_fadeNode, RE::NiAVObject* a_object)
 		{
 			func(a_fadeNode, a_object);
+			// T6b3e: as a leaf update (its records with their pins, the new fade node among them: CaptureLeaf), so the entry holds the fade
+			// node its tree and fade-root owners are copied from (HoldProperties); the property update alone carried no reference, and an
+			// entry attached before the fade node was set found none (w140-w143: hundreds of roots left unlisted).
 			if (auto* geometry = a_object ? a_object->AsGeometry() : nullptr)
-				PushPropertyUpdate(geometry->GetGeometryRuntimeData().shaderProperty.get(), SceneCapture::PropertyRecord::kFadeNode);
+				PushLeafUpdate(*geometry);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -865,9 +868,9 @@ namespace DCLF
 		return ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
 	}
 
-	void SceneStore::IngestEvents(bool a_frameStart)
+	bool SceneStore::NoteLoadingScreen()
 	{
-		// Switch events are taken on the render thread only (PushSwitch): this is it.
+		// Switch events are taken on the render thread only (PushSwitch): this is it (Present and the frame's start).
 		switchEventThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 		// Nothing may walk the scene graph while a load screen is up. A load tears down and rebuilds
 		// TES::objRoot and the cell 3D under it, and the attach events queued across it name subtrees that
@@ -875,117 +878,158 @@ namespace DCLF
 		// is what crashed in RefreshCategoryNodes' objRoot walk (a child that read back as
 		// 0x0001000000020001) and, the day before, in AddSubtree.
 		//
-		// The queues are still drained, because they hold references to attached subtrees and must not grow
-		// while the world is not rendered - but the events are discarded rather than applied, and the first
-		// frame after the load rebuilds the tracked set from scratch. A load invalidates all of it anyway, so
-		// nothing is lost by not trying to track across it.
-		auto& tracker = SceneTracker::Get();
-		if (SceneStore::IsLoadingScreenUp()) {
-			// Only the walking stops. The tracked set is deliberately left alone until the load is over:
-			// dropping it here releases the game buffers the tables reference while the previous frame's
-			// epoch is still in flight, and a draw then reads a freed device address. That is a
-			// VK_ERROR_DEVICE_LOST on the teleport, which is exactly what happened when this branch cleared
-			// eagerly. The entries hold NiPointers, so holding them across the load is the safe direction,
-			// and the rescan replaces them on a normal frame.
-			// T6b3a: what the load invalidates of the coordinator's (the rescan, the drained events not yet applied, the move events) is
-			// dropped by the coordinator, told by a marker batch posted once a load (ApplyLoading): nothing of its state is written here.
-			if (!std::exchange(loadingPosted, true)) {
-				auto marker = std::make_shared<EventBatch>();
-				marker->loading = true;
-				eventBatches.Push(std::move(marker));
+		// The queues are still drained (T6b3d: by the coordinator's passes, their one consumer), because they hold references to
+		// attached subtrees and must not grow while the world is not rendered - but the events are discarded for the tracking rather
+		// than applied (the mirror keeps them: loadingCarry), and the first frame after the load rebuilds the tracked set from scratch.
+		// A load invalidates all of it anyway, so nothing is lost by not trying to track across it.
+		if (!SceneStore::IsLoadingScreenUp()) {
+			if (std::exchange(loadingPosted, false)) {
+				loadingSeen.store(false, std::memory_order_release);
+				// The engine's events wake the passes again, and one takes the load's carry now.
+				SetScenePassLoading(false);
+				WakeScenePass(SceneWake::LoadDrain);
 			}
-			// The first category capture after the load pins every category node (the coordinator rescans them all).
+			return false;
+		}
+		// Only the walking stops. The tracked set is deliberately left alone until the load is over:
+		// dropping it here releases the game buffers the tables reference while the previous frame's
+		// epoch is still in flight, and a draw then reads a freed device address. That is a
+		// VK_ERROR_DEVICE_LOST on the teleport, which is exactly what happened when this branch cleared
+		// eagerly. The entries hold NiPointers, so holding them across the load is the safe direction,
+		// and the rescan replaces them on a normal frame.
+		// T6b3a: what the load invalidates of the coordinator's (the rescan, the drained events not yet applied, the move events) is
+		// dropped by the coordinator, told by a marker batch posted once a load (ApplyLoading): nothing of its state is written here.
+		// T6b3d: loadingSeen first, then the marker: a pass that takes the marker sees the load, and drains into the mirror's carry.
+		if (!std::exchange(loadingPosted, true)) {
+			loadingSeen.store(true, std::memory_order_release);
+			auto marker = std::make_shared<EventBatch>();
+			marker->loading = true;
+			eventBatches.Push(std::move(marker));
+			// The first category capture after the load pins every category node (the coordinator rescans them all), and is made
+			// whatever the signature says; the switches are brought up to date at the first frame's start after it (CatchUpSwitches),
+			// and PrimaryCull reads them all again from the next frame's start.
 			rescanCaptureAll = true;
-			// The set does not survive a load: it names geometry from the cell being torn down, and withholds its passes from the
-			// engine. Nothing is withheld until the next commit publishes the set again.
-			PassCapture::Get().PublishSet(nullptr);
-			ingesting.reset();
-			// The mirror's (step 6e F3): carried to the next batch, which applies them before its own. The tracking takes none.
+			categoryCapturePending = true;
+			worldCatchUpPending = true;
+			switchResyncNext = true;
+		}
+		// The set does not survive a load: it names geometry from the cell being torn down, and withholds its passes from the
+		// engine. Nothing is withheld until the next commit publishes the set again.
+		PassCapture::Get().PublishSet(nullptr);
+		// T6b3d: while it is up the engine's events wake no pass (a load pushes thousands a frame, each for the mirror's carry alone): one
+		// pass drains them here, once a Present and frame start, as the old ingestion did.
+		SetScenePassLoading(true);
+		WakeScenePass(SceneWake::LoadDrain);
+		return true;
+	}
+
+	std::shared_ptr<SceneStore::EventBatch> SceneStore::CollectEvents()
+	{
+		ZoneScopedN("CS.DCLF.Scene.CollectEvents");
+		// T6b3d: the coordinator is the queues' one consumer. Each is drained up to where it stood at its drain (the tracker's stack by
+		// one exchange, the rings by their head: EventQueue::Drain), all of them here at the pass's start, so a producer extending a queue
+		// is the next pass's and a pass always ends. What the render thread posted for the pass was taken before (the category capture,
+		// the mirror probe), so every event older than its capture is in this batch or an earlier one.
+		auto& tracker = SceneTracker::Get();
+		auto probe = mirrorProbePosted.Take();
+		if (loadingSeen.load(std::memory_order_acquire)) {
+			// The load screen's branch (NoteLoadingScreen's, T6b3a): the mirror's events carried to the first pass after the load, which
+			// applies them before its own; the rest discarded for the tracking, the objects the events without values name kept for the
+			// mirror's parity, and the references the discarded events hold (the node and switch events) released at Present.
 			if (!loadingCarry)
 				loadingCarry = std::make_shared<EventBatch>();
 			loadingCarry->AppendMirror(tracker.Drain());
-			// The other queues are discarded for the tracking; the objects the ones without values name are kept for the mirror's
-			// parity.
 			auto& named = loadingCarry->mirrorNamed;
 			auto keep = [&named](const void* a_key) { named.push_back(a_key); };
-			// The queues the render thread drains (the LOD fade, emittance and move events are the coordinator's: ApplyLoading).
+			auto discarded = std::make_shared<EventBatch>();
+			BatchUnwindGuard discardedGuard(*this, discarded);
 			{
 				std::vector<const RE::BSFadeNode*> fades;
 				DrainFadeEvents(fades);
 				std::vector<const void*> keys;
 				DrainPropertyEvents(keys);
-				std::vector<RE::NiPointer<RE::NiAVObject>> nodes;
-				DrainNodeEvents(nodes);
 			}
+			DrainNodeEvents(discarded->nodes);
 			fadeSnapEvents.Drain(keep);
 			fadeAmountEvents.Drain(keep);
 			lodSegmentEvents.Drain(keep);
-			// The switches are brought up to date at the first ingestion after the load (CatchUpSwitches); PrimaryCull reads them all
-			// again from the next frame's start.
-			worldCatchUpPending = true;
-			categoryCapturePending = true;
-			switchEvents.Drain([&keep](SwitchEvent&& a_event) { keep(a_event.node.get()); });
-			switchResyncNext = true;
-			return;
+			switchEvents.Drain([&](SwitchEvent&& a_event) {
+				keep(a_event.node.get());
+				discarded->switches.push_back(std::move(a_event));
+			});
+			if (!discarded->nodes.empty() || !discarded->switches.empty())
+				batchesReleased.Push(std::move(discarded));
+			++pumpStats.loading;
+			return nullptr;
 		}
-		loadingPosted = false;
-		// The drain alone: pointer moves into the batch, in push order. Everything that walks or evaluates is ApplyEvents'.
-		if (!ingesting)
-			ingesting = std::make_shared<EventBatch>();
-		auto& batch = *ingesting;
+		auto batch = std::make_shared<EventBatch>();
+		// T6b3e: a throw hands the batch (its events' pins, nodes and switches) to the render thread, never destroys it here.
+		BatchUnwindGuard unwindGuard(*this, batch);
+		batch->probe = std::move(probe);
 		if (loadingCarry) {
-			batch.AppendMirror(std::exchange(loadingCarry->mirrorHead, nullptr));
-			batch.mirrorNamed = std::move(loadingCarry->mirrorNamed);
+			batch->AppendMirror(std::exchange(loadingCarry->mirrorHead, nullptr));
+			batch->mirrorNamed = std::move(loadingCarry->mirrorNamed);
 			loadingCarry.reset();
 		}
-		auto* attached = tracker.Drain();
-		batch.Append(attached);
-		fadeSnapEvents.Drain([&](const void* a_node) { batch.fadeSnaps.push_back(a_node); });
-		fadeAmountEvents.Drain([&](const void* a_node) { batch.fadeAmounts.push_back(a_node); });
-		DrainFadeEvents(batch.fades);
-		DrainPropertyEvents(batch.properties);
-		DrainNodeEvents(batch.nodes);
-		const std::size_t switchesBefore = batch.switches.size();
-		switchEvents.Drain([&](SwitchEvent&& a_event) { batch.switches.push_back(std::move(a_event)); });
-		lodSegmentEvents.Drain([&](const void* a_key) { batch.lodSegments.push_back(a_key); });
-		// The switches' catch-ups are engine code that writes: the render thread's, here, never the scene work's.
-		attachedRoots.clear();
-		for (const auto* event = attached; event; event = event->next)
-			if (event->type == SceneTracker::EventType::Attached && event->node)
-				attachedRoots.push_back(event->node.get());
-		CatchUpSwitches(attachedRoots, std::span<const SwitchEvent>(batch.switches).subspan(switchesBefore));
-		// The category nodes as the scene work will diff them (step 6e F2): a detach can take one with it before the signature sees
-		// its cell go, and a load's end finds every cell new.
-		// Only at the frame's start (a_frameStart: the engine's update done, the scene work about to run): one taken at Present would
-		// be the update's to change before the scene work diffed it. A detach Present ingested forces the next.
-		for (const auto* event = attached; event && !categoryCapturePending; event = event->next)
-			categoryCapturePending = event->type == SceneTracker::EventType::Detached;
-		if (a_frameStart) {
-			CaptureCategories(std::exchange(categoryCapturePending, false), batch);
-			CaptureMirrorRequests(batch);
-			ProbeMirror(batch);
+		// The drain alone: pointer moves into the batch, in push order. Everything that walks or evaluates is ApplyEvents'.
+		auto* drained = tracker.Drain();
+		batch->Append(drained);
+		fadeSnapEvents.Drain([&](const void* a_node) { batch->fadeSnaps.push_back(a_node); });
+		fadeAmountEvents.Drain([&](const void* a_node) { batch->fadeAmounts.push_back(a_node); });
+		DrainFadeEvents(batch->fades);
+		DrainPropertyEvents(batch->properties);
+		DrainNodeEvents(batch->nodes);
+		switchEvents.Drain([&](SwitchEvent&& a_event) { batch->switches.push_back(std::move(a_event)); });
+		lodSegmentEvents.Drain([&](const void* a_key) { batch->lodSegments.push_back(a_key); });
+		// The oldest stamp (the latencies), whether a detach came (the next category capture is forced: a detach can take a category
+		// node with it before the signature sees its cell go), and what the switches' catch-ups need: engine code that writes, the
+		// render thread's at its frame's start, asked with references the batch's events hold now (copies, dropped there).
+		std::shared_ptr<SwitchCatchUp> catchUp;
+		// T6b3e: on a throw its references (copies) go to the render thread (EngineReleases), never dropped here.
+		struct CatchUpUnwind
+		{
+			std::shared_ptr<SwitchCatchUp>& held;
+			int exceptions = std::uncaught_exceptions();
+			~CatchUpUnwind()
+			{
+				if (!held || std::uncaught_exceptions() <= exceptions)
+					return;
+				for (auto& node : held->attached)
+					EngineReleases::Push(RE::NiPointer<RE::NiRefObject>(std::move(node)));
+				for (auto& event : held->switches)
+					EngineReleases::Push(RE::NiPointer<RE::NiRefObject>(std::move(event.node)));
+			}
+		} catchUpUnwind{ catchUp };
+		std::uint32_t events = 0;
+		for (const auto* event = drained; event; event = event->next) {
+			++events;
+			if (event->stampNs && (!batch->oldestNs || event->stampNs < batch->oldestNs)) {
+				batch->oldestNs = event->stampNs;
+				batch->oldestFrame = event->stampFrame;
+			}
+			if (event->mirrorOnly)
+				continue;
+			if (event->type == SceneTracker::EventType::Detached)
+				categoryDetachSeen.store(true, std::memory_order_relaxed);
+			else if (event->type == SceneTracker::EventType::Attached && event->node) {
+				if (!catchUp)
+					catchUp = std::make_shared<SwitchCatchUp>();
+				catchUp->attached.push_back(event->node);
+			}
 		}
-		// Tree LOD's mirror is the render thread's (DecideTreeLod reads it at the frame's start).
-		treeLod.Drain(frame);
-	}
-
-	void SceneStore::NoteEventsPresent()
-	{
-		if (ingesting)
-			++ingesting->presents;
-	}
-
-	bool SceneStore::EventsUnapplied() const
-	{
-		return ingesting && ingesting->presents > 1;
-	}
-
-	void SceneStore::PostIngested()
-	{
-		// T6b3a: the render thread's batch handed to the coordinator whole (it applies the posted batches in order, ApplyEvents).
-		if (ingesting)
-			eventBatches.Push(std::move(ingesting));
-		ingesting.reset();
+		if (!batch->switches.empty()) {
+			if (!catchUp)
+				catchUp = std::make_shared<SwitchCatchUp>();
+			catchUp->switches.reserve(batch->switches.size());
+			for (const auto& event : batch->switches)
+				catchUp->switches.push_back(SwitchEvent{ event.node, event.before, event.structural });
+		}
+		if (catchUp)
+			switchCatchUps.Push(std::move(catchUp));
+		events += static_cast<std::uint32_t>(batch->fadeSnaps.size() + batch->fadeAmounts.size() + batch->fades.size() + batch->properties.size() +
+											 batch->nodes.size() + batch->switches.size() + batch->lodSegments.size());
+		pumpStats.passEvents.push_back(events);
+		return batch;
 	}
 
 	void SceneStore::ReleaseHandedBack()
@@ -1043,31 +1087,52 @@ namespace DCLF
 		}
 	}
 
-	void SceneStore::ApplyEvents()
+	void SceneStore::ApplyEvents(std::shared_ptr<EventBatch> a_batch)
 	{
-		// T6b3a: the batches the render thread posted, each applied in order (one a pass while the kicks stay; none: an empty one, as
-		// before). A load's marker drops what the load invalidated first (ApplyLoading).
-		std::vector<std::shared_ptr<EventBatch>> batches;
-		eventBatches.Drain([&batches](std::shared_ptr<EventBatch>&& a_batch) {
-			if (a_batch)
-				batches.push_back(std::move(a_batch));
-		});
-		bool applied = false;
-		for (auto& batch : batches) {
-			if (batch->loading) {
+		// T6b3d: the load markers posted since (NoteLoadingScreen: once a load) drop what the load invalidated first (ApplyLoading), then
+		// the pass's own batch (CollectEvents'; none while a load screen is up: an empty one, which still takes the category capture and
+		// the rescan). The markers hold nothing.
+		eventBatches.Drain([this](std::shared_ptr<EventBatch>&& a_marker) {
+			if (a_marker && a_marker->loading)
 				ApplyLoading();
-				continue;
+		});
+		ApplyBatch(a_batch ? std::move(a_batch) : std::make_shared<EventBatch>());
+	}
+
+	void SceneStore::ApplyFadeNodeAnswers()
+	{
+		auto& r = referenceStats;
+		fadeNodeAnswers.Drain([&](FadeNodeAnswer&& a_answer) {
+			auto* geometry = const_cast<RE::BSGeometry*>(a_answer.geometry);
+			const auto it = tracked.find(geometry);
+			auto* entry = it != tracked.end() ? &it->second : nullptr;
+			if (entry && entry->fadeNodeRequested == a_answer.fadeNode)
+				entry->fadeNodeRequested = nullptr;
+			// Taken only while the mirror still names that node for the entry's property (its fade root and tree are listed from it).
+			const auto* record = entry ? mirror.Geometry(geometry) : nullptr;
+			const auto* property = record && record->property ? mirror.Property(record->property) : nullptr;
+			if (!entry || !a_answer.node || !property || property->fadeNode != a_answer.fadeNode || entry->fadeNodeRef.get() == a_answer.fadeNode) {
+				r.fadeNodesAnsweredNone += a_answer.node ? 0 : 1;
+				HandBack(std::move(a_answer.node));
+				return;
 			}
-			ApplyBatch(std::move(batch));
-			applied = true;
-		}
-		if (!applied)
-			ApplyBatch(std::make_shared<EventBatch>());
+			++r.fadeNodesAnswered;
+			HandBack(std::move(entry->fadeNodeRef));
+			entry->fadeNodeRef = std::move(a_answer.node);
+			// Its slots' fade root, and a member tree's node, listed now (the walk left them unlisted for want of the reference).
+			for (const std::uint32_t slot : { entry->slot, entry->layerSlot }) {
+				if (slot == kNoObjectSlot || slot >= tables.objects.size() || tables.objectGeometry[slot] != geometry)
+					continue;
+				ListFadeRoot(slot);
+				if (IsResidentSlot(slot))
+					ListTree(slot);
+			}
+		});
 	}
 
 	void SceneStore::ApplyLoading()
 	{
-		// IngestEvents' loading branch, the coordinator's half (T6b3a): the first frame after the load rescans; what was drained and not
+		// NoteLoadingScreen's marker, the coordinator's half (T6b3a): the first frame after the load rescans; what was drained and not
 		// applied, and the queues only the coordinator drains, are discarded.
 		rescanPending = true;
 		{
@@ -1077,10 +1142,14 @@ namespace DCLF
 		}
 		fadeChanged.clear();
 		propertyChanged.clear();
-		nodeChanged.clear();
+		// The references these hold are the render thread's to drop (a node's last release runs the engine's destructors: its
+		// collision object leaves the Havok world), so they go back through the retirement chain, never cleared here.
+		HandBack(nodeChanged);
 		moveEvents.Discard();
 		movedFrame.clear();
 		batchHidden.clear();
+		for (auto& pending : switchPending)
+			HandBack(std::move(pending.node));
 		switchPending.clear();
 		switchPendingIndex.clear();
 		switchResync = true;
@@ -1091,6 +1160,8 @@ namespace DCLF
 		// T6b2a: the material captures first: a batch's attach names materials its leaves' captures pushed before it.
 		DrainMaterialCaptures();
 		auto batch = std::move(a_batch);
+		// T6b3e: a throw hands it to the render thread (its pins and references), never destroys it here.
+		BatchUnwindGuard unwindGuard(*this, batch);
 		const bool rescanned = rescanPending;
 		if (rescanPending) {
 			// RefreshCategoryNodes treats every category node as newly appeared and walks it, which is
@@ -1102,6 +1173,7 @@ namespace DCLF
 				HandBack(std::move(entry.property));
 				HandBack(std::move(entry.layerProperty));
 				HandBack(std::move(entry.faceHeadRef));
+				HandBack(std::move(entry.fadeNodeRef));
 			}
 			tracked.clear();
 			ClearFaceShapes();
@@ -1138,13 +1210,24 @@ namespace DCLF
 			DCLF_SCENE_PART(CategoryNodes, "CS.DCLF.Scene.CategoryNodes");
 			bool sawDetach = false;
 			for (const auto* event = batch->head; event && !sawDetach; event = event->next)
-				sawDetach = event->type == SceneTracker::EventType::Detached;
+				sawDetach = event->type == SceneTracker::EventType::Detached && !event->mirrorOnly;
 			addSource = rescanned ? TrackSource::Rescan : TrackSource::AttachEvent;
 			RefreshCategoryNodes(sawDetach || rescanned);
 			addSource = TrackSource::AttachEvent;
-			// The subtrees the mirror had no chain for last time: the render thread captured them at this frame's start (T6b1b).
-			for (const auto& root : std::exchange(pendingSubtrees, {}))
-				AddSubtree(root.get(), SubtreeSource::Retry);
+			// The subtrees the mirror had no chain for last time: the render thread captured them at a frame's start (T6b1b; T6b3d: onto
+			// the tracker's stack, so a pass after it applied them).
+			// T6b3e: their references handed back first (the retry list may be a root's last holder: never released on the pump, a throw
+			// included); the retirement chain holds them through the pass, AddSubtree walking the keys.
+			auto retry = std::exchange(pendingSubtrees, {});
+			std::vector<RE::NiAVObject*> retryRoots;
+			retryRoots.reserve(retry.size());
+			for (const auto& root : retry)
+				retryRoots.push_back(root.get());
+			HandBack(retry);
+			for (auto* root : retryRoots)
+				AddSubtree(root, SubtreeSource::Retry);
+			// T6b3e: the fade nodes the render thread pinned for entries that had none (FadeNodeRequest).
+			ApplyFadeNodeAnswers();
 		}
 
 		{
@@ -1154,6 +1237,9 @@ namespace DCLF
 			// an attach, which is a move. Its entry, slot and binding stay; the attach has evaluated it again (AddGeometry).
 			std::vector<RE::BSGeometry*> detached;
 			for (auto* event = batch->head; event; event = event->next) {
+				// The render thread's captures are the mirror's alone (T6b3d: SceneTracker::PushCaptured).
+				if (event->mirrorOnly)
+					continue;
 				// A sun candidate above it: its subtree changed, which its plan in the primary cut reads (PlanOf), whether or not a
 				// tracked geometry came or went.
 				for (const void* ancestor : event->ancestors)
@@ -1182,9 +1268,9 @@ namespace DCLF
 
 		{
 			// CS_DCLF_PERSISTENT_PARITY: a slice of the tracked geometries checked for a detach the events missed (each one found is dropped,
-			// and flagged). The normal path trusts the detach events (invariant 5).
+			// and flagged). The normal path trusts the detach events (invariant 5). Once a pass (T6b3d: one batch a pass, one consumer).
 			DCLF_SCENE_PART(Validate, "CS.DCLF.Scene.Validate");
-			if (SwitchEnabled(Switch::PersistentParity) && std::exchange(validatedFrame, sceneFrame) != sceneFrame)
+			if (SwitchEnabled(Switch::PersistentParity) && std::exchange(validatedFrame, PassStamp()) != PassStamp())
 				ValidateSlice();
 		}
 		DCLF_SCENE_PART(StructuralEvents, "CS.DCLF.Scene.StructuralEvents");
@@ -1218,7 +1304,7 @@ namespace DCLF
 		stats.categoryNodes = static_cast<std::uint32_t>(categoryNodes.size());
 		// The tracked geometries its captures and leaf updates named: their properties as the mirror has them now, held from its pins
 		// (T6b1b).
-		for (const auto* head : { batch->mirrorHead, batch->head, batch->mirrorLate })
+		for (const auto* head : { batch->mirrorHead, batch->head })
 			for (const auto* event = head; event; event = event->next) {
 				const SceneCapture::Records* records = event->type == SceneTracker::EventType::Attached ? event->captured.get() :
 				                                       event->type == SceneTracker::EventType::Updated ? event->update.leaf.get() :
@@ -1235,9 +1321,17 @@ namespace DCLF
 							}
 						}
 			}
+		// T6b3d: its oldest event, applied now and published with the next publication (the event-to-publication latency).
+		if (batch->oldestNs && (!unpublishedNs || batch->oldestNs < unpublishedNs)) {
+			unpublishedNs = batch->oldestNs;
+			unpublishedFrame = batch->oldestFrame;
+		}
 		// Its tracker events (and the switch events folded into a pending entry) hold engine references - the detached subtrees a
-		// published version of the tables may still name: through the retirement chain (step 6e E3).
-		retirement.Open().events.push_back(std::move(batch));
+		// published version of the tables may still name: through the retirement chain (step 6e E3). T6b3d: a batch that holds none (no
+		// tracker event, no switch event left in it: an idle pass's) is dropped here instead - its return would wake the pump for nothing,
+		// and every pass would keep the next one going.
+		if (batch->head || batch->mirrorHead || !batch->switches.empty())
+			retirement.Open().events.push_back(std::move(batch));
 		// Its pins name the retired batch's references: no reference is made from them after the apply (T6b1c).
 		batchPins.clear();
 	}
@@ -1329,8 +1423,8 @@ namespace DCLF
 			if (const auto it = lodRanges.find(static_cast<const RE::BSGeometry*>(key)); it != lodRanges.end())
 				SampleLodRanges(*it->first, true);
 		}
-		// CS_DCLF_PERSISTENT_PARITY: every tracked shape's ranges against its live state (once a frame: Present may apply too).
-		if (lodRanges.empty() || !SwitchEnabled(Switch::PersistentParity) || !ParityDue(sceneFrame) || std::exchange(lodParityFrame, sceneFrame) == sceneFrame)
+		// CS_DCLF_PERSISTENT_PARITY: every tracked shape's ranges against its live state (T6b3d: every 60th pass, once in it).
+		if (lodRanges.empty() || !SwitchEnabled(Switch::PersistentParity) || !PassParityDue() || std::exchange(lodParityFrame, PassStamp()) == PassStamp())
 			return;
 		++lodSegmentStats.checks;
 		std::vector<LodSegments::Range> live;
@@ -1502,7 +1596,7 @@ namespace DCLF
 		// The batch's pins (T6b1c): its attach captures' references and its leaf updates' (T6b1b), by key, for the scene work's
 		// references while it applies it.
 		batchPins.clear();
-		for (const auto* head : { a_batch.mirrorHead, a_batch.head, a_batch.mirrorLate })
+		for (const auto* head : { a_batch.mirrorHead, a_batch.head })
 			for (const auto* event = head; event; event = event->next) {
 				if (event->type == SceneTracker::EventType::Attached && event->captured)
 					PinBatch(event->captured->pins);
@@ -1511,7 +1605,26 @@ namespace DCLF
 		auto apply = [&](const SceneTracker::Event* a_head) {
 			for (const auto* event = a_head; event; event = event->next) {
 				if (event->type == SceneTracker::EventType::Attached) {
-					if (event->captured)
+					if (event->captured && event->mirrorFill) {
+						// T6b3d: a mirror request's capture fills what the mirror lacks alone (SceneTracker::Event::mirrorFill).
+						const auto& captured = *event->captured;
+						SceneCapture::Records fill;
+						fill.sequence = captured.sequence;
+						for (const auto& n : captured.nodes)
+							if (!mirror.Node(n.key))
+								fill.nodes.push_back(n);
+						for (const auto& g : captured.geometries)
+							if (!mirror.Geometry(g.key))
+								fill.geometries.push_back(g);
+						for (const auto& p : captured.properties)
+							if (!mirror.Property(p.key))
+								fill.properties.push_back(p);
+						for (const auto& a : captured.alphas)
+							if (!mirror.Alpha(a.key))
+								fill.alphas.push_back(a);
+						if (!fill.nodes.empty() || !fill.geometries.empty() || !fill.properties.empty() || !fill.alphas.empty())
+							mirror.Apply(fill);
+					} else if (event->captured)
 						mirror.Apply(*event->captured);
 					else if (event->node && mirror.Node(event->node.get()))
 						// Attached out of the world, yet held (T6b1b): its record is stale (the event holds the object: its name is safe).
@@ -1533,7 +1646,6 @@ namespace DCLF
 		};
 		apply(a_batch.mirrorHead);
 		apply(a_batch.head);
-		apply(a_batch.mirrorLate);
 		RecheckDeferredReads();
 		if (!parity)
 			return;
@@ -1556,9 +1668,32 @@ namespace DCLF
 			mirrorProbe = std::make_unique<SceneCapture::Records>(*a_batch.probe);
 	}
 
-	void SceneStore::ProbeMirror(EventBatch& a_batch)
+	void SceneStore::PostMirrorProbeRequest()
 	{
-		if (!SwitchEnabled(Switch::MirrorParity) || tracked.empty())
+		// T6b3d: the coordinator's half of the mirror parity's probe (CS_DCLF_MIRROR_PARITY): the next slice of its tracked set, each
+		// geometry held by the request (a copy of its entry's reference: the entry may let go before the render thread captures it),
+		// asked of the render thread once a frame and one at a time. The render thread drops the references.
+		if (!SwitchEnabled(Switch::MirrorParity) || tracked.empty() || mirrorProbeFrame == sceneFrame || mirrorProbeAsked.load(std::memory_order_acquire))
+			return;
+		mirrorProbeFrame = sceneFrame;
+		constexpr std::size_t kSlice = 256;
+		auto request = std::make_shared<MirrorProbeRequest>();
+		request->geometries.reserve(std::min(kSlice, tracked.size()));
+		auto it = tracked.begin() + static_cast<std::ptrdiff_t>(std::min(mirrorProbeCursor, tracked.size()));
+		for (std::size_t n = 0; n < std::min(kSlice, tracked.size()); ++n, ++it) {
+			if (it == tracked.end())
+				it = tracked.begin();
+			if (it->second.geometry)
+				request->geometries.push_back(it->second.geometry);
+		}
+		mirrorProbeCursor = static_cast<std::size_t>(it - tracked.begin());
+		mirrorProbeAsked.store(true, std::memory_order_release);
+		mirrorProbeRequests.Push(std::move(request));
+	}
+
+	void SceneStore::ProbeMirror()
+	{
+		if (!SwitchEnabled(Switch::MirrorParity))
 			return;
 		// CS_DCLF_MIRROR_WATCH=parity: the property the last check found stale, watched from here (the render thread).
 		if (const void* property = mirrorWatchRequest.exchange(nullptr, std::memory_order_acq_rel))
@@ -1567,28 +1702,28 @@ namespace DCLF
 			MirrorWatch::ArmAlpha(alpha);
 		if (const void* node = mirrorWatchNode.exchange(nullptr, std::memory_order_acq_rel))
 			MirrorWatch::ArmCurrent(node);
+		// T6b3d: the slice the coordinator asked for (the newest: an older one is dropped here, with its references), not its tracked set.
+		std::shared_ptr<MirrorProbeRequest> request;
+		mirrorProbeRequests.Drain([&request](std::shared_ptr<MirrorProbeRequest>&& a_request) { request = std::move(a_request); });
+		if (!request)
+			return;
 		ZoneScopedN("CS.DCLF.Ingest.ProbeMirror");
-		// T6b3a: the tracked set is the coordinator's, read here (CS_DCLF_MIRROR_PARITY alone) as the frame start's join leaves it; a read
-		// while the scene work runs is counted and named.
-		GuardFrameAccess("ProbeMirror");
-		// A slice of the tracked set, live (the render thread at the frame's start: the update done, before the culls): each
-		// geometry's records and its ancestors' up to the world's root, each object once. A tracked geometry is held by its entry.
-		constexpr std::size_t kSlice = 256;
+		// Live (the render thread at the frame's start: the update done, before the culls): each geometry's records and its ancestors'
+		// up to the world's root, each object once. Each geometry is held by the request.
 		auto probe = std::make_unique<SceneCapture::Records>();
 		ankerl::unordered_dense::set<const void*> taken;
-		auto it = tracked.begin() + static_cast<std::ptrdiff_t>(std::min(mirrorProbeCursor, tracked.size()));
-		for (std::size_t n = 0; n < std::min(kSlice, tracked.size()); ++n, ++it) {
-			if (it == tracked.end())
-				it = tracked.begin();
-			const auto* geometry = it->first;
+		for (const auto& held : request->geometries) {
+			const auto* geometry = held.get();
 			if (!geometry || !SceneCapture::InWorld(geometry) || !taken.insert(geometry).second)
 				continue;
 			SceneCapture::CaptureLeaf(*geometry, *probe);
 			for (const auto* ancestor = geometry->parent; ancestor && taken.insert(ancestor).second; ancestor = ancestor->parent)
 				probe->nodes.push_back(SceneCapture::CaptureNode(*ancestor));
 		}
-		mirrorProbeCursor = static_cast<std::size_t>(it - tracked.begin());
-		a_batch.probe = std::move(probe);
+		// To the next pass, which takes it before its drains (CollectEvents); the next request may follow.
+		mirrorProbePosted.Post(std::move(probe));
+		mirrorProbeAsked.store(false, std::memory_order_release);
+		WakeScenePass(SceneWake::Capture);
 	}
 
 	void SceneStore::CheckMirror()
@@ -1701,7 +1836,7 @@ namespace DCLF
 				continue;
 			if (!pending.structural && record->switchIndex == pending.before)
 				continue;
-			++mirrorReads.reads[static_cast<std::size_t>(MirrorRead::SwitchEvent)];
+			++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::SwitchEvent)];
 			if (mirrorReadParity && !a_full)
 				CheckTrackedBelow(MirrorRead::SwitchEvent, node);
 			++delta.switchChanges;
@@ -1737,7 +1872,7 @@ namespace DCLF
 		// An actor's entries are evaluated every frame anyway, and its sun entry is never tested.
 		if (record->userData && record->formType == static_cast<std::uint8_t>(RE::FormType::ActorCharacter))
 			return;
-		++mirrorReads.reads[static_cast<std::size_t>(MirrorRead::NodeEvent)];
+		++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::NodeEvent)];
 		if (mirrorReadParity)
 			CheckTrackedBelow(MirrorRead::NodeEvent, a_node);
 		// Written every frame already, placement included: a record written in full, or one the light path moves.

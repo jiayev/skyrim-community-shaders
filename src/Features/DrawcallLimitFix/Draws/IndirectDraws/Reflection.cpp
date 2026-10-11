@@ -148,6 +148,7 @@ namespace DCLF
 			logger::info("[DCLF] reflection faces' targets changed: colour {} -> {}, depth {} -> {}", static_cast<int>(reflection.targets.colour),
 				static_cast<int>(targets.colour), static_cast<int>(reflection.targets.depth), static_cast<int>(targets.depth));
 		reflection.targets = targets;
+		reflection.PublishTargets();
 		++reflection.facesCaptured;
 		if (reflection.executedFrame == SceneStore::Get().GetFrame())
 			++reflection.lateFaces;
@@ -318,6 +319,7 @@ namespace DCLF
 			if (auto* renderer = globals::game::renderer)
 				if (auto* face = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS].cubeSideRTV[0]) {
 					reflection.targets = { TargetOf(face).format, DXGI_FORMAT_D24_UNORM_S8_UINT };
+					reflection.PublishTargets();
 					// A revision input: the targets the faces' pipelines are resolved for (from a revision's request's catalog).
 					impl->PostRevisionInputs();
 				}
@@ -408,8 +410,8 @@ namespace DCLF
 		// A capability, not whether the last update drew nor what the faces' resources or pipelines are yet: the faces' targets, known
 		// at the first frame (PrepareReflection). Each member then waits for its own pipeline (ReflectionPhaseReady), and the faces
 		// withhold nothing until their epoch can draw them (DecideCoverage: the resources and the revision's shape).
-		const auto& reflection = impl->reflection;
-		return ActiveToggles().reflections && !failed && reflection.targets.colour != DXGI_FORMAT_UNKNOWN;
+		// The published targets (the scene lane's commit calls this: SceneStore::SetCapability), never the render thread's own copy.
+		return ActiveToggles().reflections && !failed && impl->reflection.LaneTargets().colour != DXGI_FORMAT_UNKNOWN;
 	}
 
 	bool IndirectDraws::Impl::ReflectionPhaseReady(const SceneStore::Tables& a_tables, std::uint32_t a_slot) const
@@ -488,6 +490,14 @@ namespace DCLF
 		for (const auto& held : impl->frameTextureBindings)
 			if (held.binding.owner)
 				owners->push_back(held.binding.owner);
+		// The scene list's payloads' roots (held here, not only by the frame's Z-prepass execution: one this frame did not submit holds
+		// nothing), the ring entry's draws, and the adopted snapshot whole (T6b3b: its versions and what its draws embed).
+		for (const auto& payload : ring.draws->payloads)
+			if (payload)
+				owners->insert(owners->end(), payload->bindingOwners.begin(), payload->bindingOwners.end());
+		owners->push_back(ring.draws);
+		if (impl->adoptedSnapshot)
+			owners->push_back(impl->adoptedSnapshot);
 		std::uint32_t drawn = 0;
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::Reflection, [&](org::RenderGraph&) {
 			// CS_DCLF_REVISION_PARITY: the commit's own shape and the revision's against it (inside the epoch: the graph's heaps). It

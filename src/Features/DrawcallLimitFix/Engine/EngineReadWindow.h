@@ -75,4 +75,32 @@ namespace DCLF
 		static inline std::uint64_t closes = 0, closesWaited = 0;
 		static inline double waitedUs = 0.0, waitedMaxUs = 0.0;
 	};
+
+	/**
+	 * @brief T6b3e, CS_DCLF_RELEASE_GUARD=1: an observer of the engine's last releases on DCLF's own threads. Dropping an engine
+	 * object's last reference runs its destructors, which belong on the engine's threads (a node's takes its collision object out of the
+	 * Havok world); the scene lane and the pool hand their references back instead (the retirement chain, EngineReleases,
+	 * batchesReleased). With the switch, NiRefObject::DeleteThis (AE 0x140d27520: the refcount-zero path of every class that keeps the
+	 * base's) is replaced by the same call with a count: a release on the scene lane (EngineReadWindow::sceneWork) or another thread of
+	 * DCLF's executor (MarkThread) is counted with the object's class name (its RTTI) and reported (LANE ENGINE RELEASE). Counted only.
+	 */
+	class ReleaseGuard
+	{
+	public:
+		/** @brief Render thread, at install: patches DeleteThis under the switch, once, its bytes checked first. */
+		static void Install();
+		/** @brief On each of DCLF's executor threads, at its start (SceneScheduler): a_kind 1 the scene lane, 2 the coordinator or a pool worker. */
+		static void MarkThread(std::uint8_t a_kind) { dclfThread = a_kind; }
+		/** @brief Since the last report, or empty while not installed. */
+		static std::string Report();
+
+	private:
+		static void DeleteThis(void* a_object);
+		static void Note(void* a_object);
+
+		static inline thread_local std::uint8_t dclfThread = 0;
+		static inline bool installed = false;
+		static inline std::atomic<std::uint64_t> laneReleases{ 0 }, poolReleases{ 0 }, unnamed{ 0 };
+		static inline std::atomic<const char*> first{ nullptr }, last{ nullptr };
+	};
 }

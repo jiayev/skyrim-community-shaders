@@ -198,40 +198,47 @@ namespace DCLF
 		return witness;
 	}
 
-	bool PrimaryCull::MembershipPass(const RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out)
+	PrimaryCull::Membership PrimaryCull::MembershipPass(const RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, const MembershipDerived& a_cached)
 	{
+		Membership answer;
+		answer.derived = a_cached;
+		answer.fail = 2;  // not lighting (SyntheticPass's index)
 		const auto* lighting = SceneCapture::LeafView::Lighting(a_leaf.property);
 		if (!lighting)
-			return false;
-		auto& cached = derivedCache[a_geometry];
+			return answer;
 		const std::uint8_t fadeState = FadeStateOf(lighting);
-		if (cached.property != lighting->key || cached.material != lighting->material || cached.flags != lighting->flags || cached.fadeState != fadeState) {
+		if (a_cached.property != lighting->key || a_cached.material != lighting->material || a_cached.flags != lighting->flags || a_cached.fadeState != fadeState) {
 			LightingDescriptors descriptors;
 			const auto reason = DeriveLightingDescriptors(*lighting, a_leaf, nullptr, descriptors);
-			cached = { lighting->key, lighting->material, lighting->flags, fadeState, reason == Ineligible::None ? descriptors.derivedPass : kNotDerived };
+			answer.derived = { lighting->key, lighting->material, lighting->flags, fadeState, reason == Ineligible::None ? descriptors.derivedPass : kNotDerived };
 		}
-		if (!SyntheticPass(*a_geometry, a_leaf, cached.derivedPass, a_out, true))
-			return false;
-		a_out.resident = true;
-		return true;
+		answer.ok = SyntheticPass(*a_geometry, a_leaf, answer.derived.derivedPass, answer.pass, true);
+		// The reason is this thread's, written by the synthetic pass just made (T6b3e: taken here, before anything else runs on it).
+		answer.fail = LastSyntheticFail();
+		if (answer.ok)
+			answer.pass.resident = true;
+		return answer;
 	}
 
-	bool PrimaryCull::MembershipLayerPass(const RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out)
+	PrimaryCull::Membership PrimaryCull::MembershipLayerPass(const RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, const MembershipDerived& a_cached)
 	{
+		Membership answer;
+		answer.derived = a_cached;
+		answer.fail = 2;  // not lighting (SyntheticPass's index)
 		const auto* layer = SceneCapture::LeafView::Lighting(a_leaf.layer);
 		if (!layer)
-			return false;
-		auto& cached = layerDerivedCache[a_geometry];
+			return answer;
 		const std::uint8_t fadeState = FadeStateOf(layer);
-		if (cached.property != layer->key || cached.material != layer->material || cached.flags != layer->flags || cached.fadeState != fadeState) {
+		if (a_cached.property != layer->key || a_cached.material != layer->material || a_cached.flags != layer->flags || a_cached.fadeState != fadeState) {
 			LightingDescriptors descriptors;
 			const auto reason = DeriveLightingDescriptors(*layer, a_leaf, nullptr, descriptors, true);
-			cached = { layer->key, layer->material, layer->flags, fadeState, reason == Ineligible::None ? descriptors.derivedPass : kNotDerived };
+			answer.derived = { layer->key, layer->material, layer->flags, fadeState, reason == Ineligible::None ? descriptors.derivedPass : kNotDerived };
 		}
-		if (!SyntheticPass(*a_geometry, a_leaf, cached.derivedPass, a_out, true, layer))
-			return false;
-		a_out.resident = true;
-		return true;
+		answer.ok = SyntheticPass(*a_geometry, a_leaf, answer.derived.derivedPass, answer.pass, true, layer);
+		answer.fail = LastSyntheticFail();
+		if (answer.ok)
+			answer.pass.resident = true;
+		return answer;
 	}
 
 	void PrimaryCull::RefreshLive(std::uint32_t a_e)
@@ -1264,23 +1271,8 @@ namespace DCLF
 				s.notSettled / applied, s.notAdmitted / applied, s.admittedNow / applied, s.members / applied, s.unbound / applied,
 				s.undrawable / applied, s.hiddenSkipped / applied, s.excluded / applied,
 				s.engineMembers / applied, s.switchStale / applied, s.unselected / applied, s.liveAll, s.liveEntries, s.prepareTicks * toMs / applied, s.afterTicks * toMs / applied);
-			{
-				const auto r = SceneStore::Get().TakeResidentStats();
-				const double rf = std::max<double>(static_cast<double>(r.frames), 1.0);
-				logger::info("[DCLF] scene membership: {:.0f} objects bound a frame ({} frames); {} records queued, {} joined, {} failed ({} the engine's pass, {} no record, {} a frame verdict, {} material or extras; {} waited for a material record, {} served, {} stale), {} rewritten ({} kept their binding), {} released, {} layers or bases unpaired; {} registrations of eligible objects not bound{}{}",
-					r.resident / rf, r.frames, r.membershipQueued, r.joined, r.failed, r.failedBy[0], r.failedBy[1], r.failedBy[2], r.failedBy[3], r.materialWaits, r.materialsServed, r.materialsStale, r.rewritten, r.membershipKept, r.released,
-					r.layerUnpaired, r.registeredUnbound, r.registeredUnboundFirst.empty() ? "" : ", first ", r.registeredUnboundFirst);
-				// The capture drain is an observer (T6b2c step 8): the registrations above are counted only on the frames it observed.
-				if (r.registrationFrames)
-					logger::info("[DCLF] registration parity (the capture drain, an observer): {} frames observed, {} main-camera registrations checked, {} of eligible objects DCLF has not bound, {} Lighting passes of another shader{}",
-						r.registrationFrames, r.registrationsChecked, r.registeredUnbound, r.lightingShaderDiffers,
-						r.lightingShaderDiffers ? " <- LIGHTING SHADER" : (r.registeredUnbound ? "" : " <- OK"));
-				else
-					logger::info("[DCLF] registration parity: not observed (CS_DCLF_PERSISTENT_PARITY off); the normal path reads no registration");
-				if (r.parityChecks)
-					logger::info("[DCLF] resident parity: {} checks, {} records compared, {} passes differ, {} records differ ({} not compared: the root fading, leaving at the next decode){}",
-						r.parityChecks, r.parityChecked, r.parityPass, r.parityRecord, r.parityPending, r.parityPass || r.parityRecord ? " <- RESIDENT PARITY" : " <- OK");
-			}
+			// The scene membership, registration and resident parity lines are the coordinator's (T6b3d: SceneStore::ReportCoordinator, from
+			// its pass: the joins' statistics are its own).
 			ReportSceneLists(s.filterChecked, s.filterMissed);
 			if (TreeAnimation::Installed() && SwitchEnabled(Switch::PersistentParity))
 				TreeAnimation::CheckParity();

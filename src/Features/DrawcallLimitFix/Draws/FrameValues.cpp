@@ -724,7 +724,13 @@ namespace DCLF
 		host->SetFrameWaitValue(seq);
 		s.kicked = true;
 		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), PublishedSceneExecutor::Preparation, org::async::TaskDispatch::Cpu,
-				"frame values", [&s, job = std::move(job)](const auto&) { s.Run(job); }))
+				"frame values", [&s, job = std::move(job)](const auto&) mutable {
+					s.Run(job);
+					// T6b3e: the shading items hold their properties (ShadingItem::property): handed to the render thread when done with
+					// (EngineReleases, at Present), never dropped with the job on this worker.
+					for (auto& item : job.shadingItems)
+						EngineReleases::Push(RE::NiPointer<RE::NiRefObject>(std::move(item.property)));
+				}))
 			stl::report_and_fail("Drawcall Limit Fix: the frame values' producer was refused by DCLF's executor");
 		return true;
 	}

@@ -270,6 +270,11 @@ namespace DCLF
 			*frameOwners = payload->bindingOwners;
 			if (ahead)
 				frameOwners->push_back(ahead);
+			// T6b3b: the adopted snapshot whole (its versions, its draws, what they embed), until this execution retires: released on ORG's
+			// host thread through the cleanup queue, never before the GPU is done with the frame (the builder's drop of a replaced one is a
+			// CPU drop alone).
+			if (impl->adoptedSnapshot)
+				frameOwners->push_back(impl->adoptedSnapshot);
 			impl->CommitMainPayload(capture, blocks, in, *payload, resources, store, stats, *frameOwners, revision);
 		}, frameOwners);
 		impl->committedPayload[jobIndex] = committed;
@@ -368,6 +373,8 @@ namespace DCLF
 		post->rows = postedRows;
 		post->fitSerial = postedFitSerial;
 		aheadSlot.Post(std::move(post));
+		// T6b3d: a frame input of the coordinator's: its pump woken (folded with the frame start's other posts).
+		WakeScenePass(SceneWake::FrameInput);
 	}
 
 	void IndirectDraws::TakeAheadContext()
@@ -600,22 +607,58 @@ namespace DCLF
 		work->light = store.CoordinatorLightCandidates();
 		work->aheadNumber = s.aheadKicked.fetch_add(1, std::memory_order_acq_rel) + 1;
 		// Latest wins: one the builder has not taken yet is replaced (dropped here, on the coordinator, as a returned publication is).
+		// T6b3d: the builder takes the newest once idle (one build in flight), so the publications made during a build coalesce here.
 		s.snapshotWorkSlot.Post(std::move(work));
 		(void)s.SnapshotPump();
 		WakeSnapshotBuilder();
 	}
 
-	void IndirectDraws::Impl::BuildSnapshotDraws()
+	std::uint64_t IndirectDraws::Impl::NamedVersionAddress(const VersionSet* a_versions, const Versioned& a_buffer)
+	{
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (!host || !a_buffer)
+			return 0;
+		auto version = a_versions ? a_versions->Find(*a_buffer) : nullptr;
+		if (!version)
+			version = a_buffer->Current();
+		if (!version || !version->buffer)
+			return 0;
+		auto device = host->GetDesc().device;
+		return device.GetBufferDeviceAddress({ version->buffer->GetAPIResource().GetHandle(), 0 });
+	}
+
+	bool IndirectDraws::Impl::DrawsEmbedFacePositions(const DrawPublication& a_draws, std::uint64_t a_address)
+	{
+		const auto embeds = [a_address](std::uint64_t a_embedded) { return !a_embedded || a_embedded == a_address; };
+		for (const auto& payload : a_draws.payloads)
+			if (payload && !embeds(payload->inputs.addresses.facePositions))
+				return false;
+		return !a_draws.shadow || embeds(a_draws.shadow->inputs.addresses.facePositions);
+	}
+
+	void IndirectDraws::Impl::BuildSnapshotDraws(const VersionSet* a_versions)
 	{
 		auto& b = snapshotBuilder;
 		auto& work = *b.work;
 		const auto start = std::chrono::steady_clock::now();
 		const auto& publication = *work.publication;
+		// T6b3b (an intermittent device loss: a vertex shader reading face positions from a freed version): the draws embed the face positions'
+		// address, and a snapshot's draws must embed the version its revision names - the one its adoption makes current - never the one
+		// the frame's context had when it was posted (a ready growth's version replaces it at that adoption, and the old one is released
+		// once its last holder goes). Taken from the sealed set, so draws and revision are one consistent build.
+		AheadContext context = work.context;
+		if (a_versions) {
+			for (const std::size_t j : { kAsyncZPrepass, kAsyncColour })
+				if (auto& addresses = context.inputs[j].addresses; context.build[j] && addresses.facePositions && context.target && context.target->scene)
+					addresses.facePositions = NamedVersionAddress(a_versions, context.target->scene->facePositions);
+			if (auto& addresses = context.shadowInputs.addresses; context.shadow && addresses.facePositions && context.shadowTarget && context.shadowTarget->scene)
+				addresses.facePositions = NamedVersionAddress(a_versions, context.shadowTarget->scene->facePositions);
+		}
 		std::shared_ptr<const DrawPublication> built;
 		aheadRunning.store(true, std::memory_order_release);
 		if (publication.tables && publication.lookups) {
 			try {
-				built = RunAhead(publication.tables, work.context, *publication.lookups, publication.tablesGeneration, work.frame, work.sun, work.light);
+				built = RunAhead(publication.tables, context, *publication.lookups, publication.tablesGeneration, work.frame, work.sun, work.light);
 			} catch (const std::exception& e) {
 				static std::atomic<std::uint32_t> logged{ 0 };
 				if (logged++ < 4)

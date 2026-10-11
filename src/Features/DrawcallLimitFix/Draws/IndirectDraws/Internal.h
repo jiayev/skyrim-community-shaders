@@ -4296,10 +4296,9 @@ namespace DCLF
 			enum class Stage : std::uint8_t
 			{
 				Idle,        // a snapshot of work stands (or none yet): made again when the frame's inputs move
-				Ahead,       // a new work item: its draws to build
-				Make,        // its revision to make (again)
+				Make,        // its revision to make (again), then its draws for the versions the revision names
 				Waiting,     // made, none sealed (a growth or a build pending): made again when woken
-				Recordings,  // sealed: its recordings awaited (the assembler's completion wakes the builder)
+				Recordings,  // sealed, its draws built: its recordings awaited (the assembler's completion wakes the builder)
 			};
 			Stage stage = Stage::Idle;
 			std::unique_ptr<SnapshotWork> work;
@@ -4330,16 +4329,37 @@ namespace DCLF
 		std::uint64_t snapshotsAdopted = 0, snapshotFramesKept = 0;
 		std::array<std::uint64_t, kStaleKinds> snapshotsStale{};
 		std::vector<std::uint32_t> adoptionLatency;
+		// The guard (DecideCoverage, unconditional): frames whose adopted snapshot's draws embed a face positions address that is not
+		// the current version's (withdrawn, <- STALE DRAWS; 0 by construction: BuildSnapshotDraws). And from a growth's adoption (its
+		// frame, ~0u: none outstanding) to the first frame whose draws embed the versions current then, in frames.
+		std::uint64_t staleDraws = 0;
+		std::uint32_t growthAdoptedFrame = ~0u;
+		std::vector<std::uint32_t> growthToDraws;
+		// T6b3d: from the oldest event its publication was the first to carry (ScenePublication::eventNs, eventFrame) to its adoption,
+		// ms and the render thread's frames (the frame's; the report's).
+		std::vector<double> eventAdoptionMs;
+		std::vector<std::uint32_t> eventAdoptionFrames;
 		/** @brief The snapshot builder's pump (configured once, never destroyed: a function-local static). */
 		org::async::SerializedTaskPump& SnapshotPump();
 		/** @brief The builder's pass (SnapshotPump's drain): see SnapshotBuilder. */
 		void SnapshotPass();
-		/** @brief The builder: the work item's draws, built ahead (RunAhead), and the builds ahead done up to its number. */
-		void BuildSnapshotDraws();
+		/**
+		 * @brief The builder: the work item's draws, built ahead (RunAhead), and the builds ahead done up to its number. Every address
+		 * they embed of a versioned buffer is of the version a_versions names (the revision sealed for them; none: the context's, for a
+		 * snapshot without a revision): the face positions, the only one (the rows' tables, the objects and extras are the payload
+		 * ring's, the frame's own; the constants buffers are the resources', never versioned).
+		 */
+		void BuildSnapshotDraws(const VersionSet* a_versions);
+		/** @brief The device address of the version of a_buffer a_versions names (its current one where it names none, or without a set). */
+		static std::uint64_t NamedVersionAddress(const VersionSet* a_versions, const Versioned& a_buffer);
+		/** @brief Whether a_draws embed the face positions at a_address wherever they embed them at all (0 in a payload: none embedded). */
+		static bool DrawsEmbedFacePositions(const DrawPublication& a_draws, std::uint64_t a_address);
 		/** @brief The builder: the snapshot of its work item, draws and the completed revision a_revision, posted for the frame. */
 		void PostSnapshot(org::async::RevisionAssembler::Lease a_revision);
 		/** @brief The builder's report lines (its counters reset): the revisions, the growths, the shapes made, the draw bound. */
 		std::string ProducerReport();
+		/** @brief The builder's report lines of the stores its builds write (main rows, object records, shadow state, extras, geometry, exclusions), reset. */
+		std::string StoresReport();
 		/** @brief The frame's report lines of the snapshots, and the builder's last. */
 		std::string SnapshotReport();
 		/** @brief The builds' task: a publication's stream views and main payloads (on the pool, in order). */
@@ -4511,7 +4531,21 @@ namespace DCLF
 		// and the forward programs and pipelines of the LOD they draw (PrepareReflection); faces captured since the last report.
 		struct ReflectionState
 		{
-			ForwardTargets targets;
+			ForwardTargets targets;  // the render thread's (written at every face capture)
+			// The same, published for the scene lane (ReflectionDrawable, ReflectionSlotReady: its set commit), which never reads `targets`:
+			// the colour format in the low 32 bits, the depth's in the high (PublishTargets, LaneTargets).
+			std::atomic<std::uint64_t> laneTargets{ 0 };
+			void PublishTargets()
+			{
+				const std::uint64_t packed = std::uint64_t(static_cast<std::uint32_t>(targets.colour)) | (std::uint64_t(static_cast<std::uint32_t>(targets.depth)) << 32);
+				if (laneTargets.load(std::memory_order_relaxed) != packed)
+					laneTargets.store(packed, std::memory_order_release);
+			}
+			ForwardTargets LaneTargets() const
+			{
+				const std::uint64_t packed = laneTargets.load(std::memory_order_acquire);
+				return { static_cast<DXGI_FORMAT>(packed & 0xFFFFFFFFu), static_cast<DXGI_FORMAT>(packed >> 32) };
+			}
 			std::uint32_t lodSlots = 0, programsReady = 0, pipelinesReady = 0;
 			bool treeReady = false;
 			// Per pipeline slot, its forward pipeline when it is a LOD slot whose pipeline is built (PrepareReflection): what the faces'
@@ -4922,6 +4956,8 @@ namespace DCLF
 			// The builder's, since the last report: drafts sealed, version sets made; per epoch the shapes that changed, the recordings
 			// requested, refused (no async epochs), recorded (a request whose every shape is recorded) and failed, and the shapes recorded.
 			std::uint64_t sealed = 0, versionSets = 0, sealFailures = 0;
+			// The versions the last revision sealed names (the builder's): what its snapshot's draws embed (BuildSnapshotDraws).
+			std::shared_ptr<const VersionSet> sealedVersions;
 			struct Epoch
 			{
 				std::uint64_t changed = 0, requested = 0, refused = 0;

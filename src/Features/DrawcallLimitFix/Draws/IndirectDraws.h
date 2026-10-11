@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -84,15 +85,19 @@ namespace DCLF
 		 */
 		void DecideShadowCoverage();
 		/**
-		 * @brief Render thread, SceneStore::CommitSet: whether the object is ready for a shadow phase (SetPhaseOfMode's): its Utility
-		 * pipeline under every rasterizer state of the catalog in each of the phase's modes of the capability, and an alpha-tested
+		 * @brief The scene lane, SceneStore::CommitSet: whether the object is ready for a shadow phase (SetPhaseOfMode's): its Utility
+		 * pipeline under every rasterizer state of each of the phase's modes a_lookups' shadow pipelines were resolved for
+		 * (Lookups::shadowInputs, the frame's start's post: never the render thread's readyModes/readyStates), and an alpha-tested
 		 * caster's diffuse imported. Part of the set's readiness (SceneSet.h). a_tables: the commit's SceneStore::Tables
 		 * (the coordinator's: the frame's view may hold another object in the slot); a_lookups: the coordinator's (the scene lane's).
 		 */
 		/** a_why (optional), when not: SceneStore::SetStats::waitingBy's index (7 shadow pipeline, 12 past the scene buffers, 13 the alpha
 		 * test's diffuse not imported). */
 		bool PhaseReady(const void* a_tables, const Lookups& a_lookups, std::uint32_t a_slot, std::uint8_t a_phase, std::uint32_t* a_why = nullptr) const;
-		/** @brief Changes when the capability's modes or the catalog's rasterizer states that PhaseReady reads change: at setup. */
+		/**
+		 * @brief Render thread: changes when the capability's modes or the catalog's rasterizer states change (at setup). The set commit
+		 * reads its lookups' Lookups::shadowInputsSerial instead (the posted inputs PhaseReady judges by).
+		 */
 		std::uint64_t ShadowReadinessSerial() const;
 		/**
 		 * @brief SceneStore::CommitSet: whether the object is within the scene buffers (and, for the main builds, the material and
@@ -161,6 +166,11 @@ namespace DCLF
 		 */
 		void PostSnapshotWork(std::shared_ptr<const void> a_publication);
 		/**
+		 * @brief Render thread, the frame's start (T6b3d: SceneStore::HandOverAtFrameStart, a publication installed): the oldest event it
+		 * and the publications skipped past carried, to now (ms, and the render thread's frames), for the snapshot report.
+		 */
+		void NoteEventAdoption(double a_ms, std::uint32_t a_frames);
+		/**
 		 * @brief Render thread, the frame's start, after the build point (T6b3b): the newest snapshot the builder posted, adopted whole -
 		 * its revision's growths and versions, its revision the frame's, its draws the frame's - unless it is stale for what it could not
 		 * know ahead (the graph's build its recordings were made on, the targets, the shadow format, its commit's toggles older than
@@ -219,6 +229,12 @@ namespace DCLF
 		std::uint32_t ReflectionRootsOwned(bool a_plain);
 		void PrepareReflection();
 		bool ReflectionDrawable() const;
+		/**
+		 * @brief T6b3e, the scene lane's commit: whether a_tables' slot a_slot's faces' forward pipeline is in a_catalog (the lane's lookups'
+		 * catalog, which its publication carries and the revision resolves the faces' pipelines from) for the faces' targets: the reflection
+		 * phase's readiness, read from nothing the render thread writes per frame.
+		 */
+		bool ReflectionSlotReady(const void* a_tables, const PipelineCatalog* a_catalog, std::uint32_t a_slot) const;
 		void ExecuteReflection();
 		std::string ReflectionReport();
 		/**
@@ -324,7 +340,9 @@ namespace DCLF
 		std::unique_ptr<Impl> impl;
 		Stats stats;
 		ShadowStats shadowStats;
-		bool failed = false;
+		// Set by the render thread (once, when DCLF cannot draw), read by the scene lane too (ShadowCapability, ReflectionDrawable,
+		// ResolveLookups, RevisionClaims): atomic.
+		std::atomic<bool> failed{ false };
 	};
 
 }

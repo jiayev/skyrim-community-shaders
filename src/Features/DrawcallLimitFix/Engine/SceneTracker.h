@@ -46,6 +46,18 @@ namespace DCLF
 			// the writer's thread. The event's, not the update's: the mirror keeps copies of updates, whose last release would be the
 			// scene work's. Released with the batch, on the render thread.
 			std::vector<RE::NiPointer<RE::NiRefObject>> pins;
+			// T6b3d: the render thread's captures at the frame's start (the category capture's portal roots, the mirror's requests:
+			// PushCaptured), for the mirror alone - in order with the hooks' events, so a capture is never applied over a newer write -
+			// and never a tracking attach or detach.
+			bool mirrorOnly = false;
+			// T6b3d: a mirror request's capture (SceneStore::CaptureMirrorRequests): only the records the mirror lacks are taken from it, as
+			// the capture from the highest ancestor the mirror lacked did before (a record the mirror holds is the events' to keep: the
+			// frame's start can catch an ancestor in a state the engine sets and undoes within the frame, with no event).
+			bool mirrorFill = false;
+			// T6b3d: when it was pushed (steady clock, ns) and the render thread's frame then (SceneCapture::Frame): the event-to-
+			// publication and event-to-adoption latencies.
+			std::uint64_t stampNs = 0;
+			std::uint32_t stampFrame = 0;
 		};
 
 		static SceneTracker& Get();
@@ -69,6 +81,11 @@ namespace DCLF
 		/** @brief A hook's values (after its write, on the writer's thread): one stack with the attaches and detaches, so an address a
 		 * detach let go and an attach took again is never given an earlier object's values. */
 		void PushUpdate(SceneCapture::Update&& a_update, std::vector<RE::NiPointer<RE::NiRefObject>>&& a_pins = {});
+		/**
+		 * @brief T6b3d, render thread: a capture of its own (the frame's start: the category capture's portal roots, the mirror's
+		 * requests) onto the same stack, marked mirror-only (Event::mirrorOnly). The stack owns a_event from here.
+		 */
+		void PushCaptured(Event* a_event, bool a_fillOnly = false);
 
 		static void CollectGeometry(RE::NiAVObject* a_root, std::vector<RE::BSGeometry*>& a_out, std::vector<const void*>* a_nodes = nullptr);
 

@@ -9,6 +9,7 @@
 #	include "Features/DrawcallLimitFix/Engine/EngineStates.h"
 #	include "Features/DrawcallLimitFix/Common/EventQueue.h"
 #	include "Features/DrawcallLimitFix/Common/LatestSlot.h"
+#	include "Features/DrawcallLimitFix/Common/SceneWake.h"
 #	include "Features/DrawcallLimitFix/Common/Switches.h"
 
 #	include "RenderGraph/RenderGraphRuntime.h"
@@ -2322,6 +2323,8 @@ namespace DCLF
 		}
 		catalog->forwardTargets = l.input ? l.input->forwardTargets : ForwardTargets{};
 		catalogSlot.Post(std::move(catalog));
+		// T6b3d: the scene lane takes it at its next pass (ResolveLookups): a new catalog wakes the scene pump.
+		WakeScenePass(SceneWake::Catalog);
 		l.dirty = false;
 	}
 

@@ -204,8 +204,20 @@ namespace DCLF
 		if (ConstantEvaluator::Get().GetLightingShader() && ShaderPrograms::Get().Enabled())
 			ResolvePipelineLookups(tables, a_catalog, a_lookups);
 		// The shadow pipelines for the views the frame's start last posted, once the walk has classified the casters.
-		const auto inputs = impl->shadowLookupInputs.load(std::memory_order_acquire);
-		if (!inputs || !inputs->enabled || tables.objects.empty() || tables.shadowTechnique.size() != tables.objects.size())
+		auto inputs = impl->shadowLookupInputs.load(std::memory_order_acquire);
+		if (inputs && !inputs->enabled)
+			inputs.reset();
+		// The inputs the lookups' shadow pipelines are for, held by the lookups (the set commit's shadow readiness reads them, PhaseReady):
+		// replaced together with the resolution below, so readiness and pipelines always agree. The held one is alive, so the pointer
+		// compare is exact.
+		if (a_lookups.shadowInputs.get() != static_cast<const void*>(inputs.get())) {
+			a_lookups.shadowInputs = inputs;
+			// Unique across lookups instances (a reset's new instance never repeats a value the commit last saw).
+			static std::atomic<std::uint64_t> shadowInputsSerials{ 0 };
+			a_lookups.shadowInputsSerial = shadowInputsSerials.fetch_add(1, std::memory_order_relaxed) + 1;
+			++a_lookups.changes;
+		}
+		if (!inputs || tables.objects.empty() || tables.shadowTechnique.size() != tables.objects.size())
 			return;
 		ResolveShadowLookups(tables, a_catalog, *inputs, a_state, a_lookups);
 	}

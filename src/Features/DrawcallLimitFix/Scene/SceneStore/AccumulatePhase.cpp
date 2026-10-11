@@ -1,5 +1,8 @@
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Common/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
+
+#include <cassert>
 
 #include "Features/ExtendedTranslucency.h"
 #include "Features/SubsurfaceScattering.h"
@@ -131,7 +134,7 @@ namespace DCLF
 			evaluator.SetLightingShader(shader);
 	}
 
-	void SceneStore::DrainCapture()
+	void SceneStore::DrainCapture(RegistrationDrain& a_drain)
 	{
 		auto& capture = PassCapture::Get();
 		if (!capture.Installed())
@@ -141,21 +144,28 @@ namespace DCLF
 		// membership and the mirror are; T6b2c step 8): what follows is the parity's (CS_DCLF_PERSISTENT_PARITY) and the decal order
 		// probe's, and nothing else reads them.
 		const auto entries = capture.Drain();
-		// The reflection residue's geometries (T6), classified by the accumulate work (ClassifyResidue). Its watch is its own gate (the
-		// sun views' parity or the timeline: IndirectDraws::ReflectionRootsOwned); taken every frame so it never accumulates.
-		auto residue = capture.TakeReflectionResidueGeometries();
-		capturedResidue.insert(capturedResidue.end(), residue.begin(), residue.end());
+		// The reflection residue's geometries (T6), classified by the next scene pass (ClassifyResidue). Its watch is its own gate (the
+		// sun views' parity or the timeline: IndirectDraws::ReflectionRootsOwned); taken every frame so it never accumulates. Their names
+		// are read here, where the frame registered them (T6b3c: the pass reading them runs past this frame's Present).
+		const auto residue = capture.TakeReflectionResidueGeometries();
+		a_drain.residue.reserve(residue.size());
+		for (const auto* geometry : residue) {
+			const auto* parent = geometry ? geometry->parent : nullptr;
+			a_drain.residue.push_back({ geometry, geometry ? fmt::format("'{}' under '{}' ({})", geometry->name.c_str() ? geometry->name.c_str() : "",
+															 parent && parent->name.c_str() ? parent->name.c_str() : "",
+															 geometry->GetRTTI() && geometry->GetRTTI()->name ? geometry->GetRTTI()->name : "?") :
+														 std::string() });
+		}
 		frameLightingPass = nullptr;
-		capturedRegistrations.clear();
-		registrationsObserved = SwitchEnabled(Switch::PersistentParity);
+		a_drain.observed = SwitchEnabled(Switch::PersistentParity);
 		const bool probe = SwitchValue(Switch::DecalOrderProbe) == "1";
-		if ((!registrationsObserved && !probe) || !RefreshMainBatchRenderers()) {
-			registrationsObserved = false;
+		if ((!a_drain.observed && !probe) || !RefreshMainBatchRenderers()) {
+			a_drain.observed = false;
 			return;
 		}
 		if (probe)
 			Scene::ProbeDecalOrder(entries, mainBatchRenderers);
-		if (!registrationsObserved)
+		if (!a_drain.observed)
 			return;
 		// The parity's: any Lighting pass the frame registered names the engine's instance DCLF evaluates with (CaptureLightingShader).
 		auto& evaluator = ConstantEvaluator::Get();
@@ -176,18 +186,32 @@ namespace DCLF
 				break;
 			}
 		// Eligible objects DCLF has not bound that the engine registered: a scene event DCLF missed (a record not written
-		// again, a verdict not taken again). The tracked set is the coordinator's: checked by the accumulate work (CheckRegistrations).
+		// again, a verdict not taken again). The tracked set is the coordinator's: checked by the next scene pass (CheckRegistrations).
 		for (const auto& entry : entries)
 			if (entry.geometry && mainBatchRenderers.contains(entry.batch) && !entry.fading)
-				capturedRegistrations.push_back({ entry.geometry, entry.hint });
+				a_drain.registrations.push_back({ entry.geometry, entry.hint });
+	}
+
+	void SceneStore::PostRegistrationDrain(std::shared_ptr<RegistrationDrain> a_drain)
+	{
+		// Latest wins for the registrations (the newest frame's alone are checked); a post no scene pass took gives its residue to this
+		// one, so none is lost or classified twice. The take between this exchange and the store finds nothing and takes it next pass.
+		if (const auto unread = registrationDrainPosted.exchange(nullptr, std::memory_order_acq_rel))
+			a_drain->residue.insert(a_drain->residue.begin(), unread->residue.begin(), unread->residue.end());
+		registrationDrainPosted.store(std::shared_ptr<const RegistrationDrain>(std::move(a_drain)), std::memory_order_release);
+		// T6b3d: no wake: the frame's next pass takes it (a mid-frame post the pass does not need sooner).
 	}
 
 	void SceneStore::ClassifyResidue()
 	{
 		// What the engine registered into the reflection faces under the LOD land and objects roots that is no reflection member:
-		// untracked, tracked but ineligible (by reason), eligible but not bound, or bound but not in the reflection phase.
+		// untracked, tracked but ineligible (by reason), eligible but not bound, or bound but not in the reflection phase. The drain's
+		// (TakeAccumulateInputs: the frames since the last pass took one), by pointer and the names the render thread read (T6b3c: a
+		// geometry the engine released since is untracked here, and nothing of it is dereferenced).
+		if (!registrationDrain)
+			return;
 		std::scoped_lock lock(residueClassesLock);
-		for (const auto* geometry : std::exchange(capturedResidue, {})) {
+		for (const auto& [geometry, names] : registrationDrain->residue) {
 			const auto it = tracked.find(const_cast<RE::BSGeometry*>(geometry));
 			std::size_t kind;
 			if (it == tracked.end())
@@ -206,16 +230,13 @@ namespace DCLF
 					++residueClasses.persistent;
 			}
 			if (TimelineEnabled())
-				StageResidue(geometry, it == tracked.end() ? nullptr : &it->second);
-			if (residueClasses.first[kind].empty() && it != tracked.end()) {
-				const auto* parent = geometry->parent;
-				residueClasses.first[kind] = fmt::format("'{}' under '{}' ({})", geometry->name.c_str() ? geometry->name.c_str() : "",
-					parent && parent->name.c_str() ? parent->name.c_str() : "", geometry->GetRTTI() && geometry->GetRTTI()->name ? geometry->GetRTTI()->name : "?");
-			}
+				StageResidue(geometry, names, it == tracked.end() ? nullptr : &it->second);
+			if (residueClasses.first[kind].empty() && it != tracked.end())
+				residueClasses.first[kind] = names;
 		}
 	}
 
-	void SceneStore::StageResidue(const RE::BSGeometry* a_geometry, const Tracked* a_entry)
+	void SceneStore::StageResidue(const RE::BSGeometry* a_geometry, const std::string& a_names, const Tracked* a_entry)
 	{
 		// Under residueClassesLock (ClassifyResidue's).
 		auto& classes = residueClasses;
@@ -250,9 +271,7 @@ namespace DCLF
 		}
 		++classes.stages[stage];
 		if (classes.stageFirst[stage].empty()) {
-			const auto* parent = a_geometry->parent;
-			classes.stageFirst[stage] = fmt::format("'{}' under '{}'{}", a_geometry->name.c_str() ? a_geometry->name.c_str() : "",
-				parent && parent->name.c_str() ? parent->name.c_str() : "",
+			classes.stageFirst[stage] = fmt::format("{}{}", a_names,
 				a_entry ? fmt::format(" (tracked {}, written {}, bound {}, joined {}, frame {})", a_entry->trackedFrame, a_entry->writtenFrame, a_entry->boundFrame,
 							  a_entry->memberFrame, sceneFrame) :
 						  std::string());
@@ -269,12 +288,13 @@ namespace DCLF
 	{
 		ClassifyResidue();
 		// The registration parity (T6b2c step 8): only while the render thread observed the frame's registrations (DrainCapture); the
-		// normal path reads none of them.
-		if (!registrationsObserved)
+		// normal path reads none of them. T6b3c: the newest frame's drain posted since the last pass (the frame before this pass's), judged
+		// against the residency this pass's walk left, before its joins: a record bound by the last pass counts as bound.
+		if (!registrationDrain || !registrationDrain->observed)
 			return;
 		++residentStats.registrationFrames;
-		residentStats.registrationsChecked += capturedRegistrations.size();
-		for (const auto& entry : capturedRegistrations) {
+		residentStats.registrationsChecked += registrationDrain->registrations.size();
+		for (const auto& entry : registrationDrain->registrations) {
 			const auto it = tracked.find(const_cast<RE::BSGeometry*>(entry.geometry));
 			if (it == tracked.end() || it->second.candidateReason != Ineligible::None || ResidentObject(FindObject(entry.geometry)))
 				continue;
@@ -344,12 +364,15 @@ namespace DCLF
 	{
 		ZoneScopedN("CS.DCLF.Accumulate.Inputs");
 		// The capture drained (always: its buffer is fixed-capacity, and the drain takes the frame's withholding counters); what the
-		// registrations say is the parity's alone (DrainCapture).
-		DrainCapture();
+		// registrations say is the parity's alone (DrainCapture). Posted for the next scene pass (T6b3c: the pass runs from the frame's
+		// start, so this frame's drain is the next pass's).
+		auto drain = std::make_shared<RegistrationDrain>();
+		DrainCapture(*drain);
+		PostRegistrationDrain(std::move(drain));
 		// CS_DCLF_PERSISTENT_PARITY: the owned members' light masks, read off the engine's light data after the registration jobs.
 		if (SwitchEnabled(Switch::PersistentParity))
 			PrimaryCull::Get().CheckLightMasks();
-		// The accumulate work's frame input: Light Limit Fix's room map, posted when its generation moves.
+		// The joins' frame input: Light Limit Fix's room map, posted when its generation moves.
 		PostRoomMap();
 	}
 
@@ -372,12 +395,14 @@ namespace DCLF
 		roomMapPosted.store(std::shared_ptr<const RoomMapInput>(std::move(input)), std::memory_order_release);
 		roomMapPostedGeneration = generation;
 		accumulateInputStats.roomMapsPosted.fetch_add(1, std::memory_order_relaxed);
+		// T6b3d: no wake: the frame's next pass takes it (a mid-frame post the pass does not need sooner).
 	}
 
 	void SceneStore::PostPipelineFrame(const GeometryPort::PipelineFrame& a_frame)
 	{
 		pipelineFramePosted.store(std::make_shared<const GeometryPort::PipelineFrame>(a_frame), std::memory_order_release);
 		accumulateInputStats.pipelineFramesPosted.fetch_add(1, std::memory_order_relaxed);
+		// T6b3d: no wake: the frame's next pass takes it (a mid-frame post the pass does not need sooner).
 	}
 
 	void SceneStore::TakeAccumulateInputs()
@@ -392,6 +417,8 @@ namespace DCLF
 			scenePipelineFrame = std::move(posted);
 			accumulateInputStats.pipelineFramesTaken.fetch_add(1, std::memory_order_relaxed);
 		}
+		// The capture's drain (T6b3c): none posted since the last pass leaves none, so no drain is checked twice.
+		registrationDrain = registrationDrainPosted.exchange(nullptr, std::memory_order_acq_rel);
 	}
 
 	void SceneStore::MakeNewPipelineConstants()
@@ -446,14 +473,14 @@ namespace DCLF
 	/**
 	 * @brief The accumulator half of the frame's render-thread work, at EarlyPrepass: the material part, a frame input and a parity
 	 * observer (T6b2c step 7). The records are the scene work's (RefreshMaterialRecords: the writers' captures, the frame components,
-	 * the texture transforms); the frame inputs and the other observers are PostAccumulateInputs' (step 8); the joins are the
-	 * accumulate work's, on the scene lane.
+	 * the texture transforms); the frame inputs and the other observers are PostAccumulateInputs' (step 8); the joins are the scene
+	 * pass's (T6b3c), on the scene lane.
 	 */
 	void SceneStore::PrepareAccumulatePhase()
 	{
 		ZoneScopedN("CS.DCLF.Accumulate.Prepare");
-		if (!sceneBuilt)
-			return;  // a load screen, or the feature installed mid-frame: nothing to patch
+		// T6b3c: no sceneBuilt test (the coordinator's, and the scene pass may be running): a request is answered whether or not a scene
+		// is built, and the queue is empty when no join ran.
 		// The frame input: the captures the joins asked for (a material no writer or attach captured lately), read where the engine
 		// reads its materials. The parity observer: the installed records against the engine's evaluation (CS_DCLF_PERSISTENT_PARITY).
 		ServeMaterialRequests();
@@ -474,37 +501,38 @@ namespace DCLF
 		});
 	}
 
-	void SceneStore::RunAccumulateWork(bool a_task)
+	template <class Result, class Evaluate, class Difference>
+	void SceneStore::EvaluateJoins(const char* a_what, std::size_t a_count, bool a_pool, std::vector<Result>& a_results, Evaluate&& a_evaluate, Difference&& a_difference)
 	{
-		inSceneTask = a_task;
-		holdPrimaryNotes = true;
-		holdLostMembers = true;
-		const auto workStart = std::chrono::steady_clock::now();
-		// T6b3a: the frame inputs (none newer than the scene pass took, while the kicks stay) and the leases given back.
-		TakeFrameInputs();
-		IndirectDraws::Get().TakeAheadContext();
-		++passSerial;
-		DropReturnedPublications();
-		RecycleRetired();
-		// The technique rows to this frame's sample (T6b2c), before the joins make new ones from it.
-		RefreshTechniqueRows();
-		// The frame inputs the render thread posted (T6b2c step 8): the room map the joins read, the pipeline frame the blocks are made from.
-		TakeAccumulateInputs();
-		BuildAccumulatePhase();
-		// The joins' new pipelines' PerGeometry blocks (T6b2c step 8: the coordinator's, from the posted pipeline frame), before the
-		// publication, which they make drawable.
-		MakeNewPipelineConstants();
-		// The joins' new material records asked for their bindings (T6b2c), and the answers since the frame's walk.
-		UpdateMaterialBindings();
-		// The joins' pipelines' masks, the walk's shadow textures, and the answers (T6b2c).
-		UpdateSharedBindings();
-		// The set applied and the tables published with it (step 6e E3), for the next frame's start to install.
-		PublishScene();
-		[[maybe_unused]] const double workMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - workStart).count();
-		TracyPlot("CS.DCLF.AccumulateWorkMs", workMs);
-		holdLostMembers = false;
-		holdPrimaryNotes = false;
-		inSceneTask = false;
+		// T6b3e: the joins' evaluations (no counters: they count nothing), by chunks of kFanoutGrain on the pool or here; each under a
+		// ShardScope (on the pool also the frame's globals and the scene work's flags).
+		a_results.clear();
+		a_results.resize(a_count);
+		auto evaluate = [&](std::vector<Result>& a_into, bool a_onPool) {
+			auto body = [&](std::size_t a_begin, std::size_t a_end) {
+				ShardScope scope(*this, a_onPool);
+				for (std::size_t i = a_begin; i < a_end; ++i)
+					a_evaluate(i, a_into[i]);
+			};
+			if (a_onPool) {
+				SceneScheduler::Executor().ParallelFor("CS.DCLF.Accumulate.Joins", a_count, kFanoutGrain, body);
+			} else {
+				for (std::size_t begin = 0; begin < a_count; begin += kFanoutGrain)
+					body(begin, std::min(a_count, begin + kFanoutGrain));
+			}
+		};
+		evaluate(a_results, a_pool);
+		// CS_DCLF_FANOUT_PARITY: evaluated again here, one after another, and compared field by field.
+		if (a_pool && SwitchEnabled(Switch::FanoutParity) && PassParityDue(11)) {
+			std::vector<Result> serial(a_count);
+			evaluate(serial, false);
+			auto& f = fanoutStats;
+			++f.parityRounds;
+			f.parityEntries += a_count;
+			for (std::size_t i = 0; i < a_count; ++i)
+				if (const char* field = a_difference(a_results[i], serial[i]); field && f.parityDiffers++ == 0)
+					f.parityFirst = fmt::format("{}, element {}: {}", a_what, i, field);
+		}
 	}
 
 	void SceneStore::BuildAccumulatePhase()
@@ -512,6 +540,8 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.Accumulate.Tables");
 		if (!sceneBuilt)
 			return;  // a load screen, or the feature installed mid-frame: nothing to patch
+		// T6b3e: the pass's snapshot of the toggles and Terrain Blending (BuildScenePhase took it), as the walk read them.
+		ShardScope passScope(*this, false);
 		PartTimer timer(stats.partMs, &stats.accumulatePartMs);
 		std::uint32_t fadingThisFrame = 0;
 		TracyCZoneN(captureZone, "CS.DCLF.Accumulate.Capture", true);
@@ -532,7 +562,7 @@ namespace DCLF
 		const std::uint32_t biasWitness = decalBiasMode[1] | (decalBiasMode[2] << 8) | (decalBiasMode[3] << 16);
 		const bool lightLimitFixLoaded = globals::features::lightLimitFix.loaded;
 		// CS_DCLF_PERSISTENT_PARITY's frames: the cached derivation is served and also recomputed, and the two compared.
-		const bool derivedProbe = SwitchEnabled(Switch::PersistentParity) && ParityDue(sceneFrame, 13);
+		const bool derivedProbe = SwitchEnabled(Switch::PersistentParity) && PassParityDue(13);
 		const bool derivationStats = SwitchEnabled(Switch::DeriveProbe);
 
 		// What this phase has anything to do with: the frame's membership joins (BindByMembership). Every other
@@ -555,56 +585,49 @@ namespace DCLF
 		timer.Add(BuildPart::PassLookup);
 		TracyCZoneEnd(orderZone);
 		TracyCZoneN(objectsZone, "CS.DCLF.Accumulate.Objects", true);
-		// One membership join: an entry's base record, or its layer's (Tracked::layerSlot, drawn from the layer property).
-		auto join = [&](RE::BSGeometry* geometry, Tracked* trackedEntry, const AccumulatedPass* accumulated, bool layer) {
+		// One membership join: an entry's base record, or its layer's (Tracked::layerSlot, drawn from the layer property). T6b3e: its
+		// evaluation (EvaluateJoin: the held property's check, the cache's witnesses, the classification, the key) before, on the pool
+		// for a burst; here, in order, what reads or writes the slots: the cache's slot half, the pipeline and material slots and records,
+		// the derivation's cache, the patch and the membership.
+		auto join = [&](const OrderEntry& a_entry, JoinResult& a_result) {
+			RE::BSGeometry* geometry = a_entry.geometry;
+			Tracked* trackedEntry = a_entry.tracked;
+			const AccumulatedPass* accumulated = a_entry.accumulated;
+			const bool layer = a_entry.layer;
 			timer.Add(BuildPart::LoopTail);
+			if (a_result.kind == JoinResult::Kind::Skip)
+				return;
 			// BindByMembership joins only records written this frame with a verdict of None, never a shadow-only one.
 			const std::uint32_t objectId = layer ? trackedEntry->layerSlot : trackedEntry->objectId;
 			auto& object = tables.objects[objectId];
-			const std::uint32_t geometrySlot = object.geometryIndex;
-
-			// The mirror's records (T6b1b), and the entry's held property (its reference: the template's, a material request's).
-			const auto leaf = mirror.Leaf(geometry);
-			const auto* propertyRecord = layer ? leaf.layer : leaf.property;
-			auto* property = trackedEntry->HeldProperty(layer);
-			if (!propertyRecord || !property || propertyRecord->key != property)
-				return;
-			auto* witnessProperty = property;
-			const auto* witnessMaterial = static_cast<const RE::BSShaderMaterial*>(propertyRecord->material);
-			const std::uint8_t fadeState = FadeStateOf(propertyRecord);
-			const bool alphaBelowOne = propertyRecord->materialAlpha < 1.0f;  // 1 without a material, or for any but a Lighting property
-
-			// The positive derivation, cached (Tracked::Derived): for an accumulated object whose
-			// witnesses all match and whose slots still carry the keys they were derived for, the
+			// The positive derivation, cached (Tracked::Derived): for an accumulated object whose witnesses all match (the evaluation's)
+			// and whose slots still carry the keys they were derived for (here: the joins before this one allocate and key slots), the
 			// classification and the whole derived section are skipped.
 			auto& derived = layer ? trackedEntry->layerDerived : trackedEntry->derived;
-			bool derivedHit = derived.valid && derived.generation == tablesGeneration &&
-			                  derived.geometrySlot == geometrySlot && derived.property == witnessProperty &&
-			                  derived.material == witnessMaterial && derived.fadeState == fadeState && derived.technique == accumulated->technique &&
-			                  derived.subPass == accumulated->subPass && derived.hint == accumulated->hint && derived.interior == interior &&
-			                  derived.alphaBelowOne == alphaBelowOne && derived.biasWitness == biasWitness;
-			if (derivedHit) {
-				derivedHit = derived.pipelineSlot < tables.pipelines.size() && tables.pipelineSlots.Alive(derived.pipelineSlot) &&
-				             tables.pipelines[derived.pipelineSlot] == derived.key &&
-				             derived.materialSlot < tables.materialSlotKey.size() && tables.materialSlots.Alive(derived.materialSlot) &&
-				             tables.materialSlotKey[derived.materialSlot] == std::pair{ derived.material, derived.descriptors.pass };
-			}
+			bool derivedHit = a_result.derivedWitness && derived.pipelineSlot < tables.pipelines.size() && tables.pipelineSlots.Alive(derived.pipelineSlot) &&
+			                  tables.pipelines[derived.pipelineSlot] == derived.key &&
+			                  derived.materialSlot < tables.materialSlotKey.size() && tables.materialSlots.Alive(derived.materialSlot) &&
+			                  tables.materialSlotKey[derived.materialSlot] == std::pair{ derived.material, derived.descriptors.pass };
+			// Its witnesses held but its slots are gone: classified as the join would have been (the evaluation again, here).
+			if (a_result.derivedWitness && !derivedHit && !a_result.classified)
+				EvaluateJoin(a_entry, true, a_result);
+			const auto& leaf = a_result.leaf;
+			auto* property = a_result.property;
+			auto* witnessProperty = property;
+			const auto* witnessMaterial = a_result.material;
+			const std::uint8_t fadeState = a_result.fadeState;
+			const bool alphaBelowOne = a_result.alphaBelowOne;
+			const std::uint32_t geometrySlot = a_result.geometrySlot;
 
 			LightingDescriptors descriptors;
-			Ineligible reason = Ineligible::None;
+			const Ineligible reason = a_result.reason;
 			if (derivedHit && !derivedProbe) {
 				descriptors = derived.descriptors;
 				++stats.derivedHits;
 			} else {
-				reason = layer ? ClassifyLayer(leaf, &descriptors, accumulated) : ClassifyStatic(leaf, &descriptors, accumulated);
+				descriptors = a_result.descriptors;
 			}
 			timer.Add(BuildPart::ClassifyStatic);
-			// Per frame whether or not the derivation was cached: hidden, part of an actor and fading are
-			// states of this frame, and the scene phase's verdict for them is the last classification's
-			// (for a static, the last event's). An object that has just been hidden must lose its bindings now,
-			// or DCLF keeps drawing what the engine has stopped drawing.
-			if (reason == Ineligible::None)
-				reason = ClassifyFrame(*trackedEntry, accumulated);
 			// The skin partitions are the walk's (Tables::skinPartitions): GetRenderPasses gives the main pass the same row, the
 			// fade node's LOD level.
 			// The histogram is the scene phase's, taken over the whole tracked set; where this phase reaches a
@@ -617,6 +640,7 @@ namespace DCLF
 				if (!layer) {
 					trackedEntry->accumulateReason = reason;
 					trackedEntry->accumulateReasonFrame = sceneFrame;
+					trackedEntry->accumulateReasonPass = passSerial;
 				}
 				// Eligible for a record but not for bindings: it stays native, which is what its scene record
 				// already says (kObjectNoBindings).
@@ -625,7 +649,8 @@ namespace DCLF
 			}
 			timer.Add(BuildPart::ClassifyFrame);
 
-			// Only computed when something will report them: this whole block exists to feed one log line.
+			// Only computed when something will report them: this whole block exists to feed one log line (CS_DCLF_DERIVE_PROBE: the
+			// joins run interleaved, FanoutMode, so its lazily sampled frame and its leases are the lane's).
 			if (!layer && derivationStats && descriptors.derivedPass != kNotDerived) {
 				++stats.derivationChecked;
 				// Against the pass the engine registered. Where its LOD fades ran out it dropped Specular or the Envmap
@@ -715,23 +740,11 @@ namespace DCLF
 				}
 				timer.Add(BuildPart::DedupHit);
 			} else {
-				using PropertyFlag = RE::BSShaderProperty::EShaderPropertyFlag;
-				const bool twoSided = (propertyRecord->flags & static_cast<std::uint64_t>(PropertyFlag::kTwoSided)) != 0;
-				// A layer's draws apply no alpha property (render flags 0x41, engine notes).
+				// The key and static flags are the evaluation's (a classified join's: EvaluateJoin); the alpha property's blend for the
+				// permutation, the record's.
 				const auto* alpha = layer ? nullptr : leaf.alpha;
-				const bool alphaTest = alpha && (alpha->flags & (1u << 9));      // GetAlphaTesting
-				const bool alphaBlending = alpha && (alpha->flags & 1u);         // GetAlphaBlending
-
-				// A decal's key carries the engine's fixed-function state indices as well (Records.h): the
-				// depth-bias mode from the frame, blend and write modes from the alpha property (derived with
-				// the descriptors). Zero for everything else, so an opaque key is exactly what it was.
-				std::uint32_t rasterFlags = twoSided ? kRasterTwoSided : 0u;
-				if (descriptors.decalGroup)
-					rasterFlags |= PackDecalRasterFlags(descriptors.decalGroup, decalBiasMode[descriptors.decalGroup & 3], descriptors.decalBlendMode, descriptors.decalWriteMode);
-				if (globals::features::extendedTranslucency.loaded)
-					rasterFlags |= ((ExtendedTranslucency::MaterialModel::DescriptorDisabled ^ TranslucencyModelOf(leaf)) & 7u) << kRasterTranslucencyShift;
-				key = PipelineKey{ descriptors.vertex, descriptors.pixel, rasterFlags, descriptors.pass,
-					VertexLayoutOf(tables.geometries[geometrySlot].vertexDesc) };
+				const bool alphaBlending = alpha && (alpha->flags & 1u);  // GetAlphaBlending
+				key = a_result.key;
 				auto pipelineIt = pipelineIndex.find(key);
 				const bool newPipeline = pipelineIt == pipelineIndex.end();
 				if (!newPipeline && !tables.PipelineUsed(pipelineIt->second)) {
@@ -840,16 +853,8 @@ namespace DCLF
 				joinMarkedMaterials.push_back(materialSlot);
 				timer.Add(BuildPart::DedupHit);
 
-				// ExternalEmittance::ShouldSuppress: interior, the property's kExternalEmittance, its reference without an emittance source.
-				const bool suppress = interior && (propertyRecord->flags & static_cast<std::uint64_t>(PropertyFlag::kExternalEmittance)) && !leaf.node->emittance;
-				staticFlags = (alphaTest ? kObjectAlphaTest : 0u) | (twoSided ? kObjectTwoSided : 0u) |
-				              (suppress ? kObjectSuppressExternalEmittance : 0u) |
-				              (descriptors.technique == kTechniqueTreeAnim ? kObjectTreeAnim : 0u) |
-				              (alphaTest ? static_cast<std::uint32_t>(alpha->threshold) << kObjectAlphaThresholdShift : 0u) |
-				              (alphaTest && alphaBlending ? kObjectAlphaBlended : 0u) |
-				              (descriptors.decalGroup ? kObjectDecal | (descriptors.decalGroup << kObjectDecalGroupShift) : 0u) |
-				              ((propertyRecord->flags & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u) |
-				              (BeastRaceFace(*propertyRecord, leaf) ? kObjectBeastRace : 0u);
+				// ExternalEmittance::ShouldSuppress and the rest of the static flags: the evaluation's (EvaluateJoin).
+				staticFlags = a_result.staticFlags;
 				{
 					if (derivedHit && derivedProbe) {
 						++stats.derivedChecked;
@@ -904,11 +909,9 @@ namespace DCLF
 			patch.fadeDistance = accumulated->fadeDistance;
 			timer.Add(BuildPart::Record);
 			if (lightLimitFixLoaded) {
-				if (trackedEntry->roomMapGeneration != roomMapGeneration) {
-					trackedEntry->roomIndex = -1;
-					if (roomMap && trackedEntry->roomNode)
-						if (const auto room = roomMap->find(trackedEntry->roomNode); room != roomMap->end())
-							trackedEntry->roomIndex = room->second;
+				// The room the evaluation found when the room map moved on since the entry's (EvaluateJoin; the map is read-only here).
+				if (a_result.roomSet) {
+					trackedEntry->roomIndex = a_result.roomIndex;
 					trackedEntry->roomMapGeneration = roomMapGeneration;
 				}
 				patch.lights.roomIndex = trackedEntry->roomIndex;
@@ -933,8 +936,37 @@ namespace DCLF
 			++residentStats.joined;
 			timer.Add(BuildPart::Record);
 		};
-		for (const auto& entry : accumulateOrder)
-			join(entry.geometry, entry.tracked, entry.accumulated, entry.layer);
+		{
+			// The geometry slots the evaluations read (the joins resolve none): unchanged until the merges are done.
+			[[maybe_unused]] const std::size_t geometries = tables.geometries.size();
+			[[maybe_unused]] const std::uint32_t generation = tablesGeneration;
+			const std::size_t count = accumulateOrder.size();
+			auto& f = fanoutStats;
+			++f.joinRounds;
+			f.joinEntries += count;
+			const std::uint32_t mode = FanoutMode(count, true);
+			if (mode == 0) {
+				for (const auto& entry : accumulateOrder) {
+					JoinResult result;
+					{
+						ShardScope scope(*this, false);
+						EvaluateJoin(entry, false, result);
+					}
+					join(entry, result);
+				}
+			} else {
+				f.joinParallelRounds += mode == 2 ? 1 : 0;
+				{
+					DCLF_SCENE_PART(JoinsFanout, "CS.DCLF.Accumulate.JoinsFanout");
+					EvaluateJoins("joins", count, mode == 2, joinResults, [&](std::size_t a_index, JoinResult& a_out) { EvaluateJoin(accumulateOrder[a_index], false, a_out); },
+						&JoinDifference);
+				}
+				DCLF_SCENE_PART(JoinsMerge, "CS.DCLF.Accumulate.JoinsMerge");
+				for (std::size_t i = 0; i < count; ++i)
+					join(accumulateOrder[i], joinResults[i]);
+			}
+			assert(tables.geometries.size() == geometries && tablesGeneration == generation);
+		}
 
 		TracyCZoneEnd(objectsZone);
 		TracyCZoneN(residentsZone, "CS.DCLF.Accumulate.Residents", true);
@@ -944,7 +976,7 @@ namespace DCLF
 			++residentStats.failed;
 			const auto entry = tracked.find(const_cast<RE::BSGeometry*>(geometry));
 			const auto cause = entry == tracked.end() || entry->second.objectStamp != objectStamp ? 1u :                  // no record
-			                   entry->second.accumulateReasonFrame == sceneFrame ? 2u :                                          // a verdict of the frame
+			                   entry->second.accumulateReasonPass == passSerial ? 2u :                                           // a verdict of this pass
 			                   3u;                                                                                          // material, or extras rows
 			++residentStats.failedBy[cause];
 			// A member whose binding could not be taken again is not bound any more.
@@ -971,12 +1003,12 @@ namespace DCLF
 		KeepResidentsAlive();
 		++residentStats.frames;
 		residentStats.resident += residents.size();
-		if (ResidentParityEnabled() && ParityDue(sceneFrame) && !residents.empty())
+		if (ResidentParityEnabled() && PassParityDue() && !residents.empty())
 			CheckResidentParity();
 		{
 			// CS_DCLF_PERSISTENT_PARITY: no bound object references a slot that is not live. Slots are freed only when nothing references
 			// them (their reference counts), which this checks; the normal path trusts them (invariant 5).
-			if (SwitchEnabled(Switch::PersistentParity) && (slotsFreedThisFrame || ParityDue(sceneFrame)))
+			if (SwitchEnabled(Switch::PersistentParity) && (slotsFreedThisFrame || PassParityDue()))
 				CheckObjectSlots(frameResolveBuffers);
 			slotsFreedThisFrame = false;
 		}
@@ -1007,9 +1039,26 @@ namespace DCLF
 	void SceneStore::BindByMembership()
 	{
 		ZoneScopedN("CS.DCLF.Accumulate.BindByMembership");
+		// A record bound again leaves the main phases of the coordinator's set first (a join never patches a member), the commit's
+		// decision too, applied or waiting for its application (LeaveSet), the whole object (U5: a claim is the whole object). T6b3c:
+		// the commit follows the joins in the same pass, so one bound again and ready joins again at it, its claim kept (the frame draws
+		// its old record from the installed snapshot until the publication with the new one); one that is not leaves there (ApplySet's
+		// notes: LeaveSet marks it for the application). This was CommitSet's rebinding rule while the commit ran before the joins.
+		auto leaveMain = [&](std::uint32_t a_slot) {
+			if (a_slot < setPhasesNext.size() && (setPhasesNext[a_slot] & kSetMain))
+				++setStats.rebinding;
+			LeaveSet(a_slot, kSetMain | kSetReflection);
+			if (PhasesIn(tables, a_slot) & (kSetMain | kSetReflection)) {
+				tables.setPhases[a_slot] = 0;
+				tables.objects[a_slot].flags &= ~kObjectMember;
+				tables.NoteChange(a_slot, kChangeBindings);
+			}
+		};
 		// The frame globals a membership pass reads changed (the static sun bits, the fade distances): every resident is bound
-		// again from this frame's.
+		// again from this frame's, out of the set until the commit (T6b3c: the witness is the joins' alone; CommitSet's rebindAll is gone).
 		if (const std::uint32_t witness = sceneInputs.membershipWitness; witness != membershipWitness) {
+			for (const std::uint32_t slot : residents)
+				leaveMain(slot);
 			bindQueue.insert(bindQueue.end(), residents.begin(), residents.end());
 			EndAllResidency();
 			membershipWitness = witness;
@@ -1020,37 +1069,44 @@ namespace DCLF
 		// after it was found: the joins wait for that frame (else every record of the load would fail the port).
 		if (!ConstantEvaluator::Get().HasLightingShader() || !FrameGlobals::Current().material.vanilla.sampled || !FrameGlobals::Current().material.vanilla.shaderKnown)
 			return;
-		auto& primary = PrimaryCull::Get();
 		// The joins that waited for a material record, again.
 		bindQueue.insert(bindQueue.end(), bindRetry.begin(), bindRetry.end());
 		bindRetry.clear();
-		for (const std::uint32_t slot : std::exchange(bindQueue, {})) {
-			if (slot >= tables.objects.size() || (tables.objects[slot].flags & (kObjectFree | kObjectShadowOnly)))
-				continue;
-			auto* geometry = const_cast<RE::BSGeometry*>(tables.objectGeometry[slot]);
-			const auto trackedIt = geometry ? tracked.find(geometry) : tracked.end();
-			// A layer slot (WriteLayer) joins with its own pass: its property's, with hint 12.
-			const bool layer = tables.IsLayer(slot);
-			// A record written every frame (a mover, an actor's part, animated shading) is bound again every frame: its slots are
-			// referenced again in the same batch, so nothing about it is retired.
-			if (trackedIt == tracked.end() || (layer ? trackedIt->second.layerSlot : trackedIt->second.slot) != slot ||
-				trackedIt->second.objectStamp != objectStamp || trackedIt->second.candidateReason != Ineligible::None)
-				continue;
+		const auto queue = std::exchange(bindQueue, {});
+		// T6b3e: each element evaluated (EvaluateJoinPre: the skip, the binding standing, the membership pass), then merged here in queue
+		// order. A slot can sit in the queue twice (a retry and a resident queued again): each evaluation reads the state before the
+		// merges, and the merge decides what depends on the merges before it (a member dropped since, with its partner).
+		auto merge = [&](std::uint32_t a_slot, JoinPre& a_pre) {
+			const std::uint32_t slot = a_slot;
+			// A member whose binding stood when evaluated, dropped since by an earlier element's failure (a layer and its base leave
+			// together): evaluated again, as the serial walk found it.
+			if (a_pre.kind == JoinPre::Kind::Kept && !IsResidentSlot(slot))
+				EvaluateJoinPre(slot, a_pre);
+			if (a_pre.kind == JoinPre::Kind::Skip)
+				return;
 			// A member written again keeps its binding while what the binding reads is the same (the derivation cache's
 			// witnesses): a skin, a face or a mover is written every frame for its transform, bones or stream alone.
-			if (IsResidentSlot(slot) && MemberBindingStands(slot, trackedIt->second)) {
+			if (a_pre.kind == JoinPre::Kind::Kept) {
 				++residentStats.membershipKept;
-				continue;
+				return;
 			}
-			AccumulatedPass pass;
-			// The mirror's records (T6b1b).
-			const auto leaf = mirror.Leaf(geometry);
-			if (layer ? !primary.MembershipLayerPass(geometry, leaf, pass) : !primary.MembershipPass(geometry, leaf, pass)) {
+			auto* geometry = a_pre.geometry;
+			const bool layer = a_pre.layer;
+			auto& entry = tracked.find(geometry)->second;
+			// The membership pass's derivation, kept in the entry (T6b3e: PrimaryCull's per-geometry maps before).
+			(layer ? entry.membershipLayerDerived : entry.membershipDerived) = a_pre.derived;
+			if (a_pre.kind == JoinPre::Kind::Failed) {
+				// A member whose binding does not stand and gives no pass is not bound any more (the failed joins' rule, below): T6b3c,
+				// the commit after the joins would otherwise keep it with the binding it no longer has (the commit before them kept it
+				// out by its rebinding rule).
+				if (IsResidentSlot(slot))
+					DropResidentSlot(slot, true);
 				// T6b0: dropped from the queue, bound only when written again.
 				if (TimelineEnabled() && !layer) {
-					const std::uint8_t why = primary.LastSyntheticFail();
-					trackedIt->second.bindFail = why;
-					trackedIt->second.bindFailFrame = sceneFrame;
+					const std::uint8_t why = a_pre.fail;
+					const auto& leaf = a_pre.leaf;
+					entry.bindFail = why;
+					entry.bindFailFrame = sceneFrame;
 					std::scoped_lock lock(residueClassesLock);
 					++timelineStats.bindFailures[why];
 					if (timelineStats.bindFailFirst.empty()) {
@@ -1059,29 +1115,228 @@ namespace DCLF
 							leaf.property && leaf.property->material ? leaf.property->materialAlpha : -1.0f, leaf.alpha ? leaf.alpha->flags : 0xFFFF);
 					}
 				}
-				continue;
+				return;
 			}
-			// A fade node's objects carry its fade-out distance for BuildDraws' fade test, which measures from the node's centre
-			// (Tables::lodFade, SetFadeRow). A tree's also take its height test.
-			if (const auto* fadeNode = leaf.fadeNode) {
-				pass.fadeDistance = PrimaryCull::MembershipFadeDistance(*fadeNode);
-				pass.heightTest = (fadeNode->kind & SceneCapture::kKindTree) != 0;
-			}
-			(layer ? accumulatedLayerPasses : accumulatedPasses).insert_or_assign(geometry, pass);
+			(layer ? accumulatedLayerPasses : accumulatedPasses).insert_or_assign(geometry, a_pre.pass);
 			(layer ? residentLayerJoining : residentJoining).insert(geometry);
-			// A record bound again leaves the main phases of the coordinator's set first (a join never patches a member): the frame
-			// draws its old record from the snapshot meanwhile, and the next frame's start takes the claim back (RevokeClaims), as the
-			// walk's join used to before the frame read a snapshot (step 6c).
-			// The commit's decision too, applied or waiting for its application (LeaveSet).
-			// The whole object leaves (U5: a claim is the whole object).
-			LeaveSet(slot, kSetMain | kSetReflection);
-			if (PhasesIn(tables, slot) & (kSetMain | kSetReflection)) {
-				tables.setPhases[slot] = 0;
-				tables.objects[slot].flags &= ~kObjectMember;
-				tables.NoteChange(slot, kChangeBindings);
-			}
+			leaveMain(slot);
 			++residentStats.membershipQueued;
+		};
+		const std::size_t count = queue.size();
+		const std::uint32_t mode = FanoutMode(count, true);
+		auto& f = fanoutStats;
+		++f.joinRounds;
+		f.joinEntries += count;
+		if (mode == 0) {
+			for (const std::uint32_t slot : queue) {
+				JoinPre pre;
+				{
+					ShardScope scope(*this, false);
+					EvaluateJoinPre(slot, pre);
+				}
+				merge(slot, pre);
+			}
+			return;
 		}
+		f.joinParallelRounds += mode == 2 ? 1 : 0;
+		{
+			DCLF_SCENE_PART(JoinsFanout, "CS.DCLF.Accumulate.BindFanout");
+			EvaluateJoins("bind queue", count, mode == 2, joinPres, [&](std::size_t a_index, JoinPre& a_out) { EvaluateJoinPre(queue[a_index], a_out); }, &JoinPreDifference);
+		}
+		{
+			DCLF_SCENE_PART(JoinsMerge, "CS.DCLF.Accumulate.BindMerge");
+			for (std::size_t i = 0; i < count; ++i)
+				merge(queue[i], joinPres[i]);
+		}
+	}
+
+	void SceneStore::EvaluateJoinPre(std::uint32_t a_slot, JoinPre& a_out) const
+	{
+		// T6b3e: BindByMembership's element, evaluated (pure: the tables as the joins found them, the tracked set, the mirror, the entry's
+		// membership cache; PrimaryCull's pass reads the frame's globals the ShardScope binds).
+		const std::uint32_t slot = a_slot;
+		auto& r = a_out;
+		r = JoinPre{};
+		if (slot >= tables.objects.size() || (tables.objects[slot].flags & (kObjectFree | kObjectShadowOnly)))
+			return;
+		auto* geometry = const_cast<RE::BSGeometry*>(tables.objectGeometry[slot]);
+		const auto trackedIt = geometry ? tracked.find(geometry) : tracked.end();
+		// A layer slot (WriteLayer) joins with its own pass: its property's, with hint 12.
+		const bool layer = tables.IsLayer(slot);
+		// A record written every frame (a mover, an actor's part, animated shading) is bound again every frame: its slots are
+		// referenced again in the same batch, so nothing about it is retired.
+		if (trackedIt == tracked.end() || (layer ? trackedIt->second.layerSlot : trackedIt->second.slot) != slot ||
+			trackedIt->second.objectStamp != objectStamp || trackedIt->second.candidateReason != Ineligible::None)
+			return;
+		const auto& entry = trackedIt->second;
+		r.geometry = geometry;
+		r.layer = layer;
+		if (IsResidentSlot(slot) && MemberBindingStands(slot, entry)) {
+			r.kind = JoinPre::Kind::Kept;
+			return;
+		}
+		// The mirror's records (T6b1b), and the entry's derivation cache (T6b3e: the merge stores what the pass leaves).
+		r.leaf = mirror.Leaf(geometry);
+		const auto& cached = layer ? entry.membershipLayerDerived : entry.membershipDerived;
+		const auto membership = layer ? PrimaryCull::MembershipLayerPass(geometry, r.leaf, cached) : PrimaryCull::MembershipPass(geometry, r.leaf, cached);
+		r.derived = membership.derived;
+		r.fail = membership.fail;
+		if (!membership.ok) {
+			r.kind = JoinPre::Kind::Failed;
+			return;
+		}
+		r.pass = membership.pass;
+		// A fade node's objects carry its fade-out distance for BuildDraws' fade test, which measures from the node's centre
+		// (Tables::lodFade, SetFadeRow). A tree's also take its height test.
+		if (const auto* fadeNode = r.leaf.fadeNode) {
+			r.pass.fadeDistance = PrimaryCull::MembershipFadeDistance(*fadeNode);
+			r.pass.heightTest = (fadeNode->kind & SceneCapture::kKindTree) != 0;
+		}
+		r.kind = JoinPre::Kind::Pass;
+	}
+
+	void SceneStore::EvaluateJoin(const OrderEntry& a_entry, bool a_classify, JoinResult& a_out) const
+	{
+		// T6b3e: a membership join's evaluation (pure, any thread under a ShardScope). Whether the derivation cache's slots still hold,
+		// the pipeline and material slots, the material records and the patch are the merge's (BuildAccumulatePhase's join).
+		auto* geometry = a_entry.geometry;
+		const Tracked& entry = *a_entry.tracked;
+		const AccumulatedPass* accumulated = a_entry.accumulated;
+		const bool layer = a_entry.layer;
+		auto& r = a_out;
+		r = JoinResult{};
+		// BindByMembership joins only records written this frame with a verdict of None, never a shadow-only one.
+		const std::uint32_t objectId = layer ? entry.layerSlot : entry.objectId;
+		r.geometrySlot = tables.objects[objectId].geometryIndex;
+		// The mirror's records (T6b1b), and the entry's held property (its reference: the template's, a material request's).
+		r.leaf = mirror.Leaf(geometry);
+		const auto* propertyRecord = layer ? r.leaf.layer : r.leaf.property;
+		r.property = entry.HeldProperty(layer);
+		if (!propertyRecord || !r.property || propertyRecord->key != r.property)
+			return;
+		r.material = static_cast<const RE::BSShaderMaterial*>(propertyRecord->material);
+		r.fadeState = FadeStateOf(propertyRecord);
+		r.alphaBelowOne = propertyRecord->materialAlpha < 1.0f;  // 1 without a material, or for any but a Lighting property
+		const bool interior = frameInterior;
+		const auto& decalBiasMode = frameDecalBias;
+		const std::uint32_t biasWitness = decalBiasMode[1] | (decalBiasMode[2] << 8) | (decalBiasMode[3] << 16);
+		// The positive derivation, cached (Tracked::Derived): its witnesses. Whether its slots still carry the keys they were derived for
+		// is the merge's: the merges before it allocate and key slots.
+		const auto& derived = layer ? entry.layerDerived : entry.derived;
+		r.derivedWitness = derived.valid && derived.generation == tablesGeneration && derived.geometrySlot == r.geometrySlot && derived.property == r.property &&
+		                   derived.material == r.material && derived.fadeState == r.fadeState && derived.technique == accumulated->technique &&
+		                   derived.subPass == accumulated->subPass && derived.hint == accumulated->hint && derived.interior == interior &&
+		                   derived.alphaBelowOne == r.alphaBelowOne && derived.biasWitness == biasWitness;
+		// CS_DCLF_PERSISTENT_PARITY's frames: the cached derivation is served and also recomputed, and the two compared.
+		const bool derivedProbe = SwitchEnabled(Switch::PersistentParity) && PassParityDue(13);
+		r.classified = a_classify || !r.derivedWitness || derivedProbe;
+		Ineligible reason = Ineligible::None;
+		if (r.classified)
+			reason = layer ? ClassifyLayer(r.leaf, &r.descriptors, accumulated) : ClassifyStatic(r.leaf, &r.descriptors, accumulated);
+		// Per frame whether or not the derivation was cached: hidden, part of an actor and fading are
+		// states of this frame, and the scene phase's verdict for them is the last classification's
+		// (for a static, the last event's). An object that has just been hidden must lose its bindings now,
+		// or DCLF keeps drawing what the engine has stopped drawing.
+		if (reason == Ineligible::None)
+			reason = ClassifyFrame(entry, accumulated);
+		r.reason = reason;
+		if (reason != Ineligible::None) {
+			r.kind = JoinResult::Kind::Rejected;
+			return;
+		}
+		r.kind = JoinResult::Kind::Joined;
+		if (r.classified) {
+			const auto& descriptors = r.descriptors;
+			using PropertyFlag = RE::BSShaderProperty::EShaderPropertyFlag;
+			const bool twoSided = (propertyRecord->flags & static_cast<std::uint64_t>(PropertyFlag::kTwoSided)) != 0;
+			// A layer's draws apply no alpha property (render flags 0x41, engine notes).
+			const auto* alpha = layer ? nullptr : r.leaf.alpha;
+			const bool alphaTest = alpha && (alpha->flags & (1u << 9));  // GetAlphaTesting
+			const bool alphaBlending = alpha && (alpha->flags & 1u);     // GetAlphaBlending
+			// A decal's key carries the engine's fixed-function state indices as well (Records.h): the
+			// depth-bias mode from the frame, blend and write modes from the alpha property (derived with
+			// the descriptors). Zero for everything else, so an opaque key is exactly what it was.
+			std::uint32_t rasterFlags = twoSided ? kRasterTwoSided : 0u;
+			if (descriptors.decalGroup)
+				rasterFlags |= PackDecalRasterFlags(descriptors.decalGroup, decalBiasMode[descriptors.decalGroup & 3], descriptors.decalBlendMode, descriptors.decalWriteMode);
+			if (globals::features::extendedTranslucency.loaded)
+				rasterFlags |= ((ExtendedTranslucency::MaterialModel::DescriptorDisabled ^ TranslucencyModelOf(r.leaf)) & 7u) << kRasterTranslucencyShift;
+			// The geometry slots are the walk's (the joins resolve none: frozen until the merges are done).
+			r.key = PipelineKey{ descriptors.vertex, descriptors.pixel, rasterFlags, descriptors.pass,
+				VertexLayoutOf(tables.geometries[r.geometrySlot].vertexDesc) };
+			// ExternalEmittance::ShouldSuppress: interior, the property's kExternalEmittance, its reference without an emittance source.
+			const bool suppress = interior && (propertyRecord->flags & static_cast<std::uint64_t>(PropertyFlag::kExternalEmittance)) && !r.leaf.node->emittance;
+			r.staticFlags = (alphaTest ? kObjectAlphaTest : 0u) | (twoSided ? kObjectTwoSided : 0u) |
+			                (suppress ? kObjectSuppressExternalEmittance : 0u) |
+			                (descriptors.technique == kTechniqueTreeAnim ? kObjectTreeAnim : 0u) |
+			                (alphaTest ? static_cast<std::uint32_t>(alpha->threshold) << kObjectAlphaThresholdShift : 0u) |
+			                (alphaTest && alphaBlending ? kObjectAlphaBlended : 0u) |
+			                (descriptors.decalGroup ? kObjectDecal | (descriptors.decalGroup << kObjectDecalGroupShift) : 0u) |
+			                ((propertyRecord->flags & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u) |
+			                (BeastRaceFace(*propertyRecord, r.leaf) ? kObjectBeastRace : 0u);
+		}
+		// Light Limit Fix's room, when the room map moved on since the entry's (the map the pass took: read-only here).
+		if (globals::features::lightLimitFix.loaded && entry.roomMapGeneration != roomMapGeneration) {
+			r.roomSet = true;
+			r.roomIndex = -1;
+			if (roomMap && entry.roomNode)
+				if (const auto room = roomMap->find(entry.roomNode); room != roomMap->end())
+					r.roomIndex = room->second;
+		}
+	}
+
+	const char* SceneStore::JoinPreDifference(const JoinPre& a_left, const JoinPre& a_right)
+	{
+		const auto& l = a_left;
+		const auto& r = a_right;
+		const std::pair<const char*, bool> fields[] = {
+			{ "kind", l.kind == r.kind },
+			{ "geometry", l.geometry == r.geometry },
+			{ "layer", l.layer == r.layer },
+			{ "leaf", l.leaf.node == r.leaf.node && l.leaf.geometry == r.leaf.geometry && l.leaf.property == r.leaf.property && l.leaf.layer == r.leaf.layer &&
+			              l.leaf.alpha == r.leaf.alpha && l.leaf.fadeNode == r.leaf.fadeNode },
+			{ "derived", l.derived == r.derived },
+			{ "pass", l.pass.technique == r.pass.technique && l.pass.subPass == r.pass.subPass && l.pass.passEnum == r.pass.passEnum && l.pass.hint == r.pass.hint &&
+			              l.pass.lodRow == r.pass.lodRow && l.pass.sunTest == r.pass.sunTest && l.pass.resident == r.pass.resident &&
+			              l.pass.fadeDistance == r.pass.fadeDistance && l.pass.heightTest == r.pass.heightTest },
+			{ "fail", l.fail == r.fail },
+		};
+		for (const auto& [name, same] : fields)
+			if (!same)
+				return name;
+		return nullptr;
+	}
+
+	const char* SceneStore::JoinDifference(const JoinResult& a_left, const JoinResult& a_right)
+	{
+		const auto& l = a_left;
+		const auto& r = a_right;
+		const auto& ld = l.descriptors;
+		const auto& rd = r.descriptors;
+		const std::pair<const char*, bool> fields[] = {
+			{ "kind", l.kind == r.kind },
+			{ "leaf", l.leaf.node == r.leaf.node && l.leaf.geometry == r.leaf.geometry && l.leaf.property == r.leaf.property && l.leaf.layer == r.leaf.layer &&
+			              l.leaf.alpha == r.leaf.alpha && l.leaf.fadeNode == r.leaf.fadeNode },
+			{ "property", l.property == r.property },
+			{ "material", l.material == r.material },
+			{ "fadeState", l.fadeState == r.fadeState },
+			{ "alphaBelowOne", l.alphaBelowOne == r.alphaBelowOne },
+			{ "geometrySlot", l.geometrySlot == r.geometrySlot },
+			{ "derivedWitness", l.derivedWitness == r.derivedWitness },
+			{ "classified", l.classified == r.classified },
+			{ "reason", l.reason == r.reason },
+			{ "descriptors", ld.technique == rd.technique && ld.pass == rd.pass && ld.vertex == rd.vertex && ld.pixel == rd.pixel && ld.rawVertex == rd.rawVertex &&
+			                     ld.rawPixel == rd.rawPixel && ld.derivedPass == rd.derivedPass && ld.rejectedTechnique == rd.rejectedTechnique &&
+			                     ld.decalGroup == rd.decalGroup && ld.decalBlendMode == rd.decalBlendMode && ld.decalWriteMode == rd.decalWriteMode &&
+			                     ld.projectedUV == rd.projectedUV },
+			{ "key", l.key == r.key },
+			{ "staticFlags", l.staticFlags == r.staticFlags },
+			{ "room", l.roomSet == r.roomSet && l.roomIndex == r.roomIndex },
+		};
+		for (const auto& [name, same] : fields)
+			if (!same)
+				return name;
+		return nullptr;
 	}
 
 	bool SceneStore::MemberBindingStands(std::uint32_t a_slot, const Tracked& a_entry) const

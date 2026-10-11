@@ -82,12 +82,12 @@ namespace DCLF
 	RE::NiNode* SceneStore::FindCategoryNode(RE::NiAVObject* a_object, Ineligible* a_parentReason, bool* a_unmirrored) const
 	{
 		constexpr auto kRead = static_cast<std::size_t>(MirrorRead::CategoryNode);
-		++mirrorReads.reads[kRead];
+		++MirrorReads().reads[kRead];
 		Ineligible reason = Ineligible::None;
 		bool unmirrored = false;
 		RE::NiNode* found = MirrorCategoryNode(a_object, reason, unmirrored);
 		if (unmirrored)
-			++mirrorReads.unmirrored[kRead];
+			++MirrorReads().unmirrored[kRead];
 		if (a_unmirrored)
 			*a_unmirrored = unmirrored;
 		if (mirrorReadParity && a_object)
@@ -265,48 +265,41 @@ namespace DCLF
 		return hash.value;
 	}
 
-	void SceneStore::CaptureMirrorRequests(EventBatch& a_batch)
+	void SceneStore::CaptureMirrorRequests()
 	{
 		// T6b1a: what the scene work tracked that the mirror holds no record of (an attach no hook captured: the references the engine
-		// moves into multibounds), captured from its highest ancestor the mirror lacks. Render thread, the frame's start: the scene work
-		// is joined, the mirror idle.
+		// moves into multibounds). Render thread, the frame's start. T6b3d: the coordinator asked because its mirror lacked the record;
+		// the mirror is not read here: the requested object is captured with its subtree and its chain up to the world's root
+		// (CaptureAttached), unless an ancestor was captured whole just before, and pushed onto the tracker's stack, mirror-only, in order
+		// with the hooks' events.
 		std::vector<RE::NiPointer<RE::NiAVObject>> requests;
 		mirrorCaptureRequests.Drain([&requests](RE::NiPointer<RE::NiAVObject>&& a_request) { requests.push_back(std::move(a_request)); });
 		if (requests.empty())
 			return;
 		ZoneScopedN("CS.DCLF.Ingest.MirrorRequests");
-		// T6b3a: the mirror is the coordinator's, read here as the frame start's join leaves it (left for T6b3c: the requests served from
-		// what the coordinator finds the mirror lacks); a read while the scene work runs is counted and named.
-		GuardFrameAccess("CaptureMirrorRequests");
+		auto& tracker = SceneTracker::Get();
 		ankerl::unordered_dense::set<const RE::NiAVObject*> captured;
-		for (const auto& geometry : requests) {  // a geometry, or (AddSubtree) a subtree's root
-			if (!geometry || mirror.Node(geometry.get()))
+		for (const auto& object : requests) {  // a geometry, or (AddSubtree) a subtree's root
+			if (!object)
 				continue;
-			const RE::NiAVObject* top = geometry.get();
 			bool covered = false;
-			for (const RE::NiAVObject* at = geometry.get(); at; at = at->parent) {
-				if (captured.contains(at)) {
-					covered = true;
-					break;
-				}
-				top = at;
-				if (!at->parent || mirror.Node(at->parent))
-					break;
-			}
-			if (covered || !captured.insert(top).second)
+			for (const RE::NiAVObject* at = object.get(); at && !covered; at = at->parent)
+				covered = captured.contains(at);
+			if (covered)
 				continue;
-			if (auto records = SceneCapture::CaptureAttached(*top)) {
+			captured.insert(object.get());
+			if (auto records = SceneCapture::CaptureAttached(*object)) {
 				categoryMirrorRecords += records->nodes.size();
 				++categoryMirrorCaptures;
 				auto* event = new SceneTracker::Event{};
 				event->type = SceneTracker::EventType::Attached;
 				event->captured = std::move(records);
-				a_batch.AppendLate(event);
+				tracker.PushCaptured(event, true);
 			}
 		}
 	}
 
-	void SceneStore::CaptureCategories(bool a_force, EventBatch& a_batch)
+	void SceneStore::CaptureCategories(bool a_force)
 	{
 		// The set's content changes only when a cell attaches or detaches, so it is made again when the signature says something
 		// moved or when a detach was seen (walk parity finds anything both miss).
@@ -436,8 +429,10 @@ namespace DCLF
 					pinSubtree(entry.root.get());
 		}
 		// The portal graph's parentless roots, the mirror's world from now on (T6b1b): each new one captured whole, each gone dropped
-		// from it (the last capture holds it), both after the batch's events (the captures that follow are the hooks', InWorld).
+		// from it (the last capture holds it), both after the events pushed before them (T6b3d: onto the tracker's stack, mirror-only;
+		// the captures that follow are the hooks', InWorld).
 		{
+			auto& tracker = SceneTracker::Get();
 			std::vector<const RE::NiAVObject*> roots;
 			for (const auto& [root, entry] : currentRoots)
 				roots.push_back(root);
@@ -449,7 +444,7 @@ namespace DCLF
 						event->type = SceneTracker::EventType::Detached;
 						SceneTracker::CollectGeometry(entry.root.get(), event->removed, &event->removedNodes);
 						event->detachedRoot = root;
-						a_batch.AppendLate(event);
+						tracker.PushCaptured(event);
 					}
 			for (const auto& [root, entry] : currentRoots)
 				if (!categoryCapture || !categoryCapture->roots.contains(root))
@@ -459,24 +454,32 @@ namespace DCLF
 						auto* event = new SceneTracker::Event{};
 						event->type = SceneTracker::EventType::Attached;
 						event->captured = std::move(records);
-						a_batch.AppendLate(event);
+						tracker.PushCaptured(event);
 					}
 		}
 		// Held until one the coordinator applied supersedes it, and posted (latest wins: a newer capture names every node new to the set
-		// the coordinator applied last, so one it never takes loses nothing).
+		// the coordinator applied last, so one it never takes loses nothing). After the pushes above: a pass that takes it (at its start,
+		// TakeCategoryCapture) drains them in the same pass. The post wakes the pump.
 		categoryCapturesHeld.push_back(capture);
 		categoryPosted.Post(std::make_unique<std::shared_ptr<const CategoryCapture>>(capture));
 		categoryCapture = std::move(capture);
 		rescanCaptureAll = false;
+		WakeScenePass(SceneWake::Capture);
 		timed();
+	}
+
+	void SceneStore::TakeCategoryCapture()
+	{
+		// The render thread's capture (CaptureCategories, posted: T6b3a), the newest, taken at the pass's start (T6b3d: before the drains,
+		// so the portal roots it pushed are in this pass's batch). Taking one lets go of the one before, which the render thread still
+		// holds (it waits for the generation RefreshCategoryNodes stores).
+		if (auto taken = categoryPosted.Take())
+			categoryTaken = std::move(*taken);
 	}
 
 	void SceneStore::RefreshCategoryNodes(bool a_force)
 	{
-		// The render thread's capture (CaptureCategories, posted: T6b3a), the newest taken: diffed again when it is new, or forced (the rescan
-		// after a load). Taking one lets go of the one before, which the render thread still holds (it waits for the generation below).
-		if (auto taken = categoryPosted.Take())
-			categoryTaken = std::move(*taken);
+		// The capture the pass took (TakeCategoryCapture), diffed again when it is new, or forced (the rescan after a load).
 		const auto* capture = categoryTaken.get();
 		if (!capture || (!a_force && capture->generation == categoryAppliedGeneration.load(std::memory_order_relaxed)))
 			return;
@@ -613,7 +616,7 @@ namespace DCLF
 		if (!a_tracked.sunEntryResolved) {
 			a_tracked.sunEntryResolved = true;
 			// The mirror's chain (T6b1b): the reference's root, or the multibound above.
-			++mirrorReads.reads[static_cast<std::size_t>(MirrorRead::SunEntry)];
+			++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::SunEntry)];
 			const void* entry = MirrorSunEntry(&a_geometry);
 			// The mirror's (its root pinned by the attach's capture: T6b1c), or on a live walk's path the live chain's; the other checked
 			// (under a lease, T6b1d).
@@ -731,6 +734,54 @@ namespace DCLF
 		};
 		hold(a_entry.property, record ? record->property : nullptr);
 		hold(a_entry.layerProperty, record ? record->Layer() : nullptr);
+		// T6b3e: the property's fade node, held from the same pins (an attach's capture pins every ancestor) for the tree and fade-root
+		// owners (ListTree, ListFadeRoot): kept while the key stays the same.
+		const auto* property = record && record->property ? mirror.Property(record->property) : nullptr;
+		const void* fadeNode = property ? property->fadeNode : nullptr;
+		if (a_entry.fadeNodeRef.get() != fadeNode) {
+			HandBack(std::move(a_entry.fadeNodeRef));
+			if (fadeNode)
+				AcquireFadeNode(a_entry, fadeNode, "a capture");
+		}
+	}
+
+	bool SceneStore::AcquireFadeNode(Tracked& a_entry, const void* a_node, const char* a_path)
+	{
+		auto& r = referenceStats;
+		const auto* key = static_cast<const RE::NiAVObject*>(a_node);
+		if ((a_entry.fadeNodeRef = Pinned(key))) {
+			++r.fadeNodes;
+			return true;
+		}
+		++r.fadeNodesRefused;
+		// Another tracked reference's root (a shared model's property names the fade node of the instance cloned last): its owner's copy.
+		if (const auto owner = rootOwners.find(key); owner != rootOwners.end() && owner->second) {
+			a_entry.fadeNodeRef = owner->second;
+			++r.fadeNodesFromRoots;
+			return true;
+		}
+		// Named for the report: the geometry, the node (its record's name and kind, whether the mirror has it above the geometry), where it
+		// was wanted, and whether the batch had pins.
+		if (r.fadeNodeNamed < 4) {
+			++r.fadeNodeNamed;
+			const auto* geometry = a_entry.geometry.get();
+			const auto* leafRecord = geometry ? mirror.Node(geometry) : nullptr;
+			const auto* nodeRecord = mirror.Node(a_node);
+			bool ancestor = false;
+			for (const void* at = geometry ? MirrorParent(geometry) : nullptr; at && !ancestor; at = MirrorParent(at))
+				ancestor = at == a_node;
+			r.fadeNodeFirst += fmt::format("{}'{}' {}: fade node '{}' {} ({}{}), {} the geometry's mirror chain, wanted at {}, the batch {} pins", r.fadeNodeFirst.empty() ? "" : "; ",
+				leafRecord && leafRecord->name ? leafRecord->name : "", static_cast<const void*>(geometry), nodeRecord && nodeRecord->name ? nodeRecord->name : "", a_node,
+				!nodeRecord ? "no record" : (nodeRecord->kind & SceneCapture::kKindTree) ? "a tree node" : (nodeRecord->kind & SceneCapture::kKindFadeNode) ? "a fade node" : "another node",
+				nodeRecord && nodeRecord->userData ? ", a reference's" : "", ancestor ? "on" : "off", a_path, batchPins.empty() ? "had no" : fmt::format("had {}", batchPins.size()));
+		}
+		// The render thread reads the property where the engine does and pins it (ServeFadeNodeRequests); once a key.
+		if (a_entry.geometry && a_entry.fadeNodeRequested != a_node) {
+			a_entry.fadeNodeRequested = a_node;
+			fadeNodeRequests.Push(FadeNodeRequest{ a_entry.geometry, a_node });
+			++r.fadeNodesRequested;
+		}
+		return false;
 	}
 
 	void SceneStore::AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason, bool a_live)
@@ -747,7 +798,7 @@ namespace DCLF
 			// The mirror names it under a_categoryNode and nothing holds it: the live scene no longer has it there (its event the next
 			// batch's), or a pin is missing. Checked after the next batch: the mirror moving it on, it lagged (T6b1c).
 			++referenceStats.refused;
-			++mirrorReads.reads[static_cast<std::size_t>(MirrorRead::Reference)];
+			++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::Reference)];
 			NoteMirrorRead(MirrorRead::Reference, true, [&] { return fmt::format("geometry {} under category node {}", static_cast<const void*>(a_geometry), static_cast<const void*>(a_categoryNode)); },
 				[this, key = static_cast<const void*>(a_geometry), a_categoryNode] {
 					Ineligible reason = Ineligible::None;
@@ -839,7 +890,7 @@ namespace DCLF
 		// The category node's child it hangs from: an actor's root is its light entry, whatever is under it (carried items too).
 		// The mirror's chain (T6b1b).
 		if (const auto* category = a_tracked.categoryNode) {
-			++mirrorReads.reads[static_cast<std::size_t>(MirrorRead::LightEntry)];
+			++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::LightEntry)];
 			const void* root = &a_geometry;
 			for (const void* node = MirrorParent(&a_geometry); node && node != category; node = MirrorParent(node))
 				root = node;
@@ -910,10 +961,10 @@ namespace DCLF
 		{
 			std::vector<std::pair<RE::BSGeometry*, Ineligible>> found;
 			bool lacking = false;
-			++mirrorReads.reads[static_cast<std::size_t>(MirrorRead::Subtree)];
+			++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::Subtree)];
 			MirrorSubtree(a_root, reasonAbove, found, lacking);
 			if (lacking)
-				++mirrorReads.unmirrored[static_cast<std::size_t>(MirrorRead::Subtree)];
+				++MirrorReads().unmirrored[static_cast<std::size_t>(MirrorRead::Subtree)];
 			if (mirrorReadParity)
 				if (const auto lease = LiveCheckLease(MirrorRead::Subtree)) {
 				std::vector<std::pair<RE::BSGeometry*, Ineligible>> live;

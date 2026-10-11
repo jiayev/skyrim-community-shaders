@@ -21,6 +21,9 @@
 #include <bit>
 #include <xbyak/xbyak.h>
 #include <chrono>
+#include <exception>
+#include <optional>
+#include "Features/DrawcallLimitFix/Common/EngineReleases.h"
 #include "Features/ExtendedTranslucency.h"
 #include "Features/LightLimitFix.h"
 #include "Features/Skin.h"
@@ -165,8 +168,8 @@ namespace DCLF
 		 * currentFade is written by the cull (AE 1.6.1170): BSFadeNode::OnVisible (0x141479f50, which every fade node
 		 * class reaches; BSLeafAnimNode::OnVisible calls it) writes it directly for one LOD mode and through the fade
 		 * update FUN_14147a160 otherwise, and FUN_1402cff60 calls that update outside a cull. Both are detoured; each
-		 * compares the value before and after and pushes the node when it moved. Cull job threads push, the render
-		 * thread ingests (SceneStore::IngestEvents). A few tens a frame while the camera moves, none at rest.
+		 * compares the value before and after and pushes the node when it moved. Cull job threads push, the
+		 * scene passes drain (T6b3d: SceneStore::CollectEvents). A few tens a frame while the camera moves, none at rest.
 		 */
 		/**
 		 * @brief CS_DCLF_DECAL_ORDER_PROBE (DecalOrder.cpp): the main registration's decal chains against the order the scene lists
@@ -226,6 +229,7 @@ namespace DCLF
 		// Its per-frame state (T6b1a): currentFade, the LOD level, the screen-door byte.
 		constexpr std::uint32_t kFadeState = SceneCapture::NodeRecord::kFadeCurrent | SceneCapture::NodeRecord::kFadeLevel | SceneCapture::NodeRecord::kFadeDoor;
 
+		// T6b3d: no wake: the cull writes currentFade every frame for what fades; the frame's next pass takes them.
 		inline EventQueue<const RE::BSFadeNode*> fadeEvents;
 
 		inline float CurrentFade(RE::BSFadeNode* a_node)
@@ -252,6 +256,7 @@ namespace DCLF
 		 * before its snap (a dynamic reference's) would keep the state it was listed with on the GPU: its row is taken from
 		 * the node again (SceneStore::ReseedFadeRoot). Identity only; the drain follows the attach and detach events.
 		 */
+		// T6b3d: no wake: a snap comes with its cell's attach, whose event wakes the pass.
 		inline EventQueue<const void*> fadeSnapEvents;
 
 		/**
@@ -261,11 +266,12 @@ namespace DCLF
 		 * mid-fade would keep the alpha it was listed with: FadeStateCS fades it toward that and drops its members. Identity only
 		 * (SceneStore::RefreshFadeAmount reads the listed node again).
 		 */
+		// T6b3d: no wake: an actor's fade writes it every frame; the frame's next pass takes them.
 		inline EventQueue<const void*> fadeAmountEvents;
 
 		/**
 		 * @brief SceneEvents: the delta walk's structural events (dclf-event-driven-tables.md, "Phase 3"), pushed
-		 * from the engine's writers on whichever thread runs them, ingested by the render thread (IngestEvents), applied by the scene work (ApplyEvents).
+		 * from the engine's writers on whichever thread runs them, drained and applied by the scene pass (T6b3d: CollectEvents, ApplyEvents).
 		 *
 		 * - A property event: BSShaderProperty::SetFlags (0x14147bee0) or SetMaterial (0x14147bff0) changed a shader
 		 *   property, or a controller was added to a property. It carries the pointer as a key only: the drain looks it
@@ -276,7 +282,8 @@ namespace DCLF
 		 *   holds a reference, as SceneTracker's attach events do, because the drain walks the node's subtree and its
 		 *   ancestors.
 		 */
-		inline EventQueue<const void*> propertyEvents;
+		inline EventQueue<const void*> propertyEvents{ &WakeScenePropertyEvent };
+		// T6b3d: no wake: Havok writes the transforms of what moves every frame (the movers, once a frame); the frame's next pass takes them.
 		inline EventQueue<RE::NiPointer<RE::NiAVObject>> nodeEvents;
 
 		inline void PushProperty(const void* a_property) { propertyEvents.Push(a_property); }
@@ -295,6 +302,7 @@ namespace DCLF
 		 * around the call and pushes the property when either moved; the walk names its dependents for the next frame's
 		 * shading sample (NameShadingEvents). Cull and accumulation job threads push, the walk drains.
 		 */
+		// T6b3d: per-frame (the next frame's shading sample): no wake, the next frame input's pass drains it.
 		inline EventQueue<const void*> lodFadeEvents;
 		inline bool lodFadeEventsInstalled = false;
 
@@ -313,14 +321,17 @@ namespace DCLF
 		 * key in propertyDependents (ListDependents), and the walk names its dependents as it does for a LOD fade event.
 		 * The main thread and the cell update jobs push, the walk drains.
 		 */
+		// T6b3d: per-frame (the next frame's shading sample): no wake, the next frame input's pass drains it.
 		inline EventQueue<const void*> emittanceEvents;
 
 		/**
 		 * @brief Object LOD's segment events (dclf-lod.md, LodSegments): the BSSubIndexTriShapes a segment write touched, as keys
 		 * (never dereferenced: the drain looks them up among the tracked shapes). Pushed after the write, by the patched calls
 		 * of the terrain manager's segment updates (InstallLodSegmentHooks), from whichever thread runs them; drained by the
-		 * render thread at IngestEvents.
+		 * scene pass (T6b3d: CollectEvents).
 		 */
+		// T6b3d: no wake: the terrain manager writes the segments as the camera moves, mostly to the ranges held (w130: 354 of 611 passes they
+		// woke changed nothing); the frame's next pass takes them.
 		inline EventQueue<const void*> lodSegmentEvents;
 		inline bool lodSegmentEventsInstalled = false;
 		bool InstallLodSegmentHooks();
@@ -354,6 +365,8 @@ namespace DCLF
 		 *   keyed by the node), and the graph-animated references' (FUN_1402f75a0, from UpdateAnimationJob).
 		 * - The node events (Havok's node writes and controller additions) name the reference above the node.
 		 */
+		// T6b3d: per-frame (the movers the frame values place, MovedRecently: this frame or the last): no wake, the next frame input's
+		// pass drains them (thousands a frame: a pass each would be a pass per animation update).
 		inline EventQueue<const void*> moveEvents;
 		// Calls per writer (the order of kMoveWriterNames), for the report.
 		inline std::array<std::atomic<std::uint64_t>, 8> moveWriterCalls{};
@@ -390,7 +403,7 @@ namespace DCLF
 
 		/**
 		 * @brief SwitchEvents: an NiSwitchNode's selection may have changed (dclf-cull-job-elimination.md, "Phase 3"),
-		 * pushed from the writer's thread, ingested by the render thread (IngestEvents) and applied by the next walk (ApplySwitchEvents).
+		 * pushed from the writer's thread, drained by the scene pass (T6b3d: CollectEvents) and applied by its walk (ApplySwitchEvents).
 		 *
 		 * NiSwitchNode::index (+0x12C) has no setter. Its only stores outside construction, cloning and loading (AE
 		 * 1.6.1170, every `mov [reg+0x12c]` in .text) are:
@@ -413,7 +426,7 @@ namespace DCLF
 			std::int32_t before = 0;
 			bool structural = false;
 		};
-		inline EventQueue<SwitchEvent> switchEvents;
+		inline EventQueue<SwitchEvent> switchEvents{ &WakeSceneSwitchEvent };
 		constexpr std::size_t kSwitchIndex = 0x12C;
 
 		inline std::int32_t& SwitchIndexOf(RE::NiAVObject* a_switch)
@@ -421,7 +434,7 @@ namespace DCLF
 			return *reinterpret_cast<std::int32_t*>(reinterpret_cast<std::byte*>(a_switch) + kSwitchIndex);
 		}
 
-		// The render thread (Skyrim's main thread), recorded at every IngestEvents. A switch event is taken only there:
+		// The render thread (Skyrim's main thread), recorded at every Present and frame start (NoteLoadingScreen, BeginFrame). A switch event is taken only there:
 		// a loader thread builds subtrees that are not in the scene yet (their attach brings the switches up to date,
 		// AddSubtree), and a reference taken to a node a loader is still assembling, released later on another thread,
 		// is not safe (a QueuedTree load crashed on a freed child under a tree's switch with these events taken there).
@@ -653,12 +666,14 @@ namespace DCLF
 	using namespace Scene;
 
 	/**
-	 * @brief One ingestion's events (SceneStore::IngestEvents), oldest first per queue, until the scene work applies them
-	 * (ApplyEvents). Applied, it is handed back whole: its tracker events hold attached subtrees, released at Present.
+	 * @brief One scene pass's events (T6b3d: SceneStore::CollectEvents, on the coordinator, each queue drained up to where it stood at
+	 * the pass's start), oldest first per queue, applied by the same pass (ApplyEvents). Applied, it is handed back whole: its tracker
+	 * events hold attached subtrees, released at Present. A batch made only to carry references to Present (a load screen's discarded
+	 * node and switch events) goes straight to batchesReleased.
 	 */
 	struct SceneStore::EventBatch
 	{
-		SceneTracker::Event* head = nullptr;  // SceneTracker's attach and detach events
+		SceneTracker::Event* head = nullptr;  // SceneTracker's attach and detach events (and the render thread's mirror-only captures)
 		SceneTracker::Event* tail = nullptr;
 		std::vector<const void*> fadeSnaps;
 		std::vector<const void*> fadeAmounts;
@@ -667,21 +682,19 @@ namespace DCLF
 		std::vector<RE::NiPointer<RE::NiAVObject>> nodes;
 		std::vector<SwitchEvent> switches;
 		std::vector<const void*> lodSegments;
-		std::uint32_t presents = 0;  // the Presents that ingested into it (EventsUnapplied)
-		// T6b3a: a load screen's marker (IngestEvents' loading branch posts one, empty): the coordinator drops what the load invalidated
+		// T6b3a: a load screen's marker (NoteLoadingScreen posts one, empty): the coordinator drops what the load invalidated
 		// (SceneStore::ApplyLoading).
 		bool loading = false;
-		// Step 6e F3: the attach and detach events a load screen's ingestions carried, for the mirror alone (oldest first, applied
-		// before the batch's own), and the frame start's parity probe (CS_DCLF_MIRROR_PARITY).
+		// Step 6e F3: the attach and detach events a load screen's passes carried, for the mirror alone (oldest first, applied before
+		// the batch's own), and the render thread's parity probe (CS_DCLF_MIRROR_PARITY, posted: T6b3d).
 		SceneTracker::Event* mirrorHead = nullptr;
 		SceneTracker::Event* mirrorTail = nullptr;
-		// T6b1b: the render thread's captures at the frame's start (CaptureMirrorRequests), applied after the batch's own events: taken
-		// after them, a detach among them must not undo what they hold.
-		SceneTracker::Event* mirrorLate = nullptr;
-		SceneTracker::Event* mirrorLateTail = nullptr;
 		std::unique_ptr<SceneCapture::Records> probe;
 		// The objects a load screen's discarded events named (the parity counts them named: their writers have hooks).
 		std::vector<const void*> mirrorNamed;
+		// T6b3d: the oldest stamp of its tracker events (SceneTracker::Event::stampNs, stampFrame; 0: none), for the latencies.
+		std::uint64_t oldestNs = 0;
+		std::uint32_t oldestFrame = 0;
 
 		EventBatch() = default;
 		EventBatch(const EventBatch&) = delete;
@@ -690,7 +703,6 @@ namespace DCLF
 		{
 			SceneTracker::FreeEvents(head);
 			SceneTracker::FreeEvents(mirrorHead);
-			SceneTracker::FreeEvents(mirrorLate);
 		}
 
 		void AppendMirror(SceneTracker::Event* a_events)
@@ -702,12 +714,6 @@ namespace DCLF
 				mirrorTail = mirrorTail->next;
 		}
 
-		void AppendLate(SceneTracker::Event* a_event)
-		{
-			(mirrorLateTail ? mirrorLateTail->next : mirrorLate) = a_event;
-			mirrorLateTail = a_event;
-		}
-
 		void Append(SceneTracker::Event* a_events)
 		{
 			if (!a_events)
@@ -716,6 +722,39 @@ namespace DCLF
 			for (tail = a_events; tail->next;)
 				tail = tail->next;
 		}
+	};
+
+	/**
+	 * @brief T6b3e: a pass's batch (its tracker events' pins and captures, its nodes' and switches' references) handed to the render thread
+	 * (batchesReleased, released at Present) when the pass unwinds while it holds it: a throw never destroys it on the pump, where the
+	 * engine's destructors must not run. A batch passed on (retired, posted) leaves it null and the guard does nothing.
+	 */
+	struct SceneStore::BatchUnwindGuard
+	{
+		BatchUnwindGuard(SceneStore& a_store, std::shared_ptr<EventBatch>& a_batch) :
+			store(a_store), batch(a_batch) {}
+		~BatchUnwindGuard()
+		{
+			if (batch && std::uncaught_exceptions() > exceptions)
+				store.batchesReleased.Push(std::move(batch));
+		}
+		BatchUnwindGuard(const BatchUnwindGuard&) = delete;
+		BatchUnwindGuard& operator=(const BatchUnwindGuard&) = delete;
+
+	private:
+		SceneStore& store;
+		std::shared_ptr<EventBatch>& batch;
+		int exceptions = std::uncaught_exceptions();
+	};
+
+	/**
+	 * @brief T6b3d: a pass's request for the switch catch-ups (CollectEvents -> ServeFrameRequests): its attached roots and its switch
+	 * events, each a reference of its own (copied while the pass's batch held them), dropped on the render thread after the catch-ups.
+	 */
+	struct SceneStore::SwitchCatchUp
+	{
+		std::vector<RE::NiPointer<RE::NiAVObject>> attached;
+		std::vector<SwitchEvent> switches;
 	};
 
 	/**
@@ -745,6 +784,48 @@ namespace DCLF
 		}
 		ScenePartScope(const ScenePartScope&) = delete;
 		ScenePartScope& operator=(const ScenePartScope&) = delete;
+	};
+
+	/**
+	 * @brief T6b3e: what a scene pass's evaluations read on whichever thread runs them. Always the pass's snapshot of the toggles and of
+	 * Terrain Blending (SceneStore::passSnapshot), and the chunk's mirror-read counters when given. On a pool thread (a_worker) also the
+	 * pass's frame globals (FrameGlobals::Current is per thread) and the scene work's flags (sceneWorkThread, EngineReadWindow::sceneWork),
+	 * as the sun candidates' verdicts take them (DirtyVerdicts): an engine read from there without a lease is counted. One per chunk; the
+	 * pass's own thread holds one (not a worker's) over a whole round, its merges included, so both halves read the same snapshot.
+	 */
+	struct SceneStore::ShardScope
+	{
+		ShardScope(const SceneStore& a_store, bool a_worker, MirrorReadStats* a_mirror = nullptr) :
+			toggles(&a_store.passSnapshot.toggles),
+			terrain(&a_store.passSnapshot.terrainDefers),
+			worker(a_worker),
+			sink(std::exchange(mirrorReadSink, a_mirror ? a_mirror : mirrorReadSink))
+		{
+			if (!worker)
+				return;
+			globalsScope.emplace(a_store.passGlobals);
+			marked = std::exchange(sceneWorkThread, true);
+			engineMarked = std::exchange(EngineReadWindow::sceneWork, true);
+		}
+		~ShardScope()
+		{
+			if (worker) {
+				EngineReadWindow::sceneWork = engineMarked;
+				sceneWorkThread = marked;
+			}
+			mirrorReadSink = sink;
+		}
+		ShardScope(const ShardScope&) = delete;
+		ShardScope& operator=(const ShardScope&) = delete;
+
+	private:
+		ToggleSnapshotScope toggles;
+		TerrainBlendingSnapshotScope terrain;
+		std::optional<FrameGlobals::Scope> globalsScope;
+		bool worker = false;
+		bool marked = false;
+		bool engineMarked = false;
+		MirrorReadStats* sink = nullptr;
 	};
 
 	// One scene sub-zone (ScenePart) for the rest of the enclosing block: a Tracy zone and the part's sum. One per block.
