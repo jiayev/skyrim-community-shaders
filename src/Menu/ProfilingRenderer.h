@@ -87,9 +87,21 @@ private:
 
 	static inline ImGuiUtils::ProfilerGraph gpuGraph{ Profiler::kHistorySize };
 
+	struct PassStatistics
+	{
+		float avgMs;
+		float p95Ms;
+		float p99Ms;
+		float cpuAvgMs;
+		float cpuP95Ms;
+		float cpuP99Ms;
+	};
+
 	struct FeatureGraphState
 	{
 		ImGuiUtils::ProfilerGraph graph{ Profiler::kHistorySize };
+		double lastStatisticsUpdate = -1.0;
+		std::unordered_map<std::string, PassStatistics> statistics;
 	};
 	static inline std::unordered_map<std::string, FeatureGraphState> featureGraphs;
 
