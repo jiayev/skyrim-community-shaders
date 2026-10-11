@@ -63,15 +63,27 @@ Fix: T7b2 (kAccumulated written by DCLF from its GPU visibility, at Main::Update
 `drawcall-limit-fix.md`, "T7b2"). The clear is removed, and the tree clock stays off DCLF's trees through the tree list removal
 (`TreeAnimation::SetOwned`). It is built but not run in game. To validate: `CS_DCLF_ACCUMULATED_PARITY=1`. `<- ANIM RATE` must
 show 0 differ, never-fading stood-in calls rejected only when written out of view, and the never-fading against fading counts. A
-fading root DCLF writes out of view still runs `FUN_14147a160` from the gate over DCLF's write-back (T7b4, `<- FADE DOUBLE`).
+fading root DCLF writes out of view ran `FUN_14147a160` from the gate over DCLF's write-back; since T7b4 the gate skips the roots DCLF
+writes (`drawcall-limit-fix.md`, "T7b4/T7b6"; `CS_DCLF_FADE_PARITY`'s `<- FADE DOUBLE` counts any engine step left).
 
-## The fade write-back reads its events only on frames that record a revision (found by T7b1, 2026-10-11)
+## Stood-in BSTreeNode trees stay on the tree manager's tree list (found by T7b5, 2026-10-11; open)
+
+`TreeAnimation::SetOwned` takes stood-in roots off the tree manager's animation list (`+0x50`, BSLeafAnimNode roots) only. A
+stood-in BSTreeNode stays on the tree list (`+0x20`), whose loop (`FUN_140437e50`) visits a tree by its first child's multibound
+cull result - which no cull refreshes for a stood-in root. A stale "in" keeps the tree visited every frame (its bones animate, in
+the near list's 40); a stale "out" freezes them (`skyrim-engine-notes.md`, "Tree manager list (T7b5)"). Fix options: TreeAnimation
+manages the tree list too, or DCLF writes the multibound result from its verdicts (T7b5's port decides which trees). Related: DCLF
+gives tree wind slots to BSTreeNode roots only (`kKindTree`); the BSLeafAnimNode trees get none.
+
+## The fade write-back reads its events only on frames that record a revision (found by T7b1, 2026-10-11; fixed by T7b6, pending validation)
 
 `FadeEventReadbackPass` (`Draws/IndirectDraws/Passes.cpp`) reads its buffer in `Record`. The depth epoch is revision-driven
 (each ring slot recorded once per revision and replayed: `extern/OpenRenderGraph/docs/persistent-epochs.md`), so on replayed frames
 no fade events are read back and the write-back sees only the recording frames' events (T7b1's visibility readback had the same
 flaw: 59 of 300 frames in motion, none in interiors). Fix: T7b6, the fade events moved onto the visibility readback's scheme (a
-fixed per-frame-slot copy, harvested when the slot is armed again).
+fixed per-frame-slot copy, harvested when the slot is armed again; `drawcall-limit-fix.md`, "T7b4/T7b6"). Built, not yet run in game.
+To validate: the `fade write-back (T7b4/T7b6)` line's "frames read" near the window's frame count (about 300) in motion and in an
+interior, "arms missed" 0 (or only frames whose depth epoch did not run), and milestones written in interiors.
 
 ## Parity issues deferred while the scene pipeline's structure lands (T6b, 2026-10-11)
 
@@ -101,6 +113,14 @@ Found in validation runs and left for a cleanup pass once the structure is in pl
 -   **Long-standing flags:** `<- CUT`, extras `<- DIFFER`, the PS25 `<- MATERIAL PORT` race, `<- TEMPLATE` (PS16), `<- FADE`,
     `<- PORTAL VIEW`, NO CASCADES.
 -   **T6b2's gate coverage runs** (snow, LOD, skin) not done.
+-   **`<- FADE DOUBLE` (T7b4, w168):** 0-11 stood-in roots a window in motion (clutter: 'HandCart01', 'Hoe', 'Bucket01',
+    'DeadSalmon01.nif'; none stored by DCLF that frame) stepped by an engine `OnVisible` - some engine cull still reaches stood-in
+    roots (which one is not attributed); 0 in interiors.
+-   **`<- FADE STATE` (w169, interiors):** 1 differ of 320 root updates (currentFade 0.982 against 0.990); new since T7b4's milestone
+    key change (LOD level, transition state) - check the port's key.
+-   **Census `<- DEFECT` in point shadows** (w168: 50 member passes in a window, 'MountainCliffSlope:0'), beside the sun cascades'.
+-   **`<- TREE MANAGER` coverage:** the tree list compared only 0-1 BSTreeNode a frame at Riverwood (all skipped both ways); the
+    animation list's clock compared 3 nodes in a window (most leaf roots are not DCLF's). Needs a cell with BSTreeNode trees.
 
 ## Accepted differences
 

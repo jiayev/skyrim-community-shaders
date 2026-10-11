@@ -1337,8 +1337,9 @@ namespace DCLF
 		if (!property)
 			return Ineligible::NotLightingShader;
 
-		// GetRenderPasses treats material alpha below one as transparent (the record's: 1 without a material).
-		if (property->materialAlpha < 1.0f)
+		// GetRenderPasses treats material alpha below one as transparent (the record's: 1 without a material): blended, the forward
+		// epoch's with CS_DCLF_FORWARD (T7d: DeriveLightingDescriptors), else native.
+		if (property->materialAlpha < 1.0f && !ActiveToggles().forward)
 			return Ineligible::AlphaBlend;
 
 		LightingDescriptors descriptors;

@@ -24,6 +24,7 @@
 #include "DrawcallLimitFix/Engine/LightSelection.h"
 #include "DrawcallLimitFix/Engine/PrimaryCull.h"
 #include "DrawcallLimitFix/Engine/RoomVisibility.h"
+#include "DrawcallLimitFix/Engine/TreeList.h"
 #include "Features/Skylighting.h"
 
 #include <filesystem>
@@ -137,6 +138,8 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::PrimaryCull::Get().Install();
 	// T7b3, CS_DCLF_ROOM_PARITY: Main::IsRoomVisible's answers against PortalViews' VisibleSet (an observer; nothing installed without it).
 	DCLF::RoomVisibility::Install();
+	// T7b5, CS_DCLF_TREE_PARITY: the tree manager's list loop against DCLF's port (an observer; nothing installed without it).
+	DCLF::TreeList::Install();
 	if (DCLF::SwitchEnabled(DCLF::Switch::Timeline))
 		DCLF::ImportTimings::Install();
 	// T6b5, CS_DCLF_LOD_GATES (on unless 0): the engine's LOD swaps gated on DCLF's claims (skyrim-engine-notes.md, "LOD swaps and their
@@ -367,8 +370,8 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	}
 	// What the next builds ahead take from the frame.
 	draws.PostAheadContext();
-	// The stood-in fade roots' write-back: the stores the last task found, made here (engine writes are the render thread's, step 6e
-	// F1), then the next task on DCLF's executor, never joined (step 6e S4), finding the next ones from the frame's snapshot.
+	// The stood-in fade roots' write-back: the next task on DCLF's executor, never joined (step 6e S4), finding the stores from the
+	// frame's snapshot; the main thread makes them at the next Main::Update's entry (T7b4: PrimaryCull::AtUpdateEntry).
 	DCLF::IndirectDraws::Get().KickFadeWriteBack();
 	// T7b1 (CS_DCLF_ACCUMULATED_PARITY alone): the visibility readbacks the GPU is done with, decoded on DCLF's executor, never joined.
 	DCLF::IndirectDraws::Get().KickVisibilityReadback();
@@ -880,6 +883,17 @@ void DrawcallLimitFix::Hooks::BSShaderAccumulator_FinishAccumulating::thunk(RE::
 		DCLF::IndirectDraws::Get().CaptureShadowView(view, mode);
 }
 
+template <int N>
+void DrawcallLimitFix::Hooks::Accumulator_BlendedDraw<N>::thunk(void* a_accumulator, std::uint32_t a_renderFlags)
+{
+	// T7d: DCLF's blended objects first, behind every blended draw of the engine's (the ordering contract: drawcall-limit-fix.md, "The
+	// forward epoch (T7d)"), for the main camera's accumulator alone (the same function draws every render mode 0 accumulator's).
+	static REL::Relocation<void**> mainAccumulator{ REL::Offset(0x338c830) };
+	if (a_accumulator && a_accumulator == *mainAccumulator && globals::features::drawcallLimitFix.Running())
+		DCLF::IndirectDraws::Get().ExecuteForward();
+	func(a_accumulator, a_renderFlags);
+}
+
 void DrawcallLimitFix::Hooks::Install()
 {
 	// Always installed: the shadow views are a live toggle (Toggles.h), and the thunk costs one compare per
@@ -907,6 +921,15 @@ void DrawcallLimitFix::Hooks::Install()
 		stl::write_thunk_call<Main_Update_Entry>(REL::Offset(kUpdateEntryCall).address());
 	else
 		logger::warn("[DCLF] Main::Update's first call is not where expected; the stood-in roots' kAccumulated is not written (T7b2)");
+	// T7d: the main pass's blended draw (FUN_1414b39d0), at both its call sites in FUN_1414b3390.
+	constexpr std::uintptr_t kBlendedDraw = 0x14b39d0, kBlendedUnderWater = 0x14b33e1, kBlendedAfterWater = 0x14b38d3;
+	if (DCLF::Engine::CallsTo(REL::Offset(kBlendedUnderWater).address(), REL::Offset(kBlendedDraw).address()) &&
+		DCLF::Engine::CallsTo(REL::Offset(kBlendedAfterWater).address(), REL::Offset(kBlendedDraw).address())) {
+		stl::write_thunk_call<Accumulator_BlendedDraw<0>>(REL::Offset(kBlendedUnderWater).address());
+		stl::write_thunk_call<Accumulator_BlendedDraw<1>>(REL::Offset(kBlendedAfterWater).address());
+	} else {
+		logger::warn("[DCLF] the main pass's blended draw is not where expected; the forward epoch (T7d) never runs, and CS_DCLF_FORWARD must stay off");
+	}
 	logger::info("[DCLF] Native pass hooks installed");
 }
 

@@ -73,6 +73,11 @@ namespace DCLF
 		// distance, against the CPU's test over the same inputs (CS_DCLF_SET_PARITY: terrainCpu).
 		std::uint32_t terrainNearTested = 0, terrainNear = 0, terrainCpuTested = 0, terrainCpuNear = 0;
 		bool terrainCpu = false;
+		// T7d, sampled likewise: the colour segment's forward inputs tested, inside the frustum, rejected by the HZB, and the forward draws
+		// appended (sorted and drawn by the forward epoch); and, under CS_DCLF_SET_PARITY, the blended passes the engine's main
+		// registration handed in for members that frame (all withheld: what it would have drawn of the class).
+		std::uint32_t forwardTested = 0, forwardInView = 0, forwardOccluded = 0, forwardDrawn = 0, forwardEngine = 0;
+		bool forwardObserved = false;
 		// The fade test (kObjectFadeTest), sampled likewise: resident inputs the depth segment's first phase found in the
 		// frustum under a fade root, and those it dropped past their fade-out distance.
 		std::uint32_t fadeTested = 0, fadeHidden = 0;

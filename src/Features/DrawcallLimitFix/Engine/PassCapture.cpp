@@ -482,7 +482,14 @@ namespace DCLF
 		{
 			++passesOnThisThread;
 			auto& capture = PassCapture::Get();
-			if (!capture.bypassed.load(std::memory_order_acquire) && (capture.WithholdMain(a_batch, a_pass) || capture.WithholdReflection(a_batch, a_pass)))
+			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdMain(a_batch, a_pass)) {
+				// T7d: a forward member's blended pass, for the <- FORWARD observer (CS_DCLF_SET_PARITY alone).
+				static const bool observe = SwitchEnabled(Switch::SetParity);
+				if (observe && a_pass && a_pass->accumulationHint == 1)
+					capture.forwardRegistered.fetch_add(1, std::memory_order_relaxed);
+				return;
+			}
+			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdReflection(a_batch, a_pass))
 				return;
 			if (RegistrationCensus::Enabled() && !capture.bypassed.load(std::memory_order_acquire))
 				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::MainList), FadingAtRegistration(a_pass));

@@ -29,6 +29,7 @@ namespace DCLF
 		LodCrossfade,
 		MtLand,
 		TbTerrain,
+		Forward,
 		ProjectedUv,
 		SwitchNodes,
 		LodObjects,
@@ -68,6 +69,7 @@ namespace DCLF
 		FanoutParity,
 		AccumulatedParity,
 		RoomParity,
+		TreeParity,
 
 		// Diagnostics: stats, shader debugging, and the probes of open investigations (dclf-open-defects.md).
 		Stats,

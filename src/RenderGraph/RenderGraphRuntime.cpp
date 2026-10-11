@@ -489,6 +489,8 @@ struct RenderGraphRuntime::Impl
 			return "DrawcallLimitFix::Skylighting occlusion / " + a_pass;
 		case Segment::Reflection:
 			return "DrawcallLimitFix::Reflection faces / " + a_pass;
+		case Segment::Forward:
+			return "DrawcallLimitFix::Forward / " + a_pass;
 		}
 		return "RenderGraph::" + a_pass;
 	}
@@ -661,6 +663,8 @@ struct RenderGraphRuntime::Impl
 			return "CS DCLF: Skylighting occlusion";
 		case Segment::Reflection:
 			return "CS DCLF: reflection faces";
+		case Segment::Forward:
+			return "CS DCLF: forward";
 		}
 		return "CS render graph";
 	}
@@ -682,6 +686,8 @@ struct RenderGraphRuntime::Impl
 			return "CS DCLF: Skylighting occlusion inputs";
 		case Segment::Reflection:
 			return "CS DCLF: reflection faces inputs";
+		case Segment::Forward:
+			return "CS DCLF: forward inputs";
 		}
 		return "CS render graph: feature inputs";
 	}
@@ -946,10 +952,10 @@ bool RenderGraphRuntime::Initialize()
 		desc.reuseRecordings = !EnvEquals("CS_ORG_REUSE_RECORDINGS", "0");
 		// The segments in the order a frame runs them: the shadow views at AfterShadowMaps, the Z-prepass at the depth pass, the water
 		// reflection's faces after it, Skylighting's map, Light Limit Fix's culling at Prepass, the colour pass where the main pass's
-		// opaque batches end.
+		// opaque batches end, and the forward epoch (T7d) at the engine's blended draw after the deferred composite.
 		if (EpochsEnabled())
 			desc.epochOrder = { EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::Reflection), EpochOf(Segment::SkyOcclusion), EpochOf(Segment::LightCulling),
-				EpochOf(Segment::MainOpaque) };
+				EpochOf(Segment::MainOpaque), EpochOf(Segment::Forward) };
 		const bool closed = desc.closedExecutions;
 		state->host = std::make_unique<org::PersistentGraphHost>(std::move(desc));
 		// The frame-wait timeline, before anything builds the graph (its packets bind it when prepared): only with a queue of the
@@ -978,11 +984,11 @@ bool RenderGraphRuntime::Initialize()
 	if (state->asyncEpochs) {
 		try {
 			std::vector<std::uint32_t> epochs{ EpochOf(Segment::Reflection), EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::SkyOcclusion),
-				EpochOf(Segment::LightCulling), EpochOf(Segment::MainOpaque) };
+				EpochOf(Segment::LightCulling), EpochOf(Segment::MainOpaque), EpochOf(Segment::Forward) };
 			// Drawcall Limit Fix's epochs are revision-driven: each submission carries the recording of the scene revision its commit
 			// selected (the commit trusts it), so no live ticket is prepared for them. Light culling's stays live.
 			std::vector<std::uint32_t> revisionEpochs{ EpochOf(Segment::Reflection), EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass),
-				EpochOf(Segment::SkyOcclusion), EpochOf(Segment::MainOpaque) };
+				EpochOf(Segment::SkyOcclusion), EpochOf(Segment::MainOpaque), EpochOf(Segment::Forward) };
 			state->host->SetAsyncEpochs(std::move(epochs), std::move(revisionEpochs));
 			logger::info("[ORG] Async epochs: each epoch is prepared and recorded ahead on the graph host's thread; the render thread submits (DCLF's from its scene revisions)");
 		} catch (const std::exception& e) {

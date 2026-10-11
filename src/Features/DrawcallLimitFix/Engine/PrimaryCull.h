@@ -121,6 +121,19 @@ namespace DCLF
 		void AtUpdateEntry(bool a_running);
 		/** @brief Whether the cut stands in for a_root now (admitted, unmixed: SyncFadeOwnership's set). Render (main) thread. */
 		bool StoodIn(const void* a_root) const { return standInRoots.contains(a_root); }
+		/**
+		 * @brief T7b4, any thread (the animation gate's job threads): whether DCLF is a_node's one fade writer this frame - its root is
+		 * in the set the main thread published at Main::Update's entry (the roots no engine cull steps: the stood-in roots; once the
+		 * culls stop, every listed root). The gate's fade update (FUN_1402cff60 -> FUN_14147a160) skips those; FadeStateCS makes the
+		 * same update on the GPU from the animated batch, and the write-back carries its milestones to the node.
+		 */
+		bool FadeWrittenByDclf(const void* a_node) const
+		{
+			const auto* writers = fadeWriters.load(std::memory_order_acquire);
+			return writers && writers->contains(a_node);
+		}
+		/** @brief T7b4: the single writer's counts, and CS_DCLF_FADE_PARITY's <- FADE DOUBLE (empty when there is nothing to report). */
+		std::string FadeWriterReport();
 		/** @brief Whether a_node is an eligible entry's root of the cut's snapshot (the readback parity's description). */
 		bool IsEntry(const RE::NiAVObject* a_node) const { return cut.eligible.contains(a_node); }
 		/**
@@ -554,6 +567,32 @@ namespace DCLF
 		// (AtUpdateEntry), and the stood-in list the <- ANIM RATE prediction is made from.
 		ankerl::unordered_dense::set<const void*> standInRoots;
 		std::vector<const void*> standInList;
+		// T7b4: the roots whose fade DCLF alone writes (FadeWrittenByDclf), published by the main thread at Main::Update's entry as an
+		// immutable set when standInRoots moved since (standInVersion), and let go at a later entry: the last cycle was waited for, so
+		// no gate reads it. Lock-free; the gate's skips since the last report.
+		using FadeWriterSet = ankerl::unordered_dense::set<const void*>;
+		std::atomic<const FadeWriterSet*> fadeWriters{ nullptr };
+		std::uint64_t standInVersion = 1, fadeWritersVersion = 0;
+		std::atomic<std::uint64_t> gateFadeSkipped{ 0 };
+		/**
+		 * @brief CS_DCLF_FADE_PARITY's <- FADE DOUBLE: the roots DCLF writes as one frame's entry found them, with their last-visible
+		 * frame (+0x13C, which only an OnVisible's fade update writes) and whether that entry stored them; the next entry reads +0x13C
+		 * again (the sample's tables hold the nodes), and a change is an engine fade step on a root DCLF writes. Main thread.
+		 */
+		struct FadeDoubleSample
+		{
+			std::shared_ptr<const void> tables;  // SceneStore::Tables: hold the nodes until the next entry
+			std::vector<const void*> roots;
+			std::vector<std::int32_t> lastVisible;
+			std::vector<std::uint8_t> stored;
+		};
+		std::unique_ptr<FadeDoubleSample> fadeDoubleSample;
+		bool fadeCutSkipped = false;  // a frame since the last entry had the engine cull every entry (PrepareFrame's preconditions)
+		std::uint64_t fadeDoubleFrames = 0, fadeDoubleRoots = 0, fadeDoubleStepped = 0, fadeDoubleSteppedStored = 0, fadeDoubleSkippedFrames = 0,
+					  fadeDoubleSkippedStepped = 0;
+		std::string fadeDoubleFirst;
+		/** @brief Main::Update's entry: the writer set published, and CS_DCLF_FADE_PARITY's sample judged and taken again. */
+		void PublishFadeWriters(bool a_running, const std::vector<const void*>& a_stored);
 		// T7b2's camera cut test (PrepareFrame, the list processes' camera): the last frame's position and rotation.
 		std::array<float, 12> cutCamera{};
 		bool cutCameraKnown = false;

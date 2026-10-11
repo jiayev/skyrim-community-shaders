@@ -556,8 +556,24 @@ namespace DCLF
 
 		// Blended geometry is drawn after the deferred composite, forward and sorted; the one exception is
 		// the engine's blended decal group, which blends inside the G-buffer pass and is handled above.
-		if (blending && a_out.decalGroup != 2 && !a_layer)
+		// T7d (CS_DCLF_FORWARD): the forward epoch draws it, as the engine's blended draw (FUN_1414b39d0) does: the pass's
+		// accumulation hint 1 (GetRenderPasses: alpha-blended, or the material's alpha below one), drawn with the alpha property
+		// applied (render flag 4: FUN_14150bc80's blend mode from its functions; none for a material alpha below one without
+		// blending, whose property alpha is the fade's and 1 for a settled object), write mode 11, the depth mode SetupGeometry
+		// derives from kZBufferTest / kZBufferWrite, and the forward pixel stage. A pair FUN_14150bc80 leaves as it finds it (stale
+		// state) stays native, and so does anything Terrain Blending holds.
+		const bool translucent = blending || a_property.materialAlpha < 1.0f;
+		if (translucent && a_out.decalGroup == 0 && !a_layer && a_out.terrainGroup == 0 && ActiveToggles().forward) {
+			const std::uint32_t blendMode = blending ? AlphaBlendModeOf(*alpha) : 0u;
+			if (blending && blendMode == 0)
+				return Ineligible::AlphaBlend;
+			a_out.forward = true;
+			a_out.forwardBlendMode = blendMode;
+			a_out.forwardDepthTest = (f & Bit(Flag::kZBufferTest)) != 0;
+			a_out.forwardDepthWrite = (f & Bit(Flag::kZBufferWrite)) != 0;
+		} else if (blending && a_out.decalGroup != 2 && !a_layer) {
 			return Ineligible::AlphaBlend;
+		}
 
 		// The descriptor derived from the property, as GetRenderPasses builds it for an opaque object with its specular and
 		// envmap LOD fades not run out: the draw fades those two by distance (LodFadeFrame), so the descriptor is the same
@@ -639,7 +655,8 @@ namespace DCLF
 		a_out.rawVertex = VertexDescriptorFromPass(SetupTechniqueDescriptor(d));
 		a_out.rawPixel = PixelDescriptorFromPass(SetupTechniqueDescriptor(d));
 		std::uint32_t vertex = 0, pixel = 0;
-		LightingShaderDescriptors(d, true, vertex, pixel);
+		// The forward epoch's draws are forward-shaded (no Deferred), as the engine's blended draws after the composite are.
+		LightingShaderDescriptors(d, !a_out.forward, vertex, pixel);
 
 		a_out.technique = (d >> 24) & 0x3f;
 		a_out.pass = d;

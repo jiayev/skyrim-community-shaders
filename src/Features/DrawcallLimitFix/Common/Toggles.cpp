@@ -17,6 +17,9 @@ namespace DCLF
 			{ &S::tbTerrain, Switch::TbTerrain, kOn, "terrain under TB", {}, "Terrain under Terrain Blending (CS_DCLF_TB_TERRAIN)",
 				"With Terrain Blending on, DCLF draws the terrain as that feature does: its near blocks' depth into its terrain depth and, offset, into the main depth, and its colour blended after the opaque and decal draws, then the meshes it redraws after the terrain.",
 				true, { &S::mtLand } },
+			{ &S::forward, Switch::Forward, kOn, "forward", {}, "Blended objects: the forward epoch (CS_DCLF_FORWARD)",
+				"T7d: DCLF draws blended Lighting geometry itself, sorted back to front on the GPU, just before the engine's own blended draws (effects, particles). Experimental: off by default.",
+				true, {}, true },
 			{ &S::switchNodes, Switch::SwitchNodes, kOn, "switch nodes", {}, "Under switch nodes: trees, harvestables (CS_DCLF_SWITCH_NODES)", nullptr, true, {} },
 			{ &S::lodObjects, Switch::LodObjects, kOn, "object LOD", {}, "Object LOD: distant objects (CS_DCLF_LOD_OBJECTS)", nullptr, true, {} },
 			{ &S::lodTerrain, Switch::LodTerrain, kOn, "terrain LOD", {}, "Terrain LOD: distant land (CS_DCLF_LOD_TERRAIN)", nullptr, true, {} },
@@ -63,7 +66,7 @@ namespace DCLF
 			set.cullMode = (cull.empty() || cull == "occlusion") ? 2 : cull == "frustum" ? 1 : 0;
 			for (const auto& toggle : kToggles) {
 				const auto& value = SwitchValue(toggle.seed);
-				set.*toggle.member = value.empty() || value == toggle.onValue;
+				set.*toggle.member = value.empty() ? !toggle.offByDefault : value == toggle.onValue;
 			}
 			return set;
 		}

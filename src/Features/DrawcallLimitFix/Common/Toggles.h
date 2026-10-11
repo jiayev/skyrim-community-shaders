@@ -39,6 +39,9 @@ namespace DCLF
 		// T7c1: while Terrain Blending holds the terrain, the terrain (its groups 1 and 2: Records.h, ObjectTerrainGroup), drawn as
 		// that feature draws it;
 		bool tbTerrain = false;
+		// T7d: blended Lighting geometry (alpha-blended, or a material alpha below one), drawn by the forward epoch: a GPU depth sort of
+		// the visible set, back to front, before the engine's own blended draws (off by default: CS_DCLF_FORWARD=1 seeds it on);
+		bool forward = false;
 		// a leaf under an NiSwitchNode, in the frames every switch on its path selects it (trees, harvestables);
 		bool switchNodes = false;
 		// object LOD (TES::lodLandRoot's BSSubIndexTriShape blocks): tracked under the LOD root, drawn by their visible segments;
@@ -86,6 +89,7 @@ namespace DCLF
 		const char* tooltip;       // or nullptr
 		bool entersClassification;  // a change drops the classification caches (SceneStore::InvalidateVerdicts)
 		bool ToggleSet::*needs[2];  // the flags it needs on, earlier in kToggles (nullptr when unused)
+		bool offByDefault = false;  // unset seeds it off (T7d's forward epoch): only its onValue turns it on
 	};
 
 	/** @brief Every flag of ToggleSet, in menu order; a flag comes after the flags it needs. */

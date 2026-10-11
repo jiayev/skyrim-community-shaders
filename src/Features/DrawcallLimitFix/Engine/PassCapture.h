@@ -224,6 +224,14 @@ namespace DCLF
 		/** @brief SubPassOf from the alpha property's testing bit (T6b1b: a record's). */
 		static std::uint32_t SubPassOf(bool a_alphaTesting, std::uint64_t a_propertyFlags);
 
+		/**
+		 * @brief T7d, CS_DCLF_SET_PARITY (the <- FORWARD observer): the blended passes (accumulation hint 1, the main modes' list insertion)
+		 * the main camera's registration handed in for members since the last call, all withheld - what the engine would have drawn of
+		 * the forward class, against the forward objects the colour segment found in view (IndirectDraws, ReadCullCounters). Render
+		 * thread, once a colour epoch; 0 without the parity.
+		 */
+		std::uint32_t TakeForwardRegistered() { return forwardRegistered.exchange(0, std::memory_order_relaxed); }
+
 	private:
 		PassCapture();
 		static constexpr std::size_t kCapacity = 32768;
@@ -245,6 +253,7 @@ namespace DCLF
 		std::atomic<std::uint32_t> directWithheld{ 0 };
 		std::atomic<std::uint32_t> mainWithheld{ 0 }, mainCrossfadeCopies{ 0 }, mainUnmodelledFades{ 0 }, occlusionWithheld{ 0 };
 		std::atomic<std::uint32_t> treeLodWithheld{ 0 };
+		std::atomic<std::uint32_t> forwardRegistered{ 0 };  // T7d (TakeForwardRegistered)
 		std::atomic<bool> treeLodOwned{ false };
 		std::atomic<std::uint32_t> reflectionWithheld{ 0 }, reflectionTreeLodWithheld{ 0 };
 		std::atomic<std::uint32_t> reflectionResidueWatch{ 0 }, reflectionResidueLod{ 0 }, reflectionResidueTree{ 0 };

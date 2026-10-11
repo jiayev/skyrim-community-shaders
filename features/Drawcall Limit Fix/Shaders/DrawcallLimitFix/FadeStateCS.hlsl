@@ -141,6 +141,7 @@ static const uint kObjectFadeNodeRow = 8;
 static const uint kNoObject = 0xFFFFFFFFu;
 static const uint kFadeRootStoodIn = 1u << 19;
 static const uint kFadeEventHeaderWords = 4;
+static const uint kFadeEventWords = 8;  // Records.h, FadeEvent
 
 static FadeFrame F;
 
@@ -440,17 +441,19 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits, uint a_progr
 	return test < 0 ? InView(a_centre, a_radius) : test != 0;
 }
 
-// The fade write-back (drawcall-limit-fix.md, "The fade write-back"): the engine reads a stood-in root's node (the tree LOD's
-// crossfade, the occlusion maps' cull, the next listing), which only this pass updates. Its milestones: 0 faded out, 1 fading,
-// 2 faded in.
+// The fade write-back (drawcall-limit-fix.md, "The fade write-back", "T7b4/T7b6"): the engine reads a stood-in root's node (the
+// tree LOD's crossfade, the occlusion maps' cull, the animation gate, the next listing), which only this pass updates. Its
+// milestones: 0 faded out, 1 fading, 2 faded in; with them (T7b4) the leaf LOD's level (+0x152 & 0xF) and transition
+// (+0x153 & 0x70), so a level step or its settling is written too, not every blend step.
 uint FadeMilestone(FadeNodeState a_state)
 {
-	return a_state.CurrentFade <= 0.0 ? 0u : (a_state.CurrentFade >= 1.0 ? 2u : 1u);
+	const uint fade = a_state.CurrentFade <= 0.0 ? 0u : (a_state.CurrentFade >= 1.0 ? 2u : 1u);
+	return fade | ((a_state.Levels & 0xFu) << 2) | (((a_state.Levels >> 12) & 0x7u) << 6);
 }
 
 // A stood-in root whose milestone is not the one last reported appends an event, and counts it reported once it is in the
 // list; one that does not fit tries again next frame (the count tells the host to grow the list). Any other root's node is
-// the engine's own, so its milestone is what the node holds.
+// the engine's own, so its milestone is what the node holds. The list's header (its frame) is the depth commit's.
 void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
 {
 	if (EventsIndex == 0 || ReportedIndex == 0)
@@ -466,18 +469,19 @@ void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
 		return;
 	}
 	RWStructuredBuffer<uint> events = ResourceDescriptorHeap[EventsIndex];
-	events[1] = F.SceneFrame;  // the list's frame: the host applies the lists in frame order
 	uint slot;
 	InterlockedAdd(events[0], 1u, slot);
 	if (slot >= EventCapacity) {
 		reported[a_index] = last;
 		return;
 	}
-	const uint at = kFadeEventHeaderWords + slot * 4u;
+	const uint at = kFadeEventHeaderWords + slot * kFadeEventWords;
 	events[at] = a_index;
 	events[at + 1u] = a_root.Generation;
 	events[at + 2u] = a_state.Flags;
 	events[at + 3u] = asuint(a_state.CurrentFade);
+	events[at + 4u] = a_state.Levels;
+	events[at + 5u] = asuint(a_state.Blend);
 	reported[a_index] = uint2(a_root.Generation, milestone);
 }
 

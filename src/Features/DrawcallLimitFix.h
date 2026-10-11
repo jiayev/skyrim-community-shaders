@@ -170,8 +170,8 @@ private:
 		/**
 		 * @brief Main::Update's first call (AE 0x140645ea0 +0x3E, FUN_140cfd280: the thread stages' events reset), on the main thread
 		 * before the frame's job lists start (0x14064613f) and after the last frame's cycle was waited for (0x14064694d): T7b2's
-		 * kAccumulated writes (PrimaryCull::AtUpdateEntry), the one point every reader sees in the same frame (skyrim-engine-notes.md,
-		 * "T7b0").
+		 * kAccumulated writes and T7b4's fade write-back stores (PrimaryCull::AtUpdateEntry), the one point every reader sees in the
+		 * same frame (skyrim-engine-notes.md, "T7b0").
 		 */
 		struct Main_Update_Entry
 		{
@@ -187,6 +187,19 @@ private:
 		struct BSShaderAccumulator_FinishAccumulating
 		{
 			static void thunk(RE::BSGraphics::BSShaderAccumulator* a_accumulator, std::uint32_t a_renderFlags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		/**
+		 * @brief T7d: the main pass's blended draw (AE FUN_1414b39d0, BSShaderAccumulator's sorted blended list interleaved with the
+		 * geometry groups' stack, after the deferred composite), at both its call sites in FinishAccumulatingPostResolveDepth's render
+		 * mode 0 (FUN_1414b3390: +0x51, first when the camera is under water; +0x543, after the water otherwise). For the main
+		 * camera's accumulator the forward epoch draws DCLF's blended objects first (IndirectDraws::ExecuteForward).
+		 */
+		template <int N>
+		struct Accumulator_BlendedDraw
+		{
+			static void thunk(void* a_accumulator, std::uint32_t a_renderFlags);
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 

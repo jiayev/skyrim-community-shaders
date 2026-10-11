@@ -734,6 +734,195 @@ namespace DCLF::Draws
 		bool phaseTwo = false;
 	};
 
+	/*
+	 * T7d: the forward epoch's passes (drawcall-limit-fix.md, "The forward epoch (T7d)"). The colour segment's BuildDraws appends every
+	 * visible forward draw (Records.h, kObjectForward) to the forward range's staging half with its view depth; ForwardSortPass, in the
+	 * colour epoch, writes them back to front into the sorted half; ForwardDrawPass, in the forward epoch (the engine's blended draw,
+	 * FUN_1414b39d0, after the deferred composite), draws the sorted half through the colour signature, on the colour pass's
+	 * attachments, every one loaded: the forward keys' pipelines write the main target alone.
+	 */
+	struct ForwardSortBindings
+	{
+		org::DeclaredViewToken sequences, count;
+	};
+
+	struct ForwardSortFrame
+	{
+		std::shared_ptr<const ComputeProgram> program;
+		ForwardSortConstants constants{};
+		std::uint32_t groups = 0;
+	};
+
+	class ForwardSortPass final : public org::TypedRenderGraphPass<ForwardSortPass, ForwardSortFrame, ForwardSortBindings>
+	{
+	public:
+		explicit ForwardSortPass(std::shared_ptr<Resources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		ForwardSortBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			ForwardSortBindings bindings{};
+			bindings.sequences = a_builder.UnorderedAccess(*resources->sequences).View();
+			bindings.count = a_builder.ShaderResource(resources->count).View();
+			return bindings;
+		}
+
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::MainOpaque);
+			a_out.push_back(frame ? frame->generation : 0);
+		}
+
+		ForwardSortFrame Prepare(const ForwardSortBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		{
+			ForwardSortFrame prepared{};
+			if (!resources->forwardSort || !BuildsDraws(a_preparation, *resources, RenderGraphRuntime::Segment::MainOpaque))
+				return prepared;
+			const auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::MainOpaque);
+			if (!frame || !frame->forwardCapacity)
+				return prepared;
+			prepared.program = resources->forwardSort;
+			auto& constants = prepared.constants;
+			constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
+			constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
+			constants.stagingBase = static_cast<std::uint32_t>(ForwardStagingSlot(*frame));
+			constants.capacity = frame->forwardCapacity;
+			constants.sequenceStride = static_cast<std::uint32_t>(sizeof(DrawSequence));
+			// Every slot the staging half can hold, each thread past the count returning.
+			prepared.groups = (frame->forwardCapacity + kForwardSortGroup - 1) / kForwardSortGroup;
+			return prepared;
+		}
+
+		static void Record(const ForwardSortBindings&, const ForwardSortFrame& a_frame, org::PassRecordContext& a_recording)
+		{
+			if (!a_frame.program || !a_frame.groups)
+				return;
+			auto& commands = a_recording.Commands();
+			commands.BindLayout(a_frame.program->layout->GetHandle());
+			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
+			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kForwardSortConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
+			commands.Dispatch(a_frame.groups, 1, 1);
+		}
+
+	private:
+		std::shared_ptr<Resources> resources;
+	};
+
+	class ForwardDrawPass final : public org::TypedRenderGraphPass<ForwardDrawPass, PreparedDraws, PassBindings>
+	{
+	public:
+		explicit ForwardDrawPass(std::shared_ptr<Resources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		PassBindings Declare(org::PassBuilder& a_builder)
+		{
+			// What the colour pass declares (MainOpaquePass), for the same draws' reads: the forward keys' pipelines are the main set's.
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			const std::span<const org::SrvView> noViews{};
+			PassBindings bindings{};
+			for (std::uint32_t i = 0; i < resources->targetCount; ++i)
+				bindings.targets[i] = a_builder.RenderTarget(resources->native[i]).View();
+			bindings.depth = a_builder.DepthReadWrite(resources->nativeDepth).View();
+			bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
+			bindings.count = a_builder.IndirectArguments(resources->count);
+			bindings.materialRows = a_builder.ShaderResource(*resources->materialRows.buffer, noViews).Resource();
+			bindings.pipelineRows = a_builder.ShaderResource(*resources->pipelineRows.buffer, noViews).Resource();
+			bindings.objects = a_builder.ShaderResource(*resources->scene->objects, noViews).Resource();
+			bindings.extras = a_builder.ShaderResource(*resources->scene->extras, noViews).Resource();
+			a_builder.VertexBuffer(*resources->scene->facePositions);
+			for (const auto& frameBuffer : resources->frameBuffers)
+				bindings.frameBuffers.push_back(a_builder.ShaderResource(frameBuffer.copy, noViews).Resource());
+			a_builder.ShaderResource(resources->frameConstants, noViews);
+			if (resources->lightLimitFix) {
+				bindings.lights = a_builder.ShaderResource(org::ResourceIdentifier("cs.llf.lights"), noViews).Resource();
+				bindings.lightIndexList = a_builder.ShaderResource(org::ResourceIdentifier("cs.llf.light-index-list"), noViews).Resource();
+				bindings.lightGrid = a_builder.ShaderResource(org::ResourceIdentifier("cs.llf.light-grid"), noViews).Resource();
+			}
+			return bindings;
+		}
+
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::MainOpaque);
+			a_out.push_back(frame ? frame->generation : 0);
+		}
+
+		PreparedDraws Prepare(const PassBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		{
+			PreparedDraws prepared{};
+			// The forward epoch's recording is prepared for the colour shape (SceneRevision.cpp: kForwardEpoch).
+			auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::MainOpaque);
+			if (!frame || !frame->forwardCapacity || !frame->indirect.valid || !resources->forwardSort || !resources->preprocessForward)
+				return prepared;
+			prepared.preprocess = resources->preprocessForward.get();
+			prepared.framePushWords = FramePushWords(resources->frameConstantsAddress);
+			prepared.frame = std::move(frame);
+			prepared.targetCount = resources->targetCount;
+			for (std::uint32_t i = 0; i < prepared.targetCount; ++i)
+				prepared.targetViews[i] = a_preparation.Capture(a_bindings.targets[i]);
+			prepared.depthView = a_preparation.Capture(a_bindings.depth);
+			return prepared;
+		}
+
+		static void Record(const PassBindings& a_bindings, const PreparedDraws& a_prepared, org::PassRecordContext& a_recording)
+		{
+			if (!a_prepared.frame || !a_prepared.preprocess)
+				return;
+			const auto& frame = *a_prepared.frame;
+			auto& commands = a_recording.Commands();
+			commands.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
+			// Every attachment loaded: the main target holds the composited frame the draws blend onto, the G-buffer attachments are
+			// masked off by the forward pipelines (and keep what the frame's later passes read).
+			std::array<rhi::ColorAttachment, kColorTargets> colors{};
+			for (std::uint32_t i = 0; i < a_prepared.targetCount; ++i) {
+				colors[i].rtv = a_recording.Resolve(a_prepared.targetViews[i]);
+				colors[i].loadOp = rhi::LoadOp::Load;
+				colors[i].storeOp = rhi::StoreOp::Store;
+				colors[i].resource = a_recording.Resolve(a_bindings.targets[i].Resource()).GetHandle();
+			}
+			rhi::DepthAttachment depth{};
+			depth.dsv = a_recording.Resolve(a_prepared.depthView);
+			depth.depthLoad = rhi::LoadOp::Load;
+			depth.depthStore = rhi::StoreOp::Store;
+			depth.stencilLoad = rhi::LoadOp::Load;
+			depth.stencilStore = rhi::StoreOp::Store;
+			rhi::PassBeginInfo begin{};
+			begin.width = frame.width;
+			begin.height = frame.height;
+			begin.minDepth = frame.minDepth;
+			begin.maxDepth = frame.maxDepth;
+			begin.depth = &depth;
+			begin.colors = { colors.data(), a_prepared.targetCount };
+			begin.debugName = "DCLF forward";
+			const auto sequences = a_recording.Resolve(a_bindings.sequences).GetHandle();
+			const auto count = a_recording.Resolve(a_bindings.count).GetHandle();
+			const auto signature = frame.indirect.signatures[kColorVariant];
+			// The sorted half (ForwardSortCS.hlsl), its count the forward count word (BuildDrawsCS.hlsl appended that many).
+			const std::uint64_t arguments = (ForwardStagingSlot(frame) + frame.forwardCapacity) * sizeof(DrawSequence);
+			const std::uint64_t countOffset = std::uint64_t(kCountForwardWord) * sizeof(std::uint32_t);
+			auto beginDrawPass = [&](rhi::CommandList& a_list) {
+				a_list.BeginPass(begin);
+				a_list.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
+				a_list.BindLayout(frame.indirect.layout);
+				a_list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
+			};
+			// The explicit preprocess, before the pass, for the state its execution has (MainOpaquePass's rule).
+			auto& state = a_prepared.preprocess->Begin(a_recording.FrameSlot());
+			state.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
+			beginDrawPass(state);
+			commands.PreprocessIndirect(state, signature, sequences, arguments, count, countOffset, frame.forwardCapacity);
+			state.EndPass();
+			state.End();
+			beginDrawPass(commands);
+			commands.ExecuteIndirect(signature, sequences, arguments, count, countOffset, frame.forwardCapacity);
+			commands.EndPass();
+		}
+
+	private:
+		std::shared_ptr<Resources> resources;
+	};
+
 	void FoldEyeIntoViewProj(const std::array<float, 16>& a_viewProj, const RE::NiPoint3& a_eye, float (&a_out)[16])
 	{
 		std::memcpy(a_out, a_viewProj.data(), sizeof(a_out));
@@ -892,6 +1081,11 @@ namespace DCLF::Draws
 			constants.phaseTwoBase = frame->sequenceDraws;
 			constants.decalBase = 2 * frame->sequenceDraws;
 			constants.decalStride = frame->sequenceDecals;
+			// T7d: the forward range's staging half, the colour segment's alone (its shape's forwardCapacity is 0 elsewhere).
+			if (now == RenderGraphRuntime::Segment::MainOpaque && frame->forwardCapacity) {
+				constants.forwardBase = static_cast<std::uint32_t>(ForwardStagingSlot(*frame));
+				constants.forwardCapacity = frame->forwardCapacity;
+			}
 			return prepared;
 		}
 
@@ -1128,7 +1322,6 @@ namespace DCLF::Draws
 			const auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass);
 			a_out.push_back(resources->scene->layout.load(std::memory_order_acquire));
 			a_out.push_back(frame ? frame->generation : 0);
-			a_out.push_back(resources->scene->fadeWriteBack ? resources->scene->fadeWriteBack->capacity.load(std::memory_order_acquire) : 0u);
 		}
 
 		FadeStatePrepared Prepare(const FadeStateBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
@@ -1151,11 +1344,12 @@ namespace DCLF::Draws
 			constants.animatedIndex = CaptureViewIndex(a_preparation, a_bindings.animated);
 			for (std::uint32_t h = 0; h < 2; ++h)
 				constants.outIndices[h] = CaptureViewIndex(a_preparation, a_bindings.published[h]);
-			if (scene.fadeEvents && scene.fadeWriteBack) {
+			// The bound event list's capacity, which its staging set's host buffers hold whole (T7b6: added with the growth, before any
+			// revision names it).
+			if (scene.fadeEvents && scene.fadeWriteBack && scene.fadeWriteBack->SetFor(sizing.fadeEventCapacity)) {
 				constants.eventsIndex = CaptureViewIndex(a_preparation, a_bindings.events);
 				constants.reportedIndex = CaptureViewIndex(a_preparation, a_bindings.reported);
-				// The bound event list's, and no more than every slot's host buffer takes.
-				constants.eventCapacity = std::min(scene.fadeWriteBack->capacity.load(std::memory_order_acquire), sizing.fadeEventCapacity);
+				constants.eventCapacity = sizing.fadeEventCapacity;
 			}
 			constants.latchIndex = frame->latch->SrvIndex();
 			// Every slot the buffers hold: the shader stops at the frame row's count.
@@ -1187,14 +1381,15 @@ namespace DCLF::Draws
 	};
 	struct FadeEventReadbackPrepared
 	{
-		std::shared_ptr<FadeWriteBack> writeBack;
-		std::uint32_t listEvents = 0;  // the bound event list's capacity (the preparation's scene sizing)
+		std::shared_ptr<FadeWriteBack> writeBack;           // holds the staging set
+		const FadeWriteBack::StagingSet* set = nullptr;   // the bound list's (the preparation's scene sizing)
 	};
 
 	/**
-	 * @brief The fade write-back's events (FadeStateCS), copied to the frame slot's host buffer after the pass; what that buffer
-	 * held from the slot's last execution (finished by now: the slot is the host's) is read first and handed to the main thread
-	 * (FadeWriteBack, IndirectDraws::ApplyFadeWriteBack).
+	 * @brief The fade write-back's events (FadeStateCS) copied whole into the host buffer of the frame slot, in the staging set of the
+	 * bound list's capacity. T7b6: a fixed copy, as VisibilityReadbackPass's: the depth epoch's recordings are made once per ring slot
+	 * for a revision and submitted again every frame (persistent-epochs.md), so the recording depends on the frame slot alone. The
+	 * depth commit harvests the buffer when the slot comes round again (Impl::ArmFadeReadback).
 	 */
 	class FadeEventReadbackPass final : public org::TypedRenderGraphPass<FadeEventReadbackPass, FadeEventReadbackPrepared, FadeEventReadbackBindings>
 	{
@@ -1216,52 +1411,20 @@ namespace DCLF::Draws
 
 		FadeEventReadbackPrepared Prepare(const FadeEventReadbackBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
-			return { scene->fadeWriteBack, SceneSizingOf(a_preparation, *scene).fadeEventCapacity };
+			const auto& writeBack = scene->fadeWriteBack;
+			return { writeBack, writeBack ? writeBack->SetFor(SceneSizingOf(a_preparation, *scene).fadeEventCapacity) : nullptr };
 		}
 
 		static void Record(const FadeEventReadbackBindings& a_bindings, const FadeEventReadbackPrepared& a_frame, org::PassRecordContext& a_recording)
 		{
-			if (!a_frame.writeBack)
+			if (!a_frame.set)
 				return;
-			auto& writeBack = *a_frame.writeBack;
-			const std::uint32_t slot = a_recording.FrameSlot();
-			if (slot >= writeBack.readback.size())
+			const std::uint32_t frameSlot = a_recording.FrameSlot();
+			if (frameSlot >= a_frame.set->buffers.size())
 				return;
-			if (writeBack.filled[slot]) {
-				auto resource = writeBack.readback[slot]->GetAPIResource();
-				void* mapped = nullptr;
-				resource.Map(&mapped);
-				if (mapped) {
-					const auto* words = static_cast<const std::uint32_t*>(mapped);
-					const std::uint32_t count = words[0];
-					const std::uint32_t events = std::min(count, writeBack.readbackEvents[slot]);
-					// The roots past the list's end try again; the list grows to them (ReserveSceneTables).
-					if (count > writeBack.readbackEvents[slot]) {
-						std::uint32_t wanted = writeBack.wanted.load(std::memory_order_relaxed);
-						while (wanted < count && !writeBack.wanted.compare_exchange_weak(wanted, count, std::memory_order_release, std::memory_order_relaxed)) {}
-					}
-					if (events) {
-						auto* batch = new FadeWriteBack::Batch();
-						batch->events.resize(events);
-						std::memcpy(batch->events.data(), words + kFadeEventHeaderWords, std::size_t(events) * sizeof(FadeEvent));
-						batch->frame = words[1];
-						writeBack.Push(batch);
-					}
-					resource.Unmap(0, 0);
-				}
-			}
-			// A larger buffer after a growth, once this one is read; the shader may append to the fewest every slot now holds.
-			if (auto larger = writeBack.next[slot].exchange(nullptr, std::memory_order_acq_rel)) {
-				writeBack.readback[slot] = std::move(larger);
-				writeBack.readbackEvents[slot] = static_cast<std::uint32_t>(writeBack.readback[slot]->GetSize() / sizeof(std::uint32_t) - kFadeEventHeaderWords) / 4;
-				writeBack.capacity.store(*std::min_element(writeBack.readbackEvents.begin(), writeBack.readbackEvents.end()), std::memory_order_release);
-			}
-			// The count and the events the shader may have appended (never more than any slot's buffer or the list hold).
-			// The bound list's too: the host buffers grow with the list's adoption, and a list of an older version is smaller.
-			const std::uint32_t copied = std::min({ writeBack.readbackEvents[slot], writeBack.capacity.load(std::memory_order_acquire), a_frame.listEvents });
-			a_recording.Commands().CopyBufferRegion(writeBack.readback[slot]->GetAPIResource().GetHandle(), 0, a_recording.Resolve(a_bindings.events).GetHandle(), 0,
-				FadeWriteBack::BytesFor(copied));
-			writeBack.filled[slot] = 1;
+			// The header and every event the list holds (FadeStateCS appends no more than that).
+			a_recording.Commands().CopyBufferRegion(a_frame.set->buffers[frameSlot]->GetAPIResource().GetHandle(), 0, a_recording.Resolve(a_bindings.events).GetHandle(), 0,
+				FadeWriteBack::BytesFor(a_frame.set->events));
 		}
 
 	private:
@@ -3031,6 +3194,17 @@ namespace DCLF::Draws
 					.PreferQueue(org::QueueKind::Graphics)
 					.Epoch(colour));
 			addSort("cs.dclf.sort-scan", "cs.dclf.sort-scatter", colourSegment, colour);
+			// T7d: the forward range's sort, back to front, after the colour build appended it; and its draw, in the forward epoch (the
+			// engine's blended draw after the deferred composite: IndirectDraws::ExecuteForward).
+			if (resources->forwardSort) {
+				a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.forward-sort",
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<ForwardSortPass>(resources)))
+						.PreferQueue(org::QueueKind::Graphics)
+						.Epoch(colour));
+				a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.forward",
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<ForwardDrawPass>(resources)))
+						.Epoch(RenderGraphRuntime::EpochOf(Segment::Forward)));
+			}
 			if (resources->probe)
 				a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.probe-before",
 					std::static_pointer_cast<org::RenderPass>(std::make_shared<ProbePass>(resources, colourSegment, false)))

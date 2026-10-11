@@ -1,5 +1,6 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Internal.h"
+#	include "Features/DrawcallLimitFix/Engine/TreeList.h"
 
 // T7b1: the main camera's visibility as GPU change events, read back without a stall and decoded into DCLF's verdicts, with the
 // <- ACCUMULATED observer against the engine's kAccumulated (drawcall-limit-fix.md, "T7b1: visibility events"; Internal.h,
@@ -331,7 +332,10 @@ namespace DCLF
 		 * publication's retirement are the render thread's). */
 		void ReleaseDecoded(Readback& a_readback)
 		{
-			for (auto* batch = a_readback.decoded.exchange(nullptr, std::memory_order_acquire); batch;) {
+			auto* batch = a_readback.decoded.exchange(nullptr, std::memory_order_acquire);
+			// T7b5's differences named first: their nodes are held by these batches' tables, or by a decode still running.
+			TreeList::NameFirsts();
+			while (batch) {
 				auto* following = batch->next;
 				Release(a_readback, batch);
 				batch = following;
@@ -359,6 +363,7 @@ namespace DCLF
 			}
 			if (readback.pending.empty()) {
 				readback.samplesUnmatched.fetch_add(SideEffects::DropAccumulatedSamples(oldestPending), std::memory_order_relaxed);
+				TreeList::DropSamples(oldestPending);
 				readback.running.store(false, std::memory_order_release);
 				readback.running.notify_all();
 				return;
@@ -368,11 +373,14 @@ namespace DCLF
 			// The engine's samples those batches reach (CS_DCLF_ACCUMULATED_PARITY: none are taken without it).
 			auto samples = std::make_shared<std::vector<std::unique_ptr<SideEffects::AccumulatedSample>>>(SideEffects::TakeAccumulatedSamples(batches.back()->frame));
 			readback.samplesUnmatched.fetch_add(SideEffects::DropAccumulatedSamples(oldestPending), std::memory_order_relaxed);
-			auto decode = [readback = a_readback, batches = std::move(batches), holder = std::move(samples)] {
+			// T7b5's tree manager samples likewise (CS_DCLF_TREE_PARITY: none without it).
+			auto treeSamples = std::make_shared<std::vector<TreeList::SamplePtr>>(TreeList::TakeSamples(batches.back()->frame));
+			TreeList::DropSamples(oldestPending);
+			auto decode = [readback = a_readback, batches = std::move(batches), holder = std::move(samples), treeSamples = std::move(treeSamples)] {
 				ZoneScopedN("CS.DCLF.VisibilityDecode");
 				const auto& samples = *holder;
 				const auto start = std::chrono::steady_clock::now();
-				std::size_t next = 0;
+				std::size_t next = 0, nextTree = 0;
 				bool reset = false;
 				for (auto* batch : batches) {
 					reset = reset || batch->reset;
@@ -387,8 +395,22 @@ namespace DCLF
 							readback->framesIncomplete.fetch_add(1, std::memory_order_relaxed);
 						++next;
 					}
+					if (!treeSamples->empty()) {
+						const auto& tables = *batch->tables;
+						TreeList::OnBatch(*treeSamples, nextTree, batch->frame, batch->complete,
+							[&](std::uint32_t a_slot) -> const void* { return a_slot < tables.fadeRootNode.size() ? tables.fadeRootNode[a_slot] : nullptr; },
+							[&](std::uint32_t a_slot) {
+								TreeList::RootVerdict verdict;
+								if (a_slot < readback->roots.size() && a_slot < tables.fadeRoots.size() && readback->roots[a_slot].generation == tables.fadeRoots[a_slot].generation) {
+									verdict.known = readback->roots[a_slot].known;
+									verdict.visible = readback->roots[a_slot].visible;
+								}
+								return verdict;
+							});
+					}
 				}
 				readback->samplesUnmatched.fetch_add(samples.size() - next, std::memory_order_relaxed);
+				TreeList::OnDecodeEnd(*treeSamples, nextTree);
 				// T7b2: the writes, from the newest batch's tables (held by the writes until the main thread made them).
 				if (auto* writes = PrepareWrites(*readback, *batches.back(), reset)) {
 					writes->next = readback->writes.load(std::memory_order_relaxed);
@@ -563,6 +585,8 @@ namespace DCLF
 			"{} clears held by a camera cut ({} cuts, {} roots set by them); {:.1f} us on the main thread\n",
 			take(r.writeBatches), take(r.fullWrites), take(r.writesSet), take(r.writesCleared), take(r.writesUnchanged), take(r.writesNotStoodIn), take(r.writesHeldByCut),
 			take(r.cuts), take(r.cutWrites), double(take(r.writeNs)) / 1000.0);
+		// T7b5, CS_DCLF_TREE_PARITY (<- TREE MANAGER).
+		text += TreeList::Report();
 		if (!SideEffects::AccumulatedParity())
 			return text;
 		text += SideEffects::AnimRateReport();

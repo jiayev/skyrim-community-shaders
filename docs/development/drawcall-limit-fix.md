@@ -32,6 +32,7 @@ Static rigid geometry:
 -   under an `NiSwitchNode` only while the switch selects it, and part of an actor only with `CS_DCLF_ACTORS` (see "Trees and actors");
 -   under a `BSOrderedNode` only when opaque (T7c0; see "Ordered nodes");
 -   terrain, with Terrain Blending on, only with `CS_DCLF_TB_TERRAIN` (T7c1; see "Terrain under Terrain Blending").
+-   blended (alpha-blended, or a material alpha below one), only with `CS_DCLF_FORWARD` (T7d; see "The forward epoch (T7d)").
 
 Per frame it must also:
 -   be visible, meaning not app-culled or hidden up to its tracked root;
@@ -2494,6 +2495,100 @@ frame): ... <- OK | <- TB NEAR`. The build parity (`CS_DCLF_BUILD_PARITY`) reads
 **Gate** (not run yet): the census's `Block` passes in the main and depth views at 0 with Terrain Blending on, the target
 probe matching with the toggle on and off, `<- TB NEAR` OK, three motion runs without device loss.
 
+## The forward epoch (T7d)
+
+Blended Lighting geometry (the census's `alpha-blend` class: 1.2 passes a frame outdoors, 4.7 indoors) was `Ineligible::AlphaBlend`
+and drawn by the engine. T7d's first part draws it in a forward epoch of DCLF's own, behind `CS_DCLF_FORWARD` (a live classification
+toggle, **off by default**, `=1` seeds it on). Refraction and the Effect-shader port are later parts; the design keeps room for them.
+
+**Where the engine draws it** (AE 1.6.1170, decompiled for this). `GetRenderPasses` gives a pass accumulation hint 1 when the property
+is alpha-blended or its material alpha is below one. The main modes' registration (`FUN_1414b2330`) puts a hint 1 pass into the batch
+renderer's blended list (`FUN_1414f50b0` -> `FUN_1414f17f0`, appended), or into a `BSOrderedNode`'s group. `FinishAccumulatingPostResolveDepth`
+for render mode 0 (`FUN_1414b3390`) runs after Community Shaders' deferred composite (`EndDeferred`, in the blended decals' hook): geometry
+groups 10 (+0xC0), the 0x5C000071 range, 11, 12 and 7, then `FUN_1414b39d0`, the blended draw, then the 0x5C006072 range. With the camera
+under water (`0x142033188 == 2`) the blended draw comes first instead. `FUN_1414b39d0` sorts the blended list by `FUN_1414e8fc0`, a stable
+merge sort on `dot(cameraWorldRotate column 0, worldBound.centre)` (the view axis distance), farthest first, minus the radius when the
+accumulator's byte `+0x51` (NiAlphaAccumulator's sort-by-closest-point) is set, and interleaves it with the geometry groups' stack
+(`0x1435e9fd0`, ordered nodes) by depth. Each pass draws through `SetupAndDrawPass` with render flag 4, so `FUN_14150bc80` applies the
+alpha property: blend mode 1-4 from its functions, none for a non-blending property whose property alpha is 1, and an unrecognised pair
+leaves whatever the previous pass set. The state before it: depth mode 3, which `SetupGeometry` lowers by the property's `kZBufferWrite`
+and `kZBufferTest`; cull back unless `kTwoSided`; no depth bias; write mode 11. Render targets 1 and 2 are unbound: only the main target
+(kMAIN, the composited image) and the main depth are bound.
+
+**Where DCLF draws it, and the ordering contract.** The forward epoch (`RenderGraphRuntime::Segment::Forward`, after `MainOpaque` in the
+graph's epoch order) runs at both call sites of `FUN_1414b39d0` (`0x1414b33e1`, `0x1414b38d3`, `Accumulator_BlendedDraw`), for the main
+camera's accumulator alone, once a frame, before the engine's own blended draws. So DCLF's blended objects are drawn after the water,
+the effect groups 10/11/12/7 and everything opaque, sorted back to front among themselves, and behind every blended pass the engine still
+draws (effect shaders, ordered-node groups, particles in the blended list). That is exact against the engine's additive passes in front
+(most effect shaders: additive is commutative with what is under it) and wrong by the effect's unattenuated contribution where an engine
+pass lies behind a DCLF surface. Drawing after the engine's would be the worse choice: an alpha-over surface would cover an effect in
+front of it. The exact order needs both classes in one GPU sort, which the Effect port gives: the forward range then holds Effect draws
+too, with a class tag, and the engine draws no blended residue. Blended leaves of `BSOrderedNode` stay `UnsupportedParent` until then.
+
+**Views.** The main camera only. The shadow views draw no blended Lighting (the caster rule rejects alpha-blended properties and
+`fade * materialAlpha < 1`, engine notes "Who casts"), the water reflection's faces draw LOD techniques only, and the depth pass registers
+none. A forward object's view mask is `kViewForward` alone (`MainMaskOf`), like a decal's `kViewDecal`: it is no depth segment input
+(the engine's blended draws write no depth before the opaque ones, so it occludes nothing DCLF's culling should know of), and the
+colour segment's BuildDraws culls it once, frustum then the HZB the depth segment rebuilt. One persistent scene, the view a mask tested
+at the GPU cull; no per-view CPU list.
+
+**What is reused.** Everything of a main-phase member: the classification and join (the forward descriptors and key from
+`DeriveLightingDescriptors`), the material, pipeline and geometry rows, the constant groups, the binding record and its frame record, the
+scene list and its drawable bit, the set and its claims (`PassCapture::MainListHook` already withholds a member's hint 1 pass), the
+revision and its recordings. The forward key is a main `PipelineKey` with the forward state in its raster flags and the pixel descriptor
+without Deferred, so its pipelines are built by the pipeline lane into the main set and executed through the colour signature: the forward
+epoch draws on the colour pass's eight attachments, all loaded (the first is kMAIN, now holding the composited image; the G-buffer
+attachments are masked off, as the engine has them unbound).
+
+**What was built.**
+
+-   **Classification** (`LightingDescriptors.cpp`, `Classification.cpp`, `PrimaryCull.cpp`): with the toggle, a translucent property
+    (blending, or material alpha below one) that is not a decal, a layer or Terrain Blending's gets `forward`, its blend mode from
+    `AlphaBlendModeOf` (0 for a material alpha below one without blending; an unrecognised pair stays `AlphaBlend`), its depth flags from
+    `kZBufferTest`/`kZBufferWrite`, and the forward pixel descriptor. `ClassifyStatic`'s material-alpha rejection and the synthetic
+    membership pass (hint 1) follow the toggle. Object flag `kObjectForward` (bit 31); raster flags `kRasterForward`,
+    `kRasterForwardDepthTest`, `kRasterForwardDepthWrite` (bits 26-28) with the blend mode and write mode 11 (`PackForwardRasterFlags`);
+    `AdditiveLighting` in the permutation for a destination-one pair, as for blended decals.
+-   **Pipelines** (`DrawPipelines.cpp`, `Build`): a forward key's colour variant takes the engine's blend for its modes on the first
+    attachment, the others disabled with write mask 0, depth LESS_EQUAL when tested, written with `kZBufferWrite` (ALWAYS for a write
+    without a test); its depth variant writes nothing (never drawn).
+-   **The range** (`GpuLayouts.h`, `ReserveMainSequences`): after the terrain ranges in phase 2's, two halves of
+    `MainSizing::forwardCapacity` each (every draw the forward pipeline slots can produce, grown to a power of two; held within
+    `sequenceDraws`): the staging half and the sorted half. `PassFrame::forwardCapacity` is the colour shape's.
+-   **BuildDrawsCS**: a forward input (colour phase only) is culled and its visibility word written as a decal's, then each draw is
+    appended to the staging half through count word 32 with its view depth (the bound centre's clip w) in the unexecuted firstInstance
+    word. Words 33-35 count the forward inputs tested, in the frustum and occluded. Push constants `ForwardBase`, `ForwardCapacity`.
+-   **ForwardSortCS** (`ForwardSortPass`, colour epoch, after the build): a rank sort, one thread a staged draw, farthest first, ties by
+    object index then first index (the same order every frame whatever the atomic append gave), written to the sorted half with
+    firstInstance cleared. O(n^2) in the visible forward draws (tens), no cap; the Effect port would replace it with a radix sort behind
+    the same contract.
+-   **ForwardDrawPass** (forward epoch): the sorted half through the colour signature, count word 32, an explicit preprocess on its own
+    state list (`Resources::preprocessForward`).
+-   **The revision** (`SceneRevision.cpp`): a sixth epoch, `kForwardEpoch`, whose shape slot names the colour slot's shape while the toggle
+    is on, so its recording is made with the colour one's and kept as long. `DecideCoverage` requires it for the frame's claims while the
+    toggle is on (a frame without it would withhold the members and draw nothing for them). `IndirectDraws::ExecuteForward` submits it,
+    only after this frame's colour epoch, holding the colour payload's bindings, the frame textures and the adopted snapshot.
+-   **Diagnostics**: `[DCLF] forward epoch (T7d, CS_DCLF_FORWARD on|off): reached N frames, E epochs; not submitted: ... without this
+    frame's colour epoch, ... without a forward recording <- NO FORWARD RECORDING, ... failed <- EPOCH FAILED`, every report. With the
+    culling counters (sampled frame): `[DCLF] forward (T7d, sampled frame): T forward inputs tested, V in the frustum, O occluded, D draws
+    sorted for the forward epoch`, and under `CS_DCLF_SET_PARITY` the observer: `; the engine registered R blended passes of members
+    <- OK | <- FORWARD` (`PassCapture::TakeForwardRegistered`: the hint 1 passes the main registration handed in for members, all
+    withheld; DCLF's frustum is a box around the bound and has no portals, so V >= R, and fewer is a member DCLF dropped). The set parity
+    treats a forward object as colour-only (like a decal); the build parity leaves the forward draws out.
+
+**Run** (`CS_DCLF_FORWARD=1`, full featureset, `CS_DCLF_CENSUS=1`, then once with `CS_DCLF_SET_PARITY=1`): the census's `alpha-blend`
+class at 0 in `main` (what remains is unrecognised blend pairs, ordered-node leaves as `unsupported-parent`, decals and layers),
+`forward epoch` epochs equal to the frames with claims and no NO FORWARD RECORDING, `forward (T7d)` draws > 0 where blended objects are
+in view, `<- OK`, no MEMBER drawn by the engine, no validation messages about generated commands, and the blended objects visible and
+lit (glass, cobwebs on Lighting, alpha-faded meshes) with the toggle on and off.
+
+**Not done; risks.** The `+0x51` radius term of the engine's key (default off) and the interleave with ordered-node groups; the frame
+record is the deferred pass's capture, so a frame register only the forward pixel stage reads resolves to what that pass had bound (the
+forward variant's registers are not audited); the blend state is read from the deferred table (Community Shaders' override), whose first
+target matches the vanilla one for these modes as far as the decal probe saw; the forward key's Lighting program is a new permutation
+(compiled at runtime: a compile failure leaves the class unbound, not drawn wrong); the occlusion maps' membership of forward objects
+follows the generic occluder rule, unverified against the engine for blended `kZBufferWrite` geometry.
+
 ## T7b1: visibility events (kAccumulated as DCLF's output, an observer)
 
 The engine's main-camera cull leaves `kAccumulated` (flag bit 26) on what passed it, and its readers need it once the culls
@@ -2526,8 +2621,8 @@ the engine still culls. It writes nothing into the engine (T7b2 does, at `Main::
     frame (count events) into a heap batch. The frame-start wake (`KickVisibilityReadback`) hands the waiting batches, in
     frame order, to one decode task on DCLF's executor. Batches are never dropped: they wait as long as needed. A frame
     whose epoch did not run is counted as missed; the GPU appends its unreported changes again. Only the render thread
-    lets go of a batch's tables, so engine references are never released on DCLF threads. (`FadeEventReadbackPass` reads
-    its buffer in `Record` too, so it sees only recording frames; T7b6 moves it onto this scheme.)
+    lets go of a batch's tables, so engine references are never released on DCLF threads. (`FadeEventReadbackPass` read
+    its buffer in `Record` too, so it saw only recording frames; T7b6 moved it onto this scheme: "T7b4/T7b6".)
 -   **The decoder** keeps `RootVisibility {generation, visible, lastFrame}` and the objects' verdicts by DCLF's slots,
     applying each batch against its frame's tables (generation check for roots, an occupant for objects, `appliedFrame` per
     slot). A new backing of the reported words (a growth) zeroes them in the commit and starts the decoder again with that
@@ -2659,6 +2754,170 @@ The report comes every 300 published sets:
 T7b3's gate is `<- ROOM` at 0. "Other keys, engine only" counts rooms and shared nodes missing from DCLF's
 graph tables, such as frames with no graph, when the engine's map is empty. Every other node gets true from
 both the engine and DCLF. Not yet run in game.
+
+## T7b5: the tree manager's list loop, ported (a dry run)
+
+The tree manager's update in `Main::Update` (`FUN_140437d40`) takes two results of the scene cull
+(`skyrim-engine-notes.md`, "Tree manager list (T7b5)"):
+
+-   its tree list loop (`FUN_140437e50`) visits a `BSTreeNode` only when its first child's multibound has the cull result 1;
+-   its clock advances a `BSLeafAnimNode` only when its `kAccumulated` is set.
+
+The loop's near list decides whose bones animate. Its stores decide the tree's LOD child. Once the culls stop (T7f), the
+visited verdicts must be DCLF's. T7b5 ports the loop as DCLF's computation and compares it with the engine's while the
+engine still culls. It changes nothing in the engine.
+
+-   **The port** (`Engine/TreeList.*`, `Decide`). DCLF's own state is the input, never the engine's cull:
+    -   the trees: the frame's tables' fade roots whose seed plan is `BSTreeNode`'s (the tree list) or `BSLeafAnimNode`'s
+        (the animation list), stood-in ones included;
+    -   the positions: the tree seeds (`TreeStatic.position`, the node's world translate);
+    -   the camera: `PrimaryCull::FadeEye`, the list camera of the frame;
+    -   the verdicts: the visibility decoder's root verdicts (`kFadeVerdictInView`).
+
+    A tree with an in-view verdict is visited. A visited tree strictly within range (manager `+0x80`) is near. The near trees
+    are sorted by distance and the nearest 40 (`0x14200d670`) kept. Past those, a tree at or past range * 0.25
+    (`0x141ad2848`) is forced to the LOD child. Each tree's outcome is one of skipped, kept, past the cut (forced or not),
+    or far. On the animation list, DCLF's answer for the clock is the root's verdict.
+-   **The observer** (`<- TREE MANAGER`, `CS_DCLF_TREE_PARITY=1`, a parity, off by default; nothing is installed without it).
+    -   **The detour.** `FUN_140437e50`'s call (`0x140437df1`, checked as a call at install) is detoured.
+    -   **The sample.** After the call, before `FUN_1404381e0` runs and before the near list is emptied, the main thread
+        samples the engine's answer. It is a safe point: no list cull or cell animation runs, and the engine's lists are read
+        under their own spin locks. The sample holds:
+        -   for each tree-list node: its multibound result, its distance and whether it is on the near list;
+        -   for each animation-list node: a base form and `kAccumulated`;
+        -   DCLF's inputs from the installed tables and seeds.
+
+        The frame is `SceneStore`'s, the last scene frame: the loop reads that frame's cull. The sample's time is added to
+        the update's budget base (`0x14313fa78`), so the engine's time-budgeted loops animate as without the observer.
+    -   **The comparison.** The visibility decode compares a sample when it applies the batch of the same frame, exactly as
+        `<- ACCUMULATED` does (no margin, no hysteresis; an incomplete batch is left out). A slot whose node moved since the
+        sample is counted aside. The differences' nodes are named on the render thread before their batches are let go.
+-   **Attribution.**
+    -   Tree list, visited differs: "multibound stale" (result 0: no cull reached it), "no multibound", or "bound" (DCLF tests
+        the root's bound, the engine the first child's multibound shape).
+    -   Tree list, outcome differs with the same visit: "camera" (the engine's process camera against DCLF's, by more than
+        1 unit), "distance", or "order" (the ranking at the cut: a set difference, since DCLF's set lacks trees it does not
+        list, or ties in the engine's unstable sort).
+    -   Stood-in trees are compared aside, by their stale multibound result: TreeAnimation takes them off the animation list
+        only, so the engine's loop still visits them from a cache no cull refreshes (an existing gap, recorded in the engine
+        notes).
+    -   Animation list: the clock's gate against DCLF's verdict, as both / DCLF's alone / the engine's alone / neither. Aside:
+        no base form, not DCLF's roots, no verdict, stood in still on the list (DCLF's own T7b2 write).
+
+The report comes with the visibility lines, every report interval:
+
+```
+[DCLF] tree manager (T7b5): <n> samples (<t> us each), <f> frames compared (<i> left out: a batch past its list; <u> samples no batch
+  reached; <b> with the near list not empty before the loop, <m> with cull mode 3, <c> without DCLF's camera, <s> root slots a frame
+  unseeded); tree list (BSTreeNode) <l> a frame: <k> compared, <same> same, <d> differ (visited: <a> multibound stale, <b> no multibound,
+  <c> bound; class: <x> camera, <y> distance, <z> order), classes engine/DCLF: skipped e/d, kept e/d, ...; stood in <s> (multibound
+  <st> stale / <si> in / <so> out; <sd> differ), aside <a> not DCLF's trees, <v> no verdict, <p> no position, <m> moved, <o> DCLF's
+  alone; animation list (BSLeafAnimNode) <l> a frame: clock <both> both / <d> DCLF's alone / <e> the engine's alone / <n> neither
+  (<p> not BSLeafAnimNode's plan in DCLF), aside ...; DCLF's leaf roots off the list <o> (stood in), <x> not on it
+  <- OK | <- TREE MANAGER | <- NOT COMPARED; first: '<name>' (<cause>, frame <f>)
+```
+
+A run should show trees compared > 0, mostly on the animation list. One load order measured an empty tree list at
+Riverwood (no `BSTreeNode` there). To read a non-zero tree list, use a load order or cell with `BSTreeNode` trees, or set
+`CS_DCLF_PRIMARY_EXCLUDE=0` so the engine culls every root. T7b5's gate is 0 differ on the engine-culled trees and the
+animation list's clock. Expected differences, to read before chasing any:
+-   "bound" (the multibound shape against the root's bound);
+-   the same frame alignment as `<- ACCUMULATED`, on roots that `<- ACCUMULATED` also counts.
+
+Written; not yet run in game.
+
+## T7b4/T7b6: the fade write-back read every frame, with one writer per root
+
+The fade write-back ("The fade write-back", above) puts FadeStateCS's state onto the nodes of the roots the cut stands in for.
+Two things were wrong with it, and T7 needs a third:
+-   Its readback read the event list in `FadeEventReadbackPass::Record`. The depth epoch replays its recordings frame after frame, so
+    the events of every replayed frame were lost (`dclf-open-defects.md`). T7b1's visibility readback had the same flaw.
+-   It had a second writer. `FUN_1402cff60`, the animation gate (`UpdateAnimationJob`, the managed nodes), runs the fade update
+    `FUN_14147a160` on any fade root whose `kAccumulated` is clear. Since T7b2, DCLF clears that bit on stood-in roots out of view, so
+    the engine stepped those nodes over DCLF's write-back from the job threads (`skyrim-engine-notes.md`, "T7b0").
+-   Once the culls stop (T7f), no engine `OnVisible` reaches any root, so every root's node, including its leaf LOD state, is DCLF's to
+    write.
+
+**T7b6: the readback on the visibility readback's scheme** (`FadeWriteBack`, `FadeEventReadbackPass`,
+`IndirectDraws::Impl::ArmFadeReadback`; the same scheme as T7b1's `VisibilityReadback`):
+-   **A fixed copy.** The pass copies the whole list (header and capacity) into the host buffer of its frame slot
+    (`RecordingContext::FrameSlot()`), in the staging set of the list capacity its revision was sized for. Nothing is chosen in
+    `Record`.
+-   **Growth.** A growth adds a staging set in the revision code, before any revision names the new capacity. Sets are kept, because a
+    kept recording may name any of them. `FadeStatePass` appends up to the bound list's capacity, which its set holds whole. The old
+    per-slot buffer swap and the shared `capacity` (the fewest any slot held) are gone.
+-   **Arming and harvest.** The depth commit (`ArmFadeReadback`, right after `UploadFadeRoots`) writes the list's header: count 0, and
+    the commit's scene frame, which is written whether or not anything is appended. FadeStateCS no longer stamps the frame. The commit
+    then arms its frame slot with that frame. Before arming, it harvests the slot's last execution: the buffer, in whichever set, whose
+    header names the armed frame. The host has waited for that execution and has not submitted the next, so DCLF waits for nothing.
+-   **Batches and misses.** A harvested frame with events becomes a batch on the existing lock-free stack, which the write-back task
+    takes as before. An arm with no buffer naming its frame is counted missed. It means the epoch did not run, so FadeStateCS did not
+    report and nothing is lost. A count past the list sets `wanted` and the list grows; the roots left out report again next frame.
+
+**T7b4: the write-back as the single writer of the roots it writes:**
+-   **The written set.** The written set is the roots no engine cull steps. Today that is the stood-in roots (`kFadeRootStoodIn`,
+    `PrimaryCull::standInRoots`). Once the culls stop, it is every listed root. `PrimaryCull::FadeWrittenByDclf(node)` is the one
+    predicate, so T7f widens it in one place. A root the engine's cull still reaches is stepped by the engine's `OnVisible`, so DCLF
+    does not write it. Writing it as well would be the double write this stage removes.
+-   **The animation gate skips it.** `Hooks::AnimatedFade` (the gate's call of `FUN_14147a160`, `0x1402d0044`) still notes the update
+    for FadeStateCS's animated batch, which runs the same update on the GPU state of every root. For a root in the written set, it
+    returns without calling the engine. The gate then reads the node's `currentFade`, which the write-back keeps at the GPU's
+    milestones. `+0x13C` is not involved: `FUN_14147a160` never writes it (verified in Ghidra).
+-   **The set's publication.** At `Main::Update`'s entry, the main thread publishes the set as an immutable hash set behind an atomic
+    pointer, rebuilt only when `standInRoots` changed. The set it replaces is deleted at that entry: the last cycle was waited for, so
+    no gate reads it (the rule `<- ANIM RATE`'s prediction follows). This is lock-free.
+-   **The stores move to `Main::Update`'s entry** (`IndirectDraws::WriteFadeStores`, from `PrimaryCull::AtUpdateEntry`, right after
+    T7b2's `kAccumulated` writes). This is T7b0's write point: no list cull, cell animation or animation job runs, and every reader of
+    the node sees the store in the same frame. Before, the stores were made at BeginSceneFrame, after `UpdateAnimationJob`.
+    -   A store is made only while the cut still stands in for its root. A store for any other root is left, because the engine's
+        cull steps that root this frame.
+    -   With DCLF off, the stores are dropped.
+    -   The task that finds the stores still runs at the frame's start, on DCLF's executor. The stores' tables are let go on the main
+        thread.
+-   **LOD levels.** The milestone key FadeStateCS reports now includes the leaf LOD level (`+0x152 & 0xF`) and the transition state
+    (`+0x153 & 0x70`), as well as faded out, fading and faded in. So a level step, and its settling, is an event. Steps of the blend
+    are not.
+    -   `FadeEvent` is now 32 bytes: it adds `levels` (`+0x152 | +0x153 << 8`) and `blend` (`+0x14C`).
+    -   For leaf and tree roots (`kFadeRootLeaf`/`kFadeRootTree`), the store writes `+0x14C`, `+0x152` and `+0x153` with the fade, and
+        pushes `kFadeLevel` to the mirror with `kFadeCurrent`.
+    -   A plain fade root's levels are not written: the node's own are the GPU's.
+    -   The engine's only other writers of these fields are `OnVisible` and `FUN_14147a430`, under `FUN_14147a160`. Neither runs at the
+        entry, and neither runs on a written root.
+-   **`<- FADE DOUBLE`** (`CS_DCLF_FADE_PARITY`, the existing fade parity; nothing is sampled without it).
+    -   At each entry, the main thread samples the roots in the written set from the accepted tables (which hold the nodes until the
+        next entry): their `+0x13C`, and whether the entry stored them. Only an `OnVisible`'s fade update writes `+0x13C` (verified:
+        `BSFadeNode::OnVisible`, `0x141479f50`, stores the fade counter after `FUN_14147a160` when the process has camera-related
+        updates). DCLF's stores never write it.
+    -   At the next entry, the main thread reads `+0x13C` again. A root whose value moved was stepped by an engine `OnVisible` during
+        a frame in which DCLF wrote it. This is a double: a second writer.
+    -   A frame whose cut did not apply (`PrepareFrame`'s preconditions) has the engine cull every root by design, followed by
+        `ReseedOwnedFadeRoots`. Those frames are counted aside.
+    -   The gate's own fade updates cannot double, because the gate skips the written set. The normal path reports only how many it
+        skipped.
+
+The reports come every report interval:
+
+```
+[DCLF] fade write-back (T7b4/T7b6): <a> milestones written onto stood-in roots' nodes by the main thread at Main::Update's entry
+  (<t> us in all), <l> left (no longer DCLF's to write), <d> dropped (DCLF off), <s> stale (...), <b> frames found the last task still
+  running; readback <f> frames read (<e> with events), <n> events, <o> past their list, <m> arms missed, <k> staging sets (+<g>), event list <c>
+[DCLF] fade writers (T7b4): <k> fade updates of the animation gate skipped on roots DCLF writes (<r> roots in the set)
+[DCLF] fade double (T7b4): <f> frames, <r> roots DCLF writes a frame; <x> stepped by an engine OnVisible as well (<y> of them stored by
+  DCLF that frame); aside: <z> frames the cut did not apply, <w> stepped in them <- OK | <- FADE DOUBLE; first: '<name>' (stored), ...
+```
+
+**Gates:**
+-   T7b6: frames read close to the frames in the window (about 300 at 60 fps), in motion and in interiors alike. Arms missed should be
+    0, or only the frames whose depth epoch did not run. Milestones are written in interiors too. Before T7b6, a fade went unwritten
+    on every frame that only replayed.
+-   T7b4: `<- FADE DOUBLE` at 0 outside the frames the cut did not apply. Gate skips > 0 wherever stood-in animated references are out
+    of view.
+
+Expected doubles, to read before chasing any: the frames the engine culls a stood-in root again ("No fade write-back": the
+precipitation mask's fallback, the point lights' and the sun's parity frames, the local map). A root that leaves the stand-in during a
+frame is also stepped by the engine that frame, after DCLF stored it at the entry.
+
+Written; not yet built or run in game (see the plan's T7 "Done").
 
 ## Decals: a second draw pass, and a single culling phase
 

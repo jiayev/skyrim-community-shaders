@@ -119,15 +119,28 @@ namespace DCLF
 		if (impl->scene && impl->scene->fadeWriteBack) {
 			auto& writeBack = *impl->scene->fadeWriteBack;
 			const auto applied = writeBack.applied.exchange(0), stale = writeBack.stale.exchange(0), busy = writeBack.busy.exchange(0);
-			const auto storeNs = writeBack.storeNs.exchange(0);
-			if (applied || stale || busy)
-				text += fmt::format("[DCLF] fade write-back (6e S4, F1): {} milestones written onto stood-in roots' nodes by the render thread at the frame's "
-									"start ({:.1f} us in all), {} stale (the root listed again or no longer stood in), {} frames found the last task still running "
-									"(their batches its or the next's); event list {} events\n",
-					applied, static_cast<double>(storeNs) / 1000.0, stale, busy, writeBack.capacity.load(std::memory_order_relaxed));
+			const auto storeNs = writeBack.storeNs.exchange(0), notWritten = writeBack.notWritten.exchange(0), dropped = writeBack.dropped.exchange(0);
+			const auto harvested = writeBack.harvested.exchange(0), withEvents = writeBack.harvestedWithEvents.exchange(0), events = writeBack.events.exchange(0);
+			const auto overflowed = writeBack.overflowed.exchange(0), missed = writeBack.missed.exchange(0), setsAdded = writeBack.setsAdded.exchange(0);
+			std::uint32_t sets = 0, listEvents = 0;
+			for (const auto* set = writeBack.sets.load(std::memory_order_acquire); set; set = set->next) {
+				++sets;
+				listEvents = std::max(listEvents, set->events);
+			}
+			// T7b6's readback (a fixed per-frame-slot copy harvested on re-arm: a frame read whether it recorded or replayed), and T7b4's
+			// stores (Main::Update's entry, on the roots DCLF alone writes).
+			if (applied || stale || busy || harvested || missed)
+				text += fmt::format("[DCLF] fade write-back (T7b4/T7b6): {} milestones written onto stood-in roots' nodes by the main thread at Main::Update's entry "
+									"({:.1f} us in all), {} left (no longer DCLF's to write), {} dropped (DCLF off), {} stale (the root listed again or no longer stood "
+									"in), {} frames found the last task still running; readback {} frames read ({} with events), {} events, {} past their list, {} arms "
+									"missed, {} staging sets (+{}), event list {}\n",
+					applied, static_cast<double>(storeNs) / 1000.0, notWritten, dropped, stale, busy, harvested, withEvents, events, overflowed, missed, sets, setsAdded,
+					listEvents);
 		}
+		text += PrimaryCull::Get().FadeWriterReport();
 		text += VisibilityReport();
 		text += ReflectionReport();
+		text += ForwardReport();  // T7d
 		if (impl->scene && impl->scene->treeLodCull && impl->scene->treeLodUploads) {
 			auto& scene = *impl->scene;
 			text += fmt::format("[DCLF] tree LOD draws: {} ({} depth commits, {} shape slots sent; tables {} shape and {} mesh slots; {} commits that could not draw a "
@@ -368,7 +381,9 @@ namespace DCLF
 				counts.depthDrawnTotal += depthDrawn;
 				counts.colourDrawnTotal += colourDrawn;
 				const char* kind = nullptr;
-				const bool decal = o < snapshot.colourState.size() && snapshot.colourState[o] == kObjectStateDecal;
+				// T7d: a forward object is colour-only like a decal (no depth segment input, no frustum stamp).
+				const bool decal = (o < snapshot.colourState.size() && snapshot.colourState[o] == kObjectStateDecal) ||
+				                   (snapshot.tables && o < snapshot.tables->objects.size() && (snapshot.tables->objects[o].flags & kObjectForward));
 				counts.recordDisagrees += (flags & 8) ? 1 : 0;
 				if (!withheld && (depthDrawn || colourDrawn)) {
 					++counts.outsideDrawn;
@@ -720,6 +735,8 @@ namespace DCLF
 	void IndirectDraws::Impl::ReadCullCounters(const std::shared_ptr<Resources>& a_resources, IndirectDraws::Stats& a_stats, const MainPayload& a_payload)
 	{
 		auto* context = globals::d3d::context;
+		// T7d: this frame's engine blended registrations of members (taken every colour epoch, so each copy has its own frame's).
+		const std::uint32_t forwardEngine = PassCapture::Get().TakeForwardRegistered();
 		if (cullReadback) {
 			if (--cullReadback->framesLeft)
 				return;
@@ -762,6 +779,12 @@ namespace DCLF
 				a_stats.terrainCpu = cullReadback->terrainCpu;
 				a_stats.terrainCpuTested = cullReadback->terrainCpuTested;
 				a_stats.terrainCpuNear = cullReadback->terrainCpuNear;
+				a_stats.forwardDrawn = words[kCountForwardWord];
+				a_stats.forwardTested = words[kCountForwardTestedWord];
+				a_stats.forwardInView = words[kCountForwardInViewWord];
+				a_stats.forwardOccluded = words[kCountForwardOccludedWord];
+				a_stats.forwardEngine = cullReadback->forwardEngine;
+				a_stats.forwardObserved = cullReadback->forwardObserved;
 				context->Unmap(cullReadback->count.get(), 0);
 			}
 			cullReadback.reset();
@@ -782,6 +805,8 @@ namespace DCLF
 		ScopedPerfEvent event("CS DCLF: culling readback");
 		context->CopyResource(readback.count.get(), a_resources->countD3D11.get());
 		readback.framesLeft = 3;
+		readback.forwardEngine = forwardEngine;
+		readback.forwardObserved = SetParityEnabled() && ActiveToggles().forward;
 		// The CPU's side of the sun test, over the same frame's colour inputs and the same planes.
 		auto sunTest = [&](const DrawInput& input) {
 			// The colour segment's inputs of the one main list (its view bits, as BuildDrawsCS tests them first).
@@ -1548,6 +1573,9 @@ namespace DCLF
 					break;
 				const std::size_t first = sequence;
 				sequence += templates;
+				// T7d: a forward input's draws are in the forward range (sorted there), not compared here.
+				if (input.flags & kObjectForward)
+					continue;
 				readback.expected.insert(readback.expected.end(), sequences.begin() + first, sequences.begin() + sequence);
 			}
 		}
