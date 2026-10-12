@@ -1208,6 +1208,9 @@ namespace Util
 		 */
 		uint32_t DIKToVK(uint32_t dikKey);
 
+		/** @brief True when a typed character must be dropped because a slider/drag text entry is active and it isn't a digit, '.' or '-'. */
+		bool IsRejectedByNumericTextEntry(uint32_t character);
+
 		/**
 		 * @brief Converts key codes to human-readable string representations
 		 *

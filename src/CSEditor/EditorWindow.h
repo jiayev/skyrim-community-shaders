@@ -77,6 +77,9 @@ public:
 	/** @brief Bottom Y of the viewport window, set during layout for palette positioning. */
 	float viewportBottomY = 0.0f;
 
+	/** @brief Editor dockspace ID from the last frame, read by the action bar to find nodes docked against it. */
+	ImGuiID dockSpaceId = 0;
+
 	/** @brief Last frame's viewport collapse state, so Draw() can skip the framebuffer copy. */
 	bool viewportCollapsed = false;
 

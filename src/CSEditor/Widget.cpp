@@ -904,6 +904,7 @@ void Widget::DrawSearchDropdown()
 					}
 				}
 			}
+			ImGui::EndChild();
 		}
 	}
 	ImGui::End();

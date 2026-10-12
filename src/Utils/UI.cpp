@@ -2469,6 +2469,14 @@ namespace Util
 			};
 		}
 
+		bool IsRejectedByNumericTextEntry(uint32_t character)
+		{
+			const ImGuiContext& context = *ImGui::GetCurrentContext();
+			if (context.TempInputId == 0 || context.ActiveId != context.TempInputId)
+				return false;
+			return !(character >= '0' && character <= '9') && character != '.' && character != '-';
+		}
+
 		uint32_t DIKToVK(uint32_t dikKey)
 		{
 			switch (dikKey) {

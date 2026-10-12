@@ -1047,7 +1047,8 @@ void Menu::ProcessInputEventQueue()
 	ImGuiIO& io = ImGui::GetIO();
 	for (auto& event : _keyEventQueue) {
 		if (event.eventType == RE::INPUT_EVENT_TYPE::kChar) {
-			io.AddInputCharacter(event.keyCode);
+			if (!Util::Input::IsRejectedByNumericTextEntry(event.keyCode))
+				io.AddInputCharacter(event.keyCode);
 			continue;
 		}
 		if (event.device == RE::INPUT_DEVICE::kMouse) {
