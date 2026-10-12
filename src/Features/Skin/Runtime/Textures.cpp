@@ -1,6 +1,6 @@
 #include "Textures.h"
 
-#include "../Editor/NifDocument.h"
+#include "../Editor/Files.h"
 #include "Globals.h"
 
 #include <DirectXTex.h>

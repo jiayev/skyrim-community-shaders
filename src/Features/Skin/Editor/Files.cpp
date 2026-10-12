@@ -1,19 +1,106 @@
 #include "Files.h"
 
 #include "../Runtime/Textures.h"
-#include "TextureTools.h"
 
 #include <commdlg.h>
 #include <cwctype>
 #include <fstream>
 #include <set>
+#include <shlobj.h>
 
 namespace SkinEditor
 {
+	namespace
+	{
+		constexpr size_t MaxBytes = 512 * 1024 * 1024;
+
+		std::string ResourcePath(const std::string& a_path)
+		{
+			std::string path = a_path;
+			std::replace(path.begin(), path.end(), '/', '\\');
+			if (path.size() >= 5 && _strnicmp(path.c_str(), "data\\", 5) == 0)
+				path.erase(0, 5);
+			return path;
+		}
+	}
+
 	std::string UTF8(const std::filesystem::path& a_path)
 	{
 		const auto text = a_path.u8string();
 		return { text.begin(), text.end() };
+	}
+
+	uint64_t Fingerprint(std::span<const uint8_t> a_bytes)
+	{
+		uint64_t value = 14695981039346656037ULL;
+		for (auto byte : a_bytes)
+			value = (value ^ byte) * 1099511628211ULL;
+		return value;
+	}
+
+	std::optional<Bytes> FindResource(const std::string& a_path)
+	{
+		RE::BSResourceNiBinaryStream input(ResourcePath(a_path));
+		if (!input.good() || !input.stream)
+			return std::nullopt;
+		if (input.stream->totalSize > MaxBytes)
+			throw std::runtime_error(T("feature.skin.asset_read_limit", "Cannot read asset or asset exceeds 512 MiB: ") + a_path);
+		Bytes bytes(input.stream->totalSize);
+		if (!input.read(reinterpret_cast<char*>(bytes.data()), static_cast<uint32_t>(bytes.size())))
+			throw std::runtime_error(T("feature.skin.could_not_read_the_complete_game_resource", "Could not read the complete game resource: ") + a_path);
+		return bytes;
+	}
+
+	Bytes ReadResource(const std::string& a_path)
+	{
+		const auto path = std::filesystem::u8path(a_path);
+		if (path.is_absolute() || std::filesystem::is_regular_file(path)) {
+			std::ifstream input(path, std::ios::binary | std::ios::ate);
+			const auto size = input.tellg();
+			if (!input || size < 0 || size > static_cast<std::streamoff>(MaxBytes))
+				throw std::runtime_error(T("feature.skin.asset_read_limit", "Cannot read asset or asset exceeds 512 MiB: ") + a_path);
+			Bytes bytes(static_cast<size_t>(size));
+			input.seekg(0);
+			if (!input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size)))
+				throw std::runtime_error(T("feature.skin.could_not_read_the_complete_asset", "Could not read the complete asset: ") + a_path);
+			return bytes;
+		}
+		if (auto bytes = FindResource(a_path))
+			return std::move(*bytes);
+		throw std::runtime_error(T("feature.skin.game_resource_is_unavailable", "Game resource is unavailable: ") + a_path);
+	}
+
+	bool IsLooseResource(const std::string& a_path)
+	{
+		// Relative to the working directory, as elsewhere in this project, so that files which only exist
+		// in a mod manager's virtual Data folder resolve.
+		std::error_code error;
+		return std::filesystem::exists(std::filesystem::path("Data") / std::filesystem::u8path(ResourcePath(a_path)), error);
+	}
+
+	SkinMaterials::Fingerprint ResourceFingerprint(const std::string& a_path)
+	{
+		const auto bytes = ReadResource(a_path);
+		return { bytes.size(), Fingerprint(bytes) };
+	}
+
+	std::optional<std::filesystem::path> ChooseFolder()
+	{
+		std::array<wchar_t, MAX_PATH> buffer{};
+		const auto title = winrt::to_hstring(T("feature.skin.choose_output_folder_title", "Choose the mod folder that contains (or will contain) textures"));
+		BROWSEINFOW dialog{};
+		dialog.hwndOwner = GetActiveWindow();
+		dialog.pszDisplayName = buffer.data();
+		dialog.lpszTitle = title.c_str();
+		dialog.ulFlags = BIF_RETURNONLYFSDIRS | BIF_EDITBOX;
+		const auto item = SHBrowseForFolderW(&dialog);
+		if (!item)
+			return std::nullopt;
+		const bool resolved = SHGetPathFromIDListW(item, buffer.data()) != FALSE;
+		CoTaskMemFree(item);
+		if (!resolved)
+			throw std::runtime_error(T("feature.skin.choose_a_file_system_folder", "Choose an ordinary file system folder."));
+		return std::filesystem::path(buffer.data());
 	}
 
 	std::optional<std::filesystem::path> ChooseFile(bool a_save, FileFilter a_filter, const wchar_t* a_extension, const std::filesystem::path& a_initial)
@@ -21,10 +108,6 @@ namespace SkinEditor
 		const char* label;
 		const wchar_t* pattern;
 		switch (a_filter) {
-		case NifFilter:
-			label = T("feature.skin.nif_filter", "Skyrim SE NIF");
-			pattern = L"*.nif";
-			break;
 		case DDSFilter:
 			label = T("feature.skin.dds_filter", "DDS texture");
 			pattern = L"*.dds";
@@ -33,16 +116,12 @@ namespace SkinEditor
 			label = T("feature.skin.image_filter", "Texture images");
 			pattern = L"*.dds;*.png;*.tga;*.tif;*.tiff;*.bmp";
 			break;
-		case SchemeFilter:
-			label = T("feature.skin.scheme_file_filter", "Skin character scheme");
-			pattern = L"*.json";
-			break;
-		case ConfigurationFilter:
-			label = T("feature.skin.configuration_file_filter", "Skin character configuration");
-			pattern = L"*.json";
+		case MaterialFilter:
+			label = T("feature.skin.material_file_filter", "Skin material file");
+			pattern = L"*.csskin.json";
 			break;
 		default:
-			label = T("feature.skin.legacy_filter", "Old material JSON");
+			label = T("feature.skin.character_file_filter", "Skin character file");
 			pattern = L"*.json";
 			break;
 		}
@@ -71,7 +150,7 @@ namespace SkinEditor
 		return std::nullopt;
 	}
 
-	void Publish(std::span<const Output> a_outputs)
+	void Publish(std::span<const Output> a_outputs, bool a_keepBackups)
 	{
 		struct File
 		{
@@ -152,6 +231,12 @@ namespace SkinEditor
 				std::error_code ignored;
 				std::filesystem::remove(file.temporary, ignored);
 			}
+			if (!a_keepBackups)
+				for (const auto& file : files) {
+					std::error_code ignored;
+					if (file.existed)
+						std::filesystem::remove(file.backup, ignored);
+				}
 		} catch (const std::exception& error) {
 			std::string message = error.what();
 			for (auto it = files.rbegin(); it != files.rend(); ++it) {
@@ -171,32 +256,6 @@ namespace SkinEditor
 			}
 			throw std::runtime_error(message);
 		}
-	}
-
-	std::vector<Output> Package(const NifDocument& a_document, const std::filesystem::path& a_nifPath)
-	{
-		auto meshes = std::filesystem::absolute(a_nifPath).parent_path();
-		while (!meshes.empty() && _wcsicmp(meshes.filename().c_str(), L"meshes") != 0) {
-			const auto parent = meshes.parent_path();
-			if (parent == meshes)
-				break;
-			meshes = parent;
-		}
-		if (_wcsicmp(meshes.filename().c_str(), L"meshes") != 0)
-			throw std::runtime_error(T("feature.skin.package_meshes_folder", "Choose a NIF inside your mod's meshes folder. Its textures folder will be created alongside meshes."));
-		std::vector<Output> outputs{ { a_nifPath, a_document.VerifiedBytes() } };
-		std::set<std::string> included;
-		for (const auto& surface : a_document.Surfaces()) {
-			if (surface.definition.status != SkinMaterials::Status::Valid)
-				continue;
-			CheckTextures(surface.definition.material);
-			for (const auto& path : surface.definition.material.textures) {
-				const auto resource = SkinMaterials::NormalizeTexturePath(path);
-				if (!resource.empty() && included.insert(resource).second)
-					outputs.push_back({ meshes.parent_path() / std::filesystem::u8path(resource), ReadResource(resource) });
-			}
-		}
-		return outputs;
 	}
 
 	std::string ImportTexture(const std::filesystem::path& a_source)

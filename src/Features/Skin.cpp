@@ -13,6 +13,7 @@ void Skin::LoadSettings(json& a_json)
 	try {
 		next.EnableSkin = a_json.value("EnableSkin", true);
 		next.DetailTexture = a_json.value("DetailTexture", next.DetailTexture);
+		next.MaterialOutputFolder = a_json.value("MaterialOutputFolder", next.MaterialOutputFolder);
 		auto number = [&](const char* name, float& value, float minimum, float maximum) {
 			const float input = a_json.value(name, value);
 			if (!std::isfinite(input))
@@ -61,7 +62,7 @@ void Skin::SaveSettings(json& a_json)
 	for (size_t i = 0; i < fields.size(); ++i)
 		profile[SettingName(i)] = fields[i].integer ? json(settings.DefaultProfile.values[i] != 0) : json(settings.DefaultProfile.values[i]);
 	a_json = { { "EnableSkin", settings.EnableSkin }, { "DefaultProfile", profile },
-		{ "DetailTexture", settings.DetailTexture },
+		{ "DetailTexture", settings.DetailTexture }, { "MaterialOutputFolder", settings.MaterialOutputFolder },
 		{ "ExtraSkinWetness", settings.ExtraSkinWetness }, { "WetFadeTime", settings.WetFadeTime },
 		{ "StartSweat", settings.StartSweat }, { "FullSweat", settings.FullSweat }, { "WetParams", settings.WetParams } };
 }
@@ -77,7 +78,7 @@ void Skin::DrawSettings()
 {
 	std::lock_guard lock(mutex);
 	bool changed = ImGui::Checkbox(T("feature.skin.enable_advanced_skin", "Enable Advanced Skin"), &settings.EnableSkin);
-	ImGui::TextWrapped("%s", T("feature.skin.global_material_inheritance", "Applies to all compatible skin. Materials and characters override only the values explicitly selected in their editors."));
+	ImGui::TextWrapped("%s", T("feature.skin.global_material_inheritance_v2", "Applies to all compatible skin. A skin texture's material file and per-character adjustments override only the values they explicitly set. Edit them in CS Editor > Skin Editor."));
 	if (ImGui::CollapsingHeader(T("feature.skin.common_parameters", "Common skin parameters"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		const auto fields = ParameterTable();
 		for (const auto parameter : ParameterOrder) {
@@ -111,7 +112,7 @@ void Skin::DrawSettings()
 	if (!editor.error.empty())
 		ImGui::TextWrapped("%s", editor.error.c_str());
 	if (ImGui::Button(T("feature.skin.reload_skin_resources", "Reload skin resources")))
-		Invalidate(true);
+		ReloadResources();
 	DrawGlobalSettings();
 	if (changed)
 		Invalidate();
