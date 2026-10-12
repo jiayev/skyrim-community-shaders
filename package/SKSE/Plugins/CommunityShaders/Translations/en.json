@@ -3330,7 +3330,7 @@
     "menu.presets.compat_plugins_missing": "Made with plugin(s) not in your load order: {plugins}",
     "menu.presets.cs_layer_note": "Applying makes this pack's CS Presets the active scene layer, replacing the previous pack's.",
     "menu.presets.disable": "Disable Preset",
-    "menu.presets.disable_tooltip": "Turns this preset off. Scene settings and form edits fall back to your own, and an Effects 11 preset returns to the Legacy install.",
+    "menu.presets.disable_tooltip": "Turns this preset off. Scene settings and form edits fall back to your own, and an Effects 11 preset switches to Vanilla.",
     "menu.presets.effects11_library_description": "Effects11 library preset",
     "menu.presets.empty": "No presets found. Drop packs into the Presets folder, install Effects 11 presets, or export from Scene Manager.",
     "menu.presets.filter_all": "All",

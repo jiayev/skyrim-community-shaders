@@ -263,7 +263,7 @@ namespace
 			if (ImGui::Button(disableLabel))
 				catalog.DisableActivePack();
 			Util::AddTooltip(T("menu.presets.disable_tooltip",
-				"Turns this preset off. Scene settings and form edits fall back to your own, and an Effects 11 preset returns to the Legacy install."));
+				"Turns this preset off. Scene settings and form edits fall back to your own, and an Effects 11 preset switches to Vanilla."));
 		}
 
 		if (packActive || baselineEnabled) {

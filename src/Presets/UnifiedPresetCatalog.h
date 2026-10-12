@@ -154,7 +154,7 @@ public:
 	 *  enables its Baseline overwrites. A Baseline-only pack leaves the active pack and scene layer untouched. */
 	bool ApplyPack(const std::string& id, bool saveEffects11Current = true);
 
-	/** @brief Turns the active pack off: Effects 11 returns to the Legacy install (Post Processing without one),
+	/** @brief Turns the active pack off: an Effects 11 pack switches the pipeline to Vanilla,
 	 *  and the scene layer and form edits fall back to the user's own. */
 	void DisableActivePack();
 
