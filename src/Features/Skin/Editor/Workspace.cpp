@@ -1,6 +1,11 @@
 #include "Features/Skin.h"
 
+#include "Globals.h"
+#include "State.h"
+
 #include <imgui_stdlib.h>
+#include <set>
+#include <shellapi.h>
 
 using namespace SkinMaterials;
 using namespace SkinEditor;
@@ -12,397 +17,534 @@ namespace
 		std::function<void()> leave;
 		~ScopeExit() { leave(); }
 	};
-}
-
-void Skin::DrawEditorDialogs()
-{
-	if (editor.pendingSave && editor.saveConflict)
-		ImGui::OpenPopup("###skin_save_conflict");
-	if (ImGui::BeginPopupModal("###skin_save_conflict", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-		ScopeExit popupScope{ [] { ImGui::EndPopup(); } };
-		if (editor.saveConflict) {
-			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetFontSize() * 32);
-			ImGui::TextWrapped("%s", editor.saveConflict->what());
-			if (!editor.error.empty())
-				ImGui::TextWrapped("%s", editor.error.c_str());
-			ImGui::TextWrapped("%s", UTF8(editor.saveConflict->path).c_str());
-			ImGui::PopTextWrapPos();
-			if (ImGui::Button(T("feature.skin.backup_and_save_edits", "Back up disk file and save my edits"))) {
-				editor.confirmSave = true;
-				ScopeExit confirmation{ [this] { editor.confirmSave = false; } };
-				if (RunCharacterSave(editor.pendingSave))
-					ImGui::CloseCurrentPopup();
-			}
-			ImGui::SameLine();
-			if (ImGui::Button(T("feature.skin.keep_editing", "Keep editing"))) {
-				editor.pendingSave = {};
-				editor.saveConflict.reset();
-				ImGui::CloseCurrentPopup();
-			}
-		} else {
-			ImGui::CloseCurrentPopup();
-		}
+	Changes ToChanges(const SkinMaterials::Material& a_material)
+	{
+		Changes result;
+		if (!a_material.enabled)
+			return result;
+		for (size_t i = 0; i < ParameterCount; ++i)
+			if (a_material.specified[i])
+				result.parameters[i] = a_material.parameters.values[i];
+		for (size_t i = 0; i < TextureCount; ++i)
+			if (!a_material.textures[i].empty())
+				result.textures[i] = { TextureMode::Resource, a_material.textures[i] };
+		return result;
 	}
-	if (editor.pendingAction)
-		ImGui::OpenPopup("###skin_discard_confirmation");
-	bool discard = false;
-	if (ImGui::BeginPopupModal("###skin_discard_confirmation", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-		ScopeExit popupScope{ [] { ImGui::EndPopup(); } };
-		ImGui::TextWrapped("%s", T("feature.skin.unsaved_draft", "This editor has unsaved changes. Save or apply them first, or discard them to continue."));
-		if (ImGui::Button(T("feature.skin.keep_editing", "Keep editing"))) {
-			editor.pendingAction = {};
-			editor.workspace = editor.character ? Editor::Workspace::Character : Editor::Workspace::Asset;
-			ImGui::CloseCurrentPopup();
-		}
-		ImGui::SameLine();
-		if (ImGui::Button(T("feature.skin.discard_and_continue", "Discard and continue"))) {
-			discard = true;
-			ImGui::CloseCurrentPopup();
-		}
+	// Accepts the mod folder itself, its textures folder, or any folder below textures.
+	std::filesystem::path ModRoot(std::filesystem::path a_folder)
+	{
+		for (auto current = a_folder; current.has_parent_path() && current != current.parent_path(); current = current.parent_path())
+			if (_wcsicmp(current.filename().c_str(), L"textures") == 0)
+				return current.parent_path();
+		return a_folder;
 	}
-	if (discard) {
-		auto action = std::move(editor.pendingAction);
-		editor.pendingAction = {};
-		editor.discardConfirmed = true;
-		ScopeExit confirmationScope{ [this] { editor.discardConfirmed = false; } };
-		action();
-	}
-	if (!editor.package.empty())
-		ImGui::OpenPopup("###skin_package_outputs");
-	if (ImGui::BeginPopupModal("###skin_package_outputs", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-		ScopeExit popupScope{ [] { ImGui::EndPopup(); } };
-		ImGui::TextWrapped("%s", T("feature.skin.package_review", "Write these files? Existing files receive recovery backups. This includes the NIF and its explicit Skin textures; native textures remain dependencies of the original mod."));
-		for (const auto& output : editor.package)
-			ImGui::TextWrapped("%s", UTF8(output.path).c_str());
-		if (ImGui::Button(T("feature.skin.write_package", "Write listed files"))) {
-			editor.packageDocument->VerifiedBytes();
-			Publish(editor.package);
-			editor.packageDocument->Open(UTF8(editor.package.front().path));
-			editor.document = std::move(editor.packageDocument);
-			editor.materials = editor.document->Surfaces();
-			editor.sourceInput = editor.document->Source();
-			editor.baseline = editor.draft;
-			editor.package.clear();
-			editor.message = T("feature.skin.package_saved", "NIF and explicit Skin textures saved to the listed mod paths.");
-			ImGui::CloseCurrentPopup();
-			Invalidate(true);
-		}
-		ImGui::SameLine();
-		if (ImGui::Button(T("feature.skin.cancel", "Cancel"))) {
-			editor.package.clear();
-			editor.packageDocument.reset();
-			ImGui::CloseCurrentPopup();
+	const char* OriginLabel(SkinLibrary::Origin a_origin)
+	{
+		switch (a_origin) {
+		case SkinLibrary::Origin::Loose:
+			return T("feature.skin.material_origin_loose", "Material file (loose)");
+		case SkinLibrary::Origin::Archive:
+			return T("feature.skin.material_origin_archive", "Material file (archive)");
+		case SkinLibrary::Origin::Session:
+			return T("feature.skin.material_origin_session", "Material file saved in this session");
+		default:
+			return T("feature.skin.material_origin_none", "No material file - common settings");
 		}
 	}
 }
 
-void Skin::DrawEditorSave()
+bool Skin::MaterialDirty() const
 {
-	if (editor.character) {
-		DrawCharacterActions();
+	return !editor.draftKey.empty() && editor.material != editor.materialBaseline;
+}
+
+bool Skin::CharacterDirty() const
+{
+	return editor.draftTarget && editor.character != editor.characterBaseline;
+}
+
+bool Skin::EditorDirty() const
+{
+	return MaterialDirty() || CharacterDirty();
+}
+
+void Skin::ChangeEditor(bool a_discards, std::function<void()> a_action)
+{
+	if (a_discards && !editor.discardConfirmed)
+		editor.pendingAction = std::move(a_action);
+	else
+		a_action();
+}
+
+void Skin::SelectActor(RE::Actor* a_actor)
+{
+	if (!a_actor || !a_actor->Get3D(false))
+		throw std::runtime_error(T("feature.skin.select_loaded_character", "Select a character with loaded 3D."));
+	const auto handle = a_actor->GetHandle();
+	ChangeEditor(CharacterDirty() && !(SkinCharacters::TargetOf(a_actor) == editor.draftTarget), [this, handle] {
+		const auto actor = handle.get();
+		if (!actor)
+			throw std::runtime_error(T("feature.skin.select_loaded_character", "Select a character with loaded 3D."));
+		editor.actor = handle;
+		editor.actorName = actor->GetName() ? actor->GetName() : "";
+		editor.draftTarget = SkinCharacters::TargetOf(actor.get());
+		const auto* saved = editor.draftTarget ? SkinCharacters::Find(*SkinCharacters::Get(), editor.draftTarget.key) : nullptr;
+		editor.character = editor.characterBaseline = saved ? saved->customization : SkinCharacters::Customization{};
+		if (!saved)
+			editor.character.name = editor.characterBaseline.name = editor.actorName;
+		editor.undo.clear();
+		editor.redo.clear();
+		RefreshSurfaces();
+		const bool shown = std::any_of(editor.surfaces.begin(), editor.surfaces.end(), [this](const auto& surface) { return surface.key == editor.key; });
+		if (!shown && !MaterialDirty()) {
+			// Prefer the body: it is usually what an author is working on and what armor shares.
+			const auto body = std::find_if(editor.surfaces.begin(), editor.surfaces.end(), [](const auto& surface) { return !surface.key.empty() && surface.description.part == SkinSurfaces::Part::Body; });
+			const auto any = std::find_if(editor.surfaces.begin(), editor.surfaces.end(), [](const auto& surface) { return !surface.key.empty(); });
+			const auto chosen = body != editor.surfaces.end() ? body : any;
+			if (chosen != editor.surfaces.end()) {
+				editor.key = chosen->key;
+				LoadMaterialDraft(chosen->key);
+			}
+		}
+		editor.message.clear();
+		Invalidate();
+	});
+}
+
+void Skin::RefreshSurfaces()
+{
+	editor.lastRefresh = globals::state->frameCount;
+	const auto actor = editor.actor.get();
+	if (!actor) {
+		editor.surfaces.clear();
 		return;
 	}
-	if (ImGui::Button(T("feature.skin.save_nif_as", "Save NIF as..."), ImVec2(-FLT_MIN, 0))) {
-		CheckTextures(editor.draft);
-		if (const auto output = ChooseFile(true, NifFilter, L"nif", std::filesystem::u8path(editor.sourceInput).filename())) {
-			auto next = *editor.document;
-			next.SetMaterial(editor.selectedBlock, editor.draft);
-			for (const auto& surface : next.Surfaces())
-				if (surface.definition.status == Status::Valid)
-					CheckTextures(surface.definition.material);
-			next.Save(*output);
-			editor.document = std::move(next);
-			editor.baseline = editor.draft;
-			editor.materials = editor.document->Surfaces();
-			editor.sourceInput = editor.document->Source();
-			editor.message = T("feature.skin.nif_saved_and_read_back_existing_loaded_models_update_when", "NIF saved and read back. Existing loaded models update when their 3D is rebuilt. Preview remains temporary.");
-			Invalidate(true);
+	std::vector<Editor::Surface> surfaces;
+	std::set<RE::NiAVObject*> roots;
+	for (bool first : { false, true }) {
+		if (first && actor.get() != RE::PlayerCharacter::GetSingleton())
+			continue;
+		auto* root = actor->Get3D(first);
+		if (!root || !roots.insert(root).second)
+			continue;
+		RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* geometry) {
+			auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
+			if (IsCompatible(property)) {
+				const auto& entry = Observe(geometry, property);
+				surfaces.push_back({ RE::NiPointer(geometry), entry.key, SkinSurfaces::Describe(geometry, actor.get()) });
+			}
+			return RE::BSVisit::BSVisitControl::kContinue;
+		});
+	}
+	std::stable_sort(surfaces.begin(), surfaces.end(), [](const auto& a, const auto& b) {
+		return std::tie(a.description.firstPerson, a.description.part) < std::tie(b.description.firstPerson, b.description.part);
+	});
+	editor.surfaces = std::move(surfaces);
+}
+
+void Skin::SelectKey(const std::string& a_key)
+{
+	if (a_key.empty() || (a_key == editor.key && a_key == editor.draftKey))
+		return;
+	ChangeEditor(MaterialDirty() && a_key != editor.draftKey, [this, a_key] {
+		editor.key = a_key;
+		if (a_key != editor.draftKey)
+			LoadMaterialDraft(a_key);
+	});
+}
+
+void Skin::LoadMaterialDraft(const std::string& a_key)
+{
+	const auto entry = FindMaterial(a_key);
+	editor.draftKey = a_key;
+	editor.material = editor.materialBaseline = entry->definition.status == Status::Valid ? ToChanges(entry->definition.material) : Changes{};
+	editor.recordFingerprint = entry->definition.status != Status::Valid || entry->definition.authoredFor.has_value();
+	editor.fingerprintWarning.clear();
+	if (entry->definition.authoredFor) {
+		try {
+			if (ResourceFingerprint(a_key) != *entry->definition.authoredFor)
+				editor.fingerprintWarning = T("feature.skin.material_authored_for_other_texture", "This material was made for a different version of this texture. Its painted masks may not line up; check the result or save again to accept it.");
+		} catch (const std::exception& e) {
+			editor.fingerprintWarning = e.what();
 		}
 	}
-	if (ImGui::Button(T("feature.skin.prepare_package", "Save NIF with Skin textures..."))) {
-		if (const auto output = ChooseFile(true, NifFilter, L"nif", std::filesystem::u8path(editor.sourceInput).filename())) {
-			auto document = *editor.document;
-			document.SetMaterial(editor.selectedBlock, editor.draft);
-			editor.package = Package(document, *output);
-			editor.packageDocument = std::move(document);
+	editor.undo.clear();
+	editor.redo.clear();
+	editor.thumbnailKey.clear();
+	Invalidate();
+}
+
+void Skin::SaveMaterial(const std::filesystem::path& a_root)
+{
+	if (editor.draftKey.empty())
+		throw std::runtime_error(T("feature.skin.select_skin_texture", "Select a skin texture first."));
+	Validate(editor.material);
+	const auto material = Apply({}, editor.material);
+	CheckTextures(material);
+	std::optional<SkinMaterials::Fingerprint> fingerprint;
+	if (editor.recordFingerprint) {
+		// Advisory data only: a diffuse that cannot be read back must not block saving the material.
+		try {
+			fingerprint = ResourceFingerprint(editor.draftKey);
+		} catch (const std::exception& e) {
+			logger::warn("[Advanced Skin Editor] {} was not fingerprinted: {}", editor.draftKey, e.what());
 		}
 	}
-	DrawBatch();
+	const auto text = Encode(material, fingerprint).dump(2) + "\n";
+	const Bytes bytes(text.begin(), text.end());
+	const auto relative = SidecarPath(editor.draftKey);
+	const auto destination = a_root / std::filesystem::u8path(relative);
+	const Output output{ destination, bytes };
+	Publish(std::span(&output, 1), false);
+	SkinLibrary::Entry entry;
+	entry.key = editor.draftKey;
+	entry.path = relative;
+	entry.definition = Parse(bytes);
+	entry.origin = SkinLibrary::Origin::Session;
+	entry.savedTo = UTF8(destination);
+	library[editor.draftKey] = std::make_shared<const SkinLibrary::Entry>(std::move(entry));
+	editor.materialBaseline = editor.material;
+	editor.fingerprintWarning.clear();
+	editor.message = I18n::GetSingleton()->Format("feature.skin.material_saved", { { "path", UTF8(destination) } },
+		"Saved {path}. It applies to everything showing this texture. If another mod provides the same file with higher priority, the game will use that one after Reload skin resources or a restart.");
+	Invalidate();
+}
+
+void Skin::SaveCharacter()
+{
+	if (!editor.draftTarget)
+		throw std::runtime_error(T("feature.skin.character_no_identity", "This character was generated at runtime and has no record to save adjustments for."));
+	if (editor.character.name.empty())
+		editor.character.name = editor.actorName;
+	std::erase_if(editor.character.materials, [](const auto& item) { return item.second.Empty(); });
+	const bool removed = editor.character.Empty();
+	const auto file = SkinCharacters::Save(editor.draftTarget, editor.character);
+	editor.characterBaseline = editor.character;
+	editor.message = removed ? I18n::GetSingleton()->Format("feature.skin.character_file_removed", { { "path", UTF8(file) } }, "No adjustments left; removed {path}.") :
+	                           I18n::GetSingleton()->Format("feature.skin.character_saved_file", { { "path", UTF8(file) } }, "Saved {path}. It applies in every save and can be edited or shared like any other file.");
+	Invalidate();
+}
+
+void Skin::DrawEditorHeader()
+{
+	using Workspace = Editor::Workspace;
+	const char* workspaces[] = { T("feature.skin.workspace_material", "Skin texture materials"), T("feature.skin.workspace_character_v2", "This character"), T("feature.skin.workspace_textures", "Texture tools") };
+	int workspace = static_cast<int>(editor.workspace);
+	float workspaceWidth = 0;
+	for (const auto* label : workspaces)
+		workspaceWidth = std::max(workspaceWidth, ImGui::CalcTextSize(label).x + ImGui::GetStyle().CellPadding.x * 2 + ImGui::GetStyle().ItemSpacing.x);
+	if (ImGui::GetContentRegionAvail().x < workspaceWidth * 3) {
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		ImGui::Combo("##skin_workspace", &workspace, workspaces, 3);
+	} else if (ImGui::BeginTable("##skin_workspaces", 3, ImGuiTableFlags_SizingStretchSame)) {
+		for (int i = 0; i < 3; ++i) {
+			ImGui::TableNextColumn();
+			if (ImGui::Selectable(workspaces[i], workspace == i))
+				workspace = i;
+		}
+		ImGui::EndTable();
+	}
+	if (workspace != static_cast<int>(editor.workspace)) {
+		editor.workspace = static_cast<Workspace>(workspace);
+		if (editor.workspace != Workspace::Textures)
+			editor.returnWorkspace = editor.workspace;
+	}
+	ImGui::Separator();
+	if (!editor.error.empty()) {
+		ImGui::TextWrapped("%s", editor.error.c_str());
+		if (ImGui::SmallButton(T("feature.skin.dismiss_error", "Dismiss error")))
+			editor.error.clear();
+	} else if (!editor.message.empty()) {
+		ImGui::TextWrapped("%s", editor.message.c_str());
+	}
+}
+
+void Skin::DrawTargets()
+{
+	if (ImGui::Button(T("feature.skin.player", "Player")))
+		SelectActor(RE::PlayerCharacter::GetSingleton());
+	ImGui::SameLine();
+	if (ImGui::Button(T("feature.skin.console_selection", "Console selection"))) {
+		const auto reference = RE::Console::GetSelectedRef();
+		auto* actor = reference ? reference->As<RE::Actor>() : nullptr;
+		if (!actor)
+			throw std::runtime_error(T("feature.skin.select_a_reference_in_the_console_or_choose_player", "Select a reference in the console, or choose Player."));
+		SelectActor(actor);
+	}
+	ImGui::SameLine();
+	if (ImGui::Button(T("feature.skin.refresh_surfaces", "Refresh")))
+		RefreshSurfaces();
+	if (!editor.actor.get()) {
+		ImGui::TextWrapped("%s", T("feature.skin.choose_target_first_v2", "Choose Player, or select an NPC in the console, to see which skin textures it shows."));
+		return;
+	}
+	// Equipment and RaceMenu changes rebuild the model; keep the list current without user action.
+	if (globals::state->frameCount - editor.lastRefresh > 30)
+		RefreshSurfaces();
+	ImGui::SameLine();
+	ImGui::TextUnformatted(editor.actorName.empty() ? T("feature.skin.unnamed_character", "Unnamed character") : editor.actorName.c_str());
+}
+
+void Skin::DrawSurfaces()
+{
+	if (!editor.actor.get())
+		return;
+	ImGui::TextWrapped("%s", T("feature.skin.texture_identity_help", "Each skin texture has its own material. Everything that shows the same texture shares it: other characters, other races, and skin inside armor and clothing meshes."));
+	std::vector<std::string> keys;
+	std::map<std::string, std::vector<std::string>> users;
+	for (const auto& surface : editor.surfaces) {
+		if (!users.contains(surface.key))
+			keys.push_back(surface.key);
+		users[surface.key].push_back(SkinSurfaces::Label(surface.description));
+	}
+	if (keys.empty()) {
+		ImGui::TextWrapped("%s", T("feature.skin.no_compatible_skin_surfaces_were_found", "No compatible skin surfaces were found."));
+		return;
+	}
+	if (!ImGui::BeginTable("##skin_surfaces", 3, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable))
+		return;
+	ScopeExit table{ [] { ImGui::EndTable(); } };
+	ImGui::TableSetupColumn(T("feature.skin.column_texture", "Skin texture"), ImGuiTableColumnFlags_WidthStretch, 3);
+	ImGui::TableSetupColumn(T("feature.skin.column_material", "Material"), ImGuiTableColumnFlags_WidthStretch, 2);
+	ImGui::TableSetupColumn(T("feature.skin.column_shown_on", "Shown on"), ImGuiTableColumnFlags_WidthStretch, 2);
+	ImGui::TableHeadersRow();
+	for (const auto& key : keys) {
+		ImGui::PushID(key.c_str());
+		ScopeExit id{ [] { ImGui::PopID(); } };
+		ImGui::TableNextRow();
+		ImGui::TableNextColumn();
+		if (key.empty()) {
+			ImGui::TextDisabled("%s", T("feature.skin.unidentified_texture", "Unidentified texture (cannot hold a material)"));
+		} else if (ImGui::Selectable(key.c_str(), key == editor.key, ImGuiSelectableFlags_SpanAllColumns)) {
+			SelectKey(key);
+		}
+		ImGui::TableNextColumn();
+		if (!key.empty()) {
+			const auto entry = FindMaterial(key);
+			if (entry->definition.status == Status::Invalid)
+				ImGui::TextWrapped("%s", T("feature.skin.material_file_invalid", "Invalid material file - ignored"));
+			else
+				ImGui::TextWrapped("%s", OriginLabel(entry->origin));
+			if (editor.draftTarget) {
+				const auto* customization = &editor.character;
+				if (customization->materials.contains(key) || !customization->all.Empty())
+					ImGui::TextDisabled("%s", T("feature.skin.character_adjusted", "+ character adjustments"));
+			}
+		}
+		ImGui::TableNextColumn();
+		std::string shown;
+		for (const auto& user : users[key])
+			shown += (shown.empty() ? "" : ", ") + user;
+		ImGui::TextWrapped("%s", shown.c_str());
+	}
+}
+
+void Skin::DrawMaterialWorkspace()
+{
+	if (editor.draftKey.empty()) {
+		ImGui::TextWrapped("%s", T("feature.skin.select_skin_texture", "Select a skin texture first."));
+		return;
+	}
+	const auto entry = FindMaterial(editor.draftKey);
+	ImGui::SeparatorText(T("feature.skin.texture_material", "Texture material"));
+	ImGui::TextWrapped("%s", editor.draftKey.c_str());
+	ImGui::TextDisabled("%s", entry->path.c_str());
+	ImGui::TextWrapped("%s", OriginLabel(entry->origin));
+	if (!entry->savedTo.empty())
+		ImGui::TextDisabled("%s", entry->savedTo.c_str());
+	if (entry->definition.status == Status::Invalid)
+		ImGui::TextWrapped("%s %s", T("feature.skin.material_file_invalid_detail", "The existing file is ignored and the common settings apply. Saving replaces it:"), entry->definition.diagnostic.c_str());
+	if (!editor.fingerprintWarning.empty())
+		ImGui::TextWrapped("%s", editor.fingerprintWarning.c_str());
+	if (editor.draftKey != editor.key)
+		ImGui::TextWrapped("%s", T("feature.skin.draft_for_other_texture", "This draft belongs to a texture other than the one selected above. Save or discard it to edit the selected texture."));
+	ImGui::TextWrapped("%s", T("feature.skin.material_scope", "Shared by every character, race and armor that shows this texture. Saving writes the material file beside the texture, ready to ship with your skin mod."));
+	DrawMaterialControls(Layer::Material);
+	DrawPreviewOptions();
+
+	ImGui::SeparatorText(T("feature.skin.save_destination", "Save destination"));
+	const auto root = settings.MaterialOutputFolder.empty() ? std::filesystem::path("Data") : std::filesystem::u8path(settings.MaterialOutputFolder);
+	ImGui::TextWrapped("%s", UTF8(root / std::filesystem::u8path(SidecarPath(editor.draftKey))).c_str());
+	ImGui::Checkbox(T("feature.skin.record_fingerprint", "Record which version of the diffuse texture this was made for"), &editor.recordFingerprint);
+	if (ImGui::Button(T("feature.skin.save_material", "Save material file"), ImVec2(-FLT_MIN, 0)))
+		SaveMaterial(root);
+	if (ImGui::Button(T("feature.skin.save_material_to_folder", "Save into a mod folder..."))) {
+		if (const auto folder = ChooseFolder()) {
+			const auto modRoot = ModRoot(*folder);
+			settings.MaterialOutputFolder = UTF8(modRoot);
+			SaveMaterial(modRoot);
+		}
+	}
+	if (!settings.MaterialOutputFolder.empty()) {
+		ImGui::SameLine();
+		if (ImGui::Button(T("feature.skin.save_material_to_data", "Use the game's Data folder")))
+			settings.MaterialOutputFolder.clear();
+	}
+	if (ImGui::Button(T("feature.skin.import_material_file", "Copy values from another material file..."))) {
+		if (const auto path = ChooseFile(false, MaterialFilter, L"json")) {
+			const auto definition = Parse(ReadResource(UTF8(*path)));
+			if (definition.status != Status::Valid)
+				throw std::runtime_error(definition.diagnostic);
+			// Painted inputs belong to the other texture's UV layout, so only the numeric values are copied.
+			PushUndo({ editor.material, editor.character });
+			editor.material.parameters = ToChanges(definition.material).parameters;
+			Invalidate();
+		}
+	}
+	ImGui::SameLine();
+	if (ImGui::Button(T("feature.skin.clear_material_overrides", "Clear all overrides"))) {
+		PushUndo({ editor.material, editor.character });
+		editor.material = {};
+		Invalidate();
+	}
+}
+
+void Skin::DrawCharacterWorkspace()
+{
+	const auto actor = editor.actor.get();
+	if (!actor)
+		return;
+	ImGui::SeparatorText(editor.actorName.empty() ? T("feature.skin.unnamed_character", "Unnamed character") : editor.actorName.c_str());
+	if (!editor.draftTarget) {
+		ImGui::TextWrapped("%s", T("feature.skin.character_no_identity", "This character was generated at runtime and has no record to save adjustments for."));
+		return;
+	}
+	const auto* saved = SkinCharacters::Find(*SkinCharacters::Get(), editor.draftTarget.key);
+	ImGui::TextWrapped("%s", T("feature.skin.character_scope_v2", "Adjustments are saved as a file for this character. They apply in every save, to every actor using this record, and the file can be edited by hand or shared. A change of race or skin texture simply switches to that texture's material."));
+	ImGui::TextDisabled("%s", editor.draftTarget.text.c_str());
+	ImGui::TextDisabled("%s", saved ? UTF8(saved->file).c_str() : T("feature.skin.character_no_file", "No character file yet"));
+	if (ImGui::RadioButton(T("feature.skin.character_scope_material", "Only this skin texture"), !editor.characterAll))
+		editor.characterAll = false;
+	ImGui::SameLine();
+	if (ImGui::RadioButton(T("feature.skin.character_scope_all", "All skin of this character"), editor.characterAll))
+		editor.characterAll = true;
+	if (!editor.characterAll) {
+		if (editor.key.empty()) {
+			ImGui::TextWrapped("%s", T("feature.skin.select_skin_texture", "Select a skin texture first."));
+		} else {
+			ImGui::TextWrapped("%s", editor.key.c_str());
+			if (std::none_of(editor.surfaces.begin(), editor.surfaces.end(), [this](const auto& surface) { return surface.key == editor.key; }))
+				ImGui::TextWrapped("%s", T("feature.skin.character_texture_not_shown", "This character does not currently show this texture. Select one of its textures in the list above."));
+			DrawMaterialControls(Layer::CharacterMaterial);
+		}
+	} else {
+		DrawMaterialControls(Layer::CharacterAll);
+	}
+	DrawPreviewOptions();
+
+	ImGui::SeparatorText(T("feature.skin.character_save_section", "Save"));
+	{
+		ImGui::BeginDisabled(!CharacterDirty());
+		ScopeExit disabled{ [] { ImGui::EndDisabled(); } };
+		if (ImGui::Button(T("feature.skin.save_character", "Save character file"), ImVec2(-FLT_MIN, 0)))
+			SaveCharacter();
+	}
+	if (ImGui::Button(T("feature.skin.remove_character_adjustments", "Remove all adjustments of this character"))) {
+		PushUndo({ editor.material, editor.character });
+		editor.character = {};
+		Invalidate();
+	}
+
+	std::set<std::string> shown;
+	for (const auto& surface : editor.surfaces)
+		shown.insert(surface.key);
+	std::vector<std::string> inactive;
+	for (const auto& [key, changes] : editor.character.materials)
+		if (!shown.contains(key))
+			inactive.push_back(key);
+	if (!inactive.empty() && ImGui::CollapsingHeader(T("feature.skin.inactive_character_materials", "Adjustments for textures not currently shown"))) {
+		ImGui::TextWrapped("%s", T("feature.skin.inactive_character_materials_help", "These apply again when the character shows the texture, for example after switching back to an earlier race. They never apply to a different texture."));
+		for (const auto& key : inactive) {
+			ImGui::PushID(key.c_str());
+			ScopeExit id{ [] { ImGui::PopID(); } };
+			ImGui::TextWrapped("%s", key.c_str());
+			ImGui::SameLine();
+			if (ImGui::SmallButton(T("feature.skin.remove", "Remove"))) {
+				PushUndo({ editor.material, editor.character });
+				editor.character.materials.erase(key);
+				Invalidate();
+				break;
+			}
+			if (!editor.key.empty() && shown.contains(editor.key)) {
+				ImGui::SameLine();
+				// Numeric values only: the painted inputs belong to the other texture's UV layout.
+				if (ImGui::SmallButton(T("feature.skin.copy_values_to_selected_texture", "Copy values to the selected texture"))) {
+					PushUndo({ editor.material, editor.character });
+					const auto parameters = editor.character.materials.at(key).parameters;
+					editor.character.materials[editor.key].parameters = parameters;
+					Invalidate();
+					break;
+				}
+			}
+		}
+	}
+
+	if (ImGui::CollapsingHeader(T("feature.skin.character_files_section", "Files and sharing"))) {
+		ImGui::TextWrapped("%s", T("feature.skin.character_files_help", "Character files are ordinary JSON in the folder below; a mod can ship them too. Use another character's file to start from its look: its adjustments are loaded into this draft and apply wherever the same textures are shown."));
+		ImGui::TextDisabled("%s", UTF8(SkinCharacters::Directory()).c_str());
+		if (ImGui::Button(T("feature.skin.open_character_folder_v2", "Open folder"))) {
+			std::error_code ignored;
+			std::filesystem::create_directories(SkinCharacters::Directory(), ignored);
+			ShellExecuteW(nullptr, L"open", std::filesystem::absolute(SkinCharacters::Directory()).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(T("feature.skin.import_character_file", "Load from another character file..."))) {
+			std::error_code ignored;
+			std::filesystem::create_directories(SkinCharacters::Directory(), ignored);
+			if (const auto path = ChooseFile(false, CharacterFilter, L"json", std::filesystem::absolute(SkinCharacters::Directory()) / "")) {
+				auto imported = SkinCharacters::Import(*path);
+				PushUndo({ editor.material, editor.character });
+				imported.name = editor.character.name.empty() ? editor.actorName : editor.character.name;
+				size_t unmatched = 0;
+				for (const auto& [key, changes] : imported.materials)
+					unmatched += shown.contains(key) ? 0 : 1;
+				editor.character = std::move(imported);
+				editor.message = I18n::GetSingleton()->Format("feature.skin.character_file_loaded", { { "count", std::to_string(unmatched) } },
+					"Loaded into the draft. {count} texture-specific entries do not match a texture this character currently shows. Save to keep it.");
+				Invalidate(true);
+			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(T("feature.skin.export_character_file", "Save a copy..."))) {
+			if (const auto path = ChooseFile(true, CharacterFilter, L"json", std::filesystem::path(editor.actorName.empty() ? "Skin character" : editor.actorName).concat(".json"))) {
+				SkinCharacters::Export(*path, editor.draftTarget, editor.character);
+				editor.message = T("feature.skin.character_copy_saved", "Copy saved. Share any custom DDS files it refers to alongside it.");
+			}
+		}
+		const auto state = SkinCharacters::Get();
+		for (const auto& problem : state->problems)
+			ImGui::TextWrapped("%s: %s", UTF8(problem.file.filename()).c_str(), problem.diagnostic.c_str());
+	}
 }
 
 void Skin::DrawMaterialEditor()
 {
 	std::lock_guard lock(mutex);
-	UpdateEditorPreview();
-	using Workspace = Editor::Workspace;
 	try {
-		const char* workspaces[] = { T("feature.skin.workspace_asset", "NIF authoring"), T("feature.skin.workspace_character", "Character customization"), T("feature.skin.workspace_textures", "Texture tools"), T("feature.skin.workspace_storage", "Configuration") };
-		int workspace = static_cast<int>(editor.workspace);
-		float workspaceWidth = 0;
-		for (const auto* label : workspaces)
-			workspaceWidth = std::max(workspaceWidth, ImGui::CalcTextSize(label).x + ImGui::GetStyle().CellPadding.x * 2 + ImGui::GetStyle().ItemSpacing.x);
-		if (ImGui::GetContentRegionAvail().x < workspaceWidth * 4) {
-			ImGui::SetNextItemWidth(-FLT_MIN);
-			ImGui::Combo("##skin_workspace", &workspace, workspaces, 4);
-		} else if (ImGui::BeginTable("##skin_workspaces", 4, ImGuiTableFlags_SizingStretchSame)) {
-			for (int i = 0; i < 4; ++i) {
-				ImGui::TableNextColumn();
-				if (ImGui::Selectable(workspaces[i], workspace == i))
-					workspace = i;
-			}
-			ImGui::EndTable();
-		}
-		if (workspace != static_cast<int>(editor.workspace)) {
-			editor.workspace = static_cast<Workspace>(workspace);
-			Invalidate();
-		}
-		ImGui::Separator();
-		const bool asset = editor.workspace == Workspace::Asset;
-		const bool character = editor.workspace == Workspace::Character;
-		const bool editing = (asset && !editor.character && editor.document && editor.selectedBlock != UINT32_MAX) ||
-		                     (character && editor.character && editor.geometry);
-		if (editing) {
-			if (asset) {
-				ImGui::TextWrapped("%s", editor.document->Source().empty() ? T("feature.skin.new_material_template", "New material template") : editor.document->Source().c_str());
-				const auto material = std::find_if(editor.materials.begin(), editor.materials.end(), [this](const auto& value) { return value.block == editor.selectedBlock; });
-				if (material != editor.materials.end())
-					ImGui::TextWrapped("%s", I18n::GetSingleton()->Format("feature.skin.material_block", { { "name", material->name.empty() ? T("feature.skin.skin_material", "Skin material") : material->name }, { "block", std::to_string(material->block) } }, "{name} [block {block}]").c_str());
-			} else {
-				const auto& target = geometries.at(editor.geometry.get()).target;
-				ImGui::TextWrapped("%s", target.name.c_str());
-				if (target.part < SkinActors::Part::Count) {
-					ImGui::SameLine();
-					ImGui::TextDisabled("/ %s", SkinActors::PartNames()[static_cast<size_t>(target.part)]);
-				}
-			}
-			ImGui::TextDisabled("%s", EditorDirty() ? T("feature.skin.draft_unsaved", "Unsaved draft") : T("feature.skin.draft_clean", "No unsaved changes"));
-			ImGui::SameLine();
-			ImGui::TextDisabled("/ %s", editor.preview || (editor.transfer && editor.transfer->preview) ? T("feature.skin.preview_active", "Temporary preview active") : T("feature.skin.preview_waiting", "Waiting for a loaded preview surface"));
-		} else if (EditorDirty()) {
-			ImGui::TextWrapped("%s", T("feature.skin.draft_retained", "Your draft is retained in its editing workspace. Opening a different target will ask before discarding it."));
-		}
-		if ((!editing && (editor.document || editor.character)) && ImGui::SmallButton(T("feature.skin.return_to_draft", "Return to material draft"))) {
-			editor.workspace = editor.character ? Workspace::Character : Workspace::Asset;
-			editor.step = 1;
-		}
-		if (!editor.error.empty()) {
-			ImGui::TextWrapped("%s", editor.error.c_str());
-			if (ImGui::SmallButton(T("feature.skin.dismiss_error", "Dismiss error")))
-				editor.error.clear();
-		} else if (!editor.message.empty()) {
-			ImGui::TextWrapped("%s", editor.message.c_str());
-		}
-		if (asset || character) {
-			const char* steps[] = { T("feature.skin.step_target", "1  Select target"), T("feature.skin.step_material", "2  Adjust material"), T("feature.skin.step_finish", "3  Review and save") };
-			float stepWidth = 0;
-			for (const auto* label : steps)
-				stepWidth = std::max(stepWidth, ImGui::CalcTextSize(label).x + ImGui::GetStyle().CellPadding.x * 2 + ImGui::GetStyle().ItemSpacing.x);
-			if (ImGui::GetContentRegionAvail().x < stepWidth * 3) {
-				int step = editing ? editor.step : 0;
-				ImGui::BeginDisabled(!editing || bool(editor.transfer));
-				ImGui::SetNextItemWidth(-FLT_MIN);
-				if (ImGui::Combo("##skin_step", &step, steps, 3))
-					editor.step = step;
-				ImGui::EndDisabled();
-			} else if (ImGui::BeginTable("##skin_steps", 3, ImGuiTableFlags_SizingStretchSame)) {
-				for (int i = 0; i < 3; ++i) {
-					ImGui::TableNextColumn();
-					ImGui::BeginDisabled((i > 0 && !editing) || bool(editor.transfer));
-					if (ImGui::Selectable(steps[i], (editing ? editor.step : 0) == i))
-						editor.step = i;
-					ImGui::EndDisabled();
-				}
-				ImGui::EndTable();
-			}
-		}
+		DrawEditorHeader();
+		const bool textureTools = editor.workspace == Editor::Workspace::Textures;
 		{
-			const float footer = (asset || character) ? ImGui::GetFrameHeightWithSpacing() * 2.5f : 0;
+			const float footer = ImGui::GetFrameHeightWithSpacing() * 1.5f;
 			const bool visible = ImGui::BeginChild("##skin_workspace_body", ImVec2(0, -footer));
 			ScopeExit body{ [] { ImGui::EndChild(); } };
 			if (visible) {
-				if (editor.workspace == Workspace::Textures) {
-					ImGui::TextWrapped("%s", T("feature.skin.texture_tool_flow", "Choose a texture type, provide source images, then build a DDS. Return to Adjust material to assign it; your material draft is retained."));
+				if (textureTools) {
 					DrawTextureTools();
-				} else if (editor.workspace == Workspace::Storage) {
-					ImGui::TextWrapped("%s", T("feature.skin.storage_flow", "Manage the external character configuration and backups. NIF authoring saves directly to assets; it does not use this file."));
-					DrawCharacterStorage();
-				} else if (editor.transfer && character) {
-					DrawCharacterTransfer();
-				} else if (!editing || editor.step == 0) {
-					DrawEditorTarget();
-				} else if (editor.step == 1) {
-					DrawMaterialControls();
-					DrawPresets();
 				} else {
-					DrawEditorPreview();
-					ImGui::SeparatorText(T("feature.skin.save_destination", "Save destination"));
-					ImGui::TextWrapped("%s", asset ? T("feature.skin.save_asset_scope", "Save the edited NIF for your mod. This affects every user of that asset after their model is rebuilt. Preview is temporary.") : T("feature.skin.save_character_scope", "Save only the selected character surfaces to the external configuration. This does not change the NIF or follow game saves."));
-					if (character)
-						ImGui::TextWrapped("%s", UTF8(SkinActors::Get()->path).c_str());
-					DrawEditorSave();
+					DrawTargets();
+					DrawSurfaces();
+					if (editor.workspace == Editor::Workspace::Material)
+						DrawMaterialWorkspace();
+					else
+						DrawCharacterWorkspace();
 				}
 			}
 		}
-		if (asset || character) {
-			ImGui::Separator();
-			if (editing && !editor.transfer) {
-				DrawEditorHistory();
-				ImGui::BeginDisabled(editor.step == 0);
-				if (ImGui::Button(T("feature.skin.previous_step", "Previous")))
-					--editor.step;
-				ImGui::EndDisabled();
-				ImGui::SameLine();
-				ImGui::BeginDisabled(editor.step == 2);
-				if (ImGui::Button(editor.step == 0 ? T("feature.skin.continue_material", "Continue to material") : T("feature.skin.continue_preview", "Continue to review and save")))
-					++editor.step;
-				ImGui::EndDisabled();
-			} else if (!editing) {
-				ImGui::TextWrapped("%s", T("feature.skin.choose_target_first", "Choose a target above to begin. Common settings already apply to all compatible skin."));
-			}
-		}
+		ImGui::Separator();
+		DrawEditorHistory();
 		DrawEditorDialogs();
 	} catch (const std::exception& error) {
 		editor.error = error.what();
 		logger::warn("[Advanced Skin Editor] {}", error.what());
-	}
-}
-
-void Skin::DrawEditorSurfacePicker(bool a_previewOnly)
-{
-	if (ImGui::Button(T("feature.skin.player", "Player")))
-		SelectReference(RE::PlayerCharacter::GetSingleton(), false, a_previewOnly);
-	ImGui::SameLine();
-	if (ImGui::Button(T("feature.skin.first_person", "First person")))
-		SelectReference(RE::PlayerCharacter::GetSingleton(), true, a_previewOnly);
-	if (ImGui::Button(T("feature.skin.console_selection", "Console selection")))
-		SelectReference(RE::Console::GetSelectedRef().get(), false, a_previewOnly);
-	const auto name = editor.geometry && editor.geometry->name.c_str() ? editor.geometry->name.c_str() : T("feature.skin.select_material", "Select material");
-	if (ImGui::BeginCombo(a_previewOnly ? T("feature.skin.preview_surface", "Preview surface") : T("feature.skin.edit_surface", "Surface to customize"), name)) {
-		ScopeExit combo{ [] { ImGui::EndCombo(); } };
-		for (const auto& surface : editor.surfaces) {
-			ImGui::PushID(surface.get());
-			ScopeExit id{ [] { ImGui::PopID(); } };
-			const auto found = geometries.find(surface.get());
-			if (found == geometries.end())
-				continue;
-			const auto& target = found->second.target;
-			const auto label = std::string(surface->name.c_str() ? surface->name.c_str() : T("feature.skin.unnamed_surface", "Unnamed surface")) +
-			                   (target.guard.firstPerson ? T("feature.skin.suffix_first_person", " (first person)") : T("feature.skin.suffix_third_person", " (third person)"));
-			if (ImGui::Selectable(label.c_str(), editor.geometry == surface)) {
-				if (a_previewOnly) {
-					editor.geometry = surface;
-					Invalidate();
-				} else {
-					ChangeEditor([this, surface] { SelectSurface(surface.get()); });
-				}
-			}
-		}
-	}
-}
-
-void Skin::DrawEditorTarget()
-{
-	if (editor.workspace == Editor::Workspace::Asset) {
-		ImGui::SeparatorText(T("feature.skin.choose_asset", "Choose a NIF to author"));
-		ImGui::TextWrapped("%s", T("feature.skin.asset_flow", "Open the final body, face, hands or feet NIF. Choose its material, adjust only the overrides you need, then preview and save."));
-		if (ImGui::Button(T("feature.skin.open_nif", "Open NIF")))
-			if (const auto path = ChooseFile(false, NifFilter, L"nif"))
-				ChangeEditor([this, path = UTF8(*path)] { OpenDocument(path); });
-		if (ImGui::Button(T("feature.skin.new_template", "New material template")))
-			ChangeEditor([this] {
-				Material material;
-				material.enabled = true;
-				editor.document = NifDocument::Template(material);
-				editor.materials = editor.document->Surfaces();
-				editor.selectedBlock = UINT32_MAX;
-				editor.character = false;
-				editor.transfer.reset();
-				editor.workspace = Editor::Workspace::Asset;
-				editor.step = 0;
-				editor.sourceInput.clear();
-				SelectMaterial(0);
-			});
-		if (ImGui::CollapsingHeader(T("feature.skin.game_resource_archive_input", "Game resource / archive input"))) {
-			ImGui::InputText(T("feature.skin.resource_path", "Resource path"), &editor.sourceInput);
-			if (ImGui::Button(T("feature.skin.open_resource", "Open resource")))
-				ChangeEditor([this, path = editor.sourceInput] { OpenDocument(path); });
-		}
-		if (!editor.character)
-			DrawAssetActions();
-	} else {
-		ImGui::SeparatorText(T("feature.skin.choose_character", "Choose a character and part"));
-		ImGui::TextWrapped("%s", T("feature.skin.character_flow", "Choose Player or an NPC selected in the console, then select the surface and the parts affected by this edit."));
-		DrawEditorSurfacePicker(false);
-		if (editor.character && editor.geometry) {
-			DrawCharacterTargets();
-			if (ImGui::CollapsingHeader(T("feature.skin.character_schemes_section", "Copy or reuse a character scheme")))
-				DrawCharacterSchemeActions();
-			const auto& entry = geometries.at(editor.geometry.get());
-			if (entry.source.asset && ImGui::CollapsingHeader(T("feature.skin.edit_asset_instead", "Edit the shared NIF instead"))) {
-				ImGui::TextWrapped("%s", T("feature.skin.shared_asset_scope", "Use this when making a mod for everyone using this mesh. It changes the shared asset, not just this character."));
-				if (ImGui::Button(T("feature.skin.edit_source_nif", "Edit source NIF"))) {
-					NifDocument document;
-					document.Open(entry.source.asset->path);
-					if (!entry.source.asset->fingerprint || document.SourceFingerprint() != entry.source.asset->fingerprint)
-						throw std::runtime_error(T("feature.skin.source_snapshot_changed_or_is_unavailable_open_the_file_explicitly", "Source snapshot changed or is unavailable. Open the file explicitly and select its material."));
-					ChangeEditor([this, source = entry.source.asset] { OpenDocument(source->path, source->block); });
-				}
-			}
-		}
-	}
-}
-
-void Skin::DrawEditorPreview()
-{
-	ImGui::SeparatorText(T("feature.skin.preview_section", "Preview on a loaded character"));
-	if (!editor.character) {
-		ImGui::TextWrapped("%s", T("feature.skin.preview_asset_target", "Choose a loaded surface for a temporary preview. This keeps the NIF you are authoring open."));
-		DrawEditorSurfacePicker(true);
-	}
-	if (!editor.geometry) {
-		ImGui::TextWrapped("%s", T("feature.skin.preview_optional", "No preview surface selected. You can still save the NIF without a game preview."));
-		return;
-	}
-	const auto cached = geometries.find(editor.geometry.get());
-	auto* property = editor.geometry->GetGeometryRuntimeData().shaderProperty.get();
-	if (cached == geometries.end() || (cached->second.actor && !SkinActors::Belongs(editor.geometry.get(), cached->second.actor.get().get())) || !IsCompatible(property)) {
-		editor.previewWetness = -1;
-		ImGui::TextWrapped("%s", T("feature.skin.preview_unavailable", "The preview surface is no longer available. Select its current model again. The NIF draft can still be saved."));
-		if (!editor.character)
-			editor.geometry = nullptr;
-		Invalidate();
-		return;
-	}
-	auto& entry = Observe(editor.geometry.get(), property);
-	if (!entry.ready || entry.revision != revision || entry.actorRevision != SkinActors::Revision())
-		Prepare(entry, SkinActors::Get());
-	if (!entry.diagnostic.empty())
-		ImGui::TextWrapped("%s", entry.diagnostic.c_str());
-	for (size_t i = 0; i < entry.textures.size(); ++i)
-		if (entry.textures[i] && !entry.textures[i]->resource.error.empty())
-			ImGui::TextWrapped("%s: %s", TextureLabels()[i], entry.textures[i]->resource.error.c_str());
-	if (editor.character) {
-		ImGui::Text(T("feature.skin.selected_surface_count", "Selected surfaces: %u"), static_cast<unsigned>(editor.targets.size()));
-		DrawCharacterTargets();
-	}
-	ImGui::TextWrapped("%s", T("feature.skin.preview_automatic", "Edits preview automatically while the editor is open. Save to keep them; discard to restore the draft's starting values."));
-	bool overrideWetness = editor.previewWetness >= 0;
-	if (ImGui::Checkbox(T("feature.skin.preview_override_wetness", "Test a specific wetness level"), &overrideWetness)) {
-		editor.previewWetness = overrideWetness ? 0.0f : -1.0f;
-		Invalidate();
-	}
-	if (overrideWetness) {
-		if (ImGui::SliderFloat(T("feature.skin.preview_wetness", "Preview wetness"), &editor.previewWetness, 0, 1))
-			Invalidate();
-	} else {
-		ImGui::TextDisabled("%s", T("feature.skin.preview_live_wetness", "Using the character's current wetness."));
-	}
-	if (ImGui::CollapsingHeader(T("feature.skin.source_details", "Source details and resource reload"))) {
-		if (entry.source.asset)
-			ImGui::TextWrapped(T("feature.skin.source_s_material_block_u_txst_08x", "Source: %s | material block %u | TXST %08X"), entry.source.asset->path.c_str(), entry.source.asset->block, entry.source.txst);
-		if (ImGui::Button(T("feature.skin.reload_skin_resources", "Reload skin resources"))) {
-			Invalidate(true);
-			editor.thumbnailKey.clear();
-		}
 	}
 }

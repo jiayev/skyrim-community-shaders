@@ -13,7 +13,7 @@ void Skin::Invalidate(bool a_resources)
 	++revision;
 	if (a_resources) {
 		textures.clear();
-		resourceRevisions.clear();
+		library.clear();
 		for (auto& [geometry, entry] : geometries)
 			entry.textures = {};
 	}
@@ -37,20 +37,40 @@ void Skin::SetupResources()
 
 void Skin::DataLoaded()
 {
-	SkinActors::Install();
-	SkinActors::InstallLifecycle();
 	std::lock_guard lock(mutex);
+	SkinCharacters::Reload();
 	Invalidate(true);
+}
+
+void Skin::ReloadResources()
+{
+	std::lock_guard lock(mutex);
+	SkinCharacters::Reload();
+	Invalidate(true);
+	editor.thumbnailKey.clear();
+	// Files may have been edited outside the game. Drafts without unsaved changes follow the files.
+	if (!editor.draftKey.empty() && !MaterialDirty())
+		LoadMaterialDraft(editor.draftKey);
+	if (editor.draftTarget && !CharacterDirty()) {
+		const auto* saved = SkinCharacters::Find(*SkinCharacters::Get(), editor.draftTarget.key);
+		editor.character = editor.characterBaseline = saved ? saved->customization : SkinCharacters::Customization{};
+	}
 }
 
 void Skin::GameReset()
 {
-	SkinActors::Reset();
+	std::lock_guard lock(mutex);
+	// References and their 3D are about to be replaced. Materials, character files and drafts do not depend on the save.
+	geometries.clear();
+	actorWetnessMap.clear();
+	pendingViews = {};
+	editor.surfaces.clear();
+	editor.actor = {};
+	Invalidate();
 }
 
 void Skin::PostPostLoad()
 {
-	SkinSources::Install();
 	stl::write_vfunc<0x6, Hooks::SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 	stl::write_vfunc<0x7, Hooks::RestoreGeometry>(RE::VTABLE_BSLightingShader[0]);
 }
@@ -65,30 +85,44 @@ std::shared_ptr<Skin::TextureEntry> Skin::RequestTexture(const std::string& a_pa
 	return entry;
 }
 
-void Skin::UpdateEditorPreview()
+SkinLibrary::Pointer Skin::FindMaterial(const std::string& a_key)
 {
-	const bool open = EditorWindow::GetSingleton()->open;
-	const auto found = geometries.find(editor.geometry.get());
-	const bool preview = open && !editor.transfer && editor.geometry && found != geometries.end() &&
-	                     (editor.character ? !editor.targets.empty() : editor.document && editor.selectedBlock != UINT32_MAX) &&
-	                     (!found->second.actor || SkinActors::Belongs(editor.geometry.get(), found->second.actor.get().get())) &&
-	                     IsCompatible(editor.geometry->GetGeometryRuntimeData().shaderProperty.get());
-	const bool transferPreview = open && editor.transfer && bool(editor.transfer->actor.get());
-	if (editor.preview != preview || (editor.transfer && editor.transfer->preview != transferPreview)) {
-		editor.preview = preview;
-		if (editor.transfer)
-			editor.transfer->preview = transferPreview;
-		Invalidate();
-	}
-	if (!open)
-		editor.previewWetness = -1;
+	if (a_key.empty())
+		return std::make_shared<const SkinLibrary::Entry>();
+	auto& entry = library[a_key];
+	if (!entry)
+		entry = std::make_shared<const SkinLibrary::Entry>(SkinLibrary::Read(a_key));
+	return entry;
 }
 
-bool Skin::PreviewMatches(const GeometryEntry& a_entry) const
+SkinMaterials::Material Skin::BaseMaterial(const std::string& a_key)
 {
-	return (editor.transfer && editor.transfer->preview && a_entry.transferPreview) || (editor.preview && (editor.character ?
-																												  std::find(editor.targets.begin(), editor.targets.end(), a_entry.geometry) != editor.targets.end() :
-																												  editor.geometry.get() == a_entry.geometry.get()));
+	if (editor.open && !a_key.empty() && a_key == editor.draftKey)
+		return Apply({}, editor.material);
+	const auto entry = FindMaterial(a_key);
+	return entry->definition.status == Status::Valid ? entry->definition.material : SkinMaterials::Material{};
+}
+
+const SkinCharacters::Customization* Skin::FindCustomization(const std::string& a_target, const SkinCharacters::State& a_state) const
+{
+	if (a_target.empty())
+		return nullptr;
+	if (editor.open && a_target == editor.draftTarget.key)
+		return &editor.character;
+	const auto* character = SkinCharacters::Find(a_state, a_target);
+	return character ? &character->customization : nullptr;
+}
+
+SkinMaterials::Material Skin::Compose(const std::string& a_key, const SkinCharacters::Customization* a_customization, Layer a_upTo)
+{
+	auto material = BaseMaterial(a_key);
+	if (!a_customization || a_upTo == Layer::Material)
+		return material;
+	material = Apply(material, ScalarsOnly(a_customization->all));
+	if (a_upTo == Layer::CharacterMaterial)
+		if (const auto found = a_customization->materials.find(a_key); found != a_customization->materials.end())
+			material = Apply(material, found->second);
+	return material;
 }
 
 Skin::GeometryEntry& Skin::Observe(RE::BSGeometry* a_geometry, RE::BSShaderProperty* a_property)
@@ -96,91 +130,37 @@ Skin::GeometryEntry& Skin::Observe(RE::BSGeometry* a_geometry, RE::BSShaderPrope
 	auto& entry = geometries[a_geometry];
 	entry.frame = globals::state->frameCount;
 	auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_property->material);
-	const auto source = SkinSources::Get(a_property);
-	auto* actor = SkinActors::Owner(a_geometry);
-	const auto previousActor = entry.actor.get();
-	if (!actor && SkinActors::Belongs(a_geometry, previousActor.get()))
-		actor = previousActor.get();
+	auto* actor = SkinSurfaces::Owner(a_geometry);
 	const auto actorHandle = actor ? actor->GetHandle() : RE::ActorHandle{};
-	auto* npc = actor ? actor->GetActorBase() : nullptr;
-	const auto race = actor && actor->GetRace() ? actor->GetRace()->GetFormID() : 0;
-	const auto sex = npc ? static_cast<uint32_t>(npc->GetSex()) : 0;
-	const std::array<float, 4> transform{ material->texCoordOffset[0].x, material->texCoordOffset[0].y, material->texCoordScale[0].x, material->texCoordScale[0].y };
-	const auto& geometryData = a_geometry->GetGeometryRuntimeData();
-	auto* partition = geometryData.skinInstance ? geometryData.skinInstance->skinPartition.get() : nullptr;
-	const bool modelSpace = a_property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kModelSpaceNormals);
-	if ((entry.target.character && !SkinActors::Current(entry.target, a_geometry)) || entry.actor != actorHandle || !entry.geometry || entry.property.get() != a_property || entry.materialPointer != material ||
-		entry.textureSet != material->textureSet || entry.normal != material->normalTexture ||
-		entry.diffuse != material->diffuseTexture || entry.source.revision != source.revision || entry.race != race || entry.sex != sex ||
-		entry.parent != a_geometry->parent || entry.buffer != geometryData.rendererData || entry.partition != partition || entry.uvTransform != transform || entry.modelSpace != modelSpace) {
-		entry.actor = actorHandle;
+	// The material key follows the bound diffuse, so any texture replacement re-identifies the surface.
+	if (!entry.geometry || entry.property.get() != a_property || entry.materialPointer != material ||
+		entry.textureSet != material->textureSet.get() || entry.diffuse != material->diffuseTexture.get() ||
+		entry.actor != actorHandle || entry.parent != a_geometry->parent) {
 		entry.geometry = RE::NiPointer(a_geometry);
 		entry.property = RE::NiPointer(a_property);
 		entry.materialPointer = material;
+		entry.textureSet = material->textureSet.get();
+		entry.diffuse = material->diffuseTexture.get();
 		entry.parent = a_geometry->parent;
-		entry.buffer = geometryData.rendererData;
-		entry.partition = partition;
-		entry.uvTransform = transform;
-		entry.modelSpace = modelSpace;
-		entry.textureSet = material->textureSet;
-		entry.normal = material->normalTexture;
-		entry.diffuse = material->diffuseTexture;
-		entry.source = source;
-		entry.race = race;
-		entry.sex = sex;
+		entry.actor = actorHandle;
+		entry.target = SkinCharacters::TargetOf(actor).key;
+		entry.key = SkinSurfaces::Key(a_property);
+		entry.head = SkinSurfaces::IsHead(a_geometry);
+		entry.thickness = SkinSurfaces::HasThickness(a_property);
 		entry.ready = false;
-		entry.head = false;
-		for (auto* parent = a_geometry->parent; parent; parent = parent->parent)
-			entry.head |= netimmerse_cast<RE::BSFaceGenNiNode*>(parent) != nullptr;
 	}
 	return entry;
 }
 
-void Skin::Prepare(GeometryEntry& a_entry, const SkinActors::Snapshot& a_state)
+void Skin::Prepare(GeometryEntry& a_entry, const SkinCharacters::State& a_state)
 {
 	a_entry.diagnostic.clear();
-	a_entry.overridden = false;
-	a_entry.transferPreview = false;
 	a_entry.textures = {};
 	try {
-		a_entry.base = Resolve(SkinSources::AssignedMaterial(a_entry.source), settings.DefaultProfile);
-		a_entry.thickness = a_entry.source.asset && !a_entry.source.asset->textures[2].empty();
-		if (auto* txst = RE::TESForm::LookupByID<RE::BGSTextureSet>(a_entry.source.txst))
-			a_entry.thickness = !SkinSources::Paths(txst)[2].empty();
-		const auto actor = a_entry.actor.get();
-		if (a_entry.inspect || (actor && SkinActors::Find(*a_state, SkinActors::ActorKey(actor.get()))))
-			a_entry.target = SkinActors::Describe(a_entry.geometry.get(), a_entry.source, [&](const std::string& path) {
-			if (path.empty())
-				return uint64_t{ 0 };
-			const auto found = resourceRevisions.find(path);
-			if (found != resourceRevisions.end())
-				return found->second;
-			const auto fingerprint = SkinEditor::Fingerprint(SkinEditor::ReadResource(path));
-			resourceRevisions.emplace(path, fingerprint);
-			return fingerprint; }, actor.get());
-		else
-			a_entry.target = {};
-		a_entry.effective = a_entry.base;
-		const bool valid = !a_entry.source.asset || a_entry.source.asset->definition.status != Status::Invalid;
-		if (!valid)
-			a_entry.diagnostic = a_entry.source.asset->definition.diagnostic;
-		if (valid && a_entry.target.character) {
-			const auto* binding = SkinActors::Find(*a_state, a_entry.target.key);
-			const auto* surface = SkinActors::Find(binding, a_entry.target.part, a_entry.target.guard);
-			if (surface && a_entry.target.error.empty()) {
-				a_entry.effective = Apply(a_entry.base, surface->changes);
-				a_entry.overridden = true;
-			} else if (binding && a_entry.target.part < SkinActors::Part::Count && !binding->parts[static_cast<size_t>(a_entry.target.part)].empty()) {
-				a_entry.diagnostic = T("feature.skin.character_customization_paused", "Character customization is paused: appearance or surface assignment changed.");
-			}
-		}
-		if (valid && editor.preview && (editor.character ? std::find(editor.targets.begin(), editor.targets.end(), a_entry.geometry) != editor.targets.end() : editor.geometry == a_entry.geometry))
-			a_entry.effective = editor.character ? Apply(a_entry.base, editor.changes) : Resolve(editor.draft, settings.DefaultProfile);
-		if (valid && editor.transfer && editor.transfer->preview)
-			if (const auto* sample = TransferSample(a_entry)) {
-				a_entry.effective = sample->material;
-				a_entry.transferPreview = true;
-			}
+		const auto source = FindMaterial(a_entry.key);
+		if (source->definition.status == Status::Invalid)
+			a_entry.diagnostic = source->path + ": " + source->definition.diagnostic + " ";
+		a_entry.effective = Resolve(Compose(a_entry.key, FindCustomization(a_entry.target, a_state), Layer::CharacterMaterial), settings.DefaultProfile);
 		for (size_t i = 0; i < a_entry.textures.size(); ++i) {
 			try {
 				a_entry.textures[i] = RequestTexture(NormalizeTexturePath(a_entry.effective.textures[i]));
@@ -198,28 +178,26 @@ void Skin::Prepare(GeometryEntry& a_entry, const SkinActors::Snapshot& a_state)
 		a_entry.diagnostic = e.what();
 	}
 	a_entry.revision = revision;
-	a_entry.actorRevision = a_state->revision;
+	a_entry.characterRevision = a_state.revision;
 	a_entry.ready = true;
 }
 
 void Skin::Prepass()
 {
 	std::lock_guard lock(mutex);
-	const auto characters = SkinActors::Get();
+	const auto characters = SkinCharacters::Get();
 	RestoreSampler();
-	if (session != characters->session) {
-		geometries.clear();
-		actorWetnessMap.clear();
-		editor = {};
-		pendingViews = {};
-		textures.clear();
-		resourceRevisions.clear();
-		texturesDirty = true;
-		session = characters->session;
+	const bool open = EditorWindow::GetSingleton()->open;
+	if (editor.open != open) {
+		// Drafts preview only while the editor is open.
+		editor.open = open;
+		if (!open)
+			editor.previewWetness = -1;
+		Invalidate();
 	}
-	UpdateEditorPreview();
+	characterRevision = characters->revision;
 	for (auto& [geometry, entry] : geometries) {
-		if (entry.actor && !SkinActors::Belongs(geometry, entry.actor.get().get())) {
+		if (entry.actor && !SkinSurfaces::Belongs(geometry, entry.actor.get().get())) {
 			entry.ready = false;
 			continue;
 		}
@@ -227,8 +205,8 @@ void Skin::Prepass()
 			entry.ready = false;
 			continue;
 		}
-		if (!entry.ready || entry.revision != revision || entry.actorRevision != characters->revision)
-			Prepare(entry, characters);
+		if (!entry.ready || entry.revision != revision || entry.characterRevision != characters->revision)
+			Prepare(entry, *characters);
 	}
 	for (auto& [path, entry] : textures) {
 		if (!entry->prepared) {
@@ -240,15 +218,14 @@ void Skin::Prepass()
 	if (frame - lastPrune >= 120) {
 		lastPrune = frame;
 		std::erase_if(geometries, [frame, this](const auto& item) {
-			return frame - item.second.frame > 600 && editor.geometry.get() != item.first &&
-			       std::none_of(editor.surfaces.begin(), editor.surfaces.end(), [&](const auto& surface) { return surface.get() == item.first; });
+			return frame - item.second.frame > 600 &&
+			       std::none_of(editor.surfaces.begin(), editor.surfaces.end(), [&](const auto& surface) { return surface.geometry.get() == item.first; });
 		});
 		std::erase_if(textures, [](const auto& item) { return item.second.use_count() == 1; });
-		SkinSources::Prune();
 	}
 }
 
-Skin::SkinData Skin::MakeData(const Material& a_material, bool a_head) const
+Skin::SkinData Skin::MakeData(const SkinMaterials::Material& a_material, bool a_head) const
 {
 	auto p = a_material.parameters;
 	const auto fields = ParameterTable();
@@ -303,7 +280,7 @@ void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			auto& entry = Observe(a_pass->geometry, a_pass->shaderProperty);
 			data.profile = MakeData(Resolve({}, settings.DefaultProfile), entry.head);
 			data.profile.skinDetailParams.w = 0;
-			if (entry.ready && entry.revision == revision && session == SkinActors::Session() && entry.actorRevision == SkinActors::Revision()) {
+			if (entry.ready && entry.revision == revision && entry.characterRevision == characterRevision) {
 				data.profile = MakeData(entry.effective, entry.head);
 				for (size_t i = 0; i < entry.textures.size(); ++i) {
 					if (entry.textures[i] && (i == 2 || !entry.textures[i]->resource.reconstructNormal))
@@ -313,7 +290,7 @@ void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 					float(entry.textures[2] && entry.textures[2]->resource.reconstructNormal), float(entry.thickness) };
 				if (!pendingViews[2])
 					data.profile.skinDetailParams.w = 0;
-				if (PreviewMatches(entry) && editor.previewWetness >= 0)
+				if (editor.open && editor.previewWetness >= 0 && ((!entry.key.empty() && entry.key == editor.draftKey) || (!entry.target.empty() && entry.target == editor.draftTarget.key)))
 					data.skinPerGeometry = { editor.previewWetness, 0, 0, 0 };
 			}
 		}
