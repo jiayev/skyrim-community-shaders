@@ -2570,9 +2570,8 @@ bool EditorWindow::ClosePopupOnEscape()
 {
 	if (!ImGui::IsKeyPressed(ImGuiKey_Escape))
 		return false;
-	// The editor ignores Escape only while a popup is open, which this close is about to end.
-	if (auto* editor = GetSingleton(); editor->open)
-		editor->suppressNextEditorEscape = true;
+	// The menu or editor ignores Escape only while a popup is open, which this close is about to end.
+	GetSingleton()->suppressNextEditorEscape = true;
 	ImGui::CloseCurrentPopup();
 	return true;
 }
