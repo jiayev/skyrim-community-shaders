@@ -692,7 +692,7 @@ namespace DCLF
 
 			// Only computed when something will report them: this whole block exists to feed one log line (CS_DCLF_DERIVE_PROBE: the
 			// joins run interleaved, FanoutMode, so its lazily sampled frame and its leases are the lane's).
-			if (!layer && derivationStats && descriptors.derivedPass != kNotDerived) {
+			if (!layer && derivationStats && descriptors.derivedPass != kNotDerived && !descriptors.effect) {
 				++stats.derivationChecked;
 				// Against the pass the engine registered. Where its LOD fades ran out it dropped Specular or the Envmap
 				// technique, which the derivation keeps (the draw fades them): those bits are the fades' and counted apart,
@@ -804,7 +804,9 @@ namespace DCLF
 					tables.geometryTemplate[slot] = property;
 					tables.geometryTemplateObject[slot] = objectId;
 
-					tables.pipelineTechnique[slot] = TechniqueRowFor(descriptors.pass);
+					// T7d's Effect port: an effect key reads nothing of a Lighting technique row (its fog is the frame's, its camera planes
+					// the frame lighting block's: Effect.hlsl, DCLF_BINDLESS); it holds the plain technique's (no shadow mask) for the row's sake.
+					tables.pipelineTechnique[slot] = TechniqueRowFor(descriptors.effect ? 0u : descriptors.pass);
 					stats.shadowMaskPipelines += tables.TechniqueShadowMask(slot) ? 1 : 0;
 
 					PipelinePermutation permutation;
@@ -824,6 +826,15 @@ namespace DCLF
 					                                         (ExtendedTranslucency::MaterialModel::DescriptorDisabled ^ RasterTranslucency(key.rasterFlags))
 					                                             << ExtendedTranslucency::ExtraFeatureDescriptorShift :
 					                                         0u;
+					// T7d's Effect port: BeginTechnique's block for an effect pass (Hooks.cpp, BSShader_BeginTechnique): the raw vertex
+					// descriptor (Effect.hlsl tests its SkyObject bit), the raw pixel bits the lookup dropped (GrayscaleToColor, GrayscaleToAlpha,
+					// IgnoreTexAlpha), InWorld; no feature bits (Extended Translucency is the Lighting shader's).
+					if (descriptors.effect) {
+						permutation.vertexShaderDescriptor = descriptors.rawVertex;
+						permutation.pixelShaderDescriptor = descriptors.rawPixel & ~descriptors.pixel;
+						permutation.extraShaderDescriptor = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::InWorld);
+						permutation.extraFeatureDescriptor = 0u;
+					}
 					tables.permutations[slot] = permutation;
 					tables.pipelineBindingVersion[slot] = tables.NextVersion();
 					pipelineIt = pipelineIndex.emplace(key, slot).first;
@@ -965,10 +976,12 @@ namespace DCLF
 					++stats.fadingFrames;
 				++stats.fadingDrawn;
 			}
-			// A member decal's chain (DecalOrder.cpp): its group, technique and sub-pass.
+			// A member decal's chain (DecalOrder.cpp): its group, technique and sub-pass. The technique is the batch renderer's, the pass enum
+			// (a Lighting pass descriptor plus 0x4800002D, an effect's plus 0x4000002C: EffectPassEnum), whose buckets the group draws in
+			// ascending order: T7d part 5's effect decals before the Lighting ones of their group, as the engine draws them.
 			if (descriptors.decalGroup) {
-				patch.decalKey = (std::uint64_t(descriptors.decalGroup) << 60) | (std::uint64_t(accumulated->technique & 0x3FFFFFFF) << 28) |
-				                 (std::uint64_t(accumulated->subPass & 7) << 24);
+				const std::uint32_t passEnum = descriptors.effect ? EffectPassEnum(accumulated->technique) : accumulated->technique + 0x4800002Du;
+				patch.decalKey = (std::uint64_t(descriptors.decalGroup) << 60) | (std::uint64_t(passEnum) << 27) | (std::uint64_t(accumulated->subPass & 7) << 24);
 			}
 			timer.Add(BuildPart::Record);
 			ApplyAccumulatePatch(patch);
@@ -1091,8 +1104,9 @@ namespace DCLF
 		auto leaveMain = [&](std::uint32_t a_slot) {
 			if (a_slot < setPhasesNext.size() && (setPhasesNext[a_slot] & kSetMain))
 				++setStats.rebinding;
-			LeaveSet(a_slot, kSetMain | kSetReflection);
-			if (PhasesIn(tables, a_slot) & (kSetMain | kSetReflection)) {
+			// T7e: a first-person member draws with its main bindings too: it leaves while they are made again.
+			LeaveSet(a_slot, kSetMain | kSetReflection | kSetFirstPerson);
+			if (PhasesIn(tables, a_slot) & (kSetMain | kSetReflection | kSetFirstPerson)) {
 				tables.setPhases[a_slot] = 0;
 				tables.objects[a_slot].flags &= ~kObjectMember;
 				tables.NoteChange(a_slot, kChangeBindings);
@@ -1310,8 +1324,14 @@ namespace DCLF
 			// T7d: a forward key's state, as the engine's blended draw (FUN_1414b39d0) leaves it (Records.h, PackForwardRasterFlags).
 			if (descriptors.forward)
 				rasterFlags |= PackForwardRasterFlags(descriptors.forwardBlendMode, kForwardWriteMode, descriptors.forwardDepthTest, descriptors.forwardDepthWrite);
-			if (globals::features::extendedTranslucency.loaded)
+			// T7d's refraction: the forward state above, and the refraction draw's variant bits (Records.h, PackRefractionRasterFlags).
+			if (descriptors.refraction)
+				rasterFlags |= PackRefractionRasterFlags(descriptors.refractionFalloff, descriptors.refractionClamp);
+			if (globals::features::extendedTranslucency.loaded && !descriptors.effect)
 				rasterFlags |= ((ExtendedTranslucency::MaterialModel::DescriptorDisabled ^ TranslucencyModelOf(r.leaf)) & 7u) << kRasterTranslucencyShift;
+			// T7d's Effect port: the Effect shader's key (Records.h, kRasterEffect).
+			if (descriptors.effect)
+				rasterFlags |= kRasterEffect;
 			// The geometry slots are the walk's (the joins resolve none: frozen until the merges are done).
 			r.key = PipelineKey{ descriptors.vertex, descriptors.pixel, rasterFlags, descriptors.pass,
 				VertexLayoutOf(tables.geometries[r.geometrySlot].vertexDesc) };
@@ -1325,8 +1345,8 @@ namespace DCLF
 			                (descriptors.decalGroup ? kObjectDecal | (descriptors.decalGroup << kObjectDecalGroupShift) : 0u) |
 			                (descriptors.terrainGroup << kObjectTerrainGroupShift) |
 			                (descriptors.forward ? kObjectForward : 0u) |
-			                ((propertyRecord->flags & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u) |
-			                (BeastRaceFace(*propertyRecord, r.leaf) ? kObjectBeastRace : 0u);
+			                (!descriptors.effect && (propertyRecord->flags & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u) |
+			                (!descriptors.effect && BeastRaceFace(*propertyRecord, r.leaf) ? kObjectBeastRace : 0u);
 		}
 		// Light Limit Fix's room, when the room map moved on since the entry's (the map the pass took: read-only here).
 		if (globals::features::lightLimitFix.loaded && entry.roomMapGeneration != roomMapGeneration) {
@@ -1383,8 +1403,9 @@ namespace DCLF
 			                     ld.decalGroup == rd.decalGroup && ld.decalBlendMode == rd.decalBlendMode && ld.decalWriteMode == rd.decalWriteMode &&
 			                     ld.terrainGroup == rd.terrainGroup &&
 			                     ld.forward == rd.forward && ld.forwardBlendMode == rd.forwardBlendMode && ld.forwardDepthTest == rd.forwardDepthTest &&
-			                     ld.forwardDepthWrite == rd.forwardDepthWrite &&
-			                     ld.projectedUV == rd.projectedUV },
+			                     ld.forwardDepthWrite == rd.forwardDepthWrite && ld.refraction == rd.refraction &&
+			                     ld.refractionFalloff == rd.refractionFalloff && ld.refractionClamp == rd.refractionClamp &&
+			                     ld.projectedUV == rd.projectedUV && ld.effect == rd.effect },
 			{ "key", l.key == r.key },
 			{ "staticFlags", l.staticFlags == r.staticFlags },
 			{ "room", l.roomSet == r.roomSet && l.roomIndex == r.roomIndex },

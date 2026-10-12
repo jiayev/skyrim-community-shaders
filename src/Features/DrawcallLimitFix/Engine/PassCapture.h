@@ -95,6 +95,33 @@ namespace DCLF
 		void SetReflectionCamera(const RE::NiCamera* a_camera);
 		void SetReflectionFace(bool a_plain) { reflectionFace.store(a_plain, std::memory_order_release); }
 		void SetReflectionTreeLodOwned(bool a_owned) { reflectionTreeLodOwned.store(a_owned, std::memory_order_release); }
+		/**
+		 * @brief T7e, render thread, BeginSceneFrame: whether the frame's first-person epochs draw the first-person members
+		 * (IndirectDraws::DecideCoverage, the latch). While set, a kSetFirstPerson member's pass into the first-person accumulator
+		 * (*0x14338c840, Main::unk_FPCulling's) or into the Z-prepass's (RenderDepth's first-person block culls into it) is withheld.
+		 */
+		void SetFirstPersonCovered(bool a_covered) { firstPersonCovered.store(a_covered, std::memory_order_release); }
+		bool FirstPersonCovered() const { return firstPersonCovered.load(std::memory_order_acquire); }
+		/** @brief Whether a_batch is one of the first-person accumulator's batch renderers (RefreshMainRenderers): the census's view. */
+		bool IsFirstPersonRenderer(const RE::BSBatchRenderer* a_batch) const
+		{
+			const auto renderers = std::atomic_load(&firstPersonRenderers);
+			return renderers && renderers->contains(a_batch);
+		}
+		/**
+		 * @brief T7e, the <- FIRST PERSON observer's counts since the last call: the first-person members' passes withheld, those the
+		 * engine was handed anyway (a member registered while the frame's first-person epochs did not draw), and every pass registered
+		 * into the first-person accumulator.
+		 */
+		struct FirstPersonCounts
+		{
+			std::uint32_t withheld = 0, memberKept = 0, registered = 0;
+		};
+		FirstPersonCounts TakeFirstPersonCounts()
+		{
+			return { firstPersonWithheld.exchange(0, std::memory_order_relaxed), firstPersonMemberKept.exchange(0, std::memory_order_relaxed),
+				firstPersonRegistered.exchange(0, std::memory_order_relaxed) };
+		}
 		/** @brief Render thread, BeginSceneFrame: whether the frame's faces are DCLF's at all (IndirectDraws::DecideCoverage). */
 		void SetReflectionCovered(bool a_covered) { reflectionCovered.store(a_covered, std::memory_order_release); }
 		bool ReflectionTreeLodOwned() const { return reflectionTreeLodOwned.load(std::memory_order_acquire); }
@@ -231,6 +258,22 @@ namespace DCLF
 		 * thread, once a colour epoch; 0 without the parity.
 		 */
 		std::uint32_t TakeForwardRegistered() { return forwardRegistered.exchange(0, std::memory_order_relaxed); }
+		/**
+		 * @brief T7d's refraction, CS_DCLF_SET_PARITY (the <- REFRACTION observer): the refraction passes (accumulation hint 4, geometry group
+		 * 5: GetRenderPasses' Utility RENDER_NORMAL pass) the main camera's registration handed in for members since the last call, all
+		 * withheld, against the refraction objects the colour segment found in view. Render thread, once a colour epoch; 0 without the parity.
+		 */
+		std::uint32_t TakeRefractionRegistered() { return refractionRegistered.exchange(0, std::memory_order_relaxed); }
+		/**
+		 * @brief T7d's Effect port, CS_DCLF_SET_PARITY (the <- EFFECT LIGHT observer): of the members' withheld blended passes, those of the
+		 * Effect shader's Lighting variant (checked), and those whose light 0 is not the scene's sun light (other): the port draws them with
+		 * the sun light's DLightColor (LightingConstants.h, SampleEffectLight), which holds while FUN_1414fcf80 gives them ShadowSceneNode
+		 * +0x200. Render thread, once a report; both 0 without the parity.
+		 */
+		std::pair<std::uint32_t, std::uint32_t> TakeEffectLight()
+		{
+			return { effectLightChecked.exchange(0, std::memory_order_relaxed), effectLightOther.exchange(0, std::memory_order_relaxed) };
+		}
 
 	private:
 		PassCapture();
@@ -254,6 +297,8 @@ namespace DCLF
 		std::atomic<std::uint32_t> mainWithheld{ 0 }, mainCrossfadeCopies{ 0 }, mainUnmodelledFades{ 0 }, occlusionWithheld{ 0 };
 		std::atomic<std::uint32_t> treeLodWithheld{ 0 };
 		std::atomic<std::uint32_t> forwardRegistered{ 0 };  // T7d (TakeForwardRegistered)
+		std::atomic<std::uint32_t> refractionRegistered{ 0 };  // T7d's refraction (TakeRefractionRegistered)
+		std::atomic<std::uint32_t> effectLightChecked{ 0 }, effectLightOther{ 0 };  // T7d's Effect port (TakeEffectLight)
 		std::atomic<bool> treeLodOwned{ false };
 		std::atomic<std::uint32_t> reflectionWithheld{ 0 }, reflectionTreeLodWithheld{ 0 };
 		std::atomic<std::uint32_t> reflectionResidueWatch{ 0 }, reflectionResidueLod{ 0 }, reflectionResidueTree{ 0 };
@@ -273,6 +318,11 @@ namespace DCLF
 		using RendererSet = ankerl::unordered_dense::set<const RE::BSBatchRenderer*>;
 		std::shared_ptr<const RendererSet> mainRenderers;
 		std::array<const void*, 2> mainAccumulators{};  // what mainRenderers was made from (render thread)
+		// T7e: the first-person accumulator's renderers (in mainRenderers too: WithholdMain's), what they were made from, and the counts.
+		std::shared_ptr<const RendererSet> firstPersonRenderers;
+		const void* firstPersonAccumulator = nullptr;
+		std::atomic<bool> firstPersonCovered{ false };
+		std::atomic<std::uint32_t> firstPersonWithheld{ 0 }, firstPersonMemberKept{ 0 }, firstPersonRegistered{ 0 };
 		EventQueue<const RE::BSGeometry*, 1024> unmodelledFades;
 		/**
 		 * @brief The main-view test at every insertion point: true when the pass is a member's, into one of the main camera's views,

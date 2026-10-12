@@ -58,6 +58,29 @@ namespace DCLF
 					logger::info("[DCLF] test command at frame {}: {}", a_frame, command);
 					// "dclf:<toggle name>=<0|1>": a live toggle (Toggles.h, ToggleInfo::name), as the menu sets it, so one run can
 					// compare a class drawn by DCLF and by the engine from the same camera.
+					// "dclf:pov=first" / "dclf:pov=third": the camera switched as the POV key does (PlayerCamera::ForceFirstPerson/ForceThirdPerson,
+					// on the main thread); no console command switches it.
+					if (command == "dclf:pov=first" || command == "dclf:pov=third") {
+						if (auto* tasks = SKSE::GetTaskInterface())
+							tasks->AddTask([first = command == "dclf:pov=first"] {
+								auto* camera = RE::PlayerCamera::GetSingleton();
+								if (camera && first)
+									camera->ForceFirstPerson();
+								else if (camera)
+									camera->ForceThirdPerson();
+							});
+						continue;
+					}
+					// T7e: "dclf:draw=1" / "dclf:draw=0": the player's weapons or magic hands drawn or sheathed (Actor::DrawWeaponMagicHands, on
+					// the main thread), so a scripted first-person run shows the arms (they are drawn only with a weapon or spell out).
+					if (command == "dclf:draw=1" || command == "dclf:draw=0") {
+						if (auto* tasks = SKSE::GetTaskInterface())
+							tasks->AddTask([draw = command == "dclf:draw=1"] {
+								if (auto* player = RE::PlayerCharacter::GetSingleton())
+									player->DrawWeaponMagicHands(draw);
+							});
+						continue;
+					}
 					if (command.rfind("dclf:", 0) == 0) {
 						const auto equals = command.find('=');
 						const auto name = command.substr(5, equals == std::string::npos ? std::string::npos : equals - 5);

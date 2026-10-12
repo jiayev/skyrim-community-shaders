@@ -181,6 +181,22 @@ namespace DCLF::SceneCapture
 		// kSegments: what the engine's draw of a sub-index shape draws now (compared by triangles: the draw's rebuild of the runs moves
 		// their starts, not their triangles).
 		std::vector<LodSegments::Range> segments;
+		/**
+		 * @brief T7e, kRenderer: a particle geometry's (NiParticles, types 1 and 2) what DCLF's particle path decides by (ParticleSystemTaken),
+		 * read where the geometry is captured; its particles themselves are ParticleSnapshots', taken at the engine's update. vertexDesc is
+		 * then the geometry's own (+0x148: the position and colour on stream 1, the renderer's quad texture coordinates on stream 0).
+		 */
+		struct Particles
+		{
+			bool system = false;            // exactly an NiParticleSystem (not NiMeshParticleSystem, BSStripParticleSystem)
+			bool worldSpace = false;        // NiParticleSystem::isWorldspace: particles in world coordinates (BSParticleSystemManager's)
+			bool data = false;              // NiParticles::particleData set
+			bool aligned = false;           // the data's aspect flags (+0x88, +0x89): velocity-aligned or speed-stretched quads
+			std::uint16_t capacity = 0;     // NiParticlesData::maxNumVertices
+			std::uint32_t subtextures = 0;  // NiParticlesData::subTextureOffsetsCount (FUN_1414bde90's TexCoordIndex and IndexedTexture)
+			bool operator==(const Particles&) const = default;
+		};
+		Particles particles;
 
 		// The capture that took it (SceneCapture::NextSequence at its start): not compared.
 		std::uint64_t sequence = 0;
@@ -215,6 +231,9 @@ namespace DCLF::SceneCapture
 		const void* key = nullptr;
 		const void* rtti = nullptr;
 		bool lighting = false;
+		// T7d's Effect port: a BSEffectShaderProperty's (exact RTTI), with kRtti. Its record then holds the effect's own fields: emissive is its
+		// emittanceColor (+0x88, null for white), feature its material's texture paths (EffectConstants.h, kEffectHasSourcePath, kEffectHasGreyscalePath).
+		bool effect = false;
 		std::uint64_t flags = 0;
 		const void* material = nullptr;
 		float materialAlpha = 1.0f;
@@ -310,6 +329,8 @@ namespace DCLF::SceneCapture
 		bool AlphaTesting() const { return alpha && (alpha->flags & (1u << 9)); }
 		/** @brief a_property when it is a BSLightingShaderProperty's (netimmerse_cast's answer), else null. */
 		static const PropertyRecord* Lighting(const PropertyRecord* a_property) { return a_property && a_property->lighting ? a_property : nullptr; }
+		/** @brief a_property when it is a BSEffectShaderProperty's, else null (T7d's Effect port). */
+		static const PropertyRecord* Effect(const PropertyRecord* a_property) { return a_property && a_property->effect ? a_property : nullptr; }
 	};
 
 	/** @brief A geometry's records captured live and held, with their view: for a reader on the render thread. */

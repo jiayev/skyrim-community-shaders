@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "Features/DrawcallLimitFix/Scene/EffectConstants.h"
 #include "Features/DrawcallLimitFix/Scene/FrameGlobals.h"
 
 struct ID3D11ShaderResourceView;
@@ -60,6 +61,12 @@ namespace DCLF
 	};
 	const StageLayout& LightingVSLayout();
 	const StageLayout& LightingPSLayout();
+	/** @brief The same for the Effect shader's variables (EffectConstants.h): an effect MaterialRecord's blocks (T7d's Effect port). */
+	const StageLayout& EffectVSLayout();
+	const StageLayout& EffectPSLayout();
+	/** @brief A record's layouts by its kind (MaterialRecord::kind: kMaterialKindLighting or kMaterialKindEffect). */
+	inline const StageLayout& MaterialVSLayout(std::uint8_t a_kind) { return a_kind == kMaterialKindEffect ? EffectVSLayout() : LightingVSLayout(); }
+	inline const StageLayout& MaterialPSLayout(std::uint8_t a_kind) { return a_kind == kMaterialKindEffect ? EffectPSLayout() : LightingPSLayout(); }
 
 	/** @brief One constant group's values in StageLayout order; unwritten components hold kUnwrittenBits. */
 	struct ConstantBlock
@@ -88,6 +95,8 @@ namespace DCLF
 		// kFeatureMaterialRegisters: null where the feature binds nothing for the material (it leaves the previous
 		// draw's binding; the draws then take the frame's).
 		std::array<ID3D11ShaderResourceView*, kFeatureMaterialTextures> featureTextures{};
+		// Which shader's SetupMaterial made it (EffectConstants.h, kMaterialKind*): the variable space of vs and ps.
+		std::uint8_t kind = kMaterialKindLighting;
 
 		/**
 		 * @brief Value equality, for measuring whether a record could be cached across frames.
@@ -103,7 +112,8 @@ namespace DCLF
 		{
 			return vs.SameBits(a_other.vs) && ps.SameBits(a_other.ps) &&
 			       textures == a_other.textures && addressModes == a_other.addressModes &&
-			       filterModes == a_other.filterModes && textureWritten == a_other.textureWritten && featureTextures == a_other.featureTextures;
+			       filterModes == a_other.filterModes && textureWritten == a_other.textureWritten && featureTextures == a_other.featureTextures &&
+			       kind == a_other.kind;
 		}
 	};
 
@@ -177,13 +187,25 @@ namespace DCLF
 		bool HasLightingShader() const { return lightingShader != nullptr; }
 		RE::BSShader* GetLightingShader() const { return lightingShader; }
 
+		/**
+		 * @brief T7d's Effect port: the engine's BSEffectShader (the instance its GetRenderPasses makes passes of, 0x1433dcce8), null before it
+		 * exists or when what is there is not an Effect shader. Any thread (a pointer read).
+		 */
+		static RE::BSShader* EffectShader();
+
 		/** @brief True while a stand-in call runs (hooks on the shader functions must ignore it). */
 		static bool Evaluating() { return evaluating; }
 
 		/** @brief Start of a frame's evaluations (CS_DCLF_EVAL=audit budget). */
 		static void ResetFrameAudits() { auditsThisFrame = 0; }
 
+		/** @brief SetupMaterial for a material; an effect material's is BSEffectShader's (EvaluateEffectMaterial). */
 		bool EvaluateMaterial(const RE::BSShaderMaterial* a_material, std::uint32_t a_passDescriptor, MaterialRecord& a_out);
+		/**
+		 * @brief T7d's Effect port: BSEffectShader::SetupMaterial (0x1414ea6c0) run against stand-ins, a record of kind kMaterialKindEffect; the
+		 * material port's parity reference. Render thread.
+		 */
+		bool EvaluateEffectMaterial(const RE::BSShaderMaterial* a_material, std::uint32_t a_passDescriptor, MaterialRecord& a_out);
 
 		/**
 		 * @brief SetupGeometry for a copy of a_templatePass (a lighting pass of a representative object,

@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
 #include "Features/DrawcallLimitFix/Common/SceneWake.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
+#include "Features/DrawcallLimitFix/Common/Toggles.h"
 
 #include <bit>
 
@@ -189,6 +190,69 @@ namespace DCLF::MaterialSources
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		// T7d's Effect port: what an effect controller can write of its property's BSEffectShaderMaterial (0x14150f090, 0x14150f700): the
+		// texture-transform buffers (+0x0c..+0x2c: UV scroll, types 6 and up), the falloff (+0x38..+0x44, types 0-4) and the base colour
+		// (+0x48..+0x54: the colour, type 5's alpha through SetMaterialAlpha).
+		constexpr std::size_t kEffectWrittenFirst = 0x0c, kEffectWrittenEnd = 0x58;
+		using EffectWritten = std::array<std::byte, kEffectWrittenEnd - kEffectWrittenFirst>;
+		EffectWritten EffectWrittenOf(const RE::BSShaderMaterial* a_material)
+		{
+			EffectWritten out{};
+			if (a_material)
+				std::memcpy(out.data(), reinterpret_cast<const std::byte*>(a_material) + kEffectWrittenFirst, out.size());
+			return out;
+		}
+		// An effect controller's update: the material captured when it moved (its records, the transform watch), and the property's shading
+		// resampled (an effect member's PropertyColor: the material's alpha, the emittance colour). A colour controller of any other type
+		// writes a property colour (its table 0x1435ef2e8): its shading is resampled.
+		void EffectControllerUpdate(RE::NiTimeController* a_this, bool a_propertyColour, void (*a_func)(RE::NiTimeController*, void*), void* a_data)
+		{
+			// Nothing is captured while the toggle is off: no effect record exists then (a join asks for its material: ServeMaterialRequests).
+			if (!ActiveToggles().effects) {
+				a_func(a_this, a_data);
+				return;
+			}
+			auto* property = static_cast<RE::BSShaderProperty*>(a_this->target);
+			auto* material = property ? property->material : nullptr;
+			const auto before = EffectWrittenOf(material);
+			a_func(a_this, a_data);
+			if (!property)
+				return;
+			if (property->material != material || (material && EffectWrittenOf(material) != before)) {
+				if (property->material)
+					NoteWritten(property->material);
+				ShadingQueue().Push(property);
+			} else if (a_propertyColour) {
+				ShadingQueue().Push(property);
+			}
+		}
+		struct EffectFloatControllerUpdate
+		{
+			static void thunk(RE::NiTimeController* a_this, void* a_data)
+			{
+				EffectControllerUpdate(a_this, false, [](RE::NiTimeController* a_c, void* a_d) { func(a_c, a_d); }, a_data);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+		struct EffectColorControllerUpdate
+		{
+			static void thunk(RE::NiTimeController* a_this, void* a_data)
+			{
+				EffectControllerUpdate(a_this, ControllerType(a_this) != 0, [](RE::NiTimeController* a_c, void* a_d) { func(a_c, a_d); }, a_data);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+		// BSEffectShaderMaterial::CopyMembers (02, 0x1414e9cf0): its in-place rewrite.
+		struct EffectCopyMembers
+		{
+			static void thunk(RE::BSShaderMaterial* a_this, RE::BSShaderMaterial* a_that)
+			{
+				func(a_this, a_that);
+				NoteWritten(a_this);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		// The material's in-place rewrites (BSShaderMaterial 02, BSLightingShaderMaterialBase 08-0A), per vtable.
 		template <std::size_t V>
 		struct MaterialHooks
@@ -263,6 +327,23 @@ namespace DCLF::MaterialSources
 				out.push_back(layout.offset[kVSTexcoordOffset] + c);
 			return out;
 		}
+
+		// T7d's Effect port: an effect record's TexcoordOffset (BSEffectShader's VS variable 9), the only frame part it has.
+		const std::vector<std::uint32_t>& EffectVSPositions()
+		{
+			static const std::vector<std::uint32_t> positions = [] {
+				const auto& layout = EffectVSLayout();
+				std::vector<std::uint32_t> out;
+				for (std::uint32_t c = 0; c < layout.size[kEffectVSTexcoordOffset] && c < 4; ++c)
+					out.push_back(layout.offset[kEffectVSTexcoordOffset] + c);
+				return out;
+			}();
+			return positions;
+		}
+		const std::vector<std::uint32_t>& TexcoordPositionsOf(const MaterialRecord& a_record)
+		{
+			return a_record.kind == kMaterialKindEffect ? EffectVSPositions() : FrameVSFloats();
+		}
 	}
 
 	void Install()
@@ -275,10 +356,15 @@ namespace DCLF::MaterialSources
 			RE::VTABLE_BSLightingShaderMaterialFacegenTint[0], RE::VTABLE_BSLightingShaderMaterialHairTint[0], RE::VTABLE_BSLightingShaderMaterialLandscape[0],
 			RE::VTABLE_BSLightingShaderMaterialLODLandscape[0], RE::VTABLE_BSLightingShaderMaterialSnow[0], RE::VTABLE_BSLightingShaderMaterialMultiLayerParallax[0] };
 		InstallMaterialHooks(vtables, std::make_index_sequence<14>{});
+		// T7d's Effect port: the effect controllers and the effect material's rewrite (installed whatever the toggle; the controllers capture
+		// nothing while it is off).
+		stl::write_vfunc<0x27, EffectFloatControllerUpdate>(RE::VTABLE_BSEffectShaderPropertyFloatController[0]);
+		stl::write_vfunc<0x27, EffectColorControllerUpdate>(RE::VTABLE_BSEffectShaderPropertyColorController[0]);
+		stl::write_vfunc<0x02, EffectCopyMembers>(RE::VTABLE_BSEffectShaderMaterial[0]);
 		// Build the fixed position lists now, off the render thread's first frame.
 		(void)FramePSFloats();
 		(void)FrameVSFloats();
-		logger::info("[DCLF] material write hooks installed: float and colour controllers, 14 material vtables");
+		logger::info("[DCLF] material write hooks installed: float and colour controllers, 14 material vtables, the effect controllers and material");
 	}
 
 	void NoteWritten(const RE::BSShaderMaterial* a_material)
@@ -333,6 +419,14 @@ namespace DCLF::MaterialSources
 
 	void CopyFrameComponents(const MaterialRecord& a_from, MaterialRecord& a_to, std::uint32_t a_passDescriptor)
 	{
+		if (a_to.kind == kMaterialKindEffect || a_from.kind == kMaterialKindEffect) {
+			// An effect record's one frame part is TexcoordOffset (the transform watch's); its pass descriptor's bits are not Lighting's.
+			if (a_to.kind == a_from.kind)
+				for (const auto position : EffectVSPositions())
+					if (a_to.vs.Written(position) && a_from.vs.Written(position))
+						a_to.vs.floats[position] = a_from.vs.floats[position];
+			return;
+		}
 		for (const auto position : FramePSFloats())
 			if (a_to.ps.Written(position) && a_from.ps.Written(position))
 				a_to.ps.floats[position] = a_from.ps.floats[position];
@@ -351,6 +445,9 @@ namespace DCLF::MaterialSources
 
 	bool ApplyFrameComponents(const MaterialRecord& a_live, MaterialRecord& a_record, std::uint32_t a_passDescriptor, bool* a_floatsChanged)
 	{
+		// An effect record has no signature-sourced component (T7d's Effect port: NoteMaterialRecord lists none).
+		if (a_live.kind == kMaterialKindEffect || a_record.kind == kMaterialKindEffect)
+			return false;
 		for (const auto position : FramePSFloats())
 			if (a_record.ps.Written(position) && a_live.ps.Written(position)) {
 				if (a_floatsChanged && std::bit_cast<std::uint32_t>(a_record.ps.floats[position]) != std::bit_cast<std::uint32_t>(a_live.ps.floats[position]))
@@ -373,7 +470,7 @@ namespace DCLF::MaterialSources
 
 	void StripFrameViews(MaterialRecord& a_record, std::uint32_t a_passDescriptor)
 	{
-		if (a_passDescriptor & kCharacterLight)
+		if ((a_passDescriptor & kCharacterLight) && a_record.kind == kMaterialKindLighting)
 			a_record.textures[kCharacterLightSlot] = nullptr;
 	}
 
@@ -397,7 +494,7 @@ namespace DCLF::MaterialSources
 		const std::uint32_t buffer = smState->textureTransformCurrentBuffer & 1;
 		const float values[4]{ material->texCoordOffset[buffer].x, material->texCoordOffset[buffer].y, material->texCoordScale[buffer].x,
 			material->texCoordScale[buffer].y };
-		const auto& positions = FrameVSFloats();
+		const auto& positions = TexcoordPositionsOf(a_record);
 		bool changed = false;
 		for (std::size_t c = 0; c < positions.size() && c < 4; ++c)
 			if (a_record.vs.Written(positions[c])) {
@@ -409,6 +506,8 @@ namespace DCLF::MaterialSources
 
 	void KeepUnreadFloats(const MaterialRecord& a_from, MaterialRecord& a_to)
 	{
+		if (a_from.kind != kMaterialKindLighting || a_to.kind != kMaterialKindLighting)
+			return;  // IBLParams is Lighting's
 		constexpr std::uint32_t kPSIBLParams = 29;
 		const auto& layout = LightingPSLayout();
 		for (std::uint32_t c = 0; c < layout.size[kPSIBLParams]; ++c)
@@ -430,7 +529,7 @@ namespace DCLF::MaterialSources
 	bool ApplyTextureTransform(const TextureTransforms& a_transforms, std::uint32_t a_buffer, MaterialRecord& a_record)
 	{
 		const auto& values = a_transforms.buffers[a_buffer & 1];
-		const auto& positions = FrameVSFloats();
+		const auto& positions = TexcoordPositionsOf(a_record);
 		bool changed = false;
 		for (std::size_t c = 0; c < positions.size() && c < values.size(); ++c)
 			if (a_record.vs.Written(positions[c])) {

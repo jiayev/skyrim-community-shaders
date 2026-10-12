@@ -170,8 +170,8 @@ namespace DCLF
 			float planes[12][4]{};
 		};
 		/**
-		 * @brief This frame's captured cascades as BuildDraws tests them, into a_out (cleared first). Render thread, after the
-		 * sun's Accumulate. Empty when none were captured this frame.
+		 * @brief This frame's cascades as BuildDraws tests them, into a_out (cleared first): DCLF's views (SunViews), not the engine's
+		 * Accumulate (T7f prep). Render thread, after the sun's UpdateCamera. Empty when the sun has no views this frame.
 		 */
 		void GpuCascades(std::vector<GpuCascade>& a_out) const;
 		/** @brief Whether this frame's full-frustum cull applied the entry exclusion (its cascades will be captured). */

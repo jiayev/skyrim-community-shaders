@@ -237,6 +237,14 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				!draws.forwardObserved ? std::string() :
 				fmt::format("; the engine registered {} blended passes of members{}", draws.forwardEngine,
 					draws.forwardInView >= draws.forwardEngine ? " <- OK" : " <- FORWARD"));
+		// T7d's refraction, likewise: every refraction pass (hint 4) of a member the engine registered is a refraction input in view.
+		if (draws.refractionTested || draws.refractionDrawn || draws.refractionEngine)
+			logger::info("[DCLF] refraction (T7d, sampled frame): {} refraction inputs tested, {} in the frustum, {} occluded or under a faded root, {} draws "
+						 "into the refraction normals{}",
+				draws.refractionTested, draws.refractionInView, draws.refractionOccluded, draws.refractionDrawn,
+				!draws.refractionObserved ? std::string() :
+				fmt::format("; the engine registered {} refraction passes of members{}", draws.refractionEngine,
+					draws.refractionInView >= draws.refractionEngine ? " <- OK" : " <- REFRACTION"));
 		if (draws.residentInputs || draws.residentResyncs)
 			logger::info("[DCLF] persistent draws (last frame, colour): {} kept inputs, {} sequences, {} pairs, {} not drawable; since the start {} region "
 						 "versions uploaded, {} resyncs (log {}, segment {}, shrunk {}, scope {}, fit {}), {} decal count moves; parity {} entries checked, {} differ, {} missing{}",

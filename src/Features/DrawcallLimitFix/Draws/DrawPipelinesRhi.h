@@ -23,6 +23,12 @@ namespace DCLF
 		std::vector<rhi::PipelineHandle> zPipelines;
 		rhi::PipelineLayoutHandle zLayout{};
 		rhi::CommandSignatureHandle zDrawSignature{};
+		// T7d's refraction draw (DrawPipelines::RequestRefraction; RefractionDrawPass): its pipeline, null while it waits or once it
+		// failed, the refraction normals' format it was built for, and the shadow views' layout and plain draw signature it draws under.
+		rhi::PipelineHandle refraction{};
+		DXGI_FORMAT refractionFormat = DXGI_FORMAT_UNKNOWN;
+		rhi::PipelineLayoutHandle refractionLayout{};
+		rhi::CommandSignatureHandle refractionDrawSignature{};
 		// The set version these handles belong to (DrawPipelines.cpp, SetVersion): while any copy of this state lives, the
 		// version's sets are not written, so hold it for as long as the handles are recorded with.
 		std::shared_ptr<const void> version;

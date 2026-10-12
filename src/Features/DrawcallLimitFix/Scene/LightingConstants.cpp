@@ -1,5 +1,6 @@
 #include "LightingConstants.h"
 #include "Features/DrawcallLimitFix/Engine/EngineReadWindow.h"
+#include "Globals.h"
 
 #include <bit>
 
@@ -183,6 +184,40 @@ namespace DCLF
 		frame.projectedGlobals[2] = 0.0f;
 		frame.projectedGlobals[3] = *reinterpret_cast<const std::uint8_t*>(REL::Offset(0x2035518).address()) ? 1.0f : 0.0f;
 		return frame;
+	}
+
+	std::array<float, 4> SampleEffectCamera()
+	{
+		static const REL::Relocation<const std::byte* const*> camera{ REL::Offset(0x332a328) };
+		const std::byte* current = *camera.get();
+		if (!current)
+			return {};
+		float nearPlane = 0.0f, farPlane = 0.0f;
+		std::memcpy(&nearPlane, current + 0x160, sizeof(nearPlane));
+		std::memcpy(&farPlane, current + 0x164, sizeof(farPlane));
+		return { farPlane, nearPlane, farPlane - nearPlane, 0.0f };
+	}
+
+	std::array<float, 4> SampleEffectLight()
+	{
+		// SetupGeometry (0x1414eab10), the Lighting bit: PS DLightColor = (ImageSpaceManager +0xe0) x (NiLight +0x134), then that times each
+		// of the light's +0x14c, +0x150, +0x154 (the multiplier first, as the engine's mulss order). Light 0 is BSLight +0x48's NiLight.
+		static const REL::Relocation<const std::byte* const*> imageSpace{ REL::Offset(0x332a6a0) };
+		auto* sceneNode = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
+		const RE::BSLight* sun = sceneNode ? sceneNode->GetRuntimeData().sunLight : nullptr;
+		const std::byte* light = nullptr;
+		if (sun)
+			std::memcpy(&light, reinterpret_cast<const std::byte*>(sun) + 0x48, sizeof(light));
+		const std::byte* manager = *imageSpace.get();
+		if (!light || !manager)
+			return {};
+		auto read = [](const std::byte* a_base, std::size_t a_offset) {
+			float value = 0.0f;
+			std::memcpy(&value, a_base + a_offset, sizeof(value));
+			return value;
+		};
+		const float scale = read(manager, 0xe0) * read(light, 0x134);
+		return { scale * read(light, 0x14c), scale * read(light, 0x150), scale * read(light, 0x154), 0.0f };
 	}
 
 	void CompleteExtras(const float* a_static, std::uint32_t a_objectFlags, const float (&a_world)[12], const ExtrasFrame& a_frame, float* a_out)
@@ -401,10 +436,35 @@ namespace DCLF
 			fades = ((pass & 0x200u) ? kLodFadeSpecular | ((a_renderFlags & 2) ? 0u : kLodFadeSsr) : 0u) | (((pass >> 24) & 0x3f) == 1 ? kLodFadeEnvmap : 0u);
 		}
 		a_out.lodFades = fades;
+		// T7d's refraction: its draw's variant bits (kRecordRefraction*), from its key; the Effect port's suppress bit (kRecordEffectSuppressEmittance).
+		if (!(object.flags & kObjectNoBindings) && object.pipelineIndex < a_tables.pipelines.size())
+			a_out.recordFlags |= RefractionRecordFlagsOf(a_tables.pipelines[object.pipelineIndex]) | EffectRecordFlagsOf(a_tables.pipelines[object.pipelineIndex], object.flags);
 	}
 
-	void SampleShading(const RE::BSLightingShaderProperty& a_property, std::uint32_t a_pass, bool a_member, BindlessShading& a_out)
+	void SampleShading(const RE::BSShaderProperty& a_base, std::uint32_t a_pass, bool a_member, BindlessShading& a_out)
 	{
+		static const REL::Relocation<const RE::NiRTTI*> effectRtti{ RE::BSEffectShaderProperty::Ni_RTTI };
+		if (a_base.GetRTTI() == effectRtti.get()) {
+			// T7d's Effect port: PropertyColor (SetupGeometry 0x1414eab10): the emittance colour or white, and the property's alpha, which
+			// GetRenderPasses leaves as the material's (the base colour's) times the fade node's currentFade; a member's is the material's.
+			const auto& effect = static_cast<const RE::BSEffectShaderProperty&>(a_base);
+			const auto* material = static_cast<const RE::BSEffectShaderMaterial*>(effect.material);
+			auto& shading = a_out.shading;
+			shading.materialData[0] = shading.materialData[1] = shading.materialData[3] = 0.0f;
+			shading.materialData[2] = a_member && material ? material->baseColor.alpha : effect.alpha;
+			const auto* emittance = effect.emittanceColor;
+			shading.emitColor[0] = emittance ? emittance->red : 1.0f;
+			shading.emitColor[1] = emittance ? emittance->green : 1.0f;
+			shading.emitColor[2] = emittance ? emittance->blue : 1.0f;
+			shading.ssrSpecular = 0.0f;
+			a_out.emissiveMult = 1.0f;
+			a_out.written = 4u | 0x70u;
+			a_out.padding[0] = a_out.padding[1] = 0u;
+			std::fill(std::begin(a_out.treeParams), std::end(a_out.treeParams), 0.0f);
+			std::fill(std::begin(a_out.windTimers), std::end(a_out.windTimers), 0.0f);
+			return;
+		}
+		const auto& a_property = static_cast<const RE::BSLightingShaderProperty&>(a_base);
 		// BSLightingShader::SetupGeometry (engine notes): which components it writes depends on the pass.
 		const bool specular = (a_pass & 0x200u) != 0;              // the pass descriptor's Specular
 		// MaterialData.x (property +0x104, envmapLODFade): SetupGeometry's cases 1, 0xb and 0x10 (Envmap, MultilayerParallax, Eye;
@@ -412,13 +472,18 @@ namespace DCLF
 		const std::uint32_t technique = (a_pass >> 24) & 0x3f;
 		const bool envmap = technique == 1 || technique == 0xb || technique == 0x10;
 		auto& shading = a_out.shading;
-		shading.materialData[0] = envmap ? a_property.envmapLODFade : 0.0f;
+		// T7d's refraction (kRefraction, kTempRefraction): no Lighting pass, but its draw's inputs (Utility.hlsl, DCLF_REFRACTION):
+		// MaterialData.x the refraction LOD fade as the property holds it at +0x104 (GetRenderPasses writes it there, the Utility pass's
+		// EyePos.w), which the draw uses where its LOD fades do not apply; MaterialData.w the material's refractionPower (BSUtilityShader::
+		// SetupMaterial's RefractionPower). Neither is in `written` (no engine Lighting constant is compared with them).
+		const bool refraction = a_property.flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kRefraction, RE::BSShaderProperty::EShaderPropertyFlag::kTempRefraction);
+		shading.materialData[0] = (envmap || refraction) ? a_property.envmapLODFade : 0.0f;
 		shading.materialData[1] = specular ? a_property.specularLODFade : 0.0f;
 		// GetRenderPasses leaves materialAlpha * the fade node's currentFade on the property, for whichever camera called it last. A
 		// member's is the material's alone: the draw multiplies its root's fade in (T1c, Lighting.hlsl DCLFAlphaFade).
 		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_property.material);
 		shading.materialData[2] = a_member && material ? material->materialAlpha : a_property.alpha;
-		shading.materialData[3] = 0.0f;
+		shading.materialData[3] = refraction && material ? material->refractionPower : 0.0f;
 		a_out.written = (envmap ? 1u : 0u) | (specular ? 2u : 0u) | 4u | (a_property.emissiveColor ? 0x70u : 0u) | 0x80u;
 		// The same sample the emissive colour folds in: the shader divides it out again, so the two must never come from different
 		// reads of an animated value.

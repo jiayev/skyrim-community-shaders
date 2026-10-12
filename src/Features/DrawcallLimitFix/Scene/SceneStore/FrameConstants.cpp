@@ -197,6 +197,12 @@ namespace DCLF
 		const auto [material, pass] = tables.materialSlotKey[a_slot];
 		if (!material)
 			return;
+		// T7d's Effect port: an effect record has no signature-sourced component (its pass descriptor's bits are not Lighting's), only its
+		// texture transforms.
+		if (a_slot < tables.materials.size() && tables.materials[a_slot].kind == kMaterialKindEffect) {
+			WatchMaterialTransforms(material, a_snapshot);
+			return;
+		}
 		const std::uint32_t signature = MaterialSources::Signature(pass);
 		auto& entry = materialSignatures[signature];
 		if (materialSignatureListed.size() <= a_slot)
@@ -359,8 +365,11 @@ namespace DCLF
 				if (i >= view.pipelines.size())
 					continue;
 				++pipelinesVisited;
+				// T7d's Effect port: an effect key's technique row is the plain technique's and its PerGeometry block is not drawn (Effect.hlsl,
+				// DCLF_BINDLESS reads neither), and the engine evaluation the checks run is the Lighting shader's: they leave it out.
+				const bool effectKey = RasterEffect(view.pipelines[i].rasterFlags);
 				if (const std::uint32_t r = i < view.pipelineTechnique.size() ? view.pipelineTechnique[i] : ~0u;
-					techniqueLive && r < techniqueChecked.size() && !techniqueChecked[r] && view.techniqueConstants[r].valid) {
+					techniqueLive && !effectKey && r < techniqueChecked.size() && !techniqueChecked[r] && view.techniqueConstants[r].valid) {
 					techniqueChecked[r] = 1;
 					const auto& row = view.techniqueConstants[r];
 					TechniqueConstants reference;
@@ -412,7 +421,7 @@ namespace DCLF
 				// (CheckFrameGeometry: the producer's refresh rules); the port made now against it (Differences: the port itself); the
 				// frame lighting against each reference after the loop, where the reference writes it. A pipeline with no template
 				// member has no reference (made by the port all the same).
-				if (geometryParityFrame) {
+				if (geometryParityFrame && !effectKey) {
 					GeometryConstants reference;
 					const auto* templatePass = TemplatePassOf(view, i);
 					if (templatePass && evaluator.EvaluateGeometry(*templatePass, view.pipelines[i].passDescriptor, kMainPassRenderFlags, reference)) {
@@ -670,7 +679,7 @@ namespace DCLF
 		for (std::uint32_t o = 0; o < tables.objects.size() && o < tables.objectGeometry.size() && o < rows->size(); ++o) {
 			if ((tables.objects[o].flags & (kObjectFree | kObjectNoBindings)) || !tables.objectGeometry[o])
 				continue;
-			const auto* property = static_cast<const RE::BSLightingShaderProperty*>(SlotProperty(o));
+			const auto* property = SlotProperty(o);
 			if (!property)
 				continue;
 			++sp.slots;
@@ -705,7 +714,7 @@ namespace DCLF
 				const auto* geometry = tables.objectGeometry[o];
 				const auto& held = (*rows)[o];
 				BindlessShading now = held;
-				SampleShading(*static_cast<const RE::BSLightingShaderProperty*>(SlotProperty(o)), tables.pipelines[tables.objects[o].pipelineIndex].passDescriptor,
+				SampleShading(*SlotProperty(o), tables.pipelines[tables.objects[o].pipelineIndex].passDescriptor,
 					IsResidentSlot(o), now);
 				sp.first = fmt::format("slot {} '{}' (flags {:#x}): material data ({} {} {}) against ({} {} {}), emit ({} {} {}) against ({} {} {}), mult {} against {}",
 					o, geometry->name.c_str() ? geometry->name.c_str() : "", tables.objects[o].flags, now.shading.materialData[0], now.shading.materialData[1],
@@ -931,11 +940,46 @@ namespace DCLF
 		else if (!ConstantEvaluator::Get().EvaluateMaterial(a_material, a_pass, engine))
 			return;
 		++p.checked;
+		MaterialRecord port = a_port;
+		if (port.kind == kMaterialKindEffect) {
+			// T7d's Effect port: what the port leaves to others. LightingInfluence.y holds softFalloffDepth, which the pixel stage divides the
+			// frame's near * far by (the engine's SetupMaterial makes near * far / it from the planes SetupTechnique left): the engine's taken
+			// where the port's holds the depth the engine divided by. t0's anisotropic filter is SetupTechnique's (the stand-in runs
+			// SetupMaterial alone).
+			const auto adjust = [](MaterialRecord& a_port, const MaterialRecord& a_engine) {
+				const std::uint32_t soft = EffectPSLayout().offset[kEffectPSLightingInfluence] + 1;
+				if (a_port.ps.Written(soft))
+					a_port.ps.floats[soft] = a_engine.ps.floats[soft];
+				if (a_engine.filterModes[0] == kUnwrittenFilterMode)
+					a_port.filterModes[0] = a_engine.filterModes[0];
+			};
+			adjust(port, engine);
+			if (MaterialPort::DescribeDifference(port, engine).empty())
+				return;
+			// The effect controllers (UV scroll, falloff, colour) write the material from the update's jobs, which can run beside the render
+			// thread: a write between the engine's evaluation and the port's capture is the check's own race. Both taken again, back to back:
+			// a pair that agrees then counts as moved; one that still differs is the port's.
+			MaterialPort::MaterialSnapshot again;
+			MaterialRecord againPort, againEngine;
+			if (a_material && MaterialPort::Capture(*a_material, again) && MaterialPort::Evaluate(again, a_pass, FrameGlobals::Current().material, againPort) &&
+				ConstantEvaluator::Get().EvaluateMaterial(a_material, a_pass, againEngine)) {
+				adjust(againPort, againEngine);
+				if (MaterialPort::DescribeDifference(againPort, againEngine).empty()) {
+					++p.moved;
+					return;
+				}
+				port = againPort;
+				engine = againEngine;
+			}
+			if (auto difference = MaterialPort::DescribeDifference(port, engine, &p.kinds); !difference.empty())
+				if (p.differ++ == 0 || p.first.starts_with("uncovered"))
+					p.first = fmt::format("effect material {}, pass {:08X}: {}", fmt::ptr(a_material), a_pass, difference);
+			return;
+		}
 		// IBLParams (PS 29): the shader object's, which moves within a frame (the port's is the frame's first record's), and which no
 		// Lighting stage reads (MaterialSources): counted apart, not compared.
 		constexpr std::uint32_t kPSIBLParams = 29;
 		const auto& ps = LightingPSLayout();
-		MaterialRecord port = a_port;
 		// The character light's t11 is the frame's whole (its target flips within a frame; records take it from the frame:
 		// ApplyFrameComponents): not compared.
 		if (MaterialSources::FrameCharacterLight(a_pass)) {
@@ -1300,7 +1344,10 @@ namespace DCLF
 			MaterialRecord live;
 			if (!key.first || !evaluator.EvaluateMaterial(key.first, key.second, live))
 				return;
-			JudgeMaterial(a_slot, key, view.materials[a_slot], live);
+			// T7d's Effect port: an effect record against the engine's now through the port alone (its LightingInfluence.y is DCLF's own:
+			// CheckMaterialPort), not by JudgeMaterial's Lighting parts.
+			if (view.materials[a_slot].kind != kMaterialKindEffect)
+				JudgeMaterial(a_slot, key, view.materials[a_slot], live);
 			CheckSlotPort(key, live);
 		};
 		// The records written since the last frame's tables (a new tables generation or a trimmed log: from the end on).

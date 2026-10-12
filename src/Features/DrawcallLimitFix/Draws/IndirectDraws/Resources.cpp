@@ -751,6 +751,29 @@ namespace DCLF
 					return NotReady(12, "Terrain Blending's terrain depth could not be imported");
 			}
 		}
+		// T7d's refraction: the engine's refraction normals (kREFRACTION_NORMALS), which FUN_1414b4860 binds as RT0 for its group 5 and
+		// ISRefraction samples (Src1Tex), imported in the format of the view the engine draws into. Without it refraction stays undrawn
+		// by DCLF (no pass is registered); nothing else depends on it.
+		if (auto* renderer = globals::game::renderer) {
+			const auto& normals = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kREFRACTION_NORMALS];
+			DxvkOrgInteropResourceInfo normalsInfo{};
+			if (normals.texture && normals.RTV && RenderGraphRuntime::Get().DescribeResource(normals.texture, normalsInfo) && normalsInfo.kind == DXVK_ORG_INTEROP_RESOURCE_IMAGE) {
+				D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+				normals.RTV->GetDesc(&rtvDesc);
+				D3D11_TEXTURE2D_DESC textureDesc{};
+				normals.texture->GetDesc(&textureDesc);
+				org::TextureDescription normalsDesc{};
+				normalsDesc.imageDimensions.push_back({ textureDesc.Width, textureDesc.Height, 0, 0 });
+				normalsDesc.format = rhi::helpers::ToRHI(rtvDesc.Format);
+				normalsDesc.channels = 4;
+				normalsDesc.hasRTV = true;
+				normalsDesc.rtvFormat = normalsDesc.format;
+				state->refractionNormals = ImportImage(device, normalsInfo.image, normalsDesc, "DCLF refraction normals");
+				state->refractionFormat = state->refractionNormals ? rtvDesc.Format : DXGI_FORMAT_UNKNOWN;
+			}
+			if (!state->refractionNormals)
+				logger::warn("[DCLF] the refraction normals (kREFRACTION_NORMALS) could not be imported; DCLF draws no refraction");
+		}
 
 		// The hierarchical depth buffer.
 		//
@@ -807,6 +830,11 @@ namespace DCLF
 		if (reflection.resources) {
 			reflection.resources->main = state;
 			reflection.resources->rebuildPending = true;
+		}
+		// T7e: so do the first-person epochs (the main depth, the targets, the rows, the frame constants): rebuilt at their next import.
+		if (firstPerson.resources) {
+			firstPerson.resources->main = state;
+			firstPerson.resources->rebuildPending = true;
 		}
 		// A revision input (T6b3b b2a): the main resources and their generation.
 		PostRevisionInputs();
@@ -929,6 +957,9 @@ namespace DCLF
 			if (moved)
 				next.zBucketCapacity.resize(slots, 0u);
 			for (std::uint32_t p = 0; p < slots; ++p) {
+				// T7d's Effect port: an effect key's slot draws in the forward range alone; its pipeline has no Z-prepass pipeline (BuildEffect).
+				if (RasterEffect(a_tables.pipelines[p].rasterFlags))
+					continue;
 				if (const std::uint32_t pipelineDraws = drawBound.PipelineDraws(p); pipelineDraws > next.zBucketCapacity[p]) {
 					next.zBucketCapacity[p] = std::bit_ceil(pipelineDraws);
 					moved = true;
@@ -967,14 +998,17 @@ namespace DCLF
 					next.terrainCapacity[g] = static_cast<std::uint32_t>(std::bit_ceil(std::min<std::uint64_t>(terrainDraws[g], 1u << 31)));
 			// T7d: the forward range (GpuLayouts.h): every draw the forward pipeline slots can produce, grown like the terrain ranges, twice
 			// over (the staging half BuildDraws appends to, the sorted half ForwardSortCS fills), after the terrain ranges in phase 2's.
-			std::uint64_t forwardDraws = 0;
+			// T7d's refraction: a refraction slot's draws go to the refraction range after the forward halves instead, sized likewise.
+			std::uint64_t forwardDraws = 0, refractionDraws = 0;
 			for (std::uint32_t p = 0; p < slots && p < a_tables.pipelines.size(); ++p)
 				if (RasterForward(a_tables.pipelines[p].rasterFlags))
-					forwardDraws += drawBound.PipelineDraws(p);
+					(RasterRefraction(a_tables.pipelines[p].rasterFlags) ? refractionDraws : forwardDraws) += drawBound.PipelineDraws(p);
 			if (forwardDraws > next.forwardCapacity)
 				next.forwardCapacity = static_cast<std::uint32_t>(std::bit_ceil(std::min<std::uint64_t>(forwardDraws, 1u << 30)));
+			if (refractionDraws > next.refractionCapacity)
+				next.refractionCapacity = static_cast<std::uint32_t>(std::bit_ceil(std::min<std::uint64_t>(refractionDraws, 1u << 30)));
 			const std::uint64_t phaseDraws = (next.zBucketFirst.empty() ? 0ull : std::uint64_t(next.zBucketFirst.back()) + next.zBucketCapacity.back()) + terrainTwins;
-			const std::uint64_t terrainRange = std::uint64_t(next.terrainCapacity[0]) + next.terrainCapacity[1] + 2ull * next.forwardCapacity;
+			const std::uint64_t terrainRange = std::uint64_t(next.terrainCapacity[0]) + next.terrainCapacity[1] + 2ull * next.forwardCapacity + next.refractionCapacity;
 			draws = static_cast<std::uint32_t>(std::min<std::uint64_t>(std::max<std::uint64_t>({ draws, phaseDraws, terrainRange }), UINT32_MAX));
 			const auto buckets = static_cast<std::uint32_t>(next.zBucketCapacity.size() + terrainSlots);
 			if (buckets > next.zBucketCountWords) {
@@ -1746,6 +1780,132 @@ namespace DCLF
 		host->AddExtension(kReflectionExtensionId, [state = reflection.resources] { return MakeReflectionExtension(state); });
 		logger::info("[DCLF] reflection cube imported: {}x{}, {} faces, format {}", r.width, r.height, info.image.arrayLayers, static_cast<int>(reflection.targets.colour));
 		// A revision input: the faces' size.
+		PostRevisionInputs();
+		return true;
+	}
+
+	bool IndirectDraws::Impl::SetupFirstPerson()
+	{
+		// T7e: the first-person epochs' buffers, made once the main resources and the scene's index pool exist; their latch and zeros are
+		// the revision code's (ReserveFirstPerson), their growth too.
+		auto& f = firstPerson;
+		if (f.resources)
+			return true;
+		if (f.setupFailed || !resources || !scene || !scene->pool)
+			return false;
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (!host)
+			return false;
+		auto device = host->GetDesc().device;
+		auto state = std::make_shared<FirstPersonResources>();
+		state->main = resources;
+		state->buildDraws = ComputeProgram::Load(device, { .source = kBuildDrawsShader, .constantWords = kBuildDrawsConstantWords });
+		if (state->buildDraws)
+			state->dispatchSignature = CreateDispatchSignature(device, state->buildDraws->layout->GetHandle());
+		if (!state->dispatchSignature) {
+			f.setupFailed = true;
+			logger::warn("[DCLF] the first-person view's BuildDraws program could not be created; first person stays native");
+			return false;
+		}
+		state->count = CreateWords(kCountWords, true, "cs.dclf.first-person.draw-count");
+		FirstPersonPlan plan;
+		if (const auto indirect = FrameIndirectState(); indirect.valid)
+			PlanFirstPersonBuckets(*resources, indirect, f.slotPipelines, plan);
+		state->bucketCountWords = Doubled(16u, static_cast<std::uint32_t>(plan.buckets.size()));
+		state->bucketCounts = MakeVersioned(CreateWords(state->bucketCountWords, true, "cs.dclf.first-person.bucket-counts"));
+		state->sequenceDraws = Doubled(64u, plan.draws);
+		state->sequences = MakeVersioned(CreateWords(std::uint64_t(state->sequenceDraws) * sizeof(DrawSequence) / 4, true, "cs.dclf.first-person.sequences"));
+		state->block = DeviceBuffer(kFirstPersonBlockBytes, "cs.dclf.first-person.block");
+		state->blockAddress = AddressOf(device, *state->block);
+		if (!state->blockAddress) {
+			f.setupFailed = true;
+			logger::warn("[DCLF] the first-person view's block has no device address; first person stays native");
+			return false;
+		}
+		f.resources = std::move(state);
+		logger::info("[DCLF] first-person graph resources created");
+		PostRevisionInputs();
+		return true;
+	}
+
+	void IndirectDraws::Impl::ReserveFirstPerson(FirstPersonResources& a_view, std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws)
+	{
+		auto* host = RenderGraphRuntime::Get().Host();
+		auto& latches = producer.latches;
+		if (!host || !latches.firstPerson)
+			return;
+		auto& r = a_view;
+		FirstPersonLatchLayout layout = latches.firstPersonLayout;
+		if (a_slots > layout.slots)
+			layout.slots = Doubled(layout.slots, a_slots);
+		if (a_buckets > layout.buckets)
+			layout.buckets = Doubled(layout.buckets, a_buckets);
+		if (!(layout == latches.firstPersonLayout)) {
+			// A new block: a frame in flight keeps reading its own (FirstPersonFrame::latch).
+			latches.firstPersonLayout = layout;
+			latches.firstPerson = org::LatchBlock::Create("cs.dclf.first-person.latch", layout.Bytes(), host->FrameSlots());
+			logger::info("[DCLF] first-person latch: {} pipeline slots, {} buckets", layout.slots, layout.buckets);
+		}
+		auto& growths = Growths::Get();
+		const FirstPersonSizing& base = growths.LatestSizing<FirstPersonSizing>(r);
+		FirstPersonSizing next = base;
+		std::vector<Growths::Part> parts;
+		if (layout.buckets > next.bucketCountWords) {
+			next.bucketCountWords = layout.buckets;
+			parts.push_back({ r.bucketCounts, next.bucketCountWords });
+		}
+		// The latched copies' zeros: the draw count and the bucket counts.
+		if (const std::uint32_t zeroBytes = std::max<std::uint32_t>(next.bucketCountWords * 4, sizeof(kZeroCounts));
+			!latches.firstPersonZeros || latches.firstPersonZeros->Stride() < zeroBytes)
+			latches.firstPersonZeros = org::LatchBlock::Create("cs.dclf.first-person.zeros", zeroBytes, 1);
+		if (a_draws > next.sequenceDraws) {
+			next.sequenceDraws = Doubled(next.sequenceDraws, a_draws);
+			parts.push_back({ r.sequences, static_cast<std::uint32_t>(std::uint64_t(next.sequenceDraws) * sizeof(DrawSequence) / 4) });
+			logger::info("[DCLF] first-person sequences: {} draws{}", next.sequenceDraws, Growths::Deferred() ? ", as graph work" : "");
+		}
+		if (!(next == base))
+			growths.Change<FirstPersonSizing>(r, producer.inputs.firstPerson, std::move(next), std::move(parts), [] {});
+	}
+
+	bool IndirectDraws::Impl::ImportFirstPersonDepth()
+	{
+		// T7e: kPOST_ZPREPASS_COPY, the first-person colour pass's depth (FUN_1414cb6d0: FUN_140e4fe00(manager, 7, ...)), imported in its
+		// DSV's format; the extension (both first-person epochs' passes) added with it, and again when the main resources change.
+		auto* host = RenderGraphRuntime::Get().Host();
+		auto* renderer = globals::game::renderer;
+		if (!firstPerson.resources || !host || !renderer)
+			return false;
+		auto& r = *firstPerson.resources;
+		const auto& copy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+		if (!copy.texture || !copy.views[0])
+			return false;
+		if (r.depthCopy && r.depthCopyTexture == copy.texture && !r.rebuildPending)
+			return true;
+		if (!r.depthCopy || r.depthCopyTexture != copy.texture) {
+			DxvkOrgInteropResourceInfo info{};
+			if (!RenderGraphRuntime::Get().DescribeResource(copy.texture, info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
+				return false;
+			D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+			copy.views[0]->GetDesc(&dsvDesc);
+			org::TextureDescription desc{};
+			desc.imageDimensions.push_back({ info.image.extent.width, info.image.extent.height, 0, 0 });
+			desc.format = rhi::helpers::ToRHI(dsvDesc.Format);
+			desc.channels = 1;
+			desc.hasDSV = true;
+			desc.dsvFormat = desc.format;
+			auto imported = ImportImage(host->GetDesc().device, info.image, desc, "DCLF first-person depth (kPOST_ZPREPASS_COPY)");
+			if (!imported) {
+				static std::uint32_t logged = 0;
+				if (logged++ < 4)
+					logger::warn("[DCLF] kPOST_ZPREPASS_COPY could not be imported (not in the general layout?); first person stays native");
+				return false;
+			}
+			r.depthCopy = std::move(imported);
+			r.depthCopyTexture = copy.texture;
+			logger::info("[DCLF] first-person depth imported: {}x{}, format {}", info.image.extent.width, info.image.extent.height, static_cast<int>(dsvDesc.Format));
+		}
+		r.rebuildPending = false;
+		host->AddExtension(kFirstPersonExtensionId, [state = firstPerson.resources] { return MakeFirstPersonExtension(state); });
 		PostRevisionInputs();
 		return true;
 	}

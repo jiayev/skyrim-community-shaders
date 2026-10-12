@@ -17,8 +17,9 @@ namespace DCLF
 	{
 		// The main camera's passes are DCLF's whenever it runs; the shadow and occlusion views' once their setup is complete (each
 		// object then waits for its own pipelines: PhaseReady); the reflection's once its resources exist.
+		// T7e: the first-person view's once its epochs can draw (the toggle, the first-person targets published).
 		return kSetMain | (ActiveToggles().shadows ? IndirectDraws::Get().ShadowCapability() : 0u) |
-		       (IndirectDraws::Get().ReflectionDrawable() ? kSetReflection : 0u);
+		       (IndirectDraws::Get().ReflectionDrawable() ? kSetReflection : 0u) | (IndirectDraws::Get().FirstPersonDrawable() ? kSetFirstPerson : 0u);
 	}
 
 	std::uint8_t SceneStore::SetParticipation(std::uint32_t a_slot, std::uint32_t a_drawn) const
@@ -26,6 +27,15 @@ namespace DCLF
 		const auto flags = tables.objects[a_slot].flags;
 		if (flags & kObjectFree)
 			return 0;
+		// T7e: a first-person entry's slot takes part in the first-person view alone (the engine draws the skeleton in no world view: the
+		// sun's casters run with both roots hidden), and only as an opaque or alpha-tested object the first-person epochs draw (a decal,
+		// a forward, refraction or shadow-only object stays the engine's).
+		if (FirstPersonSlot(a_slot)) {
+			const auto p = tables.objects[a_slot].pipelineIndex;
+			const bool drawable = !(flags & (kObjectShadowOnly | kObjectForward)) && !ObjectDecalGroup(flags) && p < tables.pipelines.size() &&
+			                      !RasterRefraction(tables.pipelines[p].rasterFlags) && !RasterEffect(tables.pipelines[p].rasterFlags);
+			return static_cast<std::uint8_t>((drawable ? kSetFirstPerson : 0u) & a_drawn);
+		}
 		std::uint32_t phases = 0;
 		if (!(flags & kObjectShadowOnly))
 			phases |= kSetMain;
@@ -42,6 +52,14 @@ namespace DCLF
 		return static_cast<std::uint8_t>(phases & a_drawn);
 	}
 
+	bool SceneStore::FirstPersonSlot(std::uint32_t a_slot) const
+	{
+		if (!firstPersonCategory || a_slot >= tables.objectGeometry.size() || !tables.objectGeometry[a_slot])
+			return false;
+		const auto entry = tracked.find(tables.objectGeometry[a_slot]);
+		return entry != tracked.end() && FirstPersonEntry(entry->second.categoryNode);
+	}
+
 	bool SceneStore::MainReady(std::uint32_t a_slot, std::uint32_t& a_why) const
 	{
 		// What a main build's pair resolution needs from the lookups (MainBuild::ResolvePair, WriteMaterialRow, WritePipelineRow): the
@@ -52,6 +70,10 @@ namespace DCLF
 		const std::uint32_t p = object.pipelineIndex, m = object.materialIndex;
 		if ((object.flags & kObjectNoBindings) || !PipelineDrawableIn(tables, lookups, p))
 			return a_why = 0, false;
+		// T7d's refraction: a refraction object is drawn by the refraction pipeline (DrawPipelines::RequestRefraction), not its slot's: until
+		// the catalog the lookups were resolved against has it, the engine keeps drawing it.
+		if (RasterRefraction(tables.pipelines[p].rasterFlags) && !(lookupsCatalog && lookupsCatalog->refraction.pipeline))
+			return a_why = 11, false;
 		if (m >= lookups.materials.size() || m >= tables.materialSlotKey.size() || !lookups.materials[m].resolved || lookups.materials[m].key != tables.materialSlotKey[m])
 			return a_why = 1, false;
 		// Its pipeline's and technique's constants, as the coordinator holds them (posted by the frame's evaluations).
@@ -243,6 +265,19 @@ namespace DCLF
 				setReadiness[source] = readiness[source];
 				moved |= std::uint8_t(1u << source);
 			}
+		// The forward views' pipelines (reason 8: the reflection's faces, T7e's first person) are no source's above: the lane publishes them in
+		// a new catalog without new lookups. A change of the ready count is a readiness event for the slots waiting on anything else (the
+		// set commit parity's 'IronLongSword:0' kept waiting with its first-person pipeline ready, 2026-10-11).
+		{
+			std::uint64_t forwardReady = 0;
+			if (lookupsCatalog)
+				for (const auto& [key, entry] : lookupsCatalog->forwardEntries)
+					forwardReady += entry.pipeline ? 1u : 0u;
+			if (forwardReady != setForwardReadiness) {
+				setForwardReadiness = forwardReady;
+				moved |= kWaitOther;
+			}
+		}
 		if (moved) {
 			++setStats.readinessEvents;
 			for (const std::uint32_t slot : setWaiting)
@@ -266,9 +301,16 @@ namespace DCLF
 		// resident: a membership witness that moved (every resident bound again) and a record whose binding did not stand are the joins'
 		// (BindByMembership: LeaveSet and the change log queue them here), and the commit decides them from what they have now. The
 		// rebinding rule that kept them out while the commit ran first is gone.
-		// Fades DCLF does not model (PassCapture::FadingAtRegistration: blended, or a decal's): the registrations that met one in
-		// a member, and the members whose fade has ended since.
+		// Fades DCLF does not model (PassCapture::FadingAtRegistration): the registrations that met one in a member, and the members whose
+		// fade has ended since. T7f prep: they exist only under the fallback toggles (CS_DCLF_FADING=0: a fade; CS_DCLF_LOD_CROSSFADE=0: a
+		// LOD cross-fade) - with both on, as by default, every fade is DCLF's and the hooks push none - so the normal path never reads the
+		// registration here; with fades off the classification already takes a fading member out from the mirror (Ineligible::Fading).
+		// The cross-fade fallback is the one reader of the registration left: it goes with the fallbacks at T7f (with the culls off the
+		// engine draws nothing to fall back to).
+		const bool fadeFallback = !ActiveToggles().fading || !ActiveToggles().lodCrossfade;
 		PassCapture::Get().TakeUnmodelledFades([&](const RE::BSGeometry* a_geometry) {
+			if (!fadeFallback)
+				return;
 			const auto entry = tracked.find(const_cast<RE::BSGeometry*>(a_geometry));
 			if (entry == tracked.end() || !setFadeHeld.insert(a_geometry).second)
 				return;
@@ -282,7 +324,7 @@ namespace DCLF
 			// Its fade node's currentFade, the mirror's (T6b1b).
 			const auto* fadeNode = entry != tracked.end() ? mirror.Leaf(entry->first).fadeNode : nullptr;
 			const bool fading = fadeNode && fadeNode->currentFade < 1.0f;
-			if (entry != tracked.end() && fading) {
+			if (entry != tracked.end() && fading && fadeFallback) {
 				++it;
 				continue;
 			}
@@ -334,6 +376,22 @@ namespace DCLF
 				}
 				if (!main)
 					phases &= ~kSetMain;
+			}
+			// T7e: the first-person view draws from the frame's scene list with the main rows and bindings (IndirectDraws, FirstPerson.cpp):
+			// resident and main-ready as a main member, and its slot's first-person pipelines (the forward one for the first-person targets,
+			// the Z-prepass group's) in the catalog the lane's lookups were resolved against. Reason 8: a forward pipeline.
+			if (phases & kSetFirstPerson) {
+				bool firstPerson = IsResidentSlot(a_slot);
+				if (std::uint32_t why = 0; firstPerson && !MainReady(a_slot, why)) {
+					waiting(why);
+					firstPerson = false;
+				}
+				if (firstPerson && !IndirectDraws::Get().FirstPersonSlotReady(&tables, lookupsCatalog.get(), a_slot)) {
+					waiting(8);
+					firstPerson = false;
+				}
+				if (!firstPerson)
+					phases &= ~kSetFirstPerson;
 			}
 			// The reflection's faces draw from the frame's scene list (IndirectDraws::ExecuteReflection): its pipeline slot's forward
 			// pipeline ready. T6b3e: in the catalog the lane's lookups were resolved against (the publication's, which the revision's faces
@@ -596,7 +654,7 @@ namespace DCLF
 		installNotes.clear();
 		auto none = std::make_shared<SetSnapshot>();
 		none->frame = frame;
-		PassCapture::Get().PublishSet(std::move(none));
+		PublishFrameClaims(std::move(none));
 		SunAccumulation::Get().PublishExclusion(nullptr);
 		if (!left.empty())
 			PrimaryCull::Get().NoteSetChanges({}, left);
@@ -631,8 +689,10 @@ namespace DCLF
 				// extras row, a fade root) may lie past them until their growth, and a build gives such an object no input.
 				auto& draws = IndirectDraws::Get();
 				const bool main = (flags & kObjectMember) && !(flags & kObjectNoBindings) && draws.FitsScene(&tables, a_slot, false);
-				const std::uint8_t others = draws.FitsScene(&tables, a_slot, true) ? static_cast<std::uint8_t>(tables.setPhases[a_slot] & ~(kSetMain | kSetReflection)) : 0;
-				drawn = static_cast<std::uint8_t>((main ? (kSetMain | kSetReflection) : 0u) | others);
+				// T7e: a first-person member draws from the main list with its bindings, as a main member (no kObjectMember: its phase).
+				const bool firstPerson = (tables.setPhases[a_slot] & kSetFirstPerson) && !(flags & kObjectNoBindings) && draws.FitsScene(&tables, a_slot, false);
+				const std::uint8_t others = draws.FitsScene(&tables, a_slot, true) ? static_cast<std::uint8_t>(tables.setPhases[a_slot] & ~(kSetMain | kSetReflection | kSetFirstPerson)) : 0;
+				drawn = static_cast<std::uint8_t>((main ? (kSetMain | kSetReflection) : 0u) | (firstPerson ? kSetFirstPerson : 0u) | others);
 			}
 			// A structural change since the last revocation (R3b): the shapes were made without it, so the claim goes whole; and a claim
 			// is the whole object (U5), so one not drawn in any of its phases goes whole too.
@@ -818,6 +878,13 @@ namespace DCLF
 		retiredPublications.Drain([](std::shared_ptr<const ScenePublication>&& a_publication) { const auto dropped = std::move(a_publication); });
 	}
 
+	void SceneStore::PublishFrameClaims(std::shared_ptr<const SetSnapshot> a_claims)
+	{
+		// DCLF's readers take the frame's claims from FrameClaims; the registration hooks withhold by the same object until the culls stop.
+		PassCapture::Get().PublishSet(a_claims);
+		std::atomic_store(&frameClaims, std::move(a_claims));
+	}
+
 	void SceneStore::InstallClaims()
 	{
 		if (!installed)
@@ -827,7 +894,7 @@ namespace DCLF
 			return;
 		installPending = false;
 		auto& primary = PrimaryCull::Get();
-		PassCapture::Get().PublishSet(installed->claims);
+		PublishFrameClaims(installed->claims);
 		frameLackingCount = installed->lackingCount;
 		if (whole) {
 			// After a withdrawal the engine's hooks hold no claim: every main claim joins.
@@ -1252,7 +1319,7 @@ namespace DCLF
 					tables.extraFree.push_back(slot);
 					break;
 				case Tables::kRetiredBones:
-					tables.boneFree[std::min<std::size_t>(retired.extra / 3, tables.boneFree.size() - 1)].push_back(slot);
+					tables.BoneFreeList(retired.extra).push_back(slot);
 					break;
 				case Tables::kRetiredFaceStream:
 					tables.faceStreamFree.push_back(slot);

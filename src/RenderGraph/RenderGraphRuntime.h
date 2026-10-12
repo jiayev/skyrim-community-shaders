@@ -69,6 +69,8 @@ public:
 		SkyOcclusion,  // Drawcall Limit Fix's variant of Skylighting's occlusion map, after the engine's RenderMask
 		Reflection,    // Drawcall Limit Fix's water reflection faces, after the engine's face render (TESWaterReflections::Update)
 		Forward,       // Drawcall Limit Fix's forward epoch (T7d): blended Lighting, at the engine's blended draw after the composite
+		FirstPersonDepth,  // Drawcall Limit Fix's first-person depth (T7e), at RenderDepth's first-person draw, before kPOST_ZPREPASS_COPY
+		FirstPerson,       // Drawcall Limit Fix's first-person colour (T7e), at Main::RenderFirstPersonView's accumulator render
 		Count
 	};
 

@@ -708,7 +708,7 @@ namespace DCLF::LocalLightCull
 					what += fmt::format(" [exclusion built frame {}{}, selected at {}]", exclusion->builtFrame, exclusion->reused ? " (reused)" : "", SceneStore::Get().GetFrame());
 					if (it != candidates.geometries.end()) {
 						const auto entry = candidates.geometryEntry[it->second];
-						const auto claims = PassCapture::Get().CurrentSet();
+						const auto claims = SceneStore::Get().FrameClaims();
 						for (const auto& [geometry, index] : candidates.geometries) {
 							if (candidates.geometryEntry[index] != entry)
 								continue;

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string_view>
 
+#include "EffectConstants.h"
 #include "Records.h"  // ObjectTreeAnim
 
 namespace DCLF::SceneCapture
@@ -37,6 +38,8 @@ namespace DCLF
 		Switch,              // under an NiSwitchNode that does not select it this frame (or CS_DCLF_SWITCH_NODES off)
 		TerrainNoBlend,      // Terrain Blending redraws it after its terrain (kNoTransparencyMultiSample): CS_DCLF_TB_TERRAIN off, or a decal
 		MultiIndex,          // BSMultiIndexTriShape otherwise eligible: its main pass is the engine's (the snow layer), its shadow a tri-shape's
+		EffectOpaque,        // CS_DCLF_EFFECTS: an effect property without a blending alpha property (the G-buffer pass's, or Falloff alone)
+		EffectVariant,       // CS_DCLF_EFFECTS: an effect permutation not ported (EffectVariantBit: blood, projected, sky object, wireframe, skinned, decal, ...)
 		Count
 	};
 
@@ -61,6 +64,8 @@ namespace DCLF
 		"switch",
 		"terrain-no-blend",
 		"multi-index",
+		"effect-opaque",
+		"effect-variant",
 	};
 
 	struct LightingDescriptors
@@ -92,6 +97,16 @@ namespace DCLF
 		bool forward = false;
 		std::uint32_t forwardBlendMode = 0;
 		bool forwardDepthTest = false, forwardDepthWrite = false;
+		// T7d's refraction (CS_DCLF_REFRACTION): kRefraction or kTempRefraction, whose one main pass is GetRenderPasses' Utility
+		// RENDER_NORMAL pass (hint 4, geometry group 5) into the refraction normals; also `forward` (the forward epoch draws it, from the
+		// refraction range), with the technique's two property-driven variants: RENDER_NORMAL_FALLOFF (kRefractionFalloff, bit 16) and
+		// RENDER_NORMAL_CLAMP (kNonProjectiveShadows, bit 13). The Lighting descriptors below are the slot's (its material and pipeline
+		// rows), never drawn.
+		bool refraction = false;
+		bool refractionFalloff = false, refractionClamp = false;
+		// T7d's Effect port (CS_DCLF_EFFECTS): the object is a BSEffectShaderProperty's (DeriveEffectDescriptors). pass, derivedPass and the four
+		// descriptors are then the Effect shader's (EffectConstants.h, EffectFlag), technique 0; it is forward, or (T7d part 5) a decal (decalGroup).
+		bool effect = false;
 		// The pass descriptor's ProjectedUV bit (CS_DCLF_PROJECTED_UV): the object needs the per-object
 		// texture matrix and pixel parameters, and the projected textures on its pipeline.
 		bool projectedUV = false;
@@ -165,7 +180,10 @@ namespace DCLF
 		// 1 when BSFadeNode::OnVisible updates the metric at all (0x142032dfd); otherwise every node keeps the one it has, and
 		// so do the property's fades, which the draw then reads as they are.
 		float fadesOn = 0.0f;
-		float pad[3]{};
+		// T7d's refraction: GetRenderPasses' refraction LOD fade's thresholds, which the refraction draw fades its normals' strength by
+		// (Utility.hlsl, DCLF_REFRACTION; Lighting.hlsl reads none of it).
+		float refractionStart = 0.0f, refractionEnd = 0.0f;
+		float pad = 0.0f;
 	};
 	static_assert(sizeof(LodFadeFrame) == 128);
 	/** @brief This frame's, from the main camera and the engine's settings. Render thread. */
@@ -380,4 +398,69 @@ namespace DCLF
 	 */
 	Ineligible DeriveLightingDescriptors(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf,
 		const AccumulatedPass* a_accumulated, LightingDescriptors& a_out, bool a_layer = false);
+
+	/**
+	 * @brief T7d's Effect port: a BSEffectShaderProperty geometry's pass as BSEffectShaderProperty::GetRenderPasses (0x1414bd890) and its
+	 * descriptor function (FUN_1414bde90) make it in the main modes, and its shader descriptors (SetupTechnique's split, Community Shaders'
+	 * lookup), from the records (the mirror's on the scene work): the blended mesh (hint 1: a_out.forward, the forward epoch's), the decal
+	 * (hints 2 and 3: a_out.decalGroup, DCLF's decal groups, the DEFERRED pixel stage; T7d part 5), either skinned through the palette path.
+	 * EffectOpaque for a mesh without a blending alpha property, EffectVariant for a variant not ported (LightingDescriptors.cpp). a_out.effect
+	 * is set on success.
+	 */
+	Ineligible DeriveEffectDescriptors(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf, LightingDescriptors& a_out);
+
+	/**
+	 * @brief CS_DCLF_EFFECTS: the variants of an effect geometry DCLF does not draw, a bit each (EffectVariantsOf). Any of them but
+	 * kEffectVariantBlendPair is Ineligible::EffectVariant; the blend pair is too once the alpha property blends (a non-blending one is
+	 * EffectOpaque first). The census splits its effect-variant class by them (RegistrationCensus).
+	 */
+	enum EffectVariantBit : std::uint32_t
+	{
+		kEffectVariantShape = 1u << 0,          // any shape but a BSTriShape or a particle system (dynamic shapes)
+		kEffectVariantSkinned = 1u << 1,        // a skin the palette path does not take: kSkinned and skinned vertices without a skin instance, or one without them (EffectSkinned), or CS_DCLF_SKINNED off
+		kEffectVariantDecal = 1u << 2,          // kDecal / kDynamicDecal with CS_DCLF_DECALS off (hints 2 and 3, the decal groups in the G-buffer pass), or one that registers no pass
+		kEffectVariantSkyObject = 1u << 3,      // bit 45: hint 0x12, geometry group 13
+		kEffectVariantWireframe = 1u << 4,      // bit 48
+		kEffectVariantCloudLighting = 1u << 5,  // kEffectLighting with kCloudLOD: the cloud light is its light 0 (FUN_1414fcf80)
+		kEffectVariantLightingNoLlf = 1u << 6,  // kEffectLighting without Light Limit Fix: the pass's own point lights (PerGeometry PLight*)
+		kEffectVariantBlood = 1u << 7,          // kWeaponBlood
+		kEffectVariantProjectedUv = 1u << 8,    // kProjectedUV
+		kEffectVariantBlendPair = 1u << 9,      // a blending pair the engine's alpha setup (FUN_14150bc80) leaves as it finds it
+		// T7e: a particle geometry DCLF's particle path does not take (ParticleRejectionOf), a bit a cause: CS_DCLF_PARTICLES off; not
+		// exactly an NiParticleSystem (BSStripParticleSystem, NiMeshParticleSystem); no particle data (or no capacity); the data's aspect
+		// flags (velocity-aligned or speed-stretched quads); no blending alpha property (its blend mode is the frame's property alpha);
+		// decal flags.
+		kEffectVariantParticle = 1u << 10,
+		kEffectVariantParticleClass = 1u << 11,
+		kEffectVariantParticleData = 1u << 12,
+		kEffectVariantParticleAligned = 1u << 13,
+		kEffectVariantParticleUnblended = 1u << 14,
+		kEffectVariantParticleDecal = 1u << 15,
+		kEffectVariantCount = 16
+	};
+	constexpr std::array<std::string_view, kEffectVariantCount> kEffectVariantNames{ "shape", "skinned", "decal", "sky-object", "wireframe",
+		"cloud-lighting", "lighting-without-llf", "blood", "projected-uv", "blend-pair", "particle: toggle off", "particle: class",
+		"particle: no data", "particle: aligned", "particle: unblended", "particle: decal" };
+	/** @brief T7e: every particle cause bit. */
+	inline constexpr std::uint32_t kEffectVariantParticles = kEffectVariantParticle | kEffectVariantParticleClass | kEffectVariantParticleData |
+	                                                         kEffectVariantParticleAligned | kEffectVariantParticleUnblended | kEffectVariantParticleDecal;
+	/** @brief The EffectVariantBit set of an effect property on a leaf, from the records (the mirror's, or LiveLeaf's for the census). */
+	std::uint32_t EffectVariantsOf(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf);
+	/** @brief The effect pass descriptor's Skinned bit (FUN_1414bde90): the property's kSkinned and a skinned vertex description. */
+	bool EffectSkinned(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf);
+	/** @brief T7e: a particle geometry's type (BSGeometry::Type kParticles or kStripParticles: NiParticles, drawn from its particle data). */
+	inline constexpr bool ParticleGeometryType(std::uint8_t a_type) { return a_type == 1 || a_type == 2; }
+	/**
+	 * @brief T7e (CS_DCLF_PARTICLES): whether DCLF's particle path draws a particle geometry (ParticleSnapshots; drawcall-limit-fix.md,
+	 * "Particles (T7e)"): exactly an NiParticleSystem (type 1; mesh and strip particle systems are not ported), in local or world space (a
+	 * world-space system's world transform is the identity with its parent's scale, FUN_140dd4db0, and its positions world coordinates: the
+	 * quads and World come out of the same formulas), with particle data and without the data's aspect flags (velocity-aligned or
+	 * speed-stretched quads, FUN_140e51320's other path), with the toggle on. The effect property's own variants are EffectVariantsOf's.
+	 * From the records.
+	 */
+	bool ParticleSystemTaken(const SceneCapture::LeafView& a_leaf);
+	/** @brief T7e: the particle cause bits (kEffectVariantParticles) of a particle geometry's pass with a_flags property flags: 0 when taken. */
+	std::uint32_t ParticleRejectionOf(const SceneCapture::LeafView& a_leaf, std::uint64_t a_flags);
+	/** @brief The engine's pass enum of an effect pass descriptor (BSShader::MakeRenderPass's, GetRenderPasses' +0x4000002C). */
+	inline constexpr std::uint32_t EffectPassEnum(std::uint32_t a_descriptor) { return a_descriptor + kEffectPassEnumBase; }
 }

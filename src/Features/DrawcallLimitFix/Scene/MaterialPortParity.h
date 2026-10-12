@@ -16,6 +16,9 @@ namespace DCLF::MaterialPort
 	{
 		std::uint64_t checked = 0, differ = 0, uncovered = 0;
 		std::uint64_t iblDrift = 0;  // IBLParams components that moved between the port's sample and the engine's (unread: not compared)
+		// T7d's Effect port: records whose material a controller wrote between the engine's evaluation and the port's capture (a second
+		// evaluation and capture agreed): the check's own race, not the port's.
+		std::uint64_t moved = 0;
 		// By kind: VS constants, PS constants, textures, address modes, filter modes, textureWritten, featureTextures.
 		std::array<std::uint64_t, 7> kinds{};
 		std::string first;

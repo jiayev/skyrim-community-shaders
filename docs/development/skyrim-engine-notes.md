@@ -407,6 +407,28 @@ capturing, just like `BeforeOpaquePass`. Keep the AE world-drawn hook at `Main::
 past the first-person draws loses the world camera (see below). Do not substitute full texture dimensions
 for the viewport, since that discards dynamic-resolution semantics.
 
+## Refraction: a normals pass and an image-space warp
+
+Decompiled from AE 1.6.1170 for T7d (drawcall-limit-fix.md, "Refraction (T7d)", which has the detail).
+
+-   `BSLightingShaderProperty::GetRenderPasses` (`0x1414adfb0`) gives a `kRefraction` / `kTempRefraction` property (flags `0x8004`) no
+    Lighting pass. After its refraction LOD fade (unless `kNoFade`: `FUN_14147c470` against the Setting values at `0x142033408` /
+    `0x142033420`, `fRefractionLODFadeStart/End`, result at `+0x104`; past the end, no passes), it builds one Utility pass with hint 4.
+    The technique is `0x200 | (kModelSpaceNormals ? 0x2 : 0x1A) | Vc (bit 37) | Skinned (bit 1) | 0x400 with kRefractionFalloff
+    (bit 16) | 0x800 with kNonProjectiveShadows (bit 13)`, plus 0x2B for the pass enum.
+-   `FUN_1414b2330` puts hint 4 into geometry group 5 (hint 5 into group 6). The shadow modes' registration (`FUN_1414b2a60`, vfunc
+    `0x158`) gives refraction nothing.
+-   `Main::Draw` at `0x140644d20`: `FUN_1414b4840` (the main accumulator's group 5 count), then `FUN_1414ce1d0` ->
+    `FUN_1414b4860(0x14338c830, world camera)`, else group 6 and 5 cleared (`FUN_1414b4ae0`). `FUN_1414b4860` sets depth mode 1 and
+    write mode 2. It draws group 6 into render target 13 (`kREFRACTION_NORMALS`) only if the normals are begun (`0x1435ef130`). Then
+    it binds target 13, cleared to (0.5, 0.5, 0, 0) (`0x141ad285c`) unless begun, marks begun and drawn (`0x1435ef130`,
+    `0x1435ef131`), and draws group 5. `FUN_1414cb6d0` (the player's third-person block) runs it again on `0x14338c840`.
+-   `BSUtilityShader::SetupMaterial` (`0x1414faa60`) binds the material's diffuse texture as t1 (`TexNormalSampler`) and writes
+    `RefractionPower` from the material's `+0x84`. `SetupGeometry` (`0x1414fae40`) writes `EyePos.w` from the property's `+0x104`,
+    and with `RenderNormalFalloff` `EyePos.xyz` is the camera in model space.
+-   `ImageSpaceEffectRefraction` (render `0x1414f9390`, IsActive `0x1414f95a0` = `0x1435ef131`) warps the frame by the normals
+    (`ISRefraction.hlsl`) and clears both flags.
+
 ## Decals: where the main pass draws them, and with what state
 
 Decompiled from AE 1.6.1170 and then measured with `CS_DCLF_DECAL_PROBE=1`, which records the
@@ -470,6 +492,16 @@ depth at all: its registration (`FUN_1414b2a60`, render mode `0xC`, from the tab
 `kZBufferWrite` passes that do reach it (Lighting technique `0x220CA`, 4 to 8 a frame at Riverwood) are offered to
 `RenderPassImmediately` but never reach `BSLightingShader::SetupGeometry`: a census of the native lighting draws (since
 removed) counted no Lighting draw in the depth pass at all, with DCLF on or off.
+
+**Effect-shader decals.** `BSEffectShaderProperty::GetRenderPasses` (`0x1414bd890`) gives a `kDecal | kDynamicDecal` property's pass hint
+2 without a blending alpha property and 3 with one (nothing else counts; `kTempRefraction` with `kDynamicDecal` makes no pass), and
+`FUN_1414b2330` puts them in groups 3 and 4 like any decal pass, so the same two functions draw them, in the deferred pass, with Community
+Shaders' `Deferred` effect permutation. Within a group the buckets go by pass enum, so effect decals (`0x4000002C +` descriptor) precede
+Lighting ones (`0x4800002D +`). `BSEffectShader::SetupGeometry` (`0x1414eab10`) keeps the group's depth mode for a decal pass and sets
+`alphaBlendWriteMode` 11 unless the technique has MotionVectorsNormals (bit 26); it calls `FUN_14150bc80` itself only for the sky object
+(bit 45). Render flag 4 (group 4 only) applies the alpha property through `FUN_1414f5cf0`, which skips it for pass enums
+`0x5C000058..0x5C00005B` (`FUN_1414b4fc0`). In `FUN_14150bc80` a property alpha below one without blending picks mode 1; its last
+argument (the alpha-test list) sets `alphaTestEnabled` (`+0xB4`) from the alpha property's test flag.
 
 ## Skinning: the palette the engine keeps, and the buffers a skinned draw uses
 
@@ -700,6 +732,91 @@ as `RenderDepth(firstPerson, …)`. The flag is set when the player's first-pers
 At the call site's return in first person, then, the eye is the first-person camera's (DCLF measured
 `(0, 0, 120.5)` against the world's `(17120, -47226, 9.7)`). The VS_PerFrame projection is also its own, with
 a near plane of 5 against 15, and the viewport depth range is still `[0, 0.1]`.
+
+## The first-person switch
+
+Reverse engineered 2026-10-11 (AE 1.6.1170) for DCLF's third-person body drawn in first person.
+
+-   **`FUN_140736150(player, firstPerson)`**: the switch between the two skeletons. Through the task queue when
+    `TaskQueueInterface::ShouldUseTaskQueue` (then `BSTaskPool_HandleTask` calls it again). Unless the requested skeleton is
+    already the one shown (or `vfunc 0x4C8` refuses first person), it **stores `kHidden` on both roots**: the third-person root
+    (`Get3D1(false)`) at `0x140736237` (`mov [r14 + 0xF4], ecx`), the first-person root (`Get3D1(true)`) at `0x140736271`
+    (`mov [r15 + 0xF4], ecx`), one hidden and the other shown. It also sets bit 0 of `player +0xBE3`, copies the player's position
+    and rotation into both roots, moves the audio listener, resets the magic casters' nodes, and refreshes the 3D (`FUN_1402df9a0`
+    on the root leaving, `FUN_1402df8a0` on the one shown).
+-   **Callers:** `FirstPersonState::Begin` (`0x1408deba0`, with 1), `AutoVanityState::Begin`, `BleedoutCameraState::Update`,
+    `DragonCameraState::Update`, `RaceSexMenu::ProcessMessage`, `PlayerCharacter::LoadGame`/`FinishLoadGame`/`Revert`, the
+    furniture camera (`FUN_1408e38b0`, with 0), calls at `0x1408e9d19` and `0x1408e1a29` (no function defined in the database)
+    and `FUN_140648cd0`. `ThirdPersonState::Begin` does not call it. Which caller shows the third-person skeleton on the switch to
+    third person was not traced: for DCLF it does not matter, since every caller's stores are the same two sites.
+-   **Nothing else hides the third-person body in first person.** The main camera's cull skips it because its root is hidden. No
+    cull or scene list build tests "first person". `Main::Draw` touches only the first-person root: hidden before the cull jobs
+    (`0x1406445a1`), shown for `FUN_1414a2170` (the receivers), hidden again, and in first person shown at the end to draw it.
+-   **`TESWaterReflections::Update`** hides `Get3D()` (vfunc `0x380`) around the cube map's faces and shows it again only when
+    `vfunc 0x388` (the third person shown) is true. The water shapes are restored to their saved state.
+
+## The first-person view
+
+`Main::Draw` (`0x1406444b0`) draws first person when `cVar23` holds: the first-person root's `kHidden` clear at entry, the third
+argument false, and `PlayerCamera +0x28` (the current state) not `+0xD0` (the free camera, `tfc`).
+
+-   **The cull:** `Main::unk_FPCulling` (`0x140645d30`) after `CalculateAndDrawShadowCasterLights`. It shows the first-person root,
+    culls it alone (cull context `FUN_1414bf320(ctx, 0, 1)`, process `0x14338c640`, camera `0x14338c820`) into the first-person
+    accumulator `0x14338c840`, and hides it again.
+-   **The view's inputs**, a struct at `0x14338c8c0` (`FUN_1414cafd0`) filled by `FUN_1406452c0` (Main::Draw's first call):
+    `+0x00` the camera position (`PlayerCamera::GetFirstPersonNodePosition`), `+0x0C` `PlayerCamera::firstPersonFOV` (`+0x140`),
+    `+0x10` `worldFOV`, `+0x18` the first-person root, `+0x20` the third-person root, `+0x28` the world root.
+-   **The camera** (`FUN_1414cb020`, before the depth and colour draws). `FUN_140d2cda0(camera, fov, near, far, width, height, ...)`:
+    -   the FOV is `firstPersonFOV + 0x14338c628`, where `FirstPersonState::Update` writes the skeleton's `firstPersonFOVControl`
+        node's local z (an animated offset);
+    -   the near plane is the float at `0x14202a928` (5 measured);
+    -   the far plane is the world scene graph's vfunc `0x1F0` (unverified: the world camera's far);
+    -   the aspect is the screen's (`0x14328cc44`/`48`);
+    -   the rotation is the world camera's world rotation.
+-   **The shifted space.** The first-person draws are made around the first-person root. `FUN_1414ce9d0` adds minus the root's
+    world translation to the world (and previous world) translation of every node under it. The camera is placed at the camera
+    position minus the root's position (the `(0, 0, 120.5)` DCLF measured), and `BSShaderManager::State +0x2E8/+0x2F4` (posAdjust,
+    the eye) follow. `FUN_1414cb270` undoes it after the colour draw. In world terms the view is the world camera's rotation at
+    `GetFirstPersonNodePosition`, with its own FOV and near plane.
+-   **Depth:** at the end of `RenderDepth` (`FUN_1414ccb30`; "The depth pass and first person" above), with the viewport depth range
+    `[0, 0.1]`.
+-   **Colour:** `FUN_1414cb6d0` (`Main::RenderFirstPersonView`, called at `Main::Draw +0x971`, after the main pass and its
+    composite). It runs `FUN_1414cb640` first, which shows the root and runs the process with the accumulator (`FUN_140e28af0`;
+    the "mask clear" DCLF's light code names). Then it sets a depth range (`0x14202b2d0`, or `0x14202b2e8` with the second
+    argument), binds the targets (slot 2 cleared, depth target 7), and renders the accumulator with the first-person camera
+    (`FUN_1414a90f0(camera, accumulator, firstPerson << 4 | 0x43)`), then its blended passes (`FUN_1414b4860`). Community
+    Shaders' Deferred hooks the call to set `InWorld`: these are forward Lighting draws after the deferred composite.
+
+Reverse engineered further 2026-10-11 for T7e-fp0 (drawcall-limit-fix.md, "First person as a view bit (T7e)"):
+
+-   **Main::Draw's third argument** is `UI::IsMenuOpen(InterfaceStrings +0xA8)`, the main menu (its only caller, `FUN_140644360`).
+    `cVar23` is taken at Main::Draw's entry; DCLF's BeginSceneFrame (the hook on `+0xD3`, `FUN_1406452c0`) runs before `0x1406445a1`
+    hides the root, so it can take the same inputs.
+-   **The far plane**: `(*gWorldSceneGraph)->vfunc 0x1F0` is `SceneGraph::GetFarDistance` (`0x1F8` `GetNearDistance`). The near plane
+    `0x14202a928` is `fNear1stPersonDistance:Display`. `FUN_140d2cda0` builds the frustum from the FOV in degrees (times
+    `0x1417a4b30`), the near and far planes and the screen size, and updates the camera.
+-   **The first-person root has no parent.** `PlayerCharacter::Load3D` (`0x1407349b0`) demands the 1st-person model into
+    `firstPerson3D` (`+0x8F8`, `Get3D1(true)`), hands it to `PlayerCamera::SetFirstPersonSkeleton` and the biped, and attaches it
+    nowhere. Its equipment attaches under it through the ordinary NiNode child functions.
+-   **The shift** (`FUN_1414ce9d0(node, delta, previousDelta)`): adds `delta` to the world translation (`+0xA0`) and `previousDelta` to
+    the previous world translation (`+0xD4`) of the node and every node under it, and on a geometry sets `kAlwaysDraw` (`0x800`) and its
+    fade (`+0xF0`) to 1. `FUN_1414cb020` (Main::Draw `+0x26A`) shifts by minus the root's world translation (and the previous frame's
+    delta), places the camera at the camera position plus that delta, and sets `posAdjust` (`State +0x2E8` the delta, `+0x2F4` the
+    camera); `FUN_1414cb270` (`+0x9C2`, after FUN_1414cb6d0) undoes it. `FUN_140742470(player, -position)` around them moves the player's
+    magic nodes and light likewise.
+-   **RenderDepth's first-person block** undoes the shift, builds a culling process on the stack with the first-person camera in world
+    space and culls the root (`FUN_1414bf320`) into the **Z-prepass's** accumulator `0x14338c828`, shifts again and draws that
+    accumulator with the first-person camera (`FUN_1414a90f0(camera, 0x14338c828, 3)` at `0x1414cd47e`), viewport depth `[0, range]`
+    (`FUN_140e57cb0`), then hides the root and restores the depth range before `kPOST_ZPREPASS_COPY`. `0x14338c840` is the first-person
+    colour accumulator (unk_FPCulling's); `0x14338c820` its camera.
+-   **FUN_1414cb6d0's targets**: Main::Draw binds slot 0 = `kMAIN` (1), slot 1 = `kMOTION_VECTOR` (7), slot 2 = target 4, and the
+    function unbinds slot 2, binds depth target 7 (`kPOST_ZPREPASS_COPY`), sets write mode 12 (`State +0xB0`) and the depth range
+    `[0, 0x14202b2d0]` (`f1stPersonFarDepthRange`; `0x14202b2e8`, `f1stPersonFarDepthRangeControlDriven`, with its second argument: the
+    player's movement controller's vfunc `0x78`, which RenderDepth gets too), and renders its accumulator at `0x1414cb7d1`.
+-   **The skin palette update** (`FUN_140e4ff90(skin, geometryWorld)`) runs once a frame per skin (`+0x38` against `gFrameCounter`, under
+    the skin's critical section): the first caller of a frame fixes the palette (bone world times skin-to-bone, through the root parent's
+    inverse) for every later draw of that frame, and the first-person skeleton's bones are shifted between `FUN_1414cb020` and
+    `FUN_1414cb270`.
 
 ## ProjectedUV and MTLand: the per-object constants and where they come from
 
@@ -1609,11 +1726,63 @@ above on the LOD stores and on which trees each list holds.
 -   **DCLF's stand-in and the tree list.** `TreeAnimation` takes stood-in roots off the animation list only. A stood-in
     `BSTreeNode` stays on the tree list, under a multibound no cull reaches, so its result stays the last cull's: stale
     "in" keeps it visited (kept, its bones animated every frame within range), stale "out" freezes its bones. DCLF's
-    skinned draws of its bones read those transforms. `<- TREE MANAGER` counts these trees by their stale result.
+    skinned draws of its bones read those transforms. `<- TREE MANAGER` counts these trees by their stale result. Fixed (T7f
+    preparation, `drawcall-limit-fix.md`): around the loop's call DCLF writes the stood-in trees' shape `+0x10` from its verdict and
+    puts the engine's value back after it.
+-   **The multibound cache's reuse** (`BSMultiBoundNode::OnVisible`, `0x140e2d710`). The node is tested only when it has children, is
+    not `kAlwaysDraw` (flag bit 11) and the process's cull mode is not 1 or 3. Mode 4 tests the shape without touching the cache.
+    Modes 0 and 2 compare `lastAccumTime` with the accumulation time (vfunc `0x118` of the object at `0x143274040`): when it moved
+    they test the shape and store `+0x10` = 2 - inside, otherwise they reuse `+0x10` (1 in, 2 out; 0 makes them test again).
+    So a value written outside a cull can serve a later cull of the same accumulation time: DCLF puts the engine's value back right
+    after the tree loop.
 -   **For T7f** (the culls off), the tree list needs the visited verdict for every `BSTreeNode` from DCLF. Either DCLF writes
     the multibound result (the shape's `+0x10`) at Main::Update's entry, or `FUN_140437e50` is replaced by DCLF's port,
     `TreeList`'s `Decide`, with the same stores. The animation list needs `kAccumulated` on its non-stood-in roots (T7b2's
-    writes extended to them).
+    writes extended to them). Written: the multibound result around the loop's call, for every listed tree, behind
+    `CS_DCLF_TREE_LIST_ALL` (`drawcall-limit-fix.md`, "T7f preparation, part 2").
+
+### T7f preparation: the frame's camera, the height-test byte, parent pointers
+
+Reverse engineered 2026-10-11 (Ghidra and capstone, AE 1.6.1170) for moving PrimaryCull's camera duties to BeginSceneFrame and for
+DCLF's writes on the nodes between a geometry and its root.
+
+-   **The main camera at BeginSceneFrame.** `FUN_1406452c0` (Main::Draw's camera setup, at `+0xD3`: DCLF's BeginSceneFrame runs right
+    after it returns) reads the world camera (`Main::WorldRootNode +0x128`). It stores the camera's world translate in
+    `0x14332a2e8`/`2ec`/`2f0`, so the tree height test's base (`0x14332a2f0`) is the camera's height. `CalculateAndDrawShadowCasterLights`
+    uses `gWorldSceneGraph +0x128` (`0x14338c8e8`, PortalViews' camera). The list processes' camera (`+0x18`) is set before Main::Update's
+    walk, which reads it. That they are one object is checked by DCLF's frame camera observer (`CS_DCLF_ACCUMULATED_PARITY`); not
+    verified statically.
+-   **The scene-list processes' `+0x121`** (the byte `BSTreeNode::OnVisible`, `0x14147d3c6`, tests for its height test). The writes of
+    `[reg+0x121]` in `.text` are:
+    -   the `NiCullingProcess` constructors (`0x140d3fd6a`, `0x140d3fed5`), which write 0;
+    -   `FUN_1414bf9f0` (`0x1414bfba7`), which copies a cull context's `+0x5D` into the static mode-0 processes. A mode-1 context
+        returns its own process (`+0x30`) without writing the byte;
+    -   functions unrelated to culling processes (`TESLandTexture`, pathing, the save, the renderer).
+
+    `FUN_14063eb50` (scene creation) writes only `+0x11C` as a word (`0x101`) on the list processes. So for the main camera's list
+    processes the byte stays 0, and their height test is off. DCLF still reads it, at BeginSceneFrame.
+-   **`NiNode`'s destructor** (`0x140d1e930`) sets each child's `parent` to null (and `parentIndex` to `0xFFFFFFFF`) before releasing
+    it. So a live object's non-null parent pointer always names a live node. At Main::Update's entry no attach or detach runs, so
+    DCLF walks a held geometry's parents up to its root there.
+-   **The cell roots' `kAccumulated`.** `DrawWorld_BuildSceneLists` (`0x14064bc20`) sets it every frame on the object root's
+    non-hidden children (`0x14064bef9`), or in an interior on the cell's `cell3D` alone (`0x14064c16a`). In both branches the object
+    root's children 0 and 1 are also appended to list 0 (`FUN_14021cf40`). They are list entries, so the main list cull sets or clears
+    their bit by its test: those two are not cell roots, and they lack the bit whenever they are out of view (DCLF's T7f dry run counted
+    them as "cell roots without the bit"). No list cull visits the other children, so nothing clears theirs.
+-   **What `Process1` leaves on a node (T7f, `kAccumulated`'s meaning).** `BSCullingProcess::Process1` (`0x140e28390`), with
+    `updateAccumulateFlag`:
+    -   **A zero radius without `kAlwaysDraw`:** the node is left alone (no test, no `OnVisible`, the bit unchanged).
+    -   **`kAlwaysDraw` (bit 11), or no active planes:** `OnVisible`, then the bit is set.
+    -   **Preprocessed (bit 12), unless `ignorePreprocess` or mode 4:** cleared if `kNotVisible`, else `OnVisible` and set.
+    -   **Cull mode 2:** cleared. **Mode 1:** passes.
+    -   **Otherwise:** the frustum (`FUN_140d3ff10`) or the room's compound frustum (`BSCompoundFrustum::Process`) sets or clears it.
+
+    The bit is written after `OnVisible` returns, so a root's bit is written after its children's and whatever its `OnVisible` did. A
+    faded-out `BSFadeNode` gets the bit even though nothing under it is visited. `NiCullingProcess::Process1` (`0x140d40160`) has the same
+    shape, without the compound frustum.
+
+    So a geometry's bit is the last cull that reached it. Under a failed node, a stopped `OnVisible` or an inactive switch or LOD child
+    it is stale. The receivers test every level and never take such a geometry.
 
 ## The material database: how a material is shared and released
 
@@ -1662,6 +1831,57 @@ exactly `vertexCount * 16`), guarded by a `BSSpinLock` at `+0x168` (lock `FUN_14
 -   **The layout.** A face partition's `vertexDesc` has the position on stream 1 (bit 54) and nothing else
     there; stream 0 holds UV, colour and skinning (stride 20 for a head).
 -   **Timing.** Frame N's render draws the morphs of frame N-1's post-render stage.
+
+## Particle systems: the writer of their data, and the draw that builds their quads
+
+AE 1.6.1170, decompiled for T7e (DCLF's particles: [drawcall-limit-fix.md](./drawcall-limit-fix.md), "Particles (T7e)").
+
+-   **The classes.** `NiParticles : BSGeometry` (type byte `+0x150` = 1, `kParticles`; `BSStripParticleSystem` is type 2): its data
+    `NiPSysData` at `+0x158`, four fade distances (ushort) at `+0x160..+0x166`, its vertex description `0x0840200004000051`
+    (`+0x148`, set by the constructor, `NiParticles::CreateClone` `0x140d40210`: the position and colour on stream 1, offset 0 and
+    16, stride 20; the texture coordinates on stream 0, stride 4). `NiParticleSystem` (vtable `0x1419c3898`) adds the modifier list
+    (`+0x168`), `lastUpdate` (`+0x18c`), `isWorldspace` (`+0x192`). `NiMeshParticleSystem` (`0x1419c43a0`) and
+    `BSStripParticleSystem` (`0x1419c4d70`) have vtables of their own. The data (`NiParticlesData`): `maxNumVertices` `+0x12`,
+    positions `+0x30`, colours `+0x38` (NiColorA, optional), radii `+0x40`, sizes `+0x48`, rotation angles `+0x50` (optional),
+    subtexture offsets `+0x60` and their count `+0x68`, the active count `+0x7c` (`GetActiveVertexCount`, vfunc 0x26), texture
+    indices `+0x80`, two aspect flags `+0x88`/`+0x89` with their parameters `+0x6c..+0x78`; `NiPSysData::particleInfo` (`+0x90`, the
+    velocities).
+-   **The writer: the update pass.** `NiParticleSystem::UpdateDownwardPass` and `UpdateSelectedDownwardPass` (vtable slots `0x2C`
+    `0x140dd48a0`, `0x2D` `0x140dd4910`; the selected one only with flag bit 2) run `FUN_140dd4db0` (UpdateWorldData: a world-space
+    system's world is the identity with its parent's scale) and `BSDynamicTriShape`'s downward pass: the controllers, among them
+    `NiPSysUpdateCtlr::Update` (`0x140ddd660`), which calls the system's vfunc `0x1c0` (`0x140dd4370`, a jump through vfunc `0x1c8`),
+    `Do_UpdateSystem` (`0x140dd4380`): the modifiers' `Update`s write the data arrays and recompute the model bound (`+0x110`), then a
+    callback (`0x143275998`, null in a vanilla game) - then the world transform and `UpdateWorldBound` (`0x140d37dc0`). Which thread:
+    whatever updates the subtree. A reference's emitters (a candle's flame, a fire's smoke) update with the reference's 3D, in the cell
+    animations' jobs (`Job_Cell_animations`, gated by the root's `kAccumulated`: `FUN_1402cff60`); the "Particles" job stage
+    (`Job_Particles` `0x1406d31a0`, in the "render 1st person" stage of the job table, `0x142011cc0`) runs `FUN_1402c76c0`: one job a
+    temporary effect (`0x1431374b0`, a `BSTArray<BSTempEffect>`, count `0x1431374c0`: `NiAVObject::Update` of the effect's 3D) and one
+    a child of `BSParticleSystemManager` (`UpdateParticleSystemManagerJob` `0x1402c7470` -> `FUN_140e2a520`: the child's vfunc
+    `0x160`), under the read lock `0x143284b90`. The "Shared particles" job (`0x1406d3720`) is in the post render stage.
+-   **The draw.** `FUN_1414f2ad0` (the per-type draw of `SetupAndDrawPass`), type 1: count = `min(GetActiveVertexCount(), 0x800)`;
+    maps `20 * 4 * count` bytes of the renderer's dynamic ring (`FUN_140e46cd0`, `FUN_140e46ed0`), fills them with `FUN_140e51320`, then
+    `FUN_140e46f20`: index buffer `0x143286a40` (R16), stream 0 the static texture coordinates `0x143286a48` (stride 4), stream 1 the
+    ring (stride 20), `DrawIndexed(count * 6)`. Both static buffers are made once at the renderer's initialisation (`FUN_140e4d280`):
+    0x800 quads of `0,1,2 0,2,3`, and the corners `(0,1) (1,1) (1,0) (0,0)` (half2) of each.
+-   **`FUN_140e51320`, the quads.** From the renderer's view data (`CameraStateData` `0x14202aee0`: `viewUp` `0x14202aef0`, `viewRight`
+    `0x14202af00`, `viewForward` `0x14202af10`) and the eye (`0x14202aecc`, posAdjust): `A = R^T viewUp`, `B = R^T viewRight` (R the
+    system's world rotation). The particle order is sorted by `dot(position, viewForward)` (model-space positions, a world direction:
+    `FUN_140d4fcb0`), farthest first, with the quicksort `FUN_140d4ff00`. Per particle: its world position `R p s + T`; the fade
+    `FUN_140d40ba0` (its distance d from the eye against the four distances: 0 below `+0x166`, rising to 1 at `+0x164`, falling from
+    `+0x162` to 0 at `+0x160`; 1 with them all 0); the colour packed RGBA8 (each channel times 255 truncated, its low byte; alpha times the
+    fade); its size `radius * size`. Without rotation angles: corners `c - (A+B)s, c - (A-B)s, c + (A+B)s, c + (A-B)s`, c the position
+    minus the model bound's centre. With them: the size is 0 when `fade * alpha <= 0.05` (`0x1417743ec`); `(sin, cos)` of the angle
+    (`FUN_14153b7a0`), `X = (cos+sin)s B + (cos-sin)s A`, `Y = (cos+sin)s A - (cos-sin)s B`, corners `c - X, c - Y, c + X, c + Y`. With the
+    aspect flags the corners follow the velocity (not decoded further). Position w is the texture index.
+-   **The shader** (`BSEffectShaderProperty` on the system: `GetRenderPasses` `0x1414bd890` gives hint 1 whatever the alpha "for a
+    particle system"; `FUN_1414bde90` sets `Particles` (`0x1000`) for a geometry whose vfunc 0x80 (`AsParticlesGeom`) answers and that is
+    not a `BSStripParticleSystem` (`0x2013` for that), `TexCoordIndex | IndexedTexture` (`0x84`) with a texture and a non-zero
+    subtexture count, never `Falloff`). `BSEffectShader::SetupGeometry` (`0x1414eab10`) with `Particles`: World's translation is
+    `R c s + T` (the model bound's centre folded in, which the vertices had subtracted), PreviousWorld the same; with `IndexedTexture`,
+    VS b11 = the data's subtexture offsets (count * 16 bytes, zero to 0x80 rows), which `Effect.hlsl`'s `TEXCOORD_INDEX` applies to the
+    corner's coordinates (`u' = o.y u + o.x`, `v' = o.w v + o.z`).
+-   **Precipitation** ("Particle: BSTriShape" in the census) is `BSParticleShaderProperty` (`GetRenderPasses` `0x1414c6890`, the Particle
+    shader `0x14150da30`...) on its own geometry, the Precipitation feature's: not this path.
 
 ## Scene state writers: where DCLF takes its events
 

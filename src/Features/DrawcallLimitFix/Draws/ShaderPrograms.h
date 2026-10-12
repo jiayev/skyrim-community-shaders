@@ -149,6 +149,15 @@ namespace DCLF
 		{
 			return (static_cast<std::uint64_t>(a_vertexDescriptor) << 32) | a_pixelDescriptor;
 		}
+		/**
+		 * @brief T7d's Effect port: an effect key's program (Records.h, kRasterEffect), `Data/Shaders/Effect.hlsl`'s builds of its vertex and
+		 * pixel descriptors with the same defines as the Lighting builds (DCLF_BINDLESS and DCLF_BINDLESS_DRAW: Effect.hlsl's DCLF reads).
+		 * Only its vertex and pixel stages (a forward object is no depth segment input: DrawPipelines builds its depth variant from them and
+		 * no Z-prepass pipeline); null until both are compiled. Never freed. The pipeline lane's; a_failed as Find's.
+		 */
+		const Program* FindEffect(const PipelineKey& a_key, RE::BSShader& a_effect, bool* a_failed = nullptr);
+		/** @brief Which Effect program a key draws with (FindEffect's entries, UpdateLane's ids): distinct from every LightingProgramId. */
+		static std::uint64_t EffectProgramId(const PipelineKey& a_key) { return LightingProgramId(a_key) | (1ull << 63); }
 		/** @brief Tree LOD's forward program: DistantTree's DistantTreeBlock technique with AlphaTest and without Deferred, pulled. */
 		const ForwardProgram* FindForwardTreeLod(RE::BSShader& a_distantTree, bool* a_failed = nullptr);
 
@@ -158,14 +167,16 @@ namespace DCLF
 			std::vector<std::uint64_t> lighting;  // LightingProgramId
 			std::vector<std::uint32_t> shadow;    // Utility techniques
 			std::vector<std::uint64_t> forward;   // ForwardProgramId
+			std::vector<std::uint64_t> effect;    // EffectProgramId (T7d's Effect port)
 			bool treeLod = false, forwardTreeLod = false;
 
-			bool Empty() const { return lighting.empty() && shadow.empty() && forward.empty() && !treeLod && !forwardTreeLod; }
+			bool Empty() const { return lighting.empty() && shadow.empty() && forward.empty() && effect.empty() && !treeLod && !forwardTreeLod; }
 			void Clear()
 			{
 				lighting.clear();
 				shadow.clear();
 				forward.clear();
+				effect.clear();
 				treeLod = forwardTreeLod = false;
 			}
 		};
@@ -208,6 +219,9 @@ namespace DCLF
 		struct ForwardEntry;
 		ankerl::unordered_dense::map<std::uint64_t, std::unique_ptr<ForwardEntry>> forwardEntries;
 		std::unique_ptr<ForwardEntry> forwardTreeLodEntry;
+		struct EffectEntry;
+		ankerl::unordered_dense::map<std::uint64_t, std::unique_ptr<EffectEntry>> effectEntries;
+		std::vector<std::byte> effectSource;  // Data/Shaders/Effect.hlsl (T7d's Effect port); empty when missing
 		std::vector<std::byte> distantTreeSource;
 		std::vector<std::byte> source;
 		std::vector<std::byte> pulledSource;  // source for the pulled builds (PulledMaterialSource); empty when it could not be made
@@ -215,7 +229,7 @@ namespace DCLF
 		std::vector<std::filesystem::path> dependencies;
 		// Each source's ShaderCompiler::FingerprintInputs with the dependencies, taken once when they load: every request's key
 		// starts from it instead of hashing the source and checking the dependency files again (2,000 keys a launch).
-		std::uint64_t sourceFingerprint = 0, pulledFingerprint = 0, utilityFingerprint = 0, distantTreeFingerprint = 0;
+		std::uint64_t sourceFingerprint = 0, pulledFingerprint = 0, utilityFingerprint = 0, distantTreeFingerprint = 0, effectFingerprint = 0;
 		bool sourcesLoaded = false;
 		std::atomic<bool> sourcesMissing{ false };
 		std::atomic<std::uint32_t> loggedFailures{ 0 };

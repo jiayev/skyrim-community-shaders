@@ -3,6 +3,7 @@
 #include "CaptureParity.h"
 
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
+#include "Features/DrawcallLimitFix/Common/Toggles.h"
 #include "Features/DrawcallLimitFix/Engine/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Engine/ShadowViews.h"
@@ -74,6 +75,8 @@ namespace DCLF::RegistrationCensus
 		// for the geometry yet, T7c0); any other shader's its type and the geometry's RTTI (static data).
 		constexpr std::uint64_t kLightingKey = 1ull << 63;
 		constexpr std::uint64_t kApproximateKey = 1ull << 62;
+		// T7d's Effect port: an effect geometry classified as a Lighting one (CS_DCLF_EFFECTS on): its classes are named "effect: ...".
+		constexpr std::uint64_t kEffectKey = 1ull << 61;
 		constexpr std::uint64_t kRttiMask = (1ull << 48) - 1;
 
 		constexpr std::array<const char*, RE::BSShader::Type::Total> kShaderNames{ "no shader", "Grass", "Sky", "Water", "BloodSplatter", "ImageSpace",
@@ -173,7 +176,7 @@ namespace DCLF::RegistrationCensus
 			// The session's: any other batch renderer's view, by first sight (grows).
 			ankerl::unordered_dense::map<const RE::BSBatchRenderer*, std::uint16_t> others;
 			// The known accumulators' renderers, made again when one of them changes.
-			std::array<const void*, 2> accumulators{};
+			std::array<const void*, 3> accumulators{};
 			ankerl::unordered_dense::map<const RE::BSBatchRenderer*, std::uint16_t> accumulatorViews;
 		};
 		Census census;
@@ -195,13 +198,16 @@ namespace DCLF::RegistrationCensus
 			// BSShaderAccumulator* at 0x14338c820 (a read there crashed at the main menu): its passes count as another view.
 			static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> depthAccumulator{ REL::Offset(0x338c828) };
 			static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> mainAccumulator{ REL::Offset(0x338c830) };
-			const std::array<RE::BSGraphics::BSShaderAccumulator*, 2> accumulators{ *depthAccumulator, *mainAccumulator };
-			const std::array<const void*, 2> sources{ accumulators[0], accumulators[1] };
+			// T7e: the first-person accumulator (*0x14338c840: Main::unk_FPCulling culls the first-person root alone into it; 0x14338c820 is
+			// its camera). RenderDepth's first-person block registers into the Z-prepass's (main depth).
+			static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> firstPersonAccumulator{ REL::Offset(0x338c840) };
+			const std::array<RE::BSGraphics::BSShaderAccumulator*, 3> accumulators{ *depthAccumulator, *mainAccumulator, *firstPersonAccumulator };
+			const std::array<const void*, 3> sources{ accumulators[0], accumulators[1], accumulators[2] };
 			if (sources == census.accumulators)
 				return;
 			census.accumulators = sources;
 			census.accumulatorViews.clear();
-			constexpr std::array<std::uint16_t, 2> kViews{ kMainDepth, kMain };
+			constexpr std::array<std::uint16_t, 3> kViews{ kMainDepth, kMain, kFirstPerson };
 			for (std::size_t i = 0; i < accumulators.size(); ++i)
 				if (accumulators[i])
 					AddRenderers(census.accumulatorViews, accumulators[i]->GetRuntimeData().batchRenderer, kViews[i]);
@@ -242,7 +248,9 @@ namespace DCLF::RegistrationCensus
 			switch (a_view) {
 			case kMainDepth:
 			case kMain:
-				return kSetMain;  // WithholdMain: any main member
+				return kSetMain;  // WithholdMain: any main member (and a first-person member in RenderDepth's block: WithheldPhase's caller's)
+			case kFirstPerson:
+				return PassCapture::Get().FirstPersonCovered() && (set->drawn & kSetFirstPerson) ? kSetFirstPerson : 0;  // T7e
 			case kReflection:
 				return (a_noted.flags & kReflectionFace) && (set->drawn & kSetReflection) ? kSetReflection : 0;
 			case kOcclusionSky:
@@ -283,8 +291,9 @@ namespace DCLF::RegistrationCensus
 			auto& store = SceneStore::Get();
 			const auto leaf = SceneCapture::LiveLeaf(a_geometry);
 			const auto* lighting = SceneCapture::LeafView::Lighting(leaf.view.property);
-			// T7c0: an ordered node rejects only a blended leaf (SceneStore's OrderedLeaf); a billboard any.
-			const bool blended = leaf.view.AlphaBlending() || (lighting && lighting->materialAlpha < 1.0f);
+			// T7c0: an ordered node rejects only a blended leaf (SceneStore's OrderedLeaf), and with the forward epoch none (T7d's ordered-node
+			// interleave: ClassifyFrame); a billboard any.
+			const bool blended = !ActiveToggles().forward && (leaf.view.AlphaBlending() || (lighting && lighting->materialAlpha < 1.0f));
 			Ineligible parentReason = Ineligible::None;
 			bool tracked = false;
 			for (const RE::NiNode* node = a_geometry.parent; node; node = node->parent) {
@@ -330,6 +339,21 @@ namespace DCLF::RegistrationCensus
 			return kApproximateKey | ApproximateClass(geometry, a_frame);
 		}
 
+		/**
+		 * @brief T7d: an effect geometry's effect-variant class split by its variants (EffectVariantsOf on the live leaf: the render thread's
+		 * read, at Collect), in the class key's bits 8-23; any other class as it is.
+		 */
+		std::uint64_t WithEffectVariants(std::uint64_t a_class, bool a_effect, const RE::BSGeometry& a_geometry)
+		{
+			constexpr auto kVariant = static_cast<std::uint8_t>(Ineligible::EffectVariant);
+			const auto reason = static_cast<std::uint8_t>(a_class & 0xFF);
+			if (!a_effect || (reason != kVariant && reason != kUntracked + kVariant))
+				return a_class;
+			const SceneCapture::LiveLeaf leaf(a_geometry);
+			const auto* property = SceneCapture::LeafView::Effect(leaf.view.property);
+			return property ? a_class | (static_cast<std::uint64_t>(EffectVariantsOf(*property, leaf.view) & 0xFFFF) << 8) : a_class;
+		}
+
 		std::string Describe(const RE::BSGeometry& a_geometry, bool a_rtti)
 		{
 			const auto* parent = a_geometry.parent;
@@ -350,7 +374,10 @@ namespace DCLF::RegistrationCensus
 			const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
 			// A Lighting geometry is DCLF's to classify whichever shader its pass has (the shadow views' passes are Utility's).
 			const bool lighting = property && netimmerse_cast<RE::BSLightingShaderProperty*>(const_cast<RE::BSShaderProperty*>(property));
-			if (lighting) {
+			// T7d's Effect port: with CS_DCLF_EFFECTS an effect geometry is DCLF's to classify too (its verdict: a member, effect-opaque, ...).
+			static const REL::Relocation<const RE::NiRTTI*> effectRtti{ RE::BSEffectShaderProperty::Ni_RTTI };
+			const bool effect = !lighting && property && ActiveToggles().effects && property->GetRTTI() == effectRtti.get();
+			if (lighting || effect) {
 				std::uint64_t cls;
 				if (const auto phase = WithheldPhase(a_noted, view, a_frame); phase && (a_frame.set->PhasesOf(geometry) & phase)) {
 					// Kept by the hooks although its view withholds the phase: WithholdMain's exceptions, else a defect.
@@ -363,11 +390,11 @@ namespace DCLF::RegistrationCensus
 					if (const auto it = a_frame.verdicts.find(geometry); it != a_frame.verdicts.end())
 						cls = it->second;
 					else
-						cls = a_frame.verdicts.emplace(geometry, NonMemberClass(a_noted, a_frame)).first->second;
+						cls = a_frame.verdicts.emplace(geometry, WithEffectVariants(NonMemberClass(a_noted, a_frame), effect, *geometry)).first->second;
 					++census.nonMemberPasses;
 					census.approximatePasses += (cls & kApproximateKey) ? 1 : 0;
 				}
-				key = kLightingKey | cls;
+				key = kLightingKey | (effect ? kEffectKey : 0ull) | cls;
 				if (cls == kMemberDefect && census.defects++ == 0)
 					census.firstDefect = fmt::format("{} in {}", Describe(*geometry, true),
 						view < kFirstOther ? std::string(kViewNames[view]) : fmt::format("other #{}", view - kFirstOther));
@@ -392,7 +419,7 @@ namespace DCLF::RegistrationCensus
 			++cls.views[view];
 			const auto [it, added] = cls.geometries.try_emplace(geometry);
 			if (added)
-				it->second.name = Describe(*geometry, lighting);
+				it->second.name = Describe(*geometry, lighting || effect);
 			++it->second.passes;
 		}
 
@@ -403,8 +430,20 @@ namespace DCLF::RegistrationCensus
 
 		std::string ClassName(std::uint64_t a_key, const ClassWindow& a_class)
 		{
-			if (a_key & kLightingKey)
-				return LightingClassName(static_cast<std::uint8_t>(a_key & 0xFF)) + ((a_key & kApproximateKey) ? " (live approximation)" : "");
+			if (a_key & kLightingKey) {
+				auto name = LightingClassName(static_cast<std::uint8_t>(a_key & 0xFF)) + ((a_key & kApproximateKey) ? " (live approximation)" : "");
+				if ((a_key & kEffectKey) && name.starts_with("lighting:"))
+					name = "effect:" + name.substr(9);
+				// T7d: the effect-variant class's variants (WithEffectVariants), joined.
+				if (const auto variants = static_cast<std::uint32_t>((a_key >> 8) & 0xFFFF)) {
+					std::string joined;
+					for (std::uint32_t v = 0; v < kEffectVariantCount; ++v)
+						if ((variants >> v) & 1)
+							joined += fmt::format("{}{}", joined.empty() ? "" : "+", kEffectVariantNames[v]);
+					name += fmt::format(" ({})", joined);
+				}
+				return name;
+			}
 			const auto type = static_cast<std::size_t>(a_key >> 48);
 			return fmt::format("{}: {}", type < kShaderNames.size() ? kShaderNames[type] : "shader ?", a_class.rtti && a_class.rtti->name ? a_class.rtti->name : "no RTTI");
 		}
@@ -432,7 +471,7 @@ namespace DCLF::RegistrationCensus
 		++census.frames;
 		RefreshAccumulatorViews();
 		Frame frame;
-		frame.set = PassCapture::Get().CurrentSet();
+		frame.set = SceneStore::Get().FrameClaims();
 		frame.parityBoth = PassCapture::ParityBoth();
 		// DrawcallLimitFix.cpp's SceneWorkInline: the parities that run the scene pass at the frame's start, on the render thread.
 		frame.coordinatorVerdicts = SwitchEnabled(Switch::PersistentParity) || SwitchEnabled(Switch::WalkParity) || CaptureParity::Enabled();

@@ -5,7 +5,10 @@
 // the dynamic lights' receivers, the tree clock: skyrim-engine-notes.md, "Engine side effects of the culls (T7a)") need it
 // once the engine's culls stop. DCLF already has both verdicts on the GPU: a fade root's is FadeStateCS's kFadeVerdictInView
 // (the list processes' Process1 test through the root's portal program), a geometry's is depth phase 1's frustum stamp
-// (cs.dclf.frustum: stamped this frame, and not dropped by its root's fade). This pass compares them, once a frame after both,
+// (cs.dclf.frustum: stamped this frame, and not dropped by its root's fade). Neither is DCLF's HZB occlusion, which the engine's cull
+// does not make: kAccumulated means in the main camera's view (frustum, portals, occlusion planes), not app-culled, and for a geometry
+// not under a root whose OnVisible stops (drawcall-limit-fix.md, "T7f: what kAccumulated means"). Phase 1 stamps every main input,
+// the decal, forward and refraction ones too, which the depth segment draws none of. This pass compares them, once a frame after both,
 // with what it last reported per slot, and appends only the changes to the event list, which the host reads back
 // asynchronously (VisibilityReadback) and decodes on DCLF's executor.
 //
@@ -122,6 +125,7 @@ static const uint kKindObject = 1;
 static const uint kBitVisible = 1u << 0;   // a root: InView (its kAccumulated); an object: stamped and not fade-hidden
 static const uint kBitInMargin = 1u << 1;  // reserved (InView against widened planes: not yet produced)
 static const uint kBitVerdict = 1u << 2;   // a root: FadeStateCS updated its listing this frame (else DCLF has no verdict for it)
+static const uint kBitFadeHidden = 1u << 3;  // an object: stamped (in view) but dropped by its root's fade (T7f: the dry run's attribution)
 // An object's reported word: these bits, and kReportedValid once a verdict has been reported for the slot.
 static const uint kReportedValid = 1u << 31;
 
@@ -182,8 +186,8 @@ void ObjectSlot(uint a_slot)
 	if (a_slot * 4u >= frustumBytes || a_slot >= reportedSlots)
 		return;
 	const uint stamp = frustum.Load(a_slot * 4u);
-	const bool visible = (stamp & kFrustumStampMask) == (SceneFrame & kFrustumStampMask) && (stamp & kFrustumFadeHidden) == 0;
-	const uint bits = visible ? kBitVisible : 0u;
+	const bool stamped = (stamp & kFrustumStampMask) == (SceneFrame & kFrustumStampMask);
+	const uint bits = stamped ? ((stamp & kFrustumFadeHidden) == 0 ? kBitVisible : kBitFadeHidden) : 0u;
 	const uint last = reported[a_slot];
 	// A slot with no report yet (a new backing) was out of view as far as the host knows (its decoder starts again with it).
 	const uint lastBits = (last & kReportedValid) != 0 ? (last & ~kReportedValid) : 0u;

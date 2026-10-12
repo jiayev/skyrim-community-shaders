@@ -106,12 +106,18 @@ namespace DCLF::Scene
 		static std::uint64_t thunk(RE::NiAVObject* a_object, RE::NiColor** a_colour)
 		{
 			auto* geometry = a_object ? a_object->AsGeometry() : nullptr;
-			auto* property = geometry ? netimmerse_cast<RE::BSLightingShaderProperty*>(geometry->GetGeometryRuntimeData().shaderProperty.get()) : nullptr;
-			const RE::NiColor* before = property ? property->emissiveColor : nullptr;
+			auto* shaderProperty = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
+			auto* property = shaderProperty ? netimmerse_cast<RE::BSLightingShaderProperty*>(shaderProperty) : nullptr;
+			// T7d's Effect port: an effect property's emittanceColor is its PropertyColor (the mirror's emissive), its re-point an event too.
+			auto* effect = shaderProperty && !property ? netimmerse_cast<RE::BSEffectShaderProperty*>(shaderProperty) : nullptr;
+			const RE::NiColor* before = property ? property->emissiveColor : effect ? effect->emittanceColor : nullptr;
 			const auto result = func(a_object, a_colour);
 			if (property && property->emissiveColor != before) {
 				PushProperty(property);
 				PushPropertyUpdate(property, SceneCapture::PropertyRecord::kEmissive);
+			} else if (effect && effect->emittanceColor != before) {
+				PushProperty(effect);
+				PushPropertyUpdate(effect, SceneCapture::PropertyRecord::kEmissive);
 			}
 			return result;
 		}
@@ -916,7 +922,7 @@ namespace DCLF
 		}
 		// The set does not survive a load: it names geometry from the cell being torn down, and withholds its passes from the
 		// engine. Nothing is withheld until the next commit publishes the set again.
-		PassCapture::Get().PublishSet(nullptr);
+		PublishFrameClaims(nullptr);
 		// T6b3d: while it is up the engine's events wake no pass (a load pushes thousands a frame, each for the mirror's carry alone): one
 		// pass drains them here, once a Present and frame start, as the old ingestion did.
 		SetScenePassLoading(true);
@@ -1199,6 +1205,7 @@ namespace DCLF
 			rootMotion.clear();
 			movingRoots.clear();
 			hiddenDependents.clear();
+			hiddenAhead.clear();
 			DropSunCandidates();
 			buckets = {};
 			// T6b5: the gates' tags were the entries'; the rescan's adds tag them again (AddGeometry, by the gates' roots).
@@ -1681,7 +1688,7 @@ namespace DCLF
 					// A hidden store's event (T6b1b): DrainHiddenEvents', the same batch's as the mirror's bit.
 					if (event->update.hiddenSite != ~0u)
 						if (const auto* record = std::get_if<SceneCapture::NodeRecord>(&event->update.record))
-							batchHidden.push_back({ record->key, event->update.hiddenSite, (record->flags & 1u) != 0 });
+							batchHidden.push_back({ record->key, event->update.hiddenSite, (record->flags & 1u) != 0, event->update.sequence });
 				}
 			}
 		};

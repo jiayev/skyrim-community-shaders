@@ -8,6 +8,7 @@ namespace DCLF::Draws
 	constexpr const char* kExtensionId = "cs.dclf.main-opaque";
 	constexpr const char* kShadowExtensionId = "cs.dclf.shadow";
 	constexpr const char* kReflectionExtensionId = "cs.dclf.reflection";
+	constexpr const char* kFirstPersonExtensionId = "cs.dclf.first-person";
 	// The shadow views' material rows (ShadowMaterialRow): row 0 for every draw without alpha testing, and one per material
 	// of the alpha-tested casters (their texture offset and diffuse). One table for every view, grown when the kept state
 	// needs more rows (GrowableRows), from this many.
@@ -85,7 +86,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kNoSkip = ~0u;
 	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested; a shadow view's [3] outside the sun's entry, [4] small, [5]
 	// under a fading root, [16] of its caster class.
-	constexpr std::uint32_t kCountWords = 36;
+	constexpr std::uint32_t kCountWords = 40;
 	/** @brief A count buffer's worth of zeros: what an epoch uploads to reset the counters it appends through. */
 	inline constexpr std::uint32_t kZeroCounts[kCountWords] = {};
 	// The sun's bits on the GPU: the colour dispatch's inputs with kObjectSunTest, and those that missed every cascade.
@@ -113,6 +114,13 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kCountForwardTestedWord = 33;
 	constexpr std::uint32_t kCountForwardInViewWord = 34;
 	constexpr std::uint32_t kCountForwardOccludedWord = 35;
+	// T7d's refraction: the refraction range's draws (the refraction draw's count; zeroed by the colour commit), then the colour segment's
+	// refraction inputs it tested, those inside the frustum (the <- REFRACTION observer's) and those the HZB or their root's fade rejected.
+	// Byte offsets must match BuildDrawsCS.hlsl.
+	constexpr std::uint32_t kCountRefractionWord = 36;
+	constexpr std::uint32_t kCountRefractionTestedWord = 37;
+	constexpr std::uint32_t kCountRefractionInViewWord = 38;
+	constexpr std::uint32_t kCountRefractionOccludedWord = 39;
 	// Byte offsets of the count words the indirect draws read; they must match BuildDrawsCS.hlsl.
 	constexpr std::uint64_t kCountDrawnPhaseTwoBytes = 68;
 	constexpr const char* kBuildDrawsShader = "DrawcallLimitFix/BuildDrawsCS.hlsl";
@@ -280,6 +288,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kVisibilityBitVisible = 1u << 0;   // a root: InView (its kAccumulated); an object: stamped, not fade-hidden
 	constexpr std::uint32_t kVisibilityBitInMargin = 1u << 1;  // reserved: InView against widened planes (not implemented; T7b2 uses the last two frames and listing defaults)
 	constexpr std::uint32_t kVisibilityBitVerdict = 1u << 2;   // a root: FadeStateCS updated its listing this frame (else no DCLF verdict)
+	constexpr std::uint32_t kVisibilityBitFadeHidden = 1u << 3;  // an object: in view, dropped by its root's fade (T7f's dry-run attribution)
 	// The list's header: the count appended (past the capacity: what the list grows to), the scene frame; two words spare.
 	constexpr std::uint32_t kVisibilityEventHeaderWords = 4;
 	constexpr std::uint32_t kInitialVisibilityEvents = 4096;
@@ -353,10 +362,12 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kViewReflection = 1u << 7;     // the water reflection's faces
 	constexpr std::uint32_t kViewDecal = 1u << 8;          // a decal: the colour segment's fixed ordinal slots, and no other view's
 	constexpr std::uint32_t kViewForward = 1u << 9;        // T7d: a forward object: the colour segment's forward range, and no other view's
+	constexpr std::uint32_t kViewRefraction = 1u << 10;    // T7d: a refraction object (kRasterRefraction): the refraction range, and no other view's
+	constexpr std::uint32_t kViewFirstPerson = 1u << 11;   // T7e: a first-person member (kSetFirstPerson): the first-person view's alone, no world view's
 	// The main segments' views of the one main list (U4a): the depth segment culls every candidate; the colour segment draws the
 	// members and writes every decal's slot (an undrawable one's blank).
 	constexpr std::uint32_t kDepthViewBits = kViewMainCull;
-	constexpr std::uint32_t kColourViewBits = kViewMain | kViewDecal | kViewForward;
+	constexpr std::uint32_t kColourViewBits = kViewMain | kViewDecal | kViewForward | kViewRefraction;
 	static_assert(offsetof(DrawInput, view) == 16 && offsetof(DrawInput, shadowRow) == 52 && offsetof(DrawInput, fadeDistance) == 60);
 	// The main sequence buffer's ranges (Resources::sequenceDraws, sequenceDecals): phase 1 and the colour segment's draws,
 	// then phase 2's (the CPU records where its draw starts, so the two need ranges fixed in advance rather than one shared
@@ -386,6 +397,12 @@ namespace DCLF::Draws
 	 * both halves together within the range: ReserveMainSequences).
 	 */
 	constexpr const char* kForwardSortShader = "DrawcallLimitFix/ForwardSortCS.hlsl";
+	/*
+	 * T7d's refraction: the refraction range (Records.h, kRasterRefraction), after the forward range's two halves: every draw the
+	 * refraction pipeline slots can produce (MainSizing::refractionCapacity, grown like the forward range), each a pooled sequence (its
+	 * draw a plain indexed draw from the index pool, its slot its first instance: StoreShadowSequence's) appended by the colour segment's
+	 * BuildDraws, drawn by the forward epoch's RefractionDrawPass into the refraction normals with one plain indexed indirect draw.
+	 */
 	// BuildDrawsLatch::bucketMapOffset's entries: a terrain group 1 slot's bucket (PlanZBuckets), whose twin, the next bucket, takes the
 	// slot's near blocks (BuildDrawsLatch::terrainNear).
 	constexpr std::uint32_t kBucketTerrainPair = 1u << 31;
@@ -455,8 +472,12 @@ namespace DCLF::Draws
 		// forwardCapacity), which the forward inputs' visible draws are appended to with their view depth. 0 capacity elsewhere.
 		std::uint32_t forwardBase;
 		std::uint32_t forwardCapacity;
+		// T7d's refraction, the colour segment: the refraction range's capacity (PassFrame::refractionCapacity; its first slot is right after
+		// the forward halves, forwardBase + 2 * forwardCapacity: RefractionSlot), which the refraction inputs' visible draws are appended
+		// to, pooled (poolFirstsIndex). 0 elsewhere.
+		std::uint32_t refractionCapacity;
 	};
-	static_assert(sizeof(BuildDrawsConstants) == 124);
+	static_assert(sizeof(BuildDrawsConstants) == 128);
 	constexpr std::uint32_t kBuildDrawsConstantWords = sizeof(BuildDrawsConstants) / 4;
 
 	/**

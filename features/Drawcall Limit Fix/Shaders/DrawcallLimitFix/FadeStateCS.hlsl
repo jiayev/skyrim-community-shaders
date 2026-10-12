@@ -117,7 +117,7 @@ struct FadeLogEntry
 // The placement rows (LightingConstants.h, BindlessPlacement).
 struct PlacementRows
 {
-	float4 Rows[9];
+	float4 Rows[10];
 };
 
 static const uint kFadeFlagFadedIn = 1u << 14;
@@ -430,15 +430,24 @@ bool MergeSeed(uint a_slot, inout FadeRootStatic a_root)
 	return true;
 }
 
-// The cull test of the root's program (kPortalNoProgram, or no programs: the frustum alone).
+// The cull test without a program: the frustum, after the node flags Process1 tests first (AE 0x140e28390): a preprocessed node
+// passes unless kNotVisible, an always-draw node passes untested (T7f: kAccumulated is this verdict, as the engine's cull sets it).
+bool FrustumInView(float3 a_centre, float a_radius, uint a_rootBits)
+{
+	if ((a_rootBits & kFadeRootPreprocessed) != 0u)
+		return (a_rootBits & kFadeRootPreprocessHidden) == 0u;
+	return (a_rootBits & kFadeRootAlwaysDraw) != 0u || InView(a_centre, a_radius);
+}
+
+// The cull test of the root's program (kPortalNoProgram, or no programs: the frustum alone, FrustumInView).
 bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits, uint a_program)
 {
 	if (ProgramsIndex == 0)
-		return InView(a_centre, a_radius);
+		return FrustumInView(a_centre, a_radius, a_rootBits);
 	ByteAddressBuffer programs = ResourceDescriptorHeap[ProgramsIndex];
 	const int test = PortalTest(programs, a_program, a_centre, a_radius, (a_rootBits & kFadeRootAlwaysDraw) != 0u, (a_rootBits & kFadeRootPreprocessed) != 0u,
 		(a_rootBits & kFadeRootPreprocessHidden) != 0u);
-	return test < 0 ? InView(a_centre, a_radius) : test != 0;
+	return test < 0 ? FrustumInView(a_centre, a_radius, a_rootBits) : test != 0;
 }
 
 // The fade write-back (drawcall-limit-fix.md, "The fade write-back", "T7b4/T7b6"): the engine reads a stood-in root's node (the

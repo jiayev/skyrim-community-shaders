@@ -30,6 +30,7 @@ namespace DCLF
 		constexpr const char* kSourcePath = "Data/Shaders/Lighting.hlsl";
 		constexpr const char* kUtilitySourcePath = "Data/Shaders/Utility.hlsl";
 		constexpr const char* kDistantTreeSourcePath = "Data/Shaders/DistantTree.hlsl";
+		constexpr const char* kEffectSourcePath = "Data/Shaders/Effect.hlsl";  // T7d's Effect port (FindEffect)
 		// DistantTree's descriptors (ShaderCache.h, DistantTreeShaderTechniques and DistantTreeShaderFlags): the technique in bit 0
 		// (1: Depth), Deferred and AlphaTest, as the engine's main view draws tree LOD (BSDistantTreeShader::SetupTechnique).
 		constexpr std::uint32_t kDistantTreeDepth = 1, kDistantTreeDeferred = 1u << 8, kDistantTreeAlphaTest = 1u << 16;
@@ -245,7 +246,8 @@ namespace DCLF
 			Shadow,
 			TreeLod,
 			Forward,
-			ForwardTreeLod
+			ForwardTreeLod,
+			Effect  // T7d's Effect port (FindEffect)
 		};
 		struct StageWaiter
 		{
@@ -284,6 +286,16 @@ namespace DCLF
 #endif
 		std::uint8_t remaining = 0;
 		std::unique_ptr<ForwardProgram> program;
+		bool failed = false;
+	};
+
+	struct ShaderPrograms::EffectEntry
+	{
+#if defined(DCLF_HAS_SHADER_COMPILER)
+		std::array<StagePtr, 2> stages;  // vertex, pixel
+#endif
+		std::uint8_t remaining = 0;
+		std::unique_ptr<Program> program;  // vertex and pixel alone
 		bool failed = false;
 	};
 
@@ -354,9 +366,19 @@ namespace DCLF
 			else
 				logger::warn("[DCLF] {} is missing; tree LOD stays native", kDistantTreeSourcePath);
 		}
+		{
+			std::ifstream effect(kEffectSourcePath, std::ios::binary);
+			std::vector<char> effectBytes((std::istreambuf_iterator<char>(effect)), std::istreambuf_iterator<char>());
+			effectSource.resize(effectBytes.size());
+			if (!effectBytes.empty())
+				std::memcpy(effectSource.data(), effectBytes.data(), effectBytes.size());
+			else
+				logger::warn("[DCLF] {} is missing; effect meshes stay native", kEffectSourcePath);
+		}
 #if defined(DCLF_HAS_SHADER_COMPILER)
 		if (auto* compiler = RenderGraphRuntime::Get().ShaderCompiler()) {
 			sourceFingerprint = compiler->FingerprintInputs(source, dependencies);
+			effectFingerprint = effectSource.empty() ? 0 : compiler->FingerprintInputs(effectSource, dependencies);
 			pulledFingerprint = pulledSource.empty() ? 0 : compiler->FingerprintInputs(pulledSource, dependencies);
 			utilityFingerprint = utilitySource.empty() ? 0 : compiler->FingerprintInputs(utilitySource, dependencies);
 			distantTreeFingerprint = distantTreeSource.empty() ? 0 : compiler->FingerprintInputs(distantTreeSource, dependencies);
@@ -427,7 +449,8 @@ namespace DCLF
 				std::string text;
 				for (const auto& define : request.defines)
 					text += fmt::format(" -D {}{}{}", Util::WStringToString(define.name), define.value.empty() ? "" : "=", Util::WStringToString(define.value));
-				logger::info("[DCLF] SPIR-V build of {} {}{} {:08X} defines:{}", a_sourceName == kSourcePath ? "Lighting" : a_sourceName == kUtilitySourcePath ? "Utility" : "DistantTree",
+				logger::info("[DCLF] SPIR-V build of {} {}{} {:08X} defines:{}",
+					a_sourceName == kSourcePath ? "Lighting" : a_sourceName == kUtilitySourcePath ? "Utility" : a_sourceName == kEffectSourcePath ? "Effect" : "DistantTree",
 					a_pixel ? (a_depthOnly ? "PS (depth)" : "PS") : "VS", a_pulled ? " (pulled)" : "", a_descriptor, text);
 			}
 			const auto shift = [&](const wchar_t* a_flag, std::uint32_t a_value) {
@@ -474,9 +497,11 @@ namespace DCLF
 		{
 			const bool utility = shader.shaderType.get() == RE::BSShader::Type::Utility;
 			const bool distantTree = shader.shaderType.get() == RE::BSShader::Type::DistantTree;
-			pulled = pulled || utility || distantTree;
+			// T7d's Effect port: Effect.hlsl's builds, never pulled (FindEffect).
+			const bool effect = shader.shaderType.get() == RE::BSShader::Type::Effect;
+			pulled = !effect && (pulled || utility || distantTree);
 			const std::uint64_t key = descriptor | (std::uint64_t(pixel) << 32) | (std::uint64_t(depth) << 33) | (std::uint64_t(utility) << 34) |
-			                          (std::uint64_t(pulled) << 35) | (std::uint64_t(distantTree) << 36);
+			                          (std::uint64_t(pulled) << 35) | (std::uint64_t(distantTree) << 36) | (std::uint64_t(effect) << 37);
 			{
 				std::lock_guard lock(mutex);
 				if (const auto found = stages.find(key); found != stages.end())
@@ -490,7 +515,7 @@ namespace DCLF
 					return found->second;
 			}
 			if (!owner.Enabled() || !owner.LoadSources() || (utility && owner.utilitySource.empty()) || (distantTree && owner.distantTreeSource.empty()) ||
-				(pulled && !utility && !distantTree && owner.pulledSource.empty()))
+				(effect && owner.effectSource.empty()) || (pulled && !utility && !distantTree && owner.pulledSource.empty()))
 				return {};
 			auto* compiler = RenderGraphRuntime::Get().ShaderCompiler();
 			if (configured != compiler) {
@@ -503,9 +528,11 @@ namespace DCLF
 			// A VS shared by several PS permutations must not rescan the shader tree each time.
 			auto stage = std::make_shared<Stage>();
 			stage->key = key;
-			RequestStage(*compiler, stage, utility ? owner.utilitySource : distantTree ? owner.distantTreeSource : pulled ? owner.pulledSource : owner.source,
-				owner.dependencies, utility ? owner.utilityFingerprint : distantTree ? owner.distantTreeFingerprint : pulled ? owner.pulledFingerprint : owner.sourceFingerprint,
-				shader, pixel, descriptor, depth, pulled, utility ? kUtilitySourcePath : distantTree ? kDistantTreeSourcePath : kSourcePath);
+			RequestStage(*compiler, stage,
+				utility ? owner.utilitySource : distantTree ? owner.distantTreeSource : effect ? owner.effectSource : pulled ? owner.pulledSource : owner.source,
+				owner.dependencies,
+				utility ? owner.utilityFingerprint : distantTree ? owner.distantTreeFingerprint : effect ? owner.effectFingerprint : pulled ? owner.pulledFingerprint : owner.sourceFingerprint,
+				shader, pixel, descriptor, depth, pulled, utility ? kUtilitySourcePath : distantTree ? kDistantTreeSourcePath : effect ? kEffectSourcePath : kSourcePath);
 			{
 				std::lock_guard lock(mutex);
 				stages.emplace(key, stage);
@@ -630,6 +657,34 @@ namespace DCLF
 				*a_onDemand = it->second->onDemand;
 #else
 			(void)a_lighting;
+			it->second->failed = true;
+#endif
+			laneStats.requested.fetch_add(1, std::memory_order_relaxed);
+		}
+		if (a_failed)
+			*a_failed = it->second->failed;
+		return it->second->program.get();
+	}
+
+	const ShaderPrograms::Program* ShaderPrograms::FindEffect(const PipelineKey& a_key, RE::BSShader& a_effect, bool* a_failed)
+	{
+		if (a_failed)
+			*a_failed = false;
+		if (!Enabled())
+			return nullptr;
+		const std::uint64_t id = EffectProgramId(a_key);
+		auto [it, inserted] = effectEntries.try_emplace(id);
+		if (inserted) {
+			it->second = std::make_unique<EffectEntry>();
+#if defined(DCLF_HAS_SHADER_COMPILER)
+			auto& entry = *it->second;
+			entry.stages = { stages->Request(*this, a_effect, false, a_key.vertexDescriptor), stages->Request(*this, a_effect, true, a_key.pixelDescriptor) };
+			if (!stages->Await(StageUser::Effect, id, entry.stages, entry.remaining)) {
+				entry.failed = true;
+				laneStats.failed.fetch_add(1, std::memory_order_relaxed);
+			}
+#else
+			(void)a_effect;
 			it->second->failed = true;
 #endif
 			laneStats.requested.fetch_add(1, std::memory_order_relaxed);
@@ -817,6 +872,7 @@ namespace DCLF
 			case StageUser::TreeLod: return treeLodEntry->remaining;
 			case StageUser::Forward: return forwardEntries.find(a_waiter.id)->second->remaining;
 			case StageUser::ForwardTreeLod: return forwardTreeLodEntry->remaining;
+			case StageUser::Effect: return effectEntries.find(a_waiter.id)->second->remaining;
 			case StageUser::Lighting: break;
 			}
 			return entries.find(a_waiter.id)->second->remaining;
@@ -894,6 +950,29 @@ namespace DCLF
 			case StageUser::ForwardTreeLod:
 				finishForward(*forwardTreeLodEntry, "DistantTree");
 				a_finished.forwardTreeLod = true;
+				continue;
+			case StageUser::Effect:
+				{
+					// T7d's Effect port: Effect.hlsl's vertex and pixel stages, a Program of those two alone.
+					auto& entry = *effectEntries.find(waiter.id)->second;
+					const auto& vertex = ArtifactOf(entry.stages[0]);
+					const auto& pixel = ArtifactOf(entry.stages[1]);
+					if (!vertex || !pixel) {
+						entry.failed = true;
+						laneStats.failed.fetch_add(1, std::memory_order_relaxed);
+						if (loggedFailures++ < kMaxLoggedFailures)
+							logger::warn("[DCLF] SPIR-V build of Effect {} {:08X} failed; its effect meshes stay native:\n{}", !vertex ? "VS" : "PS",
+								static_cast<std::uint32_t>(!vertex ? (waiter.id >> 32) & 0x7FFFFFFFu : waiter.id), (!vertex ? vertex : pixel).diagnostics.substr(0, 1500));
+					} else {
+						Program program;
+						program.vertex = vertex.binary;
+						program.pixel = pixel.binary;
+						entry.program = std::make_unique<Program>(std::move(program));
+						laneStats.ready.fetch_add(1, std::memory_order_relaxed);
+						laneStats.fromCache.fetch_add((vertex.fromCache ? 1u : 0u) + (pixel.fromCache ? 1u : 0u), std::memory_order_relaxed);
+					}
+					a_finished.effect.push_back(waiter.id);
+				}
 				continue;
 			case StageUser::Lighting:
 				break;

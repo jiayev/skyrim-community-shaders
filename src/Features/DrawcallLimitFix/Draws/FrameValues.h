@@ -79,6 +79,12 @@ namespace DCLF
 		bool Kick(std::vector<std::shared_ptr<const SceneStore::PlacementPlan>> a_plans, std::vector<SceneStore::ShadingItem> a_shading,
 			std::vector<SceneStore::WetnessValue> a_wetness, std::vector<SceneStore::FadeSeedItem> a_seeds, std::vector<SceneStore::TreeSeedItem> a_treeSeeds,
 			std::shared_ptr<const FrameGlobals> a_globals, FrameUploads a_uploads = {});
+		/**
+		 * @brief T7e, render thread, before Kick: the claims whose first-person members the frame draws (null: none, the first-person
+		 * epochs do not draw this frame). Kick samples those members' rows and skin palettes itself, before Main::Draw moves the
+		 * first-person skeleton into its root's space (FUN_1414cb020); the producer never samples a first-person item.
+		 */
+		void SetFirstPersonClaims(std::shared_ptr<const SetSnapshot> a_claims) { firstPersonClaims = std::move(a_claims); }
 		/** @brief Render thread: a frame with no producer (DCLF not running): no batch waits for one. */
 		void Skip();
 		/** @brief Render thread, at Present: the GPU point of everything the frame submitted (its ring buffers' readers). */
@@ -125,5 +131,6 @@ namespace DCLF
 		struct Impl;
 		std::unique_ptr<Impl> impl;
 		std::uint32_t frameIndex = 0, paletteIndex = 0, shadingIndex = 0, seedsIndex = 0, treeSeedsIndex = 0;
+		std::shared_ptr<const SetSnapshot> firstPersonClaims;  // T7e: SetFirstPersonClaims
 	};
 }

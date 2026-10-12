@@ -2366,7 +2366,7 @@ namespace DCLF
 
 	void IndirectDraws::Impl::ShadowsNotDrawn(IndirectDraws::ShadowStats& a_stats)
 	{
-		if (const auto set = PassCapture::Get().CurrentSet(); set && (set->drawn & (kSetCaster | kSetCasterPoint)) && PassCapture::ShadowWithholdingEnabled())
+		if (const auto set = SceneStore::Get().FrameClaims(); set && (set->drawn & (kSetCaster | kSetCasterPoint)) && PassCapture::ShadowWithholdingEnabled())
 			++a_stats.notReadyWithheld;
 	}
 

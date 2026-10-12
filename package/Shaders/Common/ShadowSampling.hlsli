@@ -66,7 +66,13 @@ namespace ShadowSampling
 
 	float Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 screenPosition, out float surfaceShadow)
 	{
-#if defined(EFFECT)
+#if defined(EFFECT) && defined(DCLF_BINDLESS)
+		// Drawcall Limit Fix: EffectRadius (Community Shaders' BSEffectShader::SetupGeometry hook: the geometry's world bound radius) is the
+		// object's placement row's bound (DCLFObjects.hlsli), not the pipeline row's permutation block.
+		float viewRayLength = min(DCLFPlacements[DCLFObjectIndex].Bound.w * 0.2, 256);
+		float3 startPosition = positionWS - viewDirection * viewRayLength;
+		float3 endPosition = positionWS + viewDirection * viewRayLength;
+#elif defined(EFFECT)
 		float viewRayLength = min(Permutation::EffectRadius * 0.2, 256);
 		float3 startPosition = positionWS - viewDirection * viewRayLength;
 		float3 endPosition = positionWS + viewDirection * viewRayLength;

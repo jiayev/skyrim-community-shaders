@@ -68,6 +68,9 @@ struct DCLFPlacement
 	// The fade node's world bound centre, and in w its LOD type plus 16 (kLodFadeHeld) when its LOD fades do not apply; w < 0
 	// without one.
 	float4 LodFadeNode;
+	// T7d's ordered-node interleave: the nearest BSOrderedNode's world bound centre over a blended leaf, and its ordinal under it (the
+	// bits of a uint) in w; 0 under none. Read by the forward sort alone (BuildDrawsCS.hlsl).
+	float4 ForwardSort;
 };
 
 #	if defined(DCLF_PULLED)
@@ -252,6 +255,58 @@ float2 DCLFWindTimersOf(uint a_object)
 	uint entry;
 	return DCLFTreeWindEntry(a_object, entry) ? DCLFTreeWind[entry * 3u + 1u].xy : DCLFShading[a_object].DCLFShadingWindTimers.xy;
 }
+
+#	if defined(PSHADER)
+// The pixel stages' (Lighting.hlsl's MaterialData.z, Effect.hlsl's PropertyColor.w): the vertex stages bind no t119 or t120.
+// FadeStateCS's rows (Records.h, FadeNodeState and FadeRootStatic), the frame record's t120 and t119 (DrawPipelines.h,
+// kFadeStatesRegister, kFadeRootsRegister): the states the frame's builds read, and the roots' static rows.
+struct DCLFFadeNodeState
+{
+	uint Flags;
+	float CurrentFade;
+	float SnapRadius;
+	int LastVisible;
+	float AmountFade;
+	float Metric;
+	float PreviousMetric;
+	float Blend;
+	uint Levels;
+	uint Generation;
+	uint Verdict;
+	uint Frame;
+};
+struct DCLFFadeRootStatic
+{
+	DCLFFadeNodeState Initial;
+	float Radius;
+	float FadeAmount;
+	float NearDistance;
+	float FarDistance;
+	uint Object;
+	uint Bits;
+	float LodScale;
+	uint Generation;
+};
+StructuredBuffer<DCLFFadeNodeState> DCLFFadeStates : register(t120);
+StructuredBuffer<DCLFFadeRootStatic> DCLFFadeRoots : register(t119);
+// What GetRenderPasses and SetupGeometry put on a pass's alpha (MaterialData.z): the property's alpha times its fade node's
+// currentFade, and for a LOD cross-fade's copy (the draw's object word bit 30: BuildDrawsCS, kObjectCrossfadeCopy) the
+// cross-fade factor (+0x14C) instead. T1c: from the object's fade root (DCLFRecordFlags bits 8-31, its slot + 1) in
+// FadeStateCS's state; 1 without a root, or with a row the frame does not hold (generation 0: none bound, or freed).
+float DCLFAlphaFade(uint a_object, bool a_copy)
+{
+	const uint root = DCLFObjects[a_object].DCLFRecordFlags >> 8;
+	if (root == 0)
+		return 1;
+	const DCLFFadeRootStatic row = DCLFFadeRoots[root - 1];
+	if (row.Generation == 0)
+		return 1;
+	DCLFFadeNodeState state = DCLFFadeStates[root - 1];
+	if (state.Generation != row.Generation)
+		state = row.Initial;
+	return a_copy ? state.Blend : state.CurrentFade;
+}
+#	endif  // PSHADER
 
 #endif  // DCLF_BINDLESS
 #endif  // __DCLF_OBJECTS_DEPENDENCY_HLSL__

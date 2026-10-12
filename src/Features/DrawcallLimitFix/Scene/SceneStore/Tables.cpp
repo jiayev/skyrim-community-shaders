@@ -118,7 +118,7 @@ namespace DCLF
 		if (a_rows && boneRows[a_slot] == a_rows)
 			return boneOffset[a_slot];
 		FreeBones(a_slot);
-		auto& free = boneFree[std::min<std::size_t>(a_rows / 3, boneFree.size() - 1)];
+		auto& free = BoneFreeList(a_rows);
 		std::uint32_t offset;
 		if (!free.empty()) {
 			offset = free.back();
@@ -233,6 +233,7 @@ namespace DCLF
 			boneOffset.clear();
 			boneRows.clear();
 			boneFree = {};
+			boneFreeOther.clear();
 			boneTop = 0;
 			boneCapacity = 0;
 			extraOffset.clear();
@@ -338,6 +339,7 @@ namespace DCLF
 		boneOffset.clear();
 		boneRows.clear();
 		boneFree = {};
+		boneFreeOther.clear();
 		boneTop = 0;
 		boneCapacity = 0;
 		extraRows.clear();

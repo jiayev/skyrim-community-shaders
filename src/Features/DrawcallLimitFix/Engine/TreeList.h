@@ -25,12 +25,13 @@ namespace DCLF::TreeList
 	 * or BSLeafAnimNode's), the trees' positions (the tree seeds), DCLF's camera (PrimaryCull's list camera of the frame) and the
 	 * visibility readback's root verdicts. It never reads the engine's cull or registration results.
 	 *
-	 * CS_DCLF_TREE_PARITY (a parity, off by default; nothing is installed without it): FUN_140437e50's call is detoured. After it the
-	 * main thread samples, at that safe point (no list cull or cell animation runs; the engine's lists under their own locks), the
+	 * FUN_140437e50's call is detoured always: around it TreeAnimation gives the loop the stood-in trees' multibound results from DCLF's
+	 * verdicts and puts the engine's back (T7b5's fix; TreeAnimation.h). CS_DCLF_TREE_PARITY (a parity, off by default; no sample
+	 * without it): after the call, before the engine's values are put back, the main thread samples, at that safe point (no list cull or cell animation runs; the engine's lists under their own locks), the
 	 * engine's answer (each list's nodes, the multibound results, the near list, the distances, kAccumulated) and DCLF's inputs from
 	 * the frame's tables. The visibility decode compares them when it reaches the frame (the tree manager reads the cull of the last
-	 * scene frame), exactly: `<- TREE MANAGER`. The engine's behaviour is unchanged (the observer's time is given back to the
-	 * manager's budget).
+	 * scene frame), exactly: `<- TREE MANAGER` (a stood-in tree aside: its result is DCLF's written verdict). The observer changes
+	 * nothing of the engine's behaviour (its time is given back to the manager's budget).
 	 */
 	void Install();
 	bool Installed();

@@ -203,6 +203,40 @@ private:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		/**
+		 * @brief T7d's refraction: Main::Draw's refraction point (AE 0x140644d20, its call of FUN_1414b4840: the main accumulator's
+		 * geometry group 5 count, which decides whether FUN_1414ce1d0 draws the refraction normals, FUN_1414b4860). When DCLF's forward
+		 * epoch drew them this frame (it marked them begun, so the engine's draw adds to them), group 6 is cleared first: the engine never
+		 * draws it there (the normals are never begun at that point without DCLF), and still clears it, as FUN_1414b4860 does.
+		 */
+		struct Main_Draw_RefractionCheck
+		{
+			static std::uint32_t thunk(void* a_accumulator);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		/**
+		 * @brief T7e: RenderDepth's first-person draw (AE 0x1414cd47e, RenderDepth +0x94E: FUN_1414a90f0(first-person camera, the Z-prepass's
+		 * accumulator, 3), after the root's cull with the first-person camera and before kPOST_ZPREPASS_COPY): DCLF's first-person depth
+		 * epoch first (IndirectDraws::ExecuteFirstPersonDepth), then the engine's draw of what it still registers.
+		 */
+		struct RenderDepth_FirstPersonDraw
+		{
+			static void thunk(void* a_camera, void* a_accumulator, std::uint32_t a_flags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		/**
+		 * @brief T7e: Main::RenderFirstPersonView's accumulator render (AE 0x1414cb7d1, FUN_1414cb6d0 +0x101: FUN_1414a90f0(first-person
+		 * camera, the first-person accumulator, firstPerson << 4 | 0x43), its targets and depth range set): DCLF's first-person colour epoch
+		 * first (IndirectDraws::ExecuteFirstPersonColour), then the engine's residue (effects, particles, anything not DCLF's).
+		 */
+		struct RenderFirstPersonView_Draw
+		{
+			static void thunk(void* a_camera, void* a_accumulator, std::uint32_t a_flags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		/** @brief The call sites of BSBatchRenderer::RenderPassImmediately, as Light Limit Fix hooks them. */
 		template <int N>
 		struct BSBatchRenderer_RenderPassImmediately
@@ -230,6 +264,7 @@ private:
 	// Why DCLF is off for the session (not AE, or the render graph could not come up); shown in the menu.
 	std::string unavailableReason;
 	bool inDepthPass = false;
+	bool depthControlDriven = false;  // T7e: RenderDepth's second argument (the first-person depth range's choice)
 	std::uint32_t captureFrame = ~0u;  // the frame whose main-pass bindings have been captured
 	std::uint32_t parityFrame = ~0u;   // the frame CS_DCLF_CAPTURE_POINT_PARITY last checked
 	bool loggedCaptureFailure = false;

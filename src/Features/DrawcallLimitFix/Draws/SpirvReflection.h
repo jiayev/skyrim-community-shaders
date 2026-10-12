@@ -51,6 +51,8 @@ namespace DCLF
 		std::vector<Input> inputs;
 		std::vector<Binding> bindings;
 		std::vector<BlockMember> blockMembers;
+		// The stage outputs' locations, a bit each (a pixel stage's: the colour attachments it writes; DXC's "out.var.SV_Target<n>").
+		std::uint32_t outputLocations = 0;
 
 		/** @brief Parses a module; false if it is not SPIR-V. */
 		bool Parse(std::span<const std::byte> a_spirv);

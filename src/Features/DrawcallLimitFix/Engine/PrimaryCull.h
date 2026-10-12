@@ -113,6 +113,12 @@ namespace DCLF
 		 */
 		std::array<float, 4> FadeEye() const { return fadeEye; }
 		/**
+		 * @brief T7f preparation, render thread, BeginSceneFrame (Main::Draw's camera setup done, before the list build and the culls): the
+		 * frame's camera duties - FadeEye, T7b2's camera cut (IndirectDraws::NoteCameraCut), TreeHeightTest - from the main camera, so
+		 * nothing DCLF needs depends on the engine's list processes running (they were PrepareFrame's, at the sun's call site).
+		 */
+		void BeginFrameCamera();
+		/**
 		 * @brief T7b2, the main thread at Main::Update's entry (DrawcallLimitFix's hook; the safe point: the last frame's job cycle was
 		 * waited for, this one's not started, so no list cull, cell animation or animation job writes the flags): the stood-in roots'
 		 * and their geometry's kAccumulated written from DCLF's visibility (IndirectDraws::WriteAccumulated), every reader seeing it this
@@ -541,9 +547,12 @@ namespace DCLF
 		std::uint32_t frameSunBits = 0;  // the sun's cascade bits this frame (AfterListJobs), for CheckLightMasks
 		std::vector<const RE::BSGeometry*> frameVisible;  // this frame's members in view under stood-in entries
 		std::vector<const RE::NiAVObject*> switchChanges;  // scratch: SceneStore::TakeSwitchChanges
-		std::array<float, 4> fadeEye{};  // FadeEye, captured in PrepareFrame
+		std::array<float, 4> fadeEye{};  // FadeEye, captured in BeginFrameCamera
+		// BeginFrameCamera's camera, and CS_DCLF_ACCUMULATED_PARITY's check in PrepareFrame: frames the list processes carried another.
+		const void* frameCamera = nullptr;
+		std::uint64_t frameCameraChecked = 0, frameCameraDiffer = 0;
 		std::shared_ptr<const SetSnapshot> frameSet;  // the frame's set, for Owned (PrepareFrame)
-		std::array<float, 2> treeHeight{ 0.0f, std::numeric_limits<float>::infinity() };  // TreeHeightTest, captured in PrepareFrame
+		std::array<float, 2> treeHeight{ 0.0f, std::numeric_limits<float>::infinity() };  // TreeHeightTest, captured in BeginFrameCamera
 		// The animation job's fade updates (FUN_1402cff60's call of FUN_14147a160, Hooks::AnimatedFade): the nodes since the last
 		// list jobs, with the inputs they were made with; at the list jobs' end they become the batch FadeStateCS applies before this
 		// frame's cull test (TakeAnimatedBatch).
@@ -593,7 +602,7 @@ namespace DCLF
 		std::string fadeDoubleFirst;
 		/** @brief Main::Update's entry: the writer set published, and CS_DCLF_FADE_PARITY's sample judged and taken again. */
 		void PublishFadeWriters(bool a_running, const std::vector<const void*>& a_stored);
-		// T7b2's camera cut test (PrepareFrame, the list processes' camera): the last frame's position and rotation.
+		// T7b2's camera cut test (BeginFrameCamera, the main camera): the last frame's position and rotation.
 		std::array<float, 12> cutCamera{};
 		bool cutCameraKnown = false;
 		/** @brief SceneStore::SetFadeRootsOwned from the current snapshot's admitted fade entries. */

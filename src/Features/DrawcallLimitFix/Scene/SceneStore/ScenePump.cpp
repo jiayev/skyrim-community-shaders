@@ -627,9 +627,10 @@ namespace DCLF
 				traits.empty() ? "-" : traits, stats.lightPlaced / fullPasses, stats.moveEvents / fullPasses, MoveEventsLive() ? "" : ", not installed",
 				stats.lightSkins / fullPasses, stats.perFrameRelookups, wholePasses);
 			if (stats.verdictsChecked || stats.verdictsSkipped)
-				logger::info("[DCLF] actor frame verdicts per pass: {:.0f} taken again, {:.0f} left for want of a hidden event ({:.0f} hidden events, {:.1f} statics classified again for one{}); {} changed with no event{}{}",
+				logger::info("[DCLF] actor frame verdicts per pass: {:.0f} taken again, {:.0f} left for want of a hidden event ({:.0f} hidden events, {:.1f} statics classified again for one, "
+							 "{} announced again at a newer frame capture{}); {} changed with no event{}{}",
 					stats.verdictsChecked / fullPasses, stats.verdictsSkipped / fullPasses, stats.hiddenEvents / fullPasses, stats.hiddenRetaken / fullPasses,
-					HiddenEventsLive() ? "" : ", not installed", stats.verdictsMissed, stats.verdictsMissed ? " <- MISSED; first: " : " <- OK", stats.firstVerdictMissed);
+					stats.hiddenAheadAnnounced, HiddenEventsLive() ? "" : ", not installed", stats.verdictsMissed, stats.verdictsMissed ? " <- MISSED; first: " : " <- OK", stats.firstVerdictMissed);
 			if (stats.inputRereads[0] || stats.inputRereads[1]) {
 				std::string components;
 				for (std::size_t i = 0; i < stats.inputChanged.size(); ++i)

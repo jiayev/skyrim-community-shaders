@@ -178,6 +178,20 @@ namespace DCLF
 	};
 	static_assert(sizeof(ExtrasFrame) == 96);
 	inline constexpr std::size_t kExtrasFrameVertexBytes = offsetof(ExtrasFrame, projectedGlobals);
+	/**
+	 * @brief T7d's Effect port: the current camera's planes as BSEffectShader::SetupTechnique (0x1414ea2c0) takes them for a Soft pass (the
+	 * camera at 0x14332a328: near +0x160, far +0x164): far, near, far - near (CameraDataEffect.yz), 0. Sampled by each main commit (render
+	 * thread) into the frame lighting block after the extras' pixel row (PS b13 c17: Effect.hlsl, DCLFEffectCamera); zero without a camera.
+	 */
+	std::array<float, 4> SampleEffectCamera();
+	/**
+	 * @brief T7d's Effect port, the Lighting variant: PS DLightColor as BSEffectShader::SetupGeometry (0x1414eab10) writes it for a pass with
+	 * the Lighting bit and a light: its light 0 (FUN_1414fcf80: the scene's sun light, ShadowSceneNode[0] +0x200, for a property without
+	 * kCloudLOD), its NiLight's fade (+0x134) times the HDR multiplier (ImageSpaceManager +0xe0), then each channel of its
+	 * NiDirectionalLight +0x14c colour (the weather's effect lighting); w 0 (not written). Sampled by each main commit (render thread) into
+	 * the frame lighting block after the effect camera (PS b13 c18: Effect.hlsl, DCLFEffectDLightColor); zero without a sun light.
+	 */
+	std::array<float, 4> SampleEffectLight();
 	/** @brief This frame's, from the engine's globals (render thread). */
 	ExtrasFrame SampleExtrasFrame();
 	/**
@@ -273,12 +287,46 @@ namespace DCLF
 	 * SSRParams.w for a_pass, and Linear Lighting's multiplier), unwritten components zero; its wetness left as it is. a_member: a
 	 * scene member's (SceneStore's resident records), whose fades are DCLF's (FadeStateCS) and so not in its alpha. Any thread
 	 * inside the engine-read window (plain reads of the property).
+	 *
+	 * T7d's Effect port: a BSEffectShaderProperty's is its PropertyColor (BSEffectShader::SetupGeometry): EmitColor the emittance colour
+	 * (white without one), MaterialData.z the material's alpha for a member (its fade is the draw's, as a Lighting member's), else the
+	 * property's alpha; the rest zero.
 	 */
-	void SampleShading(const RE::BSLightingShaderProperty& a_property, std::uint32_t a_pass, bool a_member, BindlessShading& a_out);
+	void SampleShading(const RE::BSShaderProperty& a_property, std::uint32_t a_pass, bool a_member, BindlessShading& a_out);
 	// BindlessObject::recordFlags (DCLFObjects.hlsli, DCLFRecordFlags): Subsurface Scattering's IsBeastRace (kObjectBeastRace).
 	inline constexpr std::uint32_t kRecordBeastRace = 1u << 0;
 	// ... and an alpha-tested object whose alpha property blends (kObjectAlphaBlended): the depth pass's reference (Utility.hlsl).
 	inline constexpr std::uint32_t kRecordAlphaBlended = 1u << 1;
+	// T7d's refraction (DCLFObjects.hlsli, Utility.hlsl DCLF_REFRACTION): a refraction object (its key's kRasterRefraction), and the
+	// variants of the engine's Utility RENDER_NORMAL technique for it (GetRenderPasses, AE 0x1414adfb0) that its draw takes from here
+	// rather than from its pipeline: RENDER_NORMAL_FALLOFF (kRefractionFalloff), RENDER_NORMAL_CLAMP (kNonProjectiveShadows), no Normals
+	// (kModelSpaceNormals), VC (kVertexColors), and two-sided (kTwoSided: its draw keeps the back faces). Skinned is the record's palette.
+	inline constexpr std::uint32_t kRecordRefraction = 1u << 2;
+	inline constexpr std::uint32_t kRecordRefractionFalloff = 1u << 3;
+	inline constexpr std::uint32_t kRecordRefractionClamp = 1u << 4;
+	inline constexpr std::uint32_t kRecordRefractionNoNormals = 1u << 5;
+	inline constexpr std::uint32_t kRecordRefractionVertexColors = 1u << 6;
+	inline constexpr std::uint32_t kRecordRefractionTwoSided = 1u << 7;
+	/** @brief The kRecordRefraction* bits of an object drawn with a_key: none unless it is a refraction key (kRasterRefraction). */
+	inline constexpr std::uint32_t RefractionRecordFlagsOf(const PipelineKey& a_key)
+	{
+		if (!(a_key.rasterFlags & kRasterRefraction))
+			return 0u;
+		return kRecordRefraction | ((a_key.rasterFlags & kRasterRefractionFalloff) ? kRecordRefractionFalloff : 0u) |
+		       ((a_key.rasterFlags & kRasterRefractionClamp) ? kRecordRefractionClamp : 0u) |
+		       ((a_key.passDescriptor & (1u << 2)) ? kRecordRefractionNoNormals : 0u) |     // the pass's ModelSpaceNormals
+		       ((a_key.passDescriptor & (1u << 0)) ? kRecordRefractionVertexColors : 0u) |  // its VC
+		       ((a_key.rasterFlags & kRasterTwoSided) ? kRecordRefractionTwoSided : 0u);
+	}
+	// T7d's Effect port: External Emittance's suppress bit (kObjectSuppressExternalEmittance) of an effect object, which Effect.hlsl's
+	// Lighting variant reads (DCLFSuppressExternalEmittance). Shares bit 3 with kRecordRefractionFalloff: an effect record never has
+	// kRecordRefraction.
+	inline constexpr std::uint32_t kRecordEffectSuppressEmittance = 1u << 3;
+	/** @brief The kRecordEffectSuppressEmittance bit of an object drawn with a_key: none unless it is an effect key (kRasterEffect). */
+	inline constexpr std::uint32_t EffectRecordFlagsOf(const PipelineKey& a_key, std::uint32_t a_objectFlags)
+	{
+		return RasterEffect(a_key.rasterFlags) && (a_objectFlags & kObjectSuppressExternalEmittance) ? kRecordEffectSuppressEmittance : 0u;
+	}
 	inline constexpr std::uint32_t kRecordFadeRootShift = 8;
 	/** @brief BindlessObject::recordFlags of an object: its flags and its fade root slot (Tables::objectFadeRoot) + 1 in bits 8-31. */
 	inline std::uint32_t RecordFlagsOf(std::uint32_t a_objectFlags, std::uint32_t a_fadeRoot)
@@ -303,11 +351,17 @@ namespace DCLF
 		// The fade node (LodFadeNodeOf): its world bound centre, and in w its LOD type plus kLodFadeHeld when the LOD fades do not
 		// apply; w < 0 without one. The fade-out tests' centre (BuildDrawsCS, FadeStateCS) and the draw's LOD fades' (Lighting.hlsl).
 		float lodFadeNode[4];
+		// T7d's ordered-node interleave (FrameValues::SampleRow): a blended leaf under a BSOrderedNode is drawn in its node's group, at the
+		// node's depth and in the node's child order (FUN_1414b39d0's group stack): the nearest such node's world bound centre, and in w the
+		// leaf's ordinal under it (1 + its index among the node's geometries, depth first in child order: the order its OnVisible appends
+		// them), as the float of that integer's bits; all 0 for a leaf under none. The forward sort's key (BuildDrawsCS, ForwardSortCS).
+		float forwardSort[4];
 	};
-	static_assert(sizeof(BindlessPlacement) == 144);
+	static_assert(sizeof(BindlessPlacement) == 160);
 	// BuildDrawsCS.hlsl and FadeStateCS.hlsl read these by their float4 index in the row (kPlacementBoundRow, kPlacementSunEntryRow,
-	// kPlacementFadeNodeRow).
-	static_assert(offsetof(BindlessPlacement, bound) == 6 * 16 && offsetof(BindlessPlacement, sunEntry) == 7 * 16 && offsetof(BindlessPlacement, lodFadeNode) == 8 * 16);
+	// kPlacementFadeNodeRow, kObjectForwardSortRow).
+	static_assert(offsetof(BindlessPlacement, bound) == 6 * 16 && offsetof(BindlessPlacement, sunEntry) == 7 * 16 && offsetof(BindlessPlacement, lodFadeNode) == 8 * 16 &&
+				  offsetof(BindlessPlacement, forwardSort) == 9 * 16);
 
 	/**
 	 * @brief Where a palette block's rows are in the frame's palettes (FrameValues): the block at a_offset (Tables::boneOffset, in

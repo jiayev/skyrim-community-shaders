@@ -20,6 +20,9 @@ namespace DCLF
 				const auto& entry = a_lookups.pipelines[p];
 				if (entry.setIndex == Lookups::kNone || !(entry.key == keys[p]) || entry.setIndex >= groups.size())
 					continue;
+				// T7d's Effect port: no bucket for an effect key (no forward object is a depth input, and its pipeline has no Z-prepass pipeline).
+				if (RasterEffect(keys[p].rasterFlags))
+					continue;
 				const std::uint32_t group = groups[entry.setIndex];
 				auto& bucket = groupBucket[group];
 				// T7c1: a terrain group 1 slot's group (its depth pipeline's key holds no other: DrawPipelines.cpp, ZPipelineKey) has a twin
@@ -80,6 +83,8 @@ namespace DCLF
 			add(constants, sizeof(FrameFog), FrameSlotOffset(false, kFrameFogRegister));
 			add(constants, kExtrasFrameVertexBytes, FrameSlotOffset(false, kFrameFogRegister) + sizeof(FrameFog));
 			add(constants, sizeof(ExtrasFrame::projectedGlobals), kExtrasPixelFrameOffset);
+			add(constants, sizeof(std::array<float, 4>), kEffectCameraFrameOffset);  // T7d's Effect port (SampleEffectCamera)
+			add(constants, sizeof(std::array<float, 4>), kEffectLightFrameOffset);   // its Lighting variant (SampleEffectLight)
 			if (!a_depthOnly && a_resources.foliage)
 				add(constants, 8 * sizeof(std::uint32_t), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting) + sizeof(LodFadeFrame));
 			if (const auto& scene = *a_resources.scene; a_depthOnly && scene.treeLodCull && scene.treeLodShapes) {
@@ -92,6 +97,7 @@ namespace DCLF
 				add(a_resources.count.get(), sizeof(std::uint32_t), kCountDecalLayerWord * sizeof(std::uint32_t));
 				add(a_resources.count.get(), kTerrainGroups * sizeof(std::uint32_t), kCountTerrainGroupWord * sizeof(std::uint32_t));
 				add(a_resources.count.get(), 4 * sizeof(std::uint32_t), kCountForwardWord * sizeof(std::uint32_t));  // T7d
+				add(a_resources.count.get(), 4 * sizeof(std::uint32_t), kCountRefractionWord * sizeof(std::uint32_t));  // T7d's refraction
 			}
 			if (a_depthOnly && a_resources.pool && a_buckets)
 				for (const auto& counts : a_resources.zBucketCounts)
@@ -123,6 +129,7 @@ namespace DCLF
 			in.sequenceDecals = sizing.sequenceDecals;
 			in.terrainCapacity = sizing.terrainCapacity;
 			in.forwardCapacity = sizing.forwardCapacity;
+			in.refractionCapacity = sizing.refractionCapacity;
 			in.materialRows = a_revision ? a_resources.materialRows.RevisionAddress() : a_resources.materialRows.address;
 			in.pipelineRows = a_revision ? a_resources.pipelineRows.RevisionAddress() : a_resources.pipelineRows.address;
 			in.cullMode = a_cullMode;
@@ -147,6 +154,7 @@ namespace DCLF
 			if (!a_in.depthOnly) {
 				frame->terrainCapacity = a_in.terrainCapacity;
 				frame->forwardCapacity = a_in.forwardCapacity;  // T7d: the colour segment's and the forward epoch's
+				frame->refractionCapacity = a_in.refractionCapacity;  // T7d's refraction: likewise
 			}
 			frame->width = a_in.viewport.width;
 			frame->height = a_in.viewport.height;
@@ -179,7 +187,7 @@ namespace DCLF
 					out |= 1u << a_field;
 			};
 			note(kShapeCapacity, a.drawCapacity != b.drawCapacity || a.decalCapacity != b.decalCapacity || a.terrainCapacity != b.terrainCapacity ||
-			                          a.forwardCapacity != b.forwardCapacity);
+			                          a.forwardCapacity != b.forwardCapacity || a.refractionCapacity != b.refractionCapacity);
 			note(kShapeSequences, a.sequenceDraws != b.sequenceDraws || a.sequenceDecals != b.sequenceDecals);
 			note(kShapeRows, a.materialRows != b.materialRows || a.pipelineRows != b.pipelineRows);
 			note(kShapeViewport, a.width != b.width || a.height != b.height || a.minDepth != b.minDepth || a.maxDepth != b.maxDepth);
@@ -216,6 +224,64 @@ namespace DCLF
 				bucket.first = a_out.draws;
 				a_out.draws += bucket.capacity;
 			}
+		}
+
+		void PlanFirstPersonBuckets(const MainSizing& a_main, const IndirectState& a_indirect, std::span<const rhi::PipelineHandle> a_slotPipelines, FirstPersonPlan& a_out)
+		{
+			// T7e: per pair of a slot's Z-prepass group's depth pipeline and its first-person forward pipeline, the slots drawing with it,
+			// each slot's range what its objects can produce (the Z-prepass's bucket capacity, as the reflection's).
+			const auto slots = static_cast<std::uint32_t>(a_main.zBucketCapacity.size());
+			a_out.map.assign(slots, kNoBucket);
+			a_out.buckets.clear();
+			for (std::uint32_t p = 0; p < slots; ++p) {
+				if (p >= a_slotPipelines.size() || !a_slotPipelines[p].valid() || !a_main.zBucketCapacity[p] || p >= a_indirect.zGroups.size())
+					continue;
+				const std::uint32_t group = a_indirect.zGroups[p];
+				if (group >= a_indirect.zPipelines.size() || !a_indirect.zPipelines[group].valid())
+					continue;
+				const auto depth = a_indirect.zPipelines[group];
+				const auto colour = a_slotPipelines[p];
+				auto it = std::find_if(a_out.buckets.begin(), a_out.buckets.end(),
+					[&](const auto& a_bucket) { return SameHandle(a_bucket.depth, depth) && SameHandle(a_bucket.colour, colour); });
+				if (it == a_out.buckets.end())
+					it = a_out.buckets.insert(a_out.buckets.end(), FirstPersonFrame::Bucket{ depth, colour, 0, 0 });
+				it->capacity += a_main.zBucketCapacity[p];
+				a_out.map[p] = static_cast<std::uint32_t>(it - a_out.buckets.begin());
+			}
+			a_out.draws = 0;
+			for (auto& bucket : a_out.buckets) {
+				bucket.first = a_out.draws;
+				a_out.draws += bucket.capacity;
+			}
+		}
+
+		std::shared_ptr<FirstPersonFrame> MakeFirstPersonShape(const FirstPersonResources& a_resources, const FirstPersonShapeInputs& a_in)
+		{
+			auto frame = std::make_shared<FirstPersonFrame>();
+			frame->resourceHeap = a_in.resourceHeap;
+			frame->samplerHeap = a_in.samplerHeap;
+			frame->indirect = a_in.indirect;
+			frame->latch = a_in.latch;
+			frame->zeros = a_in.zeros;
+			frame->blockOffset = a_in.latchLayout.BlockOffset();
+			frame->width = a_in.width;
+			frame->height = a_in.height;
+			frame->depthRange = a_in.depthRange;
+			frame->materialRows = a_in.materialRows;
+			frame->pipelineRows = a_in.pipelineRows;
+			frame->sequenceDraws = (a_in.sizing ? *a_in.sizing : static_cast<const FirstPersonSizing&>(a_resources)).sequenceDraws;
+			frame->buckets = a_in.buckets;
+			frame->latchLayout = a_in.latchLayout;
+			frame->map = a_in.map;
+			// The colour segment's frame constants (the frame lighting at PS b13, the frame record), VS and PS b12 the first-person
+			// camera's block (the latched copies take it from the latch each frame).
+			frame->push = FramePushWords(a_in.frameConstantsAddress);
+			for (const bool pixel : { false, true })
+				if (const std::uint32_t word = FramePushWord(pixel, kPerFrameVertexRegister); word != ~0u) {
+					frame->push[word] = static_cast<std::uint32_t>(a_resources.blockAddress);
+					frame->push[word + 1] = static_cast<std::uint32_t>(a_resources.blockAddress >> 32);
+				}
+			return frame;
 		}
 
 		std::shared_ptr<ReflectionFrame> MakeReflectionShape(const ReflectionResources& a_resources, const ReflectionShapeInputs& a_in)
@@ -280,6 +346,11 @@ namespace DCLF
 		if (!latches.reflection && inputs.reflection) {
 			latches.reflectionLayout = { 64, 4 };
 			latches.reflection = org::LatchBlock::Create("cs.dclf.reflection.latch", latches.reflectionLayout.Bytes(), host->FrameSlots());
+		}
+		// T7e: the first-person epochs' latch.
+		if (!latches.firstPerson && inputs.firstPerson) {
+			latches.firstPersonLayout = { 64, 4 };
+			latches.firstPerson = org::LatchBlock::Create("cs.dclf.first-person.latch", latches.firstPersonLayout.Bytes(), host->FrameSlots());
 		}
 	}
 
@@ -384,6 +455,17 @@ namespace DCLF
 			PlanReflectionBuckets(Growths::Get().LatestSizing<MainSizing>(r), slotPipelines, latest);
 			// The faces' map for every pipeline slot the tables have, as the Z-prepass's (above).
 			ReserveReflection(*faceState, inputs.scene.get(), static_cast<std::uint32_t>(std::max<std::size_t>(latest.map.size(), a_request.pipelines)),
+				static_cast<std::uint32_t>(latest.buckets.size()), latest.draws);
+		}
+		// T7e: the first-person epochs' pipelines, as the request's catalog has them for its tables, and their buffers for the main sizing's
+		// newest change (as the faces' above).
+		const auto firstPersonState = inputs.firstPerson;
+		const bool firstPersonOn = inputs.toggles.firstPerson && inputs.claims && inputs.firstPersonTargets.colour != DXGI_FORMAT_UNKNOWN;
+		FirstPersonPipelinesOf(catalog, tables, inputs.firstPersonTargets, firstPersonOn, firstPersonRevisionPipelines);
+		if (firstPersonState && firstPersonOn) {
+			FirstPersonPlan latest;
+			PlanFirstPersonBuckets(Growths::Get().LatestSizing<MainSizing>(r), indirect, firstPersonRevisionPipelines, latest);
+			ReserveFirstPerson(*firstPersonState, static_cast<std::uint32_t>(std::max<std::size_t>(latest.map.size(), a_request.pipelines)),
 				static_cast<std::uint32_t>(latest.buckets.size()), latest.draws);
 		}
 		// The shapes are made again only when what they are made from moved (RevisionShapesKey): otherwise the revision sealed at this
@@ -535,6 +617,36 @@ namespace DCLF
 			made.reflection[0] = MakeReflectionShape(*faceState, in);
 			made.reflectionFrames[0] = frameNumber;
 		}
+		// T7e: the first-person epochs', from the first-person resources and the main sizing (the heaps the graph's), the render area the
+		// colour commit's viewport.
+		made.firstPerson[1] = std::move(made.firstPerson[0]);
+		made.firstPersonFrames[1] = made.firstPersonFrames[0];
+		made.firstPerson[0] = nullptr;
+		made.firstPersonFrames[0] = ~0u;
+		if (firstPersonOn && firstPersonState && indirect.valid && inputs.mainKnown[kColourShape] && latches.firstPerson) {
+			FirstPersonPlan plan;
+			PlanFirstPersonBuckets(Growths::Get().RevisionSizing<MainSizing>(r), indirect, firstPersonRevisionPipelines, plan);
+			FirstPersonShapeInputs in;
+			in.resourceHeap = resourceHeap;
+			in.samplerHeap = samplerHeap;
+			in.indirect = indirect;
+			in.buckets = std::move(plan.buckets);
+			in.map = std::make_shared<const std::vector<std::uint32_t>>(std::move(plan.map));
+			in.materialRows = r.materialRows.RevisionAddress();
+			in.pipelineRows = r.pipelineRows.RevisionAddress();
+			in.latch = latches.firstPerson;
+			in.latchLayout = latches.firstPersonLayout;
+			in.zeros = latches.firstPersonZeros;
+			in.frameConstantsAddress = r.frameConstantsAddress;
+			in.width = inputs.viewport[kColourShape].width;
+			in.height = inputs.viewport[kColourShape].height;
+			in.depthRange = inputs.firstPersonDepthRange;
+			in.sizing = &Growths::Get().RevisionSizing<FirstPersonSizing>(*firstPersonState);
+			if (!in.buckets.empty() && in.zeros) {
+				made.firstPerson[0] = MakeFirstPersonShape(*firstPersonState, in);
+				made.firstPersonFrames[0] = frameNumber;
+			}
+		}
 		// The frame's shape parity compares with what was made (posted: both makes).
 		madeSlot.Post(std::make_unique<MadeShapes>(made));
 		// The revision of these shapes (R3c b): assembled, its changed epochs recorded for it.
@@ -648,6 +760,22 @@ namespace DCLF
 			mix(a_treeLod ? 1u : 0u);
 			mix(sceneState->treeLodCull ? 1u : 0u);
 		}
+		// T7e: the first-person epochs': its resources, latch, targets, depth range, the render area and the slots' pipelines.
+		group = kKeyFirstPerson;
+		if (const auto& view = inputs.firstPerson) {
+			ptr(view.get());
+			ptr(latches.firstPerson.get());
+			raw(latches.firstPersonLayout);
+			ptr(latches.firstPersonZeros.get());
+			raw(inputs.firstPersonTargets);
+			raw(inputs.firstPersonDepthRange);
+			raw(inputs.viewport[kColourShape]);
+			for (const auto& pipeline : firstPersonRevisionPipelines) {
+				mix(pipeline.index);
+				mix(pipeline.generation);
+			}
+		}
+		mix(inputs.toggles.firstPerson);
 		group = kKeyPipelines;
 		mix(std::hash<std::string_view>{}(inputs.gbufferProbe));
 		return key;
@@ -819,6 +947,22 @@ namespace DCLF
 					a_frame.sequenceDraws, revision.sequenceDraws, a_frame.zCalls.size(), revision.zCalls.size(), a_frame.latched.copies.size(), revision.latched.copies.size());
 			}
 		}
+	}
+
+	bool IndirectDraws::FirstPersonSlotReady(const void* a_tables, const PipelineCatalog* a_catalog, std::uint32_t a_slot) const
+	{
+		// T7e: the slot's first-person forward pipeline as a_catalog has it for the published first-person targets, and its Z-prepass group's
+		// depth pipeline in that catalog's main set (FirstPersonPipelinesOf's and PlanFirstPersonBuckets' rules): the scene lane's commit's.
+		const auto& tables = *static_cast<const SceneStore::Tables*>(a_tables);
+		const ForwardTargets targets = impl->firstPerson.LaneTargets();
+		if (!a_catalog || targets.colour == DXGI_FORMAT_UNKNOWN || a_slot >= tables.objects.size())
+			return false;
+		const std::uint32_t p = tables.objects[a_slot].pipelineIndex;
+		ForwardPipelineKey key;
+		if (p >= tables.pipelines.size() || !Draws::FirstPersonForwardKey(tables, p, key) || !ForwardPipelineOf(a_catalog, key, targets).valid())
+			return false;
+		const auto indirect = GetIndirectState(*a_catalog, a_catalog->targetsGeneration);
+		return indirect.valid && p < indirect.zGroups.size() && indirect.zGroups[p] < indirect.zPipelines.size() && indirect.zPipelines[indirect.zGroups[p]].valid();
 	}
 
 	bool IndirectDraws::ReflectionSlotReady(const void* a_tables, const PipelineCatalog* a_catalog, std::uint32_t a_slot) const

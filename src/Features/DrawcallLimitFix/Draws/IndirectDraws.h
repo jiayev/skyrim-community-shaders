@@ -152,6 +152,11 @@ namespace DCLF
 		void ExecuteForward();
 		/** @brief T7d: the forward epoch's report line (ForwardReport), its counters reset. */
 		std::string ForwardReport();
+		/**
+		 * @brief T7d's refraction: whether this frame's forward epoch drew the refraction normals (and so marked them begun for the engine:
+		 * ExecuteForward). Render thread, at Main::Draw's refraction point (DrawcallLimitFix's Main_Draw_RefractionCheck).
+		 */
+		bool RefractionDrawnThisFrame() const;
 
 		/**
 		 * @brief Render thread, the frame's start with the scene work joined: what the scene lane's lookups are made from that only the
@@ -227,8 +232,23 @@ namespace DCLF
 		 * and their geometry with atomic read-modify-writes ("T7b2: kAccumulated written by DCLF"). a_stoodIn(root): whether the cut still
 		 * stands in for the root (PrimaryCull's own set: a write for a root it no longer stands in for is left). a_live false (DCLF does
 		 * not run): the writes are dropped, and the next decode writes everything again.
+		 *
+		 * T7f preparation: the decoder's wide writes (every other root DCLF lists, its geometry, the plain entry roots) are made too under
+		 * CS_DCLF_ACCUMULATED_ALL, with the nodes between a visible geometry and its root and the cell roots (ListUpkeep's), whoever
+		 * stands in for the root; otherwise they are a dry run, compared with the engine's bit under CS_DCLF_ACCUMULATED_PARITY.
 		 */
 		void WriteAccumulated(bool a_live, const std::function<bool(const void*)>& a_stoodIn);
+		/**
+		 * @brief T7b5 fix, the main thread after WriteAccumulated (Main::Update): DCLF's main-camera verdict of a stood-in root as WriteAccumulated
+		 * last wrote it (its kAccumulated); a root it has not written yet is visible (no verdict yet: T7b2's rule). Reads no engine memory.
+		 */
+		bool AccumulatedVerdict(const void* a_root) const;
+		/**
+		 * @brief T7f preparation, the main thread after WriteAccumulated: DCLF's verdict of any root it lists (a fade root or a plain entry
+		 * root; written, or the dry run's with the wide writes: TreeAnimation's tree list), false when it has none (not listed by the
+		 * newest written tables, or no write yet; none without the wide writes but for the stood-in roots). Reads no engine memory.
+		 */
+		bool AccumulatedVerdictOf(const void* a_root, bool& a_visible) const;
 		/** @brief T7b2, render thread: a camera cut in a_frame (PrimaryCull): every stood-in root visible until a batch of a_frame or later. */
 		void NoteCameraCut(std::uint32_t a_frame);
 		/** @brief T7b2, any thread: the next decode writes every stood-in root and geometry, not only the changes (the engine wrote them). */
@@ -274,6 +294,23 @@ namespace DCLF
 		bool ReflectionSlotReady(const void* a_tables, const PipelineCatalog* a_catalog, std::uint32_t a_slot) const;
 		void ExecuteReflection();
 		std::string ReflectionReport();
+		/**
+		 * @brief T7e, the first-person view (CS_DCLF_FIRST_PERSON; drawcall-limit-fix.md, "First person as a view bit (T7e)"; FirstPerson.cpp).
+		 * BeginFirstPersonFrame: render thread, BeginSceneFrame, before DecideCoverage: the view's latch (Main::Draw's cVar23, recomputed:
+		 * the first-person root shown, the main menu closed, the camera not the free one) and its depth range, its targets published, its
+		 * pipelines asked of the lane, its resources made. ExecuteFirstPersonDepth: render thread, at RenderDepth's first-person draw (its
+		 * camera set up by FUN_1414cb020): the first-person camera captured in world space and the depth epoch. ExecuteFirstPersonColour:
+		 * render thread, at FUN_1414cb6d0's accumulator render: the colour epoch. FirstPersonDrawable: the set draws kSetFirstPerson
+		 * (SceneStore::SetCapability). FirstPersonSlotReady: the scene lane's commit's readiness of a slot (its pipelines in a_catalog).
+		 * FirstPersonFrameClaims: the claims whose first-person members the frame draws (FrameValues samples them), null when none.
+		 */
+		void BeginFirstPersonFrame();
+		void ExecuteFirstPersonDepth(bool a_controlDriven);
+		void ExecuteFirstPersonColour();
+		bool FirstPersonDrawable() const;
+		bool FirstPersonSlotReady(const void* a_tables, const PipelineCatalog* a_catalog, std::uint32_t a_slot) const;
+		bool FirstPersonCovered() const;
+		std::string FirstPersonReport();
 		/**
 		 * @brief Render thread, before anything reads the nodes or changes the tables (BeforeShadowMaps, the accumulate phase, the
 		 * next scene frame's events): the job joined, or stopped; what it did not reach goes to the next one.

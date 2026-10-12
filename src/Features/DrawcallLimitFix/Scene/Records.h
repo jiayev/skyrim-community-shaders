@@ -285,6 +285,9 @@ namespace DCLF
 		kRasterAlphaToCoverage = 1u << 11,
 		kRasterWriteModeShift = 12,  // 4 bits: alphaBlendWriteMode (0-12)
 		kRasterBlendExtra = 1u << 16,
+		// T7d's Effect port (CS_DCLF_EFFECTS): the key is the Effect shader's (BSEffectShader; Effect.hlsl), its descriptors and pass descriptor
+		// that shader's (EffectDescriptors.h). Not an engine state index: RasterStateBits leaves it out.
+		kRasterEffect = 1u << 17,
 		// Main keys only: 3 bits, Extended Translucency's material model for the draw XOR DescriptorDisabled (so an
 		// opaque key, whose model is disabled, keeps 0 here). ExtendedTranslucency::MaterialModelOf sets it per
 		// geometry in the feature's SetupGeometry hook; it differs from disabled only for blended geometry (blended
@@ -301,6 +304,13 @@ namespace DCLF
 		kRasterForward = 1u << 26,
 		kRasterForwardDepthTest = 1u << 27,
 		kRasterForwardDepthWrite = 1u << 28,
+		// T7d's refraction (with kRasterForward): a refraction object's key (LightingDescriptors::refraction). Its Lighting pipeline is
+		// never drawn: the refraction range's draws are Utility RENDER_NORMAL draws into the refraction normals (RefractionDrawPass),
+		// which take the technique's property-driven variants from these bits (RENDER_NORMAL_FALLOFF, RENDER_NORMAL_CLAMP: the object
+		// record's kRecordRefraction* bits, BuildObjectRecord).
+		kRasterRefraction = 1u << 29,
+		kRasterRefractionFalloff = 1u << 30,
+		kRasterRefractionClamp = 1u << 31,
 	};
 	inline constexpr std::uint32_t kRasterTranslucencyMask = 7u << kRasterTranslucencyShift;
 
@@ -309,8 +319,10 @@ namespace DCLF
 	inline constexpr std::uint32_t RasterBlendMode(std::uint32_t a_flags) { return (a_flags >> kRasterBlendModeShift) & 7u; }
 	inline constexpr std::uint32_t RasterWriteMode(std::uint32_t a_flags) { return (a_flags >> kRasterWriteModeShift) & 15u; }
 	inline constexpr std::uint32_t RasterTerrainGroup(std::uint32_t a_flags) { return (a_flags >> kRasterTerrainGroupShift) & 3u; }
-	/** @brief Everything but the two-sided bit and the translucency model: what selects the engine's state objects. */
-	inline constexpr std::uint32_t RasterStateBits(std::uint32_t a_flags) { return a_flags & ~(kRasterTwoSided | kRasterTranslucencyMask); }
+	/** @brief Everything but the two-sided bit, the translucency model and the shader class: what selects the engine's state objects. */
+	inline constexpr std::uint32_t RasterStateBits(std::uint32_t a_flags) { return a_flags & ~(kRasterTwoSided | kRasterTranslucencyMask | kRasterEffect); }
+	/** @brief Whether a key is the Effect shader's (kRasterEffect). */
+	inline constexpr bool RasterEffect(std::uint32_t a_flags) { return (a_flags & kRasterEffect) != 0; }
 	inline constexpr std::uint32_t RasterTranslucency(std::uint32_t a_flags) { return (a_flags & kRasterTranslucencyMask) >> kRasterTranslucencyShift; }
 
 	/** @brief Packs a decal's state indices (EngineStates.h says where each comes from). */
@@ -331,6 +343,13 @@ namespace DCLF
 	}
 
 	inline constexpr bool RasterForward(std::uint32_t a_flags) { return (a_flags & kRasterForward) != 0; }
+	/** @brief Whether a key is a refraction object's (T7d's refraction: kRasterRefraction): drawn from the refraction range, not the forward one. */
+	inline constexpr bool RasterRefraction(std::uint32_t a_flags) { return (a_flags & kRasterRefraction) != 0; }
+	/** @brief Packs a refraction key's variant bits (T7d's refraction), on top of its forward state. */
+	inline constexpr std::uint32_t PackRefractionRasterFlags(bool a_falloff, bool a_clamp)
+	{
+		return kRasterRefraction | (a_falloff ? kRasterRefractionFalloff : 0u) | (a_clamp ? kRasterRefractionClamp : 0u);
+	}
 
 	/** @brief Packs a forward key's state (T7d): the engine's blend and write modes, and the property's depth flags. */
 	inline constexpr std::uint32_t PackForwardRasterFlags(std::uint32_t a_blendMode, std::uint32_t a_writeMode, bool a_depthTest, bool a_depthWrite)
