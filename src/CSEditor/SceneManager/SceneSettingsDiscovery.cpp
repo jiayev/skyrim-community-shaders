@@ -497,8 +497,14 @@ try {
 	const bool exportedIntoActivePack = std::filesystem::equivalent(targetRoot, GetActiveScenePackRoot(), activeEc);
 	if (exportScene && exportedIntoActivePack)
 		ReloadOverwrites();
-	if (exportForms && exportedIntoActivePack)
+	if (exportForms && exportedIntoActivePack) {
+		// The pack now supplies these values; loose copies would shadow it.
+		for (const auto& edit : formEdits) {
+			std::error_code removeEc;
+			std::filesystem::remove(FormEditSources::GetFilePath(Util::PathHelpers::GetCommunityShaderPath(), edit.key), removeEc);
+		}
 		CSEditor::ReloadFormEdits();
+	}
 
 	logger::info("[SceneSettings] Exported preset '{}' ({} scene file(s), {} form edit(s){}, type {}) to '{}'",
 		safeModName, sceneFileCount, formEdits.size(), exportEffects11 ? ", Effects 11" : "",

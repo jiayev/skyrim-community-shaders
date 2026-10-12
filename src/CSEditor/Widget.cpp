@@ -233,6 +233,8 @@ std::string Widget::GetFolderName() const
 		return std::string(kVisualEffectsFolderName);
 	case RE::FormType::Cell:
 		return std::string(kCellLightingFolderName);
+	case RE::FormType::LensFlare:
+		return std::string(kLensFlareFolderName);
 	default:
 		return std::string(kOtherEditorWidgetsFolderName);
 	}

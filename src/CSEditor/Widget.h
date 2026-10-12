@@ -67,6 +67,7 @@ public:
 	static constexpr std::string_view kPrecipitationFolderName = "Precipitation";
 	static constexpr std::string_view kVisualEffectsFolderName = "Visual Effects";
 	static constexpr std::string_view kCellLightingFolderName = "Cell Lighting";
+	static constexpr std::string_view kLensFlareFolderName = "Lens Flares";
 	static constexpr std::string_view kOtherEditorWidgetsFolderName = "Other Editor Widgets";
 
 	static constexpr std::array kSaveFolderNames = {
@@ -77,6 +78,7 @@ public:
 		kPrecipitationFolderName,
 		kVisualEffectsFolderName,
 		kCellLightingFolderName,
+		kLensFlareFolderName,
 		kOtherEditorWidgetsFolderName
 	};
 

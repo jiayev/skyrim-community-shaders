@@ -130,6 +130,8 @@ namespace
 			return T(TKEY("category_visual_effects"), "Visual Effects");
 		if (folder == Widget::kCellLightingFolderName)
 			return T(TKEY("category_cell_lighting"), "Cell Lighting");
+		if (folder == Widget::kLensFlareFolderName)
+			return T(TKEY("category_lens_flares"), "Lens Flares");
 		if (folder == Widget::kOtherEditorWidgetsFolderName)
 			return T(TKEY("category_other_widgets"), "Other Editor Widgets");
 		return T(TKEY("unknown"), "Unknown");
