@@ -60,7 +60,8 @@ public:
 	spdlog::level::level_enum logLevel = spdlog::level::info;
 	bool enableDeveloperMode = false;  ///< Explicit developer mode toggle; also enabled when log level is debug/trace.
 	std::string shaderDefinesString = "";
-	std::vector<std::pair<std::string, std::string>> shaderDefines{};  // data structure to parse string into; needed to avoid dangling pointers
+	std::shared_ptr<const std::vector<std::pair<std::string, std::string>>> shaderDefines = std::make_shared<const std::vector<std::pair<std::string, std::string>>>();  // data structure to parse string into; needed to avoid dangling pointers
+	std::mutex shaderDefinesMutex;
 
 	float timer = 0;
 	double smoothDrawCalls[RE::BSShader::Type::Total + 1];
@@ -177,7 +178,7 @@ public:
 	 * @param defines Semicolon-separated define string (e.g. "FOO=1;BAR=2").
 	 */
 	void SetDefines(std::string defines);
-	std::vector<std::pair<std::string, std::string>>* GetDefines();
+	std::shared_ptr<const std::vector<std::pair<std::string, std::string>>> GetDefines();
 
 	/**
 	 * @brief Checks whether the given shader type is enabled.
@@ -293,7 +294,9 @@ public:
 		AdditiveLighting = 1 << 6,
 		IsEye = 1 << 7,
 		SourceAlphaBlend = 1 << 8,
-		NoSkyScattering = 1 << 9  ///< Cloud layer drawn without Effects11 cloud scattering
+		NoSkyScattering = 1 << 9,  ///< Cloud layer drawn without Effects11 cloud scattering
+		IsAurora = 1 << 10,
+		IsMoon = 1 << 11,
 	};
 
 	/** @brief Bitflags describing extra feature-specific properties related to terrain displacement and material models. */
@@ -358,6 +361,11 @@ public:
 	 * @param a_pass The render pass to inspect.
 	 */
 	void UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass);
+	/**
+	 * @brief Flags effect shader passes that draw the aurora (sky objects under the sky's aurora root).
+	 * @param a_pass The render pass to inspect.
+	 */
+	void UpdateEffectShaderPermutation(RE::BSRenderPass* a_pass);
 	/**
 	 * @brief Checks whether directional shadows are available for the current scene.
 	 * @returns true if directional shadows are present, false otherwise.

@@ -18,6 +18,7 @@
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/PostProcessing.h"
+#include "Features/RemoteControl/NvPerf.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
@@ -162,6 +163,19 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	auto state = globals::state;
 	auto shaderCache = globals::shaderCache;
 
+	// Landscape Seams: draw the vanilla terrain permutation while the seams one is compiling or failed.
+	constexpr auto landscapeSeamsFlag = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
+	if (shader->shaderType.get() == RE::BSShader::Type::Lighting && (pixelDescriptor & landscapeSeamsFlag) != 0) {
+		auto probeVertexDescriptor = vertexDescriptor;
+		auto probePixelDescriptor = pixelDescriptor;
+		state->ModifyShaderLookup(*shader, probeVertexDescriptor, probePixelDescriptor);
+		if (shaderCache->GetVertexShader(*shader, probeVertexDescriptor) == nullptr ||
+			shaderCache->GetPixelShader(*shader, probePixelDescriptor) == nullptr) {
+			vertexDescriptor &= ~landscapeSeamsFlag;
+			pixelDescriptor &= ~landscapeSeamsFlag;
+		}
+	}
+
 	state->updateShader = true;
 	state->currentShader = shader;
 
@@ -236,6 +250,7 @@ namespace EffectExtensions
 		{
 			func(shader, pass, renderFlags);
 			ExternalEmittance::UpdatePermutation(pass);
+			globals::state->UpdateEffectShaderPermutation(pass);
 			globals::state->permutationData.EffectRadius = pass->geometry->worldBound.radius;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -400,6 +415,9 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
+		// Nsight Perf passes span one frame's rendering: ended before the overlay and Present, begun after.
+		NvPerf::OnPresentBegin();
+
 		HRESULT retval = globals::features::hdrDisplay.HandleSwapChainPresent(
 			This,
 			SyncInterval,
@@ -410,6 +428,8 @@ struct IDXGISwapChain_Present
 
 		globals::features::screenshotFeature.ProcessCaptureRequest();
 		globals::state->Reset();
+
+		NvPerf::OnPresentEnd();
 
 		TracyD3D11Collect(globals::state->tracyCtx);
 

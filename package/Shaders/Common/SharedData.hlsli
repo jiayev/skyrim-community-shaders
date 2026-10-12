@@ -366,6 +366,20 @@ namespace SharedData
 		float WaterPad0;
 		float WaterPad1;
 		float WaterPad2;
+
+		float StarsCurve;
+		float StarsIntensity;
+		float MoonCurve;
+		uint EnableAnimatedStars;
+
+		float StarsAnimationTime;
+		float StarsAnimationDensity;
+		float StarsAnimationIntensity;
+		float AuroraIntensity;
+
+		float AuroraCurve;
+		uint FixBlackCrush;
+		float2 NightSkyPad0;
 	};
 	struct TerrainBlendingSettings
 	{

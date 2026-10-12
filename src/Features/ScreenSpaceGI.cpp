@@ -140,7 +140,7 @@ void ScreenSpaceGI::DrawSettings()
 		}
 
 		if (showAdvanced) {
-			if (ImGui::SliderInt(T(TKEY("steps_per_slice"), "Steps Per Slice"), (int*)&settings.NumSteps, 1, 32)) {
+			if (ImGui::SliderInt(T(TKEY("steps_per_slice"), "Steps Per Slice"), (int*)&settings.NumSteps, 1, 32, "%d", ImGuiSliderFlags_AlwaysClamp)) {
 				resetReblurHistory = true;
 				hasMultiBounceHistory = false;
 			}
@@ -256,6 +256,7 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 	const auto previous = settings;
 
 	settings = o_json;
+	settings.NumSteps = std::clamp(settings.NumSteps, 1u, 32u);
 	if (settings.QuarterRes)
 		settings.HalfRes = false;
 	if (!settings.EnableREBLUR) {

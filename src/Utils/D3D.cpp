@@ -113,7 +113,9 @@ namespace Util
 		int len = _vsnprintf_s(buffer, _TRUNCATE, Format, va);
 		va_end(va);
 
-		Resource->SetPrivateData(WKPDID_D3DDebugObjectNameT, len, buffer);
+		if (len < 0)
+			len = static_cast<int>(strnlen(buffer, sizeof(buffer)));
+		Resource->SetPrivateData(WKPDID_D3DDebugObjectNameT, static_cast<UINT>(len), buffer);
 	}
 
 	// Per-frame getters would otherwise retry a failed compile every frame.
@@ -307,8 +309,8 @@ namespace Util
 		if (globals::shaderCache->IsDiskCache())
 			flags |= D3DCOMPILE_SKIP_VALIDATION;
 
-		ID3DBlob* shaderBlob;
-		ID3DBlob* shaderErrors;
+		winrt::com_ptr<ID3DBlob> shaderBlob;
+		winrt::com_ptr<ID3DBlob> shaderErrors;
 
 		const auto failureKey = std::format("{}|{}|{}|{}|{}", str, ProgramType, Program, flags, DefinesToString(macros));
 		{
@@ -343,7 +345,7 @@ namespace Util
 		}
 
 		logger::debug("Compiling {} with {}", str, DefinesToString(macros));
-		if (FAILED(D3DCompileFromFile(FilePath, macros.data(), &include, Program, ProgramType, flags, 0, &shaderBlob, &shaderErrors))) {
+		if (FAILED(D3DCompileFromFile(FilePath, macros.data(), &include, Program, ProgramType, flags, 0, shaderBlob.put(), shaderErrors.put()))) {
 			logger::warn("Shader compilation failed:\n\n{}", shaderErrors ? static_cast<char*>(shaderErrors->GetBufferPointer()) : "Unknown error");
 			recordFailure();
 			return nullptr;
@@ -351,10 +353,10 @@ namespace Util
 		if (shaderErrors)
 			logger::debug("Shader logs:\n{}", static_cast<char*>(shaderErrors->GetBufferPointer()));
 		if (diskPath)
-			Store(*diskPath, shaderBlob);
+			Store(*diskPath, shaderBlob.get());
 
 		ID3D11DeviceChild* shader = nullptr;
-		DX::ThrowIfFailed(CreateShaderObject(device, ProgramType, shaderBlob, &shader));
+		DX::ThrowIfFailed(CreateShaderObject(device, ProgramType, shaderBlob.get(), &shader));
 		return shader;
 	}
 

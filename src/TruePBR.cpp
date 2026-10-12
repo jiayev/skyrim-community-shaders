@@ -600,6 +600,16 @@ namespace Permutations
 		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::MTLandLODBlend, landFlagValues, result);
 		return result;
 	}
+
+	std::unordered_set<uint32_t> GeneratePBRUtilityPixelPermutations()
+	{
+		using enum SIE::ShaderCache::UtilityShaderFlags;
+
+		constexpr std::array flags{ Vc, AlphaTest, TreeAnim };
+		constexpr uint32_t constantFlags = static_cast<uint32_t>(Texture) | static_cast<uint32_t>(RenderBaseTexture) | static_cast<uint32_t>(TruePbr);
+
+		return GenerateFlagPermutations(flags, constantFlags);
+	}
 }
 
 void TruePBR::GenerateShaderPermutations(RE::BSShader* shader)
@@ -613,6 +623,10 @@ void TruePBR::GenerateShaderPermutations(RE::BSShader* shader)
 			auto pixelShaderDescriptor = descriptor;
 			state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
 			std::ignore = shaderCache->GetPixelShader(*shader, pixelShaderDescriptor);
+		}
+	} else if (shader->shaderType == RE::BSShader::Type::Utility) {
+		for (auto descriptor : Permutations::GeneratePBRUtilityPixelPermutations()) {
+			std::ignore = shaderCache->GetPixelShader(*shader, descriptor);
 		}
 	}
 }
@@ -741,6 +755,11 @@ struct BSLightingShaderProperty_LoadBinary
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
+static bool IsPBRShaderProperty(const RE::BSShaderProperty* property)
+{
+	return property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting) && (property->material->GetFeature() == RE::BSShaderMaterial::Feature::kDefault || property->material->GetFeature() == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend);
+}
+
 struct BSLightingShaderProperty_GetRenderPasses
 {
 	static RE::BSShaderProperty::RenderPassArray* thunk(RE::BSLightingShaderProperty* property, RE::BSGeometry* geometry, std::uint32_t renderFlags, RE::BSShaderAccumulator* accumulator)
@@ -752,11 +771,7 @@ struct BSLightingShaderProperty_GetRenderPasses
 
 		const auto issEnabledAndInteriorWithSun = globals::features::interiorSun.loaded && globals::features::interiorSun.isInteriorWithSun;
 
-		bool isPbr = false;
-
-		if (property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting) && (property->material->GetFeature() == RE::BSShaderMaterial::Feature::kDefault || property->material->GetFeature() == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend)) {
-			isPbr = true;
-		}
+		const bool isPbr = IsPBRShaderProperty(property);
 
 		auto currentPass = renderPasses->head;
 		while (currentPass != nullptr) {
@@ -765,7 +780,7 @@ struct BSLightingShaderProperty_GetRenderPasses
 				auto lightingTechnique = currentPass->passEnum - LightingTechniqueStart;
 				auto lightingFlags = lightingTechnique & ~(~0u << 24);
 				auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((lightingTechnique >> 24) & 0x3F);
-				lightingFlags &= ~0b111000u;
+				lightingFlags &= ~(static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr) | static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Deferred));
 				if (isPbr) {
 					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr);
 					lightingFlags &= ~static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Specular);
@@ -789,6 +804,31 @@ struct BSLightingShaderProperty_GetRenderPasses
 				currentPass->passEnum = lightingTechnique + LightingTechniqueStart;
 			}
 			currentPass = currentPass->next;
+		}
+
+		return renderPasses;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+struct BSLightingShaderProperty_GetRenderPasses_LocalMap
+{
+	static RE::BSShaderProperty::RenderPassArray* thunk(RE::BSLightingShaderProperty* property, RE::BSGeometry* geometry, std::uint32_t renderFlags, RE::BSShaderAccumulator* accumulator)
+	{
+		auto renderPasses = func(property, geometry, renderFlags, accumulator);
+		if (renderPasses == nullptr || !IsPBRShaderProperty(property)) {
+			return renderPasses;
+		}
+
+		for (auto* pass = renderPasses->head; pass != nullptr; pass = pass->next) {
+			if (pass->shader->shaderType == RE::BSShader::Type::Utility) {
+				constexpr uint32_t UtilityTechniqueStart = 0x2B;
+				auto utilityTechnique = pass->passEnum - UtilityTechniqueStart;
+				if (utilityTechnique & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderBaseTexture)) {
+					utilityTechnique |= static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::TruePbr);
+					pass->passEnum = utilityTechnique + UtilityTechniqueStart;
+				}
+			}
 		}
 
 		return renderPasses;
@@ -1167,37 +1207,35 @@ RE::TESLandTexture* GetDefaultLandTexture()
 	return *defaultLandTextureAddress;
 }
 
-bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
+bool TruePBR::IsPBRLand(const RE::TESObjectLAND* land)
 {
-	if (land == nullptr) {
+	if (land == nullptr || land->loadedData == nullptr) {
 		return false;
 	}
 
-	auto singleton = &globals::features::truePBR;
-
-	bool isPbr = false;
-	if (land->loadedData != nullptr) {
-		for (uint32_t quadIndex = 0; quadIndex < 4; ++quadIndex) {
-			if (land->loadedData->defQuadTextures[quadIndex] != nullptr) {
-				if (singleton->IsPBRTextureSet(Util::GetSeasonalSwap(land->loadedData->defQuadTextures[quadIndex]->textureSet))) {
-					isPbr = true;
-					break;
-				}
-			} else if (singleton->defaultPbrLandTextureSet != nullptr) {
-				isPbr = true;
+	for (uint32_t quadIndex = 0; quadIndex < 4; ++quadIndex) {
+		if (land->loadedData->defQuadTextures[quadIndex] != nullptr) {
+			if (IsPBRTextureSet(Util::GetSeasonalSwap(land->loadedData->defQuadTextures[quadIndex]->textureSet))) {
+				return true;
 			}
-			for (uint32_t textureIndex = 0; textureIndex < 6; ++textureIndex) {
-				if (land->loadedData->quadTextures[quadIndex][textureIndex] != nullptr) {
-					if (singleton->IsPBRTextureSet(Util::GetSeasonalSwap(land->loadedData->quadTextures[quadIndex][textureIndex]->textureSet))) {
-						isPbr = true;
-						break;
-					}
+		} else if (defaultPbrLandTextureSet != nullptr) {
+			return true;
+		}
+		for (uint32_t textureIndex = 0; textureIndex < 6; ++textureIndex) {
+			if (land->loadedData->quadTextures[quadIndex][textureIndex] != nullptr) {
+				if (IsPBRTextureSet(Util::GetSeasonalSwap(land->loadedData->quadTextures[quadIndex][textureIndex]->textureSet))) {
+					return true;
 				}
 			}
 		}
 	}
 
-	if (!isPbr) {
+	return false;
+}
+
+bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
+{
+	if (!IsPBRLand(land)) {
 		return false;
 	}
 
@@ -1666,6 +1704,7 @@ void TruePBR::PostPostLoad()
 	logger::info("[TruePBR] Hooking BSLightingShaderProperty");
 	stl::write_vfunc<0x18, BSLightingShaderProperty_LoadBinary>(RE::VTABLE_BSLightingShaderProperty[0]);
 	stl::write_vfunc<0x2A, BSLightingShaderProperty_GetRenderPasses>(RE::VTABLE_BSLightingShaderProperty[0]);
+	stl::write_vfunc<0x2C, BSLightingShaderProperty_GetRenderPasses_LocalMap>(RE::VTABLE_BSLightingShaderProperty[0]);
 	stl::detour_thunk<BSLightingShaderProperty_OnLoadTextureSet>(REL::RelocationID(99865, 106510));
 
 	logger::info("[TruePBR] Hooking BSLightingShader");

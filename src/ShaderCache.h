@@ -694,6 +694,7 @@ namespace SIE
 			// Community Shaders start
 			TruePbr = 1 << 3,
 			Deferred = 1 << 4,
+			LandscapeSeams = 1 << 5,
 			// Community Shaders end
 			Specular = 1 << 9,
 			SoftLighting = 1 << 10,
@@ -851,6 +852,7 @@ namespace SIE
 			LodObject = 1 << 27,
 			LocalMapFogOfWar = 1 << 28,
 			OpaqueEffect = 1 << 29,
+			TruePbr = 1 << 30,
 		};
 
 		// Shader blocking data for developer mode

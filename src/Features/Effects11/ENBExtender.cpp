@@ -276,11 +276,21 @@ namespace ENBExtender
 		return true;
 	}
 
+	/** @brief Defines KiENBExtender 1.6.0 injects; *_AVAILABLE only for bindings Effect::UpdateExternBindings fills. */
+	static constexpr std::string_view extenderDefines =
+		"#define ENB_EXT_VER 1\n"
+		"#define ENB_EXT_VER_MINOR 6\n"
+		"#define ENB_EXT_VER_PATCH 0\n"
+		"#define ENB_EXT_GRAFTING 0\n"
+		"#define ENB_EXT_INV_CAM_ROT_MAT_AVAILABLE 1\n"
+		"#define ENB_EXT_WVP_MAT_AVAILABLE 1\n"
+		"#define ENB_EXT_INV_WVP_MAT_AVAILABLE 1\n";
+
 	void ConvertExtenderSyntax(std::string& content, const std::filesystem::path& enbseriesPath, std::vector<Effect::UIDefineInfo>& uiDefines, const std::string& iniPath, const std::string& iniSection)
 	{
 		std::string result;
-		result.reserve(content.size());
-		result += "#define ENB_EXT_VER 1\n";
+		result.reserve(content.size() + extenderDefines.size());
+		result += extenderDefines;
 		std::istringstream stream(content);
 		std::string line;
 
@@ -1232,11 +1242,19 @@ namespace ENBExtender
 		return source.starts_with("KIEFX");
 	}
 
-	bool CreateEncryptedEffect(const std::string& effectName, winrt::com_ptr<ID3DX11Effect>& effect, std::string& error)
+	bool CreateEncryptedEffect(const std::filesystem::path& effectPath, winrt::com_ptr<ID3DX11Effect>& effect, std::string& error)
 	{
+		auto effectName = effectPath.filename().string();
 		auto index = GetKiCompileFileIndex(effectName);
 		if (!index) {
 			error = fmt::format("Encrypted effect '{}' has no ENB Extender compile slot", effectName);
+			return false;
+		}
+
+		// ENBExt_Compile takes no path and always reads <current directory>\enbseries
+		std::error_code ec;
+		if (!std::filesystem::equivalent(effectPath.parent_path(), std::filesystem::absolute("enbseries"), ec)) {
+			error = "Encrypted preset: ENB Extender only loads presets from the game folder's enbseries, not Data\\enbseries";
 			return false;
 		}
 
