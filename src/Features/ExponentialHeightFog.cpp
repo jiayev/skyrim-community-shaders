@@ -339,13 +339,13 @@ void ExponentialHeightFog::EnsureVolumetricResources()
 	currentGridSize = gridSize;
 	currentFarGridSize = farGridSize;
 
-	auto make3D = [this](const DirectX::XMUINT4& a_size, const char* a_name) {
+	auto make3D = [this](const DirectX::XMUINT4& a_size, const char* a_name, DXGI_FORMAT a_format = DXGI_FORMAT_R16G16B16A16_FLOAT) {
 		D3D11_TEXTURE3D_DESC texDesc{};
 		texDesc.Width = a_size.x;
 		texDesc.Height = a_size.y;
 		texDesc.Depth = a_size.z;
 		texDesc.MipLevels = 1;
-		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		texDesc.Format = a_format;
 		texDesc.Usage = D3D11_USAGE_DEFAULT;
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
@@ -395,7 +395,7 @@ void ExponentialHeightFog::EnsureVolumetricResources()
 
 	vBufferA = make3D(gridSize, "ExponentialHeightFog::VBufferA");
 	conservativeDepth = make2D(gridSize, "ExponentialHeightFog::ConservativeDepth");
-	lightScattering = make3D(gridSize, "ExponentialHeightFog::LightScattering");
+	lightScattering = make3D(gridSize, "ExponentialHeightFog::LightScattering", DXGI_FORMAT_R32G32B32A32_FLOAT);
 	integratedLightScattering = make3D(gridSize, "ExponentialHeightFog::IntegratedLightScattering");
 
 	conservativeDepthHistory = std::make_unique<Texture2D>(conservativeDepth->desc, "ExponentialHeightFog::ConservativeDepthHistory");
@@ -418,7 +418,7 @@ void ExponentialHeightFog::EnsureVolumetricResources()
 
 	vBufferAFar = make3D(farGridSize, "ExponentialHeightFog::VBufferAFar");
 	conservativeDepthFar = make2D(farGridSize, "ExponentialHeightFog::ConservativeDepthFar");
-	lightScatteringFar = make3D(farGridSize, "ExponentialHeightFog::LightScatteringFar");
+	lightScatteringFar = make3D(farGridSize, "ExponentialHeightFog::LightScatteringFar", DXGI_FORMAT_R32G32B32A32_FLOAT);
 	integratedLightScatteringFar = make3D(farGridSize, "ExponentialHeightFog::IntegratedLightScatteringFar");
 
 	conservativeDepthFarHistory = std::make_unique<Texture2D>(conservativeDepthFar->desc, "ExponentialHeightFog::ConservativeDepthFarHistory");
