@@ -186,7 +186,7 @@ namespace DCLF
 		};
 		std::map<std::tuple<const RE::BSBatchRenderer*, std::uint32_t, std::uint32_t>, std::vector<Registered>> chains;
 		for (const auto& entry : a_entries) {
-			if (!a_main.contains(entry.batch) || (entry.hint != 2 && entry.hint != 3) || entry.fading || !entry.geometry)
+			if (!a_main.contains(entry.batch) || (entry.hint != 2 && entry.hint != 3) || !entry.geometry)
 				continue;
 			++p.registrations;
 			Registered registered{ {}, entry.geometry };
@@ -439,7 +439,9 @@ namespace DCLF
 		ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> previous(before.begin(), before.end());
 		for (const auto& entry : kept) {
 			const std::uint32_t group = static_cast<std::uint32_t>(entry.chain >> 60) - 1;
-			const std::uint32_t ordinal = tables.decalCount[group]++;
+			// T7e's blood decals: a skinned decal of several partitions takes a slot per partition (DecalSpanOf).
+			const std::uint32_t ordinal = tables.decalCount[group];
+			tables.decalCount[group] += DecalSpanOf(entry.object < tables.skinPartitions.size() ? tables.skinPartitions[entry.object] : 0u);
 			tables.decalOrdinal[entry.object] = ordinal;
 			decalOrdered.push_back(entry.object);
 			const auto it = previous.find(entry.object);

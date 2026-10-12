@@ -730,7 +730,7 @@ namespace DCLF::Draws
 		if (!geometry.vertexAddress || !geometry.indexAddress)
 			return false;
 		// A decal: the colour segment's alone (MainMaskOf), with its ordinal in its group's range (OrderDecals, which logs a change for
-		// every decal it moves; none without the colour segment). One of several partitions is an entry too, never drawable (RegionEntry).
+		// every decal it moves; none without the colour segment). One of several partitions takes a slot a partition (DecalSpanOf).
 		if (const std::uint32_t group = ObjectDecalGroup(object.flags))
 			if (o >= tables.decalOrdinal.size() || tables.decalOrdinal[o] >= decalCount[group - 1])
 				return false;
@@ -755,12 +755,12 @@ namespace DCLF::Draws
 		}
 		const auto& blocks = pipelineBlocks[object.pipelineIndex];
 		const auto pair = r.pairs.find(PairKeyOf(object));
-		// A decal's slot in its group's range, which holds one sequence: one of several partitions cannot draw there. A decal it
-		// cannot draw is still an input, which BuildDraws writes as a zero-count draw (the loop's blank).
+		// A decal's slots in its group's range (a slot a partition: DecalSpanOf). A decal it cannot draw is still an input, which BuildDraws
+		// writes as zero-count draws (the loop's blank).
 		const bool decal = ObjectDecalGroup(object.flags) != 0;
 		const std::uint32_t ordinal = decal ? tables.decalOrdinal[o] : 0u;
-		const std::uint32_t partitions = PartitionsOf(tables, o);  // a decal of several never draws (below)
-		const bool drawable = InSet(o) && blocks.setIndex != Lookups::kNone && pair != r.pairs.end() && pair->second.ok && !(decal && PartitionsOf(tables, o));
+		const std::uint32_t partitions = PartitionsOf(tables, o);
+		const bool drawable = InSet(o) && blocks.setIndex != Lookups::kNone && pair != r.pairs.end() && pair->second.ok;
 		// The pair's slot is its rows (RowsOf).
 		a_input = { drawable ? blocks.setIndex : 0u, drawable ? pair->second.slot : 0u, object.geometryIndex, object.flags | (drawable ? kInputDrawable : 0u),
 			{ MainMaskOf(tables, o) }, o, ordinal, partitions, FaceStreamGeometry(tables, o, in.addresses.facePositions) };
@@ -825,7 +825,9 @@ namespace DCLF::Draws
 	{
 		const auto& object = tables.objects[o];
 		// The record's flags carry no kInputDrawable (the epoch's): undrawable. The stream and fade row stay none (~0u).
-		return { 0, 0, object.geometryIndex < in.addresses.fit.geometryRows ? object.geometryIndex : 0u, object.flags, { MainMaskOf(tables, o) }, o, tables.decalOrdinal[o] };
+		// The partitions word: the decal's slots (DecalSpanOf), each written as a zero-count draw.
+		return { 0, 0, object.geometryIndex < in.addresses.fit.geometryRows ? object.geometryIndex : 0u, object.flags, { MainMaskOf(tables, o) }, o, tables.decalOrdinal[o],
+			o < tables.skinPartitions.size() ? tables.skinPartitions[o] : 0u };
 	}
 
 	void MainBuild::RegionWrite(std::uint32_t i, const DrawInput& a_entry)
@@ -1344,7 +1346,8 @@ namespace DCLF::Draws
 		} decalSlot;
 		if (decalGroup) {
 			decalSlot.inputs = &drawInputs;
-			decalSlot.blank = { 0, 0, object.geometryIndex, object.flags, { MainMaskOf(tables, o) }, static_cast<std::uint32_t>(o), tables.decalOrdinal[o] };
+			decalSlot.blank = { 0, 0, object.geometryIndex, object.flags, { MainMaskOf(tables, o) }, static_cast<std::uint32_t>(o), tables.decalOrdinal[o],
+				o < tables.skinPartitions.size() ? tables.skinPartitions[o] : 0u };
 		}
 		const auto& blocks = pipelineBlocks[object.pipelineIndex];
 		if (blocks.setIndex == Lookups::kNone) {
@@ -1370,13 +1373,9 @@ namespace DCLF::Draws
 			Skipped(Skip::NotInSet);
 			return;
 		}
-		// A skin of several partitions writes one sequence per partition drawn. A decal has one slot,
-		// so a decal that is such a skin cannot be drawn by the decal pass.
+		// A skin of several partitions writes one sequence per partition drawn; a decal that is such a skin (T7e's blood decals) one per
+		// slot of its span (OrderDecals, DecalSpanOf).
 		const std::uint32_t partitions = PartitionsOf(tables, o);
-		if (decalGroup && partitions) {
-			Skipped(Skip::Geometry);
-			return;
-		}
 		// A face shape draws only with its positions as the second stream, and a pipeline that reads its
 		// position from the second stream only with them: the slot would fall back to the geometry's own
 		// buffer and draw its other attributes as positions.
@@ -1403,8 +1402,9 @@ namespace DCLF::Draws
 		if (decalGroup) {
 			const std::uint32_t ordinal = tables.decalOrdinal[o];
 			decalSlot.inputs = nullptr;  // drawn: the blank is not needed
+			// T7e's blood decals: the partitions word names its slots (DecalSpanOf; BuildDrawsCS draws a partition at each).
 			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex, object.flags | kInputDrawable, { MainMaskOf(tables, o) },
-				static_cast<std::uint32_t>(o), ordinal, 0, streamIndex });
+				static_cast<std::uint32_t>(o), ordinal, partitions, streamIndex });
 			decalTemplates[decalGroup - 1][ordinal] = sequence;
 			++out.decalsDrawn;
 			if (o < out.objectState.size())

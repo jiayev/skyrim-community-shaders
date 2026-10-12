@@ -166,11 +166,25 @@ cbuffer IndexedTexcoordBuffer : register(b11)
 #	if defined(DCLF_BINDLESS)
 // World and PreviousWorld are the object's placement row's (absolute), made relative to this draw's eye and previous eye, the
 // subtraction SetupGeometry does on the CPU for the engine's own draws (Lighting.hlsl, DCLF_VS_WORLD).
-static precise float3x4 World = float3x4(DCLFPlacements[DCLFObjectIndex].World[0] - float4(0, 0, 0, BonesPivot.x),
-	DCLFPlacements[DCLFObjectIndex].World[1] - float4(0, 0, 0, BonesPivot.y), DCLFPlacements[DCLFObjectIndex].World[2] - float4(0, 0, 0, BonesPivot.z));
-static precise float3x4 PreviousWorld = float3x4(DCLFPlacements[DCLFObjectIndex].PreviousWorld[0] - float4(0, 0, 0, PreviousBonesPivot.x),
-	DCLFPlacements[DCLFObjectIndex].PreviousWorld[1] - float4(0, 0, 0, PreviousBonesPivot.y),
-	DCLFPlacements[DCLFObjectIndex].PreviousWorld[2] - float4(0, 0, 0, PreviousBonesPivot.z));
+// CS_DCLF_BILLBOARDS (Billboards.h): a billboard's row is its unturned world and its node's base and pivot, turned here to this
+// draw's camera as NiBillboardNode::OnVisible turns the node for the culling camera (DCLFObjects.hlsli, DCLFBillboardWorld): the camera's
+// axes are CameraView's rows (c0-c2, as SetCameraData copies the camera's world rotation: right, up, forward) and its eye the posAdjust
+// above. Its previous world is the same turn (the row holds no previous base): no motion of its own.
+static const bool DCLFBillboard = (DCLFObjects[DCLFObjectIndex].DCLFRecordFlags & kDCLFRecordEffectBillboard) != 0;
+float3x4 DCLFEffectWorld(bool a_previous)
+{
+	const float3 eye = a_previous ? PreviousBonesPivot : BonesPivot;
+	if (DCLFBillboard) {
+		const float3x4 world = DCLFBillboardWorld(DCLFObjectIndex, ScreenProj[2].xyz, ScreenProj[1].xyz, ScreenProj[0].xyz, BonesPivot);
+		return float3x4(world[0] - float4(0, 0, 0, eye.x), world[1] - float4(0, 0, 0, eye.y), world[2] - float4(0, 0, 0, eye.z));
+	}
+	const DCLFPlacement placement = DCLFPlacements[DCLFObjectIndex];
+	return a_previous ? float3x4(placement.PreviousWorld[0] - float4(0, 0, 0, eye.x), placement.PreviousWorld[1] - float4(0, 0, 0, eye.y),
+							placement.PreviousWorld[2] - float4(0, 0, 0, eye.z)) :
+	                    float3x4(placement.World[0] - float4(0, 0, 0, eye.x), placement.World[1] - float4(0, 0, 0, eye.y), placement.World[2] - float4(0, 0, 0, eye.z));
+}
+static precise float3x4 World = DCLFEffectWorld(false);
+static precise float3x4 PreviousWorld = DCLFEffectWorld(true);
 #	endif  // DCLF_BINDLESS
 
 #	if defined(PROJECTED_UV)
@@ -532,6 +546,9 @@ cbuffer DCLFFrameLighting : register(b13)
 	// The Lighting variant's DLightColor (SetupGeometry: the pass's light 0, the scene's sun light, its NiDirectionalLight +0x14c colour times
 	// its fade and the HDR multiplier): the frame's (LightingConstants.h, SampleEffectLight).
 	float4 DCLFEffectDLightColor : packoffset(c18);
+	// Blood's AlphaTestRef.yz (SetupGeometry: the weapon blood's two globals, 0x1433dccf0 and 0x1433dccf4): the frame's (LightingConstants.h,
+	// SampleEffectBlood).
+	float4 DCLFEffectBlood : packoffset(c19);
 };
 static const float4 CameraDataEffect = DCLFEffectCamera;
 // The soft depth (Soft: SetupTechnique binds the depth copy, kPOST_ZPREPASS_COPY, to t3): the frame record's, by name (DrawPipelines.h,
@@ -873,16 +890,23 @@ PS_OUTPUT main(PS_INPUT input)
 	float alpha = baseColor.w;
 
 #	if defined(BLOOD)
+#		if defined(DCLF_BINDLESS)
+	// Drawcall Limit Fix (T7d's Effect port): SetupGeometry's AlphaTestRef for Blood is the alpha property's threshold / 255 (the object record's
+	// reference: LightingConstants.h, AlphaTestRefOf) and the frame's two globals (DCLFEffectBlood); the PerGeometry block is not bound.
+	const float4 bloodRef = float4(AlphaTestRefRS, DCLFEffectBlood.yz, 0);
+#		else
+	const float4 bloodRef = AlphaTestRef;
+#		endif
 	alpha = baseColor.y;
-	float deltaY = saturate(baseColor.y - AlphaTestRef.x);
+	float deltaY = saturate(baseColor.y - bloodRef.x);
 	float bloodMul = baseColor.z;
 #		if defined(VC)
 	bloodMul *= input.Color.w;
 #		endif
-	if (deltaY < AlphaTestRef.y) {
-		bloodMul *= (deltaY / AlphaTestRef.y);
+	if (deltaY < bloodRef.y) {
+		bloodMul *= (deltaY / bloodRef.y);
 	}
-	baseColor.xyz = saturate(float3(2, 1, 1) - bloodMul.xxx) * (-bloodMul * AlphaTestRef.z + 1);
+	baseColor.xyz = saturate(float3(2, 1, 1) - bloodMul.xxx) * (-bloodMul * bloodRef.z + 1);
 	baseColor.xyz = ColorManagement::TextureToWorking(baseColor.xyz);
 #	endif
 

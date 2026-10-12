@@ -52,6 +52,7 @@ namespace DCLF
 	void IndirectDraws::KickVisibilityReadback() {}
 	void IndirectDraws::WriteAccumulated(bool, const std::function<bool(const void*)>&) {}
 	bool IndirectDraws::AccumulatedVerdict(const void*) const { return true; }
+	bool IndirectDraws::AccumulatedStoredNow(const void*) const { return false; }
 	void IndirectDraws::NoteCameraCut(std::uint32_t) {}
 	void IndirectDraws::RequestAccumulatedRefresh() {}
 	std::string IndirectDraws::VisibilityReport() { return {}; }

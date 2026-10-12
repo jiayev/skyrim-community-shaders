@@ -26,6 +26,9 @@ namespace DCLF
 			if (a_slot >= a_tables.pipelines.size() || !a_tables.PipelineUsed(a_slot))
 				return false;
 			const auto& pipelineKey = a_tables.pipelines[a_slot];
+			// T7e's forward part: a forward key's slot draws with the main set's colour pipeline in the forward range (FirstPersonForwardSlotsOf).
+			if (RasterForward(pipelineKey.rasterFlags))
+				return false;
 			// The main pipeline's vertex descriptor (the pulled vertex stage: skins read their palette as the Z-prepass's do) and its
 			// pixel descriptor without Deferred (the engine draws first person forward, after the composite: Community Shaders' Deferred
 			// sets InWorld around it); back faces culled unless two-sided.
@@ -43,6 +46,13 @@ namespace DCLF
 			for (std::size_t p = 0; p < a_tables.pipelines.size(); ++p)
 				if (ForwardPipelineKey key; FirstPersonForwardKey(a_tables, p, key))
 					a_slots[p] = ForwardPipelineOf(a_catalog, key, a_targets);
+		}
+
+		void FirstPersonForwardSlotsOf(const SceneStore::Tables& a_tables, bool a_on, std::vector<std::uint8_t>& a_slots)
+		{
+			a_slots.assign(a_on ? a_tables.pipelines.size() : 0, 0);
+			for (std::size_t p = 0; p < a_slots.size(); ++p)
+				a_slots[p] = a_tables.PipelineUsed(p) && RasterForward(a_tables.pipelines[p].rasterFlags) && !RasterRefraction(a_tables.pipelines[p].rasterFlags) ? 1 : 0;
 		}
 
 		namespace
@@ -115,7 +125,8 @@ namespace DCLF
 					const auto latch = frame.latch->Resource()->GetAPIResource().GetHandle();
 					const auto zeros = frame.zeros->Resource()->GetAPIResource().GetHandle();
 					commands.CopyBufferRegion(a_recording.Resolve(a_bindings.count).GetHandle(), 0, zeros, 0, sizeof(kZeroCounts));
-					const std::uint64_t bucketBytes = std::max<std::size_t>(frame.buckets.size(), 1) * sizeof(std::uint32_t);
+					// T7e's forward part: the forward range's count word after the buckets'.
+					const std::uint64_t bucketBytes = std::max<std::size_t>(frame.buckets.size() + (frame.forwardCapacity ? 1 : 0), 1) * sizeof(std::uint32_t);
 					commands.CopyBufferRegion(a_recording.Resolve(a_bindings.bucketCounts).GetHandle(), 0, zeros, 0, bucketBytes);
 					commands.CopyBufferRegion(a_recording.Resolve(a_bindings.block).GetHandle(), 0, latch, frame.latch->Offset(a_recording.FrameSlot()) + frame.blockOffset,
 						kFirstPersonBlockBytes);
@@ -367,6 +378,214 @@ namespace DCLF
 				bool colour = false;
 			};
 
+			struct SortBindings
+			{
+				org::DeclaredViewToken sequences, counts;
+			};
+
+			struct SortPrepared
+			{
+				std::shared_ptr<const ComputeProgram> program;
+				ForwardSortConstants constants{};
+				std::uint32_t groups = 0;
+			};
+
+			/**
+			 * @brief T7e's forward part: the first-person forward range's sort, back to front (ForwardSortCS.hlsl, the main forward range's
+			 * program), after the first-person BuildDraws staged the visible forward draws with the first-person camera's view depth; its count
+			 * the range's bucket count word (kCountOffset).
+			 */
+			class SortPass final : public org::TypedRenderGraphPass<SortPass, SortPrepared, SortBindings>
+			{
+			public:
+				explicit SortPass(std::shared_ptr<FirstPersonResources> a_resources) :
+					resources(std::move(a_resources)) {}
+
+				SortBindings Declare(org::PassBuilder& a_builder)
+				{
+					a_builder.PreferQueue(org::QueueKind::Graphics);
+					SortBindings bindings{};
+					bindings.sequences = a_builder.UnorderedAccess(*resources->sequences).View();
+					bindings.counts = a_builder.ShaderResource(*resources->bucketCounts).View();
+					return bindings;
+				}
+
+				void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
+				{
+					const auto frame = CurrentFirstPersonFrame(a_preparation);
+					a_out.push_back(frame ? frame->generation : 0);
+				}
+
+				SortPrepared Prepare(const SortBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+				{
+					SortPrepared prepared{};
+					const auto frame = CurrentFirstPersonFrame(a_preparation);
+					const auto& program = resources->main->forwardSort;
+					if (!frame || !frame->latch || !frame->forwardCapacity || !program)
+						return prepared;
+					prepared.program = program;
+					auto& constants = prepared.constants;
+					constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
+					constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.counts);
+					constants.stagingBase = frame->forwardFirst;
+					constants.capacity = frame->forwardCapacity;
+					constants.sequenceStride = static_cast<std::uint32_t>(sizeof(DrawSequence));
+					constants.countOffset = frame->forwardEntry * static_cast<std::uint32_t>(sizeof(std::uint32_t));
+					constants.options = ForwardSortConstants::kCountOffset;
+					prepared.groups = (frame->forwardCapacity + kForwardSortGroup - 1) / kForwardSortGroup;
+					return prepared;
+				}
+
+				static void Record(const SortBindings&, const SortPrepared& a_prepared, org::PassRecordContext& a_recording)
+				{
+					if (!a_prepared.program || !a_prepared.groups)
+						return;
+					auto& commands = a_recording.Commands();
+					commands.BindLayout(a_prepared.program->layout->GetHandle());
+					commands.BindPipeline(a_prepared.program->pipeline->GetHandle());
+					commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kForwardSortConstantWords, reinterpret_cast<const std::uint32_t*>(&a_prepared.constants));
+					commands.Dispatch(a_prepared.groups, 1, 1);
+				}
+
+			private:
+				std::shared_ptr<FirstPersonResources> resources;
+			};
+
+			struct ForwardBindings
+			{
+				std::array<org::DeclaredViewToken, kColorTargets> targets;
+				org::DeclaredViewToken depth;
+				org::ResourceBindingToken sequences, counts;
+			};
+
+			struct ForwardPrepared
+			{
+				std::shared_ptr<const FirstPersonFrame> frame;
+				PreprocessStates* preprocess = nullptr;
+				std::uint32_t targetCount = 0;
+				std::array<org::PreparedDescriptorReference, kColorTargets> targets{};
+				org::PreparedDescriptorReference depth{};
+			};
+
+			/**
+			 * @brief T7e's forward part: the sorted half of the first-person forward range drawn through the main colour signature (the main
+			 * set's forward pipelines, a pipeline per sequence: blended Lighting, the Effect port's meshes and particles), after the first-person
+			 * opaque draws, with the first-person camera's frame push data and depth range, onto the main pass's attachments (every one loaded:
+			 * the forward pipelines write the main target alone) tested against kPOST_ZPREPASS_COPY, as the engine's first-person blended list
+			 * is drawn after its opaque passes into kMAIN against that depth.
+			 */
+			class ForwardPass final : public org::TypedRenderGraphPass<ForwardPass, ForwardPrepared, ForwardBindings>
+			{
+			public:
+				explicit ForwardPass(std::shared_ptr<FirstPersonResources> a_resources) :
+					resources(std::move(a_resources)) {}
+
+				ForwardBindings Declare(org::PassBuilder& a_builder)
+				{
+					a_builder.PreferQueue(org::QueueKind::Graphics);
+					const std::span<const org::SrvView> noViews{};
+					const auto& main = *resources->main;
+					const auto& scene = *main.scene;
+					ForwardBindings bindings{};
+					for (std::uint32_t i = 0; i < main.targetCount; ++i)
+						bindings.targets[i] = a_builder.RenderTarget(main.native[i]).View();
+					bindings.depth = a_builder.DepthReadWrite(resources->depthCopy).View();
+					bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
+					bindings.counts = a_builder.IndirectArguments(*resources->bucketCounts).Resource();
+					a_builder.ShaderResource(*main.materialRows.buffer, noViews);
+					a_builder.ShaderResource(*main.pipelineRows.buffer, noViews);
+					a_builder.ShaderResource(*scene.objects, noViews);
+					a_builder.ShaderResource(*scene.extras, noViews);
+					a_builder.VertexBuffer(*scene.facePositions);
+					a_builder.ShaderResource(resources->block, noViews);
+					for (const auto& frameBuffer : main.frameBuffers)
+						a_builder.ShaderResource(frameBuffer.copy, noViews);
+					a_builder.ShaderResource(main.frameConstants, noViews);
+					if (main.lightLimitFix) {
+						a_builder.ShaderResource(org::ResourceIdentifier("cs.llf.lights"), noViews);
+						a_builder.ShaderResource(org::ResourceIdentifier("cs.llf.light-index-list"), noViews);
+						a_builder.ShaderResource(org::ResourceIdentifier("cs.llf.light-grid"), noViews);
+					}
+					return bindings;
+				}
+
+				void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
+				{
+					const auto frame = CurrentFirstPersonFrame(a_preparation);
+					a_out.push_back(frame ? frame->generation : 0);
+				}
+
+				ForwardPrepared Prepare(const ForwardBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+				{
+					ForwardPrepared prepared{};
+					auto frame = CurrentFirstPersonFrame(a_preparation);
+					if (!frame || !frame->forwardCapacity || !frame->indirect.valid || !frame->width || !frame->height || !resources->preprocessForward ||
+						!resources->main->forwardSort)
+						return prepared;
+					prepared.preprocess = resources->preprocessForward.get();
+					prepared.targetCount = resources->main->targetCount;
+					for (std::uint32_t i = 0; i < prepared.targetCount; ++i)
+						prepared.targets[i] = a_preparation.Capture(a_bindings.targets[i]);
+					prepared.depth = a_preparation.Capture(a_bindings.depth);
+					prepared.frame = std::move(frame);
+					return prepared;
+				}
+
+				static void Record(const ForwardBindings& a_bindings, const ForwardPrepared& a_prepared, org::PassRecordContext& a_recording)
+				{
+					if (!a_prepared.frame || !a_prepared.preprocess)
+						return;
+					const auto& frame = *a_prepared.frame;
+					auto& commands = a_recording.Commands();
+					std::array<rhi::ColorAttachment, kColorTargets> colours{};
+					for (std::uint32_t i = 0; i < a_prepared.targetCount; ++i) {
+						colours[i].rtv = a_recording.Resolve(a_prepared.targets[i]);
+						colours[i].loadOp = rhi::LoadOp::Load;
+						colours[i].storeOp = rhi::StoreOp::Store;
+						colours[i].resource = a_recording.Resolve(a_bindings.targets[i].Resource()).GetHandle();
+					}
+					rhi::DepthAttachment depth{};
+					depth.dsv = a_recording.Resolve(a_prepared.depth);
+					depth.depthLoad = rhi::LoadOp::Load;
+					depth.depthStore = rhi::StoreOp::Store;
+					depth.stencilLoad = rhi::LoadOp::Load;
+					depth.stencilStore = rhi::StoreOp::Store;
+					rhi::PassBeginInfo begin{};
+					begin.colors = { colours.data(), a_prepared.targetCount };
+					begin.depth = &depth;
+					begin.width = frame.width;
+					begin.height = frame.height;
+					begin.minDepth = 0.0f;
+					begin.maxDepth = frame.depthRange;
+					begin.debugName = "DCLF first-person forward";
+					const auto sequences = a_recording.Resolve(a_bindings.sequences).GetHandle();
+					const auto counts = a_recording.Resolve(a_bindings.counts).GetHandle();
+					const auto signature = frame.indirect.signatures[kColorVariant];
+					const std::uint64_t arguments = std::uint64_t(frame.forwardFirst + frame.forwardCapacity) * sizeof(DrawSequence);
+					const std::uint64_t countOffset = std::uint64_t(frame.forwardEntry) * sizeof(std::uint32_t);
+					auto beginDrawPass = [&](rhi::CommandList& a_list) {
+						a_list.BeginPass(begin);
+						a_list.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
+						a_list.BindLayout(frame.indirect.layout);
+						a_list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, frame.push.data());
+					};
+					// The explicit preprocess, before the pass, for the state its execution has (the forward epoch's rule: ForwardDrawPass).
+					auto& state = a_prepared.preprocess->Begin(a_recording.FrameSlot());
+					state.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
+					beginDrawPass(state);
+					commands.PreprocessIndirect(state, signature, sequences, arguments, counts, countOffset, frame.forwardCapacity);
+					state.EndPass();
+					state.End();
+					commands.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
+					beginDrawPass(commands);
+					commands.ExecuteIndirect(signature, sequences, arguments, counts, countOffset, frame.forwardCapacity);
+					commands.EndPass();
+				}
+
+			private:
+				std::shared_ptr<FirstPersonResources> resources;
+			};
+
 			class FirstPersonExtension final : public org::RenderGraph::IRenderGraphExtension
 			{
 			public:
@@ -399,9 +618,20 @@ namespace DCLF
 					a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.first-person.depth",
 						std::static_pointer_cast<org::RenderPass>(std::make_shared<DrawPass>(resources, false)))
 							.Epoch(depthEpoch));
+					// T7e's forward part: the forward range sorted with the depth epoch (after its BuildDraws), drawn in the colour epoch after
+					// the opaque draws.
+					if (resources->main->forwardSort)
+						a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.first-person.forward-sort",
+							std::static_pointer_cast<org::RenderPass>(std::make_shared<SortPass>(resources)))
+								.PreferQueue(org::QueueKind::Graphics)
+								.Epoch(depthEpoch));
 					a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.first-person.colour",
 						std::static_pointer_cast<org::RenderPass>(std::make_shared<DrawPass>(resources, true)))
 							.Epoch(colourEpoch));
+					if (resources->main->forwardSort && resources->preprocessForward)
+						a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.first-person.forward",
+							std::static_pointer_cast<org::RenderPass>(std::make_shared<ForwardPass>(resources)))
+								.Epoch(colourEpoch));
 				}
 
 			private:
@@ -549,11 +779,37 @@ namespace DCLF
 				if (auto* root = player->Get3D(true); root && root != player->Get3D(false))
 					SceneTracker::CollectGeometry(root, geometry);
 			const ankerl::unordered_dense::set<const RE::BSGeometry*> skeleton(geometry.begin(), geometry.end());
+			const auto claims = SceneStore::Get().FrameClaims();
+			f.forwardMembersNow = 0;
 			for (std::size_t o = 0; o < tables.objects.size() && !skeleton.empty(); ++o)
 				if (o < tables.objectGeometry.size() && tables.objectGeometry[o] && skeleton.contains(tables.objectGeometry[o]) &&
-					!(tables.objects[o].flags & kObjectFree) && tables.objects[o].pipelineIndex < f.slotsWanted.size())
+					!(tables.objects[o].flags & kObjectFree) && tables.objects[o].pipelineIndex < f.slotsWanted.size()) {
 					f.slotsWanted[tables.objects[o].pipelineIndex] = 1;
+					// T7e's forward part: a forward member of the frame's claims (the report's count).
+					if ((tables.objects[o].flags & kObjectForward) && claims && (claims->PhasesOf(tables.objectGeometry[o]) & kSetFirstPerson))
+						++f.forwardMembersNow;
+				}
+			// CS_DCLF_SET_PARITY: the skeleton's slots and their claimed phases, logged when they change (which first-person geometry the
+			// first-person view does not take, and what it takes instead).
+			if (SwitchEnabled(Switch::SetParity) && claims) {
+				std::string members;
+				for (std::size_t o = 0; o < tables.objects.size() && !skeleton.empty(); ++o)
+					if (o < tables.objectGeometry.size() && tables.objectGeometry[o] && skeleton.contains(tables.objectGeometry[o]) && !(tables.objects[o].flags & kObjectFree))
+						members += fmt::format("{}'{}' {} slot {} flags {:#x} phases {:#x}", members.empty() ? "" : "; ", tables.objectGeometry[o]->name.c_str() ? tables.objectGeometry[o]->name.c_str() : "?", static_cast<const void*>(tables.objectGeometry[o]),
+							o, tables.objects[o].flags, claims->PhasesOf(tables.objectGeometry[o]));
+				if (members != f.loggedSkeleton) {
+					f.loggedSkeleton = members;
+					logger::info("[DCLF] first-person skeleton's slots (T7e, CS_DCLF_SET_PARITY): {} geometries walked; {}", geometry.size(), members);
+				}
+			}
 		}
+		// T7e's forward part: the main set's forward pipelines draw into this pass when its depth is the main pass's format (the colour
+		// attachments are the main pass's own); the forward members the installed tables hold.
+		const bool forwardCompatible = formats.depth != DXGI_FORMAT_UNKNOWN && formats.depth == f.targets.depth;
+		if (f.forwardCompatible.exchange(forwardCompatible, std::memory_order_acq_rel) != forwardCompatible)
+			logger::info("[DCLF] first-person forward part: the main depth format {} and kPOST_ZPREPASS_COPY's {}: {}", static_cast<int>(formats.depth),
+				static_cast<int>(f.targets.depth), forwardCompatible ? "drawn by DCLF" : "the engine's");
+		f.forwardMembers += f.forwardMembersNow;
 		std::uint32_t slots = 0, ready = 0;
 		f.slotPipelines.assign(tables.pipelines.size(), rhi::PipelineHandle{});
 		for (std::size_t p = 0; p < tables.pipelines.size(); ++p) {
@@ -712,6 +968,11 @@ namespace DCLF
 				table.push_back(bucket.first);
 				table.push_back(bucket.capacity);
 			}
+			// T7e's forward part: the forward range's staging half, its entry after the buckets' (FirstPersonFrame::forwardEntry).
+			if (target.forwardCapacity) {
+				table.push_back(target.forwardFirst);
+				table.push_back(target.forwardCapacity);
+			}
 			if (!table.empty())
 				LatchWrite(latchBlock, "first-person bucket table", latchSlot, layout.TableOffset(), std::as_bytes(std::span(table)));
 			BuildDrawsLatch latch{};
@@ -797,6 +1058,13 @@ namespace DCLF
 			ActiveToggles().firstPerson ? "on" : "off", f.frames, f.latched, f.depthEpochs, f.colourEpochs, s[0], s[1], s[2], s[3], s[4], s[5], s[5] ? " <- EPOCH FAILED" : "", s[6],
 			s[6] ? " <- NO DEPTH EPOCH" : "", static_cast<int>(f.targets.colour), static_cast<int>(f.targets.colour2), static_cast<int>(f.targets.depth), f.slots,
 			f.pipelinesReady, f.depthRange);
+		const auto particles = FrameValues::TakeFirstPersonParticleStats();
+		text += fmt::format("[DCLF] first person's forward part (T7e): {:.1f} forward members a frame (blended Lighting, effects, particles; the main set's pipelines "
+							"through the colour signature, sorted back to front); particle members: {} expansions of {} particles faced to the first-person eye, "
+							"their snapshots' bound at most {:.0f} units from it{}{}\n",
+			f.frames ? static_cast<double>(f.forwardMembers) / static_cast<double>(f.frames) : 0.0, particles.expansions, particles.particles, particles.farthest,
+			particles.farthest > 2000.0f ? " <- FIRST-PERSON PARTICLE SPACE" : "",
+			f.forwardCompatible.load(std::memory_order_acquire) ? "" : "; the main depth format is not kPOST_ZPREPASS_COPY's: forward members stay the engine's");
 		// The <- FIRST PERSON observer (CS_DCLF_SET_PARITY; PassCapture): the engine's first-person registrations of members, withheld, and
 		// those it was handed (a member registered while its epochs did not draw: 0 on every covered frame).
 		if (SwitchEnabled(Switch::SetParity) || counts.memberKept)
@@ -805,7 +1073,7 @@ namespace DCLF
 				counts.registered, counts.withheld, counts.memberKept,
 				counts.memberKept && f.depthEpochs ? " <- FIRST PERSON" : (counts.withheld || counts.registered ? " <- OK" : ""));
 		const std::uint32_t depthFrame = f.depthFrame;
-		f.frames = f.latched = f.depthEpochs = f.colourEpochs = 0;
+		f.frames = f.latched = f.depthEpochs = f.colourEpochs = f.forwardMembers = 0;
 		f.skipped = {};
 		f.depthFrame = depthFrame;
 		return text;

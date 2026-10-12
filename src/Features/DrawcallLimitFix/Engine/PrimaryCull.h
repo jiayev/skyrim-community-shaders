@@ -70,19 +70,13 @@ namespace DCLF
 		bool Installed() const { return installed; }
 
 		/**
-		 * @brief Render thread, after the sun's Accumulate: the pass descriptor's ShadowDir and DefShadow bits (13, 14)
-		 * GetRenderPasses would give the geometry's main pass this frame, for a geometry no shadowed point light reaches;
-		 * ~0u when the cascades are not known this frame. The engine's rule (dclf-gpu-driven-frame.md, "Phase 1, step 2"),
-		 * with the sun's mask replaced by the cascade test.
-		 */
-		static std::uint32_t SunShadowBits(const RE::BSGeometry& a_geometry, const SceneCapture::LeafView& a_leaf, const SceneCapture::PropertyRecord* a_property = nullptr);
-		/**
-		 * @brief The bits SunShadowBits gives a geometry whose bound meets a cascade: what depends on the object and
-		 * the frame's globals alone. The GPU makes the cascade test (kObjectSunTest).
+		 * @brief The pass descriptor's ShadowDir and DefShadow bits (13, 14) a geometry whose bound meets a cascade takes: what depends on
+		 * the object and the frame's globals alone. The GPU makes the cascade test (kObjectSunTest), as the engine's rule does with the
+		 * sun's mask (dclf-gpu-driven-frame.md, "Phase 1, step 2").
 		 */
 		static std::uint32_t SunShadowStatic(const SceneCapture::LeafView& a_leaf, const SceneCapture::PropertyRecord* a_property = nullptr);
 		/** @brief CS_DCLF_RESIDENT_PARITY: the synthetic pass built from scratch (no cache), for SceneStore's comparison. */
-		static bool FreshSyntheticPass(const RE::BSGeometry& a_geometry, const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out);
+		static bool FreshSyntheticPass(const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out);
 		/**
 		 * @brief A membership pass's answer (T6b3e): the pass when ok, why there is none otherwise (LastSyntheticFail's, taken right
 		 * after the synthetic pass on the thread that made it), and the derivation cache entry for the caller to store.
@@ -100,9 +94,9 @@ namespace DCLF
 		 * thread with the frame's globals bound): the derived descriptor comes from a_cached when its witnesses match, and the entry to
 		 * store comes back in the answer (SceneStore keeps it in the tracked entry: Tracked::membershipDerived).
 		 */
-		static Membership MembershipPass(const RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, const MembershipDerived& a_cached);
+		static Membership MembershipPass(const SceneCapture::LeafView& a_leaf, const MembershipDerived& a_cached);
 		/** @brief MembershipPass for the geometry's layer (LayerPropertyOf: a_leaf's layer): the pass of its property with hint 12. */
-		static Membership MembershipLayerPass(const RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, const MembershipDerived& a_cached);
+		static Membership MembershipLayerPass(const SceneCapture::LeafView& a_leaf, const MembershipDerived& a_cached);
 		/** @brief A fade root's fade-out distance for BuildDraws' fade test (kObjectFadeTest), 0 when it has none. */
 		static float MembershipFadeDistance(const SceneCapture::NodeRecord& a_root) { return FadeDistanceOf(a_root); }
 		/** @brief The frame globals a membership pass reads (the static sun bits, the fade distances): a change rebinds them all. */
@@ -129,17 +123,34 @@ namespace DCLF
 		bool StoodIn(const void* a_root) const { return standInRoots.contains(a_root); }
 		/**
 		 * @brief T7b4, any thread (the animation gate's job threads): whether DCLF is a_node's one fade writer this frame - its root is
-		 * in the set the main thread published at Main::Update's entry (the roots no engine cull steps: the stood-in roots; once the
-		 * culls stop, every listed root). The gate's fade update (FUN_1402cff60 -> FUN_14147a160) skips those; FadeStateCS makes the
-		 * same update on the GPU from the animated batch, and the write-back carries its milestones to the node.
+		 * in the set the main thread published at Main::Update's entry (T7f checklist items 4-5: every listed root, kFadeRootWritten in
+		 * the accepted tables the entry published). The gate's fade update (FUN_1402cff60 -> FUN_14147a160) skips those, and so do the
+		 * fade nodes' OnVisible (FadeOnVisible);
+		 * FadeStateCS makes the same update on the GPU, and the write-back carries its milestones to the node.
 		 */
 		bool FadeWrittenByDclf(const void* a_node) const
 		{
-			const auto* writers = fadeWriters.load(std::memory_order_acquire);
-			return writers && writers->contains(a_node);
+			const auto* tables = fadeWriterTables.load(std::memory_order_acquire);
+			return tables && WrittenByTables(tables, a_node);
 		}
+		void NoteOnVisibleFadeSkipped() { onVisibleFadeSkipped.fetch_add(1, std::memory_order_relaxed); }
+		/** @brief a_node listed by a_tables (SceneStore::Tables) with kFadeRootWritten. Any thread; the tables are immutable. */
+		static bool WrittenByTables(const void* a_tables, const void* a_node);
 		/** @brief T7b4: the single writer's counts, and CS_DCLF_FADE_PARITY's <- FADE DOUBLE (empty when there is nothing to report). */
 		std::string FadeWriterReport();
+		/**
+		 * @brief T7f item 8, the census (render thread): whether a_geometry is under an entry the cut has as whole this frame (admitted,
+		 * nothing engine-drawn, nothing to hand over), which no engine cull should reach.
+		 */
+		bool DrawsWhole(const RE::NiAVObject* a_geometry) const
+		{
+			if (!standInLive)
+				return false;
+			for (const RE::NiAVObject* object = a_geometry; object; object = object->parent)
+				if (const auto it = cut.eligible.find(object); it != cut.eligible.end())
+					return it->second < cut.admitted.size() && cut.admitted[it->second] && !cut.mixed[it->second] && !cut.walk[it->second];
+			return false;
+		}
 		/** @brief Whether a_node is an eligible entry's root of the cut's snapshot (the readback parity's description). */
 		bool IsEntry(const RE::NiAVObject* a_node) const { return cut.eligible.contains(a_node); }
 		/**
@@ -158,12 +169,10 @@ namespace DCLF
 		 */
 		/** @brief T6b0: why this thread's last SyntheticPass gave none (kSyntheticFailNames' index; 0: it gave one). */
 		static std::uint8_t LastSyntheticFail();
-		static constexpr std::array<const char*, 6> kSyntheticFailNames{ "-", "not derived", "not lighting", "sun bits", "translucent layer", "translucent" };
-		static bool SyntheticPass(const RE::BSGeometry& a_geometry, const SceneCapture::LeafView& a_leaf, std::uint32_t a_derivedPass, AccumulatedPass& a_out,
-			bool a_sunOnGpu = false, const SceneCapture::PropertyRecord* a_layer = nullptr);
+		static constexpr std::array<const char*, 6> kSyntheticFailNames{ "-", "not derived", "not lighting", "-", "translucent layer", "translucent" };
+		static bool SyntheticPass(const SceneCapture::LeafView& a_leaf, std::uint32_t a_derivedPass, AccumulatedPass& a_out,
+			const SceneCapture::PropertyRecord* a_layer = nullptr);
 
-		/** @brief This frame's members in view under the entries the list jobs stood in for (nothing registered them). */
-		const std::vector<const RE::BSGeometry*>& StoodInMembers() const { return frameVisible; }
 		/**
 		 * @brief Render thread (SceneStore, a member's residency dropped): the geometry's entry is walked again (Cut::walk) until
 		 * the next frame says whether it still needs it.
@@ -313,6 +322,8 @@ namespace DCLF
 		void InstallSceneLists();
 		/** @brief The report's scene lists line (a_checked, a_missed: the dry runs' stand-in counts). */
 		void ReportSceneLists(std::uint64_t a_checked, std::uint64_t a_missed);
+		/** @brief T7f item 8: the report's culls off line (the candidate entries by the cut's verdict, the engine's classes named). */
+		void ReportCullsOff();
 		enum class ListMode : std::uint8_t
 		{
 			Engine,   // the engine builds and ClearLists clears them; the filter takes DCLF's roots out after the build
@@ -434,6 +445,18 @@ namespace DCLF
 		/** @brief The entry's plan; its members are appended to cut.members (not for a rejected entry). */
 		EntryPlan PlanOf(std::uint32_t a_entry, const RE::NiAVObject* a_root);
 		std::uintptr_t geometryOnVisible = 0;  // BSGeometry's OnVisible (vtable slot 0x34): a member's must be it
+		/**
+		 * @brief T7f item 8: the OnVisibles (slot 0x34) whose cull side effects DCLF makes or needs none of
+		 * (skyrim-engine-notes.md, "T7f item 8"), read from the classes' vtables at Install. Nodes: NiNode's (the slot, and the engine's
+		 * own, which every subclass that keeps it calls), the multibound's frustum cache, a switch's selected child (followed by event), a
+		 * billboard's turn (DCLF turns its billboards from the unturned world), an ordered node's alpha group number (DCLF orders its
+		 * forward members itself). Geometry besides BSGeometry's: three that append under a condition.
+		 */
+		struct WideOnVisible
+		{
+			std::uintptr_t node = 0, engineNode = 0, multiBound = 0, switchNode = 0, billboard = 0, ordered = 0, dynamic = 0, subIndex = 0, segmented = 0;
+		};
+		WideOnVisible wideOnVisible;
 		/** @brief BSTreeNode::OnVisible's height test: true when the tree is above the limit (not drawn, not updated). */
 		static bool TreeAboveLimit(const RE::NiAVObject* a_node, const RE::NiCullingProcess& a_process);
 		/** @brief Render thread, after the full-frustum cull: this frame's preconditions, and a new snapshot's plans. */
@@ -488,6 +511,10 @@ namespace DCLF
 			// to the GPU whole. Kept by events (RefreshWalk): a new snapshot, a member's binding lost (NoteMemberLost, then
 			// the next frame), a member newly drawn.
 			std::vector<std::uint8_t> walk;
+			// T7f item 8, the census's names: per entry index, why its plan is Rejected (the RTTI of the node or geometry whose OnVisible
+			// the cut cannot stand for, or no DCLF geometry; null otherwise), and the first engine-drawn geometry of a mixed one.
+			std::vector<const char*> rejectReason;
+			std::vector<std::string> mixedBy;
 			// The same by node, kept across snapshots with the set of DCLF members it was admitted with (MemberSignature): a root
 			// whose members changed (a decal attached, a part swapped) is admitted again only once the new ones are drawn.
 			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint64_t> admittedRoots;
@@ -571,17 +598,18 @@ namespace DCLF
 		// The fade roots DCLF services (SyncFadeOwnership: the admitted entries' with a fade plan), and whether a frame since
 		// the last applied one left every entry to the engine (their nodes are then seeded again).
 		std::vector<const RE::NiAVObject*> ownedFadeRoots;
-		bool fadeSkipped = false;
-		// T7b2: the roots the cut stands in for (ownedFadeRoots without engine-drawn parts), whose kAccumulated DCLF writes
-		// (AtUpdateEntry), and the stood-in list the <- ANIM RATE prediction is made from.
+		// T7b2: the roots the cut stands in for (ownedFadeRoots without engine-drawn parts, and since T7f item 8 the plain entries without
+		// them), whose kAccumulated no engine cull writes (AtUpdateEntry), and the stood-in fade roots the <- ANIM RATE prediction is made from.
 		ankerl::unordered_dense::set<const void*> standInRoots;
 		std::vector<const void*> standInList;
-		// T7b4: the roots whose fade DCLF alone writes (FadeWrittenByDclf), published by the main thread at Main::Update's entry as an
-		// immutable set when standInRoots moved since (standInVersion), and let go at a later entry: the last cycle was waited for, so
-		// no gate reads it. Lock-free; the gate's skips since the last report.
-		using FadeWriterSet = ankerl::unordered_dense::set<const void*>;
-		std::atomic<const FadeWriterSet*> fadeWriters{ nullptr };
-		std::uint64_t standInVersion = 1, fadeWritersVersion = 0;
+		// T7b4, T7f checklist items 4-5: the roots whose fade DCLF alone writes (FadeWrittenByDclf) are the accepted tables the entry found
+		// (SceneStore::Tables, immutable; their rows' kFadeRootWritten), held by the main thread until the next entry (the last cycle was
+		// waited for: no OnVisible or gate reads them). Lock-free; the gate's and OnVisibles' skips since the last report.
+		std::atomic<const void*> fadeWriterTables{ nullptr };
+		std::shared_ptr<const void> fadeWriterTablesHeld;
+		std::atomic<std::uint64_t> onVisibleFadeSkipped{ 0 };
+		/** @brief Main::Update's entry: the accepted tables published as the writer set (a_running false: none). */
+		void PublishWriterTables(bool a_running);
 		std::atomic<std::uint64_t> gateFadeSkipped{ 0 };
 		/**
 		 * @brief CS_DCLF_FADE_PARITY's <- FADE DOUBLE: the roots DCLF writes as one frame's entry found them, with their last-visible
@@ -598,7 +626,7 @@ namespace DCLF
 		std::unique_ptr<FadeDoubleSample> fadeDoubleSample;
 		bool fadeCutSkipped = false;  // a frame since the last entry had the engine cull every entry (PrepareFrame's preconditions)
 		std::uint64_t fadeDoubleFrames = 0, fadeDoubleRoots = 0, fadeDoubleStepped = 0, fadeDoubleSteppedStored = 0, fadeDoubleSkippedFrames = 0,
-					  fadeDoubleSkippedStepped = 0;
+					  fadeDoubleSkippedStepped = 0, fadeDoubleSnapped = 0;
 		std::string fadeDoubleFirst;
 		/** @brief Main::Update's entry: the writer set published, and CS_DCLF_FADE_PARITY's sample judged and taken again. */
 		void PublishFadeWriters(bool a_running, const std::vector<const void*>& a_stored);

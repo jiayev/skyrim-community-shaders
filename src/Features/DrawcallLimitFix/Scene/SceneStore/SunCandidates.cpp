@@ -119,8 +119,8 @@ namespace DCLF
 			t.geometrySlot[g] = FindObject(geometry);
 			t.primaryGeometry[g] = 0;
 			if (a_sun)
-				if (const auto entry = tracked.find(geometry); entry != tracked.end() && PrimaryEntryAllows(entry->second, *geometry))
-					t.primaryGeometry[g] = 1;
+				if (const auto entry = tracked.find(geometry); entry != tracked.end())
+					t.primaryGeometry[g] = PrimaryVerdict(entry->second, *geometry);
 			t.geometries[e].push_back(g);
 		}
 	}
@@ -226,7 +226,7 @@ namespace DCLF
 					return fmt::format("a geometry of {} with object {}, now {}", static_cast<const void*>(root), a_table.geometrySlot[g->second], FindObject(geometry));
 				if (a_sun) {
 					const auto entry = tracked.find(const_cast<RE::BSGeometry*>(geometry));
-					const std::uint8_t allows = entry != tracked.end() && PrimaryEntryAllows(entry->second, *geometry) ? 1 : 0;
+					const std::uint8_t allows = entry != tracked.end() ? PrimaryVerdict(entry->second, *geometry) : 0;
 					if (a_table.primaryGeometry[g->second] != allows)
 						return fmt::format("a geometry of {} with its primary verdict {}, now {}", static_cast<const void*>(root), a_table.primaryGeometry[g->second], allows);
 				}
@@ -489,7 +489,26 @@ namespace DCLF
 		const bool decal = (leaf.property->flags & 0xc000000ull) != 0;
 		if (decal && !ActiveToggles().decals)
 			return false;
+		// T7f item 8: a blended member is DCLF's too (T7d's forward epoch: blended Lighting, the Effect port, its billboards), so its entry
+		// can be whole; its eligibility (candidateReason) already says whether the forward toggles take it.
+		if (ActiveToggles().forward)
+			return true;
 		return decal || !leaf.AlphaBlending();
+	}
+
+	std::uint8_t SceneStore::PrimaryVerdict(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const
+	{
+		if (PrimaryEntryAllows(a_tracked, a_geometry))
+			return 1;
+		// T7f item 8: a hidden static's geometry (an editor marker, an emitter's shape) is drawn by nobody, and the cull would skip it; its
+		// hidden bit changes by its events alone, which classify it again (SunEntryAllows' rule; an actor's parts are shown and hidden by
+		// its behaviour graph without one).
+		if (a_tracked.candidateFrame != 0 && a_tracked.candidateReason == Ineligible::Hidden) {
+			const auto leaf = a_tracked.geometry ? mirror.Leaf(a_tracked.geometry.get()) : SceneCapture::LeafView{};
+			if (!(leaf.node && leaf.node->userData && leaf.node->formType == static_cast<std::uint8_t>(RE::FormType::ActorCharacter)))
+				return 2;
+		}
+		return 0;
 	}
 
 	void SceneStore::UpdateSunCandidates(bool a_full)
@@ -521,9 +540,9 @@ namespace DCLF
 							candidate = false;
 							break;
 						}
-						const std::uint64_t allows = PrimaryEntryAllows(entry->second, *geometry) ? 1 : 0;
+						const std::uint64_t allows = PrimaryVerdict(entry->second, *geometry);
 						Fnv1a member;
-						member.Mix(reinterpret_cast<std::uintptr_t>(geometry) * 2 + allows);
+						member.Mix(reinterpret_cast<std::uintptr_t>(geometry) * 4 + allows);
 						member.Mix(entry->second.slot);
 						signature += member.value;
 					}

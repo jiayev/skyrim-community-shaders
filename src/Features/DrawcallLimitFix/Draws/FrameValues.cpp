@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Common/EngineReleases.h"
 
 #include "Features/DrawcallLimitFix/Common/KeptState.h"
+#include "Features/DrawcallLimitFix/Engine/Billboards.h"
 #include "Features/DrawcallLimitFix/Engine/ParticleSnapshots.h"
 #include "Features/DrawcallLimitFix/Engine/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Scene/LightingConstants.h"
@@ -11,6 +12,8 @@
 #include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
 
 #include <bit>
+#include <cmath>
+#include <optional>
 #include <cstring>
 #include <limits>
 
@@ -32,6 +35,10 @@ namespace DCLF
 {
 	namespace
 	{
+		// T7e's forward part: the first-person particle members' expansions (the producer's), for the first-person report.
+		std::atomic<std::uint64_t> firstPersonParticleExpansions{ 0 }, firstPersonParticleCount{ 0 };
+		std::atomic<std::uint32_t> firstPersonParticleFarthest{ 0 };  // a non-negative float's bits (ordered as the float)
+
 		// Row-major 3x4, as the shaders read a transform.
 		void StoreTransform(const RE::NiTransform& a_transform, float (&a_out)[12])
 		{
@@ -123,6 +130,15 @@ namespace DCLF
 		}
 	}
 
+	FrameValues::FirstPersonParticleStats FrameValues::TakeFirstPersonParticleStats()
+	{
+		FirstPersonParticleStats out;
+		out.expansions = firstPersonParticleExpansions.exchange(0, std::memory_order_relaxed);
+		out.particles = firstPersonParticleCount.exchange(0, std::memory_order_relaxed);
+		out.farthest = std::bit_cast<float>(firstPersonParticleFarthest.exchange(0, std::memory_order_relaxed));
+		return out;
+	}
+
 	void FrameValues::SampleRow(const RE::BSGeometry& a_geometry, const RE::NiAVObject* a_sunEntryNode, const RE::BSShaderProperty* a_fadeProperty,
 		BindlessPlacement& a_out)
 	{
@@ -139,6 +155,10 @@ namespace DCLF
 		StoreSunEntry(a_sunEntryNode, a_out.sunEntry);
 		StoreFadeNode(a_fadeProperty, a_out.lodFadeNode);
 		StoreForwardSort(a_geometry, a_out.forwardSort);
+		// A billboard's row is its unturned world and its node's base and pivot, which the vertex stage turns to the drawing camera
+		// (Billboards.h): its leaf's world and bound above are the last cull's turn, which nothing of DCLF's reads. Whatever the toggle, so
+		// that a row never depends on it (only the leaf's key does: RasterEffectBillboard).
+		Billboards::SampleRow(a_geometry, a_out);
 	}
 
 	bool FrameValues::SampleSlot(const SceneStore::Tables& a_tables, std::uint32_t a_slot, BindlessPlacement& a_out)
@@ -280,6 +300,9 @@ namespace DCLF
 			FrameUploads more;  // the frame's other uploads (Kick's a_uploads)
 			std::vector<FirstPersonSample> firstPerson;  // T7e: the render thread's samples (Kick)
 			ParticleSnapshots::Camera particleCamera;    // T7e: the main camera the particle members' quads face (Kick)
+			// T7e's forward part: the first-person camera a first-person particle member's quads face (Kick): the main camera's rotation (the
+			// first-person camera's, FUN_1414cb020) at the first-person eye (DrawWorld +0x00).
+			ParticleSnapshots::Camera firstPersonParticleCamera;
 		};
 		void Run(const Job& a_job);
 		void Sample(const Job& a_job);
@@ -366,9 +389,10 @@ namespace DCLF
 		items.reserve(work.movers.size() + (a_job.written.empty() ? 0 : a_job.written.back()->written.size()));
 		listed.assign(out.size(), 0);
 		blockListed.assign(paletteOut.size() / 2, 0);
-		// T7e: never a first-person item (the render thread's: FirstPersonSample), whose engine transforms the frame moves.
+		// T7e: never a first-person item (the render thread's: FirstPersonSample), whose engine transforms the frame moves; but a first-person
+		// particle member's quads, expanded here from its snapshots alone (its row the render thread's sample, the snapshot's world over it).
 		auto list = [&](const Plan::Item& a_item, bool a_settles) {
-			if (a_item.firstPerson || a_item.slot >= out.size() || !a_item.geometry || std::exchange(listed[a_item.slot], 1))
+			if ((a_item.firstPerson && !a_item.particles) || a_item.slot >= out.size() || !a_item.geometry || std::exchange(listed[a_item.slot], 1))
 				return;
 			const bool palette = a_item.boneRows && std::size_t(a_item.boneOffset) + a_item.boneRows <= blockListed.size() && !std::exchange(blockListed[a_item.boneOffset], 1);
 			items.push_back({ &a_item, palette, a_settles });
@@ -449,34 +473,53 @@ namespace DCLF
 			for (std::size_t i = a_begin; i < a_end; ++i) {
 				const auto& [itemPointer, palette, settles] = items[i];
 				const auto& item = *itemPointer;
-				EngineReadWindow::Lease lease;
-				if (!lease) {
+				// T7e's forward part: a first-person particle member reads no engine memory here (its row is the render thread's sample, written
+				// above; the rest the snapshot's), so it takes no lease, and is never a settling slot.
+				const bool firstPerson = item.firstPerson;
+				std::optional<EngineReadWindow::Lease> lease;
+				if (!firstPerson)
+					lease.emplace();
+				if (lease && !*lease) {
 					++refusedHere;
 					if (settles)
 						mine.settling.push_back(&item);  // not sampled: the next producer takes it
 					continue;
 				}
-				SampleItem(item, row, layer);
+				if (firstPerson)
+					row = out[item.slot];
+				else
+					SampleItem(item, row, layer);
 				// T7e: a particle member's quads, its system's newest snapshot faced to the frame's camera, into its block's current rows (below),
 				// and its placement's transforms and bound the snapshot's: its particle data is never read here (ParticleSnapshots::Expand).
 				auto* particles = particleRecords[i];
 				if (particles) {
 					particleRows.resize(item.boneRows);
 					ParticleSnapshots::Expanded expanded;
-					ParticleSnapshots::Get().Expand(*particles, a_job.particleCamera, item.boneRows / ParticleSnapshots::kRowsPerParticle, particleRows.data()->v, expanded);
+					ParticleSnapshots::Get().Expand(*particles, firstPerson ? a_job.firstPersonParticleCamera : a_job.particleCamera,
+						item.boneRows / ParticleSnapshots::kRowsPerParticle, particleRows.data()->v, expanded);
 					if (expanded.snapshot) {
 						std::memcpy(row.world, expanded.world, sizeof(row.world));
 						std::memcpy(row.previousWorld, expanded.world, sizeof(row.previousWorld));
 						std::memcpy(row.bound, expanded.bound, sizeof(row.bound));
+						if (firstPerson) {
+							const auto& eye = a_job.firstPersonParticleCamera.eye;
+							const float dx = expanded.bound[0] - eye[0], dy = expanded.bound[1] - eye[1], dz = expanded.bound[2] - eye[2];
+							const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+							firstPersonParticleExpansions.fetch_add(1, std::memory_order_relaxed);
+							firstPersonParticleCount.fetch_add(expanded.particles, std::memory_order_relaxed);
+							const std::uint32_t bits = std::bit_cast<std::uint32_t>(distance);
+							for (std::uint32_t seen = firstPersonParticleFarthest.load(std::memory_order_relaxed);
+								bits > seen && !firstPersonParticleFarthest.compare_exchange_weak(seen, bits, std::memory_order_relaxed);) {}
+						}
 					}
 				}
-				if (settles && std::memcmp(&item.geometry->world, &DrawnPreviousWorld(*item.geometry), sizeof(RE::NiTransform)) != 0)
+				if (settles && !firstPerson && std::memcmp(&item.geometry->world, &DrawnPreviousWorld(*item.geometry), sizeof(RE::NiTransform)) != 0)
 					mine.settling.push_back(&item);
 				if (std::memcmp(&out[item.slot], &row, sizeof(row)) != 0) {
 					out[item.slot] = row;
 					mine.slots.push_back(item.slot);
 				}
-				if (item.layerSlot != kNoObjectSlot && item.layerSlot < out.size() && std::memcmp(&out[item.layerSlot], &layer, sizeof(layer)) != 0) {
+				if (!firstPerson && item.layerSlot != kNoObjectSlot && item.layerSlot < out.size() && std::memcmp(&out[item.layerSlot], &layer, sizeof(layer)) != 0) {
 					out[item.layerSlot] = layer;
 					mine.slots.push_back(item.layerSlot);
 				}
@@ -843,6 +886,11 @@ namespace DCLF
 		job.uploads = std::move(uploads);
 		job.more = std::move(a_uploads);
 		job.particleCamera = ParticleSnapshots::Get().FrameCamera();
+		// T7e's forward part: the first-person eye (DrawWorld +0x00, FUN_1406452c0's, filled before BeginSceneFrame: the camera position
+		// FUN_1414cb020 places the first-person camera at, its rotation the world camera's).
+		job.firstPersonParticleCamera = job.particleCamera;
+		if (const auto* eye = REL::Relocation<const float*>{ REL::Offset(0x338c8c0) }.get(); eye && job.particleCamera.valid)
+			std::memcpy(job.firstPersonParticleCamera.eye, eye, sizeof(job.firstPersonParticleCamera.eye));
 		// T7e: the first-person members the frame draws (SetFirstPersonClaims), sampled here: the render thread, the engine's update done
 		// and Main::Draw's first-person shift (FUN_1414cb020) still ahead. Their skins' palettes are updated here too (the engine's update
 		// is once a frame, frameID): the engine draws none of them (withheld), so nothing of its own reads a palette pinned in world space.

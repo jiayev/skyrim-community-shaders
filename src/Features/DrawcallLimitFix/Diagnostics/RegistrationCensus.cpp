@@ -5,6 +5,7 @@
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
 #include "Features/DrawcallLimitFix/Engine/PassCapture.h"
+#include "Features/DrawcallLimitFix/Engine/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Engine/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Engine/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
@@ -65,8 +66,6 @@ namespace DCLF::RegistrationCensus
 			kEligibleRecord = 2 * kReasons,  // eligible, with a record, not a member of the view's phase
 			kEligibleNoRecord,               // eligible, no record
 			kMemberDefect,                   // a member of the view's phase the view withholds, drawn by the engine: a defect
-			kMemberCrossfadeCopy,            // a member's LOD cross-fade copy (hint 10), the engine's by the toggles
-			kMemberUnmodelledFade,           // a member's fade DCLF does not model (CS_DCLF_FADING=0)
 			kMemberParityBoth,               // CS_DCLF_PARITY_BOTH: nothing is withheld
 		kEligibleUnbound,                // eligible, a record, not bound (the coordinator's verdict alone)
 		kEligibleBound,                  // eligible, bound, not a member of the view's phase in the frame's set (the coordinator's alone)
@@ -95,10 +94,6 @@ namespace DCLF::RegistrationCensus
 				return "lighting: eligible, no record";
 			case kMemberDefect:
 				return "lighting: MEMBER drawn by the engine";
-			case kMemberCrossfadeCopy:
-				return "lighting: a member's LOD cross-fade copy";
-			case kMemberUnmodelledFade:
-				return "lighting: a member's fade DCLF does not model";
 			case kMemberParityBoth:
 				return "lighting: a member (parity both)";
 			case kEligibleUnbound:
@@ -151,6 +146,11 @@ namespace DCLF::RegistrationCensus
 			// The window's.
 			std::uint32_t frames = 0;
 			std::uint64_t passes = 0, attributed = 0, defects = 0;
+			// T7f item 8: kept passes of a geometry under an entry DCLF draws whole, in the main camera's, the sun's and the local lights'
+			// views, whose culls T7f item 8 takes off for it (no engine cull should reach it: underWhole, the tag), and in the other views
+			// (first person, focus and other shadows, the reflection faces, the occlusion maps), counted apart.
+			std::uint64_t underWhole = 0, underWholeElsewhere = 0;
+			std::string firstUnderWhole, firstUnderWholeElsewhere;
 			GeometrySet geometries;
 			ankerl::unordered_dense::map<std::uint64_t, ClassWindow> classes;
 			ankerl::unordered_dense::map<ViewClassKey, Tally, ViewClassHash> viewClasses;
@@ -296,13 +296,19 @@ namespace DCLF::RegistrationCensus
 			const bool blended = !ActiveToggles().forward && (leaf.view.AlphaBlending() || (lighting && lighting->materialAlpha < 1.0f));
 			Ineligible parentReason = Ineligible::None;
 			bool tracked = false;
+			// CS_DCLF_BILLBOARDS: an effect BSTriShape without a skin under one billboard node is DCLF's (SceneStore::BillboardModeOf).
+			// T7f item 7: a particle system under any billboard nodes too (ClassifyFrame: its world and particles are its last update's).
+			const bool particlesTaken = ActiveToggles().billboards && SwitchOnUnlessZero(Switch::BillboardParticles) && ParticleGeometryType(leaf.view.Type());
+			const bool billboardTaken = ActiveToggles().billboards && SceneCapture::LeafView::Effect(leaf.view.property) &&
+			                            leaf.view.Type() == static_cast<std::uint8_t>(RE::BSGeometry::Type::kTriShape) && !leaf.view.Skinned();
+			std::uint32_t billboards = 0;
 			for (const RE::NiNode* node = a_geometry.parent; node; node = node->parent) {
 				if (store.IsCategoryNode(node)) {
 					tracked = true;
 					break;
 				}
 				auto* object = const_cast<RE::NiNode*>(node);
-				if (netimmerse_cast<RE::NiBillboardNode*>(object))
+				if (netimmerse_cast<RE::NiBillboardNode*>(object) && !particlesTaken && (!billboardTaken || ++billboards > 1))
 					parentReason = Ineligible::Billboard;
 				else if (parentReason == Ineligible::None && blended && netimmerse_cast<RE::BSOrderedNode*>(object))
 					parentReason = Ineligible::UnsupportedParent;
@@ -380,12 +386,8 @@ namespace DCLF::RegistrationCensus
 			if (lighting || effect) {
 				std::uint64_t cls;
 				if (const auto phase = WithheldPhase(a_noted, view, a_frame); phase && (a_frame.set->PhasesOf(geometry) & phase)) {
-					// Kept by the hooks although its view withholds the phase: WithholdMain's exceptions, else a defect.
-					const bool main = view == kMain || view == kMainDepth;
-					cls = a_frame.parityBoth                                  ? kMemberParityBoth :
-					      main && a_noted.hint == 10                           ? kMemberCrossfadeCopy :
-					      main && (a_noted.flags & kFading)                    ? kMemberUnmodelledFade :
-					                                                             kMemberDefect;
+					// Kept by the hooks although its view withholds the phase: a defect.
+					cls = a_frame.parityBoth ? kMemberParityBoth : kMemberDefect;
 				} else {
 					if (const auto it = a_frame.verdicts.find(geometry); it != a_frame.verdicts.end())
 						cls = it->second;
@@ -403,6 +405,14 @@ namespace DCLF::RegistrationCensus
 				attributed = a_noted.shaderType > RE::BSShader::Type::None && a_noted.shaderType < RE::BSShader::Type::Total && rtti;
 				key = (static_cast<std::uint64_t>(a_noted.shaderType) << 48) | (reinterpret_cast<std::uintptr_t>(rtti) & kRttiMask);
 			}
+			// T7f item 8: a pass the engine kept under an entry the cut has as whole (any view): a cull reached what DCLF draws whole.
+			if (PrimaryCull::Get().DrawsWhole(geometry)) {
+				// The occlusion maps' culls reach roots outside the scene lists (object LOD) that the cut's verdict says nothing of: counted apart.
+				const bool covered = view == kMainDepth || view == kMain || view == kSun || view == kSpot || view == kPoint;
+				if ((covered ? census.underWhole : census.underWholeElsewhere)++ == 0)
+					(covered ? census.firstUnderWhole : census.firstUnderWholeElsewhere) = fmt::format("{} in {}", Describe(*geometry, true),
+						view < kFirstOther ? std::string(kViewNames[view]) : fmt::format("other #{}", view - kFirstOther));
+			}
 			++census.passes;
 			census.attributed += attributed ? 1 : 0;
 			census.geometries.insert(geometry);
@@ -418,8 +428,21 @@ namespace DCLF::RegistrationCensus
 			++cls.passes;
 			++cls.views[view];
 			const auto [it, added] = cls.geometries.try_emplace(geometry);
-			if (added)
+			if (added) {
 				it->second.name = Describe(*geometry, lighting || effect);
+				// T7f item 7: an untracked geometry's chain top (no category node above it): the three highest nodes, root first, and the depth.
+				if (const std::uint64_t c = key & 0xFF; (lighting || effect) && c >= kUntracked && c < kUntracked + kReasons) {
+					std::vector<const RE::NiAVObject*> chain;
+					for (const RE::NiAVObject* at = geometry->parent; at; at = at->parent)
+						chain.push_back(at);
+					std::string top;
+					for (std::size_t i = chain.size(), n = 0; i-- > 0 && n < 3; ++n) {
+						const auto* nodeRtti = chain[i]->GetRTTI();
+						top += fmt::format("{}'{}' ({})", n ? " > " : "", chain[i]->name.c_str() ? chain[i]->name.c_str() : "", nodeRtti && nodeRtti->name ? nodeRtti->name : "?");
+					}
+					it->second.name += fmt::format(" [chain {} deep: {}]", chain.size(), top);
+				}
+			}
 			++it->second.passes;
 		}
 
@@ -529,9 +552,11 @@ namespace DCLF::RegistrationCensus
 											 census.approximatePasses);
 		std::string out = fmt::format(
 			"[DCLF] census (T7a) over {} frames: {} passes the engine kept ({:.0f} a frame), {} geometries; {:.1f}% attributed to a named class{}; {} member passes "
-			"drawn by the engine{}; Lighting verdicts {}\n",
+			"drawn by the engine{}; {} passes under entries DCLF draws whole in the main, sun and local light views (T7f item 8){}, {} in the other views{}; Lighting verdicts {}\n",
 			census.frames, census.passes, census.passes / frames, census.geometries.size(), share, share >= 95.0 ? " <- OK" : " <- UNATTRIBUTED (gate 95%)",
-			census.defects, census.defects ? " <- DEFECT; first: " + census.firstDefect : std::string(" <- OK"), verdicts);
+			census.defects, census.defects ? " <- DEFECT; first: " + census.firstDefect : std::string(" <- OK"), census.underWhole,
+			census.underWhole ? " <- WHOLE ENTRY; first: " + census.firstUnderWhole : std::string(" <- OK"), census.underWholeElsewhere,
+			census.underWholeElsewhere ? " (first: " + census.firstUnderWholeElsewhere + ")" : std::string(), verdicts);
 		// By view, each with its classes; most passes first.
 		std::vector<std::pair<std::uint16_t, const Tally*>> views;
 		for (const auto& [view, tally] : census.views)
@@ -548,6 +573,17 @@ namespace DCLF::RegistrationCensus
 					classes += fmt::format("{}{} {}/{}", classes.empty() ? "" : ", ", ClassName(cls, census.classes[cls]), classTally->passes, classTally->geometries.size());
 			out += fmt::format("[DCLF] census view {}: {} passes ({:.1f} a frame), {} geometries; by class (passes/geometries): {}\n", ViewName(view), tally->passes,
 				tally->passes / frames, tally->geometries.size(), classes);
+			// T7e's residue: the first-person view's geometries by name and class (a handful: the class lines' tops are every view's).
+			if (view == kFirstPerson) {
+				std::string names;
+				for (const auto& [cls, classView, classTally] : viewClasses)
+					if (classView == view)
+						if (const auto c = census.classes.find(cls); c != census.classes.end())
+							for (const auto* geometry : classTally->geometries)
+								if (const auto g = c->second.geometries.find(geometry); g != c->second.geometries.end())
+									names += fmt::format("{}'{}' {} ({})", names.empty() ? "" : ", ", g->second.name, static_cast<const void*>(geometry), ClassName(cls, c->second));
+				out += fmt::format("[DCLF] census view first person's geometries: {}\n", names);
+			}
 		}
 		// By class across the views, with the geometries that registered the most passes.
 		constexpr std::size_t kTop = 5;
@@ -581,6 +617,9 @@ namespace DCLF::RegistrationCensus
 		census.viewClasses.clear();
 		census.views.clear();
 		census.firstDefect.clear();
+		census.underWhole = census.underWholeElsewhere = 0;
+		census.firstUnderWhole.clear();
+		census.firstUnderWholeElsewhere.clear();
 		census.nonMemberPasses = census.approximatePasses = census.repliesTaken = census.answered = 0;
 		// T7c0: the replies too old to be used let go of (their pins, here on the render thread); a request in flight a whole window (no
 		// scene pass answered it: DCLF off) lets go of what waited for the next, which the next frame asks again.

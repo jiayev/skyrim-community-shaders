@@ -127,6 +127,7 @@ namespace DCLF
 			float colour[4];  // white without a colour array
 			float angle;      // the rotation angle, with a rotation array
 			float rect[4];    // its subtexture rect (IndexedTexCoord[textureIndex]), the identity without subtextures
+			float velocity[3];  // NiPSysData's particle info (+0x90, NiParticleInfo::velocity) for aligned quads, zero otherwise
 		};
 		struct Slot
 		{
@@ -137,6 +138,11 @@ namespace DCLF
 			float fadeDistances[4]{};
 			bool rotations = false;
 			bool aligned = false;
+			// The data's aspect flags (FUN_140e51320, without rotations): +0x88 the quads' long axis along the velocity projected on the
+			// view plane, +0x89 their aspect by that projected speed; aspect the data's +0x6c (the aspect, and the speed's first aspect),
+			// +0x70 (the second aspect), +0x74 and +0x78 (the two speeds).
+			bool alignVelocity = false, speedAspect = false;
+			float aspect[4]{};
 			std::uint64_t sequence = 0;  // 0: never written
 		};
 
@@ -308,7 +314,7 @@ namespace DCLF
 				const auto& system = static_cast<const RE::NiParticles&>(a_system);
 				const auto* data = system.GetParticlesRuntimeData().particleData.get();
 				slot.particles.clear();
-				slot.rotations = slot.aligned = false;
+				slot.rotations = slot.aligned = slot.alignVelocity = slot.speedAspect = false;
 				if (data) {
 					const auto& p = static_cast<const RE::NiParticlesData*>(data)->GetParticlesRuntimeData();
 					// The draw's count (FUN_1414f2ad0: the active vertex count, at most 0x800).
@@ -317,6 +323,18 @@ namespace DCLF
 						slot.particles.resize(count);
 						slot.rotations = p.rotationAngles != nullptr;
 						slot.aligned = p.unk88 || p.unk89;
+						slot.alignVelocity = p.unk88 != 0;
+						slot.speedAspect = p.unk89 != 0;
+						slot.aspect[0] = p.aspectRatio;
+						slot.aspect[1] = p.speedToAspectAspect2;
+						slot.aspect[2] = p.speedToAspectAspect1;
+						slot.aspect[3] = p.speedToAspectSpeed2;
+						// The velocities the aligned quads are built from (NiPSysData's; the mirror's `velocities` keeps any other data the
+						// engine's).
+						const RE::NiParticleInfo* info = nullptr;
+						if (slot.aligned)
+							if (const auto* psys = netimmerse_cast<RE::NiPSysData*>(const_cast<RE::NiObject*>(static_cast<const RE::NiObject*>(data))))
+								info = psys->GetPSysRuntimeData().particleInfo;
 						const std::uint32_t subtextures = p.subtextureOffsets ? std::min(p.subTextureOffsetsCount, kSubtextureRows) : 0u;
 						for (std::uint32_t i = 0; i < count; ++i) {
 							auto& out = slot.particles[i];
@@ -333,6 +351,9 @@ namespace DCLF
 								out.colour[0] = out.colour[1] = out.colour[2] = out.colour[3] = 1.0f;
 							}
 							out.angle = p.rotationAngles ? p.rotationAngles[i] : 0.0f;
+							out.velocity[0] = info ? info[i].velocity.x : 0.0f;
+							out.velocity[1] = info ? info[i].velocity.y : 0.0f;
+							out.velocity[2] = info ? info[i].velocity.z : 0.0f;
 							// The vertex stage's IndexedTexCoord[index] (SetupGeometry's block: the data's offsets, zero past them), applied when
 							// the data has subtextures (FUN_1414bde90's TexCoordIndex); the identity otherwise.
 							if (p.subTextureOffsetsCount) {
@@ -428,6 +449,13 @@ namespace DCLF
 		}
 		const float plainX[3]{ up[0] + right[0], up[1] + right[1], up[2] + right[2] };
 		const float plainY[3]{ up[0] - right[0], up[1] - right[1], up[2] - right[2] };
+		// Aligned quads (FUN_140e51320's aspect flags, without rotations): the quad's axes A (first the camera's up) and B (its right),
+		// which the velocity alignment replaces particle by particle and the next particle starts from (as the engine's registers carry
+		// them), the view normal E = B x A, and the aspect, which the speed's aspect replaces and the next particle keeps likewise.
+		const bool alignedQuads = !slot.rotations && (slot.alignVelocity || slot.speedAspect);
+		float axisA[3]{ up[0], up[1], up[2] }, axisB[3]{ right[0], right[1], right[2] };
+		const float normal[3]{ up[2] * right[1] - right[2] * up[1], up[0] * right[2] - right[0] * up[2], up[1] * right[0] - right[1] * up[0] };
+		float aspect = slot.aspect[0];
 		for (std::uint32_t k = 0; k < count; ++k) {
 			const auto& particle = slot.particles[order[k]];
 			const auto& p = particle.position;
@@ -444,6 +472,43 @@ namespace DCLF
 				for (int j = 0; j < 3; ++j) {
 					x[j] = a * right[j] + b * up[j];
 					y[j] = a * up[j] - b * right[j];
+				}
+			} else if (alignedQuads) {
+				const auto& v = particle.velocity;
+				if (slot.speedAspect) {
+					// The velocity projected on the view plane; its length clamped to the two speeds picks the aspect between the two.
+					const float onB = v[0] * axisB[0] + v[1] * axisB[1] + v[2] * axisB[2];
+					const float onA = v[0] * axisA[0] + v[1] * axisA[1] + v[2] * axisA[2];
+					const float p0 = onA * axisA[0] + onB * axisB[0], p1 = onA * axisA[1] + onB * axisB[1], p2 = onA * axisA[2] + onB * axisB[2];
+					const float speed = std::sqrt(p0 * p0 + p2 * p2 + p1 * p1);
+					float clamped = slot.aspect[3];
+					if (speed <= clamped) {
+						clamped = speed;
+						if (speed <= slot.aspect[2])
+							clamped = slot.aspect[2];
+					}
+					aspect = ((clamped - slot.aspect[2]) / (slot.aspect[3] - slot.aspect[2])) * (slot.aspect[1] - slot.aspect[0]) + slot.aspect[0];
+				}
+				if (slot.alignVelocity) {
+					// A along the projected velocity (XMVector3Normalize: zero for a zero one), B = A x E, both carried to the next particle.
+					const float onB = v[0] * axisB[0] + v[1] * axisB[1] + v[2] * axisB[2];
+					const float onA = v[0] * axisA[0] + v[1] * axisA[1] + v[2] * axisA[2];
+					float a[3]{ axisA[0] * onA + onB * axisB[0], axisA[1] * onA + onB * axisB[1], axisA[2] * onA + onB * axisB[2] };
+					const float lengthSq = a[0] * a[0] + a[1] * a[1] + a[2] * a[2];
+					const float length = std::sqrt(lengthSq);
+					for (int j = 0; j < 3; ++j)
+						a[j] = lengthSq == std::numeric_limits<float>::infinity() ? std::numeric_limits<float>::quiet_NaN() : length != 0.0f ? a[j] / length : 0.0f;
+					axisA[0] = a[0];
+					axisA[1] = a[1];
+					axisA[2] = a[2];
+					axisB[0] = normal[2] * a[1] - a[2] * normal[1];
+					axisB[1] = normal[0] * a[2] - a[0] * normal[2];
+					axisB[2] = normal[1] * a[0] - a[1] * normal[0];
+				}
+				const float stretch = 1.0f / aspect;
+				for (int j = 0; j < 3; ++j) {
+					x[j] = (stretch * axisA[j] + axisB[j]) * particle.size;
+					y[j] = (stretch * axisA[j] - axisB[j]) * particle.size;
 				}
 			} else {
 				for (int j = 0; j < 3; ++j) {
@@ -482,7 +547,7 @@ namespace DCLF
 			frozen.fetch_add(1, std::memory_order_relaxed);
 		expansions.fetch_add(1, std::memory_order_relaxed);
 		expandedParticles.fetch_add(count, std::memory_order_relaxed);
-		if (slot.aligned)
+		if (alignedQuads)
 			aligned.fetch_add(1, std::memory_order_relaxed);
 	}
 
@@ -573,10 +638,10 @@ namespace DCLF
 		if (on || members || captured || expanded)
 			text += fmt::format("[DCLF] particles (T7e, CS_DCLF_PARTICLES {}): {} members bound, {} systems followed; {} snapshots taken at the engine's updates ({} "
 								"update passes with nothing new skipped, {} while another update wrote the system); {} expansions of {} particles ({} without a "
-								"snapshot yet, {} systems newly frozen: the same snapshot {} runs in a row, {} aligned systems drawn as plain quads{}); {} tables "
+								"snapshot yet, {} systems newly frozen: the same snapshot {} runs in a row, {} of them aligned quads); {} tables "
 								"published, {} records pruned\n",
 				on ? "on" : "off", members, followed.load(std::memory_order_relaxed), captured, skipped, contention, expanded, particles, none, frozenSystems, kFrozenRuns,
-				alignedDrawn, alignedDrawn ? " <- PARTICLE ALIGNED" : "", tablesPublished, recordsPruned);
+				alignedDrawn, tablesPublished, recordsPruned);
 		// CS_DCLF_SET_PARITY: the members' passes the engine registered (all withheld), against the snapshots the producer drew them from.
 		// Printed whenever the parity is on: a member under a stood-in root (every geometry of its reference DCLF's) is not culled by the engine
 		// at all, so 0 registrations is the expected answer there; a non-zero uncovered count is the defect.

@@ -16,6 +16,9 @@
 // ReserveMainSequences). The keys are read through groupshared memory a tile of 64 at a time, so each thread group reads every key once
 // per tile rather than each thread on its own. A much larger class would take a radix or bitonic sort here; the contract (staging half
 // in, sorted half out, the count word) stays.
+//
+// T7e: the first-person view's forward range (IndirectDraws: FirstPerson.cpp) is sorted by the same program, its count the range's bucket
+// count word (kSortCountOffset), its keys staged by the first-person BuildDraws with the first-person camera's view depth.
 
 cbuffer ForwardSortConstants : register(b0)
 {
@@ -24,10 +27,12 @@ cbuffer ForwardSortConstants : register(b0)
 	uint StagingBase;     // the staging half's first slot; the sorted half follows it, Capacity slots on
 	uint Capacity;        // each half's slots (PassFrame::forwardCapacity)
 	uint SequenceStride;  // bytes (sizeof(DrawSequence))
-	uint Padding0;
-	uint Padding1;
+	uint CountOffset;     // T7e: with kSortCountOffset, the byte offset of the count word in CountIndex (the first-person forward range's bucket count)
+	uint Options;         // kSortCountOffset
 	uint Padding2;
 }
+
+static const uint kSortCountOffset = 1;  // ForwardSortConstants::kCountOffset
 
 static const uint kCountForward = 128;     // GpuLayouts.h, kCountForwardWord
 static const uint kObjectWordOffset = 20;  // DrawSequence::objectIndex
@@ -84,7 +89,7 @@ groupshared uint sharedFirst[kTile];
 [numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 threadID : SV_GroupThreadID)
 {
 	ByteAddressBuffer counts = ResourceDescriptorHeap[CountIndex];
-	const uint count = min(counts.Load(kCountForward), Capacity);
+	const uint count = min(counts.Load((Options & kSortCountOffset) != 0 ? CountOffset : kCountForward), Capacity);
 	if (groupID.x * kTile >= count)
 		return;  // the whole group past the count (uniform in the group, so before any barrier)
 	RWByteAddressBuffer sequences = ResourceDescriptorHeap[SequencesIndex];

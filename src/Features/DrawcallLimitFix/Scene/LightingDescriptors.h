@@ -88,6 +88,9 @@ namespace DCLF
 		std::uint32_t decalGroup = 0;
 		std::uint32_t decalBlendMode = 0;
 		std::uint32_t decalWriteMode = 0;
+		// T7f item 7 (CS_DCLF_OPAQUE_EFFECTS): an opaque effect (hint 0, the G-buffer pass's DEFERRED variant) drawn through decal group 1's
+		// fixed slots and decal depth pass, with no depth bias (DeriveEffectDescriptors). Its pass's hint is 0, not 2.
+		bool opaqueEffect = false;
 		// T7c1 (CS_DCLF_TB_TERRAIN, while Terrain Blending holds the terrain): 0, or the terrain group (Records.h,
 		// ObjectTerrainGroup) - 1 for a kMultiTextureLandscape block, 2 for a kNoTransparencyMultiSample mesh - as that
 		// feature's hook sorts the passes it holds (TerrainBlending.cpp, BSBatchRenderer__RenderPassImmediately).
@@ -97,6 +100,9 @@ namespace DCLF
 		bool forward = false;
 		std::uint32_t forwardBlendMode = 0;
 		bool forwardDepthTest = false, forwardDepthWrite = false;
+		// T7f item 7 (CS_DCLF_FIRST_PERSON_DECALS): a first-person effect decal drawn as a forward object (SceneStore::FirstPersonDecalForward):
+		// its decal group (1 or 2), whose frame depth-bias mode the key carries in its bias bits (Records.h, kRasterDepthBiasShift); 0 else.
+		std::uint32_t forwardDecalGroup = 0;
 		// T7d's refraction (CS_DCLF_REFRACTION): kRefraction or kTempRefraction, whose one main pass is GetRenderPasses' Utility
 		// RENDER_NORMAL pass (hint 4, geometry group 5) into the refraction normals; also `forward` (the forward epoch draws it, from the
 		// refraction range), with the technique's two property-driven variants: RENDER_NORMAL_FALLOFF (kRefractionFalloff, bit 16) and
@@ -428,7 +434,7 @@ namespace DCLF
 		kEffectVariantBlendPair = 1u << 9,      // a blending pair the engine's alpha setup (FUN_14150bc80) leaves as it finds it
 		// T7e: a particle geometry DCLF's particle path does not take (ParticleRejectionOf), a bit a cause: CS_DCLF_PARTICLES off; not
 		// exactly an NiParticleSystem (BSStripParticleSystem, NiMeshParticleSystem); no particle data (or no capacity); the data's aspect
-		// flags (velocity-aligned or speed-stretched quads); no blending alpha property (its blend mode is the frame's property alpha);
+		// flags (velocity-aligned or speed-stretched quads) without the NiPSysData velocities they are built from; no blending alpha property (its blend mode is the frame's property alpha);
 		// decal flags.
 		kEffectVariantParticle = 1u << 10,
 		kEffectVariantParticleClass = 1u << 11,
@@ -454,8 +460,8 @@ namespace DCLF
 	 * @brief T7e (CS_DCLF_PARTICLES): whether DCLF's particle path draws a particle geometry (ParticleSnapshots; drawcall-limit-fix.md,
 	 * "Particles (T7e)"): exactly an NiParticleSystem (type 1; mesh and strip particle systems are not ported), in local or world space (a
 	 * world-space system's world transform is the identity with its parent's scale, FUN_140dd4db0, and its positions world coordinates: the
-	 * quads and World come out of the same formulas), with particle data and without the data's aspect flags (velocity-aligned or
-	 * speed-stretched quads, FUN_140e51320's other path), with the toggle on. The effect property's own variants are EffectVariantsOf's.
+	 * quads and World come out of the same formulas), with particle data (with the data's aspect flags, velocity-aligned or speed-stretched
+	 * quads, FUN_140e51320's other path, an NiPSysData whose velocities they are built from), with the toggle on. The effect property's own variants are EffectVariantsOf's.
 	 * From the records.
 	 */
 	bool ParticleSystemTaken(const SceneCapture::LeafView& a_leaf);

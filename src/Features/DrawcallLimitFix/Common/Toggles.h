@@ -40,19 +40,22 @@ namespace DCLF
 		// that feature draws it;
 		bool tbTerrain = false;
 		// T7d: blended Lighting geometry (alpha-blended, or a material alpha below one), drawn by the forward epoch: a GPU depth sort of
-		// the visible set, back to front, before the engine's own blended draws (off by default: CS_DCLF_FORWARD=1 seeds it on);
+		// the visible set, back to front, before the engine's own blended draws (on by default: CS_DCLF_FORWARD=0 seeds it off);
 		bool forward = false;
-		// T7d's Effect port: static blended BSEffectShaderProperty meshes, drawn by the forward epoch in the same GPU sort (needs forward; off
-		// by default: CS_DCLF_EFFECTS=1 seeds it on);
+		// T7d's Effect port: static blended BSEffectShaderProperty meshes, drawn by the forward epoch in the same GPU sort (needs forward;
+		// on by default: CS_DCLF_EFFECTS=0 seeds it off);
 		bool effects = false;
 		// T7d's refraction: Lighting geometry with kRefraction or kTempRefraction, whose one main pass is a Utility RENDER_NORMAL pass into
-		// the refraction normals (kREFRACTION_NORMALS) that ISRefraction warps the frame by; drawn in the forward epoch (needs forward; off
-		// by default: CS_DCLF_REFRACTION=1 seeds it on);
+		// the refraction normals (kREFRACTION_NORMALS) that ISRefraction warps the frame by; drawn in the forward epoch (needs forward;
+		// on by default: CS_DCLF_REFRACTION=0 seeds it off);
 		bool refraction = false;
 		// T7e's particles: NiParticleSystem geometry with a BSEffectShaderProperty, its quads built by DCLF from snapshots taken at the
-		// engine's particle update (ParticleSnapshots) and drawn in the forward epoch's sort (needs effects; off by default:
-		// CS_DCLF_PARTICLES=1 seeds it on);
+		// engine's particle update (ParticleSnapshots) and drawn in the forward epoch's sort (needs effects; on by default:
+		// CS_DCLF_PARTICLES=0 seeds it off);
 		bool particles = false;
+		// BSEffectShaderProperty meshes under one NiBillboardNode, turned to the drawing camera by the vertex stage from the node's base
+		// transform (Billboards.h; needs effects; on by default: CS_DCLF_BILLBOARDS=0 seeds it off);
+		bool billboards = false;
 		// a leaf under an NiSwitchNode, in the frames every switch on its path selects it (trees, harvestables);
 		bool switchNodes = false;
 		// object LOD (TES::lodLandRoot's BSSubIndexTriShape blocks): tracked under the LOD root, drawn by their visible segments;
@@ -65,10 +68,6 @@ namespace DCLF
 		bool skinPartitions = false;
 		// geometry under an actor's 3D, and the FacegenRGBTint technique;
 		bool actors = false;
-		// an object the engine fades with the screen-door mask in an opaque group (blended fades, hint 9, stay native);
-		bool fading = false;
-		// an object in a LOD cross-fade stays DCLF's, and only the engine's hint-10 copy of the old level is native.
-		bool lodCrossfade = false;
 
 		// The shadow views are drawn by the render graph.
 		bool shadows = false;
@@ -83,8 +82,8 @@ namespace DCLF
 		// DCLF draws the water reflection's cube map faces' LOD (dclf-lod.md, "Water reflections").
 		bool reflections = false;
 		// T7e: the player's first-person skeleton (arms, weapons, shield, magic hands) as a view of the one scene: its geometry tracked
-		// under the first-person root, members of kSetFirstPerson drawn by the first-person epochs (off by default: CS_DCLF_FIRST_PERSON=1
-		// seeds it on).
+		// under the first-person root, members of kSetFirstPerson drawn by the first-person epochs (on by default: CS_DCLF_FIRST_PERSON=0
+		// seeds it off).
 		bool firstPerson = false;
 		// The main camera's cull skips the references DCLF draws entirely (PrimaryCull).
 		bool excludePrimaryEntries = false;

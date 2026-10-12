@@ -577,6 +577,8 @@ namespace DCLF::Draws
 				  offsetof(BuildDrawsLatch, bucketMapOffset) == 248 && offsetof(BuildDrawsLatch, placementsIndex) == 252);
 	// BuildDrawsLatch::bucketMapOffset: a pipeline slot without a bucket (BuildDrawsCS's kNoPipeline).
 	constexpr std::uint32_t kNoBucket = 0xFFFFFFFFu;
+	// T7e's forward part: a first-person forward slot's map word, with its range's table entry in the low bits (BuildDrawsCS's kBucketForward).
+	constexpr std::uint32_t kFirstPersonForwardBucket = 0x40000000u;
 	constexpr std::uint32_t kSunTestOn = 1u << 31;
 
 	/**

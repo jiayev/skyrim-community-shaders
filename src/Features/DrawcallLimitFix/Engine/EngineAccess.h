@@ -51,6 +51,18 @@ namespace DCLF::Engine
 		setDirtyStates(false);
 	}
 
+	/**
+	 * @brief The engine's "no fade node": the parentless, unnamed BSFadeNode the NiPointer at 0x14332a2a0 holds (made by FUN_14147ac00 at
+	 * the engine's static initialisation, released only at exit, so the pointer is immutable while any plugin runs). BSShaderProperty's
+	 * constructor (0x14147b580) points every property's fadeNode at it, and the engine's readers treat it as null (GetRenderPasses
+	 * 0x1414ae146, BSLightingShader::Func6 0x1414dd379, BSUtilityShader::SetupGeometry 0x1414fb720). Terrain, object LOD and references
+	 * whose root is no BSFadeNode keep it.
+	 */
+	inline const void* EmptyFadeNode()
+	{
+		return Global<const void*>(0x332a2a0);
+	}
+
 	// BSShaderProperty's light data, and in it the mask of the shadow lights the geometry is registered with.
 	constexpr std::size_t kPropertyLightData = 0x70;
 	constexpr std::size_t kLightDataActiveMask = 0x1C;

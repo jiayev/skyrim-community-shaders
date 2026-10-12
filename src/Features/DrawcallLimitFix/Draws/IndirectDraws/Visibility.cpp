@@ -84,24 +84,6 @@ namespace DCLF
 			a_readback.stale.fetch_add(stale, std::memory_order_relaxed);
 		}
 
-		/** @brief CS_DCLF_ACCUMULATED_ALL (T7f preparation): every listed root's kAccumulated DCLF's, not only the stood-in roots'. */
-		bool AccumulatedAll()
-		{
-			static const bool on = SwitchEnabled(Switch::AccumulatedAll);
-			return on;
-		}
-
-		/**
-		 * @brief Whether the decoder prepares the wide writes (every listed root but the stood-in ones, their geometry, the plain entry
-		 * roots): written under CS_DCLF_ACCUMULATED_ALL, the verdicts CS_DCLF_TREE_LIST_ALL gives the tree list, or the dry runs the two
-		 * parities compare. Without any, the decode is T7b2's alone.
-		 */
-		bool WideWanted()
-		{
-			static const bool on = AccumulatedAll() || SwitchEnabled(Switch::TreeListAll) || SwitchEnabled(Switch::AccumulatedParity) || SwitchEnabled(Switch::TreeParity);
-			return on;
-		}
-
 		/** @brief T7f: a verdict that changed (a_frame: in view since, or out since) within kRecentFrames of the newest decoded frame. */
 		bool Recent(const Readback& a_readback, std::uint32_t a_frame)
 		{
@@ -117,11 +99,14 @@ namespace DCLF
 		 * out after the frame before the newest), when the root's listing has no verdict yet (a new listing, one listed again, no seed:
 		 * visible until FadeStateCS's first), or while a camera cut has no batch of its frame or later decoded.
 		 *
-		 * T7f preparation (WideWanted): the same for every other root DCLF lists, flagged wide - each fade root slot, each geometry under
+		 * T7f checklist item 1: the same for every other root DCLF lists, flagged wide - each fade root slot, each geometry under
 		 * one (not a layer), and each plain entry root (the batch's SunCandidates entry of a geometry with no fade root), visible when
 		 * any of its geometries is by the rule. A slot changing class (stood in, wide) is asked again.
+		 *
+		 * T7f: a compare list's wide writes carry the engine's bit in its own sample of the newest batch's frame (a_sample, under
+		 * CS_DCLF_ACCUMULATED_PARITY; null without one), which tells the lag's arrivals from a disagreement at the entry.
 		 */
-		Readback::Writes* PrepareWrites(Readback& a_readback, const Readback::Batch& a_newest, bool a_reset)
+		Readback::Writes* PrepareWrites(Readback& a_readback, const Readback::Batch& a_newest, bool a_reset, const SideEffects::AccumulatedSample* a_sample)
 		{
 			const auto& tables = *a_newest.tables;
 			const std::uint32_t cut = a_readback.cutFrame.load(std::memory_order_acquire);
@@ -132,10 +117,15 @@ namespace DCLF
 			const bool full = a_reset || cutAnswered || a_readback.refreshWanted.exchange(false, std::memory_order_acq_rel);
 			if (cutAnswered)
 				a_readback.cutAnswered = cut;
-			const bool wide = WideWanted();
-			// The dry run's comparison (the main thread compares the wide writes with the engine's bit instead of writing them): every wide
-			// write again, every kWideCompareInterval decodes.
-			const bool compare = wide && !AccumulatedAll() && SideEffects::AccumulatedParity() && (++a_readback.wideDecodes % Readback::kWideCompareInterval) == 0;
+			// The comparison (the main thread compares the wide writes with the engine's bit, before writing them): every wide write again,
+			// every kWideCompareInterval decodes.
+			const bool compare = SideEffects::AccumulatedParity() && (++a_readback.wideDecodes % Readback::kWideCompareInterval) == 0;
+			// T7f: the engine's bit in its sample of this batch's frame, for a compare list's slot whose node the sample holds.
+			const auto sampled = [&](const auto& a_nodes, const std::vector<std::uint8_t>& a_bits, std::size_t a_slot, const void* a_node) -> std::uint8_t {
+				if (!compare || !a_sample || a_slot >= a_nodes.size() || a_nodes[a_slot] != a_node)
+					return 0;
+				return Readback::kWhySampled | ((a_bits[a_slot] & SideEffects::kSampleAccumulated) ? Readback::kWhyEngineAtBatch : 0);
+			};
 			const std::size_t roots = tables.fadeRootNode.size(), objects = tables.objectGeometry.size();
 			if (a_readback.rootWritten.size() < roots) {
 				a_readback.rootWritten.resize(roots, Readback::kWrittenNone);
@@ -157,7 +147,7 @@ namespace DCLF
 			for (std::size_t r = 0; r < roots; ++r) {
 				const void* node = tables.fadeRootNode[r];
 				const bool stoodIn = node && r < tables.fadeRoots.size() && (tables.fadeRoots[r].bits & kFadeRootStoodIn);
-				if (!node || r >= tables.fadeRoots.size() || (!stoodIn && !wide)) {
+				if (!node || r >= tables.fadeRoots.size()) {
 					// Not written (the engine culls it, or no root here): what it was last asked is forgotten, so a return writes again.
 					a_readback.rootWritten[r] = Readback::kWrittenNone;
 					continue;
@@ -172,6 +162,8 @@ namespace DCLF
 				std::uint8_t why = visible && !(listed && a_readback.roots[r].visible) ? Readback::kWhyRule : 0;
 				if (listed && Recent(a_readback, a_readback.roots[r].visible ? a_readback.roots[r].lastFrame : a_readback.roots[r].outFrame))
 					why |= Readback::kWhyRecent;
+				if (a_sample)
+					why |= sampled(a_sample->rootNodes, a_sample->rootBits, r, node);
 				const std::uint8_t wanted = visible ? Readback::kWrittenSet : Readback::kWrittenClear;
 				const std::uint8_t wideBit = stoodIn ? 0 : 1;
 				const bool force = full || (compare && !stoodIn);
@@ -184,7 +176,7 @@ namespace DCLF
 			}
 			// The plain entry roots (wide): each object slot's entry, cached by occupant for the batch's candidates snapshot, and whether any
 			// of an entry's geometries is visible by the rule.
-			const SunCandidates* candidates = wide ? a_newest.candidates.get() : nullptr;
+			const SunCandidates* candidates = a_newest.candidates.get();
 			if (candidates != a_readback.entryCandidates) {
 				a_readback.entryCandidates = candidates;
 				a_readback.objectEntry.assign(a_readback.objectEntry.size(), SunCandidates::kNone);
@@ -197,6 +189,9 @@ namespace DCLF
 			const std::uint32_t entries = candidates ? candidates->Capacity() : 0u;
 			// Per entry index: 1 a plain geometry of it is listed, 2 one of them is visible.
 			std::vector<std::uint8_t> entryState(entries, 0u);
+			// T7f item 7: per entry index, its geometries' why bits together (an entry's verdict is theirs: the lag's attribution), and whether
+			// one of its geometries is the engine's residue (no main input): such an entry's bit is the engine's cull's, as that geometry's.
+			std::vector<std::uint8_t> entryWhy(entries, 0u), entryResidue(entries, 0u);
 			for (std::size_t o = 0; o < objects; ++o) {
 				auto* geometry = tables.objectGeometry[o];
 				const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
@@ -228,6 +223,16 @@ namespace DCLF
 						a_readback.plainNoCandidates.fetch_add(1, std::memory_order_relaxed);
 					}
 				}
+				// T7f: a wide geometry DCLF does not draw in the main view (no member with bindings: the engine's residue, a shadow-only
+				// caster) has no main input, so no stamp and no verdict: its bit stays the engine's cull's, not cleared by DCLF.
+				if (objectClass == 2 && o < tables.objects.size() &&
+					(!(tables.objects[o].flags & kObjectMember) || (tables.objects[o].flags & (kObjectNoBindings | kObjectShadowOnly | kObjectFree)))) {
+					if (compare)
+						a_readback.wideNoInput.fetch_add(1, std::memory_order_relaxed);
+					if (entry != SunCandidates::kNone)
+						entryResidue[entry] = 1;
+					objectClass = 0;
+				}
 				if (!objectClass) {
 					a_readback.objectWrittenGeometry[o] = nullptr;
 					continue;
@@ -243,8 +248,14 @@ namespace DCLF
 				} else if (visible) {
 					why = Readback::kWhyRule;
 				}
-				if (entry != SunCandidates::kNone)
+				if (a_sample)
+					why |= sampled(a_sample->objectGeometry, a_sample->objectBits, o, geometry);
+				if (entry != SunCandidates::kNone) {
 					entryState[entry] = std::max<std::uint8_t>(entryState[entry], visible ? 2 : 1);
+					// Arrived when one of its geometries arrived (the engine's sample of the batch's frame clear on it): kWhySampled alone.
+					const bool arrived = (why & Readback::kWhySampled) && !(why & Readback::kWhyEngineAtBatch);
+					entryWhy[entry] |= (why & ~(Readback::kWhySampled | Readback::kWhyEngineAtBatch)) | (arrived ? Readback::kWhySampled : 0u);
+				}
 				const std::uint8_t wideBit = objectClass == 2 ? 1 : 0;
 				const std::uint8_t wanted = visible ? Readback::kWrittenSet : Readback::kWrittenClear;
 				const bool force = full || (compare && wideBit);
@@ -260,7 +271,9 @@ namespace DCLF
 				a_readback.entryWrittenVersion.resize(entries, 0u);
 			}
 			for (std::uint32_t e = 0; e < entries; ++e) {
-				if (!entryState[e]) {
+				if (!entryState[e] || entryResidue[e]) {
+					if (entryState[e] && compare)
+						a_readback.wideEntryResidue.fetch_add(1, std::memory_order_relaxed);
 					a_readback.entryWritten[e] = Readback::kWrittenNone;
 					continue;
 				}
@@ -272,7 +285,7 @@ namespace DCLF
 				a_readback.entryWritten[e] = wanted;
 				a_readback.entryWrittenVersion[e] = version;
 				const void* node = candidates->entryNodes[e];
-				list->writes.push_back({ const_cast<void*>(node), node, visible, Readback::kWriteEntry, true });
+				list->writes.push_back({ const_cast<void*>(node), node, visible, Readback::kWriteEntry, true, entryWhy[e] });
 			}
 			if (list->writes.empty()) {
 				delete list;
@@ -297,6 +310,9 @@ namespace DCLF
 				(a_wide ? a_readback.wideUnchanged : a_readback.writesUnchanged).fetch_add(1, std::memory_order_relaxed);
 				return;
 			}
+			static const bool noteStored = SwitchEnabled(Switch::TreeParity);
+			if (noteStored)
+				a_readback.storedNow.insert(a_node);
 			if (a_set) {
 				flags.fetch_or(kFlagAccumulated, std::memory_order_relaxed);
 				(a_wide ? a_readback.wideSet : a_readback.writesSet).fetch_add(1, std::memory_order_relaxed);
@@ -307,7 +323,7 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief Main thread, CS_DCLF_ACCUMULATED_ALL: the nodes between a geometry written visible and its root set as well (the receivers
+		 * @brief Main thread, T7f checklist item 1: the nodes between a geometry written visible and its root set as well (the receivers
 		 * test every level, skyrim-engine-notes.md, "T7b0"). Set only: a node above a geometry gone out of view keeps the bit, which no reader
 		 * tells apart (the receivers stop at the geometry's own clear bit, the animation gate and the tree clock read the root alone). The
 		 * chain is gathered first and written only when it reaches the root: the geometry is held by the write's tables, and a live node's
@@ -322,6 +338,13 @@ namespace DCLF
 				chain.push_back(node);
 			if (!node) {
 				a_readback.wideNoChain.fetch_add(1, std::memory_order_relaxed);
+				if (a_readback.wideNoChainFirst.size() < 300) {
+					const auto* root = static_cast<const RE::NiAVObject*>(a_root);
+					const auto* top = chain.empty() ? a_geometry : chain.back();
+					a_readback.wideNoChainFirst += fmt::format("{}'{}' under '{}' (top '{}')", a_readback.wideNoChainFirst.empty() ? "" : ", ",
+						a_geometry->name.c_str() ? a_geometry->name.c_str() : "?", root && root->name.c_str() ? root->name.c_str() : "?",
+						top->name.c_str() ? top->name.c_str() : "?");
+				}
 				return;
 			}
 			for (auto* between : chain) {
@@ -347,7 +370,7 @@ namespace DCLF
 		void Cause(Readback& a_readback, Readback::WideCause a_cause) { a_readback.wideCauses[a_cause].fetch_add(1, std::memory_order_relaxed); }
 
 		/**
-		 * @brief Main thread at Main::Update's entry, CS_DCLF_ACCUMULATED_PARITY's dry run (CS_DCLF_ACCUMULATED_ALL off): a wide write of a
+		 * @brief Main thread at Main::Update's entry, CS_DCLF_ACCUMULATED_PARITY's comparison: a wide write of a
 		 * compare list against the bit the engine's last cull left on its node (read at the safe point; the write's tables or candidates hold
 		 * the node). An app-culled root is counted aside (the engine's cull does not reach it). The first roots DCLF would clear that the
 		 * engine has set are named.
@@ -369,6 +392,8 @@ namespace DCLF
 			Count(a_write.kind == Readback::kWriteRoot ? a_readback.wideRootCounts : a_write.kind == Readback::kWriteEntry ? a_readback.wideEntryCounts : a_readback.wideGeometryCounts,
 				dclf, engine);
 			const bool rule = (a_write.why & Readback::kWhyRule) != 0, recent = (a_write.why & Readback::kWhyRecent) != 0;
+			// T7f: the engine's own sample of the batch's frame had the bit clear: it came into view after the frame DCLF's verdict is of.
+			const bool arrived = (a_write.why & Readback::kWhySampled) && !(a_write.why & Readback::kWhyEngineAtBatch);
 			if (a_write.kind == Readback::kWriteGeometry) {
 				const auto* root = static_cast<const RE::NiAVObject*>(a_write.root);
 				bool chain = true, rootSet = true;
@@ -383,6 +408,7 @@ namespace DCLF
 				if (engine) {
 					const Readback::WideCause cause = !(chain && rootSet)               ? Readback::kEngineGeometryChain :
 					                                  a_stoodIn(root)                     ? Readback::kEngineGeometryStoodIn :
+					                                  arrived                             ? Readback::kEngineGeometryArrived :
 					                                  (a_write.why & Readback::kWhyFaded) ? Readback::kEngineGeometryFaded :
 					                                  recent                              ? Readback::kEngineGeometryRecent :
 					                                                                        Readback::kEngineGeometrySteady;
@@ -405,22 +431,24 @@ namespace DCLF
 				return;
 			const bool stoodIn = engine && a_stoodIn(a_write.node);
 			if (a_write.kind == Readback::kWriteRoot)
-				Cause(a_readback, engine ? (stoodIn ? Readback::kEngineRootStoodIn : recent ? Readback::kEngineRootRecent : Readback::kEngineRootSteady) :
+				Cause(a_readback, engine ? (stoodIn ? Readback::kEngineRootStoodIn : arrived ? Readback::kEngineRootArrived : recent ? Readback::kEngineRootRecent : Readback::kEngineRootSteady) :
 				                           (rule ? Readback::kDclfRootRule : recent ? Readback::kDclfRootRecent : Readback::kDclfRootSteady));
+			// T7f item 7: a plain entry root by its geometries' why bits (one of them changed within the lag, or arrived since the batch).
+			if (a_write.kind == Readback::kWriteEntry && engine)
+				Cause(a_readback, stoodIn ? Readback::kEngineEntryStoodIn : arrived ? Readback::kEngineEntryArrived : recent ? Readback::kEngineEntryRecent : Readback::kEngineEntrySteady);
 			if (engine && a_readback.wideFirst.size() < 300) {
 				const auto* object = static_cast<const RE::NiAVObject*>(a_write.node);
 				a_readback.wideFirst += fmt::format("{}'{}'{}{}", a_readback.wideFirst.empty() ? "" : ", ", object->name.c_str() ? object->name.c_str() : "?",
-					a_write.kind == Readback::kWriteEntry ? " (entry)" : "", stoodIn ? " (stood in)" : recent ? " (recent)" : "");
+					a_write.kind == Readback::kWriteEntry ? " (entry)" : "", stoodIn ? " (stood in)" : arrived ? " (arrived)" : recent ? " (recent)" : "");
 			}
 		}
 
 		/**
 		 * @brief Main thread at Main::Update's entry (T7f preparation): ListUpkeep's kAccumulated on the cell roots - the object root's
 		 * children that are not hidden, which DrawWorld_BuildSceneLists sets every frame (and ListUpkeep in its place when DCLF builds the
-		 * lists) - set here under CS_DCLF_ACCUMULATED_ALL, for a frame without the engine's build; otherwise counted where the bit is
-		 * missing (CS_DCLF_ACCUMULATED_PARITY). Set only, as the engine's build.
+		 * lists) - set here (T7f checklist item 1), for a frame without the engine's build. Set only, as the engine's build.
 		 */
-		void CellRoots(Readback& a_readback, bool a_write)
+		void CellRoots(Readback& a_readback)
 		{
 			const auto* sceneNode = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
 			if (!sceneNode)
@@ -432,8 +460,8 @@ namespace DCLF
 			// T7f: which children the engine's build sets (DrawWorld_BuildSceneLists, AE 0x14064bc20; drawcall-limit-fix.md, "T7f: what
 			// kAccumulated means"): in an exterior every non-hidden child from the third on; children 0 and 1 are list entries (the build
 			// appends them to list 0), whose bit the main camera's list cull sets or clears. In an interior only the cell's 3D, and children 0
-			// and 1 are list entries. Under CS_DCLF_ACCUMULATED_ALL every non-hidden child is set, the containers too (the receivers then test
-			// the levels below; no other reader reads them); the parity counts each kind without the bit.
+			// and 1 are list entries. Every non-hidden child is set, the containers too (the receivers then test the levels below; no other
+			// reader reads them).
 			const auto* tes = RE::TES::GetSingleton();
 			auto* interior = tes ? tes->interiorCell : nullptr;
 			const auto* loaded = interior ? interior->GetRuntimeData().loadedData : nullptr;
@@ -449,12 +477,8 @@ namespace DCLF
 				std::atomic_ref<std::uint32_t> flags(*reinterpret_cast<std::uint32_t*>(reinterpret_cast<std::byte*>(node) + kObjectFlags));
 				if (flags.load(std::memory_order_relaxed) & kFlagAccumulated)
 					continue;
-				if (a_write) {
-					flags.fetch_or(kFlagAccumulated, std::memory_order_relaxed);
-					a_readback.cellRootsSet.fetch_add(1, std::memory_order_relaxed);
-				} else {
-					(container ? a_readback.cellContainersUnset : a_readback.cellRootsUnset).fetch_add(1, std::memory_order_relaxed);
-				}
+				flags.fetch_or(kFlagAccumulated, std::memory_order_relaxed);
+				a_readback.cellRootsSet.fetch_add(1, std::memory_order_relaxed);
 			}
 		}
 
@@ -681,8 +705,13 @@ namespace DCLF
 				}
 				readback->samplesUnmatched.fetch_add(samples.size() - next, std::memory_order_relaxed);
 				TreeList::OnDecodeEnd(*treeSamples, nextTree);
+				// T7f: the engine's sample of the newest batch's frame, if taken (CS_DCLF_ACCUMULATED_PARITY), for the compare lists' attribution.
+				const SideEffects::AccumulatedSample* newestSample = nullptr;
+				for (const auto& sample : samples)
+					if (sample->frame == batches.back()->frame)
+						newestSample = sample.get();
 				// T7b2: the writes, from the newest batch's tables (held by the writes until the main thread made them).
-				if (auto* writes = PrepareWrites(*readback, *batches.back(), reset)) {
+				if (auto* writes = PrepareWrites(*readback, *batches.back(), reset, newestSample)) {
 					writes->next = readback->writes.load(std::memory_order_relaxed);
 					while (!readback->writes.compare_exchange_weak(writes->next, writes, std::memory_order_release, std::memory_order_relaxed)) {}
 				}
@@ -734,8 +763,8 @@ namespace DCLF
 		armed.frame = a_store.GetFrame();
 		armed.reset = reset;
 		armed.tables = a_store.AcceptedTables();
-		// T7f preparation: the frame's entries, for the wide writes' plain entry roots (none held without them).
-		armed.candidates = WideWanted() ? a_store.GetSunCandidates() : nullptr;
+		// T7f checklist item 1: the frame's entries, for the wide writes' plain entry roots.
+		armed.candidates = a_store.GetSunCandidates();
 		// T7b2: a batch harvested goes to the decode now, not at the next frame's start, so its writes reach the next Main::Update's
 		// entry (a frame less of latency).
 		if (readback.pending.size() > harvested)
@@ -770,6 +799,7 @@ namespace DCLF
 			return;
 		auto& r = *impl->scene->visibilityReadback;
 		const auto start = std::chrono::steady_clock::now();
+		r.storedNow.clear();
 		// The decoder's writes, newest first on the stack: in frame order.
 		Readback::Writes* ordered = nullptr;
 		for (auto* list = r.writes.exchange(nullptr, std::memory_order_acquire); list;) {
@@ -792,10 +822,8 @@ namespace DCLF
 			r.refreshWanted.store(true, std::memory_order_release);
 			return;
 		}
-		// T7f preparation: CS_DCLF_ACCUMULATED_ALL makes every write (the stood-in roots' and the wide ones), whoever stands in for the
-		// root, and the nodes between a visible geometry and its root; without it the wide writes are a dry run.
-		const bool all = AccumulatedAll();
-		const bool wide = WideWanted();
+		// T7f checklist item 1: every write (the stood-in roots' and the wide ones), whoever stands in for the root, and the nodes between a
+		// visible geometry and its root.
 		const std::uint32_t cut = r.cutFrame.load(std::memory_order_acquire);
 		const bool wrote = ordered != nullptr;
 		for (auto* list = ordered; list;) {
@@ -804,20 +832,9 @@ namespace DCLF
 			const bool beforeCut = cut && list->frame < cut;
 			for (const auto& write : list->writes) {
 				const bool held = beforeCut && !write.set;
-				if (write.wide && !all) {
-					// The dry run: no store. The root's verdict is kept for the tree list's dry run (TreeAnimation), and a compare list's
-					// writes are compared with the engine's bit (CS_DCLF_ACCUMULATED_PARITY).
-					r.wideDry.fetch_add(1, std::memory_order_relaxed);
-					if (list->compare)
-						CompareWide(r, write, a_stoodIn);
-					if (write.kind != Readback::kWriteGeometry && !held)
-						r.rootVerdicts.insert_or_assign(write.node, write.set);
-					continue;
-				}
-				if (!all && !a_stoodIn(write.root)) {
-					r.writesNotStoodIn.fetch_add(1, std::memory_order_relaxed);
-					continue;
-				}
+				// A compare list's wide writes against the engine's bit, before any store (CS_DCLF_ACCUMULATED_PARITY).
+				if (write.wide && list->compare)
+					CompareWide(r, write, a_stoodIn);
 				if (held) {
 					r.writesHeldByCut.fetch_add(1, std::memory_order_relaxed);
 					continue;
@@ -825,7 +842,7 @@ namespace DCLF
 				Store(r, write.node, write.set, write.wide);
 				if (write.kind != Readback::kWriteGeometry)
 					r.rootVerdicts.insert_or_assign(write.node, write.set);
-				else if (all && write.set)
+				else if (write.set)
 					SetChain(r, static_cast<RE::NiAVObject*>(write.node), write.root);
 			}
 			r.wideCompares.fetch_add(list->compare ? 1 : 0, std::memory_order_relaxed);
@@ -837,30 +854,24 @@ namespace DCLF
 			delete list;
 			list = following;
 		}
-		// A camera cut since the last: every stood-in root, and its geometry, visible now (the newest tables' slots). T7f preparation: every
-		// listed root (written under CS_DCLF_ACCUMULATED_ALL, the dry run's verdict otherwise), the plain entry roots of the newest
-		// candidates among them.
+		// A camera cut since the last: every listed root, and its geometry, visible now (the newest tables' slots), the plain entry roots of
+		// the newest candidates among them.
 		if (cut && r.cutWritten != cut && r.writtenTables) {
 			r.cutWritten = cut;
 			const auto& tables = *r.writtenTables;
-			// Per root slot: 1 written now (stood in, or every root under CS_DCLF_ACCUMULATED_ALL).
+			// Per root slot: 1 written now.
 			std::vector<std::uint8_t> written(tables.fadeRootNode.size(), 0u);
 			for (std::size_t root = 0; root < tables.fadeRootNode.size(); ++root) {
 				const void* node = tables.fadeRootNode[root];
 				if (!node || root >= tables.fadeRoots.size())
 					continue;
 				const bool stoodIn = (tables.fadeRoots[root].bits & kFadeRootStoodIn) && a_stoodIn(node);
-				if (!stoodIn && !all) {
-					if (wide)
-						r.rootVerdicts.insert_or_assign(node, true);
-					continue;
-				}
 				written[root] = 1;
 				Store(r, const_cast<void*>(node), true, !stoodIn);
 				r.rootVerdicts.insert_or_assign(node, true);
 				r.cutWrites.fetch_add(1, std::memory_order_relaxed);
 			}
-			const auto* candidates = wide ? r.writtenCandidates.get() : nullptr;
+			const auto* candidates = r.writtenCandidates.get();
 			for (std::size_t o = 0; o < tables.objectGeometry.size(); ++o) {
 				auto* geometry = tables.objectGeometry[o];
 				if (!geometry || tables.IsLayer(static_cast<std::uint32_t>(o)))
@@ -868,8 +879,7 @@ namespace DCLF
 				const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
 				if (root < written.size() && written[root]) {
 					Store(r, geometry, true, !(tables.fadeRoots[root].bits & kFadeRootStoodIn));
-					if (all)
-						SetChain(r, geometry, tables.fadeRootNode[root]);
+					SetChain(r, geometry, tables.fadeRootNode[root]);
 					continue;
 				}
 				// A plain entry root's geometry (the decoder's rule: the candidates' entry of a geometry with no fade root).
@@ -881,32 +891,23 @@ namespace DCLF
 				if (!entryNode || tables.fadeRootIndex.contains(entryNode))
 					continue;
 				r.rootVerdicts.insert_or_assign(entryNode, true);
-				if (!all)
-					continue;
 				Store(r, const_cast<RE::NiAVObject*>(entryNode), true, true);
 				Store(r, geometry, true, true);
 				SetChain(r, geometry, entryNode);
 			}
 		}
-		if (wide) {
-			// The verdicts of roots the newest tables (or candidates) no longer list forgotten, every 60th entry with a decode's writes (a
-			// lookup checks the listing itself: AccumulatedVerdictOf).
-			if (wrote && ++r.verdictPrunes >= 60) {
-				r.verdictPrunes = 0;
-				for (auto it = r.rootVerdicts.begin(); it != r.rootVerdicts.end();)
-					it = (r.writtenTables && r.writtenTables->fadeRootIndex.contains(it->first)) ||
-					             (r.writtenCandidates && r.writtenCandidates->entries.contains(static_cast<const RE::NiAVObject*>(it->first))) ?
-					         std::next(it) :
-					         r.rootVerdicts.erase(it);
-			}
-		} else {
-			// The verdicts of roots no longer stood in forgotten, with a decode's writes (a return is written again: PrepareWrites forgets them too).
-			for (auto it = r.rootVerdicts.begin(); wrote && it != r.rootVerdicts.end();)
-				it = a_stoodIn(it->first) ? std::next(it) : r.rootVerdicts.erase(it);
+		// The verdicts of roots the newest tables (or candidates) no longer list forgotten, every 60th entry with a decode's writes (a lookup
+		// checks the listing itself: AccumulatedVerdictOf).
+		if (wrote && ++r.verdictPrunes >= 60) {
+			r.verdictPrunes = 0;
+			for (auto it = r.rootVerdicts.begin(); it != r.rootVerdicts.end();)
+				it = (r.writtenTables && r.writtenTables->fadeRootIndex.contains(it->first)) ||
+				             (r.writtenCandidates && r.writtenCandidates->entries.contains(static_cast<const RE::NiAVObject*>(it->first))) ?
+				         std::next(it) :
+				         r.rootVerdicts.erase(it);
 		}
-		// T7f preparation: the cell roots (ListUpkeep's kAccumulated), set under CS_DCLF_ACCUMULATED_ALL, checked under the parity.
-		if (all || SideEffects::AccumulatedParity())
-			CellRoots(r, all);
+		// T7f checklist item 1: the cell roots (ListUpkeep's kAccumulated).
+		CellRoots(r);
 		r.writeNs.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()),
 			std::memory_order_relaxed);
 	}
@@ -918,6 +919,11 @@ namespace DCLF
 		const auto& verdicts = impl->scene->visibilityReadback->rootVerdicts;
 		const auto it = verdicts.find(a_root);
 		return it == verdicts.end() || it->second;
+	}
+
+	bool IndirectDraws::AccumulatedStoredNow(const void* a_node) const
+	{
+		return impl->scene && impl->scene->visibilityReadback && impl->scene->visibilityReadback->storedNow.contains(a_node);
 	}
 
 	bool IndirectDraws::AccumulatedVerdictOf(const void* a_root, bool& a_visible) const
@@ -953,12 +959,12 @@ namespace DCLF
 		const auto take = [](std::atomic<std::uint64_t>& a_counter) { return a_counter.exchange(0, std::memory_order_relaxed); };
 		// T7b2's writes (the normal path).
 		std::string text = fmt::format(
-			"[DCLF] accumulated writes (T7b2): {} write lists made at Main::Update's entry ({} full), {} set, {} cleared, {} already so, {} left (no longer stood in), "
+			"[DCLF] accumulated writes (T7b2): {} write lists made at Main::Update's entry ({} full), {} set, {} cleared, {} already so, "
 			"{} clears held by a camera cut ({} cuts, {} roots set by them); {:.1f} us on the main thread\n",
-			take(r.writeBatches), take(r.fullWrites), take(r.writesSet), take(r.writesCleared), take(r.writesUnchanged), take(r.writesNotStoodIn), take(r.writesHeldByCut),
+			take(r.writeBatches), take(r.fullWrites), take(r.writesSet), take(r.writesCleared), take(r.writesUnchanged), take(r.writesHeldByCut),
 			take(r.cuts), take(r.cutWrites), double(take(r.writeNs)) / 1000.0);
-		// T7f preparation: every listed root (CS_DCLF_ACCUMULATED_ALL), or its dry run.
-		if (WideWanted()) {
+		// T7f checklist item 1: every listed root.
+		{
 			struct Taken4
 			{
 				std::uint64_t both, dclfOnly, engineOnly, neither;
@@ -966,53 +972,57 @@ namespace DCLF
 			const auto take4 = [&](Readback::Counts& a_counts) { return Taken4{ take(a_counts.both), take(a_counts.dclfOnly), take(a_counts.engineOnly), take(a_counts.neither) }; };
 			const auto wideRoots = take4(r.wideRootCounts), wideEntries = take4(r.wideEntryCounts), wideGeometry = take4(r.wideGeometryCounts);
 			const auto receivers = take4(r.wideReceiverCounts);
-			const auto compares = take(r.wideCompares), cellUnset = take(r.cellRootsUnset);
+			const auto compares = take(r.wideCompares);
 			std::array<std::uint64_t, Readback::kWideCauses> causes{};
 			for (std::size_t c = 0; c < causes.size(); ++c)
 				causes[c] = take(r.wideCauses[c]);
-			const bool all = AccumulatedAll();
 			// T7f: the tag fires on what the readers would see differently outside the readback's lag ("T7f: what kAccumulated means"): a
 			// fade root or plain entry root the engine sets and DCLF steadily does not (not stood in since the batch), a geometry the receivers
-			// would take steadily without DCLF's bit, a cell root the engine's build sets without the bit.
-			const char* verdict = all ? "" :
-			                      !compares ? (SideEffects::AccumulatedParity() ? " <- NOT COMPARED" : "") :
-			                      (causes[Readback::kEngineRootSteady] || wideEntries.engineOnly || causes[Readback::kEngineGeometrySteady] || cellUnset) ? " <- ACCUMULATED ALL" :
+			// would take steadily without DCLF's bit.
+			const char* verdict = !compares ? (SideEffects::AccumulatedParity() ? " <- NOT COMPARED" : "") :
+			                      (causes[Readback::kEngineRootSteady] || causes[Readback::kEngineEntrySteady] || causes[Readback::kEngineGeometrySteady]) ? " <- ACCUMULATED ALL" :
 			                                                                                                                                              " <- OK";
 			text += fmt::format(
-				"[DCLF] accumulated, every listed root (T7f preparation; CS_DCLF_ACCUMULATED_ALL {}): wide writes {} set, {} cleared, {} already so, {} dry; {} nodes between "
-				"set ({} geometries whose walk missed their root); cell roots {} seen, {} set, {} without the bit; dry run {} compare lists: fade roots {} both / {} DCLF's alone / "
+				"[DCLF] accumulated, every listed root (T7f checklist item 1): wide writes {} set, {} cleared, {} already so; {} nodes between "
+				"set ({} geometries whose walk missed their root); cell roots {} seen, {} set; dry run {} compare lists: fade roots {} both / {} DCLF's alone / "
 				"{} the engine's alone / {} neither, plain entry roots {} / {} / {} / {}, geometry {} / {} / {} / {}, {} app-culled roots aside{}{}\n",
-				all ? "on" : "off: a dry run", take(r.wideSet), take(r.wideCleared), take(r.wideUnchanged), take(r.wideDry), take(r.wideNodesSet), take(r.wideNoChain),
-				take(r.cellRootsSeen), take(r.cellRootsSet), cellUnset, compares, wideRoots.both, wideRoots.dclfOnly, wideRoots.engineOnly, wideRoots.neither, wideEntries.both,
+				take(r.wideSet), take(r.wideCleared), take(r.wideUnchanged), take(r.wideNodesSet), take(r.wideNoChain),
+				take(r.cellRootsSeen), take(r.cellRootsSet), compares, wideRoots.both, wideRoots.dclfOnly, wideRoots.engineOnly, wideRoots.neither, wideEntries.both,
 				wideEntries.dclfOnly, wideEntries.engineOnly, wideEntries.neither, wideGeometry.both, wideGeometry.dclfOnly, wideGeometry.engineOnly, wideGeometry.neither,
 				take(r.wideHidden), verdict, r.wideFirst.empty() ? "" : "; first the engine's alone: " + r.wideFirst);
 			r.wideFirst.clear();
+			if (!r.wideNoChainFirst.empty())
+				text += fmt::format("[DCLF] accumulated, geometries whose walk missed their root (T7f): {}\n", r.wideNoChainFirst);
+			r.wideNoChainFirst.clear();
 			// T7f: the dry run's differences by cause (Readback::WideCause), the geometry against what the receivers see, the cell roots'
 			// containers and the geometries with no fade root.
 			if (compares)
 				text += fmt::format(
 					"[DCLF] accumulated dry run by cause (T7f): geometry against the receivers' bit (its chain to the root set) {} both / {} DCLF's alone / "
 					"{} the engine's alone / {} neither; the engine's alone: {} a node up to the root clear (stale, no reader), {} root stood in since the batch, "
-					"{} DCLF's root faded out, {} changed within {} frames, {} steady; DCLF's alone: {} the rule, {} changed, {} the engine's root clear, {} a node "
-					"between clear, {} steady; roots the engine's alone: {} stood in since, {} changed, {} steady; DCLF's alone: {} the rule, {} changed, {} steady; "
-					"cell containers (list entries) {} seen, {} without the bit; geometry with no fade root {} listed by an entry, {} with no candidates, {} not a "
-					"candidate, {} whose entry is a fade root{}\n",
+					"{} DCLF's root faded out, {} changed within {} frames, {} arrived since the batch (the engine's sample of its frame clear), {} steady; DCLF's alone: "
+					"{} the rule, {} changed, {} the engine's root clear, {} a node between clear, {} steady; roots the engine's alone: {} stood in since, {} changed, "
+					"{} arrived since the batch, {} steady; DCLF's alone: {} the rule, {} changed, {} steady; plain entry roots the engine's alone: {} stood "
+					"in since, {} arrived since the batch, {} changed, {} steady, {} with an engine residue geometry (not written); cell containers (list entries) {} seen; geometry with no fade root {} listed by an entry, {} with no candidates, {} not a "
+					"candidate, {} whose entry is a fade root; {} wide geometries without a main input (their bit left the engine's){}\n",
 					receivers.both, receivers.dclfOnly, receivers.engineOnly, receivers.neither, causes[Readback::kEngineGeometryChain],
 					causes[Readback::kEngineGeometryStoodIn], causes[Readback::kEngineGeometryFaded], causes[Readback::kEngineGeometryRecent], Readback::kRecentFrames,
-					causes[Readback::kEngineGeometrySteady], causes[Readback::kDclfGeometryRule], causes[Readback::kDclfGeometryRecent],
-					causes[Readback::kDclfGeometryRootClear], causes[Readback::kDclfGeometryChainClear], causes[Readback::kDclfGeometrySteady],
-					causes[Readback::kEngineRootStoodIn], causes[Readback::kEngineRootRecent], causes[Readback::kEngineRootSteady], causes[Readback::kDclfRootRule],
-					causes[Readback::kDclfRootRecent], causes[Readback::kDclfRootSteady], take(r.cellContainersSeen), take(r.cellContainersUnset), take(r.plainListed),
-					take(r.plainNoCandidates), take(r.plainNotCandidate), take(r.plainEntryIsRoot),
+					causes[Readback::kEngineGeometryArrived], causes[Readback::kEngineGeometrySteady], causes[Readback::kDclfGeometryRule],
+					causes[Readback::kDclfGeometryRecent], causes[Readback::kDclfGeometryRootClear], causes[Readback::kDclfGeometryChainClear],
+					causes[Readback::kDclfGeometrySteady], causes[Readback::kEngineRootStoodIn], causes[Readback::kEngineRootRecent], causes[Readback::kEngineRootArrived],
+					causes[Readback::kEngineRootSteady], causes[Readback::kDclfRootRule],
+					causes[Readback::kDclfRootRecent], causes[Readback::kDclfRootSteady], causes[Readback::kEngineEntryStoodIn], causes[Readback::kEngineEntryArrived],
+					causes[Readback::kEngineEntryRecent], causes[Readback::kEngineEntrySteady], take(r.wideEntryResidue), take(r.cellContainersSeen), take(r.plainListed),
+					take(r.plainNoCandidates), take(r.plainNotCandidate), take(r.plainEntryIsRoot), take(r.wideNoInput),
 					r.wideFirstGeometry.empty() ? "" : "; first steady geometry the engine's alone: " + r.wideFirstGeometry);
-			else {
+			else
 				take(r.cellContainersSeen);
-				take(r.cellContainersUnset);
-			}
 			r.wideFirstGeometry.clear();
 		}
 		// T7b5, CS_DCLF_TREE_PARITY (<- TREE MANAGER).
 		text += TreeList::Report();
+		// T7f checklist item 6: the actors' animation stamp (<- ACTOR RATE under CS_DCLF_ACCUMULATED_PARITY).
+		text += SideEffects::ActorRateReport();
 		if (!SideEffects::AccumulatedParity())
 			return text;
 		text += SideEffects::AnimRateReport();

@@ -1810,8 +1810,8 @@ namespace DCLF
 		state->count = CreateWords(kCountWords, true, "cs.dclf.first-person.draw-count");
 		FirstPersonPlan plan;
 		if (const auto indirect = FrameIndirectState(); indirect.valid)
-			PlanFirstPersonBuckets(*resources, indirect, f.slotPipelines, plan);
-		state->bucketCountWords = Doubled(16u, static_cast<std::uint32_t>(plan.buckets.size()));
+			PlanFirstPersonBuckets(*resources, nullptr, indirect, f.slotPipelines, {}, plan);  // the initial sizing (no lookups here: no bucket)
+		state->bucketCountWords = Doubled(16u, static_cast<std::uint32_t>(plan.buckets.size() + 1));
 		state->bucketCounts = MakeVersioned(CreateWords(state->bucketCountWords, true, "cs.dclf.first-person.bucket-counts"));
 		state->sequenceDraws = Doubled(64u, plan.draws);
 		state->sequences = MakeVersioned(CreateWords(std::uint64_t(state->sequenceDraws) * sizeof(DrawSequence) / 4, true, "cs.dclf.first-person.sequences"));
@@ -1822,6 +1822,8 @@ namespace DCLF
 			logger::warn("[DCLF] the first-person view's block has no device address; first person stays native");
 			return false;
 		}
+		// T7e's forward part: its draw through the main colour signature, with an explicit preprocess as the forward epoch's (ForwardDrawPass).
+		state->preprocessForward = PreprocessStates::Create(device, host->FrameSlots(), "the first-person forward part");
 		f.resources = std::move(state);
 		logger::info("[DCLF] first-person graph resources created");
 		PostRevisionInputs();

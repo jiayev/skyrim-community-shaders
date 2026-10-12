@@ -279,11 +279,13 @@ namespace DCLF::TreeAnimation
 				continue;
 			}
 			auto* result = &At<std::int32_t>(shape, kShapeResult);
-			if (!stoodIn && !all) {
-				// The dry run: the engine's result is the last scene frame's cull, DCLF's the conservative rule's (a frame or more behind it).
+			if (!stoodIn) {
+				// The comparison (the dry run, or before the write): the engine's result is the last scene frame's cull, DCLF's the
+				// conservative rule's (a frame or more behind it).
 				const std::int32_t engine = *result;
 				++(engine == 0 ? stats.dryStale : (engine == 1) == visible ? stats.drySame : visible ? stats.dryInOut : stats.dryOutIn);
-				continue;
+				if (!all)
+					continue;
 			}
 			written.push_back({ RE::NiPointer<RE::NiAVObject>(tree), result, *result });
 			writtenNodes.insert(tree);
@@ -346,12 +348,12 @@ namespace DCLF::TreeAnimation
 			listed, held.load(std::memory_order_relaxed), updateMs, s.syncs, s.takenOff, s.putBack, s.engineAdds.exchange(0), s.takenOffAgain, s.engineRemoves.exchange(0), s.clears.exchange(0), s.parityChecks,
 			s.parityOnList, s.parityChecks ? (s.parityOnList ? " <- TREE LIST" : " <- OK") : "", ownedTrees.size(), s.treeLoops, s.treesIn, s.treesOut, s.replaced[0], s.replaced[1], s.replaced[2],
 			s.noMultiBound);
-		// T7f preparation's line part: only with CS_DCLF_TREE_LIST_ALL or the dry run's CS_DCLF_TREE_PARITY.
+		// T7f's line part: with CS_DCLF_TREE_LIST_ALL or the dry run's CS_DCLF_TREE_PARITY.
 		const bool wideShown = SwitchEnabled(Switch::TreeListAll) || SwitchEnabled(Switch::TreeParity);
 		const auto wideText = !wideShown ? std::string() : fmt::format(
-			"; every BSTreeNode (T7f preparation; CS_DCLF_TREE_LIST_ALL {}): {} in / {} out written (replacing the engine's {} stale / {} in / {} out); dry run {} same, {} DCLF's in "
+			"; every BSTreeNode (T7f; CS_DCLF_TREE_LIST_ALL {}): {} in / {} out written (replacing the engine's {} stale / {} in / {} out); against the engine's {} same, {} DCLF's in "
 			"and the engine's out, {} DCLF's out and the engine's in, {} the engine's stale; aside {} without DCLF's verdict, {} without a multibound",
-			SwitchEnabled(Switch::TreeListAll) ? "on" : "off", s.wideIn, s.wideOut, s.wideReplaced[0], s.wideReplaced[1], s.wideReplaced[2], s.drySame, s.dryInOut, s.dryOutIn,
+			SwitchEnabled(Switch::TreeListAll) ? "on" : "off: a dry run", s.wideIn, s.wideOut, s.wideReplaced[0], s.wideReplaced[1], s.wideReplaced[2], s.drySame, s.dryInOut, s.dryOutIn,
 			s.dryStale, s.wideNoVerdict, s.wideNoMultiBound);
 		s.wideIn = s.wideOut = s.wideNoVerdict = s.wideNoMultiBound = s.drySame = s.dryInOut = s.dryOutIn = s.dryStale = 0;
 		s.wideReplaced = {};

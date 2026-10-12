@@ -406,6 +406,9 @@ namespace DCLF
 		// Its Lighting variant's DLightColor (PS b13 c18: Effect.hlsl, DCLFEffectDLightColor), the sun light's effect colour this frame.
 		const auto effectLight = SampleEffectLight();
 		latched(a_resources->frameConstants, effectLight.data(), sizeof(effectLight), kEffectLightFrameOffset);
+		// Its Blood's AlphaTestRef.yz (PS b13 c19: Effect.hlsl, DCLFEffectBlood), the weapon blood's two globals.
+		const auto effectBlood = SampleEffectBlood();
+		latched(a_resources->frameConstants, effectBlood.data(), sizeof(effectBlood), kEffectBloodFrameOffset);
 		// CS_DCLF_FOLIAGE_PARITY: the colour epoch's buffers (by its parity) and its tag, after the LOD fades in the same block (PS
 		// b13, c14: DCLFFoliageParity), and the compare pass's counters zeroed.
 		// The Z-prepass's stages read the owners' index and the size from it too, as the colour commit before them left it.
@@ -1146,10 +1149,11 @@ namespace DCLF
 						break;
 					if (event.root >= state.appliedFrame.size())
 						state.appliedFrame.resize(std::size_t(event.root) + 1, 0u);
-					// The root the event was of, still stood in: one listed again since, or the engine's own again, keeps its node; and
-					// an event older than the one taken last is not written over it.
+					// The root the event was of, still DCLF's to write (kFadeRootWritten: any listed root):
+					// one listed again since, or the engine's own again, keeps its node; and an event older than the one taken last is not
+					// written over it.
 					if (event.root >= tables->fadeRoots.size() || tables->fadeRoots[event.root].generation != event.generation ||
-						!(tables->fadeRoots[event.root].bits & kFadeRootStoodIn) || !tables->fadeRootNode[event.root] || batch->frame < state.appliedFrame[event.root]) {
+						!(tables->fadeRoots[event.root].bits & kFadeRootWritten) || !tables->fadeRootNode[event.root] || batch->frame < state.appliedFrame[event.root]) {
 						state.stale.fetch_add(1, std::memory_order_relaxed);
 						continue;
 					}

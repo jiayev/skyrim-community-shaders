@@ -2,6 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Diagnostics/MirrorWatch.h"
+#include "Features/DrawcallLimitFix/Engine/SideEffects.h"
 #include <cassert>
 
 
@@ -14,8 +15,6 @@ namespace DCLF::Scene
 			const float before = CurrentFade(a_this);
 			const std::uint8_t door = a_this->GetRuntimeData().unk154;
 			func(a_this, a_process, a_alphaGroup);
-			if (CurrentFade(a_this) != before)
-				PushFade(a_this);
 			// The values for the mirror (T6b1a).
 			if (CurrentFade(a_this) != before || a_this->GetRuntimeData().unk154 != door)
 				PushNodeUpdate(a_this, SceneCapture::NodeRecord::kFadeCurrent | SceneCapture::NodeRecord::kFadeDoor);
@@ -30,8 +29,6 @@ namespace DCLF::Scene
 			const float before = CurrentFade(a_this);
 			const std::uint8_t door = a_this->GetRuntimeData().unk154;
 			const auto result = func(a_this, a_fadeAmount, a_camera);
-			if (CurrentFade(a_this) != before)
-				PushFade(a_this);
 			if (CurrentFade(a_this) != before || a_this->GetRuntimeData().unk154 != door)
 				PushNodeUpdate(a_this, SceneCapture::NodeRecord::kFadeCurrent | SceneCapture::NodeRecord::kFadeDoor);
 			return result;
@@ -76,10 +73,8 @@ namespace DCLF::Scene
 		{
 			const std::uint8_t before = a_this->GetRuntimeData().unk152 & 0xF;
 			func(a_this, a_level);
-			if ((a_this->GetRuntimeData().unk152 & 0xF) != before) {
-				PushFade(a_this);
+			if ((a_this->GetRuntimeData().unk152 & 0xF) != before)
 				PushNodeUpdate(a_this, SceneCapture::NodeRecord::kFadeLevel);
-			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -134,6 +129,8 @@ namespace DCLF::Scene
 			const auto result = func(a_node, a_camera);
 			if (a_node) {
 				fadeSnapEvents.Push(a_node);
+				// CS_DCLF_FADE_PARITY: a snap writes +0x13C, which <- FADE DOUBLE would take for an engine step.
+				SideEffects::NoteFadeSnap(a_node);
 				if (netimmerse_cast<RE::BSFadeNode*>(a_node))
 					PushNodeUpdate(a_node, kFadeStatics | kFadeState);
 			}
@@ -858,17 +855,6 @@ namespace DCLF::Scene
 
 namespace DCLF
 {
-	void SceneStore::NoteFadeChanged(const RE::NiAVObject* a_fadeNode)
-	{
-		if (a_fadeNode)
-			Scene::PushFade(static_cast<const RE::BSFadeNode*>(a_fadeNode));
-	}
-
-	void SceneStore::MuteFadeEvents(bool a_muted)
-	{
-		Scene::fadeEventsMuted = a_muted;
-	}
-
 	bool SceneStore::IsLoadingScreenUp()
 	{
 		auto* ui = RE::UI::GetSingleton();
@@ -951,8 +937,6 @@ namespace DCLF
 			auto discarded = std::make_shared<EventBatch>();
 			BatchUnwindGuard discardedGuard(*this, discarded);
 			{
-				std::vector<const RE::BSFadeNode*> fades;
-				DrainFadeEvents(fades);
 				std::vector<const void*> keys;
 				DrainPropertyEvents(keys);
 			}
@@ -983,7 +967,6 @@ namespace DCLF
 		batch->Append(drained);
 		fadeSnapEvents.Drain([&](const void* a_node) { batch->fadeSnaps.push_back(a_node); });
 		fadeAmountEvents.Drain([&](const void* a_node) { batch->fadeAmounts.push_back(a_node); });
-		DrainFadeEvents(batch->fades);
 		DrainPropertyEvents(batch->properties);
 		DrainNodeEvents(batch->nodes);
 		switchEvents.Drain([&](SwitchEvent&& a_event) { batch->switches.push_back(std::move(a_event)); });
@@ -1033,7 +1016,7 @@ namespace DCLF
 		}
 		if (catchUp)
 			switchCatchUps.Push(std::move(catchUp));
-		events += static_cast<std::uint32_t>(batch->fadeSnaps.size() + batch->fadeAmounts.size() + batch->fades.size() + batch->properties.size() +
+		events += static_cast<std::uint32_t>(batch->fadeSnaps.size() + batch->fadeAmounts.size() + batch->properties.size() +
 											 batch->nodes.size() + batch->switches.size() + batch->lodSegments.size());
 		pumpStats.passEvents.push_back(events);
 		return batch;
@@ -1147,7 +1130,6 @@ namespace DCLF
 			DrainLodFadeEvents(keys);
 			DrainEmittanceEvents(keys);
 		}
-		fadeChanged.clear();
 		propertyChanged.clear();
 		// The references these hold are the render thread's to drop (a node's last release runs the engine's destructors: its
 		// collision object leaves the Havok world), so they go back through the retirement chain, never cleared here.
@@ -1193,7 +1175,6 @@ namespace DCLF
 			alwaysRenderRoots.clear();
 			validationCursor = 0;
 			fullEvaluation = true;
-			fadeDependents.clear();
 			propertyDependents.clear();
 			rootDependents.clear();
 			lightDependents.clear();
@@ -1322,8 +1303,6 @@ namespace DCLF
 		// Actors' fadeAmount, written since: their rows' input (the GPU's state stands).
 		for (const void* node : batch->fadeAmounts)
 			RefreshFadeAmount(node);
-		// The fade nodes whose currentFade changed since the last apply (the delta walk re-evaluates their dependents).
-		fadeChanged.insert(fadeChanged.end(), batch->fades.begin(), batch->fades.end());
 		// The structural events (SceneEvents): properties whose flags, material or controllers changed, and nodes Havok
 		// moved or gave a controller.
 		propertyChanged.insert(propertyChanged.end(), batch->properties.begin(), batch->properties.end());

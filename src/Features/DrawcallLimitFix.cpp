@@ -1,4 +1,5 @@
 #include "DrawcallLimitFix.h"
+#include "DrawcallLimitFix/Diagnostics/TargetDump.h"
 
 #include "Deferred.h"
 #include "DrawcallLimitFix/Common/AsyncWorker.h"
@@ -16,6 +17,7 @@
 #include "DrawcallLimitFix/Draws/FrameValues.h"
 #include "DrawcallLimitFix/Engine/EngineAccess.h"
 #include "DrawcallLimitFix/Engine/FaceSnapshots.h"
+#include "DrawcallLimitFix/Engine/Billboards.h"
 #include "DrawcallLimitFix/Engine/ParticleSnapshots.h"
 #include "DrawcallLimitFix/Engine/SunAccumulation.h"
 #include "DrawcallLimitFix/Engine/SunViews.h"
@@ -135,12 +137,14 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::FaceSnapshots::Get().Install();
 	// T7e: the particle systems' snapshots, taken after the engine's update of each (ParticleSnapshots; the systems DCLF follows alone).
 	DCLF::ParticleSnapshots::Get().Install();
+	DCLF::Billboards::Install();
 	DCLF::SunAccumulation::Get().Install();
 	DCLF::SunViews::Get().Install();
 	DCLF::LightSelection::Get().Install();
 	DCLF::FocusViews::Get().Install();
 	DCLF::PrimaryCull::Get().Install();
-	// T7b3, CS_DCLF_ROOM_PARITY: Main::IsRoomVisible's answers against PortalViews' VisibleSet (an observer; nothing installed without it).
+	// T7f checklist item 3, CS_DCLF_ROOM_ANSWER (default on): Main::IsRoomVisible answered from PortalViews' VisibleSet while DCLF runs;
+	// T7b3, CS_DCLF_ROOM_PARITY: the engine's answers against it (nothing installed with neither).
 	DCLF::RoomVisibility::Install();
 	// The tree manager's list loop: the stood-in trees' multibound results from DCLF's verdicts (T7b5's fix, TreeAnimation), and under
 	// CS_DCLF_TREE_PARITY the loop against DCLF's port (T7b5's observer).
@@ -194,6 +198,9 @@ void DrawcallLimitFix::Reset()
 	// The test commands run before the installed check, so a CS_DCLF=0 baseline reaches the same place at
 	// the same in-game hour as the run it is compared against.
 	DCLF::RunTestHarness(GetShortName());
+	// CS_DCLF_TARGET_DUMP: the frame's last point, then the count advances and finished copies are written (with DCLF on or off).
+	DCLF::TargetDump::Point("present");
+	DCLF::TargetDump::Present();
 	if (DrawCensusOn() && !DCLF::SceneStore::IsLoadingScreenUp())
 		ReportDrawCensus();
 
@@ -281,8 +288,11 @@ void DrawcallLimitFix::Hooks::Main_Update_Entry::thunk(void* a_stages)
 {
 	func(a_stages);
 	auto& feature = globals::features::drawcallLimitFix;
-	if (feature.installed)
+	if (feature.installed) {
+		// T7f checklist item 3: the frame's Main::IsRoomVisible calls answered by DCLF only while it runs.
+		DCLF::RoomVisibility::SetLive(feature.Running());
 		DCLF::PrimaryCull::Get().AtUpdateEntry(feature.Running());
+	}
 }
 
 std::int64_t DrawcallLimitFix::Hooks::Main_Draw_Early::thunk(void* a_main)
@@ -792,10 +802,6 @@ void DrawcallLimitFix::NoteNativePass(const RE::BSRenderPass* a_pass, std::uint3
 	if (!inDepthPass && !globals::deferred->deferredPass)
 		return;  // shadows, reflections and cubemaps: not the main camera's views
 	++leaks.offered;
-	// The passes the registration leaves to the engine on purpose: a cross-fade's copy of the old level, a fade DCLF does not
-	// model (whose member leaves the set at the next commit).
-	if (a_pass->accumulationHint == 10 || DCLF::PassCapture::FadingAtRegistration(a_pass))
-		return;
 	const auto set = DCLF::SceneStore::Get().FrameClaims();
 	if (!set || !(set->PhasesOf(a_pass->geometry) & DCLF::kSetMain))
 		return;
@@ -908,9 +914,16 @@ void DrawcallLimitFix::Hooks::Accumulator_BlendedDraw<N>::thunk(void* a_accumula
 	// T7d: DCLF's blended objects first, behind every blended draw of the engine's (the ordering contract: drawcall-limit-fix.md, "The
 	// forward epoch (T7d)"), for the main camera's accumulator alone (the same function draws every render mode 0 accumulator's).
 	static REL::Relocation<void**> mainAccumulator{ REL::Offset(0x338c830) };
-	if (a_accumulator && a_accumulator == *mainAccumulator && globals::features::drawcallLimitFix.Running())
+	const bool main = a_accumulator && a_accumulator == *mainAccumulator;
+	if (main)
+		DCLF::TargetDump::Point("before forward");
+	if (main && globals::features::drawcallLimitFix.Running())
 		DCLF::IndirectDraws::Get().ExecuteForward();
+	if (main)
+		DCLF::TargetDump::Point("after DCLF forward");
 	func(a_accumulator, a_renderFlags);
+	if (main)
+		DCLF::TargetDump::Point("after engine blended");
 }
 
 void DrawcallLimitFix::Hooks::RenderDepth_FirstPersonDraw::thunk(void* a_camera, void* a_accumulator, std::uint32_t a_flags)
@@ -933,12 +946,15 @@ void DrawcallLimitFix::Hooks::RenderDepth_FirstPersonDraw::thunk(void* a_camera,
 void DrawcallLimitFix::Hooks::RenderFirstPersonView_Draw::thunk(void* a_camera, void* a_accumulator, std::uint32_t a_flags)
 {
 	auto& feature = globals::features::drawcallLimitFix;
+	DCLF::TargetDump::Point("before first person");
 	if (feature.Running()) {
 		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::AfterOpaque);
 		DCLF::IndirectDraws::Get().ExecuteFirstPersonColour();
 		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 	}
+	DCLF::TargetDump::Point("after DCLF first person");
 	func(a_camera, a_accumulator, a_flags);
+	DCLF::TargetDump::Point("after first person");
 }
 
 std::uint32_t DrawcallLimitFix::Hooks::Main_Draw_RefractionCheck::thunk(void* a_accumulator)

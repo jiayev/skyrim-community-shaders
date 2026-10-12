@@ -256,6 +256,116 @@ float2 DCLFWindTimersOf(uint a_object)
 	return DCLFTreeWindEntry(a_object, entry) ? DCLFTreeWind[entry * 3u + 1u].xy : DCLFShading[a_object].DCLFShadingWindTimers.xy;
 }
 
+// CS_DCLF_BILLBOARDS (Billboards.h): a billboard's effect record (LightingConstants.h, kRecordEffectBillboard: bit 4, its node's face mode
+// in bits 5-7). Its placement row holds what no cull writes: World the leaf's unturned world (the node's base times the leaf's transform
+// relative to the node), PreviousWorld's rotation part the base rotation R0 (the node's parent's world rotation times its local),
+// PreviousWorld[0].w the leaf's world bound radius, Bound.xyz the node's translation (the pivot).
+static const uint kDCLFRecordEffectBillboard = 1u << 4;
+
+// The node's world rotation as NiBillboardNode::OnVisible makes it for a camera (0x140d3e650: R0 times the turn its face mode makes from
+// the camera's axes, the base rotation dropped for BSROTATE_ABOUT_UP), a_forward, a_up and a_right the camera's world axes and a_eye its
+// position. The constants are the engine's (Billboards.cpp, whose Orient is this function's CPU twin for the observer).
+float3x3 DCLFBillboardRotation(float3x3 a_base, float3 a_pivot, uint a_mode, float3 a_forward, float3 a_up, float3 a_right, float3 a_eye)
+{
+	const float kShort = asfloat(0x358637bdu), kNear = asfloat(0x3a83126fu), kAligned = asfloat(0x3f7fffefu), kPi = asfloat(0x40490fdbu),
+				kFlat = asfloat(0x2b8cbcccu);
+	float3x3 m = float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1);
+	float3x3 base = a_base;
+	float3 toward = -a_forward, up = a_up, right = a_right;
+	bool turned = true;
+	if (a_mode == 3 || a_mode == 4) {
+		// FUN_140d3f240: the axes turned by the rotation taking -forward onto the direction from the pivot to the camera; none within
+		// kNear (squared) of the pivot.
+		float3 d = a_eye - a_pivot;
+		const float lengthSq = d.y * d.y + d.x * d.x + d.z * d.z;
+		if (lengthSq < kNear) {
+			turned = false;
+		} else {
+			const float length = sqrt(lengthSq);
+			d = length <= kShort ? float3(0, 0, 0) : d * (1.0 / length);
+			const float cosine = dot(toward, d);
+			if (cosine < kAligned) {
+				const float angle = -1.0 < cosine ? (1.0 <= cosine ? 0.0 : acos(cosine)) : kPi;
+				float3 n = float3(toward.z * d.y - toward.y * d.z, toward.x * d.z - toward.z * d.x, toward.y * d.x - toward.x * d.y);
+				const float nLength = sqrt(n.y * n.y + n.x * n.x + n.z * n.z);
+				n = nLength <= kShort ? float3(0, 0, 0) : n * (1.0 / nLength);
+				float s, c;
+				sincos(angle, s, c);
+				const float k = 1.0 - c;
+				const float xy = n.y * n.x * k, xz = n.z * n.x * k, yz = n.z * n.y * k;
+				const float3x3 q = float3x3(n.x * n.x * k + c, n.z * s + xy, xz - n.y * s,
+					xy - n.z * s, n.y * n.y * k + c, n.x * s + yz,
+					n.y * s + xz, yz - n.x * s, n.z * n.z * k + c);
+				toward = d;
+				up = mul(q, up);
+				right = mul(q, right);
+			}
+		}
+	}
+	// The axes in the base frame (R0's transpose times them).
+	const float3 a = mul(toward, base), u = mul(up, base), r = mul(right, base);
+	if (!turned) {
+	} else if (a_mode == 0 || a_mode == 3) {
+		// ALWAYS_FACE_CAMERA, ALWAYS_FACE_CENTER: about the toward axis until the right axis has no base-frame y.
+		const float length = sqrt(r.y * r.y + u.y * u.y);
+		float3 x, y;
+		if (length <= kShort) {
+			x = -r;
+			y = -u;
+		} else {
+			const float inverse = 1.0 / length;
+			const float c = u.y * inverse, s = -(r.y * inverse);
+			x = r * c + u * s;
+			y = u * c - r * s;
+		}
+		m = float3x3(x.x, y.x, a.x, x.y, y.y, a.y, x.z, y.z, a.z);
+	} else if (a_mode == 2 || a_mode == 4) {
+		// RIGID_FACE_CAMERA, RIGID_FACE_CENTER: the camera's axes exactly.
+		m = float3x3(r.x, u.x, a.x, r.y, u.y, a.y, r.z, u.z, a.z);
+	} else if (a_mode == 1) {
+		// ROTATE_ABOUT_UP: about the base's y toward the camera.
+		const float3 d = mul(a_eye - a_pivot, base);
+		const float length = sqrt(d.z * d.z + d.x * d.x);
+		if (kFlat <= length) {
+			const float inverse = 1.0 / length;
+			m = float3x3(d.z * inverse, 0, d.x * inverse, 0, 1, 0, -(d.x * inverse), 0, d.z * inverse);
+		}
+	} else if (a_mode == 5) {
+		// BSROTATE_ABOUT_UP: the base rotation dropped, about the world's z toward the camera.
+		base = float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1);
+		const float2 d = a_eye.xy - a_pivot.xy;
+		const float length = sqrt(d.y * d.y + d.x * d.x);
+		if (kFlat <= length) {
+			const float inverse = 1.0 / length;
+			m = float3x3(-(d.y * inverse), d.x * inverse, 0, d.x * inverse, d.y * inverse, 0, 0, 0, 1);
+		}
+	}
+	return mul(base, m);
+}
+
+// A billboard's world for a camera: its unturned world (World: the node's base times the leaf's transform relative to it) turned about the
+// pivot by G = the node's turned rotation (DCLFBillboardRotation) times R0's transpose (the base rotation undone); absolute.
+float3x4 DCLFBillboardWorld(uint a_object, float3 a_forward, float3 a_up, float3 a_right, float3 a_eye)
+{
+	const DCLFPlacement placement = DCLFPlacements[a_object];
+	const float3x3 base = float3x3(placement.PreviousWorld[0].xyz, placement.PreviousWorld[1].xyz, placement.PreviousWorld[2].xyz);
+	const float3 pivot = placement.Bound.xyz;
+	const uint mode = (DCLFObjects[a_object].DCLFRecordFlags >> 5) & 7u;
+	const float3x3 g = mul(DCLFBillboardRotation(base, pivot, mode, a_forward, a_up, a_right, a_eye), transpose(base));
+	const float3x4 unturned = float3x4(placement.World[0], placement.World[1], placement.World[2]);
+	const float3x3 rotation = mul(g, (float3x3)unturned);
+	const float3 translation = mul(g, float3(unturned[0].w, unturned[1].w, unturned[2].w) - pivot) + pivot;
+	return float3x4(float4(rotation[0], translation.x), float4(rotation[1], translation.y), float4(rotation[2], translation.z));
+}
+
+// The world bound radius of an object (Community Shaders' EffectRadius: the geometry's world bound radius): a billboard's Bound covers it
+// in every orientation, so its own radius is PreviousWorld[0].w.
+float DCLFWorldBoundRadius(uint a_object)
+{
+	const DCLFPlacement placement = DCLFPlacements[a_object];
+	return (DCLFObjects[a_object].DCLFRecordFlags & kDCLFRecordEffectBillboard) ? placement.PreviousWorld[0].w : placement.Bound.w;
+}
+
 #	if defined(PSHADER)
 // The pixel stages' (Lighting.hlsl's MaterialData.z, Effect.hlsl's PropertyColor.w): the vertex stages bind no t119 or t120.
 // FadeStateCS's rows (Records.h, FadeNodeState and FadeRootStatic), the frame record's t120 and t119 (DrawPipelines.h,

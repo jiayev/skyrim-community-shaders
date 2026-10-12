@@ -1355,6 +1355,11 @@ namespace DCLF
 					depth.ds.depthEnable = true;
 					depth.ds.depthWrite = depthOnly && decalGroup == 1;
 					depth.ds.depthFunc = rhi::CompareOp::LessEqual;
+				} else if (!depthOnly && RasterDepthBiasMode(a_key.rasterFlags)) {
+					// T7f item 7: a first-person effect decal drawn forward (SceneStore::FirstPersonDecalForward) keeps its group's bias.
+					raster.rs.depthBias = a_state.depthBias;
+					raster.rs.depthBiasClamp = a_state.depthBiasClamp;
+					raster.rs.slopeScaledDepthBias = a_state.slopeScaledDepthBias;
 				}
 				rhi::SubobjBlend blend{};
 				rhi::SubobjRTVs targets{};

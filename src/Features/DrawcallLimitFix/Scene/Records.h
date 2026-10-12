@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <bit>
 #include <cstdint>
 #include <type_traits>
@@ -154,6 +155,17 @@ namespace DCLF
 	 */
 	inline constexpr std::uint32_t kPartitionChain = 1u << 15;
 	inline constexpr std::uint32_t kPartitionChainCount = kPartitionChain - 1;
+	/**
+	 * @brief T7e's blood decals: the slots a decal of a_partitions takes in its group's range from its ordinal, one per partition up to the
+	 * last its mask names (a chain's count; one for 0 or kNoPartitions). BuildDrawsCS's decal path writes each of them every frame.
+	 */
+	inline constexpr std::uint32_t DecalSpanOf(std::uint32_t a_partitions)
+	{
+		if (a_partitions & kPartitionChain)
+			return std::max(a_partitions & kPartitionChainCount, 1u);
+		const std::uint32_t mask = a_partitions & (kNoPartitions - 1);
+		return a_partitions == kNoPartitions || !mask ? 1u : static_cast<std::uint32_t>(std::bit_width(mask));
+	}
 	/** @brief The draws a partition mask gives: one per partition it names, one for 0 (the one geometry), none for kNoPartitions. */
 	inline constexpr std::uint32_t PartitionDraws(std::uint32_t a_partitions)
 	{
@@ -293,6 +305,11 @@ namespace DCLF
 		// geometry in the feature's SetupGeometry hook; it differs from disabled only for blended geometry (blended
 		// decals, such as NPC hairlines and beards), and it is the permutation's ExtraFeatureDescriptor.
 		kRasterTranslucencyShift = 21,
+		// Effect keys only (kRasterEffect, whose permutation never takes Extended Translucency's model): the same 3 bits are the
+		// billboard mode + 1 of a leaf under an NiBillboardNode (CS_DCLF_BILLBOARDS; Billboards.h), 0 for any other effect key. The
+		// draw turns the leaf to its view's camera in the vertex stage (Effect.hlsl, DCLFBillboardWorld); the object record carries
+		// the mode (EffectRecordFlagsOf).
+		kRasterEffectBillboardShift = kRasterTranslucencyShift,
 		// T7c1: 2 bits, ObjectTerrainGroup. Group 1 (Terrain Blending's held terrain) carries the blend and write modes that
 		// feature draws its terrain with (1 and 1) and tests LESS_EQUAL with depth writes; group 2 (its no-blend meshes) the
 		// write mode it leaves for them (1), blending off, testing EQUAL. Neither takes a depth bias (DrawPipelines).
@@ -323,6 +340,8 @@ namespace DCLF
 	inline constexpr std::uint32_t RasterStateBits(std::uint32_t a_flags) { return a_flags & ~(kRasterTwoSided | kRasterTranslucencyMask | kRasterEffect); }
 	/** @brief Whether a key is the Effect shader's (kRasterEffect). */
 	inline constexpr bool RasterEffect(std::uint32_t a_flags) { return (a_flags & kRasterEffect) != 0; }
+	/** @brief An effect key's billboard mode + 1 (kRasterEffectBillboardShift), 0 for a key that is no billboard's. */
+	inline constexpr std::uint32_t RasterEffectBillboard(std::uint32_t a_flags) { return RasterEffect(a_flags) ? (a_flags >> kRasterEffectBillboardShift) & 7u : 0u; }
 	inline constexpr std::uint32_t RasterTranslucency(std::uint32_t a_flags) { return (a_flags & kRasterTranslucencyMask) >> kRasterTranslucencyShift; }
 
 	/** @brief Packs a decal's state indices (EngineStates.h says where each comes from). */
@@ -565,10 +584,14 @@ namespace DCLF
 	// T6b1a: which of the slot's two seed rows (FrameValues' fade seeds, 2 * slot + this bit) holds its generation's. Every listing
 	// and reseed toggles it, so a new seed never overwrites the row the installed tables' generation still reads.
 	inline constexpr std::uint32_t kFadeRootSeedOdd = 1u << 23;
+	// T7f checklist items 4-5: the root's node is DCLF's alone to write (FadeStateCS reports its milestones, the write-back stores them
+	// at Main::Update's entry, and neither the engine's OnVisible nor the animation gate steps it): every listed root
+	// (PrimaryCull::FadeWrittenByDclf reads it from the accepted tables).
+	inline constexpr std::uint32_t kFadeRootWritten = 1u << 24;
 	// The bits the seed holds (the node's, as FrameValues samples it in the frame) and those the coordinator's row holds (its inputs).
 	inline constexpr std::uint32_t kFadeRootNodeBits = kFadeRootPlanMask | (0xFFu << kFadeRootBitsShift) | kFadeRootTreeThresholds | kFadeRootAlwaysDraw |
 	                                                   kFadeRootPreprocessed | kFadeRootPreprocessHidden;
-	inline constexpr std::uint32_t kFadeRootCoordinatorBits = kFadeRootTreeLod | kFadeRootOwned | kFadeRootStoodIn | kFadeRootSeedOdd;
+	inline constexpr std::uint32_t kFadeRootCoordinatorBits = kFadeRootTreeLod | kFadeRootOwned | kFadeRootStoodIn | kFadeRootSeedOdd | kFadeRootWritten;
 	/** @brief A root slot's seed row in FrameValues' fade seeds (kFadeRootSeedOdd). */
 	inline constexpr std::size_t FadeSeedRow(std::uint32_t a_slot, std::uint32_t a_bits) { return 2ull * a_slot + ((a_bits & kFadeRootSeedOdd) ? 1u : 0u); }
 	/**

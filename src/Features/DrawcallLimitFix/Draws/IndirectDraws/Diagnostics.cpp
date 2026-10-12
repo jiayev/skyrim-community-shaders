@@ -1,6 +1,7 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Internal.h"
 #	include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
+#	include "Features/DrawcallLimitFix/Engine/Billboards.h"
 #	include "Features/DrawcallLimitFix/Engine/ParticleSnapshots.h"
 
 namespace DCLF
@@ -143,6 +144,7 @@ namespace DCLF
 		text += ReflectionReport();
 		text += ForwardReport();  // T7d
 		text += ParticleSnapshots::Get().Report();  // T7e
+		text += Billboards::Report();
 		text += FirstPersonReport();  // T7e
 		if (impl->scene && impl->scene->treeLodCull && impl->scene->treeLodUploads) {
 			auto& scene = *impl->scene;
@@ -428,7 +430,7 @@ namespace DCLF
 							const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
 							const auto* rootNode = root < tables.fadeRootNode.size() ? static_cast<const RE::NiAVObject*>(tables.fadeRootNode[root]) : nullptr;
 							const auto* fadeNode = rootNode ? const_cast<RE::NiAVObject*>(rootNode)->AsFadeNode() : nullptr;
-							if (fadeNode && root < tables.fadeRoots.size() && !(tables.fadeRoots[root].bits & kFadeRootStoodIn) &&
+							if (fadeNode && root < tables.fadeRoots.size() && !(tables.fadeRoots[root].bits & kFadeRootWritten) &&
 								fadeNode->GetRuntimeData().currentFade == 1.0f && Engine::At<float>(rootNode, 0x100) == 1.0f) {
 								counts.fadeContradictedLast = snapshot.frame;
 								if (counts.fadeContradicted++ == 0)
@@ -1233,7 +1235,8 @@ namespace DCLF
 		for (std::size_t i = 0; i < readback.roots.size(); ++i) {
 			const auto bits = readback.roots[i].bits;
 			const auto* node = static_cast<const RE::NiAVObject*>(a_tables.fadeRootNode[base + i]);
-			if (node && snapshot && base + i < snapshot->size() && !(bits & kFadeRootStoodIn)) {
+			// A root DCLF writes (kFadeRootWritten: every listed root) has no engine OnVisible to compare.
+			if (node && snapshot && base + i < snapshot->size() && !(bits & kFadeRootWritten)) {
 				readback.nodes[i] = (*snapshot)[base + i];
 				readback.engine[i] = 1;
 				readback.nodeCentres.resize(readback.roots.size());

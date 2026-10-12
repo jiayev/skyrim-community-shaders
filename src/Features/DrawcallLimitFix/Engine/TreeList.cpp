@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Draws/FrameValues.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 
 #include <ankerl/unordered_dense.h>
@@ -89,6 +90,7 @@ namespace DCLF::TreeList
 			const void* node = nullptr;
 			bool model = false;
 			bool accumulated = false;
+			bool dclfStored = false;  // T7f: this entry's kAccumulated write was DCLF's (T7f checklist item 1), not the engine's last cull's
 		};
 		struct DclfTree
 		{
@@ -152,6 +154,7 @@ namespace DCLF::TreeList
 			// The animation list (BSLeafAnimNode).
 			std::atomic<std::uint64_t> leafListed{ 0 }, leafBoth{ 0 }, leafDclfOnly{ 0 }, leafEngineOnly{ 0 }, leafNeither{ 0 }, leafPlan{ 0 };
 			std::atomic<std::uint64_t> leafNoModel{ 0 }, leafNotDclf{ 0 }, leafNoVerdict{ 0 }, leafStoodIn{ 0 }, leafMoved{ 0 }, leafOffList{ 0 }, leafDclfAlone{ 0 };
+			std::atomic<std::uint64_t> leafDclfStored{ 0 };
 		};
 		Stats stats;
 		std::atomic<std::uint32_t> firstsKept{ 0 };  // firsts pushed since the last report (the decode pushes, the report resets)
@@ -282,7 +285,8 @@ namespace DCLF::TreeList
 					if (!node)
 						continue;
 					const auto* reference = At<const std::byte*>(node, kUserData);
-					sample->leaves.push_back({ node, reference && At<const void*>(reference, kBaseForm), (At<std::uint32_t>(node, kFlags) & kFlagAccumulated) != 0 });
+					sample->leaves.push_back({ node, reference && At<const void*>(reference, kBaseForm), (At<std::uint32_t>(node, kFlags) & kFlagAccumulated) != 0,
+						IndirectDraws::Get().AccumulatedStoredNow(node) });
 				}
 				lock.Unlock();
 			}
@@ -560,6 +564,11 @@ namespace DCLF::TreeList
 					Add(s.leafNoModel);
 					continue;
 				}
+				// T7f: DCLF stored the bit at this Main::Update's entry (its conservative rule): not the engine's cull.
+				if (leaf.dclfStored) {
+					Add(s.leafDclfStored);
+					continue;
+				}
 				if (a_sample.dclf[i].plan != kFadeRootLeaf)
 					Add(s.leafPlan);
 				const bool dclf = visible[i] != 0;
@@ -623,7 +632,7 @@ namespace DCLF::TreeList
 		const auto leafListed = Take(s.leafListed), both = Take(s.leafBoth), dclfOnly = Take(s.leafDclfOnly), engineOnly = Take(s.leafEngineOnly), neither = Take(s.leafNeither),
 				   plan = Take(s.leafPlan);
 		const auto noModel = Take(s.leafNoModel), leafNotDclf = Take(s.leafNotDclf), leafNoVerdict = Take(s.leafNoVerdict), leafStoodIn = Take(s.leafStoodIn), leafMoved = Take(s.leafMoved),
-				   offList = Take(s.leafOffList), leafAlone = Take(s.leafDclfAlone);
+				   offList = Take(s.leafOffList), leafAlone = Take(s.leafDclfAlone), leafStored = Take(s.leafDclfStored);
 		firstsKept.store(0, std::memory_order_relaxed);
 		const std::uint64_t compared = treeCompared + both + dclfOnly + engineOnly + neither;
 		const std::uint64_t differ = treeDiffer + dclfOnly + engineOnly;
@@ -635,11 +644,12 @@ namespace DCLF::TreeList
 			"({} given DCLF's verdict, {} of them differ; unwritten: multibound {} stale / {} in / {} out, {} differ), aside {} given DCLF's verdict under "
 			"CS_DCLF_TREE_LIST_ALL ({} differ), {} not DCLF's trees, {} no verdict, {} no position, {} moved, {} DCLF's alone; animation list "
 			"(BSLeafAnimNode) {:.1f} a frame: clock {} both / {} DCLF's alone / {} the engine's alone / {} neither ({} not BSLeafAnimNode's plan in DCLF), aside {} no base "
-			"form, {} not DCLF's roots, {} no verdict, {} stood in still on the list, {} moved; DCLF's leaf roots off the list {} (stood in), {} not on it{}{}\n",
+			"form, {} not DCLF's roots, {} no verdict, {} stood in still on the list, {} moved, {} stored by DCLF at the entry; DCLF's leaf "
+			"roots off the list {} (stood in), {} not on it{}{}\n",
 			samplesTaken, samplesTaken ? double(sampleNs) / double(samplesTaken) / 1000.0 : 0.0, frames, incomplete, unmatched, nearBefore, allVisited, noCamera,
 			double(unseeded) * perFrame, double(treeListed) * perFrame, treeCompared, treeSame, treeDiffer, stale, noMultiBound, bound, camera, distance, order, classes, stoodIn,
 			stoodInWritten, stoodInWrittenDiffer, stoodInStale, stoodInIn, stoodInOut, stoodInDiffer, allWritten, allWrittenDiffer, notDclf, noVerdict, noPosition, treeMoved, dclfAlone, double(leafListed) * perFrame, both, dclfOnly, engineOnly,
-			neither, plan, noModel, leafNotDclf, leafNoVerdict, leafStoodIn, leafMoved, offList, leafAlone,
+			neither, plan, noModel, leafNotDclf, leafNoVerdict, leafStoodIn, leafMoved, leafStored, offList, leafAlone,
 			!compared ? " <- NOT COMPARED" : differ ? " <- TREE MANAGER" : " <- OK", firstNames.empty() ? "" : "; first: " + firstNames);
 		firstNames.clear();
 		return text;

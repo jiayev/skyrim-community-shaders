@@ -3787,6 +3787,455 @@ Outside the readback's lag the reading should be near 0. Exterior, `CS_DCLF_ACCU
 
 Built (the shaders compile with dxc, SM 6.6); not run in game.
 
+## T7f: producers 1-6 with the culls still on (w190-w197)
+
+The plan's T7f checklist items 1-6, each a DCLF producer behind a switch, observed against the engine while it still culls. Engine facts
+are in [skyrim-engine-notes.md](./skyrim-engine-notes.md), "T7f: the fade nodes' OnVisible stores and the actors' animation stamp".
+
+| Item | Switch (default) | Observer | Result |
+| --- | --- | --- | --- |
+| 1. kAccumulated on every listed root | `CS_DCLF_ACCUMULATED_ALL` (on) | `<- ACCUMULATED ALL` (`CS_DCLF_ACCUMULATED_PARITY`) | steady classes 0 in motion (w193) and the forests (w192, w194); interiors 0-1 a window (w195/w196, an actor root) |
+| 2. Every BSTreeNode on the tree list | `CS_DCLF_TREE_LIST_ALL` (off) | `<- TREE MANAGER` (`CS_DCLF_TREE_PARITY`) | not observable: no `BSTreeNode` in this load order (Riverwood, Falkreath, Riften, Raven Rock, Morthal) |
+| 3. `Main::IsRoomVisible` from DCLF | `CS_DCLF_ROOM_ANSWER` (on) | `<- ROOM` (`CS_DCLF_ROOM_PARITY`) | rooms 0 differ in the inn and Dragonsreach (~33k calls a window); out-of-graph keys at the coc counted aside |
+| 4-5. Fade/LOD state of every listed root | `CS_DCLF_FADE_ALL` (on) | `<- FADE DOUBLE` (`CS_DCLF_FADE_PARITY`) | 0 in motion, forests and interiors (2,800-4,700 roots a frame written) |
+| 6. Actors' animation stamp | `CS_DCLF_ACTOR_RATE` (on) | `<- ACTOR RATE` (`CS_DCLF_ACCUMULATED_PARITY`) | 0 after the point lights' spheres (w195/w196); exteriors 0 |
+
+Every run: sequences > 0, no constants skips, no device loss; the parity-free motion run (w197) had no flag but `<- NO DEPTH EPOCH` and
+`<- UNPINNED FADE NODE`, both known.
+
+### Item 1: kAccumulated on every listed root
+
+-   **On by default.** The wide writes are made at Main::Update's entry. With the culls on, the engine's cull rewrites the roots it reaches
+    later in the frame. DCLF writes only its changes, so between them the engine's bit stands.
+-   **The comparison runs with the switch on too.** A compare list's wide writes are compared with the engine's bit before they are stored
+    (`CompareWide` before `Store`).
+-   **The lag's arrivals are attributed.** w176-w179's last "steady" roots, the cloud cards, came into view after the decoded batch's frame.
+    Each compare list now carries the engine's bit in its own sample of the batch's frame (`SideEffects::SampleAccumulated`, under the
+    parity; `kWhySampled`, `kWhyEngineAtBatch`). The engine's alone with that sample clear is "arrived since the batch" (`kEngineRootArrived`,
+    `kEngineGeometryArrived`): DCLF agreed at the frame its verdict is of. Root names gain " (arrived)".
+-   **Actors' roots** (the interior's last steady roots, `Skeleton.nif`, both directions in the exact observer as well). The actor pre-cull
+    (`BSFadeNodeCuller`, in Main::Draw's camera setup) sets bit 12 and, off screen, `kNotVisible` every frame. Process1 passes a preprocessed
+    node unless `kNotVisible`, whatever its room. FadeStateCS took both bits from the root's seed, the listing frame's. It now makes the
+    pre-cull's test itself: a preprocessed root is tested against the main camera's frustum alone, no room program (`FrustumInView`,
+    `EngineInView`). Left: 0-1 such root a window in an interior (an actor out of high process keeps bit 12, so the engine passes it
+    untested).
+-   **Geometry without a main input is not written.** A wide geometry whose object is not a member with bindings (the engine's residue,
+    a shadow-only caster) has no stamp and so no verdict. w194 cleared about 5,900 effect geometries a window (waterfall foam, blowing
+    snow) that the engine draws and lights. Those writes are now skipped, so the bit stays the engine's cull's ("wide geometries without
+    a main input" in the cause line).
+-   **The tree clock's comparison.** Under the switch, `<- TREE MANAGER`'s animation list counted DCLF's own entry writes as the engine's
+    bit. A clock whose `kAccumulated` this entry stored is now counted aside (`IndirectDraws::AccumulatedStoredNow`, under
+    `CS_DCLF_TREE_PARITY`).
+-   **Resolved (item 7).** 50-1,450 geometries a window whose parent walk did not reach their listed root (`SetChain`). Their root was the
+    engine's empty fade node, a static `BSFadeNode` outside the scene graph; it is no root now ("T7f item 7: the residue drawn by DCLF").
+
+### Item 2: every BSTreeNode on the tree list
+
+No run found a `BSTreeNode`. The tree list was empty in every window, and the 98-252 trees a frame on the animation list are all
+`BSLeafAnimNode`. The code path is the written one ("T7f preparation, part 2"). The comparison with the engine's multibound result now
+runs with the switch on as well ("against the engine's"). The switch stays off until a load order with `BSTreeNode` trees shows
+`<- TREE MANAGER` at 0.
+
+### Item 3: Main::IsRoomVisible answered by DCLF
+
+-   **The detour.** `RoomVisibility` detours the three calls under `CS_DCLF_ROOM_ANSWER`. While DCLF runs (`RoomVisibility::SetLive`, at
+    Main::Update's entry) and a set is published, a call is answered from the newest `VisibleSet` and the engine's function is not called.
+    With DCLF off, the engine answers.
+-   **The parity.** `CS_DCLF_ROOM_PARITY` still calls the engine's function and compares the two. A key outside DCLF's graph that the
+    engine answers false for is counted aside: a room or portal of a cell being left or loaded. DCLF's true is the conservative side (an
+    extra update). It came in one window, at the Dragonsreach coc, 106 calls. The count separates those within two sets of a graph change
+    (`VisibleSet::graphAge`).
+-   **Results.** Exteriors: about 210k calls a window, all keys outside any graph. Interiors: rooms 926 a window, 0 differences.
+
+### Items 4-5: every listed root's fade written by DCLF alone
+
+-   **`kFadeRootWritten`** (fade root bit 24): the write-back writes the root's node. It is set on the stood-in roots, and under
+    `CS_DCLF_FADE_ALL` on every listed root from its listing. With it, every listed root is also owned (`kFadeRootOwned`, its members on
+    FadeStateCS's state). The cut's stand-in then moves only `kFadeRootStoodIn`, without seeding again. `SceneStore::FadeAll`,
+    `MarkFadeRootOwned`, `ListFadeRoot`.
+-   **The writers on the root's node.**
+    -   FadeStateCS reports milestones for written roots.
+    -   The write-back task accepts their events.
+    -   `WriteFadeStores` and the animation gate's skip use `PrimaryCull::FadeWrittenByDclf`. Under the switch, that reads the accepted
+        tables the entry published (`PublishWriterTables`, held until the next entry; the lookup is lock-free on immutable tables).
+    -   `BSFadeNode`, `BSLeafAnimNode` and `BSTreeNode::OnVisible` are detoured at their entries. For a written root they keep the engine's
+        control flow (the children, the height test) without a store: no `FUN_14147a160`, no type-6 step, no `+0x13C`, no leaf LOD step, no
+        tree LOD fix-up. They are detours and not vtable slots, because subclass tables and `FadeState::PlanOf` compare the slot with the
+        engine's addresses.
+-   **The parities follow.**
+    -   `<- FADE DOUBLE` samples every written root.
+    -   A placement snap (`FUN_14147aa20`, a cell attach: it writes `+0x13C` and is already an event DCLF seeds the root from) is counted
+        aside (`SideEffects::NoteFadeSnap`). w190's 8 clutter doubles were these.
+    -   The fade visibility parity takes the engine's verdict from Process1's `kAccumulated` on a written root, since OnVisible no longer
+        writes the metric.
+    -   The fade-state parities skip written roots.
+-   **The ExclusionLive() gate.** It no longer decides fade ownership. Under the switch, every root is DCLF's whether or not the cut applied
+    that frame. `ReseedOwnedFadeRoots` does nothing, because no engine OnVisible stepped the roots. The gate itself only gates the stand-in,
+    deleted at item 9.
+-   **A known side effect while the culls run.** An engine-drawn part under a written root (a mixed entry's) reads the node's fade at the
+    write-back's milestones, not every step. The census's main view has no such class left (water, sky, grass, one particle system).
+
+### Item 6: the actors' animation stamp
+
+-   **Measured with the producer off (w190).** The engine stamped no kNotVisible actor that DCLF's shadow views do not hold (0 the engine's
+    alone). 297-489 kNotVisible actor-frames a window were in a sun cascade cull and unstamped: off-screen actors whose shadow DCLF draws.
+    The sun's entry exclusion keeps them out of the engine's cascade culls, so they animated at the reduced rate.
+-   **The producer.** `SideEffects::UpdateActorRate`, at Main::Update's entry. For each high actor whose 3D's world bound is inside the last
+    scene frame's shadow views, it stamps the skin property's `+0x80` with this frame's `gFrameCounter`:
+    -   the sun's full-frustum planes, then any cascade cull (`SunViews`);
+    -   a spot light's cull planes;
+    -   a point light's sphere (`LightViews` now keeps each light's position and radius, since a paraboloid view has no planes).
+
+    No cull result is read. w191 found the point lights missing (an inn's `Hunter` stamped by the engine alone). Since the spheres: 0.
+-   **The observer.** The observer under `CS_DCLF_ACCUMULATED_PARITY` reads `kNotVisible` and the stamp left by the last frame, and keeps
+    DCLF's own stamps apart.
+
+The reports:
+
+```
+[DCLF] actor rate (T7f checklist item 6; CS_DCLF_ACTOR_RATE on|off): <n> entries, <a> high actors a frame (...), <s> in the sun's cascade culls
+  and <l> in a local shadow view a frame, <d> stamped by DCLF a frame; kNotVisible actors ... <both> both / <d> DCLF's alone / <e> the engine's
+  alone / <n> neither, <o> DCLF's own stamp <- OK | <- ACTOR RATE
+[DCLF] fade writers (T7b4; T7f CS_DCLF_FADE_ALL on|off): <g> fade updates of the animation gate skipped ..., <v> OnVisible fade steps skipped (<r> roots in the set)
+```
+
+### Readiness for the switch (item 8) and the deletions (item 9)
+
+Done: "T7f items 8 and 9", below. The switches named above lost their off branches there (each is now how DCLF always runs).
+
+## T7f items 8 and 9: the engine's culls off for every entry DCLF draws whole, and the deletions (2026-10-12, w200-w232)
+
+Engine facts are in [skyrim-engine-notes.md](./skyrim-engine-notes.md), "T7f item 8: the OnVisibles a skipped entry no longer runs".
+
+### The decision: the cut generalised, not replaced
+
+Some geometry is still drawn by the engine: water, sky, grass, precipitation, the particle manager's and untracked temp-effect
+systems (blood impacts), opaque effects, first-person billboards, refraction and decals, and whatever the census lists as not a
+member. Turning the culls off globally would make that residue disappear. The switch is therefore per entry: an entry whose every
+geometry DCLF draws is skipped by every engine cull; an entry with any engine-drawn geometry (a mixed entry) keeps the engine's culls,
+whole.
+
+That per-entry verdict already existed. It is the cut's (`PrimaryCull::Cut`, the stand-in): plans, members, admission, `mixed`,
+`walk`. Every per-view skip keys off it or off the same `SunCandidates`:
+
+| View | How a whole entry is skipped |
+| --- | --- |
+| main camera's list jobs | out of the scene lists (`SceneLists`, Keep/Rebuild, exteriors), else `Process1` returns at once for it (the stand-in; interiors, where the lists hold rooms) |
+| sun's full-frustum cull | out of the scene lists it reads |
+| sun's cascades | the sun entry exclusion (`SunAccumulation::ExcludeEntries`, the cascade `Process1` skip) |
+| point lights' paraboloids | the light candidates' exclusion and the category filter (`LocalLightCull`) |
+| occlusion maps | out of the scene lists `Precipitation::SetupMask` culls (put back on a frame the engine draws a map) |
+
+So the switch generalises the cut. Before it (w200) these mechanisms already skipped 1,900-2,300 of 2,450-2,900 candidate entries
+a window. What still reached the engine's culls:
+
+-   **The RTTI allow-list.** `PlanOf` accepted only `NiNode`, `BSMultiBoundNode`, `NiSwitchNode` and a root fade node, and only
+    `BSTriShape`'s `OnVisible` for geometry. Rejected a window: 230-280 `BSSubIndexTriShape`, 40-70 `BSOrderedNode`, 7-14 `BSValueNode`,
+    about 10 `NiBillboardNode`, `BGSDecalNode`, `BSDamageStage`.
+-   **Blended members counted as the engine's.** `SceneStore::PrimaryEntryAllows` predates T7d: every blended member (forward Lighting,
+    the Effect port, its billboards) made its entry mixed or rejected ("no DCLF geometry": the FX entries).
+-   **Hidden statics.** An editor marker or a hidden emitter shape under an entry is tracked with `Ineligible::Hidden`, and made the
+    entry mixed although nobody draws it.
+-   **The frame gate.** `PrepareFrame` left every entry to the engine on a frame whose sun exclusion was not live.
+
+### What changed (item 8)
+
+-   **`PlanOf` judges each node and geometry by its `OnVisible`** (vtable slot `0x34`), read from the classes' vtables at Install
+    (`PrimaryCull::WideOnVisible`; the startup line `[DCLF] culls off (T7f item 8): OnVisible slots` names each and its module):
+    -   nodes: `NiNode`'s (the slot, which holds LocalLightCull's category filter hook, and the engine's own `0x140d1e2c0`, which
+        `BSFaceGenNiNode`, `BSValueNode` and every other subclass that keeps it call), the multibound's, a switch's (non-root, followed
+        by event as before), a billboard's (DCLF turns its billboards from the unturned world), an ordered node's (an alpha group number;
+        DCLF orders its forward members itself); a fade, leaf or tree node at the root only;
+    -   geometry: `BSGeometry`'s, `BSDynamicTriShape`'s, `BSSubIndexTriShape`'s, `BSSegmentedTriShape`'s (each only appends). An
+        unbound member the stand-in walks is handed over through its own `OnVisible`, so their conditions hold.
+    -   anything else is rejected, and the report names the class.
+-   **A blended member is DCLF's** (`PrimaryEntryAllows`, with `CS_DCLF_FORWARD`): its eligibility already says whether the forward
+    toggles take it.
+-   **A hidden static's geometry is left out of its entry** (`SceneStore::PrimaryVerdict`, the candidates' `primaryGeometry` value 2).
+    Its unhiding is an event that classifies it again (`SunEntryAllows`' rule); the verdict then changes, the entry's version with it,
+    and the cut plans the entry again. An actor's parts are not taken this way (its behaviour graph hides and shows them without an
+    event). An entry of nothing but hidden statics (a marker) is whole.
+-   **No frame goes back to the engine for want of the sun's exclusion.** The gate kept the stand-in's old fade service from meeting the
+    sun's `OnVisible`; every listed root's fade is DCLF's alone now (items 4-5), and on such a frame a whole entry the sun's cull reaches
+    has its casters' passes withheld (SunAccumulation's skip, PassCapture), as every member's are.
+-   **Whole plain entries are stood in** for the `kAccumulated` observers (`standInRoots`): no engine cull writes their bit.
+-   **Observers.** `[DCLF] culls off (T7f item 8)` every report: the candidate entries by the cut's verdict, the mixed ones named by
+    their first engine-drawn geometry, the rejected ones by the class. The census adds `<n> passes under entries DCLF draws whole in the
+    main, sun and local light views (T7f item 8) <- OK | <- WHOLE ENTRY, <m> in the other views` (`PrimaryCull::DrawsWhole`). The Tracy
+    zone `CS.DCLF.ListJobsWait` times the render thread's wait for the list jobs.
+
+```
+[DCLF] culls off (T7f item 8): of <c> candidate entries <w> whole (no engine cull visits them; <k> the sun's exclusion leaves in the
+  cascades), the engine's culls keep <m> mixed, <a> waiting for admission, <u> walked for an unbound member, <r> rejected; rejected by the
+  OnVisible the cut cannot stand for: <n> <class> (e.g. '<root>'), ...; mixed first: '<root>' by '<geometry>' (<class>), ...
+```
+
+The switch was built as `CS_DCLF_CULLS_OFF` (w201-w224 on/off), then made unconditional and the switch deleted (item 9).
+
+### What stays with the engine
+
+-   **Mixed entries** (44-123 of ~3,500 candidates a window in motion, 10 in the inn): campfires and fire pits (`L2_Flames*`, `L2_warp`
+    particles' emitter shapes), waterfall bodies (`CurrentPlane`), splash emitters (`emitShape`, not hidden), weapons with blood
+    (`BloodFX`, `EdgeBlood`), torches (`HeatRefraction`), and a few LOD-switch clusters. Their members are kept from the registration by
+    the AppendVirtual hook and PassCapture, and FadeStateCS fades them as before.
+-   **Rejected entries**: about 150 "no DCLF geometry" (effect entries whose meshes are all residue), the odd `BGSDecalNode` (actors'
+    skinned decals).
+-   **Entries that are not sun candidates** (an engine-drawn shadow caster under them) and entries **waiting for admission** (readiness).
+-   **Views outside the switch:** the reflection faces' culls, first person's own cull, the water reflection, grass, sky, the particle
+    manager, and the occlusion maps' culls of object LOD (counted apart by the census).
+-   **Frames without a published sun exclusion** (no shadow epoch that frame: 2-16 a window during cell loads): the cascades are the
+    engine's then. The census's sun-cascade `<- DEFECT` (known) and `<- WHOLE ENTRY` fire on exactly those windows.
+-   **`DrawWorld_BuildSceneLists` keeps running** (DCLF's Keep/Rebuild where it can): the lists still carry the mixed, rejected and
+    non-candidate entries, the portal graph's rooms and occlusion planes, and water.
+
+### The tree list and the light receivers
+
+-   **`CS_DCLF_TREE_LIST_ALL` stays off.** It was for the culls off globally. Per entry, a `BSTreeNode` whose entry the engine no longer
+    culls is a stood-in tree, and the tree list already gives it DCLF's verdict around the loop (T7b5's fix); a tree in an entry that
+    keeps the engine's cull keeps the engine's multibound result. The load order has no `BSTreeNode` anyway.
+-   **The light receivers.** Only residue needs them, and residue lives in mixed entries, which the engine culls itself (its own
+    `kAccumulated` down the chain). A whole entry holds none. The switch does not depend on the receiver chains.
+
+### Results (the gate)
+
+| Run | What | Result |
+| --- | --- | --- |
+| w200 / w206 | motion, census, switch off / on | candidates whole 1,915-2,308 of 2,448-2,910 / 3,212-3,335 of 3,483-3,608; rejected 499-551 / 148-150; census 0 member passes drawn by the engine outside the load windows, 0 passes under whole entries in the main, sun and local views |
+| w209 | motion, every observer (census, set, accumulated, fade, room, tree parities), on | flags: the known baseline only (`<- NO DEPTH EPOCH`, sun-cascade `<- DEFECT`/`<- WHOLE ENTRY` in the load windows, `<- ACCUMULATED DIFFER`, `<- GATE HOLE`, `<- CAPTURE`); engine-culled roots in the T7b1 observer 2,835-3,114 a window (w193: 47,820) |
+| w210 | motion, persistent parity, on | `<- CUT` 0, stand-in walk parity OK; known `<- DIFFER` (frame values extras), `<- MATERIAL PORT` 1 |
+| w211 | interiors (inn), every observer, on | 1,682 of 1,692 candidates whole, 10 mixed (fire pits, a coin bag's editor marker); census OK; known `<- NO CASCADES`, `<- ACCUMULATED DIFFER` |
+| w212 / w213 | motion, parity-free, on / off | no flag but `<- NO DEPTH EPOCH`; no device loss |
+| w214 / w215 | the bridge, on / off | the same image (rain aside) |
+| w216-w224 | the inn, screenshots | corrupt with the switch on and off alike, clean with DCLF off (w218): a defect elsewhere, handed to t7f-residue's render-target dump |
+| w225, w230 | motion, every observer, after the deletions | the same baseline; whole 3,353 of 3,483, 121 mixed, 9 rejected; one `<- ACTOR RATE` (a wolf, 1 actor-frame of 4,313 kNotVisible) and one `<- PORTAL VIEW` (known) in w230 |
+| w226 | motion, persistent parity, after the deletions | stand-in walk parity OK; known `<- DIFFER`, `<- MATERIAL PORT`, `<- TEMPLATE` |
+| w227, w232 | interiors, every observer, after the deletions | the inn 1,682 of 1,692 whole; known flags; w232 `<- FADE STATE` on one actor root (currentFade 0.9991 against 1: the known interior one-step, with `<- FADE INPUT`'s fadeAmount) |
+| w228, w231 | motion, parity-free, after the deletions | no flag but `<- NO DEPTH EPOCH`; list jobs' wait 0.259 / 0.269 ms |
+| w229 | the bridge, after the deletions | the same image as w214/w215 |
+
+**CPU (w212 on against w213 off, the same 35 s Tracy window, parity-free):**
+
+| Render thread, per frame | off | on |
+| --- | --- | --- |
+| wait for the main camera's list jobs (`CS.DCLF.ListJobsWait`) | 0.444 ms | 0.269 ms |
+| the sun's full-frustum cull | 0.151 ms | 0.059 ms |
+| the sun's cascade culls and registration (`Accumulate`) | 0.186 ms | 0.096 ms |
+| `AfterFullFrustum` (the cut's planning) | 0.023 ms | 0.032 ms |
+
+About 0.35 ms a frame off the render thread; the main camera's list jobs also do that much less on the job threads. The frame rate did
+not move (101 against 100 fps): these runs are GPU-bound (`CS.Present.NativeWait` 3.6-4.2 ms). Interiors (point lights) are unchanged:
+their culls already skipped every candidate entry the light exclusion takes.
+
+### The deletions (item 9)
+
+Deleted, each now dead:
+
+-   **The switches' off branches:** `CS_DCLF_CULLS_OFF` (the RTTI plan, the sun gate), `CS_DCLF_FADE_ALL` (the stood-in-only writer set
+    `fadeWriters`, `standInVersion`, `MarkFadeRootOwned`'s seeding path, `ReseedOwnedFadeRoots`, the detours' condition),
+    `CS_DCLF_ROOM_ANSWER`, `CS_DCLF_ACTOR_RATE`, `CS_DCLF_ACCUMULATED_ALL` (the dry runs, `WideWanted`, the stood-in-only verdict pruning,
+    the cell roots' count-only branch).
+-   **The fade fallback toggles** `CS_DCLF_FADING=0` and `CS_DCLF_LOD_CROSSFADE=0` (incoherent once DCLF alone writes every listed
+    root's fade): `PassCapture::FadingAtRegistration`, `unmodelledFades`/`TakeUnmodelledFades`, the cross-fade copy and unmodelled-fade
+    counters, `Entry::fading`, the census's two fade classes, the set's `setFadeHeld`, the classification's fades-off verdict, the fade
+    watch (`PushFade`, the fade event queue, `fadeChanged`, `fadeDependents`, `ListFadeDependent`, `Tracked::fadeNode`,
+    `NoteFadeChanged`, `MuteFadeEvents`). The fade hooks keep their mirror updates.
+-   **The sun's CPU cascade test:** `PrimaryCull::SunShadowBits`, `SunAccumulation::InSunCascades`, `SyntheticPass`'s `a_sunOnGpu` (always
+    the GPU's), and the membership functions' unused geometry argument.
+-   `PrimaryCull::StoodInMembers` (no reader).
+
+About 420 lines removed, 250 added for the switch and its observers.
+
+Kept, with the reason (the previous readiness list proposed deleting them, assuming no residue):
+
+-   **PassCapture's withholding:** mixed entries' members, the views outside the switch (first person, the reflection faces), frames
+    without a sun exclusion.
+-   **The stand-in, the cut, `SceneLists`, the sun exclusion and its mask code (`ApplySunBits`, `ClearOwnedMask`, `WriteMaskOnly`, the
+    mask clear), `BuildSunExclusion`, LocalLightCull's runtime:** they are the switch, per view, and the masks serve residue under an
+    excluded entry (an engine-drawn effect's main pass).
+-   **`AfterListJobs`, `Owned`/AppendVirtual, `NoteSetChanges`' mask zeroing, `CheckLightMasks`/`frameVisible`:** the animated batch,
+    mixed entries' members, a joining member's stale bits, a parity.
+-   **The reports** `primary exclusion`, `scene lists`, `sun entry exclusion`: they report live mechanisms.
+
+## T7f item 7: the residue drawn by DCLF (r1-r23, 2026-10-12)
+
+The checklist's item 7, as far as it went. Each new behaviour has a switch. The observers are under `CS_DCLF_SET_PARITY` or
+`CS_DCLF_ACCUMULATED_PARITY`. The engine facts are in [skyrim-engine-notes.md](./skyrim-engine-notes.md): "The empty fade node", and
+"Billboards: turned by the culls, per culling camera" (its last item, a particle system under a billboard).
+
+| Part | Switch (default) | Result |
+| --- | --- | --- |
+| 1. The receivers' chains: the empty fade node is no root | `CS_DCLF_EMPTY_FADE_NODE` (on) | "geometries whose walk missed their root" 0 in every window (r1; w197: 13-2,755 a window) |
+| 2a. First-person billboards (effect meshes) | `CS_DCLF_BILLBOARDS` (on) | `BrightGlowMesh` a first-person member (r2, r6) |
+| 2b. Particle systems under billboard nodes, every view | `CS_DCLF_BILLBOARD_PARTICLES` (on) | `pFireballCore04` and `pFireEmberCloud01` (the Flames hand) members (r2, r6) |
+| 3. First-person decals | `CS_DCLF_FIRST_PERSON_DECALS` (on) | the arms' `SkinnedDecal` a member (r2, r6); a weapon's Lighting `BloodLighting`: built, not exercised (no later run put visible blood on the first-person weapon) |
+| 4. Opaque effects (hint 0) | `CS_DCLF_OPAQUE_EFFECTS` (on) | `effect-opaque` gone from the main and main depth views (r4 against r5: `Slag (Mould)`, `Slag (Bucket)`, 6 members) |
+| 5. Untracked particle systems | none | not tracked: under parentless `BSMasterParticleSystem` roots (below) |
+
+**The first-person census** (Riverwood, sword and Flames). Before (fp13): 5 passes a frame left with the engine: `pFireballCore04`,
+`pFireEmberCloud01`, `BrightGlowMesh`, `HeatRefraction` and a `SkinnedDecal`. After (r6): `HeatRefraction` alone, 1 a frame.
+First-person registrations: 3,900 member passes withheld a window and 0 drawn by the engine (`<- OK`).
+
+**The main census.** `effect: effect-opaque` (2 a frame in bl5 and r5) is gone (r4). The billboard class keeps `Glow11:22` alone (1 a
+frame). The untracked effects are the master particle systems (part 5).
+
+### 1. The receivers' chains
+
+-   **The cause.** Every missed walk had the same root, an unnamed node: the engine's **empty fade node**. `BSShaderProperty`'s
+    constructor points `fadeNode` at a static `BSFadeNode` (the pointer at `0x14332a2a0`), and the engine's readers treat it as null.
+    Terrain, object LOD and some references' geometry keep it. `SceneStore::ListFadeRoot` listed it as a fade root: one parentless root
+    for thousands of geometries. No geometry's walk reached it, so the nodes above those geometries were never set. FadeStateCS and the
+    write-back also wrote a static engine node.
+-   **The fix.** `Engine::EmptyFadeNode()` (EngineAccess.h). `ListFadeRoot` and the capture's fade node reference (`Classification.cpp`,
+    before `AcquireFadeNode`) take it as no node (`CS_DCLF_EMPTY_FADE_NODE`, on; `=0` lists it as before). Such a geometry now takes the decoder's plain entry root: its `SunCandidates` entry, the
+    list entry the engine's cull reaches. `LightingDescriptors.cpp`'s `AsTreeNode` compared a fade node with the global's address instead
+    of its value; it now uses the helper too.
+-   **What it brought out.** The plain entry roots had never been written, because every geometry had a fade root (the empty one). In r1
+    they took about 4,600 geometries a window, and `<- ACCUMULATED ALL` fired on 1-26 entries a window that the engine set and DCLF did
+    not (unnamed LOD entries and `chunk`). The decoder now treats an entry as it treats a geometry:
+    -   an entry holding a geometry DCLF does not draw (no main input: the engine's residue) is not written, so the engine's cull keeps
+        its bit, as it keeps the geometry's;
+    -   an entry's write carries its geometries' why bits (`entryWhy`; arrived when one of them arrived);
+    -   its difference is attributed as a root's is: stood in, arrived since the batch, changed within the lag, or steady
+        (`kEngineEntry*`);
+    -   the tag fires on steady entries only.
+
+    The cause line adds "plain entry roots the engine's alone: ... N with an engine residue geometry (not written)".
+
+    In r23 (motion, after the attribution) the tag fires in 5 of 25 windows, all at the start.
+    -   The first two windows after the load have 45 and 21 steady entries, and 3,278 and 1,246 steady geometries whose entry is the
+        engine's alone (rocks and spray under `FXrapidsRocks01`, a reference whose root is no `BSFadeNode`).
+    -   Later windows have 0 steady entries, and 0-16 such geometries (`Permanent Decal`).
+    -   Open: why a plain entry's verdict lags its listing after a load (`SunCandidates` refreshes its entries lazily?). The missed walks
+        stay at 0.
+-   **The receivers.** A geometry that was under the empty node now has its chain set up to its entry node. DCLF writes the entry's own
+    bit, and `CellRoots` sets the cell roots above it.
+
+### 2. First-person billboards, particle systems under billboards, and refraction
+
+-   **Effect meshes under a billboard, in first person.** `SceneStore::BillboardModeOf` no longer leaves out first-person entries. The
+    first-person forward part draws them with DCLF's first-person b12 block (`ExecuteFirstPersonDepth`), which is in world space throughout:
+    c0-c2 hold the camera's rotation (the root shift moves translations only), and c40 holds the eye at `GetFirstPersonNodePosition`. The
+    row is the one the render thread sampled at Kick, before the shift.
+-   **Particle systems under billboard nodes** (`CS_DCLF_BILLBOARD_PARTICLES`), in every view. The turn reaches a particle system only
+    through the children's `UpdateDownwardPass` that `0x140d3e650` runs: slot `0x2C`, the system's own update, after which
+    ParticleSnapshots takes its snapshot. `NiParticleSystem::UpdateWorldData` (`0x140dd4c90`) is empty. So the engine draws the world and
+    particles of the system's last update, which the snapshot copies, and no turn is needed in the vertex stage. `ClassifyFrame` lets
+    such a system through, and the census follows.
+    -   Once the culls are off (item 8), a billboard DCLF draws whole is no longer turned by any cull. A system under it keeps the turn its
+        last update left, which affects its emitter's offset and, for a local-space system, its quads.
+-   **Refraction in first person stays the engine's.** `HeatRefraction` (the Flames hand) is a `BSLightingShaderProperty` with
+    `kRefraction`, under a billboard. The engine can draw it there: `FUN_1414cb6d0` runs `FUN_1414b4860` on the first-person accumulator,
+    which draws group 5 into `kREFRACTION_NORMALS` (cleared unless the main view began them). DCLF lacks two things:
+    -   a billboard turn in the Utility refraction stage (the record's billboard bits are an effect key's alone);
+    -   a refraction pass in the first-person colour epoch (the first-person camera, the first-person depth range against
+        `kPOST_ZPREPASS_COPY`, the begun and drawn flags).
+
+    Neither was built. It is one pass a frame while Flames is drawn.
+
+### 3. First-person decals
+
+`SceneStore::FirstPersonDecalForward`, called by `EvaluateJoin` after the classification, so the derivation's cache holds its result. A
+decal in group 1 or 2 on a first-person entry becomes a forward object of the first-person forward part:
+
+-   no Deferred: the effect's or the Lighting pixel stage, as a forward key's (`LightingShaderDescriptors`);
+-   the blended group's blend mode;
+-   depth tested, and written by the opaque group alone (depth modes 3 and 1);
+-   `forwardDecalGroup`: the key carries that group's frame bias mode in the decal bias bits, which a forward key leaves free. `BuildEffect`
+    now applies a forward key's bias, and `Build` already applied it for Lighting keys.
+
+Notes:
+
+-   The main view never draws a first-person entry, so no decal group loses a member. The engine draws these in its first-person
+    accumulator's decal groups. That the group functions there use the same states as in the main pass is assumed, not probed.
+-   **Order.** The forward part sorts by depth, then object. Two decals copied from the same partition share a bound, so their order is the
+    objects' and stable. The engine's order is its chains'.
+-   **Coverage.** Effect decals (`SkinnedDecal`, `BloodEffects`) and Lighting decals (a weapon's `BloodLighting`).
+
+### 4. Opaque effects
+
+`DeriveEffectDescriptors`, under `CS_DCLF_OPAQUE_EFFECTS` and `CS_DCLF_DECALS`. A hint 0 effect is one with no blending alpha property, no
+Falloff, depth tested and written, and not a particle system. It draws through **decal group 1**:
+
+-   `opaqueEffect`, with Deferred on the pixel stage;
+-   blend mode 0 and write mode 1 (an opaque Lighting key's);
+-   no depth bias (the key's bias bits stay 0);
+-   the membership pass's hint 0.
+
+Like a decal, it is an occludee culled once in the colour segment. The decal depth pass puts its depth into the frame before the colour
+pass (LESS_EQUAL), and its colour goes into the G-buffer. The effects report counts them: "N opaque, hint 0, in decal group 1; first
+opaque: 'name' at (x, y, z)".
+
+Risks:
+
+-   The engine also registers these in the main depth pass, and that registration is withheld too. So `kPOST_ZPREPASS_COPY` (which soft
+    effects and first person read) lacks them.
+-   A property alpha below one (a base colour alpha, a fade) makes the engine's pass hint 1, blended by the frame's alpha. DCLF keeps it
+    opaque.
+-   The write mode is the opaque batches' as measured for Lighting, not probed for an effect pass.
+-   Not seen on screen: the slag was outside the bridge shots. In the inn the burner (`Burner01`) is one.
+
+### 5. Untracked particle systems
+
+The census names an untracked geometry's chain top (`[chain N deep: ...]`, the three highest nodes). In r1 the persistent ones
+(`pFireballCore05` and `PCloud01`, the torches; `CandleFlame01` and `CandleGlow01`; `smoke09`, street mist) all hang under a **parentless
+`BSMasterParticleSystem`** root (`MPSTorchFire01.nif`, `MPSTorchEmbers01.nif`, `MPSCandleFlame01.nif`, `MPSMistStreet01.nif`): the addon
+nodes' shared master systems. The engine draws them, but not through the scene graph. The weather's snow (`PCloud06*`) hangs under the
+`ShadowSceneNode`'s `Weather` node.
+
+Tracking them is not a contained change. It needs:
+
+-   a category root per master system, like the first-person root;
+-   its lifetime events from whatever owns the masters;
+-   where the masters are culled, which was not traced.
+
+The blood impact particles (`pBloodSplat02` and others) did not appear in these runs, so their chain was not read.
+
+### Visual checks
+
+-   **First person (r2/r3, sword and Flames; shots taken with the toggle on, off and on again).** No misplaced or stray geometry; the
+    hand's fire is drawn with the toggle on.
+    -   The fire's size changes from shot to shot with its animation. It was as small in the engine's own shots (r3 05, toggle off) as in
+        DCLF's (r2 07).
+    -   **The dark-red smudges are the engine's screen blood** (`BloodSplatter`, under `ScreenSplatterRoot`, view "other #18" in the census),
+        drawn while the player takes damage. They grew from 2 to 28 geometries over r2's windows. Not DCLF's.
+    -   No fog-coloured bands appeared in any shot.
+-   **Bridge (r4/r5).** Opaque effects on and off: the same image. The slag is not in view.
+-   **The inn (r11-r22).** Corrupt with DCLF on whatever these switches say. The upscaler's output is where it first appears (`dclf-open-defects.md`,
+    "The Sleeping Giant Inn"). Found with `CS_DCLF_TARGET_DUMP` (below).
+
+### Target dumps (`CS_DCLF_TARGET_DUMP`)
+
+`CS_DCLF_TARGET_DUMP=f1,f2,...` (Diagnostics/TargetDump.*), at those frames, counted as `CS_DCLF_TEST_COMMANDS` counts them:
+
+-   **What is copied.** Every target bound at each named point of the frame, plus kMAIN, kMOTION_VECTOR and the main depth, into staging
+    textures. At a point with nothing bound (an epoch unbinds), the G-buffer the deferred pass last bound.
+-   **The points.** before/after z-prepass, opaque end, before/after colour, after DCLF colour, after terrain blending, after deferred
+    composite, before forward, after DCLF forward, after engine blended, before/after DCLF first person, after first person, before/after
+    upscale (and the upscaler's output), present.
+-   **Asynchronous.** The copies are read with `D3D11_MAP_FLAG_DO_NOT_WAIT` from the third Present on.
+-   **What is written.** Half-size PNGs (NaN/Inf magenta) and `stats.txt` (per target, NaN and Inf counts and per-channel finite
+    min/max/mean) into `SKSE/dclf-dump/<frame>/`. Images for every point on the first frame listed, the presented image alone on the
+    others.
+-   **With DCLF off.** The points in DCLF's own hooks are skipped. The Streamline constants are logged on dump frames.
+
+### Runs
+
+| run | what | result |
+| --- | --- | --- |
+| r1 | motion, census, set and accumulated parity | missed walks 0; plain entry roots live, `<- ACCUMULATED ALL` on 1-26 entries (attributed since); no device loss |
+| r2 | first person, census, set parity | first-person residue `HeatRefraction`, plus a weapon's `BloodLighting` once the sword had blood (fixed after r2) |
+| r3 | r2 with `CS_DCLF_BILLBOARD_PARTICLES=0` | the engine draws the two systems; shots alike |
+| r4 / r5 | bridge, census, set parity, `CS_DCLF_OPAQUE_EFFECTS` on / off | 6 opaque members; `effect-opaque` gone from main and main depth (r5: 2 a frame) |
+| r6 | first person, census, set parity | residue `HeatRefraction` alone (1 a frame); 0 member passes drawn by the engine |
+| r7 / r9 | bridge and motion, no parity | clean; sequences > 0 |
+| r8 | first person, census, set parity | as r6 (the sword's blood geometry stayed hidden) |
+| r11-r22 | the inn | the upscaler's corruption: `dclf-open-defects.md`, "The Sleeping Giant Inn" |
+| r23 | motion, census, set and accumulated parity | missed walks 0; plain entry roots attributed (above) |
+
+Every run: sequences > 0, no device loss, no new flag. The flags seen were already in bb2/fp13: `<- DEFECT` (member passes in the sun
+cascades, point and focus shadows), `<- NO DEPTH EPOCH`, `<- CAPTURE`, `<- PARTICLES` once at a first-person particle member's join, and
+`<- DIFFERS` (the sun's GPU and CPU cascade tests, 1 of 7,913). `<- WHOLE ENTRY` is item 8's.
+
 ## The third-person body in first person (fixed 2026-10-11, pending validation)
 
 Reported: after a switch to third person and back, the third-person body was still drawn in first person. The defect's record is in
@@ -3982,9 +4431,8 @@ takes the subtree's bits at RenderDepth's first-person draw, after both first-pe
 by the next frame's capture), and logs `[DCLF] first-person subtree (T7e): at the frame's start N geometries, H hidden: ...; at the last
 first-person culls ...` whenever the two lists change.
 
-**Not done; risks.** Not validated in game (fp1 drew nothing; the fixes above are built, not run). Blended first-person Lighting stays the
-engine's (no forward sort in the first-person epoch);
-effect, particle and magic-hand Effect-shader geometry stays the engine's residue (drawn after DCLF's). The jitter is the state's
+**Not done; risks.** Not validated in game (fp1 drew nothing; the fixes above are built, not run). Blended first-person Lighting, effects and
+particles: drawn since 2026-10-12 by the colour epoch's forward part ("First-person and blood residue"). The jitter is the state's
 `projectionPosScaleX/Y` added as SetCameraData adds it (not compared with the engine's first-person block yet: a register parity like
 the reflection faces' would close it). The motion-vector target is taken to be the main pass's target 1 (the formats are; the
 identity is not checked). The first frame after a switch to first person has a previous camera equal to the current. Non-member
@@ -4098,14 +4546,216 @@ particle quad's look (they are blended and textured, and these systems are far a
 **Not done; risks.** Not run since. The frame's quads face the camera the producer was handed at BeginSceneFrame and use the newest snapshot
 the producer finds, which is this frame's update or the last one's (the engine's draw uses this frame's camera and this frame's update):
 at most a frame of lag in the particles' motion. Strip particle systems, mesh particle systems, anything under `BSParticleSystemManager`
-(untracked) and aligned quads stay the engine's; so does precipitation. The sort among particles uses
+(untracked) stay the engine's (aligned quads too, until part 2: "Billboards and aligned particles"); so does precipitation. The sort among particles uses
 model-space positions against a world direction, as the engine does. The particle update of a reference's emitters is gated by its
 root's `kAccumulated`, which the engine's cull still sets (T7f must keep it: T7b's producers). An emitter whose data is resized at run
 time (`SetEmitterParticleMax`) keeps its block until its record is captured again (the particles past it are not drawn). One system
-updated by two threads at once keeps the first capture. First-person particle systems (the magic hands') stay the engine's
-(`ClassifyFrame`: FrameValues samples no first-person item, so nothing would fill their blocks). The census's `Effect: NiParticleSystem` name for these systems (with the
+updated by two threads at once keeps the first capture. First-person particle systems (the magic hands') are drawn since 2026-10-12 ("First-person
+and blood residue"). The census's `Effect: NiParticleSystem` name for these systems (with the
 Effect port on, an effect geometry should be classed `effect: ...`) is unexplained: if a run shows it still, check the systems' property
 class first (members bound would be 0).
+
+## Billboards and aligned particles (T7e, part 2; built and run 2026-10-11, bb1-bb14)
+
+After particles, the census still listed engine-drawn effect classes in the main view that need a transform that depends on the view.
+In bb2 (Riverwood motion, before this part):
+
+-   `effect: billboard`: ~16 passes a frame at the start, 43 geometries. The spray jets (`jet05/06/07/12`, `L2_jet03`), the fire cards
+    (`Flames02grant`), the smoke wisps (`Circle24`), glows.
+-   `effect: effect-variant (particle: aligned)`: 1-3 a frame (`Smoke` under `smoke-Emitter`), plus `untracked` aligned systems
+    (`CandleFlame01`, `pFireballCore05`, `PCloud01`).
+-   `effect: effect-opaque`: 2.6 a frame (the `L2_qhcoal04` coals and `Slag (Mould)`: hint 0 effects).
+
+Part 2 draws the first two. Billboards are behind a new live toggle, `CS_DCLF_BILLBOARDS` (`billboards`, on by default, needs
+`effects`). Aligned particles are behind `CS_DCLF_PARTICLES`.
+
+**What the engine does** ([skyrim-engine-notes.md](./skyrim-engine-notes.md), "Billboards: turned by the culls, per culling camera", and
+"Particle systems", the aspect flags):
+
+-   A billboard is turned **in the cull**. `NiBillboardNode::OnVisible` rebuilds the node's world from its parent's world and its local
+    (R0), multiplies in the turn its face mode makes from the culling camera, and updates its children. Every leaf below therefore holds
+    the world of the last camera that culled it (main, shadow, reflection). `UpdateWorldData` leaves the rotation alone.
+-   Aligned particle quads (the data's flags `+0x88` and `+0x89`, used only without rotation angles) follow each particle's velocity
+    projected on the view plane and take an aspect from its speed. The quad axes and the aspect carry over from one particle to the next.
+
+**DCLF's side, billboards** (`Engine/Billboards.*`):
+
+-   **Classification.** `SceneStore::BillboardModeOf` takes an effect `BSTriShape` without a skin that has exactly one billboard node
+    between it and its category node.
+    -   The face mode comes from the mirror's node kind (`kKindBillboardModeShift`): `userFlags & 7`, read at `+0x128`.
+    -   First-person entries were left out and stayed `billboard`; since T7f item 7 they are taken too (the first-person b12 block is in
+        world space). A particle system under billboard nodes is taken too (`CS_DCLF_BILLBOARD_PARTICLES`; "T7f item 7").
+    -   `ClassifyFrame` lets such a leaf through and runs the switch and ordered-node chain tests on it, because the billboard reason
+        outranks theirs.
+    -   The join puts `mode + 1` in the effect key's raster bits 21-23 (`kRasterEffectBillboardShift`). Those bits are Extended
+        Translucency's, which an effect key never carries.
+    -   `EffectRecordFlagsOf` turns them into the object record's `kRecordEffectBillboard` (bit 4), with the mode in bits 5-7.
+-   **The row** (`Billboards::SampleRow`, called at the end of `FrameValues::SampleRow` for every effect leaf under a billboard,
+    whatever the toggle). It reads nothing a cull writes.
+    -   World is the leaf's **unturned** world: the node's base (its parent's world times its local) times the locals down to the leaf.
+        It is still a world transform, so a pass that does not turn the leaf draws it where the node stands.
+    -   PreviousWorld's rotation part is R0. `PreviousWorld[0].w` is the leaf's world bound radius (Effect.hlsl's `EffectRadius`, read
+        through `DCLFWorldBoundRadius`).
+    -   Bound is the pivot (the node's translation), with a radius that covers the leaf in every orientation: the distance of the leaf's
+        bound centre from the pivot, plus its radius. The GPU cull and the forward sort use this bound.
+-   **The turn** happens on the GPU, per draw, from the drawing view's camera. `Effect.hlsl` under `DCLF_BINDLESS` does it in
+    `DCLFEffectWorld` and `DCLFBillboardWorld` (DCLFObjects.hlsli).
+    -   The camera's axes are VS_PerFrame c0-c2: CameraView's rows (right, up, forward), which SetCameraData copies from the camera's
+        world rotation. The eye is c40.
+    -   `DCLFBillboardRotation` builds the node's turned rotation. It ports `0x140d3e650`: all six modes, the centre modes' axis turn
+        (`FUN_140d3f240`), and the engine's constants by their bits.
+    -   The vertex stage applies `G = turn * R0^T` to the unturned world, about the pivot.
+    -   One persistent row and one record serve every view. There is no per-view CPU work.
+-   **PreviousWorld** of a billboard gets the same turn (the row keeps no previous base), so a billboard has no motion of its own in the
+    motion vectors.
+
+**DCLF's side, aligned particles.**
+
+-   The mirror's particle record adds `velocities`: the data is an `NiPSysData` with particle info.
+-   `ParticleSystemTaken` now takes aligned systems that have velocities. `particle: aligned` names only the ones without.
+-   The snapshot copies each particle's velocity and the four aspect parameters.
+-   `ParticleSnapshots::Expand` ports the aligned path exactly, including the axes and the aspect that carry from particle to particle.
+    As in the engine, a zero velocity collapses the rest of the draw.
+-   The report counts `N of them aligned quads`, and the `<- PARTICLE ALIGNED` flag is gone.
+
+**Observer** (`CS_DCLF_SET_PARITY`; installed only with it).
+
+-   A thunk after `NiBillboardNode::OnVisible` runs whenever the engine turns a node.
+-   For each effect leaf below the node it computes DCLF's row (SampleRow) and DCLF's turn (`Billboards::Orient`, the CPU twin of the
+    HLSL) for the culling process's own camera. It compares the result with the leaf's world as the engine just left it.
+-   The line: `[DCLF] billboards' engine turns (CS_DCLF_SET_PARITY): T nodes turned by the engine's culls, C effect leaves below them
+    checked against DCLF's row and turn, X differ (largest rotation r, translation t) <- OK | <- BILLBOARD; first ...`. On a difference,
+    `first` dumps the port's turn, the engine's turn, the base and the camera.
+-   It sees only billboards the engine still culls: a reference DCLF stands in is not culled. The leaves it checks go through the same row
+    and turn code as the members.
+
+**Reports**, every report: `[DCLF] billboards (CS_DCLF_BILLBOARDS on|off): M members bound, turned to each view's camera by the vertex
+stage`.
+
+**Runs.**
+
+-   **bb1** crashed on the build before this part: a first-chance access violation at a heap address, with no DCLF frame on the stack.
+    bb2 on the same build was clean, and the crash did not come back.
+-   **bb3/bb4**: the census's `effect: billboard` and `effect: effect-variant (particle: aligned)` left the main view, with 18 billboard
+    members and ~800-900 aligned expansions a window. But the observer flagged every leaf (`<- BILLBOARD`, rotation off by up to 1.97).
+    Its dump showed the engine's turn keeping the base's y axis (ROTATE_ABOUT_UP) on nodes whose mode read 0: **CommonLib's
+    `NiBillboardNode::userFlags` is not at AE's `+0x128` in this build.** The mode is now read at the offset (`Billboards::FaceMode`).
+-   **bb6** (motion, census, set parity): the observer found **0 of ~11,000 leaves a window differing (largest rotation 3e-7,
+    translation 4e-3)**.
+    -   `effect: billboard` is gone from main except `Glow11:22` (1 a frame at the start; not investigated, probably nested or under a
+        switch). The aligned class is gone.
+    -   Members: 182 billboards, 281 particle systems.
+    -   No device loss and no new flags. The `<- DEFECT` (member passes in sun cascades), `<- NO DEPTH EPOCH`, `<- UNPINNED FADE NODE` and
+        `<- CAPTURE` flags were already in bb2.
+-   **bb14** (motion, census, **no parity**): clean, the same flags as bb2, sequences > 0.
+-   **Visual check.**
+    -   bb13 (the bridge, `CS_DCLF_FIRST_PERSON=0`, billboards on and off): the cascade's spray looks the same.
+    -   The still view at the river (bb7, bb10, bb11) showed **full-width, fog-coloured horizontal bands when billboards and first
+        person were both on**. They did not appear with first person off (bb9, bb12) or with billboards off (bb7off).
+    -   The member count is the same either way, and no first-person billboard is a member. So a first-person pass made the main forward
+        epoch turn its world billboards toward the wrong axes. The likely cause is the main forward draws reading a b12 whose c0-c2 hold
+        the first-person camera's root-shifted view, which would turn the cards horizontal.
+    -   Reported to the first-person work (its forward part, 2026-10-11). **Open.**
+
+**Not done; risks.**
+
+-   The bands above (billboards and first person both on) are open. They must be fixed before the billboard toggle can stay on by default
+    with first person.
+-   These stay the engine's: Lighting leaves under billboards (`HeatRefraction`; not in the main view in these scenes), skins under
+    billboards, nested billboards. (First-person billboards and particle systems under billboards: drawn since T7f item 7.)
+-   Other passes that read World raw (the pulled depth and Utility stages) would draw a billboard unturned. No billboard is in them today:
+    effects cast no shadows and are not depth inputs.
+-   The forward sort uses the pivot, not the turned leaf's bound centre.
+-   A row is resampled only when its slot moves or is written, so a parent whose world changes while the leaf does not move keeps the old
+    base.
+-   The aligned path was not checked visually: the smoke systems were not on screen in the stills.
+-   Opaque effects (`effect-opaque`: the coal and slag meshes, hint 0, the G-buffer pass's `DEFERRED` variant with the opaque groups'
+    state) remain. They need an opaque effect path in the depth and colour segments, which was not attempted here.
+
+## First-person and blood residue (T7e, 2026-10-12; built, run fp7-fp13 and bl1-bl5)
+
+The first-person census (`CS_DCLF_CENSUS`, view `first person`, now with a line naming its geometries: `census view first person's
+geometries`) after the first-person switch went on by default (fp7, Riverwood, sword and Flames): 11 passes a frame registered into the
+first-person accumulator, 3 withheld. Left with the engine: the two arm meshes (` (0003CA03)...`, ` (00000D6C)...`, "eligible, bound, not a
+member"), the Flames hand's effects (`pChargeFire`, an aligned particle system under `MagicLeft`; `pFireballCore04`, `pFireEmberCloud01`,
+`BrightGlowMesh` under billboard nodes; `HeatRefraction`, a refraction Lighting billboard), and on the arms or the sword a blood decal
+(`SkinnedDecal`, `BloodLighting`) when the save carried one. The combat runs (bl1-bl4: wolves spawned at the player, the player's attacks
+sent as `player.sendanimevent attackStart`) added the main view's blood: up to ~46 passes a frame of `SkinnedDecal` (the skinned blood
+decals on actors) "eligible, bound, not a member", waiting for their decal slot, and a guard's `ImperialSwordBlood` (`kWeaponBlood`) as
+`effect-variant (blood)`.
+
+**What the engine does** ([skyrim-engine-notes.md](./skyrim-engine-notes.md), "Blood: weapon blood and skinned decals"): a hit's skinned
+decal (`BSTempEffectGeometryDecal`) is a `BSTriShape` copying its actor's skin instance (a `BSDismemberSkinInstance`: several partitions) with
+a `BSEffectShaderProperty` (`kSkinned | kDynamicDecal | kZBufferTest`, an alpha property DESTCOLOR/INVSRCALPHA: MultBlendDecal, hint 3,
+decal group 4), under a `Skinned Decal Node` the actor's `BGSDecalNode` lists; it fades through `SetMaterialAlpha`. Weapon blood is the
+weapon's `kWeaponBlood` effect geometry: `BSTempEffectWeaponBlood` shows it (`FUN_1414ab580`) and grows and fades it through the alpha
+property's threshold (`FUN_1414ab770`); `BSEffectShader::SetupGeometry` writes the Blood permutation's PS `AlphaTestRef` as (threshold /
+255, the global `0x1433dccf0`, the global `0x1433dccf4`), the globals two game settings `BSTempEffectWeaponBlood` writes each update.
+
+**What was built** (paths under `src/Features/DrawcallLimitFix/`):
+
+-   **The first-person forward part.** A first-person forward member (blended Lighting, the Effect port's meshes, particles: `SetParticipation`
+    now gives a first-person slot `kSetFirstPerson` for a forward key, never for a decal, refraction or shadow-only object) is drawn by the
+    first-person colour epoch after its opaque buckets, sorted back to front with the first-person camera. The slots' map sends every forward
+    slot (`FirstPersonForwardSlotsOf`) to a forward range's table entry with `kFirstPersonForwardBucket` (`BuildDrawsCS.hlsl`, `kBucketForward`):
+    the first-person BuildDraws culls the input as its others and stages a main-format sequence (the main set's colour pipeline) with its sort
+    key (`StageForwardKey`, shared with the colour segment's forward range) into the range's staging half; `ForwardSortCS.hlsl` sorts it into
+    the sorted half (new `CountOffset`/`Options`: the range's bucket count word); `ForwardPass` (`Draws/IndirectDraws/FirstPerson.cpp`) draws
+    the sorted half through the main colour signature with an explicit preprocess, the first-person frame push data (VS/PS b12 its block) and
+    depth range, on the main pass's attachments with `kPOST_ZPREPASS_COPY` as depth. The range holds every draw the forward slots can produce
+    (`MainSizing::forwardCapacity`); no cap. A forward slot's readiness (`FirstPersonSlotReady`) is its main readiness plus the depth formats
+    matching (`FirstPersonState::forwardCompatible`, logged once: 45 and 45 in every run).
+-   **First-person particles.** `ClassifyFrame` no longer keeps a first-person particle system the engine's. The render thread samples its row
+    at `Kick` as any first-person member's; FrameValues' producer lists the item anyway (it reads no engine memory for it: no lease, never
+    settling), takes the sampled row and expands the newest snapshot faced to the first-person camera (`Job::firstPersonParticleCamera`: the
+    main camera's rotation at `DrawWorld +0x00`). The report's `particle members: N expansions of P particles ..., their snapshots' bound at most
+    D units from it` checks the snapshots' space (`<- FIRST-PERSON PARTICLE SPACE` past 2000: a snapshot taken while the skeleton was in its
+    root's space); 43 units in every run.
+-   **The two arm meshes: a defect in the first-person buckets.** `PlanFirstPersonBuckets` and `FirstPersonSlotReady` indexed the set's
+    Z-prepass groups (`IndirectState::zGroups`, by set index) with the tables' pipeline slot. Where the two differed the slot had no group (the
+    arms waited for ever with reason 8: fp10-fp12, `first-person readiness cause 5`) or another slot's (a wrong depth pipeline for its bucket).
+    Both now take the slot's lookup entry's set index (`FirstPersonZGroupOf`), as `PlanZBuckets` does.
+-   **Skinned blood decals.** A decal of several partitions was refused (`MainReady` reason 5, `MainBuild` `Skip::Geometry`): its fixed slot
+    holds one sequence. A decal now takes a slot per partition from its ordinal (`DecalSpanOf`, `Records.h`: up to the highest partition its
+    mask names, a chain's count; `OrderDecals` counts them), its inputs carry its partitions word, and the decal path of `BuildDrawsCS.hlsl`
+    writes each slot from the partition's geometry along the `GeometryDraw` links (a partition its mask leaves out, or a culled decal, a
+    zero-count draw). A change of its span orders the decals again (`Walk.cpp`, `NoteDecalChanged`).
+-   **Weapon blood (`kWeaponBlood`).** No longer an effect variant: the descriptor's Blood bit, the record's alpha test reference the threshold
+    / 255 for a Blood key whatever its alpha test (`AlphaTestRefOf`, `BloodEffectKey`; the accumulate phase keeps the threshold in the flags for
+    it; the bindless record parity checks the same), the two globals a frame value (`SampleEffectBlood`, PS b13 c19, `DCLFEffectBlood`), read
+    by `Effect.hlsl`'s BLOOD block under `DCLF_BINDLESS`. The threshold's writes are already events (`AlphasSetThreshold`).
+-   **Observers** (`CS_DCLF_SET_PARITY`): `first-person entries the first-person view takes no part in` (participation 0, with flags and raster
+    bits), `first-person slots held out of the first-person view` (resident or not, the waiting reason and `FirstPersonSlotReady`'s cause),
+    `first-person entries filed under another category node ... <- FIRST-PERSON FILING`, and `first-person skeleton's slots` (the render
+    thread's walk: each skeleton geometry's slot, flags and claimed phases, logged when they change).
+
+**Runs.**
+
+| run | what | result |
+| --- | --- | --- |
+| fp7 | before | first person 11 passes/frame registered, 3 withheld; residue as above |
+| fp8 | forward part, particles | `pChargeFire` a member (withheld 4/frame); arms still not members |
+| fp10-fp12 | observers | arms resident, waiting reason 8, cause 5: the Z-group indexing defect |
+| fp13 | fixed | 12 passes/frame registered, **10 withheld**, 0 drawn by the engine (`<- OK`); left: the 3 effect billboards, `HeatRefraction`, a save's `SkinnedDecal` on the arms; arms, sword and Flames drawn alike (shots 03, 06) |
+| bl4 | combat, before | 53 `SkinnedDecal` waiting for their decal slot (~46 passes/frame in main) |
+| bl5 | spans | decal slot waits 0; 136 effect decal members (113 skinned); main view residue: water, sky, grass, untracked particles; blood marks on the player's body drawn |
+
+No crash, no device loss in any run; `<- DEFECT` (member passes drawn by the engine) only in the sun cascades and focus shadows, not first
+person or main; `<- PARTICLES` twice a run, at the frames a first-person particle member joins (equipping Flames, the toggle on).
+
+**Left with the engine, and why** (as of fp13; T7f item 7 then took the first-person billboards, the particle systems under billboards and
+the first-person decals, leaving `HeatRefraction`). First-person billboards (`BrightGlowMesh`, the particle systems under `BillBoardNode`) and the refraction
+billboard `HeatRefraction`: the billboard work (`CS_DCLF_BILLBOARDS`) leaves first-person billboard leaves out; the forward part draws them as
+soon as they are members (the billboard transform reads VS b12, the first-person block). First-person decals (a `SkinnedDecal` or
+`BloodLighting` on the arms): the first-person epochs have no decal groups. First-person refraction. The blood impact particles
+(`pBloodSplat02`, `pBloodDrops06`, `pBloodLines`): temporary effects outside DCLF's categories (untracked, a few passes). Weapon blood was not
+exercised in game: no run put blood on a weapon DCLF tracks (bl1's guard sword appeared before the port; bl4-bl5's attacks hit nothing), so the
+BLOOD permutation's pipeline was never built.
+
+**Risks.** A first-person particle member joining is withheld from the engine before its first expansion (`<- PARTICLES`, one frame). The
+first-person forward part draws through the main set's pipelines, which write the main target alone: the motion vectors of a blended
+first-person draw keep the opaque pass's. A decal whose mask gains a partition past its ordered span without a span change event draws one
+slot short until it is ordered again. The decal probe's templates (`decalTemplates`) hold a multi-partition decal's first slot only.
 
 ## Decals: a second draw pass, and a single culling phase
 

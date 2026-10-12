@@ -1,4 +1,5 @@
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Common/SceneScheduler.h"
 #include <cassert>
 
@@ -776,6 +777,10 @@ namespace DCLF
 		// owners (ListTree, ListFadeRoot): kept while the key stays the same.
 		const auto* property = record && record->property ? mirror.Property(record->property) : nullptr;
 		const void* fadeNode = property ? property->fadeNode : nullptr;
+		// T7f item 7: the engine's "no fade node" is no root (ListFadeRoot): not held, not asked of the render thread.
+		static const bool emptyIsNone = SwitchOnUnlessZero(Switch::EmptyFadeNode);
+		if (emptyIsNone && fadeNode == Engine::EmptyFadeNode())
+			fadeNode = nullptr;
 		if (a_entry.fadeNodeRef.get() != fadeNode) {
 			HandBack(std::move(a_entry.fadeNodeRef));
 			if (fadeNode)
@@ -1521,17 +1526,80 @@ namespace DCLF
 			(a_record.flags & static_cast<std::uint32_t>(RE::NiAVObject::Flag::kHidden)) != 0, cullHidden.size(), chain);
 	}
 
-	Ineligible SceneStore::ClassifyFrame(const Tracked& a_tracked, const AccumulatedPass* a_accumulated) const
+	std::int32_t SceneStore::BillboardModeOf(const Tracked& a_tracked) const
+	{
+		if (!ActiveToggles().billboards || a_tracked.parentReason != Ineligible::Billboard)
+			return -1;
+		// T7f item 7: a first-person entry's too (the magic hands' glows). The first-person forward part draws it with DCLF's first-person
+		// b12 block (ExecuteFirstPersonDepth), which is in world space throughout: c0-c2 the camera's rotation (the shift moves translations
+		// only) and c40 the eye at GetFirstPersonNodePosition, against the row the render thread sampled at Kick, before the shift.
+		const auto leaf = mirror.Leaf(a_tracked.geometry.get());
+		if (!leaf || !SceneCapture::LeafView::Effect(leaf.property) || leaf.Type() != static_cast<std::uint8_t>(RE::BSGeometry::Type::kTriShape) || leaf.Skinned())
+			return -1;
+		std::int32_t mode = -1;
+		std::uint32_t billboards = 0;
+		const auto* record = mirror.Node(a_tracked.geometry.get());
+		for (const void* key = record ? record->parent : nullptr; key && key != a_tracked.categoryNode; key = record->parent) {
+			record = mirror.Node(key);
+			if (!record)
+				return -1;
+			if (record->kind & SceneCapture::kKindBillboard) {
+				++billboards;
+				mode = static_cast<std::int32_t>(SceneCapture::BillboardModeOf(record->kind));
+			}
+		}
+		// One node: a billboard under another is turned from a parent world a cull wrote (the outer node's turn).
+		return billboards == 1 && mode <= 5 ? mode : -1;
+	}
+
+	void SceneStore::FirstPersonDecalForward(const Tracked& a_tracked, LightingDescriptors& a_descriptors) const
+	{
+		static const bool on = SwitchOnUnlessZero(Switch::FirstPersonDecals);
+		// Decal groups 1 and 2 (hints 2 and 3); group 3 is a multi-index layer's, never first person's.
+		const std::uint32_t group = a_descriptors.decalGroup;
+		if (!on || (group != 1 && group != 2) || !FirstPersonEntry(a_tracked.categoryNode))
+			return;
+		// The forward pixel stage: an effect's or a Lighting decal's (a weapon's BloodLighting) without Deferred, as LightingShaderDescriptors
+		// makes a forward key's.
+		a_descriptors.pixel &= a_descriptors.effect ? ~EffectFlag::Deferred : ~kLightingPixelDeferred;
+		a_descriptors.forward = true;
+		a_descriptors.forwardBlendMode = group == 2 ? a_descriptors.decalBlendMode : 0u;
+		a_descriptors.forwardDepthTest = true;
+		a_descriptors.forwardDepthWrite = group == 1;
+		a_descriptors.forwardDecalGroup = group;
+		a_descriptors.decalGroup = 0;
+		a_descriptors.decalBlendMode = 0;
+		a_descriptors.decalWriteMode = 0;
+	}
+
+	Ineligible SceneStore::ClassifyFrame(const Tracked& a_tracked) const
 	{
 		const bool underSwitch = a_tracked.parentReason == Ineligible::Switch;
 		if (underSwitch && !ActiveToggles().switchNodes)
 			return Ineligible::Switch;
+		// CS_DCLF_BILLBOARDS: an effect leaf under one billboard node is DCLF's, turned by its vertex stage (Billboards.h). The billboard
+		// outranks a switch and an ordered node in parentReason, so the chain walk below applies their tests to it as to a switch's leaf.
+		const bool underBillboard = a_tracked.parentReason == Ineligible::Billboard;
+		// T7f item 7: a particle system under billboard nodes needs no turn in the vertex stage. The turn reaches it only through its update:
+		// 0x140d3e650 runs each child's UpdateDownwardPass (slot 0x2C, the system's update, NiPSysUpdateCtlr), after which ParticleSnapshots
+		// takes its snapshot; NiParticleSystem::UpdateWorldData (vtable 0x1419c3898 slot 0x30, 0x140dd4c90) is empty. So the engine draws the
+		// world and particles of the system's last update, which the snapshot copies. Its classification is the particle path's (ClassifyStatic).
+		const auto particlesUnderBillboard = [&] {
+			static const bool on = SwitchOnUnlessZero(Switch::BillboardParticles);
+			if (!on || !ActiveToggles().billboards)
+				return false;
+			const auto leaf = mirror.Leaf(a_tracked.geometry.get());
+			return leaf && ParticleGeometryType(leaf.Type());
+		};
+		if (underBillboard && BillboardModeOf(a_tracked) < 0 && !particlesUnderBillboard())
+			return Ineligible::Billboard;
+		const bool chainTests = underSwitch || underBillboard;
 		// T7c0: under an ordered node only a blended leaf is rejected (OrderedLeaf: the node orders those passes alone); an opaque
 		// one goes on like any leaf. Under a switch too (the switch outranks it in parentReason): the chain walk below finds it.
 		// T7d's ordered-node interleave: with the forward epoch the blended leaf is DCLF's too, its draw sorted in its node's group at the
 		// node's depth and in its child order (BindlessPlacement::forwardSort; ForwardSortCS), as the engine's blended draw has the group.
 		const bool ordered = a_tracked.parentReason == Ineligible::UnsupportedParent;
-		if (a_tracked.parentReason != Ineligible::None && !underSwitch && !ordered)
+		if (a_tracked.parentReason != Ineligible::None && !underSwitch && !ordered && !underBillboard)
 			return a_tracked.parentReason;
 		const auto orderedLeaf = [&] { return !ActiveToggles().forward && OrderedLeaf(mirror.Leaf(a_tracked.geometry.get())); };
 		if (ordered && orderedLeaf())
@@ -1547,11 +1615,14 @@ namespace DCLF
 			// T7e: the first-person root's kHidden is the view's (Main::Draw, unk_FPCulling and RenderDepth toggle it within the frame,
 			// FUN_140736150 at the camera switch; cullHidden lists it hidden for the world views): a chain stops before it, whatever category
 			// node the entry was filed under. Whether the view draws is the first-person latch's (IndirectDraws::BeginFirstPersonFrame).
+			// A first-person particle system (a magic hand's) is taken as any other: FrameValues' producer expands its snapshots with the
+			// first-person camera (T7e's forward part; its row the render thread's first-person sample).
 			if (key && key == firstPersonCategory) {
-				// T7e's particles: a first-person particle system (a magic hand's) has no producer of its quads (FrameValues samples no
-				// first-person item; ParticleSnapshots): it stays the engine's.
-				if (const auto* g = mirror.Geometry(a_tracked.geometry.get()); g && g->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles))
-					return Ineligible::EffectVariant;
+				if (a_tracked.categoryNode != firstPersonCategory && SwitchEnabled(Switch::SetParity)) {
+					firstPersonMisfiled.fetch_add(1, std::memory_order_relaxed);
+					firstPersonMisfiledGeometry.store(a_tracked.geometry.get(), std::memory_order_relaxed);
+					firstPersonMisfiledCategory.store(a_tracked.categoryNode, std::memory_order_relaxed);
+				}
 				break;
 			}
 			if (HiddenForWalk(key, *record)) {
@@ -1567,24 +1638,16 @@ namespace DCLF
 			}
 			if (key == a_tracked.categoryNode)
 				break;
-			if (underSwitch && child && (record->kind & SceneCapture::kKindSwitch) && !SwitchSelects(*record, child))
+			if (underBillboard && (record->kind & SceneCapture::kKindSwitch) && !ActiveToggles().switchNodes)
 				return Ineligible::Switch;
-			if (underSwitch && (record->kind & SceneCapture::kKindOrdered) && orderedLeaf())
+			if (chainTests && child && (record->kind & SceneCapture::kKindSwitch) && !SwitchSelects(*record, child))
+				return Ineligible::Switch;
+			if (chainTests && (record->kind & SceneCapture::kKindOrdered) && orderedLeaf())
 				return Ineligible::UnsupportedParent;
 			if (!actors && record->userData && record->actor)
 				return Ineligible::Actor;
 		}
 
-		// Fading: a membership pass is built from the settled state (the fade is the feedback's). Without one (the scene
-		// phase, for the shadow views) a fade is only the native loop's when fades are not DCLF's at all; the shadow views
-		// skip faded casters themselves (ShadowReject::Faded). The fade node's currentFade, its record's.
-		bool fading = false;
-		if (!a_accumulated && !ActiveToggles().fading) {
-			const auto leaf = mirror.Leaf(a_tracked.geometry.get());
-			fading = leaf.fadeNode && leaf.fadeNode->currentFade < 1.0f;
-		}
-		if (fading)
-			return Ineligible::Fading;
 
 		return Ineligible::None;
 	}

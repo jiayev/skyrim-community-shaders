@@ -403,6 +403,7 @@ static const uint kFadeRootPreprocessed = 1u << 21;
 static const uint kFadeRootPreprocessHidden = 1u << 22;
 // T6b1a: the seeds (FrameValues' fade seeds, the latch's fadeSeedsIndex: two rows a slot, this bit picks the generation's).
 static const uint kFadeRootSeedOdd = 1u << 23;
+static const uint kFadeRootWritten = 1u << 24;  // Records.h: the node is DCLF's alone to write (every listed root, T7f)
 static const uint kFadeRootNodeBits = kFadeRootPlanMask | (0xFFu << kFadeRootBitsShift) | kFadeRootTreeThresholds | kFadeRootAlwaysDraw | kFadeRootPreprocessed |
                                       kFadeRootPreprocessHidden;
 
@@ -430,19 +431,21 @@ bool MergeSeed(uint a_slot, inout FadeRootStatic a_root)
 	return true;
 }
 
-// The cull test without a program: the frustum, after the node flags Process1 tests first (AE 0x140e28390): a preprocessed node
-// passes unless kNotVisible, an always-draw node passes untested (T7f: kAccumulated is this verdict, as the engine's cull sets it).
+// The cull test without a program: the frustum, after the node flags Process1 tests first (AE 0x140e28390): an always-draw node passes
+// untested (T7f: kAccumulated is this verdict, as the engine's cull sets it). A preprocessed node (an actor's root: the actor pre-cull,
+// BSFadeNodeCuller, sets bit 12 and, off screen, kNotVisible every frame in Main::Draw's camera setup) passes in the engine unless
+// kNotVisible, whatever its room; the seed's copy of bit 20 is the listing frame's, so DCLF makes the pre-cull's test itself: the main
+// camera's frustum on the root's bound (T7f checklist item 1: the actors' roots).
 bool FrustumInView(float3 a_centre, float a_radius, uint a_rootBits)
 {
-	if ((a_rootBits & kFadeRootPreprocessed) != 0u)
-		return (a_rootBits & kFadeRootPreprocessHidden) == 0u;
 	return (a_rootBits & kFadeRootAlwaysDraw) != 0u || InView(a_centre, a_radius);
 }
 
 // The cull test of the root's program (kPortalNoProgram, or no programs: the frustum alone, FrustumInView).
 bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits, uint a_program)
 {
-	if (ProgramsIndex == 0)
+	// A preprocessed root (an actor's): the pre-cull's frustum test alone, no room's program (Process1 does not test it either).
+	if (ProgramsIndex == 0 || (a_rootBits & kFadeRootPreprocessed) != 0u)
 		return FrustumInView(a_centre, a_radius, a_rootBits);
 	ByteAddressBuffer programs = ResourceDescriptorHeap[ProgramsIndex];
 	const int test = PortalTest(programs, a_program, a_centre, a_radius, (a_rootBits & kFadeRootAlwaysDraw) != 0u, (a_rootBits & kFadeRootPreprocessed) != 0u,
@@ -460,9 +463,9 @@ uint FadeMilestone(FadeNodeState a_state)
 	return fade | ((a_state.Levels & 0xFu) << 2) | (((a_state.Levels >> 12) & 0x7u) << 6);
 }
 
-// A stood-in root whose milestone is not the one last reported appends an event, and counts it reported once it is in the
-// list; one that does not fit tries again next frame (the count tells the host to grow the list). Any other root's node is
-// the engine's own, so its milestone is what the node holds. The list's header (its frame) is the depth commit's.
+// A root DCLF writes (kFadeRootWritten) whose milestone is not the one last reported appends an event, and counts it reported once
+// it is in the list; one that does not fit tries again next frame (the count tells the host to grow the list). Any other root's
+// node is the engine's own, so its milestone is what the node holds. The list's header (its frame) is the depth commit's.
 void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
 {
 	if (EventsIndex == 0 || ReportedIndex == 0)
@@ -473,7 +476,7 @@ void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
 	if (last.x != a_root.Generation)
 		last = uint2(a_root.Generation, FadeMilestone(a_root.Initial));
 	const uint milestone = FadeMilestone(a_state);
-	if ((a_root.Bits & kFadeRootStoodIn) == 0 || last.y == milestone) {
+	if ((a_root.Bits & kFadeRootWritten) == 0 || last.y == milestone) {
 		reported[a_index] = uint2(a_root.Generation, milestone);
 		return;
 	}
