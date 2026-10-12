@@ -191,7 +191,8 @@ bool Load()
 		L"Data/SKSE/Plugins/NVIDIA_Reflex.dll",
 		L"Data/SKSE/Plugins/MARA.dll",
 		L"Data/SKSE/Plugins/NativeWaterLightStabilizer.dll",
-	    L"Data/SKSE/Plugins/DynamicWetness.dll"
+		L"Data/SKSE/Plugins/DynamicWetness.dll",
+		L"Data/SKSE/Plugins/NMN_DeformableTerrain.dll"
 	};
 
 	for (const auto dll : incompatibleDLLs) {
