@@ -428,7 +428,6 @@ struct IDXGISwapChain_Present
 				return func(swapChain, syncInterval, presentFlags);
 			});
 
-		globals::features::screenshotFeature.ProcessCaptureRequest();
 		globals::state->Reset();
 
 		NvPerf::OnPresentEnd();
