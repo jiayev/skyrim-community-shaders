@@ -67,7 +67,11 @@ namespace DCLF::Draws
 				logger::warn("[DCLF] bindless record parity: {} differs for object {}", a_name, a_objectIndex);
 		};
 		expect(a_record.roomIndex == lights.roomIndex, "RoomIndex");
-		expect(a_record.recordFlags == RecordFlagsOf(object.flags, a_objectIndex < a_tables.objectFadeRoot.size() ? a_tables.objectFadeRoot[a_objectIndex] : kNoFadeRoot),
+		const std::uint32_t refraction =
+			!(object.flags & kObjectNoBindings) && object.pipelineIndex < a_tables.pipelines.size() ?
+				RefractionRecordFlagsOf(a_tables.pipelines[object.pipelineIndex]) | EffectRecordFlagsOf(a_tables.pipelines[object.pipelineIndex], object.flags) :
+				0u;
+		expect(a_record.recordFlags == (RecordFlagsOf(object.flags, a_objectIndex < a_tables.objectFadeRoot.size() ? a_tables.objectFadeRoot[a_objectIndex] : kNoFadeRoot) | refraction),
 			"RecordFlags");
 		const float threshold = (object.flags & kObjectAlphaTest) ? ((object.flags >> kObjectAlphaThresholdShift) & 0xFF) / 255.0f : 0.0f;
 		expect(std::bit_cast<std::uint32_t>(a_record.alphaTestRef) == std::bit_cast<std::uint32_t>(threshold), "AlphaTestRef");

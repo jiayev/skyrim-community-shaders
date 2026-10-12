@@ -136,7 +136,8 @@ namespace DCLF
 			for (std::size_t i = 0; i < a.sets.size(); ++i)
 				if (!SameHandle(a.sets[i], b.sets[i]) || !SameHandle(a.signatures[i], b.signatures[i]))
 					return false;
-			return SameHandle(a.zLayout, b.zLayout) && SameHandle(a.zDrawSignature, b.zDrawSignature);
+			return SameHandle(a.zLayout, b.zLayout) && SameHandle(a.zDrawSignature, b.zDrawSignature) && SameHandle(a.refraction, b.refraction) &&
+			       a.refractionFormat == b.refractionFormat;
 		}
 
 		// The dispatch signature every BuildDraws pass records with: one Dispatch argument, read from a latch.
@@ -239,6 +240,9 @@ namespace DCLF
 			// T7d: each half of the forward range (the colour segment's and the forward epoch's; MainSizing::forwardCapacity), after the
 			// terrain groups' ranges: the staging half BuildDraws appends to, then the sorted half the forward epoch draws.
 			std::uint32_t forwardCapacity = 0;
+			// T7d's refraction: the refraction range (the colour segment's and the forward epoch's; MainSizing::refractionCapacity), after the
+			// forward halves (RefractionSlot).
+			std::uint32_t refractionCapacity = 0;
 			// The sequence buffer's ranges as the epoch sized it (Resources::sequenceDraws, sequenceDecals): its layout.
 			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
 			// The rows' tables' addresses (Resources::materialRows, pipelineRows), which a growth moves.
@@ -279,7 +283,8 @@ namespace DCLF
 			bool SameShape(const PassFrame& o) const
 			{
 				return zCalls == o.zCalls && latched == o.latched && drawCapacity == o.drawCapacity && decalCapacity == o.decalCapacity &&
-				       terrainCapacity == o.terrainCapacity && forwardCapacity == o.forwardCapacity && sequenceDraws == o.sequenceDraws &&
+				       terrainCapacity == o.terrainCapacity && forwardCapacity == o.forwardCapacity && refractionCapacity == o.refractionCapacity &&
+				       sequenceDraws == o.sequenceDraws &&
 				       sequenceDecals == o.sequenceDecals && materialRows == o.materialRows && pipelineRows == o.pipelineRows && cullMode == o.cullMode &&
 				       probePixel == o.probePixel && probeX == o.probeX && probeY == o.probeY && width == o.width && height == o.height &&
 				       minDepth == o.minDepth && maxDepth == o.maxDepth && SameHandle(resourceHeap, o.resourceHeap) &&
@@ -347,6 +352,11 @@ namespace DCLF
 		inline std::uint64_t ForwardStagingSlot(const PassFrame& a_frame)
 		{
 			return std::uint64_t(a_frame.sequenceDraws) + a_frame.terrainCapacity[0] + a_frame.terrainCapacity[1];
+		}
+		/** @brief T7d's refraction: the refraction range's first slot in a colour shape's sequences (after the forward range's two halves). */
+		inline std::uint64_t RefractionSlot(const PassFrame& a_frame)
+		{
+			return ForwardStagingSlot(a_frame) + 2ull * a_frame.forwardCapacity;
 		}
 		constexpr std::uint32_t kSortSequencesGroup = 64;  // SortSequencesCS.hlsl's
 		// A sort's rank word holds the pipeline in its top 12 bits and the rank below (BuildDrawsCS.hlsl, kSortRankBits): a
@@ -621,6 +631,10 @@ namespace DCLF
 		 * every reader sees in the same frame and no cull or cell animation runs. With the engine's samples of the same frame
 		 * (SideEffects::SampleAccumulated) it is the <- ACCUMULATED observer. Decoded batches go back to the render thread, which names
 		 * their finds and lets go of their tables.
+		 *
+		 * T7f preparation ("T7f preparation, part 2"): with the wide writes on, the decoder also prepares every other listed root's writes
+		 * (fade roots, their geometry, the plain entry roots of the frame's SunCandidates), which the main thread makes under
+		 * CS_DCLF_ACCUMULATED_ALL (with the nodes between and the cell roots) and otherwise keeps as a dry run.
 		 */
 		struct VisibilityReadback
 		{
@@ -637,8 +651,49 @@ namespace DCLF
 			struct ObjectVisibility
 			{
 				bool visible = false;
+				bool fadeHidden = false;  // in view, dropped by its root's fade (kVisibilityBitFadeHidden: the dry run's attribution)
 				std::uint32_t lastFrame = 0;
 				std::uint32_t outFrame = 0;
+			};
+			/** @brief A write's node: a fade root slot's, a plain entry root (SunCandidates' entry with no fade root), a geometry. */
+			enum WriteKind : std::uint8_t
+			{
+				kWriteRoot,
+				kWriteEntry,
+				kWriteGeometry,
+			};
+			static constexpr std::uint32_t kWideCompareInterval = 30;
+			/** @brief T7f: why the decoder asked what it asked (Writes::Write::why, the dry run's attribution). */
+			enum WriteWhy : std::uint8_t
+			{
+				kWhyRule = 1u << 0,    // visible only by the conservative rule (the two-frame window, a listing with no verdict, a camera cut)
+				kWhyFaded = 1u << 1,   // a geometry in view whose root's fade dropped it (kVisibilityBitFadeHidden)
+				kWhyRecent = 1u << 2,  // its verdict changed within kRecentFrames of the newest decoded frame (the readback's lag)
+			};
+			static constexpr std::uint32_t kRecentFrames = 8;
+			/**
+			 * @brief T7f: the dry run's differences by cause (CompareWide; drawcall-limit-fix.md, "T7f: what kAccumulated means"). The engine's
+			 * alone (its bit set, DCLF's clear) and DCLF's alone, for geometry and fade roots, each in the first class that holds.
+			 */
+			enum WideCause : std::uint8_t
+			{
+				kEngineGeometryChain,    // a node from the geometry's parent up to its root is clear: the receivers never see it (stale)
+				kEngineGeometryStoodIn,  // its root is stood in at the entry, not in the batch's tables: the bit is not the engine's cull's
+				kEngineGeometryFaded,    // DCLF: in view, its root's OnVisible stops (the engine's bit is the last cull that reached it)
+				kEngineGeometryRecent,   // DCLF's verdict changed within kRecentFrames
+				kEngineGeometrySteady,
+				kDclfGeometryRule,       // set by the conservative rule alone
+				kDclfGeometryRecent,
+				kDclfGeometryRootClear,  // the engine's root is clear: the whole object out by its cull
+				kDclfGeometryChainClear, // a node between is clear: an inactive LOD or switch child, a zero-radius node
+				kDclfGeometrySteady,     // the chain set, the geometry clear: the engine's test of the geometry's own bound
+				kEngineRootStoodIn,
+				kEngineRootRecent,
+				kEngineRootSteady,
+				kDclfRootRule,
+				kDclfRootRecent,
+				kDclfRootSteady,
+				kWideCauses,
 			};
 			/**
 			 * @brief T7b2: kAccumulated writes the decoder prepared from one decode's newest batch, in its tables' slots, for the main
@@ -649,13 +704,23 @@ namespace DCLF
 			{
 				struct Write
 				{
-					void* node = nullptr;        // a stood-in fade root, or a geometry under one
-					const void* root = nullptr;  // its fade root (the cut's entry root): written only while the cut still stands in for it
+					void* node = nullptr;        // a fade root, a plain entry root, or a geometry under one
+					const void* root = nullptr;  // its root (a stood-in one's is written only while the cut still stands in for it); the
+					                             // end of the walk that sets the nodes between (CS_DCLF_ACCUMULATED_ALL)
 					bool set = false;
+					std::uint8_t kind = kWriteGeometry;
+					// T7f preparation: a root the cut does not stand in for (or a geometry under one, or a plain entry root): written only
+					// under CS_DCLF_ACCUMULATED_ALL; otherwise a dry run (its verdict kept for the tree list's, compared on a compare list).
+					bool wide = false;
+					std::uint8_t why = 0;  // WriteWhy (T7f: the dry run's attribution)
 				};
 				std::uint32_t frame = 0;  // the scene frame of the batch the writes follow
 				bool full = false;        // every stood-in root and geometry, not only the changes (a refresh, a reset, a cut's first batch after)
+				// T7f preparation: every wide write as well, for CS_DCLF_ACCUMULATED_PARITY's dry-run comparison at the entry (every
+				// kWideCompareInterval decodes, the switch on and CS_DCLF_ACCUMULATED_ALL off).
+				bool compare = false;
 				std::shared_ptr<const SceneStore::Tables> tables;
+				std::shared_ptr<const SunCandidates> candidates;  // the plain entry roots' (held: their nodes live until the write)
 				std::vector<Write> writes;
 				Writes* next = nullptr;
 			};
@@ -693,6 +758,7 @@ namespace DCLF
 				bool reset = false;     // the frame's commit zeroed the reported words: the decoder's verdicts start again
 				bool complete = true;   // every change fit (none of the frame's verdicts arrives a frame late)
 				std::shared_ptr<const SceneStore::Tables> tables;  // the frame's (the occupants); let go by the render thread alone
+				std::shared_ptr<const SunCandidates> candidates;   // the frame's entries (the plain entry roots of T7f's wide writes)
 				std::vector<VisibilityEvent> events;
 				std::vector<std::pair<std::uint8_t, const void*>> firsts;  // (category, node), named while `tables` holds the node
 				Batch* next = nullptr;
@@ -704,6 +770,7 @@ namespace DCLF
 				std::uint32_t frame = 0;
 				bool reset = false;
 				std::shared_ptr<const SceneStore::Tables> tables;
+				std::shared_ptr<const SunCandidates> candidates;
 			};
 
 			std::uint32_t frameSlots = 0;
@@ -727,6 +794,14 @@ namespace DCLF
 			std::vector<std::uint32_t> rootWrittenGeneration;
 			std::vector<std::uint8_t> rootWritten, objectWritten;
 			std::vector<const void*> objectWrittenGeometry;
+			// T7f preparation, the decoder's: the class each slot was last asked in (1: wide), the plain entry roots' last asks (by entry
+			// index and version), each object slot's plain entry (cached by occupant, for one candidates snapshot), and the decodes made.
+			std::vector<std::uint8_t> rootWrittenWide, objectWrittenWide, entryWritten;
+			std::vector<std::uint32_t> entryWrittenVersion;
+			const SunCandidates* entryCandidates = nullptr;
+			std::vector<std::uint32_t> objectEntry;
+			std::vector<const void*> objectEntryGeometry;
+			std::uint32_t wideDecodes = 0;
 			// T7b2, any thread: a full write asked for (PrimaryCull: a frame the engine culled the stood-in roots itself, the main thread:
 			// writes dropped), and the scene frame of the last camera cut (the render thread's, PrimaryCull::AfterFullFrustum: from there
 			// every stood-in root is visible until a batch of that frame or later is decoded).
@@ -736,11 +811,25 @@ namespace DCLF
 			std::atomic<Writes*> writes{ nullptr };
 			// The main thread's: the newest writes' tables (a cut's writes take the stood-in roots from them), and the cut it wrote.
 			std::shared_ptr<const SceneStore::Tables> writtenTables;
+			std::shared_ptr<const SunCandidates> writtenCandidates;  // the newest writes' (T7f preparation: the plain entry roots)
 			std::uint32_t cutWritten = 0;
+			std::uint32_t verdictPrunes = 0;           // entries since rootVerdicts was last pruned to the newest tables (wide verdicts)
+			std::vector<RE::NiAVObject*> chain;        // scratch: a geometry's nodes up to its root (CS_DCLF_ACCUMULATED_ALL)
+			std::string wideFirst;                     // the dry run's first roots DCLF would clear that the engine has set
+			std::string wideFirstGeometry;             // T7f: its first steady geometry of the engine's alone the receivers see, and its root
+			// T7b5 fix, the main thread's: each stood-in root's verdict as last written (set: visible), forgotten once it is no longer stood
+			// in (IndirectDraws::AccumulatedVerdict: the tree manager's multibound results of the stood-in trees). T7f preparation: with the
+			// wide writes, every listed root's too (written, or the dry run's), forgotten once the newest tables no longer list it.
+			ankerl::unordered_dense::map<const void*, bool> rootVerdicts;
 			// T7b2, since the last report: writes made (set, cleared), found as wanted, left (the cut no longer stands in for the root;
 			// a clear older than a cut), the cut's own writes, full writes prepared, cuts, and the main thread's time.
 			std::atomic<std::uint64_t> writesSet{ 0 }, writesCleared{ 0 }, writesUnchanged{ 0 }, writesNotStoodIn{ 0 }, writesHeldByCut{ 0 };
 			std::atomic<std::uint64_t> cutWrites{ 0 }, fullWrites{ 0 }, cuts{ 0 }, writeNs{ 0 }, writeBatches{ 0 };
+			// T7f preparation (the main thread's, since the last report): the wide writes made (set, cleared, already so) or dry, the nodes
+			// between set (and geometries whose walk did not reach their root), the cell roots (ListUpkeep's replacement: seen, set or
+			// found without the bit), and the dry run's comparisons with the engine's bit (roots aside: app-culled).
+			std::atomic<std::uint64_t> wideSet{ 0 }, wideCleared{ 0 }, wideUnchanged{ 0 }, wideDry{ 0 }, wideNodesSet{ 0 }, wideNoChain{ 0 };
+			std::atomic<std::uint64_t> cellRootsSeen{ 0 }, cellRootsSet{ 0 }, cellRootsUnset{ 0 }, wideCompares{ 0 }, wideHidden{ 0 };
 			// Since the last report (any thread): the batches decoded and their events, events stale (another listing's, a slot left
 			// empty, older than one taken), batches past their list, arms whose slot's buffer did not hold their frame (the epoch did not
 			// run, or ran without the readback), staging sets added, wakes that found the last task running, and the decode's time ...
@@ -756,6 +845,15 @@ namespace DCLF
 				std::atomic<std::uint64_t> both{ 0 }, dclfOnly{ 0 }, engineOnly{ 0 }, neither{ 0 };
 			};
 			Counts rootCounts, geometryCounts, stoodInRootCounts, stoodInGeometryCounts;
+			Counts wideRootCounts, wideEntryCounts, wideGeometryCounts;  // T7f preparation's dry run: DCLF's wanted bit against the engine's
+			// T7f: the dry run's geometry against what the receivers see (the geometry and every node up to its root set), its differences
+			// by cause (WideCause), the cell roots' containers (the object root's children the engine's lists cull: seen, without the bit),
+			// and the decoder's geometries with no fade root on a compare list (a plain entry's, no candidates, not a candidate, an entry
+			// that is a fade root slot).
+			Counts wideReceiverCounts;
+			std::array<std::atomic<std::uint64_t>, kWideCauses> wideCauses{};
+			std::atomic<std::uint64_t> cellContainersSeen{ 0 }, cellContainersUnset{ 0 };
+			std::atomic<std::uint64_t> plainListed{ 0 }, plainNoCandidates{ 0 }, plainNotCandidate{ 0 }, plainEntryIsRoot{ 0 };
 			std::atomic<std::uint64_t> framesCompared{ 0 }, framesIncomplete{ 0 }, samplesUnmatched{ 0 }, moved{ 0 }, staleGeometry{ 0 };
 			std::atomic<std::uint64_t> noVerdictEngine{ 0 }, noVerdictNeither{ 0 }, hiddenDclfOnly{ 0 };
 			// The render thread's: the first finds' names since the last report, per category.
@@ -1166,6 +1264,9 @@ namespace DCLF
 			// T7d: each half of the colour segment's forward range (GpuLayouts.h, kForwardSortShader), after the terrain ranges: every draw
 			// the forward pipeline slots can produce, grown to a power of two past it; the terrain ranges and both halves within sequenceDraws.
 			std::uint32_t forwardCapacity = 0;
+			// T7d's refraction: the refraction range (GpuLayouts.h), after the forward halves: every draw the refraction pipeline slots can
+			// produce, grown to a power of two past it; within sequenceDraws with the ranges before it.
+			std::uint32_t refractionCapacity = 0;
 			// The objects the per-object buffers hold (inputs, inputsDepth, visibility, frustum): the scene's object capacity, grown
 			// with it (ReserveObjectBuffers).
 			std::uint32_t objectCapacity = 0;
@@ -1246,6 +1347,10 @@ namespace DCLF
 			// T7c1: Terrain Blending's terrain depth (TerrainBlending::terrainDepth), imported once with the main depth's description,
 			// which the Z-prepass draws its near terrain blocks into (MainOpaquePass). Null without that feature.
 			std::shared_ptr<org::ExternalTextureResource> terrainDepth;
+			// T7d's refraction: the engine's refraction normals (kREFRACTION_NORMALS), imported once with their format, which the forward
+			// epoch's RefractionDrawPass draws into. Null without the target.
+			std::shared_ptr<org::ExternalTextureResource> refractionNormals;
+			DXGI_FORMAT refractionFormat = DXGI_FORMAT_UNKNOWN;
 			// CS_DCLF_GBUFFER_PROBE: one texel of every target, copied inside the epoch both before and
 			// after the colour draws. The copies are graph passes so the graph orders them against the
 			// draws; a D3D11 readback issued around the epoch is not ordered against ORG's submissions at
@@ -1365,6 +1470,7 @@ namespace DCLF
 			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // the sequence buffer's ranges (ReserveMainSequences)
 			std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};  // T7c1: the terrain groups' (MainSizing::terrainCapacity)
 			std::uint32_t forwardCapacity = 0;                    // T7d: each forward half's (MainSizing::forwardCapacity)
+			std::uint32_t refractionCapacity = 0;                 // T7d's refraction range's (MainSizing::refractionCapacity)
 			std::uint64_t materialRows = 0, pipelineRows = 0;     // the rows' tables' addresses
 			MainViewport viewport;
 			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
@@ -1511,6 +1617,7 @@ namespace DCLF
 
 		struct ShadowFrame;
 		struct ReflectionFrame;
+		struct FirstPersonFrame;
 		/**
 		 * @brief The shapes a scene revision's recording of an epoch is prepared for (R3c; SceneRevision.cpp): what its passes read
 		 * from the preparation's host data (PassPrepareContext::preparationData). A
@@ -1521,6 +1628,8 @@ namespace DCLF
 			std::array<std::shared_ptr<const PassFrame>, 2> main;  // kDepthShape, kColourShape
 			std::shared_ptr<const ShadowFrame> shadow, occlusion;
 			std::shared_ptr<const ReflectionFrame> reflection;
+			// T7e: the first-person epochs' (both: the depth and the colour epoch record against the one shape).
+			std::shared_ptr<const FirstPersonFrame> firstPerson;
 			// The scene's sizing the revision names (Growths::RevisionSizing): what its passes size their dispatches and lists by, for
 			// the versions it binds - never the live one, which moves only when the revision's growths are adopted.
 			std::shared_ptr<const SceneSizing> scene;
@@ -1963,6 +2072,10 @@ namespace DCLF
 		// the extras' pixel inputs (c16, ExtrasFrame::projectedGlobals).
 		constexpr std::uint64_t kExtrasPixelFrameOffset = std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting) + sizeof(LodFadeFrame) + 32;
 		static_assert(sizeof(FrameLighting) + sizeof(LodFadeFrame) + 32 == 16 * 16);
+		// T7d's Effect port: c17, the camera's planes (SampleEffectCamera; Effect.hlsl, DCLFEffectCamera).
+		constexpr std::uint64_t kEffectCameraFrameOffset = kExtrasPixelFrameOffset + sizeof(ExtrasFrame::projectedGlobals);
+		// The Effect port's Lighting variant: c18, its DLightColor (SampleEffectLight; Effect.hlsl, DCLFEffectDLightColor).
+		constexpr std::uint64_t kEffectLightFrameOffset = kEffectCameraFrameOffset + 16;
 		static_assert(sizeof(FrameFog) == 3 * 16);
 
 		/**
@@ -3130,7 +3243,10 @@ namespace DCLF
 
 		// ---- The scene list (U4c): one entry per object, its main part the main build's and its shadow words the shadow build's.
 		// The view bits the main build writes of an entry (the main segments', the reflection's); the rest are the shadow build's.
-		constexpr std::uint32_t kMainSideBits = kViewMainCull | kViewMain | kViewDecal | kViewForward | kViewReflection;
+		// T7d's refraction: kViewRefraction is the main build's too (MainMaskOf). Left out, a scene entry's merge with its shadow part
+		// (SetMainPart, SetShadowPart) dropped it: the colour BuildDraws' view test then skipped the refraction input entirely, so nothing
+		// culled, drew or published a verdict for the member (the set parity's "in the set and drawn by nobody", verdict not this frame's).
+		constexpr std::uint32_t kMainSideBits = kViewMainCull | kViewMain | kViewDecal | kViewForward | kViewRefraction | kViewReflection | kViewFirstPerson;
 		// Which builds' parts an entry holds (ResidentRegion::sideOf).
 		constexpr std::uint8_t kSideMain = 1;
 		constexpr std::uint8_t kSideShadow = 2;
@@ -3483,6 +3599,7 @@ namespace DCLF
 			bits |= (a_phases & kSetOccluderSky) ? kViewSkyOccluder : 0u;
 			bits |= (a_phases & kSetOccluderPrecipitation) ? kViewPrecipOccluder : 0u;
 			bits |= (a_phases & kSetReflection) ? kViewReflection : 0u;
+			bits |= (a_phases & kSetFirstPerson) ? kViewFirstPerson : 0u;
 			return bits;
 		}
 		/**
@@ -3503,12 +3620,21 @@ namespace DCLF
 		inline std::uint32_t MainMaskOf(const SceneStore::Tables& a_tables, std::size_t a_object)
 		{
 			const std::uint32_t flags = a_object < a_tables.objects.size() ? a_tables.objects[a_object].flags : 0u;
+			// T7e: a first-person member's is kViewFirstPerson alone: the first-person epochs' cull and draws, never a main candidate (the
+			// world's depth segment would draw a drawable input with kViewMainCull, and the HZB must leave the arms out).
+			if (a_object < a_tables.setPhases.size() && (a_tables.setPhases[a_object] & kSetFirstPerson))
+				return kViewFirstPerson;
 			if (ObjectDecalGroup(flags))
 				return kViewDecal;
 			// T7d: a forward object's is kViewForward alone (with its member bit): the colour segment's forward range, culled by no other
 			// view (never a depth segment input: it occludes nothing, as the engine's blended draws write no depth before the opaque ones).
-			if (flags & kObjectForward)
+			if (flags & kObjectForward) {
+				// T7d's refraction: a refraction object's is kViewRefraction alone: the refraction range (its key, kRasterRefraction).
+				const std::uint32_t pipeline = a_tables.objects[a_object].pipelineIndex;
+				if (!(flags & kObjectNoBindings) && pipeline < a_tables.pipelines.size() && RasterRefraction(a_tables.pipelines[pipeline].rasterFlags))
+					return kViewRefraction;
 				return kViewForward;
+			}
 			// The main build's bits of a scene entry alone (kMainSideBits): the shadow views' are the shadow build's (U4c).
 			return (ViewMaskOf(a_tables, a_object, true) & kMainSideBits & ~kViewMain) | ((flags & kObjectMember) ? kViewMain : 0u);
 		}
@@ -4111,6 +4237,132 @@ namespace DCLF
 		void ReflectionPipelinesOf(const PipelineCatalog* a_catalog, const SceneStore::Tables& a_tables, const ForwardTargets& a_targets, bool a_on, bool a_trees,
 			std::vector<rhi::PipelineHandle>& a_slots, rhi::PipelineHandle& a_tree);
 
+		/*
+		 * T7e: the first-person view (FirstPerson.cpp; drawcall-limit-fix.md, "First person as a view bit (T7e)"). Two epochs a frame the
+		 * engine draws first person, both recorded against one shape: the depth epoch at RenderDepth's first-person draw (after the
+		 * world's depth and DCLF's HZB, before kPOST_ZPREPASS_COPY) culls the frame's scene list through BuildDraws' bucket path with the
+		 * first-person camera (frustum only; viewBits kViewFirstPerson) and draws the buckets' Z-prepass depth pipelines into the main
+		 * depth; the colour epoch at Main::RenderFirstPersonView's accumulator render draws the same sequences with each bucket's
+		 * first-person forward pipeline into kMAIN and the motion vectors, tested against kPOST_ZPREPASS_COPY, as the engine's
+		 * first-person pass draws. Both with the viewport depth range [0, f1stPersonFarDepthRange] and the first-person camera's
+		 * VS_PerFrame (b12), the world's frame constants otherwise.
+		 */
+		constexpr std::uint32_t kFirstPersonBlockBytes = 1024;  // the first-person camera's VS_PerFrame (as kReflectionFaceBlockBytes)
+
+		/** @brief The first-person latch block's region per frame slot: its BuildDrawsLatch, the slots' map, the bucket table, its block. */
+		struct FirstPersonLatchLayout
+		{
+			std::uint32_t slots = 0;    // pipeline slots the map holds a word for
+			std::uint32_t buckets = 0;  // buckets the table holds (first, capacity)
+			static constexpr std::uint32_t MapOffset() { return static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
+			std::uint32_t TableOffset() const { return MapOffset() + slots * 4; }
+			std::uint32_t BlockOffset() const { return (TableOffset() + buckets * 8 + 255u) & ~255u; }
+			std::uint32_t Bytes() const { return BlockOffset() + kFirstPersonBlockBytes; }
+			bool operator==(const FirstPersonLatchLayout&) const = default;
+		};
+
+		/** @brief What the first-person epochs' passes record against; per-frame values are in its latch. */
+		struct FirstPersonFrame
+		{
+			std::uint64_t generation = 0;
+			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
+			IndirectState indirect{};  // zLayout and zDrawSignature (the version holds them)
+			std::shared_ptr<const org::LatchBlock> latch, zeros;
+			std::uint32_t width = 0, height = 0;  // the render area: the main colour pass's viewport
+			float depthRange = 0.1f;              // the viewport's maximum depth (f1stPersonFarDepthRange, or its control-driven value)
+			std::uint64_t materialRows = 0, pipelineRows = 0;  // the main rows' tables (BuildDraws' RowsOf)
+			std::uint32_t sequenceDraws = 0;
+			// A bucket: the pipeline slots of one pair of pipelines (the Z-prepass group's depth pipeline, the first-person forward one),
+			// its range of the sequences.
+			struct Bucket
+			{
+				rhi::PipelineHandle depth{}, colour{};
+				std::uint32_t first = 0, capacity = 0;
+				bool operator==(const Bucket& o) const
+				{
+					return SameHandle(depth, o.depth) && SameHandle(colour, o.colour) && first == o.first && capacity == o.capacity;
+				}
+			};
+			std::vector<Bucket> buckets;
+			// The frame push data: the colour segment's frame constants with VS and PS b12 the first-person camera's block.
+			std::array<std::uint32_t, kFramePushWords> push{};
+			// The latched copies' source: the block at blockOffset of the latch's slot region.
+			std::uint32_t blockOffset = 0;
+			// Not compared (implied by the latch block and the buckets).
+			FirstPersonLatchLayout latchLayout;
+			std::shared_ptr<const std::vector<std::uint32_t>> map;
+
+			bool SameShape(const FirstPersonFrame& o) const
+			{
+				return latch == o.latch && zeros == o.zeros && blockOffset == o.blockOffset && SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) &&
+				       SameIndirect(indirect, o.indirect) && width == o.width && height == o.height && depthRange == o.depthRange && materialRows == o.materialRows &&
+				       pipelineRows == o.pipelineRows && sequenceDraws == o.sequenceDraws && buckets == o.buckets && push == o.push;
+			}
+		};
+
+		/** @brief What the first-person buffers hold (Growths::Change, adopted with the revision that names it): the sequences, the bucket counts. */
+		struct FirstPersonSizing
+		{
+			std::uint32_t sequenceDraws = 0;
+			std::uint32_t bucketCountWords = 0;
+			bool operator==(const FirstPersonSizing&) const = default;
+		};
+
+		struct FirstPersonResources : FirstPersonSizing
+		{
+			// The main pass's (its depth, its targets, rows, frame constants) and, through it, the scene's.
+			std::shared_ptr<Resources> main;
+			Versioned sequences;
+			std::shared_ptr<org::Buffer> count;
+			Versioned bucketCounts;
+			std::shared_ptr<org::Buffer> block;  // kFirstPersonBlockBytes: the first-person camera's VS_PerFrame
+			std::uint64_t blockAddress = 0;
+			// The colour epoch's depth: the engine's kPOST_ZPREPASS_COPY (FUN_1414cb6d0 binds it as the first-person pass's depth).
+			std::shared_ptr<org::ExternalTextureResource> depthCopy;
+			ID3D11Texture2D* depthCopyTexture = nullptr;
+			// The passes are to be declared again (new main resources): at the first-person epochs' own reserve.
+			bool rebuildPending = false;
+			std::shared_ptr<const ComputeProgram> buildDraws;
+			rhi::CommandSignaturePtr dispatchSignature;
+		};
+
+		std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeFirstPersonExtension(std::shared_ptr<FirstPersonResources> a_resources);
+
+		/** @brief The first-person buckets: per pair of pipelines, the slots that draw with it (their Z-prepass capacity); each slot's bucket. */
+		struct FirstPersonPlan
+		{
+			std::vector<std::uint32_t> map;
+			std::vector<FirstPersonFrame::Bucket> buckets;
+			std::uint32_t draws = 0;
+		};
+		void PlanFirstPersonBuckets(const MainSizing& a_main, const IndirectState& a_indirect, std::span<const rhi::PipelineHandle> a_slotPipelines, FirstPersonPlan& a_out);
+
+		/** @brief What the first-person shape is made from (MakeFirstPersonShape). */
+		struct FirstPersonShapeInputs
+		{
+			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
+			IndirectState indirect{};
+			std::vector<FirstPersonFrame::Bucket> buckets;
+			std::shared_ptr<const std::vector<std::uint32_t>> map;
+			std::uint64_t materialRows = 0, pipelineRows = 0;
+			const FirstPersonSizing* sizing = nullptr;
+			std::shared_ptr<const org::LatchBlock> latch, zeros;
+			FirstPersonLatchLayout latchLayout;
+			std::uint64_t frameConstantsAddress = 0;
+			std::uint32_t width = 0, height = 0;
+			float depthRange = 0.1f;
+		};
+		std::shared_ptr<FirstPersonFrame> MakeFirstPersonShape(const FirstPersonResources& a_resources, const FirstPersonShapeInputs& a_in);
+
+		/**
+		 * @brief The first-person forward key of a_tables' pipeline slot a_slot: its vertex descriptor, its pixel descriptor without
+		 * Deferred, back faces culled unless two-sided, the first-person targets (kForwardFirstPerson). False for a slot that has none.
+		 */
+		bool FirstPersonForwardKey(const SceneStore::Tables& a_tables, std::size_t a_slot, ForwardPipelineKey& a_key);
+		/** @brief Per pipeline slot, its first-person forward pipeline as a_catalog has it for a_targets (none while a_on is false). */
+		void FirstPersonPipelinesOf(const PipelineCatalog* a_catalog, const SceneStore::Tables& a_tables, const ForwardTargets& a_targets, bool a_on,
+			std::vector<rhi::PipelineHandle>& a_slots);
+
 		/**
 		 * @brief The shadow view slots' buffers the frame made (AddShadowViewSlots), as it last posted them (RevisionInputs::shadowSlots):
 		 * what the revision code grows and counts the slots by, never the frame's lists.
@@ -4173,6 +4425,10 @@ namespace DCLF
 			// (the cube's import, ImportReflectionCube).
 			ForwardTargets reflectionTargets;
 			std::uint32_t reflectionWidth = 0, reflectionHeight = 0;
+			// T7e: the first-person resources, its targets (what its pipelines are resolved for) and its depth range (FirstPerson.cpp).
+			std::shared_ptr<FirstPersonResources> firstPerson;
+			ForwardTargets firstPersonTargets;
+			float firstPersonDepthRange = 0.1f;
 			// What the scene tables' reserve sizes by besides the tables (ReserveSceneTables): the portal programs' words a frame's
 			// encoding takes (PortalViews::Encoded), and tree LOD's mirror's shape and mesh slots. The shadow material rows the last
 			// shadow build wanted (ReserveShadowRows).
@@ -4206,6 +4462,9 @@ namespace DCLF
 			// The reflection's: the latch, its layout and the zeros.
 			std::shared_ptr<org::LatchBlock> reflection, reflectionZeros;
 			ReflectionLatchLayout reflectionLayout;
+			// T7e: the first-person epochs': the latch, its layout and the zeros.
+			std::shared_ptr<org::LatchBlock> firstPerson, firstPersonZeros;
+			FirstPersonLatchLayout firstPersonLayout;
 		};
 
 		/**
@@ -4222,6 +4481,8 @@ namespace DCLF
 			std::array<std::array<std::uint32_t, 2>, 2> shadowFrames{ { { ~0u, ~0u }, { ~0u, ~0u } } };
 			std::array<std::shared_ptr<const ReflectionFrame>, 2> reflection;
 			std::array<std::uint32_t, 2> reflectionFrames{ ~0u, ~0u };
+			std::array<std::shared_ptr<const FirstPersonFrame>, 2> firstPerson;  // T7e
+			std::array<std::uint32_t, 2> firstPersonFrames{ ~0u, ~0u };
 			std::shared_ptr<const ShadowBounds> bounds;
 		};
 
@@ -4917,6 +5178,69 @@ namespace DCLF
 			// of a frame runs before BeforeShadowMaps).
 			std::uint32_t executedFrame = ~0u, lateFaces = 0;
 		} reflection;
+		// T7e: the first-person view (FirstPerson.cpp). Strict epochs: the frame's first-person epochs draw its members (DecideCoverage:
+		// the revision's recordings, the resources, the latch), decided at BeginSceneFrame, before the engine culls the first-person root.
+		bool firstPersonCovered = false;
+		struct FirstPersonState
+		{
+			// The colour epoch's targets: kMAIN's format, the motion vectors' (colour2) and kPOST_ZPREPASS_COPY's (the render thread's),
+			// and the same published for the scene lane (FirstPersonDrawable, FirstPersonSlotReady: its set commit).
+			ForwardTargets targets;
+			std::atomic<std::uint64_t> laneColours{ 0 }, laneDepth{ 0 };
+			void PublishTargets()
+			{
+				const std::uint64_t colours = std::uint64_t(static_cast<std::uint32_t>(targets.colour)) | (std::uint64_t(static_cast<std::uint32_t>(targets.colour2)) << 32);
+				if (laneColours.load(std::memory_order_relaxed) != colours)
+					laneColours.store(colours, std::memory_order_release);
+				if (laneDepth.load(std::memory_order_relaxed) != static_cast<std::uint64_t>(targets.depth))
+					laneDepth.store(static_cast<std::uint64_t>(targets.depth), std::memory_order_release);
+			}
+			ForwardTargets LaneTargets() const
+			{
+				const std::uint64_t colours = laneColours.load(std::memory_order_acquire);
+				ForwardTargets out;
+				out.colour = static_cast<DXGI_FORMAT>(colours & 0xFFFFFFFFu);
+				out.colour2 = static_cast<DXGI_FORMAT>(colours >> 32);
+				out.depth = static_cast<DXGI_FORMAT>(laneDepth.load(std::memory_order_acquire));
+				return out;
+			}
+			// Per pipeline slot, its first-person forward pipeline as the frame's catalog has it (PrepareFirstPerson).
+			std::vector<rhi::PipelineHandle> slotPipelines;
+			std::uint32_t slots = 0, pipelinesReady = 0;
+			// The slots the skeleton's geometry draws with (BeginFirstPersonFrame's walk), and the frame they were found.
+			std::vector<std::uint8_t> slotsWanted;
+			std::uint32_t slotsFrame = 0;
+			std::shared_ptr<FirstPersonResources> resources;
+			bool setupFailed = false;
+			// The frame's view: Main::Draw's cVar23 recomputed at the frame's start (BeginFirstPersonFrame), the frame it is of; the
+			// depth range the engine sets (RenderDepth's second argument: the control-driven range).
+			bool latch = false;
+			std::uint32_t latchFrame = ~0u;
+			float depthRange = 0.1f;
+			// The first-person camera as the engine set it up for the frame (FUN_1414cb020), in world space (CaptureFirstPersonCamera, at
+			// the depth epoch): its VS_PerFrame block, its view-projection (eye-relative) and eye; last frame's unjittered view-projection
+			// and eye (the motion vectors' previous camera).
+			bool cameraCaptured = false;
+			std::array<std::byte, kFirstPersonBlockBytes> perFrame{};
+			std::array<float, 16> viewProj{};
+			RE::NiPoint3 eye;
+			std::array<float, 16> previousViewProjUnjittered{};
+			RE::NiPoint3 previousEye;
+			bool havePrevious = false;
+			// The frame whose depth epoch built the sequences the colour epoch draws.
+			std::uint32_t depthFrame = ~0u;
+			// Since the last report: frames reached, frames latched, epochs submitted, and the epochs not submitted by cause.
+			std::uint64_t frames = 0, latched = 0, depthEpochs = 0, colourEpochs = 0;
+			std::array<std::uint64_t, 7> skipped{};  // not drawn (latch, claims), not covered, no camera, stale inputs, no resources, failed, no depth epoch
+		} firstPerson;
+		/** @brief The first-person graph resources, created once its targets are known (render thread). */
+		bool SetupFirstPerson();
+		/** @brief The first-person resources grown for a_slots pipeline slots, a_buckets buckets and a_draws sequences (the revision code). */
+		void ReserveFirstPerson(FirstPersonResources& a_view, std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws);
+		/** @brief The engine's kPOST_ZPREPASS_COPY imported (again when it changes), and the extension added. */
+		bool ImportFirstPersonDepth();
+		// The revision code's: each pipeline slot's first-person forward pipeline as its request's catalog has it (MakeRevision).
+		std::vector<rhi::PipelineHandle> firstPersonRevisionPipelines;
 		/** @brief The reflection's graph resources, created once its targets are known (render thread). */
 		bool SetupReflection();
 		/** @brief The reflection phase's readiness of an object (PhaseReady): its pipeline slot's forward pipeline is built. */
@@ -4984,6 +5308,10 @@ namespace DCLF
 		{
 			std::uint64_t reached = 0, epochs = 0, noColour = 0, noRecording = 0, failed = 0;
 			std::uint32_t submittedFrame = ~0u;
+			// T7d's refraction (ExecuteForward): epochs whose recording drew the refraction normals (the normals marked begun for the engine),
+			// and epochs with refraction members whose draw could not (no pipeline yet, no refraction normals, a format the pipeline is not of).
+			std::uint64_t refractionDrawn = 0, refractionNotReady = 0;
+			std::uint32_t refractionFrame = ~0u;  // the frame whose forward epoch drew the refraction normals
 		} forwardEpoch;
 		// CS_DCLF_BINDLESS_PARITY's payloads, built at the epoch (the parity's builds read the eye the Z-prepass captures).
 		std::array<MainPayload, 2> fallbackPayloads;
@@ -5118,6 +5446,10 @@ namespace DCLF
 			// TakeForwardRegistered), against its forward inputs in view (<- FORWARD).
 			std::uint32_t forwardEngine = 0;
 			bool forwardObserved = false;
+			// T7d's refraction (CS_DCLF_SET_PARITY): the engine's refraction passes (hint 4) of members registered for the copied frame
+			// (PassCapture::TakeRefractionRegistered), against its refraction inputs in view (<- REFRACTION).
+			std::uint32_t refractionEngine = 0;
+			bool refractionObserved = false;
 		};
 		std::optional<CullReadback> cullReadback;
 		std::uint32_t cullEpochs = 0;
@@ -5283,16 +5615,19 @@ namespace DCLF
 		struct SceneRevisions
 		{
 			// kDepthShape, kColourShape, shadow, occlusion, reflection, and T7d's forward (kForwardEpoch: the colour shape's passes of the
-			// forward segment, recorded from the same shape while CS_DCLF_FORWARD is on)
-			static constexpr std::uint32_t kEpochs = 6;
+			// forward segment, recorded from the same shape while CS_DCLF_FORWARD is on); T7e's first-person depth and colour epochs (one
+			// first-person shape for both, while CS_DCLF_FIRST_PERSON is on)
+			static constexpr std::uint32_t kEpochs = 8;
 			// The growths slot (T6b3b b2a): the changes the revision names (Growths::NamedChanges), adopted by the frame with its selection.
 			static constexpr std::uint32_t kVersionsSlot = 0, kShapeSlot = 1, kRecordingSlot = kShapeSlot + kEpochs, kGrowthsSlot = kRecordingSlot + kEpochs,
 										   kSlots = kGrowthsSlot + 1;
 			static constexpr std::array<RenderGraphRuntime::Segment, kEpochs> kSegments = { RenderGraphRuntime::Segment::ZPrepass, RenderGraphRuntime::Segment::MainOpaque,
 				RenderGraphRuntime::Segment::ShadowView, RenderGraphRuntime::Segment::SkyOcclusion, RenderGraphRuntime::Segment::Reflection,
-				RenderGraphRuntime::Segment::Forward };
-			static constexpr std::array<const char*, kEpochs> kNames = { "Z-prepass", "colour", "shadow", "occlusion", "reflection", "forward" };
+				RenderGraphRuntime::Segment::Forward, RenderGraphRuntime::Segment::FirstPersonDepth, RenderGraphRuntime::Segment::FirstPerson };
+			static constexpr std::array<const char*, kEpochs> kNames = { "Z-prepass", "colour", "shadow", "occlusion", "reflection", "forward", "first-person depth",
+				"first-person colour" };
 			static constexpr std::uint32_t kForwardEpoch = 5;
+			static constexpr std::uint32_t kFirstPersonDepthEpoch = 6, kFirstPersonEpoch = 7;
 			// The snapshot builder's (Begin, Seal, Collect and, as the exchange's only consumer, TrySelect and AcquireActive: T6b3b). A
 			// revision's completion (its last recording, on ORG's host thread) wakes the builder.
 			org::async::RevisionAssembler assembler{ kSlots, [] { WakeSnapshotBuilder(); } };
@@ -5405,10 +5740,11 @@ namespace DCLF
 			kKeyShadow,
 			kKeyBound,
 			kKeyReflection,
+			kKeyFirstPerson,
 			kKeyGroups
 		};
 		static constexpr std::array<const char*, kKeyGroups> kKeyGroupNames = { "growths", "pipelines", "lookups", "main latch and captures", "shadow latch and layouts",
-			"casting bound outgrown", "reflection" };
+			"casting bound outgrown", "reflection", "first person" };
 		using ShapesKey = std::array<std::uint64_t, kKeyGroups>;
 		ShapesKey RevisionShapesKey(const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect, const Lookups& a_lookups, std::size_t a_pipelines,
 			std::span<const rhi::PipelineHandle> a_slotPipelines, rhi::PipelineHandle a_treePipeline, const TreeLodPipelines* a_treeLod) const;

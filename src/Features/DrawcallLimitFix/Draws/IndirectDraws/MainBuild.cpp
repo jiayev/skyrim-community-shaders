@@ -124,7 +124,11 @@ namespace DCLF::Draws
 				return static_cast<std::uint8_t>((segmentIn[kAsyncColour] ? 1u << kAsyncColour : 0u) | (segmentIn[kAsyncZPrepass] ? 1u << kAsyncZPrepass : 0u));
 			}
 			// In the frame's set (SceneStore::CommitSet): the only objects either segment draws.
-			bool InSet(std::uint32_t o) const { return o < tables.objects.size() && (tables.objects[o].flags & kObjectMember); }
+			// T7e: a first-person member is in the set too (kSetFirstPerson, no kObjectMember): drawable, its input the first-person view's alone.
+			bool InSet(std::uint32_t o) const
+			{
+				return o < tables.objects.size() && ((tables.objects[o].flags & kObjectMember) || (o < tables.setPhases.size() && (tables.setPhases[o] & kSetFirstPerson)));
+			}
 
 			// The (material, pipeline) pair's rows, checked once per build: RowsOf(pipeline, material), or kNoRecord after
 			// Skipped() recorded why (per draw).
@@ -302,16 +306,22 @@ namespace DCLF::Draws
 			}
 			PackConstantGroup(a_block, a_layout, a_table, a_variables, a_first, std::span(row.bytes.data() + a_offset, a_room));
 		};
-		pack(technique.vs, LightingVSLayout(), blocks.vsTable, kVSGroups[kPerTechnique], kVSFirstVariable[kPerTechnique], kPipelineRowTechniqueVS, kPipelineRowTechniqueBytes);
-		pack(technique.ps, LightingPSLayout(), blocks.psTable, kPSGroups[kPerTechnique], kPSFirstVariable[kPerTechnique], kPipelineRowTechniquePS, kPipelineRowTechniqueBytes);
-		// The PerGeometry template: everything the objects do not override (they read theirs from the object record).
-		GeometryTemplate geometry;
-		PackGeometryTemplate(tables.pipelineConstants[p].constants, blocks.vsTable, blocks.psTable, true, geometry);
-		if (geometry.vs.size() > kPipelineRowGeometryVSBytes || geometry.ps.size() > kPipelineRowGeometryPSBytes)
-			ok = false;
-		else {
-			std::memcpy(row.bytes.data() + kPipelineRowGeometryVS, geometry.vs.data(), geometry.vs.size());
-			std::memcpy(row.bytes.data() + kPipelineRowGeometryPS, geometry.ps.data(), geometry.ps.size());
+		// T7d's Effect port: an effect key's technique and PerGeometry blocks stay zero. What the ported variants read of them is the frame's
+		// (the fog, VS b13; the camera's planes, PS b13 c17: Effect.hlsl, DCLF_BINDLESS) or the object's (World, PropertyColor, the alpha test
+		// reference); the Lighting technique row and PerGeometry evaluation it holds for the slot's sake are not the Effect shader's.
+		const bool effect = RasterEffect(tables.pipelines[p].rasterFlags);
+		if (!effect) {
+			pack(technique.vs, LightingVSLayout(), blocks.vsTable, kVSGroups[kPerTechnique], kVSFirstVariable[kPerTechnique], kPipelineRowTechniqueVS, kPipelineRowTechniqueBytes);
+			pack(technique.ps, LightingPSLayout(), blocks.psTable, kPSGroups[kPerTechnique], kPSFirstVariable[kPerTechnique], kPipelineRowTechniquePS, kPipelineRowTechniqueBytes);
+			// The PerGeometry template: everything the objects do not override (they read theirs from the object record).
+			GeometryTemplate geometry;
+			PackGeometryTemplate(tables.pipelineConstants[p].constants, blocks.vsTable, blocks.psTable, true, geometry);
+			if (geometry.vs.size() > kPipelineRowGeometryVSBytes || geometry.ps.size() > kPipelineRowGeometryPSBytes)
+				ok = false;
+			else {
+				std::memcpy(row.bytes.data() + kPipelineRowGeometryVS, geometry.vs.data(), geometry.vs.size());
+				std::memcpy(row.bytes.data() + kPipelineRowGeometryPS, geometry.ps.data(), geometry.ps.size());
+			}
 		}
 		// The permutation: SuppressExternalEmittance is the only per-object bit DCLF puts in this block, and it is read at
 		// exactly one place in the whole shader tree - Effect.hlsl's GetLightingColor - never by Lighting.hlsl or anything it
@@ -502,7 +512,13 @@ namespace DCLF::Draws
 		// colour segment's first (its skip is the report's).
 		if (colourBuilt && !reads(kAsyncColour))
 			return;
-		if (segmentIn[kAsyncZPrepass] && !reads(kAsyncZPrepass)) {
+		// A forward key's object (T7d: blended Lighting, refraction, the Effect port's members) is no depth segment input (kViewForward,
+		// kViewRefraction alone): its depth variant is never drawn, so what it would read is nobody's to give. An effect key's depth variant
+		// is its colour stages (BuildEffect), which read the frame's textures the Z-prepass's frame record does not have. T7d part 5: so is an
+		// effect decal's, which only the colour segment's decal depth pass draws (a decal is no depth segment input either), with the colour
+		// segment's frame record, which the colour variant's check above gave what those stages read.
+		const auto rasterFlags = tables.pipelines[p].rasterFlags;
+		if (segmentIn[kAsyncZPrepass] && !RasterForward(rasterFlags) && !RasterEffect(rasterFlags) && !reads(kAsyncZPrepass)) {
 			// Drawable in colour alone: before the one list, its colour draw would have tested EQUAL against depth nobody wrote.
 			static std::atomic<std::uint32_t> logged{ 0 };
 			if (colourBuilt && logged.fetch_add(1, std::memory_order_relaxed) < 8)
@@ -523,7 +539,8 @@ namespace DCLF::Draws
 		// modes a material leaves unwritten) and the constant tables it is packed with.
 		auto& state = rows.materials[m];
 		const Lookups::Material* lookup = m < lookups.materials.size() ? &lookups.materials[m] : nullptr;
-		const bool projected = (tables.pipelines[p].passDescriptor & 0x8000u) != 0;
+		// The Lighting pass descriptor's ProjectedUV (an effect key's bit 15 is Membrane's, not ported).
+		const bool projected = (tables.pipelines[p].passDescriptor & 0x8000u) != 0 && !RasterEffect(tables.pipelines[p].rasterFlags);
 		const std::array<std::uint32_t, 8> key{ m < tables.materialVersion.size() ? tables.materialVersion[m] : 0u,
 			m < tables.materialFrameVersion.size() ? tables.materialFrameVersion[m] : 0u, lookup ? lookup->version : ~0u, lookups.sharedVersion,
 			tables.TechniqueOf(p).bindingVersion, projected ? 1u : 0u, static_cast<std::uint32_t>(blocks.tables), static_cast<std::uint32_t>(blocks.tables >> 32) };
@@ -537,15 +554,22 @@ namespace DCLF::Draws
 		const auto& technique = tables.TechniqueOf(p).value;
 		MaterialRow row;
 		state = {};
-		// The PerMaterial blocks, packed through the technique's tables.
-		const auto vsSize = ConstantGroupSize(LightingVSLayout(), blocks.vsTable, kVSGroups[kPerMaterial], kVSFirstVariable[kPerMaterial]);
-		const auto psSize = ConstantGroupSize(LightingPSLayout(), blocks.psTable, kPSGroups[kPerMaterial], kPSFirstVariable[kPerMaterial]);
-		state.blocksOk = vsSize <= kMaterialRowVSBytes && psSize <= kMaterialRowPSBytes;
+		// The PerMaterial blocks, packed through the technique's tables: in the record's shader's variable space (T7d's Effect port: an
+		// effect record is BSEffectShader's, and its key's tables are Effect.hlsl's: ConstantTableOf). A record of the other shader than its
+		// key's is no row.
+		const bool effect = RasterEffect(tables.pipelines[p].rasterFlags);
+		const auto& vsLayout = MaterialVSLayout(material.kind);
+		const auto& psLayout = MaterialPSLayout(material.kind);
+		const std::uint64_t vsGroup = effect ? kEffectVSGroups[kPerMaterial] : kVSGroups[kPerMaterial];
+		const std::uint64_t psGroup = effect ? kEffectPSGroups[kPerMaterial] : kPSGroups[kPerMaterial];
+		const std::uint32_t vsFirst = effect ? kEffectVSFirstVariable[kPerMaterial] : kVSFirstVariable[kPerMaterial];
+		const std::uint32_t psFirst = effect ? kEffectPSFirstVariable[kPerMaterial] : kPSFirstVariable[kPerMaterial];
+		const auto vsSize = ConstantGroupSize(vsLayout, blocks.vsTable, vsGroup, vsFirst);
+		const auto psSize = ConstantGroupSize(psLayout, blocks.psTable, psGroup, psFirst);
+		state.blocksOk = vsSize <= kMaterialRowVSBytes && psSize <= kMaterialRowPSBytes && effect == (material.kind == kMaterialKindEffect);
 		if (state.blocksOk) {
-			PackConstantGroup(material.vs, LightingVSLayout(), blocks.vsTable, kVSGroups[kPerMaterial], kVSFirstVariable[kPerMaterial],
-				std::span(row.bytes.data() + kMaterialRowVS, kMaterialRowVSBytes));
-			PackConstantGroup(material.ps, LightingPSLayout(), blocks.psTable, kPSGroups[kPerMaterial], kPSFirstVariable[kPerMaterial],
-				std::span(row.bytes.data() + kMaterialRowPS, kMaterialRowPSBytes));
+			PackConstantGroup(material.vs, vsLayout, blocks.vsTable, vsGroup, vsFirst, std::span(row.bytes.data() + kMaterialRowVS, kMaterialRowVSBytes));
+			PackConstantGroup(material.ps, psLayout, blocks.psTable, psGroup, psFirst, std::span(row.bytes.data() + kMaterialRowPS, kMaterialRowPSBytes));
 		}
 		auto& header = HeaderOf(row);
 		header.vsMaterial = kMaterialRowVS;

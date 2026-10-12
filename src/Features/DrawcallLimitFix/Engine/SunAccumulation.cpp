@@ -309,24 +309,28 @@ namespace DCLF
 
 	void SunAccumulation::GpuCascades(std::vector<GpuCascade>& a_out) const
 	{
-		// The cascades the sun's Accumulate culled with this frame, whether or not the entry exclusion ran: the colour pass's sun
-		// test needs them every frame (without them every pass with the sun's bits would miss, and draw unshadowed). None when the
-		// sun did not accumulate this frame, when the engine gives no pass the sun's bits either.
+		// This frame's cascades, whether or not the entry exclusion ran: the colour pass's sun test needs them every frame (without them
+		// every pass with the sun's bits would miss, and draw unshadowed). T7f prep: DCLF's own views (SunViews, from the cameras
+		// UpdateCamera set up for the sun this frame), no longer the frame and count the engine's Accumulate hook recorded - the sun's
+		// cull and registration may stop and the test stands. None when UpdateCamera did not run for the sun this frame (the sun does
+		// not draw: an interior), when the engine gives no pass the sun's bits either. Each cascade's planes are those Accumulate's hook
+		// copies from the same views (the bits' cascades), in descriptor order.
 		a_out.clear();
-		if (frameState.cascadesFrame != SceneStore::Get().GetFrame())
+		const auto& views = SunViews::Get().Current();
+		const std::uint32_t frame = SceneStore::Get().GetFrame();
+		if (!views.valid || views.sceneFrame != frame)
 			return;
-		const auto& state = frameState;
-		for (std::uint32_t c = 0; c < state.cascadeCount && c < state.cascades.size(); ++c) {
-			const auto& cascade = state.cascades[c];
-			if (!cascade.captured)
+		for (std::uint32_t d = 0; d < views.count && d < views.cascades.size(); ++d) {
+			const auto* cascade = SunViews::Get().CascadeOf(d, frame);
+			if (!cascade)
 				continue;
 			auto& out = a_out.emplace_back();
 			for (std::uint32_t p = 0; p < 6; ++p) {
-				std::memcpy(out.planes[p], cascade.planes[p].data(), sizeof(float) * 4);
-				std::memcpy(out.planes[6 + p], cascade.customPlanes[p].data(), sizeof(float) * 4);
+				std::memcpy(out.planes[p], cascade->cull.plane[p].data(), sizeof(float) * 4);
+				std::memcpy(out.planes[6 + p], cascade->caster.plane[p].data(), sizeof(float) * 4);
 			}
-			out.masks[0] = cascade.planeMask;
-			out.masks[1] = cascade.customMask;
+			out.masks[0] = cascade->cull.mask;
+			out.masks[1] = cascade->caster.mask;
 		}
 	}
 

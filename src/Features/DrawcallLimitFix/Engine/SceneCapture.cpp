@@ -3,6 +3,8 @@
 #include "Features/DrawcallLimitFix/Diagnostics/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Common/Toggles.h"
+#include "Features/DrawcallLimitFix/Scene/EffectConstants.h"
 #include "Features/DrawcallLimitFix/Scene/MaterialPort.h"
 #include "Features/DrawcallLimitFix/Scene/FadeState.h"
 #include "Features/SubsurfaceScattering.h"
@@ -143,7 +145,7 @@ namespace DCLF::SceneCapture
 		std::uint32_t d = 0;
 		d |= type != a_o.type ? kType : 0u;
 		d |= (rendererData != a_o.rendererData || vertexBuffer != a_o.vertexBuffer || indexBuffer != a_o.indexBuffer || vertexDesc != a_o.vertexDesc ||
-				 vertexCount != a_o.vertexCount || triangleCount != a_o.triangleCount) ?
+				 vertexCount != a_o.vertexCount || triangleCount != a_o.triangleCount || particles != a_o.particles) ?
 		         kRenderer :
 		         0u;
 		d |= (skin != a_o.skin || skinRtti != a_o.skinRtti || skinPartition != a_o.skinPartition || skinData != a_o.skinData || boneCount != a_o.boneCount ||
@@ -254,6 +256,7 @@ namespace DCLF::SceneCapture
 			vertexDesc = a_o.vertexDesc;
 			vertexCount = a_o.vertexCount;
 			triangleCount = a_o.triangleCount;
+			particles = a_o.particles;
 		}
 		if (a_f & kSkin) {
 			skin = a_o.skin;
@@ -288,6 +291,7 @@ namespace DCLF::SceneCapture
 		if (a_f & kRtti) {
 			rtti = a_o.rtti;
 			lighting = a_o.lighting;
+			effect = a_o.effect;
 		}
 		if (a_f & kFlags)
 			flags = a_o.flags;
@@ -476,6 +480,23 @@ namespace DCLF::SceneCapture
 			r.vertexCount = shape.vertexCount;
 			r.triangleCount = shape.triangleCount;
 		}
+		// T7e: a particle geometry (NiParticles; its draw, FUN_1414f2ad0 types 1 and 2, builds its vertices from the particle data each
+		// draw): its own vertex description and what DCLF's particle path decides by. The particles are ParticleSnapshots', at their writer.
+		if (r.type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles) || r.type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kStripParticles)) {
+			static const REL::Relocation<const RE::NiRTTI*> systemRtti{ RE::NiParticleSystem::Ni_RTTI };
+			r.vertexDesc = std::bit_cast<std::uint64_t>(data.vertexDesc);
+			auto& p = r.particles;
+			p.system = geometry.GetRTTI() == systemRtti.get();
+			if (p.system)
+				p.worldSpace = static_cast<const RE::NiParticleSystem&>(a_geometry).GetParticleSystemRuntimeData().isWorldspace;
+			if (const auto* particleData = static_cast<const RE::NiParticles&>(a_geometry).GetParticlesRuntimeData().particleData.get()) {
+				const auto& d = static_cast<const RE::NiParticlesData*>(particleData)->GetParticlesRuntimeData();
+				p.data = true;
+				p.aligned = d.unk88 || d.unk89;
+				p.capacity = d.maxNumVertices;
+				p.subtextures = d.subtextureOffsets ? d.subTextureOffsetsCount : 0u;
+			}
+		}
 		if (const auto* skin = data.skinInstance.get()) {
 			r.skin = skin;
 			r.skinRtti = const_cast<RE::NiSkinInstance*>(skin)->GetRTTI();
@@ -543,6 +564,7 @@ namespace DCLF::SceneCapture
 		r.material = a_property.material;
 		r.fadeNode = a_property.fadeNode;
 		r.controllers = property.GetControllers() != nullptr;
+		static const REL::Relocation<const RE::NiRTTI*> effectRtti{ RE::BSEffectShaderProperty::Ni_RTTI };
 		if (const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(&a_property)) {
 			r.lighting = true;
 			r.shadowPasses = lighting->shadowMapOrMaskPasses.head != nullptr;
@@ -567,6 +589,17 @@ namespace DCLF::SceneCapture
 					const auto& blend = static_cast<const RE::BSLightingShaderMaterialLandscape*>(material)->landBlendParams;
 					r.landBlend = { blend.red, blend.green, blend.blue, blend.alpha };
 				}
+			}
+		} else if (r.rtti == effectRtti.get()) {
+			// T7d's Effect port: what the effect's descriptor (FUN_1414bde90) and PropertyColor read of the property and its material,
+			// taken here where the property holds the material. GetRenderPasses tests a texture path by its string's pointer
+			// (FUN_140cec900 against null), not by the texture.
+			r.effect = true;
+			r.emissive = static_cast<const RE::BSEffectShaderProperty&>(a_property).emittanceColor;
+			if (const auto* material = a_property.material) {
+				const auto* bytes = reinterpret_cast<const std::byte*>(material);
+				const auto pathAt = [&](std::size_t a_offset) { return *reinterpret_cast<const char* const*>(bytes + a_offset) != nullptr; };
+				r.feature = (pathAt(0x70) ? kEffectHasSourcePath : 0u) | (pathAt(0x78) ? kEffectHasGreyscalePath : 0u);
 			}
 		}
 		return r;
@@ -603,10 +636,10 @@ namespace DCLF::SceneCapture
 						a_pins->emplace_back(const_cast<RE::NiAVObject*>(at));
 						break;
 					}
-		// T6b2a: a Lighting property's material, for the scene work's records (the property holds it here): an attach's or a swap's
+		// T6b2a: a Lighting (or, T7d, an effect) property's material, for the scene work's records (the property holds it here): an attach's or a swap's
 		// (a_pins). A material shared by several leaves is pushed by each; the scene work keeps the newest.
 		auto pushMaterial = [&](const PropertyRecord& a_property) {
-			if (a_pins && a_property.lighting && a_property.material)
+			if (a_pins && (a_property.lighting || (a_property.effect && ActiveToggles().effects)) && a_property.material)
 				MaterialPort::PushCapture(static_cast<const RE::BSShaderMaterial*>(a_property.material));
 		};
 		if (g.property) {

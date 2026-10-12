@@ -436,7 +436,7 @@ namespace DCLF
 		for (auto& face : reflection.faces)
 			face.captured = false;
 		auto skip = [&](std::uint32_t a_cause) { ++reflection.skipped[a_cause]; };
-		const auto set = PassCapture::Get().CurrentSet();
+		const auto set = SceneStore::Get().FrameClaims();
 		if (!set || !(set->drawn & kSetReflection))
 			return skip(0);
 		if (std::none_of(faces.begin(), faces.end(), [](const auto& a_face) { return a_face.captured; }))

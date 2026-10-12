@@ -2,6 +2,7 @@
 
 #include "EngineAccess.h"
 #include "PrimaryCull.h"
+#include "TreeAnimation.h"
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Draws/FrameValues.h"
@@ -80,6 +81,7 @@ namespace DCLF::TreeList
 			std::uint8_t result = kResultNone;
 			bool visited = false;
 			bool kept = false;     // on the near list after the loop
+			bool written = false;  // a stood-in tree whose result the loop read was DCLF's (TreeAnimation::BeforeListLoop)
 			float distance = 0.0f;  // +0x158 after the loop (written only when visited)
 		};
 		struct EngineLeaf
@@ -122,7 +124,8 @@ namespace DCLF::TreeList
 
 	namespace
 	{
-		bool installed = false;
+		bool installed = false;  // the loop's call detoured (TreeAnimation's stood-in trees, and the observer)
+		bool sampling = false;   // CS_DCLF_TREE_PARITY: the observer's samples
 
 		// The render thread's: the samples no decode has reached yet, in frame order.
 		std::deque<SamplePtr> samples;
@@ -142,6 +145,8 @@ namespace DCLF::TreeList
 			std::atomic<std::uint64_t> treeListed{ 0 }, treeCompared{ 0 }, treeSame{ 0 }, treeDiffer{ 0 };
 			std::atomic<std::uint64_t> causeStale{ 0 }, causeNoMultiBound{ 0 }, causeBound{ 0 }, causeCamera{ 0 }, causeDistance{ 0 }, causeOrder{ 0 };
 			std::atomic<std::uint64_t> treeStoodIn{ 0 }, treeStoodInDiffer{ 0 }, treeStoodInStale{ 0 }, treeStoodInIn{ 0 }, treeStoodInOut{ 0 };
+			std::atomic<std::uint64_t> treeStoodInWritten{ 0 }, treeStoodInWrittenDiffer{ 0 };  // T7b5's fix: the loop given DCLF's verdict
+			std::atomic<std::uint64_t> treeAllWritten{ 0 }, treeAllWrittenDiffer{ 0 };  // T7f preparation, CS_DCLF_TREE_LIST_ALL: engine-culled trees likewise
 			std::atomic<std::uint64_t> treeNotDclf{ 0 }, treeNoVerdict{ 0 }, treeNoPosition{ 0 }, treeMoved{ 0 }, treeDclfAlone{ 0 };
 			std::array<std::atomic<std::uint64_t>, 5> engineClass{}, dclfClass{};
 			// The animation list (BSLeafAnimNode).
@@ -259,6 +264,7 @@ namespace DCLF::TreeList
 							if (const auto* shape = At<const std::byte*>(bound, kMultiBoundShape))
 								tree.result = static_cast<std::uint8_t>(std::min<std::int32_t>(At<std::int32_t>(shape, kShapeResult), kResultNone));
 					tree.visited = tree.result != kResultNone && (tree.result == kResultIn || sample->allVisited);
+					tree.written = TreeAnimation::WroteResult(node);
 					tree.kept = kept.contains(node);
 					tree.distance = At<float>(node, kDistance);
 					sample->trees.push_back(tree);
@@ -327,11 +333,16 @@ namespace DCLF::TreeList
 				static void thunk(std::byte* a_manager, std::byte* a_process)
 				{
 					const std::uint32_t nearBefore = a_manager ? List<const void*>(a_manager, kNearList).size() : 0u;
+					// T7b5's fix: the stood-in trees' multibound results DCLF's for the loop, the engine's put back after it (and the sample).
+					TreeAnimation::BeforeListLoop(a_manager);
 					func(a_manager, a_process);
-					if (!a_manager || !a_process)
+					if (!sampling || !a_manager || !a_process) {
+						TreeAnimation::AfterListLoop();
 						return;
+					}
 					const std::int64_t start = Now();
 					TakeSample(a_manager, a_process, nearBefore);
+					TreeAnimation::AfterListLoop();
 					// The observer's time given back to the update's budget (FUN_1404381e0 stops at it): the engine animates as without it.
 					const std::int64_t spent = Now() - start;
 					Global<std::int64_t>(kBudgetStart) += spent;
@@ -347,16 +358,19 @@ namespace DCLF::TreeList
 
 	void Install()
 	{
-		if (installed || !SwitchEnabled(Switch::TreeParity))
+		if (installed)
 			return;
 		const auto base = REL::Module::get().base();
 		if (!CallsTo(base + kListLoopCall, base + kListLoop)) {
-			logger::warn("[DCLF] tree manager (T7b5) not installed: the instruction at {:#x} is not a call of FUN_140437e50", 0x140000000 + kListLoopCall);
+			logger::warn("[DCLF] tree manager (T7b5) not installed: the instruction at {:#x} is not a call of FUN_140437e50; stood-in trees keep the stale multibound result", 0x140000000 + kListLoopCall);
 			return;
 		}
+		// Always (T7b5's fix: TreeAnimation gives the loop the stood-in trees' verdicts); the observer only with its switch.
 		stl::write_thunk_call<Hooks::ListLoop>(base + kListLoopCall);
 		installed = true;
-		logger::info("[DCLF] tree manager (T7b5, CS_DCLF_TREE_PARITY): the tree manager's list loop compared with DCLF's port, frame by frame");
+		sampling = SwitchEnabled(Switch::TreeParity);
+		logger::info("[DCLF] tree manager: the list loop's call detoured (stood-in trees' multibound results from DCLF's verdicts){}",
+			sampling ? "; CS_DCLF_TREE_PARITY: compared with DCLF's port, frame by frame (T7b5)" : "");
 	}
 
 	bool Installed() { return installed; }
@@ -460,9 +474,30 @@ namespace DCLF::TreeList
 				const Class engine = EngineClass(tree, a_sample);
 				const auto port = static_cast<std::size_t>(portIndex[i]);
 				const Class dclf = dclfClass[port];
+				if (tree.written && !a_sample.dclf[i].stoodIn) {
+					// T7f preparation, CS_DCLF_TREE_LIST_ALL: the loop read DCLF's verdict on a tree the engine culls too - aside, as a
+					// stood-in one given DCLF's verdict (the rule's window differs from the port's frame by design).
+					Add(s.treeAllWritten);
+					if (engine != dclf) {
+						Add(s.treeAllWrittenDiffer);
+						KeepFirst(tree.node, a_sample.frame, "written (CS_DCLF_TREE_LIST_ALL)");
+					}
+					continue;
+				}
 				if (a_sample.dclf[i].stoodIn) {
-					// The engine's answer is from a stale cache (the cut stands in for the root: no cull reaches its multibound).
+					// The cut stands in for the root: no cull reaches its multibound. Since T7b5's fix the loop reads DCLF's verdict there
+					// (TreeAnimation: the root's kAccumulated as T7b2 wrote it, the conservative two-frame rule) - compared with the port
+					// on the decoder's verdict of the frame, aside (the rule's window and a new listing's "visible" differ by design). One
+					// the loop read unwritten (DCLF off, no multibound) keeps the stale cache's classes.
 					Add(s.treeStoodIn);
+					if (tree.written) {
+						Add(s.treeStoodInWritten);
+						if (engine != dclf) {
+							Add(s.treeStoodInWrittenDiffer);
+							KeepFirst(tree.node, a_sample.frame, "stood in, written");
+						}
+						continue;
+					}
 					Add(tree.result == kResultStale ? s.treeStoodInStale : tree.result == kResultIn ? s.treeStoodInIn : s.treeStoodInOut);
 					if (engine != dclf)
 						Add(s.treeStoodInDiffer);
@@ -570,7 +605,7 @@ namespace DCLF::TreeList
 
 	std::string Report()
 	{
-		if (!installed)
+		if (!sampling)
 			return {};
 		auto& s = stats;
 		const auto samplesTaken = Take(s.samples), sampleNs = Take(s.sampleNs), frames = Take(s.frames), incomplete = Take(s.incomplete), unmatched = Take(s.unmatched);
@@ -579,7 +614,8 @@ namespace DCLF::TreeList
 		const auto stale = Take(s.causeStale), noMultiBound = Take(s.causeNoMultiBound), bound = Take(s.causeBound), camera = Take(s.causeCamera), distance = Take(s.causeDistance),
 				   order = Take(s.causeOrder);
 		const auto stoodIn = Take(s.treeStoodIn), stoodInDiffer = Take(s.treeStoodInDiffer), stoodInStale = Take(s.treeStoodInStale), stoodInIn = Take(s.treeStoodInIn),
-				   stoodInOut = Take(s.treeStoodInOut);
+				   stoodInOut = Take(s.treeStoodInOut), stoodInWritten = Take(s.treeStoodInWritten), stoodInWrittenDiffer = Take(s.treeStoodInWrittenDiffer);
+		const auto allWritten = Take(s.treeAllWritten), allWrittenDiffer = Take(s.treeAllWrittenDiffer);
 		const auto notDclf = Take(s.treeNotDclf), noVerdict = Take(s.treeNoVerdict), noPosition = Take(s.treeNoPosition), treeMoved = Take(s.treeMoved), dclfAlone = Take(s.treeDclfAlone);
 		std::string classes;
 		for (std::size_t c = 0; c < kClassNames.size(); ++c)
@@ -596,12 +632,13 @@ namespace DCLF::TreeList
 			"[DCLF] tree manager (T7b5): {} samples ({:.1f} us each), {} frames compared ({} left out: a batch past its list; {} samples no batch reached; {} with the near list "
 			"not empty before the loop, {} with cull mode 3, {} without DCLF's camera, {:.1f} root slots a frame unseeded); tree list (BSTreeNode) {:.1f} a frame: {} compared, "
 			"{} same, {} differ (visited: {} multibound stale, {} no multibound, {} bound; class: {} camera, {} distance, {} order), classes engine/DCLF: {}; stood in {} "
-			"(multibound {} stale / {} in / {} out; {} differ), aside {} not DCLF's trees, {} no verdict, {} no position, {} moved, {} DCLF's alone; animation list "
+			"({} given DCLF's verdict, {} of them differ; unwritten: multibound {} stale / {} in / {} out, {} differ), aside {} given DCLF's verdict under "
+			"CS_DCLF_TREE_LIST_ALL ({} differ), {} not DCLF's trees, {} no verdict, {} no position, {} moved, {} DCLF's alone; animation list "
 			"(BSLeafAnimNode) {:.1f} a frame: clock {} both / {} DCLF's alone / {} the engine's alone / {} neither ({} not BSLeafAnimNode's plan in DCLF), aside {} no base "
 			"form, {} not DCLF's roots, {} no verdict, {} stood in still on the list, {} moved; DCLF's leaf roots off the list {} (stood in), {} not on it{}{}\n",
 			samplesTaken, samplesTaken ? double(sampleNs) / double(samplesTaken) / 1000.0 : 0.0, frames, incomplete, unmatched, nearBefore, allVisited, noCamera,
 			double(unseeded) * perFrame, double(treeListed) * perFrame, treeCompared, treeSame, treeDiffer, stale, noMultiBound, bound, camera, distance, order, classes, stoodIn,
-			stoodInStale, stoodInIn, stoodInOut, stoodInDiffer, notDclf, noVerdict, noPosition, treeMoved, dclfAlone, double(leafListed) * perFrame, both, dclfOnly, engineOnly,
+			stoodInWritten, stoodInWrittenDiffer, stoodInStale, stoodInIn, stoodInOut, stoodInDiffer, allWritten, allWrittenDiffer, notDclf, noVerdict, noPosition, treeMoved, dclfAlone, double(leafListed) * perFrame, both, dclfOnly, engineOnly,
 			neither, plan, noModel, leafNotDclf, leafNoVerdict, leafStoodIn, leafMoved, offList, leafAlone,
 			!compared ? " <- NOT COMPARED" : differ ? " <- TREE MANAGER" : " <- OK", firstNames.empty() ? "" : "; first: " + firstNames);
 		firstNames.clear();

@@ -29,6 +29,7 @@ namespace DCLF
 	void IndirectDraws::ExecuteColour() {}
 	void IndirectDraws::ExecuteForward() {}
 	std::string IndirectDraws::ForwardReport() { return {}; }
+	bool IndirectDraws::RefractionDrawnThisFrame() const { return false; }
 	void IndirectDraws::ProbeTargets(const char*) {}
 	void IndirectDraws::RunEpoch(bool) {}
 	void IndirectDraws::BeginShadowFrame() {}
@@ -50,6 +51,7 @@ namespace DCLF
 	void IndirectDraws::WriteFadeStores(bool, const std::function<bool(const void*)>&, std::vector<const void*>*) {}
 	void IndirectDraws::KickVisibilityReadback() {}
 	void IndirectDraws::WriteAccumulated(bool, const std::function<bool(const void*)>&) {}
+	bool IndirectDraws::AccumulatedVerdict(const void*) const { return true; }
 	void IndirectDraws::NoteCameraCut(std::uint32_t) {}
 	void IndirectDraws::RequestAccumulatedRefresh() {}
 	std::string IndirectDraws::VisibilityReport() { return {}; }
@@ -62,6 +64,13 @@ namespace DCLF
 	bool IndirectDraws::ReflectionSlotReady(const void*, const PipelineCatalog*, std::uint32_t) const { return false; }
 	void IndirectDraws::ExecuteReflection() {}
 	std::string IndirectDraws::ReflectionReport() { return {}; }
+	void IndirectDraws::BeginFirstPersonFrame() {}
+	void IndirectDraws::ExecuteFirstPersonDepth(bool) {}
+	void IndirectDraws::ExecuteFirstPersonColour() {}
+	bool IndirectDraws::FirstPersonDrawable() const { return false; }
+	bool IndirectDraws::FirstPersonSlotReady(const void*, const PipelineCatalog*, std::uint32_t) const { return false; }
+	bool IndirectDraws::FirstPersonCovered() const { return false; }
+	std::string IndirectDraws::FirstPersonReport() { return {}; }
 	void IndirectDraws::NoteRevisionInputs() {}
 	void IndirectDraws::BuildPoint() {}
 	bool IndirectDraws::DecideCoverage() { return true; }

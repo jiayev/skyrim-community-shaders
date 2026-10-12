@@ -1,6 +1,7 @@
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Diagnostics/HiddenWatch.h"
 #include "Features/DrawcallLimitFix/Common/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Engine/ParticleSnapshots.h"
 
 #include <atomic>
 #include <cassert>
@@ -617,6 +618,10 @@ namespace DCLF
 			if (rows && rows <= 240)
 				a_out.boneRows = rows;
 		}
+		// T7e: a particle member's quads (ParticleSnapshots): its block of the frame's palettes, five rows a particle of its capacity's
+		// bucket, which FrameValues' producer fills from the system's newest snapshot every frame.
+		if (a_out.reason == Ineligible::None && ParticleSystemTaken(leaf))
+			a_out.particleRows = ParticleSnapshots::RowsOf(leaf.geometry->particles.capacity);
 		// Whether the engine would draw this object into a shadow map, and with which Utility technique (WriteObject's reasons).
 		using PropertyFlag = RE::BSShaderProperty::EShaderPropertyFlag;
 		const auto* shadowProperty = leaf.property;
@@ -791,6 +796,12 @@ namespace DCLF
 				stats.boneRows += r.boneRows;
 			}
 			timer.Add(BuildPart::Skinning);
+		}
+		// T7e: a particle member's quads take a block of the frame's palettes as a skin's palette does (kObjectSkinned: the record's
+		// boneOffset names it, the placement plan lists it), filled by FrameValues' producer from the system's snapshot, not the engine's skin.
+		if (r.particleRows) {
+			objectBoneRows = r.particleRows;
+			object.flags |= kObjectSkinned;
 		}
 		// The object's slot: past the last `continue`, so a slot is only ever taken by a record that is written.
 		const std::uint32_t slotBefore = trackedEntry->slot;
@@ -997,6 +1008,24 @@ namespace DCLF
 	std::uint32_t SceneStore::ResolveGeometrySlot(const SceneCapture::GeometryRecord& a_geometry, const SceneCapture::GeometryRecord::Partition* a_partition,
 		PartTimer& a_timer)
 	{
+		// T7e: a particle system draws the renderer's own quads (FUN_1414f2ad0, type 1: the quad index list and the texture-coordinate stream
+		// FUN_140e4d280 made, one quad a particle), its vertices pulled from its block of the frame's palettes (ParticleSnapshots): one slot
+		// per capacity bucket, keyed by an address of DCLF's.
+		if (!a_partition && a_geometry.type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles) && a_geometry.particles.system) {
+			const auto quads = ParticleSnapshots::QuadsOf(a_geometry.particles.capacity);
+			const auto engineQuads = ParticleSnapshots::Get().EngineQuads();
+			if (!engineQuads.vertices || !engineQuads.indices)
+				return Tables::kSlotFree;
+			GeometrySource source;
+			source.key = static_cast<const RE::BSGraphics::TriShape*>(ParticleSnapshots::QuadSlotKey(quads));
+			source.vertexBuffer = engineQuads.vertices;
+			source.indexBuffer = engineQuads.indices;
+			source.vertexDesc = ParticleSnapshots::kSlotVertexDesc;
+			source.vertexCount = quads * 4;
+			source.indexCount = quads * 6;
+			source.layer = true;  // its key is no TriShape (Tables::geometryLayerKey: never read as one)
+			return ResolveGeometrySource(source, a_timer);
+		}
 		// The TriShape's (the partition's buffData for a skin partition), from the record.
 		const void* key = a_partition ? a_partition->rendererData : a_geometry.rendererData;
 		if (!key)
@@ -1411,8 +1440,12 @@ namespace DCLF
 		}
 		// External emittance: the shared colour the property reads (a light's, a region's or the sky's), which the weather
 		// rewrites in place (emittanceEvents). Its re-point is a property event (SetExternalEmittance).
+		// T7d's Effect port: an effect property's emittanceColor (its PropertyColor), pointed by the same function whatever its flags.
 		const auto* lighting = SceneCapture::LeafView::Lighting(leaf.property);
-		const void* emittance = lighting && (lighting->flags & static_cast<std::uint64_t>(RE::BSShaderProperty::EShaderPropertyFlag::kExternalEmittance)) ? lighting->emissive : nullptr;
+		const auto* effect = SceneCapture::LeafView::Effect(leaf.property);
+		const void* emittance = lighting && (lighting->flags & static_cast<std::uint64_t>(RE::BSShaderProperty::EShaderPropertyFlag::kExternalEmittance)) ? lighting->emissive :
+		                        effect                                                                                                          ? effect->emissive :
+		                                                                                                                                          nullptr;
 		if (emittance != a_tracked.listedEmittance) {
 			if (a_tracked.listedEmittance)
 				Unlist(propertyDependents, a_tracked.listedEmittance, a_geometry);
@@ -1601,6 +1634,10 @@ namespace DCLF
 		// The mirror's records (T6b1b).
 		const auto leaf = mirror.Leaf(&a_geometry);
 		traits |= leaf.Skinned() ? kTraitSkin : 0u;
+		// T7e: a particle system's bound and quads change with each update of it, which moves nothing the walk sees: its record is FrameValues'
+		// every frame (the producer expands its newest snapshot and takes the snapshot's placement), as a mover's.
+		if (ActiveToggles().particles && leaf.geometry && leaf.geometry->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles))
+			traits |= kTraitMoves;
 		if (leaf.property && leaf.property->controllers)
 			traits |= kTraitAnimatedShading;
 		if (leaf.alpha && leaf.alpha->controllers)
@@ -1697,7 +1734,10 @@ namespace DCLF
 		// The verdict's inputs are the hidden bits on its chain, which have events (hiddenDependents), a switch's
 		// selection, taken every frame here, and the toggles and fades, which classify it again. Without an event it
 		// stands; a parity frame takes it again anyway and counts a change no event announced.
-		const bool announced = a_tracked.hiddenEventFrame == PassStamp() || a_tracked.parentReason == Ineligible::Switch || !hiddenGating || a_tracked.hiddenChain.empty();
+		// T7e: a first-person entry's chain bits are the frame's capture (FrameGlobals: the whole skeleton, every frame), so its verdict is
+		// taken again every frame.
+		const bool announced = a_tracked.hiddenEventOwed || a_tracked.parentReason == Ineligible::Switch || !hiddenGating || a_tracked.hiddenChain.empty() ||
+		                       FirstPersonEntry(a_tracked.categoryNode);
 		if (!announced && !hiddenWitness) {
 			++a_counters.verdictsSkipped;
 			return true;
@@ -1870,6 +1910,8 @@ namespace DCLF
 				++stats->evaluateKindCount[static_cast<std::size_t>(kind)];
 			}
 		} kindSample{ a_profileKinds ? &stats : nullptr, r.kind, a_profileKinds ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{} };
+		// Evaluated after the pass's hidden events drained (every path takes the frame verdict again): what they owed it is paid.
+		entry.hiddenEventOwed = false;
 		// CS_DCLF_HIDDEN_WATCH: the nodes ActorRecordKept found changed with no event, for the store that flips them next.
 		if (r.armHiddenWatch)
 			HiddenWatch::Arm(r.hiddenWatch);

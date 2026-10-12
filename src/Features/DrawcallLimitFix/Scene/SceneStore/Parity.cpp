@@ -123,8 +123,9 @@ namespace DCLF
 		}
 		if (auto& mp = materialPortParity; mp.checked || mp.uncovered) {
 			text += fmt::format("[DCLF] material port (T6b2a: the port against the engine's evaluation): {} records, {} differ (VS {}, PS {}, textures {}, address {}, "
-								"filter {}, written {}, feature {}), {} uncovered; IBLParams moved within the frame {} (unread){}{}\n",
-				mp.checked, mp.differ, mp.kinds[0], mp.kinds[1], mp.kinds[2], mp.kinds[3], mp.kinds[4], mp.kinds[5], mp.kinds[6], mp.uncovered, mp.iblDrift,
+								"filter {}, written {}, feature {}), {} uncovered; IBLParams moved within the frame {} (unread); {} written by a controller during "
+								"the check (taken again, then agreeing){}{}\n",
+				mp.checked, mp.differ, mp.kinds[0], mp.kinds[1], mp.kinds[2], mp.kinds[3], mp.kinds[4], mp.kinds[5], mp.kinds[6], mp.uncovered, mp.iblDrift, mp.moved,
 				mp.differ || mp.uncovered ? " <- MATERIAL PORT; first: " : " <- OK", mp.first);
 			mp = {};
 		}

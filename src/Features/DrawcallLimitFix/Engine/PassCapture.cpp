@@ -11,6 +11,8 @@
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Engine/ParticleSnapshots.h"
+#include "Features/DrawcallLimitFix/Scene/EffectConstants.h"
 #include "Features/DrawcallLimitFix/Scene/TreeLod.h"
 
 #include <span>
@@ -139,20 +141,31 @@ namespace DCLF
 		// (FUN_1414cbff0) take them (skyrim-engine-notes.md, "The primary's cull: the scene lists").
 		static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> depthAccumulator{ REL::Offset(0x338c828) };
 		static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> mainAccumulator{ REL::Offset(0x338c830) };
+		// T7e: the first-person accumulator (Main::unk_FPCulling culls the first-person root alone into it; FUN_1414cb6d0 renders it). Its
+		// registrations are the first-person skeleton's alone, so a member's there is a first-person member's (WithholdMain).
+		static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> firstPersonAccumulatorAt{ REL::Offset(0x338c840) };
 		const std::array<const void*, 2> accumulators{ *depthAccumulator, *mainAccumulator };
-		if (accumulators == mainAccumulators && std::atomic_load(&mainRenderers))
+		const void* firstPerson = *firstPersonAccumulatorAt;
+		if (accumulators == mainAccumulators && firstPerson == firstPersonAccumulator && std::atomic_load(&mainRenderers))
 			return;
 		mainAccumulators = accumulators;
+		firstPersonAccumulator = firstPerson;
 		auto renderers = std::make_shared<RendererSet>();
-		for (auto* accumulator : { *depthAccumulator, *mainAccumulator }) {
-			auto* batch = accumulator ? accumulator->GetRuntimeData().batchRenderer : nullptr;
+		auto firstPersonSet = std::make_shared<RendererSet>();
+		auto add = [](RendererSet& a_set, RE::BSGraphics::BSShaderAccumulator* a_accumulator) {
+			auto* batch = a_accumulator ? a_accumulator->GetRuntimeData().batchRenderer : nullptr;
 			if (!batch)
-				continue;
-			renderers->insert(batch);
+				return;
+			a_set.insert(batch);
 			for (auto* group : batch->geometryGroups)
 				if (group && group->batchRenderer)
-					renderers->insert(group->batchRenderer);
-		}
+					a_set.insert(group->batchRenderer);
+		};
+		for (auto* accumulator : { *depthAccumulator, *mainAccumulator })
+			add(*renderers, accumulator);
+		add(*firstPersonSet, *firstPersonAccumulatorAt);
+		renderers->insert(firstPersonSet->begin(), firstPersonSet->end());
+		std::atomic_store(&firstPersonRenderers, std::shared_ptr<const RendererSet>(std::move(firstPersonSet)));
 		logger::info("[DCLF] the main camera's views: {} batch renderers (Z-prepass accumulator {}, main {})", renderers->size(), accumulators[0], accumulators[1]);
 		std::atomic_store(&mainRenderers, std::shared_ptr<const RendererSet>(std::move(renderers)));
 	}
@@ -169,7 +182,22 @@ namespace DCLF
 			return true;
 		}
 		const auto set = std::atomic_load(&frameSet);
-		if (!set || !(set->PhasesOf(a_pass->geometry) & kSetMain))
+		const std::uint8_t phases = set ? set->PhasesOf(a_pass->geometry) : std::uint8_t{ 0 };
+		const bool firstPersonView = IsFirstPersonRenderer(a_batch);
+		if (firstPersonView)
+			firstPersonRegistered.fetch_add(1, std::memory_order_relaxed);
+		// T7e: a first-person member (kSetFirstPerson alone: no world view registers it, its root hidden there): its passes into the
+		// first-person accumulator and into the Z-prepass's (RenderDepth's first-person block) are the first-person epochs' while they
+		// draw this frame (SetFirstPersonCovered); every fade of the skeleton is the engine's root's (alpha 1).
+		if (phases & kSetFirstPerson) {
+			if (firstPersonCovered.load(std::memory_order_acquire) && (set->drawn & kSetFirstPerson)) {
+				firstPersonWithheld.fetch_add(1, std::memory_order_relaxed);
+				return true;
+			}
+			firstPersonMemberKept.fetch_add(1, std::memory_order_relaxed);
+			return false;
+		}
+		if (!(phases & kSetMain))
 			return false;
 		// A LOD cross-fade's copy (hint 10): DCLF draws it (T1c: the copy partitions BuildDraws adds while the root crosses), unless
 		// cross-fades are the engine's (CS_DCLF_LOD_CROSSFADE=0) or fades are (CS_DCLF_FADING=0).
@@ -466,7 +494,16 @@ namespace DCLF
 		{
 			++passesOnThisThread;
 			auto& capture = PassCapture::Get();
-			if (!capture.bypassed.load(std::memory_order_acquire) && (capture.WithholdMain(a_batch, a_pass) || capture.WithholdReflection(a_batch, a_pass)))
+			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdMain(a_batch, a_pass)) {
+				// T7d's refraction: a member's refraction pass (hint 4, group 5), for the <- REFRACTION observer (CS_DCLF_SET_PARITY alone).
+				if constexpr (Group == 5) {
+					static const bool observe = SwitchEnabled(Switch::SetParity);
+					if (observe && a_pass && a_pass->accumulationHint == 4)
+						capture.refractionRegistered.fetch_add(1, std::memory_order_relaxed);
+				}
+				return;
+			}
+			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdReflection(a_batch, a_pass))
 				return;
 			if (RegistrationCensus::Enabled() && !capture.bypassed.load(std::memory_order_acquire))
 				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::MainGroup), FadingAtRegistration(a_pass));
@@ -485,8 +522,21 @@ namespace DCLF
 			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdMain(a_batch, a_pass)) {
 				// T7d: a forward member's blended pass, for the <- FORWARD observer (CS_DCLF_SET_PARITY alone).
 				static const bool observe = SwitchEnabled(Switch::SetParity);
-				if (observe && a_pass && a_pass->accumulationHint == 1)
+				if (observe && a_pass && a_pass->accumulationHint == 1) {
 					capture.forwardRegistered.fetch_add(1, std::memory_order_relaxed);
+					// T7e: a particle member's pass, against the snapshots DCLF drew it from (<- PARTICLES).
+					if (a_pass->geometry && a_pass->geometry->GetType().get() == RE::BSGeometry::Type::kParticles)
+						ParticleSnapshots::Get().NoteEngineRegistered(a_pass->geometry);
+					// T7d's Effect port, the Lighting variant (<- EFFECT LIGHT): the pass's light 0 against the sun light the port reads.
+					if (a_pass->shader && a_pass->shader->shaderType.get() == RE::BSShader::Type::Effect &&
+						((a_pass->passEnum - kEffectPassEnumBase) & EffectFlag::Lighting)) {
+						capture.effectLightChecked.fetch_add(1, std::memory_order_relaxed);
+						auto* sceneNode = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
+						const RE::BSLight* sun = sceneNode ? sceneNode->GetRuntimeData().sunLight : nullptr;
+						if (!a_pass->numLights || !a_pass->sceneLights || a_pass->sceneLights[0] != sun)
+							capture.effectLightOther.fetch_add(1, std::memory_order_relaxed);
+					}
+				}
 				return;
 			}
 			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdReflection(a_batch, a_pass))

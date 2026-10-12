@@ -236,6 +236,14 @@ namespace DCLF
 			return a_pixel ? std::span<const std::string_view>(kLightingPSNames) : std::span<const std::string_view>(kLightingVSNames);
 		}
 
+		/** @brief A key's variable names: the Effect shader's for an effect key (T7d's Effect port: EffectConstants.h), else Lighting's. */
+		std::span<const std::string_view> VariableNames(const PipelineKey& a_key, bool a_pixel)
+		{
+			if (RasterEffect(a_key.rasterFlags))
+				return a_pixel ? std::span<const std::string_view>(kEffectPSNames) : std::span<const std::string_view>(kEffectVSNames);
+			return LightingNames(a_pixel);
+		}
+
 		/**
 		 * @brief A stage's constant table (ConstantTables) from its modules: each Lighting variable their PerTechnique, PerMaterial or
 		 * PerGeometry block has, at its offset in floats, as ShaderCache's ReflectConstantBuffers makes it of a game shader's D3D
@@ -246,7 +254,7 @@ namespace DCLF
 		std::vector<std::uint8_t> ConstantTableOf(std::initializer_list<const SpirvReflection*> a_modules, bool a_pixel, const PipelineKey& a_key)
 		{
 			static std::atomic<std::uint32_t> logged{ 0 };
-			const auto names = LightingNames(a_pixel);
+			const auto names = VariableNames(a_key, a_pixel);
 			std::vector<std::uint8_t> table(names.size(), 0);
 			std::vector<std::uint8_t> found(names.size(), 0);
 			for (const auto* module : a_modules) {
@@ -484,6 +492,7 @@ namespace DCLF
 		};
 		// The render thread's: what it has asked of the lane already (RequestTreeLod, RequestForward), so it asks each once.
 		bool treeLodAsked = false;
+		bool refractionAsked = false;  // T7d's refraction (RequestRefraction)
 		ankerl::unordered_dense::set<ForwardPipelineKey, ForwardPipelineKeyHash> forwardAsked;
 		rhi::PipelineLayoutHandle ShadowLayout() const { return shadowLayout->GetHandle(); }
 		// The shadow views' plain indirect draw (ShadowIndirectState::drawSignature): a DrawSequence's last words read as an
@@ -521,18 +530,26 @@ namespace DCLF
 			std::uint32_t generation = 0;
 			org::services::PipelineArtifact artifact;
 		};
+		struct RefractionDone
+		{
+			std::uint32_t generation = 0;              // the main set's (the main depth's format)
+			DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;  // the refraction normals' it was built for
+			org::services::PipelineArtifact artifact;
+		};
 		struct Completions
 		{
 			EventQueue<MainDone, 1024> main;
 			EventQueue<ShadowDone, 1024> shadow;
 			EventQueue<TreeLodDone, 16> treeLod;
 			EventQueue<ForwardDone, 256> forward;
+			EventQueue<RefractionDone, 16> refraction;
 			// The pipeline lane's requests (RequestLighting, RequestShadow, RequestForward, RequestTreeLod: a flag, once is enough), and
 			// its requests to the render thread: the engine state bits it needs read (CaptureEngineStates replies with the frame's inputs).
 			EventQueue<LightingRequest, 1024> requests;
 			EventQueue<ShadowRequest, 1024> shadowRequests;
 			EventQueue<ForwardPipelineKey, 256> forwardRequests;
 			std::atomic<bool> treeLodRequest{ false };
+			std::atomic<bool> refractionRequest{ false };
 			EventQueue<std::uint32_t, 64> stateRequests;
 		};
 		// Never freed: a build may complete while the process tears down.
@@ -701,6 +718,7 @@ namespace DCLF
 			std::shared_ptr<const ankerl::unordered_dense::map<std::uint32_t, EngineState>> states;
 			std::optional<bool> frontCCW;      // EngineFrontCCW, once the engine's table holds a state
 			RE::BSShader* lighting = nullptr;  // the Lighting shader the programs' defines are of (ConstantEvaluator)
+			RE::BSShader* effect = nullptr;    // T7d's Effect port: the Effect shader its programs' defines are of (ConstantEvaluator::EffectShader)
 			// The shadow views' (SetShadowInputs, ShadowRasterStateId): the Utility shader their programs build, the shadow map format
 			// their pipelines draw into, and the registered view rasterizer states (by id - 1; append-only, so a newer list holds every
 			// id an older one did).
@@ -711,6 +729,12 @@ namespace DCLF
 			// (SetForwardTargets): the targets their pipelines draw into.
 			RE::BSShader* distantTree = nullptr;
 			ForwardTargets forwardTargets;
+			ForwardTargets firstPersonTargets;  // T7e (SetFirstPersonTargets): the first-person keys'
+			// T7d's refraction (SetRefractionInputs): the Utility shader its program builds, the refraction normals' format and the
+			// engine's write mask for write mode 2.
+			RE::BSShader* refractionUtility = nullptr;
+			DXGI_FORMAT refractionFormat = DXGI_FORMAT_UNKNOWN;
+			std::uint8_t refractionWriteMask = 0xF;
 		};
 		LatestSlot<FrameInput> inputSlot;
 		FrameInput renderInput;                       // render thread: what it posts, as last posted
@@ -762,6 +786,12 @@ namespace DCLF
 				std::atomic<std::uint32_t> requested{ 0 }, ready{ 0 }, failed{ 0 }, zPipelines{ 0 }, zDepthOnly{ 0 }, setPublishes{ 0 }, setWaits{ 0 };
 			};
 			Counters counters;
+			// T7d's Effect port: the effect keys among them (Stats::effect*).
+			struct EffectCounters
+			{
+				std::atomic<std::uint32_t> requested{ 0 }, ready{ 0 }, failed{ 0 };
+			};
+			EffectCounters effectCounters;
 			/**
 			 * @brief The shadow views' set (T6b2c step 6), kept as the main set is: keyed by the view key (ShadowPipelineKey with its
 			 * mode's bits and its view state), built for the inputs' shadow map format, published in its own set versions.
@@ -811,6 +841,37 @@ namespace DCLF
 				Counters counters;
 			};
 			TreeLod treeLod;
+			/**
+			 * @brief T7d's refraction pipeline, built for the main set's depth (again with each new main set, RecreateMainSet) and the
+			 * inputs' refraction normals format and write mask (again with new ones): its completion dropped by either.
+			 */
+			struct Refraction
+			{
+				bool asked = false;          // RequestRefraction has arrived
+				bool requested = false;      // this build is queued (its completion: Completions::refraction)
+				bool failed = false;         // this build failed, or the program did
+				bool programFailed = false;  // for good
+				DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;  // the format requested or built for
+				org::services::PipelinePayload built;
+				// Earlier builds, kept for the process: a recording may still draw with them.
+				std::vector<org::services::PipelinePayload> retired;
+				struct Counters
+				{
+					std::atomic<std::uint32_t> requested{ 0 }, ready{ 0 }, failed{ 0 };
+				};
+				Counters counters;
+				/** @brief Starts it over (a new main set, format or write mask): the build kept for the process, the program's verdict kept. */
+				void Reset()
+				{
+					if (built)
+						retired.push_back(std::move(built));
+					built = {};
+					requested = false;
+					failed = programFailed;
+					format = DXGI_FORMAT_UNKNOWN;
+				}
+			};
+			Refraction refraction;
 			/**
 			 * @brief The forward views' pipelines (T6b2c step 9), keyed as asked (ForwardPipelineKey), built for the inputs' forward
 			 * targets: again with new ones (RecreateForward). Every built pipeline is kept for the process (no set: a recording binds
@@ -865,6 +926,8 @@ namespace DCLF
 		void TryRequestTreeLod();
 		/** @brief The lane: requests a forward key's program and then its pipeline, or parks it until what it lacks arrives. */
 		void TryRequestForward(const ForwardPipelineKey& a_key);
+		/** @brief The lane: requests T7d's refraction program and then its pipeline once asked for, or leaves it until what it lacks arrives. */
+		void TryRequestRefraction();
 		/** @brief The lane: the forward targets changed; every forward key is built again. */
 		void RecreateForward(const ForwardTargets& a_from, const ForwardTargets& a_to);
 		/** @brief The lane: tree LOD's and the forward pipelines' builds that completed. */
@@ -880,7 +943,8 @@ namespace DCLF
 		static std::string DescribeKey(const PipelineKey& a_key)
 		{
 			return fmt::format("VS {:08X} PS {:08X} pass {:08X} ({}), raster {:X}, vertex layout {:016X}", a_key.vertexDescriptor, a_key.pixelDescriptor,
-				a_key.passDescriptor, LightingTechniqueName((a_key.passDescriptor >> 24) & 0x3f), a_key.rasterFlags, a_key.vertexLayout);
+				a_key.passDescriptor, RasterEffect(a_key.rasterFlags) ? std::string_view("effect") : LightingTechniqueName((a_key.passDescriptor >> 24) & 0x3f),
+				a_key.rasterFlags, a_key.vertexLayout);
 		}
 
 		bool Initialize()
@@ -1136,7 +1200,55 @@ namespace DCLF
 			return built;
 		}
 
-		/** @brief A forward view's pipeline (TryRequestForward). */
+		/**
+		 * @brief T7d's refraction pipeline (TryRequestRefraction): the pulled Utility RENDER_NORMAL stages (Utility.hlsl, DCLF_REFRACTION)
+		 * under the shadow views' layout, into the refraction normals (one attachment: FUN_1414b4860 binds kREFRACTION_NORMALS alone, as
+		 * RT0), testing the main depth LESS_EQUAL without writing it (its depth mode 1), blending off with write mode 2's mask, no culling:
+		 * the pixel stage discards a one-sided object's back faces itself, so one pipeline serves both.
+		 */
+		static org::services::PipelinePayload BuildRefraction(rhi::Device a_device, rhi::PipelineLayoutHandle a_layout, const ShaderPrograms::ShadowProgram* a_program,
+			DXGI_FORMAT a_format, DXGI_FORMAT a_depthFormat, std::uint8_t a_writeMask, bool a_frontCCW)
+		{
+			SpirvReflection vertex, pixel;
+			if (!vertex.Parse(a_program->vertex) || !pixel.Parse(a_program->pixel))
+				throw std::runtime_error("not SPIR-V");
+			CheckBindings(vertex, false);
+			CheckBindings(pixel, true);
+			auto built = std::make_shared<rhi::PipelinePtr>();
+			const rhi::SubobjLayout layout{ a_layout };
+			const rhi::SubobjShader vertexShader{ rhi::ShaderStage::Vertex, { a_program->vertex.data(), static_cast<std::uint32_t>(a_program->vertex.size()) }, "main" };
+			const rhi::SubobjShader pixelShader{ rhi::ShaderStage::Pixel, { a_program->pixel.data(), static_cast<std::uint32_t>(a_program->pixel.size()) }, "main" };
+			const rhi::SubobjDSV depthFormat{ rhi::helpers::ToRHI(a_depthFormat) };
+			const rhi::SubobjPrimitiveTopology topology{ rhi::PrimitiveTopology::TriangleList };
+			const rhi::SubobjInputLayout noInput{};
+			const rhi::SubobjFlags plain{};
+			rhi::SubobjRaster raster{};
+			raster.rs.cull = rhi::CullMode::None;
+			raster.rs.frontCCW = a_frontCCW;
+			rhi::SubobjDepth depth{};
+			depth.ds.depthEnable = true;
+			depth.ds.depthWrite = false;
+			depth.ds.depthFunc = rhi::CompareOp::LessEqual;
+			rhi::SubobjBlend blend{};
+			blend.bs.numAttachments = 1;
+			blend.bs.attachments[0].enable = false;
+			blend.bs.attachments[0].writeMask = static_cast<rhi::ColorWriteEnable>(a_writeMask & 0xF);
+			rhi::SubobjRTVs targets{};
+			targets.rt.count = 1;
+			targets.rt.formats[0] = rhi::helpers::ToRHI(a_format);
+			const rhi::PipelineStreamItem items[] = {
+				rhi::Make(layout), rhi::Make(vertexShader), rhi::Make(pixelShader), rhi::Make(raster), rhi::Make(depth), rhi::Make(blend),
+				rhi::Make(targets), rhi::Make(depthFormat), rhi::Make(topology), rhi::Make(noInput), rhi::Make(plain),
+			};
+			if (const auto result = a_device.CreatePipeline(items, static_cast<std::uint32_t>(std::size(items)), *built); result != rhi::Result::Ok)
+				throw std::runtime_error(fmt::format("CreatePipeline (refraction) failed ({})", static_cast<int>(result)));
+			return built;
+		}
+
+		/**
+		 * @brief A forward view's pipeline (TryRequestForward). T7e: with a second colour target (the first-person pass's motion vectors),
+		 * both attachments written, unblended (the first-person members are opaque or alpha-tested).
+		 */
 		static org::services::PipelinePayload BuildForward(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const ShaderPrograms::ForwardProgram* a_program,
 			ForwardTargets a_targets, rhi::CullMode a_cull, bool a_frontCCW)
 		{
@@ -1158,11 +1270,14 @@ namespace DCLF
 			depth.ds.depthWrite = true;
 			depth.ds.depthFunc = rhi::CompareOp::LessEqual;
 			// No blending, every channel written (the engine's write mask there is stale state, and the cube's alpha is not read).
+			const std::uint32_t attachments = a_targets.colour2 != DXGI_FORMAT_UNKNOWN ? 2u : 1u;
 			rhi::SubobjBlend blend{};
-			blend.bs.numAttachments = 1;
+			blend.bs.numAttachments = attachments;
 			rhi::SubobjRTVs targets{};
-			targets.rt.count = 1;
+			targets.rt.count = attachments;
 			targets.rt.formats[0] = rhi::helpers::ToRHI(a_targets.colour);
+			if (attachments > 1)
+				targets.rt.formats[1] = rhi::helpers::ToRHI(a_targets.colour2);
 			const rhi::SubobjDSV depthFormat{ rhi::helpers::ToRHI(a_targets.depth) };
 			const rhi::SubobjPrimitiveTopology topology{ rhi::PrimitiveTopology::TriangleList };
 			const rhi::SubobjInputLayout noInput{};
@@ -1172,13 +1287,107 @@ namespace DCLF
 				rhi::Make(targets), rhi::Make(depthFormat), rhi::Make(topology), rhi::Make(noInput), rhi::Make(plain),
 			};
 			if (const auto result = a_device.CreatePipeline(items, static_cast<std::uint32_t>(std::size(items)), *built); result != rhi::Result::Ok)
-				throw std::runtime_error(fmt::format("CreatePipeline (forward) failed ({})", static_cast<int>(result)));
+				throw std::runtime_error(fmt::format("CreatePipeline ({}) failed ({})", attachments > 1 ? "first-person forward" : "forward", static_cast<int>(result)));
+			return built;
+		}
+
+		/**
+		 * @brief T7d's Effect port: an effect key's pipelines (Records.h, kRasterEffect; ShaderPrograms::FindEffect: its vertex and pixel stages
+		 * alone). A forward key's colour variant is Build's forward rules (the engine's blend for its modes on the first attachment, the
+		 * others masked, the property's depth test and write); its depth variant, which the set holds but nothing draws (an effect object is
+		 * no depth segment input, and its slot has no Z-prepass bucket: Resources.cpp, PlanZBuckets), the same stages without attachments.
+		 * T7d part 5: a decal key's (an effect decal, drawn by the colour segment's decal passes with the DEFERRED pixel stage) are Build's decal
+		 * rules: the engine's bias for its bias mode, LESS_EQUAL; the colour variant blends every attachment as the engine's state for its
+		 * indices says and writes no depth, its depth variant writes the opaque group's depth (the decal depth pass, before the colour pass:
+		 * the engine's depth mode 3 for hint 2) and nothing for the blended group (depth mode 1). An attachment the pixel stage has no output
+		 * for keeps its contents (its write mask 0), as DXVK builds the engine's own pipeline for it: the DEFERRED stage without Normals or
+		 * MotionVectorsNormals writes neither the motion vectors nor the normals.
+		 * No Z-prepass pipeline: its Z key is its own, never shared.
+		 */
+		static org::services::PipelinePayload BuildEffect(rhi::Device a_device, rhi::PipelineLayoutHandle a_layout, PipelineKey a_key,
+			const ShaderPrograms::Program* a_program, TargetFormats a_targets, EngineState a_state, bool a_frontCCW)
+		{
+			SpirvReflection vertex, pixel;
+			if (!vertex.Parse(a_program->vertex) || !pixel.Parse(a_program->pixel))
+				throw std::runtime_error("not SPIR-V");
+			const std::uint32_t decalGroup = RasterDecalGroup(a_key.rasterFlags);
+			if (!a_state.valid || (!RasterForward(a_key.rasterFlags) && decalGroup != 1 && decalGroup != 2))
+				throw std::runtime_error("an effect key without the forward or a decal group's state");
+			CheckBindings(vertex, false);
+			CheckBindings(pixel, true);
+			auto built = std::make_shared<Built>();
+			for (const auto variant : { kColorVariant, kDepthVariant }) {
+				AddUsage(vertex, false, built->usage[variant]);
+				AddUsage(pixel, true, built->usage[variant]);
+			}
+			built->tables = std::make_shared<const ConstantTables>(ConstantTables{ ConstantTableOf({ &vertex }, false, a_key), ConstantTableOf({ &pixel }, true, a_key) });
+			auto hash = [](const std::vector<std::byte>& a_module) { return ankerl::unordered_dense::detail::wyhash::hash(a_module.data(), a_module.size()); };
+			built->zKey.vertex = hash(a_program->vertex) ^ 0xEFFEC7EFFEC7EFFEull;  // no Lighting pipeline's
+			built->zKey.vertexBytes = static_cast<std::uint32_t>(a_program->vertex.size());
+			built->zKey.pixel = hash(a_program->pixel);
+			built->zKey.pixelBytes = static_cast<std::uint32_t>(a_program->pixel.size());
+
+			const rhi::SubobjLayout layout{ a_layout };
+			const rhi::SubobjShader vertexShader{ rhi::ShaderStage::Vertex, { a_program->vertex.data(), static_cast<std::uint32_t>(a_program->vertex.size()) }, "main" };
+			const rhi::SubobjShader pixelShader{ rhi::ShaderStage::Pixel, { a_program->pixel.data(), static_cast<std::uint32_t>(a_program->pixel.size()) }, "main" };
+			const rhi::SubobjDSV depthFormat{ rhi::helpers::ToRHI(a_targets.depth) };
+			const rhi::SubobjPrimitiveTopology topology{ rhi::PrimitiveTopology::TriangleList };
+			const rhi::SubobjInputLayout input{ BuildInputLayout(vertex, a_key.vertexLayout) };
+			const rhi::SubobjFlags flags{ rhi::PipelineFlags_IndirectBindable };
+			const bool test = (a_key.rasterFlags & kRasterForwardDepthTest) != 0, write = (a_key.rasterFlags & kRasterForwardDepthWrite) != 0;
+			for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
+				const bool depthOnly = variant == kDepthVariant;
+				rhi::SubobjRaster raster{};
+				raster.rs.cull = (a_key.rasterFlags & kRasterTwoSided) ? rhi::CullMode::None : rhi::CullMode::Back;
+				raster.rs.frontCCW = a_frontCCW;
+				rhi::SubobjDepth depth{};
+				depth.ds.depthWrite = !depthOnly && write;
+				depth.ds.depthEnable = depthOnly || test || write;
+				depth.ds.depthFunc = (depthOnly || test) ? rhi::CompareOp::LessEqual : rhi::CompareOp::Always;
+				if (decalGroup) {
+					// Build's decal rules (a decal key carries engine state): the bias on the colour variant, and on the depth variant where the
+					// decal depth pass draws it (the opaque group); LESS_EQUAL; depth written by the opaque group's depth variant alone.
+					if (!depthOnly || decalGroup == 1) {
+						raster.rs.depthBias = a_state.depthBias;
+						raster.rs.depthBiasClamp = a_state.depthBiasClamp;
+						raster.rs.slopeScaledDepthBias = a_state.slopeScaledDepthBias;
+					}
+					depth.ds.depthEnable = true;
+					depth.ds.depthWrite = depthOnly && decalGroup == 1;
+					depth.ds.depthFunc = rhi::CompareOp::LessEqual;
+				}
+				rhi::SubobjBlend blend{};
+				rhi::SubobjRTVs targets{};
+				if (!depthOnly) {
+					blend.bs = a_state.blend;
+					blend.bs.numAttachments = a_targets.colorCount;
+					for (std::uint32_t i = decalGroup ? 0u : 1u; i < a_targets.colorCount && i < 8; ++i) {
+						if (decalGroup && ((pixel.outputLocations >> i) & 1))
+							continue;
+						blend.bs.attachments[i].enable = false;
+						blend.bs.attachments[i].writeMask = static_cast<rhi::ColorWriteEnable>(0);
+					}
+					targets.rt.count = a_targets.colorCount;
+					for (std::uint32_t i = 0; i < a_targets.colorCount; ++i)
+						targets.rt.formats[i] = rhi::helpers::ToRHI(a_targets.colors[i]);
+				} else {
+					blend.bs.numAttachments = 0;
+				}
+				const rhi::PipelineStreamItem items[] = {
+					rhi::Make(layout), rhi::Make(vertexShader), rhi::Make(pixelShader), rhi::Make(raster), rhi::Make(depth), rhi::Make(blend),
+					rhi::Make(targets), rhi::Make(depthFormat), rhi::Make(topology), rhi::Make(input), rhi::Make(flags),
+				};
+				if (const auto result = a_device.CreatePipeline(items, static_cast<std::uint32_t>(std::size(items)), built->pipelines[variant]); result != rhi::Result::Ok)
+					throw std::runtime_error(fmt::format("CreatePipeline (effect {}) failed ({})", depthOnly ? "depth" : "color", static_cast<int>(result)));
+			}
 			return built;
 		}
 
 		static org::services::PipelinePayload Build(rhi::Device a_device, rhi::PipelineLayoutHandle a_layout, rhi::PipelineLayoutHandle a_zLayout, PipelineKey a_key,
 			const ShaderPrograms::Program* a_program, TargetFormats a_targets, EngineState a_state, bool a_frontCCW)
 		{
+			if (RasterEffect(a_key.rasterFlags))
+				return BuildEffect(a_device, a_layout, a_key, a_program, a_targets, a_state, a_frontCCW);
 			SpirvReflection vertex, pixel, depthPixel, pulledVertex, pulledDepthPixel;
 			if (!vertex.Parse(a_program->vertex) || !pixel.Parse(a_program->pixel) || !depthPixel.Parse(a_program->depthPixel) ||
 				!pulledVertex.Parse(a_program->pulledVertex) || !pulledDepthPixel.Parse(a_program->pulledDepthPixel))
@@ -1493,6 +1702,26 @@ namespace DCLF
 		impl->PostInput(*this);
 	}
 
+	void DrawPipelines::RequestRefraction()
+	{
+		if (impl->refractionAsked)
+			return;
+		impl->refractionAsked = true;
+		impl->completions->refractionRequest.store(true, std::memory_order_release);
+		WakePipelineLane();
+	}
+
+	void DrawPipelines::SetRefractionInputs(RE::BSShader& a_utility, DXGI_FORMAT a_format, std::uint8_t a_writeMask)
+	{
+		auto& input = impl->renderInput;
+		if ((input.refractionUtility == &a_utility && input.refractionFormat == a_format && input.refractionWriteMask == a_writeMask) || !Enabled())
+			return;
+		input.refractionUtility = &a_utility;
+		input.refractionFormat = a_format;
+		input.refractionWriteMask = a_writeMask;
+		impl->PostInput(*this);
+	}
+
 	void DrawPipelines::RequestForward(const ForwardPipelineKey& a_key)
 	{
 		if (!impl->forwardAsked.insert(a_key).second)
@@ -1507,6 +1736,15 @@ namespace DCLF
 		if (a_targets.colour == DXGI_FORMAT_UNKNOWN || a_targets.depth == DXGI_FORMAT_UNKNOWN || input.forwardTargets == a_targets || !Enabled())
 			return;
 		input.forwardTargets = a_targets;
+		impl->PostInput(*this);
+	}
+
+	void DrawPipelines::SetFirstPersonTargets(const ForwardTargets& a_targets)
+	{
+		auto& input = impl->renderInput;
+		if (a_targets.colour == DXGI_FORMAT_UNKNOWN || a_targets.depth == DXGI_FORMAT_UNKNOWN || input.firstPersonTargets == a_targets || !Enabled())
+			return;
+		input.firstPersonTargets = a_targets;
 		impl->PostInput(*this);
 	}
 
@@ -1527,6 +1765,9 @@ namespace DCLF
 		result.zDepthOnly = counters.zDepthOnly.load(std::memory_order_relaxed);
 		result.setPublishes = counters.setPublishes.load(std::memory_order_relaxed);
 		result.setWaits = counters.setWaits.load(std::memory_order_relaxed);
+		result.effectRequested = impl->lane.effectCounters.requested.load(std::memory_order_relaxed);
+		result.effectReady = impl->lane.effectCounters.ready.load(std::memory_order_relaxed);
+		result.effectFailed = impl->lane.effectCounters.failed.load(std::memory_order_relaxed);
 		const auto& shadowCounters = impl->lane.shadow.counters;
 		result.shadowRequested = shadowCounters.requested.load(std::memory_order_relaxed);
 		result.shadowReady = shadowCounters.ready.load(std::memory_order_relaxed);
@@ -1554,7 +1795,8 @@ namespace DCLF
 			return a_variable < a_table.size() ? static_cast<std::uint8_t>(a_table[a_variable]) : 0u;
 		};
 		for (const auto& entry : a_lookups.pipelines) {
-			if (entry.setIndex == Lookups::kNone)
+			// T7d's Effect port: an effect key's tables are of the Effect shader, not of the Lighting shader objects compared here.
+			if (entry.setIndex == Lookups::kNone || RasterEffect(entry.key.rasterFlags))
 				continue;
 			++parity.entries;
 			const auto* vs = cache.GetVertexShader(a_lighting, entry.key.vertexDescriptor);
@@ -1706,6 +1948,12 @@ namespace DCLF
 				RecreateShadowSet(l.input->shadowFormat, input->shadowFormat);
 			if (l.input && l.input->forwardTargets.colour != DXGI_FORMAT_UNKNOWN && !(l.input->forwardTargets == input->forwardTargets))
 				RecreateForward(l.input->forwardTargets, input->forwardTargets);
+			// T7e: new first-person targets (a resolution or format change) build every forward pipeline again too (rare).
+			else if (l.input && l.input->firstPersonTargets.colour != DXGI_FORMAT_UNKNOWN && !(l.input->firstPersonTargets == input->firstPersonTargets))
+				RecreateForward(l.input->firstPersonTargets, input->firstPersonTargets);
+			// T7d's refraction: a new refraction normals format or write mask builds its pipeline again.
+			if (l.input && (l.input->refractionFormat != input->refractionFormat || l.input->refractionWriteMask != input->refractionWriteMask))
+				l.refraction.Reset();
 			l.input = std::shared_ptr<const FrameInput>(std::move(input));
 			inputsChanged = true;
 			l.dirty = true;  // the catalog names the targets' generation, the shadow format and the forward targets
@@ -1725,6 +1973,8 @@ namespace DCLF
 		});
 		if (completions->treeLodRequest.exchange(false, std::memory_order_acq_rel))
 			l.treeLod.asked = true;
+		if (completions->refractionRequest.exchange(false, std::memory_order_acq_rel))
+			l.refraction.asked = true;
 		if (inputsChanged) {
 			for (const auto& key : std::exchange(l.blocked, {}))
 				TryRequest(key);
@@ -1733,8 +1983,10 @@ namespace DCLF
 			for (const auto& key : std::exchange(f.blocked, {}))
 				TryRequestForward(key);
 		}
-		// Tree LOD's waits on nothing a list holds: tried every pass (it returns at once when it is requested, built or failed).
+		// Tree LOD's waits on nothing a list holds: tried every pass (it returns at once when it is requested, built or failed). So does
+		// T7d's refraction pipeline.
 		TryRequestTreeLod();
+		TryRequestRefraction();
 		// The programs finished since the last pass: their keys go on to their pipelines (or fail with them). Again until none is: a
 		// program a request above found complete at once (every stage cached) is finished with no completion to wake the lane.
 		auto& finished = l.finishedPrograms;
@@ -1743,6 +1995,9 @@ namespace DCLF
 			ShaderPrograms::Get().UpdateLane(finished);
 			if (finished.Empty())
 				break;
+			// T7d's Effect port: an effect program's id is distinct from every Lighting one (EffectProgramId); its keys wait in the same map.
+			for (const std::uint64_t id : finished.effect)
+				finished.lighting.push_back(id);
 			for (const std::uint64_t id : finished.lighting) {
 				const auto waiting = l.programWaiters.find(id);
 				if (waiting == l.programWaiters.end())
@@ -1776,6 +2031,8 @@ namespace DCLF
 				retryForward(Lane::Forward::kTreeProgram);
 			if (finished.treeLod)
 				TryRequestTreeLod();
+			if (!finished.shadow.empty())
+				TryRequestRefraction();
 		}
 		AdmitLane();
 		AdmitShadow();
@@ -1792,8 +2049,9 @@ namespace DCLF
 		if (l.entries.contains(a_key))
 			return;  // requested, or failed for good
 		const auto* input = l.input.get();
-		if (!input || !input->lighting || input->targets.colorCount == 0 || input->targets.depth == DXGI_FORMAT_UNKNOWN || !input->frontCCW || !input->states ||
-			!layout || !zLayout) {
+		const bool effect = RasterEffect(a_key.rasterFlags);
+		if (!input || !input->lighting || (effect && !input->effect) || input->targets.colorCount == 0 || input->targets.depth == DXGI_FORMAT_UNKNOWN ||
+			!input->frontCCW || !input->states || !layout || !zLayout) {
 			l.blocked.push_back(a_key);
 			return;
 		}
@@ -1803,7 +2061,9 @@ namespace DCLF
 		// logged with the key, the slot that asked for it and its nearest relative, to find what the precompile misses.
 		std::uint8_t onDemand = 0;
 		bool programFailed = false;
-		const auto* program = ShaderPrograms::Get().Find(a_key, *input->lighting, &onDemand, &programFailed);
+		// T7d's Effect port: an effect key's program is Effect.hlsl's (its vertex and pixel stages alone).
+		const auto* program = effect ? ShaderPrograms::Get().FindEffect(a_key, *input->effect, &programFailed) :
+		                               ShaderPrograms::Get().Find(a_key, *input->lighting, &onDemand, &programFailed);
 		if (onDemand)
 			logger::warn("[DCLF] on-demand SPIR-V compile: Lighting {} that no precompile requested ({}), for pipeline slot {}: {}", ShaderPrograms::OnDemandStages(onDemand),
 				SIE::ShaderCache::Instance().IsCompiling() ? "Community Shaders' compile workers still busy" : "Community Shaders' compile workers idle", slot,
@@ -1813,10 +2073,12 @@ namespace DCLF
 			l.entries.try_emplace(a_key).first->second.failed = true;
 			++l.failedEntries;
 			l.dirty = true;
+			if (effect)
+				l.effectCounters.failed.fetch_add(1, std::memory_order_relaxed);
 			return;
 		}
 		if (!program) {
-			l.programWaiters[ShaderPrograms::LightingProgramId(a_key)].push_back(a_key);
+			l.programWaiters[effect ? ShaderPrograms::EffectProgramId(a_key) : ShaderPrograms::LightingProgramId(a_key)].push_back(a_key);
 			return;
 		}
 		// The set's capacity, counting the builds still queued (every requested entry that has not failed takes a slot).
@@ -1858,8 +2120,8 @@ namespace DCLF
 		}
 		const auto& inputTargets = input->targets;
 		org::services::PipelineRecipe recipe;
-		recipe.id = fmt::format("dclf.lighting.{:08X}.{:08X}.{:08X}.{:X}.{:016X}", a_key.vertexDescriptor, a_key.pixelDescriptor, a_key.passDescriptor, a_key.rasterFlags,
-			a_key.vertexLayout);
+		recipe.id = fmt::format("dclf.{}.{:08X}.{:08X}.{:08X}.{:X}.{:016X}", effect ? "effect" : "lighting", a_key.vertexDescriptor, a_key.pixelDescriptor,
+			a_key.passDescriptor, a_key.rasterFlags, a_key.vertexLayout);
 		recipe.shaderKey = PipelineKeyHash{}(a_key);
 		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&inputTargets, sizeof(inputTargets));
 		// And the blend state, whose write masks are the engine's (an opaque key's too): a build cached with other masks is another pipeline.
@@ -1874,7 +2136,9 @@ namespace DCLF
 			WakePipelineLane();
 		});
 		l.counters.requested.fetch_add(1, std::memory_order_relaxed);
-		logger::warn("[DCLF] on-demand pipeline build: Lighting pipeline slot {}: {}; {}", slot, DescribeKey(a_key), NearestKey(a_key));
+		if (effect)
+			l.effectCounters.requested.fetch_add(1, std::memory_order_relaxed);
+		logger::warn("[DCLF] on-demand pipeline build: {} pipeline slot {}: {}; {}", effect ? "Effect" : "Lighting", slot, DescribeKey(a_key), NearestKey(a_key));
 	}
 
 	void DrawPipelines::Impl::RecreateMainSet(const TargetFormats& a_from, const TargetFormats& a_to)
@@ -1898,7 +2162,8 @@ namespace DCLF
 		l.usage.clear();
 		l.constantTables.clear();
 		++l.generation;
-		for (auto* counter : { &l.counters.requested, &l.counters.ready, &l.counters.failed, &l.counters.zPipelines, &l.counters.zDepthOnly })
+		for (auto* counter : { &l.counters.requested, &l.counters.ready, &l.counters.failed, &l.counters.zPipelines, &l.counters.zDepthOnly,
+				 &l.effectCounters.requested, &l.effectCounters.ready, &l.effectCounters.failed })
 			counter->store(0, std::memory_order_relaxed);
 		l.recreatedBy = fmt::format("main pass targets {} -> {}", describe(a_from), describe(a_to));
 		// Every key asked for, requested again once the new inputs are in (DrainLane retries the parked keys).
@@ -1917,6 +2182,8 @@ namespace DCLF
 		for (auto* counter : { &t.counters.requested, &t.counters.ready, &t.counters.failed })
 			counter->store(0, std::memory_order_relaxed);
 		t.counters.failed.store(t.programFailed ? 1u : 0u, std::memory_order_relaxed);
+		// T7d's refraction pipeline tests the main depth: built again for the new targets.
+		l.refraction.Reset();
 		l.dirty = true;
 	}
 
@@ -1939,6 +2206,8 @@ namespace DCLF
 				entry.failed = true;
 				++l.failedEntries;
 				l.counters.failed.fetch_add(1, std::memory_order_relaxed);
+				if (RasterEffect(key.rasterFlags))
+					l.effectCounters.failed.fetch_add(1, std::memory_order_relaxed);
 				if (l.loggedFailures++ < kMaxLoggedFailures)
 					logger::warn("[DCLF] Indirect pipeline VS {:08X} PS {:08X} layout {:016X} failed: {}", key.vertexDescriptor, key.pixelDescriptor, key.vertexLayout, artifact.error);
 				return;
@@ -1991,6 +2260,8 @@ namespace DCLF
 				if (entry.index == kNotReady && entry.slot != kNotReady) {
 					entry.index = entry.slot;
 					l.counters.ready.fetch_add(1, std::memory_order_relaxed);
+					if (RasterEffect(key.rasterFlags))
+						l.effectCounters.ready.fetch_add(1, std::memory_order_relaxed);
 				}
 			}
 			l.dirty = true;
@@ -2201,14 +2472,59 @@ namespace DCLF
 		t.counters.requested.fetch_add(1, std::memory_order_relaxed);
 	}
 
+	void DrawPipelines::Impl::TryRequestRefraction()
+	{
+		auto& r = lane.refraction;
+		if (!r.asked || r.requested || r.built || r.failed)
+			return;
+		// What it lacks arrives with the frame's inputs (DrainLane tries again each pass) or with its program (Finished::shadow).
+		const auto* input = lane.input.get();
+		if (!input || !input->refractionUtility || input->refractionFormat == DXGI_FORMAT_UNKNOWN || input->targets.depth == DXGI_FORMAT_UNKNOWN || !input->frontCCW ||
+			!shadowLayout)
+			return;
+		bool programFailed = false;
+		const auto* program = ShaderPrograms::Get().FindShadow(kRefractionTechnique, *input->refractionUtility, true, nullptr, nullptr, &programFailed);
+		if (programFailed) {
+			r.failed = r.programFailed = true;
+			r.counters.failed.fetch_add(1, std::memory_order_relaxed);
+			lane.dirty = true;
+			logger::warn("[DCLF] the refraction program (Utility {:08X}, pulled) failed; refraction draws nothing", kRefractionTechnique);
+			return;
+		}
+		if (!program)
+			return;
+		const DXGI_FORMAT format = input->refractionFormat, depthFormat = input->targets.depth;
+		const std::uint8_t writeMask = input->refractionWriteMask;
+		const bool frontCCW = *input->frontCCW;
+		org::services::PipelineRecipe recipe;
+		recipe.id = "dclf.refraction";
+		recipe.shaderKey = ankerl::unordered_dense::detail::wyhash::hash(program->vertex.data(), program->vertex.size()) ^
+		                   ankerl::unordered_dense::detail::wyhash::hash(program->pixel.data(), program->pixel.size()) * 0x9E3779B97F4A7C15ull;
+		const std::uint64_t fixedFunction[] = { static_cast<std::uint64_t>(format), static_cast<std::uint64_t>(depthFormat), writeMask, frontCCW ? 1ull : 0ull };
+		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(fixedFunction, sizeof(fixedFunction));
+		recipe.build = [device = device, layout = ShadowLayout(), program, format, depthFormat, writeMask, frontCCW] {
+			return BuildRefraction(device, layout, program, format, depthFormat, writeMask, frontCCW);
+		};
+		r.requested = true;
+		r.format = format;
+		(void)service.Request(std::move(recipe), [completions = completions, generation = lane.generation, format](const org::services::PipelineArtifact& a_artifact) {
+			completions->refraction.Push({ generation, format, a_artifact });
+			WakePipelineLane();
+		});
+		r.counters.requested.fetch_add(1, std::memory_order_relaxed);
+	}
+
 	void DrawPipelines::Impl::TryRequestForward(const ForwardPipelineKey& a_key)
 	{
 		auto& f = lane.forward;
 		if (f.entries.contains(a_key))
 			return;  // requested, or failed for good
 		const bool tree = (a_key.flags & ForwardPipelineKey::kForwardTreeLod) != 0;
+		// T7e: a first-person key draws into the first-person targets, back faces culled (no mirror there).
+		const bool firstPerson = (a_key.flags & ForwardPipelineKey::kForwardFirstPerson) != 0;
 		const auto* input = lane.input.get();
-		if (!input || input->forwardTargets.colour == DXGI_FORMAT_UNKNOWN || input->forwardTargets.depth == DXGI_FORMAT_UNKNOWN || !input->frontCCW ||
+		const ForwardTargets* keyTargets = input ? (firstPerson ? &input->firstPersonTargets : &input->forwardTargets) : nullptr;
+		if (!input || keyTargets->colour == DXGI_FORMAT_UNKNOWN || keyTargets->depth == DXGI_FORMAT_UNKNOWN || !input->frontCCW ||
 			!(tree ? input->distantTree : input->lighting) || !zLayout) {
 			f.blocked.push_back(a_key);
 			return;
@@ -2227,8 +2543,8 @@ namespace DCLF
 			f.programWaiters[tree ? Lane::Forward::kTreeProgram : ShaderPrograms::ForwardProgramId(a_key.vertexDescriptor, a_key.pixelDescriptor)].push_back(a_key);
 			return;
 		}
-		const ForwardTargets forwardTargets = input->forwardTargets;
-		const auto cull = (a_key.flags & ForwardPipelineKey::kForwardTwoSided) ? rhi::CullMode::None : rhi::CullMode::Front;
+		const ForwardTargets forwardTargets = *keyTargets;
+		const auto cull = (a_key.flags & ForwardPipelineKey::kForwardTwoSided) ? rhi::CullMode::None : firstPerson ? rhi::CullMode::Back : rhi::CullMode::Front;
 		auto hash = [](const std::vector<std::byte>& a_module) { return ankerl::unordered_dense::detail::wyhash::hash(a_module.data(), a_module.size()); };
 		org::services::PipelineRecipe recipe;
 		recipe.id = tree ? std::string("dclf.forward.tree-lod") : fmt::format("dclf.forward.{:08X}.{:08X}.{:X}", a_key.vertexDescriptor, a_key.pixelDescriptor, a_key.flags);
@@ -2283,6 +2599,21 @@ namespace DCLF
 			t.built = a_done.artifact.payload;
 			t.counters.ready.fetch_add(1, std::memory_order_relaxed);
 			logger::info("[DCLF] tree LOD pipelines ready");
+		});
+		auto& r = lane.refraction;
+		completions->refraction.Drain([&](RefractionDone&& a_done) {
+			if (a_done.generation != lane.generation || a_done.format != r.format || !r.requested || r.built)
+				return;  // from before a target or format change (RecreateMainSet, Refraction::Reset)
+			lane.dirty = true;
+			if (!a_done.artifact) {
+				r.failed = true;
+				r.counters.failed.fetch_add(1, std::memory_order_relaxed);
+				logger::warn("[DCLF] the refraction pipeline failed: {}; refraction draws nothing", a_done.artifact.error);
+				return;
+			}
+			r.built = a_done.artifact.payload;
+			r.counters.ready.fetch_add(1, std::memory_order_relaxed);
+			logger::info("[DCLF] refraction pipeline ready (Utility {:08X}, refraction normals format {})", kRefractionTechnique, static_cast<int>(a_done.format));
 		});
 		auto& f = lane.forward;
 		completions->forward.Drain([&](ForwardDone&& a_done) {
@@ -2341,6 +2672,10 @@ namespace DCLF
 		// Tree LOD's pipelines (of the targets of targetsGeneration) and the forward views' (of forwardTargets): each kept by the lane.
 		catalog->treeLod.pipelines = l.treeLod.built;
 		catalog->treeLod.failed = l.treeLod.failed;
+		// T7d's refraction pipeline (of the targets of targetsGeneration, and of its format).
+		catalog->refraction.pipeline = l.refraction.built;
+		catalog->refraction.format = l.refraction.built ? l.refraction.format : DXGI_FORMAT_UNKNOWN;
+		catalog->refraction.failed = l.refraction.failed;
 		const auto& f = l.forward;
 		catalog->forwardEntries.reserve(f.entries.size());
 		for (const auto& [key, entry] : f.entries) {
@@ -2351,6 +2686,7 @@ namespace DCLF
 			catalog->forwardEntries.emplace(key, out);
 		}
 		catalog->forwardTargets = l.input ? l.input->forwardTargets : ForwardTargets{};
+		catalog->firstPersonTargets = l.input ? l.input->firstPersonTargets : ForwardTargets{};
 		catalogSlot.Post(std::move(catalog));
 		// T6b3d: the scene lane takes it at its next pass (ResolveLookups): a new catalog wakes the scene pump.
 		WakeScenePass(SceneWake::Catalog);
@@ -2385,7 +2721,11 @@ namespace DCLF
 
 	rhi::PipelineHandle ForwardPipelineOf(const PipelineCatalog* a_catalog, const ForwardPipelineKey& a_key, const ForwardTargets& a_targets)
 	{
-		if (!a_catalog || !(a_catalog->forwardTargets == a_targets))
+		if (!a_catalog)
+			return {};
+		// T7e: a first-person key's pipelines are of the first-person targets.
+		const auto& built = (a_key.flags & ForwardPipelineKey::kForwardFirstPerson) ? a_catalog->firstPersonTargets : a_catalog->forwardTargets;
+		if (!(built == a_targets))
 			return {};
 		const auto* entry = a_catalog->FindForward(a_key);
 		if (!entry || !entry->pipeline)
@@ -2443,6 +2783,10 @@ namespace DCLF
 			}
 		if (auto* lighting = ConstantEvaluator::Get().GetLightingShader(); lighting != input.lighting) {
 			input.lighting = lighting;
+			changed = true;
+		}
+		if (auto* effect = ConstantEvaluator::EffectShader(); effect != input.effect) {
+			input.effect = effect;
 			changed = true;
 		}
 		// The deferred pass's blend states (DeferredBlendState) exist from its first frame: until then nothing is read, so no
@@ -2521,10 +2865,20 @@ namespace DCLF
 		}
 		state.zGroups = version->zGroupOf;
 		state.zPipelines.reserve(version->zGroupFirst.size());
-		for (const auto first : version->zGroupFirst)
-			state.zPipelines.push_back(static_cast<const DrawPipelines::Impl::Built*>(version->pipelines[first].get())->pulledDepth->GetHandle());
+		for (const auto first : version->zGroupFirst) {
+			// An effect pipeline's group has no Z-prepass pipeline (BuildEffect), and no bucket ever names it (PlanZBuckets).
+			const auto& pulledDepth = static_cast<const DrawPipelines::Impl::Built*>(version->pipelines[first].get())->pulledDepth;
+			state.zPipelines.push_back(pulledDepth ? pulledDepth->GetHandle() : decltype(pulledDepth->GetHandle()){});
+		}
 		state.zLayout = impl.zLayout->GetHandle();
 		state.zDrawSignature = impl.zDrawSignature->GetHandle();
+		// T7d's refraction draw: built for this catalog's targets (checked above) and its format, under the shadow views' layout.
+		if (a_catalog.refraction.pipeline && impl.shadowLayout && impl.shadowDrawSignature) {
+			state.refraction = (*static_cast<const rhi::PipelinePtr*>(a_catalog.refraction.pipeline.get()))->GetHandle();
+			state.refractionFormat = a_catalog.refraction.format;
+			state.refractionLayout = impl.shadowLayout->GetHandle();
+			state.refractionDrawSignature = impl.shadowDrawSignature->GetHandle();
+		}
 		state.version = std::move(version);
 		state.layout = impl.layout->GetHandle();
 		state.valid = true;
@@ -2577,8 +2931,11 @@ namespace DCLF
 	std::uint32_t DrawPipelines::ShadowRasterStateId(const D3D11_RASTERIZER_DESC&, std::uint32_t) { return 0; }
 	void DrawPipelines::RequestTreeLod() {}
 	void DrawPipelines::SetTreeLodInputs(RE::BSShader&) {}
+	void DrawPipelines::RequestRefraction() {}
+	void DrawPipelines::SetRefractionInputs(RE::BSShader&, DXGI_FORMAT, std::uint8_t) {}
 	void DrawPipelines::RequestForward(const ForwardPipelineKey&) {}
 	void DrawPipelines::SetForwardTargets(const ForwardTargets&) {}
+	void DrawPipelines::SetFirstPersonTargets(const ForwardTargets&) {}
 	void DrawPipelines::CaptureEngineStates() {}
 	void DrawPipelines::CheckConstantTables(const RE::BSShader&, const Lookups&) {}
 }

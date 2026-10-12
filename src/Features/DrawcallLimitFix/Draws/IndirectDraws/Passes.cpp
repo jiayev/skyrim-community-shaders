@@ -923,6 +923,148 @@ namespace DCLF::Draws
 		std::shared_ptr<Resources> resources;
 	};
 
+	/**
+	 * T7d's refraction (drawcall-limit-fix.md, "Refraction (T7d)"): the refraction range's draws, which the colour segment's BuildDraws
+	 * appended (pooled), drawn in the forward epoch into the refraction normals (kREFRACTION_NORMALS, Resources::refractionNormals) with
+	 * one plain indexed indirect draw of the refraction pipeline (DrawPipelines::RequestRefraction; Utility.hlsl, DCLF_REFRACTION),
+	 * testing the main depth. The target is cleared first to FUN_1414b4860's clear colour (0.5, 0.5, 0, 0: no offset, no mask), as the
+	 * engine clears it before its own group 5 (IndirectDraws::ExecuteForward then marks the normals begun, so the engine's later draws into
+	 * them add to DCLF's rather than clearing them).
+	 */
+	struct RefractionBindings
+	{
+		org::DeclaredViewToken target, depth;
+		org::ResourceBindingToken sequences, count, pool, materialRows, pipelineRows, objects, extras;
+		std::vector<org::ResourceBindingToken> frameBuffers;
+	};
+
+	struct RefractionPrepared
+	{
+		std::shared_ptr<const PassFrame> frame;
+		org::PreparedDescriptorReference targetView{}, depthView{};
+		std::uint64_t frameConstants = 0;
+	};
+
+	class RefractionDrawPass final : public org::TypedRenderGraphPass<RefractionDrawPass, RefractionPrepared, RefractionBindings>
+	{
+	public:
+		explicit RefractionDrawPass(std::shared_ptr<Resources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		RefractionBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			const std::span<const org::SrvView> noViews{};
+			RefractionBindings bindings{};
+			bindings.target = a_builder.RenderTarget(resources->refractionNormals).View();
+			bindings.depth = a_builder.DepthReadWrite(resources->nativeDepth).View();
+			// The sequences are the draws' arguments and what their vertex stage reads by device address (DCLF_PULLED).
+			bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
+			a_builder.ShaderResource(*resources->sequences, noViews);
+			bindings.count = a_builder.IndirectArguments(resources->count);
+			bindings.pool = a_builder.IndexBuffer(*resources->pool->indices);
+			bindings.materialRows = a_builder.ShaderResource(*resources->materialRows.buffer, noViews).Resource();
+			bindings.pipelineRows = a_builder.ShaderResource(*resources->pipelineRows.buffer, noViews).Resource();
+			bindings.objects = a_builder.ShaderResource(*resources->scene->objects, noViews).Resource();
+			bindings.extras = a_builder.ShaderResource(*resources->scene->extras, noViews).Resource();
+			// A face shape's positions (the second stream), and the geometries' vertices and indices, read through their addresses.
+			a_builder.ShaderResource(*resources->scene->facePositions, noViews);
+			for (const auto& frameBuffer : resources->frameBuffers)
+				bindings.frameBuffers.push_back(a_builder.ShaderResource(frameBuffer.copy, noViews).Resource());
+			a_builder.ShaderResource(resources->frameConstants, noViews);
+			return bindings;
+		}
+
+		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::MainOpaque);
+			a_out.push_back(frame ? frame->generation : 0);
+			a_out.push_back(resources->pool ? resources->pool->layout : 0);
+		}
+
+		RefractionPrepared Prepare(const RefractionBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
+		{
+			RefractionPrepared prepared{};
+			// The forward epoch's recording is prepared for the colour shape (SceneRevision.cpp: kForwardEpoch), as ForwardDrawPass's.
+			auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::MainOpaque);
+			if (!frame || !frame->refractionCapacity || !frame->indirect.valid || !frame->indirect.refraction.valid() || !frame->indirect.refractionDrawSignature.valid() ||
+				frame->indirect.refractionFormat != resources->refractionFormat || !resources->pool)
+				return prepared;
+			prepared.frame = std::move(frame);
+			prepared.targetView = a_preparation.Capture(a_bindings.target);
+			prepared.depthView = a_preparation.Capture(a_bindings.depth);
+			prepared.frameConstants = resources->frameConstantsAddress;
+			return prepared;
+		}
+
+		static void Record(const RefractionBindings& a_bindings, const RefractionPrepared& a_prepared, org::PassRecordContext& a_recording)
+		{
+			if (!a_prepared.frame || !a_prepared.frameConstants)
+				return;
+			const auto& frame = *a_prepared.frame;
+			auto& commands = a_recording.Commands();
+			commands.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
+			rhi::ColorAttachment colour{};
+			colour.rtv = a_recording.Resolve(a_prepared.targetView);
+			colour.loadOp = rhi::LoadOp::Clear;
+			colour.storeOp = rhi::StoreOp::Store;
+			colour.clear.type = rhi::ClearValueType::Color;
+			colour.clear.rgba[0] = colour.clear.rgba[1] = 0.5f;  // FUN_1414b4860's clear colour (0x141ad285c, 0.5), as RENDER_NORMAL_CLEAR writes
+			colour.clear.rgba[2] = colour.clear.rgba[3] = 0.0f;
+			colour.resource = a_recording.Resolve(a_bindings.target.Resource()).GetHandle();
+			rhi::DepthAttachment depth{};
+			depth.dsv = a_recording.Resolve(a_prepared.depthView);
+			depth.depthLoad = rhi::LoadOp::Load;
+			depth.depthStore = rhi::StoreOp::Store;
+			depth.stencilLoad = rhi::LoadOp::Load;
+			depth.stencilStore = rhi::StoreOp::Store;
+			rhi::PassBeginInfo begin{};
+			begin.width = frame.width;
+			begin.height = frame.height;
+			begin.minDepth = frame.minDepth;
+			begin.maxDepth = frame.maxDepth;
+			begin.depth = &depth;
+			begin.colors = { &colour, 1 };
+			begin.debugName = "DCLF refraction normals";
+			auto device = RenderGraphRuntime::Get().Host()->GetDesc().device;
+			auto split = [](std::uint32_t* a_words, std::uint64_t a_value) {
+				a_words[0] = static_cast<std::uint32_t>(a_value);
+				a_words[1] = static_cast<std::uint32_t>(a_value >> 32);
+			};
+			// The pass's blocks (the shadow views' layout, kShadowPush*): the colour epoch's frame record and frame slots (its VS_PerFrame:
+			// the main camera), the zeroed shared light block as the zero block.
+			const std::uint64_t constants = a_prepared.frameConstants;
+			std::uint32_t pass[kShadowPushWords]{};
+			split(pass + kShadowPushFrameRecord, constants + std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
+			split(pass + kShadowPushViewBlock, constants + FrameSlotOffset(false, 0));
+			split(pass + kShadowPushPerFrame, constants + FrameSlotOffset(false, kPerFrameVertexRegister));
+			split(pass + kShadowPushZeros, constants + std::uint64_t(kFrameSlotSharedLight) * kFrameSlotBytes);
+			split(pass + kShadowPushSharedData, constants + FrameSlotOffset(false, kSharedDataRegister));
+			split(pass + kShadowPushFeatureData, constants + FrameSlotOffset(false, kFeatureDataRegister));
+			const auto sequences = a_recording.Resolve(a_bindings.sequences).GetHandle();
+			const auto count = a_recording.Resolve(a_bindings.count).GetHandle();
+			const std::uint64_t first = RefractionSlot(frame) * sizeof(DrawSequence);
+			// The call's words (kDrawPushWords): the range's first sequence, which its instance indexes, and the frame's LodFadeFrame (the
+			// lighting slot's, after FrameLighting) in the material rows' words, which the refraction stage reads instead.
+			std::uint32_t words[kDrawPushWords]{};
+			split(words + kShadowDrawPushSequences, device.GetBufferDeviceAddress({ sequences, 0 }) + first);
+			split(words + kShadowDrawPushMaterialRows, constants + std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting));
+			commands.BeginPass(begin);
+			commands.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
+			commands.BindLayout(frame.indirect.refractionLayout);
+			commands.SetIndexBuffer(rhi::IndexBufferView{ a_recording.Resolve(a_bindings.pool).GetHandle(), 0, 0, rhi::Format::R16_UInt });
+			commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kShadowPushWords, pass);
+			commands.BindPipeline(frame.indirect.refraction);
+			commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);
+			commands.ExecuteIndirect(frame.indirect.refractionDrawSignature, sequences, first + kSequenceDrawOffset, count,
+				std::uint64_t(kCountRefractionWord) * sizeof(std::uint32_t), frame.refractionCapacity);
+			commands.EndPass();
+		}
+
+	private:
+		std::shared_ptr<Resources> resources;
+	};
+
 	void FoldEyeIntoViewProj(const std::array<float, 16>& a_viewProj, const RE::NiPoint3& a_eye, float (&a_out)[16])
 	{
 		std::memcpy(a_out, a_viewProj.data(), sizeof(a_out));
@@ -1001,6 +1143,9 @@ namespace DCLF::Draws
 				bindings.bucketCounts = a_builder.UnorderedAccess(*resources->zBucketCounts[fixedPhase == 2 ? 1 : 0]).View();
 				bindings.poolFirsts = a_builder.ShaderResource(*resources->pool->firsts).View();
 			}
+			// T7d's refraction: the colour segment's refraction draws are pooled too (RefractionDrawPass draws them plainly).
+			if (segment == RenderGraphRuntime::Segment::MainOpaque && resources->pool)
+				bindings.poolFirsts = a_builder.ShaderResource(*resources->pool->firsts).View();
 			if (Sorts()) {
 				bindings.sortCounts = a_builder.UnorderedAccess(resources->sort->counts).View();
 				bindings.sortStaging = a_builder.UnorderedAccess(*resources->sort->staging).View();
@@ -1085,6 +1230,13 @@ namespace DCLF::Draws
 			if (now == RenderGraphRuntime::Segment::MainOpaque && frame->forwardCapacity) {
 				constants.forwardBase = static_cast<std::uint32_t>(ForwardStagingSlot(*frame));
 				constants.forwardCapacity = frame->forwardCapacity;
+			}
+			// T7d's refraction: the refraction range (after the forward halves: forwardBase + 2 * forwardCapacity in the shader), its draws
+			// pooled. The forward base is the staging slot whether or not the forward range has any capacity.
+			if (now == RenderGraphRuntime::Segment::MainOpaque && frame->refractionCapacity && resources->pool) {
+				constants.forwardBase = static_cast<std::uint32_t>(ForwardStagingSlot(*frame));
+				constants.refractionCapacity = frame->refractionCapacity;
+				constants.poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
 			}
 			return prepared;
 		}
@@ -3110,6 +3262,8 @@ namespace DCLF::Draws
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.native-depth"), resources->nativeDepth);
 			if (resources->terrainDepth)
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.terrain-blending-depth"), resources->terrainDepth);
+			if (resources->refractionNormals)
+				Register(a_graph, org::ResourceIdentifier("cs.dclf.refraction-normals"), resources->refractionNormals);
 			if (resources->hzb) {
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.hzb"), resources->hzb);
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.hzb-counter"), resources->hzbCounter);
@@ -3205,6 +3359,11 @@ namespace DCLF::Draws
 					std::static_pointer_cast<org::RenderPass>(std::make_shared<ForwardDrawPass>(resources)))
 						.Epoch(RenderGraphRuntime::EpochOf(Segment::Forward)));
 			}
+			// T7d's refraction: the refraction range's draw into the refraction normals, in the forward epoch after the blended draws.
+			if (resources->refractionNormals && resources->nativeDepth && resources->pool)
+				a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.refraction",
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<RefractionDrawPass>(resources)))
+						.Epoch(RenderGraphRuntime::EpochOf(Segment::Forward)));
 			if (resources->probe)
 				a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.probe-before",
 					std::static_pointer_cast<org::RenderPass>(std::make_shared<ProbePass>(resources, colourSegment, false)))

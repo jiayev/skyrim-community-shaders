@@ -32,7 +32,8 @@ cbuffer BuildDrawsConstants : register(b0)
 	uint VisibilityIndex;
 	uint LatchOffset;  // this dispatch's BuildDrawsLatch, in bytes into the latch block
 	// RWByteAddressBuffer: per object, the stamp of the last frame its bound was inside the main camera's frustum.
-	// Written by the depth segment's first phase only (0 elsewhere): the visibility feedback (IndirectDraws).
+	// Written by the depth segment's first phase only (0 elsewhere), for its own inputs and (T7f) the decal, forward and
+	// refraction inputs it otherwise skips: the visibility feedback (IndirectDraws, VisibilityEventsCS).
 	uint FrustumIndex;
 	// Occlusion culling against the hierarchical depth buffer built at the end of the depth pass
 	// (HzbCS.hlsl). HzbIndex is zero when there is no HZB, which includes the first frame.
@@ -76,6 +77,10 @@ cbuffer BuildDrawsConstants : register(b0)
 	// forward input's draws are appended to, each with its view depth in its firstInstance word (ForwardSortCS.hlsl sorts them).
 	uint ForwardBase;
 	uint ForwardCapacity;
+	// T7d's refraction, the colour segment: the refraction range's capacity (BuildDrawsConstants::refractionCapacity). The range starts
+	// after the forward range's two halves (ForwardBase + 2 * ForwardCapacity); a visible refraction input's draws are appended to it,
+	// pooled (PoolFirstsIndex), as a shadow view's are, for the forward epoch's plain draw into the refraction normals.
+	uint RefractionCapacity;
 }
 
 // StructuredBuffer<FadeNodeState>: FadeStateCS's states as the frame before published them (the latch's fadeStatesIndex, read at
@@ -253,15 +258,16 @@ static float4 TerrainNear;
 static uint2 TerrainCapacity;
 
 // The placement row's rows the culling reads (LightingConstants.h, BindlessPlacement): the world bound, the sun entry's sphere,
-// the fade node's centre.
+// the fade node's centre, and the forward sort's (T7d's ordered-node interleave: the nearest BSOrderedNode's centre, the ordinal).
 struct PlacementRows
 {
-	float4 rows[9];
+	float4 rows[10];
 };
 static const uint kObjectBoundRow = 6;
 static const uint kObjectSunEntryRow = 7;
 static const uint kObjectFadeNodeRow = 8;
-// StructuredBuffer of the 144-byte placement rows (DCLFObjects.hlsli, BindlessPlacement), the frame's (the latch's placementsIndex,
+static const uint kObjectForwardSortRow = 9;
+// StructuredBuffer of the 160-byte placement rows (DCLFObjects.hlsli, BindlessPlacement), the frame's (the latch's placementsIndex,
 // read at LoadLatch): an input's bound, sun entry and fade node are its object's row (a move rewrites the row, never the inputs).
 static uint PlacementsIndex;
 // The payload's buffers (BuildDrawsLatch::payloadValid): a payload ring entry's when the latch names one, else the pass's own.
@@ -500,6 +506,11 @@ static const uint kBucketTerrainPair = 0x80000000u;
 // segment rebuilt from this frame's depth), and appends each visible draw to the forward range's staging half with its view depth;
 // ForwardSortCS.hlsl writes them back to front into the sorted half, which the forward epoch draws after the deferred composite.
 static const uint kObjectForward = 0x80000000u;
+// T7d's refraction: a forward input whose view mask is kViewRefraction (GpuLayouts.h: its key's kRasterRefraction) is a refraction object.
+// Culled as a forward input (and by its root's fade verdict, as phase 1 does: the engine registers nothing under a root its OnVisible
+// stops at), its draws go to the refraction range, pooled; RefractionDrawPass draws them into the refraction normals (Utility.hlsl,
+// DCLF_REFRACTION). No sort: the engine draws its group 5 by its batches, and the draw neither blends nor writes depth.
+static const uint kViewRefraction = 1u << 10;
 // TerrainBlending.cpp's test, exactly: a block is in its terrain depth unless its bound's nearest point is past the distance.
 bool TerrainNearOf(float4 a_bound) { return distance(a_bound.xyz, TerrainNear.xyz) - a_bound.w <= TerrainNear.w; }
 // Set by the epoch rather than by the object: this input carries a usable bindings record, so a sequence
@@ -556,6 +567,12 @@ static const uint kCountForward = 128;
 static const uint kCountForwardTested = 132;
 static const uint kCountForwardInView = 136;
 static const uint kCountForwardOccluded = 140;
+// T7d's refraction: the refraction range's draws (its draw's count, zeroed by the colour commit), then the refraction inputs the colour
+// segment tested, those inside the frustum and those the HZB or their root's fade rejected (GpuLayouts.h, kCountRefractionWord).
+static const uint kCountRefraction = 144;
+static const uint kCountRefractionTested = 148;
+static const uint kCountRefractionInView = 152;
+static const uint kCountRefractionOccluded = 156;
 
 // The frustum stamp's word: the stamp in the low 28 bits (the latch's), and whether the fade test dropped the object in
 // that frame. The visibility feedback compares the low bits (PrimaryCull::ConsumeFeedback).
@@ -704,6 +721,79 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	return result.Occluded;
 }
 
+// The visibility feedback's word for a phase 1 input its frustum (and portal) test kept: this frame's stamp, and whether its root's
+// fade dropped it (the engine's cull does not go on into the children of a root whose OnVisible stops). Its fade test's drop, returned.
+// Counted (kCountFadeTested, kCountFadeHidden) for the depth segment's own inputs alone.
+bool StampFrustum(ByteAddressBuffer a_inputs, uint a_inputOffset, uint a_flags, uint a_objectIndex, bool a_count)
+{
+	RWByteAddressBuffer count = ResourceDescriptorHeap[CountIndex];
+	uint scratch;
+	bool fadeHidden = false;
+	RWByteAddressBuffer frustumStamps = ResourceDescriptorHeap[FrustumIndex];
+	// An input under a fade root: its root's OnVisible of the frame before (FadeStateCS, a frame ahead), as the engine's cull
+	// would have decided whether to go on into the children. Every listed root's (T1a): DCLF's state is authoritative.
+	const uint fadeRoot = a_inputs.Load(a_inputOffset + 48);
+	bool serviced = false;
+	if (fadeRoot != 0xFFFFFFFFu && FadeRootsIndex != 0) {
+		StructuredBuffer<FadeRootStatic> fadeRoots = ResourceDescriptorHeap[FadeRootsIndex];
+		const FadeRootStatic rootRow = fadeRoots[fadeRoot];
+		StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
+		const FadeNodeState fadeState = fadeStates[fadeRoot];
+		serviced = fadeState.Generation == rootRow.Generation && (fadeState.Verdict & kFadeVerdictServiced) != 0;
+		if (serviced) {
+			fadeHidden = (fadeState.Verdict & kFadeVerdictDrawn) == 0;
+			if (a_count) {
+				count.InterlockedAdd(kCountFadeTested, 1, scratch);
+				if (fadeHidden)
+					count.InterlockedAdd(kCountFadeHidden, 1, scratch);
+			}
+		}
+	}
+	// A root the update did not service (out of view then, or listed since): BSFadeNode::OnVisible snaps the fade of a root
+	// that was not in view last frame to 0 past its fade-out distance (kObjectFadeTest), and keeps it at 0 once it has, so
+	// the draw is dropped. The fade node's centre is the record's, its fade-out distance the input's (fade.w: structural).
+	const float4 fade = float4(ObjectRow(a_objectIndex, kObjectFadeNodeRow).xyz, asfloat(a_inputs.Load(a_inputOffset + 60)));
+	if (!serviced && (a_flags & kObjectFadeTest) != 0 && fade.w != 0.0 && FadeEye.w != 0.0) {
+		const uint previous = frustumStamps.Load(a_objectIndex * 4);
+		const bool wasInView = (previous & kFrustumStampMask) == ((VisibilityStamp - 1) & kFrustumStampMask);
+		const bool wasHidden = wasInView && (previous & kFrustumFadeHidden) != 0;
+		// FUN_14147b110: the distance to the root's centre, scaled by the camera's LOD factor over the LOD type's
+		// divisor (folded into a positive distance), or by a constant (a negative one).
+		const float distance = length(fade.xyz - FadeEye.xyz) * (fade.w > 0.0 ? FadeEye.w : 1.0);
+		fadeHidden = distance > abs(fade.w) && (!wasInView || wasHidden);
+		if (a_count) {
+			count.InterlockedAdd(kCountFadeTested, 1, scratch);
+			if (fadeHidden)
+				count.InterlockedAdd(kCountFadeHidden, 1, scratch);
+		}
+	}
+	frustumStamps.Store(a_objectIndex * 4, VisibilityStamp | (fadeHidden ? kFrustumFadeHidden : 0));
+	return fadeHidden;
+}
+
+// The main camera's cull of an object before the HZB, as phase 1 makes it (the frustum, then the portals and occluders its root is
+// culled through: the engine's Process1 on the member, after its root's, PortalPrograms.hlsli; an object with no fade root, the frustum
+// alone). T7f: the visibility feedback's verdict for the main inputs no depth segment input carries (kStampOnlyViews).
+bool MainFrustumRejected(ByteAddressBuffer a_inputs, uint a_inputOffset, float4 a_bound)
+{
+	if (Culled(a_bound.xyz, a_bound.w))
+		return true;
+	if (PortalProgramsIndex == 0 || RootProgramsIndex == 0)
+		return false;
+	const uint portalRoot = a_inputs.Load(a_inputOffset + 48);
+	if (portalRoot == 0xFFFFFFFFu)
+		return false;
+	StructuredBuffer<uint> rootPrograms = ResourceDescriptorHeap[RootProgramsIndex];
+	ByteAddressBuffer portalPrograms = ResourceDescriptorHeap[PortalProgramsIndex];
+	return PortalTest(portalPrograms, rootPrograms[portalRoot], a_bound.xyz, a_bound.w, false, false, false) == 0;
+}
+
+// T7f (drawcall-limit-fix.md, "T7f: what kAccumulated means"): the main inputs that are no depth segment input - a decal's
+// (kViewDecal), a forward object's (kViewForward), a refraction object's (kViewRefraction), which the colour segment culls once - still
+// take the main camera's cull as any object's for kAccumulated: phase 1 stamps their frustum verdict and nothing else (no draw, no
+// visibility word, no counter). GpuLayouts.h's bits.
+static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
+
 [numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
 {
 	LoadLatch();
@@ -721,8 +811,15 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	const uint4 input = inputs.Load4(inputOffset);  // pipeline index, record index, geometry index, flags
 	// The view types this dispatch draws (BuildDrawsLatch::viewBits) against what the object takes part in (DrawInput's view mask):
 	// the scene is one, a view is a mask. Before anything else of the input is read.
-	if (ViewBits != 0 && (inputs.Load(inputOffset + 16) & ViewBits) == 0)
+	if (ViewBits != 0 && (inputs.Load(inputOffset + 16) & ViewBits) == 0) {
+		// T7f: a decal, forward or refraction input's frustum verdict, in phase 1 (kStampOnlyViews).
+		if (FrustumIndex != 0 && CullPhase() == kPhaseOne && (inputs.Load(inputOffset + 16) & kStampOnlyViews) != 0) {
+			const uint stampObject = inputs.Load(inputOffset + 32);
+			if (CullMode() == 0 || !MainFrustumRejected(inputs, inputOffset, ObjectRow(stampObject, kObjectBoundRow)))
+				StampFrustum(inputs, inputOffset, input.w, stampObject, false);
+		}
 		return;
+	}
 	// A focus view's casters: its target's members (the engine registers the target's subtree whole).
 	if (FocusRoot != 0 && inputs.Load(inputOffset + 48) != FocusRoot - 1)
 		return;
@@ -824,19 +921,35 @@ bool Occluded(float3 boundCentre, float boundRadius)
 
 	// T7d: a forward input's culling, once, in the colour segment (kObjectForward); its visibility word as a decal's.
 	const bool forwardInput = keyWord == 0 && (input.w & kObjectForward) != 0;
+	const bool refractionInput = forwardInput && (inputs.Load(inputOffset + 16) & kViewRefraction) != 0;
 	if (forwardInput) {
-		if (phase != kPhaseColour || ForwardCapacity == 0)
-			return;  // the depth segment never submits one; a shape without the range has no forward draws
+		if (phase != kPhaseColour || (refractionInput ? RefractionCapacity == 0 || PoolFirstsIndex == 0 : ForwardCapacity == 0))
+			return;  // the depth segment never submits one; a shape without the range has no forward (or refraction) draws
 		bool forwardCulled = !drawable;
 		if (drawable && CullMode() != 0) {
-			count.InterlockedAdd(kCountForwardTested, 1, scratch);
+			count.InterlockedAdd(refractionInput ? kCountRefractionTested : kCountForwardTested, 1, scratch);
 			const float4 bound = ObjectRow(objectIndex, kObjectBoundRow);
 			forwardCulled = Culled(bound.xyz, bound.w);
 			if (!forwardCulled) {
-				count.InterlockedAdd(kCountForwardInView, 1, scratch);
+				count.InterlockedAdd(refractionInput ? kCountRefractionInView : kCountForwardInView, 1, scratch);
 				if (CullMode() >= 2 && Occluded(bound.xyz, bound.w)) {
 					forwardCulled = true;
-					count.InterlockedAdd(kCountForwardOccluded, 1, scratch);
+					count.InterlockedAdd(refractionInput ? kCountRefractionOccluded : kCountForwardOccluded, 1, scratch);
+				}
+			}
+		}
+		// A refraction object's normals are not faded by its root (GetRenderPasses' refraction pass takes no alpha): one under a root whose
+		// OnVisible stopped (FadeStateCS's verdict, serviced and not drawn) is not drawn at all, as the engine registers nothing there.
+		if (refractionInput && !forwardCulled && FadeRootsIndex != 0 && FadeStatesIndex != 0) {
+			const uint refractionRoot = inputs.Load(inputOffset + 48);
+			if (refractionRoot != 0xFFFFFFFFu) {
+				StructuredBuffer<FadeRootStatic> fadeRoots = ResourceDescriptorHeap[FadeRootsIndex];
+				StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
+				const FadeRootStatic rootRow = fadeRoots[refractionRoot];
+				const FadeNodeState rootState = fadeStates[refractionRoot];
+				if (rootState.Generation == rootRow.Generation && (rootState.Verdict & kFadeVerdictServiced) != 0 && (rootState.Verdict & kFadeVerdictDrawn) == 0) {
+					forwardCulled = true;
+					count.InterlockedAdd(kCountRefractionOccluded, 1, scratch);
 				}
 			}
 		}
@@ -884,45 +997,10 @@ bool Occluded(float3 boundCentre, float boundRadius)
 		cullRejected = frustumRejected || occlusionRejected;
 	}
 	// The visibility feedback: the frustum alone (occlusion does not stop the engine's OnVisible), for every candidate
-	// phase 1 tests, drawable or not.
+	// phase 1 tests, drawable or not (StampFrustum).
 	bool fadeHidden = false;
-	if (FrustumIndex != 0 && phase == kPhaseOne && !frustumRejected) {
-		RWByteAddressBuffer frustumStamps = ResourceDescriptorHeap[FrustumIndex];
-		// An input under a fade root: its root's OnVisible of the frame before (FadeStateCS, a frame ahead), as the engine's cull
-		// would have decided whether to go on into the children. Every listed root's (T1a): DCLF's state is authoritative.
-		const uint fadeRoot = inputs.Load(inputOffset + 48);
-		bool serviced = false;
-		if (fadeRoot != 0xFFFFFFFFu && FadeRootsIndex != 0) {
-			StructuredBuffer<FadeRootStatic> fadeRoots = ResourceDescriptorHeap[FadeRootsIndex];
-			const FadeRootStatic rootRow = fadeRoots[fadeRoot];
-			StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
-			const FadeNodeState fadeState = fadeStates[fadeRoot];
-			serviced = fadeState.Generation == rootRow.Generation && (fadeState.Verdict & kFadeVerdictServiced) != 0;
-			if (serviced) {
-				fadeHidden = (fadeState.Verdict & kFadeVerdictDrawn) == 0;
-				count.InterlockedAdd(kCountFadeTested, 1, scratch);
-				if (fadeHidden)
-					count.InterlockedAdd(kCountFadeHidden, 1, scratch);
-			}
-		}
-		// A root the update did not service (out of view then, or listed since): BSFadeNode::OnVisible snaps the fade of a root
-		// that was not in view last frame to 0 past its fade-out distance (kObjectFadeTest), and keeps it at 0 once it has, so
-		// the draw is dropped. The fade node's centre is the record's, its fade-out distance the input's (fade.w: structural).
-		const float4 fade = float4(ObjectRow(objectIndex, kObjectFadeNodeRow).xyz, asfloat(inputs.Load(inputOffset + 60)));
-		if (!serviced && (input.w & kObjectFadeTest) != 0 && fade.w != 0.0 && FadeEye.w != 0.0) {
-			const uint previous = frustumStamps.Load(objectIndex * 4);
-			const bool wasInView = (previous & kFrustumStampMask) == ((VisibilityStamp - 1) & kFrustumStampMask);
-			const bool wasHidden = wasInView && (previous & kFrustumFadeHidden) != 0;
-			// FUN_14147b110: the distance to the root's centre, scaled by the camera's LOD factor over the LOD type's
-			// divisor (folded into a positive distance), or by a constant (a negative one).
-			const float distance = length(fade.xyz - FadeEye.xyz) * (fade.w > 0.0 ? FadeEye.w : 1.0);
-			fadeHidden = distance > abs(fade.w) && (!wasInView || wasHidden);
-			count.InterlockedAdd(kCountFadeTested, 1, scratch);
-			if (fadeHidden)
-				count.InterlockedAdd(kCountFadeHidden, 1, scratch);
-		}
-		frustumStamps.Store(objectIndex * 4, VisibilityStamp | (fadeHidden ? kFrustumFadeHidden : 0));
-	}
+	if (FrustumIndex != 0 && phase == kPhaseOne && !frustumRejected)
+		fadeHidden = StampFrustum(inputs, inputOffset, input.w, objectIndex, true);
 	// BSTreeNode::OnVisible draws nothing of a tree whose root is above the frame's height limit.
 	if (phase == kPhaseOne && !frustumRejected && (input.w & kObjectHeightTest) != 0) {
 		const float3 root = ObjectRow(objectIndex, kObjectFadeNodeRow).xyz;
@@ -1037,6 +1115,15 @@ bool Occluded(float3 boundCentre, float boundRadius)
 					StoreShadowSequence(sequences, bucket.x + slot, slot, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
 						firstIndex, poolFirsts.Load(geometryIndex * 4));
 				}
+			} else if (refractionInput) {
+				// T7d's refraction: the refraction range, which holds every draw the refraction slots can produce; a pooled sequence, its slot
+				// its first instance (StoreShadowSequence's), by which the pulled vertex stage finds it (Utility.hlsl, DCLF_REFRACTION).
+				count.InterlockedAdd(kCountRefraction, 1, slot);
+				if (slot >= RefractionCapacity)
+					return;
+				ByteAddressBuffer refractionFirsts = ResourceDescriptorHeap[PoolFirstsIndex];
+				StoreShadowSequence(sequences, ForwardBase + 2 * ForwardCapacity + slot, slot, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
+					firstIndex, refractionFirsts.Load(geometryIndex * 4));
 			} else if (forwardInput) {
 				// T7d: the forward range's staging half, which holds every draw the forward slots can produce; the draw's view depth (the
 				// bound centre's clip w, the view axis distance: the engine's blended sort key, FUN_1414e8fc0) in its firstInstance word,
@@ -1045,9 +1132,19 @@ bool Occluded(float3 boundCentre, float boundRadius)
 				if (slot >= ForwardCapacity)
 					return;
 				StoreSequence(sequences, ForwardBase + slot, pipeline, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
-				const float4 forwardBound = ObjectRow(objectIndex, kObjectBoundRow);
-				const float clipW = mul(ViewProj, float4(forwardBound.xyz, 1.0)).w;
-				sequences.Store((ForwardBase + slot) * kSequenceStride + 88, asuint(isnan(clipW) ? 0.0 : clipW));  // a NaN would break the rank
+				// T7d's ordered-node interleave: a leaf of a BSOrderedNode's group is sorted at its node's centre (BindlessPlacement::forwardSort,
+				// its ordinal in w), where the engine's blended draw places the whole group; its node (a hash of that centre, the same bits for
+				// every leaf of the group) and its ordinal go in the unexecuted instanceCount and vertexOffset words, which ForwardSortCS.hlsl
+				// reads and puts back (1, 0).
+				const float4 forwardSort = ObjectRow(objectIndex, kObjectForwardSortRow);
+				const uint ordinal = asuint(forwardSort.w);
+				const float3 sortCentre = ordinal != 0 ? forwardSort.xyz : ObjectRow(objectIndex, kObjectBoundRow).xyz;
+				const float clipW = mul(ViewProj, float4(sortCentre, 1.0)).w;
+				const uint group = ordinal != 0 ? (asuint(forwardSort.x) * 0x9E3779B1u) ^ (asuint(forwardSort.y) * 0x85EBCA77u) ^ (asuint(forwardSort.z) * 0xC2B2AE3Du) : 0u;
+				const uint stagedAt = (ForwardBase + slot) * kSequenceStride;
+				sequences.Store(stagedAt + 76, group);
+				sequences.Store(stagedAt + 84, ordinal);
+				sequences.Store(stagedAt + 88, asuint(isnan(clipW) ? 0.0 : clipW));  // a NaN would break the rank
 			} else if (terrainGroup != 0) {
 				// A terrain group's range (GpuLayouts.h, kTerrainGroups), which holds every draw its group's slots can produce.
 				count.InterlockedAdd(kCountTerrainGroup1 + (terrainGroup - 1) * 4, 1, slot);

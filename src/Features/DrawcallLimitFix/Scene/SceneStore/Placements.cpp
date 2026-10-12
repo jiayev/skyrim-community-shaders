@@ -101,10 +101,14 @@ namespace DCLF
 		item.sunEntryNode = OwnedRoot(a_tracked.sunEntryNode);
 		item.slot = a_tracked.slot;
 		item.layerSlot = a_tracked.slot < tables.layerOf.size() ? tables.layerOf[a_tracked.slot] : kNoObjectSlot;
+		item.firstPerson = FirstPersonEntry(a_tracked.categoryNode);
 		// A skinned record's palette: its block, which the record addresses.
 		if (item.slot < tables.boneRows.size() && (tables.objects[item.slot].flags & kObjectSkinned) && tables.boneRows[item.slot]) {
 			item.boneOffset = tables.boneOffset[item.slot];
 			item.boneRows = tables.boneRows[item.slot];
+			// T7e: a particle member's block holds its quads (ParticleSnapshots), not a skin's palette (the mirror's record says which).
+			const auto* record = mirror.Geometry(a_geometry);
+			item.particles = record && record->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles) && !record->skin;
 		}
 		return item;
 	}

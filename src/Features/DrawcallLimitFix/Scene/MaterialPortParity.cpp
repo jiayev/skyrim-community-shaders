@@ -42,8 +42,8 @@ namespace DCLF::MaterialPort
 					return;
 				}
 		};
-		blocks(0, "VS", a_port.vs, a_engine.vs, LightingVSLayout());
-		blocks(1, "PS", a_port.ps, a_engine.ps, LightingPSLayout());
+		blocks(0, "VS", a_port.vs, a_engine.vs, MaterialVSLayout(a_port.kind));
+		blocks(1, "PS", a_port.ps, a_engine.ps, MaterialPSLayout(a_port.kind));
 		auto slots = [&](std::size_t a_kind, const char* a_what, const auto& a_p, const auto& a_e) {
 			for (std::size_t s = 0; s < a_p.size(); ++s)
 				if (a_p[s] != a_e[s]) {

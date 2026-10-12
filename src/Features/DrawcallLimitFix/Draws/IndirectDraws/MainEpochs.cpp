@@ -155,6 +155,32 @@ namespace DCLF
 			++f.failed;
 			return;
 		}
+		// T7d's refraction: the pipeline asked for and its inputs posted (each once, or when they change), and whether this recording draws
+		// the refraction normals (RefractionDrawPass: the colour shape has refraction slots and the refraction pipeline of the imported
+		// normals' format).
+		bool refraction = false;
+		if (ActiveToggles().refraction) {
+			const auto& resources = impl->resources;
+			auto& pipelines = DrawPipelines::Get();
+			pipelines.RequestRefraction();
+			if (resources && resources->refractionNormals && globals::game::utilityShader) {
+				// The engine's write mask for write mode 2 (FUN_1414b4860), blending off: the forward table's, as it is outside the deferred pass.
+				std::uint8_t writeMask = 0xF;
+				if (auto* blend = EngineBlendStates()[0][0][2][0]) {
+					D3D11_BLEND_DESC desc{};
+					blend->GetDesc(&desc);
+					writeMask = static_cast<std::uint8_t>(desc.RenderTarget[0].RenderTargetWriteMask & 0xF);
+				}
+				pipelines.SetRefractionInputs(*globals::game::utilityShader, resources->refractionFormat, writeMask);
+			}
+			const auto shape = revision.shape ? revision.shape->Value<PassFrame>() : nullptr;
+			if (shape && shape->refractionCapacity) {
+				refraction = resources && resources->refractionNormals && resources->pool && shape->indirect.refraction.valid() &&
+				             shape->indirect.refractionFormat == resources->refractionFormat;
+				if (!refraction)
+					++f.refractionNotReady;
+			}
+		}
 		// Held until this execution retires (its draws read what the colour commit bound): the colour payload's bindings, the frame
 		// textures its frame record names, the adopted snapshot whole.
 		auto owners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
@@ -173,6 +199,24 @@ namespace DCLF
 		}
 		f.submittedFrame = frame;
 		++f.epochs;
+		// T7d's refraction: the epoch cleared and drew the refraction normals, ahead of Main::Draw's own group 5 (FUN_1414b4860). Marked
+		// begun and drawn, as that function marks them (0x1435ef130, 0x1435ef131): the engine's later draws into them then add to DCLF's
+		// instead of clearing them, and ISRefraction (its IsActive reads 0x1435ef131, 0x1414f95a0) warps the frame by them. Its render
+		// clears both. Main::Draw's group 6 is cleared for it at the refraction point (DrawcallLimitFix's Main_Draw_RefractionCheck), where
+		// the engine would never have drawn it.
+		if (refraction) {
+			static REL::Relocation<std::uint8_t*> normalsBegun{ REL::Offset(0x35ef130) };
+			static REL::Relocation<std::uint8_t*> normalsDrawn{ REL::Offset(0x35ef131) };
+			*normalsBegun = 1;
+			*normalsDrawn = 1;
+			f.refractionFrame = frame;
+			++f.refractionDrawn;
+		}
+	}
+
+	bool IndirectDraws::RefractionDrawnThisFrame() const
+	{
+		return impl && impl->forwardEpoch.refractionFrame == SceneStore::Get().GetFrame();
 	}
 
 	std::string IndirectDraws::ForwardReport()
@@ -186,9 +230,46 @@ namespace DCLF
 									   "{} without a forward recording{}, {} failed{}\n",
 			ActiveToggles().forward ? "on" : "off", f.reached, f.epochs, f.noColour, f.noRecording, f.noRecording ? " <- NO FORWARD RECORDING" : "", f.failed,
 			f.failed ? " <- EPOCH FAILED" : "");
+		if (f.refractionDrawn || f.refractionNotReady || ActiveToggles().refraction)
+			text += fmt::format("[DCLF] refraction (T7d, CS_DCLF_REFRACTION {}): {} forward epochs drew the refraction normals, {} with refraction slots could not "
+								"(no refraction pipeline yet, or no refraction normals){}\n",
+				ActiveToggles().refraction ? "on" : "off", f.refractionDrawn, f.refractionNotReady, f.refractionNotReady && !f.refractionDrawn ? " <- NO REFRACTION DRAW" : "");
+		// T7d's Effect port: its members in the installed tables (objects of an effect key: forward ones, and T7d part 5's decals, in the decal
+		// groups, and skinned ones), its material records, its pipelines.
+		{
+			const auto& tables = SceneStore::Get().GetTables();
+			std::uint32_t members = 0, forwardMembers = 0, materials = 0, lit = 0, decals = 0, skinned = 0;
+			for (const auto& object : tables.objects) {
+				if ((object.flags & (kObjectFree | kObjectNoBindings)) || !(object.flags & kObjectMember))
+					continue;
+				forwardMembers += (object.flags & kObjectForward) ? 1u : 0u;
+				if (object.pipelineIndex < tables.pipelines.size() && RasterEffect(tables.pipelines[object.pipelineIndex].rasterFlags)) {
+					++members;
+					lit += (tables.pipelines[object.pipelineIndex].passDescriptor & EffectFlag::Lighting) ? 1u : 0u;  // the Lighting variant
+					decals += ObjectDecalGroup(object.flags) ? 1u : 0u;
+					// T7e: a particle member's block is its quads', not a skin's palette.
+					skinned += (object.flags & kObjectSkinned) && !(tables.pipelines[object.pipelineIndex].passDescriptor & EffectFlag::Particles) ? 1u : 0u;
+				}
+			}
+			for (std::uint32_t m = 0; m < tables.materials.size(); ++m)
+				materials += tables.MaterialUsed(m) && tables.materials[m].kind == kMaterialKindEffect ? 1u : 0u;
+			const auto pipelines = DrawPipelines::Get().GetStats();
+			if (members || materials || pipelines.effectRequested || ActiveToggles().effects)
+				text += fmt::format("[DCLF] effects (T7d's Effect port, CS_DCLF_EFFECTS {}): {} members bound ({} the Lighting variant, {} decals, {} skinned; {} forward "
+									"members in all), {} effect materials in use; pipelines {} requested, {} ready, {} failed{}\n",
+					ActiveToggles().effects ? "on" : "off", members, lit, decals, skinned, forwardMembers, materials, pipelines.effectRequested, pipelines.effectReady,
+					pipelines.effectFailed, pipelines.effectFailed ? " <- EFFECT PIPELINE FAILED" : "");
+			// CS_DCLF_SET_PARITY: the members' Lighting-variant passes the engine registered, against the sun light the port reads as their light 0.
+			if (const auto [checked, other] = PassCapture::Get().TakeEffectLight(); checked)
+				text += fmt::format("[DCLF] effects' Lighting variant (CS_DCLF_SET_PARITY): {} engine passes of members checked, {} with a light 0 other than the sun "
+									"light{}\n",
+					checked, other, other ? " <- EFFECT LIGHT" : " <- OK");
+		}
 		const std::uint32_t submitted = f.submittedFrame;
+		const std::uint32_t refractionFrame = f.refractionFrame;
 		f = {};
 		f.submittedFrame = submitted;
+		f.refractionFrame = refractionFrame;
 		return text;
 	}
 
@@ -853,10 +934,15 @@ namespace DCLF
 			++inputs;
 			const std::uint32_t expected = MainMaskOf(a_tables, a_input.objectIndex);
 			const std::uint32_t mask = a_input.view.mask & kMainSideBits;
-			const bool decal = ObjectDecalGroup(a_input.flags) != 0;
+			// T7d: a forward object (blended Lighting, refraction, an Effect member: kViewForward or kViewRefraction alone) is the colour
+			// segment's alone, as a decal is.
+			const bool colourOnly = ObjectDecalGroup(a_input.flags) != 0 || (a_input.flags & kObjectForward) != 0;
 			const bool drawable = (a_input.flags & kInputDrawable) != 0;
 			if (mask == expected && (mask & (kDepthViewBits | kColourViewBits)) &&
-				(!drawable || ((mask & kColourViewBits) && (decal || (mask & kDepthViewBits)))))
+				(!drawable || ((mask & kColourViewBits) && (colourOnly || (mask & kDepthViewBits)))))
+				return;
+			// T7e: a first-person member's is kViewFirstPerson alone: the first-person epochs', no main segment's.
+			if (mask == expected && mask == kViewFirstPerson)
 				return;
 			++differ;
 			std::uint64_t none = ~0ull;

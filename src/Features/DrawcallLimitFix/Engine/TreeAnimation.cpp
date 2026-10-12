@@ -3,9 +3,12 @@
 #include "EngineAccess.h"
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 
 #include <ankerl/unordered_dense.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstring>
 
@@ -25,12 +28,19 @@ namespace DCLF::TreeAnimation
 		constexpr std::uintptr_t kClear = 0x437ae0;     // FUN_140437ae0(manager): both lists emptied (TES, the manager's teardown)
 		constexpr std::size_t kAnimationList = 0x50;    // BSTArray<NiAVObject*> (a reference each, taken by hand)
 		constexpr std::size_t kLock = 0x18;             // BSSpinLock (owner, count), the animation list's
+		// The tree list (T7b5's fix; skyrim-engine-notes.md, "Tree manager list (T7b5)").
+		constexpr std::size_t kTreeList = 0x20;          // BSTArray<BSTreeNode*>
+		constexpr std::size_t kTreeLock = 0x10;          // BSSpinLock of the tree list
+		constexpr std::uintptr_t kFirstMultiBound = 0x147d640;  // FUN_14147d640(tree): its first child's AsMultiBoundNode (vfunc 0x30), or null
+		constexpr std::size_t kMultiBound = 0x128;       // BSMultiBoundNode's BSMultiBound
+		constexpr std::size_t kMultiBoundShape = 0x18;   // BSMultiBound's BSMultiBoundShape
+		constexpr std::size_t kShapeResult = 0x10;       // the cull result FUN_140437e50 reads: 0 stale, 1 in, 2 out
 
 		using List = RE::BSTArray<RE::NiAVObject*>;
 
 		std::byte* Manager() { return Global<std::byte*>(kManager); }
 		List& AnimationList(std::byte* a_manager) { return *reinterpret_cast<List*>(a_manager + kAnimationList); }
-		RE::BSSpinLock& Lock(std::byte* a_manager) { return *reinterpret_cast<RE::BSSpinLock*>(a_manager + kLock); }
+		RE::BSSpinLock& Lock(std::byte* a_manager, std::size_t a_offset = kLock) { return *reinterpret_cast<RE::BSSpinLock*>(a_manager + a_offset); }
 
 		bool installed = false;
 		bool enabled = false;
@@ -44,10 +54,34 @@ namespace DCLF::TreeAnimation
 		// detached.size(), for the report, which takes no lock.
 		std::atomic<std::uint32_t> held{ 0 };
 
+		// The tree list (main thread): the stood-in BSTreeNodes, whether DCLF runs this frame, and the results written for the loop now
+		// running (each tree held, its shape and the engine's value to put back).
+		ankerl::unordered_dense::set<const RE::NiAVObject*> ownedTrees;
+		bool running = false;
+		struct WrittenResult
+		{
+			RE::NiPointer<RE::NiAVObject> tree;
+			std::int32_t* result = nullptr;
+			std::int32_t engine = 0;
+		};
+		std::vector<WrittenResult> written;
+		ankerl::unordered_dense::set<const void*> writtenNodes;
+
 		struct Stats
 		{
 			std::atomic<std::uint64_t> engineAdds{ 0 }, engineRemoves{ 0 }, clears{ 0 };
 			std::uint64_t syncs = 0, takenOff = 0, putBack = 0, takenOffAgain = 0, parityChecks = 0, parityOnList = 0;
+			// The tree list: loops written around, the trees written in view / out of view, the engine's value they replaced (0 stale, 1 in,
+			// 2 out), and stood-in trees found without a multibound (the loop never visits them, as for the engine).
+			std::uint64_t treeLoops = 0, treesIn = 0, treesOut = 0, noMultiBound = 0;
+			std::array<std::uint64_t, 3> replaced{};
+			// T7f preparation, every other BSTreeNode on the list: under CS_DCLF_TREE_LIST_ALL written in view / out of view (and the engine's
+			// value they replaced); otherwise, under CS_DCLF_TREE_PARITY, the dry run: DCLF's would-be result against the engine's (same, DCLF
+			// in and the engine out, DCLF out and the engine in, the engine's stale). Aside: no DCLF verdict (not listed, or not yet written),
+			// no multibound.
+			std::uint64_t wideIn = 0, wideOut = 0, wideNoVerdict = 0, wideNoMultiBound = 0;
+			std::array<std::uint64_t, 3> wideReplaced{};
+			std::uint64_t drySame = 0, dryInOut = 0, dryOutIn = 0, dryStale = 0;
 		};
 		Stats stats;
 
@@ -167,10 +201,11 @@ namespace DCLF::TreeAnimation
 
 	bool Installed() { return installed; }
 
-	void SetOwned(const std::vector<const RE::NiAVObject*>& a_roots)
+	void SetOwned(const std::vector<const RE::NiAVObject*>& a_roots, const std::vector<const RE::NiAVObject*>& a_trees)
 	{
 		if (!installed)
 			return;
+		ownedTrees = ankerl::unordered_dense::set<const RE::NiAVObject*>(a_trees.begin(), a_trees.end());
 		auto* manager = Manager();
 		DrainAdds(manager);
 		ankerl::unordered_dense::set<const RE::NiAVObject*> next(a_roots.begin(), a_roots.end());
@@ -198,6 +233,84 @@ namespace DCLF::TreeAnimation
 		lock.Unlock();
 		stats.putBack += putBack.size();
 		owned = std::move(next);
+	}
+
+	void AtUpdateEntry(bool a_running)
+	{
+		running = a_running;
+	}
+
+	void BeforeListLoop(std::byte* a_manager)
+	{
+		// T7f preparation: CS_DCLF_TREE_LIST_ALL gives the loop DCLF's verdict for every BSTreeNode DCLF lists (IndirectDraws::
+		// AccumulatedVerdictOf: the root's kAccumulated as written at Main::Update's entry, or the wide writes' dry run's); otherwise
+		// CS_DCLF_TREE_PARITY compares that verdict with the engine's result, writing nothing.
+		static const bool all = SwitchEnabled(Switch::TreeListAll);
+		static const bool dry = !all && SwitchEnabled(Switch::TreeParity);
+		if (!installed || !running || !a_manager || !written.empty() || (ownedTrees.empty() && !all && !dry))
+			return;
+		using FirstMultiBound = std::byte* (*)(const void*);
+		static const auto firstMultiBound = reinterpret_cast<FirstMultiBound>(REL::Module::get().base() + kFirstMultiBound);
+		auto& draws = IndirectDraws::Get();
+		// The list holds each tree: a stood-in one on it is alive while the lock is held, and the reference taken keeps it so until
+		// AfterListLoop, whatever another thread removes meanwhile.
+		auto& lock = Lock(a_manager, kTreeLock);
+		lock.Lock();
+		const auto& list = *reinterpret_cast<const List*>(a_manager + kTreeList);
+		for (std::uint32_t i = 0; i < list.size(); ++i) {
+			auto* tree = list[i];
+			if (!tree)
+				continue;
+			const bool stoodIn = ownedTrees.contains(tree);
+			bool visible = true;
+			if (stoodIn) {
+				visible = draws.AccumulatedVerdict(tree);
+			} else if (!all && !dry) {
+				continue;
+			} else if (!draws.AccumulatedVerdictOf(tree, visible)) {
+				++stats.wideNoVerdict;
+				continue;
+			}
+			auto* multiBound = firstMultiBound(tree);
+			auto* bound = multiBound ? At<std::byte*>(multiBound, kMultiBound) : nullptr;
+			auto* shape = bound ? At<std::byte*>(bound, kMultiBoundShape) : nullptr;
+			if (!shape) {
+				++(stoodIn ? stats.noMultiBound : stats.wideNoMultiBound);
+				continue;
+			}
+			auto* result = &At<std::int32_t>(shape, kShapeResult);
+			if (!stoodIn && !all) {
+				// The dry run: the engine's result is the last scene frame's cull, DCLF's the conservative rule's (a frame or more behind it).
+				const std::int32_t engine = *result;
+				++(engine == 0 ? stats.dryStale : (engine == 1) == visible ? stats.drySame : visible ? stats.dryInOut : stats.dryOutIn);
+				continue;
+			}
+			written.push_back({ RE::NiPointer<RE::NiAVObject>(tree), result, *result });
+			writtenNodes.insert(tree);
+			++(stoodIn ? stats.replaced : stats.wideReplaced)[std::clamp<std::int32_t>(*result, 0, 2)];
+			if (stoodIn)
+				++(visible ? stats.treesIn : stats.treesOut);
+			else
+				++(visible ? stats.wideIn : stats.wideOut);
+			*result = visible ? 1 : 2;
+		}
+		lock.Unlock();
+		stats.treeLoops += written.empty() ? 0 : 1;
+	}
+
+	void AfterListLoop()
+	{
+		// The engine's values back (the loop has made its stores; nothing else read DCLF's), and the references let go here, on the main
+		// thread.
+		for (auto& entry : written)
+			*entry.result = entry.engine;
+		written.clear();
+		writtenNodes.clear();
+	}
+
+	bool WroteResult(const void* a_node)
+	{
+		return writtenNodes.contains(a_node);
 	}
 
 	void CheckParity()
@@ -228,10 +341,23 @@ namespace DCLF::TreeAnimation
 		if (!installed)
 			return fmt::format("[DCLF] tree animation list: off (CS_DCLF_TREE_LIST=0): {} on the list (the manager's last update {:.3f} ms)", listed, updateMs);
 		auto& s = stats;
-		const auto text = fmt::format("[DCLF] tree animation list: {} on the list, {} owned trees off it (the manager's last update {:.3f} ms); {} syncs: {} taken off, {} put back; engine: {} adds ({} taken off again), {} removes of trees off the list, {} clears; parity {} checks, {} owned trees on the list{}",
+		const auto text = fmt::format("[DCLF] tree animation list: {} on the list, {} owned trees off it (the manager's last update {:.3f} ms); {} syncs: {} taken off, {} put back; engine: {} adds ({} taken off again), {} removes of trees off the list, {} clears; parity {} checks, {} owned trees on the list{}; "
+									  "tree list (T7b5 fix): {} stood-in BSTreeNodes, {} loops given DCLF's verdicts: {} in / {} out (replacing the engine's {} stale / {} in / {} out), {} without a multibound",
 			listed, held.load(std::memory_order_relaxed), updateMs, s.syncs, s.takenOff, s.putBack, s.engineAdds.exchange(0), s.takenOffAgain, s.engineRemoves.exchange(0), s.clears.exchange(0), s.parityChecks,
-			s.parityOnList, s.parityChecks ? (s.parityOnList ? " <- TREE LIST" : " <- OK") : "");
+			s.parityOnList, s.parityChecks ? (s.parityOnList ? " <- TREE LIST" : " <- OK") : "", ownedTrees.size(), s.treeLoops, s.treesIn, s.treesOut, s.replaced[0], s.replaced[1], s.replaced[2],
+			s.noMultiBound);
+		// T7f preparation's line part: only with CS_DCLF_TREE_LIST_ALL or the dry run's CS_DCLF_TREE_PARITY.
+		const bool wideShown = SwitchEnabled(Switch::TreeListAll) || SwitchEnabled(Switch::TreeParity);
+		const auto wideText = !wideShown ? std::string() : fmt::format(
+			"; every BSTreeNode (T7f preparation; CS_DCLF_TREE_LIST_ALL {}): {} in / {} out written (replacing the engine's {} stale / {} in / {} out); dry run {} same, {} DCLF's in "
+			"and the engine's out, {} DCLF's out and the engine's in, {} the engine's stale; aside {} without DCLF's verdict, {} without a multibound",
+			SwitchEnabled(Switch::TreeListAll) ? "on" : "off", s.wideIn, s.wideOut, s.wideReplaced[0], s.wideReplaced[1], s.wideReplaced[2], s.drySame, s.dryInOut, s.dryOutIn,
+			s.dryStale, s.wideNoVerdict, s.wideNoMultiBound);
+		s.wideIn = s.wideOut = s.wideNoVerdict = s.wideNoMultiBound = s.drySame = s.dryInOut = s.dryOutIn = s.dryStale = 0;
+		s.wideReplaced = {};
 		s.syncs = s.takenOff = s.putBack = s.takenOffAgain = s.parityChecks = s.parityOnList = 0;
-		return text;
+		s.treeLoops = s.treesIn = s.treesOut = s.noMultiBound = 0;
+		s.replaced = {};
+		return text + wideText;
 	}
 }

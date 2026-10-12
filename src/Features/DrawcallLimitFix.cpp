@@ -16,6 +16,7 @@
 #include "DrawcallLimitFix/Draws/FrameValues.h"
 #include "DrawcallLimitFix/Engine/EngineAccess.h"
 #include "DrawcallLimitFix/Engine/FaceSnapshots.h"
+#include "DrawcallLimitFix/Engine/ParticleSnapshots.h"
 #include "DrawcallLimitFix/Engine/SunAccumulation.h"
 #include "DrawcallLimitFix/Engine/SunViews.h"
 #include "DrawcallLimitFix/Engine/FocusViews.h"
@@ -38,6 +39,7 @@
 #include "DrawcallLimitFix/Engine/LocalLightCull.h"
 #include "DrawcallLimitFix/Engine/PassCapture.h"
 #include "DrawcallLimitFix/Engine/ReflectionFaces.h"
+#include "DrawcallLimitFix/Scene/FrameGlobals.h"
 #include "DrawcallLimitFix/Scene/SceneStore.h"
 #include "DrawcallLimitFix/Scene/LightingDescriptors.h"
 #include "DrawcallLimitFix/Engine/SceneTracker.h"
@@ -131,6 +133,8 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::InstallReflectionCensus();
 	DCLF::MaterialSources::Install();
 	DCLF::FaceSnapshots::Get().Install();
+	// T7e: the particle systems' snapshots, taken after the engine's update of each (ParticleSnapshots; the systems DCLF follows alone).
+	DCLF::ParticleSnapshots::Get().Install();
 	DCLF::SunAccumulation::Get().Install();
 	DCLF::SunViews::Get().Install();
 	DCLF::LightSelection::Get().Install();
@@ -138,7 +142,8 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::PrimaryCull::Get().Install();
 	// T7b3, CS_DCLF_ROOM_PARITY: Main::IsRoomVisible's answers against PortalViews' VisibleSet (an observer; nothing installed without it).
 	DCLF::RoomVisibility::Install();
-	// T7b5, CS_DCLF_TREE_PARITY: the tree manager's list loop against DCLF's port (an observer; nothing installed without it).
+	// The tree manager's list loop: the stood-in trees' multibound results from DCLF's verdicts (T7b5's fix, TreeAnimation), and under
+	// CS_DCLF_TREE_PARITY the loop against DCLF's port (T7b5's observer).
 	DCLF::TreeList::Install();
 	if (DCLF::SwitchEnabled(DCLF::Switch::Timeline))
 		DCLF::ImportTimings::Install();
@@ -339,6 +344,11 @@ bool DrawcallLimitFix::BeginSceneFrame()
 		DCLF::RenderThreadBudget::Part captures(DCLF::RenderThreadBudget::Bucket::SceneCaptures);
 		store.BeginFrame();
 	}
+	// T7f preparation: the frame's camera duties (FadeEye, the camera cut, the tree height test) from the main camera, under the frame's
+	// number, not from the list processes' call site.
+	DCLF::PrimaryCull::Get().BeginFrameCamera();
+	// T7e: the main camera the frame's particle quads face (FrameValues' producer expands them), and the renderer's quads once.
+	DCLF::ParticleSnapshots::Get().BeginFrame();
 	auto& draws = DCLF::IndirectDraws::Get();
 	{
 		// The exchange (T6b3d: the budget's scene exchange). T6b3b: the newest complete snapshot the builder posted, adopted whole - its
@@ -351,6 +361,9 @@ bool DrawcallLimitFix::BeginSceneFrame()
 		store.HandOverAtFrameStart(draws.AdoptSnapshot(toggleGeneration));
 		store.SyncFrameTables();
 	}
+	// T7e: the first-person view's latch (Main::Draw's cVar23, recomputed before the root is hidden again), targets, pipelines and
+	// resources, before the coverage that decides whether its members are withheld.
+	draws.BeginFirstPersonFrame();
 	// The candidate entries changed since the sun exclusion's snapshot leave it (the engine culls them); the rest stand.
 	DCLF::SunAccumulation::Get().BeginFrame(store.GetSunCandidates());
 	PrepareFrameLookups();
@@ -368,6 +381,11 @@ bool DrawcallLimitFix::BeginSceneFrame()
 		// frame whose claims are post-swap; a withdrawn frame's too).
 		store.ReleaseGates();
 	}
+	// CS_DCLF_SET_PARITY: no claim on a hidden skeleton of the player's (`<- PLAYER 3D`).
+	DCLF::ObservePlayerClaims();
+	// T7e: the first-person members the frame's epochs draw: their rows and palettes taken by the frame values' kick (below) on this thread,
+	// before Main::Draw moves the skeleton into its root's space (FUN_1414cb020).
+	DCLF::FrameValues::Get().SetFirstPersonClaims(draws.FirstPersonCovered() ? store.FrameClaims() : nullptr);
 	// What the next builds ahead take from the frame.
 	draws.PostAheadContext();
 	// The stood-in fade roots' write-back: the next task on DCLF's executor, never joined (step 6e S4), finding the stores from the
@@ -633,7 +651,7 @@ bool DrawcallLimitFix::OcclusionNeedsEngine(OcclusionMap a_map)
 {
 	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Occlusion);
 	const std::uint8_t phase = a_map == kSkyOcclusion ? DCLF::kSetOccluderSky : DCLF::kSetOccluderPrecipitation;
-	const auto set = DCLF::PassCapture::Get().CurrentSet();
+	const auto set = DCLF::SceneStore::Get().FrameClaims();
 	const bool needed = !Running() || !DCLF::SceneStore::OcclusionEnabled(a_map) || !(occlusionWanted & (1u << a_map)) || !set || !(set->drawn & phase) ||
 	                    DCLF::SceneStore::Get().SetLacking(phase) > 0;
 	// The engine's cull of the map reads the scene lists: whole again.
@@ -778,7 +796,7 @@ void DrawcallLimitFix::NoteNativePass(const RE::BSRenderPass* a_pass, std::uint3
 	// model (whose member leaves the set at the next commit).
 	if (a_pass->accumulationHint == 10 || DCLF::PassCapture::FadingAtRegistration(a_pass))
 		return;
-	const auto set = DCLF::PassCapture::Get().CurrentSet();
+	const auto set = DCLF::SceneStore::Get().FrameClaims();
 	if (!set || !(set->PhasesOf(a_pass->geometry) & DCLF::kSetMain))
 		return;
 	++(inDepthPass ? leaks.leakedInDepth : leaks.leakedInOpaque);
@@ -791,6 +809,7 @@ void DrawcallLimitFix::Hooks::Main_RenderDepth::thunk(bool a_firstPerson, bool a
 {
 	auto& feature = globals::features::drawcallLimitFix;
 	feature.inDepthPass = true;
+	feature.depthControlDriven = a_a2;
 	func(a_firstPerson, a_a2);
 	feature.inDepthPass = false;
 }
@@ -894,6 +913,45 @@ void DrawcallLimitFix::Hooks::Accumulator_BlendedDraw<N>::thunk(void* a_accumula
 	func(a_accumulator, a_renderFlags);
 }
 
+void DrawcallLimitFix::Hooks::RenderDepth_FirstPersonDraw::thunk(void* a_camera, void* a_accumulator, std::uint32_t a_flags)
+{
+	auto& feature = globals::features::drawcallLimitFix;
+	if (feature.Running()) {
+		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ZPrepass);
+		// The first-person subtree's hidden bits as the engine's first-person culls (unk_FPCulling, this block's) saw them: the next
+		// frame's members' chains read these (FrameGlobals::NoteFirstPersonCulled).
+		if (DCLF::ActiveToggles().firstPerson)
+			if (auto* player = RE::PlayerCharacter::GetSingleton())
+				DCLF::FrameGlobals::NoteFirstPersonCulled(player->Get3D(true));
+		DCLF::IndirectDraws::Get().ExecuteFirstPersonDepth(feature.depthControlDriven);
+		// DCLF's epoch leaves the context's bindings to the engine's state tracking.
+		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+	}
+	func(a_camera, a_accumulator, a_flags);
+}
+
+void DrawcallLimitFix::Hooks::RenderFirstPersonView_Draw::thunk(void* a_camera, void* a_accumulator, std::uint32_t a_flags)
+{
+	auto& feature = globals::features::drawcallLimitFix;
+	if (feature.Running()) {
+		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::AfterOpaque);
+		DCLF::IndirectDraws::Get().ExecuteFirstPersonColour();
+		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+	}
+	func(a_camera, a_accumulator, a_flags);
+}
+
+std::uint32_t DrawcallLimitFix::Hooks::Main_Draw_RefractionCheck::thunk(void* a_accumulator)
+{
+	// FUN_1414b4ae0(accumulator, 6): the group's pass list cleared (FUN_1414f1940), undrawn.
+	if (a_accumulator && globals::features::drawcallLimitFix.Running() && DCLF::IndirectDraws::Get().RefractionDrawnThisFrame()) {
+		using ClearGroup = void (*)(void*, std::int32_t);
+		static REL::Relocation<ClearGroup> clearGroup{ REL::Offset(0x14b4ae0) };
+		clearGroup(a_accumulator, 6);
+	}
+	return func(a_accumulator);
+}
+
 void DrawcallLimitFix::Hooks::Install()
 {
 	// Always installed: the shadow views are a live toggle (Toggles.h), and the thunk costs one compare per
@@ -929,6 +987,22 @@ void DrawcallLimitFix::Hooks::Install()
 		stl::write_thunk_call<Accumulator_BlendedDraw<1>>(REL::Offset(kBlendedAfterWater).address());
 	} else {
 		logger::warn("[DCLF] the main pass's blended draw is not where expected; the forward epoch (T7d) never runs, and CS_DCLF_FORWARD must stay off");
+	}
+	// T7d's refraction: Main::Draw's refraction point (its group 5 count, FUN_1414b4840).
+	constexpr std::uintptr_t kRefractionCheck = 0x644d20, kGroupFiveCount = 0x14b4840;
+	if (DCLF::Engine::CallsTo(REL::Offset(kRefractionCheck).address(), REL::Offset(kGroupFiveCount).address()))
+		stl::write_thunk_call<Main_Draw_RefractionCheck>(REL::Offset(kRefractionCheck).address());
+	else
+		logger::warn("[DCLF] Main::Draw's refraction point is not where expected; CS_DCLF_REFRACTION must stay off");
+	// T7e: the first-person view's two points (FUN_1414a90f0, the accumulator render, at RenderDepth's first-person draw and at
+	// FUN_1414cb6d0's), always installed: one compare a frame each while CS_DCLF_FIRST_PERSON is off.
+	constexpr std::uintptr_t kAccumulatorRender = 0x14a90f0, kDepthFirstPersonDraw = 0x14cd47e, kFirstPersonViewDraw = 0x14cb7d1;
+	if (DCLF::Engine::CallsTo(REL::Offset(kDepthFirstPersonDraw).address(), REL::Offset(kAccumulatorRender).address()) &&
+		DCLF::Engine::CallsTo(REL::Offset(kFirstPersonViewDraw).address(), REL::Offset(kAccumulatorRender).address())) {
+		stl::write_thunk_call<RenderDepth_FirstPersonDraw>(REL::Offset(kDepthFirstPersonDraw).address());
+		stl::write_thunk_call<RenderFirstPersonView_Draw>(REL::Offset(kFirstPersonViewDraw).address());
+	} else {
+		logger::warn("[DCLF] the first-person draws are not where expected; the first-person view (T7e) never runs, and CS_DCLF_FIRST_PERSON must stay off");
 	}
 	logger::info("[DCLF] Native pass hooks installed");
 }
@@ -1071,7 +1145,7 @@ void DrawcallLimitFix::DrawSettings()
 		if (const auto& gpu = RenderGraphRuntime::Get().GpuTimingSummary(); !gpu.empty())
 			ImGui::TextUnformatted(("GPU (ORG pass timestamps, last report):\n" + gpu).c_str());
 		const auto& capture = DCLF::PassCapture::Get().GetStats();
-		const auto set = DCLF::PassCapture::Get().CurrentSet();
+		const auto set = DCLF::SceneStore::Get().FrameClaims();
 		ImGui::Text("DCLF set: %u members; main-view passes withheld %u", set ? static_cast<std::uint32_t>(set->phases.size()) : 0u, capture.mainWithheld);
 		if (active.shadows) {
 			const auto& shadow = DCLF::IndirectDraws::Get().GetShadowStats();

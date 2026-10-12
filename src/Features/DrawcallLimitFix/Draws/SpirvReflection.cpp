@@ -36,6 +36,7 @@ namespace DCLF
 		constexpr std::uint32_t kStorageUniformConstant = 0;
 		constexpr std::uint32_t kStorageInput = 1;
 		constexpr std::uint32_t kStorageUniform = 2;
+		constexpr std::uint32_t kStorageOutput = 3;
 		constexpr std::uint32_t kStorageStorageBuffer = 12;
 
 		constexpr std::uint32_t kNone = ~0u;
@@ -68,6 +69,7 @@ namespace DCLF
 		inputs.clear();
 		bindings.clear();
 		blockMembers.clear();
+		outputLocations = 0;
 		if (a_spirv.size() < kHeaderWords * 4 || a_spirv.size() % 4 != 0)
 			return false;
 		std::vector<std::uint32_t> words(a_spirv.size() / 4);
@@ -198,6 +200,11 @@ namespace DCLF
 				const std::uint32_t index = digits < semantic.size() ? static_cast<std::uint32_t>(std::stoul(semantic.substr(digits))) : 0;
 				semantic.resize(digits);
 				inputs.push_back({ std::move(semantic), index, id.location });
+				continue;
+			}
+			if (id.storage == kStorageOutput) {
+				if (!id.builtIn && id.location < 32)
+					outputLocations |= 1u << id.location;
 				continue;
 			}
 			// A constant buffer's members, whether the code reads them or not: the layout is the declaration's.

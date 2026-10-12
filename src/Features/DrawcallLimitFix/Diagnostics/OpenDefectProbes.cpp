@@ -1008,4 +1008,58 @@ namespace DCLF
 		ReflectionFaces::SetAfterFaces(&AfterFaces);
 		logger::info("[DCLF] reflection census on");
 	}
+
+	void ObservePlayerClaims()
+	{
+		if (!SwitchEnabled(Switch::SetParity))
+			return;
+		struct Observed
+		{
+			std::uint32_t frames = 0, hiddenFrames = 0, claimedFrames = 0, violations = 0;
+			std::uint32_t streak = 0, longest = 0;
+			std::string first;
+		};
+		static Observed observed;
+		auto* player = RE::PlayerCharacter::GetSingleton();
+		const auto claims = SceneStore::Get().FrameClaims();
+		++observed.frames;
+		std::uint32_t claimed = 0;
+		std::string example;
+		// The geometry under a_root claimed for the main view (a safe point: the engine's update is done, the culls not begun).
+		auto count = [&](RE::NiAVObject* a_root) {
+			RE::BSVisit::TraverseScenegraphGeometries(a_root, [&](RE::BSGeometry* a_geometry) {
+				if (claims->PhasesOf(a_geometry) & kSetMain) {
+					if (!claimed++)
+						example = a_geometry->name.c_str() ? a_geometry->name.c_str() : "?";
+				}
+				return RE::BSVisit::BSVisitControl::kContinue;
+			});
+		};
+		if (player && claims) {
+			auto* thirdPerson = player->Get3D(false);
+			auto* firstPerson = player->Get3D(true);
+			const bool thirdHidden = thirdPerson && thirdPerson->GetFlags().any(RE::NiAVObject::Flag::kHidden);
+			observed.hiddenFrames += thirdHidden ? 1 : 0;
+			if (thirdHidden)
+				count(thirdPerson);
+			if (firstPerson && firstPerson != thirdPerson)
+				count(firstPerson);
+		}
+		if (claimed) {
+			++observed.claimedFrames;
+			observed.longest = std::max(observed.longest, ++observed.streak);
+			if (observed.streak == 9 && !observed.violations++)
+				observed.first = fmt::format("'{}' and {} more claimed for 9 frames", example, claimed - 1);
+		} else
+			observed.streak = 0;
+		if (observed.frames < 300)
+			return;
+		logger::info("[DCLF] player 3D against the claims (set parity) over {} frames: third person hidden in {}; frames with a hidden skeleton's geometry claimed for "
+					 "the main view {} (longest run {}), runs past the publication's latency {}{}{}",
+			observed.frames, observed.hiddenFrames, observed.claimedFrames, observed.longest, observed.violations, observed.violations ? " <- PLAYER 3D; first: " : " <- OK",
+			observed.first);
+		const std::uint32_t streak = observed.streak;
+		observed = {};
+		observed.streak = streak;
+	}
 }

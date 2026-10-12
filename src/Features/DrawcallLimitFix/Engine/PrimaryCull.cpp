@@ -48,6 +48,10 @@ namespace DCLF
 		constexpr std::uintptr_t kNoSunShadowDir = 0x20330a4;      // byte: GetRenderPasses gives no pass ShadowDir
 		constexpr std::uintptr_t kScreenDoorFades = 0x2033468;     // byte: screen-door fades are on
 		constexpr std::uintptr_t kListProcesses = 0x338c8a0;       // BSGeometryListCullingProcess**, one per scene list
+		// T7f preparation: the main camera, the world scene graph's (+0x128), which FUN_1406452c0 (Main::Draw's camera setup, before
+		// BeginSceneFrame) sets the tree height base from, and the list processes carry.
+		constexpr std::uintptr_t kWorldSceneGraph = 0x338c8e8;
+		constexpr std::size_t kSceneGraphCamera = 0x128;
 		constexpr std::uintptr_t kFadesOn = 0x2032dfd;             // byte: BSFadeNode::OnVisible updates fades
 		// NiAVObject / BSFadeNode fields BSFadeNode::OnVisible (AE 0x141479f50) reads before its fade update.
 		constexpr std::size_t kObjectFlags = 0xF4;
@@ -147,9 +151,41 @@ namespace DCLF
 		return SceneStore::ReadSwitch(*a_switch).index;
 	}
 
+	namespace
+	{
+		/**
+		 * @brief T7d's Effect port: an effect member's main pass, built from the object alone as BSEffectShaderProperty::GetRenderPasses
+		 * would register it (0x1414bd890): hint 1 (the blended list), the effect pass enum, the fade node's LOD row. Derived every time (no
+		 * MembershipDerived cache: its witnesses do not cover the alpha property and the texture paths the descriptor reads; it is cheap).
+		 */
+		bool EffectMembershipPass(const SceneCapture::LeafView& a_leaf, const SceneCapture::PropertyRecord& a_effect, AccumulatedPass& a_out, std::uint32_t* a_derived)
+		{
+			LightingDescriptors descriptors;
+			const bool derived = DeriveEffectDescriptors(a_effect, a_leaf, descriptors) == Ineligible::None;
+			if (a_derived)
+				*a_derived = derived ? descriptors.derivedPass : kNotDerived;
+			if (!derived)
+				return false;
+			a_out = {};
+			a_out.subPass = PassCapture::SubPassOf(a_leaf.AlphaTesting(), a_effect.flags);
+			a_out.technique = descriptors.derivedPass;
+			a_out.passEnum = EffectPassEnum(descriptors.derivedPass);
+			// GetRenderPasses' hint: 1 for the blended mesh, 2 or 3 for a decal (T7d part 5: by whether its alpha property blends).
+			a_out.hint = descriptors.decalGroup ? descriptors.decalGroup + 1 : 1u;
+			a_out.lodRow = SceneStore::LodRowOf(a_leaf, &a_effect);
+			return true;
+		}
+	}
+
 	bool PrimaryCull::FreshSyntheticPass(const RE::BSGeometry& a_geometry, const SceneCapture::LeafView& a_leaf, AccumulatedPass& a_out)
 	{
 		const auto* lighting = SceneCapture::LeafView::Lighting(a_leaf.property);
+		if (const auto* effect = lighting ? nullptr : SceneCapture::LeafView::Effect(a_leaf.property); effect && ActiveToggles().effects) {
+			if (!EffectMembershipPass(a_leaf, *effect, a_out, nullptr))
+				return false;
+			a_out.resident = true;
+			return true;
+		}
 		if (!lighting)
 			return false;
 		LightingDescriptors descriptors;
@@ -209,6 +245,15 @@ namespace DCLF
 		answer.derived = a_cached;
 		answer.fail = 2;  // not lighting (SyntheticPass's index)
 		const auto* lighting = SceneCapture::LeafView::Lighting(a_leaf.property);
+		if (const auto* effect = lighting ? nullptr : SceneCapture::LeafView::Effect(a_leaf.property); effect && ActiveToggles().effects) {
+			std::uint32_t derived = kNotDerived;
+			answer.ok = EffectMembershipPass(a_leaf, *effect, answer.pass, &derived);
+			answer.derived = { effect->key, effect->material, effect->flags, 0, derived };
+			answer.fail = answer.ok ? 0 : 1;  // derived, or not (SyntheticPass's indices)
+			if (answer.ok)
+				answer.pass.resident = true;
+			return answer;
+		}
 		if (!lighting)
 			return answer;
 		const std::uint8_t fadeState = FadeStateOf(lighting);
@@ -319,28 +364,21 @@ namespace DCLF
 		       RttiIs(a_root, "BSTreeNode") ? EntryPlan::TreeRoot : EntryPlan::Plain;
 	}
 
-	void PrimaryCull::PrepareFrame()
+	void PrimaryCull::BeginFrameCamera()
 	{
-		++cutStats.frames;
-		// The membership witness, before the list jobs: the commit sampled it at the scene phase (a frame without one samples it
-		// here), and BindByMembership reads the same sample.
-		if (sampledWitnessFrame != SceneStore::Get().GetFrame())
-			SampleMembershipWitness();
-		// The switches whose selection the walks applied since the last frame; a frame the cut skips drops them, so the
-		// next one reads every switch again.
-		const bool switchResync = SceneStore::Get().TakeSwitchChanges(switchChanges);
-		liveStale = switchResync || liveStale;
-		auto candidates = SceneStore::Get().GetSunCandidates();
-		const std::uint32_t count = Global<std::uint32_t>(kSceneListCount);
-		auto** processes = Global<RE::NiCullingProcess**>(kListProcesses);
-		++frameCounter;
-		frameSet = PassCapture::Get().CurrentSet();
-		standInLive = false;
+		// T7f preparation: the frame's camera duties, from the main camera (the world scene graph's, set up by Main::Draw's camera setup
+		// just before), not from the list processes' Process1 call site, so nothing here depends on the list cull running. The list
+		// processes carry the same camera (CS_DCLF_ACCUMULATED_PARITY checks it in PrepareFrame).
+		if (!installed)
+			return;
+		const auto* sceneGraph = Global<const std::byte*>(kWorldSceneGraph);
+		const auto* camera = sceneGraph ? At<const RE::NiCamera*>(sceneGraph, kSceneGraphCamera) : nullptr;
+		frameCamera = camera;
 		// The camera the fade roots' distances are measured from (BuildDraws' fade test).
 		fadeEye = {};
-		if (const auto* camera = processes && count ? processes[0]->camera : nullptr) {
+		if (camera) {
 			fadeEye = { camera->world.translate.x, camera->world.translate.y, camera->world.translate.z, At<float>(camera, kCameraLodAdjust) };
-			// T7b2: a camera cut (a jump or a snap turn the frames between a GPU verdict and its write cannot follow): every stood-in root
+			// T7b2: a camera cut (a jump or a snap turn the frames between a GPU verdict and its write cannot follow): every DCLF-written root
 			// visible until a batch of this frame or later is decoded (IndirectDraws::NoteCameraCut). A turn's angle from the rotations'
 			// relative trace, axis-agnostic.
 			const auto& r = camera->world.rotate.entry;
@@ -357,9 +395,39 @@ namespace DCLF
 			cutCamera = now;
 			cutCameraKnown = true;
 		}
-		// BSTreeNode::OnVisible's height test, as the list processes have it this frame (TreeAboveLimit).
+		// BSTreeNode::OnVisible's height test as the main camera's list processes have it (TreeAboveLimit): their +0x121 is a constant of
+		// the process (only the constructors write it, 0, for these processes; skyrim-engine-notes.md, "T7f preparation"), the base is
+		// the camera's height (FUN_1406452c0 stores it), the switch and the limit are globals.
+		const std::uint32_t count = Global<std::uint32_t>(kSceneListCount);
+		auto** processes = Global<RE::NiCullingProcess**>(kListProcesses);
 		const bool heightTest = processes && count && processes[0] && At<std::uint8_t>(processes[0], kProcessTreeHeightTest) && Global<std::uint8_t>(kTreeHeightTestOn);
 		treeHeight = { Global<float>(kTreeHeightBase), heightTest ? Global<float>(kTreeHeightLimit) : std::numeric_limits<float>::infinity() };
+	}
+
+	void PrimaryCull::PrepareFrame()
+	{
+		++cutStats.frames;
+		// The membership witness, before the list jobs: the commit sampled it at the scene phase (a frame without one samples it
+		// here), and BindByMembership reads the same sample.
+		if (sampledWitnessFrame != SceneStore::Get().GetFrame())
+			SampleMembershipWitness();
+		// The switches whose selection the walks applied since the last frame; a frame the cut skips drops them, so the
+		// next one reads every switch again.
+		const bool switchResync = SceneStore::Get().TakeSwitchChanges(switchChanges);
+		liveStale = switchResync || liveStale;
+		auto candidates = SceneStore::Get().GetSunCandidates();
+		const std::uint32_t count = Global<std::uint32_t>(kSceneListCount);
+		auto** processes = Global<RE::NiCullingProcess**>(kListProcesses);
+		++frameCounter;
+		frameSet = SceneStore::Get().FrameClaims();
+		standInLive = false;
+		// The frame's camera (FadeEye, the camera cut, TreeHeightTest) is BeginFrameCamera's, at BeginSceneFrame. CS_DCLF_ACCUMULATED_PARITY:
+		// the list processes' camera must be the one it read.
+		if (SwitchEnabled(Switch::AccumulatedParity) && processes && count && processes[0]) {
+			++frameCameraChecked;
+			if (static_cast<const void*>(processes[0]->camera) != frameCamera)
+				++frameCameraDiffer;
+		}
 		if (!processes || !count || count > cut.processes.size())
 			return;
 		// The list processes this frame: the leaf exclusion (AppendVirtual) applies whenever they are known.
@@ -381,7 +449,7 @@ namespace DCLF
 				standInList.clear();
 				++standInVersion;
 				SceneStore::Get().SetFadeRootsOwned({});
-				TreeAnimation::SetOwned({});
+				TreeAnimation::SetOwned({}, {});
 			}
 			frameLive.store(true, std::memory_order_release);
 			return;
@@ -810,7 +878,7 @@ namespace DCLF
 		standInList.clear();
 		++standInVersion;
 		std::vector<SceneStore::OwnedFadeRoot> owned;
-		std::vector<const RE::NiAVObject*> animated;
+		std::vector<const RE::NiAVObject*> animated, trees;
 		for (std::uint32_t e = 0; e < cut.plans.size(); ++e) {
 			const auto plan = cut.plans[e];
 			const bool fade = plan == EntryPlan::FadeRoot || plan == EntryPlan::LeafRoot || plan == EntryPlan::TreeRoot;
@@ -822,10 +890,13 @@ namespace DCLF
 				standInRoots.insert(cut.roots[e]);
 				standInList.push_back(cut.roots[e]);
 				animated.push_back(cut.roots[e]);
+				// T7b5's fix: a stood-in BSTreeNode stays on the tree manager's tree list, its loop given DCLF's verdict (TreeAnimation).
+				if (plan == EntryPlan::TreeRoot)
+					trees.push_back(cut.roots[e]);
 			}
 		}
 		SceneStore::Get().SetFadeRootsOwned(owned);
-		TreeAnimation::SetOwned(animated);
+		TreeAnimation::SetOwned(animated, trees);
 	}
 
 	void PrimaryCull::AtUpdateEntry(bool a_running)
@@ -835,6 +906,8 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.AccumulatedWrites");
 		// The writes for roots the cut no longer stands in for are left: the engine's cull writes those this frame.
 		IndirectDraws::Get().WriteAccumulated(a_running, [this](const void* a_root) { return standInRoots.contains(a_root); });
+		// T7b5's fix: the tree manager's loop (later in this Main::Update) takes the stood-in trees' visibility from those writes.
+		TreeAnimation::AtUpdateEntry(a_running);
 		// T7b4: the fade write-back's stores, on the roots DCLF writes alone (the set the gate skips this frame, published below); one
 		// for a root the cut no longer stands in for is left, the engine's cull stepping it this frame.
 		std::vector<const void*> stored;
@@ -1252,6 +1325,12 @@ namespace DCLF
 			if (translucent)
 				return false;
 			hint = kLayerHint;
+		} else if (flags & 0x8004ull) {
+			// T7d's refraction (kRefraction, kTempRefraction): GetRenderPasses' one main pass is the Utility RENDER_NORMAL pass, hint 4
+			// (geometry group 5), whatever the alpha; drawn by the forward epoch from the refraction range (CS_DCLF_REFRACTION).
+			if (!ActiveToggles().refraction || !ActiveToggles().forward)
+				return false;
+			hint = 4;
 		} else if (flags & 0xc000000ull)
 			hint = translucent ? 3 : 2;  // the decal groups
 		else if (translucent && !ActiveToggles().forward)
@@ -1450,6 +1529,13 @@ namespace DCLF
 				logger::info("[DCLF] fade port parity (the port against the engine's functions on node copies): {} roots, {} differ{}{}", fadePort.checked, fadePort.differ,
 					fadePort.differ ? " <- FADE PORT" : " <- OK", fadePort.first.empty() ? "" : "; first: " + fadePort.first);
 				fadePort = {};
+			}
+			// T7f preparation, CS_DCLF_ACCUMULATED_PARITY: BeginFrameCamera's main camera against the list processes'.
+			if (frameCameraChecked) {
+				logger::info("[DCLF] frame camera (T7f preparation: FadeEye, the camera cut and the height test from the main camera at BeginSceneFrame): {} frames, {} with "
+							 "another camera on the list processes{}",
+					frameCameraChecked, frameCameraDiffer, frameCameraDiffer ? " <- FRAME CAMERA" : " <- OK");
+				frameCameraChecked = frameCameraDiffer = 0;
 			}
 			// LOD skins: records whose partitions BuildDraws picks by their root's level in FadeStateCS's state (T1b).
 			const auto& lodTables = SceneStore::Get().GetTables();

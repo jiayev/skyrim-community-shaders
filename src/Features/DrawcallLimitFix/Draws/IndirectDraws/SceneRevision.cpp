@@ -188,6 +188,24 @@ namespace DCLF
 			if (changed)
 				setShape(4, std::move(kept));
 		}
+		// T7e: the first-person epochs (depth, colour) both record against the first-person shape, while CS_DCLF_FIRST_PERSON is on: their
+		// slots name the same value (a recording kept for each stays while the shape does); none while it is off.
+		{
+			std::shared_ptr<const FirstPersonFrame> made = producer.inputs.toggles.firstPerson ? shapes.firstPerson[0] : nullptr;
+			const auto& current = draft.Get(R::kShapeSlot + R::kFirstPersonDepthEpoch);
+			const auto currentShape = current ? current->Value<FirstPersonFrame>() : nullptr;
+			if (made) {
+				bool changed = false;
+				auto kept = Kept<FirstPersonFrame>(currentShape, made, changed);
+				if (changed || !draft.Get(R::kShapeSlot + R::kFirstPersonEpoch)) {
+					setShape(R::kFirstPersonDepthEpoch, kept);
+					setShape(R::kFirstPersonEpoch, kept);
+				}
+			} else if (currentShape) {
+				draft.Set(R::kShapeSlot + R::kFirstPersonDepthEpoch, nullptr);
+				draft.Set(R::kShapeSlot + R::kFirstPersonEpoch, nullptr);
+			}
+		}
 		// T7d: the forward epoch records the colour shape's forward passes (ForwardDrawPass), while CS_DCLF_FORWARD is on: its slot names
 		// the colour slot's shape (the same value, so a recording kept for it stays while the colour shape does); none while it is off.
 		{
@@ -246,6 +264,9 @@ namespace DCLF
 			if (e == R::kForwardEpoch) {
 				// T7d: the forward epoch's passes prepare against the colour shape (CurrentFrame's MainOpaque).
 				request([&](RevisionShapes& a_shapes) { a_shapes.main[kColourShape] = shapeFragment->Value<PassFrame>(); });
+			} else if (e == R::kFirstPersonDepthEpoch || e == R::kFirstPersonEpoch) {
+				// T7e: both first-person epochs' passes prepare against the first-person shape.
+				request([&](RevisionShapes& a_shapes) { a_shapes.firstPerson = shapeFragment->Value<FirstPersonFrame>(); });
 			} else if (e < 2) {
 				request([&](RevisionShapes& a_shapes) { a_shapes.main[e] = shapeFragment->Value<PassFrame>(); });
 			} else if (e < 4) {
@@ -438,6 +459,7 @@ namespace DCLF
 		next.main = resources;
 		next.shadow = shadow;
 		next.reflection = reflection.resources;
+		next.firstPerson = firstPerson.resources;
 		next.scene = scene;
 		bool deferred = false;
 		if (auto* host = RenderGraphRuntime::Get().Host()) {
@@ -471,6 +493,8 @@ namespace DCLF
 		next.reflectionTargets = reflection.targets;
 		next.reflectionWidth = reflection.resources ? reflection.resources->width : 0u;
 		next.reflectionHeight = reflection.resources ? reflection.resources->height : 0u;
+		next.firstPersonTargets = firstPerson.targets;
+		next.firstPersonDepthRange = firstPerson.depthRange;
 		next.portalWords = static_cast<std::uint32_t>(PortalViews::Get().Encoded().size());
 		auto& mirror = SceneStore::Get().TreeLodMirror();
 		next.treeLodShapeSlots = mirror.ShapeSlots();
@@ -491,6 +515,8 @@ namespace DCLF
 		                  next.blockSizes == previous.blockSizes && next.shadowKnown == previous.shadowKnown && next.reflectionKnown == previous.reflectionKnown &&
 		                  next.reflectionTargets == previous.reflectionTargets && next.reflectionWidth == previous.reflectionWidth &&
 		                  next.reflectionHeight == previous.reflectionHeight && next.portalWords == previous.portalWords &&
+		                  next.firstPerson == previous.firstPerson && next.firstPersonTargets == previous.firstPersonTargets &&
+		                  next.firstPersonDepthRange == previous.firstPersonDepthRange &&
 		                  next.treeLodShapeSlots == previous.treeLodShapeSlots && next.treeLodMeshSlots == previous.treeLodMeshSlots &&
 		                  next.shadowRowsWanted == previous.shadowRowsWanted && next.shadowSlots == previous.shadowSlots && next.asyncEpochs == previous.asyncEpochs &&
 		                  !next.uploads.owner_before(previous.uploads) && !previous.uploads.owner_before(next.uploads);
@@ -514,6 +540,9 @@ namespace DCLF
 			rv.covered.fill(true);
 			impl->reflectionCovered = true;
 			PassCapture::Get().SetReflectionCovered(true);
+			// T7e: nothing of the first person's is withheld from a failed graph (the engine draws it).
+			impl->firstPersonCovered = false;
+			PassCapture::Get().SetFirstPersonCovered(false);
 			return true;
 		}
 		// Each epoch's recordings in the adopted snapshot's revision, of the graph as built now (the build point just ran), and its versions
@@ -571,6 +600,14 @@ namespace DCLF
 		                    resources->committed[kDepthShape].objectCapacity == resources->objectCapacity;
 		impl->reflectionCovered = main && inputs && rv.covered[4] && reflection.resources && reflection.resources->cube && !host->RebuildRequested();
 		PassCapture::Get().SetReflectionCovered(impl->reflectionCovered);
+		// T7e: the first-person members are withheld from the engine (PassCapture) and drawn by the first-person epochs on a frame the engine
+		// draws first person (the latch), whose claims stand, both epochs' recordings in the revision and the depth copy imported into the
+		// graph as built. Its members need no frame before's inputs: both epochs draw this frame's scene list with this frame's camera.
+		const auto& fp = impl->firstPerson;
+		impl->firstPersonCovered = main && ActiveToggles().firstPerson && fp.latch && fp.latchFrame == frame && rv.covered[R::kFirstPersonDepthEpoch] &&
+		                           rv.covered[R::kFirstPersonEpoch] && fp.resources && fp.resources->depthCopy && !fp.resources->rebuildPending && fp.resources->main &&
+		                           fp.resources->main == impl->resources && fp.resources->main->native[1] && !host->RebuildRequested();
+		PassCapture::Get().SetFirstPersonCovered(impl->firstPersonCovered);
 		return main;
 	}
 

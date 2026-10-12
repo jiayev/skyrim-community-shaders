@@ -33,6 +33,11 @@ Static rigid geometry:
 -   under a `BSOrderedNode` only when opaque (T7c0; see "Ordered nodes");
 -   terrain, with Terrain Blending on, only with `CS_DCLF_TB_TERRAIN` (T7c1; see "Terrain under Terrain Blending").
 -   blended (alpha-blended, or a material alpha below one), only with `CS_DCLF_FORWARD` (T7d; see "The forward epoch (T7d)").
+-   refractive (`kRefraction`, `kTempRefraction`), only with `CS_DCLF_REFRACTION` and `CS_DCLF_FORWARD` (T7d; see "Refraction (T7d)").
+-   or a `BSEffectShaderProperty` on a `BSTriShape` whose pass is the static blended mesh's, only with `CS_DCLF_EFFECTS` and
+    `CS_DCLF_FORWARD` (T7d; see "The Effect shader in the forward epoch (T7d, part 3)").
+-   or an `NiParticleSystem` (blended) with a `BSEffectShaderProperty`, only with `CS_DCLF_PARTICLES` and
+    `CS_DCLF_EFFECTS`, its quads built from snapshots taken at the engine's particle update (T7e; see "Particles (T7e)").
 
 Per frame it must also:
 -   be visible, meaning not app-culled or hidden up to its tracked root;
@@ -2412,7 +2417,8 @@ classes by what this report counts.
 ### Ordered nodes (T7c0)
 
 A `BSOrderedNode` orders its leaves' blended passes and nothing else, so its opaque leaves are main-phase eligible like
-any other leaf. Its blended ones stay `UnsupportedParent`, for T7d. From the AE executable:
+any other leaf. Its blended ones stay `UnsupportedParent`, for T7d (with the forward epoch they are DCLF's since T7d's ordered-node
+interleave: "Effect variants and the ordered-node interleave (T7d, part 4)"). From the AE executable:
 
 -   **The cull.** The node's `OnVisible` (`0x141503970`) opens a new group of the culling process (an atomic increment of
     `+0x301f0`) and culls its children into it. `AppendVirtual` queues them on the process's groups (`+0x301d8`) instead of
@@ -2597,6 +2603,504 @@ target matches the vanilla one for these modes as far as the decal probe saw; th
 (compiled at runtime: a compile failure leaves the class unbound, not drawn wrong); the occlusion maps' membership of forward objects
 follows the generic occluder rule, unverified against the engine for blended `kZBufferWrite` geometry.
 
+## Refraction (T7d)
+
+Lighting geometry with `kRefraction` or `kTempRefraction` (heat haze over fires and forges, streams' surfaces, the invisibility
+shimmer, which `Actor::SetRefraction` turns on with `kTempRefraction`) was `Ineligible::Technique` (`refraction`, technique 63 in
+the histogram) and drawn by the engine. The T7a census put it at 3.9 `technique` passes a frame in interiors. T7d's second part
+draws it behind `CS_DCLF_REFRACTION` (a live classification toggle, **off by default**, `=1` seeds it on; it needs
+`CS_DCLF_FORWARD`).
+
+**How the engine draws refraction** (AE 1.6.1170, decompiled for this):
+
+-   **No colour pass.** For such a property `BSLightingShaderProperty::GetRenderPasses` (`0x1414adfb0`) builds no Lighting pass.
+    It first runs the refraction LOD fade, unless the property has `kNoFade` (bit 35) or the accumulator is in its `+0xB9` mode:
+    `FUN_14147c470` at the fade node's metric (`+0x144`) against the Setting values `fRefractionLODFadeStart/End:LightingShader` at
+    `0x142033408` / `0x142033420` (0.025 / 0.03), with the result in `+0x104`, the property's `envmapLODFade` slot. Past the end it
+    returns no passes at all. A property alpha of 0 also registers nothing. Then it builds a single **Utility** pass with
+    accumulation hint **4**, technique `RenderNormal (0x200)`, plus `Texture | Normals | BinormalTangent (0x1A)` (only `Texture` with
+    `kModelSpaceNormals`), `Vc` with `kVertexColors`, `Skinned` with `kSkinned`, `RenderNormalFalloff` with `kRefractionFalloff`
+    (bit 16) and `RenderNormalClamp` with `kNonProjectiveShadows` (bit 13). The pass enum is the technique + 0x2B. It may add an
+    Effect pass for the property's effect data, as it does for any Lighting property.
+-   **Registration.** The main modes' registration (`FUN_1414b2330`) inserts a hint 4 pass into geometry group **5**. Hint 5, the
+    accumulator's `+0xB9` mode's `RenderNormalClear` passes, goes into group 6. The depth and shadow modes (`FUN_1414b2a60`, vfunc
+    `0x158`, `GetRenderPasses_ShadowMapOrMask`) give refraction no pass, and neither does the occlusion maps' function.
+-   **The draw: after the world, into `kREFRACTION_NORMALS`.** In `Main::Draw`, after `Main::RenderWorld` (`FUN_1414cdaa0`: the
+    deferred pass, the composite, the water, the blended draw), the call at `0x140644d20` reads the main accumulator's group 5
+    count (`FUN_1414b4840`). With passes there, `FUN_1414ce1d0` runs `FUN_1414b4860(main accumulator, world camera)`. Otherwise
+    groups 6 and 5 are cleared undrawn (`FUN_1414b4ae0`). `FUN_1414b4860` sets depth mode 1 (tested, not written) and write mode 2.
+    If the normals are already begun (`0x1435ef130`), it draws group 6 into render target 13 (`kREFRACTION_NORMALS`) with the target
+    kept, then clears group 6. For group 5 it sets the clear colour (0.5, 0.5, 0, 0) (`0x141ad285c` holds 0.5) unless the normals
+    are begun, binds target 13 (clear, or kept if begun), marks the normals begun and drawn (`0x1435ef130`, `0x1435ef131`), and draws
+    group 5. RT0 is the only target it binds; the main depth stays bound. Later in the frame the player's third-person block
+    (`FUN_1414cb6d0`) runs the same function on its own accumulator (`0x14338c840`).
+-   **The shader** (`Utility.hlsl`, `RENDER_NORMAL`): the view-space normal (clamped to Â±0.1 with `RENDER_NORMAL_CLAMP`) and the
+    texture's normal (`TexNormalSampler`, t1). `BSUtilityShader::SetupMaterial` (`0x1414faa60`) binds the material's **diffuse**
+    texture there, with its `textureClampMode`, filter mode 3. The output is xy = ((normal * 0.9 + normalVS.xy) / max(1,
+    0.0013333 z + 0.8)) * 0.5 + 0.5, z = vertex alpha * RefractionPower * EyePos.w * falloff, w = 1. `RefractionPower` is the
+    material's `+0x84`. `EyePos.w` is the property's `+0x104`, the refraction LOD fade (`BSUtilityShader::SetupGeometry`,
+    `0x1414fae40`). With `RENDER_NORMAL_FALLOFF`, `EyePos.xyz` is the camera in model space (the world transform inverted), and the
+    falloff is dot(normal, the direction to the eye).
+-   **The warp is an image-space effect.** `ImageSpaceEffectRefraction` (vtable functions `0x1414f9390` render, `0x1414f95a0`
+    IsActive, which returns `0x1435ef131`) runs `ISRefraction.hlsl` with Src0 the frame and Src1 the normals: the texture coordinate
+    is offset by (z * 0.1) * (xy - 0.5), and the frame is blended toward the offset sample by the normals' w there. Its render
+    clears both flags. So the **scene-colour copy** the refraction samples is the image-space manager's input, made after the world
+    is drawn. Neither the engine's draw nor DCLF's samples the colour. The cleared value (0.5, 0.5, 0, 0) and a zero-strength
+    surface warp nothing. Community Shaders changes none of this: `Lighting.hlsl` has no refraction path (its `refract()` calls are
+    the clearcoat and parallax), and Upscaling only upscales the normals target.
+-   **State.** The draw is neither forward-shaded nor blended: no blending (write mode 2), depth tested and not written, culling by
+    the batch lists (back faces unless `kTwoSided`). The order within group 5 is the batch renderer's. With no depth writes and
+    no blending, only overlapping refraction surfaces depend on it (the last one wins).
+
+**Where DCLF draws it.** In the **forward epoch**, after the blended draws (`RefractionDrawPass`, `cs.dclf.refraction`, registered
+in `Segment::Forward` after `cs.dclf.forward`). The pass clears the imported `kREFRACTION_NORMALS` to (0.5, 0.5, 0, 0), as
+`FUN_1414b4860` does, and draws the refraction range with one plain indexed indirect draw that tests the main depth.
+`IndirectDraws::ExecuteForward` then sets `0x1435ef130` and `0x1435ef131`, as `FUN_1414b4860` does. Main::Draw's own refraction
+point then finds the normals begun: if the engine still has refraction passes in group 5 (non-members), it draws them **on top
+of DCLF's without clearing**, and ISRefraction runs. That point (the call at `0x140644d20`) is hooked
+(`Main_Draw_RefractionCheck`). When DCLF drew the normals that frame, the hook clears group 6 first. Group 6 is the only thing
+the begun flag would newly let the engine draw there, and it never draws group 6 at that point otherwise.
+
+-   **Ordering.** The normals hold no colour, so blended draws need no ordering against them. ISRefraction warps the final frame,
+    DCLF's forward draws and the engine's blended draws included. What moves is the depth the normals are tested against: the
+    forward epoch's main depth lacks the depth writes of the engine's blended passes drawn after it (a z-writing effect in front of
+    a refraction surface). The engine's normals would be occluded there; DCLF's are not.
+-   **Views.** The main camera only, as the engine: no shadow, depth, occlusion or reflection pass exists for refraction. A
+    refraction object's view mask is `kViewRefraction` (bit 10) alone (`MainMaskOf`, from its key's `kRasterRefraction`). It is not
+    a depth segment input. The colour segment's BuildDraws culls it once (frustum, then the HZB), and also drops it under a fade
+    root whose OnVisible FadeStateCS found stopped, where the engine registers nothing. One persistent scene with view masks, as
+    `kViewForward`; no per-view CPU list. `kViewRefraction` is one of the main build's bits (`kMainSideBits`). The first run (w172)
+    left it out, so merging a scene entry with its shadow part dropped it. The colour BuildDraws then skipped the input: no cull, no
+    draw and no published verdict, and the set parity reported the member `<- SET PARITY` ("in the set and drawn by nobody, verdict
+    not this frame's").
+
+**What was built.**
+
+-   **Classification** (`LightingDescriptors.cpp`): with both toggles, a refraction property that is not a decal, a layer or
+    Terrain Blending's terrain, with a material alpha above 0, gets `refraction` and `forward` (blend 0, depth tested, not
+    written). It also gets `refractionFalloff` and `refractionClamp`, and the Lighting descriptors the property derives (the slot's
+    material and pipeline rows). Its key has `kRasterForward` and `kRasterRefraction`, plus `kRasterRefractionFalloff` and
+    `kRasterRefractionClamp` (bits 29-31). The object has `kObjectForward`, so every forward rule applies: colour-only, out of the
+    depth segment, colour-only in the set parity, out of the build parity. The synthetic membership pass is hint 4
+    (`PrimaryCull`). `LodFadeNodeOf` counts refraction (without `kNoFade`) as fade-sensitive.
+-   **The record** (`LightingConstants.h`, `RefractionRecordFlagsOf`): `DCLFRecordFlags` bits 2-7 hold `kRecordRefraction` and the
+    variants (falloff, clamp, no normals, vertex colours, two-sided). The shading row (`SampleShading`) holds the property's `+0x104`
+    in `MaterialData.x`, used where the LOD fades do not apply, and the material's `refractionPower` in `MaterialData.w`. Neither
+    is in `written`, so no engine Lighting constant is compared with them.
+-   **The range** (`GpuLayouts.h`, `ReserveMainSequences`): after the forward range's two halves, `MainSizing::refractionCapacity`
+    holds every draw the refraction slots can produce, grown to a power of two (`RefractionSlot`). Refraction slots no longer count
+    toward the forward capacity. Count words 36-39 (`kCountRefractionWord`): the draws, then the inputs tested, in the frustum, and
+    occluded or under a faded root. The colour commit zeroes them.
+-   **BuildDrawsCS**: a forward input whose view mask is `kViewRefraction` is culled as above, and its draws are appended to the
+    refraction range as **pooled** sequences (`StoreShadowSequence`: from the index pool, the slot as the first instance). The colour
+    segment binds the pool's firsts for this (`refractionCapacity` is a new push word, the constants still 128 bytes; the range base
+    is `ForwardBase + 2 * ForwardCapacity`).
+-   **The pipeline** (`DrawPipelines::RequestRefraction`, `SetRefractionInputs`; lane `Refraction`, `BuildRefraction`): one pipeline
+    from `FindShadow(kRefractionTechnique = 0x20A)` (Utility `TEXTURE NORMALS RENDER_NORMAL`, pulled), under the shadow views'
+    layout and plain draw signature. It has one attachment in the normals' format with the RT0 write mask of the engine's blend
+    state for write mode 2 (read from the forward table), depth LESS_EQUAL without writes, and no culling. It is rebuilt with the
+    main targets or a new format. `IndirectState::refraction` names it, so a new pipeline changes the colour shape and its
+    recordings. A refraction object joins the set's main phase only once the catalog its lookups were resolved against has the
+    pipeline (`SceneStore::MainReady`, waiting reason 11). Until then the engine draws it.
+-   **The stages** (`Utility.hlsl`, `DCLF_REFRACTION` = `DCLF_PULLED` + `RENDER_NORMAL`): the vertex stage reads its sequence: the
+    pipeline row's vertex layout, the material row's `TexcoordOffset` (Lighting's PerMaterial c2, the same values Utility's
+    SetupMaterial writes) and its t0 (the diffuse, the refraction normal map) with its sampler. It reads the record's variants and
+    skins with the record's palette when it has one. It computes the refraction LOD fade from the frame's `LodFadeFrame`
+    (`refractionStart` and `refractionEnd` added in place of its padding; the call's push data names its address) the way Lighting
+    computes its envmap fade. Past the end it emits nothing. `RefractionPower` is folded into `TexCoord0.w`. The pixel stage is the
+    engine's output, and it discards a one-sided object's back faces.
+-   **Diagnostics.** In the forward epoch's report: `[DCLF] refraction (T7d, CS_DCLF_REFRACTION on|off): E forward epochs drew the
+    refraction normals, N with refraction slots could not (...) <- NO REFRACTION DRAW`. With the culling counters (sampled frame):
+    `[DCLF] refraction (T7d, sampled frame): T refraction inputs tested, V in the frustum, O occluded or under a faded root, D draws
+    into the refraction normals`. Under `CS_DCLF_SET_PARITY` it adds the observer: `; the engine registered R refraction passes of
+    members <- OK | <- REFRACTION`. R comes from `PassCapture::TakeRefractionRegistered`: the hint 4 passes withheld at the group 5
+    insertion. V >= R, as for `<- FORWARD`. The census's `technique` class (refraction) should be 0 in `main` with the switch on.
+    `[DCLF] refraction pipeline ready` is logged when the lane builds the pipeline.
+
+**Run** (`CS_DCLF_FORWARD=1 CS_DCLF_REFRACTION=1`, full featureset, `CS_DCLF_CENSUS=1`, then once with `CS_DCLF_SET_PARITY=1`; an
+interior with a fire, e.g. a hold's hall or an inn): `refraction pipeline ready`; refraction epochs about equal to the forward
+epochs while a refraction member is in the scene, and no `NO REFRACTION DRAW`; the sampled line with V > 0 and D > 0 near a fire;
+`<- OK`; the census without the `technique` (refraction) class in `main`. Visually, the heat haze shimmers over the fire with the
+switch on and off alike, with no full-screen warp, no haze through walls, and no stale haze after turning away.
+
+**Not done; risks.** Built (CommunityShaders, RelWithDebInfo), the refraction stages and BuildDrawsCS compiled offline to SPIR-V; not run in game. The refraction slot also builds its (never drawn) forward Lighting pipeline and
+material row, because drawability is the main set's (an extra Lighting permutation compile per variant; it could be admitted
+without one). While any refraction member is in the scene, DCLF clears the normals and marks them drawn even when none is
+visible: the image-space refraction pass then runs on frames where the engine would skip it (an identity warp, one full-screen
+pass), and the player's accumulator may draw its group 6 where the engine would not (only when it holds passes). The depth
+difference above (engine z-writing blended passes). An animated refraction power follows the shading row's events, a texture
+transform the material's captures. A property that is specular or envmapped **and** refractive with `kNoFade` takes the refraction
+fade anyway (the held bit is per node). `kTempRefraction` toggled at runtime (invisibility) needs the classification to see the
+flag change, as any property flag change does. The effect pass of a refraction property's effect data is withheld with the member,
+as for every member with effect data.
+
+## The Effect shader in the forward epoch (T7d, part 3)
+
+The census's largest class the engine still draws is `Effect: BSTriShape` (w168: ~100-145 passes a frame in the main view
+outside, ~21 inside): static `BSEffectShaderProperty` meshes, mostly the distant cloud cards around the mountains
+(`CloudDistant*`, `CloudShape*`), the LOD window glows (`WRLODWindowGlow01`), mist and light cards. `NiParticleSystem` is
+the same shader on particle geometry (T7e). Before this every one of them was `not-lighting-shader`. Behind
+`CS_DCLF_EFFECTS` (a live classification toggle, **off by default**, `=1` seeds it on; it needs `CS_DCLF_FORWARD`) DCLF draws
+the blended static ones in the forward epoch, in the same GPU sort as blended Lighting.
+
+**What the engine does** (AE 1.6.1170, decompiled for this):
+
+-   **`BSEffectShaderProperty::GetRenderPasses`** (`0x1414bd890`). No pass for render modes 0xc-0xf, 0x10-0x11, nor for
+    `kTempRefraction` with `kDynamicDecal`. It sets the property's `alpha` (+0x30) to `materialAlpha * fadeNode->currentFade`
+    (`0x14147bf30`; the material's alpha alone when the accumulator's byte `+0xb9` is set), builds one pass with
+    `passEnum = descriptor + 0x4000002C` and picks its accumulation hint: 2 or 3 for `kDecal`/`kDynamicDecal` (by alpha
+    blending), 0x12 for bit 45 (`kBillboard`'s bit, the effect's sky object: geometry group 13), else **1** (the blended list)
+    when `alpha < 1`, the alpha property blends, the geometry is a particle system or the descriptor has Falloff, else **0**
+    (`RegisterPass`, the opaque batches: Community Shaders' `DEFERRED` effect variant in the G-buffer pass). A fade node whose
+    `+0x153 & 0x70` is not 0x20 adds a copy of each pass with hint 9 (geometry group 7: the LOD cross-fade's copy).
+-   **The descriptor** (`FUN_1414bde90`; `ShaderCache.h` `EffectShaderFlags`): Vc (`kVertexColors`), TexCoord|Texture (the
+    material's source texture path is not empty), TexCoordIndex|IndexedTexture (particles with a texture), Skinned (`kSkinned`
+    and a skinned vertex description), Normals|Falloff (`kFalloff`, not particles), Particles, StripParticles, AddBlend (the
+    alpha property's destination function ONE), MultBlend (destination SRCCOLOR), MultBlendDecal (DESTCOLOR, INVSRCALPHA),
+    SkyObject (bit 45), Lighting (`kEffectLighting` and the global `0x142033508`), Blood (`kWeaponBlood`), ProjectedUv
+    (`kProjectedUV`, with TexCoord and Normals), Soft (`kSoftEffect`), GrayscaleToColor / GrayscaleToAlpha (`kGrayscaleToPalette*`
+    with a greyscale texture path), MotionVectorsNormals (`kZBufferTest` and `kZBufferWrite`, normals in the vertex description,
+    no alpha property or an alpha-tested one). Membrane, AlphaTest and IgnoreTexAlpha are never set by it.
+-   **`BSEffectShader::SetupTechnique`** (vfunc 2, `0x1414ea2c0`): the vertex descriptor is the pass's without bits 19-21
+    (`FUN_141521300`), the pixel descriptor without Skinned (unless Membrane) and SkyObject (`FUN_141521310`); Community Shaders'
+    lookup (`State::ModifyShaderLookup`) drops GrayscaleToColor, GrayscaleToAlpha and IgnoreTexAlpha from both (the permutation
+    block keeps them: `Permutation::PixelShaderDescriptor`) and adds Deferred in the deferred pass. VS PerTechnique: the fog, from
+    the scene graph's fog property, exactly the Lighting technique's (FogNearColor.w is `invFrameBufferRange`). PS PerTechnique:
+    with Soft, CameraDataEffect.yz = the current camera's near and far - near (`0x14332a328` +0x160, +0x164), VPOSOffset the
+    render size's inverse, the depth copy (`kPOST_ZPREPASS_COPY`, `0x14328cbfc` = 7 in the main view) bound to t3; FilteringParam
+    from two globals; t0's filter mode anisotropic with Texture (else t0 unbound).
+-   **`BSEffectShader::SetupMaterial`** (vfunc 4, `0x1414ea6c0`; the non-membrane half): with Texture, t0 = the source texture
+    (+0x58), its address mode the material's `effectClampMode` (+0x80), VS TexcoordOffset = the texture-transform buffer the
+    frame reads (+0x0c/+0x10 offset, +0x1c/+0x20 scale, as Lighting's); with GrayscaleToColor or GrayscaleToAlpha, t4 = the
+    greyscale texture (+0x60), address mode 0, filter mode 1. PS BaseColor = the base colour's rgb (+0x48) times
+    `baseColorScale` (+0x6c) and its alpha, or with GrayscaleToColor the raw colour and BaseColorScale.x = +0x6c;
+    LightingInfluence.x = the byte +0x81 / 255; with Soft LightingInfluence.y = near * far / `softFalloffDepth` (+0x68, the
+    camera's planes as SetupTechnique left them) and VS SoftMateralVSParams.x = +0x68; with Falloff VS FalloffData = +0x38..+0x44.
+-   **`BSEffectShader::SetupGeometry`** (vfunc 6, `0x1414eab10`; non-membrane): World and PreviousWorld as Lighting's (made
+    relative to posAdjust); PS PropertyColor = the property's `emittanceColor` (+0x88, a pointer, white without one) and its
+    `alpha` (+0x30; times the fade node's +0x14c for a cross-fade copy); with Lighting, DLightColor and the point lights;
+    with Blood, AlphaTestRef; with ProjectedUv, MatProj and t2. The depth mode from `kZBufferTest`/`kZBufferWrite` (test only: 1,
+    or 3 with the byte `0x1433dccf8`; neither: 0; both with a blending alpha property: 3); bit 48 (`kWireframe`) and bit 45 set
+    more state. Community Shaders' hooks: Light Limit Fix's strict lights and External Emittance's suppress bit (read only by the
+    Lighting variant), `EffectRadius` = the bound's radius (read only by the Lighting variant's shadows).
+-   **The animation** writes the material: `BSEffectShaderPropertyFloatController::Update` (`0x14150f090`) type 5 through
+    `SetMaterialAlpha` (the base colour's alpha), types 0-4 material floats (the falloff, the cosine of an angle for 1-2), types
+    6 and up the texture-transform buffer the next frame reads (UV scroll); `BSEffectShaderPropertyColorController::Update`
+    (`0x14150f700`) type 0 the base colour, others a property colour. External emittance points `emittanceColor` at the source's
+    shared colour (`0x1480fc0`).
+-   **Where it is drawn.** A hint 1 pass is in the same blended list as blended Lighting: `FUN_1414b39d0` sorts the two
+    together, farthest first. Groups 10, 11, 12 and 7 (`FUN_1414b3390`, before it) hold other classes' passes and the effects'
+    cross-fade copies.
+
+**What DCLF draws, and what it leaves.** One effect class for now: the static blended mesh. An effect property is eligible with
+the toggle when its geometry is a `BSTriShape` (particles and dynamic shapes stay `not-trishape`, T7e) without a skin, its pass
+would take hint 1 because its alpha property blends with a pair the engine's alpha setup recognises, and its descriptor holds
+none of the variants not ported. Everything else keeps a reason of its own:
+
+-   `effect-opaque`: no blending alpha property (hint 0, the G-buffer pass's `DEFERRED` variant; or Falloff alone, whose blend
+    mode the engine takes from the property alpha of the frame: `FUN_14150bc80` gives 1 below one, none at one).
+-   `effect-variant`: Lighting (`kEffectLighting`: the sun, the point lights or the cluster lights, Skylighting and the
+    shadows; drawn since part 4), Blood, ProjectedUv, the sky object (bit 45), wireframe (bit 48), skinned, an effect decal (hints 2
+    and 3), a blend pair the engine's alpha setup leaves alone, any shape but a `BSTriShape` (membrane passes never come from a
+    property). Part 4 names them (`EffectVariantBit`) and the census splits the class by them.
+-   `unsupported-parent` for a blended leaf under a `BSOrderedNode`, as before (part 4: none with the forward epoch);
+    `not-lighting-shader` with the toggle off, and for a geometry with no shader property.
+
+**How.**
+
+-   **Classification** (`LightingDescriptors.cpp`, `DeriveEffectDescriptors`; `ClassifyStatic`): the pass descriptor as
+    `FUN_1414bde90` builds it from the mirror's records (the property's flags and its material's two texture paths, the
+    alpha property, the geometry's vertex description), the vertex and pixel descriptors as SetupTechnique and Community
+    Shaders' lookup make them (forward: no Deferred), the forward state as for blended Lighting (blend mode from
+    `AlphaBlendModeOf`, depth test and write from the flags). `LightingDescriptors::effect` marks it. The membership pass
+    (`PrimaryCull::MembershipPass`, `FreshSyntheticPass`: `EffectMembershipPass`) builds hint 1 with the effect pass enum, derived
+    every time (the `MembershipDerived` witnesses do not cover the alpha property and the paths). `PassCapture::Record` keeps no
+    effect registration, so the synthetic pass is the only one an effect member has.
+-   **The mirror** (`SceneCapture::CaptureProperty`): an effect property's record (`PropertyRecord::effect`, `LeafView::Effect`)
+    now also holds its `emittanceColor` (the record's `emissive`) and whether its material's two texture paths are set
+    (`feature`: `kEffectHasSourcePath`, `kEffectHasGreyscalePath`), taken where the property is captured. `SetExternalEmittance`'s
+    re-point of an effect property is a property event (it dropped them), and `ListDependents` lists an effect's emittance colour
+    so the weather's rewrites of it resample the member's shading.
+-   **The material port** (`MaterialPortEffect.cpp`, `EvaluateEffect`): SetupMaterial's non-membrane half and SetupTechnique's
+    filter modes, a pure function of the material's snapshot (`MaterialPort::Capture` now knows `BSEffectShaderMaterial`: 0x88
+    bytes, textures at +0x58 and +0x60) and the frame's texture-transform buffer, into a `MaterialRecord` of kind
+    `kMaterialKindEffect` in the effect shader's variable space (`EffectConstants.h`: CommunityShaders' `EffectVS`/`EffectPS`
+    indices, the engine's constant-table order). LightingInfluence.y holds `softFalloffDepth` itself: the pixel stage divides the
+    frame's near * far by it (the same product and quotient, so the same float). The records follow the material's writes:
+    the effect controllers and the effect material's `CopyMembers` capture it (`MaterialSources`), and the scene work's
+    texture-transform watch writes the frame's buffer into an effect record's TexcoordOffset (its own positions:
+    `MaterialSources`' frame functions take the record's kind). An effect record takes no Lighting signature (no frame-sourced
+    material constant). The controllers capture nothing while the toggle is off (and an attach pushes no effect material then):
+    a join with no capture asks for one (`ServeMaterialRequests`).
+-   **The parity observer** (`CS_DCLF_PERSISTENT_PARITY`): the engine's `BSEffectShader::SetupMaterial` run against stand-ins
+    (`ConstantEvaluator::EvaluateEffectMaterial`, which `EvaluateMaterial` dispatches an effect material to; the shader is the
+    engine's instance at `0x1433dcce8`, its technique at +0x90), compared with the port's record of a fresh capture field by field
+    (`CheckSlotPort`, `CheckMaterialPort`: the `material port` line, as Lighting's), with the engine's LightingInfluence.y and t0
+    filter taken over the port's (DCLF's own, and SetupTechnique's). `JudgeMaterial`'s Lighting parts are not run on an effect
+    record.
+-   **Pipelines.** An effect key is a main `PipelineKey` with `kRasterEffect` (raster bit 17, outside `RasterStateBits`) and
+    the forward state; the pipeline lane compiles `Data/Shaders/Effect.hlsl` (`ShaderPrograms::FindEffect`: its vertex and pixel
+    stages only, the same defines as the Lighting builds, `EffectProgramId` apart from every Lighting id) on DCLF's pool, and
+    `BuildEffect` makes its colour variant as a forward key's and its depth variant from the same stages without attachments (in
+    the set, never drawn). No Z-prepass pipeline: an effect key's slot gets no Z-prepass bucket (the sequences' sizing in
+    `Resources.cpp`, `PlanZBuckets`), and its group's entry in the indirect state is null. Its constant tables are the effect variables' (`ConstantTableOf` by the key's class), and
+    the main build packs an effect record's PerMaterial blocks by them (`WriteMaterialRow`; a record of the other shader than its
+    key's is no row). The effect build reads, under `DCLF_BINDLESS`: World and PreviousWorld from the placement rows, the fog from
+    the frame's `DCLFFrameFog` (VS b13), PropertyColor from the shading row (EmitColor, the material's alpha in MaterialData.z
+    times the object's fade, `DCLFAlphaFade`), the alpha test reference from the record, CameraDataEffect from the frame lighting
+    block (PS b13 c17: `DCLFEffectCamera`, the current camera's planes, written by every main commit), the soft depth from a frame
+    register (t118, the frame record's `kEffectSoftDepthRegister`: `kPOST_ZPREPASS_COPY`'s view). The pipeline row's technique and
+    geometry blocks are zero (nothing the ported variants read stays there); its permutation block holds the raw vertex
+    descriptor, the pixel descriptor's three permutation bits and InWorld.
+-   **Shading rows**: an effect member's row is EmitColor = the emittance colour (white without), MaterialData.z = the
+    material's alpha; resampled on the controllers' and emittance's events like Lighting's.
+-   **Drawing**: an effect member is a forward object (`kObjectForward`, view mask `kViewForward`): culled by the colour
+    BuildDraws, appended to the forward range and sorted with blended Lighting by view depth, back to front, drawn by the forward
+    epoch. The exact order of T7d's contract now holds for the two classes DCLF owns; against the engine's remaining blended
+    passes (particles, effects not ported, ordered-node groups) DCLF's still go first.
+-   **Withholding**: `PassCapture::WithholdMain` withholds a member's passes whatever its shader, so the effect member's hint 1
+    pass leaves the engine's blended list. Its cross-fade copy (hint 9) is withheld with the rest only with the LOD cross-fade
+    toggle, as Lighting's.
+
+**Reports.** The ineligible counts and the census name the new reasons (`effect-opaque`, `effect-variant`); the census class
+`Effect: BSTriShape` in `main` falls by the effect members. Every report, after the forward epoch's line:
+`[DCLF] effects (T7d's Effect port, CS_DCLF_EFFECTS on|off): M members bound (F forward members in all), K effect materials in
+use; pipelines R requested, A ready, X failed <- EFFECT PIPELINE FAILED`. A failed Effect build logs `SPIR-V build of Effect ...
+failed` with its diagnostics, and its members stay the engine's (their pipeline is never drawable).
+
+**Run** (`CS_DCLF_FORWARD=1 CS_DCLF_EFFECTS=1`, full featureset, `CS_DCLF_CENSUS=1`; once with `CS_DCLF_PERSISTENT_PARITY=1`
+and `CS_DCLF_SET_PARITY=1`): Whiterun or Riverwood outside (the cloud cards and the window glows), an interior with light
+cards. The census's `Effect: BSTriShape` in `main` down by the members, effects members > 0, effect pipelines ready and none
+failed, the material port's parity 0 differing, `forward (T7d)` draws > 0, no MEMBER drawn by the engine; visually the clouds,
+glows and mist the same with the toggle on and off (the soft edges against the ground, the UV scroll moving).
+
+**First run (w172, Riverwood, with refraction and the parities).** No crash or device loss, 16 effect pipelines ready and none
+failed, ~820 members bound; but only ~10 forward inputs drawable: 830 pairs were `not drawable` (`skipped: texture`, missing t19). The
+main build required every pair's depth variant to be given what it reads (the one list draws a member in both segments or neither),
+and an effect key's depth variant is its colour stages, which read the frame's textures (t19, the exponential height fog's
+scattering) the Z-prepass's frame record does not have: `<- SEGMENT SPLIT`, neither segment drew it, so the claims left it to the
+engine (the census's `Effect: BSTriShape` stayed at ~116 a frame). Fixed: a forward key's pair is no longer held to its depth variant
+(`ResolvePair`: a forward object is no depth segment input). The view mask parity now takes a forward object's mask as colour-only,
+as a decal's (`<- VIEW MASK` on `mask 0x200, expected 0x200`). The census classifies effect geometry by DCLF's verdict with the
+toggle on (`effect: effect-opaque`, `effect: unsupported-parent`, ...: the waterfall foam under `OrderedRenderingNode` is the latter).
+The material port's 21-26 differences a window (all FalloffData of animated effect materials, a few 1e-4) are a controller's write
+between the engine's evaluation and the port's capture: an effect difference is taken again back to back and counted as `written by a
+controller during the check` when the second pair agrees.
+
+**Not done; risks.** Not visually validated in game yet. Lighting, membrane, projected, blood, sky-object, skinned and particle effects (T7e); opaque effects in the
+G-buffer pass; Falloff without blending; the depth mode's global `0x1433dccf8` (test-only effects write depth when it is set:
+DCLF does not); the hint 9 cross-fade copy's alpha; the frame record's frame textures are the deferred pass's capture, so a
+frame register only the effect stage reads (IBL, exponential height fog) resolves to what that pass had bound; the effect
+material's texture paths are read where the property is captured, so a path rewritten in place behind an unchanged material
+pointer keeps the old Texture bit until the property is captured again; an effect member's LOD cross-fade copy (hint 9, its fade
+node's) is withheld with the member, so DCLF draws the object once where the engine drew it twice during the fade.
+
+## Effect variants and the ordered-node interleave (T7d, part 4)
+
+After the Effect port the census's largest engine-drawn class left in the main view was `effect: effect-variant` (w174, Riverwood:
+~66 passes a frame, 239 geometries), and blended leaves under a `BSOrderedNode` (the waterfalls' `OrderedRenderingNode`) were
+`unsupported-parent`. Part 4 names the variants, draws the largest one (the effect Lighting variant), and draws ordered nodes' blended
+leaves in the forward epoch in their group's order. Everything stays behind `CS_DCLF_EFFECTS` and `CS_DCLF_FORWARD` (no new toggle).
+
+**The breakdown.** The census now splits the class by `EffectVariantBit` (`LightingDescriptors.h`, `EffectVariantsOf`: shape, skinned,
+decal, sky object, wireframe, cloud lighting, Lighting without Light Limit Fix, blood, projected UV, blend pair), named in the class:
+`effect: effect-variant (decal)`, `(skinned)`, ... Before part 4 the run could not show it, so the vanilla meshes were read offline (a
+NIF reader over the extracted meshes, the same rule as `EffectVariantsOf`). Of the blended `BSTriShape` effect meshes:
+
+| variant | meshes | where |
+| --- | --- | --- |
+| ported before part 4 | 2479 (358 under an ordered node) | cloud cards, glows, light cards |
+| **Lighting** (`kEffectLighting`) | **859** (131 under an ordered node) | every census top name: `FXMistLow*`, `FXAmbSnowBlowing*`, `FXRapids*`, the smoke wisps (`Circle0x`), the waterfalls' and creeks' streams (`L2_whiteCrossStream*`, `FXWaterfallSkirtFillMesh02`, `modeledFoam`) |
+| decal (`kDecal`/`kDynamicDecal`) | 434 (55 with blood, 31 with Lighting) | the waterfalls' foam (`FXWaterfallBody*Foam`: decal and Lighting), dungeon decals |
+| skinned | 201 | actors' and armour's effects (magic, the monk robes), Ineligible::Actor in the scenes anyway |
+| opaque (hint 0) | 645, nearly all `EditorMarker` | none in the w174 census (`effect-opaque` absent from the main view) |
+
+Every Lighting-variant mesh blends with a recognised pair (564 additive, 295 alpha-over) and none has `kCloudLOD`. So the Lighting
+variant is ported; decals (the G-buffer pass's decal groups, the `DEFERRED` variant), skinned and opaque effects stay the engine's.
+
+**The Lighting variant: what the engine does** (AE 1.6.1170, decompiled for this):
+
+-   **The descriptor** (`FUN_1414bde90`): bit 16 (Lighting) for `kEffectLighting` with the global `0x142033508`, which only its
+    initialiser writes (to 1: the image's data).
+-   **The lights** (`GetRenderPasses`, `0x1414bd890`): with the Lighting bit and an active shadow scene node, `FUN_1414fcf80` fills the
+    pass's light list (up to 5): light 0 is the scene's sun light (`ShadowSceneNode +0x200`; `+0x208`, the cloud light, for `kCloudLOD`;
+    `+0x210` with the global `0x14332b3b8`, which nothing writes), then the shadow-casting and point lights.
+-   **`SetupGeometry`** (`0x1414eab10`): with the Lighting bit and a light, PS `DLightColor` = (`ImageSpaceManager +0xe0`, the HDR
+    multiplier) x (light 0's `NiLight +0x134`, its fade), then each of the light's `NiDirectionalLight +0x14c..+0x154` (the weather's
+    effect lighting colour); the point lights (model-space positions, `1/radius^2`, colours) into `PLight*`. Neither `SetupTechnique`
+    nor `SetupMaterial` tests the bit. Community Shaders' hook writes `EffectRadius` (the geometry's world bound radius) and External
+    Emittance's suppress bit.
+-   **`Effect.hlsl`, `LIGHTING`**: `DLightColor`, split into directional and ambient parts against the frame's (`ExtractLighting`),
+    Skylighting, the sun's shadows (`Get3DFilteredShadow` over `EffectRadius * 0.2` along the view ray), the exponential height fog's sun
+    attenuation, and the point lights: Light Limit Fix's clusters in the world, the pass's `PLight*` only outside it.
+
+**DCLF's side:**
+
+-   **Classification** (`DeriveEffectDescriptors`): the Lighting variant is ported unless it has `kCloudLOD` (`cloud-lighting`: its
+    light 0 is the cloud light) or Light Limit Fix is not loaded (`lighting-without-llf`: the point lights would be the pass's own). The
+    descriptor gets bit 16, so the vertex and pixel stages are Effect.hlsl's `LIGHTING` permutation; the key, the material port and its
+    parity follow the descriptor as for any effect.
+-   **`DLightColor`** is a frame value: `SampleEffectLight` (`LightingConstants.cpp`) reads the sun light as `SetupGeometry` does, in
+    the same multiplication order, on the render thread at each main commit, into the frame lighting block (PS b13 c18,
+    `DCLFEffectDLightColor`; `kEffectLightFrameOffset`). Effect.hlsl under `DCLF_BINDLESS` reads it in place of PerGeometry c7.
+-   **`EffectRadius`** is the object's placement bound radius (`ShadowSampling.hlsli` under `EFFECT` and `DCLF_BINDLESS`), the same
+    value Community Shaders' hook writes (`worldBound.radius`); a pipeline row's permutation block would hold 0 for every object.
+-   **External Emittance's suppress bit** is per object: the record flag `kRecordEffectSuppressEmittance` (bit 3, shared with
+    `kRecordRefractionFalloff`: an effect record is never a refraction one; `EffectRecordFlagsOf`) from `kObjectSuppressExternalEmittance`,
+    read by Effect.hlsl as `DCLFSuppressExternalEmittance`.
+-   The point lights are Light Limit Fix's clusters, frame buffers like the shadows and Skylighting: the frame record's registers (the
+    deferred pass's capture). A register the Lighting variant reads that the capture does not have leaves the pair not drawable (its
+    objects stay the engine's), never drawn wrong.
+
+**The ordered-node interleave: what the engine does** (`FUN_1414b39d0` and its helpers):
+
+-   The node's `OnVisible` (`0x141503970`) opens a group of the culling process and culls its children into it in child order (then
+    `NiNode`'s `OnVisible`, depth first). `ProcessJob` (`0x140e28af0`) registers each group between the accumulator's vfuncs `0x140`
+    (`0x1414b4ba0` -> `FUN_1414f50d0`) and `0x148` (`FUN_1414f5200`): `0x140` pushes a group entry on a stack (`0x1435ea000`, 0x28
+    bytes an entry, count `0x1435e9fd0`) with its depth `dot(camera axis, node world bound centre)` (minus the radius with the
+    accumulator's `+0x51`), the bound being the nearest `BSOrderedNode` above the group's first geometry (`FUN_1415039f0`, exact type).
+    `FUN_1414b2330` appends a hint 1 pass to the group's list (`FUN_1414f17f0`, at the tail); every other pass goes where it would
+    under any node.
+-   The node's bound (`0x141503a60`): its static bound with `kFixedBound`, which `LoadBinary` sets only for a static bound of non-zero
+    radius; otherwise `NiNode`'s merge of its children's. The vanilla waterfalls have a zero-radius static bound, so theirs is the merge.
+-   The blended draw sorts the stack by depth (`FUN_1414f4170`: `qsort` with `0x1414f55e0`, `(int)(a - b)`, nearest at the bottom)
+    and merges it with the sorted blended list (`FUN_1414f5330`): the stack's top group is drawn whole (`FUN_1414f19d0`, its passes in
+    list order) while its depth is greater than the list head's; at an equal depth the list pass goes first.
+
+**DCLF's side:**
+
+-   **Classification** (`ClassifyFrame`): with the forward toggle, a blended leaf under an ordered node is no longer
+    `UnsupportedParent`. Its passes are withheld by `MainListHook` like any member's (the group insertion is the same call).
+-   **The sort key** (`BindlessPlacement::forwardSort`, placement row 9, so the row is now 160 bytes; `DCLFPlacement::ForwardSort`):
+    `FrameValues::SampleRow`, inside the engine-read window, walks a blended leaf's parents to the nearest `BSOrderedNode` (exact type,
+    as `FUN_1415039f0`) and stores its live world bound centre, and in w the leaf's ordinal (1 + its index among the node's geometries,
+    depth first in child order); 0 for a leaf under none or an opaque leaf (no parent is read for it).
+-   **BuildDrawsCS** sorts such a draw at its node's centre (the clip w of that centre), and stages its group (a hash of the centre's
+    bits, the same for every leaf of the group) and its ordinal in the unexecuted `instanceCount` and `vertexOffset` words.
+-   **ForwardSortCS**: farther first; at one depth a plain draw before a group's; then group, ordinal, object, first index. It puts
+    `instanceCount` 1, `vertexOffset` 0 and `firstInstance` 0 back. The keys go through groupshared memory a tile of 64 at a time (still
+    O(n^2) compares, each key read once per thread group per tile instead of once per thread).
+-   **Census**: the live approximation's ordered rule follows `ClassifyFrame`.
+
+**Reports.** The census class `effect: effect-variant (<variants>)`; the effects line `... M members bound (L the Lighting variant; F
+forward members in all) ...`; under `CS_DCLF_SET_PARITY` a new observer: `[DCLF] effects' Lighting variant (CS_DCLF_SET_PARITY): C
+engine passes of members checked, X with a light 0 other than the sun light <- OK | <- EFFECT LIGHT` (`PassCapture::TakeEffectLight`,
+in `MainListHook`: each withheld Lighting-variant pass's `sceneLights[0]` against `ShadowSceneNode[0]->sunLight`, the assumption
+`SampleEffectLight` rests on).
+
+**Run** (defaults: forward, effects and refraction on; `CS_DCLF_CENSUS=1`; once with `CS_DCLF_SET_PARITY=1` and
+`CS_DCLF_PERSISTENT_PARITY=1`; Riverwood with its waterfall and the river, or any place with mist and blowing snow): the census's
+`effect: effect-variant` in `main` down to the decals (the waterfalls' foam) and a few others, its split naming them; no
+`unsupported-parent` class in `main`; the effects line with L > 0 and new effect pipelines ready, none failed; `<- EFFECT LIGHT` OK;
+the material port 0 differing; `forward (T7d)` draws up by the new members; no `skipped: texture` growth for effect pairs (a frame
+register the Lighting variant reads missing from the capture). Visually, with the toggles on and off: the mist, the blowing snow, the
+rapids and the smoke wisps lit the same (day and night, in shadow, near a fire), and the waterfall's layers in the same order.
+
+**Not done; risks.** Built (CommunityShaders, RelWithDebInfo); BuildDrawsCS, ForwardSortCS, FadeStateCS and Effect.hlsl's `LIGHTING`
+variant (VS and PS, the w174 feature defines) compiled offline to SPIR-V; not run. Not ported: effect decals, skinned effects (both since part 5), opaque
+effects, the cloud light's variant; `DLightColor` assumes the global `0x142033508` and light 0 as above (the observer checks the light).
+A group whose leaves are split between DCLF and the engine (a child the engine still draws, e.g. a variant not ported) loses its order:
+DCLF's leaves are drawn in the forward epoch, before the engine's blended draw draws the rest of the group. The sort row is sampled with
+the placement (the slot written, or moving): a leaf whose blending changes without its slot being written again keeps the old row.
+Two groups whose nodes have the same centre share a hash and interleave by ordinal. The `+0x51` radius term and `qsort`'s integer
+comparison (the engine leaves groups within one unit unordered) are not modelled. The placement rows grew by a row (11% more
+placement upload).
+
+## Effect decals and skinned effects (T7d, part 5)
+
+After part 4 the census's `effect: effect-variant` in the main view was mostly two variants: decals (434 vanilla meshes, among them the
+waterfalls' foam `FXWaterfallBody*Foam`, decal and Lighting) and skinned effects (201: actors' and armour's). Part 5 draws both, behind the
+same toggles (`CS_DCLF_EFFECTS`, with `CS_DCLF_DECALS` for decals and `CS_DCLF_SKINNED` for skinned effects; no new toggle).
+
+**What the engine does with an effect decal** (AE 1.6.1170, decompiled for this):
+
+-   **The hint** (`BSEffectShaderProperty::GetRenderPasses`, `0x1414bd890`): a `kDecal` or `kDynamicDecal` property's pass takes hint **2**
+    without a blending alpha property and **3** with one, whatever its alpha, Falloff or particles (the hint 1 rule is the non-decal
+    branch). `kTempRefraction` with `kDynamicDecal` registers no pass at all.
+-   **The group** (`FUN_1414b2330`): hint 2 into geometry group 3 (only when the accumulator draws decals, `+0x12c`), hint 3 into group
+    4: the same groups as Lighting decals, drawn by `FUN_1414b3bb0` and `FUN_1414b3d50` inside the deferred pass, into the G-buffer
+    (engine notes, "Decals"). Within a group the batch renderer draws its technique buckets by pass enum, ascending: an effect pass enum
+    (`0x4000002C +` descriptor) is below every Lighting one (`0x4800002D +`), so a group's effect decals are drawn before its Lighting
+    decals. They are not blended with the forward list: they are drawn long before it, in the G-buffer pass.
+-   **The shader**: Community Shaders' lookup (`State::ModifyShaderLookup`) adds the effect pixel stage's `Deferred` bit in the deferred
+    pass, so an effect decal is `Effect.hlsl`'s `DEFERRED` permutation: its colour into every G-buffer target (RT0 and RT3-7; RT1 and
+    RT2, the motion vectors and normals, only with MotionVectorsNormals, RT2 alone with Normals).
+-   **The state** (`BSEffectShader::SetupGeometry`, `0x1414eab10`, for a pass of hint 2 or 3): the depth mode is the group function's (3,
+    test and write, for group 3; 1, test only, for group 4), which SetupGeometry leaves for a decal (it derives it from `kZBufferTest` /
+    `kZBufferWrite` only for other passes); the bias mode is the group function's (`6 + b` with the `ToggleDepthBias` byte, else 0;
+    `10 + b`); the write mode is **11** for every decal pass without MotionVectorsNormals (the technique's bit 26), the group's otherwise
+    (10, 11); the alpha property is applied in group 4 alone (render flags 0x45 against 0x41: `FUN_14150bc80`'s blend mode from its pair).
+    So the Lighting decals' state indices, with SetupGeometry's write mode.
+-   **The descriptor** (`FUN_1414bde90`): AddBlend, MultBlend and MultBlendDecal come from the alpha property's functions whether it blends
+    or not, and none without one; MotionVectorsNormals needs no alpha property or an alpha-tested one; **Skinned** is `kSkinned` with a
+    skinned vertex description (`+0x148 & 0x1004000000000000`).
+
+**DCLF's side, decals:**
+
+-   **Classification** (`DeriveEffectDescriptors`): a decal is no longer a variant with `CS_DCLF_DECALS` (`EffectVariantsOf` keeps the
+    decal bit without it, and for `kTempRefraction` with `kDynamicDecal`). It gets decal group 1 (hint 2) or 2 (hint 3), the blend mode
+    from the pair in group 2 (a pair the alpha setup leaves stays `blend-pair`), write mode 11 (10 for group 1 with MotionVectorsNormals),
+    and the pixel descriptor's `Deferred` bit; `forward` stays false. The descriptor bits are null-safe for a decal without an alpha
+    property. The key packs the decal state as a Lighting decal's (`PackDecalRasterFlags`, the frame's bias mode) with `kRasterEffect`; the
+    object takes `kObjectDecal` and its group, so it is a decal everywhere a Lighting decal is (view mask `kViewDecal`, the fixed slots, the
+    colour segment's single culling, no depth segment input).
+-   **The membership pass** (`EffectMembershipPass`) takes the decal's hint (2 or 3), and the member decal's chain key (`AccumulatePhase`,
+    `decalKey`) is now ordered by the **pass enum** (bits 27-58) instead of the Lighting descriptor, for Lighting decals too (the same order
+    among them): a group's effect decals come before its Lighting ones, as the engine draws them.
+-   **Pipelines** (`BuildEffect`): a decal key's are Build's decal rules: the engine's bias for its bias mode, LESS_EQUAL; the colour
+    variant blends every attachment as the engine's state for its indices says (captured in the deferred pass, as a Lighting decal's)
+    and writes no depth; the depth variant writes the opaque group's depth (the decal depth pass, the engine's depth mode 3) with the same
+    stages (their discards are the alpha test's), and nothing for the blended group. An attachment the pixel stage has no output for is not
+    written (write mask 0, `SpirvReflection::outputLocations`), as DXVK builds the engine's pipeline: without Normals or
+    MotionVectorsNormals the motion vectors and normals keep what the host wrote.
+-   **The pair** (`ResolvePair`): an effect key is never held to the Z-prepass's frame record: its depth variant is drawn only by the
+    colour segment's decal depth pass, with the colour segment's frame record, which the colour check already gave what it reads.
+
+**DCLF's side, skinned effects:**
+
+-   **Classification**: the skinned variant is now exactly a skin the palette path cannot take (`EffectVariantsOf`, `EffectSkinned`): the
+    descriptor's Skinned bit without a skin instance, a skin instance without it, or a skin with `CS_DCLF_SKINNED` off. Otherwise the
+    descriptor gets Skinned (the vertex stage's `SKINNED`; SetupTechnique's split drops it from the pixel stage) and the object goes the
+    Lighting skinned objects' way, which never depended on the shader: `ClassifyStatic`'s skin checks (one `NiSkinInstance` partition, or
+    with `CS_DCLF_SKIN_PARTITIONS` dismember skins and several partitions; at most 80 bones), the walk's palette rows (`kObjectSkinned`,
+    `FrameValues`' palette update), the partition buffers and masks (BuildDraws draws each enabled partition). A skinned blended effect is a
+    forward object (the forward epoch, sorted with the rest); a skinned decal is a decal.
+-   **`Effect.hlsl`**: under `DCLF_BINDLESS` the `SKINNED` vertex path reads the object's rows in `DCLFPalettes` at its record's
+    `DCLFBoneOffset` / `DCLFPreviousBoneOffset` (`GetBoneTransformMatrixBindless`, `GetBoneRSMatrixBindless`, as Lighting.hlsl does), not
+    the bone constant buffers, which `DCLF_BINDLESS` does not declare.
+
+**Parity.** The material port's parity (`CS_DCLF_PERSISTENT_PARITY`, the `material port` line) covers every effect record whatever its
+object's class: a decal's and a skinned effect's records are the same `EvaluateEffect` of their pass descriptor (which holds no `Deferred`;
+Skinned changes nothing SetupMaterial reads), checked against the engine's SetupMaterial. The decal order parity covers the new chain keys.
+Not covered: the effect decal's state indices (`CS_DCLF_DECAL_PROBE` checks the Lighting decals' native draws only).
+
+**Reports.** The effects line: `[DCLF] effects (T7d's Effect port, CS_DCLF_EFFECTS on): M members bound (L the Lighting variant, D decals,
+S skinned; F forward members in all), ...` (M now counts every member of an effect key, not only the forward ones). The decals line counts
+effect decals with the Lighting ones. The census: `effect: effect-variant (decal)` and `(skinned)` in `main` fall to the decals and skins
+DCLF still cannot draw, and the split names those by their other variants (a blood decal is `(blood)`, no longer `(decal+blood)`); `decal`
+and `skinned` remain only with their toggles off, for a decal that registers no pass, or for a skin the palette path does not take.
+
+**Run** (defaults; `CS_DCLF_CENSUS=1`; once with `CS_DCLF_PERSISTENT_PARITY=1` and `CS_DCLF_SET_PARITY=1`):
+
+-   **Decals:** Riverwood's waterfall (the foam where the falls by the mill meet the river: `FXWaterfallBody*Foam`, decal and Lighting); a
+    dungeon with decals (Bleak Falls Barrow). The effects line's D > 0 and new effect pipelines ready (keys with `Deferred`, bit 27 of the PS
+    descriptor), none failed; the decals line's submitted count up by them; the census's `effect: effect-variant (decal...)` gone from
+    `main`; the material port 0 differing; the decal order parity 0 differing. Visually, toggles on and off: the foam the same (lit, in the
+    same order over the rock and water, no z-fighting, no foam drawn over the waterfall's blended layers), and the G-buffer views (normals,
+    motion vectors) unchanged under it.
+-   **Skinned effects:** an actor with an effect-shader part, e.g. a summoned Flame Atronach (its body's flames), a Storm or Frost
+    Atronach, a wisp, or an NPC wearing armour with an effect layer. The effects line's S > 0, the census's `effect: effect-variant
+    (skinned)` gone from `main` (with `CS_DCLF_ACTORS` on, the default), no `skipped: texture` growth; visually the effect moving with the
+    body (no lag, no bind pose), the same with the toggles on and off.
+
+**Not done; risks.** Built (CommunityShaders, RelWithDebInfo); Effect.hlsl's `DEFERRED` (Lighting, Soft, Falloff, MotionVectorsNormals,
+MultBlendDecal) and skinned (Lighting, MotionVectorsNormals) permutations compiled offline to SPIR-V; not run. Blood decals (`kWeaponBlood`,
+the blood splatter) and the other variants stay the engine's. The effect decal's state indices are the decompile's (blend mode 0 in group
+1, `alphaBlendModeExtra` 0, write mode 11) and were not measured by the decal probe as the Lighting decals' were. An effect decal in the
+opaque group runs its pixel stage twice (the decal depth pass, then the colour pass), and its depth variant's pixel stage writes outputs
+with no attachment bound. The DXVK write-mask rule for a missing output is assumed, not checked against the engine's pipeline. A skinned
+effect's forward sort depth is its placement's bound, as a skinned blended Lighting object's.
+
 ## T7b1: visibility events (kAccumulated as DCLF's output, an observer)
 
 The engine's main-camera cull leaves `kAccumulated` (flag bit 26) on what passed it, and its readers need it once the culls
@@ -2656,7 +3160,8 @@ The report comes every report interval:
 ```
 
 T7b1's gate is 0 differ on the engine-culled roots and geometry. Expected differences to read before chasing any: an
-object that is not a depth candidate is never stamped, so DCLF says out of view. A geometry under a root the engine
+object with no main input is never stamped, so DCLF says out of view (decal, forward and refraction inputs are stamped since "T7f:
+what kAccumulated means"; before, they were not). A geometry under a root the engine
 failed keeps the bit of the last cull that reached it (the "stale" count). Water
 shapes and non-fade entry roots are not compared: DCLF has no verdict for them yet. Not yet run in game.
 
@@ -2926,6 +3431,681 @@ precipitation mask's fallback, the point lights' and the sun's parity frames, th
 frame is also stepped by the engine that frame, after DCLF stored it at the entry.
 
 Written; not yet built or run in game (see the plan's T7 "Done").
+
+## T7f preparation: DCLF's readers off the engine's results, and stood-in trees on the tree list
+
+T7f switches the engine's scene culls off. This stage changes no cull. It moves every normal-path reader of a cull or
+registration result onto DCLF's own state, or limits it to a parity or to the engine-facing cut, so that T7f is only deletions
+plus the producers in the plan's T7f checklist.
+
+### The readers, one by one
+
+-   **The frame's claims.** DCLF's readers took the frame's set from `PassCapture::CurrentSet()`, the registration hooks' copy.
+    `SceneStore::FrameClaims()` now holds it. `PublishFrameClaims` writes it at the installation (`InstallClaims`), at the
+    withdrawal and at the load, and hands the hooks the same object.
+    -   Moved to `FrameClaims`: `PrimaryCull::PrepareFrame`, `ExecuteReflection`, `ShadowsNotDrawn`, `OcclusionNeedsEngine`, the
+        native-pass leak observer, the settings panel, the census, and LocalLightCull's lost-pass diagnostic.
+    -   Still on the hooks' copy: the hooks themselves (`WithholdMain`, `CastersForBatch`, the occlusion phase; this is the cut), and
+        the set parity's "hooks' claims" column, which observes the hooks.
+-   **`TakeUnmodelledFades`** (`CommitSet`). The registration's fade verdict could take members out of the set. This happens only
+    under the fallback toggles (`CS_DCLF_FADING=0`, `CS_DCLF_LOD_CROSSFADE=0`). With both on, as by default, the hooks push
+    nothing.
+    -   With fades off, the classification already takes a fading member out from the mirror (`Ineligible::Fading`).
+    -   The commit now uses the drained geometries only while a fallback toggle is off, and releases every held member otherwise.
+    -   The cross-fade fallback is the last registration reader. It goes with the fallbacks at T7f: with the culls off, the engine
+        draws nothing to fall back to.
+-   **The GPU sun test's cascades** (`SunAccumulation::GpuCascades`). It took its frame, its cascade count and its validity from the
+    engine's sun `Accumulate` hook. If the sun's cull stopped, the cascades would come back empty, and every pass with the sun's
+    bits would draw unshadowed. It now reads `SunViews::Current()`, from the cameras `UpdateCamera` set up. The planes are the same
+    ones the hook copied from those views. A frame without sun views (an interior) still gets none.
+-   **PrimaryCull: the stand-in and admission.** The normal path reads no engine verdict. Admission comes from readiness events
+    (T5c). The inputs left:
+    -   The list jobs' planes in `StandIn`: the cut's own, deleted with it.
+    -   The list process's camera (`FadeEye`, the T7b2 camera cut) and its height-test byte `+0x121` (`TreeHeightTest`): view inputs,
+        not results. Both were read in `PrepareFrame`, the `CalculateAndDrawShadowCasterLights` hook; they are now read at
+        `BeginSceneFrame` from the main camera ("T7f preparation, part 2", below).
+    -   `frameVisible`: gathered, but read only by the light-mask parity and the report's member count.
+    -   The stand-in's gate on `SunAccumulation::ExclusionLive()`. It is right while the sun's cull runs (the stand-in may skip an
+        entry only when the sun's cull does not reach it), and it goes with the stand-in.
+-   **The list filter and `SceneLists`.** Their inputs are DCLF's: admission, walk, mixed, and the exclusion's `excluded`. They read
+    the engine's built lists in order to filter them, which is the cut, deleted at T7f. The exception is `ListUpkeep`'s
+    `kAccumulated` on the cell roots: a producer (the checklist).
+-   **The sun entry exclusion and the mask reproduction** (`ExcludeEntries`, `CascadeProcess1`, `Register`, `WriteMaskOnly`,
+    `ApplySunBits`, `ClearOwnedMask`, `MaskClear`, the cascade bit capture). Engine-facing only: only the engine's `GetRenderPasses`
+    reads the masks they write. DCLF reads a mask only in `CheckLightMasks` (the persistent parity). `InSunCascades` and
+    `SunShadowBits` are dead, because `SyntheticPass` is always given `a_sunOnGpu`. All are deleted at T7f.
+-   **LocalLightCull's category filter** (the point lights' paraboloid culls, and the point-light mask writes). Its consumers are
+    all the engine's. DCLF's local shadows come from `LightViews` and `LightSelection`. Deleted at T7f.
+
+### Stood-in BSTreeNode trees on the tree list (T7b5's defect, fixed)
+
+The tree list's loop (`FUN_140437e50`) visits a tree only when its first child's multibound shape holds the cull result 1. No cull
+reaches a stood-in tree's multibound, so the loop read a stale result. A stale "in" animated the tree's bones forever. A stale
+"out" froze its bones and its LOD switch.
+
+**Why the trees stay on the list.** `TreeAnimation` could take them off the tree list, as it does for the animation list. That was
+rejected, because DCLF follows the loop's stores for these trees, and off the list both would freeze:
+-   the LOD switch (`+0x180`), followed by event (`FUN_140437e50` is one of the switch stores' sources);
+-   the near list's bones (`FUN_140438ed0`), which DCLF's skinned draws read.
+
+**What happens instead: DCLF's verdict, around the loop's call.**
+-   **The hook.** `TreeList`'s detour of `0x140437df1` is now always installed. Its observer samples only under
+    `CS_DCLF_TREE_PARITY`.
+-   **Before the call** (`TreeAnimation::BeforeListLoop`). It runs on the main thread in Main::Update's tree manager update, where
+    no list cull or cell animation runs. Under the tree list's lock (`+0x10`), for each stood-in BSTreeNode on the list (`SetOwned`'s
+    new `a_trees`: the admitted, unmixed `EntryPlan::TreeRoot` roots):
+    -   it writes the shape's `+0x10` as 1 or 2 from `IndirectDraws::AccumulatedVerdict`: the root's `kAccumulated` as T7b2 wrote
+        it at Main::Update's entry, kept per root on the main thread, and visible until the first write;
+    -   it remembers the engine's value;
+    -   it holds the tree by a reference.
+-   **After the call**, and after the observer's sample, `AfterListLoop` puts the engine's values back and lets the references go,
+    on the main thread.
+-   **Why the values are put back.** `BSMultiBoundNode::OnVisible` (`0x140e2d710`) reuses the cached result for a cull of mode 0
+    or 2 while its `lastAccumTime` matches the accumulation time (vfunc `0x118` of `0x143274040`). Mode 4 never writes the cache,
+    and modes 1 and 3 ignore it. If the value were left, DCLF's main-view verdict could serve a later cull with the same time. Only
+    the loop sees it.
+-   **With DCLF off** (`TreeAnimation::AtUpdateEntry(false)`), nothing is written.
+
+The report line `[DCLF] tree animation list` gains:
+
+```
+tree list (T7b5 fix): <n> stood-in BSTreeNodes, <l> loops given DCLF's verdicts: <i> in / <o> out (replacing the engine's <s> stale /
+  <a> in / <b> out), <m> without a multibound
+```
+
+`<- TREE MANAGER` (`CS_DCLF_TREE_PARITY`) still counts stood-in trees aside, now as "given DCLF's verdict", with the number that
+differ from the port on the decoder's verdict for the frame. Some differences are expected by design: the conservative two-frame
+rule, and a new listing counting as visible. A stood-in tree the loop read without DCLF's value (DCLF off, or no multibound) keeps
+the stale-cache classes.
+
+### What a run should show
+
+-   The tree list's loops > 0 wherever stood-in BSTreeNodes exist, with in and out moving as the camera turns.
+-   In `<- TREE MANAGER`, stood in "given DCLF's verdict" equal to the stood-in count, with few differences.
+-   The GPU sun test with cascades on every exterior frame (the colour commit's count of frames without cascades unchanged).
+-   No change in the set parity, `<- FADE DOUBLE` or `<- ANIM RATE`.
+
+Built; not run in game.
+
+## T7f preparation, part 2: kAccumulated on every listed root, every tree on the tree list, the frame's camera
+
+The culls stay on. This stage writes three of the producers in the plan's T7f checklist: item 1, item 2, and the camera part of item 5.
+Each new write sits behind a switch that T7f turns on with the culls off. Until then, a new write is a dry run that the existing
+parities compare with the engine.
+
+### kAccumulated on every listed root (checklist item 1, `CS_DCLF_ACCUMULATED_ALL`)
+
+-   **What DCLF lists:**
+    -   every fade root slot, stood in or not;
+    -   every geometry under one, layers excepted;
+    -   the plain entry roots. A geometry with no fade root has an entry in the frame's `SunCandidates`: the reference's root, or a
+        terrain block's multibound node. That node is a plain entry root when it is not also a fade root slot.
+
+    An entry that is not a candidate (an engine-drawn shadow caster under it) has no plain root. The checklist's item 7 leaves none.
+-   **The decoder** (`PrepareWrites`). Besides T7b2's stood-in writes, it makes "wide" writes for everything else DCLF lists, by the
+    same rule. A plain entry root is visible when any of its geometries is.
+    -   The armed frame carries its candidates snapshot (`Armed::candidates`, then the batch's, then the writes'), which holds the entry
+        nodes until the write. Each object slot's entry is cached by occupant for one snapshot.
+    -   Every write records its class (stood in, wide). A slot whose class changes is written again.
+    -   The wide writes are made only when one of `CS_DCLF_ACCUMULATED_ALL`, `CS_DCLF_TREE_LIST_ALL`, `CS_DCLF_ACCUMULATED_PARITY` or
+        `CS_DCLF_TREE_PARITY` is on. With none of them, the decode is T7b2's, unchanged, and no candidates are held.
+-   **At Main::Update's entry** (T7b0's write point, as before):
+    -   **With `CS_DCLF_ACCUMULATED_ALL` on,** every write is made, whoever stands in for the root. The stood-in check is skipped: with the
+        culls off, every root is DCLF's.
+        -   For each geometry written visible, the nodes between it and its root are set too (`SetChain`). This is set only: a node above
+            a geometry that went out of view keeps the bit. No reader can tell: the receivers stop at the geometry's own clear bit, and
+            the animation gate and the tree clock read the root.
+        -   The chain is gathered first and written only when it reaches the root. The geometry is held by the write's tables, and a live
+            node's parent pointer names a live node (NiNode's destructor clears its children's parents: `skyrim-engine-notes.md`, "T7f
+            preparation").
+        -   A camera cut sets every listed root, its geometry and the nodes between.
+    -   **With it off** (the default), the wide writes are a dry run:
+        -   nothing is stored;
+        -   the roots' verdicts are kept for the tree list (`IndirectDraws::AccumulatedVerdictOf`);
+        -   under `CS_DCLF_ACCUMULATED_PARITY`, every 30th decode makes a compare list carrying every wide write. The main thread compares
+            each write with the bit the engine's last cull left, read at the entry.
+-   **The cell roots** (`ListUpkeep`'s writes, and their replacement).
+    -   Today, `DrawWorld_BuildSceneLists` sets kAccumulated every frame on the object root's children that are not hidden (the cell
+        roots). When DCLF builds the lists (Keep, Rebuild), the engine's build skips the object root, and `ListUpkeep` sets the same bits
+        in the build's job. No cull clears them, because no list cull visits a cell root.
+    -   The replacement (`CellRoots`): at Main::Update's entry, the same nodes are set under `CS_DCLF_ACCUMULATED_ALL`. Under the parity
+        alone, the cell roots without the bit are counted.
+    -   A cell attached during Main::Update gets its bit at the next entry, so the light assignment (`FUN_1414a2170`) misses its
+        receivers for that one frame. BuildSceneLists and `ListUpkeep` keep running until T7f decides whether BuildSceneLists still runs
+        (checklist item 8).
+
+The report comes every report interval, when the wide writes are made:
+
+```
+[DCLF] accumulated, every listed root (T7f preparation; CS_DCLF_ACCUMULATED_ALL on|off: a dry run): wide writes <s> set, <c> cleared,
+  <u> already so, <d> dry; <n> nodes between set (<x> geometries whose walk missed their root); cell roots <a> seen, <b> set, <m> without
+  the bit; dry run <k> compare lists: fade roots <both> / <DCLF's alone> / <the engine's alone> / <neither>, plain entry roots ...,
+  geometry ..., <h> app-culled roots aside <- OK | <- ACCUMULATED ALL | <- NOT COMPARED; first the engine's alone: '<name>' (entry), ...
+```
+
+How to read the dry run:
+-   **It compares two different frames.** The wanted bit comes from the conservative rule on the newest decoded batch, a few frames
+    behind. The engine's bit comes from its cull of the frame before the entry.
+-   **"DCLF's alone" grows in motion.** The causes are the two-frame window, a new listing counting as visible, and camera cuts.
+-   **"The engine's alone" is the lag coming into view** (the readback's frame slots plus one frame). It should be about 0 while
+    standing still and small in slow motion.
+-   **Geometry has two more causes:** an object with no main input is never stamped, and a geometry under a root the engine
+    failed keeps a stale bit (as in `<- ACCUMULATED`). "T7f: what kAccumulated means" attributes each difference by cause.
+-   **When the tag fires.** `<- ACCUMULATED ALL` fires for any fade root or plain entry root that is the engine's alone, or a cell root
+    without the bit. Read the names: a flagged root seen while standing still is a real disagreement. `<- ACCUMULATED` (exact, same
+    frame) stays the gate for the verdicts themselves.
+
+What a run should show (an exterior, `CS_DCLF_ACCUMULATED_PARITY=1`, with motion and still periods):
+-   about 10 compare lists a window;
+-   cell roots seen > 0, none without the bit (children 0 and 1, list entries, are counted apart since "T7f: what kAccumulated
+    means", which also attributes the w176/w177 differences);
+-   plain entry roots compared > 0 (terrain blocks, plain NiNode roots).
+
+### Every BSTreeNode on the tree list (checklist item 2, `CS_DCLF_TREE_LIST_ALL`)
+
+-   **The loop.** `TreeAnimation::BeforeListLoop` now visits every tree on the list.
+    -   A stood-in tree is handled as before.
+    -   Any other tree takes its verdict from `IndirectDraws::AccumulatedVerdictOf`: the written root verdicts, or the dry run's. The
+        root must be listed by the newest written tables (or candidates), so a verdict kept for a dead node cannot answer for another
+        node at its address.
+-   **With the switch on,** the result is written as 1 or 2 around the loop and put back after it, exactly as for the stood-in trees (and
+    for the same reason: the multibound cache's reuse).
+-   **With it off, under `CS_DCLF_TREE_PARITY`,** it is a dry run. DCLF's would-be result is compared with the engine's: same, DCLF's in
+    and the engine's out, DCLF's out and the engine's in, or the engine's stale.
+-   **A tree DCLF has no verdict for** (not listed, or not written yet) keeps the engine's value and is counted. With the culls off it
+    would read a stale cache, so T7f wants that count at 0.
+-   **Why not the port.** Replacing the loop with `TreeList::Decide` was not chosen. Writing the result keeps the engine's own stores
+    (the LOD switch, the near list, the bones), which DCLF follows.
+-   **`<- TREE MANAGER`** counts a written tree that the engine culls aside, as "given DCLF's verdict under CS_DCLF_TREE_LIST_ALL".
+
+The `[DCLF] tree animation list` line gains, with either switch:
+
+```
+; every BSTreeNode (T7f preparation; CS_DCLF_TREE_LIST_ALL on|off): <i> in / <o> out written (replacing the engine's <s> stale / <a> in /
+  <b> out); dry run <same> same, <x> DCLF's in and the engine's out, <y> DCLF's out and the engine's in, <z> the engine's stale; aside
+  <v> without DCLF's verdict, <m> without a multibound
+```
+
+What a run should show: use a forest exterior with `BSTreeNode` trees and `CS_DCLF_TREE_PARITY=1`. The pine forests around Falkreath or
+in the Rift are candidates, not verified. Check that `<- TREE MANAGER`'s tree list count is above 0: Riverwood had none in one load order.
+-   "same" far above the differences.
+-   "DCLF's out and the engine's in" near 0 while standing still.
+-   Few trees without DCLF's verdict: only the trees DCLF does not draw.
+
+### The frame's camera at BeginSceneFrame (the camera part of checklist item 5)
+
+-   **Where.** `PrimaryCull::BeginFrameCamera` runs from `DrawcallLimitFix::BeginSceneFrame`, right after `SceneStore::BeginFrame`, so the
+    camera cut keeps the frame's number.
+-   **What.** It reads `FadeEye`, the camera cut and `TreeHeightTest` from the world scene graph's camera (`0x14338c8e8 +0x128`).
+    `FUN_1406452c0`, Main::Draw's camera setup just before, takes the tree height base from that camera. The height test's `+0x121`
+    byte is still read from list process 0: it is a constant of the process (only the constructors write it, and they write 0).
+-   **The readers** (the depth commit's fade frame and latch, `FadeState::SampleFrame`, TreeList's sample) all run after
+    BeginSceneFrame, so they see the same frame's values as before.
+-   **Two differences from before:**
+    -   The values update only while DCLF runs. `PrepareFrame` ran whenever the hook was installed, so the first frame after DCLF was off
+        may count one cut against the old camera, which is conservative.
+    -   They are now set under `CS_DCLF_PARITY_BOTH`. `PrepareFrame` was skipped there, which left `FadeEye` zero.
+-   **The observer** (`CS_DCLF_ACCUMULATED_PARITY`). `PrepareFrame` compares the list processes' camera with the one BeginFrameCamera read:
+
+```
+[DCLF] frame camera (T7f preparation: ...): <n> frames, <d> with another camera on the list processes <- OK | <- FRAME CAMERA
+```
+
+Built; not run in game.
+
+## T7f: what kAccumulated means (the w176/w177 dry run attributed; built, not run)
+
+w176/w177 ran the dry run of `CS_DCLF_ACCUMULATED_ALL` under `CS_DCLF_ACCUMULATED_PARITY` (`<- ACCUMULATED ALL`). The fade roots
+agreed: 3538 both, 7 DCLF's alone, 3 the engine's alone in the last motion window. The geometry did not: 2,000-5,800 the engine's alone
+a window, about 400 DCLF's alone. The first names were cloud cards (`CloudDistant*`, `CloudShape*`). Every window also had about
+300 cell roots without the bit.
+
+**The meaning (decided).** The bit DCLF writes means what the engine's cull means. A node has it when it is in the main camera's view:
+the frustum, and the portals and occlusion planes PortalViews reproduces. It must also not be app-culled. A geometry must also not be
+under a root whose `OnVisible` stops (faded out). DCLF's HZB occlusion is not part of it, because the engine's cull has none. The readers
+expect this conservative meaning: the light receivers at every level, the animation gate and the tree clock.
+
+### What the engine's cull leaves (Ghidra, AE 1.6.1170)
+
+-   **`BSCullingProcess::Process1`** (`0x140e28390`, the list processes):
+    -   A node with a zero radius and no `kAlwaysDraw` is left alone: no test, no `OnVisible`, no change to the bit.
+    -   A `kAlwaysDraw` node (bit 11) passes untested.
+    -   A preprocessed node (bit 12) passes unless `kNotVisible`.
+    -   Any other node is tested against the frustum, or against the room's compound frustum.
+    -   The bit is written after `OnVisible` returns, so a root is written after its children.
+    -   `NiCullingProcess::Process1` (`0x140d40160`) is the same, without the compound frustum.
+-   **A geometry's bit is stale wherever the cull did not reach it.** That covers a geometry under a node the cull failed, under a root
+    whose `OnVisible` stopped, and under an inactive LOD or switch child. Its bit is whatever the last cull that reached it left. The
+    receivers test the bit on every level down from the cell root, so they never take such a geometry.
+-   **The cell roots** (`DrawWorld_BuildSceneLists`, `0x14064bc20`):
+    -   In an exterior, the build sets every non-hidden child of the object root from the third on.
+    -   Children 0 and 1 are list entries: the build appends them to list 0, and the main list cull sets or clears their bit.
+    -   In an interior, only the cell's 3D is set, and children 0 and 1 are again list entries.
+
+### The attribution
+
+-   **The geometry DCLF's verdict leaves out.** `cs.dclf.frustum`, BuildDrawsCS phase 1's stamp, is already the frustum and portal test
+    before the HZB, with the fade drop in its top bit. So the HZB is not the cause. The causes are:
+    -   **Stale geometry under a failed chain.** This is most of it. In the same runs the exact observer (`<- ACCUMULATED`) counted
+        66,000-99,000 of 86,000-118,000 engine's-alone geometries a window as "stale under a failed root". The dry run did not separate
+        this class.
+    -   **Unstamped inputs.** Phase 1 stamps only depth segment inputs (`kViewMainCull`). A decal (`kViewDecal`), a forward object
+        (`kViewForward`, including the Effect cards, which are on by default since w176) and a refraction object (`kViewRefraction`) were
+        never stamped, so their geometry read "out of view" even when it was in view. The cloud cards are forward Effect statics.
+    -   **Faded roots.** DCLF clears a geometry whose root is faded out, which is the meaning above. The engine's bit there is stale.
+    -   **The readback's lag**, coming into view.
+-   **DCLF's alone.**
+    -   The conservative rule: the two-frame window, a listing with no verdict, a camera cut.
+    -   Geometry the engine does not visit: an inactive LOD or switch child, or a zero-radius node between.
+    -   The lag, going out of view.
+-   **The roots the engine's alone** (cloud cards, 1-10 a window). Not resolved statically:
+    -   The exact same-frame observer had 0 engine's-alone engine-culled roots in the same windows.
+    -   So the difference is between DCLF's verdict a few frames back and the bit at the entry: the lag, or a root stood in since the
+        batch's tables, whose bit is then no cull's.
+    -   The dry run now names each one with its cause.
+    -   One verdict gap was found and fixed: with no portal program, FadeStateCS tested the frustum alone. Process1 passes a
+        `kAlwaysDraw` root untested and a preprocessed one unless `kNotVisible`.
+-   **The cell roots without the bit.** They were children 0 and 1: list entries the main list cull clears when they are out of view (one
+    a frame in the w176 exterior; in the w177 interior, the two non-cell children). They are not cell roots.
+-   **Sky and clouds outside the lists.** The sky's own meshes (`Sky`: dome, clouds, moon) are not in the scene lists, and no cull with
+    `updateAccumulateFlag` reaches them, so the engine sets nothing there and no reader needs DCLF to. The world's cloud cards
+    (`CloudDistant*`) are references DCLF lists and draws (forward Effect). Their bit now follows the same verdict as any object's.
+    Their readers are only the receivers, and only if an effect with lighting takes point lights.
+
+### The change
+
+-   **Every main input is stamped** (`BuildDrawsCS.hlsl`). A phase 1 thread whose input is a decal, forward or refraction input
+    (`kStampOnlyViews`) runs the main camera's test before the HZB (`MainFrustumRejected`: the frustum, then its root's portal program),
+    and the fade test (`StampFrustum`, the depth inputs' own code moved into a function). It writes the stamp and nothing else: no draw, no
+    visibility word, no counter. The colour segment still culls these inputs once, with the HZB, for drawing. The HZB verdict stays the
+    draws' alone.
+-   **The object's event carries the fade drop** (`VisibilityEventsCS.hlsl`, `kVisibilityBitFadeHidden`). A stamped object is either
+    visible or fade-hidden. The decoder keeps `ObjectVisibility::fadeHidden`. The written bit is unchanged: visible.
+-   **A root without a portal program** (`FadeStateCS.hlsl`, `FrustumInView`): preprocessed roots pass unless `kNotVisible`, and
+    always-draw roots pass untested, as in Process1. This is also the verdict FadeStateCS fades by.
+-   **The root's bit keeps its meaning.** FadeStateCS's `kFadeVerdictInView` is the engine's Process1 test, and the engine sets the bit on
+    a faded-out root too: it sets it after `OnVisible` whatever that does. The readers test the fade themselves (`FUN_1402cff60` step 2:
+    `currentFade <= 0`). "Not faded out" applies to the geometry, where the engine's own bit is stale.
+-   **The cell roots** (`CellRoots`). The parity counts the children the build sets (from the third on in an exterior, the cell's 3D in
+    an interior) apart from the containers (list entries). Only the former fires the tag. Under `CS_DCLF_ACCUMULATED_ALL` every
+    non-hidden child is set, the containers too. That is conservative: the receivers then test the levels below, and no other reader
+    reads a container. T7b0's write point and rules are unchanged.
+
+### The attribution in the dry run (`CompareWide`, `PrepareWrites`)
+
+-   **The cause bits.** Each write carries the decoder's cause bits (`Writes::Write::why`):
+    -   visible by the rule alone;
+    -   fade-hidden;
+    -   a verdict that changed within `kRecentFrames` (8) of the newest decoded frame.
+-   **What the main thread adds,** at the entry:
+    -   whether the geometry's chain up to its root is set (the parent walk of `SetChain`, at the same safe point);
+    -   whether its root is stood in now.
+-   **Each difference falls in the first cause that holds** (`WideCause`):
+    -   **The engine's alone:** a node up to the root clear (stale, no reader), the root stood in since the batch, DCLF's root faded out,
+        changed recently, steady.
+    -   **DCLF's alone:** the rule, changed recently, the engine's root clear, a node between clear, steady.
+    -   **Roots:** stood in since, changed, steady; or the rule, changed, steady.
+-   **The geometry is also compared with the receivers' bit:** the engine's bit on the geometry and on every node up to its root.
+
+The report gains one line after `[DCLF] accumulated, every listed root`:
+
+```
+[DCLF] accumulated dry run by cause (T7f): geometry against the receivers' bit (its chain to the root set) <b> both / <d> DCLF's alone /
+  <e> the engine's alone / <n> neither; the engine's alone: <c> a node up to the root clear (stale, no reader), <s> root stood in since the
+  batch, <f> DCLF's root faded out, <r> changed within 8 frames, <t> steady; DCLF's alone: <u> the rule, <r> changed, <o> the engine's root
+  clear, <a> a node between clear, <t> steady; roots the engine's alone: <s> stood in since, <r> changed, <t> steady; DCLF's alone: <u> the
+  rule, <r> changed, <t> steady; cell containers (list entries) <k> seen, <m> without the bit; geometry with no fade root <p> listed by an
+  entry, <q> with no candidates, <x> not a candidate, <y> whose entry is a fade root; first steady geometry the engine's alone: '<g>' under '<root>'
+```
+
+-   **The engine's-alone root names** gain " (stood in)" or " (recent)".
+-   **`<- ACCUMULATED ALL` now fires on what a reader would see differently, outside the lag:**
+    -   a fade root the engine's alone, steady;
+    -   a plain entry root the engine's alone;
+    -   a geometry the engine's alone, steady, whose chain is set;
+    -   a cell root the build sets, without the bit.
+-   **The plain entry roots were 0/0/0/0 in w176.** The last four counts say why: no candidates snapshot, the geometry not a candidate,
+    or its entry already a fade root slot.
+
+### The expected dry-run reading
+
+Outside the readback's lag the reading should be near 0. Exterior, `CS_DCLF_ACCUMULATED_PARITY=1`, standing still and in motion:
+
+-   **Fade roots:** the engine's alone steady 0. "Stood in since" and "changed" are small, and grow in motion only.
+-   **Geometry against the receivers' bit:** the engine's alone is "faded" plus "stood in since" plus "changed" plus "steady". Most of
+    the old 2,000-5,800 a window move to "a node up to the root clear", which no reader sees.
+    -   The cloud cards, decals and blended objects in view now agree.
+    -   "Steady" should be about 0 standing still. In motion it holds what came into view within the lag (the readback's frame slots
+        plus one frame): roughly the objects entering view in about 4 frames, each counted once per compare list (about 10 a window).
+-   **DCLF's alone** is mostly the rule (the two-frame window grows in motion). Some is "a node between clear" (LOD and switch
+    children). The rest is "changed".
+-   **Cell roots without the bit:** 0. The containers are counted on their own, and are without the bit whenever their bound is out of
+    view.
+-   **Residuals that remain by design:**
+    -   objects with no main input at all (a shadow-only caster under an in-view root) are never stamped and read "steady";
+    -   a zero-radius root, which Process1 leaves untouched, gets DCLF's frustum verdict at its centre.
+
+Built (the shaders compile with dxc, SM 6.6); not run in game.
+
+## The third-person body in first person (fixed 2026-10-11, pending validation)
+
+Reported: after a switch to third person and back, the third-person body was still drawn in first person. The defect's record is in
+[dclf-open-defects.md](./dclf-open-defects.md); the engine side is in [skyrim-engine-notes.md](./skyrim-engine-notes.md), "The
+first-person switch". The engine hides the third-person root with a plain `kHidden` store (`FUN_140736150`, `0x140736237`), a site
+HiddenStores already patched. The event reached DCLF. Two rules of the scene pass dropped it:
+
+-   **An actor's hidden event lived for one pass.** `ActorRecordKept` took the frame verdict again only when
+    `hiddenEventFrame == PassStamp()`. The camera switches in `Main::Update`, where a hidden store wakes a pass at once, and that pass
+    is an event walk (same `sceneFrame`), which schedules no per-frame entry. The event was gone by the frame's walk.
+-   **The capture outranks the mirror for the nodes it lists.** `HiddenForWalk` reads `FrameGlobals::cullHidden` first, and the
+    third-person root is listed (`TESWaterReflections::Update` hides and restores it inside the frame). A pass holding the frame
+    before's capture judged the hidden root as shown.
+
+The parities that run the pass inline (walk, persistent, capture) take it after the frame's capture, and a parity pass checks
+every verdict, so only parity-free runs drew the body.
+
+**The fix:**
+-   `Tracked::hiddenEventOwed` replaces `hiddenEventFrame`: `DrainHiddenEvents` sets it, the entry's next evaluation takes the frame
+    verdict again, and `MergeEntry` clears it. The event waits for a walk that evaluates the entry.
+-   `FrameGlobals::cullHiddenSequence`: `SceneCapture::NextSequence()` taken just before the capture reads the bits (a locked add, so
+    a store whose update is numbered before it is in the capture). `BatchHidden` carries the update's sequence. An event on a
+    listed node, numbered after the pass's capture and leaving a bit the capture does not hold, goes to `SceneStore::hiddenAhead`.
+    The first pass whose capture is numbered after it announces the node again: the dependents are owed, statics classified again.
+    A rescan clears the map. Its keys are never read.
+-   Report: `actor frame verdicts per pass: ... N announced again at a newer frame capture`.
+-   Observer (`CS_DCLF_SET_PARITY`, `Diagnostics/OpenDefectProbes.cpp`, `ObservePlayerClaims`): at the frame start, after the claims
+    are installed, the main claims on the player's hidden third-person skeleton and on the first-person skeleton (hidden for every
+    world view). A run of 9 frames or more is drawn by DCLF where the engine draws nothing: `<- PLAYER 3D`. Set parity alone does
+    not run the pass inline, so the observer sees the normal path.
+-   Test harness: `CS_DCLF_TEST_COMMANDS` takes `dclf:pov=first` and `dclf:pov=third` (`PlayerCamera::ForceFirstPerson`/
+    `ForceThirdPerson` as an SKSE task). No console command switches the camera.
+
+First to third person was already right: a hidden actor entry has no record and is written in full every walk, so the body joins
+one to three frames later and the engine draws it until then. The reverse (something hidden in third person and drawn by DCLF in
+first) has one candidate, the first-person skeleton. `cullHidden` lists it as hidden for every view the scene serves, so it never
+gets a record; the observer counts it too.
+
+## First person as a view bit (T7e, design 2026-10-11; built 2026-10-11 behind `CS_DCLF_FIRST_PERSON`, off; not run in game)
+
+First person was the engine's: the first-person skeleton was never tracked (its root has no parent; see fp0 below), its own cull fills its
+own accumulator, and the depth and colour passes draw it (engine notes, "The first-person view"). T7e makes it a view of the one
+persistent scene, behind the live toggle `CS_DCLF_FIRST_PERSON` ("First person" in the menu; off by default, `=1` seeds it on; it needs
+the skinned and actors toggles). The design below is followed; the decisions fp0 settled and what was built come after it.
+
+**Membership: one scene, a view bit.**
+-   The first-person skeleton's geometry is tracked like an actor's (how the tracker reaches its root is fp0's question). It gets a set phase
+    `kSetFirstPerson` (`Scene/SceneSet.h`) and a view bit `kViewFirstPerson = 1u << 11` (`GpuLayouts.h`), and never `kViewMain`,
+    a caster bit or an occluder bit. The engine draws it in no world view: in first person the sun's casters run with both roots
+    hidden, so the player casts no shadow.
+-   The root's `kHidden` is view-scoped, not membership:
+    -   `FUN_140736150`'s stores are the persistent state: an event, as for the third-person root.
+    -   `Main::Draw`'s, `unk_FPCulling`'s and `RenderDepth`'s toggles happen inside the frame and must change nothing.
+    -   `ClassifyFrame` skips the first-person root on its entries' chains (`cullHidden` keeps it hidden for the world views).
+    -   The view's latch is enabled on the frames the engine draws first person. `Main::Draw`'s `cVar23`, recomputed at
+        `BeginSceneFrame` (the hook runs after `cVar23` is taken and before `0x1406445a1` hides the root again): the root shown,
+        `PlayerCamera +0x28 != +0xD0` (not `tfc`), and `Main::Draw`'s third argument false.
+-   No per-view CPU list: the GPU cull tests `kViewFirstPerson` in the object's mask against the first-person view's latch, and its
+    frustum.
+
+**Camera and projection** (captured at `BeginSceneFrame`, where `FUN_1406452c0` has filled `0x14338c8c0` and `Main::Update` has
+run `FirstPersonState::Update`):
+-   eye: `GetFirstPersonNodePosition` (`0x14338c8c0 +0x00`); rotation: the world camera's world rotation;
+-   FOV: `PlayerCamera::firstPersonFOV` plus the animated offset `0x14338c628`; near: the float at `0x14202a928` (5); far: the world
+    camera's (to confirm); aspect: the screen's; the main view's TAA jitter;
+-   DCLF draws in world space. The engine's shifted space (the root moved to the origin by `FUN_1414ce9d0` around the draws) is the
+    same image. Hazard: the shift writes the skeleton's world translations on the render thread during `RenderDepth`'s block and
+    `FUN_1414cb020`-`FUN_1414cb270`. The frame values must read the first-person placements before it (they are kicked at
+    `BeginSceneFrame`), or take them from the mirror's moves.
+-   Viewport depth range `[0, 0.1]` in the depth pass (so the arms stay in front of the world), and in colour the engine's (the float
+    pair at `0x14202b2d0`, or `0x14202b2e8` with `RenderFirstPersonView`'s second argument).
+
+**Where the draws go:**
+-   **Depth:** a first-person pass at the end of the depth epoch, after the world's draws and **after the HZB build** (the HZB must
+    keep leaving the arms out), with the first-person view constants. It must land before `RenderDepth`'s `kPOST_ZPREPASS_COPY`
+    (the copy includes the engine's first-person depth today).
+-   **Colour:** a new epoch `Segment::FirstPerson` at `Main::RenderFirstPersonView` (`Main::Draw +0x971`; Deferred already thunks
+    the call for `InWorld`; DCLF hooks the accumulator render inside, `FUN_1414a90f0`, or chains the thunk). Forward Lighting keys
+    (the T7d forward epoch's pixel descriptors without Deferred, with `InWorld`): opaque first, then blended through the forward sort
+    with the first-person camera, into the engine's first-person targets (slot 2 cleared, depth target 7), before the engine's own
+    first-person passes (the residue: effects, particles).
+-   **Lights:** DCLF's members take LLF's clustered lights and the sun as world actors do. Whether the first-person forward draws
+    sample the sun's shadow mask (screen space) the same way is open.
+
+**What the engine still does:** the skeleton's animation and skinning (DCLF reads the palette as for actors), the camera state, the
+first-person cull (`unk_FPCulling`) and its light process (`FUN_1414cb640`) until T7f. DCLF's members are withheld from the
+first-person accumulator's registrations (`0x14338c840`). The census can name that accumulator exactly: its `0x14338c820` is the
+camera, which is why the read there crashed.
+
+**Observer:** `<- FIRST PERSON` under `CS_DCLF_SET_PARITY`: the engine's first-person registrations of members (0 with the switch on);
+with it off, first-person inputs in the view against the engine's registrations of the same geometry.
+
+**Stages:**
+1.  T7e-fp0 RE: `Main::Draw`'s third argument; the far plane; the root's parent and how the tracker reaches it; whether
+    `RenderDepth`'s block shifts the root too; the frame values' read times against the shift.
+2.  T7e-fp1: the membership with the view bit (records, `kSetFirstPerson`, no draw); the census shows the members.
+3.  T7e-fp2: the camera and the depth pass.
+4.  T7e-fp3: the colour epoch.
+5.  T7e-fp4: the engine's registrations withheld, the observer, then the switch on by default.
+
+Gate: census `first person` 0 registered geometry with the switch on, `<- FIRST PERSON` OK, screenshots of the arms and weapon
+alike with the switch on and off (FOV changes, bow zoom), 3 runs without device loss.
+
+**fp0, what the decompile settled** (AE 1.6.1170; engine notes, "The first-person view", has the detail):
+-   **Main::Draw's third argument** is `UI::IsMenuOpen("Main Menu")` (its caller `FUN_140644360`, `InterfaceStrings +0xA8`).
+-   **The far plane** is the world scene graph's `GetFarDistance` (vfunc `0x1F0` = `SceneGraph::GetFarDistance`), the world camera's.
+-   **The root's parent: none.** `PlayerCharacter::Load3D` loads `firstPerson3D` (`+0x8F8`) and attaches it nowhere; `unk_FPCulling` and
+    RenderDepth's block cull it alone. So the tracker never saw it. DCLF now files it as a parentless root that is its own category node
+    (the portal graph's `alwaysRenderChildren` path: `SetDrawnRoots` makes the mirror count it in the world, so the equipment's attaches
+    under it are events like any other).
+-   **RenderDepth's block shifts the root too**: it undoes Main::Draw's shift (`FUN_1414ce9d0` with plus the root), culls the root in
+    world space with its own process into the Z-prepass's accumulator `0x14338c828`, shifts again and draws that accumulator with the
+    first-person camera (flags 3). So the skeleton is in the root's space from `FUN_1414cb020` (Main::Draw `+0x26A`) to `FUN_1414cb270`
+    (`+0x9C2`) apart from that cull, inside DCLF's read window.
+-   **The frame values' race, and its answer.** The producer kicked at BeginSceneFrame samples on the pool until Present, and the
+    engine's skin update (`FUN_140e4ff90`) runs once a frame (frameID) for whoever calls it first: a pool read could land on either side
+    of the shift, or between, and could pin a shifted or unshifted palette for the engine's own draws. So the producer never samples a
+    first-person item (`PlacementPlan::Item::firstPerson`), and the render thread takes the claimed members' rows and palettes in
+    `FrameValues::Kick` at BeginSceneFrame, before the shift (`FirstPersonSample`), calling the skin update itself: the engine draws none
+    of them (withheld), so nothing of its own reads a palette pinned in world space. An unclaimed first-person skin is not touched.
+-   **Sun shadows on the arms**: no first-person caster (the casters run with both roots hidden). The colour pass is forward Lighting with
+    the colour segment's frame record, which samples the screen-space shadow mask the main pass made from the main depth (which holds the
+    arms' depth from the depth epoch), as the engine's first-person draws sample it.
+-   **The colour targets**: FUN_1414cb6d0 draws into slot 0 = `kMAIN` and slot 1 = `kMOTION_VECTOR` (Main::Draw binds 1, 7, 4 and the
+    function unbinds slot 2) with depth target 7 = `kPOST_ZPREPASS_COPY`, write mode 12, the depth range `[0, f1stPersonFarDepthRange]`
+    (`0x14202b2d0`; `f1stPersonFarDepthRangeControlDriven`, `0x14202b2e8`, with the second argument, the movement controller's vfunc
+    `0x78`). The near plane `0x14202a928` is `fNear1stPersonDistance`.
+
+**What was built** (paths under `src/Features/DrawcallLimitFix/`):
+-   **Switch, toggle**: `CS_DCLF_FIRST_PERSON` (`Common/Switches`), `ToggleSet::firstPerson` (`Common/Toggles`, classification).
+-   **fp1, membership** (`Scene/SceneStore/Classification.cpp`, `SceneSet.cpp`, `HiddenStores.cpp`, `AccumulatePhase.cpp`):
+    `CaptureCategories` adds `player->Get3D(true)` (when it is not the third-person root) to the category set and as a root filed under
+    itself (`CategoryCapture::firstPersonRoot`; `CategorySignature` mixes it); `SceneStore::firstPersonCategory` is the coordinator's
+    copy. `ClassifyFrame` stops at it before the hidden test (its `kHidden` is the view's). `DrainHiddenEvents` announces nothing for its
+    hidden events (Main::Draw toggles it every frame). `SetParticipation` gives a first-person slot `kSetFirstPerson` alone, and only to
+    an opaque or alpha-tested object (a decal, forward, refraction, effect or shadow-only object stays the engine's). `CommitSet` makes
+    it a member when resident, main-ready and its first-person pipelines are in the lane's catalog (`FirstPersonSlotReady`; waiting
+    reason 8, a forward pipeline). `BindByMembership` and `RevokeUndrawnClaims` treat it as a main-bound phase. Set phase
+    `kSetFirstPerson = 1u << 6` (`Scene/SceneSet.h`), view bit `kViewFirstPerson = 1u << 11` (`GpuLayouts.h`, in `kMainSideBits`);
+    `MainMaskOf` gives a member `kViewFirstPerson` alone (no main candidate: the HZB keeps leaving the arms out), `MainBuild::InSet`
+    makes it drawable. One persistent scene: the first-person epochs' BuildDraws test the view bit against the input's mask.
+-   **fp2/fp3, camera, depth and colour** (`Draws/IndirectDraws/FirstPerson.cpp`, new; `Shapes.cpp`, `SceneRevision.cpp`,
+    `Resources.cpp`, `Internal.h`): two revision epochs (`SceneRevisions::kEpochs` 8; `kFirstPersonDepthEpoch`, `kFirstPersonEpoch`;
+    segments `RenderGraphRuntime::Segment::FirstPersonDepth` after Reflection and `FirstPerson` after Forward in the epoch order), both
+    recorded against one `FirstPersonFrame` shape while the toggle is on. `BeginFirstPersonFrame` (BeginSceneFrame, before
+    `DecideCoverage`) recomputes Main::Draw's `cVar23` (the root shown, the main menu closed, not the free camera), publishes the targets
+    (the main pass's targets 0 and 1, `kPOST_ZPREPASS_COPY`'s DSV format), asks the lane for each first-person slot's forward pipeline
+    (`ForwardPipelineKey::kForwardFirstPerson`: two attachments, back faces culled; `DrawPipelines::SetFirstPersonTargets`) and makes the
+    resources (`SetupFirstPerson`, `ImportFirstPersonDepth`, which adds the `cs.dclf.first-person` extension). Hooks
+    (`DrawcallLimitFix.cpp`): `RenderDepth_FirstPersonDraw` at `0x1414cd47e` (RenderDepth's first-person `FUN_1414a90f0`) and
+    `RenderFirstPersonView_Draw` at `0x1414cb7d1` (FUN_1414cb6d0's). `ExecuteFirstPersonDepth` reads the engine's first-person camera
+    (`*0x14338c820`, set up by `FUN_1414cb020`: its frustum and rotation) with its world eye (`DrawWorld +0x00`), builds its VS_PerFrame
+    over the renderer's last block (the jitter from `State::projectionPosScaleX/Y`, the previous unjittered view-projection and eye kept
+    for the motion vectors), and runs the depth epoch: latched copies (block, zeroed counts), BuildDraws over the ring entry's main list
+    (frustum only, `viewBits = kViewFirstPerson`, a bucket per pair of the slot's Z-prepass depth pipeline and first-person forward
+    pipeline), the depth draws into the main depth with the viewport `[0, range]`. `ExecuteFirstPersonColour` draws the same sequences
+    with the forward pipelines into `kMAIN` and the motion vectors against `kPOST_ZPREPASS_COPY`, before the engine's residue.
+-   **fp4, withholding and the observer** (`Engine/PassCapture`): the first-person accumulator's renderers (`*0x14338c840`) are WithholdMain's
+    too; a `kSetFirstPerson` member's pass into them or into the Z-prepass's (RenderDepth's block) is withheld while
+    `SetFirstPersonCovered` (DecideCoverage: the latch, the claims, both recordings, the depth copy imported, no rebuild pending).
+    `RegistrationCensus` names the accumulator (`first person`). The observer's counts are in the report.
+
+**Report**, every report while the toggle is on or anything ran:
+
+```
+[DCLF] first person (T7e, CS_DCLF_FIRST_PERSON on|off): F frames, L the engine drew first person (latch); epochs: D depth, C colour; not drawn: ...
+  not the view's frame, ... not covered, ... without the camera, ... stale inputs, ... without resources, ... failed [<- EPOCH FAILED], ... colour without
+  the frame's depth epoch [<- NO DEPTH EPOCH]; targets colour .. motion .. depth .., S first-person pipeline slots, R pipelines ready, depth range r
+[DCLF] first person's registrations (T7e, ...): N passes registered into the first-person accumulator, W member passes withheld, K member passes the engine drew <- OK | <- FIRST PERSON
+```
+
+The second line is printed under `CS_DCLF_SET_PARITY` (or whenever K > 0). Expect, with the toggle on and a weapon drawn: D = C = L
+after the first few seconds, S > 0 and R = S, W > 0 and K = 0 (`<- OK`); the revision report's `first-person depth` and `first-person
+colour` epochs recorded; the census's `first person` view without Lighting geometry of the skeleton (members withheld).
+
+**First run (fp1, 2026-10-11: Riverwood, sword and Flames, set parity, census): first person never engaged.** Three causes, fixed:
+-   **The colour epoch's recordings were all refused** ("not replayable"; the revision report's `first-person colour 3 requested, 0
+    recorded, 3 failed`, and the reflection's early failures). A host's frame slots are frames in flight times epochs: 4 x 9 = 36 with
+    the two new epochs, and ORG kept recordings for 32 slots alone (`RenderGraph::kKeptRecordingSlots`), so an epoch's recording on slots
+    32-35 was not keepable and its revision-driven recording refused. ORG now keeps them for every slot a host can have (255, the host's
+    own limit).
+-   **The arms were `hidden`** (census: the skeleton's ` (0003CA03)` meshes "lighting: hidden" while the engine drew them): a stale
+    mirror bit, from a store with no event. `FrameGlobals::cullHidden` now holds every node of the first-person subtree with its live bit
+    each frame (the render thread, before Main::Draw touches it), and `ActorRecordKept` takes a first-person entry's verdict again every
+    frame. With no record the arms had no slot, hence `0 first-person pipeline slots`.
+-   **`<- COMMIT`, a member kept waiting** ('IronLongSword:0' waiting with reason 8 and cause `0x10` while its first-person pipeline was
+    ready): no readiness source moves when the lane publishes a forward pipeline in a new catalog. `CommitSet` now counts the lookups'
+    catalog's ready forward pipelines and treats a change as a readiness event for the `kWaitOther` slots (the reflection's reason 8 too).
+
+**Second run (fp2):** the epochs ran (covered, 300 a report) with no member: the same three skeleton meshes stayed `hidden` with their
+live bits captured at the frame's start. So the frame start's bits are not what the engine's first-person culls see. The capture now
+takes the subtree's bits at RenderDepth's first-person draw, after both first-person culls (`FrameGlobals::NoteFirstPersonCulled`, used
+by the next frame's capture), and logs `[DCLF] first-person subtree (T7e): at the frame's start N geometries, H hidden: ...; at the last
+first-person culls ...` whenever the two lists change.
+
+**Not done; risks.** Not validated in game (fp1 drew nothing; the fixes above are built, not run). Blended first-person Lighting stays the
+engine's (no forward sort in the first-person epoch);
+effect, particle and magic-hand Effect-shader geometry stays the engine's residue (drawn after DCLF's). The jitter is the state's
+`projectionPosScaleX/Y` added as SetCameraData adds it (not compared with the engine's first-person block yet: a register parity like
+the reflection faces' would close it). The motion-vector target is taken to be the main pass's target 1 (the formats are; the
+identity is not checked). The first frame after a switch to first person has a previous camera equal to the current. Non-member
+first-person geometry (an unsupported class) is a cull-only main candidate in the depth segment's inputs (its mask cannot name the view
+without its phase); harmless to the draws, it adds a few inputs. A first-person member's first frames after a toggle are the engine's
+until its pipelines and recordings exist (as every phase).
+
+## Particles (T7e; built 2026-10-11 behind `CS_DCLF_PARTICLES`, off; first run fp-fp1: nothing taken, fixed, not run again)
+
+After the Effect port and the ordered-node interleave the census's main view still had engine-drawn particle systems: `Effect:
+NiParticleSystem` (the smoke and the candle glows and flames: `smoke07-Emitter`, `CandleGlow01-Emitter`) and `Particle: BSTriShape`
+(about three passes a frame). The first is a `BSEffectShaderProperty` on an `NiParticleSystem`, the Effect port's shader on geometry that
+has no vertex buffer of its own; the second is precipitation (`BSParticleShaderProperty`, the Precipitation feature's), left out. T7e
+draws the common case: an `NiParticleSystem` with a blended effect property, in the forward epoch's sort, from snapshots taken at the
+engine's particle update. Behind `CS_DCLF_PARTICLES` (a live classification toggle, **off by default**, `=1` seeds it on; it needs
+`CS_DCLF_EFFECTS`).
+
+**What the engine does** (AE 1.6.1170; [skyrim-engine-notes.md](./skyrim-engine-notes.md), "Particle systems"):
+
+-   **The writer** is the system's update pass: `NiParticleSystem::UpdateDownwardPass` / `UpdateSelectedDownwardPass` (vtable slots 0x2C,
+    0x2D: `0x140dd48a0`, `0x140dd4910`) run `NiPSysUpdateCtlr::Update` (`0x140ddd660`) -> `Do_UpdateSystem` (`0x140dd4380`: the modifiers
+    write the `NiPSysData` arrays and the model bound), then the world transform and the world bound. On whichever thread updates the
+    subtree: the cell animations' jobs for a reference's emitters (gated by its root's `kAccumulated`), the "Particles" job stage
+    (`Job_Particles` `0x1406d31a0`) for temporary effects and `BSParticleSystemManager`'s world-space systems. The data is written outside
+    Main::Update, inside the engine-read window, so DCLF may not read it later: it is copied at its writer.
+-   **The draw** builds the quads on the render thread each draw (`FUN_1414f2ad0`, type 1): at most 0x800 particles, `FUN_140e51320`
+    faces each to the drawing camera (the view data's up and right in model space), sorts them back to front (`FUN_140d4fcb0`,
+    `FUN_140d4ff00`), fades each by its distance from the eye (`FUN_140d40ba0`, the system's four distances at `+0x160`), packs the colour
+    and writes four vertices (position relative to the model bound's centre, texture index, colour: 20 bytes) into the dynamic ring;
+    stream 0 is the renderer's static texture-coordinate stream and the index list its static quad list (`FUN_140e4d280`).
+-   **The shader**: `GetRenderPasses` gives a particle system's pass hint 1 whatever its alpha; `FUN_1414bde90` adds `Particles`, and
+    `TexCoordIndex | IndexedTexture` with a texture and subtextures, never `Falloff`. `SetupGeometry` folds the model bound's centre into
+    World's translation (PreviousWorld the same) and binds the data's subtexture offsets as VS b11 (`IndexedTexCoord`).
+
+**What DCLF draws.** A particle geometry with an effect property is the Effect port's to classify (`ClassifyStatic`, before the
+renderer-data checks). It is drawn when `ParticleSystemTaken`: exactly an `NiParticleSystem` (type 1), with particle data, no aspect
+flags (velocity-aligned or speed-stretched quads), a blending alpha property, no decal flags, and none of the effect variants not ported.
+Local and world space alike: most vanilla emitters (candle flames, chimney smoke, magic) are world space (the NIF's "World Space" flag,
+`NiParticleSystem::LoadBinary` -> `+0x192`) and stay under their reference; such a system's world transform is the identity with its
+parent's scale (`FUN_140dd4db0`) and its positions are world coordinates, which the same quad and World formulas take. Everything else of
+a particle geometry is `effect-variant (particle: <cause>)`, a census name a cause (`ParticleRejectionOf`): `toggle off`, `class` (strip
+and mesh particle systems, a skin), `no data`, `aligned`, `unblended` (its blend mode would follow the frame's property alpha), `decal`.
+With the toggle off particle geometry stays `not-trishape`.
+
+**How.**
+
+-   **The mirror** (`SceneCapture::CaptureGeometry`): a particle geometry's record holds its own vertex description (`+0x148`) and
+    `GeometryRecord::Particles` (exact class, world space, data, aspect flags, capacity `maxNumVertices`, subtexture count), compared with
+    the renderer fields. Its particles are not in the mirror.
+-   **The snapshots** (`Engine/ParticleSnapshots.*`): thunks after the two update slots copy what the quads need (per particle the
+    model-space position, `radius * size`, the colour or white, the rotation angle, the subtexture rect `IndexedTexCoord[textureIndex]`;
+    per system the world transform, the world bound, the model bound's centre, the fade distances) into the system's record: a triple
+    buffer, filled by the writer and exchanged into `latest` (a second simultaneous writer skips: `contended`). Only records the producer
+    follows are written: one lookup in an immutable open-addressed table the producer republishes when its set changes. A writer counts
+    itself in before it reads the table; a replaced table or a pruned record is freed once that count was seen at zero after the
+    replacement. No lock, no waiting, no engine reference held.
+-   **The geometry slot** (`SceneStore::ResolveGeometrySlot`): the renderer's own static quad list and texture-coordinate stream, one
+    slot per capacity bucket (a power of two from 8 to 0x800 quads, keyed by an address of DCLF's), with a vertex description of the
+    texture-coordinate stream alone (`ParticleSnapshots::kSlotVertexDesc`: NiParticles' own puts the position on stream 1, which DCLF's
+    draws reserve for face streams).
+-   **The block**: a particle member takes a block of the frame's palettes as a skin's palette does (`kObjectSkinned`, the record's
+    `boneOffset`; `Tables::PlaceBones`, whose free lists are now exact for any block size: `BoneFreeList`), five rows a particle of its
+    bucket: four corners (position relative to the model bound's centre, the packed colour in w) and the subtexture rect. Its entry is per
+    frame (`kTraitMoves`), so the placement plan lists it as a mover, its item marked `particles`.
+-   **The quads** (FrameValues' producer, `ParticleSnapshots::Expand`): for each particle member of the frame's plan, the newest snapshot
+    faced to the frame's main camera (`ParticleSnapshots::BeginFrame` at BeginSceneFrame: the world scene graph's camera, its world rotation's
+    columns the view data's forward, up and right, its translation the eye) exactly as `FUN_140e51320` does (both paths: plain and
+    rotated; the engine's quicksort, the distance fade, the colour packing), the rest of the block degenerate quads; and the member's
+    placement row takes the snapshot's world (the centre folded into the translation, PreviousWorld the same) and world bound, which
+    the GPU cull reads. The rows go up with the palettes' journal (only the changed blocks).
+-   **The draw**: an effect key of the particle descriptor (the forward state from the alpha property), `Effect.hlsl` under
+    `DCLF_BINDLESS` and `PARTICLES` (`DCLF_PARTICLE_PULL`): no vertex input but `SV_VertexID`, its corner pulled from the object's block
+    (`DCLFParticleInput`), the subtexture rect applied as the engine's vertex stage applies `IndexedTexCoord` (no b11). The member is a
+    forward object (`kViewForward`), culled by the colour BuildDraws with its snapshot's bound, sorted with the blended Lighting and effect
+    draws by its bound's centre (as the engine sorts its pass) and drawn by the forward epoch. The membership pass is the Effect port's
+    (hint 1), so `MainListHook` withholds the engine's.
+
+**Reports**, every report: `[DCLF] particles (T7e, CS_DCLF_PARTICLES on|off): M members bound, F systems followed; S snapshots taken at
+the engine's updates (C while another update wrote the system); E expansions of P particles (N without a snapshot yet, A aligned systems
+drawn as plain quads <- PARTICLE ALIGNED); T tables published, R records pruned`. Under `CS_DCLF_SET_PARITY` the observer: `[DCLF]
+particles' engine passes (CS_DCLF_SET_PARITY): R passes of particle members the engine registered (withheld), U of them without a
+snapshot DCLF expanded in its last 3 runs <- OK | <- PARTICLES; first '<name>' under '<parent>'` (`PassCapture::MainListHook`, the
+withheld hint 1 passes of particle geometry). The census's `Effect: NiParticleSystem` class leaves the main view for the members; what
+stays is named `effect: effect-variant (particle)`.
+
+**Run** (`CS_DCLF_PARTICLES=1`, full featureset, `CS_DCLF_CENSUS=1`; once with `CS_DCLF_SET_PARITY=1`): an interior with candles and a
+fire (an inn: the Bannered Mare, the Sleeping Giant), and an exterior with chimney or campfire smoke (Riverwood, Whiterun). Expected:
+`members bound` > 0, snapshots and expansions every window with `without a snapshot yet` near 0 after the first frames, no `PARTICLE
+ALIGNED`; `<- OK` with R > 0; the census's main view without `Effect: NiParticleSystem` (or only `effect: effect-variant (particle)`
+for systems the path does not take); effect pipelines ready with none failed (new permutations: `PARTICLES`, `TEXCOORD_INDEX`);
+visually the flames, glows and smoke the same with the toggle on and off: their size, colour, flicker, the soft edges, the
+subtexture animation (fire flipbooks), their order against other blended objects, and the camera-distance fade.
+
+**First run (fp-fp1, Riverwood bridge, first person with Flames).** No crash, but `0 members bound, 0 systems followed`: every system
+(31 geometries, ~28 passes a frame in main: `PArray05`, `smoke03`, `CandleFlame01`, ...) was `effect-variant (particle)`. The
+local-space condition rejected them: the vanilla emitters are world space under their references (above). Fixed by taking world-space
+systems; the census now names each rejection's cause.
+
+**Second run (fp-fp2, same place, with `CS_DCLF_FIRST_PERSON=1`).** No crash; 194 members bound and followed, ~116,000 snapshots and
+58,200 expansions (~190,000 particles) a window, one table published (the first window; none after: the set did not change), none
+without a snapshot after the first window. The engine's update passes reach each system twice a frame (the full and the selective
+downward pass): a capture now copies nothing when the system's `lastUpdate` and world transform are those of its last capture
+(`update passes with nothing new skipped`). The observer printed nothing: the engine registered no pass of a particle member, because
+their roots are stood in (every geometry of the reference is DCLF's, so the engine never culls it; the forward observer said the same,
+`the engine registered 0 blended passes of members`). The line is now printed whenever the parity is on, and the report counts
+`systems newly frozen` (the same snapshot 30 runs in a row: an update the engine stopped, which a stood-in root's `kAccumulated` would
+cause). Left as `effect-variant (particle: aligned)`: `PArray07/08`, and outside DCLF's categories `PCloud01`, `pFireballCore05`,
+`CandleFlame01`. The dark strip at the right edge in its shots 01-03 (opaque, full height, untextured, fading out by 04) is not a
+particle quad's look (they are blended and textured, and these systems are far away).
+
+**Not done; risks.** Not run since. The frame's quads face the camera the producer was handed at BeginSceneFrame and use the newest snapshot
+the producer finds, which is this frame's update or the last one's (the engine's draw uses this frame's camera and this frame's update):
+at most a frame of lag in the particles' motion. Strip particle systems, mesh particle systems, anything under `BSParticleSystemManager`
+(untracked) and aligned quads stay the engine's; so does precipitation. The sort among particles uses
+model-space positions against a world direction, as the engine does. The particle update of a reference's emitters is gated by its
+root's `kAccumulated`, which the engine's cull still sets (T7f must keep it: T7b's producers). An emitter whose data is resized at run
+time (`SetEmitterParticleMax`) keeps its block until its record is captured again (the particles past it are not drawn). One system
+updated by two threads at once keeps the first capture. First-person particle systems (the magic hands') stay the engine's
+(`ClassifyFrame`: FrameValues samples no first-person item, so nothing would fill their blocks). The census's `Effect: NiParticleSystem` name for these systems (with the
+Effect port on, an effect geometry should be classed `effect: ...`) is unexplained: if a run shows it still, check the systems' property
+class first (members bound would be 0).
 
 ## Decals: a second draw pass, and a single culling phase
 

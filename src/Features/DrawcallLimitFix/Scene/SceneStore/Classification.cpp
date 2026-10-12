@@ -126,6 +126,13 @@ namespace DCLF
 		RE::NiNode* found = nullptr;
 		bool unmirrored = false;
 		const void* top = a_object;
+		// T7e: the first-person root is its own category node, whatever its record's parent: walked as a root (RefreshCategoryNodes'
+		// roots), its subtree is filed under it, never under a category node above it (fp5's members were, and took no first-person phase).
+		if (a_object && a_object == firstPersonCategory) {
+			a_reason = Ineligible::None;
+			a_unmirrored = !mirror.Node(a_object);
+			return static_cast<RE::NiNode*>(const_cast<void*>(a_object));
+		}
 		const SceneCapture::NodeRecord* record = a_object ? mirror.Node(a_object) : nullptr;
 		unmirrored = a_object && !record;
 		const void* key = record ? record->parent : nullptr;
@@ -194,6 +201,12 @@ namespace DCLF
 	RE::NiNode* SceneStore::FindCategoryNodeLive(RE::NiAVObject* a_object, Ineligible* a_parentReason) const
 	{
 		EngineReadWindow::Touch("SceneStore::FindCategoryNodeLive");
+		// T7e: the first-person root files its subtree under itself (MirrorCategoryNode).
+		if (a_object && a_object == firstPersonCategory) {
+			if (a_parentReason)
+				*a_parentReason = Ineligible::None;
+			return static_cast<RE::NiNode*>(a_object);
+		}
 		Ineligible reason = Ineligible::None;
 		const RE::NiAVObject* top = a_object;
 		RE::NiNode* node = a_object ? a_object->parent : nullptr;
@@ -255,6 +268,12 @@ namespace DCLF
 			// The LOD root (RefreshCategoryNodes), with the toggles that list it.
 			mix(ActiveToggles().lodObjects || ActiveToggles().lodTerrain ? tes->lodLandRoot : nullptr);
 			hash.Mix((ActiveToggles().lodObjects ? 1u : 0u) | (ActiveToggles().lodTerrain ? 2u : 0u));
+			// T7e: the first-person root while the toggle tracks it (CaptureCategories).
+			if (ActiveToggles().firstPerson)
+				if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+					mix(player->Get3D(true));
+					mix(player->Get3D(false));
+				}
 			mix(tes->interiorCell);
 			if (tes->interiorCell) {
 				mixCell(tes->interiorCell);
@@ -383,6 +402,18 @@ namespace DCLF
 					addCell(grid->cells[i]);
 			}
 		}
+		// T7e (CS_DCLF_FIRST_PERSON): the player's first-person skeleton (PlayerCharacter +0x8F8, Load3D: no parent; Main::unk_FPCulling and
+		// RenderDepth cull it alone). Its root is a category node (the walk up from its geometry ends there) and a root filed under itself
+		// (the parentless roots' path: the mirror counts it in the world, SetDrawnRoots, and its attaches - the equipment - reach the
+		// tracker as events). Its kHidden is view-scoped: ClassifyFrame stops at it.
+		if (ActiveToggles().firstPerson)
+			if (auto* player = RE::PlayerCharacter::GetSingleton())
+				if (auto* firstPerson = player->Get3D(true); firstPerson && firstPerson != player->Get3D(false))
+					if (auto* node = firstPerson->AsNode()) {
+						current.insert(node);
+						currentRoots.try_emplace(node, CategoryCapture::Root{ RE::NiPointer<RE::NiAVObject>(node), node });
+						capture->firstPersonRoot = node;
+					}
 		capture->held.reserve(current.size());
 		for (auto* node : current)
 			capture->held.emplace_back(node);
@@ -493,6 +524,7 @@ namespace DCLF
 			++referenceStats.pins;
 		}
 		categorySignature = capture->signature;
+		firstPersonCategory = capture->firstPersonRoot;
 		const auto& current = capture->nodes;
 		const auto& currentRoots = capture->roots;
 
@@ -1292,6 +1324,19 @@ namespace DCLF
 			}
 		}
 		if (type != RE::BSGeometry::Type::kTriShape && !multiIndex && !lodObject) {
+			// T7e (CS_DCLF_PARTICLES): a particle geometry with an effect property is the Effect port's to classify (DeriveEffectDescriptors:
+			// a particle system DCLF's particle path draws, or the particle variant). It has no renderer data of its own: its draw is the
+			// renderer's quads, its vertices ParticleSnapshots' (SceneStore::ResolveGeometrySlot).
+			if (ParticleGeometryType(g.type) && ActiveToggles().particles) {
+				const auto* effect = SceneCapture::LeafView::Effect(a_leaf.property);
+				if (!effect || !ActiveToggles().effects)
+					return Ineligible::NotLightingShader;
+				LightingDescriptors descriptors;
+				const Ineligible reason = DeriveEffectDescriptors(*effect, a_leaf, descriptors);
+				if (a_descriptors && reason == Ineligible::None)
+					*a_descriptors = descriptors;
+				return reason;
+			}
 			if (!face)
 				return Ineligible::NotTriShape;
 		}
@@ -1334,8 +1379,20 @@ namespace DCLF
 		}
 
 		const auto* property = SceneCapture::LeafView::Lighting(a_leaf.property);
-		if (!property)
-			return Ineligible::NotLightingShader;
+		if (!property) {
+			// T7d's Effect port (CS_DCLF_EFFECTS): a BSEffectShaderProperty on a BSTriShape, drawn by the forward epoch when its pass is the
+			// static blended mesh's (DeriveEffectDescriptors). Any other shape of one keeps the effect's own reason.
+			const auto* effect = SceneCapture::LeafView::Effect(a_leaf.property);
+			if (!effect || !ActiveToggles().effects)
+				return Ineligible::NotLightingShader;
+			if (type != RE::BSGeometry::Type::kTriShape)
+				return Ineligible::EffectVariant;
+			LightingDescriptors descriptors;
+			const Ineligible reason = DeriveEffectDescriptors(*effect, a_leaf, descriptors);
+			if (a_descriptors && reason == Ineligible::None)
+				*a_descriptors = descriptors;
+			return reason;
+		}
 
 		// GetRenderPasses treats material alpha below one as transparent (the record's: 1 without a material): blended, the forward
 		// epoch's with CS_DCLF_FORWARD (T7d: DeriveLightingDescriptors), else native.
@@ -1437,6 +1494,33 @@ namespace DCLF
 		return (a_record.flags & static_cast<std::uint32_t>(RE::NiAVObject::Flag::kHidden)) != 0 && !mirror.Gated(a_object);
 	}
 
+	void SceneStore::NoteFirstPersonHidden(const Tracked& a_tracked, const void* a_key, const SceneCapture::NodeRecord& a_record, std::uint32_t a_depth) const
+	{
+		static std::atomic<std::uint32_t> logged{ 0 };
+		if (logged.fetch_add(1, std::memory_order_relaxed) >= 16)
+			return;
+		const auto& cullHidden = FrameGlobals::Current().cullHidden;
+		const auto* object = static_cast<const RE::NiAVObject*>(a_key);
+		const auto it = std::lower_bound(cullHidden.begin(), cullHidden.end(), object, [](const auto& a_entry, const RE::NiAVObject* a_object) { return a_entry.first < a_object; });
+		const bool listed = it != cullHidden.end() && it->first == object;
+		// The mirror's chain (keys), from the leaf up.
+		std::string chain;
+		const void* at = a_tracked.geometry.get();
+		for (std::uint32_t n = 0; at && n < 16; ++n) {
+			const auto* node = mirror.Node(at);
+			chain += fmt::format("{}{}", n ? " <- " : "", at);
+			at = node ? node->parent : nullptr;
+			if (!node)
+				chain += " (no record)";
+		}
+		logger::info("[DCLF] first-person hidden verdict (T7e): geometry {} filed under {} (the first-person root {}{}); hidden at chain depth {}: node {}{}, {} (the mirror's bit {}); "
+					 "{} nodes listed in the frame's capture; the mirror's chain: {}",
+			static_cast<const void*>(a_tracked.geometry.get()), static_cast<const void*>(a_tracked.categoryNode), static_cast<const void*>(firstPersonCategory),
+			FirstPersonEntry(a_tracked.categoryNode) ? ", the same" : ", another", a_depth, a_key, a_key == a_tracked.categoryNode ? " (its category node)" : "",
+			listed ? fmt::format("listed hidden {} in the frame's capture", it->second) : std::string("not in the frame's capture"),
+			(a_record.flags & static_cast<std::uint32_t>(RE::NiAVObject::Flag::kHidden)) != 0, cullHidden.size(), chain);
+	}
+
 	Ineligible SceneStore::ClassifyFrame(const Tracked& a_tracked, const AccumulatedPass* a_accumulated) const
 	{
 		const bool underSwitch = a_tracked.parentReason == Ineligible::Switch;
@@ -1444,10 +1528,12 @@ namespace DCLF
 			return Ineligible::Switch;
 		// T7c0: under an ordered node only a blended leaf is rejected (OrderedLeaf: the node orders those passes alone); an opaque
 		// one goes on like any leaf. Under a switch too (the switch outranks it in parentReason): the chain walk below finds it.
+		// T7d's ordered-node interleave: with the forward epoch the blended leaf is DCLF's too, its draw sorted in its node's group at the
+		// node's depth and in its child order (BindlessPlacement::forwardSort; ForwardSortCS), as the engine's blended draw has the group.
 		const bool ordered = a_tracked.parentReason == Ineligible::UnsupportedParent;
 		if (a_tracked.parentReason != Ineligible::None && !underSwitch && !ordered)
 			return a_tracked.parentReason;
-		const auto orderedLeaf = [&] { return OrderedLeaf(mirror.Leaf(a_tracked.geometry.get())); };
+		const auto orderedLeaf = [&] { return !ActiveToggles().forward && OrderedLeaf(mirror.Leaf(a_tracked.geometry.get())); };
 		if (ordered && orderedLeaf())
 			return Ineligible::UnsupportedParent;
 
@@ -1456,9 +1542,29 @@ namespace DCLF
 		const bool actors = ActiveToggles().actors;
 		const void* child = nullptr;
 		const void* key = a_tracked.geometry.get();
-		for (const auto* record = mirror.Node(key); record; child = key, key = record->parent, record = key ? mirror.Node(key) : nullptr) {
-			if (HiddenForWalk(key, *record))
+		std::uint32_t depth = 0;
+		for (const auto* record = mirror.Node(key); record; child = key, key = record->parent, record = key ? mirror.Node(key) : nullptr, ++depth) {
+			// T7e: the first-person root's kHidden is the view's (Main::Draw, unk_FPCulling and RenderDepth toggle it within the frame,
+			// FUN_140736150 at the camera switch; cullHidden lists it hidden for the world views): a chain stops before it, whatever category
+			// node the entry was filed under. Whether the view draws is the first-person latch's (IndirectDraws::BeginFirstPersonFrame).
+			if (key && key == firstPersonCategory) {
+				// T7e's particles: a first-person particle system (a magic hand's) has no producer of its quads (FrameValues samples no
+				// first-person item; ParticleSnapshots): it stays the engine's.
+				if (const auto* g = mirror.Geometry(a_tracked.geometry.get()); g && g->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles))
+					return Ineligible::EffectVariant;
+				break;
+			}
+			if (HiddenForWalk(key, *record)) {
+				// T7e's diagnostic (pointers alone, never dereferenced): which node hid an entry of the first-person skeleton (fp5 kept its
+				// arms hidden with every subtree bit clear).
+				if (firstPersonCategory) {
+					const auto& skeleton = FrameGlobals::Current().firstPersonGeometry;
+					if (FirstPersonEntry(a_tracked.categoryNode) ||
+						std::binary_search(skeleton.begin(), skeleton.end(), static_cast<const RE::NiAVObject*>(static_cast<const void*>(a_tracked.geometry.get()))))
+						NoteFirstPersonHidden(a_tracked, key, *record, depth);
+				}
 				return Ineligible::Hidden;
+			}
 			if (key == a_tracked.categoryNode)
 				break;
 			if (underSwitch && child && (record->kind & SceneCapture::kKindSwitch) && !SwitchSelects(*record, child))

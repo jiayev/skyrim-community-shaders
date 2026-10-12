@@ -66,7 +66,7 @@ show 0 differ, never-fading stood-in calls rejected only when written out of vie
 fading root DCLF writes out of view ran `FUN_14147a160` from the gate over DCLF's write-back; since T7b4 the gate skips the roots DCLF
 writes (`drawcall-limit-fix.md`, "T7b4/T7b6"; `CS_DCLF_FADE_PARITY`'s `<- FADE DOUBLE` counts any engine step left).
 
-## Stood-in BSTreeNode trees stay on the tree manager's tree list (found by T7b5, 2026-10-11; open)
+## Stood-in BSTreeNode trees stay on the tree manager's tree list (found by T7b5, 2026-10-11; fixed, pending validation)
 
 `TreeAnimation::SetOwned` takes stood-in roots off the tree manager's animation list (`+0x50`, BSLeafAnimNode roots) only. A
 stood-in BSTreeNode stays on the tree list (`+0x20`), whose loop (`FUN_140437e50`) visits a tree by its first child's multibound
@@ -74,6 +74,12 @@ cull result - which no cull refreshes for a stood-in root. A stale "in" keeps th
 the near list's 40); a stale "out" freezes them (`skyrim-engine-notes.md`, "Tree manager list (T7b5)"). Fix options: TreeAnimation
 manages the tree list too, or DCLF writes the multibound result from its verdicts (T7b5's port decides which trees). Related: DCLF
 gives tree wind slots to BSTreeNode roots only (`kKindTree`); the BSLeafAnimNode trees get none.
+
+Fix (T7f preparation; `drawcall-limit-fix.md`, "T7f preparation"): the trees stay on the list (DCLF follows the loop's LOD switch
+stores and the near list's bones), and around the loop's call `TreeAnimation` writes each stood-in tree's multibound result from
+DCLF's verdict (the root's `kAccumulated` as T7b2 wrote it), putting the engine's value back right after. Built, not run. To
+validate: the `tree animation list` line's "loops given DCLF's verdicts" > 0 where stood-in BSTreeNodes exist; under
+`CS_DCLF_TREE_PARITY`, `<- TREE MANAGER`'s stood-in trees "given DCLF's verdict" equal to the stood-in count, few differences.
 
 ## The fade write-back reads its events only on frames that record a revision (found by T7b1, 2026-10-11; fixed by T7b6, pending validation)
 
@@ -84,6 +90,48 @@ flaw: 59 of 300 frames in motion, none in interiors). Fix: T7b6, the fade events
 fixed per-frame-slot copy, harvested when the slot is armed again; `drawcall-limit-fix.md`, "T7b4/T7b6"). Built, not yet run in game.
 To validate: the `fade write-back (T7b4/T7b6)` line's "frames read" near the window's frame count (about 300) in motion and in an
 interior, "arms missed" 0 (or only frames whose depth epoch did not run), and milestones written in interiors.
+
+## The third-person body drawn in first person after a camera switch (user report, 2026-10-11; fixed, pending validation)
+
+**Symptom.** Switched to third person and back to first person, the player's third-person body went on being drawn in first
+person. Only in runs without the walk, persistent or capture parities (they run the scene pass inline at the frame's start).
+
+**What the engine does.** `FirstPersonState::Begin` (`0x1408deba0`) calls `FUN_140736150(player, 1)` (also reached from the
+BSTaskPool, `AutoVanityState::Begin`, the bleedout and dragon cameras, `RaceSexMenu` and the load paths). It hides the third-person
+root (`0x140736237`, `mov [r14 + 0xF4], ecx`) and shows the first-person root (`0x140736271`); with 0 it does the reverse. Both
+stores are in HiddenStores' site table, so the hide reaches DCLF as an event. No cull test is involved: the main camera's cull
+skips the root because it is hidden (`skyrim-engine-notes.md`, "The first-person switch").
+
+**Why DCLF kept drawing it.** The camera switches in `Main::Update`, outside the frame's render, where a hidden store wakes a
+scene pass at once (`SceneWake::Hidden`). That pass:
+1.  is an event walk (the same `sceneFrame` as the frame's own pass), which does not evaluate the per-frame entries, and an
+    actor's light-path entry took its hidden event only in the pass that drained it (`hiddenEventFrame == PassStamp()`). The
+    event was dropped before any walk evaluated the body;
+2.  holds the frame before's capture (`FrameGlobals::cullHidden`). It lists the third-person root (for `TESWaterReflections`'
+    scoped hides) and outranks the mirror's bit, so even an evaluation in that pass judged the root by the frame before's "shown".
+
+The next frame's walk found no event and left the verdict alone. The body kept its records and its main claim, and DCLF drew it
+while the engine drew nothing. Under the walk/persistent/capture parities the pass runs inline after the frame's capture, and a
+parity pass checks every verdict, so those runs never showed it. Going from first to third person was right: a hidden actor entry
+has no record and is written in full every walk, so the body joins one to three frames later and the engine draws it meanwhile.
+
+**Fix** (`drawcall-limit-fix.md`, "The third-person body in first person"):
+-   An actor entry's hidden event is owed until a walk evaluates the entry (`Tracked::hiddenEventOwed`, set by `DrainHiddenEvents`,
+    cleared by `MergeEntry`), not only in the pass that drained it.
+-   An event on a node the capture lists, numbered after the capture (`SceneCapture::NextSequence`, taken by
+    `FrameGlobals::Capture` before its reads: `cullHiddenSequence`) and leaving a bit the capture does not hold, is announced again
+    at the first pass whose capture is newer (`SceneStore::hiddenAhead`).
+
+**Validate** (no parity switch but `CS_DCLF_SET_PARITY=1`, which does not run the pass inline):
+`CS_DCLF_TEST_COMMANDS='600:dclf:pov=third;900:dclf:pov=first;1200:dclf:pov=third;1500:dclf:pov=first'` from a save in first
+person. `dclf:pov=first|third` is a harness command (`PlayerCamera::ForceFirstPerson`/`ForceThirdPerson` on the main thread): no
+console command switches the camera. To check:
+-   the `player 3D against the claims (set parity)` line: `<- OK`, runs past the publication's latency 0;
+-   the `actor frame verdicts per pass` line: "announced again at a newer frame capture" > 0 (in first person about one a frame
+    anyway: `Main::Draw` shows the first-person root inside the frame, which `cullHidden` holds hidden; in third person the water
+    reflection's scoped hides of the body), and, in a separate run with `CS_DCLF_WALK_PARITY=1` (which runs the pass inline, so it cannot show the defect itself),
+    `changed with no event` 0;
+-   screenshots after each switch: no body in first person, a whole body in third.
 
 ## Parity issues deferred while the scene pipeline's structure lands (T6b, 2026-10-11)
 
@@ -134,6 +182,30 @@ Found in validation runs and left for a cleanup pass once the structure is in pl
     link). DCLF holds property and material references, but nothing ties it yet: reproduce with `CS_DCLF_RELEASE_GUARD=1` and
     with DCLF off. The crash then hung the game in Community Shaders' in-process `MiniDumpWriteDump` (a suspended thread held
     the heap lock); the dump is now written out of process (`tools/crash-dump-helper`, `CS_TEST_CRASH` to test it).
+
+-   **`<- ACCUMULATED ALL` (T7f dry run, w176/w177): attributed and changed, pending a run** (`drawcall-limit-fix.md`, "T7f: what
+    kAccumulated means"). Roots agreed (fade roots 3538 both / 7 DCLF's alone / 3 the engine's alone). The engine set kAccumulated on
+    2,000-5,800 geometries a window that DCLF's verdict left out, DCLF alone on about 400, and 300 "cell roots" a window had no bit.
+    -   **Not the HZB.** The geometry verdict (BuildDrawsCS phase 1's `cs.dclf.frustum`) was already the frustum and portal test before
+        the HZB.
+    -   **The causes:**
+        -   most is stale engine bits on geometry under a node or root the cull failed or whose `OnVisible` stopped (no reader takes those:
+            the receivers test every level);
+        -   decal, forward (Effect cloud cards) and refraction inputs were never stamped, so their geometry read out of view;
+        -   faded roots (DCLF's clear is the decided meaning);
+        -   the readback's lag;
+        -   the "cell roots" without the bit were the object root's children 0 and 1, list entries the main cull clears when out of view.
+    -   **Changed:**
+        -   phase 1 stamps every main input;
+        -   the object event carries the fade drop;
+        -   FadeStateCS passes always-draw and preprocessed roots without a program as Process1 does;
+        -   `CellRoots` counts the containers apart;
+        -   the dry run attributes each difference by cause and compares geometry with the receivers' bit.
+    -   **Open:** the 1-10 cloud-card roots a window that are the engine's alone (the same-frame observer had none). The dry run now names
+        each as stood in since the batch, recent, or steady. Next: a run with `CS_DCLF_ACCUMULATED_PARITY=1`, standing still and in
+        motion; expect the steady classes near 0 standing still.
+-   **`<- MATERIAL PORT` (w176):** 1 a window left on an effect's FalloffData (VS variable 7) after the retake - a controller
+    write the retake missed.
 
 ## Accepted differences
 

@@ -389,6 +389,15 @@ namespace DCLF
 			std::vector<std::uint32_t> boneOffset;  // parallel to objects, in rows
 			std::vector<std::uint32_t> boneRows;    // parallel to objects
 			std::array<std::vector<std::uint32_t>, 81> boneFree{};  // freed blocks' offsets, by bones (rows / 3; at most 80)
+			// T7e: freed blocks of any other size (a particle member's quads: ParticleSnapshots::RowsOf), by their rows.
+			std::map<std::uint32_t, std::vector<std::uint32_t>> boneFreeOther;
+			/** @brief The free list of a_rows-row blocks: a skin's palette by its bones, any other block by its rows. */
+			std::vector<std::uint32_t>& BoneFreeList(std::uint32_t a_rows)
+			{
+				if (a_rows % 3 == 0 && a_rows / 3 < boneFree.size())
+					return boneFree[a_rows / 3];
+				return boneFreeOther[a_rows];
+			}
 			std::uint32_t boneTop = 0;       // rows handed out
 			std::uint32_t boneCapacity = 0;  // rows the blocks span (FrameValues' palettes hold twice as many)
 			std::uint32_t BoneCapacity() const { return boneCapacity; }
@@ -812,6 +821,7 @@ namespace DCLF
 			// changed with no event (the first named).
 			std::uint64_t hiddenEvents = 0, verdictsChecked = 0, verdictsSkipped = 0, verdictsMissed = 0;
 			std::uint64_t hiddenRetaken = 0;  // statics classified again for a hidden event on their chain (T6b4)
+			std::uint64_t hiddenAheadAnnounced = 0;  // hidden events announced again at a capture newer than them (hiddenAhead)
 			std::string firstVerdictMissed;
 			// CS_DCLF_INPUT_WATCH: per input component (kInputComponentNames), the re-reads that found it changed; per kind
 			// of re-read (classify, shading), the re-reads that found any change; the first such change named.
@@ -871,7 +881,7 @@ namespace DCLF
 			stats.lightPlaced = stats.lightSkins = 0;
 			stats.moveEvents = stats.perFrameRelookups = 0;
 			stats.hiddenEvents = stats.verdictsChecked = stats.verdictsSkipped = stats.verdictsMissed = 0;
-			stats.hiddenRetaken = 0;
+			stats.hiddenRetaken = stats.hiddenAheadAnnounced = 0;
 			stats.firstVerdictMissed.clear();
 			stats.inputChanged = {};
 			stats.inputRereads = stats.inputRereadsChanged = {};
@@ -1213,6 +1223,13 @@ namespace DCLF
 		void PostPipelineFrame(const GeometryPort::PipelineFrame& a_frame);
 		/** @brief Render thread, after HandOverAtFrameStart and the coverage decision: the installed publication's claims made the frame's. */
 		void InstallClaims();
+		/**
+		 * @brief T7f prep, any thread: the frame's claims - the installed publication's set (InstallClaims), an empty set after a withdrawal
+		 * (WithdrawSet), null during a load or before the first. DCLF's own readers of the frame's set take it here; the registration hooks'
+		 * copy (PassCapture::PublishSet, the same object) is the engine-facing cut alone and goes with the culls (the plan's T7f).
+		 * Immutable and swapped whole.
+		 */
+		std::shared_ptr<const SetSnapshot> FrameClaims() const { return std::atomic_load(&frameClaims); }
 		/** @brief Whether a publication is installed (none: the frame has no claims, WithdrawSet). */
 		bool HasInstalled() const { return installed != nullptr; }
 		/** @brief The installed publication's sequence, 0 without one. */
@@ -1332,7 +1349,7 @@ namespace DCLF
 		/** @brief The coordinator's passes since the start (T6b3a): what a once-a-pass rule counts once the passes leave the frames. */
 		std::uint64_t PassSerial() const { return passSerial; }
 		/**
-		 * @brief T6b3d: the pass as a 32-bit stamp for the per-entry "this pass" marks (Tracked::candidateFrame, hiddenEventFrame,
+		 * @brief T6b3d: the pass as a 32-bit stamp for the per-entry "this pass" marks (Tracked::candidateFrame,
 		 * Tables::geometryLastUsed): never 0 ("never") nor Tables::kSlotFree, unique over 2^32 - 2 passes.
 		 */
 		std::uint32_t PassStamp() const { return static_cast<std::uint32_t>(passSerial % 0xFFFFFFFEull) + 1u; }
@@ -1786,6 +1803,14 @@ namespace DCLF
 				// A skin's palette block (Tables::boneOffset, boneRows), 0 rows without one: the engine's palette update, then its
 				// rows (PaletteRowsOf).
 				std::uint32_t boneOffset = 0, boneRows = 0;
+				// T7e: a first-person entry's (FirstPersonEntry). The engine moves the first-person skeleton's world translations to its
+				// root's space on the render thread (FUN_1414cb020 to FUN_1414cb270, and RenderDepth's block), within the read window: the
+				// producer never samples it, and the render thread takes a claimed one's row and palette at the frame's start, before
+				// the shift (FrameValues::Kick).
+				bool firstPerson = false;
+				// T7e: a particle system's (its block, boneOffset and boneRows, is its quads': ParticleSnapshots, five rows a particle): the
+				// producer expands its newest snapshot there, and its placement row is the snapshot's.
+				bool particles = false;
 			};
 			struct Root
 			{
@@ -1805,7 +1830,7 @@ namespace DCLF
 		 */
 		struct ShadingItem
 		{
-			RE::NiPointer<RE::BSShaderProperty> property;  // a BSLightingShaderProperty (the layer's for a layer's slot)
+			RE::NiPointer<RE::BSShaderProperty> property;  // a BSLightingShaderProperty (the layer's for a layer's slot), or T7d's effect property
 			std::uint32_t slot = kNoObjectSlot;
 			std::uint32_t pass = 0;   // its pipeline's pass descriptor
 			bool member = false;      // a resident record's (SampleShading's a_member)
@@ -2071,10 +2096,13 @@ namespace DCLF
 			// The key its move events carry (MoveKeyOf): the one reference on its chain up to the category node, set at
 			// classification. Null when there is none or more than one, and the light path places it every frame.
 			const void* moveKey = nullptr;
-			// An actor's light-path entry: the nodes from it up to its category node, listed in hiddenDependents, and the
-			// frame one of them last had a hidden-bit event (DrainHiddenEvents).
+			// An actor's light-path entry: the nodes from it up to its category node, listed in hiddenDependents, and whether one
+			// of them had a hidden-bit event since the entry was last evaluated (DrainHiddenEvents sets it, MergeEntry clears it). Not
+			// the pass that drained it: a pass a hidden store wakes outside the frame's render is an event walk, which does not evaluate
+			// the per-frame entries, so the event must wait for the frame's next walk (the first-person switch's hide of the
+			// third-person skeleton was lost that way).
 			std::vector<const RE::NiAVObject*> hiddenChain;
-			std::uint32_t hiddenEventFrame = 0;  // T6b3d: the pass (PassStamp) whose batch announced a hidden event on its chain
+			bool hiddenEventOwed = false;
 			// kTraitAnimatedShading: what the record read from the animated shader and alpha properties when it was
 			// last written in full (ShadingInputsOf); the light path writes it in full again when they differ.
 			std::uint64_t shadingInputs = 0;
@@ -2240,6 +2268,8 @@ namespace DCLF
 			// these) until the coordinator has applied a newer capture. T6b3a: in the capture (no list the two threads share); "new" is
 			// against the capture the coordinator applied last, so each capture pins all it names.
 			std::vector<RE::NiPointer<RE::NiRefObject>> pins;
+			// T7e (CS_DCLF_FIRST_PERSON): the player's first-person root, both a category node and a root (filed under itself), or null.
+			const RE::NiNode* firstPersonRoot = nullptr;
 		};
 		/**
 		 * @brief Render thread, the frame's start (not while a load screen is up): the newest CategoryCapture, made when a_force or the
@@ -2923,6 +2953,14 @@ namespace DCLF
 			RE::NiNode* category = nullptr;
 		};
 		ankerl::unordered_dense::map<const RE::NiAVObject*, AlwaysRenderRoot> alwaysRenderRoots;
+		// T7e: the coordinator's copy of the applied capture's first-person root (CategoryCapture::firstPersonRoot): the category node of
+		// the first-person members. Its kHidden is view-scoped (Main::Draw shows it only to draw first person): ClassifyFrame stops at it
+		// before the hidden test, and its hidden events announce nothing (DrainHiddenEvents).
+		const RE::NiNode* firstPersonCategory = nullptr;
+		/** @brief T7e's diagnostic: the node that hid an entry of the first-person skeleton (ClassifyFrame), the first 16. */
+		void NoteFirstPersonHidden(const Tracked& a_tracked, const void* a_key, const SceneCapture::NodeRecord& a_record, std::uint32_t a_depth) const;
+		/** @brief T7e: whether a tracked entry is a first-person one (its category node the first-person root). */
+		bool FirstPersonEntry(const RE::NiNode* a_categoryNode) const { return a_categoryNode && a_categoryNode == firstPersonCategory; }
 		// Diagnostics: the frame each category node was found and the refresh's cause (GetCategoryInfo), and
 		// the source AddGeometry stamps on new entries.
 		ankerl::unordered_dense::map<const RE::NiNode*, std::pair<std::uint32_t, std::uint8_t>> categoryFound;
@@ -3538,8 +3576,15 @@ namespace DCLF
 			const void* key = nullptr;
 			std::uint32_t site = 0;
 			bool hidden = false;
+			std::uint64_t sequence = 0;  // the update's (SceneCapture::NextSequence after the store)
 		};
 		std::vector<BatchHidden> batchHidden;
+		/**
+		 * @brief The nodes FrameGlobals::cullHidden lists whose hidden event was newer than the capture the pass judged it by, and
+		 * differed from it: their event's sequence. DrainHiddenEvents announces each again at the first pass whose capture is numbered
+		 * after it (FrameGlobals::cullHiddenSequence). A key only, never read.
+		 */
+		ankerl::unordered_dense::map<const void*, std::uint64_t> hiddenAhead;
 		bool MovedRecently(const void* a_key) const
 		{
 			const auto it = movedFrame.find(a_key);
@@ -3872,6 +3917,7 @@ namespace DCLF
 			bool lodChain = false;
 			bool skinCandidate = false;  // skinned with the toggle on: in this walk's skinnedObjects
 			std::uint32_t boneRows = 0;  // its palette's rows, 0 without one (or past 240)
+			std::uint32_t particleRows = 0;  // T7e: a particle member's block of the frame's palettes (ParticleSnapshots::RowsOf), 0 for anything else
 			std::uint8_t shadowReject = 0;
 			std::uint32_t shadowTechnique = 0;
 			const RE::BSShaderMaterial* shadowMaterial = nullptr;  // the alpha-tested techniques' diffuse (the property record's)
@@ -4436,6 +4482,9 @@ namespace DCLF
 		std::vector<std::pair<std::vector<const RE::BSGeometry*>, std::vector<const RE::BSGeometry*>>> installNotes;
 		bool installPending = false;
 		std::shared_ptr<const SetSnapshot> notedClaims;
+		// FrameClaims (render thread writes through PublishFrameClaims, any thread reads), and the registration hooks told of it too.
+		std::shared_ptr<const SetSnapshot> frameClaims;
+		void PublishFrameClaims(std::shared_ptr<const SetSnapshot> a_claims);
 		std::array<std::uint32_t, 3> frameLackingCount{};
 		PublicationStats publicationStats;
 		std::vector<std::uint32_t> setApplyMark;  // parallel to objects: its index in setApply plus one, 0 when not in it
@@ -4571,6 +4620,9 @@ namespace DCLF
 			}
 		}
 		std::array<std::uint64_t, kWaitSources> setReadiness{ ~0ull, ~0ull, ~0ull, ~0ull };
+		// The forward views' pipelines ready in the lookups' catalog (the reflection's and T7e's first person's readiness, reason 8): no
+		// readiness source above moves when the lane publishes one, so a change of their count takes the kWaitOther slots again.
+		std::uint64_t setForwardReadiness = ~0ull;
 		std::vector<std::uint8_t> setWaitCause;  // by slot: what it waits on (its last evaluation's), when waiting
 		std::vector<std::uint8_t> setWaitWhy;    // by slot: the first reason (SetStats::waitingBy's index) of its last wait (T6b0)
 		std::uint64_t setShadowModes = ~0ull;      // the shadow modes and states caster readiness was last taken under
@@ -4607,6 +4659,8 @@ namespace DCLF
 		std::uint8_t SetParticipation(std::uint32_t a_slot, std::uint32_t a_drawn) const;
 		/** @brief Whether everything the object's main phase draws with is ready; a_why: SetStats::waitingBy's index when not. */
 		bool MainReady(std::uint32_t a_slot, std::uint32_t& a_why) const;
+		/** @brief T7e: whether a slot's geometry is a first-person entry's (FirstPersonEntry; the coordinator's tracked map). */
+		bool FirstPersonSlot(std::uint32_t a_slot) const;
 		// Sun entry nodes something was attached under or detached from since the last walk (keys).
 		std::vector<const RE::NiAVObject*> dirtyRoots;
 		ankerl::unordered_dense::map<const void*, std::vector<RE::BSGeometry*>> propertyDependents;
@@ -4676,7 +4730,7 @@ namespace DCLF
 			std::uint32_t vertexCount = 0;
 			std::uint32_t indexCount = 0;
 			std::uint32_t firstIndex = 0;  // a range of the index list (object LOD's visible ranges); 0 for the whole
-			bool layer = false;            // a layer's second index list (Tables::geometryLayerKey)
+			bool layer = false;            // a key that is no TriShape (Tables::geometryLayerKey): a layer's second index list, T7e's particle quads
 		};
 		/** @brief The buffers order[a_first...]'s geometry slots will resolve, prefetched in one batch (GpuResources::Prefetch). */
 		void PrefetchGeometryBuffers(std::size_t a_first);

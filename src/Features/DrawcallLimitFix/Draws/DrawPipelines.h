@@ -177,6 +177,12 @@ namespace DCLF
 	 */
 	inline constexpr std::uint32_t kFadeStatesRegister = kTextureRegisters - 8;
 	inline constexpr std::uint32_t kFadeRootsRegister = kTextureRegisters - 9;
+	/**
+	 * @brief t118: T7d's Effect port: the soft effects' depth (Effect.hlsl, DCLFEffectSoftDepth), which the engine's SetupTechnique binds at
+	 * t3 for a Soft pass: the depth copy (kPOST_ZPREPASS_COPY, the main view's 0x14328cbfc). A render target, the frame's: the frame record
+	 * names it (Uploads.cpp), so no material row holds it.
+	 */
+	inline constexpr std::uint32_t kEffectSoftDepthRegister = kTextureRegisters - 10;
 
 	/**
 	 * @brief Everything one indirect draw binds, in GPU memory: its address is the draw's only push data,
@@ -226,6 +232,14 @@ namespace DCLF
 	 * @brief The shadow views' pipeline classes (ShadowIndirectState::discards): a pixel stage that cannot defer the depth test,
 	 * and one that can (an alpha test's discard). A view draws the first class's pipelines, then the second's.
 	 */
+	/**
+	 * @brief T7d's refraction draw's Utility technique (ShaderCache::UtilityShaderFlags): RenderNormal | Texture | Normals, the
+	 * defines its pulled build compiles with (Utility.hlsl, DCLF_REFRACTION). The engine's technique for a refraction property
+	 * (GetRenderPasses, AE 0x1414adfb0) varies by Vc, Skinned, RenderNormalFalloff, RenderNormalClamp and model-space normals (no
+	 * Normals); the pulled build takes each of those from the draw (its object record, its geometry's layout) instead, so one
+	 * pipeline draws every refraction object.
+	 */
+	inline constexpr std::uint32_t kRefractionTechnique = 0x20Au;
 	inline constexpr std::uint32_t kShadowDepthOnly = 0;
 	inline constexpr std::uint32_t kShadowDiscards = 1;
 	inline constexpr std::uint32_t kShadowClasses = 2;
@@ -238,6 +252,8 @@ namespace DCLF
 	{
 		DXGI_FORMAT colour = DXGI_FORMAT_UNKNOWN;
 		DXGI_FORMAT depth = DXGI_FORMAT_UNKNOWN;
+		// T7e: a second colour attachment (the first-person pass's motion vectors, FUN_1414cb6d0's slot 1); unknown: one attachment.
+		DXGI_FORMAT colour2 = DXGI_FORMAT_UNKNOWN;
 
 		bool operator==(const ForwardTargets&) const = default;
 	};
@@ -251,7 +267,9 @@ namespace DCLF
 	 */
 	struct ForwardPipelineKey
 	{
-		static constexpr std::uint32_t kForwardTwoSided = 1, kForwardTreeLod = 2;
+		// T7e: kForwardFirstPerson builds the key for the first-person targets (DrawPipelines::SetFirstPersonTargets: kMAIN and the
+		// motion vectors, kPOST_ZPREPASS_COPY's depth), back faces culled unless two-sided, every channel of both attachments written.
+		static constexpr std::uint32_t kForwardTwoSided = 1, kForwardTreeLod = 2, kForwardFirstPerson = 4;
 		std::uint32_t vertexDescriptor = 0, pixelDescriptor = 0;
 		std::uint32_t flags = 0;  // kForward*
 
@@ -323,6 +341,15 @@ namespace DCLF
 			bool failed = false;
 		};
 		TreeLodEntry treeLod;
+		// T7d's refraction pipeline (DrawPipelines::RequestRefraction), of the targets of targetsGeneration (the main depth) and the
+		// refraction normals' format it was built for: built (an rhi::PipelinePtr), or failed. Neither while it waits.
+		struct RefractionEntry
+		{
+			std::shared_ptr<const void> pipeline;
+			DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+			bool failed = false;
+		};
+		RefractionEntry refraction;
 		struct ForwardEntry
 		{
 			std::shared_ptr<const void> pipeline;  // once built (an rhi::PipelinePtr)
@@ -332,6 +359,7 @@ namespace DCLF
 		// Every forward view key (DrawPipelines::RequestForward) whose program the lane has, or found failed, built for forwardTargets.
 		ankerl::unordered_dense::map<ForwardPipelineKey, ForwardEntry, ForwardPipelineKeyHash> forwardEntries;
 		ForwardTargets forwardTargets;  // the forward targets the lane has (DrawPipelines::SetForwardTargets)
+		ForwardTargets firstPersonTargets;  // T7e: the first-person keys' (DrawPipelines::SetFirstPersonTargets)
 
 		const Entry* Find(const PipelineKey& a_key) const
 		{
@@ -396,6 +424,8 @@ namespace DCLF
 			std::uint32_t treeLodRequested = 0, treeLodReady = 0, treeLodFailed = 0;
 			std::uint32_t forwardRequested = 0, forwardReady = 0, forwardFailed = 0;
 			std::uint32_t treeLodWaits = 0, forwardWaits = 0;
+			// T7d's Effect port: the main set's effect keys (Records.h, kRasterEffect) among requested, ready and failed.
+			std::uint32_t effectRequested = 0, effectReady = 0, effectFailed = 0;
 		};
 
 		static DrawPipelines& Get();
@@ -473,6 +503,20 @@ namespace DCLF
 		/** @brief Render thread: the DistantTree shader whose programs tree LOD's pipelines build (a frame input of the lane; posted when it changes). */
 		void SetTreeLodInputs(RE::BSShader& a_distantTree);
 		/**
+		 * @brief Render thread: asks the pipeline lane for T7d's refraction pipeline: the Utility shader's pulled RENDER_NORMAL build
+		 * (kRefractionTechnique; Utility.hlsl, DCLF_REFRACTION: the technique's other variants are each draw's, from its object record)
+		 * under the shadow views' layout, one colour attachment in the refraction normals' format with the engine's write mask for write
+		 * mode 2, the main depth tested LESS_EQUAL and not written (FUN_1414b4860's depth mode 1), no culling (the pixel stage drops a
+		 * one-sided object's back faces). Once is enough: the lane builds it again after a target or format change. It arrives in a
+		 * later catalog (PipelineCatalog::refraction; IndirectState::refraction) once SetRefractionInputs has posted its inputs.
+		 */
+		void RequestRefraction();
+		/**
+		 * @brief Render thread: the refraction pipeline's frame inputs (posted when they change): the Utility shader, the refraction
+		 * normals' format (kREFRACTION_NORMALS) and the RT0 write mask of the engine's blend state for write mode 2, blending off.
+		 */
+		void SetRefractionInputs(RE::BSShader& a_utility, DXGI_FORMAT a_format, std::uint8_t a_writeMask);
+		/**
 		 * @brief Render thread: asks the pipeline lane for a forward view's pipeline (ForwardPipelineKey): the forward program's pulled
 		 * stages, the forward targets, depth LESS_EQUAL with writes, the key's cull, the engine's winding, no blending. Once per key is
 		 * enough (repeats are dropped here). It arrives in a later catalog (PipelineCatalog::forwardEntries; ForwardPipelineOf).
@@ -480,6 +524,8 @@ namespace DCLF
 		void RequestForward(const ForwardPipelineKey& a_key);
 		/** @brief Render thread: the forward views' targets (a frame input of the lane; posted when they change, every forward pipeline built again). */
 		void SetForwardTargets(const ForwardTargets& a_targets);
+		/** @brief T7e, render thread: the first-person forward keys' targets (kForwardFirstPerson; a frame input of the lane, as SetForwardTargets). */
+		void SetFirstPersonTargets(const ForwardTargets& a_targets);
 		/** @brief Render thread: a frame whose tree LOD, or whose forward view, waited for a pipeline its catalog did not have (Stats). */
 		void NoteFrameWaits(bool a_treeLod, bool a_forward)
 		{

@@ -20,7 +20,7 @@ namespace DCLF
 	 * compiled and imported (SceneStore::CommitSet). Each phase is whole - its views withhold exactly what its draws draw - and
 	 * the set is decided once a frame, at the scene phase, held in the tables (Tables::setPhases, and the record's kObjectMember
 	 * for the main phase), which every build selects by. This is the engine's copy of the same
-	 * decision: published whole at the same point (PassCapture::PublishSet) and read by the registration hooks, which withhold
+	 * decision: published whole at the same point (SceneStore::FrameClaims for DCLF's readers; PassCapture::PublishSet, the same object, until the culls stop) and read by the registration hooks, which withhold
 	 * a member's passes from the batch renderers of the views DCLF draws. It decides nothing.
 	 */
 	enum SetPhase : std::uint8_t
@@ -33,6 +33,9 @@ namespace DCLF
 		// The water reflection's cube map faces (dclf-lod.md, "Water reflections"): a LOD member whose forward pipeline is ready
 		// and that was a main member at the last commit too (the faces draw from the last frame's depth inputs).
 		kSetReflection = 1u << 5,
+		// T7e: the first-person view (drawcall-limit-fix.md, "First person as a view bit"): the first-person skeleton's geometry, drawn
+		// by the first-person epochs with the first-person camera and in no world view (never with another phase).
+		kSetFirstPerson = 1u << 6,
 	};
 
 	/**

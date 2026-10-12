@@ -16,7 +16,7 @@ namespace DCLF::RegistrationCensus
 	 * reference, so it outlives the frame's registrations), renderer and the per-pass values that are gone by the frame's end
 	 * onto a lock-free queue. Collect, on the render thread at Present (the report's), drains it and classifies each pass there:
 	 * the view by its batch renderer, the class by DCLF's own state as the render thread may read it - the frame's set
-	 * (PassCapture::CurrentSet), the installed tables' records, the category nodes of the newest publication, and the live leaf's
+	 * (SceneStore::FrameClaims), the installed tables' records, the category nodes of the newest publication, and the live leaf's
 	 * static verdict. A Lighting geometry that is no member of its view's phase gets the coordinator's verdict (SceneStore's tracked
 	 * entries: Ineligible's reasons with the per-frame ones, a record, bound): read directly while the scene work runs inline (the
 	 * parities); otherwise (T7c0) asked of the coordinator - Collect posts the distinct geometries seen since its last request, pinned,

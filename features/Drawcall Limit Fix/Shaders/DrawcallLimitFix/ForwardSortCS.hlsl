@@ -1,14 +1,21 @@
 // Drawcall Limit Fix, T7d: the forward range's sort, back to front. The colour segment's BuildDrawsCS appended every visible forward
-// draw (Records.h, kObjectForward: blended Lighting geometry) to the staging half of the forward range, each with its view depth (the
-// bound centre's clip w) in its firstInstance word, which nothing executes there. Each thread takes one staged draw, counts the draws
-// that come before it in the engine's blended order - farther first (FUN_1414e8fc0 sorts the blended list by the view axis distance of
-// the bound centre, largest first), ties broken by the object index and then the first index, so the order is the same every frame
-// whatever order the atomic append gave - and writes it to that rank of the sorted half, its firstInstance word cleared. Every slot of
-// [0, count) of the sorted half is written exactly once; the forward epoch draws the sorted half through the count word.
+// draw (Records.h, kObjectForward: blended Lighting geometry and the Effect port's meshes) to the staging half of the forward range,
+// each with its sort key in three words nothing executes there: its view depth (the clip w of its bound centre, or of its BSOrderedNode's
+// centre for a leaf of an ordered group) in firstInstance, and for such a leaf its group (a hash of that centre) in instanceCount and its
+// ordinal under the node in vertexOffset. Each thread takes one staged draw, counts the draws that come before it in the engine's blended
+// order, and writes it to that rank of the sorted half with those three words put back (instanceCount 1, vertexOffset 0, firstInstance
+// 0). Every slot of [0, count) of the sorted half is written exactly once; the forward epoch draws the sorted half through the count word.
 //
-// The rank is O(n^2) in the visible forward draws (tens a frame: the census's blended Lighting class is 1-5 passes a frame), with no
-// cap: the range holds every draw the forward slots can produce (IndirectDraws: ReserveMainSequences). A larger class (the Effect port)
-// would take a radix or bitonic sort here; the contract (staging half in, sorted half out, the count word) stays.
+// The engine's order (FUN_1414b39d0): the blended list sorted by the view axis distance of the bound centre, farthest first
+// (FUN_1414e8fc0, stable), merged with the ordered nodes' groups sorted by their node's distance (qsort, 0x1414f55e0) - a group drawn
+// whole, its passes in their registration order (FUN_1414f19d0: the node's child order), before a list pass nearer than it and after one
+// at its distance or farther (FUN_1414f5330). So: farther first; at one depth a plain draw before a group's; then by group, by ordinal,
+// and last by the object index and the first index, so the order is the same every frame whatever order the atomic append gave.
+//
+// The rank is O(n^2) in the visible forward draws, with no cap: the range holds every draw the forward slots can produce (IndirectDraws:
+// ReserveMainSequences). The keys are read through groupshared memory a tile of 64 at a time, so each thread group reads every key once
+// per tile rather than each thread on its own. A much larger class would take a radix or bitonic sort here; the contract (staging half
+// in, sorted half out, the count word) stays.
 
 cbuffer ForwardSortConstants : register(b0)
 {
@@ -24,45 +31,102 @@ cbuffer ForwardSortConstants : register(b0)
 
 static const uint kCountForward = 128;     // GpuLayouts.h, kCountForwardWord
 static const uint kObjectWordOffset = 20;  // DrawSequence::objectIndex
+static const uint kInstanceCountOffset = 76;
 static const uint kFirstIndexOffset = 80;  // the DrawIndexed arguments' firstIndex
+static const uint kVertexOffsetOffset = 84;
 static const uint kFirstInstanceOffset = 88;
 static const uint kObjectIndexMask = (1u << 26) - 1;  // Records.h, kObjectIndexMask
+static const uint kTile = 64;                         // the thread group (IndirectDraws: kForwardSortGroup)
 
-// Whether draw a comes before draw b in the blended order: farther first, then by object index, then by first index.
-bool Before(float a_depth, uint a_object, uint a_first, float b_depth, uint b_object, uint b_first)
+struct SortKey
 {
-	if (a_depth != b_depth)
-		return a_depth > b_depth;
-	if (a_object != b_object)
-		return a_object < b_object;
-	return a_first < b_first;
+	float depth;
+	uint group;
+	uint ordinal;  // 0: a plain draw
+	uint object;
+	uint first;
+};
+
+SortKey LoadKey(RWByteAddressBuffer a_sequences, uint a_slot)
+{
+	const uint at = (StagingBase + a_slot) * SequenceStride;
+	SortKey key;
+	key.depth = asfloat(a_sequences.Load(at + kFirstInstanceOffset));
+	key.group = a_sequences.Load(at + kInstanceCountOffset);
+	key.ordinal = a_sequences.Load(at + kVertexOffsetOffset);
+	key.object = a_sequences.Load(at + kObjectWordOffset) & kObjectIndexMask;
+	key.first = a_sequences.Load(at + kFirstIndexOffset);
+	return key;
 }
 
-[numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
+// Whether draw a comes before draw b in the blended order.
+bool Before(SortKey a, SortKey b)
+{
+	if (a.depth != b.depth)
+		return a.depth > b.depth;
+	if ((a.ordinal == 0) != (b.ordinal == 0))
+		return a.ordinal == 0;
+	if (a.group != b.group)
+		return a.group < b.group;
+	if (a.ordinal != b.ordinal)
+		return a.ordinal < b.ordinal;
+	if (a.object != b.object)
+		return a.object < b.object;
+	return a.first < b.first;
+}
+
+groupshared float sharedDepth[kTile];
+groupshared uint sharedGroup[kTile];
+groupshared uint sharedOrdinal[kTile];
+groupshared uint sharedObject[kTile];
+groupshared uint sharedFirst[kTile];
+
+[numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 threadID : SV_GroupThreadID)
 {
 	ByteAddressBuffer counts = ResourceDescriptorHeap[CountIndex];
 	const uint count = min(counts.Load(kCountForward), Capacity);
-	const uint index = dispatchID.x;
-	if (index >= count)
-		return;
+	if (groupID.x * kTile >= count)
+		return;  // the whole group past the count (uniform in the group, so before any barrier)
 	RWByteAddressBuffer sequences = ResourceDescriptorHeap[SequencesIndex];
+	const uint index = dispatchID.x;
+	const bool staged = index < count;
+	const SortKey mine = LoadKey(sequences, staged ? index : 0);
+
+	uint rank = 0;
+	[loop] for (uint tile = 0; tile < count; tile += kTile) {
+		const uint other = tile + threadID.x;
+		if (other < count) {
+			const SortKey key = LoadKey(sequences, other);
+			sharedDepth[threadID.x] = key.depth;
+			sharedGroup[threadID.x] = key.group;
+			sharedOrdinal[threadID.x] = key.ordinal;
+			sharedObject[threadID.x] = key.object;
+			sharedFirst[threadID.x] = key.first;
+		}
+		GroupMemoryBarrierWithGroupSync();
+		const uint keys = min(kTile, count - tile);
+		if (staged) {
+			[loop] for (uint k = 0; k < keys; ++k) {
+				if (tile + k == index)
+					continue;
+				SortKey key;
+				key.depth = sharedDepth[k];
+				key.group = sharedGroup[k];
+				key.ordinal = sharedOrdinal[k];
+				key.object = sharedObject[k];
+				key.first = sharedFirst[k];
+				rank += Before(key, mine) ? 1u : 0u;
+			}
+		}
+		GroupMemoryBarrierWithGroupSync();
+	}
+	if (!staged)
+		return;
 
 	const uint source = (StagingBase + index) * SequenceStride;
-	const float depth = asfloat(sequences.Load(source + kFirstInstanceOffset));
-	const uint object = sequences.Load(source + kObjectWordOffset) & kObjectIndexMask;
-	const uint first = sequences.Load(source + kFirstIndexOffset);
-	uint rank = 0;
-	[loop] for (uint other = 0; other < count; ++other) {
-		if (other == index)
-			continue;
-		const uint at = (StagingBase + other) * SequenceStride;
-		const float otherDepth = asfloat(sequences.Load(at + kFirstInstanceOffset));
-		const uint otherObject = sequences.Load(at + kObjectWordOffset) & kObjectIndexMask;
-		const uint otherFirst = sequences.Load(at + kFirstIndexOffset);
-		rank += Before(otherDepth, otherObject, otherFirst, depth, object, first) ? 1u : 0u;
-	}
-
 	const uint target = (StagingBase + Capacity + rank) * SequenceStride;
-	[loop] for (uint word = 0; word + 4 <= SequenceStride; word += 4)
-		sequences.Store(target + word, word == kFirstInstanceOffset ? 0u : sequences.Load(source + word));
+	[loop] for (uint word = 0; word + 4 <= SequenceStride; word += 4) {
+		const uint value = word == kInstanceCountOffset ? 1u : (word == kVertexOffsetOffset || word == kFirstInstanceOffset) ? 0u : sequences.Load(source + word);
+		sequences.Store(target + word, value);
+	}
 }

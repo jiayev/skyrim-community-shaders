@@ -824,14 +824,52 @@ namespace DCLF
 		ankerl::unordered_dense::set<RE::BSGeometry*> retake;
 		ankerl::unordered_dense::set<const void*> categoryEvents;
 		auto announce = [&](RE::BSGeometry* a_geometry, Tracked& a_entry) {
-			a_entry.hiddenEventFrame = PassStamp();
+			a_entry.hiddenEventOwed = true;
 			if (!(a_entry.lightTraits & kTraitActor))
 				retake.insert(a_geometry);
+		};
+		auto announceKey = [&](const void* a_key) {
+			// T7e: not the first-person root's (shown and hidden within every frame): no chain of its members reaches its bit.
+			if (categoryNodes.contains(static_cast<RE::NiNode*>(const_cast<void*>(a_key))) && a_key != firstPersonCategory)
+				categoryEvents.insert(a_key);
+			const auto dependents = hiddenDependents.find(a_key);
+			if (dependents == hiddenDependents.end())
+				return;
+			for (auto* geometry : dependents->second)
+				if (const auto entry = tracked.find(geometry); entry != tracked.end())
+					announce(entry->first, entry->second);
+		};
+		// The nodes the frame's capture lists (FrameGlobals::cullHidden) are judged by the capture's bit, not the mirror's (HiddenForWalk).
+		// An event on one of them numbered after the capture may be newer than the bit it holds: a pass a hidden store wakes outside the
+		// frame's render still holds the frame before's capture (the switch to first person hides the third-person skeleton in
+		// FirstPersonState::Begin, FUN_140736150, from Main::Update: judged by the frame before's "shown", the skeleton kept its records
+		// and DCLF drew it in first person). Such a key is announced again at the first pass whose capture is numbered after its event;
+		// one whose event left the bit the capture holds is judged right already.
+		const auto& globals = FrameGlobals::Current();
+		for (auto it = hiddenAhead.begin(); it != hiddenAhead.end();) {
+			if (it->second < globals.cullHiddenSequence) {
+				announceKey(it->first);
+				++stats.hiddenAheadAnnounced;
+				it = hiddenAhead.erase(it);
+			} else
+				++it;
+		}
+		auto aheadOfCapture = [&](const BatchHidden& a_event) {
+			if (a_event.sequence < globals.cullHiddenSequence)
+				return false;
+			const auto& listed = globals.cullHidden;
+			const auto* object = static_cast<const RE::NiAVObject*>(a_event.key);
+			const auto it = std::lower_bound(listed.begin(), listed.end(), object, [](const auto& a_entry, const RE::NiAVObject* a_object) { return a_entry.first < a_object; });
+			return it != listed.end() && it->first == object && it->second != a_event.hidden;
 		};
 		// The applied batches' hidden stores (their mirror updates: ApplyMirrorEvents), in order.
 		stats.hiddenEvents += batchHidden.size();
 		for (const auto& a_event : std::exchange(batchHidden, {})) {
 			const void* a_key = a_event.key;
+			if (aheadOfCapture(a_event)) {
+				auto& sequence = hiddenAhead[a_key];
+				sequence = std::max(sequence, a_event.sequence);
+			}
 			// T6b0: the node's last show, for the residue's stale hidden verdicts.
 			if (timeline && !a_event.hidden)
 				unhideKeys[a_key] = { sceneFrame, a_event.site };
@@ -840,14 +878,7 @@ namespace DCLF
 				primaryNotes.Push({ PrimaryNote::Kind::HiddenKey, a_key });
 			else
 				primary.NoteHiddenKey(a_key);
-			if (categoryNodes.contains(static_cast<RE::NiNode*>(const_cast<void*>(a_key))))
-				categoryEvents.insert(a_key);
-			const auto dependents = hiddenDependents.find(a_key);
-			if (dependents == hiddenDependents.end())
-				continue;
-			for (auto* geometry : dependents->second)
-				if (const auto entry = tracked.find(geometry); entry != tracked.end())
-					announce(entry->first, entry->second);
+			announceKey(a_key);
 		}
 		// A category node's: every entry under it (rare: a cell's nodes).
 		if (!categoryEvents.empty())

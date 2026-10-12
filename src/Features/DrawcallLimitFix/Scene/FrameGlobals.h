@@ -56,6 +56,7 @@ namespace DCLF
 		std::array<std::uint32_t, 4> decalBias{};  // DecalDepthBiasMode per decal group (0 unused)
 		// [LightingShader] LOD fade thresholds (GetRenderPasses' specular and envmap LOD fades).
 		float specularStart = 0.09f, specularEnd = 0.10f, envmapStart = 0.09f, envmapEnd = 0.10f;
+		float refractionStart = 0.025f, refractionEnd = 0.03f;  // T7d's refraction (fRefractionLODFade*)
 		// SetupTechniqueDescriptor's bytes (0x2032fdb, 0x2035500).
 		std::uint8_t techniqueByte12 = 0, techniqueByte7 = 0;
 		// GetRenderPasses_ShadowMapOrMask's global (0x2033498): 1 no caster without kCastShadows, 2 the volumetric copy only.
@@ -76,6 +77,12 @@ namespace DCLF
 		float treeWindMagnitude = 0.0f, treeWindFadeStart = 0.0f, treeWindFadeEnd = 0.0f, treeWindTimerScale = 0.0f;
 		// The roots whose hidden bit the culls change around the scene's views (CaptureCullHiddenBits), as each view sees it; sorted.
 		std::vector<std::pair<const RE::NiAVObject*, bool>> cullHidden;
+		// SceneCapture::NextSequence just before cullHidden was read: a hidden store's event numbered after it may be newer than the bit
+		// the capture holds for its node (SceneStore::DrainHiddenEvents announces it again at a newer capture).
+		std::uint64_t cullHiddenSequence = 0;
+		// T7e: the geometry keys under the first-person root as the frame's start walked them (sorted; identities): the first-person
+		// hidden verdict's diagnostic (SceneStore::NoteFirstPersonHidden).
+		std::vector<const RE::NiAVObject*> firstPersonGeometry;
 		// PrimaryCull::MembershipWitness of the values above.
 		std::uint32_t membershipWitness = 0;
 		// SetupTechnique's inputs (T6b2c).
@@ -88,6 +95,11 @@ namespace DCLF
 
 		/** @brief Render thread, the frame's start: the frame's capture, which Current() hands the render thread from now on. */
 		static std::shared_ptr<const FrameGlobals> Capture();
+		/**
+		 * @brief T7e, render thread, at RenderDepth's first-person draw (after the engine's first-person culls): the hidden bit of every
+		 * node under a_root as those culls saw them. The next frame's capture lists them (cullHidden) in place of the frame start's bits.
+		 */
+		static void NoteFirstPersonCulled(const RE::NiAVObject* a_root);
 		/** @brief The capture this thread reads: its Scope's, else (the render thread) the latest. */
 		static const FrameGlobals& Current();
 		/** @brief Since the last call: reads from a thread with neither a scope nor the render thread's identity. */

@@ -78,6 +78,11 @@ namespace DCLF
 		// registration handed in for members that frame (all withheld: what it would have drawn of the class).
 		std::uint32_t forwardTested = 0, forwardInView = 0, forwardOccluded = 0, forwardDrawn = 0, forwardEngine = 0;
 		bool forwardObserved = false;
+		// T7d's refraction, sampled likewise: the colour segment's refraction inputs tested, inside the frustum, rejected by the HZB or their
+		// root's fade, and the refraction draws appended; and, under CS_DCLF_SET_PARITY, the refraction passes (hint 4) the engine's main
+		// registration handed in for members that frame (all withheld).
+		std::uint32_t refractionTested = 0, refractionInView = 0, refractionOccluded = 0, refractionDrawn = 0, refractionEngine = 0;
+		bool refractionObserved = false;
 		// The fade test (kObjectFadeTest), sampled likewise: resident inputs the depth segment's first phase found in the
 		// frustum under a fade root, and those it dropped past their fade-out distance.
 		std::uint32_t fadeTested = 0, fadeHidden = 0;

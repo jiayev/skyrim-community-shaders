@@ -323,7 +323,7 @@ namespace DCLF
 		// The shading the frame draws with (FrameValues, sampled at the frame's start); the engine's now when the property changed
 		// since (the accepted difference: counted, and the sample itself checked).
 		const auto* shadingRows = FrameValues::Get().ShadingIfDone(true);
-		const auto* property = static_cast<const RE::BSLightingShaderProperty*>(SceneStore::Get().SlotPropertyOf(a_objectIndex));
+		const auto* property = SceneStore::Get().SlotPropertyOf(a_objectIndex);
 		if (!shadingRows || a_objectIndex >= shadingRows->size() || !property)
 			return true;
 		BindlessShading shading = (*shadingRows)[a_objectIndex];

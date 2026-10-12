@@ -258,11 +258,18 @@ namespace DCLF
 		constexpr std::uint32_t kTerrainBlendingMaskRegister = 55;
 		const auto& terrainBlending = globals::features::terrainBlending;
 		auto* const terrainMask = TerrainBlendingDefersTerrain() ? terrainBlending.terrainDepth.depthSRV : nullptr;
+		// T7d's Effect port: the soft effects' depth (kEffectSoftDepthRegister): the depth copy SetupTechnique binds for a Soft pass in the main
+		// view (kPOST_ZPREPASS_COPY), which Community Shaders fills from the main depth after the deferred pass, before the forward epoch reads it.
+		auto* const effectSoftDepth = globals::game::renderer ?
+		                                  reinterpret_cast<ID3D11ShaderResourceView*>(
+											  globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV) :
+		                                  nullptr;
 		for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters && !depthOnly; ++t) {
 			auto& held = frameTextureBindings[t];
 			// The character light's noise is the frame's view (FrameCapture::characterLightView), not a captured register.
-			auto* const view = t == kCharacterLightRegister ? a_store.GetFrameCapture().characterLightView :
+			auto* const view = t == kCharacterLightRegister                         ? a_store.GetFrameCapture().characterLightView :
 			                   (t == kTerrainBlendingMaskRegister && terrainMask) ? terrainMask :
+			                   t == kEffectSoftDepthRegister                      ? effectSoftDepth :
 			                                                                         a_capture.psViews[t];
 			if (!view) {
 				if (held.view)
@@ -393,6 +400,12 @@ namespace DCLF
 		const ExtrasFrame extrasFrame = SampleExtrasFrame();
 		latched(a_resources->frameConstants, &extrasFrame, kExtrasFrameVertexBytes, FrameSlotOffset(false, kFrameFogRegister) + sizeof(FrameFog));
 		latched(a_resources->frameConstants, extrasFrame.projectedGlobals, sizeof(extrasFrame.projectedGlobals), kExtrasPixelFrameOffset);
+		// T7d's Effect port: the camera's planes the soft effects read (PS b13 c17, after the extras' row: Effect.hlsl, DCLFEffectCamera).
+		const auto effectCamera = SampleEffectCamera();
+		latched(a_resources->frameConstants, effectCamera.data(), sizeof(effectCamera), kEffectCameraFrameOffset);
+		// Its Lighting variant's DLightColor (PS b13 c18: Effect.hlsl, DCLFEffectDLightColor), the sun light's effect colour this frame.
+		const auto effectLight = SampleEffectLight();
+		latched(a_resources->frameConstants, effectLight.data(), sizeof(effectLight), kEffectLightFrameOffset);
 		// CS_DCLF_FOLIAGE_PARITY: the colour epoch's buffers (by its parity) and its tag, after the LOD fades in the same block (PS
 		// b13, c14: DCLFFoliageParity), and the compare pass's counters zeroed.
 		// The Z-prepass's stages read the owners' index and the size from it too, as the colour commit before them left it.
@@ -529,6 +542,8 @@ namespace DCLF
 			latched(a_resources->count, kZeroCounts, kTerrainGroups * sizeof(std::uint32_t), kCountTerrainGroupWord * sizeof(std::uint32_t));
 			// T7d: the forward range's count (its draw's) and the forward culling's tallies (BuildDrawsCS).
 			latched(a_resources->count, kZeroCounts, 4 * sizeof(std::uint32_t), kCountForwardWord * sizeof(std::uint32_t));
+			// T7d's refraction: the refraction range's count (its draw's) and the refraction culling's tallies (BuildDrawsCS).
+			latched(a_resources->count, kZeroCounts, 4 * sizeof(std::uint32_t), kCountRefractionWord * sizeof(std::uint32_t));
 		}
 		if (!ring)
 			UploadMainPayload(a_payload, *a_resources, uploads);

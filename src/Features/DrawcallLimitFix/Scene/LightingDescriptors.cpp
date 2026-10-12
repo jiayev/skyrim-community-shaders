@@ -5,12 +5,14 @@
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
 #include "State.h"
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
+#include "Features/LightLimitFix.h"
 #include "Features/TerrainBlending.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Scene/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Engine/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Engine/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Scene/EffectConstants.h"
 
 namespace DCLF
 {
@@ -174,6 +176,8 @@ namespace DCLF
 		for (std::uint32_t type = 0; type < 16; ++type)
 			frame.divisors[type] = g.fadeTypeDivisors[type];
 		frame.fadesOn = g.fadesOn ? 1.0f : 0.0f;
+		frame.refractionStart = g.refractionStart;
+		frame.refractionEnd = g.refractionEnd;
 		return frame;
 	}
 
@@ -182,7 +186,10 @@ namespace DCLF
 		if (!a_property || !a_property->fadeNode)
 			return { 0.0f, 0.0f, 0.0f, -1.0f };
 		const auto* node = a_property->fadeNode;
-		const bool held = !(a_property->flags.underlying() & (Bit(Flag::kSpecular) | Bit(Flag::kMultiIndexSnow) | Bit(Flag::kEnvMap))) ||
+		// T7d's refraction: a refraction property's own fade (fRefractionLODFade*, GetRenderPasses' unless kNoFade) is fade-sensitive too.
+		const std::uint64_t flags = a_property->flags.underlying();
+		const bool refractionFades = (flags & (Bit(Flag::kRefraction) | Bit(Flag::kTempRefraction))) && !(flags & Bit(Flag::kNoFade));
+		const bool held = (!(flags & (Bit(Flag::kSpecular) | Bit(Flag::kMultiIndexSnow) | Bit(Flag::kEnvMap))) && !refractionFades) ||
 		                  node->GetFlags().any(RE::NiAVObject::Flag::kIgnoreFade);
 		const auto& center = node->worldBound.center;
 		return { center.x, center.y, center.z, static_cast<float>(Engine::At<std::uint8_t>(node, 0x153) & 0xF) + (held ? kLodFadeHeld : 0.0f) };
@@ -548,10 +555,24 @@ namespace DCLF
 				return Ineligible::TerrainNoBlend;
 			a_out.terrainGroup = terrain ? 1u : noBlend ? 2u : 0u;
 		}
-		// Refraction has its own LOD fade that removes the object entirely; leave it to the game.
+		// Refraction (BSLightingShaderProperty::GetRenderPasses, AE 0x1414adfb0): a property with kRefraction or kTempRefraction has one
+		// main pass, a Utility RENDER_NORMAL pass (hint 4: geometry group 5), which Main::Draw draws into the refraction normals after the
+		// world (FUN_1414b4860) for ISRefraction to warp the frame by; and none at all past its refraction LOD fade's end. T7d
+		// (CS_DCLF_REFRACTION, with the forward epoch): the forward epoch draws those normals (drawcall-limit-fix.md, "Refraction (T7d)"),
+		// the draw fading them as GetRenderPasses would. A material alpha of 0 registers nothing: left native (so not drawn).
 		if (f & (Bit(Flag::kRefraction) | Bit(Flag::kTempRefraction))) {
-			a_out.rejectedTechnique = kRefractionReject;
-			return Ineligible::Technique;
+			if (!ActiveToggles().refraction || !ActiveToggles().forward || a_out.decalGroup || a_layer || a_out.terrainGroup || a_property.materialAlpha <= 0.0f) {
+				a_out.rejectedTechnique = kRefractionReject;
+				return Ineligible::Technique;
+			}
+			a_out.refraction = true;
+			a_out.refractionFalloff = (f & Bit(Flag::kRefractionFalloff)) != 0;
+			a_out.refractionClamp = (f & Bit(Flag::kNonProjectiveShadows)) != 0;
+			// The draw's state (FUN_1414b4860): depth mode 1, tested and not written; blending off.
+			a_out.forward = true;
+			a_out.forwardBlendMode = 0;
+			a_out.forwardDepthTest = true;
+			a_out.forwardDepthWrite = false;
 		}
 
 		// Blended geometry is drawn after the deferred composite, forward and sorted; the one exception is
@@ -563,7 +584,9 @@ namespace DCLF
 		// derives from kZBufferTest / kZBufferWrite, and the forward pixel stage. A pair FUN_14150bc80 leaves as it finds it (stale
 		// state) stays native, and so does anything Terrain Blending holds.
 		const bool translucent = blending || a_property.materialAlpha < 1.0f;
-		if (translucent && a_out.decalGroup == 0 && !a_layer && a_out.terrainGroup == 0 && ActiveToggles().forward) {
+		if (a_out.refraction) {
+			// The forward state is the refraction draw's (above): its alpha property is not applied.
+		} else if (translucent && a_out.decalGroup == 0 && !a_layer && a_out.terrainGroup == 0 && ActiveToggles().forward) {
 			const std::uint32_t blendMode = blending ? AlphaBlendModeOf(*alpha) : 0u;
 			if (blending && blendMode == 0)
 				return Ineligible::AlphaBlend;
@@ -663,6 +686,196 @@ namespace DCLF
 		a_out.projectedUV = (d & Bit(LightingFlag::ProjectedUV)) != 0;
 		a_out.vertex = vertex;
 		a_out.pixel = pixel;
+		return Ineligible::None;
+	}
+
+	bool EffectSkinned(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf)
+	{
+		// FUN_1414bde90: kSkinned and the geometry's vertex description (+0x148) with a skin flag (VF_SKINNED's bits, 0x1004000000000000).
+		constexpr std::uint64_t kVertexSkinned = 0x1004000000000000ull;
+		const std::uint64_t vertexDesc = a_leaf.geometry ? a_leaf.geometry->vertexDesc : 0;
+		return (a_property.flags & Bit(Flag::kSkinned)) && (vertexDesc & kVertexSkinned);
+	}
+
+	bool ParticleSystemTaken(const SceneCapture::LeafView& a_leaf)
+	{
+		// The mirror's particle record (SceneCapture::GeometryRecord::Particles), taken where the geometry is captured.
+		if (!ActiveToggles().particles || !a_leaf.geometry || a_leaf.Type() != static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles) || a_leaf.Skinned())
+			return false;
+		const auto& p = a_leaf.geometry->particles;
+		return p.system && p.data && !p.aligned && p.capacity > 0;
+	}
+
+	std::uint32_t ParticleRejectionOf(const SceneCapture::LeafView& a_leaf, std::uint64_t a_flags)
+	{
+		// ParticleSystemTaken's conditions, each its own census name; then the property's (a particle system's pass is hint 1 whatever its alpha,
+		// GetRenderPasses: without a blending alpha property its blend mode is the frame's property alpha, FUN_14150bc80; and no decal of one).
+		if (!ActiveToggles().particles)
+			return kEffectVariantParticle;
+		const auto* g = a_leaf.geometry;
+		if (!g || a_leaf.Type() != static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles) || !g->particles.system || a_leaf.Skinned())
+			return kEffectVariantParticleClass;
+		std::uint32_t causes = 0;
+		if (!g->particles.data || !g->particles.capacity)
+			causes |= kEffectVariantParticleData;
+		if (g->particles.aligned)
+			causes |= kEffectVariantParticleAligned;
+		if (!a_leaf.AlphaBlending())
+			causes |= kEffectVariantParticleUnblended;
+		if (a_flags & (Bit(Flag::kDecal) | Bit(Flag::kDynamicDecal)))
+			causes |= kEffectVariantParticleDecal;
+		return causes;
+	}
+
+	std::uint32_t EffectVariantsOf(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf)
+	{
+		// What BSEffectShaderProperty::GetRenderPasses (0x1414bd890) and BSEffectShader's setup functions do for this property that the
+		// port does not: the decal groups without CS_DCLF_DECALS (hints 2 and 3; kTempRefraction with kDynamicDecal makes no pass at all); the
+		// sky object (bit 45: hint 0x12, geometry group 13, SetupGeometry's own cull and alpha setup); wireframe (bit 48: SetupGeometry's depth
+		// and fill state); Blood and ProjectedUv, whose constants are not ported; a skin the palette path does not take; any shape but a
+		// BSTriShape, or (T7e) a particle system DCLF's particle path draws.
+		const std::uint64_t f = a_property.flags;
+		std::uint32_t variants = 0;
+		if (ParticleGeometryType(a_leaf.Type())) {
+			// T7e: a particle system's pass is hint 1 whatever its alpha (GetRenderPasses: "the geometry is a particle system"), so one without a
+			// blending alpha property takes its blend mode from the frame's property alpha (FUN_14150bc80): not ported; nor is a decal of one.
+			variants |= ParticleRejectionOf(a_leaf, f);
+		} else if (a_leaf.Type() != static_cast<std::uint8_t>(RE::BSGeometry::Type::kTriShape)) {
+			variants |= kEffectVariantShape;
+		}
+		// T7d part 5: a skinned effect is drawn through the skin palette path (CS_DCLF_SKINNED: the partition's buffer, the palette rows in
+		// DCLFPalettes) when its pass is the SKINNED permutation and its geometry has the skin that permutation reads: the descriptor's Skinned
+		// bit (FUN_1414bde90: kSkinned and a skinned vertex description, EffectSkinned) exactly where the leaf has a skin instance. kSkinned
+		// on a static shape without skinned vertices is no variant (the descriptor has no Skinned bit); every other mismatch is.
+		if (EffectSkinned(a_property, a_leaf) != a_leaf.Skinned() || (a_leaf.Skinned() && !ActiveToggles().skinned))
+			variants |= kEffectVariantSkinned;
+		// T7d part 5: an effect decal (hints 2 and 3) is drawn in DCLF's decal groups (CS_DCLF_DECALS), as the engine draws it in its own,
+		// inside the G-buffer pass with the DEFERRED permutation. kTempRefraction with kDynamicDecal registers no pass at all (GetRenderPasses):
+		// nothing to draw, so it stays a variant.
+		if ((f & (Bit(Flag::kDecal) | Bit(Flag::kDynamicDecal))) &&
+			(!ActiveToggles().decals || ((f & Bit(Flag::kTempRefraction)) && (f & Bit(Flag::kDynamicDecal)))))
+			variants |= kEffectVariantDecal;
+		if (f & Bit(Flag::kBillboard))
+			variants |= kEffectVariantSkyObject;
+		if (f & Bit(Flag::kWireframe))
+			variants |= kEffectVariantWireframe;
+		// The Lighting variant (kEffectLighting; the descriptor's Lighting bit also needs the global 0x142033508, which only its initialiser
+		// writes, to 1): its light 0 is FUN_1414fcf80's, the scene's sun light (ShadowSceneNode +0x200) unless kCloudLOD picks the cloud
+		// light (+0x208), so the port's frame value (SampleEffectLight) is the sun's alone; and its point lights are Light Limit Fix's
+		// clusters in the world (Effect.hlsl, GetLightingColor), the pass's own PerGeometry lights without it.
+		if (f & Bit(Flag::kEffectLighting)) {
+			if (f & Bit(Flag::kCloudLOD))
+				variants |= kEffectVariantCloudLighting;
+			if (!globals::features::lightLimitFix.loaded)
+				variants |= kEffectVariantLightingNoLlf;
+		}
+		if (f & Bit(Flag::kWeaponBlood))
+			variants |= kEffectVariantBlood;
+		if (f & Bit(Flag::kProjectedUV))
+			variants |= kEffectVariantProjectedUv;
+		if (a_leaf.AlphaBlending() && AlphaBlendModeOf(*a_leaf.alpha) == 0)
+			variants |= kEffectVariantBlendPair;
+		return variants;
+	}
+
+	Ineligible DeriveEffectDescriptors(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf, LightingDescriptors& a_out)
+	{
+		// T7d's Effect port (drawcall-limit-fix.md, "The Effect shader in the forward epoch"): BSEffectShaderProperty::GetRenderPasses
+		// (0x1414bd890) for a BSTriShape in the main modes, from the records: its hint, and its descriptor as FUN_1414bde90 builds it.
+		const std::uint64_t f = a_property.flags;
+		const auto* alpha = a_leaf.alpha;
+		const std::uint64_t vertexDesc = a_leaf.geometry ? a_leaf.geometry->vertexDesc : 0;
+		const std::uint32_t variants = EffectVariantsOf(a_property, a_leaf);
+		if (variants & ~kEffectVariantBlendPair)
+			return Ineligible::EffectVariant;
+		// Hint 1 (the blended list, sorted with blended Lighting) for a blending alpha property, with the blend mode the engine's alpha setup
+		// (FUN_14150bc80) takes from its pair; without one the pass is hint 0 (the G-buffer pass's DEFERRED variant), or hint 1 by Falloff or
+		// the property alpha alone, whose blend mode then follows the frame's alpha.
+		// T7d part 5: a decal (kDecal / kDynamicDecal; EffectVariantsOf left it, so CS_DCLF_DECALS is on) takes hint 2 without a blending alpha
+		// property and 3 with one, whatever its alpha or Falloff (GetRenderPasses), and the main registration (FUN_1414b2330) puts them in
+		// geometry groups 3 and 4: the engine's opaque and blended decal groups, DCLF's decal groups 1 and 2.
+		const bool decal = (f & (Bit(Flag::kDecal) | Bit(Flag::kDynamicDecal))) != 0;
+		const bool blending = a_leaf.AlphaBlending();
+		if (!blending && !decal)
+			return Ineligible::EffectOpaque;
+		// T7e: a particle system DCLF's particle path draws (EffectVariantsOf left no other, and only a blending one): hint 1, the forward epoch's.
+		const bool particles = ParticleGeometryType(a_leaf.Type());
+		if (variants & kEffectVariantBlendPair)
+			return Ineligible::EffectVariant;  // a pair the alpha setup leaves as it finds it (only ever a blending one)
+		const std::uint32_t blendMode = blending ? AlphaBlendModeOf(*alpha) : 0u;
+
+		using namespace EffectFlag;
+		std::uint32_t d = 0;
+		if (f & Bit(Flag::kVertexColors))
+			d |= Vc;
+		// The source texture's path (FUN_140cec900 against null: the mirror's kEffectHasSourcePath).
+		if (a_property.feature & kEffectHasSourcePath)
+			d |= TexCoord | Texture;
+		// kSkinned with a skinned vertex description (EffectVariantsOf: drawn only where the leaf has the skin).
+		if (EffectSkinned(a_property, a_leaf))
+			d |= Skinned;
+		// Falloff for anything but particles; a particle system's Particles, and with a texture and the data's subtextures TexCoordIndex and
+		// IndexedTexture (the vertex stage's IndexedTexCoord, which DCLF's particle quads carry resolved: Effect.hlsl, DCLFParticleInput).
+		if ((f & Bit(Flag::kFalloff)) && !particles)
+			d |= Normals | Falloff;
+		if (particles) {
+			d |= Particles;
+			if ((d & Texture) && a_leaf.geometry && a_leaf.geometry->particles.subtextures)
+				d |= TexCoordIndex | IndexedTexture;
+		}
+		// The alpha property's functions (bits 1-4 source, 5-8 destination), blending or not: ONE as destination is AddBlend, SRCCOLOR
+		// MultBlend, the pair (DESTCOLOR, INVSRCALPHA) MultBlendDecal. None without an alpha property (a decal's may have none).
+		const std::uint32_t source = alpha ? (alpha->flags >> 1) & 0xF : ~0u, dest = alpha ? (alpha->flags >> 5) & 0xF : ~0u;
+		if (dest == 0)
+			d |= AddBlend;
+		if (source == 4 && dest == 7)
+			d |= MultBlendDecal;
+		else if (dest == 2)
+			d |= MultBlend;
+		if (f & Bit(Flag::kSoftEffect))
+			d |= Soft;
+		// The Lighting variant (EffectVariantsOf): kEffectLighting, the global 0x142033508 taken as its initialiser leaves it.
+		if (f & Bit(Flag::kEffectLighting))
+			d |= Lighting;
+		if (a_property.feature & kEffectHasGreyscalePath) {
+			if (f & Bit(Flag::kGrayscaleToPaletteColor))
+				d |= GrayscaleToColor;
+			if (f & Bit(Flag::kGrayscaleToPaletteAlpha))
+				d |= GrayscaleToAlpha;
+		}
+		// Normals in the vertex description (either stream), no alpha property or an alpha-tested one, depth tested and written.
+		constexpr std::uint64_t kVertexNormals = 0x200800000000000ull;
+		if ((vertexDesc & kVertexNormals) && (!alpha || (alpha->flags & (1u << 9))) && (f & Bit(Flag::kZBufferTest)) && (f & Bit(Flag::kZBufferWrite)))
+			d |= MotionVectorsNormals;
+
+		// SetupTechnique's split (FUN_141521300, FUN_141521310), then Community Shaders' lookup (State::ModifyShaderLookup, Effect): the
+		// three permutation bits off both, and Deferred on the pixel stage in the deferred pass alone: a decal's (the decal groups draw inside
+		// it, into the G-buffer), never a forward object's (the forward epoch is after the composite, as the engine's blended draw).
+		constexpr std::uint32_t kPermutationBits = GrayscaleToColor | GrayscaleToAlpha | IgnoreTexAlpha;
+		a_out = {};
+		a_out.effect = true;
+		a_out.technique = 0;
+		a_out.pass = d;
+		a_out.derivedPass = d;
+		a_out.rawVertex = d & 0xffc7ffffu;
+		a_out.rawPixel = ((d & Membrane) ? d : (d & ~Skinned)) & ~SkyObject;
+		a_out.vertex = a_out.rawVertex & ~kPermutationBits;
+		a_out.pixel = (a_out.rawPixel & ~kPermutationBits) | (decal ? Deferred : 0u);
+		if (decal) {
+			// The decal group's state (engine notes, "Decals"; BSEffectShader::SetupGeometry 0x1414eab10 for a pass of hint 2 or 3): the group
+			// function's depth mode (3 for the opaque group, 1 for the blended one) and bias, which SetupGeometry leaves for a decal; the
+			// alpha property applied in the blended group alone (render flags 0x45 against 0x41: FUN_14150bc80's mode from its pair); write
+			// mode 11, which SetupGeometry sets for every decal pass without MotionVectorsNormals, the group's own otherwise (10 for the
+			// opaque group, 11 for the blended one).
+			a_out.decalGroup = blending ? 2u : 1u;
+			a_out.decalBlendMode = blendMode;
+			a_out.decalWriteMode = (!blending && (d & MotionVectorsNormals)) ? 10u : 11u;
+			return Ineligible::None;
+		}
+		a_out.forward = true;
+		a_out.forwardBlendMode = blendMode;
+		a_out.forwardDepthTest = (f & Bit(Flag::kZBufferTest)) != 0;
+		a_out.forwardDepthWrite = (f & Bit(Flag::kZBufferWrite)) != 0;
 		return Ineligible::None;
 	}
 }

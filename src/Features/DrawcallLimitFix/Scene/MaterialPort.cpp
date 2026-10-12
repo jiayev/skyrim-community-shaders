@@ -29,7 +29,10 @@ namespace DCLF::MaterialPort
 		a_out.vtable = *reinterpret_cast<const void* const*>(&a_material);
 		a_out.feature = static_cast<std::uint32_t>(a_material.GetFeature());
 		a_out.pbr = OwnClass(a_out.vtable);
-		a_out.size = a_out.pbr ? PBRMaterialBytes(a_material) : VanillaClassSize(a_material);
+		a_out.effect = !a_out.pbr && EffectMaterial(a_material);
+		if (a_out.effect)
+			a_out.feature = 0;  // no Lighting material feature (FeatureHooksCovered: none of Advanced Skin's)
+		a_out.size = a_out.pbr ? PBRMaterialBytes(a_material) : a_out.effect ? kEffectMaterialBytes : VanillaClassSize(a_material);
 		a_out.textureCount = 0;
 		if (!a_out.size || a_out.size > kMaxMaterialBytes)
 			return false;
@@ -38,6 +41,8 @@ namespace DCLF::MaterialPort
 		std::uint32_t count = 0;
 		if (a_out.pbr)
 			PBRTextureFields(a_material, fields.data(), count);
+		else if (a_out.effect)
+			EffectTextureFields(fields.data(), count);
 		else
 			VanillaTextureFields(a_material, fields.data(), count);
 		for (std::uint32_t i = 0; i < count && i < kMaxTextureFields; ++i)
@@ -76,6 +81,9 @@ namespace DCLF::MaterialPort
 
 	bool Evaluate(const MaterialSnapshot& a_snapshot, std::uint32_t a_passDescriptor, const MaterialFrame& a_frame, MaterialRecord& a_out)
 	{
+		// T7d's Effect port: an effect material is BSEffectShader's (no Community Shaders hook on its SetupMaterial).
+		if (a_snapshot.effect)
+			return EvaluateEffect(a_snapshot, a_passDescriptor, a_frame.vanilla, a_out);
 		// The hooks' chain (installed in feature order): Advanced Skin and TerrainHelper around TruePBR around vanilla. TruePBR's
 		// replacement takes the passes it takes (and hands back to vanilla what it does not draw: EvaluatePBR).
 		const bool covered = PBRTakesPass(a_passDescriptor, a_frame.feature) ? EvaluatePBR(a_snapshot, a_passDescriptor, a_frame, a_out) :

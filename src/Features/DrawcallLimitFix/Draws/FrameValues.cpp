@@ -3,12 +3,14 @@
 #include "Features/DrawcallLimitFix/Common/EngineReleases.h"
 
 #include "Features/DrawcallLimitFix/Common/KeptState.h"
+#include "Features/DrawcallLimitFix/Engine/ParticleSnapshots.h"
 #include "Features/DrawcallLimitFix/Engine/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Scene/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Scene/FadeState.h"
 #include "Features/DrawcallLimitFix/Scene/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
 
+#include <bit>
 #include <cstring>
 #include <limits>
 
@@ -65,6 +67,60 @@ namespace DCLF
 			const auto node = LodFadeNodeOf(a_property);
 			std::memcpy(a_out, node.data(), sizeof(a_out));
 		}
+
+		/** @brief a_geometry's index among a_node's geometries, depth first in child order (null slots skipped); false if not found. */
+		bool OrdinalUnder(const RE::NiNode& a_node, const RE::BSGeometry& a_geometry, std::uint32_t& a_index)
+		{
+			for (const auto& child : a_node.GetChildren()) {
+				auto* object = child.get();
+				if (!object)
+					continue;
+				if (object == &a_geometry)
+					return true;
+				if (object->AsGeometry())
+					++a_index;
+				else if (const auto* node = object->AsNode(); node && OrdinalUnder(*node, a_geometry, a_index))
+					return true;
+			}
+			return false;
+		}
+
+		// T7d's ordered-node interleave (BindlessPlacement::forwardSort): a blended leaf's nearest BSOrderedNode (FUN_1415039f0's walk up
+		// the parents, the exact type), whose OnVisible opens a group of the culling process and culls its children into it in child order
+		// (0x141503970, then NiNode's); the list process registers the group at the node's world bound (ProcessJob, 0x140e28af0, the
+		// accumulator's vfunc 0x140: FUN_1414f50d0's depth, the view axis distance of that centre), and the blended draw interleaves the
+		// groups, sorted by that depth (qsort, comparator 0x1414f55e0), with the blended list (FUN_1414f5330), each group's passes in their
+		// registration order (FUN_1414f19d0). Only a blended leaf's passes go into the group (FUN_1414b2330 gives it to hint 1 alone), so an
+		// opaque leaf's row stays 0 and no parent of it is read. The node's bound is live: BSOrderedNode's bound update (0x141503a60) takes
+		// its static bound only with kFixedBound (LoadBinary sets it for a static bound of non-zero radius), else NiNode's merge of its
+		// children's. Read inside the engine-read window (the caller's lease), where the scene graph holds still.
+		void StoreForwardSort(const RE::BSGeometry& a_geometry, float (&a_out)[4])
+		{
+			a_out[0] = a_out[1] = a_out[2] = a_out[3] = 0.0f;
+			const auto& data = a_geometry.GetGeometryRuntimeData();
+			const auto* alpha = data.alphaProperty.get();
+			bool blended = alpha && (alpha->alphaFlags & 1);
+			if (!blended)
+				if (const auto* lighting = netimmerse_cast<RE::BSLightingShaderProperty*>(data.shaderProperty.get()); lighting && lighting->material)
+					blended = static_cast<const RE::BSLightingShaderMaterialBase*>(lighting->material)->materialAlpha < 1.0f;
+			if (!blended)
+				return;
+			static const REL::Relocation<const RE::NiRTTI*> orderedRtti{ RE::BSOrderedNode::Ni_RTTI };
+			const RE::NiNode* ordered = nullptr;
+			for (auto* node = a_geometry.parent; node; node = node->parent)
+				if (node->GetRTTI() == orderedRtti.get()) {
+					ordered = node;
+					break;
+				}
+			std::uint32_t index = 0;
+			if (!ordered || !OrdinalUnder(*ordered, a_geometry, index))
+				return;
+			const auto& bound = ordered->worldBound;
+			a_out[0] = bound.center.x;
+			a_out[1] = bound.center.y;
+			a_out[2] = bound.center.z;
+			a_out[3] = std::bit_cast<float>(index + 1);
+		}
 	}
 
 	void FrameValues::SampleRow(const RE::BSGeometry& a_geometry, const RE::NiAVObject* a_sunEntryNode, const RE::BSShaderProperty* a_fadeProperty,
@@ -82,6 +138,7 @@ namespace DCLF
 		a_out.bound[3] = a_geometry.worldBound.radius;
 		StoreSunEntry(a_sunEntryNode, a_out.sunEntry);
 		StoreFadeNode(a_fadeProperty, a_out.lodFadeNode);
+		StoreForwardSort(a_geometry, a_out.forwardSort);
 	}
 
 	bool FrameValues::SampleSlot(const SceneStore::Tables& a_tables, std::uint32_t a_slot, BindlessPlacement& a_out)
@@ -190,6 +247,17 @@ namespace DCLF
 		std::uint64_t parityChecks = 0, parityDiffers = 0, parityFresh = 0, paletteChecks = 0, paletteDiffers = 0;
 		std::string parityFirst, paletteFirst;
 
+		/**
+		 * @brief T7e: a first-person member's row (and its layer's) and palettes, taken by the render thread at Kick (before Main::Draw
+		 * moves the skeleton into its root's space), written by the producer in place of a sample.
+		 */
+		struct FirstPersonSample
+		{
+			std::uint32_t slot = kNoObjectSlot, layerSlot = kNoObjectSlot, boneOffset = 0, boneRows = 0;
+			BindlessPlacement row{}, layer{};
+			std::vector<PaletteRow> current, previous;
+		};
+
 		struct Job
 		{
 			std::uint64_t seq = 0;
@@ -210,6 +278,8 @@ namespace DCLF
 			std::shared_ptr<rhi::TimelinePtr> timeline;
 			std::shared_ptr<org::runtime::IUploadService> uploads;
 			FrameUploads more;  // the frame's other uploads (Kick's a_uploads)
+			std::vector<FirstPersonSample> firstPerson;  // T7e: the render thread's samples (Kick)
+			ParticleSnapshots::Camera particleCamera;    // T7e: the main camera the particle members' quads face (Kick)
 		};
 		void Run(const Job& a_job);
 		void Sample(const Job& a_job);
@@ -296,8 +366,9 @@ namespace DCLF
 		items.reserve(work.movers.size() + (a_job.written.empty() ? 0 : a_job.written.back()->written.size()));
 		listed.assign(out.size(), 0);
 		blockListed.assign(paletteOut.size() / 2, 0);
+		// T7e: never a first-person item (the render thread's: FirstPersonSample), whose engine transforms the frame moves.
 		auto list = [&](const Plan::Item& a_item, bool a_settles) {
-			if (a_item.slot >= out.size() || !a_item.geometry || std::exchange(listed[a_item.slot], 1))
+			if (a_item.firstPerson || a_item.slot >= out.size() || !a_item.geometry || std::exchange(listed[a_item.slot], 1))
 				return;
 			const bool palette = a_item.boneRows && std::size_t(a_item.boneOffset) + a_item.boneRows <= blockListed.size() && !std::exchange(blockListed[a_item.boneOffset], 1);
 			items.push_back({ &a_item, palette, a_settles });
@@ -325,6 +396,34 @@ namespace DCLF
 		} handOver{ carried };
 		for (const auto& item : carried)
 			list(item, true);
+		// T7e: the first-person members' samples the render thread took (Kick), written here in order: values only.
+		std::uint64_t firstPersonMarked = 0, firstPersonPaletteMarked = 0;
+		for (const auto& sample : a_job.firstPerson) {
+			if (sample.slot >= out.size())
+				continue;
+			if (std::memcmp(&out[sample.slot], &sample.row, sizeof(sample.row)) != 0) {
+				out[sample.slot] = sample.row;
+				rows.Mark(sample.slot);
+				++firstPersonMarked;
+			}
+			if (sample.layerSlot != kNoObjectSlot && sample.layerSlot < out.size() && std::memcmp(&out[sample.layerSlot], &sample.layer, sizeof(sample.layer)) != 0) {
+				out[sample.layerSlot] = sample.layer;
+				rows.Mark(sample.layerSlot);
+				++firstPersonMarked;
+			}
+			if (!sample.boneRows || sample.current.size() != sample.boneRows || sample.previous.size() != sample.boneRows)
+				continue;
+			const auto at = PaletteRowsOf(sample.boneOffset, sample.boneRows);
+			if (std::size_t(at.previous) + sample.boneRows > paletteOut.size() || std::size_t(at.current) + sample.boneRows > paletteOut.size())
+				continue;
+			const std::size_t paletteBytes = std::size_t(sample.boneRows) * sizeof(PaletteRow);
+			if (std::memcmp(&paletteOut[at.current], sample.current.data(), paletteBytes) != 0 || std::memcmp(&paletteOut[at.previous], sample.previous.data(), paletteBytes) != 0) {
+				std::memcpy(&paletteOut[at.current], sample.current.data(), paletteBytes);
+				std::memcpy(&paletteOut[at.previous], sample.previous.data(), paletteBytes);
+				palettes.MarkRange(at.current, 2 * sample.boneRows);
+				firstPersonPaletteMarked += 2 * sample.boneRows;
+			}
+		}
 		auto& executor = SceneScheduler::Executor();
 		constexpr std::size_t kGrain = 64;
 		// Each chunk's changed slots and palette runs, marked after (the journals are one thread's).
@@ -337,10 +436,16 @@ namespace DCLF
 		};
 		std::vector<Changed> changed((items.size() + kGrain - 1) / kGrain);
 		std::atomic<std::uint64_t> refusedHere{ 0 };
+		// T7e: the particle members' records (ParticleSnapshots::Follow, which only the producer calls), before the items run in parallel.
+		std::vector<ParticleSnapshots::Record*> particleRecords(items.size(), nullptr);
+		for (std::size_t i = 0; i < items.size(); ++i)
+			if (items[i].palette && items[i].item->particles)
+				particleRecords[i] = ParticleSnapshots::Get().Follow(items[i].item->geometry.get());
 		executor.ParallelFor("CS.DCLF.FrameValues.Items", items.size(), kGrain, [&](std::size_t a_begin, std::size_t a_end) {
 			ZoneScopedN("CS.DCLF.FrameValues.Items");
 			auto& mine = changed[a_begin / kGrain];
 			BindlessPlacement row, layer;
+			std::vector<PaletteRow> particleRows;
 			for (std::size_t i = a_begin; i < a_end; ++i) {
 				const auto& [itemPointer, palette, settles] = items[i];
 				const auto& item = *itemPointer;
@@ -352,6 +457,19 @@ namespace DCLF
 					continue;
 				}
 				SampleItem(item, row, layer);
+				// T7e: a particle member's quads, its system's newest snapshot faced to the frame's camera, into its block's current rows (below),
+				// and its placement's transforms and bound the snapshot's: its particle data is never read here (ParticleSnapshots::Expand).
+				auto* particles = particleRecords[i];
+				if (particles) {
+					particleRows.resize(item.boneRows);
+					ParticleSnapshots::Expanded expanded;
+					ParticleSnapshots::Get().Expand(*particles, a_job.particleCamera, item.boneRows / ParticleSnapshots::kRowsPerParticle, particleRows.data()->v, expanded);
+					if (expanded.snapshot) {
+						std::memcpy(row.world, expanded.world, sizeof(row.world));
+						std::memcpy(row.previousWorld, expanded.world, sizeof(row.previousWorld));
+						std::memcpy(row.bound, expanded.bound, sizeof(row.bound));
+					}
+				}
 				if (settles && std::memcmp(&item.geometry->world, &DrawnPreviousWorld(*item.geometry), sizeof(RE::NiTransform)) != 0)
 					mine.settling.push_back(&item);
 				if (std::memcmp(&out[item.slot], &row, sizeof(row)) != 0) {
@@ -364,6 +482,15 @@ namespace DCLF
 				}
 				if (!palette)
 					continue;
+				if (particles) {
+					const auto at = PaletteRowsOf(item.boneOffset, item.boneRows);
+					const std::size_t bytes = std::size_t(item.boneRows) * sizeof(PaletteRow);
+					if (std::memcmp(&paletteOut[at.current], particleRows.data(), bytes) != 0) {
+						std::memcpy(&paletteOut[at.current], particleRows.data(), bytes);
+						mine.paletteRuns.emplace_back(at.current, item.boneRows);
+					}
+					continue;
+				}
 				// The skin's palette: the engine's update for the frame, then its rows into the block's, noted only when they differ.
 				auto& geometry = *item.geometry;
 				if (auto* skin = geometry.GetGeometryRuntimeData().skinInstance.get())
@@ -384,6 +511,8 @@ namespace DCLF
 				}
 			}
 		});
+		// T7e: the particle records no plan named lately pruned, a changed table published.
+		ParticleSnapshots::Get().EndRun();
 		// The roots: their dependents' sun entries (and fade nodes), after the items wrote theirs.
 		std::vector<std::vector<std::uint32_t>> rootChanged(work.roots.size());
 		executor.ParallelFor("CS.DCLF.FrameValues.Roots", work.roots.size(), 16, [&](std::size_t a_begin, std::size_t a_end) {
@@ -398,7 +527,7 @@ namespace DCLF
 				float entry[4];
 				StoreSunEntry(root.root.get(), entry);
 				for (const auto& dependent : root.dependents) {
-					if (dependent.slot >= out.size() || !dependent.geometry)
+					if (dependent.firstPerson || dependent.slot >= out.size() || !dependent.geometry)
 						continue;
 					const auto write = [&](std::uint32_t a_slot, const RE::BSShaderProperty* a_property) {
 						auto& row = out[a_slot];
@@ -437,9 +566,9 @@ namespace DCLF
 				rows.Mark(slot);
 			marked += slots.size();
 		}
-		sampled += static_cast<std::uint64_t>(items.size());
-		rowsChanged += marked;
-		paletteRowsChanged += paletteMarked;
+		sampled += static_cast<std::uint64_t>(items.size() + a_job.firstPerson.size());
+		rowsChanged += marked + firstPersonMarked;
+		paletteRowsChanged += paletteMarked + firstPersonPaletteMarked;
 		if (const auto refusals = refusedHere.load())
 			refused += refusals;
 		SampleShadingRows(a_job, work.slots);
@@ -512,7 +641,7 @@ namespace DCLF
 					continue;
 				}
 				BindlessShading row = out[item.slot];
-				SampleShading(*static_cast<const RE::BSLightingShaderProperty*>(item.property.get()), item.pass, item.member, row);
+				SampleShading(*item.property.get(), item.pass, item.member, row);
 				// An actor's wetness is the capture's (below); anything else has none.
 				if (!item.actor)
 					std::fill(std::begin(row.skinPerGeometry), std::end(row.skinPerGeometry), 0.0f);
@@ -713,6 +842,45 @@ namespace DCLF
 		job.timeline = std::move(timeline);
 		job.uploads = std::move(uploads);
 		job.more = std::move(a_uploads);
+		job.particleCamera = ParticleSnapshots::Get().FrameCamera();
+		// T7e: the first-person members the frame draws (SetFirstPersonClaims), sampled here: the render thread, the engine's update done
+		// and Main::Draw's first-person shift (FUN_1414cb020) still ahead. Their skins' palettes are updated here too (the engine's update
+		// is once a frame, frameID): the engine draws none of them (withheld), so nothing of its own reads a palette pinned in world space.
+		if (const auto claims = std::exchange(firstPersonClaims, nullptr)) {
+			std::vector<std::uint8_t> taken;
+			auto take = [&](const Plan::Item& a_item) {
+				if (!a_item.firstPerson || !a_item.geometry || a_item.slot == kNoObjectSlot || !(claims->PhasesOf(a_item.geometry.get()) & kSetFirstPerson))
+					return;
+				if (taken.size() <= a_item.slot)
+					taken.resize(a_item.slot + 1, 0);
+				if (std::exchange(taken[a_item.slot], 1))
+					return;
+				auto& sample = job.firstPerson.emplace_back();
+				sample.slot = a_item.slot;
+				sample.layerSlot = a_item.layerSlot;
+				SampleItem(a_item, sample.row, sample.layer);
+				if (!a_item.boneRows)
+					return;
+				auto& geometry = *a_item.geometry;
+				if (auto* skin = geometry.GetGeometryRuntimeData().skinInstance.get())
+					UpdateSkin(skin, geometry.world);
+				const float* current = nullptr;
+				const float* previous = nullptr;
+				if (!SkinPalettes(geometry, a_item.boneRows, current, previous))
+					return;
+				sample.boneOffset = a_item.boneOffset;
+				sample.boneRows = a_item.boneRows;
+				const auto* currentRows = reinterpret_cast<const PaletteRow*>(current);
+				const auto* previousRows = reinterpret_cast<const PaletteRow*>(previous);
+				sample.current.assign(currentRows, currentRows + a_item.boneRows);
+				sample.previous.assign(previousRows, previousRows + a_item.boneRows);
+			};
+			for (const auto& item : job.plan->movers)
+				take(item);
+			for (auto it = job.written.rbegin(); it != job.written.rend(); ++it)
+				for (const auto& item : (*it)->written)
+					take(item);
+		}
 		if (s.plan)
 			s.plans.emplace_back(seq, s.plan);
 		frameIndex = s.ring[r].srvIndex;
@@ -824,6 +992,10 @@ namespace DCLF
 		BindlessPlacement expected;
 		for (std::uint32_t slot = 0; slot < count; ++slot) {
 			if (!SampleSlot(a_tables, slot, expected))
+				continue;
+			// T7e: a particle member's row is its snapshot's (ParticleSnapshots), not the engine's transforms now.
+			if ((a_tables.objects[slot].flags & kObjectSkinned) && a_tables.objectGeometry[slot] &&
+				a_tables.objectGeometry[slot]->GetType().get() == RE::BSGeometry::Type::kParticles)
 				continue;
 			++s.parityChecks;
 			if (fresh[slot]) {

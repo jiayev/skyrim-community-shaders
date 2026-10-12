@@ -1,8 +1,10 @@
 #include "ConstantEvaluator.h"
+#include "Features/DrawcallLimitFix/Scene/EffectConstants.h"
 
 #include "Features/DrawcallLimitFix/Common/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
+#include "Features/DrawcallLimitFix/Scene/MaterialPort.h"
 
 #include <array>
 #include <cstring>
@@ -89,9 +91,29 @@ namespace DCLF
 		return layout;
 	}
 
+	const StageLayout& EffectVSLayout()
+	{
+		// World, PreviousWorld and MatProj are float3x4 (MatProj a float4[3]); Bones (skinned only) never needs real storage.
+		static const StageLayout layout = MakeLayout(kEffectVSVariables, { { kEffectVSWorld, 12 }, { kEffectVSPreviousWorld, 12 }, { kEffectVSMatProj, 12 } }, { kEffectVSBones });
+		return layout;
+	}
+
+	const StageLayout& EffectPSLayout()
+	{
+		static const StageLayout layout = MakeLayout(kEffectPSVariables, {}, {});
+		return layout;
+	}
+
 	void ConstantBlock::Reset()
 	{
 		floats.fill(std::bit_cast<float>(kUnwrittenBits));
+	}
+
+	RE::BSShader* ConstantEvaluator::EffectShader()
+	{
+		static const REL::Relocation<RE::BSShader**> instance{ REL::Offset(0x33dcce8) };
+		auto* shader = *instance.get();
+		return shader && shader->shaderType.get() == RE::BSShader::Type::Effect ? shader : nullptr;
 	}
 
 	ConstantEvaluator& ConstantEvaluator::Get()
@@ -317,10 +339,89 @@ namespace DCLF
 		return true;
 	}
 
+	bool ConstantEvaluator::EvaluateEffectMaterial(const RE::BSShaderMaterial* a_material, std::uint32_t a_passDescriptor, MaterialRecord& a_out)
+	{
+		// T7d's Effect port, the parity's reference: BSEffectShader::SetupMaterial (vfunc 4, 0x1414ea6c0) against stand-in shaders whose constant
+		// tables point at blocks in EffectVSLayout / EffectPSLayout order, its technique (+0x90) the pass descriptor; no Community Shaders hook
+		// on it. The shadow state, the technique and every constant buffer binding are restored, as RunStandIn does for the Lighting shader.
+		auto* shader = EffectShader();
+		if (!shader || !a_material)
+			return false;
+		RenderThreadBudget::Part budget(RenderThreadBudget::Bucket::EngineBoundary);
+		auto& state = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData();
+		auto* context = globals::d3d::context;
+		alignas(16) static std::uint8_t vsStorage[sizeof(RE::BSGraphics::VertexShader)];
+		alignas(16) static std::uint8_t psStorage[sizeof(RE::BSGraphics::PixelShader)];
+		static ConstantBlock vsBlocks[3];
+		static ConstantBlock psBlocks[3];
+		std::memset(vsStorage, 0, sizeof(vsStorage));
+		std::memset(psStorage, 0, sizeof(psStorage));
+		auto* vs = reinterpret_cast<RE::BSGraphics::VertexShader*>(vsStorage);
+		auto* ps = reinterpret_cast<RE::BSGraphics::PixelShader*>(psStorage);
+		for (std::uint32_t level = 0; level < 3; ++level) {
+			vsBlocks[level].Reset();
+			psBlocks[level].Reset();
+		}
+		PointAt(vs, EffectVSLayout(), vsBlocks);
+		PointAt(ps, EffectPSLayout(), psBlocks);
+		auto savedState = std::make_unique<std::uint8_t[]>(sizeof(state));
+		std::memcpy(savedState.get(), &state, sizeof(state));
+		auto* technique = reinterpret_cast<std::uint32_t*>(reinterpret_cast<std::byte*>(shader) + 0x90);
+		const std::uint32_t savedTechnique = *technique;
+		std::array<ID3D11Buffer*, kConstantBufferSlots> savedVS{};
+		std::array<ID3D11Buffer*, kConstantBufferSlots> savedPS{};
+		context->VSGetConstantBuffers(0, kConstantBufferSlots, savedVS.data());
+		context->PSGetConstantBuffers(0, kConstantBufferSlots, savedPS.data());
+
+		state.currentVertexShader = vs;
+		state.currentPixelShader = ps;
+		for (std::uint32_t slot = 0; slot < kPixelTextureSlots; ++slot) {
+			state.PSTexture[slot] = reinterpret_cast<std::remove_reference_t<decltype(state.PSTexture[slot])>>(TextureSentinel(slot));
+			state.PSTextureFilterMode[slot] = static_cast<RE::BSGraphics::TextureFilterMode>(kUnwrittenFilterMode);
+		}
+		*technique = a_passDescriptor;
+		evaluating = true;
+		CallVirtual<void (*)(RE::BSShader*, const RE::BSShaderMaterial*)>(shader, kSetupMaterialSlot, a_material);
+		evaluating = false;
+
+		a_out.vs = vsBlocks[kPerMaterial];
+		a_out.ps = psBlocks[kPerMaterial];
+		a_out.textureWritten = 0;
+		for (std::uint32_t slot = 0; slot < kPixelTextureSlots; ++slot) {
+			auto* texture = reinterpret_cast<ID3D11ShaderResourceView*>(state.PSTexture[slot]);
+			if (texture != TextureSentinel(slot)) {
+				a_out.textures[slot] = texture;
+				a_out.addressModes[slot] = static_cast<std::uint32_t>(state.PSTextureAddressMode[slot].underlying());
+				a_out.textureWritten |= 1u << slot;
+			} else {
+				a_out.textures[slot] = nullptr;
+				a_out.addressModes[slot] = 0;
+			}
+			a_out.filterModes[slot] = static_cast<std::uint32_t>(state.PSTextureFilterMode[slot].underlying());
+		}
+		a_out.featureTextures = {};
+		a_out.kind = kMaterialKindEffect;
+
+		std::memcpy(&state, savedState.get(), sizeof(state));
+		*technique = savedTechnique;
+		context->VSSetConstantBuffers(0, kConstantBufferSlots, savedVS.data());
+		context->PSSetConstantBuffers(0, kConstantBufferSlots, savedPS.data());
+		for (auto* buffer : savedVS)
+			if (buffer)
+				buffer->Release();
+		for (auto* buffer : savedPS)
+			if (buffer)
+				buffer->Release();
+		return true;
+	}
+
 	bool ConstantEvaluator::EvaluateMaterial(const RE::BSShaderMaterial* a_material, std::uint32_t a_passDescriptor, MaterialRecord& a_out)
 	{
 		if (!a_material)
 			return false;
+		// T7d's Effect port: an effect material is BSEffectShader's (its pass descriptor that shader's).
+		if (MaterialPort::EffectMaterial(*a_material))
+			return EvaluateEffectMaterial(a_material, a_passDescriptor, a_out);
 
 		struct Call
 		{

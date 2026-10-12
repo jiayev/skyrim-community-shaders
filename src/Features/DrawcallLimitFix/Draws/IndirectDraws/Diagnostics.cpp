@@ -1,6 +1,7 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Internal.h"
 #	include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
+#	include "Features/DrawcallLimitFix/Engine/ParticleSnapshots.h"
 
 namespace DCLF
 {
@@ -141,6 +142,8 @@ namespace DCLF
 		text += VisibilityReport();
 		text += ReflectionReport();
 		text += ForwardReport();  // T7d
+		text += ParticleSnapshots::Get().Report();  // T7e
+		text += FirstPersonReport();  // T7e
 		if (impl->scene && impl->scene->treeLodCull && impl->scene->treeLodUploads) {
 			auto& scene = *impl->scene;
 			text += fmt::format("[DCLF] tree LOD draws: {} ({} depth commits, {} shape slots sent; tables {} shape and {} mesh slots; {} commits that could not draw a "
@@ -737,6 +740,7 @@ namespace DCLF
 		auto* context = globals::d3d::context;
 		// T7d: this frame's engine blended registrations of members (taken every colour epoch, so each copy has its own frame's).
 		const std::uint32_t forwardEngine = PassCapture::Get().TakeForwardRegistered();
+		const std::uint32_t refractionEngine = PassCapture::Get().TakeRefractionRegistered();  // T7d's refraction, likewise
 		if (cullReadback) {
 			if (--cullReadback->framesLeft)
 				return;
@@ -785,6 +789,12 @@ namespace DCLF
 				a_stats.forwardOccluded = words[kCountForwardOccludedWord];
 				a_stats.forwardEngine = cullReadback->forwardEngine;
 				a_stats.forwardObserved = cullReadback->forwardObserved;
+				a_stats.refractionDrawn = words[kCountRefractionWord];
+				a_stats.refractionTested = words[kCountRefractionTestedWord];
+				a_stats.refractionInView = words[kCountRefractionInViewWord];
+				a_stats.refractionOccluded = words[kCountRefractionOccludedWord];
+				a_stats.refractionEngine = cullReadback->refractionEngine;
+				a_stats.refractionObserved = cullReadback->refractionObserved;
 				context->Unmap(cullReadback->count.get(), 0);
 			}
 			cullReadback.reset();
@@ -807,6 +817,8 @@ namespace DCLF
 		readback.framesLeft = 3;
 		readback.forwardEngine = forwardEngine;
 		readback.forwardObserved = SetParityEnabled() && ActiveToggles().forward;
+		readback.refractionEngine = refractionEngine;
+		readback.refractionObserved = SetParityEnabled() && ActiveToggles().forward && ActiveToggles().refraction;
 		// The CPU's side of the sun test, over the same frame's colour inputs and the same planes.
 		auto sunTest = [&](const DrawInput& input) {
 			// The colour segment's inputs of the one main list (its view bits, as BuildDrawsCS tests them first).
