@@ -337,6 +337,8 @@ namespace WeatherExtensions
 		static void thunk(RE::Sky* sky, float a_delta)
 		{
 			func(sky, a_delta);
+			// Moonlight colours feed Effects11's grading; the dim must follow it, as its colour filter lifts zero
+			globals::features::skySync.ApplyMoonlightColors(sky);
 			if (globals::features::effects11.loaded)
 				globals::features::effects11.OnSkyUpdateColors(sky);
 			globals::features::skySync.OnSkyUpdateColors(sky);

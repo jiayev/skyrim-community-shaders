@@ -418,6 +418,20 @@ RE::NiColor F3ToNi(float3 color)
 	return { color.x, color.y, color.z };
 }
 
+/** @brief A time-of-day setting moved from its interpolated value towards its Night value by nightWeight. */
+static float GetNightWeightedValue(SettingManager& settingManager, std::string_view key, std::string_view category, float nightWeight)
+{
+	const float value = settingManager.GetInterpolatedTimeOfDayValue(key, category);
+	return nightWeight > 0.0f ? std::lerp(value, settingManager.GetValue<TimeOfDayValue>(key, category)[TimeOfDayValue::Night], nightWeight) : value;
+}
+
+/** @brief Colour counterpart of GetNightWeightedValue. */
+static float3 GetNightWeightedColor(SettingManager& settingManager, std::string_view key, std::string_view category, float nightWeight)
+{
+	const float3 value = settingManager.GetInterpolatedColorTimeOfDayValue(key, category);
+	return nightWeight > 0.0f ? float3::Lerp(value, settingManager.GetValue<ColorTimeOfDayValue>(key, category)[ColorTimeOfDayValue::Night], nightWeight) : value;
+}
+
 void Effects11::OverrideWeather(RE::Sky* a_sky)
 {
 	if (!a_sky) {
@@ -443,10 +457,14 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 		}
 		dirLightColorF3 *= sunlightScale;
 
-		dirLightColorF3 = Curve(dirLightColorF3, settingManager.GetInterpolatedTimeOfDayValue("DirectLightingCurve", "ENVIRONMENT"));
-		dirLightColorF3 = Desaturation(dirLightColorF3, settingManager.GetInterpolatedTimeOfDayValue("DirectLightingDesaturation", "ENVIRONMENT"));
-		dirLightColorF3 = ColorFilter(dirLightColorF3, settingManager.GetInterpolatedColorTimeOfDayValue("DirectLightingColorFilter", "ENVIRONMENT"), settingManager.GetInterpolatedTimeOfDayValue("DirectLightingColorFilterAmount", "ENVIRONMENT"));
-		dirLightColorF3 = Intensity(dirLightColorF3, settingManager.GetInterpolatedTimeOfDayValue("DirectLightingIntensity", "ENVIRONMENT"));
+		// Sky Sync lights from the night sunlight colour once the sun sets, so grade it as night too
+		const float nightWeight = globals::features::skySync.GetLightNightWeight();
+		auto lightingValue = [&](std::string_view key) { return GetNightWeightedValue(settingManager, key, "ENVIRONMENT", nightWeight); };
+
+		dirLightColorF3 = Curve(dirLightColorF3, lightingValue("DirectLightingCurve"));
+		dirLightColorF3 = Desaturation(dirLightColorF3, lightingValue("DirectLightingDesaturation"));
+		dirLightColorF3 = ColorFilter(dirLightColorF3, GetNightWeightedColor(settingManager, "DirectLightingColorFilter", "ENVIRONMENT", nightWeight), lightingValue("DirectLightingColorFilterAmount"));
+		dirLightColorF3 = Intensity(dirLightColorF3, lightingValue("DirectLightingIntensity"));
 
 		dirLightColorF3 /= sunlightScale;
 
@@ -515,12 +533,16 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 		{
 			auto& moonColor = colors[(uint)RE::TESWeather::ColorTypes::kMoonGlare];
 
+			// Sky Sync tints the moons from night colours once the sun sets, so grade them towards night by the same weight
+			const float nightWeight = globals::features::skySync.GetMoonNightWeight();
+			auto moonValue = [&](std::string_view key) { return GetNightWeightedValue(settingManager, key, "SKY", nightWeight); };
+
 			auto moonColorF3 = NiToF3(moonColor);
 
-			moonColorF3 = Curve(moonColorF3, settingManager.GetInterpolatedTimeOfDayValue("MoonCurve", "SKY"));
-			moonColorF3 = Desaturation(moonColorF3, settingManager.GetInterpolatedTimeOfDayValue("MoonDesaturation", "SKY"));
-			moonColorF3 = ColorFilter(moonColorF3, settingManager.GetInterpolatedColorTimeOfDayValue("MoonColorFilter", "SKY"), 0.0f);
-			moonColorF3 = Intensity(moonColorF3, settingManager.GetInterpolatedTimeOfDayValue("MoonIntensity", "SKY"));
+			moonColorF3 = Curve(moonColorF3, moonValue("MoonCurve"));
+			moonColorF3 = Desaturation(moonColorF3, moonValue("MoonDesaturation"));
+			moonColorF3 = ColorFilter(moonColorF3, GetNightWeightedColor(settingManager, "MoonColorFilter", "SKY", nightWeight), 0.0f);
+			moonColorF3 = Intensity(moonColorF3, moonValue("MoonIntensity"));
 
 			moonColor = F3ToNi(moonColorF3);
 		}
