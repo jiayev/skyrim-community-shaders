@@ -98,6 +98,8 @@ cbuffer PerFrame : register(b0)
 
 		if (previewSDR > 0.5) {
 			// Crop preview lives in the SDR menu buffer: emit gamma 2.2 instead of PQ.
+			if (postProcessOutput)
+				compositedColorLinear = Color::BT2020ToBT709(compositedColorLinear);
 			finalColor = saturate(TransferFunctions::LinearToGamma22(max(0.0, compositedColorLinear)));
 		} else {
 			if (!postProcessOutput)
