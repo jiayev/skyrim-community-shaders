@@ -2525,8 +2525,12 @@ void EditorWindow::ExitPreviewMode()
 
 	// Only restore cursor if exiting from a flying state; FreeCameraLocked already has the cursor active
 	if (wasFlying) {
-		ImGui::GetIO().MousePos = savedMousePos;
-		ImGui::GetIO().WantSetMousePos = true;
+		ImGuiIO& io = ImGui::GetIO();
+		io.MousePos = savedMousePos;
+		io.WantSetMousePos = true;
+		// Mouse events are swallowed while flying, so ImGui may have missed button releases.
+		for (int button = 0; button < ImGuiMouseButton_COUNT; ++button)
+			io.AddMouseButtonEvent(button, false);
 	}
 }
 
