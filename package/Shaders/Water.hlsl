@@ -1175,7 +1175,9 @@ PS_OUTPUT main(PS_INPUT input)
 		{
 			uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
 			LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
-			if (LightLimitFix::IsLightIgnored(light) || light.lightFlags & LightLimitFix::LightFlags::Shadow) {
+			// Water has no engine shadow mask, so only shadow casters with a cached local shadow can light it.
+			const bool localShadow = light.lightFlags & LightLimitFix::LightFlags::LocalShadow;
+			if (LightLimitFix::IsLightIgnored(light) || ((light.lightFlags & LightLimitFix::LightFlags::ShadowCaster) && !localShadow)) {
 				continue;
 			}
 
@@ -1186,12 +1188,16 @@ PS_OUTPUT main(PS_INPUT input)
 
 			float3 normalizedLightDirection = normalize(lightDirection);
 
+			float lightShadow = 1.0;
+			[branch] if (localShadow)
+				lightShadow = LightLimitFix::GetLocalShadow(DepthSampler, light.localShadowIndex, input.WPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, normalizedLightDirection, false, Random::InterleavedGradientNoise(input.HPosition.xy, SharedData::FrameCount));
+
 			float3 H = normalize(normalizedLightDirection - viewDirection);
 			float HdotN = saturate(dot(H, normal));
 
 			const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
 			float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * pow(HdotN, FresnelRI.z) * light.fade;
-			specularLighting += lightColor * intensityMultiplier;
+			specularLighting += lightColor * intensityMultiplier * lightShadow;
 		}
 	}
 	specularColor += specularLighting * 3;
