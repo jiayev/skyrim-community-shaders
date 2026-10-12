@@ -898,6 +898,8 @@ namespace DCLF
 			trackedEntry->identity);
 		if (trackedEntry->actorOwned)
 			tables.actorObjects.push_back(objectId);
+		if (DecalSpanOf(tables.skinPartitions[objectId]) != DecalSpanOf(partitionMask))
+			NoteDecalChanged(objectId);  // T7e's blood decals: its slots follow its partitions (DecalSpanOf)
 		tables.skinPartitions[objectId] = partitionMask;
 		tables.skinLodPartitions[objectId] = r.skinLodWord;
 		if (!denseWalk) {
@@ -1278,6 +1280,9 @@ namespace DCLF
 		++stats.lightSkins;
 		if (tables.skinPartitions[slot] != a_result.skinPartitions || tables.skinLodPartitions[slot] != a_result.skinLodPartitions)
 			tables.NoteChange(slot, kChangeSkin | kChangeStructure);
+		// T7e's blood decals: a decal's slots follow its partitions (DecalSpanOf): ordered again when their span moves.
+		if (DecalSpanOf(tables.skinPartitions[slot]) != DecalSpanOf(a_result.skinPartitions))
+			NoteDecalChanged(slot);
 		tables.skinPartitions[slot] = a_result.skinPartitions;
 		tables.skinLodPartitions[slot] = a_result.skinLodPartitions;
 		++stats.skinned;
@@ -1589,32 +1594,6 @@ namespace DCLF
 		if (bucket != Tracked::kNoBucket)
 			++buckets[bucket];
 		a_tracked.bucket = bucket;
-	}
-
-	void SceneStore::ListFadeDependent(RE::BSGeometry* a_geometry, Tracked& a_tracked)
-	{
-		// Only a kept record needs the event: a per-frame one is written in full anyway, unless it only moves or only
-		// follows a switch.
-		const auto leaf = mirror.Leaf(a_geometry);  // T6b1b
-		// Since T1b only the fades-off verdict (Ineligible::Fading) reads the node in the walk: the fade and LOD level are the GPU's.
-		const auto* node = leaf.property && (!a_tracked.perFrame || a_tracked.lightTraits) && !ActiveToggles().fading ?
-		                       static_cast<const RE::BSFadeNode*>(leaf.property->fadeNode) :
-		                       nullptr;
-		if (node == a_tracked.fadeNode)
-			return;
-		UnlistFadeDependent(a_geometry, a_tracked);
-		if (node) {
-			fadeDependents[node].push_back(a_geometry);
-			a_tracked.fadeNode = node;
-		}
-	}
-
-	void SceneStore::UnlistFadeDependent(RE::BSGeometry* a_geometry, Tracked& a_tracked)
-	{
-		if (!a_tracked.fadeNode)
-			return;
-		Unlist(fadeDependents, a_tracked.fadeNode, a_geometry);
-		a_tracked.fadeNode = nullptr;
 	}
 
 	std::uint32_t SceneStore::PerFrameTraits(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const
@@ -2034,11 +2013,8 @@ namespace DCLF
 				entry.shadingInputs = r.shadingInputs;
 				StoreInputComponents(entry, *geometry);
 			}
-			ListFadeDependent(geometry, entry);
 			// A static's previous transform is its current one from its second update on: FrameValues samples its row again until
 			// then (T6b1a; the scene work reads no transform).
-		} else {
-			UnlistFadeDependent(geometry, entry);
 		}
 	}
 
@@ -2391,8 +2367,6 @@ namespace DCLF
 			++delta.full;
 			perFrameSet.clear();
 			pendingEvaluation.clear();
-			fadeChanged.clear();
-			fadeDependents.clear();
 			propertyChanged.clear();
 			HandBack(nodeChanged);
 			dirtyRoots.clear();
@@ -2406,7 +2380,6 @@ namespace DCLF
 				entry.perFrameListed = false;
 				entry.hiddenChain.clear();  // hiddenDependents cleared above: listed anew at classification
 				entry.bucket = Tracked::kNoBucket;
-				entry.fadeNode = nullptr;
 				entry.listedProperty = nullptr;
 				entry.listedAlpha = nullptr;
 			}
@@ -2450,16 +2423,6 @@ namespace DCLF
 			pendingEvaluation.clear();
 			ApplyFacePublications();
 			count(delta.pending);
-			for (const auto* node : fadeChanged) {
-				const auto dependents = fadeDependents.find(node);
-				if (dependents == fadeDependents.end())
-					continue;
-				for (auto* geometry : dependents->second)
-					if (const auto it = tracked.find(geometry); it != tracked.end())
-						Reclassify(it->first, it->second);
-			}
-			fadeChanged.clear();
-			count(delta.fade);
 			delta.propertyEvents += propertyChanged.size();
 			delta.nodeEvents += nodeChanged.size();
 			for (const void* key : propertyChanged) {

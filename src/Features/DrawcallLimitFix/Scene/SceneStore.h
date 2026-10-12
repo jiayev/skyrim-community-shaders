@@ -1613,6 +1613,12 @@ namespace DCLF
 			std::uint64_t waitingRequeued = 0;  // waiting slots taken again for a readiness source they wait on
 			std::uint64_t commitParityChecks = 0, commitParityDiffer = 0;  // CS_DCLF_SET_PARITY: full evaluations, slots that differed
 			std::string firstWaiting;
+			// T7e (CS_DCLF_SET_PARITY): first-person entries' slots the first-person view takes no part in (SetParticipation), the first.
+			std::uint64_t firstPersonExcluded = 0;
+			std::string firstFirstPersonExcluded;
+			// T7e (CS_DCLF_SET_PARITY): first-person slots that take part but are held out (not resident, not main-ready, pipelines), the first.
+			std::uint64_t firstPersonHeld = 0;
+			std::string firstFirstPersonHeld;
 		};
 		SetStats TakeSetStats() { return std::exchange(setStats, {}); }
 		/**
@@ -1643,16 +1649,6 @@ namespace DCLF
 		/** @brief PrimaryCull::MembershipWitness when the residents were last bound (BindByMembership). */
 		std::uint32_t BoundMembershipWitness() const { return membershipWitness; }
 		/**
-		 * @brief Any thread: a fade node's currentFade changed outside the engine's own writers (PrimaryCull's fade service), for
-		 * the fade watch (its dependents' Faded shadow verdicts).
-		 */
-		static void NoteFadeChanged(const RE::NiAVObject* a_fadeNode);
-		/**
-		 * @brief This thread's fade watch muted, or not again: the engine's fade functions run on a copy of a node
-		 * (FadeState::CheckPort) push nothing.
-		 */
-		static void MuteFadeEvents(bool a_muted);
-		/**
 		 * @brief PrimaryCull: the fade roots whose OnVisible DCLF services (the admitted, stood-in entries' roots; kFadeRootOwned),
 		 * as a whole set, on a new snapshot or an admission. A root newly owned is seeded again from its node, which the engine
 		 * kept until then.
@@ -1670,15 +1666,12 @@ namespace DCLF
 		}
 		void ApplyFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned);
 		/**
-		 * @brief Render thread: whether the fade node's state is the GPU's alone (a stood-in root, kFadeRootStoodIn): the engine
-		 * does not cull it, so its node keeps what the engine last left there, and a reader takes the GPU's state or the settled
-		 * one instead.
+		 * @brief Render thread: whether the fade node's state is the GPU's alone: every listed fade root is owned (FadeStateCS's state is
+		 * its members') and DCLF's alone to write (kFadeRootWritten, T7f checklist items 4-5), whatever the cut stands in for; no engine
+		 * OnVisible steps it, so its node holds the write-back's milestones, and a reader takes the GPU's state or the settled one instead.
+		 * The cut's set only marks the stood-in roots (kFadeRootStoodIn: T7b2's kAccumulated class).
 		 */
-		bool FadeOnGpu(const RE::NiAVObject* a_fadeNode) const
-		{
-			const auto it = a_fadeNode ? fadeRootOwned.find(a_fadeNode) : fadeRootOwned.end();
-			return it != fadeRootOwned.end() && it->second;
-		}
+		bool FadeOnGpu(const RE::NiAVObject* a_fadeNode) const { return a_fadeNode && tables.fadeRootIndex.contains(a_fadeNode); }
 		/**
 		 * @brief CS_DCLF_COVERAGE_PROBE, render thread, at a report: every tracked geometry the main pass leaves to the engine
 		 * for its technique, by technique, shadow verdict and record; and the light entries kept in the point lights' culls,
@@ -1695,13 +1688,6 @@ namespace DCLF
 		{
 			return static_cast<std::size_t>(std::count_if(fadeRootOwned.begin(), fadeRootOwned.end(), [](const auto& a_root) { return a_root.second; }));
 		}
-		/** @brief PrimaryCull: after frames the engine culled every entry (its OnVisible ran on the nodes), every owned root again from its node. */
-		void ReseedOwnedFadeRoots()
-		{
-			fadeReseedPosted.store(true, std::memory_order_release);
-			// T6b3d: no wake: the frame's next pass takes it.
-		}
-		void ApplyReseedOwnedFadeRoots();
 		/** @brief A listed fade root's row from its node again (a new generation: the GPU's state restarts from it), owned bits kept. */
 		void ReseedFadeRoot(const void* a_node);
 		/**
@@ -2082,7 +2068,6 @@ namespace DCLF
 			// skinned, a face shape, under a switch, or a controller or a non-fixed rigid body on its chain), so the
 			// delta walk evaluates it every frame; set at an evaluation that classified it, and kept. scheduledWalk:
 			// the walk that last scheduled it. bucket: the histogram bucket it is counted in (kNoBucket: none).
-			// fadeNode: the fade node it is listed under in fadeDependents.
 			bool perFrame = false;
 			bool perFrameListed = false;
 			// lightTraits: the entry is per frame only because it moves (kTraitMoves, kTraitRootMoves), follows a switch
@@ -2125,7 +2110,6 @@ namespace DCLF
 			std::uint32_t fullWalk = 0;  // the walk that must write it in full (an event, not the per-frame set)
 			std::uint8_t bucket = kNoBucket;
 			std::uint32_t scheduledWalk = 0;
-			const RE::BSFadeNode* fadeNode = nullptr;
 			static constexpr std::uint8_t kNoBucket = 0xFF;
 		};
 		/**
@@ -2160,6 +2144,12 @@ namespace DCLF
 		 * switch child), keeps the entry in.
 		 */
 		bool PrimaryEntryAllows(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const;
+		/**
+		 * @brief The primary verdict a sun candidate's geometry row carries (SunCandidates::primaryGeometry): 1 when PrimaryEntryAllows, 2
+		 * (T7f item 8) for a hidden static's geometry, which nobody draws while hidden and whose unhiding is an event
+		 * that changes this verdict (so its entry is planned again), 0 otherwise (the engine's).
+		 */
+		std::uint8_t PrimaryVerdict(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const;
 		void MarkSunEntryDirty(const RE::NiAVObject* a_entry)
 		{
 			if (a_entry)
@@ -2396,6 +2386,10 @@ namespace DCLF
 			std::array<std::string, static_cast<std::size_t>(MirrorRead::kCount)> first;
 		};
 		mutable MirrorReadStats mirrorReads;
+		// T7e (CS_DCLF_SET_PARITY): entries whose mirror chain reaches the first-person root while they are filed under another category
+		// node (ClassifyFrame): the first-person view never takes them (FirstPersonSlot). Counted from the evaluations' threads.
+		mutable std::atomic<std::uint64_t> firstPersonMisfiled{ 0 };
+		mutable std::atomic<const void*> firstPersonMisfiledGeometry{ nullptr }, firstPersonMisfiledCategory{ nullptr };
 		/**
 		 * @brief T6b3e: where this thread counts its mirror reads: an evaluation chunk's counters (EvalCounters::mirror, installed by its
 		 * ShardScope, merged in chunk order), else the store's. Every count goes through MirrorReads().
@@ -2746,8 +2740,24 @@ namespace DCLF
 
 		/** @brief A cheap hash of everything RefreshCategoryNodes reads to find category nodes. */
 		std::uint64_t CategorySignature() const;
-		// a_accumulated: the frame's registered pass, whose captured fade state then stands in for the live one.
-		Ineligible ClassifyFrame(const Tracked& a_tracked, const AccumulatedPass* a_accumulated = nullptr) const;
+		Ineligible ClassifyFrame(const Tracked& a_tracked) const;
+		/**
+		 * @brief CS_DCLF_BILLBOARDS: the face mode (0-5) of the one NiBillboardNode between a Billboard-parented leaf and its category node,
+		 * when DCLF draws the leaf turned on the GPU (Billboards.h): a BSEffectShaderProperty BSTriShape without a skin, one billboard node
+		 * on the mirror's chain, a mode NiBillboardNode knows; -1 otherwise (the leaf stays Ineligible::Billboard).
+		 */
+		std::int32_t BillboardModeOf(const Tracked& a_tracked) const;
+		/**
+		 * @brief T7f item 7 (CS_DCLF_FIRST_PERSON_DECALS): a decal of a first-person entry (an effect's: a skinned blood decal on the arms; a
+		 * Lighting one: a weapon's BloodLighting) made a
+		 * forward object of the first-person forward part (the engine's first-person accumulator draws it in a decal group after its opaque
+		 * passes; DCLF draws it after the first-person opaque buckets, sorted with the forward members): no Deferred (the first-person draws are
+		 * forward draws after the composite),
+		 * its group's blend mode (the alpha property applied in the blended group alone), depth tested, written by the opaque group alone (depth
+		 * modes 3 and 1), and the group's depth bias (forwardDecalGroup). The main view never draws a first-person entry, so no decal group
+		 * is left empty by it. Anything else is left as derived.
+		 */
+		void FirstPersonDecalForward(const Tracked& a_tracked, LightingDescriptors& a_descriptors) const;
 		/**
 		 * @brief Whether a node is hidden for the walk's views: the frame's capture for the nodes whose kHidden bit the engine
 		 * flips while the asynchronous walk runs (FrameGlobals::cullHidden, taken on the render thread just before the walk is
@@ -3132,7 +3142,6 @@ namespace DCLF
 		static constexpr std::uint64_t kNoFadeRootsSent = ~0ull;
 		std::atomic<std::uint64_t> fadeRootsSentPosted{ kNoFadeRootsSent };
 		LatestSlot<std::vector<SceneStore::OwnedFadeRoot>> fadeOwnedPosted;
-		std::atomic<bool> fadeReseedPosted{ false };
 		/** @brief The coordinator, first in its scene pass: what the render thread posted for it since (above), applied in that order. */
 		void TakeCoordinatorInputs();
 		// The frame's pipeline blocks for the coordinator (step 6e A): posted by the render thread (PostPipelineConstants) through a
@@ -3431,7 +3440,6 @@ namespace DCLF
 		 *
 		 * - the per-frame objects (Tracked::perFrame), every frame;
 		 * - new entries, and entries something marked (pendingEvaluation);
-		 * - the dependents of a fade node whose currentFade changed (FadeWatch, fadeDependents);
 		 * - the dependents of a shader or alpha property whose flags, material or controllers changed
 		 *   (propertyDependents), classified again;
 		 * - the entries under a node Havok moved or gave a controller, and the dependents of every sun entry node
@@ -3666,8 +3674,6 @@ namespace DCLF
 			TrackedDelta& a_delta) const;
 		void StoreInputComponents(Tracked& a_tracked, const RE::BSGeometry& a_geometry);
 		void MoveBucket(Tracked& a_tracked, Ineligible a_bucket);
-		void ListFadeDependent(RE::BSGeometry* a_geometry, Tracked& a_tracked);
-		void UnlistFadeDependent(RE::BSGeometry* a_geometry, Tracked& a_tracked);
 		/**
 		 * @brief Scene membership: binds the bind queue's records from passes built from the objects (PrimaryCull::MembershipPass),
 		 * as residents, which the engine's registrations and the lapse leave alone until the record is written again.
@@ -4081,7 +4087,6 @@ namespace DCLF
 		bool slotsFreedThisFrame = true;
 		// The decals given an ordinal last frame, whose decalOrdinal entries are reset this frame.
 		std::vector<std::uint32_t> decalOrdered;
-		std::vector<const RE::BSFadeNode*> fadeChanged;  // FadeWatch's, applied at ApplyEvents
 		// SetFadeRootsOwned's set (kFadeRootOwned), by node: whether each is stood in (kFadeRootStoodIn).
 		ankerl::unordered_dense::map<const void*, bool> fadeRootOwned;
 		/**
@@ -4089,7 +4094,6 @@ namespace DCLF
 		 * stood-in state changes is reported to the fade watch: its dependents' shadow verdicts read its fade from elsewhere.
 		 */
 		void MarkFadeRootOwned(const void* a_node, bool a_owned, bool a_standIn);
-		ankerl::unordered_dense::map<const RE::BSFadeNode*, std::vector<RE::BSGeometry*>> fadeDependents;
 		// The structural events (SceneEvents in SceneStore.cpp), applied at ApplyEvents: properties by key, nodes held.
 		std::vector<const void*> propertyChanged;
 		std::vector<RE::NiPointer<RE::NiAVObject>> nodeChanged;
@@ -4590,8 +4594,6 @@ namespace DCLF
 		std::uint32_t publishedSunGeneration = 0;  // render thread: the newest publication's sun generation as the frame took it
 		std::vector<const RE::BSGeometry*> setGeometry;  // parallel to objects: the geometry a base member is published under
 		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> setMemberSlot;  // published geometry -> its slot
-		// Members whose registration met a fade DCLF does not model (PassCapture::TakeUnmodelledFades): out of the set until it ends.
-		ankerl::unordered_dense::set<const RE::BSGeometry*> setFadeHeld;
 		LogCursor setCursor;
 		// The readiness sources a waiting slot may wait on (SetWaitCause bits by index), and their stamps as the waiting slots were last
 		// checked against: the lookups' versions, the shadow lookups' generation, the constants' stamp, the scene buffers' fit serial.
@@ -4687,7 +4689,7 @@ namespace DCLF
 		struct DeltaStats
 		{
 			std::uint32_t walks = 0, full = 0;
-			std::uint64_t evaluated = 0, perFrame = 0, pending = 0, property = 0, node = 0, roots = 0, fade = 0, geometryDirty = 0, restored = 0, moved = 0, kept = 0;
+			std::uint64_t evaluated = 0, perFrame = 0, pending = 0, property = 0, node = 0, roots = 0, geometryDirty = 0, restored = 0, moved = 0, kept = 0;
 			std::uint64_t propertyEvents = 0, nodeEvents = 0, reread = 0;
 			std::uint64_t facePublished = 0, faceUpdated = 0, faceWritten = 0;
 			std::uint64_t switchEvents = 0, switchChanges = 0, switchCatchUps = 0, switchReclassified = 0, attachCatchUps = 0;

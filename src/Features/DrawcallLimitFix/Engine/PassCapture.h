@@ -51,7 +51,6 @@ namespace DCLF
 			std::uint32_t technique = 0;                 // techniqueID, the batch group's key
 			std::uint32_t subPass = 0;                   // derived; see SubPassOf
 			std::uint32_t passEnum = 0;
-			bool fading = false;                         // FadingAtRegistration
 			bool withheld = false;                       // kept from the batch renderer (Withhold)
 			std::uint8_t fadeState = 0xFF;               // the fade node's LOD state (+0x153) at registration, 0xFF without one
 			std::uint8_t hint = 0;                       // accumulationHint
@@ -67,11 +66,8 @@ namespace DCLF
 			std::array<std::uint32_t, 3> shadowWithheld{};
 			std::uint32_t volumetricWithheld = 0;  // volumetric-only passes (hint 8) kept out of batch group 15
 			std::uint32_t directWithheld = 0;      // shadow passes of hints 11, 7 and 3, which bypass RegisterPass too
-			// The main camera's views: a member's passes withheld; a member's LOD cross-fade copy (hint 10) and its fades DCLF does
-			// not model, left to the engine.
-			std::uint32_t mainWithheld = 0, mainCrossfadeCopies = 0, mainUnmodelledFades = 0;
-			// Since the last report (TakeFadeTotals): the frames' cross-fade copies and unmodelled fades, summed.
-			std::uint64_t crossfadeTotal = 0, unmodelledTotal = 0;
+			// The main camera's views: a member's passes withheld.
+			std::uint32_t mainWithheld = 0;
 			std::uint32_t occlusionWithheld = 0;  // the occlusion maps' registrations: members' passes withheld
 			std::uint32_t treeLodWithheld = 0;    // tree LOD's passes into the main camera's views, while DCLF draws it
 			// The water reflection's faces: reflection-phase members' passes, and tree LOD's while DCLF draws the faces' tree LOD.
@@ -176,17 +172,6 @@ namespace DCLF
 			const auto renderers = std::atomic_load(&mainRenderers);
 			return renderers && renderers->contains(a_batch);
 		}
-		/** @brief Report thread: the cross-fade copies and unmodelled fades summed since the last call (Stats::crossfadeTotal, unmodelledTotal). */
-		std::pair<std::uint64_t, std::uint64_t> TakeFadeTotals() { return { std::exchange(stats.crossfadeTotal, 0), std::exchange(stats.unmodelledTotal, 0) }; }
-		/**
-		 * @brief The geometries whose main-camera registration met a fade DCLF does not model since the last call (render thread,
-		 * SceneStore::CommitSet): their passes went to the engine, and they leave the set until the fade ends.
-		 */
-		template <class F>
-		void TakeUnmodelledFades(F&& a_visit)
-		{
-			unmodelledFades.Drain([&](auto&& a_geometry) { a_visit(a_geometry); });
-		}
 		/**
 		 * @brief The occlusion map whose scene the engine registers next (Precipitation::SetupMask, render mode 0x1C), as its phase
 		 * (kSetOccluderSky, kSetOccluderPrecipitation), or 0 when nothing of it is withheld (DCLF does not draw the map this frame).
@@ -220,16 +205,6 @@ namespace DCLF
 		 * passes it built. SunAccumulation's probe reads it.
 		 */
 		static std::uint32_t PassesOnThisThread();
-		/**
-		 * @brief Whether the pass is one DCLF leaves to the native loop because of a fade, as it is registered:
-		 * any accumulation hint 10 (the stencil-dithered fade, and a LOD cross-fade's copy of the old level), a
-		 * fade the engine draws blended (hint 9), or any fade with CS_DCLF_FADING off. A screen-door fade in an
-		 * opaque group is DCLF's, and so is a LOD cross-fade's own pass (the new level). The cull
-		 * has just updated the fade (BSFadeNode::OnVisible runs before the node's geometry registers), and this
-		 * is the one value both the withholding and the accumulate phase's fading verdict use
-		 * (AccumulatedPass::fading).
-		 */
-		static bool FadingAtRegistration(const RE::BSRenderPass* a_pass);
 
 		/** @brief Takes everything registered since the last call; render thread only. */
 		std::span<const Entry> Drain();
@@ -294,7 +269,7 @@ namespace DCLF
 		std::array<std::atomic<std::uint32_t>, kShadowModes> shadowWithheld{};
 		std::atomic<std::uint32_t> volumetricWithheld{ 0 };
 		std::atomic<std::uint32_t> directWithheld{ 0 };
-		std::atomic<std::uint32_t> mainWithheld{ 0 }, mainCrossfadeCopies{ 0 }, mainUnmodelledFades{ 0 }, occlusionWithheld{ 0 };
+		std::atomic<std::uint32_t> mainWithheld{ 0 }, occlusionWithheld{ 0 };
 		std::atomic<std::uint32_t> treeLodWithheld{ 0 };
 		std::atomic<std::uint32_t> forwardRegistered{ 0 };  // T7d (TakeForwardRegistered)
 		std::atomic<std::uint32_t> refractionRegistered{ 0 };  // T7d's refraction (TakeRefractionRegistered)
@@ -323,10 +298,9 @@ namespace DCLF
 		const void* firstPersonAccumulator = nullptr;
 		std::atomic<bool> firstPersonCovered{ false };
 		std::atomic<std::uint32_t> firstPersonWithheld{ 0 }, firstPersonMemberKept{ 0 }, firstPersonRegistered{ 0 };
-		EventQueue<const RE::BSGeometry*, 1024> unmodelledFades;
 		/**
 		 * @brief The main-view test at every insertion point: true when the pass is a member's, into one of the main camera's views,
-		 * and not one the engine keeps (a cross-fade's copy of the old level, a fade DCLF does not model).
+		 * (every pass of it: T1c draws its fades and its LOD cross-fade's copy).
 		 */
 		bool WithholdMain(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass);
 		template <std::uint32_t Group>
@@ -346,9 +320,9 @@ namespace DCLF
 
 		struct Hook;
 		friend struct Hook;
-		void Record(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint32_t a_technique, bool a_fading, bool a_withheld);
+		void Record(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint32_t a_technique, bool a_withheld);
 		/** @brief CS_DCLF_CENSUS (T7a): a pass the hook hands on to the engine, noted for the census (RegistrationCensus::Note). */
-		void NoteKept(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint8_t a_site, bool a_fading, std::uint8_t a_occlusionPhase = 0) const;
-		bool Withhold(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, bool a_fading);
+		void NoteKept(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint8_t a_site, std::uint8_t a_occlusionPhase = 0) const;
+		bool Withhold(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass);
 	};
 }

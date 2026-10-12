@@ -148,6 +148,7 @@ namespace DCLF
 			std::uint64_t generation = 0;
 			std::uint32_t sceneFrame = ~0u;
 			std::shared_ptr<const GraphKeys> graph;  // null: no walk this frame
+			std::uint32_t graphAge = 0;              // sets published since the walk's graph (or its absence) last changed: 0 at a change
 			Keys current;
 			Keys previous;  // the previous set's current (the parity's frame alignment)
 

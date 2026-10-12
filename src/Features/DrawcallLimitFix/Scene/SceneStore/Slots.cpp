@@ -434,7 +434,6 @@ namespace DCLF
 		if (const auto it = tracked.find(a_geometry); it != tracked.end()) {
 			ReleaseObjectSlot(it->second);
 			MoveBucket(it->second, Ineligible::Count);
-			UnlistFadeDependent(it->first, it->second);
 			UnlistDependents(it->first, it->second, true);
 			UnlistFaceShape(it->first, it->second);
 			// T6b5: off its LOD gate (an outgoing block's geometries leave here, by their detach after the flip).

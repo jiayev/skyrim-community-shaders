@@ -1984,6 +1984,10 @@ namespace DCLF
 		auto set = std::make_shared<VisibleSet>();
 		set->generation = visibleGeneration.load(std::memory_order_relaxed) + 1;
 		set->sceneFrame = frame.sceneFrame;
+		// A cell change (another graph, or none): the engine's map may still hold the last graph's keys for a frame (the parity's aside).
+		const void* graphNow = graph ? graphKeys->graph : nullptr;
+		const void* graphBefore = visibleOwned && visibleOwned->graph ? visibleOwned->graph->graph : nullptr;
+		set->graphAge = visibleOwned && graphNow == graphBefore ? std::min(visibleOwned->graphAge + 1, 1000u) : 0u;
 		if (visibleOwned)
 			set->previous = visibleOwned->current;
 		if (graph) {

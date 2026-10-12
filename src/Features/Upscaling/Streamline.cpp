@@ -1,4 +1,5 @@
 #include "Streamline.h"
+#include "Features/DrawcallLimitFix/Diagnostics/TargetDump.h"
 
 #include "DXVKInterop.h"
 
@@ -912,6 +913,13 @@ static bool cs_BuildConstants(sl::Constants& a_consts, uint32_t a_outputWidth, u
 			}
 		}
 	}
+	// CS_DCLF_TARGET_DUMP's frames: the constants, to compare a good frame with a corrupt one (dclf-open-defects.md, the inn).
+	if (DCLF::TargetDump::Armed())
+		logger::info("[Streamline] dump constants: posAdj ({:.3f} {:.3f} {:.3f}) prev ({:.3f} {:.3f} {:.3f}); near {} far {} fov {}; viewToClip [{:.4f} {:.4f} {:.4f} {:.4f} | {:.4f} {:.4f}]; curVP r0 [{:.5f} {:.5f} {:.5f} {:.5f}] r3 [{:.5f} {:.5f} {:.5f} {:.5f}]; prevVP r0 [{:.5f} {:.5f} {:.5f} {:.5f}] r3 [{:.5f} {:.5f} {:.5f} {:.5f}]; clipToPrevClip diag [{:.5f} {:.5f} {:.5f} {:.5f}] row3 [{:.5f} {:.5f} {:.5f}]; jitter ({:.4f} {:.4f}); finite {}",
+			posAdj.x, posAdj.y, posAdj.z, prevPosAdj.x, prevPosAdj.y, prevPosAdj.z, a_consts.cameraNear, a_consts.cameraFar, a_consts.cameraFOV, cameraViewToClip._11, cameraViewToClip._22,
+			cameraViewToClip._33, cameraViewToClip._34, cameraViewToClip._43, cameraViewToClip._44, curVP._11, curVP._12, curVP._13, curVP._14, curVP._41, curVP._42, curVP._43, curVP._44,
+			prevVP._11, prevVP._12, prevVP._13, prevVP._14, prevVP._41, prevVP._42, prevVP._43, prevVP._44, clipToPrevClip._11, clipToPrevClip._22, clipToPrevClip._33,
+			clipToPrevClip._44, clipToPrevClip._41, clipToPrevClip._42, clipToPrevClip._43, a_jitterX, a_jitterY, reprojectionFinite);
 	a_consts.clipToPrevClip = *reinterpret_cast<const sl::float4x4*>(&clipToPrevClip);
 	a_consts.prevClipToClip = *reinterpret_cast<const sl::float4x4*>(&prevClipToClip);
 

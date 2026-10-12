@@ -1,5 +1,6 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Internal.h"
+#	include "Features/DrawcallLimitFix/Diagnostics/TargetDump.h"
 
 namespace DCLF
 {
@@ -114,6 +115,7 @@ namespace DCLF
 
 	void IndirectDraws::ProbeTargets(const char* a_label)
 	{
+		TargetDump::Point(a_label);
 		impl->ProbeGBuffer(a_label);
 	}
 
@@ -238,8 +240,10 @@ namespace DCLF
 		// groups, and skinned ones), its material records, its pipelines.
 		{
 			const auto& tables = SceneStore::Get().GetTables();
-			std::uint32_t members = 0, forwardMembers = 0, materials = 0, lit = 0, decals = 0, skinned = 0;
-			for (const auto& object : tables.objects) {
+			std::uint32_t members = 0, forwardMembers = 0, materials = 0, lit = 0, decals = 0, skinned = 0, opaque = 0;
+			std::string firstOpaque;
+			for (std::size_t o = 0; o < tables.objects.size(); ++o) {
+				const auto& object = tables.objects[o];
 				if ((object.flags & (kObjectFree | kObjectNoBindings)) || !(object.flags & kObjectMember))
 					continue;
 				forwardMembers += (object.flags & kObjectForward) ? 1u : 0u;
@@ -247,6 +251,14 @@ namespace DCLF
 					++members;
 					lit += (tables.pipelines[object.pipelineIndex].passDescriptor & EffectFlag::Lighting) ? 1u : 0u;  // the Lighting variant
 					decals += ObjectDecalGroup(object.flags) ? 1u : 0u;
+					// T7f item 7: an opaque effect (CS_DCLF_OPAQUE_EFFECTS) is decal group 1's with the opaque write mode, 1 (a decal's is 10 or 11).
+					const auto rasterFlags = tables.pipelines[object.pipelineIndex].rasterFlags;
+					if (RasterDecalGroup(rasterFlags) == 1 && RasterWriteMode(rasterFlags) == 1 && opaque++ == 0 && o < tables.objectGeometry.size() && tables.objectGeometry[o]) {
+						const auto* geometry = tables.objectGeometry[o];
+						firstOpaque = fmt::format("; first opaque: '{}' at ({:.0f}, {:.0f}, {:.0f}), raster flags {:#x}, pass {:#x}", geometry->name.c_str() ? geometry->name.c_str() : "",
+							geometry->world.translate.x, geometry->world.translate.y, geometry->world.translate.z, rasterFlags,
+							tables.pipelines[object.pipelineIndex].passDescriptor);
+					}
 					// T7e: a particle member's block is its quads', not a skin's palette.
 					skinned += (object.flags & kObjectSkinned) && !(tables.pipelines[object.pipelineIndex].passDescriptor & EffectFlag::Particles) ? 1u : 0u;
 				}
@@ -256,9 +268,9 @@ namespace DCLF
 			const auto pipelines = DrawPipelines::Get().GetStats();
 			if (members || materials || pipelines.effectRequested || ActiveToggles().effects)
 				text += fmt::format("[DCLF] effects (T7d's Effect port, CS_DCLF_EFFECTS {}): {} members bound ({} the Lighting variant, {} decals, {} skinned; {} forward "
-									"members in all), {} effect materials in use; pipelines {} requested, {} ready, {} failed{}\n",
-					ActiveToggles().effects ? "on" : "off", members, lit, decals, skinned, forwardMembers, materials, pipelines.effectRequested, pipelines.effectReady,
-					pipelines.effectFailed, pipelines.effectFailed ? " <- EFFECT PIPELINE FAILED" : "");
+									"members in all; {} opaque, hint 0, in decal group 1), {} effect materials in use; pipelines {} requested, {} ready, {} failed{}{}\n",
+					ActiveToggles().effects ? "on" : "off", members, lit, decals, skinned, forwardMembers, opaque, materials, pipelines.effectRequested, pipelines.effectReady,
+					pipelines.effectFailed, pipelines.effectFailed ? " <- EFFECT PIPELINE FAILED" : "", firstOpaque);
 			// CS_DCLF_SET_PARITY: the members' Lighting-variant passes the engine registered, against the sun light the port reads as their light 0.
 			if (const auto [checked, other] = PassCapture::Get().TakeEffectLight(); checked)
 				text += fmt::format("[DCLF] effects' Lighting variant (CS_DCLF_SET_PARITY): {} engine passes of members checked, {} with a light 0 other than the sun "
@@ -1083,6 +1095,21 @@ namespace DCLF
 				a_out.vs[kPerFrameVertexRegister].assign(bytes, bytes + sizeof(cached));
 			if (a_out.ps[kPerFrameVertexRegister].empty())
 				a_out.ps[kPerFrameVertexRegister].assign(bytes, bytes + sizeof(cached));
+		}
+		{  // BBTEMP (billboard agent): the packed VS b12's camera rows against the scene graph camera.
+			static std::atomic<std::uint32_t> bbCount{ 0 };
+			const auto& vsBlock = a_out.vs[kPerFrameVertexRegister];
+			if (vsBlock.size() >= 168 * sizeof(float) && bbCount.fetch_add(1) % 150 == 0) {
+				const auto* v = reinterpret_cast<const float*>(vsBlock.data());
+				const auto* sceneGraph = *reinterpret_cast<const std::byte* const*>(REL::Module::get().base() + 0x338c8e8);
+				const auto* camera = sceneGraph ? *reinterpret_cast<const RE::NiCamera* const*>(sceneGraph + 0x128) : nullptr;
+				const auto& r = camera ? camera->world.rotate.entry : RE::NiMatrix3{}.entry;
+				logger::info("[DCLF] BBTEMP {} pack (replay {}): c0 {:.3f} {:.3f} {:.3f} {:.3f} c1 {:.3f} {:.3f} {:.3f} c2 {:.3f} {:.3f} {:.3f} c8 {:.3f} {:.3f} {:.3f} {:.3f} c40 {:.1f} {:.1f} {:.1f}; "
+							 "camera right {:.3f} {:.3f} {:.3f} up {:.3f} {:.3f} {:.3f} forward {:.3f} {:.3f} {:.3f} eye {:.1f} {:.1f} {:.1f}",
+					a_depthOnly ? "z-prepass" : "colour", replayVertexInputs, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[8], v[9], v[10], v[32], v[33], v[34], v[35], v[160], v[161],
+					v[162], r[0][2], r[1][2], r[2][2], r[0][1], r[1][1], r[2][1], r[0][0], r[1][0], r[2][0], camera ? camera->world.translate.x : 0.0f,
+					camera ? camera->world.translate.y : 0.0f, camera ? camera->world.translate.z : 0.0f);
+			}
 		}
 
 		// b5 is Community Shaders' own SharedData, written through its ConstantBuffer helper rather than

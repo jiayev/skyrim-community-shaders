@@ -55,34 +55,7 @@ namespace DCLF
 		return subPass;
 	}
 
-	bool PassCapture::FadingAtRegistration(const RE::BSRenderPass* a_pass)
-	{
-		const auto* geometry = a_pass ? a_pass->geometry : nullptr;
-		if (!geometry)
-			return false;
-		// Accumulation hint 10 (BSLightingShader::SetupGeometry: stencil mode 0xB, reference fade * 31; a LOD cross-fade's
-		// single-level copy with MaterialData.z scaled by the cross-fade factor) is DCLF's since T1c, while fades and cross-fades are.
-		if (a_pass->accumulationHint == 10)
-			return !(ActiveToggles().lodCrossfade && ActiveToggles().fading);
-		const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
-		const auto* fadeNode = property ? property->fadeNode : nullptr;
-		if (!fadeNode)
-			return false;
-		const auto& fade = fadeNode->GetRuntimeData();
-		// Every fade is DCLF's while CS_DCLF_FADING is on (T1c): the draw's alpha takes its root's FadeStateCS fade, a decal's
-		// (hints 2 and 3) included. A blended fade (hint 9, drawn blended after the composite) is drawn in its opaque group with
-		// that alpha: an approximation, untested (no blended fade occurs in the measured load order).
-		if (fade.currentFade < 1.0f && !ActiveToggles().fading)
-			return true;
-		// A LOD cross-fade (kMeshLOD, fade node LOD state +0x153 & 0x70 not 0x20) is not a fade of the object:
-		// GetRenderPasses (AE 1414adfb0) keeps its pass as it is - the new level, drawn as any settled object
-		// is - and adds the old level as a hint-10 copy, which is the native loop's (above). DCLF keeps the
-		// object through the crossing and the native loop draws only the copy (CS_DCLF_LOD_CROSSFADE); off,
-		// the whole object is the native loop's until the crossing ends.
-		return !ActiveToggles().lodCrossfade && geometry->GetFlags().any(RE::NiAVObject::Flag::kMeshLOD) && (fade.unk153 & 0x70) != 0x20;
-	}
-
-	void PassCapture::Record(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint32_t a_technique, bool a_fading, bool a_withheld)
+	void PassCapture::Record(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint32_t a_technique, bool a_withheld)
 	{
 		if (!a_pass || !a_pass->geometry || !a_pass->shader)
 			return;
@@ -102,7 +75,7 @@ namespace DCLF
 		}
 		auto* property = a_pass->geometry->GetGeometryRuntimeData().shaderProperty.get();
 		entries[slot] = Entry{ a_pass->geometry, a_pass, a_batch, a_technique,
-			SubPassOf(a_pass->geometry, property ? property->flags.underlying() : 0ull), a_pass->passEnum, a_fading, a_withheld,
+			SubPassOf(a_pass->geometry, property ? property->flags.underlying() : 0ull), a_pass->passEnum, a_withheld,
 			property && property->fadeNode ? property->fadeNode->GetRuntimeData().unk153 : std::uint8_t{ 0xFF }, static_cast<std::uint8_t>(a_pass->accumulationHint) };
 	}
 
@@ -120,10 +93,6 @@ namespace DCLF
 		stats.treeLodWithheld = treeLodWithheld.exchange(0, std::memory_order_relaxed);
 		stats.reflectionWithheld = reflectionWithheld.exchange(0, std::memory_order_relaxed);
 		stats.reflectionTreeLodWithheld = reflectionTreeLodWithheld.exchange(0, std::memory_order_relaxed);
-		stats.mainCrossfadeCopies = mainCrossfadeCopies.exchange(0, std::memory_order_relaxed);
-		stats.mainUnmodelledFades = mainUnmodelledFades.exchange(0, std::memory_order_relaxed);
-		stats.crossfadeTotal += stats.mainCrossfadeCopies;
-		stats.unmodelledTotal += stats.mainUnmodelledFades;
 		stats.occlusionWithheld = occlusionWithheld.exchange(0, std::memory_order_relaxed);
 		lastDrain = { entries.data(), count };
 		return lastDrain;
@@ -199,23 +168,8 @@ namespace DCLF
 		}
 		if (!(phases & kSetMain))
 			return false;
-		// A LOD cross-fade's copy (hint 10): DCLF draws it (T1c: the copy partitions BuildDraws adds while the root crosses), unless
-		// cross-fades are the engine's (CS_DCLF_LOD_CROSSFADE=0) or fades are (CS_DCLF_FADING=0).
-		if (a_pass->accumulationHint == 10) {
-			mainCrossfadeCopies.fetch_add(1, std::memory_order_relaxed);
-			if (ActiveToggles().lodCrossfade && ActiveToggles().fading) {
-				mainWithheld.fetch_add(1, std::memory_order_relaxed);
-				return true;
-			}
-			return false;
-		}
-		// A fade DCLF does not model (with fades off): the engine draws it, and the member leaves the set at the next commit until
-		// the fade ends (SceneStore::CommitSet). With fades on every fade is DCLF's (T1c: the draw's alpha takes the GPU's fade).
-		if (FadingAtRegistration(a_pass)) {
-			unmodelledFades.Push(a_pass->geometry);
-			mainUnmodelledFades.fetch_add(1, std::memory_order_relaxed);
-			return false;
-		}
+		// Every pass of a member, a fade's and a LOD cross-fade's hint-10 copy of the old level included: DCLF draws them (T1c: the
+		// draw's alpha takes its root's FadeStateCS fade, and BuildDraws adds the copy partitions while the root crosses).
 		mainWithheld.fetch_add(1, std::memory_order_relaxed);
 		return true;
 	}
@@ -352,13 +306,12 @@ namespace DCLF
 		return set && (set->drawn & phase) ? set : nullptr;
 	}
 
-	bool PassCapture::Withhold(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, bool a_fading)
+	bool PassCapture::Withhold(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass)
 	{
 		if (!a_pass || !a_pass->geometry)
 			return false;
 		// A shadow view's renderers (the focus views' among them, T3c): the set's casters. A pass into any other renderer
 		// (reflections, cubemaps) is never withheld; the main camera's are WithholdMain's.
-		(void)a_fading;
 		// The parity's membership check: what the engine registers into a covered focus view against DCLF's rule (its target's fade root).
 		if (SunViews::ParityEnabled())
 			if (const auto focus = std::atomic_load(&focusRenderers); focus && !focus->empty())
@@ -373,13 +326,13 @@ namespace DCLF
 		return false;
 	}
 
-	void PassCapture::NoteKept(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint8_t a_site, bool a_fading, std::uint8_t a_occlusionPhase) const
+	void PassCapture::NoteKept(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint8_t a_site, std::uint8_t a_occlusionPhase) const
 	{
 		// The census's per-pass values, read here as the pass registers (the frame's end has neither the pass, a pooled object, nor
-		// these states): the fade verdict, and whether the reflection faces withhold now (WithholdReflection's own gates).
+		// these states): whether the reflection faces withhold now (WithholdReflection's own gates).
 		const bool face = reflectionFace.load(std::memory_order_acquire) && reflectionCovered.load(std::memory_order_acquire);
 		RegistrationCensus::Note(a_batch, a_pass, static_cast<RegistrationCensus::Site>(a_site),
-			static_cast<std::uint8_t>((a_fading ? RegistrationCensus::kFading : 0) | (face ? RegistrationCensus::kReflectionFace : 0)), a_occlusionPhase);
+			static_cast<std::uint8_t>(face ? RegistrationCensus::kReflectionFace : 0), a_occlusionPhase);
 	}
 
 	namespace
@@ -403,17 +356,15 @@ namespace DCLF
 				func(a_this, a_pass, a_techniqueID);
 				return;
 			}
-			// Per-frame state is read once, here, and both decisions below use it.
-			const bool fading = FadingAtRegistration(a_pass);
 			// Withholding is the whole of ownership: the pass is built, lit and shadowed exactly as before - only the batch
 			// renderer never receives it, so the native loop has nothing to draw. Everything the tables need is taken by Record.
-			const bool withheld = capture.WithholdMain(a_this, a_pass) || capture.WithholdReflection(a_this, a_pass) || capture.Withhold(a_this, a_pass, fading);
-			capture.Record(a_this, a_pass, a_techniqueID, fading, withheld);
+			const bool withheld = capture.WithholdMain(a_this, a_pass) || capture.WithholdReflection(a_this, a_pass) || capture.Withhold(a_this, a_pass);
+			capture.Record(a_this, a_pass, a_techniqueID, withheld);
 			LocalLightCull::NoteRegistration(a_this, a_pass, withheld);
 			if (withheld)
 				return;
 			if (RegistrationCensus::Enabled())
-				capture.NoteKept(a_this, a_pass, Census(RegistrationCensus::Site::RegisterPass), fading);
+				capture.NoteKept(a_this, a_pass, Census(RegistrationCensus::Site::RegisterPass));
 			func(a_this, a_pass, a_techniqueID);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -449,7 +400,7 @@ namespace DCLF
 			if (withheld)
 				return;
 			if (RegistrationCensus::Enabled() && !capture.bypassed.load(std::memory_order_acquire))
-				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::Volumetric), FadingAtRegistration(a_pass));
+				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::Volumetric));
 			func(a_batch, a_pass, a_group, a_arg);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -474,7 +425,7 @@ namespace DCLF
 			if (withheld)
 				return;
 			if (RegistrationCensus::Enabled() && !capture.bypassed.load(std::memory_order_acquire))
-				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::ShadowDirect), FadingAtRegistration(a_pass));
+				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::ShadowDirect));
 			func(a_batch, a_pass, a_group, a_arg);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -506,7 +457,7 @@ namespace DCLF
 			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdReflection(a_batch, a_pass))
 				return;
 			if (RegistrationCensus::Enabled() && !capture.bypassed.load(std::memory_order_acquire))
-				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::MainGroup), FadingAtRegistration(a_pass));
+				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::MainGroup));
 			func(a_batch, a_pass, a_group, a_arg);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -542,7 +493,7 @@ namespace DCLF
 			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdReflection(a_batch, a_pass))
 				return;
 			if (RegistrationCensus::Enabled() && !capture.bypassed.load(std::memory_order_acquire))
-				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::MainList), FadingAtRegistration(a_pass));
+				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::MainList));
 			func(a_batch, a_pass, a_list);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -566,7 +517,7 @@ namespace DCLF
 					return;
 				}
 			if (RegistrationCensus::Enabled() && !capture.bypassed.load(std::memory_order_acquire))
-				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::Occlusion), FadingAtRegistration(a_pass), phase);
+				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::Occlusion), phase);
 			func(a_batch, a_pass, a_group, a_arg);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

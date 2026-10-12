@@ -2,6 +2,7 @@
 
 #include "SunViews.h"
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -35,6 +36,21 @@ namespace DCLF
 		/** @brief Descriptor a_descriptor of a_light's views this frame, or null (the light not selected this frame). */
 		const SunViews::Cascade* CascadeOf(const RE::BSShadowLight* a_light, std::uint32_t a_descriptor, std::uint32_t a_sceneFrame) const;
 
+		/**
+		 * @brief T7f (SideEffects' actor rate): every view of the lights kept in scene frame a_sceneFrame (none when the views are older), with
+		 * its light's sphere (centre, radius: what a point light's paraboloid cull tests, its views having no planes).
+		 */
+		template <class F>
+		void ForEachView(std::uint32_t a_sceneFrame, F&& a_visit) const
+		{
+			if (sceneFrame != a_sceneFrame)
+				return;
+			for (const auto& light : lights)
+				for (const auto& view : light.views)
+					if (view.valid)
+						a_visit(view, light.sphere);
+		}
+
 		SunViews::Parity& GetParity() { return parity; }
 		/** @brief The parity's line (`<- LIGHT VIEW`), every 300 frames with local views; resets it. */
 		void Report();
@@ -46,6 +62,7 @@ namespace DCLF
 		{
 			const RE::BSShadowLight* light = nullptr;
 			std::vector<SunViews::Cascade> views;  // by descriptor
+			std::array<float, 4> sphere{};          // the light's position and radius (radius 0: none)
 		};
 		std::vector<Light> lights;  // this frame's, in the selection's order
 		std::uint32_t sceneFrame = ~0u;

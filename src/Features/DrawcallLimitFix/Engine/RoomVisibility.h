@@ -9,15 +9,19 @@ namespace DCLF::RoomVisibility
 	 * The engine answers whether a node (the parent, +0x30, of a reference's 3D) is in a room or portal the main camera sees, from
 	 * the portal-graph entry of the scene lists' first process (+0x30190): the managed-nodes update (FUN_1402b41a0, from
 	 * UpdateManagedNodesJob and UpdateAnimatedRefsJob), Actor::UpdateRefLight and the actor update FUN_140771520 call it, on job
-	 * threads. Its three calls are detoured only under CS_DCLF_ROOM_PARITY: the engine's answer is returned, and compared with
-	 * DCLF's (keys only, from the newest published set), the differences counted by kind and side. Without the switch nothing is
-	 * installed and PortalViews publishes no set.
+	 * threads. Its three calls are detoured (T7f checklist item 3):
+	 * - while DCLF runs (SetLive, Main::Update's entry) and a set is published, the call is answered from DCLF's VisibleSet
+	 *   (DclfAnswer) and the engine's function is not called; otherwise (DCLF off) the engine answers.
+	 * - CS_DCLF_ROOM_PARITY: the engine's answer is compared with DCLF's (keys only, from the newest published set), the differences
+	 *   counted by kind and side (the parity calls the engine's function whichever answer is returned).
 	 */
 	void Install();
 	bool Installed();
+	/** @brief The main thread at Main::Update's entry: whether DCLF runs this frame (DCLF answers only then). */
+	void SetLive(bool a_live);
 	/**
 	 * @brief DCLF's answer for a_key (the node the engine was given), from the newest VisibleSet: true without one. Any thread; reads
-	 * no engine memory. The hook point for T7f, when the engine's culls stop and the detour returns this instead.
+	 * no engine memory. The detour's answer.
 	 */
 	bool DclfAnswer(const void* a_key);
 	/** @brief The parity's line (`<- ROOM`), counters reset. Render thread: PortalViews::Build, every 300 published sets. */

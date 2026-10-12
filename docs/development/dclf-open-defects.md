@@ -133,6 +133,60 @@ console command switches the camera. To check:
     `changed with no event` 0;
 -   screenshots after each switch: no body in first person, a whole body in third.
 
+## The Sleeping Giant Inn: the upscaler's output corrupt on some frames with DCLF on (found 2026-10-12; localized, not fixed)
+
+**Symptom** (t7f-switch's w216/w217/w219, r11-r16). At `coc RiverwoodSleepingGiantInn` with DCLF on, the screen alternates:
+
+-   frames whose upper third is white and magenta garbage with a stepped lower edge, the rest dark and blocky;
+-   frames that are fully black;
+-   frames that look right.
+
+Exteriors (the Riverwood bridge) are clean, and so is DCLF off (w218, r18, r22). These had no effect: refraction, forward, effects,
+decals, opaque effects, shadows, Skylighting/precipitation, `CS_DCLF_ACCUMULATED_ALL` and the empty fade node switch.
+
+**Where it starts** (`CS_DCLF_TARGET_DUMP`, `Diagnostics/TargetDump.*`: whole targets read back asynchronously at named points of the
+frame, with DCLF on or off).
+
+-   **Clean up to the upscaler.** In r17, r19, r20 and r21, every point up to Upscaling's evaluate has 0 NaN or Inf and the same
+    statistics on good and corrupt frames: the depth epoch, the G-buffer after DCLF's colour epoch, the composite, the forward epoch, the
+    engine's blended draws, the first-person epochs, and the upscaler's inputs (kMAIN, its depth, kMOTION_VECTOR).
+-   **The DLSS output is corrupt.** On a corrupt frame (r20/r21 frame 1300) the evaluate's output (`Upscaling::UpscaledTexture`,
+    copied into kMAIN) holds ±65504 in a large region (mean -474 against an input mean of 0.14). The next frames' outputs are normal
+    (mean 0.19), from inputs whose statistics are the same.
+-   **The constants are not it.** The Streamline constants logged on the dump frames are finite and stable with DCLF on.
+    -   With DCLF off, `frameBufferCached` alternates between the world camera and the first-person camera (posAdj (0, 0, 120.5), near
+        5): the engine's own first-person camera setup.
+    -   With DCLF on it is the world camera every frame. This differs, but DCLF off is the clean one.
+
+**Next.** The pattern points at memory written by something else, not at DLSS's inputs:
+
+-   a fixed region at the start of an image, with a stepped edge where a linear write ends inside a tiled image;
+-   corrupt frames among good ones.
+
+A suspect is a GPU write through a stale buffer address, for instance a frame slot's revision recording that still names a buffer
+DCLF reallocated when the interior loaded, landing in DLSS's history or output.
+
+-   Check the upscaler's output and history allocations against DCLF's buffer growths at the coc (`CS_DCLF_STATS` "growth" lines).
+-   Try another upscaler, to see whether the victim moves.
+-   Run a Vulkan validation pass with GPU-AV on the ORG buffers.
+
+## Unattributed visual defects seen in first person (2026-10-11/12; not investigated)
+
+-   **Flickering fog-coloured bands** (user report): full-width horizontal bands of broken geometry, flickering all over the
+    screen, at the Riverwood river view in first person with billboards and first person on (runs bb7, bb10, bb11). Gone with first
+    person off (bb9, bb12) and with billboards off (bb7off), but the user saw it disappear on other actions too (equipping a sword,
+    going to third person), so billboards are not established as the cause. The billboard observer found 0 of ~11,000 leaves a
+    window turned differently from the engine. Next time: a toggle-by-toggle bisection in first person, empty-handed (first person,
+    billboards, particles, effects), and the bad draw's vertex inputs (`CS_DCLF_TARGET_PROBE` or a GPU capture).
+-   **Dark-red smudges (T7f item 7, r2):** the smudges in the first-person runs are the engine's screen blood (`BloodSplatter`, under
+    `ScreenSplatterRoot`, census view "other #18"), drawn while the player takes damage; 2 to 28 geometries over r2's windows. Not DCLF's.
+    No fog-coloured band appeared in r2, r3, r6 or r8 (billboards on, first-person billboards drawn by DCLF).
+-   **Every world particle system froze** in fp8 at about 22:58:57: 0 snapshots afterwards, all 226 systems "newly frozen".
+    Dark-red static smudges appeared in the same run with first person off. Neither recurred in fp13 or bl5. The T7f producers'
+    work (`kAccumulated` writes, the tree list) was being built in the same tree at the time; a system whose update the engine skips
+    (its root judged not visible) takes no snapshot, so watch the particles line's "newly frozen" in runs with
+    `CS_DCLF_ACCUMULATED_ALL=1`.
+
 ## Parity issues deferred while the scene pipeline's structure lands (T6b, 2026-10-11)
 
 Found in validation runs and left for a cleanup pass once the structure is in place (plan `hazy-percolating-canyon.md`).
@@ -147,6 +201,12 @@ Found in validation runs and left for a cleanup pass once the structure is in pl
 -   **T7a census: member passes drawn by the engine (`<- DEFECT`).** w159: 506-7,793 a window, all in the sun cascades
     (first: 'leaves', 'Block (1, 0)'). Async mode judges membership from the frame's set, so this may be the census reading the
     set's phases against the cascade (shadow members by phase); confirm before treating it as a withholding gap.
+    **Attributed (T7f item 8, w202-w232):** it fires only in the windows with frames that had no published sun exclusion (no shadow epoch
+    that frame, 2-16 a window during cell loads and the start), and the census's new `<- WHOLE ENTRY` fires on the same geometries: on
+    those frames the engine culls and registers the cascades whole (whether DCLF's cascades drew the same members then is not
+    established). Open: an exclusion for every
+    frame (the last one translated to the frame's candidates, or the cascades drawn from the kept state) would remove the engine's
+    cascade culls there too.
 -   **T7b1 `<- ACCUMULATED DIFFER`** (w159): on compared frames, roots the engine alone sets are effect and untracked roots
     ('FXAmbWaterfallSalmon01.nif') and geometry the engine alone sets is mostly stale under a root the engine failed; 'Emerald'
     is DCLF's alone every frame. (The readback's missing batches are structural and being fixed.)
@@ -168,7 +228,11 @@ Found in validation runs and left for a cleanup pass once the structure is in pl
     key change (LOD level, transition state) - check the port's key.
 -   **Census `<- DEFECT` in point shadows** (w168: 50 member passes in a window, 'MountainCliffSlope:0'), beside the sun cascades'.
 -   **`<- TREE MANAGER` coverage:** the tree list compared only 0-1 BSTreeNode a frame at Riverwood (all skipped both ways); the
-    animation list's clock compared 3 nodes in a window (most leaf roots are not DCLF's). Needs a cell with BSTreeNode trees.
+    animation list's clock compared 3 nodes in a window (most leaf roots are not DCLF's). Needs a cell with BSTreeNode trees (T7f: none
+    found in five exteriors, below).
+-   **`<- FADE DOUBLE` (T7b4, w168), attributed (w190-w193):** the clutter roots were placement snaps (`FUN_14147aa20`, a cell attach that
+    writes `+0x13C`), an event DCLF already follows by seeding the root again. They are now counted aside. Under `CS_DCLF_FADE_ALL` the
+    observer is at 0 everywhere.
 
 -   **Intermittent vertex-stage page faults at load (2026-10-11):** two device losses a few seconds after a load, both Aftermath
     `vertex_01`, not reproduced in the next runs: w167 at the main menu ("Shader Instruction Error", DCLF idle), and still-fix-on
@@ -201,9 +265,31 @@ Found in validation runs and left for a cleanup pass once the structure is in pl
         -   FadeStateCS passes always-draw and preprocessed roots without a program as Process1 does;
         -   `CellRoots` counts the containers apart;
         -   the dry run attributes each difference by cause and compares geometry with the receivers' bit.
-    -   **Open:** the 1-10 cloud-card roots a window that are the engine's alone (the same-frame observer had none). The dry run now names
-        each as stood in since the batch, recent, or steady. Next: a run with `CS_DCLF_ACCUMULATED_PARITY=1`, standing still and in
-        motion; expect the steady classes near 0 standing still.
+    -   **Resolved (w190-w196; `drawcall-limit-fix.md`, "T7f: producers 1-6 with the culls still on"):**
+        -   The cloud cards came into view after the decoded batch's frame. Each compare list now carries the engine's bit from its own
+            sample of that frame; with that sample clear, the root is "arrived" and not steady.
+        -   The interior's steady actor roots (`Skeleton.nif`) came from FadeStateCS using the seed's stale kNotVisible. FadeStateCS now
+            makes the actor pre-cull's frustum test itself.
+        -   The engine's residue geometry (effects DCLF does not draw) is no longer cleared by the wide writes.
+        -   `CS_DCLF_ACCUMULATED_ALL` is on by default. Steady classes: 0 in motion and in the forests; interiors 0-1 actor root in 2 of
+            30 windows (an actor out of high process keeps bit 12 and the engine passes it untested).
+    -   **Resolved (T7f item 7, r1):** the 50-1,450 geometries a window whose parent walk did not reach their listed root all had the
+        engine's empty fade node as root (the `BSFadeNode` at `0x14332a2a0` that every `BSShaderProperty` starts with, which the engine
+        reads as none). It is no root now (`Engine::EmptyFadeNode`, `CS_DCLF_EMPTY_FADE_NODE`); such geometry takes its plain entry root.
+        The count is 0 in every window. The plain entry roots this brought out are attributed like roots (`drawcall-limit-fix.md`, "T7f item
+        7").
+-   **`<- FADE STATE` in interiors (w195):** 1-3 actor roots a log, one fade step apart (`currentFade` 0.9888 against the port's 1 or
+    0.9968). It appeared with the actor pre-cull change (FadeStateCS's frustum test for preprocessed roots). w191 had the same switches
+    without that change and showed none, and w196 showed none. Not attributed yet: check the log's port for the preprocessed roots' last
+    visible frame.
+-   **`<- FADE INPUT` (w193):** an actor root's row fadeAmount 0.9947 against the node's 1, steady over three windows. An `Actor::SetAlpha`
+    write that the events missed, or a fadeAmount writer other than SetAlpha. It surfaced under `CS_DCLF_FADE_ALL`, where every root is
+    owned, but the parity compares every listed root, so it is not caused by the switch. Effect: FadeStateCS steps amountFade toward 0.995.
+-   **`<- TREE MANAGER` coverage (T7f item 2):** no `BSTreeNode` found at Riverwood, Falkreath, Riften, Raven Rock or Morthal in this load
+    order, so `CS_DCLF_TREE_LIST_ALL` stays off until a load order with such trees shows the comparison at 0.
+-   **Particles frozen in fx-firstperson's fp8 (22:58):** all 226 systems "newly frozen" for one window, right after a live
+    `dclf:first person=1` toggle, then normal again. Not reproduced in w190-w197, which had `CS_DCLF_ACCUMULATED_ALL` and particles on:
+    0 newly frozen, except 2 a run in the window of the interior's coc (the systems of the cell being left).
 -   **`<- MATERIAL PORT` (w176):** 1 a window left on an effect's FalloffData (VS variable 7) after the retake - a controller
     write the retake missed.
 

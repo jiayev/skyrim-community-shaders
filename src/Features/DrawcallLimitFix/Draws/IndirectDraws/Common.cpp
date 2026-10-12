@@ -73,7 +73,7 @@ namespace DCLF::Draws
 				0u;
 		expect(a_record.recordFlags == (RecordFlagsOf(object.flags, a_objectIndex < a_tables.objectFadeRoot.size() ? a_tables.objectFadeRoot[a_objectIndex] : kNoFadeRoot) | refraction),
 			"RecordFlags");
-		const float threshold = (object.flags & kObjectAlphaTest) ? ((object.flags >> kObjectAlphaThresholdShift) & 0xFF) / 255.0f : 0.0f;
+		const float threshold = AlphaTestRefOf(object.flags, object.pipelineIndex < a_tables.pipelines.size() ? &a_tables.pipelines[object.pipelineIndex] : nullptr);
 		expect(std::bit_cast<std::uint32_t>(a_record.alphaTestRef) == std::bit_cast<std::uint32_t>(threshold), "AlphaTestRef");
 		const bool skinned = (object.flags & kObjectSkinned) && a_objectIndex < a_tables.boneOffset.size();
 		const auto palette = skinned ? PaletteRowsOf(a_tables.boneOffset[a_objectIndex], a_tables.boneRows[a_objectIndex]) : PaletteRows{};

@@ -68,8 +68,9 @@ namespace ShadowSampling
 	{
 #if defined(EFFECT) && defined(DCLF_BINDLESS)
 		// Drawcall Limit Fix: EffectRadius (Community Shaders' BSEffectShader::SetupGeometry hook: the geometry's world bound radius) is the
-		// object's placement row's bound (DCLFObjects.hlsli), not the pipeline row's permutation block.
-		float viewRayLength = min(DCLFPlacements[DCLFObjectIndex].Bound.w * 0.2, 256);
+		// object's placement row's bound (DCLFObjects.hlsli, DCLFWorldBoundRadius: a billboard's own radius), not the pipeline row's
+		// permutation block.
+		float viewRayLength = min(DCLFWorldBoundRadius(DCLFObjectIndex) * 0.2, 256);
 		float3 startPosition = positionWS - viewDirection * viewRayLength;
 		float3 endPosition = positionWS + viewDirection * viewRayLength;
 #elif defined(EFFECT)

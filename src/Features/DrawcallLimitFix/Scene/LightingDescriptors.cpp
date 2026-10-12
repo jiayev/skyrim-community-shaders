@@ -293,8 +293,6 @@ namespace DCLF
 		// the frame's seconds the manager advances the clocks by (FUN_140437d40's argument; GetSecondsPassed reads it).
 		REL::Relocation<std::uintptr_t> treeManager{ REL::Offset(0x20f6a18) };
 		REL::Relocation<std::uintptr_t> frameSeconds{ REL::Offset(0x31cc288) };
-		// The fade node the engine treats as "no node" as well as null.
-		REL::Relocation<std::uintptr_t> emptyFadeNode{ REL::Offset(0x332a2a0) };
 
 		float GlobalFloat(const REL::Relocation<std::uintptr_t>& a_at)
 		{
@@ -306,7 +304,8 @@ namespace DCLF
 
 		const void* AsTreeNode(const RE::BSFadeNode* a_fadeNode)
 		{
-			if (!a_fadeNode || reinterpret_cast<std::uintptr_t>(a_fadeNode) == emptyFadeNode.address())
+			// The node the engine treats as "no node" as well as null (0x14332a2a0 holds a pointer to it; the global's address is not it).
+			if (!a_fadeNode || a_fadeNode == Engine::EmptyFadeNode())
 				return nullptr;
 			const auto* vtable = *reinterpret_cast<const std::uintptr_t* const*>(a_fadeNode);
 			using Fn = const void* (*)(const RE::BSFadeNode*);
@@ -671,8 +670,6 @@ namespace DCLF
 			d = (derived & ~kRegisteredPassBits) | (a_accumulated->technique & kRegisteredPassBits) | (a_layer ? 0u : StaticShadowBits(a_leaf, false, &a_property));
 			// The screen-door fade: Lighting.hlsl discards against a 4x4 screen pattern and MaterialData.z, so
 			// the object stays opaque and the Z-prepass (which keeps the alpha test) dithers identically.
-			if ((d & Bit(LightingFlag::AdditionalAlphaMask)) && !ActiveToggles().fading)
-				return Ineligible::Fading;
 		}
 
 		a_out.rawVertex = VertexDescriptorFromPass(SetupTechniqueDescriptor(d));
@@ -703,7 +700,8 @@ namespace DCLF
 		if (!ActiveToggles().particles || !a_leaf.geometry || a_leaf.Type() != static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles) || a_leaf.Skinned())
 			return false;
 		const auto& p = a_leaf.geometry->particles;
-		return p.system && p.data && !p.aligned && p.capacity > 0;
+		// Aligned quads (T7e's second part) with the velocities FUN_140e51320 reads for them.
+		return p.system && p.data && (!p.aligned || p.velocities) && p.capacity > 0;
 	}
 
 	std::uint32_t ParticleRejectionOf(const SceneCapture::LeafView& a_leaf, std::uint64_t a_flags)
@@ -718,7 +716,7 @@ namespace DCLF
 		std::uint32_t causes = 0;
 		if (!g->particles.data || !g->particles.capacity)
 			causes |= kEffectVariantParticleData;
-		if (g->particles.aligned)
+		if (g->particles.aligned && !g->particles.velocities)
 			causes |= kEffectVariantParticleAligned;
 		if (!a_leaf.AlphaBlending())
 			causes |= kEffectVariantParticleUnblended;
@@ -732,7 +730,7 @@ namespace DCLF
 		// What BSEffectShaderProperty::GetRenderPasses (0x1414bd890) and BSEffectShader's setup functions do for this property that the
 		// port does not: the decal groups without CS_DCLF_DECALS (hints 2 and 3; kTempRefraction with kDynamicDecal makes no pass at all); the
 		// sky object (bit 45: hint 0x12, geometry group 13, SetupGeometry's own cull and alpha setup); wireframe (bit 48: SetupGeometry's depth
-		// and fill state); Blood and ProjectedUv, whose constants are not ported; a skin the palette path does not take; any shape but a
+		// and fill state); ProjectedUv, whose constants are not ported (Blood's are: the weapon blood, below); a skin the palette path does not take; any shape but a
 		// BSTriShape, or (T7e) a particle system DCLF's particle path draws.
 		const std::uint64_t f = a_property.flags;
 		std::uint32_t variants = 0;
@@ -769,8 +767,8 @@ namespace DCLF
 			if (!globals::features::lightLimitFix.loaded)
 				variants |= kEffectVariantLightingNoLlf;
 		}
-		if (f & Bit(Flag::kWeaponBlood))
-			variants |= kEffectVariantBlood;
+		// kWeaponBlood (the weapon blood, BSTempEffectWeaponBlood) is ported: its AlphaTestRef (SetupGeometry: the alpha threshold / 255 and
+		// two globals) is the object record's reference and the frame's (DeriveEffectDescriptors' Blood bit; Effect.hlsl, DCLFEffectBlood).
 		if (f & Bit(Flag::kProjectedUV))
 			variants |= kEffectVariantProjectedUv;
 		if (a_leaf.AlphaBlending() && AlphaBlendModeOf(*a_leaf.alpha) == 0)
@@ -796,7 +794,16 @@ namespace DCLF
 		// geometry groups 3 and 4: the engine's opaque and blended decal groups, DCLF's decal groups 1 and 2.
 		const bool decal = (f & (Bit(Flag::kDecal) | Bit(Flag::kDynamicDecal))) != 0;
 		const bool blending = a_leaf.AlphaBlending();
-		if (!blending && !decal)
+		// T7f item 7 (CS_DCLF_OPAQUE_EFFECTS): hint 0, the G-buffer pass's opaque batches with the DEFERRED variant (forge coals, slag), is
+		// drawn through decal group 1: an occludee culled once in the colour segment, its depth written by the decal depth pass before the
+		// colour pass (LESS_EQUAL, no bias for it), its colour into the G-buffer with the opaque write mode (1, an opaque Lighting key's) and no
+		// blending, as the engine's opaque batches. Only a pass that is hint 0 whatever the frame: no Falloff (hint 1), depth tested and
+		// written (SetupGeometry's depth mode 3, which the decal depth pass makes). A property alpha below one (a base colour alpha, a fade)
+		// makes the engine's pass hint 1, blended by the frame's alpha: DCLF keeps it opaque (drawcall-limit-fix.md, "Opaque effects").
+		static const bool opaqueEffects = SwitchOnUnlessZero(Switch::OpaqueEffects);
+		const bool opaque = !blending && !decal;
+		if (opaque && (!opaqueEffects || !ActiveToggles().decals || (f & Bit(Flag::kFalloff)) || !(f & Bit(Flag::kZBufferTest)) || !(f & Bit(Flag::kZBufferWrite)) ||
+						  ParticleGeometryType(a_leaf.Type())))
 			return Ineligible::EffectOpaque;
 		// T7e: a particle system DCLF's particle path draws (EffectVariantsOf left no other, and only a blending one): hint 1, the forward epoch's.
 		const bool particles = ParticleGeometryType(a_leaf.Type());
@@ -834,6 +841,10 @@ namespace DCLF
 			d |= MultBlend;
 		if (f & Bit(Flag::kSoftEffect))
 			d |= Soft;
+		// Blood (kWeaponBlood): Effect.hlsl's BLOOD, its alpha from the texture's green and the blood mask's colour (AlphaTestRef: the record's
+		// threshold, BuildObjectRecord, and the frame's two globals, SampleEffectBlood).
+		if (f & Bit(Flag::kWeaponBlood))
+			d |= Blood;
 		// The Lighting variant (EffectVariantsOf): kEffectLighting, the global 0x142033508 taken as its initialiser leaves it.
 		if (f & Bit(Flag::kEffectLighting))
 			d |= Lighting;
@@ -860,7 +871,14 @@ namespace DCLF
 		a_out.rawVertex = d & 0xffc7ffffu;
 		a_out.rawPixel = ((d & Membrane) ? d : (d & ~Skinned)) & ~SkyObject;
 		a_out.vertex = a_out.rawVertex & ~kPermutationBits;
-		a_out.pixel = (a_out.rawPixel & ~kPermutationBits) | (decal ? Deferred : 0u);
+		a_out.pixel = (a_out.rawPixel & ~kPermutationBits) | ((decal || opaque) ? Deferred : 0u);
+		if (opaque) {
+			a_out.opaqueEffect = true;
+			a_out.decalGroup = 1u;
+			a_out.decalBlendMode = 0u;
+			a_out.decalWriteMode = 1u;
+			return Ineligible::None;
+		}
 		if (decal) {
 			// The decal group's state (engine notes, "Decals"; BSEffectShader::SetupGeometry 0x1414eab10 for a pass of hint 2 or 3): the group
 			// function's depth mode (3 for the opaque group, 1 for the blended one) and bias, which SetupGeometry leaves for a decal; the

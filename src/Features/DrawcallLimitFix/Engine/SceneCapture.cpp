@@ -1,5 +1,7 @@
 #include "SceneCapture.h"
 
+#include "Billboards.h"
+
 #include "Features/DrawcallLimitFix/Diagnostics/MirrorWatch.h"
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/EngineReadWindow.h"
@@ -441,7 +443,8 @@ namespace DCLF::SceneCapture
 			r.kind |= kKindSwitch;
 			CaptureSwitch(*node, r);
 		}
-		r.kind |= netimmerse_cast<RE::NiBillboardNode*>(node) ? kKindBillboard : 0u;
+		if (netimmerse_cast<RE::NiBillboardNode*>(node))
+			r.kind |= kKindBillboard | static_cast<std::uint16_t>(Billboards::FaceMode(node) << kKindBillboardModeShift);
 		r.kind |= netimmerse_cast<RE::BSOrderedNode*>(node) ? kKindOrdered : 0u;
 		r.kind |= netimmerse_cast<RE::BSMultiBoundNode*>(node) ? kKindMultiBound : 0u;
 		r.kind |= netimmerse_cast<RE::BSFaceGenNiNode*>(node) ? kKindFaceGen : 0u;
@@ -493,6 +496,9 @@ namespace DCLF::SceneCapture
 				const auto& d = static_cast<const RE::NiParticlesData*>(particleData)->GetParticlesRuntimeData();
 				p.data = true;
 				p.aligned = d.unk88 || d.unk89;
+				// The aligned quads' velocities (FUN_140e51320 reads NiPSysData's particle info, +0x90, for them).
+				p.velocities = netimmerse_cast<RE::NiPSysData*>(const_cast<RE::NiObject*>(static_cast<const RE::NiObject*>(particleData))) &&
+				               static_cast<const RE::NiPSysData*>(particleData)->GetPSysRuntimeData().particleInfo;
 				p.capacity = d.maxNumVertices;
 				p.subtextures = d.subtextureOffsets ? d.subTextureOffsetsCount : 0u;
 			}

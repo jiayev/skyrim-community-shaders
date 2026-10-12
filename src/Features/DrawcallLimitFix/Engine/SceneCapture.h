@@ -39,7 +39,12 @@ namespace DCLF::SceneCapture
 		kKindFaceGen = 1u << 7,
 		kKindTree = 1u << 8,
 		kKindDecalNode = 1u << 9,  // T6b1a: a BGSDecalNode (its RTTI exactly: what its OnVisible is)
+		// With kKindBillboard: the node's face mode (NiBillboardNode::userFlags & 7, +0x128: what its OnVisible turns it by) in bits 13-15
+		// (CS_DCLF_BILLBOARDS; BillboardModeOf).
+		kKindBillboardModeShift = 13,
 	};
+	/** @brief A billboard node record's face mode (kKindBillboardModeShift). */
+	inline constexpr std::uint32_t BillboardModeOf(std::uint16_t a_kind) { return (a_kind >> kKindBillboardModeShift) & 7u; }
 
 	struct NodeRecord
 	{
@@ -192,6 +197,7 @@ namespace DCLF::SceneCapture
 			bool worldSpace = false;        // NiParticleSystem::isWorldspace: particles in world coordinates (BSParticleSystemManager's)
 			bool data = false;              // NiParticles::particleData set
 			bool aligned = false;           // the data's aspect flags (+0x88, +0x89): velocity-aligned or speed-stretched quads
+			bool velocities = false;        // the data is an NiPSysData with particle info (the aligned quads' velocities)
 			std::uint16_t capacity = 0;     // NiParticlesData::maxNumVertices
 			std::uint32_t subtextures = 0;  // NiParticlesData::subTextureOffsetsCount (FUN_1414bde90's TexCoordIndex and IndexedTexture)
 			bool operator==(const Particles&) const = default;

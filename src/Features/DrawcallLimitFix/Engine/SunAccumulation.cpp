@@ -287,26 +287,6 @@ namespace DCLF
 			ResetFrameSun();
 	}
 
-	std::optional<bool> SunAccumulation::InSunCascades(const RE::NiBound& a_bound) const
-	{
-		// The cascades are captured only on a frame whose full-frustum cull applied the entry exclusion.
-		if (!exclusionLive.load(std::memory_order_acquire))
-			return std::nullopt;
-		const auto& state = frameState;
-		bool captured = false;
-		for (std::uint32_t c = 0; c < state.cascadeCount && c < state.cascades.size(); ++c) {
-			const auto& cascade = state.cascades[c];
-			if (!cascade.captured)
-				continue;
-			captured = true;
-			if (!Outside(cascade.planes, cascade.planeMask, a_bound) && !(cascade.customMask && Outside(cascade.customPlanes, cascade.customMask, a_bound)))
-				return true;
-		}
-		if (!captured)
-			return std::nullopt;
-		return false;
-	}
-
 	void SunAccumulation::GpuCascades(std::vector<GpuCascade>& a_out) const
 	{
 		// This frame's cascades, whether or not the entry exclusion ran: the colour pass's sun test needs them every frame (without them

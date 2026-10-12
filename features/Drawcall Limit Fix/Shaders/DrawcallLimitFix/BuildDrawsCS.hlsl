@@ -511,6 +511,12 @@ static const uint kObjectForward = 0x80000000u;
 // stops at), its draws go to the refraction range, pooled; RefractionDrawPass draws them into the refraction normals (Utility.hlsl,
 // DCLF_REFRACTION). No sort: the engine draws its group 5 by its batches, and the draw neither blends nor writes depth.
 static const uint kViewRefraction = 1u << 10;
+// T7e's first-person forward part: the first-person view (its latch's view bits kViewFirstPerson, the single phase) culls a forward
+// input as its other inputs (the frustum), and its slots' map sends a forward slot to the forward range's table entry with
+// kBucketForward: the draw is a main-format sequence (the main set's colour pipeline, StoreSequence) staged with its sort key there,
+// which ForwardSortCS.hlsl writes back to front into the range's sorted half (IndirectDraws: FirstPerson.cpp).
+static const uint kViewFirstPerson = 1u << 11;
+static const uint kBucketForward = 0x40000000u;
 // TerrainBlending.cpp's test, exactly: a block is in its terrain depth unless its bound's nearest point is past the distance.
 bool TerrainNearOf(float4 a_bound) { return distance(a_bound.xyz, TerrainNear.xyz) - a_bound.w <= TerrainNear.w; }
 // Set by the epoch rather than by the object: this input carries a usable bindings record, so a sequence
@@ -647,6 +653,24 @@ uint4 RowsOf(uint a_rows)
 	const uint2 pipelineRow = PipelineRowStride ? AddressOf(PipelineRowsLo, PipelineRowsHi, (a_rows >> 20) * PipelineRowStride) : uint2(0, 0);
 	const uint2 materialRow = AddressOf(MaterialRowsLo, MaterialRowsHi, (a_rows & 0xFFFFFu) * MaterialRowStride);
 	return uint4(pipelineRow, materialRow);
+}
+
+// T7d: a staged forward draw's sort key, in three words nothing executes there (ForwardSortCS.hlsl reads and puts them back): its view
+// depth (the bound centre's clip w, the view axis distance: the engine's blended sort key, FUN_1414e8fc0) in firstInstance. T7d's
+// ordered-node interleave: a leaf of a BSOrderedNode's group is sorted at its node's centre (BindlessPlacement::forwardSort, its ordinal
+// in w), where the engine's blended draw places the whole group; its node (a hash of that centre, the same bits for every leaf of the
+// group) and its ordinal go in instanceCount and vertexOffset.
+void StageForwardKey(RWByteAddressBuffer sequences, uint a_slot, uint a_object)
+{
+	const float4 forwardSort = ObjectRow(a_object, kObjectForwardSortRow);
+	const uint ordinal = asuint(forwardSort.w);
+	const float3 sortCentre = ordinal != 0 ? forwardSort.xyz : ObjectRow(a_object, kObjectBoundRow).xyz;
+	const float clipW = mul(ViewProj, float4(sortCentre, 1.0)).w;
+	const uint group = ordinal != 0 ? (asuint(forwardSort.x) * 0x9E3779B1u) ^ (asuint(forwardSort.y) * 0x85EBCA77u) ^ (asuint(forwardSort.z) * 0xC2B2AE3Du) : 0u;
+	const uint stagedAt = a_slot * kSequenceStride;
+	sequences.Store(stagedAt + 76, group);
+	sequences.Store(stagedAt + 84, ordinal);
+	sequences.Store(stagedAt + 88, asuint(isnan(clipW) ? 0.0 : clipW));  // a NaN would break the rank
 }
 
 // The bounding sphere's world-space AABB, projected corner by corner. The box contains the sphere, so
@@ -904,15 +928,30 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 			if (culled)
 				count.InterlockedAdd(kCountDecalsCulled, 1, scratch);
 		}
-		const uint geometryOffset = input.z * kGeometryStride;
-		const uint4 vertexBuffer = geometries.Load4(geometryOffset);
-		const uint4 indexBuffer = geometries.Load4(geometryOffset + 16);
-		const uint firstIndex = geometries.Load(geometryOffset + 32);
 		const uint4 rows = RowsOf(input.y);
 		const uint decalStreamIndex = inputs.Load(inputOffset + 44);
-		const uint4 decalStream = decalStreamIndex != kNoStream ? geometries.Load4(decalStreamIndex * kGeometryStride) : vertexBuffer;
-		StoreSequence(sequences, DecalBase + (decalGroup - 1) * DecalStride + decalOrdinal, input.x, rows, objectWord,
-			vertexBuffer, decalStream, indexBuffer, culled ? 0 : indexBuffer.w, firstIndex);
+		// T7e's blood decals: a skinned decal of several partitions (a BSTempEffectGeometryDecal copies its actor's dismember skin) takes a
+		// slot per partition from its ordinal (SceneStore::OrderDecals, DecalSpanOf: the partitions' encoding in the input's word +40), each
+		// its partition's geometry along the GeometryDraw links; a partition its mask leaves out writes a zero-count draw, as a culled decal.
+		const uint decalPartitions = inputs.Load(inputOffset + 40);
+		const bool decalChain = (decalPartitions & kPartitionChain) != 0;
+		const uint decalSpan = decalChain ? (decalPartitions & kPartitionChainCount) :
+		                       (decalPartitions == 0 || decalPartitions == kNoPartitions) ? 1u : firstbithigh(decalPartitions & (kNoPartitions - 1)) + 1;
+		uint decalGeometry = input.z;
+		[loop] for (uint k = 0; k < decalSpan; ++k) {
+			if (decalOrdinal + k >= DecalStride)
+				break;  // never: the range holds every slot of the group
+			const bool partitionDrawn = decalChain || decalPartitions == 0 || ((decalPartitions >> k) & 1) != 0;
+			const uint geometryOffset = (decalGeometry != kNoPartition ? decalGeometry : input.z) * kGeometryStride;
+			const uint4 vertexBuffer = geometries.Load4(geometryOffset);
+			const uint4 indexBuffer = geometries.Load4(geometryOffset + 16);
+			const uint firstIndex = geometries.Load(geometryOffset + 32);
+			const uint4 decalStream = decalStreamIndex != kNoStream ? geometries.Load4(decalStreamIndex * kGeometryStride) : vertexBuffer;
+			StoreSequence(sequences, DecalBase + (decalGroup - 1) * DecalStride + decalOrdinal + k, input.x, rows, objectWord,
+				vertexBuffer, decalStream, indexBuffer, (culled || !partitionDrawn || decalGeometry == kNoPartition) ? 0 : indexBuffer.w, firstIndex);
+			if (decalGeometry != kNoPartition)
+				decalGeometry = geometries.Load(geometryOffset + 36);  // GeometryDraw::nextPartition
+		}
 		// A decal's word: never drawn in depth, drawn in colour unless culled.
 		if (phase == kPhaseColour)
 			visibility.Store(objectIndex * 4, (VisibilityStamp << kVisibilityStampShift) | (culled ? kVisibilityRejectedFinal : (kVisibilityVisible | kVisibilityColourDrawn)));
@@ -922,7 +961,9 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 	// T7d: a forward input's culling, once, in the colour segment (kObjectForward); its visibility word as a decal's.
 	const bool forwardInput = keyWord == 0 && (input.w & kObjectForward) != 0;
 	const bool refractionInput = forwardInput && (inputs.Load(inputOffset + 16) & kViewRefraction) != 0;
-	if (forwardInput) {
+	// T7e: the first-person view's forward input is culled below with the view's others (its draw takes the map's forward entry).
+	const bool firstPersonForward = forwardInput && !refractionInput && phase == kPhaseSingle && (ViewBits & kViewFirstPerson) != 0;
+	if (forwardInput && !firstPersonForward) {
 		if (phase != kPhaseColour || (refractionInput ? RefractionCapacity == 0 || PoolFirstsIndex == 0 : ForwardCapacity == 0))
 			return;  // the depth segment never submits one; a shape without the range has no forward (or refraction) draws
 		bool forwardCulled = !drawable;
@@ -1048,6 +1089,12 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 	}
 	if (pipeline == kNoPipeline || bucketKey == kNoPipeline)
 		return;
+	// T7e: the first-person view's forward entry (kBucketForward): the forward input's alone; an opaque input never reaches it, nor a
+	// forward input another entry.
+	const bool forwardBucket = BucketMapOffset != 0 && (bucketKey & kBucketForward) != 0;
+	bucketKey &= ~kBucketForward;
+	if (forwardBucket != firstPersonForward)
+		return;
 	// T7c1: a terrain group 1 slot's bucket and its twin (PlanZBuckets): a near block's draws go to the twin, which MainOpaquePass
 	// draws into Terrain Blending's terrain depth and, offset, into the main depth; a far block's to the bucket, the main depth alone -
 	// as Terrain Blending's depth hook draws them.
@@ -1112,8 +1159,15 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 					uint drawn;
 					count.InterlockedAdd(phase == kPhaseTwo ? kCountDrawnPhaseTwo : kCountDrawn, 1, drawn);
 					ByteAddressBuffer poolFirsts = ResourceDescriptorHeap[PoolFirstsIndex];
-					StoreShadowSequence(sequences, bucket.x + slot, slot, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
-						firstIndex, poolFirsts.Load(geometryIndex * 4));
+					if (forwardBucket) {
+						// T7e: the first-person forward range's staging half: a main-format sequence (the main set's colour pipeline, drawn through the
+						// colour signature) with its sort key, as the colour segment stages its forward draws (below).
+						StoreSequence(sequences, bucket.x + slot, pipeline, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+						StageForwardKey(sequences, bucket.x + slot, objectIndex);
+					} else {
+						StoreShadowSequence(sequences, bucket.x + slot, slot, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
+							firstIndex, poolFirsts.Load(geometryIndex * 4));
+					}
 				}
 			} else if (refractionInput) {
 				// T7d's refraction: the refraction range, which holds every draw the refraction slots can produce; a pooled sequence, its slot
@@ -1132,19 +1186,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 				if (slot >= ForwardCapacity)
 					return;
 				StoreSequence(sequences, ForwardBase + slot, pipeline, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
-				// T7d's ordered-node interleave: a leaf of a BSOrderedNode's group is sorted at its node's centre (BindlessPlacement::forwardSort,
-				// its ordinal in w), where the engine's blended draw places the whole group; its node (a hash of that centre, the same bits for
-				// every leaf of the group) and its ordinal go in the unexecuted instanceCount and vertexOffset words, which ForwardSortCS.hlsl
-				// reads and puts back (1, 0).
-				const float4 forwardSort = ObjectRow(objectIndex, kObjectForwardSortRow);
-				const uint ordinal = asuint(forwardSort.w);
-				const float3 sortCentre = ordinal != 0 ? forwardSort.xyz : ObjectRow(objectIndex, kObjectBoundRow).xyz;
-				const float clipW = mul(ViewProj, float4(sortCentre, 1.0)).w;
-				const uint group = ordinal != 0 ? (asuint(forwardSort.x) * 0x9E3779B1u) ^ (asuint(forwardSort.y) * 0x85EBCA77u) ^ (asuint(forwardSort.z) * 0xC2B2AE3Du) : 0u;
-				const uint stagedAt = (ForwardBase + slot) * kSequenceStride;
-				sequences.Store(stagedAt + 76, group);
-				sequences.Store(stagedAt + 84, ordinal);
-				sequences.Store(stagedAt + 88, asuint(isnan(clipW) ? 0.0 : clipW));  // a NaN would break the rank
+				StageForwardKey(sequences, ForwardBase + slot, objectIndex);
 			} else if (terrainGroup != 0) {
 				// A terrain group's range (GpuLayouts.h, kTerrainGroups), which holds every draw its group's slots can produce.
 				count.InterlockedAdd(kCountTerrainGroup1 + (terrainGroup - 1) * 4, 1, slot);

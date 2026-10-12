@@ -461,7 +461,6 @@ namespace DCLF::FadeState
 		alignas(16) std::byte scratch[kMaxNodeBytes];
 		std::memcpy(scratch, &a_node, size);
 		const float camera[4] = { frame.eye[0], frame.eye[1], frame.eye[2], frame.lodAdjust };
-		SceneStore::MuteFadeEvents(true);
 		{
 			void* node = scratch;
 			if ((plan == kFadeRootLeaf || plan == kFadeRootTree) && Global<std::uint8_t>(0x2032dfc)) {
@@ -492,7 +491,6 @@ namespace DCLF::FadeState
 				At<float>(node, 0x14C) = 0.0f;
 			}
 		}
-		SceneStore::MuteFadeEvents(false);
 		const FadeNodeState engine = ReadNode(*reinterpret_cast<const RE::NiAVObject*>(scratch));
 		FadeNodeState port = root.initial;
 		OnVisible(port, root, centre, frame);

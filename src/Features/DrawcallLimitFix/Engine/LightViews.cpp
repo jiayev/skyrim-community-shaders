@@ -47,6 +47,9 @@ namespace DCLF
 		auto& light = lights.emplace_back();
 		light.light = a_light;
 		auto& data = const_cast<RE::BSShadowLight*>(a_light)->GetRuntimeData();
+		if (const auto* niLight = a_light->light.get())
+			light.sphere = { niLight->world.translate.x, niLight->world.translate.y, niLight->world.translate.z,
+				const_cast<RE::NiLight*>(niLight)->GetLightRuntimeData().radius.x };
 		light.views.resize(data.shadowmapDescriptors.size());
 		for (std::uint32_t d = 0; d < data.shadowmapDescriptors.size(); ++d) {
 			const auto& descriptor = data.shadowmapDescriptors[d];

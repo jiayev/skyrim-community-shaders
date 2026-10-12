@@ -1,4 +1,5 @@
 #include "OpenDefectProbes.h"
+#include "TargetDump.h"
 
 #include <DirectXPackedVector.h>
 #include <map>
@@ -521,6 +522,10 @@ void DCLF::ProbeTerrainPassState(bool a_running, std::uint32_t a_index, const RE
 void DrawcallLimitFix::ProbeOpaqueTarget(std::uint32_t a_stage)
 {
 	const bool a_afterDCLF = a_stage != 0;
+	// CS_DCLF_TARGET_DUMP's points here (Deferred's hooks), with DCLF on or off.
+	static constexpr const char* kDumpPoints[4] = { "opaque end", "after DCLF colour", "after terrain blending", "after deferred composite" };
+	if (a_stage < 4)
+		DCLF::TargetDump::Point(kDumpPoints[a_stage]);
 	const std::string& pixel = DCLF::SwitchValue(DCLF::Switch::TargetProbe);
 	if (pixel.empty())
 		return;

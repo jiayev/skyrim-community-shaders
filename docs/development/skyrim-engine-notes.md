@@ -1784,6 +1784,71 @@ DCLF's writes on the nodes between a geometry and its root.
     So a geometry's bit is the last cull that reached it. Under a failed node, a stopped `OnVisible` or an inactive switch or LOD child
     it is stale. The receivers test every level and never take such a geometry.
 
+### T7f: the fade nodes' OnVisible stores and the actors' animation stamp
+
+Reverse engineered 2026-10-11 (Ghidra, AE 1.6.1170) for the T7f checklist's items 4-6.
+
+-   **What a fade node's `OnVisible` writes.**
+    -   `BSFadeNode::OnVisible` (`0x141479f50`). With fades off (`0x142032dfd` clear), or settled (flag bit 15, `fadeAmount` and
+        `currentFade` both 1.0, `0x141ad2870`), it goes straight to `NiNode::OnVisible` (`0x140d1e2c0`, the children). Otherwise, with
+        the process's `cameraRelatedUpdates` (`+0x11C`):
+        -   a LOD type 6 node (`+0x153 & 0xF`) while `0x14332a254 == 0x141769578` steps `currentFade` itself (or sets it to 1), sets
+            flag bit 14, stores `+0x13C` and goes to the children whatever the fade;
+        -   any other runs `FUN_14147a160` (the fade state machine) and stores `+0x13C` = `0x142032e50` (the fade frame counter).
+
+        It then returns without the children when `currentFade <= 0` or `fadeAmount == 0` (the amount read before the update).
+    -   `BSLeafAnimNode::OnVisible` (`0x14147c9c0`): with LOD updates (`0x142032dfc`) and camera updates, `FUN_14147b110` (the
+        distance and level), `FUN_14147a430` (the leaf LOD transition: `+0x14C`, `+0x152`, `+0x153`) and `+0x13C`; then it jumps to
+        `BSFadeNode::OnVisible` (a tail `jmp`).
+    -   `BSTreeNode::OnVisible` (`0x14147d3c0`): the height test (process `+0x121`, `0x142032fb8`, world z `+0xEC` minus
+        `0x14332a2f0` against `0x142032fa0`: above it nothing is visited), then a `call` of `BSLeafAnimNode::OnVisible`, then the LOD
+        fix-up: with a LOD switch (`+0x180`) whose `+0x12C > 0`, `+0x153 = (+0x153 & 0xAF) | 0x20` and `+0x14C = 0`.
+
+    These and the animation gate's `FUN_14147a160` (`0x1402d0044`) are the only engine writers of a fade root's state. The plan DCLF
+    gives a root (`FadeState::PlanOf`) compares the vtable's `OnVisible` slot with the three addresses, so they are detoured at their
+    entries, not replaced in the vtables (subclasses that inherit one keep its address).
+-   **The actors' animation stamp** (`BSShaderProperty +0x80`, `lastAccumulatedFrameCount`).
+    -   `gFrameCounter` is `0x14328cc6c`. Its one writer is `Renderer::End` (`0x140e4482b`), so it is constant from a frame's
+        `Main::Update` to its end.
+    -   The writers of `+0x80` stamp it with `gFrameCounter` right after `GetRenderPasses` (vfunc `0x158`) and **before** the passes reach
+        the batch renderer's `RegisterPass` (vfunc 2, which DCLF's withholding replaces): `FUN_1414b2a60` (`0x1414b2aef`, render modes
+        `0xC`-`0x11`: the depth prepass and the shadow maps), `FUN_1414b2810`, `FUN_1414b2790`. A withheld registration still stamps; an
+        entry no cull visits (the sun's entry exclusion, the culls off) is not stamped.
+    -   `Actor::ModifyAnimationUpdateData` (`0x1406a3750`, called through the actor vtables and `PlayerCharacter`'s) sets the update's
+        "visible" byte (`+0x2C`) from `Get3D2()`: true unless the 3D has `kNotVisible` (bit 20, the actor pre-cull's) and the race's flag
+        bit 7 is clear. Then it is `(float)(gFrameCounter - skin +0x80) < fMaxFrameCounterDifferenceToConsiderVisible` (`0x142013818`,
+        cached in `0x14319a01c`), the skin property being `currentProcess +0x8 (middleHigh) +0x178` (`FUN_140713610`, a referenced read).
+        The difference is a whole number of frames, so only a stamp of the same frame counts.
+    -   So a stamp written at `Main::Update`'s entry, with that frame's counter, reaches the frame's actor animation like the engine's own.
+
+### T7f item 8: the OnVisibles a skipped entry no longer runs
+
+Reverse engineered 2026-10-12 (Ghidra, AE 1.6.1170) for the culls-off switch (`CS_DCLF_CULLS_OFF`,
+[drawcall-limit-fix.md](./drawcall-limit-fix.md), "T7f item 8"). A cull reaches a node's or geometry's `OnVisible` (vtable slot
+`0x34`) through `Process1`; an entry no cull visits runs none of them. What each one does besides the recursion:
+
+| Class | `OnVisible` | What it does |
+| --- | --- | --- |
+| `NiNode`, and every subclass that keeps it (`BSFaceGenNiNode`, `BSValueNode`, ...) | `0x140d1e2c0` | the children (`Process1` on each); nothing else |
+| `BSMultiBoundNode` | `0x140e2d710` | the multibound shape's cull cache (`+0x10`, "Tree manager list (T7b5)"), then the children |
+| `NiSwitchNode` | `0x140d29700` | the selected child only |
+| `NiBillboardNode` | `0x140d3f720` | with `cameraRelatedUpdates`, the turn to the process's camera (`0x140d3e650`, "Billboards: turned by the culls, per culling camera"), then `NiNode`'s |
+| `BSOrderedNode` | `0x141503970` | a thunk: `lock xadd` of 1 on the process's `+0x301F0` (a per-process counter), then `NiNode::OnVisible` with the new count as its third argument (the alpha group its children's appends carry) |
+| `BSGeometry` (`BSTriShape`'s slot) | `0x140d37f30` | the append (`AppendVirtual`) when the geometry has a shader property, under the TLS cull state `0x43` (`+0x768`) |
+| `BSDynamicTriShape` | `0x140d37f30` | the same function |
+| `BSSubIndexTriShape` | `0x140e312c0` | `BSDynamicTriShape`'s when its segment count is not 0 |
+| `BSSegmentedTriShape` | `0x140d59740` | `NiAVObject::OnVisible` (`0x140d1c5a0`, the append) when `+0x144` is not 0 |
+| `BGSDecalNode` | `0x1401fdf10` | `NiAVObject::Cull` on each decal's geometry (vfunc `0x148` of each `BSTempEffect` in `decals`), last first, when its bound radius is not 0 |
+| `BSFadeNode`, `BSLeafAnimNode`, `BSTreeNode` | "T7f: the fade nodes' OnVisible stores" | the fade and LOD state, the height test |
+| `BSMultiBoundRoom`, `BSPortalSharedNode`, `NiBSPNode` | `0x140e089f0`, `0x140e24740`, `0x140d4b8c0` | the portal and room structure (not under a reference's entry) |
+
+-   **No geometry `OnVisible` writes anything a reader takes.** The appends are the registration's input; a skipped geometry is simply not
+    registered.
+-   **The slots DCLF itself replaces** (the startup line `[DCLF] culls off (T7f item 8): OnVisible slots`): `NiNode`'s is LocalLightCull's
+    category filter (a hook in `CommunityShaders.dll` that ends in the engine's function), `NiBillboardNode`'s the billboards' observer under
+    `CS_DCLF_SET_PARITY`. Subclasses that keep `NiNode`'s carry the engine's address in their own tables, so a plan compares with both.
+-   **CommonLib's `VTABLE_*` ids resolve to AE's tables** at run time (`REL::Relocation`); the SE offsets beside them are not AE's.
+
 ## The material database: how a material is shared and released
 
 `BSShaderProperty::SetMaterial` (`0x14147bff0`) never stores the material it is given. It asks the material manager
@@ -1872,7 +1937,17 @@ AE 1.6.1170, decompiled for T7e (DCLF's particles: [drawcall-limit-fix.md](./dra
     fade); its size `radius * size`. Without rotation angles: corners `c - (A+B)s, c - (A-B)s, c + (A+B)s, c + (A-B)s`, c the position
     minus the model bound's centre. With them: the size is 0 when `fade * alpha <= 0.05` (`0x1417743ec`); `(sin, cos)` of the angle
     (`FUN_14153b7a0`), `X = (cos+sin)s B + (cos-sin)s A`, `Y = (cos+sin)s A - (cos-sin)s B`, corners `c - X, c - Y, c + X, c + Y`. With the
-    aspect flags the corners follow the velocity (not decoded further). Position w is the texture index.
+    aspect flags (below) the corners follow the velocity. Position w is the texture index.
+-   **The aspect flags** (`FUN_140e51320`'s path without rotation angles only: with them the flags are ignored). `+0x88` aligns the quad
+    with the velocity (`NiPSysData::particleInfo[i].velocity`, `+0x90`, stride 0x20, in the system's space), `+0x89` stretches it by its
+    speed; the parameters are `+0x6c` (the aspect, and the speed rule's first aspect), `+0x70` (the second aspect), `+0x74` and `+0x78`
+    (the two speeds; CommonLib's names for `+0x6c..+0x78` are shifted). With either flag, per particle (in the sorted order): the
+    velocity's projection on the view plane `P = (v.A) A + (v.B) B`; with `+0x89` the aspect is `lerp(+0x6c, +0x70, (clamp(|P|, +0x74,
+    +0x78) - +0x74) / (+0x78 - +0x74))`; with `+0x88` A becomes `P` normalised (`XMVector3Normalize`: zero for a zero P, NaN for an
+    infinite one) and B becomes `A x E`, E the view normal `B x A` computed once from the camera's; then `X = A/aspect + B`, `Y = A/aspect
+    - B`, corners `c - X s, c - Y s, c + X s, c + Y s`. The new A and B, and the aspect, are **not reset per particle**: the next particle's
+    projection uses them (the same plane while the axes stay orthonormal, but a zero velocity zeroes both axes, and every later particle of
+    the draw collapses to a point). Without `+0x89` the aspect is `+0x6c`.
 -   **The shader** (`BSEffectShaderProperty` on the system: `GetRenderPasses` `0x1414bd890` gives hint 1 whatever the alpha "for a
     particle system"; `FUN_1414bde90` sets `Particles` (`0x1000`) for a geometry whose vfunc 0x80 (`AsParticlesGeom`) answers and that is
     not a `BSStripParticleSystem` (`0x2013` for that), `TexCoordIndex | IndexedTexture` (`0x84`) with a texture and a non-zero
@@ -1882,6 +1957,82 @@ AE 1.6.1170, decompiled for T7e (DCLF's particles: [drawcall-limit-fix.md](./dra
     corner's coordinates (`u' = o.y u + o.x`, `v' = o.w v + o.z`).
 -   **Precipitation** ("Particle: BSTriShape" in the census) is `BSParticleShaderProperty` (`GetRenderPasses` `0x1414c6890`, the Particle
     shader `0x14150da30`...) on its own geometry, the Precipitation feature's: not this path.
+
+## Blood: weapon blood and skinned decals (AE 1.6.1170, 2026-10-12)
+
+-   **Skinned decals** (`BSTempEffectGeometryDecal`: `Initialize` `0x1404a55b0`, `Attach` `0x1404a5800`, `Update` `0x1404a56e0`; the geometry is
+    made by `FUN_1404a3ec0`). The hit's decal is a `BSTriShape` (`FUN_140d2d8f0`, 0x168 bytes, named `SkinnedDecal`) over a new renderer
+    buffer (`FUN_140e45f70`) with the target geometry's skin instance (`+0x130`, shared: a `BSDismemberSkinInstance` of several partitions on an
+    actor body), and a new `BSEffectShaderProperty` (`FUN_1414bd5e0`) with a `BSEffectShaderMaterial` whose source texture is the decal texture
+    set's first; flags `kSkinned`, `kDynamicDecal`, `kZBufferTest` set and `kZBufferWrite` cleared; an `NiAlphaProperty` with blending on,
+    DESTCOLOR / INVSRCALPHA (MultBlendDecal): hint 3, decal group 4. `Attach` puts it under the decal node (`Skinned Decal Node`), whose parent
+    is the actor's `BGSDecalNode` (`FUN_1401fdfb0` lists the temp effect in its `decals`), or straight under the target geometry's parent
+    without one. Its end fades it: `Update` calls the property's vfunc `0x188` (`SetMaterialAlpha`) with `1 - age / lifetime`, then detaches it
+    (and the decal node with its last decal, counting the manager's `+0x10` down).
+-   **World decals** (`BSTempEffectSimpleDecal`: `FUN_1404a9c70` clips and builds a `BSTriShape`, `FUN_140e52320`, into `+0x48`): their 3D is
+    attached under the reference's `BGSDecalNode` (`AttachDecal`, `0x1401fdc30`: `NiNode::AttachChild`); `Update` (`0x1404ab3f0`) fades the
+    last second through `FUN_1404ad450` (each geometry's property `SetMaterialAlpha`, vfunc `0x188`, when it differs) and detaches
+    (`FUN_1401fdd50`). `BGSDecalNode::OnVisible` (`0x1401fdf10`) culls its decals' `Get3D` (vfunc `0x148`) last to first, not its children.
+-   **Weapon blood** (`BSTempEffectWeaponBlood`): the weapon's `kWeaponBlood` effect geometry (`BloodEffects`, `ImperialSwordBlood`, ...),
+    hidden until a hit (`FUN_1414ab580` shows it, clears the alpha's blend bits). Its start (`0x1404aeb10`) and `Update` (`0x1404aec00`) set the
+    alpha threshold of every geometry under the weapon (`FUN_1414a92a0` -> `FUN_1414ab770`: `(1 - value) * 255`, the value growing then
+    falling with the effect's age) and call `FUN_1414ec2a0(DAT_14200fbe8, DAT_14200fc00)`, which stores two game settings into the globals
+    `0x1433dccf0` and `0x1433dccf4` (their only writer).
+-   **`BSEffectShader::SetupGeometry`'s Blood** (`0x1414eab10`, the pass descriptor's bit 14): PS `AlphaTestRef` = (the pass geometry's alpha
+    property (`+0x120`, `FUN_1414e8e80`) threshold `+0x32` / 255, `0x1433dccf0`, `0x1433dccf4`), whatever the property's alpha test.
+    `Effect.hlsl`'s BLOOD takes its alpha from the texture's green and its colour from the blue against those three.
+-   **The first-person root has a parent** in AE 1.6.1170 runs (2026-10-11 logs: `Skeleton.nif` under two unnamed nodes under `ObjectLODRoot`),
+    contrary to what Load3D's decompile suggested (fp0); DCLF files its subtree under it whatever its parents (`MirrorCategoryNode`).
+
+## Billboards: turned by the culls, per culling camera
+
+AE 1.6.1170, decompiled for DCLF's billboards ([drawcall-limit-fix.md](./drawcall-limit-fix.md), "Billboards and aligned particles").
+
+-   **Where.** `NiBillboardNode` (vtable `0x1417f0750`; `+0x128` userFlags, the face mode in bits 0-2) turns in its cull, not in its
+    update. `NiBillboardNode::OnVisible` (slot `0x34`, `0x140d3f720`) calls `0x140d3e650` with the culling process's camera when the
+    process has `cameraRelatedUpdates` (`+0x11c`), then `NiNode`'s OnVisible (its children). `NiBillboardNode::UpdateWorldData` (slot
+    `0x30`, `0x140d3e510`) writes only the world translation and scale from the parent (the rotation stays the last cull's). So every leaf
+    below a billboard holds the world of whichever camera culled it last; a shadow or reflection process with camera-related updates turns
+    it to its own camera (a process without them leaves the last turn).
+-   **`0x140d3e650`.** Rebuilds the node's world: rotation `R0 = parent.R * local.R`, translation `parent.R local.t parent.s + parent.t`,
+    scale `parent.s * local.s` (no parent: the local); then `R = R0 * M` with M by mode, and runs each child's `UpdateDownwardPass`
+    (vfunc `0x160`, NiUpdateData zeroed) so the leaves take it. The camera is its world rotation's columns (forward `+0x7c/88/94`, up
+    `+0x80/8c/98`, right `+0x84/90/9c`) and translation `+0xa0`. Below `a = R0^T toward`, `u = R0^T up`, `r = R0^T right` (toward =
+    -forward):
+    -   **0 ALWAYS_FACE_CAMERA / 3 ALWAYS_FACE_CENTER**: `l = sqrt(r.y^2 + u.y^2)`; for `l <= 1e-6` (`0x141ad27f8`) the columns `-r, -u, a`;
+        else with `c = u.y/l, s = -r.y/l` the columns `r c + u s`, `u c - r s`, `a` (turned about a until the right axis has no y).
+    -   **2 RIGID_FACE_CAMERA / 4 RIGID_FACE_CENTER**: the columns `r, u, a`, so `R` is the camera's axes exactly.
+    -   **1 ROTATE_ABOUT_UP**: `d = R0^T (eye - t) / scale`; with `l = sqrt(d.z^2 + d.x^2) >= 1e-12` (`0x1419afb08`) `M = [[d.z, 0, d.x], [0,
+        1, 0], [-d.x, 0, d.z]] / l`, else the identity.
+    -   **5 BSROTATE_ABOUT_UP**: R0 is replaced by the identity; `d = eye - t`; with `l = sqrt(d.x^2 + d.y^2) >= 1e-12` `M = [[-d.y, d.x, 0],
+        [d.x, d.y, 0], [0, 0, l]] / l` (determinant -1: a mirror, as the engine has it), else the identity.
+    -   The centre modes (3, 4) first turn the camera's axes with `FUN_140d3f240`: none (M the identity) when `|eye - t|^2 < 0.001`
+        (`0x141ad280c`); `d` the unit direction to the eye; when `toward . d < 0.99999899` (`0x14193aca4`) the axes are rotated by the angle
+        `acos(toward . d)` (pi at -1) about `normalize(d x toward)`, and toward becomes d.
+-   **What reads it.** `SetupGeometry` reads the leaf's world as for any geometry. The camera rows `SetCameraData` gives the view matrix
+    (`FUN_140e57ae0`, from the camera's columns: right, up, forward; VS_PerFrame's CameraView c0-c2 in the shader's row order) are the same
+    floats, so a vertex stage can rebuild the turn from b12.
+
+-   **A particle system under a billboard** (T7f item 7). The turn reaches it only through the children's `UpdateDownwardPass` that
+    `0x140d3e650` runs: slot `0x2C` of `NiParticleSystem` (vtable `0x1419c3898`) is the system's update (`NiPSysUpdateCtlr`, the writer of its
+    data, world and bound). `NiParticleSystem::UpdateWorldData` (slot `0x30`, `0x140dd4c90`) is empty. So the draw takes the
+    system's world and particles as its last update (an update pass or a cull's turn) left them; nothing turns them per view afterwards.
+
+## The empty fade node: the property's "no fade node" (T7f item 7)
+
+AE 1.6.1170. `FUN_14147ac00` (static initialisation) allocates a `BSFadeNode` (0x158 bytes, NiAVObject flags `|= 0x8000`, `currentFade`
+`+0x130` = 1) and holds it in the `NiPointer` at `0x14332a2a0`; `FUN_14147ae10` releases it at exit. It has no parent and no name.
+
+-   **Who points at it.** `BSShaderProperty`'s constructor (`0x14147b580`) sets `fadeNode` (`+0x60`) to it. Measured (r1, the fade node references'
+    report): terrain (`Land`, `Block (x, y)`), object LOD (`obj`, `objsnow`, `*-LargeRef`) and some references' geometry (havok clutter
+    such as `SteelShield`, `Salmon`, `BasicTankard01`; `Scene Root:N` meshes) keep it. Which writer gives the others their `BSFadeNode` was
+    not traced.
+-   **Who reads it as "none".** `BSLightingShaderProperty::GetRenderPasses` (`0x1414ae146`: the refraction LOD fade then measures from the
+    geometry's bound instead), `BSLightingShader::Func6` (`0x1414dd379`), `BSUtilityShader::SetupGeometry` (`0x1414fb720`), `FUN_1414dfec0`
+    (`0x1414dfedc`) and `TESWaterSystem::AddWater` compare `fadeNode` with the pointer's value and take the null path.
+-   **DCLF.** The fade-root listing (`SceneStore::ListFadeRoot`) and the fade node references take it as no node (`Engine::EmptyFadeNode`).
+    Listed as a root, it was one root of thousands of geometries outside the scene graph: no parent walk reached it (T7f's "geometries whose
+    walk missed their root"), and the fade write-back wrote it.
 
 ## Scene state writers: where DCLF takes its events
 

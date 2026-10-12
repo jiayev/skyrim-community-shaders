@@ -189,7 +189,7 @@ namespace DCLF
 		// Eligible objects DCLF has not bound that the engine registered: a scene event DCLF missed (a record not written
 		// again, a verdict not taken again). The tracked set is the coordinator's: checked by the next scene pass (CheckRegistrations).
 		for (const auto& entry : entries)
-			if (entry.geometry && mainBatchRenderers.contains(entry.batch) && !entry.fading)
+			if (entry.geometry && mainBatchRenderers.contains(entry.batch))
 				a_drain.registrations.push_back({ entry.geometry, entry.hint });
 	}
 
@@ -1236,7 +1236,7 @@ namespace DCLF
 		// The mirror's records (T6b1b), and the entry's derivation cache (T6b3e: the merge stores what the pass leaves).
 		r.leaf = mirror.Leaf(geometry);
 		const auto& cached = layer ? entry.membershipLayerDerived : entry.membershipDerived;
-		const auto membership = layer ? PrimaryCull::MembershipLayerPass(geometry, r.leaf, cached) : PrimaryCull::MembershipPass(geometry, r.leaf, cached);
+		const auto membership = layer ? PrimaryCull::MembershipLayerPass(r.leaf, cached) : PrimaryCull::MembershipPass(r.leaf, cached);
 		r.derived = membership.derived;
 		r.fail = membership.fail;
 		if (!membership.ok) {
@@ -1291,12 +1291,15 @@ namespace DCLF
 		Ineligible reason = Ineligible::None;
 		if (r.classified)
 			reason = layer ? ClassifyLayer(r.leaf, &r.descriptors, accumulated) : ClassifyStatic(r.leaf, &r.descriptors, accumulated);
-		// Per frame whether or not the derivation was cached: hidden, part of an actor and fading are
+		// T7f item 7: a first-person decal is the first-person forward part's (FirstPersonDecalForward), the derivation's cache with it.
+		if (r.classified && reason == Ineligible::None && !layer)
+			FirstPersonDecalForward(entry, r.descriptors);
+		// Per frame whether or not the derivation was cached: hidden and part of an actor are
 		// states of this frame, and the scene phase's verdict for them is the last classification's
 		// (for a static, the last event's). An object that has just been hidden must lose its bindings now,
 		// or DCLF keeps drawing what the engine has stopped drawing.
 		if (reason == Ineligible::None)
-			reason = ClassifyFrame(entry, accumulated);
+			reason = ClassifyFrame(entry);
 		r.reason = reason;
 		if (reason != Ineligible::None) {
 			r.kind = JoinResult::Kind::Rejected;
@@ -1316,7 +1319,8 @@ namespace DCLF
 			// the descriptors). Zero for everything else, so an opaque key is exactly what it was.
 			std::uint32_t rasterFlags = twoSided ? kRasterTwoSided : 0u;
 			if (descriptors.decalGroup)
-				rasterFlags |= PackDecalRasterFlags(descriptors.decalGroup, decalBiasMode[descriptors.decalGroup & 3], descriptors.decalBlendMode, descriptors.decalWriteMode);
+				rasterFlags |= PackDecalRasterFlags(descriptors.decalGroup, descriptors.opaqueEffect ? 0u : decalBiasMode[descriptors.decalGroup & 3], descriptors.decalBlendMode,
+					descriptors.decalWriteMode);  // T7f item 7: an opaque effect in decal group 1 has no bias (DeriveEffectDescriptors)
 			// T7c1: a terrain group's state, as Terrain Blending's replay sets it: blend mode 1 and write mode 1 for the terrain, blending
 			// off and write mode 1 left for the no-blend meshes after it (Records.h, PackTerrainRasterFlags).
 			if (descriptors.terrainGroup)
@@ -1324,6 +1328,9 @@ namespace DCLF
 			// T7d: a forward key's state, as the engine's blended draw (FUN_1414b39d0) leaves it (Records.h, PackForwardRasterFlags).
 			if (descriptors.forward)
 				rasterFlags |= PackForwardRasterFlags(descriptors.forwardBlendMode, kForwardWriteMode, descriptors.forwardDepthTest, descriptors.forwardDepthWrite);
+			// T7f item 7: a first-person decal's group depth bias, in the decal bias bits a forward key leaves free (BuildEffect and Build apply it).
+			if (descriptors.forward && descriptors.forwardDecalGroup)
+				rasterFlags |= (decalBiasMode[descriptors.forwardDecalGroup & 3] & 15u) << kRasterDepthBiasShift;
 			// T7d's refraction: the forward state above, and the refraction draw's variant bits (Records.h, PackRefractionRasterFlags).
 			if (descriptors.refraction)
 				rasterFlags |= PackRefractionRasterFlags(descriptors.refractionFalloff, descriptors.refractionClamp);
@@ -1332,6 +1339,11 @@ namespace DCLF
 			// T7d's Effect port: the Effect shader's key (Records.h, kRasterEffect).
 			if (descriptors.effect)
 				rasterFlags |= kRasterEffect;
+			// CS_DCLF_BILLBOARDS: a billboard leaf's mode + 1 (Records.h, kRasterEffectBillboardShift): its record tells the vertex stage to
+			// turn it (EffectRecordFlagsOf). ClassifyFrame let it through only with a mode.
+			if (descriptors.effect && entry.parentReason == Ineligible::Billboard)
+				if (const std::int32_t mode = BillboardModeOf(entry); mode >= 0)
+					rasterFlags |= static_cast<std::uint32_t>(mode + 1) << kRasterEffectBillboardShift;
 			// The geometry slots are the walk's (the joins resolve none: frozen until the merges are done).
 			r.key = PipelineKey{ descriptors.vertex, descriptors.pixel, rasterFlags, descriptors.pass,
 				VertexLayoutOf(tables.geometries[r.geometrySlot].vertexDesc) };
@@ -1340,7 +1352,10 @@ namespace DCLF
 			r.staticFlags = (alphaTest ? kObjectAlphaTest : 0u) | (twoSided ? kObjectTwoSided : 0u) |
 			                (suppress ? kObjectSuppressExternalEmittance : 0u) |
 			                (descriptors.technique == kTechniqueTreeAnim ? kObjectTreeAnim : 0u) |
-			                (alphaTest ? static_cast<std::uint32_t>(alpha->threshold) << kObjectAlphaThresholdShift : 0u) |
+			                // A Blood effect keeps its threshold too (AlphaTestRefOf: SetupGeometry's AlphaTestRef.x, tested or not).
+			                ((alphaTest || (alpha && descriptors.effect && (descriptors.pass & EffectFlag::Blood))) ?
+			                        static_cast<std::uint32_t>(alpha->threshold) << kObjectAlphaThresholdShift :
+			                        0u) |
 			                (alphaTest && alphaBlending ? kObjectAlphaBlended : 0u) |
 			                (descriptors.decalGroup ? kObjectDecal | (descriptors.decalGroup << kObjectDecalGroupShift) : 0u) |
 			                (descriptors.terrainGroup << kObjectTerrainGroupShift) |
@@ -1400,10 +1415,10 @@ namespace DCLF
 			{ "reason", l.reason == r.reason },
 			{ "descriptors", ld.technique == rd.technique && ld.pass == rd.pass && ld.vertex == rd.vertex && ld.pixel == rd.pixel && ld.rawVertex == rd.rawVertex &&
 			                     ld.rawPixel == rd.rawPixel && ld.derivedPass == rd.derivedPass && ld.rejectedTechnique == rd.rejectedTechnique &&
-			                     ld.decalGroup == rd.decalGroup && ld.decalBlendMode == rd.decalBlendMode && ld.decalWriteMode == rd.decalWriteMode &&
+			                     ld.decalGroup == rd.decalGroup && ld.decalBlendMode == rd.decalBlendMode && ld.decalWriteMode == rd.decalWriteMode && ld.opaqueEffect == rd.opaqueEffect &&
 			                     ld.terrainGroup == rd.terrainGroup &&
 			                     ld.forward == rd.forward && ld.forwardBlendMode == rd.forwardBlendMode && ld.forwardDepthTest == rd.forwardDepthTest &&
-			                     ld.forwardDepthWrite == rd.forwardDepthWrite && ld.refraction == rd.refraction &&
+			                     ld.forwardDepthWrite == rd.forwardDepthWrite && ld.forwardDecalGroup == rd.forwardDecalGroup && ld.refraction == rd.refraction &&
 			                     ld.refractionFalloff == rd.refractionFalloff && ld.refractionClamp == rd.refractionClamp &&
 			                     ld.projectedUV == rd.projectedUV && ld.effect == rd.effect },
 			{ "key", l.key == r.key },

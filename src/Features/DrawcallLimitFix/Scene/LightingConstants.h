@@ -192,6 +192,13 @@ namespace DCLF
 	 * the frame lighting block after the effect camera (PS b13 c18: Effect.hlsl, DCLFEffectDLightColor); zero without a sun light.
 	 */
 	std::array<float, 4> SampleEffectLight();
+	/**
+	 * @brief T7d's Effect port, Blood (kWeaponBlood): PS AlphaTestRef.yz as BSEffectShader::SetupGeometry (0x1414eab10) writes them for a pass
+	 * with the Blood bit: the globals 0x1433dccf0 and 0x1433dccf4, which only FUN_1414ec2a0 writes, from BSTempEffectWeaponBlood's Update and
+	 * its start (two game settings, DAT_14200fbe8 and DAT_14200fc00); x 0 (the object record's threshold), w 0. Sampled by each main commit
+	 * (render thread) into the frame lighting block after the effect light (PS b13 c19: Effect.hlsl, DCLFEffectBlood).
+	 */
+	std::array<float, 4> SampleEffectBlood();
 	/** @brief This frame's, from the engine's globals (render thread). */
 	ExtrasFrame SampleExtrasFrame();
 	/**
@@ -322,10 +329,29 @@ namespace DCLF
 	// Lighting variant reads (DCLFSuppressExternalEmittance). Shares bit 3 with kRecordRefractionFalloff: an effect record never has
 	// kRecordRefraction.
 	inline constexpr std::uint32_t kRecordEffectSuppressEmittance = 1u << 3;
-	/** @brief The kRecordEffectSuppressEmittance bit of an object drawn with a_key: none unless it is an effect key (kRasterEffect). */
+	// A billboard's effect record (CS_DCLF_BILLBOARDS; Billboards.h): its key's billboard mode (RasterEffectBillboard), which Effect.hlsl
+	// turns the leaf to the drawing camera by (DCLFBillboardWorld): bit 4 set, the mode (NiBillboardNode's userFlags & 7) in bits 5-7. Bits
+	// 4-7 are refraction's otherwise: an effect record never has kRecordRefraction.
+	inline constexpr std::uint32_t kRecordEffectBillboard = 1u << 4;
+	inline constexpr std::uint32_t kRecordEffectBillboardModeShift = 5;
+	/** @brief The kRecordEffect* bits of an object drawn with a_key: none unless it is an effect key (kRasterEffect). */
 	inline constexpr std::uint32_t EffectRecordFlagsOf(const PipelineKey& a_key, std::uint32_t a_objectFlags)
 	{
-		return RasterEffect(a_key.rasterFlags) && (a_objectFlags & kObjectSuppressExternalEmittance) ? kRecordEffectSuppressEmittance : 0u;
+		const std::uint32_t billboard = RasterEffectBillboard(a_key.rasterFlags);
+		return (RasterEffect(a_key.rasterFlags) && (a_objectFlags & kObjectSuppressExternalEmittance) ? kRecordEffectSuppressEmittance : 0u) |
+		       (billboard ? kRecordEffectBillboard | ((billboard - 1) << kRecordEffectBillboardModeShift) : 0u);
+	}
+	/**
+	 * @brief Whether a_key is the Effect port's Blood permutation (kWeaponBlood: its pass descriptor's Blood bit). BSEffectShader::SetupGeometry
+	 * (0x1414eab10) writes its PS AlphaTestRef.x as the pass's alpha property's threshold / 255 whatever its alpha test, so the object record's
+	 * reference is that (the accumulate phase keeps the threshold in the flags for it) and Effect.hlsl's BLOOD reads it (DCLFBloodAlphaTestRef).
+	 */
+	inline constexpr bool BloodEffectKey(const PipelineKey& a_key) { return RasterEffect(a_key.rasterFlags) && (a_key.passDescriptor & (1u << 14)); }
+	/** @brief BindlessObject::alphaTestRef of an object drawn with a_key: threshold / 255 when alpha tested or a Blood effect, else 0. */
+	inline float AlphaTestRefOf(std::uint32_t a_objectFlags, const PipelineKey* a_key)
+	{
+		const bool blood = a_key && !(a_objectFlags & kObjectNoBindings) && BloodEffectKey(*a_key);
+		return (a_objectFlags & kObjectAlphaTest) || blood ? ((a_objectFlags >> kObjectAlphaThresholdShift) & 0xFF) / 255.0f : 0.0f;
 	}
 	inline constexpr std::uint32_t kRecordFadeRootShift = 8;
 	/** @brief BindlessObject::recordFlags of an object: its flags and its fade root slot (Tables::objectFadeRoot) + 1 in bits 8-31. */

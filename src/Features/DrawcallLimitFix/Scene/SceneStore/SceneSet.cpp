@@ -28,12 +28,14 @@ namespace DCLF
 		if (flags & kObjectFree)
 			return 0;
 		// T7e: a first-person entry's slot takes part in the first-person view alone (the engine draws the skeleton in no world view: the
-		// sun's casters run with both roots hidden), and only as an opaque or alpha-tested object the first-person epochs draw (a decal,
-		// a forward, refraction or shadow-only object stays the engine's).
+		// sun's casters run with both roots hidden), as an object the first-person epochs draw: opaque or alpha-tested (the buckets), or a
+		// forward object - blended Lighting, the Effect port's meshes and particles - (T7e's forward part: the forward range, sorted). A
+		// decal, a refraction or a shadow-only object stays the engine's (T7f item 7: an effect decal is forward there, FirstPersonDecalForward).
 		if (FirstPersonSlot(a_slot)) {
 			const auto p = tables.objects[a_slot].pipelineIndex;
-			const bool drawable = !(flags & (kObjectShadowOnly | kObjectForward)) && !ObjectDecalGroup(flags) && p < tables.pipelines.size() &&
-			                      !RasterRefraction(tables.pipelines[p].rasterFlags) && !RasterEffect(tables.pipelines[p].rasterFlags);
+			const bool forward = (flags & kObjectForward) && p < tables.pipelines.size() && RasterForward(tables.pipelines[p].rasterFlags);
+			const bool drawable = !(flags & kObjectShadowOnly) && !ObjectDecalGroup(flags) && p < tables.pipelines.size() &&
+			                      !RasterRefraction(tables.pipelines[p].rasterFlags) && (forward || !((flags & kObjectForward) || RasterEffect(tables.pipelines[p].rasterFlags)));
 			return static_cast<std::uint8_t>((drawable ? kSetFirstPerson : 0u) & a_drawn);
 		}
 		std::uint32_t phases = 0;
@@ -94,11 +96,10 @@ namespace DCLF
 		// Within the scene buffers the main builds ahead are made against: past them it has no input until their growth.
 		if (!IndirectDraws::Get().FitsScene(&tables, a_slot, false))
 			return a_why = 10, false;
-		// A decal draws at its slot in its group's range (OrderDecals), and one slot holds one sequence: one of several partitions
-		// has none.
+		// A decal draws at its slots in its group's range (OrderDecals): one a partition (T7e's blood decals: a skinned decal copies its
+		// actor's dismember skin), all of them ordered.
 		if (const std::uint32_t group = ObjectDecalGroup(object.flags))
-			if (a_slot >= tables.decalOrdinal.size() || tables.decalOrdinal[a_slot] >= tables.decalCount[group - 1] ||
-				(a_slot < tables.skinPartitions.size() && tables.skinPartitions[a_slot]))
+			if (a_slot >= tables.decalOrdinal.size() || tables.decalOrdinal[a_slot] >= tables.decalCount[group - 1])
 				return a_why = 5, false;
 		return true;
 	}
@@ -301,41 +302,6 @@ namespace DCLF
 		// resident: a membership witness that moved (every resident bound again) and a record whose binding did not stand are the joins'
 		// (BindByMembership: LeaveSet and the change log queue them here), and the commit decides them from what they have now. The
 		// rebinding rule that kept them out while the commit ran first is gone.
-		// Fades DCLF does not model (PassCapture::FadingAtRegistration): the registrations that met one in a member, and the members whose
-		// fade has ended since. T7f prep: they exist only under the fallback toggles (CS_DCLF_FADING=0: a fade; CS_DCLF_LOD_CROSSFADE=0: a
-		// LOD cross-fade) - with both on, as by default, every fade is DCLF's and the hooks push none - so the normal path never reads the
-		// registration here; with fades off the classification already takes a fading member out from the mirror (Ineligible::Fading).
-		// The cross-fade fallback is the one reader of the registration left: it goes with the fallbacks at T7f (with the culls off the
-		// engine draws nothing to fall back to).
-		const bool fadeFallback = !ActiveToggles().fading || !ActiveToggles().lodCrossfade;
-		PassCapture::Get().TakeUnmodelledFades([&](const RE::BSGeometry* a_geometry) {
-			if (!fadeFallback)
-				return;
-			const auto entry = tracked.find(const_cast<RE::BSGeometry*>(a_geometry));
-			if (entry == tracked.end() || !setFadeHeld.insert(a_geometry).second)
-				return;
-			if (entry->second.slot != kNoObjectSlot)
-				QueueSet(entry->second.slot);
-			if (entry->second.layerSlot != kNoObjectSlot)
-				QueueSet(entry->second.layerSlot);
-		});
-		for (auto it = setFadeHeld.begin(); it != setFadeHeld.end();) {
-			const auto entry = tracked.find(const_cast<RE::BSGeometry*>(*it));
-			// Its fade node's currentFade, the mirror's (T6b1b).
-			const auto* fadeNode = entry != tracked.end() ? mirror.Leaf(entry->first).fadeNode : nullptr;
-			const bool fading = fadeNode && fadeNode->currentFade < 1.0f;
-			if (entry != tracked.end() && fading && fadeFallback) {
-				++it;
-				continue;
-			}
-			if (entry != tracked.end()) {
-				if (entry->second.slot != kNoObjectSlot)
-					QueueSet(entry->second.slot);
-				if (entry->second.layerSlot != kNoObjectSlot)
-					QueueSet(entry->second.layerSlot);
-			}
-			it = setFadeHeld.erase(it);
-		}
 
 		// The set parity's pass (below) decides every slot again without the commit's side effects (counters, causes, lags).
 		bool parityPass = false;
@@ -350,8 +316,19 @@ namespace DCLF
 				return 0;
 			const std::uint8_t participation = SetParticipation(a_slot, drawn);
 			std::uint8_t phases = participation;
-			if (!phases)
+			if (!phases) {
+				// T7e's observer: a first-person entry's slot the first-person view does not take (what SetParticipation's rule left out).
+				if ((drawn & kSetFirstPerson) && SwitchEnabled(Switch::SetParity) && FirstPersonSlot(a_slot)) {
+					++setStats.firstPersonExcluded;
+					if (setStats.firstFirstPersonExcluded.empty())
+						if (const auto* geometry = tables.objectGeometry[a_slot]) {
+							const auto p = tables.objects[a_slot].pipelineIndex;
+							setStats.firstFirstPersonExcluded = fmt::format("'{}' (slot {}, flags {:#x}, raster {:#x})", geometry->name.c_str() ? geometry->name.c_str() : "?",
+								a_slot, tables.objects[a_slot].flags, p < tables.pipelines.size() ? tables.pipelines[p].rasterFlags : 0u);
+						}
+				}
 				return 0;
+			}
 			auto waiting = [&](std::uint32_t a_why) {
 				a_wait = true;
 				if (parityPass)
@@ -368,8 +345,6 @@ namespace DCLF
 			// no binding).
 			if (phases & kSetMain) {
 				bool main = IsResidentSlot(a_slot);
-				if (const auto* geometry = tables.objectGeometry[a_slot]; main && geometry && setFadeHeld.contains(geometry))
-					main = false;
 				if (std::uint32_t why = 0; main && !MainReady(a_slot, why)) {
 					waiting(why);
 					main = false;
@@ -386,12 +361,23 @@ namespace DCLF
 					waiting(why);
 					firstPerson = false;
 				}
-				if (firstPerson && !IndirectDraws::Get().FirstPersonSlotReady(&tables, lookupsCatalog.get(), a_slot)) {
+				std::uint32_t slotWhy = 0;
+				if (firstPerson && !IndirectDraws::Get().FirstPersonSlotReady(&tables, &lookups, lookupsCatalog.get(), a_slot, &slotWhy)) {
 					waiting(8);
 					firstPerson = false;
 				}
 				if (!firstPerson)
 					phases &= ~kSetFirstPerson;
+				// T7e's observer (CS_DCLF_SET_PARITY): a first-person slot held out of its view, and why (resident: not main-ready or its pipelines).
+				if (!firstPerson && SwitchEnabled(Switch::SetParity)) {
+					++setStats.firstPersonHeld;
+					if (setStats.firstFirstPersonHeld.empty())
+						if (const auto* geometry = tables.objectGeometry[a_slot])
+							setStats.firstFirstPersonHeld = fmt::format("'{}' (slot {}, {}, waiting reason {}, first-person readiness cause {}, pipeline slot {} raster {:#x})",
+								geometry->name.c_str() ? geometry->name.c_str() : "?", a_slot, IsResidentSlot(a_slot) ? "resident" : "not resident",
+								a_slot < setWaitWhy.size() ? setWaitWhy[a_slot] : 0u, slotWhy, tables.objects[a_slot].pipelineIndex,
+								tables.objects[a_slot].pipelineIndex < tables.pipelines.size() ? tables.pipelines[tables.objects[a_slot].pipelineIndex].rasterFlags : 0u);
+				}
 			}
 			// The reflection's faces draw from the frame's scene list (IndirectDraws::ExecuteReflection): its pipeline slot's forward
 			// pipeline ready. T6b3e: in the catalog the lane's lookups were resolved against (the publication's, which the revision's faces
@@ -977,10 +963,6 @@ namespace DCLF
 		}
 		if (const auto owned = fadeOwnedPosted.Take()) {
 			ApplyFadeRootsOwned(*owned);
-			publishForced = true;
-		}
-		if (fadeReseedPosted.exchange(false, std::memory_order_acq_rel)) {
-			ApplyReseedOwnedFadeRoots();
 			publishForced = true;
 		}
 	}

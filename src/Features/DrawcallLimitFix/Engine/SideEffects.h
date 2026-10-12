@@ -63,4 +63,32 @@ namespace DCLF::SideEffects
 	void PublishAnimPrediction(const std::vector<const void*>& a_stoodInRoots);
 	/** @brief The <- ANIM RATE line since the last call (empty without the switch). */
 	std::string AnimRateReport();
+
+	/**
+	 * @brief T7f checklist item 6, the actors' animation rate (skyrim-engine-notes.md, "T7f: the fade nodes' OnVisible stores and the
+	 * actors' animation stamp"). A high actor whose 3D the actor pre-cull left kNotVisible (bit 20; the race's flag bit 7 clear) animates at full rate in a frame only when its skin
+	 * property (MiddleHighProcessData +0x178) carries that frame's gFrameCounter at +0x80 (Actor::ModifyAnimationUpdateData,
+	 * 0x1406a37ef: the difference must be under fMaxFrameCounterDifferenceToConsiderVisible, so 0). Only the depth and shadow
+	 * registrations stamp it (FUN_1414b2a60 and its siblings, before the batch renderer's RegisterPass), so it is lost once the culls
+	 * stop, and for an actor the sun's entry exclusion keeps out of the cascade culls.
+	 *
+	 * Main thread at Main::Update's entry (no job runs; gFrameCounter is this frame's until Renderer::End): DCLF's verdict per high actor
+	 * is its 3D's world bound inside any of the last scene frame's shadow views (SunViews' cascade culls, LightViews' local views) - the
+	 * views DCLF draws, from the cameras the engine set up, no cull result read. The producer stamps the property
+	 * of every actor with that verdict; CS_DCLF_ACCUMULATED_PARITY first compares, for the kNotVisible actors, the stamp the last frame
+	 * left (the engine's, where DCLF did not stamp it) with the verdict of the same frame's views: <- ACTOR RATE on an actor the engine
+	 * animated and DCLF would not.
+	 */
+	void UpdateActorRate(bool a_running);
+
+	/**
+	 * @brief CS_DCLF_FADE_PARITY's <- FADE DOUBLE attribution: FUN_14147aa20, a fade node's placement snap (a cell attach of its reference),
+	 * writes +0x13C as an OnVisible does. DCLF follows it as an event (the root's row seeded again from the node: SceneStore's
+	 * fadeSnapEvents), so a root it snapped is not a second writer. Any thread (the snap's); nothing is kept without the switch.
+	 */
+	void NoteFadeSnap(const void* a_node);
+	/** @brief The main thread at Main::Update's entry: the nodes snapped since the last call. */
+	void TakeFadeSnaps(std::vector<const void*>& a_out);
+	/** @brief The actor rate line since the last call (empty when neither the producer nor the observer ran). */
+	std::string ActorRateReport();
 }

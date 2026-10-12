@@ -233,9 +233,9 @@ namespace DCLF
 		 * stands in for the root (PrimaryCull's own set: a write for a root it no longer stands in for is left). a_live false (DCLF does
 		 * not run): the writes are dropped, and the next decode writes everything again.
 		 *
-		 * T7f preparation: the decoder's wide writes (every other root DCLF lists, its geometry, the plain entry roots) are made too under
-		 * CS_DCLF_ACCUMULATED_ALL, with the nodes between a visible geometry and its root and the cell roots (ListUpkeep's), whoever
-		 * stands in for the root; otherwise they are a dry run, compared with the engine's bit under CS_DCLF_ACCUMULATED_PARITY.
+		 * T7f checklist item 1: the decoder's wide writes (every other root DCLF lists, its geometry, the plain entry roots) are made too,
+		 * with the nodes between a visible geometry and its root and the cell roots (ListUpkeep's), whoever stands in for the root; compared
+		 * with the engine's bit under CS_DCLF_ACCUMULATED_PARITY.
 		 */
 		void WriteAccumulated(bool a_live, const std::function<bool(const void*)>& a_stoodIn);
 		/**
@@ -249,6 +249,11 @@ namespace DCLF
 		 * newest written tables, or no write yet; none without the wide writes but for the stood-in roots). Reads no engine memory.
 		 */
 		bool AccumulatedVerdictOf(const void* a_root, bool& a_visible) const;
+		/**
+		 * @brief T7f, CS_DCLF_TREE_PARITY, the main thread after WriteAccumulated: whether this entry's writes stored a_node's kAccumulated
+		 * (so a reader before the frame's culls sees DCLF's bit, not the engine's last cull's: <- TREE MANAGER counts those clocks aside).
+		 */
+		bool AccumulatedStoredNow(const void* a_node) const;
 		/** @brief T7b2, render thread: a camera cut in a_frame (PrimaryCull): every stood-in root visible until a batch of a_frame or later. */
 		void NoteCameraCut(std::uint32_t a_frame);
 		/** @brief T7b2, any thread: the next decode writes every stood-in root and geometry, not only the changes (the engine wrote them). */
@@ -308,7 +313,7 @@ namespace DCLF
 		void ExecuteFirstPersonDepth(bool a_controlDriven);
 		void ExecuteFirstPersonColour();
 		bool FirstPersonDrawable() const;
-		bool FirstPersonSlotReady(const void* a_tables, const PipelineCatalog* a_catalog, std::uint32_t a_slot) const;
+		bool FirstPersonSlotReady(const void* a_tables, const void* a_lookups, const PipelineCatalog* a_catalog, std::uint32_t a_slot, std::uint32_t* a_why = nullptr) const;
 		bool FirstPersonCovered() const;
 		std::string FirstPersonReport();
 		/**

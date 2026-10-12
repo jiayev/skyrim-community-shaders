@@ -918,12 +918,6 @@ namespace DCLF
 		const auto& object = tables.objects[index];
 		if (object.flags & kObjectNoBindings)
 			return;  // a culling candidate only: no material or pipeline entry to compare against
-		if (PassCapture::FadingAtRegistration(a_pass)) {
-			// The native loop's own pass of an object DCLF draws (a LOD cross-fade's hint-10 copy): nothing of
-			// DCLF's stands for it, so it is neither compared nor counted against the object's draws.
-			++nativeOnlyPasses;
-			return;
-		}
 		const auto& key = tables.pipelines[object.pipelineIndex];
 		const auto* state = globals::state;
 

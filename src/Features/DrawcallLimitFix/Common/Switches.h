@@ -25,14 +25,13 @@ namespace DCLF
 		Trees,
 		Decals,
 		Layers,
-		Fading,
-		LodCrossfade,
 		MtLand,
 		TbTerrain,
 		Forward,
 		Effects,
 		Refraction,
 		Particles,
+		Billboards,
 		ProjectedUv,
 		SwitchNodes,
 		LodObjects,
@@ -43,12 +42,15 @@ namespace DCLF
 		SunSkip,
 		SunExclude,
 		PrimaryExclude,
-		AccumulatedAll,
 		TreeListAll,
 		Skylight,
 		Precipitation,
 		Reflections,
 		FirstPerson,
+		FirstPersonDecals,
+		OpaqueEffects,
+		BillboardParticles,
+		EmptyFadeNode,
 		OrgEpochs,
 		OrgAsyncEpochs,
 		OrgClosed,
@@ -102,6 +104,7 @@ namespace DCLF
 		DepthTrace,
 		DrawTrace,
 		TargetProbe,
+		TargetDump,
 		FoliageParity,
 		ShadowMaskProbe,
 		ShadowMapProbe,
@@ -142,6 +145,9 @@ namespace DCLF
 
 	/** @brief Whether a switch is set to "1". */
 	bool SwitchEnabled(Switch a_switch);
+
+	/** @brief Whether a default-on switch is on: anything but "0" (unset included). */
+	inline bool SwitchOnUnlessZero(Switch a_switch) { return SwitchValue(a_switch) != "0"; }
 
 	/**
 	 * @brief CS_DCLF_FOLIAGE_PARITY: on with "1" (tree wind frozen), "wind" (running) or "land" (tree wind frozen, and every colour

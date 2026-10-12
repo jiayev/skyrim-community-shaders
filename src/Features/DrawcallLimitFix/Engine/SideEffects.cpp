@@ -1,6 +1,9 @@
 #include "SideEffects.h"
 
 #include "EngineAccess.h"
+#include "LightViews.h"
+#include "SunViews.h"
+#include "Features/DrawcallLimitFix/Common/EventQueue.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 
@@ -107,6 +110,39 @@ namespace DCLF::SideEffects
 
 		// The render thread's: the samples no decode has reached yet, in frame order.
 		std::deque<std::unique_ptr<AccumulatedSample>> samples;
+
+		// T7f checklist item 6 (AE 1.6.1170): the actors' animation rate (UpdateActorRate).
+		constexpr std::uintptr_t kFrameCounter = 0x328cc6c;     // gFrameCounter: Renderer::End (0x140e4482b) increments it
+		constexpr std::size_t kMiddleHighSkinProperty = 0x178;  // MiddleHighProcessData: the property Actor::ModifyAnimationUpdateData reads
+		constexpr std::size_t kPropertyStamp = 0x80;            // BSShaderProperty::lastAccumulatedFrameCount
+		constexpr std::uint32_t kFlagNotVisible = 1u << 20;     // the actor pre-cull's (HighActorCuller, BSFadeNodeCuller) off screen
+		constexpr std::uint32_t kRaceAlwaysAnimates = 1u << 7;  // RACE_DATA flag: ModifyAnimationUpdateData ignores kNotVisible
+
+		/** @brief The main thread's: the properties stamped at the last entry (the producer's), so the observer can tell the engine's stamps. */
+		ankerl::unordered_dense::set<const void*> actorStamped;
+		struct ActorRateCounts
+		{
+			std::uint64_t entries = 0, actors = 0, noProperty = 0, stamped = 0, inSun = 0, inLocal = 0;
+			// The observer, kNotVisible actors: DCLF's verdict of the last frame's views against the engine's stamp of that frame.
+			std::uint64_t notVisible = 0, both = 0, dclfOnly = 0, engineOnly = 0, neither = 0, ownStamp = 0;
+			std::string first;
+		};
+		ActorRateCounts actorRate;
+
+		// CS_DCLF_FADE_PARITY: the fade snaps since the last entry (NoteFadeSnap).
+		auto& fadeSnaps = *new EventQueue<const void*>();
+
+		bool SphereInside(const SunViews::Planes& a_planes, const RE::NiPoint3& a_centre, float a_radius)
+		{
+			for (std::uint32_t p = 0; p < 6; ++p) {
+				if (!((a_planes.mask >> p) & 1))
+					continue;
+				const auto& plane = a_planes.plane[p];
+				if (!(plane[0] * a_centre.x + plane[1] * a_centre.y + plane[2] * a_centre.z - plane[3] > -a_radius))
+					return false;
+			}
+			return true;
+		}
 	}
 
 	bool AccumulatedParity()
@@ -222,6 +258,120 @@ namespace DCLF::SideEffects
 		return fmt::format("[DCLF] anim rate (T7b2): {} predictions, {:.1f} stood-in roots a frame ({:.1f} written visible){}{}{}\n", predictions,
 			predictions ? double(roots) / double(predictions) : 0.0, predictions ? double(set) / double(predictions) : 0.0, sites,
 			!predictions ? " <- NOT COMPARED" : differ ? " <- ANIM RATE" : " <- OK", first);
+	}
+
+	void UpdateActorRate(bool a_running)
+	{
+		const bool observe = AccumulatedParity();
+		if (!a_running) {
+			actorStamped.clear();
+			return;
+		}
+		auto* lists = RE::ProcessLists::GetSingleton();
+		if (!lists)
+			return;
+		auto& c = actorRate;
+		++c.entries;
+		const std::uint32_t counter = Engine::Global<std::uint32_t>(kFrameCounter);
+		// The last scene frame's shadow views (the frame whose stamps the engine left): the sun's cascade culls, the local lights' views.
+		const std::uint32_t sceneFrame = SceneStore::Get().GetFrame();
+		const auto& sun = SunViews::Get().Current();
+		const bool sunViews = sun.valid && sun.sceneFrame == sceneFrame;
+		ankerl::unordered_dense::set<const void*> stampedNow;
+		for (const auto& handle : lists->highActorHandles) {
+			const auto actor = handle.get();
+			if (!actor)
+				continue;
+			const auto* process = actor->GetActorRuntimeData().currentProcess;
+			const auto* middleHigh = process ? process->middleHigh : nullptr;
+			auto* property = middleHigh ? Engine::At<std::byte*>(middleHigh, kMiddleHighSkinProperty) : nullptr;
+			auto* root = actor->Get3D2();
+			++c.actors;
+			if (!property || !root) {
+				++c.noProperty;
+				continue;
+			}
+			// DCLF's verdict: the 3D's bound inside a shadow view of the last scene frame.
+			const auto& bound = root->worldBound;
+			bool inSun = false, inLocal = false;
+			// The sun: the cascade culls walk what the full-frustum cull kept (SunViews::Frame::fullFrusta), then test their own planes.
+			bool inFull = sun.fullFrusta.empty();
+			for (const auto& planes : sun.fullFrusta)
+				inFull = inFull || SphereInside(planes, bound.center, bound.radius);
+			if (sunViews && inFull)
+				for (std::uint32_t i = 0; i < sun.count && i < SunViews::kMaxCascades && !inSun; ++i)
+					inSun = sun.cascades[i].valid && SphereInside(sun.cascades[i].cull, bound.center, bound.radius);
+			if (!inSun)
+				LightViews::Get().ForEachView(sceneFrame, [&](const SunViews::Cascade& a_view, const std::array<float, 4>& a_sphere) {
+					// A spot light's view: its cull planes; a point light's (no planes): the bound within the light's radius.
+					if (inLocal)
+						return;
+					if (a_view.cull.mask) {
+						inLocal = SphereInside(a_view.cull, bound.center, bound.radius);
+					} else if (a_sphere[3] > 0.0f) {
+						const float dx = bound.center.x - a_sphere[0], dy = bound.center.y - a_sphere[1], dz = bound.center.z - a_sphere[2];
+						const float reach = a_sphere[3] + bound.radius;
+						inLocal = dx * dx + dy * dy + dz * dz <= reach * reach;
+					}
+				});
+			const bool dclf = inSun || inLocal;
+			c.inSun += inSun ? 1 : 0;
+			c.inLocal += inLocal ? 1 : 0;
+			std::atomic_ref<std::uint32_t> stamp(Engine::At<std::uint32_t>(property, kPropertyStamp));
+			// The observer: the kNotVisible actors (the branch that reads the stamp), the last frame's stamp against the same frame's views.
+			// A stamp DCLF made at the last entry is not the engine's: such an actor is counted as DCLF's own.
+			const auto* race = actor->GetRace();
+			const bool readsStamp = (root->GetFlags().underlying() & kFlagNotVisible) && !(race && (race->data.flags.underlying() & kRaceAlwaysAnimates));
+			if (observe && readsStamp) {
+				++c.notVisible;
+				const bool engine = stamp.load(std::memory_order_relaxed) == counter - 1;
+				if (engine && actorStamped.contains(property)) {
+					++c.ownStamp;
+				} else {
+					++(dclf ? (engine ? c.both : c.dclfOnly) : (engine ? c.engineOnly : c.neither));
+					if (engine && !dclf && c.first.size() < 300)
+						c.first += fmt::format("{}'{}'", c.first.empty() ? "" : ", ", actor->GetName() ? actor->GetName() : "?");
+				}
+			}
+			// The producer: this frame's stamp, for every actor DCLF's shadow views hold (the engine reads it only for a kNotVisible one).
+			if (dclf) {
+				stamp.store(counter, std::memory_order_relaxed);
+				stampedNow.insert(property);
+				++c.stamped;
+			}
+		}
+		actorStamped = std::move(stampedNow);
+	}
+
+	void NoteFadeSnap(const void* a_node)
+	{
+		static const bool parity = SwitchEnabled(Switch::FadeParity);
+		if (parity && a_node)
+			fadeSnaps.Push(a_node);
+	}
+
+	void TakeFadeSnaps(std::vector<const void*>& a_out)
+	{
+		fadeSnaps.Drain([&](const void* a_node) { a_out.push_back(a_node); });
+	}
+
+	std::string ActorRateReport()
+	{
+		auto& c = actorRate;
+		if (!c.entries)
+			return {};
+		const bool observe = AccumulatedParity();
+		std::string text = fmt::format(
+			"[DCLF] actor rate (T7f checklist item 6): {} entries, {:.1f} high actors a frame ({:.1f} without a skin property or 3D), {:.1f} in the "
+			"sun's cascade culls and {:.1f} in a local shadow view a frame, {:.1f} stamped by DCLF a frame",
+			c.entries, double(c.actors) / double(c.entries), double(c.noProperty) / double(c.entries),
+			double(c.inSun) / double(c.entries), double(c.inLocal) / double(c.entries), double(c.stamped) / double(c.entries));
+		if (observe)
+			text += fmt::format("; kNotVisible actors (their animation reads the stamp) {}: in DCLF's shadow views / stamped by the engine last frame {} both / {} DCLF's alone / "
+								"{} the engine's alone / {} neither, {} DCLF's own stamp{}{}",
+				c.notVisible, c.both, c.dclfOnly, c.engineOnly, c.neither, c.ownStamp, c.engineOnly ? " <- ACTOR RATE" : " <- OK", c.first.empty() ? "" : "; first: " + c.first);
+		c = {};
+		return text + "\n";
 	}
 
 	std::uint64_t DropAccumulatedSamples(std::uint32_t a_oldestPending)

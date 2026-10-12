@@ -440,6 +440,17 @@ namespace DCLF
 				set.publications, set.waitingBy[0], set.waitingBy[1], set.waitingBy[2], set.waitingBy[3], set.waitingBy[4], set.waitingBy[5], set.waitingBy[6], set.waitingBy[7], set.waitingBy[8],
 				set.waitingBy[9], set.waitingBy[10], set.waitingBy[12], set.waitingBy[13], set.firstWaiting.empty() ? "" : "; first: ", set.firstWaiting, set.patchedMember, set.patchedMember ? " <- SET PATCHED" : "", set.leftAfterCommit, set.commitParityChecks, set.commitParityDiffer,
 				set.commitParityChecks ? (set.commitParityDiffer ? " <- COMMIT" : " <- OK") : "");
+			if (const auto misfiled = firstPersonMisfiled.exchange(0, std::memory_order_relaxed))
+				logger::info("[DCLF] first-person entries filed under another category node (T7e, CS_DCLF_SET_PARITY): {} evaluations; last geometry {} under {} "
+							 "(the first-person root {}) <- FIRST-PERSON FILING",
+					misfiled, firstPersonMisfiledGeometry.load(std::memory_order_relaxed), firstPersonMisfiledCategory.load(std::memory_order_relaxed),
+					static_cast<const void*>(firstPersonCategory));
+			if (set.firstPersonHeld)
+				logger::info("[DCLF] first-person slots held out of the first-person view (T7e, CS_DCLF_SET_PARITY): {} slot evaluations; first: {}", set.firstPersonHeld,
+					set.firstFirstPersonHeld);
+			if (set.firstPersonExcluded)
+				logger::info("[DCLF] first-person entries the first-person view takes no part in (T7e, CS_DCLF_SET_PARITY): {} slot evaluations; first: {}", set.firstPersonExcluded,
+					set.firstFirstPersonExcluded);
 			// T6b3d: why the members that left did (each leave once, by its commit's verdict).
 			std::string waitingText;
 			for (std::size_t why = 0; why < set.leftWaiting.size(); ++why)

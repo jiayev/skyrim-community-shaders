@@ -22,6 +22,10 @@ namespace DCLF::RoomVisibility
 		constexpr std::array<std::uintptr_t, 3> kCallSites{ 0x2b4268, 0x2e1282, 0x771687 };
 
 		bool installed = false;
+		bool observe = false;      // CS_DCLF_ROOM_PARITY: the engine's answer compared with DCLF's
+		// Whether DCLF runs this frame (Main::Update's entry, the main thread; read by the job threads' calls during the frame).
+		std::atomic<bool> live{ false };
+		std::atomic<std::uint64_t> answered{ 0 }, engineAnswered{ 0 };
 
 		// The parity's counters, by kind (room, shared node, other key) and outcome; any thread.
 		enum Outcome : std::uint32_t
@@ -34,7 +38,7 @@ namespace DCLF::RoomVisibility
 		constexpr std::array<const char*, 4> kKindNames{ "no key", "room", "shared node", "other key" };
 		struct Stats
 		{
-			std::atomic<std::uint64_t> calls{ 0 }, noSet{ 0 }, raced{ 0 }, matchPrevious{ 0 };
+			std::atomic<std::uint64_t> calls{ 0 }, noSet{ 0 }, raced{ 0 }, matchPrevious{ 0 }, graphChange{ 0 }, outsideGraph{ 0 };
 			std::array<std::array<std::atomic<std::uint64_t>, kOutcomes>, 4> byKind{};
 		};
 		Stats stats;
@@ -80,6 +84,13 @@ namespace DCLF::RoomVisibility
 				return;
 			}
 			const auto answer = a_hold->Visible(a_node);
+			// A room or portal node outside DCLF's graph (the engine's false is only ever a room's or a shared node's): the cell being
+			// left or loaded (w195/w196: one window, at the interior's coc). DCLF answers visible, the conservative side (an extra update),
+			// so it is counted aside, by whether a cell change was within two sets.
+			if (answer.kind == Set::kOther && !a_engine) {
+				(a_hold->graphAge < 2 ? stats.graphChange : stats.outsideGraph).fetch_add(1, std::memory_order_relaxed);
+				return;
+			}
 			auto& counts = stats.byKind[answer.kind];
 			counts[kCompared].fetch_add(1, std::memory_order_relaxed);
 			if (answer.visible == a_engine)
@@ -91,15 +102,29 @@ namespace DCLF::RoomVisibility
 			NoteFirst(a_node, *a_hold.get(), answer.kind, a_engine, previous);
 		}
 
-		/** @brief The three calls of Main::IsRoomVisible: the engine's answer, observed. */
+		/**
+		 * @brief The three calls of Main::IsRoomVisible: DCLF's answer while it runs (T7f checklist item 3), else the engine's; the
+		 * engine's observed against DCLF's under CS_DCLF_ROOM_PARITY.
+		 */
 		struct IsRoomVisible
 		{
 			static bool thunk(void* a_main, RE::NiNode* a_node)
 			{
 				const PortalViews::VisibleSetHold hold;
+				const bool dclf = hold && live.load(std::memory_order_acquire);
+				if (dclf && !observe) {
+					answered.fetch_add(1, std::memory_order_relaxed);
+					return hold->Visible(a_node).visible;
+				}
 				const bool engine = func(a_main, a_node);
-				Observe(hold, a_node, engine);
-				return engine;
+				if (observe)
+					Observe(hold, a_node, engine);
+				if (!dclf) {
+					engineAnswered.fetch_add(1, std::memory_order_relaxed);
+					return engine;
+				}
+				answered.fetch_add(1, std::memory_order_relaxed);
+				return hold->Visible(a_node).visible;
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -107,7 +132,8 @@ namespace DCLF::RoomVisibility
 
 	void Install()
 	{
-		if (installed || !SwitchEnabled(Switch::RoomParity))
+		observe = SwitchEnabled(Switch::RoomParity);
+		if (installed)
 			return;
 		const auto base = REL::Module::get().base();
 		for (const auto site : kCallSites)
@@ -119,12 +145,18 @@ namespace DCLF::RoomVisibility
 		for (const auto site : kCallSites)
 			stl::write_thunk_call<IsRoomVisible>(base + site);
 		installed = true;
-		logger::info("[DCLF] room visibility (T7b3, CS_DCLF_ROOM_PARITY): Main::IsRoomVisible's answers compared with PortalViews' VisibleSet (the engine's returned)");
+		logger::info("[DCLF] room visibility (T7f checklist item 3): Main::IsRoomVisible's calls answered from PortalViews' VisibleSet while DCLF runs{}",
+			observe ? ", the engine's answer compared with DCLF's (CS_DCLF_ROOM_PARITY)" : "");
 	}
 
 	bool Installed()
 	{
 		return installed;
+	}
+
+	void SetLive(bool a_live)
+	{
+		live.store(a_live, std::memory_order_release);
 	}
 
 	bool DclfAnswer(const void* a_key)
@@ -143,6 +175,8 @@ namespace DCLF::RoomVisibility
 			for (std::size_t o = 0; o < kOutcomes; ++o)
 				by[k][o] = take(stats.byKind[k][o]);
 		const std::uint64_t calls = take(stats.calls), noSet = take(stats.noSet), raced = take(stats.raced), matchPrevious = take(stats.matchPrevious);
+		const std::uint64_t graphChange = take(stats.graphChange), outsideGraph = take(stats.outsideGraph);
+		const std::uint64_t byDclf = take(answered), byEngine = take(engineAnswered);
 		std::uint64_t differ = 0;
 		for (const auto& kind : by)
 			differ += kind[kDclfOnly] + kind[kEngineOnly];
@@ -154,10 +188,15 @@ namespace DCLF::RoomVisibility
 			first.ready.store(false, std::memory_order_relaxed);
 			first.key.store(nullptr, std::memory_order_release);
 		}
-		logger::info("[DCLF] room visibility (T7b3: Main::IsRoomVisible, the engine's answer against PortalViews' VisibleSet): {} calls ({} before any set, {} across a publish: "
-					 "not compared); rooms {} ({} DCLF only, {} engine only), shared nodes {} ({} DCLF only, {} engine only), other keys {} ({} engine only: not in DCLF's "
-					 "graph), no key {}; {} differences, {} of them as the previous walk's{}{}",
-			calls, noSet, raced, by[Set::kRoom][kCompared], by[Set::kRoom][kDclfOnly], by[Set::kRoom][kEngineOnly], by[Set::kShared][kCompared], by[Set::kShared][kDclfOnly],
+		if (!observe) {
+			logger::info("[DCLF] room visibility (T7f checklist item 3): {} calls answered by DCLF's VisibleSet, {} by the engine (DCLF off, or no set yet)", byDclf, byEngine);
+			return;
+		}
+		logger::info("[DCLF] room visibility (T7b3: Main::IsRoomVisible, the engine's answer against PortalViews' VisibleSet: {} answered by DCLF, {} by the "
+					 "engine): {} calls ({} before any set, {} across a publish, {} rooms or portals outside DCLF's graph, the engine's false and DCLF's true ({} within two sets of a cell change): not compared); rooms {} ({} DCLF "
+					 "only, {} engine only), shared nodes {} ({} DCLF only, {} engine "
+					 "only), other keys {} ({} engine only: not in DCLF's graph), no key {}; {} differences, {} of them as the previous walk's{}{}",
+			byDclf, byEngine, calls, noSet, raced, outsideGraph + graphChange, graphChange, by[Set::kRoom][kCompared], by[Set::kRoom][kDclfOnly], by[Set::kRoom][kEngineOnly], by[Set::kShared][kCompared], by[Set::kShared][kDclfOnly],
 			by[Set::kShared][kEngineOnly], by[Set::kOther][kCompared], by[Set::kOther][kEngineOnly], by[Set::kNoKey][kCompared], differ, matchPrevious,
 			differ ? " <- ROOM" : " <- OK", firstText);
 	}

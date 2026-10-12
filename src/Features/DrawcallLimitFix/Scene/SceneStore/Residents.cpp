@@ -300,6 +300,12 @@ namespace DCLF
 		// Its property's fade node (T6b1b: the mirror's).
 		const auto* property = geometry ? mirror.Leaf(geometry).property : nullptr;
 		const auto* node = property ? static_cast<const RE::NiAVObject*>(property->fadeNode) : nullptr;
+		// T7f item 7: the engine's "no fade node" (Engine::EmptyFadeNode: terrain, object LOD, references whose root is no BSFadeNode) is no
+		// root. Listed, it was one root shared by thousands of geometries, outside the scene graph: no chain reached it (SetChain's misses),
+		// and FadeStateCS and the write-back wrote a static engine node. Such a geometry takes its entry's root as any plain one.
+		static const bool emptyIsNone = SwitchOnUnlessZero(Switch::EmptyFadeNode);
+		if (emptyIsNone && node == Engine::EmptyFadeNode())
+			node = nullptr;
 		// T6b3e: a root not listed yet is owned from the entry's reference (pins), never from the key; without one, not listed.
 		RE::NiPointer<RE::NiAVObject> owner;
 		if (node && !tables.fadeRootIndex.contains(node) && !(owner = HeldFadeNode(a_slot, node)))
@@ -335,7 +341,9 @@ namespace DCLF
 			row.object = a_slot;
 			row.bits |= tables.fadeRoots[r].bits & kFadeRootSeedOdd;
 			if (const auto owned = fadeRootOwned.find(node); owned != fadeRootOwned.end())
-				row.bits |= kFadeRootOwned | (owned->second ? kFadeRootStoodIn : 0u);
+				row.bits |= kFadeRootOwned | (owned->second ? kFadeRootStoodIn | kFadeRootWritten : 0u);
+			// T7f checklist items 4-5: every listed root is owned and DCLF's to write from its listing (the row's seed is the node as listed).
+			row.bits |= kFadeRootOwned | kFadeRootWritten;
 			tables.fadeRootNode[r] = node;
 			// Owned while listed (step 6e E3: a published version that names it keeps it, through the retirement chain).
 			if (fadeRootOwners.size() <= r)
@@ -384,25 +392,13 @@ namespace DCLF
 
 	void SceneStore::MarkFadeRootOwned(const void* a_node, bool a_owned, bool a_standIn)
 	{
-		const auto* node = static_cast<const RE::NiAVObject*>(a_node);
-		if (const auto before = fadeRootOwned.find(a_node); (before != fadeRootOwned.end() && before->second) != (a_owned && a_standIn))
-			NoteFadeChanged(node);
 		const auto it = tables.fadeRootIndex.find(a_node);
 		if (it == tables.fadeRootIndex.end())
 			return;
 		auto& row = tables.fadeRoots[it->second];
-		if (a_owned) {
-			// From here the GPU's state is the members': it starts from the node as the engine left it (the seed, sampled in the frame
-			// that first draws the new generation).
-			const std::uint32_t object = row.object;
-			const std::uint32_t odd = row.bits & kFadeRootSeedOdd;
-			row = FadeRootFromMirror(node);
-			row.object = object;
-			row.bits |= odd | kFadeRootOwned | (a_standIn ? kFadeRootStoodIn : 0u);
-			RequestFadeSeed(it->second, row);
-		} else {
-			row.bits &= ~(kFadeRootOwned | kFadeRootStoodIn);
-		}
+		// T7f checklist items 4-5: owned and written since its listing, its state the GPU's throughout (no engine step to seed again from):
+		// the cut's stand-in only moves kFadeRootStoodIn.
+		row.bits = (row.bits & ~kFadeRootStoodIn) | kFadeRootOwned | kFadeRootWritten | (a_owned && a_standIn ? kFadeRootStoodIn : 0u);
 		tables.NoteFadeRoot(it->second);
 	}
 
@@ -427,7 +423,7 @@ namespace DCLF
 			return;
 		auto& row = tables.fadeRoots[it->second];
 		const std::uint32_t object = row.object;
-		const std::uint32_t kept = row.bits & (kFadeRootOwned | kFadeRootStoodIn | kFadeRootSeedOdd);
+		const std::uint32_t kept = row.bits & (kFadeRootOwned | kFadeRootStoodIn | kFadeRootSeedOdd | kFadeRootWritten);
 		row = FadeRootFromMirror(a_node);
 		row.object = object;
 		row.bits |= kept;
@@ -467,12 +463,6 @@ namespace DCLF
 		a_row.generation = ++tables.fadeRootGenerations;
 		if (a_root < fadeRootOwners.size() && fadeRootOwners[a_root])
 			fadeSeedRequests.push_back({ fadeRootOwners[a_root], a_root, a_row.generation, static_cast<std::uint32_t>(FadeSeedRow(a_root, a_row.bits)) });
-	}
-
-	void SceneStore::ApplyReseedOwnedFadeRoots()
-	{
-		for (const auto& [node, standIn] : fadeRootOwned)
-			MarkFadeRootOwned(node, true, standIn);
 	}
 
 	void SceneStore::RefreshFadeRootSwitch(const RE::NiAVObject* a_switch)
@@ -547,7 +537,7 @@ namespace DCLF
 			}
 			++residentStats.parityChecked;
 			AccumulatedPass fresh;
-			const bool built = PrimaryCull::FreshSyntheticPass(*geometry, mirror.Leaf(geometry), fresh);
+			const bool built = PrimaryCull::FreshSyntheticPass(mirror.Leaf(geometry), fresh);
 			const bool passSame = built && fresh.technique == patch.pass.technique && fresh.subPass == patch.pass.subPass && fresh.hint == patch.pass.hint &&
 			                      fresh.lodRow == patch.pass.lodRow && fresh.sunTest == patch.pass.sunTest;
 			const auto& object = tables.objects[slot];

@@ -53,8 +53,9 @@ namespace DCLF
 		// geometry index -> its object slot as the walk that made the snapshot had it (-1: no record); the frame reads it, not the
 		// coordinator's tracked set (step 6c)
 		std::vector<std::int32_t> geometrySlot;
-		// Per geometry index: a main-pass table object PrimaryCull can give a synthetic pass (SceneStore::PrimaryEntryAllows);
-		// the rest under a left-out entry are registered by the engine, handed over as its cull would (PrimaryCull).
+		// Per geometry index (SceneStore::PrimaryVerdict): 1, a main-pass table object PrimaryCull can give a synthetic pass
+		// (SceneStore::PrimaryEntryAllows); 2 (T7f item 8), a hidden static's geometry, drawn by nobody; 0, the engine's: under a
+		// left-out entry handed over as its cull would (PrimaryCull).
 		std::vector<std::uint8_t> primaryGeometry;
 
 		static constexpr std::uint32_t kNone = ~0u;
@@ -153,12 +154,6 @@ namespace DCLF
 		 */
 		void BeginFrame(const std::shared_ptr<const SunCandidates>& a_candidates);
 
-		/**
-		 * @brief Render thread, from the end of the sun's Accumulate to the next full-frustum cull: whether the bound
-		 * meets any of this frame's cascades, tested against the planes the engine's own cascade culls used (the
-		 * Geometric rule). Unknown (the cascades were not captured this frame): nullopt.
-		 */
-		std::optional<bool> InSunCascades(const RE::NiBound& a_bound) const;
 		/**
 		 * @brief One cascade as BuildDraws tests it (the colour latch's cascade region, IndirectDraws: kSunCascadeBytes): the
 		 * two active-plane masks (0 custom: none), then 6 planes and 6 custom planes as (normal, constant).

@@ -85,6 +85,7 @@ namespace DCLF
 			add(constants, sizeof(ExtrasFrame::projectedGlobals), kExtrasPixelFrameOffset);
 			add(constants, sizeof(std::array<float, 4>), kEffectCameraFrameOffset);  // T7d's Effect port (SampleEffectCamera)
 			add(constants, sizeof(std::array<float, 4>), kEffectLightFrameOffset);   // its Lighting variant (SampleEffectLight)
+			add(constants, sizeof(std::array<float, 4>), kEffectBloodFrameOffset);   // its Blood (SampleEffectBlood)
 			if (!a_depthOnly && a_resources.foliage)
 				add(constants, 8 * sizeof(std::uint32_t), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting) + sizeof(LodFadeFrame));
 			if (const auto& scene = *a_resources.scene; a_depthOnly && scene.treeLodCull && scene.treeLodShapes) {
@@ -226,7 +227,18 @@ namespace DCLF
 			}
 		}
 
-		void PlanFirstPersonBuckets(const MainSizing& a_main, const IndirectState& a_indirect, std::span<const rhi::PipelineHandle> a_slotPipelines, FirstPersonPlan& a_out)
+		std::uint32_t FirstPersonZGroupOf(const Lookups* a_lookups, const IndirectState& a_indirect, std::uint32_t a_slot)
+		{
+			// The Z-prepass groups are the set's (IndirectState::zGroups, by set index): a pipeline slot's is its lookup entry's set index's, as
+			// PlanZBuckets takes it. (fp10: indexing them by the pipeline slot named another slot's group, or none past the set.)
+			if (!a_lookups || a_slot >= a_lookups->pipelines.size())
+				return kNoBucket;
+			const auto setIndex = a_lookups->pipelines[a_slot].setIndex;
+			return setIndex != Lookups::kNone && setIndex < a_indirect.zGroups.size() ? a_indirect.zGroups[setIndex] : kNoBucket;
+		}
+
+		void PlanFirstPersonBuckets(const MainSizing& a_main, const Lookups* a_lookups, const IndirectState& a_indirect, std::span<const rhi::PipelineHandle> a_slotPipelines,
+			std::span<const std::uint8_t> a_forwardSlots, FirstPersonPlan& a_out)
 		{
 			// T7e: per pair of a slot's Z-prepass group's depth pipeline and its first-person forward pipeline, the slots drawing with it,
 			// each slot's range what its objects can produce (the Z-prepass's bucket capacity, as the reflection's).
@@ -234,9 +246,9 @@ namespace DCLF
 			a_out.map.assign(slots, kNoBucket);
 			a_out.buckets.clear();
 			for (std::uint32_t p = 0; p < slots; ++p) {
-				if (p >= a_slotPipelines.size() || !a_slotPipelines[p].valid() || !a_main.zBucketCapacity[p] || p >= a_indirect.zGroups.size())
+				if (p >= a_slotPipelines.size() || !a_slotPipelines[p].valid() || !a_main.zBucketCapacity[p])
 					continue;
-				const std::uint32_t group = a_indirect.zGroups[p];
+				const std::uint32_t group = FirstPersonZGroupOf(a_lookups, a_indirect, p);
 				if (group >= a_indirect.zPipelines.size() || !a_indirect.zPipelines[group].valid())
 					continue;
 				const auto depth = a_indirect.zPipelines[group];
@@ -252,6 +264,25 @@ namespace DCLF
 			for (auto& bucket : a_out.buckets) {
 				bucket.first = a_out.draws;
 				a_out.draws += bucket.capacity;
+			}
+			// T7e's forward part: every forward slot's map word names the forward range's table entry (after the buckets) with kBucketForward
+			// (BuildDrawsCS.hlsl). The range holds every draw the forward slots can produce (the main forward range's capacity, which counts
+			// the first-person members' draws with the rest), staged then sorted: two halves after the buckets' ranges.
+			a_out.forwardFirst = a_out.forwardCapacity = 0;
+			bool forward = false;
+			for (std::uint32_t p = 0; p < slots && p < a_forwardSlots.size(); ++p)
+				if (a_forwardSlots[p] && a_out.map[p] == kNoBucket) {
+					a_out.map[p] = kFirstPersonForwardBucket | static_cast<std::uint32_t>(a_out.buckets.size());
+					forward = true;
+				}
+			if (forward && a_main.forwardCapacity) {
+				a_out.forwardFirst = a_out.draws;
+				a_out.forwardCapacity = a_main.forwardCapacity;
+				a_out.draws += 2 * a_main.forwardCapacity;
+			} else if (forward) {
+				for (auto& word : a_out.map)
+					if (word != kNoBucket && (word & kFirstPersonForwardBucket))
+						word = kNoBucket;
 			}
 		}
 
@@ -271,6 +302,9 @@ namespace DCLF
 			frame->pipelineRows = a_in.pipelineRows;
 			frame->sequenceDraws = (a_in.sizing ? *a_in.sizing : static_cast<const FirstPersonSizing&>(a_resources)).sequenceDraws;
 			frame->buckets = a_in.buckets;
+			frame->forwardFirst = a_in.forwardFirst;
+			frame->forwardCapacity = a_in.forwardCapacity;
+			frame->forwardEntry = static_cast<std::uint32_t>(a_in.buckets.size());
 			frame->latchLayout = a_in.latchLayout;
 			frame->map = a_in.map;
 			// The colour segment's frame constants (the frame lighting at PS b13, the frame record), VS and PS b12 the first-person
@@ -462,11 +496,13 @@ namespace DCLF
 		const auto firstPersonState = inputs.firstPerson;
 		const bool firstPersonOn = inputs.toggles.firstPerson && inputs.claims && inputs.firstPersonTargets.colour != DXGI_FORMAT_UNKNOWN;
 		FirstPersonPipelinesOf(catalog, tables, inputs.firstPersonTargets, firstPersonOn, firstPersonRevisionPipelines);
+		FirstPersonForwardSlotsOf(tables, firstPersonOn, firstPersonForwardSlots);
 		if (firstPersonState && firstPersonOn) {
 			FirstPersonPlan latest;
-			PlanFirstPersonBuckets(Growths::Get().LatestSizing<MainSizing>(r), indirect, firstPersonRevisionPipelines, latest);
+			PlanFirstPersonBuckets(Growths::Get().LatestSizing<MainSizing>(r), &lookups, indirect, firstPersonRevisionPipelines, firstPersonForwardSlots, latest);
+			// T7e's forward part: the forward range's table entry and count word after the buckets'.
 			ReserveFirstPerson(*firstPersonState, static_cast<std::uint32_t>(std::max<std::size_t>(latest.map.size(), a_request.pipelines)),
-				static_cast<std::uint32_t>(latest.buckets.size()), latest.draws);
+				static_cast<std::uint32_t>(latest.buckets.size() + (latest.forwardCapacity ? 1 : 0)), latest.draws);
 		}
 		// The shapes are made again only when what they are made from moved (RevisionShapesKey): otherwise the revision sealed at this
 		// join keeps the last ones. CS_DCLF_REVISION_PARITY makes them around its frames whatever the key, and flags a change the key
@@ -625,12 +661,14 @@ namespace DCLF
 		made.firstPersonFrames[0] = ~0u;
 		if (firstPersonOn && firstPersonState && indirect.valid && inputs.mainKnown[kColourShape] && latches.firstPerson) {
 			FirstPersonPlan plan;
-			PlanFirstPersonBuckets(Growths::Get().RevisionSizing<MainSizing>(r), indirect, firstPersonRevisionPipelines, plan);
+			PlanFirstPersonBuckets(Growths::Get().RevisionSizing<MainSizing>(r), &lookups, indirect, firstPersonRevisionPipelines, firstPersonForwardSlots, plan);
 			FirstPersonShapeInputs in;
 			in.resourceHeap = resourceHeap;
 			in.samplerHeap = samplerHeap;
 			in.indirect = indirect;
 			in.buckets = std::move(plan.buckets);
+			in.forwardFirst = plan.forwardFirst;
+			in.forwardCapacity = plan.forwardCapacity;
 			in.map = std::make_shared<const std::vector<std::uint32_t>>(std::move(plan.map));
 			in.materialRows = r.materialRows.RevisionAddress();
 			in.pipelineRows = r.pipelineRows.RevisionAddress();
@@ -642,7 +680,7 @@ namespace DCLF
 			in.height = inputs.viewport[kColourShape].height;
 			in.depthRange = inputs.firstPersonDepthRange;
 			in.sizing = &Growths::Get().RevisionSizing<FirstPersonSizing>(*firstPersonState);
-			if (!in.buckets.empty() && in.zeros) {
+			if ((!in.buckets.empty() || in.forwardCapacity) && in.zeros) {
 				made.firstPerson[0] = MakeFirstPersonShape(*firstPersonState, in);
 				made.firstPersonFrames[0] = frameNumber;
 			}
@@ -774,6 +812,8 @@ namespace DCLF
 				mix(pipeline.index);
 				mix(pipeline.generation);
 			}
+			for (const std::uint8_t forward : firstPersonForwardSlots)
+				mix(forward);
 		}
 		mix(inputs.toggles.firstPerson);
 		group = kKeyPipelines;
@@ -949,20 +989,36 @@ namespace DCLF
 		}
 	}
 
-	bool IndirectDraws::FirstPersonSlotReady(const void* a_tables, const PipelineCatalog* a_catalog, std::uint32_t a_slot) const
+	bool IndirectDraws::FirstPersonSlotReady(const void* a_tables, const void* a_lookups, const PipelineCatalog* a_catalog, std::uint32_t a_slot, std::uint32_t* a_why) const
 	{
+		// a_why (the set parity's observer): 1 no catalog or targets, 2 a forward key the forward part cannot draw, 3 no first-person key,
+		// 4 its pipeline not in a_catalog, 5 no Z-prepass group pipeline.
+		auto fail = [&](std::uint32_t a_cause) {
+			if (a_why)
+				*a_why = a_cause;
+			return false;
+		};
 		// T7e: the slot's first-person forward pipeline as a_catalog has it for the published first-person targets, and its Z-prepass group's
 		// depth pipeline in that catalog's main set (FirstPersonPipelinesOf's and PlanFirstPersonBuckets' rules): the scene lane's commit's.
 		const auto& tables = *static_cast<const SceneStore::Tables*>(a_tables);
 		const ForwardTargets targets = impl->firstPerson.LaneTargets();
 		if (!a_catalog || targets.colour == DXGI_FORMAT_UNKNOWN || a_slot >= tables.objects.size())
-			return false;
+			return fail(1);
 		const std::uint32_t p = tables.objects[a_slot].pipelineIndex;
+		// T7e's forward part: a forward key's slot draws with the main set's colour pipeline (main-ready: the commit's MainReady) through the
+		// colour signature, into the main pass's attachments with kPOST_ZPREPASS_COPY's depth, which must be the main pass's format.
+		if (p < tables.pipelines.size() && RasterForward(tables.pipelines[p].rasterFlags))
+			return (!RasterRefraction(tables.pipelines[p].rasterFlags) && impl->firstPerson.forwardCompatible.load(std::memory_order_acquire) &&
+			           GetIndirectState(*a_catalog, a_catalog->targetsGeneration).valid) ||
+			       fail(2);
 		ForwardPipelineKey key;
-		if (p >= tables.pipelines.size() || !Draws::FirstPersonForwardKey(tables, p, key) || !ForwardPipelineOf(a_catalog, key, targets).valid())
-			return false;
+		if (p >= tables.pipelines.size() || !Draws::FirstPersonForwardKey(tables, p, key))
+			return fail(3);
+		if (!ForwardPipelineOf(a_catalog, key, targets).valid())
+			return fail(4);
 		const auto indirect = GetIndirectState(*a_catalog, a_catalog->targetsGeneration);
-		return indirect.valid && p < indirect.zGroups.size() && indirect.zGroups[p] < indirect.zPipelines.size() && indirect.zPipelines[indirect.zGroups[p]].valid();
+		const std::uint32_t group = Draws::FirstPersonZGroupOf(static_cast<const Lookups*>(a_lookups), indirect, p);
+		return (indirect.valid && group < indirect.zPipelines.size() && indirect.zPipelines[group].valid()) || fail(5);
 	}
 
 	bool IndirectDraws::ReflectionSlotReady(const void* a_tables, const PipelineCatalog* a_catalog, std::uint32_t a_slot) const

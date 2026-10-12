@@ -85,6 +85,17 @@ namespace DCLF
 		 * first-person skeleton into its root's space (FUN_1414cb020); the producer never samples a first-person item.
 		 */
 		void SetFirstPersonClaims(std::shared_ptr<const SetSnapshot> a_claims) { firstPersonClaims = std::move(a_claims); }
+		/**
+		 * @brief T7e's forward part (the first-person report): the first-person particle members' expansions since the last call, their
+		 * particles, and the farthest a snapshot's bound centre was from the first-person eye it was faced to (a snapshot taken while
+		 * Main::Draw had the skeleton in its root's space would be far from it).
+		 */
+		struct FirstPersonParticleStats
+		{
+			std::uint64_t expansions = 0, particles = 0;
+			float farthest = 0.0f;
+		};
+		static FirstPersonParticleStats TakeFirstPersonParticleStats();
 		/** @brief Render thread: a frame with no producer (DCLF not running): no batch waits for one. */
 		void Skip();
 		/** @brief Render thread, at Present: the GPU point of everything the frame submitted (its ring buffers' readers). */

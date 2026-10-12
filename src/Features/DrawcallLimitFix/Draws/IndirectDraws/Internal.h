@@ -344,7 +344,11 @@ namespace DCLF
 			std::uint32_t stagingBase;     // the staging half's first slot
 			std::uint32_t capacity;        // each half's slots (PassFrame::forwardCapacity)
 			std::uint32_t sequenceStride;  // bytes (sizeof(DrawSequence))
-			std::uint32_t padding[3];
+			// T7e: with kCountOffset in options, the count is the word at countOffset bytes (the first-person forward range's bucket count).
+			std::uint32_t countOffset = 0;
+			std::uint32_t options = 0;
+			std::uint32_t padding = 0;
+			static constexpr std::uint32_t kCountOffset = 1;
 		};
 		constexpr std::uint32_t kForwardSortConstantWords = sizeof(ForwardSortConstants) / 4;
 		constexpr std::uint32_t kForwardSortGroup = 64;  // ForwardSortCS.hlsl's
@@ -632,9 +636,8 @@ namespace DCLF
 		 * (SideEffects::SampleAccumulated) it is the <- ACCUMULATED observer. Decoded batches go back to the render thread, which names
 		 * their finds and lets go of their tables.
 		 *
-		 * T7f preparation ("T7f preparation, part 2"): with the wide writes on, the decoder also prepares every other listed root's writes
-		 * (fade roots, their geometry, the plain entry roots of the frame's SunCandidates), which the main thread makes under
-		 * CS_DCLF_ACCUMULATED_ALL (with the nodes between and the cell roots) and otherwise keeps as a dry run.
+		 * T7f checklist item 1 ("T7f preparation, part 2"): the decoder also prepares every other listed root's writes (fade roots, their
+		 * geometry, the plain entry roots of the frame's SunCandidates), which the main thread makes with the nodes between and the cell roots.
 		 */
 		struct VisibilityReadback
 		{
@@ -669,6 +672,11 @@ namespace DCLF
 				kWhyRule = 1u << 0,    // visible only by the conservative rule (the two-frame window, a listing with no verdict, a camera cut)
 				kWhyFaded = 1u << 1,   // a geometry in view whose root's fade dropped it (kVisibilityBitFadeHidden)
 				kWhyRecent = 1u << 2,  // its verdict changed within kRecentFrames of the newest decoded frame (the readback's lag)
+				// T7f, CS_DCLF_ACCUMULATED_PARITY: the engine's own sample of the batch's frame (SideEffects::SampleAccumulated, taken after
+				// that frame's list jobs) holds the slot's node, and whether its bit was set then. The engine's alone with the bit clear in
+				// that sample came into view after the batch's frame: the readback's lag, not a disagreement.
+				kWhySampled = 1u << 3,
+				kWhyEngineAtBatch = 1u << 4,
 			};
 			static constexpr std::uint32_t kRecentFrames = 8;
 			/**
@@ -693,6 +701,13 @@ namespace DCLF
 				kDclfRootRule,
 				kDclfRootRecent,
 				kDclfRootSteady,
+				kEngineGeometryArrived,  // the engine's bit clear in its own sample of the batch's frame: in view since (the lag)
+				kEngineRootArrived,
+				// T7f item 7: a plain entry root the engine's alone, by its geometries' why bits.
+				kEngineEntryStoodIn,
+				kEngineEntryArrived,
+				kEngineEntryRecent,
+				kEngineEntrySteady,
 				kWideCauses,
 			};
 			/**
@@ -706,18 +721,18 @@ namespace DCLF
 				{
 					void* node = nullptr;        // a fade root, a plain entry root, or a geometry under one
 					const void* root = nullptr;  // its root (a stood-in one's is written only while the cut still stands in for it); the
-					                             // end of the walk that sets the nodes between (CS_DCLF_ACCUMULATED_ALL)
+					                             // end of the walk that sets the nodes between
 					bool set = false;
 					std::uint8_t kind = kWriteGeometry;
-					// T7f preparation: a root the cut does not stand in for (or a geometry under one, or a plain entry root): written only
-					// under CS_DCLF_ACCUMULATED_ALL; otherwise a dry run (its verdict kept for the tree list's, compared on a compare list).
+					// T7f checklist item 1: a root the cut does not stand in for (or a geometry under one, or a plain entry root), written
+					// as well (compared on a compare list).
 					bool wide = false;
 					std::uint8_t why = 0;  // WriteWhy (T7f: the dry run's attribution)
 				};
 				std::uint32_t frame = 0;  // the scene frame of the batch the writes follow
 				bool full = false;        // every stood-in root and geometry, not only the changes (a refresh, a reset, a cut's first batch after)
-				// T7f preparation: every wide write as well, for CS_DCLF_ACCUMULATED_PARITY's dry-run comparison at the entry (every
-				// kWideCompareInterval decodes, the switch on and CS_DCLF_ACCUMULATED_ALL off).
+				// T7f preparation: every wide write as well, for CS_DCLF_ACCUMULATED_PARITY's comparison at the entry (every
+				// kWideCompareInterval decodes, made before the write).
 				bool compare = false;
 				std::shared_ptr<const SceneStore::Tables> tables;
 				std::shared_ptr<const SunCandidates> candidates;  // the plain entry roots' (held: their nodes live until the write)
@@ -814,7 +829,10 @@ namespace DCLF
 			std::shared_ptr<const SunCandidates> writtenCandidates;  // the newest writes' (T7f preparation: the plain entry roots)
 			std::uint32_t cutWritten = 0;
 			std::uint32_t verdictPrunes = 0;           // entries since rootVerdicts was last pruned to the newest tables (wide verdicts)
-			std::vector<RE::NiAVObject*> chain;        // scratch: a geometry's nodes up to its root (CS_DCLF_ACCUMULATED_ALL)
+			std::vector<RE::NiAVObject*> chain;        // scratch: a geometry's nodes up to its root
+			// T7f, CS_DCLF_TREE_PARITY: the nodes this entry's writes stored (IndirectDraws::AccumulatedStoredNow); the main thread's.
+			ankerl::unordered_dense::set<const void*> storedNow;
+			std::string wideNoChainFirst;              // T7f: the first geometries whose parent walk did not reach their root, and the root
 			std::string wideFirst;                     // the dry run's first roots DCLF would clear that the engine has set
 			std::string wideFirstGeometry;             // T7f: its first steady geometry of the engine's alone the receivers see, and its root
 			// T7b5 fix, the main thread's: each stood-in root's verdict as last written (set: visible), forgotten once it is no longer stood
@@ -823,13 +841,13 @@ namespace DCLF
 			ankerl::unordered_dense::map<const void*, bool> rootVerdicts;
 			// T7b2, since the last report: writes made (set, cleared), found as wanted, left (the cut no longer stands in for the root;
 			// a clear older than a cut), the cut's own writes, full writes prepared, cuts, and the main thread's time.
-			std::atomic<std::uint64_t> writesSet{ 0 }, writesCleared{ 0 }, writesUnchanged{ 0 }, writesNotStoodIn{ 0 }, writesHeldByCut{ 0 };
+			std::atomic<std::uint64_t> writesSet{ 0 }, writesCleared{ 0 }, writesUnchanged{ 0 }, writesHeldByCut{ 0 };
 			std::atomic<std::uint64_t> cutWrites{ 0 }, fullWrites{ 0 }, cuts{ 0 }, writeNs{ 0 }, writeBatches{ 0 };
 			// T7f preparation (the main thread's, since the last report): the wide writes made (set, cleared, already so) or dry, the nodes
 			// between set (and geometries whose walk did not reach their root), the cell roots (ListUpkeep's replacement: seen, set or
 			// found without the bit), and the dry run's comparisons with the engine's bit (roots aside: app-culled).
-			std::atomic<std::uint64_t> wideSet{ 0 }, wideCleared{ 0 }, wideUnchanged{ 0 }, wideDry{ 0 }, wideNodesSet{ 0 }, wideNoChain{ 0 };
-			std::atomic<std::uint64_t> cellRootsSeen{ 0 }, cellRootsSet{ 0 }, cellRootsUnset{ 0 }, wideCompares{ 0 }, wideHidden{ 0 };
+			std::atomic<std::uint64_t> wideSet{ 0 }, wideCleared{ 0 }, wideUnchanged{ 0 }, wideNodesSet{ 0 }, wideNoChain{ 0 };
+			std::atomic<std::uint64_t> cellRootsSeen{ 0 }, cellRootsSet{ 0 }, wideCompares{ 0 }, wideHidden{ 0 };
 			// Since the last report (any thread): the batches decoded and their events, events stale (another listing's, a slot left
 			// empty, older than one taken), batches past their list, arms whose slot's buffer did not hold their frame (the epoch did not
 			// run, or ran without the readback), staging sets added, wakes that found the last task running, and the decode's time ...
@@ -852,8 +870,10 @@ namespace DCLF
 			// that is a fade root slot).
 			Counts wideReceiverCounts;
 			std::array<std::atomic<std::uint64_t>, kWideCauses> wideCauses{};
-			std::atomic<std::uint64_t> cellContainersSeen{ 0 }, cellContainersUnset{ 0 };
+			std::atomic<std::uint64_t> cellContainersSeen{ 0 };
 			std::atomic<std::uint64_t> plainListed{ 0 }, plainNoCandidates{ 0 }, plainNotCandidate{ 0 }, plainEntryIsRoot{ 0 };
+			std::atomic<std::uint64_t> wideEntryResidue{ 0 };  // T7f item 7: plain entry roots with an engine residue geometry (not written)
+			std::atomic<std::uint64_t> wideNoInput{ 0 };  // T7f: wide geometries with no main input (not written: the engine's cull keeps their bit)
 			std::atomic<std::uint64_t> framesCompared{ 0 }, framesIncomplete{ 0 }, samplesUnmatched{ 0 }, moved{ 0 }, staleGeometry{ 0 };
 			std::atomic<std::uint64_t> noVerdictEngine{ 0 }, noVerdictNeither{ 0 }, hiddenDclfOnly{ 0 };
 			// The render thread's: the first finds' names since the last report, per category.
@@ -2076,6 +2096,8 @@ namespace DCLF
 		constexpr std::uint64_t kEffectCameraFrameOffset = kExtrasPixelFrameOffset + sizeof(ExtrasFrame::projectedGlobals);
 		// The Effect port's Lighting variant: c18, its DLightColor (SampleEffectLight; Effect.hlsl, DCLFEffectDLightColor).
 		constexpr std::uint64_t kEffectLightFrameOffset = kEffectCameraFrameOffset + 16;
+		// The Effect port's Blood: c19, AlphaTestRef.yz's two globals (SampleEffectBlood; Effect.hlsl, DCLFEffectBlood).
+		constexpr std::uint64_t kEffectBloodFrameOffset = kEffectLightFrameOffset + 16;
 		static_assert(sizeof(FrameFog) == 3 * 16);
 
 		/**
@@ -4284,6 +4306,9 @@ namespace DCLF
 				}
 			};
 			std::vector<Bucket> buckets;
+			// T7e's forward part: the forward range (forwardCapacity staging slots at forwardFirst, the sorted half after them), its table
+			// entry and bucket count word forwardEntry (buckets.size()), drawn through the main colour signature; 0 capacity: none.
+			std::uint32_t forwardFirst = 0, forwardCapacity = 0, forwardEntry = 0;
 			// The frame push data: the colour segment's frame constants with VS and PS b12 the first-person camera's block.
 			std::array<std::uint32_t, kFramePushWords> push{};
 			// The latched copies' source: the block at blockOffset of the latch's slot region.
@@ -4296,7 +4321,8 @@ namespace DCLF
 			{
 				return latch == o.latch && zeros == o.zeros && blockOffset == o.blockOffset && SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) &&
 				       SameIndirect(indirect, o.indirect) && width == o.width && height == o.height && depthRange == o.depthRange && materialRows == o.materialRows &&
-				       pipelineRows == o.pipelineRows && sequenceDraws == o.sequenceDraws && buckets == o.buckets && push == o.push;
+				       pipelineRows == o.pipelineRows && sequenceDraws == o.sequenceDraws && buckets == o.buckets && push == o.push &&
+				       forwardFirst == o.forwardFirst && forwardCapacity == o.forwardCapacity && forwardEntry == o.forwardEntry;
 			}
 		};
 
@@ -4324,6 +4350,8 @@ namespace DCLF
 			bool rebuildPending = false;
 			std::shared_ptr<const ComputeProgram> buildDraws;
 			rhi::CommandSignaturePtr dispatchSignature;
+			// T7e's forward part: its draw's explicit preprocess (the sort is the main resources' ForwardSortCS).
+			std::shared_ptr<PreprocessStates> preprocessForward;
 		};
 
 		std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeFirstPersonExtension(std::shared_ptr<FirstPersonResources> a_resources);
@@ -4334,8 +4362,12 @@ namespace DCLF
 			std::vector<std::uint32_t> map;
 			std::vector<FirstPersonFrame::Bucket> buckets;
 			std::uint32_t draws = 0;
+			std::uint32_t forwardFirst = 0, forwardCapacity = 0;  // T7e's forward part (FirstPersonFrame's)
 		};
-		void PlanFirstPersonBuckets(const MainSizing& a_main, const IndirectState& a_indirect, std::span<const rhi::PipelineHandle> a_slotPipelines, FirstPersonPlan& a_out);
+		/** @brief A pipeline slot's Z-prepass group (its lookup entry's set index's, IndirectState::zGroups); kNoBucket without one. */
+		std::uint32_t FirstPersonZGroupOf(const Lookups* a_lookups, const IndirectState& a_indirect, std::uint32_t a_slot);
+		void PlanFirstPersonBuckets(const MainSizing& a_main, const Lookups* a_lookups, const IndirectState& a_indirect, std::span<const rhi::PipelineHandle> a_slotPipelines,
+			std::span<const std::uint8_t> a_forwardSlots, FirstPersonPlan& a_out);
 
 		/** @brief What the first-person shape is made from (MakeFirstPersonShape). */
 		struct FirstPersonShapeInputs
@@ -4343,6 +4375,7 @@ namespace DCLF
 			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
 			IndirectState indirect{};
 			std::vector<FirstPersonFrame::Bucket> buckets;
+			std::uint32_t forwardFirst = 0, forwardCapacity = 0;
 			std::shared_ptr<const std::vector<std::uint32_t>> map;
 			std::uint64_t materialRows = 0, pipelineRows = 0;
 			const FirstPersonSizing* sizing = nullptr;
@@ -4362,6 +4395,11 @@ namespace DCLF
 		/** @brief Per pipeline slot, its first-person forward pipeline as a_catalog has it for a_targets (none while a_on is false). */
 		void FirstPersonPipelinesOf(const PipelineCatalog* a_catalog, const SceneStore::Tables& a_tables, const ForwardTargets& a_targets, bool a_on,
 			std::vector<rhi::PipelineHandle>& a_slots);
+		/**
+		 * @brief T7e's forward part: per pipeline slot, whether it is a forward key the first-person view draws in its forward range (the
+		 * main set's colour pipeline through the colour signature): RasterForward, not refraction. None while a_on is false.
+		 */
+		void FirstPersonForwardSlotsOf(const SceneStore::Tables& a_tables, bool a_on, std::vector<std::uint8_t>& a_slots);
 
 		/**
 		 * @brief The shadow view slots' buffers the frame made (AddShadowViewSlots), as it last posted them (RevisionInputs::shadowSlots):
@@ -5232,7 +5270,16 @@ namespace DCLF
 			// Since the last report: frames reached, frames latched, epochs submitted, and the epochs not submitted by cause.
 			std::uint64_t frames = 0, latched = 0, depthEpochs = 0, colourEpochs = 0;
 			std::array<std::uint64_t, 7> skipped{};  // not drawn (latch, claims), not covered, no camera, stale inputs, no resources, failed, no depth epoch
+			// T7e's forward part: whether the main set's forward pipelines can draw into the first-person pass (kPOST_ZPREPASS_COPY's depth
+			// format the main pass's: BeginFirstPersonFrame), published for the scene lane (FirstPersonSlotReady); the forward members the
+			// installed tables hold (BeginFirstPersonFrame's walk), summed over the frames since the last report.
+			std::atomic<bool> forwardCompatible{ false };
+			std::uint64_t forwardMembers = 0;
+			std::uint32_t forwardMembersNow = 0;  // the last walk's (every 16 frames)
+			std::string loggedSkeleton;  // CS_DCLF_SET_PARITY: the skeleton's slots last logged
 		} firstPerson;
+		// T7e's forward part, the revision code's: per pipeline slot, whether the first-person view draws it in its forward range (MakeRevision).
+		std::vector<std::uint8_t> firstPersonForwardSlots;
 		/** @brief The first-person graph resources, created once its targets are known (render thread). */
 		bool SetupFirstPerson();
 		/** @brief The first-person resources grown for a_slots pipeline slots, a_buckets buckets and a_draws sequences (the revision code). */

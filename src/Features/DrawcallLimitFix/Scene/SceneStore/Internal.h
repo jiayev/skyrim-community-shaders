@@ -162,16 +162,6 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief FadeWatch: the fade nodes whose BSFadeNode::currentFade or LOD level (+0x152 & 0xF, LodLevelUpdate) changed, pushed
-		 * from the engine's writers.
-		 *
-		 * currentFade is written by the cull (AE 1.6.1170): BSFadeNode::OnVisible (0x141479f50, which every fade node
-		 * class reaches; BSLeafAnimNode::OnVisible calls it) writes it directly for one LOD mode and through the fade
-		 * update FUN_14147a160 otherwise, and FUN_1402cff60 calls that update outside a cull. Both are detoured; each
-		 * compares the value before and after and pushes the node when it moved. Cull job threads push, the
-		 * scene passes drain (T6b3d: SceneStore::CollectEvents). A few tens a frame while the camera moves, none at rest.
-		 */
-		/**
 		 * @brief CS_DCLF_DECAL_ORDER_PROBE (DecalOrder.cpp): the main registration's decal chains against the order the scene lists
 		 * give them. Render thread, once a frame, with the drained capture.
 		 */
@@ -229,25 +219,9 @@ namespace DCLF
 		// Its per-frame state (T6b1a): currentFade, the LOD level, the screen-door byte.
 		constexpr std::uint32_t kFadeState = SceneCapture::NodeRecord::kFadeCurrent | SceneCapture::NodeRecord::kFadeLevel | SceneCapture::NodeRecord::kFadeDoor;
 
-		// T6b3d: no wake: the cull writes currentFade every frame for what fades; the frame's next pass takes them.
-		inline EventQueue<const RE::BSFadeNode*> fadeEvents;
-
 		inline float CurrentFade(RE::BSFadeNode* a_node)
 		{
 			return a_node->GetRuntimeData().currentFade;
-		}
-
-		// SceneStore::MuteFadeEvents: this thread runs the engine's fade functions on a copy of a node.
-		inline thread_local bool fadeEventsMuted = false;
-		inline void PushFade(const RE::BSFadeNode* a_node)
-		{
-			if (!fadeEventsMuted)
-				fadeEvents.Push(a_node);
-		}
-
-		inline void DrainFadeEvents(std::vector<const RE::BSFadeNode*>& a_out)
-		{
-			fadeEvents.Drain([&](const RE::BSFadeNode* a_node) { a_out.push_back(a_node); });
 		}
 
 		/**
@@ -694,7 +668,6 @@ namespace DCLF
 		SceneTracker::Event* tail = nullptr;
 		std::vector<const void*> fadeSnaps;
 		std::vector<const void*> fadeAmounts;
-		std::vector<const RE::BSFadeNode*> fades;
 		std::vector<const void*> properties;
 		std::vector<RE::NiPointer<RE::NiAVObject>> nodes;
 		std::vector<SwitchEvent> switches;

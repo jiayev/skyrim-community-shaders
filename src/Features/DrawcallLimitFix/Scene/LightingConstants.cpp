@@ -198,6 +198,13 @@ namespace DCLF
 		return { farPlane, nearPlane, farPlane - nearPlane, 0.0f };
 	}
 
+	std::array<float, 4> SampleEffectBlood()
+	{
+		static const REL::Relocation<const float*> globals{ REL::Offset(0x33dccf0) };
+		const float* blood = globals.get();
+		return { 0.0f, blood[0], blood[1], 0.0f };
+	}
+
 	std::array<float, 4> SampleEffectLight()
 	{
 		// SetupGeometry (0x1414eab10), the Lighting bit: PS DLightColor = (ImageSpaceManager +0xe0) x (NiLight +0x134), then that times each
@@ -410,7 +417,8 @@ namespace DCLF
 		a_out.recordFlags = RecordFlagsOf(object.flags, a_objectIndex < a_tables.objectFadeRoot.size() ? a_tables.objectFadeRoot[a_objectIndex] : kNoFadeRoot);
 		// The same reference the native draw's AlphaTestRefBuffer carries: threshold / 255, and 0 when the
 		// object is not alpha tested (the shader's test is then compiled out anyway).
-		a_out.alphaTestRef = (object.flags & kObjectAlphaTest) ? ((object.flags >> kObjectAlphaThresholdShift) & 0xFF) / 255.0f : 0.0f;
+		// A Blood effect's is its threshold whatever its alpha test (AlphaTestRefOf: SetupGeometry's AlphaTestRef.x).
+		a_out.alphaTestRef = AlphaTestRefOf(object.flags, object.pipelineIndex < a_tables.pipelines.size() ? &a_tables.pipelines[object.pipelineIndex] : nullptr);
 		a_out.tree = a_objectIndex < a_tables.treeAnim.size() ? a_tables.treeAnim[a_objectIndex] : ObjectTreeAnim{};
 		// The tree listing the member draws under, for the trees' wind (DCLFTreeWind): its slot, and its generation (never 0).
 		if (const std::uint32_t treeSlot = a_objectIndex < a_tables.objectTree.size() ? a_tables.objectTree[a_objectIndex] : kNoTree; treeSlot != kNoTree) {
