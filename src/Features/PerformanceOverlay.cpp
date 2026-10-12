@@ -187,7 +187,7 @@ void PerformanceOverlay::DrawSettings()
 		ImGui::Checkbox(T(TKEY("show_border"), "Show Border"), &this->settings.ShowBorder);
 		ImGui::SliderFloat(T(TKEY("update_interval"), "Update Interval"), &this->settings.UpdateInterval, 0.001f, PerformanceOverlay::Settings::kMaxUpdateInterval, "%.2f seconds");
 		ImGui::SliderInt(T(TKEY("frame_history_size"), "Frame History Size"), &this->settings.FrameHistorySize,
-			this->settings.kMinFrameHistorySize, this->settings.kMaxFrameHistorySize);
+			this->settings.kMinFrameHistorySize, this->settings.kMaxFrameHistorySize, "%d", ImGuiSliderFlags_AlwaysClamp);
 
 		ImGui::Separator();
 		ImGui::Text("%s", T(TKEY("position"), "Position:"));
@@ -259,9 +259,6 @@ void PerformanceOverlay::DrawOverlay()
 		return;
 	}
 	if (!menu->overlayVisible) {
-		return;
-	}
-	if (this->settings.ShowVRAM && (!menu->GetDXGIAdapter3())) {
 		return;
 	}
 	if (!ImGui::GetCurrentContext()) {
@@ -1942,6 +1939,9 @@ void PerformanceOverlay::UpdateGraphValues()
 	float deltaTime = (now.QuadPart - state.lastUpdateTime.QuadPart) /
 	                  static_cast<float>(state.overlayTimingFrequency.QuadPart);
 	state.lastUpdateTime = now;
+
+	if (!state.graphSampleGate.ShouldSample())
+		return;
 
 	// Insert latest frame time into circular buffer
 	float oldFrameTime = state.frameTimeHistory.GetData()[state.frameTimeHistory.GetHeadIdx()];  // what is the point of oldFrameTime?

@@ -59,7 +59,7 @@ public:
 	struct SkylightingCB
 	{
 		REX::W32::XMFLOAT4X4 OcclusionViewProj;
-		float4 OcclusionDir;
+		float4 OcclusionSHBasis4Pi;  // SH basis of the occlusion direction, times 4 pi; evaluated once per capture
 
 		float3 PosOffset;  // cell origin in camera model space
 		uint _pad0;
@@ -104,7 +104,7 @@ public:
 	// World height of the probe grid's bottom layer, from the snapped grid origin.
 	float probeGridBottomZ = -FLT_MAX;
 	REX::W32::XMFLOAT4X4 OcclusionTransform;
-	float4 OcclusionDir;
+	float4 OcclusionSHBasis4Pi;
 	uint frameCount = 0;
 
 	/** @brief Clears the accumulation frames array to force a full rebuild of skylighting probes. */
