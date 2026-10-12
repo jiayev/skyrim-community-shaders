@@ -84,6 +84,10 @@ namespace SharedData
 		uint LightsVisualisationMode;
 		float2 pad0;
 		uint4 ClusterSize;
+		uint EnableLocalShadows;
+		uint LocalShadowSamples;
+		float LocalShadowFilterRadius;
+		float LocalShadowTexelSize;
 	};
 
 	struct WetnessEffectsSettings
