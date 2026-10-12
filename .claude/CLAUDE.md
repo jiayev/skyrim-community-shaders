@@ -101,6 +101,17 @@ Versioning (enforced by `tools/feature_version_audit.py`):
 -   Features must disable cleanly on shader compilation failure.
 -   No TODO/FIXME placeholders unless explicitly asked for planning.
 
+## Dear ImGui conventions
+
+-   Version: 1.92.6 (pinned in `vcpkg.json` `overrides`), docking branch (`docking-experimental` vcpkg feature; `ImGuiConfigFlags_DockingEnable` is set in `Menu.cpp`). Keyboard and gamepad nav are enabled.
+-   Backend: DX11 + Win32 (`imgui_impl_dx11.h` / `imgui_impl_win32.h`), driven from `src/Menu.cpp`, `src/Menu/OverlayRenderer.cpp` and `src/Menu/ThemeManager.cpp`. Do not modify backend, renderer or font-atlas setup code unless asked.
+-   ImGui headers come from vcpkg, not the repo. Before using an API, check its signature in the pinned `imgui.h` (in the vcpkg-installed `imgui` package) and use `imgui_demo.cpp` as the reference for correct usage. Recent releases changed several APIs (1.92: dynamic fonts and `PushFont(font, size)`; 1.90: `ImGuiChildFlags` replacing the `BeginChild` border bool), so do not copy snippets written for older versions.
+-   `imgui.h` is included by `include/PCH.h`. `imgui_internal.h` and `imgui_stdlib.h` are included per file; prefer public API and only reach into internals when nothing public works.
+-   ImVec2/ImVec4 operators are not enabled (`IMGUI_DEFINE_MATH_OPERATORS` is not defined, and defining it in a `.cpp` is too late because the PCH already included `imgui.h`). Write arithmetic component-wise, as the existing code does: `ImVec2(a.x + b.x, a.y + b.y)`.
+-   Give repeated or empty-label widgets unique IDs with `PushID`/`PopID` or a `##suffix` (`"##AdvancedSettingsTabs"`). Widgets built in loops (per feature, per row) should push an ID derived from a stable key rather than the loop index when the list can reorder.
+-   Prefer the RAII guards over raw Push/Pop for state: `Util::DisableGuard` (`src/Utils/UI.h`), `MenuFonts::FontRoleGuard`, `MenuFonts::ImFontGuard`, `MenuFonts::TabBarPaddingGuard` (`src/Menu/Fonts.h`).
+-   Spacing, padding and colors come from `ThemeManager::Constants`, not literals. Scale sizes by the font/global scale rather than hardcoding pixels.
+
 ## Internationalization (i18n)
 
 All user-visible strings go through the translation system (`src/I18n/I18n.h`). Source of truth for English: `package/SKSE/Plugins/CommunityShaders/Translations/en.json`.

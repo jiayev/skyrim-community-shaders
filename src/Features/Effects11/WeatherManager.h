@@ -27,9 +27,16 @@ public:
 	/// @return Location-mapped weather ID if applicable, otherwise the actual weather ID
 	uint32_t GetEffectiveWeatherID(uint32_t actualWeatherID);
 
+	/// @brief Gets the ENB SDK weather index of a weather ID: N for its [WEATHERnnn] section.
+	/// @return 0 when the weather is not listed or EnableMultipleWeathers is off ("weather not captured")
+	uint32_t GetWeatherIndex(uint32_t weatherID) const;
+
 	const std::unordered_map<std::string, WeatherEntry>& GetWeatherEntries() const { return weatherEntries; }
 
 	std::unordered_map<std::string, std::string> GetWeatherFiles() const;
+
+	/** @brief Drops the load-order index; ENB weather list and location keys are matched without it. */
+	static constexpr uint32_t LocalFormIDMask = 0x00FFFFFF;
 
 private:
 	std::unordered_map<std::string, WeatherEntry> weatherEntries;

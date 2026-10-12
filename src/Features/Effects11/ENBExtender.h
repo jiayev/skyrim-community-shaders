@@ -58,4 +58,18 @@ namespace ENBExtender
 
 	// Post-load processing
 	void LoadTechniqueDropdownMetadata(Effect& effect);
+
+	// Encrypted presets (compiled by KiENBExtender.dll)
+	/** @brief True if the effect source is a KIEFX-encrypted ENB Extender preset. */
+	bool IsEncryptedSource(std::string_view source);
+	/**
+	 * @brief Compiles an encrypted preset through KiENBExtender's ENBExt_Compile export and creates the effect.
+	 * @param effectPath Effect file path; its name, e.g. "enbbloom.fx", selects the extender slot.
+	 * @param effect Receives the created effect.
+	 * @param error Receives a user-facing message on failure.
+	 * @return True if the effect was created.
+	 */
+	bool CreateEncryptedEffect(const std::filesystem::path& effectPath, winrt::com_ptr<ID3DX11Effect>& effect, std::string& error);
+	/** @brief Assigns UI groups to an encrypted effect's variables by matching group-scoped keys in its ini, since source group scopes are unavailable. */
+	void ResolveCompiledGroups(Effect& effect, const std::filesystem::path& iniPath);
 }

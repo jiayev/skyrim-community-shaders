@@ -249,8 +249,12 @@ void GrassOptimizations::UpdateGrass()
 
 	if (!GetCullCS() || !ctx1 || !cullParamsCB) {
 		// Without a cull dispatch, the args buffers are never written. Skip drawing grass this frame to avoid drawing stale data. 
-		for (auto& [key, b] : bucketStore.buckets)
+		for (auto& [key, b] : bucketStore.buckets) {
 			b.ResetCullState();
+			b.ReleaseResources();
+			for (auto& s : b.slices)
+				s.bufferOffset = UINT32_MAX;
+		}
 		bucketStore.DiscardPending();
 		return;
 	}
@@ -800,6 +804,10 @@ void GrassOptimizations::Hooks::BSGrassShader_SetupGeometry::thunk(RE::BSShader*
 	}
 
 	func(This, a2, flags);
+
+	auto* shadowState = globals::game::shadowState;
+	shadowState->SetPSTextureAddressMode(0, RE::BSGraphics::TextureAddressMode::kClampSClampT);
+	shadowState->SetPSTextureFilterMode(0, RE::BSGraphics::TextureFilterMode::kAnisotropic);
 }
 
 static size_t GIDGroupBytes(const RE::BSMultiStreamInstanceTriShape::GroupHeader* header)

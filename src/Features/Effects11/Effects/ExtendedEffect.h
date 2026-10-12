@@ -38,7 +38,8 @@ private:
 		size_t index = 0;  ///< Index into uiVariables
 		std::string iniKey;
 		int components = 1;
-		bool perComponent = false;  ///< Vector stored as KeyX/KeyY/... keys
+		bool perComponent = false;     ///< Vector stored as KeyX/KeyY/... keys
+		bool exteriorWeather = false;  ///< Takes the base value indoors
 	};
 	/** @brief Parsed weather value; component c is used only when bit c of definedMask is set. */
 	struct ParsedWeatherValue

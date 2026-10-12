@@ -841,6 +841,13 @@ void WetnessEffects::ApplyClimatePreset(ClimatePreset preset)
 	// Removed clamping for all settings to allow full preset range
 }
 
+void WetnessEffects::Reset()
+{
+	// Not in GetCommonBufferData: the feature buffer is rebuilt several times per frame (see Deferred).
+	if (globals::game::ui && !globals::game::ui->GameIsPaused())
+		rainTimer += (size_t)(RE::GetSecondsSinceLastFrame() * 1000);  // BSTimer::delta is always 0 for some reason
+}
+
 WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData() const
 {
 	PerFrame data{};
@@ -858,10 +865,8 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData() const
 						if (!precipObject) {
 							precipObject = precip->lastPrecip;
 						}
-						if (precipObject) {
-							auto& effect = precipObject->GetGeometryRuntimeData().shaderProperty;
-							auto shaderProp = effect.get();
-							auto particleShaderProperty = netimmerse_cast<RE::BSParticleShaderProperty*>(shaderProp);
+						auto particleShaderProperty = precipObject ? netimmerse_cast<RE::BSParticleShaderProperty*>(precipObject->GetGeometryRuntimeData().shaderProperty.get()) : nullptr;
+						if (particleShaderProperty && particleShaderProperty->particleEmitter) {
 							auto rain = (RE::BSParticleShaderRainEmitter*)(particleShaderProperty->particleEmitter);
 							data.OcclusionViewProj = rain->occlusionProjection;
 						}
@@ -927,9 +932,6 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData() const
 		}
 	}
 
-	static size_t rainTimer = 0;  // size_t for precision
-	if (!globals::game::ui->GameIsPaused())
-		rainTimer += (size_t)(RE::GetSecondsSinceLastFrame() * 1000);  // BSTimer::delta is always 0 for some reason
 	data.Time = rainTimer / 1000.f;
 
 	data.settings = settings;

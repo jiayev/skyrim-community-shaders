@@ -192,7 +192,8 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 #		if defined(ENVCUBE) && defined(RAIN) && defined(EFFECTS11)
-	vsout.RaindropData.xy = input.TexCoord1.xy * 0.5 + 0.5;
+	// Corner offsets are +-particle size; their sign is the UV within the quad's atlas cell, so one drop fills each particle
+	vsout.RaindropData.xy = step(0, input.TexCoord1.xy);
 #		endif
 
 	return vsout;
@@ -211,10 +212,6 @@ struct PS_OUTPUT
 
 #	if defined(LIGHT_LIMIT_FIX)
 #		include "LightLimitFix/LightLimitFix.hlsli"
-#	endif
-
-#	if defined(ISL) && defined(LIGHT_LIMIT_FIX)
-#		include "InverseSquareLighting/InverseSquareLighting.hlsli"
 #	endif
 
 SamplerState SampSourceTexture : register(s0);
@@ -373,12 +370,7 @@ if (SharedData::enbSettings.EnableRain) {
 				float3 lightDirection = light.positionWS.xyz - positionWS.xyz;
 				float lightDist = length(lightDirection);
 
-#		if defined(ISL)
-				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
-#		else
-				float intensityFactor = saturate(lightDist / light.radius);
-				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-#		endif
+				float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light);
 
 				float3 lightColor = light.color.xyz * intensityMultiplier;
 				propertyColor += lightColor;

@@ -53,6 +53,16 @@ option(
 )
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
 option(
+    NVPERF_SUPPORT
+    "Enable the Nsight Perf range profiler in Remote Control (requires NVPERF_SDK_ROOT)"
+    OFF
+)
+set(NVPERF_SDK_ROOT
+    ""
+    CACHE PATH
+    "Nsight Perf SDK directory (the one holding include/nvperf_host.h)"
+)
+option(
     ENABLE_ENB_EXTENDER
     "Enable ENBExtender reimplementation (weather blending, time-of-day, technique bindings)"
     ON
@@ -61,6 +71,7 @@ message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
+message("\tNsight Perf: ${NVPERF_SUPPORT}")
 
 # #######################################################################################################################
 # # Build version info from git
@@ -100,6 +111,7 @@ find_package(pystring CONFIG REQUIRED)
 find_package(cppwinrt CONFIG REQUIRED)
 find_package(unordered_dense CONFIG REQUIRED)
 find_package(efsw CONFIG REQUIRED)
+find_package(xxHash CONFIG REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
 find_package(directx-headers CONFIG REQUIRED)
 find_package(effects11 CONFIG REQUIRED)
@@ -158,9 +170,11 @@ target_link_libraries(
         pystring::pystring
         unordered_dense::unordered_dense
         efsw::efsw
+        xxHash::xxhash
         Tracy::TracyClient
         Streamline
         d3d12.lib
+        bcrypt.lib
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
         Microsoft::Effects11
@@ -174,6 +188,49 @@ target_link_libraries(
 if(DEVBENCH_BRIDGE)
     target_link_libraries(${PROJECT_NAME} PRIVATE DevBench::API)
     target_compile_definitions(${PROJECT_NAME} PRIVATE DEVBENCH_BRIDGE_ENABLED)
+endif()
+
+# Nsight Perf: opt-in via -DNVPERF_SUPPORT=ON -DNVPERF_SDK_ROOT=<sdk>. The SDK is a login-gated NVIDIA
+# download, so it is never fetched. nvperf_grfx_host.dll is delay-loaded (NvPerf.cpp loads it by path
+# before the first call), so the plugin still loads where the file is absent.
+if(NVPERF_SUPPORT)
+    find_path(
+        NVPERF_INCLUDE_DIR
+        nvperf_d3d11_target.h
+        PATHS "${NVPERF_SDK_ROOT}/include"
+        NO_DEFAULT_PATH
+    )
+    find_library(
+        NVPERF_LIBRARY
+        nvperf_grfx_host
+        PATHS "${NVPERF_SDK_ROOT}/lib/x64" "${NVPERF_SDK_ROOT}/bin/x64"
+        NO_DEFAULT_PATH
+    )
+    find_file(
+        NVPERF_DLL
+        nvperf_grfx_host.dll
+        PATHS "${NVPERF_SDK_ROOT}/bin/x64"
+        NO_DEFAULT_PATH
+    )
+    if(NOT NVPERF_INCLUDE_DIR OR NOT NVPERF_LIBRARY OR NOT NVPERF_DLL)
+        message(
+            FATAL_ERROR
+            "NVPERF_SUPPORT is ON but NVPERF_SDK_ROOT ('${NVPERF_SDK_ROOT}') lacks the Nsight Perf SDK: "
+            "need include/nvperf_d3d11_target.h (${NVPERF_INCLUDE_DIR}), "
+            "nvperf_grfx_host.lib (${NVPERF_LIBRARY}) and bin/x64/nvperf_grfx_host.dll (${NVPERF_DLL})"
+        )
+    endif()
+    target_include_directories(
+        ${PROJECT_NAME}
+        SYSTEM
+        PRIVATE "${NVPERF_INCLUDE_DIR}"
+    )
+    target_link_libraries(${PROJECT_NAME} PRIVATE "${NVPERF_LIBRARY}" delayimp)
+    target_link_options(
+        ${PROJECT_NAME}
+        PRIVATE "/DELAYLOAD:nvperf_grfx_host.dll"
+    )
+    target_compile_definitions(${PROJECT_NAME} PRIVATE NVPERF_ENABLED)
 endif()
 # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
 if(MSVC_VERSION GREATER_EQUAL 1936 AND MSVC_IDE) # 17.6+
@@ -217,15 +274,11 @@ foreach(FEATURE_PATH ${FEATURE_CONFIG_FILES})
     string(STRIP "${CONFIG_VALUE}" CONFIG_VALUE)
     if(CONFIG_VALUE)
         string(
-            REGEX MATCH "[Vv]ersion = ([0-9]+)-([0-9]+)-([0-9]+)"
-            _
+            REGEX MATCH "[Vv]ersion[ \t]*=[ \t]*([0-9]+)-([0-9]+)-([0-9]+)"
+            _VERSION_MATCH
             "${CONFIG_VALUE}"
         )
-        if(
-            DEFINED CMAKE_MATCH_1
-            AND DEFINED CMAKE_MATCH_2
-            AND DEFINED CMAKE_MATCH_3
-        )
+        if(_VERSION_MATCH)
             set(ver_major ${CMAKE_MATCH_1})
             set(ver_minor ${CMAKE_MATCH_2})
             set(ver_patch ${CMAKE_MATCH_3})
@@ -500,6 +553,13 @@ install(
     PATTERN "Tests" EXCLUDE
 )
 install(CODE "file(REMOVE \${CMAKE_INSTALL_PREFIX}/Core)" COMPONENT Shaders)
+if(NVPERF_SUPPORT)
+    install(
+        FILES "${NVPERF_DLL}"
+        DESTINATION SKSE/Plugins/CommunityShaders/NvPerf
+        COMPONENT SKSE
+    )
+endif()
 
 # #######################################################################################################################
 # # Automatic AIO preparation (incremental copy system)
@@ -674,6 +734,20 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         COMMENT "Copying built DLL and PDB to AIO package"
         VERBATIM
     )
+    if(NVPERF_SUPPORT)
+        add_custom_command(
+            TARGET ${PROJECT_NAME}
+            POST_BUILD
+            COMMAND
+                ${CMAKE_COMMAND} -E make_directory
+                "${AIO_DIR}/SKSE/Plugins/CommunityShaders/NvPerf"
+            COMMAND
+                ${CMAKE_COMMAND} -E copy_if_different "${NVPERF_DLL}"
+                "${AIO_DIR}/SKSE/Plugins/CommunityShaders/NvPerf/nvperf_grfx_host.dll"
+            COMMENT "Copying nvperf_grfx_host.dll to AIO package"
+            VERBATIM
+        )
+    endif()
 
     # Only copy shaders when HLSL files change; copy individually so unchanged
     # files do not get their timestamps updated.
@@ -955,6 +1029,8 @@ find_program(
     PATHS "C:/Program Files/7-Zip" "C:/Program Files (x86)/7-Zip"
     DOC "7-Zip archiver for compressed packages"
 )
+# mx5 keeps the AIO well under Discord's 100 MB upload limit; mx1 is ~30 MB larger.
+set(SEVENZ_AIO_ARGS a -t7z -mx5 -mmt=on)
 
 # Zip base CommunityShaders and all addons as their own zip in dist folder
 if(ZIP_TO_DIST)
@@ -1060,8 +1136,7 @@ if(AIO_ZIP_TO_DIST)
             COMMAND
                 ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/dist"
             COMMAND ${CMAKE_COMMAND} -E rm -f "${AIO_ARCHIVE}"
-            COMMAND
-                "${SEVENZ_EXECUTABLE}" a -t7z -mx1 -mmt=on "${AIO_ARCHIVE}" *
+            COMMAND "${SEVENZ_EXECUTABLE}" ${SEVENZ_AIO_ARGS} "${AIO_ARCHIVE}" *
             COMMAND ${CMAKE_COMMAND} -E touch ${AIO_ZIP_STAMP}
             WORKING_DIRECTORY ${AIO_DIR}
             DEPENDS PREPARE_AIO ${CMAKE_CURRENT_BINARY_DIR}/copy_shaders.stamp
@@ -1194,8 +1269,7 @@ if(TARGET PREPARE_AIO)
             OUTPUT ${AIO_PACKAGE}
             COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_PATH}"
             COMMAND ${CMAKE_COMMAND} -E rm -f "${AIO_PACKAGE}"
-            COMMAND
-                "${SEVENZ_EXECUTABLE}" a -t7z -mx1 -mmt=on "${AIO_PACKAGE}" *
+            COMMAND "${SEVENZ_EXECUTABLE}" ${SEVENZ_AIO_ARGS} "${AIO_PACKAGE}" *
             WORKING_DIRECTORY ${AIO_DIR}
             DEPENDS
                 ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
@@ -1222,10 +1296,7 @@ else()
     if(SEVENZ_EXECUTABLE)
         set(AIO_ARCHIVE_COMMAND
             "${SEVENZ_EXECUTABLE}"
-            a
-            -t7z
-            -mx1
-            -mmt=on
+            ${SEVENZ_AIO_ARGS}
             "${AIO_PACKAGE}"
             *
         )

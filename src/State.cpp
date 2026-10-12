@@ -1,10 +1,12 @@
 #include "State.h"
 
+#include <algorithm>
 #include <codecvt>
 
 #include <pystring/pystring.h>
 
 #include "Deferred.h"
+#include "EngineFixes/LandscapeSeamsFix.h"
 #include "FeatureIssues.h"
 #include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
@@ -13,6 +15,7 @@
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/RemoteControl/NvPerf.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
@@ -52,14 +55,27 @@ void State::UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass)
 void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
 {
 	permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsSun);
+	permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsMoon);
+	permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::NoSkyScattering);
 
 	if (!a_pass || !a_pass->shaderProperty)
 		return;
 
 	auto* skyProperty = static_cast<const RE::BSSkyShaderProperty*>(a_pass->shaderProperty);
+	if (skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_CLOUDS) {
+		// Bottled Shaders keeps cloud layer 28 out of the scattering
+		constexpr std::uint16_t kNoScatteringCloudLayer = 28;
+		auto* sky = globals::game::sky;
+		if (sky && sky->clouds && kNoScatteringCloudLayer < sky->clouds->numLayers &&
+			sky->clouds->clouds[kNoScatteringCloudLayer].get() == a_pass->geometry)
+			permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::NoSkyScattering);
+	}
 	if (skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_SUN ||
 		skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_SUN_GLARE) {
 		permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsSun);
+	}
+	if (skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_MOON) {
+		permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsMoon);
 	}
 
 	// The glare VS fades itself by scene depth coverage around the sun
@@ -70,6 +86,28 @@ void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
 		// The sky draws with the z-prepass copy as its DSV, which would null an SRV of it; kMAIN holds the same depth
 		auto* depthSRV = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
 		context->VSSetShaderResources(17, 1, &depthSRV);
+	}
+}
+
+void State::UpdateEffectShaderPermutation(RE::BSRenderPass* a_pass)
+{
+	constexpr auto isAurora = static_cast<uint32_t>(ExtraShaderDescriptors::IsAurora);
+	permutationData.ExtraShaderDescriptor &= ~isAurora;
+
+	if (!a_pass || !a_pass->geometry)
+		return;
+	if (!(currentVertexDescriptor & static_cast<uint32_t>(SIE::ShaderCache::EffectShaderFlags::SkyObject)))
+		return;
+
+	const auto sky = globals::game::sky;
+	if (!sky || !sky->auroraRoot)
+		return;
+
+	for (const RE::NiAVObject* node = a_pass->geometry; node; node = node->parent) {
+		if (node == sky->auroraRoot.get()) {
+			permutationData.ExtraShaderDescriptor |= isAurora;
+			return;
+		}
 	}
 }
 
@@ -245,6 +283,7 @@ void State::Reset()
 	globals::profiler->EndFrame();
 
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
+	LandscapeSeamsFix::GetInstance().Reset();
 
 	// Cache menu open states once per frame to avoid repeated IsMenuOpen calls
 	// (each call constructs a BSFixedString, which is expensive at scale).
@@ -535,6 +574,8 @@ void State::SaveToJson(nlohmann::json& settings)
 	advanced["Use FileWatcher"] = shaderCache->UseFileWatcher();
 	advanced["Frame Annotations"] = frameAnnotations;
 	advanced["Partial Precision"] = enablePartialPrecision.load(std::memory_order_relaxed);
+	advanced["Content Store"] = enableContentStore.load(std::memory_order_relaxed);
+	advanced["Content Store Max MB"] = contentStoreMaxMB.load(std::memory_order_relaxed);
 	settings["Advanced"] = advanced;
 
 	json general;
@@ -614,6 +655,10 @@ void State::LoadFromJson(nlohmann::json& settings)
 			frameAnnotations = advanced["Frame Annotations"];
 		if (advanced.contains("Partial Precision") && advanced["Partial Precision"].is_boolean())
 			enablePartialPrecision.store(advanced["Partial Precision"].get<bool>(), std::memory_order_relaxed);
+		if (advanced.contains("Content Store") && advanced["Content Store"].is_boolean())
+			enableContentStore.store(advanced["Content Store"].get<bool>(), std::memory_order_relaxed);
+		if (advanced.contains("Content Store Max MB") && advanced["Content Store Max MB"].is_number_unsigned())
+			contentStoreMaxMB.store(static_cast<uint32_t>(std::clamp<uint64_t>(advanced["Content Store Max MB"].get<uint64_t>(), kContentStoreMinMB, kContentStoreMaxMB)), std::memory_order_relaxed);
 	}
 
 	if (settings.contains("General") && settings["General"].is_object()) {
@@ -723,10 +768,8 @@ spdlog::level::level_enum State::GetLogLevel()
 
 void State::SetDefines(std::string a_defines)
 {
-	shaderDefines.clear();
+	std::vector<std::pair<std::string, std::string>> parsedDefines;
 	shaderDefinesString = "";
-	std::string name = "";
-	std::string definition = "";
 	auto defines = pystring::split(a_defines, ";");
 	for (const auto& define : defines) {
 		auto cleanedDefine = pystring::strip(define);
@@ -737,20 +780,23 @@ void State::SetDefines(std::string a_defines)
 			logger::warn("Define string has too many '='; ignoring {}", define);
 			continue;
 		}
-		name = pystring::strip(token[0]);
-		if (token.size() == 2) {
-			definition = pystring::strip(token[1]);
-		}
+		std::string name = pystring::strip(token[0]);
+		std::string definition = token.size() == 2 ? pystring::strip(token[1]) : std::string{};
 		shaderDefinesString += pystring::strip(define) + ";";
-		shaderDefines.push_back(std::pair(name, definition));
+		parsedDefines.emplace_back(std::move(name), std::move(definition));
 	}
 	shaderDefinesString = shaderDefinesString.substr(0, shaderDefinesString.size() - 1);
+	{
+		std::scoped_lock lock(shaderDefinesMutex);
+		shaderDefines = std::make_shared<const std::vector<std::pair<std::string, std::string>>>(std::move(parsedDefines));
+	}
 	logger::debug("Shader Defines set to {}", shaderDefinesString);
 }
 
-std::vector<std::pair<std::string, std::string>>* State::GetDefines()
+std::shared_ptr<const std::vector<std::pair<std::string, std::string>>> State::GetDefines()
 {
-	return &shaderDefines;
+	std::scoped_lock lock(shaderDefinesMutex);
+	return shaderDefines;
 }
 
 bool State::ShaderEnabled(const RE::BSShader::Type a_type)
@@ -871,13 +917,17 @@ void State::SetupResources()
 
 	globals::profiler->Initialize(globals::d3d::device, globals::d3d::context);
 
-	if (frameAnnotations) {
-		globals::profiler->SetPerfEventCallbacks(
-			[this](std::string_view name) { BeginPerfEvent(name); },
-			[this](std::string_view) { EndPerfEvent(); });
-	} else {
-		globals::profiler->SetPerfEventCallbacks({}, {});
-	}
+	// Checked per pass rather than bound once, so annotations forced on at runtime (RenderDoc capture, Nsight Perf)
+	// also cover the profiler's passes. Toggles happen between frames, so a pass's begin and end agree.
+	globals::profiler->SetPerfEventCallbacks(
+		[this](std::string_view name) {
+			if (frameAnnotations)
+				BeginPerfEvent(name);
+		},
+		[this](std::string_view) {
+			if (frameAnnotations)
+				EndPerfEvent();
+		});
 }
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred)
@@ -901,13 +951,27 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::AnisoLighting |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr);
+										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr |
+										(uint32_t)SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
 
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::AmbientSpecular |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::ShadowDir |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::DefShadow |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::CharacterLight |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow);
+
+				{
+					uint32_t technique = 0x3F & (a_pixelDescriptor >> 24);
+					if (technique != (uint32_t)SIE::ShaderCache::LightingShaderTechniques::LODLand &&
+						technique != (uint32_t)SIE::ShaderCache::LightingShaderTechniques::LODLandNoise &&
+						technique != (uint32_t)SIE::ShaderCache::LightingShaderTechniques::LODObjects &&
+						technique != (uint32_t)SIE::ShaderCache::LightingShaderTechniques::LODObjectHD)
+						a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::Specular |
+											   (uint32_t)SIE::ShaderCache::LightingShaderFlags::SoftLighting |
+											   (uint32_t)SIE::ShaderCache::LightingShaderFlags::RimLighting |
+											   (uint32_t)SIE::ShaderCache::LightingShaderFlags::BackLighting);
+				}
+
 				if (a_pixelDescriptor & (uint32_t)SIE::ShaderCache::LightingShaderFlags::AdditionalAlphaMask) {
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::DoAlphaTest;
 					a_pixelDescriptor &= ~(uint32_t)SIE::ShaderCache::LightingShaderFlags::AdditionalAlphaMask;
@@ -972,6 +1036,8 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 			}
 			break;
 		}
+	} else if (a_shader.shaderType.get() == RE::BSShader::Type::Utility) {
+		a_vertexDescriptor &= ~(uint32_t)SIE::ShaderCache::UtilityShaderFlags::TruePbr;
 	}
 }
 
@@ -990,6 +1056,8 @@ void State::BeginPerfEvent(std::string_view title)
 	s_tracyPerfZones.push_back(ctx);
 #endif
 	pPerf->BeginEvent(std::wstring(title.begin(), title.end()).c_str());
+	if (NvPerf::RangesActive())
+		NvPerf::PushRange(title);
 }
 
 void State::EndPerfEvent()
@@ -1002,6 +1070,8 @@ void State::EndPerfEvent()
 		logger::warn("EndPerfEvent called without a matching BeginPerfEvent");
 	}
 #endif
+	if (NvPerf::RangesActive())
+		NvPerf::PopRange();
 	pPerf->EndEvent();
 }
 

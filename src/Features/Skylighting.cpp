@@ -5,7 +5,10 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
+#include "Utils/SphericalHarmonics.h"
 #include "Utils/VersionedRelocation.h"
+
+#include <numbers>
 
 #define I18N_KEY_PREFIX "feature.skylighting."
 
@@ -18,6 +21,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void Skylighting::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	// A negative or non-finite zenith turns the probe sample disc radius into NaN
+	settings.MaxZenith = std::isfinite(settings.MaxZenith) ? std::clamp(settings.MaxZenith, 0.0f, std::numbers::pi_v<float> / 2.0f) : Settings{}.MaxZenith;
 }
 
 void Skylighting::SaveSettings(json& o_json)
@@ -33,9 +38,16 @@ void Skylighting::RestoreDefaultSettings()
 void Skylighting::ResetSkylighting()
 {
 	auto context = globals::d3d::context;
-	UINT clr[1] = { 0 };
+	// Unit SH (fully unoccluded), matching Skylighting::UNIT_SH; probes the occlusion map does not reach would otherwise keep the previous location's values
+	const float unitSH[4] = { std::sqrt(4.0f * std::numbers::pi_v<float>), 0.0f, 0.0f, 0.0f };
+	context->ClearUnorderedAccessViewFloat(texProbeArray->uav.get(), unitSH);
+
+	// ClearUnorderedAccessViewUint always reads four values
+	const UINT clr[4] = { 0, 0, 0, 0 };
 	context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clr);
-	context->ClearUnorderedAccessViewUint(texShadowBitmask->uav.get(), clr);
+	// All 32 history bits lit, so a reset does not fade in from black while the history refills
+	const UINT litHistory[4] = { 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu };
+	context->ClearUnorderedAccessViewUint(texShadowBitmask->uav.get(), litHistory);
 
 	float clrf[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 	context->ClearUnorderedAccessViewFloat(texShadowVisibility->uav.get(), clrf);
@@ -59,7 +71,7 @@ void Skylighting::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("%s", T(TKEY("rebuild_tooltip"), "Changes below require rebuilding, a loading screen, or moving away from the current location to apply."));
 
-	ImGui::SliderAngle(T(TKEY("max_zenith"), "Max Zenith Angle"), &settings.MaxZenith, 0, 90);
+	ImGui::SliderAngle(T(TKEY("max_zenith"), "Max Zenith Angle"), &settings.MaxZenith, 0, 90, "%.0f deg", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("%s", T(TKEY("max_zenith_tooltip"), "Smaller angles creates more focused top-down shadow."));
 }
@@ -212,7 +224,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 
 	return {
 		.OcclusionViewProj = OcclusionTransform,
-		.OcclusionDir = OcclusionDir,
+		.OcclusionSHBasis4Pi = OcclusionSHBasis4Pi,
 		.PosOffset = cellOrigin - eyePos,
 		.ArrayOrigin = {
 			((int)cellID.x - probeArrayDims[0] / 2) % probeArrayDims[0],
@@ -439,7 +451,6 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 					auto value = static_cast<int32_t>(bsxFlags->value);
 
 					if (value & (static_cast<int32_t>(RE::BSXFlags::Flag::kRagdoll) |
-									static_cast<int32_t>(RE::BSXFlags::Flag::kEditorMarker) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kDynamic) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kAddon) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kNeedsTransformUpdate) |
@@ -594,7 +605,7 @@ void Skylighting::RenderOcclusion()
 					}
 
 					// disc transformation
-					vPoint.x = sqrt(vPoint.x * sin(settings.MaxZenith));
+					vPoint.x = sqrt(vPoint.x) * sin(settings.MaxZenith);
 					vPoint.y *= 6.28318530718f;
 
 					vPoint = { vPoint.x * cos(vPoint.y), vPoint.x * sin(vPoint.y) };
@@ -621,7 +632,9 @@ void Skylighting::RenderOcclusion()
 				}
 				inOcclusion = false;
 
-				OcclusionDir = -float4{ PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z, 0 };
+				// Every probe used to evaluate this same basis; evaluate it once per capture instead.
+				const auto basis = SphericalHarmonics::Scale(SphericalHarmonics::Evaluate(-PrecipitationShaderDirectionF), 4.0f * std::numbers::pi_v<float>);  // 4 pi from Monte Carlo
+				OcclusionSHBasis4Pi = float4{ basis.c0, basis.c1[0], basis.c1[1], basis.c1[2] };
 				OcclusionTransform = ((RE::BSParticleShaderRainEmitter*)rain)->occlusionProjection;
 
 				delete rain;

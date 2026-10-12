@@ -1,4 +1,7 @@
 
+#include "Common/Game.hlsli"
+#include "LightLimitFix/Attenuation.hlsli"
+
 namespace LightLimitFix
 {
 

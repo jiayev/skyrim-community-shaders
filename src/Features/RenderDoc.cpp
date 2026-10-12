@@ -113,9 +113,14 @@ void RenderDoc::Load()
 		auto runtimeName = std::string{ magic_enum::enum_name(REL::Module::GetRuntime()) };
 		auto gameVersion = Util::GetFormattedVersion(REL::Module::get().version());
 
+		// RenderDoc numbers captures per process, so stamp the session to avoid overwriting older captures
+		const auto sessionStart = std::chrono::current_zone()->to_local(
+			std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
+
 		// Build the path using std::filesystem so we don't hardcode separators
-		std::filesystem::path fileBase = capturesDir / std::format("Skyrim_{}_{}", runtimeName, gameVersion);
-		renderDocApi->SetCaptureFilePathTemplate(fileBase.string().c_str());
+		std::filesystem::path fileBase = capturesDir / std::format("Skyrim_{}_{}_{:%Y%m%d_%H%M%S}", runtimeName, gameVersion, sessionStart);
+		const auto fileBaseU8 = fileBase.u8string();
+		renderDocApi->SetCaptureFilePathTemplate(reinterpret_cast<const char*>(fileBaseU8.c_str()));
 	} catch (const std::exception& e) {
 		logger::warn("[RenderDoc] Failed to prepare capture directory/template: {}", e.what());
 	}
@@ -239,7 +244,7 @@ void RenderDoc::DrawSettings()
 
 				if (ImGui::BeginPopup("Not enough disk space##RenderDoc")) {
 					ImGui::Text("%s", T(TKEY("not_enough_space"), "Not enough free disk space to create a capture."));
-					ImGui::Text(T(TKEY("space_required"), "At least {} MB of free space is required."), GetRequiredCaptureSpaceBytes() / (1024 * 1024));
+					ImGui::Text(T(TKEY("space_required"), "At least %llu MB of free space is required."), static_cast<unsigned long long>(GetRequiredCaptureSpaceBytes() / (1024 * 1024)));
 					if (ImGui::Button(T(TKEY("ok"), "OK"))) {
 						ImGui::CloseCurrentPopup();
 					}
