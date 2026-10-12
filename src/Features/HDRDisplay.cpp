@@ -9,6 +9,7 @@
 #include "LinearLighting.h"
 #include "Menu.h"
 #include "PostProcessing.h"
+#include "ScreenshotFeature.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Upscaling.h"
@@ -565,6 +566,10 @@ void HDRDisplay::LoadSettings(json& o_json)
 	bool oldEnableHDR = settings.enableHDR;
 
 	settings = o_json;
+	settings.hdrPeakNits = std::clamp(settings.hdrPeakNits, kHdrPeakNitsMin, kHdrPeakNitsMax);
+	settings.hdrPaperWhite = std::clamp(settings.hdrPaperWhite, 80u, settings.hdrPeakNits - 1);
+	if (!std::isfinite(settings.hdrUIBrightness))
+		settings.hdrUIBrightness = 1.0f;
 
 	// Defer auto-detection to SetupResources where the swap chain is available.
 	// DetectHDR() needs globals::d3d::swapChain which isn't valid during early plugin init.
@@ -930,6 +935,9 @@ namespace
 			if (globals::features::hdrDisplay.IsPresentSuppressed())
 				return S_OK;
 
+			if (!globals::features::upscaling.d3d12SwapChainActive)
+				globals::features::screenshotFeature.ProcessCaptureRequest();
+
 			return func(This, SyncInterval, Flags);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -1014,6 +1022,7 @@ ID3D11BlendState* HDRDisplay::GetPatchedAlphaBlendState(ID3D11BlendState* origin
 
 HRESULT HDRDisplay::PresentToSwapChain(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags)
 {
+	globals::features::screenshotFeature.ProcessCaptureRequest();
 	return SwapChainPresentBottom::func(swapChain, syncInterval, flags);
 }
 

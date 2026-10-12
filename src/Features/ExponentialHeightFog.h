@@ -105,8 +105,8 @@ private:
 		float4 gridZParams = {};
 		float4x4 clipToWorld = {};
 		float4 frameJitterOffsets[16] = {};
-		float4 historyParameters = {};
-		float4 jitterParameters = {};  // x = LightScatteringSampleJitterMultiplier, y = StateFrameIndexMod8, zw = unused
+		float4 historyParameters = {};  // x = near weight, y = miss sample count, z = far weight, w = unused
+		float4 jitterParameters = {};   // x = LightScatteringSampleJitterMultiplier, y = StateFrameIndexMod8, zw = unused
 		// Far volume grid (starts where the near volume ends, runs to volumetricFogDistance).
 		DirectX::XMUINT4 farGridSizeAndFlags = {};
 		float4 farInvGridSizeAndNearFade = {};

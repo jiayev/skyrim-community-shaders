@@ -381,6 +381,10 @@ void FeatureListRenderer::RenderFeatureList(
 {
 	ImGui::BeginChild("Menus Table", ImVec2(0, -footerHeight));
 
+	// A search filter could hide the feature being navigated to
+	if (!pendingFeatureSelection.empty())
+		featureSearch.clear();
+
 	auto menuList = BuildMenuList(featureSearch, categoryExpansionStates, drawGeneralSettings, drawAdvancedSettings);
 
 	HandlePendingFeatureSelection(pendingFeatureSelection, menuList, selectedMenu);
@@ -967,7 +971,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 	if (hasFailedMessage && feat->DrawFailLoadMessage() && !FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
 		ImGui::Spacing();
 		SeparatorTextWithFont(T("menu.features.error_header", "Error"), Menu::FontRole::Subheading);
-		ImGui::TextColored(themeSettings.StatusPalette.Error, feat->failedLoadedMessage.c_str());
+		ImGui::TextColored(themeSettings.StatusPalette.Error, "%s", feat->failedLoadedMessage.c_str());
 	}
 }
 
