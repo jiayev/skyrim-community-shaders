@@ -93,33 +93,30 @@ namespace LightLimitFix
 	}
 
 	/** @brief Bilinear PCF tap equivalent to SampleCmpLevelZero; the host shaders have no comparison sampler bound, so this uses Gather. */
-	float SampleLocalShadowTap(SamplerState samp, uint slice, float2 uv, float receiverDepth)
+	float SampleLocalShadowTap(Texture2DArray<float> shadowMaps, SamplerState samp, uint slice, float2 uv, float receiverDepth, float texel)
 	{
-		const float texel = SharedData::lightLimitFixSettings.LocalShadowTexelSize;
 		float2 texelPosition = uv / texel - 0.5;
 		float2 weight = frac(texelPosition);
-		float4 lit = float4(LocalShadowMaps.GatherRed(samp, float3((floor(texelPosition) + 1.0) * texel, slice)) >= receiverDepth);
+		float4 lit = float4(shadowMaps.GatherRed(samp, float3((floor(texelPosition) + 1.0) * texel, slice)) >= receiverDepth);
 		return lerp(lerp(lit.w, lit.z, weight.x), lerp(lit.x, lit.y, weight.x), weight.y);
 	}
 
-	float SampleLocalShadowPCF(SamplerState samp, uint slice, float2 uv, float receiverDepth, float noise, float2 clampMin, float2 clampMax)
+	float SampleLocalShadowPCF(Texture2DArray<float> shadowMaps, SamplerState samp, uint slice, float2 uv, float receiverDepth, float noise, float2 clampMin, float2 clampMax, float texel, uint sampleCount, float radiusUV)
 	{
-		const uint sampleCount = SharedData::lightLimitFixSettings.LocalShadowSamples;
 		float shadow = 0.0;
 		[branch] if (sampleCount <= 1)
 		{
-			shadow = SampleLocalShadowTap(samp, slice, clamp(uv, clampMin, clampMax), receiverDepth);
+			shadow = SampleLocalShadowTap(shadowMaps, samp, slice, clamp(uv, clampMin, clampMax), receiverDepth, texel);
 		}
 		else
 		{
-			const float radiusUV = SharedData::lightLimitFixSettings.LocalShadowFilterRadius;
 			const float2x2 rotationMatrix = GetShadowRotationMatrix(noise);
 			const uint stride = sampleCount >= 8 ? 1 : 2;
 			float sum = 0.0;
 			[loop] for (uint i = 0; i < 8; i += stride)
 			{
 				float2 offset = mul(Random::SpiralSampleOffsets8[i], rotationMatrix) * radiusUV;
-				sum += SampleLocalShadowTap(samp, slice, clamp(uv + offset, clampMin, clampMax), receiverDepth);
+				sum += SampleLocalShadowTap(shadowMaps, samp, slice, clamp(uv + offset, clampMin, clampMax), receiverDepth, texel);
 			}
 			shadow = sum * (stride == 1 ? 0.125 : 0.25);
 		}
@@ -127,16 +124,14 @@ namespace LightLimitFix
 	}
 
 	// position is relative to eyePosition; each cached projection is relative to its own Origin.
-	float GetLocalShadow(SamplerState samp, uint slice, float3 position, float3 eyePosition, float3 towardLight, bool skinnedReceiver, float noise)
+	float GetLocalShadow(Texture2DArray<float> shadowMaps, SamplerState samp, LocalShadowData data, uint slice, float3 position, float3 eyePosition, float3 towardLight, bool skinnedReceiver, float noise, float texel, uint sampleCount, float radiusUV)
 	{
-		LocalShadowData data = LocalShadows[slice];
 		float rawShadow = 1.0;
 		float fade = 0.0;
 
 		[branch] if (data.Params.y > 0.0)
 		{
 			fade = data.Params.w;
-			const float texel = SharedData::lightLimitFixSettings.LocalShadowTexelSize;
 			const uint shadowType = (uint)data.Params.x;
 			float3 shadowPosition = position + (eyePosition - data.Origin.xyz) + towardLight * (skinnedReceiver ? data.Params2.y : 0.0);
 			float4 positionLS = mul(data.ShadowProj, float4(shadowPosition, 1.0));
@@ -153,7 +148,7 @@ namespace LightLimitFix
 						float2 uv = positionLS.xy * 0.5 + 0.5;
 						float receiverDepth = positionLS.z - data.Params.z;
 						float spotFalloff = saturate(1.0 - pow(length(positionLS.xy), data.Params2.x));
-						rawShadow = SampleLocalShadowPCF(samp, slice, uv, receiverDepth, noise, texel, 1.0 - texel) * spotFalloff;
+						rawShadow = SampleLocalShadowPCF(shadowMaps, samp, slice, uv, receiverDepth, noise, texel, 1.0 - texel, texel, sampleCount, radiusUV) * spotFalloff;
 					}
 				}
 			}
@@ -179,11 +174,17 @@ namespace LightLimitFix
 					}
 
 					float receiverDepth = saturate(length(positionLS.xyz) / data.Params.y) - data.Params.z;
-					rawShadow = SampleLocalShadowPCF(samp, slice, uv, receiverDepth, noise, clampMin, clampMax);
+					rawShadow = SampleLocalShadowPCF(shadowMaps, samp, slice, uv, receiverDepth, noise, clampMin, clampMax, texel, sampleCount, radiusUV);
 				}
 			}
 		}
 
 		return lerp(1.0, rawShadow, fade);
+	}
+
+	float GetLocalShadow(SamplerState samp, uint slice, float3 position, float3 eyePosition, float3 towardLight, bool skinnedReceiver, float noise)
+	{
+		return GetLocalShadow(LocalShadowMaps, samp, LocalShadows[slice], slice, position, eyePosition, towardLight, skinnedReceiver, noise,
+			SharedData::lightLimitFixSettings.LocalShadowTexelSize, SharedData::lightLimitFixSettings.LocalShadowSamples, SharedData::lightLimitFixSettings.LocalShadowFilterRadius);
 	}
 }
