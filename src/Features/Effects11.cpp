@@ -45,19 +45,13 @@ void Effects11::UpdateSkyScattering(PerFrame& a_data)
 	};
 
 	auto sky = globals::game::sky;
-	const bool sunVisible = sky && EffectManager::GetSunVisibility(sky->sun) > 0.0f;
 
-	// Keep the last direction while the sun is hidden above the horizon (e.g. by a weather), so
-	// the scattering does not jump; once it sets, keep tracking it so the twilight follows it down.
-	// The first direction is always taken, so a game loaded under a sun-hiding weather does not
-	// scatter from the zenith placeholder.
+	// Mirror the direction below the horizon while the sun is hidden (e.g. by a weather)
 	if (sky && sky->sun) {
-		const auto direction = globals::features::skySync.GetCelestialDirection(sky, SkySync::Caster::Sun);
-		const float length = direction.Length();
-		if (length > 1e-6f && (sunVisible || direction.z < 0.0f || !hasScatteringSunDirection)) {
-			scatteringSunDirection = { direction.x / length, direction.y / length, direction.z / length };
-			hasScatteringSunDirection = true;
-		}
+		auto direction = globals::features::skySync.GetCelestialDirection(sky, SkySync::Caster::Sun);
+		if (EffectManager::GetSunVisibility(sky->sun) <= 0.0f && direction.z > 0.0f)
+			direction.z = -direction.z;
+		scatteringSunDirection = { direction.x, direction.y, direction.z };
 	}
 
 	const float sunHeight = scatteringSunDirection.z;
@@ -101,7 +95,7 @@ void Effects11::UpdateSkyScattering(PerFrame& a_data)
 	a_data.SkyScatteringAtmosphereThickness = 100.0f / std::max(atmosphereThickness * atmosphereThickness, 1e-6f);
 	a_data.SkyScatteringAirGlowIntensity = timeOfDay("AirGlowIntensity");
 	a_data.SkyScatteringAirGlowRange = 1.0f / std::max(airGlowRange * airGlowRange, 1e-6f);
-	a_data.SkyScatteringSunGlowIntensity = sunVisible ? timeOfDay("SunGlowIntensity") : 0.0f;
+	a_data.SkyScatteringSunGlowIntensity = timeOfDay("SunGlowIntensity");
 	a_data.SkyScatteringSunGlowRange = 10.0f / std::max(sunGlowRange * sunGlowRange, 1e-6f);
 	a_data.SkyScatteringMoonGlowAmount = timeOfDay("MoonGlowAmount");
 	a_data.SkyScatteringMoonGlowRange = 10.0f / std::max(moonGlowRange * moonGlowRange, 1e-6f);
@@ -158,6 +152,18 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 	data.CloudsDesaturation = settingManager.GetInterpolatedTimeOfDayValue("CloudsDesaturation", "SKY");
 	data.CloudsEdgeIntensity = settingManager.GetValue<float>("CloudsEdgeIntensity", "SKY");
 	data.CloudsEdgeMoonMultiplier = settingManager.GetInterpolatedTimeOfDayValue("CloudsEdgeMoonMultiplier", "SKY");
+
+	// StarsCurve 1..4 maps to a 0..1 blend from linear stars toward stars^4
+	data.StarsCurve = std::max((settingManager.GetInterpolatedTimeOfDayValue("StarsCurve", "SKY") - 1.0f) / 3.0f, 0.0f);
+	data.StarsIntensity = settingManager.GetInterpolatedTimeOfDayValue("StarsIntensity", "SKY");
+	data.MoonCurve = settingManager.GetInterpolatedTimeOfDayValue("MoonCurve", "SKY");
+	data.EnableAnimatedStars = settingManager.GetValue<bool>("EnableAnimatedStars", "SKY");
+	data.StarsAnimationTime = settingManager.GetValue<float>("StarsAnimationTime", "SKY");
+	data.StarsAnimationDensity = settingManager.GetValue<float>("StarsAnimationDensity", "SKY");
+	data.StarsAnimationIntensity = settingManager.GetValue<float>("StarsAnimationIntensity", "SKY");
+	data.AuroraIntensity = settingManager.GetInterpolatedTimeOfDayValue("AuroraBorealisIntensity", "SKY");
+	data.AuroraCurve = settingManager.GetInterpolatedTimeOfDayValue("AuroraBorealisCurve", "SKY");
+	data.FixBlackCrush = settingManager.GetValue<bool>("FixBlackCrush", "SKY");
 
 	data.VolumetricRaysDesaturation = settingManager.GetInterpolatedTimeOfDayValue("Desaturation", "GAMEVOLUMETRICRAYS");
 	auto colorFilter = settingManager.GetInterpolatedColorTimeOfDayValue("ColorFilter", "GAMEVOLUMETRICRAYS");
@@ -412,6 +418,20 @@ RE::NiColor F3ToNi(float3 color)
 	return { color.x, color.y, color.z };
 }
 
+/** @brief A time-of-day setting moved from its interpolated value towards its Night value by nightWeight. */
+static float GetNightWeightedValue(SettingManager& settingManager, std::string_view key, std::string_view category, float nightWeight)
+{
+	const float value = settingManager.GetInterpolatedTimeOfDayValue(key, category);
+	return nightWeight > 0.0f ? std::lerp(value, settingManager.GetValue<TimeOfDayValue>(key, category)[TimeOfDayValue::Night], nightWeight) : value;
+}
+
+/** @brief Colour counterpart of GetNightWeightedValue. */
+static float3 GetNightWeightedColor(SettingManager& settingManager, std::string_view key, std::string_view category, float nightWeight)
+{
+	const float3 value = settingManager.GetInterpolatedColorTimeOfDayValue(key, category);
+	return nightWeight > 0.0f ? float3::Lerp(value, settingManager.GetValue<ColorTimeOfDayValue>(key, category)[ColorTimeOfDayValue::Night], nightWeight) : value;
+}
+
 void Effects11::OverrideWeather(RE::Sky* a_sky)
 {
 	if (!a_sky) {
@@ -437,10 +457,14 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 		}
 		dirLightColorF3 *= sunlightScale;
 
-		dirLightColorF3 = Curve(dirLightColorF3, settingManager.GetInterpolatedTimeOfDayValue("DirectLightingCurve", "ENVIRONMENT"));
-		dirLightColorF3 = Desaturation(dirLightColorF3, settingManager.GetInterpolatedTimeOfDayValue("DirectLightingDesaturation", "ENVIRONMENT"));
-		dirLightColorF3 = ColorFilter(dirLightColorF3, settingManager.GetInterpolatedColorTimeOfDayValue("DirectLightingColorFilter", "ENVIRONMENT"), settingManager.GetInterpolatedTimeOfDayValue("DirectLightingColorFilterAmount", "ENVIRONMENT"));
-		dirLightColorF3 = Intensity(dirLightColorF3, settingManager.GetInterpolatedTimeOfDayValue("DirectLightingIntensity", "ENVIRONMENT"));
+		// Sky Sync lights from the night sunlight colour once the sun sets, so grade it as night too
+		const float nightWeight = globals::features::skySync.GetLightNightWeight();
+		auto lightingValue = [&](std::string_view key) { return GetNightWeightedValue(settingManager, key, "ENVIRONMENT", nightWeight); };
+
+		dirLightColorF3 = Curve(dirLightColorF3, lightingValue("DirectLightingCurve"));
+		dirLightColorF3 = Desaturation(dirLightColorF3, lightingValue("DirectLightingDesaturation"));
+		dirLightColorF3 = ColorFilter(dirLightColorF3, GetNightWeightedColor(settingManager, "DirectLightingColorFilter", "ENVIRONMENT", nightWeight), lightingValue("DirectLightingColorFilterAmount"));
+		dirLightColorF3 = Intensity(dirLightColorF3, lightingValue("DirectLightingIntensity"));
 
 		dirLightColorF3 /= sunlightScale;
 
@@ -509,24 +533,18 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 		{
 			auto& moonColor = colors[(uint)RE::TESWeather::ColorTypes::kMoonGlare];
 
+			// Sky Sync tints the moons from night colours once the sun sets, so grade them towards night by the same weight
+			const float nightWeight = globals::features::skySync.GetMoonNightWeight();
+			auto moonValue = [&](std::string_view key) { return GetNightWeightedValue(settingManager, key, "SKY", nightWeight); };
+
 			auto moonColorF3 = NiToF3(moonColor);
 
-			moonColorF3 = Desaturation(moonColorF3, settingManager.GetInterpolatedTimeOfDayValue("MoonDesaturation", "SKY"));
-			moonColorF3 = ColorFilter(moonColorF3, settingManager.GetInterpolatedColorTimeOfDayValue("MoonColorFilter", "SKY"), 0.0f);
-			moonColorF3 = Intensity(moonColorF3, settingManager.GetInterpolatedTimeOfDayValue("MoonIntensity", "SKY"));
+			moonColorF3 = Curve(moonColorF3, moonValue("MoonCurve"));
+			moonColorF3 = Desaturation(moonColorF3, moonValue("MoonDesaturation"));
+			moonColorF3 = ColorFilter(moonColorF3, GetNightWeightedColor(settingManager, "MoonColorFilter", "SKY", nightWeight), 0.0f);
+			moonColorF3 = Intensity(moonColorF3, moonValue("MoonIntensity"));
 
 			moonColor = F3ToNi(moonColorF3);
-		}
-
-		{
-			auto& starsColor = colors[(uint)RE::TESWeather::ColorTypes::kStars];
-
-			auto starsColorF3 = NiToF3(starsColor);
-
-			starsColorF3 = Curve(starsColorF3, settingManager.GetInterpolatedTimeOfDayValue("StarsCurve", "SKY"));
-			starsColorF3 = Intensity(starsColorF3, settingManager.GetInterpolatedTimeOfDayValue("StarsIntensity", "SKY"));
-
-			starsColor = F3ToNi(starsColorF3);
 		}
 
 		{

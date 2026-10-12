@@ -151,6 +151,9 @@ namespace SIE
 					defines[lastIndex++] = { "GLINT", nullptr };
 				}
 			}
+			if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::LandscapeSeams)) != 0) {
+				defines[lastIndex++] = { "LANDSCAPE_SEAMS", nullptr };
+			}
 
 			for (auto* feature : Feature::GetFeatureList()) {
 				if (feature->loaded && feature->HasShaderDefine(RE::BSShader::Type::Lighting)) {
@@ -622,6 +625,9 @@ namespace SIE
 			}
 			if (descriptor & static_cast<uint32_t>(LocalMapFogOfWar)) {
 				defines[lastIndex++] = { "LOCALMAP_FOGOFWAR", nullptr };
+			}
+			if (descriptor & static_cast<uint32_t>(TruePbr)) {
+				defines[lastIndex++] = { "TRUE_PBR", nullptr };
 			}
 
 			if (hasShadowMask) {
@@ -1760,8 +1766,10 @@ namespace SIE
 				cache.AddCompletedShader(shaderClass, shader, descriptor, nullptr);
 				return nullptr;
 			}
-			if (errorBlob)
+			if (errorBlob) {
 				logger::debug("Shader logs:\n{}", static_cast<char*>(errorBlob->GetBufferPointer()));
+				errorBlob->Release();
+			}
 			logger::debug("Compiled shader {}:{}:{:X}", magic_enum::enum_name(type), magic_enum::enum_name(shaderClass), descriptor);
 
 #ifdef TRACY_ENABLE

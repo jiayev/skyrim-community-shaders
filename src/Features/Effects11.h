@@ -134,6 +134,20 @@ public:
 		float WaterPad0;
 		float WaterPad1;
 		float WaterPad2;
+
+		float StarsCurve;
+		float StarsIntensity;
+		float MoonCurve;
+		uint EnableAnimatedStars;
+
+		float StarsAnimationTime;
+		float StarsAnimationDensity;
+		float StarsAnimationIntensity;
+		float AuroraIntensity;
+
+		float AuroraCurve;
+		uint FixBlackCrush;
+		float2 NightSkyPad0;
 	};
 	static_assert(sizeof(PerFrame) % 16 == 0);
 	static_assert(offsetof(PerFrame, EnableCloudsScattering) % 16 == 0);
@@ -143,6 +157,8 @@ public:
 	static_assert(offsetof(PerFrame, SkyScatteringSunIntensity) % 16 == 0);
 	static_assert(offsetof(PerFrame, CloudsColorFilter) % 16 == 0);
 	static_assert(offsetof(PerFrame, MasserBillboardTan) % 16 == 0);
+	static_assert(offsetof(PerFrame, StarsCurve) % 16 == 0);
+	static_assert(offsetof(PerFrame, AuroraCurve) % 16 == 0);
 
 	bool enableEffect = false;
 
@@ -165,9 +181,8 @@ public:
 
 	/** @brief Sun color after the preset's sun desaturation and filter, normalized to a peak of 1; tints the sky scattering. */
 	float3 scatteringSunColor = { 1.0f, 1.0f, 1.0f };
-	/** @brief Last sun direction used for sky scattering; held while the sun disc is hidden above the horizon. */
+	/** @brief Sun direction used for sky scattering; mirrored below the horizon while the sun disc is hidden. */
 	float3 scatteringSunDirection = { 0.0f, 0.0f, 1.0f };
-	bool hasScatteringSunDirection = false;
 
 	PerFrame GetCommonBufferData();
 	/** @brief Fills the [SKYSCATTERING] and cloud lighting fields of the per-frame buffer. */

@@ -17,6 +17,7 @@
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/RemoteControl/NvPerf.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
@@ -161,6 +162,19 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	auto state = globals::state;
 	auto shaderCache = globals::shaderCache;
 
+	// Landscape Seams: draw the vanilla terrain permutation while the seams one is compiling or failed.
+	constexpr auto landscapeSeamsFlag = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
+	if (shader->shaderType.get() == RE::BSShader::Type::Lighting && (pixelDescriptor & landscapeSeamsFlag) != 0) {
+		auto probeVertexDescriptor = vertexDescriptor;
+		auto probePixelDescriptor = pixelDescriptor;
+		state->ModifyShaderLookup(*shader, probeVertexDescriptor, probePixelDescriptor);
+		if (shaderCache->GetVertexShader(*shader, probeVertexDescriptor) == nullptr ||
+			shaderCache->GetPixelShader(*shader, probePixelDescriptor) == nullptr) {
+			vertexDescriptor &= ~landscapeSeamsFlag;
+			pixelDescriptor &= ~landscapeSeamsFlag;
+		}
+	}
+
 	state->updateShader = true;
 	state->currentShader = shader;
 
@@ -229,6 +243,7 @@ namespace EffectExtensions
 		{
 			func(shader, pass, renderFlags);
 			ExternalEmittance::UpdatePermutation(pass);
+			globals::state->UpdateEffectShaderPermutation(pass);
 			globals::state->permutationData.EffectRadius = pass->geometry->worldBound.radius;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -322,6 +337,8 @@ namespace WeatherExtensions
 		static void thunk(RE::Sky* sky, float a_delta)
 		{
 			func(sky, a_delta);
+			// Moonlight colours feed Effects11's grading; the dim must follow it, as its colour filter lifts zero
+			globals::features::skySync.ApplyMoonlightColors(sky);
 			if (globals::features::effects11.loaded)
 				globals::features::effects11.OnSkyUpdateColors(sky);
 			globals::features::skySync.OnSkyUpdateColors(sky);
@@ -382,6 +399,9 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
+		// Nsight Perf passes span one frame's rendering: ended before the overlay and Present, begun after.
+		NvPerf::OnPresentBegin();
+
 		globals::state->Reset();
 
 		HRESULT retval = globals::features::hdrDisplay.HandleSwapChainPresent(
@@ -393,6 +413,8 @@ struct IDXGISwapChain_Present
 			});
 
 		globals::features::screenshotFeature.ProcessCaptureRequest();
+
+		NvPerf::OnPresentEnd();
 
 		TracyD3D11Collect(globals::state->tracyCtx);
 
