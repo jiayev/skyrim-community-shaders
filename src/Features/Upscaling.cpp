@@ -5,6 +5,7 @@
 #include "HDRDisplay.h"
 #include "Hooks.h"
 #include "PostProcessing.h"
+#include "RenderDoc.h"
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
@@ -218,6 +219,9 @@ void Upscaling::DrawSettings()
 
 	// Check the current upscale method
 	auto upscaleMethod = GetUpscaleMethod();
+
+	if (*currentUpscaleMode == (uint)UpscaleMethod::kFSR && upscaleMethod == UpscaleMethod::kTAA)
+		Util::Text::Warning("%s", T(TKEY("fsr_renderdoc_fallback"), "AMD FSR is unavailable while RenderDoc is loaded, using TAA."));
 
 	// Display warning for DLSS resolution limits
 	if (upscaleMethod == UpscaleMethod::kDLSS) {
@@ -596,9 +600,9 @@ void Upscaling::PostPostLoad()
 
 Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 {
-	if (streamline.featureDLSS)
-		return (UpscaleMethod)settings.upscaleMethod;
-	return (UpscaleMethod)settings.upscaleMethodNoDLSS;
+	const auto method = (UpscaleMethod)(streamline.featureDLSS ? settings.upscaleMethod : settings.upscaleMethodNoDLSS);
+	// FSR3 does not work under RenderDoc
+	return method == UpscaleMethod::kFSR && RenderDoc::IsLoaded() ? UpscaleMethod::kTAA : method;
 }
 
 void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
