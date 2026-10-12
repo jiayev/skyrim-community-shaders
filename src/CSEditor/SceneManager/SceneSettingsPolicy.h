@@ -13,6 +13,8 @@ namespace SceneSettingsPolicy
 	inline const std::vector<SettingPolicyPath> kSettingBlacklist = {
 		{ "ExponentialHeightFog", "volumetricGridPixelSize" },
 		{ "ExponentialHeightFog", "volumetricGridSizeZ" },
+		{ "ExponentialHeightFog", "volumetricFarGridPixelSize" },
+		{ "ExponentialHeightFog", "volumetricFarGridSizeZ" },
 		{ "ExponentialHeightFog", "volumetricShadowBias" },
 		{ "ExponentialHeightFog", "volumetricDepthDistributionScale" },
 		{ "ExponentialHeightFog", "volumetricHistoryWeight" },
