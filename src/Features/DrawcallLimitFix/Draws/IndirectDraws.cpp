@@ -6,7 +6,8 @@ namespace DCLF
 {
 	struct IndirectDraws::Impl
 	{};
-	IndirectDraws::IndirectDraws() = default;
+	// Without the render graph DCLF never draws: it has no claims (Failed).
+	IndirectDraws::IndirectDraws() { failed.store(true, std::memory_order_relaxed); }
 	IndirectDraws::~IndirectDraws() = default;
 	IndirectDraws& IndirectDraws::Get()
 	{
@@ -19,12 +20,10 @@ namespace DCLF
 	std::uint32_t IndirectDraws::ShadowViewCapacity() { return UINT32_MAX; }
 	void IndirectDraws::DecideShadowCoverage() {}
 	bool IndirectDraws::PhaseReady(const void*, const Lookups&, std::uint32_t, std::uint8_t, std::uint32_t*) const { return false; }
-	std::uint64_t IndirectDraws::ShadowReadinessSerial() const { return 0; }
 	bool IndirectDraws::FitsScene(const void*, std::uint32_t, bool) const { return true; }
 	std::uint64_t IndirectDraws::SceneFitSerial() const { return 0; }
 	void IndirectDraws::TakeAheadContext() {}
 	void IndirectDraws::CaptureMainPass() {}
-	void IndirectDraws::CheckCapturePoint() {}
 	void IndirectDraws::CaptureDepthPass() {}
 	void IndirectDraws::ExecuteColour() {}
 	void IndirectDraws::ExecuteForward() {}
@@ -48,11 +47,10 @@ namespace DCLF
 	std::function<void(org::runtime::IUploadService&)> IndirectDraws::PrepareFrameUploads() { return {}; }
 	void IndirectDraws::DropFrameUploads() {}
 	void IndirectDraws::KickFadeWriteBack() {}
-	void IndirectDraws::WriteFadeStores(bool, const std::function<bool(const void*)>&, std::vector<const void*>*) {}
+	void IndirectDraws::WriteFadeStores(bool, const std::function<bool(const void*)>&) {}
 	void IndirectDraws::KickVisibilityReadback() {}
 	void IndirectDraws::WriteAccumulated(bool, const std::function<bool(const void*)>&) {}
 	bool IndirectDraws::AccumulatedVerdict(const void*) const { return true; }
-	bool IndirectDraws::AccumulatedStoredNow(const void*) const { return false; }
 	void IndirectDraws::NoteCameraCut(std::uint32_t) {}
 	void IndirectDraws::RequestAccumulatedRefresh() {}
 	std::string IndirectDraws::VisibilityReport() { return {}; }
@@ -75,7 +73,6 @@ namespace DCLF
 	void IndirectDraws::NoteRevisionInputs() {}
 	void IndirectDraws::BuildPoint() {}
 	bool IndirectDraws::DecideCoverage() { return true; }
-	bool IndirectDraws::RevisionClaims() const { return false; }
 	std::uint64_t IndirectDraws::TakeStreamsRefused() { return 0; }
 	void IndirectDraws::EndFrame() {}
 	void IndirectDraws::DrainAsync() {}

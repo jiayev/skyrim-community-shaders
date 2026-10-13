@@ -3,6 +3,17 @@
 > **The historical record.** This document is the log of how DCLF was built, phase by phase, with the measurements
 > behind each decision. Parts of it describe code, switches and paths that have since been removed. The current design
 > is [dclf-architecture.md](./dclf-architecture.md); what DCLF covers is [dclf-status.md](./dclf-status.md).
+>
+> **Removed in the 2026-10-12 cleanup** (the sections below keep their history; these no longer exist):
+> - switches `CS_DCLF_REVISION_PARITY` (the revision and shape parity, `<- REVISION`, `<- SHAPE KEY`, `<- STALE` of the epoch payloads),
+>   `CS_DCLF_EVAL` (the stand-in evaluation audit), `CS_DCLF_FRAME_JOIN`, `CS_DCLF_ROOM_PARITY` (`<- ROOM`) and `CS_DCLF_TREE_PARITY`
+>   (`<- TREE MANAGER`, and the `CS_DCLF_TREE_LIST_ALL` dry run);
+> - the engine-run evaluator (`ConstantEvaluator::EvaluateMaterial`/`EvaluateGeometry` and its stand-ins) with what depended on it: the
+>   template parity (`<- TEMPLATE`), the pipeline template port parity (`<- GEOMETRY PORT`), the material port parity (`<- MATERIAL PORT`),
+>   the material parity's suspects windows and the `STALE MATERIAL` alarm;
+> - the observers `<- ACCUMULATED ALL` (the wide-write compare and its dry run), `<- ACTOR RATE` and `<- FADE DOUBLE`;
+> - the `Published/` capture island (`CaptureService`, `CapturePreparation`, `CaptureAdmission`, `CapturedScene`, `CaptureGraph`,
+>   `FaceCapture`, their tests) and `AsyncWorker`.
 
 Drawcall Limit Fix (DCLF) replaces the game's per-object opaque draw loop with GPU-driven indirect draws
 that the render graph executes on DXVK's Vulkan device (see [OpenRenderGraph on DXVK](./render-graph.md)).

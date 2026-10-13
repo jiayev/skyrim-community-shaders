@@ -18,7 +18,7 @@
 
 #include "Features/DynamicCubemaps.h"
 #include "Features/RenderDoc.h"
-#include "Features/DrawcallLimitFix/Draws/ShaderPrograms.h"
+#include "Features/DrawcallLimitFix/Draws/Pipelines/ShaderPrograms.h"
 
 #include "Plugin.h"
 
@@ -3178,6 +3178,10 @@ namespace SIE
 		} catch (std::filesystem::filesystem_error const& ex) {
 			logger::error("Failed to delete disk cache: {}", ex.what());
 		}
+		// Stamp the emptied cache for this configuration at once, before any shader is written: each compiled shader is
+		// saved as it finishes, so a run interrupted mid-compilation leaves a valid partial cache the next run continues from.
+		if (isDiskCache)
+			WriteDiskCacheInfo();
 	}
 
 	void ShaderCache::ValidateDiskCache()
@@ -3219,7 +3223,12 @@ namespace SIE
 		ini.SetUnicode();
 		ini.SetValue("Cache", "PluginVersion", Plugin::VERSION.string().c_str());
 		globals::state->WriteDiskCacheInfo(ini);
-		ini.SaveFile(L"Data\\ShaderCache\\Info.ini");
+		std::error_code ec;
+		std::filesystem::create_directories(L"Data\\ShaderCache", ec);
+		if (ini.SaveFile(L"Data\\ShaderCache\\Info.ini") < 0) {
+			logger::error("Failed to save disk cache info");
+			return;
+		}
 		logger::info("Saved disk cache info (plugin version: {})", Plugin::VERSION.string());
 	}
 

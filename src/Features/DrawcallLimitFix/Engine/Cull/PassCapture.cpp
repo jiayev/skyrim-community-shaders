@@ -1,0 +1,538 @@
+#include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
+
+#include "Features/DrawcallLimitFix/Diagnostics/Feature/OpenDefectProbes.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Engine/RegistrationCensus.h"
+
+#include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
+#include "Features/DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
+
+#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Runtime/Toggles.h"
+#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/TreeLod.h"
+
+#include <span>
+#include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
+
+namespace DCLF
+{
+	namespace
+	{
+		// BSShaderProperty::EShaderPropertyFlag bits the engine's batch-group classifier reads.
+		constexpr std::uint64_t kFlagList4 = 1ull << 54;  // -> list 4 on its own
+		constexpr std::uint64_t kFlagList2 = 1ull << 36;  // -> adds 2
+		constexpr std::uint16_t kAlphaTestingFlag = 1u << 9;
+	}
+
+	PassCapture& PassCapture::Get()
+	{
+		static PassCapture capture;
+		return capture;
+	}
+
+	PassCapture::PassCapture() = default;
+
+	std::uint32_t PassCapture::SubPassOf(bool a_alphaTesting, std::uint64_t a_propertyFlags)
+	{
+		if (a_propertyFlags & kFlagList4)
+			return 4;
+		return ((a_propertyFlags & kFlagList2) ? 2u : 0u) | (a_alphaTesting ? 1u : 0u);
+	}
+
+	std::uint32_t PassCapture::SubPassOf(const RE::BSGeometry* a_geometry, std::uint64_t a_propertyFlags)
+	{
+		if (a_propertyFlags & kFlagList4)
+			return 4;
+		std::uint32_t subPass = (a_propertyFlags & kFlagList2) ? 2u : 0u;
+		if (a_geometry) {
+			const auto* alpha = a_geometry->GetGeometryRuntimeData().alphaProperty.get();
+			if (alpha && (alpha->alphaFlags & kAlphaTestingFlag))
+				subPass |= 1u;
+		}
+		return subPass;
+	}
+
+	void PassCapture::Record(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint32_t a_technique, bool a_withheld)
+	{
+		if (!a_pass || !a_pass->geometry || !a_pass->shader)
+			return;
+		if (a_pass->shader->shaderType.get() != RE::BSShader::Type::Lighting)
+			return;
+
+		// How many threads register, for the record: the engine classifier takes a mutex and the scene
+		// lists are built on a job list, so more than one is expected.
+		const auto thread = static_cast<std::uint32_t>(GetCurrentThreadId());
+		if (lastThread.exchange(thread, std::memory_order_relaxed) != thread)
+			threadCount.fetch_add(1, std::memory_order_relaxed);
+
+		const auto slot = cursor.fetch_add(1, std::memory_order_relaxed);
+		if (slot >= kCapacity) {
+			overflow.fetch_add(1, std::memory_order_relaxed);
+			return;
+		}
+		auto* property = a_pass->geometry->GetGeometryRuntimeData().shaderProperty.get();
+		entries[slot] = Entry{ a_pass->geometry, a_pass, a_batch, a_technique,
+			SubPassOf(a_pass->geometry, property ? property->flags.underlying() : 0ull), a_pass->passEnum, a_withheld,
+			property && property->fadeNode ? property->fadeNode->GetRuntimeData().unk153 : std::uint8_t{ 0xFF }, static_cast<std::uint8_t>(a_pass->accumulationHint) };
+	}
+
+	std::span<const PassCapture::Entry> PassCapture::Drain()
+	{
+		const auto count = std::min(cursor.exchange(0, std::memory_order_relaxed), kCapacity);
+		stats.captured = static_cast<std::uint32_t>(count);
+		stats.overflowed = overflow.exchange(0, std::memory_order_relaxed);
+		stats.threads = threadCount.exchange(0, std::memory_order_relaxed);
+		for (std::uint32_t m = 0; m < kShadowModes; ++m)
+			stats.shadowWithheld[m] = shadowWithheld[m].exchange(0, std::memory_order_relaxed);
+		stats.volumetricWithheld = volumetricWithheld.exchange(0, std::memory_order_relaxed);
+		stats.directWithheld = directWithheld.exchange(0, std::memory_order_relaxed);
+		stats.mainWithheld = mainWithheld.exchange(0, std::memory_order_relaxed);
+		stats.treeLodWithheld = treeLodWithheld.exchange(0, std::memory_order_relaxed);
+		stats.reflectionWithheld = reflectionWithheld.exchange(0, std::memory_order_relaxed);
+		stats.reflectionTreeLodWithheld = reflectionTreeLodWithheld.exchange(0, std::memory_order_relaxed);
+		stats.occlusionWithheld = occlusionWithheld.exchange(0, std::memory_order_relaxed);
+		lastDrain = { entries.data(), count };
+		return lastDrain;
+	}
+
+	void PassCapture::RefreshMainRenderers()
+	{
+		// The Z-prepass's accumulator (render mode 0xC) and the main camera's (render mode 0), as the registration jobs
+		// (FUN_1414cbff0) take them (skyrim-engine-notes.md, "The primary's cull: the scene lists").
+		static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> depthAccumulator{ REL::Offset(Engine::Address::kDepthAccumulator) };
+		static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> mainAccumulator{ REL::Offset(Engine::Address::kMainAccumulator) };
+		// T7e: the first-person accumulator (Main::unk_FPCulling culls the first-person root alone into it; FUN_1414cb6d0 renders it). Its
+		// registrations are the first-person skeleton's alone, so a member's there is a first-person member's (WithholdMain).
+		static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> firstPersonAccumulatorAt{ REL::Offset(Engine::Address::kFirstPersonAccumulator) };
+		const std::array<const void*, 2> accumulators{ *depthAccumulator, *mainAccumulator };
+		const void* firstPerson = *firstPersonAccumulatorAt;
+		if (accumulators == mainAccumulators && firstPerson == firstPersonAccumulator && std::atomic_load(&mainRenderers))
+			return;
+		mainAccumulators = accumulators;
+		firstPersonAccumulator = firstPerson;
+		auto renderers = std::make_shared<RendererSet>();
+		auto firstPersonSet = std::make_shared<RendererSet>();
+		auto add = [](RendererSet& a_set, RE::BSGraphics::BSShaderAccumulator* a_accumulator) {
+			auto* batch = a_accumulator ? a_accumulator->GetRuntimeData().batchRenderer : nullptr;
+			if (!batch)
+				return;
+			a_set.insert(batch);
+			for (auto* group : batch->geometryGroups)
+				if (group && group->batchRenderer)
+					a_set.insert(group->batchRenderer);
+		};
+		for (auto* accumulator : { *depthAccumulator, *mainAccumulator })
+			add(*renderers, accumulator);
+		add(*firstPersonSet, *firstPersonAccumulatorAt);
+		renderers->insert(firstPersonSet->begin(), firstPersonSet->end());
+		std::atomic_store(&firstPersonRenderers, std::shared_ptr<const RendererSet>(std::move(firstPersonSet)));
+		logger::info("[DCLF] the main camera's views: {} batch renderers (Z-prepass accumulator {}, main {})", renderers->size(), accumulators[0], accumulators[1]);
+		std::atomic_store(&mainRenderers, std::shared_ptr<const RendererSet>(std::move(renderers)));
+	}
+
+	bool PassCapture::WithholdMain(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass)
+	{
+		if (!a_pass || !a_pass->geometry || !Policy::WithholdFromEngine() || !IsMainRenderer(a_batch))
+			return false;
+		// Tree LOD (dclf-lod.md, "Tree LOD: the draws"): DCLF draws every instance the mirror holds this frame, so the engine's
+		// passes of every tree LOD shape (its Z-prepass's, hint 7 into group 1 through the shadow modes' registration; its colour
+		// pass's, hint 7 into group 1) are withheld.
+		if (treeLodOwned.load(std::memory_order_acquire) && TreeLod::IsTreeLodShape(a_pass->geometry)) {
+			treeLodWithheld.fetch_add(1, std::memory_order_relaxed);
+			return true;
+		}
+		const auto set = std::atomic_load(&frameSet);
+		const std::uint8_t phases = set ? set->PhasesOf(a_pass->geometry) : std::uint8_t{ 0 };
+		const bool firstPersonView = IsFirstPersonRenderer(a_batch);
+		if (firstPersonView)
+			firstPersonRegistered.fetch_add(1, std::memory_order_relaxed);
+		// T7e: a first-person member (kSetFirstPerson alone: no world view registers it, its root hidden there): its passes into the
+		// first-person accumulator and into the Z-prepass's (RenderDepth's first-person block) are the first-person epochs' while they
+		// draw this frame (SetFirstPersonCovered); every fade of the skeleton is the engine's root's (alpha 1).
+		if (phases & kSetFirstPerson) {
+			if (firstPersonCovered.load(std::memory_order_acquire) && (set->drawn & kSetFirstPerson)) {
+				firstPersonWithheld.fetch_add(1, std::memory_order_relaxed);
+				return true;
+			}
+			firstPersonMemberKept.fetch_add(1, std::memory_order_relaxed);
+			return false;
+		}
+		if (!(phases & kSetMain))
+			return false;
+		// Every pass of a member, a fade's and a LOD cross-fade's hint-10 copy of the old level included: DCLF draws them (T1c: the
+		// draw's alpha takes its root's FadeStateCS fade, and BuildDraws adds the copy partitions while the root crosses).
+		mainWithheld.fetch_add(1, std::memory_order_relaxed);
+		return true;
+	}
+
+	void PassCapture::SetReflectionCamera(const RE::NiCamera* a_camera)
+	{
+		// BSCubeMapCamera's two accumulators (+0x1A0, +0x1A8; skyrim-engine-notes.md, "Water reflections: the cube map"): the faces
+		// cull into the first.
+		if (!a_camera)
+			return;
+		const auto* bytes = reinterpret_cast<const std::byte*>(a_camera);
+		const std::array<const void*, 2> accumulators{ *reinterpret_cast<void* const*>(bytes + 0x1A0), *reinterpret_cast<void* const*>(bytes + 0x1A8) };
+		if (accumulators == reflectionAccumulators && std::atomic_load(&reflectionRenderers))
+			return;
+		reflectionAccumulators = accumulators;
+		auto renderers = std::make_shared<RendererSet>();
+		for (const void* entry : accumulators) {
+			const auto* accumulator = static_cast<const RE::BSGraphics::BSShaderAccumulator*>(entry);
+			auto* batch = accumulator ? accumulator->GetRuntimeData().batchRenderer : nullptr;
+			if (!batch)
+				continue;
+			renderers->insert(batch);
+			for (auto* group : batch->geometryGroups)
+				if (group && group->batchRenderer)
+					renderers->insert(group->batchRenderer);
+		}
+		logger::info("[DCLF] the reflection faces: {} batch renderers (accumulators {}, {})", renderers->size(), accumulators[0], accumulators[1]);
+		std::atomic_store(&reflectionRenderers, std::shared_ptr<const RendererSet>(std::move(renderers)));
+	}
+
+	bool PassCapture::WithholdReflection(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass)
+	{
+		if (!a_pass || !a_pass->geometry || !Policy::WithholdFromEngine() || !reflectionFace.load(std::memory_order_acquire) || !reflectionCovered.load(std::memory_order_acquire))
+			return false;
+		const auto renderers = std::atomic_load(&reflectionRenderers);
+		if (!renderers || !renderers->contains(a_batch))
+			return false;
+		const bool treeLod = TreeLod::IsTreeLodShape(a_pass->geometry);
+		if (treeLod && reflectionTreeLodOwned.load(std::memory_order_acquire)) {
+			reflectionTreeLodWithheld.fetch_add(1, std::memory_order_relaxed);
+			return true;
+		}
+		const auto set = std::atomic_load(&frameSet);
+		if (!set || !(set->drawn & kSetReflection) || !(set->PhasesOf(a_pass->geometry) & kSetReflection)) {
+			// The residue watch: tree LOD under the tree root, anything else but the sky under the LOD land and objects roots.
+			if (const auto watch = reflectionResidueWatch.load(std::memory_order_acquire); watch & (treeLod ? ReflectionFaces::kTreeRoot : ReflectionFaces::kLodRoots))
+				NoteReflectionResidue(a_pass, treeLod);
+			return false;
+		}
+		reflectionWithheld.fetch_add(1, std::memory_order_relaxed);
+		return true;
+	}
+
+	void PassCapture::NoteReflectionResidue(const RE::BSRenderPass* a_pass, bool a_treeLod)
+	{
+		const auto* sky = RE::Sky::GetSingleton();
+		const RE::NiNode* skyRoot = sky ? sky->root.get() : nullptr;
+		for (const RE::NiAVObject* node = a_pass->geometry; node; node = node->parent)
+			if (node == skyRoot)
+				return;
+		if (!a_treeLod) {
+			std::scoped_lock lock(reflectionResidueLock);
+			if (reflectionResidueGeometries.size() < 4096)
+				reflectionResidueGeometries.push_back(a_pass->geometry);
+		}
+		if ((a_treeLod ? reflectionResidueTree : reflectionResidueLod).fetch_add(1, std::memory_order_relaxed) == 0) {
+			std::scoped_lock lock(reflectionResidueLock);
+			if (reflectionResidueFirst.empty()) {
+				const auto* name = a_pass->geometry->name.c_str();
+				reflectionResidueFirst = fmt::format("'{}' (technique {:#x}, hint {})", name ? name : "?", a_pass->passEnum, static_cast<std::uint32_t>(a_pass->accumulationHint));
+			}
+		}
+	}
+
+	std::vector<const RE::BSGeometry*> PassCapture::TakeReflectionResidueGeometries()
+	{
+		std::scoped_lock lock(reflectionResidueLock);
+		return std::exchange(reflectionResidueGeometries, {});
+	}
+
+	PassCapture::ReflectionResidue PassCapture::TakeReflectionResidue()
+	{
+		ReflectionResidue out;
+		out.lodPasses = reflectionResidueLod.exchange(0, std::memory_order_relaxed);
+		out.treePasses = reflectionResidueTree.exchange(0, std::memory_order_relaxed);
+		std::scoped_lock lock(reflectionResidueLock);
+		out.first = std::move(reflectionResidueFirst);
+		reflectionResidueFirst.clear();
+		return out;
+	}
+
+	bool PassCapture::ShadowWithholdingEnabled()
+	{
+		return ActiveToggles().shadows && !!Policy::WithholdFromEngine();
+	}
+
+	void PassCapture::SetShadowBatchRenderers(std::shared_ptr<const ShadowRendererMap> a_renderers)
+	{
+		std::atomic_store(&shadowRenderers, std::move(a_renderers));
+	}
+
+	void PassCapture::SetFocusBatchRenderers(std::shared_ptr<const ShadowRendererMap> a_renderers)
+	{
+		std::atomic_store(&focusRenderers, std::move(a_renderers));
+	}
+
+	bool PassCapture::ShadowModeOfBatch(const RE::BSBatchRenderer* a_batch, std::uint32_t& a_mode) const
+	{
+		const auto renderers = std::atomic_load(&shadowRenderers);
+		if (!renderers)
+			return false;
+		const auto it = renderers->find(a_batch);
+		if (it == renderers->end() || it->second >= kShadowModes)
+			return false;
+		a_mode = it->second;
+		return true;
+	}
+
+	bool PassCapture::CastersWithheld(std::uint8_t a_phase) const
+	{
+		const auto set = std::atomic_load(&frameSet);
+		return set && (set->drawn & a_phase) && ShadowWithholdingEnabled();
+	}
+
+	std::shared_ptr<const SetSnapshot> PassCapture::CastersForBatch(const RE::BSBatchRenderer* a_batch, std::uint8_t* a_phase) const
+	{
+		std::uint32_t mode = 0;
+		if (!ShadowModeOfBatch(a_batch, mode) || !ShadowWithholdingEnabled())
+			return nullptr;
+		const std::uint8_t phase = SetPhaseOfMode(mode);
+		if (a_phase)
+			*a_phase = phase;
+		auto set = std::atomic_load(&frameSet);
+		return set && (set->drawn & phase) ? set : nullptr;
+	}
+
+	bool PassCapture::Withhold(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass)
+	{
+		if (!a_pass || !a_pass->geometry)
+			return false;
+		// A shadow view's renderers (the focus views' among them, T3c): the set's casters. A pass into any other renderer
+		// (reflections, cubemaps) is never withheld; the main camera's are WithholdMain's.
+		// What the engine registers into a covered focus view, for its observer (Diagnostics::ShadowViewTally: against its target's fade root).
+		if (Diagnostics::Armed<Diagnostics::FocusRegistration>())
+			if (const auto focus = std::atomic_load(&focusRenderers); focus && !focus->empty())
+				if (const auto it = focus->find(a_batch); it != focus->end())
+					Diagnostics::Notify(Diagnostics::FocusRegistration{ it->second, a_pass->geometry });
+		std::uint32_t mode = 0;
+		std::uint8_t phase = 0;
+		if (const auto set = CastersForBatch(a_batch, &phase); set && ShadowModeOfBatch(a_batch, mode) && (set->PhasesOf(a_pass->geometry) & phase)) {
+			shadowWithheld[mode].fetch_add(1, std::memory_order_relaxed);
+			return true;
+		}
+		return false;
+	}
+
+	void PassCapture::NoteKept(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint8_t a_site, std::uint8_t a_occlusionPhase) const
+	{
+		// The census's per-pass values, read here as the pass registers (the frame's end has neither the pass, a pooled object, nor
+		// these states): whether the reflection faces withhold now (WithholdReflection's own gates).
+		const bool face = reflectionFace.load(std::memory_order_acquire) && reflectionCovered.load(std::memory_order_acquire);
+		Diagnostics::Notify(Diagnostics::PassKept{ a_batch, a_pass, static_cast<RegistrationCensus::Site>(a_site), face, a_occlusionPhase });
+	}
+
+	namespace
+	{
+		thread_local std::uint32_t passesOnThisThread = 0;
+		constexpr auto Census(RegistrationCensus::Site a_site) { return static_cast<std::uint8_t>(a_site); }
+	}
+
+	std::uint32_t PassCapture::PassesOnThisThread()
+	{
+		return passesOnThisThread;
+	}
+
+	struct PassCapture::Hook
+	{
+		static void thunk(RE::BSBatchRenderer* a_this, RE::BSRenderPass* a_pass, std::uint32_t a_techniqueID)
+		{
+			++passesOnThisThread;
+			auto& capture = PassCapture::Get();
+			if (capture.bypassed.load(std::memory_order_acquire)) {
+				func(a_this, a_pass, a_techniqueID);
+				return;
+			}
+			// Withholding is the whole of ownership: the pass is built, lit and shadowed exactly as before - only the batch
+			// renderer never receives it, so the native loop has nothing to draw. Everything the tables need is taken by Record.
+			const bool withheld = capture.WithholdMain(a_this, a_pass) || capture.WithholdReflection(a_this, a_pass) || capture.Withhold(a_this, a_pass);
+			capture.Record(a_this, a_pass, a_techniqueID, withheld);
+			Diagnostics::Notify(Diagnostics::PointLightPass{ a_this, a_pass, withheld, 0 });
+			if (withheld)
+				return;
+			if (Diagnostics::Armed<Diagnostics::PassKept>())
+				capture.NoteKept(a_this, a_pass, Census(RegistrationCensus::Site::RegisterPass));
+			func(a_this, a_pass, a_techniqueID);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	/**
+	 * @brief The shadow modes' registration inserting an accumulation hint 8 pass (a volumetric-only caster)
+	 * into batch group 15: AE FUN_1414b2a60's direct call to FUN_1414f5090(batch, pass, 15, 0) at +0xFF. The
+	 * pass is withheld when the batch renderer is a shadow view's and the geometry is in the frame's set with the phase of
+	 * that view's render mode (SetPhaseOfMode).
+	 */
+	bool PassCapture::WithholdAtGroup(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::atomic<std::uint32_t>& a_counter)
+	{
+		if (!a_pass || !a_pass->geometry || bypassed.load(std::memory_order_acquire))
+			return false;
+		std::uint8_t phase = 0;
+		const auto set = CastersForBatch(a_batch, &phase);
+		const bool member = set && (set->PhasesOf(a_pass->geometry) & phase);
+		if (member)
+			a_counter.fetch_add(1, std::memory_order_relaxed);
+		return member;
+	}
+
+	struct PassCapture::VolumetricGroupHook
+	{
+		static void thunk(RE::BSBatchRenderer* a_batch, RE::BSRenderPass* a_pass, std::uint32_t a_group, std::uint32_t a_arg)
+		{
+			++passesOnThisThread;
+			auto& capture = PassCapture::Get();
+			const bool withheld = (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdMain(a_batch, a_pass)) ||
+			                      capture.WithholdAtGroup(a_batch, a_pass, capture.volumetricWithheld);
+			Diagnostics::Notify(Diagnostics::PointLightPass{ a_batch, a_pass, withheld, 8 });
+			if (withheld)
+				return;
+			if (Diagnostics::Armed<Diagnostics::PassKept>() && !capture.bypassed.load(std::memory_order_acquire))
+				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::Volumetric));
+			func(a_batch, a_pass, a_group, a_arg);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	/**
+	 * @brief The same registration's other direct insertions (FUN_1414b2a60): accumulation hint 11 into batch
+	 * group 9 (+0xC9), hint 7 into group 1 (+0xDB) and hint 3, a decal-flagged caster such as an NPC's face
+	 * part, into group 4 (+0xED). None of them reaches RegisterPass, so a member registered with one of these hints is
+	 * withheld here.
+	 */
+	template <std::uint32_t Hint>
+	struct PassCapture::DirectGroupHook
+	{
+		static void thunk(RE::BSBatchRenderer* a_batch, RE::BSRenderPass* a_pass, std::uint32_t a_group, std::uint32_t a_arg)
+		{
+			++passesOnThisThread;
+			auto& capture = PassCapture::Get();
+			const bool withheld = (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdMain(a_batch, a_pass)) ||
+			                      capture.WithholdAtGroup(a_batch, a_pass, capture.directWithheld);
+			Diagnostics::Notify(Diagnostics::PointLightPass{ a_batch, a_pass, withheld, Hint });
+			if (withheld)
+				return;
+			if (Diagnostics::Armed<Diagnostics::PassKept>() && !capture.bypassed.load(std::memory_order_acquire))
+				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::ShadowDirect));
+			func(a_batch, a_pass, a_group, a_arg);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	/**
+	 * @brief The main modes' registration (FUN_1414b2330, render modes 0-11: the main camera's accumulator among them) inserting a
+	 * pass straight into a geometry group by its accumulation hint (FUN_1414f5090(batch, pass, group, flag)): hints 2-7, 9, 11,
+	 * 13-18, and a multi-index shape's layer (hint 12, group 2). None of them reaches RegisterPass, so a member's pass with one of
+	 * these hints (terrain LOD's 6 into group 0, object LOD's 7 into group 1) is withheld here. The Z-prepass's accumulator
+	 * (render mode 0xC) registers through the shadow modes' function (FUN_1414b2a60), whose insertions are the hooks above.
+	 */
+	template <std::uint32_t Group>
+	struct PassCapture::MainGroupHook
+	{
+		static void thunk(RE::BSBatchRenderer* a_batch, RE::BSRenderPass* a_pass, std::uint32_t a_group, std::uint32_t a_arg)
+		{
+			++passesOnThisThread;
+			auto& capture = PassCapture::Get();
+			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdMain(a_batch, a_pass)) {
+				if constexpr (Group == 5)
+					Diagnostics::Notify(Diagnostics::MemberGroup5PassWithheld{ a_pass });
+				return;
+			}
+			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdReflection(a_batch, a_pass))
+				return;
+			if (Diagnostics::Armed<Diagnostics::PassKept>() && !capture.bypassed.load(std::memory_order_acquire))
+				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::MainGroup));
+			func(a_batch, a_pass, a_group, a_arg);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	/** @brief The same registration's hint 1, into a pass list of the batch renderer (FUN_1414f50b0(batch, pass, list)). */
+	struct PassCapture::MainListHook
+	{
+		static void thunk(RE::BSBatchRenderer* a_batch, RE::BSRenderPass* a_pass, void* a_list)
+		{
+			++passesOnThisThread;
+			auto& capture = PassCapture::Get();
+			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdMain(a_batch, a_pass)) {
+				Diagnostics::Notify(Diagnostics::MemberListPassWithheld{ a_pass });
+				return;
+			}
+			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdReflection(a_batch, a_pass))
+				return;
+			if (Diagnostics::Armed<Diagnostics::PassKept>() && !capture.bypassed.load(std::memory_order_acquire))
+				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::MainList));
+			func(a_batch, a_pass, a_list);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	/**
+	 * @brief The occlusion maps' registration (FUN_1414b2c20, render mode 0x1C: Precipitation::SetupMask's accumulator) inserting a
+	 * pass into geometry group 14 (FUN_1414f5090(batch, pass, 14), its one insertion): a member of the map's occluder phase is
+	 * withheld, DCLF drawing it into the map (DrawcallLimitFix::DrawOcclusion); the engine draws every other occluder.
+	 */
+	struct PassCapture::OcclusionGroupHook
+	{
+		static void thunk(RE::BSBatchRenderer* a_batch, RE::BSRenderPass* a_pass, std::uint32_t a_group, std::uint32_t a_arg)
+		{
+			++passesOnThisThread;
+			auto& capture = PassCapture::Get();
+			const std::uint8_t phase = capture.occlusionPhase.load(std::memory_order_acquire);
+			if (phase && a_pass && a_pass->geometry && !!Policy::WithholdFromEngine() && !capture.bypassed.load(std::memory_order_acquire))
+				if (const auto set = std::atomic_load(&capture.frameSet); set && (set->drawn & phase) && (set->PhasesOf(a_pass->geometry) & phase)) {
+					capture.occlusionWithheld.fetch_add(1, std::memory_order_relaxed);
+					return;
+				}
+			if (Diagnostics::Armed<Diagnostics::PassKept>() && !capture.bypassed.load(std::memory_order_acquire))
+				capture.NoteKept(a_batch, a_pass, Census(RegistrationCensus::Site::Occlusion), phase);
+			func(a_batch, a_pass, a_group, a_arg);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	namespace
+	{
+		template <std::uint32_t Group, class Hook>
+		bool InstallMainGroup(std::uintptr_t a_site, std::uintptr_t a_callee)
+		{
+			if (!Engine::CallsTo(REL::Offset(a_site).address(), REL::Offset(a_callee).address()))
+				return false;
+			stl::write_thunk_call<Hook>(REL::Offset(a_site).address());
+			return true;
+		}
+	}
+
+	void PassCapture::Install()
+	{
+		if (installed)
+			return;
+		stl::write_vfunc<0x2, Hook>(RE::VTABLE_BSBatchRenderer[0]);
+		// The registration's (FUN_1414b2a60) group insertions: the volumetric copy's, and the direct hints 11, 7 and 3.
+		constexpr std::uintptr_t kVolumetricGroupCall = 0x14b2b5f;
+		constexpr std::uintptr_t kDirectGroupCalls[3] = { 0x14b2b29, 0x14b2b3b, 0x14b2b4d };
+		stl::write_thunk_call<VolumetricGroupHook>(REL::Offset(kVolumetricGroupCall).address());
+		stl::write_thunk_call<DirectGroupHook<11>>(REL::Offset(kDirectGroupCalls[0]).address());
+		stl::write_thunk_call<DirectGroupHook<7>>(REL::Offset(kDirectGroupCalls[1]).address());
+		stl::write_thunk_call<DirectGroupHook<3>>(REL::Offset(kDirectGroupCalls[2]).address());
+		// The main modes' registration's (FUN_1414b2330) group insertions, by the group each inserts into, and its hint 1 list
+		// insertion. Each call site is checked against its callee before it is patched.
+		constexpr std::uintptr_t kInsertGroup = 0x14f5090, kInsertList = 0x14f50b0;
+		const bool all = InstallMainGroup<3, MainGroupHook<3>>(0x14b24a2, kInsertGroup) & InstallMainGroup<4, MainGroupHook<4>>(0x14b24bd, kInsertGroup) &
+		                 InstallMainGroup<5, MainGroupHook<5>>(0x14b24d8, kInsertGroup) & InstallMainGroup<6, MainGroupHook<6>>(0x14b24f3, kInsertGroup) &
+		                 InstallMainGroup<0, MainGroupHook<0>>(0x14b250d, kInsertGroup) & InstallMainGroup<1, MainGroupHook<1>>(0x14b2528, kInsertGroup) &
+		                 InstallMainGroup<7, MainGroupHook<7>>(0x14b2543, kInsertGroup) & InstallMainGroup<9, MainGroupHook<9>>(0x14b255e, kInsertGroup) &
+		                 InstallMainGroup<10, MainGroupHook<10>>(0x14b2579, kInsertGroup) & InstallMainGroup<11, MainGroupHook<11>>(0x14b2591, kInsertGroup) &
+		                 InstallMainGroup<8, MainGroupHook<8>>(0x14b25a9, kInsertGroup) & InstallMainGroup<12, MainGroupHook<12>>(0x14b25c1, kInsertGroup) &
+		                 InstallMainGroup<13, MainGroupHook<13>>(0x14b25db, kInsertGroup) & InstallMainGroup<2, MainGroupHook<2>>(0x14b2667, kInsertGroup) &
+		                 InstallMainGroup<1, MainListHook>(0x14b2478, kInsertList) & InstallMainGroup<14, OcclusionGroupHook>(0x14b2c71, kInsertGroup);
+		if (!all)
+			stl::report_and_fail("Drawcall Limit Fix: the main registration's group insertions are not where expected (AE 1.6.1170 only)");
+		installed = true;
+		logger::info("[DCLF] pass capture installed on BSBatchRenderer::RegisterPass");
+	}
+}

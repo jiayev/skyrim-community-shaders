@@ -9,7 +9,7 @@
 // culling phase, the HZB's shape). Everything that changes from one execution to the next is read from
 // the pass's region of the latch block (org::LatchBlock), which the host writes just before submission;
 // the recorded commands then never change with the frame, which is what lets them be reused or recorded
-// ahead of it. Must match BuildDrawsConstants and BuildDrawsLatch in IndirectDraws.cpp.
+// ahead of it. Must match BuildDrawsConstants and BuildDrawsLatch in Core/GpuLayouts.h.
 cbuffer BuildDrawsConstants : register(b0)
 {
 	uint LatchIndex;       // ByteAddressBuffer: the latch block
@@ -40,7 +40,7 @@ cbuffer BuildDrawsConstants : register(b0)
 	uint HzbIndex;
 	uint HzbSizePacked;  // mip 0: width in the low 16 bits, height in the high 16
 	uint HzbMips;
-	// The sort by pipeline (IndirectDraws.cpp, SortDraws): with SortCountsIndex set, a sequence goes to its append slot of
+	// The sort by pipeline (Main/FrameLayout.h, DrawSort): with SortCountsIndex set, a sequence goes to its append slot of
 	// the staging buffer, with its rank among its pipeline's sequences (the count before it, from the atomic on its pipeline's
 	// word of SortCountsIndex). SortSequencesCS.hlsl then writes it to the sequences, grouped by pipeline, once the prefix
 	// sum has turned the counts into each pipeline's first slot. 0: append into the sequences directly.
@@ -224,18 +224,18 @@ static float4 CullPlanes[6];
 // inputs name pipelines themselves (the main camera).
 static uint PipelineMapOffset;
 // The main colour pass: kSunTestOn when the sun test applies, and the frame's cascades, in bytes into the latch block
-// (a count, then per cascade its two plane masks and 12 planes: IndirectDraws.cpp, SunAccumulation::GpuCascade).
+// (a count, then per cascade its two plane masks and 12 planes: Core/GpuLayouts.h, SunAccumulation::GpuCascade).
 static uint SunState;
 static const uint kSunTestOn = 0x80000000u;
 static uint SunCascadeOffset;
 // A view of the sun: the frame's full-frustum processes, in bytes into the latch block (a count, then per process its plane
-// mask and 6 planes: IndirectDraws.cpp, SunEntryProcess), shared by the slot's sun views. 0: no entry test.
+// mask and 6 planes: Core/GpuLayouts.h, SunEntryProcess), shared by the slot's sun views. 0: no entry test.
 static uint SunEntryOffset;
 static const uint kSunRegionHeader = 16;
 static const uint kSunCascadeBytes = 208;
 static const uint kSunEntryProcessBytes = 112;
 // The colour pass: the frame's local shadow lights, in bytes into the latch block (a count, then per volume its two plane
-// masks, the light's mask bit and landscape flag, its sphere and 12 planes: IndirectDraws.cpp, GpuShadowVolume). 0: none tested.
+// masks, the light's mask bit and landscape flag, its sphere and 12 planes: Core/GpuLayouts.h, GpuShadowVolume). 0: none tested.
 static uint LocalShadowOffset;
 static const uint kShadowVolumeBytes = 224;
 // The depth segment: the main camera's position and its LOD factor, the fade test's (kObjectFadeTest).
@@ -383,7 +383,7 @@ bool InSunCascades(float3 a_centre, float a_radius)
 }
 
 // A view of the sun: whether an entry sphere is outside every one of the frame's full-frustum processes (the slot's sun entry
-// region, IndirectDraws.cpp: BuildDrawsLatch::sunEntryOffset, OutsideSunEntryProcesses). None: no verdict here.
+// region, Core/GpuLayouts.h: BuildDrawsLatch::sunEntryOffset, OutsideSunEntryProcesses). None: no verdict here.
 bool OutsideSunEntry(float4 a_entry)
 {
 	if (SunEntryOffset == 0)
@@ -448,14 +448,14 @@ static const uint kVisibilityStampShift = 4;
 // A clamped shadow view (render mode 0xE) pancakes what lies in front of its near plane onto it
 // (Utility.hlsl: RENDER_SHADOWMAP_CLAMPED), so a caster there still writes depth and must be kept.
 bool NoNearPlane() { return (CullFlags & 0x200) != 0; }
-// Which caster class a shadow view draws (IndirectDraws.cpp: kCullCastersOnly, kCullVolumetricOnly): a view of
+// Which caster class a shadow view draws (Core/GpuLayouts.h: kCullCastersOnly, kCullVolumetricOnly): a view of
 // the volumetric lighting copy draws the volumetric-only casters alone, every other shadow view the rest.
 bool CastersOnly() { return (CullFlags & 0x400) != 0; }
 bool VolumetricOnly() { return (CullFlags & 0x800) != 0; }
 // A view of the sun: an input whose entry is outside the sun's full-frustum processes is none of its casters
-// (IndirectDraws.cpp: kCullSunEntry).
+// (Core/GpuLayouts.h: kCullSunEntry).
 bool SunEntry() { return (CullFlags & 0x1000) != 0; }
-// Skylighting's size test, for its occlusion map's view (IndirectDraws.cpp: kCullMinRadius): a bound radius of 32 or less draws
+// Skylighting's size test, for its occlusion map's view (Core/GpuLayouts.h: kCullMinRadius): a bound radius of 32 or less draws
 // nothing, as Skylighting::OcclusionTechnique has it.
 bool MinRadius() { return (CullFlags & 0x2000) != 0; }
 // The occlusion map's view (kCullFadeOnVisible): its occluders' fade roots as BSFadeNode::OnVisible tests them without
@@ -883,7 +883,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		return;
 	if (phase == kPhaseSingle)
 		count.InterlockedAdd(kCountCasterClass, 1, scratch);
-	// The sun's entry rule: the input's entry sphere (its fade row, IndirectDraws.cpp: SetSunEntryRow) outside every full-frustum
+	// The sun's entry rule: the input's entry sphere (its fade row, Epochs/ShadowEpochs.cpp: SetSunEntryRow) outside every full-frustum
 	// process of the frame.
 	if (SunEntry() && OutsideSunEntry(ObjectRow(objectIndex, kObjectSunEntryRow))) {
 		count.InterlockedAdd(kCountSunEntryOut, 1, scratch);

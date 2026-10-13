@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <string>
 
-#include "Features/DrawcallLimitFix/Scene/Records.h"
+#include "Features/DrawcallLimitFix/Scene/Model/Records.h"
 
 namespace DCLF
 {
@@ -88,13 +88,11 @@ namespace DCLF
 		std::uint32_t fadeTested = 0, fadeHidden = 0;
 		std::uint32_t fadeRoots = 0;  // the fade roots listed
 		// Persistent resident draws (drawcall-limit-fix.md): the colour region's inputs, sequences, pairs at stable record
-		// slots and entries it cannot draw (last epoch); new region versions, resyncs, and CS_DCLF_RESIDENT_DRAW_PARITY's
-		// counts, since the start.
+		// slots and entries it cannot draw (last epoch); new region versions and resyncs, since the start.
 		std::uint32_t residentInputs = 0, residentDraws = 0, residentPairs = 0, residentUndrawable = 0;
-		std::uint64_t residentVersions = 0, residentResyncs = 0, residentParityChecks = 0, residentParityMismatches = 0, residentMissing = 0;
+		std::uint64_t residentVersions = 0, residentResyncs = 0;
 		std::array<std::uint64_t, 5> residentResyncBy{};  // since the start, by reason (MainBuild::UpdateRegionEntries)
 		std::uint64_t residentDecalRetakes = 0;           // since the start: decal group counts moved (decals re-taken, no resync)
-		std::uint64_t residentPairsChecked = 0, residentPairsStale = 0;
 		std::array<std::uint64_t, 2> residentLastVersion{};
 		std::uint32_t extraRows = 0;  // extras rows uploaded by the last epoch
 		// What the HZB held under the tested objects: all-near or all-far means the build is wrong.
@@ -107,21 +105,14 @@ namespace DCLF
 			float uvMin[2]{}, uvMax[2]{};
 			std::uint32_t mip = 0;
 		} hzbSample;
-		std::uint32_t buildParityChecks = 0;   // CS_DCLF_BUILD_PARITY
-		std::uint32_t buildParityMismatches = 0;
-		// CS_DCLF_BINDLESS_PARITY: the per-object record the DCLF_BINDLESS builds read, checked against
-		// the constant group the non-bindless path packs for the same object. Counted per variable
-		// component, because that is the granularity at which a layout mistake shows.
-		std::uint32_t bindlessParityChecks = 0;
-		std::uint32_t bindlessParityMismatches = 0;
 		// Pairs whose pipeline's constant tables were not the ones their material row was packed with (they stayed native).
 		std::uint32_t rowTableConflicts = 0;
 		// The scene lane's builds: per job kind (colour, Z-prepass, shadow), per report interval.
 		struct Async
 		{
-			// Per epoch, since the last report (step 6e E3b, S1): committed the installed publication's payload (built ahead), or built
-			// at the epoch (CS_DCLF_BINDLESS_PARITY); and, under CS_DCLF_REVISION_PARITY, payloads for other inputs than the frame's.
-			std::uint32_t used = 0, builtInline = 0, stale = 0;
+			// Per epoch, since the last report: committed the installed publication's payload (built ahead), or built at the epoch
+			// (CS_DCLF_BINDLESS_PARITY).
+			std::uint32_t used = 0, builtInline = 0;
 		};
 		std::array<Async, 3> async{};
 	};
@@ -164,7 +155,7 @@ namespace DCLF
 		std::array<std::uint32_t, 3> casters{};
 		std::uint64_t setWaiting = 0;
 		std::string setWaitingFirst;
-		std::uint32_t inputs = 0;          // casters submitted, last view
+		std::uint32_t inputs = 0;          // casters submitted over the modes the last shadow commit used
 		std::uint32_t skippedPipeline = 0; // casters without a ready shadow pipeline, last view
 		std::uint32_t skippedTexture = 0;  // alpha-tested casters whose diffuse could not be resolved, last view
 		std::uint32_t deferredTextures = 0;   // of those, ones whose diffuse the lookups had not resolved yet (next frame)

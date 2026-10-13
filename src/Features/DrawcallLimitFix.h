@@ -1,8 +1,7 @@
 #pragma once
 
 #include "Feature.h"
-#include "Features/DrawcallLimitFix/Common/Switches.h"
-#include "Features/DrawcallLimitFix/Diagnostics/OpenDefectProbes.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Feature/OpenDefectProbes.h"
 
 /**
  * @brief Drawcall Limit Fix: replaces the native opaque render loop with GPU-driven indirect draws
@@ -65,36 +64,10 @@ struct DrawcallLimitFix : Feature
 	void OnNativeLightingDraw(RE::BSRenderPass* a_pass, std::uint32_t a_renderFlags);
 
 	/**
-	 * @brief A native draw of the main camera's depth or opaque range: a pass of a member of the frame's DCLF set is a LEAK (its
-	 * registration should have withheld it), counted with the first few for the report. Nothing is skipped here.
+	 * @brief A native draw (State::Draw, the engine's SetDirtyStates, while the hook point is observed): the pass it is in, the shader
+	 * type and its technique, announced (Diagnostics::NativeDraw).
 	 */
-	void NoteNativePass(const RE::BSRenderPass* a_pass, std::uint32_t a_technique);
-	/**
-	 * @brief CS_DCLF_DRAW_CENSUS: one native draw (State::Draw, the engine's SetDirtyStates), counted by the pass it is in,
-	 * the shader type and its technique, and reported every 300 frames (Reset).
-	 */
-	void NoteNativeDraw(const RE::BSShader* a_shader, std::uint32_t a_vertexDescriptor, std::uint32_t a_pixelDescriptor);
-	void ReportDrawCensus();
-	static bool DrawCensusOn()
-	{
-		static const bool on = DCLF::SwitchEnabled(DCLF::Switch::DrawCensus);
-		return on;
-	}
-	ankerl::unordered_dense::map<std::uint64_t, std::uint32_t> drawCensus;
-	std::uint32_t drawCensusFrames = 0;
-	/**
-	 * @brief The frame's start, the publication installed: what the scene lane's lookups need of the frame (IndirectDraws::PostLookupInputs),
-	 * and the constant tables' parity against the installed lookups (T6b2c step 5: the lookups are made and published by the scene lane).
-	 */
-	static void PrepareFrameLookups();
-
-	/** @brief The main camera's native draws since the last report, and the set members' among them (LEAK, must be 0). */
-	struct LeakStats
-	{
-		std::uint64_t offered = 0, leakedInDepth = 0, leakedInOpaque = 0;
-		std::vector<std::string> samples;  // the first few leaks
-	};
-
+	void NoteNativeDraw(const RE::BSShader* a_shader, std::uint32_t a_pixelDescriptor);
 	/**
 	 * @brief The occlusion maps, drawn by DCLF (Skylighting::RenderOcclusion's variant while DCLF runs;
 	 * docs/development/drawcall-limit-fix.md, "The occlusion maps, drawn by DCLF"): Skylighting's sky map, and the
@@ -122,12 +95,11 @@ struct DrawcallLimitFix : Feature
 	void OcclusionView(OcclusionMap a_map);
 	void DrawOcclusion();
 	/**
-	 * @brief CS_DCLF_SKYLIGHT_PARITY=1: every 120th frame a map is rendered both ways, the engine's first; CopyOcclusion(map, 0)
-	 * keeps the engine's before the map is cleared again, DrawOcclusion keeps DCLF's, and the two are compared texel by texel
-	 * a few frames later.
+	 * @brief After OcclusionReady (DCLF draws the map): whether the engine renders the map first this frame, whole, as a reference
+	 * (Policy::RenderOcclusionReference); its render is announced with OcclusionReferenceRendered before the map is cleared for DCLF's.
 	 */
-	bool OcclusionParityFrame(OcclusionMap a_map);
-	void CopyOcclusion(OcclusionMap a_map, std::uint32_t a_stage);
+	bool OcclusionReferenceFrame(OcclusionMap a_map);
+	void OcclusionReferenceRendered(OcclusionMap a_map);
 
 private:
 	struct Hooks
@@ -254,7 +226,7 @@ private:
 	bool switchedOn = true;
 	bool Running() const { return installed && switchedOn; }
 
-	// The frame's scene phase (toggles, scene events, then SceneStore's scene half), from Main::Draw's early
+	// The frame's scene phase (toggles, scene events, then Coordinator's scene half), from Main::Draw's early
 	// hook. Returns Running().
 	bool BeginSceneFrame();
 	// Off when the menu's toggle is off or the feature is unloaded (Feature::loaded, which the remote toggle
@@ -265,37 +237,4 @@ private:
 	std::string unavailableReason;
 	bool inDepthPass = false;
 	bool depthControlDriven = false;  // T7e: RenderDepth's second argument (the first-person depth range's choice)
-	std::uint32_t captureFrame = ~0u;  // the frame whose main-pass bindings have been captured
-	std::uint32_t parityFrame = ~0u;   // the frame CS_DCLF_CAPTURE_POINT_PARITY last checked
-	bool loggedCaptureFailure = false;
-	/** @brief The main pass's bindings and target formats for this frame's colour epoch, when its targets are bound. */
-	bool CaptureMainPass();
-	// Render-thread CPU spent on scene capture, averaged over a report interval.
-	struct CaptureTiming
-	{
-		double eventsMs = 0.0;  // Present's, and the frame start's requests and captures (T6b3d: ServeFrameRequests)
-		double buildMs = 0.0;  // EarlyPrepass's posts and material serving
-		double buildMaxMs = 0.0;
-		double sceneMs = 0.0;  // BeforeShadowMaps' views (T6b3d: the scene passes are the coordinator's, timed by its pump)
-		double sceneMaxMs = 0.0;
-		std::uint32_t frames = 0;
-	} timing;
-	// Per occlusion view (DCLF::kOcclusionSky, kOcclusionPrecipitation), the maps left to the engine (DCLF not ready) per
-	// report interval; and the views this frame's Ready calls said DCLF draws (DrawOcclusion's epoch draws them).
-	std::array<std::uint32_t, 2> occlusionNativeFrames{};
-	std::array<std::uint32_t, 2> occlusionEngineFrames{};
-	// The toggles' generation at the frame's start (BeginSceneFrame): a publication whose commit was made under older toggles is not
-	// installed (T6b3a: the publication carries its commit's generation; the toggle reinstall waits for one made under these).
-	std::uint32_t toggleGeneration = 0;
-	// T6b3d: a frame's start ran DCLF since the last Present (the parities' inline pass ran in it); Present applies the events inline
-	// when none did (SceneStore::ApplyEventsInline).
-	bool sceneFrameRan = false;
-	std::uint32_t occlusionWanted = 0;
-	std::uint32_t occlusionParityWaiting = 0;  // the maps whose engine render was kept this frame (CopyOcclusion stage 0)
-	/** @brief The periodic report (DrawcallLimitFix/Report.cpp): every kReportInterval frames. */
-	void ReportStats(std::uint32_t a_frame);
-	/** @brief The frame's reports, at Present, once a frame number (T6b3d: the frame's own state alone; the coordinator logs its own lines). */
-	void ReportFrame();
-	static constexpr std::uint32_t kReportInterval = 300;
-	LeakStats leaks;  // since the last report
 };

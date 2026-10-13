@@ -1,0 +1,47 @@
+#include "Features/DrawcallLimitFix/Engine/Cull/TreeList.h"
+
+#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Engine/Cull/TreeAnimation.h"
+
+// The tree manager's list loop, detoured for TreeAnimation's stood-in trees (drawcall-limit-fix.md, "T7b5"; skyrim-engine-notes.md,
+// "Tree manager list (T7b5)"). TreeList.h describes it.
+
+namespace DCLF::TreeList
+{
+	namespace
+	{
+		// AE 1.6.1170 (module offsets; Ghidra).
+		constexpr std::uintptr_t kListLoop = 0x437e50;      // FUN_140437e50(manager, process): the tree list's loop
+		constexpr std::uintptr_t kListLoopCall = 0x437df1;  // its call in FUN_140437d40 (the manager's update, Main::Update 0x140646176)
+
+		bool installed = false;
+
+		struct ListLoop
+		{
+			static void thunk(std::byte* a_manager, std::byte* a_process)
+			{
+				// T7b5's fix: the stood-in trees' multibound results DCLF's for the loop, the engine's put back after it.
+				TreeAnimation::BeforeListLoop(a_manager);
+				func(a_manager, a_process);
+				TreeAnimation::AfterListLoop();
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+	}
+
+	void Install()
+	{
+		if (installed)
+			return;
+		const auto base = REL::Module::get().base();
+		if (!Engine::CallsTo(base + kListLoopCall, base + kListLoop)) {
+			logger::warn("[DCLF] tree manager (T7b5) not installed: the instruction at {:#x} is not a call of FUN_140437e50; stood-in trees keep the stale multibound result", 0x140000000 + kListLoopCall);
+			return;
+		}
+		stl::write_thunk_call<ListLoop>(base + kListLoopCall);
+		installed = true;
+		logger::info("[DCLF] tree manager: the list loop's call detoured (stood-in trees' multibound results from DCLF's verdicts)");
+	}
+
+	bool Installed() { return installed; }
+}

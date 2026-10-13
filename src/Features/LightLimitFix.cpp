@@ -4,7 +4,7 @@
 #include "LightLimitFix/Common.h"
 #include "LightLimitFix/LightAttach.h"
 #include "CSEditor/EditorWindow.h"
-#include "DrawcallLimitFix/Scene/ConstantEvaluator.h"
+#include "DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "LightLimitFix/ORGLightCulling.h"
 #include "LinearLighting.h"
 
@@ -468,23 +468,6 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 	auto smState = globals::game::smState;
 
 	if (!shaderCache->IsEnabled())
-		return;
-
-	// Drawcall Limit Fix calls SetupGeometry on a stand-in to read back the constants the engine would
-	// produce; that call must leave nothing behind (DCLF::ConstantEvaluator::Evaluating). Everything below
-	// outlives the call and so has to be skipped:
-	//
-	//   - strictLightDataCB is the buffer the *real* draws read, and the update below is conditional on
-	//     the four cache variables. Publishing a stand-in's lights and then recording them as "what the
-	//     buffer holds" makes the next real draw whose lights match the cache skip its own upload and
-	//     shade with the stand-in's lights instead. That is the blown-out additive lighting seen at night,
-	//     and it got worse exactly when DCLF's tables widened and ran this far more often.
-	//   - frameChecker.IsNewFrame() is a once-per-frame latch; consuming it here means the real draws
-	//     never rebind b3 for that frame.
-	//
-	// strictLightDataTemp itself is scratch that _Before resets on every call, so leaving it dirty is
-	// harmless and the light maths above still runs normally for the evaluation.
-	if (DCLF::ConstantEvaluator::Evaluating())
 		return;
 
 	auto accumulator = *globals::game::currentAccumulator.get();

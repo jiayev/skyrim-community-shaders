@@ -1,7 +1,7 @@
 // Drawcall Limit Fix: the occlusion test against the hierarchical depth buffer (HzbCS.hlsl), shared by everything the main
 // camera's two-phase culling tests: BuildDrawsCS's objects (object and terrain LOD among them) and TreeLodCullCS's instances.
 // Phase 1 tests against the HZB the previous frame left, phase 2 what phase 1 rejected against the one rebuilt from this
-// frame's depth (Passes.cpp, "The two-phase tail").
+// frame's depth (Passes/Passes.cpp, "The two-phase tail").
 #ifndef DCLF_HZB_TEST_HLSLI
 #define DCLF_HZB_TEST_HLSLI
 

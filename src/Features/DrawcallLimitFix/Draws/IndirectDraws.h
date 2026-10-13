@@ -21,6 +21,10 @@ namespace org::runtime
 
 namespace DCLF
 {
+	namespace Diagnostics
+	{
+		struct DrawsView;
+	}
 	struct Lookups;
 	struct LookupsResolveState;
 	struct PipelineCatalog;
@@ -32,7 +36,7 @@ namespace DCLF
 	 * Inside the native depth pass, CaptureDepthPass runs the ZPrepass epoch (DCLF's depth, then the HZB and the
 	 * two-phase occlusion cull). Where the main (deferred) pass's opaque batches start, CaptureMainPass records
 	 * what the pass binds, and where they end ExecuteColour runs the MainOpaque epoch. The draw data is
-	 * assembled on the CPU (on the worker where it can be, AsyncWorker.h) and uploaded:
+	 * assembled on the CPU (on the coordinator's lane where it can be) and uploaded:
 	 *   - constant blocks packed with the native shaders' constant tables: PerTechnique per pipeline,
 	 *     PerMaterial per (material, pipeline), PerGeometry per object, Light Limit Fix's StrictLightData
 	 *     per (room, shadow mask), the permutation per (pipeline, object flags), the alpha-test reference
@@ -62,7 +66,7 @@ namespace DCLF
 		static IndirectDraws& Get();
 
 		/**
-		 * @brief The set's shadow phases DCLF can draw (SetPhase bits; SceneStore::SetCapability): the casters' and the point lights'
+		 * @brief The set's shadow phases DCLF can draw (SetPhase bits; Coordinator::SetCapability): the casters' and the point lights'
 		 * once the shadow resources and the rasterizer state catalog are set up, and each enabled occlusion map's once its map has been
 		 * captured. A capability, not what a frame drew: it changes only at setup, on a toggle or a failure, so which views the
 		 * engine asks for in a frame never changes the set. Published by the render thread at the frame's start
@@ -85,27 +89,22 @@ namespace DCLF
 		 */
 		void DecideShadowCoverage();
 		/**
-		 * @brief The scene lane, SceneStore::CommitSet: whether the object is ready for a shadow phase (SetPhaseOfMode's): its Utility
+		 * @brief The scene lane, Coordinator::CommitSet: whether the object is ready for a shadow phase (SetPhaseOfMode's): its Utility
 		 * pipeline under every rasterizer state of each of the phase's modes a_lookups' shadow pipelines were resolved for
 		 * (Lookups::shadowInputs, the frame's start's post: never the render thread's readyModes/readyStates), and an alpha-tested
-		 * caster's diffuse imported. Part of the set's readiness (SceneSet.h). a_tables: the commit's SceneStore::Tables
+		 * caster's diffuse imported. Part of the set's readiness (SceneSet.h). a_tables: the commit's SceneTables
 		 * (the coordinator's: the frame's view may hold another object in the slot); a_lookups: the coordinator's (the scene lane's).
 		 */
-		/** a_why (optional), when not: SceneStore::SetStats::waitingBy's index (7 shadow pipeline, 12 past the scene buffers, 13 the alpha
+		/** a_why (optional), when not: Coordinator::SetStats::waitingBy's index (7 shadow pipeline, 12 past the scene buffers, 13 the alpha
 		 * test's diffuse not imported). */
 		bool PhaseReady(const void* a_tables, const Lookups& a_lookups, std::uint32_t a_slot, std::uint8_t a_phase, std::uint32_t* a_why = nullptr) const;
 		/**
-		 * @brief Render thread: changes when the capability's modes or the catalog's rasterizer states change (at setup). The set commit
-		 * reads its lookups' Lookups::shadowInputsSerial instead (the posted inputs PhaseReady judges by).
-		 */
-		std::uint64_t ShadowReadinessSerial() const;
-		/**
-		 * @brief SceneStore::CommitSet: whether the object is within the scene buffers (and, for the main builds, the material and
+		 * @brief Coordinator::CommitSet: whether the object is within the scene buffers (and, for the main builds, the material and
 		 * pipeline rows) the builds ahead are made against (the fit the
 		 * frame's start posted with their context, PostAheadContext): the main builds' (a_shadow false) or the shadow build's. One past
 		 * them has no input until their growth (ObjectFits), so a member must wait for it: claimed, it would be drawn by nobody. The
 		 * buffers only grow, and a build ahead takes a context posted at or after the commit's. a_tables: the caller's
-		 * SceneStore::Tables (the coordinator's own in CommitSet and the revocation, not the frame's view). T6b3a: the coordinator's copy
+		 * SceneTables (the coordinator's own in CommitSet and the revocation, not the frame's view). T6b3a: the coordinator's copy
 		 * of the posted fits (TakeAheadContext), never the render thread's.
 		 */
 		bool FitsScene(const void* a_tables, std::uint32_t a_slot, bool a_shadow) const;
@@ -122,11 +121,6 @@ namespace DCLF
 		 * batches start, the engine's state applied (DrawcallLimitFix::BeforeOpaquePass).
 		 */
 		void CaptureMainPass();
-		/**
-		 * @brief CS_DCLF_CAPTURE_POINT_PARITY, at the frame's first lighting draw the engine makes: what is bound there against
-		 * the capture, in everything the colour epoch takes from it.
-		 */
-		void CheckCapturePoint();
 
 		/**
 		 * @brief Inside the native depth pass, once the world's depth is drawn: assemble this frame's draws and
@@ -166,14 +160,14 @@ namespace DCLF
 		 */
 		void PostLookupInputs();
 		/**
-		 * @brief The scene lane (SceneStore::ResolveLookups): a_lookups' pipeline entries (set index, constant tables, register usage) and
-		 * shadow pipelines (shadowPipelines, shadowSlots, shadowMapRows) resolved from a_tables (its SceneStore::Tables) and a_catalog alone,
+		 * @brief The scene lane (Coordinator::ResolveLookups): a_lookups' pipeline entries (set index, constant tables, register usage) and
+		 * shadow pipelines (shadowPipelines, shadowSlots, shadowMapRows) resolved from a_tables (its SceneTables) and a_catalog alone,
 		 * each key not asked of the pipeline lane yet asked (DrawPipelines::RequestLighting, RequestShadow); the shadow pipelines for the
 		 * views the frame's start last posted (PostLookupInputs). Reads no engine state and no render-thread service.
 		 */
 		void ResolveLookups(const void* a_tables, const PipelineCatalog* a_catalog, Lookups& a_lookups, LookupsResolveState& a_state);
 		/**
-		 * @brief The coordinator, publishing the scene (SceneStore::PublishScene; T6b3b): a_publication (its SceneStore::ScenePublication)
+		 * @brief The coordinator, publishing the scene (Coordinator::PublishScene; T6b3b): a_publication (its ScenePublication)
 		 * handed to the snapshot builder with what its draws are built from (the frame's last ahead context, PostAheadContext; the frame
 		 * and the candidates as the coordinator has them). The builder (on DCLF's preparation pool, one snapshot at a time, from the newest
 		 * publication) builds its stream views and payloads (step 6e E3b), makes and records its scene revision, and posts the complete
@@ -181,7 +175,7 @@ namespace DCLF
 		 */
 		void PostSnapshotWork(std::shared_ptr<const void> a_publication);
 		/**
-		 * @brief Render thread, the frame's start (T6b3d: SceneStore::HandOverAtFrameStart, a publication installed): the oldest event it
+		 * @brief Render thread, the frame's start (T6b3d: Coordinator::HandOverAtFrameStart, a publication installed): the oldest event it
 		 * and the publications skipped past carried, to now (ms, and the render thread's frames), for the snapshot report.
 		 */
 		void NoteEventAdoption(double a_ms, std::uint32_t a_frames);
@@ -190,7 +184,7 @@ namespace DCLF
 		 * its revision's growths and versions, its revision the frame's, its draws the frame's - unless it is stale for what it could not
 		 * know ahead (the graph's build its recordings were made on, the targets, the shadow format, its commit's toggles older than
 		 * a_togglesGeneration, the main resources), when the frame has no claims until the builder's next. Returns the adopted snapshot's
-		 * publication (a SceneStore::ScenePublication: SceneStore::HandOverAtFrameStart installs it when newer), null before the first.
+		 * publication (a ScenePublication: Coordinator::HandOverAtFrameStart installs it when newer), null before the first.
 		 */
 		std::shared_ptr<const void> AdoptSnapshot(std::uint32_t a_togglesGeneration);
 		/**
@@ -216,10 +210,9 @@ namespace DCLF
 		/**
 		 * @brief T7b4, the main thread at Main::Update's entry (T7b0's write point: no list cull, cell animation or animation job runs):
 		 * the stores the last write-back task found, made on the roots DCLF writes (a_written(root): PrimaryCull::FadeWrittenByDclf; a
-		 * store for any other root is left, the engine's cull stepping it itself). a_live false (DCLF does not run): dropped. a_stored
-		 * (CS_DCLF_FADE_PARITY's <- FADE DOUBLE, may be null): the roots stored.
+		 * store for any other root is left, the engine's cull stepping it itself). a_live false (DCLF does not run): dropped.
 		 */
-		void WriteFadeStores(bool a_live, const std::function<bool(const void*)>& a_written, std::vector<const void*>* a_stored);
+		void WriteFadeStores(bool a_live, const std::function<bool(const void*)>& a_written);
 		/**
 		 * @brief T7b1, render thread, at the frame's start: the visibility readback's batches harvested and not yet decoded (the depth
 		 * commit hands its own at once) handed to the decode task on DCLF's executor, never joined; the batches the last task decoded let
@@ -245,15 +238,10 @@ namespace DCLF
 		bool AccumulatedVerdict(const void* a_root) const;
 		/**
 		 * @brief T7f preparation, the main thread after WriteAccumulated: DCLF's verdict of any root it lists (a fade root or a plain entry
-		 * root; written, or the dry run's with the wide writes: TreeAnimation's tree list), false when it has none (not listed by the
+		 * root, as written with the wide writes: TreeAnimation's tree list), false when it has none (not listed by the
 		 * newest written tables, or no write yet; none without the wide writes but for the stood-in roots). Reads no engine memory.
 		 */
 		bool AccumulatedVerdictOf(const void* a_root, bool& a_visible) const;
-		/**
-		 * @brief T7f, CS_DCLF_TREE_PARITY, the main thread after WriteAccumulated: whether this entry's writes stored a_node's kAccumulated
-		 * (so a reader before the frame's culls sees DCLF's bit, not the engine's last cull's: <- TREE MANAGER counts those clocks aside).
-		 */
-		bool AccumulatedStoredNow(const void* a_node) const;
 		/** @brief T7b2, render thread: a camera cut in a_frame (PrimaryCull): every stood-in root visible until a batch of a_frame or later. */
 		void NoteCameraCut(std::uint32_t a_frame);
 		/** @brief T7b2, any thread: the next decode writes every stood-in root and geometry, not only the changes (the engine wrote them). */
@@ -272,7 +260,7 @@ namespace DCLF
 		 * accumulator render's end (ReflectionFaces::InFace), after the engine's draws: the face's targets, and in a plain face render
 		 * the face's camera for this update's epoch. PrepareReflection: render thread, once a frame, after DecideTreeLod: the forward
 		 * pipelines of the LOD pipeline slots in use, and tree LOD's, for those targets, asked of the pipeline lane and read from the
-		 * frame's catalog (the reflection phase's readiness), and whether the faces' tree LOD is DCLF's. ReflectionDrawable: the set draws the reflection phase (SceneStore::
+		 * frame's catalog (the reflection phase's readiness), and whether the faces' tree LOD is DCLF's. ReflectionDrawable: the set draws the reflection phase (Coordinator::
 		 * SetCapability). ExecuteReflection: render thread, once a frame at BeforeShadowMaps, after the frame's reflection updates
 		 * (TESWaterReflections::Update runs twice a frame, a face each): one epoch drawing the frame's faces' reflection-phase
 		 * members and tree LOD into the cube target.
@@ -281,7 +269,7 @@ namespace DCLF
 		/**
 		 * @brief T4: render thread, once the engine has oriented the cube camera to a face (ReflectionFaces::SetFaceOriented), before its
 		 * cull and draws: the face's view as DCLF computes it (SunViews' arithmetic on the camera; the face's slice of the cube target)
-		 * for this update's epoch. CaptureReflectionFace, after the face's draws, is then the parity's.
+		 * for this update's epoch. CaptureReflectionFace, after the face's draws, is then the observers'.
 		 */
 		void ReflectionFaceCamera(const RE::NiCamera& a_camera, std::uint32_t a_face);
 		/**
@@ -306,7 +294,7 @@ namespace DCLF
 		 * pipelines asked of the lane, its resources made. ExecuteFirstPersonDepth: render thread, at RenderDepth's first-person draw (its
 		 * camera set up by FUN_1414cb020): the first-person camera captured in world space and the depth epoch. ExecuteFirstPersonColour:
 		 * render thread, at FUN_1414cb6d0's accumulator render: the colour epoch. FirstPersonDrawable: the set draws kSetFirstPerson
-		 * (SceneStore::SetCapability). FirstPersonSlotReady: the scene lane's commit's readiness of a slot (its pipelines in a_catalog).
+		 * (Coordinator::SetCapability). FirstPersonSlotReady: the scene lane's commit's readiness of a slot (its pipelines in a_catalog).
 		 * FirstPersonFrameClaims: the claims whose first-person members the frame draws (FrameValues samples them), null when none.
 		 */
 		void BeginFirstPersonFrame();
@@ -336,12 +324,12 @@ namespace DCLF
 		/**
 		 * @brief Render thread, BeginSceneFrame, after AdoptSnapshot: whether the adopted snapshot covers the frame's main epochs - it is not
 		 * stale, its draws are for the main resources, and its revision has their recordings, of the graph as built now (strict epochs).
-		 * False: the frame has no claims (SceneStore::WithdrawSet) and DCLF draws nothing. Also decides the other epochs' coverage
+		 * False: the frame has no claims (Coordinator::WithdrawSet) and DCLF draws nothing. Also decides the other epochs' coverage
 		 * (Impl::EpochCovered). True without revisions.
 		 */
 		bool DecideCoverage();
-		/** @brief Whether the frame's claims are a scene revision's: a structural change after its join revokes one. */
-		bool RevisionClaims() const;
+		/** @brief Whether DCLF cannot draw (set once, by the render thread): the frame then has no claims. */
+		bool Failed() const { return failed.load(std::memory_order_relaxed); }
 		/** @brief Since the last call: the stream views a fallback wanted while the coordinator or the builds task ran (none made). */
 		std::uint64_t TakeStreamsRefused();
 
@@ -388,7 +376,7 @@ namespace DCLF
 		 * @brief The occlusion maps (Records.h, kOcclusionViews: Skylighting's sky map, the precipitation mask), drawn by DCLF
 		 * (Skylighting::RenderOcclusion's variant with DCLF running): the engine's RenderMask sets each view's camera and
 		 * clears its map; OcclusionView computes the view from the map's camera before it (T4), and CaptureOcclusion, at the
-		 * engine's FinishAccumulating hook (render mode 0x1C), is the parity's;
+		 * engine's FinishAccumulating hook (render mode 0x1C), is the observers';
 		 * ExecuteOcclusion then draws every occluder of the frame's shadow build (the objects' Skylighting::OcclusionTechnique
 		 * for that map) into the views a_views names (a bit per view), GPU-culled, in one epoch, and returns the ones it drew.
 		 * OcclusionReady says whether a view can be drawn this frame; when it cannot, the engine's SetupMask registers them.
@@ -396,7 +384,7 @@ namespace DCLF
 		void CaptureOcclusion(std::uint32_t a_view);
 		/**
 		 * @brief T4: render thread, once the map's camera is set up and before its RenderMask: the view as DCLF computes it from that
-		 * camera (DrawcallLimitFix::OcclusionView). CaptureOcclusion, at the engine's FinishAccumulating, is then the parity's.
+		 * camera (DrawcallLimitFix::OcclusionView). CaptureOcclusion, at the engine's FinishAccumulating, is then the observers'.
 		 */
 		void OcclusionView(std::uint32_t a_view, const RE::NiCamera& a_camera);
 		bool OcclusionReady(std::uint32_t a_view) const;
@@ -410,6 +398,7 @@ namespace DCLF
 		~IndirectDraws();
 
 	private:
+		friend struct Diagnostics::DrawsView;
 		IndirectDraws();
 
 		/** @brief Assembles this frame's draws, uploads them and runs one epoch: the Z-prepass's (a_depthOnly) or the main pass's. */
@@ -420,7 +409,7 @@ namespace DCLF
 		Stats stats;
 		ShadowStats shadowStats;
 		// Set by the render thread (once, when DCLF cannot draw), read by the scene lane too (ShadowCapability, ReflectionDrawable,
-		// ResolveLookups, RevisionClaims): atomic.
+		// ResolveLookups, Failed): atomic.
 		std::atomic<bool> failed{ false };
 	};
 

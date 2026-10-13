@@ -27,7 +27,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE TBB::tbb)
 # The plugin's existing source glob also discovers this file. Compile it only
 # in the independently testable library, without the game's PCH.
 get_target_property(_cs_dclf_plugin_sources ${PROJECT_NAME} SOURCES)
-list(FILTER _cs_dclf_plugin_sources EXCLUDE REGEX "/(PublishedSceneExecutor|CapturedScene|CaptureAdmission|CapturePreparation|CaptureService|CaptureGraph|SceneGraph|FaceCapture)\\.cpp$")
+list(FILTER _cs_dclf_plugin_sources EXCLUDE REGEX "/(SceneExecutor|SceneGraph)\\.cpp$")
 set_property(TARGET ${PROJECT_NAME} PROPERTY SOURCES ${_cs_dclf_plugin_sources})
 
 if(CS_RENDER_GRAPH)
@@ -89,8 +89,8 @@ if(CS_RENDER_GRAPH)
             target_compile_definitions(${PROJECT_NAME} PRIVATE CS_HAS_ORG_MODULE_SERVICES=1)
             # DCLF's CPU publication graph shares this module's scheduler/runtime;
             # it is linked explicitly and can be exercised without a live frame switch.
-            include(${CMAKE_CURRENT_LIST_DIR}/DclfCaptureGraph.cmake)
-            target_link_libraries(${PROJECT_NAME} PRIVATE DclfCaptureGraph)
+            include(${CMAKE_CURRENT_LIST_DIR}/DclfSceneGraph.cmake)
+            target_link_libraries(${PROJECT_NAME} PRIVATE DclfSceneGraph)
             # The Vulkan SDK's DXC: it has SPIR-V code generation (the Windows SDK's does not).
             foreach(_dll IN ITEMS dxcompiler.dll dxil.dll)
                 if(EXISTS "$ENV{VULKAN_SDK}/Bin/${_dll}")
