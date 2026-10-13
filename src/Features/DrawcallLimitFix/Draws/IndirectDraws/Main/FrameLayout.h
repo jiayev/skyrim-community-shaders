@@ -1,0 +1,267 @@
+#pragma once
+
+// A main segment's shape (PassFrame), the frame buffers, the sorts' constants and programs, the DGC preprocess state lists.
+// Part of IndirectDraws' implementation: included by Internal.h, in its order.
+
+namespace DCLF::Draws
+{
+	struct ZBucketPlan;
+	/**
+	 * @brief What one segment's passes record against: everything their recorded commands depend on,
+	 * and nothing that changes every frame. The frame's own values (the counts, the view-projection, the
+	 * culling stamp) are in the segment's BuildDrawsLatch, and the draw counts on the GPU. Published by
+	 * the commit before the epoch prepares and replaced only when it changes, so its identity is what
+	 * the passes' invocation revisions carry.
+	 */
+	struct PassFrame
+	{
+		std::uint64_t generation = 0;
+		// ExecuteIndirect max counts (GrowCapacity, within the buffer's ranges): the phase-1/colour draws, and each decal group.
+		std::uint32_t drawCapacity = 0;
+		std::array<std::uint32_t, kDecalGroups> decalCapacity{};
+		// T7c1: each terrain group's (the colour segment's; MainSizing::terrainCapacity), group 1 from phase 2's base, group 2 after it.
+		std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
+		// T7d: each half of the forward range (the colour segment's and the forward epoch's; MainSizing::forwardCapacity), after the
+		// terrain groups' ranges: the staging half BuildDraws appends to, then the sorted half the forward epoch draws.
+		std::uint32_t forwardCapacity = 0;
+		// T7d's refraction: the refraction range (the colour segment's and the forward epoch's; MainSizing::refractionCapacity), after the
+		// forward halves (RefractionSlot).
+		std::uint32_t refractionCapacity = 0;
+		// The sequence buffer's ranges as the epoch sized it (Resources::sequenceDraws, sequenceDecals): its layout.
+		std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
+		// The rows' tables' addresses (Resources::materialRows, pipelineRows), which a growth moves.
+		std::uint64_t materialRows = 0, pipelineRows = 0;
+		std::uint32_t cullMode = 0;
+		bool probePixel = false;
+		std::uint32_t probeX = 0, probeY = 0;
+		std::uint32_t width = 0, height = 0;  // render area: the main pass viewport
+		float minDepth = 0.0f, maxDepth = 1.0f;  // its depth range (the engine uses [0, 0.999998])
+		rhi::DescriptorHeapHandle resourceHeap{};
+		rhi::DescriptorHeapHandle samplerHeap{};
+		IndirectState indirect{};
+		// The latch block the epoch wrote (the revision producer's, RevisionLatches::main): one holding fewer cascades than asked for is replaced
+		// (ReserveMainLatch), and a frame in flight keeps reading its own.
+		std::shared_ptr<const org::LatchBlock> latch;
+		// The Z-prepass's plain draws (MainOpaquePass): a call per bucket, a group of pipeline slots sharing a depth pipeline. Phase
+		// 2's ranges are the same past sequenceDraws.
+		struct ZCall
+		{
+			std::uint32_t bucket = 0, first = 0, capacity = 0;
+			rhi::PipelineHandle pipeline{};
+			// T7c1: a terrain group 1 bucket's twin, its near blocks (kBucketTerrainPair): drawn into the main depth with Terrain
+			// Blending's depth offset (kZDrawPushOffsetDepth), then into its terrain depth without (Resources::terrainDepth).
+			bool terrainNear = false;
+			bool operator==(const ZCall& o) const
+			{
+				return bucket == o.bucket && first == o.first && capacity == o.capacity && SameHandle(pipeline, o.pipeline) && terrainNear == o.terrainNear;
+			}
+		};
+		std::vector<ZCall> zCalls;
+		// The commit's per-frame values the epoch's first pass copies from the latch (LatchedCopiesPass).
+		LatchedList latched;
+		// Not compared (the latch block's layout, and the bucket plan zCalls are the calls of): what a commit writing its values
+		// into this shape writes them against - a scene revision's shape, which that commit did not make (R3c).
+		MainLatchLayout latchLayout;
+		std::shared_ptr<const ZBucketPlan> zPlan;
+
+		bool SameShape(const PassFrame& o) const
+		{
+			return zCalls == o.zCalls && latched == o.latched && drawCapacity == o.drawCapacity && decalCapacity == o.decalCapacity &&
+			       terrainCapacity == o.terrainCapacity && forwardCapacity == o.forwardCapacity && refractionCapacity == o.refractionCapacity &&
+			       sequenceDraws == o.sequenceDraws &&
+			       sequenceDecals == o.sequenceDecals && materialRows == o.materialRows && pipelineRows == o.pipelineRows && cullMode == o.cullMode &&
+			       probePixel == o.probePixel && probeX == o.probeX && probeY == o.probeY && width == o.width && height == o.height &&
+			       minDepth == o.minDepth && maxDepth == o.maxDepth && SameHandle(resourceHeap, o.resourceHeap) &&
+			       SameHandle(samplerHeap, o.samplerHeap) && SameIndirect(indirect, o.indirect) && latch == o.latch;
+		}
+	};
+
+
+	// A CPU-written buffer the main pass reads as a structured buffer SRV (t16 and up): the graph reads a
+	// copy, refilled every epoch from the buffer's CPU mirror.
+	struct FrameBuffer
+	{
+		std::uint32_t textureRegister = 0;
+		std::uint32_t stride = 0;
+		std::uint32_t firstElement = 0;
+		std::uint32_t elements = 0;
+		std::shared_ptr<org::Buffer> copy;
+
+		bool SameShape(const FrameBuffer& a_other) const
+		{
+			return textureRegister == a_other.textureRegister && stride == a_other.stride && firstElement == a_other.firstElement && elements == a_other.elements;
+		}
+	};
+
+	/**
+	 * @brief The versions of the kept tables (ObjectRecordStore, ExtrasStore, GeometryStore) a set of buffers holds, written
+	 * by the commit that uploads them; 0 for new buffers, which no version is.
+	 */
+	struct TablesHeld
+	{
+		std::uint64_t objects = 0, extras = 0, geometries = 0;
+		bool operator==(const TablesHeld&) const = default;
+	};
+
+	struct SortSequencesConstants
+	{
+		std::uint32_t stagingIndex;
+		std::uint32_t ranksIndex;
+		std::uint32_t offsetsIndex;
+		std::uint32_t countIndex;
+		std::uint32_t sequencesIndex;
+		std::uint32_t sequenceStride;  // bytes (sizeof(DrawSequence))
+		std::uint32_t drawLimit;       // the draws' range (BuildDrawsConstants::phaseTwoBase)
+		std::uint32_t padding;
+	};
+	constexpr std::uint32_t kSortSequencesConstantWords = sizeof(SortSequencesConstants) / 4;
+	/**
+	 * @brief T7d: ForwardSortCS.hlsl's push constants: the forward range's staging half (BuildDraws appended the visible forward draws
+	 * there, each with its view depth in its firstInstance word) and its sorted half, which the forward epoch draws.
+	 */
+	struct ForwardSortConstants
+	{
+		std::uint32_t sequencesIndex;  // RWByteAddressBuffer: the main sequences
+		std::uint32_t countIndex;      // ByteAddressBuffer: the count words (kCountForwardWord)
+		std::uint32_t stagingBase;     // the staging half's first slot
+		std::uint32_t capacity;        // each half's slots (PassFrame::forwardCapacity)
+		std::uint32_t sequenceStride;  // bytes (sizeof(DrawSequence))
+		// T7e: with kCountOffset in options, the count is the word at countOffset bytes (the first-person forward range's bucket count).
+		std::uint32_t countOffset = 0;
+		std::uint32_t options = 0;
+		std::uint32_t padding = 0;
+		static constexpr std::uint32_t kCountOffset = 1;
+	};
+	constexpr std::uint32_t kForwardSortConstantWords = sizeof(ForwardSortConstants) / 4;
+	constexpr std::uint32_t kForwardSortGroup = 64;  // ForwardSortCS.hlsl's
+	/** @brief T7d: the forward range's staging half's first slot in a colour shape's sequences (after phase 2's terrain ranges). */
+	inline std::uint64_t ForwardStagingSlot(const PassFrame& a_frame)
+	{
+		return std::uint64_t(a_frame.sequenceDraws) + a_frame.terrainCapacity[0] + a_frame.terrainCapacity[1];
+	}
+	/** @brief T7d's refraction: the refraction range's first slot in a colour shape's sequences (after the forward range's two halves). */
+	inline std::uint64_t RefractionSlot(const PassFrame& a_frame)
+	{
+		return ForwardStagingSlot(a_frame) + 2ull * a_frame.forwardCapacity;
+	}
+	constexpr std::uint32_t kSortSequencesGroup = 64;  // SortSequencesCS.hlsl's
+	// A sort's rank word holds the pipeline in its top 12 bits and the rank below (BuildDrawsCS.hlsl, kSortRankBits): a
+	// draw range past this is a hard failure until the ranks get a word of their own.
+	constexpr std::uint32_t kSortRankLimit = 1u << 20;
+	static_assert(DrawPipelines::kMaxPipelines <= (1u << 12));
+
+	/**
+	 * @brief The sort by pipeline (DrawSort) of phase 1's and the colour segment's sequences. BuildDraws stages the sequences
+	 * and counts them per pipeline, PrefixSum turns the counts into each pipeline's first slot, and SortSequencesPass
+	 * (SortSequencesCS.hlsl) writes the sequences grouped by pipeline. The counts are zeroed once, by the first commit
+	 * (countsZeroed), and after that by the scan that reads them.
+	 *
+	 * Not the shadow views': sorting them (a part of these buffers per view slot, one scan over all of them) left their draw
+	 * time within noise at Riverwood (1.28-1.32 against 1.23-1.29 ms) while the scan of 16 views' counts cost 0.08-0.10 ms.
+	 */
+	struct DrawSort
+	{
+		std::shared_ptr<org::Buffer> counts, offsets, blockSums;
+		Versioned staging, ranks;
+		std::shared_ptr<const PrefixSum::Programs> prefixSum;
+		std::shared_ptr<const ComputeProgram> scatter;
+		bool countsZeroed = false;  // render thread
+
+		static constexpr std::uint32_t kKeys = DrawPipelines::kMaxPipelines;
+
+		/** @brief Null, logged, when either program could not be created. Staging and ranks for a_draws (they grow with the sequences). */
+		static std::shared_ptr<DrawSort> Create(rhi::Device a_device, std::uint32_t a_draws)
+		{
+			auto sort = std::make_shared<DrawSort>();
+			sort->prefixSum = PrefixSum::Load(a_device);
+			sort->scatter = ComputeProgram::Load(a_device, { .source = kSortSequencesShader, .constantWords = kSortSequencesConstantWords });
+			if (!sort->prefixSum || !sort->scatter) {
+				logger::warn("[DCLF] The draws are not sorted by pipeline: its programs could not be created");
+				return {};
+			}
+			sort->counts = CreateWords(kKeys, true, "cs.dclf.sort-counts");
+			sort->offsets = CreateWords(kKeys, true, "cs.dclf.sort-offsets");
+			sort->blockSums = CreateWords(PrefixSum::Blocks(kKeys), true, "cs.dclf.sort-block-sums");
+			sort->staging = MakeVersioned(CreateWords(std::uint64_t(a_draws) * sizeof(DrawSequence) / 4, true, "cs.dclf.sort-staging"));
+			sort->ranks = MakeVersioned(CreateWords(a_draws, true, "cs.dclf.sort-ranks"));
+			return sort;
+		}
+
+		void Register(org::RenderGraph& a_graph) const
+		{
+			// Not the staging or the ranks: versioned, their passes declare them (Register, Passes.cpp).
+			for (const auto& buffer : { counts, offsets, blockSums })
+				a_graph.RegisterResource(org::ResourceIdentifier(buffer->GetName()), buffer);
+		}
+
+		/** @brief The scan, which runs in every execution of its epoch, so the counts it clears stay zero whether or not a build ran. */
+		std::shared_ptr<org::RenderPass> ScanPass() const
+		{
+			PrefixSum::Desc scan{};
+			scan.programs = prefixSum;
+			scan.counts = counts;
+			scan.offsets = offsets;
+			scan.blockSums = blockSums;
+			scan.elements = kKeys;
+			scan.clearCounts = true;
+			return PrefixSum::CreatePass(std::move(scan));
+		}
+
+		template <class Uploads>
+		void ZeroCountsOnce(Uploads& a_uploads)
+		{
+			if (countsZeroed)
+				return;
+			static const std::array<std::uint32_t, kKeys> zeros{};
+			a_uploads(counts, zeros.data(), sizeof(zeros), 0);
+			countsZeroed = true;
+		}
+	};
+
+	struct PassStats;
+
+	/**
+	 * @brief The state lists of one recording site's explicit DGC preprocesses (DrawPipelines.h), one per frame slot:
+	 * graphics lists that are never submitted. vkCmdPreprocessGeneratedCommandsEXT is recorded outside any pass but
+	 * generates for the state of another list, render pass included, which the execution must then match exactly; so
+	 * a site begins each of its passes on its slot's list and sets it up as the execution will (heaps, layout, topology,
+	 * push data) before preprocessing that pass's calls against it. A site of its own for every pass that can record at
+	 * the same time as another.
+	 */
+	class PreprocessStates
+	{
+	public:
+		static std::shared_ptr<PreprocessStates> Create(rhi::Device a_device, std::uint32_t a_frameSlots, const char* a_site)
+		{
+			auto states = std::make_shared<PreprocessStates>();
+			states->slots.resize(std::max<std::uint32_t>(a_frameSlots, 1u));
+			for (auto& slot : states->slots) {
+				if (rhi::Failed(a_device.CreateCommandAllocator(rhi::QueueKind::Graphics, slot.allocator)) || !slot.allocator ||
+					rhi::Failed(a_device.CreateCommandList(rhi::QueueKind::Graphics, slot.allocator.Get(), slot.list)) || !slot.list) {
+					logger::error("[DCLF] DGC preprocess: no state list for {}; its draws cannot execute", a_site);
+					return nullptr;
+				}
+			}
+			return states;
+		}
+
+		// The frame slot's list, reset and recording.
+		rhi::CommandList& Begin(std::uint32_t a_frameSlot)
+		{
+			ZoneScopedN("CS.DCLF.Record.RecyclePreprocessState");
+			auto& slot = slots[a_frameSlot % slots.size()];
+			slot.list->Recycle(slot.allocator.Get());
+			return slot.list.Get();
+		}
+
+	private:
+		struct Slot
+		{
+			rhi::CommandAllocatorPtr allocator;
+			rhi::CommandListPtr list;
+		};
+		std::vector<Slot> slots;
+	};
+
+	struct IndexPool;
+}

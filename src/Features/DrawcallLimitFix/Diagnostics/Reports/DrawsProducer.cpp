@@ -1,0 +1,283 @@
+#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
+#	include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
+
+// The scene revisions' and snapshots' report lines: the frame's (SnapshotReport, RevisionReport) and the snapshot builder's, composed in
+// its pass and posted for the frame's report (ProducerReport: the revisions, the growths, the shapes made, the draw bound, and the stores
+// the builds ahead write - main rows, object records, shadow state, extras rows, geometry table, exclusions).
+
+namespace DCLF
+{
+	namespace
+	{
+		/** @brief avg / p95 / max of a_values (sorted here), "-" without any. */
+		std::string Spread(std::vector<double>& a_values)
+		{
+			if (a_values.empty())
+				return "-";
+			std::sort(a_values.begin(), a_values.end());
+			double sum = 0.0;
+			for (const double value : a_values)
+				sum += value;
+			const std::size_t p95 = (std::min)(a_values.size() - 1, a_values.size() * 95 / 100);
+			return fmt::format("{:.2f}/{:.2f}/{:.2f}", sum / double(a_values.size()), a_values[p95], a_values.back());
+		}
+	}
+
+	std::string IndirectDraws::Impl::SnapshotReport()
+	{
+		// The builder's times since the last report (its queue, drained here alone).
+		std::vector<double> ahead, shapes, recordings;
+		snapshotTimings.Drain([&](SnapshotTiming&& a_timing) {
+			if (a_timing.ahead)
+				ahead.push_back(a_timing.aheadMs);
+			shapes.push_back(a_timing.shapesMs);
+			recordings.push_back(a_timing.recordingsMs);
+		});
+		const std::size_t aheadBuilt = ahead.size();
+		std::sort(adoptionLatency.begin(), adoptionLatency.end());
+		const auto percentile = [this](std::size_t a_percent) {
+			return adoptionLatency.empty() ? 0u : adoptionLatency[(std::min)(adoptionLatency.size() - 1, adoptionLatency.size() * a_percent / 100)];
+		};
+		std::string text = fmt::format("[DCLF] scene snapshots (T6b3b): {} built, {} publications coalesced by the builder, {} adopted, {} frames adopting nothing new; "
+									   "passed over as stale: build {}, targets {}, shadow format {}, toggles {}, main resources {}; built without draws for the main "
+									   "resources {}\n",
+			snapshotsBuilt.exchange(0, std::memory_order_relaxed), snapshotsCoalesced.exchange(0, std::memory_order_relaxed), snapshotsAdopted, snapshotFramesKept,
+			snapshotsStale[kStaleBuild], snapshotsStale[kStaleTargets], snapshotsStale[kStaleShadowFormat], snapshotsStale[kStaleToggles], snapshotsStale[kStaleMain],
+			snapshotsWithoutDraws.exchange(0, std::memory_order_relaxed));
+		text += fmt::format("[DCLF] snapshot builds (ms, avg/p95/max): draws ahead {} ({} built), shapes {}, recordings wait {}; commit to adoption (frames): p50 {}, p95 {}, "
+							"max {}\n",
+			Spread(ahead), aheadBuilt, Spread(shapes), Spread(recordings), percentile(50), percentile(95), adoptionLatency.empty() ? 0u : adoptionLatency.back());
+		// From the oldest event a publication carried to the frame that installed it (the publications the builder skipped past
+		// included: Coordinator::HandOverAtFrameStart walks their log nodes).
+		if (!eventAdoptionMs.empty()) {
+			std::sort(eventAdoptionFrames.begin(), eventAdoptionFrames.end());
+			const auto framesAt = [this](std::size_t a_percent) {
+				return eventAdoptionFrames[(std::min)(eventAdoptionFrames.size() - 1, eventAdoptionFrames.size() * a_percent / 100)];
+			};
+			std::vector<double> sorted = eventAdoptionMs;
+			std::sort(sorted.begin(), sorted.end());
+			const auto msAt = [&sorted](std::size_t a_percent) { return sorted[(std::min)(sorted.size() - 1, sorted.size() * a_percent / 100)]; };
+			text += fmt::format("[DCLF] event to adoption (T6b3d: the oldest event a publication carried, to the frame installing it): {} adoptions; ms p50 {:.2f}, "
+								"p95 {:.2f}, max {:.2f}; frames p50 {}, p95 {}, max {}\n",
+				eventAdoptionMs.size(), msAt(50), msAt(95), sorted.back(), framesAt(50), framesAt(95), eventAdoptionFrames.back());
+			eventAdoptionMs.clear();
+			eventAdoptionFrames.clear();
+		}
+		// The guard's (DecideCoverage) and the growths' adoption to the first draws embedding their versions.
+		std::sort(growthToDraws.begin(), growthToDraws.end());
+		text += fmt::format("[DCLF] snapshot draws: {} frames withdrawn for draws embedding another face positions version than the current one{}; growth adoption "
+							"to draws embedding it (frames): {} growths, p50 {}, max {}\n",
+			staleDraws, staleDraws ? " <- STALE DRAWS" : "", growthToDraws.size(), growthToDraws.empty() ? 0u : growthToDraws[growthToDraws.size() / 2],
+			growthToDraws.empty() ? 0u : growthToDraws.back());
+		staleDraws = 0;
+		growthToDraws.clear();
+		snapshotsAdopted = snapshotFramesKept = 0;
+		snapshotsStale = {};
+		adoptionLatency.clear();
+		// The builder's own lines (the last it posted: a report behind), and the next asked for.
+		producerReportSlot.TakeInto(producerReport);
+		text += producerReport;
+		producerReportWanted.store(true, std::memory_order_release);
+		WakeSnapshotBuilder();
+		return text;
+	}
+
+	std::string IndirectDraws::Impl::ProducerReport()
+	{
+		// The snapshot builder's (composed in its pass, posted for the frame's report): nothing here is the frame's.
+		auto& rv = revisions;
+		std::string epochs;
+		for (std::uint32_t e = 0; e < SceneRevisions::kEpochs; ++e) {
+			auto& s = rv.epochs[e];
+			const auto recorded = s.recorded.exchange(0), failedCount = s.failed.exchange(0), dropped = s.dropped.exchange(0), shapes = s.shapes.exchange(0);
+			epochs += fmt::format("{}{} {} changed, {} requested, {} recorded ({} shapes), {} failed{}{}", epochs.empty() ? "" : "; ", kEpochTraits[e].name, s.changed,
+				s.requested, recorded, shapes, failedCount, dropped ? fmt::format(", {} dropped by a graph build", dropped) : std::string(),
+				s.refused ? fmt::format(", {} refused", s.refused) : std::string());
+			s.changed = s.requested = s.refused = 0;
+		}
+		const auto& assembled = rv.assembler.GetStats();
+		const auto growths = Growths::Get().Report();
+		std::string madeBy;
+		for (std::size_t g = 0; g < kKeyGroups; ++g)
+			if (const auto made = std::exchange(shapesMadeBy[g], 0))
+				madeBy += fmt::format("{}{} {}", madeBy.empty() ? " (moved: " : ", ", kKeyGroupNames[g], made);
+		if (!madeBy.empty())
+			madeBy += ")";
+		std::string text = fmt::format("[DCLF] revision shapes: made at {} makes{}, kept at {}\n", std::exchange(shapesMade, 0), madeBy, std::exchange(shapesKept, 0));
+		text += fmt::format("[DCLF] scene revisions (R3c, the snapshot builder's): {} sealed ({} version sets), {} pending; assembler {} published, {} failed, {} superseded, "
+							"{} abandoned; {}{}\n",
+			rv.sealed, rv.versionSets, rv.assembler.Pending(), assembled.published, assembled.failed, assembled.superseded, assembled.abandoned, epochs,
+			rv.sealFailures ? fmt::format(" <- {} NOT SEALED", rv.sealFailures) : std::string());
+		rv.sealed = rv.versionSets = 0;
+		if (!growths.empty() || rv.growthWaits || rv.buildWaits)
+			text += fmt::format("{}[DCLF] {} makes sealed no revision for a pending growth, {} for a graph build asked of the frame\n", growths,
+				std::exchange(rv.growthWaits, 0), std::exchange(rv.buildWaits, 0));
+		if (auto& bound = producer.drawBound; bound.updates) {
+			auto& parity = Diagnostics::DrawsState::Get().kept.drawBound;
+			text += fmt::format("[DCLF] scene draw bound: {} updates, {:.1f} slots changed an update, {} draws over {} slots, {} resyncs; parity {} checked, {} differ{}\n",
+				bound.updates, static_cast<double>(bound.changes) / bound.updates, bound.draws, bound.produced.size(), bound.resyncs, parity.checks,
+				parity.mismatches, parity.Verdict(true));
+			bound.updates = bound.changes = bound.resyncs = 0;
+			parity.Reset();
+		}
+		// The stores the builds write (the builder's alone).
+		text += StoresReport();
+		return text;
+	}
+
+	std::string IndirectDraws::Impl::RevisionReport()
+	{
+		auto& rv = revisions;
+		std::string covered;
+		for (std::uint32_t e = 0; e < SceneRevisions::kEpochs; ++e) {
+			const auto unrevised = std::exchange(rv.unrevised[e], 0), clamped = std::exchange(rv.latchClamped[e], 0);
+			covered += fmt::format("{}{} {}{}{}", covered.empty() ? "" : "; ", kEpochTraits[e].name, std::exchange(rv.submitted[e], 0),
+				unrevised ? fmt::format(", {} without the revision's shape <- UNREVISED", unrevised) : std::string(),
+				clamped ? fmt::format(", {} with values past its latch <- LATCH", clamped) : std::string());
+		}
+		std::string text;
+		if (!covered.empty())
+			text += fmt::format("[DCLF] epochs submitted by the revision: {}; {} values staged that a revision's latched copies lacked\n", covered,
+				std::exchange(rv.latchedMisses, 0));
+		{
+			std::string uncovered;
+			for (std::uint32_t e = 0; e < SceneRevisions::kEpochs; ++e)
+				uncovered += fmt::format("{}{} {}", e ? ", " : "", kEpochTraits[e].name, std::exchange(rv.uncovered[e], 0));
+			const std::uint64_t unbuiltTotal = unbuilt[kAsyncZPrepass] + unbuilt[kAsyncColour] + shadowUnbuilt;
+			text += fmt::format("[DCLF] strict epochs: {} frames without the adopted snapshot's main recordings (claims withdrawn: the engine's), {} graph builds at the "
+								"build point, {} tickets of epochs not submitted given back for recordings; frames whose revision lacked an epoch's current recordings: {}; "
+								"shadow views left to the engine: {} frames without the revision's shadow recording or the installed shadow payload; occlusion maps "
+								"left to the engine for want of the revision's shape: {}; covered epochs without the installed publication's payload: Z-prepass {}, "
+								"colour {}, shadow {}{}\n",
+				std::exchange(rv.withdrawn, 0), std::exchange(rv.builds, 0), std::exchange(rv.ticketsReleased, 0), uncovered, std::exchange(shadowUnrecorded, 0),
+				std::exchange(occlusionUnrecorded, 0), unbuilt[kAsyncZPrepass], unbuilt[kAsyncColour], shadowUnbuilt, unbuiltTotal ? " <- UNBUILT" : "");
+			unbuilt = {};
+			shadowUnbuilt = 0;
+		}
+		return text;
+	}
+
+	std::string Growths::Report()
+	{
+		const auto outstanding = std::count_if(entries.begin(), entries.end(), [](const auto& a_entry) { return !a_entry->adoptedSeen; });
+		const std::uint64_t adoptedCount = adopted.exchange(0, std::memory_order_relaxed);
+		if (!requested && !adoptedCount && !failed && !outstanding && atOnce.empty())
+			return {};
+		auto text = fmt::format("[DCLF] growths as graph work: {} requested, {} adopted, {} failed, {} outstanding", requested, adoptedCount, failed, outstanding);
+		if (!atOnce.empty()) {
+			text += "; adopted at once:";
+			for (const auto& [name, count] : atOnce)
+				text += fmt::format(" {} {},", name, count);
+			text.pop_back();
+		}
+		text += '\n';
+		requested = failed = 0;
+		atOnce.clear();
+		return text;
+	}
+
+	std::string IndirectDraws::Impl::StoresReport()
+	{
+		// The snapshot builder's (its pass, with ProducerReport): the stores RunAhead writes, read and reset here alone - the render thread's
+		// report never touches them. The tables' capacities as the producer knows them (Growths::Held: never the capacity the frame's
+		// adoption writes), else their first backing's.
+		std::string text;
+		const auto rowsOf = [](const GrowableRows& a_rows) {
+			const std::uint64_t held = a_rows.buffer && a_rows.stride ? Growths::Get().Held(a_rows.buffer) : 0;
+			return held ? static_cast<std::uint32_t>(held / a_rows.stride) : a_rows.capacity;
+		};
+		const auto& mainState = producer.inputs.main;
+		const auto& shadowState = producer.inputs.shadow;
+		if (auto& rows = mainRows; rows.builds) {
+			text += fmt::format("[DCLF] main rows: {} builds; a build: {:.1f} material and {:.1f} pipeline rows written; {} material and {} pipeline rows held "
+								"(tables {} and {} rows), {} resyncs; material rows written again by what moved: record {}, frame values {}, lookup {}, shared {}, "
+								"technique bindings {}, projected {}, constant tables {}\n",
+				rows.builds, double(rows.materialsWritten) / rows.builds, double(rows.pipelinesWritten) / rows.builds, rows.material.Size(), rows.pipeline.Size(),
+				mainState ? rowsOf(mainState->materialRows) : 0u, mainState ? rowsOf(mainState->pipelineRows) : 0u, rows.resyncs,
+				rows.keyMoved[0], rows.keyMoved[1], rows.keyMoved[2], rows.keyMoved[3], rows.keyMoved[4], rows.keyMoved[5], rows.keyMoved[6] + rows.keyMoved[7]);
+			rows.builds = rows.materialsWritten = rows.pipelinesWritten = rows.resyncs = 0;
+			rows.keyMoved = {};
+		}
+		auto& kept = Diagnostics::DrawsState::Get().kept;
+		if (auto* store = &objectStore; store->updates) {
+			auto& parity = kept.objects;
+			text += fmt::format("[DCLF] persistent object records: {} updates, {:.1f} records rewritten an update, {} records held, {} resyncs, {} collisions; parity {} checked, {} differ{}\n",
+				store->updates, static_cast<double>(store->rewritten) / store->updates, store->records.Size(), store->resyncs, store->collisions, parity.checks,
+				parity.mismatches, store->collisions && parity.checks ? std::string(" <- DIFFER") : parity.Verdict(true));
+			std::string causes;
+			for (std::uint32_t c = 0; c < kChangeCauseCount; ++c)
+				if (store->byCause[c])
+					causes += fmt::format("{}{} {}", causes.empty() ? "" : ", ", kChangeCauseNames[c], store->byCause[c]);
+			text += fmt::format("[DCLF] object record updates by what changed: {} only placements and palettes, {} structural{}{}\n", store->streamOnly,
+				store->structural, causes.empty() ? "" : " (by cause: ", causes.empty() ? "" : causes + ")");
+			store->streamOnly = store->structural = 0;
+			store->byCause = {};
+			store->updates = store->rewritten = store->resyncs = store->collisions = 0;
+			parity.Reset();
+		}
+		if (auto& k = shadowKept; k.builds) {
+			// The objects it holds (their words are the scene list's entries', U4c; its own region only under CS_DCLF_BUILD_PARITY).
+			const std::size_t entries = static_cast<std::size_t>(std::count_if(k.heldModes.begin(), k.heldModes.end(), [](std::uint8_t a_modes) { return a_modes != 0; }));
+			const auto* rowsTable = shadowState ? &shadowState->materialRows : nullptr;
+			text += fmt::format(
+				"[DCLF] persistent shadow state: {} builds, {:.1f} entries and {:.1f} material rows written a build, {} entries and {} material rows held "
+				"(table {} rows, grown {} times), {} resyncs; parity {} inputs checked, {} differ{}\n",
+				k.builds, static_cast<double>(k.entriesWritten) / k.builds, static_cast<double>(k.rowsWritten) / k.builds, entries, k.rows.Size(),
+				rowsTable ? rowsOf(*rowsTable) : 0u, rowsTable ? rowsTable->growths : 0u, k.resyncs, kept.shadow.checks, kept.shadow.mismatches, kept.shadow.Verdict(true));
+			// Counted by its reserves (the producer's: ReserveShadowRows).
+			if (shadowState)
+				shadowState->materialRows.growths = 0;
+			if (!kept.shadowMissingBy.empty()) {
+				std::string why;
+				for (const auto& [reason, count] : kept.shadowMissingBy)
+					why += fmt::format("{}{} {} (first {})", why.empty() ? "" : ", ", reason, count, kept.shadowMissingFirst[reason]);
+				text += fmt::format("[DCLF] persistent shadow state: inputs of the per-frame build only, by why: {}\n", why);
+				kept.shadowMissingBy.clear();
+				kept.shadowMissingFirst.clear();
+			}
+			k.builds = k.entriesWritten = k.rowsWritten = k.resyncs = 0;
+			kept.shadow.Reset();
+		}
+		if (auto* store = &extrasStore; store->updates || kept.ring.checks.load(std::memory_order_relaxed)) {
+			// Each buffer that holds the rows checks its own mirror: the scene buffers (CommitSceneStreams), the payload ring's entries
+			// (their producer, lock-free: DrawsState::Kept::Ring).
+			auto& ring = kept.ring;
+			const auto ringChecks = ring.checks.exchange(0, std::memory_order_relaxed);
+			const auto ringMismatches = ring.mismatches.exchange(0, std::memory_order_relaxed);
+			std::string ringFirst;
+			if (ring.firstState.load(std::memory_order_acquire) == 2) {
+				ringFirst = std::move(ring.first);
+				ring.first.clear();
+				ring.firstState.store(0, std::memory_order_release);
+			}
+			std::string first = kept.extrasFirst;
+			if (!ringFirst.empty())
+				first += (first.empty() ? "" : "; ") + ringFirst;
+			text += fmt::format("[DCLF] persistent extras rows: {} updates, {} resyncs; scene buffers parity {} checked, {} differ{}; payload ring parity {} checked, {} differ{}{}{}\n",
+				store->updates, store->resyncs, kept.extras.checks, kept.extras.mismatches, kept.extras.Verdict(), ringChecks, ringMismatches,
+				!ringChecks ? "" : ringMismatches ? " <- DIFFER" : " <- OK", first.empty() ? "" : "; first: ", first);
+			kept.extrasFirst.clear();
+			store->updates = store->resyncs = 0;
+			kept.extras.Reset();
+		}
+		if (auto* store = &geometryStore; store->updates) {
+			text += fmt::format("[DCLF] persistent geometry table: {} updates, {:.2f} slots repacked an update, {} slots held, {} resyncs; parity {} checked, {} differ{}\n",
+				store->updates, static_cast<double>(store->rewritten) / store->updates, store->packed.Size(), store->resyncs, kept.geometry.checks, kept.geometry.mismatches,
+				kept.geometry.Verdict(true));
+			store->updates = store->rewritten = store->resyncs = 0;
+			kept.geometry.Reset();
+		}
+		for (auto* cache : { &sunExclusionCache, &parabolicExclusionCache }) {
+			if (auto& c = *cache; c.builds) {
+				auto& parity = cache == &sunExclusionCache ? kept.sunExclusion : kept.parabolicExclusion;
+				text += fmt::format("[DCLF] {} exclusion: {} builds, {} reused ({} of them for newer candidates, the entries that moved judged again); parity {} checked, {} differ{}\n", cache == &sunExclusionCache ? "sun" : "paraboloid",
+					c.builds, c.reused, c.translated, parity.checks, parity.mismatches, parity.Verdict());
+				c.builds = c.reused = c.translated = 0;
+				parity.Reset();
+			}
+		}
+		return text;
+	}
+}
+
+#endif

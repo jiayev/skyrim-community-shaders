@@ -1,5 +1,5 @@
 #include "Upscaling.h"
-#include "DrawcallLimitFix/Diagnostics/TargetDump.h"
+#include "DrawcallLimitFix/Diagnostics/Feature/TargetDump.h"
 
 #include "../I18n/I18n.h"
 #include "Deferred.h"

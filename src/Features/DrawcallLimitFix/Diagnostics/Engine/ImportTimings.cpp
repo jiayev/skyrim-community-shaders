@@ -1,0 +1,163 @@
+#include "ImportTimings.h"
+
+#include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
+
+#include <Tracy/Tracy.hpp>
+
+namespace DCLF::ImportTimings
+{
+	const std::array<const char*, kEntries> kNames{ "grid controller", "BSTaskPool drain", "reference finish", "I/O completion pump", "LOD swaps' drain",
+		"LOD block retirement" };
+
+	namespace
+	{
+		enum Entry : std::size_t
+		{
+			kGrid,
+			kTaskDrain,
+			kReferenceFinish,
+			kIoPump,
+			kLodDrain,
+			kLodRetire,
+		};
+		// AE 1.6.1170, from the image base.
+		constexpr std::array<std::uintptr_t, kEntries> kOffsets{ 0x19b0b0, 0x654880, 0x1a0920, 0xe014e0, 0x513840, 0x510a10 };
+
+		struct Counter
+		{
+			std::atomic<std::uint64_t> calls{ 0 }, ticks{ 0 };
+		};
+		std::array<std::array<Counter, 2>, kEntries> counters;  // [entry][1: the main thread]
+		std::atomic<std::uint32_t> mainThread{ 0 };
+		bool installed = false;
+
+		struct Scope
+		{
+			explicit Scope(Entry a_entry) :
+				entry(a_entry)
+			{
+				LARGE_INTEGER now;
+				QueryPerformanceCounter(&now);
+				start = now.QuadPart;
+			}
+			~Scope()
+			{
+				LARGE_INTEGER now;
+				QueryPerformanceCounter(&now);
+				auto& counter = counters[entry][::GetCurrentThreadId() == mainThread.load(std::memory_order_relaxed) ? 1 : 0];
+				counter.calls.fetch_add(1, std::memory_order_relaxed);
+				counter.ticks.fetch_add(static_cast<std::uint64_t>(now.QuadPart - start), std::memory_order_relaxed);
+			}
+			Entry entry;
+			std::int64_t start;
+		};
+
+		// FUN_14019b0b0(controller, float*, bool)
+		struct Grid
+		{
+			static std::uint64_t thunk(std::uintptr_t a1, std::uintptr_t a2, std::uintptr_t a3)
+			{
+				ZoneScopedN("CS.DCLF.Import.GridController");
+				Scope scope(kGrid);
+				return func(a1, a2, a3);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		// FUN_140654880(pool)
+		struct TaskDrain
+		{
+			static void thunk(std::uintptr_t a1)
+			{
+				ZoneScopedN("CS.DCLF.Import.TaskPoolDrain");
+				Scope scope(kTaskDrain);
+				func(a1);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		// FUN_1401a0920(?, TESObjectREFR*, ?, ?, bool, ?)
+		struct ReferenceFinish
+		{
+			static void thunk(std::uintptr_t a1, std::uintptr_t a2, std::uintptr_t a3, std::uintptr_t a4, std::uintptr_t a5, std::uintptr_t a6)
+			{
+				ZoneScopedN("CS.DCLF.Import.ReferenceFinish");
+				Scope scope(kReferenceFinish);
+				func(a1, a2, a3, a4, a5, a6);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		// FUN_140e014e0(IOManager)
+		struct IoPump
+		{
+			static std::uint64_t thunk(std::uintptr_t a1)
+			{
+				ZoneScopedN("CS.DCLF.Import.IoPump");
+				Scope scope(kIoPump);
+				return func(a1);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		// The LOD drain (FUN_140513840) and a node's block retirement (FUN_140510a10) are detoured once, by LodGates (the swaps' gates are
+		// in their bodies): they time through LodScope.
+	}
+
+	LodScope::LodScope(LodEntry a_entry) :
+		entry(a_entry)
+	{
+		if (!installed)
+			return;
+		LARGE_INTEGER now;
+		QueryPerformanceCounter(&now);
+		start = now.QuadPart;
+	}
+
+	LodScope::~LodScope()
+	{
+		if (!start)
+			return;
+		LARGE_INTEGER now;
+		QueryPerformanceCounter(&now);
+		auto& counter = counters[entry == LodEntry::Drain ? kLodDrain : kLodRetire][::GetCurrentThreadId() == mainThread.load(std::memory_order_relaxed) ? 1 : 0];
+		counter.calls.fetch_add(1, std::memory_order_relaxed);
+		counter.ticks.fetch_add(static_cast<std::uint64_t>(now.QuadPart - start), std::memory_order_relaxed);
+	}
+
+	bool Installed()
+	{
+		return installed;
+	}
+
+	void Install()
+	{
+		if (installed)
+			return;
+		const auto base = REL::Module::get().base();
+		stl::detour_thunk<Grid>(base + kOffsets[kGrid]);
+		stl::detour_thunk<TaskDrain>(base + kOffsets[kTaskDrain]);
+		stl::detour_thunk<ReferenceFinish>(base + kOffsets[kReferenceFinish]);
+		stl::detour_thunk<IoPump>(base + kOffsets[kIoPump]);
+		// One detour per function, shared with the gates (whose bodies these are): installed by whichever comes first.
+		LodGates::InstallDetours();
+		installed = true;
+		logger::info("[DCLF] import timings (T6b0): the engine's {} import entry points detoured", static_cast<std::size_t>(kEntries));
+	}
+
+	void NoteMainThread(std::uint32_t a_thread)
+	{
+		mainThread.store(a_thread, std::memory_order_relaxed);
+	}
+
+	Totals Take()
+	{
+		Totals totals;
+		for (std::size_t e = 0; e < kEntries; ++e)
+			for (std::size_t t = 0; t < 2; ++t) {
+				totals.calls[e][t] = counters[e][t].calls.exchange(0, std::memory_order_relaxed);
+				totals.ticks[e][t] = counters[e][t].ticks.exchange(0, std::memory_order_relaxed);
+			}
+		return totals;
+	}
+}

@@ -561,8 +561,8 @@ void Skylighting::RenderOcclusion()
 					// RenderMask (nothing reads the mask in between). Otherwise, or on a frame DCLF cannot draw it, the engine does.
 					auto& dclf = globals::features::drawcallLimitFix;
 					const bool dclfDraws = dclf.OcclusionReady(DrawcallLimitFix::kPrecipitationOcclusion);
-					const bool parity = dclfDraws && dclf.OcclusionParityFrame(DrawcallLimitFix::kPrecipitationOcclusion);
-					if (dclf.OcclusionNeedsEngine(DrawcallLimitFix::kPrecipitationOcclusion) || parity) {
+					const bool reference = dclfDraws && dclf.OcclusionReferenceFrame(DrawcallLimitFix::kPrecipitationOcclusion);
+					if (dclf.OcclusionNeedsEngine(DrawcallLimitFix::kPrecipitationOcclusion) || reference) {
 						precip->SetupMask();
 					} else {
 						// What SetupMask sets: the projection, and the accumulator's camera.
@@ -579,9 +579,9 @@ void Skylighting::RenderOcclusion()
 
 					globals::profiler->BeginPass("Skylighting::PrecipMask");
 					precip->RenderMask(rain);
-					if (parity) {
-						// The engine's mask, kept; then the same view again, cleared, for DCLF's.
-						dclf.CopyOcclusion(DrawcallLimitFix::kPrecipitationOcclusion, 0);
+					if (reference) {
+						// The engine's mask, announced; then the same view again, cleared, for DCLF's.
+						dclf.OcclusionReferenceRendered(DrawcallLimitFix::kPrecipitationOcclusion);
 						precip->RenderMask(rain);
 					}
 					globals::profiler->EndPass();
@@ -653,8 +653,8 @@ void Skylighting::RenderOcclusion()
 				// sets the camera and clears the map. Otherwise, or on a frame DCLF cannot draw it, the engine does.
 				auto& dclf = globals::features::drawcallLimitFix;
 				const bool dclfDraws = dclf.OcclusionReady(DrawcallLimitFix::kSkyOcclusion);
-				const bool parity = dclfDraws && dclf.OcclusionParityFrame(DrawcallLimitFix::kSkyOcclusion);
-				const bool engine = dclf.OcclusionNeedsEngine(DrawcallLimitFix::kSkyOcclusion) || parity;
+				const bool reference = dclfDraws && dclf.OcclusionReferenceFrame(DrawcallLimitFix::kSkyOcclusion);
+				const bool engine = dclf.OcclusionNeedsEngine(DrawcallLimitFix::kSkyOcclusion) || reference;
 				{
 					ZoneScopedN("Skylighting - Setup Projection");
 					_computeProjection(precip, precip->occlusionData.camera);
@@ -670,9 +670,9 @@ void Skylighting::RenderOcclusion()
 					TracyD3D11Zone(state->tracyCtx, "Skylighting - Render Height Map");
 					globals::profiler->BeginPass("Skylighting::OcclusionMask");
 					precip->RenderMask((RE::BSParticleShaderRainEmitter*)rain);
-					if (parity) {
-						// The engine's map, kept; then the same view again, cleared, for DCLF's.
-						dclf.CopyOcclusion(DrawcallLimitFix::kSkyOcclusion, 0);
+					if (reference) {
+						// The engine's map, announced; then the same view again, cleared, for DCLF's.
+						dclf.OcclusionReferenceRendered(DrawcallLimitFix::kSkyOcclusion);
 						precip->RenderMask((RE::BSParticleShaderRainEmitter*)rain);
 					}
 					// DCLF's occluders into every map it draws this frame (this one, and the precipitation mask above).

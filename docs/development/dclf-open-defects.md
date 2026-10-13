@@ -170,6 +170,25 @@ DCLF reallocated when the interior loaded, landing in DLSS's history or output.
 -   Try another upscaler, to see whether the victim moves.
 -   Run a Vulkan validation pass with GPU-AV on the ORG buffers.
 
+## The render thread reads the coordinator's tracked map (found 2026-10-12 in refactor run s3m; not fixed)
+
+-   **Crash:** an access violation in `SceneStore::IsTracked` (`tracked.contains`, `Scene/SceneStore/SceneStore.cpp`), called from
+    `PrimaryCull::RefreshWalk` ← `PrepareFrame` ← `AfterFullFrustum` on the render thread, in a normal-path motion run (s3m).
+-   **Cause (by reading, not confirmed):** `tracked` is the coordinator's live map, rewritten by the scene pass on the lane while the
+    render thread reads it. That breaks the rule that the render thread reads only the adopted snapshot or published tables. The same
+    code is at HEAD (b1069616), so the refactor did not introduce it.
+-   **Callers:** `Engine/PrimaryCull.cpp` (`RefreshWalk` at about :716 and `RunAdmission` at about :747), plus the observer
+    `Diagnostics/Scene/CaptureParity.cpp:820` (parity only). `ReasonThisFrame` (same file) reads `tracked` the same way; check its callers' threads too.
+-   **Fix:** the two PrimaryCull callers read what the adopted snapshot or the published tables hold (a published per-geometry
+    tracked/slot answer), not `tracked`.
+-   It may explain e3w0's end-of-run crash (0xc0000005, a build before the R3 Engine changes); not confirmed, and that dump was overwritten.
+
+## Bindless parity (`Policy::BuildAtEpoch`) loses the main recordings (found 2026-10-12 in refactor runs d3w0/d3w1; not investigated)
+
+-   With the build, bindless, resident-draw, fade and capture-point parity switches on, DCLF reports "300 frames without the adopted
+    snapshot's main recordings (claims withdrawn)" after about 900 frames and draws natively from then on. Same on the code before
+    the R3 Draws changes (d3w0), so not a refactor regression; parity-only configuration (the epochs build in place).
+
 ## Unattributed visual defects seen in first person (2026-10-11/12; not investigated)
 
 -   **Flickering fog-coloured bands** (user report): full-width horizontal bands of broken geometry, flickering all over the

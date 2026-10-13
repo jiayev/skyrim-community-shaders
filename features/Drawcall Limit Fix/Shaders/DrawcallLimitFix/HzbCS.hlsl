@@ -11,7 +11,7 @@
 // The chain is built by AMD's single-pass downsampler (FidelityFX/ffx_spd.h): one dispatch writes every
 // mip, each group reducing a 64x64 tile of the source through mip 5 and the last group to finish carrying
 // on from mip 5 to the end. That needs a source whose every level halves evenly, which the depth is not.
-// The HZB is defined over a power-of-two domain instead (Resources.cpp: mip 0 is half the next power of two
+// The HZB is defined over a power-of-two domain instead (Core/Resources.cpp: mip 0 is half the next power of two
 // of the depth), and the loads answer for the texels the depth does not have:
 //
 //   - inside the domain but past the rendered area (the padding): the far plane, 1.0, which suppresses

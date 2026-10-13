@@ -1,8 +1,8 @@
-#include "Features/DrawcallLimitFix/Common/Toggles.h"
+#include "Features/DrawcallLimitFix/Runtime/Toggles.h"
 #include "TestHarness.h"
 
-#include "Features/DrawcallLimitFix/Scene/SceneStore.h"
-#include "Features/DrawcallLimitFix/Common/Switches.h"
+#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include "Features/DrawcallLimitFix/Runtime/Switches.h"
 #include "Globals.h"
 #include "State.h"
 
@@ -42,15 +42,15 @@ namespace DCLF
 			/**
 			 * @brief Advances the counter and runs whatever is due.
 			 *
-			 * The counter lives here rather than being SceneStore's frame number, because the commands have to
-			 * fire at the same point in a run whether or not the feature is installed. Driven off SceneStore's
+			 * The counter lives here rather than being Coordinator's frame number, because the commands have to
+			 * fire at the same point in a run whether or not the feature is installed. Driven off Coordinator's
 			 * frame, a CS_DCLF=0 run never ran them at all, so a "baseline" pinned to a given hour was in fact
 			 * whatever hour the save happened to be at - which is precisely the drift that makes screenshot
 			 * comparisons worthless. Loading screens do not count, so the two runs stay in step.
 			 */
 			void OnFrame()
 			{
-				if (DCLF::SceneStore::IsLoadingScreenUp())
+				if (DCLF::Scene::FrameView::IsLoadingScreenUp())
 					return;
 				const std::uint32_t a_frame = ++frame;
 				while (next < commands.size() && a_frame >= commands[next].frame) {
@@ -145,7 +145,7 @@ namespace DCLF
 
 			void OnFrame(const std::string& a_feature)
 			{
-				if (frames.empty() || DCLF::SceneStore::IsLoadingScreenUp())
+				if (frames.empty() || DCLF::Scene::FrameView::IsLoadingScreenUp())
 					return;
 				++frame;
 				for (std::size_t i = 0; i < frames.size(); ++i) {
@@ -178,7 +178,7 @@ namespace DCLF
 
 			void OnFrame()
 			{
-				if ((ranges.empty() && moves.empty()) || DCLF::SceneStore::IsLoadingScreenUp())
+				if ((ranges.empty() && moves.empty()) || DCLF::Scene::FrameView::IsLoadingScreenUp())
 					return;
 				++frame;
 				// CS_DCLF_TEST_MOVE: the player carried forward along its heading, that many units a frame, so that
@@ -241,7 +241,7 @@ namespace DCLF
 		// process ends without the engine's shutdown, which is slow and not what such a run tests.
 		static const std::uint32_t exitFrame = static_cast<std::uint32_t>(std::strtoul(DCLF::SwitchValue(DCLF::Switch::TestExit).c_str(), nullptr, 10));
 		static std::uint32_t exitCount = 0;
-		if (exitFrame && !DCLF::SceneStore::IsLoadingScreenUp() && ++exitCount >= exitFrame) {
+		if (exitFrame && !DCLF::Scene::FrameView::IsLoadingScreenUp() && ++exitCount >= exitFrame) {
 			logger::info("[DCLF] test exit at frame {}", exitCount);
 			spdlog::apply_all([](const std::shared_ptr<spdlog::logger>& a_logger) { a_logger->flush(); });
 			::TerminateProcess(::GetCurrentProcess(), 0);

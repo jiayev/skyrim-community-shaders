@@ -1,10 +1,10 @@
 #include "Streamline.h"
-#include "Features/DrawcallLimitFix/Diagnostics/TargetDump.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Feature/TargetDump.h"
 
 #include "DXVKInterop.h"
 
 #include "../../DxvkLoader.h"
-#include "../DrawcallLimitFix/Common/Switches.h"
+#include "../DrawcallLimitFix/Runtime/Switches.h"
 #include "../../Globals.h"
 #include "../../State.h"
 #include "../../Utils/Game.h"

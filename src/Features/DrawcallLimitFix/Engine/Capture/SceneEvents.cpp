@@ -1,0 +1,1046 @@
+#include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
+#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/TreeLod.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
+#include <xbyak/xbyak.h>
+
+namespace DCLF::Scene
+{
+	struct FadeOnVisible
+	{
+		static void thunk(RE::BSFadeNode* a_this, RE::NiCullingProcess* a_process, std::int32_t a_alphaGroup)
+		{
+			const float before = CurrentFade(a_this);
+			const std::uint8_t door = a_this->GetRuntimeData().unk154;
+			func(a_this, a_process, a_alphaGroup);
+			// The values for the mirror (T6b1a).
+			if (CurrentFade(a_this) != before || a_this->GetRuntimeData().unk154 != door)
+				PushNodeUpdate(a_this, SceneCapture::NodeRecord::kFadeCurrent | SceneCapture::NodeRecord::kFadeDoor);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct FadeUpdate
+	{
+		static std::uint64_t thunk(RE::BSFadeNode* a_this, float a_fadeAmount, void* a_camera)
+		{
+			const float before = CurrentFade(a_this);
+			const std::uint8_t door = a_this->GetRuntimeData().unk154;
+			const auto result = func(a_this, a_fadeAmount, a_camera);
+			if (CurrentFade(a_this) != before || a_this->GetRuntimeData().unk154 != door)
+				PushNodeUpdate(a_this, SceneCapture::NodeRecord::kFadeCurrent | SceneCapture::NodeRecord::kFadeDoor);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	/**
+	 * @brief Actor::SetAlpha (vfunc 0xE1, 0x1406c1a50; Actor's, Character's and PlayerCharacter's tables): the fadeAmount (+0x100) of
+	 * the actor's 3D root, and the player's first-person root too (fadeAmountEvents).
+	 */
+	template <class T>
+	struct ActorSetAlpha
+	{
+		static void thunk(RE::Actor* a_this, float a_alpha)
+		{
+			RE::NiAVObject* roots[2]{ a_this->Get3D1(false), a_this->Get3D1(true) };
+			float before[2]{};
+			for (std::uint32_t i = 0; i < 2; ++i)
+				before[i] = roots[i] ? Engine::At<float>(roots[i], 0x100) : 0.0f;
+			func(a_this, a_alpha);
+			for (std::uint32_t i = 0; i < 2; ++i)
+				if (roots[i] && Engine::At<float>(roots[i], 0x100) != before[i] && (i == 0 || roots[1] != roots[0])) {
+					fadeAmountEvents.Push(roots[i]);
+					if (roots[i]->AsFadeNode())
+						PushNodeUpdate(roots[i], SceneCapture::NodeRecord::kFadeAmount);  // the mirror's value (T6b1a)
+				}
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct ActorTable;
+	struct CharacterTable;
+	struct PlayerTable;
+
+	/**
+	 * @brief FUN_14147a430 (node, level): the LOD transition, the only writer of the fade node's LOD level (+0x152 & 0xF, the skin
+	 * partitions' row). The fade update (FUN_14147a160), BSLeafAnimNode::OnVisible and the feedback's fade service call it.
+	 */
+	struct LodLevelUpdate
+	{
+		static void thunk(RE::BSFadeNode* a_this, float a_level)
+		{
+			const std::uint8_t before = a_this->GetRuntimeData().unk152 & 0xF;
+			func(a_this, a_level);
+			if ((a_this->GetRuntimeData().unk152 & 0xF) != before)
+				PushNodeUpdate(a_this, SceneCapture::NodeRecord::kFadeLevel);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// Sky::SetColor (0x14040d970): a colour from a weather blend, written in place. External emittance reads some of those
+	// colours through its emissiveColor pointer (emittanceEvents).
+	struct SkySetColor
+	{
+		static void thunk(RE::Sky* a_sky, RE::NiColor* a_colour, void* a_blend, float a_flash)
+		{
+			const RE::NiColor before = a_colour ? *a_colour : RE::NiColor{};
+			func(a_sky, a_colour, a_blend, a_flash);
+			if (a_colour && std::memcmp(&before, a_colour, sizeof(before)) != 0)
+				emittanceEvents.Push(a_colour);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_141480fc0 (object, &colour): points the external emittance of the object's Lighting and effect properties at a
+	// colour, recursively. The colour a Lighting property reads is a classification input (ListDependents lists the entry
+	// under it); a re-point with no flag change would otherwise go unseen, so it is a property event.
+	struct SetExternalEmittance
+	{
+		static std::uint64_t thunk(RE::NiAVObject* a_object, RE::NiColor** a_colour)
+		{
+			auto* geometry = a_object ? a_object->AsGeometry() : nullptr;
+			auto* shaderProperty = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
+			auto* property = shaderProperty ? netimmerse_cast<RE::BSLightingShaderProperty*>(shaderProperty) : nullptr;
+			// T7d's Effect port: an effect property's emittanceColor is its PropertyColor (the mirror's emissive), its re-point an event too.
+			auto* effect = shaderProperty && !property ? netimmerse_cast<RE::BSEffectShaderProperty*>(shaderProperty) : nullptr;
+			const RE::NiColor* before = property ? property->emissiveColor : effect ? effect->emittanceColor : nullptr;
+			const auto result = func(a_object, a_colour);
+			if (property && property->emissiveColor != before) {
+				PushProperty(property);
+				PushPropertyUpdate(property, SceneCapture::PropertyRecord::kEmissive);
+			} else if (effect && effect->emittanceColor != before) {
+				PushProperty(effect);
+				PushPropertyUpdate(effect, SceneCapture::PropertyRecord::kEmissive);
+			}
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_14147aa20: a fade node's placement snap (fadeSnapEvents). The cell attaches (FUN_1402d1280, FUN_1402d5090) call it after
+	// their own writes of the node's fade statics (the LOD type's `and`/`or` at +0x153, the range through FUN_14021f200), so its
+	// update carries them.
+	struct FadeSnap
+	{
+		static std::uint64_t thunk(RE::NiAVObject* a_node, void* a_camera)
+		{
+			const auto result = func(a_node, a_camera);
+			if (a_node) {
+				fadeSnapEvents.Push(a_node);
+				if (netimmerse_cast<RE::BSFadeNode*>(a_node))
+					PushNodeUpdate(a_node, kFadeStatics | kFadeState);
+			}
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_1402d1280 (cell, reference) and FUN_1402d5090 (cell, reference, flag): a reference's 3D placed in its cell. They write the
+	// fade node's LOD type inline (`and`/`or` at +0x153: 10 for a reference flagged so, 6 for a distant one) around the range
+	// (FUN_14021f200) and snap it only on one branch (the save-load or sky cell branch skips the snap): the statics after the call.
+	inline void PushReferenceFadeStatics(RE::TESObjectREFR* a_reference)
+	{
+		auto* root = a_reference ? a_reference->Get3D() : nullptr;
+		if (auto* fade = root ? root->AsFadeNode() : nullptr) {
+			PushNodeUpdate(fade, kFadeStatics | kFadeState);
+			Diagnostics::Notify(Diagnostics::FadeStaticsPlaced{ fade });
+		}
+	}
+
+	struct CellPlaceReference
+	{
+		static void thunk(RE::TESObjectCELL* a_cell, RE::TESObjectREFR* a_reference)
+		{
+			func(a_cell, a_reference);
+			PushReferenceFadeStatics(a_reference);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct CellPlaceReferenceAt
+	{
+		static void* thunk(RE::TESObjectCELL* a_cell, RE::TESObjectREFR* a_reference, bool a_snap)
+		{
+			auto* result = func(a_cell, a_reference, a_snap);
+			PushReferenceFadeStatics(a_reference);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_140b44490 (rigid body, motion type, ...): Havok's motion change, the motion rebuilt in place (hkpRigidBody::setMotionType,
+	// FUN_140b30700, calls it directly, or as a world operation when the world is locked, which runs it later). Every path to a
+	// body's motion type ends here: NiAVObject::SetMotionType's collision objects, the animation graph, ragdolls, Havok's own.
+	// The node owning the body (TESHavokUtilities::FindCollidableObject) after the call.
+	struct RigidBodyMotionType
+	{
+		static void thunk(RE::hkpRigidBody* a_body, std::uint32_t a_type, std::uint32_t a_arg2, std::uint32_t a_arg3)
+		{
+			func(a_body, a_type, a_arg2, a_arg3);
+			if (a_body)
+				PushNodeUpdate(RE::TESHavokUtilities::FindCollidableObject(*a_body->GetCollidable()), SceneCapture::NodeRecord::kBody);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// NiObjectNET::RemoveController (0x140d269a0): the controllers a node or a property holds (PrependController's other half).
+	struct RemoveController
+	{
+		static void thunk(RE::NiObjectNET* a_target, RE::NiTimeController* a_controller)
+		{
+			func(a_target, a_controller);
+			if (!a_target)
+				return;
+			if (auto* object = netimmerse_cast<RE::NiAVObject*>(a_target))
+				PushNodeUpdate(object, SceneCapture::NodeRecord::kControllers);
+			else
+				PushPropertyUpdate(netimmerse_cast<RE::BSShaderProperty*>(a_target), SceneCapture::PropertyRecord::kControllers);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// BSDismemberSkinInstance::UpdateDismemberPartion (0x14021a530): a partition's editorVisible, its only writer after the load.
+	// The skin instance knows no geometry: the mirror finds it by the skin (SceneMirror::Update).
+	inline void PushSkinShown(const RE::BSDismemberSkinInstance* a_skin)
+	{
+		if (!a_skin)
+			return;
+		SceneCapture::GeometryRecord record;
+		record.skin = a_skin;
+		const auto& data = a_skin->GetRuntimeData();
+		if (data.partitions)
+			for (std::int32_t i = 0; i < data.numPartitions; ++i)
+				record.shown.push_back(data.partitions[i].editorVisible ? 1 : 0);
+		SceneTracker::Get().PushUpdate(SceneCapture::Update{ SceneCapture::GeometryRecord::kDismember, std::move(record) });
+	}
+
+	struct DismemberPartition
+	{
+		static void thunk(RE::BSDismemberSkinInstance* a_this, std::uint16_t a_slot, bool a_visible)
+		{
+			func(a_this, a_slot, a_visible);
+			PushSkinShown(a_this);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_140218200 (biped, ?, skin, slot, flag): an armor's dismember partitions shown for a biped slot, stored inline (a job thread:
+	// the actor's 3D update). The skin's partitions after the call.
+	struct BipedDismemberPartitions
+	{
+		static void thunk(void* a_biped, void* a_object, RE::BSDismemberSkinInstance* a_skin, std::int32_t a_slot, bool a_flag)
+		{
+			func(a_biped, a_object, a_skin, a_slot, a_flag);
+			PushSkinShown(a_skin);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_1402ad800 (land): a TESObjectLAND's landscape properties, made and stored into each of its four quads' geometry (+0x128)
+	// after the quads were attached. Each quad's leaf after the call (a swap: the new property's record with it).
+	struct LandSetupProperties
+	{
+		static std::uint64_t thunk(RE::TESObjectLAND* a_land)
+		{
+			const auto result = func(a_land);
+			const auto* loaded = a_land ? Engine::At<const RE::NiNode* const*>(a_land, 0x40) : nullptr;
+			if (!loaded)
+				return result;
+			for (std::uint32_t quad = 0; quad < 4; ++quad) {
+				const auto* node = loaded[quad];
+				if (!node || node->GetChildren().empty() || !node->GetChildren()[0])
+					continue;
+				if (auto* geometry = node->GetChildren()[0]->AsGeometry())
+					PushLeafUpdate(*geometry);
+			}
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_1402ad0e0 (land): a TESObjectLAND's quads' land blend, after the cell's attach: each quad geometry's landscape material
+	// takes its LOD blend textures (+0xF8, +0x100) and landBlendParams (+0x108). Each quad's property after the call (T6b1a).
+	struct LandBlendParams
+	{
+		static void thunk(RE::TESObjectLAND* a_land)
+		{
+			func(a_land);
+			const auto* loaded = a_land ? Engine::At<const RE::NiNode* const*>(a_land, 0x40) : nullptr;
+			if (!loaded)
+				return;
+			for (std::uint32_t quad = 0; quad < 4; ++quad) {
+				const auto* node = loaded[quad];
+				if (!node || node->GetChildren().empty() || !node->GetChildren()[0])
+					continue;
+				if (auto* geometry = node->GetChildren()[0]->AsGeometry())
+					PushPropertyUpdate(geometry->GetGeometryRuntimeData().shaderProperty.get(), SceneCapture::PropertyRecord::kLandBlend);
+			}
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_1414abd10 (object, visitor {params, colour, snow}): projected UV on every Lighting or grass property under the object,
+	// recursively (each child through the entry again): kProjectedUV and kSnow (SetFlags, their own events), then projectedUVParams
+	// and projectedUVColor stored inline. The geometry's property after the call (T6b1a).
+	struct PropertiesProjectedUV
+	{
+		static std::uint64_t thunk(RE::NiAVObject* a_object, void* a_visitor)
+		{
+			const auto result = func(a_object, a_visitor);
+			if (auto* geometry = a_object ? a_object->AsGeometry() : nullptr)
+				PushPropertyUpdate(geometry->GetGeometryRuntimeData().shaderProperty.get(), SceneCapture::PropertyRecord::kProjected);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// A BGSDecalNode's decal array edits (T6b1a; AE 1.6.1170): the append (FUN_1401fdfb0, from BSTempEffectGeometryDecal::Attach and
+	// the simple decals' attach), and the erases: a decal's or a reference's decals (FUN_1401fdc80 through FUN_1401fe020, from the decal
+	// manager), the geometry decal's update (FUN_1401fdcb0), and the two that erase and detach its 3D (FUN_1401fdd50, FUN_1401fde40).
+	// Each takes the node first; the node's decals after the call. The arguments past the node are passed through as they came.
+	template <int N>
+	struct DecalArrayEdit
+	{
+		static void thunk(RE::NiAVObject* a_node, void* a_1, void* a_2, void* a_3)
+		{
+			func(a_node, a_1, a_2, a_3);
+			PushNodeUpdate(a_node, SceneCapture::NodeRecord::kDecals);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// BSGeometry::AttachProperty (0x140267cf0, geometry, alpha): the geometry's alpha property (+0x120), set after its attach
+	// (object LOD's blocks). The leaf after the call.
+	struct GeometryAttachAlpha
+	{
+		static void thunk(RE::BSGeometry* a_geometry, RE::NiAlphaProperty* a_alpha)
+		{
+			func(a_geometry, a_alpha);
+			if (a_geometry)
+				PushLeafUpdate(*a_geometry);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_1414ab770 (object, visitor {predicate, threshold}): the alpha test threshold (+0x32) of every geometry's alpha property
+	// under the object the predicate admits, recursively (each child through the entry again), stored inline: an actor's or an
+	// effect's fade in and out (job threads, every frame of it). The alpha's threshold after the call, per geometry.
+	struct AlphasSetThreshold
+	{
+		static std::uint64_t thunk(RE::NiAVObject* a_object, void* a_visitor)
+		{
+			const auto result = func(a_object, a_visitor);
+			if (auto* geometry = a_object ? a_object->AsGeometry() : nullptr)
+				PushAlphaUpdate(geometry->GetGeometryRuntimeData().alphaProperty.get(), SceneCapture::AlphaRecord::kThreshold);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_1414ab580 (object, visitor {flag, hide}): weapon blood on every geometry under the object whose property has the flag,
+	// recursively (each child through the entry again): the node's hidden bit, kWeaponBlood (SetFlags, its own event), and the
+	// alpha's blend bits cleared inline (& 0xFE01). The alpha's flags and the hidden bit after the call, per geometry.
+	struct WeaponBloodGeometry
+	{
+		static std::uint64_t thunk(RE::NiAVObject* a_object, void* a_visitor)
+		{
+			const auto result = func(a_object, a_visitor);
+			if (auto* geometry = a_object ? a_object->AsGeometry() : nullptr) {
+				PushAlphaUpdate(geometry->GetGeometryRuntimeData().alphaProperty.get(), SceneCapture::AlphaRecord::kFlags);
+				PushNodeUpdate(geometry, SceneCapture::NodeRecord::kHidden);
+			}
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_140e880e0 (visit): FUN_140e874d0's subtree walk callback that releases a node's collision object (+0x40), as an equipped item
+	// loses its physics. The visit holds the node at +0x10. The node's body after the call.
+	struct ReleaseCollisionObject
+	{
+		static void thunk(std::byte* a_visit)
+		{
+			auto* node = a_visit ? *reinterpret_cast<RE::NiAVObject**>(a_visit + 0x10) : nullptr;
+			func(a_visit);
+			PushNodeUpdate(node, SceneCapture::NodeRecord::kBody);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_140e8bd40 (node, collision object): NiAVObject::SetCollisionObject (+0x40), from bhkWorld::InitHavok and FUN_140e8c600 after
+	// the node's world attach (a loader's clutter: its body comes after the capture). The node's body after the call (T6b1b).
+	struct SetCollisionObject
+	{
+		static void thunk(RE::NiAVObject* a_node, RE::NiCollisionObject* a_collision)
+		{
+			func(a_node, a_collision);
+			PushNodeUpdate(a_node, SceneCapture::NodeRecord::kBody);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_14147c1e0 (object, flag, set, Lighting only): one shader property flag set or cleared on every geometry's property under the
+	// object, recursively (each child through the entry again), stored inline (not SetFlags): AIProcess::Update3DModel_Impl gives an
+	// actor's 3D kCharacterLighting, the sky, explosions. The property's flags after the call, per geometry.
+	struct PropertiesSetFlag
+	{
+		static std::uint64_t thunk(RE::NiAVObject* a_object, std::uint32_t a_flag, bool a_set, bool a_lightingOnly)
+		{
+			const auto result = func(a_object, a_flag, a_set, a_lightingOnly);
+			if (auto* geometry = a_object ? a_object->AsGeometry() : nullptr)
+				PushPropertyUpdate(geometry->GetGeometryRuntimeData().shaderProperty.get(),
+					SceneCapture::PropertyRecord::kFlags | SceneCapture::PropertyRecord::kMaterialOther);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_14147c690 (&fadeNode, object): the fade node of every geometry's shader property under the object (+0x60), recursively
+	// (each child through the entry again), from FUN_14147bf70. The property's fade node after the call, per geometry.
+	struct PropertiesSetFadeNode
+	{
+		static void thunk(RE::BSFadeNode** a_fadeNode, RE::NiAVObject* a_object)
+		{
+			func(a_fadeNode, a_object);
+			// T6b3e: as a leaf update (its records with their pins, the new fade node among them: CaptureLeaf), so the entry holds the fade
+			// node its tree and fade-root owners are copied from (HoldProperties); the property update alone carried no reference, and an
+			// entry attached before the fade node was set found none (w140-w143: hundreds of roots left unlisted).
+			if (auto* geometry = a_object ? a_object->AsGeometry() : nullptr)
+				PushLeafUpdate(*geometry);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_14147a9b0 (node, near, far): the fade node's range (+0x128, +0x12C; near clamped to a minimum, far to twice it), from the
+	// model and reference attach (FUN_14021f200, from the node's radius) and an FX path (FUN_1407cfba0). Its only writer.
+	struct FadeSetRange
+	{
+		static void thunk(RE::BSFadeNode* a_this, float a_near, float a_far)
+		{
+			func(a_this, a_near, a_far);
+			PushNodeUpdate(a_this, SceneCapture::NodeRecord::kFadeNear | SceneCapture::NodeRecord::kFadeFar);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_14147aa00 (node, type): the fade node's LOD type (+0x153 & 0xF), from the model processor and the reference 3D paths.
+	struct FadeSetLodType
+	{
+		static void thunk(RE::BSFadeNode* a_this, std::uint8_t a_type)
+		{
+			func(a_this, a_type);
+			PushNodeUpdate(a_this, SceneCapture::NodeRecord::kFadeType);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct LodFadeRenderPasses
+	{
+		static RE::BSShaderProperty::RenderPassArray* thunk(RE::BSLightingShaderProperty* a_property, RE::BSGeometry* a_geometry, std::uint32_t a_renderFlags,
+			RE::BSShaderAccumulator* a_accumulator)
+		{
+			const float specular = a_property->specularLODFade;
+			const float envmap = a_property->envmapLODFade;
+			const float alpha = a_property->alpha;
+			auto* passes = func(a_property, a_geometry, a_renderFlags, a_accumulator);
+			// The LOD fades, and the alpha it leaves on the property (materialAlpha times the fade node's fade, for whichever
+			// camera registered it last), which a record that is not a member's shades with (MakeShading).
+			if (std::bit_cast<std::uint32_t>(a_property->specularLODFade) != std::bit_cast<std::uint32_t>(specular) ||
+				std::bit_cast<std::uint32_t>(a_property->envmapLODFade) != std::bit_cast<std::uint32_t>(envmap) ||
+				std::bit_cast<std::uint32_t>(a_property->alpha) != std::bit_cast<std::uint32_t>(alpha))
+				lodFadeEvents.Push(a_property);
+			// The alpha's value for the mirror (T6b1a).
+			if (std::bit_cast<std::uint32_t>(a_property->alpha) != std::bit_cast<std::uint32_t>(alpha))
+				PushPropertyUpdate(a_property, SceneCapture::PropertyRecord::kAlphaValue);
+			return passes;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct PropertySetFlags
+	{
+		static void thunk(RE::BSShaderProperty* a_this, RE::BSShaderProperty::EShaderPropertyFlag8 a_flag, bool a_set)
+		{
+			const auto before = a_this->flags.underlying();
+			func(a_this, a_flag, a_set);
+			if (a_this->flags.underlying() != before) {
+				PushProperty(a_this);
+				// The glints follow kVertexLighting (CaptureProperty).
+				PushPropertyUpdate(a_this, SceneCapture::PropertyRecord::kFlags | SceneCapture::PropertyRecord::kMaterialOther);
+			}
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct PropertySetMaterial
+	{
+		static void thunk(RE::BSShaderProperty* a_this, RE::BSShaderMaterial* a_material, bool a_unique)
+		{
+			const auto* before = a_this->material;
+			func(a_this, a_material, a_unique);
+			if (a_this->material != before) {
+				PushProperty(a_this);
+				PushPropertyUpdate(a_this, SceneCapture::PropertyRecord::kMaterial | SceneCapture::PropertyRecord::kMaterialAlpha |
+				                               SceneCapture::PropertyRecord::kMaterialOther);
+			}
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// BSLightingShaderProperty::SetMaterialAlpha (vtable slot 0x31): the material alpha a classification and a record read.
+	struct PropertySetMaterialAlpha
+	{
+		static void thunk(RE::BSLightingShaderProperty* a_this, float a_alpha)
+		{
+			const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_this->material);
+			const float before = material ? material->materialAlpha : 0.0f;
+			func(a_this, a_alpha);
+			material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_this->material);
+			if (material && std::bit_cast<std::uint32_t>(material->materialAlpha) != std::bit_cast<std::uint32_t>(before)) {
+				PushProperty(a_this);
+				PushPropertyUpdate(a_this, SceneCapture::PropertyRecord::kMaterialAlpha);
+			}
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct PrependController
+	{
+		static void thunk(RE::NiObjectNET* a_target, RE::NiTimeController* a_controller)
+		{
+			func(a_target, a_controller);
+			if (!a_target)
+				return;
+			if (auto* object = netimmerse_cast<RE::NiAVObject*>(a_target)) {
+				PushNode(object);
+				PushNodeUpdate(object, SceneCapture::NodeRecord::kControllers);
+			} else {
+				PushProperty(a_target);
+				PushPropertyUpdate(netimmerse_cast<RE::BSShaderProperty*>(a_target), SceneCapture::PropertyRecord::kControllers);
+			}
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct HavokNodeTransform
+	{
+		static void thunk(RE::NiCollisionObject* a_this, const void* a_transform)
+		{
+			func(a_this, a_transform);
+			PushNode(a_this->sceneObject);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// MoveEvents' writers (Internal.h).
+	struct AnimationGraphPlace
+	{
+		static bool thunk(RE::TESObjectREFR* a_reference)
+		{
+			const bool result = func(a_reference);
+			PushMove(a_reference);
+			CountMove(0);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ReferenceUpdate3DPosition
+	{
+		static void thunk(RE::TESObjectREFR* a_reference, bool a_warp)
+		{
+			func(a_reference, a_warp);
+			PushMove(a_reference);
+			CountMove(1);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ActorUpdate3DPosition
+	{
+		static void thunk(RE::Actor* a_actor)
+		{
+			func(a_actor);
+			PushMove(a_actor);
+			CountMove(2);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct SkyCellSkin
+	{
+		static std::uint64_t thunk(RE::Actor* a_actor)
+		{
+			const auto result = func(a_actor);
+			PushMove(a_actor);
+			CountMove(3);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct RagdollJob
+	{
+		// FUN_140770dc0's list: the actors' handles at +0x30, their count at +0x40.
+		static void thunk(std::byte* a_list)
+		{
+			func(a_list);
+			const auto* handles = *reinterpret_cast<const RE::RefHandle* const*>(a_list + 0x30);
+			const auto count = *reinterpret_cast<const std::uint32_t*>(a_list + 0x40);
+			for (std::uint32_t i = 0; handles && i < count; ++i) {
+				RE::NiPointer<RE::TESObjectREFR> reference;
+				if (RE::LookupReferenceByHandle(handles[i], reference))
+					PushMove(reference.get());
+				CountMove(4);
+			}
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct GraphAnimation
+	{
+		static void thunk(RE::TESObjectREFR* a_reference)
+		{
+			func(a_reference);
+			PushMove(a_reference);
+			CountMove(5);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	/** @brief A patched `call [rax + 0x168]`: the node's UpdateSelectedDownwardPass, then its reference or itself as the key. */
+	struct SelectiveUpdateCall
+	{
+		static void thunk(RE::NiAVObject* a_node, void* a_data, std::uint32_t a_arg)
+		{
+			using UpdateSelectedDownwardPass = void (*)(RE::NiAVObject*, void*, std::uint32_t);
+			(*reinterpret_cast<UpdateSelectedDownwardPass* const*>(a_node))[0x2D](a_node, a_data, a_arg);
+			if (const auto* reference = a_node->GetUserData())
+				PushMove(reference);
+			else
+				PushMove(a_node);
+			CountMove(6);
+		}
+	};
+
+	struct SwitchAttachChild
+	{
+		static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child, bool a_firstAvail)
+		{
+			func(a_this, a_child, a_firstAvail);
+			PushSwitchStructural(a_this);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct SwitchDetachChild1
+	{
+		static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child, RE::NiPointer<RE::NiAVObject>& a_out)
+		{
+			func(a_this, a_child, a_out);
+			PushSwitchStructural(a_this);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct SwitchDetachChild2
+	{
+		static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child)
+		{
+			func(a_this, a_child);
+			PushSwitchStructural(a_this);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct SwitchDetachChildAt1
+	{
+		static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiPointer<RE::NiAVObject>& a_out)
+		{
+			func(a_this, a_index, a_out);
+			PushSwitchStructural(a_this);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct SwitchDetachChildAt2
+	{
+		static void thunk(RE::NiNode* a_this, std::uint32_t a_index)
+		{
+			func(a_this, a_index);
+			PushSwitchStructural(a_this);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct SwitchSetAt1
+	{
+		static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiAVObject* a_child, RE::NiPointer<RE::NiAVObject>& a_out)
+		{
+			func(a_this, a_index, a_child, a_out);
+			PushSwitchStructural(a_this);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	struct SwitchSetAt2
+	{
+		static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiAVObject* a_child)
+		{
+			func(a_this, a_index, a_child);
+			PushSwitchStructural(a_this);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	template <class T>
+	void DetourSwitchSlot(std::size_t a_slot)
+	{
+		REL::Relocation<std::uintptr_t> vtable{ RE::VTABLE_NiSwitchNode[0] };
+		stl::detour_thunk<T>(reinterpret_cast<const std::uintptr_t*>(vtable.address())[a_slot]);
+	}
+
+	/**
+	 * @brief The fade resets (T6b1a): a fade node's currentFade (+0x130) stored inline, fully faded out (0) or in (1.0), with flag bit 14
+	 * (a frame bit the mirror does not hold) cleared or set after it: the cells' placements (FUN_1402bc1f0, the grid controller's on the
+	 * main thread, and FUN_1402bb690, a job's, after FUN_1402d5090's), the sky cell's (FUN_1402b9da0), the reference placement's own
+	 * branches that skip the snap (FUN_1402d1280), explosions' 3D (Explosion::Load3D) and others (every such store in the image: the
+	 * store-then-bit-14 pattern). The patched store's handler: the store, and the node's currentFade.
+	 */
+	void FadeResetStore(RE::NiAVObject* a_node, std::int32_t a_value)
+	{
+		*reinterpret_cast<std::int32_t*>(reinterpret_cast<std::byte*>(a_node) + 0x130) = a_value;
+		PushNodeUpdate(a_node, SceneCapture::NodeRecord::kFadeCurrent);
+	}
+
+	/** @brief One patched store: `mov dword ptr [base + offset], value`, as the bytes read before patching. */
+	struct SwitchStoreSite
+	{
+		std::uintptr_t offset;  // from the image base
+		std::array<std::uint8_t, 10> bytes;
+		std::uint8_t length;
+		int base;  // Xbyak::Operand register index
+		int value;               // kImmediate: the instruction's immediate, imm
+		std::uint32_t imm = 0;
+		static constexpr int kImmediate = -1;
+	};
+
+	/**
+	 * @brief The stubs the patched stores call: each loads (switch, value) into the first two argument registers
+	 * and joins a common body that saves every volatile register, the flags (a store sets none, so the code after
+	 * it may test flags set before it) and xmm0-5, calls the handler (SwitchIndexStore, FadeResetStore) on an aligned stack, and restores them.
+	 */
+	struct SwitchStoreStubs : Xbyak::CodeGenerator
+	{
+		SwitchStoreStubs(const std::vector<SwitchStoreSite>& a_sites, std::vector<std::size_t>& a_entries, std::uintptr_t a_handler) :
+			Xbyak::CodeGenerator(4096)
+		{
+			using namespace Xbyak::util;
+			Xbyak::Label common;
+			// After the three pushes: rdx at [rsp], rcx at [rsp + 8], rax at [rsp + 0x10].
+			auto slotOf = [](int a_index) -> int {
+				return a_index == Xbyak::Operand::RAX ? 0x10 : a_index == Xbyak::Operand::RCX ? 0x8 : a_index == Xbyak::Operand::RDX ? 0x0 : -1;
+			};
+			for (const auto& site : a_sites) {
+				a_entries.push_back(getSize());
+				push(rax);
+				push(rcx);
+				push(rdx);
+				if (const int slot = slotOf(site.base); slot >= 0)
+					mov(rcx, qword[rsp + slot]);
+				else
+					mov(rcx, Xbyak::Reg64(site.base));
+				if (site.value == SwitchStoreSite::kImmediate)
+					mov(edx, site.imm);
+				else if (const int slot = slotOf(site.value); slot >= 0)
+					mov(edx, dword[rsp + slot]);
+				else
+					mov(edx, Xbyak::Reg32(site.value));
+				jmp(common, T_NEAR);
+			}
+			L(common);
+			push(r8);
+			push(r9);
+			push(r10);
+			push(r11);
+			push(rbx);
+			pushf();
+			mov(rbx, rsp);
+			and_(rsp, ~std::uint32_t(0xF));
+			sub(rsp, 0x80);
+			for (int i = 0; i < 6; ++i)
+				movdqu(ptr[rsp + 0x20 + 0x10 * i], Xbyak::Xmm(i));
+			mov(rax, a_handler);
+			call(rax);
+			for (int i = 0; i < 6; ++i)
+				movdqu(Xbyak::Xmm(i), ptr[rsp + 0x20 + 0x10 * i]);
+			mov(rsp, rbx);
+			popf();
+			pop(rbx);
+			pop(r11);
+			pop(r10);
+			pop(r9);
+			pop(r8);
+			pop(rdx);
+			pop(rcx);
+			pop(rax);
+			ret();
+		}
+	};
+
+	/** @brief Patches a_sites to call a_handler(base, value) in their place (after checking every site's bytes; none is patched when one differs). */
+	bool PatchStores(const std::vector<SwitchStoreSite>& a_sites, std::uintptr_t a_handler, const char* a_what)
+	{
+		const auto base = REL::Module::get().base();
+		for (const auto& site : a_sites) {
+			if (std::memcmp(reinterpret_cast<const void*>(base + site.offset), site.bytes.data(), site.length) != 0) {
+				logger::warn("[DCLF] {} not installed: the store at {:#x} is not the expected instruction", a_what, 0x140000000 + site.offset);
+				return false;
+			}
+		}
+		std::vector<std::size_t> entries;
+		SwitchStoreStubs stubs(a_sites, entries, a_handler);
+		auto* code = static_cast<std::uint8_t*>(SKSE::GetTrampoline().allocate(stubs.getSize()));
+		std::memcpy(code, stubs.getCode(), stubs.getSize());
+		for (std::size_t i = 0; i < a_sites.size(); ++i) {
+			const std::uintptr_t at = base + a_sites[i].offset;
+			std::array<std::uint8_t, 10> patch{ 0xE8, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90, 0x90 };
+			const auto displacement = static_cast<std::int32_t>(reinterpret_cast<std::intptr_t>(code + entries[i]) - static_cast<std::intptr_t>(at + 5));
+			std::memcpy(patch.data() + 1, &displacement, sizeof(displacement));
+			REL::safe_write(at, patch.data(), a_sites[i].length);
+		}
+		logger::info("[DCLF] {}: {} stores patched ({} bytes of stubs)", a_what, a_sites.size(), stubs.getSize());
+		return true;
+	}
+
+	bool InstallFadeResetStores()
+	{
+		using Xbyak::Operand;
+		constexpr int kImm = SwitchStoreSite::kImmediate;
+		constexpr std::uint32_t kOne = 0x3f800000;
+		const std::vector<SwitchStoreSite> sites{
+			{ 0x2bc344, { 0x44, 0x89, 0xa0, 0x30, 0x01, 0x00, 0x00 }, 7, Operand::RAX, Operand::R12 },  // FUN_1402bc1f0
+			{ 0x2bb8f5, { 0x44, 0x89, 0xa0, 0x30, 0x01, 0x00, 0x00 }, 7, Operand::RAX, Operand::R12 },  // FUN_1402bb690
+			{ 0x2c859f, { 0x44, 0x89, 0xb8, 0x30, 0x01, 0x00, 0x00 }, 7, Operand::RAX, Operand::R15 },  // FUN_1402c8420
+			{ 0x1ce552, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RAX, kImm, kOne },  // FUN_1401ce010
+			{ 0x28bbd0, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, 10, Operand::RAX, kImm, 0 },     // FUN_14028b9d0
+			{ 0x2b9e89, { 0xc7, 0x87, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RDI, kImm, kOne },  // FUN_1402b9da0 (sky cell)
+			{ 0x2d1f2c, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RAX, kImm, kOne },  // FUN_1402d1280
+			{ 0x2d20dd, { 0xc7, 0x83, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RBX, kImm, kOne },  // FUN_1402d1280
+			{ 0x2e3c27, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RAX, kImm, kOne },  // Explosion::Load3D
+			{ 0x7d4791, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RAX, kImm, kOne },  // FUN_1407d4440
+			{ 0x7ee6ec, { 0xc7, 0x80, 0x30, 0x01, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f }, 10, Operand::RAX, kImm, kOne },  // FUN_1407ee3e0
+		};
+		return PatchStores(sites, reinterpret_cast<std::uintptr_t>(&FadeResetStore), "fade resets");
+	}
+
+	bool InstallSwitchStores()
+	{
+		using Xbyak::Operand;
+		const std::vector<SwitchStoreSite> sites{
+			{ 0x438004, { 0x89, 0x91, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RCX, Operand::RDX },  // BSTreeManager (FUN_140437e50)
+			{ 0x43805e, { 0x89, 0x91, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RCX, Operand::RDX },
+			{ 0x438077, { 0x89, 0x81, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RCX, Operand::RAX },
+			{ 0x43812d, { 0x89, 0x91, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RCX, Operand::RDX },
+			{ 0x438146, { 0x89, 0x81, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RCX, Operand::RAX },
+			{ 0x4385cd, { 0x44, 0x89, 0x82, 0x2c, 0x01, 0x00, 0x00 }, 7, Operand::RDX, Operand::R8 },  // local map (FUN_140438580)
+			{ 0x4388cc, { 0x89, 0x91, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RCX, Operand::RDX },  // BSTreeManager (FUN_140438840)
+			{ 0x4388e5, { 0x89, 0x81, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RCX, Operand::RAX },
+			{ 0x1e937c, { 0x89, 0x8f, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RDI, Operand::RCX },  // harvest (FUN_1401e8ef0)
+			{ 0x1e94ef, { 0x89, 0x8b, 0x2c, 0x01, 0x00, 0x00 }, 6, Operand::RBX, Operand::RCX },  // harvestable 3D (FUN_1401e9450)
+		};
+		return PatchStores(sites, reinterpret_cast<std::uintptr_t>(&SwitchIndexStore), "switch events");
+	}
+
+	namespace
+	{
+		// Object LOD's segment writers (LodSegments.h): each patched call makes the write, then names the shape.
+		struct LodSegmentShow
+		{
+			static void thunk(RE::BSGeometry* a_shape, std::uint64_t a_segment)
+			{
+				func(a_shape, a_segment);
+				lodSegmentEvents.Push(a_shape);
+				PushGeometryUpdate(a_shape, SceneCapture::GeometryRecord::kSegments);  // T6b1a
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+		struct LodSegmentHide
+		{
+			static void thunk(RE::BSGeometry* a_shape, std::uint64_t a_segment)
+			{
+				func(a_shape, a_segment);
+				lodSegmentEvents.Push(a_shape);
+				PushGeometryUpdate(a_shape, SceneCapture::GeometryRecord::kSegments);  // T6b1a
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+		struct LodSegmentShowAll
+		{
+			static void thunk(RE::BSGeometry* a_shape)
+			{
+				func(a_shape);
+				lodSegmentEvents.Push(a_shape);
+				PushGeometryUpdate(a_shape, SceneCapture::GeometryRecord::kSegments);  // T6b1a
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+	}
+
+	bool InstallLodSegmentHooks()
+	{
+		// Every call of the three writers (AE 1.6.1170, every xref): the active grid's and the large-reference grid's segment
+		// updates (FUN_1405110b0, FUN_1405112f0), two other show-all callers (FUN_1404fdcf0, FUN_140509550) and the LOD block
+		// builder (FUN_140e55790). None is patched unless every site calls what it should.
+		constexpr std::uintptr_t kShow = 0xe31130, kHide = 0xe31160, kShowAll = 0xe310b0;
+		constexpr std::uintptr_t kShowSites[] = { 0x511550, 0x511269 };
+		constexpr std::uintptr_t kHideSites[] = { 0x511544, 0x51125c };
+		constexpr std::uintptr_t kShowAllSites[] = { 0x4fde80, 0x509691, 0x511402, 0x5112b4, 0xe55ba3 };
+		auto at = [](std::uintptr_t a_offset) { return REL::Offset(a_offset).address(); };
+		bool ok = true;
+		for (const auto site : kShowSites)
+			ok = ok && Engine::CallsTo(at(site), at(kShow));
+		for (const auto site : kHideSites)
+			ok = ok && Engine::CallsTo(at(site), at(kHide));
+		for (const auto site : kShowAllSites)
+			ok = ok && Engine::CallsTo(at(site), at(kShowAll));
+		if (!ok) {
+			logger::warn("[DCLF] object LOD: a segment writer's call site differs; object LOD stays native");
+			return false;
+		}
+		for (const auto site : kShowSites)
+			stl::write_thunk_call<LodSegmentShow>(at(site));
+		for (const auto site : kHideSites)
+			stl::write_thunk_call<LodSegmentHide>(at(site));
+		for (const auto site : kShowAllSites)
+			stl::write_thunk_call<LodSegmentShowAll>(at(site));
+		return true;
+	}
+
+	void InstallMoveEvents()
+	{
+		// The two update passes are patched at their call: `call qword ptr [rax + 0x168]` (FF 90 68 01 00 00), checked
+		// first. Either missing leaves every mover placed every frame.
+		constexpr std::uintptr_t kAnimatedRefCall = 0x2b42ba;  // FUN_1402b41a0: a cell's animated reference
+		constexpr std::uintptr_t kDynamicNodeCall = 0x2b3bd5;  // FUN_1402b3ae0: the cell's dynamic node
+		constexpr std::array<std::uint8_t, 6> kCall{ 0xFF, 0x90, 0x68, 0x01, 0x00, 0x00 };
+		const auto animatedRefCall = REL::Offset(kAnimatedRefCall).address();
+		const auto dynamicNodeCall = REL::Offset(kDynamicNodeCall).address();
+		if (std::memcmp(reinterpret_cast<const void*>(animatedRefCall), kCall.data(), kCall.size()) != 0 ||
+			std::memcmp(reinterpret_cast<const void*>(dynamicNodeCall), kCall.data(), kCall.size()) != 0) {
+			logger::warn("[DCLF] move events: the cells' update passes are not where expected; every mover is placed every frame");
+			return;
+		}
+		auto& trampoline = SKSE::GetTrampoline();
+		trampoline.write_call<6>(animatedRefCall, SelectiveUpdateCall::thunk);
+		trampoline.write_call<6>(dynamicNodeCall, SelectiveUpdateCall::thunk);
+		constexpr std::uintptr_t kAnimationGraphPlace = 0x66afa0;     // FUN_14066afa0
+		constexpr std::uintptr_t kReferenceUpdate3DPosition = 0x2d9800;  // TESObjectREFR::Update3DPosition
+		constexpr std::uintptr_t kActorUpdate3DPosition = 0x69eb80;   // Actor::UpdateActor3DPosition
+		constexpr std::uintptr_t kSkyCellSkin = 0x663430;             // FUN_140663430
+		constexpr std::uintptr_t kRagdollJob = 0x770dc0;              // FUN_140770dc0
+		constexpr std::uintptr_t kGraphAnimation = 0x2f75a0;          // FUN_1402f75a0
+		stl::detour_thunk<AnimationGraphPlace>(REL::Offset(kAnimationGraphPlace).address());
+		stl::detour_thunk<ReferenceUpdate3DPosition>(REL::Offset(kReferenceUpdate3DPosition).address());
+		stl::detour_thunk<ActorUpdate3DPosition>(REL::Offset(kActorUpdate3DPosition).address());
+		stl::detour_thunk<SkyCellSkin>(REL::Offset(kSkyCellSkin).address());
+		stl::detour_thunk<RagdollJob>(REL::Offset(kRagdollJob).address());
+		stl::detour_thunk<GraphAnimation>(REL::Offset(kGraphAnimation).address());
+		moveEventsInstalled = true;
+		logger::info("[DCLF] move events installed (animation, 3D positions, ragdolls, the cells' update passes)");
+	}
+
+	void InstallSceneEvents()
+	{
+		static bool installed = false;
+		if (installed)
+			return;
+		installed = true;
+		REL::Relocation<std::uintptr_t> vtable{ RE::VTABLE_BSFadeNode[0] };
+		const auto onVisible = reinterpret_cast<const std::uintptr_t*>(vtable.address())[0x34];
+		stl::detour_thunk<FadeOnVisible>(onVisible);
+		constexpr std::uintptr_t kPropertySetFlags = 0x147bee0;     // BSShaderProperty::SetFlags
+		constexpr std::uintptr_t kPropertySetMaterial = 0x147bff0;  // BSShaderProperty::SetMaterial
+		constexpr std::uintptr_t kPrependController = 0xd268d0;     // NiObjectNET::PrependController (FUN_140d268d0)
+		constexpr std::uintptr_t kHavokNodeTransform = 0xea55a0;    // FUN_140ea55a0: a node's transform from its rigid body
+		stl::detour_thunk<FadeUpdate>(REL::Offset(Engine::Address::kFadeUpdate).address());
+		stl::detour_thunk<LodLevelUpdate>(REL::Offset(Engine::Address::kLodLevelUpdate).address());
+		constexpr std::uintptr_t kFadeSnap = 0x147aa20;             // FUN_14147aa20: a fade node's placement snap
+		stl::detour_thunk<FadeSnap>(REL::Offset(kFadeSnap).address());
+		stl::write_vfunc<0xE1, ActorSetAlpha<ActorTable>>(RE::VTABLE_Actor[0]);
+		stl::write_vfunc<0xE1, ActorSetAlpha<CharacterTable>>(RE::VTABLE_Character[0]);
+		stl::write_vfunc<0xE1, ActorSetAlpha<PlayerTable>>(RE::VTABLE_PlayerCharacter[0]);
+		constexpr std::uintptr_t kFadeSetRange = 0x147a9b0;         // FUN_14147a9b0: a fade node's near and far
+		constexpr std::uintptr_t kFadeSetLodType = 0x147aa00;       // FUN_14147aa00: a fade node's LOD type
+		stl::detour_thunk<FadeSetRange>(REL::Offset(kFadeSetRange).address());
+		stl::detour_thunk<FadeSetLodType>(REL::Offset(kFadeSetLodType).address());
+		constexpr std::uintptr_t kRigidBodyMotionType = 0xb44490;  // FUN_140b44490: a rigid body's motion rebuilt (its type)
+		stl::detour_thunk<RigidBodyMotionType>(REL::Offset(kRigidBodyMotionType).address());
+		constexpr std::uintptr_t kRemoveController = 0xd269a0;     // NiObjectNET::RemoveController
+		constexpr std::uintptr_t kDismemberPartition = 0x21a530;   // BSDismemberSkinInstance::UpdateDismemberPartion
+		stl::detour_thunk<RemoveController>(REL::Offset(kRemoveController).address());
+		stl::detour_thunk<DismemberPartition>(REL::Offset(kDismemberPartition).address());
+		constexpr std::uintptr_t kBipedDismemberPartitions = 0x218200;  // FUN_140218200: a biped slot's dismember partitions
+		stl::detour_thunk<BipedDismemberPartitions>(REL::Offset(kBipedDismemberPartitions).address());
+		constexpr std::uintptr_t kGeometryAttachAlpha = 0x267cf0;  // BSGeometry::AttachProperty (the alpha)
+		stl::detour_thunk<GeometryAttachAlpha>(REL::Offset(kGeometryAttachAlpha).address());
+		constexpr std::uintptr_t kWeaponBloodGeometry = 0x14ab580;  // FUN_1414ab580: weapon blood under an object
+		stl::detour_thunk<WeaponBloodGeometry>(REL::Offset(kWeaponBloodGeometry).address());
+		constexpr std::uintptr_t kAlphasSetThreshold = 0x14ab770;  // FUN_1414ab770: the alpha thresholds under an object
+		stl::detour_thunk<AlphasSetThreshold>(REL::Offset(kAlphasSetThreshold).address());
+		constexpr std::uintptr_t kReleaseCollisionObject = 0xe880e0;  // FUN_140e880e0: a node's collision object released (a walk's visit)
+		stl::detour_thunk<ReleaseCollisionObject>(REL::Offset(kReleaseCollisionObject).address());
+		stl::detour_thunk<SetCollisionObject>(REL::Offset(0xe8bd40).address());  // FUN_140e8bd40: NiAVObject::SetCollisionObject
+		constexpr std::uintptr_t kPropertiesSetFlag = 0x147c1e0;  // FUN_14147c1e0: a shader flag on the properties under an object
+		stl::detour_thunk<PropertiesSetFlag>(REL::Offset(kPropertiesSetFlag).address());
+		constexpr std::uintptr_t kPropertiesSetFadeNode = 0x147c690;  // FUN_14147c690: the properties' fade node under an object
+		stl::detour_thunk<PropertiesSetFadeNode>(REL::Offset(kPropertiesSetFadeNode).address());
+		constexpr std::uintptr_t kLandSetupProperties = 0x2ad800;  // FUN_1402ad800: a land's quads' landscape properties
+		stl::detour_thunk<LandSetupProperties>(REL::Offset(kLandSetupProperties).address());
+		constexpr std::uintptr_t kLandBlendParams = 0x2ad0e0;  // FUN_1402ad0e0: a land's quads' LOD blend (T6b1a)
+		stl::detour_thunk<LandBlendParams>(REL::Offset(kLandBlendParams).address());
+		constexpr std::uintptr_t kPropertiesProjectedUV = 0x14abd10;  // FUN_1414abd10: projected UV on the properties under an object (T6b1a)
+		stl::detour_thunk<PropertiesProjectedUV>(REL::Offset(kPropertiesProjectedUV).address());
+		// A decal node's array edits (T6b1a): DecalArrayEdit.
+		stl::detour_thunk<DecalArrayEdit<0>>(REL::Offset(0x1fdfb0).address());
+		stl::detour_thunk<DecalArrayEdit<1>>(REL::Offset(0x1fdc80).address());
+		stl::detour_thunk<DecalArrayEdit<2>>(REL::Offset(0x1fdcb0).address());
+		stl::detour_thunk<DecalArrayEdit<3>>(REL::Offset(0x1fdd50).address());
+		stl::detour_thunk<DecalArrayEdit<4>>(REL::Offset(0x1fde40).address());
+		constexpr std::uintptr_t kCellPlaceReference = 0x2d1280;    // FUN_1402d1280: a reference's 3D placed in its cell
+		constexpr std::uintptr_t kCellPlaceReferenceAt = 0x2d5090;  // FUN_1402d5090: the same, another path
+		stl::detour_thunk<CellPlaceReference>(REL::Offset(kCellPlaceReference).address());
+		stl::detour_thunk<CellPlaceReferenceAt>(REL::Offset(kCellPlaceReferenceAt).address());
+		stl::detour_thunk<PropertySetFlags>(REL::Offset(kPropertySetFlags).address());
+		stl::detour_thunk<PropertySetMaterial>(REL::Offset(kPropertySetMaterial).address());
+		stl::detour_thunk<PrependController>(REL::Offset(kPrependController).address());
+		stl::detour_thunk<HavokNodeTransform>(REL::Offset(kHavokNodeTransform).address());
+		stl::write_vfunc<0x2A, LodFadeRenderPasses>(RE::VTABLE_BSLightingShaderProperty[0]);
+		constexpr std::uintptr_t kSkySetColor = 0x40d970;            // Sky::SetColor
+		constexpr std::uintptr_t kSetExternalEmittance = 0x1480fc0;  // FUN_141480fc0: external emittance, per property
+		stl::detour_thunk<SkySetColor>(REL::Offset(kSkySetColor).address());
+		stl::detour_thunk<SetExternalEmittance>(REL::Offset(kSetExternalEmittance).address());
+		stl::write_vfunc<0x31, PropertySetMaterialAlpha>(RE::VTABLE_BSLightingShaderProperty[0]);
+		lodFadeEventsInstalled = true;
+		// The switch nodes' selections are followed by event alone (the cut's memberLive, ApplySwitchEvents): without the stores' hooks
+		// (an unsupported build) DCLF cannot run.
+		if (!InstallSwitchStores())
+			stl::report_and_fail("Drawcall Limit Fix: the switch nodes' hooks could not be installed (an unsupported game build)");
+		// The mirror's currentFade (T6b1a): the cells' inline resets.
+		if (!InstallFadeResetStores())
+			stl::report_and_fail("Drawcall Limit Fix: the fade resets' hooks could not be installed (an unsupported game build)");
+		{
+			// NiSwitchNode's own child edits (NiNode vtable slots 0x35, 0x37-0x3C, as SceneTracker's).
+			DetourSwitchSlot<SwitchAttachChild>(0x35);
+			DetourSwitchSlot<SwitchDetachChild1>(0x37);
+			DetourSwitchSlot<SwitchDetachChild2>(0x38);
+			DetourSwitchSlot<SwitchDetachChildAt1>(0x39);
+			DetourSwitchSlot<SwitchDetachChildAt2>(0x3A);
+			DetourSwitchSlot<SwitchSetAt1>(0x3B);
+			DetourSwitchSlot<SwitchSetAt2>(0x3C);
+			switchEventsInstalled = true;
+		}
+		logger::info("[DCLF] scene events installed (fades, property flags, materials and material alpha, LOD fades, emittance, Havok node transforms, controllers): OnVisible at {:#x}",
+			onVisible - REL::Module::get().base() + 0x140000000);
+		InstallMoveEvents();
+		hiddenEventsInstalled = InstallHiddenStores();
+		lodSegmentEventsInstalled = InstallLodSegmentHooks();
+		TreeLod::Install();
+	}
+}

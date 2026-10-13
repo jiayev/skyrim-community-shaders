@@ -1,4 +1,4 @@
-// Drawcall Limit Fix: the scatter of the sort by pipeline (IndirectDraws.cpp, SortDraws). BuildDrawsCS appended this
+// Drawcall Limit Fix: the scatter of the sort by pipeline (Main/FrameLayout.h, DrawSort). BuildDrawsCS appended this
 // segment's sequences to the staging buffer, each with its rank among its pipeline's, and counted them per pipeline; the
 // prefix sum (RenderGraph/PrefixSumCS.hlsl) turned the counts into each pipeline's first slot. Sequence i goes to its
 // pipeline's first slot plus its rank, so the draw executes each pipeline's draws together and switches pipeline once per

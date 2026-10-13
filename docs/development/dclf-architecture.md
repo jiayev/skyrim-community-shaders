@@ -274,11 +274,11 @@ else is under `src/Features/DrawcallLimitFix/`:
 
 | Folder | What is in it |
 | --- | --- |
-| `Common/` | The switch registry (`Switches`) and the live toggles (`Toggles`), the coordinator and pool (`SceneScheduler`; `AsyncWorker`'s scene lane until it is folded in), the event queue, the render-thread budget, and the building blocks of the kept state: `KeptState`, `SlotTable` |
+| `Common/` | The switch registry (`Switches`) and the live toggles (`Toggles`), the coordinator and pool (`SceneScheduler`), the event queue, the render-thread budget, and the building blocks of the kept state: `KeptState`, `SlotTable` |
 | `Engine/` | Everything that hooks or reads the engine directly: `PassCapture`, `PrimaryCull`, `SunAccumulation`, `ShadowViews`, `SceneTracker`, `FaceSnapshots`, `ConstantMirror`, `EngineStates`, and `EngineAccess.h` (the shared raw-access helpers) |
-| `Scene/` | `SceneStore` (interface `SceneStore.h`, implementation `SceneStore/`), the record layouts (`Records.h`), the lookups, and what a record is derived from: `MaterialSources`, `ConstantEvaluator`, `LightingConstants`, `LightingDescriptors`, `VertexInput` |
+| `Scene/` | `SceneStore` (interface `SceneStore.h`, implementation `SceneStore/`), the record layouts (`Records.h`), the lookups, and what a record is derived from: `MaterialSources`, `ConstantEvaluator` (the constant layouts and the technique evaluation), `EngineShaders`, `LightingConstants`, `LightingDescriptors`, `VertexInput` |
 | `Draws/` | `IndirectDraws` (interface `IndirectDraws.h`, statistics `IndirectDrawStats.h`, implementation `IndirectDraws/`), the pipelines (`DrawPipelines`), the SPIR-V programs (`ShaderPrograms`, `SpirvReflection`), and the game's buffers and textures as the graph sees them (`GpuResources`, `GpuTextures`) |
-| `Published/` | The scene graph the producers run on (`SceneGraph`, `PublishedSceneExecutor`), and the capture foundation ([dclf-async-publication.md](./dclf-async-publication.md)) |
+| `Published/` | The scene graph the producers run on (`SceneGraph`, `PublishedSceneExecutor`; [dclf-async-publication.md](./dclf-async-publication.md)) |
 | `Diagnostics/` | Capture parity, the periodic report (`Report.cpp`), the open defects' probes and the test harness |
 
 Inside `SceneStore/` and `IndirectDraws/`, `Internal.h` is shared by that folder's files only:
@@ -321,10 +321,8 @@ normal run draws.
 | Flag | Switch | What it means |
 | --- | --- | --- |
 | `<- PHASES`, `<- HOLES` | always | The capability changed outside a toggle, a load or `failed`; a view not drawn while casters were withheld from it |
-| `<- REVISION` | `CS_DCLF_REVISION_PARITY` | A commit's values differ from the revision's shape (latch, bucket plan, latched copies) |
-| `<- LATCH` | `CS_DCLF_REVISION_PARITY` | Values clamped to the revision's latch: the latch grew after the revision was made |
-| `<- SHAPE KEY` | `CS_DCLF_REVISION_PARITY` | Shapes made around a parity frame differ under an unchanged shapes key: an input the key does not name |
-| `<- STALE`, `<- UNREVISED`, `<- UNBUILT` | `CS_DCLF_REVISION_PARITY`; always | The installed payload built for other inputs; an epoch without the revision's recording; a publication without a payload for the resources |
+| `<- LATCH` | always | Values clamped to the revision's latch: the latch grew after the revision was made |
+| `<- UNREVISED`, `<- UNBUILT` | always | An epoch without the revision's recording; a publication without a payload for the resources |
 | `<- CANDIDATES` | `CS_DCLF_PERSISTENT_PARITY` | The candidate tables against a fresh build |
 | `<- CUT` | `CS_DCLF_PERSISTENT_PARITY` | The stand-in cut against a whole plan |
 | `<- COMMIT` | `CS_DCLF_SET_PARITY` | The set's incremental commit against a full evaluation |

@@ -1,0 +1,62 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+
+namespace DCLF::Reports
+{
+	/**
+	 * @brief The report schedule: every module's report lines cover the same window of kInterval frames.
+	 *
+	 * The modules count (their Counters, taken by the report); the report files here (Diagnostics/Reports/<Module>.cpp) format the
+	 * lines. Two threads report: the render thread at Present, once per frame number (Due), and the coordinator from its pass, which may
+	 * skip frame numbers (Crossing). A module with no frame number of its own counts its calls (Window).
+	 */
+	constexpr std::uint32_t kInterval = 300;
+
+	/** @brief The render thread's clock: frame a_frame (each number once) ends a window. */
+	constexpr bool Due(std::uint32_t a_frame) { return a_frame % kInterval == 0; }
+
+	/** @brief A clock that may skip frame numbers: due when a_frame is in a later window than the last call's. */
+	struct Crossing
+	{
+		std::uint32_t window = 0;
+
+		bool Due(std::uint32_t a_frame)
+		{
+			const std::uint32_t now = a_frame / kInterval;
+			if (now == window)
+				return false;
+			window = now;
+			return true;
+		}
+	};
+
+	/** @brief A module's own count of calls: due on every kInterval-th Tick. */
+	struct Window
+	{
+		std::uint32_t count = 0;
+
+		bool Tick()
+		{
+			if (++count < kInterval)
+				return false;
+			count = 0;
+			return true;
+		}
+	};
+
+	/** @brief Render thread, Present, once per frame number while DCLF runs: the frame's report lines (Frame.cpp). */
+	void RenderThread(std::uint32_t a_frame);
+
+	/** @brief The main camera's native passes since the last report, and the set members' among them (a leak: must be 0). */
+	struct LeakStats
+	{
+		std::uint64_t offered = 0, leakedInDepth = 0, leakedInOpaque = 0;
+		std::vector<std::string> samples;  // the first few leaks
+	};
+	/** @brief Render thread: the leak counts (FeatureInstall.cpp's observer counts them, the frame report takes them). */
+	LeakStats& Leaks();
+}

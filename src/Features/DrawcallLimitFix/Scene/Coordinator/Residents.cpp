@@ -1,0 +1,505 @@
+#include "Internal.h"
+
+#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
+
+namespace DCLF::Scene
+{
+	void Coordinator::MarkResidentSlot(std::uint32_t a_slot, const ResidentPatch& a_patch)
+	{
+		NoteResidentTouched(a_slot);
+		if (residentPos.size() <= a_slot)
+			residentPos.resize(std::max<std::size_t>(a_slot + 1, tables.objects.size()), kNotResident);
+		// The accumulate phase notes the join, and a patch that changed, with the rest of its write.
+		ListTree(a_slot);
+		if (residentPos[a_slot] != kNotResident) {
+			residentPatches[residentPos[a_slot]] = a_patch;
+			return;
+		}
+		residentPos[a_slot] = static_cast<std::uint32_t>(residents.size());
+		residents.push_back(a_slot);
+		residentPatches.push_back(a_patch);
+		if (a_slot < tables.residentSlot.size())
+			tables.residentSlot[a_slot] = 1;
+		Diagnostics::Notify(Diagnostics::ResidentBound{ *this, a_slot });
+	}
+
+	void Coordinator::DropResidentSlot(std::uint32_t a_slot, bool a_restore)
+	{
+		if (!IsResidentSlot(a_slot))
+			return;
+		NoteResidentTouched(a_slot);
+		const std::uint32_t at = residentPos[a_slot];
+		const std::uint32_t last = residents.back();
+		residents[at] = last;
+		residentPatches[at] = residentPatches.back();
+		residentPos[last] = at;
+		residents.pop_back();
+		residentPatches.pop_back();
+		residentPos[a_slot] = kNotResident;
+		UnlistTree(a_slot);
+		// The scene work's drops reach PrimaryCull as set changes (ApplySet) or as revoked claims (RevokeUndrawnClaims); the
+		// accumulate phase's, at once.
+		if (a_slot < tables.objectGeometry.size() && tables.objectGeometry[a_slot]) {
+			if (!holdPrimaryNotes)
+				PrimaryCull::Get().NoteMemberLost(tables.objectGeometry[a_slot]);
+			else if (holdLostMembers)
+				channels.primaryNotes.Push({ PrimaryNote::Kind::MemberLost, tables.objectGeometry[a_slot] });
+		}
+		if (a_slot < tables.residentSlot.size()) {
+			tables.residentSlot[a_slot] = 0;
+			tables.NoteChange(a_slot, kChangeMembership);
+		}
+		if (memberDecals.erase(a_slot))
+			NoteDecalChanged(a_slot);
+		if (a_restore)
+			ResetAccumulatedHalf(a_slot);
+		// A layer and its base are members together (WriteLayer): the other leaves too.
+		const std::uint32_t partner = tables.IsLayer(a_slot) ? tables.layerBase[a_slot] : a_slot < tables.layerOf.size() ? tables.layerOf[a_slot] : kNoObjectSlot;
+		if (partner != kNoObjectSlot)
+			DropResidentSlot(partner, a_restore);
+	}
+
+	void Coordinator::EndAllResidency()
+	{
+		residentMaintenanceDirty = true;
+		if (holdPrimaryNotes)
+			channels.primaryNotes.Push({ PrimaryNote::Kind::AllMembersLost, nullptr });
+		else
+			PrimaryCull::Get().NoteAllMembersLost();
+		memberDecals.clear();
+		NoteDecalsCleared();
+		for (const std::uint32_t slot : residents) {
+			UnlistTree(slot);
+			ResetAccumulatedHalf(slot);
+			residentPos[slot] = kNotResident;
+			if (slot < tables.residentSlot.size()) {
+				tables.residentSlot[slot] = 0;
+				tables.NoteChange(slot, kChangeMembership);
+			}
+		}
+		residents.clear();
+		residentPatches.clear();
+	}
+
+	void Coordinator::KeepResidentsAlive()
+	{
+		ZoneScopedN("CS.DCLF.Accumulate.KeepResidents");
+		auto& counted = residentCounted;
+		if (counted.size() < tables.objects.size())
+			counted.resize(tables.objects.size());
+		if (materialMembers.size() < tables.materials.size())
+			materialMembers.resize(tables.materials.size(), 0);
+		std::vector<std::uint32_t> pipelinesTouched, materialsTouched;
+		bool treesTouched = false;
+		// A resident's keys now (none for a slot that is not resident).
+		auto keysOf = [&](std::uint32_t a_slot) {
+			ResidentCounted keys;
+			if (!IsResidentSlot(a_slot) || a_slot >= tables.objects.size())
+				return keys;
+			const auto& object = tables.objects[a_slot];
+			keys.pipeline = object.pipelineIndex;
+			keys.material = object.materialIndex;
+			keys.tree = (object.flags & kObjectTreeAnim) != 0;
+			return keys;
+		};
+		auto uncount = [&](std::uint32_t a_slot) {
+			auto& was = counted[a_slot];
+			if (was.pipeline != ResidentCounted::kNone) {
+				pipelineMembers.Remove(was.pipeline, a_slot);
+				pipelinesTouched.push_back(was.pipeline);
+			}
+			if (was.material != ResidentCounted::kNone && was.material < materialMembers.size()) {
+				--materialMembers[was.material];
+				materialsTouched.push_back(was.material);
+			}
+			if (was.tree) {
+				treeMembers.Remove(0, a_slot);
+				treesTouched = true;
+			}
+			was = {};
+		};
+		auto count = [&](std::uint32_t a_slot) {
+			const auto keys = keysOf(a_slot);
+			if (keys.pipeline == ResidentCounted::kNone)
+				return;
+			pipelineMembers.Add(keys.pipeline, a_slot);
+			pipelinesTouched.push_back(keys.pipeline);
+			if (materialMembers.size() <= keys.material)
+				materialMembers.resize(std::size_t(keys.material) + 1, 0);
+			++materialMembers[keys.material];
+			materialsTouched.push_back(keys.material);
+			if (keys.tree) {
+				treeMembers.Add(0, a_slot);
+				treesTouched = true;
+			}
+			counted[a_slot] = keys;
+		};
+		if (residentMaintenanceDirty) {
+			// Every residency ended, or the tables were reset: everything counted again.
+			ZoneScopedN("CS.DCLF.Accumulate.RebuildResidentMaintenance");
+			counted.assign(tables.objects.size(), ResidentCounted{});
+			pipelineMembers.Clear();
+			treeMembers.Clear();
+			materialMembers.assign(tables.materials.size(), 0);
+			tables.ClearUsed();
+			for (const std::uint32_t slot : residents)
+				count(slot);
+			treesTouched = true;
+			residentMaintenanceDirty = false;
+		} else {
+			// The slots named since: their old keys out (all of them first: a fade root freed and listed again for another node
+			// within the frame), then their keys now.
+			std::sort(residentsTouched.begin(), residentsTouched.end());
+			residentsTouched.erase(std::unique(residentsTouched.begin(), residentsTouched.end()), residentsTouched.end());
+			for (const std::uint32_t slot : residentsTouched)
+				if (slot < counted.size())
+					uncount(slot);
+			for (const std::uint32_t slot : residentsTouched)
+				if (slot < counted.size())
+					count(slot);
+		}
+		residentsTouched.clear();
+		// The used sets: a pipeline or material is used while a resident holds it. The joins marked theirs as they bound; one
+		// whose join failed is no resident's.
+		pipelinesTouched.insert(pipelinesTouched.end(), joinMarkedPipelines.begin(), joinMarkedPipelines.end());
+		materialsTouched.insert(materialsTouched.end(), joinMarkedMaterials.begin(), joinMarkedMaterials.end());
+		joinMarkedPipelines.clear();
+		joinMarkedMaterials.clear();
+		for (const std::uint32_t p : pipelinesTouched)
+			tables.SetPipelineUsed(p, pipelineMembers.Count(p) != 0);
+		for (const std::uint32_t m : materialsTouched)
+			tables.SetMaterialUsed(m, m < materialMembers.size() && materialMembers[m] != 0);
+		// The members TreeWindCS writes the wind of, by their tree slots (in slot order).
+		if (treesTouched) {
+			std::vector<std::uint32_t> slots = treeMembers.lists.empty() ? std::vector<std::uint32_t>{} : treeMembers.lists[0];
+			std::sort(slots.begin(), slots.end());
+			std::vector<TreeObject> treeObjects;
+			treeObjects.reserve(slots.size());
+			for (const std::uint32_t slot : slots)
+				if (slot < tables.objectTree.size() && tables.objectTree[slot] != kNoTree)
+					treeObjects.push_back({ slot, tables.objectTree[slot] });
+			if (treeObjects.size() != tables.treeObjects.size() ||
+				std::memcmp(treeObjects.data(), tables.treeObjects.data(), treeObjects.size() * sizeof(TreeObject)) != 0) {
+				tables.treeObjects = std::move(treeObjects);
+				++tables.treeObjectsVersion;
+				tables.NoteTreesWrite();
+			}
+		}
+		// A member's property is its pipeline's lighting template, read again every frame: the property is the engine's, and a
+		// swap of it rewrites the member only when an event names it.
+		for (std::uint32_t p = 0; p < pipelineMembers.lists.size(); ++p)
+			if (const std::uint32_t slot = pipelineMembers.First(p); slot != ~0u && p < tables.geometryTemplate.size())
+				tables.geometryTemplate[p] = SlotProperty(slot);
+		// A tree's wind is TreeWindCS's from here (Records.h, TreeStatic): nothing is taken from the tree nodes per frame.
+	}
+
+	RE::NiPointer<RE::NiAVObject> Coordinator::HeldFadeNode(std::uint32_t a_slot, const void* a_node)
+	{
+		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
+		const auto it = geometry ? tracked.find(const_cast<RE::BSGeometry*>(geometry)) : tracked.end();
+		if (it != tracked.end() && it->second.fadeNodeRef.get() == a_node)
+			return it->second.fadeNodeRef;
+		// The mirror names another node than the entry holds (a field no capture brought): taken now, as at a capture (AcquireFadeNode).
+		if (it != tracked.end()) {
+			HandBack(std::move(it->second.fadeNodeRef));
+			if (AcquireFadeNode(it->second, a_node, "a listing"))
+				return it->second.fadeNodeRef;
+		}
+		// Asked of the render thread: listed when its answer comes (ApplyFadeNodeAnswers).
+		++referenceStats.fadeRootsUnowned;
+		return nullptr;
+	}
+
+	void Coordinator::ListTree(std::uint32_t a_slot)
+	{
+		// The walk parity's dense walk restores the tables, not the owners kept beside them (as ListFadeRoot).
+		if (denseWalk)
+			return;
+		const bool tree = a_slot < tables.objects.size() && (tables.objects[a_slot].flags & kObjectTreeAnim);
+		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
+		// The tree node from the mirror (its property's fade node, a BSTreeNode); its values are the seed's, which the render thread takes
+		// at the frame's start (T6b1a: the scene work reads no engine memory, and runs no engine code).
+		TreeStatic row;
+		const void* node = nullptr;
+		if (const auto* record = tree && geometry ? mirror.Leaf(geometry).property : nullptr; record && record->fadeNode)
+			if (const auto* fade = mirror.Node(record->fadeNode); fade && (fade->kind & SceneCapture::kKindTree))
+				node = record->fadeNode;
+		// T6b3e: a node not listed yet is owned from the entry's reference (pins), never from the key; without one, nodeless.
+		RE::NiPointer<RE::NiAVObject> owner;
+		if (node && !tables.treeIndex.contains(node) && !(owner = HeldFadeNode(a_slot, node)))
+			node = nullptr;
+		if (tables.objectTree.size() <= a_slot) {
+			tables.NoteTreesWrite();
+			tables.objectTree.resize(std::size_t(a_slot) + 1, kNoTree);
+		}
+		auto& current = tables.objectTree[a_slot];
+		const std::uint32_t wanted = !tree ? kNoTree : !node ? kNodelessTree : kNoTree;
+		// Already under this node (a patch that changed something else), or nodeless and staying so.
+		if (node && current < tables.treeNode.size() && tables.treeNode[current] == node)
+			return;
+		if (!node && current == wanted)
+			return;
+		tables.NoteTreesWrite();
+		UnlistTree(a_slot);
+		if (!node) {
+			current = wanted;
+			NoteResidentTouched(a_slot);
+			return;
+		}
+		auto [it, inserted] = tables.treeIndex.try_emplace(node, 0u);
+		if (inserted) {
+			std::uint32_t t;
+			if (!tables.treeFree.empty()) {
+				t = tables.treeFree.back();
+				tables.treeFree.pop_back();
+			} else {
+				t = static_cast<std::uint32_t>(tables.trees.size());
+				tables.trees.emplace_back();
+				tables.treeRefs.push_back(0);
+				tables.treeNode.push_back(nullptr);
+			}
+			row.generation = ++tables.treeGenerations;
+			row.seedOdd = (tables.trees[t].seedOdd & 1u) ^ 1u;
+			tables.trees[t] = row;
+			tables.treeNode[t] = node;
+			// Owned while listed (step 6e E3: a published version that names it keeps it, through the retirement chain).
+			if (treeOwners.size() <= t)
+				treeOwners.resize(std::size_t(t) + 1);
+			treeOwners[t] = std::move(owner);
+			treeSeedRequests.push_back({ treeOwners[t], t, row.generation, 2 * t + row.seedOdd });
+			it->second = t;
+			++tables.treesVersion;
+		}
+		++tables.treeRefs[it->second];
+		current = it->second;
+		NoteResidentTouched(a_slot);
+	}
+
+	void Coordinator::ListFadeRoot(std::uint32_t a_slot)
+	{
+		// The walk parity's dense walk restores the tables, not the members kept beside them.
+		if (denseWalk)
+			return;
+		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
+		// Its property's fade node (T6b1b: the mirror's).
+		const auto* property = geometry ? mirror.Leaf(geometry).property : nullptr;
+		const auto* node = property ? static_cast<const RE::NiAVObject*>(property->fadeNode) : nullptr;
+		// T7f item 7: the engine's "no fade node" (Engine::EmptyFadeNode: terrain, object LOD, references whose root is no BSFadeNode) is no
+		// root. Listed, it was one root shared by thousands of geometries, outside the scene graph: no chain reached it (SetChain's misses),
+		// and FadeStateCS and the write-back wrote a static engine node. Such a geometry takes its entry's root as any plain one.
+		static const bool emptyIsNone = SwitchOnUnlessZero(Switch::EmptyFadeNode);
+		if (emptyIsNone && node == Engine::EmptyFadeNode())
+			node = nullptr;
+		// T6b3e: a root not listed yet is owned from the entry's reference (pins), never from the key; without one, not listed.
+		RE::NiPointer<RE::NiAVObject> owner;
+		if (node && !tables.fadeRootIndex.contains(node) && !(owner = HeldFadeNode(a_slot, node)))
+			node = nullptr;
+		if (tables.objectFadeRoot.size() <= a_slot) {
+			tables.NoteFadeRootsWrite();
+			tables.objectFadeRoot.resize(std::size_t(a_slot) + 1, kNoFadeRoot);
+		}
+		auto& current = tables.objectFadeRoot[a_slot];
+		if (node && current < tables.fadeRootNode.size() && tables.fadeRootNode[current] == node)
+			return;
+		if (!node && current == kNoFadeRoot)
+			return;
+		tables.NoteFadeRootsWrite();
+		UnlistFadeRoot(a_slot);
+		if (!node)
+			return;
+		auto [it, inserted] = tables.fadeRootIndex.try_emplace(node, 0u);
+		if (inserted) {
+			std::uint32_t r;
+			if (!tables.fadeRootFree.empty()) {
+				r = tables.fadeRootFree.back();
+				tables.fadeRootFree.pop_back();
+			} else {
+				r = static_cast<std::uint32_t>(tables.fadeRoots.size());
+				tables.fadeRoots.emplace_back();
+				tables.fadeRootRefs.push_back(0);
+				tables.fadeRootNode.push_back(nullptr);
+			}
+			// The coordinator's half from the mirror; the node's state and values are the seed's, sampled by FrameValues in the frame
+			// that first draws the generation (T6b1a: the scene work reads no engine memory).
+			auto row = FadeRootFromMirror(node);
+			row.object = a_slot;
+			row.bits |= tables.fadeRoots[r].bits & kFadeRootSeedOdd;
+			if (const auto owned = fadeRootOwned.find(node); owned != fadeRootOwned.end())
+				row.bits |= kFadeRootOwned | (owned->second ? kFadeRootStoodIn | kFadeRootWritten : 0u);
+			// T7f checklist items 4-5: every listed root is owned and DCLF's to write from its listing (the row's seed is the node as listed).
+			row.bits |= kFadeRootOwned | kFadeRootWritten;
+			tables.fadeRootNode[r] = node;
+			// Owned while listed (step 6e E3: a published version that names it keeps it, through the retirement chain).
+			if (fadeRootOwners.size() <= r)
+				fadeRootOwners.resize(std::size_t(r) + 1);
+			fadeRootOwners[r] = std::move(owner);
+			RequestFadeSeed(r, row);
+			tables.fadeRoots[r] = row;
+			if (const auto* record = mirror.Node(node); record && record->treeLodSwitch)
+				tables.fadeRootSwitch.insert_or_assign(record->treeLodSwitch, r);
+			it->second = r;
+			tables.NoteFadeRoot(r);
+		}
+		++tables.fadeRootRefs[it->second];
+		fadeRootMembers.Add(it->second, a_slot);
+		current = it->second;
+		// The shadow inputs name it (FadeRootOf).
+		tables.NoteChange(a_slot, kChangeBindings);
+	}
+
+	void Coordinator::UnlistFadeRoot(std::uint32_t a_slot)
+	{
+		if (denseWalk || a_slot >= tables.objectFadeRoot.size() || tables.objectFadeRoot[a_slot] == kNoFadeRoot)
+			return;
+		tables.NoteFadeRootsWrite();
+		auto& current = tables.objectFadeRoot[a_slot];
+		if (fadeRootMembers.Has(current, a_slot))
+			fadeRootMembers.Remove(current, a_slot);
+		// The root's centre is a record that holds it (its fade node row): another one when this was it.
+		if (current < tables.fadeRoots.size() && tables.fadeRoots[current].object == a_slot && tables.fadeRootRefs[current] > 1) {
+			tables.fadeRoots[current].object = fadeRootMembers.First(current);
+			tables.NoteFadeRoot(current);
+		}
+		if (current < tables.fadeRootRefs.size() && --tables.fadeRootRefs[current] == 0) {
+			const auto* node = static_cast<const RE::NiAVObject*>(tables.fadeRootNode[current]);
+			std::erase_if(tables.fadeRootSwitch, [&](const auto& a_entry) { return a_entry.second == current; });
+			tables.fadeRootIndex.erase(node);
+			tables.fadeRootNode[current] = nullptr;
+			if (current < fadeRootOwners.size())
+				HandBack(std::move(fadeRootOwners[current]));
+			tables.fadeRoots[current] = FadeRootStatic{};
+			tables.Retire(Tables::kRetiredFadeRoot, current);
+			tables.NoteFadeRoot(current);
+		}
+		current = kNoFadeRoot;
+	}
+
+	void Coordinator::MarkFadeRootOwned(const void* a_node, bool a_owned, bool a_standIn)
+	{
+		const auto it = tables.fadeRootIndex.find(a_node);
+		if (it == tables.fadeRootIndex.end())
+			return;
+		auto& row = tables.fadeRoots[it->second];
+		// T7f checklist items 4-5: owned and written since its listing, its state the GPU's throughout (no engine step to seed again from):
+		// the cut's stand-in only moves kFadeRootStoodIn.
+		row.bits = (row.bits & ~kFadeRootStoodIn) | kFadeRootOwned | kFadeRootWritten | (a_owned && a_standIn ? kFadeRootStoodIn : 0u);
+		tables.NoteFadeRoot(it->second);
+	}
+
+	void Coordinator::ApplyFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned)
+	{
+		ankerl::unordered_dense::map<const void*, bool> owned;
+		for (const auto& root : a_owned)
+			owned.insert_or_assign(root.node, root.standIn);
+		for (const auto& [node, standIn] : fadeRootOwned)
+			if (!owned.contains(node))
+				MarkFadeRootOwned(node, false, false);
+		for (const auto& [node, standIn] : owned)
+			if (const auto it = fadeRootOwned.find(node); it == fadeRootOwned.end() || it->second != standIn)
+				MarkFadeRootOwned(node, true, standIn);
+		fadeRootOwned = std::move(owned);
+	}
+
+	void Coordinator::ReseedFadeRoot(const void* a_node)
+	{
+		const auto it = tables.fadeRootIndex.find(a_node);
+		if (it == tables.fadeRootIndex.end())
+			return;
+		auto& row = tables.fadeRoots[it->second];
+		const std::uint32_t object = row.object;
+		const std::uint32_t kept = row.bits & (kFadeRootOwned | kFadeRootStoodIn | kFadeRootSeedOdd | kFadeRootWritten);
+		row = FadeRootFromMirror(a_node);
+		row.object = object;
+		row.bits |= kept;
+		RequestFadeSeed(it->second, row);
+		tables.NoteFadeRoot(it->second);
+	}
+
+	FadeRootStatic Coordinator::FadeRootFromMirror(const void* a_node)
+	{
+		// What the coordinator's row holds of the node (CheckFadeInputs, the builds' state until the seed's): the fade's range, +0x109,
+		// the fadeAmount, the tree LOD switch's selection; and the state as far as the mirror holds it (the fade and the levels), the
+		// builds' until FadeStateCS's first update. The plan here is a guess (the seed's bits are the node's).
+		FadeRootStatic row;
+		const auto* node = mirror.Node(a_node);
+		if (!node) {
+			// Its geometry tracked this frame by a walk the mirror's captures lag (CaptureMirrorRequests takes it next frame), or a
+			// property's fade node outside the world: the seed brings the node's values.
+			++placementStats.fadeRootsUnmirrored;
+			return row;
+		}
+		row.initial.currentFade = node->currentFade;
+		row.initial.levels = node->fadeLevel | (std::uint32_t(node->fadeType) << 8);
+		row.fadeAmount = node->fadeAmount;
+		row.nearDistance = node->fadeNear;
+		row.farDistance = node->fadeFar;
+		row.bits = (std::uint32_t(node->fade109) << kFadeRootBitsShift) |
+		           ((node->kind & SceneCapture::kKindTree) ? (kFadeRootTree | kFadeRootTreeThresholds) : kFadeRootFade);
+		if (node->treeLodSwitch)
+			if (const auto* lodSwitch = mirror.Node(node->treeLodSwitch); lodSwitch && lodSwitch->switchIndex > 0)
+				row.bits |= kFadeRootTreeLod;
+		return row;
+	}
+
+	void Coordinator::RequestFadeSeed(std::uint32_t a_root, FadeRootStatic& a_row)
+	{
+		a_row.bits ^= kFadeRootSeedOdd;
+		a_row.generation = ++tables.fadeRootGenerations;
+		if (a_root < fadeRootOwners.size() && fadeRootOwners[a_root])
+			fadeSeedRequests.push_back({ fadeRootOwners[a_root], a_root, a_row.generation, static_cast<std::uint32_t>(FadeSeedRow(a_root, a_row.bits)) });
+	}
+
+	void Coordinator::RefreshFadeRootSwitch(const RE::NiAVObject* a_switch)
+	{
+		const auto it = tables.fadeRootSwitch.find(a_switch);
+		if (it == tables.fadeRootSwitch.end() || it->second >= tables.fadeRoots.size() || !tables.fadeRootNode[it->second])
+			return;
+		auto& row = tables.fadeRoots[it->second];
+		// The mirror's (T6b1a: the switch's stores carry its index, applied before the switch events).
+		const auto* lodSwitch = mirror.Node(a_switch);
+		const bool selected = lodSwitch && lodSwitch->switchIndex > 0;
+		if (selected == ((row.bits & kFadeRootTreeLod) != 0))
+			return;
+		// An input, not state: the row changes without a new generation, so the GPU's state row is kept.
+		row.bits = selected ? (row.bits | kFadeRootTreeLod) : (row.bits & ~kFadeRootTreeLod);
+		tables.NoteFadeRoot(it->second);
+	}
+
+	void Coordinator::RefreshFadeAmount(const void* a_node)
+	{
+		// The key alone until it names a listed root, which the listing holds.
+		const auto it = tables.fadeRootIndex.find(a_node);
+		if (it == tables.fadeRootIndex.end())
+			return;
+		auto& row = tables.fadeRoots[it->second];
+		// The mirror's (T6b1a: Actor::SetAlpha's update carries it, applied before this batch's structural events).
+		const auto* record = mirror.Node(a_node);
+		if (!record)
+			return;
+		const float amount = record->fadeAmount;
+		if (std::memcmp(&amount, &row.fadeAmount, sizeof(amount)) == 0)
+			return;
+		// An input, not state: the GPU's state row is kept, and FadeStateCS steps its amountFade toward it as the engine does.
+		row.fadeAmount = amount;
+		tables.NoteFadeRoot(it->second);
+	}
+
+	void Coordinator::UnlistTree(std::uint32_t a_slot)
+	{
+		if (a_slot >= tables.objectTree.size())
+			return;
+		tables.NoteTreesWrite();
+		auto& current = tables.objectTree[a_slot];
+		if (current < tables.treeRefs.size() && --tables.treeRefs[current] == 0) {
+			tables.treeIndex.erase(tables.treeNode[current]);
+			tables.treeNode[current] = nullptr;
+			if (current < treeOwners.size())
+				HandBack(std::move(treeOwners[current]));
+			tables.Retire(Tables::kRetiredTree, current);
+		}
+		if (current != kNoTree)
+			NoteResidentTouched(a_slot);
+		current = kNoTree;
+	}
+}

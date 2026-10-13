@@ -1,0 +1,236 @@
+#include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
+#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/EffectConstants.h"
+
+#include "Features/DrawcallLimitFix/Runtime/RenderThreadBudget.h"
+#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
+
+#include <array>
+#include <cstring>
+#include <string>
+
+#include <ankerl/unordered_dense.h>
+
+#include "FrameAnnotations.h"
+#include "Features/Skin.h"
+#include "State.h"
+#include "TruePBR.h"
+
+namespace DCLF
+{
+	namespace
+	{
+		// featureTextures' entries are Advanced Skin's two, then TruePBR's slots in register order.
+		static_assert(std::tuple_size_v<Skin::MaterialTextures> == kSkinFeatureTextures);
+		static_assert(kTruePBRFeatureTextures + TruePBR::NumExtendedTextures == kFeatureMaterialTextures &&
+					  kFeatureMaterialRegisters[kTruePBRFeatureTextures] == TruePBR::FirstExtendedTexture);
+
+		StageLayout MakeLayout(std::uint32_t a_count, std::initializer_list<std::pair<std::uint32_t, std::uint32_t>> a_sizes,
+			std::initializer_list<std::uint32_t> a_scratch)
+		{
+			StageLayout layout{};
+			layout.count = a_count;
+			layout.size.fill(4);
+			for (auto [variable, size] : a_sizes)
+				layout.size[variable] = static_cast<std::uint8_t>(size);
+			// Variables nothing reads (the per-geometry point lights under Light Limit Fix) share one region at the end.
+			constexpr std::uint32_t kScratchRegion = 228;
+			std::uint32_t next = 0;
+			for (std::uint32_t i = 0; i < a_count; ++i) {
+				if (std::find(a_scratch.begin(), a_scratch.end(), i) != a_scratch.end()) {
+					layout.offset[i] = static_cast<std::uint8_t>(kScratchRegion);
+					continue;
+				}
+				layout.offset[i] = static_cast<std::uint8_t>(next);
+				next += layout.size[i];
+			}
+			return layout;
+		}
+	}
+
+	const StageLayout& LightingVSLayout()
+	{
+		// World, PreviousWorld and TextureProj are float3x4; Bones (skinned only) never needs real storage.
+		static const StageLayout layout = MakeLayout(kLightingVSVariables, { { 0, 12 }, { 1, 12 }, { 6, 12 } }, { 16 });
+		return layout;
+	}
+
+	const StageLayout& LightingPSLayout()
+	{
+		// DirectionalAmbient is float3x4; PointLightPosition/Color[7] (1, 2) are unused with Light Limit Fix.
+		static const StageLayout layout = MakeLayout(kLightingPSVariables, { { 5, 12 }, { 1, 28 }, { 2, 28 } }, { 1, 2 });
+		return layout;
+	}
+
+	const StageLayout& EffectVSLayout()
+	{
+		// World, PreviousWorld and MatProj are float3x4 (MatProj a float4[3]); Bones (skinned only) never needs real storage.
+		static const StageLayout layout = MakeLayout(kEffectVSVariables, { { kEffectVSWorld, 12 }, { kEffectVSPreviousWorld, 12 }, { kEffectVSMatProj, 12 } }, { kEffectVSBones });
+		return layout;
+	}
+
+	const StageLayout& EffectPSLayout()
+	{
+		static const StageLayout layout = MakeLayout(kEffectPSVariables, {}, {});
+		return layout;
+	}
+
+	void ConstantBlock::Reset()
+	{
+		floats.fill(std::bit_cast<float>(kUnwrittenBits));
+	}
+
+	void LodHighDetailRange(float* a_out)
+	{
+		// The frame's sample (T6b2c). The draws take theirs from the technique rows of the frame's tables (the coordinator's, from the
+		// sample of the frame that published them), so the Z-prepass and the colour pass of a frame draw the same range.
+		const auto& range = FrameGlobals::Current().technique.highDetailRange;
+		std::memcpy(a_out, range.data(), sizeof(range));
+	}
+
+	TechniqueInputs SampleTechniqueInputs()
+	{
+		TechniqueInputs in;
+		// The loaded grid's centre and half extents (0x142033094, written by FUN_141480ab0 from the terrain manager's update), less
+		// 15 units in z and w (0x141ad28d0). SetupTechnique also takes the camera's posAdjust off the centre; DCLF's draws take
+		// their own eye off it in the vertex shader (Lighting.hlsl, DCLF_BINDLESS), so the value changes only with the grid.
+		static const REL::Relocation<const float*> highDetailRange{ REL::Offset(Engine::Address::kHighDetailRange) };
+		static const REL::Relocation<const float*> margin{ REL::Offset(Engine::Address::kHighDetailMargin) };
+		const float* range = highDetailRange.get();
+		in.highDetailRange = { range[0], range[1], range[2] - *margin.get(), range[3] - *margin.get() };
+		// The shadow mask (t14): its view, filter (point unless iShadowMaskQuarter is 4) and inverse size.
+		if (auto* renderer = globals::game::renderer) {
+			const auto& target = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kSHADOW_MASK];
+			in.shadowMask = reinterpret_cast<ID3D11ShaderResourceView*>(target.SRV);
+			if (target.texture) {
+				D3D11_TEXTURE2D_DESC desc{};
+				reinterpret_cast<ID3D11Texture2D*>(target.texture)->GetDesc(&desc);
+				in.shadowMaskSized = true;
+				in.shadowMaskInverseSize = { 1.0f / static_cast<float>(desc.Width), 1.0f / static_cast<float>(desc.Height) };
+			}
+		}
+		static RE::Setting* quarter = RE::GetINISetting("iShadowMaskQuarter:Display");
+		in.shadowMaskFilter = (quarter && quarter->GetInteger() != 4) ? 1u : 0u;
+		// Fog from the current scene graph's fog property (FUN_1414dfad0 in AE).
+		const auto& shaderState = RE::BSShaderManager::State::GetSingleton();
+		auto* sceneNode = shaderState.shadowSceneNode[shaderState.sceneGraph];
+		if (const auto* fog = sceneNode ? sceneNode->GetRuntimeData().fogProperty.get() : nullptr) {
+			in.fog = true;
+			in.fogNear = fog->nearDistance;
+			in.fogFar = fog->farDistance;
+			in.fogPower = fog->power;
+			in.fogClamp = fog->clamp;
+			in.fogNearColor = { fog->nearColor.red, fog->nearColor.green, fog->nearColor.blue };
+			in.fogFarColor = { fog->farColor.red, fog->farColor.green, fog->farColor.blue };
+		}
+		in.invFrameBufferRange = shaderState.invFrameBufferRange;
+		// ColourOutputClamp: the fLightingOutputColourClamp* settings, copied when the shader is created.
+		static RE::Setting* clampSettings[3] = {
+			RE::GetINISetting("fLightingOutputColourClampPostLit:General"),
+			RE::GetINISetting("fLightingOutputColourClampPostEnv:General"),
+			RE::GetINISetting("fLightingOutputColourClampPostSpec:General"),
+		};
+		for (std::uint32_t i = 0; i < 3; ++i)
+			in.colourClamp[i] = clampSettings[i] ? clampSettings[i]->GetFloat() : 1.0f;
+		return in;
+	}
+
+	void EvaluateTechnique(std::uint32_t a_passDescriptor, const TechniqueInputs& a_inputs, TechniqueConstants& a_out)
+	{
+		// Lighting variable indices (ShaderConstants::LightingVS / LightingPS).
+		constexpr std::uint32_t kVSHighDetailRange = 12;
+		constexpr std::uint32_t kVSFogParam = 13;
+		constexpr std::uint32_t kVSFogNearColor = 14;
+		constexpr std::uint32_t kVSFogFarColor = 15;
+		constexpr std::uint32_t kPSFogColor = 19;
+		constexpr std::uint32_t kPSColourOutputClamp = 20;
+		constexpr auto kAnisotropic = static_cast<std::uint32_t>(RE::BSGraphics::TextureFilterMode::kAnisotropic);
+
+		a_out.vs.Reset();
+		a_out.ps.Reset();
+		a_out.filterModes.fill(kUnwrittenFilterMode);
+
+		// Sampler filter modes: diffuse and normal always, then per technique, as SetupTechnique draws it.
+		const std::uint32_t technique = (SetupTechniqueDescriptor(a_passDescriptor) >> 24) & 0x3f;
+		a_out.filterModes[0] = a_out.filterModes[1] = kAnisotropic;
+		switch (technique) {
+		case 1:  // Envmap (and 0x10, not drawn): cube map and its mask
+			a_out.filterModes[4] = a_out.filterModes[5] = kAnisotropic;
+			break;
+		case 2:  // Glowmap
+			a_out.filterModes[6] = kAnisotropic;
+			break;
+		case 3:  // Parallax
+		case 7:  // ParallaxOcc
+			a_out.filterModes[3] = kAnisotropic;
+			break;
+		case 11:  // MultilayerParallax: the cube map, its mask and the inner layer
+			a_out.filterModes[4] = a_out.filterModes[5] = a_out.filterModes[8] = kAnisotropic;
+			break;
+		case 9:   // LODLand
+		case 18:  // LODLandNoise
+		{
+			// Bilinear diffuse and normal, and HighDetailRange (LodHighDetailRange), its centre absolute.
+			constexpr auto kBilinear = static_cast<std::uint32_t>(RE::BSGraphics::TextureFilterMode::kBilinear);
+			a_out.filterModes[0] = a_out.filterModes[1] = kBilinear;
+			std::memcpy(&a_out.vs.floats[LightingVSLayout().offset[kVSHighDetailRange]], a_inputs.highDetailRange.data(), sizeof(a_inputs.highDetailRange));
+			break;
+		}
+		default:
+			break;
+		}
+
+		// Shadowed directional or shadow-casting point lights with DefShadow: the shadow mask in t14
+		// (clamped; point-filtered unless iShadowMaskQuarter is 4) and its inverse size in VPOSOffset.
+		const bool shadowLights = (a_passDescriptor & (1u << 13)) || (a_passDescriptor & 0x1c0u);
+		a_out.shadowMask = shadowLights && (a_passDescriptor & (1u << 14));
+		a_out.shadowMaskTexture = nullptr;
+		if (a_out.shadowMask) {
+			constexpr std::uint32_t kPSVPOSOffset = 11;
+			a_out.shadowMaskTexture = a_inputs.shadowMask;
+			a_out.filterModes[kShadowMaskSlot] = a_inputs.shadowMaskFilter;
+			if (a_inputs.shadowMaskSized) {
+				float* offset = &a_out.ps.floats[LightingPSLayout().offset[kPSVPOSOffset]];
+				offset[0] = a_inputs.shadowMaskInverseSize[0];
+				offset[1] = a_inputs.shadowMaskInverseSize[1];
+				offset[2] = 0.0f;
+				offset[3] = 0.0f;
+			}
+		}
+
+		// Fog from the scene graph's fog property (FUN_1414dfad0 in AE), as sampled.
+		if (a_inputs.fog) {
+			const auto& vsLayout = LightingVSLayout();
+			const auto& psLayout = LightingPSLayout();
+			float* param = &a_out.vs.floats[vsLayout.offset[kVSFogParam]];
+			if (a_inputs.fogFar != 0.0f || a_inputs.fogNear != 0.0f) {
+				const float inverseRange = 1.0f / (a_inputs.fogFar - a_inputs.fogNear);
+				param[0] = inverseRange * a_inputs.fogNear;
+				param[1] = inverseRange;
+				param[2] = a_inputs.fogPower;
+				param[3] = a_inputs.fogClamp;
+			} else {
+				param[0] = 5000000.0f;
+				param[1] = 0.1f;
+				param[2] = 1.0f;
+				param[3] = 0.0f;
+			}
+			const float nearColor[4] = { a_inputs.fogNearColor[0], a_inputs.fogNearColor[1], a_inputs.fogNearColor[2], a_inputs.invFrameBufferRange };
+			std::memcpy(&a_out.vs.floats[vsLayout.offset[kVSFogNearColor]], nearColor, sizeof(nearColor));
+			std::memcpy(&a_out.ps.floats[psLayout.offset[kPSFogColor]], nearColor, sizeof(nearColor));
+			// The engine leaves w of FogFarColor as whatever was on its stack.
+			float* farColor = &a_out.vs.floats[vsLayout.offset[kVSFogFarColor]];
+			farColor[0] = a_inputs.fogFarColor[0];
+			farColor[1] = a_inputs.fogFarColor[1];
+			farColor[2] = a_inputs.fogFarColor[2];
+		}
+
+		// ColourOutputClamp: the fLightingOutputColourClamp* settings, copied when the shader is created.
+		float* clamp = &a_out.ps.floats[LightingPSLayout().offset[kPSColourOutputClamp]];
+		for (std::uint32_t i = 0; i < 3; ++i)
+			clamp[i] = a_inputs.colourClamp[i];
+		clamp[3] = 0.0f;
+	}
+}

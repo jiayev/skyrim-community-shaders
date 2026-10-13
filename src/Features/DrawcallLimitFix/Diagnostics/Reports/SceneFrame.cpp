@@ -1,0 +1,106 @@
+#include "Scene.h"
+
+#include "Engine.h"
+#include "Schedule.h"
+#include "Spread.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Scene/SceneState.h"
+#include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
+
+// The render thread's scene lines: what it keeps of the scene (the pipeline constants, the shading and extras checks, tree LOD's mirror,
+// the frame capture), and the LOD gates' releases.
+
+namespace DCLF::Reports
+{
+	using V = Diagnostics::SceneView;
+
+	/** @brief Tree LOD's mirror line (newline-terminated), its counters and its parity's reset. */
+	std::string TreeLodLine(TreeLod::Mirror& a_mirror)
+	{
+		const auto s = a_mirror.TakeStats();
+		auto& p = Diagnostics::SceneDiagnostics().treeLod;
+		auto text = fmt::format("[DCLF] tree LOD mirror: {} shapes, {} instances{}; {} adds, {} removes ({} off the render thread); parity {} checks, {} shapes compared, {} not settled, {} missing, {} stale, {} refilled after the drain, {} differ{}{}; {} groups drawn by the rule where the engine keeps hidden records\n",
+			a_mirror.Size(), a_mirror.InstanceCount(), TreeLod::installed ? "" : ", events not installed", s.adds, s.removes, TreeLod::TakeOffThread(), p.checks, p.shapes, p.unsettled,
+			p.missing, p.stale, p.late, p.differ, p.checks ? (p.missing || p.stale || p.differ ? " <- TREE LOD MIRROR; first: " : " <- OK") : "", p.first, s.intended);
+		p = { .suspects = std::move(p.suspects), .frame = p.frame };
+		return text;
+	}
+
+	std::string SceneFrameLines()
+	{
+		// What the render thread keeps (its parities and captures), reported from the frame: nothing of the coordinator's.
+		std::string text;
+		auto& diagnostics = Diagnostics::SceneDiagnostics();
+		if (auto& g = V::geometryStats(); g.frames) {
+			auto& t = diagnostics.techniques;
+			text += fmt::format("[DCLF] pipeline constants: {:.2f} full geometry evaluations and {:.2f} frame samples a frame, {:.1f} pipelines changed, frame lighting changed {:.2f}; parity {} checks, {} of {} technique blocks differ ({} more late: the sample moved since the row's write){}{}\n",
+				static_cast<double>(g.full) / g.frames, static_cast<double>(g.samples) / g.frames, static_cast<double>(g.changed) / g.frames,
+				static_cast<double>(g.lightingVersions) / g.frames, t.checks, t.techniquesDiffer, t.techniquesChecked, t.techniquesLate,
+				t.checks ? (t.techniquesDiffer ? " <- DIFFER" : " <- OK") : "", t.techniquesDiffer ? "; technique: " + t.techniqueFirst : std::string());
+			g = {};
+			t = {};
+		}
+		if (auto& ss = V::shadingStats(Scene::Coordinator::Get()); V::shadingFrames()) {
+			const double frames = static_cast<double>(std::exchange(V::shadingFrames(), 0));
+			auto& sp = diagnostics.shading;
+			text += fmt::format("[DCLF] shading (sampled at the frame's start for the slots its events name): {:.1f} LOD fade events, {:.1f} emittance events, {:.1f} "
+								"named a frame; parity at Prepass against the frame's rows: {} checks, {} slots compared, changed since the frame's start: {} named for "
+								"the next frame, {} queued, {} missed{}{}; wetness {} meshes, {} differ{}\n",
+				static_cast<double>(ss.lodFadeEvents) / frames, static_cast<double>(ss.emittanceEvents) / frames, static_cast<double>(ss.resampled) / frames, sp.checks,
+				sp.slots, sp.named, sp.late, sp.missing, sp.checks ? (sp.missing ? " <- MISSED; first: " : " <- OK") : "", sp.first, sp.wetness, sp.wetnessDiffer,
+				sp.wetness ? (sp.wetnessDiffer ? " <- DIFFER" : " <- OK") : "");
+			ss = {};
+			sp = {};
+		}
+		if (auto& ep = diagnostics.extras; ep.objects) {
+			text += fmt::format("[DCLF] extras parity (the draw's completion against the engine's routines): {} objects, {} differ, largest difference {}, {} static rows "
+								"stale with no event{}{}\n",
+				ep.objects, ep.differ, ep.maxDifference, ep.staleStatic, ep.differ || ep.staleStatic ? " <- DIFFER" : " <- OK", ep.differ ? "; first: " + ep.first : std::string());
+			ep = {};
+		}
+		if (V::treeLod().Size() || TreeLod::installed)
+			text += TreeLodLine(V::treeLod());
+		text += MirrorWatch::TakeReport(V::frame());
+		auto& captureNs = V::captureNs();
+		auto& categoryCaptureNs = V::categoryCaptureNs();
+		auto& categoryCapturesMade = V::categoryCapturesMade();
+		auto& captureFrames = V::captureFrames();
+		auto& categoryMirrorCaptures = V::categoryMirrorCaptures();
+		auto& categoryMirrorRecords = V::categoryMirrorRecords();
+		if (captureFrames) {
+			const auto unscoped = FrameGlobals::TakeUnscopedReads();
+			text += fmt::format("[DCLF] frame capture (6e F2): render thread {:.1f} us/frame for the globals, {:.1f} us/frame for the categories ({} captures made; {} subtrees the "
+								"mirror lacked captured, {} records); {} reads off the render thread with no frame's capture bound{}\n",
+				static_cast<double>(captureNs) / 1000.0 / captureFrames, static_cast<double>(categoryCaptureNs) / 1000.0 / captureFrames, categoryCapturesMade, categoryMirrorCaptures,
+				categoryMirrorRecords, unscoped, unscoped ? " <- CAPTURE" : " <- OK");
+			captureNs = categoryCaptureNs = categoryCapturesMade = captureFrames = 0;
+			categoryMirrorCaptures = categoryMirrorRecords = 0;
+		}
+		return text;
+	}
+
+	void GateReleases(std::uint32_t a_frame)
+	{
+		// The releases' lines (the render thread's: the flip to its release), with the engine side's, once a report window. The frame
+		// numbers are the render thread's, each once.
+		auto& rs = V::gateReleaseStats();
+		auto& observed = Diagnostics::SceneDiagnostics().gateReleases;
+		static Crossing crossing;
+		if (crossing.Due(a_frame)) {
+			if (rs.any)
+				logger::info("[DCLF] LOD gate releases (T6b5): {} released, {} refused (forced or unknown by then), {} in a withdrawn frame; flip to release: ms "
+							 "(p50/p95/max) {}, frames (p50/p95/max) {}; request to release ms (p50/p95/max) {}; checked {} (the set or persistent parity): "
+							 "{} incoming not claimed as flipped{}{}{}, {} outgoing still claimed{}{}{}",
+					rs.released, rs.refused, rs.withdrawn, Percentiles(rs.flipToReleaseMs), Percentiles(rs.flipToReleaseFrames),
+					Percentiles(rs.requestToReleaseMs), observed.checked, observed.holes, observed.firstHole.empty() ? "" : ", first ", observed.firstHole,
+					observed.holes ? " <- GATE HOLE" : "", observed.coverage, observed.firstCoverage.empty() ? "" : ", first ", observed.firstCoverage,
+					observed.coverage ? " <- GATE COVERAGE" : "");
+			if (LodGates::Enabled())
+				if (const auto engine = LodGatesLine(kInterval); !engine.empty())
+					logger::info("{}", engine);
+			rs = {};
+			observed = {};
+		}
+	}
+}

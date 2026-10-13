@@ -1,4 +1,4 @@
-#include "Features/DrawcallLimitFix/Published/PublishedSceneExecutor.h"
+#include "Features/DrawcallLimitFix/Runtime/SceneExecutor.h"
 #include <ORGModuleServices/Async/StateGraph.h>
 
 #include <cassert>
@@ -20,13 +20,13 @@ void Until(Predicate predicate)
 int main()
 {
 	using Graph = org::async::AsyncStateGraph;
-	using Executor = DCLF::PublishedSceneExecutor;
+	using Executor = DCLF::SceneExecutor;
 	using Result = Graph::ArtifactBuildResult;
 	using org::async::ArtifactReadiness;
 	auto scheduler = std::make_shared<Executor>();
 	org::async::StateGraphHooks<org::async::DefaultStateGraphTypes> hooks;
 	hooks.scheduling = Executor::Layout;
-	hooks.producerDispatch = { org::async::TaskDispatch::Controlled, org::async::TaskDispatch::Cpu };
+	hooks.producerDispatch = { org::async::TaskDispatch::Controlled, org::async::TaskDispatch::Cpu, org::async::TaskDispatch::Controlled };
 	Graph graph(scheduler, "DCLF isolated parity test", hooks);
 	std::array<std::promise<void>, 2> started, release;
 	std::array<std::future<void>, 2> startedResults{ started[0].get_future(), started[1].get_future() };

@@ -1,4 +1,4 @@
-#include "Features/DrawcallLimitFix/Published/PublishedSceneExecutor.h"
+#include "Features/DrawcallLimitFix/Runtime/SceneExecutor.h"
 
 #include <atomic>
 #include <cassert>
@@ -9,7 +9,7 @@
 #include <thread>
 #include <vector>
 
-using Executor = DCLF::PublishedSceneExecutor;
+using Executor = DCLF::SceneExecutor;
 using namespace std::chrono_literals;
 
 template <class T>

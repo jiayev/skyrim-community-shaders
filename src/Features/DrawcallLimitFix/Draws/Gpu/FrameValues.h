@@ -1,0 +1,159 @@
+#pragma once
+
+#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <deque>
+#include <memory>
+#include <string>
+#include <vector>
+
+
+#include <functional>
+
+namespace org::runtime
+{
+	class IUploadService;
+}
+
+namespace DCLF
+{
+	/** @brief Room for a_needed, doubling from a_current (at least 1). */
+	inline std::uint32_t Doubled(std::uint32_t a_current, std::uint32_t a_needed)
+	{
+		std::uint64_t capacity = std::max(a_current, 1u);
+		while (capacity < a_needed)
+			capacity *= 2;
+		return static_cast<std::uint32_t>(std::min<std::uint64_t>(capacity, UINT32_MAX));
+	}
+
+	struct FrameGlobals;
+	struct BindlessPlacement;
+	struct BindlessShading;
+
+	/**
+	 * @brief FrameValues(N) (dclf-async-publication.md, "FrameValues"): the values a frame's draws need to be its own - the
+	 * claimed members' placements (BindlessPlacement), the skins' palettes and the objects' shading (BindlessShading) - made on
+	 * DCLF's pool while the frame runs, and waited for by the GPU, never by the render thread. The scene's tables hold none of
+	 * them: these are the only ones drawn with.
+	 *
+	 * Each frame the render thread kicks one producer (Kick, at the scene's start) with the newest placement plan the walk made
+	 * (PlacementPlan). The producers run one after another on the preparation pool:
+	 * - they sample the plan's movers and roots, and the slots its walk wrote in full (once), across the pool, under engine-read
+	 *   leases: a skin's palette after the engine's palette update (which the native draw's bone setter would have run), into the
+	 *   rows kept by object slot and the palette rows kept by block (journalled KeptArrays); and the shading of the slots the walk
+	 *   and the accumulate phase named (ShadingItem), with the wetness the frame's start captured;
+	 * - wait, on the worker, until the frame that last read their ring buffers is done on the GPU (the buffers' GPU point);
+	 * - send those buffers the runs they lack on the dedicated upload queue, then signal the frame-wait timeline to the frame's
+	 *   sequence number (always, also after a failure), which every batch of the frame waits for (PersistentGraphHost's frame wait).
+	 *
+	 * The rows go to a ring of buffers, one per frame in flight, each holding every row: frame n's draws read buffer n % kRing (the
+	 * frame record's t123, t122 and t121, and the culling's latches), which no producer writes while a frame reads it.
+	 */
+	class FrameValues
+	{
+	public:
+		static constexpr std::uint32_t kRing = 4;
+		/** @brief One float4 of a palette (three a bone): DCLFPalettes' element. */
+		struct PaletteRow
+		{
+			float v[4];
+		};
+
+		static FrameValues& Get();
+
+		/**
+		 * @brief An object's placement row from the engine now: its geometry's transforms and bound, its sun entry node's bound
+		 * (unbounded without one), its fade property's fade node (the layer property for a layer's row).
+		 */
+		static void SampleRow(const RE::BSGeometry& a_geometry, const RE::NiAVObject* a_sunEntryNode, const RE::BSShaderProperty* a_fadeProperty,
+			BindlessPlacement& a_out);
+		/** @brief Render thread (diagnostics): a slot's row from the engine now, by the tables' structure; false for a free slot. */
+		static bool SampleSlot(const SceneTables& a_tables, std::uint32_t a_slot, BindlessPlacement& a_out);
+		/** @brief A skin's palettes after this frame's update, or false when its size is not a_rows (its block's). */
+		static bool SkinPalettes(const RE::BSGeometry& a_geometry, std::uint32_t a_rows, const float*& a_current, const float*& a_previous);
+
+		/**
+		 * @brief Render thread, at the scene's start (the engine's update done, the window open): the frame's producer, from a_plans
+		 * (the walks' plans the publication log brought since the last frame, oldest first: each one's written slots sampled, the newest
+		 * drawn with; none: the newest before them), the slots named for their shading (a_shading, the newest last) and
+		 * the wetness captured (a_wetness). Sets the host's frame wait to its sequence number. False when it cannot run (no render
+		 * graph, no dedicated upload queue): the frame waits for nothing, and its draws have no rows; what it was handed waits for the
+		 * first producer.
+		 */
+		/**
+		 * @brief What else the frame's producer uploads before it signals the frame's wait (step 6e E4: the payload ring entry the
+		 * frame's epochs read), on the producer's thread and the dedicated uploader. A throw is logged; the signal always goes.
+		 */
+		using FrameUploads = std::function<void(org::runtime::IUploadService&)>;
+		bool Kick(std::vector<std::shared_ptr<const PlacementPlan>> a_plans, std::vector<ShadingItem> a_shading,
+			std::vector<WetnessValue> a_wetness, std::vector<FadeSeedItem> a_seeds, std::vector<TreeSeedItem> a_treeSeeds,
+			std::shared_ptr<const FrameGlobals> a_globals, FrameUploads a_uploads = {});
+		/**
+		 * @brief T7e, render thread, before Kick: the claims whose first-person members the frame draws (null: none, the first-person
+		 * epochs do not draw this frame). Kick samples those members' rows and skin palettes itself, before Main::Draw moves the
+		 * first-person skeleton into its root's space (FUN_1414cb020); the producer never samples a first-person item.
+		 */
+		void SetFirstPersonClaims(std::shared_ptr<const SetSnapshot> a_claims) { firstPersonClaims = std::move(a_claims); }
+		/**
+		 * @brief T7e's forward part (the first-person report): the first-person particle members' expansions since the last call, their
+		 * particles, and the farthest a snapshot's bound centre was from the first-person eye it was faced to (a snapshot taken while
+		 * Main::Draw had the skeleton in its root's space would be far from it).
+		 */
+		struct FirstPersonParticleStats
+		{
+			std::uint64_t expansions = 0, particles = 0;
+			float farthest = 0.0f;
+		};
+		static FirstPersonParticleStats TakeFirstPersonParticleStats();
+		/** @brief Render thread: a frame with no producer (DCLF not running): no batch waits for one. */
+		void Skip();
+		/** @brief Render thread, at Present: the GPU point of everything the frame submitted (its ring buffers' readers). */
+		void EndFrame();
+		/** @brief Render thread: the descriptor of the placement buffer the current frame's draws read (0 before the first frame). */
+		std::uint32_t PlacementsIndex() const { return frameIndex; }
+		/** @brief Render thread: the descriptor of the palette buffer the current frame's draws read (0 before the first frame). */
+		std::uint32_t PalettesIndex() const { return paletteIndex; }
+		/** @brief Render thread: the descriptor of the shading buffer the current frame's draws read (0 before the first frame). */
+		std::uint32_t ShadingIndex() const { return shadingIndex; }
+		/**
+		 * @brief Render thread: the descriptor of the fade seeds the current frame reads (T6b1a: StructuredBuffer<FadeRootStatic>, two rows
+		 * a root slot: FadeSeedRow; 0 before the first frame). A root's seed is its node as the frame's start had it (StaticOf, at Kick).
+		 */
+		std::uint32_t FadeSeedsIndex() const { return seedsIndex; }
+		/** @brief Render thread: the tree seeds likewise (StructuredBuffer<TreeStatic>, two rows a tree slot: MergeTreeSeed). */
+		std::uint32_t TreeSeedsIndex() const { return treeSeedsIndex; }
+		const std::vector<TreeStatic>* TreeSeedsIfDone(bool a_wait = false) const;
+		/** @brief Render thread: the seed rows as the frame's producer left them, once it is done; a_wait (diagnostics frames): waits for it. */
+		const std::vector<FadeRootStatic>* FadeSeedsIfDone(bool a_wait = false) const;
+		bool Available() const;
+
+		/**
+		 * @brief Render thread: the rows as the frame's producer left them, once it is done (diagnostics); null while it runs (a_wait:
+		 * waits for it first; null before the first frame). Valid until the next Kick.
+		 */
+		const std::vector<BindlessPlacement>* RowsIfDone(bool a_wait = false) const;
+		/** @brief Render thread: the palette rows likewise (PaletteRowsOf places a block's). */
+		const std::vector<PaletteRow>* PalettesIfDone(bool a_wait = false) const;
+		/** @brief Render thread: the shading rows likewise; a_wait (diagnostics frames): waits for the frame's producer first. */
+		const std::vector<BindlessShading>* ShadingIfDone(bool a_wait = false) const;
+		/** @brief The producer's counters since the last take (frames 0: nothing ran, nothing else taken). */
+		struct Counters
+		{
+			std::uint64_t frames = 0, sampled = 0, settled = 0, seeded = 0, rowsChanged = 0, skins = 0, paletteRowsChanged = 0, shadingSampled = 0, shadingChanged = 0,
+						  wetnessChanged = 0, runs = 0, bytes = 0, sampleUs = 0, pointWaitUs = 0, pointWaits = 0, uploadUs = 0, maxTotalUs = 0, refused = 0, defects = 0,
+						  failures = 0;
+		};
+		/** @brief The report's take (Reports/DrawsFrameValues.cpp): the counters, reset. */
+		Counters TakeCounters();
+
+	private:
+		FrameValues();
+		~FrameValues();
+		struct Impl;
+		std::unique_ptr<Impl> impl;
+		std::uint32_t frameIndex = 0, paletteIndex = 0, shadingIndex = 0, seedsIndex = 0, treeSeedsIndex = 0;
+		std::shared_ptr<const SetSnapshot> firstPersonClaims;  // T7e: SetFirstPersonClaims
+	};
+}
