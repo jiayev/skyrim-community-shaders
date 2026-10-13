@@ -26,12 +26,15 @@ public:
 				T("feature.rain_refraction.key_feature_3", "Driven by the Effects 11 preset and its enbraindrops.png while Effects 11 is active") } };
 	}
 
+	static constexpr float kMinMotionStretch = 0.01f;
+	static constexpr float kMaxMotionStretch = 3.0f;
+
 	/** @brief User settings, used while Effects 11 is not active; mirrors the preset's [RAIN] Enable, MotionStretch and MotionTransparency. */
 	struct Settings
 	{
 		bool Enable = true;
-		float MotionStretch = 0.34f;
-		float MotionTransparency = 0.0f;
+		float MotionStretch = 2.0f;
+		float MotionTransparency = 0.91f;
 	} settings;
 
 	/** @brief Feature buffer data, matching RainRefractionSettings in SharedData.hlsli; Enable is cleared when the raindrop texture or blend state is missing. */

@@ -254,6 +254,96 @@ cbuffer PerGeometry : register(b2)
 #		include "DynamicCubemaps/DynamicCubemaps.hlsli"
 #	endif
 
+#	if defined(ENVCUBE) && defined(RAIN) && defined(DYNAMIC_CUBEMAPS) && defined(RAIN_REFRACTION)
+#		define REFRACTIVE_RAIN
+#		include "Common/BRDF.hlsli"
+
+namespace Raindrop
+{
+	static const float WaterF0 = 0.02;
+	static const float Roughness = 0.3;              // Perceptual roughness of the drop's surface highlight
+	static const float TransmissionExponent = 32.0;  // Tightness of the glow of a light seen through a drop
+}
+#	endif
+
+/** @brief What a light shades: an unlit particle that takes light as-is, or a raindrop surface. */
+struct ParticleSurface
+{
+	bool isRaindrop;
+	float3 normal;
+	float3 view;
+	float3 refractDir;  ///< View ray continued through the drop
+};
+
+/** @brief Light a particle sends toward the viewer from lightColor arriving along L (toward the light). */
+float3 ShadeLight(ParticleSurface surface, float3 lightColor, float3 L)
+{
+#	if defined(REFRACTIVE_RAIN)
+	if (surface.isRaindrop) {
+		float3 H = normalize(surface.view + L);
+		float NdotL = saturate(dot(surface.normal, L));
+		float NdotV = saturate(dot(surface.normal, surface.view));
+		float NdotH = saturate(dot(surface.normal, H));
+		float VdotH = saturate(dot(surface.view, H));
+		float3 specular = BRDF::D_GGX(Raindrop::Roughness, NdotH) * BRDF::Vis_SmithJointApprox(Raindrop::Roughness, NdotV, NdotL) *
+		                  BRDF::F_Schlick(Raindrop::WaterF0, VdotH) * NdotL;
+
+		// A light behind the drop is seen through it along the refracted view ray; normalized Phong lobe
+		float transmissionLobe = pow(saturate(dot(surface.refractDir, L)), Raindrop::TransmissionExponent) * (Raindrop::TransmissionExponent + 2.0) / Math::TAU;
+		float3 transmission = transmissionLobe * (1.0 - BRDF::F_Schlick(Raindrop::WaterF0, NdotV));
+
+		return Color::IrradianceToLinear(lightColor) * (specular + transmission);
+	}
+#	endif
+	return lightColor;
+}
+
+/** @brief Sun color at positionWS after directional, world and cloud shadows. */
+float3 GetDirLightColor(float3 positionWS)
+{
+	float unusedDetailedShadow;
+	float3 dirLightColor = SharedData::DirLightColor.xyz * ShadowSampling::GetLightingShadow(positionWS, unusedDetailedShadow);
+	// Menu and reflection passes don't match the world heightmap and cloud state
+	if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)
+		dirLightColor *= ShadowSampling::GetWorldShadow(positionWS, FrameBuffer::CameraPosAdjust.xyz);
+	return dirLightColor;
+}
+
+/** @brief Sum of the clustered point lights at positionWS, each shaded by ShadeLight. */
+float3 GetPointLighting(float3 positionWS, ParticleSurface surface)
+{
+	float3 lighting = 0.0;
+#	if defined(LIGHT_LIMIT_FIX)
+	float3 viewPosition = FrameBuffer::WorldToView(positionWS);
+	float2 screenUV = FrameBuffer::ViewToUV(viewPosition);
+
+	uint clusterIndex = 0;
+	if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+		uint lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
+		uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
+		[loop] for (uint i = 0; i < lightCount; i++)
+		{
+			uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
+			LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
+			const bool localShadow = light.lightFlags & LightLimitFix::LightFlags::LocalShadow;
+			if (LightLimitFix::IsLightIgnored(light) || ((light.lightFlags & LightLimitFix::LightFlags::ShadowCaster) && !localShadow)) {
+				continue;
+			}
+			float3 lightDirection = light.positionWS.xyz - positionWS;
+			float lightDist = length(lightDirection);
+			lightDirection /= max(lightDist, 1e-5);
+
+			float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light) * (SharedData::lightLimitFixSettings.EnableLocalShadows ? light.fade : 1.0);
+			[branch] if (intensityMultiplier > 1e-5 && localShadow)
+				intensityMultiplier *= LightLimitFix::GetLocalShadow(LinearSampler, light.localShadowIndex, positionWS, FrameBuffer::CameraPosAdjust.xyz, lightDirection, false, 0.0);
+
+			lighting += ShadeLight(surface, light.color.xyz * intensityMultiplier, lightDirection);
+		}
+	}
+#	endif
+	return lighting;
+}
+
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	PS_OUTPUT psout;
@@ -268,7 +358,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
-#	if defined(ENVCUBE) && defined(RAIN) && defined(DYNAMIC_CUBEMAPS) && defined(RAIN_REFRACTION)
+#	if defined(REFRACTIVE_RAIN)
 	if (SharedData::rainRefractionSettings.Enable) {
 		float4 raindropNormal = TexRaindropNormals.Sample(SampSourceTexture, input.RaindropData.xy);
 		float alpha = saturate(raindropNormal.w * (1.0 - SharedData::rainRefractionSettings.MotionTransparency));
@@ -306,7 +396,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 reflectColor = Color::IrradianceToLinear(DynamicCubemaps::EnvReflectionsTexture.SampleLevel(SampSourceTexture, reflectDir, 0).xyz);
 		float3 refractColor = Color::IrradianceToLinear(DynamicCubemaps::EnvReflectionsTexture.SampleLevel(SampSourceTexture, refractDir, 0).xyz);
 
-		psout.Color.xyz = Color::IrradianceToGamma(lerp(refractColor, reflectColor, fresnel));
+		// The env cubemap only carries faint bounce light, so lights are shaded on the drop directly
+		ParticleSurface drop = { true, normalWS, V, refractDir };
+		float3 directLighting = ShadeLight(drop, GetDirLightColor(posWS.xyz), SharedData::DirLightDirection.xyz) + GetPointLighting(posWS.xyz, drop);
+
+		psout.Color.xyz = Color::IrradianceToGamma(lerp(refractColor, reflectColor, fresnel) + directLighting);
 		psout.Color.w = alpha;
 		psout.Normal = float4(0, 1, 0, alpha);
 		return psout;
@@ -335,11 +429,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	positionWS = mul(FrameBuffer::CameraViewProjInverse, positionWS);
 	positionWS.xyz = positionWS.xyz / positionWS.w;
 
-	float unusedDetailedShadow;
-	float3 dirLightColor = SharedData::DirLightColor.xyz * ShadowSampling::GetLightingShadow(positionWS.xyz, unusedDetailedShadow);
-	// Menu and reflection passes don't match the world heightmap and cloud state
-	if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)
-		dirLightColor *= ShadowSampling::GetWorldShadow(positionWS.xyz, FrameBuffer::CameraPosAdjust.xyz);
+	float3 dirLightColor = GetDirLightColor(positionWS.xyz);
 	float3 ambientColor = max(0, SharedData::GetAmbient(float3(0, 0, 1)));
 #	if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
@@ -347,41 +437,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
+	const ParticleSurface unlit = (ParticleSurface)0;
 	propertyColor += dirLightColor;
 	propertyColor += ambientColor;
-
-#	if defined(LIGHT_LIMIT_FIX)
-	uint lightCount = 0;
-	{
-		float3 viewPosition = FrameBuffer::WorldToView(positionWS.xyz);
-		float2 screenUV = FrameBuffer::ViewToUV(viewPosition);
-
-		uint clusterIndex = 0;
-		if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
-			lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
-			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
-			[loop] for (uint i = 0; i < lightCount; i++)
-			{
-				uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
-				LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
-				const bool localShadow = light.lightFlags & LightLimitFix::LightFlags::LocalShadow;
-				if (LightLimitFix::IsLightIgnored(light) || ((light.lightFlags & LightLimitFix::LightFlags::ShadowCaster) && !localShadow)) {
-					continue;
-				}
-				float3 lightDirection = light.positionWS.xyz - positionWS.xyz;
-				float lightDist = length(lightDirection);
-				lightDirection /= max(lightDist, 1e-5);
-
-				float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light) * (SharedData::lightLimitFixSettings.EnableLocalShadows ? light.fade : 1.0);
-				[branch] if (intensityMultiplier > 1e-5 && localShadow)
-					intensityMultiplier *= LightLimitFix::GetLocalShadow(LinearSampler, light.localShadowIndex, positionWS.xyz, FrameBuffer::CameraPosAdjust.xyz, lightDirection, false, 0.0);
-
-				float3 lightColor = light.color.xyz * intensityMultiplier;
-				propertyColor += lightColor;
-			}
-		}
-	}
-#	endif
+	propertyColor += GetPointLighting(positionWS.xyz, unlit);
 
 	psout.Color.xyz = propertyColor * baseColor.xyz;
 	psout.Color.w = baseColor.w;

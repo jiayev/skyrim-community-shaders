@@ -1332,7 +1332,7 @@
     "feature.rain_refraction.key_feature_2": "Adjustable motion stretch and transparency",
     "feature.rain_refraction.key_feature_3": "Driven by the Effects 11 preset and its enbraindrops.png while Effects 11 is active",
     "feature.rain_refraction.motion_stretch": "Motion Stretch",
-    "feature.rain_refraction.motion_stretch_tooltip": "How far drops stretch along their fall velocity.\n0 = round drops, 1 = full vanilla streak length.",
+    "feature.rain_refraction.motion_stretch_tooltip": "How far drops stretch along their fall velocity.\nLow values give round drops, 1 = vanilla streak length, higher values stretch further.",
     "feature.rain_refraction.motion_transparency": "Motion Transparency",
     "feature.rain_refraction.motion_transparency_tooltip": "Fades the drops; higher values make rain more transparent.",
     "feature.rain_refraction.name": "Rain Refraction",

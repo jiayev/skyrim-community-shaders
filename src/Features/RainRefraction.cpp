@@ -94,11 +94,11 @@ void RainRefraction::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("enable_tooltip"), "Renders rain as refractive drops. Requires Dynamic Cubemaps."));
 	}
-	ImGui::SliderFloat(T(TKEY("motion_stretch"), "Motion Stretch"), &settings.MotionStretch, 0.0f, 1.0f, "%.2f");
+	ImGui::SliderFloat(T(TKEY("motion_stretch"), "Motion Stretch"), &settings.MotionStretch, kMinMotionStretch, kMaxMotionStretch, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("motion_stretch_tooltip"), "How far drops stretch along their fall velocity.\n0 = round drops, 1 = full vanilla streak length."));
+		ImGui::Text("%s", T(TKEY("motion_stretch_tooltip"), "How far drops stretch along their fall velocity.\nLow values give round drops, 1 = vanilla streak length, higher values stretch further."));
 	}
-	ImGui::SliderFloat(T(TKEY("motion_transparency"), "Motion Transparency"), &settings.MotionTransparency, 0.0f, 1.0f, "%.2f");
+	ImGui::SliderFloat(T(TKEY("motion_transparency"), "Motion Transparency"), &settings.MotionTransparency, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("motion_transparency_tooltip"), "Fades the drops; higher values make rain more transparent."));
 	}
@@ -109,6 +109,8 @@ void RainRefraction::DrawSettings()
 void RainRefraction::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	settings.MotionStretch = std::clamp(settings.MotionStretch, kMinMotionStretch, kMaxMotionStretch);
+	settings.MotionTransparency = std::clamp(settings.MotionTransparency, 0.0f, 1.0f);
 }
 
 void RainRefraction::SaveSettings(json& o_json)
