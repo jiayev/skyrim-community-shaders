@@ -12,6 +12,7 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "Utils/D3D.h"
 #include "Utils/FileSystem.h"
 
 #define I18N_KEY_PREFIX "feature.screenshot."
@@ -41,27 +42,6 @@ namespace
 		const char* description = "(none)";
 	};
 
-	struct D3D11MultithreadGuard
-	{
-		winrt::com_ptr<REX::W32::ID3D11Multithread> multithread;
-
-		explicit D3D11MultithreadGuard(ID3D11DeviceContext* context)
-		{
-			if (context && SUCCEEDED(context->QueryInterface(multithread.put()))) {
-				multithread->SetMultithreadProtected(TRUE);
-				multithread->Enter();
-			}
-		}
-
-		~D3D11MultithreadGuard()
-		{
-			if (multithread) {
-				multithread->Leave();
-				multithread->SetMultithreadProtected(FALSE);
-			}
-		}
-	};
-
 	bool PopulateScratchImageFromStagingTexture(
 		ID3D11DeviceContext* context,
 		ID3D11Texture2D* stagingTexture,
@@ -70,7 +50,7 @@ namespace
 		uint32_t height,
 		DirectX::ScratchImage& image)
 	{
-		D3D11MultithreadGuard guard(context);
+		Util::MultithreadScope guard(context);
 
 		D3D11_MAPPED_SUBRESOURCE mapped{};
 		if (FAILED(context->Map(stagingTexture, 0, D3D11_MAP_READ, 0, &mapped))) {
@@ -185,8 +165,8 @@ namespace
 				sourceImage.GetImages(),
 				sourceImage.GetImageCount(),
 				sourceImage.GetMetadata(),
-				DXGI_FORMAT_B8G8R8X8_UNORM,
-				DirectX::TEX_FILTER_DEFAULT,
+				DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+				DirectX::TEX_FILTER_SRGB,
 				0.0f,
 				convertedImage))) {
 			return convertedImage.GetImage(0, 0, 0);
@@ -764,7 +744,13 @@ void ScreenshotFeature::Reset()
 void ScreenshotFeature::ProcessCaptureRequest()
 {
 	if (captureRequested.exchange(false)) {
-		Capture();
+		try {
+			Capture();
+		} catch (const std::exception& e) {
+			logger::error("Screenshot capture failed: {}", e.what());
+		} catch (...) {
+			logger::error("Screenshot capture failed with an unknown exception.");
+		}
 	}
 }
 

@@ -59,7 +59,7 @@ public:
 	struct SkylightingCB
 	{
 		REX::W32::XMFLOAT4X4 OcclusionViewProj;
-		float4 OcclusionDir;
+		float4 OcclusionSHBasis4Pi;  // SH basis of the occlusion direction, times 4 pi; evaluated once per capture
 
 		float3 PosOffset;  // cell origin in camera model space
 		uint _pad0;
@@ -95,12 +95,16 @@ public:
 	// misc parameters
 	uint probeArrayDims[3] = { 256, 256, 128 };
 	float occlusionDistance = 10000.f;
+	// Slack below the probe grid for eye movement between the grid update and the occlusion render.
+	static constexpr float OCCLUSION_BELOW_GRID_MARGIN = 512.f;
 
 	// cached variables
 	bool queuedResetSkylighting = true;
 	bool inOcclusion = false;
+	// World height of the probe grid's bottom layer, from the snapped grid origin.
+	float probeGridBottomZ = -FLT_MAX;
 	REX::W32::XMFLOAT4X4 OcclusionTransform;
-	float4 OcclusionDir;
+	float4 OcclusionSHBasis4Pi;
 	uint frameCount = 0;
 
 	/** @brief Clears the accumulation frames array to force a full rebuild of skylighting probes. */
@@ -130,6 +134,20 @@ public:
 	struct SetViewFrustum
 	{
 		static void thunk(RE::NiCamera* a_camera, RE::NiFrustum* a_frustum);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	/** @brief Returns no alpha group once the engine's fixed alpha group pool is full, instead of overrunning it. */
+	struct BSShaderAccumulator_StartGroupingAlphas
+	{
+		static constexpr std::uint32_t VANILLA_POOL_SIZE = 512;
+		static constexpr std::uint32_t POOL_SIZE = VANILLA_POOL_SIZE * 2;
+		static inline std::uint32_t poolCapacity = VANILLA_POOL_SIZE;
+
+		/** @brief Repoints the engine's alpha group pool to a POOL_SIZE buffer, keeping the vanilla pool if its references are not all found. */
+		static void GrowPool();
+
+		static RE::BSBatchRenderer::GeometryGroup* thunk(RE::BSShaderAccumulator* accumulator, RE::NiBound* bound);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 

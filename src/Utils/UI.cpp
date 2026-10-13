@@ -255,6 +255,7 @@ namespace Util
 			if (shaderCache->IsDiskCache()) {
 				shaderCache->DeleteDiskCache();
 			}
+			shaderCache->ClearContentStore();
 		}
 	}
 
@@ -290,6 +291,20 @@ namespace Util
 				"%s", T("ui.clear_cache_desc",
 						  "This will clear all compiled shaders from memory and disk cache (if enabled). "
 						  "Shaders will be recompiled when the game next encounters them."));
+			if (globals::shaderCache) {
+				// Measured once when the popup opens, since it walks the store directory.
+				static std::optional<SIE::ShaderCache::ContentStoreUsage> storeUsage;
+				if (ImGui::IsWindowAppearing() || !storeUsage)
+					storeUsage = globals::shaderCache->GetContentStoreUsage();
+				if (storeUsage->blobs > 0) {
+					ImGui::Spacing();
+					ImGui::TextWrapped("%s", I18n::GetSingleton()->Format("ui.clear_cache_store_note",
+																	 { { "count", std::to_string(storeUsage->blobs) },
+																		 { "size", std::format("{:.0f}", static_cast<double>(storeUsage->bytes) / (1024.0 * 1024.0)) } },
+																	 "This also deletes the persistent shader store ({count} shaders, {size} MB).")
+												 .c_str());
+				}
+			}
 			ImGui::Spacing();
 			ImGui::Spacing();
 			ImGui::Separator();
@@ -1392,6 +1407,16 @@ namespace Util
 		ImGui::PopID();
 	}
 
+	TableSortSpec ReadTableSortSpec(int defaultColumn, bool defaultAscending)
+	{
+		TableSortSpec spec{ defaultColumn, defaultAscending };
+		if (const ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs(); sortSpecs && sortSpecs->SpecsCount > 0) {
+			spec.column = sortSpecs->Specs->ColumnIndex;
+			spec.ascending = sortSpecs->Specs->SortDirection == ImGuiSortDirection_Ascending;
+		}
+		return spec;
+	}
+
 	void ShowSortedStringTableStrings(
 		const char* table_id,
 		const std::vector<std::string>& headers,
@@ -1407,22 +1432,15 @@ namespace Util
 				ImGui::TableSetupColumn(header.c_str());
 			ImGui::TableHeadersRow();
 
-			// Determine sorting
-			int sortCol = static_cast<int>(sortColumn);
-			bool sortAsc = ascending;
-			if (const ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs()) {
-				if (sortSpecs->SpecsCount > 0) {
-					sortCol = sortSpecs->Specs->ColumnIndex;
-					sortAsc = sortSpecs->Specs->SortDirection == ImGuiSortDirection_Ascending;
-				}
-			}
+			const TableSortSpec spec = ReadTableSortSpec(static_cast<int>(sortColumn), ascending);
 
 			// Make a copy if sorting is needed
 			std::vector<std::vector<std::string>> sortedRows = rows;
-			if (sortCol >= 0 && static_cast<size_t>(sortCol) < headers.size()) {
+			if (spec.column >= 0 && static_cast<size_t>(spec.column) < headers.size()) {
 				// Fallback to default string sort if no custom sort is provided
-				auto cmp = (sortCol < static_cast<int>(customSorts.size()) && customSorts[sortCol]) ? customSorts[sortCol] : StringSortComparator;
-				std::sort(sortedRows.begin(), sortedRows.end(), [sortCol, sortAsc, &cmp](const std::vector<std::string>& a, const std::vector<std::string>& b) {
+				auto cmp = (spec.column < static_cast<int>(customSorts.size()) && customSorts[spec.column]) ? customSorts[spec.column] : StringSortComparator;
+				const size_t sortCol = static_cast<size_t>(spec.column);
+				SortTableRowsWith<std::vector<std::string>>(sortedRows, spec, [sortCol, &cmp](const std::vector<std::string>& a, const std::vector<std::string>& b, bool sortAsc) {
 					const std::string& aVal = (sortCol < a.size()) ? a[sortCol] : std::string();
 					const std::string& bVal = (sortCol < b.size()) ? b[sortCol] : std::string();
 					return cmp(aVal, bVal, sortAsc);
@@ -2219,7 +2237,7 @@ namespace Util
 				ImGui::PopStyleVar();
 				ImGui::PopStyleColor(2);
 
-				if (ImGui::IsItemClicked()) {
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
 					auto* weatherManager = globals::weatherManager;
 					auto* editorWindow = EditorWindow::GetSingleton();
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
@@ -2270,7 +2288,7 @@ namespace Util
 				ImGui::PopItemFlag();
 				ImGui::PopStyleVar();
 
-				if (ImGui::IsItemClicked()) {
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
 					auto* weatherManager = globals::weatherManager;
 					auto* editorWindow = EditorWindow::GetSingleton();
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
@@ -2321,7 +2339,7 @@ namespace Util
 				ImGui::PopItemFlag();
 				ImGui::PopStyleVar();
 
-				if (ImGui::IsItemClicked()) {
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
 					auto* weatherManager = globals::weatherManager;
 					auto* editorWindow = EditorWindow::GetSingleton();
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
@@ -2362,6 +2380,7 @@ namespace Util
 		const char* recordingLabel)
 	{
 		bool changed = false;
+		ImGui::AlignTextToFramePadding();
 		ImGui::Text("%s", label);
 		ImGui::SameLine();
 

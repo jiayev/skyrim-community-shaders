@@ -154,9 +154,9 @@ void VolumetricLightingWidget::LoadFromGameSettings()
 		return;
 	settings.intensity = volumetricLighting->intensity;
 	settings.customColorContribution = volumetricLighting->customColor.contribution;
-	settings.red = volumetricLighting->red;
-	settings.green = volumetricLighting->green;
-	settings.blue = volumetricLighting->blue;
+	settings.red = volumetricLighting->color.red;
+	settings.green = volumetricLighting->color.green;
+	settings.blue = volumetricLighting->color.blue;
 	settings.densityContribution = volumetricLighting->density.contribution;
 	settings.densitySize = volumetricLighting->density.size;
 	settings.densityWindSpeed = volumetricLighting->density.windSpeed;
@@ -190,9 +190,9 @@ void VolumetricLightingWidget::ApplyChanges()
 
 	volumetricLighting->intensity = settings.intensity;
 	volumetricLighting->customColor.contribution = settings.customColorContribution;
-	volumetricLighting->red = settings.red;
-	volumetricLighting->green = settings.green;
-	volumetricLighting->blue = settings.blue;
+	volumetricLighting->color.red = settings.red;
+	volumetricLighting->color.green = settings.green;
+	volumetricLighting->color.blue = settings.blue;
 	volumetricLighting->density.contribution = settings.densityContribution;
 	volumetricLighting->density.size = settings.densitySize;
 	volumetricLighting->density.windSpeed = settings.densityWindSpeed;

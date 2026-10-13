@@ -41,14 +41,38 @@ namespace Util
 	void SetResourceName(ID3D11DeviceChild* Resource, const char* Format, ...);
 
 	/**
+	 * @brief Enables D3D11 multithread protection and holds the immediate context's lock for the scope.
+	 * Scopes are reference counted, and the protection state from before the first scope is restored when the last one ends.
+	 */
+	class MultithreadScope
+	{
+	public:
+		explicit MultithreadScope(ID3D11DeviceContext* context);
+		~MultithreadScope();
+		MultithreadScope(const MultithreadScope&) = delete;
+		MultithreadScope& operator=(const MultithreadScope&) = delete;
+
+		/** @brief True when the lock is held; false when ID3D11Multithread is unavailable. */
+		explicit operator bool() const { return multithread != nullptr; }
+
+	private:
+		winrt::com_ptr<REX::W32::ID3D11Multithread> multithread;
+	};
+
+	/**
 	 * @brief Compile an HLSL shader from file and create the appropriate D3D11 shader object.
 	 * @param FilePath Path to the HLSL source file.
 	 * @param Defines Preprocessor macro name/value pairs to pass to the compiler.
 	 * @param ProgramType Shader model target (e.g. "ps_5_0", "vs_5_0", "cs_5_0").
 	 * @param Program Entry point function name (defaults to "main").
-	 * @return The compiled shader object, or nullptr on failure.
+	 * @return The compiled shader object, or nullptr on failure. A failed compile is not retried until ClearShaderCompileFailures().
 	 */
 	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program = "main");
+
+	/**
+	 * @brief Allow previously failed CompileShader requests to compile again.
+	 */
+	void ClearShaderCompileFailures();
 
 	/**
 	 * @brief Apply an alpha-blended highlight tint to a texture via CPU staging copy.
@@ -94,9 +118,12 @@ namespace Util
 	 *
 	 * The caller does NOT own the returned pointer.
 	 *
-	 * @param prefer16bit When false (default) returns R32_FLOAT for compute shaders doing
-	 *        arithmetic on depth; when true returns R16_UNORM for pixel shaders via
-	 *        slot 17 / SharedData::GetDepth.
+	 * Returns prepass depth until Deferred::DeferredPasses copies the finished opaque
+	 * depth, and that final depth (R24_UNORM_X8) for the rest of the frame.
+	 *
+	 * @param prefer16bit Before the final depth is available: when false (default) returns
+	 *        R32_FLOAT for compute shaders doing arithmetic on depth; when true returns
+	 *        R16_UNORM for pixel shaders via slot 17 / SharedData::GetDepth. Ignored after.
 	 * @return The depth SRV, or nullptr if unavailable.
 	 */
 	ID3D11ShaderResourceView* GetCurrentSceneDepthSRV(bool prefer16bit = false);

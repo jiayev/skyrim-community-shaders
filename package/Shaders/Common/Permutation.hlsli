@@ -77,6 +77,9 @@ namespace Permutation
 		static const uint IsSun = (1 << 4);
 		static const uint SuppressExternalEmittance = (1 << 5);
 		static const uint AdditiveLighting = (1 << 6);
+		static const uint IsAurora = (1 << 7);
+		static const uint IsMoon = (1 << 8);
+		static const uint NoSkyScattering = (1 << 9);
 	}
 
 	namespace ExtraFeatureFlags
@@ -88,6 +91,7 @@ namespace Permutation
 		static const int THLand4HasDisplacement = (1 << 4);
 		static const int THLand5HasDisplacement = (1 << 5);
 		static const int THLandHasDisplacement = (1 << 9);
+		static const int TVMeshVariation = (1 << 10);
 	}
 
 	cbuffer PerShader : register(b4)

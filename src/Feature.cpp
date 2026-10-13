@@ -11,12 +11,12 @@
 #include "Features/ExtendedTranslucency.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
+#include "Features/GrassOptimizations.h"
 #include "Features/HDRDisplay.h"
 #include "Features/HairSpecular.h"
 #include "Features/HorizonFix.h"
 #include "Features/IBL.h"
 #include "Features/InteriorSun.h"
-#include "Features/InverseSquareLighting.h"
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
@@ -193,6 +193,10 @@ bool Feature::ValidateCache(CSimpleIniA& a_ini)
 
 	if (loaded) {
 		auto versionInCache = a_ini.GetValue(ini_name.c_str(), "Version");
+		if (!versionInCache) {
+			logger::info("No cached version found. Installed {}", version);
+			return false;
+		}
 		if (strcmp(versionInCache, version.c_str()) != 0) {
 			logger::info("Change in version detected. Installed {} but {} in Disk Cache", version, versionInCache);
 			return false;
@@ -223,6 +227,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::volumetricShadows,
 		&globals::features::grassLighting,
 		&globals::features::grassCollision,
+		&globals::features::grassOptimizations,
 		&globals::features::screenSpaceShadows,
 		&globals::features::extendedMaterials,
 		&globals::features::wetnessEffects,
@@ -240,7 +245,6 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::terrainHelper,
 		&globals::features::volumetricLighting,
 		&globals::features::lodBlending,
-		&globals::features::inverseSquareLighting,
 		&globals::features::hairSpecular,
 		&globals::features::interiorSun,
 		&globals::features::terrainVariation,
@@ -308,14 +312,27 @@ bool Feature::ReapplyOverrideSettings()
 	// Get base settings and apply overrides fresh
 	json featureJson;
 	SaveSettings(featureJson);
+	json previousJson = featureJson;  // LoadSettings takes a non-const reference
 
 	// Apply overrides to the settings (without user customizations)
 	size_t appliedCount = overrideManager->ReapplyFeatureOverrides(featureName, featureJson);
 
 	if (appliedCount > 0) {
-		// Load the override settings back into the feature
-		LoadSettings(featureJson);
-		return true;
+		// Load the override settings back into the feature. A malformed override throws from
+		// LoadSettings, possibly after some fields were already applied, so restore the previous values.
+		try {
+			LoadSettings(featureJson);
+			return true;
+		} catch (const std::exception& e) {
+			logger::warn("Failed to reapply override settings for {}, keeping previous settings. Error: {}", featureName, e.what());
+			try {
+				LoadSettings(previousJson);
+			} catch (...) {
+				logger::warn("Failed to restore previous settings for {}, using default.", featureName);
+				RestoreDefaultSettings();
+			}
+			return false;
+		}
 	}
 
 	return false;
@@ -366,7 +383,7 @@ void Feature::DrawUnloadedUI()
 	if (!failedLoadedMessage.empty()) {
 		// Use error color for all failure messages
 		auto& themeSettings = Menu::GetSingleton()->GetTheme();
-		ImGui::TextColored(themeSettings.StatusPalette.Error, failedLoadedMessage.c_str());
+		ImGui::TextColored(themeSettings.StatusPalette.Error, "%s", failedLoadedMessage.c_str());
 		return;
 	}
 
@@ -377,7 +394,7 @@ void Feature::DrawUnloadedUI()
 	std::string requiredVersion = Feature::GetFeatureRequiredVersion(GetShortName());
 
 	auto missingFileMessage = std::format("The {} file is missing. This feature is not installed! Version required: {}", ini_filename, requiredVersion);
-	ImGui::TextColored(themeSettings.StatusPalette.Error, missingFileMessage.c_str());
+	ImGui::TextColored(themeSettings.StatusPalette.Error, "%s", missingFileMessage.c_str());
 
 	// Also show feature summary if available
 	auto [description, keyFeatures] = GetFeatureSummary();

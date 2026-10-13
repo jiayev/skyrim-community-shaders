@@ -1,8 +1,10 @@
 #pragma once
 
 #include <BS_thread_pool.hpp>
+#include <atomic>
 #include <efsw/efsw.hpp>
 #include <vector>
+#include <winrt/base.h>
 
 #include "Utils/WinApi.h"
 
@@ -89,9 +91,24 @@ namespace ShaderConstants
 			return instance;
 		}
 
-		const int32_t PBRFlags = 0;
-		const int32_t PBRParams1 = 1;
-		const int32_t PBRParams2 = 2;
+		const int32_t WorldViewProj = 0;
+		const int32_t WorldView = 1;
+		const int32_t World = 2;
+		const int32_t PreviousWorld = 3;
+		const int32_t FogNearColor = 4;
+		const int32_t WindVector = 5;
+		const int32_t WindTimer = 6;
+		const int32_t DirLightDirection = 7;
+		const int32_t PreviousWindTimer = 8;
+		const int32_t DirLightColor = 9;
+		const int32_t AlphaParam1 = 10;
+		const int32_t AmbientColor = 11;
+		const int32_t AlphaParam2 = 12;
+		const int32_t ScaleMask = 13;
+
+		const int32_t PBRFlags = 14;
+		const int32_t PBRParams1 = 15;
+		const int32_t PBRParams2 = 16;
 	};
 
 	struct EffectPS
@@ -210,6 +227,8 @@ namespace SIE
 
 	class CompilationSet
 	{
+		friend class ShaderCache;
+
 	public:
 		LARGE_INTEGER lastReset;
 		LARGE_INTEGER lastCalculation;
@@ -244,6 +263,8 @@ namespace SIE
 		std::atomic<uint64_t> failedTasks = 0;
 		std::atomic<uint64_t> cacheHitTasks = 0;            // number of compiles of a previously seen shader combo
 		std::atomic<uint64_t> diskHitTasks = 0;             // tasks resolved from disk cache rather than compiled
+		std::atomic<uint64_t> contentDedupeTasks = 0;       // compiles skipped because identical preprocessed code had already compiled this session
+		std::atomic<uint64_t> contentStoreHitTasks = 0;     // compiles skipped because the persistent shader store held an identical blob
 		std::atomic<uint64_t> diskHitPriorityWeight = 0;    // cumulative priority weight of disk-hit tasks
 		LARGE_INTEGER compilationPhaseStart = { 0 };        // time of first non-disk-hit task dispatch
 		std::atomic<bool> compilationPhaseStarted = false;  // set when first actual compilation begins
@@ -308,6 +329,15 @@ namespace SIE
 		bool loadedFromDisk = false;  /**< true when the shader blob was read from the disk cache rather than compiled */
 	};
 
+	namespace SShaderCache
+	{
+		/** @brief Reads a cached blob, deleting the file and returning null when it is unreadable or not intact DXBC. */
+		winrt::com_ptr<ID3DBlob> ReadIntactBlob(const std::wstring& diskPath);
+
+		/** @brief Writes through a sibling temp file and a rename, so a crash mid-write cannot leave a torn blob at diskPath. */
+		bool WriteBlobAtomic(const std::wstring& diskPath, ID3DBlob* blob);
+	}
+
 	class UpdateListener;
 
 	class ShaderCache
@@ -364,8 +394,11 @@ namespace SIE
 		bool IsDiskCache() const;
 		/** Sets whether the persistent disk cache is enabled. */
 		void SetDiskCache(bool value);
-		/** @brief Deletes the entire on-disk shader cache directory. */
-		void DeleteDiskCache();
+		/**
+		 * @brief Deletes the on-disk shader cache directory.
+		 * @param a_keepContentStore Keep the persistent shader store, whose blobs stay valid because they are keyed by their own inputs.
+		 */
+		void DeleteDiskCache(bool a_keepContentStore = false);
 		/** @brief Validates disk cache integrity against current shader sources and feature set. */
 		void ValidateDiskCache();
 		/** @brief Writes cache metadata (version, feature list) to the disk cache directory. */
@@ -437,7 +470,8 @@ namespace SIE
 		enum class ClaimResult
 		{
 			CacheHit,  // Already compiled; use the returned blob
-			Claimed    // Claimed as Pending; caller must compile and call AddCompletedShader
+			Claimed,   // Claimed as Pending; caller must compile and call AddCompletedShader
+			Failed     // Previous attempt failed; skipped until invalidation drops the entry
 		};
 		std::pair<ClaimResult, ID3DBlob*> ClaimCompilation(const std::string& key);
 		void ResolvePendingFailure(const std::string& key);
@@ -476,7 +510,27 @@ namespace SIE
 		uint64_t GetCurrentFailedCount();
 		uint64_t GetTotalTasks();
 		uint64_t GetDiskHitTasks();
+		uint64_t GetContentDedupeTasks();
 		void IncCacheHitTasks();
+		void IncContentDedupeTasks();
+		/** @brief Number of compiles satisfied by the persistent shader store in the current batch. */
+		uint64_t GetContentStoreHitTasks();
+		/** @brief Counts a compile satisfied by the persistent shader store. */
+		void IncContentStoreHitTasks();
+		/** @brief Deletes every blob in the persistent shader store, whether or not the setting is on. */
+		void ClearContentStore();
+		/** @brief Applies the store size limit setting now, evicting least recently used shaders if it was lowered. */
+		void ApplyContentStoreLimit();
+		/** @brief Where the persistent shader store lives and how much it holds. */
+		struct ContentStoreUsage
+		{
+			std::string path;  ///< Absolute, UTF-8
+			uint64_t blobs = 0;
+			uint64_t bytes = 0;
+			uint64_t maxBytes = 0;
+		};
+		/** @brief Measures the persistent shader store on disk; usable while the setting is off. */
+		ContentStoreUsage GetContentStoreUsage();
 		void ToggleErrorMessages();
 		void DisableShaderBlocking();
 		void IterateShaderBlock(bool a_forward = true);
@@ -522,7 +576,9 @@ namespace SIE
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(Util::GetPerformanceCoreCount()) / 2, 1);
 		BS::thread_pool<> compilationPool{ static_cast<std::size_t>(compilationThreadCount) };
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
-		bool backgroundCompilation = false;
+		/** @brief Updates compilation mode and wakes the dispatcher to recheck its capacity. */
+		void SetBackgroundCompilation(bool value);
+		std::atomic_bool backgroundCompilation{ false };
 		bool menuLoaded = false;
 
 		enum class LightingShaderTechniques
@@ -558,6 +614,7 @@ namespace SIE
 			// Community Shaders start
 			TruePbr = 1 << 3,
 			Deferred = 1 << 4,
+			LandscapeSeams = 1 << 5,
 			// Community Shaders end
 			Specular = 1 << 9,
 			SoftLighting = 1 << 10,
@@ -609,7 +666,9 @@ namespace SIE
 
 		enum class GrassShaderTechniques
 		{
+			RenderDepthStencil = 7,
 			RenderDepth = 8,
+			TruePbr = 9,
 		};
 
 		enum class GrassShaderFlags
@@ -713,6 +772,7 @@ namespace SIE
 			LodObject = 1 << 27,
 			LocalMapFogOfWar = 1 << 28,
 			OpaqueEffect = 1 << 29,
+			TruePbr = 1 << 30,
 		};
 
 		// Shader blocking data for developer mode

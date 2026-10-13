@@ -8,10 +8,10 @@
 #include "../ENBExtender.h"
 #include "../PresetManager.h"
 #include "../TextureManager.h"
-#include "Globals.h"
-#include "State.h"
 #include "Features/Effects11/SettingsPatches.h"
 #include "Features/Effects11/ShaderPatches.h"
+#include "Globals.h"
+#include "State.h"
 
 std::filesystem::path Effect::GetFilePath() const
 {
@@ -24,6 +24,9 @@ bool Effect::Load()
 
 	if (!std::filesystem::exists(iniPath)) {
 		logger::info("[EFFECTS11] Could not find ini file '{}' for effect '{}', using defaults", iniPath.string(), GetName());
+		// Patches force off preset effects that clash with Community Shaders, so they apply without an ini too
+		Util::SettingsPatches::Apply(*this);
+		CaptureBaseValues();
 		return true;
 	}
 
@@ -72,11 +75,13 @@ bool Effect::Load()
 		bool isPerComponent = IsPerComponentVector(uiVar);
 		if (isPerComponent) {
 			static const char* suffixes[] = { "X", "Y", "Z", "W" };
-			int numComponents = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 : 4;
+			int numComponents = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 :
+			                                                                                                          4;
 			for (int i = 0; i < numComponents; ++i) {
 				std::string compKey = iniKey + suffixes[i];
 				auto* realKey = findIniKey(compKey);
-				if (!realKey) realKey = &compKey;
+				if (!realKey)
+					realKey = &compKey;
 				std::vector<char> valueBuffer(1024);
 				DWORD result = GetPrivateProfileStringA(section.c_str(), realKey->c_str(), "", valueBuffer.data(), 1024, iniPath.string().c_str());
 				if (result > 0) {
@@ -89,7 +94,8 @@ bool Effect::Load()
 				uiVar.effectVariable->AsVector()->SetFloatVector(uiVar.vectorValue);
 		} else {
 			auto* realKey = findIniKey(iniKey);
-			if (!realKey) realKey = &iniKey;
+			if (!realKey)
+				realKey = &iniKey;
 			std::vector<char> valueBuffer(1024);
 			DWORD result = GetPrivateProfileStringA(section.c_str(), realKey->c_str(), "", valueBuffer.data(), 1024, iniPath.string().c_str());
 			if (result > 0) {
@@ -110,9 +116,66 @@ bool Effect::Load()
 	}
 
 	Util::SettingsPatches::Apply(*this);
+	CaptureBaseValues();
 
 	logger::debug("[EFFECTS11] Loaded settings from '{}' for effect '{}'", iniPath.string(), GetName());
 	return true;
+}
+
+void Effect::CaptureBaseValue(UIVariable& uiVar)
+{
+	if (uiVar.type == UIVariableType::Float)
+		uiVar.baseFloatValue = uiVar.floatValue;
+	std::copy(std::begin(uiVar.vectorValue), std::end(uiVar.vectorValue), std::begin(uiVar.baseVectorValue));
+}
+
+void Effect::CaptureDefaultValue(UIVariable& uiVar)
+{
+	// #define-backed values are read from the preset ini while preprocessing, so they have no shader default
+	if (uiVar.isLabel || uiVar.isDefine || !uiVar.effectVariable)
+		return;
+	switch (uiVar.type) {
+	case UIVariableType::Float:
+		uiVar.defaultFloatValue = uiVar.floatValue;
+		break;
+	case UIVariableType::Int:
+		uiVar.defaultIntValue = uiVar.intValue;
+		break;
+	case UIVariableType::Bool:
+		uiVar.defaultBoolValue = uiVar.boolValue;
+		break;
+	default:
+		std::copy(std::begin(uiVar.vectorValue), std::end(uiVar.vectorValue), std::begin(uiVar.defaultVectorValue));
+		break;
+	}
+	uiVar.hasDefaultValue = true;
+}
+
+bool Effect::RestoreDefaultValue(UIVariable& uiVar)
+{
+	if (!uiVar.hasDefaultValue)
+		return false;
+	switch (uiVar.type) {
+	case UIVariableType::Float:
+		uiVar.floatValue = uiVar.defaultFloatValue;
+		break;
+	case UIVariableType::Int:
+		uiVar.intValue = uiVar.defaultIntValue;
+		break;
+	case UIVariableType::Bool:
+		uiVar.boolValue = uiVar.defaultBoolValue;
+		break;
+	default:
+		std::copy(std::begin(uiVar.defaultVectorValue), std::end(uiVar.defaultVectorValue), std::begin(uiVar.vectorValue));
+		break;
+	}
+	return true;
+}
+
+void Effect::CaptureBaseValues()
+{
+	for (auto& uiVar : uiVariables)
+		CaptureBaseValue(uiVar);
 }
 
 void Effect::Save()
@@ -127,7 +190,7 @@ void Effect::Save()
 	std::transform(section.begin(), section.end(), section.begin(), ::toupper);
 
 	for (const auto& uiVar : uiVariables) {
-		if (uiVar.isLabel)
+		if (uiVar.isLabel || uiVar.isPatched)
 			continue;
 		if (!uiVar.effectVariable && !uiVar.isDefine)
 			continue;
@@ -137,9 +200,12 @@ void Effect::Save()
 
 		std::string value;
 
+		const bool useBase = IsWeatherSeparated(uiVar);
+		const float* vectorValue = useBase ? uiVar.baseVectorValue : uiVar.vectorValue;
+
 		switch (uiVar.type) {
 		case UIVariableType::Float:
-			value = std::to_string(uiVar.floatValue);
+			value = std::to_string(useBase ? uiVar.baseFloatValue : uiVar.floatValue);
 			break;
 		case UIVariableType::Int:
 			value = std::to_string(uiVar.intValue);
@@ -152,10 +218,11 @@ void Effect::Save()
 		case UIVariableType::Float4:
 			if (IsPerComponentVector(uiVar)) {
 				static const char* suffixes[] = { "X", "Y", "Z", "W" };
-				int numComponents = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 : 4;
+				int numComponents = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 :
+				                                                                                                          4;
 				for (int i = 0; i < numComponents; ++i) {
 					std::string compKey = iniKey + suffixes[i];
-					std::string compValue = std::to_string(uiVar.vectorValue[i]);
+					std::string compValue = std::to_string(vectorValue[i]);
 					BOOL compResult = WritePrivateProfileStringA(section.c_str(), compKey.c_str(), compValue.c_str(), iniPath.string().c_str());
 					if (!compResult)
 						logger::warn("[EFFECTS11] Failed to write key '{}' to ini file '{}'", compKey, iniPath.string());
@@ -163,11 +230,12 @@ void Effect::Save()
 				continue;
 			} else {
 				std::ostringstream oss;
-				int numComponents = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 : 4;
+				int numComponents = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 :
+				                                                                                                          4;
 
-				std::copy(uiVar.vectorValue, uiVar.vectorValue + numComponents - 1,
+				std::copy(vectorValue, vectorValue + numComponents - 1,
 					std::ostream_iterator<float>(oss, ", "));
-				oss << uiVar.vectorValue[numComponents - 1];
+				oss << vectorValue[numComponents - 1];
 
 				value = oss.str();
 			}
@@ -187,6 +255,8 @@ void Effect::Save()
 	}
 
 	WritePrivateProfileStringA(NULL, NULL, NULL, iniPath.string().c_str());
+
+	SaveWeatherOverrides();
 
 	logger::info("[EFFECTS11] Saved settings to '{}' for effect '{}'", iniPath.string(), GetName());
 }
@@ -220,14 +290,17 @@ bool Effect::Apply()
 
 	CreateEffectTextures();
 
+	for (const auto& entry : techniques)
+		for (const auto& info : entry.second)
+			if (!info.renderTargetName.empty() && !effectTextureCache.contains(info.renderTargetName))
+				GetCachedCommonTexture(info.renderTargetName);
+
 	logger::info("[EFFECTS11] Successfully applied effect '{}'", GetName());
 	return true;
 }
 
 void Effect::Unload()
 {
-	effect = nullptr;
-
 	techniques.clear();
 	variables.clear();
 	customTextureCache.clear();
@@ -243,6 +316,8 @@ void Effect::Unload()
 	sourceOrderMap.clear();
 
 	ClearVariableCache();
+
+	effect = nullptr;
 
 	filePresent = false;
 	errors.clear();
@@ -279,6 +354,18 @@ bool Effect::LoadFXFile()
 	}
 	mainFile.close();
 
+	if (ENBExtender::IsEncryptedSource(sourceCode)) {
+		uiDefines.clear();
+		std::string error;
+		if (!ENBExtender::CreateEncryptedEffect(filePath, effect, error)) {
+			errors.push_back(error);
+			return false;
+		}
+		ReflectCompiledEffect();
+		ENBExtender::ResolveCompiledGroups(*this, filePath.parent_path() / (GetName() + ".ini"));
+		logger::info("[EFFECTS11] Loaded encrypted FX file through ENB Extender: {}", filePath.string());
+		return true;
+	}
 
 	auto enbseriesPath = filePath.parent_path();
 	auto iniFilePath = enbseriesPath / (GetName() + ".ini");
@@ -320,13 +407,14 @@ bool Effect::LoadFXFile()
 	auto preprocess = [&](const std::string& source, ID3DInclude* include) -> std::string {
 		winrt::com_ptr<ID3DBlob> blob, err;
 		if (FAILED(D3DPreprocess(source.c_str(), source.size(), filePathStr.c_str(),
-				nullptr, include, blob.put(), err.put())) || !blob)
+				nullptr, include, blob.put(), err.put())) ||
+			!blob)
 			return {};
 		return { static_cast<const char*>(blob->GetBufferPointer()), blob->GetBufferSize() };
 	};
 
 	auto tryPreprocessAndCompile = [&](const std::string& source, ID3DInclude* include,
-		const std::vector<std::string>& extraStringifyMacros = {}) -> bool {
+									   const std::vector<std::string>& extraStringifyMacros = {}) -> bool {
 		auto pp = preprocess(source, include);
 		if (pp.empty())
 			return false;
@@ -393,15 +481,20 @@ bool Effect::LoadFXFile()
 		}
 	}
 
+	ReflectCompiledEffect();
+
+	logger::info("[EFFECTS11] Successfully loaded FX file: {}", filePathStr);
+	return true;
+}
+
+void Effect::ReflectCompiledEffect()
+{
 	EnumerateAllVariables();
 	SetupCustomTextures();
 	LoadTechniques();
 	LoadUITechniques();
 
 	LoadUIVariables();
-
-	logger::info("[EFFECTS11] Successfully loaded FX file: {}", filePathStr);
-	return true;
 }
 
 Effect::TechniqueSequenceResult Effect::ExecuteTechniqueSequence(const std::string& a_baseTechniqueName, ID3D11ShaderResourceView* a_input, TextureManager::Texture& a_output, TextureManager::Texture& a_temp)
@@ -425,7 +518,9 @@ Effect::TechniqueSequenceResult Effect::ExecuteTechniqueSequence(const std::stri
 
 	uint32_t swapCounter = 0;
 	uint32_t passOffset = 0;
+	bool wroteChain = false;
 	bool targetInOutput = false;
+	bool targetInTemp = false;
 
 	ID3D11ShaderResourceView* inputSRV = nullptr;
 	ID3D11RenderTargetView* outputRTV = nullptr;
@@ -459,28 +554,35 @@ Effect::TechniqueSequenceResult Effect::ExecuteTechniqueSequence(const std::stri
 			swapCounter++;
 		}
 
-		targetInOutput = (outputRTV == a_output.rtv.get());
-
 		if (sourceTexture && sourceTexture->IsValid())
 			sourceTexture->AsShaderResource()->SetResource(inputSRV);
 
 		RenderPasses(techniqueInfo.technique.get(), outputRTV, passOffset);
 		passOffset += techniqueInfo.passCount;
+
+		// A technique with a RenderTarget annotation writes a side target and leaves the chain result
+		// where it was. Callers swap textures on this result, so report only chain writes.
+		if (outputRTV == a_output.rtv.get() || outputRTV == a_temp.rtv.get()) {
+			wroteChain = true;
+			targetInOutput = (outputRTV == a_output.rtv.get());
+			targetInTemp = !targetInOutput;
+		}
 	}
 
-	return { true, targetInOutput };
+	return { wroteChain, targetInOutput, targetInTemp };
 }
 
-void Effect::ExecuteTechnique(const std::string& techniqueName, TextureManager::Texture& output)
+bool Effect::ExecuteTechnique(const std::string& techniqueName, TextureManager::Texture& output)
 {
 	if (!IsCompiled() || !effect)
-		return;
+		return false;
 
 	auto technique = effect->GetTechniqueByName(techniqueName.c_str());
 	if (!technique || !technique->IsValid())
-		return;
+		return false;
 
 	RenderPasses(technique, output.rtv.get());
+	return true;
 }
 
 void Effect::SetupCustomTextures()
@@ -513,8 +615,9 @@ ID3D11ShaderResourceView* Effect::LoadTextureFromFile(const std::string& filenam
 
 	DirectX::ScratchImage image;
 	HRESULT hr = DirectX::LoadFromDDSFile(filepath.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, image);
+	// PNG color-space metadata must not add hardware sRGB decoding to preset LUT values.
 	if (FAILED(hr))
-		hr = DirectX::LoadFromWICFile(filepath.c_str(), DirectX::WIC_FLAGS_NONE, nullptr, image);
+		hr = DirectX::LoadFromWICFile(filepath.c_str(), DirectX::WIC_FLAGS_IGNORE_SRGB, nullptr, image);
 	if (SUCCEEDED(hr))
 		hr = DirectX::CreateShaderResourceView(device, image.GetImages(), image.GetImageCount(), image.GetMetadata(), srv.put());
 
@@ -652,7 +755,6 @@ void Effect::LoadUITechniques()
 		selectedTechniqueIndex = defaultIndex;
 }
 
-
 ID3D11RenderTargetView* Effect::GetRenderTargetView(const std::string& renderTargetName, ID3D11RenderTargetView* fallback)
 {
 	if (renderTargetName.empty())
@@ -710,6 +812,7 @@ void Effect::LoadUIVariables()
 		UIVariable uiVar = {};
 		if (ENBExtender::CreateUIVariable(uiVar, variable, varDesc, typeDesc, groupStack, *this)) {
 			LoadUIVariableValue(uiVar);
+			CaptureDefaultValue(uiVar);
 			uiVariables.push_back(std::move(uiVar));
 		}
 	}
@@ -737,10 +840,29 @@ static std::string ReadAnnotationValue(ID3DX11EffectVariable* annotation)
 		D3DX11_EFFECT_TYPE_DESC typeDesc;
 		if (annType && SUCCEEDED(annType->GetDesc(&typeDesc))) {
 			switch (typeDesc.Type) {
-			case D3D_SVT_INT: { int v; if (SUCCEEDED(scalarVar->GetInt(&v))) return std::to_string(v); break; }
-			case D3D_SVT_FLOAT: { float v; if (SUCCEEDED(scalarVar->GetFloat(&v))) return std::to_string(v); break; }
-			case D3D_SVT_BOOL: { bool v; if (SUCCEEDED(scalarVar->GetBool(&v))) return std::to_string(v ? 1 : 0); break; }
-			default: break;
+			case D3D_SVT_INT:
+				{
+					int v;
+					if (SUCCEEDED(scalarVar->GetInt(&v)))
+						return std::to_string(v);
+					break;
+				}
+			case D3D_SVT_FLOAT:
+				{
+					float v;
+					if (SUCCEEDED(scalarVar->GetFloat(&v)))
+						return std::to_string(v);
+					break;
+				}
+			case D3D_SVT_BOOL:
+				{
+					bool v;
+					if (SUCCEEDED(scalarVar->GetBool(&v)))
+						return std::to_string(v ? 1 : 0);
+					break;
+				}
+			default:
+				break;
 			}
 		}
 		int intValue;
@@ -797,7 +919,7 @@ std::string Effect::GetGroupAnnotation(ID3DX11EffectGroup* group, const std::str
 bool Effect::IsPerComponentVector(const UIVariable& uiVar)
 {
 	return (uiVar.type == UIVariableType::Float2 || uiVar.type == UIVariableType::Float3 || uiVar.type == UIVariableType::Float4) &&
-		uiVar.widgetType != UIWidgetType::Color;
+	       uiVar.widgetType != UIWidgetType::Color;
 }
 
 std::string Effect::GetVariableIniKey(const UIVariable& uiVar)
@@ -860,7 +982,8 @@ void Effect::LoadVariableFromString(UIVariable& uiVar, const std::string& value)
 		case UIVariableType::Float4:
 			{
 				std::istringstream ss(value);
-				int numComponents = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 : 4;
+				int numComponents = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 :
+				                                                                                                          4;
 				for (int i = 0; i < numComponents; ++i) {
 					char sep;
 					ss >> uiVar.vectorValue[i];
@@ -900,7 +1023,6 @@ void Effect::UpdateUIVariables()
 			break;
 		}
 	}
-
 }
 
 void Effect::RenderImGui()

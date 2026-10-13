@@ -49,7 +49,21 @@ PS_OUTPUT main(PS_INPUT input)
 		finalTexCoord = GetMinifiedTexCoord(input.TexCoord);
 	}
 
-	float4 color = sourceTex.Sample(sourceSampler, finalTexCoord);
+	float4 color = 0;
+	if (max(g_RenderTargetResolution.x, g_RenderTargetResolution.y) == 3.0) {
+		float2 sampleOffset =
+			(((int2)g_RenderTargetResolution.xy & 1) * (1. / 6.) + 0.5) /
+			g_RenderTargetResolution.xy;
+		color.x = sourceTex.Sample(sourceSampler, finalTexCoord + sampleOffset).x;
+		color.x += sourceTex.Sample(sourceSampler,
+			finalTexCoord + float2(-sampleOffset.x, sampleOffset.y)).x;
+		color.x += sourceTex.Sample(sourceSampler, finalTexCoord - sampleOffset).x;
+		color.x += sourceTex.Sample(sourceSampler,
+			finalTexCoord + float2(sampleOffset.x, -sampleOffset.y)).x;
+		color.x *= 0.25;
+	} else {
+		color = sourceTex.Sample(sourceSampler, finalTexCoord);
+	}
 
 #	if defined(APPLY_CENTER_CONTRAST)
 	int contrastIndex = (int)(5 * input.TexCoord.x) + (int)(5 * input.TexCoord.y) * 5;

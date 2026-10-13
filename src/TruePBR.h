@@ -79,9 +79,12 @@ public:
 	struct alignas(16) Settings
 	{
 		float VertexAOStrength = 1.0f;
-		uint pad[3];
+		uint EnableMicroShadows = 1;
+		float MicroShadowStrength = 1.0f;
+		uint pad;
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
+	static_assert(sizeof(Settings) == 16);
 
 	Settings settings;
 
@@ -98,6 +101,8 @@ public:
 	 * @return True if PBR materials were applied, false if no PBR texture sets were found.
 	 */
 	bool TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land);
+	/** @brief True when TESObjectLAND_SetupMaterial gives this land PBR materials, i.e. any of its quads uses a PBR texture set. */
+	bool IsPBRLand(const RE::TESObjectLAND* land);
 	/**
 	 * @brief Configures per-material shader constants and textures for PBR rendering.
 	 *
@@ -109,6 +114,13 @@ public:
 	 * @return True if PBR setup was performed, false if the material is not PBR.
 	 */
 	bool BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material);
+	/**
+	 * @brief Converts a generated grass material to PBR.
+	 *
+	 * @param sourceProperty Source lighting property containing the PBR material.
+	 * @param grassProperty Generated grass property to update.
+	 */
+	void SetupGrassMaterial(RE::BSLightingShaderProperty* sourceProperty, RE::BSLightingShaderProperty* grassProperty);
 
 	/**
 	 * @brief Binds extended PBR shader resources (displacement, RMAOS textures) to the device context.

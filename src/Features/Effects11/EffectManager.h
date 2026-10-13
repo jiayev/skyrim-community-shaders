@@ -2,6 +2,7 @@
 
 #include "Effects/ENBAdaptation.h"
 #include "Effects/ENBBloom.h"
+#include "Effects/ENBDepthOfField.h"
 #include "Effects/ENBEffect.h"
 #include "Effects/ENBEffectPostPass.h"
 #include "Effects/ENBLens.h"
@@ -57,6 +58,7 @@ public:
 	void UpdateCommonVariablesForEffect(Effect& effect);
 
 public:
+	ENBDepthOfField enbDepthOfField;
 	ENBBloom enbBloom;
 	ENBLens enbLens;
 	ENBAdaptation enbAdaptation;
@@ -82,23 +84,31 @@ public:
 	winrt::com_ptr<ID3D11Buffer> colorCorrectionConstantBuffer;
 
 	static std::string LoadShaderFile(const char* path);
+	/** @brief Sun disc visibility in [0, 1] from its sky shader blend alpha; 0 when the sun is missing or hidden. */
+	static float GetSunVisibility(const RE::Sun* a_sun);
 	void CreateQuadGeometry();
 	void CreateRenderStates();
 	void CreateCopyShaders();
 	void CreateColorCorrectionShader();
 
-	void RenderEffectsList();
-
 	// Common variable data (updated once, applied to all effects)
 	struct CommonVariableData
 	{
 		float timer[4];
-		float weather[4];
+		float weather[4];     // x/y = current/outgoing weather form IDs (mod index stripped, location-mapped), z = transition, w = game hour
+		float enbWeather[4];  // ENB SDK "Weather": x/y = [WEATHERnnn] indices of those weathers (0 = not listed), z/w as weather
 		float timeOfDay1[4];
 		float timeOfDay2[4];
 		float eNightDayFactor;
 		float eInteriorFactor;
+		float fieldOfView;
+		float tempInfo1[4];
+		float tempInfo2[4];
+		float lightParameters[4];
 	} commonData;
+	/** @brief Effective weather IDs; commonData.weather mirrors them as floats, which can't hold every form ID exactly. */
+	uint32_t currentWeatherID = 0;
+	uint32_t previousWeatherID = 0;
 	uint32_t frameCount = 0;
 
 	void UpdateCommonData();
@@ -108,6 +118,7 @@ public:
 		uint32_t useBloom = 0xFFFFFFFF;
 		uint32_t useLens = 0xFFFFFFFF;
 		uint32_t useAdaptation = 0xFFFFFFFF;
+		uint32_t useDepthOfField = 0xFFFFFFFF;
 		uint32_t usePostPass = 0xFFFFFFFF;
 
 		uint32_t enableMultipleWeathers = 0xFFFFFFFF;
@@ -122,11 +133,15 @@ public:
 
 		uint32_t brightness = 0xFFFFFFFF;
 		uint32_t gammaCurve = 0xFFFFFFFF;
+
+		uint32_t enableRain = 0xFFFFFFFF;
 	} ids;
 
 	const CommonVariableData& GetCommonData() const { return commonData; }
+	/** @brief The weather that dominates the current blend; weather-separated edits are written to it. */
+	uint32_t GetDominantWeatherID() const { return commonData.weather[2] > 0.5f ? currentWeatherID : previousWeatherID; }
 
-	bool IsInitialized() const { return initialized; }
+	bool IsInitialized() const { return initialized && copyVertexShader && copyPixelShader; }
 
 	/** @brief True when a usable preset is present; enbeffect.fx is required, so its absence means no preset.
 		Effects11 must stay fully inert in that case, leaving the image untouched. */
@@ -138,7 +153,11 @@ public:
 	void ExecuteEffect(EffectBase& effect, uint32_t enableSettingID = 0xFFFFFFFF);
 
 	// Texture copy using pixel shader
-	void CopyTexture(ID3D11ShaderResourceView* source, ID3D11RenderTargetView* destination);
+	/** @return false if nothing was drawn (missing shaders or invalid views). */
+	bool CopyTexture(ID3D11ShaderResourceView* source, ID3D11RenderTargetView* destination, bool dither = true);
+
+	/** @brief Copies source into distinct destination with CopyResource when full layouts match, else via CopyTexture, leaving no RTV bound. */
+	void CopyToTarget(ID3D11Texture2D* source, ID3D11ShaderResourceView* sourceSRV, ID3D11Texture2D* destination, ID3D11RenderTargetView* destinationRTV);
 
 	// Color correction using compute shader
 	void ApplyColorCorrection(ID3D11UnorderedAccessView* textureUAV);
@@ -153,5 +172,18 @@ private:
 	/** @brief Logs the resolved preset location, or why no preset is in use. */
 	void LogPresetStatus() const;
 
+	/** @brief Fills ENB tempInfo1 (cursor position, menu flag, button mask) and tempInfo2 (last left/right click). */
+	void UpdateCursorData();
+	/** @brief Fills ENB LightParameters with the sun's screen position in NDC (xy, -1..1, y up) and visibility (w). */
+	void UpdateLightParameters();
+	/** @brief True if the effect is compiled and its enable setting (if any) is on. */
+	bool WillEffectRun(EffectBase& effect, uint32_t enableSettingID);
+
 	bool initialized = false;
+
+	RE::TESWeather* cachedLastWeather = nullptr;
+	float averageFps = 60.0f;
+	float cursorPosition[2] = { 0.5f, 0.5f };
+	float lastLeftClick[2] = { 0.5f, 0.5f };
+	float lastRightClick[2] = { 0.5f, 0.5f };
 };

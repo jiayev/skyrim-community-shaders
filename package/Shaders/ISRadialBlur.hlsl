@@ -19,6 +19,11 @@ cbuffer PerGeometry : register(b2)
 	float4 Center : packoffset(c1);
 };
 
+float2 GetSourceTexCoord(float2 texCoord)
+{
+	return Center.w > 0.5 ? FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(texCoord) : texCoord;
+}
+
 float GetCircleParam(float centerDistance, float param1, float param2)
 {
 	float circleDistance = max(0, centerDistance - param1);
@@ -36,13 +41,13 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 offset = Center.xy - input.TexCoord;
 	float centerDistance = length(offset);
 	float2 sampleDelta =
-		0.5 * (normalize(offset) * max(0, GetCircleParam(centerDistance, Params.z, Params.y) -
-											  GetCircleParam(centerDistance, Center.z, Params.w)));
+		(1. / NUM_STEPS) * (normalize(offset) * max(0, GetCircleParam(centerDistance, Params.z, Params.y) -
+												 GetCircleParam(centerDistance, Center.z, Params.w)));
 
 	float4 color = 0;
 	for (float sampleIndex = -NUM_STEPS; sampleIndex <= NUM_STEPS; ++sampleIndex) {
 		float2 texCoord = input.TexCoord + sampleDelta * sampleIndex;
-		float2 adjustedTexCoord = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(texCoord);
+		float2 adjustedTexCoord = GetSourceTexCoord(texCoord);
 		float4 currentColor = ImageTex.SampleLevel(ImageSampler, adjustedTexCoord, 0);
 		color += currentColor;
 	}

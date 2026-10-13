@@ -8,6 +8,7 @@ struct VolumetricShadows;
 struct ExtendedMaterials;
 struct GrassCollision;
 struct GrassLighting;
+struct GrassOptimizations;
 struct HairSpecular;
 struct HorizonFix;
 struct IBL;
@@ -15,7 +16,6 @@ struct LightLimitFix;
 struct LinearLighting;
 struct LODBlending;
 struct InteriorSun;
-struct InverseSquareLighting;
 struct ScreenSpaceGI;
 struct ScreenSpaceShadows;
 struct Skylighting;
@@ -97,6 +97,7 @@ namespace globals
 		extern ExtendedMaterials extendedMaterials;
 		extern GrassCollision grassCollision;
 		extern GrassLighting grassLighting;
+		extern GrassOptimizations grassOptimizations;
 		extern HairSpecular hairSpecular;
 		extern HorizonFix horizonFix;
 		extern IBL ibl;
@@ -104,7 +105,6 @@ namespace globals
 		extern LinearLighting linearLighting;
 		extern LODBlending lodBlending;
 		extern InteriorSun interiorSun;
-		extern InverseSquareLighting inverseSquareLighting;
 		extern ScreenSpaceGI screenSpaceGI;
 		extern ScreenSpaceShadows screenSpaceShadows;
 		extern Skylighting skylighting;
@@ -237,6 +237,8 @@ namespace globals
 		extern REL::Relocation<const RE::NiRTTI*> NiBillboardNodeRTTI;
 		extern REL::Relocation<const RE::NiRTTI*> NiAlphaPropertyRTTI;
 		extern REL::Relocation<const RE::NiRTTI*> NiSourceTextureRTTI;
+		extern REL::Relocation<const RE::NiRTTI*> BSGrassShaderPropertyRTTI;
+		extern REL::Relocation<const RE::NiRTTI*> BSMultiStreamInstanceTriShapeRTTI;
 	}
 
 	extern State* state;

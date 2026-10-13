@@ -187,7 +187,7 @@ void PerformanceOverlay::DrawSettings()
 		ImGui::Checkbox(T(TKEY("show_border"), "Show Border"), &this->settings.ShowBorder);
 		ImGui::SliderFloat(T(TKEY("update_interval"), "Update Interval"), &this->settings.UpdateInterval, 0.001f, PerformanceOverlay::Settings::kMaxUpdateInterval, "%.2f seconds");
 		ImGui::SliderInt(T(TKEY("frame_history_size"), "Frame History Size"), &this->settings.FrameHistorySize,
-			this->settings.kMinFrameHistorySize, this->settings.kMaxFrameHistorySize);
+			this->settings.kMinFrameHistorySize, this->settings.kMaxFrameHistorySize, "%d", ImGuiSliderFlags_AlwaysClamp);
 
 		ImGui::Separator();
 		ImGui::Text("%s", T(TKEY("position"), "Position:"));
@@ -259,9 +259,6 @@ void PerformanceOverlay::DrawOverlay()
 		return;
 	}
 	if (!menu->overlayVisible) {
-		return;
-	}
-	if (this->settings.ShowVRAM && (!menu->GetDXGIAdapter3())) {
 		return;
 	}
 	if (!ImGui::GetCurrentContext()) {
@@ -1250,21 +1247,12 @@ void PerformanceOverlay::DrawABTestSection(const std::vector<DrawCallRow>& allRo
 
 				// Sort the settings diff if needed
 				std::vector<SettingsDiffEntry> sortedDiff = this->settingsDiff;
-				if (const ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs()) {
-					if (sortSpecs->SpecsCount > 0) {
-						int sortCol = sortSpecs->Specs->ColumnIndex;
-						bool sortAsc = sortSpecs->Specs->SortDirection == ImGuiSortDirection_Ascending;
-						std::sort(sortedDiff.begin(), sortedDiff.end(), [sortCol, sortAsc](const SettingsDiffEntry& a, const SettingsDiffEntry& b) {
-							if (sortCol == 0)
-								return sortAsc ? (a.path < b.path) : (a.path > b.path);
-							if (sortCol == 1)
-								return sortAsc ? (a.aValue < b.aValue) : (a.aValue > b.aValue);
-							if (sortCol == 2)
-								return sortAsc ? (a.bValue < b.bValue) : (a.bValue > b.bValue);
-							return false;
-						});
-					}
-				}
+				static const std::vector<Util::TableRowSortFunc<SettingsDiffEntry>> diffSorts = {
+					[](const SettingsDiffEntry& a, const SettingsDiffEntry& b, bool asc) { return asc ? (a.path < b.path) : (a.path > b.path); },
+					[](const SettingsDiffEntry& a, const SettingsDiffEntry& b, bool asc) { return asc ? (a.aValue < b.aValue) : (a.aValue > b.aValue); },
+					[](const SettingsDiffEntry& a, const SettingsDiffEntry& b, bool asc) { return asc ? (a.bValue < b.bValue) : (a.bValue > b.bValue); },
+				};
+				Util::SortTableRows(sortedDiff, Util::ReadTableSortSpec(0, true), diffSorts);
 				for (const auto& entry : sortedDiff) {
 					ImGui::TableNextRow();
 					ImGui::TableSetColumnIndex(0);
@@ -1951,6 +1939,9 @@ void PerformanceOverlay::UpdateGraphValues()
 	float deltaTime = (now.QuadPart - state.lastUpdateTime.QuadPart) /
 	                  static_cast<float>(state.overlayTimingFrequency.QuadPart);
 	state.lastUpdateTime = now;
+
+	if (!state.graphSampleGate.ShouldSample())
+		return;
 
 	// Insert latest frame time into circular buffer
 	float oldFrameTime = state.frameTimeHistory.GetData()[state.frameTimeHistory.GetHeadIdx()];  // what is the point of oldFrameTime?

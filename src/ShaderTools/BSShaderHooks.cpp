@@ -2,12 +2,13 @@
 
 namespace BSShaderHooks
 {
-	void hk_LoadShaders(REX::BSShader* bsShader, std::uintptr_t)
+	void hk_LoadShaders(RE::BSShader* bsShader, std::uintptr_t)
 	{
-		logger::info("BSShader::LoadShaders called on {} - ps count {}", bsShader->m_LoaderType, bsShader->m_PixelShaderTable.size());
+		const std::string_view loaderType = bsShader->fxpFilename ? bsShader->fxpFilename : "Unknown";
+		logger::info("BSShader::LoadShaders called on {} - ps count {}", loaderType, bsShader->pixelShaders.size());
 
-		if (strcmp("Lighting", bsShader->m_LoaderType) == 0) {
-			std::unordered_map<REX::TechniqueID, std::wstring> techniqueFileMap;
+		if (loaderType == "Lighting") {
+			std::unordered_map<std::uint32_t, std::wstring> techniqueFileMap;
 
 			const auto shaderDir = std::filesystem::current_path() /= "Data/SKSE/plugins/shaders/"sv;
 
@@ -22,19 +23,19 @@ namespace BSShaderHooks
 
 					auto filenameStr = entry.path().filename().string();
 					auto techniqueIdStr = filenameStr.substr(0, filenameStr.find('_'));
-					const REX::TechniqueID techniqueId = std::strtoul(techniqueIdStr.c_str(), nullptr, 16);
+					const std::uint32_t techniqueId = std::strtoul(techniqueIdStr.c_str(), nullptr, 16);
 					logger::info("found shader technique id {:08x} with path {}", techniqueId, entry.path().generic_string());
 					foundCount++;
 					techniqueFileMap.insert(std::make_pair(techniqueId, absolute(entry.path()).wstring()));
 				}
 
-				for (const auto& entry : bsShader->m_PixelShaderTable) {
-					auto tFileIt = techniqueFileMap.find(entry->m_TechniqueID);
+				for (const auto& entry : bsShader->pixelShaders) {
+					auto tFileIt = techniqueFileMap.find(entry->id);
 					if (tFileIt != techniqueFileMap.end()) {
 						if (const auto shader = ShaderCompiler::CompileAndRegisterPixelShader(tFileIt->second)) {
 							logger::info("shader compiled successfully, replacing old shader");
 							successCount++;
-							entry->m_Shader = shader;
+							entry->shader = reinterpret_cast<REX::W32::ID3D11PixelShader*>(shader);
 						} else {
 							failedCount++;
 						}
@@ -43,9 +44,9 @@ namespace BSShaderHooks
 			}
 		}
 
-		std::unordered_map<REX::TechniqueID, std::wstring> techniqueFileMap;
+		std::unordered_map<std::uint32_t, std::wstring> techniqueFileMap;
 
-		const auto shaderDir = std::filesystem::current_path() /= std::format("Data\\Shaders\\{}\\"sv, bsShader->m_LoaderType);
+		const auto shaderDir = std::filesystem::current_path() /= std::format("Data\\Shaders\\{}\\"sv, loaderType);
 		if (std::filesystem::exists(shaderDir)) {
 			logger::info("{}", shaderDir.generic_string());
 
@@ -57,7 +58,7 @@ namespace BSShaderHooks
 				std::string fileStr = entry.path().filename().generic_string();
 
 				std::string techniqueIDStr;
-				REX::TechniqueID techniqueId;
+				std::uint32_t techniqueId;
 				if (fileStr.ends_with(".ps.hlsl")) {
 					techniqueIDStr = fileStr.substr(0, fileStr.length() - 8);
 					techniqueId = std::strtoul(techniqueIDStr.c_str(), nullptr, 16);
@@ -77,14 +78,14 @@ namespace BSShaderHooks
 				techniqueFileMap.insert(std::make_pair(techniqueId, absolute(entry.path()).wstring()));
 			}
 
-			for (const auto& entry : bsShader->m_PixelShaderTable) {
-				auto tFileIt = techniqueFileMap.find(entry->m_TechniqueID);
+			for (const auto& entry : bsShader->pixelShaders) {
+				auto tFileIt = techniqueFileMap.find(entry->id);
 				if (tFileIt != techniqueFileMap.end()) {
 					bool compile = tFileIt->second.ends_with(L".hlsl");
 					if (const auto shader = compile ? ShaderCompiler::CompileAndRegisterPixelShader(tFileIt->second) : ShaderCompiler::RegisterPixelShader(tFileIt->second)) {
 						logger::info("shader compiled successfully, replacing old shader");
 						successCount++;
-						entry->m_Shader = shader;
+						entry->shader = reinterpret_cast<REX::W32::ID3D11PixelShader*>(shader);
 					} else {
 						failedCount++;
 					}

@@ -68,8 +68,8 @@ void SubsurfaceScattering::DrawSettings()
 					ImGui::Text("%s", T(TKEY("thickness_tooltip"), "Blur radius relative to depth."));
 				}
 
-				updateKernels = updateKernels || ImGui::ColorEdit3(T(TKEY("strength"), "Strength"), (float*)&settings.BaseProfile.Strength);
-				updateKernels = updateKernels || ImGui::ColorEdit3(T(TKEY("falloff"), "Falloff"), (float*)&settings.BaseProfile.Falloff);
+				updateKernels |= ImGui::ColorEdit3(T(TKEY("strength"), "Strength"), (float*)&settings.BaseProfile.Strength);
+				updateKernels |= ImGui::ColorEdit3(T(TKEY("falloff"), "Falloff"), (float*)&settings.BaseProfile.Falloff);
 
 				ImGui::TreePop();
 			}
@@ -85,8 +85,8 @@ void SubsurfaceScattering::DrawSettings()
 					ImGui::Text("%s", T(TKEY("thickness_tooltip"), "Blur radius relative to depth."));
 				}
 
-				updateKernels = updateKernels || ImGui::ColorEdit3(T(TKEY("strength"), "Strength"), (float*)&settings.HumanProfile.Strength);
-				updateKernels = updateKernels || ImGui::ColorEdit3(T(TKEY("falloff"), "Falloff"), (float*)&settings.HumanProfile.Falloff);
+				updateKernels |= ImGui::ColorEdit3(T(TKEY("strength"), "Strength"), (float*)&settings.HumanProfile.Strength);
+				updateKernels |= ImGui::ColorEdit3(T(TKEY("falloff"), "Falloff"), (float*)&settings.HumanProfile.Falloff);
 
 				ImGui::TreePop();
 			}
@@ -416,12 +416,14 @@ void SubsurfaceScattering::Reset()
 void SubsurfaceScattering::RestoreDefaultSettings()
 {
 	settings = {};
+	updateKernels = true;
 }
 
 void SubsurfaceScattering::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	settings.ScatterMode = std::clamp(settings.ScatterMode, (int)kPreScatter, (int)kPreAndPostScatter);
+	updateKernels = true;
 }
 
 void SubsurfaceScattering::SaveSettings(json& o_json)
@@ -487,7 +489,11 @@ ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderBurley()
 
 void SubsurfaceScattering::DataLoaded()
 {
-	isBeastRaceKeyword = RE::TESForm::LookupByEditorID("IsBeastRace")->As<RE::BGSKeyword>();
+	auto form = RE::TESForm::LookupByEditorID("IsBeastRace");
+	isBeastRaceKeyword = form ? form->As<RE::BGSKeyword>() : nullptr;
+	if (!isBeastRaceKeyword) {
+		logger::warn("IsBeastRace keyword is unavailable; using the default SSS skin classification");
+	}
 }
 
 void SubsurfaceScattering::PostPostLoad()
@@ -505,10 +511,11 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 			bool isBeastRace = true;
 
 			auto geometry = a_pass->geometry;
-			if (auto userData = geometry->GetUserData())
-				if (auto actor = userData->As<RE::Actor>())
-					if (auto race = actor->GetRace())
-						isBeastRace = race->HasKeyword(isBeastRaceKeyword);
+			if (isBeastRaceKeyword)
+				if (auto userData = geometry->GetUserData())
+					if (auto actor = userData->As<RE::Actor>())
+						if (auto race = actor->GetRace())
+							isBeastRace = race->HasKeyword(isBeastRaceKeyword);
 
 			validMaterials = true;
 

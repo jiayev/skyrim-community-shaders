@@ -125,6 +125,16 @@ public:
 
 		float vectorValue[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
+		float baseFloatValue = 0.0f;
+		float baseVectorValue[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+		// Value compiled into the shader, before the preset ini is applied ("Reset to default")
+		float defaultFloatValue = 0.0f;
+		int defaultIntValue = 0;
+		bool defaultBoolValue = false;
+		float defaultVectorValue[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		bool hasDefaultValue = false;
+
 		// UI properties
 		float floatMin = 0.0f;
 		float floatMax = 1.0f;
@@ -134,6 +144,7 @@ public:
 		int sourceOrder = INT_MAX;
 		bool isLabel = false;
 		bool isReadOnly = false;
+		bool isPatched = false;
 		bool isDefine = false;
 		bool isHidden = false;
 		bool isTopLevel = false;
@@ -152,6 +163,15 @@ public:
 	};
 
 	std::vector<UIVariable> uiVariables;
+
+	static bool IsWeatherSeparated(const UIVariable& uiVar) { return !uiVar.separation.empty() && uiVar.separation != "None"; }
+	static void CaptureBaseValue(UIVariable& uiVar);
+	/** @brief Records the current value as the shader default. Only meaningful before the ini is applied. */
+	static void CaptureDefaultValue(UIVariable& uiVar);
+	/** @brief Restores the shader default captured by CaptureDefaultValue. @return False when none was captured. */
+	static bool RestoreDefaultValue(UIVariable& uiVar);
+	void CaptureBaseValues();
+	virtual void SaveWeatherOverrides() {}
 
 	struct GroupMeta
 	{
@@ -229,15 +249,16 @@ public:
 
 	struct TechniqueSequenceResult
 	{
-		bool executed = false;
-		bool inOutput = false;
+		bool executed = false;  ///< At least one technique wrote the chain output (a_output or a_temp)
+		bool inOutput = false;  ///< The chain result is in a_output
+		bool inTemp = false;    ///< The chain result is in a_temp
 	};
 
 	// Execute a technique sequence with ping-pong rendering
 	TechniqueSequenceResult ExecuteTechniqueSequence(const std::string& a_baseTechniqueName, ID3D11ShaderResourceView* a_input, TextureManager::Texture& a_output, TextureManager::Texture& a_temp);
 
-	// Execute a single technique
-	void ExecuteTechnique(const std::string& techniqueName, TextureManager::Texture& output);
+	/** @brief Renders a single technique into output. @return False when the effect or technique is missing or invalid and nothing was rendered. */
+	bool ExecuteTechnique(const std::string& techniqueName, TextureManager::Texture& output);
 
 	// Allow EffectManager to setup common variables
 	ID3DX11Effect* GetEffect() const { return effect.get(); }
@@ -275,6 +296,8 @@ protected:
 
 private:
 	bool LoadFXFile();
+	/** @brief Builds variable, texture, technique and UI state from the created effect. */
+	void ReflectCompiledEffect();
 
 	std::unordered_map<std::string, ID3DX11EffectVariable*> variableCache;
 	std::unordered_map<std::string, TextureManager::Texture*> commonTexturePointerCache;

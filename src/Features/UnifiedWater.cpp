@@ -4,9 +4,11 @@
 #include "Menu.h"
 #include "Menu/ThemeManager.h"
 #include "Util.h"
+#include "Utils/VersionedRelocation.h"
 
 #define I18N_KEY_PREFIX "feature.unified_water."
 
+#include "RE/B/BSAtomic.h"
 #include "RE/L/LoadingMenu.h"
 #include "RE/M/MapMenu.h"
 #include "RE/P/PlayerCharacter.h"
@@ -101,6 +103,26 @@ namespace
 		return true;
 	}
 
+	/** @brief Hands @p object to the engine's deferred release queue, which destroys it at a safe point once the caller's references drop. */
+	void QueueDeferredRelease(RE::NiPointer<RE::NiRefObject>& object)
+	{
+		static REL::Relocation<void(RE::NiPointer<RE::NiRefObject>*)> func{ REL::RelocationID(69180, 70544) };
+		func(&object);
+	}
+
+	/** @brief Removes @p entry from @p entries when the array holds its last reference, as TESWaterSystem::RemoveWater does. */
+	template <class Entry>
+	void RemoveOrphanedEntry(RE::BSTArray<RE::NiPointer<Entry>>& entries, const Entry* entry)
+	{
+		if (!entry || entry->GetRefCount() != 1)
+			return;
+		const auto it = std::ranges::find_if(entries, [&](const auto& candidate) { return candidate.get() == entry; });
+		if (it == entries.end())
+			return;
+		RE::NiPointer<RE::NiRefObject> released{ it->get() };
+		QueueDeferredRelease(released);
+		entries.erase(it);
+	}
 }
 
 void UnifiedWater::DrawSettings()
@@ -432,7 +454,7 @@ void UnifiedWater::PostPostLoad()
 
 	stl::detour_thunk<BGSTerrainBlock_Detach>(REL::RelocationID(30936, 31739));
 
-	stl::detour_thunk<BGSTerrainNode_UpdateWaterMeshSubVisibility>(REL::RelocationID(31059, 31846));
+	stl::detour_thunk<BGSTerrainNode_UpdateWaterMeshSubVisibility>(Util::VersionedRelocation::ResolveID(31059, 31846, 523588));
 
 	stl::detour_thunk<TESWaterSystem_UpdateDisplacementMeshPosition>(REL::RelocationID(31384, 32175));
 
@@ -569,7 +591,18 @@ void UnifiedWater::BGSTerrainNode_UpdateWaterMeshSubVisibility::thunk(const RE::
 
 		bool cull = false;
 		if (x >= 0 && y >= 0 && x < length && y < length) {
-			if (const auto cell = gridCells->GetCell(x, y); cell && cell->cellState.any(RE::TESObjectCELL::CellState::kAttached, static_cast<RE::TESObjectCELL::CellState>(6))) {
+			RE::TESObjectCELL* cell = nullptr;
+			if (REL::Module::IsAE() && REL::Module::IsAtLeast(SKSE::RUNTIME_SSE_1_7_99)) {
+				// Skyrim 1.7 added a shared lock around the terrain-cell map lookup. Keep
+				// the guard scoped to the lookup, matching the native function.
+				static REL::Relocation<RE::BSReadWriteLock*> terrainCellMapLock{ REL::ID(564236) };
+				const RE::BSReadLockGuard lock(*terrainCellMapLock);
+				cell = gridCells->GetCell(x, y);
+			} else {
+				cell = gridCells->GetCell(x, y);
+			}
+
+			if (cell && cell->cellState.any(RE::TESObjectCELL::CellState::kAttached, static_cast<RE::TESObjectCELL::CellState>(6))) {
 				// Keep LOD visible when a loaded dry cell has no active water to replace it
 				cull = cell->cellFlags.any(RE::TESObjectCELL::Flag::kHasWater);
 			}
@@ -681,7 +714,20 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 	}
 
 	for (auto& [shape, instruction] : built) {
-		waterSystem->AddWater(shape, instruction->form.ptr, instruction->waterHeight, nullptr, true, false);
+		{
+			// Held across AddWater so no other thread can reuse this tile's reflection or normals, which keep raw pointers to its material
+			RE::BSSpinLockGuard guard(waterSystem->lock);
+			waterSystem->AddWater(shape, instruction->form.ptr, instruction->waterHeight, nullptr, true, false);
+
+			// Remove from WaterSystem, will manage it ourselves
+			if (!waterSystem->waterObjects.empty() && waterSystem->waterObjects.back()->shape.get() == shape) {
+				const auto reflections = waterSystem->waterObjects.back()->reflections.get();
+				const auto normals = waterSystem->waterObjects.back()->normals.get();
+				waterSystem->waterObjects.pop_back();
+				RemoveOrphanedEntry(waterSystem->waterReflections, reflections);
+				RemoveOrphanedEntry(waterSystem->waterNormals, normals);
+			}
+		}
 
 		if (const auto prop = shape->GetGeometryRuntimeData().shaderProperty.get(); prop && prop->GetRTTI() == globals::rtti::BSWaterShaderPropertyRTTI.get()) {
 			const auto waterShaderProp = static_cast<RE::BSWaterShaderProperty*>(prop);
@@ -693,14 +739,6 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 			if (instruction->form.ptr->flags.any(RE::TESWaterForm::Flag::kBlendNormals))
 				waterFlags |= RE::BSWaterShaderProperty::WaterFlag::kBlendNormals;
 			waterShaderProp->waterFlags = waterFlags;
-		}
-
-		// Remove from WaterSystem, will manage it ourselves. Lock: our only direct edit to the shared list.
-		{
-			RE::BSSpinLockGuard guard(waterSystem->lock);
-			if (!waterSystem->waterObjects.empty()) {
-				waterSystem->waterObjects.pop_back();
-			}
 		}
 	}
 
@@ -756,7 +794,7 @@ void UnifiedWater::BGSTerrainBlock_Detach::thunk(RE::BGSTerrainBlock* block)
 	}
 }
 
-void UnifiedWater::BSWaterShader_SetupGeometry::thunk(RE::BSShader* waterShader, RE::BSRenderPass* pass)
+void UnifiedWater::BSWaterShader_SetupGeometry::thunk(RE::BSShader* waterShader, RE::BSRenderPass* pass, uint32_t renderFlags)
 {
 	auto& singleton = globals::features::unifiedWater;
 
@@ -782,7 +820,7 @@ void UnifiedWater::BSWaterShader_SetupGeometry::thunk(RE::BSShader* waterShader,
 		}
 	}
 
-	func(waterShader, pass);
+	func(waterShader, pass, renderFlags);
 }
 
 void UnifiedWater::TESWaterSystem_UpdateDisplacementMeshPosition::thunk(RE::TESWaterSystem* waterSystem)
