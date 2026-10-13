@@ -32,7 +32,9 @@ You do not edit meshes, you do not need an ESP, and you do not need to know whic
 3. The table lists every skin texture this character is showing, where each one appears (head, body, hands, feet, an outfit's name, first person), and whether it already has a material file. Select the texture you want to work on.
 4. Adjust the material. Tick **Override** beside a value to store it in this material; unticked values keep following the common settings, so a material only needs the things that make this skin different. The categories are **Textures**, **Dual specular lobes**, **Fuzz and edges**, **Transmission and SSS**, **Detail normals** and **Wet response**.
 5. Watch the result. While the editor is open, your draft is shown on **everything that uses this texture**, on every loaded character, exactly as it will look after saving. Use **Test a specific wetness level** to check the wet look.
-6. Choose **Save material file**. It is written beside the texture under the game's Data folder (with Mod Organizer this lands in Overwrite). To write straight into your mod, choose **Save into a mod folder...** and pick the mod's folder; it is remembered with the feature's settings.
+6. Choose **Save material file**. It is written beside the texture under the game's Data folder (with Mod Organizer this lands in Overwrite). To write straight into your mod instead, choose **Write into a mod folder...** once and pick your mod's folder; it is remembered with the feature's settings and also receives textures built by the texture tools.
+
+Texture inputs are picked with **Choose DDS**, which browses the Data folder as the game sees it — with Mod Organizer, the merged view of all your mods — and stores a game path such as `textures/myskin/body_rfaos.dds`. You never deal with where a file physically lives, and the material keeps working when the texture is later packed into a BSA. Textures inside a BSA are not listed; type their path under **Resource path** instead.
 
 A skin set usually has several textures: head, body, hands and often feet, and separate ones for each sex and for beast races. Each needs its own material file. To give them the same numeric values, save one, select the next texture, and choose **Copy values from another material file...**. Painted maps are not copied, because they only fit the texture they were painted for.
 
@@ -90,7 +92,7 @@ Formats: RGBA8 or BC7 for anything with a painted alpha. BC5 UNORM works for a d
 
 ### Pack channels without external tools
 
-Open the **Texture tools** workspace. For controls, choose equal-sized grayscale images for R, G, B and A; unselected channels use the displayed constants. For detail, enable **Detail normal + region mask** and choose the normal and the mask. **Build and save DDS** writes linear data with mipmaps, optionally as BC7. **Use this texture in the current material** assigns the result to the draft you were editing. Inputs can be DDS, PNG, TGA, TIFF or BMP up to 8192 × 8192 and must have equal dimensions.
+Open the **Texture tools** workspace. For controls, choose equal-sized grayscale images for R, G, B and A; unselected channels use the displayed constants. For detail, enable **Detail normal + region mask** and choose the normal and the mask. Source images can come from anywhere on disk. Under **Output**, give the game path of the result; the editor suggests one beside the skin texture you are editing. **Build and save DDS** writes linear data with mipmaps, optionally as BC7, into the output mod folder. **Use this texture in the current material** assigns the result to the draft you were editing. Inputs can be DDS, PNG, TGA, TIFF or BMP up to 8192 × 8192 and must have equal dimensions.
 
 ## Adjust one character
 

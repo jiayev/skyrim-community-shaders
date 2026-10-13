@@ -2,6 +2,7 @@
 
 #include "I18n/I18n.h"
 #include "Skin/Editor/Files.h"
+#include "Skin/Editor/ResourceBrowser.h"
 #include "Skin/Editor/TextureTools.h"
 #include "Skin/Material/Library.h"
 #include "Skin/Persistence/Characters.h"
@@ -152,6 +153,8 @@ private:
 		bool characterAll = false;
 		std::vector<Draft> undo, redo;
 		SkinEditor::TextureTools tools;
+		SkinEditor::ResourceBrowser browser;
+		std::string toolsOutput;  ///< Resource path the texture tools write to.
 		SkinTextures::Resource thumbnail;
 		std::string thumbnailKey;
 		std::string generatedDDS;
@@ -202,6 +205,7 @@ private:
 	void SelectKey(const std::string& a_key);
 	void LoadMaterialDraft(const std::string& a_key);
 	void SaveMaterial(const std::filesystem::path& a_root);
+	std::filesystem::path OutputRoot() const;
 	void SaveCharacter();
 	void ReloadResources();
 	void PushUndo(const Editor::Draft& a_before);
