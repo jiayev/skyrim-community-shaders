@@ -79,29 +79,6 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kPerDrawVS = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 4) | (1u << 9) | (1u << 10);
 	// b7 is Advanced Skin's SkinPerGeometry: bound per draw, for the actor the engine drew last (kSkinRegister).
 	constexpr std::uint32_t kPerDrawPS = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4) | (1u << 7) | (1u << 8) | (1u << 11);
-	// Bytes per texel, for printing exactly the pixel a readback holds and nothing beyond it.
-	inline std::uint32_t FormatBytes(DXGI_FORMAT a_format)
-	{
-		switch (a_format) {
-		case DXGI_FORMAT_R32G32B32A32_FLOAT:
-			return 16;
-		case DXGI_FORMAT_R16G16B16A16_FLOAT:
-		case DXGI_FORMAT_R16G16B16A16_UNORM:
-		case DXGI_FORMAT_R32G32_FLOAT:
-			return 8;
-		case DXGI_FORMAT_R16_FLOAT:
-		case DXGI_FORMAT_R16_UNORM:
-		case DXGI_FORMAT_D16_UNORM:
-			return 2;
-		case DXGI_FORMAT_R8_UNORM:
-			return 1;
-		default:
-			return 4;  // the 32-bit packed formats the G-buffer uses (RGBA8, R10G10B10A2, R11G11B10)
-		}
-	}
-
-	// The probe's sample points, in the order they happen within a frame.
-	constexpr const char* kProbeFirstLabel = "before z-prepass";
 
 	constexpr std::uint32_t kLinearLightingRegister = 8;  // LLPerGeometry: Linear Lighting's per-object emissive multiplier
 	constexpr std::uint32_t kSkinRegister = 7;             // SkinPerGeometry: Advanced Skin's per-object wetness

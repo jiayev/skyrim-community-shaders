@@ -1,3 +1,6 @@
+// The revision producer's assembly (snapshot builder): a scene revision's versions (VersionSet), its epochs' shapes and the
+// recordings requested for them on ORG's host thread, sealed; and the render thread's use of the selected revision (RevisionOf).
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 
@@ -117,7 +120,7 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.AssembleRevision");
 		using R = SceneRevisions;
 		auto& rv = revisions;
-		// A growth still pending (G2): the publication's claims may reach past the versions a revision made now could name, so none is
+		// A growth still pending: the publication's claims may reach past the versions a revision made now could name, so none is
 		// made; the builder makes it again when the growth settles (it wakes the builder).
 		if (rv.growthPending) {
 			++rv.growthWaits;

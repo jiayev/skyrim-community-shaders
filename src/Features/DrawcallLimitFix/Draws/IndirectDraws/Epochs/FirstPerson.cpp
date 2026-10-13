@@ -1,3 +1,6 @@
+// The first-person view drawn by DCLF: its capture, targets and pipelines, the first-person phase's readiness, and its two
+// epochs' commits (their passes are ViewEpoch.cpp's). Render thread, but for FirstPersonDrawable (the scene lane's commit).
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -11,8 +14,8 @@
 namespace DCLF
 {
 	/*
-	 * T7e: the first-person view drawn by DCLF (drawcall-limit-fix.md, "First person as a view bit (T7e)"; skyrim-engine-notes.md, "The
-	 * first-person view"). The first-person skeleton's geometry is tracked under its root (Coordinator::CaptureCategories) and its members
+	 * The first-person view (drawcall-limit-fix.md, "First person as a view bit"; skyrim-engine-notes.md, "The first-person
+	 * view"). The first-person skeleton's geometry is tracked under its root (Coordinator::CaptureCategories) and its members
 	 * (kSetFirstPerson) are inputs of the one main list with the view bit kViewFirstPerson alone (MainMaskOf). On a frame the engine draws
 	 * first person (the latch: Main::Draw's cVar23), two epochs draw them with the first-person camera as the engine set it up
 	 * (FUN_1414cb020: the world camera's rotation at GetFirstPersonNodePosition, firstPersonFOV plus the animated offset, near
@@ -119,14 +122,14 @@ namespace DCLF
 				if (o < tables.objectGeometry.size() && tables.objectGeometry[o] && skeleton.contains(tables.objectGeometry[o]) &&
 					!(tables.objects[o].flags & kObjectFree) && tables.objects[o].pipelineIndex < f.slotsWanted.size()) {
 					f.slotsWanted[tables.objects[o].pipelineIndex] = 1;
-					// T7e's forward part: a forward member of the frame's claims (the report's count).
+					// The forward part: a forward member of the frame's claims (the report's count).
 					if ((tables.objects[o].flags & kObjectForward) && claims && (claims->PhasesOf(tables.objectGeometry[o]) & kSetFirstPerson))
 						++f.forwardMembersNow;
 				}
 			if (claims)
 				Diagnostics::Notify(Diagnostics::FirstPersonSkeletonWalked{ tables, skeleton, geometry.size(), *claims });
 		}
-		// T7e's forward part: the main set's forward pipelines draw into this pass when its depth is the main pass's format (the colour
+		// The forward part: the main set's forward pipelines draw into this pass when its depth is the main pass's format (the colour
 		// attachments are the main pass's own); the forward members the installed tables hold.
 		const bool forwardCompatible = formats.depth != DXGI_FORMAT_UNKNOWN && formats.depth == f.targets.depth;
 		if (f.forwardCompatible.exchange(forwardCompatible, std::memory_order_acq_rel) != forwardCompatible)

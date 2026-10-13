@@ -1,3 +1,6 @@
+// MaterialPort's snapshot capture (any thread where the material is alive), the capture queue's producer side and Evaluate's
+// dispatch to the vanilla, PBR, feature-hook and Effect ports.
+
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
@@ -81,7 +84,7 @@ namespace DCLF::MaterialPort
 
 	bool Evaluate(const MaterialSnapshot& a_snapshot, std::uint32_t a_passDescriptor, const MaterialFrame& a_frame, MaterialRecord& a_out)
 	{
-		// T7d's Effect port: an effect material is BSEffectShader's (no Community Shaders hook on its SetupMaterial).
+		// An effect material is BSEffectShader's (no Community Shaders hook on its SetupMaterial).
 		if (a_snapshot.effect)
 			return EvaluateEffect(a_snapshot, a_passDescriptor, a_frame.vanilla, a_out);
 		// The hooks' chain (installed in feature order): Advanced Skin and TerrainHelper around TruePBR around vanilla. TruePBR's

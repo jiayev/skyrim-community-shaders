@@ -1,11 +1,11 @@
+// CS_DCLF_MIRROR_PARITY, the reads: each of the lane's reads ported to the mirror checked against the live read (the object alive: the lane
+// holds it), under a live check's lease; a difference is checked again after the next batch (Coordinator's DeferredRead: lagged, or it
+// differs). The passes run their evaluations on their own thread while this observes (Policy::SerialFanout).
+
 #include "SceneObservers.h"
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
-
-// CS_DCLF_MIRROR_PARITY, the reads: each of the lane's reads ported to the mirror checked against the live read (the object alive: the lane
-// holds it), under a live check's lease; a difference is checked again after the next batch (Coordinator's DeferredRead: lagged, or it
-// differs). The passes run their evaluations on their own thread while this observes (Policy::SerialFanout).
 
 namespace DCLF::Diagnostics
 {

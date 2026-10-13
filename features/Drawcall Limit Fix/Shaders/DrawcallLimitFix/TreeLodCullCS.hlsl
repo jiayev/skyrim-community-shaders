@@ -1,5 +1,5 @@
 // Drawcall Limit Fix: tree LOD's instances culled for the main camera, in the depth segment's two phases like every other
-// object (dclf-lod.md, "Tree LOD: the draws"; Scene/TreeLod.h; Passes/Passes.cpp, "The two-phase tail").
+// object (dclf-lod.md, "Tree LOD: the draws"; Scene/Ports/TreeLod.h; Passes/Passes.cpp, "The two-phase tail").
 //
 // Phase 1 (before the Z-prepass's draw): one thread per instance record, shape slot (id / 75), record (id % 75). A record past
 // its slot's count, or hidden (scale 0, as the engine packs a hidden instance), draws nothing; the rest are tested against the
@@ -13,6 +13,7 @@
 // every record the tables hold, and the draw row bounds the slots.
 #include "DrawcallLimitFix/HzbTest.hlsli"
 
+// Must match TreeLodCullConstants (Draws/IndirectDraws/Core/GpuLayouts.h).
 cbuffer TreeLodCullConstants : register(b0)
 {
 	uint ShapesIndex;     // ByteAddressBuffer: TreeLod::ShapeRow per shape slot

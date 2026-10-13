@@ -1,3 +1,5 @@
+// TreeAnimation: the tree manager's animation list without DCLF's trees (render thread syncs, the engine's add/remove/clear detours
+// on any thread), and the tree list's multibound results around its loop (main thread). TreeAnimation.h describes it.
 #include "Features/DrawcallLimitFix/Engine/Cull/TreeAnimation.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
@@ -12,9 +14,6 @@
 #include <atomic>
 #include <cstring>
 
-// The tree manager's animation list without DCLF's trees (drawcall-limit-fix.md, "Owned trees off the tree manager's
-// animation list"). TreeAnimation.h describes it.
-
 namespace DCLF::TreeAnimation
 {
 	namespace
@@ -27,7 +26,7 @@ namespace DCLF::TreeAnimation
 		constexpr std::uintptr_t kClear = 0x437ae0;     // FUN_140437ae0(manager): both lists emptied (TES, the manager's teardown)
 		constexpr std::size_t kAnimationList = 0x50;    // BSTArray<NiAVObject*> (a reference each, taken by hand)
 		constexpr std::size_t kLock = 0x18;             // BSSpinLock (owner, count), the animation list's
-		// The tree list (T7b5's fix; skyrim-engine-notes.md, "Tree manager list (T7b5)").
+		// The tree list (skyrim-engine-notes.md, "Tree manager list").
 		constexpr std::size_t kTreeList = 0x20;          // BSTArray<BSTreeNode*>
 		constexpr std::size_t kTreeLock = 0x10;          // BSSpinLock of the tree list
 		constexpr std::size_t kMultiBound = 0x128;       // BSMultiBoundNode's BSMultiBound
@@ -72,7 +71,7 @@ namespace DCLF::TreeAnimation
 			// 2 out), and stood-in trees found without a multibound (the loop never visits them, as for the engine).
 			std::uint64_t treeLoops = 0, treesIn = 0, treesOut = 0, noMultiBound = 0;
 			std::array<std::uint64_t, 3> replaced{};
-			// T7f preparation, every other BSTreeNode on the list, under CS_DCLF_TREE_LIST_ALL: written in view / out of view (and the
+			// Every other BSTreeNode on the list, under CS_DCLF_TREE_LIST_ALL: written in view / out of view (and the
 			// engine's value they replaced), and DCLF's result against the engine's before the write (same, DCLF in and the engine out, DCLF
 			// out and the engine in, the engine's stale). Aside: no DCLF verdict (not listed, or not yet written), no multibound.
 			std::uint64_t wideIn = 0, wideOut = 0, wideNoVerdict = 0, wideNoMultiBound = 0;
@@ -238,7 +237,7 @@ namespace DCLF::TreeAnimation
 
 	void BeforeListLoop(std::byte* a_manager)
 	{
-		// T7f preparation: CS_DCLF_TREE_LIST_ALL gives the loop DCLF's verdict for every BSTreeNode DCLF lists (IndirectDraws::
+		// CS_DCLF_TREE_LIST_ALL gives the loop DCLF's verdict for every BSTreeNode DCLF lists (IndirectDraws::
 		// AccumulatedVerdictOf: the root's kAccumulated as written at Main::Update's entry).
 		static const bool all = SwitchEnabled(Switch::TreeListAll);
 		if (!installed || !running || !a_manager || !written.empty() || (ownedTrees.empty() && !all))

@@ -1,3 +1,4 @@
+// RoomVisibility: the detour of Main::IsRoomVisible's three calls (job threads), answered from PortalViews' VisibleSet while DCLF runs.
 #include "Features/DrawcallLimitFix/Engine/Cull/RoomVisibility.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
@@ -22,7 +23,7 @@ namespace DCLF::RoomVisibility
 		std::atomic<bool> live{ false };
 		std::atomic<std::uint64_t> answered{ 0 }, engineAnswered{ 0 };
 
-		/** @brief The three calls of Main::IsRoomVisible: DCLF's answer while it runs (T7f checklist item 3), else the engine's. */
+		/** @brief The three calls of Main::IsRoomVisible: DCLF's answer while it runs, else the engine's. */
 		struct IsRoomVisible
 		{
 			static bool thunk(void* a_main, RE::NiNode* a_node)

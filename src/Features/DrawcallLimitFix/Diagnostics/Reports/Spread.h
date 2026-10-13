@@ -7,8 +7,8 @@
 
 namespace DCLF::Reports
 {
-	/** @brief avg / p95 / max of a_values (sorted here), "-" without any. */
-	inline std::string Spread(std::vector<double>& a_values)
+	/** @brief avg / p95 / max of a_values (sorted here) with a_decimals decimals, "-" without any. */
+	inline std::string Spread(std::vector<double>& a_values, int a_decimals = 3)
 	{
 		if (a_values.empty())
 			return "-";
@@ -17,7 +17,7 @@ namespace DCLF::Reports
 		for (const double value : a_values)
 			sum += value;
 		const std::size_t p95 = (std::min)(a_values.size() - 1, a_values.size() * 95 / 100);
-		return fmt::format("{:.3f}/{:.3f}/{:.3f}", sum / double(a_values.size()), a_values[p95], a_values.back());
+		return fmt::format("{:.{}f}/{:.{}f}/{:.{}f}", sum / double(a_values.size()), a_decimals, a_values[p95], a_decimals, a_values.back(), a_decimals);
 	}
 
 	/** @brief p50 / p95 / max of a_values (sorted here), "-" without any. */

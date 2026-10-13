@@ -1,3 +1,6 @@
+// LightingDescriptors.h's ports: technique selection, pass and shader descriptors, shadow bits, LOD fades, tree animation and the
+// Effect / particle acceptance. Pure functions of the records and FrameGlobals; the Sample* functions are the render thread's.
+
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 
 #include "ShaderCache.h"
@@ -33,23 +36,19 @@ namespace DCLF
 			case Technique::Envmap:
 			case Technique::Glowmap:
 			case Technique::Parallax:
-			// Parallax occlusion and multilayer parallax: SetupMaterial writes their constants and textures (ParallaxOccData,
-			// MultiLayerParallaxData, the layer and envmap maps), which the material records take from the engine's own
-			// evaluation; SetupTechnique's remap and samplers are SetupTechniqueDescriptor's and EvaluateTechnique's.
+			// SetupMaterial writes their constants and textures (ParallaxOccData, MultiLayerParallaxData, layer and envmap maps),
+			// which the material records take from the engine's evaluation.
 			case Technique::ParallaxOcc:
 			case Technique::MultilayerParallax:
 				return true;
-			// A multi-index shape's ice or snow layer (kMultiIndexSnow with kProjectedUV): SparkleParams is SetupMaterial's, the
-			// projected values the shape's own (Coordinator::WriteObjectExtras), and the slot-10 texture SetupTechnique binds is replaced by
-			// SetupGeometry's projected textures.
+			// A multi-index shape's ice or snow layer (kMultiIndexSnow with kProjectedUV): SparkleParams is SetupMaterial's; SetupGeometry's
+			// projected textures replace the slot-10 texture SetupTechnique binds.
 			case Technique::MultiIndexSparkle:
 				return ActiveToggles().layers;
 			case Technique::TreeAnim:
 				return ActiveToggles().trees;
-			// Actor skin (bodies, hands): the Lighting shader's SKIN path with TintColor, a PerMaterial constant.
-			// NPC faces (Facegen: the tint and detail maps at t3/t4), hair (Hair: TintColor) and eyes (Eye: the eye
-			// centres, material VS constants): everything they add is written by SetupMaterial, which the material
-			// records take from the engine's own evaluation. A face part's positions are FaceSnapshots'.
+			// Actor skin (SKIN path, TintColor), faces (Facegen: tint and detail maps at t3/t4), hair (TintColor) and eyes (eye
+			// centres, material VS constants): all written by SetupMaterial. A face part's positions are FaceSnapshots'.
 			case Technique::FacegenRGBTint:
 			case Technique::Facegen:
 			case Technique::Hair:
@@ -58,13 +57,11 @@ namespace DCLF
 			case Technique::MTLand:
 			case Technique::MTLandLODBlend:
 				return MtLandEnabled();
-			// Object LOD (dclf-lod.md): the LODOBJECTS / LODOBJECTSHD permutations, drawn by their visible segment ranges.
-			// Reached only for a BSSubIndexTriShape with the LOD object flags (DeriveLightingDescriptors).
+			// Object LOD (dclf-lod.md), drawn by visible segment ranges; only a BSSubIndexTriShape with the LOD object flags.
 			case Technique::LODObjects:
 			case Technique::LODObjectHD:
 				return ActiveToggles().lodObjects;
-			// Terrain LOD (dclf-lod.md): the LODLAND / LODLANDNOISE permutations. Reached only for a land block's shape under the
-			// LOD root (IsLodLand).
+			// Terrain LOD (dclf-lod.md): only a land block's shape under the LOD root (IsLodLand).
 			case Technique::LODLand:
 			case Technique::LODLandNoise:
 				return ActiveToggles().lodTerrain;
@@ -73,9 +70,8 @@ namespace DCLF
 			}
 		}
 
-		// FUN_14147c470: false when the feature has faded out; otherwise the fade factor in a_fade.
-		// a_metric is the fade node's current LOD metric (+0x144); the previous one (+0x148) only
-		// feeds the engine's render-pass cache invalidation, which DCLF does not need.
+		// FUN_14147c470: false when the feature has faded out, else the fade factor in a_fade. a_metric is the fade node's current
+		// LOD metric (+0x144); the previous one (+0x148) only feeds the engine's render-pass cache invalidation.
 		bool LodFadeVisible(float a_metric, float a_start, float a_end, float& a_fade)
 		{
 			if (a_end < a_metric)
@@ -88,15 +84,14 @@ namespace DCLF
 			return true;
 		}
 
-
 		// BSLightingShader::SetupTechnique splits the pass descriptor (engine notes, SetupTechnique).
 		constexpr std::uint32_t VertexDescriptorFromPass(std::uint32_t d)
 		{
 			return (d & 0x48007u) | ((d & 0x20a00u) ? 0x200u : 0u) | (d & 0x3f000000u);
 		}
 
-		// Community Shaders replaces the pixel split (TruePBR.cpp, BSLightingShader_GetPixelTechnique) so that
-		// bits 3-5 (its TruePbr/Deferred flags) survive; only the shadow light count (bits 6-8) is dropped.
+		// Community Shaders' pixel split (TruePBR.cpp, BSLightingShader_GetPixelTechnique) keeps bits 3-5 (TruePbr/Deferred);
+		// only the shadow light count (bits 6-8) is dropped.
 		constexpr std::uint32_t PixelDescriptorFromPass(std::uint32_t d)
 		{
 			std::uint32_t p = d & ~0x1c0u;
@@ -128,15 +123,13 @@ namespace DCLF
 
 	std::uint32_t StaticShadowBits(const SceneCapture::LeafView& a_leaf, bool a_settled, const SceneCapture::PropertyRecord* a_property)
 	{
-		// The frame's globals (FrameGlobals: the main accumulator's deferred-shadow byte, no ShadowDir, screen-door fades).
 		const auto& g = FrameGlobals::Current();
 		const auto* lighting = SceneCapture::LeafView::Lighting(a_property ? a_property : a_leaf.property);
 		if (!lighting || !g.accumulator)
 			return 0;
 		const std::uint64_t flags = lighting->flags;
-		// Its fade node's record (the leaf's).
 		const auto* fadeNode = lighting->fadeNode ? a_leaf.FadeNodeOf(lighting) : nullptr;
-		// a_settled: fully faded in, whatever the node holds (a member's pass, whose fade is the GPU's).
+		// a_settled: fully faded in whatever the node holds (a member's pass: its fade is the GPU's).
 		const float fade = fadeNode && !a_settled ? fadeNode->currentFade : 1.0f;
 		const float alpha = lighting->materialAlpha * fade;  // the record's materialAlpha: 1 without a material
 		const bool blended = a_leaf.AlphaBlending();
@@ -158,7 +151,6 @@ namespace DCLF
 
 	LodFadeFrame SampleLodFadeFrame()
 	{
-		// The frame's capture (FrameGlobals): the main camera, the [LightingShader] thresholds and the fade update's constants.
 		const auto& g = FrameGlobals::Current();
 		LodFadeFrame frame;
 		frame.eye[0] = g.eye[0];
@@ -186,7 +178,7 @@ namespace DCLF
 		if (!a_property || !a_property->fadeNode)
 			return { 0.0f, 0.0f, 0.0f, -1.0f };
 		const auto* node = a_property->fadeNode;
-		// T7d's refraction: a refraction property's own fade (fRefractionLODFade*, GetRenderPasses' unless kNoFade) is fade-sensitive too.
+		// A refraction property's own fade (fRefractionLODFade*, GetRenderPasses' unless kNoFade) is fade-sensitive too.
 		const std::uint64_t flags = a_property->flags.underlying();
 		const bool refractionFades = (flags & (Bit(Flag::kRefraction) | Bit(Flag::kTempRefraction))) && !(flags & Bit(Flag::kNoFade));
 		const bool held = (!(flags & (Bit(Flag::kSpecular) | Bit(Flag::kMultiIndexSnow) | Bit(Flag::kEnvMap))) && !refractionFades) ||
@@ -195,32 +187,13 @@ namespace DCLF
 		return { center.x, center.y, center.z, static_cast<float>(Engine::At<std::uint8_t>(node, 0x153) & 0xF) + (held ? kLodFadeHeld : 0.0f) };
 	}
 
-	float LodMetricOf(const LodFadeFrame& a_frame, const std::array<float, 4>& a_node)
-	{
-		// FUN_14147b110: the distance from the camera to the node's bound centre, scaled by lodAdjust over the LOD type's
-		// divisor (the default scale when that is not positive), times the metric scale; or the override.
-		if (a_frame.overridden != 0.0f)
-			return a_frame.metricOverride;
-		const float divisor = a_frame.divisors[static_cast<std::uint32_t>(a_node[3]) & 0xF];
-		const float scale = divisor > 0.0f ? a_frame.lodAdjust / divisor : a_frame.defaultScale;
-		const float dx = a_node[0] - a_frame.eye[0], dy = a_node[1] - a_frame.eye[1], dz = a_node[2] - a_frame.eye[2];
-		return std::sqrt(dx * dx + dy * dy + dz * dz) * scale * a_frame.metricScale;
-	}
-
-	float LodFadeAt(float a_metric, float a_start, float a_end)
-	{
-		float fade = 0.0f;
-		return LodFadeVisible(a_metric, a_start, a_end, fade) ? fade : 0.0f;
-	}
-
 	static_assert(kLightingPixelDeferred == static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::Deferred));
 
 	void LightingShaderDescriptors(std::uint32_t a_pass, bool a_deferred, std::uint32_t& a_vertex, std::uint32_t& a_pixel)
 	{
 		uint vertex = VertexDescriptorFromPass(SetupTechniqueDescriptor(a_pass));
 		uint pixel = PixelDescriptorFromPass(SetupTechniqueDescriptor(a_pass));
-		// Forced, so the result does not depend on whether the deferred pass happens to be running; ModifyShaderLookup only adds the
-		// bit, so a forward view's descriptor is the same without it.
+		// Forced, so the result does not depend on whether the deferred pass is running; the lookup only adds the bit.
 		globals::state->ModifyShaderLookup(RE::BSShader::Type::Lighting, vertex, pixel, true);
 		if (!a_deferred)
 			pixel &= ~kLightingPixelDeferred;
@@ -231,7 +204,7 @@ namespace DCLF
 	std::uint32_t SetupTechniqueDescriptor(std::uint32_t a_pass)
 	{
 		const std::uint32_t technique = a_pass & 0x3f000000u;
-		// The engine's bytes 0x2032fdb and 0x2035500, as the frame captured them (FrameGlobals).
+		// The engine's bytes 0x2032fdb and 0x2035500 as the frame captured them.
 		const auto& g = FrameGlobals::Current();
 		if (technique == 0x12000000u && !g.techniqueByte12)
 			return (a_pass & 0xc9ffffffu) | 0x9000000u;
@@ -279,18 +252,14 @@ namespace DCLF
 
 	namespace
 	{
-		// Globals BSLightingShader::SetupGeometry's TreeAnim case reads. Module-relative, like the other
-		// engine addresses this feature depends on; a wrong one shows up at once as a capture-parity
-		// mismatch on VS PerGeometry 4 or 5 rather than as a silent wrong value.
-		// Resolved as addresses and read through, rather than as typed Relocations: these are plain data
-		// globals, not the function or vtable pointers Relocation's accessors are shaped for.
+		// Data globals SetupGeometry's TreeAnim case reads, resolved as addresses and read through.
 		REL::Relocation<std::uintptr_t> treeWindFadeStart{ REL::Offset(Engine::Address::kTreeWindFadeStart) };
 		REL::Relocation<std::uintptr_t> treeWindFadeEnd{ REL::Offset(Engine::Address::kTreeWindFadeEnd) };
 		REL::Relocation<std::uintptr_t> treeWindTimerScale{ REL::Offset(Engine::Address::kTreeWindTimerScale) };
 		// A pointer to the object whose +0x304 holds the global wind magnitude.
 		REL::Relocation<std::uintptr_t> treeWindSource{ REL::Offset(Engine::Address::kShadowSceneNode) };
-		// The tree manager (BSTreeManager*), whose +0x78 is the gust's speed and +0x80 the squared range of its update, and
-		// the frame's seconds the manager advances the clocks by (FUN_140437d40's argument; GetSecondsPassed reads it).
+		// BSTreeManager* (+0x78 the gust's speed, +0x80 the squared range of its update), and the frame's seconds it advances the
+		// clocks by (FUN_140437d40's argument; GetSecondsPassed reads it).
 		REL::Relocation<std::uintptr_t> treeManager{ REL::Offset(Engine::Address::kTreeManager) };
 		REL::Relocation<std::uintptr_t> frameSeconds{ REL::Offset(Engine::Address::kFrameSeconds) };
 
@@ -304,7 +273,7 @@ namespace DCLF
 
 		const void* AsTreeNode(const RE::BSFadeNode* a_fadeNode)
 		{
-			// The node the engine treats as "no node" as well as null (0x14332a2a0 holds a pointer to it; the global's address is not it).
+			// The engine's "no node" sentinel (0x14332a2a0 holds a pointer to it) counts as null.
 			if (!a_fadeNode || a_fadeNode == Engine::EmptyFadeNode())
 				return nullptr;
 			const auto* vtable = *reinterpret_cast<const std::uintptr_t* const*>(a_fadeNode);
@@ -315,9 +284,8 @@ namespace DCLF
 		// The engine's own square root, reproduced bit for bit (engine notes: Func6, case 0xc).
 		float FastSqrt(float a_value)
 		{
-			// The engine shifts the bit pattern as a SIGNED integer (`sar`). For every real distance the
-			// two shifts agree; they differ on a negative pattern, which is what a fern's uninitialised
-			// distance field holds, and where the engine's result then clamps to the maximum amplitude.
+			// The engine shifts as a SIGNED integer (`sar`): this matters for a negative pattern (a fern's uninitialised distance
+			// field), where the engine's result clamps to the maximum amplitude.
 			const auto bits = std::bit_cast<std::int32_t>(a_value);
 			const float estimate = std::bit_cast<float>(static_cast<std::uint32_t>(0x5f3759df - (bits >> 1)));
 			return (1.5f - a_value * 0.5f * estimate * estimate) * estimate * a_value;
@@ -328,8 +296,8 @@ namespace DCLF
 			return *reinterpret_cast<const float*>(static_cast<const std::byte*>(a_node) + a_offset);
 		}
 
-		// FUN_14147d640(node): the node's object (+0x118, through its vfunc 0x30), which FUN_140437e50 selects a tree for the near
-		// list by: its +0x128, that one's +0x18, and an int at +0x10 of that equal to 1.
+		// FUN_14147d640(node): the node's object (+0x118, via vfunc 0x30). FUN_140437e50 takes a tree into the near list when
+		// object+0x128 -> +0x18 -> int at +0x10 == 1.
 		REL::Relocation<std::uintptr_t (*)(const void*)> treeObjectOf{ REL::Offset(Engine::Address::kTreeFirstMultiBound) };
 
 		bool NearListSelectable(const void* a_node)
@@ -364,11 +332,9 @@ namespace DCLF
 		a_out.timer = TreeNodeFloat(node, 0x164);
 		a_out.previousTimer = TreeNodeFloat(node, 0x168);
 		a_out.amplitude = TreeNodeFloat(node, 0x15c);
-		// The manager advances a tree node only in its near loop (FUN_1404381e0's loop 2, over FUN_140437e50's near list): a node
-		// the near list selects (NearListSelectable), whose model (+0xF8, its +0x40) has bones (+0xB8). It scales the gust by that
-		// model's +0xB0. Any other node keeps its own clock and amplitude: its model's +0xB0 is no amplitude the engine ever reads
-		// (2.3e36 on trees whose leaves, gusted by it, covered the sun's cascades). Not replicated: the near list's cap on its
-		// count (the nearest first).
+		// The manager advances a node only in its near loop (FUN_1404381e0's loop 2 over FUN_140437e50's near list): one the list
+		// selects whose model (+0xF8, its +0x40) has bones (+0xB8), scaling the gust by the model's +0xB0. Other nodes keep their
+		// clock and amplitude; their +0xB0 is never read (can be garbage like 2.3e36). Not replicated: the near list's count cap.
 		const auto* holder = *reinterpret_cast<const std::byte* const*>(bytes + 0xF8);
 		const auto* model = holder ? *reinterpret_cast<const std::byte* const*>(holder + 0x40) : nullptr;
 		const bool bones = model && *reinterpret_cast<const void* const*>(model + 0xB8);
@@ -400,16 +366,12 @@ namespace DCLF
 	{
 		const void* node = AsTreeNode(a_property.fadeNode);
 
-		// The wind's globals as the frame captured them (FrameGlobals).
 		const auto& g = FrameGlobals::Current();
 		a_out.treeParams[0] = 0.0f;
 		a_out.treeParams[1] = g.treeWindMagnitude;
 
-		// Amplitude falls off with distance. The engine does NOT use sqrtf here: it takes the squared
-		// distance at +0x158 through the 0x5f3759df fast inverse square root with one Newton step, and
-		// multiplies back by x. Substituting std::sqrt agreed for every tree that clamps at one end of
-		// the fade band or the other, and disagreed for the 600 draws a frame actually inside it - which
-		// is exactly the population whose amplitude depends on the value rather than on the clamp.
+		// Amplitude falls off with distance. The engine takes the squared distance at +0x158 through the 0x5f3759df fast inverse
+		// square root (one Newton step) times x, not sqrtf; std::sqrt differs for trees inside the fade band.
 		const float distance = node ? FastSqrt(TreeNodeFloat(node, 0x158)) : 0.0f;
 		const float maxAmplitude = node ? TreeNodeFloat(node, 0x15c) : 1.0f;
 		const float fadeStart = g.treeWindFadeStart;
@@ -423,8 +385,7 @@ namespace DCLF
 		const float scale = g.treeWindTimerScale;
 		a_out.windTimers[0] = node ? TreeNodeFloat(node, 0x164) * scale : 0.0f;
 		a_out.windTimers[1] = node ? TreeNodeFloat(node, 0x168) * scale : 0.0f;
-		// Diagnostics only (the shader reads xy): the raw inputs the amplitude came from, so a parity
-		// mismatch on it can say whether the node or its distance was the thing that differed.
+		// Diagnostics only (the shader reads xy): the amplitude's raw inputs, so a parity mismatch can tell node from distance.
 		a_out.windTimers[2] = node ? TreeNodeFloat(node, 0x158) : -1.0f;
 		a_out.windTimers[3] = node ? TreeNodeFloat(node, 0x15c) : -1.0f;
 	}
@@ -446,11 +407,8 @@ namespace DCLF
 	namespace
 	{
 		/**
-		 * @brief alphaBlendMode as BSShader's alpha setup (AE FUN_14150bc80) chooses it from a blending
-		 * NiAlphaProperty's source and destination functions, or 0 when the pair is one it leaves alone.
-		 *
-		 * The function also picks mode 1 for a non-blending property when the shader property's alpha is
-		 * below 1 (a fading object); that case is not eligible here, so it is not modelled.
+		 * @brief alphaBlendMode as BSShader's alpha setup (AE FUN_14150bc80) picks it from a blending NiAlphaProperty's functions, or
+		 * 0 for a pair it leaves alone. (Its mode 1 for a non-blending property with alpha below 1 is not modelled: not eligible.)
 		 */
 		std::uint32_t AlphaBlendModeOf(const SceneCapture::AlphaRecord& a_alpha)
 		{
@@ -476,8 +434,7 @@ namespace DCLF
 	{
 		std::uint64_t f = a_property.flags;
 
-		// Terrain LOD (a land block's BSTriShape) is DCLF's with its toggle; object LOD (a BSSubIndexTriShape: dclf-lod.md) with its
-		// own, drawn by the ranges its hidden cells leave (LodSegments).
+		// Terrain LOD (a land block's BSTriShape) and object LOD (a BSSubIndexTriShape, drawn by LodSegments' ranges) each by toggle.
 		if ((f & Bit(Flag::kLODLandscape)) && !(ActiveToggles().lodTerrain && IsLodLand(a_property.flags, a_leaf.Type())))
 			return Ineligible::Lod;
 		if ((f & (Bit(Flag::kLODObjects) | Bit(Flag::kHDLODObjects))) && !(ActiveToggles().lodObjects && IsLodObject(a_property.flags, a_leaf.Type())))
@@ -485,29 +442,21 @@ namespace DCLF
 		const auto* alpha = a_leaf.alpha;
 		const bool blending = a_leaf.AlphaBlending();
 		if (a_layer) {
-			// A multi-index shape's layer (engine notes, "The main modes' registration"): every pass of its property goes into
-			// geometry group 2 with hint 12, whatever its flags, and FUN_1414b3bb0 draws that group after the opaque decals
-			// with the same state - depth test and write, bias mode 8 + b, blending off, write mode 10, render flags 0x41 (the
-			// alpha property is not applied). DCLF's decal group 3, drawn between its opaque and blended groups.
+			// A multi-index shape's layer (engine notes, "The main modes' registration"): every pass goes into geometry group 2 with
+			// hint 12, and FUN_1414b3bb0 draws it after the opaque decals with their state (depth test+write, bias mode 8 + b, no
+			// blending, write mode 10, render flags 0x41: alpha property not applied). DCLF's decal group 3, between opaque and blended.
 			if (!ActiveToggles().decals)
 				return Ineligible::Decal;
 			a_out.decalGroup = 3;
 			a_out.decalBlendMode = 0;
 			a_out.decalWriteMode = 10;
 		} else if (f & (Bit(Flag::kDecal) | Bit(Flag::kDynamicDecal))) {
-			// Decals, from what the engine was measured doing with them (engine notes:
-			// decals). A Lighting decal pass carries accumulation hint 2 or 3, and the hint is which
-			// geometry group draws it and with what state:
-			//   hint 2: depth test+write with the opaque decal bias, blending off, write mode 10, the main
-			//           pass's render flags (0x41: the alpha property is NOT applied);
-			//   hint 3: depth test only with the blended decal bias, render flags 0x45, so the alpha
-			//           property IS applied - blend mode from its functions, alpha test from its flag -
-			//           and write mode 1 when the property has kZBufferWrite (SetupGeometry forces it),
-			//           11 otherwise (what the group function set).
-			// Both test depth against everything opaque and neither occludes anything its host does not,
-			// which is why DCLF draws them in a second pass without writing depth (IndirectDraws). Without
-			// an accumulated pass (scene membership) the hint is GetRenderPasses' for the settled object:
-			// 2 + (alpha < 1 or blending), with the material's alpha (the fade is the feedback's).
+			// Decals (engine notes: decals). The accumulation hint picks the geometry group and state:
+			//   hint 2: depth test+write, opaque decal bias, no blending, write mode 10, render flags 0x41 (alpha property NOT applied);
+			//   hint 3: depth test only, blended decal bias, render flags 0x45 (alpha property applied: blend mode from its functions,
+			//           alpha test from its flag), write mode 1 with kZBufferWrite (SetupGeometry forces it), else 11 (the group's).
+			// Neither occludes anything its host does not, so DCLF draws them in a second pass without depth writes. Without an
+			// accumulated pass the hint is GetRenderPasses' for the settled object: 2 + (material alpha < 1 or blending).
 			if (!ActiveToggles().decals || !(f & Bit(Flag::kZBufferTest)))
 				return Ineligible::Decal;
 			const std::uint32_t hint = a_accumulated ? a_accumulated->hint : (a_property.materialAlpha < 1.0f || blending) ? 3u : 2u;
@@ -518,8 +467,7 @@ namespace DCLF
 				a_out.decalBlendMode = 0;
 				a_out.decalWriteMode = 10;
 			} else if (hint == 3) {
-				// The fading case (alpha < 1 without blending) takes blend mode 1 in the engine and is
-				// also what Ineligible::Fading covers; it is left to the native loop.
+				// The fading case (alpha < 1 without blending; engine blend mode 1) stays native.
 				if (!blending)
 					return Ineligible::Decal;
 				const std::uint32_t blendMode = AlphaBlendModeOf(*alpha);
@@ -532,19 +480,15 @@ namespace DCLF
 				return Ineligible::Decal;
 			}
 		}
-		// kSkinned selects the SKINNED permutation, whose vertex shader wants a palette; with the switch on
-		// the palette comes from the geometry's skin instance (Coordinator), so a skinned property without
-		// one would draw from nothing and stays native.
+		// kSkinned selects the SKINNED permutation, whose palette comes from the geometry's skin instance: without one, native.
 		if ((f & Bit(Flag::kSkinned)) && !(ActiveToggles().skinned && a_leaf.Skinned()))
 			return Ineligible::Skinned;
 		if ((f & Bit(Flag::kProjectedUV)) && !ActiveToggles().projectedUv)
 			return Ineligible::ProjectedUV;
-		// Terrain Blending holds every Lighting pass of a kMultiTextureLandscape property and replays it after the opaque pass,
-		// blended over what lies beneath (its hook tests that flag first), and then the passes of a mesh that opts out of the
-		// blend with the otherwise unused kNoTransparencyMultiSample, testing EQUAL, so the terrain does not blend over them.
-		// T7c1: DCLF draws both as that feature does, in its terrain groups 1 and 2 after its opaque and decal groups (Records.h,
-		// ObjectTerrainGroup); without CS_DCLF_TB_TERRAIN the terrain stays native (MtLandEnabled: its technique), and so do the
-		// meshes, which DCLF would otherwise draw before the terrain blends over them. A decal or a layer has a group of its own.
+		// Terrain Blending replays every kMultiTextureLandscape pass after the opaque pass, blended over what lies beneath, then the
+		// passes of meshes opting out with the otherwise unused kNoTransparencyMultiSample, testing EQUAL. DCLF draws both as it
+		// does, in terrain groups 1 and 2 after its opaque and decal groups; without CS_DCLF_TB_TERRAIN both stay native (DCLF would
+		// draw the meshes before the terrain blends over them). A decal or layer has a group of its own.
 		if (TerrainBlendingDefersTerrain()) {
 			const bool terrain = (f & Bit(Flag::kMultiTextureLandscape)) != 0;
 			const bool noBlend = !terrain && (f & Bit(Flag::kNoTransparencyMultiSample));
@@ -554,11 +498,10 @@ namespace DCLF
 				return Ineligible::TerrainNoBlend;
 			a_out.terrainGroup = terrain ? 1u : noBlend ? 2u : 0u;
 		}
-		// Refraction (BSLightingShaderProperty::GetRenderPasses, AE 0x1414adfb0): a property with kRefraction or kTempRefraction has one
-		// main pass, a Utility RENDER_NORMAL pass (hint 4: geometry group 5), which Main::Draw draws into the refraction normals after the
-		// world (FUN_1414b4860) for ISRefraction to warp the frame by; and none at all past its refraction LOD fade's end. T7d
-		// (CS_DCLF_REFRACTION, with the forward epoch): the forward epoch draws those normals (drawcall-limit-fix.md, "Refraction (T7d)"),
-		// the draw fading them as GetRenderPasses would. A material alpha of 0 registers nothing: left native (so not drawn).
+		// Refraction (GetRenderPasses, AE 0x1414adfb0): kRefraction / kTempRefraction has one main pass, a Utility RENDER_NORMAL pass
+		// (hint 4: geometry group 5) Main::Draw draws into the refraction normals after the world (FUN_1414b4860) for ISRefraction,
+		// none past its refraction LOD fade's end. The forward epoch draws it (drawcall-limit-fix.md, "Refraction"), fading as
+		// GetRenderPasses would. A material alpha of 0 registers nothing: left native (so not drawn).
 		if (f & (Bit(Flag::kRefraction) | Bit(Flag::kTempRefraction))) {
 			if (!ActiveToggles().refraction || !ActiveToggles().forward || a_out.decalGroup || a_layer || a_out.terrainGroup || a_property.materialAlpha <= 0.0f) {
 				a_out.rejectedTechnique = kRefractionReject;
@@ -574,17 +517,14 @@ namespace DCLF
 			a_out.forwardDepthWrite = false;
 		}
 
-		// Blended geometry is drawn after the deferred composite, forward and sorted; the one exception is
-		// the engine's blended decal group, which blends inside the G-buffer pass and is handled above.
-		// T7d (CS_DCLF_FORWARD): the forward epoch draws it, as the engine's blended draw (FUN_1414b39d0) does: the pass's
-		// accumulation hint 1 (GetRenderPasses: alpha-blended, or the material's alpha below one), drawn with the alpha property
-		// applied (render flag 4: FUN_14150bc80's blend mode from its functions; none for a material alpha below one without
-		// blending, whose property alpha is the fade's and 1 for a settled object), write mode 11, the depth mode SetupGeometry
-		// derives from kZBufferTest / kZBufferWrite, and the forward pixel stage. A pair FUN_14150bc80 leaves as it finds it (stale
-		// state) stays native, and so does anything Terrain Blending holds.
+		// Blended geometry draws after the deferred composite (except the blended decal group, above). CS_DCLF_FORWARD: the forward
+		// epoch draws it as the engine's blended draw (FUN_1414b39d0) does: hint 1 (blended, or material alpha below one), alpha
+		// property applied (render flag 4: FUN_14150bc80's mode; none for alpha below one without blending, whose property alpha is
+		// the fade's), write mode 11, SetupGeometry's depth mode from kZBufferTest / kZBufferWrite, the forward pixel stage. A pair
+		// FUN_14150bc80 leaves as it finds it (stale state) stays native, as does anything Terrain Blending holds.
 		const bool translucent = blending || a_property.materialAlpha < 1.0f;
 		if (a_out.refraction) {
-			// The forward state is the refraction draw's (above): its alpha property is not applied.
+			// The refraction draw's forward state (above): alpha property not applied.
 		} else if (translucent && a_out.decalGroup == 0 && !a_layer && a_out.terrainGroup == 0 && ActiveToggles().forward) {
 			const std::uint32_t blendMode = blending ? AlphaBlendModeOf(*alpha) : 0u;
 			if (blending && blendMode == 0)
@@ -597,13 +537,11 @@ namespace DCLF
 			return Ineligible::AlphaBlend;
 		}
 
-		// The descriptor derived from the property, as GetRenderPasses builds it for an opaque object with its specular and
-		// envmap LOD fades not run out: the draw fades those two by distance (LodFadeFrame), so the descriptor is the same
-		// at every distance. Where the accumulator holds a pass, only its per-frame bits are taken from it (below).
+		// The descriptor as GetRenderPasses builds it for an opaque object whose specular and envmap LOD fades have not run out
+		// (the draw fades them, LodFadeFrame), so it is the same at every distance.
 		std::uint32_t derived = 0;
 		const Ineligible derivedReason = [&] {
-			// Without a fade node GetRenderPasses never computes the LOD fades, so the property fields the draw reads may be
-			// stale. Leave such objects native rather than guess.
+			// Without a fade node GetRenderPasses never computes the LOD fades, so the fields the draw reads may be stale: native.
 			if (!a_property.fadeNode && (f & (Bit(Flag::kSpecular) | Bit(Flag::kMultiIndexSnow) | Bit(Flag::kEnvMap))))
 				return Ineligible::Fading;
 
@@ -616,8 +554,7 @@ namespace DCLF
 			std::uint32_t d = technique << 24;
 			if (f & Bit(Flag::kVertexColors))
 				d |= Bit(LightingFlag::VC);
-			// GetRenderPasses copies the property's kSkinned straight into bit 1, whether or not the geometry has a
-			// skin (static fish and buckets carry it).
+			// GetRenderPasses copies kSkinned into bit 1 whether or not there is a skin (static fish and buckets carry it).
 			if (f & Bit(Flag::kSkinned))
 				d |= Bit(LightingFlag::Skinned);
 			// ProjectedUV is kProjectedUV itself; the snow conditions only add bits 19 and 21 on top (not derived).
@@ -642,8 +579,7 @@ namespace DCLF
 			if (f & Bit(Flag::kCharacterLighting))
 				d |= Bit(LightingFlag::CharacterLight);
 
-			// Community Shaders' GetRenderPasses hook (TruePBR.cpp): PBR materials swap Specular for TruePbr,
-			// and glint turns on AnisoLighting.
+			// Community Shaders' GetRenderPasses hook (TruePBR.cpp): PBR swaps Specular for TruePbr; glint adds AnisoLighting.
 			const auto feature = static_cast<RE::BSShaderMaterial::Feature>(a_property.feature);
 			const bool isPbr = (f & Bit(Flag::kVertexLighting)) && a_property.material &&
 			                   (feature == RE::BSShaderMaterial::Feature::kDefault || feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend);
@@ -662,20 +598,18 @@ namespace DCLF
 		a_out.derivedPass = derived;
 		std::uint32_t d = derived;
 		if (a_accumulated) {
-			// The pass the accumulator registered gives only what the property does not: DoAlphaTest, the screen-door fade and the
-			// snow bits (kRegisteredPassBits). The rest is the derivation's, so the technique does not change with the distance the
-			// engine's LOD fades were taken at, and the shadow bits are StaticShadowBits', which the draw decides per frame.
-			// A layer's pass has no shadow bits: ShadowDir is the property's light mask naming the sun, and the registrations write
-			// masks on the main property alone (FUN_1414b2140), so DefShadow goes too (LayerShadowBits).
+			// The registered pass gives only kRegisteredPassBits; the rest stays the derivation's (camera-independent), the shadow
+			// bits StaticShadowBits'. A layer's pass has none: ShadowDir is the property's light mask naming the sun, and the
+			// registrations write masks on the main property alone (FUN_1414b2140), so DefShadow goes too.
 			d = (derived & ~kRegisteredPassBits) | (a_accumulated->technique & kRegisteredPassBits) | (a_layer ? 0u : StaticShadowBits(a_leaf, false, &a_property));
-			// The screen-door fade: Lighting.hlsl discards against a 4x4 screen pattern and MaterialData.z, so
-			// the object stays opaque and the Z-prepass (which keeps the alpha test) dithers identically.
+			// Screen-door fade: Lighting.hlsl discards against a 4x4 pattern and MaterialData.z, so the object stays opaque and the
+			// Z-prepass (which keeps the alpha test) dithers identically.
 		}
 
 		a_out.rawVertex = VertexDescriptorFromPass(SetupTechniqueDescriptor(d));
 		a_out.rawPixel = PixelDescriptorFromPass(SetupTechniqueDescriptor(d));
 		std::uint32_t vertex = 0, pixel = 0;
-		// The forward epoch's draws are forward-shaded (no Deferred), as the engine's blended draws after the composite are.
+		// Forward epoch draws are forward-shaded (no Deferred), as the engine's blended draws after the composite.
 		LightingShaderDescriptors(d, !a_out.forward, vertex, pixel);
 
 		a_out.technique = (d >> 24) & 0x3f;
@@ -696,18 +630,17 @@ namespace DCLF
 
 	bool ParticleSystemTaken(const SceneCapture::LeafView& a_leaf)
 	{
-		// The mirror's particle record (SceneCapture::GeometryRecord::Particles), taken where the geometry is captured.
 		if (!ActiveToggles().particles || !a_leaf.geometry || a_leaf.Type() != static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles) || a_leaf.Skinned())
 			return false;
 		const auto& p = a_leaf.geometry->particles;
-		// Aligned quads (T7e's second part) with the velocities FUN_140e51320 reads for them.
+		// Aligned quads with the velocities FUN_140e51320 reads for them.
 		return p.system && p.data && (!p.aligned || p.velocities) && p.capacity > 0;
 	}
 
 	std::uint32_t ParticleRejectionOf(const SceneCapture::LeafView& a_leaf, std::uint64_t a_flags)
 	{
-		// ParticleSystemTaken's conditions, each its own census name; then the property's (a particle system's pass is hint 1 whatever its alpha,
-		// GetRenderPasses: without a blending alpha property its blend mode is the frame's property alpha, FUN_14150bc80; and no decal of one).
+		// ParticleSystemTaken's conditions, a bit each, then the property's: a particle pass is hint 1 whatever its alpha, so without
+		// a blending alpha property its blend mode is the frame's property alpha (FUN_14150bc80); and no decal.
 		if (!ActiveToggles().particles)
 			return kEffectVariantParticle;
 		const auto* g = a_leaf.geometry;
@@ -727,29 +660,22 @@ namespace DCLF
 
 	std::uint32_t EffectVariantsOf(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf)
 	{
-		// What BSEffectShaderProperty::GetRenderPasses (0x1414bd890) and BSEffectShader's setup functions do for this property that the
-		// port does not: the decal groups without CS_DCLF_DECALS (hints 2 and 3; kTempRefraction with kDynamicDecal makes no pass at all); the
-		// sky object (bit 45: hint 0x12, geometry group 13, SetupGeometry's own cull and alpha setup); wireframe (bit 48: SetupGeometry's depth
-		// and fill state); ProjectedUv, whose constants are not ported (Blood's are: the weapon blood, below); a skin the palette path does not take; any shape but a
-		// BSTriShape, or (T7e) a particle system DCLF's particle path draws.
+		// What BSEffectShaderProperty::GetRenderPasses (0x1414bd890) and BSEffectShader's setup do that the port does not. Sky object
+		// (bit 45): hint 0x12, geometry group 13, SetupGeometry's own cull and alpha setup. Wireframe (bit 48): SetupGeometry's depth
+		// and fill state. ProjectedUv: constants not ported.
 		const std::uint64_t f = a_property.flags;
 		std::uint32_t variants = 0;
 		if (ParticleGeometryType(a_leaf.Type())) {
-			// T7e: a particle system's pass is hint 1 whatever its alpha (GetRenderPasses: "the geometry is a particle system"), so one without a
-			// blending alpha property takes its blend mode from the frame's property alpha (FUN_14150bc80): not ported; nor is a decal of one.
 			variants |= ParticleRejectionOf(a_leaf, f);
 		} else if (a_leaf.Type() != static_cast<std::uint8_t>(RE::BSGeometry::Type::kTriShape)) {
 			variants |= kEffectVariantShape;
 		}
-		// T7d part 5: a skinned effect is drawn through the skin palette path (CS_DCLF_SKINNED: the partition's buffer, the palette rows in
-		// DCLFPalettes) when its pass is the SKINNED permutation and its geometry has the skin that permutation reads: the descriptor's Skinned
-		// bit (FUN_1414bde90: kSkinned and a skinned vertex description, EffectSkinned) exactly where the leaf has a skin instance. kSkinned
-		// on a static shape without skinned vertices is no variant (the descriptor has no Skinned bit); every other mismatch is.
+		// The palette path (CS_DCLF_SKINNED) draws a skinned effect when the descriptor's Skinned bit (EffectSkinned) matches the
+		// leaf having a skin instance. kSkinned on a static shape without skinned vertices is no variant; any other mismatch is.
 		if (EffectSkinned(a_property, a_leaf) != a_leaf.Skinned() || (a_leaf.Skinned() && !ActiveToggles().skinned))
 			variants |= kEffectVariantSkinned;
-		// T7d part 5: an effect decal (hints 2 and 3) is drawn in DCLF's decal groups (CS_DCLF_DECALS), as the engine draws it in its own,
-		// inside the G-buffer pass with the DEFERRED permutation. kTempRefraction with kDynamicDecal registers no pass at all (GetRenderPasses):
-		// nothing to draw, so it stays a variant.
+		// Effect decals (hints 2 and 3) go to DCLF's decal groups (G-buffer pass, DEFERRED). kTempRefraction with kDynamicDecal
+		// registers no pass at all (GetRenderPasses), so it stays a variant.
 		if ((f & (Bit(Flag::kDecal) | Bit(Flag::kDynamicDecal))) &&
 			(!ActiveToggles().decals || ((f & Bit(Flag::kTempRefraction)) && (f & Bit(Flag::kDynamicDecal)))))
 			variants |= kEffectVariantDecal;
@@ -757,18 +683,17 @@ namespace DCLF
 			variants |= kEffectVariantSkyObject;
 		if (f & Bit(Flag::kWireframe))
 			variants |= kEffectVariantWireframe;
-		// The Lighting variant (kEffectLighting; the descriptor's Lighting bit also needs the global 0x142033508, which only its initialiser
-		// writes, to 1): its light 0 is FUN_1414fcf80's, the scene's sun light (ShadowSceneNode +0x200) unless kCloudLOD picks the cloud
-		// light (+0x208), so the port's frame value (SampleEffectLight) is the sun's alone; and its point lights are Light Limit Fix's
-		// clusters in the world (Effect.hlsl, GetLightingColor), the pass's own PerGeometry lights without it.
+		// kEffectLighting (the Lighting bit also needs global 0x142033508, set to 1 only by its initialiser): light 0 is FUN_1414fcf80's,
+		// the sun (ShadowSceneNode +0x200) unless kCloudLOD picks the cloud light (+0x208); the port has the sun's alone. Point lights
+		// are Light Limit Fix's clusters (Effect.hlsl, GetLightingColor), the pass's own PerGeometry lights without it.
 		if (f & Bit(Flag::kEffectLighting)) {
 			if (f & Bit(Flag::kCloudLOD))
 				variants |= kEffectVariantCloudLighting;
 			if (!globals::features::lightLimitFix.loaded)
 				variants |= kEffectVariantLightingNoLlf;
 		}
-		// kWeaponBlood (the weapon blood, BSTempEffectWeaponBlood) is ported: its AlphaTestRef (SetupGeometry: the alpha threshold / 255 and
-		// two globals) is the object record's reference and the frame's (DeriveEffectDescriptors' Blood bit; Effect.hlsl, DCLFEffectBlood).
+		// kWeaponBlood (BSTempEffectWeaponBlood) is ported: its AlphaTestRef (SetupGeometry: alpha threshold / 255 and two globals) is
+		// the object record's and the frame's.
 		if (f & Bit(Flag::kProjectedUV))
 			variants |= kEffectVariantProjectedUv;
 		if (a_leaf.AlphaBlending() && AlphaBlendModeOf(*a_leaf.alpha) == 0)
@@ -778,34 +703,29 @@ namespace DCLF
 
 	Ineligible DeriveEffectDescriptors(const SceneCapture::PropertyRecord& a_property, const SceneCapture::LeafView& a_leaf, LightingDescriptors& a_out)
 	{
-		// T7d's Effect port (drawcall-limit-fix.md, "The Effect shader in the forward epoch"): BSEffectShaderProperty::GetRenderPasses
-		// (0x1414bd890) for a BSTriShape in the main modes, from the records: its hint, and its descriptor as FUN_1414bde90 builds it.
+		// drawcall-limit-fix.md, "The Effect shader in the forward epoch".
 		const std::uint64_t f = a_property.flags;
 		const auto* alpha = a_leaf.alpha;
 		const std::uint64_t vertexDesc = a_leaf.geometry ? a_leaf.geometry->vertexDesc : 0;
 		const std::uint32_t variants = EffectVariantsOf(a_property, a_leaf);
 		if (variants & ~kEffectVariantBlendPair)
 			return Ineligible::EffectVariant;
-		// Hint 1 (the blended list, sorted with blended Lighting) for a blending alpha property, with the blend mode the engine's alpha setup
-		// (FUN_14150bc80) takes from its pair; without one the pass is hint 0 (the G-buffer pass's DEFERRED variant), or hint 1 by Falloff or
-		// the property alpha alone, whose blend mode then follows the frame's alpha.
-		// T7d part 5: a decal (kDecal / kDynamicDecal; EffectVariantsOf left it, so CS_DCLF_DECALS is on) takes hint 2 without a blending alpha
-		// property and 3 with one, whatever its alpha or Falloff (GetRenderPasses), and the main registration (FUN_1414b2330) puts them in
-		// geometry groups 3 and 4: the engine's opaque and blended decal groups, DCLF's decal groups 1 and 2.
+		// Hint 1 (blended list, sorted with blended Lighting) for a blending alpha property, blend mode from FUN_14150bc80; without one,
+		// hint 0 (G-buffer DEFERRED variant), or hint 1 by Falloff or property alpha alone (blend mode then follows the frame's alpha).
+		// A decal takes hint 2 without a blending alpha property and 3 with one, whatever its alpha or Falloff; FUN_1414b2330 puts
+		// them in geometry groups 3 and 4, the engine's opaque and blended decal groups (DCLF's 1 and 2).
 		const bool decal = (f & (Bit(Flag::kDecal) | Bit(Flag::kDynamicDecal))) != 0;
 		const bool blending = a_leaf.AlphaBlending();
-		// T7f item 7 (CS_DCLF_OPAQUE_EFFECTS): hint 0, the G-buffer pass's opaque batches with the DEFERRED variant (forge coals, slag), is
-		// drawn through decal group 1: an occludee culled once in the colour segment, its depth written by the decal depth pass before the
-		// colour pass (LESS_EQUAL, no bias for it), its colour into the G-buffer with the opaque write mode (1, an opaque Lighting key's) and no
-		// blending, as the engine's opaque batches. Only a pass that is hint 0 whatever the frame: no Falloff (hint 1), depth tested and
-		// written (SetupGeometry's depth mode 3, which the decal depth pass makes). A property alpha below one (a base colour alpha, a fade)
-		// makes the engine's pass hint 1, blended by the frame's alpha: DCLF keeps it opaque (drawcall-limit-fix.md, "Opaque effects").
+		// CS_DCLF_OPAQUE_EFFECTS: hint 0 (G-buffer opaque batches, DEFERRED: forge coals, slag) drawn through decal group 1: depth by
+		// the decal depth pass (LESS_EQUAL, no bias), colour with write mode 1 and no blending. Only a pass that is hint 0 every frame:
+		// no Falloff, depth tested and written (SetupGeometry's mode 3). A property alpha below one makes the engine's pass hint 1,
+		// blended by the frame's alpha: DCLF keeps it opaque (drawcall-limit-fix.md, "Opaque effects").
 		static const bool opaqueEffects = SwitchOnUnlessZero(Switch::OpaqueEffects);
 		const bool opaque = !blending && !decal;
 		if (opaque && (!opaqueEffects || !ActiveToggles().decals || (f & Bit(Flag::kFalloff)) || !(f & Bit(Flag::kZBufferTest)) || !(f & Bit(Flag::kZBufferWrite)) ||
 						  ParticleGeometryType(a_leaf.Type())))
 			return Ineligible::EffectOpaque;
-		// T7e: a particle system DCLF's particle path draws (EffectVariantsOf left no other, and only a blending one): hint 1, the forward epoch's.
+		// A taken particle system: hint 1, the forward epoch's.
 		const bool particles = ParticleGeometryType(a_leaf.Type());
 		if (variants & kEffectVariantBlendPair)
 			return Ineligible::EffectVariant;  // a pair the alpha setup leaves as it finds it (only ever a blending one)
@@ -818,11 +738,10 @@ namespace DCLF
 		// The source texture's path (FUN_140cec900 against null: the mirror's kEffectHasSourcePath).
 		if (a_property.feature & kEffectHasSourcePath)
 			d |= TexCoord | Texture;
-		// kSkinned with a skinned vertex description (EffectVariantsOf: drawn only where the leaf has the skin).
 		if (EffectSkinned(a_property, a_leaf))
 			d |= Skinned;
-		// Falloff for anything but particles; a particle system's Particles, and with a texture and the data's subtextures TexCoordIndex and
-		// IndexedTexture (the vertex stage's IndexedTexCoord, which DCLF's particle quads carry resolved: Effect.hlsl, DCLFParticleInput).
+		// Falloff for anything but particles. Particles with a texture and subtextures add TexCoordIndex and IndexedTexture (DCLF's
+		// particle quads carry the IndexedTexCoord resolved: Effect.hlsl, DCLFParticleInput).
 		if ((f & Bit(Flag::kFalloff)) && !particles)
 			d |= Normals | Falloff;
 		if (particles) {
@@ -841,11 +760,10 @@ namespace DCLF
 			d |= MultBlend;
 		if (f & Bit(Flag::kSoftEffect))
 			d |= Soft;
-		// Blood (kWeaponBlood): Effect.hlsl's BLOOD, its alpha from the texture's green and the blood mask's colour (AlphaTestRef: the record's
-		// threshold, BuildObjectRecord, and the frame's two globals, SampleEffectBlood).
+		// Effect.hlsl's BLOOD: alpha from the texture's green and the blood mask's colour.
 		if (f & Bit(Flag::kWeaponBlood))
 			d |= Blood;
-		// The Lighting variant (EffectVariantsOf): kEffectLighting, the global 0x142033508 taken as its initialiser leaves it.
+		// Global 0x142033508 taken as its initialiser leaves it (1).
 		if (f & Bit(Flag::kEffectLighting))
 			d |= Lighting;
 		if (a_property.feature & kEffectHasGreyscalePath) {
@@ -859,9 +777,8 @@ namespace DCLF
 		if ((vertexDesc & kVertexNormals) && (!alpha || (alpha->flags & (1u << 9))) && (f & Bit(Flag::kZBufferTest)) && (f & Bit(Flag::kZBufferWrite)))
 			d |= MotionVectorsNormals;
 
-		// SetupTechnique's split (FUN_141521300, FUN_141521310), then Community Shaders' lookup (State::ModifyShaderLookup, Effect): the
-		// three permutation bits off both, and Deferred on the pixel stage in the deferred pass alone: a decal's (the decal groups draw inside
-		// it, into the G-buffer), never a forward object's (the forward epoch is after the composite, as the engine's blended draw).
+		// SetupTechnique's split (FUN_141521300, FUN_141521310), then State::ModifyShaderLookup: the three permutation bits off both,
+		// Deferred on the pixel stage only in the deferred pass (decals, opaque effects), never for forward objects.
 		constexpr std::uint32_t kPermutationBits = GrayscaleToColor | GrayscaleToAlpha | IgnoreTexAlpha;
 		a_out = {};
 		a_out.effect = true;
@@ -880,11 +797,9 @@ namespace DCLF
 			return Ineligible::None;
 		}
 		if (decal) {
-			// The decal group's state (engine notes, "Decals"; BSEffectShader::SetupGeometry 0x1414eab10 for a pass of hint 2 or 3): the group
-			// function's depth mode (3 for the opaque group, 1 for the blended one) and bias, which SetupGeometry leaves for a decal; the
-			// alpha property applied in the blended group alone (render flags 0x45 against 0x41: FUN_14150bc80's mode from its pair); write
-			// mode 11, which SetupGeometry sets for every decal pass without MotionVectorsNormals, the group's own otherwise (10 for the
-			// opaque group, 11 for the blended one).
+			// Decal group state (engine notes, "Decals"; BSEffectShader::SetupGeometry 0x1414eab10, hints 2 and 3): the group's depth
+			// mode (3 opaque, 1 blended) and bias, which SetupGeometry leaves; alpha property applied in the blended group alone (render
+			// flags 0x45 vs 0x41); write mode 11 without MotionVectorsNormals (SetupGeometry), else the group's (10 opaque, 11 blended).
 			a_out.decalGroup = blending ? 2u : 1u;
 			a_out.decalBlendMode = blendMode;
 			a_out.decalWriteMode = (!blending && (d & MotionVectorsNormals)) ? 10u : 11u;

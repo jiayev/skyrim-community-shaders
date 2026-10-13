@@ -1,3 +1,7 @@
+// The water reflection's cube map faces drawn by DCLF (dclf-lod.md, "Water reflections"): the faces' capture, the forward
+// programs and pipelines of the LOD they draw, the reflection phase's readiness, and the faces' commit (their epoch is
+// ViewEpoch.cpp's). Render thread, but for ReflectionDrawable (the scene lane's commit).
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -11,11 +15,6 @@
 
 namespace DCLF
 {
-	/*
-	 * The water reflection's cube map faces drawn by DCLF (dclf-lod.md, "Water reflections"): the faces' capture, the forward
-	 * programs and pipelines of the LOD they draw, the reflection phase's readiness, and the faces' epoch (ViewEpoch.cpp).
-	 */
-
 	namespace
 	{
 		/** @brief A render target view's format, its face (the array slice it views) and its texture. */
@@ -75,7 +74,7 @@ namespace DCLF
 		auto& face = reflection.faces[a_face];
 		face = {};
 		// VS_PerFrame for the face's camera over the frame's registers as the renderer last uploaded them (as the engine uploads it for
-		// a face, measured against its block at the face's draws: no jitter, no previous camera).
+		// a face: no jitter, no previous camera).
 		SunViews::Cascade view;
 		SunViews::CameraMatrices(a_camera, view);
 		PerFrameBlock(view, FrameBlockNow(), false, nullptr, face.perFrame.data());
@@ -99,7 +98,7 @@ namespace DCLF
 	{
 		// The roots whose members DCLF's faces draw, in a plain update of a frame whose faces are DCLF's (DecideCoverage):
 		// - LOD trees while the faces' tree LOD is DCLF's (PrepareReflection): drawn from DCLF's mirror, no registration needed.
-		// - LOD land and objects while the engine's LOD swaps are gated (T6b6; LodGates, T6b5) and both are DCLF's (the toggles): a
+		// - LOD land and objects while the engine's LOD swaps are gated (LodGates) and both are DCLF's (the toggles): a
 		//   swap's incoming blocks are shown only by the frame whose claims hold them, so the faces never need the engine's
 		//   registrations of them. Ungated, the LOD chunks and objects the engine shows or attaches in motion take DCLF a few frames
 		//   to bind (ClassifyResidue) and their roots stay, the members withheld (PassCapture).
@@ -123,7 +122,7 @@ namespace DCLF
 	void IndirectDraws::PrepareReflection()
 	{
 		// The forward pipelines of every LOD pipeline slot the frame's objects use, and tree LOD's, for the faces' targets: asked of the
-		// pipeline lane here (T6b2c step 9: each key once, the targets a frame input) and read from the frame's catalog, ready a few
+		// pipeline lane here (each key once, the targets a frame input) and read from the frame's catalog, ready a few
 		// frames later. The slots whose pipeline is ready are the reflection phase's readiness (PhaseReady): a change of them is a
 		// readiness event for the set. A slot without one is no reflection-phase member meanwhile (the engine draws it in the faces).
 		auto& reflection = impl->reflection;
@@ -217,7 +216,7 @@ namespace DCLF
 			return skip(0);
 		if (std::none_of(faces.begin(), faces.end(), [](const auto& a_face) { return a_face.captured; }))
 			return skip(2);
-		// What the faces draw from: the frame's scene list (its ring entry, as the shadow views'; U5: a member is the reflection's from
+		// What the faces draw from: the frame's scene list (its ring entry, as the shadow views': a member is the reflection's from
 		// the frame it joins) with this frame's depth commit's index pool, depth inputs, object records and geometry rows - the frame's
 		// publication whole - and the frame before's colour frame record, in the backing it was written to.
 		const std::uint32_t frameNumber = Scene::FrameView::Get().GetFrame();

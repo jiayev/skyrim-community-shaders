@@ -1,4 +1,5 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
+#	include "Spread.h"
 #	include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
 
 // The scene revisions' and snapshots' report lines: the frame's (SnapshotReport, RevisionReport) and the snapshot builder's, composed in
@@ -7,22 +8,6 @@
 
 namespace DCLF
 {
-	namespace
-	{
-		/** @brief avg / p95 / max of a_values (sorted here), "-" without any. */
-		std::string Spread(std::vector<double>& a_values)
-		{
-			if (a_values.empty())
-				return "-";
-			std::sort(a_values.begin(), a_values.end());
-			double sum = 0.0;
-			for (const double value : a_values)
-				sum += value;
-			const std::size_t p95 = (std::min)(a_values.size() - 1, a_values.size() * 95 / 100);
-			return fmt::format("{:.2f}/{:.2f}/{:.2f}", sum / double(a_values.size()), a_values[p95], a_values.back());
-		}
-	}
-
 	std::string IndirectDraws::Impl::SnapshotReport()
 	{
 		// The builder's times since the last report (its queue, drained here alone).
@@ -46,9 +31,9 @@ namespace DCLF
 			snapshotsWithoutDraws.exchange(0, std::memory_order_relaxed));
 		text += fmt::format("[DCLF] snapshot builds (ms, avg/p95/max): draws ahead {} ({} built), shapes {}, recordings wait {}; commit to adoption (frames): p50 {}, p95 {}, "
 							"max {}\n",
-			Spread(ahead), aheadBuilt, Spread(shapes), Spread(recordings), percentile(50), percentile(95), adoptionLatency.empty() ? 0u : adoptionLatency.back());
+			Reports::Spread(ahead, 2), aheadBuilt, Reports::Spread(shapes, 2), Reports::Spread(recordings, 2), percentile(50), percentile(95), adoptionLatency.empty() ? 0u : adoptionLatency.back());
 		// From the oldest event a publication carried to the frame that installed it (the publications the builder skipped past
-		// included: Coordinator::HandOverAtFrameStart walks their log nodes).
+		// included: FrameView::HandOverAtFrameStart walks their log nodes).
 		if (!eventAdoptionMs.empty()) {
 			std::sort(eventAdoptionFrames.begin(), eventAdoptionFrames.end());
 			const auto framesAt = [this](std::size_t a_percent) {
@@ -216,7 +201,7 @@ namespace DCLF
 			parity.Reset();
 		}
 		if (auto& k = shadowKept; k.builds) {
-			// The objects it holds (their words are the scene list's entries', U4c; its own region only under CS_DCLF_BUILD_PARITY).
+			// The objects it holds (their words are the scene list's entries'; its own region only under CS_DCLF_BUILD_PARITY).
 			const std::size_t entries = static_cast<std::size_t>(std::count_if(k.heldModes.begin(), k.heldModes.end(), [](std::uint8_t a_modes) { return a_modes != 0; }));
 			const auto* rowsTable = shadowState ? &shadowState->materialRows : nullptr;
 			text += fmt::format(

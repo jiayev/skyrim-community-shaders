@@ -3,7 +3,7 @@
 namespace DCLF::MirrorWatch
 {
 	/**
-	 * @brief CS_DCLF_MIRROR_WATCH (step 6e F3): hardware write watchpoints (the debug registers, every thread of the process) on
+	 * @brief CS_DCLF_MIRROR_WATCH: hardware write watchpoints (the debug registers, every thread of the process) on
 	 * one object's mirrored fields, armed by the hook that just captured or set them. Every write that changes a watched dword
 	 * records the instruction after it, so a writer the mirror's hooks miss can be named. One object at a time; disarmed after 16
 	 * changes or 600 frames, then armed again on the next. Diagnostic only. The value:
@@ -18,13 +18,13 @@ namespace DCLF::MirrorWatch
 	void ArmNode(const RE::NiAVObject* a_node);
 	/**
 	 * @brief parity: a shader property the mirror parity found stale (its flags, both dwords, and its fade node). Render thread.
-	 * parity:alpha, parity:projected, parity:land (T6b1a): one found stale in that field, its dwords (BSShaderProperty::alpha;
+	 * parity:alpha, parity:projected, parity:land: one found stale in that field, its dwords (BSShaderProperty::alpha;
 	 * projectedUVParams; the landscape material's landBlendParams).
 	 */
 	void ArmProperty(const void* a_property);
 	/** @brief The property record fields (PropertyRecord::Field) whose staleness arms the watch: kFlags for parity, 0 when off. */
 	std::uint32_t PropertyFields();
-	/** @brief parity:current (T6b1a): a fade node the mirror parity found stale in its currentFade (+0x130, and +0x154). Render thread. */
+	/** @brief parity:current: a fade node the mirror parity found stale in its currentFade (+0x130, and +0x154). Render thread. */
 	void ArmCurrent(const void* a_node);
 	bool CurrentFromParity();
 	/** @brief parity: an alpha property the mirror parity found stale (its flags and threshold). Render thread. */

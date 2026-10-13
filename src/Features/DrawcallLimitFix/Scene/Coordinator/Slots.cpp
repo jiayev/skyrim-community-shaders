@@ -1,3 +1,6 @@
+// The coordinator's slot lifetimes (scene lane): geometry, object, pipeline and material slots allocated and freed, the tables
+// cleared, and a tracked geometry erased. Engine references freed here go through the retirement chain to the render thread.
+
 #include "Internal.h"
 
 namespace DCLF::Scene
@@ -55,11 +58,11 @@ namespace DCLF::Scene
 		fadeRootMembers.Clear();
 		tables.Clear();
 		ClearFaceRegions();
-		// The scene work's material and shared bindings (T6b2c) with the tables they were made for, and the lookups they are written into.
+		// The scene work's material and shared bindings with the tables they were made for, and the lookups they are written into.
 		ResetMaterialBindings();
 		ResetSharedBindings();
 		// Drop material binding owners on world/device reset without permitting an old worker snapshot to match a newly empty lookup
-		// generation. The lookups are the scene lane's (T6b2c step 5): made new here, whichever thread runs the coordinator's work; the
+		// generation. The lookups are the scene lane's: made new here, whichever thread runs the coordinator's work; the
 		// frame keeps the installed publication's until a newer one is installed.
 		ResetLookups();
 		for (auto& [geometry, entry] : tracked) {
@@ -70,9 +73,9 @@ namespace DCLF::Scene
 		pipelineIndex.clear();
 		materialIndex.clear();
 		materialDependents.clear();
-		// The scene work's record upkeep (T6b2c step 7) named the cleared slots.
+		// The scene work's record upkeep named the cleared slots.
 		ResetMaterialRecords();
-		// T6b3e: released at Present through the retirement chain, as ClearMaterialSlot's (the last reference deletes the engine's
+		// Released at Present through the retirement chain, as ClearMaterialSlot's (the last reference deletes the engine's
 		// material: never on the pump, which runs this on a loading pass).
 		for (auto& owner : materialOwners)
 			if (owner)
@@ -149,7 +152,7 @@ namespace DCLF::Scene
 				retirement.Open().imports.push_back(std::move(*owner));
 		import = {};
 		tables.geometryLastUsed[a_slot] = Tables::kSlotFree;
-		// The log names every write of the geometry columns (the published tables replay them by it, step 6d).
+		// The log names every write of the geometry columns (the published tables replay them by it).
 		tables.NoteGeometry(a_slot);
 	}
 
@@ -316,7 +319,7 @@ namespace DCLF::Scene
 		auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
 		if (!geometry)
 			return nullptr;
-		// Its entry's held property (T6b1b: the mirror's), not the live geometry's.
+		// Its entry's held property (the mirror's), not the live geometry's.
 		const auto it = tracked.find(geometry);
 		return it != tracked.end() ? it->second.HeldProperty(tables.IsLayer(a_slot)) : nullptr;
 	}
@@ -368,7 +371,7 @@ namespace DCLF::Scene
 			MoveBucket(it->second, Ineligible::Count);
 			UnlistDependents(it->first, it->second, true);
 			UnlistFaceShape(it->first, it->second);
-			// T6b5: off its LOD gate (an outgoing block's geometries leave here, by their detach after the flip).
+			// Off its LOD gate (an outgoing block's geometries leave here, by their detach after the flip).
 			if (it->second.gate || it->second.gateHeldOut)
 				UntagGate(it->first, it->second);
 			sceneIdentity.Detach(a_geometry);

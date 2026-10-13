@@ -1,3 +1,7 @@
+// FrameView's service of the coordinator's requests and its engine captures: switch catch-ups, fade node and material requests,
+// the category capture, the mirror's capture requests, the EarlyPrepass inputs (capture drain, room map) and the Lighting shader and
+// accumulator latches. Render thread: everything here reads or writes live engine state.
+
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Runtime/Hash.h"
 #include "Features/DrawcallLimitFix/Runtime/Toggles.h"
@@ -17,9 +21,8 @@ namespace DCLF::Scene
 {
 	namespace
 	{
-		// Cell 3D category nodes Drawcall Limit Fix draws from (engine notes: cell 3D category nodes).
-		// The Actor node holds the actors of an exterior (an interior moves them into its rooms). It is
-		// walked whatever CS_DCLF_ACTORS says: the toggle is ClassifyFrame's Actor rule, so it can change live.
+		// Cell 3D category nodes DCLF draws from (engine notes: cell 3D category nodes). The Actor node holds an exterior's actors
+		// (an interior moves them into its rooms); walked whatever CS_DCLF_ACTORS says, since that toggle is ClassifyFrame's and live.
 		constexpr std::array<std::uint32_t, 4> kDrawnCategories{ 0 /*Actor*/, 3 /*Static*/, 4 /*Dynamic*/, 5 /*MultiBound*/ };
 	}
 
@@ -27,8 +30,8 @@ namespace DCLF::Scene
 	{
 		ZoneScopedN("CS.DCLF.FrameRequests");
 		RenderThreadBudget::Part budget(RenderThreadBudget::Bucket::SceneCaptures);
-		// The switch catch-ups the passes asked for (engine code that writes, before the culls: CatchUpSwitches), and every switch in the
-		// world on the first frame after a load. The requests' references dropped here, after.
+		// The passes' switch catch-ups (engine writes, before the culls), and every switch after a load. The requests' references
+		// are dropped here, on the render thread.
 		{
 			std::vector<std::shared_ptr<SwitchCatchUp>> requests;
 			channels.switchCatchUps.Drain([&requests](std::shared_ptr<SwitchCatchUp>&& a_request) {
@@ -46,26 +49,22 @@ namespace DCLF::Scene
 				CatchUpSwitches({}, {});
 		}
 		if (a_running) {
-			// The category nodes as the passes will diff them: made again when the signature moved, a pass saw a detach (a
-			// detach can take a category node with it before the signature sees its cell go), or a load ended (every cell is new).
+			// Forced after a detach (it can take a category node before the signature sees its cell go) or a load.
 			const bool detached = channels.categoryDetachSeen.exchange(false, std::memory_order_acq_rel);
 			CaptureCategories(std::exchange(categoryCapturePending, false) || detached);
-			// What the passes found the mirror lacking, and the mirror's observers' slice.
 			CaptureMirrorRequests();
-			Diagnostics::Notify(Diagnostics::MirrorProbePoint{ *this });
-			// The fade nodes the coordinator holds no reference to, read from the properties where the engine reads them.
+			Diagnostics::Notify<Diagnostics::ScenePoint::MirrorProbePoint>();
 			ServeFadeNodeRequests();
 		}
-		// Tree LOD's mirror is the render thread's (DecideTreeLod reads it at the frame's start).
+		// Tree LOD's mirror is the render thread's (DecideTreeLod reads it at frame start).
 		treeLod.Drain(frame);
 	}
 
 	void FrameView::ServeFadeNodeRequests()
 	{
-		// Render thread, the frame's start: each request's geometry's property read live, as GetRenderPasses reads its fade node to
-		// draw it. A geometry in the world whose property still names the requested node is drawn with that node, so the node is alive here:
-		// its reference is taken and posted back. Otherwise the answer is none (the coordinator asks again for the node its mirror names
-		// next). The requests' geometry references are dropped here, on the render thread.
+		// Each geometry's property read live, as GetRenderPasses reads its fade node. An in-world geometry whose property still names
+		// the node draws with it, so the node is alive: its reference is posted back. Otherwise the answer is none (the coordinator
+		// asks again for the node its mirror names next). The geometry references are dropped here, on the render thread.
 		bool answered = false;
 		channels.fadeNodeRequests.Drain([&](FadeNodeRequest&& a_request) {
 			FadeNodeAnswer answer;
@@ -95,7 +94,7 @@ namespace DCLF::Scene
 					return true;
 			return false;
 		};
-		// Every switch under a_from (a whole subtree: no bound, unlike an event's walk).
+		// Every switch in a_from's whole subtree.
 		std::vector<RE::NiAVObject*> stack;
 		auto catchUpUnder = [&](RE::NiAVObject* a_from, std::atomic<std::uint64_t>& a_count) {
 			stack.assign(1, a_from);
@@ -163,13 +162,13 @@ namespace DCLF::Scene
 
 	void FrameView::CaptureCategories(bool a_force)
 	{
-		// The set's content changes only when a cell attaches or detaches, so it is made again when the signature says something
-		// moved or when a detach was seen (walk parity finds anything both miss).
+		// The set changes only when a cell attaches or detaches: remade when the signature moved or a detach was seen (walk parity
+		// finds anything both miss).
 		ZoneScopedN("CS.DCLF.Ingest.CaptureCategories");
 		const auto start = std::chrono::steady_clock::now();
 		const auto timed = [&] { categoryCaptureNs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()); };
-		// The captures one the coordinator has applied supersedes are let go, their pins with them (the coordinator let go
-		// of its copy before it moved the generation on, so these drops are the render thread's, as an engine reference's must be).
+		// Drop captures superseded by one the coordinator applied, pins included. The coordinator let go of its copy before moving
+		// the generation, so these engine references are released here, on the render thread.
 		const std::uint64_t applied = channels.categoryAppliedGeneration.load(std::memory_order_acquire);
 		while (categoryCapturesHeld.size() > 1 && categoryCapturesHeld.front()->generation < applied)
 			categoryCapturesHeld.pop_front();
@@ -197,8 +196,8 @@ namespace DCLF::Scene
 						current.insert(node);
 				}
 			}
-			// References the engine moves out of the category nodes into multibounds (exteriors) and the
-			// portal graph's rooms (interiors), all under ObjectLODRoot (engine notes: cell multibounds and rooms).
+			// References the engine moves out of the category nodes into multibounds (exteriors) and portal graph rooms
+			// (interiors), all under ObjectLODRoot (engine notes: cell multibounds and rooms).
 			if (auto* multiBound = loaded->multiBoundNode.get())
 				current.insert(multiBound);
 			if (auto* graph = loaded->portalGraph.get()) {
@@ -208,9 +207,8 @@ namespace DCLF::Scene
 				}
 				if (auto* shared = graph->portalSharedNode.get()) {
 					current.insert(shared);
-					// References the graph draws with no parent (Bleak Falls Barrow's chamber pieces and stairs): each root is
-					// filed under the shared node (FindCategoryNode). Held, so a root that leaves the list is still there to
-					// walk when what was tracked under it is dropped.
+					// Parentless references the graph draws (e.g. Bleak Falls Barrow's chamber pieces), filed under the shared node
+					// (FindCategoryNode). Held, so a root that leaves the list can still be walked when its tracked content is dropped.
 					for (const auto& child : graph->alwaysRenderChildren) {
 						if (child && !child->parent)
 							currentRoots.try_emplace(child.get(), CategoryCapture::Root{ child, shared });
@@ -220,27 +218,25 @@ namespace DCLF::Scene
 		};
 
 		if (auto* tes = RE::TES::GetSingleton()) {
-			// Multibounds: the engine moves references out of the category nodes into BSMultiBoundNodes
-			// under ObjectLODRoot (TES::objRoot), in exteriors and (holding the rooms) in interiors
-			// (engine notes: multibounds and rooms).
+			// BSMultiBoundNodes under ObjectLODRoot (TES::objRoot), in exteriors and (holding the rooms) interiors.
 			if (auto* objRoot = tes->objRoot) {
 				for (auto& child : objRoot->GetChildren()) {
 					if (auto* multiBound = child ? netimmerse_cast<RE::BSMultiBoundNode*>(child.get()) : nullptr)
 						current.insert(multiBound);
 				}
 			}
-			// Object and terrain LOD: TES::lodLandRoot holds the terrain manager's LOD blocks (a BSMultiBoundNode per block: object
-			// LOD's BSSubIndexTriShapes, one segment per cell, and the land's BSTriShapes), attached and detached as the camera moves
-			// (dclf-lod.md). The root is the category node; what attaches under it is tracked by the same structural events as a
-			// cell's content. A class whose toggle is off classifies as Lod.
+			// Object and terrain LOD: TES::lodLandRoot holds the terrain manager's LOD blocks (a BSMultiBoundNode each: object LOD's
+			// BSSubIndexTriShapes, one segment per cell, and the land's BSTriShapes), attached and detached as the camera moves
+			// (dclf-lod.md). It is the category node; its content is tracked by the usual structural events. A class whose toggle is
+			// off classifies as Lod.
 			if ((ActiveToggles().lodObjects || ActiveToggles().lodTerrain) && tes->lodLandRoot)
 				current.insert(tes->lodLandRoot);
 			Engine::ForEachLoadedCell(*tes, addCell);
 		}
 		// CS_DCLF_FIRST_PERSON: the player's first-person skeleton (PlayerCharacter +0x8F8, Load3D: no parent; Main::unk_FPCulling and
-		// RenderDepth cull it alone). Its root is a category node (the walk up from its geometry ends there) and a root filed under itself
-		// (the parentless roots' path: the mirror counts it in the world, SetDrawnRoots, and its attaches - the equipment - reach the
-		// tracker as events). Its kHidden is view-scoped: ClassifyFrame stops at it.
+		// RenderDepth cull it alone). Its root is a category node and a parentless root filed under itself, so the mirror counts it
+		// in the world (SetDrawnRoots) and its equipment attaches reach the tracker as events. Its kHidden is view-scoped:
+		// ClassifyFrame stops at it.
 		if (ActiveToggles().firstPerson)
 			if (auto* player = RE::PlayerCharacter::GetSingleton())
 				if (auto* firstPerson = player->Get3D(true); firstPerson && firstPerson != player->Get3D(false))
@@ -252,9 +248,8 @@ namespace DCLF::Scene
 		capture->held.reserve(current.size());
 		for (auto* node : current)
 			capture->held.emplace_back(node);
-		// What the scene work will walk: the category nodes new to its set, their children's keys and their subtrees held, and
-		// the subtrees of the roots new to it. Its set is the capture it applied last (RefreshCategoryNodes makes them equal), read
-		// here from the render thread's own copy, never the coordinator's; none applied yet, or a rescan pending, makes every one new.
+		// Pin what the scene work will walk: category nodes new to its set (children's keys, subtrees) and new roots' subtrees. Its
+		// set is the capture it applied last, read from the render thread's own copy; none applied, or a rescan, makes all new.
 		{
 			const CategoryCapture* base = nullptr;
 			for (const auto& held : categoryCapturesHeld)
@@ -265,7 +260,7 @@ namespace DCLF::Scene
 			auto pinSubtree = [&](RE::NiAVObject* a_root) {
 				Engine::ForEachLive(a_root, [&](RE::NiAVObject& a_object, std::uint32_t) {
 					pins.emplace_back(&a_object);
-					// A geometry's properties too (what its entry holds).
+					// And a geometry's properties (what its entry holds).
 					if (auto* geometry = a_object.AsGeometry()) {
 						const auto& data = geometry->GetGeometryRuntimeData();
 						for (RE::NiRefObject* property : { static_cast<RE::NiRefObject*>(data.shaderProperty.get()), static_cast<RE::NiRefObject*>(LayerPropertyOf(*geometry)),
@@ -289,9 +284,8 @@ namespace DCLF::Scene
 				if (all || !base->roots.contains(root) || !base->nodes.contains(entry.category))
 					pinSubtree(entry.root.get());
 		}
-		// The portal graph's parentless roots, the mirror's world from now on: each new one captured whole, each gone dropped
-		// from it (the last capture holds it), both after the events pushed before them (onto the tracker's stack, mirror-only;
-		// the captures that follow are the hooks', InWorld).
+		// The parentless roots are the mirror's world from now on: each new one captured whole, each gone one detached (the last
+		// capture still holds it), pushed onto the tracker's stack mirror-only, after the events already there.
 		{
 			auto& tracker = SceneTracker::Get();
 			std::vector<const RE::NiAVObject*> roots;
@@ -318,9 +312,8 @@ namespace DCLF::Scene
 						tracker.PushCaptured(event);
 					}
 		}
-		// Held until one the coordinator applied supersedes it, and posted (latest wins: a newer capture names every node new to the set
-		// the coordinator applied last, so one it never takes loses nothing). After the pushes above: a pass that takes it (at its start,
-		// TakeCategoryCapture) drains them in the same pass. The post wakes the pump.
+		// Held until superseded by an applied one, and posted latest-wins (a newer capture names every node new to the last applied
+		// set, so a skipped one loses nothing). Posted after the pushes above, so the pass that takes it drains them too.
 		categoryCapturesHeld.push_back(capture);
 		channels.categoryPosted.Post(std::make_unique<std::shared_ptr<const CategoryCapture>>(capture));
 		categoryCapture = std::move(capture);
@@ -331,11 +324,9 @@ namespace DCLF::Scene
 
 	void FrameView::CaptureMirrorRequests()
 	{
-		// What the scene work tracked that the mirror holds no record of (an attach no hook captured: the references the engine
-		// moves into multibounds). Render thread, the frame's start. The coordinator asked because its mirror lacked the record;
-		// the mirror is not read here: the requested object is captured with its subtree and its chain up to the world's root
-		// (CaptureAttached), unless an ancestor was captured whole just before, and pushed onto the tracker's stack, mirror-only, in order
-		// with the hooks' events.
+		// Objects the mirror lacks (an attach no hook captured, e.g. references moved into multibounds): each captured with its
+		// subtree and chain to the world root (CaptureAttached) unless an ancestor was just captured, and pushed onto the tracker's
+		// stack, mirror-only, in order with the hooks' events.
 		std::vector<RE::NiPointer<RE::NiAVObject>> requests;
 		channels.mirrorCaptureRequests.Drain([&requests](RE::NiPointer<RE::NiAVObject>&& a_request) { requests.push_back(std::move(a_request)); });
 		if (requests.empty())
@@ -363,30 +354,20 @@ namespace DCLF::Scene
 		}
 	}
 
-	/**
-	 * @brief The accumulator half of the frame's render-thread work, at EarlyPrepass: the material part, a frame input and a parity
-	 * observer. The records are the scene work's (RefreshMaterialRecords: the writers' captures, the frame components,
-	 * the texture transforms); the frame inputs and the other observers are PostAccumulateInputs'; the joins are the scene
-	 * pass's, on the scene lane.
-	 */
 	void FrameView::PrepareAccumulatePhase()
 	{
 		ZoneScopedN("CS.DCLF.Accumulate.Prepare");
-		// No sceneBuilt test (the coordinator's, and the scene pass may be running): a request is answered whether or not a scene
-		// is built, and the queue is empty when no join ran.
-		// The frame input: the captures the joins asked for (a material no writer or attach captured lately), read where the engine
-		// reads its materials.
+		// No sceneBuilt test (the coordinator's, and the scene pass may be running): requests are answered regardless, and the
+		// queue is empty when no join ran.
 		ServeMaterialRequests();
-		Diagnostics::Notify(Diagnostics::AccumulatePrepared{ *this });
+		Diagnostics::Notify<Diagnostics::ScenePoint::AccumulatePrepared>();
 	}
 
 	void FrameView::ServeMaterialRequests()
 	{
 		channels.materialRequests.Drain([&](MaterialRequest&& a_request) {
-			// A material the scene work holds no capture of: captured here, off the property the join read (it holds the
-			// property, the property its material), for the scene work's next pass. A property with another material now was swapped
-			// after the join's batch: the request is stale (the join asks again after the swap's). Answered either way, so the join may
-			// ask again; the property's reference is dropped here, on the render thread.
+			// Captured off the property the join held. A property whose material changed since is stale (the join asks again
+			// after the swap). Answered either way; the property's reference is dropped here, on the render thread.
 			const bool current = a_request.property && a_request.property->material == a_request.material;
 			if (current)
 				MaterialPort::PushCapture(a_request.material);
@@ -397,12 +378,8 @@ namespace DCLF::Scene
 	void FrameView::PostAccumulateInputs()
 	{
 		ZoneScopedN("CS.DCLF.Accumulate.Inputs");
-		// The capture drained (always: its buffer is fixed-capacity, and the drain takes the frame's withholding counters); what the
-		// registrations say is the observers' alone (DrainCapture), posted for the next scene pass (the pass runs from the frame's start,
-		// so this frame's drain is the next pass's), and after the registration jobs the observers' reads of the engine's light data.
 		DrainCapture();
-		Diagnostics::Notify(Diagnostics::RegistrationsDone{ *this });
-		// The joins' frame input: Light Limit Fix's room map, posted when its generation moves.
+		Diagnostics::Notify<Diagnostics::FramePoint::RegistrationsDone>();
 		PostRoomMap();
 	}
 
@@ -411,16 +388,15 @@ namespace DCLF::Scene
 		auto& capture = PassCapture::Get();
 		if (!capture.Installed())
 			return;
-		// Always drained: the capture buffer is fixed-capacity and a frame that does not drain it overflows, and the drain takes the
-		// frame's withholding counters (the report's). The main camera's registrations are no source of anything DCLF draws (scene
-		// membership and the mirror are): what was registered is the observers' alone.
+		// Always drained: the buffer is fixed-capacity and would overflow, and the drain takes the withholding counters. The main
+		// camera's registrations are no source of anything DCLF draws (membership and the mirror are): only observers read them.
 		const auto entries = capture.Drain();
 		Diagnostics::Notify(Diagnostics::CaptureDrained{ *this, entries });
 	}
 
 	void FrameView::PostRoomMap()
 	{
-		// Light Limit Fix's map is the render thread's (it swaps it at its own point), so it is read here and only the copy is posted.
+		// Light Limit Fix's map is the render thread's (it swaps it at its own point): only a copy is posted.
 		auto& lightFix = globals::features::lightLimitFix;
 		if (!lightFix.loaded)
 			return;
@@ -437,21 +413,21 @@ namespace DCLF::Scene
 		channels.roomMapPosted.store(std::shared_ptr<const RoomMapInput>(std::move(input)), std::memory_order_release);
 		roomMapPostedGeneration = generation;
 		channels.accumulateInputs.roomMapsPosted.fetch_add(1, std::memory_order_relaxed);
-		// No wake: the frame's next pass takes it (a mid-frame post the pass does not need sooner).
+		// No wake: the frame's next pass takes it.
 	}
 
 	void FrameView::PostPipelineFrame(const GeometryPort::PipelineFrame& a_frame)
 	{
 		channels.pipelineFramePosted.store(std::make_shared<const GeometryPort::PipelineFrame>(a_frame), std::memory_order_release);
 		channels.accumulateInputs.pipelineFramesPosted.fetch_add(1, std::memory_order_relaxed);
-		// No wake: the frame's next pass takes it (a mid-frame post the pass does not need sooner).
+		// No wake: the frame's next pass takes it.
 	}
 
 	void FrameView::CaptureLightingShader()
 	{
-		// The BSLightingShader instance: the engine's own (0x14338ca00, written by its constructor; the shader GetRenderPasses gives
-		// a Lighting pass), not learned from a registration. Read at the frame's start with the coordinator idle, before the frame's
-		// globals (MaterialPort's sources read it) and the scene work's kick, so the scene lane reads only what was set before its kick.
+		// The engine's BSLightingShader instance (0x14338ca00, written by its constructor; the shader GetRenderPasses gives a Lighting
+		// pass). Read at frame start before the globals (MaterialPort's sources read it) and the frame inputs' post, so the scene
+		// lane reads only what was set before that post.
 		if (EngineShaders::Lighting())
 			return;
 		static const REL::Relocation<RE::BSShader**> lightingShader{ REL::Offset(Engine::Address::kLightingShader) };
@@ -477,12 +453,9 @@ namespace DCLF::Scene
 
 	std::uint64_t FrameView::CategorySignature() const
 	{
-		// A cheap stand-in for "the set of category nodes may have changed". It has to be conservative in
-		// one direction only: if it misses a change, geometry attached under a newly appeared node is
-		// never tracked, because AddSubtree needs the category node to already be known. So it folds in
-		// everything the refresh below reads to *find* nodes - the interior cell, the grid cells, each
-		// cell's loaded data and cell3D and how many children it has, and objRoot's child count - rather
-		// than just the cell pointers.
+		// A cheap "the category nodes may have changed". A missed change means geometry under a new node is never tracked
+		// (AddSubtree needs the category node known), so it folds in everything CaptureCategories reads to *find* nodes, not
+		// just the cell pointers.
 		Fnv1a hash;
 		auto mix = [&hash](const void* a_value) { hash.Mix(a_value); };
 		auto mixCell = [&](RE::TESObjectCELL* a_cell) {
@@ -495,7 +468,7 @@ namespace DCLF::Scene
 			mix(cell3D);
 			if (cell3D)
 				hash.Mix(cell3D->GetChildren().size());
-			// The portal graph's parentless roots (RefreshCategoryNodes): a few dozen pointers.
+			// The portal graph's parentless roots: a few dozen pointers.
 			if (const auto* graph = loaded ? loaded->portalGraph.get() : nullptr) {
 				mix(graph->portalSharedNode.get());
 				hash.Mix(graph->alwaysRenderChildren.size());
@@ -509,10 +482,10 @@ namespace DCLF::Scene
 			if (auto* objRoot = tes->objRoot)
 				hash.Mix(objRoot->GetChildren().size());
 			mix(tes->objRoot);
-			// The LOD root (RefreshCategoryNodes), with the toggles that list it.
+			// The LOD root, with the toggles that list it.
 			mix(ActiveToggles().lodObjects || ActiveToggles().lodTerrain ? tes->lodLandRoot : nullptr);
 			hash.Mix((ActiveToggles().lodObjects ? 1u : 0u) | (ActiveToggles().lodTerrain ? 2u : 0u));
-			// The first-person root while the toggle tracks it (CaptureCategories).
+			// The first-person root while the toggle tracks it.
 			if (ActiveToggles().firstPerson)
 				if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 					mix(player->Get3D(true));

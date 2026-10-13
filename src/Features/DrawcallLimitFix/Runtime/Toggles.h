@@ -36,20 +36,20 @@ namespace DCLF
 		bool projectedUv = false;
 		// terrain, the MTLand and MTLandLODBlend techniques (MtLandEnabled adds the Terrain Blending condition);
 		bool mtLand = false;
-		// T7c1: while Terrain Blending holds the terrain, the terrain (its groups 1 and 2: Records.h, ObjectTerrainGroup), drawn as
+		// while Terrain Blending holds the terrain, the terrain (its groups 1 and 2: Records.h, ObjectTerrainGroup), drawn as
 		// that feature draws it;
 		bool tbTerrain = false;
-		// T7d: blended Lighting geometry (alpha-blended, or a material alpha below one), drawn by the forward epoch: a GPU depth sort of
+		// blended Lighting geometry (alpha-blended, or a material alpha below one), drawn by the forward epoch: a GPU depth sort of
 		// the visible set, back to front, before the engine's own blended draws (on by default: CS_DCLF_FORWARD=0 seeds it off);
 		bool forward = false;
-		// T7d's Effect port: static blended BSEffectShaderProperty meshes, drawn by the forward epoch in the same GPU sort (needs forward;
+		// static blended BSEffectShaderProperty meshes, drawn by the forward epoch in the same GPU sort (needs forward;
 		// on by default: CS_DCLF_EFFECTS=0 seeds it off);
 		bool effects = false;
-		// T7d's refraction: Lighting geometry with kRefraction or kTempRefraction, whose one main pass is a Utility RENDER_NORMAL pass into
+		// refraction: Lighting geometry with kRefraction or kTempRefraction, whose one main pass is a Utility RENDER_NORMAL pass into
 		// the refraction normals (kREFRACTION_NORMALS) that ISRefraction warps the frame by; drawn in the forward epoch (needs forward;
 		// on by default: CS_DCLF_REFRACTION=0 seeds it off);
 		bool refraction = false;
-		// T7e's particles: NiParticleSystem geometry with a BSEffectShaderProperty, its quads built by DCLF from snapshots taken at the
+		// particles: NiParticleSystem geometry with a BSEffectShaderProperty, its quads built by DCLF from snapshots taken at the
 		// engine's particle update (ParticleSnapshots) and drawn in the forward epoch's sort (needs effects; on by default:
 		// CS_DCLF_PARTICLES=0 seeds it off);
 		bool particles = false;
@@ -81,7 +81,7 @@ namespace DCLF
 		bool precipitationOcclusion = false;
 		// DCLF draws the water reflection's cube map faces' LOD (dclf-lod.md, "Water reflections").
 		bool reflections = false;
-		// T7e: the player's first-person skeleton (arms, weapons, shield, magic hands) as a view of the one scene: its geometry tracked
+		// The player's first-person skeleton (arms, weapons, shield, magic hands) as a view of the one scene: its geometry tracked
 		// under the first-person root, members of kSetFirstPerson drawn by the first-person epochs (on by default: CS_DCLF_FIRST_PERSON=0
 		// seeds it off).
 		bool firstPerson = false;
@@ -103,7 +103,7 @@ namespace DCLF
 		const char* tooltip;       // or nullptr
 		bool entersClassification;  // a change drops the classification caches (Coordinator::InvalidateVerdicts)
 		bool ToggleSet::*needs[2];  // the flags it needs on, earlier in kToggles (nullptr when unused)
-		bool offByDefault = false;  // unset seeds it off (T7d's forward epoch): only its onValue turns it on
+		bool offByDefault = false;  // unset seeds it off: only its onValue turns it on
 	};
 
 	/** @brief Every flag of ToggleSet, in menu order; a flag comes after the flags it needs. */
@@ -113,10 +113,9 @@ namespace DCLF
 	 * @brief The requested and the active toggle sets.
 	 *
 	 * The menu edits the REQUESTED set. The render thread copies it into the ACTIVE set once per frame, at
-	 * the frame's first DCLF point (BeforeShadowMaps), so a toggle never changes under a running frame. The
-	 * active set is one packed word behind a relaxed atomic, because the registration hook reads it from
-	 * whatever thread the engine registers on: a toggle is a standing statement, not a synchronisation
-	 * point, and one word makes every read a single load with no lock.
+	 * the frame's start (FrameDriver), so a toggle never changes under a running frame. The active set is one
+	 * packed word behind a relaxed atomic, because hooks on the engine's job threads and DCLF's threads read it:
+	 * a toggle is a standing statement, not a synchronisation point, and one word makes every read a single load.
 	 *
 	 * A change to a toggle that enters the classification (the object classes) invalidates every cached verdict and
 	 * derivation (Coordinator::InvalidateVerdicts), because those caches witness the object, not the switches.
@@ -156,16 +155,16 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief T6b3e: a thread's snapshot of the active set, which ActiveToggles reads in its place while installed (ToggleSnapshotScope):
+	 * @brief A thread's snapshot of the active set, which ActiveToggles reads in its place while installed (ToggleSnapshotScope):
 	 * a scene pass's evaluations read the set the pass took at its start on whichever thread they run, though the render thread may
 	 * change the active one meanwhile.
 	 */
 	inline thread_local const ToggleSet* activeToggleSnapshot = nullptr;
 
-	/** @brief The toggles in force for the current frame (Toggles::Active), or this thread's snapshot of them (T6b3e); any thread. */
+	/** @brief The toggles in force for the current frame (Toggles::Active), or this thread's snapshot of them; any thread. */
 	inline ToggleSet ActiveToggles() { return activeToggleSnapshot ? *activeToggleSnapshot : Toggles::Get().Active(); }
 
-	/** @brief T6b3e: a_set is this thread's ActiveToggles while the scope lives (null: the active set). */
+	/** @brief a_set is this thread's ActiveToggles while the scope lives (null: the active set). */
 	class ToggleSnapshotScope
 	{
 	public:

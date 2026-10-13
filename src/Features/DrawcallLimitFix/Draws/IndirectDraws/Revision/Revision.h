@@ -23,12 +23,12 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief T6b3b b2a: what a scene revision reads of the frame, as the render thread last posted it (Impl::PostRevisionInputs, at
-	 * each place a value is captured: BuildPoint, Setup, BeforeShadowMaps, the occlusion views, the shadow placements, the main
-	 * epochs' captures, the parity's first commits, PrepareReflection; and, while the revision is made on the render thread, before
-	 * each make). Immutable once posted, latest wins (Impl::revisionInputsSlot); the revision code reads its copy and its request
-	 * alone, never the frame's state. generation moves with every post; the generations it carries (the graph's build, the targets,
-	 * the shadow format, the toggles, the main resources) are what a snapshot's adoption compares (b3).
+	 * @brief What a scene revision reads of the frame, as the render thread last posted it (Impl::PostRevisionInputs, at each place a
+	 * value is captured: BuildPoint, Setup, BeforeShadowMaps, the occlusion views, the shadow placements, the main epochs' captures,
+	 * PrepareReflection; and, while the revision is made on the render thread, before each make). Immutable once posted, latest wins
+	 * (Impl::revisionInputsSlot); the revision code reads its copy and its request alone, never the frame's state. generation moves with
+	 * every post; the generations it carries (the graph's build, the targets, the shadow format, the toggles, the main resources) are
+	 * what a snapshot's adoption compares.
 	 */
 	struct RevisionInputs
 	{
@@ -48,7 +48,6 @@ namespace DCLF::Draws
 		// The toggles (the cull mode, the reflections and tree LOD, the occlusion maps), their generation, and the switches read.
 		ToggleSet toggles{};
 		std::uint32_t togglesGeneration = 0;
-		std::string gbufferProbe;  // CS_DCLF_GBUFFER_PROBE
 		bool claims = false;       // !IndirectDraws::Failed
 		std::uint32_t shadowRasterStates = 0;  // DrawPipelines::ShadowRasterStateCount
 		// BeforeShadowMaps: the shadow views' candidates (ShadowViews::Candidates, the last Rebuild's). The occlusion maps' layout
@@ -77,8 +76,8 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief The revision producer's latches (T6b3b b2a: made by the revision code alone, Create'd off the host's world so its thread
-	 * may make them; ReserveMainLatch, ReserveShadowLatch, ReserveReflection, ReserveLatchedBlock), held by the shapes it makes: a
+	 * @brief The revision producer's latches (made by the revision code alone, Create'd off the host's world so its thread may make
+	 * them; ReserveMainLatch, ReserveShadowLatch, ReserveView, ReserveLatchedBlock), held by the shapes it makes: a
 	 * commit writes into the selected revision's shape's latch, and its parity names that shape's. A frame in flight keeps the block
 	 * its shape holds; one replaced here drops with the last shape holding it.
 	 */
@@ -119,7 +118,7 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief The versions of every versioned buffer (VersionRegistry) as a scene revision names them (R3c): a preparation for the
+	 * @brief The versions of every versioned buffer (VersionRegistry) as a scene revision names them: a preparation for the
 	 * revision resolves each buffer to its version here (org::IResourceVersions), whatever is current when it runs.
 	 */
 	struct VersionSet final : org::IResourceVersions

@@ -1,6 +1,6 @@
 #pragma once
 
-// The counters IndirectDraws keeps for the report (DrawcallLimitFix/Report.cpp), apart from its interface.
+// The counters IndirectDraws keeps for the reports (Diagnostics/Reports/), apart from its interface.
 
 #include <array>
 #include <cstdint>
@@ -36,8 +36,7 @@ namespace DCLF
 		std::uint32_t records = 0;                       // binding records built, last epoch
 		std::uint64_t uploadBytes = 0;                   // last epoch
 		double cpuMs = 0.0;                              // last epoch, assembly and epoch
-		// Where that time goes
-		// Parts 0-2 are per binding record, not per draw
+		// Where that time goes (kEpochPartNames); parts 0-2 are per binding record, not per draw.
 		std::array<double, 8> partMs{};
 		// The render thread's part of the main epochs (the commit and what surrounds it inside the epoch),
 		// summed over commitEpochs since the last report: join, lookups, frame textures and patches, frame
@@ -69,16 +68,16 @@ namespace DCLF
 		// flagged inputs and how many missed every cascade, against the CPU's count over the same inputs and
 		// planes (the same test in C++).
 		std::uint32_t sunTested = 0, sunMissed = 0, sunCpuTested = 0, sunCpuMissed = 0;
-		// T7c1, sampled likewise: the depth segment's first phase's terrain group 1 inputs and those within Terrain Blending's near
+		// Sampled likewise: the depth segment's first phase's terrain group 1 inputs and those within Terrain Blending's near
 		// distance, against the CPU's test over the same inputs (CS_DCLF_SET_PARITY: terrainCpu).
 		std::uint32_t terrainNearTested = 0, terrainNear = 0, terrainCpuTested = 0, terrainCpuNear = 0;
 		bool terrainCpu = false;
-		// T7d, sampled likewise: the colour segment's forward inputs tested, inside the frustum, rejected by the HZB, and the forward draws
+		// Sampled likewise: the colour segment's forward inputs tested, inside the frustum, rejected by the HZB, and the forward draws
 		// appended (sorted and drawn by the forward epoch); and, under CS_DCLF_SET_PARITY, the blended passes the engine's main
 		// registration handed in for members that frame (all withheld: what it would have drawn of the class).
 		std::uint32_t forwardTested = 0, forwardInView = 0, forwardOccluded = 0, forwardDrawn = 0, forwardEngine = 0;
 		bool forwardObserved = false;
-		// T7d's refraction, sampled likewise: the colour segment's refraction inputs tested, inside the frustum, rejected by the HZB or their
+		// Refraction, sampled likewise: the colour segment's refraction inputs tested, inside the frustum, rejected by the HZB or their
 		// root's fade, and the refraction draws appended; and, under CS_DCLF_SET_PARITY, the refraction passes (hint 4) the engine's main
 		// registration handed in for members that frame (all withheld).
 		std::uint32_t refractionTested = 0, refractionInView = 0, refractionOccluded = 0, refractionDrawn = 0, refractionEngine = 0;
@@ -110,9 +109,8 @@ namespace DCLF
 		// The scene lane's builds: per job kind (colour, Z-prepass, shadow), per report interval.
 		struct Async
 		{
-			// Per epoch, since the last report: committed the installed publication's payload (built ahead), or built at the epoch
-			// (CS_DCLF_BINDLESS_PARITY).
-			std::uint32_t used = 0, builtInline = 0;
+			// Per epoch, since the last report: committed the installed publication's payload (built ahead).
+			std::uint32_t used = 0;
 		};
 		std::array<Async, 3> async{};
 	};

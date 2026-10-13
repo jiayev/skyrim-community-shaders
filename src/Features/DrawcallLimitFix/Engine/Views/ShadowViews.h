@@ -24,10 +24,8 @@ namespace DCLF
 {
 	/**
 	 * @brief Why the engine would draw no shadow-map pass for an object (engine notes: shadow maps,
-	 * `BSLightingShaderProperty::GetRenderPasses_ShadowMapOrMask`). None means it is a caster.
-	 *
-	 * Measured against the engine's own registrations: over ~1M it rejected none of the casters the engine
-	 * registered.
+	 * `BSLightingShaderProperty::GetRenderPasses_ShadowMapOrMask`). None means it is a caster. It agrees with the engine's own
+	 * registrations: it rejects none of the casters the engine registers.
 	 */
 	enum class ShadowReject : std::uint8_t
 	{
@@ -55,17 +53,16 @@ namespace DCLF
 		 */
 		VolumetricOnly,
 		/**
-		 * A DecalNoZWrite decal without bit 18. By the reading of FUN_1414b2a60 above a paraboloid light would cast it, but
-		 * measured it never does: with the point lights' culls whole (LocalLightCull's parity frames, every insertion
-		 * watched), 2,099 such decals at Riverwood and 80 in the Bannered Mare gave no paraboloid pass. So it is no caster
-		 * of any mode; LocalLightCull's parity reports one if a scene ever registers it.
+		 * A DecalNoZWrite decal without bit 18. By the reading of FUN_1414b2a60 above a paraboloid light would cast it, but it
+		 * never does (observed with the point lights' culls whole, every insertion watched: no paraboloid pass). So it is no
+		 * caster of any mode; LocalLightCull's observer reports one if a scene ever registers it.
 		 */
 		DecalPointLight,
 		// A multi-index shape's layer object (Coordinator::Tracked::layerSlot): the shadow modes register the main property's
 		// passes alone (FUN_1414b2a60), so the additional property never casts.
 		Layer,
-		// Object and terrain LOD (under TES::lodLandRoot: IsLodObject, IsLodLand): no shadow cull reaches the LOD root, and
-		// measured, no shadow mode ever registers either (dclf-lod.md, the census).
+		// Object and terrain LOD (under TES::lodLandRoot: IsLodObject, IsLodLand): no shadow cull reaches the LOD root, and no
+		// shadow mode ever registers either (observed: dclf-lod.md, the census).
 		Lod,
 		Count
 	};
@@ -109,7 +106,7 @@ namespace DCLF
 
 	/**
 	 * @brief The engine's verdict on whether an object casts into a shadow map. Faded takes the material's alpha alone: the fade
-	 * node's share is FadeStateCS's, and a shadow view's BuildDraws drops the caster while its root fades (T1a: never the node's).
+	 * node's share is FadeStateCS's, and a shadow view's BuildDraws drops the caster while its root fades (never the node's).
 	 */
 	ShadowReject ShadowCasterReject(const SceneCapture::LeafView& a_leaf);
 	/**
@@ -142,7 +139,7 @@ namespace DCLF
 	 * A view is identified downstream by its accumulator and by its batch renderer: the accumulator is
 	 * what `FinishAccumulatingPreResolveDepth` is called on when the view is drawn, and the batch renderer
 	 * is what the engine registers the view's Utility passes with - which is how a captured registration
-	 * is attributed to a view, exactly as `mainBatchRenderers` attributes the main camera's.
+	 * is attributed to a view, as the diagnostics' `mainBatchRenderers` attributes the main camera's.
 	 *
 	 * Render thread only, and valid only between BeforeShadowMaps and the end of the frame's shadow draws.
 	 */
@@ -188,12 +185,12 @@ namespace DCLF
 			std::uint32_t renderMode = 0;
 			/**
 			 * @brief DCLF's this frame: a shadow mode's view (not a focus one, its mode known) within the view slots DCLF's
-			 * buffers hold now (SetViewCapacity), in the engine's order. Only these are withheld (the registration hook's renderers)
+			 * buffers hold this frame (SetViewCapacity), in the engine's order. Only these are withheld (the registration hook's renderers)
 			 * and captured; the rest the engine draws alone, while DCLF's slots grow (Growths) for them.
 			 */
 			bool covered = false;
 			/**
-			 * @brief Where the engine will draw it (T3d), DCLF's prediction at Rebuild: the depth target (RENDER_TARGET_DEPTHSTENCIL) and
+			 * @brief Where the engine will draw it, DCLF's prediction at Rebuild: the depth target (RENDER_TARGET_DEPTHSTENCIL) and
 			 * slice. A sun cascade with volumetricCopy is drawn twice, its volumetric lighting copy first (target 3, the same slice).
 			 */
 			std::uint32_t drawTarget = ~0u;
@@ -203,7 +200,7 @@ namespace DCLF
 
 		static ShadowViews& Get();
 
-		/** @brief How many shadow views DCLF can draw this frame (its view slots' buffers now); UINT32_MAX: no bound. Before Rebuild. */
+		/** @brief How many shadow views DCLF can draw this frame (its view slots' buffers); UINT32_MAX: no bound. Before Rebuild. */
 		void SetViewCapacity(std::uint32_t a_views) { viewCapacity = a_views; }
 		/** @brief The frame's shadow-mode views DCLF would draw with slots enough (covered or not): what its slots grow to. */
 		std::uint32_t Candidates() const { return candidates; }

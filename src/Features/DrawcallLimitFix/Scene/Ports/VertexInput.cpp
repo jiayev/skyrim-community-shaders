@@ -1,3 +1,5 @@
+// VertexInput.h's ports of the engine's vertex input masks and input layouts. Pure.
+
 #include "Features/DrawcallLimitFix/Scene/Ports/VertexInput.h"
 
 namespace DCLF

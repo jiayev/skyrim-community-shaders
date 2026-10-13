@@ -1,3 +1,6 @@
+// CS_DCLF_ACCUMULATED_PARITY's engine side (Accumulated.h): the render thread's kAccumulated samples and frame camera check, the
+// animation gate's detours (job threads) and the prediction published at Main::Update's entry (main thread).
+
 #include "Accumulated.h"
 
 #include "Events.h"
@@ -26,7 +29,7 @@ namespace DCLF::Diagnostics::Accumulated
 		std::uint32_t Flags(const void* a_node) { return Engine::FlagsOf(a_node); }
 		bool AccumulatedBit(const void* a_node) { return (Flags(a_node) & kFlagAccumulated) != 0; }
 
-		// AE 1.6.1170: FUN_1402cff60 and its three calls (skyrim-engine-notes.md, "T7b0").
+		// AE 1.6.1170: FUN_1402cff60 and its three calls (skyrim-engine-notes.md, "who sets kAccumulated").
 		constexpr std::uintptr_t kAnimGate = 0x2cff60;
 		constexpr std::array<std::uintptr_t, 3> kAnimGateCallSites{ 0x2c73f6, 0x2b4230, 0x2b5382 };  // UpdateAnimationJob, FUN_1402b41a0, FUN_1402b52e0
 
@@ -109,7 +112,7 @@ namespace DCLF::Diagnostics::Accumulated
 		FrameCamera frameCamera;
 
 		/** @brief PrimaryCull::Install: <- ANIM RATE on FUN_1402cff60's three calls. */
-		void InstallAnimRate(const PrimaryCullInstalled&)
+		void InstallAnimRate(const On<EnginePoint::PrimaryCullInstalled>&)
 		{
 			const auto base = REL::Module::get().base();
 			for (const auto site : kAnimGateCallSites)
@@ -134,12 +137,12 @@ namespace DCLF::Diagnostics::Accumulated
 		}
 
 		/** @brief After the list jobs' Finish: the bit on the frame's tables' fade roots and geometries. */
-		void SampleBits(const ListJobsDone& a_event)
+		void SampleBits(const On<EnginePoint::ListJobsDone>&)
 		{
 			// The frame's tables (the installed publication's: the same the frame's depth commit armed its readback with).
 			const auto& tables = Scene::FrameView::Get().GetTables();
 			auto sample = std::make_unique<Sample>();
-			sample->frame = a_event.frame;
+			sample->frame = Scene::FrameView::Get().GetFrame();
 			const std::size_t roots = tables.fadeRootNode.size();
 			sample->rootNodes.assign(tables.fadeRootNode.begin(), tables.fadeRootNode.end());
 			sample->rootBits.assign(roots, 0u);
@@ -195,9 +198,9 @@ namespace DCLF::Diagnostics::Accumulated
 
 	void Install()
 	{
-		Subscribe<PrimaryCullInstalled>(InstallAnimRate);
+		Subscribe<EnginePoint::PrimaryCullInstalled>(InstallAnimRate);
 		Subscribe<CutFrameBegin>(CheckFrameCamera);
-		Subscribe<ListJobsDone>(SampleBits);
+		Subscribe<EnginePoint::ListJobsDone>(SampleBits);
 		Subscribe<UpdateEntry>(PublishPrediction);
 	}
 

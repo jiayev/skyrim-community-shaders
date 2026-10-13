@@ -1,3 +1,6 @@
+// SunAccumulation: the sun's entry exclusion (render thread, after the full-frustum cull), the registration-free accumulation's
+// thunks on the sun's Accumulate and its registrations (the render thread and the registration jobs), the sun's bits for removed
+// entries, and the cascades BuildDraws tests (from SunViews).
 #include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
@@ -101,7 +104,7 @@ namespace DCLF
 		constexpr std::size_t kGeometryType = 0x150;
 		constexpr std::size_t kDismemberSkinReady = 0x98;
 
-		/** @brief Whether M1 applies this frame: the set it skips registrations by withholds casters. */
+		/** @brief Whether the registration skip applies this frame: the set it skips registrations by withholds casters. */
 		bool M1Active(const ToggleSet& a_toggles)
 		{
 			return a_toggles.skipSunAccumulation && PassCapture::ShadowWithholdingEnabled() &&
@@ -281,11 +284,10 @@ namespace DCLF
 	void SunAccumulation::GpuCascades(std::vector<GpuCascade>& a_out) const
 	{
 		// This frame's cascades, whether or not the entry exclusion ran: the colour pass's sun test needs them every frame (without them
-		// every pass with the sun's bits would miss, and draw unshadowed). T7f prep: DCLF's own views (SunViews, from the cameras
-		// UpdateCamera set up for the sun this frame), no longer the frame and count the engine's Accumulate hook recorded - the sun's
-		// cull and registration may stop and the test stands. None when UpdateCamera did not run for the sun this frame (the sun does
-		// not draw: an interior), when the engine gives no pass the sun's bits either. Each cascade's planes are those Accumulate's hook
-		// copies from the same views (the bits' cascades), in descriptor order.
+		// every pass with the sun's bits would miss, and draw unshadowed). From DCLF's own views (SunViews, from the cameras UpdateCamera
+		// set up for the sun this frame), so the test does not depend on the engine's Accumulate running. None when UpdateCamera did not
+		// run for the sun this frame (the sun does not draw: an interior), when the engine gives no pass the sun's bits either. Each
+		// cascade's planes are those Accumulate's hook copies from the same views (the bits' cascades), in descriptor order.
 		a_out.clear();
 		const auto& views = SunViews::Get().Current();
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
@@ -385,7 +387,7 @@ namespace DCLF
 				if (self.frameState.cascades.size() < call.count)
 					self.frameState.cascades.resize(call.count);
 				const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
-				Diagnostics::Notify(Diagnostics::SunAccumulateBegin{ frame });
+				Diagnostics::Notify<Diagnostics::EnginePoint::SunAccumulateBegin>();
 				// Each cascade's volume is DCLF's (SunViews, from the camera UpdateCamera set up). A cascade without DCLF's stays unknown,
 				// its bit unset.
 				for (std::uint32_t i = 0; i < call.count; ++i) {
@@ -406,9 +408,8 @@ namespace DCLF
 				func(a_light, a_count, a_arg2, a_arg3);
 				const std::int64_t ticks = Now() - start;
 				currentCall = nullptr;
-				Diagnostics::Notify(Diagnostics::SunAccumulateEnd{ frame });
-				// The cascades as the engine culled them: what a removed entry's geometries are tested against when the
-				// main camera registers them. From here until the next mask clear, those registrations take DCLF's bits.
+				// The captured cascades: what a removed entry's geometries are tested against when the main camera registers
+				// them. From here until the next mask clear, those registrations take DCLF's bits.
 				{
 					auto& state = self.frameState;
 					state.cascadeCount = call.count;
@@ -486,7 +487,6 @@ namespace DCLF
 				if (self.exclusionLive.load(std::memory_order_relaxed) && (self.frameState.stamp & 63) == 0 && self.UnderRemovedEntry(geometry))
 					++self.stats.cascadeRegistrationsUnderRemoved;
 				if (claimed) {
-					Diagnostics::Notify(Diagnostics::SunCasterClaimed{ geometry, call->descriptors[cascade] });
 					// An owned geometry's mask stays 0 (ClearOwnedMask); any other takes the cascade's bit for its main registration.
 					if (PrimaryCull::Get().Owned(*geometry))
 						ClearOwnedMask(a_geometry);
@@ -633,7 +633,7 @@ namespace DCLF
 		stl::write_thunk_call<Hooks::Cascade>(cascadeCall);
 		stl::write_thunk_call<Hooks::CascadeCull>(cascadeCull);
 		stl::write_thunk_call<Hooks::MaskClear>(maskClear);
-		// The cascades' skip of the excluded entries they reach anyway: with the point lights' (CS_DCLF_LIGHT_EXCLUDE=0: neither).
+		// The cascades' skip of the excluded entries they reach anyway (the point lights' culls have their own: LocalLightCull).
 		stl::write_vfunc<0x16, Hooks::CascadeProcess1>(RE::VTABLE_BSCullingProcess[0]);
 		installed = true;
 		logger::info("[DCLF] sun accumulation installed (Accumulate, its cascades and registrations, the full-frustum cull)");

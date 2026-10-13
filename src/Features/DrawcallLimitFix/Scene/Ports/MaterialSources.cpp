@@ -1,3 +1,5 @@
+// MaterialSources.h's rules: the frame-sourced float positions, signatures and the copy / apply helpers.
+
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialSources.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
@@ -35,7 +37,7 @@ namespace DCLF::MaterialSources
 		// PS PerMaterial variables whose values come from the shader object or engine globals
 		// (BSLightingShader::SetupMaterial, AE 1414dc310), with the components that do. Not IBLParams (this+0xcc, then
 		// this+0xd0.. or this+0xe0.. by this+0xf0): no Lighting stage reads it, and its colour drifts with the time of day
-		// almost every frame, which re-versioned every record of every signature (the motion run m1: ~1,030 a frame).
+		// almost every frame, which would re-version every record of every signature.
 		struct FrameVariable
 		{
 			std::uint32_t variable;
@@ -71,7 +73,7 @@ namespace DCLF::MaterialSources
 			return out;
 		}
 
-		// T7d's Effect port: an effect record's TexcoordOffset (BSEffectShader's VS variable 9), the only frame part it has.
+		// An effect record's TexcoordOffset (BSEffectShader's VS variable 9), the only frame part it has.
 		const std::vector<std::uint32_t>& EffectVSPositions()
 		{
 			static const std::vector<std::uint32_t> positions = [] {
@@ -140,7 +142,7 @@ namespace DCLF::MaterialSources
 
 	bool ApplyFrameComponents(const MaterialRecord& a_live, MaterialRecord& a_record, std::uint32_t a_passDescriptor, bool* a_floatsChanged)
 	{
-		// An effect record has no signature-sourced component (T7d's Effect port: NoteMaterialRecord lists none).
+		// An effect record has no signature-sourced component (NoteMaterialRecord lists none).
 		if (a_live.kind == kMaterialKindEffect || a_record.kind == kMaterialKindEffect)
 			return false;
 		for (const auto position : FramePSFloats())

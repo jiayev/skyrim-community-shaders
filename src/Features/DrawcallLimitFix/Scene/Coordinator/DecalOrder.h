@@ -1,10 +1,10 @@
 #pragma once
 
+// The decal draw order's key (DecalOrder.cpp's, and the decal order parity's: Diagnostics/Scene).
+
 #include <algorithm>
 #include <cstdint>
 #include <vector>
-
-// The decal draw order's key (DecalOrder.cpp's, and the decal order probe's: Diagnostics/Scene).
 
 namespace DCLF::Scene
 {

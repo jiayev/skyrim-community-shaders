@@ -26,7 +26,7 @@ namespace DCLF
 			for (std::size_t i = 0; i < Capacity; ++i)
 				cells[i].sequence.store(i, std::memory_order_relaxed);
 		}
-		/** @brief T6b3d: a_onPush is called after every push, on the pushing thread (a consumer's wake: WakeScenePropertyEvent and the like). */
+		/** @brief a_onPush is called after every push, on the pushing thread (a consumer's wake: WakeScenePropertyEvent and the like). */
 		explicit EventQueue(void (*a_onPush)()) :
 			EventQueue()
 		{
@@ -48,7 +48,7 @@ namespace DCLF
 
 		/**
 		 * @brief The one consumer: every event pushed before the call, oldest first (a_visit(T&&)). Returns how many. Bounded by the
-		 * ring's head at the call (T6b3d): a producer extending the queue meanwhile is the next drain's, so a drain always ends.
+		 * ring's head at the call: a producer extending the queue meanwhile is the next drain's, so a drain always ends.
 		 */
 		template <class F>
 		std::size_t Drain(F&& a_visit)

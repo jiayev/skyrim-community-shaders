@@ -1,3 +1,4 @@
+// SceneExecutor: per-domain job queues, worker threads, timers, scopes and ParallelFor.
 #include "Features/DrawcallLimitFix/Runtime/SceneExecutor.h"
 
 #include <algorithm>

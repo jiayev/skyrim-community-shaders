@@ -1,16 +1,18 @@
-#include "DrawcallLimitFix/PortalPrograms.hlsli"
 // Drawcall Limit Fix: the fade roots' state on the GPU (drawcall-limit-fix.md, "Fades on the GPU"; Records.h, FadeRootStatic).
 //
 // The engine updates a BSFadeNode's fade and LOD state in its OnVisible, for the main camera's cull, whenever the node's bound
 // passes the cull's frustum test. This pass does the same for every fade root a DCLF member draws under, from the depth
 // segment's view-projection: one thread per root slot. A state row whose generation is not its static row's is new (a listed
-// node) and starts from the node's values. The update is Scene/FadeState.cpp's port of the engine's functions, instruction
+// node) and starts from the node's values. The update is Scene/Ports/FadeState.cpp's port of the engine's functions, instruction
 // for instruction; keep the two the same.
 //
 // A frame ahead, on the compute queue in the Z-prepass epoch: the state rows are this pass's alone, and every root's state
 // after the update is published into the frame's output of two (by the scene frame's parity). The builds read the other one,
 // the frame before's (BuildDrawsLatch::fadeStatesIndex), so nothing waits for this pass.
 
+#include "DrawcallLimitFix/PortalPrograms.hlsli"
+
+// Must match FadeStateConstants (Draws/IndirectDraws/Core/GpuLayouts.h).
 cbuffer FadeStateConstants : register(b0)
 {
 	uint RootsIndex;    // StructuredBuffer<FadeRootStatic>
@@ -30,6 +32,7 @@ cbuffer FadeStateConstants : register(b0)
 	uint Padding3;
 }
 
+// FadeNodeState, FadeRootStatic, FadeFrame and FadeLogEntry must match Records.h's (and VisibilityEventsCS.hlsl's copies).
 struct FadeNodeState
 {
 	uint Flags;
@@ -401,9 +404,9 @@ bool InView(float3 a_centre, float a_radius)
 static const uint kFadeRootAlwaysDraw = 1u << 20;
 static const uint kFadeRootPreprocessed = 1u << 21;
 static const uint kFadeRootPreprocessHidden = 1u << 22;
-// T6b1a: the seeds (FrameValues' fade seeds, the latch's fadeSeedsIndex: two rows a slot, this bit picks the generation's).
+// The seeds (FrameValues' fade seeds, the latch's fadeSeedsIndex: two rows a slot, this bit picks the generation's).
 static const uint kFadeRootSeedOdd = 1u << 23;
-static const uint kFadeRootWritten = 1u << 24;  // Records.h: the node is DCLF's alone to write (every listed root, T7f)
+static const uint kFadeRootWritten = 1u << 24;  // Records.h: the node is DCLF's alone to write (every listed root)
 static const uint kFadeRootNodeBits = kFadeRootPlanMask | (0xFFu << kFadeRootBitsShift) | kFadeRootTreeThresholds | kFadeRootAlwaysDraw | kFadeRootPreprocessed |
                                       kFadeRootPreprocessHidden;
 
@@ -432,10 +435,10 @@ bool MergeSeed(uint a_slot, inout FadeRootStatic a_root)
 }
 
 // The cull test without a program: the frustum, after the node flags Process1 tests first (AE 0x140e28390): an always-draw node passes
-// untested (T7f: kAccumulated is this verdict, as the engine's cull sets it). A preprocessed node (an actor's root: the actor pre-cull,
+// untested (kAccumulated is this verdict, as the engine's cull sets it). A preprocessed node (an actor's root: the actor pre-cull,
 // BSFadeNodeCuller, sets bit 12 and, off screen, kNotVisible every frame in Main::Draw's camera setup) passes in the engine unless
 // kNotVisible, whatever its room; the seed's copy of bit 20 is the listing frame's, so DCLF makes the pre-cull's test itself: the main
-// camera's frustum on the root's bound (T7f checklist item 1: the actors' roots).
+// camera's frustum on the root's bound.
 bool FrustumInView(float3 a_centre, float a_radius, uint a_rootBits)
 {
 	return (a_rootBits & kFadeRootAlwaysDraw) != 0u || InView(a_centre, a_radius);
@@ -453,9 +456,9 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits, uint a_progr
 	return test < 0 ? FrustumInView(a_centre, a_radius, a_rootBits) : test != 0;
 }
 
-// The fade write-back (drawcall-limit-fix.md, "The fade write-back", "T7b4/T7b6"): the engine reads a stood-in root's node (the
+// The fade write-back (drawcall-limit-fix.md, "The fade write-back"): the engine reads a stood-in root's node (the
 // tree LOD's crossfade, the occlusion maps' cull, the animation gate, the next listing), which only this pass updates. Its
-// milestones: 0 faded out, 1 fading, 2 faded in; with them (T7b4) the leaf LOD's level (+0x152 & 0xF) and transition
+// milestones: 0 faded out, 1 fading, 2 faded in; with them the leaf LOD's level (+0x152 & 0xF) and transition
 // (+0x153 & 0x70), so a level step or its settling is written too, not every blend step.
 uint FadeMilestone(FadeNodeState a_state)
 {
@@ -510,7 +513,7 @@ void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
 	FadeRootStatic root = roots[index];
 	RWStructuredBuffer<FadeNodeState> published = ResourceDescriptorHeap[(F.SceneFrame & 1u) != 0 ? OutIndex1 : OutIndex0];
 	FadeNodeState state = states[index];
-	// No root, or (T6b1a) its seed not sampled yet: not updated this frame.
+	// No root, or its seed not sampled yet: not updated this frame.
 	if (root.Object == kNoObject || root.Generation == 0 || !MergeSeed(index, root)) {
 		published[index] = state;
 		return;

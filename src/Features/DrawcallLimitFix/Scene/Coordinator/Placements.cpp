@@ -1,3 +1,6 @@
+// The coordinator's placement work (scene lane): the move events drained into move keys, the moving roots queued, and the placement
+// plan (movers, roots and their dependents) published for the frame's placement passes.
+
 #include "Internal.h"
 
 namespace DCLF::Scene
@@ -6,7 +9,7 @@ namespace DCLF::Scene
 	{
 		// A reference's animation pushes several in a row.
 		const void* last = nullptr;
-		// "This frame and the last" (T6b3d): the keys turn over when the pass's frame moved on, so a burst's passes add to the frame's.
+		// "This frame and the last": the keys turn over when the pass's frame moved on, so a burst's passes add to the frame's.
 		if (std::exchange(movedKeysFrame, sceneFrame) != sceneFrame) {
 			std::swap(movedKeys[0], movedKeys[1]);
 			movedKeys[0].clear();
@@ -19,7 +22,7 @@ namespace DCLF::Scene
 		});
 		// A node event names a node: the reference above it, or its category node when no node up to it has one.
 		for (const auto& node : nodeChanged) {
-			// The mirror's chain (T6b1b).
+			// The mirror's chain (the scene work reads no engine memory).
 			const void* key = nullptr;
 			for (const void* at = node.get(); at && !key; at = mirror.Parent(at))
 				if (const auto* record = mirror.Node(at))
@@ -33,7 +36,7 @@ namespace DCLF::Scene
 		}
 		if (a_full)
 			moveUngatedThrough = sceneFrame + 1;
-		// Pruned once 256 frames went by (T6b3d: by the frames the passes saw, which may skip the multiples of 256).
+		// Pruned once 256 frames went by (by the frames the passes saw, which may skip the multiples of 256).
 		if (sceneFrame - movedPruneFrame >= 256) {
 			movedPruneFrame = sceneFrame;
 			std::erase_if(movedFrame, [&](const auto& a_entry) { return sceneFrame - a_entry.second > 1; });
@@ -43,7 +46,7 @@ namespace DCLF::Scene
 
 	const void* Coordinator::MoveKeyOf(const RE::BSGeometry& a_geometry, const RE::NiNode* a_categoryNode) const
 	{
-		// The mirror's chain (T6b1b).
+		// The mirror's chain.
 		++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::MoveKey)];
 		auto keyOf = [&](auto&& a_parent, auto&& a_reference) -> const void* {
 			const void* key = nullptr;
@@ -78,7 +81,7 @@ namespace DCLF::Scene
 	{
 		ResolveSunEntry(a_tracked, *a_geometry);
 		PlacementPlan::Item item;
-		// Copies of references the scene work holds (step 6e F1): the entry's, and its listed root's.
+		// Copies of references the scene work holds: the entry's, and its listed root's.
 		item.geometry = a_tracked.geometry;
 		item.sunEntryNode = OwnedRoot(a_tracked.sunEntryNode);
 		item.slot = a_tracked.slot;
@@ -88,7 +91,7 @@ namespace DCLF::Scene
 		if (item.slot < tables.boneRows.size() && (tables.objects[item.slot].flags & kObjectSkinned) && tables.boneRows[item.slot]) {
 			item.boneOffset = tables.boneOffset[item.slot];
 			item.boneRows = tables.boneRows[item.slot];
-			// T7e: a particle member's block holds its quads (ParticleSnapshots), not a skin's palette (the mirror's record says which).
+			// A particle member's block holds its quads (ParticleSnapshots), not a skin's palette (the mirror's record says which).
 			const auto* record = mirror.Geometry(a_geometry);
 			item.particles = record && record->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles) && !record->skin;
 		}
@@ -122,14 +125,13 @@ namespace DCLF::Scene
 	void Coordinator::PublishPlacementPlan()
 	{
 		DCLF_SCENE_PART(Placements, "CS.DCLF.Scene.Placements");
-		// T6b3d: a walk that did not take the per-frame entries (a pass of a frame that had its per-frame walk) lists no movers itself.
-		// With nothing written either, it makes no plan (the frame keeps drawing with the last one's movers and roots: FrameValues); with
-		// slots written, its plan carries the last per-frame walk's movers, those still recorded in the slots they were listed with (a
-		// slot freed since may be another object's once its retirement returns).
-		// T6b3e (e0): the roots likewise. They are per-frame work (their reference's move events, the frame's), so only the per-frame walk
-		// queues them: QueueRoots walked every moving root and move key on every pass (33-50% of a steady one). A later walk's plan
-		// carries the per-frame walk's roots with their dependents. What is carried is keys and slots alone (CarriedItem): the references
-		// are copied again here from the entries (PlanItemOf) and the root owners, so the pump never holds the last one across passes.
+		// A walk that did not take the per-frame entries (a pass of a frame that had its per-frame walk) lists no movers itself. With
+		// nothing written either, it makes no plan (the frame keeps drawing with the last one's movers and roots: FrameValues); with slots
+		// written, its plan carries the last per-frame walk's movers, those still recorded in the slots they were listed with (a slot freed
+		// since may be another object's once its retirement returns). The roots likewise: they are per-frame work (their reference's move
+		// events, the frame's), so only the per-frame walk queues them, and a later walk's plan carries its roots with their dependents.
+		// What is carried is keys and slots alone (CarriedItem): the references are copied again here from the entries (PlanItemOf) and the
+		// root owners, so the pump never holds the last one across passes.
 		if (!perFrameWalked) {
 			if (!placementPlan || placementPlan->written.empty()) {
 				placementPlan.reset();
@@ -205,8 +207,8 @@ namespace DCLF::Scene
 		auto& plan = *placementPlan;
 		plan.slots = static_cast<std::uint32_t>(tables.objects.size());
 		plan.boneCapacity = tables.BoneCapacity();
-		// T6b3d: a plan no publication took yet (a pass that threw before its publication) is kept for the next one, which carries
-		// every plan since (TakeDeltas): the frame takes every plan, so none is replaced.
+		// A plan no publication took yet (a pass that threw before its publication) is kept for the next one, which carries every plan
+		// since (TakeDeltas): the frame takes every plan, so none is replaced.
 		if (placementPlanReady)
 			placementPlansHeld.push_back(std::move(placementPlanReady));
 		placementPlanReady = std::move(placementPlan);

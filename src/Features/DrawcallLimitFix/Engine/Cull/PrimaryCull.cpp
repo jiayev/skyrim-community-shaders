@@ -1,3 +1,5 @@
+// PrimaryCull: the list jobs' stand-in (Process1, AppendVirtual; job threads), the render thread's frame around them, the cut's
+// plans and admission, the synthetic membership passes (any thread), and the fade writer's hooks.
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Engine/Views/PortalViews.h"
 
@@ -44,8 +46,8 @@ namespace DCLF
 		constexpr std::uintptr_t kListJobsFinishCallSite = 0x14cbf4d;  // ... -> JobList::Finish(scene list culling)
 		constexpr std::uintptr_t kProcess1 = 0xe28390;  // BSCullingProcess::Process1, the list processes' vtable slot 0x16
 		constexpr std::size_t kAccumulatorDeferredShadow = 0x178;  // byte: the accumulator draws the deferred shadow mask
-		// T7f preparation: the main camera, the world scene graph's (+0x128), which FUN_1406452c0 (Main::Draw's camera setup, before
-		// BeginSceneFrame) sets the tree height base from, and the list processes carry.
+		// The main camera: the world scene graph's (+0x128), carried by the list processes; FUN_1406452c0 (Main::Draw's camera
+		// setup, before BeginSceneFrame) sets the tree height base from it.
 		constexpr std::size_t kSceneGraphCamera = 0x128;
 		// NiAVObject / BSFadeNode fields BSFadeNode::OnVisible (AE 0x141479f50) reads before its fade update.
 		constexpr std::uint32_t kFlagFadeSettled = 1u << 15;
@@ -61,8 +63,7 @@ namespace DCLF
 		constexpr std::uintptr_t kTreeHeightBase = 0x332a2f0;     // float
 		constexpr std::uintptr_t kTreeHeightLimit = 0x2032fa0;    // float
 		constexpr std::size_t kTreeLodData = 0x180;               // pointer; its +0x12C count
-		// T7f checklist items 4-5: the fade nodes' OnVisible (detoured: FadeState::PlanOf compares the vtables' slots with these) and the
-		// NiNode OnVisible BSFadeNode's ends in (its children's cull).
+		// The NiNode OnVisible BSFadeNode's ends in (its children's cull), and fields the fade OnVisible detours read.
 		constexpr std::uintptr_t kNodeOnVisible = 0xd1e2c0;       // NiNode::OnVisible
 		constexpr std::size_t kNodeWorldZ = 0xEC;                 // NiAVObject::world.translate.z
 		constexpr std::size_t kProcessCameraUpdates = 0x11C;      // byte: NiCullingProcess::cameraRelatedUpdates
@@ -71,8 +72,8 @@ namespace DCLF
 		constexpr std::size_t kFadeNear = 0x128;                  // float, on the fade node
 		constexpr std::size_t kFadeFar = 0x12C;                   // float
 		constexpr std::size_t kFadeAlwaysOut = 0x109;             // byte: bit 0 fades the node out whatever its distance
-		// T7b2's camera cut: a frame's move past any locomotion (a sprinting horse moves ~20 units a frame at 60 fps), or a turn past
-		// 30 degrees (a fast mouse flick is ~15 a frame).
+		// The camera cut: a move past any locomotion (a sprinting horse ~20 units/frame at 60 fps), or a turn past 30 degrees (a
+		// fast mouse flick ~15).
 		constexpr float kCutDistance = 256.0f;
 		constexpr float kCutTurnCosine = 0.8660254f;
 
@@ -115,9 +116,8 @@ namespace DCLF
 	namespace
 	{
 		/**
-		 * @brief T7d's Effect port: an effect member's main pass, built from the object alone as BSEffectShaderProperty::GetRenderPasses
-		 * would register it (0x1414bd890): hint 1 (the blended list), the effect pass enum, the fade node's LOD row. Derived every time (no
-		 * MembershipDerived cache: its witnesses do not cover the alpha property and the texture paths the descriptor reads; it is cheap).
+		 * @brief An effect member's main pass as BSEffectShaderProperty::GetRenderPasses (0x1414bd890) would register it (hint,
+		 * effect pass enum, LOD row). Not cached: MembershipDerived's witnesses miss the alpha property and texture paths; it is cheap.
 		 */
 		bool EffectMembershipPass(const SceneCapture::LeafView& a_leaf, const SceneCapture::PropertyRecord& a_effect, AccumulatedPass& a_out, std::uint32_t* a_derived)
 		{
@@ -131,8 +131,8 @@ namespace DCLF
 			a_out.subPass = PassCapture::SubPassOf(a_leaf.AlphaTesting(), a_effect.flags);
 			a_out.technique = descriptors.derivedPass;
 			a_out.passEnum = EffectPassEnum(descriptors.derivedPass);
-			// GetRenderPasses' hint: 1 for the blended mesh, 2 or 3 for a decal (T7d part 5: by whether its alpha property blends).
-			a_out.hint = descriptors.opaqueEffect ? 0u : descriptors.decalGroup ? descriptors.decalGroup + 1 : 1u;  // T7f item 7: an opaque effect's is 0
+			// GetRenderPasses' hint: 0 opaque, 2 or 3 decal (by whether its alpha blends), 1 blended.
+			a_out.hint = descriptors.opaqueEffect ? 0u : descriptors.decalGroup ? descriptors.decalGroup + 1 : 1u;
 			a_out.lodRow = SceneCapture::LodRowOf(a_leaf, &a_effect);
 			return true;
 		}
@@ -160,15 +160,14 @@ namespace DCLF
 
 	float PrimaryCull::FadeDistanceOf(const SceneCapture::NodeRecord& a_root)
 	{
-		// The fade node's record (T6b1b): its LOD type and fade distances.
-		// The frame's globals (step 6e F2: the scene work reads the frame's capture, never the engine's).
+		// From the fade node's record and the frame's captured globals, never the engine's.
 		const auto& g = FrameGlobals::Current();
 		// No fade update at all, or no distance term in the fade value (FUN_14147b110 returns 1).
 		if (!g.fadesOn || !g.fadeLodUpdates)
 			return 0.0f;
 		const std::uint32_t type = a_root.fadeType;
-		// Type 8 fades gradually even from out of view (FUN_14147a160), and OnVisible's type-6 branch never fades out
-		// (ServiceFade): the engine draws either on the frame it comes into view, as the member is.
+		// Type 8 fades gradually even out of view (FUN_14147a160) and OnVisible's type-6 branch never fades out (ServiceFade): the
+		// engine draws either the frame it comes into view.
 		if (type == 8 || (type == 6 && g.fadeSpecialA == g.fadeSpecialB))
 			return 0.0f;
 		const float mult = g.fadeDistanceMult;
@@ -224,7 +223,7 @@ namespace DCLF
 			answer.derived = { lighting->key, lighting->material, lighting->flags, fadeState, reason == Ineligible::None ? descriptors.derivedPass : kNotDerived };
 		}
 		answer.ok = SyntheticPass(a_leaf, answer.derived.derivedPass, answer.pass);
-		// The reason is this thread's, written by the synthetic pass just made (T6b3e: taken here, before anything else runs on it).
+		// Thread-local, from the synthetic pass just made.
 		answer.fail = LastSyntheticFail();
 		if (answer.ok)
 			answer.pass.resident = true;
@@ -268,10 +267,8 @@ namespace DCLF
 	PrimaryCull::EntryPlan PrimaryCull::PlanOf(std::uint32_t a_entry, const RE::NiAVObject* a_root)
 	{
 		const auto& candidates = *cut.candidates;
-		// T7f item 8: each node and geometry is judged by its OnVisible (the vtable slot, wideOnVisible), not its RTTI name. Plain: a node
-		// whose cull side effects are none, DCLF's own or followed by event, under a root that may also be a fade node; a geometry that
-		// appends itself to the process. A geometry the snapshot has as DCLF's (Eligibility::PrimaryVerdict) is a member; a hidden static's
-		// is left out; every other is the engine's, which makes the entry mixed (the engine culls it whole).
+		// Each node and geometry is judged by its OnVisible slot (wideOnVisible), not its RTTI. A geometry the snapshot has as DCLF's
+		// (Eligibility::PrimaryVerdict) is a member; a hidden static's is left out; any other is the engine's and makes the entry mixed.
 		const std::size_t first = cut.members.size();
 		const std::size_t firstPath = cut.switchPaths.size();
 		const std::size_t firstSwitch = cut.switches.size();
@@ -296,8 +293,7 @@ namespace DCLF
 				}
 				const auto it = candidates.geometries.find(geometry);
 				const std::uint8_t verdict = it != candidates.geometries.end() && it->second < candidates.primaryGeometry.size() ? candidates.primaryGeometry[it->second] : Eligibility::kPrimaryEngine;
-				// A hidden static's geometry: no member, and nothing of the engine's while hidden; its unhiding
-				// changes the verdict, so the snapshot plans the entry again.
+				// A hidden static's geometry: neither; unhiding changes the verdict and replans the entry.
 				if (verdict == Eligibility::kPrimaryHiddenStatic) {
 					++hidden;
 					return;
@@ -334,8 +330,7 @@ namespace DCLF
 				a_self(a_self, child.get(), false);
 		};
 		visit(visit, a_root, true);
-		// An entry with nothing of DCLF's is the engine's, unless all it holds is hidden statics' geometry (a marker),
-		// which nobody draws: no cull need visit it until an unhiding plans it again.
+		// Nothing of DCLF's: the engine's, unless it holds only hidden statics (a marker), which nobody draws until unhidden.
 		const bool empty = !ours && !(hidden && !mixedBy);
 		cut.rejectReason[a_entry] = rejected ? rejected : empty ? "no DCLF geometry" : nullptr;
 		cut.mixedBy[a_entry] = rejected || empty || !mixedBy ? std::string() :
@@ -353,21 +348,18 @@ namespace DCLF
 
 	void PrimaryCull::BeginFrameCamera()
 	{
-		// T7f preparation: the frame's camera duties, from the main camera (the world scene graph's, set up by Main::Draw's camera setup
-		// just before), not from the list processes' Process1 call site, so nothing here depends on the list cull running. The list
-		// processes carry the same camera (Diagnostics::Accumulated checks it).
+		// From the main camera, so nothing here depends on the list cull running (the list processes carry the same camera).
 		if (!installed)
 			return;
 		const auto* sceneGraph = Global<const std::byte*>(Engine::Address::kWorldSceneGraph);
 		const auto* camera = sceneGraph ? At<const RE::NiCamera*>(sceneGraph, kSceneGraphCamera) : nullptr;
 		frameCamera = camera;
-		// The camera the fade roots' distances are measured from (BuildDraws' fade test).
+		// The fade test's camera.
 		fadeEye = {};
 		if (camera) {
 			fadeEye = { camera->world.translate.x, camera->world.translate.y, camera->world.translate.z, At<float>(camera, kCameraLodAdjust) };
-			// T7b2: a camera cut (a jump or a snap turn the frames between a GPU verdict and its write cannot follow): every DCLF-written root
-			// visible until a batch of this frame or later is decoded (IndirectDraws::NoteCameraCut). A turn's angle from the rotations'
-			// relative trace, axis-agnostic.
+			// A camera cut (a jump or snap turn the verdict-to-write latency cannot follow): every DCLF-written root visible until a
+			// batch of this frame or later decodes (IndirectDraws::NoteCameraCut). Turn angle from the relative rotation's trace.
 			const auto& r = camera->world.rotate.entry;
 			const std::array<float, 12> now{ fadeEye[0], fadeEye[1], fadeEye[2], r[0][0], r[0][1], r[0][2], r[1][0], r[1][1], r[1][2], r[2][0], r[2][1], r[2][2] };
 			if (cutCameraKnown) {
@@ -382,9 +374,8 @@ namespace DCLF
 			cutCamera = now;
 			cutCameraKnown = true;
 		}
-		// BSTreeNode::OnVisible's height test as the main camera's list processes have it (TreeAboveLimit): their +0x121 is a constant of
-		// the process (only the constructors write it, 0, for these processes; skyrim-engine-notes.md, "T7f preparation"), the base is
-		// the camera's height (FUN_1406452c0 stores it), the switch and the limit are globals.
+		// BSTreeNode::OnVisible's height test as the list processes have it: their +0x121 is 0 (only the constructors write it;
+		// skyrim-engine-notes.md, "the height-test byte"), the base is the camera height (FUN_1406452c0), the switch and limit globals.
 		const std::uint32_t count = Global<std::uint32_t>(Engine::Address::kSceneListCount);
 		auto** processes = Global<RE::NiCullingProcess**>(Engine::Address::kListProcesses);
 		const bool heightTest = processes && count && processes[0] && At<std::uint8_t>(processes[0], kProcessTreeHeightTest) && Global<std::uint8_t>(kTreeHeightTestOn);
@@ -394,12 +385,10 @@ namespace DCLF
 	void PrimaryCull::PrepareFrame()
 	{
 		++cutStats.frames;
-		// The membership witness, before the list jobs: the commit sampled it at the scene phase (a frame without one samples it
-		// here), and BindByMembership reads the same sample.
+		// FrameView samples the witness with the frame's inputs; a frame without them samples it here.
 		if (sampledWitnessFrame != Scene::FrameView::Get().GetFrame())
 			SampleMembershipWitness();
-		// The switches whose selection the walks applied since the last frame; a frame the cut skips drops them, so the
-		// next one reads every switch again.
+		// A frame the cut skips drops the switch changes, so the next one reads every switch.
 		const bool switchResync = Scene::FrameView::Get().TakeSwitchChanges(switchChanges);
 		liveStale = switchResync || liveStale;
 		auto candidates = Scene::FrameView::Get().GetSunCandidates();
@@ -407,11 +396,10 @@ namespace DCLF
 		auto** processes = Global<RE::NiCullingProcess**>(Engine::Address::kListProcesses);
 		frameSet = Scene::FrameView::Get().FrameClaims();
 		standInLive = false;
-		// The frame's camera (FadeEye, the camera cut, TreeHeightTest) is BeginFrameCamera's, at BeginSceneFrame.
 		Diagnostics::Notify(Diagnostics::CutFrameBegin{ processes, count });
 		if (!processes || !count || count > cut.processes.size())
 			return;
-		// The list processes this frame: the leaf exclusion (AppendVirtual) applies whenever they are known.
+		// The leaf exclusion (AppendVirtual) applies whenever the list processes are known.
 		cut.processCount = count;
 		for (std::uint32_t i = 0; i < count; ++i) {
 			cut.processes[i] = processes[i];
@@ -420,10 +408,7 @@ namespace DCLF
 			out.visible.clear();
 		}
 		Diagnostics::Notify(Diagnostics::CutSlotsReset{ count });
-		// The stand-in (CS_DCLF_PRIMARY_EXCLUDE) needs a current snapshot, and the sun's entry exclusion live (its cascades
-		// captured) unless the sun does not draw this frame (T5b: an interior, no cascades to take an entry out of); otherwise the
-		// engine culls every entry this frame, less what the leaf exclusion keeps from its registration. A member's local shadow lights are the GPU's (LocalShadowLights), so local shadows need nothing of
-		// the engine's cull.
+		// The stand-in needs a current snapshot; otherwise the engine culls every entry (less the leaf exclusion).
 		if (!ActiveToggles().excludePrimaryEntries) {
 			if (!ownedFadeRoots.empty()) {
 				ownedFadeRoots.clear();
@@ -435,31 +420,27 @@ namespace DCLF
 			frameLive.store(true, std::memory_order_release);
 			return;
 		}
-		// T7f item 8: no frame goes back to the engine for want of the sun's exclusion (the stand-in's old gate, which kept its fade service
-		// from meeting the sun's OnVisible on one root): every listed root's fade is DCLF's alone (the fade OnVisibles skip their stores on
-		// it), and a whole entry the sun's cull still reaches on a frame without the exclusion has its casters' passes withheld
-		// (SunAccumulation's skip, PassCapture), as every member's are.
+		// The sun's exclusion is not a precondition: listed roots' fade is DCLF's alone, and a whole entry the sun's cull reaches
+		// without it has its casters' passes withheld (SunAccumulation, PassCapture).
 		if (!candidates) {
 			++(candidates ? cutStats.skippedPreconditions : cutStats.skippedStale);
 			liveStale = true;
-			// T7b2: the engine culls the stood-in roots this frame and writes their kAccumulated itself; the next decode writes them all.
+			// The engine culls the stood-in roots and writes their kAccumulated this frame; the next decode writes them all.
 			if (!ownedFadeRoots.empty())
 				IndirectDraws::Get().RequestAccumulatedRefresh();
 			frameLive.store(true, std::memory_order_release);
 			return;
 		}
 		const std::int64_t start = Now();
-		// The cut follows the frame's snapshot entry by entry: the indices whose versions moved since the one it followed are planned
-		// again (SyncCut), every other entry stands.
+		// Entries whose versions moved since the last snapshot are planned again (SyncCut); the rest stand.
 		const bool newSnapshot = cut.candidates != candidates;
 		std::vector<std::uint32_t> changedEntries;
 		if (newSnapshot) {
 			ChangedEntries(cut.candidates.get(), *candidates, changedEntries);
 			SyncCut(candidates, changedEntries);
 		}
-		Diagnostics::Notify(Diagnostics::CutSynced{ Scene::FrameView::Get().GetFrame() });
-		// Which members their switches select: the switch events name the entries to read again (dclf-cull-job-elimination.md,
-		// "Phase 3"); a new snapshot, a resync or a skipped frame reads them all.
+		Diagnostics::Notify<Diagnostics::EnginePoint::CutSynced>();
+		// Switch events name the entries to read again (dclf-cull-job-elimination.md); a resync or skipped frame reads all.
 		cut.liveEvents = Scene::SwitchEventsLive();
 		if (cut.liveEvents) {
 			if (liveStale) {
@@ -481,19 +462,17 @@ namespace DCLF
 		cutStats.entriesPlanned += changedEntries.size();
 		standInLive = true;
 		walkEverything = Policy::WalkEveryEntry();
-		// Which entries the stand-in walks: the entries planned again (SyncCut queues them), from their members once memberLive is
-		// current; the entries a member joined or left the set in since.
+		// Walk flags for entries planned again (once memberLive is current) and entries a member joined or left.
 		for (const std::uint32_t e : std::exchange(walkRefresh, {}))
 			RefreshWalk(e);
-		// The entries whose members are all in the set now are left out of the engine's cull from this frame on.
+		// Entries whose members are all in the set leave the engine's cull from this frame.
 		RunAdmission();
-		// The fade roots DCLF services: a new snapshot's, and every one again from its node after frames the engine culled
-		// them all (its OnVisible ran on them meanwhile).
+		// Fade roots: a new snapshot's, and all again after frames the engine culled them (its OnVisible ran meanwhile).
 		if (!changedEntries.empty())
 			SyncFadeOwnership();
 		++cutStats.appliedFrames;
 		cutStats.prepareTicks += Now() - start;
-		// The list jobs are queued after this returns: their queueing orders everything above before their reads.
+		// The list jobs are queued after this returns, which orders everything above before their reads.
 		frameLive.store(true, std::memory_order_release);
 		gpuSunFrame = true;
 	}
@@ -502,8 +481,8 @@ namespace DCLF
 	{
 		std::scoped_lock lock(animatedMutex);
 		animatedNodes.push_back(a_node);
-		// The inputs FUN_14147a160 reads: the camera FUN_1402cff60 passes (the world root camera's position and lodAdjust), and the
-		// fade globals as they are now; the same for every call of one animation update.
+		// FUN_14147a160's inputs: the camera FUN_1402cff60 passes (world root camera's position, lodAdjust) and the fade globals;
+		// the same for every call of one animation update.
 		if (a_camera) {
 			const AnimatedFadeInputs inputs{ { a_camera[0], a_camera[1], a_camera[2] }, a_camera[3], Global<std::int32_t>(Engine::Address::kFadeFrameCounter), Global<float>(Engine::Address::kFadeStepTime), 1u };
 			if (!animatedInputs.valid)
@@ -528,10 +507,8 @@ namespace DCLF
 
 	void PrimaryCull::NoteSetChanges(const std::vector<const RE::BSGeometry*>& a_joined, const std::vector<const RE::BSGeometry*>& a_left)
 	{
-		// A geometry that joins the set is no longer main-registered, so nothing would read and clear the bits a shadow light
-		// wrote into its mask while it was the engine's: cleared once here, and kept 0 from now on by SunAccumulation
-		// (ClearOwnedMask). Only those the installed publication claims are touched (T6b3a: held by it, so alive; the coordinator's
-		// tracked set is not the frame's to read).
+		// A joining geometry is not main-registered, so nothing clears the light bits it gathered as the engine's: cleared once here,
+		// then kept 0 (SunAccumulation, ClearOwnedMask). Only those the installed publication claims (and so holds alive).
 		for (const auto* geometry : a_joined)
 			if (Scene::FrameView::Get().HeldByInstalled(geometry))
 				if (const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get())
@@ -541,7 +518,7 @@ namespace DCLF
 			NoteMemberLost(geometry);
 		if (!cut.candidates)
 			return;
-		// The entries of the geometries that joined (by pointer alone: nothing here is dereferenced).
+		// By pointer alone: nothing here is dereferenced.
 		const auto& candidates = *cut.candidates;
 		for (const auto* geometry : a_joined)
 			if (const auto it = candidates.geometries.find(geometry); it != candidates.geometries.end() && it->second < candidates.geometryEntry.size()) {
@@ -572,7 +549,7 @@ namespace DCLF
 		grow(cut.rejectReason, static_cast<const char*>(nullptr));
 		grow(cut.mixedBy, std::string());
 		for (const std::uint32_t e : a_changed) {
-			// The entry as the cut had it, let go: its root's verdicts, its switches; its members' ranges become garbage.
+			// Let go of the old entry; its member ranges become garbage.
 			if (const auto* old = cut.roots[e]) {
 				if (const auto it = cut.eligible.find(old); it != cut.eligible.end() && it->second == e)
 					cut.eligible.erase(it);
@@ -593,7 +570,7 @@ namespace DCLF
 			cut.roots[e] = root;
 			if (!root)
 				continue;
-			// Planned again: its members and switches appended (PlanOf), their objects, whether its switches select them.
+			// Planned again: members and switches appended (PlanOf), their objects, their switch selection.
 			cut.plans[e] = PlanOf(e, root);
 			cut.memberEnd[e] = static_cast<std::uint32_t>(cut.members.size());
 			cut.switchEnd[e] = static_cast<std::uint32_t>(cut.switches.size());
@@ -603,7 +580,7 @@ namespace DCLF
 			cut.memberLive.resize(cut.members.size(), 1);
 			for (std::uint32_t m = cut.memberBegin[e]; m < cut.memberEnd[e]; ++m) {
 				cut.mixed[e] |= cut.members[m].engine ? 1 : 0;
-				// The object the snapshot's walk had (step 6c: the frame reads no tracked set).
+				// The object the snapshot's walk had (the frame reads no tracked set).
 				const auto it = cut.members[m].engine ? candidates.geometries.end() : candidates.geometries.find(cut.members[m].geometry);
 				cut.memberObject[m] = it != candidates.geometries.end() && it->second < candidates.geometrySlot.size() ? candidates.geometrySlot[it->second] : -1;
 			}
@@ -611,7 +588,7 @@ namespace DCLF
 				cut.switchEntry.insert_or_assign(cut.switches[w], e);
 			RefreshLive(e);
 			cut.eligible.insert_or_assign(root, e);
-			// Admitted again with the same DCLF members it was admitted with; checked for admission otherwise (Admit).
+			// Admitted again if its DCLF members are unchanged; otherwise queued for RunAdmission.
 			if (const auto it = cut.admittedRoots.find(root); it != cut.admittedRoots.end() && it->second == MemberSignature(e))
 				cut.admitted[e] = 1;
 			else
@@ -633,7 +610,7 @@ namespace DCLF
 		cut.mixedBy.resize(capacity);
 		std::erase_if(cut.pendingAdmission, [capacity](std::uint32_t a_e) { return a_e >= capacity; });
 		std::erase_if(walkRefresh, [capacity](std::uint32_t a_e) { return a_e >= capacity; });
-		// The members' pool gathered again once more of it is garbage than live (each live member copied once per as many let go).
+		// Repack once garbage exceeds live members (amortised: one copy per member let go).
 		if (cutGarbage > cut.members.size() / 2)
 			CompactCut();
 		++cutVersion;
@@ -641,7 +618,7 @@ namespace DCLF
 
 	PrimaryCull::Cut PrimaryCull::PlanWholeCut()
 	{
-		// Every entry planned again from nothing into a fresh cut (SyncCut on an empty one), and the cut as it stood put back.
+		// SyncCut on an empty cut, then the current cut put back.
 		if (!cut.candidates)
 			return {};
 		Cut kept = std::move(cut);
@@ -704,8 +681,7 @@ namespace DCLF
 		if (!cut.candidates)
 			return;
 		bool admittedAny = false;
-		// Admission is by readiness, on events (T5c: no engine verdict): a new snapshot's entries and the entries a member joined the
-		// set in (OnSetChanged) are checked; one with a member not tracked (a stale snapshot's, during a load) again next frame.
+		// Admission by readiness on events, never by engine verdict.
 		std::vector<std::uint32_t> retry;
 		for (const std::uint32_t e : cut.pendingAdmission) {
 			if (e >= cut.admitted.size() || cut.admitted[e] || cut.plans[e] == EntryPlan::Rejected)
@@ -713,7 +689,7 @@ namespace DCLF
 			bool all = true;
 			for (std::uint32_t m = cut.memberBegin[e]; m < cut.memberEnd[e] && all; ++m) {
 				const auto* geometry = cut.members[m].geometry;
-				// A member no longer tracked may be gone: the entry waits for the snapshot that follows, or the next frame.
+				// An untracked member may be gone: wait for the next snapshot or frame.
 				if (!store.IsTrackedFromRenderThread(geometry)) {
 					all = false;
 					retry.push_back(e);
@@ -739,9 +715,8 @@ namespace DCLF
 	{
 		if (a_e >= cut.walk.size() || cut.plans[a_e] == EntryPlan::Rejected)
 			return;
-		// Engine-drawn members are handed to the registration every frame; a member not in the set is, until it is. Whether it is
-		// shown (its hidden bits, its switches) is the walk's test each frame, not this decision's: the engine shows a member (a cell's
-		// terrain chunk once it loads) with no event that reaches here before the frame culls it.
+		// Walk while there are engine-drawn members or members not in the set. Shown-ness is the walk's per-frame test, not this
+		// decision's: the engine shows a member (a cell's terrain chunk once loaded) with no event reaching here first.
 		bool walk = cut.mixed[a_e] != 0;
 		auto& store = Scene::Coordinator::Get();
 		for (std::uint32_t m = cut.memberBegin[a_e]; m < cut.memberEnd[a_e] && !walk; ++m)
@@ -762,7 +737,7 @@ namespace DCLF
 				cutVersion += cut.walk[e] ? 0 : 1;
 				cut.walk[e] = 1;
 				walkRefresh.push_back(e);
-				// Out of this frame's lists: the member is handed to nobody until the next frame's filter keeps the root.
+				// Out of this frame's lists: handed to nobody until the next frame's filter keeps the root.
 				if (const auto filter = listFilter.load(std::memory_order_acquire); filter && ListsFiltered() && filter->roots.contains(cut.roots[e]))
 					++listStats.lostWhileOut;
 			}
@@ -792,14 +767,11 @@ namespace DCLF
 
 	void PrimaryCull::SyncFadeOwnership()
 	{
-		// The admitted entries with a fade root, whose members' fade is FadeStateCS's from the next frame on. One with engine-drawn
-		// parts is culled by the engine, which updates its node itself; every other is stood in (its state is the GPU's alone,
-		// its node left as the engine last updated it) and taken off the tree manager's animation list (TreeAnimation: its trees are
-		// TreeWindCS's, so the tree clock, which reads the BSLeafAnimNode's kAccumulated, must not advance them as well).
-		// T7b2: its kAccumulated is DCLF's from here, written from the GPU's visibility at Main::Update's entry (AtUpdateEntry). It
-		// used to be cleared once here, which kept the tree clock off it but also stopped FUN_1402cff60 from animating every stood-in
-		// reference that never fades (dclf-open-defects.md); the tree list removal alone keeps the clock off. Until its first write
-		// it keeps the bit the engine's last cull left (a new listing is written visible: no verdict yet).
+		// Admitted entries with a fade root: their fade is FadeStateCS's from the next frame. A mixed one is culled by the engine,
+		// which updates its node. Every other is stood in (state on the GPU alone) and taken off the tree manager's animation list
+		// (TreeAnimation: TreeWindCS animates its trees; the tree clock reads BSLeafAnimNode's kAccumulated). Its kAccumulated is
+		// DCLF's, written at Main::Update's entry (AtUpdateEntry); clearing it would stop FUN_1402cff60 animating a stood-in
+		// reference that never fades. Until its first write it keeps the engine's last bit (a new listing is written visible).
 		ownedFadeRoots.clear();
 		standInRoots.clear();
 		standInList.clear();
@@ -808,8 +780,7 @@ namespace DCLF
 		for (std::uint32_t e = 0; e < cut.plans.size(); ++e) {
 			const auto plan = cut.plans[e];
 			const bool fade = plan == EntryPlan::FadeRoot || plan == EntryPlan::LeafRoot || plan == EntryPlan::TreeRoot;
-			// T7f item 8: a plain entry the cut stands in for has no engine cull either, so its kAccumulated is DCLF's alone (the
-			// observers count it aside as stood in).
+			// A stood-in plain entry has no engine cull either: its kAccumulated is DCLF's.
 			if (plan == EntryPlan::Plain && cut.admitted[e] && !cut.mixed[e])
 				standInRoots.insert(cut.roots[e]);
 			if (!cut.admitted[e] || !fade)
@@ -820,7 +791,7 @@ namespace DCLF
 				standInRoots.insert(cut.roots[e]);
 				standInList.push_back(cut.roots[e]);
 				animated.push_back(cut.roots[e]);
-				// T7b5's fix: a stood-in BSTreeNode stays on the tree manager's tree list, its loop given DCLF's verdict (TreeAnimation).
+				// A stood-in BSTreeNode stays on the tree manager's tree list, its loop given DCLF's verdict (TreeAnimation).
 				if (plan == EntryPlan::TreeRoot)
 					trees.push_back(cut.roots[e]);
 			}
@@ -834,16 +805,16 @@ namespace DCLF
 		if (!installed)
 			return;
 		ZoneScopedN("CS.DCLF.AccumulatedWrites");
-		// The writes for roots the cut no longer stands in for are left: the engine's cull writes those this frame.
+		// Roots no longer stood in are left to the engine's cull this frame.
 		IndirectDraws::Get().WriteAccumulated(a_running, [this](const void* a_root) { return standInRoots.contains(a_root); });
-		// T7b5's fix: the tree manager's loop (later in this Main::Update) takes the stood-in trees' visibility from those writes.
+		// The tree manager's loop (later in this Main::Update) takes the stood-in trees' visibility from those writes.
 		TreeAnimation::AtUpdateEntry(a_running);
-		// T7b4: the fade write-back's stores, on the roots DCLF writes alone (T7f checklist items 4-5: every root the accepted tables list,
-		// kFadeRootWritten, published first as the set the gate and the fade OnVisibles skip this frame, whatever the cut stands in for).
+		// The fade write-back on every root the accepted tables list with kFadeRootWritten, published first as the set the gate
+		// and fade OnVisibles skip.
 		PublishWriterTables(a_running);
 		IndirectDraws::Get().WriteFadeStores(a_running, [this](const void* a_root) { return FadeWrittenByDclf(a_root); });
 		Diagnostics::Notify(Diagnostics::UpdateEntry{ a_running });
-		// T7f checklist item 6: the high actors' animation stamp from DCLF's shadow views.
+		// The high actors' animation stamp from DCLF's shadow views.
 		SideEffects::UpdateActorRate(a_running);
 	}
 
@@ -887,21 +858,18 @@ namespace DCLF
 		++out.seen;
 		Diagnostics::Notify(Diagnostics::StandInEntry{ a_slot, e, a_object });
 		const bool fadeRoot = plan == EntryPlan::FadeRoot || plan == EntryPlan::LeafRoot || plan == EntryPlan::TreeRoot;
-		// A fade, and a LOD cross-fade, are the feedback's: its fade service steps them, and a faded-out root draws nothing
-		// (FadeStateCS). A cross-fade's hint-10 copy is not drawn (drawcall-limit-fix.md, "LOD cross-fades": none occur
-		// in SE's settings); crossing roots are counted, for the report.
+		// Fades and LOD cross-fades are FadeStateCS's; a faded-out root draws nothing. A cross-fade's hint-10 copy is not drawn
+		// (drawcall-limit-fix.md, "LOD cross-fades": none in SE's settings); crossing roots (+0x153 bits 4-6 not 2) are counted.
 		if (fadeRoot && (At<std::uint8_t>(a_object, 0x153) & 0x70) != 0x20)
 			++out.notSettled;
 		if (!cut.admitted[e]) {
-			// The engine culls it this frame (less what the leaf exclusion keeps from its registration). Its admission is by
-			// readiness alone (RunAdmission, on events), not by the engine's verdict.
+			// The engine culls it this frame (less the leaf exclusion); admission is by readiness, not its verdict.
 			EngineProcess1(a_process, a_object, a_arg);
 			++out.notAdmitted;
 			return true;
 		}
-		// A switch whose selected child is out of date: NiSwitchNode::OnVisible brings it up to date before culling it
-		// (UpdateDownwardPass). With the switch events that is done when the selection changes (Coordinator::CatchUpSwitch),
-		// so none is found here; without them, the engine culls this entry this frame.
+		// A stale selected child: NiSwitchNode::OnVisible updates it before culling (UpdateDownwardPass). Switch events do that on
+		// change (Coordinator::CatchUpSwitch); without them, the engine culls this entry this frame.
 		if (!cut.liveEvents) {
 			for (std::uint32_t w = cut.switchBegin[e]; w < cut.switchEnd[e]; ++w) {
 				const auto* switchNode = cut.switches[w];
@@ -912,30 +880,19 @@ namespace DCLF
 				}
 			}
 		}
-		// Engine-drawn parts: the engine culls the entry whole, and runs its OnVisible on the node they are drawn from; DCLF's
-		// members are kept from the registration by the AppendVirtual hook, and FadeStateCS runs the same update for them.
+		// Engine-drawn parts: the engine culls the entry whole; the AppendVirtual hook keeps DCLF's members from the registration.
 		if (cut.mixed[e]) {
-			if (Diagnostics::Armed<Diagnostics::MixedEntryCulled>()) {
-				const float metricBefore = fadeRoot ? At<float>(a_object, 0x144) : 0.0f;
-				const std::int32_t visibleBefore = fadeRoot ? At<std::int32_t>(a_object, kLastVisibleFrame) : 0;
-				EngineProcess1(a_process, a_object, a_arg);
-				++out.mixed;
-				Diagnostics::Notify(Diagnostics::MixedEntryCulled{ a_slot, a_object, fadeRoot, metricBefore, visibleBefore });
-				return true;
-			}
 			EngineProcess1(a_process, a_object, a_arg);
 			++out.mixed;
 			return true;
 		}
 		++out.skipped;
-		// An entry with nothing for the registration (Cut::walk): the GPU culls and draws its members, and their fade is
-		// FadeStateCS's. Policy::WalkEveryEntry walks every entry.
+		// Nothing for the registration: the GPU culls and draws it whole.
 		if (!cut.walk[e] && !walkEverything)
 			return true;
 		++out.walked;
-		// The root's state (fade, LOD) is FadeStateCS's; what is left here is what the frame draws, by the cull's
-		// test against the job's own planes (its Process2 set them up from the list's first entry). A tree above the height
-		// limit draws nothing.
+		// Test against the job's own planes (its Process2 set them up from the list's first entry). A tree above the height limit
+		// draws nothing.
 		if (plan == EntryPlan::TreeRoot && TreeAboveLimit(a_object, *a_process))
 			return true;
 		if (Outside(a_process->planes, a_object->worldBound))
@@ -957,18 +914,16 @@ namespace DCLF
 				++out.hidden;
 				continue;
 			}
-			// In the frame's set: drawn from its record whenever the GPU finds it. A member not in it (not ready, or its binding taken
-			// again this frame) is the engine's to register.
+			// In the frame's set: the GPU draws it. Otherwise (not ready, rebinding) the engine registers it.
 			if (!member.engine && MemberDrawable(cut.memberObject[m])) {
 				out.visible.push_back(geometry);
 				continue;
 			}
 			if (!member.engine && Scene::FrameView::Get().IsMember(cut.memberObject[m]))
 				++out.undrawable;
-			// The engine's, or DCLF's but not bound yet: what its cull does for a visible geometry, the test of its bound,
-			// then the append to this process (BSGeometry::OnVisible), in the traversal's order, for the registration jobs.
+			// The engine's, or DCLF's but unbound: the cull's bound test, then BSGeometry::OnVisible's append, in traversal order.
 			if (!Outside(a_process->planes, geometry->worldBound)) {
-				// The geometry's own OnVisible when it is not BSGeometry's (T7f item 8: the three that append under a condition).
+				// The geometry's own OnVisible when it is not BSGeometry's (the three that append under a condition).
 				if (const std::uintptr_t onVisible = (*reinterpret_cast<const std::uintptr_t* const*>(geometry))[0x34]; onVisible != geometryOnVisible) {
 					using OnVisibleFn = void (*)(RE::NiAVObject*, RE::NiCullingProcess*, std::int32_t);
 					reinterpret_cast<OnVisibleFn>(onVisible)(const_cast<RE::BSGeometry*>(geometry), a_process, a_arg);
@@ -984,14 +939,14 @@ namespace DCLF
 
 	void PrimaryCull::AfterListJobs()
 	{
-		// The animation job's updates since the last list jobs: complete now (the job runs between two culls), this frame's batch.
+		// The animation job runs between two culls, so its updates are complete now.
 		{
 			std::scoped_lock lock(animatedMutex);
 			animatedBatch.swap(animatedNodes);
 			animatedNodes.clear();
 			batchInputs = std::exchange(animatedInputs, {});
 		}
-		Diagnostics::Notify(Diagnostics::ListJobsDone{ Scene::FrameView::Get().GetFrame() });
+		Diagnostics::Notify<Diagnostics::EnginePoint::ListJobsDone>();
 		if (!frameLive.exchange(false, std::memory_order_acq_rel))
 			return;
 		const std::int64_t start = Now();
@@ -1013,20 +968,13 @@ namespace DCLF
 			s.unselected += out.unselected;
 		}
 		cutStats.members += frameVisible.size();
-		// The members' activeLightMask needs no clear: the shadow lights' registrations leave an owned geometry's 0, as its main
-		// registration would have (SunAccumulation, ClearOwnedMask); the light mask observer counts the exceptions.
-		Diagnostics::Notify(Diagnostics::ListJobsMerged{ Scene::FrameView::Get().GetFrame() });
+		// No activeLightMask clear: the shadow lights' registrations leave an owned geometry's 0 (SunAccumulation, ClearOwnedMask).
+		Diagnostics::Notify<Diagnostics::EnginePoint::ListJobsMerged>();
 		cutStats.afterTicks += Now() - start;
-	}
-
-	void PrimaryCull::CheckLightMasks()
-	{
-		Diagnostics::Notify(Diagnostics::MainRegistrationsDone{});
 	}
 
 	void PrimaryCull::AfterFullFrustum()
 	{
-		// The frame's walk runs on (step 6c): what this reads of it is the last walk's, handed over at the frame's start.
 		ZoneScopedN("CS.DCLF.AfterFullFrustum");
 		frameLive.store(false, std::memory_order_relaxed);
 		gpuSunFrame = false;
@@ -1036,12 +984,12 @@ namespace DCLF
 		// CS_DCLF_PARITY_BOTH: the engine culls and registers everything.
 		if (!!Policy::WithholdFromEngine())
 			PrepareFrame();
-		Diagnostics::Notify(Diagnostics::FullFrustumDone{});
+		Diagnostics::Notify<Diagnostics::EnginePoint::FullFrustumDone>();
 	}
 
 	std::uint32_t PrimaryCull::SunShadowStatic(const SceneCapture::LeafView& a_leaf, const SceneCapture::PropertyRecord* a_property)
 	{
-		// The settled state's, as the synthetic pass is: a member's fade is the GPU's (and a stood-in root's node is not it).
+		// Settled state, like the synthetic pass: a member's fade is the GPU's.
 		return StaticShadowBits(a_leaf, true, a_property);
 	}
 
@@ -1061,20 +1009,18 @@ namespace DCLF
 		syntheticFail = 1;
 		if (a_derivedPass == kNotDerived)
 			return false;
-		// The records (T6b1b: the mirror's).
+		// The mirror's records.
 		const auto* lighting = SceneCapture::LeafView::Lighting(a_layer ? a_layer : a_leaf.property);
 		syntheticFail = 2;
 		if (!lighting)
 			return false;
 		const std::uint64_t flags = lighting->flags;
 		const bool blended = a_leaf.AlphaBlending();
-		// The object's settled state, not its current fade: GetRenderPasses (1414adfb0) draws a screen-door fade of an
-		// unblended, fully opaque material as the plain opaque pass with alpha = materialAlpha, and a member's fade is the
-		// GPU's (FadeStateCS). Translucent objects take hints 1 and 9 (blended, sorted); not modelled.
+		// Settled state, not the current fade: GetRenderPasses (1414adfb0) draws a screen-door fade of an unblended opaque material
+		// as the plain opaque pass with alpha = materialAlpha. Translucent objects take hints 1 and 9; not modelled.
 		const bool translucent = lighting->materialAlpha < 1.0f || blended;
-		// On the GPU: the bits the object takes inside a cascade, and BuildDraws drops them on a miss (kObjectSunTest).
-		// A layer takes no shadow bits (measured: its passes never carry ShadowDir or DefShadow): its property's light mask never
-		// names the sun, the registrations writing masks on the main property alone (FUN_1414b2140).
+		// The bits taken inside a cascade; BuildDraws drops them on a miss (kObjectSunTest). A layer takes none: the registrations
+		// write light masks on the main property alone (FUN_1414b2140).
 		const std::uint32_t sun = a_layer ? 0u : SunShadowStatic(a_leaf);
 		std::uint32_t hint = 0;
 		syntheticFail = a_layer ? 4 : 5;
@@ -1084,8 +1030,8 @@ namespace DCLF
 				return false;
 			hint = kLayerHint;
 		} else if (flags & 0x8004ull) {
-			// T7d's refraction (kRefraction, kTempRefraction): GetRenderPasses' one main pass is the Utility RENDER_NORMAL pass, hint 4
-			// (geometry group 5), whatever the alpha; drawn by the forward epoch from the refraction range (CS_DCLF_REFRACTION).
+			// Refraction (kRefraction, kTempRefraction): one Utility RENDER_NORMAL pass, hint 4 (group 5), whatever the alpha; drawn
+			// by the forward epoch from the refraction range (CS_DCLF_REFRACTION).
 			if (!ActiveToggles().refraction || !ActiveToggles().forward)
 				return false;
 			hint = 4;
@@ -1094,7 +1040,7 @@ namespace DCLF
 		else if (translucent && !ActiveToggles().forward)
 			return false;
 		else if (translucent)
-			hint = 1;  // T7d: the blended group (FUN_1414b2330's hint 1), drawn by the forward epoch
+			hint = 1;  // the blended group (FUN_1414b2330's hint 1), drawn by the forward epoch
 		else if (flags & 0x8000000600000000ull)
 			hint = (~static_cast<std::uint32_t>(flags >> 33) & 1u) | 6u;
 		else if (flags & (1ull << 61))
@@ -1115,9 +1061,9 @@ namespace DCLF
 	struct PrimaryCull::Hooks
 	{
 		/**
-		 * @brief BSGeometryListCullingProcess::Process1 (vtable slot 0x16, AE 0x140e28390), which every list job calls for
-		 * each entry after its first and for every child a node's OnVisible culls. The vtable is shared with the sun's
-		 * full-frustum processes and every other list process; only the scene lists' own processes are stood in for.
+		 * @brief BSGeometryListCullingProcess::Process1 (vtable slot 0x16, AE 0x140e28390), called for each list entry after the
+		 * first and every child an OnVisible culls. The vtable is shared with the sun's and every other list process; only the scene
+		 * lists' processes are stood in for.
 		 */
 		struct Process1
 		{
@@ -1151,8 +1097,8 @@ namespace DCLF
 		};
 
 		/**
-		 * @brief FUN_1402cff60's call of the fade update (FUN_14147a160): the animation job's update of an animated reference's fade
-		 * node while the cull did not reach it (kAccumulated clear), from the main camera, outside any OnVisible.
+		 * @brief FUN_1402cff60's call of FUN_14147a160: the animation job updates an animated reference's fade node the cull did not
+		 * reach (kAccumulated clear), from the main camera.
 		 */
 		struct AnimatedFade
 		{
@@ -1161,7 +1107,7 @@ namespace DCLF
 				auto& cull = PrimaryCull::Get();
 				// FadeStateCS makes the same update on the GPU (the animated batch), for every root.
 				cull.NoteAnimatedFade(a_node, a_camera);
-				// T7b4: one writer. A root DCLF writes keeps the state the write-back gave its node; the gate then reads its currentFade.
+				// One writer: the root keeps the write-back's state; the gate reads its currentFade.
 				if (cull.FadeWrittenByDclf(a_node)) {
 					cull.gateFadeSkipped.fetch_add(1, std::memory_order_relaxed);
 					return;
@@ -1171,7 +1117,7 @@ namespace DCLF
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		/** @brief Main::Update's portal walk (FUN_1401a43c0): DCLF's walk right after it, from the same camera, before the lists are built. */
+		/** @brief Main::Update's portal walk (FUN_1401a43c0): DCLF's walk follows, same camera, before the list build. */
 		struct PortalWalk
 		{
 			static void thunk(void* a_tes, void* a_process)
@@ -1200,7 +1146,7 @@ namespace DCLF
 			{
 				std::uint64_t result;
 				{
-					// The render thread's wait for the main camera's list jobs (T7f item 8 measures what the culls off save).
+					// The render thread's wait for the main camera's list jobs.
 					ZoneScopedN("CS.DCLF.ListJobsWait");
 					result = func(a_1, a_2, a_3, a_4);
 				}
@@ -1214,10 +1160,9 @@ namespace DCLF
 	namespace
 	{
 		/**
-		 * @brief T7f checklist items 4-5: BSFadeNode::OnVisible (AE 0x141479f50) without its stores, for a root DCLF writes. The engine's
-		 * control flow is kept - fades off, or settled with kIgnoreFade at fade and amount 1: the children; with camera-related updates
-		 * a LOD-type-6 node in its special state: the children; otherwise none when faded out or with a zero amount - but the fade update
-		 * (FUN_14147a160 or the type-6 step) and the last-visible frame (+0x13C) are not written: the node's state is the write-back's.
+		 * @brief BSFadeNode::OnVisible (AE 0x141479f50) without its stores, for a root DCLF writes. Control flow kept (fades off, or
+		 * settled with kIgnoreFade at fade and amount 1: children; camera updates with a LOD-type-6 node in its special state:
+		 * children; faded out or zero amount: none), but the fade update (FUN_14147a160 or the type-6 step) and +0x13C are skipped.
 		 */
 		void WrittenFadeOnVisible(void* a_node, RE::NiCullingProcess* a_process, std::int32_t a_arg)
 		{
@@ -1303,8 +1248,7 @@ namespace DCLF
 
 	void PrimaryCull::PublishWriterTables(bool a_running)
 	{
-		// The tables replaced are let go here, after the new ones are published: the last frame's cycle was waited for before this entry,
-		// so no OnVisible or gate reads them.
+		// The replaced tables are released after publication: the last cycle was waited for, so no OnVisible or gate reads them.
 		std::shared_ptr<const void> tables;
 		if (a_running)
 			tables = Scene::FrameView::Get().AcceptedTables();
@@ -1340,19 +1284,18 @@ namespace DCLF
 		stl::write_vfunc<0x18, Hooks::AppendVirtual>(RE::VTABLE_BSGeometryListCullingProcess[0]);
 		InstallSceneLists();
 		TreeAnimation::Install();
-		Diagnostics::Notify(Diagnostics::PrimaryCullInstalled{});
+		Diagnostics::Notify<Diagnostics::EnginePoint::PrimaryCullInstalled>();
 		LocalLightCull::Install();
-		// T7f checklist items 4-5: the fade nodes' OnVisible leave the roots DCLF writes alone (detours, not vtable slots: the subclasses'
-		// tables and FadeState::PlanOf keep the engine's addresses).
+		// Fade OnVisibles leave DCLF-written roots alone (detours, not vtable slots, so subclass tables and FadeState::PlanOf keep
+		// the engine's addresses).
 		stl::detour_thunk<FadeOnVisible>(base + Engine::Address::kFadeOnVisible);
 		stl::detour_thunk<LeafOnVisible>(base + Engine::Address::kLeafOnVisible);
 		stl::detour_thunk<TreeOnVisible>(base + Engine::Address::kTreeOnVisible);
 		REL::Relocation<std::uintptr_t> triShape{ RE::VTABLE_BSTriShape[0] };
 		geometryOnVisible = reinterpret_cast<const std::uintptr_t*>(triShape.address())[0x34];
-		// T7f item 8: the OnVisibles the cut's plans stand for (PlanOf), from the classes' own vtables. A slot may hold a hook
-		// (NiNode's is LocalLightCull's category filter, NiBillboardNode's the billboards' observer under CS_DCLF_SET_PARITY), which ends in
-		// the engine's function: the slot is what a node of the class calls, and the engine's NiNode::OnVisible is what its subclasses keep,
-		// so both count. The startup log names the module holding each slot.
+		// The OnVisibles PlanOf stands for, from the classes' vtables. A slot may hold a hook ending in the engine's function
+		// (NiNode's: LocalLightCull's category filter; NiBillboardNode's: the billboard observer under CS_DCLF_SET_PARITY), so both
+		// the slot and the engine's NiNode::OnVisible (which subclasses keep) count. The startup log names each slot's module.
 		const auto slot = [](std::uintptr_t a_vtable) { return reinterpret_cast<const std::uintptr_t*>(a_vtable)[0x34]; };
 		wideOnVisible.node = slot(REL::Relocation<std::uintptr_t>{ RE::VTABLE_NiNode[0] }.address());
 		wideOnVisible.engineNode = base + kNodeOnVisible;

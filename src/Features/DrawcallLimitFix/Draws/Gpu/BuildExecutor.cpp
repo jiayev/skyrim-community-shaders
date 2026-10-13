@@ -1,3 +1,5 @@
+// The build pump and the pipeline lane (see the header).
+
 #include "BuildExecutor.h"
 
 #include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"

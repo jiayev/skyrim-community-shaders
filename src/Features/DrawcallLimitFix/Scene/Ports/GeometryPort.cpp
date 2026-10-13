@@ -1,3 +1,5 @@
+// GeometryPort.h's SetupGeometry port: the render thread's PipelineFrame sample and the pure block writers.
+
 #include "Features/DrawcallLimitFix/Scene/Ports/GeometryPort.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"

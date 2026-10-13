@@ -1,3 +1,5 @@
+// FrameDriver: the render thread's DCLF work at each engine point of the frame (see the header).
+
 #include "Features/DrawcallLimitFix/Draws/FrameDriver.h"
 
 #include "Deferred.h"
@@ -90,8 +92,8 @@ namespace DCLF
 		}
 		// The engine's update is done: workers may read its scene graph until Present (EngineReadWindow).
 		EngineReadWindow::Open();
-		// The coordinator's pump runs the scene passes whenever its producers wake it; nothing of it is kicked or joined here. The frame's
-		// posts below (the frame inputs, the ahead context, the captures, the fade write-back's) wake it once, when this scope ends.
+		// The coordinator's pump runs the scene passes whenever its producers wake it. The frame's posts below (the frame inputs, the ahead
+		// context, the captures, the fade write-back's) wake it once, when this scope ends.
 		ScenePassWakeBatch wakes;
 		scene.SetScenePassMode(true, inlinePass);
 		// The frame's toggles, before anything reads them. A change that enters the classification drops the cached verdicts (the
@@ -128,7 +130,7 @@ namespace DCLF
 		// The candidate entries changed since the sun exclusion's snapshot leave it (the engine culls them); the rest stand.
 		SunAccumulation::Get().BeginFrame(view.GetSunCandidates());
 		// The lookups are the installed publication's; what only the frame has goes to the scene lane (PostLookupInputs).
-		Diagnostics::Notify(Diagnostics::LookupsInstalled{ view.GetFrame() });
+		Diagnostics::Notify<Diagnostics::FramePoint::LookupsInstalled>();
 		draws.PostLookupInputs();
 		{
 			// A frame the adopted snapshot does not cover, or whose publication was committed under older toggles or before a LOD gate's
@@ -141,7 +143,7 @@ namespace DCLF
 			// The LOD gates the installed publications flipped, released before the culls (in the frame whose claims are post-swap).
 			view.ReleaseGates();
 		}
-		Diagnostics::Notify(Diagnostics::ClaimsInstalled{ view.GetFrame() });
+		Diagnostics::Notify<Diagnostics::FramePoint::ClaimsInstalled>();
 		// The first-person members the frame's epochs draw: their rows and palettes taken by the frame values' kick (below) on this thread,
 		// before Main::Draw moves the skeleton into its root's space.
 		FrameValues::Get().SetFirstPersonClaims(draws.FirstPersonCovered() ? view.FrameClaims() : nullptr);
@@ -212,7 +214,7 @@ namespace DCLF
 	{
 		ScopedPerfEvent event("CS DCLF: shadow views");
 		const auto start = std::chrono::steady_clock::now();
-		Diagnostics::Notify(Diagnostics::ShadowViewsBegin{ Scene::FrameView::Get().GetFrame() });
+		Diagnostics::Notify<Diagnostics::FramePoint::ShadowViewsBegin>();
 		// The frame's shadow views, in the order the engine is about to render them. Everything downstream - the capture's attribution,
 		// the withholding, the epochs - identifies a view by this list.
 		auto& draws = IndirectDraws::Get();
@@ -238,9 +240,8 @@ namespace DCLF
 
 	void FrameDriver::EarlyPrepass()
 	{
-		// Once the registration jobs have finished: the joins' frame inputs posted for the next scene pass (Light Limit Fix's room map,
-		// the capture's drain), then the captures the last joins asked for, answered for the next pass. Nothing here reads the
-		// coordinator's state.
+		// Once the registration jobs have finished: the frame inputs posted for the next scene pass (Light Limit Fix's room map, the
+		// capture's drain), then the captures the last pass asked for, answered for the next. Nothing here reads the coordinator's state.
 		ScopedPerfEvent event("CS DCLF: accumulator tables and pipelines");
 		const auto start = std::chrono::steady_clock::now();
 		auto& view = Scene::FrameView::Get();
@@ -257,9 +258,9 @@ namespace DCLF
 		auto& view = Scene::FrameView::Get();
 		// The one point in the frame where `currentAccumulator` is the main camera's accumulator: latched for the frame's readers.
 		view.LatchAccumulator();
-		// The camera-dependent half of the per-frame constants, now that the main camera's shadow state is current.
+		// The camera-dependent half of the per-frame constants: the main camera's shadow state is current here.
 		view.RefreshFrameConstants();
-		Diagnostics::Notify(Diagnostics::PrepassEnd{ view.GetFrame() });
+		Diagnostics::Notify<Diagnostics::FramePoint::PrepassEnd>();
 	}
 
 	bool FrameDriver::OcclusionReady(std::uint32_t a_map, bool a_running)
@@ -334,8 +335,8 @@ namespace DCLF
 	void FrameDriver::AfterOpaquePass()
 	{
 		// DCLF's objects must be in the G-buffer and the depth before Terrain Blending draws its held terrain (alpha blended onto the
-		// G-buffer, its alpha the distance to the object beneath, with depth writes): drawn after that terrain, a buried object was missing
-		// from what the terrain blended onto, and the terrain's depth writes failed DCLF's EQUAL test where it overlapped.
+		// G-buffer, its alpha the distance to the object beneath, with depth writes): drawn after that terrain, a buried object would be
+		// missing from what the terrain blended onto, and the terrain's depth writes would fail DCLF's EQUAL test where it overlapped.
 		auto& draws = IndirectDraws::Get();
 		globals::d3d::context->OMSetRenderTargets(0, nullptr, nullptr);  // the epoch writes the G-buffer the context has bound
 		draws.ProbeTargets("before colour");
@@ -348,7 +349,7 @@ namespace DCLF
 	void FrameDriver::NativeLightingDraw(RE::BSRenderPass* a_pass, std::uint32_t a_renderFlags)
 	{
 		auto& view = Scene::FrameView::Get();
-		// A ProjectedUV draw has SetupGeometry's four projected textures bound now: kept for the pipelines DCLF builds with that bit (the
+		// A ProjectedUV draw has SetupGeometry's four projected textures bound here: kept for the pipelines DCLF builds with that bit (the
 		// Hair technique binds none).
 		if (globals::deferred->deferredPass && (PassDescriptorOf(a_pass->passEnum) & 0x8000u) && ((PassDescriptorOf(a_pass->passEnum) >> 24) & 0x3f) != 6)
 			view.NoteProjectedTextures();

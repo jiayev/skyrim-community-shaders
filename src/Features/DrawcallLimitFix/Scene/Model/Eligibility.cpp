@@ -1,3 +1,6 @@
+// The eligibility rules that need more than a header: the cacheable verdicts, a geometry's and a layer's static verdict, and the
+// primary-cull rule. Pure functions of the records passed in; called on the scene-work thread and on the render thread.
+
 #include "Features/DrawcallLimitFix/Scene/Model/Eligibility.h"
 
 #include "Features/DrawcallLimitFix/Runtime/Toggles.h"
@@ -58,7 +61,7 @@ namespace DCLF::Eligibility
 			}
 		}
 		if (type != RE::BSGeometry::Type::kTriShape && !multiIndex && !lodObject) {
-			// T7e (CS_DCLF_PARTICLES): a particle geometry with an effect property is the Effect port's to classify (DeriveEffectDescriptors:
+			// CS_DCLF_PARTICLES: a particle geometry with an effect property is the Effect port's to classify (DeriveEffectDescriptors:
 			// a particle system DCLF's particle path draws, or the particle variant). It has no renderer data of its own: its draw is the
 			// renderer's quads, its vertices ParticleSnapshots' (Coordinator::ResolveGeometrySlot).
 			if (ParticleGeometryType(g.type) && ActiveToggles().particles) {
@@ -114,7 +117,7 @@ namespace DCLF::Eligibility
 
 		const auto* property = SceneCapture::LeafView::Lighting(a_leaf.property);
 		if (!property) {
-			// T7d's Effect port (CS_DCLF_EFFECTS): a BSEffectShaderProperty on a BSTriShape, drawn by the forward epoch when its pass is the
+			// The Effect port (CS_DCLF_EFFECTS): a BSEffectShaderProperty on a BSTriShape, drawn by the forward epoch when its pass is the
 			// static blended mesh's (DeriveEffectDescriptors). Any other shape of one keeps the effect's own reason.
 			const auto* effect = SceneCapture::LeafView::Effect(a_leaf.property);
 			if (!effect || !ActiveToggles().effects)
@@ -129,7 +132,7 @@ namespace DCLF::Eligibility
 		}
 
 		// GetRenderPasses treats material alpha below one as transparent (the record's: 1 without a material): blended, the forward
-		// epoch's with CS_DCLF_FORWARD (T7d: DeriveLightingDescriptors), else native.
+		// epoch's with CS_DCLF_FORWARD (DeriveLightingDescriptors), else native.
 		if (property->materialAlpha < 1.0f && !ActiveToggles().forward)
 			return Ineligible::AlphaBlend;
 
@@ -139,9 +142,8 @@ namespace DCLF::Eligibility
 			if (reason == Ineligible::None) {
 				*a_descriptors = descriptors;
 			} else {
-				// The rejection diagnostics have to survive the rejection. Copying the descriptors only on
-				// success left rejectedTechnique at its default 0, and 0 is `none` - a SUPPORTED technique -
-				// so the histogram read "none(0)=1337" and looked like a finding rather than an empty field.
+				// The rejection diagnostics have to survive the rejection: rejectedTechnique's default 0 is `none`, a
+				// supported technique, so it is copied on rejection too.
 				a_descriptors->rejectedTechnique = descriptors.rejectedTechnique;
 			}
 		}

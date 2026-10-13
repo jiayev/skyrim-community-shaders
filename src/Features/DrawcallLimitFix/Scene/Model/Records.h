@@ -1,5 +1,9 @@
 #pragma once
 
+// The scene's record types and their GPU layouts: object records and flags, geometry buffers, pipeline keys and raster flags, tree
+// wind, fade roots, the fade write-back and the indirect draw sequence. Written by the coordinator into SceneTables, read by the
+// render thread's builds and by the shaders, whose HLSL layouts must match these.
+
 #include <algorithm>
 #include <bit>
 #include <cstdint>
@@ -9,10 +13,7 @@ struct ID3D11Buffer;
 
 namespace DCLF
 {
-	/**
-	 * @brief Per-object record. This is the GPU layout of the object table (16-byte aligned,
-	 * no implicit padding), so it can be uploaded as is.
-	 */
+	/** @brief Per-object record: the object table's GPU layout (16-byte aligned, no implicit padding), uploaded as is. */
 	struct ObjectRecord
 	{
 		// The placement (world, previous world, bound) is not the record's: FrameValues samples it into the frame's rows.
@@ -29,86 +30,61 @@ namespace DCLF
 		kObjectTwoSided = 1u << 1,   // no culling (the native main pass culls back faces otherwise)
 		kObjectSuppressExternalEmittance = 1u << 2,  // ExtraShaderDescriptors::SuppressExternalEmittance in the permutation buffer
 		// Subsurface Scattering's IsBeastRace for a face (BSLightingShader_SetupSkin: kFace or kFaceGenRGBTint, its actor's race
-		// keyword, set without an actor or race): per actor, so the object record's (BindlessObject::recordFlags), not the
-		// pipeline's permutation, where the native draw has it.
+		// keyword): per actor, so the record's, not the permutation's.
 		kObjectBeastRace = 1u << 3,
-		// A skinned object (CS_DCLF_SKINNED): its vertices come from the skin partition's own buffer and its
-		// vertex shader reads the bone palette rows at BindlessObject::boneOffset / previousBoneOffset.
+		// CS_DCLF_SKINNED: vertices from the skin partition's own buffer, bone palette rows at BindlessObject::boneOffset /
+		// previousBoneOffset.
 		kObjectSkinned = 1u << 4,
-		// The object is a culling candidate only: it cannot be drawn this frame, so no material or
-		// pipeline entry was built for it and its materialIndex and pipelineIndex mean nothing. Anything
-		// that indexes the tables with them must check this first - the tables can be empty entirely (the
-		// first frame after a teleport has tracked geometry but nothing accumulated yet), so even index 0
-		// is not safe.
+		// A culling candidate only: materialIndex and pipelineIndex mean nothing; check before indexing. The tables may be empty
+		// (first frame after a teleport), so even index 0 is unsafe.
 		kObjectNoBindings = 1u << 5,
-		// Technique 12. Only a tree's TreeParams and WindTimers are its own; for everything else those
-		// two variables belong to the pipeline template, and writing a zeroed per-object copy over them
-		// clobbers values the native draw does use - which is what the first attempt at trees did, to
-		// every object in the frame rather than only to trees.
+		// Technique 12: TreeParams and WindTimers are per object. For anything else they are the pipeline template's, which a
+		// zeroed per-object copy would clobber.
 		kObjectTreeAnim = 1u << 6,
-		// A decal (CS_DCLF_DECALS). Never an occluder: it is left out of the depth segment entirely and
-		// drawn by the colour segment's second pass, after the opaque draws, in the engine's group order.
-		// The group is in bits 20-21 (kObjectDecalGroupShift): 1 = accumulation hint 2 (the engine's
-		// opaque decal group, geometry group 3, drawn first), 3 = a multi-index shape's layer (hint 12, geometry
-		// group 2, drawn second), 2 = hint 3 (the blended one, geometry group 4, drawn last).
-		// kDecalDrawOrder has the order of their ranges.
+		// CS_DCLF_DECALS. Never an occluder: not in the depth segment, drawn by the colour segment's second pass after the opaque
+		// draws. Group (bits 20-21): 1 = accumulation hint 2 (opaque, geometry group 3, first), 3 = multi-index layer (hint 12,
+		// group 2, second), 2 = hint 3 (blended, group 4, last); see kDecalDrawOrder.
 		kObjectDecal = 1u << 7,
 		kObjectAlphaThresholdShift = 8,
-		// Per-object PerGeometry values beyond World and the tree pair, kept in the epoch's row buffer at
-		// BindlessObject::extraOffset (Records: kExtraRows rows, layout in Coordinator::RefreshFrameConstants):
-		// the ProjectedUV texture matrix and pixel parameters (CS_DCLF_PROJECTED_UV), and the landscape
-		// blend parameters of the MTLand techniques (CS_DCLF_MTLAND).
-		// An alpha-tested object whose alpha property also blends: the engine's depth pass tests it against a reference of its
-		// own (BSUtilityShader::SetupGeometry's PerGeometry AlphaTestRef; Utility.hlsl, DCLFDepthAlphaTestRef).
+		// Alpha-tested and blended: the depth pass uses its own reference (BSUtilityShader::SetupGeometry's AlphaTestRef;
+		// DCLFDepthAlphaTestRef).
 		kObjectAlphaBlended = 1u << 17,
+		// Extra PerGeometry rows at BindlessObject::extraOffset (kExtraRows, layout in FrameView::RefreshFrameConstants):
+		// ProjectedUV's texture matrix and parameters (CS_DCLF_PROJECTED_UV), MTLand's blend parameters (CS_DCLF_MTLAND).
 		kObjectProjectedUV = 1u << 18,
 		kObjectLandBlend = 1u << 19,
 		kObjectDecalGroupShift = 20,
-		// T7c1: the same two bits without kObjectDecal are a terrain group (CS_DCLF_TB_TERRAIN, while Terrain Blending holds the
-		// terrain): 1 = a kMultiTextureLandscape block, drawn after the opaque and decal groups with Terrain Blending's blend
-		// state, its near blocks' depth into Terrain Blending's terrain depth and, offset, into the main depth; 2 = a
-		// kNoTransparencyMultiSample mesh, drawn after the terrain testing EQUAL (ObjectTerrainGroup).
+		// Without kObjectDecal, a terrain group (CS_DCLF_TB_TERRAIN, while Terrain Blending holds the terrain): 1 = a
+		// kMultiTextureLandscape block, drawn after opaque and decals with Terrain Blending's blend state, near blocks' depth into
+		// its terrain depth and, offset, the main depth; 2 = a kNoTransparencyMultiSample mesh, drawn after it testing EQUAL.
 		kObjectTerrainGroupShift = kObjectDecalGroupShift,
-		// The engine would draw no shadow-map pass for this object (ShadowViews.h: ShadowCasterReject),
-		// so no shadow view's culling may accept it. Decided by the scene phase, which is before any
-		// shadow view is drawn.
+		// The engine draws no shadow-map pass for it (ShadowCasterReject), so no shadow view may accept it. Set by the scene phase.
 		kObjectNoShadow = 1u << 22,
-		// A volumetric-only caster (ShadowReject::VolumetricOnly): the engine draws it into the sun's volumetric
-		// lighting copy and nowhere else (batch group 15, accumulation hint 8). A shadow view of the copy draws
-		// only these inputs, and every other shadow view skips them (BuildDrawsLatch::cullFlags). Set by the
-		// scene phase.
+		// ShadowReject::VolumetricOnly: the engine draws it only into the sun's volumetric lighting copy (batch group 15, hint 8),
+		// whose view draws only these; every other view skips them (BuildDrawsLatch::cullFlags). Set by the scene phase.
 		kObjectVolumetricOnly = 1u << 23,
-		// A shadow-only object: the main pass cannot take it (its Ineligible reason is one the shadow views do
-		// not care about, Coordinator::ShadowOnlyReason), but it is a shadow caster, so it has a record for the
-		// shadow epochs alone. It always has kObjectNoBindings; the accumulate phase and the main epochs skip it.
+		// Main-pass ineligible for a reason the shadow views ignore (ShadowOnlyReason): a record for the shadow epochs alone.
+		// Always with kObjectNoBindings.
 		kObjectShadowOnly = 1u << 24,
-		// A free object slot (Coordinator's persistent slots): no object at all. It always has kObjectNoBindings and
-		// kObjectNoShadow too, so every loop that skips those skips it; the main build skips it before counting.
+		// A free object slot. Always with kObjectNoBindings and kObjectNoShadow, so loops skipping those skip it.
 		kObjectFree = 1u << 25,
-		// A synthetic main pass (PrimaryCull) whose pipeline carries the sun's bits (DefShadow, ShadowDir) because
-		// the object may take the sun's shadow: the colour epoch's BuildDraws tests its bound against this frame's
-		// cascades and, on a miss, marks the draw (kObjectSunMiss) so the pixel stage drops the two bits, as
-		// GetRenderPasses would have left them off. Set per frame by the accumulate phase.
+		// A synthetic main pass (PrimaryCull) with the sun's bits (DefShadow, ShadowDir): the colour BuildDraws tests its bound
+		// against the cascades and on a miss sets kObjectSunMiss so the pixel stage drops them, as GetRenderPasses would.
 		kObjectSunTest = 1u << 26,
-		// A resident object under a fade root (PrimaryCull, dclf-cull-job-elimination.md "Phase 4 in detail"): the depth
-		// segment's first phase tests its entry root's distance against the fade-out distance (Tables::fadeDistance, its
-		// placement row's fade node) and drops it, as a final verdict, where BSFadeNode::OnVisible would snap its fade to 0: past
-		// the distance and not in view last frame. Set by the accumulate phase with the resident patch.
+		// A resident under a fade root (PrimaryCull): the depth segment's first phase drops it for good where BSFadeNode::OnVisible
+		// would snap its fade to 0 (entry root past SceneTables::fadeDistance and not in view last frame).
 		kObjectFadeTest = 1u << 27,
-		// A resident tree (PrimaryCull): the depth segment's first phase drops it, as a final verdict, where
-		// BSTreeNode::OnVisible's height test would (its entry root's centre above the frame's limit).
+		// A resident tree (PrimaryCull): dropped for good where BSTreeNode::OnVisible's height test would (entry root's centre
+		// above the frame's limit).
 		kObjectHeightTest = 1u << 28,
 		// A landscape property (kLandscape, kNoLODLandFade): the main pass's light selection gives it only the local shadow
 		// lights that take landscape (BSShadowLight +0x61; LocalShadowLights).
 		kObjectLandscapeLights = 1u << 29,
-		// Bound by scene membership (Coordinator::BindByMembership): drawn whenever the GPU finds it. Every record with bindings
-		// is a member; the rest are culling candidates (kObjectNoBindings).
+		// Bound by scene membership (Coordinator::BindByMembership): drawn whenever the GPU finds it. Every record with bindings.
 		kObjectMember = 1u << 30,
-		// T7d (CS_DCLF_FORWARD): a blended Lighting object, drawn by the forward epoch. Never an occluder: like a decal it is left
-		// out of the depth segment (its view mask is kViewForward alone), culled once by the colour segment's BuildDraws (frustum,
-		// then the HZB the depth segment rebuilt), appended to the forward range with its view depth, sorted back to front on the GPU
-		// (ForwardSortCS) and drawn by the forward epoch at the engine's blended point (FUN_1414b39d0), forward-shaded into the main
-		// target. Its key carries the forward state (kRasterForward).
+		// CS_DCLF_FORWARD: a blended Lighting object. Never an occluder (view mask kViewForward alone); culled by the colour
+		// BuildDraws (frustum, rebuilt HZB), sorted back to front (ForwardSortCS) and forward-shaded into the main target at the
+		// engine's blended point (FUN_1414b39d0). Key: kRasterForward.
 		kObjectForward = 1u << 31,
 	};
 
@@ -121,9 +97,8 @@ namespace DCLF
 	inline constexpr std::uint32_t kObjectIndexMask = (1u << kObjectLocalShadowShift) - 1;
 
 	/**
-	 * @brief The face positions buffer (FaceSnapshots) holds one float4 per vertex of every face shape drawn, each shape in a
-	 * region Coordinator keeps for it while it is walked, and is bound as a face draw's second vertex stream, which is where the
-	 * engine's own draw puts BSDynamicTriShape::dynamicData. A shape without a region yet has kNoFaceRegion.
+	 * @brief The face positions buffer (FaceSnapshots): a float4 per vertex of each drawn face shape, in a per-shape region, bound
+	 * as the second vertex stream (where the engine puts BSDynamicTriShape::dynamicData). kNoFaceRegion: no region yet.
 	 */
 	inline constexpr std::uint32_t kNoFaceRegion = ~0u;
 	inline constexpr std::uint32_t kNoFaceStream = ~0u;
@@ -137,27 +112,21 @@ namespace DCLF
 
 	/** @brief ObjectFlags -> decal group (0 for anything that is not a decal). */
 	inline constexpr std::uint32_t ObjectDecalGroup(std::uint32_t a_flags) { return (a_flags & kObjectDecal) ? (a_flags >> kObjectDecalGroupShift) & 3u : 0u; }
-	/** @brief ObjectFlags -> terrain group (T7c1; 0 for a decal, or anything Terrain Blending does not hold). */
+	/** @brief ObjectFlags -> terrain group (0 for a decal, or anything Terrain Blending does not hold). */
 	inline constexpr std::uint32_t ObjectTerrainGroup(std::uint32_t a_flags) { return (a_flags & kObjectDecal) ? 0u : (a_flags >> kObjectTerrainGroupShift) & 3u; }
 
 	/** @brief GeometryBuffers::nextPartition: the last partition, or a TriShape that is not one. */
 	inline constexpr std::uint32_t kNoPartition = ~0u;
 	/** @brief The most partitions a skin DCLF draws may have: one bit each in the draw's partition mask. */
 	inline constexpr std::uint32_t kMaxSkinPartitions = 8;
-	/**
-	 * @brief Tables::skinPartitions for a skin whose fade node's LOD level draws none of its partitions (SkinPartitionMask 0:
-	 * the engine draws nothing of it at that level). The object stays a member with its bindings; BuildDraws writes no draw.
-	 */
+	/** @brief skinPartitions when the current LOD level draws no partition (SkinPartitionMask 0): still a member, no draw. */
 	inline constexpr std::uint32_t kNoPartitions = 1u << kMaxSkinPartitions;
-	/**
-	 * @brief Tables::skinPartitions for a chain: every geometry slot linked from the object's first (nextPartition) is drawn, the
-	 * count in the low bits. Object LOD's visible ranges (LodSegments), however many its hidden cells leave.
-	 */
+	/** @brief skinPartitions for a chain (Object LOD's visible ranges, LodSegments): the count of nextPartition links drawn. */
 	inline constexpr std::uint32_t kPartitionChain = 1u << 15;
 	inline constexpr std::uint32_t kPartitionChainCount = kPartitionChain - 1;
 	/**
-	 * @brief T7e's blood decals: the slots a decal of a_partitions takes in its group's range from its ordinal, one per partition up to the
-	 * last its mask names (a chain's count; one for 0 or kNoPartitions). BuildDrawsCS's decal path writes each of them every frame.
+	 * @brief Blood decals: the slots a decal takes from its ordinal, one per partition up to the last its mask names (a chain's
+	 * count; one for 0 or kNoPartitions). BuildDrawsCS writes each every frame.
 	 */
 	inline constexpr std::uint32_t DecalSpanOf(std::uint32_t a_partitions)
 	{
@@ -174,10 +143,7 @@ namespace DCLF
 		return a_partitions == kNoPartitions ? 0u : a_partitions ? static_cast<std::uint32_t>(std::popcount(a_partitions)) : 1u;
 	}
 
-	/**
-	 * @brief Geometry shared by every object that uses the same BSGraphics::TriShape.
-	 * The buffers are the game's.
-	 */
+	/** @brief Geometry shared by every object that uses the same BSGraphics::TriShape. The buffers are the game's. */
 	struct GeometryBuffers
 	{
 		ID3D11Buffer* vertexBuffer = nullptr;
@@ -192,16 +158,11 @@ namespace DCLF
 		std::uint64_t indexAddress = 0;
 		std::uint64_t vertexBytes = 0;
 		std::uint64_t indexBytes = 0;
-		// For a skin partition's TriShape: the slot of the same skin's next partition, rewritten every frame the
-		// skin is drawn (Coordinator::LinkPartitions), else kNoPartition. BuildDrawsCS walks it.
+		// A skin partition's TriShape: the skin's next partition slot (whatever the frame's mask), else kNoPartition.
 		std::uint32_t nextPartition = kNoPartition;
 	};
 
-	/**
-	 * @brief Per-object light assignment Light Limit Fix passes per draw (StrictLightData, PS b3). In the
-	 * main pass there are no strict lights (NumStrictLights is 0); what varies is the object's room in
-	 * interiors and the shadow mask channels of its shadow-casting lights.
-	 */
+	/** @brief Light Limit Fix's per-draw StrictLightData (PS b3); the main pass has no strict lights, so only these vary. */
 	struct ObjectLights
 	{
 		std::int32_t roomIndex = -1;
@@ -209,9 +170,8 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief Community Shaders' permutation buffer (State::PermutationCB, b4) for a pipeline, as
-	 * BeginTechnique and the SetupGeometry hooks leave it for the draw. Per-object bits
-	 * (kObjectSuppressExternalEmittance) are added on top of extraShaderDescriptor.
+	 * @brief Community Shaders' permutation buffer (State::PermutationCB, b4) for a pipeline, as BeginTechnique and the
+	 * SetupGeometry hooks leave it. Per-object bits (kObjectSuppressExternalEmittance) go on top of extraShaderDescriptor.
 	 */
 	struct PipelinePermutation
 	{
@@ -235,14 +195,8 @@ namespace DCLF
 	static_assert(std::has_unique_object_representations_v<PipelineKey>);
 
 	/**
-	 * @brief A pipeline of the shadow views: one Utility technique, one vertex layout, one raster state.
-	 *
-	 * Its own key space, not a variant of PipelineKey: a shadow draw runs the Utility shader with the
-	 * technique the engine derives for the caster (ShadowViews.h), which does not follow the Lighting
-	 * descriptors the main pass's key is built from - two objects sharing a Lighting pipeline can cast
-	 * with different Utility techniques, and one Utility technique serves objects of many Lighting
-	 * pipelines. The raster flags carry two-sidedness; a pipeline (not a caster's base key, whose viewState is 0) is for one
-	 * view rasterizer state (DrawPipelines::ShadowRasterStateId, 1 and up).
+	 * @brief A shadow pipeline: one Utility technique, vertex layout and raster state. Its own key space: a caster's Utility
+	 * technique (ShadowViews.h) does not follow its Lighting descriptors.
 	 */
 	struct ShadowPipelineKey
 	{
@@ -277,16 +231,10 @@ namespace DCLF
 	/**
 	 * @brief Fixed-function state of a pipeline, packed.
 	 *
-	 * For an opaque object only bit 0 is ever set: the native main (deferred) pass draws it with depth
-	 * test EQUAL against the Z-prepass (no write), stencil, blending and depth bias off, back-face
-	 * culling unless two-sided, and none of that needs stating.
-	 *
-	 * A decal is drawn by the engine with a depth bias and, in its blended group, with the geometry's
-	 * alpha property applied, so its key also carries the INDICES of the engine's own state objects -
-	 * RendererShadowState's rasterStateDepthBiasMode, alphaBlendMode, alphaBlendAlphaToCoverage,
-	 * alphaBlendWriteMode and alphaBlendModeExtra - which DrawPipelines reads back from the engine's
-	 * state tables (EngineStates.h) rather than re-deriving what each index means. Zero for everything
-	 * that is not a decal, so every existing key is unchanged.
+	 * An opaque object sets at most bit 0 (the native deferred pass: depth EQUAL against the Z-prepass, no write, no stencil,
+	 * blend or bias, back faces culled unless two-sided). Decal, terrain and forward keys carry the INDICES of the engine's state
+	 * objects (RendererShadowState's rasterStateDepthBiasMode, alphaBlendMode, alphaBlendAlphaToCoverage, alphaBlendWriteMode,
+	 * alphaBlendModeExtra), which DrawPipelines reads back from the engine's tables (EngineStates.h) rather than re-deriving.
 	 */
 	enum PipelineRasterFlags : std::uint32_t
 	{
@@ -297,34 +245,26 @@ namespace DCLF
 		kRasterAlphaToCoverage = 1u << 11,
 		kRasterWriteModeShift = 12,  // 4 bits: alphaBlendWriteMode (0-12)
 		kRasterBlendExtra = 1u << 16,
-		// T7d's Effect port (CS_DCLF_EFFECTS): the key is the Effect shader's (BSEffectShader; Effect.hlsl), its descriptors and pass descriptor
-		// that shader's (EffectDescriptors.h). Not an engine state index: RasterStateBits leaves it out.
+		// CS_DCLF_EFFECTS: an Effect shader key (BSEffectShader; Effect.hlsl), descriptors and pass descriptor that shader's
+		// (EffectDescriptors.h). Not an engine state index: RasterStateBits leaves it out.
 		kRasterEffect = 1u << 17,
-		// Main keys only: 3 bits, Extended Translucency's material model for the draw XOR DescriptorDisabled (so an
-		// opaque key, whose model is disabled, keeps 0 here). ExtendedTranslucency::MaterialModelOf sets it per
-		// geometry in the feature's SetupGeometry hook; it differs from disabled only for blended geometry (blended
-		// decals, such as NPC hairlines and beards), and it is the permutation's ExtraFeatureDescriptor.
+		// Main keys only, 3 bits: Extended Translucency's material model XOR DescriptorDisabled (ExtendedTranslucency::
+		// MaterialModelOf; the permutation's ExtraFeatureDescriptor). Non-zero only for blended geometry (e.g. NPC hairlines).
 		kRasterTranslucencyShift = 21,
-		// Effect keys only (kRasterEffect, whose permutation never takes Extended Translucency's model): the same 3 bits are the
-		// billboard mode + 1 of a leaf under an NiBillboardNode (CS_DCLF_BILLBOARDS; Billboards.h), 0 for any other effect key. The
-		// draw turns the leaf to its view's camera in the vertex stage (Effect.hlsl, DCLFBillboardWorld); the object record carries
-		// the mode (EffectRecordFlagsOf).
+		// Effect keys only, same 3 bits: billboard mode + 1 of a leaf under an NiBillboardNode (CS_DCLF_BILLBOARDS), else 0. The
+		// vertex stage turns the leaf to its view's camera (DCLFBillboardWorld); the record carries the mode (EffectRecordFlagsOf).
 		kRasterEffectBillboardShift = kRasterTranslucencyShift,
-		// T7c1: 2 bits, ObjectTerrainGroup. Group 1 (Terrain Blending's held terrain) carries the blend and write modes that
-		// feature draws its terrain with (1 and 1) and tests LESS_EQUAL with depth writes; group 2 (its no-blend meshes) the
-		// write mode it leaves for them (1), blending off, testing EQUAL. Neither takes a depth bias (DrawPipelines).
+		// 2 bits, ObjectTerrainGroup. Group 1: blend and write modes 1 and 1, LESS_EQUAL with depth writes; group 2: write mode 1,
+		// no blending, EQUAL. No depth bias.
 		kRasterTerrainGroupShift = 24,
-		// T7d: a forward key (kObjectForward): the forward pixel stage (no Deferred) drawn after the deferred composite onto the main
-		// target alone - the first attachment blends as the engine's state for the key's blend and write modes says (FUN_14150bc80's
-		// mode from the alpha property, write mode 11 as FUN_1414b3390 leaves it), the G-buffer attachments are not written - with
-		// the depth state SetupGeometry derives from the property: tested (LESS_EQUAL) with kZBufferTest, written with kZBufferWrite.
+		// A forward key (kObjectForward): the forward pixel stage (no Deferred), after the deferred composite, onto the main target
+		// alone. Blends with the engine's state for its modes (FUN_14150bc80's mode from the alpha property, write mode 11 as
+		// FUN_1414b3390 leaves it); depth LESS_EQUAL with kZBufferTest, written with kZBufferWrite (SetupGeometry's derivation).
 		kRasterForward = 1u << 26,
 		kRasterForwardDepthTest = 1u << 27,
 		kRasterForwardDepthWrite = 1u << 28,
-		// T7d's refraction (with kRasterForward): a refraction object's key (LightingDescriptors::refraction). Its Lighting pipeline is
-		// never drawn: the refraction range's draws are Utility RENDER_NORMAL draws into the refraction normals (RefractionDrawPass),
-		// which take the technique's property-driven variants from these bits (RENDER_NORMAL_FALLOFF, RENDER_NORMAL_CLAMP: the object
-		// record's kRecordRefraction* bits, BuildObjectRecord).
+		// Refraction (with kRasterForward; LightingDescriptors::refraction). Its Lighting pipeline is never drawn: the refraction
+		// range draws Utility RENDER_NORMAL into the refraction normals (RefractionDrawPass), variants _FALLOFF / _CLAMP from these.
 		kRasterRefraction = 1u << 29,
 		kRasterRefractionFalloff = 1u << 30,
 		kRasterRefractionClamp = 1u << 31,
@@ -336,9 +276,8 @@ namespace DCLF
 	inline constexpr std::uint32_t RasterBlendMode(std::uint32_t a_flags) { return (a_flags >> kRasterBlendModeShift) & 7u; }
 	inline constexpr std::uint32_t RasterWriteMode(std::uint32_t a_flags) { return (a_flags >> kRasterWriteModeShift) & 15u; }
 	inline constexpr std::uint32_t RasterTerrainGroup(std::uint32_t a_flags) { return (a_flags >> kRasterTerrainGroupShift) & 3u; }
-	/** @brief Everything but the two-sided bit, the translucency model and the shader class: what selects the engine's state objects. */
+	/** @brief What selects the engine's state objects: everything but two-sidedness, the translucency model and the shader class. */
 	inline constexpr std::uint32_t RasterStateBits(std::uint32_t a_flags) { return a_flags & ~(kRasterTwoSided | kRasterTranslucencyMask | kRasterEffect); }
-	/** @brief Whether a key is the Effect shader's (kRasterEffect). */
 	inline constexpr bool RasterEffect(std::uint32_t a_flags) { return (a_flags & kRasterEffect) != 0; }
 	/** @brief An effect key's billboard mode + 1 (kRasterEffectBillboardShift), 0 for a key that is no billboard's. */
 	inline constexpr std::uint32_t RasterEffectBillboard(std::uint32_t a_flags) { return RasterEffect(a_flags) ? (a_flags >> kRasterEffectBillboardShift) & 7u : 0u; }
@@ -352,25 +291,22 @@ namespace DCLF
 		       ((a_blendMode & 7u) << kRasterBlendModeShift) | ((a_writeMode & 15u) << kRasterWriteModeShift);
 	}
 
-	/**
-	 * @brief Packs a terrain group's state (T7c1): the blend and write modes Terrain Blending's replay sets
-	 * (TerrainBlending::RenderTerrainBlendingPasses), read back from the engine's state tables like a decal's.
-	 */
+	/** @brief Packs a terrain group's state: the blend and write modes TerrainBlending::RenderTerrainBlendingPasses sets. */
 	inline constexpr std::uint32_t PackTerrainRasterFlags(std::uint32_t a_group, std::uint32_t a_blendMode, std::uint32_t a_writeMode)
 	{
 		return ((a_group & 3u) << kRasterTerrainGroupShift) | ((a_blendMode & 7u) << kRasterBlendModeShift) | ((a_writeMode & 15u) << kRasterWriteModeShift);
 	}
 
 	inline constexpr bool RasterForward(std::uint32_t a_flags) { return (a_flags & kRasterForward) != 0; }
-	/** @brief Whether a key is a refraction object's (T7d's refraction: kRasterRefraction): drawn from the refraction range, not the forward one. */
+	/** @brief A refraction key: drawn from the refraction range, not the forward one. */
 	inline constexpr bool RasterRefraction(std::uint32_t a_flags) { return (a_flags & kRasterRefraction) != 0; }
-	/** @brief Packs a refraction key's variant bits (T7d's refraction), on top of its forward state. */
+	/** @brief Packs a refraction key's variant bits, on top of its forward state. */
 	inline constexpr std::uint32_t PackRefractionRasterFlags(bool a_falloff, bool a_clamp)
 	{
 		return kRasterRefraction | (a_falloff ? kRasterRefractionFalloff : 0u) | (a_clamp ? kRasterRefractionClamp : 0u);
 	}
 
-	/** @brief Packs a forward key's state (T7d): the engine's blend and write modes, and the property's depth flags. */
+	/** @brief Packs a forward key's state: the engine's blend and write modes, and the property's depth flags. */
 	inline constexpr std::uint32_t PackForwardRasterFlags(std::uint32_t a_blendMode, std::uint32_t a_writeMode, bool a_depthTest, bool a_depthWrite)
 	{
 		return kRasterForward | ((a_blendMode & 7u) << kRasterBlendModeShift) | ((a_writeMode & 15u) << kRasterWriteModeShift) |
@@ -378,8 +314,8 @@ namespace DCLF
 	}
 
 	/**
-	 * @brief Per-object values of the PerGeometry pixel constants (everything else in that group is
-	 * per frame). Components the engine does not write for this object hold kUnwrittenBits.
+	 * @brief Per-object values of the PerGeometry pixel constants (the rest of that group is per frame). Components the engine
+	 * does not write for this object hold kUnwrittenBits.
 	 */
 	struct ObjectShading
 	{
@@ -390,16 +326,8 @@ namespace DCLF
 	static_assert(sizeof(ObjectShading) == 32);
 
 	/**
-	 * @brief The two PerGeometry variables tree animation displaces its vertices with (technique 12).
-	 *
-	 * Per object, not per pipeline. Every other PerGeometry value DCLF treats as a property of the
-	 * pipeline, taken from one template object, and for trees that is wrong twice over: TreeParams
-	 * carries the individual tree's amplitude and leaf frequency, and WindTimers is a per-tree clock
-	 * the engine advances as it sets the draw up. Left per-pipeline, one template tree's wind is handed
-	 * to every tree sharing its pipeline - capture parity counted 47,851 and 83,390 mismatched draws.
-	 *
-	 * windTimers uses only xy; it is a float4 so the struct keeps 16-byte alignment on both sides of
-	 * the GPU record, where a float2 would let HLSL pad and the two layouts disagree.
+	 * @brief Tree animation's two PerGeometry variables (technique 12), per object, not per pipeline: TreeParams is the tree's own
+	 * amplitude and leaf frequency, WindTimers a per-tree clock. windTimers is a float4 (xy used) so HLSL keeps the same layout.
 	 */
 	struct ObjectTreeAnim
 	{
@@ -414,10 +342,9 @@ namespace DCLF
 	 * The engine's tree manager (FUN_1404381e0, from Main::Update) advances a BSTreeNode's timer (+0x164) by the frame's
 	 * seconds, measures its squared distance to the camera (+0x158), and within its range (manager +0x80) takes the gust
 	 * amplitude (+0x15C) from the timer: 0.25 * sum over k in {1,3,5,7} of sin(k * pi * manager+0x78 * timer), times the
-	 * model's scale (model +0xB0). SetupGeometry then reads them and keeps the timer as the previous one (+0x168). DCLF's
-	 * members take all of it from TreeWindCS: one TreeStatic row per tree node a member draws (the CPU's, written when the
-	 * node is listed), one TreeClock row per node (the GPU's, initialised from the static row's values when its generation
-	 * is new), and one TreeObject per member drawing under a node, whose record's TreeParams and WindTimers the pass writes.
+	 * model's scale (model +0xB0). SetupGeometry reads them and keeps the timer as the previous one (+0x168). For members
+	 * TreeWindCS does it all: per node a TreeStatic row (CPU, when listed) and a TreeClock row (GPU, reseeded on a new
+	 * generation); per member a TreeObject, whose record's TreeParams and WindTimers the pass writes.
 	 */
 	struct TreeStatic
 	{
@@ -429,16 +356,13 @@ namespace DCLF
 		float amplitude = 1.0f;
 		std::uint32_t generation = 0;  // new for every listing: the clock row takes the values above again
 		std::uint32_t animated = 0;    // a model is attached (the manager advances only such a node)
-		// T6b1a: which of the slot's two seed rows (FrameValues' tree seeds, 2 * slot + this) holds its generation's: the values above
-		// are the seed's, the node as the frame's start had it; the coordinator's row holds the generation and this.
+		// Which of the slot's two seed rows (FrameValues' tree seeds, 2 * slot + this) holds its generation's: the values above
+		// are the seed's (the node at frame start); the coordinator's row holds the generation and this.
 		std::uint32_t seedOdd = 0;
 		std::uint32_t padding = 0;
 	};
 	static_assert(sizeof(TreeStatic) == 48);
-	/**
-	 * @brief The row TreeWindCS takes a tree from: its seed (the node's values when listed) with the coordinator's generation. False while
-	 * no seed of the row's generation is there (TreeWindCS.hlsl: keep the two the same).
-	 */
+	/** @brief The row TreeWindCS takes a tree from: its seed, if one of the row's generation is there (must match TreeWindCS.hlsl). */
 	inline bool MergeTreeSeed(const TreeStatic& a_row, const TreeStatic* a_seeds, std::size_t a_seedCount, std::uint32_t a_slot, TreeStatic& a_out)
 	{
 		const std::size_t at = 2ull * a_slot + (a_row.seedOdd & 1u);
@@ -479,10 +403,9 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief The occlusion maps DCLF draws from its own tables, each a view of the precipitation accumulator (render mode
-	 * 0x1C) the engine would otherwise fill by culling and registering the scene lists (Precipitation::SetupMask):
-	 * Skylighting's sky occlusion map, and the precipitation occlusion mask. Each has its own pass rule
-	 * (Skylighting::OcclusionTechnique), technique column, pipeline keys, shadow-build mode, view slot and depth target.
+	 * @brief The occlusion maps DCLF draws from its tables, each a view of the precipitation accumulator (render mode 0x1C) the
+	 * engine would fill by culling the scene lists (Precipitation::SetupMask): Skylighting's sky map and the precipitation mask.
+	 * Each has its own pass rule (Skylighting::OcclusionTechnique), technique column, keys, build mode, view slot and depth target.
 	 */
 	inline constexpr std::uint32_t kOcclusionViews = 2;
 	inline constexpr std::uint32_t kOcclusionSky = 0;
@@ -490,8 +413,8 @@ namespace DCLF
 
 
 	/**
-	 * @brief The main camera's portal and occluder programs as DCLF's walk built them (Engine/PortalViews, T5a2), for FadeStateCS's
-	 * root test and the main view's member test (BuildDrawsCS): a ByteAddressBuffer uploaded with the depth commit.
+	 * @brief The main camera's portal and occluder programs (Engine/Views/PortalViews), for FadeStateCS's and BuildDrawsCS's main
+	 * view tests: a ByteAddressBuffer uploaded with the depth commit.
 	 *
 	 * Layout (bytes): the camera's view planes (NiFrustumPlanes: six {n, d}, the active mask at +96; kPortalSetBytes), then a header
 	 * {program count, 0, 0, 0}, then a directory entry per program (kPortalDirectoryBytes: flags, operator count, set count, first
@@ -509,12 +432,10 @@ namespace DCLF
 	inline constexpr std::uint32_t kPortalSkipView = 1u << 1;  // skipViewFrustum: the view test is not made
 
 	/**
-	 * @brief Fade roots on the GPU (FadeStateCS.hlsl; drawcall-limit-fix.md, "Fades on the GPU"). A member's fade node is
-	 * a root: one FadeRootStatic row per root (the CPU's, written when the node is listed) and one FadeNodeState row (the
-	 * GPU's, seeded from the static row's `initial` when its generation is new). The pass runs the node's OnVisible for
-	 * the main camera whenever its bound is in view, as the engine's cull does (Scene/FadeState.h ports it to C++).
-	 *
-	 * FadeNodeState is the node's own fields, as BSFadeNode keeps them (skyrim-engine-notes.md, "Fade state").
+	 * @brief Fade roots on the GPU (FadeStateCS.hlsl; drawcall-limit-fix.md, "Fades on the GPU"). A member's fade node is a root:
+	 * a FadeRootStatic row (CPU, when listed) and a FadeNodeState row (GPU, reseeded from `initial` on a new generation). The pass
+	 * runs the node's OnVisible for the main camera whenever its bound is in view (C++ port: Scene/Ports/FadeState.h).
+	 * FadeNodeState holds BSFadeNode's own fields (skyrim-engine-notes.md, "Fade state").
 	 */
 	struct FadeNodeState
 	{
@@ -563,8 +484,8 @@ namespace DCLF
 	inline constexpr std::uint32_t kFadeRootBitsShift = 8;    // +0x109
 	inline constexpr std::uint32_t kFadeRootTreeLod = 1u << 16;     // a tree whose LOD switch selects past child 0 (+0x180's +0x12C)
 	inline constexpr std::uint32_t kFadeRootTreeThresholds = 1u << 17;  // a BSTreeNode: a type-4 node takes the tree LOD thresholds
-	// FadeStateCS's state is the members' (PrimaryCull's admitted entries): their members follow the GPU's state. The engine
-	// updates every other root's node itself, and their members keep the distance test (kObjectFadeTest).
+	// A root of PrimaryCull's admitted entries, whose members follow FadeStateCS's state. The engine updates other roots; their
+	// members keep the distance test (kObjectFadeTest).
 	inline constexpr std::uint32_t kFadeRootOwned = 1u << 18;
 	// The node's own flags BSCullingProcess::Process1 (AE 0x140e28390) reads before OnVisible: kAlwaysDraw (bit 11) skips
 	// the bound tests; kPreProcessedNode (bit 12) skips them too unless the process ignores preprocessing, and with bit 20
@@ -572,21 +493,18 @@ namespace DCLF
 	inline constexpr std::uint32_t kFadeRootAlwaysDraw = 1u << 20;
 	inline constexpr std::uint32_t kFadeRootPreprocessed = 1u << 21;
 	inline constexpr std::uint32_t kFadeRootPreprocessHidden = 1u << 22;
-	// An owned root with no engine-drawn part, which the stand-in culls in the engine's place: its state is FadeStateCS's alone,
-	// and its node takes the GPU's milestones and LOD levels from the fade write-back (FadeEvent; DCLF is its one writer since T7b4:
-	// the animation gate's fade update skips it, PrimaryCull::FadeWrittenByDclf). DCLF's own readers take the GPU's
-	// state (a shadow view's fading caster, BuildDrawsCS) or the settled one (ShadowCasterReject, the synthetic pass); the
-	// engine reads the node only on the frames it culls the root again, whose OnVisible starts from it (drawcall-limit-fix.md,
-	// "No fade write-back"). An owned root with engine-drawn parts is culled by the engine, whose OnVisible updates its node;
-	// FadeStateCS runs the same update for its DCLF members (CS_DCLF_FADE_PARITY compares the two).
+	// An owned root with no engine-drawn part, culled by the stand-in: its state is FadeStateCS's alone and its node takes the
+	// GPU's milestones and LOD levels from the fade write-back (FadeEvent; the animation gate skips it,
+	// PrimaryCull::FadeWrittenByDclf). DCLF's readers take the GPU's state (BuildDrawsCS) or the settled one (ShadowCasterReject,
+	// the synthetic pass). An owned root with engine-drawn parts is culled by the engine; FadeStateCS runs the same update for its
+	// DCLF members (CS_DCLF_FADE_PARITY compares).
 	inline constexpr std::uint32_t kFadeRootStoodIn = 1u << 19;
 	inline constexpr std::uint32_t kNoFadeRoot = ~0u;
-	// T6b1a: which of the slot's two seed rows (FrameValues' fade seeds, 2 * slot + this bit) holds its generation's. Every listing
+	// Which of the slot's two seed rows (FrameValues' fade seeds, 2 * slot + this bit) holds its generation's. Every listing
 	// and reseed toggles it, so a new seed never overwrites the row the installed tables' generation still reads.
 	inline constexpr std::uint32_t kFadeRootSeedOdd = 1u << 23;
-	// T7f checklist items 4-5: the root's node is DCLF's alone to write (FadeStateCS reports its milestones, the write-back stores them
-	// at Main::Update's entry, and neither the engine's OnVisible nor the animation gate steps it): every listed root
-	// (PrimaryCull::FadeWrittenByDclf reads it from the accepted tables).
+	// The node is DCLF's alone to write (the write-back stores FadeStateCS's milestones at Main::Update's entry; neither OnVisible
+	// nor the animation gate steps it). Every listed root; PrimaryCull::FadeWrittenByDclf reads it from the accepted tables.
 	inline constexpr std::uint32_t kFadeRootWritten = 1u << 24;
 	// The bits the seed holds (the node's, as FrameValues samples it in the frame) and those the coordinator's row holds (its inputs).
 	inline constexpr std::uint32_t kFadeRootNodeBits = kFadeRootPlanMask | (0xFFu << kFadeRootBitsShift) | kFadeRootTreeThresholds | kFadeRootAlwaysDraw |
@@ -595,9 +513,8 @@ namespace DCLF
 	/** @brief A root slot's seed row in FrameValues' fade seeds (kFadeRootSeedOdd). */
 	inline constexpr std::size_t FadeSeedRow(std::uint32_t a_slot, std::uint32_t a_bits) { return 2ull * a_slot + ((a_bits & kFadeRootSeedOdd) ? 1u : 0u); }
 	/**
-	 * @brief The row FadeStateCS updates with (and BuildDrawsCS seeds a state from): the seed's - the node's state, radius, range,
-	 * bits and LOD scale as FrameValues sampled them in the frame - with the coordinator's object, generation, fadeAmount and bits.
-	 * False while no seed of the row's generation is there (FadeStateCS.hlsl's MergeSeed: keep the two the same).
+	 * @brief The row FadeStateCS updates with: the seed FrameValues sampled, with the coordinator's object, generation, fadeAmount
+	 * and bits. False while no seed of the row's generation is there (must match FadeStateCS.hlsl's MergeSeed).
 	 */
 	inline bool MergeFadeSeed(const FadeRootStatic& a_root, const FadeRootStatic* a_seeds, std::size_t a_seedCount, std::uint32_t a_slot, FadeRootStatic& a_out)
 	{
@@ -648,19 +565,18 @@ namespace DCLF
 		float treeHeightLimit = 0.0f;     // 0x142032fa0, +infinity while the test is off
 		std::uint32_t padding = 0;
 		float divisors[16]{};             // 0x142032e00, per LOD type
-		// The pass's per-frame values, here rather than in its prepared invocation (which is prepared ahead of the commit):
-		// the root slots, the scene frame and the parity log's first root (~0u: none).
+		// Per-frame values (the invocation is prepared ahead of the commit): root slots, scene frame, parity log's first root.
 		std::uint32_t rootCount = 0, sceneFrame = 0, logBase = ~0u, reserved = 0;
-		// The animation job's fade update (FUN_1402cff60 -> FUN_14147a160) on a root its last cull did not reach: the inputs it was
-		// made with (its camera, the fade counter and frame time then), for the roots stamped with this frame (the animated buffer).
+		// The animation job's fade update (FUN_1402cff60 -> FUN_14147a160) on a root its last cull missed: its inputs, for the roots
+		// the animated buffer stamps with this frame.
 		float animEye[3]{};
 		float animLodAdjust = 0.0f;
 		std::int32_t animCounter = 0;
 		float animDeltaTime = 0.0f;
 		std::uint32_t animPadding[2]{};
 	};
-	// The animated buffer's word per root: the scene frame (its low 28 bits) of the batch that updated it, and how many updates
-	// that batch made (the job can update a node more than once between two culls).
+	// The animated buffer's word per root: the scene frame (low 28 bits) of the batch that updated it, and how many updates that
+	// batch made (the job can update a node more than once between two culls).
 	inline constexpr std::uint32_t kFadeAnimatedCountBits = 4;
 	inline constexpr std::uint32_t kFadeAnimatedCountMask = (1u << kFadeAnimatedCountBits) - 1;
 	inline constexpr std::uint32_t FadeAnimatedWord(std::uint32_t a_frame, std::uint32_t a_count)
@@ -691,11 +607,9 @@ namespace DCLF
 	inline constexpr std::uint32_t kFadeLogEntries = 64;
 
 	/**
-	 * @brief The fade write-back (drawcall-limit-fix.md, "The fade write-back", "T7b4/T7b6"): a stood-in root whose fade crossed a
-	 * milestone in FadeStateCS's update (faded out, fading, faded in), or whose leaf LOD level or transition changed (T7b4), with the
-	 * state the engine's readers of the node take from it. The pass appends them after a header (the count, the scene frame - the
-	 * depth commit's, written whether or not anything is appended - and two of padding) in the event list; the host writes them onto
-	 * the nodes in frame order.
+	 * @brief The fade write-back (drawcall-limit-fix.md, "The fade write-back"): a stood-in root whose fade crossed a milestone
+	 * (faded out, fading, faded in) or whose leaf LOD level or transition changed. Appended after a header (count, the depth
+	 * commit's scene frame - always written - and two of padding); the host writes them onto the nodes in frame order.
 	 */
 	struct FadeEvent
 	{
@@ -703,8 +617,8 @@ namespace DCLF
 		std::uint32_t generation = 0;  // its static row's: a slot listed again since is not the event's
 		std::uint32_t flags = 0;       // the state's (kFadeFlagMask)
 		float currentFade = 0.0f;
-		std::uint32_t levels = 0;      // T7b4: the state's +0x152 | +0x153 << 8 (FadeNodeState::levels)
-		float blend = 0.0f;            // T7b4: +0x14C, the LOD cross-fade
+		std::uint32_t levels = 0;      // the state's +0x152 | +0x153 << 8 (FadeNodeState::levels)
+		float blend = 0.0f;            // +0x14C, the LOD cross-fade
 		std::uint32_t padding[2]{};
 	};
 	static_assert(sizeof(FadeEvent) == 32);
@@ -713,24 +627,19 @@ namespace DCLF
 	inline constexpr std::uint32_t kInitialFadeEvents = 1024;
 
 	/**
-	 * @brief One indirect draw, in the argument order of the command signature (BasicRHI packs arguments
-	 * like D3D12, 4-byte aligned): pipeline set index, push data (its pipeline row's and material row's addresses and
-	 * the object word), two vertex buffer views, index buffer view (D3D12 VBV / IBV layouts), DrawIndexed.
+	 * @brief One indirect draw, in the command signature's argument order (BasicRHI packs arguments like D3D12, 4-byte aligned):
+	 * pipeline set index, push data (pipeline row and material row addresses, object word), two vertex buffer views, index buffer
+	 * view (D3D12 VBV / IBV layouts), DrawIndexed.
 	 *
-	 * The second view is slot 1, where a dynamic shape's positions are (FaceSnapshots; the engine's own draw
-	 * binds BSDynamicTriShape::dynamicData there). Every other draw repeats its slot 0 view, which a layout
-	 * without a second stream never reads.
-	 *
-	 * The scene tables hold the geometry part with the pipeline's table index; the main-pass epoch
-	 * replaces it with the pipeline set index and fills in the rows' addresses.
+	 * Slot 1 is a dynamic shape's positions (FaceSnapshots; where the engine binds BSDynamicTriShape::dynamicData); other draws
+	 * repeat slot 0. The tables hold a template with the pipeline's table index; the epoch substitutes the set index and rows.
 	 */
 #pragma pack(push, 4)
 	struct DrawSequence
 	{
 		std::uint32_t pipelineIndex;
-		// The draw's rows (IndirectDraws: the pipeline row's registers, and the material row's), and the object's index in
-		// Coordinator::Tables::objects, by which the shaders reach per-object data. The five words are one contiguous Constant
-		// indirect argument (the layout's per-draw push data), so they stay together, in this order.
+		// The draw's rows (the pipeline row's registers and the material row) and the object's index in SceneTables::objects.
+		// The five words are one contiguous Constant indirect argument (the per-draw push data): keep them together, in order.
 		std::uint64_t pipelineRowAddress;
 		std::uint64_t materialRowAddress;
 		std::uint32_t objectIndex;

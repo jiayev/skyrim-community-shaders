@@ -1,6 +1,8 @@
+// FrameView's frame start and hand-over: the frame inputs posted, the adopted publication installed with the log walked up to it,
+// the claims installed or withdrawn, the LOD gates released, load screens noted and the actors' wetness captured. Render thread.
+
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Runtime/Toggles.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Engine/ImportTimings.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Scene.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
@@ -30,14 +32,13 @@ namespace DCLF::Scene
 		// The frame's engine globals, before anything of the frame reads them; the scene work's passes take them with the
 		// frame inputs.
 		const auto captureStart = std::chrono::steady_clock::now();
-		// The Lighting shader first (once): the globals' material sources read it (no longer learned at the capture drain).
+		// The Lighting shader first (once): the globals' material sources read it.
 		CaptureLightingShader();
 		frameGlobals = FrameGlobals::Capture();
 		SceneCapture::SetMainThread(::GetCurrentThreadId());
-		ImportTimings::NoteMainThread(::GetCurrentThreadId());
 		SceneCapture::SetFrame(frame);
 		// The LOD gates' forced releases so far, once a frame: the frame inputs carry it to the coordinator, and the frame withdraws its
-		// claims while the installed publication was built for an older one (DrawcallLimitFix::BeginSceneFrame).
+		// claims while the installed publication was built for an older one (FrameDriver).
 		frameLodForced = LodGates::ForcedGeneration();
 		captureNs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - captureStart).count());
 		++captureFrames;
@@ -64,8 +65,7 @@ namespace DCLF::Scene
 	void FrameView::HandOverAtFrameStart(std::shared_ptr<const void> a_adopted)
 	{
 		ZoneScopedN("CS.DCLF.Scene.HandOverAtFrameStart");
-		// Nothing of the coordinator's is read here. The notes the scene work held for PrimaryCull are delivered (the join delivers
-		// them first while it stays).
+		// Nothing of the coordinator's is read here. The notes the scene work held for PrimaryCull are delivered first.
 		DeliverPrimaryNotes();
 		// The publication of the snapshot the frame adopted (IndirectDraws::AdoptSnapshot), installed when newer than the installed
 		// one; a snapshot made again for the installed one (new recordings, the frame's inputs moved) brings none.
@@ -121,8 +121,6 @@ namespace DCLF::Scene
 					break;
 				note = next;
 				auto& deltas = note->value;
-				// A commit's time to its installation, by the geometries it joined.
-				publicationStats.installDelay[AgeBucket(frame - deltas.commitFrame)] += deltas.joined.size();
 				installNotes.emplace_back(std::move(deltas.joined), std::move(deltas.left));
 				// The gates these claims flipped, released by the frame installing them (ReleaseGates).
 				append(frameGateReleases, deltas.gateFlips);
@@ -250,8 +248,7 @@ namespace DCLF::Scene
 
 	std::vector<ShadingItem> FrameView::PeekShadingItems() const
 	{
-		// Those the log holds past the frame's cursor (published, not taken), then those named since the last publication (the parities'
-		// inline scene work: the coordinator is idle).
+		// Those the log holds past the frame's cursor (published, not taken).
 		std::vector<ShadingItem> items;
 		using Log = PublicationLog<PublicationDeltas>;
 		for (const Log::Node* next = Log::Next(deltasCursor ? deltasCursor : channels.publicationLog.First()); next; next = Log::Next(const_cast<Log::Node*>(next)))
@@ -300,9 +297,7 @@ namespace DCLF::Scene
 		switchEventThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 		// Nothing may walk the scene graph while a load screen is up. A load tears down and rebuilds
 		// TES::objRoot and the cell 3D under it, and the attach events queued across it name subtrees that
-		// are still being assembled; walking either gives a pointer that is stale or simply garbage. That
-		// is what crashed in RefreshCategoryNodes' objRoot walk (a child that read back as
-		// 0x0001000000020001) and, the day before, in AddSubtree.
+		// are still being assembled; walking either gives a pointer that is stale or garbage.
 		//
 		// The queues are still drained (by the coordinator's passes, their one consumer), because they hold references to
 		// attached subtrees and must not grow while the world is not rendered - but the events are discarded for the tracking rather
@@ -318,11 +313,9 @@ namespace DCLF::Scene
 			return false;
 		}
 		// Only the walking stops. The tracked set is deliberately left alone until the load is over:
-		// dropping it here releases the game buffers the tables reference while the previous frame's
-		// epoch is still in flight, and a draw then reads a freed device address. That is a
-		// VK_ERROR_DEVICE_LOST on the teleport, which is exactly what happened when this branch cleared
-		// eagerly. The entries hold NiPointers, so holding them across the load is the safe direction,
-		// and the rescan replaces them on a normal frame.
+		// dropping it here would release the game buffers the tables reference while the previous frame's
+		// epoch is still in flight, and a draw would read a freed device address (device lost). The entries
+		// hold NiPointers, so holding them across the load is safe, and the rescan replaces them on a normal frame.
 		// What the load invalidates of the coordinator's (the rescan, the drained events not yet applied, the move events) is
 		// dropped by the coordinator, told by a marker batch posted once a load (ApplyLoading): nothing of its state is written here.
 		// LoadingSeen first, then the marker: a pass that takes the marker sees the load, and drains into the mirror's carry.
@@ -341,7 +334,7 @@ namespace DCLF::Scene
 		// engine. Nothing is withheld until the next commit publishes the set again.
 		PublishFrameClaims(nullptr);
 		// While it is up the engine's events wake no pass (a load pushes thousands a frame, each for the mirror's carry alone): one
-		// pass drains them here, once a Present and frame start, as the old ingestion did.
+		// pass drains them here, once a Present and frame start.
 		SetScenePassLoading(true);
 		WakeScenePass(SceneWake::LoadDrain);
 		return true;

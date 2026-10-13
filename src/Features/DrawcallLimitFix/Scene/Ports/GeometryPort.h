@@ -1,5 +1,8 @@
 #pragma once
 
+// SetupGeometry's per-pipeline and per-frame PerGeometry values: PipelineFrame (sampled by the render thread at Prepass) and the
+// pure functions that write a pipeline's block from it. Per-object values are LightingConstants' (ObjectGeometryConstants).
+
 #include <array>
 #include <cstdint>
 #include <string>
@@ -16,7 +19,7 @@ namespace DCLF::GeometryPort
 	inline constexpr std::uint32_t kMainPassRenderFlags = 0x41;
 
 	/**
-	 * @brief The per-frame inputs of a pipeline's PerGeometry block (T6b2): what BSLightingShader::SetupGeometry (AE 0x1414dd040)
+	 * @brief The per-frame inputs of a pipeline's PerGeometry block: what BSLightingShader::SetupGeometry (AE 0x1414dd040)
 	 * writes that is neither the object's nor fixed by the pass descriptor, as the engine would compute it now. Sampled by the
 	 * render thread once a frame at Prepass (cheap global reads; SamplePipelineFrame), after which nothing of the engine is read:
 	 * PipelineGeometryConstants is a pure function of a descriptor and this.
@@ -63,9 +66,9 @@ namespace DCLF::GeometryPort
 	};
 
 	/**
-	 * @brief This frame's (render thread, inside the engine-read window). Sampled at Prepass (Coordinator::RefreshFrameConstants), not
+	 * @brief This frame's (render thread, inside the engine-read window). Sampled at Prepass (FrameView::RefreshFrameConstants), not
 	 * the frame's start: the eye is the current accumulator's and posAdjust the shadow state's, which are the main camera's only
-	 * there (at EarlyPrepass and before they still belong to the shadow-map camera; DrawcallLimitFix::Prepass).
+	 * there (at EarlyPrepass and before they still belong to the shadow-map camera).
 	 */
 	PipelineFrame SamplePipelineFrame();
 

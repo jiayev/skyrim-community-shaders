@@ -1,3 +1,7 @@
+// DCLF's render graph passes and the extensions that add them (main opaque, forward, shadow views, occlusion, HZB, tree LOD and
+// wind, fade states, visibility events). Declared at graph build; prepared and recorded on ORG's host thread from the epoch
+// revision's shape (RevisionShapes), never from the frame's live state.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
@@ -5,8 +9,8 @@
 namespace DCLF::Draws
 {
 	/**
-	 * @brief Tree LOD's draw (dclf-lod.md, "Tree LOD: the draws"): its pipeline, its push data (the draw row's address, and whether
-	 * its instances start after phase 1's: phase 2's depth draw), its arguments in the list's header (TreeLod::VisibleHeader).
+	 * @brief Records tree LOD's draw (dclf-lod.md): push data is the draw row's address and whether this is phase 2's depth draw;
+	 * arguments come from the list's header (TreeLod::VisibleHeader).
 	 */
 	void RecordTreeLodDraw(rhi::CommandList& a_commands, const TreeLodPipelines& a_pipelines, bool a_colour, bool a_phaseTwo, std::uint64_t a_draw, rhi::ResourceHandle a_visible)
 	{
@@ -32,10 +36,9 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief Tree LOD's cull (TreeLodCullCS.hlsl), in the depth segment's two phases like BuildDraws': phase 1 tests every instance
-	 * record against the frustum and the HZB the previous frame left, before the Z-prepass's draw; phase 2 tests phase 1's
-	 * occluded ones against the HZB rebuilt from this frame's depth, before the rescues' draw. Both append to the list the passes
-	 * draw. The depth commit uploaded the tables' changes, the draw row and the list's header with no instances.
+	 * @brief Tree LOD's cull (TreeLodCullCS.hlsl) in the depth segment's two phases, like BuildDraws: phase 1 tests every instance
+	 * against the frustum and last frame's HZB; phase 2 retests phase 1's occluded ones against the HZB rebuilt this frame. Both
+	 * append to the list the passes draw.
 	 */
 	class TreeLodCullPass final : public org::TypedRenderGraphPass<TreeLodCullPass, TreeLodCullPrepared, TreeLodCullBindings>
 	{
@@ -52,15 +55,13 @@ namespace DCLF::Draws
 			bindings.instances = a_builder.ShaderResource(*scene.treeLodInstances).View();
 			bindings.draw = a_builder.ShaderResource(scene.treeLodDraw).View();
 			bindings.visible = a_builder.UnorderedAccess(*scene.treeLodVisible).View();
-			// As BuildDraws': phase 1 sees the HZB the previous frame left, phase 2 the one just rebuilt; their places around the
-			// build (GatherStructuralPasses) are what makes the difference.
+			// Which HZB a phase sees depends on its place around the HZB build (GatherStructuralPasses).
 			if (resources->hzb)
 				bindings.hzb = a_builder.ShaderResource(resources->hzb).View();
 			return bindings;
 		}
 
-		// What the recording depends on: the tables' layout (a growth gives them new views and a larger dispatch) and the depth
-		// segment's shape (its latch).
+		// The recording depends on the tables' layout (growth changes views and dispatch) and the depth segment's shape.
 		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
 			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
@@ -92,8 +93,7 @@ namespace DCLF::Draws
 				constants.hzbSizePacked = (resources->hzbWidth & 0xFFFF) | (resources->hzbHeight << 16);
 				constants.hzbMips = resources->hzbMips;
 			}
-			// Every record the tables hold (phase 1), or every retest entry they can (phase 2): the shader stops at the draw row's
-			// slots and each slot's count, or at the retest count.
+			// Dispatched for full capacity; the shader stops at the real counts.
 			prepared.groups = static_cast<std::uint32_t>((records + kTreeLodCullGroup - 1) / kTreeLodCullGroup);
 			return prepared;
 		}
@@ -103,7 +103,7 @@ namespace DCLF::Draws
 			if (!a_frame.program || !a_frame.groups || !a_frame.latch)
 				return;
 			auto constants = a_frame.constants;
-			// The depth segment's BuildDrawsLatch in this frame slot (RecordLatchedDispatch's offset 0).
+			// The depth segment's BuildDrawsLatch in this frame slot.
 			constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
@@ -127,10 +127,7 @@ namespace DCLF::Draws
 		std::shared_ptr<SceneBuffers::TreeLodCounts> counts;
 	};
 
-	/**
-	 * @brief Tree LOD's cull counts (SceneBuffers::TreeLodCounts): the list's header after the depth segment's second phase, to the
-	 * frame slot's host buffer; what the slot held from its last frame is summed first.
-	 */
+	/** @brief Copies tree LOD's list header to the frame slot's host buffer after phase 2, first summing what the slot held. */
 	class TreeLodReadbackPass final : public org::TypedRenderGraphPass<TreeLodReadbackPass, TreeLodReadbackPrepared, TreeLodReadbackBindings>
 	{
 	public:
@@ -186,8 +183,7 @@ namespace DCLF::Draws
 	class MainOpaquePass final : public org::TypedRenderGraphPass<MainOpaquePass, PreparedDraws, PassBindings>
 	{
 	public:
-		// phaseTwo: the second depth draw of the two-phase culling, which draws only what the rebuilt HZB
-		// brought back, from the reserved part of the sequence buffer.
+		// phaseTwo: the second depth draw, of what the rebuilt HZB brought back (the sequence buffer's reserved part).
 		MainOpaquePass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, bool a_phaseTwo = false) :
 			resources(std::move(a_resources)), segment(a_segment), phaseTwo(a_phaseTwo) {}
 
@@ -201,25 +197,24 @@ namespace DCLF::Draws
 			bindings.depth = a_builder.DepthReadWrite(resources->nativeDepth).View();
 			bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
 			bindings.count = a_builder.IndirectArguments(resources->count);
-			// Read through device addresses; declared so the graph orders them after their uploads.
+			// Read by device address; declared so the graph orders them after their uploads.
 			a_builder.ShaderResource(*resources->materialRows.buffer, noViews);
 			a_builder.ShaderResource(*resources->pipelineRows.buffer, noViews);
 			a_builder.ShaderResource(*resources->scene->objects, noViews);
 			a_builder.ShaderResource(*resources->scene->extras, noViews);
 			if (segment == RenderGraphRuntime::Segment::ZPrepass) {
-				// The plain draws (DCLF_PULLED): the vertex stage reads the sequences and the face positions through their addresses,
-				// the draws index the pool, and each bucket's count word is its draw's count.
+				// The plain draws (DCLF_PULLED) read sequences and face positions by address and index the pool.
 				a_builder.ShaderResource(*resources->sequences, noViews);
 				a_builder.ShaderResource(*resources->scene->facePositions, noViews);
 				bindings.pool = a_builder.IndexBuffer(*resources->pool->indices);
 				bindings.bucketCounts = a_builder.IndirectArguments(*resources->zBucketCounts[phaseTwo ? 1 : 0]).Resource();
-				// T7c1: Terrain Blending's terrain depth, which the near terrain blocks' twin buckets draw into after the main depth.
+				// Terrain Blending's terrain depth, drawn by the near terrain blocks' twin buckets.
 				if (resources->terrainDepth)
 					bindings.terrainDepth = a_builder.DepthReadWrite(resources->terrainDepth).View();
 			} else {
-				// Read by the input assembler (the face draws' second stream), after the commit's uploads into it.
+				// The face draws' second vertex stream.
 				a_builder.VertexBuffer(*resources->scene->facePositions);
-				// The foliage record (Policy::RecordFoliagePixels): the alpha-tested draws write what each pixel shows, through its buffers' addresses.
+				// The foliage record (Policy::RecordFoliagePixels): alpha-tested draws write per-pixel ids by address.
 				if (const auto& foliage = resources->foliage) {
 					const std::span<const org::UavView> noUavs{};
 					for (std::uint32_t h = 0; h < 2; ++h) {
@@ -230,7 +225,7 @@ namespace DCLF::Draws
 			}
 			DeclareFrameBuffers(a_builder, *resources);
 			a_builder.ShaderResource(resources->frameConstants, noViews);  // the frame record's slots, by address
-			// Tree LOD's draw: its arguments, and the tables its vertex stage reads through their addresses.
+			// Tree LOD's arguments and the tables its vertex stage reads by address.
 			if (const auto& scene = *resources->scene; scene.treeLodCull) {
 				bindings.treeLodVisible = a_builder.IndirectArguments(*scene.treeLodVisible).Resource();
 				for (const auto& table : { scene.treeLodShapes, scene.treeLodInstances, scene.treeLodMeshes })
@@ -248,7 +243,7 @@ namespace DCLF::Draws
 			a_out.push_back(static_cast<std::uint64_t>(now));
 			a_out.push_back(phaseTwo ? 1 : 0);
 			a_out.push_back(resources->pool ? resources->pool->layout : 0);
-			// Tree LOD's pipelines, once built (and again after a target change).
+			// Tree LOD's pipelines (built late, rebuilt on a target change).
 			a_out.push_back(reinterpret_cast<std::uintptr_t>(resources->scene->treeLodPipelines.load(std::memory_order_acquire).get()));
 		}
 
@@ -303,25 +298,22 @@ namespace DCLF::Draws
 			begin.minDepth = frame.minDepth;
 			begin.maxDepth = frame.maxDepth;
 
-			// DCLF's Z-prepass: depth only, like the native one. It adds DCLF's objects to the depth the native
-			// passes already wrote, so they occlude and are occluded correctly. It runs in its own segment,
-			// inside the native depth pass, so that the rest of the frame - the native draws that test depth,
-			// the sky and everything that reads the depth buffer afterwards - sees DCLF's objects.
+			// The Z-prepass adds DCLF's objects to the native depth, inside the native depth pass, so everything after (native
+			// depth-tested draws, the sky, depth readers) sees them.
 			auto depth = LoadedDepth(a_recording, a_prepared.depthView);
 			begin.depth = &depth;
 			begin.debugName = "DCLF depth";
 			auto* stats = a_prepared.stats;
 			const std::uint32_t statsSlot = a_recording.FrameSlot();
 			const auto depthKind = a_prepared.phaseTwo ? PassStats::kDepthPhaseTwo : PassStats::kDepth;
-			// A pass of DCLF's draws: its attachments, the layout, the topology and the frame push data - on the command list,
-			// and on a preprocess state list, identically.
+			// Begins a draw pass identically on the command list and on a preprocess state list.
 			auto beginDrawPass = [&](rhi::CommandList& a_list, const rhi::PassBeginInfo& a_begin) {
 				a_list.BeginPass(a_begin);
 				a_list.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
 				a_list.BindLayout(frame.indirect.layout);
 				a_list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
 			};
-			// The frame slot's preprocess state list, with this pass's heaps; null without explicit preprocessing.
+			// The frame slot's preprocess state list; null without explicit preprocessing.
 			auto preprocessState = [&]() -> rhi::CommandList* {
 				if (!a_prepared.preprocess)
 					return nullptr;
@@ -330,11 +322,9 @@ namespace DCLF::Draws
 				return &state;
 			};
 			if (zPrepass) {
-				// Plain indexed indirect draws (DCLF_PULLED): one per bucket, a pipeline slot's range of the phase's sequences (phase 2's
-				// past sequenceDraws, its rescues), with the slot's pulled depth pipeline, its push words (kZDrawPush*: the range's first
-				// sequence, the slot's pipeline row, its vertex layout) and its count word, from the pool. The vertex stage fetches each
-				// draw's vertices and rows through the sequence its instance names (Lighting.hlsl), since a plain draw cannot bind a
-				// vertex buffer or push data of its own.
+				// Plain indexed indirect draws (DCLF_PULLED), one per bucket over its range of the phase's sequences (phase 2's past
+				// sequenceDraws), with push words kZDrawPush* and the bucket's count word. A plain draw cannot bind its own vertex
+				// buffer or push data, so the vertex stage fetches through the sequence its instance names (Lighting.hlsl).
 				(void)count;
 				if (stats)
 					stats->Start(commands, statsSlot, depthKind);
@@ -349,26 +339,25 @@ namespace DCLF::Draws
 				const auto counts = a_recording.Resolve(a_bindings.bucketCounts).GetHandle();
 				const std::uint64_t sequencesAddress = device.GetBufferDeviceAddress({ sequences, 0 });
 				const std::uint64_t phaseBase = a_prepared.phaseTwo ? std::uint64_t(frame.sequenceDraws) : 0;
-				// A call's draws, its depth offset word set or not (kZDrawPushOffsetDepth).
 				auto drawCall = [&](const PassFrame::ZCall& a_call, bool a_offsetDepth) {
 					RecordBucketDraw(commands, frame.indirect.zDrawSignature, sequences, sequencesAddress, phaseBase + a_call.first, a_call.pipeline, counts, a_call.bucket,
 						a_call.capacity, a_offsetDepth);
 				};
-				// T7c1: a terrain group 1 bucket's twin (its near blocks) goes into the main depth with Terrain Blending's offset, as that
-				// feature's depth hook draws them the second time (TerrainBlending::TerrainShaderHacks, OFFSET_DEPTH).
+				// A terrain group 1 twin (near blocks) draws into the main depth with Terrain Blending's offset, as its depth hook
+				// does (TerrainBlending::TerrainShaderHacks, OFFSET_DEPTH).
 				bool terrainNear = false;
 				for (const auto& call : frame.zCalls) {
 					drawCall(call, call.terrainNear);
 					terrainNear = terrainNear || call.terrainNear;
 				}
-				// Tree LOD's depth: one instanced draw of the phase's culled records (TreeLodCullPass).
+				// Tree LOD's depth: one instanced draw of the phase's culled records.
 				if (a_prepared.treeLod)
 					RecordTreeLodDraw(commands, *a_prepared.treeLod, false, a_prepared.phaseTwo, a_prepared.treeLodDraw, a_recording.Resolve(a_bindings.treeLodVisible).GetHandle());
 				if (stats)
 					stats->End(commands, statsSlot, depthKind);
 				commands.EndPass();
-				// T7c1, "DCLF terrain depth": the twins again, without the offset, into Terrain Blending's terrain depth - the first of that
-				// feature's two draws of a near block - which its blend (TerrainBlending::BlendPrepassDepths) reads after this epoch.
+				// The twins again without the offset into Terrain Blending's terrain depth (its first draw of a near block), which
+				// TerrainBlending::BlendPrepassDepths reads after this epoch.
 				if (terrainNear && a_prepared.terrainDepth) {
 					rhi::DepthAttachment terrainDepth = depth;
 					terrainDepth.dsv = a_recording.Resolve(a_prepared.terrainDepthView);
@@ -390,21 +379,16 @@ namespace DCLF::Draws
 				return;
 			}
 
-			// The main pass: depth test EQUAL against the Z-prepass's (its pipelines do not write depth; the
-			// attachment stays in the layout the pass declared).
-
-			// The opaque decals' depth, before any colour: the engine's main pass
-			// draws its opaque decal group with depth writes and its bias, so this is where the frame's depth has them, and
-			// with it every host fragment under an opaque decal texel fails the colour pass's EQUAL test and is not shaded -
-			// the decal overwrites every target there (blending off, full masks). The group's depth variants test LESS_EQUAL
-			// with the decal's bias and run the alpha test, so a transparent texel leaves the host's depth. The blended
-			// group has none: it writes no depth natively, and it blends over its host, which must still be shaded.
-			// nvperf ranges around the colour pass's parts (NvPerfBridge::PushPassRange), when a capture selects them.
+			// The main pass tests depth EQUAL against the Z-prepass and writes none.
+			// Opaque decal depth goes first: the engine draws its opaque decal group with depth writes and bias, so a host fragment
+			// under an opaque decal texel fails the colour EQUAL test (the decal overwrites every target there). The depth variants
+			// test LESS_EQUAL with the bias and alpha-test, so a transparent texel keeps the host's depth. Blended decals write no
+			// depth: their host must still be shaded.
+			// nvperf ranges around the colour pass's parts, when a capture selects them.
 			void* const nvCommands = NvPerfBridge::Active() ? rhi::vulkan::get_cmd_list(commands) : nullptr;
 			auto subRange = [&](const char* a_name) { return nvCommands && NvPerfBridge::PushPassRange(nvCommands, a_name); };
 			auto endSubRange = [&](bool a_pushed) { if (nvCommands) NvPerfBridge::PopPassRange(nvCommands, a_pushed); };
-			// The colour passes, every target loaded: the main one and the decals'; each with the layout, the topology and the frame
-			// push data.
+			// The colour passes, every target loaded.
 			rhi::PassBeginInfo mainBegin = begin;
 			mainBegin.colors = { colors.data(), a_prepared.targetCount };
 			mainBegin.debugName = "DCLF main opaque";
@@ -418,15 +402,15 @@ namespace DCLF::Draws
 				return (2 * std::uint64_t(frame.sequenceDraws) + std::uint64_t(a_group) * frame.sequenceDecals) * sizeof(DrawSequence);
 			};
 			auto decalCount = [](std::uint32_t a_group) { return std::uint64_t(DecalCountWord(a_group)) * sizeof(std::uint32_t); };
-			// T7c1: the terrain groups' ranges (GpuLayouts.h, kTerrainGroups), in phase 2's, and their count words.
+			// The terrain groups' ranges (kTerrainGroups), within phase 2's, and their count words.
 			auto terrainArguments = [&](std::uint32_t a_group) {
 				return (std::uint64_t(frame.sequenceDraws) + (a_group == 0 ? 0u : frame.terrainCapacity[0])) * sizeof(DrawSequence);
 			};
 			auto terrainCount = [](std::uint32_t a_group) { return std::uint64_t(kCountTerrainGroupWord + a_group) * sizeof(std::uint32_t); };
 			const bool anyTerrain = frame.terrainCapacity[0] || frame.terrainCapacity[1];
 			const bool anyDecals = frame.decalCapacity[0] || frame.decalCapacity[1] || frame.decalCapacity[2] || anyTerrain;
-			// The second pass's calls, in order: the opaque decals and the multi-index layers, then (T7c1) Terrain Blending's terrain
-			// and the meshes it redraws after it - as its replay follows the engine's opaque groups - then the blended decals.
+			// The second pass's calls in order: opaque decals and multi-index layers, Terrain Blending's terrain and the meshes it
+			// redraws (its replay follows the engine's opaque groups), then blended decals.
 			auto secondPass = [&](auto&& a_call) {
 				for (const std::uint32_t group : kDecalDrawOrder) {
 					if (group == 1)
@@ -440,11 +424,9 @@ namespace DCLF::Draws
 				}
 			};
 
-			// Every call below is preprocessed here, before the first pass: generated inside the pass
-			// instead, by NVIDIA's driver, each colour call cost a fixed ~170 us of idle GPU in these eight-target passes. The
-			// preprocess is generated for the state list's state - each call's pass begun and set up exactly as it is below,
-			// with the same heaps - which the execution must match; the sequences and counts are final before this pass (the
-			// culling wrote them).
+			// Every call is preprocessed before the first pass: generated inside the pass by NVIDIA's driver, each colour call idles
+			// the GPU for a fixed time in these eight-target passes. The state list must match the execution below exactly (same
+			// pass setup and heaps); sequences and counts are final (the culling wrote them).
 			if (auto* preprocessList = preprocessState()) {
 				auto& state = *preprocessList;
 				if (frame.decalCapacity[0]) {
@@ -484,8 +466,7 @@ namespace DCLF::Draws
 				commands.ExecuteIndirect(colourSignature, sequences, 0, count, 0, frame.drawCapacity);
 				endSubRange(drawPart);
 			}
-			// Tree LOD's colour, testing EQUAL against its Z-prepass draw: the pulled pipeline under the Z-prepass's layout, whose
-			// frame push data is the main layout's.
+			// Tree LOD's colour tests EQUAL against its Z-prepass draw, under the Z-prepass layout (same frame push data).
 			if (a_prepared.treeLod) {
 				const bool treePart = subRange("cs.dclf.colour.tree-lod");
 				commands.BindLayout(frame.indirect.zLayout);
@@ -500,13 +481,10 @@ namespace DCLF::Draws
 			if (stats)
 				stats->Resolve(commands, statsSlot, PassStats::kColour);
 
-			// The second pass: decals, after every opaque draw, in the engine's order - its opaque decal
-			// group, the multi-index layers, then its blended group, each from its own fixed-slot range and its own count
-			// word. The pipelines test depth LESS_EQUAL with the engine's decal bias; only the layers write depth here (the
-			// opaque group's is already there, from the decal depth pass). Same attachments, all loaded.
-			// T7c1: before the blended group, Terrain Blending's terrain (blend mode 1, LESS_EQUAL with depth writes, its mask t55 the
-			// frame record's) and then its no-blend meshes (EQUAL), each appended to its own range, as that feature replays them after
-			// the opaque groups and before the engine's blended decals (Deferred::Hooks::Main_RenderWorld_BlendedDecals).
+			// The second pass: decals after every opaque draw in the engine's order, each group from its own range and count word,
+			// LESS_EQUAL with the engine's decal bias; only the layers write depth here (opaque decal depth is already in). Before the
+			// blended group, Terrain Blending's terrain (blend mode 1, LESS_EQUAL with depth writes, mask t55 in the frame record) and
+			// its no-blend meshes (EQUAL), as that feature replays them (Deferred::Hooks::Main_RenderWorld_BlendedDecals).
 			if (anyDecals) {
 				const bool decalPart = subRange("cs.dclf.colour.decals");
 				beginDrawPass(commands, decalBegin);
@@ -527,11 +505,10 @@ namespace DCLF::Draws
 	};
 
 	/*
-	 * T7d: the forward epoch's passes (drawcall-limit-fix.md, "The forward epoch (T7d)"). The colour segment's BuildDraws appends every
-	 * visible forward draw (Records.h, kObjectForward) to the forward range's staging half with its view depth; ForwardSortPass, in the
-	 * colour epoch, writes them back to front into the sorted half; ForwardDrawPass, in the forward epoch (the engine's blended draw,
-	 * FUN_1414b39d0, after the deferred composite), draws the sorted half through the colour signature, on the colour pass's
-	 * attachments, every one loaded: the forward keys' pipelines write the main target alone.
+	 * The forward epoch's passes (drawcall-limit-fix.md). The colour BuildDraws appends visible forward draws (kObjectForward) with
+	 * their view depth to the staging half; ForwardSortPass (colour epoch) sorts them back to front into the sorted half;
+	 * ForwardDrawPass draws it in the forward epoch (the engine's blended draw, FUN_1414b39d0, after the deferred composite) on the
+	 * colour pass's attachments; forward pipelines write the main target alone.
 	 */
 	namespace
 	{
@@ -577,7 +554,7 @@ namespace DCLF::Draws
 				constants.sequenceStride = static_cast<std::uint32_t>(sizeof(DrawSequence));
 				constants.countOffset = range.countOffset;
 				constants.options = range.countAtOffset ? ForwardSortConstants::kCountOffset : 0u;
-				// Every slot the staging half can hold, each thread past the count returning.
+				// Full capacity; threads past the count return.
 				prepared.groups = (range.capacity + kForwardSortGroup - 1) / kForwardSortGroup;
 				return prepared;
 			}
@@ -608,7 +585,7 @@ namespace DCLF::Draws
 
 		PassBindings Declare(org::PassBuilder& a_builder)
 		{
-			// What the colour pass declares (MainOpaquePass), for the same draws' reads: the forward keys' pipelines are the main set's.
+			// As MainOpaquePass: the forward pipelines are the main set's.
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			const std::span<const org::SrvView> noViews{};
 			PassBindings bindings{};
@@ -636,7 +613,7 @@ namespace DCLF::Draws
 		PreparedDraws Prepare(const PassBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			PreparedDraws prepared{};
-			// The forward epoch's recording is prepared for the colour shape (Revision/Assemble.cpp: Epoch::Forward).
+			// The forward epoch is prepared for the colour shape (Revision/Assemble.cpp).
 			auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::MainOpaque);
 			if (!frame || !frame->forwardCapacity || !frame->indirect.valid || !resources->forwardSort || !resources->preprocessForward)
 				return prepared;
@@ -655,8 +632,7 @@ namespace DCLF::Draws
 			if (!a_prepared.frame || !a_prepared.preprocess)
 				return;
 			const auto& frame = *a_prepared.frame;
-			// Every attachment loaded: the main target holds the composited frame the draws blend onto, the G-buffer attachments are
-			// masked off by the forward pipelines (and keep what the frame's later passes read).
+			// Every attachment loaded: the draws blend onto the composited frame; G-buffer targets are masked off.
 			auto colors = LoadedColours(a_recording, a_prepared.targetViews, a_bindings.targets, a_prepared.targetCount);
 			auto depth = LoadedDepth(a_recording, a_prepared.depthView);
 			rhi::PassBeginInfo begin{};
@@ -669,7 +645,7 @@ namespace DCLF::Draws
 			begin.debugName = "DCLF forward";
 			const auto sequences = a_recording.Resolve(a_bindings.sequences).GetHandle();
 			const auto count = a_recording.Resolve(a_bindings.count).GetHandle();
-			// The sorted half (ForwardSortCS.hlsl), its count the forward count word (BuildDrawsCS.hlsl appended that many).
+			// The sorted half, counted by the forward count word.
 			const std::uint64_t arguments = (ForwardStagingSlot(frame) + frame.forwardCapacity) * sizeof(DrawSequence);
 			const std::uint64_t countOffset = std::uint64_t(kCountForwardWord) * sizeof(std::uint32_t);
 			RecordPreprocessedDraw(a_recording, *a_prepared.preprocess, begin, frame.resourceHeap, frame.samplerHeap, frame.indirect.layout, a_prepared.framePushWords,
@@ -681,12 +657,10 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * T7d's refraction (drawcall-limit-fix.md, "Refraction (T7d)"): the refraction range's draws, which the colour segment's BuildDraws
-	 * appended (pooled), drawn in the forward epoch into the refraction normals (kREFRACTION_NORMALS, Resources::refractionNormals) with
-	 * one plain indexed indirect draw of the refraction pipeline (DrawPipelines::RequestRefraction; Utility.hlsl, DCLF_REFRACTION),
-	 * testing the main depth. The target is cleared first to FUN_1414b4860's clear colour (0.5, 0.5, 0, 0: no offset, no mask), as the
-	 * engine clears it before its own group 5 (IndirectDraws::ExecuteForward then marks the normals begun, so the engine's later draws into
-	 * them add to DCLF's rather than clearing them).
+	 * The refraction pass (drawcall-limit-fix.md): the refraction range's draws, drawn in the forward epoch into kREFRACTION_NORMALS
+	 * with one plain indexed indirect draw (DCLF_REFRACTION), testing the main depth. The target is first cleared to FUN_1414b4860's
+	 * colour (0.5, 0.5, 0, 0: no offset, no mask), as the engine does before its group 5; ExecuteForward then marks the normals
+	 * begun so the engine's later draws add to DCLF's.
 	 */
 	struct RefractionBindings
 	{
@@ -714,7 +688,7 @@ namespace DCLF::Draws
 			RefractionBindings bindings{};
 			bindings.target = a_builder.RenderTarget(resources->refractionNormals).View();
 			bindings.depth = a_builder.DepthReadWrite(resources->nativeDepth).View();
-			// The sequences are the draws' arguments and what their vertex stage reads by device address (DCLF_PULLED).
+			// The sequences are both arguments and read by address (DCLF_PULLED).
 			bindings.sequences = a_builder.IndirectArguments(*resources->sequences).Resource();
 			a_builder.ShaderResource(*resources->sequences, noViews);
 			bindings.count = a_builder.IndirectArguments(resources->count);
@@ -723,7 +697,7 @@ namespace DCLF::Draws
 			a_builder.ShaderResource(*resources->pipelineRows.buffer, noViews);
 			a_builder.ShaderResource(*resources->scene->objects, noViews);
 			a_builder.ShaderResource(*resources->scene->extras, noViews);
-			// A face shape's positions (the second stream), and the geometries' vertices and indices, read through their addresses.
+			// Face positions, read by address.
 			a_builder.ShaderResource(*resources->scene->facePositions, noViews);
 			DeclareFrameBuffers(a_builder, *resources, false);
 			a_builder.ShaderResource(resources->frameConstants, noViews);
@@ -740,7 +714,7 @@ namespace DCLF::Draws
 		RefractionPrepared Prepare(const RefractionBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			RefractionPrepared prepared{};
-			// The forward epoch's recording is prepared for the colour shape (Revision/Assemble.cpp: Epoch::Forward), as ForwardDrawPass's.
+			// Prepared for the colour shape, as ForwardDrawPass.
 			auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::MainOpaque);
 			if (!frame || !frame->refractionCapacity || !frame->indirect.valid || !frame->indirect.refraction.valid() || !frame->indirect.refractionDrawSignature.valid() ||
 				frame->indirect.refractionFormat != resources->refractionFormat || !resources->pool)
@@ -781,8 +755,8 @@ namespace DCLF::Draws
 				a_words[0] = static_cast<std::uint32_t>(a_value);
 				a_words[1] = static_cast<std::uint32_t>(a_value >> 32);
 			};
-			// The pass's blocks (the shadow views' layout, kShadowPush*): the colour epoch's frame record and frame slots (its VS_PerFrame:
-			// the main camera), the zeroed shared light block as the zero block.
+			// Blocks in the shadow views' layout (kShadowPush*): the colour epoch's frame record and slots (main camera), and the zeroed
+			// shared light block as the zero block.
 			const std::uint64_t constants = a_prepared.frameConstants;
 			std::uint32_t pass[kShadowPushWords]{};
 			split(pass + kShadowPushFrameRecord, constants + std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
@@ -794,8 +768,8 @@ namespace DCLF::Draws
 			const auto sequences = a_recording.Resolve(a_bindings.sequences).GetHandle();
 			const auto count = a_recording.Resolve(a_bindings.count).GetHandle();
 			const std::uint64_t first = RefractionSlot(frame) * sizeof(DrawSequence);
-			// The call's words (kDrawPushWords): the range's first sequence, which its instance indexes, and the frame's LodFadeFrame (the
-			// lighting slot's, after FrameLighting) in the material rows' words, which the refraction stage reads instead.
+			// Call words: the range's first sequence, and the frame's LodFadeFrame (after FrameLighting in the lighting slot) in the
+			// material rows' words, which the refraction stage reads instead.
 			std::uint32_t words[kDrawPushWords]{};
 			split(words + kShadowDrawPushSequences, device.GetBufferDeviceAddress({ sequences, 0 }) + first);
 			split(words + kShadowDrawPushMaterialRows, constants + std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting));
@@ -872,28 +846,24 @@ namespace DCLF::Draws
 			bindings.visibility = a_builder.UnorderedAccess(*resources->visibility).View();
 			if (resources->frustum)
 				bindings.frustum = a_builder.UnorderedAccess(*resources->frustum).View();
-			// The main camera's first phase tests a member against its root's portal program (Records.h, kPortal*).
+			// Phase 1 tests a member against its root's portal program (kPortal*).
 			if (resources->frustum && resources->scene->portalPrograms && resources->scene->fadeRootPrograms) {
 				bindings.portalPrograms = a_builder.ShaderResource(*resources->scene->portalPrograms).View();
 				bindings.rootPrograms = a_builder.ShaderResource(*resources->scene->fadeRootPrograms).View();
 			}
-			// Every phase reads the fade roots' static rows (the first phase's fade verdicts, every phase's LOD skin partitions), and
-			// the states FadeStateCS published the frame before (its latch's; undeclared, as nothing this frame writes them:
-			// SceneBuffers::fadeStatesOut).
+			// Every phase reads the fade roots' static rows (phase 1's fade verdicts, LOD skin partitions). The states FadeStateCS
+			// published last frame are undeclared: nothing this frame writes them.
 			if (resources->scene->fadeRoots)
 				bindings.fadeRoots = a_builder.ShaderResource(*resources->scene->fadeRoots).View();
-			// Phase 1 sees the HZB the previous frame left, phase 2 the one just rebuilt from this
-			// frame's depth. Both read the same resource; what differs is where they sit relative to
-			// the build, which is why the ordering below is the whole design.
+			// Phase 1 sees last frame's HZB, phase 2 the one rebuilt this frame: same resource, ordered by their place around the build.
 			if (resources->hzb)
 				bindings.hzb = a_builder.ShaderResource(resources->hzb).View();
-			// The depth segment's phases write their draws into the pipeline slots' buckets (Resources::zBucketCounts), indexed
-			// from the pool (PoolFirstsIndex), for the Z-prepass's plain draws.
+			// The depth phases write into the pipeline slots' buckets, indexed from the pool, for the Z-prepass's plain draws.
 			if (segment == RenderGraphRuntime::Segment::ZPrepass && resources->pool) {
 				bindings.bucketCounts = a_builder.UnorderedAccess(*resources->zBucketCounts[fixedPhase == 2 ? 1 : 0]).View();
 				bindings.poolFirsts = a_builder.ShaderResource(*resources->pool->firsts).View();
 			}
-			// T7d's refraction: the colour segment's refraction draws are pooled too (RefractionDrawPass draws them plainly).
+			// The colour segment's refraction draws are pooled too.
 			if (segment == RenderGraphRuntime::Segment::MainOpaque && resources->pool)
 				bindings.poolFirsts = a_builder.ShaderResource(*resources->pool->firsts).View();
 			if (Sorts()) {
@@ -922,8 +892,7 @@ namespace DCLF::Draws
 			if (!frame || !resources->buildDraws || !frame->latch || !resources->dispatchSignature)
 				return prepared;
 			const std::uint32_t phase = Phase(now);
-			// The second phase belongs to the depth segment only: it is what re-tests phase 1's rejects
-			// against the HZB that has just been rebuilt from this frame's depth.
+			// Phase 2 (retesting phase 1's rejects against the rebuilt HZB) belongs to the depth segment only.
 			if (fixedPhase == 2 && now != RenderGraphRuntime::Segment::ZPrepass)
 				return prepared;
 			prepared.program = resources->buildDraws;
@@ -931,25 +900,23 @@ namespace DCLF::Draws
 			prepared.signature = resources->dispatchSignature->GetHandle();
 			auto& constants = prepared.constants;
 			constants.latchIndex = frame->latch->SrvIndex();
-			// The depth segment's phases read its own inputs (Resources::inputsDepth), the colour segment the colour inputs.
+			// The depth phases read their own inputs (Resources::inputsDepth).
 			const bool depthInputs = (phase == 1 || phase == 2) && resources->inputsDepth;
 			constants.inputsIndex = CaptureViewIndex(a_preparation, depthInputs ? a_bindings.inputsDepth : a_bindings.inputs);
 			constants.geometriesIndex = CaptureViewIndex(a_preparation, a_bindings.geometries);
 			constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
 			constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
-			// The rows both segments' draws name (MainRows), at their tables' addresses as the epoch sized them.
 			SetRows(constants, frame->materialRows, frame->pipelineRows);
 			constants.phaseBits = (phase & 0xFu) << 4;
 			constants.visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
-			// The frustum stamps: the depth segment's first phase alone tests every candidate's frustum.
+			// Frustum stamps: only depth phase 1 tests every candidate's frustum.
 			if (resources->frustum && phase == 1)
 				constants.frustumIndex = CaptureViewIndex(a_preparation, a_bindings.frustum);
-			// And the portal programs: a member whose root's program culls its bound is out of view, as the frustum's.
+			// A member whose root's portal program culls its bound is out of view.
 			if (resources->frustum && phase == 1 && a_bindings.portalPrograms.layout && resources->scene->fadeRoots && resources->scene->fadeRootCount) {
 				constants.portalProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.portalPrograms);
 				constants.rootProgramsIndex = CaptureViewIndex(a_preparation, a_bindings.rootPrograms);
 			}
-			// Every phase: the first phase's fade verdicts, and every phase's LOD skin partitions (LodPartitions).
 			if (resources->scene->fadeRoots && resources->scene->fadeRootCount) {
 				constants.fadeRootsIndex = CaptureViewIndex(a_preparation, a_bindings.fadeRoots);
 			}
@@ -967,17 +934,16 @@ namespace DCLF::Draws
 				constants.sortStagingIndex = CaptureViewIndex(a_preparation, a_bindings.sortStaging);
 				constants.sortRanksIndex = CaptureViewIndex(a_preparation, a_bindings.sortRanks);
 			}
-			// The sequence buffer's ranges as the epoch sized them.
 			constants.phaseTwoBase = frame->sequenceDraws;
 			constants.decalBase = 2 * frame->sequenceDraws;
 			constants.decalStride = frame->sequenceDecals;
-			// T7d: the forward range's staging half, the colour segment's alone (its shape's forwardCapacity is 0 elsewhere).
+			// The forward staging half: colour segment only.
 			if (now == RenderGraphRuntime::Segment::MainOpaque && frame->forwardCapacity) {
 				constants.forwardBase = static_cast<std::uint32_t>(ForwardStagingSlot(*frame));
 				constants.forwardCapacity = frame->forwardCapacity;
 			}
-			// T7d's refraction: the refraction range (after the forward halves: forwardBase + 2 * forwardCapacity in the shader), its draws
-			// pooled. The forward base is the staging slot whether or not the forward range has any capacity.
+			// The refraction range follows the forward halves (forwardBase + 2 * forwardCapacity), so forwardBase is set even
+			// without forward capacity.
 			if (now == RenderGraphRuntime::Segment::MainOpaque && frame->refractionCapacity && resources->pool) {
 				constants.forwardBase = static_cast<std::uint32_t>(ForwardStagingSlot(*frame));
 				constants.refractionCapacity = frame->refractionCapacity;
@@ -1004,8 +970,7 @@ namespace DCLF::Draws
 		}
 
 	private:
-		// Phase 2 appends its few rescues into its own range, unsorted; the other builds are followed by the sort's passes.
-		// The colour segment's draws, sorted by pipeline for its device-generated draw; the depth segment's are bucketed instead.
+		// Only the colour segment sorts (by pipeline, for its device-generated draw); depth draws are bucketed.
 		bool Sorts() const { return resources->sort && segment != RenderGraphRuntime::Segment::ZPrepass; }
 
 		std::shared_ptr<Resources> resources;
@@ -1025,10 +990,7 @@ namespace DCLF::Draws
 		std::uint32_t groups = 0;
 	};
 
-	/**
-	 * @brief The sort's scatter (DrawSort), after its segment's BuildDraws and the scan. It covers every slot BuildDraws can
-	 * append (the draws' range as the epoch sized it), each thread past the count returning.
-	 */
+	/** @brief The sort's scatter, after BuildDraws and the scan, over the draws' full range (threads past the count return). */
 	class SortSequencesPass final : public org::TypedRenderGraphPass<SortSequencesPass, SortSequencesFrame, SortSequencesBindings>
 	{
 	public:
@@ -1104,11 +1066,9 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief Tree wind (TreeWindCS.hlsl), on the compute queue in the Z-prepass epoch: each tree's clock brought to this frame
-	 * and its TreeParams and WindTimers into this frame's wind buffer (SceneBuffers::treeWindRows, by the frame's parity), which
-	 * the next frame's draws read. Nothing in any epoch reads what it writes, so nothing waits for it: it has the epoch's raster
-	 * work to run beside, and the host orders it against the frames either side (RenderGraphRuntime, the compute queue's entry
-	 * and exit). The readers do not declare the wind buffers for the same reason: the one they read was finished a frame ago.
+	 * @brief Tree wind (TreeWindCS.hlsl) on the compute queue in the Z-prepass epoch: advances each tree's clock and writes its
+	 * TreeParams and WindTimers into this frame's wind buffer (by parity), which next frame's draws read. Nothing this frame
+	 * reads it, so it overlaps the raster work; the host orders it against adjacent frames, and readers need not declare it.
 	 */
 	class TreeWindPass final : public org::TypedRenderGraphPass<TreeWindPass, TreeWindFramePrepared, TreeWindBindings>
 	{
@@ -1128,8 +1088,7 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		// What the recording depends on: the buffers' layout (a growth gives them new views). The count and the frame's inputs
-		// are the frame row, which every commit uploads.
+		// The recording depends on the buffers' layout; count and frame inputs are in the uploaded frame row.
 		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
 			a_out.push_back(scene->layout.load(std::memory_order_acquire));
@@ -1147,7 +1106,7 @@ namespace DCLF::Draws
 			constants.frameIndex = CaptureViewIndex(a_preparation, a_bindings.frame);
 			for (std::uint32_t h = 0; h < 2; ++h)
 				constants.windIndices[h] = CaptureViewIndex(a_preparation, a_bindings.wind[h]);
-			// Every entry the buffers hold (the nodeless one, then the tree slots): the shader stops at the frame row's count.
+			// Full capacity (the nodeless entry, then the tree slots); the shader stops at the count.
 			prepared.groups = (SceneSizingOf(a_preparation, *scene).treeCapacity + 1 + kTreeWindGroup - 1) / kTreeWindGroup;
 			return prepared;
 		}
@@ -1181,10 +1140,7 @@ namespace DCLF::Draws
 		std::uint32_t groups = 0;
 	};
 
-	/**
-	 * @brief The fade roots' state (FadeStateCS.hlsl): each root's OnVisible for the main camera whenever its bound is in the
-	 * depth segment's frustum, once a frame, ahead of that segment's culling.
-	 */
+	/** @brief Fade roots' state (FadeStateCS.hlsl): each root's main-camera OnVisible, once a frame, before the depth culling. */
 	class FadeStatePass final : public org::TypedRenderGraphPass<FadeStatePass, FadeStatePrepared, FadeStateBindings>
 	{
 	public:
@@ -1212,8 +1168,7 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		// What the recording depends on: the buffers' layout and the depth segment's shape (its latch). The root count, the frame
-		// and the log are the frame row (Records.h, FadeFrame), which the depth commit uploads.
+		// The recording depends on the buffers' layout and the depth shape; counts are in the uploaded FadeFrame row.
 		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
 			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
@@ -1241,15 +1196,14 @@ namespace DCLF::Draws
 			constants.animatedIndex = CaptureViewIndex(a_preparation, a_bindings.animated);
 			for (std::uint32_t h = 0; h < 2; ++h)
 				constants.outIndices[h] = CaptureViewIndex(a_preparation, a_bindings.published[h]);
-			// The bound event list's capacity, which its staging set's host buffers hold whole (T7b6: added with the growth, before any
-			// revision names it).
+			// Only with a staging set that holds the whole bound list.
 			if (scene.fadeEvents && scene.fadeWriteBack && scene.fadeWriteBack->SetFor(sizing.fadeEventCapacity)) {
 				constants.eventsIndex = CaptureViewIndex(a_preparation, a_bindings.events);
 				constants.reportedIndex = CaptureViewIndex(a_preparation, a_bindings.reported);
 				constants.eventCapacity = sizing.fadeEventCapacity;
 			}
 			constants.latchIndex = frame->latch->SrvIndex();
-			// Every slot the buffers hold: the shader stops at the frame row's count.
+			// Full capacity; the shader stops at the count.
 			prepared.groups = (sizing.fadeRootCapacity + kFadeStateGroup - 1) / kFadeStateGroup;
 			return prepared;
 		}
@@ -1259,7 +1213,7 @@ namespace DCLF::Draws
 			if (!a_frame.program || !a_frame.groups || !a_frame.latch)
 				return;
 			auto constants = a_frame.constants;
-			// The depth segment's BuildDrawsLatch in this frame slot (RecordLatchedDispatch's offset 0).
+			// The depth segment's BuildDrawsLatch in this frame slot.
 			constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
@@ -1283,9 +1237,8 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief An event list (HostEventRing: the fade write-back's, the visibility events') copied whole into the host buffer of the frame
-	 * slot, in the staging set of the bound list's capacity: a fixed copy, so the recording depends on the frame slot alone. The depth
-	 * commit harvests the buffer when the slot comes round again (Impl::ArmFadeReadback, ArmVisibilityReadback).
+	 * @brief Copies an event list (fade write-back, visibility events) whole into the frame slot's host buffer: a fixed copy, so
+	 * the recording depends on the slot alone. The depth commit harvests it when the slot comes round again.
 	 */
 	class EventReadbackPass final : public org::TypedRenderGraphPass<EventReadbackPass, EventReadbackPrepared, EventReadbackBindings>
 	{
@@ -1307,7 +1260,7 @@ namespace DCLF::Draws
 			const std::uint32_t frameSlot = a_recording.FrameSlot();
 			if (!a_prepared.set || frameSlot >= a_prepared.set->buffers.size())
 				return;
-			// The header and every event the list holds (its GPU work appends no more than that).
+			// The header and the list's full capacity.
 			a_recording.Commands().CopyBufferRegion(a_prepared.set->buffers[frameSlot]->GetAPIResource().GetHandle(), 0, a_recording.Resolve(a_bindings.events).GetHandle(), 0,
 				a_prepared.ring->bytesFor(a_prepared.set->events));
 		}
@@ -1332,9 +1285,8 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief T7b1 (CS_DCLF_ACCUMULATED_PARITY): the main camera's visibility as change events (VisibilityEventsCS.hlsl), at the depth
-	 * segment's end, once both verdicts are this frame's - the roots' InView (FadeStatePass) and the objects' frustum stamps (depth phase
-	 * 1) - for VisibilityReadbackPass.
+	 * @brief The main camera's visibility as change events (VisibilityEventsCS.hlsl) at the depth segment's end, from the roots'
+	 * InView and the objects' frustum stamps. The normal path writes the stood-in roots' kAccumulated from them.
 	 */
 	class VisibilityEventsPass final : public org::TypedRenderGraphPass<VisibilityEventsPass, VisibilityEventsPrepared, VisibilityEventsBindings>
 	{
@@ -1357,8 +1309,7 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		// The buffers' layout and the depth segment's shape (the per-object buffers' versions). The frame, the root count and the camera
-		// are the fade frame row, which the depth commit uploads.
+		// The buffers' layout and the depth shape; frame, counts and camera are in the uploaded fade frame row.
 		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
 			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
@@ -1371,8 +1322,7 @@ namespace DCLF::Draws
 			VisibilityEventsPrepared prepared{};
 			const auto& scene = *resources->scene;
 			const auto& sizing = SceneSizingOf(a_preparation, scene);
-			// Only with the staging set the readback of this sizing copies into (it holds the whole list): nothing is appended that the
-			// copy would leave out.
+			// Only with a staging set that holds the whole list, so the copy misses nothing.
 			if (!scene.visibilityEventsProgram || !scene.visibilityReadback || !sizing.visibilityEventCapacity || !scene.visibilityReadback->SetFor(sizing.visibilityEventCapacity))
 				return prepared;
 			prepared.program = scene.visibilityEventsProgram;
@@ -1384,10 +1334,8 @@ namespace DCLF::Draws
 			constants.rootReportedIndex = CaptureViewIndex(a_preparation, a_bindings.rootReported);
 			constants.objectReportedIndex = CaptureViewIndex(a_preparation, a_bindings.objectReported);
 			constants.eventsIndex = CaptureViewIndex(a_preparation, a_bindings.events);
-			// The bound list's, which its staging set's buffers hold whole.
 			constants.eventCapacity = sizing.visibilityEventCapacity;
-			// Every root slot the buffers hold (the shader stops at the frame row's count), then every object slot - while the segment
-			// builds (without depth phase 1 no stamp is this frame's, and the words stand).
+			// Every root slot, then every object slot while the segment builds (without depth phase 1 no stamp is this frame's).
 			constants.rootSlots = sizing.fadeRootCapacity;
 			constants.objectSlots = BuildsDraws(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass) ? sizing.objectCapacity : 0u;
 			prepared.groups = (constants.rootSlots + constants.objectSlots + kVisibilityEventsGroup - 1) / kVisibilityEventsGroup;
@@ -1419,8 +1367,8 @@ namespace DCLF::Draws
 	struct HzbFrame
 	{
 		std::shared_ptr<const ComputeProgram> program;
-		// One single-pass downsample per kHzbDispatchMips levels at most, the first reading the scene depth and each other
-		// the previous one's last level. A domain of up to 4096 texels a side takes one.
+		// One single-pass downsample per kHzbDispatchMips levels, the first from scene depth, each next from the previous one's
+		// last level. Up to 4096 texels a side takes one.
 		struct Dispatch
 		{
 			HzbConstants constants{};
@@ -1430,16 +1378,9 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief Builds the hierarchical depth buffer after the world's depth draws.
-	 *
-	 * It runs in the ZPrepass segment, after DCLF's own depth draws, so the HZB describes the depth the
-	 * frame actually has: the native occluders the engine drew (terrain and everything ineligible) plus
-	 * the objects DCLF drew itself. On AE that is inside the depth pass, before the first-person model's
-	 * depth and the rooms' stencil draws, which it therefore leaves out: fewer occluders, never more.
-	 *
-	 * The whole mip chain is one dispatch of the single-pass downsampler (HzbCS.hlsl, FidelityFX SPD): a
-	 * dispatch per level with a full barrier between each cost about 0.1 ms, nearly all of it the drains.
-	 * Levels of a single texture are not separate resources to the graph, so the chain is one pass either way.
+	 * @brief Builds the HZB in the ZPrepass segment after DCLF's depth draws, so it holds the native occluders plus DCLF's. On
+	 * AE that is before the first-person model's depth and the rooms' stencil draws: fewer occluders, never more. The chain
+	 * is one single-pass downsample (HzbCS.hlsl, FidelityFX SPD): per-level dispatches would need a full barrier each.
 	 */
 	class HzbPass final : public org::TypedRenderGraphPass<HzbPass, HzbFrame, HzbBindings>
 	{
@@ -1470,13 +1411,13 @@ namespace DCLF::Draws
 		HzbFrame Prepare(const HzbBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
 			HzbFrame prepared{};
-			// Only in the Z-prepass segment: anywhere else the depth is not the world's final depth.
+			// Only in the Z-prepass segment, where the depth is the world's final depth.
 			const auto now = segment;
 			if (now != RenderGraphRuntime::Segment::ZPrepass)
 				return prepared;
 			if (!resources->hzb || !resources->hzbProgram || !resources->hzbCounter)
 				return prepared;
-			// A published depth frame: its commit zeroed the group counter (hzbCounterZeroed) before this first dispatch.
+			// The depth commit zeroed the group counter (hzbCounterZeroed).
 			const auto frame = CurrentFrame(a_preparation, now);
 			if (!frame)
 				return prepared;
@@ -1496,8 +1437,7 @@ namespace DCLF::Draws
 				auto& constants = dispatch.constants;
 				constants.counterIndex = counterIndex;
 				if (level == 0) {
-					// Mip 0 is half the padded domain, of which the rendered area holds depth: the depth image can be
-					// larger than the viewport the draws use, and everything past that viewport is untouched.
+					// Mip 0 is half the padded domain; only the rendered area holds depth (the image can exceed the viewport).
 					constants.fromDepth = 1;
 					constants.sourceIndex = depthIndex;
 					constants.domainSize[0] = resources->hzbWidth * 2;
@@ -1512,8 +1452,8 @@ namespace DCLF::Draws
 				}
 				constants.targetSize[0] = levelSize(level, 0);
 				constants.targetSize[1] = levelSize(level, 1);
-				// A group reduces its tile through six levels; the last group carries on from the sixth only when that
-				// level fits its own tile, which a domain of more than kHzbTile tiles a side does not.
+				// A group reduces its tile through six levels; the last group continues past the sixth only when that level fits
+				// one tile (a domain of at most kHzbTile tiles a side).
 				const std::uint32_t domain = std::max(constants.domainSize[0], constants.domainSize[1]);
 				const std::uint32_t reach = domain / kHzbTile <= kHzbTile ? kHzbDispatchMips : 6u;
 				constants.mips = std::min(resources->hzbMips - level, reach);
@@ -1577,8 +1517,7 @@ namespace DCLF::Draws
 			return nullptr;
 		a_desc.imageDimensions.clear();
 		a_desc.imageDimensions.push_back({ a_image.extent.width, a_image.extent.height, 0, 0 });
-		// An array image publishes a view per slice (ORG builds one DSV per slice for arrays), which is
-		// how a shadow view's epoch attaches the one slice the engine gave that view.
+		// ORG builds a DSV per slice for arrays, so a shadow view attaches its own slice.
 		a_desc.isArray = a_image.arrayLayers > 1;
 		a_desc.arraySize = a_desc.isArray ? a_image.arrayLayers : 1;
 		a_desc.initialLayout = rhi::ResourceLayout::Common;
@@ -1588,7 +1527,7 @@ namespace DCLF::Draws
 		return result;
 	}
 
-	/** @brief The shadow shape a_preparation prepares for: its revision's shadow views', or (a_sky) occlusion views', null without one. */
+	/** @brief The revision's shadow (or, a_sky, occlusion) shape being prepared; null without one. */
 	std::shared_ptr<const ShadowFrame> CurrentShadowFrame(const org::PassPrepareContext& a_preparation, bool a_sky)
 	{
 		if (const auto* shapes = RevisionShapesOf(a_preparation))
@@ -1637,9 +1576,8 @@ namespace DCLF::Draws
 			bindings.geometries = a_builder.ShaderResource(*resources->scene->geometries).View();
 			bindings.visibility = a_builder.UnorderedAccess(*resources->visibility).View();
 			bindings.poolFirsts = a_builder.ShaderResource(*resources->pool->firsts).View();
-			// The fade roots' rows: a shadow view's casters under stood-in roots follow FadeStateCS's state, and an occlusion view's
-			// occluders their roots' OnVisible (kCullFadeOnVisible); the states are the latch's (published the frame before, or a
-			// parity frame's node states), undeclared like the depth segment's.
+			// Fade roots' rows: casters under stood-in roots follow FadeStateCS's state, occluders their roots' OnVisible
+			// (kCullFadeOnVisible). The states are last frame's, undeclared as in the depth segment.
 			if (resources->scene->fadeRoots)
 				bindings.fadeRoots = a_builder.ShaderResource(*resources->scene->fadeRoots).View();
 			return bindings;
@@ -1680,15 +1618,14 @@ namespace DCLF::Draws
 				constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count[view.slot]);
 				constants.bucketCountsIndex = CaptureViewIndex(a_preparation, a_bindings.bucketCounts[view.slot]);
 				constants.poolFirstsIndex = poolFirstsIndex;
-				// A draw's words name its material row (the table every view reads).
 				constants.materialRowsAddressLo = static_cast<std::uint32_t>(view.materialRows);
 				constants.materialRowsAddressHi = static_cast<std::uint32_t>(view.materialRows >> 32);
 				constants.materialRowStride = sizeof(ShadowMaterialRow);  // no pipeline rows: their stride stays 0
-				// The bucket path's draws are bounded by their buckets' capacities (the latch's bucket table); this bounds the other.
+				// Bucketed draws are bounded by their buckets; this bounds the rest.
 				constants.phaseTwoBase = view.sequenceDraws;
-				// The single phase (the latch holds the frustum-only mode, with no engine-visibility gate).
+				// The single phase: frustum only, no engine-visibility gate.
 				constants.phaseBits = 0;
-				// The visibility words are written per object by every dispatch; nothing reads them here.
+				// Every dispatch writes the visibility words; nothing reads them here.
 				constants.visibilityIndex = visibilityIndex;
 				constants.fadeRootsIndex = fadeRootsIndex;
 				prepared.dispatches.push_back(dispatch);
@@ -1708,7 +1645,7 @@ namespace DCLF::Draws
 		}
 
 	private:
-		// The fade roots' rows hold the tables' (the depth commit's upload), so a root slot names its row.
+		// The fade roots' rows mirror the tables (the depth commit uploads them).
 		bool FadeRows() const { return resources->scene->fadeRoots && resources->scene->fadeRootCount; }
 
 		std::shared_ptr<ShadowResources> resources;
@@ -1728,15 +1665,11 @@ namespace DCLF::Draws
 		IndexPoolConstants constants{};
 	};
 
-	/**
-	 * @brief The index pool's copies (IndexPool, IndexPoolCS.hlsl): the ranges the shadow commit gave out this frame,
-	 * copied from their index buffers before the shadow epoch's views draw from the pool. Its dispatch is in the latch.
-	 */
+	/** @brief Copies this frame's new index pool ranges (IndexPoolCS.hlsl) before draws read the pool; dispatched from the latch. */
 	class IndexPoolPass final : public org::TypedRenderGraphPass<IndexPoolPass, IndexPoolPrepared, IndexPoolBindings>
 	{
 	public:
-		// The epoch's latch (its frame's) and the pool's dispatch in it, as of the shape the epoch runs: the shadow epoch's, or the
-		// depth segment's (whichever commit gave the pool's ranges out this frame wrote the copies).
+		// The latch holding the pool's dispatch, from the shape the epoch runs (shadow or depth: whichever commit gave out ranges).
 		struct LatchOf
 		{
 			std::uint64_t generation = 0;
@@ -1819,7 +1752,7 @@ namespace DCLF::Draws
 		std::vector<View> views;
 	};
 
-	/** @brief The shadow views' draws: each view's culled sequences into its slice and viewport, in one pass. */
+	/** @brief The shadow views' draws: each view's culled sequences into its slice and viewport. */
 	class ShadowViewPass final : public org::TypedRenderGraphPass<ShadowViewPass, ShadowPrepared, ShadowPassBindings>
 	{
 	public:
@@ -1831,7 +1764,6 @@ namespace DCLF::Draws
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			const std::span<const org::SrvView> noViews{};
 			ShadowPassBindings bindings{};
-			// The shadow views draw into the shadow maps, the occlusion epoch into the occlusion maps alone.
 			for (std::uint32_t i = 0; i < kShadowDepthTargets; ++i) {
 				if (resources->depth[i] && IsOcclusionTarget(i) == sky) {
 					bindings.depthViews[i].reserve(resources->depthLayers[i]);
@@ -1839,7 +1771,7 @@ namespace DCLF::Draws
 						bindings.depthViews[i].push_back(a_builder.DepthReadWrite(resources->depth[i], org::DsvView{ UINT32_MAX, 0, slice }).View());
 				}
 			}
-			// A slot's sequences are both the draws' arguments and what their vertex stage reads by device address (DCLF_PULLED).
+			// A slot's sequences are both arguments and read by address (DCLF_PULLED).
 			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
 				bindings.sequences.push_back(a_builder.IndirectArguments(*resources->sequences[s]).Resource());
 				a_builder.ShaderResource(*resources->sequences[s], noViews);
@@ -1850,8 +1782,7 @@ namespace DCLF::Draws
 			bindings.viewBlocks = a_builder.ShaderResource(*resources->viewBlocks.buffer, noViews).Resource();
 			a_builder.ShaderResource(*resources->scene->objects, noViews);
 			a_builder.ShaderResource(*resources->scene->extras, noViews);
-			// The face positions (a dynamic shape's second stream), and the geometries' vertices and indices, are read by the
-			// vertex stage through their addresses: the face positions after the commit's uploads into them.
+			// Face positions, read by address after the commit's uploads.
 			a_builder.ShaderResource(*resources->scene->facePositions, noViews);
 			bindings.pool = a_builder.IndexBuffer(*resources->pool->indices);
 			return bindings;
@@ -1875,8 +1806,7 @@ namespace DCLF::Draws
 				if (!view.capacity || view.slot >= a_bindings.sequences.size() || view.target >= kShadowDepthTargets || !resources->depth[view.target] ||
 					IsOcclusionTarget(view.target) != sky)
 					continue;
-				// The slices this pass declared (its bindings), not the live target's: a target grown since (a new shadow map's
-				// import) has slices a recording prepared for these bindings cannot name.
+				// The declared slices, not the live target's: a target grown since has slices these bindings cannot name.
 				if (view.slice >= resources->depthLayers[view.target] || view.slice >= a_bindings.depthViews[view.target].size())
 					continue;
 				prepared.views.push_back({ i, a_preparation.Capture(a_bindings.depthViews[view.target][view.slice]) });
@@ -1894,7 +1824,6 @@ namespace DCLF::Draws
 			const auto& frame = *a_prepared.frame;
 			auto& commands = a_recording.Commands();
 			commands.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
-			// A view's pass: its slice and viewport, loaded, added to, stored.
 			std::vector<rhi::DepthAttachment> depths(a_prepared.views.size());
 			std::vector<rhi::PassBeginInfo> begins(a_prepared.views.size());
 			for (std::size_t i = 0; i < a_prepared.views.size(); ++i) {
@@ -1907,7 +1836,7 @@ namespace DCLF::Draws
 				begin.height = view.height;
 				begin.minDepth = view.minDepth;
 				begin.maxDepth = view.maxDepth;
-				// The slice the engine drew its own casters into: loaded, added to, stored.
+				// The engine's casters are already in the slice: loaded, added to, stored.
 				auto& depth = depths[i];
 				depth.dsv = a_recording.Resolve(prepared.depthView);
 				depth.depthLoad = rhi::LoadOp::Load;
@@ -1917,11 +1846,8 @@ namespace DCLF::Draws
 				begin.depth = &depth;
 				begin.debugName = a_prepared.sky ? "DCLF occlusion map" : "DCLF shadow view";
 			}
-			// A view: its pass (its slice, the layout, the topology, its push data: its blocks, and the index pool), then a plain
-			// indexed indirect draw per bucket (ShadowBucket), the depth-only class's first: the bucket's pipeline, its push words
-			// (kShadowDrawPushSequences and after), and its range of the slot's sequences, as many as its count word holds. The
-			// vertex stage fetches each draw's vertices through the sequence its instance names (Utility.hlsl, DCLF_PULLED), since
-			// a plain draw cannot bind a vertex buffer of its own.
+			// Per view: a plain indexed indirect draw per bucket over its range of the slot's sequences, counted by its count word.
+			// A plain draw cannot bind its own vertex buffer, so the vertex stage fetches through the sequence (Utility.hlsl, DCLF_PULLED).
 			auto device = RenderGraphRuntime::Get().Host()->GetDesc().device;
 			auto split = [](std::uint32_t* a_words, std::uint64_t a_value) {
 				a_words[0] = static_cast<std::uint32_t>(a_value);
@@ -2038,7 +1964,6 @@ namespace DCLF::Draws
 			AddPass(a_out, PassKind::Copy, "cs.dclf.shadow.latched-copies", ShadowLatchedCopies(false), epoch);
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.shadow.index-pool",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources->pool, [shadow = resources](const org::PassPrepareContext& a_preparation) {
-					// The latch and its layout the revision's shape holds (the producer's).
 					const auto frame = CurrentShadowFrame(a_preparation, false);
 					return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, frame ? frame->latchLayout.PoolOffset() : 0u };
 				})))
@@ -2046,7 +1971,7 @@ namespace DCLF::Draws
 					.Epoch(epoch));
 			AddPass(a_out, PassKind::Compute, "cs.dclf.shadow.build-draws", std::make_shared<ShadowBuildDrawsPass>(resources, false), epoch);
 			AddPass(a_out, PassKind::Render, "cs.dclf.shadow.view", std::make_shared<ShadowViewPass>(resources, false), epoch);
-			// Skylighting's occlusion map: the same passes over its one view, in its own epoch after RenderMask.
+			// Skylighting's occlusion map: the same passes in its own epoch after RenderMask.
 			const auto skyEpoch = RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::SkyOcclusion);
 			AddPass(a_out, PassKind::Copy, "cs.dclf.sky.latched-copies", ShadowLatchedCopies(true), skyEpoch);
 			AddPass(a_out, PassKind::Compute, "cs.dclf.sky.build-draws", std::make_shared<ShadowBuildDrawsPass>(resources, true), skyEpoch);
@@ -2054,7 +1979,7 @@ namespace DCLF::Draws
 		}
 
 	private:
-		/** @brief The views' latched copies (ShadowFrame::latched): their blocks, their counters, the commit's values in the constants. */
+		/** @brief The views' latched copies: blocks, counters, and the commit's values in the constants. */
 		std::shared_ptr<org::RenderPass> ShadowLatchedCopies(bool a_sky) const
 		{
 			auto targets = [shadow = resources] {
@@ -2136,7 +2061,7 @@ namespace DCLF::Draws
 		return std::make_shared<LatchedCopiesPass>(std::move(a_targets), std::move(a_source), a_declared);
 	}
 
-	/** @brief The buffers a main commit's per-frame values go to through the latch (LatchedUploads), as its latched copies declare them. */
+	/** @brief The buffers a main commit may latch into (LatchedUploads); its latched copies declare them. */
 	std::vector<LatchedTarget> MainLatchedTargets(const Resources& a_resources)
 	{
 		std::vector<LatchedTarget> out;
@@ -2149,7 +2074,7 @@ namespace DCLF::Draws
 		for (const auto& frameBuffer : a_resources.frameBuffers)
 			if (frameBuffer.copy)
 				out.push_back({ frameBuffer.copy, nullptr });
-		// Tree LOD's draw row and its list's header; not the trees' or the fades' frame rows, which the compute queue reads.
+		// Tree LOD's draw row and list header; not the trees' or fades' frame rows, which the compute queue reads.
 		if (const auto& scene = *a_resources.scene; scene.treeLodCull) {
 			out.push_back({ scene.treeLodDraw, nullptr });
 			out.push_back({ nullptr, scene.treeLodVisible });
@@ -2179,7 +2104,7 @@ namespace DCLF::Draws
 			a_list.BindLayout(a_layout);
 			a_list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_push.data());
 		};
-		// The explicit preprocess, before the pass, for the state its execution has (MainOpaquePass's rule).
+		// Preprocess before the pass, with the execution's exact state (as MainOpaquePass).
 		auto& state = a_preprocess.Begin(a_recording.FrameSlot());
 		beginDrawPass(state);
 		commands.PreprocessIndirect(state, a_signature, a_arguments, a_argumentsOffset, a_counts, a_countOffset, a_capacity);
@@ -2206,8 +2131,7 @@ namespace DCLF::Draws
 				Register(a_graph, org::ResourceIdentifier("cs.dclf.draw-inputs-depth"), resources->inputsDepth);
 			RegisterSceneBuffers(a_graph, *resources->scene);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.draw-count"), resources->count);
-			// Read through device addresses (the frame record's slots), declared by their readers so the graph orders them after
-			// the epochs' latched copies.
+			// Read by address; readers declare it so the graph orders them after the latched copies.
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.frame-constants"), resources->frameConstants);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.z.bucket-counts"), resources->zBucketCounts[0]);
 			Register(a_graph, org::ResourceIdentifier("cs.dclf.z.bucket-counts2"), resources->zBucketCounts[1]);
@@ -2247,8 +2171,8 @@ namespace DCLF::Draws
 			const auto depth = RenderGraphRuntime::EpochOf(Segment::ZPrepass);
 			const auto colourSegment = Segment::MainOpaque;
 			const auto depthSegment = Segment::ZPrepass;
-			// Each epoch's first pass: its commit's per-frame values, from the latch (LatchedCopiesPass), which declares every target a
-			// commit may latch and publishes them (Resources::latchedTargets), so a commit latches only what the pass will copy.
+			// Each epoch's first pass copies the commit's latched values. It publishes its declared targets (Resources::latchedTargets),
+			// so a commit latches only what the pass will copy.
 			for (const auto segment : { depthSegment, colourSegment })
 				AddPass(a_out, PassKind::Copy, segment == depthSegment ? "cs.dclf.z.latched-copies" : "cs.dclf.latched-copies",
 					MakeLatchedCopiesPass([resources = resources] { return MainLatchedTargets(*resources); },
@@ -2258,10 +2182,9 @@ namespace DCLF::Draws
 						},
 						&resources->latchedTargets),
 					RenderGraphRuntime::EpochOf(segment));
-			// A pass instance runs only in its own epoch and its segment is fixed here, so the Z-prepass has its own
-			// build-draws and draw pass.
-			// The sort by pipeline after a build (DrawSort): the counts' prefix sum, then the scatter. The scan runs in every
-			// execution, so the counts it clears are zero whether or not a build ran; the scatter only after a build.
+			// A pass's segment is fixed, so each segment has its own instances.
+			// The sort by pipeline (DrawSort): the scan runs in every execution (so the counts it clears are zero even without a
+			// build), the scatter only after a build.
 			const auto addSort = [&](const char* a_scan, const char* a_scatter, RenderGraphRuntime::Segment a_segment, auto a_epoch) {
 				if (!resources->sort)
 					return;
@@ -2273,34 +2196,31 @@ namespace DCLF::Draws
 						.PreferQueue(org::QueueKind::Graphics)
 						.Epoch(a_epoch));
 			};
-			// The trees' wind for the next frame, beside this epoch's raster work.
+			// Tree wind for the next frame, beside this epoch's raster work.
 			if (resources->scene->treeWind && resources->scene->trees)
 				AddPass(a_out, PassKind::Compute, "cs.dclf.z.tree-wind", std::make_shared<TreeWindPass>(resources->scene), depth, PassQueue::Compute);
-			// The fade roots' state for the next frame's culling, beside this epoch's raster work.
+			// Fade roots' state for the next frame's culling, likewise.
 			if (resources->scene->fadeState && resources->scene->fadeRoots)
 				AddPass(a_out, PassKind::Compute, "cs.dclf.z.fade-state", std::make_shared<FadeStatePass>(resources), depth, PassQueue::Compute);
-			// Its write-back's events, to the host (FadeWriteBack).
+			// Its write-back events, to the host.
 			if (resources->scene->fadeState && resources->scene->fadeRoots && resources->scene->fadeEvents && resources->scene->fadeWriteBack)
 				AddPass(a_out, PassKind::Copy, "cs.dclf.z.fade-events", std::make_shared<EventReadbackPass>(resources->scene, resources->scene->fadeEvents, resources->scene->fadeWriteBack, &SceneSizing::fadeEventCapacity), depth, PassQueue::None);
 			AddPass(a_out, PassKind::Compute, "cs.dclf.z.build-draws", std::make_shared<BuildDrawsPass>(resources, depthSegment), depth);
-			// The pool's copies the depth commit gave out (in a frame whose shadow epoch has not already), before the builds name
-			// the ranges and the draws read them.
+			// The pool copies the depth commit gave out (when the shadow epoch has not), before the draws read them.
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.index-pool",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources->pool, [main = resources](const org::PassPrepareContext& a_preparation) {
-					// The latch and its layout the revision's shape holds (the producer's).
 					const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
 					return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, frame ? frame->latchLayout.PoolOffset() : 0u };
 				})))
 					.PreferQueue(org::QueueKind::Graphics)
 					.Epoch(depth));
-			// Tree LOD's list, phase 1's, before the depth draw that draws it.
+			// Tree LOD's phase 1 list, before the depth draw.
 			if (resources->scene->treeLodCull)
 				AddPass(a_out, PassKind::Compute, "cs.dclf.z.tree-lod-cull", std::make_shared<TreeLodCullPass>(resources, 1), depth);
 			AddPass(a_out, PassKind::Render, "cs.dclf.z.depth", std::make_shared<MainOpaquePass>(resources, depthSegment), depth);
 			AddPass(a_out, PassKind::Compute, "cs.dclf.build-draws", std::make_shared<BuildDrawsPass>(resources, colourSegment), colour);
 			addSort("cs.dclf.sort-scan", "cs.dclf.sort-scatter", colourSegment, colour);
-			// T7d: the forward range's sort, back to front, after the colour build appended it; and its draw, in the forward epoch (the
-			// engine's blended draw after the deferred composite: IndirectDraws::ExecuteForward).
+			// The forward sort after the colour build; its draw in the forward epoch (IndirectDraws::ExecuteForward).
 			if (resources->forwardSort) {
 				AddPass(a_out, PassKind::Compute, "cs.dclf.forward-sort",
 					MakeForwardSortPass(resources->sequences, { resources->count, nullptr }, [main = resources](const org::PassPrepareContext& a_preparation) {
@@ -2312,26 +2232,15 @@ namespace DCLF::Draws
 					colour);
 				AddPass(a_out, PassKind::Render, "cs.dclf.forward", std::make_shared<ForwardDrawPass>(resources), RenderGraphRuntime::EpochOf(Segment::Forward));
 			}
-			// T7d's refraction: the refraction range's draw into the refraction normals, in the forward epoch after the blended draws.
+			// Refraction normals, in the forward epoch after the blended draws.
 			if (resources->refractionNormals && resources->nativeDepth && resources->pool)
 				AddPass(a_out, PassKind::Render, "cs.dclf.refraction", std::make_shared<RefractionDrawPass>(resources), RenderGraphRuntime::EpochOf(Segment::Forward));
 			Diagnostics::Notify(Diagnostics::MainGraphPasses{ Diagnostics::MainGraphPasses::kBeforeColour, resources, colour, a_out });
 			AddPass(a_out, PassKind::Render, "cs.dclf.main-opaque", std::make_shared<MainOpaquePass>(resources, colourSegment), colour);
-			// The observers' passes after the colour draws (Diagnostics::MainGraphPasses).
 			Diagnostics::Notify(Diagnostics::MainGraphPasses{ Diagnostics::MainGraphPasses::kAfterColour, resources, colour, a_out });
-			// The two-phase tail, all of it inside the depth segment and all of it in this order:
-			//
-			//   build-draws (phase 1, against the HZB the previous frame left)
-			//   main-opaque (the phase-1 depth draw)
-			//   hzb         (rebuilt from the depth that draw has just finished)
-			//   build-draws-phase2 (phase 1's rejects, re-tested against the rebuilt HZB)
-			//   tree-lod-cull-phase2 (tree LOD's, the same)
-			//   depth-phase2       (the rescues, so their depth is in the frame too)
-			//
-			// Phase 1 tests against a depth buffer that is a frame old, which is what makes it cheap and
-			// also what makes it wrong at the edges: anything that has just come out from behind an
-			// occluder was hidden in that buffer. Phase 2 exists to take those back, after a rebuild
-			// that can see them.
+			// The two-phase tail, in the depth segment, in this order: build-draws (phase 1, last frame's HZB), depth draw, hzb
+			// (rebuilt from it), build-draws-phase2 and tree-lod-cull-phase2 (phase 1's rejects retested), depth-phase2 (the
+			// rescues). Phase 1's frame-old HZB misses what just came out from behind an occluder; phase 2 takes those back.
 			if (resources->hzb) {
 				AddPass(a_out, PassKind::Compute, "cs.dclf.hzb", std::make_shared<HzbPass>(resources, depthSegment), depth);
 				AddPass(a_out, PassKind::Compute, "cs.dclf.build-draws-phase2", std::make_shared<BuildDrawsPass>(resources, depthSegment, 2), depth);
@@ -2339,17 +2248,14 @@ namespace DCLF::Draws
 					AddPass(a_out, PassKind::Compute, "cs.dclf.tree-lod-cull-phase2", std::make_shared<TreeLodCullPass>(resources, 2), depth);
 				AddPass(a_out, PassKind::Render, "cs.dclf.depth-phase2", std::make_shared<MainOpaquePass>(resources, depthSegment, true), depth);
 			}
-			// Tree LOD's cull counts, after both phases.
 			if (resources->scene->treeLodCull && resources->scene->treeLodCounts)
 				AddPass(a_out, PassKind::Copy, "cs.dclf.z.tree-lod-counts", std::make_shared<TreeLodReadbackPass>(resources->scene), depth, PassQueue::None);
-			// T7b1 (CS_DCLF_ACCUMULATED_PARITY alone): the frame's visibility changes, after both phases (the roots' InView and the
-			// objects' frustum stamps are final), and their copy into the frame's readback slot (VisibilityReadback).
+			// Visibility changes once both phases' verdicts are final, and their readback copy.
 			const auto& sceneBuffers = *resources->scene;
 			if (sceneBuffers.visibilityEventsProgram && sceneBuffers.visibilityReadback && sceneBuffers.fadeState && sceneBuffers.fadeRoots && resources->frustum) {
 				AddPass(a_out, PassKind::Compute, "cs.dclf.z.visibility-events", std::make_shared<VisibilityEventsPass>(resources), depth);
 				AddPass(a_out, PassKind::Copy, "cs.dclf.z.visibility-readback", std::make_shared<EventReadbackPass>(resources->scene, resources->scene->visibilityEvents, resources->scene->visibilityReadback, &SceneSizing::visibilityEventCapacity), depth, PassQueue::None);
 			}
-			// The observers' passes after the depth segment's (Diagnostics::MainGraphPasses).
 			Diagnostics::Notify(Diagnostics::MainGraphPasses{ Diagnostics::MainGraphPasses::kAfterDepth, resources, depth, a_out });
 		}
 

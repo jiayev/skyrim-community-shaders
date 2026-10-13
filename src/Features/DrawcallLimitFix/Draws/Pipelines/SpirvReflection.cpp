@@ -1,3 +1,5 @@
+// SpirvReflection::Parse: one pass over a DXC module's words. Pure; any thread.
+
 #include "SpirvReflection.h"
 
 #include <cstring>

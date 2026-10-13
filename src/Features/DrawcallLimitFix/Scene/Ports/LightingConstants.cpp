@@ -1,3 +1,6 @@
+// LightingConstants.h's implementations: frame block merges, the render thread's frame samples (extras, effect camera / light /
+// blood), the object rows (BuildObjectRecord, SampleShading) and the constant-group packing.
+
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/GeometryPort.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
@@ -414,7 +417,7 @@ namespace DCLF
 			fades = ((pass & 0x200u) ? kLodFadeSpecular | ((a_renderFlags & 2) ? 0u : kLodFadeSsr) : 0u) | (((pass >> 24) & 0x3f) == 1 ? kLodFadeEnvmap : 0u);
 		}
 		a_out.lodFades = fades;
-		// T7d's refraction: its draw's variant bits (kRecordRefraction*), from its key; the Effect port's suppress bit (kRecordEffectSuppressEmittance).
+		// A refraction object's variant bits (kRecordRefraction*), from its key; the Effect port's suppress bit (kRecordEffectSuppressEmittance).
 		if (!(object.flags & kObjectNoBindings) && object.pipelineIndex < a_tables.pipelines.size())
 			a_out.recordFlags |= RefractionRecordFlagsOf(a_tables.pipelines[object.pipelineIndex]) | EffectRecordFlagsOf(a_tables.pipelines[object.pipelineIndex], object.flags);
 	}
@@ -423,7 +426,7 @@ namespace DCLF
 	{
 		static const REL::Relocation<const RE::NiRTTI*> effectRtti{ RE::BSEffectShaderProperty::Ni_RTTI };
 		if (a_base.GetRTTI() == effectRtti.get()) {
-			// T7d's Effect port: PropertyColor (SetupGeometry 0x1414eab10): the emittance colour or white, and the property's alpha, which
+			// Effect port: PropertyColor (SetupGeometry 0x1414eab10): the emittance colour or white, and the property's alpha, which
 			// GetRenderPasses leaves as the material's (the base colour's) times the fade node's currentFade; a member's is the material's.
 			const auto& effect = static_cast<const RE::BSEffectShaderProperty&>(a_base);
 			const auto* material = static_cast<const RE::BSEffectShaderMaterial*>(effect.material);
@@ -450,7 +453,7 @@ namespace DCLF
 		const std::uint32_t technique = (a_pass >> 24) & 0x3f;
 		const bool envmap = technique == 1 || technique == 0xb || technique == 0x10;
 		auto& shading = a_out.shading;
-		// T7d's refraction (kRefraction, kTempRefraction): no Lighting pass, but its draw's inputs (Utility.hlsl, DCLF_REFRACTION):
+		// Refraction (kRefraction, kTempRefraction): no Lighting pass, but its draw's inputs (Utility.hlsl, DCLF_REFRACTION):
 		// MaterialData.x the refraction LOD fade as the property holds it at +0x104 (GetRenderPasses writes it there, the Utility pass's
 		// EyePos.w), which the draw uses where its LOD fades do not apply; MaterialData.w the material's refractionPower (BSUtilityShader::
 		// SetupMaterial's RefractionPower). Neither is in `written` (no engine Lighting constant is compared with them).
@@ -458,7 +461,7 @@ namespace DCLF
 		shading.materialData[0] = (envmap || refraction) ? a_property.envmapLODFade : 0.0f;
 		shading.materialData[1] = specular ? a_property.specularLODFade : 0.0f;
 		// GetRenderPasses leaves materialAlpha * the fade node's currentFade on the property, for whichever camera called it last. A
-		// member's is the material's alone: the draw multiplies its root's fade in (T1c, Lighting.hlsl DCLFAlphaFade).
+		// member's is the material's alone: the draw multiplies its root's fade in (Lighting.hlsl DCLFAlphaFade).
 		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_property.material);
 		shading.materialData[2] = a_member && material ? material->materialAlpha : a_property.alpha;
 		shading.materialData[3] = refraction && material ? material->refractionPower : 0.0f;
@@ -473,7 +476,7 @@ namespace DCLF
 		shading.emitColor[2] = emissive ? emissive->blue * mult : 0.0f;
 		shading.ssrSpecular = ((GeometryPort::kMainPassRenderFlags & 2) ? 0.0f : 1.0f) * (specular ? a_property.specularLODFade : 0.0f);
 		a_out.padding[0] = a_out.padding[1] = 0u;
-		// The tree's wind, as SetupGeometry's case 0xc makes it now (T6b1a: was the accumulate phase's, from the node).
+		// The tree's wind, as SetupGeometry's case 0xc makes it now.
 		ObjectTreeAnim tree{};
 		if (a_property.flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kTreeAnim))
 			DeriveTreeAnim(a_property, tree);

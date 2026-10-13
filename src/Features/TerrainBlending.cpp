@@ -399,11 +399,8 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		context->OMSetDepthStencilState(terrainDepthStencilState, 0xFF);
 
 		globals::profiler->BeginPass("TerrainBlending::TerrainPasses");
-		for (auto& renderPass : terrainRenderPasses) {
+		for (auto& renderPass : terrainRenderPasses)
 			Hooks::BSBatchRenderer__RenderPassImmediately::func(renderPass.a_pass, renderPass.a_technique, renderPass.a_alphaTest, renderPass.a_renderFlags);
-			if (globals::features::drawcallLimitFix.loaded)
-				globals::features::drawcallLimitFix.ProbeTerrainPass(static_cast<std::uint32_t>(&renderPass - terrainRenderPasses.data()), renderPass.a_pass);
-		}
 		globals::profiler->EndPass();
 
 		// Reset alpha blending

@@ -1,3 +1,4 @@
+// CS_DCLF_TARGET_DUMP: staging copies at the frame's target points, written as PNGs and statistics once readable. Render thread.
 #include "TargetDump.h"
 
 #include <DirectXPackedVector.h>

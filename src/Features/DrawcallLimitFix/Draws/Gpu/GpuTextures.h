@@ -30,7 +30,7 @@ namespace DCLF
 	 * shadow state's address and filter modes) into ORG's sampler heap.
 	 *
 	 * Render thread: inside an epoch (its descriptor service) or outside one (the graph's own, retained, as the import thread uses).
-	 * Request, Seal and Fixed are any thread's (T6b2c: the scene work's material and shared bindings): a request goes to the import
+	 * Request, Seal and Fixed are any thread's (the scene work's material and shared bindings): a request goes to the import
 	 * thread through a lock-free queue, which answers it as an event into the requester's queue, from the registry or by importing
 	 * with the context the render thread published (PublishImportContext, with the null descriptor and the samplers: Fixed). The
 	 * registry's lock is the render thread's (ResolveBinding) and the import thread's alone.

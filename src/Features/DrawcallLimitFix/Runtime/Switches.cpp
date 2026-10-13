@@ -1,3 +1,4 @@
+// Switches: the registry (name, kind, description per switch), the switches file and environment read once, the startup summary.
 #include "Features/DrawcallLimitFix/Runtime/Switches.h"
 
 #include <ShlObj.h>
@@ -110,16 +111,13 @@ namespace DCLF
 			{ ChangeLogParity, "CS_DCLF_CHANGE_LOG_PARITY", P, N, false, "1: the change log against a diff of the tables" },
 			{ ResidentParity, "CS_DCLF_RESIDENT_PARITY", P, N, false, "1: resident records against the engine's registrations" },
 			{ FadeParity, "CS_DCLF_FADE_PARITY", P, N, false, "1: the fade port against the engine's functions, and FadeStateCS against the port" },
-			{ ResidentDrawParity, "CS_DCLF_RESIDENT_DRAW_PARITY", P, N, false, "1: the resident region's draws against a whole-scene build" },
 			{ BuildParity, "CS_DCLF_BUILD_PARITY", P, N, false, "1: the build cache against a fresh build" },
 			{ SetParity, "CS_DCLF_SET_PARITY", P, N, false, "1: the per-object visibility words read back after the colour epoch against the CPU's decisions" },
 			{ MirrorParity, "CS_DCLF_MIRROR_PARITY", P, N, false, "1: the scene mirror against the live objects, a slice of the tracked set a frame (step 6e F3)" },
-			{ BindlessParity, "CS_DCLF_BINDLESS_PARITY", P, N, false, "1: the object records against the values of the constant groups they replace" },
 			{ CaptureParity, "CS_DCLF_CAPTURE_PARITY", P, N, false, "1: the tables against the engine's own lighting draws (run with CS_DCLF_PARITY_BOTH=1, so the engine draws what DCLF draws)" },
 			{ ParityBoth, "CS_DCLF_PARITY_BOTH", P, N, false, "1: nothing is withheld from the engine, which draws everything while DCLF draws its set as well (capture parity compares the two; it double-draws)" },
 			{ CapturePointParity, "CS_DCLF_CAPTURE_POINT_PARITY", P, N, false, "1: the colour epoch's captured bindings against the frame's first native lighting draw" },
 			{ SkylightParity, "CS_DCLF_SKYLIGHT_PARITY", P, N, false, "1: DCLF's Skylighting occlusion map against the engine's, texel by texel" },
-			{ FanoutParity, "CS_DCLF_FANOUT_PARITY", P, N, false, "1: every 60th pass, the fanned-out evaluations (walk rounds and joins) made again on the scene lane and compared field by field (T6b3e)" },
 			{ AccumulatedParity, "CS_DCLF_ACCUMULATED_PARITY", P, N, false,
 				"1: T7b1/T7b2 observers: DCLF's decoded visibility against the engine's kAccumulated on the listed roots and their geometry, frame by frame (<- ACCUMULATED), and FUN_1402cff60's animation gate on the stood-in roots against DCLF's writes (<- ANIM RATE); off: the readback and the writes still run" },
 
@@ -131,18 +129,11 @@ namespace DCLF
 				"TEMP, default on: the pulled Lighting vertex stage checks its sequence and fetch, and faults at a beacon address naming the check (0: off)" },
 			{ ShaderSourceDir, "CS_DCLF_SHADER_SOURCE_DIR", D, N, false, "where CS_DCLF_SHADER_DEBUG copies the HLSL sources" },
 			{ TraceTexturePaths, "CS_DCLF_TRACE_TEXTURE_PATHS", D, N, false, "set: texture identities are logged with their paths" },
-			{ CoverageProbe, "CS_DCLF_COVERAGE_PROBE", D, N, false, "1: which shaders the objects DCLF leaves native use" },
-			{ DrawCensus, "CS_DCLF_DRAW_CENSUS", D, N, false, "1: the engine's native draws per frame, by pass, shader type and technique" },
 			{ TreeLodAudit, "CS_DCLF_TREE_LOD_AUDIT", D, N, false, "1: tree LOD instances the engine leaves shown over a loaded, visible full tree (and hidden ones without one), every 60 frames" },
-			{ ReflectionCensus, "CS_DCLF_REFLECTION_CENSUS", D, N, false, "1: TEMP, the water reflection cube map's draws per face, by shader, technique, LOD class and state, every 300 frames" },
 			{ Census, "CS_DCLF_CENSUS", D, N, false,
 				"1: T7a's census, every report: what the engine still draws (the passes registered and not withheld) per view and class (DCLF's verdict for Lighting geometry; shader type and RTTI otherwise)" },
-			{ DeriveProbe, "CS_DCLF_DERIVE_PROBE", D, N, false, "1: derivation statistics in the report" },
-			{ SlotProbe, "CS_DCLF_SLOT_PROBE", D, N, false, "1: slot lifetime statistics in the report" },
-			{ DecalOrderProbe, "CS_DCLF_DECAL_ORDER_PROBE", D, N, false, "1: the main pass's decal registration order against the scene lists' order" },
 			{ HiddenWatch, "CS_DCLF_HIDDEN_WATCH", D, N, false, "1: hardware watchpoints name the store behind a hidden change no event announced (with walk parity)" },
 			{ MirrorWatch, "CS_DCLF_MIRROR_WATCH", D, N, false, "1: hardware watchpoints on a fade node's statics after its placement name the writers the mirror misses" },
-			{ InputWatch, "CS_DCLF_INPUT_WATCH", D, N, false, "1: which of a per-frame entry's classify and shading inputs changed when the light path re-read them" },
 			{ TableStart, "CS_DCLF_TABLE_START", D, N, false, "small: the growable GPU tables start with a few rows, so that growth runs early and often" },
 			{ SkylightDumpDir, "CS_DCLF_SKYLIGHT_DUMP_DIR", D, N, false, "where CS_DCLF_SKYLIGHT_PARITY writes the maps it compares" },
 			{ DepthTrace, "CS_DCLF_DEPTH_TRACE", D, N, false, "1: the D3D11 calls that touch the main depth buffer, for five frames" },
@@ -151,12 +142,7 @@ namespace DCLF
 			{ TargetDump, "CS_DCLF_TARGET_DUMP", D, N, false, "f1,f2,...: at those Present counts, every target bound at each dump point of the frame (and kMAIN, its depth) read back asynchronously and written as half-size PNGs with NaN/Inf marked, and their statistics (Diagnostics/TargetDump.h; into SKSE/dclf-dump/<count>)" },
 			{ FoliageParity, "CS_DCLF_FOLIAGE_PARITY", P, N, false,
 				"1: the alpha-tested colour draws' pixels (object, albedo, diffuse) against the frame before's, tree wind frozen; wind: not frozen" },
-			{ ShadowMaskProbe, "CS_DCLF_SHADOWMASK_PROBE", D, N, false, "x,y: the shadow mask at a pixel (open defect)" },
-			{ ShadowMapProbe, "CS_DCLF_SHADOWMAP_PROBE", D, N, false, "1: the shadow maps' contents (open defect)" },
-			{ GBufferProbe, "CS_DCLF_GBUFFER_PROBE", D, N, false, "x,y: the G-buffer at a pixel after DCLF's colour epoch (open defect)" },
 			{ ShadowDebugOutput, "CS_DCLF_SHADOW_DEBUG_OUTPUT", D, N, false, "1: Lighting.hlsl writes the sun's shadow terms into the diffuse target (open defect)" },
-			{ Timeline, "CS_DCLF_TIMELINE", D, N, false,
-				"1: T6b0's measurements: objects' stage timelines, the reflection residue by furthest stage, unhides by store, join and install latency, the engine's import share by thread" },
 			{ ReleaseGuard, "CS_DCLF_RELEASE_GUARD", D, N, false,
 				"1: the engine objects' last releases on DCLF's threads (the scene lane, the pool) counted and named by class (NiRefObject::DeleteThis patched; T6b3e)" },
 

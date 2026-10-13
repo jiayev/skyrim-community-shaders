@@ -1,3 +1,6 @@
+// MaterialPort's Community Shaders part: TruePBR's SetupMaterial replacement, Advanced Skin's textures and the FeatureFrame sample
+// (render thread, the frame's start). Evaluation is pure.
+
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"

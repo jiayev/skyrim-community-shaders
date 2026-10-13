@@ -9,10 +9,11 @@ namespace DCLF::Policy
 	 * frames, a reference built in full, or the scene work kept where its observers read it.
 	 *
 	 * Every answer here with the observers off (no `CS_DCLF_*` parity or probe switch) is the normal path's, and the main path asks
-	 * nothing else of the diagnostics to decide its work. Policy.cpp derives each answer from Observation.
+	 * nothing else of the diagnostics to decide its work (it never reads a parity switch itself). Policy.cpp derives each answer from
+	 * Observation.
 	 */
 
-	/** @brief The scene pass runs inline at the frame's start on the render thread (the pump's wakes dropped), where the observers that read the store from the engine's hooks keep their placement. Normal path: false. */
+	/** @brief The scene pass runs inline at the frame's start on the render thread (the pump's wakes dropped), where the observers that read the scene state from the engine's hooks keep their placement. Normal path: false. */
 	bool ScenePassInline();
 
 	/** @brief The primary cull's stand-in walks every entry each frame, not only the entries it refreshes. Normal path: false. */
@@ -24,9 +25,6 @@ namespace DCLF::Policy
 	/** @brief The sun's cascades skip the entries DCLF excludes on frame a_frame (else the engine accumulates them). Normal path: true. */
 	bool ExcludeSun(std::uint32_t a_frame);
 
-	/** @brief The engine builds its scene lists whole every frame (DCLF neither filters nor keeps them). Normal path: false. */
-	bool KeepSceneListsWhole();
-
 	/** @brief The engine's scene lists are kept as DCLF's filter leaves them on frame a_frame (else the engine builds them whole). Normal path: true. */
 	bool FilterSceneLists(std::uint32_t a_frame);
 
@@ -36,9 +34,6 @@ namespace DCLF::Policy
 	/** @brief The shadow views copy the engine's per-frame block even where DCLF owns the view's camera. Normal path: false. */
 	bool CaptureEngineShadowBlock();
 
-	/** @brief The main payloads are built at the epochs instead of ahead with the publication (the builds read the eye the Z-prepass captures). Normal path: false. */
-	bool BuildAtEpoch();
-
 	/** @brief The set's members are withheld from the engine's views (else the engine draws everything while DCLF draws its set too). Normal path: true. */
 	bool WithholdFromEngine();
 
@@ -46,20 +41,17 @@ namespace DCLF::Policy
 	enum class Verdicts : std::uint8_t
 	{
 		Classification,  // the walk's cached classification
-		Derivation,      // the joins' cached derivation
+		Derivation,      // the accumulate phase's cached derivation
 	};
 
 	/** @brief Pass a_pass recomputes the cached a_verdicts as well as serving them (the two compared). Normal path: false. */
 	bool RecomputeCachedVerdicts(Verdicts a_verdicts, std::uint64_t a_pass);
 
-	/** @brief The scene pass's evaluations run interleaved on the pass's own thread (fan-out 0) whatever CS_DCLF_FANOUT asks: the observers' live reads and lazy samples are the pass's. a_joins: the joins' round. Normal path: false. */
-	bool SerialFanout(bool a_joins);
+	/** @brief The scene pass's evaluations run interleaved on the pass's own thread (fan-out 0) whatever CS_DCLF_FANOUT asks: the mirror reads' live checks are the pass's. Normal path: false. */
+	bool SerialFanout();
 
 	/** @brief The hidden witness reads every gated entry's hidden chain on pass a_pass. Normal path: false. */
 	bool HiddenWitness(std::uint64_t a_pass);
-
-	/** @brief A cached entry whose inputs no event changed has them read again (and is classified again when they moved). Normal path: false. */
-	bool RereadCachedInputs();
 
 	/** @brief The main builds reuse the resident region's cache (else every build is whole). Normal path: true. */
 	bool ReuseResidentRegion();
@@ -82,6 +74,6 @@ namespace DCLF::Policy
 	/** @brief The scene pass checks a slice of the tracked set against the live scene graph and drops the entries whose detach the events missed. Normal path: false. */
 	bool ValidateTrackedSlice();
 
-	/** @brief The joins check every bound record's slots after a pass that freed one (a_slotsFreed) or on pass a_pass, and neutralise a record naming a slot no member holds. Normal path: false. */
+	/** @brief The accumulate phase checks every bound record's slots after a pass that freed one (a_slotsFreed) or on pass a_pass, and neutralise a record naming a slot no member holds. Normal path: false. */
 	bool NeutraliseDanglingSlots(bool a_slotsFreed, std::uint64_t a_pass);
 }

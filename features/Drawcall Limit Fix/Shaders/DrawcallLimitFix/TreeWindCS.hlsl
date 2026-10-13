@@ -8,9 +8,10 @@
 // entry s + 1 tree slot s, whose clock row it first brings to this frame (a row whose generation is not its static row's is new,
 // a listed node, and starts from the node's values). The entry is what SetupGeometry's case 0xc makes of the tree, which is the
 // same for every member drawing under it (TreeParams, WindTimers with the distance and amplitude in zw), then the listing's
-// generation. The buffers alternate by frame: this frame's
-// is drawn by the next one (Common/DCLFObjects.hlsli, DCLFTreeWind), so nothing waits for this pass.
+// generation. The buffers alternate by frame: this frame's is drawn by the next one (Common/DCLFObjects.hlsli, DCLFTreeWind),
+// so nothing waits for this pass.
 
+// Must match TreeWindConstants (Draws/IndirectDraws/Core/GpuLayouts.h).
 cbuffer TreeWindConstants : register(b0)
 {
 	uint TreesIndex;    // StructuredBuffer<TreeStatic>
@@ -28,7 +29,7 @@ struct TreeWindFrameRow
 	uint TreeCount;    // tree slots
 	uint ObjectCount;  // members (unused)
 	uint Frame;
-	uint TreeSeedsIndex;  // T6b1a: StructuredBuffer<TreeStatic>, FrameValues' tree seeds (two rows a slot)
+	uint TreeSeedsIndex;  // StructuredBuffer<TreeStatic>, FrameValues' tree seeds (two rows a slot)
 	float DeltaTime;
 	float CameraX;
 	float CameraY;
@@ -45,6 +46,7 @@ struct TreeWindFrameRow
 
 static TreeWindFrameRow W;
 
+// Records.h's TreeStatic and TreeClock: must match.
 struct TreeStatic
 {
 	float3 Position;
@@ -55,7 +57,7 @@ struct TreeStatic
 	float Amplitude;
 	uint Generation;
 	uint Animated;
-	uint SeedOdd;  // T6b1a: which of the slot's two seed rows holds its generation's
+	uint SeedOdd;  // which of the slot's two seed rows holds its generation's
 	uint Padding;
 };
 
@@ -115,7 +117,7 @@ float Distance2(float3 a_position)
 		StructuredBuffer<TreeStatic> trees = ResourceDescriptorHeap[TreesIndex];
 		RWStructuredBuffer<TreeClock> clocks = ResourceDescriptorHeap[ClocksIndex];
 		TreeStatic tree = trees[slot];
-		// T6b1a: the node's values are its seed's (Records.h, MergeTreeSeed: keep the two the same); none of the listing's generation yet:
+		// The node's values are its seed's (Records.h, MergeTreeSeed: keep the two the same); none of the listing's generation yet:
 		// no clock step and no entry this frame (a member draws with its shading row's until there is one).
 		{
 			if (W.TreeSeedsIndex == 0)

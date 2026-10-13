@@ -1,7 +1,7 @@
 #pragma once
 
 // A main segment's shape (PassFrame), the frame buffers, the sorts' constants and programs, the DGC preprocess state lists.
-// Part of IndirectDraws' implementation: included by Internal.h, in its order.
+// Made by the commits and the shape producer, recorded against on the render thread. Included by Internal.h, in its order.
 
 namespace DCLF::Draws
 {
@@ -19,12 +19,12 @@ namespace DCLF::Draws
 		// ExecuteIndirect max counts (GrowCapacity, within the buffer's ranges): the phase-1/colour draws, and each decal group.
 		std::uint32_t drawCapacity = 0;
 		std::array<std::uint32_t, kDecalGroups> decalCapacity{};
-		// T7c1: each terrain group's (the colour segment's; MainSizing::terrainCapacity), group 1 from phase 2's base, group 2 after it.
+		// Each terrain group's (the colour segment's; MainSizing::terrainCapacity), group 1 from phase 2's base, group 2 after it.
 		std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
-		// T7d: each half of the forward range (the colour segment's and the forward epoch's; MainSizing::forwardCapacity), after the
+		// Each half of the forward range (the colour segment's and the forward epoch's; MainSizing::forwardCapacity), after the
 		// terrain groups' ranges: the staging half BuildDraws appends to, then the sorted half the forward epoch draws.
 		std::uint32_t forwardCapacity = 0;
-		// T7d's refraction: the refraction range (the colour segment's and the forward epoch's; MainSizing::refractionCapacity), after the
+		// The refraction range (the colour segment's and the forward epoch's; MainSizing::refractionCapacity), after the
 		// forward halves (RefractionSlot).
 		std::uint32_t refractionCapacity = 0;
 		// The sequence buffer's ranges as the epoch sized it (Resources::sequenceDraws, sequenceDecals): its layout.
@@ -32,8 +32,6 @@ namespace DCLF::Draws
 		// The rows' tables' addresses (Resources::materialRows, pipelineRows), which a growth moves.
 		std::uint64_t materialRows = 0, pipelineRows = 0;
 		std::uint32_t cullMode = 0;
-		bool probePixel = false;
-		std::uint32_t probeX = 0, probeY = 0;
 		std::uint32_t width = 0, height = 0;  // render area: the main pass viewport
 		float minDepth = 0.0f, maxDepth = 1.0f;  // its depth range (the engine uses [0, 0.999998])
 		rhi::DescriptorHeapHandle resourceHeap{};
@@ -48,7 +46,7 @@ namespace DCLF::Draws
 		{
 			std::uint32_t bucket = 0, first = 0, capacity = 0;
 			rhi::PipelineHandle pipeline{};
-			// T7c1: a terrain group 1 bucket's twin, its near blocks (kBucketTerrainPair): drawn into the main depth with Terrain
+			// A terrain group 1 bucket's twin, its near blocks (kBucketTerrainPair): drawn into the main depth with Terrain
 			// Blending's depth offset (kZDrawPushOffsetDepth), then into its terrain depth without (Resources::terrainDepth).
 			bool terrainNear = false;
 			bool operator==(const ZCall& o) const
@@ -60,7 +58,7 @@ namespace DCLF::Draws
 		// The commit's per-frame values the epoch's first pass copies from the latch (LatchedCopiesPass).
 		LatchedList latched;
 		// Not compared (the latch block's layout, and the bucket plan zCalls are the calls of): what a commit writing its values
-		// into this shape writes them against - a scene revision's shape, which that commit did not make (R3c).
+		// into this shape writes them against - a scene revision's shape, which that commit did not make.
 		MainLatchLayout latchLayout;
 		std::shared_ptr<const ZBucketPlan> zPlan;
 
@@ -70,7 +68,7 @@ namespace DCLF::Draws
 			       terrainCapacity == o.terrainCapacity && forwardCapacity == o.forwardCapacity && refractionCapacity == o.refractionCapacity &&
 			       sequenceDraws == o.sequenceDraws &&
 			       sequenceDecals == o.sequenceDecals && materialRows == o.materialRows && pipelineRows == o.pipelineRows && cullMode == o.cullMode &&
-			       probePixel == o.probePixel && probeX == o.probeX && probeY == o.probeY && width == o.width && height == o.height &&
+			       width == o.width && height == o.height &&
 			       minDepth == o.minDepth && maxDepth == o.maxDepth && SameHandle(resourceHeap, o.resourceHeap) &&
 			       SameHandle(samplerHeap, o.samplerHeap) && SameIndirect(indirect, o.indirect) && latch == o.latch;
 		}
@@ -116,7 +114,7 @@ namespace DCLF::Draws
 	};
 	constexpr std::uint32_t kSortSequencesConstantWords = sizeof(SortSequencesConstants) / 4;
 	/**
-	 * @brief T7d: ForwardSortCS.hlsl's push constants: the forward range's staging half (BuildDraws appended the visible forward draws
+	 * @brief ForwardSortCS.hlsl's push constants: the forward range's staging half (BuildDraws appended the visible forward draws
 	 * there, each with its view depth in its firstInstance word) and its sorted half, which the forward epoch draws.
 	 */
 	struct ForwardSortConstants
@@ -126,7 +124,7 @@ namespace DCLF::Draws
 		std::uint32_t stagingBase;     // the staging half's first slot
 		std::uint32_t capacity;        // each half's slots (PassFrame::forwardCapacity)
 		std::uint32_t sequenceStride;  // bytes (sizeof(DrawSequence))
-		// T7e: with kCountOffset in options, the count is the word at countOffset bytes (the first-person forward range's bucket count).
+		// With kCountOffset in options, the count is the word at countOffset bytes (the first-person forward range's bucket count).
 		std::uint32_t countOffset = 0;
 		std::uint32_t options = 0;
 		std::uint32_t padding = 0;
@@ -134,12 +132,12 @@ namespace DCLF::Draws
 	};
 	constexpr std::uint32_t kForwardSortConstantWords = sizeof(ForwardSortConstants) / 4;
 	constexpr std::uint32_t kForwardSortGroup = 64;  // ForwardSortCS.hlsl's
-	/** @brief T7d: the forward range's staging half's first slot in a colour shape's sequences (after phase 2's terrain ranges). */
+	/** @brief The forward range's staging half's first slot in a colour shape's sequences (after phase 2's terrain ranges). */
 	inline std::uint64_t ForwardStagingSlot(const PassFrame& a_frame)
 	{
 		return std::uint64_t(a_frame.sequenceDraws) + a_frame.terrainCapacity[0] + a_frame.terrainCapacity[1];
 	}
-	/** @brief T7d's refraction: the refraction range's first slot in a colour shape's sequences (after the forward range's two halves). */
+	/** @brief The refraction range's first slot in a colour shape's sequences (after the forward range's two halves). */
 	inline std::uint64_t RefractionSlot(const PassFrame& a_frame)
 	{
 		return ForwardStagingSlot(a_frame) + 2ull * a_frame.forwardCapacity;
@@ -156,8 +154,8 @@ namespace DCLF::Draws
 	 * (SortSequencesCS.hlsl) writes the sequences grouped by pipeline. The counts are zeroed once, by the first commit
 	 * (countsZeroed), and after that by the scan that reads them.
 	 *
-	 * Not the shadow views': sorting them (a part of these buffers per view slot, one scan over all of them) left their draw
-	 * time within noise at Riverwood (1.28-1.32 against 1.23-1.29 ms) while the scan of 16 views' counts cost 0.08-0.10 ms.
+	 * Not the shadow views': sorting them (a part of these buffers per view slot, one scan over all of them) gained no measurable
+	 * draw time, and the scan over every view's counts costs more than it saves.
 	 */
 	struct DrawSort
 	{

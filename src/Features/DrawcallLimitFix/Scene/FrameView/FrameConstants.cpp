@@ -1,3 +1,6 @@
+// FrameView's Prepass constants: the pipelines' PerGeometry blocks from the frame's sample (posted to the coordinator when a
+// bindless-read value changes), the frame lighting and fog, the character light's view and the projected textures. Render thread.
+
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "State.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
@@ -19,7 +22,7 @@ namespace DCLF::Scene
 		// The material records' frame components are the scene work's (RefreshMaterialSignatures); the frame keeps the
 		// character light's view, from its sample.
 		RefreshCharacterLightView();
-		Diagnostics::Notify(Diagnostics::PrepassConstantsBegin{ *this });
+		Diagnostics::Notify<Diagnostics::ScenePoint::PrepassConstantsBegin>();
 		if (!EngineShaders::Lighting())
 			return;
 		// The frame's pipeline inputs (GeometryPort::PipelineFrame), sampled once, here: the eye is the current accumulator's
@@ -52,7 +55,7 @@ namespace DCLF::Scene
 			EvaluateTechnique(0, fog);
 			MergeFrameFog(fog, frameFog, fogWritten);
 		}
-		Diagnostics::Notify(Diagnostics::PipelineConstantsBegin{ *this });
+		Diagnostics::Notify<Diagnostics::ScenePoint::PipelineConstantsBegin>();
 		frameTables.SyncPipelines(view.pipelines, view.pipelineBindingVersion, frameTablesGeneration);
 		TracyCZoneN(pipelinesZone, "CS.DCLF.FrameConstants.Pipelines", true);
 		std::int64_t pipelinesVisited = 0;
@@ -116,7 +119,7 @@ namespace DCLF::Scene
 		// Every pipeline was made whole once: from the next frame, the frame values in place unless the pipeline inputs move.
 		constantsRefreshed = true;
 		++shadingFrames;
-		Diagnostics::Notify(Diagnostics::PrepassConstantsEnd{ *this });
+		Diagnostics::Notify<Diagnostics::ScenePoint::PrepassConstantsEnd>();
 	}
 
 	void FrameView::RefreshCharacterLightView()

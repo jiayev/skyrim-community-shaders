@@ -1,5 +1,8 @@
 #pragma once
 
+// The executors DCLF's pipeline work runs on: the width-limited build pump (shader compiles and pipeline builds, on the preparation
+// pool) and the pipeline lane's serialized drain (on the coordinator executor). Callable from any thread.
+
 #include <functional>
 
 namespace DCLF
@@ -22,7 +25,7 @@ namespace DCLF
 	unsigned BuildWidth();
 
 	/**
-	 * @brief The pipeline lane (T6b2c step 4): the coordinator of the Lighting programs and pipelines (DrawPipelines.cpp, Impl::Lane).
+	 * @brief The pipeline lane: the coordinator of the Lighting programs and pipelines (DrawPipelines.cpp, Impl::Lane).
 	 * One drain pass at a time on DCLF's coordinator (SceneScheduler::Executor(), SceneExecutor::Coordinator), scheduled by
 	 * WakePipelineLane, which any thread calls after it posts something the lane takes: a request, a compile's or a build's
 	 * completion, the frame's inputs. Wakes coalesce (org::async::SerializedTaskPump: lock-free, level-triggered), and a wake

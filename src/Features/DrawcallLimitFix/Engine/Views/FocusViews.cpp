@@ -1,3 +1,5 @@
+// FocusViews: the BSShadowDirectionalLight::sub detour (render thread) and the focus views it records.
+
 #include "Features/DrawcallLimitFix/Engine/Views/FocusViews.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
@@ -58,7 +60,7 @@ namespace DCLF
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
 		if (frame != sceneFrame) {
 			if (!hosts.empty())
-				Diagnostics::Notify(Diagnostics::FocusViewsFrame{});
+				Diagnostics::Notify<Diagnostics::EnginePoint::FocusViewsFrame>();
 			hosts.clear();
 			sceneFrame = frame;
 		}

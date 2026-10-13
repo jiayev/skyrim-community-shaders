@@ -1,3 +1,6 @@
+// PrimaryCull's scene lists (drawcall-limit-fix.md, "The scene lists without DCLF's roots"): the filter published on the render
+// thread (PublishListFilter, RestoreSceneLists), the build's job (DrawWorld_BuildSceneLists' detour: kept, rebuilt or the engine's
+// build filtered), and the attach/detach detours' structure events (any thread). PrimaryCull.h, PublishListFilter, describes the modes.
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Engine/Views/PortalViews.h"
 
@@ -14,9 +17,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
-
-// The main camera's scene lists without DCLF's roots, and kept across frames (drawcall-limit-fix.md, "The scene lists
-// without DCLF's roots"). PrimaryCull.h, PublishListFilter, describes the modes.
 
 namespace DCLF
 {
@@ -119,7 +119,7 @@ namespace DCLF
 		if (!sceneNode || !processes || !processes[0] || !tes || !count || count > listSentinels.size())
 			return fail(1);
 		// The interior branch (and with no unbound space, the water's) does not walk the object root. Whether the walk reached
-		// unbound space is DCLF's walk's (T5b; PortalViews, after Main::Update's).
+		// unbound space is DCLF's walk's (PortalViews, after Main::Update's).
 		if (!PortalViews::Get().VisibleUnbound())
 			return fail(2);
 		if (tes->interiorCell)
@@ -146,7 +146,6 @@ namespace DCLF
 			++listStats.noOcclusion;
 			return nullptr;
 		}
-		// The cut's snapshot, with the frame's candidate changes following it (the changed entries stay in the lists: Cut::stale).
 		// The cut as the last frame left it, brought up to the frame's candidates (it plans again only the entries that moved).
 		if (const auto candidates = Scene::FrameView::Get().GetSunCandidates(); !candidates) {
 			++listStats.notCurrent;
@@ -159,7 +158,7 @@ namespace DCLF
 		}
 		// The exclusion this frame's full-frustum cull applies, for the same snapshot: a root out of the lists is out of
 		// the sun's cascades only when that exclusion takes it out too. With the sun off (an interior) no full-frustum cull
-		// reads the lists, and no exclusion is needed (T5b).
+		// reads the lists, and no exclusion is needed.
 		const bool sunOff = Global<std::uint8_t>(Engine::Address::kSunOff) != 0;
 		const auto exclusion = sunOff ? nullptr : SunAccumulation::Get().PendingExclusion();
 		if (!sunOff && (!exclusion || exclusion->candidates != cut.candidates || exclusion->excluded.size() != cut.plans.size())) {
@@ -200,15 +199,9 @@ namespace DCLF
 		listsFiltered.store(false, std::memory_order_release);
 		listFilter.store(nullptr, std::memory_order_release);
 		listMode.store(ListMode::Engine, std::memory_order_release);
-		Diagnostics::Notify(Diagnostics::SceneListsPublishing{});
+		Diagnostics::Notify<Diagnostics::EnginePoint::SceneListsPublishing>();
 		if (!installed) {
 			++listStats.notToggled;
-			listsDirty.store(true, std::memory_order_relaxed);
-			return;
-		}
-		// The engine's own build, whole (Policy::KeepSceneListsWhole).
-		if (Policy::KeepSceneListsWhole()) {
-			++listStats.decalOrder;
 			listsDirty.store(true, std::memory_order_relaxed);
 			return;
 		}
@@ -467,7 +460,7 @@ namespace DCLF
 		if (!filter || !lists || !count)
 			return;
 		// The filter's roots are alive: its candidates hold them (SunCandidates::held). One the engine detached since the snapshot
-		// was made stays out (it is no longer in the scene); a hidden one is skipped by the cull. Taking a reference to a root the
+		// was made stays out (it has left the scene); a hidden one is skipped by the cull. Taking a reference to a root the
 		// snapshot did not hold is what put freed roots into the lists, released at Present (crash-catalog.md).
 		const auto* scene = SceneNode();
 		std::uint32_t l = 0;
@@ -540,7 +533,7 @@ namespace DCLF
 					self.BuryLists();
 					func();
 					self.listsDirty.store(true, std::memory_order_relaxed);
-					Diagnostics::Notify(Diagnostics::EngineSceneListsBuilt{});
+					Diagnostics::Notify<Diagnostics::EnginePoint::EngineSceneListsBuilt>();
 					self.FilterSceneLists();
 					return;
 				}
@@ -637,11 +630,11 @@ namespace DCLF
 		c.eventsApplied = l.eventsApplied.exchange(0), c.eventsAdded = l.eventsAdded.exchange(0), c.eventsRemoved = l.eventsRemoved.exchange(0);
 		c.eventsRebuilt = l.eventsRebuilt.exchange(0);
 		c.frames = l.frames, c.published = l.published, c.built = l.built, c.dryRuns = l.dryRuns, c.notToggled = l.notToggled, c.notCurrent = l.notCurrent;
-		c.noExclusion = l.noExclusion, c.noOcclusion = l.noOcclusion, c.decalOrder = l.decalOrder;
+		c.noExclusion = l.noExclusion, c.noOcclusion = l.noOcclusion;
 		c.restored = l.restored, c.restoreDetached = l.restoreDetached, c.unexcluded = l.unexcluded, c.lostWhileOut = l.lostWhileOut;
 		c.engineFrames = l.engineFrames, c.notKeepable = l.notKeepable, c.notKeepableBy = l.notKeepableBy;
 		c.rebuildStructure = l.rebuildStructure, c.rebuildFilter = l.rebuildFilter, c.rebuildWitness = l.rebuildWitness, c.rebuildDirty = l.rebuildDirty;
-		l.frames = l.published = l.built = l.dryRuns = l.notToggled = l.notCurrent = l.noExclusion = l.noOcclusion = l.decalOrder = 0;
+		l.frames = l.published = l.built = l.dryRuns = l.notToggled = l.notCurrent = l.noExclusion = l.noOcclusion = 0;
 		l.restored = l.restoreDetached = l.unexcluded = l.lostWhileOut = l.engineFrames = l.notKeepable = 0;
 		l.notKeepableBy = {};
 		l.rebuildStructure = l.rebuildFilter = l.rebuildWitness = l.rebuildDirty = 0;

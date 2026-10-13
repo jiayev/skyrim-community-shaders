@@ -1,3 +1,5 @@
+// LightViews: the kept local lights' views, computed on the render thread from LightSelection's detour.
+
 #include "Features/DrawcallLimitFix/Engine/Views/LightViews.h"
 
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -30,7 +32,7 @@ namespace DCLF
 		if (frame != sceneFrame) {
 			// A new frame: last frame's views go; the observers count frames that had local lights.
 			if (!lights.empty())
-				Diagnostics::Notify(Diagnostics::LightViewsFrame{});
+				Diagnostics::Notify<Diagnostics::EnginePoint::LightViewsFrame>();
 			lights.clear();
 			sceneFrame = frame;
 		}

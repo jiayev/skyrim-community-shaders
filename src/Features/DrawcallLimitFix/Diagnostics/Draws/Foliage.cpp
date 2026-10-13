@@ -1,12 +1,12 @@
+// CS_DCLF_FOLIAGE_PARITY: the colour pass's alpha-tested draws' pixels (the foliage record, Policy::RecordFoliagePixels) against the frame
+// before's, reprojected, and within the frame against the Z-prepass's owners (FoliageParityCS.hlsl): the compare pass and its readback,
+// appended after the colour draws, and the report of each frame's results.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "DrawsState.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #	include "Events.h"
 #	include "Observers.h"
-
-// CS_DCLF_FOLIAGE_PARITY: the colour pass's alpha-tested draws' pixels (the foliage record, Policy::RecordFoliagePixels) against the frame
-// before's, reprojected, and within the frame against the Z-prepass's owners (FoliageParityCS.hlsl): the compare pass and its readback,
-// appended after the colour draws, and the report of each frame's results.
 
 namespace DCLF::Diagnostics
 {

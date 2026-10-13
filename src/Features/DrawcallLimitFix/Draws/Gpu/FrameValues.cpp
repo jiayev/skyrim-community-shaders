@@ -1,3 +1,5 @@
+// FrameValues (see the header): the render thread's Kick and the producers it dispatches onto the preparation pool, one at a time.
+
 #include "FrameValues.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
@@ -37,9 +39,9 @@ namespace DCLF
 {
 	namespace
 	{
-		// T7e's forward part: the first-person particle members' expansions (the producer's), for the first-person report.
+		// First-person particle expansion counters, for the first-person report.
 		std::atomic<std::uint64_t> firstPersonParticleExpansions{ 0 }, firstPersonParticleCount{ 0 };
-		std::atomic<std::uint32_t> firstPersonParticleFarthest{ 0 };  // a non-negative float's bits (ordered as the float)
+		std::atomic<std::uint32_t> firstPersonParticleFarthest{ 0 };  // non-negative float bits (ordered as the float)
 
 		// Row-major 3x4, as the shaders read a transform.
 		void StoreTransform(const RE::NiTransform& a_transform, float (&a_out)[12])
@@ -56,7 +58,7 @@ namespace DCLF
 			a_out[11] = a_transform.translate.z;
 		}
 
-		// A sun entry: the node's bound, or unbounded (radius +max, inside every process) without one.
+		// The node's bound, or unbounded (radius +max, inside every process).
 		void StoreSunEntry(const RE::NiAVObject* a_node, float (&a_out)[4])
 		{
 			if (a_node && a_node->worldBound.radius >= 0.0f) {
@@ -77,7 +79,7 @@ namespace DCLF
 			std::memcpy(a_out, node.data(), sizeof(a_out));
 		}
 
-		/** @brief a_geometry's index among a_node's geometries, depth first in child order (null slots skipped); false if not found. */
+		/** @brief a_geometry's depth-first index among a_node's geometries (null slots skipped); false if not found. */
 		bool OrdinalUnder(const RE::NiNode& a_node, const RE::BSGeometry& a_geometry, std::uint32_t& a_index)
 		{
 			for (const auto& child : a_node.GetChildren()) {
@@ -94,15 +96,11 @@ namespace DCLF
 			return false;
 		}
 
-		// T7d's ordered-node interleave (BindlessPlacement::forwardSort): a blended leaf's nearest BSOrderedNode (FUN_1415039f0's walk up
-		// the parents, the exact type), whose OnVisible opens a group of the culling process and culls its children into it in child order
-		// (0x141503970, then NiNode's); the list process registers the group at the node's world bound (ProcessJob, 0x140e28af0, the
-		// accumulator's vfunc 0x140: FUN_1414f50d0's depth, the view axis distance of that centre), and the blended draw interleaves the
-		// groups, sorted by that depth (qsort, comparator 0x1414f55e0), with the blended list (FUN_1414f5330), each group's passes in their
-		// registration order (FUN_1414f19d0). Only a blended leaf's passes go into the group (FUN_1414b2330 gives it to hint 1 alone), so an
-		// opaque leaf's row stays 0 and no parent of it is read. The node's bound is live: BSOrderedNode's bound update (0x141503a60) takes
-		// its static bound only with kFixedBound (LoadBinary sets it for a static bound of non-zero radius), else NiNode's merge of its
-		// children's. Read inside the engine-read window (the caller's lease), where the scene graph holds still.
+		// The ordered-node interleave (BindlessPlacement::forwardSort; engine walk in drawcall-limit-fix.md): a blended leaf's nearest
+		// BSOrderedNode (exact type, FUN_1415039f0) opens a group whose children draw in child order; the groups are sorted by the
+		// node's world-bound centre depth (comparator 0x1414f55e0) and interleaved with the blended list. Only blended leaves join a
+		// group (FUN_1414b2330), so an opaque leaf's row stays 0. The bound is live unless kFixedBound (0x141503a60). Read inside the
+		// caller's engine-read lease.
 		void StoreForwardSort(const RE::BSGeometry& a_geometry, float (&a_out)[4])
 		{
 			a_out[0] = a_out[1] = a_out[2] = a_out[3] = 0.0f;
@@ -157,9 +155,7 @@ namespace DCLF
 		StoreSunEntry(a_sunEntryNode, a_out.sunEntry);
 		StoreFadeNode(a_fadeProperty, a_out.lodFadeNode);
 		StoreForwardSort(a_geometry, a_out.forwardSort);
-		// A billboard's row is its unturned world and its node's base and pivot, which the vertex stage turns to the drawing camera
-		// (Billboards.h): its leaf's world and bound above are the last cull's turn, which nothing of DCLF's reads. Whatever the toggle, so
-		// that a row never depends on it (only the leaf's key does: RasterEffectBillboard).
+		// A billboard's unturned world, base and pivot (Billboards.h), sampled regardless of the toggle so rows never depend on it.
 		Billboards::SampleRow(a_geometry, a_out);
 	}
 
@@ -181,9 +177,9 @@ namespace DCLF
 		using PaletteRow = FrameValues::PaletteRow;
 
 		/**
-		 * @brief The engine's per-frame palette update (AE FUN_140e4ff90): what the bone setter runs from the native draw an owned
-		 * skin no longer gets. Idempotent within a frame (frameID) and under the skin's own critical section, so any thread may run
-		 * it; it copies the current palette to the previous one first and writes three float4 rows a bone in absolute world space.
+		 * @brief The engine's per-frame palette update (AE FUN_140e4ff90), which the native draw's bone setter runs and an owned skin
+		 * misses. Idempotent per frame (frameID) under the skin's critical section, so any thread may run it; copies current to
+		 * previous, then writes three float4 rows per bone in absolute world space.
 		 */
 		void UpdateSkin(RE::NiSkinInstance* a_skin, const RE::NiTransform& a_world)
 		{
@@ -192,7 +188,6 @@ namespace DCLF
 			updateSkinInstance(a_skin, &a_world);
 		}
 
-		// An item's row, and its layer's.
 		void SampleItem(const Plan::Item& a_item, BindlessPlacement& a_row, BindlessPlacement& a_layer)
 		{
 			const auto& geometry = *a_item.geometry;
@@ -204,7 +199,7 @@ namespace DCLF
 		}
 	}
 
-	// The skin's palettes after this frame's update; false when its size is not its block's (the walk writes it again: KeepSkin).
+	// The skin's palettes after this frame's update; false when its size mismatches its block (the walk rewrites it: KeepSkin).
 	bool FrameValues::SkinPalettes(const RE::BSGeometry& a_geometry, std::uint32_t a_rows, const float*& a_current, const float*& a_previous)
 	{
 		auto* skin = a_geometry.GetGeometryRuntimeData().skinInstance.get();
@@ -227,13 +222,13 @@ namespace DCLF
 		std::array<org::PersistentGraphHost::GpuPoint, kRing> points;  // per ring entry: the last frame that read it
 		std::shared_ptr<const Plan> plan;                              // the newest
 		std::vector<std::shared_ptr<const Plan>> unsampled;           // plans whose written slots no producer has sampled yet
-		std::vector<ShadingItem> unsampledShading;        // shading items and wetness no producer has taken yet
+		std::vector<ShadingItem> unsampledShading;        // not yet taken by a producer
 		std::vector<WetnessValue> unsampledWetness;
-		std::vector<std::pair<std::uint32_t, FadeRootStatic>> unsentSeeds;  // T6b1a: seed rows (FadeSeedRow) no producer has written yet
-		std::uint32_t seedRows = 0;                                     // the seed rows the requests have named (FadeSeedRow + 1, grown)
+		std::vector<std::pair<std::uint32_t, FadeRootStatic>> unsentSeeds;  // by FadeSeedRow, not yet written
+		std::uint32_t seedRows = 0;                                     // highest named FadeSeedRow + 1
 		std::vector<std::pair<std::uint32_t, TreeStatic>> unsentTreeSeeds;
 		std::uint32_t treeSeedRows = 0;
-		std::deque<std::pair<std::uint64_t, std::shared_ptr<const Plan>>> plans;  // the plans each kicked producer reads, by its sequence
+		std::deque<std::pair<std::uint64_t, std::shared_ptr<const Plan>>> plans;  // held per kicked producer's sequence
 		std::uint64_t seq = 0;                                          // the last kicked
 		bool kicked = false;                                            // this frame
 		bool unavailableLogged = false;
@@ -242,15 +237,13 @@ namespace DCLF
 		KeptArray<BindlessPlacement> rows;
 		KeptArray<PaletteRow> palettes;
 		KeptArray<BindlessShading> shading;
-		KeptArray<FadeRootStatic> seeds;  // T6b1a: by FadeSeedRow
-		KeptArray<TreeStatic> treeSeeds;  // T6b1a: by 2 * tree slot + seedOdd
-		std::array<std::uint64_t, kRing> held{}, paletteHeld{}, shadingHeld{}, seedsHeld{}, treeSeedsHeld{};  // per ring entry: the versions it holds
-		std::vector<std::uint8_t> listed;                       // per slot, while a producer lists its items
-		std::vector<std::uint8_t> blockListed;                  // per palette row, likewise (a block an older plan's item still names)
-		std::vector<std::uint8_t> shadingListed;                // per slot, while a producer lists its shading items
-		// T6b1a: the written slots whose previous transform was not their current one yet (a static's first update), sampled again by
-		// the next producers until it is; a newer item for the slot (a write, a mover) takes its place. The scene work no longer reads
-		// the transforms to write them again.
+		KeptArray<FadeRootStatic> seeds;  // by FadeSeedRow
+		KeptArray<TreeStatic> treeSeeds;  // by 2 * tree slot + seedOdd
+		std::array<std::uint64_t, kRing> held{}, paletteHeld{}, shadingHeld{}, seedsHeld{}, treeSeedsHeld{};  // per ring entry: versions held
+		std::vector<std::uint8_t> listed;                       // dedup marks while listing items: per slot
+		std::vector<std::uint8_t> blockListed;                  // per palette block
+		std::vector<std::uint8_t> shadingListed;                // per slot, shading items
+		// Written slots whose previous transform still differs from the current (a static's first update): resampled until equal.
 		std::vector<Plan::Item> settling;
 		std::atomic<std::uint64_t> done{ 0 };
 
@@ -260,8 +253,8 @@ namespace DCLF
 		std::atomic<std::uint64_t> sampleUs{ 0 }, pointWaitUs{ 0 }, uploadUs{ 0 }, maxTotalUs{ 0 };
 
 		/**
-		 * @brief T7e: a first-person member's row (and its layer's) and palettes, taken by the render thread at Kick (before Main::Draw
-		 * moves the skeleton into its root's space), written by the producer in place of a sample.
+		 * @brief A first-person member's rows and palettes, sampled by the render thread at Kick, before Main::Draw moves the
+		 * skeleton into its root's space.
 		 */
 		struct FirstPersonSample
 		{
@@ -274,26 +267,26 @@ namespace DCLF
 		{
 			std::uint64_t seq = 0;
 			const Plan* plan = nullptr;
-			std::vector<const Plan*> written;  // the plans whose written slots it samples too (once each, oldest first)
-			std::vector<ShadingItem> shadingItems;  // the slots named for their shading, the newest last
-			std::vector<WetnessValue> wetness;      // the wetness captured, in capture order
-			std::vector<std::pair<std::uint32_t, FadeRootStatic>> seedValues;  // T6b1a: the seed rows taken at the frame's start, in request order
+			std::vector<const Plan*> written;  // plans whose written slots it also samples (oldest first)
+			std::vector<ShadingItem> shadingItems;  // newest last
+			std::vector<WetnessValue> wetness;      // in capture order
+			std::vector<std::pair<std::uint32_t, FadeRootStatic>> seedValues;  // taken at the frame's start, in request order
 			std::uint32_t seedRows = 0;
 			std::vector<std::pair<std::uint32_t, TreeStatic>> treeSeedValues;
 			std::uint32_t treeSeedRows = 0;
-			std::shared_ptr<const FrameGlobals> globals;  // the frame's engine globals (the shading rows' tree wind)
+			std::shared_ptr<const FrameGlobals> globals;  // the frame's engine globals (shading rows' tree wind)
 			std::uint32_t ringIndex = 0;
 			std::shared_ptr<org::Buffer> target, paletteTarget, shadingTarget, seedTarget, treeSeedTarget;
-			std::uint32_t capacity = 0, paletteCapacity = 0, shadingCapacity = 0, seedCapacity = 0, treeSeedCapacity = 0;  // their rows
-			bool fresh = false, paletteFresh = false, shadingFresh = false, seedFresh = false, treeSeedFresh = false;      // a new buffer: it holds nothing
+			std::uint32_t capacity = 0, paletteCapacity = 0, shadingCapacity = 0, seedCapacity = 0, treeSeedCapacity = 0;  // in rows
+			bool fresh = false, paletteFresh = false, shadingFresh = false, seedFresh = false, treeSeedFresh = false;      // new buffer, holds nothing
 			org::PersistentGraphHost::GpuPoint reuse;
 			std::shared_ptr<rhi::TimelinePtr> timeline;
 			std::shared_ptr<org::runtime::IUploadService> uploads;
 			FrameUploads more;  // the frame's other uploads (Kick's a_uploads)
-			std::vector<FirstPersonSample> firstPerson;  // T7e: the render thread's samples (Kick)
-			ParticleSnapshots::Camera particleCamera;    // T7e: the main camera the particle members' quads face (Kick)
-			// T7e's forward part: the first-person camera a first-person particle member's quads face (Kick): the main camera's rotation (the
-			// first-person camera's, FUN_1414cb020) at the first-person eye (DrawWorld +0x00).
+			std::vector<FirstPersonSample> firstPerson;  // the render thread's samples (Kick)
+			ParticleSnapshots::Camera particleCamera;    // the main camera particle quads face
+			// The camera first-person particle quads face: the main camera's rotation (the first-person camera's, FUN_1414cb020)
+			// at the first-person eye (DrawWorld +0x00).
 			ParticleSnapshots::Camera firstPersonParticleCamera;
 		};
 		void Run(const Job& a_job);
@@ -308,7 +301,7 @@ namespace DCLF
 	void FrameValues::Impl::Run(const Job& a_job)
 	{
 		ZoneScopedN("CS.DCLF.FrameValues");
-		// One producer at a time, in order: each builds on the rows the one before left, and the signals rise.
+		// One producer at a time, in order: each builds on the previous one's rows, and signals rise monotonically.
 		for (auto finished = done.load(std::memory_order_acquire); finished + 1 < a_job.seq; finished = done.load(std::memory_order_acquire))
 			done.wait(finished, std::memory_order_acquire);
 		const auto start = std::chrono::steady_clock::now();
@@ -316,7 +309,7 @@ namespace DCLF
 			Sample(a_job);
 			const auto sampledAt = std::chrono::steady_clock::now();
 			sampleUs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(sampledAt - start).count());
-			// The buffers' last readers, F frames back, done on the GPU (almost always already).
+			// Wait for the buffers' last readers, kRing frames back (almost always done).
 			if (!a_job.reuse.Reached()) {
 				ZoneScopedN("CS.DCLF.FrameValues.WaitBuffer");
 				++pointWaits;
@@ -339,7 +332,7 @@ namespace DCLF
 			if (failures++ == 0)
 				logger::error("[DCLF] frame values {} failed: {}; the frame draws the rows its buffers held", a_job.seq, e.what());
 		}
-		// Always: every batch of the frame waits for it.
+		// Always signal: every batch of the frame waits for it.
 		if (!a_job.uploads || !a_job.uploads->QueueStreamingSignal(a_job.timeline, a_job.seq))
 			stl::report_and_fail(fmt::format("Drawcall Limit Fix: frame values {} could not signal the frame's wait; the GPU would wait for it forever", a_job.seq));
 		const auto total = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
@@ -362,27 +355,25 @@ namespace DCLF
 			out.resize(work.slots, BindlessPlacement{});
 			rows.MarkRange(first, work.slots - first);
 		}
-		// Every block's current and previous palette (PaletteRowsOf).
+		// Two row sets per block: current and previous (PaletteRowsOf).
 		auto& paletteOut = palettes.Mutable();
 		if (const std::size_t paletteRows = 2ull * work.boneCapacity; paletteOut.size() < paletteRows) {
 			const std::size_t first = paletteOut.size();
 			paletteOut.resize(paletteRows, PaletteRow{});
 			palettes.MarkRange(first, paletteRows - first);
 		}
-		// The items, once each: the movers, and the slots the plans not sampled yet wrote in full, the newest walk's first (a slot an
-		// older walk wrote and a newer one wrote again is the newer one's). A palette block likewise: the newest item naming it.
+		// Each slot and palette block once, by its newest item.
 		struct Listed
 		{
 			const Plan::Item* item;
 			bool palette;
-			bool settles = false;  // a written slot's (not a mover's): kept while its transforms differ
+			bool settles = false;  // a written slot (not a mover): kept while its transforms differ
 		};
 		std::vector<Listed> items;
 		items.reserve(work.movers.size() + (a_job.written.empty() ? 0 : a_job.written.back()->written.size()));
 		listed.assign(out.size(), 0);
 		blockListed.assign(paletteOut.size() / 2, 0);
-		// T7e: never a first-person item (the render thread's: FirstPersonSample), whose engine transforms the frame moves; but a first-person
-		// particle member's quads, expanded here from its snapshots alone (its row the render thread's sample, the snapshot's world over it).
+		// First-person items are the render thread's (FirstPersonSample), except particle members (expanded from snapshots).
 		auto list = [&](const Plan::Item& a_item, bool a_settles) {
 			if ((a_item.firstPerson && !a_item.particles) || a_item.slot >= out.size() || !a_item.geometry || std::exchange(listed[a_item.slot], 1))
 				return;
@@ -394,9 +385,8 @@ namespace DCLF
 		for (auto it = a_job.written.rbegin(); it != a_job.written.rend(); ++it)
 			for (const auto& item : (*it)->written)
 				list(item, true);
-		// Last: a slot listed above is a newer item's.
-		// The items carried from the last producer (their references copies: the plan they came from may be gone, and these the last
-		// ones): handed to the render thread when done with (EngineReleases, at Present), never dropped here.
+		// Carried settling items last (a slot listed above is newer). They may hold the last engine references, so they go to the
+		// render thread when done (EngineReleases, at Present), never dropped here.
 		auto carried = std::move(settling);
 		settling.clear();
 		struct HandOver
@@ -412,7 +402,6 @@ namespace DCLF
 		} handOver{ carried };
 		for (const auto& item : carried)
 			list(item, true);
-		// T7e: the first-person members' samples the render thread took (Kick), written here in order: values only.
 		std::uint64_t firstPersonMarked = 0, firstPersonPaletteMarked = 0;
 		for (const auto& sample : a_job.firstPerson) {
 			if (sample.slot >= out.size())
@@ -442,7 +431,7 @@ namespace DCLF
 		}
 		auto& executor = SceneScheduler::Executor();
 		constexpr std::size_t kGrain = 64;
-		// Each chunk's changed slots and palette runs, marked after (the journals are one thread's).
+		// Per chunk, marked afterwards (the journals are single-threaded).
 		struct Changed
 		{
 			std::vector<std::uint32_t> slots;
@@ -452,7 +441,7 @@ namespace DCLF
 		};
 		std::vector<Changed> changed((items.size() + kGrain - 1) / kGrain);
 		std::atomic<std::uint64_t> refusedHere{ 0 };
-		// T7e: the particle members' records (ParticleSnapshots::Follow, which only the producer calls), before the items run in parallel.
+		// Particle records, before the parallel loop (ParticleSnapshots::Follow is producer-only).
 		std::vector<ParticleSnapshots::Record*> particleRecords(items.size(), nullptr);
 		for (std::size_t i = 0; i < items.size(); ++i)
 			if (items[i].palette && items[i].item->particles)
@@ -465,8 +454,7 @@ namespace DCLF
 			for (std::size_t i = a_begin; i < a_end; ++i) {
 				const auto& [itemPointer, palette, settles] = items[i];
 				const auto& item = *itemPointer;
-				// T7e's forward part: a first-person particle member reads no engine memory here (its row is the render thread's sample, written
-				// above; the rest the snapshot's), so it takes no lease, and is never a settling slot.
+				// A first-person particle member reads no engine memory here: no lease, never settling.
 				const bool firstPerson = item.firstPerson;
 				std::optional<EngineReadWindow::Lease> lease;
 				if (!firstPerson)
@@ -481,8 +469,7 @@ namespace DCLF
 					row = out[item.slot];
 				else
 					SampleItem(item, row, layer);
-				// T7e: a particle member's quads, its system's newest snapshot faced to the frame's camera, into its block's current rows (below),
-				// and its placement's transforms and bound the snapshot's: its particle data is never read here (ParticleSnapshots::Expand).
+				// Particle quads, transforms and bound from the newest snapshot (particle data is never read here).
 				auto* particles = particleRecords[i];
 				if (particles) {
 					particleRows.resize(item.boneRows);
@@ -526,7 +513,7 @@ namespace DCLF
 					}
 					continue;
 				}
-				// The skin's palette: the engine's update for the frame, then its rows into the block's, noted only when they differ.
+				// Run the engine's palette update, then copy rows that differ.
 				auto& geometry = *item.geometry;
 				if (auto* skin = geometry.GetGeometryRuntimeData().skinInstance.get())
 					UpdateSkin(skin, geometry.world);
@@ -546,9 +533,8 @@ namespace DCLF
 				}
 			}
 		});
-		// T7e: the particle records no plan named lately pruned, a changed table published.
 		ParticleSnapshots::Get().EndRun();
-		// The roots: their dependents' sun entries (and fade nodes), after the items wrote theirs.
+		// Roots: their dependents' sun entries and fade nodes, after the items wrote theirs.
 		std::vector<std::vector<std::uint32_t>> rootChanged(work.roots.size());
 		executor.ParallelFor("CS.DCLF.FrameValues.Roots", work.roots.size(), 16, [&](std::size_t a_begin, std::size_t a_end) {
 			ZoneScopedN("CS.DCLF.FrameValues.Roots");
@@ -620,7 +606,7 @@ namespace DCLF
 			out.resize(a_job.seedRows, FadeRootStatic{});
 			seeds.MarkRange(first, a_job.seedRows - first);
 		}
-		// Taken by the render thread at the frame's start (Kick), in request order: a later one for the same row wins.
+		// In request order: a later value for the same row wins.
 		for (const auto& [at, row] : a_job.seedValues) {
 			if (at >= out.size())
 				continue;
@@ -654,7 +640,7 @@ namespace DCLF
 			out.resize(a_slots, BindlessShading{});
 			shading.MarkRange(first, a_slots - first);
 		}
-		// Each slot once, by the newest item naming it (a slot freed and taken again since an older one was named).
+		// Each slot once, by its newest item (the slot may have been reused since).
 		std::vector<const ShadingItem*> items;
 		items.reserve(a_job.shadingItems.size());
 		shadingListed.assign(out.size(), 0);
@@ -677,7 +663,7 @@ namespace DCLF
 				}
 				BindlessShading row = out[item.slot];
 				SampleShading(*item.property.get(), item.pass, item.member, row);
-				// An actor's wetness is the capture's (below); anything else has none.
+				// Only actors have wetness (from the capture, below).
 				if (!item.actor)
 					std::fill(std::begin(row.skinPerGeometry), std::end(row.skinPerGeometry), 0.0f);
 				if (std::memcmp(&row, &out[item.slot], sizeof(row)) != 0) {
@@ -766,8 +752,8 @@ namespace DCLF
 	{
 		auto& s = *impl;
 		s.kicked = false;
-		// The fade seeds (T6b1a): the nodes as the frame's start has them, before this frame's culls update them (FadeStateCS's first update
-		// of the generation is this frame's), with the frame's globals (StaticOf's LOD scale). The render thread's own read.
+		// Fade seeds: read at the frame's start, before this frame's culls update the nodes (FadeStateCS's first update is this
+		// frame's), with the frame's globals (StaticOf's LOD scale).
 		{
 			FrameGlobals::Scope scope(a_globals);
 			for (const auto& seed : a_seeds) {
@@ -778,7 +764,7 @@ namespace DCLF
 				s.unsentSeeds.emplace_back(seed.row, row);
 				s.seedRows = std::max(s.seedRows, seed.row + 1);
 			}
-			// The trees' likewise: the node's clock and values (TreeStaticOfNode runs the engine's FUN_14147d640: the render thread's).
+			// Tree seeds likewise (TreeStaticOfNode runs the engine's FUN_14147d640: render thread only).
 			for (const auto& seed : a_treeSeeds) {
 				if (!seed.node)
 					continue;
@@ -790,15 +776,14 @@ namespace DCLF
 				s.treeSeedRows = std::max(s.treeSeedRows, seed.row + 1);
 			}
 		}
-		// The shading items and the wetness, after any no producer took yet (each in order: the newest last).
+		// Appended after any not yet taken (newest last).
 		s.unsampledShading.insert(s.unsampledShading.end(), std::make_move_iterator(a_shading.begin()), std::make_move_iterator(a_shading.end()));
 		s.unsampledWetness.insert(s.unsampledWetness.end(), a_wetness.begin(), a_wetness.end());
 		auto* host = RenderGraphRuntime::Get().Host();
 		auto timeline = RenderGraphRuntime::Get().FrameWaitTimeline();
 		auto uploads = host ? host->RetainUploads() : nullptr;
 		if (!host || !timeline || !uploads || !uploads->HasDedicatedStreamingQueue()) {
-			// The plans wait for the first producer (their written slots are sampled once, by one): a startup's first frames precede the
-			// upload queue (the graph's first build makes it).
+			// Plans wait for the first producer; startup frames precede the upload queue (made by the graph's first build).
 			for (auto& plan : a_plans)
 				if (plan) {
 					s.unsampled.push_back(plan);
@@ -812,14 +797,13 @@ namespace DCLF
 			}
 			return false;
 		}
-		// Every plan the publication log brought since the last frame (T6b3a: more than one when the frame's start took several
-		// publications), oldest first: each one's written slots sampled, the newest drawn with.
+		// Every plan since the last frame: all written slots are sampled, the newest is drawn with.
 		for (auto& plan : a_plans)
 			if (plan) {
 				s.unsampled.push_back(plan);
 				s.plan = std::move(plan);
 			}
-		// The plans done producers read, released here (the newest stays with s.plan): their references are the engine's to drop.
+		// Release finished producers' plans here on the render thread (they hold engine references).
 		const auto finished = s.done.load(std::memory_order_acquire);
 		while (!s.plans.empty() && s.plans.front().first <= finished)
 			s.plans.pop_front();
@@ -829,7 +813,7 @@ namespace DCLF
 		Impl::Job job;
 		job.seq = seq;
 		job.plan = s.plan ? s.plan.get() : &kEmpty;
-		// Every plan the producer reads, held until it is done.
+		// Held until the producer is done.
 		for (auto& unsampled : s.unsampled) {
 			job.written.push_back(unsampled.get());
 			s.plans.emplace_back(seq, std::move(unsampled));
@@ -843,7 +827,7 @@ namespace DCLF
 		job.treeSeedRows = s.treeSeedRows;
 		job.globals = a_globals;
 		job.ringIndex = r;
-		// Each buffer holds every row the plan's tables do; a new one when it grows (the old one goes when the frames reading it retire).
+		// Grow by replacing the buffer; the old one retires with the frames reading it.
 		const auto ensure = [&](Impl::RingBuffer& a_entry, std::uint32_t a_needed, std::uint32_t a_stride, const char* a_name, bool& a_fresh) {
 			if (a_entry.buffer && a_entry.capacity >= a_needed)
 				return;
@@ -878,14 +862,13 @@ namespace DCLF
 		job.uploads = std::move(uploads);
 		job.more = std::move(a_uploads);
 		job.particleCamera = ParticleSnapshots::Get().FrameCamera();
-		// T7e's forward part: the first-person eye (DrawWorld +0x00, FUN_1406452c0's, filled before BeginSceneFrame: the camera position
-		// FUN_1414cb020 places the first-person camera at, its rotation the world camera's).
+		// The first-person eye (DrawWorld +0x00, filled by FUN_1406452c0 before FrameDriver::BeginFrame): where FUN_1414cb020 places
+		// the first-person camera, with the world camera's rotation.
 		job.firstPersonParticleCamera = job.particleCamera;
 		if (const auto* eye = REL::Relocation<const float*>{ REL::Offset(Engine::Address::kDrawWorldEye) }.get(); eye && job.particleCamera.valid)
 			std::memcpy(job.firstPersonParticleCamera.eye, eye, sizeof(job.firstPersonParticleCamera.eye));
-		// T7e: the first-person members the frame draws (SetFirstPersonClaims), sampled here: the render thread, the engine's update done
-		// and Main::Draw's first-person shift (FUN_1414cb020) still ahead. Their skins' palettes are updated here too (the engine's update
-		// is once a frame, frameID): the engine draws none of them (withheld), so nothing of its own reads a palette pinned in world space.
+		// Claimed first-person members, sampled after the engine's update and before Main::Draw's first-person shift
+		// (FUN_1414cb020), palettes included: the engine draws none of them, so none of its reads see a world-space palette.
 		if (const auto claims = std::exchange(firstPersonClaims, nullptr)) {
 			std::vector<std::uint8_t> taken;
 			auto take = [&](const Plan::Item& a_item) {
@@ -928,14 +911,13 @@ namespace DCLF
 		shadingIndex = s.shadingRing[r].srvIndex;
 		seedsIndex = s.seedRing[r].srvIndex;
 		treeSeedsIndex = s.treeSeedRing[r].srvIndex;
-		// Every batch submitted from here waits for the frame's values; the producer always signals them.
+		// Batches submitted from here wait for the frame's values; the producer always signals.
 		host->SetFrameWaitValue(seq);
 		s.kicked = true;
 		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu,
 				"frame values", [&s, job = std::move(job)](const auto&) mutable {
 					s.Run(job);
-					// T6b3e: the shading items hold their properties (ShadingItem::property): handed to the render thread when done with
-					// (EngineReleases, at Present), never dropped with the job on this worker.
+					// Engine references go to the render thread (EngineReleases, at Present), never dropped on this worker.
 					for (auto& item : job.shadingItems)
 						EngineReleases::Push(RE::NiPointer<RE::NiRefObject>(std::move(item.property)));
 				}))

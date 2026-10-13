@@ -1,3 +1,6 @@
+// The kept decal draw order (Coordinator::OrderDecals) and its per-object ordinals, coordinator thread. Keys come from the scene
+// mirror's parent chains, so the order needs no frame lists.
+
 #include "Internal.h"
 #include "DecalOrder.h"
 
@@ -26,7 +29,7 @@ namespace DCLF::Scene
 		/**
 		 * @brief The order the scene gives a_geometry, without the frame's lists: whether a BSOrderedNode groups it, and its
 		 * visit positions from the top of the scene graph down (NiNode slots do not move; a BGSDecalNode visits its decals
-		 * last to first). Within a reference this is the registration's order exactly. The mirror's chain (T6b1b).
+		 * last to first). Within a reference this is the registration's order exactly.
 		 */
 		bool SceneKeyOf(const SceneMirror& a_mirror, const void* a_geometry, OrderKey& a_out)
 		{
@@ -74,7 +77,7 @@ namespace DCLF::Scene
 			return text;
 		}
 
-		/** @brief The BGSDecalNode above a_object (its record's kind: the RTTI exactly), the mirror's chain (T6b1b). */
+		/** @brief The BGSDecalNode above a_object (its record's kind: the RTTI exactly). */
 		const RE::NiAVObject* DecalNodeOf(const SceneMirror& a_mirror, const void* a_object)
 		{
 			const auto* record = a_object ? a_mirror.Node(a_object) : nullptr;
@@ -171,7 +174,7 @@ namespace DCLF::Scene
 	void Coordinator::OrderDecals()
 	{
 		// The engine draws a decal chain (a group's technique bucket and sub-pass list) in reverse registration order, and
-		// registers in the order of its scene lists (DecalOrder.cpp's key, which the order probe measures). Stable: the
+		// registers in the order of its scene lists (the OrderKey, which the decal order parity checks). Stable: the
 		// scene's order, kept: a decal's key is taken when it joins (or is patched again), and a change re-keys only the
 		// decals it names; the ordinals are counted again in one pass.
 		if (!keptDecals)
@@ -230,7 +233,7 @@ namespace DCLF::Scene
 		decalsRebuild = false;
 
 		if (checked)
-			Diagnostics::Notify(Diagnostics::DecalsOrdered{ *this });
+			Diagnostics::Notify<Diagnostics::ScenePoint::DecalsOrdered>();
 		if (!changed)
 			return;
 
@@ -248,7 +251,7 @@ namespace DCLF::Scene
 		ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> previous(before.begin(), before.end());
 		for (const auto& entry : kept) {
 			const std::uint32_t group = static_cast<std::uint32_t>(entry.chain >> 60) - 1;
-			// T7e's blood decals: a skinned decal of several partitions takes a slot per partition (DecalSpanOf).
+			// A skinned decal of several partitions takes a slot per partition (DecalSpanOf).
 			const std::uint32_t ordinal = tables.decalCount[group];
 			tables.decalCount[group] += DecalSpanOf(entry.object < tables.skinPartitions.size() ? tables.skinPartitions[entry.object] : 0u);
 			tables.decalOrdinal[entry.object] = ordinal;

@@ -1,3 +1,6 @@
+// MaterialPort's vanilla part: BSLightingShader::SetupMaterial for the vanilla material classes, and the VanillaFrame sample
+// (render thread, the frame's start). Evaluation is pure.
+
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
 

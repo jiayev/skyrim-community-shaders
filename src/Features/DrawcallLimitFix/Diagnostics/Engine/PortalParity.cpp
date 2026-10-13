@@ -1,3 +1,5 @@
+// The portal views' parity (PortalParity.h): at PortalViews::Build's end, render thread.
+
 #include "PortalParity.h"
 
 #include "Events.h"
@@ -30,7 +32,7 @@ namespace DCLF::Diagnostics::PortalParity
 		Tally tally;
 		Reports::Window window;
 
-		void Check(const PortalWalkBuilt&)
+		void Check(const On<EnginePoint::PortalWalkBuilt>&)
 		{
 			// The engine's entry as Main::Update's walk left it (the list jobs, which add the portals' shared-node frustums, have not run).
 			auto& p = tally;
@@ -240,7 +242,7 @@ namespace DCLF::Diagnostics::PortalParity
 			}
 		}
 
-		void Walked(const PortalWalkBuilt& a_event)
+		void Walked(const On<EnginePoint::PortalWalkBuilt>& a_event)
 		{
 			Check(a_event);
 			if (window.Tick())
@@ -250,7 +252,7 @@ namespace DCLF::Diagnostics::PortalParity
 
 	void Install()
 	{
-		Subscribe<PortalWalkBuilt>(Walked);
+		Subscribe<EnginePoint::PortalWalkBuilt>(Walked);
 	}
 
 	Tally Take()

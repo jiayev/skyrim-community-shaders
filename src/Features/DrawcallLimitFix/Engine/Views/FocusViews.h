@@ -17,7 +17,7 @@ namespace RE
 namespace DCLF
 {
 	/**
-	 * @brief The focus shadows' views as DCLF computes them (T3c, 2026-10-09): from the cameras BSShadowDirectionalLight::sub
+	 * @brief The focus shadows' views as DCLF computes them: from the cameras BSShadowDirectionalLight::sub
 	 * (0x1414f0480) has just aimed at the focus targets, for whichever light hosts them (the sun, or a spot light: LightSelection
 	 * ports which). Per focus descriptor i below the target count (0x14332a498), SunViews' arithmetic: the matrices, the eye and
 	 * the viewport of the camera's port; no caster volume (the focus accumulation, FUN_1414f0b90, culls nothing). And target i's
@@ -39,7 +39,7 @@ namespace DCLF
 		const SunViews::Cascade* CascadeOf(const RE::BSShadowLight* a_light, std::uint32_t a_descriptor, std::uint32_t a_sceneFrame) const;
 		/** @brief Focus target a_descriptor's node this frame (the casters' root), or null. */
 		const RE::NiAVObject* TargetOf(std::uint32_t a_descriptor, std::uint32_t a_sceneFrame) const;
-		/** @brief The engine's focus targets now (0x14332a488): target a_index's node, or null. */
+		/** @brief The engine's current focus targets (0x14332a488): target a_index's node, or null. */
 		static const RE::NiAVObject* EngineTarget(std::uint32_t a_index);
 		static std::uint32_t EngineTargetCount();
 

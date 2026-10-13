@@ -1,3 +1,6 @@
+// The views' epochs (ViewEpoch.h): their traits, forward keys, bucket plans and shapes, their passes and graph extension, their
+// cameras' VS_PerFrame and their commits (render thread). Their captures and coverage are Reflection.cpp's and FirstPerson.cpp's.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 
@@ -5,10 +8,6 @@
 
 namespace DCLF
 {
-	/*
-	 * The views' epochs (Internal.h, "The views"): their traits, forward keys, bucket plans and shapes, their passes and graph
-	 * extension, their cameras' VS_PerFrame and their commits. Their captures and coverage are Reflection.cpp's and FirstPerson.cpp's.
-	 */
 
 	namespace Draws
 	{

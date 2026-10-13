@@ -1,12 +1,12 @@
+// CS_DCLF_PERSISTENT_PARITY: tree wind parity. Every 120th colour epoch the records of up to 64 tree members are read back (3 frames
+// later) and checked against the engine's formulas and clocks; and both wind buffers whole, every listed tree's entry.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "DrawsState.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #	include "DrawsView.h"
 #	include "Events.h"
 #	include "Observers.h"
-
-// CS_DCLF_PERSISTENT_PARITY: tree wind parity. Every 120th colour epoch the records of up to 64 tree members are read back (3 frames
-// later) and checked against the engine's formulas and clocks; and both wind buffers whole, every listed tree's entry.
 
 namespace DCLF::Diagnostics
 {

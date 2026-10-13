@@ -25,7 +25,7 @@ namespace RE
 namespace DCLF
 {
 	/**
-	 * @brief T6b2: BSLightingShader::SetupMaterial ported (engine notes, "BSLightingShader::SetupMaterial: where every material
+	 * @brief BSLightingShader::SetupMaterial ported (engine notes, "BSLightingShader::SetupMaterial: where every material
 	 * constant comes from"), Community Shaders' hooks on it included (TruePBR's replacement, Advanced Skin's and TerrainHelper's
 	 * extra textures).
 	 *
@@ -57,7 +57,7 @@ namespace DCLF
 			const void* vtable = nullptr;  // its class
 			std::uint32_t feature = 0;     // BSShaderMaterial::GetFeature()
 			bool pbr = false;              // CS's BSLightingShaderMaterialPBR
-			bool effect = false;           // T7d's Effect port: a BSEffectShaderMaterial (EvaluateEffect)
+			bool effect = false;           // a BSEffectShaderMaterial (EvaluateEffect)
 			std::uint32_t size = 0;        // bytes taken (the class's size)
 			std::array<std::byte, kMaxMaterialBytes> bytes{};
 			std::uint32_t textureCount = 0;
@@ -87,7 +87,7 @@ namespace DCLF
 		bool Capture(const RE::BSShaderMaterial& a_material, MaterialSnapshot& a_out);
 
 		/**
-		 * @brief T6b2a: a snapshot on its way to the scene work, with a reference on the material its capture took (the material's
+		 * @brief A snapshot on its way to the scene work, with a reference on the material its capture took (the material's
 		 * count, InterlockedIncrement: any thread, the material alive where it is captured). The scene work hands the reference on: to a
 		 * material slot, or to the render thread's releases (the engine's release is its); never dropped where it lands.
 		 */
@@ -102,7 +102,7 @@ namespace DCLF
 			std::array<winrt::com_ptr<ID3D11ShaderResourceView>, kMaxTextureFields> views;
 		};
 		/** @brief The captures for the scene work (Coordinator::DrainMaterialCaptures, its one consumer). */
-		// T6b3d: no wake of its own: a requested capture's answer wakes the pass (ServeMaterialRequests), a writer's (controllers write
+		// No wake of its own: a requested capture's answer wakes the pass (ServeMaterialRequests), a writer's (controllers write
 		// every frame) waits for the frame's pass, an attach's comes with the attach's event.
 		inline EventQueue<std::unique_ptr<HeldSnapshot>> captures;
 		/**
@@ -141,7 +141,7 @@ namespace DCLF
 		/** @brief BSEffectShaderMaterial's texture fields: the source (+0x58) and the greyscale palette (+0x60). */
 		void EffectTextureFields(std::uint16_t* a_out, std::uint32_t& a_count);
 		/**
-		 * @brief T7d's Effect port: BSEffectShader::SetupMaterial (0x1414ea6c0, the non-membrane half) and SetupTechnique's filter modes for
+		 * @brief BSEffectShader::SetupMaterial (0x1414ea6c0, the non-membrane half) and SetupTechnique's filter modes for
 		 * an effect material's snapshot, into a record of kind kMaterialKindEffect (EffectVSLayout / EffectPSLayout order). LightingInfluence.y
 		 * holds softFalloffDepth itself (the pixel stage divides the frame's near * far by it). False: a membrane pass, a greyscale pass without
 		 * its palette, or a snapshot that is not an effect material's (MaterialPortEffect.cpp).

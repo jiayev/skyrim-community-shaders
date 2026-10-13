@@ -13,8 +13,7 @@ namespace DCLF
 {
 
 	// DCLF's executor: one coordinator thread (the frame's builds), one scene thread (the scene lane: the coordinator's passes) and a
-	// configurable number of preparation threads.
-	// Dispatch never waits and never runs work inline: a job goes into its domain's unbounded MPMC queue
+	// configurable number of preparation threads. Dispatch never waits and never runs work inline: a job goes into its domain's unbounded MPMC queue
 	// (tbb::concurrent_queue, as BasicRenderer's scheduler) and a semaphore wakes a worker. Nothing is rejected for want of
 	// room; only an invalid scope, class or task is. Scope waits and Shutdown are teardown/test APIs, not normal-frame
 	// operations.

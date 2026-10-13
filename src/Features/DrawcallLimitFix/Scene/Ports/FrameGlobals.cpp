@@ -1,3 +1,5 @@
+// FrameGlobals.h's capture (render thread, the frame's start), the first-person subtree's cull bits and the scoped reads.
+
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 #include "Features/DrawcallLimitFix/Engine/Access/Walkers.h"
@@ -49,14 +51,14 @@ namespace DCLF
 		CachedSetting iniSpecularEnd{ "fSpecularLODFadeEnd:LightingShader", 0.10f };
 		CachedSetting iniEnvmapStart{ "fEnvmapLODFadeStart:LightingShader", 0.09f };
 		CachedSetting iniEnvmapEnd{ "fEnvmapLODFadeEnd:LightingShader", 0.10f };
-		// T7d's refraction: GetRenderPasses' refraction LOD fade (the Setting objects' values it reads, AE 0x142033408 and 0x142033420).
+		// GetRenderPasses' refraction LOD fade (the Setting objects' values it reads, AE 0x142033408 and 0x142033420).
 		CachedSetting iniRefractionStart{ "fRefractionLODFadeStart:LightingShader", 0.025f };
 		CachedSetting iniRefractionEnd{ "fRefractionLODFadeEnd:LightingShader", 0.03f };
 
 		bool Hidden(const RE::NiAVObject* a_object) { return Engine::IsHidden(a_object); }
 
 		/**
-		 * @brief T7e: one node of the first-person subtree as a walk of the live tree found it (render thread): its key (an identity,
+		 * @brief One node of the first-person subtree as a walk of the live tree found it (render thread): its key (an identity,
 		 * never dereferenced after the walk), its hidden bit, whether it is a geometry and its name (the diagnostic's, and an identity
 		 * check against an address the engine reused for another node).
 		 */
@@ -85,7 +87,7 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief T7e's diagnostic (render thread): the geometry of the first-person subtree hidden at the frame's start, and at the last
+		 * @brief The first-person diagnostic (render thread): the geometry of the first-person subtree hidden at the frame's start, and at the last
 		 * frame's culls (of the nodes still in the tree), logged when the two lists change (at most 24 times). Reads the copies alone.
 		 */
 		void NoteFirstPersonDifference(const std::vector<SubtreeBit>& a_live, bool a_culled)
@@ -193,7 +195,7 @@ namespace DCLF
 		g->treeWindFadeEnd = Global<float>(Engine::Address::kTreeWindFadeEnd);
 		g->treeWindTimerScale = Global<float>(Engine::Address::kTreeWindTimerScale);
 		// The roots whose hidden bit the frame changes around the scene's views (Coordinator::HiddenForWalk), as the views see it,
-		// at the point the scene work is kicked from (after Main::Draw's early call).
+		// at the frame's start (after Main::Draw's early call).
 		if (!g->loading) {
 			// Numbered before the reads (a locked add): a store whose event is numbered before it is in them.
 			g->cullHiddenSequence = SceneCapture::NextSequence();
@@ -214,16 +216,16 @@ namespace DCLF
 				const RE::NiAVObject* thirdPerson = player->Get3D(false);
 				if (thirdPerson)
 					g->cullHidden.emplace_back(thirdPerson, Hidden(thirdPerson));
-				// The first-person skeleton: Main::Draw (AE 0x1406444b0) hides it right after the call the scene work is kicked from,
+				// The first-person skeleton: Main::Draw (AE 0x1406444b0) hides it right after the call the frame's start runs from,
 				// keeps it hidden through the main camera's cull and the sun's shadow casters, and shows it only to draw the
 				// first-person view with its own camera. For every view the scene serves it is hidden.
 				const RE::NiAVObject* firstPerson = player->Get3D(true);
 				if (firstPerson && firstPerson != thirdPerson)
 					g->cullHidden.emplace_back(firstPerson, true);
-				// T7e (CS_DCLF_FIRST_PERSON): every node and geometry under the first-person root, with the bit the engine's first-person
+				// CS_DCLF_FIRST_PERSON: every node and geometry under the first-person root, with the bit the engine's first-person
 				// culls saw last frame (NoteFirstPersonCulled), else as it is now (this thread, before Main::Draw touches the skeleton). Not
-				// every store to them has an event, and the frame start's bits are not the culls' (the runs of 2026-10-11 kept the arms
-				// hidden while the engine drew them every frame), so the first-person members' chains read their bits from here.
+				// every store to them has an event, and the frame start's bits are not the culls' (the arms are hidden at the frame's start
+				// while the engine draws them), so the first-person members' chains read their bits from here.
 				if (firstPerson && firstPerson != thirdPerson && ActiveToggles().firstPerson) {
 					// The live walk proves each key alive; a culled bit is taken for a key found here with the same name (an address the
 					// engine freed and reused for another node since is not the same node), else the live bit.

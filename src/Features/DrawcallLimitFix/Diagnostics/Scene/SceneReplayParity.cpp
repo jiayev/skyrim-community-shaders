@@ -1,10 +1,10 @@
+// CS_DCLF_PERSISTENT_PARITY: every 60th publication, the snapshot the replay brought up to date against the tables it was made from: the
+// material records, the object and geometry slots, the kept families and the logs.
+
 #include "SceneObservers.h"
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
-
-// CS_DCLF_PERSISTENT_PARITY: every 60th publication, the snapshot the replay brought up to date against the tables it was made from: the
-// material records, the object and geometry slots, the kept families and the logs.
 
 namespace DCLF::Diagnostics
 {

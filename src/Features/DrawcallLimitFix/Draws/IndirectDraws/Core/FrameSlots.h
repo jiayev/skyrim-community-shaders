@@ -1,7 +1,7 @@
 #pragma once
 
-// The main pass's capture and the per-frame constant blocks at their frame slots (the frame push data).
-// Part of IndirectDraws' implementation: included by Internal.h, in its order.
+// The main pass's capture (render thread) and the layout of the per-frame constant blocks at their frame slots, with the frame push
+// words that name them. Part of IndirectDraws' implementation: included by Internal.h, in its order.
 
 namespace DCLF::Draws
 {
@@ -74,23 +74,11 @@ namespace DCLF::Draws
 		std::uint64_t capacity = 0;
 	};
 
-	// ---------------------------------------------------------------------------------------------
-	// The epoch's inputs, their build, and their commit.
-	//
-	// An epoch's CPU work is in three parts, so that the build - the part proportional to the scene -
-	// can run off the render thread (docs: asynchronous tables). Prepare, on the render thread, snapshots
-	// everything the build needs that is not immutable for the frame. Build is a pure function of that
-	// snapshot, the tables and the lookups (Lookups.h), and writes only its payload: nothing in it may
-	// call the engine, D3D11, DXVK or ORG. Commit, on the render thread inside the epoch's preparation,
-	// validates the payload against what it was built for, resolves what only the services can resolve,
-	// and issues the uploads.
-	// ---------------------------------------------------------------------------------------------
-
 	// The per-frame constant blocks - whatever the main pass binds outside the per-draw registers - live
 	// in Resources::frameConstants at fixed slots, so that a record can name a block before its contents
 	// exist: the vertex stage's b0-b13, then the pixel stage's, then the zeroed StrictLightData block
 	// every bindless draw's b3 reads, and the frame lighting every DCLF_BINDLESS draw's b13 reads
-	// (Coordinator::FrameCapture::lighting). A slot is D3D11's constant buffer maximum, so no block overflows.
+	// (FrameView::FrameCapture::lighting). A slot is D3D11's constant buffer maximum, so no block overflows.
 	constexpr std::uint64_t kFrameSlotBytes = 65536;
 	constexpr std::uint32_t kFrameSlotSharedLight = 2 * kConstantBufferRegisters;
 	constexpr std::uint32_t kFrameSlotLighting = kFrameSlotSharedLight + 1;
@@ -108,7 +96,7 @@ namespace DCLF::Draws
 	// the extras' pixel inputs (c16, ExtrasFrame::projectedGlobals).
 	constexpr std::uint64_t kExtrasPixelFrameOffset = std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting) + sizeof(LodFadeFrame) + 32;
 	static_assert(sizeof(FrameLighting) + sizeof(LodFadeFrame) + 32 == 16 * 16);
-	// T7d's Effect port: c17, the camera's planes (SampleEffectCamera; Effect.hlsl, DCLFEffectCamera).
+	// The Effect port: c17, the camera's planes (SampleEffectCamera; Effect.hlsl, DCLFEffectCamera).
 	constexpr std::uint64_t kEffectCameraFrameOffset = kExtrasPixelFrameOffset + sizeof(ExtrasFrame::projectedGlobals);
 	// The Effect port's Lighting variant: c18, its DLightColor (SampleEffectLight; Effect.hlsl, DCLFEffectDLightColor).
 	constexpr std::uint64_t kEffectLightFrameOffset = kEffectCameraFrameOffset + 16;

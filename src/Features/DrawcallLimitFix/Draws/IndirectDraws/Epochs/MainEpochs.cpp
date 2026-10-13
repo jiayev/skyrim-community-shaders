@@ -1,3 +1,6 @@
+// The main epochs on the render thread: the Z-prepass's and colour pass's captures at their engine hooks, the forward and
+// refraction epoch, each epoch's commit of the installed publication's payload, and the frame blocks taken from the capture.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -27,7 +30,6 @@ namespace DCLF
 		impl->mainPassDepth = impl->pending->depth;
 		impl->mainMinDepth = impl->pending->minDepth;
 		impl->mainMaxDepth = impl->pending->maxDepth;
-		Diagnostics::Notify(Diagnostics::MainPassCaptured{ *impl->pending });
 	}
 
 	void IndirectDraws::CaptureDepthPass()
@@ -62,7 +64,7 @@ namespace DCLF
 		if (impl->pending)
 			impl->pending->Release();
 		impl->pending = std::move(capture);
-		ProbeTargets(kProbeFirstLabel);
+		ProbeTargets("before z-prepass");
 		RunEpoch(true);
 		ProbeTargets("after z-prepass");
 	}
@@ -70,7 +72,6 @@ namespace DCLF
 	void IndirectDraws::ProbeTargets(const char* a_label)
 	{
 		Diagnostics::Notify(Diagnostics::TargetPoint{ a_label });
-		Diagnostics::Notify(Diagnostics::ProbePoint{ a_label });
 	}
 
 	void IndirectDraws::ExecuteColour()
@@ -113,7 +114,7 @@ namespace DCLF
 			++f.failed;
 			return;
 		}
-		// T7d's refraction: the pipeline asked for and its inputs posted (each once, or when they change), and whether this recording draws
+		// Refraction: the pipeline asked for and its inputs posted (each once, or when they change), and whether this recording draws
 		// the refraction normals (RefractionDrawPass: the colour shape has refraction slots and the refraction pipeline of the imported
 		// normals' format).
 		bool refraction = false;
@@ -148,7 +149,7 @@ namespace DCLF
 		}
 		f.submittedFrame = frame;
 		++f.epochs;
-		// T7d's refraction: the epoch cleared and drew the refraction normals, ahead of Main::Draw's own group 5 (FUN_1414b4860). Marked
+		// Refraction: the epoch cleared and drew the refraction normals, ahead of Main::Draw's own group 5 (FUN_1414b4860). Marked
 		// begun and drawn, as that function marks them (0x1435ef130, 0x1435ef131): the engine's later draws into them then add to DCLF's
 		// instead of clearing them, and ISRefraction (its IsActive reads 0x1435ef131, 0x1414f95a0) warps the frame by them. Its render
 		// clears both. Main::Draw's group 6 is cleared for it at the refraction point (DrawcallLimitFix's Main_Draw_RefractionCheck), where
@@ -209,7 +210,6 @@ namespace DCLF
 			return;
 		}
 
-		const auto& tables = Scene::FrameView::Get().GetTables();
 		auto resources = impl->resources;
 		stats.skipped = {};
 		stats.missingTextures = {};
@@ -238,7 +238,7 @@ namespace DCLF
 				sizes.ps[slot] = std::max(sizes.ps[slot], static_cast<std::uint32_t>(blocks.ps[slot].size()));
 			}
 			parity.known[shape] = true;
-			// Revision inputs (T6b3b b2a): posted when they moved.
+			// Revision inputs: posted when they moved.
 			if (!knownBefore || !(viewportBefore == parity.viewport[shape]) || !(sizesBefore == parity.blockSizes[shape]))
 				impl->PostRevisionInputs();
 		}
@@ -250,8 +250,6 @@ namespace DCLF
 		masks.psMask = blocks.psMask;
 		masks.known = true;
 		if (depthOnly) {
-			impl->prepassEye = capture.eye;
-			impl->prepassPreviousEye = capture.previousEye;
 			impl->prepassInputs = true;
 		}
 		// A frame without claims (Coordinator::WithdrawSet: no revision covers it) has nothing of DCLF's to draw, and is not submitted.
@@ -263,9 +261,8 @@ namespace DCLF
 		// payload (a snapshot without one for each epoch gives the frame no claims: DecideCoverage): trusted, nothing is built or checked here. A payload built
 		// for other main resources (made at this frame's Setup: a new render size) names their buffers: the frame is not submitted.
 		const auto revision = impl->RevisionOf(static_cast<std::uint32_t>(depthOnly ? kDepthShape : kColourShape));
-		const bool atEpoch = Policy::BuildAtEpoch();
 		std::shared_ptr<MainPayload> ahead = impl->installedDraws ? impl->installedDraws->payloads[jobIndex] : nullptr;
-		if (!revision || (!atEpoch && (!ahead || ahead->inputs.addresses.identity != resources.get()))) {
+		if (!revision || !ahead || ahead->inputs.addresses.identity != resources.get()) {
 			// Resources made at this frame's Setup are the only way here (the graph is built for them, and the frames until their
 			// revision are the engine's); anything else is a defect.
 			if (revision && resources == resourcesBefore && impl->unbuilt[jobIndex]++ == 0)
@@ -274,9 +271,8 @@ namespace DCLF
 			capture.Release();
 			return;
 		}
-		MainInputs in = impl->PrepareMainInputs(&capture, depthOnly, *resources, blocks.vsMask, blocks.psMask);
+		MainInputs in = impl->PrepareMainInputs(depthOnly, *resources, blocks.vsMask, blocks.psMask);
 		auto& async = stats.async[jobIndex];
-		bool builtAhead = false;
 		const MainPayload* committed = nullptr;
 
 		const auto cleanup = RenderGraphRuntime::Get().Host()->ResourceCleanup();
@@ -287,27 +283,16 @@ namespace DCLF
 		}
 		auto frameOwners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(segment, [&](org::RenderGraph&) {
-			// The lookups hold still for the whole frame: the installed publication's (T6b2c step 5), which its payloads were built with.
+			// The lookups hold still for the whole frame: the installed publication's, which its payloads were built with.
 			const auto& lookups = Scene::FrameView::Get().GetLookups();
 			in.lookupGeneration = lookups.generation;
 			MainPayload* payload = ahead.get();
-			if (atEpoch) {
-				// Built here, with rows of its own (Policy::BuildAtEpoch: the builds read the eye this epoch captures).
-				++async.builtInline;
-				payload = &impl->fallbackPayloads[jobIndex];
-				BuildMainPayload(in, tables, Scene::FrameView::Get().GetFrameTables(), lookups, *payload, impl->fallbackRows, nullptr, impl->StreamsNow());
-				payload->foreignRows = true;
-				ahead.reset();
-			} else {
-				++async.used;
-				builtAhead = true;
-			}
+			++async.used;
 			committed = payload;
 			// Copied: a frame that keeps the publication commits the payload again.
 			*frameOwners = payload->bindingOwners;
-			if (ahead)
-				frameOwners->push_back(ahead);
-			// T6b3b: the adopted snapshot whole (its versions, its draws, what they embed), until this execution retires: released on ORG's
+			frameOwners->push_back(ahead);
+			// The adopted snapshot whole (its versions, its draws, what they embed), until this execution retires: released on ORG's
 			// host thread through the cleanup queue, never before the GPU is done with the frame (the builder's drop of a replaced one is a
 			// CPU drop alone).
 			if (impl->adoptedSnapshot)
@@ -330,21 +315,15 @@ namespace DCLF
 		}
 
 		stats.cpuMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-		// The remainder is the epoch execution itself and the commit. It stays a subtraction, but it is now
-		// a small one rather than the bucket the per-draw work hid in. When the worker built the payload, the
-		// build's parts are the worker's time and the render thread's is all remainder (the join included).
-		stats.partMs[7] = builtAhead ? stats.cpuMs :
-		                                  stats.cpuMs - (stats.partMs[0] + stats.partMs[1] + stats.partMs[2] +
-		                                                    stats.partMs[3] + stats.partMs[4] + stats.partMs[5] + stats.partMs[6]);
+		// The remainder is the epoch execution itself and the commit: the payload was built ahead, so the build's parts are the
+		// builder's time and the render thread's is all remainder.
+		stats.partMs[7] = stats.cpuMs;
 		if (!ok)
 			logger::error("[DCLF] The main-pass epoch failed; the render graph is disabled");
 	}
 
 	void IndirectDraws::EndFrame()
 	{
-		// The epochs' own builds hold the frame's stream views (and through them its publication's retirement node): let go.
-		for (auto& payload : impl->fallbackPayloads)
-			payload.Reset();
 		// The ring entry the frame read: free again once what the frame submitted is done on the GPU.
 		if (impl->ringFrame.valid)
 			if (auto* host = RenderGraphRuntime::Get().Host())
@@ -402,8 +381,8 @@ namespace DCLF
 
 		// b12 is the game's PerFrame buffer. The constant mirror does not always hold its contents - the
 		// engine does not rewrite it through the hooked context every frame - and an empty slot drops
-		// every object whose shaders read it, which left distant buildings unshaded. Community Shaders
-		// already caches this buffer between Map and Unmap for its own use, so take it from there.
+		// every object whose shaders read it. Community Shaders already caches this buffer between Map
+		// and Unmap for its own use, so take it from there.
 		{
 			const auto& cached = globals::game::frameBufferCached.data;
 			const auto* bytes = reinterpret_cast<const std::byte*>(&cached);
@@ -414,8 +393,8 @@ namespace DCLF
 		}
 		// b5 is Community Shaders' own SharedData, written through its ConstantBuffer helper rather than
 		// through the hooked device context, so the constant mirror never observes the write and the
-		// slot would stay empty - which dropped every object whose shader reads it (the untextured
-		// architecture in Dragonsreach). CS keeps the struct it uploaded, so pack that directly.
+		// slot would stay empty, dropping every object whose shader reads it. CS keeps the struct it
+		// uploaded, so pack that directly.
 		// These are supplied in the Z-prepass too. Its pixel stage is the DCLF_DEPTH_ONLY build,
 		// which still reads them in the code that runs before the alpha test, and they all come from
 		// Community Shaders or the game's own cache rather than from the main pass's bindings - so they
@@ -433,7 +412,7 @@ namespace DCLF
 		// rejected by the constants check).
 		a_out.vs[kFrameFogRegister].clear();
 		a_out.vsMask |= 1u << kFrameFogRegister;
-		// Step 6e E5: a slot the epoch supplied before and lacks now - a feature's block the capture point sees bound in some frames
+		// A slot the epoch supplied before and lacks now - a feature's block the capture point sees bound in some frames
 		// only (VS b7) - is supplied from its last capture, counted, so the frame's slots are the same every frame and the builds
 		// ahead, made for the slots the epoch last supplied, stay usable. The Z-prepass's carried vertex blocks are
 		// the colour epoch's replay too: the two transform alike.
@@ -480,30 +459,13 @@ namespace DCLF
 		}
 	}
 
-	MainInputs IndirectDraws::Impl::PrepareMainInputs(const Capture* a_capture, bool a_depthOnly, const Resources& a_resources, std::uint32_t a_vsMask, std::uint32_t a_psMask)
+	MainInputs IndirectDraws::Impl::PrepareMainInputs(bool a_depthOnly, const Resources& a_resources, std::uint32_t a_vsMask, std::uint32_t a_psMask)
 	{
 		MainInputs in;
 		in.frameNumber = Scene::FrameView::Get().GetFrame();
 		in.depthOnly = a_depthOnly;
 		in.residentUploaded = a_resources.residentUploaded[a_depthOnly && a_resources.inputsDepth ? 0 : 1];
 		in.tablesHeld = a_resources.scene->held;
-		in.readsEye = Policy::BuildAtEpoch();
-		// Camera-relative world matrices: the colour epoch must use the eye the Z-prepass used, or the
-		// same vertex lands somewhere else and the EQUAL test rejects it. Without a capture (the job kicked
-		// ahead of the epoch) the replay is the only source, which KickColourBuild requires.
-		const bool replayVertexInputs = !a_depthOnly && prepassInputs;
-		if (replayVertexInputs || !a_capture) {
-			in.eye = prepassEye;
-			in.previousEye = prepassPreviousEye;
-		} else {
-			in.eye = a_capture->eye;
-			in.previousEye = a_capture->previousEye;
-		}
-		// The records are absolute and the shaders subtract the eye, so a build reads it only for its parity checks
-		// against the constant-group form, which is relative. Where it is not read it is not an
-		// input: the Z-prepass job needs no eye prediction, and nothing goes stale on it.
-		if (!BuildReadsEye(in))
-			in.eye = in.previousEye = {};
 		in.vsFrameMask = a_vsMask;
 		in.psFrameMask = a_psMask;
 		// The rows both segments share, and the versions of them the tables hold.

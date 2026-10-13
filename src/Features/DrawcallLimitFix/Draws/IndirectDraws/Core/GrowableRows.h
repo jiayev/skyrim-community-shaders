@@ -1,19 +1,16 @@
 #pragma once
 
-// IndirectDraws' growable tables. Included by Internal.h, after the headers these declarations use.
+// IndirectDraws' growable tables: versioned-buffer growth (Growth, Adopt), growth as graph work named by scene revisions (Growths:
+// the snapshot builder posts and settles, the frame start adopts), and GrowableRows. Included by Internal.h.
 
 namespace DCLF::Draws
 {
-	/**
-	 * @brief Any thread (T6b3b): wakes the snapshot builder (IndirectDraws::Impl::SnapshotPass) - a growth settled, a revision completed,
-	 * the frame posted something it takes. Coalesced; nothing before the builder's first work.
-	 */
+	/** @brief Any thread: wakes the snapshot builder (Impl::SnapshotPass). Coalesced; a no-op before its first work. */
 	void WakeSnapshotBuilder();
 
 	/**
-	 * @brief A growth of versioned buffers (Versioned): their next versions, made at the new sizes, and what their adoption changes
-	 * - the held versions reset (a new version holds nothing), the addresses and descriptor indices taken again, a layout made
-	 * for the new size. A consequence describes the new versions, so it runs when they become the ones written: at adoption.
+	 * @brief A growth of versioned buffers: their next versions at the new sizes. Consequences describe the new versions, so they
+	 * run at adoption.
 	 */
 	struct Growth
 	{
@@ -31,40 +28,30 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief Adopts a growth (render thread): its versions become current, then a_adopted runs, then the graph host is told
-	 * (PersistentGraphHost::NoteNewVersions: a ticket prepared against the old versions is prepared again or takes a kept recording).
-	 * Nothing changes in place, so nothing waits; the old versions stay as they were for whatever holds them. The live path adopts a
-	 * growth as it is made.
+	 * @brief Render thread: makes a growth's versions current, runs a_adopted, then tells the graph host (NoteNewVersions).
+	 * Nothing changes in place, so nothing waits; old versions stay intact for their holders.
 	 */
 	void Adopt(Growth&& a_growth, const std::function<void()>& a_adopted = {});
 
 	/**
-	 * @brief Growth as graph work (G2; the SARP/BasicRenderer model, BuildVersionedGpuBuffer), in revision mode. A change is an
-	 * owner's sizing (the capacities its writers and shapes index by) with the buffers that grow with it: their next versions are
-	 * made and filled on the scene graph (Runtime::SceneGraph::PostGrowth: the preparation pool and the dedicated uploader), and
-	 * a change without buffers is ready at once. A ready change is what the next revision sealed names (VersionSet::Snapshot, its
-	 * shapes made from RevisionSizing); it is adopted - its versions made current, its sizing the owner's, its consequences run - when
-	 * a snapshot whose revision names it is adopted (IndirectDraws::AdoptSnapshot). Until then the owner's sizing and the current versions are what
-	 * every write and every recording uses, and what is past them waits. No revision is sealed while a change is pending: its claims
-	 * could reach past the versions it names. Without revisions a change is adopted as it is made.
+	 * @brief Growth as graph work (the BasicRenderer model), in revision mode. A change is an owner's sizing plus the buffers that
+	 * grow with it, made and filled on the scene graph (SceneGraph::PostGrowth). The next sealed revision names each ready change;
+	 * it is adopted when a snapshot naming it is adopted (AdoptSnapshot). Until then everything uses the current sizing and
+	 * versions, and what is past them waits. No revision is sealed while a change is pending (its claims could reach past the
+	 * versions it names). Without revisions a change is adopted as it is made.
 	 *
-	 * T6b3b b2a, two sides and nothing shared but immutable entries and one atomic:
-	 * - The producer's (the revision code: the reserves, MakeRevision, AssembleRevision): Post, Settle, Prune, the sizings and versions a
-	 *   revision names (RevisionSizing, LatestSizing, Ready, Named, Asked, Held) and Naming, the changes a sealed revision names, handed
-	 *   over by value in it (NamedChanges, its growths fragment). Its entries are its own; an entry is immutable once ready but for the
-	 *   producer's own fields (ready, adoptedSeen). The last adopted change of an owner (or of a buffer, for an ownerless one) stays as
-	 *   the producer's record of what was adopted, so it never reads an owner's sizing the frame writes at adoption.
-	 * - The frame's (AdoptSnapshot): AdoptNamed adopts, in request order, the selected revision's changes it has not adopted yet (the
-	 *   versions, the owner's sizing, the consequences, VersionRegistry::Changed, NoteNewVersions), and publishes how far it adopted
-	 *   (adoptedPublished), which the producer's next Prune takes in.
-	 * An entry is settled on the coordinator lane (published by its state). An owner's change holds its life (the owner's shared state):
-	 * a dead owner's changes are dropped, never matched by a later owner at its address, and their consequences never run.
+	 * Two sides share only immutable entries and one atomic:
+	 * - Producer (snapshot builder): Post, Settle, Prune, the sizing/version queries, Naming. Entries are immutable once ready
+	 *   except ready/adoptedSeen. Each owner's last adopted change is kept as the producer's record, so it never reads an owner
+	 *   sizing the frame writes.
+	 * - Frame: AdoptNamed adopts, in request order, and publishes adoptedPublished for Prune.
+	 * A change holds its owner's life: a dead owner's changes are dropped, never matched by a later owner at the same address.
 	 */
 	struct Growths
 	{
 		/** @brief Producer thread: a new version's contents (VersionGrowthRequest::contentsOf). */
 		using ContentsOf = std::function<void(const org::BufferVersion&, std::vector<org::services::VersionFill>&, std::shared_ptr<const void>&)>;
-		/** @brief One buffer of a change: its new size (structured elements, else bytes) and its contents (none: written whole by its users). */
+		/** @brief One buffer of a change: new size (structured elements, else bytes) and contents (none: its users write it whole). */
 		struct Part
 		{
 			Versioned buffer;
@@ -75,13 +62,13 @@ namespace DCLF::Draws
 		};
 		struct Entry
 		{
-			std::uint64_t serial = 0;              // request order (Post's): the order changes are adopted in
-			const void* owner = nullptr;           // the sizing it changes (RevisionSizing, LatestSizing), or none
-			std::weak_ptr<const void> life;        // the owner's (or an ownerless table's) life: expired, the change is dropped
+			std::uint64_t serial = 0;              // request order = adoption order
+			const void* owner = nullptr;           // the sizing it changes, or none
+			std::weak_ptr<const void> life;        // expired: the change is dropped
 			std::shared_ptr<const void> sizing;    // the owner's sizing once adopted
 			std::vector<Part> parts;
-			std::function<void()> adopted;         // the frame, when it is adopted (after its versions and sizing)
-			// The producer's: seen ready at a make (Settle: what a revision may name), and seen adopted (Prune: its record).
+			std::function<void()> adopted;         // frame, at adoption (after versions and sizing)
+			// Producer's: seen ready by Settle (a revision may name it), seen adopted by Prune.
 			bool ready = false;
 			bool adoptedSeen = false;
 			enum : std::uint8_t
@@ -91,44 +78,40 @@ namespace DCLF::Draws
 				kFailed
 			};
 			std::atomic<std::uint8_t> state = kPending;
-			std::vector<std::shared_ptr<const org::BufferVersion>> versions;  // by its parts, written before the state turns ready
+			std::vector<std::shared_ptr<const org::BufferVersion>> versions;  // per part, written before state turns ready
 			std::string error;                                                // before it turns failed
 			bool Alive() const { return !life.expired(); }
 		};
-		/** @brief What a sealed revision names (its growths fragment): the ready changes the producer had not seen adopted, in order. */
+		/** @brief A sealed revision's growths fragment: the ready changes not yet seen adopted, in order. */
 		struct NamedChanges
 		{
 			std::vector<std::shared_ptr<const Entry>> entries;
 		};
-		// The producer's.
-		std::vector<std::shared_ptr<Entry>> entries;  // by request order: outstanding, and each owner's (buffer's) last adopted
+		// Producer's.
+		std::vector<std::shared_ptr<Entry>> entries;  // request order: outstanding, plus each owner's (buffer's) last adopted
 		std::uint64_t serial = 0;                     // the last Post's
-		std::uint64_t stamp = 0;                      // moves when what a revision may name moves (a change seen ready, or adopted)
+		std::uint64_t stamp = 0;                      // moves when what a revision may name moves
 		std::uint64_t requested = 0, failed = 0;      // since the last report
 		std::uint32_t failuresLogged = 0;
-		// The frame's: the last change adopted (AdoptNamed), and its publication for the producer (Prune).
+		// Frame's: the last change adopted, published for Prune.
 		std::uint64_t adoptedThrough = 0;
 		std::atomic<std::uint64_t> adoptedPublished{ 0 };
-		std::atomic<std::uint64_t> adopted{ 0 };      // since the last report (the builder's report exchanges it)
-		// Growths adopted at once in revision mode, by buffer name (Adopt: the thread that made them).
+		std::atomic<std::uint64_t> adopted{ 0 };      // since the last report
+		// Growths adopted at once in revision mode, by buffer name.
 		std::map<std::string, std::uint32_t> atOnce;
-		// Whether changes are graph work (Deferred), as the frame last posted it (RevisionInputs: async epochs and the host's uploader,
-		// owner-thread state), and the uploader a change's fills go through (the producer's copy, set at each make: RevisionInputs).
+		// Whether changes are graph work (posted by the frame), and the uploader fills go through (set at each make).
 		std::atomic<bool> deferred{ false };
 		std::weak_ptr<org::runtime::IUploadService> uploads;
 
 		static Growths& Get();
-		/**
-		 * @brief Any thread: changes are graph work - revision mode, with the scene graph and the host's uploader (posted by the frame:
-		 * Impl::PostRevisionInputs) - else they are adopted at once.
-		 */
+		/** @brief Any thread: changes are graph work (revision mode with scene graph and uploader), else adopted at once. */
 		static bool Deferred();
-		/** @brief The owner thread (the frame's commits): the same, from the host as it is now. */
+		/** @brief Owner thread (the frame's commits): the same, from the host's current state. */
 		static bool OwnerDeferred();
 
 		/**
-		 * @brief The producer: an owner's sizing changes to a_sizing, with a_parts' buffers grown: adopted now without revisions, else
-		 * posted. a_life: the owner's life (its shared state). a_adopted runs once it is adopted, after the owner took a_sizing.
+		 * @brief Producer: the owner's sizing changes to a_sizing with a_parts grown; adopted now without revisions, else posted.
+		 * a_life: the owner's shared state. a_adopted runs at adoption, after the owner took a_sizing.
 		 */
 		template <class Sizing>
 		void Change(Sizing& a_owner, std::weak_ptr<const void> a_life, Sizing a_sizing, std::vector<Part> a_parts, std::function<void()> a_adopted = {})
@@ -140,7 +123,7 @@ namespace DCLF::Draws
 					adopted();
 			});
 		}
-		/** @brief The producer: the owner's sizing a revision made now names: its newest ready change's (adopted or not), else its own. */
+		/** @brief Producer: the sizing a revision made now names: the newest ready change's (adopted or not), else the owner's. */
 		template <class Sizing>
 		const Sizing& RevisionSizing(const Sizing& a_owner) const
 		{
@@ -149,7 +132,7 @@ namespace DCLF::Draws
 					return *static_cast<const Sizing*>((*it)->sizing.get());
 			return a_owner;
 		}
-		/** @brief The producer: what a new change builds on: the owner's newest change's sizing (pending, ready or adopted), else its own. */
+		/** @brief Producer: what a new change builds on: the newest change's sizing (any state), else the owner's. */
 		template <class Sizing>
 		const Sizing& LatestSizing(const Sizing& a_owner) const
 		{
@@ -158,32 +141,31 @@ namespace DCLF::Draws
 					return *static_cast<const Sizing*>((*it)->sizing.get());
 			return a_owner;
 		}
-		/** @brief The producer: a change of a_owner's (none: of a_parts' buffers alone), a_adopted its whole consequence. */
+		/** @brief Producer: posts a change of a_owner (null: of a_parts alone); a_adopted is its whole consequence. */
 		void Post(const void* a_owner, std::weak_ptr<const void> a_life, std::shared_ptr<const void> a_sizing, std::vector<Part> a_parts, std::function<void()> a_adopted);
-		/** @brief The producer: the size a buffer's newest outstanding change asks for, in bytes (0: none). */
+		/** @brief Producer: bytes the buffer's newest outstanding change asks for (0: none). */
 		std::uint64_t Asked(const Versioned& a_buffer) const;
-		/** @brief The producer: the size a buffer's newest change asks for or was adopted at, in bytes (0: none: its first backing's). */
+		/** @brief Producer: bytes the buffer's newest change asks for or was adopted at (0: still its first backing). */
 		std::uint64_t Held(const Versioned& a_buffer) const;
-		/** @brief The producer, at each make's start: takes in what the frame adopted (adoptedPublished), its records kept. */
+		/** @brief Producer, at each make's start: takes in adoptedPublished, keeping the records. */
 		void Prune();
-		/** @brief The producer, the make: takes in what the graph settled. True while a change is pending (no revision is sealed). */
+		/** @brief Producer, at the make: takes in what the graph settled. True while a change is pending (no seal). */
 		bool Settle();
-		/** @brief The producer: the newest version of a_buffer a revision made now names that is not adopted yet, else null (the current one). */
+		/** @brief Producer: the newest named, not-yet-adopted version of a_buffer, else null (the current one). */
 		std::shared_ptr<const org::BufferVersion> Ready(const Versioned& a_buffer) const;
-		/** @brief The producer: the newest version of a_buffer a revision made now names: a ready change's, adopted or not, else null. */
+		/** @brief Producer: the newest named version of a_buffer (a ready change's, adopted or not), else null. */
 		std::shared_ptr<const org::BufferVersion> Named(const Versioned& a_buffer) const;
-		/** @brief The producer, before a seal: what the revision names (every ready change not seen adopted), handed over in it. */
+		/** @brief Producer, before a seal: every ready change not seen adopted, carried in the revision. */
 		std::shared_ptr<const NamedChanges> Naming() const;
-		/** @brief The frame, at a selection: adopts, in order, a_named's changes it has not adopted yet. True when one was. */
+		/** @brief Frame, at a selection: adopts a_named's not-yet-adopted changes in order. True when one was. */
 		bool AdoptNamed(const NamedChanges& a_named);
 		/** @brief A report line, its counters reset; empty when nothing happened. */
 		std::string Report();
 	};
 
 	/**
-	 * @brief A table's rows as a growth's new version holds them (Growths: the fill made on the producer's thread, from rows kept
-	 * immutable): `bytes` lays the rows out for a table at an address, and `held` is the kept rows' version they are, which the table
-	 * holds once the version is adopted (the rows changed since are sent then).
+	 * @brief A row table growth's fill, from immutable kept rows: `bytes` lays them out at an address; `held` is their version,
+	 * which the table holds once adopted.
 	 */
 	struct RowsCapture
 	{
@@ -192,40 +174,32 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief A table of fixed-stride rows in one device buffer the shaders read by address, which grows instead of capping.
+	 * @brief A table of fixed-stride rows in one device buffer, read by address, that grows instead of capping.
 	 *
-	 * Each row is a constant-buffer block (the stride a multiple of kConstantAlignment), so the table is an array of them.
-	 * Rows are named by index; what holds their values (a KeptArray, a payload's vector) is the caller's. Reserve grows
-	 * the backing when the rows asked for do not fit - to twice the capacity, or more - through Buffer::ResizeBytes, which
-	 * keeps the graph resource (its backing generation changes) and releases the old backing through ORG's deletion queue,
-	 * frames in flight after the GPU last used it. The new backing holds
-	 * nothing, so after a growth (the generation changes) every row is sent again. A row past the capacity waits for the
-	 * next Reserve, as a caster waits for its texture: nothing is dropped and nothing falls back.
-	 *
-	 * Reserved by the revision code (T6b3b b2a: sized from Growths::Held, never the capacity the frame's adoption writes): a growth
-	 * publishes a new version (PersistentGraphHost::NoteNewVersions), nothing waits. Given the rows' capture, a growth is graph work
-	 * (Growths::Deferred): the capacity, address and generation move when its version is adopted (the frame), and until then a row
-	 * past the capacity waits.
+	 * Rows are constant-buffer blocks (stride a multiple of kConstantAlignment); the caller owns the values. Reserve at least
+	 * doubles the backing; a new backing holds nothing, so every row is sent again. A row past the capacity waits for the next
+	 * Reserve: nothing is dropped, nothing falls back. Reserved by the revision code from Growths::Held; capacity, address and
+	 * generation move when the frame adopts the version.
 	 */
 	struct GrowableRows
 	{
-		Versioned buffer;  // a growth is a new version (the old one stays as it was for what holds it)
+		Versioned buffer;  // a growth is a new version; the old one stays intact for its holders
 		std::uint64_t address = 0;
 		std::uint32_t stride = 0;
 		std::uint32_t capacity = 0;    // rows the backing holds
 		std::uint64_t generation = 0;  // counts the backings: a new one holds nothing
 		std::uint32_t growths = 0;     // since the last report
 		std::string name;
-		std::shared_ptr<int> life = std::make_shared<int>();  // a deferred growth's consequence runs only while the table is
+		std::shared_ptr<int> life = std::make_shared<int>();  // a deferred growth's consequence runs only while this lives
 
 		/** @brief The first backing: a_rows rows of a_stride bytes. False when it has no device address. */
 		bool Create(std::uint32_t a_stride, std::uint32_t a_rows, const char* a_name);
 		/**
-		 * @brief Room for a_rows: true when it grew or asked to. a_adopted(held) runs when the new version is adopted, with the kept
-		 * rows' version it holds: a_capture's (a deferred growth is filled from it), else 0 (every row must be sent again).
+		 * @brief Room for a_rows: true when it grew or asked to. a_adopted(held) runs at adoption with the kept-rows version the
+		 * backing holds: a_capture's, else 0 (every row must be sent again).
 		 */
 		bool Reserve(std::uint32_t a_rows, const std::function<void(std::uint64_t)>& a_adopted = {}, const RowsCapture* a_capture = nullptr);
-		/** @brief The producer: the address a revision made now names (Growths::Named: a ready growth's version), else the first one's. */
+		/** @brief Producer: the address a revision made now names (a ready growth's version), else the current one. */
 		std::uint64_t RevisionAddress() const;
 	};
 }

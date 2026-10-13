@@ -1,3 +1,7 @@
+// The revision producer, on the snapshot builder (DCLF's preparation pool, one pass at a time): MakeRevision makes a scene
+// revision's shapes and latches from a publication and the frame's posted RevisionInputs, then AssembleRevision seals them. Also the
+// main shape's plans (shared with the commits) and the scene lane's first-person and reflection slot checks.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -21,12 +25,12 @@ namespace DCLF
 				const auto& entry = a_lookups.pipelines[p];
 				if (entry.setIndex == Lookups::kNone || !(entry.key == keys[p]) || entry.setIndex >= groups.size())
 					continue;
-				// T7d's Effect port: no bucket for an effect key (no forward object is a depth input, and its pipeline has no Z-prepass pipeline).
+				// The Effect port: no bucket for an effect key (no forward object is a depth input, and its pipeline has no Z-prepass pipeline).
 				if (RasterEffect(keys[p].rasterFlags))
 					continue;
 				const std::uint32_t group = groups[entry.setIndex];
 				auto& bucket = groupBucket[group];
-				// T7c1: a terrain group 1 slot's group (its depth pipeline's key holds no other: DrawPipelines.cpp, ZPipelineKey) has a twin
+				// A terrain group 1 slot's group (its depth pipeline's key holds no other: DrawPipelines.cpp, ZPipelineKey) has a twin
 				// bucket right after its own, as large, for its near blocks (BuildDrawsCS, kBucketTerrainPair; MainOpaquePass).
 				const bool terrain = RasterTerrainGroup(keys[p].rasterFlags) == 1;
 				if (bucket == kNoBucket) {
@@ -84,7 +88,7 @@ namespace DCLF
 			add(constants, sizeof(FrameFog), FrameSlotOffset(false, kFrameFogRegister));
 			add(constants, kExtrasFrameVertexBytes, FrameSlotOffset(false, kFrameFogRegister) + sizeof(FrameFog));
 			add(constants, sizeof(ExtrasFrame::projectedGlobals), kExtrasPixelFrameOffset);
-			add(constants, sizeof(std::array<float, 4>), kEffectCameraFrameOffset);  // T7d's Effect port (SampleEffectCamera)
+			add(constants, sizeof(std::array<float, 4>), kEffectCameraFrameOffset);  // the Effect port (SampleEffectCamera)
 			add(constants, sizeof(std::array<float, 4>), kEffectLightFrameOffset);   // its Lighting variant (SampleEffectLight)
 			add(constants, sizeof(std::array<float, 4>), kEffectBloodFrameOffset);   // its Blood (SampleEffectBlood)
 			if (!a_depthOnly && a_resources.foliage)
@@ -98,8 +102,8 @@ namespace DCLF
 				add(a_resources.count.get(), 4 * sizeof(std::uint32_t), kCountDecalGroupWord * sizeof(std::uint32_t));
 				add(a_resources.count.get(), sizeof(std::uint32_t), kCountDecalLayerWord * sizeof(std::uint32_t));
 				add(a_resources.count.get(), kTerrainGroups * sizeof(std::uint32_t), kCountTerrainGroupWord * sizeof(std::uint32_t));
-				add(a_resources.count.get(), 4 * sizeof(std::uint32_t), kCountForwardWord * sizeof(std::uint32_t));  // T7d
-				add(a_resources.count.get(), 4 * sizeof(std::uint32_t), kCountRefractionWord * sizeof(std::uint32_t));  // T7d's refraction
+				add(a_resources.count.get(), 4 * sizeof(std::uint32_t), kCountForwardWord * sizeof(std::uint32_t));
+				add(a_resources.count.get(), 4 * sizeof(std::uint32_t), kCountRefractionWord * sizeof(std::uint32_t));
 			}
 			if (a_depthOnly && a_resources.pool && a_buckets)
 				for (const auto& counts : a_resources.zBucketCounts)
@@ -152,11 +156,11 @@ namespace DCLF
 			frame->drawCapacity = a_in.sequenceDraws;
 			for (std::uint32_t group = 0; group < kDecalGroups; ++group)
 				frame->decalCapacity[group] = a_in.depthOnly ? 0u : a_in.sequenceDecals;
-			// T7c1: the terrain groups' ranges, the colour segment's alone (BuildDrawsCS appends them there).
+			// The terrain groups' ranges, the colour segment's alone (BuildDrawsCS appends them there).
 			if (!a_in.depthOnly) {
 				frame->terrainCapacity = a_in.terrainCapacity;
-				frame->forwardCapacity = a_in.forwardCapacity;  // T7d: the colour segment's and the forward epoch's
-				frame->refractionCapacity = a_in.refractionCapacity;  // T7d's refraction: likewise
+				frame->forwardCapacity = a_in.forwardCapacity;  // the colour segment's and the forward epoch's
+				frame->refractionCapacity = a_in.refractionCapacity;  // likewise
 			}
 			frame->width = a_in.viewport.width;
 			frame->height = a_in.viewport.height;
@@ -166,13 +170,6 @@ namespace DCLF
 			frame->samplerHeap = a_in.samplerHeap;
 			frame->indirect = a_in.indirect;
 			frame->cullMode = a_in.cullMode;
-			if (const std::string_view pixel = a_in.probe; !pixel.empty()) {
-				if (const auto sep = pixel.find_first_of(",x"); sep != std::string::npos) {
-					frame->probeX = static_cast<std::uint32_t>(std::strtoul(std::string(pixel.substr(0, sep)).c_str(), nullptr, 10));
-					frame->probeY = static_cast<std::uint32_t>(std::strtoul(std::string(pixel.substr(sep + 1)).c_str(), nullptr, 10));
-					frame->probePixel = frame->probeX < frame->width && frame->probeY < frame->height;
-				}
-			}
 			frame->latch = a_in.latch;
 			frame->latchLayout = a_in.latchLayout;
 			frame->zCalls = a_in.zCalls;
@@ -229,11 +226,10 @@ namespace DCLF
 		if (!inputs.claims || !inputs.main || !inputs.main->scene || !host || !a_publication.tables)
 			return;
 		const auto& tables = *a_publication.tables;
-		// T6b3a: the revision is its publication's alone - its tables, its lookups and the catalog they were resolved from (named
-		// explicitly: GetIndirectState, GetShadowIndirectState of it, for the generations its inputs hold) - never the frame's installed
-		// lookups and catalog. Made from those, a revision's shapes followed which publication the frame happened to have installed: a
-		// frame that kept its publication (a revision late) paired the next revision's tables with older lookups, which changed its
-		// bucket plans and rows again, which made it late too.
+		// The revision is its publication's alone - its tables, its lookups and the catalog they were resolved from (named explicitly:
+		// GetIndirectState, GetShadowIndirectState of it, for the generations its inputs hold) - never the frame's installed lookups and
+		// catalog: shapes made from those would follow whichever publication the frame has installed, pairing a late revision's tables
+		// with older lookups and changing its bucket plans and rows again.
 		static const Lookups kNoLookups;
 		const Lookups& lookups = a_publication.lookups ? *a_publication.lookups : kNoLookups;
 		const PipelineCatalog* catalog = a_publication.catalog.get();
@@ -246,19 +242,19 @@ namespace DCLF
 		ReserveMainSequences(r, tables, a_publication.tablesGeneration);
 		if (inputs.scene)
 			ReserveIndexPool(*inputs.scene, tables, a_publication.tablesGeneration);
-		// The shadow material rows the last shadow build wanted (the frame's epochs reserved them before T6b3b).
+		// The shadow material rows the last shadow build wanted.
 		if (inputs.shadow)
 			ReserveShadowRows(*inputs.shadow, inputs.shadowRowsWanted);
 		// The colour commit's sun cascades and local shadow light volumes, a shadow view each (the last Rebuild's candidates): the latch
-		// a revision names holds them from its join on, not from a colour commit's growth (which a frame without claims never runs).
+		// a revision names holds them from its make on, not from a colour commit's growth (which a frame without claims never runs).
 		{
 			const std::uint32_t views = inputs.shadowCandidates;
 			// And the Z-prepass's bucket map for every pipeline slot the tables have: a publication a revision made now covers holds no more
-			// (its commit is this join's or older), and a commit past the map draws nothing for the slots it lacks.
+			// (its commit is this make's or older), and a commit past the map draws nothing for the slots it lacks.
 			const auto& layout = latches.mainLayout;
 			ReserveMainLatch(std::max(views, layout.cascades), std::max(views, layout.shadowVolumes), std::max(layout.buckets, request.pipelines));
 		}
-		// The growths the graph finished (G2): what the revision made now names, its shapes' addresses included. One still pending
+		// The growths the graph finished: what the revision made now names, its shapes' addresses included. One still pending
 		// keeps the revision from being sealed (AssembleRevision).
 		revisions.growthPending = Growths::Get().Settle();
 		const auto indirect = catalog ? GetIndirectState(*catalog, inputs.targetsGeneration) : IndirectState{};
@@ -277,7 +273,7 @@ namespace DCLF
 					recent.resize(Impl::kRecentOcclusionLayouts);
 			}
 		}
-		// The shadow and reflection buffers for what the revisions' shapes name, reserved at every join (a growth asked for here is one
+		// The shadow and reflection buffers for what the revisions' shapes name, reserved at every make (a growth asked for here is one
 		// a revision adopts).
 		const auto shadowState = inputs.shadow;
 		if (shadowState && shadowIndirect.valid) {
@@ -290,7 +286,7 @@ namespace DCLF
 					slots = std::max(slots, view.slot + 1);
 			ReserveShadowSequences(*shadowState, tables, a_publication.tablesGeneration, slots, 0);
 			// The latch for what the frame's epochs can name (over every mode): its views, key slots, the states registered and the
-			// sun's processes, a view's each at most. The key slots of the publication's lookups (T6b2c step 5: the scene lane resolved
+			// sun's processes, a view's each at most. The key slots of the publication's lookups (the scene lane resolved
 			// the slots of these tables' keys already; append-only per instance), and the keys its casters and occluders use.
 			const std::size_t slotKeys = std::max(lookups.shadowSlotKeys.size(), request.shadowSlotKeys);
 			const std::size_t keys = slotKeys + request.shadowKeys;
@@ -298,7 +294,7 @@ namespace DCLF
 			ReserveShadowLatch(*shadowState, views, static_cast<std::uint32_t>(keys), inputs.shadowRasterStates, std::max(views, latches.shadowLayout.sunProcesses));
 		}
 		// The views' forward pipelines (and the faces' tree LOD's), as the request's catalog has them for its tables, and their buffers for
-		// the main sizing's newest change, at the join it is asked for: the changes are adopted with the same revision (none is sealed
+		// the main sizing's newest change, at the make it is asked for: the changes are adopted with the same revision (none is sealed
 		// while either is pending), so a commit's plan from the main sizing always fits them. Their maps for every pipeline slot the tables
 		// have, as the Z-prepass's (above).
 		TreeLodPipelines treeLodPipelines;
@@ -325,7 +321,7 @@ namespace DCLF
 				static_cast<std::uint32_t>(latest.buckets.size() + (latest.forwardCapacity ? 1 : 0)), latest.draws);
 		}
 		// The shapes are made again only when what they are made from moved (RevisionShapesKey): otherwise the revision sealed at this
-		// join keeps the last ones.
+		// make keeps the last ones.
 		if (producer.drawBound.shadowVersion != shadowBoundChecked) {
 			shadowBoundChecked = producer.drawBound.shadowVersion;
 			if (!ShadowShapesHold(ShadowBoundsOf(producer.drawBound, lookups)))
@@ -349,7 +345,6 @@ namespace DCLF
 				continue;
 			const bool depthOnly = shape == kDepthShape;
 			auto in = MainShapeInputsOf(r, depthOnly, inputs.toggles.cullMode, true);
-			in.probe = inputs.gbufferProbe;
 			in.latch = latches.main;
 			in.latchLayout = latches.mainLayout;
 			in.viewport = inputs.viewport[shape];
@@ -456,7 +451,7 @@ namespace DCLF
 			if (!traits.depthPass || ((!in.plan.buckets.empty() || in.plan.forwardCapacity) && viewLatches.zeros))
 				shape = MakeViewShape(*view.resources, in);
 		}
-		// The revision of these shapes (R3c b): assembled, its changed epochs recorded for it.
+		// The revision of these shapes: assembled, its changed epochs recorded for it.
 		AssembleRevision(frameNumber);
 	}
 
@@ -485,7 +480,7 @@ namespace DCLF
 		// The revision's inputs (RevisionInputs) and latches (the producer's): what its shapes are made from besides the request.
 		const auto& inputs = producer.inputs;
 		const auto& latches = producer.latches;
-		// The request's lookups (T6b3a: the publication's, which the shapes are made from).
+		// The request's lookups (the publication's, which the shapes are made from).
 		const auto& lookups = a_lookups;
 		// What every shape names: the growths a revision adopts (sizings, rows' addresses), the pipeline sets, the heaps, the toggles.
 		group = kKeyGrowths;
@@ -506,7 +501,7 @@ namespace DCLF
 		mix(lookups.generation);
 		mix(lookups.versionCounter);
 		mix(lookups.shadowGeneration);
-		mix(a_pipelines);  // the request's pipeline slots (T6b3a: the publication's tables, not the coordinator's)
+		mix(a_pipelines);  // the request's pipeline slots (the publication's tables, not the coordinator's)
 		// The main segments': their latch, latched blocks and targets, and what their commits captured (viewport, frame blocks).
 		group = kKeyMain;
 		const auto& r = *inputs.main;
@@ -580,8 +575,6 @@ namespace DCLF
 		}
 		group = kKeyFirstPerson;
 		mix(inputs.toggles.firstPerson);
-		group = kKeyPipelines;
-		mix(std::hash<std::string_view>{}(inputs.gbufferProbe));
 		return key;
 	}
 
@@ -624,14 +617,14 @@ namespace DCLF
 				*a_why = a_cause;
 			return false;
 		};
-		// T7e: the slot's first-person forward pipeline as a_catalog has it for the published first-person targets, and its Z-prepass group's
+		// The slot's first-person forward pipeline as a_catalog has it for the published first-person targets, and its Z-prepass group's
 		// depth pipeline in that catalog's main set (FirstPersonPipelinesOf's and PlanFirstPersonBuckets' rules): the scene lane's commit's.
 		const auto& tables = *static_cast<const SceneTables*>(a_tables);
 		const ForwardTargets targets = impl->firstPerson.LaneTargets();
 		if (!a_catalog || targets.colour == DXGI_FORMAT_UNKNOWN || a_slot >= tables.objects.size())
 			return fail(1);
 		const std::uint32_t p = tables.objects[a_slot].pipelineIndex;
-		// T7e's forward part: a forward key's slot draws with the main set's colour pipeline (main-ready: the commit's MainReady) through the
+		// The forward part: a forward key's slot draws with the main set's colour pipeline (main-ready: the commit's MainReady) through the
 		// colour signature, into the main pass's attachments with kPOST_ZPREPASS_COPY's depth, which must be the main pass's format.
 		if (p < tables.pipelines.size() && RasterForward(tables.pipelines[p].rasterFlags))
 			return (!RasterRefraction(tables.pipelines[p].rasterFlags) && impl->firstPerson.forwardCompatible.load(std::memory_order_acquire) &&
@@ -649,9 +642,9 @@ namespace DCLF
 
 	bool IndirectDraws::ReflectionSlotReady(const void* a_tables, const PipelineCatalog* a_catalog, std::uint32_t a_slot) const
 	{
-		// T6b3e: the faces' forward pipeline of the slot's pipeline as a_catalog has it for the faces' targets (ReflectionPipelinesOf's rule,
+		// The faces' forward pipeline of the slot's pipeline as a_catalog has it for the faces' targets (ReflectionPipelinesOf's rule,
 		// which the revision's shapes resolve from their publication's catalog): the scene lane's commit's, from its own catalog, never the
-		// render thread's per-frame list (Reflection::slotPipelines, assigned whole by PrepareReflection while the lane read it).
+		// render thread's per-frame list (Reflection::slotPipelines, which PrepareReflection assigns whole).
 		const auto& tables = *static_cast<const SceneTables*>(a_tables);
 		const ForwardTargets targets = impl->reflection.LaneTargets();  // the published copy (the render thread writes `targets` at every face capture)
 		if (!a_catalog || targets.colour == DXGI_FORMAT_UNKNOWN || a_slot >= tables.objects.size())

@@ -1,3 +1,6 @@
+// The scene's event hooks (installed on the render thread at PostPostLoad): detours and patched stores on engine writers, each
+// pushing the mirror's update and the scene pass's event on the writer's thread (SceneEvents.h).
+
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
@@ -15,7 +18,7 @@ namespace DCLF::Scene
 			const float before = CurrentFade(a_this);
 			const std::uint8_t door = a_this->GetRuntimeData().unk154;
 			func(a_this, a_process, a_alphaGroup);
-			// The values for the mirror (T6b1a).
+			// The values for the mirror.
 			if (CurrentFade(a_this) != before || a_this->GetRuntimeData().unk154 != door)
 				PushNodeUpdate(a_this, SceneCapture::NodeRecord::kFadeCurrent | SceneCapture::NodeRecord::kFadeDoor);
 		}
@@ -37,8 +40,8 @@ namespace DCLF::Scene
 	};
 
 	/**
-	 * @brief Actor::SetAlpha (vfunc 0xE1, 0x1406c1a50; Actor's, Character's and PlayerCharacter's tables): the fadeAmount (+0x100) of
-	 * the actor's 3D root, and the player's first-person root too (fadeAmountEvents).
+	 * @brief Actor::SetAlpha (vfunc 0xE1, 0x1406c1a50; Actor, Character, PlayerCharacter tables): fadeAmount (+0x100) of the 3D
+	 * root, and the player's first-person root.
 	 */
 	template <class T>
 	struct ActorSetAlpha
@@ -54,7 +57,7 @@ namespace DCLF::Scene
 				if (roots[i] && Engine::At<float>(roots[i], 0x100) != before[i] && (i == 0 || roots[1] != roots[0])) {
 					fadeAmountEvents.Push(roots[i]);
 					if (roots[i]->AsFadeNode())
-						PushNodeUpdate(roots[i], SceneCapture::NodeRecord::kFadeAmount);  // the mirror's value (T6b1a)
+						PushNodeUpdate(roots[i], SceneCapture::NodeRecord::kFadeAmount);  // the mirror's value
 				}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -64,8 +67,8 @@ namespace DCLF::Scene
 	struct PlayerTable;
 
 	/**
-	 * @brief FUN_14147a430 (node, level): the LOD transition, the only writer of the fade node's LOD level (+0x152 & 0xF, the skin
-	 * partitions' row). The fade update (FUN_14147a160), BSLeafAnimNode::OnVisible and the feedback's fade service call it.
+	 * @brief FUN_14147a430 (node, level): the only writer of the fade node's LOD level (+0x152 & 0xF, the skin partitions' row);
+	 * called by the fade update (FUN_14147a160), BSLeafAnimNode::OnVisible and the feedback's fade service.
 	 */
 	struct LodLevelUpdate
 	{
@@ -79,8 +82,7 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// Sky::SetColor (0x14040d970): a colour from a weather blend, written in place. External emittance reads some of those
-	// colours through its emissiveColor pointer (emittanceEvents).
+	// Sky::SetColor (0x14040d970): a weather-blend colour written in place; external emittance may point at it.
 	struct SkySetColor
 	{
 		static void thunk(RE::Sky* a_sky, RE::NiColor* a_colour, void* a_blend, float a_flash)
@@ -93,9 +95,8 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_141480fc0 (object, &colour): points the external emittance of the object's Lighting and effect properties at a
-	// colour, recursively. The colour a Lighting property reads is a classification input (ListDependents lists the entry
-	// under it); a re-point with no flag change would otherwise go unseen, so it is a property event.
+	// FUN_141480fc0 (object, &colour): points the external emittance of the Lighting and effect properties under the object at
+	// a colour. The colour is a classification input (ListDependents), so a re-point is a property event.
 	struct SetExternalEmittance
 	{
 		static std::uint64_t thunk(RE::NiAVObject* a_object, RE::NiColor** a_colour)
@@ -103,7 +104,7 @@ namespace DCLF::Scene
 			auto* geometry = a_object ? a_object->AsGeometry() : nullptr;
 			auto* shaderProperty = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
 			auto* property = shaderProperty ? netimmerse_cast<RE::BSLightingShaderProperty*>(shaderProperty) : nullptr;
-			// T7d's Effect port: an effect property's emittanceColor is its PropertyColor (the mirror's emissive), its re-point an event too.
+			// An effect property's emittanceColor is its PropertyColor (the mirror's emissive): a re-point is an event too.
 			auto* effect = shaderProperty && !property ? netimmerse_cast<RE::BSEffectShaderProperty*>(shaderProperty) : nullptr;
 			const RE::NiColor* before = property ? property->emissiveColor : effect ? effect->emittanceColor : nullptr;
 			const auto result = func(a_object, a_colour);
@@ -119,9 +120,8 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_14147aa20: a fade node's placement snap (fadeSnapEvents). The cell attaches (FUN_1402d1280, FUN_1402d5090) call it after
-	// their own writes of the node's fade statics (the LOD type's `and`/`or` at +0x153, the range through FUN_14021f200), so its
-	// update carries them.
+	// FUN_14147aa20: a fade node's placement snap. The cell attaches (FUN_1402d1280, FUN_1402d5090) call it after writing the
+	// fade statics (LOD type `and`/`or` at +0x153, range through FUN_14021f200), so its update carries them.
 	struct FadeSnap
 	{
 		static std::uint64_t thunk(RE::NiAVObject* a_node, void* a_camera)
@@ -137,9 +137,9 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_1402d1280 (cell, reference) and FUN_1402d5090 (cell, reference, flag): a reference's 3D placed in its cell. They write the
-	// fade node's LOD type inline (`and`/`or` at +0x153: 10 for a reference flagged so, 6 for a distant one) around the range
-	// (FUN_14021f200) and snap it only on one branch (the save-load or sky cell branch skips the snap): the statics after the call.
+	// FUN_1402d1280 (cell, reference) and FUN_1402d5090 (cell, reference, flag): a reference's 3D placed in its cell. They write
+	// the LOD type inline (`and`/`or` at +0x153: 10 if flagged, 6 if distant) around the range (FUN_14021f200) and snap only on
+	// one branch (save-load and sky cell skip it): the statics after the call.
 	inline void PushReferenceFadeStatics(RE::TESObjectREFR* a_reference)
 	{
 		auto* root = a_reference ? a_reference->Get3D() : nullptr;
@@ -170,10 +170,9 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_140b44490 (rigid body, motion type, ...): Havok's motion change, the motion rebuilt in place (hkpRigidBody::setMotionType,
-	// FUN_140b30700, calls it directly, or as a world operation when the world is locked, which runs it later). Every path to a
-	// body's motion type ends here: NiAVObject::SetMotionType's collision objects, the animation graph, ragdolls, Havok's own.
-	// The node owning the body (TESHavokUtilities::FindCollidableObject) after the call.
+	// FUN_140b44490 (rigid body, motion type, ...): the motion rebuilt in place (from hkpRigidBody::setMotionType, FUN_140b30700,
+	// directly or deferred while the world is locked). Every motion type path ends here (SetMotionType, animation graph, ragdolls,
+	// Havok). The owning node (TESHavokUtilities::FindCollidableObject) after the call.
 	struct RigidBodyMotionType
 	{
 		static void thunk(RE::hkpRigidBody* a_body, std::uint32_t a_type, std::uint32_t a_arg2, std::uint32_t a_arg3)
@@ -185,7 +184,7 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// NiObjectNET::RemoveController (0x140d269a0): the controllers a node or a property holds (PrependController's other half).
+	// NiObjectNET::RemoveController (0x140d269a0): PrependController's other half.
 	struct RemoveController
 	{
 		static void thunk(RE::NiObjectNET* a_target, RE::NiTimeController* a_controller)
@@ -201,8 +200,8 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// BSDismemberSkinInstance::UpdateDismemberPartion (0x14021a530): a partition's editorVisible, its only writer after the load.
-	// The skin instance knows no geometry: the mirror finds it by the skin (SceneMirror::Update).
+	// BSDismemberSkinInstance::UpdateDismemberPartion (0x14021a530): a partition's editorVisible, its only writer after load. The
+	// skin instance knows no geometry: the mirror finds it by the skin.
 	inline void PushSkinShown(const RE::BSDismemberSkinInstance* a_skin)
 	{
 		if (!a_skin)
@@ -226,8 +225,8 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_140218200 (biped, ?, skin, slot, flag): an armor's dismember partitions shown for a biped slot, stored inline (a job thread:
-	// the actor's 3D update). The skin's partitions after the call.
+	// FUN_140218200 (biped, ?, skin, slot, flag): an armor's partitions shown for a biped slot, stored inline (job thread, the
+	// actor's 3D update). The skin's partitions after the call.
 	struct BipedDismemberPartitions
 	{
 		static void thunk(void* a_biped, void* a_object, RE::BSDismemberSkinInstance* a_skin, std::int32_t a_slot, bool a_flag)
@@ -238,8 +237,8 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_1402ad800 (land): a TESObjectLAND's landscape properties, made and stored into each of its four quads' geometry (+0x128)
-	// after the quads were attached. Each quad's leaf after the call (a swap: the new property's record with it).
+	// FUN_1402ad800 (land): a TESObjectLAND's landscape properties stored into its four quads' geometry (+0x128) after their
+	// attach. Each quad's leaf after the call (a swap, with the new property's record).
 	struct LandSetupProperties
 	{
 		static std::uint64_t thunk(RE::TESObjectLAND* a_land)
@@ -260,8 +259,8 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_1402ad0e0 (land): a TESObjectLAND's quads' land blend, after the cell's attach: each quad geometry's landscape material
-	// takes its LOD blend textures (+0xF8, +0x100) and landBlendParams (+0x108). Each quad's property after the call (T6b1a).
+	// FUN_1402ad0e0 (land): after the cell's attach, each quad's landscape material takes LOD blend textures (+0xF8, +0x100) and
+	// landBlendParams (+0x108). Each quad's property after the call.
 	struct LandBlendParams
 	{
 		static void thunk(RE::TESObjectLAND* a_land)
@@ -281,9 +280,9 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_1414abd10 (object, visitor {params, colour, snow}): projected UV on every Lighting or grass property under the object,
-	// recursively (each child through the entry again): kProjectedUV and kSnow (SetFlags, their own events), then projectedUVParams
-	// and projectedUVColor stored inline. The geometry's property after the call (T6b1a).
+	// FUN_1414abd10 (object, visitor {params, colour, snow}): projected UV on every Lighting or grass property under the object
+	// (recursing through the entry): kProjectedUV and kSnow via SetFlags, projectedUVParams and projectedUVColor inline. The
+	// property after the call.
 	struct PropertiesProjectedUV
 	{
 		static std::uint64_t thunk(RE::NiAVObject* a_object, void* a_visitor)
@@ -296,10 +295,10 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// A BGSDecalNode's decal array edits (T6b1a; AE 1.6.1170): the append (FUN_1401fdfb0, from BSTempEffectGeometryDecal::Attach and
-	// the simple decals' attach), and the erases: a decal's or a reference's decals (FUN_1401fdc80 through FUN_1401fe020, from the decal
-	// manager), the geometry decal's update (FUN_1401fdcb0), and the two that erase and detach its 3D (FUN_1401fdd50, FUN_1401fde40).
-	// Each takes the node first; the node's decals after the call. The arguments past the node are passed through as they came.
+	// A BGSDecalNode's decal array edits (AE 1.6.1170): append (FUN_1401fdfb0, from BSTempEffectGeometryDecal::Attach and simple
+	// decals' attach); erases: a decal's or reference's decals (FUN_1401fdc80 via FUN_1401fe020, from the decal manager), the
+	// geometry decal's update (FUN_1401fdcb0), erase-and-detach (FUN_1401fdd50, FUN_1401fde40). Node first, other arguments passed
+	// through; the node's decals after the call.
 	template <int N>
 	struct DecalArrayEdit
 	{
@@ -311,8 +310,8 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// BSGeometry::AttachProperty (0x140267cf0, geometry, alpha): the geometry's alpha property (+0x120), set after its attach
-	// (object LOD's blocks). The leaf after the call.
+	// BSGeometry::AttachProperty (0x140267cf0, geometry, alpha): the alpha property (+0x120), set after attach (object LOD's
+	// blocks). The leaf after the call.
 	struct GeometryAttachAlpha
 	{
 		static void thunk(RE::BSGeometry* a_geometry, RE::NiAlphaProperty* a_alpha)
@@ -324,9 +323,8 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_1414ab770 (object, visitor {predicate, threshold}): the alpha test threshold (+0x32) of every geometry's alpha property
-	// under the object the predicate admits, recursively (each child through the entry again), stored inline: an actor's or an
-	// effect's fade in and out (job threads, every frame of it). The alpha's threshold after the call, per geometry.
+	// FUN_1414ab770 (object, visitor {predicate, threshold}): the alpha test threshold (+0x32) of admitted geometries under the
+	// object, inline: an actor's or effect's fade (job threads, every frame of it). Per geometry after the call.
 	struct AlphasSetThreshold
 	{
 		static std::uint64_t thunk(RE::NiAVObject* a_object, void* a_visitor)
@@ -339,9 +337,8 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_1414ab580 (object, visitor {flag, hide}): weapon blood on every geometry under the object whose property has the flag,
-	// recursively (each child through the entry again): the node's hidden bit, kWeaponBlood (SetFlags, its own event), and the
-	// alpha's blend bits cleared inline (& 0xFE01). The alpha's flags and the hidden bit after the call, per geometry.
+	// FUN_1414ab580 (object, visitor {flag, hide}): weapon blood on flagged geometries under the object: hidden bit, kWeaponBlood
+	// (SetFlags), alpha blend bits cleared inline (& 0xFE01). Alpha flags and hidden bit after the call, per geometry.
 	struct WeaponBloodGeometry
 	{
 		static std::uint64_t thunk(RE::NiAVObject* a_object, void* a_visitor)
@@ -356,8 +353,8 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_140e880e0 (visit): FUN_140e874d0's subtree walk callback that releases a node's collision object (+0x40), as an equipped item
-	// loses its physics. The visit holds the node at +0x10. The node's body after the call.
+	// FUN_140e880e0 (visit): FUN_140e874d0's walk callback releasing a node's collision object (+0x40) as an equipped item loses
+	// physics; the node is at visit +0x10. The body after the call.
 	struct ReleaseCollisionObject
 	{
 		static void thunk(std::byte* a_visit)
@@ -369,8 +366,8 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_140e8bd40 (node, collision object): NiAVObject::SetCollisionObject (+0x40), from bhkWorld::InitHavok and FUN_140e8c600 after
-	// the node's world attach (a loader's clutter: its body comes after the capture). The node's body after the call (T6b1b).
+	// FUN_140e8bd40 (node, collision object): NiAVObject::SetCollisionObject (+0x40), from bhkWorld::InitHavok and FUN_140e8c600
+	// after the world attach (a loader's clutter gets its body after the capture). The body after the call.
 	struct SetCollisionObject
 	{
 		static void thunk(RE::NiAVObject* a_node, RE::NiCollisionObject* a_collision)
@@ -381,9 +378,8 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_14147c1e0 (object, flag, set, Lighting only): one shader property flag set or cleared on every geometry's property under the
-	// object, recursively (each child through the entry again), stored inline (not SetFlags): AIProcess::Update3DModel_Impl gives an
-	// actor's 3D kCharacterLighting, the sky, explosions. The property's flags after the call, per geometry.
+	// FUN_14147c1e0 (object, flag, set, Lighting only): one shader flag on every property under the object, inline (not SetFlags):
+	// AIProcess::Update3DModel_Impl's kCharacterLighting, the sky, explosions. Per geometry after the call.
 	struct PropertiesSetFlag
 	{
 		static std::uint64_t thunk(RE::NiAVObject* a_object, std::uint32_t a_flag, bool a_set, bool a_lightingOnly)
@@ -397,24 +393,23 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_14147c690 (&fadeNode, object): the fade node of every geometry's shader property under the object (+0x60), recursively
-	// (each child through the entry again), from FUN_14147bf70. The property's fade node after the call, per geometry.
+	// FUN_14147c690 (&fadeNode, object): the fade node (+0x60) of every shader property under the object, from FUN_14147bf70. Per
+	// geometry after the call.
 	struct PropertiesSetFadeNode
 	{
 		static void thunk(RE::BSFadeNode** a_fadeNode, RE::NiAVObject* a_object)
 		{
 			func(a_fadeNode, a_object);
-			// T6b3e: as a leaf update (its records with their pins, the new fade node among them: CaptureLeaf), so the entry holds the fade
-			// node its tree and fade-root owners are copied from (HoldProperties); the property update alone carried no reference, and an
-			// entry attached before the fade node was set found none (w140-w143: hundreds of roots left unlisted).
+			// A leaf update, so the entry holds the new fade node its tree and fade-root owners copy from (HoldProperties); a property
+			// update carries no reference, and an entry attached before the fade node was set would leave its root unlisted.
 			if (auto* geometry = a_object ? a_object->AsGeometry() : nullptr)
 				PushLeafUpdate(*geometry);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// FUN_14147a9b0 (node, near, far): the fade node's range (+0x128, +0x12C; near clamped to a minimum, far to twice it), from the
-	// model and reference attach (FUN_14021f200, from the node's radius) and an FX path (FUN_1407cfba0). Its only writer.
+	// FUN_14147a9b0 (node, near, far): the fade range's only writer (+0x128, +0x12C; near clamped to a minimum, far to twice it),
+	// from the attach (FUN_14021f200, from the radius) and an FX path (FUN_1407cfba0).
 	struct FadeSetRange
 	{
 		static void thunk(RE::BSFadeNode* a_this, float a_near, float a_far)
@@ -445,13 +440,13 @@ namespace DCLF::Scene
 			const float envmap = a_property->envmapLODFade;
 			const float alpha = a_property->alpha;
 			auto* passes = func(a_property, a_geometry, a_renderFlags, a_accumulator);
-			// The LOD fades, and the alpha it leaves on the property (materialAlpha times the fade node's fade, for whichever
-			// camera registered it last), which a record that is not a member's shades with (MakeShading).
+			// The LOD fades and the alpha left on the property (materialAlpha times the fade, for the last registering camera),
+			// which non-member records shade with (MakeShading).
 			if (std::bit_cast<std::uint32_t>(a_property->specularLODFade) != std::bit_cast<std::uint32_t>(specular) ||
 				std::bit_cast<std::uint32_t>(a_property->envmapLODFade) != std::bit_cast<std::uint32_t>(envmap) ||
 				std::bit_cast<std::uint32_t>(a_property->alpha) != std::bit_cast<std::uint32_t>(alpha))
 				lodFadeEvents.Push(a_property);
-			// The alpha's value for the mirror (T6b1a).
+			// The alpha's value for the mirror.
 			if (std::bit_cast<std::uint32_t>(a_property->alpha) != std::bit_cast<std::uint32_t>(alpha))
 				PushPropertyUpdate(a_property, SceneCapture::PropertyRecord::kAlphaValue);
 			return passes;
@@ -489,7 +484,7 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// BSLightingShaderProperty::SetMaterialAlpha (vtable slot 0x31): the material alpha a classification and a record read.
+	// BSLightingShaderProperty::SetMaterialAlpha (vtable slot 0x31).
 	struct PropertySetMaterialAlpha
 	{
 		static void thunk(RE::BSLightingShaderProperty* a_this, float a_alpha)
@@ -534,7 +529,7 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// MoveEvents' writers (Internal.h).
+	// MoveEvents' writers (SceneEvents.h).
 	struct AnimationGraphPlace
 	{
 		static bool thunk(RE::TESObjectREFR* a_reference)
@@ -697,11 +692,10 @@ namespace DCLF::Scene
 	}
 
 	/**
-	 * @brief The fade resets (T6b1a): a fade node's currentFade (+0x130) stored inline, fully faded out (0) or in (1.0), with flag bit 14
-	 * (a frame bit the mirror does not hold) cleared or set after it: the cells' placements (FUN_1402bc1f0, the grid controller's on the
-	 * main thread, and FUN_1402bb690, a job's, after FUN_1402d5090's), the sky cell's (FUN_1402b9da0), the reference placement's own
-	 * branches that skip the snap (FUN_1402d1280), explosions' 3D (Explosion::Load3D) and others (every such store in the image: the
-	 * store-then-bit-14 pattern). The patched store's handler: the store, and the node's currentFade.
+	 * @brief The fade resets' handler: currentFade (+0x130) stored inline as 0 or 1.0, then flag bit 14 (a frame bit, not
+	 * mirrored) set or cleared: cell placements (FUN_1402bc1f0, grid controller, main thread; FUN_1402bb690, a job, after
+	 * FUN_1402d5090), the sky cell (FUN_1402b9da0), FUN_1402d1280's no-snap branches, Explosion::Load3D and every other
+	 * store-then-bit-14 site in the image.
 	 */
 	void FadeResetStore(RE::NiAVObject* a_node, std::int32_t a_value)
 	{
@@ -709,7 +703,7 @@ namespace DCLF::Scene
 		PushNodeUpdate(a_node, SceneCapture::NodeRecord::kFadeCurrent);
 	}
 
-	/** @brief One patched store: `mov dword ptr [base + offset], value`, as the bytes read before patching. */
+	/** @brief One patched store `mov dword ptr [base + offset], value`, as the bytes verified before patching. */
 	struct SwitchStoreSite
 	{
 		std::uintptr_t offset;  // from the image base
@@ -722,9 +716,8 @@ namespace DCLF::Scene
 	};
 
 	/**
-	 * @brief The stubs the patched stores call: each loads (switch, value) into the first two argument registers
-	 * and joins a common body that saves every volatile register, the flags (a store sets none, so the code after
-	 * it may test flags set before it) and xmm0-5, calls the handler (SwitchIndexStore, FadeResetStore) on an aligned stack, and restores them.
+	 * @brief The stubs: each loads (base, value) into the first two argument registers and joins a common body that saves the
+	 * volatile registers, the flags (a store sets none, so later code may test earlier flags) and xmm0-5, and calls the handler.
 	 */
 	struct SwitchStoreStubs : Xbyak::CodeGenerator
 	{
@@ -784,7 +777,7 @@ namespace DCLF::Scene
 		}
 	};
 
-	/** @brief Patches a_sites to call a_handler(base, value) in their place (after checking every site's bytes; none is patched when one differs). */
+	/** @brief Patches a_sites to call a_handler(base, value) instead; none is patched if any site's bytes differ. */
 	bool PatchStores(const std::vector<SwitchStoreSite>& a_sites, std::uintptr_t a_handler, const char* a_what)
 	{
 		const auto base = REL::Module::get().base();
@@ -857,7 +850,7 @@ namespace DCLF::Scene
 			{
 				func(a_shape, a_segment);
 				lodSegmentEvents.Push(a_shape);
-				PushGeometryUpdate(a_shape, SceneCapture::GeometryRecord::kSegments);  // T6b1a
+				PushGeometryUpdate(a_shape, SceneCapture::GeometryRecord::kSegments);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -867,7 +860,7 @@ namespace DCLF::Scene
 			{
 				func(a_shape, a_segment);
 				lodSegmentEvents.Push(a_shape);
-				PushGeometryUpdate(a_shape, SceneCapture::GeometryRecord::kSegments);  // T6b1a
+				PushGeometryUpdate(a_shape, SceneCapture::GeometryRecord::kSegments);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -877,7 +870,7 @@ namespace DCLF::Scene
 			{
 				func(a_shape);
 				lodSegmentEvents.Push(a_shape);
-				PushGeometryUpdate(a_shape, SceneCapture::GeometryRecord::kSegments);  // T6b1a
+				PushGeometryUpdate(a_shape, SceneCapture::GeometryRecord::kSegments);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -885,9 +878,8 @@ namespace DCLF::Scene
 
 	bool InstallLodSegmentHooks()
 	{
-		// Every call of the three writers (AE 1.6.1170, every xref): the active grid's and the large-reference grid's segment
-		// updates (FUN_1405110b0, FUN_1405112f0), two other show-all callers (FUN_1404fdcf0, FUN_140509550) and the LOD block
-		// builder (FUN_140e55790). None is patched unless every site calls what it should.
+		// Every xref of the three writers (AE 1.6.1170): the active and large-reference grids' segment updates (FUN_1405110b0,
+		// FUN_1405112f0), two show-all callers (FUN_1404fdcf0, FUN_140509550), the LOD block builder (FUN_140e55790). All or none.
 		constexpr std::uintptr_t kShow = 0xe31130, kHide = 0xe31160, kShowAll = 0xe310b0;
 		constexpr std::uintptr_t kShowSites[] = { 0x511550, 0x511269 };
 		constexpr std::uintptr_t kHideSites[] = { 0x511544, 0x51125c };
@@ -915,8 +907,8 @@ namespace DCLF::Scene
 
 	void InstallMoveEvents()
 	{
-		// The two update passes are patched at their call: `call qword ptr [rax + 0x168]` (FF 90 68 01 00 00), checked
-		// first. Either missing leaves every mover placed every frame.
+		// Both update passes patched at `call qword ptr [rax + 0x168]` (FF 90 68 01 00 00), checked first; either missing places
+		// every mover every frame.
 		constexpr std::uintptr_t kAnimatedRefCall = 0x2b42ba;  // FUN_1402b41a0: a cell's animated reference
 		constexpr std::uintptr_t kDynamicNodeCall = 0x2b3bd5;  // FUN_1402b3ae0: the cell's dynamic node
 		constexpr std::array<std::uint8_t, 6> kCall{ 0xFF, 0x90, 0x68, 0x01, 0x00, 0x00 };
@@ -993,11 +985,11 @@ namespace DCLF::Scene
 		stl::detour_thunk<PropertiesSetFadeNode>(REL::Offset(kPropertiesSetFadeNode).address());
 		constexpr std::uintptr_t kLandSetupProperties = 0x2ad800;  // FUN_1402ad800: a land's quads' landscape properties
 		stl::detour_thunk<LandSetupProperties>(REL::Offset(kLandSetupProperties).address());
-		constexpr std::uintptr_t kLandBlendParams = 0x2ad0e0;  // FUN_1402ad0e0: a land's quads' LOD blend (T6b1a)
+		constexpr std::uintptr_t kLandBlendParams = 0x2ad0e0;  // FUN_1402ad0e0: a land's quads' LOD blend
 		stl::detour_thunk<LandBlendParams>(REL::Offset(kLandBlendParams).address());
-		constexpr std::uintptr_t kPropertiesProjectedUV = 0x14abd10;  // FUN_1414abd10: projected UV on the properties under an object (T6b1a)
+		constexpr std::uintptr_t kPropertiesProjectedUV = 0x14abd10;  // FUN_1414abd10: projected UV on the properties under an object
 		stl::detour_thunk<PropertiesProjectedUV>(REL::Offset(kPropertiesProjectedUV).address());
-		// A decal node's array edits (T6b1a): DecalArrayEdit.
+		// A decal node's array edits: DecalArrayEdit.
 		stl::detour_thunk<DecalArrayEdit<0>>(REL::Offset(0x1fdfb0).address());
 		stl::detour_thunk<DecalArrayEdit<1>>(REL::Offset(0x1fdc80).address());
 		stl::detour_thunk<DecalArrayEdit<2>>(REL::Offset(0x1fdcb0).address());
@@ -1018,11 +1010,10 @@ namespace DCLF::Scene
 		stl::detour_thunk<SetExternalEmittance>(REL::Offset(kSetExternalEmittance).address());
 		stl::write_vfunc<0x31, PropertySetMaterialAlpha>(RE::VTABLE_BSLightingShaderProperty[0]);
 		lodFadeEventsInstalled = true;
-		// The switch nodes' selections are followed by event alone (the cut's memberLive, ApplySwitchEvents): without the stores' hooks
-		// (an unsupported build) DCLF cannot run.
+		// Switch selections are followed by event alone (memberLive, ApplySwitchEvents): without these hooks DCLF cannot run.
 		if (!InstallSwitchStores())
 			stl::report_and_fail("Drawcall Limit Fix: the switch nodes' hooks could not be installed (an unsupported game build)");
-		// The mirror's currentFade (T6b1a): the cells' inline resets.
+		// The mirror's currentFade: the cells' inline resets.
 		if (!InstallFadeResetStores())
 			stl::report_and_fail("Drawcall Limit Fix: the fade resets' hooks could not be installed (an unsupported game build)");
 		{

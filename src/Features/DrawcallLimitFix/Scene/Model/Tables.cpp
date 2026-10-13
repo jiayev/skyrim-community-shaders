@@ -1,3 +1,6 @@
+// SceneTables' slot and column maintenance (growth, change detection, block allocation, clears). Called on the coordinator's
+// scene-work thread, on its own live tables.
+
 #include "Features/DrawcallLimitFix/Scene/Model/Tables.h"
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"

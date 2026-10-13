@@ -1,3 +1,5 @@
+// LightSelection: the CalculateActiveShadowCasterLights detour (render thread) and its port of the engine's selection.
+
 #include "Features/DrawcallLimitFix/Engine/Views/LightSelection.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
@@ -169,7 +171,7 @@ namespace DCLF
 	bool LightSelection::SharesRoomWithCamera(const RE::BSShadowLight* a_light)
 	{
 		// The engine's condition first: descriptor 0's culling process and its entry exist (allocation, not a cull); then the
-		// light's rooms as DCLF walks them now (PortalViews::WalkLight) against the world camera's this frame (T5a).
+		// light's rooms as DCLF walks them this frame (PortalViews::WalkLight) against the world camera's.
 		auto* light = const_cast<RE::BSShadowLight*>(a_light);
 		const auto& descriptors = light->GetRuntimeData().shadowmapDescriptors;
 		const auto* process = descriptors.empty() ? nullptr : descriptors[0].cullingProcess;
@@ -193,7 +195,7 @@ namespace DCLF
 			return;
 		auto& runtime = node->GetRuntimeData();
 		std::uint32_t kept = 0, slot = 0, mask = 0;
-		// The focus shadows (T3c): on when the setting is and there is a target; the host found so far (0x14338c912).
+		// The focus shadows: on when the setting is and there is a target; the host found so far (0x14338c912).
 		const bool focusOn = Global<std::uint8_t>(kFocusShadows) != 0 && Global<std::uint32_t>(Engine::Address::kFocusTargetCount) != 0;
 		bool focusFound = false;
 		if (!Global<std::uint8_t>(Engine::Address::kSunOff) && runtime.sunShadowDirLight) {
@@ -230,7 +232,7 @@ namespace DCLF
 				continue;
 			if (!Visible(*light, *camera, cameraPlanes) || !SharesRoomWithCamera(light))
 				continue;
-			// Kept: the engine walks it now (FUN_1414a2530), its walk's edge flags left on the shapes.
+			// Kept: the engine walks it here (FUN_1414a2530), its walk's edge flags left on the shapes.
 			PortalViews::Get().CommitLightWalk();
 			frame.locals.push_back({ light, slot, mask });
 			// The focus host: a light with the flag, or the first that can host (vfunc 0x20: directional, spot) while none has.
@@ -262,7 +264,7 @@ namespace DCLF
 		for (const auto& selected : frame.locals)
 			if (selected.light != frame.sun && focusFlags[selected.light])
 				frame.focusHosts.push_back(selected.light);
-		// Lights no longer candidates leave the map (a freed light's address may be reused).
+		// Lights that are not candidates leave the map (a freed light's address may be reused).
 		if (focusFlags.size() > 64) {
 			std::unordered_map<const RE::BSShadowLight*, bool> live;
 			for (const auto& pointer : runtime.activeShadowLights)
@@ -280,13 +282,13 @@ namespace DCLF
 			lightRooms = std::move(live);
 		}
 		frame.valid = true;
-		// Their views, from the cameras their UpdateCamera has set up (T3a).
+		// Their views, from the cameras their UpdateCamera has set up (LightViews).
 		for (const auto& selected : frame.locals) {
 			auto* light = const_cast<RE::BSShadowLight*>(selected.light);
 			if (light->GetIsFrustumLight() || light->GetIsParabolicLight())
 				LightViews::Get().Update(selected.light);
 		}
-		Diagnostics::Notify(Diagnostics::LightSelectionMade{});
+		Diagnostics::Notify<Diagnostics::EnginePoint::LightSelectionMade>();
 	}
 
 	struct LightSelection::Hooks
@@ -296,7 +298,7 @@ namespace DCLF
 			static void thunk()
 			{
 				auto& selection = LightSelection::Get();
-				Diagnostics::Notify(Diagnostics::LightSelectionBegin{});
+				Diagnostics::Notify<Diagnostics::EnginePoint::LightSelectionBegin>();
 				func();
 				selection.Select();
 			}

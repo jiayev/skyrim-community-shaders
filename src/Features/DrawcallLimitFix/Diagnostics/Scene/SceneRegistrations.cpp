@@ -1,15 +1,13 @@
+// What the frame registered, observed: the capture's drain read on the render thread (the Lighting shader check, the main camera's
+// registrations, the reflection residue's geometries), posted for the next scene pass, which classifies the residue and checks the
+// registrations against the residency its walk left (the registration parity). The normal path reads no registration.
+
 #include "SceneObservers.h"
 #include "SceneState.h"
 
 #include "HiddenWatch.h"
-#include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
-
-// What the frame registered, observed: the capture's drain read on the render thread (the Lighting shader check, the main camera's
-// registrations, the reflection residue's geometries, the decal order probe), posted for the next scene pass, which classifies the residue
-// (CS_DCLF_TIMELINE's stages with it) and checks the registrations against the residency its walk left (the registration parity). The
-// normal path reads no registration.
 
 namespace DCLF::Diagnostics
 {
@@ -17,7 +15,7 @@ namespace DCLF::Diagnostics
 	{
 		using V = SceneView;
 
-		bool residueOn = false, parityOn = false, decalProbeOn = false;
+		bool residueOn = false, parityOn = false;
 
 		/** @brief The main camera's batch renderers, for the filter of the capture; false before the first latch (the first frame). */
 		bool RefreshMainBatchRenderers()
@@ -40,8 +38,8 @@ namespace DCLF::Diagnostics
 		{
 			auto& state = SceneDiagnostics();
 			auto drain = std::make_shared<RegistrationDrain>();
-			// The reflection residue's geometries, classified by the next scene pass. Its watch is its own gate (the sun views' parity or
-			// the timeline: IndirectDraws::ReflectionRootsOwned); taken every frame so it never accumulates. Their names are read here,
+			// The reflection residue's geometries, classified by the next scene pass. Its watch is its own gate (the parities:
+			// IndirectDraws::ReflectionRootsOwned); taken every frame so it never accumulates. Their names are read here,
 			// where the frame registered them (the pass reading them runs past this frame's Present).
 			if (residueOn) {
 				const auto residue = PassCapture::Get().TakeReflectionResidueGeometries();
@@ -56,25 +54,21 @@ namespace DCLF::Diagnostics
 			}
 			drain->observed = parityOn;
 			const auto entries = a_event.entries;
-			if ((parityOn || decalProbeOn) && RefreshMainBatchRenderers()) {
-				if (decalProbeOn)
-					ProbeDecalOrder(entries, state.mainBatchRenderers);
-				if (parityOn) {
-					// Any Lighting pass the frame registered names the engine's instance DCLF's programs are of (CaptureLightingShader).
-					if (auto* lighting = EngineShaders::Lighting())
-						for (const auto& entry : entries)
-							if (entry.pass && entry.pass->shader && entry.pass->shader->shaderType.get() == RE::BSShader::Type::Lighting) {
-								if (entry.pass->shader != lighting && state.registrations.lightingShaderDiffers++ == 0)
-									logger::warn("[DCLF] the Lighting shader the registrations use ({}) is not the engine's instance DCLF's programs are of ({}) <- LIGHTING SHADER",
-										static_cast<const void*>(entry.pass->shader), static_cast<const void*>(lighting));
-								break;
-							}
-					// Eligible objects DCLF has not bound that the engine registered: a scene event DCLF missed (a record not written again,
-					// a verdict not taken again). The tracked set is the coordinator's: checked by the next scene pass.
+			if (parityOn && RefreshMainBatchRenderers()) {
+				// Any Lighting pass the frame registered names the engine's instance DCLF's programs are of (CaptureLightingShader).
+				if (auto* lighting = EngineShaders::Lighting())
 					for (const auto& entry : entries)
-						if (entry.geometry && state.mainBatchRenderers.contains(entry.batch))
-							drain->registrations.push_back({ entry.geometry, entry.hint });
-				}
+						if (entry.pass && entry.pass->shader && entry.pass->shader->shaderType.get() == RE::BSShader::Type::Lighting) {
+							if (entry.pass->shader != lighting && state.registrations.lightingShaderDiffers++ == 0)
+								logger::warn("[DCLF] the Lighting shader the registrations use ({}) is not the engine's instance DCLF's programs are of ({}) <- LIGHTING SHADER",
+									static_cast<const void*>(entry.pass->shader), static_cast<const void*>(lighting));
+							break;
+						}
+				// Eligible objects DCLF has not bound that the engine registered: a scene event DCLF missed (a record not written again,
+				// a verdict not taken again). The tracked set is the coordinator's: checked by the next scene pass.
+				for (const auto& entry : entries)
+					if (entry.geometry && state.mainBatchRenderers.contains(entry.batch))
+						drain->registrations.push_back({ entry.geometry, entry.hint });
 			} else {
 				drain->observed = false;
 			}
@@ -85,61 +79,11 @@ namespace DCLF::Diagnostics
 			state.drainPosted.store(std::shared_ptr<const RegistrationDrain>(std::move(drain)), std::memory_order_release);
 		}
 
-		void OnInputsTaken(const AccumulateInputsTaken&)
+		void OnInputsTaken(const On<ScenePoint::AccumulateInputsTaken>&)
 		{
 			// None posted since the last pass leaves none, so no drain is checked twice.
 			auto& state = SceneDiagnostics();
 			state.drain = state.drainPosted.exchange(nullptr, std::memory_order_acq_rel);
-		}
-
-		/** @brief A residue geometry's furthest stage (CS_DCLF_TIMELINE), under the residue's lock; a_names: the drain's. */
-		void StageResidue(const Scene::Coordinator& a_store, const RE::BSGeometry* a_geometry, const std::string& a_names, const V::Tracked* a_entry)
-		{
-			auto& classes = SceneDiagnostics().residue;
-			const std::uint32_t sceneFrame = V::sceneFrame(a_store);
-			const auto& tables = V::tables(a_store);
-			const auto& setWaitCause = V::setWaitCause(a_store);
-			const auto& setWaitWhy = V::setWaitWhy(a_store);
-			std::size_t stage = kStageUntracked;
-			if (a_entry) {
-				const auto& notes = NotesOrNone(*a_entry);
-				if (a_entry->candidateReason == Ineligible::Hidden) {
-					bool hiddenNow = false;
-					const auto [shown, site] = LastShowOnChain(a_store, *a_geometry, *a_entry, hiddenNow);
-					stage = hiddenNow ? kStageHiddenNow : kStageHiddenStale;
-					if (!hiddenNow) {
-						++classes.staleSites[site];
-						if (shown)
-							++classes.sinceShow[Scene::AgeBucket(sceneFrame - shown)];
-					}
-				} else if (a_entry->candidateReason != Ineligible::None) {
-					stage = kStageIneligible;
-				} else if (const std::int32_t slot = a_store.FindObject(a_geometry); slot < 0) {
-					stage = kStageNoRecord;
-				} else if (!V::ResidentObject(a_store, slot)) {
-					stage = kStageUnbound;
-					++classes.unboundBy[notes.bindFailFrame >= notes.writtenFrame ? notes.bindFail : 0];
-					++classes.unboundJoin[a_entry->accumulateReasonFrame >= notes.writtenFrame ? static_cast<std::size_t>(a_entry->accumulateReason) : 0];
-				} else if (const auto s = static_cast<std::uint32_t>(slot); Scene::PhasesIn(tables, s) & kSetReflection) {
-					stage = kStageApplied;
-				} else if (s < setWaitCause.size() && setWaitCause[s]) {
-					stage = kStageWaiting;
-					++classes.waitingBy[s < setWaitWhy.size() ? std::min<std::size_t>(setWaitWhy[s], classes.waitingBy.size() - 1) : 0];
-				} else {
-					stage = kStageNotReflection;
-				}
-				// A LOD geometry the engine shows before DCLF is ready, that no gate ever held: a show path the gates do not cover.
-				if ((stage == kStageHiddenStale || stage == kStageNoRecord || stage == kStageUnbound || stage == kStageWaiting) && !a_entry->gateSeen && LodGates::Enabled())
-					stage = kStageUngated;
-				++classes.ages[stage][Scene::AgeBucket(sceneFrame - a_entry->trackedFrame)];
-			}
-			++classes.stages[stage];
-			if (classes.stageFirst[stage].empty()) {
-				classes.stageFirst[stage] = fmt::format("{}{}", a_names,
-					a_entry ? fmt::format(" (tracked {}, written {}, bound {}, joined {}, frame {})", a_entry->trackedFrame, NotesOrNone(*a_entry).writtenFrame,
-								  NotesOrNone(*a_entry).boundFrame, NotesOrNone(*a_entry).memberFrame, sceneFrame) :
-							  std::string());
-			}
 		}
 
 		void ClassifyResidue(const Scene::Coordinator& a_store)
@@ -153,7 +97,6 @@ namespace DCLF::Diagnostics
 				return;
 			const auto& tracked = V::tracked(a_store);
 			const std::uint32_t sceneFrame = V::sceneFrame(a_store);
-			const bool timeline = Observe().timeline;
 			std::scoped_lock lock(state.residueLock);
 			auto& classes = state.residue;
 			for (const auto& [geometry, names] : state.drain->residue) {
@@ -174,8 +117,6 @@ namespace DCLF::Diagnostics
 					if (++seen.frames == 10)
 						++classes.persistent;
 				}
-				if (timeline)
-					StageResidue(a_store, geometry, names, it == tracked.end() ? nullptr : &it->second);
 				if (classes.first[kind].empty() && it != tracked.end())
 					classes.first[kind] = names;
 			}
@@ -207,12 +148,12 @@ namespace DCLF::Diagnostics
 			}
 		}
 
-		void OnJoinsBegin(const JoinsBegin& a_event)
+		void OnJoinsBegin(const On<ScenePoint::JoinsBegin>&)
 		{
 			if (residueOn)
-				ClassifyResidue(a_event.store);
+				ClassifyResidue(Scene::Coordinator::Get());
 			if (parityOn)
-				CheckRegistrations(a_event.store);
+				CheckRegistrations(Scene::Coordinator::Get());
 		}
 	}
 
@@ -226,15 +167,6 @@ namespace DCLF::Diagnostics
 			fp.misfiledCategory.store(a_event.category, std::memory_order_relaxed);
 		}
 
-		void OnRegistrationsDone(const RegistrationsDone&)
-		{
-			// The owned members' light masks, read off the engine's light data after the registration jobs.
-			PrimaryCull::Get().CheckLightMasks();
-		}
-	}
-
-	namespace
-	{
 		void OnVerdictUnannounced(const ActorVerdictUnannounced& a_event)
 		{
 			// CS_DCLF_HIDDEN_WATCH: the chain's nearest four nodes, for the store that flips them next.
@@ -255,11 +187,6 @@ namespace DCLF::Diagnostics
 		Subscribe<FirstPersonMisfiled>(OnMisfiled);
 	}
 
-	void InstallLightMaskCheck()
-	{
-		Subscribe<RegistrationsDone>(OnRegistrationsDone);
-	}
-
 	ResidueClasses TakeResidueClasses()
 	{
 		auto& state = SceneDiagnostics();
@@ -267,17 +194,14 @@ namespace DCLF::Diagnostics
 		return std::exchange(state.residue, {});
 	}
 
-	void InstallRegistrations(bool a_residue, bool a_parity, bool a_decalOrderProbe)
+	void InstallRegistrations(bool a_residue, bool a_parity)
 	{
 		residueOn = a_residue;
 		parityOn = a_parity;
-		decalProbeOn = a_decalOrderProbe;
-		if (!residueOn && !parityOn && !decalProbeOn)
+		if (!residueOn && !parityOn)
 			return;
 		Subscribe<CaptureDrained>(OnCaptureDrained);
-		if (residueOn || parityOn) {
-			Subscribe<AccumulateInputsTaken>(OnInputsTaken);
-			Subscribe<JoinsBegin>(OnJoinsBegin);
-		}
+		Subscribe<ScenePoint::AccumulateInputsTaken>(OnInputsTaken);
+		Subscribe<ScenePoint::JoinsBegin>(OnJoinsBegin);
 	}
 }

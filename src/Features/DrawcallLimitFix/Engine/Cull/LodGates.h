@@ -14,7 +14,7 @@ namespace RE
 namespace DCLF::LodGates
 {
 	/**
-	 * @brief T6b5: the engine's LOD swaps gated on DCLF's readiness (CS_DCLF_LOD_GATES, on by default).
+	 * @brief The engine's LOD swaps gated on DCLF's readiness (CS_DCLF_LOD_GATES, on by default).
 	 *
 	 * The object and terrain Upgrade/Downgrade Func2s (AE 1.6.1170; skyrim-engine-notes.md, "LOD swaps and their gates") attach the
 	 * incoming blocks and retire the outgoing in one call, on a job thread or the main thread, under the terrain manager's lock; the
@@ -28,7 +28,7 @@ namespace DCLF::LodGates
 	 *   after the attaches;
 	 * - the scene coordinator publishes the post-swap claims once every geometry under the incoming roots is a member or ineligible,
 	 *   with a flip for the gate (PublicationDeltas::gateFlips);
-	 * - the render thread, adopting that publication (BeginSceneFrame, before the culls), calls Flip: the incoming shown and the
+	 * - the render thread, adopting that publication (FrameView, at the frame's start before the culls), calls Flip: the incoming shown and the
 	 *   outgoing hidden through app-cull, with their hidden events, in the frame whose claims are post-swap;
 	 * - the next LOD drain, under the manager's lock, detaches and releases the outgoing through the engine's own functions.
 	 *
@@ -57,7 +57,7 @@ namespace DCLF::LodGates
 	bool Enabled();
 	/**
 	 * @brief The detours on the LOD drain (FUN_140513840: held blocks released at its head) and a node's retirement (FUN_140510a10: the
-	 * steal), one each, shared with ImportTimings (which times through them): installed by whichever comes first. Idempotent.
+	 * steal), one each (Install calls it). Idempotent.
 	 */
 	void InstallDetours();
 

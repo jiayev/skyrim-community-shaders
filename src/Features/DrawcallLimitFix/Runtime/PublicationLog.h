@@ -7,7 +7,7 @@
 namespace DCLF
 {
 	/**
-	 * @brief A forward-linked log from one producer to one consumer (T6b3a): the producer appends a node and sets the last one's next
+	 * @brief A forward-linked log from one producer to one consumer: the producer appends a node and sets the last one's next
 	 * to it; the consumer walks from where it stopped, as far as next is set, and frees what it has walked past. Lock-free, never
 	 * blocks, never loses a node: what a latest-wins mailbox skips (a publication the frame's start never took) still reaches the
 	 * consumer here. The producer never reads a node after setting its next; the consumer never frees the node whose next is unset

@@ -1,3 +1,7 @@
+// The lookups' pipeline entries: the scene lane resolves the Lighting and shadow pipelines a publication's tables use from the
+// pipeline lane's catalog (no engine or render-thread reads); the render thread posts the frame inputs they are resolved for
+// (PostLookupInputs).
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #	include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
@@ -61,8 +65,8 @@ namespace DCLF::Draws
 			changed |= entry.setIndex != resolved;
 			entry.setIndex = resolved;
 			if (resolved != Lookups::kNone) {
-				// Its stages' constant tables (which cbuffer offset each Lighting variable has), the lane's with the build (T6b2c: reflected
-				// from DCLF's own modules, fixed per built entry; ShaderCache's are the parity's, CheckConstantTables). Copied where they differ.
+				// Its stages' constant tables (which cbuffer offset each Lighting variable has), the lane's with the build (reflected
+				// from DCLF's own modules, fixed per built entry; ShaderCache's are the diagnostics', CheckConstantTables). Copied where they differ.
 				auto assign = [&](std::vector<std::uint8_t>& a_table, const std::vector<std::uint8_t>& a_source) {
 					if (a_table != a_source) {
 						a_table = a_source;
@@ -90,7 +94,7 @@ namespace DCLF::Draws
 		Lookups& a_lookups)
 	{
 		ZoneScopedN("CS.DCLF.Scene.ShadowLookups");
-		// The shadow pipelines are the pipeline lane's (T6b2c step 6): asked of it here, each key once, and resolved from the catalog the
+		// The shadow pipelines are the pipeline lane's: asked of it here, each key once, and resolved from the catalog the
 		// lookups are published with alone (its shadow entries, whose set version GetShadowIndirectState binds), so the indices and the set
 		// agree. Nothing below reads the engine or a render-thread service.
 		if (!a_catalog)
@@ -227,11 +231,11 @@ namespace DCLF
 	{
 		if (!impl || failed)
 			return;
-		// What the import thread answers the scene work's requests with (T6b2c), and the fixed bindings (the null descriptor, the engine's
-		// samplers: made here, the render thread's), published before the scene work is kicked.
+		// What the import thread answers the scene work's requests with, and the fixed bindings (the null descriptor, the engine's
+		// samplers: made here, the render thread's), published before the scene work runs.
 		GpuTextures::Get().PublishImportContext();
 		UpdateShadowCapability();
-		// The shadow views' frame inputs of the pipeline lane (T6b2c step 6): the format its shadow set is built for (the views' depth
+		// The shadow views' frame inputs of the pipeline lane: the format its shadow set is built for (the views' depth
 		// targets', or an occlusion map's while no shadow view has drawn) and the Utility shader. The lane builds the keys the scene lane
 		// asks for, and its next catalog has what it built.
 		auto& views = impl->lastShadow;

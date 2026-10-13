@@ -1,10 +1,10 @@
+// The joins' and the slots' observers: CS_DCLF_RESIDENT_PARITY (the residents' passes built again) and CS_DCLF_PERSISTENT_PARITY's drained
+// material slot check.
+
 #include "SceneObservers.h"
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
-
-// The joins' and the slots' observers: CS_DCLF_RESIDENT_PARITY (the residents' passes built again), CS_DCLF_SLOT_PROBE (what the used
-// slots serve, re-derived), and CS_DCLF_PERSISTENT_PARITY's drained material slot check.
 
 namespace DCLF::Diagnostics
 {
@@ -52,44 +52,6 @@ namespace DCLF::Diagnostics
 			}
 		}
 
-		void ProbeSlots(const Scene::Coordinator& a_store, bool a_resolveBuffers)
-		{
-			const auto& tables = V::tables(a_store);
-			const std::uint32_t sceneFrame = V::sceneFrame(a_store);
-			static std::uint32_t logged = 0;
-			if (logged >= 40)
-				return;
-			auto& gpu = GpuResources::Scene();
-			std::uint32_t geometryDiffers = 0, geometriesProbed = 0;
-			std::string first;
-			if (a_resolveBuffers) {
-				for (std::uint32_t slot = 0; slot < tables.geometries.size(); ++slot) {
-					if (tables.geometryLastUsed[slot] != a_store.PassStamp() || tables.geometryLayerKey[slot])
-						continue;
-					++geometriesProbed;
-					const auto& record = tables.geometries[slot];
-					const auto* triShape = tables.geometrySlotKey[slot];
-					const auto vertexLease = gpu.Acquire(record.vertexBuffer);
-					const auto indexLease = gpu.Acquire(record.indexBuffer);
-					const auto* vertex = vertexLease ? &vertexLease->buffer : nullptr;
-					const auto* index = indexLease ? &indexLease->buffer : nullptr;
-					const bool same = triShape && vertex && index && vertex->address == record.vertexAddress && index->address == record.indexAddress &&
-					                  reinterpret_cast<ID3D11Buffer*>(triShape->vertexBuffer) == record.vertexBuffer &&
-					                  reinterpret_cast<ID3D11Buffer*>(triShape->indexBuffer) == record.indexBuffer;
-					if (!same && geometryDiffers++ == 0 && first.empty())
-						first = fmt::format("geometry slot {} vb {:#x} -> {:#x} ib {:#x} -> {:#x} (trishape {} buffers {}/{} vs {}/{})", slot,
-							record.vertexAddress, vertex ? vertex->address : 0ull, record.indexAddress, index ? index->address : 0ull,
-							static_cast<const void*>(triShape), static_cast<const void*>(record.vertexBuffer), static_cast<const void*>(record.indexBuffer),
-							triShape ? static_cast<const void*>(triShape->vertexBuffer) : nullptr, triShape ? static_cast<const void*>(triShape->indexBuffer) : nullptr);
-				}
-			}
-			if (geometryDiffers || sceneFrame < 12) {
-				++logged;
-				logger::info("[DCLF] slot probe frame {}: {} of {} used geometries differ{}{}", sceneFrame, geometryDiffers, geometriesProbed, first.empty() ? "" : "; first: ",
-					first);
-			}
-		}
-
 		void OnMaterialSlotDrained(const MaterialSlotDrained& a_event)
 		{
 			// A bound record still naming the slot is a reference the counts missed.
@@ -106,27 +68,17 @@ namespace DCLF::Diagnostics
 				}
 		}
 
-		void OnResidentsKept(const ResidentsKept& a_event)
+		void OnResidentsKept(const On<ScenePoint::ResidentsKept>&)
 		{
-			const auto& store = a_event.store;
+			const auto& store = Scene::Coordinator::Get();
 			if (ParityDue(V::passSerial(store)) && !V::residents(store).empty())
 				CheckResidentParity(store);
-		}
-
-		void OnSlotsChecked(const SlotsChecked& a_event)
-		{
-			ProbeSlots(a_event.store, a_event.resolveBuffers);
 		}
 	}
 
 	void InstallResidentParity()
 	{
-		Subscribe<ResidentsKept>(OnResidentsKept);
-	}
-
-	void InstallSlotProbe()
-	{
-		Subscribe<SlotsChecked>(OnSlotsChecked);
+		Subscribe<ScenePoint::ResidentsKept>(OnResidentsKept);
 	}
 
 	void InstallSlotDrainCheck()

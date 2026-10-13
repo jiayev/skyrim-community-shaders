@@ -1,5 +1,8 @@
 #pragma once
 
+// The scene area's diagnostics state: what its observers keep between their hook points and the reports. Each struct names its owner
+// thread (the coordinator's, or the render thread's); what crosses between them is handed over under a lock or by exchange.
+
 #include "Census.h"
 #include "Residue.h"
 #include "SceneView.h"
@@ -13,26 +16,7 @@
 
 namespace DCLF::Diagnostics
 {
-	/**
-	 * @brief A tracked entry's notes (Tracked::notes, made by the first observer that writes one): the timeline's stamps. The scene
-	 * pass's thread alone.
-	 */
-	struct TrackedNotes
-	{
-		// The frames its record was last taken anew (a slot), it was last bound (made resident) and it last joined the set; 0: never.
-		std::uint32_t writtenFrame = 0, boundFrame = 0, memberFrame = 0;
-		// Its last membership pass that gave none (PrimaryCull::LastSyntheticFail), with the frame; a record so left is bound only when
-		// written again.
-		std::uint32_t bindFailFrame = 0;
-		std::uint8_t bindFail = 0;
-	};
-
-	/** @brief An entry's notes, made when absent. */
-	TrackedNotes& NotesOf(const SceneView::Tracked& a_entry);
-	/** @brief An entry's notes, all zero when it has none. */
-	const TrackedNotes& NotesOrNone(const SceneView::Tracked& a_entry);
-
-	/** @brief CS_DCLF_WALK_PARITY: the slot tables against a dense rebuild (WalkParity.cpp), the coordinator's. */
+	/** @brief CS_DCLF_WALK_PARITY: the slot tables against a dense rebuild (SceneWalkParity.cpp), the coordinator's. */
 	struct WalkParityState
 	{
 		std::uint32_t checks = 0;
@@ -48,7 +32,7 @@ namespace DCLF::Diagnostics
 		std::map<std::string, std::uint32_t> byWhat;  // the differences by what differs
 	};
 
-	/** @brief CS_DCLF_CHANGE_LOG_PARITY: the change log against a diff of the tables (ChangeLogParity.cpp), the coordinator's. */
+	/** @brief CS_DCLF_CHANGE_LOG_PARITY: the change log against a diff of the tables (SceneChangeLogParity.cpp), the coordinator's. */
 	struct ChangeLogParityState
 	{
 		std::vector<SceneTables::Columns> snapshot;
@@ -57,17 +41,6 @@ namespace DCLF::Diagnostics
 		std::string first;
 	};
 
-	/** @brief CS_DCLF_TIMELINE: the frames from an event to the set, by geometry joining (Scene::kAgeBuckets). */
-	struct TimelineStats
-	{
-		std::array<std::uint64_t, Scene::kAgeBuckets> attachToMember{};   // a geometry's first join since it was tracked
-		std::array<std::uint64_t, Scene::kAgeBuckets> writtenToBound{};   // a record taken anew to its binding
-		std::array<std::uint64_t, Scene::kAgeBuckets> writtenToMember{};  // a record taken anew to its join
-		std::array<std::uint64_t, Scene::kAgeBuckets> showToMember{};     // a stale hidden verdict's show (its chain's last) to its join
-		std::uint64_t joins = 0, firstJoins = 0, bound = 0;
-		std::array<std::uint64_t, 6> bindFailures{};  // membership passes that gave none, by PrimaryCull::LastSyntheticFail
-		std::string bindFailFirst;
-	};
 
 	/**
 	 * @brief What the frame registered, for the scene pass after it (SceneRegistrations.cpp): the render thread at the capture's drain ->
@@ -183,13 +156,6 @@ namespace DCLF::Diagnostics
 		std::string firstHole, firstCoverage;
 	};
 
-	/** @brief CS_DCLF_FANOUT_PARITY: the fanned-out rounds against their serial evaluation (reported with the fan-out line), the coordinator's. */
-	struct FanoutParityState
-	{
-		std::uint64_t parityRounds = 0, parityEntries = 0, parityDiffers = 0;
-		std::string parityFirst;
-	};
-
 	/** @brief CS_DCLF_MIRROR_PARITY, the records: the probe's slice, the coordinator -> the render thread (each geometry held: the render thread drops them). */
 	struct MirrorProbeRequest
 	{
@@ -276,7 +242,6 @@ namespace DCLF::Diagnostics
 		FirstPersonObserverState firstPerson;
 		TreeLodParityState treeLod;
 		MirrorParityState mirror;
-		FanoutParityState fanout;
 		GateObserverState gates;
 		GateReleaseObserverState gateReleases;
 		ReplayParityState replay;
@@ -290,13 +255,9 @@ namespace DCLF::Diagnostics
 		ShadingParityState shading;
 		WalkParityState walk;
 		ChangeLogParityState changeLog;
-		// The timeline's counts and the residue's classes: written by the coordinator, the residue's taken by the render thread's
-		// reflection report, under the lock.
+		// The residue's classes: written by the coordinator, taken by the render thread's reflection report, under the lock.
 		std::mutex residueLock;
-		TimelineStats timeline;   // under residueLock
-		ResidueClasses residue;   // under residueLock
-		// The timeline's: a node's last show (the hidden events) -> {frame, the store's index}; pruned by age. The coordinator's.
-		ankerl::unordered_dense::map<const void*, std::pair<std::uint32_t, std::uint32_t>> unhideKeys;
+		ResidueClasses residue;
 		// The capture's drains: the render thread's post, and the pass's newest taken (null until the first; none posted since the last
 		// pass leaves none, so no drain is checked twice).
 		std::atomic<std::shared_ptr<const RegistrationDrain>> drainPosted;
@@ -312,8 +273,4 @@ namespace DCLF::Diagnostics
 
 	/** @brief The scene area's diagnostics state. */
 	SceneState& SceneDiagnostics();
-
-	// The observers' report parts (the reports in Diagnostics/Reports/Scene*.cpp call them).
-	/** @brief The coordinator: the timeline's counts since the last call. */
-	TimelineStats TakeTimeline();
 }

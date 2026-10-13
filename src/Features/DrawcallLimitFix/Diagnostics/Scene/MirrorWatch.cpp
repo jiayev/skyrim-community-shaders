@@ -1,3 +1,6 @@
+// MirrorWatch (CS_DCLF_MIRROR_WATCH): the debug-register watchpoints, set on every thread by a helper thread, and the vectored exception
+// handler that records the writes. Armed by the capture hooks (the engine's threads) or the mirror parity (render thread).
+
 #include "MirrorWatch.h"
 
 #include "Features/DrawcallLimitFix/Runtime/Switches.h"
@@ -43,7 +46,7 @@ namespace DCLF::MirrorWatch
 			if (!triggered)
 				return EXCEPTION_CONTINUE_SEARCH;
 			// A watchpoint the disarm did not reach on this thread (its context was not set, or it raced the disarm): this thread's
-			// registers are cleared and it goes on. An unhandled one crashed the game (y57).
+			// registers are cleared and it goes on (left unhandled, it crashes the game).
 			if (!armed.load(std::memory_order_acquire)) {
 				context->Dr7 = 0;
 				context->Dr6 = 0;
@@ -137,10 +140,10 @@ namespace DCLF::MirrorWatch
 
 		bool Matches(const RE::NiAVObject& a_object, std::string_view a_name)
 		{
-			// Alternatives separated by '|' (T6b1b).
+			// Alternatives separated by '|'.
 			if (const auto bar = a_name.find('|'); bar != std::string_view::npos)
 				return Matches(a_object, a_name.substr(0, bar)) || Matches(a_object, a_name.substr(bar + 1));
-			// A trailing '*' matches a prefix (T6b1b).
+			// A trailing '*' matches a prefix.
 			if (!a_name.empty() && a_name.back() == '*')
 				return a_object.name.c_str() && std::string_view(a_object.name.c_str()).starts_with(a_name.substr(0, a_name.size() - 1));
 			return a_name.empty() || (a_object.name.c_str() && a_name == a_object.name.c_str());
@@ -197,7 +200,7 @@ namespace DCLF::MirrorWatch
 
 	void ArmNode(const RE::NiAVObject* a_node)
 	{
-		// current:<name> (T6b1a): a fade node at its world attach's capture, its currentFade (+0x130) and screen-door byte (+0x154).
+		// current:<name>: a fade node at its world attach's capture, its currentFade (+0x130) and screen-door byte (+0x154).
 		constexpr std::string_view kCurrentPrefix = "current:";
 		if (a_node && Enabled() && !armed.load(std::memory_order_acquire) && Value().starts_with(kCurrentPrefix)) {
 			if (const_cast<RE::NiAVObject*>(a_node)->AsFadeNode() && Matches(*a_node, std::string_view(Value()).substr(kCurrentPrefix.size()))) {
@@ -206,7 +209,7 @@ namespace DCLF::MirrorWatch
 			}
 			return;
 		}
-		// parent:<name> (T6b1b): an object at its world attach's capture, its parent pointer (+0x30, both dwords).
+		// parent:<name>: an object at its world attach's capture, its parent pointer (+0x30, both dwords).
 		constexpr std::string_view kParentPrefix = "parent:";
 		if (a_node && Enabled() && !armed.load(std::memory_order_acquire) && Value().starts_with(kParentPrefix)) {
 			if (Matches(*a_node, std::string_view(Value()).substr(kParentPrefix.size()))) {
@@ -266,7 +269,7 @@ namespace DCLF::MirrorWatch
 									  Slot{ n > 2 ? partitions + 8 : nullptr, "partition 2" } });
 			return;
 		}
-		// projected:<name>, land:<name> (T6b1a): the property's projected UV parameters, or its landscape material's land blend, from the
+		// projected:<name>, land:<name>: the property's projected UV parameters, or its landscape material's land blend, from the
 		// world attach's capture on.
 		constexpr std::string_view kProjectedPrefix = "projected:";
 		constexpr std::string_view kLandPrefix = "land:";

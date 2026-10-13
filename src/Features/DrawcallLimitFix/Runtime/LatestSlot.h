@@ -10,9 +10,7 @@ namespace DCLF
 	 * Lock-free (one pointer exchange each way; MSVC's std::atomic<std::shared_ptr> is not); a value is owned by exactly one side at a
 	 * time, so nothing is read after it is freed. A value nobody took is freed by the next Post or by the slot's end, on that thread:
 	 * a value whose drop must happen on a given thread (an engine reference) is not posted here bare.
-	 *
-	 * Users: the pipeline lane's frame inputs (render thread -> lane) and its catalogs (lane -> the scene lane); the scene publication
-	 * (the coordinator -> the frame's start), the frame inputs and the ahead context (the frame's start -> the coordinator).
+	 * Users: the scene channels (Channels.h), the pipeline lane's inputs and catalogs, the revision producer's slots (Impl.h).
 	 */
 	template <class T>
 	struct LatestSlot

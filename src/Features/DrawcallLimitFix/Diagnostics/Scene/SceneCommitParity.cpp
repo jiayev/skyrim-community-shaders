@@ -1,11 +1,11 @@
+// CS_DCLF_SET_PARITY: every 60th commit (one commit a pass) every slot's phases and waiting decided again (Coordinator::DecideSlot) against
+// what the commit's queue (its events and requeues by cause) left: a slot the requeues missed differs. And the first-person slots the
+// decisions leave out of the first-person view, the commit's and the check's.
+
 #include "SceneObservers.h"
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
-
-// CS_DCLF_SET_PARITY: every 60th commit (one commit a pass) every slot's phases and waiting decided again (Coordinator::DecideSlot) against
-// what the commit's queue (its events and requeues by cause) left: a slot the requeues missed differs. And the first-person slots the
-// decisions leave out of the first-person view, the commit's and the check's.
 
 namespace DCLF::Diagnostics
 {
@@ -32,7 +32,7 @@ namespace DCLF::Diagnostics
 				if (fp.firstFirstPersonHeld.empty())
 					if (const auto* geometry = tables.objectGeometry[a_slot])
 						fp.firstFirstPersonHeld = fmt::format("'{}' (slot {}, {}, waiting reason {}, first-person readiness cause {}, pipeline slot {} raster {:#x})",
-							geometry->name.c_str() ? geometry->name.c_str() : "?", a_slot, V::IsResidentSlotOf(a_store, a_slot) ? "resident" : "not resident",
+							geometry->name.c_str() ? geometry->name.c_str() : "?", a_slot, V::IsResidentSlot(a_store, a_slot) ? "resident" : "not resident",
 							a_waitWhy, a_decision.firstPersonSlotWhy, tables.objects[a_slot].pipelineIndex,
 							tables.objects[a_slot].pipelineIndex < tables.pipelines.size() ? tables.pipelines[tables.objects[a_slot].pipelineIndex].rasterFlags : 0u);
 			}

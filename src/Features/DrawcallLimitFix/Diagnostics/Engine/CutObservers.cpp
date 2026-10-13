@@ -1,3 +1,6 @@
+// The primary cull's observers (CutObservers.h): the render thread's at PrimaryCull's hook points, and the list jobs' per-slot counts
+// on their job threads (read after Finish).
+
 #include "CutObservers.h"
 
 #include "Events.h"
@@ -5,7 +8,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Engine/Views/PortalViews.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -19,19 +21,13 @@ namespace DCLF::Diagnostics::CutObservers
 		using Engine::At;
 		using Engine::Global;
 
-		// The fade node's fields the visibility check reads (BSFadeNode).
-		constexpr std::uint32_t kFlagFadeSettled = 1u << 15;
-		constexpr std::size_t kFadeAmount = 0x100;
-		constexpr std::size_t kCurrentFade = 0x130;
-		constexpr std::size_t kLastVisibleFrame = 0x13C;
-		constexpr std::size_t kFadeMetric = 0x144;
 		constexpr std::size_t kLightData = Engine::kPropertyLightData;
 
 		/** @brief One list job's counts: written by its job thread only, read after Finish. */
 		struct Slot
 		{
-			std::uint64_t walkMissed = 0, filterChecked = 0, filterMissed = 0, visibilityChecked = 0, visibilityDiffer = 0;
-			std::string walkMissedFirst, visibilityFirst;
+			std::uint64_t walkMissed = 0, filterChecked = 0, filterMissed = 0;
+			std::string walkMissedFirst;
 		};
 		std::array<Slot, 16> slots;
 		Counts counts;  // render thread (the list parity's: the build's job, read after Finish)
@@ -50,9 +46,9 @@ namespace DCLF::Diagnostics::CutObservers
 
 		// ---- The cut.
 
-		void CheckCut(const CutSynced& a_event)
+		void CheckCut(const On<EnginePoint::CutSynced>&)
 		{
-			if (!ParityDue(a_event.frame, 11))
+			if (!ParityDue(Scene::FrameView::Get().GetFrame(), 11))
 				return;
 			const auto& cut = PrimaryCullView::Cut();
 			if (!cut.candidates)
@@ -161,34 +157,7 @@ namespace DCLF::Diagnostics::CutObservers
 			slot.filterMissed += Dry(e) ? 1 : 0;
 		}
 
-		/** @brief The engine's verdict (its OnVisible ran: the node's metric or last visible frame changed) against FadeStateCS's test. */
-		void MixedCulled(const MixedEntryCulled& a_event)
-		{
-			auto* object = a_event.root;
-			// A settled node, its fades at 1, returns before updating anything: nothing tells.
-			const bool settled = a_event.fadeRoot && (object->GetFlags().underlying() & kFlagFadeSettled) && At<float>(object, kFadeAmount) == 1.0f &&
-			                     At<float>(object, kCurrentFade) == 1.0f;
-			if (!a_event.fadeRoot || settled || a_event.slot < 0)
-				return;
-			// A root DCLF writes keeps its node through OnVisible (FadeOnVisible), so the engine's verdict is the kAccumulated Process1 wrote
-			// after it.
-			const bool engine = PrimaryCull::Get().FadeWrittenByDclf(object) ? (object->GetFlags().underlying() & (1u << 26)) != 0 :
-			                                                                   At<float>(object, kFadeMetric) != a_event.metricBefore || At<std::int32_t>(object, kLastVisibleFrame) != a_event.visibleBefore;
-			const float centre[3]{ object->worldBound.center.x, object->worldBound.center.y, object->worldBound.center.z };
-			std::string why;
-			auto& portals = PortalViews::Get();
-			const int port = PortalViews::Visible(portals.Encoded(), portals.ProgramOf(object), centre, object->worldBound.radius, object->GetFlags().underlying(), why);
-			if (port < 0)
-				return;
-			auto& slot = slots[a_event.slot];
-			++slot.visibilityChecked;
-			if ((port != 0) != engine && slot.visibilityDiffer++ == 0)
-				slot.visibilityFirst = fmt::format("'{}' slot {}: the engine {}, the port {} ({}); centre ({:.0f} {:.0f} {:.0f}) r {:.0f}, flags {:#x}",
-					object->name.c_str() ? object->name.c_str() : "", a_event.slot, engine ? "visible" : "culled", port ? "visible" : "culled", why, centre[0], centre[1],
-					centre[2], object->worldBound.radius, object->GetFlags().underlying());
-		}
-
-		void Merge(const ListJobsMerged& a_event)
+		void Merge(const On<EnginePoint::ListJobsMerged>&)
 		{
 			sunBits = SunAccumulation::Get().SunBits();
 			const auto count = PrimaryCullView::Cut().processCount;
@@ -197,17 +166,13 @@ namespace DCLF::Diagnostics::CutObservers
 				counts.walkMissed += slot.walkMissed;
 				counts.filterChecked += slot.filterChecked;
 				counts.filterMissed += slot.filterMissed;
-				counts.visibilityChecked += slot.visibilityChecked;
-				counts.visibilityDiffer += slot.visibilityDiffer;
-				if (counts.visibilityFirst.empty() && !slot.visibilityFirst.empty())
-					counts.visibilityFirst = slot.visibilityFirst;
 				if (counts.walkMissedFirst.size() < 2000 && !slot.walkMissedFirst.empty())
-					counts.walkMissedFirst += fmt::format(" [frame {}] {}", a_event.frame, slot.walkMissedFirst);
+					counts.walkMissedFirst += fmt::format(" [frame {}] {}", Scene::FrameView::Get().GetFrame(), slot.walkMissedFirst);
 			}
 		}
 
 		/** @brief After the registration jobs: a property an engine-drawn geometry shares holds that one's bits until its main registration. */
-		void CheckLightMasks(const MainRegistrationsDone&)
+		void CheckLightMasks(const On<FramePoint::RegistrationsDone>&)
 		{
 			const auto& cull = PrimaryCull::Get();
 			for (const auto* geometry : PrimaryCullView::FrameVisible())
@@ -231,7 +196,7 @@ namespace DCLF::Diagnostics::CutObservers
 		}
 
 		/** @brief The port against the engine's functions on copies of the snapshot's fade roots (nothing writes them until the list jobs). */
-		void CheckFadePort(const FullFrustumDone&)
+		void CheckFadePort(const On<EnginePoint::FullFrustumDone>&)
 		{
 			if (!PrimaryCullView::StandInLive() || (frames % 30) != 0)
 				return;
@@ -253,20 +218,21 @@ namespace DCLF::Diagnostics::CutObservers
 		}
 
 		/** @brief The fade roots' nodes now, after this cull's OnVisible and before the next animation job's updates. */
-		void SnapshotNodes(const ListJobsDone& a_event)
+		void SnapshotNodes(const On<EnginePoint::ListJobsDone>&)
 		{
-			if ((a_event.frame % 30) != 0)
+			const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
+			if ((frame % 30) != 0)
 				return;
 			const auto& roots = Scene::FrameView::Get().GetTables().fadeRootNode;
 			nodeSnapshot.resize(roots.size());
 			for (std::size_t r = 0; r < roots.size(); ++r)
 				nodeSnapshot[r] = roots[r] ? FadeState::ReadNode(*static_cast<const RE::NiAVObject*>(roots[r])) : FadeNodeState{};
-			nodeSnapshotFrame = a_event.frame;
+			nodeSnapshotFrame = frame;
 		}
 
 		// ---- The scene lists.
 
-		void ListsPublishing(const SceneListsPublishing&)
+		void ListsPublishing(const On<EnginePoint::SceneListsPublishing>&)
 		{
 			dryHold.reset();
 			dryRoots = nullptr;
@@ -281,7 +247,7 @@ namespace DCLF::Diagnostics::CutObservers
 		}
 
 		/** @brief The build's job: the engine's lists (whole) against DCLF's enumeration: every root of theirs is DCLF's, every root of DCLF's not theirs hidden. */
-		void CheckLists(const EngineSceneListsBuilt&)
+		void CheckLists(const On<EnginePoint::EngineSceneListsBuilt>&)
 		{
 			if (!checkLists)
 				return;
@@ -342,23 +308,22 @@ namespace DCLF::Diagnostics::CutObservers
 	void Install(bool a_scene, bool a_fade)
 	{
 		if (a_scene) {
-			Subscribe<CutSynced>(CheckCut);
+			Subscribe<EnginePoint::CutSynced>(CheckCut);
 			Subscribe<StandInEntry>(EntryReached);
 			Subscribe<StandInHandedOver>(HandedOver);
-			Subscribe<MainRegistrationsDone>(CheckLightMasks);
-			Subscribe<SceneListsPublishing>(ListsPublishing);
+			Subscribe<FramePoint::RegistrationsDone>(CheckLightMasks);
+			Subscribe<EnginePoint::SceneListsPublishing>(ListsPublishing);
 			Subscribe<SceneListsWhole>(ListsWhole);
-			Subscribe<EngineSceneListsBuilt>(CheckLists);
+			Subscribe<EnginePoint::EngineSceneListsBuilt>(CheckLists);
 		}
 		if (a_fade) {
-			Subscribe<MixedEntryCulled>(MixedCulled);
 			Subscribe<CutFrameBegin>(CountFrame);
-			Subscribe<FullFrustumDone>(CheckFadePort);
-			Subscribe<ListJobsDone>(SnapshotNodes);
+			Subscribe<EnginePoint::FullFrustumDone>(CheckFadePort);
+			Subscribe<EnginePoint::ListJobsDone>(SnapshotNodes);
 		}
 		if (a_scene || a_fade) {
 			Subscribe<CutSlotsReset>(ResetSlots);
-			Subscribe<ListJobsMerged>(Merge);
+			Subscribe<EnginePoint::ListJobsMerged>(Merge);
 		}
 	}
 

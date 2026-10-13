@@ -25,13 +25,11 @@ namespace DCLF::Diagnostics
 		static std::uint64_t passSerial(const Store& s) { return s.passSerial; }
 		static std::uint32_t tablesGeneration(const Store& s) { return s.tablesGeneration; }
 		static std::uint32_t walkSerial(const Store& s) { return s.walkSerial; }
-		static std::uint32_t objectStamp(const Store& s) { return s.objectStamp; }
 		static const auto& perFrameSet(const Store& s) { return s.perFrameSet; }
 		static const RE::NiNode* firstPersonCategory(const Store& s) { return s.firstPersonCategory; }
 
 		// The render thread's (Scene::FrameView): its frame, its captures' and constants' counters, tree LOD's mirror.
 		using Frame = Scene::FrameView;
-		static Frame& frameView() { return Frame::Get(); }
 		static std::uint32_t frame() { return Frame::Get().frame; }
 		static const auto& projectedTextures() { return Frame::Get().projectedTextures; }
 		static auto& gateReleaseStats() { return Frame::Get().gateReleaseStats; }
@@ -70,20 +68,12 @@ namespace DCLF::Diagnostics
 		static auto& lightTable(Store& s) { return s.lightTable; }
 		static auto& rootMotion(Store& s) { return s.rootMotion; }
 		using CandidateTable = Scene::CandidateTable;
-		static const auto& lightCandidates(const Store& s) { return s.lightCandidates; }
-		static const auto& lightDependents(const Store& s) { return s.lightDependents; }
-		static bool CategoryNodeOwn(const Store& s, const RE::NiAVObject* a_node) { return s.CategoryNodeOwn(a_node); }
-		static bool LightEntryAllows(const Store& s, const Tracked& a_tracked, const RE::BSGeometry& a_geometry, bool a_switchNodes)
-		{
-			return Eligibility::Light(Store::VerdictOf(a_tracked), a_switchNodes, [&] { return s.mirror.Leaf(&a_geometry); });
-		}
 		// The set's commit.
 		using SlotDecision = Scene::Coordinator::SlotDecision;
 		static SlotDecision DecideSlot(const Store& s, std::uint32_t a_slot, bool a_live, std::uint32_t a_drawn) { return s.DecideSlot(a_slot, a_live, a_drawn); }
 		static const auto& setPhasesNext(const Store& s) { return s.setPhasesNext; }
 		static const auto& setWaitingMark(const Store& s) { return s.setWaitingMark; }
 		static bool GateWithholds(const Store& s, std::uint32_t a_slot) { return s.GateWithholds(a_slot); }
-		static bool IsResidentSlotOf(const Store& s, std::uint32_t a_slot) { return s.IsResidentSlot(a_slot); }
 		// The mirror reads' checks (Coordinator's counting: NoteMirrorRead, LiveCheckLease, the deferred rechecks).
 		using MirrorRead = Scene::Coordinator::MirrorRead;
 		static EngineReadWindow::Lease LiveCheckLease(const Store& s, MirrorRead a_read) { return s.LiveCheckLease(a_read); }
@@ -109,12 +99,6 @@ namespace DCLF::Diagnostics
 		{
 			s.MirrorSubtree(a_root, a_reason, a_out, a_unmirrored);
 		}
-		using EvalResult = Scene::Coordinator::EvalResult;
-		using SubtreePrep = Scene::Coordinator::SubtreePrep;
-		using SubtreeSource = Scene::Coordinator::SubtreeSource;
-		using JoinPre = Scene::Coordinator::JoinPre;
-		using JoinResult = Scene::Coordinator::JoinResult;
-		static const auto& order(const Store& s) { return s.order; }
 		static const auto& shadowIndexedInputs(const Store& s) { return s.shadowIndexedInputs; }
 		static const auto& shadowIndexedLive(const Store& s) { return s.shadowIndexedLive; }
 		static Scene::Coordinator::ShadowInputs ShadowInputsOf(const Store& s, std::uint32_t a_slot) { return s.ShadowInputsOf(a_slot); }
@@ -174,7 +158,7 @@ namespace DCLF::Diagnostics
 		static bool ResidentObject(const Store& s, std::int32_t a_object) { return s.ResidentObject(a_object); }
 		static bool HiddenForWalk(const Store& s, const RE::NiAVObject* a_object) { return s.HiddenForWalk(a_object); }
 		static std::uint32_t PerFrameTraits(const Store& s, const Tracked& a_tracked, const RE::BSGeometry& a_geometry) { return s.PerFrameTraits(a_tracked, a_geometry); }
-		/** @brief PerFrameOf with the reference roots' motion taken from scratch (a_freshMotion): it writes nothing of the store then. */
+		/** @brief PerFrameOf with the reference roots' motion taken from scratch (a_freshMotion): it writes nothing of the coordinator then. */
 		static std::pair<bool, std::uint32_t> PerFrameOfFresh(const Store& s, const Tracked& a_tracked, const RE::BSGeometry& a_geometry, Ineligible a_reason,
 			std::uint32_t& a_traits, ankerl::unordered_dense::map<const RE::NiAVObject*, bool>& a_freshMotion)
 		{
@@ -191,7 +175,7 @@ namespace DCLF::Diagnostics
 		static const auto& shadingNamed(const Store& s) { return s.shadingNamed; }
 		static const auto& residentPatches(const Store& s) { return s.residentPatches; }
 
-		// The walk's reference (Coordinator::DenseReference): the store is left as it was.
+		// The walk's reference (Coordinator::DenseReference): the coordinator is left as it was.
 		using ReferenceReasons = ankerl::unordered_dense::map<const RE::BSGeometry*, Ineligible>;
 		static void DenseReference(Store& s, Tables& a_dense, ReferenceReasons& a_reasons) { s.DenseReference(a_dense, a_reasons); }
 	};

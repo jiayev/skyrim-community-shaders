@@ -1,5 +1,8 @@
 #pragma once
 
+// The coordinator's material texture bindings: the requests in flight, the answers kept and the slots holding a previous view. Scene
+// lane only, except the replies queue (the import thread answers into it).
+
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -16,7 +19,7 @@ struct ID3D11ShaderResourceView;
 namespace DCLF
 {
 	/**
-	 * @brief T6b2c: the material slots' texture bindings, made by the scene work (Coordinator::UpdateMaterialBindings).
+	 * @brief The material slots' texture bindings, made by the scene work (Coordinator::UpdateMaterialBindings).
 	 *
 	 * Where the scene work makes or changes a material slot's record (the tables' material log), or a slot becomes used, it asks
 	 * GpuTextures for the bindings of the record's views (GpuTextures::Request) and writes the slot's entry: the descriptor
@@ -63,7 +66,7 @@ namespace DCLF
 		std::vector<std::uint64_t> usedSeen;
 		LogCursor cursor;  // the tables' material log
 		std::uint64_t cookie = 1;  // the requests' since the last reset: an answer with another is stale
-		GpuTextures::Replies replies{ &WakeSceneTextureReply };  // T6b3d: an answer wakes the scene pump
+		GpuTextures::Replies replies{ &WakeSceneTextureReply };  // an answer wakes the scene pump
 		Stats stats;
 
 		void MarkChanged(std::uint32_t a_slot)

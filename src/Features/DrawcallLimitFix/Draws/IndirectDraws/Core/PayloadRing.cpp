@@ -1,3 +1,6 @@
+// The payload ring (Impl::payloadRing): at the frame's start the render thread picks the frame's entry and grows its buffers
+// (PrepareFrameUploads); the frame's producer (FrameValues' job, on the dedicated uploader) then brings it up to the installed
+// publication, sending each buffer what changed since the version it holds, before it signals the frame's wait.
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -5,11 +8,6 @@
 
 namespace DCLF
 {
-	/*
-	 * The payload ring (Impl::payloadRing): each frame's entry brought up to the installed publication by the frame's producer
-	 * on the dedicated uploader, before it signals the frame's wait.
-	 */
-
 	std::function<void(org::runtime::IUploadService&)> IndirectDraws::PrepareFrameUploads()
 	{
 		if (!impl)
@@ -29,7 +27,7 @@ namespace DCLF
 		const ShadowPayload* shadow = draws->shadow.get();
 		// The geometry table: the main payloads' and the shadow payload's are the same (the publication's stream views and face streams).
 		std::uint64_t geometryRows = shadow ? shadow->geometries.Count() : 0;
-		// The scene list (U4c): the region every payload of the publication holds, then the main payloads' frame inputs, then the shadow
+		// The scene list: the region every payload of the publication holds, then the main payloads' frame inputs, then the shadow
 		// payload's.
 		if (newest)
 			geometryRows = std::max<std::uint64_t>(geometryRows, newest->geometryDraws.Count());
@@ -79,7 +77,7 @@ namespace DCLF
 		if (shadow) {
 			frame.shadow = true;
 			frame.shadowRows = entry.shadowRows.address;
-			frame.shadowInputsIndex = entry.inputs.srvIndex;  // the scene list (U4c)
+			frame.shadowInputsIndex = entry.inputs.srvIndex;  // the scene list
 		}
 		frame.materialRows = entry.materialRows.address;
 		frame.pipelineRows = entry.pipelineRows.address;
@@ -120,13 +118,13 @@ namespace DCLF
 			EmitGeometryDraws(geometries, entry.geometries.held, sender(entry.geometries, Impl::kRingGeometries));
 			entry.geometries.held = geometries.Version();
 			holders.geometries.Set(r, entry.geometries.held);
-			// The shadow payload's rows (step 6e S2).
+			// The shadow payload's rows.
 			if (shadow) {
 				shadow->materialRows.Emit(entry.shadowRows.held, sender(entry.shadowRows, Impl::kRingShadowRows));
 				entry.shadowRows.held = shadow->materialRows.Version();
 				holders.shadowRows.Set(r, entry.shadowRows.held);
 			}
-			// The scene list (U4c): its region at the head (what changed since; every payload of the publication holds the same view), the
+			// The scene list: its region at the head (what changed since; every payload of the publication holds the same view), the
 			// main payloads' frame inputs after it, then the shadow payload's (whole).
 			{
 				auto& part = entry.inputs;

@@ -1,3 +1,7 @@
+// The snapshot builder (one pass at a time on DCLF's preparation pool): the builds ahead of a publication's draws, from the context
+// the render thread posts at the frame's start, its revision made and sealed, the snapshot posted; and the render thread's adoption of
+// the newest one (AdoptSnapshot). PostSnapshotWork and the fits (FitsScene) are the coordinator's.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #	include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
@@ -8,11 +12,6 @@
 namespace DCLF
 {
 	using org::async::RevisionFragment;
-
-	/*
-	 * The snapshot builder (one pass at a time on DCLF's pool): the builds ahead of a publication's draws, from the context the
-	 * frame's start posts, its revision made and sealed, the snapshot posted; and the frame's adoption of the newest one.
-	 */
 
 	void IndirectDraws::PostAheadContext()
 	{
@@ -25,23 +24,22 @@ namespace DCLF
 			return;
 		}
 		auto* lighting = EngineShaders::Lighting();
-		// Built at the epochs instead (Policy::BuildAtEpoch): nothing ahead.
-		if (!lighting || !DrawPipelines::Get().Enabled() || !FrameIndirectState().valid || Policy::BuildAtEpoch()) {
+		if (!lighting || !DrawPipelines::Get().Enabled() || !FrameIndirectState().valid) {
 			impl->PostAhead();
 			return;
 		}
-		// The capacities the builds are made against are the frame's first join's (MakeRevision reserves them from the newest
-		// publication's tables, T6b3a; the only tables the kept draw bound follows).
+		// The capacities the builds are made against are MakeRevision's (it reserves them from the newest publication's tables, the only
+		// tables the kept draw bound follows).
 		for (const std::size_t j : { kAsyncZPrepass, kAsyncColour }) {
 			const auto& masks = impl->epochMasks[j];
 			// The frame slots the epochs last supplied; the colour build replays the Z-prepass's vertex inputs.
 			if (!masks.known || (j == kAsyncColour && !impl->prepassInputs))
 				continue;
-			c.inputs[j] = impl->PrepareMainInputs(nullptr, j == kAsyncZPrepass, *impl->resources, masks.vsMask, masks.psMask);
+			c.inputs[j] = impl->PrepareMainInputs(j == kAsyncZPrepass, *impl->resources, masks.vsMask, masks.psMask);
 			c.build[j] = true;
 		}
 		c.target = impl->resources;
-		// The shadow payload's (step 6e S1), for the last epoch's views; the shadow lookups the scene lane resolves for them (PostLookupInputs).
+		// The shadow payload's, for the last epoch's views; the shadow lookups the scene lane resolves for them (PostLookupInputs).
 		const auto& tables = Scene::FrameView::Get().GetTables();
 		if (ActiveToggles().shadows && impl->shadow && impl->lastShadow.known && globals::game::utilityShader && !tables.objects.empty() &&
 			tables.shadowTechnique.size() == tables.objects.size()) {
@@ -55,7 +53,7 @@ namespace DCLF
 
 	void IndirectDraws::Impl::PostAhead(bool a_fit)
 	{
-		// T6b3a: immutable once posted, latest wins; the coordinator takes it at its passes' start (TakeAheadContext).
+		// Immutable once posted, latest wins; the coordinator takes it at its passes' start (TakeAheadContext).
 		if (a_fit)
 			PostFit();
 		auto post = std::make_unique<AheadPost>();
@@ -64,7 +62,7 @@ namespace DCLF
 		post->rows = postedRows;
 		post->fitSerial = postedFitSerial;
 		aheadSlot.Post(std::move(post));
-		// T6b3d: a frame input of the coordinator's: its pump woken (folded with the frame start's other posts).
+		// A frame input of the coordinator's: its pump woken (folded with the frame start's other posts).
 		WakeScenePass(SceneWake::FrameInput);
 	}
 
@@ -91,7 +89,7 @@ namespace DCLF
 	{
 		if (!impl)
 			return true;
-		// The coordinator's copy of the posted fits (T6b3a: TakeAheadContext), never the render thread's.
+		// The coordinator's copy of the posted fits (TakeAheadContext), never the render thread's.
 		const auto& posted = impl->aheadTaken;
 		const auto& tables = *static_cast<const SceneTables*>(a_tables);
 		if (a_slot >= tables.objects.size() || !ObjectFits(tables, a_slot, posted.fit[a_shadow ? 1 : 0]))
@@ -131,7 +129,7 @@ namespace DCLF
 		work->light = store.CoordinatorLightCandidates();
 		work->aheadNumber = s.aheadKicked.fetch_add(1, std::memory_order_acq_rel) + 1;
 		// Latest wins: one the builder has not taken yet is replaced (dropped here, on the coordinator, as a returned publication is).
-		// T6b3d: the builder takes the newest once idle (one build in flight), so the publications made during a build coalesce here.
+		// The builder takes the newest once idle (one build in flight), so the publications made during a build coalesce here.
 		s.snapshotWorkSlot.Post(std::move(work));
 		(void)s.SnapshotPump();
 		WakeSnapshotBuilder();
@@ -166,10 +164,10 @@ namespace DCLF
 		auto& work = *b.work;
 		const auto start = std::chrono::steady_clock::now();
 		const auto& publication = *work.publication;
-		// T6b3b (an intermittent device loss: a vertex shader reading face positions from a freed version): the draws embed the face positions'
-		// address, and a snapshot's draws must embed the version its revision names - the one its adoption makes current - never the one
-		// the frame's context had when it was posted (a ready growth's version replaces it at that adoption, and the old one is released
-		// once its last holder goes). Taken from the sealed set, so draws and revision are one consistent build.
+		// The draws embed the face positions' address, and a snapshot's draws must embed the version its revision names - the one its
+		// adoption makes current - never the one the frame's context had when it was posted (a ready growth's version replaces it at that
+		// adoption, and the old one is released once its last holder goes: a vertex shader reading it loses the device). Taken from the
+		// sealed set, so draws and revision are one consistent build.
 		AheadContext context = work.context;
 		if (a_versions) {
 			for (const std::size_t j : { kAsyncZPrepass, kAsyncColour })
@@ -224,10 +222,10 @@ namespace DCLF
 		const auto& c = a_context;
 		if (!c.valid || !c.target || !c.target->scene)
 			return out;
-		// The scene list (U4c): the main build's region, into which the shadow build writes its words; its journal's build begins once a
+		// The scene list: the main build's region, into which the shadow build writes its words; its journal's build begins once a
 		// publication, with whichever writes first.
 		mainCache.region.begun = false;
-		// Both segments in one build: one list, read by each through its view bits (U4a).
+		// Both segments in one build: one list, read by each through its view bits.
 		std::array<MainInputs, 2> inputs;
 		std::array<const MainInputs*, 2> segmentIn{};
 		std::array<MainPayload*, 2> segmentOut{};
@@ -249,7 +247,7 @@ namespace DCLF
 			segmentOut[j] = out->payloads[j].get();
 		}
 		BuildMainPayloads(segmentIn, *a_tables, Scene::FrameView::Get().GetFrameTables(), a_lookups, segmentOut, mainRows, &mainCache, out->streams);
-		// The shadow payload (step 6e S1), from the same tables, stream views and lookups, with the publication's candidates, and the
+		// The shadow payload, from the same tables, stream views and lookups, with the publication's candidates, and the
 		// next frame's exclusions from it.
 		if (c.shadow && c.shadowTarget && c.shadowTarget->scene) {
 			ShadowInputs in = c.shadowInputs;
@@ -259,9 +257,9 @@ namespace DCLF
 			in.sunCandidates = a_sunCandidates;
 			in.lightCandidates = a_lightCandidates;
 			in.tablesHeld = from;
-			// The oldest versions the ring's entries hold: what the shadow journals keep changes back to (step 6e S2).
+			// The oldest versions the ring's entries hold: what the shadow journals keep changes back to.
 			in.materialRowsHeld = ringHolders.shadowRows.Oldest();
-			in.inputsHeld = ringHolders.resident.Oldest();  // the scene list's region (U4c)
+			in.inputsHeld = ringHolders.resident.Oldest();  // the scene list's region
 			auto payload = AcquireShadowPayload();
 			BuildShadowPayload(in, *a_tables, a_lookups, *payload, out->streams, ShadowKeptState(), Policy::ReuseResidentRegion() ? &mainCache.region : nullptr);
 			// The publication holds the views; the payload, which the epochs may hold past it, does not.
@@ -275,7 +273,7 @@ namespace DCLF
 			}
 			out->shadow = std::move(payload);
 		}
-		// Every payload of the publication holds the scene list's region as both builds left it (U4c): the shadow payload's view, taken
+		// Every payload of the publication holds the scene list's region as both builds left it: the shadow payload's view, taken
 		// after its words, or without it the main region's; and the shadow payload where its own frame inputs follow the main ones'.
 		{
 			KeptView<DrawInput> region;
@@ -364,13 +362,10 @@ namespace DCLF
 					}
 					continue;
 				}
-				// T6b3d (w127: the pacing by the frame's takes held a publication made after the frame's take for the next take, a frame
-				// late): one build in flight, the next started as soon as the builder is idle, from the newest publication (the work slot
-				// holds only one newer than the posted snapshot's) - everything published meanwhile coalesced into it. A posted snapshot the
-				// frame has not taken is replaced by the newer complete one; the build's own time is the rate (publications come only on a
-				// change), and an unchanged revision is cheap (its recordings kept).
-				// The newest work, replacing the current one (latest wins: the publications it skipped are coalesced; their log deltas
-				// reach the frame with it).
+				// One build in flight, the next started as soon as the builder is idle, from the newest work (latest wins: the publications
+				// it skipped coalesce into it, and their log deltas reach the frame with it). A posted snapshot the frame has not taken is
+				// replaced by the newer complete one; the build's own time is the rate (publications come only on a change), and an unchanged
+				// revision is cheap (its recordings kept).
 				if (auto next = snapshotWorkSlot.Take()) {
 					const std::uint64_t sequence = next->publication ? next->publication->sequence : 0;
 					if (b.lastPublication && sequence > b.lastPublication + 1)
@@ -444,14 +439,11 @@ namespace DCLF
 		snapshot->publication = b.work->publication;
 		snapshot->draws = b.draws;
 		snapshot->revision = std::move(a_revision);
-		// Its draws: both main payloads, for the main resources its revision is of (or the epochs build their own). The builder's verdict:
-		// without, its frames have no claims (DecideCoverage), whatever the frame finds.
-		bool complete = Policy::BuildAtEpoch();
-		if (!complete) {
-			complete = b.draws != nullptr && inputs.main != nullptr;
-			for (const std::size_t j : { kAsyncZPrepass, kAsyncColour })
-				complete = complete && b.draws->payloads[j] && b.draws->payloads[j]->inputs.addresses.identity == inputs.main.get();
-		}
+		// Its draws: both main payloads, for the main resources its revision is of. The builder's verdict: without, its frames have no
+		// claims (DecideCoverage), whatever the frame finds.
+		bool complete = b.draws != nullptr && inputs.main != nullptr;
+		for (const std::size_t j : { kAsyncZPrepass, kAsyncColour })
+			complete = complete && b.draws->payloads[j] && b.draws->payloads[j]->inputs.addresses.identity == inputs.main.get();
 		snapshot->drawsComplete = complete && snapshot->revision != nullptr;
 		if (!snapshot->drawsComplete)
 			snapshotsWithoutDraws.fetch_add(1, std::memory_order_relaxed);
@@ -529,7 +521,7 @@ namespace DCLF
 		// The replaced one back to the builder last, once nothing of the frame's holds it alone: its release is the builder's.
 		if (auto replaced = std::exchange(s.adoptedSnapshot, snapshot))
 			s.retiredSnapshots.Push(std::move(replaced));
-		// T6b3d: the slot is free (a builder idle with inputs moved remakes for the frame as it is now).
+		// The slot is free (a builder idle with inputs moved remakes for the frame as it is now).
 		WakeSnapshotBuilder();
 		return snapshot->publication;
 	}

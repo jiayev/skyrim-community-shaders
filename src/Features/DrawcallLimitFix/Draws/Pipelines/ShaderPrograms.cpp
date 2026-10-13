@@ -1,3 +1,5 @@
+// ShaderPrograms: the stage cache, the compile requests and the pipeline lane's entries (see the header).
+
 #include "ShaderPrograms.h"
 
 #include <array>
@@ -37,7 +39,7 @@ namespace DCLF
 			TreeLod,
 			Forward,
 			ForwardTreeLod,
-			Effect  // T7d's Effect port (FindEffect)
+			Effect  // FindEffect
 		};
 	}
 
@@ -46,7 +48,7 @@ namespace DCLF
 		constexpr const char* kSourcePath = "Data/Shaders/Lighting.hlsl";
 		constexpr const char* kUtilitySourcePath = "Data/Shaders/Utility.hlsl";
 		constexpr const char* kDistantTreeSourcePath = "Data/Shaders/DistantTree.hlsl";
-		constexpr const char* kEffectSourcePath = "Data/Shaders/Effect.hlsl";  // T7d's Effect port (FindEffect)
+		constexpr const char* kEffectSourcePath = "Data/Shaders/Effect.hlsl";  // FindEffect
 		// DistantTree's descriptors (ShaderCache.h, DistantTreeShaderTechniques and DistantTreeShaderFlags): the technique in bit 0
 		// (1: Depth), Deferred and AlphaTest, as the engine's main view draws tree LOD (BSDistantTreeShader::SetupTechnique).
 		constexpr std::uint32_t kDistantTreeDepth = 1, kDistantTreeDeferred = 1u << 8, kDistantTreeAlphaTest = 1u << 16;
@@ -58,12 +60,11 @@ namespace DCLF
 			return std::wstring(a_value.begin(), a_value.end());
 		}
 
-		// The SPIR-V is built with source-level debug info by default for now (CS_DCLF_SHADER_DEBUG=0: without), so a GPU crash
-		// dump names the shader (Aftermath; and for Nsight and
-		// RenderDoc; the source is embedded, and SnapshotSources' copy is there for editing), still optimized. Part of the
-		// compile key, so the debug builds are cached beside the release ones. There is deliberately no
-		// -Od form: unoptimized code reads per-frame constant buffers (VS b6, PS b7) that the epochs do
-		// not supply, so every candidate is skipped and DCLF draws nothing.
+		// The SPIR-V is built with source-level debug info by default (CS_DCLF_SHADER_DEBUG=0: without), so a GPU crash dump names the
+		// shader (Aftermath; and for Nsight and RenderDoc; the source is embedded, and SnapshotSources' copy is there for editing), still
+		// optimized. Part of the compile key, so the debug builds are cached beside the release ones. There is deliberately no -Od form:
+		// unoptimized code reads per-frame constant buffers (VS b6, PS b7) that the epochs do not supply, so every candidate is skipped
+		// and DCLF draws nothing.
 		bool ShaderDebug()
 		{
 			return SwitchValue(Switch::ShaderDebug) != "0";
@@ -398,7 +399,7 @@ namespace DCLF
 			// other inputs (PulledLightingSource).
 			if (a_pulled && a_sourceName == kSourcePath)
 				request.defines.push_back({ L"DCLF_PULLED_ROWS", L"1" });
-			// TEMP (the pulled stages' GPU fault, 2026-10-09): CS_DCLF_FETCH_GUARD, default on (Lighting.hlsl, DCLF_FETCH_GUARD).
+			// TEMP (against the pulled stages' GPU fault): CS_DCLF_FETCH_GUARD, default on (Lighting.hlsl, DCLF_FETCH_GUARD).
 			if (a_pulled && !a_pixel && a_sourceName == kSourcePath && SwitchValue(Switch::FetchGuard) != "0")
 				request.defines.push_back({ L"DCLF_FETCH_GUARD", L"1" });
 			// The foliage record (Policy::RecordFoliagePixels): the colour pass's alpha-tested draws write what each pixel shows, and the
@@ -462,7 +463,7 @@ namespace DCLF
 		{
 			const bool utility = shader.shaderType.get() == RE::BSShader::Type::Utility;
 			const bool distantTree = shader.shaderType.get() == RE::BSShader::Type::DistantTree;
-			// T7d's Effect port: Effect.hlsl's builds, never pulled (FindEffect).
+			// Effect.hlsl's builds, never pulled (FindEffect).
 			const bool effect = shader.shaderType.get() == RE::BSShader::Type::Effect;
 			pulled = !effect && (pulled || utility || distantTree);
 			const std::uint64_t key = descriptor | (std::uint64_t(pixel) << 32) | (std::uint64_t(depth) << 33) | (std::uint64_t(utility) << 34) |
@@ -745,7 +746,7 @@ namespace DCLF
 	{
 		const org::services::ShaderArtifact& ArtifactOf(const StagePtr& a_stage) { return *a_stage->artifact; }
 
-		// The outcome of a stage no precompile had asked for (logged with its reason when it was requested): compiled now, or
+		// The outcome of a stage no precompile had asked for (logged with its reason when it was requested): compiled, or
 		// found in the disk cache, which a precompile run before would also have filled.
 		void OnDemandOutcome(const char* a_what, std::uint8_t a_stages, std::chrono::steady_clock::time_point a_requested,
 			std::initializer_list<std::pair<std::uint8_t, const org::services::ShaderArtifact*>> a_artifacts)
@@ -869,7 +870,7 @@ namespace DCLF
 				}
 				continue;
 			case StageUser::Effect:
-				// T7d's Effect port: Effect.hlsl's vertex and pixel stages, a Program of those two alone.
+				// Effect.hlsl's vertex and pixel stages, a Program of those two alone.
 				FinishEntry(*effectEntries.find(id)->second, &laneStats.ready, laneStats.failed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
 					if (loggedFailures++ < kMaxLoggedFailures)
 						logger::warn("[DCLF] SPIR-V build of Effect {} {:08X} failed; its effect meshes stay native:\n{}", a_stage ? "PS" : "VS", a_stage ? pixel : vertex & 0x7FFFFFFFu,

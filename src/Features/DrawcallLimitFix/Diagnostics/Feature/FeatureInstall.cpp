@@ -1,3 +1,5 @@
+// InstallFeature: the observers of the feature file's frame events (Hooks.h): the frame-level parities, probes, leak count and
+// target dump. Each runs on the render thread at its hook point.
 #include "Features/DrawcallLimitFix/Diagnostics/Install.h"
 
 #include "Skylight.h"
@@ -11,13 +13,8 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Feature/OpenDefectProbes.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Feature/TargetDump.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
-#include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/TerrainBlending.h"
-
-#include <ankerl/unordered_dense.h>
-
-// The feature file's observers: the frame-level parities and probes the feature's hooks announce (Hooks.h's frame events).
 
 namespace DCLF::Reports
 {
@@ -53,49 +50,6 @@ namespace DCLF::Diagnostics
 				leaks.samples.push_back(fmt::format("'{}' ({}, hint {}, technique {:08X})", pass->geometry->name.c_str() ? pass->geometry->name.c_str() : "?",
 					a_offered.inDepthPass ? "depth" : "opaque", static_cast<std::uint32_t>(pass->accumulationHint), a_offered.technique));
 		}
-
-		/** @brief CS_DCLF_DRAW_CENSUS: the native draws by pass, shader type and technique, reported every 300 frames. */
-		struct DrawCensus
-		{
-			ankerl::unordered_dense::map<std::uint64_t, std::uint32_t> counts;
-			std::uint32_t frames = 0;
-
-			void Note(const NativeDraw& a_draw) { ++counts[(std::uint64_t(a_draw.pass) << 48) | (std::uint64_t(a_draw.shaderType) << 40) | a_draw.technique]; }
-
-			void Report()
-			{
-				if (Scene::FrameView::IsLoadingScreenUp() || ++frames < 300)
-					return;
-				std::vector<std::pair<std::uint32_t, std::uint64_t>> rows;
-				std::uint64_t total = 0;
-				for (const auto& [key, count] : counts) {
-					rows.emplace_back(count, key);
-					total += count;
-				}
-				std::sort(rows.begin(), rows.end(), std::greater<>());
-				const auto passName = [](std::uint32_t a_pass) -> std::string {
-					switch (a_pass) {
-					case 0x100: return "depth prepass";
-					case 0x101: return "deferred main";
-					case 0xFF: return "no accumulator";
-					default: return fmt::format("render mode {:#x}", a_pass);
-					}
-				};
-				std::string text;
-				for (std::size_t i = 0; i < rows.size() && i < 30; ++i) {
-					const auto [count, key] = rows[i];
-					const auto type = static_cast<std::uint32_t>((key >> 40) & 0xFF);
-					const auto technique = static_cast<std::uint32_t>(key & 0xFFFFFFFFull);
-					const auto typeName = type < magic_enum::enum_count<RE::BSShader::Type>() ? magic_enum::enum_name(static_cast<RE::BSShader::Type>(type)) : std::string_view("none");
-					text += fmt::format("\n    {:7.1f}  {}, {} {}", static_cast<double>(count) / frames, passName(static_cast<std::uint32_t>(key >> 48)), typeName,
-						type == static_cast<std::uint32_t>(RE::BSShader::Type::Lighting) ? std::string(LightingTechniqueName(technique)) : fmt::format("{:08X}", technique));
-				}
-				logger::info("[DCLF] draw census: {:.1f} native draws a frame over {} frames, {} groups; the largest:{}", static_cast<double>(total) / frames, frames, rows.size(), text);
-				counts.clear();
-				frames = 0;
-			}
-		};
-		DrawCensus drawCensus;
 
 		/**
 		 * @brief CS_DCLF_TARGET_PROBE: the blend state a native Lighting draw of the main pass left bound (its write masks per target), and
@@ -143,15 +97,11 @@ namespace DCLF::Diagnostics
 		if (SwitchEnabled(Switch::TreeLodAudit))
 			Subscribe<FrameBegin>([](const FrameBegin&) { AuditTreeLod(); });
 		if (o.claims)
-			Subscribe<ClaimsInstalled>([](const ClaimsInstalled&) { ObservePlayerClaims(); });
-		// Prepass: the occlusion maps' compare (Skylight), then the open defects' probes, DCLF running or not.
+			Subscribe<FramePoint::ClaimsInstalled>([](const On<FramePoint::ClaimsInstalled>&) { ObservePlayerClaims(); });
+		// Prepass: the occlusion maps' compare (Skylight).
 		Skylight::Install();
-		if (!SwitchValue(Switch::ShadowMaskProbe).empty())
-			Subscribe<PrepassBegin>([](const PrepassBegin& a_event) { ProbeShadowMask(a_event.running); });
-		if (SwitchEnabled(Switch::ShadowMapProbe))
-			Subscribe<PrepassBegin>([](const PrepassBegin& a_event) { ProbeShadowMaps(a_event.running); });
 		if (o.capture)
-			Subscribe<PrepassEnd>([](const PrepassEnd& a_event) { CaptureParity::Get().Report(a_event.frame, 300); });
+			Subscribe<FramePoint::PrepassEnd>([](const On<FramePoint::PrepassEnd>&) { CaptureParity::Get().Report(Scene::FrameView::Get().GetFrame(), 300); });
 		// The native lighting draws: the capture parity (the capture point's is the draws area's).
 		if (o.capture)
 			Subscribe<NativeLightingDraw>([](const NativeLightingDraw& a_event) {
@@ -167,11 +117,7 @@ namespace DCLF::Diagnostics
 		// CS_DCLF_TARGET_DUMP: the frame's points, and at Present the count advances and finished copies are written.
 		if (!SwitchValue(Switch::TargetDump).empty()) {
 			Subscribe<TargetPoint>([](const TargetPoint& a_point) { TargetDump::Point(a_point.label, a_point.extra); });
-			Subscribe<Present>([](const Present&) { TargetDump::Present(); });
-		}
-		if (SwitchEnabled(Switch::DrawCensus)) {
-			Subscribe<NativeDraw>([](const NativeDraw& a_draw) { drawCensus.Note(a_draw); });
-			Subscribe<Present>([](const Present&) { drawCensus.Report(); });
+			Subscribe<FramePoint::Present>([](const On<FramePoint::Present>&) { TargetDump::Present(); });
 		}
 	}
 }

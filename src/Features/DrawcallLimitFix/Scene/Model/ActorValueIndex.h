@@ -10,8 +10,9 @@
 
 namespace DCLF
 {
-	// Scene-writer-owned membership. IDs include incarnations; no engine pointers
-	// or deferred engine reads are stored here. Consume only after a writer batch.
+	// Actor-owned slots grouped by actor, with one sampled value per actor fanned out to its slots. The coordinator keeps one in its
+	// tables (membership only) and the render thread its own from the published changes (FrameView, where values are sampled).
+	// IDs include incarnations; no engine pointers or deferred engine reads are stored here. Consume only after a writer batch.
 	class ActorValueIndex
 	{
 	public:

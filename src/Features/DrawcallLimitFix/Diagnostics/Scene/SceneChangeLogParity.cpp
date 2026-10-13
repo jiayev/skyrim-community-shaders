@@ -1,10 +1,10 @@
+// CS_DCLF_CHANGE_LOG_PARITY: every 60 passes each slot's columns are kept, and a pass later every slot whose columns changed in between
+// must be in the log for that pass with the causes that changed. At the scene phase's start, before anything of the pass writes.
+
 #include "SceneObservers.h"
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
-
-// CS_DCLF_CHANGE_LOG_PARITY: every 60 passes each slot's columns are kept, and a pass later every slot whose columns changed in between
-// must be in the log for that pass with the causes that changed. At the scene phase's start, before anything of the pass writes.
 
 namespace DCLF::Diagnostics
 {
@@ -12,9 +12,9 @@ namespace DCLF::Diagnostics
 	{
 		using V = SceneView;
 
-		void OnScenePhaseBegin(const ScenePhaseBegin& a_event)
+		void OnScenePhaseBegin(const On<ScenePoint::ScenePhaseBegin>&)
 		{
-			const auto& store = a_event.store;
+			const auto& store = Scene::Coordinator::Get();
 			const auto& tables = V::tables(store);
 			const auto tablesGeneration = V::tablesGeneration(store);
 			const auto sceneFrame = V::sceneFrame(store);
@@ -67,6 +67,6 @@ namespace DCLF::Diagnostics
 
 	void InstallChangeLogParity()
 	{
-		Subscribe<ScenePhaseBegin>(OnScenePhaseBegin);
+		Subscribe<ScenePoint::ScenePhaseBegin>(OnScenePhaseBegin);
 	}
 }

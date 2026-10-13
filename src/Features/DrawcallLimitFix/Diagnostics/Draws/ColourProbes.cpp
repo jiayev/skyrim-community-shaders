@@ -1,58 +1,12 @@
+// The colour epoch's probe: the objects whose bound covers a pixel (CS_DCLF_TARGET_PROBE).
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "DrawsState.h"
 #	include "Events.h"
 #	include "Observers.h"
 
-// The colour epoch's probes: its ViewProj's jitter (CS_DCLF_STATS) and the objects whose bound covers a pixel (CS_DCLF_TARGET_PROBE).
-
 namespace DCLF::Diagnostics
 {
-	void MeasureJitter(const ColourFrameBlock& a_block)
-	{
-		// The colour epoch's ViewProj (c8-c11 of b12) against its unjittered copy (c12-c15), the main pass's b12 now, the cached frame
-		// buffer and the previous epoch's.
-		const auto& a_capture = a_block.capture;
-		const auto packed = a_block.packed;
-		auto& mirror = ConstantMirror::Get();
-		if (packed.size() >= 16 * 4 * sizeof(float)) {
-			const auto* p = reinterpret_cast<const float*>(packed.data());
-			auto maxDiff = [&](const float* a_other) {
-				float d = 0.0f;
-				for (int i = 0; i < 16; ++i)
-					d = std::max(d, std::abs(p[32 + i] - a_other[i]));
-				return d;
-			};
-			auto& j = DrawsState::Get().jitter;
-			j.vsUnjittered += maxDiff(p + 48);
-			j.vsUnjitteredMax = std::max(j.vsUnjitteredMax, maxDiff(p + 48));
-			if (auto* buffer = a_capture.vsBuffers[kPerFrameVertexRegister]) {
-				const auto main = mirror.Contents(buffer);
-				if (main.size() >= 48 * sizeof(float)) {
-					const float d = maxDiff(reinterpret_cast<const float*>(main.data()) + 32);
-					j.vsMain += d;
-					j.vsMainMax = std::max(j.vsMainMax, d);
-				}
-			}
-			const float cached = maxDiff(reinterpret_cast<const float*>(&globals::game::frameBufferCached.data) + 32);
-			j.vsCached += cached;
-			j.vsCachedMax = std::max(j.vsCachedMax, cached);
-			if (j.havePrevious) {
-				const float d = maxDiff(j.previous.data());
-				j.vsPrevious += d;
-				j.vsPreviousMax = std::max(j.vsPreviousMax, d);
-			}
-			std::copy(p + 32, p + 48, j.previous.begin());
-			j.havePrevious = true;
-			if (++j.epochs == 300) {
-				logger::info("[DCLF] colour epoch ViewProj over {} epochs (mean / max of the largest element difference): against its unjittered copy {:.2e} / {:.2e}, "
-							 "the main pass's b12 now {:.2e} / {:.2e}, the cached frame buffer {:.2e} / {:.2e}, the previous epoch's {:.2e} / {:.2e}; jitter {:.6f} {:.6f}",
-					j.epochs, j.vsUnjittered / j.epochs, j.vsUnjitteredMax, j.vsMain / j.epochs, j.vsMainMax, j.vsCached / j.epochs, j.vsCachedMax,
-					j.vsPrevious / j.epochs, j.vsPreviousMax, p[32 + 2] - p[48 + 2], p[32 + 6] - p[48 + 6]);
-				j = { .previous = j.previous, .havePrevious = true };
-			}
-		}
-	}
-
 	void ProbeTarget(const MainCullViewProj& a_cull)
 	{
 		const auto& latch = a_cull.latch;

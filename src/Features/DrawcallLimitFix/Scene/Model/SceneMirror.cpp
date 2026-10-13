@@ -1,3 +1,6 @@
+// SceneMirror's record maintenance: captures applied newest-wins with the later updates replayed over them, detaches, evictions
+// and hook updates. Scene-work thread (the coordinator's event application).
+
 #include "Features/DrawcallLimitFix/Scene/Model/SceneMirror.h"
 
 #include <fmt/ranges.h>

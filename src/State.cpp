@@ -16,7 +16,6 @@
 #include "EngineFixes/SunShadowMaskFix.h"
 #include "Features/DrawcallLimitFix/Runtime/Switches.h"
 #include "Features/DrawcallLimitFix.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "GpuEventTimers.h"
 #include "RenderGraph/NvPerfBridge.h"
 #include "GpuIdleTrace.h"
@@ -123,8 +122,6 @@ void State::Draw()
 	ZoneScoped;
 	if (globals::features::sceneManager.loaded)
 		globals::features::sceneManager.Update();
-	if (DCLF::Diagnostics::Armed<DCLF::Diagnostics::NativeDraw>())
-		globals::features::drawcallLimitFix.NoteNativeDraw(currentShader, currentPixelDescriptor);
 
 	auto shaderCache = globals::shaderCache;
 	auto& terrainBlending = globals::features::terrainBlending;

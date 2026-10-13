@@ -10,24 +10,23 @@ namespace DCLF
 	/**
 	 * @brief When a worker may touch the engine's scene graph (dclf-async-publication.md, "The engine-read window").
 	 *
-	 * From Main::Draw to Present the engine reads its scene graph but does not write it (BeginSceneFrame lists the writes
-	 * that do happen: currentFade, billboards, texture transforms). The window is open over exactly that span: Open at
-	 * BeginSceneFrame, Close at Present, both on the render thread. A worker reading or writing engine memory takes a Lease
-	 * per item and does the item only while it holds one; a refused lease means the window has closed, and the worker
-	 * leaves the rest for whoever resumes it (by index, as RunPlacements and the fade write-back do).
+	 * From Main::Draw to Present the engine reads its scene graph but does not write it (the writes that do happen there:
+	 * currentFade, billboards, texture transforms). The window is open over exactly that span: Open at FrameDriver::BeginFrame, Close at Present, both on the render thread. A worker touching engine memory takes a Lease per item and
+	 * does the item only while it holds one; a refused lease means the window has closed, and the worker leaves the rest, by index, for
+	 * the next window.
 	 *
-	 * Close waits for the leases in flight - an item each, never a task - so the update that follows Present never runs
-	 * beside a worker inside engine memory. Lock-free: one atomic word holds the open bit and the lease count, so a lease
-	 * can never be taken after Close has seen the count.
+	 * Close waits for the leases in flight - an item each, never a task - so the update that follows Present never runs beside a worker
+	 * inside engine memory. Lock-free: one atomic word holds the open bit and the lease count, so a lease can never be taken after Close
+	 * has seen the count.
 	 *
-	 * The scene work is not joined at Present, so it may run beside the engine's update; it reads the mirror alone, and its
-	 * observers' live reads each take a lease. The engine's read paths (SceneCapture's captures, the live helpers) Touch the
-	 * window: on a scene work thread without a lease, the access is a defect, counted and named (the report's LANE ENGINE ACCESS).
+	 * The scene work is not joined at Present, so it may run beside the engine's update; it reads the mirror alone, and its observers'
+	 * live reads each take a lease. The engine's read paths (SceneCapture's captures, the live helpers) Touch the window: on a scene work
+	 * thread without a lease, the access is a defect, counted and named (the report's LANE ENGINE ACCESS).
 	 */
 	class EngineReadWindow
 	{
 	public:
-		/** @brief Render thread, Main::Draw (BeginSceneFrame): the engine's update is done; workers may read. */
+		/** @brief Render thread, Main::Draw (FrameDriver::BeginFrame): the engine's update is done; workers may read. */
 		static void Open();
 		/** @brief Render thread, Present: no new lease from here; returns once the leases in flight are released. */
 		static void Close();

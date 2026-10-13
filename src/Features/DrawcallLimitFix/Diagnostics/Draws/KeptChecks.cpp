@@ -1,10 +1,10 @@
+// CS_DCLF_PERSISTENT_PARITY: the stores the builds keep against a rebuild from the tables (the object records, the geometry table, the
+// extras rows as each buffer holds them, the draw bound, the kept shadow build, the exclusions' reuse). Each runs on its store's thread.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "DrawsState.h"
 #	include "Events.h"
 #	include "Observers.h"
-
-// CS_DCLF_PERSISTENT_PARITY: the stores the builds keep against a rebuild from the tables (the object records, the geometry table, the
-// extras rows as each buffer holds them, the draw bound, the kept shadow build, the exclusions' reuse). Each runs on its store's thread.
 
 namespace DCLF::Diagnostics
 {
@@ -75,7 +75,7 @@ namespace DCLF::Diagnostics
 		}
 	}
 
-	void CheckObjectRecords(const ObjectRecordsUpdated& a_updated)
+	void CheckObjectRecords(const StoreUpdated<Draws::ObjectRecordStore>& a_updated)
 	{
 		// Every record against one built from the tables now.
 		if (!ParityDue(a_updated.frame))
@@ -94,7 +94,7 @@ namespace DCLF::Diagnostics
 		}
 	}
 
-	void CheckGeometryDraws(const GeometryDrawsUpdated& a_updated)
+	void CheckGeometryDraws(const StoreUpdated<Draws::GeometryStore>& a_updated)
 	{
 		// Every slot against one packed from the tables now.
 		if (!ParityDue(a_updated.frame))
@@ -111,7 +111,7 @@ namespace DCLF::Diagnostics
 		DrawsState::Get().kept.geometry.Check(differs == count, [&] { return fmt::format("slot {}", differs); });
 	}
 
-	void CheckDrawBound(const DrawBoundUpdated& a_updated)
+	void CheckDrawBound(const StoreUpdated<Draws::DrawBoundStore>& a_updated)
 	{
 		// The kept bound against a scan.
 		if (!ParityDue(a_updated.frame))

@@ -1,10 +1,10 @@
+// CS_DCLF_PERSISTENT_PARITY: every tracked object LOD shape's drawn ranges (kept by its segment events) against its live state, every 60th
+// pass, once in it, after the pass's segment events.
+
 #include "SceneObservers.h"
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
-
-// CS_DCLF_PERSISTENT_PARITY: every tracked object LOD shape's drawn ranges (kept by its segment events) against its live state, every 60th
-// pass, once in it, after the pass's segment events.
 
 namespace DCLF::Diagnostics
 {
@@ -12,9 +12,9 @@ namespace DCLF::Diagnostics
 	{
 		using V = SceneView;
 
-		void OnLodSegmentsApplied(const LodSegmentsApplied& a_event)
+		void OnLodSegmentsApplied(const On<ScenePoint::LodSegmentsApplied>&)
 		{
-			const auto& store = a_event.store;
+			const auto& store = Scene::Coordinator::Get();
 			const auto& lodRanges = V::lodRanges(store);
 			auto& l = SceneDiagnostics().lodSegments;
 			if (lodRanges.empty() || !ParityDue(V::passSerial(store)) || std::exchange(l.pass, store.PassStamp()) == store.PassStamp())
@@ -40,6 +40,6 @@ namespace DCLF::Diagnostics
 
 	void InstallLodSegmentParity()
 	{
-		Subscribe<LodSegmentsApplied>(OnLodSegmentsApplied);
+		Subscribe<ScenePoint::LodSegmentsApplied>(OnLodSegmentsApplied);
 	}
 }

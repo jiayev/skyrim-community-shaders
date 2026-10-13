@@ -1,3 +1,5 @@
+// ReleaseGuard (CS_DCLF_RELEASE_GUARD): the NiRefObject::DeleteThis patch and its counting, on whatever thread releases.
+
 #include "ReleaseGuard.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"

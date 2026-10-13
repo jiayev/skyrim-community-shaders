@@ -1,15 +1,12 @@
-// Drawcall Limit Fix: writes the indirect draw sequences (DrawSequence, Records.h) of this frame's draws
-// from the per-draw inputs and the geometry table, appending them with an atomic count. Compiled to SPIR-V at runtime
-// (ComputeProgram) for the render graph, with BasicRHI's descriptor-heap ABI; buffers are fetched from the descriptor heap by index.
+// Drawcall Limit Fix: culls this frame's draw inputs and writes their indirect draw sequences (DrawSequence, Records.h) from the
+// inputs and the geometry table. Compiled to SPIR-V at runtime (ComputeProgram) with BasicRHI's descriptor-heap ABI.
 
 #include "DrawcallLimitFix/HzbTest.hlsli"
 #include "DrawcallLimitFix/PortalPrograms.hlsli"
 
-// Push constants: only what is fixed for a pass across executions (descriptor indices, addresses, the
-// culling phase, the HZB's shape). Everything that changes from one execution to the next is read from
-// the pass's region of the latch block (org::LatchBlock), which the host writes just before submission;
-// the recorded commands then never change with the frame, which is what lets them be reused or recorded
-// ahead of it. Must match BuildDrawsConstants and BuildDrawsLatch in Core/GpuLayouts.h.
+// Push constants: only what is fixed for a pass across executions. Everything per-execution is read from the pass's region of
+// the latch block (org::LatchBlock), written just before submission, so recorded commands can be reused or recorded ahead.
+// Must match BuildDrawsConstants and BuildDrawsLatch in Core/GpuLayouts.h.
 cbuffer BuildDrawsConstants : register(b0)
 {
 	uint LatchIndex;       // ByteAddressBuffer: the latch block
@@ -17,79 +14,65 @@ cbuffer BuildDrawsConstants : register(b0)
 	uint GeometriesIndex;  // ByteAddressBuffer: GeometryDraw[]
 	uint SequencesIndex;   // RWByteAddressBuffer: DrawSequence[]
 	uint CountIndex;       // RWByteAddressBuffer: uint (zeroed before the dispatch)
-	// The rows an input's y names (IndirectDraws: RowsOf): the material rows' table (the low 20 bits), and the pipeline
-	// rows' (the high 12; a table of stride 0 for the shadow views, whose inputs name no pipeline row).
+	// The rows an input's y names (RowsOf): material row (low 20 bits), pipeline row (high 12; stride 0 for the shadow views).
 	uint MaterialRowsAddressLo;
 	uint MaterialRowsAddressHi;
 	uint MaterialRowStride;
-	// Bits 4-7: the culling phase, which is the pass's; the mode and the native-visible gate are the
-	// frame's and come from the latch.
+	// Bits 4-7: the pass's culling phase; the mode and other bits come from the latch.
 	uint PhaseBits;
-	// RWByteAddressBuffer: one uint per object in the frame's tables, written by the depth segment's two
-	// culling phases and read by the colour segment. This is how the colour pass draws exactly what the
-	// depth passes drew: the decision is made once, in the depth segment, and published here, instead of
-	// each segment testing for itself and quietly disagreeing.
+	// RWByteAddressBuffer: one uint per object, written by the depth segment's two phases and read by the colour segment, so the
+	// colour pass draws exactly what the depth passes drew (one decision, not two that can disagree).
 	uint VisibilityIndex;
 	uint LatchOffset;  // this dispatch's BuildDrawsLatch, in bytes into the latch block
-	// RWByteAddressBuffer: per object, the stamp of the last frame its bound was inside the main camera's frustum.
-	// Written by the depth segment's first phase only (0 elsewhere), for its own inputs and (T7f) the decal, forward and
-	// refraction inputs it otherwise skips: the visibility feedback (IndirectDraws, VisibilityEventsCS).
+	// RWByteAddressBuffer: per object, the stamp of the last frame its bound was in the main frustum. Depth segment phase 1 only
+	// (0 elsewhere), including the decal, forward and refraction inputs it otherwise skips: the visibility feedback
+	// (VisibilityEventsCS).
 	uint FrustumIndex;
-	// Occlusion culling against the hierarchical depth buffer built at the end of the depth pass
-	// (HzbCS.hlsl). HzbIndex is zero when there is no HZB, which includes the first frame.
+	// Occlusion culling against the HZB built after the depth pass (HzbCS.hlsl); 0 when there is none (including the first frame).
 	uint HzbIndex;
 	uint HzbSizePacked;  // mip 0: width in the low 16 bits, height in the high 16
 	uint HzbMips;
-	// The sort by pipeline (Main/FrameLayout.h, DrawSort): with SortCountsIndex set, a sequence goes to its append slot of
-	// the staging buffer, with its rank among its pipeline's sequences (the count before it, from the atomic on its pipeline's
-	// word of SortCountsIndex). SortSequencesCS.hlsl then writes it to the sequences, grouped by pipeline, once the prefix
-	// sum has turned the counts into each pipeline's first slot. 0: append into the sequences directly.
+	// The sort by pipeline (DrawSort): with SortCountsIndex set, a sequence goes to the staging buffer with its rank among its
+	// pipeline's sequences (an atomic per pipeline); SortSequencesCS.hlsl scatters it after the prefix sum. 0: append directly.
 	uint SortCountsIndex;   // RWByteAddressBuffer: uint[kSortKeys], zero before the dispatch
 	uint SortStagingIndex;  // RWByteAddressBuffer: DrawSequence[PhaseTwoBase]
 	uint SortRanksIndex;    // RWByteAddressBuffer: uint[PhaseTwoBase]
-	// The sequence buffer's ranges, in sequences (IndirectDraws: the buffer is sized before each epoch to hold every draw it
-	// can produce). Phase 2 writes after the draws' range: its draw is recorded on the CPU, which cannot know how many
-	// sequences phase 1 wrote, so the two need ranges fixed in advance rather than one range shared by an atomic counter.
-	// The decal ranges follow phase 2's: one range of DecalStride slots per group, slot = the decal's ordinal in the
-	// engine's draw order.
+	// Sequence buffer ranges, in sequences (sized before each epoch for every draw it can produce). Phase 2 has its own fixed range:
+	// its draw is recorded on the CPU, which cannot know phase 1's count. The decal ranges follow: DecalStride slots per group, slot
+	// = the decal's ordinal in the engine's draw order.
 	uint PhaseTwoBase;
 	uint DecalBase;
 	uint DecalStride;
 	uint PipelineRowStride;
 	uint PipelineRowsAddressLo;
 	uint PipelineRowsAddressHi;
-	// The depth segment's first phase and the shadow views: StructuredBuffer<FadeRootStatic> and StructuredBuffer<FadeNodeState>
-	// (FadeStateCS.hlsl; Records.h). The first phase drops an input while its root's OnVisible stops; a shadow view drops a
-	// caster while its root fades; every drawing dispatch picks a LOD skin's partitions by its root's level (LodPartitions).
-	// Every listed root's state is FadeStateCS's (T1a, T1b): DCLF's model, not the node's. 0 where nothing is bound.
+	// StructuredBuffer<FadeRootStatic> (FadeStateCS.hlsl; Records.h). Phase 1 drops an input while its root's OnVisible stops; a
+	// shadow view drops a caster while its root fades; every dispatch picks LOD partitions by the root's level (LodPartitions). Root
+	// state is FadeStateCS's model, not the node's. 0 where unbound.
 	uint FadeRootsIndex;
-	// The depth segment's first phase (the main camera): ByteAddressBuffer, the portal programs (Records.h, kPortal*), and below
-	// StructuredBuffer<uint>, each fade root's program. A member whose root's program culls its bound is out of view. 0 elsewhere.
+	// Depth segment phase 1: ByteAddressBuffer of portal programs (kPortal*), and below StructuredBuffer<uint> of each fade root's
+	// program. A member whose root's program culls its bound is out of view. 0 elsewhere.
 	uint PortalProgramsIndex;
-	// A shadow view, and the depth segment's phases: RWByteAddressBuffer, the bucket counts, a word per bucket (BucketTableOffset). 0
-	// elsewhere.
+	// Shadow views and depth phases: RWByteAddressBuffer of bucket counts, a word per bucket (BucketTableOffset). 0 elsewhere.
 	uint BucketCountsIndex;
-	// A shadow view and the depth segment: ByteAddressBuffer, each geometry slot's first index in the index pool (IndexPool), ~0
-	// without one.
+	// Shadow views and depth segment: ByteAddressBuffer of each geometry slot's first index in the index pool, ~0 without one.
 	uint PoolFirstsIndex;
 	uint RootProgramsIndex;
-	// T7d, the colour segment: the forward range's staging half (BuildDrawsConstants::forwardBase, forwardCapacity), which a visible
-	// forward input's draws are appended to, each with its view depth in its firstInstance word (ForwardSortCS.hlsl sorts them).
+	// Colour segment: the forward range's staging half; visible forward draws append here with their view depth in firstInstance
+	// (ForwardSortCS.hlsl sorts them).
 	uint ForwardBase;
 	uint ForwardCapacity;
-	// T7d's refraction, the colour segment: the refraction range's capacity (BuildDrawsConstants::refractionCapacity). The range starts
-	// after the forward range's two halves (ForwardBase + 2 * ForwardCapacity); a visible refraction input's draws are appended to it,
-	// pooled (PoolFirstsIndex), as a shadow view's are, for the forward epoch's plain draw into the refraction normals.
+	// Colour segment: the refraction range (after the forward range's two halves); visible refraction draws append here, pooled
+	// as a shadow view's, for the forward epoch's plain draw into the refraction normals.
 	uint RefractionCapacity;
 }
 
-// StructuredBuffer<FadeNodeState>: FadeStateCS's states as the frame before published them (the latch's fadeStatesIndex, read at
-// the top of main).
+// StructuredBuffer<FadeNodeState>: FadeStateCS's states as the previous frame published them (latch fadeStatesIndex).
 static uint FadeStatesIndex;
-// StructuredBuffer<FadeRootStatic>: the frame's fade seeds (T6b1a: the latch's fadeSeedsIndex; FrameValues, two rows a slot).
+// StructuredBuffer<FadeRootStatic>: the frame's fade seeds (latch fadeSeedsIndex; FrameValues, two rows per slot).
 static uint FadeSeedsIndex;
 
-// FadeStateCS.hlsl's rows, as Records.h lays them out.
+// FadeStateCS.hlsl's rows: must match Records.h's FadeNodeState and FadeRootStatic.
 struct FadeNodeState
 {
 	uint Flags;
@@ -121,8 +104,7 @@ static const uint kFadeVerdictServiced = 1u << 2;
 static const uint kFadeVerdictDrawn = 1u << 3;
 static const uint kFadeFlagSettled = 1u << 15;
 
-// A root's state until FadeStateCS's first update of its generation (T6b1a): its seed's, the node as the frame's values sampled it
-// (Records.h, FadeSeedRow), else the row's (the coordinator's, from its mirror).
+// A root's state until FadeStateCS's first update of its generation: its seed (FrameValues, FadeSeedRow), else the row's.
 FadeNodeState SeedState(uint a_root, FadeRootStatic a_row)
 {
 	if (FadeSeedsIndex != 0) {
@@ -136,8 +118,7 @@ FadeNodeState SeedState(uint a_root, FadeRootStatic a_row)
 	return a_row.Initial;
 }
 
-// Whether a fade root slot (~0u: none) is not fully faded in: its state row's fade, or its seed's until FadeStateCS's first update
-// of a new generation.
+// Whether a fade root slot (~0u: none) is not fully faded in.
 bool RootFading(uint a_root)
 {
 	if (a_root == 0xFFFFFFFFu)
@@ -149,14 +130,12 @@ bool RootFading(uint a_root)
 	return (state.Generation == row.Generation ? state.CurrentFade : SeedState(a_root, row).CurrentFade) < 1.0;
 }
 
-// A LOD skin's partitions (DrawInput::lodPartitions, byte L the mask of LOD level L) at its root's level in FadeStateCS's state
-// (FUN_14147a430's level, +0x152 & 0xF), the row GetRenderPasses gives every view's pass; the input's partitions word (every
-// level's) without the state, or for any other input.
+// A LOD skin's partitions (DrawInput::lodPartitions, byte L = level L's mask) at its root's level (FUN_14147a430's level,
+// +0x152 & 0xF), as GetRenderPasses gives every view's pass; a_partitions when there is no state or LOD.
 //
-// a_copy: while the root crosses levels (+0x153 & 0x70 not 0x20), GetRenderPasses' hint-10 copy (T1c): the single-level row L,
-// LOD byte L alone (the cumulative row L+1 less row L), drawn with the cross-fade factor (+0x14C) on its alpha. Its stencil
-// test (mode 0xB: the reference int(blend * 31) GREATER than the stencil, which is 0 outside, a room's index + 1 inside) is
-// taken as outside's: drawn while int(blend * 31) > 0. A main view's alone (a_main): the shadow views' passes have no copy.
+// a_copy: while the root crosses levels (+0x153 & 0x70 not 0x20), GetRenderPasses' hint-10 copy: row L+1 less row L, drawn with
+// the cross-fade factor (+0x14C) on its alpha. Its stencil test (mode 0xB: ref int(blend * 31) GREATER than the stencil, 0
+// outside, room index + 1 inside) is taken as outside's: drawn while int(blend * 31) > 0. Main views only.
 uint LodPartitions(uint a_partitions, uint a_lod, uint a_root, bool a_main, out uint a_copy)
 {
 	a_copy = 0;
@@ -175,10 +154,9 @@ uint LodPartitions(uint a_partitions, uint a_lod, uint a_root, bool a_main, out 
 	return mask == 0 && a_copy == 0 ? (1u << 8) : mask;  // kNoPartitions (declared below)
 }
 
-// Whether BSFadeNode::OnVisible stops at a fade root slot (~0u: none) for a culling process without cameraRelatedUpdates
-// (Precipitation::SetupMask's, Skylighting's occlusion map): with fades on, a root that is not settled goes on into its
-// children only while its fade is above 0 and its fadeAmount is not 0 - the fade as the main camera's cull leaves it, which
-// FadeStateCS keeps for every listed root.
+// Whether BSFadeNode::OnVisible stops at a fade root (~0u: none) for a culling process without cameraRelatedUpdates
+// (Precipitation::SetupMask, Skylighting's occlusion map): an unsettled root recurses only while its fade (as the main camera's
+// cull leaves it) is above 0 and its fadeAmount is not 0.
 bool FadedOutOfOcclusion(uint a_root)
 {
 	if (a_root == 0xFFFFFFFFu)
@@ -194,71 +172,61 @@ bool FadedOutOfOcclusion(uint a_root)
 	return !(state.CurrentFade > 0.0) || row.FadeAmount == 0.0;
 }
 
-// The execution's values, from the latch (BuildDrawsLatch): read once per thread at the top of main. The
-// first three words of the latch are this dispatch's own indirect arguments.
+// The execution's values, from the latch (BuildDrawsLatch), read at the top of main. Its first three words are this dispatch's
+// indirect arguments.
 static uint DrawCount;
-// Bits 0-3 are the mode (0 off, 1 frustum, 2 frustum then the HZB), bits 4-7 the phase (from the push
-// constants), and bit 9 NoNearPlane.
+// Bits 0-3 mode (0 off, 1 frustum, 2 frustum then HZB), 4-7 phase (push constants), bit 9 NoNearPlane.
 static uint CullFlags;
-// Stamps the verdicts this frame publishes. A word that does not carry the current stamp was not
-// written this frame, and the colour segment then treats the object as visible rather than trusting a
-// stale verdict. Visible is the safe default: drawing something the depth passes did not cover means
-// the colour draw's EQUAL test fails and the native pass shades it, while believing a stale "hidden"
-// would drop an object that has depth and no other draw left to shade it.
+// Stamps this frame's verdicts. A word without the current stamp is treated as visible by the colour segment: a needless draw
+// fails its EQUAL test, while a stale "hidden" would drop an object that has depth and nothing else to shade it.
 static uint VisibilityStamp;
-// The HZB covers a power-of-two area that is larger than the rendered image, so a texture coordinate in
-// the image is NOT one in the HZB. This is the ratio between them, per axis, as 16-bit fixed point.
-// Leaving it out makes the culling sample the padding, which is all far plane, and the HZB then looks
-// uniformly empty however correctly it was built.
+// The HZB covers a power-of-two area larger than the image: this is the image-to-HZB UV ratio per axis, 16-bit fixed point.
+// Without it the test samples the far-plane padding and the HZB looks empty.
 static uint HzbUvScalePacked;
-// The main pass's view-projection with the camera translation already folded into it, so a bound's
-// absolute world position projects directly.
+// The main pass's view-projection with the camera translation folded in: absolute world positions project directly.
 static float4x4 ViewProj;
-// A shadow view's caster volume, as the engine culls its casters (NiCullingProcess::customCullPlanes):
-// absolute world space, (normal, constant), inside where dot(normal, p) - constant >= 0. CullPlaneMask says
-// which are tested; it is 0 for the main camera.
+// A shadow view's caster volume (NiCullingProcess::customCullPlanes): absolute world (normal, constant), inside where
+// dot(normal, p) - constant >= 0. CullPlaneMask selects the tested planes; 0 for the main camera.
 static uint CullPlaneMask;
 static float4 CullPlanes[6];
-// A shadow view's row of the pipeline map, in bytes into the latch block: its inputs name key slots, and
-// the row holds each slot's pipeline under the view's rasterizer state (depth bias, culling). 0 when the
-// inputs name pipelines themselves (the main camera).
+// A shadow view's pipeline map row (latch bytes): its inputs name key slots, the row gives each slot's pipeline under the view's
+// rasterizer state. 0 when inputs name pipelines themselves (main camera).
 static uint PipelineMapOffset;
-// The main colour pass: kSunTestOn when the sun test applies, and the frame's cascades, in bytes into the latch block
-// (a count, then per cascade its two plane masks and 12 planes: Core/GpuLayouts.h, SunAccumulation::GpuCascade).
+// Main colour pass: kSunTestOn when the sun test applies, and the cascades' latch offset (a count, then per cascade two plane
+// masks and 12 planes: GpuLayouts.h, GpuCascade).
 static uint SunState;
 static const uint kSunTestOn = 0x80000000u;
 static uint SunCascadeOffset;
-// A view of the sun: the frame's full-frustum processes, in bytes into the latch block (a count, then per process its plane
-// mask and 6 planes: Core/GpuLayouts.h, SunEntryProcess), shared by the slot's sun views. 0: no entry test.
+// A sun view: the full-frustum processes' latch offset (a count, then per process a plane mask and 6 planes: SunEntryProcess),
+// shared by the slot's sun views. 0: no entry test.
 static uint SunEntryOffset;
 static const uint kSunRegionHeader = 16;
 static const uint kSunCascadeBytes = 208;
 static const uint kSunEntryProcessBytes = 112;
-// The colour pass: the frame's local shadow lights, in bytes into the latch block (a count, then per volume its two plane
-// masks, the light's mask bit and landscape flag, its sphere and 12 planes: Core/GpuLayouts.h, GpuShadowVolume). 0: none tested.
+// Colour pass: local shadow lights' latch offset (a count, then per volume two plane masks, mask bit, landscape flag, sphere and
+// 12 planes: GpuShadowVolume). 0: none tested.
 static uint LocalShadowOffset;
 static const uint kShadowVolumeBytes = 224;
-// The depth segment: the main camera's position and its LOD factor, the fade test's (kObjectFadeTest).
+// Depth segment: the main camera's position and LOD factor (kObjectFadeTest).
 static float4 FadeEye;
-// The depth segment: the tree height test's base and limit (kObjectHeightTest); the limit is +infinity when it is off.
+// Depth segment: the tree height test's base and limit (kObjectHeightTest); limit +infinity when off.
 static float2 TreeHeight;
-// A shadow view: its bucket table, in bytes into the latch block (BuildDrawsLatch::bucketTableOffset): the view's map row names
-// a bucket for each key slot, and the table gives each bucket its range of the slot's sequences (first, capacity). 0 elsewhere.
+// A shadow view's bucket table (latch bytes): its map row names a bucket per key slot, the table gives each bucket its sequence
+// range (first, capacity). 0 elsewhere.
 static uint BucketTableOffset;
-// The depth segment's phases: each pipeline slot's bucket, in bytes into the latch block (BuildDrawsLatch::bucketMapOffset).
+// Depth phases: each pipeline slot's bucket (latch bytes).
 static uint BucketMapOffset;
-// The view types this dispatch draws (BuildDrawsLatch::viewBits, kView* in GpuLayouts.h); 0: every input.
+// The view types this dispatch draws (kView*); 0: every input.
 static uint ViewBits;
-// A focus view (BuildDrawsLatch::focusRoot): its target's fade root slot + 1, which the input's root word must name. 0: no test.
+// A focus view: its target's fade root slot + 1, which the input's root word must name. 0: no test.
 static uint FocusRoot;
-// T7c1, the depth segment while Terrain Blending holds the terrain (BuildDrawsLatch::terrainNear): its eye, and in w its near distance;
-// w 0: no terrain test.
+// Depth segment while Terrain Blending holds the terrain: its eye, and in w its near distance (0: no terrain test).
 static float4 TerrainNear;
-// T7c1, the colour segment: the terrain groups' ranges past PhaseTwoBase (BuildDrawsLatch::terrainCapacity), group 2's after group 1's.
+// Colour segment: the terrain groups' range sizes past PhaseTwoBase, group 2's after group 1's.
 static uint2 TerrainCapacity;
 
-// The placement row's rows the culling reads (LightingConstants.h, BindlessPlacement): the world bound, the sun entry's sphere,
-// the fade node's centre, and the forward sort's (T7d's ordered-node interleave: the nearest BSOrderedNode's centre, the ordinal).
+// The placement rows the culling reads (BindlessPlacement): world bound, sun entry sphere, fade node centre, and the forward
+// sort's (nearest BSOrderedNode's centre, ordinal).
 struct PlacementRows
 {
 	float4 rows[10];
@@ -267,10 +235,10 @@ static const uint kObjectBoundRow = 6;
 static const uint kObjectSunEntryRow = 7;
 static const uint kObjectFadeNodeRow = 8;
 static const uint kObjectForwardSortRow = 9;
-// StructuredBuffer of the 160-byte placement rows (DCLFObjects.hlsli, BindlessPlacement), the frame's (the latch's placementsIndex,
-// read at LoadLatch): an input's bound, sun entry and fade node are its object's row (a move rewrites the row, never the inputs).
+// StructuredBuffer of the frame's 160-byte placement rows (BindlessPlacement): an input's bound, sun entry and fade node are its
+// object's row (a move rewrites the row, never the inputs).
 static uint PlacementsIndex;
-// The payload's buffers (BuildDrawsLatch::payloadValid): a payload ring entry's when the latch names one, else the pass's own.
+// The payload's buffers: the payload ring entry's when the latch names one, else the pass's own.
 static uint InputsBuffer;
 static uint GeometriesBuffer;
 static uint MaterialRowsLo;
@@ -304,8 +272,7 @@ void LoadLatch()
 	SunCascadeOffset = sunRegions.x;
 	SunEntryOffset = sunRegions.y;
 	LocalShadowOffset = sunRegions.z;
-	// The depth segment's phases each have their table (BuildDrawsLatch::bucketTableOffset, phaseTwoBucketTableOffset), and
-	// share the pipeline slots' map to the buckets (bucketMapOffset).
+	// Each depth phase has its own bucket table; they share the slot-to-bucket map.
 	BucketTableOffset = latch.Load(LatchOffset + (((PhaseBits >> 4) & 0xFu) == 2 ? 244 : 236));
 	BucketMapOffset = latch.Load(LatchOffset + 248);
 	FadeStatesIndex = latch.Load(LatchOffset + 240);
@@ -326,9 +293,8 @@ void LoadLatch()
 	PipelineRowsHi = ring ? rows.w : PipelineRowsAddressHi;
 }
 
-// Light Limit Fix's shadow mask of an input, as the main pass's light selection gives it (LocalShadowLights): the local
-// shadow lights whose sphere its bound meets and whose shadowmap descriptor's planes it is inside, less the ones a landscape
-// property does not take.
+// Light Limit Fix's shadow mask of an input, as the main pass's selection (LocalShadowLights): local shadow lights whose sphere
+// its bound meets and whose planes it is inside, less those a landscape property does not take.
 uint LocalShadowMask(float3 a_centre, float a_radius, bool a_landscape)
 {
 	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
@@ -358,9 +324,8 @@ uint LocalShadowMask(float3 a_centre, float a_radius, bool a_landscape)
 	return mask;
 }
 
-// A synthetic pass whose pipeline carries the sun's bits (kObjectSunTest): whether its bound meets any of this
-// frame's cascades, with SunAccumulation's sphere test (outside a plane when dot(n, c) - d < -r) against each
-// cascade's planes and custom planes, as the engine's cascade culls used them.
+// kObjectSunTest: whether the bound meets any cascade, with SunAccumulation's sphere test (outside when dot(n, c) - d < -r)
+// against each cascade's planes and custom planes, as the engine's cascade culls.
 bool InSunCascades(float3 a_centre, float a_radius)
 {
 	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
@@ -382,8 +347,7 @@ bool InSunCascades(float3 a_centre, float a_radius)
 	return false;
 }
 
-// A view of the sun: whether an entry sphere is outside every one of the frame's full-frustum processes (the slot's sun entry
-// region, Core/GpuLayouts.h: BuildDrawsLatch::sunEntryOffset, OutsideSunEntryProcesses). None: no verdict here.
+// A sun view: whether an entry sphere is outside every full-frustum process (OutsideSunEntryProcesses). None: no verdict.
 bool OutsideSunEntry(float4 a_entry)
 {
 	if (SunEntryOffset == 0)
@@ -408,9 +372,8 @@ bool OutsideSunEntry(float4 a_entry)
 	return true;
 }
 
-// The draw's pipeline: the input's own, or - a shadow view - its key slot's bucket through the view's row of the map.
-// kNoPipeline when the row has none, which the CPU never lets an input reach; the draw is then dropped
-// rather than executed with an index outside the set.
+// The draw's pipeline: the input's own, or (shadow view) its key slot's through the view's map row. kNoPipeline (which the CPU
+// never lets an input reach) drops the draw rather than execute an index outside the set.
 static const uint kNoPipeline = 0xFFFFFFFFu;
 uint DrawPipeline(uint a_input)
 {
@@ -421,124 +384,99 @@ uint DrawPipeline(uint a_input)
 }
 
 uint CullMode() { return CullFlags & 0xF; }
-// 1: the depth segment's first phase, against the HZB left by the previous frame. 2: its second phase,
-// against the HZB just rebuilt from this frame's depth, over what phase 1 rejected. 3: the colour segment,
-// which does not test anything and just reads what the two phases decided.
+// 1: depth phase 1, against the previous frame's HZB. 2: depth phase 2, against the HZB rebuilt from this frame's depth, over
+// what phase 1 rejected. 3: the colour segment, which only reads what the two phases decided.
 uint CullPhase() { return (CullFlags >> 4) & 0xF; }
 static const uint kPhaseSingle = 0;
 static const uint kPhaseOne = 1;
 static const uint kPhaseTwo = 2;
 static const uint kPhaseColour = 3;
 
-// Visibility values. Frustum rejection is final - nothing about a later depth buffer can bring an object
-// back inside the frustum - while an occlusion rejection in phase 1 is provisional, because phase 1 tested
-// against a depth buffer from the previous frame.
+// Visibility values. Frustum rejection is final; a phase 1 occlusion rejection is provisional (previous frame's depth).
 static const uint kVisibilityOccludedRetest = 0;
 static const uint kVisibilityVisible = 1;
 static const uint kVisibilityRejectedFinal = 2;
 // Written only by the colour segment, for an object it drew without a verdict published this frame.
 static const uint kVisibilityUnpublished = 3;
-// The word: the verdict in bits 0-1, whether the depth segment drew the object (bit 2) and whether the colour
-// segment did (bit 3), and the stamp above them. The two drawn bits are what CS_DCLF_SET_PARITY reads back: an
-// object with depth and no colour, or colour and no depth, is visible damage.
+// The word: verdict in bits 0-1, depth-drawn (bit 2), colour-drawn (bit 3), the stamp above. CS_DCLF_SET_PARITY reads the drawn
+// bits back: depth without colour, or colour without depth, is visible damage.
 static const uint kVisibilityVerdictMask = 3;
 static const uint kVisibilityDepthDrawn = 4;
 static const uint kVisibilityColourDrawn = 8;
 static const uint kVisibilityStampShift = 4;
-// A clamped shadow view (render mode 0xE) pancakes what lies in front of its near plane onto it
-// (Utility.hlsl: RENDER_SHADOWMAP_CLAMPED), so a caster there still writes depth and must be kept.
+// A clamped shadow view (render mode 0xE) pancakes casters in front of its near plane onto it (RENDER_SHADOWMAP_CLAMPED): keep them.
 bool NoNearPlane() { return (CullFlags & 0x200) != 0; }
-// Which caster class a shadow view draws (Core/GpuLayouts.h: kCullCastersOnly, kCullVolumetricOnly): a view of
-// the volumetric lighting copy draws the volumetric-only casters alone, every other shadow view the rest.
+// Caster class (kCullCastersOnly, kCullVolumetricOnly): the volumetric lighting copy's views draw only the volumetric-only casters,
+// every other shadow view the rest.
 bool CastersOnly() { return (CullFlags & 0x400) != 0; }
 bool VolumetricOnly() { return (CullFlags & 0x800) != 0; }
-// A view of the sun: an input whose entry is outside the sun's full-frustum processes is none of its casters
-// (Core/GpuLayouts.h: kCullSunEntry).
+// A sun view: an input whose entry is outside the full-frustum processes is not a caster (kCullSunEntry).
 bool SunEntry() { return (CullFlags & 0x1000) != 0; }
-// Skylighting's size test, for its occlusion map's view (Core/GpuLayouts.h: kCullMinRadius): a bound radius of 32 or less draws
-// nothing, as Skylighting::OcclusionTechnique has it.
+// Skylighting's occlusion map view (kCullMinRadius): a bound radius of 32 or less draws nothing (OcclusionTechnique).
 bool MinRadius() { return (CullFlags & 0x2000) != 0; }
-// The occlusion map's view (kCullFadeOnVisible): its occluders' fade roots as BSFadeNode::OnVisible tests them without
-// cameraRelatedUpdates (FadedOutOfOcclusion), instead of a shadow view's fading test (RootFading).
+// The occlusion map view (kCullFadeOnVisible): fade roots tested as OnVisible without cameraRelatedUpdates (FadedOutOfOcclusion),
+// not RootFading.
 bool FadeOnVisible() { return (CullFlags & 0x4000) != 0; }
-// A LOD cross-fade copy partition's draw (T1c: LodPartitions), in the object word's bit 30: the pixel stage takes the cross-fade factor
-// for its alpha instead of the fade (Lighting.hlsl, DCLFAlphaFade).
+// Object word bit 30: a LOD cross-fade copy draw (LodPartitions); the pixel stage uses the cross-fade factor as alpha (DCLFAlphaFade).
 static const uint kObjectCrossfadeCopy = 1u << 30;
-// The key word a view reads of an input (GpuLayouts.h: kCullKeyShift): 0 its pipeline word and its rows' word (the main segments,
-// the reflection); otherwise a shadow view's, whose material row is the input's shadowRow - 1 a caster's key (ViewWords::shadowKey),
-// 2 and 3 an occlusion map's (occlusionKey[0], [1]). The shadow list holds every mode's casters and occluders once (U4b).
+// The key word a view reads (kCullKeyShift): 0 the pipeline and rows words (main segments, reflection); otherwise a shadow view's
+// (material row = shadowRow): 1 a caster's key (ViewWords::shadowKey), 2 and 3 an occlusion map's (occlusionKey[0], [1]).
 uint KeyWord() { return (CullFlags >> 16) & 3; }
 
 // Object flags (Records.h), as the draw input carries them.
-// A synthetic main pass with the sun's bits (Records.h), and the object word's mark for a draw that misses every
-// cascade (kObjectSunMiss), which the pixel stage reads (DCLFObjects.hlsli).
+// A synthetic main pass with the sun's bits, and the object word's mark for a draw that misses every cascade (read by the pixel stage).
 static const uint kObjectSunTest = 1u << 26;
 static const uint kObjectSunMiss = 1u << 31;
-// The object word's local shadow lights (Records.h: kObjectLocalShadowShift), and a landscape property's flag, whose selection
-// takes only the lights that take landscape (kObjectLandscapeLights).
+// The object word's local shadow lights, and a landscape property's flag (only lights that take landscape).
 static const uint kObjectLocalShadowShift = 26;
 static const uint kObjectLandscapeLights = 1u << 29;
 static const uint kObjectMember = 1u << 30;
-// An object under a fade root with a fade-out distance (Records.h): the depth segment's first phase drops it past that distance
-// unless it was in view last frame, where its root's state has no OnVisible of the frame before to go by.
+// Under a fade root with a fade-out distance: phase 1 drops it past that distance unless it was in view last frame (used when
+// its root's state has no previous OnVisible).
 static const uint kObjectFadeTest = 1u << 27;
-// The object's fade root has faded out (Records.h): nothing of it is drawn, but its frustum stamp is still written, so the
-// feedback keeps servicing the root and it can fade back in.
-// A resident tree (Records.h): phase 1 drops it where BSTreeNode::OnVisible's height test would.
+// A resident tree: phase 1 drops it where BSTreeNode::OnVisible's height test would.
 static const uint kObjectHeightTest = 1u << 28;
-// A volumetric-only caster (Records.h), drawn only by the views of the volumetric lighting copy.
+// A volumetric-only caster, drawn only by the volumetric lighting copy's views.
 static const uint kObjectVolumetricOnly = 1u << 23;
-// A decal, with its group (1 = the engine's opaque decal group, 2 = the blended one) in bits 20-21.
-// Decals are never occluders: they are not submitted to the depth segment at all, and the colour segment
-// tests them ONCE, here, against the HZB rebuilt at the end of this frame's depth segment - which is final
-// by then - and writes their sequences to fixed slots (DecalBase) rather than appending them, so
-// that overlapping decals are drawn in the engine's order every frame.
+// A decal, group in bits 20-21 (1 = the engine's opaque decal group, 2 = blended). Never occluders or depth inputs: the colour
+// segment tests them once against this frame's final HZB and writes fixed slots (DecalBase), so overlapping decals draw in the
+// engine's order.
 static const uint kObjectDecal = 1u << 7;
 static const uint kObjectDecalGroupShift = 20;
-// T7c1: the same bits without kObjectDecal are a terrain group (Records.h, ObjectTerrainGroup): 1 Terrain Blending's terrain, 2 the
-// meshes it redraws after it. The colour segment appends each group's draws to its own range (in phase 2's, which the colour segment
-// does not otherwise use: GpuLayouts.h, kTerrainGroups), drawn after the opaque and decal groups; the depth segment sends
-// a group 1 draw whose bound reaches within Terrain Blending's near distance to its bucket's twin (kBucketTerrainPair).
+// The same bits without kObjectDecal are a terrain group (ObjectTerrainGroup): 1 Terrain Blending's terrain, 2 the meshes it
+// redraws after. The colour segment appends each group to its own range (in phase 2's range, unused there: kTerrainGroups),
+// drawn after opaque and decals; the depth segment sends a group 1 draw within the near distance to its bucket's twin.
 uint TerrainGroup(uint a_flags) { return (a_flags & kObjectDecal) != 0 ? 0 : (a_flags >> kObjectDecalGroupShift) & 3; }
 static const uint kBucketTerrainPair = 0x80000000u;
-// T7d: a blended Lighting object the forward epoch draws (Records.h, kObjectForward). Like a decal it is no occluder and no depth
-// segment input (its view mask is kViewForward alone): the colour segment culls it once, here (the frustum, then the HZB the depth
-// segment rebuilt from this frame's depth), and appends each visible draw to the forward range's staging half with its view depth;
-// ForwardSortCS.hlsl writes them back to front into the sorted half, which the forward epoch draws after the deferred composite.
+// A blended Lighting object drawn by the forward epoch. Like a decal, no occluder or depth input: the colour segment culls it once
+// (frustum, then this frame's HZB) and stages each visible draw with its view depth; ForwardSortCS.hlsl sorts back to front.
 static const uint kObjectForward = 0x80000000u;
-// T7d's refraction: a forward input whose view mask is kViewRefraction (GpuLayouts.h: its key's kRasterRefraction) is a refraction object.
-// Culled as a forward input (and by its root's fade verdict, as phase 1 does: the engine registers nothing under a root its OnVisible
-// stops at), its draws go to the refraction range, pooled; RefractionDrawPass draws them into the refraction normals (Utility.hlsl,
-// DCLF_REFRACTION). No sort: the engine draws its group 5 by its batches, and the draw neither blends nor writes depth.
+// A refraction object (kRasterRefraction): culled as a forward input plus its root's fade verdict (the engine registers nothing
+// under a root its OnVisible stops at); draws go pooled to the refraction range (RefractionDrawPass). No sort: the engine draws
+// group 5 by batches, and the draw neither blends nor writes depth.
 static const uint kViewRefraction = 1u << 10;
-// T7e's first-person forward part: the first-person view (its latch's view bits kViewFirstPerson, the single phase) culls a forward
-// input as its other inputs (the frustum), and its slots' map sends a forward slot to the forward range's table entry with
-// kBucketForward: the draw is a main-format sequence (the main set's colour pipeline, StoreSequence) staged with its sort key there,
-// which ForwardSortCS.hlsl writes back to front into the range's sorted half (IndirectDraws: FirstPerson.cpp).
+// First-person forward: the first-person view (single phase) frustum-culls a forward input, and its slot map sends a forward slot
+// to the forward range with kBucketForward: a main-format sequence staged with its sort key for ForwardSortCS (FirstPerson.cpp).
 static const uint kViewFirstPerson = 1u << 11;
 static const uint kBucketForward = 0x40000000u;
-// TerrainBlending.cpp's test, exactly: a block is in its terrain depth unless its bound's nearest point is past the distance.
+// TerrainBlending.cpp's test exactly: a block is in its terrain depth unless its bound's nearest point is past the distance.
 bool TerrainNearOf(float4 a_bound) { return distance(a_bound.xyz, TerrainNear.xyz) - a_bound.w <= TerrainNear.w; }
-// Set by the epoch rather than by the object: this input carries a usable bindings record, so a sequence
-// may be written for it. The depth segment submits an input for EVERY candidate so that the culling covers
-// them all and the published visibility is complete, but it only builds records for the ones it is allowed
-// to draw - which is what the native loop is skipping. The rest are cull-only.
+// Set by the epoch: this input may get a sequence. The depth segment submits every candidate so the published visibility is
+// complete; the rest are cull-only.
 static const uint kInputDrawable = 1u << 16;
 
 // Counter words in the count buffer (zeroed before the dispatch).
 static const uint kCountDrawn = 0;          // sequences written
 static const uint kCountCulled = 4;         // rejected by this frame's culling
 static const uint kCountTested = 8;         // looked at by the culling at all
-// What a shadow view drops before its culling: inputs of its caster class, then those outside the sun's entry processes, at
-// most the minimum radius, under a stood-in root fading (an occlusion map's view: under a root its OnVisible stops at).
+// What a shadow view drops before culling: wrong caster class, outside the sun entry, at most the minimum radius, under a fading
+// root (occlusion map: a root its OnVisible stops at).
 static const uint kCountSunEntryOut = 12;
 static const uint kCountMinRadius = 16;
 static const uint kCountRootFading = 20;
 static const uint kCountCasterClass = 64;
-// Words 3-5 and 16 are free (they counted against the engine's own culling, which no longer marks the objects).
 static const uint kCountOccluded = 24;      // rejected by the HZB rather than by the frustum
-// What the HZB actually held under the objects that were tested, so that a suspicious rejection count can
-// be told apart from an HZB that is uniformly empty or uniformly full without a texture readback.
+// What the HZB held under tested objects, to tell a suspicious rejection count from an empty or full HZB without a readback.
 static const uint kCountHzbNear = 28;       // the footprint's farthest depth was ~0: the build wrote nothing
 static const uint kCountHzbFar = 32;        // it was ~1: all far plane, so nothing can ever be occluded
 static const uint kCountHzbSampled = 36;    // footprints sampled, to give the two above a denominator
@@ -562,42 +500,41 @@ static const uint kCountSunMissed = 96;
 // The fade test: inputs under a fade root phase 1 found in the frustum, and those it dropped.
 static const uint kCountFadeTested = 100;
 static const uint kCountFadeHidden = 104;
-// T7c1: the terrain groups' draws (their draws' counts, zeroed by the colour commit), then phase 1's terrain group 1 inputs and those
-// it found near (GpuLayouts.h, kCountTerrainGroupWord).
+// The terrain groups' draw counts (zeroed by the colour commit), then phase 1's terrain group 1 inputs and those found near
+// (kCountTerrainGroupWord).
 static const uint kCountTerrainGroup1 = 112;
 static const uint kCountTerrainNearTested = 120;
 static const uint kCountTerrainNear = 124;
-// T7d: the forward range's draws (the forward epoch's count, zeroed by the colour commit), then the forward inputs the colour segment
-// tested, those inside the frustum and those the HZB rejected (GpuLayouts.h, kCountForwardWord).
+// The forward draw count (zeroed by the colour commit), then forward inputs tested, in the frustum, HZB-rejected (kCountForwardWord).
 static const uint kCountForward = 128;
 static const uint kCountForwardTested = 132;
 static const uint kCountForwardInView = 136;
 static const uint kCountForwardOccluded = 140;
-// T7d's refraction: the refraction range's draws (its draw's count, zeroed by the colour commit), then the refraction inputs the colour
-// segment tested, those inside the frustum and those the HZB or their root's fade rejected (GpuLayouts.h, kCountRefractionWord).
+// The refraction draw count (zeroed by the colour commit), then refraction inputs tested, in the frustum, rejected by HZB or fade
+// (kCountRefractionWord).
 static const uint kCountRefraction = 144;
 static const uint kCountRefractionTested = 148;
 static const uint kCountRefractionInView = 152;
 static const uint kCountRefractionOccluded = 156;
 
-// The frustum stamp's word: the stamp in the low 28 bits (the latch's), and whether the fade test dropped the object in
-// that frame. The visibility feedback compares the low bits (PrimaryCull::ConsumeFeedback).
+// The frustum stamp word: the stamp in the low 28 bits, and whether the fade test dropped the object that frame
+// (VisibilityEventsCS.hlsl compares the low bits).
 static const uint kFrustumStampMask = 0x0FFFFFFFu;
 static const uint kFrustumFadeHidden = 0x80000000u;
 
-// The pipelines a sort distinguishes: the pipeline sets' capacity (DrawPipelines::kMaxPipelines). A rank word holds the key
-// in its top 12 bits and the rank among the key's sequences below (IndirectDraws caps the draws' range at kSortRankLimit).
+// Sort keys: the pipeline sets' capacity (DrawPipelines::kMaxPipelines). A rank word holds the key in its top 12 bits and the
+// rank below (the draws' range is capped at kSortRankLimit).
 static const uint kSortKeys = 4096;
 static const uint kSortRankBits = 20;
 
-// DrawInput: 64 bytes (pipeline/record/geometry/flags, the world-space bounding sphere, the object index, the
+// DrawInput (Core/GpuLayouts.h): 64 bytes (pipeline/record/geometry/flags, the world-space bounding sphere, the object index, the
 // decal ordinal, the skin partitions to draw, the GeometryDraw of a second vertex stream or ~0, and the fade row:
 // the entry root's centre and the fade-out distance, for kObjectFadeTest).
 static const uint kInputStride = 64;
-// GeometryDraw: 40 bytes (vertex buffer view, index buffer view, index count, first index, next partition).
+// GeometryDraw (Core/GpuLayouts.h): 40 bytes (vertex buffer view, index buffer view, index count, first index, next partition).
 static const uint kGeometryStride = 40;
-// A skin of several partitions is one object drawn once per partition the engine would draw: the input's
-// mask names them (bit i = partition i), and each partition's GeometryDraw links to the next one's.
+// A multi-partition skin draws once per partition the engine would: the input's mask names them (bit i = partition i), and
+// each partition's GeometryDraw links to the next.
 static const uint kMaxPartitions = 8;
 static const uint kNoPartition = 0xFFFFFFFFu;
 // The mask of a skin whose LOD level draws none of its partitions (Records.h): no draw at all.
@@ -605,14 +542,13 @@ static const uint kNoPartitions = 1u << 8;
 // A chain (Records.h, kPartitionChain): every slot linked from the first, the count in the low bits (object LOD's visible ranges).
 static const uint kPartitionChain = 1u << 15;
 static const uint kPartitionChainCount = kPartitionChain - 1;
-// DrawSequence: 92 bytes, 4-byte packed. Words 1-5 are the root constants (the pipeline row's address, the material row's,
+// DrawSequence (Records.h): 92 bytes, 4-byte packed. Words 1-5 are the root constants (the pipeline row's address, the material row's,
 // then the object index), which is why the object index sits between the rows' addresses and the vertex buffer.
 // The second vertex buffer view (slot 1) is a face shape's positions (FaceSnapshots), else the first again.
 static const uint kSequenceStride = 92;
 static const uint kIndexFormatR16 = 57;  // DXGI_FORMAT_R16_UINT
 static const uint kNoStream = 0xFFFFFFFFu;
 
-// One sequence at a slot of the dispatch's sequence buffer.
 void StoreSequence(RWByteAddressBuffer sequences, uint slot, uint pipeline, uint4 rows, uint objectIndex, uint4 vertexBuffer,
 	uint4 streamBuffer, uint4 indexBuffer, uint indexCount, uint firstIndex)
 {
@@ -627,9 +563,8 @@ void StoreSequence(RWByteAddressBuffer sequences, uint slot, uint pipeline, uint
 	sequences.Store(base + 88, 0);
 }
 
-// A shadow view's sequence: StoreSequence's, its draw a plain indexed draw (ShadowViewPass) from the index pool - its first
-// index the pool's copy of its geometry's (a_poolFirst, ~0 for a geometry without one: no indices), no vertex offset, so the
-// vertex stage's index is the geometry's own, which it fetches the vertex of - and the bucket slot as its first instance.
+// A shadow view's sequence: a plain indexed draw (ShadowViewPass) from the index pool (a_poolFirst, ~0: no indices), no vertex
+// offset so the vertex stage fetches by the geometry's own index, and the bucket slot as first instance.
 void StoreShadowSequence(RWByteAddressBuffer sequences, uint slot, uint instance, uint4 rows, uint objectIndex, uint4 vertexBuffer,
 	uint4 streamBuffer, uint4 indexBuffer, uint indexCount, uint firstIndex, uint a_poolFirst)
 {
@@ -639,15 +574,13 @@ void StoreShadowSequence(RWByteAddressBuffer sequences, uint slot, uint instance
 	sequences.Store(slot * kSequenceStride + 88, instance);
 }
 
-// A 64-bit address: a table's base plus a 32-bit offset, with the carry.
 uint2 AddressOf(uint a_lo, uint a_hi, uint a_offset)
 {
 	const uint lo = a_lo + a_offset;
 	return uint2(lo, a_hi + (lo < a_lo ? 1 : 0));
 }
 
-// An input's rows (its y: the pipeline row in the high 12 bits, the material row in the low 20): their addresses, the
-// draw's first four push words.
+// An input's rows (y: pipeline row high 12 bits, material row low 20) as addresses: the draw's first four push words.
 uint4 RowsOf(uint a_rows)
 {
 	const uint2 pipelineRow = PipelineRowStride ? AddressOf(PipelineRowsLo, PipelineRowsHi, (a_rows >> 20) * PipelineRowStride) : uint2(0, 0);
@@ -655,11 +588,9 @@ uint4 RowsOf(uint a_rows)
 	return uint4(pipelineRow, materialRow);
 }
 
-// T7d: a staged forward draw's sort key, in three words nothing executes there (ForwardSortCS.hlsl reads and puts them back): its view
-// depth (the bound centre's clip w, the view axis distance: the engine's blended sort key, FUN_1414e8fc0) in firstInstance. T7d's
-// ordered-node interleave: a leaf of a BSOrderedNode's group is sorted at its node's centre (BindlessPlacement::forwardSort, its ordinal
-// in w), where the engine's blended draw places the whole group; its node (a hash of that centre, the same bits for every leaf of the
-// group) and its ordinal go in instanceCount and vertexOffset.
+// A staged forward draw's sort key, in three words ForwardSortCS.hlsl reads and restores: view depth (clip w, the engine's blended
+// sort key, FUN_1414e8fc0) in firstInstance. A BSOrderedNode group's leaf sorts at its node's centre (forwardSort, ordinal in w),
+// where the engine places the whole group; the node (a hash of that centre) and ordinal go in instanceCount and vertexOffset.
 void StageForwardKey(RWByteAddressBuffer sequences, uint a_slot, uint a_object)
 {
 	const float4 forwardSort = ObjectRow(a_object, kObjectForwardSortRow);
@@ -673,15 +604,9 @@ void StageForwardKey(RWByteAddressBuffer sequences, uint a_slot, uint a_object)
 	sequences.Store(stagedAt + 88, asuint(isnan(clipW) ? 0.0 : clipW));  // a NaN would break the rank
 }
 
-// The bounding sphere's world-space AABB, projected corner by corner. The box contains the sphere, so
-// every test built on it errs towards keeping the object: an object is only rejected when all eight
-// corners are outside the same clip plane, which no visible object can be.
-//
-// The tests are on the homogeneous coordinates, before any divide (-w <= x <= w, -w <= y <= w, 0 <= z <= w):
-// each is linear in the point, so it holds for a corner behind the eye (w <= 0) as for one in front, and an
-// object wholly behind the camera is outside the near plane. (It used to keep any object with a corner behind
-// the eye, which kept everything behind the main camera, whose culling has no world-space planes: at Riverwood
-// about 2,600 objects a frame, which the HZB could not test either.)
+// The bounding sphere's world AABB, projected corner by corner: rejected only when all eight corners are outside one clip plane.
+// Tests are on homogeneous coordinates before any divide, linear in the point, so they hold for corners behind the eye (w <= 0),
+// and an object wholly behind the camera fails the near plane (nothing else would reject it).
 bool Culled(float3 boundCentre, float boundRadius)
 {
 	const float3 centre = boundCentre;
@@ -706,8 +631,7 @@ bool Culled(float3 boundCentre, float boundRadius)
 	return any(planes != 0) || any(depthPlanes != 0);
 }
 
-// Occlusion against the HZB (HzbTest.hlsli), with the dispatch's counters: what the HZB held under the objects tested, and one
-// rejection in full.
+// Occlusion against the HZB (HzbTest.hlsli), with diagnostic counters.
 bool Occluded(float3 boundCentre, float boundRadius)
 {
 	HzbView view;
@@ -728,9 +652,7 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	else if (result.Farthest >= 0.9999)
 		counters.InterlockedAdd(kCountHzbFar, 1, scratch);
 
-	// One sample of a rejection, so that a suspicious count can be read rather than guessed at: what the
-	// HZB held, what the object's nearest corner was, where it was sampled and at which level. Written by
-	// whichever thread gets there first; only the first rejection of the dispatch lands.
+	// The dispatch's first rejection in full (HZB value, nearest corner, UV range, mip), so a suspicious count can be read.
 	if (result.Occluded) {
 		uint previous;
 		counters.InterlockedCompareExchange(kSampleTaken, 0, 1, previous);
@@ -745,17 +667,16 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	return result.Occluded;
 }
 
-// The visibility feedback's word for a phase 1 input its frustum (and portal) test kept: this frame's stamp, and whether its root's
-// fade dropped it (the engine's cull does not go on into the children of a root whose OnVisible stops). Its fade test's drop, returned.
-// Counted (kCountFadeTested, kCountFadeHidden) for the depth segment's own inputs alone.
+// Stamps the visibility feedback word of a phase 1 input that passed the frustum (and portal) test, with whether its root's fade
+// dropped it (the engine's cull does not recurse past a root whose OnVisible stops); returns that drop. a_count: own inputs only.
 bool StampFrustum(ByteAddressBuffer a_inputs, uint a_inputOffset, uint a_flags, uint a_objectIndex, bool a_count)
 {
 	RWByteAddressBuffer count = ResourceDescriptorHeap[CountIndex];
 	uint scratch;
 	bool fadeHidden = false;
 	RWByteAddressBuffer frustumStamps = ResourceDescriptorHeap[FrustumIndex];
-	// An input under a fade root: its root's OnVisible of the frame before (FadeStateCS, a frame ahead), as the engine's cull
-	// would have decided whether to go on into the children. Every listed root's (T1a): DCLF's state is authoritative.
+	// Under a fade root: the root's previous OnVisible verdict (FadeStateCS), as the engine's cull decides whether to recurse.
+	// DCLF's state is authoritative.
 	const uint fadeRoot = a_inputs.Load(a_inputOffset + 48);
 	bool serviced = false;
 	if (fadeRoot != 0xFFFFFFFFu && FadeRootsIndex != 0) {
@@ -773,16 +694,15 @@ bool StampFrustum(ByteAddressBuffer a_inputs, uint a_inputOffset, uint a_flags, 
 			}
 		}
 	}
-	// A root the update did not service (out of view then, or listed since): BSFadeNode::OnVisible snaps the fade of a root
-	// that was not in view last frame to 0 past its fade-out distance (kObjectFadeTest), and keeps it at 0 once it has, so
-	// the draw is dropped. The fade node's centre is the record's, its fade-out distance the input's (fade.w: structural).
+	// An unserviced root (out of view, or newly listed): BSFadeNode::OnVisible snaps the fade of a root not in view last frame to 0
+	// past its fade-out distance and keeps it there, so the draw is dropped. Centre from the record, distance from the input.
 	const float4 fade = float4(ObjectRow(a_objectIndex, kObjectFadeNodeRow).xyz, asfloat(a_inputs.Load(a_inputOffset + 60)));
 	if (!serviced && (a_flags & kObjectFadeTest) != 0 && fade.w != 0.0 && FadeEye.w != 0.0) {
 		const uint previous = frustumStamps.Load(a_objectIndex * 4);
 		const bool wasInView = (previous & kFrustumStampMask) == ((VisibilityStamp - 1) & kFrustumStampMask);
 		const bool wasHidden = wasInView && (previous & kFrustumFadeHidden) != 0;
-		// FUN_14147b110: the distance to the root's centre, scaled by the camera's LOD factor over the LOD type's
-		// divisor (folded into a positive distance), or by a constant (a negative one).
+		// FUN_14147b110: distance to the root's centre, scaled by the camera's LOD factor over the LOD type's divisor (folded into a
+		// positive distance), or by a constant (a negative one).
 		const float distance = length(fade.xyz - FadeEye.xyz) * (fade.w > 0.0 ? FadeEye.w : 1.0);
 		fadeHidden = distance > abs(fade.w) && (!wasInView || wasHidden);
 		if (a_count) {
@@ -795,9 +715,8 @@ bool StampFrustum(ByteAddressBuffer a_inputs, uint a_inputOffset, uint a_flags, 
 	return fadeHidden;
 }
 
-// The main camera's cull of an object before the HZB, as phase 1 makes it (the frustum, then the portals and occluders its root is
-// culled through: the engine's Process1 on the member, after its root's, PortalPrograms.hlsli; an object with no fade root, the frustum
-// alone). T7f: the visibility feedback's verdict for the main inputs no depth segment input carries (kStampOnlyViews).
+// The main camera's cull before the HZB: the frustum, then the portals and occluders its root is culled through (the engine's
+// Process1 on the member after its root's; PortalPrograms.hlsli). Also the feedback verdict for kStampOnlyViews inputs.
 bool MainFrustumRejected(ByteAddressBuffer a_inputs, uint a_inputOffset, float4 a_bound)
 {
 	if (Culled(a_bound.xyz, a_bound.w))
@@ -812,10 +731,8 @@ bool MainFrustumRejected(ByteAddressBuffer a_inputs, uint a_inputOffset, float4 
 	return PortalTest(portalPrograms, rootPrograms[portalRoot], a_bound.xyz, a_bound.w, false, false, false) == 0;
 }
 
-// T7f (drawcall-limit-fix.md, "T7f: what kAccumulated means"): the main inputs that are no depth segment input - a decal's
-// (kViewDecal), a forward object's (kViewForward), a refraction object's (kViewRefraction), which the colour segment culls once - still
-// take the main camera's cull as any object's for kAccumulated: phase 1 stamps their frustum verdict and nothing else (no draw, no
-// visibility word, no counter). GpuLayouts.h's bits.
+// Decal, forward and refraction inputs (culled once by the colour segment) still need the main camera's cull for kAccumulated
+// (drawcall-limit-fix.md): phase 1 stamps their frustum verdict and nothing else. GpuLayouts.h's bits.
 static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 
 [numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
@@ -833,10 +750,9 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 
 	const uint inputOffset = draw * kInputStride;
 	const uint4 input = inputs.Load4(inputOffset);  // pipeline index, record index, geometry index, flags
-	// The view types this dispatch draws (BuildDrawsLatch::viewBits) against what the object takes part in (DrawInput's view mask):
-	// the scene is one, a view is a mask. Before anything else of the input is read.
+	// This dispatch's view types against the input's view mask (one scene, a view is a mask), before reading anything else.
 	if (ViewBits != 0 && (inputs.Load(inputOffset + 16) & ViewBits) == 0) {
-		// T7f: a decal, forward or refraction input's frustum verdict, in phase 1 (kStampOnlyViews).
+		// kStampOnlyViews: phase 1 stamps the frustum verdict.
 		if (FrustumIndex != 0 && CullPhase() == kPhaseOne && (inputs.Load(inputOffset + 16) & kStampOnlyViews) != 0) {
 			const uint stampObject = inputs.Load(inputOffset + 32);
 			if (CullMode() == 0 || !MainFrustumRejected(inputs, inputOffset, ObjectRow(stampObject, kObjectBoundRow)))
@@ -848,15 +764,14 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 	if (FocusRoot != 0 && inputs.Load(inputOffset + 48) != FocusRoot - 1)
 		return;
 	const uint objectIndex = inputs.Load(inputOffset + 32);
-	// The view's key and rows' words (KeyWord): a shadow view's are the view words' key of its family and the shadow row.
+	// The view's key and rows words (KeyWord): a shadow view's are its family's key and the shadow row.
 	const uint keyWord = KeyWord();
 	const uint drawKey = keyWord != 0 ? inputs.Load(inputOffset + 16 + keyWord * 4) : input.x;
 	const uint rowsWord = keyWord != 0 ? inputs.Load(inputOffset + 52) : input.y;
 	if (drawKey == 0xFFFFFFFFu)
 		return;  // no key in the view's family: never an input its mask lets through
-	// The word the draw's root constants carry: the object index, and kObjectSunMiss when a synthetic pass with the
-	// sun's bits meets no cascade this frame. Tested and counted for every such input, drawn or not, so the count
-	// compares with the CPU's over the same inputs.
+	// The draw's object word: the object index, plus kObjectSunMiss when a sun-test pass meets no cascade. Counted for every such
+	// input, drawn or not, to compare with the CPU's count.
 	uint objectWord = objectIndex;
 	if ((SunState & kSunTestOn) != 0 && (input.w & kObjectSunTest) != 0) {
 		uint sunScratch;
@@ -872,7 +787,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		const float4 bound = ObjectRow(objectIndex, kObjectBoundRow);
 		objectWord |= (LocalShadowMask(bound.xyz, bound.w, (input.w & kObjectLandscapeLights) != 0) & 0xFu) << kObjectLocalShadowShift;
 	}
-	// The drawable bit is the main family's (a scene entry's main part, U4c): a shadow view draws every input its bits select.
+	// The drawable bit is the main family's; a shadow view draws every input its bits select.
 	const bool drawable = keyWord != 0 || (input.w & kInputDrawable) != 0;
 	uint scratch;
 	const uint phase = CullPhase();
@@ -883,8 +798,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		return;
 	if (phase == kPhaseSingle)
 		count.InterlockedAdd(kCountCasterClass, 1, scratch);
-	// The sun's entry rule: the input's entry sphere (its fade row, Epochs/ShadowEpochs.cpp: SetSunEntryRow) outside every full-frustum
-	// process of the frame.
+	// The sun entry rule: the entry sphere (SetSunEntryRow) outside every full-frustum process.
 	if (SunEntry() && OutsideSunEntry(ObjectRow(objectIndex, kObjectSunEntryRow))) {
 		count.InterlockedAdd(kCountSunEntryOut, 1, scratch);
 		return;
@@ -893,26 +807,22 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		count.InterlockedAdd(kCountMinRadius, 1, scratch);
 		return;
 	}
-	// A shadow view's caster under a fading root, whose fade is FadeStateCS's: the engine casts no fading caster
-	// (ShadowReject::Faded, fade * materialAlpha < 1; the CPU's verdict takes the material's alpha alone), nor one under a
-	// root faded out.
+	// A caster under a fading or faded-out root (FadeStateCS's fade): the engine casts no fading caster (ShadowReject::Faded,
+	// fade * materialAlpha < 1; the CPU's verdict takes the material's alpha alone).
 	if (phase == kPhaseSingle && FadeRootsIndex != 0 &&
 		(FadeOnVisible() ? FadedOutOfOcclusion(inputs.Load(inputOffset + 48)) : RootFading(inputs.Load(inputOffset + 48)))) {
 		count.InterlockedAdd(kCountRootFading, 1, scratch);
 		return;
 	}
 
-	// T7c1: the <- TB NEAR observer's tally - phase 1's terrain group 1 inputs, culled or not, and those within the near distance - which
-	// the CPU repeats over the same inputs (IndirectDraws::Impl::ReadCullCounters).
+	// The <- TB NEAR observer's tally of phase 1's terrain group 1 inputs, repeated by the CPU (ReadCullCounters).
 	if (phase == kPhaseOne && TerrainNear.w > 0.0 && TerrainGroup(input.w) == 1) {
 		count.InterlockedAdd(kCountTerrainNearTested, 1, scratch);
 		if (TerrainNearOf(ObjectRow(objectIndex, kObjectBoundRow)))
 			count.InterlockedAdd(kCountTerrainNear, 1, scratch);
 	}
 
-	// Decals: single-phase, fixed slot. Every decal input writes its slot, culled or not, so nothing a
-	// previous frame left there can be executed: a culled or undrawable decal writes the same sequence
-	// with an index count of zero, which the indirect draw fetches and skips.
+	// Decals: fixed slots. Every decal writes its slot, culled or not (index count 0), so nothing stale is ever executed.
 	const uint decalGroup = keyWord == 0 && (input.w & kObjectDecal) ? (input.w >> kObjectDecalGroupShift) & 3 : 0;
 	if (decalGroup != 0) {
 		if (phase != kPhaseColour && phase != kPhaseSingle)
@@ -930,9 +840,8 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		}
 		const uint4 rows = RowsOf(input.y);
 		const uint decalStreamIndex = inputs.Load(inputOffset + 44);
-		// T7e's blood decals: a skinned decal of several partitions (a BSTempEffectGeometryDecal copies its actor's dismember skin) takes a
-		// slot per partition from its ordinal (SceneStore::OrderDecals, DecalSpanOf: the partitions' encoding in the input's word +40), each
-		// its partition's geometry along the GeometryDraw links; a partition its mask leaves out writes a zero-count draw, as a culled decal.
+		// Blood decals: a multi-partition skinned decal (BSTempEffectGeometryDecal copies its actor's dismember skin) takes a slot per
+		// partition from its ordinal (OrderDecals, DecalSpanOf; encoding in word +40); a partition its mask leaves out writes a zero-count draw.
 		const uint decalPartitions = inputs.Load(inputOffset + 40);
 		const bool decalChain = (decalPartitions & kPartitionChain) != 0;
 		const uint decalSpan = decalChain ? (decalPartitions & kPartitionChainCount) :
@@ -958,10 +867,10 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		return;
 	}
 
-	// T7d: a forward input's culling, once, in the colour segment (kObjectForward); its visibility word as a decal's.
+	// A forward input is culled once, in the colour segment; its visibility word as a decal's.
 	const bool forwardInput = keyWord == 0 && (input.w & kObjectForward) != 0;
 	const bool refractionInput = forwardInput && (inputs.Load(inputOffset + 16) & kViewRefraction) != 0;
-	// T7e: the first-person view's forward input is culled below with the view's others (its draw takes the map's forward entry).
+	// The first-person view's forward input is culled below with its other inputs.
 	const bool firstPersonForward = forwardInput && !refractionInput && phase == kPhaseSingle && (ViewBits & kViewFirstPerson) != 0;
 	if (forwardInput && !firstPersonForward) {
 		if (phase != kPhaseColour || (refractionInput ? RefractionCapacity == 0 || PoolFirstsIndex == 0 : ForwardCapacity == 0))
@@ -979,8 +888,8 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 				}
 			}
 		}
-		// A refraction object's normals are not faded by its root (GetRenderPasses' refraction pass takes no alpha): one under a root whose
-		// OnVisible stopped (FadeStateCS's verdict, serviced and not drawn) is not drawn at all, as the engine registers nothing there.
+		// Refraction normals take no root fade (GetRenderPasses' refraction pass has no alpha): under a root whose OnVisible stopped
+		// (serviced, not drawn) nothing is drawn, as the engine registers nothing there.
 		if (refractionInput && !forwardCulled && FadeRootsIndex != 0 && FadeStatesIndex != 0) {
 			const uint refractionRoot = inputs.Load(inputOffset + 48);
 			if (refractionRoot != 0xFFFFFFFFu) {
@@ -999,11 +908,8 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 			return;
 	}
 
-	// Phase 2 only revisits what phase 1 provisionally rejected, and the colour segment tests nothing at
-	// all - it draws what the two phases decided. Reading the decision rather than repeating it is what
-	// keeps the depth and colour passes drawing the same set; the colour pass tests depth EQUAL, so an
-	// object it draws without matching depth is invisible, and one the depth pass writes without a colour
-	// draw is a hole that the native pass can no longer fill.
+	// Phase 2 revisits only phase 1's provisional rejections; the colour segment draws what the phases decided. Reading the decision
+	// keeps depth and colour drawing the same set: under EQUAL, colour without depth is invisible, depth without colour is a hole.
 	const uint published = visibility.Load(objectIndex * 4);
 	const bool publishedThisFrame = (published >> kVisibilityStampShift) == VisibilityStamp;
 	const uint verdict = publishedThisFrame ? (published & kVisibilityVerdictMask) : kVisibilityVisible;
@@ -1017,10 +923,9 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		// Word 2 separates "the culling rejected nothing" from "the culling did not run".
 		count.InterlockedAdd(kCountTested, 1, scratch);
 		const float4 bound = ObjectRow(objectIndex, kObjectBoundRow);  // centre (world), radius
-		// Phase 2 has already had its frustum answer from phase 1 and only revisits occlusion.
+		// Phase 2 only revisits occlusion.
 		frustumRejected = phase != kPhaseTwo && Culled(bound.xyz, bound.w);
-		// The portals and occluders the main camera culls through (its room's compound frustum, or unbound space's): the engine's
-		// Process1 on the member, after its root's (PortalPrograms.hlsli). An object with no fade root: the frustum alone.
+		// The portals and occluders the main camera culls through (as MainFrustumRejected).
 		if (!frustumRejected && phase == kPhaseOne && PortalProgramsIndex != 0 && RootProgramsIndex != 0) {
 			const uint portalRoot = inputs.Load(inputOffset + 48);
 			if (portalRoot != 0xFFFFFFFFu) {
@@ -1037,8 +942,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		}
 		cullRejected = frustumRejected || occlusionRejected;
 	}
-	// The visibility feedback: the frustum alone (occlusion does not stop the engine's OnVisible), for every candidate
-	// phase 1 tests, drawable or not (StampFrustum).
+	// The visibility feedback: frustum only (occlusion does not stop the engine's OnVisible), every phase 1 candidate.
 	bool fadeHidden = false;
 	if (FrustumIndex != 0 && phase == kPhaseOne && !frustumRejected)
 		fadeHidden = StampFrustum(inputs, inputOffset, input.w, objectIndex, true);
@@ -1047,15 +951,12 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		const float3 root = ObjectRow(objectIndex, kObjectFadeNodeRow).xyz;
 		fadeHidden = fadeHidden || root.z - TreeHeight.x > TreeHeight.y;
 	}
-	// A final verdict, like the frustum's: the colour segment reads it, and phase 2 never revisits it.
+	// Final, like the frustum's: phase 2 never revisits it.
 	cullRejected = cullRejected || fadeHidden;
 
-	// Whether this dispatch appends a draw for the object: past the culling, and with bindings.
 	const bool draws = !cullRejected && drawable;
 
-	// Publish the decision, and whether the depth segment drew the object. Phase 1 writes one for every
-	// candidate, so the buffer is completely rewritten each frame and nothing stale survives into the colour
-	// segment.
+	// Publish the decision and the depth-drawn bit. Phase 1 writes every candidate, so nothing stale survives into the colour segment.
 	if (phase == kPhaseOne || phase == kPhaseTwo) {
 		const uint decided = (frustumRejected || fadeHidden) ? kVisibilityRejectedFinal :
 			(occlusionRejected ? (phase == kPhaseOne ? kVisibilityOccludedRetest : kVisibilityRejectedFinal) : kVisibilityVisible);
@@ -1063,7 +964,6 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 		if (phase == kPhaseTwo && !occlusionRejected)
 			count.InterlockedAdd(kCountRescuedByPhaseTwo, 1, scratch);
 	}
-	// The colour segment marks what it draws, in the same word.
 	if (phase == kPhaseColour && draws && !forwardInput) {
 		if (publishedThisFrame)
 			visibility.InterlockedOr(objectIndex * 4, kVisibilityColourDrawn, scratch);
@@ -1073,15 +973,12 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 
 	if (cullRejected)
 		return;
-	// Cull-only inputs carry no bindings record, so there is nothing to draw even though the object is
-	// visible and its visibility has been published.
+	// Cull-only inputs have nothing to draw.
 	if (!drawable)
 		return;
 	const uint pipeline = DrawPipeline(drawKey);  // a shadow view's: the draw's bucket
-	// A draw's bucket: a shadow view's is its pipeline map entry (above); the depth segment's is its pipeline slot's (the rows' top
-	// 12 bits) in the slots' map, the group of slots sharing its depth pipeline (MainOpaquePass), kNoPipeline for a slot with none.
-	// A reflection face's likewise, its map sending a LOD slot to the bucket of its forward pipeline and every other slot to none
-	// (IndirectDraws::ExecuteReflection): whoever's latch names a slots' map.
+	// A draw's bucket: a shadow view's is its pipeline map entry; with a slot map (depth segment, reflection faces), the pipeline slot's
+	// (rows' top 12 bits) entry: the group sharing its depth pipeline, or a reflection's forward pipeline for LOD slots; kNoPipeline: none.
 	uint bucketKey = pipeline;
 	if (BucketMapOffset != 0) {
 		ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
@@ -1089,26 +986,23 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 	}
 	if (pipeline == kNoPipeline || bucketKey == kNoPipeline)
 		return;
-	// T7e: the first-person view's forward entry (kBucketForward): the forward input's alone; an opaque input never reaches it, nor a
-	// forward input another entry.
+	// kBucketForward entries take forward inputs only, and forward inputs only those.
 	const bool forwardBucket = BucketMapOffset != 0 && (bucketKey & kBucketForward) != 0;
 	bucketKey &= ~kBucketForward;
 	if (forwardBucket != firstPersonForward)
 		return;
-	// T7c1: a terrain group 1 slot's bucket and its twin (PlanZBuckets): a near block's draws go to the twin, which MainOpaquePass
-	// draws into Terrain Blending's terrain depth and, offset, into the main depth; a far block's to the bucket, the main depth alone -
-	// as Terrain Blending's depth hook draws them.
+	// Terrain group 1's bucket and twin (PlanZBuckets): near blocks go to the twin (drawn into Terrain Blending's depth and, offset,
+	// the main depth), far blocks to the bucket (main depth alone), as Terrain Blending's depth hook does.
 	if ((bucketKey & kBucketTerrainPair) != 0) {
 		bucketKey &= ~kBucketTerrainPair;
 		if (TerrainNear.w > 0.0 && TerrainNearOf(ObjectRow(objectIndex, kObjectBoundRow)))
 			bucketKey += 1;
 	}
-	// T7c1: the colour segment's terrain groups append to their own ranges, outside the sort (TerrainGroup).
+	// The colour segment's terrain groups append to their own ranges, unsorted.
 	const uint terrainGroup = phase == kPhaseColour && keyWord == 0 ? TerrainGroup(input.w) : 0;
-	// Phase 2's sequences are few and draw from their own range; they are not sorted.
+	// Phase 2's sequences are few and draw from their own range, unsorted.
 	const bool secondRange = phase == kPhaseTwo;
 	const bool sorted = SortCountsIndex != 0 && !secondRange;
-	// A shadow view's bucket: its range of the slot's sequences.
 	uint2 bucket = uint2(0, 0);
 	if (BucketTableOffset != 0) {
 		ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
@@ -1117,19 +1011,16 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 	if (sorted && pipeline >= kSortKeys)
 		return;  // outside the sets, like kNoPipeline; before any slot is taken, so the sorted range has no hole
 
-	// The draw's rows' addresses (its push data).
 	const uint4 rows = RowsOf(rowsWord);
 
-	// One draw of the input's geometry, or - for a skin of several partitions - one per partition its mask
-	// names, walking the partitions' GeometryDraw links. Every draw is the same object: one record, one
-	// visibility word, one verdict.
+	// One draw per partition the mask names (walking the GeometryDraw links); all are one object with one visibility word.
 	uint copyPartitions;
 	const uint basePartitions = LodPartitions(inputs.Load(inputOffset + 40), inputs.Load(inputOffset + 56), inputs.Load(inputOffset + 48), keyWord == 0, copyPartitions);
 	if (basePartitions == kNoPartitions)
 		return;
-	// A LOD skin's cross-fade copy partitions are drawn with the rest, each marked in its object word (kObjectCrossfadeCopy).
+	// Cross-fade copy partitions draw with the rest, marked kObjectCrossfadeCopy.
 	const uint partitions = basePartitions | copyPartitions;
-	// The second stream, the same for every partition: a face shape's positions are the whole shape's.
+	// The second stream is the same for every partition (a face shape's positions are the whole shape's).
 	const uint streamIndex = inputs.Load(inputOffset + 44);
 	const uint4 stream = streamIndex != kNoStream ? geometries.Load4(streamIndex * kGeometryStride) : uint4(0, 0, 0, 0);
 	uint geometryIndex = input.z;
@@ -1143,16 +1034,12 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 			const uint4 indexBuffer = geometries.Load4(geometryOffset + 16);  // address lo, hi, size, index count
 			const uint firstIndex = geometries.Load(geometryOffset + 32);
 
-			// Phase 2 appends into a reserved part of the same buffer, with a counter of its own, because its
-			// draw is recorded separately and the offset a recorded draw starts at has to be known on the CPU.
-			// The range holds every draw the epoch can produce; the guard keeps a phase inside its own range regardless.
+			// Each range holds every draw it can receive; the guards keep each inside its own range regardless.
 			const uint4 secondStream = streamIndex != kNoStream ? stream : vertexBuffer;
 			uint slot;
 			if (BucketTableOffset != 0) {
-				// A shadow view's or the depth segment's: the bucket's next slot, counted in its own word. One plain indexed indirect draw
-				// with the bucket's pipeline executes the range (ShadowViewPass, MainOpaquePass); the slot is the draw's instance, by
-				// which the vertex stage finds the sequence (Utility.hlsl, Lighting.hlsl: DCLF_PULLED). The table sizes every bucket for
-				// all the draws its key slots (a shadow view's) or its pipeline slot's objects (the depth segment's) can produce.
+				// Bucketed (shadow view, depth segment): the bucket's next slot. One plain indexed indirect draw per bucket executes the range
+				// (ShadowViewPass, MainOpaquePass); the slot is the instance by which the pulled vertex stage finds the sequence (DCLF_PULLED).
 				RWByteAddressBuffer bucketCounts = ResourceDescriptorHeap[BucketCountsIndex];
 				bucketCounts.InterlockedAdd(bucketKey * 4, 1, slot);
 				if (slot < bucket.y) {
@@ -1160,8 +1047,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 					count.InterlockedAdd(phase == kPhaseTwo ? kCountDrawnPhaseTwo : kCountDrawn, 1, drawn);
 					ByteAddressBuffer poolFirsts = ResourceDescriptorHeap[PoolFirstsIndex];
 					if (forwardBucket) {
-						// T7e: the first-person forward range's staging half: a main-format sequence (the main set's colour pipeline, drawn through the
-						// colour signature) with its sort key, as the colour segment stages its forward draws (below).
+						// First-person forward staging: a main-format sequence with its sort key, as the colour segment's forward draws below.
 						StoreSequence(sequences, bucket.x + slot, pipeline, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
 						StageForwardKey(sequences, bucket.x + slot, objectIndex);
 					} else {
@@ -1170,8 +1056,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 					}
 				}
 			} else if (refractionInput) {
-				// T7d's refraction: the refraction range, which holds every draw the refraction slots can produce; a pooled sequence, its slot
-				// its first instance (StoreShadowSequence's), by which the pulled vertex stage finds it (Utility.hlsl, DCLF_REFRACTION).
+				// The refraction range: a pooled sequence, its slot the instance the pulled vertex stage finds it by (DCLF_REFRACTION).
 				count.InterlockedAdd(kCountRefraction, 1, slot);
 				if (slot >= RefractionCapacity)
 					return;
@@ -1179,16 +1064,14 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 				StoreShadowSequence(sequences, ForwardBase + 2 * ForwardCapacity + slot, slot, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
 					firstIndex, refractionFirsts.Load(geometryIndex * 4));
 			} else if (forwardInput) {
-				// T7d: the forward range's staging half, which holds every draw the forward slots can produce; the draw's view depth (the
-				// bound centre's clip w, the view axis distance: the engine's blended sort key, FUN_1414e8fc0) in its firstInstance word,
-				// which ForwardSortCS.hlsl reads and clears.
+				// The forward range's staging half, with the sort key (StageForwardKey).
 				count.InterlockedAdd(kCountForward, 1, slot);
 				if (slot >= ForwardCapacity)
 					return;
 				StoreSequence(sequences, ForwardBase + slot, pipeline, rows, drawWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
 				StageForwardKey(sequences, ForwardBase + slot, objectIndex);
 			} else if (terrainGroup != 0) {
-				// A terrain group's range (GpuLayouts.h, kTerrainGroups), which holds every draw its group's slots can produce.
+				// A terrain group's range (kTerrainGroups).
 				count.InterlockedAdd(kCountTerrainGroup1 + (terrainGroup - 1) * 4, 1, slot);
 				if (slot >= (terrainGroup == 1 ? TerrainCapacity.x : TerrainCapacity.y))
 					return;
@@ -1202,8 +1085,7 @@ static const uint kStampOnlyViews = (1u << 8) | (1u << 9) | (1u << 10);
 					RWByteAddressBuffer sortCounts = ResourceDescriptorHeap[SortCountsIndex];
 					RWByteAddressBuffer staging = ResourceDescriptorHeap[SortStagingIndex];
 					RWByteAddressBuffer ranks = ResourceDescriptorHeap[SortRanksIndex];
-					// The scatter reads the key back from the rank word (the key in the top 12 bits, the rank in the low 20: a rank
-					// is under PhaseTwoBase, which IndirectDraws keeps within them), so that the key need not be a field of the sequence.
+					// The scatter reads the key back from the rank word (key top 12 bits, rank low 20: PhaseTwoBase is kept within them).
 					const uint key = pipeline;
 					uint rank;
 					sortCounts.InterlockedAdd(key * 4, 1, rank);

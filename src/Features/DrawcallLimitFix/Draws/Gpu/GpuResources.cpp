@@ -1,3 +1,5 @@
+// GpuResources: the buffer registries' resolution and leases, each instance on its owner's thread (see the header).
+
 #include "GpuResources.h"
 
 #include <chrono>
@@ -134,7 +136,7 @@ namespace DCLF
 		std::vector<DxvkOrgInteropResourceInfo> infos(keys.size());
 		std::vector<HRESULT> results(keys.size(), E_FAIL);
 		if (!RenderGraphRuntime::Get().DescribeResources(wanted, infos, results)) {
-			// No batched export: Acquire resolves each as before.
+			// No batched export: Acquire resolves each one by one.
 			for (auto* key : keys)
 				prefetched.erase(key);
 			return;

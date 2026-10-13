@@ -76,10 +76,9 @@ namespace DCLF
 		static constexpr const char* kNames[3] = { "colour", "zprepass", "shadow" };
 		for (std::size_t i = 0; i < stats.async.size(); ++i) {
 			auto& a = stats.async[i];
-			if (!a.builtInline && !a.used)
+			if (!a.used)
 				continue;
-			text += fmt::format("[DCLF] {} epochs: {} committed the payload built ahead with their publication, {} built at the epoch (bindless parity)\n",
-				kNames[i], a.used, a.builtInline);
+			text += fmt::format("[DCLF] {} epochs: {} committed the payload built ahead with their publication\n", kNames[i], a.used);
 			if (i == kAsyncZPrepass)
 				text += fmt::format("[DCLF] frame slots supplied from an earlier capture (6e E5): {}\n", std::exchange(impl->frameSlotsCarried, 0));
 			a = {};

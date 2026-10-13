@@ -10,66 +10,8 @@
 // The views' epochs' report lines (taken by IndirectDraws::AsyncReport): the forward epoch and the effects, the reflection faces, the
 // first-person view, the accumulated visibility, the shadow capability.
 
-namespace DCLF::Scene
-{
-	std::uintptr_t HiddenStoreSiteAt(std::uint32_t a_index);
-}
-
 namespace DCLF
 {
-	namespace
-	{
-		/** @brief The residue by the furthest stage its geometries reached, with their ages since tracked and the stale verdicts' shows. */
-		std::string ResidueStageReport(const Diagnostics::ResidueClasses& a_classes)
-		{
-			std::uint64_t total = 0;
-			for (const auto count : a_classes.stages)
-				total += count;
-			if (!total)
-				return {};
-			auto histogram = [](const auto& a_buckets) {
-				std::string text;
-				for (std::size_t b = 0; b < a_buckets.size(); ++b)
-					if (a_buckets[b])
-						text += fmt::format("{}{}:{}", text.empty() ? "" : " ", Scene::kAgeBucketNames[b], a_buckets[b]);
-				return text.empty() ? std::string("-") : text;
-			};
-			std::string text = fmt::format("[DCLF] residue by stage (T6b0): {} passes", total);
-			for (std::size_t s = 0; s < Diagnostics::kStageCount; ++s) {
-				if (!a_classes.stages[s])
-					continue;
-				text += fmt::format("; {} {} ({:.0f}%, frames since tracked {})", a_classes.stages[s], Diagnostics::kStageNames[s], 100.0 * a_classes.stages[s] / total,
-					histogram(a_classes.ages[s]));
-				if (s == Diagnostics::kStageWaiting) {
-					std::string why;
-					for (std::size_t w = 0; w < a_classes.waitingBy.size(); ++w)
-						if (a_classes.waitingBy[w])
-							why += fmt::format("{}{}:{}", why.empty() ? "" : " ", w, a_classes.waitingBy[w]);
-					text += " [reasons " + why + "]";
-				}
-				if (s == Diagnostics::kStageUnbound) {
-					std::string why;
-					for (std::size_t w = 0; w < a_classes.unboundBy.size(); ++w)
-						if (a_classes.unboundBy[w])
-							why += fmt::format("{}{} {}", why.empty() ? "" : ", ", w ? PrimaryCull::kSyntheticFailNames[w] : "no failed membership pass", a_classes.unboundBy[w]);
-					for (std::size_t r = 0; r < a_classes.unboundJoin.size(); ++r)
-						if (a_classes.unboundJoin[r])
-							why += fmt::format("; join verdict {} {}", r ? kIneligibleNames[r] : "none", a_classes.unboundJoin[r]);
-					text += " [" + why + "]";
-				}
-				if (s == Diagnostics::kStageHiddenStale) {
-					std::string sites;
-					for (const auto& [site, count] : a_classes.staleSites)
-						sites += fmt::format("{}{} {}", sites.empty() ? "" : ", ", site == ~0u ? std::string("no show seen") : fmt::format("{:#x}", Scene::HiddenStoreSiteAt(site)), count);
-					text += fmt::format(" [last show by: {}; frames since it {}]", sites, histogram(a_classes.sinceShow));
-				}
-				if (!a_classes.stageFirst[s].empty())
-					text += " (first: " + a_classes.stageFirst[s] + ")";
-			}
-			return text + "\n";
-		}
-	}
-
 	std::string IndirectDraws::ForwardReport()
 	{
 		if (!impl)
@@ -152,7 +94,7 @@ namespace DCLF
 		// The faces' cameras against the engine's at their draws, and the LOD roots the engine did not cull.
 		const auto roots = ReflectionFaces::TakeRootStats();
 		const auto residue = PassCapture::Get().TakeReflectionResidue();
-		std::string residueKinds, residueStages;
+		std::string residueKinds;
 		{
 			const auto classes = Diagnostics::TakeResidueClasses();
 			for (std::size_t k = 0; k < Diagnostics::kResidueKinds; ++k) {
@@ -167,8 +109,6 @@ namespace DCLF
 			}
 			if (!residueKinds.empty())
 				residueKinds += fmt::format("; {} geometries, {} of them on 10 frames or more]", classes.seen.size(), classes.persistent);
-			if (Diagnostics::Observe().timeline)
-				residueStages = ResidueStageReport(classes);
 		}
 		auto& parity = Diagnostics::DrawsState::Get().faceCameras;
 		text += fmt::format("[DCLF] reflection faces (T4: DCLF's cameras, the engine's tree LOD root skipped; T6b6: its LOD land and objects roots while gated): {} updates, {} without the "
@@ -178,7 +118,6 @@ namespace DCLF
 			roots.updates, roots.treeSkipped, roots.lodSkipped, parity.faces, parity.blocks, parity.slices, parity.registers, parity.largest,
 			parity.blocks || parity.slices ? " <- FACE CAMERA" : (parity.faces ? " <- OK" : ""), parity.first.empty() ? "" : " (first: " + parity.first + ")",
 			residue.treePasses, residue.treePasses ? " <- REFLECTION RESIDUE" : "", residue.lodPasses, residue.first.empty() ? "" : " (first: " + residue.first + ")", residueKinds);
-		text += residueStages;
 		parity = {};
 		reflection.facesCaptured = reflection.updates = reflection.epochs = reflection.facesDrawn = reflection.lateFaces = 0;
 		reflection.skipped = {};

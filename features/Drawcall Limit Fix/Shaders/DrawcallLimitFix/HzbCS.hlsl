@@ -25,6 +25,7 @@
 // take: its mip 5 is wider than the last group's 64x64. HzbPass then splits the chain, each dispatch reading
 // the previous one's last level (FromDepth 0).
 
+// Must match HzbConstants (Draws/IndirectDraws/Passes/PassHelpers.h).
 cbuffer HzbConstants : register(b0)
 {
 	uint SourceIndex;   // FromDepth: Texture2D<float> of the scene depth. Otherwise RWTexture2D<float> of an HZB level.

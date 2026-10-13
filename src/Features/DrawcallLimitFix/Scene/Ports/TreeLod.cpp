@@ -1,3 +1,6 @@
+// Tree LOD: the hooks on the refill, block update, AddGroup and RemoveGroup (any thread; events onto TreeLod::events), the refill's
+// packing rule, and the render thread's Mirror (Drain, slots, mesh leases) the depth commit uploads from.
+
 #include "Features/DrawcallLimitFix/Scene/Ports/TreeLod.h"
 
 #include "Features/DrawcallLimitFix/Runtime/KeptState.h"

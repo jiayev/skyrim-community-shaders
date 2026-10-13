@@ -4,6 +4,7 @@
 // pipeline's first slot plus its rank, so the draw executes each pipeline's draws together and switches pipeline once per
 // pipeline rather than per draw. Every slot of [0, count) is written exactly once.
 
+// Must match SortSequencesConstants (Draws/IndirectDraws/Main/FrameLayout.h).
 cbuffer SortSequencesConstants : register(b0)
 {
 	uint StagingIndex;    // ByteAddressBuffer: DrawSequence[DrawLimit], as BuildDrawsCS appended them

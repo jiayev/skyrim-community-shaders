@@ -39,7 +39,7 @@ it ([dclf-async-publication.md](./dclf-async-publication.md)).
 
 | Point in the frame | Render thread | Coordinator and pool | GPU |
 | --- | --- | --- | --- |
-| `Main::Draw`, before the main cull (`BeginSceneFrame`) | Joins the last scene work, applies the toggles, hands the tables over, selects the newest scene revision (`SelectRevision`) and the newest publication it covers (`SelectPublication`), then installs its claims, list filter and sun exclusion, or withdraws the set (below). Kicks the frame's values (`FrameValues::Kick`: placements, palettes, shading, and the payload ring entry the epochs read) and the scene work | **Scene work**: the frame's events applied, the walk, the set's commit; then the publication, its payloads built ahead on the pool (`BuildAhead`), and the revision's shapes (`MakeRevisionShapes`) | The frame values' uploads, on the copy queue |
+| `Main::Draw`, before the main cull (`FrameDriver::BeginFrame`) | Applies the toggles, adopts the newest complete snapshot the snapshot builder posted (`IndirectDraws::AdoptSnapshot`: its revision, its draws and its publication, installed by `FrameView::HandOverAtFrameStart`), then installs its claims, list filter and sun exclusion, or withdraws the set (below). Serves the coordinator's requests and kicks the frame's values (`FrameValues::Kick`: placements, palettes, shading, and the payload ring entry the epochs read) | **Scene pass** (`Coordinator::RunSceneWork`, whenever its producers wake the pump): the events applied, the walk, the set's commit; then the publication (`PublishScene`), handed to the **snapshot builder** on the pool (`IndirectDraws::PostSnapshotWork`: the payloads built ahead, the revision made and sealed) | The frame values' uploads, on the copy queue |
 | The engine's cull jobs | The engine registers the passes it keeps. `PassCapture` withholds DCLF's objects, `PrimaryCull` stands in for DCLF's references inside the list jobs, and the sun's cascades skip DCLF's entries | | |
 | `BeforeShadowMaps` | The **reflection epoch**; the frame's shadow views (`ShadowViews`), their coverage by the selected revision (`DecideShadowCoverage`) | | The water reflection's faces |
 | Each shadow view's `FinishAccumulating` | `CaptureShadowView`: where the engine drew, and with which constants | | The engine's own shadow draws |
@@ -63,7 +63,7 @@ installed publication's claims.
 ## The data
 
 ```
-engine writers ──events──▶ SceneStore tables ──change log──▶ kept stores ──▶ payload ──commit──▶ epoch (GPU)
+engine writers ──events──▶ Coordinator tables ──change log──▶ kept stores ──▶ payload ──commit──▶ epoch (GPU)
  (hooks)                    (Scene/, coordinator)            (Draws/)        (pool)    (render thread)
 ```
 
@@ -76,7 +76,7 @@ engine writers ──events──▶ SceneStore tables ──change log──▶
 
     The render thread drains them into a batch (`EventQueue`), and the scene work applies it. Nothing about an object
     is re-read on a schedule: a change the events miss is a defect, and the walk and mirror parity checks find it.
-2.  **Tables.** `SceneStore` holds a record per object, and shared tables of geometries, pipelines and materials
+2.  **Tables.** `Scene::Coordinator` holds a record per object, and shared tables of geometries, pipelines and materials
     (`SlotTable`: slots with generations and reference counts). Every change a write makes to the tables is appended
     to the change log (`Tables::changeLog`), with its causes.
 3.  **Lookups.** What a build needs from the render thread's services is resolved ahead of the build (`Lookups`):
@@ -92,9 +92,9 @@ engine writers ──events──▶ SceneStore tables ──change log──▶
     -   the drawn set (`DrawnMarks`);
     -   the shadow state (which modes hold each object, what waits) and the shadow material rows (`ShadowKept`).
 5.  **Payload.** A build is a pure function from the tables and lookups to a payload: the rows it wrote, the draw
-    inputs and the kept stores' changes. `BuildMainPayloads` (`Draws/IndirectDraws/MainBuild.cpp`, both main segments
+    inputs and the kept stores' changes. `BuildMainPayloads` (`Draws/IndirectDraws/Builders/MainBuild.cpp`, both main segments
     in one build) and `BuildShadowPayload` are the two builders. They run on the pool with each publication
-    (`BuildAhead`), the main build first; the frame's producer copies what the payloads changed into the frame's payload
+    (`IndirectDraws::PostSnapshotWork`), the main build first; the frame's producer copies what the payloads changed into the frame's payload
     ring entry.
 6.  **Commit and epoch.** On the render thread, the commit adds what only it has: the frame's constant buffers
     (`ConstantMirror`), the per-frame textures and the latch, written into the selected revision's shape. Then the
@@ -264,33 +264,23 @@ a frame happens to have.
     the per-object state the cull maintains (fades, LOD, the tree clock's bit), so the engine never traverses those
     references. The cut it stands in with is kept per candidate entry, planned again only for the entries that moved.
 
-The menu's toggles (`Common/Toggles`) change all of this live: a toggle withdraws the set until a publication committed
+The menu's toggles (`Runtime/Toggles`) change all of this live: a toggle withdraws the set until a publication committed
 under the new toggles is installed. Switching DCLF off clears every claim and bypasses the capture.
 
 ## Where the code is
 
-`src/Features/DrawcallLimitFix.{h,cpp}` is the feature: its hooks, the frame's order above and the menu. Everything
-else is under `src/Features/DrawcallLimitFix/`:
+The module tree, the threads, a frame's data flow and the diagnostics contract are in the **Code map** of
+[drawcall-limit-fix.md](./drawcall-limit-fix.md#code-map). In short: `src/Features/DrawcallLimitFix.{h,cpp}` is the feature
+(its hooks, lifecycle and menu); under `src/Features/DrawcallLimitFix/`, `Engine/{Access,Capture,Cull,Views}` touch the
+engine, `Scene/{Model,Ports,Coordinator,FrameView}` and `Scene/Channels.h` keep the scene, `Draws/` draws it
+(`FrameDriver`, `IndirectDraws`, `Gpu/`, `Pipelines/`), `Runtime/` holds the building blocks, and `Diagnostics/` every
+parity check, probe and report.
 
-| Folder | What is in it |
-| --- | --- |
-| `Common/` | The switch registry (`Switches`) and the live toggles (`Toggles`), the coordinator and pool (`SceneScheduler`), the event queue, the render-thread budget, and the building blocks of the kept state: `KeptState`, `SlotTable` |
-| `Engine/` | Everything that hooks or reads the engine directly: `PassCapture`, `PrimaryCull`, `SunAccumulation`, `ShadowViews`, `SceneTracker`, `FaceSnapshots`, `ConstantMirror`, `EngineStates`, and `EngineAccess.h` (the shared raw-access helpers) |
-| `Scene/` | `SceneStore` (interface `SceneStore.h`, implementation `SceneStore/`), the record layouts (`Records.h`), the lookups, and what a record is derived from: `MaterialSources`, `ConstantEvaluator` (the constant layouts and the technique evaluation), `EngineShaders`, `LightingConstants`, `LightingDescriptors`, `VertexInput` |
-| `Draws/` | `IndirectDraws` (interface `IndirectDraws.h`, statistics `IndirectDrawStats.h`, implementation `IndirectDraws/`), the pipelines (`DrawPipelines`), the SPIR-V programs (`ShaderPrograms`, `SpirvReflection`), and the game's buffers and textures as the graph sees them (`GpuResources`, `GpuTextures`) |
-| `Published/` | The scene graph the producers run on (`SceneGraph`, `PublishedSceneExecutor`; [dclf-async-publication.md](./dclf-async-publication.md)) |
-| `Diagnostics/` | Capture parity, the periodic report (`Report.cpp`), the open defects' probes and the test harness |
-
-Inside `SceneStore/` and `IndirectDraws/`, `Internal.h` is shared by that folder's files only:
-
--   `SceneStore/` is split by the tables' life cycle: tables, events, classification, the walk, the accumulate phase,
-    the frame constants, residents, sun candidates, slots and parity.
--   `IndirectDraws/` is split by the path a frame takes: passes, resources, kept stores, the main and shadow builds,
-    material lookups, the main and shadow epochs, uploads and diagnostics. The layouts the shaders read are in
-    `GpuLayouts.h`, and must match `BuildDrawsCS.hlsl` and `Lighting.hlsl`.
+Inside `Scene/Coordinator/` and `Draws/IndirectDraws/`, `Internal.h` is shared by that folder's files only. The layouts the
+shaders read are in `Draws/IndirectDraws/Core/GpuLayouts.h`, and must match `BuildDrawsCS.hlsl` and `Lighting.hlsl`.
 
 Includes within a folder use bare names. Includes across folders are rooted at `src/`
-(`Features/DrawcallLimitFix/Scene/SceneStore.h`).
+(`Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h`).
 
 ## Two modes: trusted, and parity
 
@@ -331,7 +321,7 @@ normal run draws.
 
 ## Switches
 
-Every switch is a row of the registry in `Common/Switches.cpp`, with its kind and a one-line description:
+Every switch is a row of the registry in `Runtime/Switches.cpp`, with its kind and a one-line description:
 
 -   **Feature**: on by default. The row says which values reduce the featureset; a run that sets one logs
     `featureset: REDUCED by ...`.
@@ -354,15 +344,15 @@ fails on the baseline is listed in [dclf-open-defects.md](./dclf-open-defects.md
 | `CS_DCLF_PERSISTENT_PARITY` | Every kept store (object records, bindings, bones, geometry, shadow state, shading resample, sun exclusion and sun entry) against a rebuild |
 | `CS_DCLF_WALK_PARITY` | The tables, as the events left them, against a dense walk of the scene |
 | `CS_DCLF_CHANGE_LOG_PARITY` | The change log against a diff of the tables |
-| `CS_DCLF_RESIDENT_PARITY`, `CS_DCLF_RESIDENT_DRAW_PARITY` | Resident records against the engine's registrations; the resident region's inputs against the tables |
+| `CS_DCLF_RESIDENT_PARITY` | Resident records against their passes built again |
 | `CS_DCLF_BUILD_PARITY` | The GPU's draw sequences against the CPU's templates |
 | `CS_DCLF_SKYLIGHT_PARITY` | DCLF's Skylighting occlusion map against the engine's |
 | `CS_DCLF_CAPTURE_PARITY` (with `CS_DCLF_PARITY_BOTH=1`) | The tables against the engine's own lighting draws: descriptors, transforms, every constant group, textures |
-| `CS_DCLF_SET_PARITY`, `CS_DCLF_BINDLESS_PARITY`, `CS_DCLF_PASS_PARITY`, `CS_DCLF_CAPTURE_POINT_PARITY` | Narrower checks of one mechanism each (see their registry rows) |
+| `CS_DCLF_SET_PARITY`, `CS_DCLF_CAPTURE_POINT_PARITY`, `CS_DCLF_FADE_PARITY`, `CS_DCLF_MIRROR_PARITY`, `CS_DCLF_ACCUMULATED_PARITY`, `CS_DCLF_FOLIAGE_PARITY` | Narrower checks of one mechanism each (see their registry rows) |
 
 The standard validation is two 60-second runs on the same save:
 
-1.  The first seven rows together.
+1.  The first six rows together.
 2.  Capture parity with ownership off.
 
 The CPU tests in `tests/DrawcallLimitFixCPU` cover the kept state and the publication foundation.

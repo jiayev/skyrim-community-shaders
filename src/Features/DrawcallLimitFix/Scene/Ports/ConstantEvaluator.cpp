@@ -1,3 +1,6 @@
+// ConstantEvaluator.h's layouts, and SetupTechnique's port: SampleTechniqueInputs (render thread, the frame's start) and the pure
+// EvaluateTechnique.
+
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EffectConstants.h"
@@ -84,7 +87,7 @@ namespace DCLF
 
 	void LodHighDetailRange(float* a_out)
 	{
-		// The frame's sample (T6b2c). The draws take theirs from the technique rows of the frame's tables (the coordinator's, from the
+		// The frame's sample. The draws take theirs from the technique rows of the frame's tables (the coordinator's, from the
 		// sample of the frame that published them), so the Z-prepass and the colour pass of a frame draw the same range.
 		const auto& range = FrameGlobals::Current().technique.highDetailRange;
 		std::memcpy(a_out, range.data(), sizeof(range));

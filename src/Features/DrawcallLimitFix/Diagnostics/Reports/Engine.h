@@ -6,7 +6,7 @@
 namespace DCLF::Reports
 {
 	/**
-	 * @brief The engine area's report lines (Diagnostics/Reports/Engine*.cpp): each formats what its module counted since the last call
+	 * @brief The engine area's report lines (Diagnostics/Reports/EngineLines.cpp, EnginePrimaryCull.cpp): each formats what its module counted since the last call
 	 * (the module's Take) and resets it. The callers log them at the report schedule's moments (Schedule.h).
 	 */
 
@@ -31,8 +31,6 @@ namespace DCLF::Reports
 	/** @brief The fade writers' line (newline-terminated); empty while nothing was skipped. */
 	std::string FadeWritersLine();
 
-	/** @brief The engine import work by thread (CS_DCLF_TIMELINE), over a_frames frames; empty while not installed. */
-	std::string ImportTimingsLine(std::uint32_t a_frames);
 	/** @brief The engine-read window's closes, waits and refused leases; empty while nothing happened. */
 	std::string EngineReadWindowLine();
 	/** @brief CS_DCLF_RELEASE_GUARD: the engine's last releases on DCLF's threads; empty while not installed. */

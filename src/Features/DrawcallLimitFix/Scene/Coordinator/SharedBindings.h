@@ -1,5 +1,8 @@
 #pragma once
 
+// The coordinator's shared texture bindings (projected textures, technique shadow masks, shadow textures): their requests and answers.
+// Scene lane only, except projectedPosted (the render thread posts it) and the replies queue (the import thread answers into it).
+
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -18,7 +21,7 @@
 namespace DCLF
 {
 	/**
-	 * @brief T6b2c: the texture bindings every record or pipeline shares, made by the scene work (Coordinator::UpdateSharedBindings), as
+	 * @brief The texture bindings every record or pipeline shares, made by the scene work (Coordinator::UpdateSharedBindings), as
 	 * MaterialBindings makes the material slots': the fixed bindings (the null descriptor and the engine's samplers, which the render
 	 * thread makes and publishes with the import context: GpuTextures::Fixed), the projected textures, each used pipeline's technique
 	 * shadow mask, and the alpha-tested casters' diffuse textures (the shadow textures).
@@ -27,7 +30,7 @@ namespace DCLF
 	 * a caster's texture the shadow dependency index added (Tables::shadowTextureChanges) - with GpuTextures::Request, answered as events
 	 * into `replies`, which the next pass drains. A view the scene work has had answered before (here or for a material) resolves at once.
 	 *
-	 * The entries are the scene lane's lookups' (T6b2c step 5), written straight in where they are resolved, with the generations and
+	 * The entries are the scene lane's lookups', written straight in where they are resolved, with the generations and
 	 * versions the builds key on (the shared entries and their binding block, Pipeline's mask fields, shadowTextures). This holds what is
 	 * not published: the requests, the answers kept, what each entry was resolved for.
 	 */
@@ -98,7 +101,7 @@ namespace DCLF
 		// The answers of the drain being applied (rejections included).
 		ankerl::unordered_dense::map<ID3D11ShaderResourceView*, GpuTextures::Binding> arrived;
 		std::uint64_t cookie = 1;  // the requests' since the last reset: an answer with another is stale
-		GpuTextures::Replies replies{ &WakeSceneTextureReply };  // T6b3d: an answer wakes the scene pump
+		GpuTextures::Replies replies{ &WakeSceneTextureReply };  // an answer wakes the scene pump
 		Stats stats;
 	};
 }

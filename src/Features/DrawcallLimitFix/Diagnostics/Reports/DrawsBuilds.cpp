@@ -4,21 +4,10 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
 
-// The main builds' checks (Diagnostics/Draws/BuildChecks.cpp), since the start, for the render thread's report (Frame.cpp).
+// The draws' build lines (constant tables, pass statistics, the colour sun test), for the render thread's report (Frame.cpp).
 
 namespace DCLF::Reports
 {
-	void BindlessParityLines()
-	{
-		const auto& c = Diagnostics::DrawsState::Get().buildChecks;
-		if (!c.bindless)
-			return;
-		if (c.bindlessDiffer)
-			logger::warn("[DCLF] bindless record parity MISMATCH: {} of {} components differ", c.bindlessDiffer, c.bindless);
-		else
-			logger::info("[DCLF] bindless record parity OK: {} components match the constant groups", c.bindless);
-	}
-
 	void ConstantTableLines()
 	{
 		const auto ct = std::exchange(Diagnostics::DrawsState::Get().constantTables, {});
@@ -48,21 +37,10 @@ namespace DCLF::Reports
 	{
 		logger::info("[DCLF] colour sun test: {} of {} frames without the sun's cascades{}", a_empty, kInterval, a_empty ? " <- NO CASCADES" : " <- OK");
 	}
-
-	std::string ResidentParityPart()
-	{
-		const auto& c = Diagnostics::DrawsState::Get().buildChecks;
-		return fmt::format("parity {} entries checked, {} differ, {} missing{}", c.resident, c.residentDiffer, c.residentMissing,
-			c.resident ? fmt::format("; pairs {} checked, {} resolved with no event{}", c.pairs, c.pairsStale,
-							 c.residentDiffer || c.residentMissing || c.pairsStale ? " <- RESIDENT DRAW PARITY" : " <- OK") :
-						 std::string());
-	}
 }
 #else
 namespace DCLF::Reports
 {
-	void BindlessParityLines() {}
-	std::string ResidentParityPart() { return "parity 0 entries checked, 0 differ, 0 missing"; }
 	void ColourSunTestLine(std::uint32_t) {}
 	void ConstantTableLines() {}
 	void PassStatsLine(const std::array<std::array<std::uint64_t, 4>, 3>&, const std::array<std::uint32_t, 3>&) {}

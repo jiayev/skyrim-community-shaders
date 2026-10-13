@@ -1,5 +1,9 @@
 #pragma once
 
+// The constant records DCLF evaluates in place of the engine's setup functions: ConstantBlock and the Lighting / Effect variable
+// layouts, MaterialRecord (SetupMaterial), TechniqueConstants (SetupTechnique, a pure function of TechniqueInputs the render thread
+// samples at the frame's start) and GeometryConstants (SetupGeometry).
+
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -61,7 +65,7 @@ namespace DCLF
 	};
 	const StageLayout& LightingVSLayout();
 	const StageLayout& LightingPSLayout();
-	/** @brief The same for the Effect shader's variables (EffectConstants.h): an effect MaterialRecord's blocks (T7d's Effect port). */
+	/** @brief The same for the Effect shader's variables (EffectConstants.h): an effect MaterialRecord's blocks. */
 	const StageLayout& EffectVSLayout();
 	const StageLayout& EffectPSLayout();
 	/** @brief A record's layouts by its kind (MaterialRecord::kind: kMaterialKindLighting or kMaterialKindEffect). */
@@ -99,14 +103,8 @@ namespace DCLF
 		std::uint8_t kind = kMaterialKindLighting;
 
 		/**
-		 * @brief Value equality, for measuring whether a record could be cached across frames.
-		 *
-		 * Member-wise, NOT memcmp over the object. The members total 2340 bytes while the struct is
-		 * 16-aligned because of ConstantBlock, so there are 12 bytes of trailing padding that nothing
-		 * ever writes. memcmp compared that padding: a record built on the stack carried whatever
-		 * garbage was there, the copy held in the probe map carried different garbage, and every single
-		 * comparison came out unequal. That is what "104 evaluated, 0 unchanged, 104 changed" was
-		 * reporting - the instrument, not the materials.
+		 * @brief Value equality. Member-wise, NOT memcmp over the object: the struct is 16-aligned because of
+		 * ConstantBlock, and its 12 bytes of trailing padding are never written, so memcmp would compare garbage.
 		 */
 		bool operator==(const MaterialRecord& a_other) const
 		{
@@ -142,7 +140,7 @@ namespace DCLF
 
 	/** @brief Render thread (the frame's start, FrameGlobals::Capture; the parity): what SetupTechnique reads of the engine now. */
 	TechniqueInputs SampleTechniqueInputs();
-	/** @brief Pure (T6b2c): SetupTechnique's writes for a pass descriptor from sampled inputs. */
+	/** @brief Pure: SetupTechnique's writes for a pass descriptor from sampled inputs. */
 	void EvaluateTechnique(std::uint32_t a_passDescriptor, const TechniqueInputs& a_inputs, TechniqueConstants& a_out);
 	/** @brief EvaluateTechnique from the frame's sample (FrameGlobals::Current().technique). */
 	inline void EvaluateTechnique(std::uint32_t a_passDescriptor, TechniqueConstants& a_out)

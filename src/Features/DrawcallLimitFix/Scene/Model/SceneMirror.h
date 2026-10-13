@@ -17,8 +17,8 @@ namespace DCLF
 	}
 
 	/**
-	 * @brief The coordinator's copy of the engine's scene (dclf-async-publication.md, "F3"): the records the hooks captured,
-	 * applied in event order. Owned by the scene work.
+	 * @brief The coordinator's copy of the engine's scene: the records the hooks captured, applied in event order. Owned and
+	 * written by the scene work (ApplyEvents); the scene pass's pool evaluations read it while it is unchanged.
 	 *
 	 * CS_DCLF_MIRROR_PARITY checks it (Diagnostics/Scene, the mirror's records): a slice of the tracked objects captured live at the
 	 * frame's start against the mirror after the frame's events.
@@ -41,7 +41,7 @@ namespace DCLF
 		/** @brief A detached subtree: its root (taken off its parent's children) and every object under it. */
 		void Detach(const void* a_root, std::span<RE::BSGeometry* const> a_geometries, std::span<const void* const> a_nodes);
 		/**
-		 * @brief T6b1b: a record whose object an event names attached out of the world: it left the world by no detach a hook saw (or its
+		 * @brief A record whose object an event names attached out of the world: it left the world by no detach a hook saw (or its
 		 * memory is another object's now), so it and every record under it go. a_what names the new object for the report.
 		 */
 		void Evict(const void* a_key, std::string_view a_what);
@@ -64,16 +64,16 @@ namespace DCLF
 		const SceneCapture::GeometryRecord* Geometry(const void* a_key) const;
 		const SceneCapture::PropertyRecord* Property(const void* a_key) const;
 		const SceneCapture::AlphaRecord* Alpha(const void* a_key) const;
-		/** @brief T6b1b: a geometry's records (its node, parent, properties, alpha and fade node), null where the mirror holds none. */
+		/** @brief A geometry's records (its node, parent, properties, alpha and fade node), null where the mirror holds none. */
 		SceneCapture::LeafView Leaf(const void* a_key) const;
 		/**
-		 * @brief T6b3e: the record writes so far (Apply, Detach, Evict, Update, Clear), never reset: the scene pass's evaluations read the
+		 * @brief The record writes so far (Apply, Detach, Evict, Update, Clear), never reset: the scene pass's evaluations read the
 		 * mirror from the pool and assert it unchanged across them (it is written by ApplyEvents alone).
 		 */
 		std::uint64_t Writes() const { return writes; }
 
 		/**
-		 * @brief T6b5: a LOD gate's incoming root (Coordinator::ApplyGateEvent; cleared at the gate's outcome or its root's detach). Its own
+		 * @brief A LOD gate's incoming root (Coordinator::ApplyGateEvent; cleared at the gate's outcome or its root's detach). Its own
 		 * kHidden is the gate's - the engine side hides the block before its attach and vetoes the engine's shows until the flip - so the
 		 * scene's hidden test ignores that one bit (Coordinator::HiddenForWalk): the blocks are classified, written, bound and committed
 		 * while hidden. Kept beside the records, not in them: a capture replaces a record whole, and the parity compares records alone.
@@ -127,7 +127,7 @@ namespace DCLF
 		ankerl::unordered_dense::map<std::uintptr_t, std::vector<Recent>> recent;
 		std::uint64_t batch = 0;
 		std::uint64_t writes = 0;  // Writes()
-		KeySet gated;              // T6b5: SetGated
+		KeySet gated;              // SetGated
 		bool replaying = false;
 		std::uint64_t replayed = 0, stale = 0, superseded = 0;
 		std::pair<std::uint8_t, const void*> UpdateRecord(const SceneCapture::Update& a_update);

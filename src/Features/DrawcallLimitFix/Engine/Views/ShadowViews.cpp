@@ -1,3 +1,6 @@
+// ShadowViews: the caster verdicts (ShadowCasterReject, on whichever thread classifies) and the frame's shadow view list (Rebuild,
+// render thread at BeforeShadowMaps).
+
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
 #include "Features/DrawcallLimitFix/Engine/Views/LightSelection.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
@@ -38,7 +41,7 @@ namespace DCLF
 
 	std::uint32_t UtilityShaderDecl(std::uint64_t a_flags)
 	{
-		// BSLightingShaderProperty::DetermineUtilityShaderDecl (vtable slot 0x3D, AE 0x1414adf00), ported (step 6e F1: the scene work
+		// BSLightingShaderProperty::DetermineUtilityShaderDecl (vtable slot 0x3D, AE 0x1414adf00), ported (the scene work
 		// calls no engine code): a function of the property's flags (+0x38) alone, never 0.
 		std::uint32_t decl = (a_flags & 0x1000) ? 0x2u : 0x1Au;
 		if (a_flags & 0x2)
@@ -69,7 +72,7 @@ namespace DCLF
 		const bool decalLike = decal && (flags & Bit(18));
 		if (decal && !(decalLike && (flags & Bit(32)) && blended))
 			return decalLike ? ShadowReject::DecalNoZWrite : ShadowReject::DecalPointLight;
-		// The fade node's share (fade * materialAlpha < 1) is the GPU's: a shadow view drops a caster while its root fades (T1a).
+		// The fade node's share (fade * materialAlpha < 1) is the GPU's: a shadow view drops a caster while its root fades.
 		if (lighting->materialAlpha < 1.0f)
 			return ShadowReject::Faded;
 		if (flags & 0x8004ull)
@@ -164,7 +167,7 @@ namespace DCLF
 	void ShadowViews::Rebuild()
 	{
 		Clear();
-		// DCLF's selection's slots (T3b): shadowLightsAccum as CalculateActiveShadowCasterLights fills it, the array
+		// DCLF's selection's slots (LightSelection): shadowLightsAccum as CalculateActiveShadowCasterLights fills it, the array
 		// GetShadowCasterLightArrayEntry indexes - the lights, in the sequence, the engine renders a moment later. None this frame
 		// (no selection ran): no views, and the engine draws them.
 		const auto* selection = LightSelection::Get().Current(Scene::FrameView::Get().GetFrame());
@@ -217,7 +220,7 @@ namespace DCLF
 			};
 			for (std::uint32_t d = 0; d < data.shadowmapDescriptors.size(); ++d)
 				add(data.shadowmapDescriptors[d], d, false);
-			// A focus host's focus views (T3c, DCLF's hosts and target count: Render draws descriptors 0..count-1), once per light.
+			// A focus host's focus views (FocusViews: DCLF's hosts and target count: Render draws descriptors 0..count-1), once per light.
 			if (std::find(selection->focusHosts.begin(), selection->focusHosts.end(), light) != selection->focusHosts.end() &&
 				std::find(focusAdded.begin(), focusAdded.end(), light) == focusAdded.end()) {
 				focusAdded.push_back(light);

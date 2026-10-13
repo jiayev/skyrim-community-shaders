@@ -1,3 +1,7 @@
+// The coordinator's scene pump: the scene passes run on the scene lane, one at a time, whenever a producer wakes the pump
+// (WakeScenePass, any thread); the frame never kicks or joins them, and the render thread serves what they ask of it at the frame's
+// start. Also the pass's bookkeeping and whether a pass publishes (PublicationNeeded).
+
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
@@ -16,9 +20,6 @@
 #include <sstream>
 #include <thread>
 #include <type_traits>
-
-// T6b3d: the coordinator's pump (dclf-async-publication.md, "T6b3d"). The scene passes run on the scene lane whenever a producer wakes
-// the pump - never kicked or joined by the frame - and the render thread serves what they ask of it at the frame's start.
 
 namespace DCLF
 {
@@ -81,8 +82,8 @@ namespace DCLF
 		if (engineEvent && scenePassesLoading.load(std::memory_order_relaxed))
 			return;
 		// Inside the frame's render (Main::Draw to Present: EngineReadWindow) the engine sets and undoes these for its own views - each
-		// camera's registration leaves its alpha on the property (GetRenderPasses), the reflection faces hide the water around them, Main::Draw
-		// hides the first-person skeleton - so the frame's next pass takes them (w130: 70-80% of the passes they woke changed nothing). An
+		// camera's registration leaves its alpha on the property (GetRenderPasses), the reflection faces hide the water around them,
+		// Main::Draw hides the first-person skeleton - so the frame's next pass takes them (most passes they woke changed nothing). An
 		// attach, a detach or a switch still wakes.
 		const bool renderToggle = a_source == SceneWake::Hidden || a_source == SceneWake::Leaf || a_source == SceneWake::PropertyUpdate ||
 		                          a_source == SceneWake::AlphaUpdate || a_source == SceneWake::PropertyEvent;
@@ -129,8 +130,8 @@ namespace DCLF::Scene
 	void Coordinator::StartScenePump()
 	{
 		// Configured once, never destroyed (as the snapshot builder's pump). Its passes run on the scene lane, one at a time
-		// (level-triggered, lock-free: SerializedTaskPump); the lane is the scene work's alone (step 6c), so a long pass never holds up the
-		// coordinator's jobs (the frame's builds), and it is above the engine's job threads as the scene work was.
+		// (level-triggered, lock-free: SerializedTaskPump); the lane is the scene work's alone, so a long pass never holds up the
+		// coordinator's jobs (the frame's builds), and it is above the engine's job threads.
 		static auto* pump = SceneScheduler::MakeLanePump(
 			SceneScheduler::Executor(), SceneScheduler::SceneLaneScope(), SceneExecutor::Scene, org::async::TaskDispatch::Controlled, "DCLF scene pass",
 			[this] { ScenePass(passInline); },
@@ -138,7 +139,7 @@ namespace DCLF::Scene
 				if (!scenePumpFailed.exchange(true, std::memory_order_acq_rel))
 					logger::error("[DCLF] the scene pump was refused by the scene lane; no scene pass runs from here on");
 			});
-		// No wake on a retirement returned (T6b3d, w124: a return woke a pass whose publication's drop returned the next): the next pass
+		// No wake on a retirement returned (a return would wake a pass whose publication's drop returns the next): the next pass
 		// with an input recycles it.
 		scenePump.store(pump, std::memory_order_release);
 		// What was pushed before the pump existed (the session's first events).
@@ -170,7 +171,7 @@ namespace DCLF::Scene
 			std::this_thread::yield();
 		}
 		passInline = false;
-		// What the pass held for PrimaryCull, now (the join delivered them before T6b3d).
+		// What the pass held for PrimaryCull, delivered here.
 		FrameView::Get().DeliverPrimaryNotes();
 	}
 
@@ -197,11 +198,11 @@ namespace DCLF::Scene
 		const bool marked = EngineReadWindow::sceneWork;
 		if (!a_inline)
 			EngineReadWindow::sceneWork = true;
-		// The frame's engine globals, never the engine's (step 6e F2): the newest frame inputs', taken once for the pass (inputs posted
+		// The frame's engine globals, never the engine's: the newest frame inputs', taken once for the pass (inputs posted
 		// after this are the next pass's: the post wakes it), or none before the first frame.
 		TakeFrameInputs();
 		try {
-			// T6b3e: kept for the pass's evaluations on the pool (ShardScope binds the same capture there).
+			// Kept for the pass's evaluations on the pool (ShardScope binds the same capture there).
 			passGlobals = sceneInputs.globals ? sceneInputs.globals : NoFrameGlobals();
 			FrameGlobals::Scope scope(passGlobals);
 			RunSceneWork(!a_inline);
@@ -269,12 +270,11 @@ namespace DCLF::Scene
 
 	bool Coordinator::PublicationNeeded()
 	{
-		// T6b3d (w124: a publication, and a snapshot built, every pass): a pass publishes only what changed since the last publication - the
-		// tables (their logs, stamps and sizes), the lookups and their catalog, the candidates, the claims (the commit's applications and its
-		// snapshot), the deltas the frame takes (plans, shading, seeds, switches, imports, wetness, light entries), the category nodes, the
-		// toggles its commit was made under, or an input the coordinator took for the frame. A pass that changed none publishes nothing: the
-		// snapshot of the last publication stands.
-		// T6b5: a LOD gate's forced release the last publication was not built for publishes too (the frames withdraw until one is).
+		// A pass publishes only what changed since the last publication - the tables (their logs, stamps and sizes), the lookups and their
+		// catalog, the candidates, the claims (the commit's applications and its snapshot), the deltas the frame takes (plans, shading,
+		// seeds, switches, imports, wetness, light entries), the category nodes, the toggles its commit was made under, an input the
+		// coordinator took for the frame, or a LOD gate's forced release the last publication was not built for (the frames withdraw until
+		// one is). A pass that changed none publishes nothing: the snapshot of the last publication stands.
 		const bool needed = !publishedKeyValid || publishForced || !setApply.empty() || setSnapshotDirty || nodeSetsDirty || DeltasPending() ||
 		                    sceneInputs.lodForcedGeneration != publishedLodForced || !(CurrentPublishKey() == publishedKey);
 		if (!needed)

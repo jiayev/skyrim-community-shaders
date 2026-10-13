@@ -1,3 +1,5 @@
+// The draws area's observers (IndirectDraws' epochs, builds and readbacks; the draw pipelines' and the frame values' parities).
+
 #include "Features/DrawcallLimitFix/Diagnostics/Install.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
@@ -15,8 +17,6 @@
 #endif
 
 #include <utility>
-
-// The draws area's observers (IndirectDraws' epochs, builds and readbacks; the draw pipelines' and the frame values' parities).
 
 namespace DCLF::Diagnostics
 {
@@ -47,21 +47,13 @@ namespace DCLF::Diagnostics
 		if (o.scene) {
 			Subscribe<ExtrasSending>(&MirrorExtras);
 			Subscribe<ExtrasSent>(&CheckExtras);
-			Subscribe<ObjectRecordsUpdated>(&CheckObjectRecords);
-			Subscribe<GeometryDrawsUpdated>(&CheckGeometryDraws);
-			Subscribe<DrawBoundUpdated>(&CheckDrawBound);
+			Subscribe(&CheckObjectRecords);
+			Subscribe(&CheckGeometryDraws);
+			Subscribe(&CheckDrawBound);
 			Subscribe<ShadowBuilt>(&CheckKeptShadow);
 			Subscribe<ExclusionRebuilt>(&CheckExclusionReuse);
 			Subscribe<DrawsBuiltAhead>(&CheckViewMasks);
 		}
-		if (o.bindless) {
-			Subscribe<MainBuildBegun>(&BeginBindlessChecks);
-			Subscribe<MainRecordAssembled>(&CheckBindless);
-		}
-		if (o.residentDraws)
-			Subscribe<ResidentRegionUpdated>(&CheckResidentRegion);
-		if (o.bindless || o.residentDraws)
-			Subscribe<MainPayloadCommitted>(&SumBuildChecks);
 		if (o.builds)
 			Subscribe<IndexPoolUpdated>(&CheckIndexPool);
 		if (o.claimsOrScene) {
@@ -73,39 +65,29 @@ namespace DCLF::Diagnostics
 		}
 		if (o.scene)
 			Subscribe<ShadowViewLatched>(&CheckSunEntry);
-		if (o.claims)
-			Subscribe<ShadowViewLatched>(&CheckCascadeCulling);
-		// The graph passes (MainGraphPasses), in their order at each point: the G-buffer probe's copies, then the foliage compare.
-		if (!o.gbufferProbe.empty())
-			Subscribe<MainGraphPasses>(&AppendProbePasses);
+		// The graph passes (MainGraphPasses): the foliage compare.
 		if (o.foliage) {
 			Subscribe<FoliageRecordMade>(&MakeFoliageCompare);
 			Subscribe<MainGraphPasses>(&AppendFoliagePasses);
 		}
-		if (o.stats)
-			Subscribe<ColourFrameBlock>(&MeasureJitter);
 		if (!o.targetProbe.empty())
 			Subscribe<MainCullViewProj>(&ProbeTarget);
 		if (o.claimsOrScene)
 			Subscribe<ReflectionFaceDrawn>(&CheckReflectionFace);
 		if (o.claims)
 			Subscribe<FirstPersonSkeletonWalked>(&NoteFirstPersonSkeleton);
-		if (!o.gbufferProbe.empty()) {
-			Subscribe<MainPassCaptured>(&NoteProbeTargets);
-			Subscribe<ProbePoint>(&ProbeGBuffer);
-		}
 		// The frame values' rows and palettes against the engine's now.
 		if (o.scene)
-			Subscribe<ShadowViewsBegin>([](const ShadowViewsBegin& a_event) {
-				if (ParityDue(a_event.frame)) {
+			Subscribe<FramePoint::ShadowViewsBegin>([](const On<FramePoint::ShadowViewsBegin>&) {
+				if (ParityDue(Scene::FrameView::Get().GetFrame())) {
 					auto& store = Scene::Coordinator::Get();
 					CheckFrameValues(Scene::FrameView::Get().GetTables(), store.PeekPlacementPlan());
 				}
 			});
 		// The frame's constant tables against the game's shader objects', for every entry the installed lookups resolved.
 		if (o.scene)
-			Subscribe<LookupsInstalled>([](const LookupsInstalled& a_event) {
-				if (auto* lighting = EngineShaders::Lighting(); lighting && ShaderPrograms::Get().Enabled() && ParityDue(a_event.frame))
+			Subscribe<FramePoint::LookupsInstalled>([](const On<FramePoint::LookupsInstalled>&) {
+				if (auto* lighting = EngineShaders::Lighting(); lighting && ShaderPrograms::Get().Enabled() && ParityDue(Scene::FrameView::Get().GetFrame()))
 					CheckConstantTables(*lighting, Scene::FrameView::Get().GetLookups());
 			});
 		// The colour epoch's capture against the frame's first deferred lighting draw.

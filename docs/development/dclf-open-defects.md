@@ -49,7 +49,7 @@ already do (`DrawPipelines::ReadEngineState`).
 
 ## Stood-in animated references that never fade freeze (found by T7b0, 2026-10-11; fixed by T7b2, pending validation)
 
-`SyncFadeOwnership` (`Engine/PrimaryCull.cpp` ~773-790) clears kAccumulated (bit 26) on the roots DCLF stands in for, and nothing
+`SyncFadeOwnership` (`Engine/Cull/PrimaryCull.cpp` ~773-790) clears kAccumulated (bit 26) on the roots DCLF stands in for, and nothing
 sets it again while they are stood in. `FUN_1402cff60` (`UpdateAnimationJob`'s and the managed nodes' gate, on `ref->Get3D()`)
 then takes its "not accumulated" path (`skyrim-engine-notes.md`, "T7b0"):
 
@@ -83,7 +83,7 @@ validate: the `tree animation list` line's "loops given DCLF's verdicts" > 0 whe
 
 ## The fade write-back reads its events only on frames that record a revision (found by T7b1, 2026-10-11; fixed by T7b6, pending validation)
 
-`FadeEventReadbackPass` (`Draws/IndirectDraws/Passes.cpp`) reads its buffer in `Record`. The depth epoch is revision-driven
+`FadeEventReadbackPass` (`Draws/IndirectDraws/Passes/Passes.cpp`) reads its buffer in `Record`. The depth epoch is revision-driven
 (each ring slot recorded once per revision and replayed: `extern/OpenRenderGraph/docs/persistent-epochs.md`), so on replayed frames
 no fade events are read back and the write-back sees only the recording frames' events (T7b1's visibility readback had the same
 flaw: 59 of 300 frames in motion, none in interiors). Fix: T7b6, the fade events moved onto the visibility readback's scheme (a
@@ -120,7 +120,7 @@ has no record and is written in full every walk, so the body joins one to three 
     cleared by `MergeEntry`), not only in the pass that drained it.
 -   An event on a node the capture lists, numbered after the capture (`SceneCapture::NextSequence`, taken by
     `FrameGlobals::Capture` before its reads: `cullHiddenSequence`) and leaving a bit the capture does not hold, is announced again
-    at the first pass whose capture is newer (`SceneStore::hiddenAhead`).
+    at the first pass whose capture is newer (`Coordinator::hiddenAhead`).
 
 **Validate** (no parity switch but `CS_DCLF_SET_PARITY=1`, which does not run the pass inline):
 `CS_DCLF_TEST_COMMANDS='600:dclf:pov=third;900:dclf:pov=first;1200:dclf:pov=third;1500:dclf:pov=first'` from a save in first
@@ -172,22 +172,17 @@ DCLF reallocated when the interior loaded, landing in DLSS's history or output.
 
 ## The render thread reads the coordinator's tracked map (found 2026-10-12 in refactor run s3m; not fixed)
 
--   **Crash:** an access violation in `SceneStore::IsTracked` (`tracked.contains`, `Scene/SceneStore/SceneStore.cpp`), called from
+-   **Crash:** an access violation in `SceneStore::IsTracked` (`tracked.contains`; now `Scene::Coordinator::IsTrackedFromRenderThread`,
+    `Scene/Coordinator/Coordinator.h`), called from
     `PrimaryCull::RefreshWalk` ← `PrepareFrame` ← `AfterFullFrustum` on the render thread, in a normal-path motion run (s3m).
 -   **Cause (by reading, not confirmed):** `tracked` is the coordinator's live map, rewritten by the scene pass on the lane while the
     render thread reads it. That breaks the rule that the render thread reads only the adopted snapshot or published tables. The same
     code is at HEAD (b1069616), so the refactor did not introduce it.
--   **Callers:** `Engine/PrimaryCull.cpp` (`RefreshWalk` at about :716 and `RunAdmission` at about :747), plus the observer
-    `Diagnostics/Scene/CaptureParity.cpp:820` (parity only). `ReasonThisFrame` (same file) reads `tracked` the same way; check its callers' threads too.
+-   **Callers:** `Engine/Cull/PrimaryCull.cpp` (`RefreshWalk` at about :716 and `RunAdmission` at about :747), plus the observer
+    `Diagnostics/Scene/CaptureParity.cpp:820` (parity only). (`ReasonThisFrame`, which read `tracked` the same way, had no callers and is deleted.)
 -   **Fix:** the two PrimaryCull callers read what the adopted snapshot or the published tables hold (a published per-geometry
     tracked/slot answer), not `tracked`.
 -   It may explain e3w0's end-of-run crash (0xc0000005, a build before the R3 Engine changes); not confirmed, and that dump was overwritten.
-
-## Bindless parity (`Policy::BuildAtEpoch`) loses the main recordings (found 2026-10-12 in refactor runs d3w0/d3w1; not investigated)
-
--   With the build, bindless, resident-draw, fade and capture-point parity switches on, DCLF reports "300 frames without the adopted
-    snapshot's main recordings (claims withdrawn)" after about 900 frames and draws natively from then on. Same on the code before
-    the R3 Draws changes (d3w0), so not a refactor regression; parity-only configuration (the epochs build in place).
 
 ## Unattributed visual defects seen in first person (2026-10-11/12; not investigated)
 
@@ -598,7 +593,10 @@ Runs: `CS_DCLF_PERSISTENT_PARITY`, `WALK_PARITY`, `CHANGE_LOG_PARITY`, `RESIDENT
 `CS_DCLF_CAPTURE_PARITY=1` with `CS_DCLF_OWNERSHIP=off` on its own. 60 seconds each; counts are per report
 interval (300 frames). Every check not listed reports 0.
 
-### Fade visibility parity differs in single windows
+### Fade visibility parity differed in single windows (the check was removed in the 2026-10-13 diagnostics trim)
+
+The CPU inference below was the check's own weak point; the fade path is checked by the fade port and fade state parities
+(`CS_DCLF_FADE_PARITY`). What it showed:
 
 **Evidence.** `CS_DCLF_FADE_PARITY`'s "fade visibility parity" line, which compares the engine's cull of entries with
 engine-drawn parts against FadeStateCS's test, is 0 in almost every 300-frame window. Occasionally one window differs:
@@ -733,7 +731,7 @@ multiplier, `DCLF 1.0403805, native 1.0114646`): an animated emissive sampled on
 that `RefreshFrameConstants`' shading resample exists for. It does not recur after the first interval.
 
 **Next step.** Find the branch of `BSLightingShader::SetupGeometry` (AE `0x1414dd040`) that writes `EyePosition`
-and the condition under which it writes zero, and apply the same condition in the tables (`SceneStore`'s
+and the condition under which it writes zero, and apply the same condition in the tables (the coordinator's
 PerGeometry evaluation), not a per-frame sample.
 
 ### Primary exclusion never applies at this save
@@ -754,8 +752,6 @@ for a NaN. The constant blocks are now compared bit for bit (`ConstantBlock::Sam
 
 ## Probes added for this investigation
 
--   `CS_DCLF_SHADOWMAP_PROBE=1`: the sun's cascade texture and the VSM copy, summarised per slice and mip.
--   `CS_DCLF_SHADOWMASK_PROBE=x,y`: the engine's shadow mask at a pixel.
 -   `CS_DCLF_TARGET_PROBE=x,y`: every bound G-buffer target, averaged over a 64 x 64 block, where the opaque
     pass ends, DCLF on or off. Whole pixels of the render resolution (2560 x 1440 under DLSS Quality at 4K), the
     block's top-left corner; fractions parse as 0.

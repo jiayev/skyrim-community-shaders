@@ -1,3 +1,5 @@
+// EngineReadWindow: Open/Close on the render thread, leases taken and released on any worker; the report's counters.
+
 #include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
 
 #include "Features/DrawcallLimitFix/Runtime/Switches.h"

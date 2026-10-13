@@ -1,5 +1,8 @@
 #pragma once
 
+// The registration census's question to the coordinator and its answer: Diagnostics/Engine/RegistrationCensus asks on the render
+// thread, SceneCensus.cpp answers in the next scene pass.
+
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 
 #include <cstdint>
@@ -23,8 +26,9 @@ namespace DCLF::Diagnostics
 {
 	/**
 	 * @brief The coordinator's verdict on a geometry the census (CS_DCLF_CENSUS) saw the engine draw: tracked, and if so its verdict this
-	 * frame (Coordinator::ReasonThisFrame: hidden, switch, actor, fading and the static ones), its record, its residency and its phases in
-	 * the coordinator's tables. By pointer: nothing of the geometry is read (the request's pins keep the address its own).
+	 * frame (hidden, switch, actor, fading and the static ones: the joins' verdict of this frame, else the walk's), its record, its
+	 * residency and its phases in the coordinator's tables. By pointer: nothing of the geometry is read (the request's pins keep the
+	 * address its own).
 	 */
 	struct CensusVerdict
 	{
@@ -35,7 +39,7 @@ namespace DCLF::Diagnostics
 		std::uint8_t phases = 0;  // PhasesIn of its record, the coordinator's tables
 	};
 	/**
-	 * @brief The census's question (render thread, Collect -> the next scene pass, Census.cpp) and its answer (the pass -> the render
+	 * @brief The census's question (render thread, Collect -> the next scene pass, SceneCensus.cpp) and its answer (the pass -> the render
 	 * thread's next Collect). One in flight at a time: the census posts the next only once it took the reply, carrying every geometry seen
 	 * since. The pins (taken on the render thread) travel back with the reply, so they are let go of on the render thread.
 	 */
