@@ -35,7 +35,7 @@ public:
 	} settings;
 
 	/** @brief Feature buffer data, matching RainRefractionSettings in SharedData.hlsli; Enable is cleared when the raindrop texture or blend state is missing. */
-	struct alignas(16) PerFrame
+	struct PerFrame
 	{
 		uint Enable;
 		float MotionStretch;
