@@ -1,5 +1,8 @@
 #pragma once
 
+// MaterialSources: the rules that keep a material record's frame-sourced parts current (signatures, TexcoordOffset, t11) without
+// re-evaluating it. Pure functions; the scene-work thread applies them to the tables' records.
+
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -35,8 +38,8 @@ namespace DCLF
 	 *   controller (BSLightingShaderPropertyFloatController / ColorController::Update), or the material's
 	 *   in-place rewrites (CopyMembers, OnLoadTextureSet, ClearTextures, ReceiveValuesFromRootMaterial; CS's
 	 *   PBR materials report theirs through NoteWritten). Each write captures the material for the scene work
-	 *   (MaterialPort::PushCapture), which evaluates the written material's records again from the capture (T6b2c
-	 *   step 7: Coordinator::RefreshMaterialRecords).
+	 *   (MaterialPort::PushCapture), which evaluates the written material's records again from the capture
+	 *   (Coordinator::RefreshMaterialRecords).
 	 * - TexcoordOffset (VS 11): the material's two texture-transform buffers, read at the index the engine
 	 *   flips every frame (Main::Update). A controller's write captures the material; the scene work watches it
 	 *   across the buffer flip, writing the frame's buffer (FrameGlobals' textureTransformBuffer) from the

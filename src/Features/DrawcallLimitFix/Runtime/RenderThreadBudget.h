@@ -13,7 +13,7 @@ namespace DCLF
 	 *
 	 * Every DCLF hook the render thread enters is a Hook: its whole time is counted, by site. Parts nested in it are counted to
 	 * their bucket; the epochs it ran are split by RenderGraphRuntime::RenderThreadEpochTotals (the submission proper, and ORG's
-	 * other render-thread work); the rest is Other, which the migration takes to zero. The per-draw hooks (NoteNativePass,
+	 * other render-thread work); the rest is Other. The per-draw hooks (NoteNativePass,
 	 * OnNativeLightingDraw) and the engine's own hooks DCLF edits (the sun's and point lights' culls, the scene lists, the pass
 	 * capture on the job threads) are not counted here: they report their own times.
 	 *
@@ -24,13 +24,13 @@ namespace DCLF
 	public:
 		enum class Bucket : std::uint8_t
 		{
-			Exchange,        // T6b3d: the frame's start's exchange with the scene: the snapshot taken and adopted, its publication installed
-			SceneCaptures,   // T6b3d: the frame's start's engine captures and requests for the scene (globals, categories, mirror, switches)
+			Exchange,        // the frame's start's exchange with the scene: the snapshot taken and adopted, its publication installed
+			SceneCaptures,   // the frame's start's engine captures and requests for the scene (globals, categories, mirror, switches)
 			Capture,         // copying state only the render thread can read: D3D11 bindings, constant mirrors, view state
 			Submit,          // ORG's submission proper: the ticket, the queue submission, the stream's close
 			OrgOverhead,     // ORG's other render-thread work in an epoch: releases, the ticket's check, upload recording, flushes
 			EngineBoundary,  // engine code DCLF calls and engine writes it applies
-			Other,           // everything else: what moves to the workers
+			Other,           // everything else (work that belongs off the render thread)
 			Count
 		};
 

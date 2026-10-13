@@ -1,5 +1,9 @@
 #pragma once
 
+// What crosses from the coordinator to the render thread with a publication: the immutable ScenePublication, the publication
+// log's per-publication deltas (claims, placement plans, shading names, seed requests, gate flips) and their item types. Made on
+// the scene-work thread, read on the render thread once installed.
+
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -27,8 +31,8 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief A publication of the scene (step 6e E3; T6b3a: complete and immutable): everything a frame reads of the scene, made by the
-	 * coordinator (PublishScene) and handed to the snapshot builder (IndirectDraws::PostSnapshotWork, T6b3b), which posts it with its
+	 * @brief A publication of the scene, complete and immutable: everything a frame reads of the scene, made by the
+	 * coordinator (PublishScene) and handed to the snapshot builder (IndirectDraws::PostSnapshotWork), which posts it with its
 	 * draws and its revision as one snapshot; the render thread adopts the newest snapshot whole (HandOverAtFrameStart installs its
 	 * publication). The claims' changes and the frame inputs each publication's pass made (the placement plan, the shading names, the
 	 * seed requests, the switches, the retired imports) travel on the publication log (PublicationDeltas), so a publication the builder
@@ -39,14 +43,14 @@ namespace DCLF
 		std::uint64_t sequence = 0;
 		std::uint32_t commitFrame = 0;        // the scene frame of the commit it applies (CommitSet's; stats and the install delay)
 		std::uint32_t togglesGeneration = 0;  // the toggles that commit was made under (FrameInputs): the toggle reinstall waits for one
-		// T6b5: the LOD gates' forced releases its pass's events were complete for (FrameInputs::lodForcedGeneration): an older one may
+		// The LOD gates' forced releases its pass's events were complete for (FrameInputs::lodForcedGeneration): an older one may
 		// claim the outgoing blocks a forced release detached, and the frames withdraw until one built after it is installed.
 		std::uint64_t lodForcedGeneration = 0;
 		std::uint32_t tablesGeneration = 0;   // the tables' generation (GetTablesGeneration while it is the frame's)
 		std::shared_ptr<const SceneTables> tables;
 		std::shared_ptr<const SetSnapshot> claims;
 		std::array<std::uint32_t, 3> lackingCount{};
-		// T6b2c step 5: the lookups the draws were built with, parallel to the tables, and the catalog they were resolved from, whose
+		// The lookups the draws were built with, parallel to the tables, and the catalog they were resolved from, whose
 		// set versions the frames that install it bind (DrawPipelines::HoldCatalog; a revision names its request's explicitly).
 		std::shared_ptr<const Lookups> lookups;
 		std::shared_ptr<const PipelineCatalog> catalog;
@@ -57,9 +61,9 @@ namespace DCLF
 		// point lights' culls ask of the frame (IsCategoryNode), never the coordinator's set. The light entries change with every
 		// tracked root, so they travel as changes on the publication log instead (PublicationDeltas::lightEntries).
 		std::shared_ptr<const ankerl::unordered_dense::set<RE::NiNode*>> categoryNodes;
-		// The scene revision's counts (the snapshot builder's, T6b3b).
+		// The scene revision's counts (the snapshot builder's).
 		RevisionRequest revision;
-		// T6b3d: the oldest event it is the first publication of (SceneTracker::Event::stampNs, stampFrame; 0: none), for the
+		// The oldest event it is the first publication of (SceneTracker::Event::stampNs, stampFrame; 0: none), for the
 		// event-to-adoption latency (IndirectDraws' snapshot report).
 		std::uint64_t eventNs = 0;
 		std::uint32_t eventFrame = 0;
@@ -69,7 +73,7 @@ namespace DCLF
 	 * @brief What FrameValues samples (dclf-async-publication.md, "FrameValues"): the placements and palettes of the per-frame
 	 * movers (the walk's kept movers, every one), the sun entries of the roots the walk took, and the slots the walk wrote in
 	 * full - each an object's slot and the engine objects its row is read from, held. Made by the walk on the scene task, taken
-	 * by the render thread at the next frame's start (TakePlacementPlan) and released there: its references are the engine's to
+	 * by the render thread at the next frame's start (FrameView::TakePlacementPlans) and released there: its references are the engine's to
 	 * drop. The tables hold no placement or palette: these are the only rows the frames draw with.
 	 */
 	struct PlacementPlan
@@ -80,15 +84,15 @@ namespace DCLF
 			RE::NiPointer<RE::NiAVObject> sunEntryNode;  // its sun entry (ResolveSunEntry); none: the entry is unbounded
 			std::uint32_t slot = kNoObjectSlot;
 			std::uint32_t layerSlot = kNoObjectSlot;  // its layer's row (WriteLayer): the same placement, its layer property's fade node
-			// A skin's palette block (Tables::boneOffset, boneRows), 0 rows without one: the engine's palette update, then its
+			// A skin's palette block (SceneTables::boneOffset, boneRows), 0 rows without one: the engine's palette update, then its
 			// rows (PaletteRowsOf).
 			std::uint32_t boneOffset = 0, boneRows = 0;
-			// T7e: a first-person entry's (FirstPersonEntry). The engine moves the first-person skeleton's world translations to its
+			// A first-person entry's (FirstPersonEntry). The engine moves the first-person skeleton's world translations to its
 			// root's space on the render thread (FUN_1414cb020 to FUN_1414cb270, and RenderDepth's block), within the read window: the
 			// producer never samples it, and the render thread takes a claimed one's row and palette at the frame's start, before
 			// the shift (FrameValues::Kick).
 			bool firstPerson = false;
-			// T7e: a particle system's (its block, boneOffset and boneRows, is its quads': ParticleSnapshots, five rows a particle): the
+			// A particle system's (its block, boneOffset and boneRows, is its quads': ParticleSnapshots, five rows a particle): the
 			// producer expands its newest snapshot there, and its placement row is the snapshot's.
 			bool particles = false;
 		};
@@ -101,7 +105,7 @@ namespace DCLF
 		std::vector<Item> written;  // once, by the frame that takes the plan
 		std::vector<Root> roots;    // every frame until the next plan
 		std::uint32_t slots = 0;         // the object slots the tables held
-		std::uint32_t boneCapacity = 0;  // the palette rows their blocks span (Tables::BoneCapacity)
+		std::uint32_t boneCapacity = 0;  // the palette rows their blocks span (SceneTables::BoneCapacity)
 		std::uint64_t walk = 0;          // the walk that made it
 	};
 
@@ -111,7 +115,7 @@ namespace DCLF
 	 */
 	struct ShadingItem
 	{
-		RE::NiPointer<RE::BSShaderProperty> property;  // a BSLightingShaderProperty (the layer's for a layer's slot), or T7d's effect property
+		RE::NiPointer<RE::BSShaderProperty> property;  // a BSLightingShaderProperty (the layer's for a layer's slot), or an effect property
 		std::uint32_t slot = kNoObjectSlot;
 		std::uint32_t pass = 0;   // its pipeline's pass descriptor
 		bool member = false;      // a resident record's (SampleShading's a_member)
@@ -119,7 +123,7 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief T6b1a: a fade root whose seed FrameValues samples (FadeState::StaticOf) in the frame that first draws its generation, into
+	 * @brief A fade root whose seed FrameValues samples (FadeState::StaticOf) in the frame that first draws its generation, into
 	 * its seed row (FadeSeedRow): listed, reseeded by a placement snap, or owned. Holds the node.
 	 */
 	struct FadeSeedItem
@@ -130,7 +134,7 @@ namespace DCLF
 		std::uint32_t row = 0;
 	};
 
-	/** @brief T6b1a: a listed tree node whose values FrameValues' tree seeds take at the frame's start (row: 2 * slot + seedOdd). */
+	/** @brief A listed tree node whose values FrameValues' tree seeds take at the frame's start (row: 2 * slot + seedOdd). */
 	using TreeSeedItem = FadeSeedItem;
 
 	/** @brief One actor-owned slot's wetness, as the frame's start captured it (Skin::GetWetness). */
@@ -141,15 +145,15 @@ namespace DCLF
 	};
 
 	// The light entries (IsLightEntry): a key of lightDependents gaining its first geometry, losing its last, or every key gone, as
-	// the coordinator's changes (onto the log: PublicationDeltas::lightEntries) and the render thread's set kept from them. Copying the
-	// whole set at each change (a root tracked or untracked: every frame in motion) lengthened the accumulate pass.
+	// the coordinator's changes (onto the log: PublicationDeltas::lightEntries) and the render thread's set kept from them. Changes, not
+	// copies of the set: it changes with every root tracked or untracked, every frame in motion.
 	struct LightEntryChange
 	{
 		const RE::NiAVObject* node = nullptr;
 		std::int8_t kind = 0;  // 1 added, -1 removed, 0 every entry cleared
 	};
 
-	/** @brief T6b5: a LOD gate flipped by a commit (UpdateGates), released by the frame installing its publication (ReleaseGates). */
+	/** @brief A LOD gate flipped by a commit (UpdateGates), released by the frame installing its publication (ReleaseGates). */
 	struct GateFlip
 	{
 		std::uint64_t token = 0;
@@ -160,7 +164,7 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief What one publication's passes made for the frame and the frame's start takes (T6b3a), carried by the publication log in
+	 * @brief What one publication's passes made for the frame and the frame's start takes, carried by the publication log in
 	 * the publication's order: the main claims' changes against the publication before it (taken up to the installed one), and the
 	 * frame inputs (taken up to the newest one taken): the walks' placement plans, the slots named for their shading, the fade and
 	 * tree seed requests, the switches the walks applied (switchResync: PrimaryCull reads them all), the import leases of the geometry
@@ -170,7 +174,7 @@ namespace DCLF
 	{
 		std::uint64_t publication = 0;  // its publication's sequence
 		std::uint32_t commitFrame = 0;  // that publication's commit (the install delay)
-		// T6b3d: that publication's oldest event (ScenePublication::eventNs, eventFrame): the frame installing it, or one after it the
+		// That publication's oldest event (ScenePublication::eventNs, eventFrame): the frame installing it, or one after it the
 		// builder skipped past to, measures the event to its adoption.
 		std::uint64_t eventNs = 0;
 		std::uint32_t eventFrame = 0;
@@ -183,7 +187,7 @@ namespace DCLF
 		std::vector<std::shared_ptr<const void>> retiredImports;
 		std::vector<SceneTables::ActorWetnessChange> actorWetness;
 		std::vector<LightEntryChange> lightEntries;
-		std::vector<GateFlip> gateFlips;  // T6b5: the LOD gates its commits flipped (ReleaseGates)
+		std::vector<GateFlip> gateFlips;  // the LOD gates its commits flipped (ReleaseGates)
 	};
 
 	/** @brief What a publication is made from (the tables' logs, stamps and sizes, the lookups, the catalog): a pass that changed none of it publishes nothing. */

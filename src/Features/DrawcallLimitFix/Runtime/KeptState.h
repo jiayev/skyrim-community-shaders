@@ -129,8 +129,7 @@ namespace DCLF
 					a_run(std::uint64_t{ 0 }, a_count);
 					return a_count;
 				}
-				// Dense dirty object/input tables: a compact bitmap avoids sorting thousands of
-				// single-element journal entries. Sparse/large byte arenas keep the range sorter.
+				// Dense dirty tables: a bitmap avoids sorting thousands of single-element entries. Sparse or large arenas sort ranges.
 				if (reuseKeptStorage && entries.size() >= 128 && a_count <= (1u << 20) && a_count <= entries.size() * 64) {
 					std::vector<std::uint64_t> bits(static_cast<std::size_t>((a_count + 63) / 64), 0);
 					for (const auto& entry : entries) {
@@ -370,7 +369,7 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief The versions several buffers mirroring one kept array hold (a ring of them, one per frame in flight: step 6e E), each
+	 * @brief The versions several buffers mirroring one kept array hold (a ring of them, one per frame in flight), each
 	 * set by the uploader that fills it, read by the array's builds for the oldest (ChangeJournal::BeginBuild). Lock-free: an
 	 * uploader raises its entry once its upload is queued; a build that reads an older value only keeps more of the journal.
 	 */

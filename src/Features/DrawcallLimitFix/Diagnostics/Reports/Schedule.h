@@ -48,6 +48,14 @@ namespace DCLF::Reports
 		}
 	};
 
+	/** @brief Milliseconds per QueryPerformanceCounter tick, for the reports' timings. */
+	inline double MsPerTick()
+	{
+		LARGE_INTEGER frequency{};
+		QueryPerformanceFrequency(&frequency);
+		return 1000.0 / static_cast<double>(frequency.QuadPart);
+	}
+
 	/** @brief Render thread, Present, once per frame number while DCLF runs: the frame's report lines (Frame.cpp). */
 	void RenderThread(std::uint32_t a_frame);
 

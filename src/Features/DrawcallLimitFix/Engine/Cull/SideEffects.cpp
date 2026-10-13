@@ -1,3 +1,4 @@
+// SideEffects: the actors' animation stamp from DCLF's shadow views (main thread, Main::Update's entry). SideEffects.h describes it.
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
@@ -8,8 +9,6 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
-
-// The engine side effects DCLF produces. SideEffects.h describes them.
 
 namespace DCLF::SideEffects
 {

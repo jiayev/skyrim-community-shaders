@@ -1,11 +1,3 @@
-#include "SceneObservers.h"
-#include "SceneState.h"
-
-#include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
-#include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
-
-#include <fmt/ranges.h>
-
 // CS_DCLF_MIRROR_PARITY, the records: the render thread captures a slice of the tracked objects live at the frame's start (the probe, asked
 // by the coordinator once a frame), and the next pass compares it with the mirror after its events. A field that differs is
 // - evented: an event without values named the object since it was last captured (a hook that carries no value yet);
@@ -13,6 +5,14 @@
 // - missed: nothing named it (a writer no hook sees).
 // An update names only its fields: a field it did not carry that differs is late or missed. CS_DCLF_MIRROR_WATCH=parity arms its
 // watchpoints on what the check found stale.
+
+#include "SceneObservers.h"
+#include "SceneState.h"
+
+#include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
+
+#include <fmt/ranges.h>
 
 namespace DCLF::Diagnostics
 {
@@ -92,7 +92,7 @@ namespace DCLF::Diagnostics
 							a_mirror->currentFade, a_live.currentFade, a_mirror->fadeLevel, a_live.fadeLevel, a_mirror->fadeDoor, a_live.fadeDoor, a_mirror->capturedFrame,
 							a_mirror->thread, a_mirror->updatedFrame, a_live.capturedFrame);
 					if (differ & SceneCapture::NodeRecord::kBody) {
-						// Diagnostic (the parity's, F3): the live chain NonFixedBody reads, from the probe's key (alive: the probe just read it).
+						// The live chain NonFixedBody reads, from the probe's key (alive: the probe just read it).
 						const auto* node = static_cast<const RE::NiAVObject*>(a_live.key);
 						const auto* collision = node->collisionObject.get();
 						const auto* ni = collision ? const_cast<RE::NiCollisionObject*>(collision)->AsBhkNiCollisionObject() : nullptr;
@@ -256,13 +256,13 @@ namespace DCLF::Diagnostics
 			m.probeRequests.Push(std::move(request));
 		}
 
-		void OnCheckPoint(const MirrorCheckPoint& a_event)
+		void OnCheckPoint(const On<ScenePoint::MirrorCheckPoint>&)
 		{
 			// With the pass's events all drained: the applied batch's probe against the mirror; the next probe asked of the render thread.
 			auto& m = SceneDiagnostics().mirror;
 			if (m.probe) {
 				ZoneScopedN("CS.DCLF.Scene.MirrorParity");
-				Check(V::mirror(a_event.store), *m.probe, m.eventKeys, m.eventFields);
+				Check(V::mirror(Scene::Coordinator::Get()), *m.probe, m.eventKeys, m.eventFields);
 				if (const void* property = std::exchange(m.missedProperty, nullptr))
 					m.watchProperty.store(property, std::memory_order_release);
 				if (const void* alpha = std::exchange(m.missedAlpha, nullptr))
@@ -273,10 +273,10 @@ namespace DCLF::Diagnostics
 			}
 			m.eventKeys.clear();
 			m.eventFields.clear();
-			PostProbeRequest(a_event.store);
+			PostProbeRequest(Scene::Coordinator::Get());
 		}
 
-		void OnProbePoint(const MirrorProbePoint&)
+		void OnProbePoint(const On<ScenePoint::MirrorProbePoint>&)
 		{
 			// Render thread, the frame's start. CS_DCLF_MIRROR_WATCH=parity: what the last check found stale, watched from here.
 			auto& m = SceneDiagnostics().mirror;
@@ -362,7 +362,7 @@ namespace DCLF::Diagnostics
 		Subscribe<MirrorUpdateApplied>(OnUpdateApplied);
 		Subscribe<EventsCollecting>(OnEventsCollecting);
 		Subscribe<MirrorEventsApplied>(OnEventsApplied);
-		Subscribe<MirrorCheckPoint>(OnCheckPoint);
-		Subscribe<MirrorProbePoint>(OnProbePoint);
+		Subscribe<ScenePoint::MirrorCheckPoint>(OnCheckPoint);
+		Subscribe<ScenePoint::MirrorProbePoint>(OnProbePoint);
 	}
 }

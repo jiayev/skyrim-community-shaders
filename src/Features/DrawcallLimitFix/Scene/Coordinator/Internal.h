@@ -1,6 +1,7 @@
 #pragma once
 
-// Coordinator's implementation, shared by the files of this folder only (Coordinator.h is the interface).
+// Coordinator's implementation, shared by the files of this folder only (Coordinator.h is the interface): helpers, the event batch,
+// the shard and timing scopes. Coordinator thread (the scene lane) and the pass's pool workers.
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
@@ -233,11 +234,11 @@ namespace DCLF
 		};
 	}
 
-	// What were one translation unit's anonymous namespaces: their names resolve here as they did there.
+	// The folder's files use Scene's names unqualified.
 	using namespace Scene;
 
 	/**
-	 * @brief One scene pass's events (T6b3d: Coordinator::CollectEvents, on the coordinator, each queue drained up to where it stood at
+	 * @brief One scene pass's events (Coordinator::CollectEvents, on the coordinator, each queue drained up to where it stood at
 	 * the pass's start), oldest first per queue, applied by the same pass (ApplyEvents). Applied, it is handed back whole: its tracker
 	 * events hold attached subtrees, released at Present. A batch made only to carry references to Present (a load screen's discarded
 	 * node and switch events) goes straight to EngineReleases::PushOwner.
@@ -257,7 +258,7 @@ namespace DCLF
 		SceneTracker::Event* mirrorTail = nullptr;
 		// The objects a load screen's discarded events named (the mirror's observers count them named: their writers have hooks).
 		std::vector<const void*> mirrorNamed;
-		// T6b3d: the oldest stamp of its tracker events (SceneTracker::Event::stampNs, stampFrame; 0: none), for the latencies.
+		// The oldest stamp of its tracker events (SceneTracker::Event::stampNs, stampFrame; 0: none), for the latencies.
 		std::uint64_t oldestNs = 0;
 		std::uint32_t oldestFrame = 0;
 
@@ -290,7 +291,7 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief T6b3e: a pass's batch (its tracker events' pins and captures, its nodes' and switches' references) handed to the render thread
+	 * @brief A pass's batch (its tracker events' pins and captures, its nodes' and switches' references) handed to the render thread
 	 * (EngineReleases::PushOwner, released at Present) when the pass unwinds while it holds it: a throw never destroys it on the pump, where the
 	 * engine's destructors must not run. A batch passed on (retired, posted) leaves it null and the guard does nothing.
 	 */
@@ -313,16 +314,6 @@ namespace DCLF
 	};
 
 
-	/**
-	 * @brief Attributes the time since the last call to one BuildPart.
-	 *
-	 * Inert unless CS_DCLF_PROFILE=1: with profiling off `parts` is null and Add() is a null test, so
-	 * the loop makes no clock calls. That matters because the calls themselves were ~4000 a frame,
-	 * about 0.1 ms, which is 6% of what BuildFrame was being measured at.
-	 *
-	 * Timing a loop from inside it perturbs what it measures, so the profiled and unprofiled totals
-	 * are both reported and the difference is the instrument's own cost.
-	 */
 	/** @brief Adds the time from construction to destruction to a scene part's sum and its frame's time (ms). */
 	struct ScenePartScope
 	{
@@ -343,7 +334,7 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief T6b3e: what a scene pass's evaluations read on whichever thread runs them. Always the pass's snapshot of the toggles and of
+	 * @brief What a scene pass's evaluations read on whichever thread runs them. Always the pass's snapshot of the toggles and of
 	 * Terrain Blending (Coordinator::passSnapshot), and the chunk's mirror-read counters when given. On a pool thread (a_worker) also the
 	 * pass's frame globals (FrameGlobals::Current is per thread) and the scene work's flags (sceneWorkThread, EngineReadWindow::sceneWork),
 	 * as the sun candidates' verdicts (DirtyVerdicts) and the fan-outs take them: an engine read from there without a lease is counted. One per chunk; the
@@ -390,6 +381,13 @@ namespace DCLF
 	ScenePartScope scenePartScope(stats.scenePartMs[static_cast<std::size_t>(ScenePart::a_part)], \
 		stats.scenePartFrameMs[static_cast<std::size_t>(ScenePart::a_part)])
 
+	/**
+	 * @brief Attributes the time since the last call to one BuildPart.
+	 *
+	 * Inert unless CS_DCLF_PROFILE=1: with profiling off `parts` is null and Add() is a null test, so the loop makes no clock calls.
+	 * Timing a loop from inside it perturbs what it measures, so the profiled and unprofiled totals are both reported and the
+	 * difference is the instrument's own cost.
+	 */
 	struct PartTimer
 	{
 		std::array<double, static_cast<std::size_t>(BuildPart::Count)>* parts = nullptr;

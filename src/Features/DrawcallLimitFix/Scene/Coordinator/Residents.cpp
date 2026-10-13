@@ -1,3 +1,6 @@
+// The coordinator's residents (scene lane): the resident set's slots marked, dropped and kept alive, and the tree and fade-root rows
+// listed for them, with their owned engine nodes and seed requests.
+
 #include "Internal.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
@@ -21,7 +24,6 @@ namespace DCLF::Scene
 		residentPatches.push_back(a_patch);
 		if (a_slot < tables.residentSlot.size())
 			tables.residentSlot[a_slot] = 1;
-		Diagnostics::Notify(Diagnostics::ResidentBound{ *this, a_slot });
 	}
 
 	void Coordinator::DropResidentSlot(std::uint32_t a_slot, bool a_restore)
@@ -219,13 +221,13 @@ namespace DCLF::Scene
 		const bool tree = a_slot < tables.objects.size() && (tables.objects[a_slot].flags & kObjectTreeAnim);
 		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
 		// The tree node from the mirror (its property's fade node, a BSTreeNode); its values are the seed's, which the render thread takes
-		// at the frame's start (T6b1a: the scene work reads no engine memory, and runs no engine code).
+		// at the frame's start (the scene work reads no engine memory, and runs no engine code).
 		TreeStatic row;
 		const void* node = nullptr;
 		if (const auto* record = tree && geometry ? mirror.Leaf(geometry).property : nullptr; record && record->fadeNode)
 			if (const auto* fade = mirror.Node(record->fadeNode); fade && (fade->kind & SceneCapture::kKindTree))
 				node = record->fadeNode;
-		// T6b3e: a node not listed yet is owned from the entry's reference (pins), never from the key; without one, nodeless.
+		// A node not listed yet is owned from the entry's reference (pins), never from the key; without one, nodeless.
 		RE::NiPointer<RE::NiAVObject> owner;
 		if (node && !tables.treeIndex.contains(node) && !(owner = HeldFadeNode(a_slot, node)))
 			node = nullptr;
@@ -263,7 +265,7 @@ namespace DCLF::Scene
 			row.seedOdd = (tables.trees[t].seedOdd & 1u) ^ 1u;
 			tables.trees[t] = row;
 			tables.treeNode[t] = node;
-			// Owned while listed (step 6e E3: a published version that names it keeps it, through the retirement chain).
+			// Owned while listed (a published version that names it keeps it, through the retirement chain).
 			if (treeOwners.size() <= t)
 				treeOwners.resize(std::size_t(t) + 1);
 			treeOwners[t] = std::move(owner);
@@ -282,16 +284,16 @@ namespace DCLF::Scene
 		if (denseWalk)
 			return;
 		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
-		// Its property's fade node (T6b1b: the mirror's).
+		// Its property's fade node (the mirror's).
 		const auto* property = geometry ? mirror.Leaf(geometry).property : nullptr;
 		const auto* node = property ? static_cast<const RE::NiAVObject*>(property->fadeNode) : nullptr;
-		// T7f item 7: the engine's "no fade node" (Engine::EmptyFadeNode: terrain, object LOD, references whose root is no BSFadeNode) is no
-		// root. Listed, it was one root shared by thousands of geometries, outside the scene graph: no chain reached it (SetChain's misses),
-		// and FadeStateCS and the write-back wrote a static engine node. Such a geometry takes its entry's root as any plain one.
+		// The engine's "no fade node" (Engine::EmptyFadeNode: terrain, object LOD, references whose root is no BSFadeNode) is no root: it
+		// is one node shared by thousands of geometries, outside the scene graph, so no chain reaches it and FadeStateCS and the write-back
+		// would write a static engine node. Such a geometry takes its entry's root as any plain one.
 		static const bool emptyIsNone = SwitchOnUnlessZero(Switch::EmptyFadeNode);
 		if (emptyIsNone && node == Engine::EmptyFadeNode())
 			node = nullptr;
-		// T6b3e: a root not listed yet is owned from the entry's reference (pins), never from the key; without one, not listed.
+		// A root not listed yet is owned from the entry's reference (pins), never from the key; without one, not listed.
 		RE::NiPointer<RE::NiAVObject> owner;
 		if (node && !tables.fadeRootIndex.contains(node) && !(owner = HeldFadeNode(a_slot, node)))
 			node = nullptr;
@@ -321,16 +323,16 @@ namespace DCLF::Scene
 				tables.fadeRootNode.push_back(nullptr);
 			}
 			// The coordinator's half from the mirror; the node's state and values are the seed's, sampled by FrameValues in the frame
-			// that first draws the generation (T6b1a: the scene work reads no engine memory).
+			// that first draws the generation (the scene work reads no engine memory).
 			auto row = FadeRootFromMirror(node);
 			row.object = a_slot;
 			row.bits |= tables.fadeRoots[r].bits & kFadeRootSeedOdd;
 			if (const auto owned = fadeRootOwned.find(node); owned != fadeRootOwned.end())
 				row.bits |= kFadeRootOwned | (owned->second ? kFadeRootStoodIn | kFadeRootWritten : 0u);
-			// T7f checklist items 4-5: every listed root is owned and DCLF's to write from its listing (the row's seed is the node as listed).
+			// Every listed root is owned and DCLF's to write from its listing (the row's seed is the node as listed).
 			row.bits |= kFadeRootOwned | kFadeRootWritten;
 			tables.fadeRootNode[r] = node;
-			// Owned while listed (step 6e E3: a published version that names it keeps it, through the retirement chain).
+			// Owned while listed (a published version that names it keeps it, through the retirement chain).
 			if (fadeRootOwners.size() <= r)
 				fadeRootOwners.resize(std::size_t(r) + 1);
 			fadeRootOwners[r] = std::move(owner);
@@ -381,7 +383,7 @@ namespace DCLF::Scene
 		if (it == tables.fadeRootIndex.end())
 			return;
 		auto& row = tables.fadeRoots[it->second];
-		// T7f checklist items 4-5: owned and written since its listing, its state the GPU's throughout (no engine step to seed again from):
+		// Owned and written since its listing, its state the GPU's throughout (no engine step to seed again from):
 		// the cut's stand-in only moves kFadeRootStoodIn.
 		row.bits = (row.bits & ~kFadeRootStoodIn) | kFadeRootOwned | kFadeRootWritten | (a_owned && a_standIn ? kFadeRootStoodIn : 0u);
 		tables.NoteFadeRoot(it->second);
@@ -456,7 +458,7 @@ namespace DCLF::Scene
 		if (it == tables.fadeRootSwitch.end() || it->second >= tables.fadeRoots.size() || !tables.fadeRootNode[it->second])
 			return;
 		auto& row = tables.fadeRoots[it->second];
-		// The mirror's (T6b1a: the switch's stores carry its index, applied before the switch events).
+		// The mirror's (the switch's stores carry its index, applied before the switch events).
 		const auto* lodSwitch = mirror.Node(a_switch);
 		const bool selected = lodSwitch && lodSwitch->switchIndex > 0;
 		if (selected == ((row.bits & kFadeRootTreeLod) != 0))
@@ -473,7 +475,7 @@ namespace DCLF::Scene
 		if (it == tables.fadeRootIndex.end())
 			return;
 		auto& row = tables.fadeRoots[it->second];
-		// The mirror's (T6b1a: Actor::SetAlpha's update carries it, applied before this batch's structural events).
+		// The mirror's (Actor::SetAlpha's update carries it, applied before this batch's structural events).
 		const auto* record = mirror.Node(a_node);
 		if (!record)
 			return;

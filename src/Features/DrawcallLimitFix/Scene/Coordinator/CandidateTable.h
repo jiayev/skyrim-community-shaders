@@ -1,5 +1,8 @@
 #pragma once
 
+// The coordinator's stable index space for a candidate set (the sun's and the point lights' SunCandidates), and the pooled snapshots
+// published from it. Coordinator thread only; a published snapshot is read by the frame's builds and released by its last owner.
+
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -11,10 +14,9 @@
 namespace DCLF::Scene
 {
 	/**
-	 * @brief A candidate set's stable index space (SunCandidates' indices), the coordinator's: the entries' and their geometries' indices
-	 * with their free lists, each entry's geometries and its version (moved by every change of the index, from a counter the caller
-	 * shares between tables). A snapshot is brought up to it at the indices whose versions moved (Publish), reusing one of the pool no
-	 * reader holds any more.
+	 * @brief The entries' and their geometries' indices with their free lists, each entry's geometries and its version (moved by every
+	 * change of the index, from a counter the caller shares between tables). Publish brings a pooled snapshot no reader holds up to the
+	 * table at the indices whose versions moved.
 	 */
 	struct CandidateTable
 	{
@@ -36,7 +38,7 @@ namespace DCLF::Scene
 		/** @brief Every index freed under a new version: the pooled snapshots drop their entries when brought up to it. */
 		void Reset(std::uint32_t& a_versions);
 		/**
-		 * @brief a_root's entry as its dependents now are (a_dependents; null: not a candidate): written again, its geometries with it,
+		 * @brief a_root's entry as its dependents are (a_dependents; null: not a candidate): written again, its geometries with it,
 		 * under a new version. a_geometry(geometry) gives a new geometry's object slot and primary verdict.
 		 */
 		template <class Geometry>

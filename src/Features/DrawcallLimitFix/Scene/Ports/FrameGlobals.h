@@ -1,5 +1,8 @@
 #pragma once
 
+// FrameGlobals: the engine globals the scene reads, captured once by the render thread at the frame's start and immutable after;
+// the scene-work thread and its pool read the capture their frame carries (FrameGlobals::Scope), the render thread its latest.
+
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -21,7 +24,7 @@ struct ID3D11ShaderResourceView;
 namespace DCLF
 {
 	/**
-	 * @brief What SetupTechnique reads of the engine (T6b2c): sampled by the render thread at the frame's start (SampleTechniqueInputs,
+	 * @brief What SetupTechnique reads of the engine: sampled by the render thread at the frame's start (SampleTechniqueInputs,
 	 * ConstantEvaluator.cpp), so EvaluateTechnique is a function of the pass descriptor and the frame's sample alone.
 	 */
 	struct TechniqueInputs
@@ -39,14 +42,13 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief The engine's frame globals the scene reads (step 6e F2), captured by the render thread at the frame's start
-	 * (BeginSceneFrame: the engine's update done, before the culls), immutable after.
+	 * @brief The engine's frame globals the scene reads, captured by the render thread at the frame's start
+	 * (FrameDriver::BeginFrame: the engine's update done, before the culls), immutable after.
 	 *
-	 * The scene work runs on DCLF's coordinator and reads no engine memory (dclf-async-publication.md, "F"): what it took from
-	 * engine globals - settings, render state bytes, the fade update's constants, the tree wind, the frame's cull-hidden roots -
-	 * it reads from the capture its frame carries (Scope). A helper shared with the render thread reads the same capture, the
-	 * render thread's latest. Any other thread that reads it without a scope is a defect: counted and logged once (it gets the
-	 * render thread's latest).
+	 * The scene work runs on DCLF's coordinator and reads no engine memory: what it needs of engine globals - settings, render
+	 * state bytes, the fade update's constants, the tree wind, the frame's cull-hidden roots - it reads from the capture its frame
+	 * carries (Scope). A helper shared with the render thread reads the same capture, the render thread's latest. Any other thread
+	 * that reads it without a scope is a defect: counted and logged once (it gets the render thread's latest).
 	 */
 	struct FrameGlobals
 	{
@@ -56,7 +58,7 @@ namespace DCLF
 		std::array<std::uint32_t, 4> decalBias{};  // DecalDepthBiasMode per decal group (0 unused)
 		// [LightingShader] LOD fade thresholds (GetRenderPasses' specular and envmap LOD fades).
 		float specularStart = 0.09f, specularEnd = 0.10f, envmapStart = 0.09f, envmapEnd = 0.10f;
-		float refractionStart = 0.025f, refractionEnd = 0.03f;  // T7d's refraction (fRefractionLODFade*)
+		float refractionStart = 0.025f, refractionEnd = 0.03f;  // the refraction LOD fade (fRefractionLODFade*)
 		// SetupTechniqueDescriptor's bytes (0x2032fdb, 0x2035500).
 		std::uint8_t techniqueByte12 = 0, techniqueByte7 = 0;
 		// GetRenderPasses_ShadowMapOrMask's global (0x2033498): 1 no caster without kCastShadows, 2 the volumetric copy only.
@@ -80,23 +82,23 @@ namespace DCLF
 		// SceneCapture::NextSequence just before cullHidden was read: a hidden store's event numbered after it may be newer than the bit
 		// the capture holds for its node (Coordinator::DrainHiddenEvents announces it again at a newer capture).
 		std::uint64_t cullHiddenSequence = 0;
-		// T7e: the geometry keys under the first-person root as the frame's start walked them (sorted; identities): the first-person
+		// The geometry keys under the first-person root as the frame's start walked them (sorted; identities): the first-person
 		// hidden verdict's diagnostic (Coordinator::NoteFirstPersonHidden).
 		std::vector<const RE::NiAVObject*> firstPersonGeometry;
 		// PrimaryCull::MembershipWitness of the values above.
 		std::uint32_t membershipWitness = 0;
-		// SetupTechnique's inputs (T6b2c).
+		// SetupTechnique's inputs.
 		TechniqueInputs technique;
 		// A reference on technique.shadowMask, taken with the sample: the technique rows name it, and the scene work asks for its binding
 		// (Coordinator::UpdateSharedBindings) while its frame's capture is held, so the view outlives the request.
 		winrt::com_ptr<ID3D11ShaderResourceView> shadowMaskHeld;
-		// SetupMaterial's per-frame sources (T6b2a: the scene work's material records).
+		// SetupMaterial's per-frame sources (the scene work's material records).
 		MaterialPort::MaterialFrame material;
 
 		/** @brief Render thread, the frame's start: the frame's capture, which Current() hands the render thread from now on. */
 		static std::shared_ptr<const FrameGlobals> Capture();
 		/**
-		 * @brief T7e, render thread, at RenderDepth's first-person draw (after the engine's first-person culls): the hidden bit of every
+		 * @brief Render thread, at RenderDepth's first-person draw (after the engine's first-person culls): the hidden bit of every
 		 * node under a_root as those culls saw them. The next frame's capture lists them (cullHidden) in place of the frame start's bits.
 		 */
 		static void NoteFirstPersonCulled(const RE::NiAVObject* a_root);

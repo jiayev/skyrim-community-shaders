@@ -1,3 +1,5 @@
+// CandidateTable's reset and snapshot publication (coordinator thread).
+
 #include "Features/DrawcallLimitFix/Scene/Coordinator/CandidateTable.h"
 
 #include "Features/DrawcallLimitFix/Runtime/EngineReleases.h"
@@ -8,7 +10,6 @@ namespace DCLF::Scene
 {
 	void CandidateTable::Reset(std::uint32_t& a_versions)
 	{
-		// Every index freed under a new version: the pooled snapshots drop their entries when brought up to it.
 		for (std::uint32_t e = 0; e < nodes.size(); ++e)
 			version[e] = ++a_versions;
 		index.clear();

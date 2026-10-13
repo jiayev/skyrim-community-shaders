@@ -8,9 +8,8 @@ namespace DCLF
 	 * @brief The engine's shader instances DCLF's programs and material ports are of.
 	 *
 	 * The Lighting shader is BSLightingShader's instance (0x14338ca00, written by its constructor), as captured at a frame's start
-	 * (Coordinator::CaptureLightingShader): set once, on the render thread with the coordinator idle and before the scene work's kick,
-	 * so the scene lane reads only what was set before it; null before the engine made it. The Effect shader is read where it is
-	 * asked for.
+	 * (FrameView::CaptureLightingShader): set once, on the render thread before the frame's inputs are posted, so the scene lane reads
+	 * only what was set before it; null before the engine made it. The Effect shader is read where it is asked for.
 	 */
 	class EngineShaders
 	{

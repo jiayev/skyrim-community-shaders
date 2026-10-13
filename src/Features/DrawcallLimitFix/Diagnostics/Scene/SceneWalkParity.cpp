@@ -1,10 +1,10 @@
+// CS_DCLF_WALK_PARITY: every 60 passes, right after the walk, the slot tables against a dense rebuild (Coordinator's reference walk,
+// which leaves the coordinator as it found it), object by object, and the kept verdicts and traits against a classification from scratch.
+
 #include "SceneObservers.h"
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
-
-// CS_DCLF_WALK_PARITY: every 60 passes, right after the walk, the slot tables against a dense rebuild (Coordinator's reference walk,
-// which leaves the store as it found it), object by object, and the kept verdicts and traits against a classification from scratch.
 
 namespace DCLF::Diagnostics
 {
@@ -203,9 +203,9 @@ namespace DCLF::Diagnostics
 			}
 		}
 
-		void OnWalkDone(const WalkDone& a_event)
+		void OnWalkDone(const On<ScenePoint::WalkDone>&)
 		{
-			auto& store = a_event.store;
+			auto& store = Scene::Coordinator::Get();
 			if (!ParityDue(V::passSerial(store)))
 				return;
 			ZoneScopedN("CS.DCLF.Scene.WalkParity");
@@ -218,6 +218,6 @@ namespace DCLF::Diagnostics
 
 	void InstallWalkParity()
 	{
-		Subscribe<WalkDone>(OnWalkDone);
+		Subscribe<ScenePoint::WalkDone>(OnWalkDone);
 	}
 }

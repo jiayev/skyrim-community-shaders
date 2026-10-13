@@ -163,9 +163,6 @@ namespace DCLF::Engine
 		inline constexpr std::uintptr_t kDepthBiasEnabled = 0x2032ff6;        // byte: ToggleDepthBias (read by FUN_1414b3bb0)
 		inline constexpr std::uintptr_t kCameraDepthRange = 0x202b130;        // float[2]: the camera state's depth range (FUN_140e57e10)
 		inline constexpr std::uintptr_t kMatrixMultiply = 0x153d3c8;          // the engine's 4x4 multiply (out, a, b)
-		inline constexpr std::uintptr_t kReflectLodLand = 0x20104a0;          // bool: INI bReflectLODLand
-		inline constexpr std::uintptr_t kReflectLodObjects = 0x20104b8;       // bool: INI bReflectLODObjects
-		inline constexpr std::uintptr_t kReflectLodTrees = 0x20104d0;         // bool: INI bReflectLODTrees
 	}
 
 	// NiAVObject::flags and the bits DCLF reads and writes.

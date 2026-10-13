@@ -30,24 +30,22 @@ namespace DCLF
 	struct PipelineCatalog;
 
 	/**
-	 * @brief DCLF's objects drawn by the render graph with indirect command streams, into the main pass's own
-	 * targets and depth; the native loop skips what DCLF drew.
+	 * @brief DCLF's draws: the installed scene publication's objects drawn by the render graph with GPU-culled indirect draws; the
+	 * engine is told not to draw what DCLF claims.
 	 *
-	 * Inside the native depth pass, CaptureDepthPass runs the ZPrepass epoch (DCLF's depth, then the HZB and the
-	 * two-phase occlusion cull). Where the main (deferred) pass's opaque batches start, CaptureMainPass records
-	 * what the pass binds, and where they end ExecuteColour runs the MainOpaque epoch. The draw data is
-	 * assembled on the CPU (on the coordinator's lane where it can be) and uploaded:
-	 *   - constant blocks packed with the native shaders' constant tables: PerTechnique per pipeline,
-	 *     PerMaterial per (material, pipeline), PerGeometry per object, Light Limit Fix's StrictLightData
-	 *     per (room, shadow mask), the permutation per (pipeline, object flags), the alpha-test reference
-	 *     per threshold, and every other bound constant buffer from its CPU mirror (ConstantMirror);
-	 *   - one DrawBindings record per object (constant buffer addresses, texture and sampler heap indices);
-	 *   - one DrawSequence per object.
-	 * The colour pass executes the sequences against the Z-prepass's depth (depth test EQUAL) into the main
-	 * pass's targets, imported from DXVK. An object is drawn only when everything its pipeline's shaders read
-	 * can be supplied.
+	 * Each DCLF draw point is an epoch (Revision/Epochs.h): Z-prepass (depth, HZB, two-phase occlusion culling), colour (EQUAL
+	 * against the Z-prepass), forward (blended, back to front), shadow views and occlusion maps, water reflection faces, first
+	 * person. An epoch submits the selected scene revision's recording; its commit writes only what the frame has (constant blocks,
+	 * frame textures, the latch) into the revision's shape, and its draws read the frame's payload ring entry. Nothing is built in
+	 * the frame.
 	 *
-	 * Render thread only.
+	 * Threads:
+	 *   - the coordinator (scene lane): PhaseReady, FitsScene, the slot readiness checks, ResolveLookups, PostSnapshotWork;
+	 *   - the snapshot builder (DCLF's preparation pool, one pass at a time): a publication's payloads and scene revision, the
+	 *     complete snapshot posted for the frame's start (AdoptSnapshot);
+	 *   - the main thread at Main::Update's entry: WriteFadeStores, WriteAccumulated and the verdicts;
+	 *   - the render thread: everything else.
+	 * The hand-offs between them are latest-wins slots and atomics.
 	 */
 	class IndirectDraws
 	{
@@ -66,11 +64,8 @@ namespace DCLF
 		static IndirectDraws& Get();
 
 		/**
-		 * @brief The set's shadow phases DCLF can draw (SetPhase bits; Coordinator::SetCapability): the casters' and the point lights'
-		 * once the shadow resources and the rasterizer state catalog are set up, and each enabled occlusion map's once its map has been
-		 * captured. A capability, not what a frame drew: it changes only at setup, on a toggle or a failure, so which views the
-		 * engine asks for in a frame never changes the set. Published by the render thread at the frame's start
-		 * (UpdateShadowCapability); any thread.
+		 * @brief The shadow phases DCLF can draw (SetPhase bits; Coordinator::SetCapability). A capability, changed only at setup, on a
+		 * toggle or a failure, so the views a frame asks for never change the set. Published by the render thread; read from any thread.
 		 */
 		std::uint8_t ShadowCapability() const;
 		/** @brief Render thread, at the frame's start: sets up what the capability needs and publishes it. */
@@ -79,223 +74,179 @@ namespace DCLF
 		std::string ShadowCapabilityReport() const;
 		/**
 		 * @brief Render thread, before ShadowViews::Rebuild: how many shadow views DCLF draws - every one (UINT32_MAX) once the view
-		 * placements are set up (a view draws at its placement's slot), none before, after a failure, or on a frame without claims.
+		 * placements are set up, none before, after a failure, or on a frame without claims.
 		 */
 		std::uint32_t ShadowViewCapacity();
 		/**
-		 * @brief BeforeShadowMaps, after ShadowViews::Rebuild and before the engine draws a view (scene revisions): the frame's views are
-		 * DCLF's with the selected revision's shape for the placements (one shape, whichever views come); until a revision has recorded
-		 * it (startup, a growth), every one is the engine's this frame (ShadowViews::UncoverAll).
+		 * @brief BeforeShadowMaps, after ShadowViews::Rebuild: the frame's views are DCLF's with the selected revision's shape; until a
+		 * revision has recorded it (startup, a growth), every one is the engine's this frame (ShadowViews::UncoverAll).
 		 */
 		void DecideShadowCoverage();
 		/**
-		 * @brief The scene lane, Coordinator::CommitSet: whether the object is ready for a shadow phase (SetPhaseOfMode's): its Utility
-		 * pipeline under every rasterizer state of each of the phase's modes a_lookups' shadow pipelines were resolved for
-		 * (Lookups::shadowInputs, the frame's start's post: never the render thread's readyModes/readyStates), and an alpha-tested
-		 * caster's diffuse imported. Part of the set's readiness (SceneSet.h). a_tables: the commit's SceneTables
-		 * (the coordinator's: the frame's view may hold another object in the slot); a_lookups: the coordinator's (the scene lane's).
+		 * @brief Scene lane (Coordinator::CommitSet): whether the object is ready for a shadow phase: its Utility pipeline under every
+		 * state a_lookups resolved for the phase's modes (never the render thread's readyModes/readyStates), and an alpha-tested
+		 * caster's diffuse imported. a_tables: the coordinator's. a_why: SetStats::waitingBy's index (7 shadow pipeline, 12 past the
+		 * scene buffers, 13 diffuse not imported).
 		 */
-		/** a_why (optional), when not: Coordinator::SetStats::waitingBy's index (7 shadow pipeline, 12 past the scene buffers, 13 the alpha
-		 * test's diffuse not imported). */
 		bool PhaseReady(const void* a_tables, const Lookups& a_lookups, std::uint32_t a_slot, std::uint8_t a_phase, std::uint32_t* a_why = nullptr) const;
 		/**
-		 * @brief Coordinator::CommitSet: whether the object is within the scene buffers (and, for the main builds, the material and
-		 * pipeline rows) the builds ahead are made against (the fit the
-		 * frame's start posted with their context, PostAheadContext): the main builds' (a_shadow false) or the shadow build's. One past
-		 * them has no input until their growth (ObjectFits), so a member must wait for it: claimed, it would be drawn by nobody. The
-		 * buffers only grow, and a build ahead takes a context posted at or after the commit's. a_tables: the caller's
-		 * SceneTables (the coordinator's own in CommitSet and the revocation, not the frame's view). T6b3a: the coordinator's copy
-		 * of the posted fits (TakeAheadContext), never the render thread's.
+		 * @brief Coordinator::CommitSet: whether the object fits the scene buffers (and main rows) the main (a_shadow false) or shadow
+		 * builds ahead are made against. One past them has no input until a growth, so claimed it would be drawn by nobody; it waits.
+		 * Reads the coordinator's copy of the fits (TakeAheadContext), never the render thread's.
 		 */
 		bool FitsScene(const void* a_tables, std::uint32_t a_slot, bool a_shadow) const;
 		/** @brief Changes when FitsScene's fits do (a growth of the scene buffers): the slots waiting for one are taken again. */
 		std::uint64_t SceneFitSerial() const;
-		/**
-		 * @brief The coordinator, at the start of each pass (T6b3a): the ahead context and the fits the frame's start posted since
-		 * (latest wins), the copy BuildAhead, FitsScene and SceneFitSerial read.
-		 */
+		/** @brief Coordinator, at each pass's start: takes the latest ahead context and fits the frame's start posted. */
 		void TakeAheadContext();
 
-		/**
-		 * @brief What the main pass binds (buffers, views, targets, viewport), for this frame's colour epoch: where its opaque
-		 * batches start, the engine's state applied (DrawcallLimitFix::BeforeOpaquePass).
-		 */
+		/** @brief Where the main pass's opaque batches start: captures its bindings and viewport for the colour epoch. */
 		void CaptureMainPass();
 
 		/**
-		 * @brief Inside the native depth pass, once the world's depth is drawn: assemble this frame's draws and
-		 * write their depth into the engine's main depth.
+		 * @brief Inside the native depth pass, once the world's depth is drawn: the Z-prepass epoch, writing DCLF's depth into the
+		 * engine's main depth.
 		 *
-		 * It runs here, and not with the colour pass, because everything the rest of the frame does with
-		 * depth - the native draws' own depth test, the sky, Terrain Blending's blended depth and every
-		 * effect that reads it - is derived from the depth buffer at this point and has to see DCLF's
-		 * objects. Only the vertex stage's bindings are needed, which the depth pass has bound; the pixel
-		 * stage is the DCLF_DEPTH_ONLY build, which reads nothing that is not bound yet.
+		 * It runs here, not with the colour pass, because everything later that uses depth (the native draws' depth test, the sky,
+		 * Terrain Blending's blended depth, every effect reading it) derives from the depth buffer at this point. Only the vertex
+		 * stage's bindings are needed, which the depth pass has bound; the pixel stage is the DCLF_DEPTH_ONLY build.
 		 */
 		void CaptureDepthPass();
 
-		/** @brief Where the main pass's opaque batches end: the colour pass, against the depth above. */
+		/** @brief Where the main pass's opaque batches end: the colour epoch, against the depth above. */
 		void ExecuteColour();
 
 		/**
-		 * @brief T7d (CS_DCLF_FORWARD): the forward epoch, at the engine's blended draw (FUN_1414b39d0, after the deferred composite and
-		 * the water): the frame's visible forward objects (blended Lighting), sorted back to front by the colour epoch, drawn onto the
-		 * main target before the engine's own blended draws. Render thread; submits the selected revision's forward recording (nothing
-		 * is built or uploaded here: the colour commit wrote everything its draws read), and only after this frame's colour epoch.
+		 * @brief The forward epoch (CS_DCLF_FORWARD), at the engine's blended draw (FUN_1414b39d0, after the deferred composite and
+		 * the water): the visible forward objects, sorted back to front by the colour epoch, drawn before the engine's own blended
+		 * draws. Render thread; only after this frame's colour epoch, whose commit wrote everything these draws read.
 		 */
 		void ExecuteForward();
-		/** @brief T7d: the forward epoch's report line (ForwardReport), its counters reset. */
+		/** @brief The forward epoch's report line, its counters reset. */
 		std::string ForwardReport();
 		/**
-		 * @brief T7d's refraction: whether this frame's forward epoch drew the refraction normals (and so marked them begun for the engine:
-		 * ExecuteForward). Render thread, at Main::Draw's refraction point (DrawcallLimitFix's Main_Draw_RefractionCheck).
+		 * @brief Whether this frame's forward epoch drew the refraction normals (and marked them begun for the engine). Render thread,
+		 * at Main::Draw's refraction point (Main_Draw_RefractionCheck).
 		 */
 		bool RefractionDrawnThisFrame() const;
 
 		/**
-		 * @brief Render thread, the frame's start with the scene work joined: what the scene lane's lookups are made from that only the
-		 * frame has (T6b2c step 5): the import context and the fixed bindings (GpuTextures::PublishImportContext), the shadow capability
-		 * (UpdateShadowCapability), the pipeline lane's shadow inputs (DrawPipelines::SetShadowInputs), and the shadow views' modes, states
-		 * and formats the shadow pipelines are resolved for, through a latest-wins slot (ResolveLookups reads it).
+		 * @brief Render thread, the frame's start: posts what the scene lane's lookups need that only the frame has (import context,
+		 * shadow capability, shadow modes, states and formats), latest wins.
 		 */
 		void PostLookupInputs();
 		/**
-		 * @brief The scene lane (Coordinator::ResolveLookups): a_lookups' pipeline entries (set index, constant tables, register usage) and
-		 * shadow pipelines (shadowPipelines, shadowSlots, shadowMapRows) resolved from a_tables (its SceneTables) and a_catalog alone,
-		 * each key not asked of the pipeline lane yet asked (DrawPipelines::RequestLighting, RequestShadow); the shadow pipelines for the
-		 * views the frame's start last posted (PostLookupInputs). Reads no engine state and no render-thread service.
+		 * @brief Scene lane: a_lookups' pipeline entries and shadow pipelines resolved from a_tables and a_catalog alone, asking the
+		 * pipeline lane for missing keys. Reads no engine state and no render-thread service.
 		 */
 		void ResolveLookups(const void* a_tables, const PipelineCatalog* a_catalog, Lookups& a_lookups, LookupsResolveState& a_state);
 		/**
-		 * @brief The coordinator, publishing the scene (Coordinator::PublishScene; T6b3b): a_publication (its ScenePublication)
-		 * handed to the snapshot builder with what its draws are built from (the frame's last ahead context, PostAheadContext; the frame
-		 * and the candidates as the coordinator has them). The builder (on DCLF's preparation pool, one snapshot at a time, from the newest
-		 * publication) builds its stream views and payloads (step 6e E3b), makes and records its scene revision, and posts the complete
-		 * snapshot for the frame (AdoptSnapshot). Latest wins: a publication a newer one replaced before the builder took it is skipped.
+		 * @brief Coordinator::PublishScene: hands a_publication (a ScenePublication) to the snapshot builder with the last ahead
+		 * context, latest wins. The builder makes its payloads and scene revision and posts the complete snapshot (AdoptSnapshot).
 		 */
 		void PostSnapshotWork(std::shared_ptr<const void> a_publication);
 		/**
-		 * @brief Render thread, the frame's start (T6b3d: Coordinator::HandOverAtFrameStart, a publication installed): the oldest event it
-		 * and the publications skipped past carried, to now (ms, and the render thread's frames), for the snapshot report.
+		 * @brief Render thread, the frame's start (a publication installed): the age of the oldest event it and the skipped
+		 * publications carried (ms and frames), for the snapshot report.
 		 */
 		void NoteEventAdoption(double a_ms, std::uint32_t a_frames);
 		/**
-		 * @brief Render thread, the frame's start, after the build point (T6b3b): the newest snapshot the builder posted, adopted whole -
-		 * its revision's growths and versions, its revision the frame's, its draws the frame's - unless it is stale for what it could not
-		 * know ahead (the graph's build its recordings were made on, the targets, the shadow format, its commit's toggles older than
-		 * a_togglesGeneration, the main resources), when the frame has no claims until the builder's next. Returns the adopted snapshot's
-		 * publication (a ScenePublication: Coordinator::HandOverAtFrameStart installs it when newer), null before the first.
+		 * @brief Render thread, the frame's start, after the build point: adopts the newest posted snapshot whole, unless stale for
+		 * what it could not know ahead (graph build, targets, shadow format, toggles older than a_togglesGeneration, main resources);
+		 * then the frame has no claims until the next. Returns its ScenePublication (installed by FrameView::HandOverAtFrameStart when
+		 * newer), null before the first.
 		 */
 		std::shared_ptr<const void> AdoptSnapshot(std::uint32_t a_togglesGeneration);
 		/**
-		 * @brief Render thread, the frame's start: what the next builds ahead take from the frame (resources, masks) and the fits, posted
-		 * for the coordinator (T6b3a: a latest-wins slot it takes at its passes' start, TakeAheadContext).
+		 * @brief Render thread, the frame's start: posts what the next builds ahead take from the frame (resources, masks) and the
+		 * fits, through a latest-wins slot (TakeAheadContext).
 		 */
 		void PostAheadContext();
 		/**
-		 * @brief Render thread, the frame's start, after AdoptSnapshot: the payload ring entry the frame's epochs read, made to hold
-		 * the adopted snapshot's payloads, and what fills it (FrameValues' job runs it before the frame's signal, step 6e E4). Empty: none.
+		 * @brief Render thread, the frame's start, after AdoptSnapshot: sizes the payload ring entry the frame's epochs read to the
+		 * adopted snapshot's payloads, and returns what fills it (FrameValues' job runs it before the frame's signal). Empty: none.
 		 */
 		std::function<void(org::runtime::IUploadService&)> PrepareFrameUploads();
 		/** @brief Render thread: the frame's producer did not run (FrameValues::Kick refused): its epochs read no ring entry. */
 		void DropFrameUploads();
 
 		/**
-		 * @brief Render thread, at the end of the scene tables: the fade write-back's events read back since the last kick (and any
-		 * the last task did not reach) judged on DCLF's executor into the stores WriteFadeStores makes (drawcall-limit-fix.md, "The
-		 * fade write-back", "T7b4/T7b6"). A stood-in root's node is otherwise left as the engine last wrote it, and the engine's
-		 * readers of it (the tree LOD's crossfade, the occlusion maps' cull, the animation gate, its next listing) would take that.
+		 * @brief Render thread, the frame's start: hands the fade events read back since the last kick to a task on DCLF's executor
+		 * that judges them into the stores WriteFadeStores makes (drawcall-limit-fix.md, "The fade write-back"). Without it a stood-in
+		 * root's node stays as the engine last wrote it for its readers (tree LOD crossfade, occlusion cull, animation gate).
 		 */
 		void KickFadeWriteBack();
 		/**
-		 * @brief T7b4, the main thread at Main::Update's entry (T7b0's write point: no list cull, cell animation or animation job runs):
-		 * the stores the last write-back task found, made on the roots DCLF writes (a_written(root): PrimaryCull::FadeWrittenByDclf; a
-		 * store for any other root is left, the engine's cull stepping it itself). a_live false (DCLF does not run): dropped.
+		 * @brief Main thread at Main::Update's entry (no list cull, cell animation or animation job runs): makes the last task's
+		 * stores on the roots DCLF writes (a_written: PrimaryCull::FadeWrittenByDclf; other roots are left to the engine's cull).
+		 * a_live false (DCLF does not run): dropped.
 		 */
 		void WriteFadeStores(bool a_live, const std::function<bool(const void*)>& a_written);
 		/**
-		 * @brief T7b1, render thread, at the frame's start: the visibility readback's batches harvested and not yet decoded (the depth
-		 * commit hands its own at once) handed to the decode task on DCLF's executor, never joined; the batches the last task decoded let
-		 * go of (drawcall-limit-fix.md, "T7b1: visibility events"). Writes no engine memory.
+		 * @brief Render thread, at the frame's start: hands the harvested, undecoded visibility readback batches to the decode task on
+		 * DCLF's executor, never joined, and frees the batches the last task decoded (drawcall-limit-fix.md, "visibility events").
+		 * Writes no engine memory.
 		 */
 		void KickVisibilityReadback();
 		/**
-		 * @brief T7b2, the main thread at Main::Update's entry (no list cull, cell animation or animation job runs: the last frame's cycle
-		 * was waited for, this one's job lists are not started): the kAccumulated writes the decoder prepared, made on the stood-in roots
-		 * and their geometry with atomic read-modify-writes ("T7b2: kAccumulated written by DCLF"). a_stoodIn(root): whether the cut still
-		 * stands in for the root (PrimaryCull's own set: a write for a root it no longer stands in for is left). a_live false (DCLF does
-		 * not run): the writes are dropped, and the next decode writes everything again.
-		 *
-		 * T7f checklist item 1: the decoder's wide writes (every other root DCLF lists, its geometry, the plain entry roots) are made too,
-		 * with the nodes between a visible geometry and its root and the cell roots (ListUpkeep's), whoever stands in for the root; compared
-		 * with the engine's bit under CS_DCLF_ACCUMULATED_PARITY.
+		 * @brief Main thread at Main::Update's entry (no cull or job list running): makes the decoder's kAccumulated writes with atomic
+		 * read-modify-writes: the stood-in roots and their geometry (while a_stoodIn says PrimaryCull still stands in), and the wide
+		 * writes (other listed roots, plain entry roots, the nodes between, the cell roots). a_live false: dropped, and the next
+		 * decode writes everything again.
 		 */
 		void WriteAccumulated(bool a_live, const std::function<bool(const void*)>& a_stoodIn);
 		/**
-		 * @brief T7b5 fix, the main thread after WriteAccumulated (Main::Update): DCLF's main-camera verdict of a stood-in root as WriteAccumulated
-		 * last wrote it (its kAccumulated); a root it has not written yet is visible (no verdict yet: T7b2's rule). Reads no engine memory.
+		 * @brief Main thread after WriteAccumulated: DCLF's main-camera verdict of a stood-in root as last written; visible when not
+		 * written yet. Reads no engine memory.
 		 */
 		bool AccumulatedVerdict(const void* a_root) const;
 		/**
-		 * @brief T7f preparation, the main thread after WriteAccumulated: DCLF's verdict of any root it lists (a fade root or a plain entry
-		 * root, as written with the wide writes: TreeAnimation's tree list), false when it has none (not listed by the
-		 * newest written tables, or no write yet; none without the wide writes but for the stood-in roots). Reads no engine memory.
+		 * @brief Main thread after WriteAccumulated: DCLF's verdict of any root it lists (a fade root or plain entry root, from the
+		 * wide writes: TreeAnimation's tree list); false when it has none. Reads no engine memory.
 		 */
 		bool AccumulatedVerdictOf(const void* a_root, bool& a_visible) const;
-		/** @brief T7b2, render thread: a camera cut in a_frame (PrimaryCull): every stood-in root visible until a batch of a_frame or later. */
+		/** @brief Render thread: a camera cut in a_frame (PrimaryCull): every stood-in root visible until a batch of a_frame or later. */
 		void NoteCameraCut(std::uint32_t a_frame);
-		/** @brief T7b2, any thread: the next decode writes every stood-in root and geometry, not only the changes (the engine wrote them). */
+		/** @brief Any thread: the next decode writes every stood-in root and geometry, not only the changes (the engine wrote them). */
 		void RequestAccumulatedRefresh();
-		/** @brief T7b2's line, and the <- ACCUMULATED and <- ANIM RATE observers' (CS_DCLF_ACCUMULATED_PARITY) since the last call. */
+		/** @brief The visibility readback's line, and the <- ACCUMULATED and <- ANIM RATE observers' since the last call. */
 		std::string VisibilityReport();
 		/**
-		 * @brief Render thread, at the frame's first DCLF point, after the scene events (the tree LOD mirror's drain) and before the
-		 * main camera's cull: whether DCLF draws tree LOD this frame - its toggle on, its pipelines in the frame's catalog (asked of the
-		 * pipeline lane here: DrawPipelines::RequestTreeLod), its tables built, the engine's tree LOD texture there. The registrations
-		 * withhold the engine's tree LOD passes on it (PassCapture), and the depth commit draws on it (UploadTreeLod).
+		 * @brief Render thread, the frame's first DCLF point, before the main camera's cull: whether DCLF draws tree LOD this frame
+		 * (toggle, pipelines, tables, the engine's tree LOD texture). If so PassCapture withholds the engine's tree LOD passes.
 		 */
 		bool DecideTreeLod();
 		/**
-		 * @brief The water reflection's faces (dclf-lod.md, "Water reflections"). CaptureReflectionFace: render thread, at a face's
-		 * accumulator render's end (ReflectionFaces::InFace), after the engine's draws: the face's targets, and in a plain face render
-		 * the face's camera for this update's epoch. PrepareReflection: render thread, once a frame, after DecideTreeLod: the forward
-		 * pipelines of the LOD pipeline slots in use, and tree LOD's, for those targets, asked of the pipeline lane and read from the
-		 * frame's catalog (the reflection phase's readiness), and whether the faces' tree LOD is DCLF's. ReflectionDrawable: the set draws the reflection phase (Coordinator::
-		 * SetCapability). ExecuteReflection: render thread, once a frame at BeforeShadowMaps, after the frame's reflection updates
-		 * (TESWaterReflections::Update runs twice a frame, a face each): one epoch drawing the frame's faces' reflection-phase
-		 * members and tree LOD into the cube target.
+		 * @brief The water reflection's faces (dclf-lod.md, "Water reflections"), render thread. CaptureReflectionFace: at a face's
+		 * accumulator render's end, its targets. PrepareReflection: once a frame after DecideTreeLod, the LOD slots' and tree LOD's
+		 * forward pipelines. ExecuteReflection: at BeforeShadowMaps, after the frame's updates (TESWaterReflections::Update runs twice
+		 * a frame, a face each): one epoch drawing the faces' members and tree LOD into the cube target.
 		 */
 		void CaptureReflectionFace();
 		/**
-		 * @brief T4: render thread, once the engine has oriented the cube camera to a face (ReflectionFaces::SetFaceOriented), before its
-		 * cull and draws: the face's view as DCLF computes it (SunViews' arithmetic on the camera; the face's slice of the cube target)
-		 * for this update's epoch. CaptureReflectionFace, after the face's draws, is then the observers'.
+		 * @brief Render thread, once the engine has oriented the cube camera to a face, before its cull and draws: the face's view as
+		 * DCLF computes it (SunViews' arithmetic; the face's slice of the cube target).
 		 */
 		void ReflectionFaceCamera(const RE::NiCamera& a_camera, std::uint32_t a_face);
 		/**
-		 * @brief T4: render thread, at a reflection update's start: the cube camera's LOD roots DCLF draws in its faces
-		 * (ReflectionFaces::RootBits), whose add-roots are skipped - the engine neither culls nor registers them.
+		 * @brief Render thread, at a reflection update's start: the cube camera's LOD roots DCLF draws (ReflectionFaces::RootBits),
+		 * whose add-roots are skipped so the engine neither culls nor registers them.
 		 */
 		std::uint32_t ReflectionRootsOwned(bool a_plain);
 		void PrepareReflection();
 		bool ReflectionDrawable() const;
 		/**
-		 * @brief T6b3e, the scene lane's commit: whether a_tables' slot a_slot's faces' forward pipeline is in a_catalog (the lane's lookups'
-		 * catalog, which its publication carries and the revision resolves the faces' pipelines from) for the faces' targets: the reflection
-		 * phase's readiness, read from nothing the render thread writes per frame.
+		 * @brief Scene lane's commit: whether the slot's faces' forward pipeline is in a_catalog (the lane's) for the faces' targets:
+		 * the reflection phase's readiness, read from nothing the render thread writes per frame.
 		 */
 		bool ReflectionSlotReady(const void* a_tables, const PipelineCatalog* a_catalog, std::uint32_t a_slot) const;
 		void ExecuteReflection();
 		std::string ReflectionReport();
 		/**
-		 * @brief T7e, the first-person view (CS_DCLF_FIRST_PERSON; drawcall-limit-fix.md, "First person as a view bit (T7e)"; FirstPerson.cpp).
-		 * BeginFirstPersonFrame: render thread, BeginSceneFrame, before DecideCoverage: the view's latch (Main::Draw's cVar23, recomputed:
-		 * the first-person root shown, the main menu closed, the camera not the free one) and its depth range, its targets published, its
-		 * pipelines asked of the lane, its resources made. ExecuteFirstPersonDepth: render thread, at RenderDepth's first-person draw (its
-		 * camera set up by FUN_1414cb020): the first-person camera captured in world space and the depth epoch. ExecuteFirstPersonColour:
-		 * render thread, at FUN_1414cb6d0's accumulator render: the colour epoch. FirstPersonDrawable: the set draws kSetFirstPerson
-		 * (Coordinator::SetCapability). FirstPersonSlotReady: the scene lane's commit's readiness of a slot (its pipelines in a_catalog).
-		 * FirstPersonFrameClaims: the claims whose first-person members the frame draws (FrameValues samples them), null when none.
+		 * @brief The first-person view (CS_DCLF_FIRST_PERSON; drawcall-limit-fix.md, "First person as a view bit"). Render thread.
+		 * BeginFirstPersonFrame, before DecideCoverage: the latch (Main::Draw's cVar23 recomputed: first-person root shown, main menu
+		 * closed, camera not the free one), depth range, targets, pipelines. ExecuteFirstPersonDepth: at RenderDepth's first-person
+		 * draw (camera set up by FUN_1414cb020): the depth epoch. ExecuteFirstPersonColour: at FUN_1414cb6d0's accumulator render.
 		 */
 		void BeginFirstPersonFrame();
 		void ExecuteFirstPersonDepth(bool a_controlDriven);
@@ -304,88 +255,62 @@ namespace DCLF
 		bool FirstPersonSlotReady(const void* a_tables, const void* a_lookups, const PipelineCatalog* a_catalog, std::uint32_t a_slot, std::uint32_t* a_why = nullptr) const;
 		bool FirstPersonCovered() const;
 		std::string FirstPersonReport();
-		/**
-		 * @brief Render thread, before anything reads the nodes or changes the tables (BeforeShadowMaps, the accumulate phase, the
-		 * next scene frame's events): the job joined, or stopped; what it did not reach goes to the next one.
-		 */
 
 		/**
-		 * @brief Render thread (T6b3b b2a): what a scene revision reads of the frame (Impl::RevisionInputs), posted when it moved. Called
-		 * where a value is captured outside IndirectDraws: after the shadow views' Rebuild (their candidates, BeforeShadowMaps).
+		 * @brief Render thread: posts what a scene revision reads of the frame (Impl::RevisionInputs) when it moved; called where such
+		 * a value is captured outside IndirectDraws (after the shadow views' Rebuild).
 		 */
 		void NoteRevisionInputs();
 		/**
-		 * @brief Render thread, first at BeginSceneFrame, every frame: the graph's build point. Its builds are explicit
-		 * (PersistentGraphHost::SetExplicitBuilds): an extension added or removed during a frame waits for this point, so the graph a
-		 * frame's revision was recorded on runs through that frame. It also serves what the snapshot builder asked of the owner thread
-		 * (shadow view slots) and posts the frame's revision inputs.
+		 * @brief Render thread, first at every frame's start: the graph's build point. Builds are explicit, so the graph a frame's
+		 * revision was recorded on runs through that frame. Also serves the builder's requests (shadow view slots).
 		 */
 		void BuildPoint();
 		/**
-		 * @brief Render thread, BeginSceneFrame, after AdoptSnapshot: whether the adopted snapshot covers the frame's main epochs - it is not
-		 * stale, its draws are for the main resources, and its revision has their recordings, of the graph as built now (strict epochs).
-		 * False: the frame has no claims (Coordinator::WithdrawSet) and DCLF draws nothing. Also decides the other epochs' coverage
-		 * (Impl::EpochCovered). True without revisions.
+		 * @brief Render thread, after AdoptSnapshot: whether the snapshot covers the main epochs (not stale, recordings of the graph as
+		 * built now). False: the frame has no claims (FrameView::WithdrawSet). Also decides the other epochs' coverage.
 		 */
 		bool DecideCoverage();
 		/** @brief Whether DCLF cannot draw (set once, by the render thread): the frame then has no claims. */
 		bool Failed() const { return failed.load(std::memory_order_relaxed); }
-		/** @brief Since the last call: the stream views a fallback wanted while the coordinator or the builds task ran (none made). */
+		/** @brief Since the last call: the stream views a fallback wanted while the coordinator or the snapshot builder ran (none made). */
 		std::uint64_t TakeStreamsRefused();
 
-		/** @brief At Present: a job the frame never joined is dropped and counted (Stats::Async::leaked). */
+		/** @brief At Present: the frame's ring entry freed once the GPU is done with it; the frame's stream views let go. */
 		void EndFrame();
 
-		/** @brief Drops every job and waits for the worker: the live toggle, teardown. */
+		/** @brief Waits for the builds ahead, the fade write-back and the visibility decode; lets go of the frame's stream views. */
 		void DrainAsync();
 
-		/** @brief The `[DCLF] async` report lines for the interval, and resets the interval's async counters. */
+		/** @brief The `[DCLF] async` report lines for the interval; resets its counters. */
 		std::string AsyncReport();
 
-		/**
-		 * @brief CS_DCLF_GBUFFER_PROBE=<x>x<y>: read one texel of every main-pass target back and log it.
-		 *
-		 * Called either side of the colour epoch, it says what DCLF changed in the G-buffer the composite
-		 * then consumes, in the same frame and at the same texel - which a comparison between two runs
-		 * cannot, because the camera never lands in exactly the same place twice.
-		 */
+		/** @brief A named main-pass point (around the Z-prepass and colour epoch) for Diagnostics::TargetPoint (CS_DCLF_TARGET_DUMP). */
 		void ProbeTargets(const char* a_label);
 
-		/** @brief BeforeShadowMaps: the shadow frame begins; the views are captured from here (CaptureShadowView). */
+		/** @brief BeforeShadowMaps: the shadow frame begins; views are captured from here (CaptureShadowView). */
 		void BeginShadowFrame();
 
 		/**
-		 * @brief Inside a shadow view's FinishAccumulatingPreResolveDepth, after the native draws: captures
-		 * the view - its target and slice, viewport, eye and the per-frame constants the engine drew it
-		 * with - for the frame's shadow epoch. Nothing is drawn here.
+		 * @brief Inside a shadow view's FinishAccumulatingPreResolveDepth, after the native draws: captures the view (target and
+		 * slice, viewport, eye, the per-frame constants) for the shadow epoch. Nothing is drawn here.
 		 */
 		void CaptureShadowView(std::uint32_t a_viewId, std::uint32_t a_renderMode);
 
 		/**
-		 * @brief AfterShadowMaps: one epoch that culls the frame's casters against every captured view and
-		 * draws them into the views' slices of the engine's shadow maps.
-		 *
-		 * One epoch for all views, not one per view, because the graph's own execution costs ~0.9 ms of
-		 * CPU per epoch whatever it draws; the views' slices are consumed only after Main_RenderShadowMaps
-		 * returns (the shadow mask, the volumetric lighting), so drawing them all at its end is equivalent
-		 * to drawing each after its native draws (engine notes: shadow maps).
+		 * @brief AfterShadowMaps: one epoch culling the casters against every captured view into the views' slices. One epoch, not one
+		 * per view (each graph execution costs CPU); the slices are consumed only after Main_RenderShadowMaps returns, so it is
+		 * equivalent.
 		 */
 		void ExecuteShadowFrame();
 
 		/**
-		 * @brief The occlusion maps (Records.h, kOcclusionViews: Skylighting's sky map, the precipitation mask), drawn by DCLF
-		 * (Skylighting::RenderOcclusion's variant with DCLF running): the engine's RenderMask sets each view's camera and
-		 * clears its map; OcclusionView computes the view from the map's camera before it (T4), and CaptureOcclusion, at the
-		 * engine's FinishAccumulating hook (render mode 0x1C), is the observers';
-		 * ExecuteOcclusion then draws every occluder of the frame's shadow build (the objects' Skylighting::OcclusionTechnique
-		 * for that map) into the views a_views names (a bit per view), GPU-culled, in one epoch, and returns the ones it drew.
-		 * OcclusionReady says whether a view can be drawn this frame; when it cannot, the engine's SetupMask registers them.
+		 * @brief The occlusion maps (kOcclusionViews: Skylighting's sky map, the precipitation mask), render thread. CaptureOcclusion,
+		 * at FinishAccumulating (render mode 0x1C): the map's layout. ExecuteOcclusion: the shadow build's occluders into the views in
+		 * a_views, in one epoch; returns those drawn. When OcclusionReady is false the engine's SetupMask registers them.
 		 */
 		void CaptureOcclusion(std::uint32_t a_view);
-		/**
-		 * @brief T4: render thread, once the map's camera is set up and before its RenderMask: the view as DCLF computes it from that
-		 * camera (DrawcallLimitFix::OcclusionView). CaptureOcclusion, at the engine's FinishAccumulating, is then the observers'.
-		 */
+		/** @brief Render thread, once the map's camera is set up, before its RenderMask: the view as DCLF computes it. */
 		void OcclusionView(std::uint32_t a_view, const RE::NiCamera& a_camera);
 		bool OcclusionReady(std::uint32_t a_view) const;
 		std::uint32_t ExecuteOcclusion(std::uint32_t a_views);
@@ -401,15 +326,14 @@ namespace DCLF
 		friend struct Diagnostics::DrawsView;
 		IndirectDraws();
 
-		/** @brief Assembles this frame's draws, uploads them and runs one epoch: the Z-prepass's (a_depthOnly) or the main pass's. */
+		/** @brief One main epoch (Z-prepass if a_depthOnly, else colour), committed into the selected revision and submitted. */
 		void RunEpoch(bool a_depthOnly);
 
 		struct Impl;
 		std::unique_ptr<Impl> impl;
 		Stats stats;
 		ShadowStats shadowStats;
-		// Set by the render thread (once, when DCLF cannot draw), read by the scene lane too (ShadowCapability, ReflectionDrawable,
-		// ResolveLookups, Failed): atomic.
+		// Set once by the render thread, read by the scene lane too: atomic.
 		std::atomic<bool> failed{ false };
 	};
 

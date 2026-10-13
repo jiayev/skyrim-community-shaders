@@ -1,3 +1,5 @@
+// ReflectionFaces: the water reflection update, add-root and face render hooks (render thread).
+
 #include "Features/DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
 
@@ -11,7 +13,6 @@ namespace DCLF::ReflectionFaces
 		const RE::NiCamera* camera = nullptr;
 		std::uint32_t faceMask = 0;
 		bool plain = false;
-		AfterFaces afterFaces = nullptr;
 		FaceOriented faceOriented = nullptr;
 		AfterFaceDraws afterFaceDraws = nullptr;
 		RootsOwned rootsOwned = nullptr;
@@ -93,8 +94,6 @@ namespace DCLF::ReflectionFaces
 				capture.SetReflectionFace(false);
 				camera = nullptr;
 				faceMask = 0;
-				if (afterFaces)
-					afterFaces(a_faces);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -115,10 +114,8 @@ namespace DCLF::ReflectionFaces
 	}
 
 	bool InFace() { return camera != nullptr; }
-	const RE::NiCamera* Camera() { return camera; }
 	std::uint32_t FaceMask() { return faceMask; }
 	bool Plain() { return plain; }
-	void SetAfterFaces(AfterFaces a_callback) { afterFaces = a_callback; }
 	void SetFaceOriented(FaceOriented a_callback) { faceOriented = a_callback; }
 	void SetAfterFaceDraws(AfterFaceDraws a_callback) { afterFaceDraws = a_callback; }
 	void SetRootsOwned(RootsOwned a_callback) { rootsOwned = a_callback; }

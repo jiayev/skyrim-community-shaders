@@ -6,7 +6,7 @@
 
 namespace DCLF
 {
-	// Coordinator-only lifecycle IDs. Raw keys never escape this tracker; a
+	// Lifecycle IDs for tracked geometry and their actors, coordinator thread only. Raw keys never escape this tracker; a
 	// publication carries only the returned IDs. Reset drops keys but not the
 	// allocation counter, so a new world cannot reuse an old publication ID.
 	class SceneIdentity

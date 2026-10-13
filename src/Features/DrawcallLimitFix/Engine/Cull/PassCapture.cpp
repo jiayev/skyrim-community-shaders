@@ -1,3 +1,5 @@
+// PassCapture: the registration hooks (RegisterPass and the direct group/list insertions; any registering thread), the withholding
+// tests by view, the per-pass record the render thread drains, and the renderer sets refreshed on the render thread.
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Feature/OpenDefectProbes.h"
@@ -103,7 +105,7 @@ namespace DCLF
 		// (FUN_1414cbff0) take them (skyrim-engine-notes.md, "The primary's cull: the scene lists").
 		static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> depthAccumulator{ REL::Offset(Engine::Address::kDepthAccumulator) };
 		static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> mainAccumulator{ REL::Offset(Engine::Address::kMainAccumulator) };
-		// T7e: the first-person accumulator (Main::unk_FPCulling culls the first-person root alone into it; FUN_1414cb6d0 renders it). Its
+		// The first-person accumulator (Main::unk_FPCulling culls the first-person root alone into it; FUN_1414cb6d0 renders it). Its
 		// registrations are the first-person skeleton's alone, so a member's there is a first-person member's (WithholdMain).
 		static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> firstPersonAccumulatorAt{ REL::Offset(Engine::Address::kFirstPersonAccumulator) };
 		const std::array<const void*, 2> accumulators{ *depthAccumulator, *mainAccumulator };
@@ -148,7 +150,7 @@ namespace DCLF
 		const bool firstPersonView = IsFirstPersonRenderer(a_batch);
 		if (firstPersonView)
 			firstPersonRegistered.fetch_add(1, std::memory_order_relaxed);
-		// T7e: a first-person member (kSetFirstPerson alone: no world view registers it, its root hidden there): its passes into the
+		// A first-person member (kSetFirstPerson alone: no world view registers it, its root hidden there): its passes into the
 		// first-person accumulator and into the Z-prepass's (RenderDepth's first-person block) are the first-person epochs' while they
 		// draw this frame (SetFirstPersonCovered); every fade of the skeleton is the engine's root's (alpha 1).
 		if (phases & kSetFirstPerson) {
@@ -161,7 +163,7 @@ namespace DCLF
 		}
 		if (!(phases & kSetMain))
 			return false;
-		// Every pass of a member, a fade's and a LOD cross-fade's hint-10 copy of the old level included: DCLF draws them (T1c: the
+		// Every pass of a member, a fade's and a LOD cross-fade's hint-10 copy of the old level included: DCLF draws them (the
 		// draw's alpha takes its root's FadeStateCS fade, and BuildDraws adds the copy partitions while the root crosses).
 		mainWithheld.fetch_add(1, std::memory_order_relaxed);
 		return true;
@@ -303,7 +305,7 @@ namespace DCLF
 	{
 		if (!a_pass || !a_pass->geometry)
 			return false;
-		// A shadow view's renderers (the focus views' among them, T3c): the set's casters. A pass into any other renderer
+		// A shadow view's renderers (the focus views' among them): the set's casters. A pass into any other renderer
 		// (reflections, cubemaps) is never withheld; the main camera's are WithholdMain's.
 		// What the engine registers into a covered focus view, for its observer (Diagnostics::ShadowViewTally: against its target's fade root).
 		if (Diagnostics::Armed<Diagnostics::FocusRegistration>())
@@ -348,8 +350,8 @@ namespace DCLF
 				func(a_this, a_pass, a_techniqueID);
 				return;
 			}
-			// Withholding is the whole of ownership: the pass is built, lit and shadowed exactly as before - only the batch
-			// renderer never receives it, so the native loop has nothing to draw. Everything the tables need is taken by Record.
+			// Withholding is the whole of ownership: the pass is built, lit and shadowed as the engine would - only the batch
+			// renderer never receives it, so the native loop has nothing to draw. Record notes it for the observers.
 			const bool withheld = capture.WithholdMain(a_this, a_pass) || capture.WithholdReflection(a_this, a_pass) || capture.Withhold(a_this, a_pass);
 			capture.Record(a_this, a_pass, a_techniqueID, withheld);
 			Diagnostics::Notify(Diagnostics::PointLightPass{ a_this, a_pass, withheld, 0 });

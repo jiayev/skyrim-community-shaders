@@ -75,6 +75,11 @@ namespace DCLF
 		static bool SkinPalettes(const RE::BSGeometry& a_geometry, std::uint32_t a_rows, const float*& a_current, const float*& a_previous);
 
 		/**
+		 * @brief What else the frame's producer uploads before it signals the frame's wait (the payload ring entry the frame's epochs
+		 * read), on the producer's thread and the dedicated uploader. A throw is logged; the signal always goes.
+		 */
+		using FrameUploads = std::function<void(org::runtime::IUploadService&)>;
+		/**
 		 * @brief Render thread, at the scene's start (the engine's update done, the window open): the frame's producer, from a_plans
 		 * (the walks' plans the publication log brought since the last frame, oldest first: each one's written slots sampled, the newest
 		 * drawn with; none: the newest before them), the slots named for their shading (a_shading, the newest last) and
@@ -82,22 +87,17 @@ namespace DCLF
 		 * graph, no dedicated upload queue): the frame waits for nothing, and its draws have no rows; what it was handed waits for the
 		 * first producer.
 		 */
-		/**
-		 * @brief What else the frame's producer uploads before it signals the frame's wait (step 6e E4: the payload ring entry the
-		 * frame's epochs read), on the producer's thread and the dedicated uploader. A throw is logged; the signal always goes.
-		 */
-		using FrameUploads = std::function<void(org::runtime::IUploadService&)>;
 		bool Kick(std::vector<std::shared_ptr<const PlacementPlan>> a_plans, std::vector<ShadingItem> a_shading,
 			std::vector<WetnessValue> a_wetness, std::vector<FadeSeedItem> a_seeds, std::vector<TreeSeedItem> a_treeSeeds,
 			std::shared_ptr<const FrameGlobals> a_globals, FrameUploads a_uploads = {});
 		/**
-		 * @brief T7e, render thread, before Kick: the claims whose first-person members the frame draws (null: none, the first-person
+		 * @brief Render thread, before Kick: the claims whose first-person members the frame draws (null: none, the first-person
 		 * epochs do not draw this frame). Kick samples those members' rows and skin palettes itself, before Main::Draw moves the
 		 * first-person skeleton into its root's space (FUN_1414cb020); the producer never samples a first-person item.
 		 */
 		void SetFirstPersonClaims(std::shared_ptr<const SetSnapshot> a_claims) { firstPersonClaims = std::move(a_claims); }
 		/**
-		 * @brief T7e's forward part (the first-person report): the first-person particle members' expansions since the last call, their
+		 * @brief The first-person report: the first-person particle members' expansions since the last call, their
 		 * particles, and the farthest a snapshot's bound centre was from the first-person eye it was faced to (a snapshot taken while
 		 * Main::Draw had the skeleton in its root's space would be far from it).
 		 */
@@ -118,7 +118,7 @@ namespace DCLF
 		/** @brief Render thread: the descriptor of the shading buffer the current frame's draws read (0 before the first frame). */
 		std::uint32_t ShadingIndex() const { return shadingIndex; }
 		/**
-		 * @brief Render thread: the descriptor of the fade seeds the current frame reads (T6b1a: StructuredBuffer<FadeRootStatic>, two rows
+		 * @brief Render thread: the descriptor of the fade seeds the current frame reads (StructuredBuffer<FadeRootStatic>, two rows
 		 * a root slot: FadeSeedRow; 0 before the first frame). A root's seed is its node as the frame's start had it (StaticOf, at Kick).
 		 */
 		std::uint32_t FadeSeedsIndex() const { return seedsIndex; }
@@ -154,6 +154,6 @@ namespace DCLF
 		struct Impl;
 		std::unique_ptr<Impl> impl;
 		std::uint32_t frameIndex = 0, paletteIndex = 0, shadingIndex = 0, seedsIndex = 0, treeSeedsIndex = 0;
-		std::shared_ptr<const SetSnapshot> firstPersonClaims;  // T7e: SetFirstPersonClaims
+		std::shared_ptr<const SetSnapshot> firstPersonClaims;  // SetFirstPersonClaims
 	};
 }

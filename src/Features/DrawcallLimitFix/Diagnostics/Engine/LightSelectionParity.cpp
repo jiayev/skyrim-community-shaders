@@ -1,3 +1,5 @@
+// The light selection's parity (LightSelectionParity.h): at LightSelection's detour of CalculateActiveShadowCasterLights, render thread.
+
 #include "LightSelectionParity.h"
 
 #include "Events.h"
@@ -57,7 +59,7 @@ namespace DCLF::Diagnostics::LightSelectionParity
 		Tally tally;
 		Reports::Window window;
 
-		void Sample(const LightSelectionBegin&)
+		void Sample(const On<EnginePoint::LightSelectionBegin>&)
 		{
 			// The engine's room test at the function's entry (FUN_140e14300 on the entries), and where the light's
 			// entry was last walked from (its room process's camera, +0x128 -> +0x18).
@@ -158,7 +160,7 @@ namespace DCLF::Diagnostics::LightSelectionParity
 			}
 		}
 
-		void Check(const LightSelectionMade&)
+		void Check(const On<EnginePoint::LightSelectionMade>&)
 		{
 			auto& p = tally;
 			const auto& frame = View::Frame();
@@ -253,8 +255,8 @@ namespace DCLF::Diagnostics::LightSelectionParity
 
 	void Install()
 	{
-		Subscribe<LightSelectionBegin>(Sample);
-		Subscribe<LightSelectionMade>(Check);
+		Subscribe<EnginePoint::LightSelectionBegin>(Sample);
+		Subscribe<EnginePoint::LightSelectionMade>(Check);
 	}
 
 	Tally Take()

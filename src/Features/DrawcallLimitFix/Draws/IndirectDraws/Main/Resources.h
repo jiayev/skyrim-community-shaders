@@ -1,80 +1,67 @@
 #pragma once
 
-// The main epochs' graph resources, their bindings and bucket plans, their shapes' inputs, the pass statistics.
-// Part of IndirectDraws' implementation: included by Internal.h, in its order.
+// The main epochs' graph resources, bindings, bucket plans, shape inputs and pass statistics. Render thread's; sizing changes come
+// from the revision producer (Growths). Included by Internal.h.
 
 namespace DCLF::Draws
 {
 	/**
-	 * @brief What the main epochs' writers and shapes index the sequences and the Z-prepass's bucket counts by (Impl::
-	 * ReserveMainSequences): changed with those buffers' growth, as one (Growths::Change; a revision's shapes take the change it
-	 * names, RevisionSizing).
+	 * @brief The sizes the main epochs index the sequences and Z-prepass bucket counts by (Impl::ReserveMainSequences); changes
+	 * as one with those buffers' growth (Growths::Change; a revision's shapes take the change it names).
 	 */
 	struct MainSizing
 	{
-		// The Z-prepass's plain draws (MainOpaquePass, DCLF_PULLED): per pipeline slot, its bucket's range of each phase's sequences
-		// - every draw the slot's objects can produce, held while they fit and grown to a power of two past it, so the recorded
-		// calls change only then (zBucketsLayout) - and each phase's count words, a word a slot, zeroed by the depth commit.
+		// Z-prepass plain draws (MainOpaquePass, DCLF_PULLED): per pipeline slot, its bucket's range of each phase's sequences
+		// (every draw the slot can produce; grown to a power of two only when exceeded, so the recorded calls change only then:
+		// zBucketsLayout), and each phase's count words, one per slot, zeroed by the depth commit.
 		std::vector<std::uint32_t> zBucketCapacity, zBucketFirst;
 		std::uint64_t zBucketsLayout = 0;
 		std::uint32_t zBucketCountWords = 0;
-		// The sequence buffer's ranges (GpuLayouts.h, SequenceSlots): draws per draw range (phase 1 and colour, phase 2) and per
-		// decal group, holding every draw the scene can produce.
+		// Sequence buffer ranges (GpuLayouts.h, SequenceSlots): draws per draw range and per decal group.
 		std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
-		// T7c1: the colour segment's terrain groups' ranges, in phase 2's (GpuLayouts.h, kTerrainGroups): every draw each group's
-		// pipeline slots can produce, grown to a power of two past it; the two together within sequenceDraws.
+		// Within sequenceDraws, power-of-two ranges in phase 2 (GpuLayouts.h): the terrain groups' (kTerrainGroups), then each
+		// forward half's (kForwardSortShader), then refraction's.
 		std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
-		// T7d: each half of the colour segment's forward range (GpuLayouts.h, kForwardSortShader), after the terrain ranges: every draw
-		// the forward pipeline slots can produce, grown to a power of two past it; the terrain ranges and both halves within sequenceDraws.
 		std::uint32_t forwardCapacity = 0;
-		// T7d's refraction: the refraction range (GpuLayouts.h), after the forward halves: every draw the refraction pipeline slots can
-		// produce, grown to a power of two past it; within sequenceDraws with the ranges before it.
 		std::uint32_t refractionCapacity = 0;
-		// The objects the per-object buffers hold (inputs, inputsDepth, visibility, frustum): the scene's object capacity, grown
-		// with it (ReserveObjectBuffers).
+		// Capacity of the per-object buffers (inputs, inputsDepth, visibility, frustum): the scene's (ReserveObjectBuffers).
 		std::uint32_t objectCapacity = 0;
 		bool operator==(const MainSizing&) const = default;
 	};
 
 	struct Resources : MainSizing
 	{
-		// The draws the newest change of the sequences asks for (ReserveMainSequences, the revision code's; this sizing's at first):
-		// what a commit past the adopted ranges is checked against - draws waiting for that change, or a defect of the bound.
+		// Draws the newest sequences change asks for: a commit past the adopted ranges checks against it.
 		std::atomic<std::uint32_t> askedSequenceDraws{ 0 };
 		std::vector<FrameBuffer> frameBuffers;
-		// The main pass's rows (DrawPipelines.h, kMaterialRowBytes / kPipelineRowBytes), one table each for both segments,
-		// indexed by the scene's material and pipeline slots; grown before an epoch to the tables' slot counts
-		// (Impl::ReserveMainSequences). The versions of the kept rows (MainRows) they hold: 0 in a new backing.
+		// The main pass's rows (DrawPipelines.h), shared by both segments, by material and pipeline slot. *Held: the kept rows'
+		// version they hold, 0 in a new backing.
 		GrowableRows materialRows, pipelineRows;
 		std::uint64_t materialRowsHeld = 0, pipelineRowsHeld = 0;
-		// The scene's tables, every epoch's (SceneBuffers): the object records, bone rows, geometry table and face positions.
+		// Shared by every epoch.
 		std::shared_ptr<SceneBuffers> scene;
 		Versioned inputs, sequences;  // BuildDraws: in, out (and the scene's geometries)
 		std::shared_ptr<org::Buffer> count;
-		// The Z-prepass's bucket counts (MainSizing) and the index pool (the scene's).
 		std::array<Versioned, 2> zBucketCounts;
 		std::shared_ptr<IndexPool> pool;
-		// The Z-prepass segment's draw inputs, for the commits that do not read the frame's ring entry (the scene list): a payload
-		// built at the epoch (CS_DCLF_BINDLESS_PARITY), one per segment and each with its own drawable bits, so each segment keeps
-		// its own buffer (the colour segment's is `inputs`), with the version of the region the buffer holds, per segment
-		// (0 Z-prepass, 1 colour), written by the commit that uploads it.
+		// The Z-prepass's own draw inputs (different drawable bits). residentUploaded: per segment (0 Z-prepass, 1 colour), the
+		// region version its buffer holds.
 		Versioned inputsDepth;
 		std::array<std::uint64_t, 2> residentUploaded{};
 		std::shared_ptr<const ComputeProgram> buildDraws;
 		winrt::com_ptr<ID3D11Buffer> sequencesD3D11, countD3D11;  // CS_DCLF_BUILD_PARITY readback
-		// The foliage record (GpuLayouts.h; Policy::RecordFoliagePixels): by frame parity, each pixel's object and colours, and the
-		// observers' compare pass's results (Diagnostics/Draws/Foliage.cpp: its program and a host copy of the results per frame slot,
-		// read when the slot comes round again).
+		// The foliage record (Policy::RecordFoliagePixels): per frame parity, each pixel's object and colours, and the compare
+		// pass's results (Diagnostics/Draws/Foliage.cpp), read back per frame slot.
 		struct FoliageRecord
 		{
 			std::array<std::shared_ptr<org::Buffer>, 2> ids, colours;
 			std::array<std::uint64_t, 2> idsAddress{}, coloursAddress{};
 			std::shared_ptr<org::Buffer> results;
 			std::uint64_t resultsAddress = 0;
-			// The Z-prepass's alpha-tested fragments' owner per pixel (GpuLayouts.h, kFoliageOwned), its UAV's index.
+			// The Z-prepass's alpha-tested fragment owner per pixel (GpuLayouts.h, kFoliageOwned) and its UAV index.
 			std::shared_ptr<org::Buffer> owners;
 			std::uint32_t ownersIndex = 0;
-			std::uint32_t epoch = 0;  // colour commits so far: the buffers' parity and tag (the store's frame can repeat or skip)
+			std::uint32_t epoch = 0;  // colour commits so far: buffer parity and tag (the scene frame can repeat or skip)
 			std::shared_ptr<const ComputeProgram> program;
 			std::vector<std::shared_ptr<org::Buffer>> readback;
 			std::vector<std::uint32_t> readbackFrame;  // 1 where the slot's copy holds a frame's results
@@ -83,76 +70,54 @@ namespace DCLF::Draws
 		std::shared_ptr<FoliageRecord> foliage;
 		winrt::com_ptr<ID3D11Buffer> visibilityD3D11;              // CS_DCLF_SET_PARITY readback
 		winrt::com_ptr<ID3D11Buffer> frustumD3D11;                 // CS_DCLF_SET_PARITY readback (the fade test's drops)
-		// The per-frame constant blocks at fixed slots (FrameSlotOffset), so a build can name them before
-		// their contents exist.
+		// The per-frame constant blocks at fixed slots (FrameSlotOffset), so a build can name them before their contents exist.
 		std::shared_ptr<org::Buffer> frameConstants;
-		// The targets the passes declared for the commits' latched copies (LatchedCopiesPass), which a commit's LatchedUploads
-		// take; anything else is staged. The copies' blocks, per segment (kDepthShape, kColourShape), are the revision producer's
-		// (RevisionLatches::mainLatched), held by the shapes (PassFrame::latched).
+		// Targets declared for the latched copies (LatchedCopiesPass); anything else is staged.
 		std::atomic<std::shared_ptr<const std::vector<const void*>>> latchedTargets;  // LatchedTarget::key
 		std::uint64_t frameConstantsAddress = 0;
-		// The zeroed StrictLightData block every bindless draw's b3 reads (kFrameSlotSharedLight): constant, so sent once, by the
-		// first commit, as a staged upload outside the latched layout.
+		// The zeroed StrictLightData every bindless draw's b3 reads: constant, staged once by the first commit.
 		bool sharedLightZeroed = false;
-		// The main pass's own targets and depth, imported: DCLF draws into them, and the native loop skips the
-		// objects it drew (DrawcallLimitFix's RenderPassImmediately hooks).
+		// The main pass's imported targets and depth.
 		std::uint32_t targetCount = 0;
 		std::array<std::shared_ptr<org::ExternalTextureResource>, kColorTargets> native;
 		std::shared_ptr<org::ExternalTextureResource> nativeDepth;
-		// T7c1: Terrain Blending's terrain depth (TerrainBlending::terrainDepth), imported once with the main depth's description,
-		// which the Z-prepass draws its near terrain blocks into (MainOpaquePass). Null without that feature.
+		// Terrain Blending's terrain depth, which the Z-prepass draws near terrain into. Null without that feature.
 		std::shared_ptr<org::ExternalTextureResource> terrainDepth;
-		// T7d's refraction: the engine's refraction normals (kREFRACTION_NORMALS), imported once with their format, which the forward
-		// epoch's RefractionDrawPass draws into. Null without the target.
+		// The engine's refraction normals (kREFRACTION_NORMALS), for RefractionDrawPass. Null without the target.
 		std::shared_ptr<org::ExternalTextureResource> refractionNormals;
 		DXGI_FORMAT refractionFormat = DXGI_FORMAT_UNKNOWN;
-		// CS_DCLF_GBUFFER_PROBE: one texel of every target, copied inside the epoch both before and
-		// after the colour draws. The copies are graph passes so the graph orders them against the
-		// draws; a D3D11 readback issued around the epoch is not ordered against ORG's submissions at
-		// all, and silently reports that nothing changed.
-		std::shared_ptr<org::Buffer> probe;
-		winrt::com_ptr<ID3D11Buffer> probeD3D11;
-		// Phase 4's hierarchical depth buffer. Its source is nativeDepth, which is imported with a
-		// shader-resource view as well as a depth-stencil one so that the graph sees the depth the draws
-		// write and the depth the build reads as one resource and orders them.
 		Versioned visibility;  // per-object verdict, published by the depth segment
-		// Per object, the stamp of the last frame the main camera's depth phase 1 found its bound inside the frustum
-		// (occlusion aside: the engine's OnVisible semantics). Never cleared: a stale stamp is simply not this frame's.
+		// Per object, the last frame stamp at which main depth phase 1 found its bound inside the frustum, occlusion aside (the
+		// engine's OnVisible semantics). Never cleared: a stale stamp is simply not this frame's.
 		Versioned frustum;
 		std::shared_ptr<PassStats> passStats;  // CS_DCLF_PASS_STATS
-		// The explicit DGC preprocesses' state list of the colour segment's passes. The depth segment's draws are plain
-		// (PassFrame::zCalls).
+		// Explicit DGC preprocess state lists (colour segment, forward epoch), and the forward range's sort.
 		std::shared_ptr<PreprocessStates> preprocessMain;
-		// T7d: the forward epoch's (ForwardDrawPass), which records in an epoch of its own; and the forward range's sort.
 		std::shared_ptr<PreprocessStates> preprocessForward;
 		std::shared_ptr<const ComputeProgram> forwardSort;
+		// The HZB. nativeDepth is imported with SRV and DSV so the graph sees one depth resource for draws and build.
 		std::shared_ptr<org::PixelBuffer> hzb;
 		std::shared_ptr<const ComputeProgram> hzbProgram;
-		// The single-pass downsample's count of finished groups: zeroed by the first depth commit (hzbCounterZeroed,
-		// render thread), and after that by the last group of each dispatch.
+		// The downsample's finished-group count: zeroed by the first depth commit, then by each dispatch's last group.
 		std::shared_ptr<org::Buffer> hzbCounter;
 		bool hzbCounterZeroed = false;
 		std::uint32_t hzbWidth = 0, hzbHeight = 0, hzbMips = 0;
 		std::uint32_t width = 0, height = 0;
 		bool lightLimitFix = false;  // LLF's graph buffers are registered (they are read at t35-t37)
-		// The latch block (per frame slot, one BuildDrawsLatch, then the colour pass's cascades) is the revision producer's
-		// (RevisionLatches::main, grown by ReserveMainLatch), held by the shapes (PassFrame::latch, latchLayout).
 		rhi::CommandSignaturePtr dispatchSignature;
-		// The sort by pipeline of phase 1's and the colour segment's sequences (one view); null when it is off.
+		// The pipeline sort of phase 1's and the colour segment's sequences; null when off.
 		std::shared_ptr<DrawSort> sort;
-		// Per drawing segment, its last commit (render thread): the scene frame, its inputs, and the backings it wrote into (the
-		// scene tables' growths, the per-object buffers' capacity). The reflection's faces draw from the depth segment's inputs
-		// and the colour segment's frame record as the frame before left them, and only while nothing has grown since.
+		// Per segment, its last commit. The reflection's faces reuse the previous frame's depth inputs and colour frame record
+		// only while nothing has grown since.
 		struct Committed
 		{
 			std::uint32_t frame = ~0u, inputs = 0;
 			std::uint64_t sceneGeneration = 0;
 			std::uint32_t objectCapacity = 0;
-			// The main rows' backings its inputs name by address (MainRowsGeneration): a growth adopted since leaves them on a
-			// version nothing holds.
+			// MainRowsGeneration its inputs embed addresses of.
 			std::uint64_t rowsGeneration = 0;
 		};
-		/** @brief The main rows' backings (material and pipeline rows' generations): what draw inputs embed the addresses of. */
+		/** @brief The material and pipeline rows' backing generation: what draw inputs embed the addresses of. */
 		std::uint64_t MainRowsGeneration() const { return (materialRows.generation << 32) ^ pipelineRows.generation; }
 		std::array<Committed, 2> committed;
 	};
@@ -168,19 +133,15 @@ namespace DCLF::Draws
 	};
 
 	/*
-	 * The main epochs' shape producers (Revision/Producer.cpp; dclf-async-publication.md, R3c). A segment's shape (PassFrame) is a function
-	 * of what a scene revision names - its resource versions, the scene's draw bound, the pipeline set and the lookups - and of
-	 * what changes only with the engine's setup (the main pass's viewport, the frame blocks' sizes); never of a frame's values,
-	 * which the commit writes into the latch and the latched copies' layout the shape names. A revision's shape is made from
-	 * these at the scene work's join (MakeRevision).
+	 * The main epochs' shape producers (Revision/Producer.cpp; dclf-async-publication.md). A segment's shape (PassFrame) is a function
+	 * of what a scene revision names (resource versions, draw bound, pipeline set, lookups) and of engine setup (viewport, frame
+	 * block sizes); never of a frame's values, which the commit writes into the latch.
 	 */
 
 	/**
-	 * @brief The Z-prepass's plain draws (MainOpaquePass): a bucket per group of pipeline slots that share a depth pipeline
-	 * (IndirectState::zGroups), in the order the slots first name them, its range the slots' ranges together
-	 * (Resources::zBucketCapacity, which the sequences' phase ranges hold); each slot's bucket (kNoBucket: a slot without a
-	 * published pipeline, whose draws BuildDraws drops); each phase's table of (first, capacity) per bucket; a draw call per
-	 * bucket. The calls are the shape's; the map and the tables the commit's latch.
+	 * @brief The Z-prepass's plain draws: one bucket per group of pipeline slots sharing a depth pipeline (IndirectState::zGroups),
+	 * in first-use order. map: each slot's bucket (kNoBucket without a published pipeline: BuildDraws drops its draws). The calls
+	 * are the shape's; map and tables go into the latch.
 	 */
 	struct ZBucketPlan
 	{
@@ -191,21 +152,18 @@ namespace DCLF::Draws
 	};
 	void PlanZBuckets(const MainSizing& a_resources, const Lookups& a_lookups, const SceneTables& a_tables, const IndirectState& a_indirect, ZBucketPlan& a_out);
 
-	/** @brief The sizes of a main epoch's frame blocks (FrameBlocks), per stage and register: what its latched copies of them take. */
+	/** @brief A main epoch's frame block sizes (FrameBlocks) per stage and register, which its latched copies take. */
 	struct FrameBlockSizes
 	{
 		std::array<std::uint32_t, kConstantBufferRegisters> vs{}, ps{};
 		bool operator==(const FrameBlockSizes&) const = default;
 	};
 
-	/**
-	 * @brief A main commit's latched copies (LatchedUploads), in the order it writes them and packed as LatchedUploads packs
-	 * them: a function of its resources, its segment, its frame blocks' sizes and the Z-prepass's bucket count.
-	 */
+	/** @brief A main commit's latched copies, in write order and packed as LatchedUploads packs them. */
 	std::vector<LatchedCopy> MainLatchedLayout(const Resources& a_resources, bool a_depthOnly, const FrameBlockSizes& a_blocks, std::uint32_t a_buckets);
 	/** @brief The bytes a layout takes of its latch block's slot. */
 	std::size_t LatchedBytes(const std::vector<LatchedCopy>& a_copies);
-	/** @brief A latched copies' block holding at least a_bytes a slot: a new, larger one when it does not (LatchedUploads' rule). */
+	/** @brief Replaces a_block with a larger one unless it already holds a_bytes per slot. */
 	void ReserveLatchedBlock(std::shared_ptr<org::LatchBlock>& a_block, std::size_t a_bytes, std::uint32_t a_slots);
 
 	/** @brief The main pass's render area and depth range, as a segment's last capture had them. */
@@ -220,34 +178,31 @@ namespace DCLF::Draws
 	struct MainShapeInputs
 	{
 		bool depthOnly = false;
-		std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // the sequence buffer's ranges (ReserveMainSequences)
-		std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};  // T7c1: the terrain groups' (MainSizing::terrainCapacity)
-		std::uint32_t forwardCapacity = 0;                    // T7d: each forward half's (MainSizing::forwardCapacity)
-		std::uint32_t refractionCapacity = 0;                 // T7d's refraction range's (MainSizing::refractionCapacity)
-		std::uint64_t materialRows = 0, pipelineRows = 0;     // the rows' tables' addresses
+		std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // MainSizing's ranges
+		std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
+		std::uint32_t forwardCapacity = 0;
+		std::uint32_t refractionCapacity = 0;
+		std::uint64_t materialRows = 0, pipelineRows = 0;     // the row tables' addresses
 		MainViewport viewport;
 		rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
 		IndirectState indirect{};
 		std::uint32_t cullMode = 0;
-		std::string_view probe;                        // CS_DCLF_GBUFFER_PROBE's value (a revision's: its inputs')
-		std::shared_ptr<const org::LatchBlock> latch;  // the main latch (the revision producer's: ReserveMainLatch)
-		MainLatchLayout latchLayout;                   // its layout
+		std::shared_ptr<const org::LatchBlock> latch;  // the revision producer's (ReserveMainLatch)
+		MainLatchLayout latchLayout;
 		std::vector<PassFrame::ZCall> zCalls;          // the depth segment's (PlanZBuckets)
-		std::shared_ptr<const ZBucketPlan> zPlan;      // the plan they are the calls of
+		std::shared_ptr<const ZBucketPlan> zPlan;
 		LatchedList latched;                           // MainLatchedLayout, in its reserved block
 	};
 	/**
-	 * @brief The segment's resources' part of its shape's inputs: the ranges, the rows, the cull mode (a_cullMode: the toggles', as
-	 * the caller has them). Not the latch (the revision producer's, which the caller names) nor the descriptor heaps (the graph's).
+	 * @brief The resources' part of a segment's shape inputs (ranges, rows, a_cullMode). The caller fills the latch and the
+	 * descriptor heaps.
 	 */
 	MainShapeInputs MainShapeInputsOf(const Resources& a_resources, bool a_depthOnly, std::uint32_t a_cullMode, bool a_revision = false);
 	std::shared_ptr<PassFrame> MakeMainShape(const MainShapeInputs& a_in);
 
 
 	/**
-	 * @brief CS_DCLF_PASS_STATS=1: pipeline statistics (input vertices and primitives, vertex and pixel shader
-	 * invocations) of the main epochs' draw passes, per frame slot, read back when the slot comes round again: the counter
-	 * check that DCLF's passes draw and depth-test what they should (the colour pass's pixel shader invocations, above all).
+	 * @brief CS_DCLF_PASS_STATS=1: the main draw passes' pipeline statistics per frame slot, read back when the slot comes round.
 	 */
 	struct PassStats
 	{
@@ -329,12 +284,12 @@ namespace DCLF::Draws
 		std::shared_ptr<const PassFrame> frame;
 		std::array<org::PreparedDescriptorReference, kColorTargets> targetViews{};
 		org::PreparedDescriptorReference depthView{};
-		org::PreparedDescriptorReference terrainDepthView{};  // T7c1: Terrain Blending's terrain depth (the Z-prepass's)
+		org::PreparedDescriptorReference terrainDepthView{};  // Terrain Blending's terrain depth (the Z-prepass's)
 		bool terrainDepth = false;
 		std::uint32_t targetCount = 0;
 		bool phaseTwo = false;
 		bool zPrepass = false;
-		// Tree LOD's draw (UploadTreeLod): its pipelines and the draw row's address, which its push data names.
+		// Tree LOD's draw (UploadTreeLod): pipelines and the draw row's address (in its push data).
 		std::shared_ptr<const TreeLodPipelines> treeLod;
 		std::uint64_t treeLodDraw = 0;
 	};

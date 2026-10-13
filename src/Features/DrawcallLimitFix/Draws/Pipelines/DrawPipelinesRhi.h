@@ -1,6 +1,7 @@
 #pragma once
 
 // BasicRHI view of DrawPipelines, for the graph pass (include after rhi_interop_vulkan.h).
+
 #include <array>
 #include <memory>
 #include <vector>
@@ -23,7 +24,7 @@ namespace DCLF
 		std::vector<rhi::PipelineHandle> zPipelines;
 		rhi::PipelineLayoutHandle zLayout{};
 		rhi::CommandSignatureHandle zDrawSignature{};
-		// T7d's refraction draw (DrawPipelines::RequestRefraction; RefractionDrawPass): its pipeline, null while it waits or once it
+		// The refraction draw (DrawPipelines::RequestRefraction; RefractionDrawPass): its pipeline, null while it waits or once it
 		// failed, the refraction normals' format it was built for, and the shadow views' layout and plain draw signature it draws under.
 		rhi::PipelineHandle refraction{};
 		DXGI_FORMAT refractionFormat = DXGI_FORMAT_UNKNOWN;

@@ -36,7 +36,7 @@ namespace DCLF
 	{
 		/**
 		 * @brief An NiBillboardNode's face mode: userFlags (+0x128) & 7, as 0x140d3e650 reads it. Read at the offset, not through
-		 * CommonLib's member, whose offset in this build is not AE's (it read 0 for ROTATE_ABOUT_UP nodes).
+		 * CommonLib's member, whose offset in this build is not AE's (it reads 0 for ROTATE_ABOUT_UP nodes).
 		 */
 		std::uint32_t FaceMode(const void* a_node);
 

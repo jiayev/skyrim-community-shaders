@@ -1,4 +1,5 @@
-// Drawcall Limit Fix: CS_DCLF_FOLIAGE_PARITY's compare pass (IndirectDraws GpuLayouts.h, FoliageParityConstants).
+// Drawcall Limit Fix: CS_DCLF_FOLIAGE_PARITY's compare pass (Diagnostics/Draws/Foliage.cpp; its constants must match FoliageParityConstants
+// there, its counters GpuLayouts.h's FoliageCounter).
 //
 // The colour pass's alpha-tested draws write what each pixel shows (Lighting.hlsl, DCLF_FOLIAGE_PARITY): its object word (the
 // object's index + 1 in the low 24 bits, the frame's tag above them), and four words: its albedo (RGB8, and its motion vector's
@@ -127,8 +128,7 @@ void Sample(RWByteAddressBuffer a_results, uint a_counter, uint a_base, uint a_c
 		const float ownerDepth = asfloat(0xFFFFFFFFu - uint(owner >> 32));
 		const uint ownerObject = uint(owner) & 0x00FFFFFFu;
 		// The owner's depth as the buffer stores it (D24): one of the two levels either side of it, as the conversion rounds. Another
-		// fragment a unit or more in front (a draw the engine keeps, which records nothing) is not the owner's depth: with the
-		// former 1.5-unit tolerance it was, and counted as the owner left unshaded.
+		// fragment a unit or more in front (a draw the engine keeps, which records nothing) is not the owner's depth.
 		if (abs(round(depthBuffer.Load(int3(pixel, 0)) * 16777215.0) - ownerDepth * 16777215.0) < 1.0) {
 			results.InterlockedAdd(kOwned * 4, 1);
 			const uint failure = object == 0 ? kUnshaded : object != ownerObject ? kOtherObject : 0;

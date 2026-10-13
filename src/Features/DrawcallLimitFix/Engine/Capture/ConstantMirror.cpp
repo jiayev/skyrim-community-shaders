@@ -1,3 +1,5 @@
+// ConstantMirror: the watched buffers' CPU copies, kept by the immediate-context hooks on the render thread.
+
 #include "Features/DrawcallLimitFix/Engine/Capture/ConstantMirror.h"
 
 #include <cstring>

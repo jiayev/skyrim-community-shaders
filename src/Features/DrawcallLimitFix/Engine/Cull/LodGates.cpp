@@ -1,7 +1,8 @@
+// LodGates: the swap thunks and detours (on the engine's LOD threads, under the terrain manager's lock), the veto table HiddenStores'
+// stubs read lock-free, the render thread's Flip, and the outcomes posted to the coordinator.
 #include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
 
-#include "Features/DrawcallLimitFix/Diagnostics/Engine/ImportTimings.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Runtime/SceneWake.h"
@@ -27,16 +28,16 @@ namespace DCLF::LodGates
 	namespace
 	{
 		/**
-		 * AE 1.6.1170, from the image base (skyrim-engine-notes.md, "LOD swaps and their gates"); every call site's bytes compared before
-		 * any is patched. The quadtree node (0x50 bytes): +0x08 terrain block handle, +0x10 object block handle, +0x18 tree handle,
-		 * +0x20/+0x28 the map's fixed-level terrain/object handles, +0x30 children (4 contiguous nodes), +0x40 flags. A handle: +0x0C state
-		 * (bits 0x70000000) and references, +0x28 the block. An object block: +0x08 its NiNode (attached to the LOD root), +0x11 attached.
-		 * A terrain block: +0x08 the land node and +0x10 the water node (the two its show and hide store to), +0x18 the container
-		 * attached to a level node, +0x21 attached, +0x22 water registered.
+		 * AE 1.6.1170, from the image base (skyrim-engine-notes.md, "LOD swaps and their gates"); call site bytes are checked before
+		 * patching. Quadtree node (0x50 bytes): +0x08 terrain handle, +0x10 object handle, +0x18 tree handle, +0x20/+0x28 the map's
+		 * fixed-level terrain/object handles, +0x30 children (4 contiguous), +0x40 flags. Handle: +0x0C state (bits 0x70000000) and
+		 * references, +0x28 the block. Object block: +0x08 its NiNode (under the LOD root), +0x11 attached. Terrain block: +0x08 land
+		 * and +0x10 water node (what show/hide store to), +0x18 the container attached to a level node, +0x21 attached, +0x22 water
+		 * registered.
 		 */
 		enum Offset : std::uintptr_t
 		{
-			// The Func2s' call sites (the gates' swap): their attaches (pre-hide) and the retirement that follows (the steal, the gate).
+			// The Func2s' call sites: attaches (pre-hide) and the retirement that follows (steal, then the gate).
 			kObjectUpgradeAttach = 0x51339a,     // BGSQueuedObjectUpgrade::Func2: FUN_1404fda90(child block), once per ready child
 			kObjectUpgradeRetire = 0x51340c,     // ...: FUN_140510a10(parent, 2)
 			kTerrainUpgradeAttach = 0x512ceb,    // FUN_140512c90 (terrain upgrade Func2): FUN_140509550(child block)
@@ -46,17 +47,16 @@ namespace DCLF::LodGates
 			kTerrainDowngradeAttach = 0x512f55,  // BGSQueuedTerrainDowngrade::Func2: FUN_140509550(parent block)
 			kTerrainDowngradeRetire = 0x512fb1,  // ...: FUN_140510c20(child, 1), once per child
 			// The InitialLoad Func2s (vtables 0x1418690d8 objects, 0x141869030 terrain; queued by FUN_140513ea0 / FUN_1405139b0 for an
-			// unloaded node with no loaded block above it): the node's own block attached, nothing retired (a gate with no outgoing).
+			// unloaded node with no loaded block above it): attach only, nothing retired.
 			kObjectInitialAttach = 0x513789,   // BGSQueuedObjectInitialLoad::Func2 (0x140513740): FUN_1404fda90(node's block)
 			kTerrainInitialAttach = 0x513091,  // BGSQueuedTerrainInitialLoad::Func2 (0x140513080): FUN_140509550(item's block)
-			// Forced releases at call sites: FUN_14050e430's early return with the LOD roots hidden (a tail `jmp` to FUN_140509950),
-			// and its full rebuild FUN_14050f790(manager, root, .., 1).
+			// Forced releases: FUN_14050e430's early return with the LOD roots hidden (tail `jmp` to FUN_140509950) and its full rebuild.
 			kRootsHiddenReturn = 0x50e4e4,
 			kFullRebuild = 0x50e7ae,
 			// Detoured.
 			kLodDrain = 0x513840,           // FUN_140513840: the swaps' drain (Func2s), from FUN_14050e430 under the manager's lock
 			kRetire = 0x510a10,             // FUN_140510a10(node, bits): a node's blocks detached and released (1 terrain, 2 objects)
-			kDeactivate = 0x50ed60,         // FUN_14050ed60: the manager deactivated (a worldspace's unload, FUN_14050e250, calls it first)
+			kDeactivate = 0x50ed60,         // FUN_14050ed60: manager deactivated (FUN_14050e250, a worldspace unload, calls it first)
 			kMapHideAll = 0x511b40,         // FUN_140511b40(node, show): the map's show or hide of every block
 			kMapEnter = 0x511680,           // FUN_140511680: to the map's fixed levels
 			kMapExit = 0x511860,            // FUN_140511860: back from them (also FUN_14050e430's LOD-off branch)
@@ -67,11 +67,11 @@ namespace DCLF::LodGates
 			kDetachTerrain = 0x509770,  // FUN_140509770(block): unregisters its LOD water too
 			kReleaseObject = 0x501d00,  // FUN_140501d00(handle): one reference
 			kReleaseTerrain = 0x50d170,  // FUN_14050d170(handle)
-			kLodVisibleTest = 0x512160,  // FUN_140512160(node, cell, objects): the update's show test (the coverage observer's)
+			kLodVisibleTest = 0x512160,  // FUN_140512160(node, cell, objects): the update's show test
 			// Data.
 			kManagerLock = 0x315b8c8,  // DAT_14315b8c8: the terrain manager's recursive BSSpinLock, held around the drain
-			kLoadScreen = 0x315b6a0,   // DAT_14315b6a0: the load screen up (FUN_1401a1150's open sets it; its close runs the LOD's full update, then clears it)
-			kTlsIndex = 0x35f0878,     // the module's TLS index: +0x768 in its block is the memory context id FUN_140510a10 sets to 0x55
+			kLoadScreen = 0x315b6a0,   // DAT_14315b6a0: load screen up (FUN_1401a1150 sets it; its close runs the LOD full update, then clears it)
+			kTlsIndex = 0x35f0878,     // TLS index: +0x768 in its block is the memory context id FUN_140510a10 sets to 0x55
 		};
 
 		struct CallSite
@@ -79,7 +79,7 @@ namespace DCLF::LodGates
 			std::uintptr_t offset;
 			std::array<std::uint8_t, 5> bytes;
 		};
-		// Read from the binary (Ghidra, AE 1.6.1170): each a rel32 `call` (`jmp` for the early return) to the function named above.
+		// Each a rel32 `call` (`jmp` for the early return) to the function named above (AE 1.6.1170).
 		constexpr std::array<CallSite, 12> kCallSites{ {
 			{ kObjectUpgradeAttach, { 0xE8, 0xF1, 0xA6, 0xFE, 0xFF } },
 			{ kObjectUpgradeRetire, { 0xE8, 0xFF, 0xD5, 0xFF, 0xFF } },
@@ -108,10 +108,9 @@ namespace DCLF::LodGates
 		}
 
 		/**
-		 * @brief The terrain manager's lock (recursive, the engine's own): every engine-side structure here (the open gates, the pending and
-		 * held maps, the veto table's writes) is touched under it, as the quadtree it mirrors is. The swaps and the drain already hold it;
-		 * the forced paths outside it (a worldspace's unload, the map, LOD off) take it, as the engine's own update would. LodGates adds
-		 * no lock of its own.
+		 * @brief The terrain manager's recursive lock: every engine-side structure here (open gates, pending and held maps, veto table
+		 * writes) is touched under it, like the quadtree. Swaps and the drain already hold it; the forced paths take it. LodGates adds no
+		 * lock of its own.
 		 */
 		class EngineLock
 		{
@@ -129,7 +128,7 @@ namespace DCLF::LodGates
 			RE::BSSpinLock& lock;
 		};
 
-		/** @brief FUN_140510a10's memory context (its first act): the engine's allocation accounting sees our releases as its own. */
+		/** @brief FUN_140510a10's memory context (its first act), so the engine's allocation accounting sees our releases as its own. */
 		class MemoryContext
 		{
 		public:
@@ -190,8 +189,8 @@ namespace DCLF::LodGates
 			return { At<RE::NiAVObject*>(a_block, 0x08), At<RE::NiAVObject*>(a_block, 0x10) };
 		}
 
-		// NiAVObject::flags (+0xF4) bit 0, app-cull: the bit every LOD show and hide stores. Atomic, as other bits of the dword may be
-		// written by the engine at the same time. Returns whether the bit changed.
+		// NiAVObject::flags (+0xF4) bit 0, app-cull: what every LOD show/hide stores. Atomic: the engine may write other bits at once.
+		// Returns whether the bit changed.
 		bool SetHidden(RE::NiAVObject* a_object, bool a_hidden)
 		{
 			std::atomic_ref<std::uint32_t> flags(At<std::uint32_t>(reinterpret_cast<std::uintptr_t>(a_object), 0xF4));
@@ -219,9 +218,8 @@ namespace DCLF::LodGates
 		}
 
 		/**
-		 * @brief A gate's state, with its token: one word, `token << 3 | state`, so that a compare-exchange from Open names the gate too (a
-		 * record is reused for later gates; a stale token's exchange fails). Open -> Flipping -> Flipped -> Released (the render thread's
-		 * flip, then the drain's release), or Open -> Forced (a safety path, or superseded by a later swap of the same nodes).
+		 * @brief A gate's state with its token in one word (`token << 3 | state`), so an exchange on a reused record with a stale token
+		 * fails. Open -> Flipping -> Flipped (render thread) -> Released (drain), or Open -> Forced (safety path, or superseded).
 		 */
 		enum State : std::uint64_t
 		{
@@ -235,24 +233,23 @@ namespace DCLF::LodGates
 		constexpr std::uint64_t Word(std::uint64_t a_token, State a_state) { return (a_token << 3) | a_state; }
 
 		/**
-		 * @brief A held block's fate while its gate lives. The swapping thread's reattach and the render thread's flip race for an owned
-		 * block by compare-exchange (seq_cst): exactly one wins, so the flip never hides a block the engine just made a node's current one
-		 * again, and a reattach after the flip's hide makes it a later gate's incoming (that gate's flip shows it).
+		 * @brief A held block's fate while its gate lives. The swap's reattach and the render thread's flip race by seq_cst exchange:
+		 * the flip never hides a block the engine just made current again, and a reattach after the hide makes it a later gate's incoming.
 		 */
 		enum Handoff : std::uint8_t
 		{
 			kOwned = 0,
-			kReattached = 1,  // attached again by a swap before the flip reached it (the engine reused it): the flip leaves it shown
-			kHandedOff = 2,   // stolen again by a later gate (from its node, after a reattach): that gate owns its visibility
+			kReattached = 1,  // reattached by a swap before the flip reached it: the flip leaves it shown
+			kHandedOff = 2,   // stolen again by a later gate, which owns its visibility
 			kFlipHidden = 3,  // hidden by its gate's flip
 		};
 
 		struct Block
 		{
 			std::uintptr_t block = 0;   // the handle's +0x28
-			std::uintptr_t handle = 0;  // held: the stolen handle, whose reference DCLF owns; incoming: 0 (the attach sees the block only)
+			std::uintptr_t handle = 0;  // held: the stolen handle, whose reference DCLF owns; incoming: 0
 			std::uintptr_t node = 0;    // held: the quadtree node it was taken from (the reuse check)
-			std::uint64_t token = 0;    // held: the gate holding it (Emit's; its kept notice names it), 0 for a pending block held past a flip
+			std::uint64_t token = 0;    // held: its gate (0 for a pending block held past a flip)
 			Kind kind = Kind::Object;
 			std::array<RE::NiAVObject*, 2> nodes{};  // the app-cull nodes
 			std::atomic<std::uint8_t> handoff{ kOwned };  // held, while its gate lives: Handoff
@@ -274,10 +271,9 @@ namespace DCLF::LodGates
 		};
 
 		/**
-		 * @brief One gate. Type-stable: records are reused, never freed, so a stale reference (the veto table's, the render thread's lookup,
-		 * a pending block's) reads a live word and finds its token gone. The vectors are written by the engine side before the gate is
-		 * published (Open) and after it leaves Open by the engine's own exchange; the render thread reads them only between its exchange to
-		 * Flipping and its store of Flipped.
+		 * @brief One gate. Type-stable (reused, never freed), so a stale reference reads a live word and finds its token gone. The engine
+		 * side writes the vectors before publishing (Open) and after its own exchange out of Open; the render thread reads them only
+		 * between its exchange to Flipping and its store of Flipped.
 		 */
 		struct Gate
 		{
@@ -295,25 +291,22 @@ namespace DCLF::LodGates
 			return word == Word(a_token, kOpen) || word == Word(a_token, kFlipping);
 		}
 
-		// Live, or flipped and not yet released: the veto table keeps the entry (the coverage observer's re-hide marks).
+		// Live, or flipped and unreleased (the veto entry stays for the coverage observer).
 		bool Unreleased(const Gate* a_gate, std::uint64_t a_token)
 		{
 			return Live(a_gate, a_token) || a_gate->word.load(std::memory_order_acquire) == Word(a_token, kFlipped);
 		}
 
-		// ---------------------------------------------------------------------------------------------------------------------------
-		// The veto table: the pending incoming nodes, read lock-free by HiddenStores' veto stubs on any thread. Written by the engine side
-		// alone (under the manager's lock); a slot is filled once and never reused (a removal is a tombstone), so a reader's entry never
-		// changes under it; whether it vetoes is its gate's word (Open or Flipping). Growth (and the compaction of resolved entries)
-		// builds a new table and publishes it; an old table is freed once no reader is inside one (vetoReaders seen at 0 after the
-		// publication: a reader counts itself before loading the table). No cap: the table grows with the open gates' nodes.
-		// ---------------------------------------------------------------------------------------------------------------------------
+		// The veto table: pending incoming nodes, read lock-free by HiddenStores' veto stubs on any thread, written by the engine side
+		// alone. A slot is filled once (removal is a tombstone), so a reader's entry never changes; its gate's word decides the veto.
+		// Growth and compaction publish a new table; an old one is freed once vetoReaders is seen at 0 after the publication (readers
+		// count themselves before loading). No cap.
 		struct VetoEntry
 		{
 			std::atomic<std::uintptr_t> key{ 0 };  // 0 empty, kTomb removed, else the NiAVObject
 			const Gate* gate = nullptr;
 			std::uint64_t token = 0;
-			// The coverage observer's (NoteEngineHide): the engine's LOD hide store that hid the node again after its gate's flip (its offset), else 0.
+			// NoteEngineHide: offset of the engine store that hid the node again after its gate's flip, else 0.
 			std::atomic<std::uint32_t> rehidSite{ 0 };
 		};
 		constexpr std::uintptr_t kTomb = 1;
@@ -322,7 +315,7 @@ namespace DCLF::LodGates
 		{
 			explicit VetoTable(std::size_t a_capacity) :
 				capacity(a_capacity), entries(std::make_unique<VetoEntry[]>(a_capacity)) {}
-			std::size_t capacity;  // a power of two, at least twice the slots filled (a probe always meets an empty slot)
+			std::size_t capacity;  // a power of two, at least twice the filled slots (a probe always meets an empty one)
 			std::size_t filled = 0;
 			std::unique_ptr<VetoEntry[]> entries;
 		};
@@ -341,9 +334,7 @@ namespace DCLF::LodGates
 		std::atomic<std::uint32_t> engineWork{ 0 };  // open + pending + deferred: the hooks' fast test (no lock taken at 0)
 		std::atomic<std::uint64_t> forcedGeneration{ 0 };
 
-		// ---------------------------------------------------------------------------------------------------------------------------
 		// Counters, since the last report.
-		// ---------------------------------------------------------------------------------------------------------------------------
 		enum class Flush : std::uint8_t
 		{
 			Deactivate,
@@ -368,7 +359,7 @@ namespace DCLF::LodGates
 			std::array<std::atomic<std::uint64_t>, static_cast<std::size_t>(Flush::Count)> flushes{};
 			std::atomic<std::int64_t> flipTicks{ 0 }, flipTicksMax{ 0 }, releaseTicks{ 0 }, releaseTicksMax{ 0 };
 			std::atomic<std::uint64_t> flipFrames{ 0 }, releases{ 0 };
-			// Set at each drain (the engine side's view): the open gates and the oldest one's age.
+			// Set at each drain: open gates and the oldest one's age.
 			std::atomic<std::uint32_t> open{ 0 }, oldestFrames{ 0 };
 			std::atomic<std::int64_t> oldestTicks{ 0 };
 		};
@@ -381,9 +372,7 @@ namespace DCLF::LodGates
 			}
 		}
 
-		// ---------------------------------------------------------------------------------------------------------------------------
 		// Outcomes (to the coordinator) and opened gates (to the render thread's lookup): lock-free stacks.
-		// ---------------------------------------------------------------------------------------------------------------------------
 		struct OutcomeNode
 		{
 			Outcome outcome;
@@ -399,9 +388,8 @@ namespace DCLF::LodGates
 		}
 
 		/**
-		 * @brief A held block the engine reused (a node's current block again): the scene drops its gate's hold on the block's geometries
-		 * (outgoing tag, gateHeldOut) and commits them again. Posted after the gate's own event (the gate opened before it held anything),
-		 * so the coordinator meets it in that event's batch or a later one. Idempotent on the scene side.
+		 * @brief A held block the engine reused: the scene drops its gate's hold on the block's geometries and commits them again. Posted
+		 * after the gate's own event, so the coordinator meets it in that batch or later. Idempotent.
 		 */
 		void PostKept(std::uint64_t a_token, const std::array<RE::NiAVObject*, 2>& a_nodes)
 		{
@@ -420,18 +408,16 @@ namespace DCLF::LodGates
 		};
 		std::atomic<OpenedNode*> opened{ nullptr };
 
-		// The render thread's: token -> gate, from the opened stack (Flip's lookup; nothing else reads it).
+		// Render thread only: token -> gate, from the opened stack (Flip's lookup).
 		ankerl::unordered_dense::map<std::uint64_t, Gate*> renderGates;
 		std::size_t renderPruneMark = 256;
 
 		bool installed = false;
 		bool detoursInstalled = false;
-		bool (*running)() = nullptr;  // DrawcallLimitFix::Running (Install's): the gates hold only while DCLF runs
-		bool coverageObserver = false;  // the parity switches: the coverage invariant checked at each release
+		bool (*running)() = nullptr;  // the gates hold only while DCLF runs
+		bool coverageObserver = false;  // parity: the coverage invariant checked at each release
 
-		// ---------------------------------------------------------------------------------------------------------------------------
-		// The engine side: under the manager's lock (EngineLock), on whichever engine thread holds it.
-		// ---------------------------------------------------------------------------------------------------------------------------
+		// The engine side: under the manager's lock, on whichever engine thread holds it.
 		struct GateRef
 		{
 			Gate* gate = nullptr;
@@ -449,12 +435,12 @@ namespace DCLF::LodGates
 			std::vector<Gate*> open;  // Open, Flipping or Flipped (awaiting its release), oldest first
 			std::vector<Gate*> spare;  // released records, reused (type-stable)
 			ankerl::unordered_dense::map<std::uintptr_t, Pending> pending;  // an incoming block (hidden, vetoed) -> its gate
-			ankerl::unordered_dense::map<std::uintptr_t, GateRef> held;     // a held block -> the gate that holds it (the latest)
-			std::vector<Block> deferred;  // held blocks to release once no flip is in progress (their nodes are the flip's)
+			ankerl::unordered_dense::map<std::uintptr_t, GateRef> held;     // a held block -> the latest gate holding it
+			std::vector<Block> deferred;  // held blocks to release once no flip is in progress
 			std::unique_ptr<VetoTable> table;  // the published one
 			std::vector<std::unique_ptr<VetoTable>> retiredTables;
 			std::uint64_t nextToken = 0;
-			bool orphans = false;  // a gate was superseded with pending blocks the swap did not retire: SweepOrphans shows them
+			bool orphans = false;  // a superseded gate left pending blocks: SweepOrphans shows them
 		};
 		EngineSide& Side()
 		{
@@ -469,7 +455,7 @@ namespace DCLF::LodGates
 
 		void FreeRetiredTables(EngineSide& a_side)
 		{
-			// The tables were unpublished before this load (seq_cst both): a reader that counts itself after it loads the new table.
+			// Unpublished before this load (both seq_cst): a reader counting itself later loads the new table.
 			if (!a_side.retiredTables.empty() && vetoReaders.load(std::memory_order_seq_cst) == 0)
 				a_side.retiredTables.clear();
 		}
@@ -535,7 +521,7 @@ namespace DCLF::LodGates
 				table = &RebuildVeto(a_side, 1);
 			const auto mask = table->capacity - 1;
 			auto slot = Hash(key, table->capacity);
-			// One live entry per key: an earlier one (a resolved gate's, the node gated again) is removed on the way to an empty slot.
+			// One live entry per key: an earlier one is tombstoned on the way to an empty slot.
 			for (std::uintptr_t at; (at = table->entries[slot].key.load(std::memory_order_relaxed)) != 0; slot = (slot + 1) & mask)
 				if (at == key)
 					table->entries[slot].key.store(kTomb, std::memory_order_release);
@@ -547,8 +533,8 @@ namespace DCLF::LodGates
 
 		thread_local struct Build
 		{
-			std::uint32_t expected = 0;  // the swap's retirement calls still to come (upgrade 1, downgrade 4: one per child)
-			bool retiring = false;       // inside the swap's retirement with pending incoming: the retire detour steals
+			std::uint32_t expected = 0;  // retirement calls still to come (upgrade 1, downgrade 4: one per child)
+			bool retiring = false;       // in the swap's retirement with pending incoming: the retire detour steals
 			std::vector<Block> incoming, outgoing;
 			void Reset()
 			{
@@ -604,13 +590,10 @@ namespace DCLF::LodGates
 		}
 
 		/**
-		 * @brief A held block's release, as FUN_140510a10 would have run it at the swap: detached when loaded and attached (a terrain block
-		 * when its node's level allows, as the engine's test), then the reference released. Reuse: a quadtree node references the
-		 * handle again (the engine's swap back found the block DCLF still held; a block is cached per node, so its own node's slot or that
-		 * node's map slot is the only place) - only DCLF's reference goes, and the block stays attached as the node's current one: the
-		 * scene is told (PostKept) unless a later gate holds it pending (reattached after the flip hid it: that gate's tags take it over).
-		 * While a flip is in progress the release waits for a later drain (its nodes may be the flip's), unless a forced flush already
-		 * waited the flip out.
+		 * @brief A held block's release as FUN_140510a10 would have run it: detached when loaded and attached (terrain when the node's
+		 * level allows), then the reference released. Reused (its node's slot or map slot references the handle again: blocks are cached
+		 * per node): only DCLF's reference goes and the scene is told (PostKept) unless a later gate holds it pending. During a flip it
+		 * waits for a later drain, unless a forced flush already waited the flip out.
 		 */
 		void ReleaseHeld(EngineSide& a_side, const Block& a_block, bool a_force)
 		{
@@ -628,8 +611,7 @@ namespace DCLF::LodGates
 			} else if (reused) {
 				counters.reused.fetch_add(1, std::memory_order_relaxed);
 				if (!a_side.pending.contains(a_block.block)) {
-					// Hidden by the flip and current again with no gate pending: a reattach no thunk saw (every gated attach makes it a later
-					// gate's incoming). Its visibility stays the engine's (its own update's show stores are not vetoed); counted.
+					// Hidden by the flip and current again with no gate pending: a reattach no thunk saw. Visibility stays the engine's.
 					if (handoff == kFlipHidden && a_block.nodes[0] && IsHidden(a_block.nodes[0]))
 						counters.reusedHidden.fetch_add(1, std::memory_order_relaxed);
 					PostKept(a_block.token, a_block.nodes);
@@ -660,10 +642,7 @@ namespace DCLF::LodGates
 			counters.forced.fetch_add(1, std::memory_order_relaxed);
 		}
 
-		/**
-		 * @brief Pending blocks whose gate was resolved without them (superseded by a swap that retired other blocks of it): still attached,
-		 * so shown, ungated; the rest are gone from the map already (their retirement erased them).
-		 */
+		/** @brief Pending blocks whose gate was resolved without them: shown if still attached, and ungated. */
 		void SweepOrphans(EngineSide& a_side)
 		{
 			if (!a_side.orphans)
@@ -684,10 +663,9 @@ namespace DCLF::LodGates
 		}
 
 		/**
-		 * @brief A gate a swap superseded (the caller's exchange took it from Open to Forced): one of its pending blocks is being retired.
-		 * Its other pending blocks become orphans (SweepOrphans, at the swap's end or the next drain: most are retired by the same swap).
-		 * Its held blocks: reused ones lose DCLF's reference; inside a swap that opens a gate they move to it (still shown, held until
-		 * that gate's flip); outside one the area is being retired, and they are released now.
+		 * @brief A gate a swap superseded (caller exchanged Open -> Forced) because one of its pending blocks is being retired. Other
+		 * pending blocks become orphans. Held blocks: reused ones lose DCLF's reference; inside a gating swap they move to the new gate;
+		 * otherwise they are released now.
 		 */
 		void Supersede(EngineSide& a_side, Gate& a_gate, Build* a_into)
 		{
@@ -709,7 +687,7 @@ namespace DCLF::LodGates
 			WakeSceneGate();
 		}
 
-		/** @brief A held block stolen again by a later swap (its node referenced it again): the earlier gate's copy only drops its reference. */
+		/** @brief A held block stolen again by a later swap: the earlier gate's copy only drops its reference. */
 		void HandOff(EngineSide& a_side, std::uintptr_t a_block)
 		{
 			const auto it = a_side.held.find(a_block);
@@ -725,22 +703,18 @@ namespace DCLF::LodGates
 		}
 
 		/**
-		 * @brief The coverage observer (the parity switches): at a flipped gate's release, exactly one level shown (the incoming, still attached, against the outgoing),
-		 * unless the engine itself hid the incoming again after the flip. The terrain manager's own update hides LOD under the loaded
-		 * cells (terrain: FUN_140510110's param_3, FUN_140512160(node, player cell, 0), 0 when every cell around the node is loaded, ->
-		 * FUN_140509b20; objects: FUN_1405103e0's param_3, FUN_140512160(node, cell, 1), the cell's LOD bitset, -> the store at
-		 * 0x1405106a4), as it does after an ungated swap's attach: neither level shown there is the engine's, the loaded cells cover it.
-		 * Those re-hides are marked on the gate's veto entries (NoteEngineHide, from HiddenStores' stubs) and counted apart; an incoming
-		 * block hidden without one is a hole. Each flagged gate names, per hidden incoming block, the store that hid it, the engine's test
-		 * now and whether the node is still attached at that level.
+		 * @brief The coverage observer (parity): at a flipped gate's release exactly one level is shown, unless the engine hid the incoming
+		 * again. The manager's update hides LOD under loaded cells (terrain: FUN_140510110's param_3, FUN_140512160(node, player cell, 0)
+		 * -> FUN_140509b20; objects: FUN_1405103e0's param_3, FUN_140512160(node, cell, 1) -> the store at 0x1405106a4); those re-hides are
+		 * marked by NoteEngineHide and counted apart. Any other hidden incoming block is a hole, logged with its store, the engine's test
+		 * now, and whether it is attached at that level.
 		 */
 		void CheckCoverage(EngineSide& a_side, const Gate& a_gate)
 		{
 			std::uint32_t incoming = 0, incomingShown = 0, engineHid = 0, outgoingShown = 0;
 			std::string detail;
 			auto* player = RE::PlayerCharacter::GetSingleton();
-			// An exterior cell only: FUN_140512160's loaded-cells walk reads the cell's worldspace (null for an interior), as the update
-			// that calls it runs only for an exterior.
+			// Exterior only: FUN_140512160 reads the cell's worldspace (null for an interior).
 			auto* cell = player ? player->GetParentCell() : nullptr;
 			if (cell && (At<const volatile std::uint8_t>(reinterpret_cast<std::uintptr_t>(cell), 0x40) & 1) != 0)
 				cell = nullptr;
@@ -768,7 +742,7 @@ namespace DCLF::LodGates
 						site ? fmt::format("{:#x}", 0x140000000ull + site) : std::string("none seen"),
 						wanted < 0 ? "-" : wanted ? "show" : "hide (the loaded cells)");
 			}
-			// The outgoing the flip owned (a reattached block is the engine's current one again; a handed-off one a later gate's).
+			// The outgoing the flip owned (not reattached or handed off).
 			for (const auto& block : a_gate.outgoing)
 				if (const auto handoff = block.handoff.load(std::memory_order_relaxed); (handoff == kFlipHidden || handoff == kOwned) && block.nodes[0] &&
 																						  Attached(block.block, block.kind))
@@ -805,9 +779,8 @@ namespace DCLF::LodGates
 		}
 
 		/**
-		 * @brief Every gate resolved now (unload, the map, LOD off, a rebuild, DCLF stopped): open ones forced (their pending blocks shown,
-		 * their held ones released), flipped ones released. A flip already past its exchange finishes first: the one wait in LodGates,
-		 * bounded by that flip's few stores (after the exchanges no other flip can start).
+		 * @brief Resolves every gate now (unload, map, LOD off, rebuild, DCLF stopped): open ones forced (pending shown, held released),
+		 * flipped ones released. A flip past its exchange finishes first: LodGates' one wait, bounded by its few stores.
 		 */
 		void FlushAll(Flush a_reason)
 		{
@@ -851,16 +824,13 @@ namespace DCLF::LodGates
 				WakeSceneGate();
 		}
 
-		// ---------------------------------------------------------------------------------------------------------------------------
 		// The swap: attaches (pre-hide), the retirement (steal), the gate (Emit).
-		// ---------------------------------------------------------------------------------------------------------------------------
 
 		/**
-		 * @brief An incoming block's attach in a Func2: hidden before it when it was not attached (a block already attached and shown, a
-		 * reused one, must not go dark), the hide undone when the attach did nothing (FUN_140509550 attaches only a loaded terrain block).
-		 * No hidden event: the block is not in the world until the attach, whose capture reads the bit. A block attached already that a
-		 * gate holds: taken from the flip by compare-exchange on its handoff while the flip has not hidden it - reused while shown (the
-		 * flip leaves it, the scene is told: PostKept); hidden by the flip already - incoming again, this swap's gate shows it.
+		 * @brief An incoming block's attach in a Func2: pre-hidden unless already attached (a reused, shown block must not go dark), the
+		 * hide undone if the attach did nothing (FUN_140509550 attaches only a loaded terrain block). No hidden event: the attach's capture
+		 * reads the bit. An attached block a gate holds is taken from the flip by exchange: still shown -> reused (PostKept); already
+		 * flip-hidden -> incoming again.
 		 */
 		template <class F>
 		void OnAttach(std::uintptr_t a_block, Kind a_kind, std::uint32_t a_retireCalls, F&& a_original)
@@ -916,11 +886,9 @@ namespace DCLF::LodGates
 		}
 
 		/**
-		 * @brief FUN_140510a10's body around the engine's: the steal inside a gated swap (a loaded, attached block taken from its node, so
-		 * the engine skips its detach and release and DCLF owns the reference), and every retirement of a pending block (its gate
-		 * superseded; the engine retires the block, hidden and never shown). A pending block whose gate a flip is showing right now is
-		 * held instead (stolen, released at a later drain): its nodes are the flip's until it ends. Trees (4) and the map's handles (0x10)
-		 * pass through.
+		 * @brief Around FUN_140510a10: inside a gated swap, steals a loaded, attached block (the engine skips detach and release; DCLF owns
+		 * the reference); retiring a pending block supersedes its gate (the engine retires it, never shown). A pending block whose gate is
+		 * flipping right now is held until a later drain. Trees (4) and the map's handles (0x10) pass through.
 		 */
 		template <class F>
 		void Retire(std::uintptr_t a_node, std::uint32_t a_bits, F&& a_original)
@@ -983,8 +951,8 @@ namespace DCLF::LodGates
 		}
 
 		/**
-		 * @brief The swap's end (its last retirement call): orphans shown, then the gate opened when an incoming block is pending - published
-		 * to the render thread's lookup, then captured as the tracker's Gate event, in order after the attaches.
+		 * @brief The swap's end (last retirement call): orphans shown, then a gate opened if any incoming block is pending, published to the
+		 * render thread's lookup and captured as the tracker's Gate event after the attaches.
 		 */
 		void Emit(Build& a_build)
 		{
@@ -1048,7 +1016,7 @@ namespace DCLF::LodGates
 				Emit(b);
 		}
 
-		/** @brief The drain's head, under the manager's lock: flipped gates' held blocks released, ages noted; all flushed if DCLF stopped. */
+		/** @brief The drain's head, under the manager's lock: releases flipped gates' held blocks, notes ages; flushes if DCLF stopped. */
 		void DrainHead()
 		{
 			if (!installed || engineWork.load(std::memory_order_acquire) == 0)
@@ -1081,9 +1049,7 @@ namespace DCLF::LodGates
 			Publish(side);
 		}
 
-		// ---------------------------------------------------------------------------------------------------------------------------
 		// The hooks.
-		// ---------------------------------------------------------------------------------------------------------------------------
 		template <Kind K, std::uint32_t RetireCalls>
 		struct Attach
 		{
@@ -1099,10 +1065,9 @@ namespace DCLF::LodGates
 		using TerrainDowngradeAttach = Attach<Kind::Terrain, 4>;
 
 		/**
-		 * @brief The InitialLoad Func2s' attach: a node's first level where no block above it is loaded (an area coming into LOD range in
-		 * play, or every node at a worldspace's load), nothing retired, so the gate (no outgoing) is emitted right after it. Under a load
-		 * screen (DAT_14315b6a0: the queuers then retire the node's subtree and ancestors first) the attach passes through: the load
-		 * screen's last LOD update is a full rebuild, which flushed every gate before its drain, and DCLF withdraws there.
+		 * @brief The InitialLoad Func2s' attach (an area entering LOD range): nothing retired, so the gate is emitted right after. Under a
+		 * load screen (DAT_14315b6a0; the queuers retire the node's subtree and ancestors first) it passes through: the load screen ends
+		 * in a full rebuild, which flushes every gate.
 		 */
 		template <Kind K>
 		struct InitialAttach
@@ -1143,8 +1108,6 @@ namespace DCLF::LodGates
 		{
 			static void thunk(std::uintptr_t a_queue)
 			{
-				ZoneNamedN(lodDrainZone, "CS.DCLF.Import.LodDrain", ImportTimings::Installed());
-				ImportTimings::LodScope scope(ImportTimings::LodEntry::Drain);
 				DrainHead();
 				func(a_queue);
 			}
@@ -1155,8 +1118,6 @@ namespace DCLF::LodGates
 		{
 			static void thunk(std::uintptr_t a_node, std::uint32_t a_bits)
 			{
-				ZoneNamedN(lodRetireZone, "CS.DCLF.Import.LodRetire", ImportTimings::Installed());
-				ImportTimings::LodScope scope(ImportTimings::LodEntry::Retire);
 				Retire(a_node, a_bits, [](std::uintptr_t a_at, std::uint32_t a_which) { func(a_at, a_which); });
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -1227,8 +1188,7 @@ namespace DCLF::LodGates
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
-		// FUN_14050f790(manager, root, .., .., 1) at 0x14050e7ae: the full rebuild (the manager's first update, or one asked for). Not
-		// the function: the round-robin node update passes 1 for every node near the player (flags bit 0x8000), every update.
+		// The full rebuild call at 0x14050e7ae only: the round-robin node update also passes 1 to FUN_14050f790 for nodes near the player.
 		struct FullRebuild
 		{
 			static void thunk(std::uintptr_t a_manager, std::uintptr_t a_root, std::uintptr_t a_cell, std::uintptr_t a_player, std::uint8_t a_full)
@@ -1377,7 +1337,7 @@ namespace DCLF::LodGates
 		}
 		auto* gate = it->second;
 		renderGates.erase(it);
-		// Announced before the exchange: a forced flush that wins its own exchange and then sees this clear knows no flip is storing.
+		// Before the exchange: a forced flush that wins its exchange and then sees this clear knows no flip is storing.
 		flipActive.store(1, std::memory_order_seq_cst);
 		auto expected = Word(a_token, kOpen);
 		if (!gate->word.compare_exchange_strong(expected, Word(a_token, kFlipping), std::memory_order_seq_cst)) {
@@ -1388,8 +1348,7 @@ namespace DCLF::LodGates
 		openGates.fetch_sub(1, std::memory_order_acq_rel);
 		for (const auto& block : gate->incoming)
 			Unhide(block.nodes);
-		// Each owned outgoing block taken by compare-exchange before its hide: one the engine reattached first (OnAttach's exchange) is
-		// the node's current block again and stays shown; one handed off is a later gate's.
+		// Each owned outgoing block is claimed by exchange before its hide (a reattached or handed-off one is left alone).
 		for (auto& block : gate->outgoing) {
 			auto handoff = static_cast<std::uint8_t>(kOwned);
 			if (!block.handoff.compare_exchange_strong(handoff, kFlipHidden, std::memory_order_seq_cst))

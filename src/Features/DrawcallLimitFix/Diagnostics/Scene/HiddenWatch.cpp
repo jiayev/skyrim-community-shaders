@@ -1,3 +1,6 @@
+// HiddenWatch (CS_DCLF_HIDDEN_WATCH): the debug-register watchpoints, set on every thread by a helper thread, and the vectored exception
+// handler that records the flips. Armed by the coordinator's actor observer (SceneRegistrations.cpp); reported on the render thread.
+
 #include "HiddenWatch.h"
 
 #include "Features/DrawcallLimitFix/Runtime/Switches.h"

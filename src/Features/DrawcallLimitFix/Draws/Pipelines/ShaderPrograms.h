@@ -42,7 +42,7 @@ namespace DCLF
 	 * lock-free queue, which the consumer drains: the entries waiting for the stage are told, and an entry whose stages have
 	 * all completed gets its program. Nothing polls a compile.
 	 *
-	 * One consumer owns the programs (T6b2c steps 4 and 9): the pipeline lane (BuildExecutor.h, WakePipelineLane), which a completion
+	 * One consumer owns the programs: the pipeline lane (BuildExecutor.h, WakePipelineLane), which a completion
 	 * wakes: every kind's entries (Find, FindShadow, FindTreeLod, FindForward, FindForwardTreeLod) are made and finished on it
 	 * (UpdateLane). The stage cache also accepts CS compilation workers.
 	 */
@@ -150,7 +150,7 @@ namespace DCLF
 			return (static_cast<std::uint64_t>(a_vertexDescriptor) << 32) | a_pixelDescriptor;
 		}
 		/**
-		 * @brief T7d's Effect port: an effect key's program (Records.h, kRasterEffect), `Data/Shaders/Effect.hlsl`'s builds of its vertex and
+		 * @brief An effect key's program (Records.h, kRasterEffect), `Data/Shaders/Effect.hlsl`'s builds of its vertex and
 		 * pixel descriptors with the same defines as the Lighting builds (DCLF_BINDLESS and DCLF_BINDLESS_DRAW: Effect.hlsl's DCLF reads).
 		 * Only its vertex and pixel stages (a forward object is no depth segment input: DrawPipelines builds its depth variant from them and
 		 * no Z-prepass pipeline); null until both are compiled. Never freed. The pipeline lane's; a_failed as Find's.
@@ -167,7 +167,7 @@ namespace DCLF
 			std::vector<std::uint64_t> lighting;  // LightingProgramId
 			std::vector<std::uint32_t> shadow;    // Utility techniques
 			std::vector<std::uint64_t> forward;   // ForwardProgramId
-			std::vector<std::uint64_t> effect;    // EffectProgramId (T7d's Effect port)
+			std::vector<std::uint64_t> effect;    // EffectProgramId
 			bool treeLod = false, forwardTreeLod = false;
 
 			bool Empty() const { return lighting.empty() && shadow.empty() && forward.empty() && effect.empty() && !treeLod && !forwardTreeLod; }
@@ -180,7 +180,7 @@ namespace DCLF
 				treeLod = forwardTreeLod = false;
 			}
 		};
-		/** @brief The pipeline lane: admits the compilations that completed since the last call, and appends the programs now made or failed to a_finished. */
+		/** @brief The pipeline lane: admits the compilations that completed since the last call, and appends the programs made or failed to a_finished. */
 		void UpdateLane(Finished& a_finished);
 
 		// CS compilation workers request the same stages the runtime programs use, and wait for them (on the stage, not a future).
@@ -237,14 +237,14 @@ namespace DCLF
 		ankerl::unordered_dense::map<std::uint64_t, std::unique_ptr<ForwardEntry>> forwardEntries;
 		std::unique_ptr<ForwardEntry> forwardTreeLodEntry;
 		ankerl::unordered_dense::map<std::uint64_t, std::unique_ptr<EffectEntry>> effectEntries;
-		std::vector<std::byte> effectSource;  // Data/Shaders/Effect.hlsl (T7d's Effect port); empty when missing
+		std::vector<std::byte> effectSource;  // Data/Shaders/Effect.hlsl; empty when missing
 		std::vector<std::byte> distantTreeSource;
 		std::vector<std::byte> source;
 		std::vector<std::byte> pulledSource;  // source for the pulled builds (PulledMaterialSource); empty when it could not be made
 		std::vector<std::byte> utilitySource;
 		std::vector<std::filesystem::path> dependencies;
 		// Each source's ShaderCompiler::FingerprintInputs with the dependencies, taken once when they load: every request's key
-		// starts from it instead of hashing the source and checking the dependency files again (2,000 keys a launch).
+		// starts from it instead of hashing the source and checking the dependency files again (thousands of keys a launch).
 		std::uint64_t sourceFingerprint = 0, pulledFingerprint = 0, utilityFingerprint = 0, distantTreeFingerprint = 0, effectFingerprint = 0;
 		bool sourcesLoaded = false;
 		std::atomic<bool> sourcesMissing{ false };

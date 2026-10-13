@@ -6,19 +6,18 @@
 namespace DCLF
 {
 	/**
-	 * @brief T6b3d: what woke the coordinator's pump (Coordinator's scene passes, on the scene lane), by source - the report counts the
-	 * passes each source woke and those of them that changed nothing. A pass runs only for an input whose effect is wanted before the
-	 * frame's own pass (the FrameInput one, once a frame): an attach in the world, a detach, a hidden bit, a leaf's property or alpha
-	 * swapped, a property's or alpha's values, a property event (flags, material, controller), a switch, the answers a waiting join or
-	 * binding needs, a new catalog, a load. The hidden, leaf, value and property sources wake only outside the frame's render (the
-	 * EngineReadWindow, Main::Draw to Present): there the engine sets and undoes them for its own views (GetRenderPasses leaves each
-	 * camera's alpha on the property, the reflection faces hide the water, Main::Draw hides the first-person skeleton), and the frame's
-	 * next pass takes them (w130: 70-80% of the passes they woke changed nothing). What the frame's pass takes anyway does not wake it
-	 * (w127: 7539 of 9697 passes changed nothing): the per-frame queues (moves, fades, fade snaps and amounts, node transforms and
-	 * controllers, LOD fades, emittance, shading), object LOD's segment writes (the terrain manager refreshes them as the camera moves,
-	 * mostly to the ranges held), the node and geometry value updates, an attach out of the world (a loader's subtree: its world attach
-	 * wakes), the material writers' captures (controllers write every frame), the render thread's mid-frame posts (the registration
-	 * drain, the room map, the pipeline frame and blocks, the fade posts).
+	 * @brief What woke the coordinator's scene pump (its passes run on the scene lane), by source; the report counts the passes each
+	 * source woke and those that changed nothing. A pass runs only for an input whose effect is wanted before the frame's own pass
+	 * (FrameInput, once a frame): a world attach, a detach, a hidden bit, a leaf's property or alpha swapped, property or alpha values,
+	 * a property event, a switch, an answer a waiting binding needs, a new catalog, a load.
+	 *
+	 * The hidden, leaf, value and property sources wake only outside the frame's render (the EngineReadWindow, Main::Draw to Present):
+	 * inside it the engine sets and undoes them for its own views (GetRenderPasses leaves each camera's alpha on the property, the
+	 * reflection faces hide the water, Main::Draw hides the first-person skeleton), and the frame's next pass takes them. What the
+	 * frame's pass takes anyway does not wake it: the per-frame queues (moves, fades, node transforms and controllers, LOD fades,
+	 * emittance, shading), object LOD's segment writes (the terrain manager refreshes them as the camera moves), node and geometry value
+	 * updates, an attach out of the world (a loader's subtree: its world attach wakes), the material writers' captures (controllers
+	 * write every frame), and the render thread's mid-frame posts.
 	 */
 	enum class SceneWake : std::uint8_t
 	{
@@ -37,7 +36,7 @@ namespace DCLF
 		LoadMarker,      // a load screen's marker
 		LoadDrain,       // a Present or frame start under a load screen (the queues drained once a call)
 		Capture,         // the render thread's captures for the pass (the category capture, the mirror probe)
-		Gate,            // T6b5: a LOD gate captured (the tracker's Gate event), or its outcome posted (LodGates: a flip, a forced release)
+		Gate,            // a LOD gate captured (the tracker's Gate event), or its outcome posted (LodGates: a flip, a forced release)
 		Count
 	};
 	inline constexpr std::array<const char*, static_cast<std::size_t>(SceneWake::Count)> kSceneWakeNames{ "frame input", "attach", "detach",
@@ -48,7 +47,7 @@ namespace DCLF
 	 * @brief A producer's wake (any thread, after the push it announces). Lock-free and cheap when its source is already pending (one
 	 * relaxed load); level-triggered: a wake while a pass runs queues one more. Nothing before Coordinator::StartScenePump, nothing while
 	 * the passes run inline (the parities: Coordinator::SetScenePassMode), and no engine event's wake while a load screen is up
-	 * (SetScenePassLoading: the passes then drain once a Present, as the old ingestion did).
+	 * (SetScenePassLoading: the passes then drain once a Present).
 	 */
 	void WakeScenePass(SceneWake a_source);
 	/** @brief EventQueue's on-push hooks (a function each, by source). */
@@ -58,11 +57,11 @@ namespace DCLF
 	inline void WakeSceneTextureReply() { WakeScenePass(SceneWake::TextureReply); }
 	inline void WakeSceneLoadMarker() { WakeScenePass(SceneWake::LoadMarker); }
 	/**
-	 * @brief T6b5: a LOD gate's outcome posted (LodGates' forced releases call it after the post; the render thread's flips are woken by
-	 * Coordinator::ReleaseGates). Not an engine event for the load screen's hold: the first pass after a load takes the outcomes.
+	 * @brief A LOD gate's outcome posted (LodGates' forced releases call it after the post; the render thread's flips are woken by
+	 * FrameView::ReleaseGates). Not an engine event for the load screen's hold: the first pass after a load takes the outcomes.
 	 */
 	inline void WakeSceneGate() { WakeScenePass(SceneWake::Gate); }
-	/** @brief Render thread (Coordinator::NoteLoadingScreen): a load screen is up (the engine events' wakes held), or not. */
+	/** @brief Render thread (FrameView::NoteLoadingScreen): a load screen is up (the engine events' wakes held), or not. */
 	void SetScenePassLoading(bool a_loading);
 	/** @brief Since the last call: the pushes each source made inside the frame's render (no wake: the frame's next pass took them). */
 	std::array<std::uint64_t, static_cast<std::size_t>(SceneWake::Count)> TakeScenePassDeferred();

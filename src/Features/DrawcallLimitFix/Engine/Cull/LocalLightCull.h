@@ -20,15 +20,15 @@ namespace DCLF
 
 	/**
 	 * @brief The point lights' shadow culls without the entries DCLF draws (drawcall-limit-fix.md, "Point lights' shadow culls
-	 * without DCLF's entries"). AE only.
+	 * without DCLF's entries"). AE only. The point lights' culls run on the render thread; the detours and registration hook on any.
 	 *
 	 * BSShadowParabolicLight::Accumulate (0x14151b960) culls through BSCullingProcess::Process (FUN_1414bf320) with the static
 	 * BSParabolicCullingProcess (0x14335bfa0); without a light's own root list (sceneAccumArray) it walks the scene's whole object
 	 * root, every frame, every point light: BSFadeNode::OnVisible on hundreds of DCLF's roots, whose casters DCLF's paraboloid
-	 * views draw and the registration then withholds (PassCapture). The exclusion is BuildSunExclusion's for the
-	 * paraboloid mode, over the light candidates (Coordinator::GetLightCandidates): an entry all of whose shadow casters are that
-	 * mode's inputs. The process's Process1 (vtable slot 0x16)
-	 * skips such an entry while the set withholds that mode's casters this frame and the exclusion was built for the current candidates.
+	 * views draw and the registration then withholds (PassCapture). The exclusion is BuildSunExclusion's for the paraboloid
+	 * mode, over the light candidates (FrameView::GetLightCandidates): an entry all of whose shadow casters are that mode's
+	 * inputs. The process's Process1 (vtable slot 0x16) skips such an entry while the set withholds that mode's casters this
+	 * frame and the exclusion was built for the current candidates.
 	 * On the frames Policy::FilterLightCulls keeps whole nothing is skipped, and Diagnostics::LightCulls counts a paraboloid pass the
 	 * registration did not withhold under an excluded entry as one the skip would lose.
 	 */
@@ -37,7 +37,7 @@ namespace DCLF
 		void Install();
 		/** @brief Render thread, after the shadow epoch drew the paraboloid views: next frame's exclusion (null: none). */
 		void Publish(std::shared_ptr<SunExclusion> a_exclusion);
-		/** @brief Render thread, at the scene frame's start: this frame's exclusion. */
+		/** @brief Render thread, FrameDriver at the scene frame's start: this frame's exclusion. */
 		void SelectFrame(std::uint32_t a_frame);
 
 		/** @brief The counters since the last Take, reset (Reports::PrimaryCullLines' point lights' lines). */

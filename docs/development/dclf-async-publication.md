@@ -1236,7 +1236,7 @@ resident-draw, set and fade parity; motion m28/m29).
   a frame for their material, all served.
 - *6b, second part: the frame's engine values out of the tables* (y4, y6). Writing them into the frame's snapshot copy was
   rejected: the coordinator bumps the same version counters in its own tables, so versions would collide and the upload caches
-  that compare them would miss changes. Instead `FrameTables` (Scene/FrameTables.h) holds them, written by the render thread only,
+  that compare them would miss changes. Instead `FrameTables` (Scene/Model/FrameTables.h) holds them, written by the render thread only,
   versioned by its own counter, indexed by the tables' slots and keyed to them (a slot whose key, binding or record version moved
   is taken afresh): the pipelines' PerGeometry blocks; the technique rows' constants (the tables keep each row's key; the shadow
   mask is the key's low bit); the material records as the frame draws them (the coordinator's record with the writer events'
@@ -1350,7 +1350,7 @@ resident-draw, set and fade parity; motion m28/m29).
     (SelectPublication, IndirectDraws::SetApplicable) - its tables, claims and PrimaryCull notes together - or keeps the installed
     one whole (13-29% of frames in motion: the revision's recordings a frame late). Withdrawal is the frame's alone.
     Keeping an older publication needs what it names to stay valid: BasicRenderer's rule, nothing logically freed while a version
-    that names it lives. `RetirementChain` (Common/Retirement.h): each publication holds the chain node opened with it, a node
+    that names it lives. `RetirementChain` (Runtime/Retirement.h): each publication holds the chain node opened with it, a node
     holds the newer one, and a node's batch - object, tree, fade-root, extras, bone, face-stream slots, the SlotTables' slots, the
     material/pipeline lookups' retirements, the geometry buffers' owners, the material references, every engine reference handed
     back - returns to the coordinator's free lists (RecycleRetired) once no publication up to it lives. CPU test
@@ -1719,7 +1719,7 @@ resident-draw, set and fade parity; motion m28/m29).
     only the known open flags. Present found the scene work running 85 times in 7,200 on the normal path (w69), never with the
     parities (their frames finish before it); the render thread's waits 0.006 ms a frame (the frame start's join).
   - *T6b2: the constants ported* (2026-10-10, w70-w87; the ports written by subagents in parallel, integrated and measured here):
-    - **The material port** (`Scene/MaterialPort.h`): `MaterialPort::Evaluate` makes SetupMaterial's record from a
+    - **The material port** (`Scene/Ports/MaterialPort.h`): `MaterialPort::Evaluate` makes SetupMaterial's record from a
       `MaterialSnapshot` (the material's bytes, its class, its textures' views: `Capture`) and a `MaterialFrame` (the shader object's,
       the globals' and the render targets' values: `SampleFrame`). The parts: vanilla SetupMaterial 1414dc310 (`MaterialPortVanilla`,
       every technique and flag path, the class table by vtable with each class's size from its Create), TruePBR's replacement and its
@@ -1728,7 +1728,7 @@ resident-draw, set and fade parity; motion m28/m29).
       (`SceneStore::PortMaterial`: the new slots, the written materials, the frame components' samples); the engine's evaluation runs
       only as the parity (`CheckMaterialPort`, CS_DCLF_PERSISTENT_PARITY, `<- MATERIAL PORT`). IBLParams (PS 29, the shader object's,
       unread by the Lighting stages) moves within a frame: counted apart, not compared.
-    - **The pipeline template port** (`Scene/GeometryPort.h`): SetupGeometry's per-pipeline part (the sun, the ambient, the light
+    - **The pipeline template port** (`Scene/Ports/GeometryPort.h`): SetupGeometry's per-pipeline part (the sun, the ambient, the light
       counts, the eye, SSRParams, the world map rows) from a sampled `PipelineFrame`; no per-pipeline value depends on the template
       object. SSE Engine Fixes' BSLightingAmbientSpecular fix writes PS 6 in SetupGeometry (and NOPs SetupMaterial's write): ported,
       the patch found by its instruction (engine notes). The parity `<- GEOMETRY PORT` against the template's evaluation.
@@ -1965,7 +1965,7 @@ resident-draw, set and fade parity; motion m28/m29).
     the publication. The kicks and joins stay (T6b3c removes them); behaviour is meant to be the same, with the differences named.
     - **The publication.** `ScenePublication` (public, immutable) carries the tables, lookups, catalog, claims, draws, lacking counts,
       the sun and light candidates with their generations, the category nodes (copied again only when they changed), `tablesGeneration`, the toggles generation its commit was made under, a `RevisionRequest` and a `sequence`.
-      `PublishScene` posts it to a `LatestSlot` (`Common/LatestSlot.h`, promoted from `DrawPipelines.cpp`; a raw pointer exchange).
+      `PublishScene` posts it to a `LatestSlot` (`Runtime/LatestSlot.h`, promoted from `DrawPipelines.cpp`; a raw pointer exchange).
       The render thread is its only taker: `MakeRevisionForNewest`, at Present and the frame's start, takes what was posted and makes a
       revision from the newest whenever it is new (joined or not: the request is immutable), else once a frame, so every publication
       pending has had its revision. The render thread keeps the pending ones (oldest first) and the installed one; `SelectPublication` installs the
@@ -1975,7 +1975,7 @@ resident-draw, set and fade parity; motion m28/m29).
       as a candidate (its notes are not: the log). The render thread's republish is gone: the coordinator publishes at a scene pass's
       start when its tables moved since its last publication or a pass left frame inputs unpublished (`tables published`' count,
       now not a render-thread cost), so a change Present applied (menus) is selectable a frame later than before.
-    - **The publication log** (`Common/PublicationLog.h`, forward-linked, one producer, one consumer). Each publication's node
+    - **The publication log** (`Runtime/PublicationLog.h`, forward-linked, one producer, one consumer). Each publication's node
       carries its claims' changes (joined, left) and the frame inputs its passes made: the placement plans, the shading names, the
       fade and tree seed requests, the switches applied (`kMaxSwitchChanges` gone: no cap), the retired imports and the actors'
       wetness membership changes, and the light entries' changes (a key of `lightDependents` gaining its first geometry or losing its
@@ -2220,14 +2220,14 @@ resident-draw, set and fade parity; motion m28/m29).
       before the main cull). The commit sees the joins' new pipelines and records, so members join a frame earlier and
       `members patched by the accumulate phase` must stay 0. The joins and the publication lengthen the pass that Present tries to join.
   - *T6b3d: the pump; the joins out* (2026-10-10; w122-w130: parity and normal path run after each revision; the last wake revision written, not run yet). The
-    scene pass is no longer kicked or joined by the frame: a `SerializedTaskPump` (the coordinator's pump, `Scene/SceneStore/ScenePump.cpp`,
+    scene pass is no longer kicked or joined by the frame: a `SerializedTaskPump` (the coordinator's pump, `Scene/Coordinator/ScenePump.cpp`,
     a new file) runs `RunSceneWork` on the scene lane when one of its producers wakes it with an input, any number of times a frame
     (bursts) or none (menus).
     - **The lane.** The pump dispatches onto `SceneScheduler::SceneLane()` (its `Coordinator` class), not `Executor()`'s coordinator: the
       lane is the scene work's alone (step 6c), so a long pass never holds up the coordinator's jobs (AsyncWorker's, the frame's builds),
       and its thread is above the engine's job threads as the scene work's was. One pass at a time, level-triggered, lock-free; a wake
       while a pass runs queues exactly one more (the pump's epoch).
-    - **Wakes, by source** (`Common/SceneWake.h`: `WakeScenePass(SceneWake)`, any thread, after the push it announces; a bit per source
+    - **Wakes, by source** (`Runtime/SceneWake.h`: `WakeScenePass(SceneWake)`, any thread, after the push it announces; a bit per source
       the pass takes at its start, with a fence pair, so a producer whose bit is set does no atomic RMW). The frame-input pass is the
       backbone (`FrameInput`, once a frame; the frame's start folds its posts into one wake: `ScenePassWakeBatch`). Besides it a pass runs
       only for an input wanted before it: from the tracker's stack `Attach` (in the world alone: its capture), `Detach`, `Hidden`, `Leaf`
@@ -2544,7 +2544,7 @@ resident-draw, set and fade parity; motion m28/m29).
       the same as in a `CS_DCLF_FANOUT=0` run; the mirror reads line's `subtree`, `sun entry` and `light entry` counts unchanged against
       mode 0.
   - *T6b5, the scene side: objects ready before the engine shows its LOD swaps* (2026-10-11; written, not built or run yet; the engine
-    side, `Engine/LodGates.cpp`, by its own change). The interface is `Engine/LodGates.h`. The engine side hides a swap's incoming blocks
+    side, `Engine/Cull/LodGates.cpp`, by its own change). The interface is `Engine/Cull/LodGates.h`. The engine side hides a swap's incoming blocks
     before their attach and vetoes the engine's shows, keeps the outgoing attached and shown, and calls `LodGates::CaptureGate` after the
     attaches. The scene side holds the swap until every geometry under the incoming roots is a whole member or ineligible, then publishes
     the post-swap claims with a flip, which the frame adopting them releases.
@@ -2555,7 +2555,7 @@ resident-draw, set and fade parity; motion m28/m29).
       (`SceneMirror::SetGated`), a key set beside the records: a capture replaces a record whole, and the mirror parity compares records
       alone. `HiddenForWalk(key, record)` ignores a gated node's own kHidden, and every other hide still counts. So a gated block's
       geometries are classified, written, bound and joined while the engine keeps the block hidden.
-    - **Gates** (`SceneStore::LodGate`, `lodGates` by token, `gateOfRoot` by root with its side; `Scene/SceneStore/Gates.cpp`).
+    - **Gates** (`SceneStore::LodGate`, `lodGates` by token, `gateOfRoot` by root with its side; `Scene/Coordinator/Gates.cpp`).
       - The event walks the mirror once per root (`TagGateRoot`, `MirrorSubtree`) and tags the tracked geometries (`Tracked::gate`,
         `gateSide`). `AddGeometry` tags later arrivals by the nearest gate root on their mirror chain (`TagGateAbove`).
       - An incoming tag reclassifies the geometry. Its slots are queued for the next commit (`gateQueued`), with their earlier gate

@@ -1,6 +1,7 @@
 #pragma once
 
-// IndirectDraws' implementation, shared by the files of this folder only (IndirectDraws.h is the interface).
+// IndirectDraws' implementation umbrella, included by the sources of this folder only (IndirectDraws.h is the interface): the
+// headers of Core/, Revision/, Main/, Shadow/, Builders/, Passes/ and Epochs/ in dependency order, and Impl.h last.
 
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 // volk must precede every Vulkan header in this translation unit.
@@ -43,7 +44,6 @@
 #	include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #	include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 #	include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/PayloadChecks.h"
 #	include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 #	include "Features/DrawcallLimitFix/Diagnostics/Reports/Draws.h"
 #	include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
@@ -102,12 +102,12 @@
 #	include "Revision/Shapes.h"
 #	include "Shadow/ShadowFrame.h"
 #	include "Core/FrameSlots.h"
-#	include "Build/KeptStores.h"
-#	include "Build/MainPayload.h"
-#	include "Build/ShadowPayload.h"
-#	include "Build/Geometry.h"
-#	include "Build/MainBuild.h"
-#	include "Build/ShadowBuild.h"
+#	include "Builders/KeptStores.h"
+#	include "Builders/MainPayload.h"
+#	include "Builders/ShadowPayload.h"
+#	include "Builders/Geometry.h"
+#	include "Builders/MainBuild.h"
+#	include "Builders/ShadowBuild.h"
 #	include "Core/Uploads.h"
 #	include "Passes/PassHelpers.h"
 #	include "Epochs/ViewEpoch.h"

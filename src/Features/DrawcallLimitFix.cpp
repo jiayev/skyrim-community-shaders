@@ -1,3 +1,5 @@
+// The feature shell: install, the engine hook thunks and their installation, the menu toggle and the settings UI. The lifecycle
+// points forward to Draws/FrameDriver on the render thread.
 #include "DrawcallLimitFix.h"
 
 #include "Deferred.h"
@@ -47,10 +49,7 @@ void DrawcallLimitFix::PostPostLoad()
 		logger::info("[DCLF] {}; the game renders natively", unavailableReason);
 		return;
 	}
-	// CS_DCLF=0 is the off switch every gate in this work compares against, and until now nothing read it:
-	// the switch appeared in the summary line below and nowhere else, so runs labelled "CS_DCLF=0 baseline"
-	// had the feature fully installed and were not baselines at all. Unset still means on, which is the
-	// behaviour everything else here was built against.
+	// CS_DCLF=0: the baseline the gates compare against; nothing is installed. Unset means on.
 	if (DCLF::SwitchValue(DCLF::Switch::Dclf) == "0") {
 		logger::info("[DCLF] CS_DCLF=0; the feature stays off and the game renders natively");
 		return;
@@ -81,31 +80,30 @@ void DrawcallLimitFix::PostPostLoad()
 	(void)DCLF::MaterialSources::FramePSFloats();
 	(void)DCLF::MaterialSources::FrameVSFloats();
 	DCLF::FaceSnapshots::Get().Install();
-	// T7e: the particle systems' snapshots, taken after the engine's update of each (ParticleSnapshots; the systems DCLF follows alone).
+	// The particle systems' snapshots, taken after the engine's update of each (ParticleSnapshots; the systems DCLF follows alone).
 	DCLF::ParticleSnapshots::Get().Install();
 	DCLF::SunAccumulation::Get().Install();
 	DCLF::SunViews::Get().Install();
 	DCLF::LightSelection::Get().Install();
 	DCLF::FocusViews::Get().Install();
 	DCLF::PrimaryCull::Get().Install();
-	// T7f checklist item 3: Main::IsRoomVisible answered from PortalViews' VisibleSet while DCLF runs.
+	// Main::IsRoomVisible answered from PortalViews' VisibleSet while DCLF runs.
 	DCLF::RoomVisibility::Install();
-	// The tree manager's list loop: the stood-in trees' multibound results from DCLF's verdicts (T7b5's fix, TreeAnimation).
+	// The tree manager's list loop: the stood-in trees' multibound results from DCLF's verdicts (TreeAnimation).
 	DCLF::TreeList::Install();
-	// T6b5, CS_DCLF_LOD_GATES (on unless 0): the engine's LOD swaps gated on DCLF's claims (skyrim-engine-notes.md, "LOD swaps and their
+	// CS_DCLF_LOD_GATES (on unless 0): the engine's LOD swaps gated on DCLF's claims (skyrim-engine-notes.md, "LOD swaps and their
 	// gates"). Shares the LOD drain's and the retirement's detours with the import timings.
 	DCLF::LodGates::Install([] { return globals::features::drawcallLimitFix.Running(); });
-	// DCLF's threads and its scene graph, before the first frame kicks a job (dclf-async-publication.md, "The design").
+	// DCLF's threads and its state graph, before the first frame dispatches a job (dclf-async-publication.md, "The design").
 	(void)DCLF::SceneScheduler::Graph();
 	Hooks::Install();
 	installed = true;
-	// T6b3d: the coordinator's pump, from here woken by its producers (the hooks above push from now on); its passes apply the events
+	// The coordinator's pump, from here woken by its producers (the hooks above push from now on); its passes apply the events
 	// alone until the first frame runs DCLF (SetScenePassMode).
 	DCLF::Scene::Coordinator::Get().SetScenePassMode(false, DCLF::Policy::ScenePassInline());
 	DCLF::Scene::Coordinator::Get().StartScenePump();
-	// The switches this process actually sees, once. Several reports below are gated on them, so without
-	// this a silent log is indistinguishable from a switch that never reached the game - which is exactly
-	// what happened when they came from the environment alone (see Switches.h).
+	// The switches this process actually sees, once: a silent log is otherwise indistinguishable from a switch that never reached
+	// the game (Switches.h).
 	logger::info("[DCLF] switches: {}", DCLF::SwitchSummary());
 	if (const auto reduced = DCLF::ReducedFeatures(); reduced.empty())
 		logger::info("[DCLF] featureset: full (every feature on; the menu can still turn some off live)");
@@ -117,11 +115,9 @@ void DrawcallLimitFix::SetupResources()
 {
 	if (installed && RenderGraphRuntime::Get().IsActive() && RenderGraphRuntime::EpochsEnabled())
 		DCLF::ShaderPrograms::Get().StartPrecompile();
-	// Runs right after the render graph tried to adopt DXVK's device (State::SetupResources). The hooks went in
-	// at PostPostLoad, before any device existed; without the graph there is nothing to draw with, and left
-	// on, DCLF would track, classify and skip for nothing while the frame silently stays native. So it is
-	// forced off here, with the reason in the log and in the menu instead of only a line of zeroes in the stats.
-	// DCLF's passes run in epochs of their own (CS_ORG_EPOCHS, which Light Limit Fix can do without).
+	// Runs right after the render graph tried to adopt DXVK's device (State::SetupResources). The hooks went in at PostPostLoad,
+	// before any device existed; without the graph (or its epochs: CS_ORG_EPOCHS) there is nothing to draw with, so DCLF is forced
+	// off here, with the reason in the log and the menu.
 	if (!installed || (RenderGraphRuntime::Get().IsActive() && RenderGraphRuntime::EpochsEnabled()))
 		return;
 	unavailableReason = RenderGraphRuntime::Get().IsActive() ? std::string("the render graph runs without epochs (CS_ORG_EPOCHS=0)") :
@@ -141,9 +137,9 @@ void DrawcallLimitFix::Reset()
 	DCLF::RunTestHarness(GetShortName());
 	// The frame's last target point, then Present's observers (with DCLF on or off).
 	DCLF::Diagnostics::Notify(DCLF::Diagnostics::TargetPoint{ "present" });
-	DCLF::Diagnostics::Notify(DCLF::Diagnostics::Present{});
+	DCLF::Diagnostics::Notify<DCLF::Diagnostics::FramePoint::Present>();
 	// Every Present, in menus too: the coordinator's queues hold references to attached subtrees and must not grow while the world is
-	// not rendered (its passes drain them; nothing of it is joined here).
+	// not rendered (FrameDriver::EndFrame keeps its passes draining them).
 	if (!installed)
 		return;
 	{
@@ -166,7 +162,7 @@ void DrawcallLimitFix::UpdateActive()
 void DrawcallLimitFix::SetActive(bool a_active)
 {
 	switchedOn = a_active;
-	// T6b3d: nothing to join; the passes apply the events alone while off (the tracked set stays current), whole again once on.
+	// While off the scene passes apply the events alone (the tracked set stays current); whole again once on.
 	DCLF::Scene::Coordinator::Get().SetScenePassMode(Running(), DCLF::Policy::ScenePassInline());
 	if (!a_active)
 		DCLF::IndirectDraws::Get().DrainAsync();
@@ -185,7 +181,7 @@ void DrawcallLimitFix::Hooks::Main_Update_Entry::thunk(void* a_stages)
 	func(a_stages);
 	auto& feature = globals::features::drawcallLimitFix;
 	if (feature.installed) {
-		// T7f checklist item 3: the frame's Main::IsRoomVisible calls answered by DCLF only while it runs.
+		// The frame's Main::IsRoomVisible calls answered by DCLF only while it runs.
 		DCLF::RoomVisibility::SetLive(feature.Running());
 		DCLF::PrimaryCull::Get().AtUpdateEntry(feature.Running());
 	}
@@ -281,25 +277,6 @@ void DrawcallLimitFix::Prepass()
 		DCLF::FrameDriver::Get().Prepass();
 }
 
-void DrawcallLimitFix::NoteNativeDraw(const RE::BSShader* a_shader, std::uint32_t a_pixelDescriptor)
-{
-	if (!DCLF::Diagnostics::Armed<DCLF::Diagnostics::NativeDraw>())
-		return;
-	// The pass: DCLF's Z-prepass hook, the deferred main pass, or else the current accumulator's render mode (shadow maps
-	// 0xD-0xF, occlusion 0x1C, ...), 0xFF with none.
-	std::uint32_t pass = 0xFF;
-	if (inDepthPass)
-		pass = 0x100;
-	else if (globals::deferred->deferredPass)
-		pass = 0x101;
-	else if (auto* accumulator = *globals::game::currentAccumulator.get())
-		pass = static_cast<std::uint32_t>(accumulator->GetRuntimeData().renderMode);
-	const std::uint32_t type = a_shader ? static_cast<std::uint32_t>(a_shader->shaderType.get()) : 0xFF;
-	// Lighting's technique is the pixel descriptor's top byte; any other shader's descriptor is its technique.
-	const std::uint32_t technique = type == static_cast<std::uint32_t>(RE::BSShader::Type::Lighting) ? (a_pixelDescriptor >> 24) & 0x3f : a_pixelDescriptor;
-	DCLF::Diagnostics::Notify(DCLF::Diagnostics::NativeDraw{ pass, type, technique });
-}
-
 void DrawcallLimitFix::Hooks::Main_RenderDepth::thunk(bool a_firstPerson, bool a_a2)
 {
 	auto& feature = globals::features::drawcallLimitFix;
@@ -321,10 +298,9 @@ void DrawcallLimitFix::Hooks::Main_RenderDepth_WorldDrawn::thunk(void* a_accumul
 	// depth goes in after the world's, as it does natively, so there is nothing to refresh.
 	DCLF::IndirectDraws::Get().CaptureDepthPass();
 	// The frame's reflection faces (every TESWaterReflections::Update of the frame has run: two a frame, a face each), drawn by DCLF
-	// in one epoch, before the water reads the cube (dclf-lod.md, "Water reflections"): after the depth commit, which brought the
-	// index pool and the scene's buffers to the frame's publication, whose scene list the faces draw. Before it (at
-	// BeforeShadowMaps) they drew this frame's list against the frame before's pool: a slot the publication gave another geometry
-	// drew its old range's indices against its new vertices, past their end (a device fault).
+	// in one epoch, before the water reads the cube (dclf-lod.md, "Water reflections"). It must follow the depth commit, which brings
+	// the index pool and the scene's buffers to the frame's publication whose scene list the faces draw: against the frame before's
+	// pool, a slot the publication gave another geometry would draw its old indices against its new vertices (a device fault).
 	DCLF::IndirectDraws::Get().ExecuteReflection();
 	if (DCLF::Scene::FrameView::Get().GetTables().objects.size() >= 400)
 		globals::BeginDCLFDepthTrace(globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture);
@@ -370,8 +346,8 @@ void DrawcallLimitFix::Hooks::BSShaderAccumulator_FinishAccumulating::thunk(RE::
 template <int N>
 void DrawcallLimitFix::Hooks::Accumulator_BlendedDraw<N>::thunk(void* a_accumulator, std::uint32_t a_renderFlags)
 {
-	// T7d: DCLF's blended objects first, behind every blended draw of the engine's (the ordering contract: drawcall-limit-fix.md, "The
-	// forward epoch (T7d)"), for the main camera's accumulator alone (the same function draws every render mode 0 accumulator's).
+	// DCLF's blended objects first, behind every blended draw of the engine's (the ordering contract: drawcall-limit-fix.md, "The
+	// forward epoch"), for the main camera's accumulator alone (the same function draws every render mode 0 accumulator's).
 	static REL::Relocation<void**> mainAccumulator{ REL::Offset(DCLF::Engine::Address::kMainAccumulator) };
 	const bool main = a_accumulator && a_accumulator == *mainAccumulator;
 	if (main)
@@ -447,12 +423,12 @@ void DrawcallLimitFix::Hooks::Install()
 		logger::warn("[DCLF] the geometry groups' pass draw is not where expected; their passes stay native (terrain LOD among them)");
 	stl::write_thunk_call<Main_Draw_Early>(REL::RelocationID(35560, 36559).address() + 0xD3);
 	logger::info("[DCLF] scene phase hook installed on Main::Draw");
-	// T7b2: the stood-in roots' kAccumulated, written at Main::Update's entry.
+	// The stood-in roots' kAccumulated, written at Main::Update's entry.
 	if (DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kUpdateEntryCall).address(), REL::Offset(DCLF::Engine::Address::kStagesReset).address()))
 		stl::write_thunk_call<Main_Update_Entry>(REL::Offset(DCLF::Engine::Address::kUpdateEntryCall).address());
 	else
 		logger::warn("[DCLF] Main::Update's first call is not where expected; the stood-in roots' kAccumulated is not written (T7b2)");
-	// T7d: the main pass's blended draw (FUN_1414b39d0), at both its call sites in FUN_1414b3390.
+	// The main pass's blended draw (FUN_1414b39d0), at both its call sites in FUN_1414b3390.
 	if (DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kBlendedUnderWater).address(), REL::Offset(DCLF::Engine::Address::kBlendedDraw).address()) &&
 		DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kBlendedAfterWater).address(), REL::Offset(DCLF::Engine::Address::kBlendedDraw).address())) {
 		stl::write_thunk_call<Accumulator_BlendedDraw<0>>(REL::Offset(DCLF::Engine::Address::kBlendedUnderWater).address());
@@ -460,12 +436,12 @@ void DrawcallLimitFix::Hooks::Install()
 	} else {
 		logger::warn("[DCLF] the main pass's blended draw is not where expected; the forward epoch (T7d) never runs, and CS_DCLF_FORWARD must stay off");
 	}
-	// T7d's refraction: Main::Draw's refraction point (its group 5 count, FUN_1414b4840).
+	// Main::Draw's refraction point (its group 5 count, FUN_1414b4840).
 	if (DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kRefractionCheck).address(), REL::Offset(DCLF::Engine::Address::kGroupFiveCount).address()))
 		stl::write_thunk_call<Main_Draw_RefractionCheck>(REL::Offset(DCLF::Engine::Address::kRefractionCheck).address());
 	else
 		logger::warn("[DCLF] Main::Draw's refraction point is not where expected; CS_DCLF_REFRACTION must stay off");
-	// T7e: the first-person view's two points (FUN_1414a90f0, the accumulator render, at RenderDepth's first-person draw and at
+	// The first-person view's two points (FUN_1414a90f0, the accumulator render, at RenderDepth's first-person draw and at
 	// FUN_1414cb6d0's), always installed: one compare a frame each while CS_DCLF_FIRST_PERSON is off.
 	if (DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kDepthFirstPersonDraw).address(), REL::Offset(DCLF::Engine::Address::kAccumulatorRender).address()) &&
 		DCLF::Engine::CallsTo(REL::Offset(DCLF::Engine::Address::kFirstPersonViewDraw).address(), REL::Offset(DCLF::Engine::Address::kAccumulatorRender).address())) {

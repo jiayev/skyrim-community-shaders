@@ -1,10 +1,8 @@
+// TreeList: the tree manager's list loop detoured (main thread, Main::Update) for TreeAnimation's stood-in trees. TreeList.h describes it.
 #include "Features/DrawcallLimitFix/Engine/Cull/TreeList.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/TreeAnimation.h"
-
-// The tree manager's list loop, detoured for TreeAnimation's stood-in trees (drawcall-limit-fix.md, "T7b5"; skyrim-engine-notes.md,
-// "Tree manager list (T7b5)"). TreeList.h describes it.
 
 namespace DCLF::TreeList
 {
@@ -20,7 +18,7 @@ namespace DCLF::TreeList
 		{
 			static void thunk(std::byte* a_manager, std::byte* a_process)
 			{
-				// T7b5's fix: the stood-in trees' multibound results DCLF's for the loop, the engine's put back after it.
+				// The stood-in trees' multibound results DCLF's for the loop, the engine's put back after it.
 				TreeAnimation::BeforeListLoop(a_manager);
 				func(a_manager, a_process);
 				TreeAnimation::AfterListLoop();

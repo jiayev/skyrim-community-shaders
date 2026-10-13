@@ -1,10 +1,10 @@
+// CS_DCLF_PERSISTENT_PARITY: every 60 passes the kept decal order against one made whole (every key taken again: Coordinator's
+// CompareDecalOrder), after the order's upkeep.
+
 #include "SceneObservers.h"
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
-
-// CS_DCLF_PERSISTENT_PARITY: every 60 passes the kept decal order against one made whole (every key taken again: Coordinator's
-// CompareDecalOrder), after the order's upkeep.
 
 namespace DCLF::Diagnostics
 {
@@ -17,10 +17,10 @@ namespace DCLF::Diagnostics
 			a_event.checked = a_event.checked || ParityDue(V::passSerial(a_event.store));
 		}
 
-		void OnDecalsOrdered(const DecalsOrdered& a_event)
+		void OnDecalsOrdered(const On<ScenePoint::DecalsOrdered>&)
 		{
 			auto& dp = SceneDiagnostics().decalOrder;
-			const auto result = V::CompareDecalOrder(a_event.store);
+			const auto result = V::CompareDecalOrder(Scene::Coordinator::Get());
 			++dp.checks;
 			dp.decals += result.decals;
 			if (result.staleKeys && dp.staleKeys == 0)
@@ -35,6 +35,6 @@ namespace DCLF::Diagnostics
 	void InstallDecalOrderParity()
 	{
 		Subscribe<DecalOrderDue>(OnDecalOrderDue);
-		Subscribe<DecalsOrdered>(OnDecalsOrdered);
+		Subscribe<ScenePoint::DecalsOrdered>(OnDecalsOrdered);
 	}
 }

@@ -1,13 +1,13 @@
 #pragma once
 
+// The draws area's hook points (IndirectDraws' epochs, commits, builds and stores), for its observers (Diagnostics/Draws, subscribed in
+// DrawsInstall.cpp). Each is announced with Diagnostics::Notify (Hooks.h) on the thread its comment names; an event that hands something
+// back carries a reference to the output, which the main path initializes to its own answer with nothing observing.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "DrawsView.h"
 #	include "Features/DrawcallLimitFix/Diagnostics/Engine/ShadowViewTally.h"
 #	include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
-
-// The draws area's hook points (IndirectDraws' epochs, commits, builds and stores), for its observers (Diagnostics/Draws, subscribed in
-// DrawsInstall.cpp). Each is announced with Diagnostics::Notify (Hooks.h) on the thread its comment names; an event that hands something
-// back carries a reference to the output, which the main path initializes to its own answer with nothing observing.
 
 namespace DCLF::Diagnostics
 {
@@ -30,18 +30,6 @@ namespace DCLF::Diagnostics
 		bool depthOnly;
 	};
 
-	/** @brief CaptureMainPass took the main pass's bindings (the colour epoch's capture). */
-	struct MainPassCaptured
-	{
-		const Draws::Capture& capture;
-	};
-
-	/** @brief One of the main pass's probe points (before and after the Z-prepass and the colour epoch). */
-	struct ProbePoint
-	{
-		const char* label;
-	};
-
 	/**
 	 * @brief The depth commit's fade roots, before they are uploaded: an observer may name the first root of the frame's FadeStateCS
 	 * log window (base, ~0u: none logged).
@@ -52,13 +40,6 @@ namespace DCLF::Diagnostics
 		const SceneTables& tables;
 		const FadeFrame& inputs;
 		std::uint32_t& base;
-	};
-
-	/** @brief The colour commit's VS_PerFrame block (packed: the replayed Z-prepass bytes, or the capture's), with its capture. */
-	struct ColourFrameBlock
-	{
-		const Draws::Capture& capture;
-		std::span<const std::byte> packed;
 	};
 
 	/** @brief A main commit's culling ViewProj (latch.viewProj, the eye folded in), with the shape's size. */
@@ -110,7 +91,7 @@ namespace DCLF::Diagnostics
 
 	// ---- The shadow epochs (render thread).
 
-	/** @brief The scene's index pool brought up to the tables' first a_count geometry slots (UpdateIndexPool). */
+	/** @brief The scene's index pool brought up to the tables' first `count` geometry slots (UpdateIndexPool). */
 	struct IndexPoolUpdated
 	{
 		const Draws::IndexPool& pool;
@@ -144,14 +125,14 @@ namespace DCLF::Diagnostics
 		ShadowView kind;
 	};
 
-	/** @brief A shadow build's inputs took DCLF's full-frustum processes for frame a_frame (taken), or found none current. */
+	/** @brief A shadow build's inputs took DCLF's full-frustum processes for frame `frame` (taken), or found none current. */
 	struct SunEntryPlanesTaken
 	{
 		std::uint32_t frame;
 		bool taken;
 	};
 
-	/** @brief The engine's FinishAccumulating of occlusion map a_view (IndirectDraws::CaptureOcclusion). */
+	/** @brief The engine's FinishAccumulating of occlusion map `view` (IndirectDraws::CaptureOcclusion). */
 	struct OcclusionCaptured
 	{
 		std::uint32_t view;
@@ -177,7 +158,7 @@ namespace DCLF::Diagnostics
 		std::vector<float>*& mirror;
 	};
 
-	/** @brief The extras rows' buffer `entry` was sent a_rows for frame `frame` (bufferRows: the rows it holds; ~0u, a ring entry: every row). */
+	/** @brief The extras rows' buffer `entry` was sent `rows` for frame `frame` (bufferRows: the rows it holds; ~0u, a ring entry: every row). */
 	struct ExtrasSent
 	{
 		std::uint32_t entry;
@@ -186,31 +167,19 @@ namespace DCLF::Diagnostics
 		std::uint32_t bufferRows;
 	};
 
-	/** @brief The object records' store brought up to a_tables (UpdateObjectRecords), before its view is taken. */
-	struct ObjectRecordsUpdated
+	/**
+	 * @brief A kept store brought up to `tables`, before its view is taken: the object records (UpdateObjectRecords), the geometry table
+	 * (UpdateGeometryDraws), the revision producer's draw bound (UpdateDrawBound).
+	 */
+	template <class Store>
+	struct StoreUpdated
 	{
-		const Draws::ObjectRecordStore& store;
+		const Store& store;
 		const SceneTables& tables;
 		std::uint32_t frame;
 	};
 
-	/** @brief The geometry table's store brought up to a_tables (UpdateGeometryDraws), before its view is taken. */
-	struct GeometryDrawsUpdated
-	{
-		const Draws::GeometryStore& store;
-		const SceneTables& tables;
-		std::uint32_t frame;
-	};
-
-	/** @brief The revision producer's draw bound brought up to a_tables (UpdateDrawBound). */
-	struct DrawBoundUpdated
-	{
-		const Draws::DrawBoundStore& store;
-		const SceneTables& tables;
-		std::uint32_t frame;
-	};
-
-	/** @brief A kept shadow build made (BuildShadowPayload with its kept state), from a_in. */
+	/** @brief A kept shadow build made (BuildShadowPayload with its kept state), from `in`. */
 	struct ShadowBuilt
 	{
 		const Draws::ShadowInputs& in;
@@ -227,41 +196,7 @@ namespace DCLF::Diagnostics
 		bool same;
 	};
 
-	// ---- The main builds (the builder's thread, or the render thread for a build at the epoch) and their commits (render thread).
-
-	/** @brief A main build begins. */
-	struct MainBuildBegun
-	{
-	};
-
-	/** @brief A main build assembled object `object`'s record (its pair's rows are built), with its pipeline's constant tables. */
-	struct MainRecordAssembled
-	{
-		const SceneTables& tables;
-		std::uint32_t object;
-		std::span<const std::uint8_t> vsTable, psTable;
-		const RE::NiPoint3& eye;
-		const RE::NiPoint3& previousEye;
-		Draws::MainPayload& out;
-	};
-
-	/** @brief A main build brought its resident region up to the tables, before it routes the touched slots (reference: the build's own entries). */
-	struct ResidentRegionUpdated
-	{
-		const Draws::ResidentRegion& region;
-		const Draws::RegionReference& reference;
-		const SceneTables& tables;
-		std::uint32_t frame;
-		Draws::MainPayload& out;
-	};
-
-	/** @brief A main commit took its payload's build counts (MainPayload::checks) into the frame. */
-	struct MainPayloadCommitted
-	{
-		const Draws::MainPayload& payload;
-	};
-
-	/** @brief A publication's draws built ahead (RunAhead), for frame a_frame. */
+	/** @brief A publication's draws built ahead (RunAhead), for frame `frame`. */
 	struct DrawsBuiltAhead
 	{
 		const DrawsView::Impl::DrawPublication& draws;

@@ -15,7 +15,7 @@ namespace DCLF::Eligibility
 	// What a node between a leaf and its category node makes of the leaf. A billboard turns to the camera in
 	// the main cull (NiBillboardNode::OnVisible), after the scene walk read its world transform. A switch
 	// node draws one child at a time: Switch marks the leaf for the per-frame test (SwitchSelects). An ordered
-	// node orders its leaves' blended passes alone (T7c0: OrderedLeaf), whose draw order does not survive being
+	// node orders its leaves' blended passes alone (OrderedLeaf), whose draw order does not survive being
 	// drawn out of the native loop: UnsupportedParent marks the leaf for ClassifyFrame's test of its leaf.
 	inline Ineligible ParentReason(RE::NiNode* a_node)
 	{
@@ -38,7 +38,7 @@ namespace DCLF::Eligibility
 	}
 
 	// The stronger of two parent reasons: a billboard (whatever its leaf) outranks a switch (decided per frame), which
-	// outranks an ordered node (decided by the leaf: T7c0). ClassifyFrame's chain walk finds an ordered node under a
+	// outranks an ordered node (decided by the leaf). ClassifyFrame's chain walk finds an ordered node under a
 	// switch's verdict itself.
 	inline Ineligible CombineParentReasons(Ineligible a_lhs, Ineligible a_rhs)
 	{
@@ -49,13 +49,13 @@ namespace DCLF::Eligibility
 	}
 
 	/**
-	 * @brief T7c0: whether a BSOrderedNode above a_leaf orders its draws (UnsupportedParent): its passes are blended. The node's
+	 * @brief Whether a BSOrderedNode above a_leaf orders its draws (UnsupportedParent): its passes are blended. The node's
 	 * OnVisible (0x141503970) opens a new group of the culling process (+0x301f0) and culls its children into it (AppendVirtual);
 	 * the list process registers each group's geometries with the group (ProcessJob, 0x140e28af0: the accumulator's vfuncs 0x140
 	 * and 0x148 around FUN_1414b2140), and the main modes' registration (FUN_1414b2330) gives the group only to a hint 1 pass
 	 * (blended: FUN_1414f50b0 into the group's list). Every other pass (an opaque one's hint 0 through RegisterPass, the decal
 	 * groups) goes where it would under any node, so an opaque leaf is drawn in the normal opaque path and is DCLF's like any.
-	 * A blended leaf AlphaBlend's static verdict rejects first; what passes it (a blended decal; T7d's blended Lighting) stays.
+	 * A blended leaf AlphaBlend's static verdict rejects first; what passes it (a blended decal; blended Lighting) stays.
 	 */
 	inline bool OrderedLeaf(const SceneCapture::LeafView& a_leaf)
 	{
@@ -79,12 +79,11 @@ namespace DCLF::Eligibility
 
 	/**
 	 * @brief Whether an object the main pass cannot take is still a shadow caster DCLF can draw: its reason is
-	 * one the shadow views are indifferent to, and the engine would draw it into a shadow map. Measured
-	 * (the engine's cascade draws with DCLF on) and reverse engineered per reason:
+	 * one the shadow views are indifferent to, and the engine would draw it into a shadow map. Per reason:
 	 * - Technique: the lighting technique is outside the main pass's set (the terrain's landscape blocks);
 	 *   a shadow view draws the Utility technique, which ShadowUtilityTechnique derives from the property.
 	 * - UnsupportedParent: a blended leaf under a BSOrderedNode (OrderedLeaf), which orders blended draws and nothing else
-	 *   (T7c0: an opaque one is main-phase eligible).
+	 *   (an opaque one is main-phase eligible).
 	 * - MultiIndex: a BSMultiIndexTriShape, whose shadow passes draw as a tri-shape's (ClassifyStatic).
 	 * Not a billboard: NiBillboardNode turns to the culling camera, which for a shadow view is the light's.
 	 */
@@ -104,7 +103,7 @@ namespace DCLF::Eligibility
 	/** @brief Whether a negative verdict follows only from what the pointer witnesses cover. */
 	bool Cacheable(Ineligible a_reason);
 	/**
-	 * @brief Static eligibility of a geometry, without the per-frame checks: from its records (T6b1b: the mirror's leaf on the scene
+	 * @brief Static eligibility of a geometry, without the per-frame checks: from its records (the mirror's leaf on the scene
 	 * work, SceneCapture::LiveLeaf's on the render thread).
 	 */
 	Ineligible Static(const SceneCapture::LeafView& a_leaf, LightingDescriptors* a_descriptors, const AccumulatedPass* a_accumulated = nullptr);
@@ -164,14 +163,12 @@ namespace DCLF::Eligibility
 	/**
 	 * @brief Whether a tracked geometry lets its light entry leave the point lights' culls. A table object: the exclusion
 	 * decides (BuildSunExclusion). Any other must give the light's registration no pass: what the sun's rule allows
-	 * (SunEntryAllows: hidden, alpha-blended, fading, an unselected switch child), or no Lighting property. The light's bit
+	 * (Sun: hidden, alpha-blended, fading, an unselected switch child), or no Lighting property. The light's bit
 	 * in its activeLightMask, which the registration writes on every geometry the cull reaches, is LocalLightCull's.
 	 */
 	template <class Leaf>
 	bool Light(const EntryVerdict& a_entry, bool a_switchNodes, Leaf&& a_leaf)
 	{
-		// What the sun's rule allows (the caster rule gives an alpha-blended or fading property no shadow pass, the paraboloid's as
-		// the cascades'), and any geometry without a Lighting property. The lights' bits of every geometry are LocalLightCull's.
 		return Sun(a_entry, a_switchNodes, a_leaf) || (a_entry.classified && !SceneCapture::LeafView::Lighting(a_leaf().property));
 	}
 
@@ -185,7 +182,7 @@ namespace DCLF::Eligibility
 
 	/**
 	 * @brief The primary verdict a sun candidate's geometry row carries (SunCandidates::primaryGeometry): kPrimaryMember when Primary, kPrimaryHiddenStatic
-	 * (T7f item 8) for a hidden static's geometry, which nobody draws while hidden and whose unhiding is an event
+	 * for a hidden static's geometry, which nobody draws while hidden and whose unhiding is an event
 	 * that changes this verdict (so its entry is planned again), kPrimaryEngine otherwise (the engine's).
 	 */
 	template <class Leaf>

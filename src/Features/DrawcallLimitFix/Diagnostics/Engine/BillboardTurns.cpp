@@ -1,3 +1,6 @@
+// The billboards' observer (BillboardTurns.h): the thunk after NiBillboardNode::OnVisible, on whatever thread runs the cull; the
+// report takes its counts on the render thread.
+
 #include "BillboardTurns.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"

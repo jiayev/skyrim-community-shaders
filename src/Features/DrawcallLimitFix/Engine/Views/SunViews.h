@@ -16,7 +16,7 @@ namespace RE
 namespace DCLF
 {
 	/**
-	 * @brief The sun's views as DCLF computes them (T2a, 2026-10-08): from the shadow cameras BSShadowDirectionalLight::UpdateCamera
+	 * @brief The sun's views as DCLF computes them: from the shadow cameras BSShadowDirectionalLight::UpdateCamera
 	 * (0x141512230) has just set up, before any of the engine's culls or draws of them. Nothing here reads the engine's cascade culls
 	 * (Accumulate's culling processes) or the renderer's state at a view's draw; those captures are the observers' alone (Diagnostics::ShadowViewTally).
 	 *

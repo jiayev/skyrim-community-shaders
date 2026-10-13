@@ -1,3 +1,7 @@
+// CS_DCLF_PERSISTENT_PARITY at Prepass (render thread; the scene work runs inline under the parities): the used sets against the installed
+// records, the technique rows against the engine's values now, the extras rows against the engine's routines, and every drawn slot's
+// shading against the frame's rows.
+
 #include "SceneObservers.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -6,10 +10,6 @@
 #include "Features/DrawcallLimitFix/Draws/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
-
-// CS_DCLF_PERSISTENT_PARITY at Prepass (render thread; the scene work runs inline under the parities): the used sets against the installed
-// records, the technique rows against the engine's values now, the extras rows against the engine's routines, and every drawn slot's
-// shading against the frame's rows.
 
 namespace DCLF::Diagnostics
 {
@@ -291,17 +291,17 @@ namespace DCLF::Diagnostics
 			}
 		}
 
-		void OnPrepassBegin(const PrepassConstantsBegin&)
+		void OnPrepassBegin(const On<ScenePoint::PrepassConstantsBegin>&)
 		{
 			CheckMaterialFrame();
 		}
 
-		void OnPipelineConstants(const PipelineConstantsBegin&)
+		void OnPipelineConstants(const On<ScenePoint::PipelineConstantsBegin>&)
 		{
 			CheckTechniqueRows();
 		}
 
-		void OnPrepassEnd(const PrepassConstantsEnd&)
+		void OnPrepassEnd(const On<ScenePoint::PrepassConstantsEnd>&)
 		{
 			if (!ParityDue(V::frame()))
 				return;
@@ -312,8 +312,8 @@ namespace DCLF::Diagnostics
 
 	void InstallFrameParity()
 	{
-		Subscribe<PrepassConstantsBegin>(OnPrepassBegin);
-		Subscribe<PipelineConstantsBegin>(OnPipelineConstants);
-		Subscribe<PrepassConstantsEnd>(OnPrepassEnd);
+		Subscribe<ScenePoint::PrepassConstantsBegin>(OnPrepassBegin);
+		Subscribe<ScenePoint::PipelineConstantsBegin>(OnPipelineConstants);
+		Subscribe<ScenePoint::PrepassConstantsEnd>(OnPrepassEnd);
 	}
 }

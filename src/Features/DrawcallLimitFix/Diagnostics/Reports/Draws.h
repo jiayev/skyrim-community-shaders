@@ -18,8 +18,4 @@ namespace DCLF::Reports
 	void PassStatsLine(const std::array<std::array<std::uint64_t, 4>, 3>& a_totals, const std::array<std::uint32_t, 3>& a_samples);
 	/** @brief The colour commits of the report window whose sun test ran without the sun's cascades (a_empty), logged. */
 	void ColourSunTestLine(std::uint32_t a_empty);
-	/** @brief CS_DCLF_BINDLESS_PARITY: the records against the constant groups, since the start (logged; nothing while nothing was checked). */
-	void BindlessParityLines();
-	/** @brief CS_DCLF_RESIDENT_DRAW_PARITY: the resident region's checks since the start, the tail of the persistent draws' line. */
-	std::string ResidentParityPart();
 }

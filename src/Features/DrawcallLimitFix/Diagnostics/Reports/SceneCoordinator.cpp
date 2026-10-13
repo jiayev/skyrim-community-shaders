@@ -30,15 +30,10 @@ namespace DCLF::Reports
 				"light-path entries written in full at the merge {}; join rounds {} ({} on the pool), joins {}",
 				ConfiguredFanout(), SceneScheduler::PreparationWorkers(), f.rounds, f.parallelRounds, f.entries, f.parallelEntries, f.chunks, f.lightMissed, f.joinRounds,
 				f.joinParallelRounds, f.joinEntries);
-			// e5: AddSubtrees' prepares (the pool from kSubtreeFanoutMin roots) and merges; their times in modes 1 and 2.
+			// AddSubtrees' prepares (the pool from kSubtreeFanoutMin roots) and merges; their times in modes 1 and 2.
 			line += fmt::format("; subtree rounds {} ({} on the pool), roots {} ({} on the pool), geometries {}, prepare {:.2f} ms, merge {:.2f} ms", f.subtreeRounds,
 				f.subtreeParallelRounds, f.subtreeRoots, f.subtreeParallelRoots, f.subtreeGeometries, f.subtreePrepareMs, f.subtreeMergeMs);
-			auto& p = Diagnostics::SceneDiagnostics().fanout;
-			if (p.parityRounds)
-				line += fmt::format("; parity (CS_DCLF_FANOUT_PARITY): {} rounds, {} entries, {} differ{}{}", p.parityRounds, p.parityEntries, p.parityDiffers,
-					p.parityDiffers ? " <- FANOUT; first: " : " <- OK", p.parityFirst);
 			f = {};
-			p = {};
 			return line;
 		}
 
@@ -246,8 +241,7 @@ namespace DCLF::Reports
 					ms.captured, ms.replaced, ms.stale, ms.aged, V::materialSnapshots(s).size(), ms.made, ms.uncovered, ms.requested, ms.uncovered ? " <- MATERIAL PORT" : "");
 				ms = {};
 			}
-			// The material bindings the scene work makes (the frame's start reads this, and the scene lane's lookups, with the scene work
-			// joined).
+			// The material bindings the scene work makes.
 			if (auto& mb = V::materialBindings(s); mb.stats.requested || mb.stats.answered || mb.stats.versioned || !mb.inFlight.empty()) {
 				std::size_t waiting = 0, holding = 0;
 				Tables::ForEachBit(tables.usedMaterialBits, [&](std::uint32_t a_slot) {
@@ -263,7 +257,7 @@ namespace DCLF::Reports
 					bs.requested, bs.answered, bs.rejected, bs.stale, bs.cached, mb.cache.size(), bs.resolved, bs.retired, bs.versioned, mb.inFlight.size(), waiting, holding);
 				mb.stats = {};
 			}
-			// The shared, projected, mask and shadow texture bindings the scene work makes (read the same way).
+			// The shared, projected, mask and shadow texture bindings the scene work makes.
 			if (auto& sb = V::sharedBindings(s); sb.stats.fixedPublished || sb.stats.projectedCaptures || sb.stats.shadowAdded || sb.stats.shadowRemoved ||
 											 sb.stats.writtenShared || sb.stats.writtenMasks || sb.stats.writtenShadow || !sb.inFlight.empty()) {
 				// What is still asked for now, by the kinds waiting on each view in flight; the projected textures and masks waiting, by entry.
@@ -343,7 +337,7 @@ namespace DCLF::Reports
 			}
 			if (auto& t = delta; t.walks) {
 				const double n = t.walks;
-				// The catch-ups are the render thread's, at ingestion (CatchUpSwitches).
+				// The catch-ups are the render thread's, at the frame's start (FrameView's CatchUpSwitches).
 				t.switchCatchUps = Scene::Channels::Get().catchUpsBySwitch.exchange(0, std::memory_order_relaxed);
 				t.attachCatchUps = Scene::Channels::Get().catchUpsByAttach.exchange(0, std::memory_order_relaxed);
 				const double catchUpUs = static_cast<double>(Scene::Channels::Get().catchUpNs.exchange(0, std::memory_order_relaxed)) / 1000.0 / n;
@@ -353,9 +347,9 @@ namespace DCLF::Reports
 					V::lightTable(s).index.size(), V::lightTable(s).nodes.size(), std::exchange(V::lightTable(s).entriesWritten, 0), std::exchange(V::lightTable(s).snapshots, 0),
 					Diagnostics::SceneDiagnostics().candidates.checks, Diagnostics::SceneDiagnostics().candidates.mismatches, Diagnostics::SceneDiagnostics().candidates.checks ? (Diagnostics::SceneDiagnostics().candidates.mismatches ? " <- CANDIDATES" : " <- OK") : "");
 				Diagnostics::SceneDiagnostics().candidates = {};
-				text += fmt::format("[DCLF] scene delta: {} walks ({} full), evaluated {:.0f}/frame (max {}; per-frame {:.0f}, of them {:.0f} kept by the light path and {:.0f} moved by it; pending {:.0f}, property {:.1f}, node {:.1f}, sun entry node {:.1f}, geometry {:.1f}), lapsed {:.0f}, {:.0f} live slots; events per frame: {:.1f} property, {:.1f} node; {:.2f} inputs re-read changed; switch events {:.2f}/frame: {:.2f} changed, {:.2f} caught up by the render thread at ingestion ({:.2f} under attached subtrees or the world after a load; {:.2f} us/frame), {:.1f} entries classified again; face publications {:.1f}/frame: {:.1f} streams updated in place, {:.2f} shapes written\n",
+				text += fmt::format("[DCLF] scene delta: {} walks ({} full), evaluated {:.0f}/frame (max {}; per-frame {:.0f}, of them {:.0f} kept by the light path and {:.0f} moved by it; pending {:.0f}, property {:.1f}, node {:.1f}, sun entry node {:.1f}, geometry {:.1f}), lapsed {:.0f}, {:.0f} live slots; events per frame: {:.1f} property, {:.1f} node; switch events {:.2f}/frame: {:.2f} changed, {:.2f} caught up by the render thread at ingestion ({:.2f} under attached subtrees or the world after a load; {:.2f} us/frame), {:.1f} entries classified again; face publications {:.1f}/frame: {:.1f} streams updated in place, {:.2f} shapes written\n",
 					t.walks, t.full, t.evaluated / n, t.evaluatedMax, t.perFrame / n, t.kept / n, t.moved / n, t.pending / n, t.property / n, t.node / n, t.roots / n,
-					t.geometryDirty / n, t.restored / n, t.live / n, t.propertyEvents / n, t.nodeEvents / n, t.reread / n,
+					t.geometryDirty / n, t.restored / n, t.live / n, t.propertyEvents / n, t.nodeEvents / n,
 					t.switchEvents / n, t.switchChanges / n, t.switchCatchUps / n, t.attachCatchUps / n, catchUpUs, t.switchReclassified / n, t.facePublished / n, t.faceUpdated / n,
 					t.faceWritten / n);
 				if (auto& rootMotion = V::rootMotion(s); rootMotion.size() > (1u << 16))
@@ -395,7 +389,7 @@ namespace DCLF::Reports
 						deferred += fmt::format("{}{} {}", deferred.empty() ? "" : ", ", kSceneWakeNames[source], held[source]);
 				logger::info("[DCLF] scene pump pushes inside the frame's render, not woken (T6b3d: the frame's next pass takes them): {}",
 					deferred.empty() ? "-" : deferred);
-				// The walk's rounds and the joins evaluated on the pool, and CS_DCLF_FANOUT_PARITY's comparison.
+				// The walk's rounds and the joins evaluated on the pool.
 				if (const auto fanout = FanoutLine(s); !fanout.empty())
 					logger::info("{}", fanout);
 				// CS_DCLF_RELEASE_GUARD: the engine's last releases on DCLF's threads (any is a defect).
@@ -497,20 +491,6 @@ namespace DCLF::Reports
 			if (stats.decals[0] || stats.decals[1] || stats.decals[2])
 				logger::info("[DCLF] decals (the last pass): {} candidates ({} in the opaque group, {} multi-index layers, {} in the blended group)",
 					stats.decals[0] + stats.decals[1] + stats.decals[2], stats.decals[0], stats.decals[2], stats.decals[1]);
-			if (Diagnostics::Observe().deriveProbe) {
-				std::string bitBreakdown;
-				for (std::uint32_t bit = 0; bit < 32; ++bit) {
-					if (!stats.derivationBitCounts[bit])
-						continue;
-					bitBreakdown += std::format("{} bit {}{}={}", bitBreakdown.empty() ? "" : ",", bit, ((1u << bit) & kRuntimePassBits) ? "*" : "", stats.derivationBitCounts[bit]);
-				}
-				logger::info("[DCLF] derivation (the last pass): {} objects compared, {} would stay native; property bits: {} differ ({:08X}), {} only where the engine's LOD fades ran out; runtime bits: {} differ ({:08X}); per bit (* = runtime):{}",
-					stats.derivationChecked, stats.derivationNative, stats.derivationDiffers, stats.derivationBits, stats.derivationFadeBits,
-					stats.derivationRuntimeDiffers, stats.derivationRuntimeBits, bitBreakdown.empty() ? std::string(" none") : bitBreakdown);
-				logger::info("[DCLF] LOD fades (the last pass): {} objects with a fade node compared; the metric differs from the engine's on {}, the draw's fades on {}{}{}",
-					stats.lodFadeChecked, stats.lodMetricDiffers, stats.lodFadeDiffers, stats.lodFadeFirst.empty() ? "" : "; first: ", stats.lodFadeFirst,
-					stats.lodFadeDiffers ? " <- LOD FADE" : "");
-			}
 			logger::info("[DCLF] derived cache (the last pass): {} served, {} recomputed and compared, {} differ{}; slots alive {} geometries / {} pipelines / {} materials, {} swept, {} geometries refreshed in place, {} slot violations{}",
 				stats.derivedHits, stats.derivedChecked, stats.derivedDiffers, stats.derivedDiffers ? " <- STALE" : "",
 				stats.geometriesAlive, stats.pipelinesAlive, stats.materialsAlive, stats.slotsSwept, stats.geometriesRefreshed,
@@ -527,18 +507,6 @@ namespace DCLF::Reports
 				}
 				if (!techniques.empty())
 					logger::info("[DCLF] left native by technique: {}", techniques);
-			}
-			if (Diagnostics::Observe().coverageProbe)
-				for (const auto& line : std::views::split(Diagnostics::CoverageCensus(s), '\n'))
-					logger::info("{}", std::string_view(line.begin(), line.end()));
-			if (!stats.propertyRejects.empty()) {
-				std::vector<std::pair<const RE::NiRTTI*, std::uint32_t>> sorted(stats.propertyRejects.begin(), stats.propertyRejects.end());
-				std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
-				std::string byProperty;
-				for (const auto& [rtti, count] : sorted)
-					byProperty += fmt::format(" {}={}", rtti && rtti->name ? rtti->name : "?", count);
-				logger::info("[DCLF] left native by property type:{}; {} alpha blended, {} opaque ({} alpha tested)",
-					byProperty, stats.rejectedBlended, stats.rejectedOpaque, stats.rejectedOpaqueAlphaTest);
 			}
 			logger::info("[DCLF] materials (the last pass): {} evaluated; the scene work's last pass (T6b2c step 7): {} captured ({} records rewritten, {} materials held for another evaluation), {} signature samples; slots {} alive (+{} retired on last reference, {} of them a member's)",
 				stats.materialsEvaluated, stats.materialWrites, stats.materialsRewritten, stats.materialsHeld,
@@ -572,30 +540,6 @@ namespace DCLF::Reports
 					replay.parityChecks ? (differ ? " <- REPLAY DIFFERS" : " <- OK") : "");
 				logger::info("[DCLF] retirement (6e E3: nothing freed while a publication names it): {}", s.TakeRetirementReport());
 			}
-			if (Diagnostics::Observe().timeline) {
-				// CS_DCLF_TIMELINE: the frames from an event to the set (the commit to installation is the frame's: its report).
-				auto histogram = [](const auto& a_buckets) {
-					std::string out;
-					for (std::size_t b = 0; b < a_buckets.size(); ++b)
-						if (a_buckets[b])
-							out += fmt::format("{}{}:{}", out.empty() ? "" : " ", Scene::kAgeBucketNames[b], a_buckets[b]);
-					return out.empty() ? std::string("-") : out;
-				};
-				const auto timeline = Diagnostics::TakeTimeline();
-				logger::info("[DCLF] latency (T6b0, frames): {} joins ({} first since tracked), {} bindings; attach to join {}; record to binding {}; record to join {}; "
-							 "a show to its join {}",
-					timeline.joins, timeline.firstJoins, timeline.bound, histogram(timeline.attachToMember), histogram(timeline.writtenToBound),
-					histogram(timeline.writtenToMember), histogram(timeline.showToMember));
-				std::string failures;
-				for (std::size_t w = 1; w < timeline.bindFailures.size(); ++w)
-					if (timeline.bindFailures[w])
-						failures += fmt::format("{}{} {}", failures.empty() ? "" : ", ", PrimaryCull::kSyntheticFailNames[w], timeline.bindFailures[w]);
-				if (!failures.empty())
-					logger::info("[DCLF] membership passes that gave none (T6b0: dropped, bound only when written again): {}; first: {}", failures, timeline.bindFailFirst);
-				logger::info("[DCLF] hidden bit stores (T6b0, shown/hidden): {}", Scene::TakeHiddenSiteReport());
-				if (const auto line = ImportTimingsLine(kInterval); !line.empty())
-					logger::info("{}", line);
-			}
 			{
 				// The scene pass by sub-zone (ScenePart), per whole pass.
 				std::string sceneParts;
@@ -621,16 +565,6 @@ namespace DCLF::Reports
 								 "{} announced again at a newer frame capture{}); {} changed with no event{}{}",
 						stats.verdictsChecked / fullPasses, stats.verdictsSkipped / fullPasses, stats.hiddenEvents / fullPasses, stats.hiddenRetaken / fullPasses,
 						stats.hiddenAheadAnnounced, Scene::HiddenStoresLive() ? "" : ", not installed", stats.verdictsMissed, stats.verdictsMissed ? " <- MISSED; first: " : " <- OK", stats.firstVerdictMissed);
-				if (stats.inputRereads[0] || stats.inputRereads[1]) {
-					std::string components;
-					for (std::size_t i = 0; i < stats.inputChanged.size(); ++i)
-						if (stats.inputChanged[i])
-							components += fmt::format("{}{} {}", components.empty() ? "" : ", ", Scene::Coordinator::kInputComponentNames[i], stats.inputChanged[i]);
-					logger::info("[DCLF] input watch: classify re-reads {:.0f}/pass ({} changed with no event), shading re-reads {:.0f}/pass ({} changed with no event); by component: {}{}{}{}",
-						stats.inputRereads[0] / fullPasses, stats.inputRereadsChanged[0], stats.inputRereads[1] / fullPasses, stats.inputRereadsChanged[1],
-						components.empty() ? "none" : components, stats.inputRereadsChanged[0] || stats.inputRereadsChanged[1] ? " <- MISSED" : " <- OK",
-						stats.firstInputChange.empty() ? "" : "; first: ", stats.firstInputChange);
-				}
 				if (const auto line = PlacementLine(s); !line.empty())
 					logger::info("{}", line);
 				if (Diagnostics::Observe().profile) {

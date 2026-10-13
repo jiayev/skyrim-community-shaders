@@ -1,12 +1,12 @@
+// CS_DCLF_SET_PARITY: the frame's set against what the GPU drew. Each colour epoch's visibility words (its stamps and verdicts) are
+// copied with the CPU's side that explains them, and read three frames later: a member drawn by nobody, an object drawn outside the
+// set, the depth and colour segments disagreeing, the registration hooks' claims against the set, and the gaps.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "DrawsState.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #	include "Events.h"
 #	include "Observers.h"
-
-// CS_DCLF_SET_PARITY: the frame's set against what the GPU drew. Each colour epoch's visibility words (its stamps and verdicts) are
-// copied with the CPU's side that explains them, and read three frames later: a member drawn by nobody, an object drawn outside the
-// set, the depth and colour segments disagreeing, the registration hooks' claims against the set, and the gaps.
 
 namespace DCLF::Diagnostics
 {

@@ -1,3 +1,6 @@
+// FaceSnapshots: the morph-job and stage-join thunks (the engine's face morphing threads) and the head records the coordinator's scene walk
+// keeps; the open-addressed head table they share.
+
 #include "Features/DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
@@ -195,7 +198,7 @@ namespace DCLF
 
 		// A retired record is freed once a morph stage has completed after its retirement: every job that could
 		// have found it belonged to a stage that has joined since.
-		/** @brief a_record's references into released (T6b1b), then the record freed. */
+		/** @brief a_record's references into released, then the record freed. */
 		void Free(Record* a_record)
 		{
 			released.emplace_back(std::move(a_record->head));
@@ -390,7 +393,7 @@ namespace DCLF
 				}
 				if (!d.Insert(a_head, rebuilt)) {
 					d.Free(rebuilt);
-					// T6b3e: the scratch's copies too, into released (the render thread drops them: TakeReleased), never cleared here later
+					// The scratch's copies too, into released (the render thread drops them: TakeReleased), never cleared here later
 					// as the last holders.
 					for (auto& shape : d.scratch)
 						d.released.emplace_back(std::move(shape.shape));

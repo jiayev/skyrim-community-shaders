@@ -1,3 +1,4 @@
+// SceneGraph: the state graph's hooks and the growth producer (preparation pool; `done` on the coordinator lane).
 #include "Features/DrawcallLimitFix/Runtime/SceneGraph.h"
 #include "Features/DrawcallLimitFix/Runtime/SceneExecutor.h"
 

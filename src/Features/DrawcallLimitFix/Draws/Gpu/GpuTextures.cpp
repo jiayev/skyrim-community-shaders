@@ -1,3 +1,5 @@
+// GpuTextures: the registry, the import thread and the samplers (see the header).
+
 #if defined(CS_HAS_RENDER_GRAPH)
 
 // volk must precede every Vulkan header in this translation unit.
@@ -29,7 +31,7 @@ namespace DCLF
 	namespace
 	{
 		// The renderer's sampler states, [address mode][filter mode], selected by the shadow state's
-		// PSTextureAddressMode / PSTextureFilterMode (engine notes: samplers). AE 1.6.1170 only for now.
+		// PSTextureAddressMode / PSTextureFilterMode (engine notes: samplers). AE 1.6.1170 only.
 		constexpr std::uint32_t kAddressModes = 4;
 		constexpr std::uint32_t kFilterModes = 5;
 		constexpr std::uintptr_t kSamplerTableAE = 0x3288210;
@@ -277,7 +279,7 @@ namespace DCLF
 		}
 
 		// The descriptor service: the epoch's while one prepares, else the graph's own, retained (its heap allocation is locked), as
-		// the import thread makes its imports outside any epoch. The lookups are the scene lane's (T6b2c step 5).
+		// the import thread makes its imports outside any epoch. The lookups are the scene lane's.
 		static org::runtime::IDescriptorService* ServiceNow(std::shared_ptr<org::runtime::IDescriptorService>& a_retained)
 		{
 			if (auto* active = org::runtime::GetActiveDescriptorService())

@@ -1,3 +1,7 @@
+// PortalViews: the main camera's and the shadow lights' portal and occluder programs, built on the render thread. Each function names
+// the engine function it ports (AE 1.6.1170); the arithmetic keeps the engine's grouping where it decides a comparison
+// (skyrim-engine-notes.md, "Portals, rooms and occluders").
+
 #include "Features/DrawcallLimitFix/Engine/Views/PortalViews.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
@@ -17,9 +21,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Engine.h"
-
-// The main camera's portal and occluder programs (T5a). Each function names the engine function it ports (AE 1.6.1170); the
-// arithmetic keeps the engine's grouping where it decides a comparison (skyrim-engine-notes.md, "Portals, rooms and occluders").
 
 namespace DCLF
 {
@@ -1281,10 +1282,10 @@ namespace DCLF
 		frame.valid = true;
 		visibleUnbound.store(frame.visibleUnbound, std::memory_order_release);
 		++built;
-		Diagnostics::Notify(Diagnostics::PortalWalkBuilt{});
+		Diagnostics::Notify<Diagnostics::EnginePoint::PortalWalkBuilt>();
 	}
 
-	// ---- A shadow light's rooms (T5a3) ----
+	// ---- A shadow light's rooms ----
 
 	bool PortalViews::ParabolicVisible(const Parabolic& a_parabolic, const void* a_portal)
 	{
@@ -1336,7 +1337,7 @@ namespace DCLF
 			return;
 		}
 		// The light's room process camera (+0x128 -> +0x18): a shadow light's own, set up with the light (an orthographic frustum,
-		// near 0.1; its world-to-camera matrix and viewport as set up), read as a camera, as T2a and T3a read theirs. Before the
+		// near 0.1; its world-to-camera matrix and viewport as set up), read as a camera, as SunViews and LightViews read theirs. Before the
 		// engine has made one, the one FUN_1414a6400 would: the NiCamera constructor's (FUN_140d2afa0, then FUN_140d2c910 at the
 		// identity). The walk puts the light's rotation and position on it.
 		{
@@ -1593,7 +1594,7 @@ namespace DCLF
 			structure.fetch_add(1, std::memory_order_relaxed);
 	}
 
-	// ---- The VisibleSet (T7b3) ----
+	// ---- The VisibleSet ----
 
 	PortalViews::VisibleSet::Answer PortalViews::VisibleSet::Visible(const void* a_key, bool a_previous) const
 	{
@@ -1693,7 +1694,7 @@ namespace DCLF
 		visibleOwned = std::move(set);
 		visibleSet.store(visibleOwned.get(), std::memory_order_seq_cst);
 		visibleGeneration.store(generation, std::memory_order_release);
-		// A reader counted now may hold any retired set; with none, nothing can.
+		// A reader counted at this point may hold any retired set; with none, nothing can.
 		if (visibleReaders.load(std::memory_order_seq_cst) == 0)
 			visibleRetired.clear();
 	}

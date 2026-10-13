@@ -19,8 +19,8 @@ namespace DCLF
 	 * light's accumulation (CalculateActiveShadowCasterLights, one Accumulate per light) culled the object - unless the
 	 * light's +0x61 is clear and the property is landscape (kLandscape 14, kNoLODLandFade 46; BSLightingShaderProperty's
 	 * FUN_14147c340). Light Limit Fix's ShadowBitMask is then the OR of those lights' maskIndex bits (the accumulation's
-	 * order, BSShadowLight +0x520). Since T3b the lights and their mask indices are DCLF's selection's (LightSelection), and each
-	 * shadowmap descriptor's cull is what LightViews computes it tests (Process2: its custom planes, else its frustum).
+	 * order, BSShadowLight +0x520). The lights and their mask indices are DCLF's selection's (LightSelection), and each shadowmap
+	 * descriptor's cull is what LightViews computes it tests (Process2: its custom planes, else its frustum).
 	 */
 	struct LocalShadowLights
 	{
@@ -32,7 +32,7 @@ namespace DCLF
 			float center[3]{};
 			float radius = 0.0f;
 			// Per shadowmap descriptor, its planes ((normal, constant), inside where dot(normal, p) - constant >= 0) and
-			// their active mask: the six its cull tests (the second six unused since T3b: mask 0).
+			// their active mask: the six its cull tests (the second six unused: mask 0).
 			struct Volume
 			{
 				std::array<std::array<float, 4>, 12> planes{};

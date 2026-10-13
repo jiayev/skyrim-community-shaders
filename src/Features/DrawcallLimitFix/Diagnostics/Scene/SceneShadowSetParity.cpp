@@ -1,10 +1,10 @@
+// CS_DCLF_PERSISTENT_PARITY: the shadow dependency index kept by changes against a reconstruction from the same tables (the walk makes the
+// sets whole again on the passes Policy::RebuildShadowSets names).
+
 #include "SceneObservers.h"
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
-
-// CS_DCLF_PERSISTENT_PARITY: the shadow dependency index kept by changes against a reconstruction from the same tables (the walk makes the
-// sets whole again on the passes Policy::RebuildShadowSets names).
 
 namespace DCLF::Diagnostics
 {
@@ -23,9 +23,9 @@ namespace DCLF::Diagnostics
 		};
 		KeptShadowSets kept;  // the coordinator's, between the two hooks
 
-		void OnKept(const ShadowSetsKept& a_event)
+		void OnKept(const On<ScenePoint::ShadowSetsKept>&)
 		{
-			auto& store = a_event.store;
+			auto& store = Scene::Coordinator::Get();
 			const auto& tables = V::tables(store);
 			const auto& stats = V::stats(store);
 			kept.textures = tables.shadowTextureSet;
@@ -42,9 +42,9 @@ namespace DCLF::Diagnostics
 					++kept.staleInputs;
 		}
 
-		void OnRebuilt(const ShadowSetsRebuilt& a_event)
+		void OnRebuilt(const On<ScenePoint::ShadowSetsRebuilt>&)
 		{
-			auto& store = a_event.store;
+			auto& store = Scene::Coordinator::Get();
 			const auto& tables = V::tables(store);
 			const auto& stats = V::stats(store);
 			const auto& textures = kept.textures;
@@ -63,7 +63,7 @@ namespace DCLF::Diagnostics
 
 	void InstallShadowSetParity()
 	{
-		Subscribe<ShadowSetsKept>(OnKept);
-		Subscribe<ShadowSetsRebuilt>(OnRebuilt);
+		Subscribe<ScenePoint::ShadowSetsKept>(OnKept);
+		Subscribe<ScenePoint::ShadowSetsRebuilt>(OnRebuilt);
 	}
 }

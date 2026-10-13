@@ -1,10 +1,10 @@
+// CS_DCLF_PERSISTENT_PARITY: the sun and light candidate tables (kept by changes) against the candidate sets and the dependents as they
+// are, every 60 passes, after each table's update.
+
 #include "SceneObservers.h"
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
-
-// CS_DCLF_PERSISTENT_PARITY: the sun and light candidate tables (kept by changes) against the candidate sets and the dependents as they
-// are, every 60 passes, after each table's update.
 
 namespace DCLF::Diagnostics
 {

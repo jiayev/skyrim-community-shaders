@@ -1,7 +1,7 @@
 #pragma once
 
-// IndirectDraws' capacities and the layouts the GPU reads, which must match the HLSL (BuildDrawsCS, HzbCS,
-// Lighting.hlsl's DCLF paths). Included by Internal.h, after the headers these declarations use.
+// IndirectDraws' capacities and the layouts the GPU reads, which must match the HLSL (BuildDrawsCS, HzbCS, Lighting.hlsl's DCLF
+// paths). Included by Internal.h, after the headers these declarations use.
 
 namespace DCLF::Draws
 {
@@ -9,74 +9,53 @@ namespace DCLF::Draws
 	constexpr const char* kShadowExtensionId = "cs.dclf.shadow";
 	constexpr const char* kReflectionExtensionId = "cs.dclf.reflection";
 	constexpr const char* kFirstPersonExtensionId = "cs.dclf.first-person";
-	// The shadow views' material rows (ShadowMaterialRow): row 0 for every draw without alpha testing, and one per material
-	// of the alpha-tested casters (their texture offset and diffuse). One table for every view, grown when the kept state
-	// needs more rows (GrowableRows), from this many.
+	// The shadow material rows (ShadowMaterialRow): row 0 for non-alpha-tested draws, then one per alpha-tested caster material.
 	constexpr std::uint32_t kShadowMaterialRowsInitial = 256;
-	// Render modes 0xD plain, 0xE clamped, 0xF paraboloid, then one per occlusion view (Records.h, kOcclusionViews:
-	// Skylighting's occlusion map, the precipitation mask; render mode 0x1C both), whose occluders the frame's shadow build
-	// lists too and whose own epoch draws them (ExecuteOcclusion).
+	// Render modes 0xD plain, 0xE clamped, 0xF paraboloid, then one per occlusion view (kOcclusionViews; render mode 0x1C both).
 	constexpr std::uint32_t kFirstOcclusionMode = 3;
 	constexpr std::uint32_t kShadowModeCount = kFirstOcclusionMode + kOcclusionViews;
 	constexpr std::uint32_t kOcclusionRenderMode = 0x1C;
 	inline constexpr bool IsOcclusionMode(std::uint32_t a_mode) { return a_mode >= kFirstOcclusionMode; }
 	inline constexpr std::uint32_t OcclusionOfMode(std::uint32_t a_mode) { return a_mode - kFirstOcclusionMode; }
 	inline constexpr std::uint32_t OcclusionModeOf(std::uint32_t a_view) { return kFirstOcclusionMode + a_view; }
-	// The shadow epoch's view slots (ShadowResources): the occlusion views draw through the first slots (OcclusionSlot), the
-	// frame's shadow views through the slots after them (kFirstShadowViewSlot plus the view's index). There are as many as the frame has views,
-	// grown before its epoch (Impl::ReserveShadowLatch) - the exterior has four (two cascades, twice), an interior two
-	// hemispheres per shadow-casting point light - from this many. Likewise the key slots the pipeline map rows hold
-	// (Lookups::shadowSlotKeys: one per caster key, whatever the render mode, and one per occlusion key).
+	// The shadow epoch's view slots: occlusion views first, then the frame's shadow views (the exterior has four: two cascades,
+	// twice; an interior two hemispheres per shadow-casting point light). These and the following capacities are grown before the
+	// epoch (Impl::ReserveShadowLatch). Key slots: Lookups::shadowSlotKeys, one per caster key, one per occlusion key.
 	constexpr std::uint32_t kInitialShadowViewSlots = 8;
 	inline constexpr std::uint32_t OcclusionSlot(std::uint32_t a_view) { return a_view; }
 	constexpr std::uint32_t kFirstShadowViewSlot = kOcclusionViews;
 	constexpr std::uint32_t kInitialShadowKeySlots = 1024;
-	// And the latch's pipeline map rows (one per view rasterizer state, DrawPipelines::ShadowRasterStateId) and the sun's
-	// full-frustum processes it holds (six and six at the exterior save), grown likewise.
+	// Pipeline map rows (one per view rasterizer state) and the sun's full-frustum processes (six and six at the exterior save).
 	constexpr std::uint32_t kInitialShadowRasterStates = 8;
 	constexpr std::uint32_t kInitialSunProcesses = 8;
-	// The main latch block's cascades (MainLatchLayout), grown by the colour epoch that needs more (two at the exterior save).
+	// The main latch block's cascades (two at the exterior save) and local shadow light volumes (at most three lights a frame).
 	constexpr std::uint32_t kInitialSunCascades = 4;
-	// And its local shadow light volumes (GpuShadowVolume): three lights at most accumulate a frame, a point light's descriptor each.
 	constexpr std::uint32_t kInitialShadowVolumes = 8;
 	constexpr std::uint64_t kShadowConstantBytes = 1ull << 20;
-	// A view slot's blocks, a row of their own table (ShadowResources::viewBlocks): the view's Utility PerTechnique block (b0),
-	// then its VS_PerFrame copy (b12), written by its epoch's commit.
+	// A view slot's blocks (ShadowResources::viewBlocks): Utility PerTechnique (b0), then its VS_PerFrame copy (b12).
 	constexpr std::uint64_t kShadowPerFrameOffset = 256;
 	constexpr std::uint64_t kShadowViewSlotBytes = 256 + 1024;
-	// The shadow constants: the frame record (the shadow draws' textures and samplers, DrawBindings), which the views' push
-	// data names, then the arena's blocks (the zero block, SharedData, FeatureData).
+	// The shadow constants: the frame record (DrawBindings) the views' push data names, then the arena's blocks.
 	constexpr std::uint64_t kShadowFrameRecordOffset = 0;
 	constexpr std::uint64_t kShadowArenaBlocksOffset = 1024;
-	// The arena's blocks at fixed places (ShadowArenaBlocksOf): the zero block first, then SharedData and FeatureData at offsets
-	// CS's block sizes fix, so a revision's shapes name them without a build.
+	// The arena's blocks at fixed places (ShadowArenaBlocksOf: zero block, SharedData, FeatureData), so shapes name them without a build.
 	constexpr std::uint64_t kShadowZeroBlockBytes = 1024;
-	// [0] kSHADOWMAPS_ESRAM (cascades, spot lights), [1] kSHADOWMAPS (point and focus lights), and
-	// [2] kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM, the volumetric lighting copy: the engine's second draw of
-	// each cascade's accumulator, with flag 0x100, draws batch group 15 alone (FUN_1414b44f0) - the passes
-	// registered with accumulation hint 8, which are the volumetric-only casters
-	// (ShadowReject::VolumetricOnly). DCLF's views of it draw those casters alone (kCullVolumetricOnly).
-	// See CaptureShadowView.
-	// [3] depth target 10 as Skylighting swaps it in: its own occlusion map; [4] depth target 10 itself, the precipitation
-	// mask (ExecuteOcclusion, OcclusionDepthTarget).
+	// Depth targets: [0] kSHADOWMAPS_ESRAM (cascades, spot lights), [1] kSHADOWMAPS (point and focus lights), [2]
+	// kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM: the engine's second draw of each cascade's accumulator (flag 0x100) draws batch group 15
+	// alone (FUN_1414b44f0), i.e. the accumulation-hint-8 volumetric-only casters (kCullVolumetricOnly). [3] depth target 10 as
+	// Skylighting swaps it in; [4] depth target 10 itself, the precipitation mask.
 	constexpr std::uint32_t kFirstOcclusionTarget = 3;
 	constexpr std::uint32_t kShadowDepthTargets = kFirstOcclusionTarget + kOcclusionViews;
 	inline constexpr std::uint32_t OcclusionDepthTarget(std::uint32_t a_view) { return kFirstOcclusionTarget + a_view; }
 	inline constexpr bool IsOcclusionTarget(std::uint32_t a_target) { return a_target >= kFirstOcclusionTarget; }
-	// The sequence buffers (BuildDraws' output) have no fixed draw capacity: each is sized, before its epoch, to hold every draw
-	// the scene's tracked objects can produce (SceneDrawBound), growing when that does, and each indirect draw's max count
-	// is its epoch's own bound. They start at these (CS_DCLF_TABLE_START=small: a few). A bound over the device's
-	// maxSequenceCount is a hard failure.
+	// The sequence buffers' start sizes; each grows before its epoch to every draw the tracked objects can produce
+	// (SceneDrawBound). A bound over the device's maxSequenceCount is a hard failure.
 	constexpr std::uint32_t kInitialSequenceDraws = 16384;
 	constexpr std::uint32_t kInitialDecalDraws = 2048;
 	constexpr std::uint64_t kConstantAlignment = 256;  // uniform buffer address alignment (conservative)
 	constexpr std::uint32_t kColorTargets = 8;
-	// The scene tables' first capacities (SceneBuffers), which Impl::ReserveSceneTables grows to what the tables hold, doubling
-	// (CS_DCLF_TABLE_START=small: a few rows each). The object capacity sizes every per-object buffer too: the object records,
-	// the visibility and frustum words (indexed by the object's table index), and the draw inputs - a segment or a shadow mode
-	// has at most one input per object (a cull-only one for a candidate it may not draw), so an input buffer the size of the
-	// object table holds any build's. The geometry rows are the slots' then one per face stream; the extras rows every object's
-	// extras block (the palettes are FrameValues'); the face vertices every face shape's region.
+	// The scene tables' first capacities, doubled by Impl::ReserveSceneTables. The object capacity sizes every per-object buffer,
+	// draw inputs included (a segment or shadow mode has at most one input per object).
 	constexpr std::uint32_t kInitialObjects = 32768;
 	constexpr std::uint32_t kInitialGeometries = 16384;
 	constexpr std::uint32_t kInitialPoolIndices = 1u << 23;  // the shadow views' index pool (IndexPool): 16 MB
@@ -87,48 +66,42 @@ namespace DCLF::Draws
 	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested; a shadow view's [3] outside the sun's entry, [4] small, [5]
 	// under a fading root, [16] of its caster class.
 	constexpr std::uint32_t kCountWords = 40;
-	/** @brief A count buffer's worth of zeros: what an epoch uploads to reset the counters it appends through. */
+	/** @brief Zeros an epoch uploads to reset the counters it appends through. */
 	inline constexpr std::uint32_t kZeroCounts[kCountWords] = {};
-	// The sun's bits on the GPU: the colour dispatch's inputs with kObjectSunTest, and those that missed every cascade.
+	// The sun test (kObjectSunTest): the colour dispatch's tested inputs, and those that missed every cascade.
 	constexpr std::uint32_t kCountSunTestedWord = 23;
 	constexpr std::uint32_t kCountSunMissedWord = 24;
 	// The fade test (kObjectFadeTest): the depth segment's first phase's flagged inputs in the frustum, and those it dropped.
 	constexpr std::uint32_t kCountFadeTestedWord = 25;
 	constexpr std::uint32_t kCountFadeHiddenWord = 26;
-	// Decals: the two groups' slot counts, written by the CPU and read by their draws, then the culling's
-	// own tallies. Byte offsets must match BuildDrawsCS.hlsl.
+	// Decals: the groups' slot counts (written by the CPU, read by their draws), then the culling's tallies. Must match
+	// BuildDrawsCS.hlsl.
 	constexpr std::uint32_t kCountDecalGroupWord = 19;  // group 1 at word 19, group 2 at word 20
 	constexpr std::uint32_t kCountDecalsCulledWord = 21;
 	constexpr std::uint32_t kCountDecalsTestedWord = 22;
 	constexpr std::uint32_t kCountDecalLayerWord = 27;  // group 3 (the multi-index layers)
-	// T7c1: the terrain groups' draws (Records.h, ObjectTerrainGroup), which the colour segment appends to their ranges and their
-	// draws read (zeroed by the colour commit), and the depth segment's first phase's group 1 inputs and those it found near (the
-	// <- TB NEAR observer's). Byte offsets must match BuildDrawsCS.hlsl.
+	// The terrain groups' draws (ObjectTerrainGroup), then depth phase 1's group 1 inputs tested and near. Must match BuildDrawsCS.hlsl.
 	constexpr std::uint32_t kCountTerrainGroupWord = 28;  // group 1 at word 28, group 2 at word 29
 	constexpr std::uint32_t kCountTerrainNearTestedWord = 30;
 	constexpr std::uint32_t kCountTerrainNearWord = 31;
-	// T7d: the forward range's draws (the forward epoch's draw count; zeroed by the colour commit), then the colour segment's forward
-	// inputs it tested, those inside the frustum (the <- FORWARD observer's: what the engine's cull would register) and those the HZB
-	// rejected. Byte offsets must match BuildDrawsCS.hlsl and ForwardSortCS.hlsl.
+	// The forward range's draw count, then forward inputs tested, in the frustum and HZB-rejected. Must match BuildDrawsCS.hlsl
+	// and ForwardSortCS.hlsl.
 	constexpr std::uint32_t kCountForwardWord = 32;
 	constexpr std::uint32_t kCountForwardTestedWord = 33;
 	constexpr std::uint32_t kCountForwardInViewWord = 34;
 	constexpr std::uint32_t kCountForwardOccludedWord = 35;
-	// T7d's refraction: the refraction range's draws (the refraction draw's count; zeroed by the colour commit), then the colour segment's
-	// refraction inputs it tested, those inside the frustum (the <- REFRACTION observer's) and those the HZB or their root's fade rejected.
-	// Byte offsets must match BuildDrawsCS.hlsl.
+	// The refraction range's draw count, then its inputs tested, in the frustum and rejected. Must match BuildDrawsCS.hlsl.
 	constexpr std::uint32_t kCountRefractionWord = 36;
 	constexpr std::uint32_t kCountRefractionTestedWord = 37;
 	constexpr std::uint32_t kCountRefractionInViewWord = 38;
 	constexpr std::uint32_t kCountRefractionOccludedWord = 39;
-	// Byte offsets of the count words the indirect draws read; they must match BuildDrawsCS.hlsl.
+	// Byte offsets of the count words the indirect draws read; must match BuildDrawsCS.hlsl.
 	constexpr std::uint64_t kCountDrawnPhaseTwoBytes = 68;
 	constexpr const char* kBuildDrawsShader = "DrawcallLimitFix/BuildDrawsCS.hlsl";
 	constexpr const char* kHzbShader = "DrawcallLimitFix/HzbCS.hlsl";
 	constexpr const char* kSortSequencesShader = "DrawcallLimitFix/SortSequencesCS.hlsl";
 	constexpr const char* kTreeWindShader = "DrawcallLimitFix/TreeWindCS.hlsl";
-	// TreeWindCS.hlsl's constants: the buffers' indices, the two wind buffers' last. The count, the frame and its inputs are
-	// the frame row (TreeWindFrameRow), which every commit uploads: the invocation is prepared ahead of the commit.
+	// TreeWindCS.hlsl's constants: buffer indices only; per-frame values are the frame row every commit uploads.
 	struct TreeWindConstants
 	{
 		std::uint32_t treesIndex = 0, clocksIndex = 0, frameIndex = 0, padding0 = 0;
@@ -142,20 +115,16 @@ namespace DCLF::Draws
 	struct TreeWindFrameRow
 	{
 		std::uint32_t treeCount = 0, objectCount = 0, frame = 0;
-		std::uint32_t treeSeedsIndex = 0;  // T6b1a: FrameValues::TreeSeedsIndex (the frame's ring buffer)
+		std::uint32_t treeSeedsIndex = 0;  // FrameValues::TreeSeedsIndex (the frame's ring buffer)
 		TreeWindFrame inputs{};
 		std::uint32_t padding2[2]{};
 	};
 	static_assert(sizeof(TreeWindFrameRow) == 64);
 	constexpr std::uint32_t kTreeWindConstantWords = sizeof(TreeWindConstants) / 4;
 	constexpr std::uint32_t kTreeWindGroup = 64;
-	/*
-	 * The foliage record (Policy::RecordFoliagePixels, CS_DCLF_FOLIAGE_PARITY's): the colour pass's alpha-tested draws write each pixel
-	 * they shade - its object (index + 1 in the low 24 bits, the frame's low 8 bits above them, so a pixel no draw wrote this frame reads
-	 * as none) and its albedo and diffuse (RGBA8 each) - into the frame's pair of buffers, by the frame's parity; the observers' compare
-	 * pass (Diagnostics/Draws/Foliage.cpp) reads them against the frame before's.
-	 */
-	// The compare pass's results: kFoliageCounters counters, then the samples, kFoliageSampleWords words each.
+	// The foliage record (Policy::RecordFoliagePixels, CS_DCLF_FOLIAGE_PARITY; Diagnostics/Draws/Foliage.cpp): alpha-tested colour
+	// draws write each shaded pixel's object (index + 1, low 24 bits; the frame's low 8 above) and albedo and diffuse. The compare
+	// pass's results: kFoliageCounters counters, then the samples, kFoliageSampleWords words each.
 	enum FoliageCounter : std::uint32_t
 	{
 		// Against the frame before (a still camera).
@@ -165,8 +134,7 @@ namespace DCLF::Draws
 		kFoliageRecoloured,  // the same object both frames, its albedo or diffuse moved by more than the pass's step
 		kFoliageWhitened,    // ... towards white (every albedo channel at least 0.85, from under 0.6)
 		kFoliageFrameSampleCount,
-		// Within the frame, whatever the camera does: the pixels whose depth an alpha-tested Z-prepass draw wrote (the closest
-		// fragment its alpha test kept: the owner), and of them those the colour pass shaded with no object or another one.
+		// Within the frame: pixels an alpha-tested Z-prepass draw owns, and of them those shaded with no object or another one.
 		kFoliageOwned,
 		kFoliageUnshaded,
 		kFoliageOtherObject,
@@ -174,38 +142,33 @@ namespace DCLF::Draws
 		kFoliageWhiteAlbedo,
 		kFoliageWhiteDiffuse,
 		kFoliageEpochTag,  // the frame's tag, written by the pass
-		// Foliage pixels whose motion vector is more than a pixel (and more than 8) from a static object's: the trees' clocks are
-		// frozen, so the foliage is static.
+		// Foliage pixels whose motion vector is over 1 (and over 8) pixels from a static object's (tree clocks are frozen).
 		kFoliageMotion,
 		kFoliageMotionFar,
 		kFoliageInFrameSampleCount,
 		kFoliageWhiteSampleCount,
-		// Against the frame before, reprojected: the lit colour (diffuse and specular) brighter by more than 0.3 in luminance.
+		// Against the frame before, reprojected: the lit colour brighter by more than 0.3 in luminance.
 		kFoliageBrightened,
-		// Of the owned pixels, terrain LOD's (whose depth the Z-prepass and the colour pass each compute from HighDetailRange),
-		// and of them those left unshaded or shaded with another object.
+		// Of the owned pixels, terrain LOD's, and of them those unshaded or shaded with another object.
 		kFoliageLandOwned,
 		kFoliageLandUnshaded,
 		kFoliageLandOtherObject,
 		kFoliageLandSampleCount,
 		kFoliageCounters = 24
 	};
-	// A sample: x | y << 16, kind (its counter), then by kind - against the frame before: the object, its diffuse, the frame before's
-	// diffuse, its specular, the frame before's specular, its motion vector (half2 pixels); in-frame: the owner, the colour pass's
-	// object, the owner's depth, the albedo (unshaded, another object) or the object, its albedo, the motion vector's error
-	// (float pixels) and the motion vector (motion); near white: the object, its albedo and diffuse.
+	// A sample: x | y << 16, kind (its counter), then by kind - frame before: object, diffuse and previous, specular and previous,
+	// motion (half2); in-frame: owner, colour object, owner depth, albedo, or object, albedo, motion error, motion; near white:
+	// object, albedo, diffuse.
 	constexpr std::uint32_t kFoliageSampleWords = 8, kFoliageFrameSamples = 24, kFoliageInFrameSamples = 32, kFoliageWhiteSamples = 16, kFoliageLandSamples = 16;
 	constexpr std::uint32_t kFoliageFrameSampleBase = 0, kFoliageInFrameSampleBase = kFoliageFrameSampleBase + kFoliageFrameSamples,
 							kFoliageWhiteSampleBase = kFoliageInFrameSampleBase + kFoliageInFrameSamples,
 							kFoliageLandSampleBase = kFoliageWhiteSampleBase + kFoliageWhiteSamples;
 	constexpr std::uint32_t kFoliageResultWords = kFoliageCounters + (kFoliageLandSampleBase + kFoliageLandSamples) * kFoliageSampleWords;
 	constexpr std::uint32_t kFoliageColourWords = 4;  // a pixel's: albedo, diffuse, motion error, motion vector
-	// What the tree buffers hold at first (they double as the scene needs).
+	// The tree buffers' first capacity (doubled as needed).
 	constexpr std::uint32_t kInitialTrees = 1024;
 	constexpr const char* kFadeStateShader = "DrawcallLimitFix/FadeStateCS.hlsl";
-	// Tree LOD's cull (TreeLodCullCS.hlsl; Scene/TreeLod.h), in the depth segment's two phases: the tables' and the latch's
-	// indices, the phase, the retest list's place, and the HZB as BuildDrawsConstants has it; a thread per instance record (phase
-	// 1) or per retest entry (phase 2).
+	// Tree LOD's cull (TreeLodCullCS.hlsl) in the depth segment's two phases: a thread per instance (phase 1) or retest entry (2).
 	constexpr const char* kTreeLodCullShader = "DrawcallLimitFix/TreeLodCullCS.hlsl";
 	struct TreeLodCullConstants
 	{
@@ -216,7 +179,7 @@ namespace DCLF::Draws
 	};
 	constexpr std::uint32_t kTreeLodCullConstantWords = sizeof(TreeLodCullConstants) / 4;
 	constexpr std::uint32_t kTreeLodCullGroup = 64;
-	// What the tree LOD tables hold at first (shape slots, mesh slots); they double as the mirror needs.
+	// The tree LOD tables' first capacities (shape slots, mesh slots), doubled as the mirror needs.
 	constexpr std::uint32_t kInitialTreeLodShapes = 1024, kInitialTreeLodMeshes = 256;
 	constexpr const char* kIndexPoolShader = "DrawcallLimitFix/IndexPoolCS.hlsl";
 	// IndexPoolCS.hlsl's constants: the latch block and its copies' dispatch (ShadowLatchLayout::PoolOffset), the copies, the pool.
@@ -227,8 +190,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kIndexPoolConstantWords = sizeof(IndexPoolConstants) / 4;
 	// The copies' dispatch: a group per copy, rows of IndexPoolCS's kGroupsX.
 	constexpr std::uint32_t kIndexPoolGroupsX = 65535;
-	// FadeStateCS.hlsl's constants: the buffers' indices, the depth segment's latch (its view-projection), the root count, the
-	// scene frame, and the parity log's first root (~0u: no log). The frame's inputs are a buffer (Records.h, FadeFrame).
+	// FadeStateCS.hlsl's constants: the depth latch (view-projection), the parity log's first root (~0u: none). Must match the HLSL.
 	struct FadeStateConstants
 	{
 		std::uint32_t rootsIndex = 0, statesIndex = 0, frameIndex = 0;
@@ -246,8 +208,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kFadeStateConstantWords = sizeof(FadeStateConstants) / 4;
 	constexpr std::uint32_t kFadeStateGroup = 64;
 	constexpr std::uint32_t kInitialFadeRoots = 4096;
-	// VisibilityEventsCS.hlsl (T7b1, CS_DCLF_ACCUMULATED_PARITY): the main camera's per-root and per-object visibility as change
-	// events. Its constants: the buffers' indices, the event list's capacity, and the threads (the root slots, then the object slots).
+	// VisibilityEventsCS.hlsl: per-root and per-object main-camera visibility as change events; threads: root slots, then objects.
 	constexpr const char* kVisibilityEventsShader = "DrawcallLimitFix/VisibilityEventsCS.hlsl";
 	struct VisibilityEventsConstants
 	{
@@ -260,8 +221,8 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kVisibilityEventsConstantWords = sizeof(VisibilityEventsConstants) / 4;
 	constexpr std::uint32_t kVisibilityEventsGroup = 64;
 	/**
-	 * @brief One event of the list (VisibilityEventsCS.hlsl): a slot whose verdict changed from the one last reported. A root's
-	 * generation is its listing's (FadeRootStatic::generation); an object's is 0 (the slot's occupant is the frame's tables').
+	 * @brief One event (VisibilityEventsCS.hlsl): a slot whose verdict changed since last reported. A root's generation is its
+	 * listing's (FadeRootStatic::generation); an object's is 0 (the occupant is the frame's tables').
 	 */
 	struct VisibilityEvent
 	{
@@ -273,9 +234,9 @@ namespace DCLF::Draws
 	static_assert(sizeof(VisibilityEvent) == 16);
 	constexpr std::uint32_t kVisibilityKindRoot = 0, kVisibilityKindObject = 1;
 	constexpr std::uint32_t kVisibilityBitVisible = 1u << 0;   // a root: InView (its kAccumulated); an object: stamped, not fade-hidden
-	constexpr std::uint32_t kVisibilityBitInMargin = 1u << 1;  // reserved: InView against widened planes (not implemented; T7b2 uses the last two frames and listing defaults)
+	constexpr std::uint32_t kVisibilityBitInMargin = 1u << 1;  // reserved: InView against widened planes (unimplemented)
 	constexpr std::uint32_t kVisibilityBitVerdict = 1u << 2;   // a root: FadeStateCS updated its listing this frame (else no DCLF verdict)
-	constexpr std::uint32_t kVisibilityBitFadeHidden = 1u << 3;  // an object: in view, dropped by its root's fade (T7f's dry-run attribution)
+	constexpr std::uint32_t kVisibilityBitFadeHidden = 1u << 3;  // an object: in view, dropped by its root's fade
 	// The list's header: the count appended (past the capacity: what the list grows to), the scene frame; two words spare.
 	constexpr std::uint32_t kVisibilityEventHeaderWords = 4;
 	constexpr std::uint32_t kInitialVisibilityEvents = 4096;
@@ -283,10 +244,9 @@ namespace DCLF::Draws
 	{
 		return (kVisibilityEventHeaderWords + std::uint64_t(a_events) * 4) * sizeof(std::uint32_t);
 	}
-	// HzbCS.hlsl's constants (Internal.h, HzbConstants): the source, its valid and padded extents, the levels written and
-	// their descriptors.
+	// HzbCS.hlsl's constants (PassHelpers.h, HzbConstants): the source, its valid and padded extents, the levels and descriptors.
 	constexpr std::uint32_t kHzbConstantWords = 24;
-	// The levels one single-pass downsample writes (FidelityFX SPD): a 4096-texel domain to one texel.
+	// The levels one single-pass downsample (FidelityFX SPD) writes: a 4096-texel domain to one texel.
 	constexpr std::uint32_t kHzbDispatchMips = 12;
 	// Its group's tile of the source.
 	constexpr std::uint32_t kHzbTile = 64;
@@ -299,46 +259,33 @@ namespace DCLF::Draws
 		std::uint32_t recordIndex;    // DrawBindings record
 		std::uint32_t geometryIndex;  // GeometryDraw
 		std::uint32_t flags;          // object flags, plus kInputDrawable for this epoch
-		/**
-		 * @brief What the object takes part in, per view type (the scene is one, views are masks): its kView* bits, which a view's
-		 * BuildDraws tests against its own (BuildDrawsLatch::viewBits) before anything else; and the keys a view family draws it by
-		 * (U4: the one persistent list). The bound is the placement row's (BindlessPlacement::bound), so a move rewrites no input.
-		 */
+		/** @brief Its kView* bits (tested first against BuildDrawsLatch::viewBits) and the keys each view family draws it by. */
 		struct ViewWords
 		{
 			std::uint32_t mask = 0;
 			std::uint32_t shadowKey = ~0u;                      // a caster's key slot (Lookups::shadowSlots), every caster mode's
 			std::uint32_t occlusionKey[2]{ ~0u, ~0u };        // each occlusion map's key slot
 		} view;
-		// Index into the frame's object table. The two segments emit different subsets in different
-		// orders, so this is what lets the colour segment look up the visibility the depth segment
-		// published for the same object.
+		// Index into the frame's object table: lets the colour segment find the visibility the depth segment published.
 		std::uint32_t objectIndex;
 		std::uint32_t decalOrdinal;  // decals only: the slot in the group's range
-		// Skins of several partitions: bit i draws partition i (Tables::skinPartitions); 0 draws the one
-		// geometry, kNoPartitions nothing. Left 0 by every input that is not a skin. A LOD skin's is every level's
-		// partitions (lodPartitions narrows it).
+		// Skins: bit i draws partition i; 0 draws the one geometry, kNoPartitions nothing. lodPartitions narrows a LOD skin's.
 		std::uint32_t partitions;
-		// The second vertex stream of a face shape (or of a pipeline reading its position from it): the GeometryDraw holding
-		// its positions, which both payloads append after the geometry slots (FaceStreamGeometry), or ~0u.
+		// A face shape's second vertex stream: the GeometryDraw holding its positions (FaceStreamGeometry), or ~0u.
 		std::uint32_t streamIndex = ~0u;
-		// The object's fade root slot (SceneTables::objectFadeRoot; FadeStateCS's state row), ~0u when it has none: the
-		// depth segment's first phase drops it while its root's OnVisible stops, a shadow view while its root fades.
+		// The fade root slot (FadeStateCS's state row), ~0u when none: depth phase 1 drops it while its root's OnVisible stops, a
+		// shadow view while its root fades.
 		std::uint32_t fadeRoot = ~0u;
-		std::uint32_t shadowRow = 0;      // a caster's ShadowMaterialRow (U4: the one persistent list)
-		// A LOD skin's partitions per LOD level (Tables::skinLodPartitions): byte L the mask of level L (0-3), which BuildDraws
-		// picks by its fade root's level in FadeStateCS's state (T1b), in every view; 0: the partitions word as it is.
+		std::uint32_t shadowRow = 0;      // a caster's ShadowMaterialRow
+		// A LOD skin's partitions per level: byte L masks level L (0-3), picked by its fade root's level; 0: partitions as is.
 		std::uint32_t lodPartitions = 0;
-		// kObjectFadeTest (the depth segment's inputs, while the root's state has no OnVisible of the frame before): the
-		// fade-out distance (SceneTables::fadeDistance); the fade node's centre is the object record's.
+		// kObjectFadeTest: the fade-out distance (SceneTables::fadeDistance).
 		float fadeDistance = 0.0f;
 	};
 	static_assert(sizeof(DrawInput) == 64);
-	// BuildDrawsCS.hlsl: set on an input the epoch has built a bindings record for. The depth segment
-	// submits an input for every candidate so the culling covers them all, but builds records only for
-	// the ones it may draw.
+	// An input with a bindings record: the depth segment culls every candidate but records only those it may draw.
 	constexpr std::uint32_t kInputDrawable = 1u << 16;
-	// DrawInput::ViewWords::mask, and a view's BuildDrawsLatch::viewBits: the view types an object takes part in. BuildDrawsCS.hlsl.
+	// DrawInput::ViewWords::mask and BuildDrawsLatch::viewBits: the view types an object takes part in. BuildDrawsCS.hlsl.
 	constexpr std::uint32_t kViewMainCull = 1u << 0;       // a main-camera visibility candidate (the depth segment's inputs)
 	constexpr std::uint32_t kViewMain = 1u << 1;           // drawn by the main camera (the set's main phase)
 	constexpr std::uint32_t kViewSunCaster = 1u << 2;      // the sun's cascades
@@ -347,20 +294,17 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kViewSkyOccluder = 1u << 5;    // Skylighting's occlusion map
 	constexpr std::uint32_t kViewPrecipOccluder = 1u << 6; // the precipitation mask
 	constexpr std::uint32_t kViewReflection = 1u << 7;     // the water reflection's faces
-	constexpr std::uint32_t kViewDecal = 1u << 8;          // a decal: the colour segment's fixed ordinal slots, and no other view's
-	constexpr std::uint32_t kViewForward = 1u << 9;        // T7d: a forward object: the colour segment's forward range, and no other view's
-	constexpr std::uint32_t kViewRefraction = 1u << 10;    // T7d: a refraction object (kRasterRefraction): the refraction range, and no other view's
-	constexpr std::uint32_t kViewFirstPerson = 1u << 11;   // T7e: a first-person member (kSetFirstPerson): the first-person view's alone, no world view's
-	// The main segments' views of the one main list (U4a): the depth segment culls every candidate; the colour segment draws the
-	// members and writes every decal's slot (an undrawable one's blank).
+	constexpr std::uint32_t kViewDecal = 1u << 8;          // a decal: the colour segment's fixed ordinal slots only
+	constexpr std::uint32_t kViewForward = 1u << 9;        // a forward object: the colour segment's forward range only
+	constexpr std::uint32_t kViewRefraction = 1u << 10;    // a refraction object (kRasterRefraction): the refraction range only
+	constexpr std::uint32_t kViewFirstPerson = 1u << 11;   // a first-person member (kSetFirstPerson): the first-person view only
+	// The main segments' views of the one main list: depth culls every candidate; colour draws members and every decal's slot.
 	constexpr std::uint32_t kDepthViewBits = kViewMainCull;
 	constexpr std::uint32_t kColourViewBits = kViewMain | kViewDecal | kViewForward | kViewRefraction;
 	static_assert(offsetof(DrawInput, view) == 16 && offsetof(DrawInput, shadowRow) == 52 && offsetof(DrawInput, fadeDistance) == 60);
-	// The main sequence buffer's ranges (Resources::sequenceDraws, sequenceDecals): phase 1 and the colour segment's draws,
-	// then phase 2's (the CPU records where its draw starts, so the two need ranges fixed in advance rather than one shared
-	// through an atomic counter), then one range per decal group. A decal's sequence goes to the slot of its ordinal in the
-	// engine's draw order (SceneTables::decalOrdinal), so the second pass draws decals in that order every frame; a
-	// culled one is the same sequence with an index count of zero. BuildDrawsConstants carries the bases.
+	// The main sequence buffer's ranges: phase 1 and colour draws, phase 2's (fixed: the CPU records where its draw starts), then
+	// one per decal group. A decal goes to its ordinal's slot in the engine's draw order (SceneTables::decalOrdinal), so decals
+	// keep that order; a culled one has zero indices.
 	constexpr std::uint32_t kDecalGroups = 3;
 	/** @brief The decal ranges (ObjectDecalGroup - 1) in the order the second pass draws them: the engine's geometry groups 3, 2, 4. */
 	constexpr std::array<std::uint32_t, kDecalGroups> kDecalDrawOrder{ 0, 2, 1 };
@@ -368,30 +312,16 @@ namespace DCLF::Draws
 	constexpr std::uint32_t DecalCountWord(std::uint32_t a_range) { return a_range < 2 ? kCountDecalGroupWord + a_range : kCountDecalLayerWord; }
 	/** @brief The main sequence buffer's slots for a_draws per draw range and a_decals per decal group. */
 	constexpr std::uint64_t SequenceSlots(std::uint32_t a_draws, std::uint32_t a_decals) { return 2ull * a_draws + std::uint64_t(kDecalGroups) * a_decals; }
-	/*
-	 * T7c1: the terrain groups' colour draws (Records.h, ObjectTerrainGroup), after the decal groups' opaque ranges and before the
-	 * blended one, each appended through its own count word. They take phase 2's range, which the colour segment does not use
-	 * (the depth segment's draws from it are done by then): group 1 from its start, group 2 after group 1's capacity
-	 * (MainSizing::terrainCapacity: every draw the group's pipeline slots can produce, grown to a power of two past it, and the two
-	 * together within the range: ReserveMainSequences). BuildDraws reads the capacities from its latch (terrainCapacity).
-	 */
+	// The terrain groups' colour draws reuse phase 2's range (the depth segment is done with it): group 1 from its start, group 2
+	// after group 1's capacity (MainSizing::terrainCapacity).
 	constexpr std::uint32_t kTerrainGroups = 2;
-	/*
-	 * T7d: the forward range (Records.h, kObjectForward), after the terrain groups' ranges in phase 2's: first the staging half, which the
-	 * colour segment's BuildDraws appends each visible forward draw to (its view depth in the sequence's firstInstance word, which nothing
-	 * executes there), then the sorted half, which ForwardSortCS fills back to front and the forward epoch draws (MainSizing::
-	 * forwardCapacity each: every draw the forward pipeline slots can produce, grown to a power of two past it; the terrain ranges and
-	 * both halves together within the range: ReserveMainSequences).
-	 */
+	// The forward range, after the terrain ranges: a staging half BuildDraws appends visible forward draws to (view depth in the
+	// unexecuted firstInstance word), then a sorted half ForwardSortCS fills back to front. Each MainSizing::forwardCapacity.
 	constexpr const char* kForwardSortShader = "DrawcallLimitFix/ForwardSortCS.hlsl";
-	/*
-	 * T7d's refraction: the refraction range (Records.h, kRasterRefraction), after the forward range's two halves: every draw the
-	 * refraction pipeline slots can produce (MainSizing::refractionCapacity, grown like the forward range), each a pooled sequence (its
-	 * draw a plain indexed draw from the index pool, its slot its first instance: StoreShadowSequence's) appended by the colour segment's
-	 * BuildDraws, drawn by the forward epoch's RefractionDrawPass into the refraction normals with one plain indexed indirect draw.
-	 */
-	// BuildDrawsLatch::bucketMapOffset's entries: a terrain group 1 slot's bucket (PlanZBuckets), whose twin, the next bucket, takes the
-	// slot's near blocks (BuildDrawsLatch::terrainNear).
+	// The refraction range, after the forward halves: pooled sequences (StoreShadowSequence's) drawn into the refraction normals by
+	// RefractionDrawPass with one plain indexed indirect draw.
+	// BuildDrawsLatch::bucketMapOffset's entries: a terrain group 1 slot's bucket (PlanZBuckets), whose twin (the next bucket) takes
+	// the slot's near blocks (BuildDrawsLatch::terrainNear).
 	constexpr std::uint32_t kBucketTerrainPair = 1u << 31;
 
 #pragma pack(push, 4)
@@ -409,8 +339,8 @@ namespace DCLF::Draws
 #pragma pack(pop)
 	static_assert(sizeof(GeometryDraw) == 40);
 
-	// BuildDrawsCS's push constants: only what is fixed for a pass across executions. The execution's own
-	// values are in its BuildDrawsLatch (below), so the recorded dispatch never changes with the frame.
+	// BuildDrawsCS's push constants: only what is fixed for a pass across executions. Per-execution values are in its
+	// BuildDrawsLatch, so the recorded dispatch never changes with the frame.
 	struct BuildDrawsConstants
 	{
 		std::uint32_t latchIndex;        // the latch block's SRV
@@ -418,8 +348,8 @@ namespace DCLF::Draws
 		std::uint32_t geometriesIndex;
 		std::uint32_t sequencesIndex;
 		std::uint32_t countIndex;
-		// The rows an input's y names (BuildDrawsCS.hlsl, RowsOf): the material rows' table (y's low 20 bits) and, below, the
-		// pipeline rows' (its high 12; stride 0 for the shadow views).
+		// The rows an input's y names (BuildDrawsCS.hlsl, RowsOf): the material rows (y's low 20 bits) and, below, the pipeline
+		// rows (its high 12; stride 0 for the shadow views).
 		std::uint32_t materialRowsAddressLo;
 		std::uint32_t materialRowsAddressHi;
 		std::uint32_t materialRowStride;
@@ -430,47 +360,39 @@ namespace DCLF::Draws
 		std::uint32_t hzbIndex;        // 0 when there is no HZB to test against
 		std::uint32_t hzbSizePacked;   // mip 0: width in the low 16 bits, height in the high 16
 		std::uint32_t hzbMips;
-		// The sort by pipeline (DrawSort): the per-pipeline counts, the unsorted sequences and each one's rank among its
-		// pipeline's. 0 when the dispatch appends into the sequences themselves (phase 2, or the sort off).
+		// The sort by pipeline (DrawSort). 0 when appending into the sequences directly (phase 2, or the sort off).
 		std::uint32_t sortCountsIndex;
 		std::uint32_t sortStagingIndex;
 		std::uint32_t sortRanksIndex;
-		// The sequence buffer's ranges, in sequences: phase 2's first slot (the end of the draws' range, which a draw never
-		// reaches: its epoch's bound fits), the first decal slot, and each decal group's range.
+		// Sequence buffer ranges, in sequences: phase 2's first slot, the first decal slot, each decal group's range.
 		std::uint32_t phaseTwoBase;
 		std::uint32_t decalBase;
 		std::uint32_t decalStride;
 		std::uint32_t pipelineRowStride;
 		std::uint32_t pipelineRowsAddressLo;
 		std::uint32_t pipelineRowsAddressHi;
-		// The depth segment's first phase and the shadow views: the fade roots' static rows (an owned root's members follow its
-		// OnVisible verdict; the states are the latch's, BuildDrawsLatch::fadeStatesIndex). 0 elsewhere.
+		// Depth phase 1 and shadow views: the fade roots' static rows. 0 elsewhere.
 		std::uint32_t fadeRootsIndex;
-		// The depth segment's first phase (the main camera): the portal programs and each fade root's (Records.h, kPortal*), which a
-		// member's bound is tested against after the frustum. 0 elsewhere.
+		// Depth phase 1: the portal programs (kPortal*), tested after the frustum. 0 elsewhere.
 		std::uint32_t portalProgramsIndex;
-		// A shadow view: its slot's bucket counts (ShadowResources::bucketCounts), a word per bucket; the depth segment's phases: theirs
-		// (Resources::zBucketCounts), a word per pipeline slot. 0 elsewhere.
+		// A shadow view's bucket counts, or the depth phases' (a word per pipeline slot). 0 elsewhere.
 		std::uint32_t bucketCountsIndex;
-		// A shadow view and the depth segment: each geometry slot's first index in the index pool (IndexPool::firsts). 0 elsewhere.
+		// Shadow views and the depth segment: each geometry slot's first index in the index pool (IndexPool::firsts). 0 elsewhere.
 		std::uint32_t poolFirstsIndex;
 		std::uint32_t rootProgramsIndex;
-		// T7d, the colour segment: the forward range's staging half (its first slot, past the terrain ranges, and its capacity: PassFrame::
-		// forwardCapacity), which the forward inputs' visible draws are appended to with their view depth. 0 capacity elsewhere.
+		// Colour segment: the forward staging half. 0 capacity elsewhere.
 		std::uint32_t forwardBase;
 		std::uint32_t forwardCapacity;
-		// T7d's refraction, the colour segment: the refraction range's capacity (PassFrame::refractionCapacity; its first slot is right after
-		// the forward halves, forwardBase + 2 * forwardCapacity: RefractionSlot), which the refraction inputs' visible draws are appended
-		// to, pooled (poolFirstsIndex). 0 elsewhere.
+		// Colour segment: the refraction range's capacity (first slot forwardBase + 2 * forwardCapacity). 0 elsewhere.
 		std::uint32_t refractionCapacity;
 	};
 	static_assert(sizeof(BuildDrawsConstants) == 128);
 	constexpr std::uint32_t kBuildDrawsConstantWords = sizeof(BuildDrawsConstants) / 4;
 
 	/**
-	 * @brief One BuildDrawsCS dispatch's values for one execution, in its slot of a latch block
-	 * (org::LatchBlock): written by the render thread in the epoch, read by the dispatch - which takes its
-	 * own group count from the first three words (ExecuteIndirect with a dispatch signature).
+	 * @brief One BuildDrawsCS dispatch's values for one execution, in its slot of a latch block (org::LatchBlock): written by the
+	 * render thread in the epoch; the dispatch takes its group count from the first three words (ExecuteIndirect with a dispatch
+	 * signature).
 	 */
 	struct BuildDrawsLatch
 	{
@@ -480,76 +402,53 @@ namespace DCLF::Draws
 		std::uint32_t visibilityStamp;  // marks the verdicts as this frame's; see BuildDrawsCS.hlsl
 		std::uint32_t hzbUvScalePacked; // rendered area over the area the HZB covers, 16-bit fixed point
 		std::uint32_t cullPlaneMask;    // which of cullPlanes are tested; 0 for the main camera
-		// Row-major, as the shader's float4x4 with mul(M, v), with the camera translation folded in so
-		// that an absolute world position projects directly.
+		// Row-major, as the shader's float4x4 with mul(M, v), camera translation folded in so an absolute world position projects
+		// directly.
 		float viewProj[16];
-		// A shadow view's caster volume as the engine culls it: the view's culling process's custom planes
-		// (NiCullingProcess::customCullPlanes), absolute world space, (normal, constant) with the inside
-		// where dot(normal, p) - constant >= 0.
+		// A shadow view's caster volume as the engine culls it: its culling process's custom planes
+		// (NiCullingProcess::customCullPlanes), absolute world space, (normal, constant), inside where dot(normal, p) - constant >= 0.
 		float cullPlanes[6][4];
-		// A shadow view's row of the pipeline map, in bytes into the latch block: the view's inputs name key
-		// slots, and the row holds each slot's pipeline under the view's rasterizer state. 0 when the inputs
-		// name pipelines themselves (the main camera).
+		// A shadow view's pipeline map row (bytes into the latch block): each key slot's pipeline under its state. 0: main camera.
 		std::uint32_t pipelineMapOffset;
-		// The main colour pass only: kSunTestOn when BuildDraws tests every kObjectSunTest input's bound against the frame's
-		// cascades (sunCascadeOffset; a miss marks the draw kObjectSunMiss). 0 elsewhere.
+		// Colour pass: kSunTestOn to test kObjectSunTest inputs against the cascades (a miss marks kObjectSunMiss).
 		std::uint32_t sunState;
-		// The depth segment: BSTreeNode::OnVisible's height test for the kObjectHeightTest inputs, the base and the
-		// limit (PrimaryCull::TreeHeightTest; +infinity when the test is off). 0 elsewhere.
+		// Depth segment: BSTreeNode::OnVisible's height test (base, limit; +infinity when off).
 		float treeHeight[2];
-		// The depth segment: the main camera's position and LOD factor (NiCamera +0x184), as BSFadeNode::OnVisible
-		// measures a fade root's distance (PrimaryCull::FadeEye), for the kObjectFadeTest inputs. 0 elsewhere.
+		// Depth segment: the camera's position and LOD factor (NiCamera +0x184), as BSFadeNode::OnVisible measures distance.
 		float fadeEye[4];
-		// The colour pass: the frame's sun cascades (a SunRegion of SunAccumulation::GpuCascade), in bytes into the latch block.
+		// Colour pass: the sun cascades (a SunRegion of SunAccumulation::GpuCascade), bytes into the latch block.
 		std::uint32_t sunCascadeOffset;
-		// A view of the sun (kCullSunEntry): the frame's full-frustum culling processes (a SunRegion of SunEntryProcess), in bytes
-		// into the latch block, shared by every sun view of the slot. An input whose entry sphere (its fade row, SetSunEntryRow)
-		// is outside every process is none of the sun's casters. 0: no entry test.
+		// A sun view (kCullSunEntry): the full-frustum processes (SunRegion of SunEntryProcess); an input whose entry sphere is
+		// outside every one is no sun caster. 0: no entry test.
 		std::uint32_t sunEntryOffset;
-		// The colour pass: the frame's local shadow lights (a SunRegion of GpuShadowVolume, LocalShadowLights), in bytes into the
-		// latch block. BuildDraws puts each input's Light Limit Fix shadow mask into its object word (kObjectLocalShadowShift),
-		// which the pixel stage takes for ShadowBitMask and its DefShadow. 0 elsewhere.
+		// Colour pass: the local shadow lights (SunRegion of GpuShadowVolume); BuildDraws writes each input's Light Limit Fix shadow
+		// mask into its object word (kObjectLocalShadowShift) for ShadowBitMask. 0 elsewhere.
 		std::uint32_t localShadowOffset;
-		// A shadow view: its bucket table (ShadowLatchLayout::BucketOffset), in bytes into the latch block. The view's map row
-		// names a bucket per key slot, and the table gives each bucket its range of the slot's sequences (first, capacity),
-		// which one plain indirect draw with the bucket's pipeline executes (ShadowViewPass). 0 elsewhere.
+		// A shadow view: its bucket table (first, capacity per bucket), each bucket drawn by one plain indirect draw. 0 elsewhere.
 		std::uint32_t bucketTableOffset;
-		// The depth segment's first phase and the shadow views: FadeStateCS's states as the frame before published them
-		// (SceneBuffers::FadeStatesReadIndex), whose descriptor depends on the frame and so is the latch's. 0 elsewhere.
+		// Depth phase 1 and shadow views: FadeStateCS's states published the frame before (a per-frame descriptor). 0 elsewhere.
 		std::uint32_t fadeStatesIndex;
-		// The depth segment's second phase: its bucket table (MainLatchLayout::PhaseTwoBucketTableOffset), as bucketTableOffset is
-		// the first phase's. 0 elsewhere.
+		// Depth phase 2: its bucket table (MainLatchLayout::PhaseTwoBucketTableOffset). 0 elsewhere.
 		std::uint32_t phaseTwoBucketTableOffset;
-		// The depth segment's phases: each pipeline slot's bucket (MainLatchLayout::BucketMapOffset), its Z-prepass group's in this
-		// frame's tables, kNoBucket for a slot with none (no published pipeline); a reflection face's, each LOD slot's forward pipeline's bucket
-		// (IndirectDraws::ExecuteReflection). 0 elsewhere.
+		// Depth phases: each pipeline slot's Z-prepass bucket (kNoBucket: none); a reflection face: each LOD slot's. 0 elsewhere.
 		std::uint32_t bucketMapOffset;
-		// The frame's placement rows (FrameValues::PlacementsIndex: StructuredBuffer<BindlessPlacement>): an input's bound, sun entry
-		// and fade node are its object's row, which the frame's values wrote; the descriptor is the frame's (a ring buffer), so the
-		// latch's.
+		// The frame's placement rows (BindlessPlacement: bound, sun entry, fade node); a ring buffer descriptor.
 		std::uint32_t placementsIndex;
-		// Step 6e E4: the payload's buffers this execution reads when they are a payload ring entry (payloadValid; the upload queue
-		// filled it from the frame's publication): its inputs' and geometry table's SRVs and its rows' tables' addresses. 0: the
-		// pass's own (its push constants).
+		// Nonzero when this execution reads a payload ring entry (the fields below); 0: the pass's own buffers.
 		std::uint32_t payloadValid;
 		std::uint32_t inputsIndex;
 		std::uint32_t geometriesIndex;
 		// The view types this dispatch draws (kView*): an input whose mask has none of them is not this view's. 0: no test.
 		std::uint32_t viewBits;
 		std::uint32_t materialRowsLo, materialRowsHi, pipelineRowsLo, pipelineRowsHi;
-		// A focus view (T3c): its target's fade root slot + 1, which an input's root word (+48) must name; kFocusRootNone: a target
-		// that is no listed root (no input's). 0: no test.
+		// A focus view: its target's fade root slot + 1, which an input's root word (+48) must name. 0: no test.
 		std::uint32_t focusRoot;
-		// T6b1a: the frame's fade seeds (FrameValues::FadeSeedsIndex: StructuredBuffer<FadeRootStatic>, FadeSeedRow), the frame's ring
-		// buffer, so the latch's: a root's node values and state seed its first update (FadeStateCS) and the builds' state until it.
+		// The frame's fade seeds (FadeSeedRow): a root's node values and state until its first FadeStateCS update.
 		std::uint32_t fadeSeedsIndex;
-		// T7c1, the colour segment: the terrain groups' ranges past phase 2's base (MainSizing::terrainCapacity, the shape's), group 2's
-		// starting at group 1's capacity. 0 elsewhere.
+		// Colour segment: the terrain groups' capacities past phase 2's base. 0 elsewhere.
 		std::uint32_t terrainCapacity[2];
-		// T7c1, the depth segment while Terrain Blending holds the terrain: its eye (TerrainBlending::eyePosition) and its near distance
-		// (TerrainBlending::kTerrainDepthDistance) in w. A terrain group 1 draw whose bound reaches within it goes to its slot's twin
-		// bucket (kBucketTerrainPair), drawn into Terrain Blending's terrain depth and, offset, into the main depth (MainOpaquePass). w 0:
-		// no terrain test.
+		// Depth segment under Terrain Blending: its eye and near distance in w. A terrain group 1 draw within it goes to its slot's
+		// twin bucket (kBucketTerrainPair), drawn into the terrain depth and, offset, the main depth. w 0: no test.
 		float terrainNear[4];
 	};
 	// BuildDrawsLatch::focusRoot for a target that is no listed root: no input's root word is its - 1.
@@ -564,15 +463,13 @@ namespace DCLF::Draws
 				  offsetof(BuildDrawsLatch, bucketMapOffset) == 248 && offsetof(BuildDrawsLatch, placementsIndex) == 252);
 	// BuildDrawsLatch::bucketMapOffset: a pipeline slot without a bucket (BuildDrawsCS's kNoPipeline).
 	constexpr std::uint32_t kNoBucket = 0xFFFFFFFFu;
-	// T7e's forward part: a first-person forward slot's map word, with its range's table entry in the low bits (BuildDrawsCS's kBucketForward).
+	// A first-person forward slot's map word, its range's table entry in the low bits (BuildDrawsCS's kBucketForward).
 	constexpr std::uint32_t kFirstPersonForwardBucket = 0x40000000u;
 	constexpr std::uint32_t kSunTestOn = 1u << 31;
 
 	/**
-	 * @brief The sun's per-frame plane sets in a latch block, grown with the frame: a 16-byte header (the record count), then the
-	 * records. The sun's full-frustum processes (SunEntryProcess, in the shadow latch block) and its cascades
-	 * (SunAccumulation::GpuCascade, in the main one); neither has a bound in the engine (the processes are the full-frustum
-	 * cull's jobs, the cascades iNumSplits).
+	 * @brief A sun plane set in a latch block (a SunRegion: a 16-byte count header, then records): the full-frustum processes here,
+	 * the cascades (SunAccumulation::GpuCascade) in the main block. The engine bounds neither, so they grow.
 	 */
 	struct SunEntryProcess
 	{
@@ -590,7 +487,7 @@ namespace DCLF::Draws
 		return kSunRegionHeader + a_records * static_cast<std::uint32_t>(sizeof(Record));
 	}
 
-	/** @brief The sun's entry rule, as BuildDrawsCS applies it to the latch's processes: outside every one. */
+	/** @brief The sun's entry rule as BuildDrawsCS applies it: outside every process. */
 	inline bool OutsideSunEntryProcesses(std::span<const SunEntryProcess> a_processes, const float a_entry[4])
 	{
 		if (a_processes.empty())
@@ -609,7 +506,7 @@ namespace DCLF::Draws
 		return true;
 	}
 
-	/** @brief SunAccumulation's sphere test against one cascade (what BuildDrawsCS does). */
+	/** @brief SunAccumulation's sphere test against one cascade (as BuildDrawsCS does it). */
 	inline bool InSunCascade(const SunAccumulation::GpuCascade& a_cascade, const float a_centre[3], float a_radius)
 	{
 		for (std::uint32_t set = 0; set < 2; ++set) {
@@ -626,8 +523,8 @@ namespace DCLF::Draws
 	}
 	/**
 	 * @brief The shadow latch block's region per frame slot: the view slots' latches, a pipeline map row per render mode and view
-	 * rasterizer state (DrawPipelines::ShadowRasterStateId, 1 to rasterStates; MapRowOf), then the sun's full-frustum processes.
-	 * Each dimension is grown before the epoch (Impl::ReserveShadowLatch).
+	 * rasterizer state (DrawPipelines::ShadowRasterStateId, 1 to rasterStates), then the sun's full-frustum processes. Each
+	 * dimension is grown before the epoch (Impl::ReserveShadowLatch).
 	 */
 	struct ShadowLatchLayout
 	{
@@ -638,7 +535,7 @@ namespace DCLF::Draws
 		/** @brief A view's map row: its mode's rows, then its state's (1 to rasterStates). */
 		std::uint32_t MapRowOf(std::uint32_t a_mode, std::uint32_t a_state) const { return a_mode * rasterStates + (a_state - 1); }
 		std::uint32_t SunEntryOffset() const { return MapOffset() + MapRows() * MapRowBytes(); }
-		// A view slot's bucket table (BuildDrawsLatch::bucketTableOffset): (first, capacity) per bucket, at most one a key slot.
+		// A view slot's bucket table (BuildDrawsLatch::bucketTableOffset): (first, capacity) per bucket, at most one per key slot.
 		std::uint32_t BucketTableBytes() const { return keySlots * 2 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 		std::uint32_t BucketOffset(std::uint32_t a_slot) const
 		{
@@ -646,8 +543,7 @@ namespace DCLF::Draws
 		}
 		// The index pool's copies (IndexPool): their dispatch's groups, then their count.
 		std::uint32_t PoolOffset() const { return BucketOffset(viewSlots); }
-		// A view slot's blocks (its view block, then its per-frame block at kShadowPerFrameOffset), as the view-blocks buffer holds
-		// them: the epoch's latched copies (LatchedCopiesPass) copy them there, so the commit records no copy.
+		// A view slot's blocks, copied to the view-blocks buffer by LatchedCopiesPass (the commit records no copy).
 		std::uint32_t ViewBlockOffset(std::uint32_t a_slot) const
 		{
 			const std::uint32_t first = (PoolOffset() + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)) + 255u) & ~255u;
@@ -656,11 +552,9 @@ namespace DCLF::Draws
 		std::uint32_t Bytes() const { return ViewBlockOffset(viewSlots); }
 		bool operator==(const ShadowLatchLayout&) const = default;
 	};
-	/** @brief The main latch block's region per frame slot: the passes' BuildDrawsLatch, then the colour pass's cascades. */
 	/**
-	 * @brief One cull volume of a local shadow light (LocalShadowLights::Light::Volume), as BuildDraws tests an input against it:
-	 * the light's sphere, then a shadowmap descriptor's frustum and custom planes. A light of several descriptors has a record for
-	 * each, with the same mask bit.
+	 * @brief One cull volume of a local shadow light (LocalShadowLights::Light::Volume) as BuildDraws tests it: the light's sphere,
+	 * then a shadowmap descriptor's frustum and custom planes. A light of several descriptors has a record each, same mask bit.
 	 */
 	struct GpuShadowVolume
 	{
@@ -672,43 +566,43 @@ namespace DCLF::Draws
 	};
 	static_assert(sizeof(GpuShadowVolume) == 224);
 
+	/**
+	 * @brief The main latch block's region per frame slot: the passes' BuildDrawsLatch, then the colour pass's cascades and local
+	 * shadow volumes, the Z-prepass's bucket tables and map, and the index pool's copies' dispatch.
+	 */
 	struct MainLatchLayout
 	{
 		std::uint32_t cascades = 0;
 		std::uint32_t shadowVolumes = 0;
-		// The Z-prepass's buckets: one per group of pipeline slots sharing a depth pipeline (IndirectState::zGroups), at most a
-		// slot each, in each phase's table (first, capacity), and the slots' map to them.
+		// Z-prepass buckets: one per group of pipeline slots sharing a depth pipeline (IndirectState::zGroups), in each phase's
+		// table (first, capacity), and the slots' map to them.
 		std::uint32_t buckets = 0;
 		static constexpr std::uint32_t CascadeOffset() { return static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
 		std::uint32_t ShadowVolumeOffset() const { return CascadeOffset() + SunRegionBytes<SunAccumulation::GpuCascade>(cascades); }
 		std::uint32_t BucketTableOffset() const { return ShadowVolumeOffset() + SunRegionBytes<GpuShadowVolume>(shadowVolumes); }
 		std::uint32_t PhaseTwoBucketTableOffset() const { return BucketTableOffset() + buckets * 2 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 		std::uint32_t BucketMapOffset() const { return PhaseTwoBucketTableOffset() + buckets * 2 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
-		// The index pool's copies' dispatch (IndexPool), as the shadow latch has it, for the depth commit's pool update.
+		// The index pool's copies' dispatch (IndexPool), as in the shadow latch, for the depth commit's pool update.
 		std::uint32_t PoolOffset() const { return BucketMapOffset() + buckets * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 		std::uint32_t Bytes() const { return PoolOffset() + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 	};
-	// cullFlags: a clamped shadow view (0xE) pancakes casters in front of its near plane onto it
-	// (Utility.hlsl: RENDER_SHADOWMAP_CLAMPED), so the near plane rejects nothing there.
+	// cullFlags: a clamped shadow view (0xE) pancakes casters in front of its near plane onto it (Utility.hlsl:
+	// RENDER_SHADOWMAP_CLAMPED), so the near plane rejects nothing.
 	constexpr std::uint32_t kCullNoNearPlane = 0x200;
-	// cullFlags: which caster class a shadow view draws (kObjectVolumetricOnly). The shadow list holds both
-	// classes; a view of the volumetric lighting copy draws the volumetric-only casters alone, every other
-	// view of a class-split mode (VolumetricClass) everything else. Neither is set for the main camera, the
-	// paraboloids or the occlusion maps, which draw every class.
+	// cullFlags: which caster class a shadow view draws: the volumetric copy's views only volumetric-only casters, other views of a
+	// class-split mode the rest. Neither for the main camera, paraboloids or occlusion maps.
 	constexpr std::uint32_t kCullCastersOnly = 0x400;
 	constexpr std::uint32_t kCullVolumetricOnly = 0x800;
-	// cullFlags: a view of the sun (its cascades and their volumetric copies), which applies the sun's entry rule (sunEntryOffset).
+	// cullFlags: a sun view (cascades and their volumetric copies): applies the sun's entry rule (sunEntryOffset).
 	constexpr std::uint32_t kCullSunEntry = 0x1000;
-	// cullFlags: Skylighting's size test (Skylighting::OcclusionTechnique), for its occlusion map's view: an input whose bound
-	// radius is 32 or less draws nothing.
+	// cullFlags: Skylighting's size test (Skylighting::OcclusionTechnique) for its occlusion map: bound radius <= 32 draws nothing.
 	constexpr std::uint32_t kCullMinRadius = 0x2000;
-	// cullFlags: the occlusion map's view: an occluder under a fade root BSFadeNode::OnVisible stops at without
-	// cameraRelatedUpdates (Precipitation::SetupMask's cull; FadeStateCS's state) draws nothing, in place of the shadow views'
-	// fading test. Set while the engine's fades are on (0x142032dfd).
+	// cullFlags: occlusion map view: an occluder under a fade root BSFadeNode::OnVisible stops at without cameraRelatedUpdates
+	// (Precipitation::SetupMask's cull; FadeStateCS's state) draws nothing, in place of the shadow views' fading test. Set while the
+	// engine's fades are on (0x142032dfd).
 	constexpr std::uint32_t kCullFadeOnVisible = 0x4000;
-	// The key word a view reads of an input (BuildDrawsCS: KeyWord), in bits 16-17: 0 its pipeline word and its rows' word (the main
-	// segments, the reflection); otherwise a shadow view's, which reads the input's shadowRow for its material row - 1 a caster's key
-	// (DrawInput::ViewWords::shadowKey), 2 and 3 an occlusion map's (occlusionKey[0], [1]).
+	// The key word a view reads (BuildDrawsCS: KeyWord), bits 16-17: 0 pipeline word (main, reflection); 1 shadowKey; 2 and 3
+	// occlusionKey[0], [1].
 	constexpr std::uint32_t kCullKeyShift = 16;
 	constexpr std::uint32_t kCullKeyCaster = 1u << kCullKeyShift;
 }

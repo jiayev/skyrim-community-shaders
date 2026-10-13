@@ -1,3 +1,5 @@
+// FrameSlots.h's functions: the main pass's bindings captured (render thread), the frame textures it binds at t16+, and FrameData's
+// names of the frame-constants buffer's parts.
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 
@@ -51,12 +53,9 @@ namespace DCLF::Draws
 			capture.depth = resource.try_as<ID3D11Texture2D>();
 			depth->Release();
 		}
-		// Community Shaders binds its own per-frame pixel buffers - b5 SharedData and b6 FeatureData -
-		// from Renderer_ResetState, so whether they happen to be bound when this capture is taken
-		// depends on where the engine last reset its state. Skipping DCLF's objects' native draws changes
-		// that, and the objects whose shaders read b5 were then dropped for
-		// missing constants and rendered untextured. They are CS's own buffers with known identities,
-		// so take them from CS instead of from whatever is bound.
+		// Community Shaders binds its own per-frame pixel buffers - b5 SharedData and b6 FeatureData - from Renderer_ResetState, so
+		// whether they are bound when this capture is taken depends on where the engine last reset its state (which the withheld
+		// native draws change). They are CS's own buffers with known identities: taken from CS when the capture lacks them.
 		if (auto* state = globals::state) {
 			auto adopt = [&](std::uint32_t a_slot, ConstantBuffer* a_buffer) {
 				if (capture.psBuffers[a_slot] || !a_buffer || !a_buffer->CB())

@@ -1,3 +1,7 @@
+// The coordinator's frame-dependent constants (scene lane, its frame's FrameGlobals bound): material records refreshed from the
+// captures, frame-sourced components and texture transforms, object extras, technique rows, and the pipeline constants the render
+// thread posts back.
+
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
 
@@ -10,7 +14,7 @@ namespace DCLF::Scene
 {
 	void Coordinator::RefreshMaterialRecords()
 	{
-		// T6b2c step 7: the scene work, its frame's FrameGlobals bound, the captures drained (ApplyEvents): the written materials' records,
+		// The scene work, its frame's FrameGlobals bound, the captures drained (ApplyEvents): the written materials' records,
 		// the frame components, the texture transforms, in that order (a rewrite keeps the slot's frame parts, which the two after bring
 		// to this frame's sources). No engine read: the captures and the frame's sample are the inputs.
 		ZoneScopedN("CS.DCLF.Scene.MaterialRecords");
@@ -143,7 +147,7 @@ namespace DCLF::Scene
 	{
 		// TexcoordOffset: the frame reads one of a material's two buffers (FrameGlobals' textureTransformBuffer, flipped every frame by
 		// Main::Update), and a controller's write captures it (MaterialSources). A material is watched from its capture or keying until two
-		// frames have gone (T6b3d: frames, not passes - the buffer flips once a frame) and both buffers agree; meanwhile its slots take the
+		// frames have gone (frames, not passes: the buffer flips once a frame) and both buffers agree; meanwhile its slots take the
 		// frame's buffer.
 		auto& r = materialRecordStats;
 		const std::uint32_t buffer = FrameGlobals::Current().material.vanilla.textureTransformBuffer & 1;
@@ -179,7 +183,7 @@ namespace DCLF::Scene
 		const auto [material, pass] = tables.materialSlotKey[a_slot];
 		if (!material)
 			return;
-		// T7d's Effect port: an effect record has no signature-sourced component (its pass descriptor's bits are not Lighting's), only its
+		// The Effect port: an effect record has no signature-sourced component (its pass descriptor's bits are not Lighting's), only its
 		// texture transforms.
 		if (a_slot < tables.materials.size() && tables.materials[a_slot].kind == kMaterialKindEffect) {
 			WatchMaterialTransforms(material, a_snapshot);
@@ -312,7 +316,7 @@ namespace DCLF::Scene
 			return false;
 		const auto& object = tables.objects[a_object];
 		const auto* geometry = tables.objectGeometry[a_object];
-		// The records (T6b1b): the slot's property's (its layer's for a layer slot) and the geometry's.
+		// The records: the slot's property's (its layer's for a layer slot) and the geometry's.
 		const auto leaf = geometry ? mirror.Leaf(geometry) : SceneCapture::LeafView{};
 		const auto* property = tables.IsLayer(a_object) ? leaf.layer : leaf.property;
 		if (!geometry || !leaf || !property || (object.flags & kObjectNoBindings))
@@ -402,7 +406,7 @@ namespace DCLF::Scene
 
 	void Coordinator::RefreshTechniqueRows()
 	{
-		// T6b2c: the coordinator's technique rows follow its frame's sample (FrameGlobals, bound to the scene work). The witness is what
+		// The coordinator's technique rows follow its frame's sample (FrameGlobals, bound to the scene work). The witness is what
 		// the rows read of it but the fog (SameTechniqueWitness) and SetupTechniqueDescriptor's bytes; while it holds, every row is
 		// already this sample's. It moves with the loaded grid (terrain LOD's HighDetailRange), the shadow mask target, the INI clamps.
 		const auto& g = FrameGlobals::Current();

@@ -10,13 +10,13 @@
 namespace DCLF
 {
 	/**
-	 * @brief Reports scene graph attachments and detachments from any thread.
+	 * @brief The scene's event stack: scene graph attaches and detaches, the hooks' value updates and LOD gates, from any thread.
 	 *
-	 * The NiNode child-management functions are detoured once. Every attach becomes an
-	 * event holding a reference to the attached subtree; every detach becomes an event
-	 * holding the BSGeometry leaves the subtree contained, collected on the detaching thread
-	 * while the subtree is still intact. Events go onto a lock-free stack and are drained,
-	 * in order, by the render thread.
+	 * The NiNode child-management functions are detoured once. An attach becomes an event holding a reference to the attached subtree
+	 * and, in the world, its records (SceneCapture::CaptureAttached); a detach becomes an event holding the subtree's BSGeometry leaves
+	 * and nodes, collected on the detaching thread while the subtree is still intact. Every event goes onto one lock-free stack, so
+	 * they apply in push order; the coordinator drains it at each scene pass (Coordinator::CollectEvents), and the drained events'
+	 * references are released with their batch on the render thread.
 	 */
 	class SceneTracker
 	{
@@ -25,8 +25,8 @@ namespace DCLF
 		{
 			Attached,
 			Detached,
-			Updated,  // step 6e F3b: a hook's values for the mirror (update), in the same order as the attaches and detaches
-			Gate,     // T6b5: a LOD swap's gate (LodGates::CaptureGate), after the incoming blocks' attaches on the swapping thread
+			Updated,  // a hook's values for the mirror (update), in the same order as the attaches and detaches
+			Gate,     // a LOD swap's gate (LodGates::CaptureGate), after the incoming blocks' attaches on the swapping thread
 		};
 
 		struct Event
@@ -35,8 +35,8 @@ namespace DCLF
 			EventType type = EventType::Attached;
 			RE::NiPointer<RE::NiAVObject> node;    // Attached: the subtree root
 			std::vector<RE::BSGeometry*> removed;  // Detached: geometry leaves (identity only, never dereferenced)
-			// Step 6e F3, the mirror's: an attach in the world, its subtree's and ancestors' records (SceneCapture::CaptureAttached);
-			// a detach in the world, its root and its other nodes (keys).
+			// For the mirror: an attach in the world, its subtree's and ancestors' records (SceneCapture::CaptureAttached); a detach in the
+			// world, its root and its other nodes (keys).
 			std::unique_ptr<SceneCapture::Records> captured;
 			const void* detachedRoot = nullptr;
 			std::vector<const void*> removedNodes;
@@ -44,23 +44,23 @@ namespace DCLF
 			// are planned again (their subtrees changed: Coordinator::sunEntriesForced).
 			std::vector<const void*> ancestors;
 			SceneCapture::Update update;
-			// T6b1b: an update's own references (a leaf update's new properties: what the scene work holds its geometry's by), taken on
-			// the writer's thread. The event's, not the update's: the mirror keeps copies of updates, whose last release would be the
-			// scene work's. Released with the batch, on the render thread.
+			// An update's own references (a leaf update's new properties: what the scene work holds its geometry's by), taken on the
+			// writer's thread, or a Gate's incoming roots. The event's, not the update's: the mirror keeps copies of updates, whose last
+			// release would be the scene work's. Released with the batch, on the render thread.
 			std::vector<RE::NiPointer<RE::NiRefObject>> pins;
-			// T6b3d: the render thread's captures at the frame's start (the category capture's portal roots, the mirror's requests:
+			// The render thread's captures at the frame's start (the category capture's portal roots, the mirror's requests:
 			// PushCaptured), for the mirror alone - in order with the hooks' events, so a capture is never applied over a newer write -
 			// and never a tracking attach or detach.
 			bool mirrorOnly = false;
-			// T6b3d: a mirror request's capture (Coordinator::CaptureMirrorRequests): only the records the mirror lacks are taken from it, as
-			// the capture from the highest ancestor the mirror lacked did before (a record the mirror holds is the events' to keep: the
-			// frame's start can catch an ancestor in a state the engine sets and undoes within the frame, with no event).
+			// A mirror request's capture (FrameView::CaptureMirrorRequests): only the records the mirror lacks are taken from it (a record
+			// the mirror holds is the events' to keep: the frame's start can catch an ancestor in a state the engine sets and undoes within
+			// the frame, with no event).
 			bool mirrorFill = false;
-			// T6b3d: when it was pushed (steady clock, ns) and the render thread's frame then (SceneCapture::Frame): the event-to-
-			// publication and event-to-adoption latencies.
+			// When an event that wakes the scene pass was pushed (steady clock, ns) and the render thread's frame then
+			// (SceneCapture::Frame): the event-to-publication and event-to-adoption latencies.
 			std::uint64_t stampNs = 0;
 			std::uint32_t stampFrame = 0;
-			// T6b5, a Gate's: its token (LodGates', from 1), the incoming roots (the blocks' nodes: keys, each held by a pin in `pins` until
+			// A Gate's: its token (LodGates', from 1), the incoming roots (the blocks' nodes: keys, each held by a pin in `pins` until
 			// the batch is released on the render thread) and the outgoing roots (keys: attached and shown until the flip, held by the engine
 			// side's stolen handles).
 			std::uint64_t gateToken = 0;
@@ -89,12 +89,12 @@ namespace DCLF
 		 * detach let go and an attach took again is never given an earlier object's values. */
 		void PushUpdate(SceneCapture::Update&& a_update, std::vector<RE::NiPointer<RE::NiRefObject>>&& a_pins = {});
 		/**
-		 * @brief T6b3d, render thread: a capture of its own (the frame's start: the category capture's portal roots, the mirror's
+		 * @brief Render thread: a capture of its own (the frame's start: the category capture's portal roots, the mirror's
 		 * requests) onto the same stack, marked mirror-only (Event::mirrorOnly). The stack owns a_event from here.
 		 */
 		void PushCaptured(Event* a_event, bool a_fillOnly = false);
 		/**
-		 * @brief T6b5 (LodGates::CaptureGate): a LOD swap's gate, on the swapping thread under the terrain manager's lock, after the incoming
+		 * @brief LodGates::CaptureGate: a LOD swap's gate, on the swapping thread under the terrain manager's lock, after the incoming
 		 * blocks' attaches (one stack with them: the gate is applied after their captures). The incoming roots are pinned by the event.
 		 */
 		void PushGate(std::uint64_t a_token, std::span<RE::NiAVObject* const> a_incoming, std::span<RE::NiAVObject* const> a_outgoing);

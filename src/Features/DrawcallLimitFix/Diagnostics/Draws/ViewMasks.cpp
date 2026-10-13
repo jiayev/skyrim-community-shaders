@@ -1,11 +1,11 @@
+// CS_DCLF_PERSISTENT_PARITY: every input of a publication's payloads against its object's view mask (ViewMaskOf), and every input of a
+// list against the list's view types (a list holding an object the mask leaves out of it). Run by the builds ahead (one at a time); the
+// report takes the counts.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "DrawsState.h"
 #	include "Events.h"
 #	include "Observers.h"
-
-// CS_DCLF_PERSISTENT_PARITY: every input of a publication's payloads against its object's view mask (ViewMaskOf), and every input of a
-// list against the list's view types (a list holding an object the mask leaves out of it). Run by the builds ahead (one at a time); the
-// report takes the counts.
 
 namespace DCLF::Diagnostics
 {

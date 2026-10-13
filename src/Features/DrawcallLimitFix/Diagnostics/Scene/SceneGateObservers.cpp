@@ -1,11 +1,11 @@
+// The LOD gates' observers (CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY; the normal path trusts the commit): a flip's incoming
+// geometries claimed with the flip's phases and no outgoing one claimed - in the publication its commit made (the coordinator's side of
+// <- GATE HOLE) and in the claims the frame that releases it installed.
+
 #include "SceneObservers.h"
 #include "SceneState.h"
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
-
-// The LOD gates' observers (CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY; the normal path trusts the commit): a flip's incoming
-// geometries claimed with the flip's phases and no outgoing one claimed - in the publication its commit made (the coordinator's side of
-// <- GATE HOLE) and in the claims the frame that releases it installed.
 
 namespace DCLF::Diagnostics
 {
@@ -13,12 +13,12 @@ namespace DCLF::Diagnostics
 	{
 		using V = SceneView;
 
-		void OnFlipsPublished(const GateFlipsPublished& a_event)
+		void OnFlipsPublished(const On<ScenePoint::GateFlipsPublished>&)
 		{
 			// A hole here is the commit's or the revocation's, one only at the release the hand-over's.
 			auto& g = SceneDiagnostics().gates;
-			const auto* claims = V::publicationClaims(a_event.store);
-			for (const auto& flip : V::gateFlipsMade(a_event.store))
+			const auto* claims = V::publicationClaims(Scene::Coordinator::Get());
+			for (const auto& flip : V::gateFlipsMade(Scene::Coordinator::Get()))
 				for (const auto& [geometry, phases] : flip.incoming)
 					if (const std::uint8_t claimed = claims ? claims->PhasesOf(geometry) : std::uint8_t{ 0 }; claimed != phases) {
 						++g.publishHoles;
@@ -50,7 +50,7 @@ namespace DCLF::Diagnostics
 
 	void InstallGateObservers()
 	{
-		Subscribe<GateFlipsPublished>(OnFlipsPublished);
+		Subscribe<ScenePoint::GateFlipsPublished>(OnFlipsPublished);
 		Subscribe<GateReleasing>(OnReleasing);
 	}
 }

@@ -1,12 +1,12 @@
+// The first-person skeleton's claims (CS_DCLF_SET_PARITY), and the water reflection's face cameras (CS_DCLF_SET_PARITY or
+// CS_DCLF_PERSISTENT_PARITY): the face the engine has just drawn, as its accumulator render left it - the bound colour target's face and
+// VS_PerFrame (b12) from the mirror - against DCLF's (ReflectionFaceCamera). Render thread; the reflection report takes the counts.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "DrawsState.h"
 #	include "Events.h"
 #	include "Observers.h"
 #	include "Features/DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
-
-// The first-person skeleton's claims (CS_DCLF_SET_PARITY), and the water reflection's face cameras (CS_DCLF_SET_PARITY or
-// CS_DCLF_PERSISTENT_PARITY): the face the engine has just drawn, as its accumulator render left it - the bound colour target's face and
-// VS_PerFrame (b12) from the mirror - against DCLF's (ReflectionFaceCamera). Render thread; the reflection report takes the counts.
 
 namespace DCLF::Diagnostics
 {

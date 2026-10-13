@@ -11,7 +11,7 @@ apply:
 
 ## What the engine draws: the census (2026-10-03)
 
-`CS_DCLF_LOD_CENSUS=1` (a temporary probe in `Diagnostics/OpenDefectProbes.cpp`) counts two things:
+`CS_DCLF_LOD_CENSUS=1` (a temporary probe in `Diagnostics/Feature/OpenDefectProbes.cpp`) counts two things:
 - every native pass drawn through the batch renderer's two hooked loops (`RenderPassImmediately`), split into the
   depth and colour passes;
 - every shadow-mode registration DCLF does not withhold.
@@ -197,7 +197,7 @@ Measured at `BSDistantTreeShader::SetupGeometry` (a temporary probe), over the t
 
 Under the `lodTrees` toggle (`CS_DCLF_LOD_TREES`, "tree LOD"), on when unset.
 
-- **The tables** (`SceneBuffers`, `Scene/TreeLod.h`). The mirror gives each shape a slot and each mesh (a type's base
+- **The tables** (`SceneBuffers`, `Scene/Ports/TreeLod.h`). The mirror gives each shape a slot and each mesh (a type's base
   shape's renderer data) a slot of its own:
   - a shape row per slot: translation, mesh slot, record count, its type's extent;
   - 75 instance records per slot, the engine's 32-byte records;
@@ -294,7 +294,7 @@ no geometry: it is a compute pass over the main colour and depth. So "the reflec
 
 ### The census
 
-`CS_DCLF_REFLECTION_CENSUS=1` (TEMP, `OpenDefectProbes.cpp`): the engine's pass draw (`FUN_1414f2ad0`) thunked at its six
+`CS_DCLF_REFLECTION_CENSUS=1` (TEMP, `OpenDefectProbes.cpp`; removed in the 2026-10-13 diagnostics trim): the engine's pass draw (`FUN_1414f2ad0`) thunked at its six
 calls and the face render (vfunc `0x35`) flagged. Riverwood by the river, camera turning, 300 frames:
 - **The faces.** 2 a frame (one update a frame), render mode 0. The target is the cube's face, 256x256 `R16G16B16A16_FLOAT`
   (an array of 6), the depth 256x256 `R24G8_TYPELESS`, the viewport 256x256 at depth 0-1. All four INI switches are on

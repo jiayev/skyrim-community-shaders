@@ -9,12 +9,12 @@
 namespace DCLF::SideEffects
 {
 	/**
-	 * @brief The engine side effects of the main camera's cull that DCLF produces once the culls stop (skyrim-engine-notes.md, "Engine
-	 * side effects of the culls (T7a)"). kAccumulated (NiAVObject flag bit 26) is DCLF's own output: VisibilityEventsCS's change events,
+	 * @brief The engine side effects of the main camera's cull that DCLF produces where the culls are stood in for
+	 * (skyrim-engine-notes.md, "Engine side effects of the culls"). kAccumulated (NiAVObject flag bit 26) is DCLF's own output: VisibilityEventsCS's change events,
 	 * read back and decoded (IndirectDraws, VisibilityReadback), written on the roots the cut stands in for at Main::Update's entry
 	 * (IndirectDraws::WriteAccumulated); its observers are Diagnostics::Accumulated's. The actors' animation stamp is here.
 	 *
-	 * The actors' animation rate (skyrim-engine-notes.md, "T7f: the fade nodes' OnVisible stores and the actors' animation stamp"). A
+	 * The actors' animation rate (skyrim-engine-notes.md, "the fade nodes' OnVisible stores and the actors' animation stamp"). A
 	 * high actor whose 3D the actor pre-cull left kNotVisible (bit 20; the race's flag bit 7 clear) animates at full rate in a frame only
 	 * when its skin property (MiddleHighProcessData +0x178) carries that frame's gFrameCounter at +0x80 (Actor::ModifyAnimationUpdateData,
 	 * 0x1406a37ef: the difference must be under fMaxFrameCounterDifferenceToConsiderVisible, so 0). Only the depth and shadow

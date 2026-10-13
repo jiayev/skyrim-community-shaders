@@ -1,14 +1,12 @@
+// The frame's side of the scene revisions, render thread: the build point, the revision inputs it posts (latest wins) and the coverage
+// it decides at FrameDriver::BeginFrame, before the engine draws: which epochs the adopted snapshot's revision covers.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
 namespace DCLF
 {
-	/*
-	 * The frame's side of the scene revisions: the build point, the revision inputs it posts (latest wins) and the coverage it
-	 * decides at BeginSceneFrame, before the engine draws: which epochs the adopted snapshot's revision covers (render thread).
-	 */
-
 	void IndirectDraws::BuildPoint()
 	{
 		auto* host = RenderGraphRuntime::Get().Host();
@@ -23,7 +21,7 @@ namespace DCLF
 		auto& rv = impl->revisions;
 		// Explicit while scene revisions draw: an extension added or removed during a frame waits for this point, so the graph a
 		// frame's revision was recorded on runs through that frame (a build invalidates every recording: the frame after one is the
-		// engine's, DecideCoverage). Without them (or failed), the graph builds at its next submission, as before.
+		// engine's, DecideCoverage). Failed, the graph builds at its next submission.
 		const bool explicitBuilds = !failed;
 		if (rv.explicitBuilds != explicitBuilds) {
 			rv.explicitBuilds = explicitBuilds;
@@ -34,7 +32,7 @@ namespace DCLF
 		impl->ServeRevisionRequests();
 		if (explicitBuilds && host->BuildIfRequested())
 			++rv.builds;
-		// The graph's build and its heaps, the pipelines' generations, the toggles: revision inputs (T6b3b b2a), posted when they moved.
+		// The graph's build and its heaps, the pipelines' generations, the toggles: revision inputs, posted when they moved.
 		impl->PostRevisionInputs();
 		// A live epoch's recording waits for the slot its ready, unsubmitted ticket holds: an epoch the last frame did not submit (no
 		// water in view, a frame without claims) gives that ticket back while a revision waits for recordings, so none waits on it.
@@ -78,7 +76,6 @@ namespace DCLF
 		next.shadowRasterStates = drawPipelines.ShadowRasterStateCount();
 		next.toggles = ActiveToggles();
 		next.togglesGeneration = Toggles::Get().Generation();
-		next.gbufferProbe = Diagnostics::Observe().gbufferProbe;
 		next.claims = !IndirectDraws::Get().Failed();
 		next.shadowCandidates = ShadowViews::Get().Candidates();
 		next.occlusionLayouts = PredictedOcclusion();
@@ -104,7 +101,7 @@ namespace DCLF
 		                  next.buildGeneration == previous.buildGeneration && SameHandle(next.resourceHeap, previous.resourceHeap) &&
 		                  SameHandle(next.samplerHeap, previous.samplerHeap) && next.targetsGeneration == previous.targetsGeneration &&
 		                  next.shadowFormat == previous.shadowFormat && next.shadowRasterStates == previous.shadowRasterStates && next.toggles == previous.toggles &&
-		                  next.togglesGeneration == previous.togglesGeneration && next.gbufferProbe == previous.gbufferProbe && next.claims == previous.claims &&
+		                  next.togglesGeneration == previous.togglesGeneration && next.claims == previous.claims &&
 		                  next.shadowCandidates == previous.shadowCandidates && next.occlusionLayouts == previous.occlusionLayouts &&
 		                  next.shadowPlacements == previous.shadowPlacements && next.mainKnown == previous.mainKnown && next.viewport == previous.viewport &&
 		                  next.blockSizes == previous.blockSizes && next.portalWords == previous.portalWords &&
@@ -116,7 +113,7 @@ namespace DCLF
 		next.generation = previous.generation + 1;
 		postedInputs = next;
 		revisionInputsSlot.Post(std::make_unique<RevisionInputs>(std::move(next)));
-		// T6b3b: the snapshot builder makes its snapshot again for them (a revision of the frame's inputs as they are now).
+		// The snapshot builder makes its snapshot again for them (a revision of the frame's inputs as they are now).
 		(void)SnapshotPump();
 		snapshotInputsMoved.store(true, std::memory_order_release);
 		WakeSnapshotBuilder();
@@ -146,7 +143,7 @@ namespace DCLF
 		const auto versions = versionsFragment ? versionsFragment->Value<VersionSet>() : nullptr;
 		bool snapshot = impl->adoptedSnapshot && impl->adoptedSnapshot->drawsComplete && !impl->snapshotStale;
 		const bool current = host && snapshot && versions && versions->changes == VersionRegistry::Get().changes;
-		// T6b3b, the guard (unconditional, one compare a payload): the adopted draws embed the face positions of the version current now
+		// The guard (unconditional, one compare a payload): the adopted draws embed the face positions of the version current now
 		// (the one the revision names: BuildSnapshotDraws builds them so). A snapshot whose draws embed another would have its vertex
 		// shaders read a version nothing holds: its frames are withdrawn, and the builder makes the snapshot again.
 		if (current && impl->scene && impl->adoptedSnapshot->draws) {
@@ -173,8 +170,8 @@ namespace DCLF
 			}
 		for (std::uint32_t e = 0; e < R::kEpochs; ++e)
 			rv.uncovered[e] += rv.covered[e] ? 0 : 1;
-		// The main epochs decide the frame's claims: without their recordings the frame is the engine's (Coordinator::WithdrawSet).
-		// T7d: with the forward toggle on, the forward epoch's too: its members' passes are withheld with the frame's claims, and only the
+		// The main epochs decide the frame's claims: without their recordings the frame is the engine's (FrameView::WithdrawSet).
+		// With the forward toggle on, the forward epoch's too: its members' passes are withheld with the frame's claims, and only the
 		// forward epoch draws them (a frame without its recording would lose them).
 		const bool main = rv.covered[kDepthShape] && rv.covered[kColourShape] && (!ActiveToggles().forward || rv.covered[Epoch::Forward]);
 		rv.withdrawn += main ? 0 : 1;
@@ -192,7 +189,7 @@ namespace DCLF
 		                    resources->committed[kDepthShape].objectCapacity == resources->objectCapacity;
 		reflection.covered = main && inputs && rv.covered[Epoch::Reflection] && reflection.resources && reflection.resources->target && !host->RebuildRequested();
 		PassCapture::Get().SetReflectionCovered(reflection.covered);
-		// T7e: the first-person members are withheld from the engine (PassCapture) and drawn by the first-person epochs on a frame the engine
+		// The first-person members are withheld from the engine (PassCapture) and drawn by the first-person epochs on a frame the engine
 		// draws first person (the latch), whose claims stand, both epochs' recordings in the revision and the depth copy imported into the
 		// graph as built. Its members need no frame before's inputs: both epochs draw this frame's scene list with this frame's camera.
 		fp.covered = main && ActiveToggles().firstPerson && fp.latch && fp.latchFrame == frame && rv.covered[Epoch::FirstPersonDepth] && rv.covered[Epoch::FirstPersonColour] &&

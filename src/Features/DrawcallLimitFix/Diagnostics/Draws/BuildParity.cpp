@@ -1,12 +1,12 @@
+// CS_DCLF_BUILD_PARITY: every 300th epoch, BuildDraws' output (the sequences, the decal slots, the local shadow lights in the object
+// words) copied to staging and compared three frames later with the CPU's templates.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "DrawsState.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #	include "DrawsView.h"
 #	include "Events.h"
 #	include "Observers.h"
-
-// CS_DCLF_BUILD_PARITY: every 300th epoch, BuildDraws' output (the sequences, the decal slots, the local shadow lights in the object
-// words) copied to staging and compared three frames later with the CPU's templates.
 
 namespace DCLF::Diagnostics
 {
@@ -81,10 +81,8 @@ namespace DCLF::Diagnostics
 			}
 			context->Unmap(parity->count.get(), 0);
 			context->Unmap(parity->sequences.get(), 0);
-			// BuildDraws appends in any order: compare as sets. The key has to be unique per sequence, which
-			// the object index is and the record address is not - once records deduplicate, dozens of
-			// sequences share an address, the sort stops being a total order, and equal-key runs land in
-			// arbitrary relative order on the two sides. That reports mismatches that are not mismatches.
+			// BuildDraws appends in any order: compare as sets, keyed by the object index (unique per sequence; a record address is
+			// shared by every sequence of a deduplicated record, which would leave equal-key runs in arbitrary order on the two sides).
 			// A skin of several partitions writes one sequence per partition, which its index buffer tells apart.
 			// A draw that missed every sun cascade carries kObjectSunMiss in its object word; the CPU's template does not.
 			for (auto& sequence : built)
@@ -95,11 +93,8 @@ namespace DCLF::Diagnostics
 			std::sort(built.begin(), built.end(), byObject);
 			auto& expected = parity->expected;
 			std::sort(expected.begin(), expected.end(), byObject);
-			// What the GPU writes is a SUBSET of the CPU's templates whenever the culling rejects anything, so
-			// this is a subsequence check, not an element-wise one: every sequence BuildDraws wrote must
-			// appear in the CPU list under the same object index, byte for byte. Comparing position by
-			// position instead reported every sequence past the first culled object as differing - a
-			// mismatch that says nothing, on the configuration DCLF actually ships.
+			// What the GPU writes is a subset of the CPU's templates whenever the culling rejects anything, so this is a
+			// subsequence check: every sequence BuildDraws wrote must appear in the CPU list under the same object index, byte for byte.
 			std::size_t differing = 0, missing = 0;
 			std::size_t first = SIZE_MAX, firstExpected = 0;
 			for (std::size_t b = 0, e = 0; b < built.size(); ++b) {
@@ -118,20 +113,14 @@ namespace DCLF::Diagnostics
 				}
 				++e;
 			}
-			++state.sequenceChecks;
 			logger::info("[DCLF] BuildDraws local shadow lights {}: {} draws, {} differ from the CPU's selection{}{}", localDiffering ? "MISMATCH" : "OK",
 				localChecked, localDiffering, localFirst.empty() ? "" : "; first: ", localFirst);
-			if (localDiffering)
-				++state.sequenceMismatches;
 			if (decalSlots)
 				logger::info("[DCLF] BuildDraws decal parity {}: {} slots, {} culled, {} differ", decalDiffering ? "MISMATCH" : "OK", decalSlots, decalCulled, decalDiffering);
-			if (decalDiffering)
-				++state.sequenceMismatches;
 			if (!differing && !missing) {
 				logger::info("[DCLF] BuildDraws parity OK: {} of {} sequences match the CPU templates ({} rejected by the culling)", count, expected.size(),
 					expected.size() - count);
 			} else {
-				++state.sequenceMismatches;
 				logger::warn("[DCLF] BuildDraws parity MISMATCH: GPU wrote {}, CPU templated {} ({} counted culled); {} differ, {} have no template{}", count,
 					expected.size(), culled, differing, missing,
 					first != SIZE_MAX ? fmt::format(" (first: object {}, GPU vs CPU: pipeline {} vs {}, rows {:#x}/{:#x} vs {:#x}/{:#x}, vertices {:#x}/{} vs {:#x}/{}, "

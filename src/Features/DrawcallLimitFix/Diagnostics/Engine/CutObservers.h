@@ -20,8 +20,6 @@ namespace DCLF::Diagnostics::CutObservers
 	 *   - <- LIST FILTER: on the frames the engine builds its scene lists whole (Policy::FilterSceneLists), the roots the filter would
 	 *     have left out must be ones the stand-in does nothing for (the dry run), and the engine's lists must hold DCLF's enumeration;
 	 * - CS_DCLF_FADE_PARITY:
-	 *   - <- FADE VISIBILITY: the engine's cull of an admitted entry with engine-drawn parts against FadeStateCS's test (DCLF's portal
-	 *     program of the root's room);
 	 *   - <- FADE PORT: every 30th frame, up to 64 fade roots, the port against the engine's functions on node copies;
 	 *   - the fade roots' nodes at the list jobs' end every 30th frame, for the fade state's comparison (NodeSnapshot).
 	 */
@@ -41,8 +39,6 @@ namespace DCLF::Diagnostics::CutObservers
 		std::uint64_t filterChecked = 0, filterMissed = 0;
 		std::uint64_t listChecks = 0, listMissing = 0, listExtra = 0;  // missing: the engine's not in DCLF's; extra: DCLF's, not hidden, not the engine's
 		std::string listFirst;
-		std::uint64_t visibilityChecked = 0, visibilityDiffer = 0;
-		std::string visibilityFirst;
 		FadeState::PortCheck fadePort;
 	};
 	Counts Take();

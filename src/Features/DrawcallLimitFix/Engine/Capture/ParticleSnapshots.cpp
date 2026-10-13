@@ -1,3 +1,6 @@
+// ParticleSnapshots: the update-slot thunks (the writer, on whichever thread updates the system), the followed-record table and the
+// producer's expansion into the frame's palettes (FrameValues, on DCLF's pool), FUN_140e51320's port.
+
 #include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"

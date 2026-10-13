@@ -7,16 +7,16 @@
 namespace DCLF
 {
 	/**
-	 * @brief The slots of one of Coordinator's shared tables (geometries, pipelines, materials), whose columns are parallel
-	 * vectors the table grows together (Tables::GeometryColumns, PipelineColumns, MaterialColumns).
+	 * @brief The slots of one of SceneTables' shared tables (geometrySlots, pipelineSlots, materialSlots), whose columns are
+	 * parallel vectors the table grows together. Coordinator thread.
 	 *
 	 * A slot lives while something references it - the objects' records, and for a geometry slot the partition before it
 	 * in a skin's chain - counted from the tables' logs (Coordinator::UpdateSlotReferences), and is freed after the batch
-	 * in which its last reference went (DrainUnreferenced). A slot can also be freed while referenced (its record no
-	 * longer describes anything); its generation then moves on, and every count taken against the old generation lapses
-	 * instead of landing on the slot's next use.
+	 * in which its last reference went (DrainUnreferenced). A slot can also be freed while referenced (its record
+	 * describes nothing); its generation then moves on, and every count taken against the old generation lapses rather than
+	 * landing on the slot's next use.
 	 *
-	 * A freed slot is retiring, not free (step 6e E3): a published version of the tables may still name it. The owner takes the
+	 * A freed slot is retiring, not free: a published version of the tables may still name it. The owner takes the
 	 * retiring slots (TakeRetiring) into its retirement chain and gives each back (Recycle) once no publication that names it lives.
 	 */
 	class SlotTable
@@ -107,9 +107,8 @@ namespace DCLF
 			}
 		}
 		/**
-		 * @brief Consume last-reference events after a complete batch of reference changes.
-		 * No age test or live-slot traversal. References reacquired in the batch cancel
-		 * retirement; generation checks discard events for a reused slot.
+		 * @brief After a complete batch of reference changes: frees each slot whose last reference went (a_onFree first). A
+		 * reference reacquired in the batch cancels the free; a reused slot's stale events are skipped by generation.
 		 */
 		template <class F>
 		std::uint32_t DrainUnreferenced(F&& a_onFree)

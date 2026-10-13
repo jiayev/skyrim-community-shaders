@@ -1,3 +1,6 @@
+// SceneCapture: the record captures, on the capturing thread (a hook's writer, a loader attaching, or the render thread at the frame's
+// start), inside the engine-read window or under the engine call that holds the objects; the drawn-roots set and the counters.
+
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Access/Walkers.h"
 
@@ -43,7 +46,7 @@ namespace DCLF::SceneCapture
 			return entity && entity->motion.type.get() != RE::hkpMotion::MotionType::kFixed;
 		}
 
-		// T6b1a's extras, read on the capturing thread (a hook's or the probe's), never the scene work's.
+		// The records' extras, read on the capturing thread (a hook's or the probe's), never the scene work's.
 		std::int32_t BsxOf(const RE::NiNode& a_node)
 		{
 			static const RE::BSFixedString name{ "BSX" };
@@ -385,11 +388,11 @@ namespace DCLF::SceneCapture
 			CaptureFadeState(a_object, r);
 		if (a_fields & F::kFadeAmount)
 			r.fadeAmount = At<float>(&a_object, 0x100);
-		// T6b1a: a switch's index store or child edit (the caller's node is a switch).
+		// A switch's index store or child edit (the caller's node is a switch).
 		if (a_fields & F::kSwitch)
 			if (const auto* node = object.AsNode())
 				CaptureSwitch(*node, r);
-		// T6b1a: a decal node's array edit.
+		// A decal node's array edit.
 		if ((a_fields & F::kDecals) && IsDecalNode(object))
 			CaptureDecals(a_object, r);
 		return r;
@@ -477,7 +480,7 @@ namespace DCLF::SceneCapture
 			r.vertexCount = shape.vertexCount;
 			r.triangleCount = shape.triangleCount;
 		}
-		// T7e: a particle geometry (NiParticles; its draw, FUN_1414f2ad0 types 1 and 2, builds its vertices from the particle data each
+		// A particle geometry (NiParticles; its draw, FUN_1414f2ad0 types 1 and 2, builds its vertices from the particle data each
 		// draw): its own vertex description and what DCLF's particle path decides by. The particles are ParticleSnapshots', at their writer.
 		if (r.type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles) || r.type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kStripParticles)) {
 			static const REL::Relocation<const RE::NiRTTI*> systemRtti{ RE::NiParticleSystem::Ni_RTTI };
@@ -584,14 +587,14 @@ namespace DCLF::SceneCapture
 				const bool pbr = a_property.flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting) &&
 				                 (feature == RE::BSShaderMaterial::Feature::kDefault || feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend);
 				r.glints = pbr && static_cast<const BSLightingShaderMaterialPBR*>(a_property.material)->glintParameters.enabled;
-				// The land blend's material (WriteObjectExtras: techniques 8 and 19, the landscape materials).
+				// The land blend's material (techniques 8 and 19, the landscape materials).
 				if (feature == RE::BSShaderMaterial::Feature::kMultiTexLand || feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend) {
 					const auto& blend = static_cast<const RE::BSLightingShaderMaterialLandscape*>(material)->landBlendParams;
 					r.landBlend = { blend.red, blend.green, blend.blue, blend.alpha };
 				}
 			}
 		} else if (r.rtti == effectRtti.get()) {
-			// T7d's Effect port: what the effect's descriptor (FUN_1414bde90) and PropertyColor read of the property and its material,
+			// The Effect port: what the effect's descriptor (FUN_1414bde90) and PropertyColor read of the property and its material,
 			// taken here where the property holds the material. GetRenderPasses tests a texture path by its string's pointer
 			// (FUN_140cec900 against null), not by the texture.
 			r.effect = true;
@@ -626,9 +629,9 @@ namespace DCLF::SceneCapture
 			for (const void* property : { g.property, g.layerProperty, g.alpha })
 				if (property)
 					a_pins->emplace_back(static_cast<RE::NiRefObject*>(const_cast<void*>(property)));
-		// T6b3e: the property's fade node too (the scene work's tree and fade-root owners are copies of the entry's: Tracked::fadeNodeRef),
-		// pinned only when it is on the geometry's chain now (the property's field names the BSFadeNode above it; one off the chain is not
-		// known to be alive here).
+		// The property's fade node too (the scene work's tree and fade-root owners are copies of the entry's: Tracked::fadeNodeRef), pinned
+		// only when it is on the geometry's chain (the property's field names the BSFadeNode above it; one off the chain is not known to be
+		// alive here).
 		if (a_pins && g.property)
 			if (const auto* fadeNode = static_cast<const RE::BSShaderProperty*>(g.property)->fadeNode)
 				for (const RE::NiAVObject* at = a_geometry.parent; at; at = at->parent)
@@ -636,7 +639,7 @@ namespace DCLF::SceneCapture
 						a_pins->emplace_back(const_cast<RE::NiAVObject*>(at));
 						break;
 					}
-		// T6b2a: a Lighting (or, T7d, an effect) property's material, for the scene work's records (the property holds it here): an attach's or a swap's
+		// A Lighting (or an effect) property's material, for the scene work's records (the property holds it here): an attach's or a swap's
 		// (a_pins). A material shared by several leaves is pushed by each; the scene work keeps the newest.
 		auto pushMaterial = [&](const PropertyRecord& a_property) {
 			if (a_pins && (a_property.lighting || (a_property.effect && ActiveToggles().effects)) && a_property.material)

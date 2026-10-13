@@ -1,3 +1,5 @@
+// LocalLightCull: the point lights' shadow culls without DCLF's entries (LocalLightCull.h describes it): the frame's exclusion and
+// category filter (render thread), the Process1 skip and NiNode::OnVisible filter inside the lights' culls, and the lights' bits.
 #include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
 #include "Features/DrawcallLimitFix/Engine/Access/Walkers.h"
 
@@ -19,8 +21,6 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/LocalLightCullView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
-
-// The point lights' shadow culls without DCLF's entries: LocalLightCull.h describes it.
 
 namespace DCLF::LocalLightCull
 {
@@ -81,7 +81,7 @@ namespace DCLF::LocalLightCull
 			ankerl::unordered_dense::map<const RE::NiAVObject*, std::shared_ptr<CategoryFilter>> nodes;
 			const SunCandidates* candidates = nullptr;
 			std::uint64_t exclusionVersion = ~0ull;
-			std::uint64_t entriesAppeared = 0;  // Coordinator::GetLightEntriesAppeared at the build
+			std::uint64_t entriesAppeared = 0;  // FrameView::GetLightEntriesAppeared at the build
 		};
 		std::shared_ptr<const Filter> filterBuilt;
 		std::atomic<const Filter*> filterCurrent{ nullptr };  // the detours' (any thread), the built one
@@ -627,7 +627,6 @@ namespace DCLF::Diagnostics
 	using namespace LocalLightCull;
 
 	bool LocalLightCullView::Installed() { return installed; }
-	bool LocalLightCullView::FilterInstalled() { return filterInstalled; }
 	bool LocalLightCullView::CullsWhole() { return cullsWhole.load(std::memory_order_relaxed); }
 	const SunExclusion* LocalLightCullView::FrameExclusion() { return frameExclusion.load(std::memory_order_acquire); }
 	bool LocalLightCullView::Excluded(const SunExclusion& a_exclusion, const void* a_object) { return LocalLightCull::Excluded(a_exclusion, a_object); }

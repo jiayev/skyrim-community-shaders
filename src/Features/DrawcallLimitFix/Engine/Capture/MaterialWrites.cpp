@@ -1,3 +1,5 @@
+// MaterialWrites: the controller and material vtable hooks (on whichever thread runs the engine's update) and their lock-free queues.
+
 #include "Features/DrawcallLimitFix/Engine/Capture/MaterialWrites.h"
 
 #include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
@@ -27,7 +29,7 @@ namespace DCLF::MaterialWrites
 		}
 		EventQueue<const void*, 8192>& ShadingQueue()
 		{
-			// T6b3d: the scene pass drains it (NameShadingEvents) for the next frame's shading sample: per-frame, so it wakes no pass (the next
+			// The scene pass drains it (NameShadingEvents) for the next frame's shading sample: per-frame, so it wakes no pass (the next
 			// frame input's takes it).
 			static EventQueue<const void*, 8192> queue;
 			return queue;
@@ -93,9 +95,9 @@ namespace DCLF::MaterialWrites
 					func(a_this, a_data);
 					if (property->material != material || offset0 != material->texCoordOffset[0] || offset1 != material->texCoordOffset[1] ||
 						scale0 != material->texCoordScale[0] || scale1 != material->texCoordScale[1]) {
-						// T6b2c step 7: the buffers as written, for the scene work's records (its transform watch). The property's material
-						// now: alive, the property holding it (a swap during the update may have let `material` go; its slots follow the
-						// swap's event).
+						// The buffers as written, for the scene work's records (its transform watch). The property's current material:
+						// alive, the property holding it (a swap during the update may have let `material` go; its slots follow the swap's
+						// event).
 						MaterialPort::PushCapture(property->material);
 						ShadowTransformQueue().Push(material);
 					}
@@ -154,7 +156,7 @@ namespace DCLF::MaterialWrites
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		// T7d's Effect port: what an effect controller can write of its property's BSEffectShaderMaterial (0x14150f090, 0x14150f700): the
+		// The Effect port: what an effect controller can write of its property's BSEffectShaderMaterial (0x14150f090, 0x14150f700): the
 		// texture-transform buffers (+0x0c..+0x2c: UV scroll, types 6 and up), the falloff (+0x38..+0x44, types 0-4) and the base colour
 		// (+0x48..+0x54: the colour, type 5's alpha through SetMaterialAlpha).
 		constexpr std::size_t kEffectWrittenFirst = 0x0c, kEffectWrittenEnd = 0x58;
@@ -171,7 +173,8 @@ namespace DCLF::MaterialWrites
 		// writes a property colour (its table 0x1435ef2e8): its shading is resampled.
 		void EffectControllerUpdate(RE::NiTimeController* a_this, bool a_propertyColour, void (*a_func)(RE::NiTimeController*, void*), void* a_data)
 		{
-			// Nothing is captured while the toggle is off: no effect record exists then (a join asks for its material: ServeMaterialRequests).
+			// Nothing is captured while the toggle is off: no effect record exists then (the scene work asks for a material it lacks:
+			// FrameView::ServeMaterialRequests).
 			if (!ActiveToggles().effects) {
 				a_func(a_this, a_data);
 				return;
@@ -278,7 +281,7 @@ namespace DCLF::MaterialWrites
 		stl::write_vfunc<0x27, FloatControllerUpdate>(RE::VTABLE_BSLightingShaderPropertyFloatController[0]);
 		stl::write_vfunc<0x27, ColorControllerUpdate>(RE::VTABLE_BSLightingShaderPropertyColorController[0]);
 		InstallMaterialHooks(Engine::LightingMaterialVtables(), std::make_index_sequence<14>{});
-		// T7d's Effect port: the effect controllers and the effect material's rewrite (installed whatever the toggle; the controllers capture
+		// The Effect port: the effect controllers and the effect material's rewrite (installed whatever the toggle; the controllers capture
 		// nothing while it is off).
 		stl::write_vfunc<0x27, EffectFloatControllerUpdate>(RE::VTABLE_BSEffectShaderPropertyFloatController[0]);
 		stl::write_vfunc<0x27, EffectColorControllerUpdate>(RE::VTABLE_BSEffectShaderPropertyColorController[0]);
@@ -292,7 +295,7 @@ namespace DCLF::MaterialWrites
 			return;
 		if (WritesQueued())
 			GetQueue().Push(a_material);
-		// T6b2a: the material as written, for the scene work's records.
+		// The material as written, for the scene work's records.
 		MaterialPort::PushCapture(a_material);
 	}
 

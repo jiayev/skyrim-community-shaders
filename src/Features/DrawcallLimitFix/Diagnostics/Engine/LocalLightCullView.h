@@ -23,7 +23,6 @@ namespace DCLF::Diagnostics
 	struct LocalLightCullView
 	{
 		static bool Installed();
-		static bool FilterInstalled();
 		/** @brief This frame's culls skip nothing (Policy::FilterLightCulls). */
 		static bool CullsWhole();
 		/** @brief This frame's exclusion, or null. */

@@ -19,8 +19,8 @@ namespace RE
 namespace DCLF
 {
 	/**
-	 * @brief T7e: the particle systems DCLF draws (CS_DCLF_PARTICLES; drawcall-limit-fix.md, "Particles (T7e)"; engine notes, "Particle
-	 * systems"), their state published by the engine's own writer, so that DCLF never reads a system's particle data afterwards.
+	 * @brief The particle systems DCLF draws (CS_DCLF_PARTICLES; drawcall-limit-fix.md, "Particles"; engine notes, "Particle systems"),
+	 * their state published by the engine's own writer, so that DCLF never reads a system's particle data afterwards.
 	 *
 	 * The engine updates a particle system in its update pass (NiParticleSystem::UpdateDownwardPass and UpdateSelectedDownwardPass, vtable
 	 * slots 0x2C/0x2D: its controllers run Do_UpdateSystem, whose modifiers write the NiPSysData arrays and the model bound, then its world
@@ -33,7 +33,7 @@ namespace DCLF
 	 *   record, a triple buffer: the writer fills its slot and exchanges it into `latest`. A record the producer does not follow is not
 	 *   copied (one lookup in an immutable table);
 	 * - the reader: FrameValues' producer (one at a time, on DCLF's pool), for every particle member of the frame's plan, takes the newest
-	 *   snapshot and expands it with the frame's main camera (BeginFrame, at BeginSceneFrame) exactly as FUN_140e51320 does, into the
+	 *   snapshot and expands it with the frame's main camera (BeginFrame, at FrameDriver::BeginFrame) exactly as FUN_140e51320 does, into the
 	 *   member's block of the frame's palettes (five rows a particle: four corners, then the subtexture rect), which Effect.hlsl's DCLF
 	 *   particle permutation pulls by vertex index; and gives the member's placement row the snapshot's world (the model bound centre folded
 	 *   into the translation, as BSEffectShader::SetupGeometry does for particles) and world bound (the GPU cull's).
@@ -85,7 +85,7 @@ namespace DCLF
 			float up[3]{}, right[3]{}, forward[3]{}, eye[3]{};
 			bool valid = false;
 		};
-		/** @brief Render thread, BeginSceneFrame: the frame's main camera (the world scene graph's), and the renderer's quads once. */
+		/** @brief Render thread, FrameDriver::BeginFrame: the frame's main camera (the world scene graph's), and the renderer's quads once. */
 		void BeginFrame();
 		/** @brief Render thread (FrameValues::Kick): BeginFrame's camera. */
 		Camera FrameCamera() const { return frameCamera; }

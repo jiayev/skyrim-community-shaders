@@ -4,13 +4,11 @@
 #include "Features/DrawcallLimitFix/Diagnostics/Feature/OpenDefectProbes.h"
 
 /**
- * @brief Drawcall Limit Fix: replaces the native opaque render loop with GPU-driven indirect draws
- * executed by the render graph on DXVK's Vulkan device.
+ * @brief Drawcall Limit Fix: draws the scene the engine would draw per object with GPU-driven indirect draws, executed by
+ * the render graph on DXVK's Vulkan device (docs/development/drawcall-limit-fix.md, dclf-architecture.md).
  *
- * Phase 2 (this state): static rigid geometry under the Static, Dynamic and MultiBound nodes of attached
- * cells is tracked and turned into tables each frame (Phase 1), and drawn by the render graph with indirect
- * commands into off-screen copies of the main pass's targets (IndirectDraws); the frame itself still comes
- * from the native draws. See docs/development/drawcall-limit-fix.md.
+ * This file is the feature's shell: install, the engine hook thunks, the render-thread lifecycle points (each forwards to
+ * Draws/FrameDriver under a RenderThreadBudget hook), the menu toggle and the settings UI. Render thread unless noted.
  */
 struct DrawcallLimitFix : Feature
 {
@@ -48,13 +46,11 @@ struct DrawcallLimitFix : Feature
 	 * at the pixel, where the opaque pass ends, DCLF on or off.
 	 */
 	void ProbeOpaqueTarget(std::uint32_t a_stage);
-	void ProbeTerrainPass(std::uint32_t a_index, const RE::BSRenderPass* a_pass) { DCLF::ProbeTerrainPassState(Running(), a_index, a_pass); }
 
 	/**
 	 * @brief Main_RenderShadowMaps, before the engine draws the shadow maps: the scene graph and the main
 	 * camera's culling are final, the main accumulator's passes are not yet (their registration jobs run
-	 * concurrently with the shadow draws). The shadow views are drawn between this and EarlyPrepass. The
-	 * scene phase starts here only when Main::Draw's early hook did not start it (BeginSceneFrame).
+	 * concurrently with the shadow draws). The shadow views are drawn between this and EarlyPrepass.
 	 */
 	void BeforeShadowMaps();
 	/** @brief Main_RenderShadowMaps, after the call returned (before EarlyPrepasses). */
@@ -63,11 +59,6 @@ struct DrawcallLimitFix : Feature
 	/** @brief Called after the Lighting shader's SetupGeometry for every native lighting draw. */
 	void OnNativeLightingDraw(RE::BSRenderPass* a_pass, std::uint32_t a_renderFlags);
 
-	/**
-	 * @brief A native draw (State::Draw, the engine's SetDirtyStates, while the hook point is observed): the pass it is in, the shader
-	 * type and its technique, announced (Diagnostics::NativeDraw).
-	 */
-	void NoteNativeDraw(const RE::BSShader* a_shader, std::uint32_t a_pixelDescriptor);
 	/**
 	 * @brief The occlusion maps, drawn by DCLF (Skylighting::RenderOcclusion's variant while DCLF runs;
 	 * docs/development/drawcall-limit-fix.md, "The occlusion maps, drawn by DCLF"): Skylighting's sky map, and the
@@ -89,7 +80,7 @@ struct DrawcallLimitFix : Feature
 	 */
 	bool OcclusionNeedsEngine(OcclusionMap a_map);
 	/**
-	 * @brief T4: once the map's camera is set up (Precipitation's occlusion camera, after its projection: SetupMask or the
+	 * @brief Once the map's camera is set up (Precipitation's occlusion camera, after its projection: SetupMask or the
 	 * projection alone), before its RenderMask, on every frame the map renders: DCLF's view of it, computed from that camera.
 	 */
 	void OcclusionView(OcclusionMap a_map);
@@ -118,9 +109,8 @@ private:
 		 * It is the last point where the world camera is current. In first person the depth pass then draws the
 		 * first-person model with the first-person camera, whose eye is the player's head (posAdjust) and whose
 		 * VS_PerFrame is its own, and leaves both set: Main::Draw restores the world camera only after the depth
-		 * pass returns. A Z-prepass at the end of the depth pass drew the whole world with that camera, and the
-		 * colour epoch, which replays the prepass's vertex inputs, drew nothing either (engine notes: the depth
-		 * pass and first person).
+		 * pass returns, so a Z-prepass at the end of the depth pass would draw the world with the first-person
+		 * camera (skyrim-engine-notes.md, "The depth pass and first person").
 		 */
 		struct Main_RenderDepth_WorldDrawn
 		{
@@ -141,9 +131,9 @@ private:
 
 		/**
 		 * @brief Main::Update's first call (AE 0x140645ea0 +0x3E, FUN_140cfd280: the thread stages' events reset), on the main thread
-		 * before the frame's job lists start (0x14064613f) and after the last frame's cycle was waited for (0x14064694d): T7b2's
-		 * kAccumulated writes and T7b4's fade write-back stores (PrimaryCull::AtUpdateEntry), the one point every reader sees in the
-		 * same frame (skyrim-engine-notes.md, "T7b0").
+		 * before the frame's job lists start (0x14064613f) and after the last frame's cycle was waited for (0x14064694d): the stood-in
+		 * roots' kAccumulated writes and the fade write-back stores (PrimaryCull::AtUpdateEntry), the one point every reader sees in the
+		 * same frame (skyrim-engine-notes.md, "who sets kAccumulated").
 		 */
 		struct Main_Update_Entry
 		{
@@ -163,7 +153,7 @@ private:
 		};
 
 		/**
-		 * @brief T7d: the main pass's blended draw (AE FUN_1414b39d0, BSShaderAccumulator's sorted blended list interleaved with the
+		 * @brief The main pass's blended draw (AE FUN_1414b39d0, BSShaderAccumulator's sorted blended list interleaved with the
 		 * geometry groups' stack, after the deferred composite), at both its call sites in FinishAccumulatingPostResolveDepth's render
 		 * mode 0 (FUN_1414b3390: +0x51, first when the camera is under water; +0x543, after the water otherwise). For the main
 		 * camera's accumulator the forward epoch draws DCLF's blended objects first (IndirectDraws::ExecuteForward).
@@ -176,7 +166,7 @@ private:
 		};
 
 		/**
-		 * @brief T7d's refraction: Main::Draw's refraction point (AE 0x140644d20, its call of FUN_1414b4840: the main accumulator's
+		 * @brief Main::Draw's refraction point (AE 0x140644d20, its call of FUN_1414b4840: the main accumulator's
 		 * geometry group 5 count, which decides whether FUN_1414ce1d0 draws the refraction normals, FUN_1414b4860). When DCLF's forward
 		 * epoch drew them this frame (it marked them begun, so the engine's draw adds to them), group 6 is cleared first: the engine never
 		 * draws it there (the normals are never begun at that point without DCLF), and still clears it, as FUN_1414b4860 does.
@@ -188,7 +178,7 @@ private:
 		};
 
 		/**
-		 * @brief T7e: RenderDepth's first-person draw (AE 0x1414cd47e, RenderDepth +0x94E: FUN_1414a90f0(first-person camera, the Z-prepass's
+		 * @brief RenderDepth's first-person draw (AE 0x1414cd47e, RenderDepth +0x94E: FUN_1414a90f0(first-person camera, the Z-prepass's
 		 * accumulator, 3), after the root's cull with the first-person camera and before kPOST_ZPREPASS_COPY): DCLF's first-person depth
 		 * epoch first (IndirectDraws::ExecuteFirstPersonDepth), then the engine's draw of what it still registers.
 		 */
@@ -199,7 +189,7 @@ private:
 		};
 
 		/**
-		 * @brief T7e: Main::RenderFirstPersonView's accumulator render (AE 0x1414cb7d1, FUN_1414cb6d0 +0x101: FUN_1414a90f0(first-person
+		 * @brief Main::RenderFirstPersonView's accumulator render (AE 0x1414cb7d1, FUN_1414cb6d0 +0x101: FUN_1414a90f0(first-person
 		 * camera, the first-person accumulator, firstPerson << 4 | 0x43), its targets and depth range set): DCLF's first-person colour epoch
 		 * first (IndirectDraws::ExecuteFirstPersonColour), then the engine's residue (effects, particles, anything not DCLF's).
 		 */
@@ -226,8 +216,7 @@ private:
 	bool switchedOn = true;
 	bool Running() const { return installed && switchedOn; }
 
-	// The frame's scene phase (toggles, scene events, then Coordinator's scene half), from Main::Draw's early
-	// hook. Returns Running().
+	// The frame's start, from Main::Draw's early hook (FrameDriver::BeginFrame). Returns Running().
 	bool BeginSceneFrame();
 	// Off when the menu's toggle is off or the feature is unloaded (Feature::loaded, which the remote toggle
 	// flips): either way nothing may keep drawing, skipping or withholding.
@@ -236,5 +225,5 @@ private:
 	// Why DCLF is off for the session (not AE, or the render graph could not come up); shown in the menu.
 	std::string unavailableReason;
 	bool inDepthPass = false;
-	bool depthControlDriven = false;  // T7e: RenderDepth's second argument (the first-person depth range's choice)
+	bool depthControlDriven = false;  // RenderDepth's second argument (the first-person depth range's choice)
 };

@@ -1,3 +1,7 @@
+// The shadow epochs' checks (render thread): DCLF's views against the engine's (the viewport, eye, matrices and caster volume at each
+// view's draw, the predicted target, the occlusion maps' views, the sun's full-frustum processes), the sun entry test on the GPU against
+// the CPU's, and the index pool's ranges against the tables.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "DrawsState.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -5,11 +9,6 @@
 #	include "Events.h"
 #	include "Observers.h"
 #	include "Features/DrawcallLimitFix/Diagnostics/Engine/ShadowViewTally.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Engine/SunCasters.h"
-
-// The shadow epochs' checks (render thread): DCLF's views against the engine's (the viewport, eye, matrices and caster volume at each
-// view's draw, the predicted target, the occlusion maps' views, the sun's full-frustum processes), the sun views' culling against the
-// engine's cascade culls, the sun entry test on the GPU against the CPU's, and the index pool's ranges against the tables.
 
 namespace DCLF::Draws
 {
@@ -21,45 +20,6 @@ namespace DCLF::Draws
 
 namespace DCLF::Diagnostics
 {
-	namespace
-	{
-		/** @brief BuildDrawsCS's Culled, on the CPU: the latch's planes, then its view-projection's frustum over the bound's box. */
-		bool CulledByLatch(const BuildDrawsLatch& a_latch, const RE::NiBound& a_bound, std::string* a_why = nullptr)
-		{
-			const float c[3] = { a_bound.center.x, a_bound.center.y, a_bound.center.z };
-			const float r = a_bound.radius;
-			for (std::uint32_t p = 0; p < 6; ++p)
-				if ((a_latch.cullPlaneMask & (1u << p)) &&
-					a_latch.cullPlanes[p][0] * c[0] + a_latch.cullPlanes[p][1] * c[1] + a_latch.cullPlanes[p][2] * c[2] - a_latch.cullPlanes[p][3] < -r) {
-					if (a_why)
-						*a_why = fmt::format("cull plane {} of mask {:#x}, distance {:.0f}", p, a_latch.cullPlaneMask,
-							a_latch.cullPlanes[p][0] * c[0] + a_latch.cullPlanes[p][1] * c[1] + a_latch.cullPlanes[p][2] * c[2] - a_latch.cullPlanes[p][3]);
-					return true;
-				}
-			const bool noNear = (a_latch.cullFlags & kCullNoNearPlane) != 0;
-			bool out[6] = { true, true, true, true, true, true };
-			for (std::uint32_t corner = 0; corner < 8; ++corner) {
-				const float x = c[0] + ((corner & 1) ? r : -r), y = c[1] + ((corner & 2) ? r : -r), z = c[2] + ((corner & 4) ? r : -r);
-				float clip[4];
-				for (std::uint32_t row = 0; row < 4; ++row)
-					clip[row] = a_latch.viewProj[row * 4 + 0] * x + a_latch.viewProj[row * 4 + 1] * y + a_latch.viewProj[row * 4 + 2] * z + a_latch.viewProj[row * 4 + 3];
-				out[0] = out[0] && clip[0] < -clip[3];
-				out[1] = out[1] && clip[0] > clip[3];
-				out[2] = out[2] && clip[1] < -clip[3];
-				out[3] = out[3] && clip[1] > clip[3];
-				out[4] = out[4] && clip[2] < 0 && !noNear;
-				out[5] = out[5] && clip[2] > clip[3];
-			}
-			if (a_why)
-				for (std::uint32_t side = 0; side < 6; ++side)
-					if (out[side]) {
-						*a_why = fmt::format("clip side {} (near plane {})", side, noNear ? "off" : "on");
-						break;
-					}
-			return out[0] || out[1] || out[2] || out[3] || out[4] || out[5];
-		}
-	}
-
 	void CheckIndexPool(const IndexPoolUpdated& a_updated)
 	{
 		// Every range against its slot's buffer as the tables have it now (a slot whose buffer changed with no log entry would keep
@@ -302,160 +262,6 @@ namespace DCLF::Diagnostics
 			const bool cpu = OutsideSunEntry(payload.inputs, tablesNow, input.objectIndex);
 			++a_latched.stats.sunEntryChecks;
 			a_latched.stats.sunEntryMismatches += cpu != OutsideSunEntryProcesses(payload.inputs.sunEntryProcesses, placements[input.objectIndex].sunEntry) ? 1 : 0;
-		}
-	}
-
-	void CheckCascadeCulling(const ShadowViewLatched& a_latched)
-	{
-		// A sun view's culling against the engine's own cascade cull of the same frame: every caster of the set the engine's cull of the
-		// view's cascade reached (SunCasters::Claimed) must pass the view's latch, or it is drawn by nobody - the engine skips it as the
-		// set's, and DCLF's view rejects it.
-		const auto& a_view = a_latched.view;
-		const auto& a_latch = a_latched.latch;
-		const std::uint32_t a_frame = a_latched.frame;
-		const auto& a_payload = a_latched.payload;
-		auto& s = DrawsState::Get().cascadeCulling;
-		auto& checks = s.checks;
-		auto& registered = s.registered;
-		auto& rejected = s.rejected;
-		auto& offscreen = s.offscreen;
-		auto& first = s.first;
-		if (!a_view.sunView || a_view.casterClass != 0)
-			return;
-		std::uint32_t frame = 0;
-		const auto& registrations = SunCasters::Claimed(frame);
-		if (frame != a_frame)
-			return;
-		const auto* shadowView = ShadowViews::Get().At(a_view.viewId);
-		if (!shadowView)
-			return;
-		++checks;
-		for (const auto& registration : registrations) {
-			if (registration.descriptor != shadowView->descriptor || !registration.geometry)
-				continue;
-			++registered;
-			std::string why;
-			if (CulledByLatch(a_latch, registration.geometry->worldBound, &why)) {
-				// Wholly past a side of the view's own projection (the bound's box against its clip x or y): the engine's looser sphere
-				// cull registers it, but its draw would write no texel either. Not a caster nobody draws.
-				if (why.starts_with("clip side 0") || why.starts_with("clip side 1") || why.starts_with("clip side 2") || why.starts_with("clip side 3")) {
-					++offscreen;
-					continue;
-				}
-				++rejected;
-				if (first.empty()) {
-					const auto& b = registration.geometry->worldBound;
-					first = fmt::format("'{}' in cascade {} (view {}), bound ({:.0f} {:.0f} {:.0f}) r {:.0f}: {}", registration.geometry->name.c_str() ? registration.geometry->name.c_str() : "?",
-						shadowView->descriptor, a_view.viewId, b.center.x, b.center.y, b.center.z, b.radius, why);
-				}
-			}
-		}
-		// The other direction: what the view draws that covers most of the map at the light's near plane (a caster in front of
-		// everything), and anything drawn whose world transform is far from its own bound. From the rows the GPU reads.
-		{
-			const auto& records = DrawsView::Get().objectStore.records.Get();
-			static const std::vector<BindlessPlacement> kNone;
-			const auto* frameRows = FrameValues::Get().RowsIfDone();
-			const auto& placements = frameRows ? *frameRows : kNone;
-			const auto& tablesNow = Scene::FrameView::Get().GetTables();
-			ankerl::unordered_dense::set<const RE::BSGeometry*> reached;
-			for (const auto& registration : registrations)
-				if (registration.descriptor == shadowView->descriptor)
-					reached.insert(registration.geometry);
-			struct Cover
-			{
-				float area;
-				std::uint32_t object;
-				float maxZ;
-			};
-			std::vector<Cover> covers;
-			std::uint32_t drawn = 0, farWorld = 0, staleBuffers = 0;
-			std::string farFirst, staleFirst;
-			a_payload.ForEachInput(a_view.modeIndex, [&](const DrawInput& a_input) {
-				const std::uint32_t object = a_input.objectIndex;
-				if (object >= placements.size() || (a_input.flags & kObjectVolumetricOnly) || OutsideSunEntry(a_payload.inputs, tablesNow, object))
-					return;
-				const auto& placement = placements[object];
-				RE::NiBound bound;
-				bound.center = { placement.bound[0], placement.bound[1], placement.bound[2] };
-				bound.radius = placement.bound[3];
-				if (CulledByLatch(a_latch, bound))
-					return;
-				++drawn;
-				// The geometry row the draw pulls from against the buffers the object's TriShape holds now.
-				if (const auto* geometry = object < tablesNow.objectGeometry.size() ? tablesNow.objectGeometry[object] : nullptr;
-					geometry && !geometry->GetGeometryRuntimeData().skinInstance && a_input.geometryIndex < tablesNow.geometries.size() &&
-					a_input.geometryIndex < tablesNow.geometryLayerKey.size() && !tablesNow.geometryLayerKey[a_input.geometryIndex]) {
-					const auto* triShape = geometry->GetGeometryRuntimeData().rendererData;
-					const auto& row = tablesNow.geometries[a_input.geometryIndex];
-					if (triShape && (reinterpret_cast<ID3D11Buffer*>(triShape->vertexBuffer) != row.vertexBuffer || reinterpret_cast<ID3D11Buffer*>(triShape->indexBuffer) != row.indexBuffer)) {
-						if (staleBuffers++ == 0)
-							staleFirst = fmt::format("'{}' (object {}, slot {}): row vertex {} index {}, TriShape vertex {} index {}", geometry->name.c_str() ? geometry->name.c_str() : "?",
-								object, a_input.geometryIndex, static_cast<const void*>(row.vertexBuffer), static_cast<const void*>(row.indexBuffer),
-								static_cast<const void*>(triShape->vertexBuffer), static_cast<const void*>(triShape->indexBuffer));
-					}
-				}
-				const float dx = placement.world[3] - bound.center.x, dy = placement.world[7] - bound.center.y, dz = placement.world[11] - bound.center.z;
-				if (std::sqrt(dx * dx + dy * dy + dz * dz) > 4.0f * bound.radius + 512.0f) {
-					if (farWorld++ == 0) {
-						const auto* geometry = object < tablesNow.objectGeometry.size() ? tablesNow.objectGeometry[object] : nullptr;
-						farFirst = fmt::format("'{}' world at ({:.0f} {:.0f} {:.0f}), bound ({:.0f} {:.0f} {:.0f}) r {:.0f}", geometry && geometry->name.c_str() ? geometry->name.c_str() : "?",
-							placement.world[3], placement.world[7], placement.world[11], bound.center.x, bound.center.y, bound.center.z, bound.radius);
-					}
-				}
-				float minX = 1, maxX = -1, minY = 1, maxY = -1, maxZ = -1e30f;
-				for (std::uint32_t corner = 0; corner < 8; ++corner) {
-					const float p[3] = { bound.center.x + ((corner & 1) ? bound.radius : -bound.radius), bound.center.y + ((corner & 2) ? bound.radius : -bound.radius),
-						bound.center.z + ((corner & 4) ? bound.radius : -bound.radius) };
-					float clip[4];
-					for (std::uint32_t row = 0; row < 4; ++row)
-						clip[row] = a_latch.viewProj[row * 4] * p[0] + a_latch.viewProj[row * 4 + 1] * p[1] + a_latch.viewProj[row * 4 + 2] * p[2] + a_latch.viewProj[row * 4 + 3];
-					const float w = clip[3] != 0.0f ? clip[3] : 1.0f;
-					minX = std::min(minX, clip[0] / w);
-					maxX = std::max(maxX, clip[0] / w);
-					minY = std::min(minY, clip[1] / w);
-					maxY = std::max(maxY, clip[1] / w);
-					maxZ = std::max(maxZ, clip[2] / w);
-				}
-				const float area = (std::clamp(maxX, -1.0f, 1.0f) - std::clamp(minX, -1.0f, 1.0f)) * (std::clamp(maxY, -1.0f, 1.0f) - std::clamp(minY, -1.0f, 1.0f)) / 4.0f;
-				if (area > 0.25f && maxZ < 0.02f)
-					covers.push_back({ area, object, maxZ });
-			});
-			std::sort(covers.begin(), covers.end(), [](const Cover& a, const Cover& b) { return a.area > b.area; });
-			if (!covers.empty() || farWorld || staleBuffers) {
-				std::string text;
-				for (std::size_t i = 0; i < covers.size() && i < 5; ++i) {
-					const auto& c = covers[i];
-					const auto* geometry = c.object < tablesNow.objectGeometry.size() ? tablesNow.objectGeometry[c.object] : nullptr;
-					const auto& r = c.object < records.size() ? records[c.object] : BindlessObject{};
-					const auto& b = placements[c.object].bound;
-					text += fmt::format("; '{}' (object {}) {:.0f}% of the map, depth at most {:.4f}, bound ({:.0f} {:.0f} {:.0f}) r {:.0f}, the engine's ({:.0f} {:.0f} {:.0f}) r {:.0f}, {}",
-						geometry && geometry->name.c_str() ? geometry->name.c_str() : "?", c.object, 100.0f * c.area, c.maxZ, b[0], b[1], b[2], b[3],
-						geometry ? geometry->worldBound.center.x : 0.0f, geometry ? geometry->worldBound.center.y : 0.0f, geometry ? geometry->worldBound.center.z : 0.0f,
-						geometry ? geometry->worldBound.radius : 0.0f, reached.contains(geometry) ? "the engine's cull reached it" : "the engine's cull did not reach it");
-					{
-						const auto& t = r.tree;
-						const std::uint32_t treeSlot = std::bit_cast<std::uint32_t>(t.windTimers[2]);
-						text += fmt::format(", tree params ({} {} {} {}), wind slot {:#x} generation {:#x}", t.treeParams[0], t.treeParams[1], t.treeParams[2], t.treeParams[3],
-							treeSlot, std::bit_cast<std::uint32_t>(t.windTimers[3]));
-						if (treeSlot < tablesNow.trees.size()) {
-							const auto& row = tablesNow.trees[treeSlot];
-							text += fmt::format(", tree row: model amplitude {}, amplitude {}, leaf frequency {}, animated {}, generation {:#x}, at ({:.0f} {:.0f} {:.0f})", row.modelAmplitude,
-								row.amplitude, row.leafFrequency, row.animated, row.generation, row.position[0], row.position[1], row.position[2]);
-						}
-					}
-				}
-				if (s.coversLogged++ < 40)
-					logger::warn("[DCLF] cascade cover: view {} (cascade {}) frame {}: {} drawn, {} cover over a quarter of the map at the near plane, {} with the world far from the bound{}, {} pulling from buffers their TriShape no longer holds{}{}",
-						a_view.viewId, shadowView->descriptor, a_frame, drawn, covers.size(), farWorld, farFirst.empty() ? "" : " (first " + farFirst + ")", staleBuffers,
-						staleFirst.empty() ? "" : " (first " + staleFirst + ")", text);
-			}
-		}
-		if (checks == 20) {
-			logger::info("[DCLF] cascade culling parity: {} sun views checked, {} claimed casters the engine's cascade culls reached, {} of them outside the view's viewport (no texels), {} rejected by DCLF's view{}{}",
-				checks, registered, offscreen, rejected, rejected ? " <- CASCADE CULL" : " <- OK", first.empty() ? "" : "; first " + first);
-			checks = registered = rejected = offscreen = 0;
-			first.clear();
 		}
 	}
 }

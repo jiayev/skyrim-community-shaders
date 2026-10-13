@@ -1,20 +1,10 @@
 #pragma once
 
-// A commit's uploads: staged (CommitUploads) or latched (LatchedUploads).
+// A commit's uploads on the render thread: staged (CommitUploads) or latched into the epoch's latch block (LatchedUploads).
 // Part of IndirectDraws' implementation: included by Internal.h, in its order.
 
 namespace DCLF::Draws
 {
-	// Whether BuildMainPayload reads MainInputs::eye/previousEye: only the records' observers (the engine's eye-relative
-	// PerGeometry groups, Policy::BuildAtEpoch) do.
-	inline bool BuildReadsEye(const MainInputs& a_in)
-	{
-		return a_in.readsEye;
-	}
-
-	// A commit's own uploads on the render thread, staged directly (StagedUploadBatch) and submitted when the
-	// commit ends: each is one memcpy into mapped staging here and one copy in the submission, instead of a
-	// trip through the upload pass's per-upload bookkeeping. The batch comes from a pool of released ones.
 	/**
 	 * @brief A released batch from a pool (neither a payload nor the upload service still holds it), reset, or a new one
 	 * of a_pageSize pages added to the pool.
@@ -38,6 +28,9 @@ namespace DCLF::Draws
 		return batch;
 	}
 
+	// A commit's own uploads on the render thread, staged directly (StagedUploadBatch) and submitted when the commit ends: each is
+	// one memcpy into mapped staging here and one copy in the submission, with no per-upload bookkeeping in the upload pass. The
+	// batch comes from a pool of released ones.
 	class CommitUploads
 	{
 	public:
@@ -85,7 +78,7 @@ namespace DCLF::Draws
 			targets(a_targets.load(std::memory_order_acquire)), fallback(a_fallback), block(&a_block), slot(a_slot), slots(a_slots)
 		{}
 		/**
-		 * @brief Into a shape's latched copies (a scene revision's, R3c): each value at its copy's place in the list's block, the rest
+		 * @brief Into a shape's latched copies (a scene revision's): each value at its copy's place in the list's block, the rest
 		 * of the copy zeroed; a value the list has no copy for is staged (a_fallback), as a target no pass declared is. Finish zeroes
 		 * the copies no value was written to, and returns the list.
 		 */

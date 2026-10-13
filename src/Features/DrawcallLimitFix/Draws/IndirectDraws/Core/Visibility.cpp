@@ -1,13 +1,12 @@
+// The visibility readback (Readbacks.h, VisibilityReadback; drawcall-limit-fix.md): the main camera's visibility as GPU change
+// events (VisibilityEventsCS), armed and harvested by the depth commit (render thread), decoded into verdicts by a task on DCLF's
+// executor, and written as kAccumulated by the main thread at Main::Update's entry on the roots DCLF lists and their geometry.
+// The <- ACCUMULATED observer against the engine's bit runs only under CS_DCLF_ACCUMULATED_PARITY.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #	include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
-
-// T7b1: the main camera's visibility as GPU change events, read back without a stall and decoded into DCLF's verdicts, with the
-// <- ACCUMULATED observer against the engine's kAccumulated (drawcall-limit-fix.md, "T7b1: visibility events"; Internal.h,
-// VisibilityReadback; VisibilityEventsCS.hlsl). T7b2: from those verdicts, kAccumulated written on the roots the cut stands in for
-// and their geometry, at Main::Update's entry ("T7b2: kAccumulated written by DCLF"). The readback is the normal path; the
-// observers are CS_DCLF_ACCUMULATED_PARITY's alone.
 
 namespace DCLF
 {
@@ -17,7 +16,7 @@ namespace DCLF
 	{
 		using Readback = VisibilityReadback;
 
-		/** @brief The decoder's verdicts made new: a reset frame (a new backing of the reported words, which then hold nothing). */
+		/** @brief Clears the decoder's verdicts (a reset frame: the reported words have a new, empty backing). */
 		void StartAgain(Readback& a_readback)
 		{
 			a_readback.roots.assign(a_readback.roots.size(), {});
@@ -27,7 +26,7 @@ namespace DCLF
 			a_readback.decodedFrame = a_readback.previousDecodedFrame = 0;
 		}
 
-		/** @brief One batch onto the verdicts (the task's), against the tables of its frame. */
+		/** @brief Decode task: applies one batch to the verdicts, against its frame's tables. */
 		void Apply(Readback& a_readback, const Readback::Batch& a_batch)
 		{
 			const auto& tables = *a_batch.tables;
@@ -46,7 +45,7 @@ namespace DCLF
 			for (const VisibilityEvent& event : a_batch.events) {
 				const bool visible = (event.bits & kVisibilityBitVisible) != 0;
 				if (event.kind == kVisibilityKindRoot) {
-					// The listing the event is of, in its frame's tables, and no older than the one taken last.
+					// Must match its listing in its frame's tables and be no older than the last applied.
 					if (event.slot >= tables.fadeRoots.size() || tables.fadeRoots[event.slot].generation != event.generation || !tables.fadeRootNode[event.slot] ||
 						frame < a_readback.rootApplied[event.slot]) {
 						++stale;
@@ -85,25 +84,23 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief T7b2, the task's, after a decode's batches: the kAccumulated writes of the stood-in roots (kFadeRootStoodIn in the newest
-		 * batch's tables) and their geometry, by the conservative rule, where they differ from what was last asked for (all of them on a
-		 * full write). Reads no engine memory: the slots, the verdicts and the tables' pointers alone. Null when there is nothing to write.
+		 * @brief Decode task: the kAccumulated writes that differ from the last asked (all on a full write). Reads no engine
+		 * memory. Null when there is nothing to write.
 		 *
-		 * The rule (drawcall-limit-fix.md, "T7b2"): visible when in view in either of the last two decoded frames (in view now, or gone
-		 * out after the frame before the newest), when the root's listing has no verdict yet (a new listing, one listed again, no seed:
-		 * visible until FadeStateCS's first), or while a camera cut has no batch of its frame or later decoded.
+		 * The conservative rule (drawcall-limit-fix.md): visible when in view in either of the last two decoded frames, when the
+		 * listing has no verdict yet (visible until FadeStateCS's first), or while a camera cut has no decoded batch of its frame or
+		 * later.
 		 *
-		 * T7f checklist item 1: the same for every other root DCLF lists, flagged wide - each fade root slot, each geometry under
-		 * one (not a layer), and each plain entry root (the batch's SunCandidates entry of a geometry with no fade root), visible when
-		 * any of its geometries is by the rule. A slot changing class (stood in, wide) is asked again.
+		 * Stood-in roots and their geometry, plus wide writes: every other listed fade root and non-layer geometry under one, and
+		 * each plain entry root (visible when any of its geometries is). A slot changing class is rewritten.
 		 */
 		Readback::Writes* PrepareWrites(Readback& a_readback, const Readback::Batch& a_newest, bool a_reset)
 		{
 			const auto& tables = *a_newest.tables;
 			const std::uint32_t cut = a_readback.cutFrame.load(std::memory_order_acquire);
 			const bool cutPending = cut && a_readback.decodedFrame < cut;
-			// The first batch of a cut's frame or later: everything again (the main thread set every stood-in root at the cut and left
-			// the older batches' clears).
+			// The first batch at or after a cut's frame rewrites everything (the main thread set every root at the cut and held back
+			// older batches' clears).
 			const bool cutAnswered = cut && !cutPending && a_readback.cutAnswered != cut;
 			const bool full = a_reset || cutAnswered || a_readback.refreshWanted.exchange(false, std::memory_order_acq_rel);
 			if (cutAnswered)
@@ -123,13 +120,13 @@ namespace DCLF
 			auto* list = new Readback::Writes();
 			list->frame = a_newest.frame;
 			list->full = full;
-			// Per root slot: 1 stood in for in this batch's tables, 2 wide (its geometry is written with it, in its class).
+			// Per root slot: 1 stood in, 2 wide (its geometry takes the same class).
 			std::vector<std::uint8_t> rootClass(roots, 0u);
 			for (std::size_t r = 0; r < roots; ++r) {
 				const void* node = tables.fadeRootNode[r];
 				const bool stoodIn = node && r < tables.fadeRoots.size() && (tables.fadeRoots[r].bits & kFadeRootStoodIn);
 				if (!node || r >= tables.fadeRoots.size()) {
-					// Not written (the engine culls it, or no root here): what it was last asked is forgotten, so a return writes again.
+					// Not written: forget the last write so a return writes again.
 					a_readback.rootWritten[r] = Readback::kWrittenNone;
 					continue;
 				}
@@ -148,8 +145,7 @@ namespace DCLF
 				a_readback.rootWrittenWide[r] = wideBit;
 				list->writes.push_back({ const_cast<void*>(node), node, visible, Readback::kWriteRoot, !stoodIn });
 			}
-			// The plain entry roots (wide): each object slot's entry, cached by occupant for the batch's candidates snapshot, and whether any
-			// of an entry's geometries is visible by the rule.
+			// Plain entry roots (wide): each object slot's entry, cached per occupant for this candidates snapshot.
 			const SunCandidates* candidates = a_newest.candidates.get();
 			if (candidates != a_readback.entryCandidates) {
 				a_readback.entryCandidates = candidates;
@@ -161,8 +157,7 @@ namespace DCLF
 				a_readback.objectEntryGeometry.resize(objects, nullptr);
 			}
 			const std::uint32_t entries = candidates ? candidates->Capacity() : 0u;
-			// Per entry index: 1 a plain geometry of it is listed, 2 one of them is visible; and whether one of its geometries is the
-			// engine's residue (no main input): such an entry's bit is the engine's cull's, as that geometry's.
+			// Per entry: 1 listed, 2 visible; an entry with an engine-residue geometry keeps the engine's bit.
 			std::vector<std::uint8_t> entryState(entries, 0u), entryResidue(entries, 0u);
 			for (std::size_t o = 0; o < objects; ++o) {
 				auto* geometry = tables.objectGeometry[o];
@@ -191,8 +186,8 @@ namespace DCLF
 						}
 					}
 				}
-				// T7f: a wide geometry DCLF does not draw in the main view (no member with bindings: the engine's residue, a shadow-only
-				// caster) has no main input, so no stamp and no verdict: its bit stays the engine's cull's, not cleared by DCLF.
+				// A wide geometry DCLF does not draw in the main view (engine residue, shadow-only) has no verdict: its bit stays
+				// the engine cull's.
 				if (objectClass == 2 && o < tables.objects.size() &&
 					(!(tables.objects[o].flags & kObjectMember) || (tables.objects[o].flags & (kObjectNoBindings | kObjectShadowOnly | kObjectFree)))) {
 					if (entry != SunCandidates::kNone)
@@ -252,7 +247,7 @@ namespace DCLF
 		using Engine::kObjectFlags;
 		using Engine::FlagsOf;
 
-		/** @brief Main thread: one node's kAccumulated as wanted (an atomic read-modify-write; none when it already is). */
+		/** @brief Main thread: sets or clears one node's kAccumulated atomically, skipping the RMW when already as wanted. */
 		void Store(Readback& a_readback, void* a_node, bool a_set, bool a_wide = false)
 		{
 			std::atomic_ref<std::uint32_t> flags(*reinterpret_cast<std::uint32_t*>(static_cast<std::byte*>(a_node) + kObjectFlags));
@@ -270,11 +265,11 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief Main thread, T7f checklist item 1: the nodes between a geometry written visible and its root set as well (the receivers
-		 * test every level, skyrim-engine-notes.md, "T7b0"). Set only: a node above a geometry gone out of view keeps the bit, which no reader
-		 * tells apart (the receivers stop at the geometry's own clear bit, the animation gate and the tree clock read the root alone). The
-		 * chain is gathered first and written only when it reaches the root: the geometry is held by the write's tables, and a live node's
-		 * parent is live (NiNode's destructor clears its children's parent pointers); nothing attaches or detaches at Main::Update's entry.
+		 * @brief Main thread: sets kAccumulated on the nodes between a geometry written visible and its root (receivers test every
+		 * level; skyrim-engine-notes.md). Set only: a stale bit above an out-of-view geometry is harmless (receivers stop at the
+		 * geometry's clear bit; the animation gate and tree clock read the root alone). The chain is written only if it reaches the
+		 * root: the write's tables hold the geometry, a live node's parent is live (NiNode's destructor clears its children's parent
+		 * pointers), and nothing attaches or detaches at Main::Update's entry.
 		 */
 		void SetChain(Readback& a_readback, RE::NiAVObject* a_geometry, const void* a_root)
 		{
@@ -311,9 +306,8 @@ namespace DCLF
 
 
 		/**
-		 * @brief Main thread at Main::Update's entry (T7f preparation): ListUpkeep's kAccumulated on the cell roots - the object root's
-		 * children that are not hidden, which DrawWorld_BuildSceneLists sets every frame (and ListUpkeep in its place when DCLF builds the
-		 * lists) - set here (T7f checklist item 1), for a frame without the engine's build. Set only, as the engine's build.
+		 * @brief Main thread at Main::Update's entry: sets kAccumulated (set only) on the object root's non-hidden children, as
+		 * DrawWorld_BuildSceneLists does every frame, for frames where DCLF builds the lists instead.
 		 */
 		void CellRoots(Readback& a_readback)
 		{
@@ -324,11 +318,10 @@ namespace DCLF
 			auto* objectRoot = root ? root->AsNode() : nullptr;
 			if (!objectRoot || Engine::IsHidden(objectRoot))
 				return;
-			// T7f: which children the engine's build sets (DrawWorld_BuildSceneLists, AE 0x14064bc20; drawcall-limit-fix.md, "T7f: what
-			// kAccumulated means"): in an exterior every non-hidden child from the third on; children 0 and 1 are list entries (the build
-			// appends them to list 0), whose bit the main camera's list cull sets or clears. In an interior only the cell's 3D, and children 0
-			// and 1 are list entries. Every non-hidden child is set, the containers too (the receivers then test the levels below; no other
-			// reader reads them).
+			// The engine's build (DrawWorld_BuildSceneLists, AE 0x14064bc20; drawcall-limit-fix.md): in an exterior it sets every
+			// non-hidden child from the third on; children 0 and 1 are list entries (appended to list 0) whose bit the main camera's
+			// list cull sets or clears. In an interior only the cell's 3D is a cell root. Containers are set too (receivers then test
+			// the levels below; nothing else reads them).
 			const auto* tes = RE::TES::GetSingleton();
 			auto* interior = tes ? tes->interiorCell : nullptr;
 			const auto* loaded = interior ? interior->GetRuntimeData().loadedData : nullptr;
@@ -351,10 +344,8 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief The observer (<- ACCUMULATED): the decoder's verdicts just after the batch of a_sample's frame against the engine's bit
-		 * as that frame's cull left it, exactly. A slot whose node is not the batch tables' (the tables moved between the sample and the
-		 * commit) is counted aside, as are a root DCLF has no verdict for and DCLF's alone on an app-culled root. The first differences
-		 * are kept for the render thread to name.
+		 * @brief The <- ACCUMULATED observer: verdicts against the engine's bit as a_sample's frame left it. Moved slots, roots
+		 * without a verdict and DCLF-only on app-culled roots are counted aside.
 		 */
 		void Compare(Readback& a_readback, Readback::Batch& a_batch, const Diagnostics::Accumulated::Sample& a_sample)
 		{
@@ -410,7 +401,7 @@ namespace DCLF
 				Count(stoodIn ? a_readback.stoodInGeometryCounts : a_readback.geometryCounts, dclf, engine);
 				if (stoodIn || dclf == engine)
 					continue;
-				// The engine's alone under a root its cull failed: the bit a cull that reached it left, not this frame's.
+				// Engine-only under a root its cull failed: a stale bit from an earlier cull.
 				if (engine && !(bits & Diagnostics::Accumulated::kSampleRootAccumulated))
 					++staleGeometry;
 				keep(dclf ? Readback::kGeometryDclfOnly : Readback::kGeometryEngineOnly, geometry);
@@ -423,7 +414,7 @@ namespace DCLF
 			a_readback.framesCompared.fetch_add(1, std::memory_order_relaxed);
 		}
 
-		/** @brief Render thread: a decoded batch's finds named (its tables hold the nodes), then the batch and its tables let go. */
+		/** @brief Render thread: names a decoded batch's finds (its tables hold the nodes), then frees the batch and its tables. */
 		void Release(Readback& a_readback, Readback::Batch* a_batch)
 		{
 			for (const auto& [category, node] : a_batch->firsts) {
@@ -437,8 +428,8 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief Render thread, the depth commit of a frame slot: the slot's last execution's events, if its buffer holds the frame that
-		 * armed it, copied into a batch. The host has waited for that execution, and the next one is not submitted yet.
+		 * @brief Render thread, at a frame slot's depth commit: copies the slot's last execution's events into a batch if the buffer
+		 * holds the arming frame. The host has waited for that execution; the next is not submitted yet.
 		 */
 		void Harvest(Readback& a_readback, std::uint32_t a_frameSlot)
 		{
@@ -446,7 +437,7 @@ namespace DCLF
 			if (!armed.armed)
 				return;
 			armed.armed = false;
-			// The slots past the list's end append again next frame; the list grows to them (ReserveSceneTables).
+			// Events past the list's end are appended again next frame; the list grows (ReserveSceneTables).
 			const bool found = a_readback.Harvest(a_frameSlot, armed.frame, [&](const std::uint32_t* a_words, std::uint32_t a_count, std::uint32_t a_capacity) {
 				auto* batch = new Readback::Batch();
 				batch->frame = armed.frame;
@@ -460,8 +451,7 @@ namespace DCLF
 			});
 			if (found)
 				return;
-			// The epoch did not run for that frame, or ran a revision without the readback: its changes are the next frame's (the GPU
-			// appends again what it did not report). A reset it carried goes with the next batch harvested.
+			// No readback ran for that frame: the GPU reports its changes next frame; a carried reset goes with the next batch.
 			a_readback.carryReset = a_readback.carryReset || armed.reset;
 			armed.tables.reset();
 			armed.candidates.reset();
@@ -470,8 +460,7 @@ namespace DCLF
 
 	namespace
 	{
-		/** @brief Render thread: the batches the last task decoded, their finds named and their tables let go (engine reads and the
-		 * publication's retirement are the render thread's). */
+		/** @brief Render thread: releases the last task's decoded batches (engine reads and publication retirement are its own). */
 		void ReleaseDecoded(Readback& a_readback)
 		{
 			auto* batch = a_readback.decoded.exchange(nullptr, std::memory_order_acquire);
@@ -483,14 +472,12 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief Render thread: the harvested batches handed to one decode task on DCLF's executor, never joined (one at a time; the
-		 * batches a running one did not take wait for the next call). The task applies them in frame order, runs the observer when its
-		 * samples are there, and prepares the kAccumulated writes from the newest (T7b2) for Main::Update's entry.
+		 * @brief Render thread: hands the harvested batches to one decode task on DCLF's executor, never joined (one at a time).
 		 */
 		void Dispatch(const std::shared_ptr<Readback>& a_readback)
 		{
 			auto& readback = *a_readback;
-			// The samples no batch will reach: older than every armed frame and every batch waiting (their frames ran no readback).
+			// Samples older than every armed frame and waiting batch will never be matched.
 			std::uint32_t oldestPending = Scene::FrameView::Get().GetFrame();
 			for (const auto& armed : readback.armed)
 				if (armed.armed)
@@ -509,7 +496,7 @@ namespace DCLF
 			}
 			auto batches = std::exchange(readback.pending, {});
 			std::stable_sort(batches.begin(), batches.end(), [](const auto* a_a, const auto* a_b) { return a_a->frame < a_b->frame; });
-			// The engine's samples those batches reach (CS_DCLF_ACCUMULATED_PARITY: none are taken without it).
+			// Engine samples (only taken under CS_DCLF_ACCUMULATED_PARITY).
 			auto samples = std::make_shared<std::vector<std::unique_ptr<Diagnostics::Accumulated::Sample>>>(Diagnostics::Accumulated::TakeSamples(batches.back()->frame));
 			readback.samplesUnmatched.fetch_add(Diagnostics::Accumulated::DropSamples(oldestPending), std::memory_order_relaxed);
 			auto decode = [readback = a_readback, batches = std::move(batches), holder = std::move(samples)] {
@@ -521,7 +508,7 @@ namespace DCLF
 				for (auto* batch : batches) {
 					reset = reset || batch->reset;
 					Apply(*readback, *batch);
-					// The samples before this batch's frame had none; its own is compared, unless the batch left changes for the next frame.
+					// Earlier samples had no batch; this frame's is compared only if the batch is complete.
 					for (; next < samples.size() && samples[next]->frame < batch->frame; ++next)
 						readback->samplesUnmatched.fetch_add(1, std::memory_order_relaxed);
 					if (next < samples.size() && samples[next]->frame == batch->frame) {
@@ -533,12 +520,11 @@ namespace DCLF
 					}
 				}
 				readback->samplesUnmatched.fetch_add(samples.size() - next, std::memory_order_relaxed);
-				// T7b2: the writes, from the newest batch's tables (held by the writes until the main thread made them).
 				if (auto* writes = PrepareWrites(*readback, *batches.back(), reset)) {
 					writes->next = readback->writes.load(std::memory_order_relaxed);
 					while (!readback->writes.compare_exchange_weak(writes->next, writes, std::memory_order_release, std::memory_order_relaxed)) {}
 				}
-				// Back to the render thread (their tables are its to let go).
+				// Back to the render thread, which releases their tables.
 				for (auto* batch : batches) {
 					batch->next = readback->decoded.load(std::memory_order_relaxed);
 					while (!readback->decoded.compare_exchange_weak(batch->next, batch, std::memory_order_release, std::memory_order_relaxed)) {}
@@ -567,11 +553,10 @@ namespace DCLF
 			return;
 		const std::size_t harvested = readback.pending.size();
 		Harvest(readback, frameSlot);
-		// The count and the frame, for this execution's VisibilityEventsCS to append from.
+		// Reset the header for this execution's VisibilityEventsCS.
 		static constexpr std::uint32_t kZeroHeader[kVisibilityEventHeaderWords]{};
 		a_uploads(a_scene.visibilityEvents, kZeroHeader, sizeof(kZeroHeader), 0);
-		// A new backing of the reported words holds nothing: zeroed (nothing reported, no verdict), and the decoder's verdicts start
-		// again with this frame's batch.
+		// A new backing of the reported words is zeroed, and the decoder restarts with this frame's batch.
 		bool reset = false;
 		if (!a_scene.visibilityReportedZeroed) {
 			const std::vector<std::byte> roots(std::size_t(a_scene.fadeRootCapacity) * 2 * sizeof(std::uint32_t));
@@ -586,10 +571,9 @@ namespace DCLF
 		armed.frame = Scene::FrameView::Get().GetFrame();
 		armed.reset = reset;
 		armed.tables = Scene::FrameView::Get().AcceptedTables();
-		// T7f checklist item 1: the frame's entries, for the wide writes' plain entry roots.
+		// For the wide writes' plain entry roots.
 		armed.candidates = Scene::FrameView::Get().GetSunCandidates();
-		// T7b2: a batch harvested goes to the decode now, not at the next frame's start, so its writes reach the next Main::Update's
-		// entry (a frame less of latency).
+		// Decode a harvested batch now, so its writes reach the next Main::Update (one frame less latency).
 		if (readback.pending.size() > harvested)
 			Dispatch(a_scene.visibilityReadback);
 	}
@@ -622,7 +606,7 @@ namespace DCLF
 			return;
 		auto& r = *impl->scene->visibilityReadback;
 		const auto start = std::chrono::steady_clock::now();
-		// The decoder's writes, newest first on the stack: in frame order.
+		// The stack is newest first: reverse into frame order.
 		Readback::Writes* ordered = nullptr;
 		for (auto* list = r.writes.exchange(nullptr, std::memory_order_acquire); list;) {
 			auto* following = list->next;
@@ -630,8 +614,7 @@ namespace DCLF
 			ordered = list;
 			list = following;
 		}
-		// DCLF does not run this frame: nothing is written, and the decoder writes everything again once it does (what it last asked
-		// for was not made, and the engine's cull wrote the roots meanwhile).
+		// DCLF not live: write nothing and request a full rewrite once it is (the engine's cull writes the roots meanwhile).
 		if (!a_live) {
 			for (auto* list = ordered; list;) {
 				auto* following = list->next;
@@ -644,13 +627,10 @@ namespace DCLF
 			r.refreshWanted.store(true, std::memory_order_release);
 			return;
 		}
-		// T7f checklist item 1: every write (the stood-in roots' and the wide ones), whoever stands in for the root, and the nodes between a
-		// visible geometry and its root.
 		const std::uint32_t cut = r.cutFrame.load(std::memory_order_acquire);
 		const bool wrote = ordered != nullptr;
 		for (auto* list = ordered; list;) {
-			// A batch older than the last cut: its sets only (every written root stays visible until a batch of the cut's frame or later
-			// arrives; the decoder's full write then puts every clear back).
+			// A batch older than the last cut applies sets only; the post-cut full write restores the clears.
 			const bool beforeCut = cut && list->frame < cut;
 			for (const auto& write : list->writes) {
 				const bool held = beforeCut && !write.set;
@@ -665,19 +645,17 @@ namespace DCLF
 					SetChain(r, static_cast<RE::NiAVObject*>(write.node), write.root);
 			}
 			r.writeBatches.fetch_add(1, std::memory_order_relaxed);
-			// The newest's tables kept (a cut's writes take the stood-in roots from them); the older let go here, on the main thread.
+			// Keep the newest tables (a cut's writes read them); older ones are released here, on the main thread.
 			r.writtenTables = std::move(list->tables);
 			r.writtenCandidates = std::move(list->candidates);
 			auto* following = list->next;
 			delete list;
 			list = following;
 		}
-		// A camera cut since the last: every listed root, and its geometry, visible now (the newest tables' slots), the plain entry roots of
-		// the newest candidates among them.
+		// A new camera cut: every listed root, its geometry, and the plain entry roots set visible now.
 		if (cut && r.cutWritten != cut && r.writtenTables) {
 			r.cutWritten = cut;
 			const auto& tables = *r.writtenTables;
-			// Per root slot: 1 written now.
 			std::vector<std::uint8_t> written(tables.fadeRootNode.size(), 0u);
 			for (std::size_t root = 0; root < tables.fadeRootNode.size(); ++root) {
 				const void* node = tables.fadeRootNode[root];
@@ -700,7 +678,7 @@ namespace DCLF
 					SetChain(r, geometry, tables.fadeRootNode[root]);
 					continue;
 				}
-				// A plain entry root's geometry (the decoder's rule: the candidates' entry of a geometry with no fade root).
+				// A plain entry root's geometry (no fade root).
 				if (root != kNoFadeRoot || !candidates)
 					continue;
 				const auto it = candidates->geometries.find(geometry);
@@ -714,8 +692,7 @@ namespace DCLF
 				SetChain(r, geometry, entryNode);
 			}
 		}
-		// The verdicts of roots the newest tables (or candidates) no longer list forgotten, every 60th entry with a decode's writes (a lookup
-		// checks the listing itself: AccumulatedVerdictOf).
+		// Every 60th write pass, forget verdicts of roots no longer listed (lookups check the listing themselves).
 		if (wrote && ++r.verdictPrunes >= 60) {
 			r.verdictPrunes = 0;
 			for (auto it = r.rootVerdicts.begin(); it != r.rootVerdicts.end();)
@@ -724,7 +701,6 @@ namespace DCLF
 				         std::next(it) :
 				         r.rootVerdicts.erase(it);
 		}
-		// T7f checklist item 1: the cell roots (ListUpkeep's kAccumulated).
 		CellRoots(r);
 		r.writeNs.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()),
 			std::memory_order_relaxed);
@@ -747,7 +723,7 @@ namespace DCLF
 		const auto it = r.rootVerdicts.find(a_root);
 		if (it == r.rootVerdicts.end())
 			return false;
-		// Listed by the newest written tables or candidates: a verdict kept for a node since let go cannot answer for another at its address.
+		// Must still be listed: a kept verdict for a freed node must not answer for another at its address.
 		if (!(r.writtenTables && r.writtenTables->fadeRootIndex.contains(a_root)) &&
 			!(r.writtenCandidates && r.writtenCandidates->entries.contains(static_cast<const RE::NiAVObject*>(a_root))))
 			return false;

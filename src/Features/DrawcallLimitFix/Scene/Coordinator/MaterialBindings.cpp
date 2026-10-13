@@ -1,3 +1,5 @@
+// Coordinator::UpdateMaterialBindings and its helpers (MaterialBindings.h), scene lane.
+
 #include "Internal.h"
 
 namespace DCLF::Scene
@@ -20,9 +22,9 @@ namespace DCLF::Scene
 			lookups.materials.resize(tables.materials.size());
 		if (mb.held.size() < tables.materials.size())
 			mb.held.resize(tables.materials.size(), 0);
-		// The answers since the last pass: each view's waiting slots written from it (a rejection too: that texture unresolvable, as the
-		// render thread's lookups had it). An answer nobody waits on any more lets its owner go here: the last release of an import, or
-		// of its descriptor, runs on the cleanup queue (ResourceCleanupQueue::Make), never on this thread.
+		// The answers since the last pass: each view's waiting slots written from it (a rejection too: that texture unresolvable). An
+		// answer nobody waits on any more lets its owner go here: the last release of an import, or of its descriptor, runs on the cleanup
+		// queue (ResourceCleanupQueue::Make), never on this thread.
 		std::vector<std::uint32_t> waiting;
 		mb.replies.Drain([&](GpuTextures::Reply&& a_reply) {
 			if (a_reply.cookie != mb.cookie) {
@@ -76,8 +78,8 @@ namespace DCLF::Scene
 	void Coordinator::ResolveMaterialBinding(std::uint32_t a_slot)
 	{
 		auto& mb = materialBindings;
-		// Only a used slot: the used set certifies the views a record holds (Tables, "The three shared tables"), as the render thread's
-		// refresh took only the used ones. A slot freed keeps its entry until its retirement comes back (RetireMaterialBinding).
+		// Only a used slot: the used set certifies the views a record holds (Tables, "The three shared tables"). A slot freed keeps its
+		// entry until its retirement comes back (RetireMaterialBinding).
 		if (a_slot >= tables.materials.size() || a_slot >= tables.materialSlotKey.size() || a_slot >= tables.materialVersion.size() ||
 			!tables.materialSlots.Alive(a_slot) || !tables.MaterialUsed(a_slot))
 			return;
@@ -96,7 +98,7 @@ namespace DCLF::Scene
 															 current.recordVersion == tables.materialVersion[a_slot] && current.written == material.textureWritten &&
 															 current.texturesGeneration == textureGeneration)
 			return;
-		// The entry is the lookups' (T6b2c step 5), written straight in; its version and log entry come before the next commit or
+		// The entry is the lookups', written straight in; its version and log entry come before the next commit or
 		// publication (VersionMaterialBindings).
 		auto& entry = lookups.materials.Mutable(a_slot);
 		bool changed = false;
@@ -229,7 +231,7 @@ namespace DCLF::Scene
 	{
 		ZoneScopedN("CS.DCLF.Scene.VersionMaterialBindings");
 		// The scene lane, before a commit or a publication (ResolveLookups): the entries written since the last time (resolved, re-keyed,
-		// retired) each take a new version and a log entry, as the frame's start gave them when it copied them in.
+		// retired) each take a new version and a log entry.
 		auto& mb = materialBindings;
 		if (lookups.materialVersions.size() < lookups.materials.size())
 			lookups.materialVersions.resize(lookups.materials.size(), 0);

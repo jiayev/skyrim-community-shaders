@@ -1,3 +1,7 @@
+// The LOD gates' scene side (Engine/Cull/LodGates.h has the engine side; dclf-async-publication.md, "T6b5, the scene side"): the
+// coordinator's gates, opened by their events, the commit's withholding and flips, and the outcomes that retire them (drained from the
+// engine side: LodGates::DrainOutcomes). Scene lane.
+
 #include "Internal.h"
 
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
@@ -5,9 +9,6 @@
 
 #include <algorithm>
 #include <type_traits>
-
-// T6b5: the LOD gates' scene side (dclf-async-publication.md, "T6b5"; Engine/LodGates.h has the engine side): the coordinator's gates,
-// opened by their events, the commit's withholding and flips, the outcomes that retire them, and the render thread's releases.
 
 namespace DCLF::Scene
 {
@@ -231,10 +232,10 @@ namespace DCLF::Scene
 	void Coordinator::UpdateGates(bool a_live, std::vector<std::pair<std::uint32_t, std::uint8_t>>& a_apply)
 	{
 		// The slots whose structure changed since the last publication's revocation (revokeCursor's unread kStructureCauses: a record
-		// written or rewritten since). The publication this commit makes takes their claims back whole (RevokeUndrawnClaims: R3b, the shapes
+		// written or rewritten since). The publication this commit makes takes their claims back whole (RevokeUndrawnClaims: the shapes
 		// were made without the change) and claims them only at the next one: a gate flipped on one would be released with its incoming
-		// unclaimed (w152: every incoming geometry of a gate flipped in the pass that wrote its records, <- GATE HOLE). Made once, when a
-		// gate is otherwise ready to flip.
+		// unclaimed (every incoming geometry of a gate flipped in the pass that wrote its records: <- GATE HOLE). Made once, when a gate is
+		// otherwise ready to flip.
 		bool structureTaken = false;
 		ankerl::unordered_dense::set<std::uint32_t> structureUnpublished;
 		auto unpublished = [&](std::uint32_t a_slot) {

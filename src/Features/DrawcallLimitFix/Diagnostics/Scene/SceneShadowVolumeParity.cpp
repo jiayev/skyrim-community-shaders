@@ -1,11 +1,11 @@
+// CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY: the local shadow lights' volumes (LightViews' cull planes, which LocalShadowLights samples)
+// against their culling processes' after the cull, reported every 3000 volumes.
+
 #include "SceneObservers.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
 #include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
-
-// CS_DCLF_SET_PARITY or CS_DCLF_PERSISTENT_PARITY: the local shadow lights' volumes (LightViews' cull planes, which LocalShadowLights samples)
-// against their culling processes' after the cull, reported every 3000 volumes.
 
 namespace DCLF::Diagnostics
 {

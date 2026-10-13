@@ -1,14 +1,14 @@
+// CS_DCLF_FADE_PARITY: FadeStateCS against the C++ port (Scene/Ports/FadeState.h). Every 30th frame the depth commit has the pass log
+// kFadeLogEntries roots of a window (NextFadeLog keeps their static rows and the frame's inputs); the log is copied after the depth
+// epoch and checked three frames later (ReadFadeLog): each logged update made again by the port from the state it started from, with
+// the GPU's frustum verdict. And the root rows' inputs against the nodes (CheckFadeInputs).
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "DrawsState.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #	include "Events.h"
 #	include "Observers.h"
 #	include "Features/DrawcallLimitFix/Diagnostics/Engine/CutObservers.h"
-
-// CS_DCLF_FADE_PARITY: FadeStateCS against the C++ port (Scene/FadeState.h). Every 30th frame the depth commit has the pass log
-// kFadeLogEntries roots of a window (NextFadeLog keeps their static rows and the frame's inputs); the log is copied after the depth
-// epoch and checked three frames later (ReadFadeLog): each logged update made again by the port from the state it started from, with
-// the GPU's frustum verdict. And the root rows' inputs against the nodes (CheckFadeInputs).
 
 namespace DCLF::Diagnostics
 {
@@ -265,12 +265,12 @@ namespace DCLF::Diagnostics
 							p.engineFirst += fmt::format("; its portal program {}, radius read {} (the node's {}), the test on those {} ({})",
 								static_cast<std::int32_t>(list), done.radii[i], done.nodeRadii[i], port, why);
 						}
-						if (i < done.nodeCentres.size())
-							p.engineFirst += fmt::format("; the node '{}' centre ({:.0f} {:.0f} {:.0f}) at {:.0f}", done.nodeNames[i], done.nodeCentres[i][0], done.nodeCentres[i][1],
-								done.nodeCentres[i][2], distanceTo(done.nodeCentres[i].data()) * 0.0f + [&] {
-									const float dx = done.nodeCentres[i][0] - in.eye[0], dy = done.nodeCentres[i][1] - in.eye[1], dz = done.nodeCentres[i][2] - in.eye[2];
-									return std::sqrt(dx * dx + dy * dy + dz * dz);
-								}());
+						if (i < done.nodeCentres.size()) {
+							const auto& c = done.nodeCentres[i];
+							const float dx = c[0] - in.eye[0], dy = c[1] - in.eye[1], dz = c[2] - in.eye[2];
+							p.engineFirst += fmt::format("; the node '{}' centre ({:.0f} {:.0f} {:.0f}) at {:.0f}", done.nodeNames[i], c[0], c[1], c[2],
+								std::sqrt(dx * dx + dy * dy + dz * dz));
+						}
 					}
 				}
 			}

@@ -25,10 +25,9 @@ namespace DCLF
 	 * not remembered (the object's verdict is, Coordinator's UnstableBuffer).
 	 *
 	 * One instance per thread domain, each its maps' only user (no lock): Scene() is the scene work's - the pass's thread (the scene
-	 * lane, or the render thread for an inline pass): the walk's prologue, prefetch and merges (ResolveGeometrySource), the slot check
-	 * and probe; Frame() is the render thread's - tree LOD's meshes, at the depth commit (TreeLod::Mirror::TakeChanges). A buffer both
-	 * lease is resolved by each under a reference of its own (a description is idempotent; DXVK's interop is callable from any
-	 * thread). A lease may be released on any thread (its removal queued, lock-free); GetStats may be read on any thread.
+	 * lane, or the render thread for an inline pass): the walk's prologue, prefetch and merges (ResolveGeometrySource); Frame() is the
+	 * render thread's - tree LOD's meshes, at the depth commit (TreeLod::Mirror::TakeChanges). A buffer both lease is resolved by each
+	 * under a reference of its own (a description is idempotent; DXVK's interop is callable from any thread). A lease may be released on any thread (its removal queued, lock-free); GetStats may be read on any thread.
 	 *
 	 * Every description is taken under a reference on the buffer, held until a lease takes it over: a description is only the
 	 * buffer's while the buffer lives, and the key is the game's pointer, which a released buffer's successor may reuse.
@@ -59,8 +58,8 @@ namespace DCLF
 			std::uint64_t prefetchBatches = 0, prefetched = 0;  // batched resolutions, and the buffers they resolved
 			double resolveMsTotal = 0.0;
 			double resolveMsMax = 0.0;  // slowest single resolution
-			// CS_DCLF_SET_PARITY / CS_DCLF_PERSISTENT_PARITY: prefetched descriptions taken by Acquire, and those whose buffer the game
-			// had released by then (Prefetch's reference the last one): without it, a freed buffer's address.
+			// Under the claims or scene observers (Diagnostics::Observe): prefetched descriptions taken by Acquire, and those whose buffer
+			// the game had released by then (Prefetch's reference the last one): without it, a freed buffer's address.
 			std::uint64_t prefetchTaken = 0, prefetchReleased = 0;
 		};
 

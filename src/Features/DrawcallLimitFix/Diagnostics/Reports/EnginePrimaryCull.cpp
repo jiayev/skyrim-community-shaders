@@ -19,22 +19,15 @@ namespace DCLF::Reports
 {
 	namespace
 	{
-		double TicksToMs()
-		{
-			LARGE_INTEGER frequency{};
-			QueryPerformanceFrequency(&frequency);
-			return 1000.0 / static_cast<double>(frequency.QuadPart);
-		}
-
 		/** @brief The scene lists' line (a_diagnostics: the dry runs' stand-in counts and the engine's lists against DCLF's). */
 		void SceneListsLine(const Diagnostics::CutObservers::Counts& a_diagnostics)
 		{
 			const auto l = PrimaryCull::Get().TakeListCounters();
-			const double toMs = TicksToMs();
+			const double toMs = MsPerTick();
 			const auto& d = a_diagnostics;
 			const bool bad = l.unexcluded || d.filterMissed || d.listMissing || d.listExtra;
 			logger::info("[DCLF] scene lists: {} frames: {} kept, {} built by DCLF ({} late; by cause: {} structure or hidden ({}), {} filter, {} globals, {} not DCLF's), {} the engine's ({} not keepable: {}; {} filtered); "
-						 "per DCLF build {:.0f} entries ({:.3f} ms), {:.0f} DCLF roots left out a build or filtered frame; filter sets built {} (not published: {} toggled off, {} decal order, {} occlusion maps native, {} snapshot not current, {} no exclusion); "
+						 "per DCLF build {:.0f} entries ({:.3f} ms), {:.0f} DCLF roots left out a build or filtered frame; filter sets built {} (not published: {} toggled off, {} occlusion maps native, {} snapshot not current, {} no exclusion); "
 						 "dry runs {}: {} roots, {} stand-in disagreements; DCLF's lists against the engine's: {} checks, {} of the engine's missing, {} of DCLF's not hidden extra; "
 						 "put back for an occlusion map the engine drew on {} frames ({} detached roots left out); filtered frames without the sun's exclusion {}, members lost while out {}{}{}",
 				l.frames, l.kept, l.rebuilt, l.lateRebuilds, l.rebuildStructure,
@@ -44,7 +37,7 @@ namespace DCLF::Reports
 				fmt::format("{} no hidden events or call site, {} scene, {} not unbound space, {} interior, {} scene children", l.notKeepableBy[0], l.notKeepableBy[1],
 					l.notKeepableBy[2], l.notKeepableBy[3], l.notKeepableBy[4]),
 				l.filtered, l.rebuilt ? double(l.rebuildEntries) / l.rebuilt : 0.0, l.rebuilt ? l.rebuildTicks * toMs / l.rebuilt : 0.0,
-				(l.rebuilt + l.filtered) ? double(l.removed) / double(l.rebuilt + l.filtered) : 0.0, l.built, l.notToggled, l.decalOrder, l.noOcclusion, l.notCurrent,
+				(l.rebuilt + l.filtered) ? double(l.removed) / double(l.rebuilt + l.filtered) : 0.0, l.built, l.notToggled, l.noOcclusion, l.notCurrent,
 				l.noExclusion, l.dryRuns, d.filterChecked, d.filterMissed, d.listChecks, d.listMissing, d.listExtra, l.restored, l.restoreDetached, l.unexcluded,
 				l.lostWhileOut, bad ? " <- LIST FILTER" : " <- OK", d.listFirst.empty() ? "" : "; first: " + d.listFirst);
 		}
@@ -128,9 +121,7 @@ namespace DCLF::Reports
 		{
 			auto c = LocalLightCull::Take();
 			const auto p = Diagnostics::LightCulls::Take();
-			LARGE_INTEGER frequency{};
-			QueryPerformanceFrequency(&frequency);
-			const auto timing = fmt::format("[DCLF] point lights' Accumulate: {} calls, {:.3f} ms in all", c.accumulateCalls, c.accumulateTicks * 1000.0 / static_cast<double>(frequency.QuadPart));
+			const auto timing = fmt::format("[DCLF] point lights' Accumulate: {} calls, {:.3f} ms in all", c.accumulateCalls, c.accumulateTicks * MsPerTick());
 			if (!c.installed)
 				return timing;
 			const auto lost = p.lost;
@@ -148,7 +139,7 @@ namespace DCLF::Reports
 				list = fmt::format("\n[DCLF] point lights' category filter: {} lights, {} filtered, {} walked whole (frames without it); {:.1f} filtered nodes a light ({} now), {:.0f} children culled and {:.0f} cut a light, {} dirty nodes walked; {} builds ({} nodes, {:.3f} ms each); parity {} casters under a filtered node checked, {} not under a child it keeps{}{}",
 					c.lights, c.filtered, c.walkedNotLive, c.filtered ? static_cast<double>(c.nodes) / filtered : 0.0, c.filterNodes,
 					c.filtered ? static_cast<double>(c.children) / filtered : 0.0, c.filtered ? static_cast<double>(c.cut) / filtered : 0.0, c.dirtyNodes, c.builds,
-					c.nodesRebuilt, c.builds ? static_cast<double>(c.buildTicks) * 1000.0 / static_cast<double>(frequency.QuadPart) / static_cast<double>(c.builds) : 0.0,
+					c.nodesRebuilt, c.builds ? static_cast<double>(c.buildTicks) * MsPerTick() / static_cast<double>(c.builds) : 0.0,
 					p.filterChecked, p.filterMissed, p.filterChecked || p.filterMissed ? (p.filterMissed ? " <- LIGHT FILTER" : " <- OK") : "",
 					p.filterFirstMissed.empty() ? "" : "; first:" + p.filterFirstMissed);
 			}
@@ -177,7 +168,7 @@ namespace DCLF::Reports
 			return;
 		const auto s = cull.TakeCutCounters();
 		const auto d = Diagnostics::CutObservers::Take();
-		const double toMs = TicksToMs();
+		const double toMs = MsPerTick();
 		const double applied = std::max<double>(static_cast<double>(s.appliedFrames), 1.0);
 		logger::info("[DCLF] primary exclusion: applied on {} of {} frames ({} without candidates, {} preconditions), {:.1f} entries planned again a frame as their candidates moved ({} pool gatherings; parity {} checks, {} differ); per frame {:.0f} eligible entries reached, "
 					 "{:.0f} stood in for ({:.0f} walked, {:.0f} of them in view), {:.1f} cross-fading LOD (stood in), {:.1f} not yet admitted ({:.1f} admitted); {:.0f} members in view, {:.1f} not bound yet (the engine's), "
@@ -206,9 +197,6 @@ namespace DCLF::Reports
 			logger::info("[DCLF] light masks (owned members in view, which no main registration clears): {} checked, {} with the sun's bits, {} with other lights' bits{}{}",
 				d.maskChecked, d.maskSun, d.maskOther, d.maskSun || d.maskOther ? " <- LIGHT MASKS" : " <- OK", d.maskFirst.empty() ? "" : "; first: " + d.maskFirst);
 		const double mixedPerFrame = s.mixed / applied;
-		if (d.visibilityChecked)
-			logger::info("[DCLF] fade visibility parity (the engine's cull of entries with engine-drawn parts against FadeStateCS's test): {} checked, {} differ{}{}",
-				d.visibilityChecked, d.visibilityDiffer, d.visibilityDiffer ? " <- FADE VISIBILITY" : " <- OK", d.visibilityFirst.empty() ? "" : "; first: " + d.visibilityFirst);
 		if (d.fadePort.checked)
 			logger::info("[DCLF] fade port parity (the port against the engine's functions on node copies): {} roots, {} differ{}{}", d.fadePort.checked, d.fadePort.differ,
 				d.fadePort.differ ? " <- FADE PORT" : " <- OK", d.fadePort.first.empty() ? "" : "; first: " + d.fadePort.first);

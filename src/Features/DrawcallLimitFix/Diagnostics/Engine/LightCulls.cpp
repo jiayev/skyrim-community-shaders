@@ -1,3 +1,5 @@
+// The point lights' culls' parity (LightCulls.h): counted on the registration threads, taken by the render thread's report.
+
 #include "LightCulls.h"
 
 #include "Events.h"

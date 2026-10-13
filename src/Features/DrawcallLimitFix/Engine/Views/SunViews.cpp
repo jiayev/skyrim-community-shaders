@@ -1,3 +1,5 @@
+// SunViews: the UpdateCamera hook (render thread) and the ports of the engine's camera, plane and viewport arithmetic.
+
 #include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
 
 #include "Features/DrawcallLimitFix/Runtime/Switches.h"
@@ -262,7 +264,7 @@ namespace DCLF
 				if (process)
 					CullPlanes(process.get(), *camera, next.fullFrusta.emplace_back());
 		next.valid = true;
-		Diagnostics::Notify(Diagnostics::SunViewsUpdated{});
+		Diagnostics::Notify<Diagnostics::EnginePoint::SunViewsUpdated>();
 	}
 
 	struct SunViews::Hooks

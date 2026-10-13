@@ -1,3 +1,5 @@
+// The shadow views' parity (ShadowViewTally.h): render thread, but for the focus membership check on the registration threads.
+
 #include "ShadowViewTally.h"
 
 #include "Events.h"
@@ -36,19 +38,19 @@ namespace DCLF::Diagnostics
 			a_mask = a_from.activePlanes.underlying() & 0x3Fu;
 		}
 
-		void SunUpdated(const SunViewsUpdated&)
+		void SunUpdated(const On<EnginePoint::SunViewsUpdated>&)
 		{
 			if (sunWindow.Tick())
 				Reports::SunViewsLines();
 		}
 
-		void LightFrame(const LightViewsFrame&)
+		void LightFrame(const On<EnginePoint::LightViewsFrame>&)
 		{
 			if (lightWindow.Tick())
 				Reports::LightViewsLines();
 		}
 
-		void FocusFrame(const FocusViewsFrame&)
+		void FocusFrame(const On<EnginePoint::FocusViewsFrame>&)
 		{
 			if (focusWindow.Tick())
 				Reports::FocusViewsLines();
@@ -74,7 +76,7 @@ namespace DCLF::Diagnostics
 			firstState.store(2, std::memory_order_release);
 		}
 
-		void AccumulateBegin(const SunAccumulateBegin&)
+		void AccumulateBegin(const On<EnginePoint::SunAccumulateBegin>&)
 		{
 			cascadesChecked = 0;
 		}
@@ -135,11 +137,11 @@ namespace DCLF::Diagnostics
 
 	void InstallShadowViews()
 	{
-		Subscribe<SunViewsUpdated>(SunUpdated);
-		Subscribe<LightViewsFrame>(LightFrame);
-		Subscribe<FocusViewsFrame>(FocusFrame);
+		Subscribe<EnginePoint::SunViewsUpdated>(SunUpdated);
+		Subscribe<EnginePoint::LightViewsFrame>(LightFrame);
+		Subscribe<EnginePoint::FocusViewsFrame>(FocusFrame);
 		Subscribe<FocusRegistration>(FocusRegistered);
-		Subscribe<SunAccumulateBegin>(AccumulateBegin);
+		Subscribe<EnginePoint::SunAccumulateBegin>(AccumulateBegin);
 		Subscribe<SunCascadeMissing>(CascadeMissing);
 		Subscribe<SunCascadeCulled>(CascadeCulled);
 	}

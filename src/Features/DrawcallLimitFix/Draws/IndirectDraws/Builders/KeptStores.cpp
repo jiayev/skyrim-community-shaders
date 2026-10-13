@@ -1,3 +1,6 @@
+// The kept stores' updates (KeptStores.h): extras rows, object records and geometry draws brought up to a frame's tables from
+// their change logs. Run by MakeStreamViews, one caller at a time (the snapshot builder, or the render thread's StreamsNow).
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
@@ -91,7 +94,7 @@ namespace DCLF::Draws
 		}
 		s.cursor.Advance(a_tables.changeLog);
 		TracyCZoneEnd(updateRecordsZone);
-		Diagnostics::Notify(Diagnostics::ObjectRecordsUpdated{ s, a_tables, a_frame });
+		Diagnostics::Notify(Diagnostics::StoreUpdated<ObjectRecordStore>{ s, a_tables, a_frame });
 		{
 			ZoneScopedN("CS.DCLF.Build.Objects.Snapshot");
 			a_out = s.records.View();
@@ -151,7 +154,7 @@ namespace DCLF::Draws
 					s.rewritten += s.packed.Set(g, pack(g)) ? 1u : 0u;
 		}
 		s.cursor.Advance(a_tables.geometryLog);
-		Diagnostics::Notify(Diagnostics::GeometryDrawsUpdated{ s, a_tables, a_frame });
+		Diagnostics::Notify(Diagnostics::StoreUpdated<GeometryStore>{ s, a_tables, a_frame });
 		a_out.slots = s.packed.View();
 	}
 }

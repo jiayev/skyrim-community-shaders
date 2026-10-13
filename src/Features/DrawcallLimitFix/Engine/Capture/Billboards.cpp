@@ -1,3 +1,6 @@
+// Billboards: the billboard row (SampleRow, FrameValues' producer inside the engine-read window) and the CPU port of the engine's turn
+// (Orient, for the diagnostics).
+
 #include "Features/DrawcallLimitFix/Engine/Capture/Billboards.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"

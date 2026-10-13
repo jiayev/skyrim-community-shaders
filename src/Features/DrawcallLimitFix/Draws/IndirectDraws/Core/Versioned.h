@@ -16,7 +16,7 @@ namespace DCLF::Draws
 	 * scene revision's version set snapshots (VersionSet), again when the count moved or the graph was built again. A buffer
 	 * made is no change: no revision before it names it, and the passes that declare it come with a graph build.
 	 *
-	 * T6b3b b2a, lock-free across threads: a buffer is registered from any thread (MakeVersioned: a push onto registered, an MPSC
+	 * Lock-free across threads: a buffer is registered from any thread (MakeVersioned: a push onto registered, an MPSC
 	 * queue), and the snapshot's owner (the revision code, VersionSet::Snapshot) takes them into buffers, its own list. changes is the
 	 * frame's (Changed at an adoption, SetChanges at a selection), compared at adoption; published is its value for the revision code,
 	 * which stamps a set current with it. next hands out new values to either side.

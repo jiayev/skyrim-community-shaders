@@ -14,6 +14,10 @@ namespace DCLF::Diagnostics
 	/**
 	 * @brief The hook points: where the main path announces what happened, for the observers (parity checks, probes, dumps) to look.
 	 *
+	 * The main path reaches the diagnostics only three ways: Observe() (Observation.h: which subjects this run watches), Policy::
+	 * (Policy.h: the questions that change its work, whose normal-path answer is the switches-off one), and the hook points here
+	 * (Notify, Armed; observers Subscribe at Install). It never reads a parity switch itself.
+	 *
 	 * A hook point is an event type and a Notify call. Notify costs one flag test while nothing observes the event; the observers
 	 * register at Install (before the first frame, before DCLF's threads start), and the registry is read-only from then on, so
 	 * Notify takes no lock. An observer runs on the thread and at the point of its Notify, and must not change what the main path
@@ -43,12 +47,36 @@ namespace DCLF::Diagnostics
 				observer(a_event);
 	}
 
+	/**
+	 * @brief A hook point that carries nothing but which point it is: Point, an enumerator of a Point enum (FramePoint below, the areas'
+	 * in their Events.h), is the event type. Its observers read what they look at from the modules (the frame from FrameView, the
+	 * coordinator's state through Diagnostics/Scene's SceneView).
+	 */
+	template <auto Point>
+	struct On
+	{
+	};
+
+	/** @brief A hook point of an On event: Notify<FramePoint::Present>(). */
+	template <auto Point>
+	inline void Notify()
+	{
+		Notify(On<Point>{});
+	}
+
 	/** @brief Install only: a_observer runs at every hook point of Event. */
 	template <class Event>
 	void Subscribe(void (*a_observer)(const Event&))
 	{
 		Detail::observers<Event>.push_back(a_observer);
 		Detail::armed<Event> = true;
+	}
+
+	/** @brief Install only: a_observer runs at every On<Point> hook point. */
+	template <auto Point>
+	void Subscribe(void (*a_observer)(const On<Point>&))
+	{
+		Subscribe<On<Point>>(a_observer);
 	}
 
 	/**
@@ -59,40 +87,27 @@ namespace DCLF::Diagnostics
 
 	// The frame's events (render thread, in frame order).
 
+	/** @brief The frame's points (On<FramePoint::...>), in frame order. */
+	enum class FramePoint : std::uint8_t
+	{
+		LookupsInstalled,   // the frame's lookups are the installed publication's, before the scene lane's inputs are posted
+		ClaimsInstalled,    // the frame's claims are installed (or withdrawn), before the culls
+		ShadowViewsBegin,   // BeforeShadowMaps, before the frame's shadow views are listed
+		RegistrationsDone,  // EarlyPrepass: the frame's registrations drained (the registration jobs done)
+		PrepassEnd,         // Prepass, DCLF running, after the frame constants are refreshed
+		Present,            // Present, every frame (DCLF running or not), first thing
+	};
+
 	/** @brief Main::Draw's early hook, every frame, with DCLF running or not. */
 	struct FrameBegin
 	{
 		bool running;
 	};
 
-	/** @brief The frame's claims are installed (or withdrawn), before the culls. */
-	struct ClaimsInstalled
-	{
-		std::uint32_t frame;
-	};
-
-	/** @brief The frame's lookups are the installed publication's, before the scene lane's inputs are posted. */
-	struct LookupsInstalled
-	{
-		std::uint32_t frame;
-	};
-
-	/** @brief BeforeShadowMaps, before the frame's shadow views are listed. */
-	struct ShadowViewsBegin
-	{
-		std::uint32_t frame;
-	};
-
 	/** @brief Prepass, every frame (DCLF running or not), before DCLF's prepass work. */
 	struct PrepassBegin
 	{
 		bool running;
-	};
-
-	/** @brief Prepass, DCLF running, after the frame constants are refreshed. */
-	struct PrepassEnd
-	{
-		std::uint32_t frame;
 	};
 
 	/** @brief A native Lighting draw, after its SetupGeometry (DCLF running). */
@@ -103,14 +118,6 @@ namespace DCLF::Diagnostics
 		std::uint32_t frame;
 		bool deferred;          // inside the deferred pass
 		bool mainPassCaptured;  // the colour epoch's bindings were captured this frame (BeforeOpaquePass)
-	};
-
-	/** @brief A native draw (State::Draw's dirty states applied): its pass (0x100 the depth prepass, 0x101 the deferred main pass, else the accumulator's render mode, 0xFF none), shader type and technique. */
-	struct NativeDraw
-	{
-		std::uint32_t pass;
-		std::uint32_t shaderType;
-		std::uint32_t technique;
 	};
 
 	/** @brief A native pass the batch renderers are about to draw while DCLF runs: a set member's in the main views is a leak. */
@@ -147,8 +154,4 @@ namespace DCLF::Diagnostics
 		ID3D11Texture2D* extra = nullptr;
 	};
 
-	/** @brief Present, every frame (DCLF running or not), first thing. */
-	struct Present
-	{
-	};
 }

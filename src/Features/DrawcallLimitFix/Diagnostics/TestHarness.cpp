@@ -1,3 +1,5 @@
+// The test harness: the CS_DCLF_TEST_* switches' scripted commands, toggles, turns, moves and exit, run every Present on the render
+// (main) thread, DCLF installed or not.
 #include "Features/DrawcallLimitFix/Runtime/Toggles.h"
 #include "TestHarness.h"
 
@@ -42,11 +44,9 @@ namespace DCLF
 			/**
 			 * @brief Advances the counter and runs whatever is due.
 			 *
-			 * The counter lives here rather than being Coordinator's frame number, because the commands have to
-			 * fire at the same point in a run whether or not the feature is installed. Driven off Coordinator's
-			 * frame, a CS_DCLF=0 run never ran them at all, so a "baseline" pinned to a given hour was in fact
-			 * whatever hour the save happened to be at - which is precisely the drift that makes screenshot
-			 * comparisons worthless. Loading screens do not count, so the two runs stay in step.
+			 * The counter lives here rather than being the scene's frame number, because the commands have to fire
+			 * at the same point in a run whether or not the feature is installed (a CS_DCLF=0 baseline included).
+			 * Loading screens do not count, so the two runs stay in step.
 			 */
 			void OnFrame()
 			{
@@ -71,7 +71,7 @@ namespace DCLF
 							});
 						continue;
 					}
-					// T7e: "dclf:draw=1" / "dclf:draw=0": the player's weapons or magic hands drawn or sheathed (Actor::DrawWeaponMagicHands, on
+					// "dclf:draw=1" / "dclf:draw=0": the player's weapons or magic hands drawn or sheathed (Actor::DrawWeaponMagicHands, on
 					// the main thread), so a scripted first-person run shows the arms (they are drawn only with a weapon or spell out).
 					if (command == "dclf:draw=1" || command == "dclf:draw=0") {
 						if (auto* tasks = SKSE::GetTaskInterface())

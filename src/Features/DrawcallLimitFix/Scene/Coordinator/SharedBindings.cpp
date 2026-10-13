@@ -1,3 +1,5 @@
+// Coordinator::UpdateSharedBindings and its helpers (SharedBindings.h), scene lane.
+
 #include "Internal.h"
 
 namespace DCLF::Scene
@@ -53,7 +55,7 @@ namespace DCLF::Scene
 			for (const auto& answer : sb.arrived)
 				ResolveShadowTextureBinding(answer.first);
 		// The fixed bindings, as the render thread last published them with the import context: made there once, read here. Written into
-		// the lookups where they differ (T6b2c step 5): the null texture and the samplers are the shadow builds' too, so either moves both
+		// the lookups where they differ: the null texture and the samplers are the shadow builds' too, so either moves both
 		// generations, and is a new shared version.
 		if (auto fixed = GpuTextures::Get().Fixed(); fixed != sb.fixed) {
 			sb.fixed = std::move(fixed);
@@ -88,8 +90,8 @@ namespace DCLF::Scene
 		} else if (sb.projectedPending && (answeredKinds & (1u << SharedBindings::kProjected))) {
 			ResolveProjectedBindings(sb.projectedPending);
 		}
-		// Each used pipeline's technique mask, from its row (the rows follow this pass's frame sample: RefreshTechniqueRows), as the render
-		// thread's refresh took them every frame. The row's view is the frame's shadow mask target, which the frame's capture holds.
+		// Each used pipeline's technique mask, from its row (the rows follow this pass's frame sample: RefreshTechniqueRows). The row's
+		// view is the frame's shadow mask target, which the frame's capture holds.
 		if (sb.masks.size() < tables.pipelines.size())
 			sb.masks.resize(tables.pipelines.size());
 		if (lookups.pipelines.size() < tables.pipelines.size())
@@ -237,7 +239,7 @@ namespace DCLF::Scene
 		}
 		mask.settled = !binding.pending;
 		mask.wanted = wanted;
-		// Into the lookups' entry (T6b2c step 5): what it was resolved for, and where the owner or the index moved, a new generation for
+		// Into the lookups' entry: what it was resolved for, and where the owner or the index moved, a new generation for
 		// each and a new version of the entry.
 		auto& written = lookups.pipelines.Mutable(a_slot);
 		written.shadowMaskView = view;

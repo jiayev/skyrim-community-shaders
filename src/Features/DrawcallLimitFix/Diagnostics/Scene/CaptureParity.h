@@ -20,7 +20,7 @@ namespace DCLF
 	 * (deferred) pass. For each draw of a geometry in the tables it checks the shader descriptors, the
 	 * world transform, the PerMaterial and PerGeometry constants, and the material's textures and
 	 * address modes. For each draw of a statically eligible geometry under a drawn category node that
-	 * is not tracked, it counts a tracking miss.
+	 * is not tracked, it counts a tracking miss. Render thread (the draw and Map/Unmap detours).
 	 */
 	class CaptureParity
 	{

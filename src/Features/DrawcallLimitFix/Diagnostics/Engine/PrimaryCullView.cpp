@@ -1,3 +1,5 @@
+// PrimaryCullView's out-of-line reads of the cut (PrimaryCullView.h).
+
 #include "PrimaryCullView.h"
 
 namespace DCLF::Diagnostics

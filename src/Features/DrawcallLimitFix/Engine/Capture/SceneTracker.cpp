@@ -1,3 +1,5 @@
+// SceneTracker: the NiNode child-edit detours (on the editing thread) and the event stack they and the hooks push onto.
+
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
 #include "Features/DrawcallLimitFix/Engine/Access/Walkers.h"
 
@@ -131,7 +133,7 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief A node class's own implementation of a slot (T6b1b): detoured when it is not NiNode's (BSParticleSystemManager's child
+		 * @brief A node class's own implementation of a slot: detoured when it is not NiNode's (BSParticleSystemManager's child
 		 * edits, which move world-space particle systems; BGSDecalNode's detaches and sets; BSFaceGenNiNode's attach), and not detoured
 		 * already. One that calls NiNode's reports the edit twice: an attach tracked again, a detach whose records are gone.
 		 */
@@ -180,7 +182,7 @@ namespace DCLF
 		DetourNiNodeSlot<DetachChildAt2At<0>>(kDetachChildAt2);
 		DetourNiNodeSlot<SetAt1At<0>>(kSetAt1);
 		DetourNiNodeSlot<SetAt2At<0>>(kSetAt2);
-		// The node classes that override them (T6b1b: a particle system the manager moved was missed).
+		// The node classes that override them (without these, a particle system the manager moves is missed).
 		{
 			std::vector<std::uintptr_t> done;
 			DetourOverrides<1>(RE::VTABLE_BSParticleSystemManager[0], done);
@@ -195,7 +197,7 @@ namespace DCLF
 
 	void SceneTracker::Push(Event* a_event)
 	{
-		// T6b3d: stamped for the latency histograms (the scene pump's), then the pump woken for what moves latency (the source decided
+		// Stamped for the latency histograms (the scene pump's), then the pump woken for what moves latency (the source decided
 		// before the push: the event is the consumer's after it): an attach in the world, a detach, a hidden bit, a leaf swapped, a
 		// property's or an alpha's values (WakeScenePass holds these during the frame's render). A node's or a geometry's values
 		// (transforms, the cull's fade state, a switch's index, segments) wake nothing: the frame's next pass takes them.
@@ -203,7 +205,7 @@ namespace DCLF
 		switch (a_event->type) {
 		case EventType::Attached:
 			// In the world alone (its capture: CaptureAttached captures only what is): a loader's subtree attached out of the world wakes
-			// nothing (w130: 488 of 827 attach passes changed nothing); its world attach does. The event still goes to the mirror.
+			// nothing (most such passes would change nothing); its world attach does. The event still goes to the mirror.
 			if (a_event->captured)
 				source = SceneWake::Attach;
 			break;
@@ -221,7 +223,7 @@ namespace DCLF
 				source = SceneWake::AlphaUpdate;
 			break;
 		case EventType::Gate:
-			// T6b5: always (its incoming blocks are withheld from the claims and hidden from the engine until the coordinator flips it).
+			// Always (its incoming blocks are withheld from the claims and hidden from the engine until the coordinator flips it).
 			source = SceneWake::Gate;
 			break;
 		}
@@ -271,7 +273,7 @@ namespace DCLF
 		event->type = EventType::Attached;
 		event->node.reset(a_child);
 		CollectAncestors(a_child, event->ancestors);
-		// The mirror's records, on this thread after the engine's attach (step 6e F3): only what is in the world.
+		// The mirror's records, on this thread after the engine's attach: only what is in the world.
 		event->captured = SceneCapture::CaptureAttached(*a_child);
 		Push(event);
 	}
@@ -283,7 +285,7 @@ namespace DCLF
 		auto* event = new Event{};
 		event->type = EventType::Detached;
 		CollectAncestors(a_child, event->ancestors);
-		// In the world (before the engine's detach, which follows the hook): the mirror drops every record under it (step 6e F3).
+		// In the world (before the engine's detach, which follows the hook): the mirror drops every record under it.
 		const bool inWorld = SceneCapture::InWorld(a_child);
 		CollectGeometry(a_child, event->removed, inWorld ? &event->removedNodes : nullptr);
 		if (inWorld)
@@ -372,7 +374,7 @@ namespace DCLF
 	{
 		void CaptureGate(std::uint64_t a_token, std::span<RE::NiAVObject* const> a_incoming, std::span<RE::NiAVObject* const> a_outgoing)
 		{
-			// The scene side of the gate (T6b5): an event on the swapping thread's stack, ordered after the attaches it follows; the
+			// The scene side of the gate: an event on the swapping thread's stack, ordered after the attaches it follows; the
 			// coordinator opens the gate when it applies it (Coordinator::ApplyGateEvent).
 			SceneTracker::Get().PushGate(a_token, a_incoming, a_outgoing);
 		}

@@ -20,22 +20,23 @@ namespace org::async
 namespace DCLF::Runtime
 {
 	/**
-	 * @brief The DCLF scene's artifacts (dclf-async-publication.md, "The design"): the kinds of DCLF's AsyncStateGraph.
+	 * @brief The artifact kinds of DCLF's state graph (dclf-async-publication.md, "The design"). Only BufferVersion has a producer
+	 * (growth, registered here).
 	 *
-	 * SceneState is the coordinator's scene, revised in event order: its requests are exact and never coalesced, so no
-	 * revision's events are skipped. The rest are derived and replaceable: a newer request supersedes an unstarted older one.
+	 * SceneState and BufferVersion requests are exact and never coalesced; the other kinds are replaceable: a newer request
+	 * supersedes an unstarted older one.
 	 */
 	enum class SceneArtifact : std::uint32_t
 	{
-		SceneState,         // the scene tables after a frame's events (phase 3)
-		Lookups,            // material, pipeline and texture lookups (phase 5)
-		FrameValues,        // a frame's placements, palettes, shading samples and visibility (phase 4)
-		ShadowPayload,      // the per-segment payloads (phase 6)
+		SceneState,         // the scene tables after a frame's events
+		Lookups,            // material, pipeline and texture lookups
+		FrameValues,        // a frame's placements, palettes, shading samples and visibility
+		ShadowPayload,      // the per-segment payloads
 		ZPrepassPayload,
 		ColourPayload,
 		ReflectionPayload,
 		OcclusionPayload,
-		Publication,        // what the render thread accepts: claims, filters and every segment's payload (phase 3 on)
+		Publication,        // what the render thread accepts: claims, filters and every segment's payload
 		BufferVersion,      // a versioned buffer's next version, made and filled as graph work (growth: PostGrowth)
 		Count
 	};
@@ -57,7 +58,7 @@ namespace DCLF::Runtime
 		std::function<void(std::shared_ptr<const void> a_value, std::string a_error)> done;  // coordinator lane, once: null and why on failure
 	};
 
-	/** @brief DCLF's AsyncStateGraph on DCLF's executor. Producers come with the phases that need them; growth's is registered here. */
+	/** @brief DCLF's state graph on DCLF's executor, with the growth producer. */
 	class SceneGraph
 	{
 	public:

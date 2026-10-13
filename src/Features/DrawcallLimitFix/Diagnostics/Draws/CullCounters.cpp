@@ -1,3 +1,7 @@
+// The culling's own counters (always on): the colour epoch's count buffer copied every 120th epoch and read three frames later into
+// the stats, with the CPU's side of the sun test and, under CS_DCLF_SET_PARITY, of the terrain near test and the forward and
+// refraction registrations.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "DrawsState.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -5,10 +9,6 @@
 #	include "Events.h"
 #	include "Observers.h"
 #	include "Features/DrawcallLimitFix/Diagnostics/Engine/Registrations.h"
-
-// The culling's own counters (always on): the colour epoch's count buffer copied every 120th epoch and read three frames later into
-// the stats, with the CPU's side of the sun test and, under CS_DCLF_SET_PARITY, of the terrain near test and the forward and
-// refraction registrations.
 
 namespace DCLF::Diagnostics
 {

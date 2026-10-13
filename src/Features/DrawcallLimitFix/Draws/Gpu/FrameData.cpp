@@ -1,3 +1,5 @@
+// FrameData: the render thread's per-frame write counters (see the header).
+
 #include "FrameData.h"
 
 #if defined(CS_HAS_RENDER_GRAPH)

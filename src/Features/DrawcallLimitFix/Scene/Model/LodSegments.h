@@ -42,7 +42,7 @@ namespace DCLF::LodSegments
 	{
 		std::uint32_t firstIndex = 0;
 		std::uint32_t indexCount = 0;
-		// The range's geometry slot key (Coordinator::ResolveLodRanges): its first segment's record, unique while the shape lives
+		// The range's geometry slot key (Coordinator::ResolveLodRangeSlots): its first segment's record, unique while the shape lives
 		// and never a TriShape's address; null for a non-segmented shape's whole range.
 		const void* key = nullptr;
 		// The triangles alone: a run's start moves to an empty segment before it when the engine rebuilds the runs (FUN_140e31180),

@@ -1,4 +1,4 @@
-// Drawcall Limit Fix, T7d: the forward range's sort, back to front. The colour segment's BuildDrawsCS appended every visible forward
+// Drawcall Limit Fix: the forward range's sort, back to front. The colour segment's BuildDrawsCS appended every visible forward
 // draw (Records.h, kObjectForward: blended Lighting geometry and the Effect port's meshes) to the staging half of the forward range,
 // each with its sort key in three words nothing executes there: its view depth (the clip w of its bound centre, or of its BSOrderedNode's
 // centre for a leaf of an ordered group) in firstInstance, and for such a leaf its group (a hash of that centre) in instanceCount and its
@@ -17,9 +17,10 @@
 // per tile rather than each thread on its own. A much larger class would take a radix or bitonic sort here; the contract (staging half
 // in, sorted half out, the count word) stays.
 //
-// T7e: the first-person view's forward range (IndirectDraws: FirstPerson.cpp) is sorted by the same program, its count the range's bucket
+// The first-person view's forward range (IndirectDraws: FirstPerson.cpp) is sorted by the same program, its count the range's bucket
 // count word (kSortCountOffset), its keys staged by the first-person BuildDraws with the first-person camera's view depth.
 
+// Must match ForwardSortConstants (Draws/IndirectDraws/Main/FrameLayout.h).
 cbuffer ForwardSortConstants : register(b0)
 {
 	uint SequencesIndex;  // RWByteAddressBuffer: DrawSequence[], the main sequences
@@ -27,7 +28,7 @@ cbuffer ForwardSortConstants : register(b0)
 	uint StagingBase;     // the staging half's first slot; the sorted half follows it, Capacity slots on
 	uint Capacity;        // each half's slots (PassFrame::forwardCapacity)
 	uint SequenceStride;  // bytes (sizeof(DrawSequence))
-	uint CountOffset;     // T7e: with kSortCountOffset, the byte offset of the count word in CountIndex (the first-person forward range's bucket count)
+	uint CountOffset;     // with kSortCountOffset, the byte offset of the count word in CountIndex (the first-person forward range's bucket count)
 	uint Options;         // kSortCountOffset
 	uint Padding2;
 }

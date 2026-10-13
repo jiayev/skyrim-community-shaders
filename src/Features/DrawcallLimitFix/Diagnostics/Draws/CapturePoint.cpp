@@ -1,10 +1,10 @@
+// CS_DCLF_CAPTURE_POINT_PARITY: at the frame's first deferred lighting draw the engine makes, what is bound there against the colour
+// epoch's capture, in everything the colour epoch takes from it.
+
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "DrawsState.h"
 #	include "DrawsView.h"
 #	include "Observers.h"
-
-// CS_DCLF_CAPTURE_POINT_PARITY: at the frame's first deferred lighting draw the engine makes, what is bound there against the colour
-// epoch's capture, in everything the colour epoch takes from it.
 
 namespace DCLF::Diagnostics
 {

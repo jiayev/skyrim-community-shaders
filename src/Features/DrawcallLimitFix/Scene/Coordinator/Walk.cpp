@@ -1,3 +1,6 @@
+// The coordinator's walk (scene lane; entry evaluations across the pool): the scene phase of a pass, the delta walk's rounds
+// (evaluate, then merge in order), the object records and their geometry slots, face shapes' regions, and the per-frame traits.
+
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
@@ -18,43 +21,27 @@ namespace DCLF::Scene
 	}
 
 	/**
-	 * @brief The scene half of the frame, from Main::Draw's early hook.
+	 * @brief The scene phase of a pass: everything independent of the accumulator (tracked walk, eligibility, geometry slots,
+	 * transforms, bounds, bone palettes, one object record per eligible object).
 	 *
-	 * Everything that does not depend on the main camera's accumulator: the tracked walk, eligibility, the
-	 * geometry slots and their buffer resolve, the transforms and bounds, the bone palettes, and one object
-	 * record per eligible object. It runs before the shadow maps are drawn - the scene graph is final from
-	 * Main::Draw on, and a shadow epoch reads these records. The early hook is ahead of the main camera's
-	 * cull; what moves before BeforeShadowMaps is listed at DrawcallLimitFix::BeginSceneFrame.
-	 *
-	 * The records leave the accumulator's half unset: no pipeline, no material, kObjectNoBindings, and
-	 * no bindings (kObjectNoBindings). BuildAccumulatePhase patches them in place by object index, which is
-	 * fixed for the frame from here on.
+	 * The records leave the accumulator's half unset (kObjectNoBindings); BuildAccumulatePhase patches them by object index, fixed
+	 * from here on.
 	 */
 	void Coordinator::BuildScenePhase()
 	{
 		{
 			DCLF_SCENE_PART(Prologue, "CS.DCLF.Scene.Prologue");
-			// The frame number moved at BeginFrame, before the work was kicked: what the engine's hooks read in the window.
-			// The change log keeps its tail (Tables::changeLog): a reader that has not read past the trimmed half reads every
-			// slot again.
+			// A reader that has not read past the trimmed half reads every slot again.
 			tables.changeLog.Trim(1u << 17);
 			tables.materialLog.Trim(1u << 16);
 			tables.geometryLog.Trim(1u << 16);
 			tables.extrasBlockLog.Trim(1u << 16);
-			Diagnostics::Notify(Diagnostics::ScenePhaseBegin{ *this });
+			Diagnostics::Notify<Diagnostics::ScenePoint::ScenePhaseBegin>();
 		}
-		// Nothing is drawn while a load screen is up, and nothing here may touch the tracked geometry
-		// either. The load frees the renderer data and the vertex and index buffers of the cell being
-		// unloaded, while the NiPointers in `tracked` keep only the NiAVObjects alive; classifying those
-		// entries reads freed BSGraphics::TriShape data and hands the render graph device addresses that no
-		// longer belong to anything, which the GPU answers with VK_ERROR_DEVICE_LOST a few frames later.
-		//
-		// Before the events stopped being applied the scene graph across loads, this did not arise: the
-		// category-node refresh pruned those entries as the cell's nodes vanished, so they never reached
-		// this loop. Leaving the tables empty is both the safe and the obviously correct thing to draw
-		// during a load screen.
+		// Nothing may touch the tracked geometry during a load screen: the load frees the unloading cell's renderer data and vertex
+		// and index buffers while `tracked` keeps only the NiAVObjects alive. Reading them hands the graph dead device addresses
+		// (VK_ERROR_DEVICE_LOST a few frames later), so the tables stay empty.
 		sceneBuilt = false;
-		// The frame's globals (FrameGlobals: the render thread's capture at the frame's start; step 6e F2).
 		const auto& globals = FrameGlobals::Current();
 		if (globals.loading) {
 			ResetSlotTables();
@@ -66,8 +53,7 @@ namespace DCLF::Scene
 			stats.materials = 0;
 			return;
 		}
-		// T6b3e: the toggles and Terrain Blending as the pass's evaluations read them, on the pool and here (ShardScope), the joins
-		// included (BuildAccumulatePhase binds the same): the render thread may switch either while the pass runs.
+		// Snapshotted for the whole pass (pool and joins): the render thread may switch either while it runs.
 		passSnapshot = { ActiveToggles(), TerrainBlendingDefersTerrain() };
 		ShardScope passScope(*this, false);
 		PartTimer timer(stats.partMs);
@@ -82,32 +68,26 @@ namespace DCLF::Scene
 					resolveBuffers ? "active from this frame" : "inactive from this frame", stats.geometriesAlive, stats.pipelinesAlive, stats.materialsAlive);
 				graphWasActive = resolveBuffers;
 			}
-			// Frame-globals that were being read per object. ShouldSuppress in particular is three terms, and
-			// only one of them is per object - the interior test is the same answer for every object in the
-			// frame. The depth-bias mode of each decal group is frame state (a console toggle and whether sun
-			// shadows are off), read once here rather than per decal.
+			// Frame state, read once: ShouldSuppress's interior test and the decal depth-bias mode are the same for every object.
 			frameInterior = globals.interior;
 			frameDecalBias = globals.decalBias;
 			geometryIndex.reserve(tracked.size());
 		}
 		timer.Add(BuildPart::Walk);
 		{
-			// Consume object-reference changes from the completed frame. Materials retire
-			// on their last-reference event; geometry and pipeline slots retain their grace period.
+			// Materials retire on their last-reference event; geometry and pipeline slots keep their grace period.
 			DCLF_SCENE_PART(SweepSlots, "CS.DCLF.Scene.SweepSlots");
 			SweepSlots();
 		}
 
-		// Only what can have changed (DeltaWalk).
 		DeltaWalk();
-		// What the next frame's values sample (FrameValues): the slots the shading events name, the walk's movers, the slots it wrote,
-		// the roots it takes.
+		// What the next frame's values sample (FrameValues).
 		{
 			DCLF_SCENE_PART(Shading, "CS.DCLF.Scene.Shading");
 			NameShadingEvents();
 		}
 		PublishPlacementPlan();
-		Diagnostics::Notify(Diagnostics::WalkDone{ *this });
+		Diagnostics::Notify<Diagnostics::ScenePoint::WalkDone>();
 		stats.objects = tables.liveObjects;
 		sceneBuilt = true;
 	}
@@ -116,8 +96,7 @@ namespace DCLF::Scene
 	{
 		a_face = {};
 		a_region = kNoFaceRegion;
-		// The head the entry holds, its shapes the mirror's children of it (T6b1b): each a dynamic shape's record and its tracked entry's
-		// reference.
+		// The head's shapes: its dynamic-shape children in the mirror, each with its tracked entry's reference.
 		if (auto* head = a_tracked.faceHeadRef.get()) {
 			a_face = FaceSnapshots::Get().Shape(&a_geometry, head, [&](std::vector<FaceSnapshots::ShapeInput>& a_out) {
 				const auto* record = mirror.Node(head);
@@ -142,7 +121,7 @@ namespace DCLF::Scene
 	void Coordinator::PushFaceStream(RE::BSGeometry& a_geometry, const Tracked& a_tracked, std::uint32_t a_slot, const FaceSnapshots::ShapeView& a_face, std::uint32_t a_region)
 	{
 		std::shared_ptr<const FaceSnapshots::HeadView> headView;
-		const RE::BSFaceGenNiNode* head = a_tracked.faceHeadRef.get();  // T6b1b: the entry's
+		const RE::BSFaceGenNiNode* head = a_tracked.faceHeadRef.get();  // the entry's
 		if (head) {
 			auto [headEntry, inserted] = capturedFaceHeads.try_emplace(head);
 			if (inserted) {
@@ -159,7 +138,7 @@ namespace DCLF::Scene
 
 	void Coordinator::ListFaceShape(RE::BSGeometry* a_geometry, Tracked& a_tracked)
 	{
-		const auto* head = a_tracked.faceHeadRef.get();  // T6b1b: the entry's
+		const auto* head = a_tracked.faceHeadRef.get();  // the entry's
 		if (!head || a_tracked.faceHead == head)
 			return;
 		UnlistFaceShape(a_geometry, a_tracked);
@@ -197,8 +176,7 @@ namespace DCLF::Scene
 
 	void Coordinator::ApplyFacePublications()
 	{
-		// A head's record changed shape (a writer found a shape's vertex count changed, or a shape left): every shape of it is
-		// written again, the first of which rebuilds the record.
+		// A head's record changed shape: every shape of it is written again, the first rebuilding the record.
 		for (const auto* head : faceStale) {
 			const auto it = faceHeads.find(head);
 			if (it == faceHeads.end())
@@ -259,7 +237,7 @@ namespace DCLF::Scene
 	{
 		auto& region = faceRegions[a_geometry];
 		if (region.count != a_vertexCount) {
-			// The old region retires: an installed publication's streams may still name it (the reflection's, a frame behind).
+			// Retired, not freed: an installed publication's streams may still name it.
 			if (region.count)
 				tables.Retire(Tables::kRetiredFaceRegion, region.first, region.count);
 			region = {};
@@ -294,8 +272,7 @@ namespace DCLF::Scene
 
 	void Coordinator::EndFaceWalk()
 	{
-		// The regions of the streams freed since: free when no stream of the shape holds the region any more (a shape written
-		// to another slot holds it through its new stream). Not the dense walk's (walk parity), whose tables are put back.
+		// Freed streams' regions retire once no stream of the shape holds them. The dense walk's tables are put back, so skip it.
 		for (const auto& [geometry, first] : denseWalk ? decltype(tables.faceStreamsReleased){} : tables.faceStreamsReleased) {
 			const auto it = faceRegions.find(geometry);
 			if (it == faceRegions.end() || it->second.first != first)
@@ -310,7 +287,7 @@ namespace DCLF::Scene
 			faceRegions.erase(it);
 		}
 		tables.faceStreamsReleased.clear();
-		// Sorted and coalesced, so a run of freed shapes is one range again (the retirement chain gives them back: RecycleRetired).
+		// Coalesce the free ranges (RecycleRetired returns them).
 		std::sort(faceRegionFree.begin(), faceRegionFree.end());
 		std::size_t out = 0;
 		for (std::size_t i = 0; i < faceRegionFree.size(); ++i) {
@@ -338,7 +315,7 @@ namespace DCLF::Scene
 		++walkSerial;
 		if (FaceSnapshots::Enabled()) {
 			FaceSnapshots::Get().BeginWalk(facePublished, faceStale);
-			// The freed records' references, released at Present through the retirement chain (T6b1b).
+			// The freed records' references, released at Present through the retirement chain.
 			std::vector<RE::NiRefObject*> released;
 			FaceSnapshots::Get().TakeReleased(released);
 			for (auto* object : released) {
@@ -349,15 +326,7 @@ namespace DCLF::Scene
 		}
 		stats.ineligible.fill(0);
 		stats.techniqueRejects.fill(0);
-		stats.propertyRejects.clear();
-		stats.rejectedBlended = stats.rejectedOpaque = stats.rejectedOpaqueAlphaTest = 0;
 		stats.shadowMaskPipelines = 0;
-		stats.derivationChecked = stats.derivationDiffers = stats.derivationBits = stats.derivationNative = 0;
-		stats.derivationFadeBits = stats.lodFadeChecked = stats.lodMetricDiffers = stats.lodFadeDiffers = 0;
-		stats.lodFadeFirst.clear();
-		lodFadeSampled = false;
-		stats.derivationRuntimeDiffers = stats.derivationRuntimeBits = 0;
-		stats.derivationBitCounts.fill(0);
 		stats.materialsEvaluated = 0;
 		stats.classifyHits = stats.classifyChecked = stats.classifyDiffers = 0;
 		stats.derivedHits = stats.derivedChecked = stats.derivedDiffers = 0;
@@ -369,9 +338,7 @@ namespace DCLF::Scene
 
 		skinnedObjects.clear();
 
-		// Every per-object container, not only three of them. The three that were left out reallocated
-		// their way back up every frame, and objectIndex - cleared just above - rehashed its way up to
-		// ~2900 entries in the Whiterun exterior, which the profile billed to `record`.
+		// Every per-object container reserved up front: one left out reallocates its way back up every walk.
 		if (!keepObjects) {
 			tables.objects.reserve(tracked.size());
 			tables.objectGeometry.reserve(tracked.size());
@@ -389,7 +356,6 @@ namespace DCLF::Scene
 		PartTimer timer(stats.partMs);
 		timer.Add(BuildPart::PassLookup);
 		for (auto& [geometry, trackedEntry, unused, layer] : order) {
-			// Per TRACKED object: for a rejected one this is its `continue` and the iteration itself.
 			timer.Add(BuildPart::LoopTail);
 			Ineligible bucket = Ineligible::Count;
 			WriteObject(geometry, *trackedEntry, timer, bucket);
@@ -403,23 +369,18 @@ namespace DCLF::Scene
 
 	void Coordinator::DenseReference(Tables& a_dense, ankerl::unordered_dense::map<const RE::BSGeometry*, Ineligible>& a_reasons)
 	{
-		// The slot walk has just run. Everything a second walk overwrites is kept and restored, so the frame goes on with the slot tables
-		// exactly as they were.
+		// Everything the second walk overwrites is saved and restored, so the frame goes on with the slot tables unchanged (the
+		// geometry index and face regions live outside the tables, so they are saved too). Tree and fade-root owners are not: the dense
+		// walk lists neither, and copies would be references the pump drops. The reference walks the whole tracked set.
 		Tables slots = tables;
 		const auto savedStamp = objectStamp;
 		const auto savedStats = stats;
 		const auto savedSkinned = skinnedObjects;
-		// The dense walk may resolve a geometry slot the delta walk did not (an object only it writes): the index map is not part of the
-		// tables, so it is kept too.
 		const auto savedGeometryIndex = geometryIndex;
 		const auto savedRefreshed = refreshedGeometry;
-		// The face regions likewise: the streams that hold them are the slot tables'.
 		const auto savedFaceRegions = faceRegions;
 		const auto savedFaceRegionFree = faceRegionFree;
 		const auto savedFaceRegionTop = faceRegionTop;
-		// The tree and fade-root owners are not saved: the dense walk lists neither (ListTree, ListFadeRoot: denseWalk), and copies of
-		// them would be references the pump drops.
-		// The delta walk's `order` holds only what it evaluated; the reference is the whole tracked set.
 		BuildFullOrder();
 		referenceReasons.clear();
 		denseWalk = true;
@@ -467,17 +428,14 @@ namespace DCLF::Scene
 
 	void Coordinator::EvaluateWrite(RE::BSGeometry* geometry, const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out, PartTimer& timer) const
 	{
-		// T6b3e: WriteObject's evaluation, pure (any thread under a ShardScope): what it decides for the entry goes into a_out's delta, its
-		// counts into a_counters, and everything that reads or writes a slot is the merge's (MergeWrite).
+		// WriteObject's pure half (any thread under a ShardScope): decisions go to a_out's delta, counts to a_counters; anything that
+		// touches a slot is MergeWrite's.
 		auto& c = a_counters;
 		auto& d = a_out.delta;
-		// Policy::RecomputeCachedVerdicts: the cached verdict is used and *also* recomputed, and the two compared.
+		// The cached verdict is used and also recomputed, and the two compared.
 		const bool classifyProbe = Policy::RecomputeCachedVerdicts(Policy::Verdicts::Classification, passSerial);
-		// CS_DCLF_COVERAGE_PROBE=1: which shader the uncovered objects actually use.
-		const bool coverageProbe = Diagnostics::Observe().coverageProbe;
 		const auto& entry = a_tracked;
-		// Its records (T6b1b): the mirror's, never the live geometry's. None yet (an attach no hook captured, its capture requested at
-		// AddGeometry): written when the capture's batch names it (leafWaiting, set by the merge).
+		// The mirror's records, never the live geometry. None yet (an uncaptured attach): written when its capture lands (leafWaiting).
 		const auto leaf = mirror.Leaf(geometry);
 		a_out.leaf = leaf;
 		if (!leaf) {
@@ -488,14 +446,10 @@ namespace DCLF::Scene
 			return;
 		}
 
-		// Eligibility, and nothing else. This phase needs no lighting descriptors - the pipeline and
-		// material belong to the accumulator's half - so the verdict is taken from Tracked's own
-		// cache (refreshed by the delta walk's events) rather than recomputed per object per frame: that cache is what made the cull-only path cheap, and here it covers every object.
-		//
-		// A verdict that is stale in the "eligible" direction costs nothing: the accumulate phase
-		// classifies again before it hands an object any bindings. A verdict stale the other way
-		// would leave an accumulated object without a record, so that phase clears the cache for it.
-		// An NPC face shape (FaceSnapshots), resolved once: a tracked geometry's type and parent do not change.
+		// Eligibility only, from Tracked's event-refreshed cache. A verdict stale toward "eligible" is harmless (the accumulate phase
+		// classifies again before binding); one stale the other way would leave an accumulated object without a record, so that phase
+		// clears the cache for it.
+		// An NPC face shape, resolved once: a tracked geometry's type and parent do not change.
 		bool faceShapeOf = entry.faceShape;
 		if (!entry.faceShapeResolved) {
 			d.faceShapeSet = true;
@@ -503,41 +457,27 @@ namespace DCLF::Scene
 			                            (leaf.parent->kind & SceneCapture::kKindFaceGen);
 		}
 		const bool faceShape = faceShapeOf && FaceSnapshots::Enabled();
-		// Owned by an actor, as Skin::GetWetness decides it; resolved once, like the face shape.
+		// Actor-owned as Skin::GetWetness decides it; resolved once.
 		if (!entry.actorOwnedResolved) {
 			d.actorOwnedSet = true;
 			d.actorOwned = leaf.node->IsActorCharacter();
 		}
 		Ineligible reason;
 		bool shadowOnly = false;  // not the main pass's, but a caster the shadow epochs draw (kObjectShadowOnly)
-		// A face shape is classified every frame: its record also depends on its head's snapshot, and the
-		// verdicts it can take (hidden, fading, a decal group) change as the actor does.
-		// The dense rebuild (walk parity's reference) classifies from scratch and leaves the caches alone. With
-		// A classification stands until an event takes it again, except an actor's and any other per-frame entry
-		// written in full: its inputs are re-read every frame (Tracked::classifyInputs), as its record is.
+		// A classification stands until an event (property, fade, hidden bit, attach, detach) writes the entry again. Exceptions: a
+		// face shape is classified every frame (its record depends on the head's snapshot and the actor's state), as are an actor's and
+		// other per-frame entries' frame verdicts. The dense rebuild classifies from scratch and leaves the caches alone.
 		const bool rereads = entry.perFrame && (!entry.lightTraits || (entry.lightTraits & kTraitActor));
 		bool cached = !denseWalk && !faceShape && entry.candidateFrame != 0;
-		// What a classification reads has events (properties, fades, hidden bits, attach and detach), each of which writes the
-		// entry in full; CS_DCLF_INPUT_WATCH reads the inputs again regardless, and counts a change no event announced.
-		if (cached && rereads && Policy::RereadCachedInputs()) {
-			const bool changed = ClassifyInputsOf(*geometry) != entry.classifyInputs;
-			NoteInputReread(entry, *geometry, 0, changed, c, d);
-			if (changed) {
-				cached = false;
-				++c.reread;
-			}
-		}
 		if (cached) {
 			reason = entry.candidateReason;
-			// Under a switch node the verdict follows the switch's selection, which changes (a harvested
-			// plant, a tree's variant) without anything the cache witnesses: the shadow views draw what
-			// this phase admits, so it is taken again every frame. Static verdicts other than None stand.
-			// A re-read entry's hidden and actor verdicts are the frame's too.
+			// Under a switch node the verdict follows the switch's selection, which changes (a harvested plant, a tree's variant)
+			// without an event, and the shadow views draw what this phase admits: retaken every frame. Other static verdicts stand.
 			const bool frameVerdict = reason == Ineligible::None || reason == Ineligible::Switch ||
 			                          (rereads && (reason == Ineligible::Hidden || reason == Ineligible::Actor));
 			if ((entry.parentReason == Ineligible::Switch || rereads) && frameVerdict) {
 				reason = ClassifyFrame(entry);
-				// A verdict the frame changed is a classification: EvaluateRound takes the entry's traits again.
+				// A changed verdict counts as a classification (EvaluateRound retakes the traits).
 				d.candidateSet = true;
 				d.candidateFrame = reason != entry.candidateReason ? PassStamp() : entry.candidateFrame;
 				d.candidateReason = reason;
@@ -553,7 +493,6 @@ namespace DCLF::Scene
 		} else {
 			LightingDescriptors descriptors;
 			const auto& verdict = entry.verdict;
-			// The witnesses: the records' keys.
 			const auto* witnessRenderer = static_cast<const RE::BSGraphics::TriShape*>(leaf.geometry->rendererData);
 			const auto* witnessProperty = static_cast<const RE::BSShaderProperty*>(leaf.geometry->property);
 			const auto* witnessMaterial = leaf.property ? static_cast<const RE::BSShaderMaterial*>(leaf.property->material) : nullptr;
@@ -567,7 +506,7 @@ namespace DCLF::Scene
 			} else {
 				reason = Eligibility::Static(leaf, &descriptors);
 				if (hit) {
-					// probe: the cache said one thing and the computation another, which is a defect (logged at the merge, once a walk).
+					// A mismatch is a defect (logged at the merge, once a walk).
 					++c.classifyChecked;
 					if (reason != verdict.reason && c.classifyDiffers++ == 0)
 						c.classifyDiffersFirst = fmt::format("[DCLF] classify cache: '{}' is cached as {} but recomputes as {}", geometry->name.c_str() ? geometry->name.c_str() : "?",
@@ -592,28 +531,11 @@ namespace DCLF::Scene
 				d.candidateSet = true;
 				d.candidateFrame = PassStamp();
 				d.candidateReason = reason;
-				d.classifyInputsSet = true;
-				d.classifyInputs = ClassifyInputsOf(*geometry);
-				// StoreInputComponents' (CS_DCLF_INPUT_WATCH).
-				if (Diagnostics::Observe().inputWatch) {
-					d.inputComponentsSet = true;
-					d.inputComponents = InputComponentsOf(*geometry);
-				}
 			}
 			++c.ineligible[static_cast<std::size_t>(reason)];
 			a_out.reason = reason;
 			if (reason == Ineligible::Technique)
 				++c.techniqueRejects[descriptors.rejectedTechnique & 63];
-			if (coverageProbe && reason == Ineligible::NotLightingShader) {
-				++c.propertyRejects[leaf.property ? static_cast<const RE::NiRTTI*>(leaf.property->rtti) : nullptr];
-				if (leaf.AlphaBlending()) {
-					++c.rejectedBlended;
-				} else {
-					++c.rejectedOpaque;
-					if (leaf.AlphaTesting())
-						++c.rejectedOpaqueAlphaTest;
-				}
-			}
 			shadowOnly = reason != Ineligible::None && !Eligibility::DeferredToAccumulate(reason) && Eligibility::ShadowOnlyCaster(reason, leaf);
 			a_out.shadowOnly = shadowOnly;
 			if (reason != Ineligible::None && !Eligibility::DeferredToAccumulate(reason) && !shadowOnly) {
@@ -622,16 +544,15 @@ namespace DCLF::Scene
 			}
 		}
 
-		// The record's inputs that name no slot: its face (resolved by the merge: FaceSnapshots' state is shared), skin, LOD ranges,
-		// palette rows, shadow and occlusion techniques.
+		// The record's slot-free inputs (the face is the merge's: FaceSnapshots' state is shared).
 		a_out.write = EvalResult::Write::Record;
 		a_out.faceShape = faceShape;
 		const auto& g = *leaf.geometry;
-		// Which skin partitions the engine draws: every LOD level's for a LOD skin, narrowed by the draw to its root's level (T1b,
-		// skinLodPartitions). A skin the engine draws no partition of at any level stays a member that draws nothing (kNoPartitions).
+		// The skin partitions the engine draws: every LOD level's for a LOD skin (the draw narrows to its root's level); none at any
+		// level is a member that draws nothing (kNoPartitions).
 		std::uint16_t partitionMask = SkinPartitionsOf(g);
-		// Object LOD (dclf-lod.md): the ranges its hidden cells leave. Whole, the TriShape's own slot; none, a member that draws
-		// nothing (kNoPartitions); else a chain of range slots (kPartitionChain), resolved again at each segment event.
+		// Object LOD (dclf-lod.md): the ranges its hidden cells leave. Whole: the TriShape's own slot; none: kNoPartitions; else a
+		// chain of range slots (kPartitionChain), resolved again at each segment event.
 		const auto* shapeRanges = g.type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape) ? LodRangesOf(geometry) : nullptr;
 		const bool lodChain = shapeRanges && !shapeRanges->empty() && !LodSegments::Whole(g.triangleCount, *shapeRanges);
 		if (shapeRanges && shapeRanges->empty())
@@ -640,23 +561,22 @@ namespace DCLF::Scene
 			partitionMask = static_cast<std::uint16_t>(kPartitionChain | std::min<std::size_t>(shapeRanges->size(), kPartitionChainCount));
 		a_out.partitionMask = partitionMask;
 		a_out.lodChain = lodChain;
-		// Skinning: the palette's rows from the skin data's bone count (SkinRowsOf, the record's; the merge places the block).
+		// Palette rows from the bone count; the merge places the block.
 		if (leaf.Skinned() && ActiveToggles().skinned) {
 			a_out.skinCandidate = true;
 			const std::uint32_t rows = leaf.geometry->skinData ? leaf.geometry->boneCount * 3 : 0u;
 			if (rows && rows <= 240)
 				a_out.boneRows = rows;
 		}
-		// T7e: a particle member's quads (ParticleSnapshots): its block of the frame's palettes, five rows a particle of its capacity's
-		// bucket, which FrameValues' producer fills from the system's newest snapshot every frame.
+		// A particle member's palette block: five rows a particle of its capacity bucket, filled by FrameValues every frame.
 		if (a_out.reason == Ineligible::None && ParticleSystemTaken(leaf))
 			a_out.particleRows = ParticleSnapshots::RowsOf(leaf.geometry->particles.capacity);
-		// Whether the engine would draw this object into a shadow map, and with which Utility technique (WriteObject's reasons).
+		// Whether the engine would draw this object into a shadow map, and with which Utility technique.
 		using PropertyFlag = RE::BSShaderProperty::EShaderPropertyFlag;
 		const auto* shadowProperty = leaf.property;
 		const auto shadowReject = ShadowCasterReject(leaf);
 		a_out.shadowReject = static_cast<std::uint8_t>(shadowReject);
-		// An alpha-tested technique (bit 0x80) samples the diffuse: the property's record's material and diffuse view.
+		// An alpha-tested technique (bit 0x80) samples the diffuse.
 		auto sampleDiffuse = [&]() {
 			if (a_out.shadowMaterial)
 				return;
@@ -670,8 +590,7 @@ namespace DCLF::Scene
 			if (a_out.shadowTechnique & 0x80)
 				sampleDiffuse();
 		}
-		// The occlusion maps DCLF draws: LOD is no occluder of either (Precipitation::SetupMask culls the scene lists, which do not hold
-		// the LOD root).
+		// LOD occludes neither occlusion map (Precipitation::SetupMask culls the scene lists, which do not hold the LOD root).
 		constexpr std::uint64_t kLodFlags = static_cast<std::uint64_t>(PropertyFlag::kLODLandscape) | static_cast<std::uint64_t>(PropertyFlag::kLODObjects) |
 		                                    static_cast<std::uint64_t>(PropertyFlag::kHDLODObjects);
 		const bool lod = shadowProperty && (shadowProperty->flags & kLodFlags);
@@ -697,12 +616,10 @@ namespace DCLF::Scene
 			}
 			return false;
 		}
-		// A member's record written again (an event, or its per-frame inputs): it stays a member with its binding if the
-		// write keeps it eligible in the same slot, and BindByMembership binds it again only if what the binding reads changed.
+		// A rewritten member keeps its binding if it stays eligible in the same slot; BindByMembership rebinds only if its inputs changed.
 		const bool wasMember = !denseWalk && a_tracked.slot != kNoObjectSlot && IsResidentSlot(a_tracked.slot);
 		if (wasMember)
 			++residentStats.rewritten;
-		// What the evaluation decided for the entry (T6b3e: its TrackedDelta), as WriteObject wrote it.
 		if (d.faceShapeSet) {
 			trackedEntry->faceShapeResolved = true;
 			trackedEntry->faceShape = d.faceShape;
@@ -713,19 +630,12 @@ namespace DCLF::Scene
 			trackedEntry->actorOwnedResolved = true;
 			trackedEntry->actorOwned = d.actorOwned;
 		}
-		if (d.inputComponentsSet) {
-			if (!trackedEntry->inputComponents)
-				trackedEntry->inputComponents = std::make_unique<std::array<std::uint64_t, 12>>();
-			*trackedEntry->inputComponents = d.inputComponents;
-		}
 		if (d.verdictSet)
 			trackedEntry->verdict = d.verdict;
 		if (d.candidateSet) {
 			trackedEntry->candidateFrame = d.candidateFrame;
 			trackedEntry->candidateReason = d.candidateReason;
 		}
-		if (d.classifyInputsSet)
-			trackedEntry->classifyInputs = d.classifyInputs;
 		if (r.referenceReason)
 			referenceReasons[geometry] = r.reason;
 		if (r.write != EvalResult::Write::Record)
@@ -735,24 +645,19 @@ namespace DCLF::Scene
 		const auto& g = *leaf.geometry;
 		const Ineligible reason = r.reason;
 		const bool shadowOnly = r.shadowOnly;
-		// A face shape's positions: its head's snapshot (FaceSnapshots), and the region of the positions buffer
-		// the epochs upload them to. Every record of a face shape has them, whatever its verdict (a deferred decal
-		// included); without a snapshot the shape gets no record, and the engine draws it - and, the snapshot
-		// being the head's, every other shape of its head too.
+		// A face shape's positions (its head's snapshot) and its region of the positions buffer, whatever its verdict. Without a
+		// snapshot it gets no record and waits for its head's publication (ApplyFacePublications), which writes it again.
 		FaceSnapshots::ShapeView face{};
 		std::uint32_t faceRegion = kNoFaceRegion;
-		// Without a snapshot it waits for its head's publication (ApplyFacePublications), which writes it again.
 		trackedEntry->faceWaiting = r.faceShape && !ResolveFace(*geometry, *trackedEntry, face, faceRegion);
 		if (trackedEntry->faceWaiting)
 			return false;
-		// Geometry, shared between every object drawing the same TriShape. A skinned shape draws its
-		// skin partitions' own buffers, one draw each (ClassifyStatic has checked every one).
-		// The record's (T6b1b).
+		// Geometry slots are shared by every object drawing the same TriShape; a skinned shape draws each partition's buffers.
 		const bool skinned = g.skin && g.skinPartition && !g.partitions.empty();
 		const SceneCapture::GeometryRecord::Partition* skinPartition = skinned ? &g.partitions[0] : nullptr;
 		const std::uint16_t partitionMask = r.partitionMask;
 		const bool lodChain = r.lodChain;
-		// The ranges the evaluation found (lodRanges is written by the events alone, never during the walk).
+		// lodRanges is written only by events, never during the walk.
 		const auto* shapeRanges = lodChain ? LodRangesOf(geometry) : nullptr;
 		assert(!lodChain || shapeRanges);
 		const std::uint32_t geometrySlot = lodChain ? ResolveLodRangeSlots(g, *shapeRanges, timer) : ResolveGeometrySlot(g, skinPartition, timer);
@@ -762,8 +667,7 @@ namespace DCLF::Scene
 			a_bucket = Ineligible::UnstableBuffer;
 			return false;
 		}
-		// The other partitions' slots, linked from the first so a draw can walk them. Every partition is
-		// resolved and linked whatever this frame's mask, because the main camera's may differ.
+		// The other partitions' slots, linked from the first; all of them whatever this frame's mask, since the main camera's may differ.
 		if (skinned && g.partitions.size() > 1) {
 			std::uint32_t previous = geometrySlot;
 			bool unstable = false;
@@ -793,27 +697,22 @@ namespace DCLF::Scene
 
 		ObjectRecord object{};
 		object.geometryIndex = geometrySlot;
-		// The accumulator's half is not known yet: no bindings, and not native-visible. Both are
-		// patched by BuildAccumulatePhase, and nothing between the two phases reads them -
-		// BuildDrawsCS rejects an object with kObjectNoBindings before it looks at the indices.
+		// The accumulator's half is patched by BuildAccumulatePhase; BuildDrawsCS rejects kObjectNoBindings before reading the indices.
 		object.materialIndex = 0;
 		object.pipelineIndex = 0;
 		object.flags = kObjectNoBindings | (shadowOnly ? kObjectShadowOnly : 0u);
-		// Two-sidedness is the property's, not the pass's: the shadow epochs key their pipelines on it
-		// before the accumulate phase has computed the static flags, and that phase derives the same bit.
+		// Two-sidedness and the alpha test are set here, not by the accumulate phase: the shadow epochs key pipelines on them and read
+		// the alpha reference (Utility.hlsl, DCLFAlphaTestRef) before that phase runs.
 		using PropertyFlag = RE::BSShaderProperty::EShaderPropertyFlag;
 		if (leaf.property && (leaf.property->flags & static_cast<std::uint64_t>(PropertyFlag::kTwoSided)))
 			object.flags |= kObjectTwoSided;
-		// Likewise the alpha test and its threshold: a shadow caster's alpha reference comes from the
-		// object record (Utility.hlsl, DCLFAlphaTestRef), which is packed before the accumulate phase.
 		if (leaf.AlphaTesting())
 			object.flags |= kObjectAlphaTest | (static_cast<std::uint32_t>(leaf.alpha->threshold) << kObjectAlphaThresholdShift) |
 			                (leaf.AlphaBlending() ? kObjectAlphaBlended : 0u);
 
-		// Skinning: the engine's own palette, whose rows FrameValues samples after running the engine's per-frame update (AE
-		// FUN_140e4ff90) itself - what the bone setter runs from the native draw this object no longer gets. That update sizes the
-		// palette from the skin data's bone count (numMatrices = skinData +0x58), so the block is placed by the bone count here
-		// (step 6e F1: the scene work runs no engine code). A palette that is not that size is FrameValues' defect, counted.
+		// Skinning: FrameValues runs the engine's per-frame palette update itself (AE FUN_140e4ff90, which the native draw's bone setter
+		// would run) and samples its rows. That update sizes the palette by the bone count (numMatrices = skinData +0x58), so the block
+		// is placed by it here; a palette of another size is FrameValues' defect, counted.
 		std::uint32_t objectBoneRows = 0;
 		if (r.skinCandidate) {
 			timer.Add(BuildPart::Record);
@@ -826,18 +725,16 @@ namespace DCLF::Scene
 			}
 			timer.Add(BuildPart::Skinning);
 		}
-		// T7e: a particle member's quads take a block of the frame's palettes as a skin's palette does (kObjectSkinned: the record's
-		// boneOffset names it, the placement plan lists it), filled by FrameValues' producer from the system's snapshot, not the engine's skin.
+		// A particle member's quads take a palette block like a skin (kObjectSkinned), filled from the system's snapshot.
 		if (r.particleRows) {
 			objectBoneRows = r.particleRows;
 			object.flags |= kObjectSkinned;
 		}
-		// The object's slot: past the last `continue`, so a slot is only ever taken by a record that is written.
+		// Past the last early return, so a slot is only taken by a record that is written.
 		const std::uint32_t slotBefore = trackedEntry->slot;
 		const std::uint32_t objectId = AcquireObjectSlot(*trackedEntry, geometry);
-		// The accumulated half is the membership's: a member written again for the same object keeps its binding (checked
-		// against its witnesses when bound again). An entry written every frame (a face, an actor's part) would otherwise
-		// lose its binding here and take it back there, every frame.
+		// A member rewritten in the same slot keeps its binding (rechecked against its witnesses), or per-frame entries would drop and
+		// retake it every frame.
 		const bool keepMember = wasMember && objectId == slotBefore && a_bucket == Ineligible::None && !shadowOnly &&
 		                        !(tables.objects[objectId].flags & kObjectFree);
 		if (wasMember && !keepMember)
@@ -848,17 +745,13 @@ namespace DCLF::Scene
 			tables.PlaceBones(objectId, objectBoneRows);
 		else
 			tables.FreeBones(objectId);
-		// Whether the engine would draw this object into a shadow map, and with which Utility
-		// technique. It belongs here and nowhere else: every shadow view is rendered between this
-		// phase and the next, so a verdict taken later would arrive after the views that need it.
+		// The shadow verdict belongs to this phase: every shadow view renders before the accumulate phase.
 		const auto* shadowProperty = leaf.property;
 		const auto shadowReject = static_cast<ShadowReject>(r.shadowReject);
 		static_assert(static_cast<std::size_t>(ShadowReject::Count) <= std::tuple_size_v<decltype(stats.shadowRejects)>);
 		++stats.shadowRejects[static_cast<std::size_t>(shadowReject)];
-		// The alpha-tested techniques' diffuse (the evaluation's), listed once among the shadow textures.
 		if (r.shadowDiffuse && tables.shadowTextureSeen.insert(r.shadowDiffuse).second)
 			tables.shadowTextureSet.push_back(r.shadowDiffuse);
-		// The pipeline the technique draws with, listed once per key.
 		auto useKey = [&](std::vector<ShadowPipelineKey>& a_used, std::uint32_t a_technique) {
 			const ShadowPipelineKey key{ a_technique,
 				(shadowProperty->flags & static_cast<std::uint64_t>(PropertyFlag::kTwoSided)) ? kRasterTwoSided : 0u,
@@ -866,7 +759,7 @@ namespace DCLF::Scene
 			if (std::find(a_used.begin(), a_used.end(), key) == a_used.end())
 				a_used.push_back(key);
 		};
-		// A volumetric-only caster is one too, for the views of the volumetric lighting copy alone.
+		// A volumetric-only caster draws only into the volumetric lighting copy's views.
 		const bool volumetricOnly = shadowReject == ShadowReject::VolumetricOnly;
 		if (shadowReject == ShadowReject::None || volumetricOnly) {
 			++stats.shadowCasters;
@@ -879,10 +772,8 @@ namespace DCLF::Scene
 			tables.shadowTechnique[objectId] = 0;
 		}
 		tables.shadowReject[objectId] = r.shadowReject;
-		// The occlusion maps DCLF draws (Skylighting's sky map, the precipitation mask): whether and how this object draws into
-		// each, by Skylighting's rule for that map (the evaluation's). Its size test (a bound radius of 32 or less draws nothing) is
-		// the view's BuildDraws' (kCullMinRadius), against the record's bound, so an animated actor's bound crossing it is no
-		// classification input.
+		// Occlusion maps (Skylighting's sky map, the precipitation mask), by Skylighting's rule for each. The size test (radius <= 32)
+		// is the view's BuildDraws' (kCullMinRadius), so an animated bound crossing it is no classification input.
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
 			tables.occlusionTechnique[v][objectId] = r.occlusion[v];
 			if (r.occlusion[v])
@@ -902,8 +793,7 @@ namespace DCLF::Scene
 		ListFadeRoot(objectId);
 		tables.objectIdentity[objectId] = trackedEntry->identity;
 		tables.objectGroup[objectId] = trackedEntry->groupIdentity;
-		// A member decal written again (an actor's part every frame, a subtree attached again) may have moved in the scene graph:
-		// its place in the decal order is taken again (OrderDecals).
+		// A rewritten member decal may have moved in the scene graph: reorder it.
 		if (memberDecals.contains(objectId))
 			NoteDecalChanged(objectId);
 		const std::uint32_t keptPipeline = tables.draws[objectId].pipelineIndex;
@@ -915,8 +805,7 @@ namespace DCLF::Scene
 			object.pipelineIndex = kept.pipelineIndex;
 			tables.objects[objectId] = object;
 		} else {
-			// The extras rows are allocated by the accumulate phase, which is where the descriptors that
-			// decide whether an object needs them are derived.
+			// The accumulate phase allocates extras rows (it derives the descriptors that need them).
 			tables.FreeExtras(objectId);
 			tables.objects[objectId] = object;
 			tables.lights[objectId] = ObjectLights{};
@@ -928,13 +817,12 @@ namespace DCLF::Scene
 		if (trackedEntry->actorOwned)
 			tables.actorObjects.push_back(objectId);
 		if (DecalSpanOf(tables.skinPartitions[objectId]) != DecalSpanOf(partitionMask))
-			NoteDecalChanged(objectId);  // T7e's blood decals: its slots follow its partitions (DecalSpanOf)
+			NoteDecalChanged(objectId);  // blood decals: its slots follow its partitions (DecalSpanOf)
 		tables.skinPartitions[objectId] = partitionMask;
 		tables.skinLodPartitions[objectId] = r.skinLodWord;
 		if (!denseWalk) {
 			trackedEntry->objectStamp = objectStamp;
 			trackedEntry->objectId = objectId;
-			// Scene membership: an eligible record written (entering the scene, or an event rewrote it) is bound again.
 			if (a_bucket == Ineligible::None && !shadowOnly)
 				bindQueue.push_back(objectId);
 		}
@@ -947,7 +835,7 @@ namespace DCLF::Scene
 
 	bool Coordinator::WriteObject(RE::BSGeometry* geometry, Tracked& a_tracked, PartTimer& timer, Ineligible& a_bucket)
 	{
-		// T6b3e: the evaluation and its merge, one after the other (the dense walk: the same pair as the delta walk's rounds).
+		// The dense walk's evaluate-then-merge, the same pair as the delta walk's rounds.
 		EvalCounters counters;
 		EvalResult result;
 		{
@@ -961,7 +849,6 @@ namespace DCLF::Scene
 	void Coordinator::WriteLayer(RE::BSGeometry* a_geometry, const SceneCapture::LeafView& a_leaf, Tracked& a_tracked, std::uint32_t a_base, bool a_member, bool a_keepMember,
 		PartTimer& a_timer)
 	{
-		// The layer's record (T6b1b: the mirror's).
 		const auto* property = a_member ? SceneCapture::LeafView::Lighting(a_leaf.layer) : nullptr;
 		const std::uint32_t geometrySlot = property ? ResolveLayerGeometrySlot(*a_leaf.geometry, a_timer) : Tables::kSlotFree;
 		if (geometrySlot == Tables::kSlotFree) {
@@ -973,7 +860,7 @@ namespace DCLF::Scene
 		const std::uint32_t slot = AcquireLayerSlot(a_tracked, a_geometry, a_base);
 		const bool same = !denseWalk && slot == slotBefore;
 		const Tables::Columns columnsBefore = same ? tables.ColumnsOf(slot) : Tables::Columns{};
-		// A layer joins and leaves with its base (BindByMembership, DropResidentSlot): its binding stands while the base's does.
+		// A layer's binding stands while its base's does.
 		const bool keepMember = same && a_keepMember && IsResidentSlot(slot) && !(tables.objects[slot].flags & kObjectFree);
 		if (!denseWalk && !keepMember && IsResidentSlot(slot))
 			DropResidentSlot(slot, false);
@@ -1039,9 +926,8 @@ namespace DCLF::Scene
 	std::uint32_t Coordinator::ResolveGeometrySlot(const SceneCapture::GeometryRecord& a_geometry, const SceneCapture::GeometryRecord::Partition* a_partition,
 		PartTimer& a_timer)
 	{
-		// T7e: a particle system draws the renderer's own quads (FUN_1414f2ad0, type 1: the quad index list and the texture-coordinate stream
-		// FUN_140e4d280 made, one quad a particle), its vertices pulled from its block of the frame's palettes (ParticleSnapshots): one slot
-		// per capacity bucket, keyed by an address of DCLF's.
+		// A particle system draws the renderer's own quads (FUN_1414f2ad0 type 1: FUN_140e4d280's quad index list and texcoord stream,
+		// one quad a particle), vertices pulled from its palette block: one slot per capacity bucket, keyed by a DCLF address.
 		if (!a_partition && a_geometry.type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles) && a_geometry.particles.system) {
 			const auto quads = ParticleSnapshots::QuadsOf(a_geometry.particles.capacity);
 			const auto engineQuads = ParticleSnapshots::Get().EngineQuads();
@@ -1057,7 +943,7 @@ namespace DCLF::Scene
 			source.layer = true;  // its key is no TriShape (Tables::geometryLayerKey: never read as one)
 			return ResolveGeometrySource(source, a_timer);
 		}
-		// The TriShape's (the partition's buffData for a skin partition), from the record.
+		// Keyed by the TriShape (a skin partition's buffData).
 		const void* key = a_partition ? a_partition->rendererData : a_geometry.rendererData;
 		if (!key)
 			return Tables::kSlotFree;
@@ -1073,7 +959,7 @@ namespace DCLF::Scene
 
 	std::uint32_t Coordinator::ResolveLodRangeSlots(const SceneCapture::GeometryRecord& a_geometry, const std::vector<LodSegments::Range>& a_ranges, PartTimer& a_timer)
 	{
-		// The draw (FUN_1414f2ad0, type 8): the renderer data's buffers, DrawIndexed(count, first, 0) per range (the record's).
+		// The engine draw (FUN_1414f2ad0 type 8): the renderer data's buffers, DrawIndexed(count, first, 0) per range.
 		if (!a_geometry.rendererData || a_ranges.empty())
 			return Tables::kSlotFree;
 		std::uint32_t first = Tables::kSlotFree, previous = Tables::kSlotFree;
@@ -1107,7 +993,7 @@ namespace DCLF::Scene
 	std::uint32_t Coordinator::ResolveLayerGeometrySlot(const SceneCapture::GeometryRecord& a_geometry, PartTimer& a_timer)
 	{
 		// The layer's draw (FUN_140e465d0 for a hint-12 pass): the renderer data's vertex buffer, the second index list
-		// (altIndexBuffer, whose first qword is its ID3D11Buffer) as R16, altPrimCount triangles from index 0. The record's.
+		// (altIndexBuffer, whose first qword is its ID3D11Buffer) as R16, altPrimCount triangles from index 0.
 		if (!a_geometry.rendererData || !a_geometry.altIndexBuffer || !a_geometry.altPrimCount)
 			return Tables::kSlotFree;
 		GeometrySource source;
@@ -1123,9 +1009,8 @@ namespace DCLF::Scene
 
 	void Coordinator::PrefetchGeometryBuffers(std::size_t a_first)
 	{
-		// The buffers the round's geometry slots will resolve (ResolveGeometrySource), named to GpuResources at once: one
-		// synchronization with DXVK's worker thread for the round rather than one per new buffer (the cell loads' cost). An entry
-		// the light path keeps resolves nothing; one this misses still resolves, alone.
+		// Names the round's buffers to GpuResources at once: one sync with DXVK's worker per round, not per new buffer (cell loads).
+		// A buffer this misses still resolves, alone.
 		if (!frameResolveBuffers)
 			return;
 		ZoneScopedN("CS.DCLF.Scene.PrefetchBuffers");
@@ -1137,12 +1022,10 @@ namespace DCLF::Scene
 			buffers.push_back(a_indices);
 		};
 		for (std::size_t i = a_first; i < order.size(); ++i) {
-			// A per-frame entry is placed, not written (a selected switch child or an actor's record resolves alone), and one the
-			// last classification left without a record has nothing to resolve unless an event changed it, which is rare.
+			// Skip per-frame entries (placed, not written) and entries last classified ineligible.
 			const Tracked& entry = *order[i].tracked;
 			if (entry.perFrame || (entry.slot == kNoObjectSlot && entry.candidateFrame != 0 && entry.candidateReason != Ineligible::None))
 				continue;
-			// The record's buffers (T6b1b).
 			const auto* g = mirror.Geometry(order[i].geometry);
 			if (!g)
 				continue;
@@ -1164,8 +1047,8 @@ namespace DCLF::Scene
 		const bool resolveBuffers = frameResolveBuffers;
 		auto geometryIt = geometryIndex.find(a_source.key);
 		const bool newGeometry = geometryIt == geometryIndex.end();
-		// A slot found by address but describing other buffers is a TriShape reallocated at the same
-		// address: it is resolved again into the same slot. So is one resolved while the render graph was off.
+		// A slot whose buffers differ is a TriShape reallocated at the same address, or one resolved while the graph was off:
+		// resolved again into the same slot.
 		const bool staleGeometry = !newGeometry &&
 		                           ((resolveBuffers && tables.geometries[geometryIt->second].vertexAddress == 0) ||
 		                               tables.geometries[geometryIt->second].firstIndex != a_source.firstIndex ||
@@ -1176,18 +1059,14 @@ namespace DCLF::Scene
 		if (staleGeometry)
 			++stats.geometriesRefreshed;
 		if (newGeometry || staleGeometry) {
-			// The buffers are resolved once per TRISHAPE, not once per object. The slot's leases keep them resolved
-			// (GpuResources) for as long as the slot lives.
+			// Once per TriShape; the slot's leases keep the buffers resolved, and unmoved (the graph reads them in place), while it lives.
 			std::optional<GpuResources::LeasedBuffer> vertexLease, indexLease;
 			if (resolveBuffers) {
-				// The render graph reads the game's buffers in place; they must never move (GpuResources).
 				vertexLease = gpu.Acquire(a_source.vertexBuffer);
 				if (vertexLease)
 					indexLease = gpu.Acquire(a_source.indexBuffer);
 				if (!vertexLease || !indexLease) {
-					// Nothing was inserted, so the next object sharing this TriShape retries, exactly
-					// as it did when every object resolved for itself. A stale slot is freed: its
-					// record no longer describes anything.
+					// Nothing inserted, so the next object sharing this TriShape retries; a stale slot is freed.
 					if (staleGeometry) {
 						const std::uint32_t slot = geometryIt->second;
 						FreeGeometrySlot(slot);
@@ -1202,7 +1081,7 @@ namespace DCLF::Scene
 			record.vertexBuffer = a_source.vertexBuffer;
 			record.indexBuffer = a_source.indexBuffer;
 			record.vertexDesc = a_source.vertexDesc;
-			// The stride the engine binds is the desc's low nibble in dwords (engine notes: vertex input).
+			// The engine's stride: the desc's low nibble, in dwords.
 			record.vertexStride = static_cast<std::uint32_t>(record.vertexDesc & 0xFu) * 4u;
 			record.vertexCount = a_source.vertexCount;
 			record.indexCount = a_source.indexCount;
@@ -1231,7 +1110,6 @@ namespace DCLF::Scene
 				geometryIt = geometryIndex.emplace(a_source.key, slot).first;
 			a_timer.Add(BuildPart::Resolve);
 		} else if (resolveBuffers && tables.geometryLastUsed[geometryIt->second] != PassStamp()) {
-			// First use of the slot this frame: the Touch above already kept the references alive.
 			a_timer.Add(BuildPart::DedupHit);
 		}
 		tables.geometryLastUsed[geometryIt->second] = PassStamp();
@@ -1243,8 +1121,7 @@ namespace DCLF::Scene
 		order.clear();
 		order.reserve(tracked.size());
 		for (auto& [geometry, entry] : tracked) {
-			// In full: the light path keeps a record without writing it, and the full evaluation's sweep
-			// (SweepObjectSlots) frees every slot this walk did not write.
+			// In full: SweepObjectSlots frees every slot this walk did not write, and the light path writes nothing.
 			entry.scheduledWalk = walkSerial;
 			entry.fullWalk = walkSerial;
 			order.push_back({ geometry, &entry, nullptr });
@@ -1263,29 +1140,6 @@ namespace DCLF::Scene
 		order.push_back({ a_geometry, &a_tracked, nullptr });
 	}
 
-	std::uint64_t Coordinator::ShadingInputsOf(const RE::BSGeometry& a_geometry) const
-	{
-		// The mirror's records (T6b1b).
-		const auto leaf = mirror.Leaf(&a_geometry);
-		Fnv1a hash;
-		auto mix = [&hash](std::uint64_t a_value) { hash.Mix(a_value); };
-		const auto* property = leaf.property;
-		mix(reinterpret_cast<std::uintptr_t>(leaf.geometry ? leaf.geometry->property : nullptr));
-		if (property) {
-			mix(property->flags);
-			mix(reinterpret_cast<std::uintptr_t>(property->material));
-			// Only a lighting property's material is a BSLightingShaderMaterialBase; for any other the record reads nothing more.
-			if (property->material && property->lighting) {
-				mix(std::bit_cast<std::uint32_t>(property->materialAlpha));
-				mix(reinterpret_cast<std::uintptr_t>(property->diffuseView));
-			}
-		}
-		mix(reinterpret_cast<std::uintptr_t>(leaf.geometry ? leaf.geometry->alpha : nullptr));
-		if (leaf.alpha)
-			mix((std::uint64_t(leaf.alpha->flags) << 8) | leaf.alpha->threshold);
-		return hash.value;
-	}
-
 	Coordinator::ShadowInputs Coordinator::ShadowInputsOf(std::uint32_t a_slot) const
 	{
 		if (a_slot == kNoObjectSlot || a_slot >= tables.objects.size() || (tables.objects[a_slot].flags & kObjectFree))
@@ -1298,9 +1152,7 @@ namespace DCLF::Scene
 
 	bool Coordinator::KeepSkin(RE::BSGeometry* a_geometry, Tracked& a_tracked, const EvalResult& a_result)
 	{
-		// T6b3e: the record's skin, the toggle and the rows the engine's palette update gives it (the skin data's bone count:
-		// SkinRowsOf, the record's) are the evaluation's (EvaluateEntry's light path); the slot's half is here. FrameValues checks the
-		// palette after this frame's update.
+		// The slot half of the light path's skin check (EvaluateEntry did the record half); FrameValues checks the palette later.
 		const std::uint32_t slot = a_tracked.slot;
 		const std::uint32_t rows = a_result.skinRows;
 		if (!(tables.objects[slot].flags & kObjectSkinned) || rows != tables.boneRows[slot])
@@ -1309,7 +1161,7 @@ namespace DCLF::Scene
 		++stats.lightSkins;
 		if (tables.skinPartitions[slot] != a_result.skinPartitions || tables.skinLodPartitions[slot] != a_result.skinLodPartitions)
 			tables.NoteChange(slot, kChangeSkin | kChangeStructure);
-		// T7e's blood decals: a decal's slots follow its partitions (DecalSpanOf): ordered again when their span moves.
+		// Blood decals' slots follow the partitions: reorder when the span moves.
 		if (DecalSpanOf(tables.skinPartitions[slot]) != DecalSpanOf(a_result.skinPartitions))
 			NoteDecalChanged(slot);
 		tables.skinPartitions[slot] = a_result.skinPartitions;
@@ -1321,16 +1173,16 @@ namespace DCLF::Scene
 
 	bool Coordinator::RootMoves(const RE::NiAVObject* a_root, const bool* a_now)
 	{
-		// Only a reference's root: a multibound's bound is its shape's, and an actor's entry is never tested (the mirror's record).
+		// Only a reference's root (a multibound's bound is its shape's; actors are never tested).
 		const auto* record = a_root ? mirror.Node(a_root) : nullptr;
 		if (!record || !record->userData)
 			return false;
-		// Kept until an event under the root forgets it (ScheduleRoot) or its last dependent leaves (UnlistDependents). T6b3e: a_now, the
-		// root's motion as an evaluation found it this walk (RootMovesNow over the same mirror), when rootMotion does not hold it yet.
+		// Kept until an event under the root (ScheduleRoot) or its last dependent leaving (UnlistDependents) forgets it. a_now: an
+		// evaluation's fresh read this walk.
 		const auto [motion, inserted] = rootMotion.try_emplace(a_root, false);
 		if (inserted) {
 			motion->second = a_now ? *a_now : RootMovesNow(a_root);
-			// Its bound is taken by the root pass (QueueRoots), keyed by its reference's move events.
+			// The root pass (QueueRoots) takes its bound, keyed by its reference's move events.
 			if (motion->second)
 				movingRoots.try_emplace(a_root, MovingRoot{ static_cast<const RE::TESObjectREFR*>(record->userData), FindCategoryNode(const_cast<RE::NiAVObject*>(a_root), nullptr) });
 		}
@@ -1339,7 +1191,6 @@ namespace DCLF::Scene
 
 	bool Coordinator::RootMovesNow(const RE::NiAVObject* a_root) const
 	{
-		// The mirror's subtree (T6b1b).
 		const auto* root = a_root ? mirror.Node(a_root) : nullptr;
 		if (!root || !root->userData)
 			return false;
@@ -1348,7 +1199,7 @@ namespace DCLF::Scene
 			if (a_record.controllers || a_record.body)
 				moves = true;
 			else if (a_record.kind & SceneCapture::kKindGeometry)
-				// A skin's bound follows its bones, which walk parity found moving with no controller or body in sight.
+				// A skin's bound follows its bones, which move with no controller or body on the chain.
 				if (const auto* geometry = mirror.Geometry(a_key))
 					moves = geometry->skin != nullptr;
 			return !moves;
@@ -1356,105 +1207,9 @@ namespace DCLF::Scene
 		return moves;
 	}
 
-	std::array<std::uint64_t, 12> Coordinator::InputComponentsOf(const RE::BSGeometry& a_geometry) const
-	{
-		// The mirror's records (T6b1b). c[3], the bound's size test, is the GPU's (kCullMinRadius): not an input.
-		const auto leaf = mirror.Leaf(&a_geometry);
-		std::array<std::uint64_t, 12> c{};
-		if (!leaf)
-			return c;
-		const auto& g = *leaf.geometry;
-		c[0] = reinterpret_cast<std::uintptr_t>(g.rendererData);
-		c[1] = reinterpret_cast<std::uintptr_t>(g.skin);
-		c[2] = reinterpret_cast<std::uintptr_t>(g.skinPartition);
-		c[4] = reinterpret_cast<std::uintptr_t>(g.property);
-		if (const auto* property = leaf.property) {
-			c[5] = property->flags;
-			c[6] = reinterpret_cast<std::uintptr_t>(property->material);
-			c[7] = FadeStateOf(property);
-			if (property->lighting && property->material) {
-				c[8] = std::bit_cast<std::uint32_t>(property->materialAlpha);
-				c[11] = reinterpret_cast<std::uintptr_t>(property->diffuseView);
-			}
-		}
-		if (leaf.alpha) {
-			c[9] = reinterpret_cast<std::uintptr_t>(g.alpha);
-			c[10] = (std::uint64_t(leaf.alpha->flags) << 8) | leaf.alpha->threshold;
-		}
-		return c;
-	}
-
-	void Coordinator::StoreInputComponents(Tracked& a_tracked, const RE::BSGeometry& a_geometry)
-	{
-		if (!Diagnostics::Observe().inputWatch)
-			return;
-		if (!a_tracked.inputComponents)
-			a_tracked.inputComponents = std::make_unique<std::array<std::uint64_t, 12>>();
-		*a_tracked.inputComponents = InputComponentsOf(a_geometry);
-	}
-
-	void Coordinator::NoteInputReread(const Tracked& a_tracked, const RE::BSGeometry& a_geometry, std::uint32_t a_kind, bool a_changed, EvalCounters& a_counters,
-		TrackedDelta& a_delta) const
-	{
-		if (!Diagnostics::Observe().inputWatch)
-			return;
-		auto& c = a_counters;
-		++c.inputRereads[a_kind];
-		if (!a_changed)
-			return;
-		++c.inputRereadsChanged[a_kind];
-		const auto now = InputComponentsOf(a_geometry);
-		// T6b3e: the components the entry holds as its evaluation has them (an earlier re-read of the same evaluation stored them).
-		const auto* stored = a_delta.inputComponentsSet ? &a_delta.inputComponents : a_tracked.inputComponents.get();
-		if (!stored)
-			return;
-		std::string changed;
-		for (std::size_t i = 0; i < now.size(); ++i)
-			if (now[i] != (*stored)[i]) {
-				++c.inputChanged[i];
-				if (c.firstInputChange.empty())
-					changed += fmt::format("{}{} {:#x} -> {:#x}", changed.empty() ? "" : ", ", kInputComponentNames[i], (*stored)[i], now[i]);
-			}
-		if (c.firstInputChange.empty() && !changed.empty())
-			c.firstInputChange = fmt::format("'{}' ({}): {}", a_geometry.name.c_str() ? a_geometry.name.c_str() : "?", a_kind ? "shading" : "classify", changed);
-		a_delta.inputComponentsSet = true;
-		a_delta.inputComponents = now;
-	}
-
-	std::uint64_t Coordinator::ClassifyInputsOf(const RE::BSGeometry& a_geometry) const
-	{
-		// What ClassifyStatic reads: the renderer data and skin, the property, its flags, material and fade state, the
-		// material alpha, and the alpha property. The mirror's records (T6b1b).
-		const auto leaf = mirror.Leaf(&a_geometry);
-		Fnv1a hash;
-		auto mix = [&hash](std::uint64_t a_value) { hash.Mix(a_value); };
-		if (!leaf)
-			return hash.value;
-		const auto& g = *leaf.geometry;
-		mix(reinterpret_cast<std::uintptr_t>(g.rendererData));
-		mix(reinterpret_cast<std::uintptr_t>(g.skin));
-		mix(reinterpret_cast<std::uintptr_t>(g.skinPartition));
-		// Not the bound: Skylighting's size test is the GPU's (kCullMinRadius).
-		mix(reinterpret_cast<std::uintptr_t>(g.property));
-		if (const auto* property = leaf.property) {
-			mix(property->flags);
-			mix(reinterpret_cast<std::uintptr_t>(property->material));
-			mix(FadeStateOf(property));
-			if (property->lighting && property->material)
-				mix(std::bit_cast<std::uint32_t>(property->materialAlpha));
-		}
-		if (leaf.alpha) {
-			mix(reinterpret_cast<std::uintptr_t>(g.alpha));
-			mix((std::uint64_t(leaf.alpha->flags) << 8) | leaf.alpha->threshold);
-		}
-		return hash.value;
-	}
-
 	void Coordinator::ListDependents(RE::BSGeometry* a_geometry, Tracked& a_tracked)
 	{
-		// The properties as this evaluation read them: an event on either classifies the entry again. A property swapped
-		// without an event is taken up at the entry's next evaluation, and walk parity is the alarm for one that is not.
-		// The mirror's records (T6b1b).
+		// The properties this evaluation read: an event on any of them classifies the entry again.
 		const auto leaf = mirror.Leaf(a_geometry);
 		const void* property = leaf.geometry ? leaf.geometry->property : nullptr;
 		const void* alpha = leaf.geometry ? leaf.geometry->alpha : nullptr;
@@ -1472,9 +1227,8 @@ namespace DCLF::Scene
 				propertyDependents[alpha].push_back(a_geometry);
 			a_tracked.listedAlpha = alpha;
 		}
-		// External emittance: the shared colour the property reads (a light's, a region's or the sky's), which the weather
-		// rewrites in place (emittanceEvents). Its re-point is a property event (SetExternalEmittance).
-		// T7d's Effect port: an effect property's emittanceColor (its PropertyColor), pointed by the same function whatever its flags.
+		// External emittance: the shared colour (a light's, region's or the sky's) the weather rewrites in place (emittanceEvents); its
+		// re-point is a property event (SetExternalEmittance). An effect property's emittanceColor is pointed the same way, any flags.
 		const auto* lighting = SceneCapture::LeafView::Lighting(leaf.property);
 		const auto* effect = SceneCapture::LeafView::Effect(leaf.property);
 		const void* emittance = lighting && (lighting->flags & static_cast<std::uint64_t>(RE::BSShaderProperty::EShaderPropertyFlag::kExternalEmittance)) ? lighting->emissive :
@@ -1487,7 +1241,7 @@ namespace DCLF::Scene
 				propertyDependents[emittance].push_back(a_geometry);
 			a_tracked.listedEmittance = emittance;
 		}
-		// A multi-index shape's layer property (LayerPropertyOf): its events classify the entry again too.
+		// A multi-index shape's layer property.
 		const void* layer = leaf.geometry ? leaf.geometry->Layer() : nullptr;
 		if (layer != a_tracked.listedLayerProperty) {
 			if (a_tracked.listedLayerProperty)
@@ -1515,10 +1269,9 @@ namespace DCLF::Scene
 		if (a_root)
 			UnlistHiddenChain(a_geometry, a_tracked);
 		if (a_root && a_tracked.lightRoot) {
-			// A candidate losing a geometry (a cell unloading frees the entry after its geometries) is written again at the walk's
-			// candidates update; until then the snapshots that name it hold its node.
+			// Rewritten at the candidates update; until then the snapshots naming it hold its node.
 			MarkLightEntryDirty(a_tracked.lightRoot);
-			// Its last dependent gone: out of the frame's light entries (IsLightEntry, through the log).
+			// Last dependent gone: out of the frame's light entries.
 			if (!Unlist(lightDependents, a_tracked.lightRoot, a_geometry))
 				lightEntryChanges.push_back({ a_tracked.lightRoot, -1 });
 			ReleaseRootOwner(a_tracked.lightRoot);
@@ -1526,7 +1279,7 @@ namespace DCLF::Scene
 		}
 		if (a_root && a_tracked.listedRoot) {
 			MarkSunEntryDirty(a_tracked.listedRoot);
-			// The others under it: its bound takes this one in no more. The node is a key here; it may be gone.
+			// The root's bound drops this one. The node is only a key here; it may be gone.
 			if (Unlist(rootDependents, a_tracked.listedRoot, a_geometry)) {
 				dirtyRoots.push_back(a_tracked.listedRoot);
 			} else {
@@ -1548,7 +1301,7 @@ namespace DCLF::Scene
 		auto& owner = rootOwners[a_root];
 		if (owner)
 			return true;
-		// The batch's pin (T6b1c), or a live walk's pointer; never a key alone.
+		// The batch's pin, or a live walk's pointer; never a key alone.
 		if (!(owner = Pinned(a_root)) && a_live) {
 			++referenceStats.live;
 			owner.reset(const_cast<RE::NiAVObject*>(a_root));
@@ -1632,18 +1385,15 @@ namespace DCLF::Scene
 
 	std::uint32_t Coordinator::PerFrameTraitsOf(bool a_faceShape, bool a_actorOwned, const RE::NiNode* a_categoryNode, const RE::BSGeometry& a_geometry) const
 	{
-		// The movable set (dclf-event-driven-tables.md, "Reverse-engineering results"): a static reference never moves
-		// in place, so what moves is owned by an actor, animated by a controller, or simulated by Havok. A skin's
-		// palette, a face's snapshot and a switch's selection change without moving anything. A controller on the
-		// shader or alpha property animates the material alpha the shadow verdict reads.
+		// The movable set (dclf-event-driven-tables.md): a static reference never moves in place, so what moves is actor-owned,
+		// controller-animated or Havok-simulated. Skin palettes, face snapshots and switch selections change without moving. A
+		// controller on the shader or alpha property animates the material alpha the shadow verdict reads.
 		std::uint32_t traits = 0;
 		traits |= a_faceShape ? kTraitFace : 0u;
 		traits |= a_actorOwned ? kTraitActor : 0u;
-		// The mirror's records (T6b1b).
 		const auto leaf = mirror.Leaf(&a_geometry);
 		traits |= leaf.Skinned() ? kTraitSkin : 0u;
-		// T7e: a particle system's bound and quads change with each update of it, which moves nothing the walk sees: its record is FrameValues'
-		// every frame (the producer expands its newest snapshot and takes the snapshot's placement), as a mover's.
+		// A particle system's bound and quads change with each update, invisibly to the walk: FrameValues places it every frame.
 		if (ActiveToggles().particles && leaf.geometry && leaf.geometry->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles))
 			traits |= kTraitMoves;
 		if (leaf.property && leaf.property->controllers)
@@ -1665,7 +1415,7 @@ namespace DCLF::Scene
 	std::pair<bool, std::uint32_t> Coordinator::PerFrameOf(const Tracked& a_tracked, const RE::BSGeometry& a_geometry, Ineligible a_reason, std::uint32_t& a_traits,
 		ankerl::unordered_dense::map<const RE::NiAVObject*, bool>* a_freshMotion)
 	{
-		// An unselected switch child may get a record when its switch selects it: by event (ApplySwitchEvents), like any other verdict.
+		// An unselected switch child gets a record by event when selected (ApplySwitchEvents).
 		const bool mayRecord = a_reason == Ineligible::None || Eligibility::DeferredToAccumulate(a_reason) || Eligibility::ShadowOnlyCaster(a_reason, mirror.Leaf(&a_geometry));
 		std::uint32_t traits = PerFrameTraits(a_tracked, a_geometry);
 		if (mayRecord && !(traits & (kTraitFace | kTraitActor)) && a_tracked.sunEntryNode) {
@@ -1687,20 +1437,15 @@ namespace DCLF::Scene
 
 	std::pair<bool, std::uint32_t> Coordinator::PerFrameFrom(std::uint32_t a_traits, Ineligible a_reason, bool a_mayRecord)
 	{
-		// Per frame when a frame can change its record: its verdict lets it have one (or it is under a switch), and its
-		// inputs change every frame. A movable slot's chain is re-read every frame whatever its verdict, as the design has
-		// it: an actor's equipment is shown, hidden and swapped with no event of its own (walk parity caught a shield and a
-		// chopping axe left hidden), and a visibility controller hides and shows its node.
-		// A record whose only motion is its root's bound is not: the root pass takes the bound into its sun entry
-		// (QueueRoots), since nothing on its own chain moves.
+		// Per frame when a frame can change its record. A movable chain is re-read whatever its verdict: an actor's equipment is shown,
+		// hidden and swapped with no event, and a visibility controller toggles its node. Root-bound-only motion is not per frame: the
+		// root pass takes it (QueueRoots).
 		const std::uint32_t traits = a_traits;
 		const bool frameVerdict = a_reason == Ineligible::Hidden || a_reason == Ineligible::Switch || a_reason == Ineligible::Actor;
 		const bool perFrame = (a_mayRecord && traits && traits != kTraitRootMoves && traits != kTraitFace) || (traits & kTraitActor) ||
 		                      (frameVerdict && (traits & kTraitMoves));
-		// The light path takes only a record's placement, palette, switch selection or shading, and for an actor's the exact
-		// recheck of its verdict inputs (ActorRecordKept); a face shape's positions follow its head's publications
-		// (ApplyFacePublications), not the walk. An entry it cannot have a record for is written in full, which re-reads its
-		// verdict.
+		// The light path takes only placement, palette, switch selection, shading and an actor's verdict recheck (ActorRecordKept); face
+		// positions follow the head's publications. An entry that cannot have a record is written in full.
 		const std::uint32_t light = perFrame && a_mayRecord &&
 		                                    !(traits & ~(kTraitSwitch | kTraitMoves | kTraitRootMoves | kTraitAnimatedShading | kTraitSkin | kTraitActor | kTraitFace)) ?
 		                                traits :
@@ -1710,8 +1455,7 @@ namespace DCLF::Scene
 
 	std::pair<bool, std::uint32_t> Coordinator::PerFrameMerge(const Tracked& a_tracked, const EvalResult& a_result)
 	{
-		// T6b3e: PerFrameOf from the evaluation's traits; the root's motion is rootMotion's when it holds the root (the merge's state,
-		// as RootMoves kept it), else the evaluation's fresh read of the same mirror for the root it expected, inserted here.
+		// PerFrameOf from the evaluation's traits; root motion from rootMotion, else the evaluation's fresh read (inserted here).
 		std::uint32_t traits = a_result.traits;
 		if (a_result.mayRecord && !(traits & (kTraitFace | kTraitActor)) && a_tracked.sunEntryNode) {
 			const bool* now = a_tracked.sunEntryNode == a_result.rootCandidate ? &a_result.rootMovesNow : nullptr;
@@ -1721,29 +1465,16 @@ namespace DCLF::Scene
 		return PerFrameFrom(traits, a_tracked.candidateReason, a_result.mayRecord);
 	}
 
-	bool Coordinator::ActorRecordKept(const RE::BSGeometry& a_geometry, const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out) const
+	bool Coordinator::ActorRecordKept(const Tracked& a_tracked, EvalCounters& a_counters, EvalResult& a_out) const
 	{
-		// What WriteObject's cached branch reads for an entry it re-reads (`rereads`): the static verdict's inputs, and
-		// the frame's verdict when the cached one is a frame verdict. Equal inputs and the same verdict write the same
-		// record but for its placement and palette, which the light path takes (walk parity is the check). T6b3e: an evaluation
-		// (pure): the counts into a_counters, the components and an unannounced change into a_out.
-		if (Policy::RereadCachedInputs()) {
-			const bool changed = ClassifyInputsOf(a_geometry) != a_tracked.classifyInputs;
-			NoteInputReread(a_tracked, a_geometry, 0, changed, a_counters, a_out.delta);
-			if (changed) {
-				++a_counters.reread;
-				return false;
-			}
-		}
+		// Pure. An actor's frame verdict, as WriteObject's cached branch would retake it; the same verdict writes the same record but
+		// for placement and palette, which the light path takes.
 		const Ineligible cached = a_tracked.candidateReason;
 		const bool frameVerdict = cached == Ineligible::None || cached == Ineligible::Switch || cached == Ineligible::Hidden || cached == Ineligible::Actor;
 		if (!frameVerdict)
 			return true;
-		// The verdict's inputs are the hidden bits on its chain, which have events (hiddenDependents), a switch's
-		// selection, taken every frame here, and the toggles and fades, which classify it again. Without an event it
-		// stands; a parity frame takes it again anyway and counts a change no event announced.
-		// T7e: a first-person entry's chain bits are the frame's capture (FrameGlobals: the whole skeleton, every frame), so its verdict is
-		// taken again every frame.
+		// Its inputs (chain hidden bits, switch selection, toggles, fades) all have events or are retaken here, so without one it
+		// stands; a witness frame retakes it and counts an unannounced change. First-person chains are recaptured every frame.
 		const bool announced = a_tracked.hiddenEventOwed || a_tracked.parentReason == Ineligible::Switch || !hiddenGating || a_tracked.hiddenChain.empty() ||
 		                       FirstPersonEntry(a_tracked.categoryNode);
 		if (!announced && !hiddenWitness) {
@@ -1755,7 +1486,7 @@ namespace DCLF::Scene
 		if (now != cached && !announced && !a_counters.verdictsMissed++)
 			a_counters.firstVerdictMissed = fmt::format("'{}' {} now {}", a_tracked.geometry->name.c_str() ? a_tracked.geometry->name.c_str() : "?",
 				kIneligibleNames[static_cast<std::size_t>(cached)], kIneligibleNames[static_cast<std::size_t>(now)]);
-		// A change no event announced: the merge tells the observers (the hidden watch arms on the chain).
+		// The merge tells the observers.
 		if (now != cached && !announced)
 			a_out.verdictUnannounced = true;
 		return now == cached;
@@ -1770,15 +1501,13 @@ namespace DCLF::Scene
 		return configured;
 	}
 
-	std::uint32_t Coordinator::FanoutMode(std::size_t a_count, bool a_joins, std::size_t a_least) const
+	std::uint32_t Coordinator::FanoutMode(std::size_t a_count, std::size_t a_least) const
 	{
-		// The mirror-read parity's live checks note their leases and differences on the pass's own thread, and the joins' derive probe
-		// samples the LOD fade frame lazily and reads live properties under a lease: both interleaved, as the walk was.
-		if (Policy::SerialFanout(a_joins))
+		// The mirror-read parity's live checks must run on the pass's own thread.
+		if (Policy::SerialFanout())
 			return 0;
 		const std::uint32_t configured = ConfiguredFanout();
-		// The pool only from the scene lane (ParallelFor waits: never on the render thread, where the parities run the pass inline), and
-		// only for a round worth the chunks.
+		// The pool only from the scene lane (ParallelFor waits; never on the render thread) and for a round worth the chunks.
 		if (configured == 2 && (!inSceneTask || a_count < a_least))
 			return 1;
 		return configured;
@@ -1790,7 +1519,7 @@ namespace DCLF::Scene
 		const Tracked& entry = *order[a_index].tracked;
 		auto& r = a_out;
 		a_timer.Add(BuildPart::LoopTail);
-		// The entry's time by what the round does with it (EvaluateKind): its evaluation's here, its merge's at the merge.
+		// Profiling bucket.
 		r.kind = entry.lightTraits && entry.perFrame ? EvaluateKind::Light :
 		         !entry.perFrame                     ? EvaluateKind::Event :
 		         entry.faceShape                     ? EvaluateKind::Face :
@@ -1808,19 +1537,17 @@ namespace DCLF::Scene
 					counters->evaluateKindMs[static_cast<std::size_t>(kind)] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 			}
 		} kindSample{ profileKinds ? &a_counters : nullptr, r.kind, profileKinds ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{} };
-		// A static that only moves or follows a switch, whose classification stands: what the full walk would take
-		// again is the switch's verdict (WriteObject's cached branch) and the placement.
+		// The light path: a classified entry that only moves, follows a switch, or is an actor's; the full write is skipped if kept.
 		if (a_light && entry.lightTraits && entry.perFrame && entry.fullWalk != walkSerial && entry.candidateFrame != 0) {
 			const bool recorded = entry.slot != kNoObjectSlot && entry.objectStamp == objectStamp;
 			bool kept = true;
 			if (entry.lightTraits & kTraitActor) {
-				kept = recorded && ActorRecordKept(*geometry, entry, a_counters, r);
+				kept = recorded && ActorRecordKept(entry, a_counters, r);
 			} else if (entry.lightTraits & kTraitSwitch) {
-				// The selection is what changes (a harvested plant, a tree's LOD); the rest of the chain is a static's,
-				// fixed like any kept record's (dclf-event-driven-tables.md).
+				// Only the selection changes (a harvested plant, a tree's LOD); the rest of the chain is static.
 				const bool verdictKept = (entry.candidateReason == Ineligible::None || entry.candidateReason == Ineligible::Switch) &&
 				                         (entry.candidateReason == Ineligible::None) == recorded;
-				const auto* switchRecord = entry.switchNode ? mirror.Node(entry.switchNode) : nullptr;  // T6b1b: the mirror's
+				const auto* switchRecord = entry.switchNode ? mirror.Node(entry.switchNode) : nullptr;
 				if (verdictKept && switchRecord && ActiveToggles().switchNodes)
 					kept = SwitchSelects(*switchRecord, entry.switchChild) == (entry.candidateReason == Ineligible::None);
 				else
@@ -1828,14 +1555,9 @@ namespace DCLF::Scene
 			} else {
 				kept = recorded;
 			}
-			if (kept && (entry.lightTraits & (kTraitAnimatedShading | kTraitActor)) && Policy::RereadCachedInputs()) {
-				kept = ShadingInputsOf(*geometry) == entry.shadingInputs;
-				NoteInputReread(entry, *geometry, 1, !kept, a_counters, r.delta);
-			}
-			// Last: it lists the skin only when the record is kept (an unselected switch child has none). KeepSkin's record half: the
-			// skin, the toggle and the rows the engine's palette update gives it (the record's); its slot half is the merge's.
+			// Last, only for a kept record: KeepSkin's record half (its slot half is the merge's).
 			if (kept && recorded && (entry.lightTraits & kTraitSkin)) {
-				const auto* record = mirror.Geometry(geometry);  // T6b1b
+				const auto* record = mirror.Geometry(geometry);
 				const std::uint32_t rows = record && record->skinData ? record->boneCount * 3 : 0u;
 				kept = record && record->skin && ActiveToggles().skinned && rows && rows <= 240;
 				if (kept) {
@@ -1861,21 +1583,18 @@ namespace DCLF::Scene
 	{
 		const auto& entry = a_tracked;
 		const auto& d = a_out.delta;
-		// The entry as its merge leaves it (MergeWrite applies the delta; a leaf the mirror lacks resets the classification).
+		// The entry as MergeWrite will leave it (a missing leaf resets the classification).
 		const std::uint32_t candidateFrame = a_out.write == EvalResult::Write::NoLeaf ? (denseWalk ? entry.candidateFrame : 0u) :
 		                                     d.candidateSet                            ? d.candidateFrame :
 		                                                                                 entry.candidateFrame;
 		const Ineligible reason = d.candidateSet ? d.candidateReason : entry.candidateReason;
-		// Classified now: a new entry, or an event took its classification again.
 		a_out.classified = candidateFrame == PassStamp();
 		if (a_out.classified) {
-			// Per frame only when a frame can change its record (PerFrameOf): the traits from the face shape and actor ownership as the
-			// merge leaves them, the root's motion left to it (PerFrameMerge: rootMotion first), read fresh here for the root it will test.
+			// PerFrameOf's inputs as the merge will see them; root motion is read fresh here, PerFrameMerge prefers rootMotion.
 			a_out.traits = PerFrameTraitsOf(d.faceShapeSet ? d.faceShape : entry.faceShape, d.actorOwnedSet ? d.actorOwned : entry.actorOwned, entry.categoryNode, *geometry);
-			// An unselected switch child may get a record when its switch selects it: by event (ApplySwitchEvents), like any other verdict.
 			a_out.mayRecord = reason == Ineligible::None || Eligibility::DeferredToAccumulate(reason) || Eligibility::ShadowOnlyCaster(reason, a_out.leaf);
 			if (a_out.mayRecord && !(a_out.traits & (kTraitFace | kTraitActor))) {
-				// The sun entry PerFrameOf tests: the resolved one, or the one ResolveSunEntry resolves at the write (the mirror's).
+				// The resolved sun entry, or the one ResolveSunEntry will resolve at the write.
 				a_out.rootCandidate = entry.sunEntryResolved ? entry.sunEntryNode : static_cast<const RE::NiAVObject*>(MirrorSunEntry(geometry));
 				if (a_out.rootCandidate) {
 					const auto [motion, inserted] = a_counters.rootMotion.try_emplace(a_out.rootCandidate, false);
@@ -1885,11 +1604,6 @@ namespace DCLF::Scene
 				}
 			}
 			a_out.moveKey = MoveKeyOf(*geometry, entry.categoryNode);
-		}
-		// What a written record of an animated shading or actor entry stores (Tracked::shadingInputs): the traits the merge may give it.
-		if ((a_out.traits | entry.lightTraits) & (kTraitAnimatedShading | kTraitActor)) {
-			a_out.shadingInputsSet = true;
-			a_out.shadingInputs = ShadingInputsOf(*geometry);
 		}
 	}
 
@@ -1911,27 +1625,20 @@ namespace DCLF::Scene
 				++stats->evaluateKindCount[static_cast<std::size_t>(kind)];
 			}
 		} kindSample{ a_profileKinds ? &stats : nullptr, r.kind, a_profileKinds ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{} };
-		// Evaluated after the pass's hidden events drained (every path takes the frame verdict again): what they owed it is paid.
+		// Evaluated after the pass's hidden events drained, so what they owed it is paid.
 		entry.hiddenEventOwed = false;
-		// The verdict ActorRecordKept found changed with no event: its chain, for the observers (the store that flips it next).
 		if (r.verdictUnannounced)
 			Diagnostics::Notify(Diagnostics::ActorVerdictUnannounced{ entry.hiddenChain });
 		if (r.light) {
-			// The light path's re-reads stand (CS_DCLF_INPUT_WATCH's components), and KeepSkin's slot half decides the skin.
-			if (r.delta.inputComponentsSet) {
-				if (!entry.inputComponents)
-					entry.inputComponents = std::make_unique<std::array<std::uint64_t, 12>>();
-				*entry.inputComponents = r.delta.inputComponents;
-			}
 			if (!r.lightSkin || KeepSkin(geometry, entry, r)) {
 				for (std::uint32_t bit = 0; bit < stats.lightByTrait.size(); ++bit)
 					stats.lightByTrait[bit] += (entry.lightTraits >> bit) & 1u;
 				const bool recorded = r.lightRecorded;
-				// Every walk lists the actors' records anew (Tables::actorObjects: wetness and capture parity read it).
+				// Tables::actorObjects is rebuilt every walk.
 				if (recorded && entry.actorOwned)
 					tables.actorObjects.push_back(entry.slot);
-				// An actor's skeleton moves without a controller or a body on its chain (Havok's behaviour graph). Every
-				// recorded mover is FrameValues' each frame (its placement and palette).
+				// An actor's skeleton moves with no controller or body on its chain (Havok's behaviour graph). FrameValues places
+				// every recorded mover each frame.
 				if (recorded && (entry.lightTraits & (kTraitMoves | kTraitRootMoves | kTraitSkin | kTraitActor))) {
 					WalkPlan().movers.push_back(PlanItemOf(geometry, entry));
 					++stats.lightPlaced;
@@ -1942,8 +1649,7 @@ namespace DCLF::Scene
 				entry.movedWalk = walkSerial;  // not written in full: a later round may still write it
 				return;
 			}
-			// The slot's flags or palette rows are not the record's: written in full, as the walk did, its evaluation made here (pure:
-			// the entry's Tracked is as the round's evaluations read it, but for the components applied above, which the delta holds).
+			// The slot's flags or palette rows disagree: evaluate and write in full here.
 			++fanoutStats.lightMissed;
 			r.light = false;
 			if (r.kind == EvaluateKind::Light)
@@ -1966,18 +1672,16 @@ namespace DCLF::Scene
 		MoveBucket(entry, bucket);
 		if (!written && entry.slot != kNoObjectSlot)
 			ReleaseObjectSlot(entry);
-		// What the write changed (Tables::changeLog); a slot taken anew is new in everything. Its row is FrameValues' next frame.
+		// Log what the write changed (a new slot: everything); FrameValues samples the row next frame.
 		if (written && entry.slot != kNoObjectSlot) {
 			WalkPlan().written.push_back(PlanItemOf(geometry, entry));
 			if (entry.slot == slotBefore) {
 				tables.NoteWrite(entry.slot, columnsBefore);
 			} else {
 				tables.NoteChange(entry.slot, kChangeAll);
-				Diagnostics::Notify(Diagnostics::RecordWrittenAnew{ *this, geometry });
 			}
 		}
-		// What its sun entry's candidacy reads (SunEntryAllows), and what the entry's snapshot row holds of it (its object, whether the
-		// primary cut may give it a synthetic pass: PrimaryEntryAllows), any of which a write may change.
+		// A write may change what the sun/light entry's candidacy and snapshot row read (SunEntryAllows, PrimaryEntryAllows).
 		if (hadSlot != (entry.slot != kNoObjectSlot) || reasonBefore != entry.candidateReason || written) {
 			MarkSunEntryDirty(entry.sunEntryNode);
 			MarkLightEntryDirty(entry.lightRoot);
@@ -1990,22 +1694,18 @@ namespace DCLF::Scene
 				shadowDirtySlots.push_back(entry.slot);
 		}
 		ListDependents(geometry, entry);
-		// Classified now: a new entry, or an event took its classification again.
+		// Classified this pass (new, or an event retook it).
 		if (entry.candidateFrame == PassStamp()) {
-			// Per frame only when a frame can change its record: a face shape (classified every frame), an entry
-			// under a switch, or one whose verdict lets it have a record, with inputs that change every frame. An
-			// entry left out by its verdict is taken again when the verdict is due, like any other. T6b3e: the evaluation's traits
-			// and move key (EvaluateClassified, which found the same classification).
 			assert(r.classified);
 			std::tie(entry.perFrame, entry.lightTraits) = PerFrameMerge(entry, r);
 			entry.moveKey = r.moveKey;
-			// Every entry's chain (T6b4): a static's hidden bit is followed by events as an actor's is.
+			// Every entry's hidden chain is followed by events, a static's as an actor's.
 			ListHiddenChain(geometry, entry);
 			entry.switchNode = nullptr;
 			entry.switchChild = nullptr;
 			if (entry.lightTraits & kTraitSwitch) {
 				std::uint32_t switches = 0;
-				// ClassifyFrame's walk: every node below the category node (the mirror's chain, T6b1b).
+				// ClassifyFrame's walk: every node below the category node.
 				const void* child = geometry;
 				const auto* leafRecord = mirror.Node(geometry);
 				for (const void* key = leafRecord ? leafRecord->parent : nullptr; key && key != entry.categoryNode;) {
@@ -2028,32 +1728,16 @@ namespace DCLF::Scene
 			entry.perFrameListed = true;
 			perFrameSet.push_back({ geometry, &entry });
 		}
-		if (written) {
-			if (entry.lightTraits & (kTraitAnimatedShading | kTraitActor)) {
-				// The evaluation took them for the traits the entry can have here (EvaluateClassified).
-				assert(r.shadingInputsSet);
-				entry.shadingInputs = r.shadingInputs;
-				StoreInputComponents(entry, *geometry);
-			}
-			// A static's previous transform is its current one from its second update on: FrameValues samples its row again until
-			// then (T6b1a; the scene work reads no transform).
-		}
 	}
 
 	void Coordinator::MergeCounters(EvalCounters& a_counters)
 	{
-		// T6b3e: in chunk order. A first is taken where the store has none; the classify cache's warning is logged for the walk's first
-		// difference (BeginWalk resets the count), as WriteObject logged it.
+		// In chunk order, so the "first" strings are deterministic; the classify warning logs once a walk.
 		auto& c = a_counters;
 		for (std::size_t i = 0; i < c.ineligible.size(); ++i)
 			stats.ineligible[i] += c.ineligible[i];
 		for (std::size_t i = 0; i < c.techniqueRejects.size(); ++i)
 			stats.techniqueRejects[i] += c.techniqueRejects[i];
-		for (const auto& [rtti, count] : c.propertyRejects)
-			stats.propertyRejects[rtti] += count;
-		stats.rejectedBlended += c.rejectedBlended;
-		stats.rejectedOpaque += c.rejectedOpaque;
-		stats.rejectedOpaqueAlphaTest += c.rejectedOpaqueAlphaTest;
 		stats.classifyHits += c.classifyHits;
 		stats.classifyChecked += c.classifyChecked;
 		if (c.classifyDiffers && !stats.classifyDiffers)
@@ -2064,16 +1748,7 @@ namespace DCLF::Scene
 		if (c.verdictsMissed && !stats.verdictsMissed)
 			stats.firstVerdictMissed = std::move(c.firstVerdictMissed);
 		stats.verdictsMissed += c.verdictsMissed;
-		for (std::size_t i = 0; i < c.inputChanged.size(); ++i)
-			stats.inputChanged[i] += c.inputChanged[i];
-		for (std::size_t k = 0; k < c.inputRereads.size(); ++k) {
-			stats.inputRereads[k] += c.inputRereads[k];
-			stats.inputRereadsChanged[k] += c.inputRereadsChanged[k];
-		}
-		if (stats.firstInputChange.empty() && !c.firstInputChange.empty())
-			stats.firstInputChange = std::move(c.firstInputChange);
 		leafStats.missing += c.leafMissing;
-		delta.reread += c.reread;
 		for (std::size_t p = 0; p < c.partMs.size(); ++p)
 			stats.partMs[p] += c.partMs[p];
 		for (std::size_t k = 0; k < c.evaluateKindMs.size(); ++k)
@@ -2083,7 +1758,7 @@ namespace DCLF::Scene
 
 	void Coordinator::MergeMirrorReads(MirrorReadStats& a_counts)
 	{
-		// The store's own counts (never a sink: the merge runs on the pass's thread).
+		// The merge runs on the pass's thread.
 		auto& m = mirrorReads;
 		const auto& c = a_counts;
 		for (std::size_t i = 0; i < m.reads.size(); ++i) {
@@ -2105,14 +1780,13 @@ namespace DCLF::Scene
 		const std::size_t count = order.size() - a_first;
 		const bool light = a_first == 0;
 		const bool profileKinds = light && Diagnostics::Observe().profile;
-		const std::uint32_t mode = FanoutMode(count, false);
+		const std::uint32_t mode = FanoutMode(count);
 		auto& f = fanoutStats;
 		++f.rounds;
 		f.entries += count;
-		// The pass's snapshot (toggles, Terrain Blending) on this thread over both halves: its own evaluations and the merges' reads.
 		ShardScope passScope(*this, false);
 		if (mode == 0) {
-			// Each entry evaluated and merged before the next: the walk as it was (the reference).
+			// Serial reference: each entry evaluated and merged before the next.
 			EvalCounters counters;
 			for (std::size_t i = a_first; i < order.size(); ++i) {
 				EvalResult result;
@@ -2125,9 +1799,8 @@ namespace DCLF::Scene
 			MergeCounters(counters);
 			return;
 		}
-		// Every entry evaluated (pure: the mirror, its own Tracked, the walk's stamps, the pass's snapshot), then merged in index
-		// order. The pool from kFanoutMinEntries entries on the lane (mode 2), chunk by chunk; the counters by chunk, so they and
-		// their firsts do not depend on the thread that ran a chunk.
+		// Evaluate every entry (pure: mirror, own Tracked, walk stamps, pass snapshot), then merge in index order. Counters are per
+		// chunk so they do not depend on which thread ran it.
 		const bool parallel = mode == 2;
 		const std::size_t chunks = (count + kFanoutGrain - 1) / kFanoutGrain;
 		evalResults.clear();
@@ -2152,19 +1825,13 @@ namespace DCLF::Scene
 					body(begin, std::min(count, begin + kFanoutGrain));
 			}
 		};
-		// The contract's witnesses: nothing writes the mirror or the tracked set while the evaluations read them.
+		// Witnesses: nothing writes the mirror or the tracked set while evaluations read them.
 		[[maybe_unused]] const std::uint64_t mirrorWrites = mirror.Writes();
 		[[maybe_unused]] const std::uint64_t layout = trackedLayout;
-		// An observer comparing this round with a serial evaluation (FanoutDue) takes the round whole: every chunk evaluated first.
-		bool checked = false;
-		if (parallel)
-			Diagnostics::Notify(Diagnostics::FanoutDue{ *this, checked });
-		if (parallel && !checked) {
-			// e4, the ordered streaming merge: one shard a chunk, claimed by the pool's helpers and by this thread; chunk k is merged as
-			// soon as it is ready, this thread evaluating an unclaimed one meanwhile, or waiting on chunk k's flag when none is left. Safe
-			// under the evaluation's contract alone: a merge writes only its own entries' Tracked, the tables, the slots and the lists, none
-			// of which an evaluation reads (the mirror and the tracked set are unchanged: the witnesses above). A helper that starts after
-			// the round finds every chunk claimed and touches nothing but the shared state it holds.
+		if (parallel) {
+			// Ordered streaming merge: chunks are claimed by pool helpers and this thread; chunk k merges as soon as it is ready, this
+			// thread evaluating unclaimed chunks or waiting meanwhile. Safe because a merge writes only state no evaluation reads (its own
+			// entries' Tracked, tables, slots, lists). A late helper finds every chunk claimed and touches only the shared Shards.
 			ZoneScopedN("CS.DCLF.Scene.EvaluateStream");
 			struct Shards
 			{
@@ -2228,7 +1895,6 @@ namespace DCLF::Scene
 					MergeEntry(a_first + i, profileKinds, evalResults[i], a_timer);
 				mergeMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mergeStart).count();
 			}
-			// The two halves' times: the merges', and the rest (this thread's evaluations and waits).
 			const double totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 			for (const auto& [part, ms] : { std::pair{ ScenePart::EvaluateMerge, mergeMs }, std::pair{ ScenePart::EvaluateFanout, std::max(0.0, totalMs - mergeMs) } }) {
 				stats.scenePartMs[static_cast<std::size_t>(part)] += ms;
@@ -2244,16 +1910,6 @@ namespace DCLF::Scene
 			evaluate(evalResults, evalCounters, parallel);
 		}
 		assert(mirror.Writes() == mirrorWrites && trackedLayout == layout);
-		// The observer's reference: the round evaluated again on the lane, one entry after another (its counters dropped). The merges wait
-		// for both (a merge changes the entries it merged).
-		if (checked) {
-			const std::function<void(std::vector<EvalResult>&)> serial = [&](std::vector<EvalResult>& a_out) {
-				a_out.resize(count);
-				std::vector<EvalCounters> serialCounters(chunks);
-				evaluate(a_out, serialCounters, false);
-			};
-			Diagnostics::Notify(Diagnostics::WalkRoundEvaluated{ *this, a_first, evalResults, serial });
-		}
 		{
 			DCLF_SCENE_PART(EvaluateMerge, "CS.DCLF.Scene.EvaluateMerge");
 			for (auto& counters : evalCounters)
@@ -2270,10 +1926,8 @@ namespace DCLF::Scene
 			stats.scenePartFrameMs[static_cast<std::size_t>(ScenePart::Schedule)]);
 		TracyCZoneN(scheduleZone, "CS.DCLF.Scene.Schedule", true);
 		const bool full = fullEvaluation;
-		// T6b3d: the per-frame entries (actors, faces, movers, switches, animated shading) once a frame input: their inputs are the frame's
-		// (its globals, its move events), so a second pass of the same frame wrote the same records again, noted them on the change log
-		// and made a publication of nothing new (w124: 700 entries a walk, 25-35 walks a frame). A pass of the same frame takes what its
-		// events schedule alone; the movers stay the last per-frame walk's (PublishPlacementPlan).
+		// Per-frame entries are walked once per frame input: a second pass of the same frame would rewrite the same records. Such a pass
+		// takes only what its events schedule; the movers stay the last per-frame walk's (PublishPlacementPlan).
 		perFrameWalked = full || perFrameFrame != sceneFrame;
 		if (perFrameWalked) {
 			perFrameFrame = sceneFrame;
@@ -2281,18 +1935,18 @@ namespace DCLF::Scene
 		} else {
 			++pumpStats.eventWalks;
 		}
-		// The actors the last per-frame walk listed (Tables::actorObjects, a per-walk list), kept through a walk that does not take them.
+		// The last per-frame walk's actors, kept through a walk that does not take them.
 		std::vector<std::uint32_t> keptActors;
 		if (!perFrameWalked)
 			keptActors = std::move(tables.actorObjects);
-		// Before a full evaluation drops the node events: they name movers too.
+		// Before a full evaluation drops the node events, which name movers too.
 		DrainMoveEvents(full);
 		DrainHiddenEvents();
 		if (full) {
 			shadowIndexNeedsRebuild = true;
 			shadowDirtySlots.clear();
 		}
-		// The shadow sets cover every record; BeginWalk clears them, and they are rebuilt only when an input changed.
+		// BeginWalk clears the shadow sets; they are rebuilt only when an input changed.
 		auto keptTextureSet = std::move(tables.shadowTextureSet);
 		auto keptTextureSeen = std::move(tables.shadowTextureSeen);
 		auto keptKeys = std::move(tables.shadowKeysUsed);
@@ -2301,7 +1955,7 @@ namespace DCLF::Scene
 		BeginWalk(!full);
 		PartTimer timer(stats.partMs);
 		if (full) {
-			// Everything, as the full walk: after a reset, a load or a live toggle nothing kept can be trusted.
+			// After a reset, a load or a live toggle nothing kept can be trusted.
 			fullEvaluation = false;
 			facePublished.clear();
 			faceStale.clear();
@@ -2344,8 +1998,7 @@ namespace DCLF::Scene
 				}
 				Tracked* entry = item.tracked;
 				if (!entry || !entry->perFrameListed || !entry->perFrame || entry->scheduledWalk == walkSerial) {
-					// Erased (or erased and added again, which listed the new entry anew), or no longer per frame
-					// (queued for its next classification).
+					// Erased (a re-added entry is listed anew), or no longer per frame.
 					if (entry && !entry->perFrame && entry->scheduledWalk != walkSerial)
 						entry->perFrameListed = false;
 					item = perFrameSet.back();
@@ -2436,9 +2089,8 @@ namespace DCLF::Scene
 
 	void Coordinator::FinishDeltaWalk(PartTimer& a_timer)
 	{
-		// The kept slots' geometry slots: a referenced one lives (Tables::geometrySlots), and its leases keep its buffers
-		// resolved (GpuResources). Every unresolved slot once buffers start resolving (the render graph came back), and a slot
-		// ResolveGeometrySlot freed, are stale: the objects drawing them are written again, which resolves them.
+		// Stale geometry slots (unresolved ones once the graph comes back, and ones ResolveGeometrySlot freed): the kept objects drawing
+		// them are written again, which resolves them.
 		std::optional<ScenePartScope> scanScope(std::in_place, stats.scenePartMs[static_cast<std::size_t>(ScenePart::GeometryScan)],
 			stats.scenePartFrameMs[static_cast<std::size_t>(ScenePart::GeometryScan)]);
 		TracyCZoneN(scanZone, "CS.DCLF.Scene.GeometryScan", true);
@@ -2463,7 +2115,7 @@ namespace DCLF::Scene
 				const auto& object = tables.objects[s];
 				if ((object.flags & kObjectFree) || tables.objectSeen[s] == walkSerial)
 					continue;
-				// A skin of several partitions draws the chain of slots linked from its first (WriteObject).
+				// A multi-partition skin draws the slot chain linked from its first.
 				bool stale = false;
 				std::uint32_t g = object.geometryIndex;
 				const std::uint32_t links = (tables.skinPartitions[s] & kPartitionChain) ? (tables.skinPartitions[s] & kPartitionChainCount) : kMaxSkinPartitions;
@@ -2512,7 +2164,6 @@ namespace DCLF::Scene
 		TracyCZoneEnd(roundsZone);
 		roundsScope.reset();
 		DCLF_SCENE_PART(ShadowSets, "CS.DCLF.Scene.ShadowSets");
-		// The shadow dependency index reads changed object slots from the same journal as the other kept tables.
 		std::sort(tables.actorObjects.begin(), tables.actorObjects.end());
 		tables.liveObjects = tables.CountLive();
 		if (!shadowSetsDirty) {
@@ -2522,11 +2173,11 @@ namespace DCLF::Scene
 			return;
 		}
 		RefreshShadowSets(false);
-		// The shadow sets made again whole from the same tables, for the observers that compare the two (a Policy question: the parities').
+		// Parity: rebuilt whole from the same tables for the observers to compare.
 		if (Policy::RebuildShadowSets(passSerial)) {
-			Diagnostics::Notify(Diagnostics::ShadowSetsKept{ *this });
+			Diagnostics::Notify<Diagnostics::ScenePoint::ShadowSetsKept>();
 			RefreshShadowSets(true);
-			Diagnostics::Notify(Diagnostics::ShadowSetsRebuilt{ *this });
+			Diagnostics::Notify<Diagnostics::ScenePoint::ShadowSetsRebuilt>();
 		}
 		keptShadowCasters = stats.shadowCasters;
 		keptShadowRejects = stats.shadowRejects;

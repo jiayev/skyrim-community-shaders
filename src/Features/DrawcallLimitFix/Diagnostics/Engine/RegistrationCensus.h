@@ -8,9 +8,9 @@
 namespace DCLF::RegistrationCensus
 {
 	/**
-	 * @brief T7a's census (CS_DCLF_CENSUS; drawcall-limit-fix.md, "T7a census"): what the engine still draws - every pass a
+	 * @brief The registration census (CS_DCLF_CENSUS; drawcall-limit-fix.md, "what the engine still draws"): every pass a
 	 * registration hook hands on to a batch renderer (PassCapture: RegisterPass and the direct group insertions), withheld ones
-	 * not - by view and class, reported every report interval. An observer: it decides nothing and changes nothing.
+	 * not, by view and class, reported every report interval. An observer: it decides nothing and changes nothing.
 	 *
 	 * The hooks run wherever the engine registers (the scene list jobs, the render thread): Note pushes the pass's geometry (a
 	 * reference, so it outlives the frame's registrations), renderer and the per-pass values that are gone by the frame's end
@@ -19,8 +19,8 @@ namespace DCLF::RegistrationCensus
 	 * (Coordinator::FrameClaims), the installed tables' records, the category nodes of the newest publication, and the live leaf's
 	 * static verdict. A Lighting geometry that is no member of its view's phase gets the coordinator's verdict (Coordinator's tracked
 	 * entries: Ineligible's reasons with the per-frame ones, a record, bound): read directly while the scene work runs inline (the
-	 * parities); otherwise (T7c0) asked of the coordinator - Collect posts the distinct geometries seen since its last request, pinned,
-	 * the next scene pass answers each (Coordinator::AnswerCensus) and hands the pins back with the reply, and a later Collect takes it -
+	 * parities); otherwise asked of the coordinator - Collect posts the distinct geometries seen since its last request, pinned,
+	 * the next scene pass answers each (Diagnostics::CensusVerdictOf) and hands the pins back with the reply, and a later Collect takes it -
 	 * with the live approximation (from the frame's copies, the per-frame verdicts not told apart) only until a reply arrives, its
 	 * classes marked so. Nothing is read of the engine on DCLF's threads, and no engine reference is let go of there.
 	 */

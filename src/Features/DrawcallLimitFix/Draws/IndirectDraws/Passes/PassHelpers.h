@@ -38,17 +38,6 @@ namespace DCLF::Draws
 	};
 	static_assert(sizeof(HzbConstants) / 4 == kHzbConstantWords);
 
-	// Bytes reserved per sampled texel; a copy footprint's row pitch wants generous alignment.
-	constexpr std::uint32_t kProbeSlotBytes = 256;
-	// Slots: the colour targets before the draws, the same after, then the depth after the Z-prepass and
-	// again just before the colour draws - the two numbers the colour pass's depth test compares.
-	constexpr std::uint32_t kProbeDepthAfterPrepass = 2 * kColorTargets;
-	constexpr std::uint32_t kProbeDepthBeforeColour = kProbeDepthAfterPrepass + 1;
-	constexpr std::uint32_t kProbeDepthAfterColour = kProbeDepthBeforeColour + 1;
-	constexpr std::uint32_t kProbeDepthAfterSky = kProbeDepthAfterColour + 1;
-	constexpr std::uint32_t kProbeDepthAfterLightCulling = kProbeDepthAfterSky + 1;
-	constexpr std::uint32_t kProbeSlots = kProbeDepthAfterLightCulling + 1;
-
 	// MainPayload::objectState values besides the Skip reasons.
 	constexpr std::uint8_t kObjectStateDrawable = 0xF0;
 	constexpr std::uint8_t kObjectStateDecal = 0xF1;

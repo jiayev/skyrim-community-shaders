@@ -1,7 +1,7 @@
 #pragma once
 
-// The views drawn by epochs of their own: the reflection's faces and the first-person view.
-// Part of IndirectDraws' implementation: included by Internal.h, in its order.
+// The views drawn by epochs of their own: the reflection's faces and the first-person view (one set of types, ViewTraits).
+// Captured and committed on the render thread; their shapes are the revision producer's. Included by Internal.h, in its order.
 
 namespace DCLF::Draws
 {

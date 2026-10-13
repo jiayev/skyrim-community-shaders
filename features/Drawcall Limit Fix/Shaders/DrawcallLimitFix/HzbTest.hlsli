@@ -45,8 +45,7 @@ bool HzbScreenExtent(float4x4 a_viewProj, float3 boundCentre, float boundRadius,
 		minZ = min(minZ, ndc.z);
 	}
 	// Clip space to texture space. The y axis flips: the draws use a y-flipped viewport, which puts clip
-	// y = +1 at the top of the image, where v = 0. Measured: the other orientation gives 571 false
-	// negatives against 45, so this is not a guess.
+	// y = +1 at the top of the image, where v = 0 (checked: the other orientation gives far more false negatives).
 	uvMin = saturate(float2(ndcMin.x, -ndcMax.y) * 0.5 + 0.5);
 	uvMax = saturate(float2(ndcMax.x, -ndcMin.y) * 0.5 + 0.5);
 	nearestZ = minZ;

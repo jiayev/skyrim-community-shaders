@@ -37,7 +37,7 @@ namespace DCLF
 		/** @brief The scope every feature job runs under: never cancelled (a job's own stop source cancels it). */
 		static const org::async::Scope& Scope();
 		static unsigned PreparationWorkers();
-		/** @brief DCLF's AsyncStateGraph on this executor (Runtime::SceneGraph); its producers come with the phases that need them. */
+		/** @brief DCLF's state graph on this executor (Runtime::SceneGraph). */
 		static Runtime::SceneGraph& Graph();
 		/**
 		 * @brief A lane: a SerializedTaskPump (lock-free, level-triggered: wakes coalesce) whose passes run a_drain one at a time, each

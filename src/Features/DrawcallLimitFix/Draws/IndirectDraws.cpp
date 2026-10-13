@@ -1,3 +1,5 @@
+// IndirectDraws for a build without the render graph or ORG module services: every member a stub, and DCLF marked failed so it never
+// claims or draws anything.
 #if !(defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES))
 
 #	include "IndirectDraws.h"

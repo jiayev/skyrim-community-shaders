@@ -1,3 +1,7 @@
+// The coordinator's classification (scene lane; subtree prepares across the pool): category nodes found and refreshed from the
+// render thread's capture, subtrees and geometries tracked from the mirror (prepare, then merge in event order), and the per-entry
+// verdicts (ClassifyFrame, HiddenForWalk, billboards, first person).
+
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
@@ -29,7 +33,7 @@ namespace DCLF::Scene
 	{
 		if (!a_geometry.skinPartition || a_lodRow >= 8)
 			return 0;
-		// The shown flags (a dismember skin's, the record's: none for another skin, or a dismember skin without its array).
+		// A dismember skin's shown flags (empty otherwise).
 		const auto& shown = a_geometry.shown;
 		std::uint32_t mask = 0;
 		for (std::uint32_t i = 0; i < a_geometry.partitions.size() && i < kMaxSkinPartitions; ++i) {
@@ -46,7 +50,7 @@ namespace DCLF::Scene
 	{
 		if (!a_geometry.skin || !a_geometry.skinPartition)
 			return 0;
-		// Row 3 (cumulative: every level's partitions), whatever the node's level; a LOD skin's draw narrows it (SkinLodPartitionsOf).
+		// Row 3 (cumulative over levels); a LOD skin's draw narrows it (SkinLodPartitionsOf).
 		const std::uint32_t mask = SkinPartitionMask(a_geometry, 3);
 		return static_cast<std::uint16_t>(!mask ? kNoPartitions : a_geometry.partitions.size() > 1 ? mask : 0u);
 	}
@@ -86,8 +90,7 @@ namespace DCLF::Scene
 		RE::NiNode* found = nullptr;
 		bool unmirrored = false;
 		const void* top = a_object;
-		// T7e: the first-person root is its own category node, whatever its record's parent: walked as a root (RefreshCategoryNodes'
-		// roots), its subtree is filed under it, never under a category node above it (fp5's members were, and took no first-person phase).
+		// The first-person root is its own category node, never filed under one above it (whose members take no first-person phase).
 		if (a_object && a_object == firstPersonCategory) {
 			a_reason = Ineligible::None;
 			a_unmirrored = !mirror.Node(a_object);
@@ -111,7 +114,7 @@ namespace DCLF::Scene
 			top = key;
 			key = parent->parent;
 		}
-		// A root the portal graph draws with no parent at all (alwaysRenderChildren): filed under its graph's shared portal node.
+		// A parentless root the portal graph draws (alwaysRenderChildren): filed under its graph's shared portal node.
 		if (!found && !key && !unmirrored && top && !alwaysRenderRoots.empty())
 			if (const auto it = alwaysRenderRoots.find(static_cast<const RE::NiAVObject*>(top)); it != alwaysRenderRoots.end())
 				found = it->second.category;
@@ -122,7 +125,7 @@ namespace DCLF::Scene
 
 	void Coordinator::RecheckDeferredReads()
 	{
-		// After the batch the differing reads' changes were in: the mirror agreeing now, the read lagged; not, it differs.
+		// After the next batch: agreeing now means the read lagged, else it differs.
 		for (auto& deferred : std::exchange(deferredReads, {})) {
 			const auto r = static_cast<std::size_t>(deferred.read);
 			if (deferred.recheck())
@@ -135,7 +138,7 @@ namespace DCLF::Scene
 	RE::NiNode* Coordinator::FindCategoryNodeLive(RE::NiAVObject* a_object, Ineligible* a_parentReason) const
 	{
 		EngineReadWindow::Touch("Coordinator::FindCategoryNodeLive");
-		// T7e: the first-person root files its subtree under itself (MirrorCategoryNode).
+		// The first-person root files its subtree under itself (MirrorCategoryNode).
 		if (a_object && a_object == firstPersonCategory) {
 			if (a_parentReason)
 				*a_parentReason = Ineligible::None;
@@ -153,8 +156,7 @@ namespace DCLF::Scene
 			reason = Eligibility::CombineParentReasons(reason, Eligibility::ParentReason(node));
 			top = node;
 		}
-		// A root the portal graph draws with no parent at all (alwaysRenderChildren): filed under its graph's shared portal
-		// node, a category node no walk up from it reaches.
+		// A parentless portal-graph root: filed under its graph's shared portal node.
 		if (!node && top && !top->parent && !alwaysRenderRoots.empty()) {
 			if (const auto it = alwaysRenderRoots.find(top); it != alwaysRenderRoots.end()) {
 				if (a_parentReason)
@@ -167,22 +169,21 @@ namespace DCLF::Scene
 
 	void Coordinator::TakeCategoryCapture()
 	{
-		// The render thread's capture (CaptureCategories, posted: T6b3a), the newest, taken at the pass's start (T6b3d: before the drains,
-		// so the portal roots it pushed are in this pass's batch). Taking one lets go of the one before, which the render thread still
-		// holds (it waits for the generation RefreshCategoryNodes stores).
+		// The newest CaptureCategories post, taken before the drains so the portal roots it pushed are in this pass's batch. The render
+		// thread keeps the previous one until RefreshCategoryNodes stores its generation.
 		if (auto taken = channels.categoryPosted.Take())
 			categoryTaken = std::move(*taken);
 	}
 
 	void Coordinator::RefreshCategoryNodes(bool a_force)
 	{
-		// The capture the pass took (TakeCategoryCapture), diffed again when it is new, or forced (the rescan after a load).
+		// Diffed when new, or forced (the rescan after a load).
 		const auto* capture = categoryTaken.get();
 		if (!capture || (!a_force && capture->generation == channels.categoryAppliedGeneration.load(std::memory_order_relaxed)))
 			return;
 		const std::uint8_t cause = a_force ? 1 : 0;
 		channels.categoryAppliedGeneration.store(capture->generation, std::memory_order_release);
-		// Its pins (T6b1c): held by the capture until the render thread lets go of it (after a newer one is applied).
+		// Pins held by the capture until the render thread drops it.
 		for (const auto& pin : capture->pins) {
 			batchPins.insert_or_assign(pin.get(), pin.get());
 			++referenceStats.pins;
@@ -214,9 +215,8 @@ namespace DCLF::Scene
 					stale.push_back(geometry);
 					continue;
 				}
-				// Filed under a root (its walk up ends without reaching the category node): stale when the root left.
+				// Filed under a portal root: stale when the root left.
 				if (removedRoot && alwaysRenderRoots.size()) {
-					// The mirror's chain (T6b1b).
 					const void* top = geometry;
 					const void* parent = mirror.Parent(top);
 					for (; parent && parent != entry.categoryNode; parent = mirror.Parent(top))
@@ -247,7 +247,7 @@ namespace DCLF::Scene
 		nodeSetsDirty = true;  // the publication's copy made again (IsCategoryNode)
 		for (auto& [root, entry] : alwaysRenderRoots)
 			HandBack(std::move(entry.root));
-		// Copies of the capture's references (the scene work never makes one from a key).
+		// Copies of the capture's references (never made from a key).
 		alwaysRenderRoots.clear();
 		for (const auto& [root, entry] : currentRoots)
 			alwaysRenderRoots.emplace(root, AlwaysRenderRoot{ entry.root, entry.category });
@@ -255,12 +255,10 @@ namespace DCLF::Scene
 		const TrackSource previousSource = addSource;
 		if (addSource != TrackSource::Rescan)
 			addSource = TrackSource::CategoryAppeared;
-		// T6b3e e5: the roots listed in the order they were walked, then tracked together (AddSubtrees: prepared, on the pool for a
-		// rescan's thousands, and merged in this order). The category nodes and the portal roots are this capture's from here on.
+		// Roots listed in walk order, then tracked together (AddSubtrees prepares on the pool for a rescan and merges in this order).
 		std::vector<std::pair<RE::NiAVObject*, SubtreeSource>> walked;
 		for (auto* node : added) {
 			categoryFound[node] = { sceneFrame, cause };
-			// The capture's keys of its children (T6b1c: not read here).
 			const auto keys = capture->children.find(node);
 			if (keys == capture->children.end()) {
 				++categoryChildrenMissing;
@@ -269,7 +267,7 @@ namespace DCLF::Scene
 			for (const auto* child : keys->second)
 				walked.emplace_back(const_cast<RE::NiAVObject*>(child), SubtreeSource::CategoryWalk);
 		}
-		// Roots of a graph whose shared node appeared now are walked here too (FindCategoryNode finds them through it).
+		// Roots of a graph whose shared node just appeared.
 		for (const auto& [root, entry] : alwaysRenderRoots) {
 			if (std::find(added.begin(), added.end(), entry.category) != added.end())
 				walked.emplace_back(entry.root.get(), SubtreeSource::CategoryWalk);
@@ -317,10 +315,10 @@ namespace DCLF::Scene
 	{
 		if (!a_tracked.sunEntryResolved) {
 			a_tracked.sunEntryResolved = true;
-			// The mirror's chain (T6b1b): the reference's root, or the multibound above.
+			// The reference's root, or the multibound above.
 			++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::SunEntry)];
 			const void* entry = MirrorSunEntry(&a_geometry);
-			// The mirror's (its root pinned by the attach's capture), or on a live walk's path the live chain's; the observers check the other.
+			// The mirror's (root pinned by the attach's capture), or on a live walk the live chain's; observers compare the two.
 			if (!a_live) {
 				a_tracked.sunEntryNode = static_cast<const RE::NiAVObject*>(entry);
 				Diagnostics::Notify(Diagnostics::SunEntryRead{ *this, a_geometry, entry, nullptr, false });
@@ -367,7 +365,7 @@ namespace DCLF::Scene
 		if (a_skylighting ? any(kSkinned) && !any(kTreeAnim) : any(kSkinned))
 			return 0;
 		if (a_skylighting && a_leaf.node->userData) {
-			// The nearest fade node above it (AsFadeNode's: the record's kind), its BSX flags.
+			// The nearest fade node's BSX flags.
 			const SceneCapture::NodeRecord* fadeNode = nullptr;
 			for (const auto* record = a_leaf.parent; record && !fadeNode; record = record->parent ? mirror.Node(record->parent) : nullptr)
 				fadeNode = (record->kind & SceneCapture::kKindFadeNode) ? record : nullptr;
@@ -400,8 +398,7 @@ namespace DCLF::Scene
 
 	const RE::NiNode* Coordinator::RoomNodeOf(const void* a_object) const
 	{
-		// Light Limit Fix's room (GetParentRoomNode): the nearest node from the object up that is a BSMultiBoundRoom or a
-		// BSPortalSharedNode, by its RTTI. The mirror's chain (T6b1b).
+		// Light Limit Fix's GetParentRoomNode: the nearest BSMultiBoundRoom or BSPortalSharedNode up the chain, by RTTI.
 		static const auto* roomRtti = REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSMultiBoundRoom }.get();
 		static const auto* portalRtti = REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSPortalSharedNode }.get();
 		for (const void* key = a_object; key;) {
@@ -421,7 +418,7 @@ namespace DCLF::Scene
 		auto hold = [&](RE::NiPointer<RE::BSShaderProperty>& a_held, const void* a_key) {
 			if (a_held.get() == a_key)
 				return;
-			// The event that named it (an attach's capture, a leaf update) holds it: the batch's pin.
+			// The batch's pin, from the event that named it.
 			auto next = a_key ? Pinned(static_cast<const RE::BSShaderProperty*>(a_key)) : nullptr;
 			if (a_key && !next) {
 				++referenceStats.propertiesRefused;
@@ -435,11 +432,10 @@ namespace DCLF::Scene
 		};
 		hold(a_entry.property, record ? record->property : nullptr);
 		hold(a_entry.layerProperty, record ? record->Layer() : nullptr);
-		// T6b3e: the property's fade node, held from the same pins (an attach's capture pins every ancestor) for the tree and fade-root
-		// owners (ListTree, ListFadeRoot): kept while the key stays the same.
+		// The property's fade node, for the tree and fade-root owners (an attach's capture pins every ancestor).
 		const auto* property = record && record->property ? mirror.Property(record->property) : nullptr;
 		const void* fadeNode = property ? property->fadeNode : nullptr;
-		// T7f item 7: the engine's "no fade node" is no root (ListFadeRoot): not held, not asked of the render thread.
+		// The engine's "no fade node" sentinel is no root.
 		static const bool emptyIsNone = SwitchOnUnlessZero(Switch::EmptyFadeNode);
 		if (emptyIsNone && fadeNode == Engine::EmptyFadeNode())
 			fadeNode = nullptr;
@@ -459,14 +455,12 @@ namespace DCLF::Scene
 			return true;
 		}
 		++r.fadeNodesRefused;
-		// Another tracked reference's root (a shared model's property names the fade node of the instance cloned last): its owner's copy.
+		// A shared model's property names the fade node of the instance cloned last: use that root's owner.
 		if (const auto owner = rootOwners.find(key); owner != rootOwners.end() && owner->second) {
 			a_entry.fadeNodeRef = owner->second;
 			++r.fadeNodesFromRoots;
 			return true;
 		}
-		// Named for the report: the geometry, the node (its record's name and kind, whether the mirror has it above the geometry), where it
-		// was wanted, and whether the batch had pins.
 		if (r.fadeNodeNamed < 4) {
 			++r.fadeNodeNamed;
 			const auto* geometry = a_entry.geometry.get();
@@ -480,7 +474,7 @@ namespace DCLF::Scene
 				!nodeRecord ? "no record" : (nodeRecord->kind & SceneCapture::kKindTree) ? "a tree node" : (nodeRecord->kind & SceneCapture::kKindFadeNode) ? "a fade node" : "another node",
 				nodeRecord && nodeRecord->userData ? ", a reference's" : "", ancestor ? "on" : "off", a_path, batchPins.empty() ? "had no" : fmt::format("had {}", batchPins.size()));
 		}
-		// The render thread reads the property where the engine does and pins it (ServeFadeNodeRequests); once a key.
+		// The render thread pins it (ServeFadeNodeRequests); asked once per key.
 		if (a_entry.geometry && a_entry.fadeNodeRequested != a_node) {
 			a_entry.fadeNodeRequested = a_node;
 			channels.fadeNodeRequests.Push(FadeNodeRequest{ a_entry.geometry, a_node });
@@ -491,8 +485,8 @@ namespace DCLF::Scene
 
 	void Coordinator::AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason, bool a_live, const GeometryPrep& a_prep)
 	{
-		// T6b3e e5: what it reads of the mirror is a_prep's (PrepareGeometry, maybe on the pool); here the writes, in event order.
-		// Its reference first (T6b1c): the entry's own when tracked already, else the batch's pin, else (a live walk's) the pointer.
+		// The mirror reads are a_prep's (maybe from the pool); here the writes, in event order. Reference: the entry's, else the batch's
+		// pin, else (a live walk) the pointer.
 		RE::NiPointer<RE::BSGeometry> reference;
 		if (const auto known = tracked.find(a_geometry); known != tracked.end() && known->second.geometry.get() == a_geometry)
 			reference = known->second.geometry;
@@ -501,8 +495,7 @@ namespace DCLF::Scene
 			reference.reset(a_geometry);
 		}
 		if (!reference) {
-			// The mirror names it under a_categoryNode and nothing holds it: the live scene no longer has it there (its event the next
-			// batch's), or a pin is missing. Checked after the next batch: the mirror moving it on, it lagged (T6b1c).
+			// Nothing holds it: it left (its event is next batch's) or a pin is missing. Rechecked after the next batch.
 			++referenceStats.refused;
 			++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::Reference)];
 			NoteMirrorRead(MirrorRead::Reference, true, [&] { return fmt::format("geometry {} under category node {}", static_cast<const void*>(a_geometry), static_cast<const void*>(a_categoryNode)); },
@@ -516,7 +509,6 @@ namespace DCLF::Scene
 		const auto [it, inserted] = tracked.try_emplace(a_geometry);
 		trackedLayout += inserted ? 1 : 0;
 		auto& entry = it->second;
-		// Its node's record's reference, an actor's (the prepare's).
 		const auto* actorOwner = a_prep.actorOwner;
 		const auto identity = sceneIdentity.Attach(a_geometry, actorOwner);
 		if (identity.replaced) {
@@ -535,7 +527,7 @@ namespace DCLF::Scene
 		entry.roomMapGeneration = 0;
 		entry.geometry = std::move(reference);
 		HoldProperties(entry);
-		// A face shape's head (a dynamic shape under a BSFaceGenNiNode, the mirror's: the prepare's): held from the batch's pins (T6b1b).
+		// A face shape's head, held from the batch's pins.
 		{
 			const auto* head = a_prep.faceHead;
 			if (entry.faceHeadRef.get() != head) {
@@ -545,19 +537,17 @@ namespace DCLF::Scene
 			}
 		}
 		entry.categoryNode = a_categoryNode;
-		// The mirror holds no record of it (an attach no hook captured): the render thread captures it at the next frame's start (T6b1a).
+		// No mirror record (an uncaptured attach): the render thread captures it at the next frame's start.
 		if (!a_prep.mirrored)
 			channels.mirrorCaptureRequests.Push(RE::NiPointer<RE::NiAVObject>(a_geometry));
 		entry.parentReason = a_parentReason;
-		// Attached (again): its classification stands no more, and every other entry reading the same sun entry node is
-		// evaluated again, since that node's bound takes this one in now (dclf-event-driven-tables.md, "Phase 3").
+		// (Re)attached: reclassify, and re-evaluate the sun entry's other dependents (its bound now includes this one).
 		entry.candidateFrame = 0;
 		{
 			UnlistDependents(a_geometry, entry, true);
 			entry.sunEntryResolved = false;
 			entry.sunEntryNode = nullptr;
-			// The prepare's mirror read (counted here, as ResolveSunEntry counts it), or ResolveSunEntry's with its live check (the
-			// mirror-read parity's, a live walk's).
+			// The prepare's read (counted here), or ResolveSunEntry's with its live check.
 			const bool prepared = a_prep.resolved && !a_live;
 			if (prepared) {
 				++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::SunEntry)];
@@ -570,7 +560,7 @@ namespace DCLF::Scene
 				entry.sunEntryNode = nullptr;
 			if (entry.sunEntryNode) {
 				rootDependents[entry.sunEntryNode].push_back(a_geometry);
-				const auto* rootRecord = mirror.Node(entry.sunEntryNode);  // its reference, the mirror's
+				const auto* rootRecord = mirror.Node(entry.sunEntryNode);
 				if (const auto* rootRef = rootRecord ? static_cast<const RE::TESObjectREFR*>(rootRecord->userData) : nullptr;
 					rootRef && rootReference.try_emplace(entry.sunEntryNode, rootRef).second)
 					referenceRoot[rootRef] = entry.sunEntryNode;
@@ -578,8 +568,7 @@ namespace DCLF::Scene
 				dirtyRoots.push_back(entry.sunEntryNode);
 				MarkSunEntryDirty(entry.sunEntryNode);
 			}
-			// LightEntryOf's: the prepare's actor root (its mirror walk counted here, as LightEntryOf counts it), else the sun entry when
-			// it is no category node's own.
+			// As LightEntryOf: the prepare's actor root, else the sun entry unless a category node owns it.
 			const RE::NiAVObject* lightEntry = nullptr;
 			if (!prepared) {
 				lightEntry = LightEntryOf(entry, *a_geometry, a_live);
@@ -598,19 +587,18 @@ namespace DCLF::Scene
 				MarkLightEntryDirty(lightEntry);
 			}
 		}
-		// Object LOD: its drawn ranges from now on, by its segment events (lodSegmentEvents).
+		// Object LOD: drawn ranges from here on follow its segment events.
 		if (a_prep.subIndex)
 			SampleLodRanges(*a_geometry, false);
 		pendingEvaluation.push_back(a_geometry);
-		// T6b5: under a LOD gate's root (its gate applied before this attach reached the tracking, or a subtree added after it): tagged.
+		// Under a LOD gate's root applied earlier: tag it.
 		if (!gateOfRoot.empty())
 			TagGateAbove(a_geometry, entry);
 	}
 
 	const RE::NiAVObject* Coordinator::LightEntryOf(const Tracked& a_tracked, const RE::BSGeometry& a_geometry, bool a_live) const
 	{
-		// The category node's child it hangs from: an actor's root is its light entry, whatever is under it (carried items too).
-		// The mirror's chain (T6b1b).
+		// An actor's root (the category node's child it hangs from) is the light entry for everything under it, carried items too.
 		if (const auto* category = a_tracked.categoryNode) {
 			++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::LightEntry)];
 			const void* root = &a_geometry;
@@ -618,7 +606,7 @@ namespace DCLF::Scene
 				root = node;
 			const auto* record = root != &a_geometry ? mirror.Node(root) : nullptr;
 			const bool actorRoot = record && record->parent == category && record->IsActorCharacter();
-			// The mirror's (its root pinned by the attach's capture), or on a live walk's path the live chain's; the observers check the other.
+			// The mirror's, or on a live walk the live chain's; observers compare the two.
 			if (!a_live) {
 				Diagnostics::Notify(Diagnostics::LightEntryRead{ *this, a_geometry, category, root, actorRoot, nullptr, false, false });
 				if (actorRoot)
@@ -637,7 +625,6 @@ namespace DCLF::Scene
 
 	const RE::NiAVObject* Coordinator::LiveLightRoot(const RE::BSGeometry& a_geometry, const RE::NiNode* a_category, bool& a_actor)
 	{
-		// The category node's child a_geometry hangs from on the live chain, and whether its reference is an actor.
 		const RE::NiAVObject* live = &a_geometry;
 		for (const auto* node = a_geometry.parent; node && node != a_category; node = node->parent)
 			live = node;
@@ -648,7 +635,7 @@ namespace DCLF::Scene
 
 	void Coordinator::AddSubtree(RE::NiAVObject* a_root, SubtreeSource a_source)
 	{
-		// T6b3e e5: its prepare then its merge, here (CS_DCLF_FANOUT=0's unit; AddSubtrees prepares many first).
+		// Serial unit: prepare then merge.
 		SubtreePrep prep;
 		PrepareSubtree(a_root, a_source, prep);
 		fanoutStats.subtreeGeometries += prep.geometries.size();
@@ -657,17 +644,14 @@ namespace DCLF::Scene
 
 	void Coordinator::PrepareSubtree(RE::NiAVObject* a_root, SubtreeSource a_source, SubtreePrep& a_out) const
 	{
-		// T6b3e e5: pure over the batch's mirror (ApplyMirrorEvents applied all of it before any subtree is tracked, and nothing tracking
-		// one writes it), the category nodes and the portal roots (RefreshCategoryNodes stored them before its own walks): any thread
-		// under a ShardScope, its mirror reads into the chunk's counters. No engine memory (the root is a key) but the mirror-read
-		// parity's live check, which runs on the pass's thread (FanoutMode: 0).
+		// Pure over the mirror, category nodes and portal roots, none of which tracking writes: any thread under a ShardScope. No engine
+		// memory (the root is a key), except the mirror-read parity's live check, which runs serially on the pass's thread.
 		a_out.root = a_root;
 		a_out.source = a_source;
 		a_out.category = nullptr;
 		a_out.unmirrored = false;
 		a_out.geometries.clear();
-		// The attach event is drained a frame or more after it was queued, so its node can already be gone
-		// (a cell transition releases the subtree). Walking it then dereferences null.
+		// The attach is drained a frame or more after it was queued; a cell transition may have released the subtree.
 		if (!a_root)
 			return;
 		Ineligible reasonAbove = Ineligible::None;
@@ -675,9 +659,8 @@ namespace DCLF::Scene
 		if (!a_out.category)
 			return;
 
-		// Walk down the mirror, carrying what the nodes between the category node and the leaf make of it (ParentReason's); each
-		// geometry's reference the pin of an attach's capture or the category capture (T6b1c: the mirror can name one the engine has
-		// detached and freed since; its pin holds it), taken at the merge.
+		// Walk down the mirror carrying the parent reasons. Each geometry's reference is its capture's pin, taken at the merge (the
+		// mirror may name one the engine has since freed; the pin holds it).
 		std::vector<std::pair<RE::BSGeometry*, Ineligible>> found;
 		bool lacking = false;
 		++MirrorReads().reads[static_cast<std::size_t>(MirrorRead::Subtree)];
@@ -692,13 +675,10 @@ namespace DCLF::Scene
 
 	void Coordinator::PrepareGeometry(RE::BSGeometry* a_geometry, Ineligible a_reason, const RE::NiNode* a_category, GeometryPrep& a_out) const
 	{
-		// T6b3e e5: AddGeometry's mirror reads (its node's record, the room node, a face shape's head, its geometry record's type, the sun
-		// entry, the light entry's walk), keys alone. The sun and light entry reads are counted at the merge (ResolveSunEntry and
-		// LightEntryOf counted them there, and a refused reference reads neither).
+		// AddGeometry's mirror reads, keys only. Sun and light entry reads are counted at the merge (a refused reference reads neither).
 		a_out = GeometryPrep{};
 		a_out.geometry = a_geometry;
 		a_out.reason = a_reason;
-		// Its node's record (T6b1b): the reference, an actor's.
 		const auto* record = mirror.Node(a_geometry);
 		a_out.mirrored = record != nullptr;
 		a_out.actorOwner = record && record->IsActorCharacter() ?
@@ -711,12 +691,12 @@ namespace DCLF::Scene
 		const bool face = parent && (parent->kind & SceneCapture::kKindFaceGen) && g && g->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kDynamicTriShape);
 		a_out.faceHead = face ? static_cast<const RE::BSFaceGenNiNode*>(record->parent) : nullptr;
 		a_out.subIndex = g && g->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kSubIndexTriShape);
-		// While an observer checks the sun and light entry reads against the live chain, the merge resolves both (ResolveSunEntry, LightEntryOf).
+		// While an observer checks these reads against the live chain, the merge resolves both.
 		if (Diagnostics::Armed<Diagnostics::SunEntryRead>())
 			return;
 		a_out.resolved = true;
 		a_out.sunEntry = MirrorSunEntry(a_geometry);
-		// LightEntryOf's mirror walk: the category node's child it hangs from, its light entry when that is an actor's root.
+		// LightEntryOf's mirror walk.
 		if (a_category) {
 			const void* root = a_geometry;
 			for (const void* node = mirror.Parent(a_geometry); node && node != a_category; node = mirror.Parent(node))
@@ -729,12 +709,12 @@ namespace DCLF::Scene
 
 	void Coordinator::MergeSubtree(SubtreePrep& a_prep)
 	{
-		// T6b3e e5: in event order, on the pass's thread: the pins, the pending retry and the capture requests, every geometry's entry.
+		// In event order, on the pass's thread.
 		if (!a_prep.root)
 			return;
 		if (!a_prep.category) {
 			if (a_prep.unmirrored && a_prep.source == SubtreeSource::CategoryWalk) {
-				// Its reference a pin's copy (the capture's): never one made from a key.
+				// A pin's copy, never a reference made from a key.
 				if (auto root = Pinned(static_cast<const RE::NiAVObject*>(a_prep.root))) {
 					++subtreesPended;
 					channels.mirrorCaptureRequests.Push(root);
@@ -753,8 +733,7 @@ namespace DCLF::Scene
 
 	void Coordinator::PrepareSubtrees(const std::vector<std::pair<RE::NiAVObject*, SubtreeSource>>& a_roots, std::uint32_t a_mode, std::vector<SubtreePrep>& a_out)
 	{
-		// T6b3e e5: every root's prepare (pure: PrepareSubtree), by chunks of kSubtreeGrain on the pool (mode 2) or here (1); the mirror
-		// reads counted by chunk (indexed begin / kSubtreeGrain, so not by the thread) and merged in chunk order.
+		// By chunks on the pool (mode 2) or here; mirror reads counted per chunk (not per thread) and merged in chunk order.
 		const std::size_t count = a_roots.size();
 		const bool parallel = a_mode == 2;
 		const std::size_t chunks = (count + kSubtreeGrain - 1) / kSubtreeGrain;
@@ -784,18 +763,6 @@ namespace DCLF::Scene
 			AddScenePartMs(ScenePart::SubtreesFanout, ms);
 			f.subtreePrepareMs += ms;
 		}
-		// An observer's reference (FanoutDue): prepared again here, one root after another (its counters dropped).
-		bool checked = false;
-		if (parallel)
-			Diagnostics::Notify(Diagnostics::FanoutDue{ *this, checked });
-		if (checked) {
-			const std::function<void(std::vector<SubtreePrep>&)> serial = [&](std::vector<SubtreePrep>& a_into) {
-				a_into.resize(count);
-				std::vector<MirrorReadStats> serialCounters(chunks);
-				prepare(a_into, serialCounters, false);
-			};
-			Diagnostics::Notify(Diagnostics::SubtreesPrepared{ *this, a_roots, a_out, serial });
-		}
 		for (auto& chunk : counters)
 			MergeMirrorReads(chunk);
 		for (const auto& prep : a_out)
@@ -809,16 +776,13 @@ namespace DCLF::Scene
 		auto& f = fanoutStats;
 		++f.subtreeRounds;
 		f.subtreeRoots += a_roots.size();
-		const std::uint32_t mode = FanoutMode(a_roots.size(), false, kSubtreeFanoutMin);
+		const std::uint32_t mode = FanoutMode(a_roots.size(), kSubtreeFanoutMin);
 		if (mode == 0) {
-			// Each prepared and merged before the next: AddSubtree as it was (the reference).
 			for (const auto& [root, source] : a_roots)
 				AddSubtree(root, source);
 			return;
 		}
-		// Every root prepared, then merged in order. An earlier root's merge cannot change a later one's prepare: the merges write the
-		// tracked set, the identities, the dependents and the pins' references, never the mirror, the category nodes or the portal
-		// roots a prepare reads (the witnesses).
+		// Prepare all, then merge in order: merges never write what a prepare reads (mirror, category nodes, portal roots: witnessed).
 		[[maybe_unused]] const std::uint64_t mirrorWrites = mirror.Writes();
 		[[maybe_unused]] const std::size_t categories = categoryNodes.size();
 		[[maybe_unused]] const std::size_t portalRoots = alwaysRenderRoots.size();
@@ -837,7 +801,7 @@ namespace DCLF::Scene
 
 	void Coordinator::MirrorSubtree(const void* a_root, Ineligible a_reason, std::vector<std::pair<RE::BSGeometry*, Ineligible>>& a_out, bool& a_unmirrored) const
 	{
-		// Its switches' selected children were caught up at ingestion (CatchUpSwitches).
+		// Switch selections were caught up at ingestion (CatchUpSwitches).
 		if (ForEachMirror(mirror, a_root, a_reason, [&](const void* a_key, const SceneCapture::NodeRecord& a_record, Ineligible a_above, Ineligible& a_below) {
 				if (a_record.kind & SceneCapture::kKindGeometry)
 					a_out.emplace_back(static_cast<RE::BSGeometry*>(const_cast<void*>(a_key)), a_above);
@@ -852,7 +816,7 @@ namespace DCLF::Scene
 
 	bool Coordinator::HiddenForWalk(const RE::NiAVObject* a_object) const
 	{
-		// The frame's capture (FrameGlobals::cullHidden, taken by the render thread when the scene work is kicked).
+		// The render thread's frame-start capture first.
 		const auto& cullHidden = FrameGlobals::Current().cullHidden;
 		const auto it = std::lower_bound(cullHidden.begin(), cullHidden.end(), a_object, [](const auto& a_entry, const RE::NiAVObject* a_key) { return a_entry.first < a_key; });
 		if (it != cullHidden.end() && it->first == a_object)
@@ -867,7 +831,7 @@ namespace DCLF::Scene
 		const auto it = std::lower_bound(cullHidden.begin(), cullHidden.end(), object, [](const auto& a_entry, const RE::NiAVObject* a_key) { return a_entry.first < a_key; });
 		if (it != cullHidden.end() && it->first == object)
 			return it->second;
-		// T6b5: a gated LOD block's own hide is the gate's (SceneMirror::SetGated), not the scene's: every other hide on the chain counts.
+		// A gated LOD block's own hide is the gate's (SceneMirror::SetGated), not the scene's.
 		return (a_record.flags & static_cast<std::uint32_t>(RE::NiAVObject::Flag::kHidden)) != 0 && !mirror.Gated(a_object);
 	}
 
@@ -880,7 +844,6 @@ namespace DCLF::Scene
 		const auto* object = static_cast<const RE::NiAVObject*>(a_key);
 		const auto it = std::lower_bound(cullHidden.begin(), cullHidden.end(), object, [](const auto& a_entry, const RE::NiAVObject* a_object) { return a_entry.first < a_object; });
 		const bool listed = it != cullHidden.end() && it->first == object;
-		// The mirror's chain (keys), from the leaf up.
 		std::string chain;
 		const void* at = a_tracked.geometry.get();
 		for (std::uint32_t n = 0; at && n < 16; ++n) {
@@ -902,9 +865,8 @@ namespace DCLF::Scene
 	{
 		if (!ActiveToggles().billboards || a_tracked.parentReason != Ineligible::Billboard)
 			return -1;
-		// T7f item 7: a first-person entry's too (the magic hands' glows). The first-person forward part draws it with DCLF's first-person
-		// b12 block (ExecuteFirstPersonDepth), which is in world space throughout: c0-c2 the camera's rotation (the shift moves translations
-		// only) and c40 the eye at GetFirstPersonNodePosition, against the row the render thread sampled at Kick, before the shift.
+		// First-person entries too (magic hand glows): the first-person forward part's b12 block (ExecuteFirstPersonDepth) is world
+		// space throughout (c0-c2 the camera rotation, c40 the eye at GetFirstPersonNodePosition), sampled before the shift.
 		const auto leaf = mirror.Leaf(a_tracked.geometry.get());
 		if (!leaf || !SceneCapture::LeafView::Effect(leaf.property) || leaf.Type() != static_cast<std::uint8_t>(RE::BSGeometry::Type::kTriShape) || leaf.Skinned())
 			return -1;
@@ -920,7 +882,7 @@ namespace DCLF::Scene
 				mode = static_cast<std::int32_t>(SceneCapture::BillboardModeOf(record->kind));
 			}
 		}
-		// One node: a billboard under another is turned from a parent world a cull wrote (the outer node's turn).
+		// Exactly one: a nested billboard turns from a parent world the outer node's cull wrote.
 		return billboards == 1 && mode <= 5 ? mode : -1;
 	}
 
@@ -931,8 +893,7 @@ namespace DCLF::Scene
 		const std::uint32_t group = a_descriptors.decalGroup;
 		if (!on || (group != 1 && group != 2) || !FirstPersonEntry(a_tracked.categoryNode))
 			return;
-		// The forward pixel stage: an effect's or a Lighting decal's (a weapon's BloodLighting) without Deferred, as LightingShaderDescriptors
-		// makes a forward key's.
+		// The forward pixel stage: drop Deferred, as LightingShaderDescriptors does for a forward key.
 		a_descriptors.pixel &= a_descriptors.effect ? ~EffectFlag::Deferred : ~kLightingPixelDeferred;
 		a_descriptors.forward = true;
 		a_descriptors.forwardBlendMode = group == 2 ? a_descriptors.decalBlendMode : 0u;
@@ -949,13 +910,12 @@ namespace DCLF::Scene
 		const bool underSwitch = a_tracked.parentReason == Ineligible::Switch;
 		if (underSwitch && !ActiveToggles().switchNodes)
 			return Ineligible::Switch;
-		// CS_DCLF_BILLBOARDS: an effect leaf under one billboard node is DCLF's, turned by its vertex stage (Billboards.h). The billboard
-		// outranks a switch and an ordered node in parentReason, so the chain walk below applies their tests to it as to a switch's leaf.
+		// An effect leaf under one billboard node is DCLF's, turned by its vertex stage (Billboards.h). Billboard outranks switch and
+		// ordered in parentReason, so the chain walk below applies their tests too.
 		const bool underBillboard = a_tracked.parentReason == Ineligible::Billboard;
-		// T7f item 7: a particle system under billboard nodes needs no turn in the vertex stage. The turn reaches it only through its update:
-		// 0x140d3e650 runs each child's UpdateDownwardPass (slot 0x2C, the system's update, NiPSysUpdateCtlr), after which ParticleSnapshots
-		// takes its snapshot; NiParticleSystem::UpdateWorldData (vtable 0x1419c3898 slot 0x30, 0x140dd4c90) is empty. So the engine draws the
-		// world and particles of the system's last update, which the snapshot copies. Its classification is the particle path's (ClassifyStatic).
+		// A particle system under billboards needs no vertex-stage turn: 0x140d3e650 runs each child's UpdateDownwardPass (slot 0x2C,
+		// NiPSysUpdateCtlr), after which ParticleSnapshots snapshots it, and NiParticleSystem::UpdateWorldData (vtable 0x1419c3898 slot
+		// 0x30, 0x140dd4c90) is empty, so the engine draws the last update's world and particles, which the snapshot copies.
 		const auto particlesUnderBillboard = [&] {
 			static const bool on = SwitchOnUnlessZero(Switch::BillboardParticles);
 			if (!on || !ActiveToggles().billboards)
@@ -966,10 +926,8 @@ namespace DCLF::Scene
 		if (underBillboard && BillboardModeOf(a_tracked) < 0 && !particlesUnderBillboard())
 			return Ineligible::Billboard;
 		const bool chainTests = underSwitch || underBillboard;
-		// T7c0: under an ordered node only a blended leaf is rejected (OrderedLeaf: the node orders those passes alone); an opaque
-		// one goes on like any leaf. Under a switch too (the switch outranks it in parentReason): the chain walk below finds it.
-		// T7d's ordered-node interleave: with the forward epoch the blended leaf is DCLF's too, its draw sorted in its node's group at the
-		// node's depth and in its child order (BindlessPlacement::forwardSort; ForwardSortCS), as the engine's blended draw has the group.
+		// Under an ordered node only a blended leaf is rejected (the node orders only those passes), unless the forward epoch takes it,
+		// sorted in its node's group by depth and child order (ForwardSortCS). Under a switch the chain walk finds it.
 		const bool ordered = a_tracked.parentReason == Ineligible::UnsupportedParent;
 		if (a_tracked.parentReason != Ineligible::None && !underSwitch && !ordered && !underBillboard)
 			return a_tracked.parentReason;
@@ -977,26 +935,21 @@ namespace DCLF::Scene
 		if (ordered && orderedLeaf())
 			return Ineligible::UnsupportedParent;
 
-		// App-culled or hidden anywhere between the leaf and its category node; part of an actor; under a
-		// switch node that does not draw this branch. The mirror's chain (T6b1b).
+		// Hidden anywhere up to the category node; part of an actor; under a switch not drawing this branch.
 		const bool actors = ActiveToggles().actors;
 		const void* child = nullptr;
 		const void* key = a_tracked.geometry.get();
 		std::uint32_t depth = 0;
 		for (const auto* record = mirror.Node(key); record; child = key, key = record->parent, record = key ? mirror.Node(key) : nullptr, ++depth) {
-			// T7e: the first-person root's kHidden is the view's (Main::Draw, unk_FPCulling and RenderDepth toggle it within the frame,
-			// FUN_140736150 at the camera switch; cullHidden lists it hidden for the world views): a chain stops before it, whatever category
-			// node the entry was filed under. Whether the view draws is the first-person latch's (IndirectDraws::BeginFirstPersonFrame).
-			// A first-person particle system (a magic hand's) is taken as any other: FrameValues' producer expands its snapshots with the
-			// first-person camera (T7e's forward part; its row the render thread's first-person sample).
+			// The first-person root's kHidden belongs to the view (Main::Draw, unk_FPCulling and RenderDepth toggle it within the frame,
+			// FUN_140736150 at the camera switch): the chain stops before it. Whether the view draws is the first-person latch's.
 			if (key && key == firstPersonCategory) {
 				if (a_tracked.categoryNode != firstPersonCategory)
 					Diagnostics::Notify(Diagnostics::FirstPersonMisfiled{ a_tracked.geometry.get(), a_tracked.categoryNode });
 				break;
 			}
 			if (HiddenForWalk(key, *record)) {
-				// T7e's diagnostic (pointers alone, never dereferenced): which node hid an entry of the first-person skeleton (fp5 kept its
-				// arms hidden with every subtree bit clear).
+				// Diagnostic (pointers only, never dereferenced).
 				if (firstPersonCategory) {
 					const auto& skeleton = FrameGlobals::Current().firstPersonGeometry;
 					if (FirstPersonEntry(a_tracked.categoryNode) ||

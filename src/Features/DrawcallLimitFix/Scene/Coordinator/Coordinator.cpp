@@ -1,3 +1,6 @@
+// Coordinator's singleton and its per-geometry lookups (the tracked map, read on the coordinator thread or by the render thread's
+// diagnostics).
+
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 

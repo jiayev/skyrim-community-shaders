@@ -14,6 +14,18 @@
 > - the observers `<- ACCUMULATED ALL` (the wide-write compare and its dry run), `<- ACTOR RATE` and `<- FADE DOUBLE`;
 > - the `Published/` capture island (`CaptureService`, `CapturePreparation`, `CaptureAdmission`, `CapturedScene`, `CaptureGraph`,
 >   `FaceCapture`, their tests) and `AsyncWorker`.
+>
+> **Removed in the 2026-10-13 diagnostics trim** (checks that never fired or that other checks cover, and the probes of finished
+> investigations, with the hooks, events, views and main-path code that served only them):
+> - parity switches `CS_DCLF_FANOUT_PARITY` (`<- FANOUT`), `CS_DCLF_RESIDENT_DRAW_PARITY` (`<- RESIDENT DRAW PARITY`, the region reference) and
+>   `CS_DCLF_BINDLESS_PARITY` (the record against constant group check, with `Policy::BuildAtEpoch` and the at-epoch fallback builds);
+> - diagnostic switches `CS_DCLF_TIMELINE` (the stage timelines, latencies, residue stages, hidden-store counts, engine import timings),
+>   `CS_DCLF_INPUT_WATCH` (with the classify and shading input hashes), `CS_DCLF_DERIVE_PROBE`, `CS_DCLF_COVERAGE_PROBE`,
+>   `CS_DCLF_DECAL_ORDER_PROBE` (with `Policy::KeepSceneListsWhole`), `CS_DCLF_SLOT_PROBE`, `CS_DCLF_GBUFFER_PROBE` (its graph passes and
+>   buffer), `CS_DCLF_DRAW_CENSUS`, `CS_DCLF_REFLECTION_CENSUS`, `CS_DCLF_SHADOWMASK_PROBE` and `CS_DCLF_SHADOWMAP_PROBE`;
+> - observers under kept switches: the cascade culling parity (`<- CASCADE CULL`, the cascade cover warnings and the claimed sun casters),
+>   the fade visibility parity (`<- FADE VISIBILITY`), the terrain pass state probe (`CS_DCLF_TARGET_PROBE`'s Terrain Blending dump) and
+>   the colour epoch's ViewProj jitter line (`CS_DCLF_STATS`).
 
 Drawcall Limit Fix (DCLF) replaces the game's per-object opaque draw loop with GPU-driven indirect draws
 that the render graph executes on DXVK's Vulkan device (see [OpenRenderGraph on DXVK](./render-graph.md)).
@@ -28,6 +40,70 @@ It is built in phases:
 
 What the game binary does, as far as DCLF depends on it, is recorded in
 [Skyrim engine notes](./skyrim-engine-notes.md).
+
+## Code map
+
+This section describes the code as it is now (after the 2026-10-12/13 restructure); the phases below are its history.
+`src/Features/DrawcallLimitFix.{h,cpp}` is the feature: the hook thunks and their install, the lifecycle
+(PostPostLoad, SetupResources, Reset), the settings UI, and one-line forwards for the hooks other features call. The rest
+is under `src/Features/DrawcallLimitFix/`:
+
+| Directory | Owns | Thread |
+| --- | --- | --- |
+| `Engine/Access/` | `EngineAccess.h` (`Engine::Address`: every shared engine address and offset, object flags, RTTI/vtable tests, switch-node reads), `EngineReadWindow` (when workers may read the engine's scene graph), `Walkers.h` | any |
+| `Engine/Capture/` | The engine's writers, hooked: `SceneTracker` (attach/detach), `SceneEvents` / `HiddenStores` / `MaterialWrites` (the event hooks), `SceneCapture` (the record reads), `ConstantMirror` (the D3D11 constant buffers), `FaceSnapshots`, `ParticleSnapshots`, `Billboards` | the writer's thread (pushes events); render thread (captures) |
+| `Engine/Cull/` | Where the engine's cull and registration meet DCLF: `PassCapture` (withholds claimed passes), `PrimaryCull` (stands in for DCLF's references in the list jobs), `SunAccumulation`, `LocalLightCull`, `SceneLists`, `LodGates`, `RoomVisibility`, `TreeList`, `TreeAnimation`, `SideEffects` | render thread and the engine's cull jobs |
+| `Engine/Views/` | The views DCLF draws for the engine: `ShadowViews`, `SunViews`, `LightViews`, `FocusViews`, `PortalViews` (+ `PortalShapes.h`), `LightSelection`, `ReflectionFaces` | render thread |
+| `Scene/Model/` | The data: `Records.h`, `Tables` (the shared slot tables and their change log), `Publication.h` (what a publication carries), `SceneMirror` (the scene graph as the events left it), `SceneSet.h`, `Eligibility` (pure verdicts), `Lookups.h`, `FrameTables.h`, `LodSegments.h`, `ActorValueIndex.h`, `SceneIdentity.h` | written by the coordinator, read through publications |
+| `Scene/Ports/` | What a record is derived from, ported from the engine's shaders and functions: `MaterialPort*`, `GeometryPort`, `LightingConstants`, `LightingDescriptors`, `FadeState`, `TreeLod`, `FrameGlobals`, `ConstantEvaluator`, `EffectConstants.h`, `EngineShaders.h`, `VertexInput`, `LocalShadows`, `MaterialSources` | coordinator (records), render thread (frame values) |
+| `Scene/Coordinator/` | `Scene::Coordinator`: the scene's state and its pass (events applied, classification, the walk, the accumulate phase, the set's commit, the publication), split by stage into `ApplyEvents`, `Classification`, `Walk`, `AccumulatePhase`, `SceneSet`, `Gates`, `Slots`, `Residents`, `Placements`, `FrameConstants`, `Material/SharedBindings`, `DecalOrder`, `CandidateTable`, `SunCandidates`, `ScenePump` | coordinator (the scene lane) and its pool shards |
+| `Scene/FrameView/` | `Scene::FrameView`: the render thread's half: the installed publication, the publication log walked up to it, the frame's captures, tables, lookups and claims, and the requests it serves for the coordinator | render thread |
+| `Scene/Channels.h` | `Scene::Channels`: every message between the coordinator and the render thread (lock-free queues and slots); neither side reads the other's members | both |
+| `Draws/` | `FrameDriver` (the frame's DCLF work at each engine point), `IndirectDraws` (the public face of the draws), `IndirectDrawStats.h` | render thread |
+| `Draws/IndirectDraws/` | The draws' implementation behind the `Internal.h` umbrella and `Impl.h`: `Core/` (GPU layouts, growable rows, uploads, readbacks, the payload ring, frame slots, resources), `Builders/` (the kept stores and the main and shadow builds: pure functions from tables and lookups to payloads), `Revision/` (the epoch table, shapes, the revision's assembly, coverage, the snapshot builder), `Epochs/` (main, shadow, and the views: reflection and first person as one `ViewEpoch`), `Passes/` (the render graph passes), `Main/`, `Shadow/` | pool (builders, snapshot builder); render thread (adoption, commit, submit); GPU |
+| `Draws/Gpu/` | `FrameValues` (placements, palettes, shading per frame, made on the pool), `FrameData`, `GpuResources`, `GpuTextures`, `BuildExecutor` | render thread, pool |
+| `Draws/Pipelines/` | `DrawPipelines` (+ `Rhi`), `ShaderPrograms`, `SpirvReflection`, `EngineStates` | render thread, compile workers |
+| `Runtime/` | The building blocks: `SceneScheduler` (the scene lane and the pool), `SceneExecutor`, `SceneGraph`, `EventQueue`, `LatestSlot`, `PublicationLog`, `Retirement`, `SlotTable`, `KeptState`, `EngineReleases`, `SceneWake`, `RenderThreadBudget`, `Switches` (the switch registry), `Toggles` (the menu's live toggles), `Hash.h` | any |
+| `Diagnostics/` | Every parity check, probe and report (below) | the observed point's |
+
+The shaders are in `features/Drawcall Limit Fix/Shaders/DrawcallLimitFix/`; the layouts they read are in
+`Draws/IndirectDraws/Core/GpuLayouts.h`. The CPU tests are in `tests/DrawcallLimitFixCPU`.
+
+**Threads.**
+- **Render thread**: the hooks, `FrameDriver`, `FrameView`, the engine-side views, and each epoch's commit and submission. It captures
+  what only it can read and builds nothing.
+- **Engine threads** (cull jobs, loaders, Havok): run the hooked writers, which push events, and the list jobs `PrimaryCull` stands in for.
+- **Coordinator**: the scene lane (`SceneScheduler`), a serialized pump woken by its producers, running one scene pass at a time
+  (`Coordinator::ScenePass`), its heavy stages sharded on DCLF's pool.
+- **Pool**: the pass's shards, the frame values, and the snapshot builder (one at a time).
+- **GPU**: the epochs' recordings on DXVK's Vulkan device through the render graph. Engine references are never released on DCLF's
+  threads (`EngineReleases` hands them back to the render thread).
+
+**A frame's data.**
+1. Engine hooks (`Engine/Capture`) push events (`EventQueue`) and update the scene mirror (`SceneTracker` -> `SceneMirror`).
+2. The coordinator's pass (`Coordinator::RunSceneWork`) applies the events, classifies, walks, joins the accumulate phase's inputs,
+   commits the set and, when anything changed, publishes (`PublishScene`): the tables, lookups and claims as a publication appended to the
+   publication log (`Channels::publicationLog`), and the publication handed to the snapshot builder (`IndirectDraws::PostSnapshotWork`).
+3. The snapshot builder (`Revision/Snapshot.cpp`, on the pool) builds the publication's draws ahead (`Builders/`), makes and seals its
+   revision (`Revision/`), and posts the complete snapshot.
+4. The frame's start (`FrameDriver::BeginFrame`) adopts the newest complete snapshot whole (`IndirectDraws::AdoptSnapshot`,
+   `FrameView::HandOverAtFrameStart`), installs its claims or withdraws the set, and kicks the frame values.
+5. The epochs (Z-prepass, colour, forward, shadow, occlusion, reflection, first person) commit the frame's values into the adopted
+   revision's shapes and run its recordings; the engine is told not to draw what the claims cover (`PassCapture`, `SunAccumulation`,
+   `PrimaryCull`).
+
+**The diagnostics contract.** The main path knows diagnostics only through three narrow calls, and never reads a parity switch itself:
+- `Diagnostics::Observe()` (`Observation.h`): the run's subject flags, read once from the switches (what a main-path site must keep or
+  build for an observer).
+- `Diagnostics::Policy::` (`Policy.h`): the few questions where an observer changes what the main path does; each answers the switch-off
+  value on the normal path.
+- Hook points (`Hooks.h`): `Notify(event)`, `Armed<Event>()`, `Subscribe`. A point that carries nothing is an enumerator (`FramePoint`,
+  `EnginePoint`, `ScenePoint`: `Notify<ScenePoint::WalkDone>()`); the others are event structs (`Diagnostics/<Area>/Events.h`).
+  Observers register at `Diagnostics::Install()` before DCLF's threads start, so Notify costs one flag test and takes no lock.
+
+The observers read the modules' private state through read-only views (`SceneView`, `DrawsView`, `PrimaryCullView`, ...) and report on
+`Diagnostics/Reports/Schedule.h`'s schedule. Each area's observers are under `Diagnostics/{Scene,Draws,Engine,Feature}/`; the report
+formatting is under `Diagnostics/Reports/`.
 
 ## Phase 1: scene capture
 
@@ -1620,7 +1696,7 @@ they are not part of the witness.
 ## Switches
 
 The switches are defined, each with its kind and a one-line description, in the registry in
-`src/Features/DrawcallLimitFix/Common/Switches.cpp`. [dclf-architecture.md](./dclf-architecture.md) ("Switches",
+`src/Features/DrawcallLimitFix/Runtime/Switches.cpp`. [dclf-architecture.md](./dclf-architecture.md) ("Switches",
 "Parity gates") says how they are read and which ones validate a change. Switches this document names that are not in
 the registry were removed with the paths they chose between: DCLF is AE only and hybrid only, and a default-on feature
 has no startup fallback.

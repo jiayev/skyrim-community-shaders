@@ -1,3 +1,5 @@
+// MaterialPort's Effect part: BSEffectShader::SetupMaterial (the non-membrane half) on a snapshot. Pure.
+
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
 
@@ -27,7 +29,6 @@ namespace DCLF::MaterialPort
 		// BSGraphics::TextureFilterMode: SetupTechnique gives t0 anisotropic filtering with Texture, SetupMaterial t4 bilinear.
 		constexpr std::uint32_t kFilterBilinear = 1;
 		constexpr std::uint32_t kFilterAnisotropic = 3;
-
 	}
 
 	bool EffectMaterial(const RE::BSShaderMaterial& a_material)

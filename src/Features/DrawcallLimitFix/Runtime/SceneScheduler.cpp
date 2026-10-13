@@ -1,3 +1,4 @@
+// SceneScheduler: DCLF's executor, scopes, state graph and lane pumps; thread names and priorities. Created on first use, never destroyed.
 #include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
 
 #include "Features/DrawcallLimitFix/Runtime/Switches.h"
@@ -28,7 +29,7 @@ namespace DCLF
 		// Never destroyed: joining threads in a DLL's static destruction (under the loader lock, after ExitProcess has ended
 		// them) is not something to rely on.
 		static auto* executor = new SceneExecutor(PreparationWorkers(), [](org::async::TaskClass a_class, unsigned a_index) {
-			// T6b3e: one of DCLF's threads, for the release guard (CS_DCLF_RELEASE_GUARD): the scene lane's, or the others'.
+			// One of DCLF's threads, for the release guard (CS_DCLF_RELEASE_GUARD): the scene lane's, or the others'.
 			ReleaseGuard::MarkThread(a_class.domain == SceneExecutor::Scene.domain ? 1 : 2);
 			if (a_class.domain == SceneExecutor::Scene.domain) {
 				SetThreadDescription(GetCurrentThread(), L"CS DCLF scene");

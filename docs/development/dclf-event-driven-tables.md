@@ -508,7 +508,7 @@ None of them writes a world or bone transform. The probe found one exception, wh
 | With the scene placement job | 1.03-1.06 ms | the job: 0.81-0.83 ms on the worker, joined with 0.000 ms waited |
 
 **Movers by event.** The engine's move writers push a key into an event queue (`MoveEvents` in
-`Scene/SceneStore/Internal.h`), from whichever job thread runs them, after the write:
+`Scene/Coordinator/Internal.h`), from whichever job thread runs them, after the write:
 
 | Writer | Key | Calls a frame, Whiterun |
 | --- | --- | --- |
@@ -562,7 +562,7 @@ entry was added or erased since they were taken (`trackedLayout`); otherwise it 
 frames standing, 19-59 in the flight). `ValidateSlice` runs once a frame instead of in both `ProcessEvents` calls.
 
 **Hidden bits by event.** Every store that can change `kHidden` (bit 0 of `NiAVObject::flags`, `+0xF4`) is patched
-with a call to a stub (`Scene/SceneStore/HiddenStores.cpp`, 464 sites, `CS_DCLF_HIDDEN_EVENTS=0` turns them off):
+with a call to a stub (`Engine/Capture/HiddenStores.cpp`, 464 sites, `CS_DCLF_HIDDEN_EVENTS=0` turns them off):
 
 - every `or` whose operand may set bit 0 (111);
 - every `and` whose operand may clear it (100);
@@ -595,7 +595,7 @@ because property pointer swaps have no choke point.
 
 **A flip after the drain is a frame late, not missed** (added later). Riverwood's walk parity sometimes found an NPC's
 `Shield:0` verdict stale, and the witness counted it as "changed with no event". `CS_DCLF_HIDDEN_WATCH=1` (hardware
-write watchpoints on the chain's flags, armed by such a miss: `Diagnostics/HiddenWatch.cpp`) named the writers. They are
+write watchpoints on the chain's flags, armed by such a miss: `Diagnostics/Scene/HiddenWatch.cpp`) named the writers. They are
 two patched stores, `0x140bc193c` (hide) and `0x140bc194b` (show), which toggle that NPC's `SHIELD` node every 150-360 ms
 from job threads. Both push their events. A flip that lands between the walk's drain (`DrainHiddenEvents`) and its read
 of the chain changes the state while its event waits for the next frame. A parity frame's witness then sees a change
@@ -664,8 +664,8 @@ never farther).
 in full: property flags and materials, controllers, fades, hidden bits, attach and detach, and the material alpha
 (`BSLightingShaderProperty::SetMaterialAlpha`, vtable slot 0x31, newly hooked). `Actor::SetAlpha` writes the root's
 `+0x100` (a fade, not the material). The light path and `WriteObject`'s cached branch therefore no longer re-read
-`ClassifyInputsOf` / `ShadingInputsOf`. `CS_DCLF_INPUT_WATCH=1` still re-reads them and reports any change no event
-announced (`<- MISSED`). In a scripted run (`CS_DCLF_TEST_COMMANDS`: spawns, unequip and equip, invisibility on and
+`ClassifyInputsOf` / `ShadingInputsOf`. `CS_DCLF_INPUT_WATCH=1` re-read them and reported any change no event
+announced (`<- MISSED`); it and the two hashes were removed in the 2026-10-13 diagnostics trim. In a scripted run (`CS_DCLF_TEST_COMMANDS`: spawns, unequip and equip, invisibility on and
 off, `SetActorAlpha`) it found 0, and walk parity was clean but for the race below. The light path went from 0.57 ms
 to 0.48 ms.
 

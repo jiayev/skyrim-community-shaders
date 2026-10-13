@@ -1,3 +1,4 @@
+// Policy's answers, each derived from the run's Observation (any thread: Observe() is read once and immutable).
 #include "Policy.h"
 
 #include "Observation.h"
@@ -7,7 +8,7 @@ namespace DCLF::Policy
 {
 	bool ScenePassInline()
 	{
-		// The observers that read the store from the engine's hooks while the scene work would run: the persistent and walk parities,
+		// The observers that read the scene state from the engine's hooks while the scene work would run: the persistent and walk parities,
 		// and the capture parity's face draws.
 		const auto& o = Diagnostics::Observe();
 		return o.scene || o.walk || o.capture;
@@ -31,12 +32,6 @@ namespace DCLF::Policy
 		return !(Diagnostics::Observe().scene && Diagnostics::ParityDue(a_frame));
 	}
 
-	bool KeepSceneListsWhole()
-	{
-		// The decal order probe compares the decal order with the engine's own lists.
-		return Diagnostics::Observe().decalOrderProbe;
-	}
-
 	bool FilterSceneLists(std::uint32_t a_frame)
 	{
 		// The scene lists' check compares the engine's whole lists against DCLF's enumeration on its frames.
@@ -55,12 +50,6 @@ namespace DCLF::Policy
 		return Diagnostics::Observe().claimsOrScene;
 	}
 
-	bool BuildAtEpoch()
-	{
-		// The bindless check's builds read the eye the Z-prepass epoch captures.
-		return Diagnostics::Observe().bindless;
-	}
-
 	bool WithholdFromEngine()
 	{
 		// The capture check compares DCLF's draws with the engine's own draws of the same objects.
@@ -72,22 +61,15 @@ namespace DCLF::Policy
 		return Diagnostics::Observe().scene && Diagnostics::ParityDue(a_pass, a_verdicts == Verdicts::Classification ? 17 : 13);
 	}
 
-	bool SerialFanout(bool a_joins)
+	bool SerialFanout()
 	{
-		// The mirror check's live reads note their leases and differences on the pass's own thread, and the derive probe samples the LOD
-		// fade frame lazily and reads live properties under a lease.
-		const auto& o = Diagnostics::Observe();
-		return o.mirror || (a_joins && o.deriveProbe);
+		// The mirror check's live reads note their leases and differences on the pass's own thread.
+		return Diagnostics::Observe().mirror;
 	}
 
 	bool HiddenWitness(std::uint64_t a_pass)
 	{
 		return Diagnostics::Observe().walkOrScene && Diagnostics::ParityDue(a_pass);
-	}
-
-	bool RereadCachedInputs()
-	{
-		return Diagnostics::Observe().inputWatch;
 	}
 
 	bool ReuseResidentRegion()
@@ -116,9 +98,8 @@ namespace DCLF::Policy
 
 	bool KeepReflectionRoots(std::uint32_t& a_updates)
 	{
-		// The residue's watch (the reflection report's): every 30th update while the parities or the timeline observe.
-		const auto& o = Diagnostics::Observe();
-		return (o.claimsOrScene || o.timeline) && a_updates++ % 30 == 0;
+		// The residue's watch (the reflection report's): every 30th update while the parities observe.
+		return Diagnostics::Observe().claimsOrScene && a_updates++ % 30 == 0;
 	}
 
 	bool RebuildShadowSets(std::uint64_t a_pass)
