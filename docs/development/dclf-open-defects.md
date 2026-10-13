@@ -133,56 +133,26 @@ console command switches the camera. To check:
     `changed with no event` 0;
 -   screenshots after each switch: no body in first person, a whole body in third.
 
-## The Sleeping Giant Inn: the upscaler's output corrupt on some frames with DCLF on (found 2026-10-12; localized, not fixed)
+## Validation errors in the first-person and reflection views (found 2026-10-13 by syncval at the inn; not fixed)
 
-**Symptom** (t7f-switch's w216/w217/w219, r11-r16). At `coc RiverwoodSleepingGiantInn` with DCLF on, the screen alternates:
+Core validation and syncval at `coc RiverwoodSleepingGiantInn` (FP on, i12vk/i16sync, transient around the views' growth):
 
--   frames whose upper third is white and magenta garbage with a stepped lower edge, the rest dark and blocky;
--   frames that are fully black;
--   frames that look right.
+-   **Indirect draws past `cs.dclf.first-person.sequences`** (`VUID-vkCmdDrawIndexedIndirectCount-maxDrawCount-03143`, 32 messages):
+    stride 92 x (521 - 1) + 72 + 20 = 47,932 bytes from a 5,888-byte buffer (the initial 64 draws a face). The view's bucket capacities
+    come from a sizing whose sequences growth ("first-person sequences: 8192 draws a face, as graph work") the recording does not yet
+    bind, so the draws read their arguments from the next buffer in the heap (syncval reports it as a read-after-write against the view's
+    latched copies). `DrawPass::InvocationRevision` (`Epochs/ViewEpoch.cpp`) names the frame's generation and the pool's layout, not
+    the sequences' version.
+-   **DGC with an invalid indirect address** (`VUID-VkDeviceAddress-size-11364`, 16): `vkCmdPreprocessGeneratedCommandsEXT` /
+    `vkCmdExecuteGeneratedCommandsEXT` read arguments at 0x...6a1b4, inside no buffer (between `cs.dclf.reflection.bucket-counts2` and
+    its neighbour): the same view-sizing mismatch in the first-person forward part (`arguments = (forwardFirst + forwardCapacity) * 92`).
+-   **Main indirect set mixes fragment output interfaces** (`VUID-vkUpdateIndirectExecutionSetPipelineEXT-initialPipeline-11147`):
+    pipelines writing locations 0-2 (forward) are added to a set whose initial pipeline writes 0-7 (deferred).
+-   Also seen every run: `VUID-VkGeneratedCommandsInfoEXT-indirectCommandsLayout-11079` (a vertex-buffer token with a pipeline lacking
+    `VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE`).
 
-Exteriors (the Riverwood bridge) are clean, and so is DCLF off (w218, r18, r22). These had no effect: refraction, forward, effects,
-decals, opaque effects, shadows, Skylighting/precipitation, `CS_DCLF_ACCUMULATED_ALL` and the empty fade node switch.
-
-**Where it starts** (`CS_DCLF_TARGET_DUMP`, `Diagnostics/TargetDump.*`: whole targets read back asynchronously at named points of the
-frame, with DCLF on or off).
-
--   **Clean up to the upscaler.** In r17, r19, r20 and r21, every point up to Upscaling's evaluate has 0 NaN or Inf and the same
-    statistics on good and corrupt frames: the depth epoch, the G-buffer after DCLF's colour epoch, the composite, the forward epoch, the
-    engine's blended draws, the first-person epochs, and the upscaler's inputs (kMAIN, its depth, kMOTION_VECTOR).
--   **The DLSS output is corrupt.** On a corrupt frame (r20/r21 frame 1300) the evaluate's output (`Upscaling::UpscaledTexture`,
-    copied into kMAIN) holds ±65504 in a large region (mean -474 against an input mean of 0.14). The next frames' outputs are normal
-    (mean 0.19), from inputs whose statistics are the same.
--   **The constants are not it.** The Streamline constants logged on the dump frames are finite and stable with DCLF on.
-    -   With DCLF off, `frameBufferCached` alternates between the world camera and the first-person camera (posAdj (0, 0, 120.5), near
-        5): the engine's own first-person camera setup.
-    -   With DCLF on it is the world camera every frame. This differs, but DCLF off is the clean one.
-
-**Next.** The pattern points at memory written by something else, not at DLSS's inputs:
-
--   a fixed region at the start of an image, with a stepped edge where a linear write ends inside a tiled image;
--   corrupt frames among good ones.
-
-A suspect is a GPU write through a stale buffer address, for instance a frame slot's revision recording that still names a buffer
-DCLF reallocated when the interior loaded, landing in DLSS's history or output.
-
--   Check the upscaler's output and history allocations against DCLF's buffer growths at the coc (`CS_DCLF_STATS` "growth" lines).
--   Try another upscaler, to see whether the victim moves.
--   Run a Vulkan validation pass with GPU-AV on the ORG buffers.
-
-## The render thread reads the coordinator's tracked map (found 2026-10-12 in refactor run s3m; not fixed)
-
--   **Crash:** an access violation in `SceneStore::IsTracked` (`tracked.contains`; now `Scene::Coordinator::IsTrackedFromRenderThread`,
-    `Scene/Coordinator/Coordinator.h`), called from
-    `PrimaryCull::RefreshWalk` ← `PrepareFrame` ← `AfterFullFrustum` on the render thread, in a normal-path motion run (s3m).
--   **Cause (by reading, not confirmed):** `tracked` is the coordinator's live map, rewritten by the scene pass on the lane while the
-    render thread reads it. That breaks the rule that the render thread reads only the adopted snapshot or published tables. The same
-    code is at HEAD (b1069616), so the refactor did not introduce it.
--   **Callers:** `Engine/Cull/PrimaryCull.cpp` (`RefreshWalk` at about :716 and `RunAdmission` at about :747), plus the observer
-    `Diagnostics/Scene/CaptureParity.cpp:820` (parity only). (`ReasonThisFrame`, which read `tracked` the same way, had no callers and is deleted.)
--   **Fix:** the two PrimaryCull callers read what the adopted snapshot or the published tables hold (a published per-geometry
-    tracked/slot answer), not `tracked`.
--   It may explain e3w0's end-of-run crash (0xc0000005, a build before the R3 Engine changes); not confirmed, and that dump was overwritten.
+They are not the inn's upscaler corruption (that persists with every first-person draw skipped, see its resolved entry), but the first
+two read arbitrary memory as draw arguments and may relate to the intermittent device loss in the pulled Lighting VS.
 
 ## Unattributed visual defects seen in first person (2026-10-11/12; not investigated)
 
@@ -409,6 +379,78 @@ full trees have since unloaded, which DCLF does not reproduce.
     the LOD forest where trees were loaded, lasting until the block is refilled for another reason. Then compare with
     DCLF's tree LOD on.
 
+## Resolved: the Sleeping Giant Inn's black or garbage upscaler output (found 2026-10-12; fixed 2026-10-13, outside DCLF)
+
+**Symptom.** At `coc RiverwoodSleepingGiantInn` with DCLF on, frames were black, or white and magenta in the top third, or right,
+changing frame to frame. Every DCLF-on run reproduced it (about 25 runs; nearly every screenshot black or garbage, and consecutive
+dumped frames zeros, garbage, right), with DLSS and with FSR alike. DCLF off, and exteriors, were clean.
+
+**Where it starts (readbacks).**
+
+-   The target dump (`CS_DCLF_TARGET_DUMP`) now also stages the upscaler's output at every point, adds an "after evaluate" point
+    (before the copy over kMAIN), and writes the output's raw texels at "before upscale" and "after evaluate". The output texture is not
+    touched during the frame; the evaluate itself writes it: frame 699 zeros, 700 garbage (±65504, alpha intact: the upscaler's own
+    values, not a stomp), 701 and 702 right, from inputs with the same statistics.
+-   An in-command-buffer readback (`InCbReadback` in `Upscaling/Streamline.cpp`, on dump frames) copies the colour, motion vectors and
+    depth inside the upscaler's own command buffer just before the evaluate, and the output just after: the inputs are what the dump
+    sees (same min/max/mean), the colour input is unchanged after the evaluate, and the output is the corrupt one. So the upscaler
+    computes garbage from correct inputs and constants.
+
+**What decided it (16-second inn runs, 5 screenshots each).**
+
+-   `CS_DCLF_FIRST_PERSON=0`: clean. Narrowed in code: not submitting DCLF's first-person colour epoch: clean; the epoch submitted with
+    no draws (colour, forward and depth passes recorded empty), with no image declared, and without its semaphore waits: still bad.
+    Replacing the epoch with a D3D11 flush or with an empty interop submission: clean.
+-   Device idle before or after the evaluate: clean; waiting for the upscaler's own previous evaluate (1 or 2 in flight), waiting for the
+    first-person epoch's completion, or idling the upload or compute queue: still bad. The corruption needs the upscaler's command buffer
+    to run on the GPU right behind the graph epoch.
+-   A D3D11 UAV clear of a small typed texture (which DXVK runs as a compute shader binding image descriptors) between the epoch and the
+    evaluate: clean; a typed-buffer clear (a buffer fill) there: still bad.
+-   Not it (all tested): freed ORG memory reused (logged buffer VAs, never freeing any ORG memory), DGC preprocess pages (kept, 4x
+    padded), ORG's deletion depth (4x), imported D3D11 images (kept alive), the upscaler's image views (kept), frame-values
+    wait-before-signal, the upscaler's D24S8 depth (an R32 depth instead), the compute queue (off), early flush.
+
+**Cause (as far as a black box allows).** The upscalers run through Streamline on the descriptor-heap path: a Streamline plugin asks
+for `VK_EXT_descriptor_heap` ("requested by a plugin(s) added" in the log), which the render graph has enabled on DXVK's device (DXVK
+itself stays on descriptor buffers on NVIDIA). When the upscaler's command buffer runs directly behind a graph epoch's command buffer,
+which binds the graph's descriptor heaps, the evaluate computes from the wrong descriptors on NVIDIA's driver; DXVK work that binds
+image descriptors in between, or the GPU going idle, avoids it. DCLF's first-person colour epoch, at `RenderFirstPersonView`, is the
+only epoch with no such DXVK work after it before the upscaler (the forward epoch is followed by the engine's textured draws).
+
+**Fix** (`Upscaling::SeparateFromGraphEpochs`, `src/Features/Upscaling.cpp`): before each evaluate, while the render graph is active,
+DXVK clears a 64x64 typed UAV (the tested separator). No lock, no wait; about one tiny dispatch a frame.
+
+**Validated (2026-10-13):** six inn runs f1-f6, 30 of 30 screenshots right, DCLF drawing (798 sequences, first-person epochs 300 depth
+and 300 colour a window), frame rate as before (126-130 fps against 129-131); motion run innfixm: no crash, no device loss, DCLF's
+epochs all submitted.
+
+## Resolved: the render thread read the coordinator's tracked map (found 2026-10-12 in refactor run s3m; fixed 2026-10-13)
+
+-   **Crash:** an access violation in `SceneStore::IsTracked` (`tracked.contains`; after the refactor
+    `Scene::Coordinator::IsTrackedFromRenderThread`), called from `PrimaryCull::RefreshWalk` <- `PrepareFrame` <- `AfterFullFrustum`
+    on the render thread, in a normal-path motion run (s3m). `tracked` is the coordinator's live map, which the scene pass rewrites on
+    the lane meanwhile: the render thread broke the rule that it reads only the adopted publication and published tables. Present
+    since admission was simplified (bf9eed8b), so not a refactor regression.
+-   **What PrimaryCull asked.** `RunAdmission` (every member of a pending entry) and `RefreshWalk` (DCLF members not in the set)
+    asked "is this member still tracked?" only as a liveness guard: an untracked member may be freed, so admission waits rather than
+    dereference it in `MemberShown`.
+-   **Fix (`Engine/Cull/PrimaryCull.cpp`).** Both answer from the cut's candidate snapshot (`cut.candidates->geometries`, the
+    frame's `FrameView::GetSunCandidates()`), which comes with the installed publication. The snapshot lists exactly what was tracked
+    when it was published: a sun entry is a candidate only while every dependent geometry is tracked (`UpdateSunCandidates`), and an
+    untrack or a new tracked dependent rewrites the entry (its signature mixes each dependent and its slot), so the next snapshot drops
+    or adds it and replans the entry, which requeues it for admission. A geometry the snapshot lists is held alive while the
+    installed publication is (its release, at the untrack after that publication, sits in a later retirement-chain node). Lookups
+    are by pointer only. `Coordinator::IsTrackedFromRenderThread` is deleted; `IsTracked` stays for the coordinator thread and capture
+    parity (an observer). No lock, no new state.
+-   **Difference from the live read:** an engine-drawn member tracked under a different sun entry than its plan's root (nested
+    entries) is not listed by this entry; it now waits for the entry's next rewrite instead of passing at once. Admission counts did
+    not move (below).
+-   **Validated (2026-10-13, P/refactor/R3 v2*):** motion normal (v2m): primary exclusion per window 216/192/201/215 entries stood in
+    (baseline dtm 218/190/199/214), admitted 3.8-7.5 a frame (dtm 4.1-9.9), set members 4,8xx/6,0xx/4,4xx as dtm, 0 crash, 0 device
+    loss; motion parity (v2mp, SET + PERSISTENT + dbg.env): commit parity 5 checks 0 differ `<- OK` every window, set parity claims
+    `<- OK`, stand-in walk parity 18/18 `<- OK`, DIFFER 24 (frame values and extras only, dtmp 30); release guard (v2g, dedicated motion run): scene lane 0, executor/pool 0, 25 of 25 windows `<- OK`. The
+    normal set before the fix (v1: lights, bridge, inn) was identical to the diagtrim baseline (798 / 847, 9350 / 9901).
+
 ## Resolved: shadowed terrain drawn black under Terrain Blending (T7c1; fixed 2026-10-11, validated: probe matches the engine path, screenshot lit)
 
 **Symptom.** With DCLF drawing the terrain under Terrain Blending (`CS_DCLF_TB_TERRAIN`, default on), shadowed terrain
@@ -592,6 +634,49 @@ Runs: `CS_DCLF_PERSISTENT_PARITY`, `WALK_PARITY`, `CHANGE_LOG_PARITY`, `RESIDENT
 `RESIDENT_DRAW_PARITY`, `BUILD_PARITY` and `SKYLIGHT_PARITY` together; and
 `CS_DCLF_CAPTURE_PARITY=1` with `CS_DCLF_OWNERSHIP=off` on its own. 60 seconds each; counts are per report
 interval (300 frames). Every check not listed reports 0.
+
+### Capture parity and draw parity MISMATCH under CAPTURE + PARITY_BOTH (2026-10-13; pre-existing, not a refactor regression)
+
+**Runs.** Motion (60 s, the worldspace flight) with `CS_DCLF_CAPTURE_PARITY`, `PARITY_BOTH`, `CAPTURE_POINT_PARITY` and
+`SKYLIGHT_PARITY`: the pre-refactor build (b1069616, the R0 DLL with b1069616's DCLF shaders; run pre0c) against the current tree
+(dtc, v2c). The counts match window for window, so the refactor changed none of them:
+
+| window | b1069616 (pre0c) | current (v2c) |
+| --- | --- | --- |
+| 1 (load) | 552,626 of 970,297 (549,351 material) | 554,021 of 970,209 (549,852 material) |
+| 2 | 84,359 of 163,173 (77,313 material, 74 per-geometry, 3,459 technique) | 84,192 of 159,934 (76,773, 169, 3,338) |
+| draw parity, windows 1-5 | 3, 5, 12, 11, 7 differ | 3, 5, 12, 11, 7 differ |
+| permutation parity, windows 2-5 | 2,367, 2,944, 3,334, 7,066 | 2,298, 3,045, 3,325, 6,808 |
+
+Capture point parity is OK in every window. Earlier capture runs gave no baseline: the last ones (2026-10-11) checked 0 draws (no
+`PARITY_BOTH`), and the "R0 DLL no longer starts" of the diagnostics trim was only the run script's deployed-DLL hash guard.
+
+**What mismatches, by field** (window 2's variable histogram and samples; the other windows alike):
+-   **Material (all of it): PS PerMaterial 29, IBLParams.y**, e.g. `WRFenceBaseSupport01:47` DCLF 0, native 0.745; LOD `obj`, every
+    LODObjects / LODObjectHD draw, most treeAnim. The record keeps IBLParams from its first evaluation on purpose
+    (`MaterialSources::KeepUnreadFloats`): it drifts with the time of day and no Lighting stage reads it (Lighting.hlsl declares it
+    at PerMaterial c8 and never uses it; dclf-async-publication.md, m1). **The observer compares wrongly**: `CompareMaterial`'s
+    mask (`kPSGroups[kPerMaterial]`) still includes variable 29.
+-   **Technique: PS PerTechnique 19 (FogColor) and VS PerTechnique 13-15 (FogParam, FogNearColor, FogFarColor)**, small drifts
+    (FogColor 0.13725 against 0.13787). The technique rows keep their first fog (`KeepTechniqueFog`); the draw reads the vertex fog
+    from the frame block (`DCLFFrameFog`, VS b13, under `DCLF_BINDLESS`) and no Lighting stage reads FogColor. **The observer
+    compares rows the draw does not read.** A few `HighDetailRange` (VS 12, LODLandNoise) differences at load.
+-   **Loaded terrain blocks drawn with another technique** (`Block (x, 0)`): DCLF's pipeline is MTLandLODBlend (19: descriptors VS
+    13000001 / PS 13010019) where the engine's pass is MTLand (8: 08000001 / 08010019). Permutation parity's `vertex 1B000000`
+    (= 0x13 ^ 0x08) is this, about 900 a window; `pixel 800000` (about 1,700-1,900) and `feature 1C0` (about 300) were not
+    attributed. **The normal path draws a different technique** than the engine chose that frame (the shading of the
+    land-to-LOD blend). Not chased.
+-   **Per-geometry** (74-175 a window, 0 in most): PS PerGeometry 7 on a facegen tint part (`MarksMaleHumanoid06LeftGash`, DCLF 1
+    against 0.944) and VS PerGeometry 6 (TextureProj); the counts follow the NPCs in view.
+-   **Character light t11** on NPC armour (`outfit_1`, `merchanttorso_1`): DCLF's frame view (mode 0) against the draw's (mode 3);
+    a handful of samples. The engine alternates the view frame to frame (`FrameCharacterLightView`).
+-   **Draw parity** 0-15 of 50k-980k draws a window (different arguments or bound buffers), unattributed.
+-   **Face capture parity**: every reflection face draw differs from its object's main row (face lighting PS PerGeometry 3-5 and the
+    IBL / fog fields above): the face draws are not expected to match the main rows.
+
+**Next.** Leave variable 29 out of `CompareMaterial`, and the fog variables out of the technique comparison when the draw reads
+the frame fog, so that the report shows the real differences (the terrain technique, the per-geometry and t11 samples, draw
+parity). Then look at why the land block's pipeline keeps MTLandLODBlend when the engine's pass is MTLand.
 
 ### Fade visibility parity differed in single windows (the check was removed in the 2026-10-13 diagnostics trim)
 

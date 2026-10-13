@@ -483,7 +483,7 @@ namespace DCLF
 			// Admission by node across snapshots, with its DCLF members' signature (MemberSignature): a root whose members changed
 			// (a decal attached, a part swapped) is admitted again only once the new ones are drawn.
 			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint64_t> admittedRoots;
-			std::vector<std::uint32_t> pendingAdmission;       // for RunAdmission: a new snapshot's, a member joined, a member not tracked yet
+			std::vector<std::uint32_t> pendingAdmission;       // for RunAdmission: a new snapshot's, a member joined, a member the snapshot does not list yet
 			std::array<const RE::NiCullingProcess*, 16> processes{};  // the list processes this frame
 			std::uint32_t processCount = 0;
 		};

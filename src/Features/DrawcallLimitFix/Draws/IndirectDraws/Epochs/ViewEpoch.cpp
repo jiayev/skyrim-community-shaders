@@ -611,6 +611,7 @@ namespace DCLF
 					const auto sequences = a_recording.Resolve(a_bindings.sequences).GetHandle();
 					const std::uint64_t sequencesAddress = device.GetBufferDeviceAddress({ sequences, 0 });
 					const rhi::IndexBufferView pool{ a_recording.Resolve(a_bindings.pool).GetHandle(), 0, 0, rhi::Format::R16_UInt };
+					const std::uint64_t poolAddress = device.GetBufferDeviceAddress({ pool.buffer, 0 });
 					for (std::uint32_t f = 0; f < a_prepared.faces; ++f) {
 						std::array<rhi::ColorAttachment, 2> colours{};
 						rhi::PassBeginInfo begin{};
@@ -657,7 +658,8 @@ namespace DCLF
 							if (!bucket.capacity)
 								continue;
 							RecordBucketDraw(commands, frame.indirect.zDrawSignature, sequences, sequencesAddress, std::uint64_t(f) * frame.sequenceDraws + bucket.first,
-								mode == DrawMode::Depth ? bucket.depth : bucket.colour, counts, b, bucket.capacity);
+								mode == DrawMode::Depth ? bucket.depth : bucket.colour, counts, b, bucket.capacity, false,
+								mode == DrawMode::Faces ? 3u : mode == DrawMode::Depth ? 4u : 5u, poolAddress);
 						}
 						// Tree LOD: one instanced draw of the face's list, its row the face's (phase 1's arguments, its instances from the list's start).
 						if (mode == DrawMode::Faces && frame.tree.valid() && frame.treeGroups) {

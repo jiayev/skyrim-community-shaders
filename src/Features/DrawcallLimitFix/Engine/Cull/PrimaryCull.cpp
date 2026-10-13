@@ -677,9 +677,9 @@ namespace DCLF
 
 	void PrimaryCull::RunAdmission()
 	{
-		auto& store = Scene::Coordinator::Get();
 		if (!cut.candidates)
 			return;
+		const auto& candidates = *cut.candidates;
 		bool admittedAny = false;
 		// Admission by readiness on events, never by engine verdict.
 		std::vector<std::uint32_t> retry;
@@ -689,8 +689,9 @@ namespace DCLF
 			bool all = true;
 			for (std::uint32_t m = cut.memberBegin[e]; m < cut.memberEnd[e] && all; ++m) {
 				const auto* geometry = cut.members[m].geometry;
-				// An untracked member may be gone: wait for the next snapshot or frame.
-				if (!store.IsTrackedFromRenderThread(geometry)) {
+				// A member the frame's snapshot does not list may be gone: wait for a snapshot that lists it. The snapshot came with
+				// the installed publication, whose retirement chain keeps every geometry it lists alive (by pointer alone here).
+				if (!candidates.geometries.contains(geometry)) {
 					all = false;
 					retry.push_back(e);
 					break;
@@ -717,10 +718,11 @@ namespace DCLF
 			return;
 		// Walk while there are engine-drawn members or members not in the set. Shown-ness is the walk's per-frame test, not this
 		// decision's: the engine shows a member (a cell's terrain chunk once loaded) with no event reaching here first.
+		// Tracked: listed by the frame's snapshot (never the coordinator's live map, which the scene pass rewrites meanwhile).
 		bool walk = cut.mixed[a_e] != 0;
-		auto& store = Scene::Coordinator::Get();
+		const auto& geometries = cut.candidates->geometries;
 		for (std::uint32_t m = cut.memberBegin[a_e]; m < cut.memberEnd[a_e] && !walk; ++m)
-			if (!cut.members[m].engine && !MemberDrawable(cut.memberObject[m]) && store.IsTrackedFromRenderThread(cut.members[m].geometry))
+			if (!cut.members[m].engine && !MemberDrawable(cut.memberObject[m]) && geometries.contains(cut.members[m].geometry))
 				walk = true;
 		cutVersion += cut.walk[a_e] != (walk ? 1 : 0) ? 1 : 0;
 		cut.walk[a_e] = walk ? 1 : 0;

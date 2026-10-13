@@ -339,9 +339,10 @@ namespace DCLF::Draws
 				const auto counts = a_recording.Resolve(a_bindings.bucketCounts).GetHandle();
 				const std::uint64_t sequencesAddress = device.GetBufferDeviceAddress({ sequences, 0 });
 				const std::uint64_t phaseBase = a_prepared.phaseTwo ? std::uint64_t(frame.sequenceDraws) : 0;
+				const std::uint64_t poolAddress = device.GetBufferDeviceAddress({ a_recording.Resolve(a_bindings.pool).GetHandle(), 0 });
 				auto drawCall = [&](const PassFrame::ZCall& a_call, bool a_offsetDepth) {
 					RecordBucketDraw(commands, frame.indirect.zDrawSignature, sequences, sequencesAddress, phaseBase + a_call.first, a_call.pipeline, counts, a_call.bucket,
-						a_call.capacity, a_offsetDepth);
+						a_call.capacity, a_offsetDepth, a_prepared.phaseTwo ? 2u : 1u, poolAddress);
 				};
 				// A terrain group 1 twin (near blocks) draws into the main depth with Terrain Blending's offset, as its depth hook
 				// does (TerrainBlending::TerrainShaderHacks, OFFSET_DEPTH).

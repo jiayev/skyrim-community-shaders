@@ -355,6 +355,9 @@ namespace DCLF
 					allFirsts = true;
 				});
 			}
+			// Revision mode: a firsts version the producer grew (ReserveIndexPool) holds nothing once adopted.
+			if (std::exchange(p.firstsWhole, false))
+				allFirsts = true;
 			const std::uint32_t held = std::min(count, p.firstsCapacity);
 			if (allFirsts) {
 				if (held)
@@ -1607,11 +1610,13 @@ namespace DCLF
 			indices = true;
 		}
 		const std::uint32_t slots = std::max(count, 1u);
+		bool firsts = false;
 		if (slots > next.firstsCapacity) {
 			next.firstsCapacity = std::max(next.firstsCapacity, 1u);
 			while (next.firstsCapacity < slots)
 				next.firstsCapacity *= 2;
 			parts.push_back({ p.firsts, next.firstsCapacity });
+			firsts = true;
 		}
 		if (slots > next.copiesCapacity) {
 			next.copiesCapacity = std::max(next.copiesCapacity, 1u);
@@ -1623,9 +1628,11 @@ namespace DCLF
 			return;
 		logger::info("[DCLF] index pool: {} indices, {} slots and {} copies grown to {}, {} and {} ({} MB){}", base.capacity, base.firstsCapacity, base.copiesCapacity,
 			next.capacity, next.firstsCapacity, next.copiesCapacity, std::uint64_t(next.capacity) * 2 >> 20, Growths::Deferred() ? ", as graph work" : "");
-		growths.Change<PoolSizing>(p, a_scene.pool, std::move(next), std::move(parts), [&p, indices] {
+		growths.Change<PoolSizing>(p, a_scene.pool, std::move(next), std::move(parts), [&p, indices, firsts] {
 			++p.layout;
 			p.relayout = p.relayout || indices;
+			// A new firsts version holds nothing: every slot's first index is sent again (a relayout sends them too).
+			p.firstsWhole = p.firstsWhole || firsts;
 		});
 	}
 

@@ -151,6 +151,9 @@ namespace DCLF::Scene
 			if (*owner)
 				retirement.Open().imports.push_back(std::move(*owner));
 		import = {};
+		// The record named the buffers the leases held: nothing may read through it once they are released (the index pool copies a
+		// logged slot's indices from its index address, its geometry row is the slot's draws' vertex buffer).
+		tables.geometries[a_slot] = {};
 		tables.geometryLastUsed[a_slot] = Tables::kSlotFree;
 		// The log names every write of the geometry columns (the published tables replay them by it).
 		tables.NoteGeometry(a_slot);

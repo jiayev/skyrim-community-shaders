@@ -143,6 +143,8 @@ public:
 	void ConfigureTAA();
 	void ConfigureUpscaling(RE::BSGraphics::State* a_state);
 	void Upscale();
+	/** @brief Before an evaluate: DXVK work between the last render-graph epoch and the upscaler (see the definition). */
+	void SeparateFromGraphEpochs();
 
 	bool IsFrameGenerationActive() const;
 
@@ -180,6 +182,8 @@ public:
 	// D3D11 textures
 	Texture2D* upscaledTexture = nullptr;
 	Texture2D* hudlessTexture = nullptr;
+	// A small typed UAV DXVK clears before each evaluate (SeparateFromGraphEpochs).
+	winrt::com_ptr<ID3D11UnorderedAccessView> epochSeparator;
 
 	virtual void ClearShaderCache() override;
 

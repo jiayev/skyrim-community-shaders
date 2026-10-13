@@ -486,9 +486,13 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 	second.stride = streamBuffer.w;
 #		if defined(DCLF_FETCH_GUARD)
 	// [TEMP] The pulled stages' GPU fault (2026-10-09): the sequence and the fetch checked before any read through them. A failed
-	// check reads a beacon address instead, so the device's page fault names it: 0x1D0000000000 + check << 36 + the object word's
-	// low 24 bits << 12. Checks: 1 the sequence's instance word is not this draw's instance (a slot not written for it); 2 a row's
-	// address is 0; 3 no vertex buffer address; 4 the vertex past its first stream's size; 5 past its second stream's size.
+	// check reads a beacon address instead, so the device's page fault names it: 0x1D0000000000 + check << 36 + the pass << 33 + the
+	// object word's low 21 bits << 12. Checks: 1 the sequence's instance word is not this draw's instance (a slot not written for it); 2 a row's
+	// address is 0; 3 no vertex buffer address; 4, 6 and 7 the vertex past its first stream's size; 5 past its second stream's size.
+	// The first stream's failure is split by where the bad index comes from: 7 the geometry's own index buffer (the sequence's index
+	// address) holds indices past the vertex buffer (the sequence's vertex and index buffers disagree); else the index pool's range
+	// does not hold the geometry's indices: 6 its head differs from the index buffer's start (exact for a geometry whose first index
+	// is 0), 4 its head agrees. The pool's address is the call's push words 2-3 (DrawPipelines.h, kZDrawPushPoolAddress; 0: unchecked).
 	{
 		uint check = 0;
 		const uint instanceWord = vk::RawBufferLoad<uint>(sequence + 88);
@@ -498,12 +502,38 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 			check = 2;
 		else if (all(vertexBuffer.xy == 0))
 			check = 3;
-		else if (uint64_t(index + 1) * vertexBuffer.w > uint64_t(vertexBuffer.z))
+		else if (uint64_t(index + 1) * vertexBuffer.w > uint64_t(vertexBuffer.z)) {
 			check = 4;
-		else if (uint64_t(index + 1) * streamBuffer.w > uint64_t(streamBuffer.z))
+			const uint4 indexBuffer = vk::RawBufferLoad<uint4>(sequence + 56);  // address, size in bytes, format
+			const uint64_t engine = DCLFAddress(indexBuffer.xy);
+			const uint vertices = vertexBuffer.w ? vertexBuffer.z / vertexBuffer.w : 0u;
+			const uint indices = min(indexBuffer.z / 2u, 131072u);
+			bool engineBad = false;
+			[loop] for (uint i = 0; engine != 0 && i < indices && !engineBad; i += 2) {
+				const uint pair = vk::RawBufferLoad<uint>(engine + uint64_t(i) * 2);
+				engineBad = (pair & 0xFFFFu) >= vertices || (i + 1 < indices && (pair >> 16) >= vertices);
+			}
+			if (engineBad)
+				check = 7;
+			else if (engine != 0 && any(DCLFMaterialRowsAddress != 0)) {
+				const uint64_t pool = DCLFAddress(DCLFMaterialRowsAddress);
+				const uint drawFirst = vk::RawBufferLoad<uint>(sequence + 80);  // the range's first index plus the geometry's
+				const uint head = min(indices, 8u);
+				[loop] for (uint k = 0; k < head; ++k) {
+					const uint at = drawFirst + k;
+					const uint poolWord = vk::RawBufferLoad<uint>(pool + uint64_t(at & ~1u) * 2);
+					const uint engineWord = vk::RawBufferLoad<uint>(engine + uint64_t(k & ~1u) * 2);
+					if (((at & 1u) ? poolWord >> 16 : poolWord & 0xFFFFu) != ((k & 1u) ? engineWord >> 16 : engineWord & 0xFFFFu))
+						check = 6;
+				}
+			}
+		} else if (uint64_t(index + 1) * streamBuffer.w > uint64_t(streamBuffer.z))
 			check = 5;
 		if (check != 0) {
-			const uint64_t beacon = 0x1D0000000000ull + (uint64_t(check) << 36) + (uint64_t(DCLFObjectWord & 0xFFFFFFu) << 12);
+			// Bits 33-35: the pass (DrawPipelines.h, kZDrawPushPassTag: 1-2 the Z-prepass's phases, 3 the faces, 4-5 first person); bits
+			// 12-32 the object word's low 21 bits.
+			const uint64_t beacon = 0x1D0000000000ull + (uint64_t(check) << 36) + (uint64_t(DCLFVertexLayout.y & 7u) << 33) +
+			                        (uint64_t(DCLFObjectWord & 0x1FFFFFu) << 12);
 			first.address = beacon;
 			second.address = beacon;
 			first.stride = 0;

@@ -478,11 +478,6 @@ namespace DCLF
 		void ReseedFadeRoot(const void* a_node);
 		/** @brief Whether the geometry sits under a tracked category node (the tracked map, read on the caller's thread). */
 		bool IsTracked(const RE::BSGeometry* a_geometry) const;
-		/**
-		 * @brief IsTracked from the render thread (PrimaryCull's RefreshWalk, RunAdmission) while a pass may write the map: an
-		 * unsynchronized read, the open defect "The render thread reads the coordinator's tracked map" (dclf-open-defects.md).
-		 */
-		bool IsTrackedFromRenderThread(const RE::BSGeometry* a_geometry) const { return IsTracked(a_geometry); }
 		/** @brief Object LOD: the index ranges a tracked BSSubIndexTriShape draws (its visible segments' runs), or null. */
 		const std::vector<LodSegments::Range>* LodRangesOf(const RE::BSGeometry* a_shape) const
 		{
