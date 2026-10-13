@@ -159,14 +159,9 @@ void Skin::DrawMaterialControls(Layer a_layer)
 					}
 					const auto path = Apply(inherited, changes).textures[i];
 					ImGui::TextWrapped("%s", path.empty() ? (i == 2 ? T("feature.skin.global_detail", "Global detail") : T("feature.skin.no_control_texture", "No texture (scalar roughness / flat wet normal)")) : path.c_str());
-					if (ImGui::Button(T("feature.skin.choose_dds", "Choose DDS"))) {
-						if (const auto file = ChooseFile(false, DDSFilter, L"dds")) {
-							const auto imported = ImportTexture(*file);
-							if (!imported.empty()) {
-								edit = { TextureMode::Resource, imported };
-								Invalidate(true);
-							}
-						}
+					if (const auto chosen = ResourcePicker(editor.browser, T("feature.skin.choose_dds", "Choose DDS"), path.empty() ? key : path, ".dds")) {
+						edit = { TextureMode::Resource, NormalizeTexturePath(*chosen) };
+						Invalidate(true);
 					}
 					ImGui::SameLine();
 					if (ImGui::Button(i == 2 ? T("feature.skin.use_global_detail", "Use global detail") : T("feature.skin.use_neutral", "Use neutral")))
@@ -277,15 +272,35 @@ void Skin::DrawTextureTools()
 		ImGui::TextWrapped("%s", T("feature.skin.use_grayscale_images_of_equal_dimensions_the_red_channel_of", "Use grayscale images of equal dimensions. The red channel of each input is copied into the selected output channel."));
 	}
 	ImGui::Checkbox(T("feature.skin.compress_as_bc7_slower", "Compress as BC7 (slower)"), &editor.tools.compress);
-	if (ImGui::Button(T("feature.skin.build_and_save_dds", "Build and save DDS"))) {
-		if (const auto output = ChooseFile(true, DDSFilter, L"dds", editor.tools.detail ? "detail_normal_mask.dds" : "skin_controls.dds")) {
-			const Output file{ *output, editor.tools.detail ? PackDetail(editor.tools) : PackControls(editor.tools) };
-			Publish(std::span(&file, 1));
-			editor.generatedDDS = UTF8(*output);
-			editor.generatedDetail = editor.tools.detail;
-			editor.message = T("feature.skin.dds_saved_with_linear_channels_alpha_and_mipmaps_choose_dds", "DDS saved with linear channels, alpha and mipmaps. Choose DDS on the material to assign it.");
-		}
+
+	ImGui::SeparatorText(T("feature.skin.texture_output_section", "Output"));
+	ImGui::TextWrapped("%s", T("feature.skin.texture_output_help", "Source images can come from anywhere. The result is a game resource: choose its path inside textures/. It is written below the same mod folder as material files."));
+	// Suggest a name beside the skin texture being edited, which is where its material file lives too.
+	const auto& anchor = editor.draftKey.empty() ? editor.key : editor.draftKey;
+	if (editor.toolsOutput.empty() && anchor.size() > 4)
+		editor.toolsOutput = anchor.substr(0, anchor.size() - 4) + (editor.tools.detail ? "_detail.dds" : "_rfaos.dds");
+	ImGui::SetNextItemWidth(-FLT_MIN);
+	ImGui::InputTextWithHint("##tools_output", "textures/myskin/body_rfaos.dds", &editor.toolsOutput);
+	if (const auto chosen = ResourcePicker(editor.browser, T("feature.skin.choose_existing_dds", "Replace an existing DDS..."), editor.toolsOutput.empty() ? anchor : editor.toolsOutput, ".dds"))
+		editor.toolsOutput = *chosen;
+	const auto root = OutputRoot();
+	std::string resource;
+	try {
+		resource = NormalizeTexturePath(editor.toolsOutput);
+	} catch (const std::exception& e) {
+		ImGui::TextWrapped("%s", e.what());
 	}
+	if (!resource.empty())
+		ImGui::TextDisabled("%s", UTF8(root / std::filesystem::u8path(resource)).c_str());
+	ImGui::BeginDisabled(resource.empty());
+	if (ImGui::Button(T("feature.skin.build_and_save_dds", "Build and save DDS"))) {
+		PublishResource(root, resource, editor.tools.detail ? PackDetail(editor.tools) : PackControls(editor.tools));
+		editor.generatedDDS = resource;
+		editor.generatedDetail = editor.tools.detail;
+		Invalidate(true);
+		editor.message = T("feature.skin.dds_saved_as_resource", "DDS saved with linear channels, alpha and mipmaps.");
+	}
+	ImGui::EndDisabled();
 	if (editor.generatedDDS.empty())
 		return;
 	ImGui::SeparatorText(T("feature.skin.texture_output", "Created texture"));
@@ -295,8 +310,8 @@ void Skin::DrawTextureTools()
 	ImGui::BeginDisabled(!hasDraft);
 	ScopeExit disabled{ [] { ImGui::EndDisabled(); } };
 	if (ImGui::Button(T("feature.skin.assign_created_texture", "Use this texture in the current material"))) {
-		const auto path = ImportTexture(std::filesystem::u8path(editor.generatedDDS));
-		if (!path.empty()) {
+		const auto path = editor.generatedDDS;
+		{
 			PushUndo({ editor.material, editor.character });
 			const size_t slot = editor.generatedDetail ? 2 : 0;
 			if (character)

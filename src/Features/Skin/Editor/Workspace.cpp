@@ -194,8 +194,7 @@ void Skin::SaveMaterial(const std::filesystem::path& a_root)
 	const Bytes bytes(text.begin(), text.end());
 	const auto relative = SidecarPath(editor.draftKey);
 	const auto destination = a_root / std::filesystem::u8path(relative);
-	const Output output{ destination, bytes };
-	Publish(std::span(&output, 1), false);
+	PublishResource(a_root, relative, bytes);
 	SkinLibrary::Entry entry;
 	entry.key = editor.draftKey;
 	entry.path = relative;
@@ -208,6 +207,11 @@ void Skin::SaveMaterial(const std::filesystem::path& a_root)
 	editor.message = I18n::GetSingleton()->Format("feature.skin.material_saved", { { "path", UTF8(destination) } },
 		"Saved {path}. It applies to everything showing this texture. If another mod provides the same file with higher priority, the game will use that one after Reload skin resources or a restart.");
 	Invalidate();
+}
+
+std::filesystem::path Skin::OutputRoot() const
+{
+	return settings.MaterialOutputFolder.empty() ? std::filesystem::path("Data") : std::filesystem::u8path(settings.MaterialOutputFolder);
 }
 
 void Skin::SaveCharacter()
@@ -363,28 +367,27 @@ void Skin::DrawMaterialWorkspace()
 	DrawPreviewOptions();
 
 	ImGui::SeparatorText(T("feature.skin.save_destination", "Save destination"));
-	const auto root = settings.MaterialOutputFolder.empty() ? std::filesystem::path("Data") : std::filesystem::u8path(settings.MaterialOutputFolder);
+	const auto root = OutputRoot();
+	ImGui::TextWrapped("%s", T("feature.skin.output_folder_help", "Paths inside materials are always game resource paths, so they work from any mod and from archives. Only the mod folder that new files are written into is a location on disk."));
 	ImGui::TextWrapped("%s", UTF8(root / std::filesystem::u8path(SidecarPath(editor.draftKey))).c_str());
-	ImGui::Checkbox(T("feature.skin.record_fingerprint", "Record which version of the diffuse texture this was made for"), &editor.recordFingerprint);
-	if (ImGui::Button(T("feature.skin.save_material", "Save material file"), ImVec2(-FLT_MIN, 0)))
-		SaveMaterial(root);
-	if (ImGui::Button(T("feature.skin.save_material_to_folder", "Save into a mod folder..."))) {
-		if (const auto folder = ChooseFolder()) {
-			const auto modRoot = ModRoot(*folder);
-			settings.MaterialOutputFolder = UTF8(modRoot);
-			SaveMaterial(modRoot);
-		}
+	if (ImGui::Button(T("feature.skin.choose_output_folder", "Write into a mod folder..."))) {
+		if (const auto folder = ChooseFolder())
+			settings.MaterialOutputFolder = UTF8(ModRoot(*folder));
 	}
 	if (!settings.MaterialOutputFolder.empty()) {
 		ImGui::SameLine();
 		if (ImGui::Button(T("feature.skin.save_material_to_data", "Use the game's Data folder")))
 			settings.MaterialOutputFolder.clear();
 	}
-	if (ImGui::Button(T("feature.skin.import_material_file", "Copy values from another material file..."))) {
-		if (const auto path = ChooseFile(false, MaterialFilter, L"json")) {
-			const auto definition = Parse(ReadResource(UTF8(*path)));
+	ImGui::Checkbox(T("feature.skin.record_fingerprint", "Record which version of the diffuse texture this was made for"), &editor.recordFingerprint);
+	if (ImGui::Button(T("feature.skin.save_material", "Save material file"), ImVec2(-FLT_MIN, 0)))
+		SaveMaterial(root);
+	if (const auto chosen = ResourcePicker(editor.browser, T("feature.skin.import_material_file", "Copy values from another material file..."), editor.draftKey, SidecarExtension)) {
+		{
+			const auto bytes = FindResource(*chosen);
+			const auto definition = bytes ? Parse(*bytes) : Definition{};
 			if (definition.status != Status::Valid)
-				throw std::runtime_error(definition.diagnostic);
+				throw std::runtime_error(definition.diagnostic.empty() ? T("feature.skin.game_resource_is_unavailable", "Game resource is unavailable: ") + *chosen : definition.diagnostic);
 			// Painted inputs belong to the other texture's UV layout, so only the numeric values are copied.
 			PushUndo({ editor.material, editor.character });
 			editor.material.parameters = ToChanges(definition.material).parameters;

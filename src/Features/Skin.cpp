@@ -96,18 +96,9 @@ void Skin::DrawSettings()
 	ImGui::TextWrapped("%s", T("feature.skin.global_detail_applies_when_a_material_has_no_detail_texture", "Global detail applies when a material has no detail texture. Its alpha mask uses the model's main UV, independently of tiling."));
 	changed |= ImGui::InputText(T("feature.skin.global_detail_dds", "Global detail DDS"), &settings.DetailTexture);
 	ImGui::SameLine();
-	if (ImGui::Button(T("feature.skin.choose_dds", "Choose DDS"))) {
-		try {
-			if (const auto path = SkinEditor::ChooseFile(false, SkinEditor::DDSFilter, L"dds")) {
-				const auto imported = SkinEditor::ImportTexture(*path);
-				if (!imported.empty()) {
-					settings.DetailTexture = imported;
-					changed = true;
-				}
-			}
-		} catch (const std::exception& error) {
-			editor.error = error.what();
-		}
+	if (const auto chosen = SkinEditor::ResourcePicker(editor.browser, T("feature.skin.choose_dds", "Choose DDS"), settings.DetailTexture, ".dds")) {
+		settings.DetailTexture = *chosen;
+		changed = true;
 	}
 	if (!editor.error.empty())
 		ImGui::TextWrapped("%s", editor.error.c_str());

@@ -16,7 +16,11 @@ namespace SkinLibrary
 			const auto bytes = SkinEditor::FindResource(entry.path);
 			if (!bytes)
 				return entry;
-			entry.origin = SkinEditor::IsLooseResource(entry.path) ? Origin::Loose : Origin::Archive;
+			const auto session = SkinEditor::SessionOutput(entry.path);
+			entry.origin = SkinEditor::IsLooseResource(entry.path) ? Origin::Loose : session ? Origin::Session :
+			                                                                                   Origin::Archive;
+			if (entry.origin == Origin::Session)
+				entry.savedTo = SkinEditor::UTF8(*session);
 			if (bytes->size() > MaxBytes)
 				throw std::runtime_error(T("feature.skin.material_file_too_large", "The material file exceeds 1 MiB."));
 			entry.definition = SkinMaterials::Parse(*bytes);

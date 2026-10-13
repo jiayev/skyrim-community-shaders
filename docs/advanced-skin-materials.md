@@ -171,7 +171,16 @@ Limits: 1 MiB per file, 256 texture entries per character.
 
 While the editor is open, a texture material draft previews on everything that shows the texture, on any character, and a character draft previews on that character. That is exactly what saving will affect. Both drafts are retained while switching workspaces; choosing another texture or character asks before discarding unsaved edits. Undo and redo cover both drafts.
 
-After a save, the editor uses the saved content directly, because a file written into a mod folder may not be visible to the running game. **Reload skin resources** re-reads through the game's resource system and therefore shows which file actually wins.
+### Paths in a mod manager
+
+Under Mod Organizer and similar tools the game sees a virtual Data folder assembled from many mod folders. A path on disk such as `D:\MO2\mods\My Skin\textures\body_rfaos.dds` therefore means nothing to the game, and would break as soon as the file moved into a BSA or another mod. So the editor separates two things:
+
+-   **References to resources** — every texture in a material or character file, the global detail texture, the material whose values are copied — are game resource paths (`textures/...`). They are chosen in an in-game browser that lists the Data folder as the game sees it, including all virtual files. Archived files are not listed, but their resource path can be typed in.
+-   **Where new files are written** — material files and textures built by the texture tools — is the one place a disk location is needed. It is a single setting, the output mod folder, chosen once with a system folder dialog (`Data` by default, which Mod Organizer redirects to Overwrite). A resource path is then appended to it. If the chosen folder is a `textures` folder or below, the mod folder above it is used.
+
+The system file dialog is used only for files that are not game resources: source images for the texture tools, and copies of character files written for sharing.
+
+A file created inside a mod folder while the game runs may not be visible through the mod manager's virtual Data folder until the next launch. The editor remembers every file it writes this session and reads it from where it was written when the game cannot find it, so previews keep working. **Reload skin resources** re-reads through the game's resource system and therefore shows which file actually wins.
 
 ## Code organization
 

@@ -5,6 +5,7 @@
 #include <commdlg.h>
 #include <cwctype>
 #include <fstream>
+#include <mutex>
 #include <set>
 #include <shlobj.h>
 
@@ -22,6 +23,33 @@ namespace SkinEditor
 				path.erase(0, 5);
 			return path;
 		}
+		std::string OutputKey(const std::string& a_resource)
+		{
+			auto key = ResourcePath(a_resource);
+			std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+			return key;
+		}
+		std::mutex outputMutex;
+		std::unordered_map<std::string, std::filesystem::path> outputs;
+	}
+
+	std::optional<std::filesystem::path> SessionOutput(const std::string& a_resource)
+	{
+		std::lock_guard lock(outputMutex);
+		const auto found = outputs.find(OutputKey(a_resource));
+		return found == outputs.end() ? std::nullopt : std::optional(found->second);
+	}
+
+	void RememberOutput(const std::string& a_resource, const std::filesystem::path& a_file)
+	{
+		std::lock_guard lock(outputMutex);
+		outputs[OutputKey(a_resource)] = a_file;
+	}
+
+	void ForgetOutputs()
+	{
+		std::lock_guard lock(outputMutex);
+		outputs.clear();
 	}
 
 	std::string UTF8(const std::filesystem::path& a_path)
@@ -41,8 +69,12 @@ namespace SkinEditor
 	std::optional<Bytes> FindResource(const std::string& a_path)
 	{
 		RE::BSResourceNiBinaryStream input(ResourcePath(a_path));
-		if (!input.good() || !input.stream)
+		if (!input.good() || !input.stream) {
+			// Written this session but not (yet) visible to the game: read it from where it was written.
+			if (const auto file = SessionOutput(a_path); file && std::filesystem::exists(*file))
+				return ReadResource(UTF8(*file));
 			return std::nullopt;
+		}
 		if (input.stream->totalSize > MaxBytes)
 			throw std::runtime_error(T("feature.skin.asset_read_limit", "Cannot read asset or asset exceeds 512 MiB: ") + a_path);
 		Bytes bytes(input.stream->totalSize);
@@ -108,17 +140,9 @@ namespace SkinEditor
 		const char* label;
 		const wchar_t* pattern;
 		switch (a_filter) {
-		case DDSFilter:
-			label = T("feature.skin.dds_filter", "DDS texture");
-			pattern = L"*.dds";
-			break;
 		case ImageFilter:
 			label = T("feature.skin.image_filter", "Texture images");
 			pattern = L"*.dds;*.png;*.tga;*.tif;*.tiff;*.bmp";
-			break;
-		case MaterialFilter:
-			label = T("feature.skin.material_file_filter", "Skin material file");
-			pattern = L"*.csskin.json";
 			break;
 		default:
 			label = T("feature.skin.character_file_filter", "Skin character file");
@@ -258,23 +282,11 @@ namespace SkinEditor
 		}
 	}
 
-	std::string ImportTexture(const std::filesystem::path& a_source)
+	void PublishResource(const std::filesystem::path& a_root, const std::string& a_resource, Bytes a_bytes)
 	{
-		SkinTextures::Validate(UTF8(a_source));
-		const auto root = std::filesystem::weakly_canonical("Data/textures");
-		const auto relative = std::filesystem::weakly_canonical(a_source).lexically_relative(root);
-		if (!relative.empty() && *relative.begin() != "..")
-			return SkinMaterials::NormalizeTexturePath("textures/" + UTF8(relative));
-		std::filesystem::create_directories(root / "CS/Skin");
-		const auto destination = ChooseFile(true, DDSFilter, L"dds", root / "CS/Skin" / a_source.filename());
-		if (!destination)
-			return {};
-		const auto target = std::filesystem::weakly_canonical(*destination).lexically_relative(root);
-		if (target.empty() || *target.begin() == "..")
-			throw std::runtime_error(T("feature.skin.for_game_preview_import_into_this_game_s_data_textures", "For game preview, import into this game's Data/textures folder (or a mod manager's redirected Data folder)."));
-		const auto path = SkinMaterials::NormalizeTexturePath("textures/" + UTF8(target));
-		const Output output{ *destination, ReadResource(UTF8(a_source)) };
-		Publish(std::span(&output, 1));
-		return path;
+		const auto file = a_root / std::filesystem::u8path(a_resource);
+		const Output output{ file, std::move(a_bytes) };
+		Publish(std::span(&output, 1), false);
+		RememberOutput(a_resource, file);
 	}
 }
