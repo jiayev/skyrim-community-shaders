@@ -51,6 +51,13 @@ namespace DCLF
 	// Terrain Blending's depth offset (Utility.hlsl, OFFSET_DEPTH), in the shadow views' vertex layout word: 1 for a terrain group 1
 	// twin bucket's call (MainOpaquePass); the pulled Lighting vertex stage adds it to clip z.
 	inline constexpr std::uint32_t kZDrawPushOffsetDepth = 4;
+	// TEMP (the pulled stages' GPU fault): the pass of a plain Lighting draw, in the pad word (DCLFVertexLayout.y), for the fetch guard's
+	// beacon (Lighting.hlsl, DCLF_FETCH_GUARD): 1 the Z-prepass's phase 1, 2 its phase 2, 3 the reflection faces, 4 the first-person
+	// depth, 5 the first-person colour.
+	inline constexpr std::uint32_t kZDrawPushPassTag = 5;
+	// TEMP, likewise: the index pool's device address (DCLFMaterialRowsAddress, unused by the pulled Lighting stage), which the fetch
+	// guard compares with the geometry's index buffer.
+	inline constexpr std::uint32_t kZDrawPushPoolAddress = 2;
 	// A shadow view's plain draw's push words: the first sequence's address (indexed by instance; Utility.hlsl, DCLF_PULLED), the
 	// material rows' table (for the layout's b1/t0 ranges; the stages read the draw's row themselves), the vertex layout.
 	inline constexpr std::uint32_t kShadowDrawPushSequences = 0, kShadowDrawPushMaterialRows = 2, kShadowDrawPushVertexLayout = 4;

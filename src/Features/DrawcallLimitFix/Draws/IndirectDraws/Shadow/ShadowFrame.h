@@ -125,6 +125,8 @@ namespace DCLF::Draws
 		Versioned copies;   // this commit's copies: source address (low, high), first index, words
 		// A new indices version was adopted: the next update lays out and copies every range again.
 		bool relayout = false;
+		// A new firsts version was adopted (it holds nothing): the next update sends every slot's first index.
+		bool firstsWhole = false;
 		// Slots waiting for growth (no room, past the first-index table or this commit's copies); retried by every update.
 		std::vector<std::uint32_t> waiting;
 		bool fragmented = false;  // no room though the pool has twice what it holds: a relayout is asked for

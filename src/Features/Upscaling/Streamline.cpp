@@ -13,6 +13,8 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <DirectXPackedVector.h>
+#include <fstream>
 #include <mutex>
 #include <string_view>
 #include <unordered_set>
@@ -1227,6 +1229,206 @@ static bool cs_CanReleaseFailedFSRFrame(DXVKInterop* a_dxvk,
 	return false;
 }
 
+
+// Diagnostic (CS_DCLF_TARGET_DUMP frames): the upscaler's inputs and output copied inside its
+// own command buffer, just before and just after the evaluate, and read back once complete (InCbReadback::Drain).
+namespace InCbReadback
+{
+	struct Copy
+	{
+		std::string name;
+		VkFormat format = VK_FORMAT_UNDEFINED;
+		uint32_t width = 0, height = 0, texel = 0;
+		VkDeviceSize offset = 0;
+	};
+	struct State
+	{
+		VkDevice device = VK_NULL_HANDLE;
+		VkBuffer buffer = VK_NULL_HANDLE;
+		VkDeviceMemory memory = VK_NULL_HANDLE;
+		void* mapped = nullptr;
+		VkDeviceSize size = 0, used = 0;
+		std::vector<Copy> copies;
+		uint32_t frame = 0;
+		bool pending = false;
+		uint32_t framesWaited = 0;
+		PFN_vkCmdCopyImageToBuffer copyImageToBuffer = nullptr;
+		PFN_vkCmdPipelineBarrier barrier = nullptr;
+	};
+	static State& Get()
+	{
+		static State s;
+		return s;
+	}
+
+	static bool Ensure(DXVKInterop* a_dxvk)
+	{
+		auto& s = Get();
+		if (s.buffer)
+			return true;
+		const VkDevice device = a_dxvk->GetDevice();
+		auto gdpa = a_dxvk->GetDeviceProcAddr();
+		auto gipa = a_dxvk->GetInstanceProcAddr();
+		if (!gdpa || !gipa)
+			return false;
+		auto createBuffer = reinterpret_cast<PFN_vkCreateBuffer>(gdpa(device, "vkCreateBuffer"));
+		auto requirements = reinterpret_cast<PFN_vkGetBufferMemoryRequirements>(gdpa(device, "vkGetBufferMemoryRequirements"));
+		auto allocate = reinterpret_cast<PFN_vkAllocateMemory>(gdpa(device, "vkAllocateMemory"));
+		auto bind = reinterpret_cast<PFN_vkBindBufferMemory>(gdpa(device, "vkBindBufferMemory"));
+		auto map = reinterpret_cast<PFN_vkMapMemory>(gdpa(device, "vkMapMemory"));
+		auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(gipa(a_dxvk->GetInstance(), "vkGetPhysicalDeviceMemoryProperties"));
+		s.copyImageToBuffer = reinterpret_cast<PFN_vkCmdCopyImageToBuffer>(gdpa(device, "vkCmdCopyImageToBuffer"));
+		s.barrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(gdpa(device, "vkCmdPipelineBarrier"));
+		if (!createBuffer || !requirements || !allocate || !bind || !map || !properties || !s.copyImageToBuffer || !s.barrier)
+			return false;
+		s.size = 512ull << 20;
+		VkBufferCreateInfo info{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+		info.size = s.size;
+		info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+		if (createBuffer(device, &info, nullptr, &s.buffer) != VK_SUCCESS)
+			return false;
+		VkMemoryRequirements req{};
+		requirements(device, s.buffer, &req);
+		VkPhysicalDeviceMemoryProperties props{};
+		properties(a_dxvk->GetPhysicalDevice(), &props);
+		const VkMemoryPropertyFlags cached = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+		const VkMemoryPropertyFlags coherent = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+		uint32_t type = UINT32_MAX;
+		for (uint32_t i = 0; i < props.memoryTypeCount && type == UINT32_MAX; ++i)
+			if ((req.memoryTypeBits & (1u << i)) && (props.memoryTypes[i].propertyFlags & cached) == cached)
+				type = i;
+		for (uint32_t i = 0; i < props.memoryTypeCount && type == UINT32_MAX; ++i)
+			if ((req.memoryTypeBits & (1u << i)) && (props.memoryTypes[i].propertyFlags & coherent) == coherent)
+				type = i;
+		if (type == UINT32_MAX)
+			return false;
+		VkMemoryAllocateInfo alloc{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+		alloc.allocationSize = req.size;
+		alloc.memoryTypeIndex = type;
+		if (allocate(device, &alloc, nullptr, &s.memory) != VK_SUCCESS || bind(device, s.buffer, s.memory, 0) != VK_SUCCESS ||
+			map(device, s.memory, 0, VK_WHOLE_SIZE, 0, &s.mapped) != VK_SUCCESS)
+			return false;
+		s.device = device;
+		logger::info("[Streamline] in-command-buffer readback ready ({} MB, memory type {})", s.size >> 20, type);
+		return true;
+	}
+
+	static uint32_t TexelBytes(VkFormat a_format)
+	{
+		switch (a_format) {
+		case VK_FORMAT_R16G16B16A16_SFLOAT:
+			return 8;
+		case VK_FORMAT_R16G16_SFLOAT:
+		case VK_FORMAT_D24_UNORM_S8_UINT:
+		case VK_FORMAT_D32_SFLOAT:
+		case VK_FORMAT_X8_D24_UNORM_PACK32:
+			return 4;
+		default:
+			return 0;
+		}
+	}
+
+	static bool IsDepth(VkFormat a_format)
+	{
+		return a_format == VK_FORMAT_D24_UNORM_S8_UINT || a_format == VK_FORMAT_D32_SFLOAT || a_format == VK_FORMAT_X8_D24_UNORM_PACK32;
+	}
+
+	static void Record(VkCommandBuffer a_cmd, const sl::Resource& a_res, const std::string& a_name, uint32_t a_width, uint32_t a_height)
+	{
+		auto& s = Get();
+		const auto format = static_cast<VkFormat>(a_res.nativeFormat);
+		const uint32_t texel = TexelBytes(format);
+		if (!texel || !s.buffer) {
+			logger::info("[Streamline] in-cb readback: {} format {} not copied", a_name, static_cast<int>(format));
+			return;
+		}
+		const VkDeviceSize bytes = VkDeviceSize(a_width) * a_height * texel;
+		if (s.used + bytes > s.size)
+			return;
+		VkMemoryBarrier full{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+		full.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+		full.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+		s.barrier(a_cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &full, 0, nullptr, 0, nullptr);
+		VkBufferImageCopy region{};
+		region.bufferOffset = s.used;
+		region.imageSubresource.aspectMask = IsDepth(format) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+		region.imageSubresource.layerCount = 1;
+		region.imageExtent = { a_width, a_height, 1 };
+		s.copyImageToBuffer(a_cmd, static_cast<VkImage>(a_res.native), static_cast<VkImageLayout>(a_res.state), s.buffer, 1, &region);
+		s.barrier(a_cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &full, 0, nullptr, 0, nullptr);
+		s.copies.push_back({ a_name, format, a_width, a_height, texel, s.used });
+		s.used += (bytes + 255) & ~VkDeviceSize(255);
+	}
+
+	static std::string Stats(const Copy& a_copy)
+	{
+		auto& s = Get();
+		const auto* base = static_cast<const uint8_t*>(s.mapped) + a_copy.offset;
+		double sum[4] = {}, mn[4], mx[4];
+		for (int c = 0; c < 4; ++c)
+			mn[c] = 1e30, mx[c] = -1e30;
+		uint64_t nonFinite = 0, n = 0, topBad = 0, topCount = 0;
+		const uint32_t channels = a_copy.format == VK_FORMAT_R16G16B16A16_SFLOAT ? 4 : a_copy.format == VK_FORMAT_R16G16_SFLOAT ? 2 : 1;
+		for (uint32_t y = 0; y < a_copy.height; ++y)
+			for (uint32_t x = 0; x < a_copy.width; ++x) {
+				const uint8_t* t = base + (std::size_t(y) * a_copy.width + x) * a_copy.texel;
+				float v[4]{};
+				if (channels > 1) {
+					for (uint32_t c = 0; c < channels; ++c)
+						v[c] = DirectX::PackedVector::XMConvertHalfToFloat(reinterpret_cast<const uint16_t*>(t)[c]);
+				} else if (a_copy.format == VK_FORMAT_D32_SFLOAT) {
+					v[0] = *reinterpret_cast<const float*>(t);
+				} else {
+					v[0] = (*reinterpret_cast<const uint32_t*>(t) & 0xFFFFFFu) / 16777215.0f;
+				}
+				bool bad = false;
+				for (uint32_t c = 0; c < channels; ++c) {
+					if (!std::isfinite(v[c])) {
+						++nonFinite;
+						bad = true;
+						continue;
+					}
+					sum[c] += v[c];
+					mn[c] = std::min<double>(mn[c], v[c]);
+					mx[c] = std::max<double>(mx[c], v[c]);
+				}
+				if (channels > 1 && y < a_copy.height / 4) {
+					++topCount;
+					if (bad || std::abs(v[0]) > 100.0f || std::abs(v[1]) > 100.0f)
+						++topBad;
+				}
+				++n;
+			}
+		std::string text = fmt::format("{} ({}x{}, format {}): {} non-finite", a_copy.name, a_copy.width, a_copy.height, static_cast<int>(a_copy.format), nonFinite);
+		for (uint32_t c = 0; c < channels; ++c)
+			text += fmt::format("; c{} min {:.4g} max {:.4g} mean {:.4g}", c, mn[c], mx[c], sum[c] / double(n ? n : 1));
+		if (topCount)
+			text += fmt::format("; top quarter |v|>100 or non-finite: {} of {}", topBad, topCount);
+		return text;
+	}
+
+	// At each evaluate: once the armed frame's buffer can have completed, waits for it and writes its statistics and raw copies.
+	static void Drain(DXVKInterop* a_dxvk)
+	{
+		auto& s = Get();
+		if (!s.pending || ++s.framesWaited < 4)
+			return;
+		if (!a_dxvk->WaitDeviceIdle())
+			return;
+		auto dir = logger::log_directory().value_or(std::filesystem::path{}) / "dclf-dump" / "incb";
+		std::error_code error;
+		std::filesystem::create_directories(dir, error);
+		for (const auto& copy : s.copies) {
+			logger::info("[Streamline] in-cb readback frame {}: {}", s.frame, Stats(copy));
+			std::ofstream raw(dir / (copy.name + ".raw"), std::ios::binary);
+			raw.write(static_cast<const char*>(s.mapped) + copy.offset, static_cast<std::streamsize>(std::size_t(copy.width) * copy.height * copy.texel));
+		}
+		s.copies.clear();
+		s.used = 0;
+		s.pending = false;
+	}
+}
+
 static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::ViewportHandle& a_viewport,
 	ID3D11Resource* a_colorIn, ID3D11Resource* a_colorOut, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 	uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_outputWidth, uint32_t a_outputHeight,
@@ -1241,6 +1443,7 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 	auto* dxvk = DXVKInterop::GetSingleton();
 	if (!dxvk)
 		return sl::Result::eErrorNotInitialized;
+	InCbReadback::Drain(dxvk);
 
 	sl::FrameToken* token = RenderFrameToken();
 	if (!token) {
@@ -1378,7 +1581,23 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 			return tagRes;
 		}
 
+		// CS_DCLF_TARGET_DUMP frames: the inputs as this command buffer sees them, before the evaluate (InCbReadback).
+		static uint32_t s_dumpFrames = 0;
+		const bool readback = DCLF::TargetDump::Armed() && haveColor && s_dumpFrames < 3 && InCbReadback::Ensure(dxvk);
+		if (readback) {
+			InCbReadback::Record(cmd, colorInRes, fmt::format("f{}-in-color", s_dumpFrames + 1), a_renderWidth, a_renderHeight);
+			InCbReadback::Record(cmd, mvecRes, fmt::format("f{}-in-mvec", s_dumpFrames + 1), a_renderWidth, a_renderHeight);
+			InCbReadback::Record(cmd, depthRes, fmt::format("f{}-in-depth", s_dumpFrames + 1), a_renderWidth, a_renderHeight);
+		}
 		evalRes = cs_EvaluateFeature(a_feature, *token, a_viewport, cmd);
+		if (readback && evalRes == sl::Result::eOk) {
+			InCbReadback::Record(cmd, colorOutRes, fmt::format("f{}-out-color", s_dumpFrames + 1), a_outputWidth, a_outputHeight);
+			InCbReadback::Record(cmd, colorInRes, fmt::format("f{}-in-color-after", s_dumpFrames + 1), a_renderWidth, a_renderHeight);
+			auto& rb = InCbReadback::Get();
+			rb.pending = true;
+			rb.framesWaited = 0;
+			rb.frame = ++s_dumpFrames;
+		}
 		if (evalRes != sl::Result::eOk) {
 			const bool canRelease = a_feature != sl::kFeatureFSR_G ||
 				cs_CanReleaseFailedFSRFrame(dxvk, transaction, a_viewport,

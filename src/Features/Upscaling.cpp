@@ -9,6 +9,7 @@
 #include "Hooks.h"
 #include "State.h"
 #include "Upscaling/DXVKInterop.h"
+#include "RenderGraph/RenderGraphRuntime.h"
 #include "Upscaling/FrameGenController.h"
 #include "Upscaling/Streamline.h"
 #include "Utils/Game.h"
@@ -1632,6 +1633,29 @@ bool Upscaling::IsWindowUnusable()
 }
 
 
+void Upscaling::SeparateFromGraphEpochs()
+{
+	// The upscalers run through Streamline on the descriptor heap path (a Streamline plugin asks for VK_EXT_descriptor_heap, which the
+	// render graph has enabled on DXVK's device). Their command buffer must not run directly after a render-graph epoch's command buffer,
+	// which binds the graph's descriptor heaps: on NVIDIA's driver the evaluate then computes from the wrong descriptors whenever the two
+	// run back to back on the GPU, and writes black or garbage output (dclf-open-defects.md, the Sleeping Giant Inn; Drawcall Limit Fix's
+	// first-person colour epoch is the last epoch before the upscaler). DXVK work that binds image descriptors in between avoids it: a UAV
+	// clear of a small typed texture, which DXVK runs as a compute shader. A plain flush, an empty submission or a buffer fill does not.
+	if (!RenderGraphRuntime::Get().IsActive())
+		return;
+	if (!epochSeparator) {
+		D3D11_TEXTURE2D_DESC desc{ 64, 64, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, { 1, 0 }, D3D11_USAGE_DEFAULT, D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE, 0, 0 };
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		if (FAILED(globals::d3d::device->CreateTexture2D(&desc, nullptr, texture.put())) ||
+			FAILED(globals::d3d::device->CreateUnorderedAccessView(texture.get(), nullptr, epochSeparator.put()))) {
+			logger::error("[Upscaling] The graph epoch separator could not be created; the upscaler may follow an epoch directly");
+			return;
+		}
+	}
+	const UINT values[4] = { 1, 2, 3, 4 };
+	globals::d3d::context->ClearUnorderedAccessViewUint(epochSeparator.get(), values);
+}
+
 void Upscaling::Upscale()
 {
 	ZoneScoped;
@@ -1666,7 +1690,8 @@ void Upscaling::Upscale()
 		const auto renderSize = Util::ConvertToDynamic(displaySize);
 		auto result = Streamline::EvaluationResult::kFailed;
 
-		DCLF::TargetDump::Point("before upscale");
+		DCLF::TargetDump::Point("before upscale", upscaledTexture && upscaledTexture->resource ? upscaledTexture->resource.get() : nullptr);
+		SeparateFromGraphEpochs();
 		if (upscaledTexture && upscaledTexture->resource) {
 			switch (method) {
 			case UpscaleMethod::kFSR:
@@ -1696,6 +1721,8 @@ void Upscaling::Upscale()
 			}
 		}
 
+		// CS_DCLF_TARGET_DUMP: the inputs as the evaluate left them (and its output), before the copy over kMAIN.
+		DCLF::TargetDump::Point("after evaluate", upscaledTexture && upscaledTexture->resource ? upscaledTexture->resource.get() : nullptr);
 		// Not timed: this is the first use of either image in DXVK's next command list, so DXVK moves the copy
 		// into that list's init buffer, ahead of any timestamp a D3D11 timer here would write.
 		if (result == Streamline::EvaluationResult::kReady)

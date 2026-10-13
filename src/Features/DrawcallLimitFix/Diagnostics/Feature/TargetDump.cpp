@@ -1,5 +1,6 @@
 // CS_DCLF_TARGET_DUMP: staging copies at the frame's target points, written as PNGs and statistics once readable. Render thread.
 #include "TargetDump.h"
+#include "Features/Upscaling.h"
 
 #include <DirectXPackedVector.h>
 #include <DirectXTex.h>
@@ -319,6 +320,10 @@ namespace DCLF::TargetDump
 		Stage(TextureOf(depthView), order + "-depth", frame);
 		if (depthView)
 			depthView->Release();
+		// Without an extra: the upscaler's output (what the previous frame's evaluate wrote), at every point.
+		if (!a_extra)
+			if (auto* upscaled = globals::features::upscaling.upscaledTexture; upscaled && upscaled->resource)
+				a_extra = upscaled->resource.get();
 		Stage(a_extra, order + "-extra", frame);
 		// The renderer's main colour, motion vectors and depth, bound or not (an epoch runs with the context's targets unbound).
 		if (auto* renderer = RE::BSGraphics::Renderer::GetSingleton()) {
@@ -379,6 +384,14 @@ namespace DCLF::TargetDump
 			// consecutive frames stays small.
 			const bool image = frame.count == wanted.front() || frame.copies[i].name.find("-present-rt0") != std::string::npos;
 			stats << Write(frame.copies[i], mapped[i], dir, image) << "\n";
+			// The extra target's raw texels (the upscaler's output), row by row, for a byte-level look at what overwrote it.
+			if (frame.copies[i].name.ends_with("-extra") && (frame.copies[i].name.find("before-upscale") != std::string::npos || frame.copies[i].name.find("after-evaluate") != std::string::npos)) {
+				std::ofstream raw(dir / (frame.copies[i].name + ".raw"), std::ios::binary);
+				const auto& c = frame.copies[i];
+				const std::size_t rowBytes = std::size_t(c.width) * (c.format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4);
+				for (std::uint32_t y = 0; y < c.height; ++y)
+					raw.write(static_cast<const char*>(mapped[i].pData) + std::size_t(y) * mapped[i].RowPitch, static_cast<std::streamsize>(rowBytes));
+			}
 			context->Unmap(frame.copies[i].staging.get(), 0);
 		}
 		logger::info("[DCLF] target dump: Present {}, {} points, {} targets written to {}", frame.count, frame.points.size(), done, dir.string());

@@ -166,13 +166,18 @@ namespace DCLF::Draws
 	 * data of its own.
 	 */
 	inline void RecordBucketDraw(rhi::CommandList& a_commands, rhi::CommandSignatureHandle a_signature, rhi::ResourceHandle a_sequences, std::uint64_t a_sequencesAddress,
-		std::uint64_t a_first, rhi::PipelineHandle a_pipeline, rhi::ResourceHandle a_counts, std::uint32_t a_bucket, std::uint32_t a_capacity, bool a_offsetDepth = false)
+		std::uint64_t a_first, rhi::PipelineHandle a_pipeline, rhi::ResourceHandle a_counts, std::uint32_t a_bucket, std::uint32_t a_capacity, bool a_offsetDepth = false,
+		std::uint32_t a_passTag = 0, std::uint64_t a_poolAddress = 0)
 	{
 		const std::uint64_t first = a_first * sizeof(DrawSequence);
 		std::uint32_t words[kDrawPushWords]{};
 		words[kZDrawPushSequences] = static_cast<std::uint32_t>(a_sequencesAddress + first);
 		words[kZDrawPushSequences + 1] = static_cast<std::uint32_t>((a_sequencesAddress + first) >> 32);
 		words[kZDrawPushOffsetDepth] = a_offsetDepth ? 1u : 0u;
+		// TEMP (the pulled stages' GPU fault): the pass, for the fetch guard's beacon (Lighting.hlsl, DCLF_FETCH_GUARD).
+		words[kZDrawPushPassTag] = a_passTag;
+		words[kZDrawPushPoolAddress] = static_cast<std::uint32_t>(a_poolAddress);
+		words[kZDrawPushPoolAddress + 1] = static_cast<std::uint32_t>(a_poolAddress >> 32);
 		a_commands.BindPipeline(a_pipeline);
 		a_commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);
 		a_commands.ExecuteIndirect(a_signature, a_sequences, first + kSequenceDrawOffset, a_counts, std::uint64_t(a_bucket) * sizeof(std::uint32_t), a_capacity);
