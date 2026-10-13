@@ -877,8 +877,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 originDirLightColor = dirLightColor;
 	dirLightColor *= dirLightColorMultiplier;
 
-	float softLightRolloff = saturate(input.VertexNormal.w * 10.0) * SharedData::grassLightingSettings.SubsurfaceScatteringAmount * 2.0;
-
 	float3 albedo = baseColor.xyz * vertexColor;
 	float3 transmissionTint = GrassLighting::GetTransmissionTint(albedo);
 
