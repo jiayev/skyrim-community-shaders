@@ -309,10 +309,9 @@ float3 GetDirLightColor(float3 positionWS)
 	return dirLightColor;
 }
 
-/** @brief Sum of the clustered point lights at positionWS, each shaded by ShadeLight. */
-float3 GetPointLighting(float3 positionWS, ParticleSurface surface)
+/** @brief Adds the clustered point lights at positionWS, each shaded by ShadeLight, to lighting in light order. */
+void AddPointLighting(float3 positionWS, ParticleSurface surface, inout float3 lighting)
 {
-	float3 lighting = 0.0;
 #	if defined(LIGHT_LIMIT_FIX)
 	float3 viewPosition = FrameBuffer::WorldToView(positionWS);
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition);
@@ -341,7 +340,6 @@ float3 GetPointLighting(float3 positionWS, ParticleSurface surface)
 		}
 	}
 #	endif
-	return lighting;
 }
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
@@ -398,7 +396,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		// The env cubemap only carries faint bounce light, so lights are shaded on the drop directly
 		ParticleSurface drop = { true, normalWS, V, refractDir };
-		float3 directLighting = ShadeLight(drop, GetDirLightColor(posWS.xyz), SharedData::DirLightDirection.xyz) + GetPointLighting(posWS.xyz, drop);
+		float3 directLighting = ShadeLight(drop, GetDirLightColor(posWS.xyz), SharedData::DirLightDirection.xyz);
+		AddPointLighting(posWS.xyz, drop, directLighting);
 
 		psout.Color.xyz = Color::IrradianceToGamma(lerp(refractColor, reflectColor, fresnel) + directLighting);
 		psout.Color.w = alpha;
@@ -440,7 +439,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	const ParticleSurface unlit = (ParticleSurface)0;
 	propertyColor += dirLightColor;
 	propertyColor += ambientColor;
-	propertyColor += GetPointLighting(positionWS.xyz, unlit);
+	AddPointLighting(positionWS.xyz, unlit, propertyColor);
 
 	psout.Color.xyz = propertyColor * baseColor.xyz;
 	psout.Color.w = baseColor.w;
