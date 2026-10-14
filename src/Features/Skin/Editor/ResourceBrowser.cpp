@@ -70,14 +70,23 @@ namespace SkinEditor
 		}
 	}
 
+	void OpenResourceBrowser(ResourceBrowser& a_state, const std::string& a_start)
+	{
+		a_state = {};
+		a_state.directory = StartDirectory(a_start);
+		ImGui::OpenPopup("##skin_resource_browser");
+	}
+
 	std::optional<std::string> ResourcePicker(ResourceBrowser& a_state, const char* a_label, const std::string& a_start, std::string_view a_suffix)
 	{
+		if (ImGui::Button(a_label))
+			OpenResourceBrowser(a_state, a_start);
+		return ResourceBrowserPopup(a_state, a_suffix);
+	}
+
+	std::optional<std::string> ResourceBrowserPopup(ResourceBrowser& a_state, std::string_view a_suffix)
+	{
 		std::optional<std::string> chosen;
-		if (ImGui::Button(a_label)) {
-			a_state = {};
-			a_state.directory = StartDirectory(a_start);
-			ImGui::OpenPopup("##skin_resource_browser");
-		}
 		if (!ImGui::BeginPopup("##skin_resource_browser"))
 			return chosen;
 		if (!a_state.listed)

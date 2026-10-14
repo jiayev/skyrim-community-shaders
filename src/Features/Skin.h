@@ -40,6 +40,9 @@ struct Skin : Feature
 	void DataLoaded() override;
 	void GameReset() override;
 	void DrawMaterialEditor();
+	/// Page header subtitle and right-aligned page actions, drawn by the CS Editor beside the page title.
+	std::string GetEditorSubtitle();
+	void DrawEditorPageActions();
 	void SetShaderResources(ID3D11DeviceContext* a_context);
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
 	void RestoreSampler();
@@ -78,6 +81,20 @@ struct Skin : Feature
 	static_assert(sizeof(PerGeometryData) == 144);
 	SkinData GetCommonBufferData();
 
+	enum class Layer
+	{
+		Material,          ///< The texture material file shared by everyone showing the texture.
+		CharacterAll,      ///< Scalars applied to every skin surface of one character.
+		CharacterMaterial  ///< Changes applied to one character while it shows one texture.
+	};
+	/// Where the value a control shows comes from, relative to the layer being edited.
+	struct Provenance
+	{
+		bool own = false;                    ///< This layer sets it.
+		std::optional<Layer> overriddenBy;   ///< A higher layer of the selected character sets it too.
+		std::optional<Layer> inheritedFrom;  ///< Lower layer supplying it; empty for the common settings.
+	};
+
 private:
 	struct TextureEntry
 	{
@@ -110,20 +127,8 @@ private:
 		float4 wetness{ 0, 0, 0, 0 };
 		uint32_t frameCount = 0;
 	};
-	enum class Layer
-	{
-		Material,          ///< The texture material file shared by everyone showing the texture.
-		CharacterAll,      ///< Scalars applied to every skin surface of one character.
-		CharacterMaterial  ///< Changes applied to one character while it shows one texture.
-	};
 	struct Editor
 	{
-		enum class Workspace
-		{
-			Material,
-			Character,
-			Textures
-		};
 		struct Surface
 		{
 			RE::NiPointer<RE::BSGeometry> geometry;
@@ -136,34 +141,41 @@ private:
 			SkinCharacters::Customization character;
 			bool operator==(const Draft&) const = default;
 		};
-		Workspace workspace = Workspace::Material;
-		Workspace returnWorkspace = Workspace::Material;
-		int materialSection = 0;
+		enum class Source
+		{
+			None,
+			Player,
+			Console
+		};
+		Layer layer = Layer::Material;
+		int section = 0;
+		Source source = Source::None;
 		RE::ActorHandle actor;
 		std::string actorName;
 		std::vector<Surface> surfaces;
 		uint32_t lastRefresh = 0;
-		std::string key;
+		std::array<char, 128> filter{};
+		std::string key;  ///< Selected skin texture; the material draft always belongs to it.
 		std::string draftKey;
 		SkinMaterials::Changes material, materialBaseline;
 		std::string fingerprintWarning;
 		bool recordFingerprint = true;
 		SkinCharacters::Target draftTarget;
 		SkinCharacters::Customization character, characterBaseline;
-		bool characterAll = false;
 		std::vector<Draft> undo, redo;
 		SkinEditor::TextureTools tools;
 		SkinEditor::ResourceBrowser browser;
 		std::string toolsOutput;  ///< Resource path the texture tools write to.
+		bool toolsWindow = false;
 		SkinTextures::Resource thumbnail;
 		std::string thumbnailKey;
 		std::string generatedDDS;
 		bool generatedDetail = false;
-		std::string message;
-		std::string error;
 		bool open = false;
 		bool discardConfirmed = false;
 		std::function<void()> pendingAction;
+		bool clearRequested = false;
+		bool showProblems = false;
 		bool editGesture = false;
 		float previewWetness = -1.0f;
 		int channel = 0;
@@ -199,26 +211,42 @@ private:
 	bool EditorDirty() const;
 	bool MaterialDirty() const;
 	bool CharacterDirty() const;
+	bool LayerDirty(Layer a_layer) const;
+	bool LayerAvailable(Layer a_layer) const;
+	const char* LayerLabel(Layer a_layer) const;
+	void Notify(const std::string& a_message, bool a_error = false) const;
 	void ChangeEditor(bool a_discards, std::function<void()> a_action);
-	void SelectActor(RE::Actor* a_actor);
+	void SelectActor(RE::Actor* a_actor, Editor::Source a_source);
 	void RefreshSurfaces();
 	void SelectKey(const std::string& a_key);
 	void LoadMaterialDraft(const std::string& a_key);
 	void SaveMaterial(const std::filesystem::path& a_root);
 	std::filesystem::path OutputRoot() const;
 	void SaveCharacter();
+	void SaveLayer();
+	void RevertLayer();
+	void ClearLayer();
 	void ReloadResources();
 	void PushUndo(const Editor::Draft& a_before);
-	void DrawEditorHeader();
-	void DrawTargets();
-	void DrawSurfaces();
-	void DrawMaterialWorkspace();
-	void DrawCharacterWorkspace();
-	void DrawMaterialControls(Layer a_layer);
+	void Undo();
+	void Redo();
+	SkinMaterials::Changes* LayerChanges(Layer a_layer);
+	SkinMaterials::Material InheritedMaterial(Layer a_layer);
+	Provenance ParameterProvenance(size_t a_parameter, Layer a_layer) const;
+	Provenance TextureProvenance(size_t a_texture, Layer a_layer) const;
+	void DrawTargetBar();
+	void DrawProblems();
+	void DrawTextureList();
+	void DrawTexturePanel();
+	void DrawTextureHeader();
+	void DrawLayerStack();
+	void DrawLayerToolbar();
+	void DrawLayerNote();
+	void DrawMaterialControls();
+	void DrawParameters(SkinMaterials::Changes& a_changes, const SkinMaterials::Material& a_inherited);
+	void DrawTextureInputs(SkinMaterials::Changes& a_changes, const SkinMaterials::Material& a_inherited);
 	void DrawTextureChannels(const SkinMaterials::Material& a_material);
-	void DrawPreviewOptions();
 	void DrawTextureTools();
-	void DrawEditorHistory();
 	void DrawEditorDialogs();
 	void DrawGlobalSettings();
 	float GetWaterHeight(const RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_pos);

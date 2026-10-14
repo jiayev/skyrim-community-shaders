@@ -100,8 +100,6 @@ void Skin::DrawSettings()
 		settings.DetailTexture = *chosen;
 		changed = true;
 	}
-	if (!editor.error.empty())
-		ImGui::TextWrapped("%s", editor.error.c_str());
 	if (ImGui::Button(T("feature.skin.reload_skin_resources", "Reload skin resources")))
 		ReloadResources();
 	DrawGlobalSettings();

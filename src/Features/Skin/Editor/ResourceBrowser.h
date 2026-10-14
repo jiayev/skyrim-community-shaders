@@ -18,4 +18,8 @@ namespace SkinEditor
 	/// `a_suffix` is the lower-case file name ending to list, such as ".dds". Returns the chosen resource path.
 	/// Only loose files are listed; archived resources can still be entered as text by the caller.
 	std::optional<std::string> ResourcePicker(ResourceBrowser& a_state, const char* a_label, const std::string& a_start, std::string_view a_suffix);
+	/// The same browser for a caller that draws its own button: open it, then draw the popup every frame in
+	/// the same ID scope.
+	void OpenResourceBrowser(ResourceBrowser& a_state, const std::string& a_start);
+	std::optional<std::string> ResourceBrowserPopup(ResourceBrowser& a_state, std::string_view a_suffix);
 }

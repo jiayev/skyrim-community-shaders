@@ -79,10 +79,19 @@
 #define ICON_FA_GLOBE_EUROPE "\xef\x9e\xa2"	// U+f7a2
 #define ICON_FA_HARD_HAT "\xef\xa0\x87"	// U+f807
 #define ICON_FA_BORDER_ALL "\xef\xa1\x8c"	// U+f84c
+#define ICON_FA_USER "\xef\x80\x87"	// U+f007
+#define ICON_FA_REDO "\xef\x80\x9e"	// U+f01e
+#define ICON_FA_TINT "\xef\x81\x83"	// U+f043
+#define ICON_FA_CROSSHAIRS "\xef\x81\x9b"	// U+f05b
+#define ICON_FA_EXCLAMATION_TRIANGLE "\xef\x81\xb1"	// U+f071
+#define ICON_FA_HISTORY "\xef\x87\x9a"	// U+f1da
+#define ICON_FA_TSHIRT "\xef\x95\x93"	// U+f553
+#define ICON_FA_TOOLS "\xef\x9f\x99"	// U+f7d9
 
 // Inclusive [min,max] pairs for ImFontAtlas::AddFontFromFileTTF glyphRanges (0-terminated).
 inline constexpr unsigned short ICON_FA_GLYPH_RANGES[] = {
 	0xe065, 0xe065,
+	0xf007, 0xf007,
 	0xf00c, 0xf00c,
 	0xf00d, 0xf00d,
 	0xf015, 0xf015,
@@ -92,11 +101,14 @@ inline constexpr unsigned short ICON_FA_GLYPH_RANGES[] = {
 	0xf023, 0xf023,
 	0xf024, 0xf024,
 	0xf02b, 0xf02b,
+	0xf043, 0xf043,
 	0xf04b, 0xf04c,
+	0xf05b, 0xf05b,
 	0xf060, 0xf060,
 	0xf067, 0xf067,
 	0xf06c, 0xf06c,
 	0xf06e, 0xf06e,
+	0xf071, 0xf071,
 	0xf07c, 0xf07c,
 	0xf09c, 0xf09c,
 	0xf0c0, 0xf0c0,
@@ -115,6 +127,7 @@ inline constexpr unsigned short ICON_FA_GLYPH_RANGES[] = {
 	0xf19c, 0xf19c,
 	0xf1b0, 0xf1b0,
 	0xf1bb, 0xf1bb,
+	0xf1da, 0xf1da,
 	0xf1fc, 0xf1fc,
 	0xf236, 0xf236,
 	0xf279, 0xf279,
@@ -132,6 +145,7 @@ inline constexpr unsigned short ICON_FA_GLYPH_RANGES[] = {
 	0xf544, 0xf544,
 	0xf54c, 0xf54c,
 	0xf54e, 0xf54e,
+	0xf553, 0xf553,
 	0xf554, 0xf554,
 	0xf56e, 0xf56e,
 	0xf594, 0xf594,
@@ -148,6 +162,7 @@ inline constexpr unsigned short ICON_FA_GLYPH_RANGES[] = {
 	0xf75f, 0xf75f,
 	0xf787, 0xf787,
 	0xf7a2, 0xf7a2,
+	0xf7d9, 0xf7d9,
 	0xf807, 0xf807,
 	0xf84c, 0xf84c,
 	0
