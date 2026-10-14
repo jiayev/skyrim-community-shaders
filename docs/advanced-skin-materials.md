@@ -165,11 +165,17 @@ Limits: 1 MiB per file, 256 texture entries per character.
 
 **CS Editor → Skin Editor** has three workspaces.
 
--   **Skin texture materials** — choose Player or the console selection. The table lists every skin texture the character shows, whether it has a material file and where that file comes from, and which parts show it, including the outfit a shape belongs to and first-person shapes. Selecting a texture opens its material. Saving writes the material file under the game's Data folder or a chosen mod folder; the choice is kept with the feature's settings.
--   **This character** — the same target and table, with a choice between **Only this skin texture** and **All skin of this character**. **Save character file** writes the character's file; with no adjustments left, it removes the file. Also: entries for textures not currently shown, loading another character's file into the draft, and saving a copy for sharing.
--   **Texture tools** — channel packing for controls and detail textures.
+The page follows the Scene Manager's layout:
 
-While the editor is open, a texture material draft previews on everything that shows the texture, on any character, and a character draft previews on that character. That is exactly what saving will affect. Both drafts are retained while switching workspaces; choosing another texture or character asks before discarding unsaved edits. Undo and redo cover both drafts.
+-   **Character bar**: **Player** and **Console selection** chips, the character's name and its record. The page header holds the texture tools and **Reload skin resources**.
+-   **Texture column**: every skin texture the character shows, grouped by head, body, hands, feet and other, with where each appears, including outfits and first person. A dot gives the material file's state; markers flag this character's adjustments and unsaved edits. Textures with stored character adjustments that are not shown now are listed separately. The column filters and resizes.
+-   **Texture panel**: the texture's name, path, material file badge and warnings; a breadcrumb **Common › Texture material › Whole character › Character on this texture** whose highlighted chip is the layer being edited, with a toolbar (undo, redo, save, revert, copy and share, clear layer, wetness preview); the destination of a save; and the values by category.
+-   **Rows**: each value leads with a gutter box, ticked when the edited layer sets the value. It is green when that value is the one shown, and amber when a higher layer of the selected character sets it too. Editing a value sets it on the layer; untick, or right-click and choose **Inherit again**, to inherit. The tooltip names the layer the value comes from.
+-   **Texture tools**: a separate window for channel packing, whose result can be assigned to the layer being edited.
+
+Saving the texture material writes its file. Saving either character layer writes the character's file; with no adjustments left, it removes the file. Errors and confirmations appear as editor notifications.
+
+While the editor is open, a texture material draft previews on everything that shows the texture, on any character, and a character draft previews on that character. That is exactly what saving will affect. Both drafts are retained while switching layers; choosing another texture or character asks before discarding unsaved edits. Undo and redo cover both drafts.
 
 ### Paths in a mod manager
 

@@ -27,18 +27,20 @@ You do not edit meshes, you do not need an ESP, and you do not need to know whic
 
 ## Make a material in the game
 
-1. Open **CS Editor → Skin Editor → Skin texture materials**.
-2. Choose **Player**, or select an NPC in the console and choose **Console selection**.
-3. The table lists every skin texture this character is showing, where each one appears (head, body, hands, feet, an outfit's name, first person), and whether it already has a material file. Select the texture you want to work on.
-4. Adjust the material. Tick **Override** beside a value to store it in this material; unticked values keep following the common settings, so a material only needs the things that make this skin different. The categories are **Textures**, **Dual specular lobes**, **Fuzz and edges**, **Transmission and SSS**, **Detail normals** and **Wet response**.
-5. Watch the result. While the editor is open, your draft is shown on **everything that uses this texture**, on every loaded character, exactly as it will look after saving. Use **Test a specific wetness level** to check the wet look.
-6. Choose **Save material file**. It is written beside the texture under the game's Data folder (with Mod Organizer this lands in Overwrite). To write straight into your mod instead, choose **Write into a mod folder...** once and pick your mod's folder; it is remembered with the feature's settings and also receives textures built by the texture tools.
+Open **CS Editor → Skin Editor**. The page works like the Scene Manager: a list on the left, the thing you are editing on the right, and a breadcrumb that says which layer your edits go to.
 
-Texture inputs are picked with **Choose DDS**, which browses the Data folder as the game sees it — with Mod Organizer, the merged view of all your mods — and stores a game path such as `textures/myskin/body_rfaos.dds`. You never deal with where a file physically lives, and the material keeps working when the texture is later packed into a BSA. Textures inside a BSA are not listed; type their path under **Resource path** instead.
+1. Choose **Player**, or click an NPC in the console and choose **Console selection**.
+2. The left column lists every skin texture the character shows, grouped by head, body, hands and feet. Under each name it says where the texture appears, including outfits and first person. The dot in front describes its material: green, it has a material file; blue, saved this session; red, the file has a mistake and is ignored; hollow, common settings only. Select a texture.
+3. The breadcrumb above the controls reads **Common › Texture material › Whole character › Character on this texture**. **Texture material** is highlighted: you are editing the material shared by everyone who shows this texture.
+4. Pick a category (**Textures**, **Dual specular lobes**, **Fuzz and edges**, **Transmission and SSS**, **Detail normals**, **Wet response**) and change values. Changing a value sets it on this layer, and the box in front of it ticks and turns green. Untick it, or right-click and choose **Inherit again**, to go back to the common settings. Hover a name to see where its value comes from.
+5. Watch the result. While the editor is open, your draft is shown on **everything that uses this texture**, on every loaded character, exactly as it will look after saving. The droplet button tests a fixed wetness level.
+6. Save with the disk button or **Ctrl+S**. The line under the breadcrumb shows where the file goes: beside the texture under the game's Data folder (with Mod Organizer, in Overwrite). **Change folder** writes into your own mod instead; it is remembered, and the texture tools write there too.
 
-A skin set usually has several textures: head, body, hands and often feet, and separate ones for each sex and for beast races. Each needs its own material file. To give them the same numeric values, save one, select the next texture, and choose **Copy values from another material file...**. Painted maps are not copied, because they only fit the texture they were painted for.
+The toolbar beside the breadcrumb also has **Undo** and **Redo**, **Revert** to the saved file, **Copy and share**, and **Clear layer**. A dot after a layer in the breadcrumb, or on a texture in the list, means unsaved changes. Selecting another texture with unsaved changes asks first.
 
-**Undo**, **Redo** and **Discard draft** are at the bottom. Selecting another texture with unsaved changes asks first.
+Each texture input row has a folder button that browses the Data folder as the game sees it (with Mod Organizer, the merged view of all your mods) and stores a game path such as `textures/myskin/body_rfaos.dds`. You never deal with where a file physically lives, and the material keeps working when the texture is later packed into a BSA. Textures inside a BSA are not listed; type their path into the field and press Enter.
+
+A skin set usually has several textures: head, body, hands and often feet, and separate ones for each sex and for beast races. Each needs its own material file. To give them the same numeric values, save one, select the next texture, and use **Copy and share → Copy values from another material file...**. Painted maps are not copied, because they only fit the texture they were painted for.
 
 ## Write a material by hand
 
@@ -92,25 +94,25 @@ Formats: RGBA8 or BC7 for anything with a painted alpha. BC5 UNORM works for a d
 
 ### Pack channels without external tools
 
-Open the **Texture tools** workspace. For controls, choose equal-sized grayscale images for R, G, B and A; unselected channels use the displayed constants. For detail, enable **Detail normal + region mask** and choose the normal and the mask. Source images can come from anywhere on disk. Under **Output**, give the game path of the result; the editor suggests one beside the skin texture you are editing. **Build and save DDS** writes linear data with mipmaps, optionally as BC7, into the output mod folder. **Use this texture in the current material** assigns the result to the draft you were editing. Inputs can be DDS, PNG, TGA, TIFF or BMP up to 8192 × 8192 and must have equal dimensions.
+Open the **Texture tools** window with the tools button in the page header, or the tools button on a texture row. Choose **Skin controls** or **Detail normal + mask**. For controls, choose equal-sized grayscale images for R, G, B and A; unselected channels use the displayed constants. Source images can come from anywhere on disk. Under **Output**, give the game path of the result; one beside the skin texture you are editing is suggested. **Build and save DDS** writes linear data with mipmaps, optionally as BC7, into the output mod folder. **Use in ...** assigns the result to the layer you are editing. Inputs can be DDS, PNG, TGA, TIFF or BMP up to 8192 × 8192 and must have equal dimensions.
 
 ## Adjust one character
 
-Use this for a player or follower who should look a little different from everyone else with the same skin — oilier, less fuzz, a personal detail mask.
+Use this for a player or follower who should look a little different from everyone else with the same skin: oilier, less fuzz, a personal detail mask.
 
-1. Open **Skin Editor → This character** and choose **Player** or **Console selection**.
-2. Choose the scope:
-    - **All skin of this character** — numeric values only, applied to head, body, hands and feet alike.
-    - **Only this skin texture** — values and textures for the texture selected in the table.
-3. Adjust, then choose **Save character file**.
+1. Choose **Player** or **Console selection**, and select a texture.
+2. In the breadcrumb, click the layer to edit:
+    - **Whole character**: numeric values only, applied to head, body, hands and feet alike.
+    - **Character on this texture**: values and textures for the selected texture only. These win over everything else.
+3. Adjust, then save. Both character layers are saved together in the character's file.
 
-The adjustments are saved as a small JSON file for that character in `Data/SKSE/Plugins/CommunityShaders/AdvancedSkin/Characters`. It applies in every save, to every actor using that NPC record, and you can edit it by hand, share it, or ship it with a follower mod. The [file format](advanced-skin-materials.md#character-files) is described in the technical reference. After editing it outside the game, choose **Reload skin resources**.
+The adjustments are saved as a small JSON file for that character in `Data/SKSE/Plugins/CommunityShaders/AdvancedSkin/Characters`. It applies in every save, to every actor using that NPC record, and you can edit it by hand, share it, or ship it with a follower mod. The [file format](advanced-skin-materials.md#character-files) is described in the technical reference. After editing it outside the game, use the reload button in the page header.
 
-The player file applies to whichever character you are playing. To keep several looks, save copies and swap them in, or load one into the draft with **Load from another character file...**.
+The player file applies to whichever character you are playing. To keep several looks, save copies and swap them in, or use **Copy and share → Load from another character file...**.
 
-If the character stops showing a texture — for example the player changes race — the adjustments for that texture are kept under **Adjustments for textures not currently shown**. They return if the texture returns. From there you can remove them, or copy their numeric values to the texture selected now.
+If the character stops showing a texture, for example after a race change, its adjustments stay in the list under **Adjusted, not shown now** and return if the texture returns. Select one to edit or clear it.
 
-Under **Files and sharing**, **Load from another character file...** copies another character's adjustments into this draft, and **Save a copy...** writes one for sharing. Texture-specific entries take effect wherever the same texture is shown.
+**Copy and share** also has **Save a copy...** for sharing and **Open folder**. Texture-specific entries take effect wherever the same texture is shown. If a character file has a mistake, a banner at the top of the page says so; click it for the reason.
 
 ## Package and check
 

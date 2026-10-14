@@ -484,6 +484,9 @@ void EditorWindow::DrawBrowserPage()
 	}
 
 	if (id == "Skin Editor") {
+		auto& skin = globals::features::skin;
+		BrowserUI::PageHeader(category->icon, category->label, skin.GetEditorSubtitle().c_str());
+		skin.DrawEditorPageActions();
 		BeginScrollableContent("##SkinEditorScroll");
 		globals::features::skin.DrawMaterialEditor();
 		EndScrollableContent();
