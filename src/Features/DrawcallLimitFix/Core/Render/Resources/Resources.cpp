@@ -2,6 +2,7 @@
 // SetupShadow, SetupView), each versioned buffer registered with the scene's set (its extent, growth policy and contents), the
 // scene's draw bound and the main latch the revision code keeps.
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
+#include "Features/LightLimitFix/ORGLightCulling.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/TerrainBlending.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
@@ -166,6 +167,117 @@ namespace DCLF::Draws
 			}
 		}
 
+		/** @brief The pipeline statistics query pool and its per-slot readbacks (PassStats::Enabled); none without the pool. */
+		void CreatePassStats(Resources& a_state, org::PersistentGraphHost& a_host, rhi::Device a_device)
+		{
+			auto passStats = std::make_shared<PassStats>();
+			const std::uint32_t slots = a_host.FrameSlots();
+			rhi::QueryPoolDesc desc{};
+			desc.type = rhi::QueryType::PipelineStatistics;
+			desc.count = slots * PassStats::kKinds;
+			desc.statsMask = rhi::PipelineStatBits::PS_IAVertices | rhi::PipelineStatBits::PS_IAPrimitives | rhi::PipelineStatBits::PS_VSInvocations |
+			                 rhi::PipelineStatBits::PS_PSInvocations;
+			desc.requireAllStats = true;
+			if (a_device.CreateQueryPool(desc, passStats->pool) != rhi::Result::Ok || !passStats->pool) {
+				logger::warn("[DCLF] pass statistics: no pipeline statistics query pool");
+			} else {
+				for (std::uint32_t i = 0; i < slots; ++i)
+					passStats->readback.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, std::uint64_t(PassStats::kKinds) * PassStats::kFields * sizeof(std::uint64_t)));
+				passStats->written.resize(slots);
+				a_state.passStats = std::move(passStats);
+				logger::info("[DCLF] pass statistics on: {} frame slots", slots);
+			}
+		}
+
+		/** @brief The foliage pixel record at the target's size (Policy::RecordFoliagePixels). */
+		void CreateFoliageRecord(Resources& a_state, org::PersistentGraphHost& a_host, rhi::Device a_device, const D3D11_TEXTURE2D_DESC& a_target)
+		{
+			auto foliage = std::make_shared<Resources::FoliageRecord>();
+			foliage->width = a_target.Width;
+			foliage->height = a_target.Height;
+			const std::uint64_t pixels = std::uint64_t(a_target.Width) * a_target.Height;
+			for (std::uint32_t h = 0; h < 2; ++h) {
+				foliage->ids[h] = CreateWords(pixels, true, fmt::format("cs.dclf.foliage-ids{}", h).c_str());
+				foliage->colours[h] = CreateWords(pixels * kFoliageColourWords, true, fmt::format("cs.dclf.foliage-colours{}", h).c_str());
+				foliage->idsAddress[h] = AddressOf(a_device, *foliage->ids[h]);
+				foliage->coloursAddress[h] = AddressOf(a_device, *foliage->colours[h]);
+			}
+			foliage->results = CreateWords(kFoliageResultWords, true, "cs.dclf.foliage-results");
+			foliage->owners = CreateWords(pixels * 2, true, "cs.dclf.foliage-owners");
+			foliage->ownersIndex = foliage->owners->GetUAVShaderVisibleInfo(0).slot.index;
+			foliage->resultsAddress = AddressOf(a_device, *foliage->results);
+			// The record stands only with the observers' compare pass.
+			bool ready = false;
+			Diagnostics::Notify(Diagnostics::FoliageRecordMade{ *foliage, a_device, a_host.FrameSlots(), ready });
+			if (ready)
+				a_state.foliage = std::move(foliage);
+		}
+
+		/**
+		 * @brief The engine's refraction normals (kREFRACTION_NORMALS): FUN_1414b4860 binds them as RT0 for group 5, ISRefraction samples
+		 * them (Src1Tex). Imported in the engine RTV's format; without them DCLF draws no refraction.
+		 */
+		void ImportRefractionNormals(Resources& a_state, rhi::Device a_device)
+		{
+			if (auto* renderer = globals::game::renderer) {
+				const auto& normals = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kREFRACTION_NORMALS];
+				DxvkOrgInteropResourceInfo normalsInfo{};
+				if (normals.texture && normals.RTV && RenderGraphRuntime::Get().DescribeResource(normals.texture, normalsInfo) && normalsInfo.kind == DXVK_ORG_INTEROP_RESOURCE_IMAGE) {
+					D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+					normals.RTV->GetDesc(&rtvDesc);
+					D3D11_TEXTURE2D_DESC textureDesc{};
+					normals.texture->GetDesc(&textureDesc);
+					org::TextureDescription normalsDesc{};
+					normalsDesc.imageDimensions.push_back({ textureDesc.Width, textureDesc.Height, 0, 0 });
+					normalsDesc.format = rhi::helpers::ToRHI(rtvDesc.Format);
+					normalsDesc.channels = 4;
+					normalsDesc.hasRTV = true;
+					normalsDesc.rtvFormat = normalsDesc.format;
+					a_state.refractionNormals = ImportImage(a_device, normalsInfo.image, normalsDesc, "DCLF refraction normals");
+					a_state.refractionFormat = a_state.refractionNormals ? rtvDesc.Format : DXGI_FORMAT_UNKNOWN;
+				}
+				if (!a_state.refractionNormals)
+					logger::warn("[DCLF] the refraction normals (kREFRACTION_NORMALS) could not be imported; DCLF draws no refraction");
+			}
+		}
+
+		/**
+		 * @brief The HZB: mip 0 is half the depth's next power of two, so a mip is chosen from a screen extent by log2 alone. Padded
+		 * texels are filled with the far plane, which suppresses culling rather than causing it.
+		 */
+		void CreateHzb(Resources& a_state, rhi::Device a_device)
+		{
+			auto nextPowerOfTwo = [](std::uint32_t a_value) {
+				std::uint32_t result = 1;
+				while (result < a_value)
+					result <<= 1;
+				return result;
+			};
+			a_state.hzbWidth = std::max(1u, nextPowerOfTwo(a_state.width) / 2);
+			a_state.hzbHeight = std::max(1u, nextPowerOfTwo(a_state.height) / 2);
+			a_state.hzbMips = 1;
+			for (std::uint32_t size = std::max(a_state.hzbWidth, a_state.hzbHeight); size > 1; size >>= 1)
+				++a_state.hzbMips;
+
+			org::TextureDescription hzbDesc{};
+			for (std::uint32_t mip = 0; mip < a_state.hzbMips; ++mip)
+				hzbDesc.imageDimensions.push_back({ std::max(1u, a_state.hzbWidth >> mip), std::max(1u, a_state.hzbHeight >> mip), 0, 0 });
+			hzbDesc.format = rhi::Format::R32_Float;
+			hzbDesc.channels = 1;
+			hzbDesc.hasUAV = true;
+			hzbDesc.uavFormat = hzbDesc.format;
+			hzbDesc.hasSRV = true;
+			hzbDesc.srvFormat = hzbDesc.format;
+			a_state.hzb = org::PixelBuffer::CreateSharedUnmaterialized(hzbDesc);
+			a_state.hzb->SetName("cs.dclf.hzb");
+			a_state.hzbCounter = CreateWords(1, true, "cs.dclf.hzb-counter");
+
+			a_state.hzbProgram = ComputeProgram::Load(a_device, { .source = kHzbShader, .constantWords = kHzbConstantWords });
+			if (!a_state.hzbProgram) {
+				logger::warn("[DCLF] The HZB compute program could not be created; occlusion culling stays off");
+				a_state.hzb.reset();
+			}
+		}
 	}
 }
 
@@ -201,193 +313,19 @@ namespace DCLF
 			return false;
 		}
 		state->scene = scene;
-		// The sequence ranges (SequenceSlots) at the first layout's sizes, required to every draw the scene can produce (RequireMain);
-		// sized to the layout exactly (its ranges grow by doubling).
-		const bool smallTables = SwitchValue(Switch::TableStart) == "small";
-		const MainLayout firstLayout = InitialMainLayout();
-		state->sequences = MakeVersioned(CreateWords(SequenceSlots(firstLayout.sequenceDraws, firstLayout.sequenceDecals) * sizeof(DrawSequence) / 4, true, "cs.dclf.sequences"),
-			{ .extent = { 0, sizeof(DrawSequence), 4 }, .policy = org::services::GrowthPolicy::Headroom(0) });
-		state->count = CreateWords(kCountWords, true, "cs.dclf.draw-count");
-		// One word per object: the depth segment's culling verdict, so the colour segment draws exactly the same set. The per-object
-		// buffers start at the scene's objects (and grow with them: RequireSceneTables).
-		const std::uint32_t objects = InitialObjectUnits();
-		state->visibility = MakeVersioned(CreateWords(objects, true, "cs.dclf.visibility"), { .extent = { 0, 4, 4 } });
-		state->frustum = MakeVersioned(CreateWords(objects, true, "cs.dclf.frustum"), { .extent = { 0, 4, 4 } });
-		if (PassStats::Enabled()) {
-			auto passStats = std::make_shared<PassStats>();
-			const std::uint32_t slots = host->FrameSlots();
-			rhi::QueryPoolDesc desc{};
-			desc.type = rhi::QueryType::PipelineStatistics;
-			desc.count = slots * PassStats::kKinds;
-			desc.statsMask = rhi::PipelineStatBits::PS_IAVertices | rhi::PipelineStatBits::PS_IAPrimitives | rhi::PipelineStatBits::PS_VSInvocations |
-			                 rhi::PipelineStatBits::PS_PSInvocations;
-			desc.requireAllStats = true;
-			if (device.CreateQueryPool(desc, passStats->pool) != rhi::Result::Ok || !passStats->pool) {
-				logger::warn("[DCLF] pass statistics: no pipeline statistics query pool");
-			} else {
-				for (std::uint32_t i = 0; i < slots; ++i)
-					passStats->readback.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, std::uint64_t(PassStats::kKinds) * PassStats::kFields * sizeof(std::uint64_t)));
-				passStats->written.resize(slots);
-				state->passStats = std::move(passStats);
-				logger::info("[DCLF] pass statistics on: {} frame slots", slots);
-			}
-		}
-		state->preprocessMain = PreprocessStates::Create(device, host->FrameSlots(), "the main segment");
-		// The forward epoch records in its own epoch, so it needs its own state list.
-		state->preprocessForward = PreprocessStates::Create(device, host->FrameSlots(), "the forward epoch");
-		state->buildDraws = ComputeProgram::Load(device, { .source = kBuildDrawsShader, .constantWords = kBuildDrawsConstantWords });
-		if (!state->buildDraws)
-			return NotReady(7, "the BuildDraws program could not be created");
-		// Without the forward sort the forward epoch draws nothing.
-		state->forwardSort = ComputeProgram::Load(device, { .source = kForwardSortShader, .constantWords = kForwardSortConstantWords });
-		if (!state->forwardSort)
-			logger::warn("[DCLF] the forward sort program could not be created: the forward epoch draws nothing");
-		state->dispatchSignature = CreateDispatchSignature(device, state->buildDraws->layout->GetHandle());
-		if (!state->dispatchSignature)
-			return NotReady(7, "the BuildDraws dispatch signature could not be created");
-		// The latch is the revision producer's. Sorting by pipeline: BuildDraws appends in thread order, so unsorted nearly every
-		// sequence would switch pipeline.
-		state->sort = DrawSort::Create(device, firstLayout.sequenceDraws);
-		// The Z-prepass's bucket count words (required to the layout's buckets) and the scene's index pool.
-		const GrowableSpec bucketWords{ .extent = { 0, 4, 4 }, .policy = org::services::GrowthPolicy::Doubling(64) };
-		state->zBucketCounts[0] = MakeVersioned(CreateWords(64, true, "cs.dclf.z.bucket-counts"), bucketWords);
-		state->zBucketCounts[1] = MakeVersioned(CreateWords(64, true, "cs.dclf.z.bucket-counts2"), bucketWords);
-		state->pool = EnsureIndexPool(*scene, device, smallTables);
-		if (!state->pool)
-			return NotReady(7, "the index pool's copy program could not be created");
-		// The draw-count buffer is read back for the culling counters, parity or not; the view covers every word (a short view
-		// would read zeros that look clean).
-		state->countD3D11 = WrapWords(*state->count, kCountWords * sizeof(std::uint32_t));
-		state->frameConstants = DeviceBuffer(kFrameConstantBytes, "cs.dclf.frame-constants");
-		state->frameConstantsAddress = AddressOf(device, *state->frameConstants);
-
-		if (!state->frameConstantsAddress) {
-			logger::error("[DCLF] Draw data buffers have no device address");
+		if (!CreateMainBuffers(*state, *host, device))
 			return false;
-		}
 
 		state->width = target.Width;
 		state->height = target.Height;
-		if (Policy::RecordFoliagePixels()) {
-			auto foliage = std::make_shared<Resources::FoliageRecord>();
-			foliage->width = target.Width;
-			foliage->height = target.Height;
-			const std::uint64_t pixels = std::uint64_t(target.Width) * target.Height;
-			for (std::uint32_t h = 0; h < 2; ++h) {
-				foliage->ids[h] = CreateWords(pixels, true, fmt::format("cs.dclf.foliage-ids{}", h).c_str());
-				foliage->colours[h] = CreateWords(pixels * kFoliageColourWords, true, fmt::format("cs.dclf.foliage-colours{}", h).c_str());
-				foliage->idsAddress[h] = AddressOf(device, *foliage->ids[h]);
-				foliage->coloursAddress[h] = AddressOf(device, *foliage->colours[h]);
-			}
-			foliage->results = CreateWords(kFoliageResultWords, true, "cs.dclf.foliage-results");
-			foliage->owners = CreateWords(pixels * 2, true, "cs.dclf.foliage-owners");
-			foliage->ownersIndex = foliage->owners->GetUAVShaderVisibleInfo(0).slot.index;
-			foliage->resultsAddress = AddressOf(device, *foliage->results);
-			// The record stands only with the observers' compare pass.
-			bool ready = false;
-			Diagnostics::Notify(Diagnostics::FoliageRecordMade{ *foliage, device, host->FrameSlots(), ready });
-			if (ready)
-				state->foliage = std::move(foliage);
-		}
+		if (Policy::RecordFoliagePixels())
+			CreateFoliageRecord(*state, *host, device, target);
 
-		// The main pass's targets and depth, imported.
-		state->targetCount = targets.colorCount;
-		for (std::uint32_t i = 0; i < targets.colorCount; ++i) {
-			DxvkOrgInteropResourceInfo info{};
-			if (!a_capture.targets[i] || !RenderGraphRuntime::Get().DescribeResource(a_capture.targets[i].get(), info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
-				return NotReady(5, "a main-pass target cannot be described");
-			org::TextureDescription desc{};
-			desc.format = rhi::helpers::ToRHI(targets.colors[i]);
-			desc.channels = 4;
-			desc.hasRTV = true;
-			desc.rtvFormat = desc.format;
-			state->native[i] = ImportImage(device, info.image, desc, "DCLF native target");
-			if (!state->native[i])
-				return NotReady(6, "a main-pass target could not be imported");
-		}
-		{
-			DxvkOrgInteropResourceInfo info{};
-			if (!a_capture.depth || !RenderGraphRuntime::Get().DescribeResource(a_capture.depth.get(), info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
-				return NotReady(10, "the main-pass depth cannot be described");
-			// Attachable and readable from one import: two imports would be unrelated resources to the graph, with no barrier
-			// between the depth draws and the HZB read (which would then reduce the cleared far plane).
-			org::TextureDescription depthDesc{};
-			depthDesc.imageDimensions.push_back({ target.Width, target.Height, 0, 0 });
-			depthDesc.format = rhi::helpers::ToRHI(targets.depth);
-			depthDesc.channels = 1;
-			depthDesc.hasDSV = true;
-			depthDesc.dsvFormat = depthDesc.format;
-			depthDesc.hasSRV = true;
-			depthDesc.srvFormat = DepthReadFormat(depthDesc.format);
-			state->nativeDepth = ImportImage(device, info.image, depthDesc, "DCLF native depth");
-			if (!state->nativeDepth)
-				return NotReady(11, "the main-pass depth could not be imported");
-			// Terrain Blending's terrain depth shares the main depth's description; the Z-prepass draws near terrain blocks into it
-			// as that feature's depth hook does.
-			if (const auto& terrainBlending = globals::features::terrainBlending; terrainBlending.loaded && terrainBlending.terrainDepth.texture) {
-				DxvkOrgInteropResourceInfo terrainInfo{};
-				if (!RenderGraphRuntime::Get().DescribeResource(terrainBlending.terrainDepth.texture, terrainInfo) || terrainInfo.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
-					return NotReady(12, "Terrain Blending's terrain depth cannot be described");
-				state->terrainDepth = ImportImage(device, terrainInfo.image, depthDesc, "DCLF terrain blending depth");
-				if (!state->terrainDepth)
-					return NotReady(12, "Terrain Blending's terrain depth could not be imported");
-			}
-		}
-		// The engine's refraction normals (kREFRACTION_NORMALS): FUN_1414b4860 binds them as RT0 for group 5, ISRefraction samples
-		// them (Src1Tex). Imported in the engine RTV's format; without them DCLF draws no refraction.
-		if (auto* renderer = globals::game::renderer) {
-			const auto& normals = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kREFRACTION_NORMALS];
-			DxvkOrgInteropResourceInfo normalsInfo{};
-			if (normals.texture && normals.RTV && RenderGraphRuntime::Get().DescribeResource(normals.texture, normalsInfo) && normalsInfo.kind == DXVK_ORG_INTEROP_RESOURCE_IMAGE) {
-				D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
-				normals.RTV->GetDesc(&rtvDesc);
-				D3D11_TEXTURE2D_DESC textureDesc{};
-				normals.texture->GetDesc(&textureDesc);
-				org::TextureDescription normalsDesc{};
-				normalsDesc.imageDimensions.push_back({ textureDesc.Width, textureDesc.Height, 0, 0 });
-				normalsDesc.format = rhi::helpers::ToRHI(rtvDesc.Format);
-				normalsDesc.channels = 4;
-				normalsDesc.hasRTV = true;
-				normalsDesc.rtvFormat = normalsDesc.format;
-				state->refractionNormals = ImportImage(device, normalsInfo.image, normalsDesc, "DCLF refraction normals");
-				state->refractionFormat = state->refractionNormals ? rtvDesc.Format : DXGI_FORMAT_UNKNOWN;
-			}
-			if (!state->refractionNormals)
-				logger::warn("[DCLF] the refraction normals (kREFRACTION_NORMALS) could not be imported; DCLF draws no refraction");
-		}
+		if (!ImportMainTargets(*state, a_capture, device, target, targets))
+			return false;
+		ImportRefractionNormals(*state, device);
 
-		// The HZB: mip 0 is half the depth's next power of two, so a mip is chosen from a screen extent by log2 alone. Padded
-		// texels are filled with the far plane, which suppresses culling rather than causing it.
-		auto nextPowerOfTwo = [](std::uint32_t a_value) {
-			std::uint32_t result = 1;
-			while (result < a_value)
-				result <<= 1;
-			return result;
-		};
-		state->hzbWidth = std::max(1u, nextPowerOfTwo(state->width) / 2);
-		state->hzbHeight = std::max(1u, nextPowerOfTwo(state->height) / 2);
-		state->hzbMips = 1;
-		for (std::uint32_t size = std::max(state->hzbWidth, state->hzbHeight); size > 1; size >>= 1)
-			++state->hzbMips;
-
-		org::TextureDescription hzbDesc{};
-		for (std::uint32_t mip = 0; mip < state->hzbMips; ++mip)
-			hzbDesc.imageDimensions.push_back({ std::max(1u, state->hzbWidth >> mip), std::max(1u, state->hzbHeight >> mip), 0, 0 });
-		hzbDesc.format = rhi::Format::R32_Float;
-		hzbDesc.channels = 1;
-		hzbDesc.hasUAV = true;
-		hzbDesc.uavFormat = hzbDesc.format;
-		hzbDesc.hasSRV = true;
-		hzbDesc.srvFormat = hzbDesc.format;
-		state->hzb = org::PixelBuffer::CreateSharedUnmaterialized(hzbDesc);
-		state->hzb->SetName("cs.dclf.hzb");
-		state->hzbCounter = CreateWords(1, true, "cs.dclf.hzb-counter");
-
-		state->hzbProgram = ComputeProgram::Load(device, { .source = kHzbShader, .constantWords = kHzbConstantWords });
-		if (!state->hzbProgram) {
-			logger::warn("[DCLF] The HZB compute program could not be created; occlusion culling stays off");
-			state->hzb.reset();
-		}
+		CreateHzb(*state, device);
 
 		state->lightLimitFix = lightLimitFix;
 		for (auto& frameBuffer : frameBuffers) {
@@ -411,6 +349,105 @@ namespace DCLF
 		// The graph is rebuilt with the new resources on its next epoch.
 		host->AddExtension(kExtensionId, [state] { return MakeMainOpaqueExtension(state); });
 		logger::info("[DCLF] Main-pass graph resources: {} targets {}x{}, depth format {}", targets.colorCount, width, height, static_cast<int>(targets.depth));
+		return true;
+	}
+
+	bool IndirectDraws::Impl::CreateMainBuffers(Resources& a_state, org::PersistentGraphHost& a_host, rhi::Device a_device)
+	{
+		// The sequence ranges (SequenceSlots) at the first layout's sizes, required to every draw the scene can produce (RequireMain);
+		// sized to the layout exactly (its ranges grow by doubling).
+		const bool smallTables = SwitchValue(Switch::TableStart) == "small";
+		const MainLayout firstLayout = InitialMainLayout();
+		a_state.sequences = MakeVersioned(CreateWords(SequenceSlots(firstLayout.sequenceDraws, firstLayout.sequenceDecals) * sizeof(DrawSequence) / 4, true, "cs.dclf.sequences"),
+			{ .extent = { 0, sizeof(DrawSequence), 4 }, .policy = org::services::GrowthPolicy::Headroom(0) });
+		a_state.count = CreateWords(kCountWords, true, "cs.dclf.draw-count");
+		// One word per object: the depth segment's culling verdict, so the colour segment draws exactly the same set. The per-object
+		// buffers start at the scene's objects (and grow with them: RequireSceneTables).
+		const std::uint32_t objects = InitialObjectUnits();
+		a_state.visibility = MakeVersioned(CreateWords(objects, true, "cs.dclf.visibility"), { .extent = { 0, 4, 4 } });
+		a_state.frustum = MakeVersioned(CreateWords(objects, true, "cs.dclf.frustum"), { .extent = { 0, 4, 4 } });
+		if (PassStats::Enabled())
+			CreatePassStats(a_state, a_host, a_device);
+		a_state.preprocessMain = PreprocessStates::Create(a_device, a_host.FrameSlots(), "the main segment");
+		// The forward epoch records in its own epoch, so it needs its own state list.
+		a_state.preprocessForward = PreprocessStates::Create(a_device, a_host.FrameSlots(), "the forward epoch");
+		a_state.buildDraws = ComputeProgram::Load(a_device, { .source = kBuildDrawsShader, .constantWords = kBuildDrawsConstantWords });
+		if (!a_state.buildDraws)
+			return NotReady(7, "the BuildDraws program could not be created");
+		// Without the forward sort the forward epoch draws nothing.
+		a_state.forwardSort = ComputeProgram::Load(a_device, { .source = kForwardSortShader, .constantWords = kForwardSortConstantWords });
+		if (!a_state.forwardSort)
+			logger::warn("[DCLF] the forward sort program could not be created: the forward epoch draws nothing");
+		a_state.dispatchSignature = CreateDispatchSignature(a_device, a_state.buildDraws->layout->GetHandle());
+		if (!a_state.dispatchSignature)
+			return NotReady(7, "the BuildDraws dispatch signature could not be created");
+		// The latch is the revision producer's. Sorting by pipeline: BuildDraws appends in thread order, so unsorted nearly every
+		// sequence would switch pipeline.
+		a_state.sort = DrawSort::Create(a_device, firstLayout.sequenceDraws);
+		// The Z-prepass's bucket count words (required to the layout's buckets) and the scene's index pool.
+		const GrowableSpec bucketWords{ .extent = { 0, 4, 4 }, .policy = org::services::GrowthPolicy::Doubling(64) };
+		a_state.zBucketCounts[0] = MakeVersioned(CreateWords(64, true, "cs.dclf.z.bucket-counts"), bucketWords);
+		a_state.zBucketCounts[1] = MakeVersioned(CreateWords(64, true, "cs.dclf.z.bucket-counts2"), bucketWords);
+		a_state.pool = EnsureIndexPool(*scene, a_device, smallTables);
+		if (!a_state.pool)
+			return NotReady(7, "the index pool's copy program could not be created");
+		// The draw-count buffer is read back for the culling counters, parity or not; the view covers every word (a short view
+		// would read zeros that look clean).
+		a_state.countD3D11 = WrapWords(*a_state.count, kCountWords * sizeof(std::uint32_t));
+		a_state.frameConstants = DeviceBuffer(kFrameConstantBytes, "cs.dclf.frame-constants");
+		a_state.frameConstantsAddress = AddressOf(a_device, *a_state.frameConstants);
+
+		if (!a_state.frameConstantsAddress) {
+			logger::error("[DCLF] Draw data buffers have no device address");
+			return false;
+		}
+		return true;
+	}
+
+	bool IndirectDraws::Impl::ImportMainTargets(Resources& a_state, const Capture& a_capture, rhi::Device a_device, const D3D11_TEXTURE2D_DESC& a_target,
+		const TargetFormats& a_targets)
+	{
+		// The main pass's targets and depth, imported.
+		a_state.targetCount = a_targets.colorCount;
+		for (std::uint32_t i = 0; i < a_targets.colorCount; ++i) {
+			DxvkOrgInteropResourceInfo info{};
+			if (!a_capture.targets[i] || !RenderGraphRuntime::Get().DescribeResource(a_capture.targets[i].get(), info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
+				return NotReady(5, "a main-pass target cannot be described");
+			org::TextureDescription desc{};
+			desc.format = rhi::helpers::ToRHI(a_targets.colors[i]);
+			desc.channels = 4;
+			desc.hasRTV = true;
+			desc.rtvFormat = desc.format;
+			a_state.native[i] = ImportImage(a_device, info.image, desc, "DCLF native target");
+			if (!a_state.native[i])
+				return NotReady(6, "a main-pass target could not be imported");
+		}
+		DxvkOrgInteropResourceInfo info{};
+		if (!a_capture.depth || !RenderGraphRuntime::Get().DescribeResource(a_capture.depth.get(), info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
+			return NotReady(10, "the main-pass depth cannot be described");
+		// Attachable and readable from one import: two imports would be unrelated resources to the graph, with no barrier
+		// between the depth draws and the HZB read (which would then reduce the cleared far plane).
+		org::TextureDescription depthDesc{};
+		depthDesc.imageDimensions.push_back({ a_target.Width, a_target.Height, 0, 0 });
+		depthDesc.format = rhi::helpers::ToRHI(a_targets.depth);
+		depthDesc.channels = 1;
+		depthDesc.hasDSV = true;
+		depthDesc.dsvFormat = depthDesc.format;
+		depthDesc.hasSRV = true;
+		depthDesc.srvFormat = DepthReadFormat(depthDesc.format);
+		a_state.nativeDepth = ImportImage(a_device, info.image, depthDesc, "DCLF native depth");
+		if (!a_state.nativeDepth)
+			return NotReady(11, "the main-pass depth could not be imported");
+		// Terrain Blending's terrain depth shares the main depth's description; the Z-prepass draws near terrain blocks into it
+		// as that feature's depth hook does.
+		if (const auto& terrainBlending = globals::features::terrainBlending; terrainBlending.loaded && terrainBlending.terrainDepth.texture) {
+			DxvkOrgInteropResourceInfo terrainInfo{};
+			if (!RenderGraphRuntime::Get().DescribeResource(terrainBlending.terrainDepth.texture, terrainInfo) || terrainInfo.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
+				return NotReady(12, "Terrain Blending's terrain depth cannot be described");
+			a_state.terrainDepth = ImportImage(a_device, terrainInfo.image, depthDesc, "DCLF terrain blending depth");
+			if (!a_state.terrainDepth)
+				return NotReady(12, "Terrain Blending's terrain depth could not be imported");
+		}
 		return true;
 	}
 

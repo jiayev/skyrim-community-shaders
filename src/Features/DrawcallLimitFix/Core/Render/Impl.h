@@ -19,6 +19,11 @@ namespace DCLF
 
 namespace DCLF
 {
+	namespace Draws
+	{
+		struct MainCommit;  // CommitMainPayload's shared locals (Payload/Uploads.cpp)
+	}
+
 	struct IndirectDraws::Impl : ImplSnapshotBuilder, ImplViews, ImplProducer, ImplStats
 	{
 		std::shared_ptr<Resources> resources;
@@ -199,6 +204,10 @@ namespace DCLF
 		/** @brief The snapshot builder: a publication's stream views and payloads (on the pool, in publication order). */
 		std::shared_ptr<const DrawPublication> RunAhead(std::shared_ptr<const SceneTables> a_tables, const AheadContext& a_context, const Lookups& a_lookups,
 			std::uint32_t a_generation, std::uint32_t a_frame, std::shared_ptr<const SunCandidates> a_sunCandidates, std::shared_ptr<const SunCandidates> a_lightCandidates);
+		/** @brief RunAhead's shadow stage: the shadow payload into a_out, from the same tables, stream views and lookups, and its exclusions. */
+		void BuildAheadShadow(DrawPublication& a_out, const AheadContext& a_context, const SceneTables& a_tables, const Lookups& a_lookups, std::uint32_t a_generation,
+			std::uint32_t a_frame, const std::shared_ptr<const SunCandidates>& a_sunCandidates, const std::shared_ptr<const SunCandidates>& a_lightCandidates,
+			const TablesContentEpochs& a_oldestTables);
 		/** @brief Waits until no build ahead runs (DrainAsync; never per frame). */
 		void WaitAhead();
 		/** @brief Waits for the fade write-back task (DrainAsync; never per frame). */
@@ -269,6 +278,10 @@ namespace DCLF
 
 		/** @brief An epoch's per-frame constant blocks from the capture's mirrors (render thread; keeps the Z-prepass's bytes). */
 		void PackFrameBlocks(const Capture& a_capture, bool a_depthOnly, FrameBlocks& a_out);
+		// PackFrameBlocks' stages: the captured buffers' mirrored blocks (the Z-prepass's vertex bytes kept, replayed for the colour
+		// epoch), and the slots the capture lacks supplied from the last one.
+		void MirrorFrameBlocks(const Capture& a_capture, bool a_depthOnly, bool a_replayVertexInputs, FrameBlocks& a_out);
+		void CarryMissingBlocks(bool a_depthOnly, bool a_replayVertexInputs, FrameBlocks& a_out);
 		// Per main epoch (Z-prepass, colour): each frame slot's last captured block, for a frame that lacks it.
 		struct CarriedBlocks
 		{
@@ -290,6 +303,14 @@ namespace DCLF
 		bool CommitMainPayload(const Capture& a_capture, const FrameBlocks& a_blocks, const MainInputs& a_frame, MainPayload& a_payload,
 			const std::shared_ptr<Resources>& a_resources, IndirectDraws::Stats& a_stats,
 			std::vector<std::shared_ptr<const void>>& a_bindingOwners, const EpochRevision& a_revision);
+		// CommitMainPayload's stages (Payload/Uploads.cpp): Draws::MainCommit is its shared locals.
+		void CommitShadowInputs(bool a_depthOnly, const PassFrame& a_shape, std::uint32_t a_revisionEpoch);
+		void ResolveFrameTextures(const MainCommit& a_commit, std::array<std::uint32_t, kTextureRegisters>& a_frameTextures);
+		void UploadSceneStreams(const MainCommit& a_commit);
+		void CommitFadeRoots(const MainCommit& a_commit);
+		void ZeroCommitCounts(const MainCommit& a_commit);
+		void WriteDepthBuckets(const MainCommit& a_commit, std::uint32_t a_latchSlot, BuildDrawsLatch& a_latch);
+		void WriteShadowLatch(const MainCommit& a_commit, std::uint32_t a_latchSlot, BuildDrawsLatch& a_latch);
 
 		// The vertex-stage inputs the Z-prepass wrote its depth with: the colour pass tests EQUAL against it, and the engine rewrites
 		// the per-frame constants between the depth pass and the composite, so the colour pass reuses these bytes.
@@ -324,6 +345,14 @@ namespace DCLF
 		 * alone, then assembled. a_frame: the publication's commitFrame.
 		 */
 		void MakeRevision(const ScenePublication& a_publication, std::uint32_t a_frame);
+		/** @brief MakeRevision's stages (Producer.cpp): the make's publication and what its requirements hand its shapes. */
+		struct RevisionMake;
+		void RequireRevisionSet(RevisionMake& a_make, GrowthBuild& a_build);
+		void RequireRevisionViews(RevisionMake& a_make, GrowthBuild& a_build);
+		void RequireRevisionLatched(RevisionMake& a_make, GrowthBuild& a_build);
+		void MakeMainShapes(RevisionMake& a_make, const NamedVersions& a_sealed, const MainLayout& a_layout);
+		void MakeShadowShapes(const RevisionMake& a_make, const NamedVersions& a_sealed);
+		void MakeViewShapes(const RevisionMake& a_make, const NamedVersions& a_sealed, const MainLayout& a_layout);
 		/** @brief Revision code: the latch blocks' handles registered (once), and each latch laid out at its first sizes once its resources are. */
 		void EnsureRevisionLatches();
 
@@ -339,6 +368,11 @@ namespace DCLF
 		 * before the engine draws, and not submitted. True without revisions.
 		 */
 		bool EpochCovered(std::uint32_t a_epoch) const;
+		/** @brief DecideCoverage's stages (Coverage.cpp): a failed graph's coverage, the epochs' recordings, the faces', first person's. */
+		void CoverFailedGraph();
+		void DecideEpochCoverage(org::PersistentGraphHost* a_host);
+		void DecideReflectionCoverage(org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame);
+		void DecideFirstPersonCoverage(org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame);
 		void SubmitRevisionRecording(std::uint32_t a_epoch, const RevisionRecordings& a_recordings, std::size_t a_index);
 		std::string RevisionReport();
 		ShapesKey RevisionShapesKey(const NamedVersions& a_sealed, const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect, const Lookups& a_lookups,
@@ -361,5 +395,9 @@ namespace DCLF
 		}
 
 		bool Setup(const Capture& a_capture, bool a_depthOnly = false);
+		// Setup's stages: the main segment's buffers and programs, and the main pass's imported targets and depth.
+		bool CreateMainBuffers(Resources& a_state, org::PersistentGraphHost& a_host, rhi::Device a_device);
+		bool ImportMainTargets(Resources& a_state, const Capture& a_capture, rhi::Device a_device, const D3D11_TEXTURE2D_DESC& a_target,
+			const TargetFormats& a_targets);
 	};
 }

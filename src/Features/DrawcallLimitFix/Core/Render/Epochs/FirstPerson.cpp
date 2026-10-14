@@ -1,5 +1,5 @@
 // The first-person view drawn by DCLF: its capture, targets and pipelines, the first-person phase's readiness, and its two
-// epochs' commits (their passes are ViewEpochRecord.cpp's). Render thread, but for FirstPersonDrawable (the scene lane's commit).
+// epochs' commits (their passes are ViewEpochRecord.cpp's). Render thread, but for FirstPersonDrawable and FirstPersonSlotReady (the scene lane's commit).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -35,80 +35,60 @@ namespace DCLF
 		// The viewport depth range both first-person passes set (FUN_140e57cb0(state, 0, max)): f1stPersonFarDepthRange, or
 		// f1stPersonFarDepthRangeControlDriven with RenderDepth's and FUN_1414cb6d0's second argument (the movement controller's vfunc 0x78).
 		constexpr std::uintptr_t kFarDepthRange = 0x202b2d0, kFarDepthRangeControlDriven = 0x202b2e8;
-	}
 
-	bool IndirectDraws::FirstPersonDrawable() const
-	{
-		// A capability (Coordinator::SetCapability, the scene lane's commit): the toggle, and the first-person targets published (the colour
-		// epoch's formats, known once the main pass's targets were captured and kPOST_ZPREPASS_COPY exists). Each member then waits for its
-		// own pipelines (FirstPersonSlotReady), and the engine draws it until the frame's epochs are covered (PassCapture).
-		return impl && ActiveToggles().firstPerson && !failed && impl->firstPerson.LaneTargets().colour != DXGI_FORMAT_UNKNOWN;
-	}
+		using FirstPersonState = ImplViews::FirstPersonState;
 
-	bool IndirectDraws::FirstPersonCovered() const
-	{
-		return impl && impl->firstPerson.covered;
-	}
+		/**
+		 * @brief The latch: Main::Draw's cVar23 (AE 0x1406444b0, taken at its entry), recomputed here (Main_Draw_Early runs after FUN_1406452c0 and
+		 * before 0x1406445a1 hides the first-person root): the root's kHidden clear, Main::Draw's third argument false (FUN_140644360:
+		 * UI::IsMenuOpen("Main Menu")), and PlayerCamera +0x28 (the current state) not +0xD0 (the free camera, tfc).
+		 */
+		bool FirstPersonLatch()
+		{
+			bool latch = false;
+			if (auto* player = RE::PlayerCharacter::GetSingleton())
+				if (const auto* root = player->Get3D(true); root && root != player->Get3D(false) && !root->GetFlags().any(RE::NiAVObject::Flag::kHidden)) {
+					auto* ui = RE::UI::GetSingleton();
+					const auto* camera = RE::PlayerCamera::GetSingleton();
+					const bool mainMenu = ui && ui->IsMenuOpen(RE::MainMenu::MENU_NAME);
+					const bool freeCamera = camera && camera->IsCurrentState(RE::CameraState::kFree, RE::CameraState::kFree);
+					latch = !mainMenu && camera && !freeCamera;
+				}
+			return latch;
+		}
 
-	void IndirectDraws::BeginFirstPersonFrame()
-	{
-		ZoneScopedN("CS.DCLF.BeginFirstPersonFrame");
-		if (!impl)
-			return;
-		auto& f = impl->firstPerson;
-		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
-		const bool on = ActiveToggles().firstPerson && !failed;
-		f.latch = false;
-		f.latchFrame = frame;
-		if (!on)
-			return;
-		++f.frames;
-		// The latch: Main::Draw's cVar23 (AE 0x1406444b0, taken at its entry), recomputed here (Main_Draw_Early runs after FUN_1406452c0 and
-		// before 0x1406445a1 hides the first-person root): the root's kHidden clear, Main::Draw's third argument false (FUN_140644360:
-		// UI::IsMenuOpen("Main Menu")), and PlayerCamera +0x28 (the current state) not +0xD0 (the free camera, tfc).
-		if (auto* player = RE::PlayerCharacter::GetSingleton())
-			if (const auto* root = player->Get3D(true); root && root != player->Get3D(false) && !root->GetFlags().any(RE::NiAVObject::Flag::kHidden)) {
-				auto* ui = RE::UI::GetSingleton();
-				const auto* camera = RE::PlayerCamera::GetSingleton();
-				const bool mainMenu = ui && ui->IsMenuOpen(RE::MainMenu::MENU_NAME);
-				const bool freeCamera = camera && camera->IsCurrentState(RE::CameraState::kFree, RE::CameraState::kFree);
-				f.latch = !mainMenu && camera && !freeCamera;
-			}
-		f.latched += f.latch ? 1 : 0;
-		// The colour epoch's targets: the main pass's targets 0 and 1 (kMAIN and the motion vectors, as FUN_1414cb6d0 binds them; the
-		// main pass's capture's formats) and kPOST_ZPREPASS_COPY's depth format.
-		const auto& formats = impl->formats;
-		auto* renderer = globals::game::renderer;
-		if (renderer && formats.colorCount >= 2) {
-			const auto& copy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-			if (copy.views[0]) {
-				D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
-				copy.views[0]->GetDesc(&dsvDesc);
-				ForwardTargets targets;
-				targets.colour = formats.colors[0];
-				targets.colour2 = formats.colors[1];
-				targets.depth = dsvDesc.Format;
-				if (!(targets == f.targets)) {
-					f.targets = targets;
-					f.PublishTargets();
-					impl->PostRevisionInputs();
-					logger::info("[DCLF] first-person targets: colour {}, motion vectors {}, depth {}", static_cast<int>(targets.colour), static_cast<int>(targets.colour2),
-						static_cast<int>(targets.depth));
+		/**
+		 * @brief The colour epoch's targets: the main pass's targets 0 and 1 (kMAIN and the motion vectors, as FUN_1414cb6d0 binds them; the
+		 * main pass's capture's formats) and kPOST_ZPREPASS_COPY's depth format, into a_f and published. True when they changed.
+		 */
+		bool CaptureFirstPersonTargets(const TargetFormats& a_formats, FirstPersonState& a_f)
+		{
+			auto* renderer = globals::game::renderer;
+			if (renderer && a_formats.colorCount >= 2) {
+				const auto& copy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+				if (copy.views[0]) {
+					D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+					copy.views[0]->GetDesc(&dsvDesc);
+					ForwardTargets targets;
+					targets.colour = a_formats.colors[0];
+					targets.colour2 = a_formats.colors[1];
+					targets.depth = dsvDesc.Format;
+					if (!(targets == a_f.targets)) {
+						a_f.targets = targets;
+						a_f.PublishTargets();
+						return true;
+					}
 				}
 			}
+			return false;
 		}
-		if (f.targets.colour == DXGI_FORMAT_UNKNOWN)
-			return;
-		// The slots' first-person forward pipelines, asked of the pipeline lane (each key once) and read from the frame's catalog.
-		auto& drawPipelines = DrawPipelines::Get();
-		drawPipelines.SetFirstPersonTargets(f.targets);
-		const auto* catalog = FrameCatalog();
-		const auto& tables = Scene::FrameView::Get().GetTables();
-		// The pipeline slots the skeleton's geometry draws with: the installed tables' slots of the geometry under the first-person root
-		// (the render thread's own walk of it, before Main::Draw touches it), found again every 16 frames or when the tables' slots grow.
-		// Their pipelines are asked for before any is a member (the commit waits for them: FirstPersonSlotReady).
-		if (frame - f.slotsFrame >= 16 || f.slotsWanted.size() != tables.pipelines.size()) {
-			f.slotsFrame = frame;
+
+		/** @brief The pipeline slots the skeleton's geometry draws with, found again (see BeginFirstPersonFrame), and its forward members. */
+		void WalkFirstPersonSkeleton(FirstPersonState& a_f, const SceneTables& a_tables, std::uint32_t a_frame)
+		{
+			auto& f = a_f;
+			const auto& tables = a_tables;
+			f.slotsFrame = a_frame;
 			f.slotsWanted.assign(tables.pipelines.size(), 0);
 			std::vector<RE::BSGeometry*> geometry;
 			if (auto* player = RE::PlayerCharacter::GetSingleton())
@@ -128,6 +108,108 @@ namespace DCLF
 			if (claims)
 				Diagnostics::Notify(Diagnostics::FirstPersonSkeletonWalked{ tables, skeleton, geometry.size(), *claims });
 		}
+
+		/** @brief The wanted slots' first-person forward pipelines, asked of the pipeline lane (each key once) and read from a_catalog. */
+		void ResolveFirstPersonPipelines(FirstPersonState& a_f, const SceneTables& a_tables, const PipelineCatalog* a_catalog, DrawPipelines& a_drawPipelines)
+		{
+			auto& f = a_f;
+			const auto& tables = a_tables;
+			std::uint32_t slots = 0, ready = 0;
+			f.slotPipelines.assign(tables.pipelines.size(), rhi::PipelineHandle{});
+			for (std::size_t p = 0; p < tables.pipelines.size(); ++p) {
+				ForwardPipelineKey key;
+				if (!f.slotsWanted[p] || !ViewForwardKey(ViewKind::FirstPerson, tables, p, key))
+					continue;
+				++slots;
+				a_drawPipelines.RequestForward(key);
+				if (const auto pipeline = ForwardPipelineOf(a_catalog, key, f.targets); pipeline.valid()) {
+					f.slotPipelines[p] = pipeline;
+					++ready;
+				}
+			}
+			f.slots = slots;
+			f.pipelinesReady = ready;
+		}
+	}
+
+	bool IndirectDraws::FirstPersonDrawable() const
+	{
+		// A capability (Coordinator::SetCapability, the scene lane's commit): the toggle, and the first-person targets published (the colour
+		// epoch's formats, known once the main pass's targets were captured and kPOST_ZPREPASS_COPY exists). Each member then waits for its
+		// own pipelines (FirstPersonSlotReady), and the engine draws it until the frame's epochs are covered (PassCapture).
+		return impl && ActiveToggles().firstPerson && !failed && impl->firstPerson.LaneTargets().colour != DXGI_FORMAT_UNKNOWN;
+	}
+
+	bool IndirectDraws::FirstPersonCovered() const
+	{
+		return impl && impl->firstPerson.covered;
+	}
+
+	bool IndirectDraws::FirstPersonSlotReady(const void* a_tables, const void* a_lookups, const PipelineCatalog* a_catalog, std::uint32_t a_slot, std::uint32_t* a_why) const
+	{
+		// a_why (the set parity's observer): 1 no catalog or targets, 2 a forward key the forward part cannot draw, 3 no first-person key,
+		// 4 its pipeline not in a_catalog, 5 no Z-prepass group pipeline.
+		auto fail = [&](std::uint32_t a_cause) {
+			if (a_why)
+				*a_why = a_cause;
+			return false;
+		};
+		// The slot's first-person forward pipeline as a_catalog has it for the published first-person targets, and its Z-prepass group's
+		// depth pipeline in that catalog's main set (FirstPersonPipelinesOf's and PlanFirstPersonBuckets' rules): the scene lane's commit's.
+		const auto& tables = *static_cast<const SceneTables*>(a_tables);
+		const ForwardTargets targets = impl->firstPerson.LaneTargets();
+		if (!a_catalog || targets.colour == DXGI_FORMAT_UNKNOWN || a_slot >= tables.objects.size())
+			return fail(1);
+		const std::uint32_t p = tables.objects[a_slot].pipelineIndex;
+		// The forward part: a forward key's slot draws with the main set's colour pipeline (main-ready: the commit's MainReady) through the
+		// colour signature, into the main pass's attachments with kPOST_ZPREPASS_COPY's depth, which must be the main pass's format.
+		if (p < tables.pipelines.size() && RasterForward(tables.pipelines[p].rasterFlags))
+			return (!RasterRefraction(tables.pipelines[p].rasterFlags) && impl->firstPerson.forwardCompatible.load(std::memory_order_acquire) &&
+			           GetIndirectState(*a_catalog, a_catalog->targetsGeneration).valid) ||
+			       fail(2);
+		ForwardPipelineKey key;
+		if (p >= tables.pipelines.size() || !ViewForwardKey(ViewKind::FirstPerson, tables, p, key))
+			return fail(3);
+		if (!ForwardPipelineOf(a_catalog, key, targets).valid())
+			return fail(4);
+		const auto indirect = GetIndirectState(*a_catalog, a_catalog->targetsGeneration);
+		const std::uint32_t group = Draws::ZGroupOf(static_cast<const Lookups*>(a_lookups), indirect, p);
+		return (indirect.valid && group < indirect.zPipelines.size() && indirect.zPipelines[group].valid()) || fail(5);
+	}
+
+	void IndirectDraws::BeginFirstPersonFrame()
+	{
+		ZoneScopedN("CS.DCLF.BeginFirstPersonFrame");
+		if (!impl)
+			return;
+		auto& f = impl->firstPerson;
+		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
+		const bool on = ActiveToggles().firstPerson && !failed;
+		f.latch = false;
+		f.latchFrame = frame;
+		if (!on)
+			return;
+		++f.frames;
+		f.latch = FirstPersonLatch();
+		f.latched += f.latch ? 1 : 0;
+		const auto& formats = impl->formats;
+		if (CaptureFirstPersonTargets(formats, f)) {
+			impl->PostRevisionInputs();
+			logger::info("[DCLF] first-person targets: colour {}, motion vectors {}, depth {}", static_cast<int>(f.targets.colour), static_cast<int>(f.targets.colour2),
+				static_cast<int>(f.targets.depth));
+		}
+		if (f.targets.colour == DXGI_FORMAT_UNKNOWN)
+			return;
+		// The slots' first-person forward pipelines, asked of the pipeline lane (each key once) and read from the frame's catalog.
+		auto& drawPipelines = DrawPipelines::Get();
+		drawPipelines.SetFirstPersonTargets(f.targets);
+		const auto* catalog = FrameCatalog();
+		const auto& tables = Scene::FrameView::Get().GetTables();
+		// The pipeline slots the skeleton's geometry draws with: the installed tables' slots of the geometry under the first-person root
+		// (the render thread's own walk of it, before Main::Draw touches it), found again every 16 frames or when the tables' slots grow.
+		// Their pipelines are asked for before any is a member (the commit waits for them: FirstPersonSlotReady).
+		if (frame - f.slotsFrame >= 16 || f.slotsWanted.size() != tables.pipelines.size())
+			WalkFirstPersonSkeleton(f, tables, frame);
 		// The forward part: the main set's forward pipelines draw into this pass when its depth is the main pass's format (the colour
 		// attachments are the main pass's own); the forward members the installed tables hold.
 		const bool forwardCompatible = formats.depth != DXGI_FORMAT_UNKNOWN && formats.depth == f.targets.depth;
@@ -135,21 +217,7 @@ namespace DCLF
 			logger::info("[DCLF] first-person forward part: the main depth format {} and kPOST_ZPREPASS_COPY's {}: {}", static_cast<int>(formats.depth),
 				static_cast<int>(f.targets.depth), forwardCompatible ? "drawn by DCLF" : "the engine's");
 		f.forwardMembers += f.forwardMembersNow;
-		std::uint32_t slots = 0, ready = 0;
-		f.slotPipelines.assign(tables.pipelines.size(), rhi::PipelineHandle{});
-		for (std::size_t p = 0; p < tables.pipelines.size(); ++p) {
-			ForwardPipelineKey key;
-			if (!f.slotsWanted[p] || !ViewForwardKey(ViewKind::FirstPerson, tables, p, key))
-				continue;
-			++slots;
-			drawPipelines.RequestForward(key);
-			if (const auto pipeline = ForwardPipelineOf(catalog, key, f.targets); pipeline.valid()) {
-				f.slotPipelines[p] = pipeline;
-				++ready;
-			}
-		}
-		f.slots = slots;
-		f.pipelinesReady = ready;
+		ResolveFirstPersonPipelines(f, tables, catalog, drawPipelines);
 		if (impl->SetupView(ViewKind::FirstPerson))
 			impl->ImportFirstPersonDepth();
 	}

@@ -328,100 +328,59 @@ namespace DCLF
 		impl->WaitVisibilityReadback();
 	}
 
+	namespace
+	{
+		/**
+		 * @brief The blocks the epoch supplies whatever the pass binds: the game's PerFrame (b12), Community Shaders' SharedData (b5)
+		 * and feature data, and DCLF's own frame fog slot (VS b13), named in the mask.
+		 */
+		void SupplyFixedBlocks(FrameBlocks& a_out)
+		{
+			// b12 is the game's PerFrame buffer. The constant mirror does not always hold its contents - the
+			// engine does not rewrite it through the hooked context every frame - and an empty slot drops
+			// every object whose shaders read it. Community Shaders already caches this buffer between Map
+			// and Unmap for its own use, so take it from there.
+			{
+				const auto& cached = globals::game::frameBufferCached.data;
+				const auto* bytes = reinterpret_cast<const std::byte*>(&cached);
+				if (a_out.vs[kPerFrameVertexRegister].empty())
+					a_out.vs[kPerFrameVertexRegister].assign(bytes, bytes + sizeof(cached));
+				if (a_out.ps[kPerFrameVertexRegister].empty())
+					a_out.ps[kPerFrameVertexRegister].assign(bytes, bytes + sizeof(cached));
+			}
+			// b5 is Community Shaders' own SharedData, written through its ConstantBuffer helper rather than
+			// through the hooked device context, so the constant mirror never observes the write and the
+			// slot would stay empty, dropping every object whose shader reads it. CS keeps the struct it
+			// uploaded, so pack that directly.
+			// These are supplied in the Z-prepass too. Its pixel stage is the DCLF_DEPTH_ONLY build,
+			// which still reads them in the code that runs before the alpha test, and they all come from
+			// Community Shaders or the game's own cache rather than from the main pass's bindings - so they
+			// are available during the native depth pass, where the main pass's bindings are not.
+			if (auto* state = globals::state) {
+				const auto* shared = reinterpret_cast<const std::byte*>(&state->lastSharedData);
+				a_out.ps[kSharedDataRegister].assign(shared, shared + sizeof(State::SharedDataCB));
+				if (!state->lastFeatureData.empty()) {
+					const auto* feature = reinterpret_cast<const std::byte*>(state->lastFeatureData.data());
+					a_out.ps[kFeatureDataRegister].assign(feature, feature + state->lastFeatureData.size());
+				}
+			}
+			// The vertex stage's b13 is DCLF's own (DCLFFrameFog), latched by the commit: nothing the pass binds there is the draws'.
+			// Its block stays empty here, but the slot is supplied, so the mask names it (a pipeline reading an unsupplied slot is
+			// rejected by the constants check).
+			a_out.vs[kFrameFogRegister].clear();
+			a_out.vsMask |= 1u << kFrameFogRegister;
+		}
+	}
+
 	void IndirectDraws::Impl::PackFrameBlocks(const Capture& a_capture, bool a_depthOnly, FrameBlocks& a_out)
 	{
 		RenderThreadBudget::Part budget(RenderThreadBudget::Bucket::Capture);
-		// Per-frame constant buffers: whatever the main pass binds outside the per-draw slots.
-		// On the Z-prepass the pixel-stage per-frame bindings are skipped entirely: the native depth pass
-		// has not bound the main pass's yet, and the DCLF_DEPTH_ONLY build of the pixel stage compiles
-		// away everything that would read them.
-		auto& mirror = ConstantMirror::Get();
 		// The colour epoch replays the vertex-stage bytes the Z-prepass used, so the
 		// two agree to the bit and the colour pass's EQUAL test passes.
 		const bool replayVertexInputs = !a_depthOnly && prepassInputs;
-		if (a_depthOnly)
-			for (auto& bytes : prepassVS)
-				bytes.clear();
-		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
-			if (replayVertexInputs && !((kPerDrawVS >> slot) & 1)) {
-				const auto& bytes = prepassVS[slot];
-				if (!bytes.empty())
-					a_out.vs[slot].assign(bytes.begin(), bytes.end());
-			}
-			for (auto [buffers, perDraw, out] : { std::tuple{ &a_capture.vsBuffers, kPerDrawVS, &a_out.vs }, std::tuple{ &a_capture.psBuffers, kPerDrawPS, &a_out.ps } }) {
-				if (a_depthOnly && out == &a_out.ps)
-					continue;
-				if (replayVertexInputs && out == &a_out.vs)
-					continue;
-				auto* buffer = (*buffers)[slot];
-				if (!buffer || ((perDraw >> slot) & 1))
-					continue;
-				mirror.Watch(buffer);
-				const auto contents = mirror.Contents(buffer);
-				if (!contents.empty())
-					(*out)[slot].assign(contents.begin(), contents.end());
-				if (a_depthOnly && out == &a_out.vs && !contents.empty())
-					prepassVS[slot].assign(contents.begin(), contents.end());
-			}
-		}
-
-		// b12 is the game's PerFrame buffer. The constant mirror does not always hold its contents - the
-		// engine does not rewrite it through the hooked context every frame - and an empty slot drops
-		// every object whose shaders read it. Community Shaders already caches this buffer between Map
-		// and Unmap for its own use, so take it from there.
-		{
-			const auto& cached = globals::game::frameBufferCached.data;
-			const auto* bytes = reinterpret_cast<const std::byte*>(&cached);
-			if (a_out.vs[kPerFrameVertexRegister].empty())
-				a_out.vs[kPerFrameVertexRegister].assign(bytes, bytes + sizeof(cached));
-			if (a_out.ps[kPerFrameVertexRegister].empty())
-				a_out.ps[kPerFrameVertexRegister].assign(bytes, bytes + sizeof(cached));
-		}
-		// b5 is Community Shaders' own SharedData, written through its ConstantBuffer helper rather than
-		// through the hooked device context, so the constant mirror never observes the write and the
-		// slot would stay empty, dropping every object whose shader reads it. CS keeps the struct it
-		// uploaded, so pack that directly.
-		// These are supplied in the Z-prepass too. Its pixel stage is the DCLF_DEPTH_ONLY build,
-		// which still reads them in the code that runs before the alpha test, and they all come from
-		// Community Shaders or the game's own cache rather than from the main pass's bindings - so they
-		// are available during the native depth pass, where the main pass's bindings are not.
-		if (auto* state = globals::state) {
-			const auto* shared = reinterpret_cast<const std::byte*>(&state->lastSharedData);
-			a_out.ps[kSharedDataRegister].assign(shared, shared + sizeof(State::SharedDataCB));
-			if (!state->lastFeatureData.empty()) {
-				const auto* feature = reinterpret_cast<const std::byte*>(state->lastFeatureData.data());
-				a_out.ps[kFeatureDataRegister].assign(feature, feature + state->lastFeatureData.size());
-			}
-		}
-		// The vertex stage's b13 is DCLF's own (DCLFFrameFog), latched by the commit: nothing the pass binds there is the draws'.
-		// Its block stays empty here, but the slot is supplied, so the mask names it (a pipeline reading an unsupplied slot is
-		// rejected by the constants check).
-		a_out.vs[kFrameFogRegister].clear();
-		a_out.vsMask |= 1u << kFrameFogRegister;
-		// A slot the epoch supplied before and lacks now - a feature's block the capture point sees bound in some frames
-		// only (VS b7) - is supplied from its last capture, counted, so the frame's slots are the same every frame and the builds
-		// ahead, made for the slots the epoch last supplied, stay usable. The Z-prepass's carried vertex blocks are
-		// the colour epoch's replay too: the two transform alike.
-		auto& carry = carriedBlocks[a_depthOnly ? 0 : 1];
-		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
-			for (auto [out, kept, vertex] : { std::tuple{ &a_out.vs[slot], &carry.vs[slot], true }, std::tuple{ &a_out.ps[slot], &carry.ps[slot], false } }) {
-				if (!out->empty()) {
-					kept->assign(out->begin(), out->end());
-					continue;
-				}
-				if (kept->empty() || (vertex && replayVertexInputs) || (!vertex && a_depthOnly))
-					continue;
-				out->assign(kept->begin(), kept->end());
-				++frameSlotsCarried;
-				if (const std::uint32_t bit = 1u << (slot + (vertex ? 0 : 16) + (a_depthOnly ? 0 : 8)); !(carriedLogged & bit)) {
-					carriedLogged |= bit;
-					logger::info("[DCLF] {} epoch, frame {}: {} b{} not bound at the capture, supplied from an earlier one ({} bytes)", a_depthOnly ? "zprepass" : "colour",
-						Scene::FrameView::Get().GetFrame(), vertex ? "VS" : "PS", slot, out->size());
-				}
-				if (vertex && a_depthOnly)
-					prepassVS[slot] = *out;
-			}
-		}
+		MirrorFrameBlocks(a_capture, a_depthOnly, replayVertexInputs, a_out);
+		SupplyFixedBlocks(a_out);
+		CarryMissingBlocks(a_depthOnly, replayVertexInputs, a_out);
 		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
 			if (!a_out.vs[slot].empty())
 				a_out.vsMask |= 1u << slot;
@@ -442,6 +401,68 @@ namespace DCLF
 					((a_out.psMask >> slot) & 1) ? "supplied" : "empty");
 			}
 			logger::info("[DCLF] main-pass per-frame pixel constants: {}", text);
+		}
+	}
+
+	void IndirectDraws::Impl::MirrorFrameBlocks(const Capture& a_capture, bool a_depthOnly, bool a_replayVertexInputs, FrameBlocks& a_out)
+	{
+		// Per-frame constant buffers: whatever the main pass binds outside the per-draw slots.
+		// On the Z-prepass the pixel-stage per-frame bindings are skipped entirely: the native depth pass
+		// has not bound the main pass's yet, and the DCLF_DEPTH_ONLY build of the pixel stage compiles
+		// away everything that would read them.
+		auto& mirror = ConstantMirror::Get();
+		if (a_depthOnly)
+			for (auto& bytes : prepassVS)
+				bytes.clear();
+		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
+			if (a_replayVertexInputs && !((kPerDrawVS >> slot) & 1)) {
+				const auto& bytes = prepassVS[slot];
+				if (!bytes.empty())
+					a_out.vs[slot].assign(bytes.begin(), bytes.end());
+			}
+			for (auto [buffers, perDraw, out] : { std::tuple{ &a_capture.vsBuffers, kPerDrawVS, &a_out.vs }, std::tuple{ &a_capture.psBuffers, kPerDrawPS, &a_out.ps } }) {
+				if (a_depthOnly && out == &a_out.ps)
+					continue;
+				if (a_replayVertexInputs && out == &a_out.vs)
+					continue;
+				auto* buffer = (*buffers)[slot];
+				if (!buffer || ((perDraw >> slot) & 1))
+					continue;
+				mirror.Watch(buffer);
+				const auto contents = mirror.Contents(buffer);
+				if (!contents.empty())
+					(*out)[slot].assign(contents.begin(), contents.end());
+				if (a_depthOnly && out == &a_out.vs && !contents.empty())
+					prepassVS[slot].assign(contents.begin(), contents.end());
+			}
+		}
+	}
+
+	void IndirectDraws::Impl::CarryMissingBlocks(bool a_depthOnly, bool a_replayVertexInputs, FrameBlocks& a_out)
+	{
+		// A slot the epoch supplied before and lacks now - a feature's block the capture point sees bound in some frames
+		// only (VS b7) - is supplied from its last capture, counted, so the frame's slots are the same every frame and the builds
+		// ahead, made for the slots the epoch last supplied, stay usable. The Z-prepass's carried vertex blocks are
+		// the colour epoch's replay too: the two transform alike.
+		auto& carry = carriedBlocks[a_depthOnly ? 0 : 1];
+		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
+			for (auto [out, kept, vertex] : { std::tuple{ &a_out.vs[slot], &carry.vs[slot], true }, std::tuple{ &a_out.ps[slot], &carry.ps[slot], false } }) {
+				if (!out->empty()) {
+					kept->assign(out->begin(), out->end());
+					continue;
+				}
+				if (kept->empty() || (vertex && a_replayVertexInputs) || (!vertex && a_depthOnly))
+					continue;
+				out->assign(kept->begin(), kept->end());
+				++frameSlotsCarried;
+				if (const std::uint32_t bit = 1u << (slot + (vertex ? 0 : 16) + (a_depthOnly ? 0 : 8)); !(carriedLogged & bit)) {
+					carriedLogged |= bit;
+					logger::info("[DCLF] {} epoch, frame {}: {} b{} not bound at the capture, supplied from an earlier one ({} bytes)", a_depthOnly ? "zprepass" : "colour",
+						Scene::FrameView::Get().GetFrame(), vertex ? "VS" : "PS", slot, out->size());
+				}
+				if (vertex && a_depthOnly)
+					prepassVS[slot] = *out;
+			}
 		}
 	}
 

@@ -491,6 +491,69 @@ namespace DCLF
 			// at the first-person eye (DrawWorld +0x00).
 			ParticleSnapshots::Camera firstPersonParticleCamera;
 		};
+		// Sample's stages.
+		struct Listed
+		{
+			const Plan::Item* item;
+			bool palette;
+			bool settles = false;  // a written slot (not a mover): kept while its transforms differ
+			bool mover = false;    // a plan's mover: due again next frame when its sample changed a row or palette
+		};
+		static constexpr std::size_t kSampleGrain = 64;
+		// Per chunk, marked afterwards (the journals are single-threaded).
+		struct Changed
+		{
+			std::vector<std::uint32_t> slots;
+			std::vector<std::pair<std::uint32_t, std::uint32_t>> paletteRuns;  // (first row, rows)
+			std::vector<const Plan::Item*> settling;
+			std::vector<const void*> owed;  // movers due again next frame (owedKeys)
+			std::uint64_t skins = 0, defects = 0;
+		};
+		// The build's rows and palettes, after its one Mutable() each (written from many threads after it).
+		struct SampleOut
+		{
+			std::vector<BindlessPlacement>& out;
+			std::vector<PaletteRow>& paletteOut;
+		};
+		// A chunk's scratch (SampleListed).
+		struct ItemScratch
+		{
+			BindlessPlacement row, layer;
+			std::vector<PaletteRow> particleRows;
+		};
+		void ListItem(const Plan::Item& a_item, bool a_settles, bool a_mover, std::size_t a_rows, std::size_t a_blocks, std::vector<Listed>& a_items);
+		void MarkSampledRoots();
+		void ApplyFirstPersonSamples(const Job& a_job, const SampleOut& a_out, std::uint64_t& a_marked, std::uint64_t& a_paletteMarked);
+		void SampleItems(const Job& a_job, const std::vector<Listed>& a_items, const SampleOut& a_out, std::vector<Changed>& a_changed,
+			std::atomic<std::uint64_t>& a_refused);
+		void SampleListed(const Job& a_job, const Listed& a_listed, ParticleSnapshots::Record* a_particles, const SampleOut& a_out, Changed& a_mine,
+			ItemScratch& a_scratch, std::atomic<std::uint64_t>& a_refused);
+		static void ExpandParticles(const Job& a_job, const Plan::Item& a_item, ParticleSnapshots::Record& a_particles, ItemScratch& a_scratch);
+		static bool SamplePalette(const Plan::Item& a_item, bool a_particles, const SampleOut& a_out, Changed& a_mine, const ItemScratch& a_scratch);
+		void SampleRoots(const SampleOut& a_out, std::vector<std::vector<std::uint32_t>>& a_rootChanged, std::vector<std::uint8_t>& a_rootRefused,
+			std::atomic<std::uint64_t>& a_refused);
+		void MarkSampled(const std::vector<Changed>& a_changed, const std::vector<std::vector<std::uint32_t>>& a_rootChanged,
+			const std::vector<std::uint8_t>& a_rootRefused, std::uint64_t& a_marked, std::uint64_t& a_paletteMarked);
+		// CheckEveryMover's stages.
+		struct Fresh
+		{
+			BindlessPlacement row{}, layer{};
+			bool sampled = false;
+		};
+		void SampleFreshMovers(const std::vector<BindlessPlacement>& a_out, std::vector<Fresh>& a_fresh, std::atomic<std::uint64_t>& a_palettesChecked,
+			std::atomic<std::uint64_t>& a_palettesDiffer, std::string& a_firstPalette);
+		void ApplyFreshRoots(const std::vector<BindlessPlacement>& a_out, const ankerl::unordered_dense::map<std::uint32_t, std::uint32_t>& a_slotMover,
+			std::vector<Fresh>& a_fresh, std::string& a_firstRoot);
+		void CompareFreshRows(const std::vector<BindlessPlacement>& a_out, const std::vector<Fresh>& a_fresh, std::string& a_firstRow);
+		void ReportMovedParity(std::uint64_t a_palettesChecked, std::uint64_t a_palettesDiffer, const std::string& a_firstRow,
+			const std::string& a_firstPalette, const std::string& a_firstRoot);
+		// Kick's stages (render thread).
+		void CopySeeds(std::vector<FadeSeedItem>& a_seeds, const std::shared_ptr<const FrameGlobals>& a_globals);
+		void ReadTreeSeeds(const std::vector<TreeSeedItem>& a_treeSeeds, const std::shared_ptr<const FrameGlobals>& a_globals);
+		void ApplyFirstPersonPlans(const std::vector<std::shared_ptr<const Plan>>& a_plans);
+		void QueuePlans(std::vector<std::shared_ptr<const Plan>>& a_plans);
+		void LeaseBackings(Job& a_job);
+		void SampleFirstPerson(Job& a_job, const SetSnapshot& a_claims);
 		void Run(const Job& a_job);
 		void Sample(const Job& a_job);
 		void ApplyPlans(const Job& a_job);
@@ -1019,13 +1082,6 @@ namespace DCLF
 		// The movers and roots that moved (MarkDue).
 		MarkDue(a_job);
 		// Each slot and palette block once, by its newest item.
-		struct Listed
-		{
-			const Plan::Item* item;
-			bool palette;
-			bool settles = false;  // a written slot (not a mover): kept while its transforms differ
-			bool mover = false;    // a plan's mover: due again next frame when its sample changed a row or palette
-		};
 		std::vector<Listed> items;
 		items.reserve(dueMovers.size() + (a_job.written.empty() ? 0 : a_job.written.back()->written.size()) + settling.size());
 		// The marks grow with the rows; only those set are cleared (at the end).
@@ -1034,24 +1090,12 @@ namespace DCLF
 			listed.resize(out.size(), 0);
 		if (blockListed.size() < blocks)
 			blockListed.resize(blocks, 0);
-		// First-person items are the render thread's (FirstPersonSample), except particle members (expanded from snapshots).
-		auto list = [&](const Plan::Item& a_item, bool a_settles, bool a_mover) {
-			if ((a_item.firstPerson && !a_item.particles) || a_item.slot >= out.size() || !a_item.geometry || listed[a_item.slot])
-				return;
-			listed[a_item.slot] = 1;
-			listedSlots.push_back(a_item.slot);
-			const bool palette = a_item.boneRows && std::size_t(a_item.boneOffset) + a_item.boneRows <= blocks && !blockListed[a_item.boneOffset];
-			if (palette) {
-				blockListed[a_item.boneOffset] = 1;
-				listedBlocks.push_back(a_item.boneOffset);
-			}
-			items.push_back({ &a_item, palette, a_settles, a_mover });
-		};
+		const std::size_t slots = out.size();
 		for (const auto m : dueMovers)
-			list(keptMovers[m].item, false, true);
+			ListItem(keptMovers[m].item, false, true, slots, blocks, items);
 		for (auto it = a_job.written.rbegin(); it != a_job.written.rend(); ++it)
 			for (const auto& item : (*it)->written)
-				list(item, true, false);
+				ListItem(item, true, false, slots, blocks, items);
 		// Carried settling items last (a slot listed above is newer). They may hold the last engine references, so they go to the
 		// render thread when done (EngineReleases, at Present), never dropped here.
 		auto carried = std::move(settling);
@@ -1068,217 +1112,20 @@ namespace DCLF
 			}
 		} handOver{ carried };
 		for (const auto& item : carried)
-			list(item, true, false);
-		// A root writes its dependents' sun entry and fade node after their rows: again whenever one of them was sampled.
-		for (const auto slot : listedSlots)
-			if (const auto it = slotRoots.find(slot); it != slotRoots.end())
-				for (const auto r : it->second)
-					MarkRoot(r);
+			ListItem(item, true, false, slots, blocks, items);
+		MarkSampledRoots();
+		const SampleOut sampleOut{ out, paletteOut };
 		std::uint64_t firstPersonMarked = 0, firstPersonPaletteMarked = 0;
-		for (const auto& sample : a_job.firstPerson) {
-			if (sample.slot >= out.size())
-				continue;
-			if (std::memcmp(&out[sample.slot], &sample.row, sizeof(sample.row)) != 0) {
-				out[sample.slot] = sample.row;
-				rows.Mark(sample.slot);
-				++firstPersonMarked;
-			}
-			if (sample.layerSlot != kNoObjectSlot && sample.layerSlot < out.size() && std::memcmp(&out[sample.layerSlot], &sample.layer, sizeof(sample.layer)) != 0) {
-				out[sample.layerSlot] = sample.layer;
-				rows.Mark(sample.layerSlot);
-				++firstPersonMarked;
-			}
-			if (!sample.boneRows || sample.current.size() != sample.boneRows || sample.previous.size() != sample.boneRows)
-				continue;
-			const auto at = PaletteRowsOf(sample.boneOffset, sample.boneRows);
-			if (std::size_t(at.previous) + sample.boneRows > paletteOut.size() || std::size_t(at.current) + sample.boneRows > paletteOut.size())
-				continue;
-			const std::size_t paletteBytes = std::size_t(sample.boneRows) * sizeof(PaletteRow);
-			if (std::memcmp(&paletteOut[at.current], sample.current.data(), paletteBytes) != 0 || std::memcmp(&paletteOut[at.previous], sample.previous.data(), paletteBytes) != 0) {
-				std::memcpy(&paletteOut[at.current], sample.current.data(), paletteBytes);
-				std::memcpy(&paletteOut[at.previous], sample.previous.data(), paletteBytes);
-				palettes.MarkRange(at.current, 2 * sample.boneRows);
-				firstPersonPaletteMarked += 2 * sample.boneRows;
-			}
-		}
-		auto& executor = SceneScheduler::Executor();
-		constexpr std::size_t kGrain = 64;
-		// Per chunk, marked afterwards (the journals are single-threaded).
-		struct Changed
-		{
-			std::vector<std::uint32_t> slots;
-			std::vector<std::pair<std::uint32_t, std::uint32_t>> paletteRuns;  // (first row, rows)
-			std::vector<const Plan::Item*> settling;
-			std::vector<const void*> owed;  // movers due again next frame (owedKeys)
-			std::uint64_t skins = 0, defects = 0;
-		};
-		std::vector<Changed> changed((items.size() + kGrain - 1) / kGrain);
+		ApplyFirstPersonSamples(a_job, sampleOut, firstPersonMarked, firstPersonPaletteMarked);
+		std::vector<Changed> changed((items.size() + kSampleGrain - 1) / kSampleGrain);
 		std::atomic<std::uint64_t> refusedHere{ 0 };
-		// Particle records, before the parallel loop (ParticleSnapshots::Follow is producer-only).
-		std::vector<ParticleSnapshots::Record*> particleRecords(items.size(), nullptr);
-		for (std::size_t i = 0; i < items.size(); ++i)
-			if (items[i].palette && items[i].item->particles)
-				particleRecords[i] = ParticleSnapshots::Get().Follow(items[i].item->geometry.get());
-		executor.ParallelFor("CS.DCLF.FrameValues.Items", items.size(), kGrain, [&](std::size_t a_begin, std::size_t a_end) {
-			ZoneScopedN("CS.DCLF.FrameValues.Items");
-			auto& mine = changed[a_begin / kGrain];
-			BindlessPlacement row, layer;
-			std::vector<PaletteRow> particleRows;
-			for (std::size_t i = a_begin; i < a_end; ++i) {
-				const auto& [itemPointer, palette, settles, mover] = items[i];
-				const auto& item = *itemPointer;
-				// A first-person particle member reads no engine memory here: no lease, never settling.
-				const bool firstPerson = item.firstPerson;
-				std::optional<EngineReadWindow::Lease> lease;
-				if (!firstPerson)
-					lease.emplace();
-				if (lease && !*lease) {
-					++refusedHere;
-					if (settles)
-						mine.settling.push_back(&item);  // not sampled: the next producer takes it
-					if (mover)
-						mine.owed.push_back(item.geometry.get());
-					continue;
-				}
-				bool changes = false;
-				if (firstPerson)
-					row = out[item.slot];
-				else
-					SampleItem(item, row, layer);
-				// Particle quads, transforms and bound from the newest snapshot (particle data is never read here).
-				auto* particles = particleRecords[i];
-				if (particles) {
-					particleRows.resize(item.boneRows);
-					ParticleSnapshots::Expanded expanded;
-					ParticleSnapshots::Get().Expand(*particles, firstPerson ? a_job.firstPersonParticleCamera : a_job.particleCamera,
-						item.boneRows / ParticleSnapshots::kRowsPerParticle, particleRows.data()->v, expanded);
-					if (expanded.snapshot) {
-						std::memcpy(row.world, expanded.world, sizeof(row.world));
-						std::memcpy(row.previousWorld, expanded.world, sizeof(row.previousWorld));
-						std::memcpy(row.bound, expanded.bound, sizeof(row.bound));
-						if (firstPerson) {
-							const auto& eye = a_job.firstPersonParticleCamera.eye;
-							const float dx = expanded.bound[0] - eye[0], dy = expanded.bound[1] - eye[1], dz = expanded.bound[2] - eye[2];
-							const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-							firstPersonParticleExpansions.fetch_add(1, std::memory_order_relaxed);
-							firstPersonParticleCount.fetch_add(expanded.particles, std::memory_order_relaxed);
-							const std::uint32_t bits = std::bit_cast<std::uint32_t>(distance);
-							for (std::uint32_t seen = firstPersonParticleFarthest.load(std::memory_order_relaxed);
-								bits > seen && !firstPersonParticleFarthest.compare_exchange_weak(seen, bits, std::memory_order_relaxed);) {}
-						}
-					}
-				}
-				if (settles && !firstPerson && std::memcmp(&item.geometry->world, &DrawnPreviousWorld(*item.geometry), sizeof(RE::NiTransform)) != 0)
-					mine.settling.push_back(&item);
-				if (std::memcmp(&out[item.slot], &row, sizeof(row)) != 0) {
-					out[item.slot] = row;
-					mine.slots.push_back(item.slot);
-					changes = true;
-				}
-				if (!firstPerson && item.layerSlot != kNoObjectSlot && item.layerSlot < out.size() && std::memcmp(&out[item.layerSlot], &layer, sizeof(layer)) != 0) {
-					out[item.layerSlot] = layer;
-					mine.slots.push_back(item.layerSlot);
-					changes = true;
-				}
-				if (palette) {
-					if (particles) {
-						const auto at = PaletteRowsOf(item.boneOffset, item.boneRows);
-						const std::size_t bytes = std::size_t(item.boneRows) * sizeof(PaletteRow);
-						if (std::memcmp(&paletteOut[at.current], particleRows.data(), bytes) != 0) {
-							std::memcpy(&paletteOut[at.current], particleRows.data(), bytes);
-							mine.paletteRuns.emplace_back(at.current, item.boneRows);
-							changes = true;
-						}
-					} else {
-						// Run the engine's palette update, then copy rows that differ (the frame after its motion stops, the update copies the
-						// current palette to the previous: the change that keeps the skin due once more, so its motion vectors settle).
-						auto& geometry = *item.geometry;
-						if (auto* skin = geometry.GetGeometryRuntimeData().skinInstance.get())
-							UpdateSkin(skin, geometry.world);
-						const float* current = nullptr;
-						const float* previous = nullptr;
-						if (!SkinPalettes(geometry, item.boneRows, current, previous)) {
-							++mine.defects;
-						} else {
-							++mine.skins;
-							const auto at = PaletteRowsOf(item.boneOffset, item.boneRows);
-							const std::size_t bytes = std::size_t(item.boneRows) * sizeof(PaletteRow);
-							if (std::memcmp(&paletteOut[at.current], current, bytes) != 0 || std::memcmp(&paletteOut[at.previous], previous, bytes) != 0) {
-								std::memcpy(&paletteOut[at.current], current, bytes);
-								std::memcpy(&paletteOut[at.previous], previous, bytes);
-								mine.paletteRuns.emplace_back(at.current, 2 * item.boneRows);
-								changes = true;
-							}
-						}
-					}
-				}
-				// A mover whose sample changed something is sampled again next frame, until a sample changes nothing: its previous world
-				// and previous palette settle on the current ones the frame after its motion stops.
-				if (mover && changes)
-					mine.owed.push_back(item.geometry.get());
-			}
-		});
-		ParticleSnapshots::Get().EndRun();
+		SampleItems(a_job, items, sampleOut, changed, refusedHere);
 		// Roots: their dependents' sun entries and fade nodes, after the items wrote theirs.
 		std::vector<std::vector<std::uint32_t>> rootChanged(dueRoots.size());
 		std::vector<std::uint8_t> rootRefused(dueRoots.size(), 0);
-		executor.ParallelFor("CS.DCLF.FrameValues.Roots", dueRoots.size(), 16, [&](std::size_t a_begin, std::size_t a_end) {
-			ZoneScopedN("CS.DCLF.FrameValues.Roots");
-			for (std::size_t r = a_begin; r < a_end; ++r) {
-				const auto& root = keptRoots[dueRoots[r]];
-				EngineReadWindow::Lease lease;
-				if (!lease) {
-					++refusedHere;
-					rootRefused[r] = 1;
-					continue;
-				}
-				float entry[4];
-				StoreSunEntry(root.root.get(), entry);
-				for (const auto& dependent : root.dependents) {
-					if (dependent.firstPerson || dependent.slot >= out.size() || !dependent.geometry)
-						continue;
-					const auto write = [&](std::uint32_t a_slot, const RE::BSShaderProperty* a_property) {
-						auto& row = out[a_slot];
-						float fade[4];
-						StoreFadeNode(a_property, fade);
-						if (std::memcmp(row.sunEntry, entry, sizeof(entry)) == 0 && std::memcmp(row.lodFadeNode, fade, sizeof(fade)) == 0)
-							return;
-						std::memcpy(row.sunEntry, entry, sizeof(entry));
-						std::memcpy(row.lodFadeNode, fade, sizeof(fade));
-						rootChanged[r].push_back(a_slot);
-					};
-					write(dependent.slot, dependent.geometry->GetGeometryRuntimeData().shaderProperty.get());
-					if (dependent.layerSlot != kNoObjectSlot && dependent.layerSlot < out.size())
-						write(dependent.layerSlot, LayerPropertyOf(*dependent.geometry));
-				}
-			}
-		});
+		SampleRoots(sampleOut, rootChanged, rootRefused, refusedHere);
 		std::uint64_t marked = 0, paletteMarked = 0;
-		for (const auto& chunk : changed) {
-			for (const auto* item : chunk.settling)
-				settling.push_back(*item);
-			owedKeys.insert(owedKeys.end(), chunk.owed.begin(), chunk.owed.end());
-		}
-		settled += settling.size();
-		for (const auto& chunk : changed) {
-			for (const auto slot : chunk.slots)
-				rows.Mark(slot);
-			marked += chunk.slots.size();
-			for (const auto& [first, count] : chunk.paletteRuns) {
-				palettes.MarkRange(first, count);
-				paletteMarked += count;
-			}
-			skins += chunk.skins;
-			defects += chunk.defects;
-		}
-		for (std::size_t r = 0; r < dueRoots.size(); ++r) {
-			for (const auto slot : rootChanged[r])
-				rows.Mark(slot);
-			marked += rootChanged[r].size();
-			// Likewise a root whose sample changed a row (or was refused) is due next frame.
-			if (rootRefused[r] || !rootChanged[r].empty())
-				owedKeys.push_back(keptRoots[dueRoots[r]].root.get());
-		}
+		MarkSampled(changed, rootChanged, rootRefused, marked, paletteMarked);
 		sampled += static_cast<std::uint64_t>(items.size() + a_job.firstPerson.size());
 		rowsChanged += marked + firstPersonMarked;
 		paletteRowsChanged += paletteMarked + firstPersonPaletteMarked;
@@ -1303,6 +1150,262 @@ namespace DCLF
 		SampleTextureTransforms(a_job);
 	}
 
+	// First-person items are the render thread's (FirstPersonSample), except particle members (expanded from snapshots).
+	void FrameValues::Impl::ListItem(const Plan::Item& a_item, bool a_settles, bool a_mover, std::size_t a_rows, std::size_t a_blocks, std::vector<Listed>& a_items)
+	{
+		if ((a_item.firstPerson && !a_item.particles) || a_item.slot >= a_rows || !a_item.geometry || listed[a_item.slot])
+			return;
+		listed[a_item.slot] = 1;
+		listedSlots.push_back(a_item.slot);
+		const bool palette = a_item.boneRows && std::size_t(a_item.boneOffset) + a_item.boneRows <= a_blocks && !blockListed[a_item.boneOffset];
+		if (palette) {
+			blockListed[a_item.boneOffset] = 1;
+			listedBlocks.push_back(a_item.boneOffset);
+		}
+		a_items.push_back({ &a_item, palette, a_settles, a_mover });
+	}
+
+	// A root writes its dependents' sun entry and fade node after their rows: again whenever one of them was sampled.
+	void FrameValues::Impl::MarkSampledRoots()
+	{
+		for (const auto slot : listedSlots)
+			if (const auto it = slotRoots.find(slot); it != slotRoots.end())
+				for (const auto r : it->second)
+					MarkRoot(r);
+	}
+
+	// The render thread's first-person samples (Kick) onto the rows and palettes.
+	void FrameValues::Impl::ApplyFirstPersonSamples(const Job& a_job, const SampleOut& a_out, std::uint64_t& a_marked, std::uint64_t& a_paletteMarked)
+	{
+		auto& out = a_out.out;
+		auto& paletteOut = a_out.paletteOut;
+		for (const auto& sample : a_job.firstPerson) {
+			if (sample.slot >= out.size())
+				continue;
+			if (std::memcmp(&out[sample.slot], &sample.row, sizeof(sample.row)) != 0) {
+				out[sample.slot] = sample.row;
+				rows.Mark(sample.slot);
+				++a_marked;
+			}
+			if (sample.layerSlot != kNoObjectSlot && sample.layerSlot < out.size() && std::memcmp(&out[sample.layerSlot], &sample.layer, sizeof(sample.layer)) != 0) {
+				out[sample.layerSlot] = sample.layer;
+				rows.Mark(sample.layerSlot);
+				++a_marked;
+			}
+			if (!sample.boneRows || sample.current.size() != sample.boneRows || sample.previous.size() != sample.boneRows)
+				continue;
+			const auto at = PaletteRowsOf(sample.boneOffset, sample.boneRows);
+			if (std::size_t(at.previous) + sample.boneRows > paletteOut.size() || std::size_t(at.current) + sample.boneRows > paletteOut.size())
+				continue;
+			const std::size_t paletteBytes = std::size_t(sample.boneRows) * sizeof(PaletteRow);
+			if (std::memcmp(&paletteOut[at.current], sample.current.data(), paletteBytes) != 0 || std::memcmp(&paletteOut[at.previous], sample.previous.data(), paletteBytes) != 0) {
+				std::memcpy(&paletteOut[at.current], sample.current.data(), paletteBytes);
+				std::memcpy(&paletteOut[at.previous], sample.previous.data(), paletteBytes);
+				palettes.MarkRange(at.current, 2 * sample.boneRows);
+				a_paletteMarked += 2 * sample.boneRows;
+			}
+		}
+	}
+
+	void FrameValues::Impl::SampleItems(const Job& a_job, const std::vector<Listed>& a_items, const SampleOut& a_out, std::vector<Changed>& a_changed,
+		std::atomic<std::uint64_t>& a_refused)
+	{
+		auto& executor = SceneScheduler::Executor();
+		// Particle records, before the parallel loop (ParticleSnapshots::Follow is producer-only).
+		std::vector<ParticleSnapshots::Record*> particleRecords(a_items.size(), nullptr);
+		for (std::size_t i = 0; i < a_items.size(); ++i)
+			if (a_items[i].palette && a_items[i].item->particles)
+				particleRecords[i] = ParticleSnapshots::Get().Follow(a_items[i].item->geometry.get());
+		executor.ParallelFor("CS.DCLF.FrameValues.Items", a_items.size(), kSampleGrain, [&](std::size_t a_begin, std::size_t a_end) {
+			ZoneScopedN("CS.DCLF.FrameValues.Items");
+			auto& mine = a_changed[a_begin / kSampleGrain];
+			ItemScratch scratch;
+			for (std::size_t i = a_begin; i < a_end; ++i)
+				SampleListed(a_job, a_items[i], particleRecords[i], a_out, mine, scratch, a_refused);
+		});
+		ParticleSnapshots::Get().EndRun();
+	}
+
+	void FrameValues::Impl::SampleListed(const Job& a_job, const Listed& a_listed, ParticleSnapshots::Record* a_particles, const SampleOut& a_out, Changed& a_mine,
+		ItemScratch& a_scratch, std::atomic<std::uint64_t>& a_refused)
+	{
+		auto& out = a_out.out;
+		auto& row = a_scratch.row;
+		auto& layer = a_scratch.layer;
+		const auto& [itemPointer, palette, settles, mover] = a_listed;
+		const auto& item = *itemPointer;
+		// A first-person particle member reads no engine memory here: no lease, never settling.
+		const bool firstPerson = item.firstPerson;
+		std::optional<EngineReadWindow::Lease> lease;
+		if (!firstPerson)
+			lease.emplace();
+		if (lease && !*lease) {
+			++a_refused;
+			if (settles)
+				a_mine.settling.push_back(&item);  // not sampled: the next producer takes it
+			if (mover)
+				a_mine.owed.push_back(item.geometry.get());
+			return;
+		}
+		bool changes = false;
+		if (firstPerson)
+			row = out[item.slot];
+		else
+			SampleItem(item, row, layer);
+		// Particle quads, transforms and bound from the newest snapshot (particle data is never read here).
+		if (a_particles)
+			ExpandParticles(a_job, item, *a_particles, a_scratch);
+		if (settles && !firstPerson && std::memcmp(&item.geometry->world, &DrawnPreviousWorld(*item.geometry), sizeof(RE::NiTransform)) != 0)
+			a_mine.settling.push_back(&item);
+		if (std::memcmp(&out[item.slot], &row, sizeof(row)) != 0) {
+			out[item.slot] = row;
+			a_mine.slots.push_back(item.slot);
+			changes = true;
+		}
+		if (!firstPerson && item.layerSlot != kNoObjectSlot && item.layerSlot < out.size() && std::memcmp(&out[item.layerSlot], &layer, sizeof(layer)) != 0) {
+			out[item.layerSlot] = layer;
+			a_mine.slots.push_back(item.layerSlot);
+			changes = true;
+		}
+		if (palette && SamplePalette(item, a_particles != nullptr, a_out, a_mine, a_scratch))
+			changes = true;
+		// A mover whose sample changed something is sampled again next frame, until a sample changes nothing: its previous world
+		// and previous palette settle on the current ones the frame after its motion stops.
+		if (mover && changes)
+			a_mine.owed.push_back(item.geometry.get());
+	}
+
+	void FrameValues::Impl::ExpandParticles(const Job& a_job, const Plan::Item& a_item, ParticleSnapshots::Record& a_particles, ItemScratch& a_scratch)
+	{
+		auto& row = a_scratch.row;
+		auto& particleRows = a_scratch.particleRows;
+		const bool firstPerson = a_item.firstPerson;
+		particleRows.resize(a_item.boneRows);
+		ParticleSnapshots::Expanded expanded;
+		ParticleSnapshots::Get().Expand(a_particles, firstPerson ? a_job.firstPersonParticleCamera : a_job.particleCamera,
+			a_item.boneRows / ParticleSnapshots::kRowsPerParticle, particleRows.data()->v, expanded);
+		if (!expanded.snapshot)
+			return;
+		std::memcpy(row.world, expanded.world, sizeof(row.world));
+		std::memcpy(row.previousWorld, expanded.world, sizeof(row.previousWorld));
+		std::memcpy(row.bound, expanded.bound, sizeof(row.bound));
+		if (firstPerson) {
+			const auto& eye = a_job.firstPersonParticleCamera.eye;
+			const float dx = expanded.bound[0] - eye[0], dy = expanded.bound[1] - eye[1], dz = expanded.bound[2] - eye[2];
+			const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+			firstPersonParticleExpansions.fetch_add(1, std::memory_order_relaxed);
+			firstPersonParticleCount.fetch_add(expanded.particles, std::memory_order_relaxed);
+			const std::uint32_t bits = std::bit_cast<std::uint32_t>(distance);
+			for (std::uint32_t seen = firstPersonParticleFarthest.load(std::memory_order_relaxed);
+				bits > seen && !firstPersonParticleFarthest.compare_exchange_weak(seen, bits, std::memory_order_relaxed);) {}
+		}
+	}
+
+	// A listed palette block's rows (true when any changed).
+	bool FrameValues::Impl::SamplePalette(const Plan::Item& a_item, bool a_particles, const SampleOut& a_out, Changed& a_mine, const ItemScratch& a_scratch)
+	{
+		const auto& item = a_item;
+		auto& paletteOut = a_out.paletteOut;
+		if (a_particles) {
+			const auto at = PaletteRowsOf(item.boneOffset, item.boneRows);
+			const std::size_t bytes = std::size_t(item.boneRows) * sizeof(PaletteRow);
+			if (std::memcmp(&paletteOut[at.current], a_scratch.particleRows.data(), bytes) != 0) {
+				std::memcpy(&paletteOut[at.current], a_scratch.particleRows.data(), bytes);
+				a_mine.paletteRuns.emplace_back(at.current, item.boneRows);
+				return true;
+			}
+			return false;
+		}
+		// Run the engine's palette update, then copy rows that differ (the frame after its motion stops, the update copies the
+		// current palette to the previous: the change that keeps the skin due once more, so its motion vectors settle).
+		auto& geometry = *item.geometry;
+		if (auto* skin = geometry.GetGeometryRuntimeData().skinInstance.get())
+			UpdateSkin(skin, geometry.world);
+		const float* current = nullptr;
+		const float* previous = nullptr;
+		if (!SkinPalettes(geometry, item.boneRows, current, previous)) {
+			++a_mine.defects;
+			return false;
+		}
+		++a_mine.skins;
+		const auto at = PaletteRowsOf(item.boneOffset, item.boneRows);
+		const std::size_t bytes = std::size_t(item.boneRows) * sizeof(PaletteRow);
+		if (std::memcmp(&paletteOut[at.current], current, bytes) != 0 || std::memcmp(&paletteOut[at.previous], previous, bytes) != 0) {
+			std::memcpy(&paletteOut[at.current], current, bytes);
+			std::memcpy(&paletteOut[at.previous], previous, bytes);
+			a_mine.paletteRuns.emplace_back(at.current, 2 * item.boneRows);
+			return true;
+		}
+		return false;
+	}
+	void FrameValues::Impl::SampleRoots(const SampleOut& a_out, std::vector<std::vector<std::uint32_t>>& a_rootChanged, std::vector<std::uint8_t>& a_rootRefused,
+		std::atomic<std::uint64_t>& a_refused)
+	{
+		auto& out = a_out.out;
+		SceneScheduler::Executor().ParallelFor("CS.DCLF.FrameValues.Roots", dueRoots.size(), 16, [&](std::size_t a_begin, std::size_t a_end) {
+			ZoneScopedN("CS.DCLF.FrameValues.Roots");
+			for (std::size_t r = a_begin; r < a_end; ++r) {
+				const auto& root = keptRoots[dueRoots[r]];
+				EngineReadWindow::Lease lease;
+				if (!lease) {
+					++a_refused;
+					a_rootRefused[r] = 1;
+					continue;
+				}
+				float entry[4];
+				StoreSunEntry(root.root.get(), entry);
+				for (const auto& dependent : root.dependents) {
+					if (dependent.firstPerson || dependent.slot >= out.size() || !dependent.geometry)
+						continue;
+					const auto write = [&](std::uint32_t a_slot, const RE::BSShaderProperty* a_property) {
+						auto& row = out[a_slot];
+						float fade[4];
+						StoreFadeNode(a_property, fade);
+						if (std::memcmp(row.sunEntry, entry, sizeof(entry)) == 0 && std::memcmp(row.lodFadeNode, fade, sizeof(fade)) == 0)
+							return;
+						std::memcpy(row.sunEntry, entry, sizeof(entry));
+						std::memcpy(row.lodFadeNode, fade, sizeof(fade));
+						a_rootChanged[r].push_back(a_slot);
+					};
+					write(dependent.slot, dependent.geometry->GetGeometryRuntimeData().shaderProperty.get());
+					if (dependent.layerSlot != kNoObjectSlot && dependent.layerSlot < out.size())
+						write(dependent.layerSlot, LayerPropertyOf(*dependent.geometry));
+				}
+			}
+		});
+	}
+
+	// The chunks' and roots' changes into the journals (single-threaded), and what is due again next frame.
+	void FrameValues::Impl::MarkSampled(const std::vector<Changed>& a_changed, const std::vector<std::vector<std::uint32_t>>& a_rootChanged,
+		const std::vector<std::uint8_t>& a_rootRefused, std::uint64_t& a_marked, std::uint64_t& a_paletteMarked)
+	{
+		for (const auto& chunk : a_changed) {
+			for (const auto* item : chunk.settling)
+				settling.push_back(*item);
+			owedKeys.insert(owedKeys.end(), chunk.owed.begin(), chunk.owed.end());
+		}
+		settled += settling.size();
+		for (const auto& chunk : a_changed) {
+			for (const auto slot : chunk.slots)
+				rows.Mark(slot);
+			a_marked += chunk.slots.size();
+			for (const auto& [first, count] : chunk.paletteRuns) {
+				palettes.MarkRange(first, count);
+				a_paletteMarked += count;
+			}
+			skins += chunk.skins;
+			defects += chunk.defects;
+		}
+		for (std::size_t r = 0; r < dueRoots.size(); ++r) {
+			for (const auto slot : a_rootChanged[r])
+				rows.Mark(slot);
+			a_marked += a_rootChanged[r].size();
+			// Likewise a root whose sample changed a row (or was refused) is due next frame.
+			if (a_rootRefused[r] || !a_rootChanged[r].empty())
+				owedKeys.push_back(keptRoots[dueRoots[r]].root.get());
+		}
+	}
+
 	void FrameValues::Impl::CheckEveryMover(const Job& a_job)
 	{
 		ZoneScopedN("CS.DCLF.FrameValues.MovedParity");
@@ -1312,12 +1415,6 @@ namespace DCLF
 		// idempotent per frame (a due skin's runs again for nothing); a skin not due runs it here as the native bone setter would.
 		(void)a_job;
 		const auto& out = rows.Get();
-		const auto& paletteOut = palettes.Get();
-		struct Fresh
-		{
-			BindlessPlacement row{}, layer{};
-			bool sampled = false;
-		};
 		std::vector<Fresh> fresh(keptMovers.size());
 		ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> slotMover;  // a checked mover's slot and its layer's: its index
 		for (std::uint32_t m = 0; m < keptMovers.size(); ++m) {
@@ -1330,6 +1427,21 @@ namespace DCLF
 		}
 		std::atomic<std::uint64_t> palettesChecked{ 0 }, palettesDiffer{ 0 };
 		std::string firstPalette;
+		SampleFreshMovers(out, fresh, palettesChecked, palettesDiffer, firstPalette);
+		std::string firstRoot;
+		ApplyFreshRoots(out, slotMover, fresh, firstRoot);
+		std::string firstRow;
+		CompareFreshRows(out, fresh, firstRow);
+		ReportMovedParity(palettesChecked.load(), palettesDiffer.load(), firstRow, firstPalette, firstRoot);
+	}
+
+	// Every checked mover sampled fresh (nothing written), and its palette against the one the producers left.
+	void FrameValues::Impl::SampleFreshMovers(const std::vector<BindlessPlacement>& a_out, std::vector<Fresh>& a_fresh, std::atomic<std::uint64_t>& a_palettesChecked,
+		std::atomic<std::uint64_t>& a_palettesDiffer, std::string& a_firstPalette)
+	{
+		const auto& out = a_out;
+		const auto& paletteOut = palettes.Get();
+		auto& fresh = a_fresh;
 		std::atomic_flag firstPaletteTaken;
 		SceneScheduler::Executor().ParallelFor("CS.DCLF.FrameValues.MovedParity", keptMovers.size(), 64, [&](std::size_t a_begin, std::size_t a_end) {
 			for (std::size_t m = a_begin; m < a_end; ++m) {
@@ -1350,22 +1462,30 @@ namespace DCLF
 				const float* previous = nullptr;
 				if (!SkinPalettes(geometry, item.boneRows, current, previous))
 					continue;
-				++palettesChecked;
+				++a_palettesChecked;
 				const auto at = PaletteRowsOf(item.boneOffset, item.boneRows);
 				const std::size_t bytes = std::size_t(item.boneRows) * sizeof(PaletteRow);
 				const bool currentDiffers = std::memcmp(&paletteOut[at.current], current, bytes) != 0;
 				if (currentDiffers || std::memcmp(&paletteOut[at.previous], previous, bytes) != 0) {
-					++palettesDiffer;
+					++a_palettesDiffer;
 					if (!firstPaletteTaken.test_and_set())
-						firstPalette = fmt::format("palette of slot {} ('{}', {}): {}", item.slot, geometry.name.c_str(), moverDue[m] ? "due" : "not due",
+						a_firstPalette = fmt::format("palette of slot {} ('{}', {}): {}", item.slot, geometry.name.c_str(), moverDue[m] ? "due" : "not due",
 							currentDiffers ? "current" : "previous");
 				}
 			}
 		});
-		// The roots onto the fresh rows of their dependents, as the producer orders them (after the items); a dependent that is no
-		// checked mover is compared on the two values the root writes.
+	}
+
+	// The roots onto the fresh rows of their dependents, as the producer orders them (after the items); a dependent that is no
+	// checked mover is compared on the two values the root writes.
+	void FrameValues::Impl::ApplyFreshRoots(const std::vector<BindlessPlacement>& a_out, const ankerl::unordered_dense::map<std::uint32_t, std::uint32_t>& a_slotMover,
+		std::vector<Fresh>& a_fresh, std::string& a_firstRoot)
+	{
+		const auto& out = a_out;
+		const auto& slotMover = a_slotMover;
+		auto& fresh = a_fresh;
+		auto& firstRoot = a_firstRoot;
 		auto& p = movedParity;
-		std::string firstRoot;
 		for (std::uint32_t r = 0; r < keptRoots.size(); ++r) {
 			const auto& root = keptRoots[r];
 			EngineReadWindow::Lease lease;
@@ -1398,7 +1518,15 @@ namespace DCLF
 					apply(dependent.layerSlot, LayerPropertyOf(*dependent.geometry));
 			}
 		}
-		std::string firstRow;
+	}
+
+	// Every fresh row against the row the producers left.
+	void FrameValues::Impl::CompareFreshRows(const std::vector<BindlessPlacement>& a_out, const std::vector<Fresh>& a_fresh, std::string& a_firstRow)
+	{
+		const auto& out = a_out;
+		const auto& fresh = a_fresh;
+		auto& firstRow = a_firstRow;
+		auto& p = movedParity;
 		for (std::uint32_t m = 0; m < keptMovers.size(); ++m) {
 			if (!fresh[m].sampled)
 				continue;
@@ -1418,15 +1546,21 @@ namespace DCLF
 			if (item.layerSlot != kNoObjectSlot && item.layerSlot < out.size())
 				compare(item.layerSlot, fresh[m].layer);
 		}
-		p.palettes += palettesChecked.load();
-		p.palettesDiffer += palettesDiffer.load();
+	}
+
+	void FrameValues::Impl::ReportMovedParity(std::uint64_t a_palettesChecked, std::uint64_t a_palettesDiffer, const std::string& a_firstRow,
+		const std::string& a_firstPalette, const std::string& a_firstRoot)
+	{
+		auto& p = movedParity;
+		p.palettes += a_palettesChecked;
+		p.palettesDiffer += a_palettesDiffer;
 		++p.checks;
 		p.movers += liveMovers;
 		p.moversDue += dueMovers.size();
 		p.roots += liveRoots;
 		p.rootsDue += dueRoots.size();
 		if (p.first.empty())
-			p.first = !firstRow.empty() ? firstRow : !firstPalette.empty() ? firstPalette : firstRoot;
+			p.first = !a_firstRow.empty() ? a_firstRow : !a_firstPalette.empty() ? a_firstPalette : a_firstRoot;
 		const bool differs = p.rowsDiffer || p.palettesDiffer || p.rootRowsDiffer;
 		if (p.checks < 5 && !differs)
 			return;
@@ -1748,6 +1882,145 @@ namespace DCLF
 		return runtime.Host() && runtime.FrameWaitTimeline();
 	}
 
+	void FrameValues::Impl::CopySeeds(std::vector<FadeSeedItem>& a_seeds, const std::shared_ptr<const FrameGlobals>& a_globals)
+	{
+		for (auto& seed : a_seeds) {
+			if (!seed.node)
+				continue;
+			auto& copy = unsentSeeds.emplace_back();
+			std::memcpy(copy.bytes.data(), seed.node.get(), FadeState::NodeBytes(FadeState::PlanOf(*seed.node)));
+			copy.node = std::move(seed.node);
+			copy.globals = a_globals;
+			copy.row = seed.row;
+			copy.generation = seed.generation;
+			seedRows = std::max(seedRows, seed.row + 1);
+		}
+	}
+
+	void FrameValues::Impl::ReadTreeSeeds(const std::vector<TreeSeedItem>& a_treeSeeds, const std::shared_ptr<const FrameGlobals>& a_globals)
+	{
+		FrameGlobals::Scope scope(a_globals);
+		// Tree seeds likewise, but read here: TreeStaticOfNode's near-list test reads the tree's multibound shape's cull result (FUN_14147d640
+		// is a pure read, the first child's AsMultiBoundNode; then the shape's +0x10), which this frame's culls write.
+		for (const auto& seed : a_treeSeeds) {
+			if (!seed.node)
+				continue;
+			TreeStatic row;
+			TreeStaticOfNode(seed.node.get(), row);
+			row.generation = seed.generation;
+			row.seedOdd = seed.row & 1u;
+			unsentTreeSeeds.emplace_back(seed.row, row);
+			treeSeedRows = std::max(treeSeedRows, seed.row + 1);
+		}
+	}
+
+	// The kept set's first-person movers, every plan applied in order (the producers apply the same plans to the whole set).
+	void FrameValues::Impl::ApplyFirstPersonPlans(const std::vector<std::shared_ptr<const Plan>>& a_plans)
+	{
+		for (const auto& applied : a_plans) {
+			if (!applied)
+				continue;
+			auto release = [](Plan::Item& a_item) {
+				ReleaseLater(a_item.geometry);
+				ReleaseLater(a_item.sunEntryNode);
+			};
+			if (applied->reset) {
+				for (auto& [geometry, item] : firstPersonMovers)
+					release(item);
+				firstPersonMovers.clear();
+			}
+			for (const void* geometry : applied->moversLeft)
+				if (const auto it = firstPersonMovers.find(geometry); it != firstPersonMovers.end()) {
+					release(it->second);
+					firstPersonMovers.erase(it);
+				}
+			for (const auto& item : applied->movers) {
+				if (!item.geometry)
+					continue;
+				const auto it = firstPersonMovers.find(item.geometry.get());
+				if (it != firstPersonMovers.end()) {
+					release(it->second);
+					if (item.firstPerson)
+						it->second = item;
+					else
+						firstPersonMovers.erase(it);
+				} else if (item.firstPerson) {
+					firstPersonMovers.emplace(item.geometry.get(), item);
+				}
+			}
+		}
+	}
+
+	void FrameValues::Impl::QueuePlans(std::vector<std::shared_ptr<const Plan>>& a_plans)
+	{
+		for (auto& queued : a_plans)
+			if (queued) {
+				unsampled.push_back(queued);
+				plan = std::move(queued);
+				++planSerial;
+			}
+	}
+
+	void FrameValues::Impl::LeaseBackings(Job& a_job)
+	{
+		const std::array<std::uint64_t, kPools> needed{ plan ? plan->slots : 0u, plan ? 2ull * plan->boneCapacity : 0u,
+			plan ? plan->slots : 0u, seedRows, treeSeedRows, transformRows };
+		for (std::size_t part = 0; part < kPools; ++part) {
+			auto& pool = pools[part];
+			pool.capacity = org::services::GrowthPolicy::Doubling(1024).Next(pool.capacity, needed[part]);
+			const auto name = fmt::format("cs.dclf.frame-values.{}", kPartNames[part]);
+			org::services::BackingPool::AcquireInfo info;
+			auto lease = pool.pool->Acquire({ .capacityClass = pool.capacity, .stride = kStrides[part], .name = name },
+				pool.newestContentEpoch.load(std::memory_order_acquire), &info);
+			if (!lease)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: the frame values' {} pool returned no backing", kPartNames[part]));
+			++pool.acquires;
+			if (info.allocated)
+				++pool.made;
+			a_job.oldestContentEpochs[part] = pool.pool->OldestContentEpoch();
+			pool.floor.store(a_job.oldestContentEpochs[part].value_or(0), std::memory_order_relaxed);
+			frameLeases[part] = lease;
+			a_job.leases[part] = std::move(lease);
+		}
+	}
+
+	void FrameValues::Impl::SampleFirstPerson(Job& a_job, const SetSnapshot& a_claims)
+	{
+		std::vector<std::uint8_t> taken;
+		auto take = [&](const Plan::Item& a_item) {
+			if (!a_item.firstPerson || !a_item.geometry || a_item.slot == kNoObjectSlot || !(a_claims.PhasesOf(a_item.geometry.get()) & kSetFirstPerson))
+				return;
+			if (taken.size() <= a_item.slot)
+				taken.resize(a_item.slot + 1, 0);
+			if (std::exchange(taken[a_item.slot], 1))
+				return;
+			auto& sample = a_job.firstPerson.emplace_back();
+			sample.slot = a_item.slot;
+			sample.layerSlot = a_item.layerSlot;
+			SampleItem(a_item, sample.row, sample.layer);
+			if (!a_item.boneRows)
+				return;
+			auto& geometry = *a_item.geometry;
+			if (auto* skin = geometry.GetGeometryRuntimeData().skinInstance.get())
+				UpdateSkin(skin, geometry.world);
+			const float* current = nullptr;
+			const float* previous = nullptr;
+			if (!SkinPalettes(geometry, a_item.boneRows, current, previous))
+				return;
+			sample.boneOffset = a_item.boneOffset;
+			sample.boneRows = a_item.boneRows;
+			const auto* currentRows = reinterpret_cast<const PaletteRow*>(current);
+			const auto* previousRows = reinterpret_cast<const PaletteRow*>(previous);
+			sample.current.assign(currentRows, currentRows + a_item.boneRows);
+			sample.previous.assign(previousRows, previousRows + a_item.boneRows);
+		};
+		for (const auto& [geometry, item] : firstPersonMovers)
+			take(item);
+		for (auto it = a_job.written.rbegin(); it != a_job.written.rend(); ++it)
+			for (const auto& item : (*it)->written)
+				take(item);
+	}
+
 	bool FrameValues::Kick(std::vector<std::shared_ptr<const PlacementPlan>> a_plans, std::vector<ShadingItem> a_shading,
 		std::vector<WetnessValue> a_wetness, std::vector<FadeSeedItem> a_seeds, std::vector<TreeSeedItem> a_treeSeeds,
 		std::shared_ptr<const FrameGlobals> a_globals)
@@ -1758,79 +2031,18 @@ namespace DCLF
 		BindFrameLeases(s.frameLeases);
 		// Fade seeds: the node as the frame's start has it, before this frame's culls update it (FadeStateCS's first update is this
 		// frame's): its bytes copied here, the row made from the copy by the producer (StaticOf, with the frame's globals: its LOD scale).
-		for (auto& seed : a_seeds) {
-			if (!seed.node)
-				continue;
-			auto& copy = s.unsentSeeds.emplace_back();
-			std::memcpy(copy.bytes.data(), seed.node.get(), FadeState::NodeBytes(FadeState::PlanOf(*seed.node)));
-			copy.node = std::move(seed.node);
-			copy.globals = a_globals;
-			copy.row = seed.row;
-			copy.generation = seed.generation;
-			s.seedRows = std::max(s.seedRows, seed.row + 1);
-		}
-		{
-			FrameGlobals::Scope scope(a_globals);
-			// Tree seeds likewise, but read here: TreeStaticOfNode's near-list test reads the tree's multibound shape's cull result (FUN_14147d640
-			// is a pure read, the first child's AsMultiBoundNode; then the shape's +0x10), which this frame's culls write.
-			for (const auto& seed : a_treeSeeds) {
-				if (!seed.node)
-					continue;
-				TreeStatic row;
-				TreeStaticOfNode(seed.node.get(), row);
-				row.generation = seed.generation;
-				row.seedOdd = seed.row & 1u;
-				s.unsentTreeSeeds.emplace_back(seed.row, row);
-				s.treeSeedRows = std::max(s.treeSeedRows, seed.row + 1);
-			}
-		}
+		s.CopySeeds(a_seeds, a_globals);
+		s.ReadTreeSeeds(a_treeSeeds, a_globals);
 		// Appended after any not yet taken (newest last).
 		s.unsampledShading.insert(s.unsampledShading.end(), std::make_move_iterator(a_shading.begin()), std::make_move_iterator(a_shading.end()));
 		s.unsampledWetness.insert(s.unsampledWetness.end(), a_wetness.begin(), a_wetness.end());
-		// The kept set's first-person movers, every plan applied in order (the producers apply the same plans to the whole set).
-		for (const auto& plan : a_plans) {
-			if (!plan)
-				continue;
-			auto release = [](Plan::Item& a_item) {
-				ReleaseLater(a_item.geometry);
-				ReleaseLater(a_item.sunEntryNode);
-			};
-			if (plan->reset) {
-				for (auto& [geometry, item] : s.firstPersonMovers)
-					release(item);
-				s.firstPersonMovers.clear();
-			}
-			for (const void* geometry : plan->moversLeft)
-				if (const auto it = s.firstPersonMovers.find(geometry); it != s.firstPersonMovers.end()) {
-					release(it->second);
-					s.firstPersonMovers.erase(it);
-				}
-			for (const auto& item : plan->movers) {
-				if (!item.geometry)
-					continue;
-				const auto it = s.firstPersonMovers.find(item.geometry.get());
-				if (it != s.firstPersonMovers.end()) {
-					release(it->second);
-					if (item.firstPerson)
-						it->second = item;
-					else
-						s.firstPersonMovers.erase(it);
-				} else if (item.firstPerson) {
-					s.firstPersonMovers.emplace(item.geometry.get(), item);
-				}
-			}
-		}
+		s.ApplyFirstPersonPlans(a_plans);
 		auto* host = RenderGraphRuntime::Get().Host();
 		auto timeline = RenderGraphRuntime::Get().FrameWaitTimeline();
 		auto uploads = host ? host->RetainUploads() : nullptr;
 		if (!host || !timeline || !uploads || !uploads->HasDedicatedStreamingQueue()) {
 			// Plans wait for the first producer; startup frames precede the upload queue (made by the graph's first build).
-			for (auto& plan : a_plans)
-				if (plan) {
-					s.unsampled.push_back(plan);
-					s.plan = std::move(plan);
-					++s.planSerial;
-				}
+			s.QueuePlans(a_plans);
 			if (host)
 				host->SetFrameWaitValue(0);
 			// No backing is leased for the frame: its draws have no rows (no index names a backing the pool may release).
@@ -1842,12 +2054,7 @@ namespace DCLF
 			return false;
 		}
 		// Every plan since the last frame, in order: the producer applies each onto its kept set and samples its written slots.
-		for (auto& plan : a_plans)
-			if (plan) {
-				s.unsampled.push_back(plan);
-				s.plan = std::move(plan);
-				++s.planSerial;
-			}
+		s.QueuePlans(a_plans);
 		// Release finished producers' plans here on the render thread (they hold engine references).
 		const auto finished = s.done.load(std::memory_order_acquire);
 		while (!s.plans.empty() && s.plans.front().first <= finished)
@@ -1881,25 +2088,7 @@ namespace DCLF
 		// Each part's backing, holding every row the producer leaves (a class of GrowthPolicy::Doubling(1024)), the one that holds
 		// most of the journal preferred; the floor (the oldest content in circulation, this lease's included) is what the
 		// producer's journal keeps.
-		const std::array<std::uint64_t, kPools> needed{ s.plan ? s.plan->slots : 0u, s.plan ? 2ull * s.plan->boneCapacity : 0u,
-			s.plan ? s.plan->slots : 0u, s.seedRows, s.treeSeedRows, s.transformRows };
-		for (std::size_t part = 0; part < kPools; ++part) {
-			auto& pool = s.pools[part];
-			pool.capacity = org::services::GrowthPolicy::Doubling(1024).Next(pool.capacity, needed[part]);
-			const auto name = fmt::format("cs.dclf.frame-values.{}", Impl::kPartNames[part]);
-			org::services::BackingPool::AcquireInfo info;
-			auto lease = pool.pool->Acquire({ .capacityClass = pool.capacity, .stride = Impl::kStrides[part], .name = name },
-				pool.newestContentEpoch.load(std::memory_order_acquire), &info);
-			if (!lease)
-				stl::report_and_fail(fmt::format("Drawcall Limit Fix: the frame values' {} pool returned no backing", Impl::kPartNames[part]));
-			++pool.acquires;
-			if (info.allocated)
-				++pool.made;
-			job.oldestContentEpochs[part] = pool.pool->OldestContentEpoch();
-			pool.floor.store(job.oldestContentEpochs[part].value_or(0), std::memory_order_relaxed);
-			s.frameLeases[part] = lease;
-			job.leases[part] = std::move(lease);
-		}
+		s.LeaseBackings(job);
 		job.timeline = std::move(timeline);
 		job.uploads = std::move(uploads);
 		job.particleCamera = ParticleSnapshots::Get().FrameCamera();
@@ -1910,41 +2099,8 @@ namespace DCLF
 			std::memcpy(job.firstPersonParticleCamera.eye, eye, sizeof(job.firstPersonParticleCamera.eye));
 		// Claimed first-person members, sampled after the engine's update and before Main::Draw's first-person shift
 		// (FUN_1414cb020), palettes included: the engine draws none of them, so none of its reads see a world-space palette.
-		if (const auto claims = std::exchange(firstPersonClaims, nullptr)) {
-			std::vector<std::uint8_t> taken;
-			auto take = [&](const Plan::Item& a_item) {
-				if (!a_item.firstPerson || !a_item.geometry || a_item.slot == kNoObjectSlot || !(claims->PhasesOf(a_item.geometry.get()) & kSetFirstPerson))
-					return;
-				if (taken.size() <= a_item.slot)
-					taken.resize(a_item.slot + 1, 0);
-				if (std::exchange(taken[a_item.slot], 1))
-					return;
-				auto& sample = job.firstPerson.emplace_back();
-				sample.slot = a_item.slot;
-				sample.layerSlot = a_item.layerSlot;
-				SampleItem(a_item, sample.row, sample.layer);
-				if (!a_item.boneRows)
-					return;
-				auto& geometry = *a_item.geometry;
-				if (auto* skin = geometry.GetGeometryRuntimeData().skinInstance.get())
-					UpdateSkin(skin, geometry.world);
-				const float* current = nullptr;
-				const float* previous = nullptr;
-				if (!SkinPalettes(geometry, a_item.boneRows, current, previous))
-					return;
-				sample.boneOffset = a_item.boneOffset;
-				sample.boneRows = a_item.boneRows;
-				const auto* currentRows = reinterpret_cast<const PaletteRow*>(current);
-				const auto* previousRows = reinterpret_cast<const PaletteRow*>(previous);
-				sample.current.assign(currentRows, currentRows + a_item.boneRows);
-				sample.previous.assign(previousRows, previousRows + a_item.boneRows);
-			};
-			for (const auto& [geometry, item] : s.firstPersonMovers)
-				take(item);
-			for (auto it = job.written.rbegin(); it != job.written.rend(); ++it)
-				for (const auto& item : (*it)->written)
-					take(item);
-		}
+		if (const auto claims = std::exchange(firstPersonClaims, nullptr))
+			s.SampleFirstPerson(job, *claims);
 		if (s.plan)
 			s.plans.emplace_back(seq, s.plan);
 		frameIndex = s.frameLeases[Impl::kPlacements]->srvIndex;

@@ -1,6 +1,6 @@
 // The water reflection's cube map faces drawn by DCLF (dclf-lod.md, "Water reflections"): the faces' capture, the forward
 // programs and pipelines of the LOD they draw, the reflection phase's readiness, and the faces' commit (their epoch is
-// ViewEpoch.cpp's, its passes ViewEpochRecord.cpp's). Render thread, but for ReflectionDrawable (the scene lane's commit).
+// ViewEpoch.cpp's, its passes ViewEpochRecord.cpp's). Render thread, but for ReflectionDrawable and ReflectionSlotReady (the scene lane's commit).
 
 #include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -191,6 +191,20 @@ namespace DCLF
 		// withhold nothing until their epoch can draw them (DecideCoverage: the resources and the revision's shape).
 		// The published targets (the scene lane's commit calls this: Coordinator::SetCapability), never the render thread's own copy.
 		return ActiveToggles().reflections && !failed && impl->reflection.LaneTargets().colour != DXGI_FORMAT_UNKNOWN;
+	}
+
+	bool IndirectDraws::ReflectionSlotReady(const void* a_tables, const PipelineCatalog* a_catalog, std::uint32_t a_slot) const
+	{
+		// The faces' forward pipeline of the slot's pipeline as a_catalog has it for the faces' targets (ReflectionPipelinesOf's rule,
+		// which the revision's shapes resolve from their publication's catalog): the scene lane's commit's, from its own catalog, never the
+		// render thread's per-frame list (Reflection::slotPipelines, which PrepareReflection assigns whole).
+		const auto& tables = *static_cast<const SceneTables*>(a_tables);
+		const ForwardTargets targets = impl->reflection.LaneTargets();  // the published copy (the render thread writes `targets` at every face capture)
+		if (!a_catalog || targets.colour == DXGI_FORMAT_UNKNOWN || a_slot >= tables.objects.size())
+			return false;
+		const std::uint32_t p = tables.objects[a_slot].pipelineIndex;
+		ForwardPipelineKey key;
+		return p < tables.pipelines.size() && ViewForwardKey(ViewKind::Reflection, tables, p, key) && ForwardPipelineOf(a_catalog, key, targets).valid();
 	}
 
 	bool IndirectDraws::Impl::ReflectionPhaseReady(const SceneTables& a_tables, std::uint32_t a_slot) const
