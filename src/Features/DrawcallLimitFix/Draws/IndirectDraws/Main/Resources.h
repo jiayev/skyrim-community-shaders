@@ -1,22 +1,25 @@
 #pragma once
 
-// The main epochs' graph resources, bindings, bucket plans, shape inputs and pass statistics. Render thread's; sizing changes come
-// from the revision producer (Growths). Included by Internal.h.
+// The main epochs' graph resources, bindings, bucket plans, shape inputs and pass statistics. Render thread's; their buffers grow
+// to the revision producer's requirements (SceneBufferSet), its layout (MainLayout) derived from the scene's draw bound.
+// Included by Internal.h.
 
 namespace DCLF::Draws
 {
 	/**
-	 * @brief The sizes the main epochs index the sequences and Z-prepass bucket counts by (Impl::ReserveMainSequences); changes
-	 * as one with those buffers' growth (Growths::Change; a revision's shapes take the change it names).
+	 * @brief How the main epochs lay out the sequences and the Z-prepass buckets (the revision producer's, Impl::RequireMain): derived
+	 * from the scene's draw bound, grown only when exceeded (powers of two), so the recorded calls change only then. Every buffer it
+	 * indexes is required to hold it, and a set sealed without that is never named, so a shape made from this layout and the named
+	 * buffers always agree.
 	 */
-	struct MainSizing
+	struct MainLayout
 	{
 		// Z-prepass plain draws (MainOpaquePass, DCLF_PULLED): per pipeline slot, its bucket's range of each phase's sequences
-		// (every draw the slot can produce; grown to a power of two only when exceeded, so the recorded calls change only then:
-		// zBucketsLayout), and each phase's count words, one per slot, zeroed by the depth commit.
+		// (every draw the slot can produce; zBucketsLayout moves with them), and the count words the buckets take (slots, then a
+		// twin per terrain group 1 slot), zeroed by the depth commit.
 		std::vector<std::uint32_t> zBucketCapacity, zBucketFirst;
 		std::uint64_t zBucketsLayout = 0;
-		std::uint32_t zBucketCountWords = 0;
+		std::uint32_t buckets = 0;
 		// Sequence buffer ranges (GpuLayouts.h, SequenceSlots): draws per draw range and per decal group.
 		std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
 		// Within sequenceDraws, power-of-two ranges in phase 2 (GpuLayouts.h): the terrain groups' (kTerrainGroups), then each
@@ -24,32 +27,45 @@ namespace DCLF::Draws
 		std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
 		std::uint32_t forwardCapacity = 0;
 		std::uint32_t refractionCapacity = 0;
-		// Capacity of the per-object buffers (inputs, inputsDepth, visibility, frustum): the scene's (ReserveObjectBuffers).
-		std::uint32_t objectCapacity = 0;
-		bool operator==(const MainSizing&) const = default;
+		bool operator==(const MainLayout&) const = default;
 	};
+	/** @brief The main layout's first sequence ranges (CS_DCLF_TABLE_START=small: a few draws, to test growth). */
+	MainLayout InitialMainLayout();
 
-	struct Resources : MainSizing
+	struct MainRowCaptures;
+	struct Resources
 	{
-		// Draws the newest sequences change asks for: a commit past the adopted ranges checks against it.
-		std::atomic<std::uint32_t> askedSequenceDraws{ 0 };
 		std::vector<FrameBuffer> frameBuffers;
-		// The main pass's rows (DrawPipelines.h), shared by both segments, by material and pipeline slot. *Held: the kept rows'
-		// version they hold, 0 in a new backing.
+		// The main pass's rows (DrawPipelines.h), shared by both segments, by material and pipeline slot. *Filled: the kept rows'
+		// version the table version holds (a captured version: its capture's; else none, sent whole).
 		GrowableRows materialRows, pipelineRows;
-		std::uint64_t materialRowsHeld = 0, pipelineRowsHeld = 0;
+		org::services::FilledContents<> materialRowsFilled, pipelineRowsFilled;
+		// The rows the last main commit sent, as the revision producer took them at its make: what a new row table version is laid
+		// out from (its capture, on the preparation pool).
+		std::shared_ptr<MainRowCaptures> rowCaptures;
 		// Shared by every epoch.
 		std::shared_ptr<SceneBuffers> scene;
 		Versioned inputs, sequences;  // BuildDraws: in, out (and the scene's geometries)
 		std::shared_ptr<org::Buffer> count;
 		std::array<Versioned, 2> zBucketCounts;
 		std::shared_ptr<IndexPool> pool;
-		// The Z-prepass's own draw inputs (different drawable bits). residentUploaded: per segment (0 Z-prepass, 1 colour), the
-		// region version its buffer holds.
+		// The Z-prepass's own draw inputs (different drawable bits). residentFilled: per segment (0 Z-prepass's inputsDepth, 1 the
+		// colour segment's inputs), the region version its buffer version holds.
 		Versioned inputsDepth;
-		std::array<std::uint64_t, 2> residentUploaded{};
+		std::array<org::services::FilledContents<>, 2> residentFilled;
+		/** @brief The segment's input buffer (inputsDepth for the Z-prepass when it has its own) and the residentFilled index. */
+		std::pair<const Versioned*, std::size_t> SegmentInputs(bool a_depthOnly) const
+		{
+			return a_depthOnly && inputsDepth ? std::pair{ &inputsDepth, std::size_t(0) } : std::pair{ &inputs, std::size_t(1) };
+		}
+		/** @brief The region version the segment's input buffer version a_named names holds (0: none, sent whole). */
+		std::uint64_t ResidentHeld(const NamedVersions& a_named, bool a_depthOnly) const
+		{
+			const auto [buffer, index] = SegmentInputs(a_depthOnly);
+			return residentFilled[index].Since(a_named.Of(*buffer)).value_or(0);
+		}
 		std::shared_ptr<const ComputeProgram> buildDraws;
-		winrt::com_ptr<ID3D11Buffer> sequencesD3D11, countD3D11;  // CS_DCLF_BUILD_PARITY readback
+		winrt::com_ptr<ID3D11Buffer> countD3D11;  // the culling counters' readback
 		// The foliage record (Policy::RecordFoliagePixels): per frame parity, each pixel's object and colours, and the compare
 		// pass's results (Diagnostics/Draws/Foliage.cpp), read back per frame slot.
 		struct FoliageRecord
@@ -68,8 +84,6 @@ namespace DCLF::Draws
 			std::uint32_t width = 0, height = 0;
 		};
 		std::shared_ptr<FoliageRecord> foliage;
-		winrt::com_ptr<ID3D11Buffer> visibilityD3D11;              // CS_DCLF_SET_PARITY readback
-		winrt::com_ptr<ID3D11Buffer> frustumD3D11;                 // CS_DCLF_SET_PARITY readback (the fade test's drops)
 		// The per-frame constant blocks at fixed slots (FrameSlotOffset), so a build can name them before their contents exist.
 		std::shared_ptr<org::Buffer> frameConstants;
 		// Targets declared for the latched copies (LatchedCopiesPass); anything else is staged.
@@ -108,17 +122,12 @@ namespace DCLF::Draws
 		// The pipeline sort of phase 1's and the colour segment's sequences; null when off.
 		std::shared_ptr<DrawSort> sort;
 		// Per segment, its last commit. The reflection's faces reuse the previous frame's depth inputs and colour frame record
-		// only while nothing has grown since.
+		// only while the adopted set is the one they were committed against (nothing has grown since).
 		struct Committed
 		{
 			std::uint32_t frame = ~0u, inputs = 0;
-			std::uint64_t sceneGeneration = 0;
-			std::uint32_t objectCapacity = 0;
-			// MainRowsGeneration its inputs embed addresses of.
-			std::uint64_t rowsGeneration = 0;
+			std::uint64_t named = 0;  // the adopted set's serial
 		};
-		/** @brief The material and pipeline rows' backing generation: what draw inputs embed the addresses of. */
-		std::uint64_t MainRowsGeneration() const { return (materialRows.generation << 32) ^ pipelineRows.generation; }
 		std::array<Committed, 2> committed;
 	};
 
@@ -150,7 +159,7 @@ namespace DCLF::Draws
 		std::vector<PassFrame::ZCall> calls;
 		std::uint32_t Buckets() const { return static_cast<std::uint32_t>(calls.size()); }
 	};
-	void PlanZBuckets(const MainSizing& a_resources, const Lookups& a_lookups, const SceneTables& a_tables, const IndirectState& a_indirect, ZBucketPlan& a_out);
+	void PlanZBuckets(const MainLayout& a_layout, const Lookups& a_lookups, const SceneTables& a_tables, const IndirectState& a_indirect, ZBucketPlan& a_out);
 
 	/** @brief A main epoch's frame block sizes (FrameBlocks) per stage and register, which its latched copies take. */
 	struct FrameBlockSizes
@@ -163,8 +172,6 @@ namespace DCLF::Draws
 	std::vector<LatchedCopy> MainLatchedLayout(const Resources& a_resources, bool a_depthOnly, const FrameBlockSizes& a_blocks, std::uint32_t a_buckets);
 	/** @brief The bytes a layout takes of its latch block's slot. */
 	std::size_t LatchedBytes(const std::vector<LatchedCopy>& a_copies);
-	/** @brief Replaces a_block with a larger one unless it already holds a_bytes per slot. */
-	void ReserveLatchedBlock(std::shared_ptr<org::LatchBlock>& a_block, std::size_t a_bytes, std::uint32_t a_slots);
 
 	/** @brief The main pass's render area and depth range, as a segment's last capture had them. */
 	struct MainViewport
@@ -178,7 +185,7 @@ namespace DCLF::Draws
 	struct MainShapeInputs
 	{
 		bool depthOnly = false;
-		std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // MainSizing's ranges
+		std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // MainLayout's ranges
 		std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
 		std::uint32_t forwardCapacity = 0;
 		std::uint32_t refractionCapacity = 0;
@@ -187,17 +194,17 @@ namespace DCLF::Draws
 		rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
 		IndirectState indirect{};
 		std::uint32_t cullMode = 0;
-		std::shared_ptr<const org::LatchBlock> latch;  // the revision producer's (ReserveMainLatch)
+		std::shared_ptr<const org::LatchBlock> latch;  // the one the revision's set names (RequireLatches)
 		MainLatchLayout latchLayout;
 		std::vector<PassFrame::ZCall> zCalls;          // the depth segment's (PlanZBuckets)
 		std::shared_ptr<const ZBucketPlan> zPlan;
 		LatchedList latched;                           // MainLatchedLayout, in its reserved block
 	};
 	/**
-	 * @brief The resources' part of a segment's shape inputs (ranges, rows, a_cullMode). The caller fills the latch and the
-	 * descriptor heaps.
+	 * @brief A segment's shape inputs from the layout and the rows' versions a_named names (ranges, rows, a_cullMode). The caller fills
+	 * the latch and the descriptor heaps.
 	 */
-	MainShapeInputs MainShapeInputsOf(const Resources& a_resources, bool a_depthOnly, std::uint32_t a_cullMode, bool a_revision = false);
+	MainShapeInputs MainShapeInputsOf(const Resources& a_resources, const MainLayout& a_layout, const NamedVersions& a_named, bool a_depthOnly, std::uint32_t a_cullMode);
 	std::shared_ptr<PassFrame> MakeMainShape(const MainShapeInputs& a_in);
 
 

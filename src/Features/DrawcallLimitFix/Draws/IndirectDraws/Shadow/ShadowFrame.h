@@ -77,7 +77,7 @@ namespace DCLF::Draws
 		rhi::DescriptorHeapHandle samplerHeap{};
 		ShadowIndirectState indirect{};
 		std::vector<ShadowFrameView> views;
-		// The latch block (RevisionLatches::shadow, replaced when the slots grow); pass preparation reads it from here.
+		// The latch block (the one the revision's set names: a new one when the layout grows); pass preparation reads it from here.
 		std::shared_ptr<const org::LatchBlock> latch;
 		// Latched copies: view blocks, zeroed counts, and the commit's SharedData/FeatureData (kCommitList).
 		std::array<LatchedList, 3> latched;
@@ -95,23 +95,12 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief The index pool's capacities (ReserveIndexPool). relayouts moves for a same-size relayout of a fragmented pool.
-	 */
-	struct PoolSizing
-	{
-		std::uint32_t capacity = 0;        // in indices
-		std::uint32_t firstsCapacity = 0;  // geometry slots
-		std::uint32_t copiesCapacity = 0;
-		std::uint32_t relayouts = 0;
-		bool operator==(const PoolSizing&) const = default;
-	};
-
-	/**
 	 * @brief Every geometry slot's indices copied into one buffer, so plain indexed draws bind one index buffer and keep vertex
 	 * reuse. Ranges are per slot, never shared: a buffer address is no identity (freed addresses are reused at once). The frame's
-	 * first drawing commit reassigns logged slots' ranges (UpdateIndexPool), copied before its draws. Render thread.
+	 * first drawing commit reassigns logged slots' ranges (UpdateIndexPool), copied before its draws. Render thread. Its capacities
+	 * (indices, geometry slots, copies) are the named versions' units (Impl::RequireIndexPool).
 	 */
-	struct IndexPool : PoolSizing
+	struct IndexPool
 	{
 		static constexpr std::uint32_t kNoRange = ~0u;
 		// A slot's range: first index and count (even: 4-byte aligned), and the source buffer.
@@ -123,13 +112,15 @@ namespace DCLF::Draws
 		Versioned indices;  // 16-bit
 		Versioned firsts;   // per geometry slot: its range's first index, kNoRange without one
 		Versioned copies;   // this commit's copies: source address (low, high), first index, words
-		// A new indices version was adopted: the next update lays out and copies every range again.
-		bool relayout = false;
-		// A new firsts version was adopted (it holds nothing): the next update sends every slot's first index.
-		bool firstsWhole = false;
+		// The versions the last update filled: an indices version it did not lay out is laid out and every range copied again; a
+		// firsts version it did not fill is sent every slot's first index.
+		org::services::FilledVersion indicesFilled, firstsFilled;
 		// Slots waiting for growth (no room, past the first-index table or this commit's copies); retried by every update.
 		std::vector<std::uint32_t> waiting;
-		bool fragmented = false;  // no room though the pool has twice what it holds: a relayout is asked for
+		// No room though the pool has twice what it holds: the serial of the indices version found fragmented, published by the
+		// render thread; the producer requires a version newer than it (a relayout at the same size). A serial alone, so relaxed
+		// order suffices.
+		std::atomic<std::uint64_t> fragmentedAt{ 0 };
 		// The revision producer's bound (RevisionProducer::poolBound): every slot's index count, kept from the log.
 		struct Bound
 		{
@@ -139,7 +130,6 @@ namespace DCLF::Draws
 		} bound;
 		std::shared_ptr<const ComputeProgram> program;
 		rhi::CommandSignaturePtr dispatchSignature;
-		std::uint64_t layout = 0;  // bumped whenever a buffer gets a new backing
 		LogCursor cursor;
 		std::vector<Range> slots;                                   // per geometry slot: its range
 		std::vector<std::uint32_t> slotFirst;                       // per geometry slot: what firsts holds
@@ -148,24 +138,22 @@ namespace DCLF::Draws
 		std::uint64_t indicesHeld = 0;                              // live indices, for the report
 	};
 
-	/** @brief What the shadow epochs' writers index by, changed with those buffers' growth (Growths::Change). */
-	struct ShadowSizing
+	/** @brief What a shadow shape indexes by: the units the named versions of the shadow buffers hold (MakeRevision). */
+	struct ShadowCapacity
 	{
-		std::uint32_t objectCapacity = 0;  // visibility and inputs, as Resources::objectCapacity
-		// Every view slot's sequences in draws (one size for all; a slot added mid-growth uses LatestSizing).
+		// Every view slot's sequences in draws (the least slot's).
 		std::uint32_t sequenceDraws = 0;
-		// Bucket count words per view slot; a pipeline past them waits for the growth (TrimmedRow).
+		// Bucket count words per view slot (the least slot's); a pipeline past them waits for the growth (TrimmedRow).
 		std::uint32_t bucketCountWords = 0;
-		// View slots the view-blocks buffer holds; a frame's views past them stay the engine's (ShadowViewCapacity).
+		// View slots the view-blocks buffer holds; a layout past them is not drawn.
 		std::uint32_t viewSlots = 0;
-		bool operator==(const ShadowSizing&) const = default;
 	};
 
 	/** @brief The shadow latch's first layout (CS_DCLF_TABLE_START=small: Skylighting's map, one view, a few key slots). */
 	ShadowLatchLayout InitialShadowLatchLayout();
 
 	/** @brief The shadow views' graph resources: the main path's set per view slot, without targets or an HZB. */
-	struct ShadowResources : ShadowSizing
+	struct ShadowResources
 	{
 		std::shared_ptr<org::Buffer> constants;
 		Versioned visibility;
@@ -183,16 +171,13 @@ namespace DCLF::Draws
 		std::vector<winrt::com_ptr<ID3D11Buffer>> countD3D11;
 		// The view slots' blocks (kShadowViewSlotBytes a row: b0, b12), written by each epoch's commit.
 		GrowableRows viewBlocks;
-		// ShadowKept versions the inputs and rows hold (0: written without it, or a new backing).
-		std::uint64_t inputsUploaded = 0;
-		std::uint64_t materialRowsHeld = 0;
 		std::uint64_t constantsAddress = 0;
 		std::shared_ptr<const ComputeProgram> buildDraws;
 		// The engine's shadow map arrays, imported once each (again when the engine recreates them), a DSV per slice.
 		std::array<std::shared_ptr<org::ExternalTextureResource>, kShadowDepthTargets> depth;
 		std::array<ID3D11Texture2D*, kShadowDepthTargets> depthTexture{};
 		std::array<std::uint32_t, kShadowDepthTargets> depthLayers{};
-		// The latch blocks are the revision producer's (RevisionLatches). Targets the latched-copies pass declared:
+		// The latch blocks are the revision's set's (NamedVersions::Latch). Targets the latched-copies pass declared:
 		std::atomic<std::shared_ptr<const std::vector<const void*>>> latchedTargets;  // LatchedTarget::key
 		rhi::CommandSignaturePtr dispatchSignature;
 		// This frame's engine views, for the culling readback's report.

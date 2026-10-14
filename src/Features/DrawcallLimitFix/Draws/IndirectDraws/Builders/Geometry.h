@@ -14,13 +14,20 @@ namespace DCLF::Draws
 	void ForEachDrawnGeometry(const SceneTables& a_tables, std::uint32_t a_firstSlot, std::uint32_t a_partitions, F&& a_draw);
 
 	/**
-	 * @brief What a_scene's buffers hold now, with per-object buffers of a_objectBuffers objects (an epoch's inputs). Without the
-	 * tree wind or fade programs no draw reads their rows (the records keep their own wind; no fade root is tested).
+	 * @brief What the versions a_named names of a_scene's buffers hold, with per-object buffers of a_objectBuffers objects (an epoch's
+	 * visibility). A buffer the set does not name holds nothing. Without the tree wind or fade programs no draw reads their rows (the
+	 * records keep their own wind; no fade root is tested).
 	 */
-	inline SceneFit SceneFitOf(const SceneBuffers& a_scene, std::uint32_t a_objectBuffers)
+	inline SceneFit SceneFitOf(const NamedVersions& a_named, const SceneBuffers& a_scene, std::uint64_t a_objectBuffers)
 	{
-		return { std::min(a_scene.objectCapacity, a_objectBuffers), a_scene.geometryRows, a_scene.extraRows, a_scene.faceVertices,
-			a_scene.treeWind && a_scene.trees ? a_scene.treeCapacity : ~0u, a_scene.fadeState && a_scene.fadeRoots ? a_scene.fadeRootCapacity : ~0u };
+		const auto units = [&](const Versioned& a_buffer) { return static_cast<std::uint32_t>(std::min<std::uint64_t>(NamedUnits(a_named, a_buffer), UINT32_MAX)); };
+		SceneFit fit{ static_cast<std::uint32_t>(std::min<std::uint64_t>(units(a_scene.objects), a_objectBuffers)), units(a_scene.geometries), units(a_scene.extras),
+			units(a_scene.facePositions) };
+		if (a_scene.treeWind && a_scene.trees)
+			fit.trees = std::min({ units(a_scene.trees), units(a_scene.treeWindRows[0]), units(a_scene.treeWindRows[1]) });
+		if (a_scene.fadeState && a_scene.fadeRoots)
+			fit.fadeRoots = std::min({ units(a_scene.fadeRoots), units(a_scene.fadeStatesOut[0]), units(a_scene.fadeStatesOut[1]) });
+		return fit;
 	}
 
 	/**
@@ -158,7 +165,7 @@ namespace DCLF::Draws
 	template <class Emit>
 	std::size_t EmitGeometryDraws(const GeometryDrawsOut& a_out, std::uint64_t a_held, Emit&& a_emit, std::size_t a_rows = ~std::size_t(0))
 	{
-		// Clipped to the buffer's rows (a_rows): what is past them waits for its growth (Growths).
+		// Clipped to the buffer's rows (a_rows): what is past them waits for the requirement that grows it.
 		std::size_t bytes = a_out.slots.Emit(a_held, a_emit, a_rows);
 		if (!a_out.faces.empty() && a_out.SlotCount() < a_rows) {
 			const std::size_t faces = std::min(a_out.faces.size(), a_rows - a_out.SlotCount());
@@ -176,7 +183,7 @@ namespace DCLF::Draws
 	constexpr std::uint64_t kPositionInSecondStream = 1ull << 54;
 
 	// The GeometryDraw of object a_object's positions, or ~0u: not a face shape, or no positions buffer. AppendFaceStreams
-	// writes them at these indices, after the slots (the geometry table holds both: ReserveSceneTables).
+	// writes them at these indices, after the slots (the geometry table holds both: RequireSceneTables).
 	inline std::uint32_t FaceStreamGeometry(const SceneTables& a_tables, std::size_t a_object, std::uint64_t a_positions)
 	{
 		if (!a_positions || a_object >= a_tables.faceStream.size() || a_tables.faceStream[a_object] == kNoFaceStream)
@@ -220,18 +227,23 @@ namespace DCLF::Draws
 		a_sequence.streamStride = 16;
 	}
 
-	// A commit's face uploads (render thread): a region at a time, and only when the head's snapshot is not the
-	// one the epoch's buffer holds. The snapshot stays the walk's until its next walk, which is after the commit. A region
-	// past the buffer (a_vertices) waits for its growth.
+	// A commit's face uploads (render thread): a region at a time, and only when the head's snapshot is not the one the version
+	// a_named (the adopted set) names holds (a version it did not fill holds none). The snapshot stays the walk's until its next walk,
+	// which is after the commit. A region past that version's vertices waits for the requirement that grows it.
 	template <class Uploads>
-	std::uint32_t UploadFaceStreams(const std::vector<SceneTables::FaceStream>& a_streams, const Versioned& a_positions,
-		ankerl::unordered_dense::map<std::uint32_t, std::uint64_t>& a_uploaded, Uploads& a_uploads, std::uint32_t a_vertices = ~0u)
+	std::uint32_t UploadFaceStreams(const NamedVersions& a_named, const std::vector<SceneTables::FaceStream>& a_streams, const Versioned& a_positions, FaceUploads& a_uploaded,
+		Uploads& a_uploads)
 	{
+		const auto& version = a_named.Of(a_positions);
+		if (!a_uploaded.version.Holds(version)) {
+			a_uploaded.regions.clear();
+			a_uploaded.version.Filled(version);
+		}
 		std::uint32_t count = 0;
 		for (const auto& stream : a_streams) {
-			if (stream.object == SceneTables::kNoFaceObject || std::uint64_t(stream.region) + stream.vertexCount > a_vertices)
+			if (stream.object == SceneTables::kNoFaceObject || std::uint64_t(stream.region) + stream.vertexCount > version.units)
 				continue;
-			auto& uploaded = a_uploaded[stream.region];
+			auto& uploaded = a_uploaded.regions[stream.region];
 			if (uploaded == stream.generation)
 				continue;
 			a_uploads(a_positions, stream.positions, std::size_t(stream.vertexCount) * 16, std::uint64_t(stream.region) * 16);

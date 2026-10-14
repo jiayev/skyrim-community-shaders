@@ -57,7 +57,6 @@ namespace DCLF
 		next.main = resources;
 		next.shadow = shadow;
 		next.scene = scene;
-		bool deferred = false;
 		if (auto* host = RenderGraphRuntime::Get().Host()) {
 			next.buildGeneration = host->BuildGeneration();
 			if (auto* descriptors = host->Descriptors()) {
@@ -66,10 +65,7 @@ namespace DCLF
 			}
 			next.asyncEpochs = host->AsyncEpochs();
 			next.uploads = host->RetainUploads();
-			deferred = next.asyncEpochs && host->Uploads();
 		}
-		// Whether growths are graph work: read by the revision code and the commits alike (Growths::Deferred), so set here at once.
-		Growths::Get().deferred.store(deferred, std::memory_order_release);
 		auto& drawPipelines = DrawPipelines::Get();
 		next.targetsGeneration = drawPipelines.Generation();
 		next.shadowFormat = drawPipelines.ShadowFormat();
@@ -134,32 +130,22 @@ namespace DCLF
 			PassCapture::Get().SetFirstPersonCovered(false);
 			return true;
 		}
-		// Each epoch's recordings in the adopted snapshot's revision, of the graph as built now (the build point just ran), and its versions
-		// the current ones - when the snapshot is current (AdoptSnapshot found none stale) and its draws are for the main resources.
+		// Each epoch's recordings in the adopted snapshot's revision, of the graph as built now (the build point just ran), and its set the
+		// adopted one (its versions made current at the adoption) - when the snapshot is current (AdoptSnapshot found none stale) and its
+		// draws are for the main resources.
 		rv.covered.fill(false);
 		auto* host = RenderGraphRuntime::Get().Host();
 		const auto& active = rv.active;
 		const auto& versionsFragment = active ? active->Fragment(R::kVersionsSlot) : nullptr;
-		const auto versions = versionsFragment ? versionsFragment->Value<VersionSet>() : nullptr;
+		const auto versions = versionsFragment ? versionsFragment->Value<NamedVersions>() : nullptr;
 		bool snapshot = impl->adoptedSnapshot && impl->adoptedSnapshot->drawsComplete && !impl->snapshotStale;
-		const bool current = host && snapshot && versions && versions->changes == VersionRegistry::Get().changes;
-		// The guard (unconditional, one compare a payload): the adopted draws embed the face positions of the version current now
-		// (the one the revision names: BuildSnapshotDraws builds them so). A snapshot whose draws embed another would have its vertex
-		// shaders read a version nothing holds: its frames are withdrawn, and the builder makes the snapshot again.
-		if (current && impl->scene && impl->adoptedSnapshot->draws) {
-			if (!Impl::DrawsEmbedFacePositions(*impl->adoptedSnapshot->draws, impl->scene->facePositionsAddress)) {
-				if (impl->staleDraws++ == 0)
-					logger::warn("[DCLF] the adopted snapshot's draws of frame {} embed face positions of another version than the current one: withdrawn <- STALE DRAWS",
-						Scene::FrameView::Get().GetFrame());
-				snapshot = false;
-				impl->snapshotInputsMoved.store(true, std::memory_order_release);
-				WakeSnapshotBuilder();
-			} else if (impl->growthAdoptedFrame != ~0u) {
-				// The first frame whose draws embed the versions a growth's adoption made current.
-				const std::uint32_t frameNow = Scene::FrameView::Get().GetFrame();
-				impl->growthToDraws.push_back(frameNow >= impl->growthAdoptedFrame ? frameNow - impl->growthAdoptedFrame : 0u);
-				impl->growthAdoptedFrame = ~0u;
-			}
+		const bool current = host && snapshot && versions && versions.get() == impl->adoptedVersions;
+		// The adopted draws embed the addresses of the versions its revision names (BuildSnapshotDraws builds them from the sealed set;
+		// Diagnostics' SnapshotSealed checks it): the first frame whose draws embed the versions a growth's adoption made current.
+		if (current && snapshot && impl->growthAdoptedFrame != ~0u) {
+			const std::uint32_t frameNow = Scene::FrameView::Get().GetFrame();
+			impl->growthToDraws.push_back(frameNow >= impl->growthAdoptedFrame ? frameNow - impl->growthAdoptedFrame : 0u);
+			impl->growthAdoptedFrame = ~0u;
 		}
 		if (current && snapshot)
 			for (std::uint32_t e = 0; e < R::kEpochs; ++e) {
@@ -180,13 +166,12 @@ namespace DCLF
 		const auto& resources = impl->resources;
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
 		// The faces draw from the frame's scene list and the frame before's colour frame record (ExecuteReflection): not
-		// after a frame whose main epochs were not submitted (no claims), nor once a growth of the rows was adopted since (this frame's
-		// selection), which leaves those addresses on a version nothing holds.
+		// after a frame whose main epochs were not submitted (no claims), nor once another set was adopted since (this frame's
+		// selection), which leaves those addresses on versions nothing holds.
+		const std::uint64_t named = impl->Adopted().Serial();
 		const bool inputs = resources && resources->committed[kDepthShape].frame == resources->committed[kColourShape].frame &&
-		                    frame - resources->committed[kDepthShape].frame <= 1 && resources->committed[kDepthShape].rowsGeneration == resources->MainRowsGeneration() &&
-		                    resources->committed[kColourShape].rowsGeneration == resources->MainRowsGeneration() &&
-		                    impl->scene && resources->committed[kDepthShape].sceneGeneration == impl->scene->generation &&
-		                    resources->committed[kDepthShape].objectCapacity == resources->objectCapacity;
+		                    frame - resources->committed[kDepthShape].frame <= 1 && resources->committed[kDepthShape].named == named &&
+		                    resources->committed[kColourShape].named == named && impl->scene;
 		reflection.covered = main && inputs && rv.covered[Epoch::Reflection] && reflection.resources && reflection.resources->target && !host->RebuildRequested();
 		PassCapture::Get().SetReflectionCovered(reflection.covered);
 		// The first-person members are withheld from the engine (PassCapture) and drawn by the first-person epochs on a frame the engine

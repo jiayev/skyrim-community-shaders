@@ -19,15 +19,15 @@ namespace DCLF::Draws
 		// ExecuteIndirect max counts (GrowCapacity, within the buffer's ranges): the phase-1/colour draws, and each decal group.
 		std::uint32_t drawCapacity = 0;
 		std::array<std::uint32_t, kDecalGroups> decalCapacity{};
-		// Each terrain group's (the colour segment's; MainSizing::terrainCapacity), group 1 from phase 2's base, group 2 after it.
+		// Each terrain group's (the colour segment's; MainLayout::terrainCapacity), group 1 from phase 2's base, group 2 after it.
 		std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
-		// Each half of the forward range (the colour segment's and the forward epoch's; MainSizing::forwardCapacity), after the
+		// Each half of the forward range (the colour segment's and the forward epoch's; MainLayout::forwardCapacity), after the
 		// terrain groups' ranges: the staging half BuildDraws appends to, then the sorted half the forward epoch draws.
 		std::uint32_t forwardCapacity = 0;
-		// The refraction range (the colour segment's and the forward epoch's; MainSizing::refractionCapacity), after the
+		// The refraction range (the colour segment's and the forward epoch's; MainLayout::refractionCapacity), after the
 		// forward halves (RefractionSlot).
 		std::uint32_t refractionCapacity = 0;
-		// The sequence buffer's ranges as the epoch sized it (Resources::sequenceDraws, sequenceDecals): its layout.
+		// The sequence buffer's ranges as the epoch sized it (MainLayout::sequenceDraws, sequenceDecals): its layout.
 		std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
 		// The rows' tables' addresses (Resources::materialRows, pipelineRows), which a growth moves.
 		std::uint64_t materialRows = 0, pipelineRows = 0;
@@ -37,8 +37,8 @@ namespace DCLF::Draws
 		rhi::DescriptorHeapHandle resourceHeap{};
 		rhi::DescriptorHeapHandle samplerHeap{};
 		IndirectState indirect{};
-		// The latch block the epoch wrote (the revision producer's, RevisionLatches::main): one holding fewer cascades than asked for is replaced
-		// (ReserveMainLatch), and a frame in flight keeps reading its own.
+		// The latch block the epoch wrote (the one the revision's set names): a layout grown (ReserveMainLatch) is a new block of the
+		// next set, and a frame in flight keeps reading its own.
 		std::shared_ptr<const org::LatchBlock> latch;
 		// The Z-prepass's plain draws (MainOpaquePass): a call per bucket, a group of pipeline slots sharing a depth pipeline. Phase
 		// 2's ranges are the same past sequenceDraws.
@@ -180,8 +180,10 @@ namespace DCLF::Draws
 			sort->counts = CreateWords(kKeys, true, "cs.dclf.sort-counts");
 			sort->offsets = CreateWords(kKeys, true, "cs.dclf.sort-offsets");
 			sort->blockSums = CreateWords(PrefixSum::Blocks(kKeys), true, "cs.dclf.sort-block-sums");
-			sort->staging = MakeVersioned(CreateWords(std::uint64_t(a_draws) * sizeof(DrawSequence) / 4, true, "cs.dclf.sort-staging"));
-			sort->ranks = MakeVersioned(CreateWords(a_draws, true, "cs.dclf.sort-ranks"));
+			// Sized to the main layout's draws exactly (its ranges grow by doubling: Impl::RequireMain).
+			sort->staging = MakeVersioned(CreateWords(std::uint64_t(a_draws) * sizeof(DrawSequence) / 4, true, "cs.dclf.sort-staging"),
+				{ .extent = { 0, sizeof(DrawSequence), 4 }, .policy = org::services::GrowthPolicy::Headroom(0) });
+			sort->ranks = MakeVersioned(CreateWords(a_draws, true, "cs.dclf.sort-ranks"), { .extent = { 0, 4, 4 }, .policy = org::services::GrowthPolicy::Headroom(0) });
 			return sort;
 		}
 

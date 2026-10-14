@@ -72,7 +72,7 @@ namespace DCLF
 			return setIndex != Lookups::kNone && setIndex < a_indirect.zGroups.size() ? a_indirect.zGroups[setIndex] : kNoBucket;
 		}
 
-		void PlanViewBuckets(const ViewTraits& a_traits, const MainSizing& a_main, const Lookups* a_lookups, const IndirectState& a_indirect,
+		void PlanViewBuckets(const ViewTraits& a_traits, const MainLayout& a_main, const Lookups* a_lookups, const IndirectState& a_indirect,
 			std::span<const rhi::PipelineHandle> a_slotPipelines, std::span<const std::uint8_t> a_forwardSlots, ViewPlan& a_out)
 		{
 			const auto slots = static_cast<std::uint32_t>(a_main.zBucketCapacity.size());
@@ -137,7 +137,7 @@ namespace DCLF
 			frame->depthRange = a_in.depthRange;
 			frame->materialRows = a_in.materialRows;
 			frame->pipelineRows = a_in.pipelineRows;
-			frame->sequenceDraws = (a_in.sizing ? *a_in.sizing : static_cast<const ViewSizing&>(a_resources)).sequenceDraws;
+			frame->sequenceDraws = a_in.sequenceDraws;
 			frame->buckets = a_in.plan.buckets;
 			frame->forwardFirst = a_in.plan.forwardFirst;
 			frame->forwardCapacity = a_in.plan.forwardCapacity;
@@ -342,7 +342,7 @@ namespace DCLF
 				{
 					const auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
 					a_out.push_back(frame ? frame->generation : 0);
-					a_out.push_back(resources->main->scene->pool->layout);
+					a_out.push_back(NamedSerial(a_preparation, resources->main->scene->pool->firsts));
 				}
 
 				BuildPrepared Prepare(const BuildBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
@@ -434,7 +434,11 @@ namespace DCLF
 				{
 					const auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
 					a_out.push_back(frame ? frame->generation : 0);
-					a_out.push_back(resources->main->scene->layout.load(std::memory_order_acquire));
+					const auto& scene = *resources->main->scene;
+					a_out.push_back(NamedSerial(a_preparation, scene.treeLodShapes));
+					a_out.push_back(NamedSerial(a_preparation, scene.treeLodInstances));
+					for (std::uint32_t f = 0; f < resources->traits->faces; ++f)
+						a_out.push_back(NamedSerial(a_preparation, resources->treeVisible[f]));
 				}
 
 				TreePrepared Prepare(const TreeBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
@@ -577,7 +581,8 @@ namespace DCLF
 				{
 					const auto frame = CurrentViewFrame(a_preparation, resources->traits->kind);
 					a_out.push_back(frame ? frame->generation : 0);
-					a_out.push_back(resources->main->scene->pool->layout);
+					a_out.push_back(NamedSerial(a_preparation, resources->main->scene->pool->indices));
+					a_out.push_back(NamedSerial(a_preparation, resources->sequences));
 					a_out.push_back(static_cast<std::uint64_t>(mode));
 				}
 
@@ -926,7 +931,7 @@ namespace DCLF
 			if (a_treeRow && a_shape.tree.valid() && view) {
 				// The face's row (its own list), naming no slot when the face is not drawn or the faces' tree LOD is the engine's.
 				TreeLod::DrawRow row = *a_treeRow;
-				row.visible = view->treeVisibleAddress[f] + TreeLod::kVisibleHeaderWords * sizeof(std::uint32_t);
+				row.visible = Adopted().Of(view->treeVisible[f]).deviceAddress + TreeLod::kVisibleHeaderWords * sizeof(std::uint32_t);
 				row.shapeSlots = face.drawn ? a_treeRow->shapeSlots : 0u;
 				LatchWriteValue(latchBlock, labels.trees, latchSlot, layout.FaceOffset(f) + ViewLatchLayout::kTreeRowInFace, row);
 				TreeLod::VisibleHeader header{};

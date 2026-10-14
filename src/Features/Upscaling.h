@@ -143,7 +143,10 @@ public:
 	void ConfigureTAA();
 	void ConfigureUpscaling(RE::BSGraphics::State* a_state);
 	void Upscale();
-	/** @brief Before an evaluate: DXVK work between the last render-graph epoch and the upscaler (see the definition). */
+	/**
+	 * @brief Before an evaluate: DXVK work between the last render-graph epoch and the upscaler. The rule and its evidence:
+	 * docs/development/render-graph.md, "Hazard: external Vulkan work directly after a graph epoch". Frame generation is not covered.
+	 */
 	void SeparateFromGraphEpochs();
 
 	bool IsFrameGenerationActive() const;

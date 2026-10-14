@@ -46,7 +46,7 @@ namespace DCLF::Diagnostics
 			}
 		}
 		logger::info("[DCLF] index pool parity: {} slots, {} ranges ({} indices held of {}), {} stale, {} without a range ({} waiting for the pool's growth){}{}",
-			count, held, p.indicesHeld, p.capacity, stale, unheld, p.waiting.size(), stale || unheld > p.waiting.size() ? " <- INDEX POOL" : " <- OK",
+			count, held, p.indicesHeld, NamedUnits(DrawsView::Get().Adopted(), p.indices), stale, unheld, p.waiting.size(), stale || unheld > p.waiting.size() ? " <- INDEX POOL" : " <- OK",
 			firstStale != IndexPool::kNoRange ? fmt::format("; first stale: slot {}", firstStale) : std::string());
 	}
 

@@ -14,8 +14,9 @@ namespace DCLF::Draws
 	struct HostEventRing
 	{
 		/**
-		 * @brief The host buffers of one list capacity, one per frame slot. Append-only (a growth adds one before any revision names
-		 * the capacity: Impl::ReserveSceneTables), kept until the ring goes: a kept recording may name any of them.
+		 * @brief The host buffers of one list capacity, one per frame slot. Append-only (one per capacity a sealed set names, added
+		 * from its named units before any shape of that set: Impl::MakeRevision), kept until the ring goes: a kept recording may name
+		 * any of them.
 		 */
 		struct StagingSet
 		{
@@ -49,7 +50,7 @@ namespace DCLF::Draws
 					return set;
 			return nullptr;
 		}
-		/** @brief Adds a staging set for a list of a_events (one thread at a time: the setup, then the growths' revision code). */
+		/** @brief Adds a staging set for a list of a_events (one thread at a time: the setup, then the revision producer's seals). */
 		void AddSet(std::uint32_t a_events)
 		{
 			if (SetFor(a_events))

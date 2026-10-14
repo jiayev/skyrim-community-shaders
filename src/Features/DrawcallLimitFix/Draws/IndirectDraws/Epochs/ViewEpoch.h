@@ -118,23 +118,16 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief What a view's buffers hold (Growths::Change, adopted with the revision that names it): a face's range of the sequences,
-	 * a face's bucket counts in words, and the scene's tree LOD shape slots the faces' tree lists hold.
+	 * @brief A view's graph resources. Its buffers are the scene's set's: a face's range of the sequences (a unit: a draw in every
+	 * face), a face's bucket count words, and the faces' tree lists (the scene's tree LOD shape slots, grown with its tables), each
+	 * required by the revision producer to hold the view's plan (Impl::RequireView).
 	 */
-	struct ViewSizing
-	{
-		std::uint32_t sequenceDraws = 0;
-		std::uint32_t bucketCountWords = 0;
-		std::uint32_t treeShapeCapacity = 0;
-		bool operator==(const ViewSizing&) const = default;
-	};
-
-	struct ViewResources : ViewSizing
+	struct ViewResources
 	{
 		const ViewTraits* traits = nullptr;
 		// The main pass's (its depth inputs, targets, rows, visibility, frame constants) and, through it, the scene's.
 		std::shared_ptr<Resources> main;
-		Versioned sequences;  // faces * sequenceDraws
+		Versioned sequences;  // faces * a face's range
 		std::shared_ptr<org::Buffer> count;
 		std::array<Versioned, kMaxViewFaces> bucketCounts;
 		std::shared_ptr<org::Buffer> blocks;  // kViewBlockBytes per face
@@ -148,8 +141,8 @@ namespace DCLF::Draws
 		// Tree LOD: per face a draw row (its visible list the face's) and a visible list, for the scene's shape slots.
 		std::array<std::shared_ptr<org::Buffer>, kMaxViewFaces> treeRows;
 		std::array<Versioned, kMaxViewFaces> treeVisible;
-		std::array<std::uint64_t, kMaxViewFaces> treeRowsAddress{}, treeVisibleAddress{};
-		// The passes are to be declared again (new main resources, new tree lists): at the view's own reserve, never mid-frame.
+		std::array<std::uint64_t, kMaxViewFaces> treeRowsAddress{};
+		// The passes are to be declared again (new main resources): at the view's own import, never mid-frame.
 		bool rebuildPending = false;
 		std::shared_ptr<const ComputeProgram> buildDraws;
 		rhi::CommandSignaturePtr dispatchSignature;
@@ -173,24 +166,24 @@ namespace DCLF::Draws
 	};
 	/** @brief A pipeline slot's Z-prepass group (its lookup entry's set index's, IndirectState::zGroups); kNoBucket without one. */
 	std::uint32_t ZGroupOf(const Lookups* a_lookups, const IndirectState& a_indirect, std::uint32_t a_slot);
-	void PlanViewBuckets(const ViewTraits& a_traits, const MainSizing& a_main, const Lookups* a_lookups, const IndirectState& a_indirect,
+	void PlanViewBuckets(const ViewTraits& a_traits, const MainLayout& a_main, const Lookups* a_lookups, const IndirectState& a_indirect,
 		std::span<const rhi::PipelineHandle> a_slotPipelines, std::span<const std::uint8_t> a_forwardSlots, ViewPlan& a_out);
 
-	/** @brief A view's latch, its layout and the zeros its latched copies take (the revision producer's: RevisionLatches). */
+	/** @brief A view's latch, its layout and the zeros its latched copies take: the blocks the revision's set names (NamedVersions::Latch). */
 	struct ViewLatches
 	{
-		std::shared_ptr<org::LatchBlock> latch, zeros;
+		std::shared_ptr<const org::LatchBlock> latch, zeros;
 		ViewLatchLayout layout;
 	};
 
-	/** @brief What a view's shape is made from (MakeViewShape): its resources' sizing, the plan, the main rows and the latches. */
+	/** @brief What a view's shape is made from (MakeViewShape): the plan, its sequences' named range, the main rows and the latches. */
 	struct ViewShapeInputs
 	{
 		rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
 		IndirectState indirect{};
 		ViewPlan plan;
 		std::uint64_t materialRows = 0, pipelineRows = 0;
-		const ViewSizing* sizing = nullptr;  // a revision's (Growths::RevisionSizing)
+		std::uint32_t sequenceDraws = 0;  // a face's range: the sequences' named units (the revision's set), at least plan.draws
 		const ViewLatches* latches = nullptr;
 		std::uint64_t frameConstantsAddress = 0;  // the colour segment's, which the push data names
 		std::uint32_t width = 0, height = 0;

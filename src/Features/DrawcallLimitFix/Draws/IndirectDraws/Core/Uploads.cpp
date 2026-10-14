@@ -13,37 +13,40 @@
 
 namespace DCLF
 {
+	void Draws::CommitUploads::operator()(const Versioned& a_target, const void* a_data, std::size_t a_bytes, std::uint64_t a_offset)
+	{
+		Diagnostics::Notify(Diagnostics::CommitTargetStaged{ named, a_target });
+		(*this)(TargetOf(a_target), a_data, a_bytes, a_offset);
+	}
+
 	namespace
 	{
-		/** @brief The versions a payload's uploads are against: what the buffers hold, or are to hold (a build ahead's staging). */
+		/** @brief The versions a payload's uploads are against: what the versions a_named names hold (0: none, sent whole). */
 		struct PayloadHeld
 		{
 			std::uint64_t materialRows = 0, pipelineRows = 0, resident = 0, geometries = 0;
 		};
-		PayloadHeld HeldNow(const MainPayload& a_payload, const Resources& a_resources)
+		PayloadHeld HeldNow(const NamedVersions& a_named, const MainPayload& a_payload, const Resources& a_resources)
 		{
-			const auto& addresses = a_payload.inputs.addresses;
-			const bool depth = a_payload.inputs.depthOnly && a_resources.inputsDepth;
-			return { addresses.records == a_resources.materialRows.address ? a_resources.materialRowsHeld : 0,
-				addresses.pipelineRows == a_resources.pipelineRows.address ? a_resources.pipelineRowsHeld : 0, a_resources.residentUploaded[depth ? 0 : 1],
-				a_resources.scene->held.geometries };
+			return { a_resources.materialRowsFilled.Since(a_named.Of(a_resources.materialRows.buffer)).value_or(0),
+				a_resources.pipelineRowsFilled.Since(a_named.Of(a_resources.pipelineRows.buffer)).value_or(0), a_resources.ResidentHeld(a_named, a_payload.inputs.depthOnly),
+				a_resources.scene->Held(a_named).geometries };
 		}
 
 		template <class Emit>
-		void ForEachMainPayloadUpload(const MainPayload& a_payload, const Resources& a_resources, const PayloadHeld& a_held, Emit&& a_emit)
+		void ForEachMainPayloadUpload(const NamedVersions& a_named, const MainPayload& a_payload, const Resources& a_resources, const PayloadHeld& a_held, Emit&& a_emit)
 		{
 			{
 				ZoneScopedN("CS.DCLF.UploadRanges.Rows");
-				// The rows the tables lack, header addresses made absolute; rows past the tables wait for their growth. A table grown
-				// at once since the build's inputs were taken holds none: all are sent.
-				const auto& addresses = a_payload.inputs.addresses;
+				// The rows the table versions a_named names lack, header addresses made absolute (theirs); rows past the tables wait
+				// for their growth.
 				const auto& materials = a_resources.materialRows;
 				const auto& pipelines = a_resources.pipelineRows;
-				EmitMainRows(a_payload.materialRows, addresses.records == materials.address ? a_held.materialRows : 0, materials.address, materials.capacity,
+				EmitMainRows(a_payload.materialRows, a_held.materialRows, a_named.Of(materials.buffer).deviceAddress, materials.RowsIn(a_named),
 					[](MaterialRow& a_row, std::uint64_t a_address) {
 					PatchRowAddresses(a_row, a_address);
 				}, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { a_emit(a_resources.materialRows.buffer, a_data, a_bytes, a_offset); });
-				EmitMainRows(a_payload.pipelineRows, addresses.pipelineRows == pipelines.address ? a_held.pipelineRows : 0, pipelines.address, pipelines.capacity,
+				EmitMainRows(a_payload.pipelineRows, a_held.pipelineRows, a_named.Of(pipelines.buffer).deviceAddress, pipelines.RowsIn(a_named),
 					[](PipelineRow& a_row, std::uint64_t a_address) {
 					PatchRowAddresses(a_row, a_address);
 				}, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { a_emit(a_resources.pipelineRows.buffer, a_data, a_bytes, a_offset); });
@@ -51,8 +54,7 @@ namespace DCLF
 			// Not the object records or palettes (CommitSceneStreams).
 			const auto& scene = *a_resources.scene;
 			// The input buffer: the resident region at its head (when not already held), then the frame's own inputs.
-			const bool depth = a_payload.inputs.depthOnly && a_resources.inputsDepth;
-			const auto& inputs = depth ? a_resources.inputsDepth : a_resources.inputs;
+			const auto& inputs = *a_resources.SegmentInputs(a_payload.inputs.depthOnly).first;
 			const std::size_t regionCount = a_payload.resident.Count();
 			TracyCZoneN(residentUploadZone, "CS.DCLF.UploadRanges.Resident", true);
 			a_payload.resident.Emit(a_held.resident,
@@ -61,14 +63,14 @@ namespace DCLF
 				a_emit(inputs, a_payload.inputList.data(), a_payload.inputList.size() * sizeof(DrawInput), regionCount * sizeof(DrawInput));
 			TracyCZoneEnd(residentUploadZone);
 			EmitGeometryDraws(a_payload.geometryDraws, a_held.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-				a_emit(scene.geometries->Get(), a_data, a_bytes, a_offset);
-			}, scene.geometryRows);
+				a_emit(scene.geometries, a_data, a_bytes, a_offset);
+			}, a_named.Of(scene.geometries).units);
 		}
 
 		// Render thread: the payload through the commit's uploads.
-		void UploadMainPayload(const MainPayload& a_payload, const Resources& a_resources, CommitUploads& a_uploads)
+		void UploadMainPayload(const NamedVersions& a_named, const MainPayload& a_payload, const Resources& a_resources, CommitUploads& a_uploads)
 		{
-			ForEachMainPayloadUpload(a_payload, a_resources, HeldNow(a_payload, a_resources), [&](const auto& a_target, const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+			ForEachMainPayloadUpload(a_named, a_payload, a_resources, HeldNow(a_named, a_payload, a_resources), [&](const auto& a_target, const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 				a_uploads(a_target, a_data, a_bytes, a_offset);
 			});
 		}
@@ -117,7 +119,7 @@ namespace DCLF
 			return nullptr;
 		}
 		// From the oldest version the scene buffers or ring entries hold.
-		const auto& held = resources->scene->held;
+		const auto held = resources->scene->Held(Adopted());
 		const auto& holders = ringHolders;
 		const TablesHeld from{ std::min(held.objects, holders.objects.Oldest()), std::min(held.extras, holders.extras.Oldest()),
 			std::min(held.geometries, holders.geometries.Oldest()) };
@@ -139,22 +141,27 @@ namespace DCLF
 		(void)a_tables;
 		const ObjectRecordsOut& objects = views->objects;
 		sent.objects = objects.Count();
-		// Records past the buffers wait for growth and are resent until adopted (the held version moves only once all are sent).
-		sent.objectBytes = objects.Emit(a_scene.held.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+		// Records past the named versions wait for the requirement that grows them and are resent until a set holding them is adopted
+		// (the filled version moves only once all are sent).
+		const auto& named = Adopted();
+		const TablesHeld held = a_scene.Held(named);
+		const auto &objectsVersion = named.Of(a_scene.objects), &extrasVersion = named.Of(a_scene.extras);
+		sent.objectBytes = objects.Emit(held.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 			a_uploads(a_scene.objects, a_data, a_bytes, a_offset);
-		}, a_scene.objectCapacity);
-		if (objects.Version() && objects.Count() <= a_scene.objectCapacity)
-			a_scene.held.objects = objects.Version();
+		}, objectsVersion.units);
+		if (objects.Version() && objects.Count() <= objectsVersion.units)
+			a_scene.objectsFilled.Filled(objectsVersion, objects.Version());
 		const ExtrasOut& extras = views->extras;
 		sent.extraRows = extras.Rows();
 		std::vector<float>* extrasMirror = nullptr;
 		Diagnostics::Notify(Diagnostics::ExtrasSending{ Diagnostics::ExtrasSending::kSceneBuffers, extrasMirror });
-		sent.extraRowsSent = EmitExtras(extras, a_scene.held.extras, extrasMirror, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+		const auto extraRows = static_cast<std::uint32_t>(extrasVersion.units);
+		sent.extraRowsSent = EmitExtras(extras, held.extras, extrasMirror, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 			a_uploads(a_scene.extras, a_data, a_bytes, a_offset);
-		}, a_scene.extraRows);
-		Diagnostics::Notify(Diagnostics::ExtrasSent{ Diagnostics::ExtrasSending::kSceneBuffers, a_frame, extras, a_scene.extraRows });
-		if (extras.Version() && extras.Rows() <= a_scene.extraRows)
-			a_scene.held.extras = extras.Version();
+		}, extraRows);
+		Diagnostics::Notify(Diagnostics::ExtrasSent{ Diagnostics::ExtrasSending::kSceneBuffers, a_frame, extras, extraRows });
+		if (extras.Version() && extras.Rows() <= extraRows)
+			a_scene.extrasFilled.Filled(extrasVersion, extras.Version());
 		extrasStore.rowsSent += sent.extraRowsSent;
 		return sent;
 	}
@@ -180,7 +187,9 @@ namespace DCLF
 		auto& textures = GpuTextures::Get();
 		auto& mirror = ConstantMirror::Get();
 		const bool replayVertexInputs = !depthOnly && prepassInputs;
-		CommitUploads uploads(commitStagedPool);
+		// The adopted set: every versioned buffer's address, SRV index and capacity the commit writes, and the version it writes into.
+		const auto& named = Adopted();
+		CommitUploads uploads(commitStagedPool, named);
 		const std::size_t latchedShape = depthOnly ? kDepthShape : kColourShape;
 		// The selected revision's shape is trusted: the commit writes the frame's values into its latch, bucket plan and latched
 		// copies, and submits its recording. Nothing is checked against it.
@@ -341,16 +350,17 @@ namespace DCLF
 			const std::uint32_t nullIndex = textures.NullIndex() != kInvalidIndex ? textures.NullIndex() : 0u;
 			for (std::uint32_t t = 0; t < kTextureRegisters; ++t)
 				frameRecord.textures[t] = frameTextures[t] == kInvalidIndex ? nullIndex : frameTextures[t];
-			frameRecord.textures[kObjectBufferRegister] = ring ? ringFrame.objectsIndex : in.addresses.objectsIndex;
-			frameRecord.textures[kExtrasBufferRegister] = ring ? ringFrame.extrasIndex : in.addresses.extrasIndex;
+			const auto& sceneBuffers = *a_resources->scene;
+			frameRecord.textures[kObjectBufferRegister] = ring ? ringFrame.objectsIndex : named.Of(sceneBuffers.objects).srvIndex;
+			frameRecord.textures[kExtrasBufferRegister] = ring ? ringFrame.extrasIndex : named.Of(sceneBuffers.extras).srvIndex;
 			frameRecord.textures[kPlacementBufferRegister] = in.addresses.placementsIndex;
 			frameRecord.textures[kPaletteBufferRegister] = in.addresses.palettesIndex;
 			frameRecord.textures[kShadingBufferRegister] = in.addresses.shadingIndex;
-			frameRecord.textures[kTreeWindRegister] = in.addresses.treeWindIndex;
+			frameRecord.textures[kTreeWindRegister] = sceneBuffers.TreeWindReadIndex(named, frameNumber);
 			// The fade states and the roots' static rows every draw's alpha reads.
-			if (const auto& sceneBuffers = *a_resources->scene; sceneBuffers.fadeRoots && sceneBuffers.fadeRootsIndex) {
-				frameRecord.textures[kFadeStatesRegister] = sceneBuffers.FadeStatesReadIndex(frameNumber);
-				frameRecord.textures[kFadeRootsRegister] = sceneBuffers.fadeRootsIndex;
+			if (const std::uint32_t roots = named.Of(sceneBuffers.fadeRoots).srvIndex) {
+				frameRecord.textures[kFadeStatesRegister] = sceneBuffers.FadeStatesReadIndex(named, frameNumber);
+				frameRecord.textures[kFadeRootsRegister] = roots;
 			}
 			latched(a_resources->frameConstants, &frameRecord, sizeof(frameRecord), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
 		}
@@ -404,24 +414,24 @@ namespace DCLF
 
 		lap(3);
 		// Uploads run ahead of every pass of this epoch. An installed payload is the ring entry's; a build made here uploads its
-		// vectors. At most an input per object, none past the buffers.
-		CheckSceneCapacity(*a_resources->scene, 0, 0, 0, a_payload.resident.Count() + a_payload.inputList.size(), a_resources->objectCapacity, "the main pass");
-		UploadFaceStreams(a_payload.faceStreams, a_resources->scene->facePositions, a_resources->scene->faceUploaded, uploads, a_resources->scene->faceVertices);
-		ZeroFrameAheadOutputs(*a_resources->scene, uploads);
-		UploadTrees(Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), *a_resources->scene, uploads, depthOnly);
+		// vectors. Its inputs fit the input buffer's named version (the revision required them: InputsFit).
+		CheckInputCapacity(a_payload.resident.Count() + a_payload.inputList.size(), named.Of(*a_resources->SegmentInputs(depthOnly).first).units, "the main pass");
+		UploadFaceStreams(named, a_payload.faceStreams, a_resources->scene->facePositions, a_resources->scene->faceUploaded, uploads);
+		UploadTrees(named, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), *a_resources->scene, uploads, depthOnly);
 		// Tree LOD (dclf-lod.md): the mirror's changes, draw row and list arguments, for the depth cull and both passes' draws.
 		if (depthOnly && a_resources->scene->treeLodCull) {
 			auto& sceneBuffers = *a_resources->scene;
-			UploadTreeLod(Scene::FrameView::Get().TreeLodMirror(), sceneBuffers, latched, a_bindingOwners, treeLodOwned);
+			UploadTreeLod(named, Scene::FrameView::Get().TreeLodMirror(), sceneBuffers, latched, a_bindingOwners, treeLodOwned);
 			// The engine's passes were withheld: a commit that cannot draw leaves a hole.
 			if (treeLodOwned && !sceneBuffers.treeLodReady.load(std::memory_order_acquire) && treeLodMissed++ < 8)
 				logger::warn("[DCLF] tree LOD: frame {} withheld the engine's passes but the depth commit could not draw (tables {} of {} shape slots)", frameNumber,
-					Scene::FrameView::Get().TreeLodMirror().ShapeSlots(), sceneBuffers.treeLodShapeCapacity);
+					Scene::FrameView::Get().TreeLodMirror().ShapeSlots(), named.Of(sceneBuffers.treeLodShapes).units);
 		}
 		// Fade roots and, once a frame, their inputs for FadeStateCS: the list jobs' camera (PrimaryCull::FadeEye) and the engine's
 		// fade globals.
 		if (depthOnly && a_resources->scene->fadeState) {
 			auto& buffers = *a_resources->scene;
+			const auto rootSlots = static_cast<std::uint32_t>(named.Of(buffers.fadeRoots).units);
 			std::uint32_t logBase = buffers.fadeLogBase;
 			FadeFrame inputs = buffers.fadeFrame;
 			if (buffers.fadeFrameNumber != Scene::FrameView::Get().GetFrame()) {
@@ -441,11 +451,11 @@ namespace DCLF
 				ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> counts;
 				if (buffers.fadeAnimated && anim.valid)
 					for (const auto* node : nodes)
-						if (const auto it = index.find(node); it != index.end() && it->second < buffers.fadeRootCapacity)
+						if (const auto it = index.find(node); it != index.end() && it->second < rootSlots)
 							++counts[it->second];
 				auto& animatedWords = buffers.fadeAnimatedMirror;
-				if (animatedWords.size() < buffers.fadeRootCapacity)
-					animatedWords.resize(buffers.fadeRootCapacity, 0u);
+				if (animatedWords.size() < rootSlots)
+					animatedWords.resize(rootSlots, 0u);
 				std::vector<std::uint32_t> stamped;
 				stamped.reserve(counts.size());
 				for (const auto& [root, count] : counts) {
@@ -453,6 +463,12 @@ namespace DCLF
 					stamped.push_back(root);
 				}
 				std::sort(stamped.begin(), stamped.end());
+				// A version not filled is sent the whole mirror.
+				if (const auto& animated = named.Of(buffers.fadeAnimated); !buffers.fadeAnimatedFilled.Holds(animated)) {
+					stamped.resize(std::min<std::size_t>(animatedWords.size(), animated.units));
+					std::iota(stamped.begin(), stamped.end(), 0u);
+					buffers.fadeAnimatedFilled.Filled(animated);
+				}
 				SendWordRuns(stamped, [&](std::uint32_t a_first, std::uint32_t a_count) {
 					uploads(buffers.fadeAnimated, animatedWords.data() + a_first, std::size_t(a_count) * sizeof(std::uint32_t), std::uint64_t(a_first) * sizeof(std::uint32_t));
 				});
@@ -465,8 +481,8 @@ namespace DCLF
 				logBase = ~0u;
 				Diagnostics::Notify(Diagnostics::FadeLogWindow{ Scene::FrameView::Get().GetFrame(), Scene::FrameView::Get().GetTables(), inputs, logBase });
 			}
-			UploadFadeRoots(Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), inputs, logBase, buffers, uploads, PortalViews::Get().Encoded());
-			Scene::FrameView::Get().FadeRootsSent(buffers.fadeRootsHeld);
+			UploadFadeRoots(named, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), inputs, logBase, buffers, uploads, PortalViews::Get().Encoded());
+			Scene::FrameView::Get().FadeRootsSent(buffers.FadeRootsHeld(named));
 			// The fade events' header and readback slot (its last execution harvested first).
 			ArmFadeReadback(buffers, uploads);
 			ArmVisibilityReadback(buffers, uploads);
@@ -474,14 +490,16 @@ namespace DCLF
 			const auto& rootTables = Scene::FrameView::Get().GetTables();
 			auto& portals = PortalViews::Get();
 			const std::uint64_t programsKey = rootTables.FadeRootsVersion() * 0x9E3779B97F4A7C15ull ^ portals.ProgramsVersion();
-			if (buffers.fadeRootPrograms && buffers.fadeRootProgramsHeld != programsKey && rootTables.fadeRootNode.size() <= buffers.fadeRootCapacity) {
+			const auto& programsVersion = named.Of(buffers.fadeRootPrograms);
+			const auto programsHeld = buffers.fadeRootProgramsFilled.Since(programsVersion);
+			if (programsHeld != programsKey && rootTables.fadeRootNode.size() <= programsVersion.units) {
 				std::vector<std::uint32_t> programs(rootTables.fadeRootNode.size(), kPortalNoProgram);
 				for (std::size_t r = 0; r < programs.size(); ++r)
 					if (const auto* node = static_cast<const RE::NiAVObject*>(rootTables.fadeRootNode[r]))
 						programs[r] = portals.ProgramOf(node);
-				// Only words that differ (all of them for a new buffer).
+				// Only words that differ (all of them for a version not filled).
 				auto& sent = buffers.fadeRootProgramsMirror;
-				if (buffers.fadeRootProgramsHeld == ~0ull)
+				if (!programsHeld)
 					sent.clear();
 				std::vector<std::uint32_t> differing;
 				for (std::uint32_t r = 0; r < programs.size(); ++r)
@@ -491,7 +509,7 @@ namespace DCLF
 					uploads(buffers.fadeRootPrograms, programs.data() + a_first, std::size_t(a_count) * sizeof(std::uint32_t), std::uint64_t(a_first) * sizeof(std::uint32_t));
 				});
 				sent = std::move(programs);
-				buffers.fadeRootProgramsHeld = programsKey;
+				buffers.fadeRootProgramsFilled.Filled(programsVersion, programsKey);
 			}
 		}
 		// The streams as the tables hold them now (with a ring entry, the producer sent them).
@@ -521,24 +539,25 @@ namespace DCLF
 			// The refraction range's count and culling tallies.
 			latched(a_resources->count, kZeroCounts, 4 * sizeof(std::uint32_t), kCountRefractionWord * sizeof(std::uint32_t));
 		}
-		if (!ring)
-			UploadMainPayload(a_payload, *a_resources, uploads);
-		// The held version moves only when every row fit; the rest are resent until the growth is adopted.
+		auto& sceneBuffers = *a_resources->scene;
+		const std::uint64_t geometriesHeld = sceneBuffers.Held(named).geometries;
 		if (!ring) {
-			if (a_payload.materialRows.Count() <= a_resources->materialRows.capacity)
-				a_resources->materialRowsHeld = a_payload.materialRows.Version();
-			if (a_payload.pipelineRows.Count() <= a_resources->pipelineRows.capacity)
-				a_resources->pipelineRowsHeld = a_payload.pipelineRows.Version();
+			UploadMainPayload(named, a_payload, *a_resources, uploads);
+			// The filled versions move only when every row fit; the rest are resent until a set holding them is adopted.
+			if (a_payload.materialRows.Count() <= a_resources->materialRows.RowsIn(named))
+				a_resources->materialRowsFilled.Filled(named.Of(a_resources->materialRows.buffer), a_payload.materialRows.Version());
+			if (a_payload.pipelineRows.Count() <= a_resources->pipelineRows.RowsIn(named))
+				a_resources->pipelineRowsFilled.Filled(named.Of(a_resources->pipelineRows.buffer), a_payload.pipelineRows.Version());
+			const auto [inputs, segment] = a_resources->SegmentInputs(depthOnly);
+			a_resources->residentFilled[segment].Filled(named.Of(*inputs), a_payload.resident.Version());
 		}
-		// Posted for the revision code: what a deferred row-table growth is filled with.
+		// Posted for the revision producer: what a new row table version is laid out from (its capture).
 		committedRowsSlot.Post(std::make_unique<CommittedRows>(CommittedRows{ a_payload.materialRows, a_payload.pipelineRows }));
-		if (!ring)
-			a_resources->residentUploaded[depthOnly && a_resources->inputsDepth ? 0 : 1] = a_payload.resident.Version();
-		auto& held = a_resources->scene->held;
 		const std::size_t objectBytes = streams.objectBytes;
-		const std::size_t geometryBytes = EmitGeometryDraws(a_payload.geometryDraws, held.geometries, [](const void*, std::size_t, std::size_t) {}, a_resources->scene->geometryRows);
-		if (!ring && a_payload.geometryDraws.Version() && a_payload.geometryDraws.Count() <= a_resources->scene->geometryRows)
-			held.geometries = a_payload.geometryDraws.Version();
+		const auto& geometriesVersion = named.Of(sceneBuffers.geometries);
+		const std::size_t geometryBytes = EmitGeometryDraws(a_payload.geometryDraws, geometriesHeld, [](const void*, std::size_t, std::size_t) {}, geometriesVersion.units);
+		if (!ring && a_payload.geometryDraws.Version() && a_payload.geometryDraws.Count() <= geometriesVersion.units)
+			sceneBuffers.geometriesFilled.Filled(geometriesVersion, a_payload.geometryDraws.Version());
 		a_stats.residentInputs = static_cast<std::uint32_t>(a_payload.resident.Count());
 		if (!depthOnly) {
 			a_stats.residentDraws = a_payload.residentDraws;
@@ -586,16 +605,13 @@ namespace DCLF
 		const auto decalCount = depthOnly ? std::array<std::uint32_t, kDecalGroups>{} : a_payload.decalCount;
 		// Inputs the culling covers; in the depth segment more than drawCount (cull-only candidates).
 		const std::uint32_t inputCount = static_cast<std::uint32_t>(a_payload.inputList.size() + (a_payload.resident.Count()));
-		// The ranges hold the scene's draw bound: a count past them is a defect, unless their growth is outstanding (the draws past
-		// them wait; BuildDrawsCS drops them).
-		if (drawCount > a_resources->sequenceDraws) {
-			if (drawCount > a_resources->askedSequenceDraws.load(std::memory_order_acquire))
-				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} draws past the sequence buffer's {} (the scene's draw bound missed them)", drawCount, a_resources->sequenceDraws));
-			a_stats.drawsWaiting += drawCount - a_resources->sequenceDraws;
-		}
+		// The shape's ranges hold the scene's draw bound, and the sequences' named version holds the ranges (the revision required
+		// them): a count past them is a defect of that bound.
+		if (drawCount > shape.sequenceDraws)
+			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} draws past the sequence buffer's {} (the scene's draw bound missed them)", drawCount, shape.sequenceDraws));
 		for (std::uint32_t group = 0; group < kDecalGroups; ++group)
-			if (decalCount[group] > a_resources->sequenceDecals)
-				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} decals past the sequence buffer's {} per group", decalCount[group], a_resources->sequenceDecals));
+			if (decalCount[group] > shape.sequenceDecals)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} decals past the sequence buffer's {} per group", decalCount[group], shape.sequenceDecals));
 		// The culling must use the draws' ViewProj (VS_PerFrame c8).
 		std::array<float, 16> viewProj{};
 		bool hasViewProj = false;
@@ -682,17 +698,17 @@ namespace DCLF
 			latch.terrainCapacity[1] = shape.terrainCapacity[1];
 		}
 		// Both segments read LOD skin levels from the same fade states.
-		latch.fadeStatesIndex = a_resources->scene->FadeStatesReadIndex(frameNumber);
+		latch.fadeStatesIndex = a_resources->scene->FadeStatesReadIndex(named, frameNumber);
 		const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
 		// The depth segment's plain draws: the index pool brought up to the tables, the bucket map and each phase's table in the
 		// latch, their count words zeroed. A slot without a published pipeline maps to none: BuildDraws drops its draws.
 		if (depthOnly && a_resources->pool) {
 			const auto& layout = latchLayout;
-			UpdateIndexPool(*a_resources->pool, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetTablesGeneration(), latchBlock, latchSlot, layout.PoolOffset(), uploads);
-			// The plan's slots, and none for any other slot the installed members can use (new since the plan, or past an outstanding
-			// growth).
+			UpdateIndexPool(named, *a_resources->pool, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetTablesGeneration(), latchBlock, latchSlot,
+				layout.PoolOffset(), uploads);
+			// The plan's slots, and none for any other slot the installed members can use (new since the plan).
 			const auto planned = static_cast<std::uint32_t>(writePlan.map.size());
-			auto slots = std::max({ planned, static_cast<std::uint32_t>(a_resources->zBucketCapacity.size()), InstalledPipelineSlots() });
+			auto slots = std::max(planned, InstalledPipelineSlots());
 			if (slots > layout.buckets)
 				slots = layout.buckets;
 			const std::uint32_t buckets = writePlan.Buckets();
@@ -727,7 +743,7 @@ namespace DCLF
 		}
 		LatchWriteValue(latchBlock, "main culling latch", latchSlot, 0, latch);
 		// What the reflection faces draw from early next frame: this commit's inputs and buffer backings.
-		a_resources->committed[shapeIndex] = { frameNumber, inputCount, a_resources->scene->generation, a_resources->objectCapacity, a_resources->MainRowsGeneration() };
+		a_resources->committed[shapeIndex] = { frameNumber, inputCount, named.Serial() };
 
 		(void)latched.Finish();
 		revisions.latchedMisses += latched.Misses();
@@ -835,7 +851,7 @@ namespace DCLF
 			return;
 		// Harvests the slot's last execution (the host waited for it) if its buffer holds the frame that armed it. If the epoch did
 		// not run for that frame, FadeStateCS did not report either: the next execution reports those changes. Roots past the
-		// list's end report again next frame while the list grows (ReserveSceneTables).
+		// list's end report again next frame while the list grows (RequireSceneTables).
 		if (auto& armed = writeBack.armed[frameSlot]; armed.armed) {
 			armed.armed = false;
 			writeBack.Harvest(frameSlot, armed.frame, [&](const std::uint32_t* a_words, std::uint32_t a_count, std::uint32_t a_capacity) {

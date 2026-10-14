@@ -45,7 +45,8 @@ namespace DCLF
 			auto& scene = *impl->scene;
 			text += fmt::format("[DCLF] tree LOD draws: {} ({} depth commits, {} shape slots sent; tables {} shape and {} mesh slots; {} commits that could not draw a "
 								"withheld frame){}\n",
-				impl->treeLodOwned ? "DCLF's" : "the engine's", scene.treeLodUploads, scene.treeLodSlotsSent, scene.treeLodShapeCapacity, scene.treeLodMeshCapacity,
+				impl->treeLodOwned ? "DCLF's" : "the engine's", scene.treeLodUploads, scene.treeLodSlotsSent, NamedUnits(impl->Adopted(), scene.treeLodShapes),
+				NamedUnits(impl->Adopted(), scene.treeLodMeshes),
 				impl->treeLodMissed, impl->treeLodMissed ? " <- TREE LOD HOLES" : "");
 			scene.treeLodUploads = scene.treeLodSlotsSent = 0;
 			// Its two-phase cull: in view, drawn by phase 1, occluded by the last frame's HZB, brought back by the rebuilt one.

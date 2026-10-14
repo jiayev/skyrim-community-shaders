@@ -1,4 +1,4 @@
-// The revision producer's assembly (snapshot builder): a scene revision's versions (VersionSet), its epochs' shapes and the
+// The revision producer's assembly (snapshot builder): a scene revision's versions (the sealed set), its epochs' shapes and the
 // recordings requested for them on ORG's host thread, sealed; and the render thread's use of the selected revision (RevisionOf).
 
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
@@ -7,75 +7,6 @@
 namespace DCLF
 {
 	using org::async::RevisionFragment;
-
-	std::shared_ptr<const org::BufferVersion> Draws::VersionSet::Find(const org::VersionedBuffer& a_buffer) const noexcept
-	{
-		const void* key = a_buffer.Key();
-		const auto it = std::lower_bound(versions.begin(), versions.end(), key,
-			[](const auto& a_entry, const void* a_key) { return std::less<const void*>{}(a_entry.first, a_key); });
-		return it != versions.end() && it->first == key ? it->second : nullptr;
-	}
-
-	std::shared_ptr<const Draws::VersionSet> Draws::VersionSet::Snapshot()
-	{
-		auto set = std::make_shared<VersionSet>();
-		auto& registry = VersionRegistry::Get();
-		// The buffers registered since (from any thread), then the live ones: the revision code's own list.
-		registry.TakeRegistered();
-		auto& buffers = registry.buffers;
-		std::erase_if(buffers, [](const auto& a_buffer) { return a_buffer.expired(); });
-		struct Named
-		{
-			const void* key;
-			std::shared_ptr<const org::BufferVersion> version;
-			std::weak_ptr<org::VersionedBuffer> buffer;
-		};
-		std::vector<Named> named;
-		named.reserve(buffers.size());
-		// Current under the frame's changes as last published (the frame's own value moves only at its adoptions).
-		set->changes = registry.Published();
-		const auto& growths = Growths::Get();
-		bool pending = false;
-		for (const auto& weak : buffers)
-			if (const auto buffer = weak.lock()) {
-				auto version = growths.Ready(buffer);
-				pending = pending || version;
-				named.push_back({ buffer->Key(), version ? std::move(version) : buffer->Current(), weak });
-			}
-		if (pending)
-			set->changes = registry.Next();
-		std::sort(named.begin(), named.end(), [](const Named& a, const Named& b) { return std::less<const void*>{}(a.key, b.key); });
-		set->versions.reserve(named.size());
-		set->buffers.reserve(named.size());
-		for (auto& entry : named) {
-			set->versions.emplace_back(entry.key, std::move(entry.version));
-			set->buffers.push_back(std::move(entry.buffer));
-		}
-		return set;
-	}
-
-	bool Draws::VersionSet::Current() const
-	{
-		// The set's own buffers (the frame never reads the revision code's list): a buffer made after the set (not in it) is one no
-		// recording of its revision names, so it moves nothing the set binds.
-		for (std::size_t i = 0; i < buffers.size() && i < versions.size(); ++i)
-			if (const auto buffer = buffers[i].lock())
-				if (versions[i].second && versions[i].second != buffer->Current())
-					return false;
-		return true;
-	}
-
-	bool Draws::Growths::Deferred()
-	{
-		// As the frame posted it (PostRevisionInputs: the host's async epochs and uploader are the owner thread's).
-		return Get().deferred.load(std::memory_order_acquire);
-	}
-
-	bool Draws::Growths::OwnerDeferred()
-	{
-		auto* host = RenderGraphRuntime::Get().Host();
-		return host && host->AsyncEpochs() && host->Uploads();
-	}
 
 	namespace
 	{
@@ -120,12 +51,6 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.AssembleRevision");
 		using R = SceneRevisions;
 		auto& rv = revisions;
-		// A growth still pending: the publication's claims may reach past the versions a revision made now could name, so none is
-		// made; the builder makes it again when the growth settles (it wakes the builder).
-		if (rv.growthPending) {
-			++rv.growthWaits;
-			return;
-		}
 		// A graph build asked of the frame (shadow view slots: ServeRevisionRequests) not made yet: a recording now would be of the graph
 		// without what it declares, which that build supersedes. None is sealed until the inputs carry it (one integer compare; the
 		// inputs' post wakes the builder).
@@ -135,20 +60,21 @@ namespace DCLF
 		}
 		producer.buildWanted = 0;
 		auto draft = rv.assembler.Begin();
-		// The versions: again when a growth was adopted or became ready to name, or the graph was built again (with the buffers made
-		// since: a recording is of the build it was made on, so every epoch is recorded again for the new set). The build as the frame
-		// posted it (RevisionInputs: BuildPoint's).
+		// The versions: the make's sealed set (the same set and fragment while nothing changed, so every recording of it stands), as a
+		// fragment of its own after a graph build (a recording is of the build it was made on, so every epoch is recorded again). The
+		// build as the frame posted it (RevisionInputs: BuildPoint's).
 		const std::uint64_t builds = producer.inputs.buildGeneration;
-		if (const std::uint64_t changes = VersionRegistry::Get().Published(); rv.versionChanges != changes || rv.growthStamp != Growths::Get().stamp ||
-			rv.graphBuilds != builds || !draft.Get(R::kVersionsSlot)) {
-			draft.Set(R::kVersionsSlot, RevisionFragment::MakeReady(VersionSet::Snapshot()));
-			rv.versionChanges = changes;
-			rv.growthStamp = Growths::Get().stamp;
+		const auto& sealed = rv.named;
+		if (rv.versionsNamed != sealed.named || rv.graphBuilds != builds) {
+			rv.versionsFragment = rv.versionsNamed == sealed.named ? RevisionFragment::MakeReady(sealed.named) : sealed.fragment;
+			rv.versionsNamed = sealed.named;
 			rv.graphBuilds = builds;
 			++rv.versionSets;
 		}
+		if (draft.Get(R::kVersionsSlot) != rv.versionsFragment)
+			draft.Set(R::kVersionsSlot, rv.versionsFragment);
 		const auto& versionsFragment = draft.Get(R::kVersionsSlot);
-		const auto versions = versionsFragment->Value<VersionSet>();
+		const auto versions = versionsFragment->Value<NamedVersions>();
 
 		// Each epoch's shape (MakeRevision's): its fragment kept while the shape is the same.
 		auto setShape = [&]<class Value>(std::uint32_t a_epoch, std::shared_ptr<const Value> a_value) {
@@ -219,9 +145,6 @@ namespace DCLF
 		// one is dropped (the epoch has none in the revision) and not asked for again until its shape or the versions change.
 		auto* host = RenderGraphRuntime::Get().Host();
 		const bool recordable = host && producer.inputs.asyncEpochs;
-		// The scene's sizing its versions have (the growths it names): what its passes size by.
-		const auto& sceneState = producer.inputs.scene;
-		const auto sceneSizing = sceneState ? std::make_shared<const SceneSizing>(Growths::Get().RevisionSizing<SceneSizing>(*sceneState)) : nullptr;
 		for (std::uint32_t e = 0; e < R::kEpochs; ++e) {
 			const std::uint32_t slot = R::kRecordingSlot + e;
 			const auto& shapeFragment = draft.Get(R::kShapeSlot + e);
@@ -252,7 +175,6 @@ namespace DCLF
 				auto data = std::make_shared<EpochRevisionData>();
 				data->versions = versions;
 				a_fill(data->shapes);
-				data->shapes.scene = sceneSizing;
 				requests.push_back(std::move(data));
 			};
 			// The epoch's passes prepare against its shape (the forward epoch's, the colour shape: CurrentFrame's MainOpaque).
@@ -342,12 +264,11 @@ namespace DCLF
 			draft.Set(slot, work->fragment);
 		}
 
-		// The ready changes are this revision's (its versions and shapes were made from them), handed over in it by value: the frame adopts
-		// them with its selection (Growths::AdoptNamed).
-		draft.Set(R::kGrowthsSlot, RevisionFragment::MakeReady(Growths::Get().Naming()));
+		// The frame adopts the revision's set with its selection (AdoptSnapshot: NamedVersions::AdoptAll).
 		try {
 			(void)rv.assembler.Seal(std::move(draft));
 			rv.sealedVersions = versions;
+			rv.sealedLayout = rv.layout;
 			++rv.sealed;
 		} catch (const std::exception& error) {
 			if (rv.sealFailures++ < 4)

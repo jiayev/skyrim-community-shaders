@@ -402,8 +402,8 @@ namespace DCLF::Draws
 		if (m > kRowMaterialMask || p >= (1u << (32 - kRowPipelineShift)))
 			stl::report_and_fail(fmt::format("Drawcall Limit Fix: material slot {} or pipeline slot {} past an input's row fields", m, p));
 		auto fail = [&](Skip a_reason) { resolved.skipReason = static_cast<std::uint32_t>(a_reason); };
-		// A row past its table waits for the growth adopted with the revision claiming its draws; it is still written (kept),
-		// so the growth's fill holds it.
+		// A row past its table's named version waits for the set that holds it; it is still written (kept), so that version's
+		// capture holds it.
 		const bool rowsFit = m < in.addresses.recordCapacity && p < in.addresses.pipelineCapacity;
 		Mark(0);
 		WriteMaterialRow(m, p, blocks);
@@ -1163,7 +1163,7 @@ namespace DCLF::Draws
 				Skipped(Skip::CandidateOnly);
 			return;
 		}
-		// Past the scene's buffers (growth outstanding): no input, except a decal's blank, which keeps its slot as a zero-count draw.
+		// Past the scene's buffers' named versions: no input, except a decal's blank, which keeps its slot as a zero-count draw.
 		if (!ObjectFits(tables, o, in.addresses.fit)) {
 			if (const std::uint32_t group = ObjectDecalGroup(object.flags);
 				group && o < tables.decalOrdinal.size() && tables.decalOrdinal[o] < decalCount[group - 1])

@@ -13,7 +13,7 @@ namespace DCLF
 	struct IndirectDraws::Impl
 	{
 		std::shared_ptr<Resources> resources;
-		// The main rows the last main commit sent, for the revision code to fill a deferred growth with.
+		// The main rows the last main commit sent, for the revision producer's row captures (Resources::rowCaptures).
 		struct CommittedRows
 		{
 			KeptView<MaterialRow> materials;
@@ -121,19 +121,29 @@ namespace DCLF
 		/** @brief Revision code: the producer's draw bound brought up to date with a_tables' change log. */
 		void UpdateDrawBound(const SceneTables& a_tables, std::uint32_t a_generation);
 		/**
-		 * @brief Revision code (a growth): a_resources' sequences, buckets and rows grown to the draw bound. A bound over the device's
-		 * max sequence count or the sort's rank field is a hard failure.
+		 * @brief Revision code: the main layout (RevisionProducer::mainLayout) brought up to the draw bound, and a_resources' sequences,
+		 * bucket counts and rows required to hold it. A bound over the device's max sequence count or the sort's rank field is a hard
+		 * failure.
 		 */
-		void ReserveMainSequences(Resources& a_resources, const SceneTables& a_tables, std::uint32_t a_generation);
-		/** @brief Revision code (a growth): the index pool's room for every geometry the tables have. */
-		void ReserveIndexPool(SceneBuffers& a_scene, const SceneTables& a_tables, std::uint32_t a_generation);
-		void ReserveShadowSequences(ShadowResources& a_shadow, const SceneTables& a_tables, std::uint32_t a_generation, std::uint32_t a_slots, std::uint32_t a_first = 0);
-		/** @brief Revision code: grows the shadow material rows to a_wanted (the last build's) and a quarter more. */
-		void ReserveShadowRows(ShadowResources& a_shadow, std::uint32_t a_wanted);
-		/** @brief Revision code: view slots and map rows grown (more slots rebuild the graph; either growth is a new latch block). */
-		void ReserveShadowLatch(ShadowResources& a_shadow, std::uint32_t a_views, std::uint32_t a_keys, std::uint32_t a_rasterStates, std::uint32_t a_sunProcesses);
-		// Revision code: a new main latch block (RevisionLatches::main) when it holds fewer cascades, volumes or buckets than asked.
+		void RequireMain(GrowthBuild& a_build, Resources& a_resources, const SceneTables& a_tables, std::uint32_t a_generation);
+		/** @brief Revision code: the index pool's room for every geometry the tables have, and a relayout of a fragmented one. */
+		void RequireIndexPool(GrowthBuild& a_build, SceneBuffers& a_scene, const SceneTables& a_tables, std::uint32_t a_generation);
+		/** @brief Revision code: every shadow view slot's sequences required to hold the scene's draw bound. */
+		void RequireShadowSequences(GrowthBuild& a_build, const SceneTables& a_tables, std::uint32_t a_generation);
+		/**
+		 * @brief Revision code: view slots and map rows grown (more slots rebuild the graph; either growth is a new latch layout), the
+		 * view blocks and every slot's bucket counts required to hold them.
+		 */
+		void ReserveShadowLatch(GrowthBuild& a_build, ShadowResources& a_shadow, std::uint32_t a_views, std::uint32_t a_keys, std::uint32_t a_rasterStates,
+			std::uint32_t a_sunProcesses);
+		// Revision code: the main latch's layout grown when it holds fewer cascades, volumes or buckets than asked (RequireLatches
+		// asks the set for a block of it).
 		void ReserveMainLatch(std::uint32_t a_cascades, std::uint32_t a_shadowVolumes, std::uint32_t a_buckets = 0);
+		/**
+		 * @brief Revision code: every latch block laid out, required of the set as its layout stands (another layout: a new block),
+		 * with the zeros the shadow and view latched copies take. Once per make, after every reserve.
+		 */
+		void RequireLatches(GrowthBuild& a_build);
 		std::uint32_t shadowRowsWanted = 0;  // the last shadow build's (ShadowPayload::rowsWanted)
 		ShadowInputs PrepareShadowInputs(const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
 			const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates) const;
@@ -240,6 +250,22 @@ namespace DCLF
 		// The frame's: the adopted snapshot, and whether the newest found was stale (no claims until a current one).
 		std::shared_ptr<const SceneSnapshot> adoptedSnapshot;
 		bool snapshotStale = false;
+		// The adopted snapshot's revision's versions (held by it): what commits and latch writes take every versioned buffer's
+		// address, SRV index and capacity from (Adopted).
+		const NamedVersions* adoptedVersions = nullptr;
+		/** @brief The frame: the adopted set; it names nothing before the first adoption of a revision. */
+		const NamedVersions& Adopted() const
+		{
+			static const NamedVersions kNone;
+			return adoptedVersions ? *adoptedVersions : kNone;
+		}
+		/**
+		 * @brief The addresses, SRV indices, capacities and fit a main (shadow) build embeds of its resources' versioned buffers, as
+		 * a_named names them (the tree wind read at a_frame: the buffer the frame before wrote), and the main layout's decal range.
+		 * Every other field of a_out stands.
+		 */
+		static void AddressesOf(const NamedVersions& a_named, const MainLayout& a_layout, const Resources& a_resources, std::uint32_t a_frame, ResourceAddresses& a_out);
+		static void AddressesOf(const NamedVersions& a_named, const ShadowResources& a_resources, std::uint32_t a_frame, ResourceAddresses& a_out);
 		// Snapshots the frame replaced, back to the builder, which drops them (nothing of a snapshot is released on the render thread).
 		Retired<SceneSnapshot> retiredSnapshots;
 		/** @brief The builder's state (SnapshotPass: one pass at a time on the pool, woken by posts, completions and growths). */
@@ -255,6 +281,7 @@ namespace DCLF
 			Stage stage = Stage::Idle;
 			std::unique_ptr<SnapshotWork> work;
 			std::shared_ptr<const DrawPublication> draws;
+			std::uint64_t drawsNamed = 0;  // the serial of the set draws embed the addresses of (0: none)
 			std::uint64_t sealed = 0;  // the revision sealed for work
 			std::uint64_t serial = 0, lastPublication = 0;
 			std::chrono::steady_clock::time_point sealedAt{};
@@ -280,9 +307,7 @@ namespace DCLF
 		std::uint64_t snapshotsAdopted = 0, snapshotFramesKept = 0;
 		std::array<std::uint64_t, kStaleKinds> snapshotsStale{};
 		std::vector<std::uint32_t> adoptionLatency;
-		// The guard (DecideCoverage): frames whose draws embed a stale face positions address (withdrawn, <- STALE DRAWS; 0 by
-		// construction); frames from a growth's adoption (~0u: none) to draws embedding its versions.
-		std::uint64_t staleDraws = 0;
+		// Frames from a growth's adoption (~0u: none) to draws embedding its versions (DecideCoverage).
 		std::uint32_t growthAdoptedFrame = ~0u;
 		std::vector<std::uint32_t> growthToDraws;
 		// From the oldest event its publication first carried (ScenePublication::eventNs, eventFrame) to its adoption, ms and frames.
@@ -293,14 +318,15 @@ namespace DCLF
 		/** @brief The builder's pass (SnapshotPump's drain): see SnapshotBuilder. */
 		void SnapshotPass();
 		/**
-		 * @brief The builder: the work item's draws (RunAhead). The only versioned address they embed, the face positions, is of the
-		 * version a_versions names (none: the context's).
+		 * @brief The builder: the work item's draws (RunAhead), every versioned buffer's address and SRV index they embed of the version
+		 * a_versions names (AddressesOf, a_layout's decal range; none without a set: such draws draw nothing).
 		 */
-		void BuildSnapshotDraws(const VersionSet* a_versions);
-		/** @brief The device address of the version of a_buffer a_versions names (its current one where it names none, or without a set). */
-		static std::uint64_t NamedVersionAddress(const VersionSet* a_versions, const Versioned& a_buffer);
-		/** @brief Whether a_draws embed the face positions at a_address wherever they embed them at all (0 in a payload: none embedded). */
-		static bool DrawsEmbedFacePositions(const DrawPublication& a_draws, std::uint64_t a_address);
+		void BuildSnapshotDraws(const NamedVersions* a_versions, const MainLayout* a_layout);
+		/**
+		 * @brief The builder: the inputs a_draws' payloads put in the input buffers, raised into the producer's input demand; false when
+		 * a_named's versions hold less (the revision is made again, requiring them: RequireSceneTables).
+		 */
+		bool InputsFit(const DrawPublication& a_draws, const NamedVersions& a_named);
 		/** @brief The builder: posts the snapshot of its work item, draws and the completed revision a_revision. */
 		void PostSnapshot(org::async::RevisionAssembler::Lease a_revision);
 		/** @brief The builder's report lines (counters reset): revisions, growths, shapes made, the draw bound. */
@@ -334,11 +360,8 @@ namespace DCLF
 		 * since the version it holds. Reused once its last reader is done on the GPU. Epochs name it by values, so no recording binds it.
 		 */
 		static constexpr std::uint32_t kPayloadRing = 4;
-		struct RingPart
+		struct RingPart : org::services::TransportBuffer
 		{
-			std::shared_ptr<org::Buffer> buffer;
-			std::uint64_t capacity = 0;  // elements
-			std::uint32_t srvIndex = 0;
 			std::uint64_t address = 0;
 			std::uint64_t held = 0;  // the version it holds (the producer's)
 		};
@@ -533,8 +556,8 @@ namespace DCLF
 		std::vector<std::uint8_t> viewForwardSlots;
 		/** @brief A view's graph resources, created once its targets are known (render thread). */
 		bool SetupView(ViewKind a_kind);
-		/** @brief Revision code: a view's latch for a_slots slots and a_buckets buckets, buffers for a_draws per face, tree lists. */
-		void ReserveView(ViewResources& a_view, SceneBuffers* a_scene, std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws);
+		/** @brief Revision code: a view's latch layout for a_slots slots and a_buckets buckets, and its buffers required to hold them and a_draws a face. */
+		void RequireView(GrowthBuild& a_build, ViewResources& a_view, std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws);
 		/** @brief The engine's kPOST_ZPREPASS_COPY imported (again when it changes), and the extension added. */
 		bool ImportFirstPersonDepth();
 		/** @brief The reflection phase's readiness of an object: its pipeline slot's forward pipeline is built. */
@@ -547,10 +570,11 @@ namespace DCLF
 		std::shared_ptr<std::vector<std::shared_ptr<const void>>> EpochOwners(std::span<const MainPayload* const> a_payloads);
 		/** @brief The scene buffers, created once (render thread). False when they have no device address. */
 		bool EnsureSceneBuffers(rhi::Device a_device);
-		/** @brief The scene buffers and per-object buffers grown to hold a_tables (render thread, before a build's inputs are taken). */
-		void ReserveSceneTables(SceneBuffers& a_scene, const SceneTables& a_tables);
-		/** @brief The main and shadow resources' per-object buffers grown to the scene's object capacity. */
-		void ReserveObjectBuffers();
+		/**
+		 * @brief Revision code: the scene's tables required to hold a_tables (and the frame's posted counts), with the per-object
+		 * buffers (the objects and the input demand) and the faces' tree lists.
+		 */
+		void RequireSceneTables(GrowthBuild& a_build, SceneBuffers& a_scene, const SceneTables& a_tables);
 		ObjectRecordStore objectStore;
 		ExtrasStore extrasStore;
 		GeometryStore geometryStore;
@@ -674,7 +698,9 @@ namespace DCLF
 		{
 			RevisionInputs inputs;
 			std::uint32_t frame = 0;  // the frame the make is for (MakeRevision's a_frame)
-			RevisionLatches latches;
+			// The latches' layouts, and their blocks' handles in the scene's set (the sealed set names the blocks).
+			RevisionLatchLayouts latches;
+			RevisionLatchHandles latchHandles;
 			MadeShapes made;
 			// The occlusion maps' recent layouts (newest first, kRecentOcclusionLayouts): a revision makes a shape for each.
 			std::vector<std::vector<ShadowViewLayout>> recentOcclusionLayouts;
@@ -684,6 +710,13 @@ namespace DCLF
 			RowBucketsCache rowBuckets;
 			// The last main commit's rows (committedRowsSlot, taken at the make's start).
 			CommittedRows committedRows;
+			// How the main epochs lay out the sequences (RequireMain; its first sizes Setup's), and the layout of the last sealed set.
+			MainLayout mainLayout;
+			bool mainLayoutMade = false;
+			// The inputs the snapshot's payloads put in the main and shadow input buffers (InputsFit): the most any build ahead put.
+			std::uint64_t mainInputs = 0, shadowInputs = 0;
+			// The bucket count words the last shadow shapes were made for (ShadowShapesHold).
+			std::uint32_t shadowBucketWords = 0;
 			// The graph build a frame request needs (0 none): nothing is sealed before it, or its recordings would lack its declarations.
 			std::uint64_t buildWanted = 0;
 		} producer;
@@ -701,7 +734,7 @@ namespace DCLF
 		 * alone, then assembled. a_frame: the publication's commitFrame.
 		 */
 		void MakeRevision(const ScenePublication& a_publication, std::uint32_t a_frame);
-		/** @brief Revision code: the producer's latches made at their first sizes once their resources are. */
+		/** @brief Revision code: the latch blocks' handles registered (once), and each latch laid out at its first sizes once its resources are. */
 		void EnsureRevisionLatches();
 
 		/**
@@ -712,24 +745,28 @@ namespace DCLF
 		 */
 		struct SceneRevisions
 		{
-			// By Epoch: the forward epoch uses the colour shape, the first-person epochs share one.
+			// By Epoch: the forward epoch uses the colour shape, the first-person epochs share one. The versions slot: the set the
+			// revision names (NamedVersions), adopted by the frame with it.
 			static constexpr std::uint32_t kEpochs = Epoch::Count;
-			// The growths slot: the changes the revision names (Growths::NamedChanges), adopted by the frame with it.
-			static constexpr std::uint32_t kVersionsSlot = 0, kShapeSlot = 1, kRecordingSlot = kShapeSlot + kEpochs, kGrowthsSlot = kRecordingSlot + kEpochs,
-										   kSlots = kGrowthsSlot + 1;
+			static constexpr std::uint32_t kVersionsSlot = 0, kShapeSlot = 1, kRecordingSlot = kShapeSlot + kEpochs, kSlots = kRecordingSlot + kEpochs;
 			// The builder's alone (the only consumer); a revision's last recording completing wakes the builder.
 			org::async::RevisionAssembler assembler{ kSlots, [] { WakeSnapshotBuilder(); } };
-			std::uint64_t versionChanges = ~0ull;  // VersionRegistry::changes the versions fragment was made at
-			std::uint64_t graphBuilds = ~0ull;     // and the host's graph build (PersistentGraphHost::BuildGeneration)
-			std::uint64_t growthStamp = ~0ull;     // and Growths::stamp (the ready growths it names)
-			// A growth still pending at this make (Growths::Settle): nothing is sealed until woken again.
-			bool growthPending = false;
-			std::uint64_t growthWaits = 0;  // makes that sealed nothing for it, since the last report
+			// This make's sealed set (MakeRevision) and the layout its shapes were made from.
+			SealedSet named;
+			std::shared_ptr<const MainLayout> layout;
+			// The versions fragment the revisions carry: the set's own, or one of the same set made for a graph build since (a
+			// recording is of the build it was made on, so every epoch is recorded again).
+			std::shared_ptr<const org::async::RevisionFragment> versionsFragment;
+			std::shared_ptr<const NamedVersions> versionsNamed;
+			std::uint64_t graphBuilds = ~0ull;  // the build versionsFragment was made for (RevisionInputs::buildGeneration)
+			std::uint64_t growthWaits = 0;  // makes whose set was pending (a growth batch in flight), since the last report
 			std::uint64_t buildWaits = 0;   // makes that sealed nothing for a graph build asked of the frame (RevisionProducer::buildWanted)
+			std::uint64_t inputWaits = 0;   // sealed revisions whose draws' inputs their set did not hold (InputsFit): made again
 			// The builder's report counters.
 			std::uint64_t sealed = 0, versionSets = 0, sealFailures = 0;
-			// The versions the last sealed revision names (the builder's): what its snapshot's draws embed.
-			std::shared_ptr<const VersionSet> sealedVersions;
+			// The versions and layout the last sealed revision names (the builder's): what its snapshot's draws embed.
+			std::shared_ptr<const NamedVersions> sealedVersions;
+			std::shared_ptr<const MainLayout> sealedLayout;
 			struct EpochStats
 			{
 				std::uint64_t changed = 0, requested = 0, refused = 0;
@@ -751,7 +788,7 @@ namespace DCLF
 			// Per epoch, the inputs (versions, shape) whose recording failed: not asked again until they change.
 			std::array<std::pair<std::shared_ptr<const org::async::RevisionFragment>, std::shared_ptr<const org::async::RevisionFragment>>, kEpochs> failedFor;
 		} revisions;
-		/** @brief The builder: seals the revision of MakeRevision's shapes; none while a growth or a needed build is pending. */
+		/** @brief The builder: seals the revision of MakeRevision's shapes and sealed set; none while a needed build is pending. */
 		void AssembleRevision(std::uint32_t a_frame);
 		/** @brief Recording requests not yet completed: what the build point releases unsubmitted tickets for. */
 		std::atomic<std::uint32_t> recordingsOutstanding{ 0 };
@@ -770,7 +807,7 @@ namespace DCLF
 		/** @brief What the revisions' shapes are made from, hashed by group; the shapes are made again only when it moves. */
 		enum ShapesKeyGroup : std::size_t
 		{
-			kKeyGrowths,
+			kKeyVersions,
 			kKeyPipelines,
 			kKeyLookups,
 			kKeyMain,
@@ -780,18 +817,18 @@ namespace DCLF
 			kKeyFirstPerson,
 			kKeyGroups
 		};
-		static constexpr std::array<const char*, kKeyGroups> kKeyGroupNames = { "growths", "pipelines", "lookups", "main latch and captures", "shadow latch and layouts",
+		static constexpr std::array<const char*, kKeyGroups> kKeyGroupNames = { "named set", "pipelines", "lookups", "main latch and captures", "shadow latch and layouts",
 			"casting bound outgrown", "reflection", "first person" };
 		using ShapesKey = std::array<std::uint64_t, kKeyGroups>;
-		ShapesKey RevisionShapesKey(const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect, const Lookups& a_lookups, std::size_t a_pipelines,
-			const TreeLodPipelines* a_treeLod) const;
+		ShapesKey RevisionShapesKey(const NamedVersions& a_named, const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect, const Lookups& a_lookups,
+			std::size_t a_pipelines, const TreeLodPipelines* a_treeLod) const;
 		ShapesKey revisionShapesKey{};
 		std::array<std::uint64_t, kKeyGroups> shapesMadeBy{};  // since the last report: makes by the group whose inputs moved
 		// Since the last report: makes that made the shapes, and that kept the last ones.
 		std::uint64_t shapesMade = 0, shapesKept = 0;
 		/**
-		 * @brief Whether the last shadow and occlusion shapes hold a_bounds (capacities and buckets enough, no row at the bucket words).
-		 * Capacities only grow, so a shape remade from a bound they hold is the same shape.
+		 * @brief Whether the last shadow and occlusion shapes hold a_bounds (capacities and buckets enough, no row at the bucket words
+		 * they were made for). Capacities only grow, so a shape remade from a bound they hold is the same shape.
 		 */
 		bool ShadowShapesHold(const ShadowBounds& a_bounds) const;
 		// The casting bound's version last checked (drawBound.shadowVersion) and its outgrowths (kKeyBound: a move alone keeps the shapes).

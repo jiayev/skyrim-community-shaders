@@ -29,6 +29,8 @@
 #	include <OpenRenderGraph/PersistentGraphHost.h>
 #	include <Render/Runtime/IUploadService.h>
 #	include <Resources/Buffers/Buffer.h>
+#	include <ORGModuleServices/GrowthPolicy.h>
+#	include <ORGModuleServices/TransportBuffer.h>
 #	include <rhi.h>
 
 #	include <algorithm>
@@ -213,11 +215,7 @@ namespace DCLF
 	struct FrameValues::Impl
 	{
 		// Render thread.
-		struct RingBuffer
-		{
-			std::shared_ptr<org::Buffer> buffer;
-			std::uint32_t capacity = 0, srvIndex = 0;
-		};
+		using RingBuffer = org::services::TransportBuffer;
 		std::array<RingBuffer, kRing> ring, paletteRing, shadingRing, seedRing, treeSeedRing;
 		std::array<org::PersistentGraphHost::GpuPoint, kRing> points;  // per ring entry: the last frame that read it
 		std::shared_ptr<const Plan> plan;                              // the newest
@@ -828,19 +826,11 @@ namespace DCLF
 		job.globals = a_globals;
 		job.ringIndex = r;
 		// Grow by replacing the buffer; the old one retires with the frames reading it.
+		const auto retire = [](std::shared_ptr<org::Buffer>&& a_old) { Scene::FrameView::Get().RetireImport(std::move(a_old)); };
 		const auto ensure = [&](Impl::RingBuffer& a_entry, std::uint32_t a_needed, std::uint32_t a_stride, const char* a_name, bool& a_fresh) {
-			if (a_entry.buffer && a_entry.capacity >= a_needed)
-				return;
-			const std::uint32_t capacity = Doubled(std::max(a_entry.capacity, 1024u), a_needed);
-			auto buffer = org::Buffer::CreateUnmaterializedStructuredBuffer(capacity, a_stride, false);
-			buffer->SetName(fmt::format("cs.dclf.frame-values.{}.{}", a_name, r).c_str());
-			buffer->Materialize();
-			if (a_entry.buffer)
-				Scene::FrameView::Get().RetireImport(std::move(a_entry.buffer));
-			a_entry.buffer = std::move(buffer);
-			a_entry.capacity = capacity;
-			a_entry.srvIndex = a_entry.buffer->GetSRVInfo(0).slot.index;
-			a_fresh = true;
+			if (org::services::EnsureTransport(a_entry, a_needed, a_stride, org::services::GrowthPolicy::Doubling(1024),
+					[&] { return fmt::format("cs.dclf.frame-values.{}.{}", a_name, r); }, retire))
+				a_fresh = true;
 		};
 		ensure(s.ring[r], s.plan ? s.plan->slots : 0u, sizeof(BindlessPlacement), "placements", job.fresh);
 		ensure(s.paletteRing[r], s.plan ? 2 * s.plan->boneCapacity : 0u, sizeof(PaletteRow), "palettes", job.paletteFresh);
@@ -848,15 +838,15 @@ namespace DCLF
 		ensure(s.seedRing[r], s.seedRows, sizeof(FadeRootStatic), "fade-seeds", job.seedFresh);
 		ensure(s.treeSeedRing[r], s.treeSeedRows, sizeof(TreeStatic), "tree-seeds", job.treeSeedFresh);
 		job.target = s.ring[r].buffer;
-		job.capacity = s.ring[r].capacity;
+		job.capacity = static_cast<std::uint32_t>(s.ring[r].capacity);
 		job.paletteTarget = s.paletteRing[r].buffer;
-		job.paletteCapacity = s.paletteRing[r].capacity;
+		job.paletteCapacity = static_cast<std::uint32_t>(s.paletteRing[r].capacity);
 		job.shadingTarget = s.shadingRing[r].buffer;
-		job.shadingCapacity = s.shadingRing[r].capacity;
+		job.shadingCapacity = static_cast<std::uint32_t>(s.shadingRing[r].capacity);
 		job.seedTarget = s.seedRing[r].buffer;
-		job.seedCapacity = s.seedRing[r].capacity;
+		job.seedCapacity = static_cast<std::uint32_t>(s.seedRing[r].capacity);
 		job.treeSeedTarget = s.treeSeedRing[r].buffer;
-		job.treeSeedCapacity = s.treeSeedRing[r].capacity;
+		job.treeSeedCapacity = static_cast<std::uint32_t>(s.treeSeedRing[r].capacity);
 		job.reuse = s.points[r];
 		job.timeline = std::move(timeline);
 		job.uploads = std::move(uploads);

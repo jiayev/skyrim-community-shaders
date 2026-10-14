@@ -3,19 +3,10 @@
 #include <ORGModuleServices/Async/ArtifactResources.h>
 #include <ORGModuleServices/Async/GraphScheduler.h>
 #include <ORGModuleServices/Async/StateGraphTypes.h>
+#include <ORGModuleServices/Async/VersionGrowthArtifact.h>
 
-#include <atomic>
 #include <cstdint>
-#include <functional>
 #include <memory>
-#include <string>
-#include <vector>
-
-namespace org::async
-{
-	template <class Binding>
-	class StateGraph;
-}
 
 namespace DCLF::Runtime
 {
@@ -41,22 +32,8 @@ namespace DCLF::Runtime
 		Count
 	};
 
-	/**
-	 * @brief A growth as graph work (the SARP/BasicRenderer model, BuildVersionedGpuBuffer): a BufferVersion artifact whose producer
-	 * runs on the preparation pool, makes the version and queues its fills on the dedicated uploader, and is ready once those copies
-	 * completed (the uploader's tickets notify); `done` then runs on the coordinator lane. Type-erased, so the graph's library need
-	 * not see ORG's buffers.
-	 */
-	struct GrowthWork
-	{
-		struct Produced
-		{
-			std::shared_ptr<const void> value;                          // what `done` is given
-			std::shared_ptr<const org::async::GpuSubmissionSet> ready;  // null: ready now
-		};
-		std::function<Produced()> produce;  // preparation pool; throws when the version cannot be made or filled
-		std::function<void(std::shared_ptr<const void> a_value, std::string a_error)> done;  // coordinator lane, once: null and why on failure
-	};
+	/** @brief A growth as graph work (org::async::VersionGrowthWork): a BufferVersion artifact made on the preparation pool, `done` on the coordinator lane. */
+	using GrowthWork = org::async::VersionGrowthWork;
 
 	/** @brief DCLF's state graph on DCLF's executor, with the growth producer. */
 	class SceneGraph
@@ -81,8 +58,6 @@ namespace DCLF::Runtime
 
 	private:
 		std::unique_ptr<Graph> graph;
-		struct GrowthWait;
-		std::vector<std::shared_ptr<GrowthWait>> growthWaits;  // the posting thread's
-		std::uint64_t growthIds = 0;
+		std::unique_ptr<org::async::VersionGrowthPosts<org::async::DefaultStateGraphTypes>> growths;  // the posting thread's
 	};
 }
