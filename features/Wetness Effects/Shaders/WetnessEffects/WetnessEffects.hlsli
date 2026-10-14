@@ -486,6 +486,8 @@ namespace WetnessEffects
 
 	WallRainState GetWallRainState(float3 rainPosition, float3 vertexNormal, float3 positionDx, float3 positionDy, float3 rainPositionDx, float3 rainPositionDy, bool attachToModel)
 	{
+		WallRainState state = (WallRainState)0;
+		bool validProjection = true;
 		float3 position = rainPosition * GAME_UNIT_TO_M;
 		float slope = length(vertexNormal.xy);
 		float3 down = slope > 1e-4 ? (vertexNormal * vertexNormal.z - float3(0, 0, 1)) / slope : float3(0, -1, 0);
@@ -498,56 +500,57 @@ namespace WetnessEffects
 			float3 modelArea = cross(rainPositionDx, rainPositionDy);
 			float worldAreaSquared = dot(worldArea, worldArea);
 			float modelAreaSquared = dot(modelArea, modelArea);
-			if (worldAreaSquared <= max(1e-20, dot(positionDx, positionDx) * dot(positionDy, positionDy) * 1e-8) ||
-				modelAreaSquared <= max(1e-20, dot(rainPositionDx, rainPositionDx) * dot(rainPositionDy, rainPositionDy) * 1e-8)) {
-				return (WallRainState)0;
-			}
-			reciprocalX = cross(positionDy, worldArea) / worldAreaSquared;
-			reciprocalY = cross(worldArea, positionDx) / worldAreaSquared;
-			rainNormal = modelArea * rsqrt(modelAreaSquared) * (dot(worldArea, vertexNormal) < 0.0 ? -1.0 : 1.0);
-			if (slope > 1e-4) {
-				down = rainPositionDx * dot(reciprocalX, down) + rainPositionDy * dot(reciprocalY, down);
-			}
-			if (slope <= 1e-4 || dot(down, down) <= 1e-12) {
-				float3 axis = abs(rainNormal.z) < 0.999 ? float3(0, 0, 1) : float3(0, 1, 0);
-				down = rainNormal * dot(rainNormal, axis) - axis;
-			}
-			down *= rsqrt(max(dot(down, down), 1e-20));
-		}
-		float3 across = normalize(cross(down, rainNormal));
-		float2 footprint = (abs(float2(dot(rainPositionDx, across), dot(rainPositionDx, down))) + abs(float2(dot(rainPositionDy, across), dot(rainPositionDy, down)))) * GAME_UNIT_TO_M;
-		float3 worldAcross = across;
-		float3 worldDown = down;
-		[branch] if (attachToModel)
-		{
-			worldAcross = reciprocalX * dot(rainPositionDx, across) + reciprocalY * dot(rainPositionDy, across);
-			worldDown = reciprocalX * dot(rainPositionDx, down) + reciprocalY * dot(rainPositionDy, down);
-		}
-		float3 weights = smoothstep(0.35, 0.75, abs(rainNormal));
-		weights *= weights;
-		weights /= weights.x + weights.y + weights.z;
-		float rainAmount = max(SharedData::wetnessEffectsSettings.Raining, 0.0) * 1.5;
-		float4 flow = 0.0;
-		[loop] for (int axis = 0; axis < 3; axis++)
-		{
-			float weight = axis == 0 ? weights.x : (axis == 1 ? weights.y : weights.z);
-			if (weight > 0.0) {
-				float3 axisU = axis == 0 ? float3(0, 1, 0) : float3(1, 0, 0);
-				float3 axisV = axis == 2 ? float3(0, 1, 0) : float3(0, 0, -1);
-				float3 axisN = axis == 0 ? float3(1, 0, 0) : (axis == 1 ? float3(0, 1, 0) : float3(0, 0, 1));
-				uint seed = axis == 0 ? 3u : (axis == 1 ? 11u : 23u);
-				float2 streakCellSize = axis == 2 ? float2(0.16, 0.16) : float2(0.045, 0.42);
-				WallRainProjection projection = GetWallRainCoordinates(position, rainNormal, across, down, footprint, slope, axisU, axisV, axisN);
-				flow += GetWallRainProjection(projection, streakCellSize, rainAmount, seed) * weight;
+			validProjection = !(worldAreaSquared <= max(1e-20, dot(positionDx, positionDx) * dot(positionDy, positionDy) * 1e-8) ||
+								modelAreaSquared <= max(1e-20, dot(rainPositionDx, rainPositionDx) * dot(rainPositionDy, rainPositionDy) * 1e-8));
+			if (validProjection) {
+				reciprocalX = cross(positionDy, worldArea) / worldAreaSquared;
+				reciprocalY = cross(worldArea, positionDx) / worldAreaSquared;
+				rainNormal = modelArea * rsqrt(modelAreaSquared) * (dot(worldArea, vertexNormal) < 0.0 ? -1.0 : 1.0);
+				if (slope > 1e-4) {
+					down = rainPositionDx * dot(reciprocalX, down) + rainPositionDy * dot(reciprocalY, down);
+				}
+				if (slope <= 1e-4 || dot(down, down) <= 1e-12) {
+					float3 axis = abs(rainNormal.z) < 0.999 ? float3(0, 0, 1) : float3(0, 1, 0);
+					down = rainNormal * dot(rainNormal, axis) - axis;
+				}
+				down *= rsqrt(max(dot(down, down), 1e-20));
 			}
 		}
+		if (validProjection) {
+			float3 across = normalize(cross(down, rainNormal));
+			float2 footprint = (abs(float2(dot(rainPositionDx, across), dot(rainPositionDx, down))) + abs(float2(dot(rainPositionDy, across), dot(rainPositionDy, down)))) * GAME_UNIT_TO_M;
+			float3 worldAcross = across;
+			float3 worldDown = down;
+			[branch] if (attachToModel)
+			{
+				worldAcross = reciprocalX * dot(rainPositionDx, across) + reciprocalY * dot(rainPositionDy, across);
+				worldDown = reciprocalX * dot(rainPositionDx, down) + reciprocalY * dot(rainPositionDy, down);
+			}
+			float3 weights = smoothstep(0.35, 0.75, abs(rainNormal));
+			weights *= weights;
+			weights /= weights.x + weights.y + weights.z;
+			float rainAmount = max(SharedData::wetnessEffectsSettings.Raining, 0.0) * 1.5;
+			float4 flow = 0.0;
+			[loop] for (int axis = 0; axis < 3; axis++)
+			{
+				float weight = axis == 0 ? weights.x : (axis == 1 ? weights.y : weights.z);
+				if (weight > 0.0) {
+					float3 axisU = axis == 0 ? float3(0, 1, 0) : float3(1, 0, 0);
+					float3 axisV = axis == 2 ? float3(0, 1, 0) : float3(0, 0, -1);
+					float3 axisN = axis == 0 ? float3(1, 0, 0) : (axis == 1 ? float3(0, 1, 0) : float3(0, 0, 1));
+					uint seed = axis == 0 ? 3u : (axis == 1 ? 11u : 23u);
+					float2 streakCellSize = axis == 2 ? float2(0.16, 0.16) : float2(0.045, 0.42);
+					WallRainProjection projection = GetWallRainCoordinates(position, rainNormal, across, down, footprint, slope, axisU, axisV, axisN);
+					flow += GetWallRainProjection(projection, streakCellSize, rainAmount, seed) * weight;
+				}
+			}
 
-		WallRainState state;
-		state.gradient = (worldAcross * flow.x + worldDown * flow.y) / length(weights);
-		state.gradient -= vertexNormal * dot(state.gradient, vertexNormal);
-		state.gradient *= SharedData::wetnessEffectsSettings.WallRainNormalStrength;
-		state.water = flow.z;
-		state.damp = flow.w;
+			state.gradient = (worldAcross * flow.x + worldDown * flow.y) / length(weights);
+			state.gradient -= vertexNormal * dot(state.gradient, vertexNormal);
+			state.gradient *= SharedData::wetnessEffectsSettings.WallRainNormalStrength;
+			state.water = flow.z;
+			state.damp = flow.w;
+		}
 		return state;
 	}
 
@@ -602,6 +605,7 @@ namespace WetnessEffects
 		bool enableRainFlowEffects,
 		bool attachToModel = false)
 	{
+		SurfaceWetnessState state = InitSurfaceWetnessState(shadingNormal, 1.0);
 		float3 positionDx = 0.0;
 		float3 positionDy = 0.0;
 		float3 rainPosition = puddlePosition;
@@ -623,16 +627,10 @@ namespace WetnessEffects
 				positionDy = ddy(puddlePosition);
 				rainPositionDx = positionDx;
 				rainPositionDy = positionDy;
-				if (rainExposure <= 0.0)
-					return InitSurfaceWetnessState(shadingNormal, 1.0);
 			}
 		}
 
-		SurfaceWetnessState state;
 		state.normal = vertexNormal;
-		state.roughness = 1.0;
-		state.glossinessAlbedo = 0.0;
-		state.glossinessSpecular = 0.0;
 
 		float wetnessDistToWater = abs(worldPosition.z - waterHeight);
 		float shoreFactor = saturate(1.0 - (wetnessDistToWater / SharedData::wetnessEffectsSettings.ShoreRange));
