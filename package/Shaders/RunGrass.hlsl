@@ -826,7 +826,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				else
 	if (complex)
 #				endif
-		dirSpecularColor = dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, SharedData::grassLightingSettings.Glossiness);
+		dirSpecularColor = dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, SharedData::grassLightingSettings.Glossiness) * Color::VanillaNormalization();
 #				if defined(WETNESS_EFFECTS)
 	WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDirection, SharedData::DirLightDirection.xyz, dirLightColor, dirDetailedShadow * Color::PBRLightingCompensation * Color::PBRLightingScale, dirDiffuseColor, dirSpecularColor, wetnessDirectSpecularColor);
 #				endif
@@ -888,7 +888,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #					else
 				if (complex)
 #					endif
-					lightSpecularColor = GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, SharedData::grassLightingSettings.Glossiness);
+					lightSpecularColor = GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, SharedData::grassLightingSettings.Glossiness) * Color::VanillaNormalization();
 #					if defined(WETNESS_EFFECTS)
 				WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDirection, normalizedLightDirection, pointLightColor, lightShadow * Color::PBRLightingCompensation * Color::PBRLightingScale, lightDiffuseColor, lightSpecularColor, wetnessDirectSpecularColor);
 #					endif
