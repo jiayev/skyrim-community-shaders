@@ -30,13 +30,13 @@ namespace DCLF::Draws
 
 	// A commit's own uploads on the render thread, staged directly (StagedUploadBatch) and submitted when the commit ends: each is
 	// one memcpy into mapped staging here and one copy in the submission, with no per-upload bookkeeping in the upload pass. The
-	// batch comes from a pool of released ones. A versioned buffer's bytes go to the version the adopted set names (a_named), the one
+	// batch comes from a pool of released ones. A versioned buffer's bytes go to the version the adopted set names (a_adopted), the one
 	// the epoch's recordings resolve.
 	class CommitUploads
 	{
 	public:
-		CommitUploads(std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool, const NamedVersions& a_named) :
-			batch(AcquireStagedBatch(a_pool, std::size_t{ 1 } << 20)), named(a_named)
+		CommitUploads(std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool, const NamedVersions& a_adopted) :
+			batch(AcquireStagedBatch(a_pool, std::size_t{ 1 } << 20)), adopted(a_adopted)
 		{}
 		~CommitUploads()
 		{
@@ -58,11 +58,11 @@ namespace DCLF::Draws
 		// every set sealed after its registration, and a commit writes only what its revision's shapes name).
 		void operator()(const Versioned& a_target, const void* a_data, std::size_t a_bytes, std::uint64_t a_offset);
 		/** @brief The buffer a write into a_target goes to: the version the adopted set names. */
-		const std::shared_ptr<org::Buffer>& TargetOf(const Versioned& a_target) const { return named.Of(a_target).version->buffer; }
+		const std::shared_ptr<org::Buffer>& TargetOf(const Versioned& a_target) const { return adopted.Of(a_target).version->buffer; }
 
 	private:
 		std::shared_ptr<org::runtime::StagedUploadBatch> batch;
-		const NamedVersions& named;
+		const NamedVersions& adopted;
 	};
 
 	/**

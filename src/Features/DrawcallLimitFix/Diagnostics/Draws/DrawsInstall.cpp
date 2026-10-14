@@ -36,6 +36,12 @@ namespace DCLF::Diagnostics
 			Subscribe<MainEpochDone>(&CheckBuildParity);
 		Subscribe<CullLatchWritten>(&NoteCullLatch);
 		Subscribe<MainEpochDone>(&ReadCullCounters);
+		Subscribe<FrameTextureUnresolved>(&DescribeUnresolvedFrameTexture);
+		Subscribe<FrameBufferUnfilled>(&LogUnfilledFrameBuffer);
+		Subscribe<TreeLodMissed>(&LogTreeLodMissed);
+		Subscribe<FadeInputsVaried>(&LogFadeInputsVaried);
+		Subscribe<ShortBuffersDrawn>(&LogShortBuffers);
+		Subscribe<MainCullingSetup>(&LogCullingSetup);
 		if (o.scene)
 			Subscribe<MainEpochDone>(&ReadTreeWind);
 		if (o.fade) {

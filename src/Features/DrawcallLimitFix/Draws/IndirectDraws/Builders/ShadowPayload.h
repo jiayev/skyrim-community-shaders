@@ -68,11 +68,10 @@ namespace DCLF::Draws
 		// Community Shaders' SharedData (b5) and FeatureData (b6), copied from the structs CS keeps.
 		std::vector<std::byte> sharedData, featureData;
 		std::uint32_t lookupGeneration = 0, tablesGeneration = 0;
-		TablesHeld tablesHeld;  // SceneBuffers::Held
-		// The versions of the kept shadow state the buffers hold (a build ahead's: the ring entries' oldest; else 0, sent whole):
-		// what the journals keep changes for.
-		std::uint64_t inputsHeld = 0;  // the shadow list's
-		std::uint64_t materialRowsHeld = 0;
+		TablesContentEpochs tablesOldestContentEpochs;  // PayloadBuilder::OldestContentEpoch of each kept table
+		// What the shadow journals keep changes back to (a build ahead's: the payload pools' oldest content epochs; else 0, kept whole).
+		std::uint64_t inputsOldestContentEpoch = 0;  // the shadow list's
+		std::uint64_t materialRowsOldestContentEpoch = 0;
 	};
 
 	struct ShadowPayload
@@ -82,11 +81,8 @@ namespace DCLF::Draws
 		std::shared_ptr<const StreamViews> streams;  // the frame's stream views the build read
 		ConstantArena arena;  // the view slots' head and the frame record are reserved; the commit writes the views into it
 		DrawBindings frameRecord{};  // every view's textures and samplers but the diffuse (kShadowFrameRecordOffset)
-		// The rows the inputs name: the kept state's (journalled), or the build's own (version 0: sent whole).
+		// The rows the inputs name: the kept state's (journalled), or the build's own (content epoch 0: sent whole).
 		KeptView<ShadowMaterialRow> materialRows;
-		// Rows the build needed, within the table's capacity or not: what the next frame's Reserve grows it to. The
-		// materials past the capacity wait for it (their casters stay the engine's this frame).
-		std::uint32_t rowsWanted = 0, waitingRows = 0;
 		// Per mode, the draws its inputs can produce (a skin draws once per partition): its views' max count.
 		std::array<std::uint32_t, kShadowModeCount> modeDraws{};
 		// Per mode, the same by key slot (DrawInput::pipelineIndex): what sizes a view's buckets (ShadowBucket).
@@ -94,7 +90,7 @@ namespace DCLF::Draws
 		std::vector<std::uint32_t> objectRecord;  // per object: its material row, or ~0u when it cannot draw
 		// The one shadow list: an input per caster or occluder, for every mode it is drawn in at once, its view mask the
 		// views of those modes (ModeViewBits). The kept state's region (ShadowKept::scene) at the head of the buffer, sent as what
-		// changed since the version the buffer holds, then the frame's own (face shapes; everything without the kept state).
+		// changed since the content epoch the buffer holds, then the frame's own (face shapes; everything without the kept state).
 		bool kept = false;
 		KeptView<DrawInput> regionInputs;
 		std::vector<DrawInput> inputList;
@@ -157,7 +153,6 @@ namespace DCLF::Draws
 			arena.Reset(kShadowConstantBytes);
 			frameRecord = {};
 			materialRows.Reset();
-			rowsWanted = waitingRows = 0;
 			modeDraws = {};
 			for (auto& slots : keySlotDraws)
 				slots.clear();
@@ -216,9 +211,9 @@ namespace DCLF::Draws
 		const ShadowPayload* payload = nullptr;
 		// What the capacities are sized for, with the payload's draws: the scene's (the revision's draws stay within them).
 		const ShadowBounds* bounds = nullptr;
-		// What the shadow buffers' named versions hold, and the material rows' and view blocks' addresses (the revision's set).
+		// What the shadow buffers' named versions hold, and the view blocks' address (the revision's set).
 		ShadowCapacity capacity;
-		std::uint64_t materialRows = 0, viewBlocks = 0;
+		std::uint64_t viewBlocks = 0;
 		std::shared_ptr<const ShadowFrame> previous;  // the last published shape: its slots' capacities only grow
 		LatchedList latched;
 		// The latch block, its layout and the counters' zeros (the blocks the revision's set names: NamedVersions::Latch; a commit's

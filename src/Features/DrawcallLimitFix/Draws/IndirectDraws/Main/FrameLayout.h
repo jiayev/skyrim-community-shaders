@@ -29,8 +29,6 @@ namespace DCLF::Draws
 		std::uint32_t refractionCapacity = 0;
 		// The sequence buffer's ranges as the epoch sized it (MainLayout::sequenceDraws, sequenceDecals): its layout.
 		std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
-		// The rows' tables' addresses (Resources::materialRows, pipelineRows), which a growth moves.
-		std::uint64_t materialRows = 0, pipelineRows = 0;
 		std::uint32_t cullMode = 0;
 		std::uint32_t width = 0, height = 0;  // render area: the main pass viewport
 		float minDepth = 0.0f, maxDepth = 1.0f;  // its depth range (the engine uses [0, 0.999998])
@@ -67,7 +65,7 @@ namespace DCLF::Draws
 			return zCalls == o.zCalls && latched == o.latched && drawCapacity == o.drawCapacity && decalCapacity == o.decalCapacity &&
 			       terrainCapacity == o.terrainCapacity && forwardCapacity == o.forwardCapacity && refractionCapacity == o.refractionCapacity &&
 			       sequenceDraws == o.sequenceDraws &&
-			       sequenceDecals == o.sequenceDecals && materialRows == o.materialRows && pipelineRows == o.pipelineRows && cullMode == o.cullMode &&
+			       sequenceDecals == o.sequenceDecals && cullMode == o.cullMode &&
 			       width == o.width && height == o.height &&
 			       minDepth == o.minDepth && maxDepth == o.maxDepth && SameHandle(resourceHeap, o.resourceHeap) &&
 			       SameHandle(samplerHeap, o.samplerHeap) && SameIndirect(indirect, o.indirect) && latch == o.latch;
@@ -92,13 +90,13 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief The versions of the kept tables (ObjectRecordStore, ExtrasStore, GeometryStore) a set of buffers holds, written
-	 * by the commit that uploads them; 0 for new buffers, which no version is.
+	 * @brief A content epoch per kept table (ObjectRecordStore, ExtrasStore, GeometryStore): what a build trims each one's
+	 * journal to (PayloadBuilder::OldestContentEpoch of its part).
 	 */
-	struct TablesHeld
+	struct TablesContentEpochs
 	{
 		std::uint64_t objects = 0, extras = 0, geometries = 0;
-		bool operator==(const TablesHeld&) const = default;
+		bool operator==(const TablesContentEpochs&) const = default;
 	};
 
 	struct SortSequencesConstants
@@ -189,7 +187,7 @@ namespace DCLF::Draws
 
 		void Register(org::RenderGraph& a_graph) const
 		{
-			// Not the staging or the ranks: versioned, their passes declare them (Register, Passes.cpp).
+			// Not the staging or the ranks: versioned, their passes declare them (Register, Passes/MainExtension.cpp).
 			for (const auto& buffer : { counts, offsets, blockSums })
 				a_graph.RegisterResource(org::ResourceIdentifier(buffer->GetName()), buffer);
 		}

@@ -77,7 +77,6 @@ namespace DCLF
 		PassStats,
 		Profile,
 		ShaderDebug,
-		FetchGuard,
 		ShaderSourceDir,
 		TraceTexturePaths,
 		TreeLodAudit,
@@ -99,7 +98,6 @@ namespace DCLF
 		TestMove,
 		TestTurn,
 		TestToggle,
-		TestRowsGrowth,
 		TestExit,
 
 		// Other features' switches, read through the same file.

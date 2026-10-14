@@ -16,6 +16,11 @@ namespace DCLF::Draws
 	 * @brief The versions a sealed set names (org::services::NamedVersions): the only source of a versioned buffer's address, SRV
 	 * index and capacity. Builds ahead read the sealed revision's set, commits and latch writes the adopted one's
 	 * (IndirectDraws::Impl::Adopted), each through Of.
+	 *
+	 * Naming: `sealed` is a set the producer sealed (SceneRevisions::sealed, a_sealed parameters, the snapshot builder's side);
+	 * `adopted` is the one the frame installed with its snapshot (Impl::Adopted, BindAdopted, the render thread's side). A set's
+	 * `serial` is its identity (NamedVersions::Serial); a buffer's `version` is an org::BufferVersion; a `contentEpoch` is a
+	 * journal position (KeptArray/ChangeJournal::ContentEpoch, a pooled backing's contentEpoch).
 	 */
 	using NamedVersions = org::services::NamedVersions;
 
@@ -32,12 +37,12 @@ namespace DCLF::Draws
 	Versioned MakeVersioned(std::shared_ptr<org::Buffer> a_buffer, GrowableSpec a_spec);
 
 	/**
-	 * @brief The units the version a_named names holds, 0 when the set names none (a set made before the buffer, or before the first
+	 * @brief The units the version a_sealed names holds, 0 when the set names none (a set made before the buffer, or before the first
 	 * adoption): what a fit made on the render thread for the coordinator reads. The draws' paths read Of.
 	 */
-	inline std::uint64_t NamedUnits(const NamedVersions& a_named, const Versioned& a_buffer)
+	inline std::uint64_t NamedUnits(const NamedVersions& a_sealed, const Versioned& a_buffer)
 	{
-		return a_buffer && a_named.Names(*a_buffer) ? a_named.Of(*a_buffer).units : 0;
+		return a_buffer && a_sealed.Names(*a_buffer) ? a_sealed.Of(*a_buffer).units : 0;
 	}
 
 	/** @brief Where a write goes: the buffer, or a versioned buffer's current version. */

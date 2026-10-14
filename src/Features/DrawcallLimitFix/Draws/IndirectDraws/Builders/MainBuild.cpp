@@ -195,9 +195,9 @@ namespace DCLF::Draws
 
 	void MainBuild::BeginRows()
 	{
-		// The tables hold the version last sent; only what is written from here on is sent.
-		rows.material.BeginBuild(in.materialRowsHeld);
-		rows.pipeline.BeginBuild(in.pipelineRowsHeld);
+		// The journals keep what the oldest payload backing lacks (its content epoch); only what is written from here on is new.
+		rows.material.BeginBuild(in.materialRowsOldestContentEpoch);
+		rows.pipeline.BeginBuild(in.pipelineRowsOldestContentEpoch);
 		if (!rows.active || rows.identity != in.addresses.identity || rows.generation != in.tablesGeneration) {
 			// New resources or tables (slots mean other things): every row again.
 			rows.material.Clear();
@@ -343,7 +343,8 @@ namespace DCLF::Draws
 
 	void MainBuild::PrepareObjects()
 	{
-		// The per-object records and palettes change every frame: the commit's (CommitSceneStreams), not the build's.
+		// The per-object records are the stream views' (MakeStreamViews, published in the payload by PayloadBuilder) and the palettes the
+		// frame values' (FrameValues), not the build's.
 		Mark(6);
 		if (colourBuilt) {
 			for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
@@ -402,9 +403,7 @@ namespace DCLF::Draws
 		if (m > kRowMaterialMask || p >= (1u << (32 - kRowPipelineShift)))
 			stl::report_and_fail(fmt::format("Drawcall Limit Fix: material slot {} or pipeline slot {} past an input's row fields", m, p));
 		auto fail = [&](Skip a_reason) { resolved.skipReason = static_cast<std::uint32_t>(a_reason); };
-		// A row past its table's named version waits for the set that holds it; it is still written (kept), so that version's
-		// capture holds it.
-		const bool rowsFit = m < in.addresses.recordCapacity && p < in.addresses.pipelineCapacity;
+		// No row waits for a table: the payload's row tables hold every row (PayloadBuilder).
 		Mark(0);
 		WriteMaterialRow(m, p, blocks);
 		const auto& material = rows.materials[m];
@@ -498,8 +497,6 @@ namespace DCLF::Draws
 					m, p, kSkipNames[resolved.skipReason]);
 			return;
 		}
-		if (!rowsFit)
-			return fail(Skip::Capacity);
 		resolved.recordIndex = RowsOf(p, m);
 	}
 
@@ -602,14 +599,16 @@ namespace DCLF::Draws
 		state.tables = blocks.tables;
 		state.key = key;
 		state.written = true;
-		if (rows.material.Set(m, row))
+		// Only the parts that moved are marked (an animated effect's TexcoordOffset or falloff moves one, not the row): a backing catches up
+		// those parts alone (EmitMainRowParts).
+		if (rows.material.SetParts(m, row, kMaterialRowParts))
 			++out.materialRowsWritten;
 		++rows.materialsWritten;
 	}
 
 	// The resident region (drawcall-limit-fix.md, "Persistent resident draws"): draw inputs kept across frames, changed only by
-	// the tables' change log, a pipeline's set index or a pair's record failing. The loop skips its objects; the commit uploads
-	// the inputs only on a new version.
+	// the tables' change log, a pipeline's set index or a pair's record failing. The loop skips its objects; PayloadBuilder sends
+	// a backing only what changed since its content epoch.
 	void MainBuild::BuildResidentRegion()
 	{
 		region = cache && Policy::ReuseResidentRegion() ? &cache->region : nullptr;
@@ -753,7 +752,7 @@ namespace DCLF::Draws
 	{
 		const auto& object = tables.objects[o];
 		// No kInputDrawable; stream and fade row stay none. The partitions word names the decal's slots, each a zero-count draw.
-		return { 0, 0, object.geometryIndex < in.addresses.fit.geometryRows ? object.geometryIndex : 0u, object.flags, { MainMaskOf(tables, o) }, o, tables.decalOrdinal[o],
+		return { 0, 0, object.geometryIndex < tables.geometries.size() ? object.geometryIndex : 0u, object.flags, { MainMaskOf(tables, o) }, o, tables.decalOrdinal[o],
 			o < tables.skinPartitions.size() ? tables.skinPartitions[o] : 0u };
 	}
 
@@ -842,8 +841,9 @@ namespace DCLF::Draws
 	{
 		auto& r = *region;
 		r.touched.clear();
-		// The buffer holds the version last sent; only later changes are sent (once per publication, by whichever build writes first).
-		r.Begin(in.residentUploaded);
+		// The journal keeps what the oldest payload backing lacks; only later changes are new (once per publication, by whichever
+		// build writes first).
+		r.Begin(in.inputsOldestContentEpoch);
 		// Resync reasons (for the report): log lost, segments, tables shrunk, scope, buffers' fit.
 		const std::array<bool, kResyncReasons> reasons{ !r.cursor.Continues(tables.changeLog, in.tablesGeneration), r.segments != Segments(),
 			r.indexOf.size() > tables.objects.size(), r.wholeScene != wholeScene, r.fit != in.addresses.fit };
@@ -898,8 +898,6 @@ namespace DCLF::Draws
 		auto mix = [&](std::uint64_t a_word) { value = (value ^ a_word) * 0x100000001b3ull; };
 		const auto& blocks = pipelineBlocks[p];
 		mix(lookups.sharedVersion);
-		// A pair past the row tables resolves again once their growth is adopted.
-		mix((std::uint64_t(in.addresses.recordCapacity) << 32) | in.addresses.pipelineCapacity);
 		mix(tables.TechniqueOf(p).bindingVersion);
 		mix((tables.pipelines[p].passDescriptor & 0x8000u) != 0 ? 1u : 0u);
 		mix(blocks.tables);
@@ -1232,13 +1230,14 @@ namespace DCLF::Draws
 		const std::uint32_t recordIndex = AssembleRecord(o, object, blocks);
 		if (recordIndex == kNoRecord)
 			return;
-		// The CPU template of what BuildDraws writes (for the build parity).
+		// The CPU template of what BuildDraws writes (for the build parity). Its row addresses are byte offsets into the tables: the
+		// tables are the payload's backings (PayloadVersions), which the build parity adds; the draws embed none of them.
 		Mark(2);
 		auto sequence = tables.draws[o];
 		sequence.pipelineIndex = blocks.setIndex;
 		sequence.objectIndex = o;
-		sequence.pipelineRowAddress = in.addresses.pipelineRows + std::uint64_t(recordIndex >> kRowPipelineShift) * kPipelineRowBytes;
-		sequence.materialRowAddress = in.addresses.records + std::uint64_t(recordIndex & kRowMaterialMask) * kMaterialRowBytes;
+		sequence.pipelineRowAddress = std::uint64_t(recordIndex >> kRowPipelineShift) * kPipelineRowBytes;
+		sequence.materialRowAddress = std::uint64_t(recordIndex & kRowMaterialMask) * kMaterialRowBytes;
 		if (streamIndex != ~0u)
 			SetSequenceStream(sequence, tables, o, in.addresses.facePositions);
 		if (decalGroup) {

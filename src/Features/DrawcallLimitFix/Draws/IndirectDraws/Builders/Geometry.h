@@ -14,15 +14,17 @@ namespace DCLF::Draws
 	void ForEachDrawnGeometry(const SceneTables& a_tables, std::uint32_t a_firstSlot, std::uint32_t a_partitions, F&& a_draw);
 
 	/**
-	 * @brief What the versions a_named names of a_scene's buffers hold, with per-object buffers of a_objectBuffers objects (an epoch's
-	 * visibility). A buffer the set does not name holds nothing. Without the tree wind or fade programs no draw reads their rows (the
-	 * records keep their own wind; no fade root is tested).
+	 * @brief What the versions a_sealed names of a_scene's buffers hold, with per-object buffers of a_objectBuffers objects (an epoch's
+	 * visibility). A buffer the set does not name holds nothing. The payload's parts (records, geometry rows, extras) bound nothing:
+	 * the payload holds every row of its publication (PayloadBuilder). Without the tree wind or fade programs no draw reads their rows
+	 * (the records keep their own wind; no fade root is tested).
 	 */
-	inline SceneFit SceneFitOf(const NamedVersions& a_named, const SceneBuffers& a_scene, std::uint64_t a_objectBuffers)
+	inline SceneFit SceneFitOf(const NamedVersions& a_sealed, const SceneBuffers& a_scene, std::uint64_t a_objectBuffers)
 	{
-		const auto units = [&](const Versioned& a_buffer) { return static_cast<std::uint32_t>(std::min<std::uint64_t>(NamedUnits(a_named, a_buffer), UINT32_MAX)); };
-		SceneFit fit{ static_cast<std::uint32_t>(std::min<std::uint64_t>(units(a_scene.objects), a_objectBuffers)), units(a_scene.geometries), units(a_scene.extras),
-			units(a_scene.facePositions) };
+		const auto units = [&](const Versioned& a_buffer) { return static_cast<std::uint32_t>(std::min<std::uint64_t>(NamedUnits(a_sealed, a_buffer), UINT32_MAX)); };
+		SceneFit fit;
+		fit.objects = static_cast<std::uint32_t>(std::min<std::uint64_t>(a_objectBuffers, UINT32_MAX));
+		fit.faceVertices = units(a_scene.facePositions);
 		if (a_scene.treeWind && a_scene.trees)
 			fit.trees = std::min({ units(a_scene.trees), units(a_scene.treeWindRows[0]), units(a_scene.treeWindRows[1]) });
 		if (a_scene.fadeState && a_scene.fadeRoots)
@@ -31,24 +33,13 @@ namespace DCLF::Draws
 	}
 
 	/**
-	 * @brief Whether object a_object is within what the scene's buffers hold (SceneFit): its record, every geometry row its draws
-	 * read (its partitions', a face's positions' row), its extras and its face positions. One past them waits for
-	 * their growth: no input names it, so no draw or culling test reads past a buffer.
+	 * @brief Whether object a_object is within what the scene's buffers hold (SceneFit): its per-object rows, its tree and fade root
+	 * rows and its face positions (its record, geometry rows and extras are the payload's, which holds them all). One past them waits
+	 * for their growth: no input names it, so no draw or culling test reads past a buffer.
 	 */
 	inline bool ObjectFits(const SceneTables& a_tables, std::uint32_t a_object, const SceneFit& a_fit)
 	{
 		if (a_object >= a_fit.objects)
-			return false;
-		const auto& object = a_tables.objects[a_object];
-		if (object.geometryIndex >= a_fit.geometryRows)
-			return false;
-		bool rows = true;
-		if (a_object < a_tables.skinPartitions.size() && a_tables.skinPartitions[a_object])
-			ForEachDrawnGeometry(a_tables, object.geometryIndex, a_tables.skinPartitions[a_object], [&](std::uint32_t a_slot) { rows = rows && a_slot < a_fit.geometryRows; });
-		if (!rows)
-			return false;
-		if (a_object < a_tables.extraOffset.size() && a_tables.extraOffset[a_object] != kNoExtraRows &&
-			std::uint64_t(a_tables.extraOffset[a_object]) + kExtraRows > a_fit.extraRows)
 			return false;
 		if (a_object < a_tables.objectTree.size() && a_tables.objectTree[a_object] < kNodelessTree && a_tables.objectTree[a_object] >= a_fit.trees)
 			return false;
@@ -56,8 +47,6 @@ namespace DCLF::Draws
 			return false;
 		if (a_object < a_tables.faceStream.size() && a_tables.faceStream[a_object] != kNoFaceStream) {
 			const std::uint32_t stream = a_tables.faceStream[a_object];
-			if (a_tables.geometries.size() + stream >= a_fit.geometryRows)
-				return false;
 			if (stream < a_tables.faceStreams.size() && std::uint64_t(a_tables.faceStreams[stream].region) + a_tables.faceStreams[stream].vertexCount > a_fit.faceVertices)
 				return false;
 		}
@@ -152,21 +141,21 @@ namespace DCLF::Draws
 	}
 
 	/**
-	 * @brief The build's geometry slots' draws: brought up to date from the geometry log in the store (a_uploaded is the
-	 * version the buffer holds, as the inputs saw it), or packed whole without one.
+	 * @brief The build's geometry slots' draws: brought up to date from the geometry log in the store (its journal trimmed to
+	 * a_oldestContentEpoch, the oldest a payload backing holds), or packed whole without one.
 	 */
-	void UpdateGeometryDraws(GeometryStore* a_store, std::uint64_t a_uploaded, const SceneTables& a_tables, std::uint32_t a_generation,
+	void UpdateGeometryDraws(GeometryStore* a_store, std::uint64_t a_oldestContentEpoch, const SceneTables& a_tables, std::uint32_t a_generation,
 		std::uint32_t a_frame, GeometryDrawsOut& a_out);
 
 	/**
-	 * @brief The geometry buffer's uploads: the slots a buffer at a_held lacks, then the face streams' draws after them.
+	 * @brief The geometry buffer's uploads: the slots a buffer at a_contentEpoch lacks, then the face streams' draws after them.
 	 * The bytes sent.
 	 */
 	template <class Emit>
-	std::size_t EmitGeometryDraws(const GeometryDrawsOut& a_out, std::uint64_t a_held, Emit&& a_emit, std::size_t a_rows = ~std::size_t(0))
+	std::size_t EmitGeometryDraws(const GeometryDrawsOut& a_out, std::uint64_t a_contentEpoch, Emit&& a_emit, std::size_t a_rows = ~std::size_t(0))
 	{
 		// Clipped to the buffer's rows (a_rows): what is past them waits for the requirement that grows it.
-		std::size_t bytes = a_out.slots.Emit(a_held, a_emit, a_rows);
+		std::size_t bytes = a_out.slots.Emit(a_contentEpoch, a_emit, a_rows);
 		if (!a_out.faces.empty() && a_out.SlotCount() < a_rows) {
 			const std::size_t faces = std::min(a_out.faces.size(), a_rows - a_out.SlotCount());
 			a_emit(a_out.faces.data(), faces * sizeof(GeometryDraw), a_out.SlotCount() * sizeof(GeometryDraw));
@@ -228,13 +217,13 @@ namespace DCLF::Draws
 	}
 
 	// A commit's face uploads (render thread): a region at a time, and only when the head's snapshot is not the one the version
-	// a_named (the adopted set) names holds (a version it did not fill holds none). The snapshot stays the walk's until its next walk,
+	// a_sealed (the adopted set) names holds (a version it did not fill holds none). The snapshot stays the walk's until its next walk,
 	// which is after the commit. A region past that version's vertices waits for the requirement that grows it.
 	template <class Uploads>
-	std::uint32_t UploadFaceStreams(const NamedVersions& a_named, const std::vector<SceneTables::FaceStream>& a_streams, const Versioned& a_positions, FaceUploads& a_uploaded,
+	std::uint32_t UploadFaceStreams(const NamedVersions& a_sealed, const std::vector<SceneTables::FaceStream>& a_streams, const Versioned& a_positions, FaceUploads& a_uploaded,
 		Uploads& a_uploads)
 	{
-		const auto& version = a_named.Of(a_positions);
+		const auto& version = a_sealed.Of(a_positions);
 		if (!a_uploaded.version.Holds(version)) {
 			a_uploaded.regions.clear();
 			a_uploaded.version.Filled(version);

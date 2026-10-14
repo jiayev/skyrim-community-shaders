@@ -1,18 +1,18 @@
 #pragma once
 
 // The kept stores (object records, draw bound, extras, geometry draws), journalled across frames so a buffer is sent only what
-// changed since the version it holds, and the per-frame stream views made from them. Included by Internal.h, in its order.
+// changed since the content epoch it holds, and the per-frame stream views made from them. Included by Internal.h, in its order.
 
 namespace DCLF::Draws
 {
 	/**
-	 * @brief What the named versions of the scene's buffers hold (the per-object buffers' objects too): an object past them - its record,
-	 * a geometry row it draws, its palettes or extras, its face positions - waits for the requirement that grows them, drawing nothing and
-	 * culling nothing (ObjectFits).
+	 * @brief What the named versions of the scene's buffers hold (the per-object buffers' objects): an object past them - its per-object
+	 * rows, its tree or fade root rows, its face positions - waits for the requirement that grows them, drawing nothing and culling
+	 * nothing (ObjectFits). The payload's parts are not among them: it holds every row of its publication.
 	 */
 	struct SceneFit
 	{
-		std::uint32_t objects = ~0u, geometryRows = ~0u, extraRows = ~0u, faceVertices = ~0u;
+		std::uint32_t objects = ~0u, faceVertices = ~0u;
 		std::uint32_t trees = ~0u, fadeRoots = ~0u;  // the tree wind entries and fade root rows a draw reads by its slot (none: unbounded)
 		bool operator==(const SceneFit&) const = default;
 	};
@@ -21,17 +21,13 @@ namespace DCLF::Draws
 	// IndirectDraws::Impl::AddressesOf); a change means the resources were recreated under it.
 	struct ResourceAddresses
 	{
-		// records: the material rows' table (the shadow views' ShadowMaterialRow, the main pass's MaterialRow); pipelineRows: the
-		// main pass's pipeline rows.
-		std::uint64_t constants = 0, records = 0, pipelineRows = 0, frameConstants = 0;
+		// The payload's tables (records, rows, extras) are none of these: the epochs take them from the installed payload.
+		std::uint64_t constants = 0, frameConstants = 0;
 		std::uint64_t facePositions = 0;  // the face positions buffer (SceneBuffers::facePositions)
-		std::uint32_t objectsIndex = 0, extrasIndex = 0;
 		std::uint32_t placementsIndex = 0;  // the frame's placement rows (FrameValues::PlacementsIndex)
 		std::uint32_t palettesIndex = 0;    // the frame's palettes (FrameValues::PalettesIndex)
 		std::uint32_t shadingIndex = 0;     // the frame's shading rows (FrameValues::ShadingIndex)
 		std::uint32_t treeWindIndex = 0;  // the wind buffer the frame's draws read (SceneBuffers::TreeWindReadIndex)
-		std::uint32_t recordCapacity = 0;  // the material rows' table's rows (a row past it waits for the table to grow)
-		std::uint32_t pipelineCapacity = 0;  // the main pipeline rows' likewise
 		std::uint32_t sequenceDecals = 0;    // the sequences' decal range per group (MainLayout): a decal past it waits for their growth
 		SceneFit fit;                        // what the scene's buffers hold (an object past them waits)
 		const void* identity = nullptr;
@@ -42,7 +38,7 @@ namespace DCLF::Draws
 	/**
 	 * @brief The per-object records (BindlessObject) one objects buffer holds, kept across frames (drawcall-limit-fix.md,
 	 * "Persistent draw state"): a record is written again only when the change log names a column it is built from, and the
-	 * buffer is sent what changed since the version it holds (KeptArray). One, for every epoch's builds (SceneBuffers),
+	 * buffer is sent what changed since the content epoch it holds (KeptArray). One, for every epoch's builds (SceneBuffers),
 	 * updated by MakeStreamViews, which never runs twice at once; `collisions` counts it if anything ever does.
 	 */
 	struct ObjectRecordStore
@@ -129,12 +125,12 @@ namespace DCLF::Draws
 	};
 	ScannedDrawBound ScanDrawBound(const SceneTables& a_tables);
 
-	/** @brief A build's view of the object records: the store's, or a full set of its own without one (version 0). */
+	/** @brief A build's view of the object records: the store's, or a full set of its own without one (content epoch 0). */
 	using ObjectRecordsOut = KeptView<BindlessObject>;
 
 	/**
 	 * @brief The rows the extras buffer holds (Records.h, kExtraRows a block): read straight from the tables' array, and journalled
-	 * as rows, so the buffer is sent the rows changed since the version it holds. The change log names them: an extras block's
+	 * as rows, so the buffer is sent the rows changed since the content epoch it holds. The change log names them: an extras block's
 	 * rows or place (kChangeExtras). One, for every epoch's builds (SceneBuffers), updated like ObjectRecordStore.
 	 */
 	struct ExtrasStore
@@ -144,33 +140,33 @@ namespace DCLF::Draws
 		std::uint64_t updates = 0, rowsSent = 0, resyncs = 0;
 	};
 
-	/** @brief A build's view of the rows: the tables' array, with the store's changes (version 0: sent whole). */
+	/** @brief A build's view of the rows: the tables' array, with the store's changes (content epoch 0: sent whole). */
 	struct ExtrasOut
 	{
 		const float* extras = nullptr;
 		std::uint32_t extraRows = 0;
 		ChangeJournal::Snapshot changes;
-		std::uint64_t Version() const { return changes.version; }
+		std::uint64_t ContentEpoch() const { return changes.contentEpoch; }
 		std::uint32_t Rows() const { return extraRows; }
 		const float* Row(std::uint64_t a_row) const { return extras + std::size_t(a_row) * 4; }
 		void Reset() { *this = {}; }
 	};
 
-	void UpdateExtras(ExtrasStore* a_store, std::uint64_t a_uploaded, const SceneTables& a_tables, std::uint32_t a_generation, ExtrasOut& a_out);
+	void UpdateExtras(ExtrasStore* a_store, std::uint64_t a_oldestContentEpoch, const SceneTables& a_tables, std::uint32_t a_generation, ExtrasOut& a_out);
 
 	/**
-	 * @brief The uploads of a build's rows a buffer at a_held lacks (the changed runs, else all of them), clipped to the buffer
+	 * @brief The uploads of a build's rows a buffer at a_contentEpoch lacks (the changed runs, else all of them), clipped to the buffer
 	 * (a_bufferRows: what is past it waits for its growth). a_mirror (an observer's, Diagnostics::ExtrasSending): that buffer's
 	 * rows as uploaded, written with them.
 	 */
 	template <class Emit>
-	std::size_t EmitExtras(const ExtrasOut& a_out, std::uint64_t a_held, std::vector<float>* a_mirror, Emit&& a_emit, std::uint32_t a_bufferRows = ~0u)
+	std::size_t EmitExtras(const ExtrasOut& a_out, std::uint64_t a_contentEpoch, std::vector<float>* a_mirror, Emit&& a_emit, std::uint32_t a_bufferRows = ~0u)
 	{
 		const std::uint32_t rows = std::min(a_out.Rows(), a_bufferRows);
 		if (!rows || !a_out.extras)
 			return 0;
 		std::size_t sent = 0;
-		a_out.changes.ForEachRun(a_held, rows, [&](std::uint64_t a_first, std::uint64_t a_count) {
+		a_out.changes.ForEachRun(a_contentEpoch, rows, [&](std::uint64_t a_first, std::uint64_t a_count) {
 			a_emit(a_out.Row(a_first), std::size_t(a_count) * 16, std::size_t(a_first) * 16);
 			if (a_mirror) {
 				if (a_mirror->size() < std::size_t(rows) * 4)
@@ -192,7 +188,7 @@ namespace DCLF::Draws
 		std::vector<GeometryDraw> faces;
 		std::size_t SlotCount() const { return slots.Count(); }
 		std::size_t Count() const { return SlotCount() + faces.size(); }
-		std::uint64_t Version() const { return slots.Version(); }
+		std::uint64_t ContentEpoch() const { return slots.ContentEpoch(); }
 		std::vector<GeometryDraw> Flat() const
 		{
 			std::vector<GeometryDraw> flat;
@@ -217,14 +213,6 @@ namespace DCLF::Draws
 		ExtrasOut extras;
 		KeptView<GeometryDraw> geometries;
 	};
-	/** @brief What a set of stream views was made from: the frame's tables as they stood (their logs' ends) and their generation. */
-	struct StreamsKey
-	{
-		const void* tables = nullptr;
-		std::uint64_t log = 0, geometryLog = 0;
-		std::uint32_t generation = 0;
-		bool operator==(const StreamsKey&) const = default;
-	};
 	/**
 	 * @brief A build's geometry slots: the frame's stream views', or packed whole from the tables without them (a diagnostics
 	 * reference build, or no scene buffers yet).
@@ -234,7 +222,7 @@ namespace DCLF::Draws
 
 	/**
 	 * @brief The geometry slots' draws one geometry buffer holds, kept across builds: repacked from the tables' geometry log
-	 * (SceneTables::geometryLog), and sent as the slots changed since the version the buffer holds. One, for every epoch's
+	 * (SceneTables::geometryLog), and sent as the slots changed since the content epoch the buffer holds. One, for every epoch's
 	 * builds (SceneBuffers), updated like ObjectRecordStore.
 	 */
 	struct GeometryStore
@@ -246,10 +234,10 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief The stores brought up to a_tables (from the versions a_from), as views (StreamViews). One caller at a time: the
-	 * snapshot builder, or the render thread (Impl::StreamsNow) while no build ahead is in flight.
+	 * @brief The stores brought up to a_tables (their journals trimmed to a_oldest), as views (StreamViews). One caller at a time: the
+	 * snapshot builder.
 	 */
-	std::shared_ptr<const StreamViews> MakeStreamViews(ObjectRecordStore& a_objects, ExtrasStore& a_extras, GeometryStore& a_geometries, const TablesHeld& a_from,
+	std::shared_ptr<const StreamViews> MakeStreamViews(ObjectRecordStore& a_objects, ExtrasStore& a_extras, GeometryStore& a_geometries, const TablesContentEpochs& a_oldest,
 		std::shared_ptr<const SceneTables> a_hold, const SceneTables& a_tables, std::uint32_t a_generation, std::uint32_t a_frame);
 
 	// What a record is built from (BuildObjectRecord): the alpha test and the LOD fades (bindings), the lights, the tree
@@ -257,9 +245,9 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kObjectRecordCauses = kChangeBindings | kChangeLights | kChangeTree | kChangeSkin | kChangeExtras;
 
 	/**
-	 * @brief The build's object records: brought up to date from the change log in the store (a_uploaded is the version
-	 * the buffer holds, as the inputs saw it), or built whole without one.
+	 * @brief The build's object records: brought up to date from the change log in the store (its journal trimmed to
+	 * a_oldestContentEpoch, the oldest a payload backing holds), or built whole without one.
 	 */
-	void UpdateObjectRecords(ObjectRecordStore* a_store, std::uint64_t a_uploaded, const SceneTables& a_tables, std::uint32_t a_generation,
+	void UpdateObjectRecords(ObjectRecordStore* a_store, std::uint64_t a_oldestContentEpoch, const SceneTables& a_tables, std::uint32_t a_generation,
 		std::uint32_t a_frame, ObjectRecordsOut& a_out);
 }

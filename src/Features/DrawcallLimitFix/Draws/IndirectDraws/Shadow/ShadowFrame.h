@@ -55,7 +55,6 @@ namespace DCLF::Draws
 		float minDepth = 0.0f, maxDepth = 1.0f;
 		std::uint32_t target = 0;  // index into ShadowResources::depth
 		std::uint32_t slice = 0;
-		std::uint64_t materialRows = 0;  // the shadow material rows' address (shared by every view)
 		std::uint32_t sequenceDraws = 0;  // its slot's sequence buffer, in draws
 		std::array<std::uint32_t, kShadowPushWords> push{};
 		// Depth-only class pipelines first (ShadowBuckets).
@@ -157,11 +156,8 @@ namespace DCLF::Draws
 	{
 		std::shared_ptr<org::Buffer> constants;
 		Versioned visibility;
-		// The material rows every view's draws name (ShadowMaterialRow).
-		GrowableRows materialRows;
+		// The views' inputs, geometries and material rows (ShadowMaterialRow) are the installed payload's (PayloadVersions).
 		std::shared_ptr<SceneBuffers> scene;
-		// The views' own inputs, for dispatches that do not read the frame's ring entry.
-		Versioned inputs;
 		// Per view slot (occlusion views, then shadow views): sequence and count buffers, and the counters' readback view.
 		std::vector<Versioned> sequences;
 		std::vector<std::shared_ptr<org::Buffer>> count;

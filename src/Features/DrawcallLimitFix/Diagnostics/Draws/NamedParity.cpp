@@ -1,4 +1,4 @@
-// CS_DCLF_PERSISTENT_PARITY: the named set, the only source of a versioned buffer's address, SRV index and capacity. Every address and SRV
+// CS_DCLF_PERSISTENT_PARITY: the sealed set, the only source of a versioned buffer's address, SRV index and capacity. Every address and SRV
 // index a snapshot's draws embed against the set its revision was sealed with, and every shape's ranges and counts against the named
 // versions of the buffers it indexes (the snapshot builder); every commit target named and current in the adopted set, and the
 // recordings' resolves of buffers their set does not name (render thread).
@@ -40,21 +40,21 @@ namespace DCLF::Diagnostics
 
 		/** @brief The fields a build embeds of the versioned buffers both its kinds of resources hold (Impl::AddressesOf). */
 		template <class Resources>
-		void CheckAddresses(const char* a_payload, const Draws::NamedVersions& a_named, const Resources& a_resources, const Draws::ResourceAddresses& a_embedded)
+		void CheckAddresses(const char* a_payload, const Draws::NamedVersions& a_sealed, const Resources& a_resources, const Draws::ResourceAddresses& a_embedded)
 		{
 			auto& c = sealedChecks;
 			++c.payloads;
 			// An unnamed buffer's entry is empty (check reports it unnamed first).
 			const auto entry = [&](const Draws::Versioned& a_buffer) -> const org::services::NamedEntry& {
 				static const org::services::NamedEntry kUnnamed;
-				return a_buffer && a_named.Names(*a_buffer) ? a_named.Of(*a_buffer) : kUnnamed;
+				return a_buffer && a_sealed.Names(*a_buffer) ? a_sealed.Of(*a_buffer) : kUnnamed;
 			};
 			const auto& scene = *a_resources.scene;
 			const auto check = [&](const char* a_field, const Draws::Versioned& a_buffer, std::uint64_t a_value, std::uint64_t a_expected) {
-				if (a_buffer && !a_named.Names(a_buffer)) {
+				if (a_buffer && !a_sealed.Names(a_buffer)) {
 					++c.unnamed;
 					if (c.logged++ < kLogged)
-						logger::warn("[DCLF] snapshot draws (set {}): the {} payload's {} is of {}, which the sealed set does not name <- NAMED ADDRESS", a_named.Serial(),
+						logger::warn("[DCLF] snapshot draws (set {}): the {} payload's {} is of {}, which the sealed set does not name <- NAMED ADDRESS", a_sealed.Serial(),
 							a_payload, a_field, a_buffer->Get()->GetName());
 					return;
 				}
@@ -62,17 +62,9 @@ namespace DCLF::Diagnostics
 					return;
 				++c.differ;
 				if (c.logged++ < kLogged)
-					logger::warn("[DCLF] snapshot draws (set {}): the {} payload's {} is {:#x}, the sealed set names {:#x} <- NAMED ADDRESS", a_named.Serial(), a_payload,
+					logger::warn("[DCLF] snapshot draws (set {}): the {} payload's {} is {:#x}, the sealed set names {:#x} <- NAMED ADDRESS", a_sealed.Serial(), a_payload,
 						a_field, a_value, a_expected);
 			};
-			check("material rows", a_resources.materialRows.buffer, a_embedded.records, entry(a_resources.materialRows.buffer).deviceAddress);
-			check("material row capacity", a_resources.materialRows.buffer, a_embedded.recordCapacity, entry(a_resources.materialRows.buffer).units);
-			if constexpr (requires { a_resources.pipelineRows; }) {
-				check("pipeline rows", a_resources.pipelineRows.buffer, a_embedded.pipelineRows, entry(a_resources.pipelineRows.buffer).deviceAddress);
-				check("pipeline row capacity", a_resources.pipelineRows.buffer, a_embedded.pipelineCapacity, entry(a_resources.pipelineRows.buffer).units);
-			}
-			check("objects' SRV", scene.objects, a_embedded.objectsIndex, entry(scene.objects).srvIndex);
-			check("extras' SRV", scene.extras, a_embedded.extrasIndex, entry(scene.extras).srvIndex);
 			if (a_embedded.facePositions || FaceSnapshots::Enabled())
 				check("face positions", scene.facePositions, a_embedded.facePositions, entry(scene.facePositions).deviceAddress);
 			// The wind read by the frame the context was posted at: the one the frame before wrote, either parity's.
@@ -92,26 +84,26 @@ namespace DCLF::Diagnostics
 		for (const std::size_t j : { Draws::kAsyncZPrepass, Draws::kAsyncColour })
 			if (const auto& payload = draws.payloads[j]; payload && context.build[j] && context.target && context.target->scene &&
 														 payload->inputs.addresses.identity == context.target.get())
-				CheckAddresses(j == Draws::kAsyncZPrepass ? "Z-prepass" : "colour", a_sealed.named, *context.target, payload->inputs.addresses);
+				CheckAddresses(j == Draws::kAsyncZPrepass ? "Z-prepass" : "colour", a_sealed.sealed, *context.target, payload->inputs.addresses);
 		if (const auto& shadow = draws.shadow; shadow && context.shadow && context.shadowTarget && context.shadowTarget->scene &&
 											   shadow->inputs.addresses.identity == context.shadowTarget.get())
-			CheckAddresses("shadow", a_sealed.named, *context.shadowTarget, shadow->inputs.addresses);
+			CheckAddresses("shadow", a_sealed.sealed, *context.shadowTarget, shadow->inputs.addresses);
 	}
 
 	void CheckCommitTarget(const CommitTargetStaged& a_staged)
 	{
 		auto& c = commitChecks;
 		++c.targets;
-		if (!a_staged.named.Names(a_staged.target)) {
+		if (!a_staged.sealed.Names(a_staged.target)) {
 			++c.unnamed;
 			if (c.logged++ < kLogged)
 				logger::warn("[DCLF] frame {}: a commit staged bytes into {}, which the adopted set (set {}) does not name: nothing staged <- NAMED PARITY",
-					Scene::FrameView::Get().GetFrame(), a_staged.target->Get()->GetName(), a_staged.named.Serial());
-		} else if (const auto& entry = a_staged.named.Of(a_staged.target); entry.version != a_staged.target->Current()) {
+					Scene::FrameView::Get().GetFrame(), a_staged.target->Get()->GetName(), a_staged.sealed.Serial());
+		} else if (const auto& entry = a_staged.sealed.Of(a_staged.target); entry.version != a_staged.target->Current()) {
 			++c.notCurrent;
 			if (c.logged++ < kLogged)
 				logger::warn("[DCLF] frame {}: a commit staged bytes into {} through the adopted set (set {}), whose version {} is not the current {} <- NAMED PARITY",
-					Scene::FrameView::Get().GetFrame(), a_staged.target->Get()->GetName(), a_staged.named.Serial(), entry.version->number,
+					Scene::FrameView::Get().GetFrame(), a_staged.target->Get()->GetName(), a_staged.sealed.Serial(), entry.version->number,
 					a_staged.target->Current() ? a_staged.target->Current()->number : 0);
 		}
 	}
@@ -120,15 +112,15 @@ namespace DCLF::Diagnostics
 	{
 		auto& c = shapeChecks;
 		++c.revisions;
-		const auto& named = a_made.named;
+		const auto& sealed = a_made.sealed;
 		const auto& inputs = a_made.inputs;
 		const auto finding = [&](const std::string& a_what) {
 			++c.findings;
 			if (c.logged++ < kLogged)
-				logger::warn("[DCLF] revision shapes (set {}): {} <- SHAPE CAPACITY", named.Serial(), a_what);
+				logger::warn("[DCLF] revision shapes (set {}): {} <- SHAPE CAPACITY", sealed.Serial(), a_what);
 		};
-		const auto units = [&](const Draws::Versioned& a_buffer) { return Draws::NamedUnits(named, a_buffer); };
-		const auto bytes = [&](const Draws::Versioned& a_buffer) -> std::uint64_t { return a_buffer && named.Names(*a_buffer) ? named.Of(*a_buffer).bytes : 0; };
+		const auto units = [&](const Draws::Versioned& a_buffer) { return Draws::NamedUnits(sealed, a_buffer); };
+		const auto bytes = [&](const Draws::Versioned& a_buffer) -> std::uint64_t { return a_buffer && sealed.Names(*a_buffer) ? sealed.Of(*a_buffer).bytes : 0; };
 		constexpr std::uint64_t kSequence = sizeof(DrawSequence);
 		// The views: every face's range within the sequences, the plan (its buckets and forward range) within a face's range, its buckets'
 		// count words within each face's bucket counts.
@@ -223,17 +215,17 @@ namespace DCLF::Diagnostics
 			return;
 		auto& c = commitChecks;
 		// The recordings of the adopted revision resolved every buffer they bind from its set: Find's misses, counted by the set.
-		const auto& named = draws->Adopted();
-		if (&named != c.set || named.Serial() != c.setSerial) {
-			c.set = &named;
-			c.setSerial = named.Serial();
+		const auto& adopted = draws->Adopted();
+		if (&adopted != c.set || adopted.Serial() != c.setSerial) {
+			c.set = &adopted;
+			c.setSerial = adopted.Serial();
 			c.setMisses = 0;
 		}
-		if (const std::uint64_t misses = named.Misses(); misses > c.setMisses) {
+		if (const std::uint64_t misses = adopted.Misses(); misses > c.setMisses) {
 			c.resolves += misses - c.setMisses;
 			if (c.logged++ < kLogged)
 				logger::warn("[DCLF] frame {}: the adopted set (set {}) was asked {} times for a buffer it does not name: a recording resolved an unnamed buffer <- NAMED PARITY",
-					Scene::FrameView::Get().GetFrame(), named.Serial(), misses - c.setMisses);
+					Scene::FrameView::Get().GetFrame(), adopted.Serial(), misses - c.setMisses);
 			c.setMisses = misses;
 		}
 		if (++c.frames % 600 == 0) {

@@ -247,7 +247,7 @@ Under the `lodTrees` toggle (`CS_DCLF_LOD_TREES`, "tree LOD"), on when unset.
 
 ## LOD in the two-phase occlusion (2026-10-04)
 
-Every LOD class takes part in the main camera's two-phase occlusion, as the other objects do (Passes.cpp, "The two-phase
+Every LOD class takes part in the main camera's two-phase occlusion, as the other objects do (Passes/MainExtension.cpp, "The two-phase
 tail"): phase 1 tests against the HZB the previous frame left, the HZB is rebuilt from the depth phase 1 drew, and phase 2
 tests what phase 1 occluded against the rebuilt one. What phase 1 draws is in the HZB, so LOD occludes as well.
 
@@ -389,7 +389,7 @@ A DCLF native variant of the face, as for Skylighting's map, with the sky left t
   before the depth pass (the report's "captured after their frame's epoch" is 0), and nothing between the face render and
   the water reads the cube (`FUN_140e44c60` after it only restores four renderer words; the cube has one mip). An epoch
   per update was two a frame: each epoch is a slot of the host's ring (render-graph.md, "Frames in flight"). It draws only
-  with the frame's ring entry (the scene list and its rows), after this frame's depth commit (the index pool, the depth
+  with the installed payload (the scene list and its rows; the frame's ring entry until 2026-10-14), after this frame's depth commit (the index pool, the depth
   inputs, the object records and geometry rows at the frame's publication), and while the colour commit whose frame
   record it reads is the frame before's, into the same backings (`Resources::committed`). The shape always has all six faces, so the recordings hold
   across frames; a face the frame doesn't render culls and draws nothing (zero dispatch, no tree slots).

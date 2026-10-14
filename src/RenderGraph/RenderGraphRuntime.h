@@ -77,6 +77,14 @@ public:
 	static RenderGraphRuntime& Get();
 
 	/**
+	 * @brief Game frames the graph's work may run behind the render thread (PersistentGraphHost::Desc::framesInFlight). The host
+	 * sizes its frame slot ring from it, a slot per epoch of every frame (FrameSlots), and each epoch's next slot waits for that
+	 * slot's last GPU work: fewer frames than the CPU runs ahead of the GPU (DXVK's frame latency) would stall the render thread
+	 * every few frames.
+	 */
+	static constexpr std::uint32_t kGameFramesInFlight = 4;
+
+	/**
 	 * @brief CS_ORG_EPOCHS (default on, =0 off): each segment is an ORG host epoch. The graph compiles once
 	 * over the whole frame - scheduling and transient aliasing see every segment's lifetimes, in frame order -
 	 * and each ExecuteEpoch prepares, admits, records and submits only its own segment's passes. Off, every

@@ -1,5 +1,5 @@
 // CS_DCLF_PERSISTENT_PARITY: the stores the builds keep against a rebuild from the tables (the object records, the geometry table, the
-// extras rows as each buffer holds them, the draw bound, the kept shadow build, the exclusions' reuse). Each runs on its store's thread.
+// extras rows as each payload backing holds them, the draw bound, the kept shadow build, the exclusions' reuse). Each runs on its store's thread.
 
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "DrawsState.h"
@@ -16,7 +16,7 @@ namespace DCLF::Diagnostics
 			const std::uint32_t rows = a_out.Rows();
 			if (a_mirror.size() < std::size_t(rows) * 4) {
 				if (a_first)
-					*a_first = fmt::format("{} rows (version {}), the mirror holds {}: rows never sent", rows, a_out.Version(), a_mirror.size() / 4);
+					*a_first = fmt::format("{} rows (version {}), the mirror holds {}: rows never sent", rows, a_out.ContentEpoch(), a_mirror.size() / 4);
 				return false;
 			}
 			for (std::uint32_t row = 0; row < rows; ++row) {
@@ -25,7 +25,7 @@ namespace DCLF::Diagnostics
 				if (std::memcmp(u, t, 16) == 0)
 					continue;
 				if (a_first)
-					*a_first = fmt::format("row {} of {} (version {}): uploaded ({} {} {} {}), tables ({} {} {} {})", row, rows, a_out.Version(), u[0], u[1], u[2], u[3],
+					*a_first = fmt::format("row {} of {} (version {}): uploaded ({} {} {} {}), tables ({} {} {} {})", row, rows, a_out.ContentEpoch(), u[0], u[1], u[2], u[3],
 						t[0], t[1], t[2], t[3]);
 				return false;
 			}
@@ -35,44 +35,25 @@ namespace DCLF::Diagnostics
 
 	void MirrorExtras(const ExtrasSending& a_sending)
 	{
-		auto& kept = DrawsState::Get().kept;
-		a_sending.mirror = a_sending.entry == ExtrasSending::kSceneBuffers ? &kept.sceneExtras : &kept.ringExtras[a_sending.entry % kept.ringExtras.size()];
+		// The backing's own mirror (each catch-up sends what that backing lacks); released backings' mirrors go.
+		auto& mirrors = DrawsState::Get().kept.extrasMirrors;
+		for (auto it = mirrors.begin(); it != mirrors.end();)
+			it = it->second.backing.expired() ? mirrors.erase(it) : std::next(it);
+		auto& mirror = mirrors[a_sending.backing->generation];
+		mirror.backing = a_sending.backing.Get();
+		a_sending.mirror = &mirror.rows;
 	}
 
 	void CheckExtras(const ExtrasSent& a_sent)
 	{
+		// Every publication: the backing, caught up from what it held, against the rows it was caught up to (a catch-up that missed a
+		// change since the backing's contentEpoch differs here).
 		auto& kept = DrawsState::Get().kept;
-		if (a_sent.entry == ExtrasSending::kSceneBuffers) {
-			// The scene buffers, on the parity's frames, when they hold every row.
-			if (!ParityDue(a_sent.frame) || a_sent.rows.Rows() > a_sent.bufferRows)
-				return;
-			std::string first;
-			const bool same = CompareExtras(kept.sceneExtras, a_sent.rows, kept.extrasFirst.empty() ? &first : nullptr);
-			if (!same && kept.extrasFirst.empty())
-				kept.extrasFirst = "scene buffers: " + first;
-			kept.extras.Check(same);
-			return;
-		}
-		// A payload ring entry, over kPayloadRing consecutive frames from each parity frame, so every entry is checked (the entries rotate
-		// one a frame, and the parity's period is a multiple of their count: one frame alone would check the same entry each time).
-		bool due = false;
-		for (std::uint32_t k = 0; k < DrawsView::Impl::kPayloadRing && !due; ++k)
-			due = ParityDue(a_sent.frame, k);
-		if (!due)
-			return;
-		auto& ring = kept.ring;
-		const bool wantFirst = ring.firstState.load(std::memory_order_relaxed) == 0;
+		const auto it = kept.extrasMirrors.find(a_sent.backing->generation);
+		static const std::vector<float> none;
 		std::string first;
-		const bool same = CompareExtras(kept.ringExtras[a_sent.entry % kept.ringExtras.size()], a_sent.rows, wantFirst ? &first : nullptr);
-		ring.checks.fetch_add(1, std::memory_order_relaxed);
-		if (same)
-			return;
-		ring.mismatches.fetch_add(1, std::memory_order_relaxed);
-		std::uint32_t none = 0;
-		if (wantFirst && ring.firstState.compare_exchange_strong(none, 1, std::memory_order_acquire)) {
-			ring.first = fmt::format("payload ring entry {}: {}", a_sent.entry, first);
-			ring.firstState.store(2, std::memory_order_release);
-		}
+		const bool same = CompareExtras(it != kept.extrasMirrors.end() ? it->second.rows : none, a_sent.rows, kept.extras.mismatches ? nullptr : &first);
+		kept.extras.Check(same, [&] { return fmt::format("extras backing {}: {}", a_sent.backing->generation, first); });
 	}
 
 	void CheckObjectRecords(const StoreUpdated<Draws::ObjectRecordStore>& a_updated)

@@ -125,8 +125,6 @@ namespace DCLF
 			{ PassStats, "CS_DCLF_PASS_STATS", D, N, false, "1: per-pass counts in the report" },
 			{ Profile, "CS_DCLF_PROFILE", D, N, false, "1: scene-phase timings in the report" },
 			{ ShaderDebug, "CS_DCLF_SHADER_DEBUG", D, N, false, "default on: SPIR-V with debug info, and the HLSL sources copied beside the log; 0: without" },
-			{ FetchGuard, "CS_DCLF_FETCH_GUARD", D, N, false,
-				"TEMP, default on: the pulled Lighting vertex stage checks its sequence and fetch, and faults at a beacon address naming the check (0: off)" },
 			{ ShaderSourceDir, "CS_DCLF_SHADER_SOURCE_DIR", D, N, false, "where CS_DCLF_SHADER_DEBUG copies the HLSL sources" },
 			{ TraceTexturePaths, "CS_DCLF_TRACE_TEXTURE_PATHS", D, N, false, "set: texture identities are logged with their paths" },
 			{ TreeLodAudit, "CS_DCLF_TREE_LOD_AUDIT", D, N, false, "1: tree LOD instances the engine leaves shown over a loaded, visible full tree (and hidden ones without one), every 60 frames" },
@@ -150,7 +148,6 @@ namespace DCLF
 			{ TestMove, "CS_DCLF_TEST_MOVE", T, N, false, "<start>:<end>:<units per frame>;...: carries the player forward" },
 			{ TestTurn, "CS_DCLF_TEST_TURN", T, N, false, "<start>:<end>:<degrees per frame>;...: turns the player" },
 			{ TestToggle, "CS_DCLF_TEST_TOGGLE", T, N, false, "<off frame>:<on frame>...: switches DCLF off and on" },
-			{ TestRowsGrowth, "CS_DCLF_TEST_ROWS_GROWTH", T, N, false, "<frame>: the main material and pipeline rows grow at that frame (a growth's fill under claims)" },
 			{ TestExit, "CS_DCLF_TEST_EXIT", T, N, false, "<frame>: the game exits at once after that many frames (startup loops)" },
 
 			{ UpscaleSubmit, "CS_UPSCALE_SUBMIT", O, N, false, "direct: upscaling's ring submissions wait for DXVK's command stream" },

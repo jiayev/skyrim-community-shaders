@@ -86,12 +86,12 @@ namespace DCLF
 		std::uint32_t fadeTested = 0, fadeHidden = 0;
 		std::uint32_t fadeRoots = 0;  // the fade roots listed
 		// Persistent resident draws (drawcall-limit-fix.md): the colour region's inputs, sequences, pairs at stable record
-		// slots and entries it cannot draw (last epoch); new region versions and resyncs, since the start.
+		// slots and entries it cannot draw (last epoch); new region content epochs and resyncs, since the start.
 		std::uint32_t residentInputs = 0, residentDraws = 0, residentPairs = 0, residentUndrawable = 0;
-		std::uint64_t residentVersions = 0, residentResyncs = 0;
+		std::uint64_t residentEpochs = 0, residentResyncs = 0;
 		std::array<std::uint64_t, 5> residentResyncBy{};  // since the start, by reason (MainBuild::UpdateRegionEntries)
 		std::uint64_t residentDecalRetakes = 0;           // since the start: decal group counts moved (decals re-taken, no resync)
-		std::array<std::uint64_t, 2> residentLastVersion{};
+		std::array<std::uint64_t, 2> residentLastEpoch{};
 		std::uint32_t extraRows = 0;  // extras rows uploaded by the last epoch
 		// What the HZB held under the tested objects: all-near or all-far means the build is wrong.
 		std::uint32_t hzbNear = 0, hzbFar = 0, hzbSampled = 0;
@@ -158,7 +158,6 @@ namespace DCLF
 		std::uint32_t deferredTextures = 0;   // of those, ones whose diffuse the lookups had not resolved yet (next frame)
 		std::uint32_t deferredPipelines = 0;  // casters whose shadow pipeline the lookups had no entry for yet
 		std::uint32_t records = 0;         // material rows, last frame
-		std::uint32_t waitingRows = 0;     // materials past the rows' table, waiting for it to grow, last frame
 		double cpuMs = 0.0;                // per report interval, all views
 		double captureMs = 0.0;            // per report interval, the hooks' captures
 		double prepareMs = 0.0;            // of which the once-per-frame preparation

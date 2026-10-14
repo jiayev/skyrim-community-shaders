@@ -751,9 +751,9 @@ namespace DCLF::Scene
 
 	void Coordinator::TakeCoordinatorInputs()
 	{
-		// In order: the depth commit's held fade roots, then PrimaryCull's fade ownership. Each forces a publication.
-		if (const std::uint64_t held = channels.fadeRootsSentPosted.exchange(Channels::kNoFadeRootsSent, std::memory_order_acq_rel); held != Channels::kNoFadeRootsSent) {
-			tables.fadeRootsJournal.BeginBuild(held);
+		// In order: the content epoch of the depth commit's fade roots, then PrimaryCull's fade ownership. Each forces a publication.
+		if (const std::uint64_t contentEpoch = channels.fadeRootsSentPosted.exchange(Channels::kNoFadeRootsSent, std::memory_order_acq_rel); contentEpoch != Channels::kNoFadeRootsSent) {
+			tables.fadeRootsJournal.BeginBuild(contentEpoch);
 			publishForced = true;
 		}
 		if (const auto owned = channels.fadeOwnedPosted.Take()) {

@@ -10,7 +10,7 @@ namespace DCLF::Draws
 	void WakeSnapshotBuilder();
 
 	using GrowthBuild = org::services::GrowableBufferSet::Build;
-	using SealedSet = org::services::GrowableBufferSet::Sealed;
+	using SealedSet = org::services::GrowableBufferSet::Sealed;  // a Seal's result: the sealed set (named) and its fragment
 	using LatchHandle = org::services::LatchHandle;
 
 	/**
@@ -83,12 +83,12 @@ namespace DCLF::Draws
 			for (const auto& member : members)
 				buffers.Require(a_build, member, a_units);
 		}
-		/** @brief The units every member's version a_named names holds (0 without members); throws for a member it does not name. */
-		std::uint64_t Units(const NamedVersions& a_named) const
+		/** @brief The units every member's version a_sealed names holds (0 without members); throws for a member it does not name. */
+		std::uint64_t Units(const NamedVersions& a_sealed) const
 		{
 			std::uint64_t units = members.empty() ? 0 : ~0ull;
 			for (const auto& member : members)
-				units = std::min(units, a_named.Of(member).units);
+				units = std::min(units, a_sealed.Of(member).units);
 			return units;
 		}
 		/** @brief Producer: the most asked of any member (SceneBufferSet::Asked). */

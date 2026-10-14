@@ -1,5 +1,5 @@
 // The kept stores' updates (KeptStores.h): extras rows, object records and geometry draws brought up to a frame's tables from
-// their change logs. Run by MakeStreamViews, one caller at a time (the snapshot builder, or the render thread's StreamsNow).
+// their change logs. Run by MakeStreamViews, one caller at a time (the snapshot builder).
 
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
@@ -7,7 +7,7 @@
 
 namespace DCLF::Draws
 {
-	void UpdateExtras(ExtrasStore* a_store, std::uint64_t a_uploaded, const SceneTables& a_tables, std::uint32_t a_generation, ExtrasOut& a_out)
+	void UpdateExtras(ExtrasStore* a_store, std::uint64_t a_oldestContentEpoch, const SceneTables& a_tables, std::uint32_t a_generation, ExtrasOut& a_out)
 	{
 		ZoneScopedN("CS.DCLF.Build.UpdateExtras");
 		a_out = {};
@@ -17,7 +17,7 @@ namespace DCLF::Draws
 			return;
 		auto& s = *a_store;
 		++s.updates;
-		s.rows.BeginBuild(a_uploaded);
+		s.rows.BeginBuild(a_oldestContentEpoch);
 		if (!s.cursor.Continues(a_tables.changeLog, a_generation)) {
 			s.cursor.Restart(a_generation);
 			s.rows.Resync();
@@ -33,7 +33,7 @@ namespace DCLF::Draws
 		a_out.changes = s.rows.Take();
 	}
 
-	void UpdateObjectRecords(ObjectRecordStore* a_store, std::uint64_t a_uploaded, const SceneTables& a_tables, std::uint32_t a_generation,
+	void UpdateObjectRecords(ObjectRecordStore* a_store, std::uint64_t a_oldestContentEpoch, const SceneTables& a_tables, std::uint32_t a_generation,
 		std::uint32_t a_frame, ObjectRecordsOut& a_out)
 	{
 		ZoneScopedN("CS.DCLF.Build.UpdateObjectRecords");
@@ -50,7 +50,7 @@ namespace DCLF::Draws
 		if (s.busy.exchange(1, std::memory_order_acquire) != 0)
 			++s.collisions;
 		++s.updates;
-		s.records.BeginBuild(a_uploaded);
+		s.records.BeginBuild(a_oldestContentEpoch);
 		TracyCZoneN(updateRecordsZone, "CS.DCLF.Build.Objects.ApplyChanges", true);
 		if (!s.cursor.Continues(a_tables.changeLog, a_generation) || s.records.Size() > count) {
 			// Every record again: the first build, new tables, or a log this store fell behind.
@@ -113,7 +113,7 @@ namespace DCLF::Draws
 		a_out.slots = a_streams->geometries;
 	}
 
-	void UpdateGeometryDraws(GeometryStore* a_store, std::uint64_t a_uploaded, const SceneTables& a_tables, std::uint32_t a_generation,
+	void UpdateGeometryDraws(GeometryStore* a_store, std::uint64_t a_oldestContentEpoch, const SceneTables& a_tables, std::uint32_t a_generation,
 		std::uint32_t a_frame, GeometryDrawsOut& a_out)
 	{
 		ZoneScopedN("CS.DCLF.Build.UpdateGeometryDraws");
@@ -129,7 +129,7 @@ namespace DCLF::Draws
 		}
 		auto& s = *a_store;
 		++s.updates;
-		s.packed.BeginBuild(a_uploaded);
+		s.packed.BeginBuild(a_oldestContentEpoch);
 		if (!s.cursor.Continues(a_tables.geometryLog, a_generation) || s.packed.Size() > count) {
 			auto& packed = s.packed.Mutable();
 			packed.resize(count);

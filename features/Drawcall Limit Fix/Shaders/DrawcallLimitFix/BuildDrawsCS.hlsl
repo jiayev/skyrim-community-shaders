@@ -10,13 +10,10 @@
 cbuffer BuildDrawsConstants : register(b0)
 {
 	uint LatchIndex;       // ByteAddressBuffer: the latch block
-	uint InputsIndex;      // ByteAddressBuffer: DrawInput[DrawCount]
-	uint GeometriesIndex;  // ByteAddressBuffer: GeometryDraw[]
 	uint SequencesIndex;   // RWByteAddressBuffer: DrawSequence[]
 	uint CountIndex;       // RWByteAddressBuffer: uint (zeroed before the dispatch)
-	// The rows an input's y names (RowsOf): material row (low 20 bits), pipeline row (high 12; stride 0 for the shadow views).
-	uint MaterialRowsAddressLo;
-	uint MaterialRowsAddressHi;
+	// The strides of the rows an input's y names (RowsOf): material row (low 20 bits), pipeline row (high 12; stride 0 for the
+	// shadow views). Their addresses are the payload's, in the latch.
 	uint MaterialRowStride;
 	// Bits 4-7: the pass's culling phase; the mode and other bits come from the latch.
 	uint PhaseBits;
@@ -44,8 +41,6 @@ cbuffer BuildDrawsConstants : register(b0)
 	uint DecalBase;
 	uint DecalStride;
 	uint PipelineRowStride;
-	uint PipelineRowsAddressLo;
-	uint PipelineRowsAddressHi;
 	// StructuredBuffer<FadeRootStatic> (FadeStateCS.hlsl; Records.h). Phase 1 drops an input while its root's OnVisible stops; a
 	// shadow view drops a caster while its root fades; every dispatch picks LOD partitions by the root's level (LodPartitions). Root
 	// state is FadeStateCS's model, not the node's. 0 where unbound.
@@ -238,7 +233,7 @@ static const uint kObjectForwardSortRow = 9;
 // StructuredBuffer of the frame's 160-byte placement rows (BindlessPlacement): an input's bound, sun entry and fade node are its
 // object's row (a move rewrites the row, never the inputs).
 static uint PlacementsIndex;
-// The payload's buffers: the payload ring entry's when the latch names one, else the pass's own.
+// The payload's buffers: the installed publication's PayloadVersions (the latch names them).
 static uint InputsBuffer;
 static uint GeometriesBuffer;
 static uint MaterialRowsLo;
@@ -277,20 +272,20 @@ void LoadLatch()
 	BucketMapOffset = latch.Load(LatchOffset + 248);
 	FadeStatesIndex = latch.Load(LatchOffset + 240);
 	PlacementsIndex = latch.Load(LatchOffset + 252);
-	FadeSeedsIndex = latch.Load(LatchOffset + 292);
+	FadeSeedsIndex = latch.Load(LatchOffset + 288);
+	// The installed publication's payload: the scene list, the geometry table and the rows.
 	const uint4 payload = latch.Load4(LatchOffset + 256);
 	const uint4 rows = latch.Load4(LatchOffset + 272);
-	const bool ring = payload.x != 0;
-	ViewBits = payload.w;
-	FocusRoot = latch.Load(LatchOffset + 288);
+	InputsBuffer = payload.x;
+	GeometriesBuffer = payload.y;
+	ViewBits = payload.z;
+	FocusRoot = payload.w;
 	TerrainNear = asfloat(latch.Load4(LatchOffset + 304));
-	TerrainCapacity = latch.Load2(LatchOffset + 296);
-	InputsBuffer = ring ? payload.y : InputsIndex;
-	GeometriesBuffer = ring ? payload.z : GeometriesIndex;
-	MaterialRowsLo = ring ? rows.x : MaterialRowsAddressLo;
-	MaterialRowsHi = ring ? rows.y : MaterialRowsAddressHi;
-	PipelineRowsLo = ring ? rows.z : PipelineRowsAddressLo;
-	PipelineRowsHi = ring ? rows.w : PipelineRowsAddressHi;
+	TerrainCapacity = latch.Load2(LatchOffset + 292);
+	MaterialRowsLo = rows.x;
+	MaterialRowsHi = rows.y;
+	PipelineRowsLo = rows.z;
+	PipelineRowsHi = rows.w;
 }
 
 // Light Limit Fix's shadow mask of an input, as the main pass's selection (LocalShadowLights): local shadow lights whose sphere

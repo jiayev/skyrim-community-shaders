@@ -43,11 +43,11 @@ namespace DCLF
 	void IndirectDraws::PostLookupInputs() {}
 	void IndirectDraws::ResolveLookups(const void*, const PipelineCatalog*, Lookups&, LookupsResolveState&) {}
 	void IndirectDraws::PostSnapshotWork(std::shared_ptr<const void>) {}
+	void IndirectDraws::NoteScenePassDone(std::uint32_t) {}
 	void IndirectDraws::NoteEventAdoption(double, std::uint32_t) {}
 	std::shared_ptr<const void> IndirectDraws::AdoptSnapshot(std::uint32_t) { return nullptr; }
+	void IndirectDraws::BindAdopted() {}
 	void IndirectDraws::PostAheadContext() {}
-	std::function<void(org::runtime::IUploadService&)> IndirectDraws::PrepareFrameUploads() { return {}; }
-	void IndirectDraws::DropFrameUploads() {}
 	void IndirectDraws::KickFadeWriteBack() {}
 	void IndirectDraws::WriteFadeStores(bool, const std::function<bool(const void*)>&) {}
 	void IndirectDraws::KickVisibilityReadback() {}
@@ -75,8 +75,6 @@ namespace DCLF
 	void IndirectDraws::NoteRevisionInputs() {}
 	void IndirectDraws::BuildPoint() {}
 	bool IndirectDraws::DecideCoverage() { return true; }
-	std::uint64_t IndirectDraws::TakeStreamsRefused() { return 0; }
-	void IndirectDraws::EndFrame() {}
 	void IndirectDraws::DrainAsync() {}
 	std::string IndirectDraws::AsyncReport() { return {}; }
 }

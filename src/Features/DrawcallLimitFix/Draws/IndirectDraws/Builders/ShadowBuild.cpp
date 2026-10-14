@@ -63,13 +63,13 @@ namespace DCLF::Draws
 		const std::uint32_t objects = static_cast<std::uint32_t>(a_tables.objects.size());
 		++k.builds;
 		const std::uint64_t build = ++k.build;
-		// Only rows changed since the version the buffer holds are sent.
-		k.rows.BeginBuild(a_in.materialRowsHeld);
+		// The journal keeps what the oldest payload backing lacks; each backing is sent the rows changed since its content epoch.
+		k.rows.BeginBuild(a_in.materialRowsOldestContentEpoch);
 		// Shadow words in the main build's region, or a region of its own (Policy::ReuseResidentRegion off).
 		if (a_scene)
-			a_scene->Begin(a_in.inputsHeld);
+			a_scene->Begin(a_in.inputsOldestContentEpoch);
 		else
-			k.scene.inputs.BeginBuild(a_in.inputsHeld);
+			k.scene.inputs.BeginBuild(a_in.inputsOldestContentEpoch);
 		// Scene buffer growth (ObjectFits moved) also rereads every object.
 		bool resync = !k.cursor.Continues(a_tables.changeLog, a_in.tablesGeneration) || k.identity != a_in.addresses.identity || k.objectRecord.size() > objects ||
 		              k.fit != a_in.addresses.fit;
@@ -125,7 +125,7 @@ namespace DCLF::Draws
 			// Read the texture offset off the material now (controllers move it after the walk; see below).
 			const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(k.slotMaterial[a_slot]);
 			const auto textureIt = k.slotDiffuse[a_slot] ? a_lookups.shadowTextures.find(k.slotDiffuse[a_slot]) : a_lookups.shadowTextures.end();
-			const bool ready = textureIt != a_lookups.shadowTextures.end() && textureIt->second != Lookups::kNone && a_slot < a_in.addresses.recordCapacity;
+			const bool ready = textureIt != a_lookups.shadowTextures.end() && textureIt->second != Lookups::kNone;
 			k.slotReady[a_slot] = ready ? 1 : 0;
 			if (!ready)
 				return false;
@@ -232,7 +232,7 @@ namespace DCLF::Draws
 				return 0;
 			auto wait = [&](const char* a_why, std::uint32_t a_value) {
 				if (a_out.setWaitingFirst.empty())
-					a_out.setWaitingFirst = fmt::format("object {} mode {}: {} {} (row capacity {})", o, m, a_why, a_value, a_in.addresses.recordCapacity);
+					a_out.setWaitingFirst = fmt::format("object {} mode {}: {} {}", o, m, a_why, a_value);
 				return 2;
 			};
 			// Past the scene buffers: waits for their growth (the resync rereads it).
@@ -366,10 +366,9 @@ namespace DCLF::Draws
 		k.cursor.Advance(a_tables.changeLog);
 		for (const std::uint32_t o : changed)
 			takeRecord(o);
-		// Material rows are rewritten on events (rowDirty); a lookups or capacity change marks every slot.
-		if (k.lookupsGeneration != a_lookups.shadowGeneration || k.rowCapacity != a_in.addresses.recordCapacity) {
+		// Material rows are rewritten on events (rowDirty); a lookups change marks every slot.
+		if (k.lookupsGeneration != a_lookups.shadowGeneration) {
 			k.lookupsGeneration = a_lookups.shadowGeneration;
-			k.rowCapacity = a_in.addresses.recordCapacity;
 			for (std::uint32_t slot = 1; slot < k.slotMaterial.size(); ++slot)
 				if (k.slotMaterial[slot])
 					markRow(slot);
@@ -400,11 +399,10 @@ namespace DCLF::Draws
 			markRow(slot);
 			++w;
 		}
-		// An unwritten slot (texture unresolved, or past capacity) stays for the next build.
+		// An unwritten slot (texture unresolved) stays for the next build.
 		for (std::size_t d = 0; d < k.rowDirty.size();) {
 			const std::uint32_t slot = k.rowDirty[d];
 			if (slot < k.slotMaterial.size() && k.slotMaterial[slot] && !materialRow(slot)) {
-				a_out.waitingRows += slot >= a_in.addresses.recordCapacity ? 1 : 0;
 				++d;
 				continue;
 			}
@@ -421,7 +419,6 @@ namespace DCLF::Draws
 			k.ownersChanged = false;
 		}
 		a_out.bindingOwners.push_back(k.owners);
-		a_out.rowsWanted = static_cast<std::uint32_t>(k.slotMaterial.size());
 		for (const std::uint32_t o : changed)
 			touch(o);
 		// The main build's resync emptied the scene list: rewrite every held object.
@@ -687,7 +684,8 @@ namespace DCLF::Draws
 			return base + offset;
 		};
 
-		// ---- Shared by every view: the geometry table and binding records (object records and bone rows are CommitSceneStreams').
+		// ---- Shared by every view: the geometry table and binding records (object records are the stream views', published
+		// in the payload by PayloadBuilder; palettes are FrameValues').
 		TakeGeometryDraws(a_streams.get(), a_tables, a_in.tablesGeneration, a_in.frameNumber, a_out.geometries);
 		a_out.streams = std::move(a_streams);
 		AppendFaceStreams(a_tables, a_in.addresses.facePositions, a_out.geometries);
@@ -709,8 +707,7 @@ namespace DCLF::Draws
 		const std::uint32_t nullIndex = a_lookups.nullTexture == Lookups::kNone ? 0u : a_lookups.nullTexture;
 		for (auto& index : frameRecord.textures)
 			index = nullIndex;
-		frameRecord.textures[kObjectBufferRegister] = a_in.addresses.objectsIndex;
-		frameRecord.textures[kExtrasBufferRegister] = a_in.addresses.extrasIndex;
+		// The objects' and extras' registers are the payload's: the commit fills them from the installed payload.
 		frameRecord.textures[kPlacementBufferRegister] = a_in.addresses.placementsIndex;
 		frameRecord.textures[kPaletteBufferRegister] = a_in.addresses.palettesIndex;
 		frameRecord.textures[kShadingBufferRegister] = a_in.addresses.shadingIndex;  // a tree's wind until its entry
@@ -767,12 +764,6 @@ namespace DCLF::Draws
 				++a_out.skippedTexture;
 				continue;
 			}
-			// Past capacity: waits for the growth (rowsWanted), the engine's meanwhile.
-			++a_out.rowsWanted;
-			if (rows.size() >= a_in.addresses.recordCapacity) {
-				++a_out.waitingRows;
-				continue;
-			}
 			// Read now, not from the walk: BSLightingShaderPropertyFloatController::Update moves it between Main::Draw and
 			// BeforeShadowMaps. Use the buffer the frame reads (textureTransformCurrentBuffer, flipped by Main::Update), as
 			// BSUtilityShader::SetupMaterial does; the controllers write the other.
@@ -788,7 +779,6 @@ namespace DCLF::Draws
 			recordByMaterial.emplace(material, index);
 			objectRecord[o] = index;
 		}
-		a_out.rowsWanted += 1;  // row 0
 		a_out.materialRows = { std::make_shared<const std::vector<ShadowMaterialRow>>(std::move(rows)), {} };
 
 		// ---- The modes that draw each object, then one input per object for all of them.

@@ -55,14 +55,14 @@ namespace DCLF::Draws
 	std::shared_ptr<IndexPool> EnsureIndexPool(SceneBuffers& a_scene, rhi::Device a_device, bool a_small);
 
 	/**
-	 * @brief Brings the index pool up to the tables in the versions a_named (the adopted set) names (ShadowEpochs.cpp): whichever
+	 * @brief Brings the index pool up to the tables in the versions a_sealed (the adopted set) names (ShadowIndexPool.cpp): whichever
 	 * commit draws from it first in a frame gives the ranges out and writes their copies' dispatch at a_poolOffset of its latch slot;
 	 * a later commit finds nothing to copy.
 	 */
-	void UpdateIndexPool(const NamedVersions& a_named, IndexPool& a_pool, const SceneTables& a_tables, std::uint32_t a_generation, const org::LatchBlock& a_latch,
+	void UpdateIndexPool(const NamedVersions& a_sealed, IndexPool& a_pool, const SceneTables& a_tables, std::uint32_t a_generation, const org::LatchBlock& a_latch,
 		std::uint32_t a_latchSlot, std::uint32_t a_poolOffset, CommitUploads& a_uploads);
 
-	// The graph extensions that add DCLF's passes (Passes.cpp).
+	// The graph extensions that add DCLF's passes (Passes/MainExtension.cpp, Passes/Shadow.cpp).
 	std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeMainOpaqueExtension(std::shared_ptr<Resources> a_resources);
 	std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeShadowExtension(std::shared_ptr<ShadowResources> a_resources);
 
@@ -150,15 +150,32 @@ namespace DCLF::Draws
 		rhi::DescriptorHeapHandle a_samplerHeap, rhi::PipelineLayoutHandle a_layout, const std::array<std::uint32_t, kFramePushWords>& a_push, rhi::CommandSignatureHandle a_signature,
 		rhi::ResourceHandle a_arguments, std::uint64_t a_argumentsOffset, rhi::ResourceHandle a_counts, std::uint64_t a_countOffset, std::uint32_t a_capacity);
 
-	/** @brief The rows' tables' addresses and strides into BuildDraws' constants (BuildDrawsCS: RowsOf). */
-	inline void SetRows(BuildDrawsConstants& a_constants, std::uint64_t a_materialRows, std::uint64_t a_pipelineRows)
+	/** @brief The rows' strides into BuildDraws' constants (BuildDrawsCS: RowsOf; the addresses are the latch's: PayloadLatch). */
+	inline void SetRowStrides(BuildDrawsConstants& a_constants, bool a_pipelineRows = true)
 	{
-		a_constants.materialRowsAddressLo = static_cast<std::uint32_t>(a_materialRows);
-		a_constants.materialRowsAddressHi = static_cast<std::uint32_t>(a_materialRows >> 32);
 		a_constants.materialRowStride = kMaterialRowBytes;
-		a_constants.pipelineRowsAddressLo = static_cast<std::uint32_t>(a_pipelineRows);
-		a_constants.pipelineRowsAddressHi = static_cast<std::uint32_t>(a_pipelineRows >> 32);
-		a_constants.pipelineRowStride = kPipelineRowBytes;
+		a_constants.pipelineRowStride = a_pipelineRows ? kPipelineRowBytes : 0u;
+	}
+	/** @brief The installed payload's main parts into a culling latch: the scene list, the geometry table, the main rows. */
+	inline void PayloadLatch(const PayloadVersions& a_payload, BuildDrawsLatch& a_latch)
+	{
+		const std::uint64_t materialRows = a_payload[PayloadPart::MaterialRows].address, pipelineRows = a_payload[PayloadPart::PipelineRows].address;
+		a_latch.inputsIndex = a_payload[PayloadPart::Inputs].srvIndex;
+		a_latch.geometriesIndex = a_payload[PayloadPart::Geometries].srvIndex;
+		a_latch.materialRowsLo = static_cast<std::uint32_t>(materialRows);
+		a_latch.materialRowsHi = static_cast<std::uint32_t>(materialRows >> 32);
+		a_latch.pipelineRowsLo = static_cast<std::uint32_t>(pipelineRows);
+		a_latch.pipelineRowsHi = static_cast<std::uint32_t>(pipelineRows >> 32);
+	}
+	/** @brief The installed payload's shadow parts into a shadow or occlusion view's latch: the scene list, the geometry table, the shadow rows. */
+	inline void ShadowPayloadLatch(const PayloadVersions& a_payload, BuildDrawsLatch& a_latch)
+	{
+		const std::uint64_t shadowRows = a_payload[PayloadPart::ShadowRows].address;
+		a_latch.inputsIndex = a_payload[PayloadPart::Inputs].srvIndex;
+		a_latch.geometriesIndex = a_payload[PayloadPart::Geometries].srvIndex;
+		a_latch.materialRowsLo = static_cast<std::uint32_t>(shadowRows);
+		a_latch.materialRowsHi = static_cast<std::uint32_t>(shadowRows >> 32);
+		a_latch.pipelineRowsLo = a_latch.pipelineRowsHi = 0;
 	}
 	/**
 	 * @brief One bucket's plain indexed indirect draws (DCLF_PULLED): its range of the sequences from slot a_first, its pipeline, its
@@ -167,18 +184,13 @@ namespace DCLF::Draws
 	 * data of its own.
 	 */
 	inline void RecordBucketDraw(rhi::CommandList& a_commands, rhi::CommandSignatureHandle a_signature, rhi::ResourceHandle a_sequences, std::uint64_t a_sequencesAddress,
-		std::uint64_t a_first, rhi::PipelineHandle a_pipeline, rhi::ResourceHandle a_counts, std::uint32_t a_bucket, std::uint32_t a_capacity, bool a_offsetDepth = false,
-		std::uint32_t a_passTag = 0, std::uint64_t a_poolAddress = 0)
+		std::uint64_t a_first, rhi::PipelineHandle a_pipeline, rhi::ResourceHandle a_counts, std::uint32_t a_bucket, std::uint32_t a_capacity, bool a_offsetDepth = false)
 	{
 		const std::uint64_t first = a_first * sizeof(DrawSequence);
 		std::uint32_t words[kDrawPushWords]{};
 		words[kZDrawPushSequences] = static_cast<std::uint32_t>(a_sequencesAddress + first);
 		words[kZDrawPushSequences + 1] = static_cast<std::uint32_t>((a_sequencesAddress + first) >> 32);
 		words[kZDrawPushOffsetDepth] = a_offsetDepth ? 1u : 0u;
-		// TEMP (the pulled stages' GPU fault): the pass, for the fetch guard's beacon (Lighting.hlsl, DCLF_FETCH_GUARD).
-		words[kZDrawPushPassTag] = a_passTag;
-		words[kZDrawPushPoolAddress] = static_cast<std::uint32_t>(a_poolAddress);
-		words[kZDrawPushPoolAddress + 1] = static_cast<std::uint32_t>(a_poolAddress >> 32);
 		a_commands.BindPipeline(a_pipeline);
 		a_commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);
 		a_commands.ExecuteIndirect(a_signature, a_sequences, first + kSequenceDrawOffset, a_counts, std::uint64_t(a_bucket) * sizeof(std::uint32_t), a_capacity);

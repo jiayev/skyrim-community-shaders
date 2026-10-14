@@ -245,6 +245,8 @@ namespace DCLF::Scene
 		}
 		ps.maxPassesInFrame = (std::max)(ps.maxPassesInFrame, ++ps.passesThisFrame);
 		TracyPlot("CS.DCLF.ScenePassMs", ms);
+		// The pass of sceneFrame's inputs is done, its publication (if any) posted: the snapshot builder may publish for the frame now.
+		IndirectDraws::Get().NoteScenePassDone(sceneFrame);
 		// The coordinator's report lines, when its frame crossed into a new window.
 		Reports::ScenePassEnd(*this, sceneFrame);
 	}

@@ -1,5 +1,5 @@
 // The first-person view drawn by DCLF: its capture, targets and pipelines, the first-person phase's readiness, and its two
-// epochs' commits (their passes are ViewEpoch.cpp's). Render thread, but for FirstPersonDrawable (the scene lane's commit).
+// epochs' commits (their passes are ViewEpochRecord.cpp's). Render thread, but for FirstPersonDrawable (the scene lane's commit).
 
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
@@ -194,14 +194,14 @@ namespace DCLF
 		f.previous = current;
 		f.havePrevious = true;
 
-		// What the epoch draws from: the frame's scene list (its ring entry) with this frame's depth commit's index pool, inputs, object
+		// What the epoch draws from: the frame's scene list (the installed payload) with this frame's depth commit's index pool, inputs, object
 		// records and geometry rows - the frame's publication whole.
 		const auto main = impl->resources;
 		const auto& depthCommit = main ? main->committed[kDepthShape] : Resources::Committed{};
-		if (!main || !main->inputsDepth || !impl->scene || depthCommit.frame != frameNumber || depthCommit.named != impl->Adopted().Serial())
+		if (!main || !impl->scene || depthCommit.frame != frameNumber || depthCommit.adoptedSerial != impl->Adopted().Serial())
 			return skip(3);
-		const auto& ring = impl->ringFrame;
-		const MainPayload* listed = ring.valid && ring.draws ? ring.draws->payloads[kAsyncZPrepass].get() : nullptr;
+		const auto& draws = impl->installedDraws;
+		const MainPayload* listed = impl->InstalledPayload() && draws ? draws->payloads[kAsyncZPrepass].get() : nullptr;
 		if (!listed)
 			return skip(3);
 		const auto listInputs = static_cast<std::uint32_t>(listed->resident.Count() + listed->inputList.size());
@@ -211,7 +211,7 @@ namespace DCLF
 		if (!revision)
 			return skip(1);
 		const auto shape = revision.shape->Value<ViewFrame>();
-		const auto& payloads = ring.draws->payloads;
+		const auto& payloads = draws->payloads;
 		const std::array<const MainPayload*, 2> listedPayloads{ payloads[0].get(), payloads[1].get() };
 		const auto owners = impl->EpochOwners(listedPayloads);
 		if (!owners)

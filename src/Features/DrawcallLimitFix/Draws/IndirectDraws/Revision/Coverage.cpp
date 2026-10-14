@@ -87,7 +87,6 @@ namespace DCLF
 		auto& mirror = Scene::FrameView::Get().TreeLodMirror();
 		next.treeLodShapeSlots = mirror.ShapeSlots();
 		next.treeLodMeshSlots = mirror.MeshSlots();
-		next.shadowRowsWanted = shadowRowsWanted;
 		if (shadow && (!postedShadowSlots || postedShadowSlots->sequences.size() != shadow->sequences.size()))
 			postedShadowSlots = std::make_shared<const ShadowSlotBuffers>(ShadowSlotBuffers{ shadow->sequences, shadow->bucketCounts });
 		next.shadowSlots = shadow ? postedShadowSlots : nullptr;
@@ -102,7 +101,7 @@ namespace DCLF
 		                  next.shadowPlacements == previous.shadowPlacements && next.mainKnown == previous.mainKnown && next.viewport == previous.viewport &&
 		                  next.blockSizes == previous.blockSizes && next.portalWords == previous.portalWords &&
 		                  next.treeLodShapeSlots == previous.treeLodShapeSlots && next.treeLodMeshSlots == previous.treeLodMeshSlots &&
-		                  next.shadowRowsWanted == previous.shadowRowsWanted && next.shadowSlots == previous.shadowSlots && next.asyncEpochs == previous.asyncEpochs &&
+		                  next.shadowSlots == previous.shadowSlots && next.asyncEpochs == previous.asyncEpochs &&
 		                  !next.uploads.owner_before(previous.uploads) && !previous.uploads.owner_before(next.uploads);
 		if (same && previous.generation)
 			return;
@@ -131,15 +130,16 @@ namespace DCLF
 			return true;
 		}
 		// Each epoch's recordings in the adopted snapshot's revision, of the graph as built now (the build point just ran), and its set the
-		// adopted one (its versions made current at the adoption) - when the snapshot is current (AdoptSnapshot found none stale) and its
-		// draws are for the main resources.
+		// adopted one (its versions made current at the adoption) - when the snapshot is current (AdoptSnapshot found none stale), its
+		// draws are for the main resources and its payload is installed and ready (no payload: not covered; no fallback).
 		rv.covered.fill(false);
 		auto* host = RenderGraphRuntime::Get().Host();
 		const auto& active = rv.active;
 		const auto& versionsFragment = active ? active->Fragment(R::kVersionsSlot) : nullptr;
 		const auto versions = versionsFragment ? versionsFragment->Value<NamedVersions>() : nullptr;
-		bool snapshot = impl->adoptedSnapshot && impl->adoptedSnapshot->drawsComplete && !impl->snapshotStale;
-		const bool current = host && snapshot && versions && versions.get() == impl->adoptedVersions;
+		const auto* payload = impl->InstalledPayload();
+		bool snapshot = impl->adoptedSnapshot && impl->adoptedSnapshot->drawsComplete && !impl->snapshotStale && payload && payload->Ready();
+		const bool current = host && snapshot && versions && versions.get() == impl->adoptedSet;
 		// The adopted draws embed the addresses of the versions its revision names (BuildSnapshotDraws builds them from the sealed set;
 		// Diagnostics' SnapshotSealed checks it): the first frame whose draws embed the versions a growth's adoption made current.
 		if (current && snapshot && impl->growthAdoptedFrame != ~0u) {
@@ -167,11 +167,13 @@ namespace DCLF
 		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
 		// The faces draw from the frame's scene list and the frame before's colour frame record (ExecuteReflection): not
 		// after a frame whose main epochs were not submitted (no claims), nor once another set was adopted since (this frame's
-		// selection), which leaves those addresses on versions nothing holds.
-		const std::uint64_t named = impl->Adopted().Serial();
+		// selection) or another payload installed since (the frame record names the payload's objects and extras), which leaves those
+		// addresses on versions nothing holds.
+		const std::uint64_t adoptedSerial = impl->Adopted().Serial();
 		const bool inputs = resources && resources->committed[kDepthShape].frame == resources->committed[kColourShape].frame &&
-		                    frame - resources->committed[kDepthShape].frame <= 1 && resources->committed[kDepthShape].named == named &&
-		                    resources->committed[kColourShape].named == named && impl->scene;
+		                    frame - resources->committed[kDepthShape].frame <= 1 && resources->committed[kDepthShape].adoptedSerial == adoptedSerial &&
+		                    resources->committed[kColourShape].adoptedSerial == adoptedSerial && impl->installedPayloadFrame <= resources->committed[kColourShape].frame &&
+		                    impl->scene;
 		reflection.covered = main && inputs && rv.covered[Epoch::Reflection] && reflection.resources && reflection.resources->target && !host->RebuildRequested();
 		PassCapture::Get().SetReflectionCovered(reflection.covered);
 		// The first-person members are withheld from the engine (PassCapture) and drawn by the first-person epochs on a frame the engine

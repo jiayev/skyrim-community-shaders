@@ -1,5 +1,6 @@
-// CS_DCLF_BUILD_PARITY: every 300th epoch, BuildDraws' output (the sequences, the decal slots, the local shadow lights in the object
-// words) copied to staging and compared three frames later with the CPU's templates.
+// CS_DCLF_BUILD_PARITY: every 300th colour epoch, BuildDraws' output (the sequences, the decal slots, the local shadow lights in the object
+// words) copied to staging and compared three main epochs later with the CPU's templates. The templates' row addresses are offsets into
+// the row tables; the epoch's payload (PayloadVersions) places them, recorded when the check is armed.
 
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "DrawsState.h"
@@ -23,6 +24,17 @@ namespace DCLF::Diagnostics
 		const auto& decalTemplates = a_payload.decalTemplates;
 		const auto& inputs = a_payload.inputList;
 		auto* context = globals::d3d::context;
+		// Every main epoch's payload, while the check is on (by the colour epochs counted): where a row outside its epoch's tables came from.
+		if (const auto* seen = a_epoch.payloadVersions; seen && seen->main) {
+			auto& history = state.parityPayloads;
+			const auto newest = state.parityPayloadsSeen ? &history[(state.parityPayloadsSeen - 1) % history.size()] : nullptr;
+			if (!newest || newest->serial != seen->serial) {
+				const auto& material = (*seen)[Draws::PayloadPart::MaterialRows];
+				const auto& pipeline = (*seen)[Draws::PayloadPart::PipelineRows];
+				history[state.parityPayloadsSeen++ % history.size()] = { seen->serial, parityEpochs, material.address, material.units * kMaterialRowBytes,
+					pipeline.address, pipeline.units * kPipelineRowBytes };
+			}
+		}
 		if (parity) {
 			if (--parity->framesLeft)
 				return;
@@ -42,6 +54,34 @@ namespace DCLF::Diagnostics
 				const auto* range = gpuSequences + std::size_t(parity->sequenceDraws) + (group == 0 ? 0u : parity->terrainCapacity[0]);
 				built.insert(built.end(), range, range + appended);
 			}
+			// A sequence against its template, field by field, with the rows as indices into the payload's tables ("-": outside).
+			// Outside: the recent payload whose tables hold it, if any (its serial, and how many colour epochs before the copy it was first seen).
+			auto originOf = [&](std::uint64_t a_address) -> std::string {
+				const auto& history = state.parityPayloads;
+				const std::uint32_t kept = std::min<std::uint32_t>(state.parityPayloadsSeen, static_cast<std::uint32_t>(history.size()));
+				for (std::uint32_t k = 1; k <= kept; ++k) {
+					const auto& seen = history[(state.parityPayloadsSeen - k) % history.size()];
+					const bool material = a_address >= seen.materialBase && a_address < seen.materialBase + seen.materialBytes;
+					const bool pipeline = a_address >= seen.pipelineBase && a_address < seen.pipelineBase + seen.pipelineBytes;
+					if (material || pipeline)
+						return fmt::format(", {} rows of payload {} (seen {} colour epochs before the copy)", material ? "material" : "pipeline", seen.serial,
+							static_cast<std::int64_t>(parity->armedEpoch) - static_cast<std::int64_t>(seen.epoch));
+				}
+				return ", in no recent payload";
+			};
+			auto rowOf = [&](std::uint64_t a_address, std::uint64_t a_base, std::uint64_t a_bytes) {
+				return a_address >= a_base && (a_address - a_base) % a_bytes == 0 ? fmt::format("{}", (a_address - a_base) / a_bytes) :
+				                                                                    fmt::format("- ({:#x}{})", a_address, originOf(a_address));
+			};
+			auto describe = [&](const DrawSequence& a_gpu, const DrawSequence& a_cpu) {
+				const auto pipelineRow = [&](const DrawSequence& a) { return rowOf(a.pipelineRowAddress, parity->pipelineRowsBase, kPipelineRowBytes); };
+				const auto materialRow = [&](const DrawSequence& a) { return rowOf(a.materialRowAddress, parity->materialRowsBase, kMaterialRowBytes); };
+				return fmt::format("GPU vs CPU: pipeline {} vs {}, pipeline row {} vs {}, material row {} vs {}, vertices {:#x}/{} vs {:#x}/{}, indices {:#x}/{} vs {:#x}/{}, "
+								   "index count {} vs {}, first index {} vs {}",
+					a_gpu.pipelineIndex, a_cpu.pipelineIndex, pipelineRow(a_gpu), pipelineRow(a_cpu), materialRow(a_gpu), materialRow(a_cpu), a_gpu.vertexBufferAddress,
+					a_gpu.vertexBufferSize, a_cpu.vertexBufferAddress, a_cpu.vertexBufferSize, a_gpu.indexBufferAddress, a_gpu.indexBufferSize, a_cpu.indexBufferAddress,
+					a_cpu.indexBufferSize, a_gpu.indexCount, a_cpu.indexCount, a_gpu.firstIndex, a_cpu.firstIndex);
+			};
 			// The local shadow lights BuildDraws selected, from each object word, against the CPU's selection; then out of the word,
 			// which the CPU's templates do not carry.
 			std::size_t localChecked = 0, localDiffering = 0;
@@ -61,6 +101,7 @@ namespace DCLF::Diagnostics
 			// The decal slots: fixed, so they compare in place. A culled slot is the template with an index
 			// count of zero; anything else differing is a defect.
 			std::size_t decalDiffering = 0, decalCulled = 0, decalSlots = 0;
+			std::string decalFirst;
 			for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
 				const auto& expectedDecals = parity->expectedDecals[group];
 				const auto* slots = gpuSequences + 2 * std::size_t(parity->sequenceDraws) + std::size_t(group) * parity->sequenceDecals;
@@ -75,21 +116,21 @@ namespace DCLF::Diagnostics
 					DrawSequence decal = slots[slot];
 					takeLocalShadows(decal);
 					decal.objectIndex &= ~kObjectSunMiss;  // as the draws below: the CPU's template has no cascade test
-					if (std::memcmp(&decal, &expectedDecals[slot], sizeof(DrawSequence)) != 0)
-						++decalDiffering;
+					if (std::memcmp(&decal, &expectedDecals[slot], sizeof(DrawSequence)) != 0 && decalDiffering++ == 0)
+						decalFirst = fmt::format("group {} slot {} (object {}): {}", group, slot, decal.objectIndex & kObjectIndexMask, describe(decal, expectedDecals[slot]));
 				}
 			}
 			context->Unmap(parity->count.get(), 0);
 			context->Unmap(parity->sequences.get(), 0);
-			// BuildDraws appends in any order: compare as sets, keyed by the object index (unique per sequence; a record address is
-			// shared by every sequence of a deduplicated record, which would leave equal-key runs in arbitrary order on the two sides).
-			// A skin of several partitions writes one sequence per partition, which its index buffer tells apart.
+			// BuildDraws appends in any order: compare as sets, keyed by the object index (a record address is shared by every sequence
+			// of a deduplicated record, which would leave equal-key runs in arbitrary order on the two sides). A skin of several
+			// partitions writes one sequence per partition drawn (GeometryDraw::nextPartition), which its index range tells apart:
+			// partitions can share one index buffer, so the key is the index buffer and the first index.
 			// A draw that missed every sun cascade carries kObjectSunMiss in its object word; the CPU's template does not.
 			for (auto& sequence : built)
 				sequence.objectIndex &= ~kObjectSunMiss;
-			auto byObject = [](const DrawSequence& a, const DrawSequence& b) {
-				return a.objectIndex != b.objectIndex ? a.objectIndex < b.objectIndex : a.indexBufferAddress < b.indexBufferAddress;
-			};
+			auto keyOf = [](const DrawSequence& a) { return std::tuple(a.objectIndex, a.indexBufferAddress, a.firstIndex); };
+			auto byObject = [&](const DrawSequence& a, const DrawSequence& b) { return keyOf(a) < keyOf(b); };
 			std::sort(built.begin(), built.end(), byObject);
 			auto& expected = parity->expected;
 			std::sort(expected.begin(), expected.end(), byObject);
@@ -98,9 +139,9 @@ namespace DCLF::Diagnostics
 			std::size_t differing = 0, missing = 0;
 			std::size_t first = SIZE_MAX, firstExpected = 0;
 			for (std::size_t b = 0, e = 0; b < built.size(); ++b) {
-				while (e < expected.size() && expected[e].objectIndex < built[b].objectIndex)
-					++e;  // the CPU built a template the culling rejected
-				if (e == expected.size() || expected[e].objectIndex != built[b].objectIndex) {
+				while (e < expected.size() && byObject(expected[e], built[b]))
+					++e;  // the CPU built a template the culling rejected (or a partition it did not draw)
+				if (e == expected.size() || keyOf(expected[e]) != keyOf(built[b])) {
 					++missing;  // a sequence with no template at all, which no culling can explain
 					continue;
 				}
@@ -116,29 +157,32 @@ namespace DCLF::Diagnostics
 			logger::info("[DCLF] BuildDraws local shadow lights {}: {} draws, {} differ from the CPU's selection{}{}", localDiffering ? "MISMATCH" : "OK",
 				localChecked, localDiffering, localFirst.empty() ? "" : "; first: ", localFirst);
 			if (decalSlots)
-				logger::info("[DCLF] BuildDraws decal parity {}: {} slots, {} culled, {} differ", decalDiffering ? "MISMATCH" : "OK", decalSlots, decalCulled, decalDiffering);
+				logger::info("[DCLF] BuildDraws decal parity {}: {} slots, {} culled, {} differ{}{}", decalDiffering ? "MISMATCH" : "OK", decalSlots, decalCulled, decalDiffering,
+					decalFirst.empty() ? "" : "; first: ", decalFirst);
 			if (!differing && !missing) {
 				logger::info("[DCLF] BuildDraws parity OK: {} of {} sequences match the CPU templates ({} rejected by the culling)", count, expected.size(),
 					expected.size() - count);
 			} else {
-				logger::warn("[DCLF] BuildDraws parity MISMATCH: GPU wrote {}, CPU templated {} ({} counted culled); {} differ, {} have no template{}", count,
-					expected.size(), culled, differing, missing,
-					first != SIZE_MAX ? fmt::format(" (first: object {}, GPU vs CPU: pipeline {} vs {}, rows {:#x}/{:#x} vs {:#x}/{:#x}, vertices {:#x}/{} vs {:#x}/{}, "
-													"indices {:#x}/{} vs {:#x}/{}, index count {} vs {}, first index {} vs {})",
-											built[first].objectIndex, built[first].pipelineIndex, expected[firstExpected].pipelineIndex, built[first].pipelineRowAddress,
-											built[first].materialRowAddress, expected[firstExpected].pipelineRowAddress, expected[firstExpected].materialRowAddress,
-											built[first].vertexBufferAddress, built[first].vertexBufferSize, expected[firstExpected].vertexBufferAddress,
-											expected[firstExpected].vertexBufferSize, built[first].indexBufferAddress, built[first].indexBufferSize,
-											expected[firstExpected].indexBufferAddress, expected[firstExpected].indexBufferSize, built[first].indexCount,
-											expected[firstExpected].indexCount, built[first].firstIndex, expected[firstExpected].firstIndex) :
-										"");
+				logger::warn("[DCLF] BuildDraws parity MISMATCH: GPU wrote {}, CPU templated {} ({} counted culled); {} differ, {} have no template; sequences version {} "
+							 "named, {} current{}",
+					count, expected.size(), culled, differing, missing, parity->sequencesNamed, parity->sequencesCurrent,
+					first != SIZE_MAX ? fmt::format(" (first: object {}, {})", built[first].objectIndex, describe(built[first], expected[firstExpected])) : "");
 			}
 			parity.reset();
 			return;
 		}
-		if ((parityEpochs++ % 300) != 0 || !a_resources->countD3D11)
+		// The colour epoch's only: the Z-prepass's draws go to its pipeline slots' buckets (shadow-format sequences at each bucket's
+		// range, BuildDrawsCS's BucketTableOffset path), never to the plain range or the decal slots compared here, which then
+		// still hold the last colour epoch's (another frame's payload).
+		if (a_epoch.depthOnly || (parityEpochs++ % 300) != 0 || !a_resources->countD3D11)
 			return;
-		auto* const sequencesView = state.paritySequences.Of(a_resources->sequences);
+		// The version the epoch's recording wrote: the one the adopted set names (resolved through it, IResourceVersions), which
+		// need not be the buffer's current one.
+		auto namedSequences = DrawsView::Get().Adopted().Find(*a_resources->sequences);
+		const auto currentSequences = a_resources->sequences->Current();
+		const std::uint64_t sequencesNamed = namedSequences ? namedSequences->number : 0;
+		const std::uint64_t sequencesCurrent = currentSequences ? currentSequences->number : 0;
+		auto* const sequencesView = state.paritySequences.Of(namedSequences ? std::move(namedSequences) : currentSequences);
 		if (!sequencesView)
 			return;
 		// After the epoch in D3D11 stream order: the copies see what BuildDraws wrote.
@@ -156,7 +200,13 @@ namespace DCLF::Diagnostics
 			context->CopyResource(buffer.get(), a_source);
 			return buffer;
 		};
+		// The row tables BuildDraws read: the epoch's payload's (none: the epoch drew nothing of a payload to compare).
+		const auto* payloadVersions = a_epoch.payloadVersions;
+		if (!payloadVersions || !payloadVersions->main)
+			return;
 		ParityReadback readback;
+		readback.pipelineRowsBase = (*payloadVersions)[Draws::PayloadPart::PipelineRows].address;
+		readback.materialRowsBase = (*payloadVersions)[Draws::PayloadPart::MaterialRows].address;
 		readback.sequences = staging(sequencesView);
 		readback.count = staging(a_resources->countD3D11.get());
 		// The ranges of the shape the epoch was committed into (the adopted revision's).
@@ -173,8 +223,16 @@ namespace DCLF::Diagnostics
 		// switches. inputs is parallel to sequences.
 		readback.expected.clear();
 		readback.expected.reserve(sequences.size());
-		for (std::uint32_t group = 0; group < kDecalGroups; ++group)
+		// The templates' rows are offsets into the tables: placed at the payload's.
+		auto place = [&](DrawSequence& a_sequence) {
+			a_sequence.pipelineRowAddress += readback.pipelineRowsBase;
+			a_sequence.materialRowAddress += readback.materialRowsBase;
+		};
+		for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
 			readback.expectedDecals[group] = decalTemplates[group];
+			for (auto& decal : readback.expectedDecals[group])
+				place(decal);
+		}
 		{
 			// Cull-only inputs carry no sequence, so the two run at different rates and the drawable ones
 			// have to be counted off rather than indexed in step. Decals have their own slots and templates.
@@ -193,6 +251,8 @@ namespace DCLF::Diagnostics
 					continue;
 				readback.expected.insert(readback.expected.end(), sequences.begin() + first, sequences.begin() + sequence);
 			}
+			for (auto& expected : readback.expected)
+				place(expected);
 		}
 		// The CPU's local shadow selection for every object the epoch drew, with the volumes it uploaded (none on the Z-prepass).
 		if (!a_payload.inputs.depthOnly) {
@@ -208,6 +268,9 @@ namespace DCLF::Diagnostics
 				readback.expectedLocalShadows[input.objectIndex] = localShadows.MaskOf(property, center, geometry->worldBound.radius) & 0xFu;
 			}
 		}
+		readback.sequencesNamed = sequencesNamed;
+		readback.sequencesCurrent = sequencesCurrent;
+		readback.armedEpoch = parityEpochs;
 		readback.framesLeft = 3;
 		if (readback.sequences && readback.count)
 			parity = std::move(readback);

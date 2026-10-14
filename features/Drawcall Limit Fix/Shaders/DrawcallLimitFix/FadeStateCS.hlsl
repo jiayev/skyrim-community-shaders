@@ -415,7 +415,7 @@ static const uint kFadeRootNodeBits = kFadeRootPlanMask | (0xFFu << kFadeRootBit
 bool MergeSeed(uint a_slot, inout FadeRootStatic a_root)
 {
 	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
-	const uint seedsIndex = latch.Load(LatchOffset + 292);
+	const uint seedsIndex = latch.Load(LatchOffset + 288);
 	if (seedsIndex == 0)
 		return false;
 	StructuredBuffer<FadeRootStatic> seeds = ResourceDescriptorHeap[seedsIndex];

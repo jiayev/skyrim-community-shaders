@@ -20,6 +20,8 @@ namespace DCLF::Diagnostics
 		const Draws::MainPayload& payload;
 		const Draws::MainPayload* depth;  // the frame's committed Z-prepass payload (colour epoch, the same frame), or null
 		bool depthOnly;
+		// The scene payload the epoch committed with (the row tables BuildDraws read; null: none): its rows' bases for the build parity.
+		const Draws::PayloadVersions* payloadVersions;
 		IndirectDrawStats& stats;
 	};
 
@@ -28,6 +30,59 @@ namespace DCLF::Diagnostics
 	{
 		const Draws::BuildDrawsLatch& latch;
 		bool depthOnly;
+	};
+
+	/**
+	 * @brief A frame texture register the drawn pipelines read that a main commit could not resolve (it reads zero), every commit
+	 * per such register: the view captured there (null: nothing bound).
+	 */
+	struct FrameTextureUnresolved
+	{
+		std::uint32_t textureRegister;
+		ID3D11ShaderResourceView* view;
+	};
+
+	/**
+	 * @brief A main commit's frame buffer (a CPU-written structured buffer the pipelines read at t`textureRegister`) that the constant
+	 * mirror cannot fill (it holds `mirrorBytes`): its copy reads zero. Every such commit.
+	 */
+	struct FrameBufferUnfilled
+	{
+		std::uint32_t textureRegister, elements, stride;
+		std::size_t mirrorBytes;
+	};
+
+	/** @brief The depth commit could not draw tree LOD on a frame that withheld the engine's passes (a hole): the tables' shape slots and the buffer's. */
+	struct TreeLodMissed
+	{
+		std::uint32_t frame;
+		std::uint64_t shapeSlots, bufferSlots;
+	};
+
+	/** @brief The depth commit's fade updates of `frame`, from the animation job, had differing inputs: the first's stand for all. */
+	struct FadeInputsVaried
+	{
+		std::uint32_t frame;
+	};
+
+	/** @brief A main commit's payload drew past a geometry's buffers (MainPayload::shortBuffer), the first time in the stats window. */
+	struct ShortBuffersDrawn
+	{
+		const SceneTables& tables;
+		const Draws::MainPayload& payload;
+	};
+
+	/**
+	 * @brief A main commit's culling setup, every commit: the shape it commits into, its capture (the VS_PerFrame binding), whether it
+	 * found the draws' ViewProj, and the replayed Z-prepass VS_PerFrame contents (colour with the prepass's vertex inputs; else empty).
+	 */
+	struct MainCullingSetup
+	{
+		const Draws::PassFrame& shape;
+		const Draws::Capture& capture;
+		bool depthOnly, hasViewProj, replay;
+		std::uint32_t frame, liveObjects;
+		std::span<const std::byte> replayPerFrame;
 	};
 
 	/**
@@ -150,21 +205,21 @@ namespace DCLF::Diagnostics
 
 	// ---- The stores the builds keep (the builder's thread, or the render thread while the builder is idle) and the buffers they fill.
 
-	/** @brief The extras rows' buffer `entry` (kSceneBuffers, else a payload ring entry's, on the uploader's thread) is about to be sent rows: an observer may give the mirror they are copied into as sent. */
+	/**
+	 * @brief The payload's extras backing `backing` (its lease) is about to be caught up with a publication's rows
+	 * (PayloadBuilder::Publish, the snapshot builder's thread): an observer may give the mirror they are copied into as sent.
+	 */
 	struct ExtrasSending
 	{
-		static constexpr std::uint32_t kSceneBuffers = ~0u;
-		std::uint32_t entry;
+		const org::services::BackingLease& backing;
 		std::vector<float>*& mirror;
 	};
 
-	/** @brief The extras rows' buffer `entry` was sent `rows` for frame `frame` (bufferRows: the rows it holds; ~0u, a ring entry: every row). */
+	/** @brief The payload's extras backing `backing` was caught up to `rows` (it now holds every row of them). */
 	struct ExtrasSent
 	{
-		std::uint32_t entry;
-		std::uint32_t frame;
+		const org::services::BackingLease& backing;
 		const Draws::ExtrasOut& rows;
-		std::uint32_t bufferRows;
 	};
 
 	/**
@@ -204,30 +259,30 @@ namespace DCLF::Diagnostics
 		std::uint32_t frame;
 	};
 
-	// ---- The named set (the snapshot is the only source of a versioned buffer's address and SRV index).
+	// ---- The sealed set (the snapshot is the only source of a versioned buffer's address and SRV index).
 
 	/** @brief A scene revision sealed (snapshot builder), with the draws its snapshot pairs with it, built from `context`. */
 	struct SnapshotSealed
 	{
-		const Draws::NamedVersions& named;
+		const Draws::NamedVersions& sealed;
 		const DrawsView::Impl::DrawPublication& draws;
 		const DrawsView::Impl::AheadContext& context;
 	};
 
-	/** @brief A commit staged bytes into a versioned buffer (CommitUploads, render thread), through the adopted set `named`. */
+	/** @brief A commit staged bytes into a versioned buffer (CommitUploads, render thread), through the adopted set (`sealed`). */
 	struct CommitTargetStaged
 	{
-		const Draws::NamedVersions& named;
+		const Draws::NamedVersions& sealed;
 		const Draws::Versioned& target;
 	};
 
 	/**
-	 * @brief The revision producer made shapes (MakeRevision, snapshot builder) from the sealed set `named`, the main layout and its
+	 * @brief The revision producer made shapes (MakeRevision, snapshot builder) from the sealed set `sealed`, the main layout and its
 	 * inputs, for tables of `geometries` geometry slots.
 	 */
 	struct RevisionShapesMade
 	{
-		const Draws::NamedVersions& named;
+		const Draws::NamedVersions& sealed;
 		const Draws::MainLayout& layout;
 		const Draws::MadeShapes& made;
 		const Draws::RevisionInputs& inputs;

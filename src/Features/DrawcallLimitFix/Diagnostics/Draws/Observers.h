@@ -8,6 +8,12 @@ namespace DCLF::Diagnostics
 {
 	struct MainEpochDone;
 	struct CullLatchWritten;
+	struct FrameTextureUnresolved;
+	struct FrameBufferUnfilled;
+	struct TreeLodMissed;
+	struct FadeInputsVaried;
+	struct ShortBuffersDrawn;
+	struct MainCullingSetup;
 	struct FadeLogWindow;
 	struct ExtrasSending;
 	struct ExtrasSent;
@@ -35,6 +41,14 @@ namespace DCLF::Diagnostics
 	// The culling's counters, every run (CullCounters.cpp).
 	void NoteCullLatch(const CullLatchWritten& a_written);
 	void ReadCullCounters(const MainEpochDone& a_epoch);
+	// A frame texture the commit could not resolve, described once per register, every run (TextureCommit.cpp).
+	void DescribeUnresolvedFrameTexture(const FrameTextureUnresolved& a_unresolved);
+	// The main commits' warnings and setup log, every run (CommitLog.cpp).
+	void LogUnfilledFrameBuffer(const FrameBufferUnfilled& a_unfilled);
+	void LogTreeLodMissed(const TreeLodMissed& a_missed);
+	void LogFadeInputsVaried(const FadeInputsVaried& a_varied);
+	void LogShortBuffers(const ShortBuffersDrawn& a_drawn);
+	void LogCullingSetup(const MainCullingSetup& a_setup);
 	// CS_DCLF_BUILD_PARITY (BuildParity.cpp).
 	void CheckBuildParity(const MainEpochDone& a_epoch);
 	// CS_DCLF_PERSISTENT_PARITY: tree wind (TreeWind.cpp).
@@ -58,7 +72,7 @@ namespace DCLF::Diagnostics
 	void CheckKeptShadow(const ShadowBuilt& a_built);
 	void CheckExclusionReuse(const ExclusionRebuilt& a_rebuilt);
 	void CheckViewMasks(const DrawsBuiltAhead& a_built);
-	// CS_DCLF_PERSISTENT_PARITY: the named set (NamedParity.cpp): every address a snapshot's draws embed against its sealed set; the
+	// CS_DCLF_PERSISTENT_PARITY: the sealed set (NamedParity.cpp): every address a snapshot's draws embed against its sealed set; the
 	// commits' targets named and current in the adopted set; the recordings' resolves of buffers their set does not name; and every
 	// shape's ranges and counts within the named versions of the buffers it indexes.
 	void CheckSnapshotAddresses(const SnapshotSealed& a_sealed);

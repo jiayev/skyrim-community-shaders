@@ -4,11 +4,13 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <span>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 // The building blocks of DCLF's persistent draw state (drawcall-limit-fix.md, "Persistent draw state"): what the tables
@@ -90,42 +92,43 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief What changed in a kept array, by version, for the buffers that mirror it.
+	 * @brief What changed in a kept array, by content epoch, for the buffers that mirror it.
 	 *
-	 * Each build that changes anything is one new version. The journal keeps every change after its floor as (version,
-	 * range) entries, so a holder - a GPU buffer that holds some version - is sent the ranges changed since that version,
+	 * Each build that changes anything is one new content epoch (a journal position). The journal keeps every change after its floor
+	 * as (contentEpoch, range) entries, so a holder - a GPU buffer whose contents are at some content epoch - is sent the ranges
+	 * changed since that epoch,
 	 * coalesced; a holder below the floor (or a new buffer, which holds 0) is sent everything. One holder or several (the
-	 * shadow epoch's view slots each hold their own version): BeginBuild trims what the oldest holder still counted has.
+	 * shadow epoch's view slots each hold their own content epoch): BeginBuild trims what the oldest holder still counted has.
 	 */
 	class ChangeJournal
 	{
 	public:
 		struct Entry
 		{
-			std::uint64_t version = 0;
+			std::uint64_t contentEpoch = 0;
 			std::uint64_t first = 0;
 			std::uint64_t count = 0;
 		};
 
-		/** @brief What a build's payload carries: the version, and the changes since the floor. */
+		/** @brief What a build's payload carries: the content epoch, and the changes since the floor. */
 		struct Snapshot
 		{
-			std::uint64_t version = 0;  // 0: not a kept array's, sent whole
+			std::uint64_t contentEpoch = 0;  // 0: not a kept array's, sent whole
 			std::uint64_t floor = 0;
 			std::vector<Entry> entries;
 
-			/** @brief Whether a holder at a_held has this version. */
-			bool Holds(std::uint64_t a_held) const { return version && a_held == version; }
+			/** @brief Whether a holder at a_contentEpoch has this snapshot's contents. */
+			bool Holds(std::uint64_t a_contentEpoch) const { return contentEpoch && a_contentEpoch == contentEpoch; }
 			/**
-			 * @brief The runs of a_count elements a holder at a_held lacks, coalesced and clipped: a_run(first, count). All of
+			 * @brief The runs of a_count elements a holder at a_contentEpoch lacks, coalesced and clipped: a_run(first, count). All of
 			 * them when it holds nothing this journal can build on. Returns the elements sent.
 			 */
 			template <class Run>
-			std::uint64_t ForEachRun(std::uint64_t a_held, std::uint64_t a_count, Run&& a_run) const
+			std::uint64_t ForEachRun(std::uint64_t a_contentEpoch, std::uint64_t a_count, Run&& a_run) const
 			{
-				if (!a_count || Holds(a_held))
+				if (!a_count || Holds(a_contentEpoch))
 					return 0;
-				if (!version || a_held < floor || a_held > version) {
+				if (!contentEpoch || a_contentEpoch < floor || a_contentEpoch > contentEpoch) {
 					a_run(std::uint64_t{ 0 }, a_count);
 					return a_count;
 				}
@@ -133,7 +136,7 @@ namespace DCLF
 				if (reuseKeptStorage && entries.size() >= 128 && a_count <= (1u << 20) && a_count <= entries.size() * 64) {
 					std::vector<std::uint64_t> bits(static_cast<std::size_t>((a_count + 63) / 64), 0);
 					for (const auto& entry : entries) {
-						if (entry.version <= a_held || !entry.count || entry.first >= a_count)
+						if (entry.contentEpoch <= a_contentEpoch || !entry.count || entry.first >= a_count)
 							continue;
 						const auto lastIndex = entry.first + std::min(entry.count, a_count - entry.first) - 1;
 						const auto firstWord = entry.first / 64, lastWord = lastIndex / 64;
@@ -169,7 +172,7 @@ namespace DCLF
 				std::vector<std::pair<std::uint64_t, std::uint64_t>> runs;
 				runs.reserve(entries.size());
 				for (const auto& entry : entries)
-					if (entry.version > a_held)
+					if (entry.contentEpoch > a_contentEpoch)
 						runs.emplace_back(entry.first, entry.first + entry.count);
 				std::sort(runs.begin(), runs.end());
 				std::uint64_t sent = 0;
@@ -192,19 +195,21 @@ namespace DCLF
 		static constexpr std::size_t kMaxEntries = 1u << 16;
 
 		/**
-		 * @brief A build's start: forgets the changes a holder at a_oldestHeld has (the oldest holder still counted), and
-		 * opens the build, which takes a new version at its first change.
+		 * @brief A build's start: forgets the changes a holder at a_oldestContentEpoch has (the oldest holder still counted), and
+		 * opens the build, which takes a new content epoch at its first change.
 		 */
-		void BeginBuild(std::uint64_t a_oldestHeld)
+		void BeginBuild(std::uint64_t a_oldestContentEpoch)
 		{
-			if (a_oldestHeld > floor && a_oldestHeld <= version) {
-				std::erase_if(entries, [&](const Entry& a_entry) { return a_entry.version <= a_oldestHeld; });
-				floor = a_oldestHeld;
+			// Clamped to the current epoch: ~0 (no holder holds anything) lets every change go.
+			a_oldestContentEpoch = std::min(a_oldestContentEpoch, contentEpoch);
+			if (a_oldestContentEpoch > floor) {
+				std::erase_if(entries, [&](const Entry& a_entry) { return a_entry.contentEpoch <= a_oldestContentEpoch; });
+				floor = a_oldestContentEpoch;
 			}
 			if (entries.size() > kMaxEntries) {
 				// A holder that fell this far behind is sent everything.
 				entries.clear();
-				floor = version;
+				floor = contentEpoch;
 			}
 			changed = false;
 		}
@@ -214,10 +219,10 @@ namespace DCLF
 			Touch();
 			if (markedAt.size() <= a_index)
 				markedAt.resize(static_cast<std::size_t>(a_index) + 1, 0);
-			if (markedAt[a_index] == version)
+			if (markedAt[a_index] == contentEpoch)
 				return;
-			markedAt[a_index] = version;
-			entries.push_back({ version, a_index, 1 });
+			markedAt[a_index] = contentEpoch;
+			entries.push_back({ contentEpoch, a_index, 1 });
 		}
 		/** @brief A range changed. */
 		void MarkRange(std::uint64_t a_first, std::uint64_t a_count)
@@ -225,34 +230,34 @@ namespace DCLF
 			if (!a_count)
 				return;
 			Touch();
-			entries.push_back({ version, a_first, a_count });
+			entries.push_back({ contentEpoch, a_first, a_count });
 		}
-		/** @brief Everything changed: every holder is sent everything. The version counts on, so no old one is taken for it. */
+		/** @brief Everything changed: every holder is sent everything. The content epoch counts on, so no old one is taken for it. */
 		void Resync()
 		{
 			Touch();
 			entries.clear();
-			floor = version;
+			floor = contentEpoch;
 		}
-		std::uint64_t Version() const { return version; }
+		std::uint64_t ContentEpoch() const { return contentEpoch; }
 		/** @brief Whether this build changed anything. */
 		bool Changed() const { return changed; }
-		Snapshot Take() const { return { version, floor, entries }; }
+		Snapshot Take() const { return { contentEpoch, floor, entries }; }
 
 	private:
 		void Touch()
 		{
 			if (!changed) {
-				++version;
+				++contentEpoch;
 				changed = true;
 			}
 		}
 
-		std::uint64_t version = 0;
+		std::uint64_t contentEpoch = 0;
 		std::uint64_t floor = 0;
 		bool changed = false;
 		std::vector<Entry> entries;
-		std::vector<std::uint64_t> markedAt;  // per element: the version that last marked it
+		std::vector<std::uint64_t> markedAt;  // per element: the content epoch that last marked it
 	};
 
 	/** @brief A build's view of a kept array: the elements (shared with the array, copy-on-write) and their changes. */
@@ -266,19 +271,19 @@ namespace DCLF
 
 		std::size_t Count() const { return elements ? elements->size() : 0; }
 		const T* At(std::size_t a_index) const { return elements && a_index < elements->size() ? &(*elements)[a_index] : nullptr; }
-		std::uint64_t Version() const { return changes.version; }
+		std::uint64_t ContentEpoch() const { return changes.contentEpoch; }
 		/**
-		 * @brief The uploads a holder at a_held lacks: a_emit(data, bytes, offset). Returns the bytes sent. A holder of a_capacity
-		 * elements is sent none past them (they wait for its growth: it holds a_held's version of them only once it holds them all).
+		 * @brief The uploads a holder at a_contentEpoch lacks: a_emit(data, bytes, offset). Returns the bytes sent. A holder of a_capacity
+		 * elements is sent none past them (they wait for its growth: it is at a_contentEpoch for them only once it holds them all).
 		 */
 		template <class Emit>
-		std::size_t Emit(std::uint64_t a_held, Emit&& a_emit, std::size_t a_capacity = ~std::size_t(0)) const
+		std::size_t Emit(std::uint64_t a_contentEpoch, Emit&& a_emit, std::size_t a_capacity = ~std::size_t(0)) const
 		{
 			if (!elements)
 				return 0;
 			const auto* data = elements->data();
 			std::size_t sent = 0;
-			changes.ForEachRun(a_held, Count(), [&](std::uint64_t a_first, std::uint64_t a_count) {
+			changes.ForEachRun(a_contentEpoch, Count(), [&](std::uint64_t a_first, std::uint64_t a_count) {
 				if (a_first >= a_capacity)
 					return;
 				a_count = std::min<std::uint64_t>(a_count, a_capacity - a_first);
@@ -292,16 +297,16 @@ namespace DCLF
 
 	/**
 	 * @brief An array kept across builds and mirrored by GPU buffers: copy-on-write against the views the payloads hold,
-	 * and journalled (ChangeJournal), so each buffer is sent what changed since the version it holds.
+	 * and journalled (ChangeJournal), so each buffer is sent what changed since the content epoch it holds.
 	 */
 	template <class T>
 	class KeptArray
 	{
 	public:
 		/** @brief A build's start (ChangeJournal::BeginBuild). */
-		void BeginBuild(std::uint64_t a_oldestHeld)
+		void BeginBuild(std::uint64_t a_oldestContentEpoch)
 		{
-			journal.BeginBuild(a_oldestHeld);
+			journal.BeginBuild(a_oldestContentEpoch);
 			copied = false;
 		}
 		const std::vector<T>& Get() const { return *elements; }
@@ -346,19 +351,39 @@ namespace DCLF
 			journal.Mark(a_index);
 			return true;
 		}
+		/**
+		 * @brief Writes an element and marks only those of its a_parts equal slices whose bytes differ: an array written this way has a
+		 * journal of parts (element i's part p is i * a_parts + p), and its views are emitted by part. Returns the parts marked.
+		 */
+		std::size_t SetParts(std::size_t a_index, const T& a_value, std::size_t a_parts)
+		{
+			static_assert(std::is_trivially_copyable_v<T>);
+			const std::size_t partBytes = sizeof(T) / a_parts;
+			const auto* held = reinterpret_cast<const std::byte*>(&(*elements)[a_index]);
+			const auto* value = reinterpret_cast<const std::byte*>(&a_value);
+			std::size_t marked = 0;
+			for (std::size_t p = 0; p < a_parts; ++p)
+				if (std::memcmp(held + p * partBytes, value + p * partBytes, partBytes) != 0) {
+					journal.Mark(a_index * a_parts + p);
+					++marked;
+				}
+			if (marked)
+				Mutable()[a_index] = a_value;
+			return marked;
+		}
 		void Mark(std::size_t a_index) { journal.Mark(a_index); }
 		void MarkRange(std::uint64_t a_first, std::uint64_t a_count) { journal.MarkRange(a_first, a_count); }
 		void Resync() { journal.Resync(); }
-		/** @brief Empty, and every holder sent everything again (the versions count on). */
+		/** @brief Empty, and every holder sent everything again (the content epoch counts on). */
 		void Clear()
 		{
 			Mutable().clear();
 			journal.Resync();
 		}
-		std::uint64_t Version() const { return journal.Version(); }
+		std::uint64_t ContentEpoch() const { return journal.ContentEpoch(); }
 		bool Changed() const { return journal.Changed(); }
 		KeptView<T> View() const { return { elements, journal.Take() }; }
-		/** @brief The elements themselves, for a view that is not journalled (version 0: sent whole). */
+		/** @brief The elements themselves, for a view that is not journalled (content epoch 0: sent whole). */
 		std::shared_ptr<const std::vector<T>> Shared() const { return elements; }
 
 	private:
@@ -366,31 +391,6 @@ namespace DCLF
 		std::vector<std::shared_ptr<std::vector<T>>> spare;
 		ChangeJournal journal;
 		bool copied = false;
-	};
-
-	/**
-	 * @brief The versions several buffers mirroring one kept array hold (a ring of them, one per frame in flight), each
-	 * set by the uploader that fills it, read by the array's builds for the oldest (ChangeJournal::BeginBuild). Lock-free: an
-	 * uploader raises its entry once its upload is queued; a build that reads an older value only keeps more of the journal.
-	 */
-	template <std::size_t N>
-	class KeptHolders
-	{
-	public:
-		void Set(std::size_t a_holder, std::uint64_t a_version) { held[a_holder].store(a_version, std::memory_order_release); }
-		std::uint64_t Get(std::size_t a_holder) const { return held[a_holder].load(std::memory_order_acquire); }
-		/** @brief The oldest version any holder has (0 while one holds nothing: the journal is kept whole). */
-		std::uint64_t Oldest() const
-		{
-			std::uint64_t oldest = ~std::uint64_t{ 0 };
-			for (const auto& version : held)
-				oldest = std::min(oldest, version.load(std::memory_order_acquire));
-			return oldest;
-		}
-		static constexpr std::size_t Size() { return N; }
-
-	private:
-		std::array<std::atomic<std::uint64_t>, N> held{};
 	};
 
 	/** @brief A list of indices with a mark per index, so each is listed once. */
