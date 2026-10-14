@@ -1,65 +1,14 @@
 {
  "legacyEdges": {
-  "Core -> Scene": 1,
-  "Draws -> Engine": 32,
-  "Draws -> Scene": 47,
-  "Engine -> Draws": 3,
+  "Core -> Engine": 32,
+  "Core -> Scene": 48,
   "Engine -> Scene": 33,
-  "Scene -> Draws": 15,
   "Scene -> Engine": 41
  },
  "overThresholds": {
-  "DCLF::Diagnostics::CheckBuildParity": [
-   228,
-   76
-  ],
-  "DCLF::Diagnostics::ReadFadeLog": [
-   158,
-   64
-  ],
-  "DCLF::Diagnostics::FoliageParityReport": [
-   167,
-   61
-  ],
-  "DCLF::Diagnostics::CheckShapeCapacities": [
-   92,
-   42
-  ],
-  "DCLF::Diagnostics::CheckSetParity": [
-   387,
-   226
-  ],
-  "DCLF::Diagnostics::ReadTreeWind": [
-   237,
-   109
-  ],
-  "DCLF::Diagnostics::LightCulls::Registered": [
-   83,
-   48
-  ],
-  "DCLF::Diagnostics::PortalParity::Check": [
-   197,
-   100
-  ],
   "DCLF::AuditTreeLod": [
    83,
    41
-  ],
-  "DrawcallLimitFix::ProbeOpaqueTarget": [
-   196,
-   55
-  ],
-  "DCLF::Reports::Stats": [
-   229,
-   95
-  ],
-  "DCLF::Reports::Coordinator": [
-   217,
-   90
-  ],
-  "DCLF::Reports::SceneLines": [
-   153,
-   79
   ],
   "DCLF::CaptureParity::OnNativeLightingDraw": [
    205,
@@ -69,37 +18,57 @@
    171,
    75
   ],
+  "DCLF::DeriveEffectDescriptors": [
+   85,
+   47
+  ],
+  "DCLF::DeriveLightingDescriptors": [
+   141,
+   79
+  ],
   "DCLF::Diagnostics::Check": [
    123,
    67
   ],
-  "DCLF::Diagnostics::OnTablesReplayed": [
-   103,
-   68
+  "DCLF::Diagnostics::CheckBuildParity": [
+   228,
+   76
+  ],
+  "DCLF::Diagnostics::CheckSetParity": [
+   387,
+   226
+  ],
+  "DCLF::Diagnostics::CheckShapeCapacities": [
+   92,
+   42
   ],
   "DCLF::Diagnostics::CheckWalkParity": [
    175,
    82
   ],
-  "DCLF::FrameValues::Impl::CheckEveryMover": [
-   128,
-   60
-  ],
-  "DCLF::FrameValues::Impl::Sample": [
-   285,
-   91
-  ],
-  "DCLF::FrameValues::Kick": [
-   198,
+  "DCLF::Diagnostics::FoliageParityReport": [
+   167,
    61
   ],
-  "DCLF::Draws::MainBuild::PackMaterialRow": [
-   97,
-   44
+  "DCLF::Diagnostics::LightCulls::Registered": [
+   83,
+   48
   ],
-  "DCLF::Draws::MainBuild::UpdateRegionPairs": [
-   176,
-   57
+  "DCLF::Diagnostics::OnTablesReplayed": [
+   103,
+   68
+  ],
+  "DCLF::Diagnostics::PortalParity::Check": [
+   197,
+   100
+  ],
+  "DCLF::Diagnostics::ReadFadeLog": [
+   158,
+   64
+  ],
+  "DCLF::Diagnostics::ReadTreeWind": [
+   237,
+   109
   ],
   "DCLF::Draws::BuildKeptShadow": [
    415,
@@ -113,33 +82,13 @@
    186,
    61
   ],
-  "DCLF::IndirectDraws::Impl::Setup": [
-   209,
-   53
+  "DCLF::Draws::UpdateIndexPool": [
+   151,
+   40
   ],
-  "DCLF::IndirectDraws::Impl::CommitMainPayload": [
-   461,
-   127
-  ],
-  "DCLF::JudgeObject": [
-   92,
-   48
-  ],
-  "DCLF::PrepareWrites": [
-   145,
-   56
-  ],
-  "DCLF::ReferenceWrites": [
-   124,
-   67
-  ],
-  "DCLF::IndirectDraws::BeginFirstPersonFrame": [
-   91,
-   42
-  ],
-  "DCLF::IndirectDraws::Impl::PackFrameBlocks": [
-   86,
-   49
+  "DCLF::Eligibility::Static": [
+   89,
+   58
   ],
   "DCLF::IndirectDraws::CaptureShadowView": [
    164,
@@ -149,73 +98,49 @@
    281,
    78
   ],
-  "DCLF::Draws::UpdateIndexPool": [
-   151,
-   40
-  ],
-  "DCLF::Draws::MainOpaquePass::Record": [
-   183,
+  "DCLF::JudgeObject": [
+   92,
    48
-  ],
-  "DCLF::IndirectDraws::Impl::AssembleRevision": [
-   204,
-   75
-  ],
-  "DCLF::IndirectDraws::DecideCoverage": [
-   52,
-   50
-  ],
-  "DCLF::IndirectDraws::Impl::MakeRevision": [
-   247,
-   100
-  ],
-  "DCLF::IndirectDraws::Impl::RunAhead": [
-   123,
-   33
-  ],
-  "DCLF::DrawPipelines::Impl::Initialize": [
-   184,
-   49
-  ],
-  "DCLF::PulledLightingSource": [
-   113,
-   43
-  ],
-  "DCLF::SpirvReflection::Parse": [
-   157,
-   84
-  ],
-  "DCLF::Scene::HiddenStoreSites": [
-   470,
-   1
-  ],
-  "DCLF::ParticleSnapshots::Expand": [
-   127,
-   30
-  ],
-  "DCLF::PrimaryCull::PlanEntry": [
-   75,
-   47
-  ],
-  "DCLF::PrimaryCull::CurrentListFilter": [
-   133,
-   54
   ],
   "DCLF::LightSelection::Select": [
    93,
    41
   ],
-  "DCLF::Scene::Coordinator::BuildAccumulatePhase": [
-   369,
-   97
+  "DCLF::MaterialPort::EvaluateVanilla": [
+   212,
+   60
   ],
-  "DCLF::Scene::Coordinator::EvaluateJoin": [
-   91,
-   69
+  "DCLF::ParticleSnapshots::Expand": [
+   127,
+   30
   ],
-  "DCLF::Scene::Coordinator::RefreshShadowSets": [
-   160,
-   52
+  "DCLF::PrepareWrites": [
+   145,
+   56
+  ],
+  "DCLF::PrimaryCull::CurrentListFilter": [
+   133,
+   54
+  ],
+  "DCLF::PrimaryCull::PlanEntry": [
+   75,
+   47
+  ],
+  "DCLF::ReferenceWrites": [
+   124,
+   67
+  ],
+  "DCLF::Reports::Coordinator": [
+   217,
+   90
+  ],
+  "DCLF::Reports::SceneLines": [
+   153,
+   79
+  ],
+  "DCLF::Reports::Stats": [
+   229,
+   95
   ],
   "DCLF::Scene::Coordinator::ApplyBatch": [
    202,
@@ -225,21 +150,9 @@
    146,
    65
   ],
-  "DCLF::Scene::Coordinator::RefreshCategoryNodes": [
-   128,
-   57
-  ],
-  "DCLF::Scene::Coordinator::UpdateGates": [
-   80,
-   41
-  ],
-  "DCLF::Scene::Coordinator::ResolveMaterialBinding": [
-   94,
-   46
-  ],
-  "DCLF::Scene::Coordinator::KeepResidentsAlive": [
-   121,
-   38
+  "DCLF::Scene::Coordinator::BuildAccumulatePhase": [
+   369,
+   97
   ],
   "DCLF::Scene::Coordinator::CheckPacedPublication": [
    64,
@@ -249,21 +162,13 @@
    234,
    94
   ],
-  "DCLF::Scene::Coordinator::PublishTables": [
-   382,
-   91
-  ],
-  "DCLF::Scene::Coordinator::RunSceneWork": [
-   126,
-   11
-  ],
-  "DCLF::Scene::Coordinator::UpdateSharedBindings": [
-   167,
-   58
-  ],
   "DCLF::Scene::Coordinator::DeltaWalk": [
    198,
    54
+  ],
+  "DCLF::Scene::Coordinator::EvaluateJoin": [
+   91,
+   69
   ],
   "DCLF::Scene::Coordinator::EvaluateRound": [
    137,
@@ -277,6 +182,10 @@
    151,
    50
   ],
+  "DCLF::Scene::Coordinator::KeepResidentsAlive": [
+   121,
+   38
+  ],
   "DCLF::Scene::Coordinator::MergeEntry": [
    132,
    61
@@ -285,29 +194,49 @@
    204,
    68
   ],
+  "DCLF::Scene::Coordinator::PublishTables": [
+   382,
+   91
+  ],
+  "DCLF::Scene::Coordinator::RefreshCategoryNodes": [
+   128,
+   57
+  ],
+  "DCLF::Scene::Coordinator::RefreshShadowSets": [
+   160,
+   52
+  ],
+  "DCLF::Scene::Coordinator::ResolveMaterialBinding": [
+   94,
+   46
+  ],
+  "DCLF::Scene::Coordinator::RunSceneWork": [
+   126,
+   11
+  ],
+  "DCLF::Scene::Coordinator::UpdateGates": [
+   80,
+   41
+  ],
+  "DCLF::Scene::Coordinator::UpdateSharedBindings": [
+   167,
+   58
+  ],
   "DCLF::Scene::FrameView::CaptureCategories": [
    134,
    62
   ],
-  "DCLF::Eligibility::Static": [
-   89,
-   58
+  "DCLF::Scene::HiddenStoreSites": [
+   470,
+   1
   ],
   "DCLF::SceneMirror::ApplyCapture": [
    78,
    43
   ],
-  "DCLF::DeriveEffectDescriptors": [
-   85,
-   47
-  ],
-  "DCLF::DeriveLightingDescriptors": [
-   141,
-   79
-  ],
-  "DCLF::MaterialPort::EvaluateVanilla": [
-   212,
-   60
+  "DrawcallLimitFix::ProbeOpaqueTarget": [
+   196,
+   55
   ]
  }
 }

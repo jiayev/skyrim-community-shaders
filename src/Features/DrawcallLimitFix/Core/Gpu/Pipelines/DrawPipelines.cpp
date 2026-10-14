@@ -337,6 +337,135 @@ namespace DCLF
 				layout.bindings.push_back(rhi::InputBindingDesc{ 1, 16, rhi::InputRate::PerVertex, 1 });
 			return layout;
 		}
+
+		// Initialize's pipeline layout ranges.
+		rhi::LayoutBindingRange LayoutRange(std::uint32_t a_binding, std::uint32_t a_count, rhi::ShaderStage a_stage, rhi::LayoutRangeSource a_source, std::size_t a_offset,
+			bool a_samplers = false)
+		{
+			rhi::LayoutBindingRange range{};
+			range.set = 0;
+			range.binding = a_binding;
+			range.count = a_count;
+			range.visibility = a_stage;
+			range.source = a_source;
+			range.recordOffset = static_cast<std::uint32_t>(a_offset);
+			range.samplers = a_samplers;
+			return range;
+		}
+		// A range whose record (or pushed address) is at a_word of push range a_root.
+		rhi::LayoutBindingRange RangeFrom(rhi::LayoutBindingRange a_range, std::uint32_t a_root, std::uint32_t a_word)
+		{
+			a_range.addressRootIndex = a_root;
+			a_range.addressOffset32 = a_word;
+			return a_range;
+		}
+		rhi::LayoutBindingRange PushedRange(std::uint32_t a_binding, rhi::ShaderStage a_stage, std::uint32_t a_root, std::uint32_t a_word)
+		{
+			return RangeFrom(LayoutRange(a_binding, 1, a_stage, rhi::LayoutRangeSource::PushAddress, 0), a_root, a_word);
+		}
+		rhi::LayoutBindingRange FromMaterialRow(rhi::LayoutBindingRange a_range) { return RangeFrom(a_range, 0, kDrawPushMaterialRow); }
+		rhi::LayoutBindingRange FromFrameRecord(rhi::LayoutBindingRange a_range) { return RangeFrom(a_range, 1, kFramePushRecord); }
+
+		// The main pass: pass-wide blocks by push address, b0/b1/b2/b4 from the draw's rows, the rest from the frame record.
+		std::vector<rhi::LayoutBindingRange> MainLayoutRanges(bool a_pulled)
+		{
+			// A pulled draw (Z-prepass plain draws) reads its rows itself (DCLF_PULLED): no row ranges.
+			auto fromRow = [](rhi::LayoutBindingRange a_range) { return RangeFrom(a_range, 0, kDrawPushPipelineRow); };
+			std::vector<rhi::LayoutBindingRange> mainRanges;
+			std::uint32_t word = kFramePushRegisters;
+			for (const bool pixel : { false, true }) {
+				const std::uint32_t mask = pixel ? kFramePushPS : kFramePushVS;
+				const auto stage = pixel ? rhi::ShaderStage::Pixel : rhi::ShaderStage::Vertex;
+				const std::size_t frame = pixel ? offsetof(DrawBindings, pixelConstants) : offsetof(DrawBindings, vertexConstants);
+				for (std::uint32_t r = 0; r < kConstantBufferRegisters; ++r) {
+					const std::uint32_t b = kBindingShiftB + r;
+					const auto address = rhi::LayoutRangeSource::IndirectAddress;
+					if ((mask >> r) & 1) {
+						mainRanges.push_back(PushedRange(b, stage, 1, word));
+						word += 2;
+					} else if (a_pulled && (r <= 2 || r == 4)) {
+						continue;
+					} else if (r == 0) {
+						mainRanges.push_back(fromRow(LayoutRange(b, 1, stage, address,
+							kPipelineRowHeader + (pixel ? offsetof(PipelineRowHeader, psTechnique) : offsetof(PipelineRowHeader, vsTechnique)))));
+					} else if (r == 1) {
+						mainRanges.push_back(FromMaterialRow(LayoutRange(b, 1, stage, address,
+							kMaterialRowHeader + (pixel ? offsetof(MaterialRowHeader, psMaterial) : offsetof(MaterialRowHeader, vsMaterial)))));
+					} else if (r == 2) {
+						mainRanges.push_back(fromRow(LayoutRange(b, 1, stage, address,
+							kPipelineRowHeader + (pixel ? offsetof(PipelineRowHeader, psGeometry) : offsetof(PipelineRowHeader, vsGeometry)))));
+					} else if (r == 4) {
+						mainRanges.push_back(fromRow(LayoutRange(b, 1, stage, address,
+							kPipelineRowHeader + (pixel ? offsetof(PipelineRowHeader, psPermutation) : offsetof(PipelineRowHeader, vsPermutation)))));
+					} else {
+						mainRanges.push_back(FromFrameRecord(LayoutRange(b, 1, stage, address, frame + 8 * std::size_t{ r })));
+					}
+				}
+			}
+			// Textures and samplers: t0-t15 and the features' from the material row, except the shadow mask (t14, pipeline row); the rest
+			// from the frame record.
+			const auto index = rhi::LayoutRangeSource::IndirectIndex;
+			const auto pixelStage = rhi::ShaderStage::Pixel;
+			for (std::uint32_t t = 0; t < kPixelTextureSlots; ++t) {
+				if (a_pulled) {
+					continue;
+				} else if (t == kShadowMaskSlot) {
+					mainRanges.push_back(fromRow(LayoutRange(kBindingShiftT + t, 1, pixelStage, index, kPipelineRowHeader + offsetof(PipelineRowHeader, shadowMask))));
+					mainRanges.push_back(fromRow(LayoutRange(kBindingShiftS + t, 1, pixelStage, index, kPipelineRowHeader + offsetof(PipelineRowHeader, shadowMaskSampler), true)));
+				} else {
+					mainRanges.push_back(FromMaterialRow(LayoutRange(kBindingShiftT + t, 1, pixelStage, index, kMaterialRowHeader + offsetof(MaterialRowHeader, textures) + 4 * std::size_t{ t })));
+					mainRanges.push_back(FromMaterialRow(LayoutRange(kBindingShiftS + t, 1, pixelStage, index, kMaterialRowHeader + offsetof(MaterialRowHeader, samplers) + 4 * std::size_t{ t }, true)));
+				}
+			}
+			std::uint32_t first = kPixelTextureSlots;
+			for (std::uint32_t f = 0; f < kFeatureMaterialTextures; ++f) {
+				const std::uint32_t t = kFeatureMaterialRegisters[f];
+				if (t > first)
+					mainRanges.push_back(FromFrameRecord(LayoutRange(kBindingShiftT + first, t - first, pixelStage, index, offsetof(DrawBindings, textures) + 4 * std::size_t{ first })));
+				if (!a_pulled)
+					mainRanges.push_back(FromMaterialRow(LayoutRange(kBindingShiftT + t, 1, pixelStage, index, kMaterialRowHeader + offsetof(MaterialRowHeader, features) + 4 * std::size_t{ f })));
+				first = t + 1;
+			}
+			mainRanges.push_back(FromFrameRecord(LayoutRange(kBindingShiftT + first, kTextureRegisters - first, pixelStage, index, offsetof(DrawBindings, textures) + 4 * std::size_t{ first })));
+			// The vertex stage's buffers (t121-t127), from the frame record.
+			mainRanges.push_back(FromFrameRecord(LayoutRange(kVertexTextureBinding, kVertexTextureCount, rhi::ShaderStage::Vertex, index,
+				offsetof(DrawBindings, textures) + 4 * std::size_t{ kShadingBufferRegister })));
+			return mainRanges;
+		}
+
+		// The shadow views': the draw's words name its material row, the view's push words and frame record the rest.
+		std::vector<rhi::LayoutBindingRange> ShadowLayoutRanges()
+		{
+			const auto index = rhi::LayoutRangeSource::IndirectIndex;
+			const auto pixelStage = rhi::ShaderStage::Pixel;
+			auto fromShadowFrameRecord = [](rhi::LayoutBindingRange a_range) { return RangeFrom(a_range, 1, kShadowPushFrameRecord); };
+			std::vector<rhi::LayoutBindingRange> shadowRanges;
+			for (const bool pixel : { false, true }) {
+				const auto stage = pixel ? rhi::ShaderStage::Pixel : rhi::ShaderStage::Vertex;
+				for (std::uint32_t r = 0; r < kConstantBufferRegisters; ++r) {
+					const std::uint32_t b = kBindingShiftB + r;
+					if (!pixel && r == 1)
+						shadowRanges.push_back(PushedRange(b, stage, 0, kDrawPushMaterialRow));  // the material row itself
+					else if (r == 0)
+						shadowRanges.push_back(PushedRange(b, stage, 1, kShadowPushViewBlock));
+					else if (r == kPerFrameVertexRegister)
+						shadowRanges.push_back(PushedRange(b, stage, 1, kShadowPushPerFrame));
+					else if (r == kSharedDataRegister)
+						shadowRanges.push_back(PushedRange(b, stage, 1, kShadowPushSharedData));
+					else if (r == kFeatureDataRegister)
+						shadowRanges.push_back(PushedRange(b, stage, 1, kShadowPushFeatureData));
+					else
+						shadowRanges.push_back(PushedRange(b, stage, 1, kShadowPushZeros));
+				}
+			}
+			// The diffuse (t0) from the draw's row; t1 and up, the samplers and the vertex stage's buffers from the frame record.
+			shadowRanges.push_back(FromMaterialRow(LayoutRange(kBindingShiftT, 1, pixelStage, index, kShadowRowDiffuseOffset)));
+			shadowRanges.push_back(fromShadowFrameRecord(LayoutRange(kBindingShiftT + 1, kTextureRegisters - 1, pixelStage, index, offsetof(DrawBindings, textures) + 4)));
+			shadowRanges.push_back(fromShadowFrameRecord(LayoutRange(kBindingShiftS, kSamplerRegisters, pixelStage, index, offsetof(DrawBindings, samplers), true)));
+			shadowRanges.push_back(fromShadowFrameRecord(LayoutRange(kVertexTextureBinding, kVertexTextureCount, rhi::ShaderStage::Vertex, index,
+				offsetof(DrawBindings, textures) + 4 * std::size_t{ kShadingBufferRegister })));
+			return shadowRanges;
+		}
 	}
 
 	struct DrawPipelines::Impl
@@ -971,96 +1100,8 @@ namespace DCLF
 			pushConstants[1].set = 0;
 			pushConstants[1].binding = kFramePushBinding;
 
-			auto range = [](std::uint32_t a_binding, std::uint32_t a_count, rhi::ShaderStage a_stage, rhi::LayoutRangeSource a_source, std::size_t a_offset, bool a_samplers = false) {
-				rhi::LayoutBindingRange range{};
-				range.set = 0;
-				range.binding = a_binding;
-				range.count = a_count;
-				range.visibility = a_stage;
-				range.source = a_source;
-				range.recordOffset = static_cast<std::uint32_t>(a_offset);
-				range.samplers = a_samplers;
-				return range;
-			};
-			// A range whose record (or pushed address) is at a_word of push range a_root.
-			auto from = [](rhi::LayoutBindingRange a_range, std::uint32_t a_root, std::uint32_t a_word) {
-				a_range.addressRootIndex = a_root;
-				a_range.addressOffset32 = a_word;
-				return a_range;
-			};
-			auto pushed = [&](std::uint32_t a_binding, rhi::ShaderStage a_stage, std::uint32_t a_root, std::uint32_t a_word) {
-				return from(range(a_binding, 1, a_stage, rhi::LayoutRangeSource::PushAddress, 0), a_root, a_word);
-			};
-			auto fromMaterialRow = [&](rhi::LayoutBindingRange a_range) { return from(a_range, 0, kDrawPushMaterialRow); };
-			auto fromFrameRecord = [&](rhi::LayoutBindingRange a_range) { return from(a_range, 1, kFramePushRecord); };
-
-			// The main pass: pass-wide blocks by push address, b0/b1/b2/b4 from the draw's rows, the rest from the frame record.
-			auto buildRanges = [&](bool a_pulled) {
-			// A pulled draw (Z-prepass plain draws) reads its rows itself (DCLF_PULLED): no row ranges.
-			auto fromRow = [&](rhi::LayoutBindingRange a_range) { return from(a_range, 0, kDrawPushPipelineRow); };
-			std::vector<rhi::LayoutBindingRange> mainRanges;
-			std::uint32_t word = kFramePushRegisters;
-			for (const bool pixel : { false, true }) {
-				const std::uint32_t mask = pixel ? kFramePushPS : kFramePushVS;
-				const auto stage = pixel ? rhi::ShaderStage::Pixel : rhi::ShaderStage::Vertex;
-				const std::size_t frame = pixel ? offsetof(DrawBindings, pixelConstants) : offsetof(DrawBindings, vertexConstants);
-				for (std::uint32_t r = 0; r < kConstantBufferRegisters; ++r) {
-					const std::uint32_t b = kBindingShiftB + r;
-					const auto address = rhi::LayoutRangeSource::IndirectAddress;
-					if ((mask >> r) & 1) {
-						mainRanges.push_back(pushed(b, stage, 1, word));
-						word += 2;
-					} else if (a_pulled && (r <= 2 || r == 4)) {
-						continue;
-					} else if (r == 0) {
-						mainRanges.push_back(fromRow(range(b, 1, stage, address,
-							kPipelineRowHeader + (pixel ? offsetof(PipelineRowHeader, psTechnique) : offsetof(PipelineRowHeader, vsTechnique)))));
-					} else if (r == 1) {
-						mainRanges.push_back(fromMaterialRow(range(b, 1, stage, address,
-							kMaterialRowHeader + (pixel ? offsetof(MaterialRowHeader, psMaterial) : offsetof(MaterialRowHeader, vsMaterial)))));
-					} else if (r == 2) {
-						mainRanges.push_back(fromRow(range(b, 1, stage, address,
-							kPipelineRowHeader + (pixel ? offsetof(PipelineRowHeader, psGeometry) : offsetof(PipelineRowHeader, vsGeometry)))));
-					} else if (r == 4) {
-						mainRanges.push_back(fromRow(range(b, 1, stage, address,
-							kPipelineRowHeader + (pixel ? offsetof(PipelineRowHeader, psPermutation) : offsetof(PipelineRowHeader, vsPermutation)))));
-					} else {
-						mainRanges.push_back(fromFrameRecord(range(b, 1, stage, address, frame + 8 * std::size_t{ r })));
-					}
-				}
-			}
-			// Textures and samplers: t0-t15 and the features' from the material row, except the shadow mask (t14, pipeline row); the rest
-			// from the frame record.
-			const auto index = rhi::LayoutRangeSource::IndirectIndex;
-			const auto pixelStage = rhi::ShaderStage::Pixel;
-			for (std::uint32_t t = 0; t < kPixelTextureSlots; ++t) {
-				if (a_pulled) {
-					continue;
-				} else if (t == kShadowMaskSlot) {
-					mainRanges.push_back(fromRow(range(kBindingShiftT + t, 1, pixelStage, index, kPipelineRowHeader + offsetof(PipelineRowHeader, shadowMask))));
-					mainRanges.push_back(fromRow(range(kBindingShiftS + t, 1, pixelStage, index, kPipelineRowHeader + offsetof(PipelineRowHeader, shadowMaskSampler), true)));
-				} else {
-					mainRanges.push_back(fromMaterialRow(range(kBindingShiftT + t, 1, pixelStage, index, kMaterialRowHeader + offsetof(MaterialRowHeader, textures) + 4 * std::size_t{ t })));
-					mainRanges.push_back(fromMaterialRow(range(kBindingShiftS + t, 1, pixelStage, index, kMaterialRowHeader + offsetof(MaterialRowHeader, samplers) + 4 * std::size_t{ t }, true)));
-				}
-			}
-			std::uint32_t first = kPixelTextureSlots;
-			for (std::uint32_t f = 0; f < kFeatureMaterialTextures; ++f) {
-				const std::uint32_t t = kFeatureMaterialRegisters[f];
-				if (t > first)
-					mainRanges.push_back(fromFrameRecord(range(kBindingShiftT + first, t - first, pixelStage, index, offsetof(DrawBindings, textures) + 4 * std::size_t{ first })));
-				if (!a_pulled)
-					mainRanges.push_back(fromMaterialRow(range(kBindingShiftT + t, 1, pixelStage, index, kMaterialRowHeader + offsetof(MaterialRowHeader, features) + 4 * std::size_t{ f })));
-				first = t + 1;
-			}
-			mainRanges.push_back(fromFrameRecord(range(kBindingShiftT + first, kTextureRegisters - first, pixelStage, index, offsetof(DrawBindings, textures) + 4 * std::size_t{ first })));
-			// The vertex stage's buffers (t121-t127), from the frame record.
-			mainRanges.push_back(fromFrameRecord(range(kVertexTextureBinding, kVertexTextureCount, rhi::ShaderStage::Vertex, index,
-				offsetof(DrawBindings, textures) + 4 * std::size_t{ kShadingBufferRegister })));
-			return mainRanges;
-			};
-			const auto mainRanges = buildRanges(false);
-			const auto zRanges = buildRanges(true);
+			const auto mainRanges = MainLayoutRanges(false);
+			const auto zRanges = MainLayoutRanges(true);
 			const rhi::PipelineLayoutDesc desc{ .ranges = rhi::Span<rhi::LayoutBindingRange>{ mainRanges.data(), static_cast<std::uint32_t>(mainRanges.size()) },
 				.pushConstants = { pushConstants, 2u }, .staticSamplers = {}, .flags = rhi::PF_AllowInputAssembler };
 			logger::info("[DCLF] main layout: {} ranges, {} frame push words", mainRanges.size(), kFramePushWords);
@@ -1077,37 +1118,10 @@ namespace DCLF
 				logger::error("[DCLF] Could not create the Z-prepass's pipeline layout");
 				return false;
 			}
-			const auto index = rhi::LayoutRangeSource::IndirectIndex;
-			const auto pixelStage = rhi::ShaderStage::Pixel;
 			// The shadow views (kShadowPushWords): the draw's words name its material row (pipeline row words unused), the view's the rest.
 			rhi::PushConstantRangeDesc shadowPush[2] = { drawPush, pushConstants[1] };
 			shadowPush[1].num32BitValues = kShadowPushWords;
-			auto fromShadowFrameRecord = [&](rhi::LayoutBindingRange a_range) { return from(a_range, 1, kShadowPushFrameRecord); };
-			std::vector<rhi::LayoutBindingRange> shadowRanges;
-			for (const bool pixel : { false, true }) {
-				const auto stage = pixel ? rhi::ShaderStage::Pixel : rhi::ShaderStage::Vertex;
-				for (std::uint32_t r = 0; r < kConstantBufferRegisters; ++r) {
-					const std::uint32_t b = kBindingShiftB + r;
-					if (!pixel && r == 1)
-						shadowRanges.push_back(pushed(b, stage, 0, kDrawPushMaterialRow));  // the material row itself
-					else if (r == 0)
-						shadowRanges.push_back(pushed(b, stage, 1, kShadowPushViewBlock));
-					else if (r == kPerFrameVertexRegister)
-						shadowRanges.push_back(pushed(b, stage, 1, kShadowPushPerFrame));
-					else if (r == kSharedDataRegister)
-						shadowRanges.push_back(pushed(b, stage, 1, kShadowPushSharedData));
-					else if (r == kFeatureDataRegister)
-						shadowRanges.push_back(pushed(b, stage, 1, kShadowPushFeatureData));
-					else
-						shadowRanges.push_back(pushed(b, stage, 1, kShadowPushZeros));
-				}
-			}
-			// The diffuse (t0) from the draw's row; t1 and up, the samplers and the vertex stage's buffers from the frame record.
-			shadowRanges.push_back(fromMaterialRow(range(kBindingShiftT, 1, pixelStage, index, kShadowRowDiffuseOffset)));
-			shadowRanges.push_back(fromShadowFrameRecord(range(kBindingShiftT + 1, kTextureRegisters - 1, pixelStage, index, offsetof(DrawBindings, textures) + 4)));
-			shadowRanges.push_back(fromShadowFrameRecord(range(kBindingShiftS, kSamplerRegisters, pixelStage, index, offsetof(DrawBindings, samplers), true)));
-			shadowRanges.push_back(fromShadowFrameRecord(range(kVertexTextureBinding, kVertexTextureCount, rhi::ShaderStage::Vertex, index,
-				offsetof(DrawBindings, textures) + 4 * std::size_t{ kShadingBufferRegister })));
+			const auto shadowRanges = ShadowLayoutRanges();
 			const rhi::PipelineLayoutDesc shadowDesc{ .ranges = rhi::Span<rhi::LayoutBindingRange>{ shadowRanges.data(), static_cast<std::uint32_t>(shadowRanges.size()) },
 				.pushConstants = { shadowPush, 2u }, .staticSamplers = {}, .flags = rhi::PF_AllowInputAssembler };
 			if (device.CreatePipelineLayout(shadowDesc, shadowLayout) != rhi::Result::Ok) {
@@ -1115,6 +1129,12 @@ namespace DCLF
 				logger::error("[DCLF] Could not create the shadow views' pipeline layout");
 				return false;
 			}
+			return CreateDrawSignatures();
+		}
+
+		/** @brief Initialize's command signatures (false when a required one could not be made). */
+		bool CreateDrawSignatures()
+		{
 			rhi::IndirectArg draw{};
 			draw.kind = rhi::IndirectArgKind::DrawIndexed;
 			rhi::CommandSignatureDesc drawDesc{};

@@ -115,36 +115,55 @@ namespace DCLF
 
 	bool IndirectDraws::DecideCoverage()
 	{
-		using R = Impl::SceneRevisions;
 		auto& rv = impl->revisions;
-		auto& reflection = impl->reflection;
-		auto& fp = impl->firstPerson;
 		if (failed) {
-			rv.covered.fill(true);
-			reflection.covered = true;
-			PassCapture::Get().SetReflectionCovered(true);
-			// Nothing of the first person's is withheld from a failed graph (the engine draws it).
-			fp.covered = false;
-			PassCapture::Get().SetFirstPersonCovered(false);
+			impl->CoverFailedGraph();
 			return true;
 		}
+		auto* host = RenderGraphRuntime::Get().Host();
+		impl->DecideEpochCoverage(host);
+		// The main epochs decide the frame's claims: without their recordings the frame is the engine's (FrameView::WithdrawSet).
+		// With the forward toggle on, the forward epoch's too: its members' passes are withheld with the frame's claims, and only the
+		// forward epoch draws them (a frame without its recording would lose them).
+		const bool main = rv.covered[kDepthShape] && rv.covered[kColourShape] && (!ActiveToggles().forward || rv.covered[Epoch::Forward]);
+		rv.withdrawn += main ? 0 : 1;
+		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
+		impl->DecideReflectionCoverage(host, main, frame);
+		impl->DecideFirstPersonCoverage(host, main, frame);
+		return main;
+	}
+
+	void IndirectDraws::Impl::CoverFailedGraph()
+	{
+		revisions.covered.fill(true);
+		reflection.covered = true;
+		PassCapture::Get().SetReflectionCovered(true);
+		// Nothing of the first person's is withheld from a failed graph (the engine draws it).
+		firstPerson.covered = false;
+		PassCapture::Get().SetFirstPersonCovered(false);
+	}
+
+	void IndirectDraws::Impl::DecideEpochCoverage(org::PersistentGraphHost* a_host)
+	{
+		using R = SceneRevisions;
+		auto& rv = revisions;
+		auto* host = a_host;
 		// Each epoch's recordings in the adopted snapshot's revision, of the graph as built now (the build point just ran), and its set the
 		// adopted one (its versions made current at the adoption) - when the snapshot is current (AdoptSnapshot found none stale), its
 		// draws are for the main resources and its payload is installed and ready (no payload: not covered; no fallback).
 		rv.covered.fill(false);
-		auto* host = RenderGraphRuntime::Get().Host();
 		const auto& active = rv.active;
 		const auto& versionsFragment = active ? active->Fragment(R::kVersionsSlot) : nullptr;
 		const auto versions = versionsFragment ? versionsFragment->Value<NamedVersions>() : nullptr;
-		const auto* payload = impl->InstalledPayload();
-		bool snapshot = impl->adoptedSnapshot && impl->adoptedSnapshot->drawsComplete && !impl->snapshotStale && payload && payload->Ready();
-		const bool current = host && snapshot && versions && versions.get() == impl->adoptedSet;
+		const auto* payload = InstalledPayload();
+		bool snapshot = adoptedSnapshot && adoptedSnapshot->drawsComplete && !snapshotStale && payload && payload->Ready();
+		const bool current = host && snapshot && versions && versions.get() == adoptedSet;
 		// The adopted draws embed the addresses of the versions its revision names (BuildSnapshotDraws builds them from the sealed set;
 		// Diagnostics' SnapshotSealed checks it): the first frame whose draws embed the versions a growth's adoption made current.
-		if (current && snapshot && impl->growthAdoptedFrame != ~0u) {
+		if (current && snapshot && growthAdoptedFrame != ~0u) {
 			const std::uint32_t frameNow = Scene::FrameView::Get().GetFrame();
-			impl->growthToDraws.push_back(frameNow >= impl->growthAdoptedFrame ? frameNow - impl->growthAdoptedFrame : 0u);
-			impl->growthAdoptedFrame = ~0u;
+			growthToDraws.push_back(frameNow >= growthAdoptedFrame ? frameNow - growthAdoptedFrame : 0u);
+			growthAdoptedFrame = ~0u;
 		}
 		if (current && snapshot)
 			for (std::uint32_t e = 0; e < R::kEpochs; ++e) {
@@ -155,34 +174,37 @@ namespace DCLF
 			}
 		for (std::uint32_t e = 0; e < R::kEpochs; ++e)
 			rv.uncovered[e] += rv.covered[e] ? 0 : 1;
-		// The main epochs decide the frame's claims: without their recordings the frame is the engine's (FrameView::WithdrawSet).
-		// With the forward toggle on, the forward epoch's too: its members' passes are withheld with the frame's claims, and only the
-		// forward epoch draws them (a frame without its recording would lose them).
-		const bool main = rv.covered[kDepthShape] && rv.covered[kColourShape] && (!ActiveToggles().forward || rv.covered[Epoch::Forward]);
-		rv.withdrawn += main ? 0 : 1;
+	}
+
+	void IndirectDraws::Impl::DecideReflectionCoverage(org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame)
+	{
 		// The faces' withholding (PassCapture), before the engine renders them: the claims stand and the cube the epoch draws into is
 		// in the graph as built (its import, at the epoch, is built at the next build point).
-		const auto& resources = impl->resources;
-		const std::uint32_t frame = Scene::FrameView::Get().GetFrame();
+		const std::uint32_t frame = a_frame;
 		// The faces draw from the frame's scene list and the frame before's colour frame record (ExecuteReflection): not
 		// after a frame whose main epochs were not submitted (no claims), nor once another set was adopted since (this frame's
 		// selection) or another payload installed since (the frame record names the payload's objects and extras), which leaves those
 		// addresses on versions nothing holds.
-		const std::uint64_t adoptedSerial = impl->Adopted().Serial();
+		const std::uint64_t adoptedSerial = Adopted().Serial();
 		const bool inputs = resources && resources->committed[kDepthShape].frame == resources->committed[kColourShape].frame &&
 		                    frame - resources->committed[kDepthShape].frame <= 1 && resources->committed[kDepthShape].adoptedSerial == adoptedSerial &&
-		                    resources->committed[kColourShape].adoptedSerial == adoptedSerial && impl->installedPayloadFrame <= resources->committed[kColourShape].frame &&
-		                    impl->scene;
-		reflection.covered = main && inputs && rv.covered[Epoch::Reflection] && reflection.resources && reflection.resources->target && !host->RebuildRequested();
+		                    resources->committed[kColourShape].adoptedSerial == adoptedSerial && installedPayloadFrame <= resources->committed[kColourShape].frame &&
+		                    scene;
+		reflection.covered = a_main && inputs && revisions.covered[Epoch::Reflection] && reflection.resources && reflection.resources->target && !a_host->RebuildRequested();
 		PassCapture::Get().SetReflectionCovered(reflection.covered);
+	}
+
+	void IndirectDraws::Impl::DecideFirstPersonCoverage(org::PersistentGraphHost* a_host, bool a_main, std::uint32_t a_frame)
+	{
+		const auto& rv = revisions;
+		auto& fp = firstPerson;
 		// The first-person members are withheld from the engine (PassCapture) and drawn by the first-person epochs on a frame the engine
 		// draws first person (the latch), whose claims stand, both epochs' recordings in the revision and the depth copy imported into the
 		// graph as built. Its members need no frame before's inputs: both epochs draw this frame's scene list with this frame's camera.
-		fp.covered = main && ActiveToggles().firstPerson && fp.latch && fp.latchFrame == frame && rv.covered[Epoch::FirstPersonDepth] && rv.covered[Epoch::FirstPersonColour] &&
-		             fp.resources && fp.resources->target && !fp.resources->rebuildPending && fp.resources->main && fp.resources->main == impl->resources &&
-		             fp.resources->main->native[1] && !host->RebuildRequested();
+		fp.covered = a_main && ActiveToggles().firstPerson && fp.latch && fp.latchFrame == a_frame && rv.covered[Epoch::FirstPersonDepth] && rv.covered[Epoch::FirstPersonColour] &&
+		             fp.resources && fp.resources->target && !fp.resources->rebuildPending && fp.resources->main && fp.resources->main == resources &&
+		             fp.resources->main->native[1] && !a_host->RebuildRequested();
 		PassCapture::Get().SetFirstPersonCovered(fp.covered);
-		return main;
 	}
 
 	bool IndirectDraws::Impl::EpochCovered(std::uint32_t a_epoch) const

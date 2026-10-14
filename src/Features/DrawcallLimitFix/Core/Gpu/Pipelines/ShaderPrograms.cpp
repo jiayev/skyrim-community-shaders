@@ -93,6 +93,127 @@ namespace DCLF
 
 	namespace
 	{
+		// A block's row and its stage's place in it (DCLFObjects.hlsli).
+		struct PulledBlock
+		{
+			const char* row = nullptr;
+			const char* offset = nullptr;
+		};
+
+		PulledBlock PulledBlockOf(const std::string& a_name)
+		{
+			return a_name == "PerTechnique" ? PulledBlock{ "DCLFPipelineRowAddress", "kDCLFTechniqueBlock" } :
+			       a_name == "PerMaterial"  ? PulledBlock{ "DCLFMaterialRowAddress", "kDCLFMaterialBlock" } :
+			                                  PulledBlock{ "DCLFPipelineRowAddress", "kDCLFGeometryBlock" };
+		}
+
+		const char* PulledRowLoad(const std::string& a_type)
+		{
+			return a_type == "float4"   ? "DCLFRowFloat4" :
+			       a_type == "float3"   ? "DCLFRowFloat3" :
+			       a_type == "float2"   ? "DCLFRowFloat2" :
+			       a_type == "float"    ? "DCLFRowFloat" :
+			       a_type == "uint"     ? "DCLFRowUint" :
+			       a_type == "int"      ? "(int)DCLFRowUint" :
+			       a_type == "float3x3" ? "DCLFRowFloat3x3" :
+			       a_type == "float3x4" ? "DCLFRowFloat3x4" :
+			                              "DCLFRowFloat4x4";
+		}
+
+		bool PulledMaterialTexture(std::uint32_t a_register)
+		{
+			return (a_register < kPixelTextureSlots && a_register != kShadowMaskSlot) || FeatureMaterialSlot(a_register) >= 0;
+		}
+
+		// PulledLightingSource's output, and the block it is in.
+		struct PulledRewrite
+		{
+			std::ostringstream out;
+			std::string blockName;
+			PulledBlock block{};
+			bool inBlock = false, opened = false;
+			std::ostringstream assignments;  // the block's DCLFPer<Block>Statics body, its #if lines with it
+			std::uint32_t textures = 0, samplers = 0, members = 0;
+		};
+
+		// A block member: a static, and its assignment from the row; false when it is not one the rows can hold.
+		bool PulledMember(const std::smatch& a_match, PulledRewrite& a_rewrite)
+		{
+			auto& out = a_rewrite.out;
+			auto& assignments = a_rewrite.assignments;
+			const auto& block = a_rewrite.block;
+			const std::string type = a_match[3].str(), name = a_match[4].str();
+			const bool matrix = type.find('x') != std::string::npos;
+			// A column-major matrix's registers are its columns, and an array of matrices is none the shader has.
+			if (matrix && (!a_match[2].matched || a_match[5].matched))
+				return false;
+			const std::uint32_t component = a_match[7].matched ? static_cast<std::uint32_t>(std::string("xyzw").find(a_match[7].str()[0])) : 0u;
+			const std::uint32_t offset = static_cast<std::uint32_t>(std::stoul(a_match[6].str())) * 16 + component * 4;
+			const auto source = [&](std::uint32_t a_offset) { return fmt::format("{}({}, {} + {})", PulledRowLoad(type), block.row, block.offset, a_offset); };
+			out << a_match[1].str() << "static " << a_match[2].str() << type << " " << name << (a_match[5].matched ? "[" + a_match[5].str() + "]" : std::string{}) << ";" << a_match[8].str()
+				<< "\n";
+			if (a_match[5].matched) {
+				// An array's elements: a register each.
+				const auto count = static_cast<std::uint32_t>(std::stoul(a_match[5].str()));
+				for (std::uint32_t e = 0; e < count; ++e)
+					assignments << "\t" << name << "[" << e << "] = " << source(offset + 16 * e) << ";\n";
+			} else {
+				assignments << "\t" << name << " = " << source(offset) << ";\n";
+			}
+			++a_rewrite.members;
+			return true;
+		}
+
+		// A line inside a row's cbuffer; false when it is not one it knows.
+		bool PulledBlockLine(const std::string& a_line, PulledRewrite& a_rewrite)
+		{
+			static const std::regex member(
+				R"(^(\s*)(row_major\s+)?(float|float2|float3|float4|uint|int|float3x3|float3x4|float4x4)\s+(\w+)\s*(?:\[\s*(\d+)\s*\])?\s*:\s*packoffset\(\s*c(\d+)(?:\.([xyzw]))?\s*\)\s*;(.*)$)");
+			auto& out = a_rewrite.out;
+			std::smatch m;
+			const auto first = a_line.find_first_not_of(" \t");
+			const std::string trimmed = first == std::string::npos ? std::string{} : a_line.substr(first);
+			if (!a_rewrite.opened && trimmed == "{") {
+				a_rewrite.opened = true;
+				out << "\n";
+			} else if (trimmed.rfind("};", 0) == 0) {
+				// The block's members as statics, assigned from the row by the pulled entry points (Lighting.hlsl,
+				// DCLFRowStatics) once the row's address is known: a member's name is one other code reuses (a struct
+				// field), so not a macro.
+				a_rewrite.inBlock = false;
+				out << "void DCLF" << a_rewrite.blockName << "Statics()\n{\n" << a_rewrite.assignments.str() << "}\n";
+			} else if (trimmed.empty() || trimmed[0] == '#' || trimmed.rfind("//", 0) == 0) {
+				out << a_line << "\n";
+				if (!trimmed.empty() && trimmed[0] == '#')
+					a_rewrite.assignments << a_line << "\n";
+			} else if (std::regex_match(a_line, m, member)) {
+				return PulledMember(m, a_rewrite);
+			} else {
+				return false;
+			}
+			return true;
+		}
+
+		// A material (or shadow mask) texture: a function reading it at the row's index, behind a macro of its name.
+		void PulledTexture(const std::smatch& a_match, PulledRewrite& a_rewrite)
+		{
+			const std::string type = a_match[2].str(), name = a_match[3].str(), slot = a_match[4].str();
+			const std::string index = std::stoul(slot) == kShadowMaskSlot ? std::string("DCLFPipelineTextureIndex()") : "DCLFMaterialTextureIndex(" + slot + ")";
+			a_rewrite.out << a_match[1].str() << type << " DCLFRow_" << name << "() { " << type << " r = ResourceDescriptorHeap[" << index << "]; return r; }\n#define " << name
+				<< " DCLFRow_" << name << "()" << a_match[5].str() << "\n";
+			++a_rewrite.textures;
+		}
+
+		// A sampler (s0-s15) likewise.
+		void PulledSampler(const std::smatch& a_match, PulledRewrite& a_rewrite)
+		{
+			const std::string type = a_match[2].str(), name = a_match[3].str(), slot = a_match[4].str();
+			const std::string index = std::stoul(slot) == kShadowMaskSlot ? std::string("DCLFPipelineSamplerIndex()") : "DCLFMaterialSamplerIndex(" + slot + ")";
+			a_rewrite.out << a_match[1].str() << type << " DCLFRow_" << name << "() { " << type << " r = SamplerDescriptorHeap[" << index << "]; return r; }\n#define " << name
+				<< " DCLFRow_" << name << "()" << a_match[5].str() << "\n";
+			++a_rewrite.samplers;
+		}
+
 		/**
 		 * @brief Lighting.hlsl for a pulled build (DCLF_PULLED): its rows' inputs, which a device-generated draw's layout maps from
 		 * the rows' addresses in its push data (DrawPipelines.cpp, the main layout), read from the rows its sequence names instead
@@ -112,115 +233,42 @@ namespace DCLF
 			static const std::regex texture(R"(^(\s*)((?:Texture2D|TextureCube|Texture2DArray|Texture3D)(?:\s*<[^>]*>)?)\s+(\w+)\s*:\s*register\(\s*t(\d+)\s*\)\s*;(.*)$)");
 			static const std::regex sampler(R"(^(\s*)(SamplerState|SamplerComparisonState)\s+(\w+)\s*:\s*register\(\s*s(\d+)\s*\)\s*;(.*)$)");
 			static const std::regex cbuffer(R"(^\s*cbuffer\s+(PerTechnique|PerMaterial|PerGeometry)\s*:\s*register\(\s*b([012])\s*\).*$)");
-			static const std::regex member(
-				R"(^(\s*)(row_major\s+)?(float|float2|float3|float4|uint|int|float3x3|float3x4|float4x4)\s+(\w+)\s*(?:\[\s*(\d+)\s*\])?\s*:\s*packoffset\(\s*c(\d+)(?:\.([xyzw]))?\s*\)\s*;(.*)$)");
-			auto materialTexture = [](std::uint32_t a_register) {
-				return (a_register < kPixelTextureSlots && a_register != kShadowMaskSlot) || FeatureMaterialSlot(a_register) >= 0;
-			};
-			// A block's row and its stage's place in it (DCLFObjects.hlsli).
-			struct Block
-			{
-				const char* row = nullptr;
-				const char* offset = nullptr;
-			};
-			auto blockOf = [](const std::string& a_name) {
-				return a_name == "PerTechnique" ? Block{ "DCLFPipelineRowAddress", "kDCLFTechniqueBlock" } :
-				       a_name == "PerMaterial"  ? Block{ "DCLFMaterialRowAddress", "kDCLFMaterialBlock" } :
-				                                  Block{ "DCLFPipelineRowAddress", "kDCLFGeometryBlock" };
-			};
-			auto load = [](const std::string& a_type) -> const char* {
-				return a_type == "float4"   ? "DCLFRowFloat4" :
-				       a_type == "float3"   ? "DCLFRowFloat3" :
-				       a_type == "float2"   ? "DCLFRowFloat2" :
-				       a_type == "float"    ? "DCLFRowFloat" :
-				       a_type == "uint"     ? "DCLFRowUint" :
-				       a_type == "int"      ? "(int)DCLFRowUint" :
-				       a_type == "float3x3" ? "DCLFRowFloat3x3" :
-				       a_type == "float3x4" ? "DCLFRowFloat3x4" :
-				                              "DCLFRowFloat4x4";
-			};
 			std::istringstream in(text);
-			std::ostringstream out;
-			std::string line, blockName;
-			Block block{};
-			bool inBlock = false, opened = false;
-			std::ostringstream assignments;  // the block's DCLFPer<Block>Statics body, its #if lines with it
-			std::uint32_t textures = 0, samplers = 0, members = 0;
+			PulledRewrite rewrite;
+			auto& out = rewrite.out;
+			std::string line;
 			auto fail = [&](const std::string& a_line) {
-				logger::error("[DCLF] Pulled Lighting source: {} line not understood: {}", blockName, a_line);
+				logger::error("[DCLF] Pulled Lighting source: {} line not understood: {}", rewrite.blockName, a_line);
 				return std::vector<std::byte>{};
 			};
 			while (std::getline(in, line)) {
 				if (!line.empty() && line.back() == '\r')
 					line.pop_back();
 				std::smatch m;
-				if (inBlock) {
-					const auto first = line.find_first_not_of(" \t");
-					const std::string trimmed = first == std::string::npos ? std::string{} : line.substr(first);
-					if (!opened && trimmed == "{") {
-						opened = true;
-						out << "\n";
-					} else if (trimmed.rfind("};", 0) == 0) {
-						// The block's members as statics, assigned from the row by the pulled entry points (Lighting.hlsl,
-						// DCLFRowStatics) once the row's address is known: a member's name is one other code reuses (a struct
-						// field), so not a macro.
-						inBlock = false;
-						out << "void DCLF" << blockName << "Statics()\n{\n" << assignments.str() << "}\n";
-					} else if (trimmed.empty() || trimmed[0] == '#' || trimmed.rfind("//", 0) == 0) {
-						out << line << "\n";
-						if (!trimmed.empty() && trimmed[0] == '#')
-							assignments << line << "\n";
-					} else if (std::regex_match(line, m, member)) {
-						const std::string type = m[3].str(), name = m[4].str();
-						const bool matrix = type.find('x') != std::string::npos;
-						// A column-major matrix's registers are its columns, and an array of matrices is none the shader has.
-						if (matrix && (!m[2].matched || m[5].matched))
-							return fail(line);
-						const std::uint32_t component = m[7].matched ? static_cast<std::uint32_t>(std::string("xyzw").find(m[7].str()[0])) : 0u;
-						const std::uint32_t offset = static_cast<std::uint32_t>(std::stoul(m[6].str())) * 16 + component * 4;
-						const auto source = [&](std::uint32_t a_offset) { return fmt::format("{}({}, {} + {})", load(type), block.row, block.offset, a_offset); };
-						out << m[1].str() << "static " << m[2].str() << type << " " << name << (m[5].matched ? "[" + m[5].str() + "]" : std::string{}) << ";" << m[8].str()
-							<< "\n";
-						if (m[5].matched) {
-							// An array's elements: a register each.
-							const auto count = static_cast<std::uint32_t>(std::stoul(m[5].str()));
-							for (std::uint32_t e = 0; e < count; ++e)
-								assignments << "\t" << name << "[" << e << "] = " << source(offset + 16 * e) << ";\n";
-						} else {
-							assignments << "\t" << name << " = " << source(offset) << ";\n";
-						}
-						++members;
-					} else {
+				if (rewrite.inBlock) {
+					if (!PulledBlockLine(line, rewrite))
 						return fail(line);
-					}
 					continue;
 				}
 				if (std::regex_match(line, m, cbuffer)) {
-					inBlock = true;
-					opened = false;
-					blockName = m[1].str();
-					block = blockOf(blockName);
-					assignments.str({});
-					out << "// " << blockName << ": the draw's " << (blockName == "PerMaterial" ? "material" : "pipeline") << " row's (DCLF_PULLED)\n";
+					rewrite.inBlock = true;
+					rewrite.opened = false;
+					rewrite.blockName = m[1].str();
+					rewrite.block = PulledBlockOf(rewrite.blockName);
+					rewrite.assignments.str({});
+					out << "// " << rewrite.blockName << ": the draw's " << (rewrite.blockName == "PerMaterial" ? "material" : "pipeline") << " row's (DCLF_PULLED)\n";
 				} else if (std::regex_match(line, m, texture) &&
-						   (materialTexture(static_cast<std::uint32_t>(std::stoul(m[4].str()))) || std::stoul(m[4].str()) == kShadowMaskSlot)) {
-					const std::string type = m[2].str(), name = m[3].str(), slot = m[4].str();
-					const std::string index = std::stoul(slot) == kShadowMaskSlot ? std::string("DCLFPipelineTextureIndex()") : "DCLFMaterialTextureIndex(" + slot + ")";
-					out << m[1].str() << type << " DCLFRow_" << name << "() { " << type << " r = ResourceDescriptorHeap[" << index << "]; return r; }\n#define " << name
-						<< " DCLFRow_" << name << "()" << m[5].str() << "\n";
-					++textures;
+						   (PulledMaterialTexture(static_cast<std::uint32_t>(std::stoul(m[4].str()))) || std::stoul(m[4].str()) == kShadowMaskSlot)) {
+					PulledTexture(m, rewrite);
 				} else if (std::regex_match(line, m, sampler) && std::stoul(m[4].str()) < 16) {  // s0-s15
-					const std::string type = m[2].str(), name = m[3].str(), slot = m[4].str();
-					const std::string index = std::stoul(slot) == kShadowMaskSlot ? std::string("DCLFPipelineSamplerIndex()") : "DCLFMaterialSamplerIndex(" + slot + ")";
-					out << m[1].str() << type << " DCLFRow_" << name << "() { " << type << " r = SamplerDescriptorHeap[" << index << "]; return r; }\n#define " << name
-						<< " DCLFRow_" << name << "()" << m[5].str() << "\n";
-					++samplers;
+					PulledSampler(m, rewrite);
 				} else {
 					out << line << "\n";
 				}
 			}
 			const std::string result = out.str();
-			logger::info("[DCLF] Pulled Lighting source: {} texture, {} sampler and {} block member declarations read from the draw's rows", textures, samplers, members);
+			logger::info("[DCLF] Pulled Lighting source: {} texture, {} sampler and {} block member declarations read from the draw's rows", rewrite.textures,
+				rewrite.samplers, rewrite.members);
 			std::vector<std::byte> bytes(result.size());
 			std::memcpy(bytes.data(), result.data(), result.size());
 			return bytes;
