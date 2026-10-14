@@ -68,6 +68,8 @@ public:
 		float WallRainNormalStrength = 2.0f;
 		float WallRainWetness = 1.0f;
 		float WallRainDarkening = 0.65f;
+		uint EnableWallRain = true;
+		float WallRainTrailLength = 1.0f;
 	};
 
 	struct alignas(16) PerFrame
@@ -78,9 +80,11 @@ public:
 		float Wetness;
 		float PuddleWetness;
 		Settings settings;
-		uint pad0;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
+	static_assert(sizeof(Settings) == 144);
+	static_assert(offsetof(PerFrame, settings) == 80);
+	static_assert(sizeof(PerFrame) == 224);
 
 	struct DebugSettings
 	{

@@ -2156,27 +2156,32 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #		endif
 
-#		if defined(SKINNED)
-	float3 wetnessRipplePosition = input.ModelPosition.xyz;
-#		elif defined(DEFERRED)
+	bool wetnessSkinned = (Permutation::VertexShaderDescriptor & Permutation::LightingFlags::Skinned) != 0;
+	bool attachWetnessToModel = wetnessSkinned || ((Permutation::VertexShaderDescriptor >> 24) & 0x3F) == Permutation::LightingTechnique::TreeAnim;
+#		if defined(DEFERRED)
 	float3 wetnessRipplePosition = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
 #		else
 	float3 wetnessRipplePosition = !FrameBuffer::FrameParams.y ? input.ModelPosition.xyz : input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
 #		endif
-#		if !defined(SKINNED) && !(defined(SKIN) && defined(CS_SKIN))
-	static const bool enableWetnessPuddleEffects = true;
-	static const bool enableWetnessRainFlowEffects = true;
+	if (attachWetnessToModel)
+		wetnessRipplePosition = input.ModelPosition.xyz;
+#		if !(defined(SKIN) && defined(CS_SKIN))
+	bool enableWetnessPuddleEffects = !wetnessSkinned;
 #		else
 	static const bool enableWetnessPuddleEffects = false;
-	static const bool enableWetnessRainFlowEffects = false;
 #		endif
+	static const bool enableWetnessRainFlowEffects = true;
 
 	float3 wetnessPuddlePosition = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
-	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessRipplePosition, wetnessPuddlePosition, worldNormal.xyz, vertexNormal.xyz, waterHeight, wetnessOcclusion, nearFactor, rainWetnessOverride, rainWetnessAdd, enableWetnessPuddleEffects, enableWetnessRainFlowEffects);
+	float3 wetnessBaseNormal = worldNormal.xyz;
+#		if defined(CS_SKIN_SHADING)
+	if (skinEnabled && skinWetness > 0.0f)
+		wetnessBaseNormal = skinWetNormal;
+#		endif
+	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessRipplePosition, wetnessPuddlePosition, wetnessBaseNormal, vertexNormal.xyz, waterHeight, wetnessOcclusion, nearFactor, rainWetnessOverride, rainWetnessAdd, enableWetnessPuddleEffects, enableWetnessRainFlowEffects, attachWetnessToModel);
 
 #		if defined(CS_SKIN_SHADING)
 	if (skinEnabled && (skinWetness > 0.0f)) {
-		wetnessState.normal = skinWetNormal;
 		wetnessState.glossinessSpecular = saturate(max(wetnessState.glossinessSpecular, skinWetness));
 		wetnessState.roughness = WetnessEffects::GetSurfaceWetnessRoughness(wetnessState.glossinessSpecular);
 	}
