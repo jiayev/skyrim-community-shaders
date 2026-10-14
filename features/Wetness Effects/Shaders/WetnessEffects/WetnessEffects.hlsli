@@ -590,6 +590,16 @@ namespace WetnessEffects
 		return max(saturate(1.0 - glossinessSpecular), wetnessMinPuddleRoughness);
 	}
 
+	float2 GetParallaxSampleOffset(float2 offset, float2 uvDx, float2 uvDy, float heightWeight)
+	{
+		float determinant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
+		float squaredArea = dot(uvDx, uvDx) * dot(uvDy, uvDy);
+		float2 sampleOffset = 0.0;
+		if (heightWeight > 0.0 && determinant * determinant > max(1e-20, squaredArea * 1e-8))
+			sampleOffset = float2(offset.x * uvDy.y - offset.y * uvDy.x, offset.y * uvDx.x - offset.x * uvDx.y) / determinant;
+		return sampleOffset;
+	}
+
 	SurfaceWetnessState GetSurfaceWetnessState(
 		float3 worldPosition,
 		float3 ripplePosition,
@@ -603,7 +613,9 @@ namespace WetnessEffects
 		float rainWetnessAdd,
 		bool enablePuddleEffects,
 		bool enableRainFlowEffects,
-		bool attachToModel = false)
+		bool attachToModel = false,
+		float2 parallaxOffset = float2(0.0, 0.0),
+		float2 surfaceHeight = float2(0.5, 0.0))
 	{
 		SurfaceWetnessState state = InitSurfaceWetnessState(shadingNormal, 1.0);
 		float3 positionDx = 0.0;
@@ -611,6 +623,7 @@ namespace WetnessEffects
 		float3 rainPosition = puddlePosition;
 		float3 rainPositionDx = 0.0;
 		float3 rainPositionDy = 0.0;
+		float heightEdge = max(fwidth(surfaceHeight.x), 0.01);
 		float rainExposure = smoothstep(-0.35, 0.0, vertexNormal.z);
 		if (enableRainFlowEffects) {
 			[branch] if (attachToModel)
@@ -630,7 +643,7 @@ namespace WetnessEffects
 			}
 		}
 
-		state.normal = vertexNormal;
+		rainPosition += rainPositionDx * parallaxOffset.x + rainPositionDy * parallaxOffset.y;
 
 		float wetnessDistToWater = abs(worldPosition.z - waterHeight);
 		float shoreFactor = saturate(1.0 - (wetnessDistToWater / SharedData::wetnessEffectsSettings.ShoreRange));
@@ -644,7 +657,7 @@ namespace WetnessEffects
 		bool calculateRipples = enablePuddleEffects && SharedData::wetnessEffectsSettings.EnableRipples;
 		bool calculateSplashes = rainWetnessOverride < 0.0 && SharedData::wetnessEffectsSettings.EnableSplashes;
 		float impactCoverage = enableRainFlowEffects ? smoothstep(0.5, 0.9, vertexNormal.z) : 1.0;
-		bool shouldCalculateRaindrops = (shadingNormal.z > 0.0) &&
+		bool shouldCalculateRaindrops = (vertexNormal.z > 0.0) &&
 		                                (impactCoverage > 0.0) &&
 		                                (SharedData::wetnessEffectsSettings.Raining > 0.0) &&
 		                                (SharedData::wetnessEffectsSettings.EnableRaindropFx) &&
@@ -652,8 +665,8 @@ namespace WetnessEffects
 
 		[branch] if (shouldCalculateRaindrops)
 		{
-			float3 rippleGridNormal = attachToModel ? float3(0, 0, 1) : state.normal;
-			raindropInfo = GetRainDrops(ripplePosition, SharedData::wetnessEffectsSettings.Time, rippleGridNormal, flatnessAmount, float2(0, 0), calculateRipples, calculateSplashes);
+			float3 impactPosition = enablePuddleEffects ? puddlePosition : ripplePosition;
+			raindropInfo = GetRainDrops(impactPosition, SharedData::wetnessEffectsSettings.Time, float3(0, 0, 1), flatnessAmount, float2(0, 0), calculateRipples, calculateSplashes);
 			raindropInfo.w *= impactCoverage;
 		}
 
@@ -690,11 +703,13 @@ namespace WetnessEffects
 		flatnessAmount *= smoothstep(SharedData::wetnessEffectsSettings.PuddleMinWetness, 1.0, state.glossinessSpecular);
 
 		float standingWater = enablePuddleEffects ? flatnessAmount : 0.0;
+		float waterLevel = saturate((state.glossinessSpecular - SharedData::wetnessEffectsSettings.PuddleMinWetness) / max(1.0 - SharedData::wetnessEffectsSettings.PuddleMinWetness, 1e-4));
+		float heightCoverage = smoothstep(0.0, heightEdge, waterLevel - surfaceHeight.x);
+		standingWater *= lerp(1.0, heightCoverage, surfaceHeight.y);
 		float puddleCoverage = smoothstep(0.02, 0.1, standingWater);
 		float beadCoverage = 1.0 - smoothstep(0.0, 0.02, standingWater);
-		state.normal = lerp(shadingNormal, vertexNormal, puddleCoverage);
-		float3 rippleNormal = normalize(lerp(float3(0, 0, 1), raindropInfo.xyz, lerp(flatnessAmount, 1.0, 0.5) * puddleCoverage));
-		state.normal = ReorientNormal(rippleNormal, state.normal);
+		float3 rippleNormal = normalize(lerp(float3(0, 0, 1), raindropInfo.xyz, lerp(flatnessAmount, 1.0, 0.5)));
+		state.normal = normalize(lerp(shadingNormal, rippleNormal, puddleCoverage));
 
 		if (enableRainFlowEffects) {
 			float flowRange = max(SharedData::wetnessEffectsSettings.RaindropFxRange, 1.0);
