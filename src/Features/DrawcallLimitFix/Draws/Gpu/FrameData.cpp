@@ -2,9 +2,7 @@
 
 #include "FrameData.h"
 
-#if defined(CS_HAS_RENDER_GRAPH)
-#	include <Render/LatchBlock.h>
-#endif
+#include <Render/LatchBlock.h>
 
 #include <atomic>
 #include <map>
@@ -47,7 +45,6 @@ namespace DCLF
 		return taken;
 	}
 
-#if defined(CS_HAS_RENDER_GRAPH)
 	void LatchWrite(const org::LatchBlock& a_block, std::string_view a_what, std::uint32_t a_slot, std::uint32_t a_offset, std::span<const std::byte> a_bytes)
 	{
 		a_block.Write(a_slot, a_offset, a_bytes);
@@ -57,5 +54,4 @@ namespace DCLF
 			FrameData::Note(where, a_bytes.size());
 		}
 	}
-#endif
 }

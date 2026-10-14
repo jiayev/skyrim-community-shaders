@@ -22,27 +22,25 @@
 #include <cstring>
 #include <limits>
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/Gpu/FrameValueMoves.h"
-#	include "Features/DrawcallLimitFix/Draws/Gpu/PooledBackings.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
-#	include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
-#	include "Features/DrawcallLimitFix/Runtime/FrameRetirement.h"
-#	include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
-#	include "Features/DrawcallLimitFix/Runtime/Switches.h"
-#	include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
-#	include "RenderGraph/RenderGraphRuntime.h"
-#	include <OpenRenderGraph/PersistentGraphHost.h>
-#	include <Render/Runtime/IUploadService.h>
-#	include <Resources/Buffers/Buffer.h>
-#	include <ORGModuleServices/BackingPool.h>
-#	include <ORGModuleServices/GrowthPolicy.h>
-#	include <rhi.h>
+#include "Features/DrawcallLimitFix/Draws/Gpu/FrameValueMoves.h"
+#include "Features/DrawcallLimitFix/Draws/Gpu/PooledBackings.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
+#include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
+#include "Features/DrawcallLimitFix/Runtime/FrameRetirement.h"
+#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
+#include "RenderGraph/RenderGraphRuntime.h"
+#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <Render/Runtime/IUploadService.h>
+#include <Resources/Buffers/Buffer.h>
+#include <ORGModuleServices/BackingPool.h>
+#include <ORGModuleServices/GrowthPolicy.h>
+#include <rhi.h>
 
-#	include <algorithm>
-#	include <ankerl/unordered_dense.h>
-#	include <chrono>
-#endif
+#include <algorithm>
+#include <ankerl/unordered_dense.h>
+#include <chrono>
 
 namespace DCLF
 {
@@ -179,7 +177,6 @@ namespace DCLF
 		return true;
 	}
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 	namespace
 	{
 		using Plan = PlacementPlan;
@@ -2114,28 +2111,4 @@ namespace DCLF
 		}
 		return out;
 	}
-#else
-	struct FrameValues::Impl
-	{};
-	FrameValues::FrameValues() = default;
-	FrameValues::~FrameValues() = default;
-	FrameValues& FrameValues::Get()
-	{
-		static FrameValues values;
-		return values;
-	}
-	bool FrameValues::Available() const { return false; }
-	bool FrameValues::Kick(std::vector<std::shared_ptr<const PlacementPlan>>, std::vector<ShadingItem>, std::vector<WetnessValue>,
-		std::vector<FadeSeedItem>, std::vector<TreeSeedItem>, std::shared_ptr<const FrameGlobals>) { return false; }
-	const std::vector<TreeStatic>* FrameValues::TreeSeedsIfDone(bool) const { return nullptr; }
-	const std::vector<FadeRootStatic>* FrameValues::FadeSeedsIfDone(bool) const { return nullptr; }
-	void FrameValues::Skip() {}
-	void FrameValues::EndFrame() {}
-	const std::vector<BindlessPlacement>* FrameValues::RowsIfDone(bool) const { return nullptr; }
-	const std::vector<FrameValues::PaletteRow>* FrameValues::PalettesIfDone(bool) const { return nullptr; }
-	const std::vector<BindlessShading>* FrameValues::ShadingIfDone(bool) const { return nullptr; }
-	FrameValues::Counters FrameValues::TakeCounters() { return {}; }
-	std::array<FrameValues::PoolStats, FrameValues::kPools> FrameValues::TakePoolStats() { return {}; }
-	bool FrameValues::SkinPalettes(const RE::BSGeometry&, std::uint32_t, const float*&, const float*&) { return false; }
-#endif
 }

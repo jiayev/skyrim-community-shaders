@@ -1,10 +1,9 @@
 // The main commits' warnings and setup log (always on, render thread): frame buffers the mirror cannot fill, tree LOD holes, the fade
 // updates' varied inputs, a draw past its buffers, and the culling setup (once) with each epoch's viewport and ViewProj z row (periodic).
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "DrawsState.h"
-#	include "Events.h"
-#	include "Observers.h"
+#include "DrawsState.h"
+#include "Events.h"
+#include "Observers.h"
 
 namespace DCLF::Diagnostics
 {
@@ -69,5 +68,3 @@ namespace DCLF::Diagnostics
 			capture.maxDepth, a_setup.replay ? "on" : "off", capture.eye.x, capture.eye.y, capture.eye.z, viewProjZ);
 	}
 }
-
-#endif

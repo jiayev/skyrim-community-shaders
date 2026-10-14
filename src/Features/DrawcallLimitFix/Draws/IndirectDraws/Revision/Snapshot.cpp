@@ -2,12 +2,11 @@
 // the render thread posts at the frame's start, its revision made and sealed, the snapshot posted; and the render thread's adoption of
 // the newest one (AdoptSnapshot). PostSnapshotWork and the fits (FitsScene) are the coordinator's.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#	include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF
 {
@@ -685,4 +684,3 @@ namespace DCLF
 		impl->eventAdoptionFrames.push_back(a_frames);
 	}
 }
-#endif

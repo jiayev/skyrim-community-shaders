@@ -1,8 +1,7 @@
 // The forward epoch's passes: the forward sort, the blended forward draws, and refraction normals.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/PassesInternal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/PassesInternal.h"
 
 namespace DCLF::Draws
 {
@@ -293,5 +292,3 @@ namespace DCLF::Draws
 		return std::make_shared<RefractionDrawPass>(std::move(a_resources));
 	}
 }
-
-#endif

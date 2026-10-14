@@ -1,8 +1,7 @@
 // The shadow (and sky occlusion) views' passes and their graph extension: culling, the views' draws, and their latched copies.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/IndexPoolPass.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/IndexPoolPass.h"
 
 namespace DCLF::Draws
 {
@@ -350,5 +349,3 @@ namespace DCLF::Draws
 		return std::make_unique<ShadowExtension>(std::move(a_resources));
 	}
 }
-
-#endif

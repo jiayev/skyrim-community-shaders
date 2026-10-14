@@ -1,9 +1,8 @@
 // The index pool every plain indexed draw binds: its creation, its update to the tables at a commit, and the producer's
 // requirement of its capacities.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF
 {
@@ -255,5 +254,3 @@ namespace DCLF
 		UnitGroup{}.Add(p.firsts).Add(p.copies).Require(a_build, std::max(count, 1u));
 	}
 }
-
-#endif

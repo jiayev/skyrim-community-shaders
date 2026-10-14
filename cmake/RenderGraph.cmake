@@ -14,21 +14,9 @@ set(CS_ORG_ROOT "${CMAKE_SOURCE_DIR}/extern" CACHE PATH
     "Directory holding BasicRHI, BasicTelemetry, OpenRenderGraph and volk side by side")
 
 set(CS_HAS_RENDER_GRAPH OFF)
+set(CS_HAS_ORG_MODULE_SERVICES OFF)
 set(CS_DXC_RUNTIME_DLLS)
 
-# Face snapshots retain CPU-only immutable leases even in a D3D11-only build.
-# This target does not configure or link any RHI/ORG runtime services.
-include("${CS_ORG_ROOT}/ORGModuleServices/cmake/AsyncPrimitives.cmake")
-target_link_libraries(${PROJECT_NAME} PRIVATE ORGModuleServices::AsyncPrimitives)
-include(${CMAKE_CURRENT_LIST_DIR}/DclfSceneExecutor.cmake)
-target_link_libraries(${PROJECT_NAME} PRIVATE DclfSceneExecutor)
-# Unbounded lock-free queues (tbb::concurrent_queue): the render graph's compute submitter. Static, as the executor's.
-target_link_libraries(${PROJECT_NAME} PRIVATE TBB::tbb)
-# The plugin's existing source glob also discovers this file. Compile it only
-# in the independently testable library, without the game's PCH.
-get_target_property(_cs_dclf_plugin_sources ${PROJECT_NAME} SOURCES)
-list(FILTER _cs_dclf_plugin_sources EXCLUDE REGEX "/(SceneExecutor|SceneGraph)\\.cpp$")
-set_property(TARGET ${PROJECT_NAME} PROPERTY SOURCES ${_cs_dclf_plugin_sources})
 
 if(CS_RENDER_GRAPH)
     set(_cs_org_missing)
@@ -87,10 +75,7 @@ if(CS_RENDER_GRAPH)
             add_subdirectory("${CS_ORG_ROOT}/ORGModuleServices" "${CMAKE_BINARY_DIR}/extern/ORGModuleServices" EXCLUDE_FROM_ALL)
             target_link_libraries(${PROJECT_NAME} PRIVATE ORGModuleServices::ORGModuleServices)
             target_compile_definitions(${PROJECT_NAME} PRIVATE CS_HAS_ORG_MODULE_SERVICES=1)
-            # DCLF's CPU publication graph shares this module's scheduler/runtime;
-            # it is linked explicitly and can be exercised without a live frame switch.
-            include(${CMAKE_CURRENT_LIST_DIR}/DclfSceneGraph.cmake)
-            target_link_libraries(${PROJECT_NAME} PRIVATE DclfSceneGraph)
+            set(CS_HAS_ORG_MODULE_SERVICES ON)
             # The Vulkan SDK's DXC: it has SPIR-V code generation (the Windows SDK's does not).
             foreach(_dll IN ITEMS dxcompiler.dll dxil.dll)
                 if(EXISTS "$ENV{VULKAN_SDK}/Bin/${_dll}")
@@ -105,6 +90,11 @@ if(CS_RENDER_GRAPH)
         # The render-graph compute passes compile their HLSL at runtime through ORGModuleServices (src/RenderGraph/
         # ComputeProgram.cpp), like Drawcall Limit Fix's Lighting builds; the sources ship with the other shaders.
         target_link_libraries(${PROJECT_NAME} PRIVATE OpenRenderGraph::OpenRenderGraph BasicRHI::BasicRHI)
+        # Unbounded lock-free queues (tbb::concurrent_queue): the render graph's compute submitter. Static, as DCLF's executor's.
+        if(NOT TARGET TBB::tbb)
+            find_package(TBB CONFIG REQUIRED)
+        endif()
+        target_link_libraries(${PROJECT_NAME} PRIVATE TBB::tbb)
         if(CS_NVPERF_DLL)
             target_link_libraries(${PROJECT_NAME} PRIVATE delayimp)
             target_link_options(${PROJECT_NAME} PRIVATE "/DELAYLOAD:nvperf_grfx_host.dll")
@@ -116,3 +106,27 @@ if(CS_RENDER_GRAPH)
         message(STATUS "CS_RENDER_GRAPH: OpenRenderGraph from ${CS_ORG_ROOT}")
     endif()
 endif()
+
+# Drawcall Limit Fix needs both (src/Features/DrawcallLimitFix.h). With them it is built and CS_HAS_DCLF is defined; without
+# them its tree (src/Features/DrawcallLimitFix/) is left out of the build, and its shell, the one file that tests CS_HAS_DCLF,
+# is inert.
+get_target_property(_cs_dclf_plugin_sources ${PROJECT_NAME} SOURCES)
+if(CS_HAS_RENDER_GRAPH AND CS_HAS_ORG_MODULE_SERVICES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE CS_HAS_DCLF=1)
+    include("${CS_ORG_ROOT}/ORGModuleServices/cmake/AsyncPrimitives.cmake")
+    target_link_libraries(${PROJECT_NAME} PRIVATE ORGModuleServices::AsyncPrimitives)
+    include(${CMAKE_CURRENT_LIST_DIR}/DclfSceneExecutor.cmake)
+    target_link_libraries(${PROJECT_NAME} PRIVATE DclfSceneExecutor)
+    # DCLF's CPU publication graph shares ORGModuleServices' scheduler/runtime; it is linked explicitly and can be exercised
+    # without a live frame switch.
+    include(${CMAKE_CURRENT_LIST_DIR}/DclfSceneGraph.cmake)
+    target_link_libraries(${PROJECT_NAME} PRIVATE DclfSceneGraph)
+    # The plugin's source glob also finds these two; they are compiled only in their independently testable libraries, without
+    # the game's PCH.
+    list(FILTER _cs_dclf_plugin_sources EXCLUDE REGEX "/(SceneExecutor|SceneGraph)\.cpp$")
+    message(STATUS "Drawcall Limit Fix: built")
+else()
+    list(FILTER _cs_dclf_plugin_sources EXCLUDE REGEX "/src/Features/DrawcallLimitFix/")
+    message(STATUS "Drawcall Limit Fix: not built (it needs the render graph and ORGModuleServices)")
+endif()
+set_property(TARGET ${PROJECT_NAME} PROPERTY SOURCES ${_cs_dclf_plugin_sources})

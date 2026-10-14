@@ -12,14 +12,11 @@
 #include "Profiler.h"
 #include "RenderGraph/DxvkOrgInterop.h"
 #include "RenderGraph/NvPerfBridge.h"
+#include "Features/DrawcallLimitFix.h"
 #include "GpuIdleTrace.h"
 #include "State.h"
 
 #include <OpenRenderGraph/PersistentGraphHost.h>
-#if defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Runtime/FrameRetirement.h"
-#	include <ORGModuleServices/BackingPool.h>
-#endif
 #if defined(CS_HAS_ORG_MODULE_SERVICES) && defined(ORG_MODULE_SERVICES_HAS_DXC)
 #	include <ORGModuleServices/ShaderCompiler.h>
 #endif
@@ -403,11 +400,9 @@ struct RenderGraphRuntime::Impl
 
 	void OnCompletedFrame(std::uint64_t a_frameNumber, const org::runtime::IStatisticsService& a_stats)
 	{
-#if defined(CS_HAS_ORG_MODULE_SERVICES)
 		// The execution is complete on the GPU (the host reports them in submission order): DCLF's pooled versions bound up to it
-		// may be reused (FrameRetirement.h).
-		DCLF::FrameRetirement()->Advance(DCLF::RetirementPoint(a_frameNumber));
-#endif
+		// may be reused.
+		DrawcallLimitFix::OnGraphFrameCompleted(a_frameNumber);
 		CompletedEpoch epoch;
 		ReadCompletedEpoch(a_frameNumber, a_stats, epoch);
 		if (!asyncEpochs) {

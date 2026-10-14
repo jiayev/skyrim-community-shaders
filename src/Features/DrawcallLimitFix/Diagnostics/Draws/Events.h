@@ -4,10 +4,9 @@
 // DrawsInstall.cpp). Each is announced with Diagnostics::Notify (Hooks.h) on the thread its comment names; an event that hands something
 // back carries a reference to the output, which the main path initializes to its own answer with nothing observing.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "DrawsView.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Engine/ShadowViewTally.h"
-#	include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
+#include "DrawsView.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Engine/ShadowViewTally.h"
+#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
 
 namespace DCLF::Diagnostics
 {
@@ -289,4 +288,3 @@ namespace DCLF::Diagnostics
 		std::size_t geometries;
 	};
 }
-#endif

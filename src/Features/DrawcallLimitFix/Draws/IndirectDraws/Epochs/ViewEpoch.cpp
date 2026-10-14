@@ -2,10 +2,9 @@
 // commits (render thread). Their passes and graph extension are ViewEpochRecord.cpp's, their captures and coverage
 // Reflection.cpp's and FirstPerson.cpp's.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 
-#	include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 
 namespace DCLF
 {
@@ -369,4 +368,3 @@ namespace DCLF
 		return owners;
 	}
 }
-#endif

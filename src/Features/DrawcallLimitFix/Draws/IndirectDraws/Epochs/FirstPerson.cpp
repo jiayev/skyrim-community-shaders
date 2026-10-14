@@ -1,15 +1,14 @@
 // The first-person view drawn by DCLF: its capture, targets and pipelines, the first-person phase's readiness, and its two
 // epochs' commits (their passes are ViewEpochRecord.cpp's). Render thread, but for FirstPersonDrawable (the scene lane's commit).
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
-#	include "Features/DrawcallLimitFix/Runtime/Toggles.h"
-#	include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
-#	include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
-#	include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
+#include "Features/DrawcallLimitFix/Runtime/Toggles.h"
+#include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
+#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 
 namespace DCLF
 {
@@ -263,4 +262,3 @@ namespace DCLF
 	}
 
 }
-#endif

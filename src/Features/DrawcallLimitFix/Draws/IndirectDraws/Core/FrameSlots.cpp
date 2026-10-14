@@ -1,7 +1,6 @@
 // FrameSlots.h's functions: the main pass's bindings captured (render thread), the frame textures it binds at t16+, and FrameData's
 // names of the frame-constants buffer's parts.
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 
 namespace DCLF::Draws
 {
@@ -107,5 +106,3 @@ namespace DCLF::Draws
 		return result;
 	}
 }
-
-#endif

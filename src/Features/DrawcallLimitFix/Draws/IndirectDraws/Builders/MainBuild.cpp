@@ -1,10 +1,9 @@
 // The main build (MainBuild.h): both main segments' payloads from a publication's tables and lookups (pipeline and material rows,
 // the resident region, the object loop). Pure; run by the snapshot builder on DCLF's pool, one build at a time.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF::Draws
 {
@@ -2063,5 +2062,3 @@ namespace DCLF::Draws
 		BuildMainPayloads(in, a_tables, a_frame, a_lookups, out, a_rows, a_cache, std::move(a_streams));
 	}
 }
-
-#endif

@@ -3,12 +3,11 @@
 // epoch and checked three frames later (ReadFadeLog): each logged update made again by the port from the state it started from, with
 // the GPU's frustum verdict. And the root rows' inputs against the nodes (CheckFadeInputs).
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "DrawsState.h"
+#include "DrawsState.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#	include "Events.h"
-#	include "Observers.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Engine/CutObservers.h"
+#include "Events.h"
+#include "Observers.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Engine/CutObservers.h"
 
 namespace DCLF::Diagnostics
 {
@@ -321,5 +320,3 @@ namespace DCLF::Diagnostics
 		}
 	}
 }
-
-#endif

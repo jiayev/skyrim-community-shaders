@@ -1,8 +1,7 @@
 // The main view's culling: BuildDraws (both phases), the sort's scatter, and tree LOD's cull.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/PassesInternal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/PassesInternal.h"
 
 namespace DCLF::Draws
 {
@@ -366,5 +365,3 @@ namespace DCLF::Draws
 		return std::make_shared<TreeLodCullPass>(std::move(a_resources), a_phase);
 	}
 }
-
-#endif

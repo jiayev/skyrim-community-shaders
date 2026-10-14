@@ -2,8 +2,7 @@
 // tables, the main layout and the buffers it indexes, the shadow view slots and the views - and the latches kept with them. Every
 // requirement is the publication's tables', the frame's posted counts' or the builds ahead's; a set is sealed only once it holds them
 // all (SceneBufferSet), so a shape made from that set never indexes past a buffer it names.
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 
 namespace DCLF
 {
@@ -298,5 +297,3 @@ namespace DCLF
 		}
 	}
 }
-
-#endif

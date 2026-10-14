@@ -1,9 +1,8 @@
 // The kept stores' updates (KeptStores.h): extras rows, object records and geometry draws brought up to a frame's tables from
 // their change logs. Run by MakeStreamViews, one caller at a time (the snapshot builder).
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF::Draws
 {
@@ -184,5 +183,3 @@ namespace DCLF::Draws
 		a_out.slots = s.packed.View();
 	}
 }
-
-#endif

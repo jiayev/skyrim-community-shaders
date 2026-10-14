@@ -2,13 +2,12 @@
 // pipeline lane's catalog (no engine or render-thread reads); the render thread posts the frame inputs they are resolved for
 // (PostLookupInputs).
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
-#	include <algorithm>
-#	include <iterator>
+#include <algorithm>
+#include <iterator>
 
 namespace DCLF::Draws
 {
@@ -336,5 +335,3 @@ namespace DCLF
 		impl->shadowLookupInputs.store(std::make_shared<const ShadowLookupInputs>(std::move(inputs)), std::memory_order_release);
 	}
 }
-
-#endif

@@ -1,30 +1,29 @@
 // GpuTextures: the registry, the import thread and the samplers (see the header).
 
-#if defined(CS_HAS_RENDER_GRAPH)
 
 // volk must precede every Vulkan header in this translation unit.
-#	include <rhi_interop_vulkan.h>
+#include <rhi_interop_vulkan.h>
 
-#	include "GpuTextures.h"
-#	include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "GpuTextures.h"
+#include "Features/DrawcallLimitFix/Runtime/Switches.h"
 
-#	include "RenderGraph/DxvkOrgInterop.h"
-#	include "RenderGraph/RenderGraphRuntime.h"
+#include "RenderGraph/DxvkOrgInterop.h"
+#include "RenderGraph/RenderGraphRuntime.h"
 
-#	include <OpenRenderGraph/PersistentGraphHost.h>
-#	include <Render/BindingTable.h>
-#	include <Render/Runtime/DescriptorServiceAccess.h>
-#	include <Render/Runtime/IDescriptorService.h>
-#	include <rhi_helpers.h>
-#	include <Tracy/Tracy.hpp>
+#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <Render/BindingTable.h>
+#include <Render/Runtime/DescriptorServiceAccess.h>
+#include <Render/Runtime/IDescriptorService.h>
+#include <rhi_helpers.h>
+#include <Tracy/Tracy.hpp>
 
-#	include <atomic>
-#	include <chrono>
-#	include <cstdlib>
-#	include <mutex>
-#	include <format>
-#	include <thread>
-#	include <vector>
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <mutex>
+#include <format>
+#include <thread>
+#include <vector>
 
 namespace DCLF
 {
@@ -490,9 +489,9 @@ namespace DCLF
 
 		static void RunImporter(Importer& a_importer)
 		{
-#	if defined(TRACY_ENABLE)
+#if defined(TRACY_ENABLE)
 			tracy::SetThreadName("CS DCLF texture import");
-#	endif
+#endif
 			// Requests that came before the render thread published a context (PublishImportContext wakes the thread).
 			std::vector<Work> parked;
 			for (;;) {
@@ -752,40 +751,3 @@ namespace DCLF
 	}
 }
 
-#else  // no render graph
-
-#	include "GpuTextures.h"
-
-namespace DCLF
-{
-	struct GpuTextures::Impl
-	{};
-	GpuTextures::GpuTextures() = default;
-	GpuTextures::~GpuTextures() = default;
-	GpuTextures& GpuTextures::Get()
-	{
-		static GpuTextures textures;
-		return textures;
-	}
-	GpuTextures::Binding GpuTextures::ResolveBinding(ID3D11ShaderResourceView*, std::uint32_t) { return {}; }
-	void GpuTextures::Request(ID3D11ShaderResourceView* a_view, std::uint32_t, Replies& a_replies, std::uint64_t a_cookie)
-	{
-		// No render graph, no import: every view is answered rejected.
-		Reply reply;
-		reply.view = a_view;
-		reply.cookie = a_cookie;
-		reply.binding = { kInvalid, {} };
-		a_replies.Push(std::move(reply));
-	}
-	void GpuTextures::PublishImportContext() {}
-	std::shared_ptr<const GpuTextures::FixedBindings> GpuTextures::Fixed() const { return nullptr; }
-	std::shared_ptr<const void> GpuTextures::Seal(std::vector<std::shared_ptr<const void>>) const { return {}; }
-	std::uint32_t GpuTextures::NullIndex() { return kInvalid; }
-	GpuTextures::Binding GpuTextures::NullBinding() { return {}; }
-	std::uint32_t GpuTextures::Sampler(std::uint32_t, std::uint32_t) { return kInvalid; }
-	GpuTextures::Binding GpuTextures::SamplerBinding(std::uint32_t, std::uint32_t) { return {}; }
-	GpuTextures::Stats GpuTextures::GetStats() const { return stats; }
-	void GpuTextures::Clear() {}
-}
-
-#endif

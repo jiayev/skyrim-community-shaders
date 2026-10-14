@@ -1,7 +1,6 @@
 #pragma once
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 
 namespace DCLF::Diagnostics
 {
@@ -20,4 +19,3 @@ namespace DCLF::Diagnostics
 		static const Impl* Find() { return IndirectDraws::Get().impl.get(); }
 	};
 }
-#endif

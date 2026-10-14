@@ -1,8 +1,7 @@
 // The payload's pooled versions (PayloadBuilder, D5): one JournaledBufferSet with a pool per part, published by the snapshot builder.
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Draws/Gpu/PooledBackings.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/Gpu/PooledBackings.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF::Draws
 {
@@ -182,4 +181,3 @@ namespace DCLF::Draws
 		return taken;
 	}
 }
-#endif

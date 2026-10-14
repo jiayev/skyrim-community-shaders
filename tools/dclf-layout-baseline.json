@@ -1,0 +1,317 @@
+{
+ "legacyEdges": {
+  "Draws -> Engine": 42,
+  "Draws -> Runtime": 31,
+  "Draws -> Scene": 47,
+  "Engine -> Draws": 3,
+  "Engine -> Runtime": 36,
+  "Engine -> Scene": 33,
+  "Runtime -> Engine": 1,
+  "Runtime -> Scene": 1,
+  "Scene -> Draws": 15,
+  "Scene -> Engine": 70,
+  "Scene -> Runtime": 62
+ },
+ "overThresholds": {
+  "Features/DrawcallLimitFix/Diagnostics/Draws/BuildParity.cpp::DCLF::Diagnostics::CheckBuildParity": [
+   228,
+   76
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Draws/FadeLog.cpp::DCLF::Diagnostics::ReadFadeLog": [
+   158,
+   64
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Draws/Foliage.cpp::DCLF::Diagnostics::FoliageParityReport": [
+   167,
+   61
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Draws/NamedParity.cpp::DCLF::Diagnostics::CheckShapeCapacities": [
+   92,
+   42
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Draws/SetParity.cpp::DCLF::Diagnostics::CheckSetParity": [
+   387,
+   226
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Draws/TreeWind.cpp::DCLF::Diagnostics::ReadTreeWind": [
+   237,
+   109
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Engine/LightCulls.cpp::DCLF::Diagnostics::LightCulls::Registered": [
+   83,
+   48
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Engine/PortalParity.cpp::DCLF::Diagnostics::PortalParity::Check": [
+   197,
+   100
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Feature/OpenDefectProbes.cpp::DCLF::AuditTreeLod": [
+   83,
+   41
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Feature/OpenDefectProbes.cpp::DrawcallLimitFix::ProbeOpaqueTarget": [
+   196,
+   55
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Reports/Frame.cpp::DCLF::Reports::Stats": [
+   229,
+   95
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Reports/SceneCoordinator.cpp::DCLF::Reports::Coordinator": [
+   217,
+   90
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Reports/SceneCoordinator.cpp::DCLF::Reports::SceneLines": [
+   153,
+   79
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Scene/CaptureParity.cpp::DCLF::CaptureParity::OnNativeLightingDraw": [
+   205,
+   100
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Scene/CaptureParity.cpp::DCLF::CaptureParity::Report": [
+   171,
+   75
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Scene/SceneMirrorParity.cpp::DCLF::Diagnostics::Check": [
+   123,
+   67
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Scene/SceneReplayParity.cpp::DCLF::Diagnostics::OnTablesReplayed": [
+   103,
+   68
+  ],
+  "Features/DrawcallLimitFix/Diagnostics/Scene/SceneWalkParity.cpp::DCLF::Diagnostics::CheckWalkParity": [
+   175,
+   82
+  ],
+  "Features/DrawcallLimitFix/Draws/Gpu/FrameValues.cpp::DCLF::FrameValues::Impl::CheckEveryMover": [
+   128,
+   60
+  ],
+  "Features/DrawcallLimitFix/Draws/Gpu/FrameValues.cpp::DCLF::FrameValues::Impl::Sample": [
+   285,
+   91
+  ],
+  "Features/DrawcallLimitFix/Draws/Gpu/FrameValues.cpp::DCLF::FrameValues::Kick": [
+   198,
+   61
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Builders/MainBuild.cpp::DCLF::Draws::MainBuild::PackMaterialRow": [
+   97,
+   44
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Builders/MainBuild.cpp::DCLF::Draws::MainBuild::UpdateRegionPairs": [
+   176,
+   57
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Builders/ShadowBuild.cpp::DCLF::Draws::BuildKeptShadow": [
+   415,
+   147
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Builders/ShadowBuild.cpp::DCLF::Draws::BuildShadowPayload": [
+   168,
+   56
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Builders/ShadowBuild.cpp::DCLF::Draws::BuildSunExclusion": [
+   186,
+   61
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Core/Resources.cpp::DCLF::IndirectDraws::Impl::Setup": [
+   209,
+   53
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Core/Uploads.cpp::DCLF::IndirectDraws::Impl::CommitMainPayload": [
+   461,
+   127
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Core/Visibility.cpp::DCLF::JudgeObject": [
+   92,
+   48
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Core/Visibility.cpp::DCLF::PrepareWrites": [
+   145,
+   56
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Core/Visibility.cpp::DCLF::ReferenceWrites": [
+   124,
+   67
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Epochs/FirstPerson.cpp::DCLF::IndirectDraws::BeginFirstPersonFrame": [
+   91,
+   42
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Epochs/MainEpochs.cpp::DCLF::IndirectDraws::Impl::PackFrameBlocks": [
+   86,
+   49
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Epochs/ShadowCapture.cpp::DCLF::IndirectDraws::CaptureShadowView": [
+   164,
+   60
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Epochs/ShadowEpochs.cpp::DCLF::IndirectDraws::ExecuteShadowFrame": [
+   281,
+   78
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Epochs/ShadowIndexPool.cpp::DCLF::Draws::UpdateIndexPool": [
+   151,
+   40
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/MainOpaque.cpp::DCLF::Draws::MainOpaquePass::Record": [
+   183,
+   48
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Revision/Assemble.cpp::DCLF::IndirectDraws::Impl::AssembleRevision": [
+   204,
+   75
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Revision/Coverage.cpp::DCLF::IndirectDraws::DecideCoverage": [
+   52,
+   50
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Revision/Producer.cpp::DCLF::IndirectDraws::Impl::MakeRevision": [
+   247,
+   100
+  ],
+  "Features/DrawcallLimitFix/Draws/IndirectDraws/Revision/Snapshot.cpp::DCLF::IndirectDraws::Impl::RunAhead": [
+   123,
+   33
+  ],
+  "Features/DrawcallLimitFix/Draws/Pipelines/DrawPipelines.cpp::DCLF::DrawPipelines::Impl::Initialize": [
+   184,
+   49
+  ],
+  "Features/DrawcallLimitFix/Draws/Pipelines/ShaderPrograms.cpp::DCLF::PulledLightingSource": [
+   113,
+   43
+  ],
+  "Features/DrawcallLimitFix/Draws/Pipelines/SpirvReflection.cpp::DCLF::SpirvReflection::Parse": [
+   157,
+   84
+  ],
+  "Features/DrawcallLimitFix/Engine/Capture/HiddenStores.cpp::DCLF::Scene::HiddenStoreSites": [
+   470,
+   1
+  ],
+  "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.cpp::DCLF::ParticleSnapshots::Expand": [
+   127,
+   30
+  ],
+  "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.cpp::DCLF::PrimaryCull::PlanEntry": [
+   75,
+   47
+  ],
+  "Features/DrawcallLimitFix/Engine/Cull/SceneLists.cpp::DCLF::PrimaryCull::CurrentListFilter": [
+   133,
+   54
+  ],
+  "Features/DrawcallLimitFix/Engine/Views/LightSelection.cpp::DCLF::LightSelection::Select": [
+   93,
+   41
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/AccumulatePhase.cpp::DCLF::Scene::Coordinator::BuildAccumulatePhase": [
+   369,
+   97
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/AccumulatePhase.cpp::DCLF::Scene::Coordinator::EvaluateJoin": [
+   91,
+   69
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/AccumulatePhase.cpp::DCLF::Scene::Coordinator::RefreshShadowSets": [
+   160,
+   52
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/ApplyEvents.cpp::DCLF::Scene::Coordinator::ApplyBatch": [
+   202,
+   46
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/ApplyEvents.cpp::DCLF::Scene::Coordinator::ApplyMirrorEvents": [
+   146,
+   65
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/Classification.cpp::DCLF::Scene::Coordinator::RefreshCategoryNodes": [
+   128,
+   57
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/Gates.cpp::DCLF::Scene::Coordinator::UpdateGates": [
+   80,
+   41
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/MaterialBindings.cpp::DCLF::Scene::Coordinator::ResolveMaterialBinding": [
+   94,
+   46
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/Residents.cpp::DCLF::Scene::Coordinator::KeepResidentsAlive": [
+   121,
+   38
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/SceneSet.cpp::DCLF::Scene::Coordinator::CheckPacedPublication": [
+   64,
+   44
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/SceneSet.cpp::DCLF::Scene::Coordinator::CommitSet": [
+   234,
+   94
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/SceneSet.cpp::DCLF::Scene::Coordinator::PublishTables": [
+   382,
+   91
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/SceneSet.cpp::DCLF::Scene::Coordinator::RunSceneWork": [
+   126,
+   11
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/SharedBindings.cpp::DCLF::Scene::Coordinator::UpdateSharedBindings": [
+   167,
+   58
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/Walk.cpp::DCLF::Scene::Coordinator::DeltaWalk": [
+   198,
+   54
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/Walk.cpp::DCLF::Scene::Coordinator::EvaluateRound": [
+   137,
+   28
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/Walk.cpp::DCLF::Scene::Coordinator::EvaluateWrite": [
+   148,
+   72
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/Walk.cpp::DCLF::Scene::Coordinator::FinishDeltaWalk": [
+   151,
+   50
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/Walk.cpp::DCLF::Scene::Coordinator::MergeEntry": [
+   132,
+   61
+  ],
+  "Features/DrawcallLimitFix/Scene/Coordinator/Walk.cpp::DCLF::Scene::Coordinator::MergeWrite": [
+   204,
+   68
+  ],
+  "Features/DrawcallLimitFix/Scene/FrameView/FrameRequests.cpp::DCLF::Scene::FrameView::CaptureCategories": [
+   134,
+   62
+  ],
+  "Features/DrawcallLimitFix/Scene/Model/Eligibility.cpp::DCLF::Eligibility::Static": [
+   89,
+   58
+  ],
+  "Features/DrawcallLimitFix/Scene/Model/SceneMirror.cpp::DCLF::SceneMirror::ApplyCapture": [
+   78,
+   43
+  ],
+  "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.cpp::DCLF::DeriveEffectDescriptors": [
+   85,
+   47
+  ],
+  "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.cpp::DCLF::DeriveLightingDescriptors": [
+   141,
+   79
+  ],
+  "Features/DrawcallLimitFix/Scene/Ports/MaterialPortVanilla.cpp::DCLF::MaterialPort::EvaluateVanilla": [
+   212,
+   60
+  ]
+ }
+}

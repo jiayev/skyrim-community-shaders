@@ -1,12 +1,11 @@
 // The shadow build (ShadowBuild.h): the shadow epochs' list, material rows and frame record (kept across builds: ShadowKept),
 // and the next frame's sun and paraboloid exclusions. Snapshot builder, on DCLF's pool.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
-#	include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
-#	include "Features/DrawcallLimitFix/Scene/Ports/MaterialSources.h"
-#	include "Features/DrawcallLimitFix/Engine/Capture/MaterialWrites.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/MaterialSources.h"
+#include "Features/DrawcallLimitFix/Engine/Capture/MaterialWrites.h"
 
 namespace DCLF::Draws
 {
@@ -1162,5 +1161,3 @@ namespace DCLF::Draws
 		CountModeDraws(a_out);
 	}
 }
-
-#endif

@@ -2,15 +2,14 @@
 // sampled every 120th epoch, read when the sample's frame slot comes round, with the CPU's side of the sun test and, under
 // CS_DCLF_SET_PARITY, of the terrain near test (a task on DCLF's executor) and the forward and refraction registrations.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "DrawsState.h"
+#include "DrawsState.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#	include "DrawsView.h"
-#	include "Events.h"
-#	include "Observers.h"
-#	include "CullCounters.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Engine/Registrations.h"
-#	include "Features/DrawcallLimitFix/Runtime/EngineReleases.h"
+#include "DrawsView.h"
+#include "Events.h"
+#include "Observers.h"
+#include "CullCounters.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Engine/Registrations.h"
+#include "Features/DrawcallLimitFix/Runtime/EngineReleases.h"
 
 namespace DCLF::Diagnostics
 {
@@ -261,5 +260,3 @@ namespace DCLF::Diagnostics
 			stl::report_and_fail("Drawcall Limit Fix: the culling counters' CPU side was refused by DCLF's executor");
 	}
 }
-
-#endif

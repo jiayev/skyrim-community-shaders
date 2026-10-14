@@ -1,9 +1,8 @@
 // The shadow epochs' shapes: the scene's bounds, bucket sizing per view, MakeShadowShape and its frame views, the arena's
 // fixed blocks and latched layout, and the map rows' buckets.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Epochs/ShadowEpochs.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Epochs/ShadowEpochs.h"
 
 namespace DCLF
 {
@@ -358,5 +357,3 @@ namespace DCLF
 		return *row;
 	}
 }
-
-#endif

@@ -1,10 +1,9 @@
 // The main graph extension: registers the main view's resources and adds its passes to the depth, colour and forward epochs.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/PassesInternal.h"
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/IndexPoolPass.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/PassesInternal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/IndexPoolPass.h"
 
 namespace DCLF::Draws
 {
@@ -180,5 +179,3 @@ namespace DCLF::Draws
 		return std::make_unique<MainOpaqueExtension>(std::move(a_resources));
 	}
 }
-
-#endif

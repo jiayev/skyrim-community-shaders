@@ -1,8 +1,7 @@
 // The revision producer's assembly (snapshot builder): a scene revision's versions (the sealed set), its epochs' shapes and the
 // recordings requested for them on ORG's host thread, sealed; and the render thread's use of the selected revision (RevisionOf).
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 
 namespace DCLF
 {
@@ -302,5 +301,3 @@ namespace DCLF
 	}
 
 }
-
-#endif

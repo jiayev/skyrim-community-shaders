@@ -1,9 +1,8 @@
 // The main commit's frame textures (always on): a register the drawn pipelines read that the commit could not resolve, described
 // once per register (the view's dimension and format; a buffer's size, stride, usage and flags; the resource's debug name).
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Events.h"
-#	include "Observers.h"
+#include "Events.h"
+#include "Observers.h"
 
 namespace DCLF::Diagnostics
 {
@@ -35,5 +34,3 @@ namespace DCLF::Diagnostics
 		}
 	}
 }
-
-#endif

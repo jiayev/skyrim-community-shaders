@@ -2,16 +2,15 @@
 // programs and pipelines of the LOD they draw, the reflection phase's readiness, and the faces' commit (their epoch is
 // ViewEpoch.cpp's, its passes ViewEpochRecord.cpp's). Render thread, but for ReflectionDrawable (the scene lane's commit).
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
-#	include "Features/DrawcallLimitFix/Runtime/Toggles.h"
-#	include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
-#	include "Features/DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
-#	include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
-#	include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
+#include "Features/DrawcallLimitFix/Runtime/Toggles.h"
+#include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
+#include "Features/DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
+#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 
 namespace DCLF
 {
@@ -276,4 +275,3 @@ namespace DCLF
 	}
 
 }
-#endif

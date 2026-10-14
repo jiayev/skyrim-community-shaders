@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Feature.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Feature/OpenDefectProbes.h"
 
 /**
  * @brief Drawcall Limit Fix: draws the scene the engine would draw per object with GPU-driven indirect draws, executed by
@@ -9,6 +8,10 @@
  *
  * This file is the feature's shell: install, the engine hook thunks, the render-thread lifecycle points (each forwards to
  * Draws/FrameDriver under a RenderThreadBudget hook), the menu toggle and the settings UI. Render thread unless noted.
+ *
+ * It is DCLF's one integration point with the rest of CS, and the one place its dependencies are decided: DCLF needs the
+ * render graph and ORGModuleServices (CS_HAS_DCLF, set by cmake/RenderGraph.cmake). Without them the rest of
+ * Features/DrawcallLimitFix/ is not built, and every entry point here is inert. Other CS code calls DCLF only through this header.
  */
 struct DrawcallLimitFix : Feature
 {
@@ -91,6 +94,28 @@ struct DrawcallLimitFix : Feature
 	 */
 	bool OcclusionReferenceFrame(OcclusionMap a_map);
 	void OcclusionReferenceRendered(OcclusionMap a_map);
+
+	// ---- Calls from the rest of CS (each inert in a build without DCLF) ----
+
+	/** @brief Any thread, lock-free: a material's fields were written in place (CS's PBR materials, which bypass the hooked writers). */
+	static void NoteMaterialWritten(const RE::BSShaderMaterial* a_material);
+	/** @brief NoteMaterialWritten when the scope ends: for an in-place rewrite with early returns. */
+	struct MaterialWriteScope
+	{
+		const RE::BSShaderMaterial* material;
+		~MaterialWriteScope() { NoteMaterialWritten(material); }
+	};
+	/** @brief ShaderCache's precompile of a Lighting/Effect/DistantTree permutation: DCLF's SPIR-V build of the same one. */
+	static void PrecompileShader(const RE::BSShader& a_shader, bool a_pixel, std::uint32_t a_descriptor);
+	/** @brief The D3D11 context's Map/Unmap/UpdateSubresource (Globals' hooks): DCLF's constant buffer mirror and capture parity. */
+	static void OnMap(ID3D11Resource* a_resource, void* a_data);
+	static void OnUnmap(ID3D11Resource* a_resource);
+	static void OnUpdateSubresource(ID3D11Resource* a_resource, const D3D11_BOX* a_box, const void* a_data);
+	/** @brief CS_DCLF_TARGET_DUMP's points from other features (Upscaling): see DCLF::TargetDump. */
+	static bool TargetDumpArmed();
+	static void TargetDumpPoint(const char* a_label, ID3D11Texture2D* a_extra = nullptr);
+	/** @brief The render graph host completed execution a_hostFrame on the GPU (in submission order): DCLF's retirement clock. */
+	static void OnGraphFrameCompleted(std::uint64_t a_hostFrame);
 
 private:
 	struct Hooks

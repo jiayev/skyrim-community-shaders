@@ -1,6 +1,5 @@
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Spread.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
+#include "Spread.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
 
 // The scene revisions' and snapshots' report lines: the frame's (SnapshotReport, RevisionReport) and the snapshot builder's, composed in
 // its pass and posted for the frame's report (ProducerReport: the revisions, the growths, the shapes made, the draw bound, and the stores
@@ -251,5 +250,3 @@ namespace DCLF
 		return text;
 	}
 }
-
-#endif

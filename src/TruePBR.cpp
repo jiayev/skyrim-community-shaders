@@ -1,6 +1,6 @@
 #include "TruePBR.h"
 
-#include "Features/DrawcallLimitFix/Engine/Capture/MaterialWrites.h"
+#include "Features/DrawcallLimitFix.h"
 
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "TruePBR/BSLightingShaderMaterialPBRLandscape.h"
@@ -1400,7 +1400,7 @@ bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 				}
 			}
 			// Written in place after SetMaterial's copy: DCLF's material records follow the material's writes.
-			DCLF::MaterialWrites::NoteWritten(material);
+			DrawcallLimitFix::NoteMaterialWritten(material);
 
 			if (globals::game::bEnableLandFade->GetBool()) {
 				shaderProperty->unk108 = false;

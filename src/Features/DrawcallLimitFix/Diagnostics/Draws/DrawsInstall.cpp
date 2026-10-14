@@ -11,11 +11,9 @@
 #include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Events.h"
-#	include "CullCounters.h"
-#	include "Observers.h"
-#endif
+#include "Events.h"
+#include "CullCounters.h"
+#include "Observers.h"
 
 #include <utility>
 
@@ -30,7 +28,6 @@ namespace DCLF::Diagnostics
 	void InstallDraws()
 	{
 		const auto& o = Observe();
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 		// A main epoch's readbacks, in this order: the build parity (both epochs), the culling's counters (always), the tree wind,
 		// the fade log (the Z-prepass's), the set parity (the colour epoch's, with the frame's Z-prepass payload).
 		if (o.builds)
@@ -108,6 +105,5 @@ namespace DCLF::Diagnostics
 				if (a_event.deferred && a_event.mainPassCaptured && std::exchange(capturePointFrame, a_event.frame) != a_event.frame)
 					CheckCapturePoint();
 			});
-#endif
 	}
 }

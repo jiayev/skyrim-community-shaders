@@ -1,8 +1,7 @@
 // The main opaque pass: DCLF's draws in the Z-prepass (depth, both phases) and the main colour pass, and tree LOD's draw.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/PassesInternal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/PassesInternal.h"
 
 namespace DCLF::Draws
 {
@@ -344,5 +343,3 @@ namespace DCLF::Draws
 		return std::make_shared<MainOpaquePass>(std::move(a_resources), a_segment, a_phaseTwo);
 	}
 }
-
-#endif

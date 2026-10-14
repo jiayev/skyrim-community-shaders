@@ -3,10 +3,9 @@
 // versions of the buffers it indexes (the snapshot builder); every commit target named and current in the adopted set, and the
 // recordings' resolves of buffers their set does not name (render thread).
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "DrawsState.h"
-#	include "Events.h"
-#	include "Observers.h"
+#include "DrawsState.h"
+#include "Events.h"
+#include "Observers.h"
 
 namespace DCLF::Diagnostics
 {
@@ -242,4 +241,3 @@ namespace DCLF::Diagnostics
 		}
 	}
 }
-#endif

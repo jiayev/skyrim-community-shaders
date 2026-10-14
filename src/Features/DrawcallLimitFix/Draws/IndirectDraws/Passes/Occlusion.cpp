@@ -1,8 +1,7 @@
 // The two-phase occlusion tail's compute: the HZB rebuild and the visibility events once both phases' verdicts are final.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/PassesInternal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/PassesInternal.h"
 
 namespace DCLF::Draws
 {
@@ -245,5 +244,3 @@ namespace DCLF::Draws
 		return std::make_shared<VisibilityEventsPass>(std::move(a_resources));
 	}
 }
-
-#endif

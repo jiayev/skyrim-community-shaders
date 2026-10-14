@@ -4,7 +4,6 @@
 #include "LightLimitFix/Common.h"
 #include "LightLimitFix/LightAttach.h"
 #include "CSEditor/EditorWindow.h"
-#include "DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "LightLimitFix/ORGLightCulling.h"
 #include "LinearLighting.h"
 

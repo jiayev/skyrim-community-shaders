@@ -1,45 +1,53 @@
 // The feature shell: install, the engine hook thunks and their installation, the menu toggle and the settings UI. The lifecycle
-// points forward to Draws/FrameDriver on the render thread.
+// points forward to Draws/FrameDriver on the render thread. The one file that decides whether DCLF is built (CS_HAS_DCLF).
 #include "DrawcallLimitFix.h"
 
-#include "Deferred.h"
-#include "DrawcallLimitFix/Runtime/RenderThreadBudget.h"
-#include "DrawcallLimitFix/Runtime/SceneScheduler.h"
-#include "DrawcallLimitFix/Engine/Capture/SceneEvents.h"
-#include "DrawcallLimitFix/Diagnostics/Hooks.h"
-#include "DrawcallLimitFix/Diagnostics/Policy.h"
-#include "DrawcallLimitFix/Engine/Capture/MaterialWrites.h"
-#include "DrawcallLimitFix/Scene/Ports/MaterialSources.h"
-#include "DrawcallLimitFix/Diagnostics/TestHarness.h"
-#include "DrawcallLimitFix/Draws/Pipelines/DrawPipelines.h"
-#include "DrawcallLimitFix/Engine/Access/EngineAccess.h"
-#include "DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
-#include "DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
-#include "DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
-#include "DrawcallLimitFix/Engine/Views/SunViews.h"
-#include "DrawcallLimitFix/Engine/Views/FocusViews.h"
-#include "DrawcallLimitFix/Engine/Cull/LodGates.h"
-#include "DrawcallLimitFix/Engine/Views/LightSelection.h"
-#include "DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
-#include "DrawcallLimitFix/Engine/Cull/RoomVisibility.h"
-#include "DrawcallLimitFix/Engine/Cull/TreeList.h"
-#include "Features/Skylighting.h"
+#if defined(CS_HAS_DCLF)
 
-#include "DrawcallLimitFix/Draws/IndirectDraws.h"
-#include "DrawcallLimitFix/Draws/FrameDriver.h"
-#include "DrawcallLimitFix/Draws/Pipelines/ShaderPrograms.h"
-#include "DrawcallLimitFix/Engine/Views/ShadowViews.h"
-#include "DrawcallLimitFix/Runtime/Toggles.h"
-#include "DrawcallLimitFix/Engine/Cull/PassCapture.h"
-#include "DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
-#include "DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
-#include "DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
-#include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#include "DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
-#include "DrawcallLimitFix/Engine/Capture/SceneTracker.h"
-#include "DrawcallLimitFix/Runtime/Switches.h"
-#include "RenderGraph/RenderGraphRuntime.h"
-#include "State.h"
+#	include "Deferred.h"
+#	include "DrawcallLimitFix/Runtime/RenderThreadBudget.h"
+#	include "DrawcallLimitFix/Runtime/SceneScheduler.h"
+#	include "DrawcallLimitFix/Engine/Capture/SceneEvents.h"
+#	include "DrawcallLimitFix/Diagnostics/Hooks.h"
+#	include "DrawcallLimitFix/Diagnostics/Policy.h"
+#	include "DrawcallLimitFix/Engine/Capture/MaterialWrites.h"
+#	include "DrawcallLimitFix/Scene/Ports/MaterialSources.h"
+#	include "DrawcallLimitFix/Diagnostics/TestHarness.h"
+#	include "DrawcallLimitFix/Draws/Pipelines/DrawPipelines.h"
+#	include "DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#	include "DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
+#	include "DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
+#	include "DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
+#	include "DrawcallLimitFix/Engine/Views/SunViews.h"
+#	include "DrawcallLimitFix/Engine/Views/FocusViews.h"
+#	include "DrawcallLimitFix/Engine/Cull/LodGates.h"
+#	include "DrawcallLimitFix/Engine/Views/LightSelection.h"
+#	include "DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
+#	include "DrawcallLimitFix/Engine/Cull/RoomVisibility.h"
+#	include "DrawcallLimitFix/Engine/Cull/TreeList.h"
+#	include "Features/Skylighting.h"
+
+#	include "DrawcallLimitFix/Draws/IndirectDraws.h"
+#	include "DrawcallLimitFix/Draws/FrameDriver.h"
+#	include "DrawcallLimitFix/Draws/Pipelines/ShaderPrograms.h"
+#	include "DrawcallLimitFix/Engine/Views/ShadowViews.h"
+#	include "DrawcallLimitFix/Runtime/Toggles.h"
+#	include "DrawcallLimitFix/Engine/Cull/PassCapture.h"
+#	include "DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
+#	include "DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
+#	include "DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
+#	include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#	include "DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
+#	include "DrawcallLimitFix/Engine/Capture/SceneTracker.h"
+#	include "DrawcallLimitFix/Runtime/Switches.h"
+#	include "RenderGraph/RenderGraphRuntime.h"
+#	include "State.h"
+#	include "DrawcallLimitFix/Engine/Capture/ConstantMirror.h"
+#	include "DrawcallLimitFix/Diagnostics/Scene/CaptureParity.h"
+#	include "DrawcallLimitFix/Diagnostics/Feature/TargetDump.h"
+#	include "DrawcallLimitFix/Runtime/FrameRetirement.h"
+
+#	include <ORGModuleServices/BackingPool.h>
 
 void DrawcallLimitFix::PostPostLoad()
 {
@@ -540,3 +548,88 @@ void DrawcallLimitFix::DrawSettings()
 		ImGui::TreePop();
 	}
 }
+
+void DrawcallLimitFix::NoteMaterialWritten(const RE::BSShaderMaterial* a_material)
+{
+	DCLF::MaterialWrites::NoteWritten(a_material);
+}
+
+void DrawcallLimitFix::PrecompileShader(const RE::BSShader& a_shader, bool a_pixel, std::uint32_t a_descriptor)
+{
+	DCLF::ShaderPrograms::Get().Precompile(a_shader, a_pixel, a_descriptor);
+}
+
+void DrawcallLimitFix::OnMap(ID3D11Resource* a_resource, void* a_data)
+{
+	if (DCLF::CaptureParity::Enabled())
+		DCLF::CaptureParity::Get().OnMap(a_resource, a_data);
+	if (auto& mirror = DCLF::ConstantMirror::Get(); mirror.Any())
+		mirror.OnMap(a_resource, a_data);
+}
+
+void DrawcallLimitFix::OnUnmap(ID3D11Resource* a_resource)
+{
+	if (DCLF::CaptureParity::Enabled())
+		DCLF::CaptureParity::Get().OnUnmap(a_resource);
+	if (auto& mirror = DCLF::ConstantMirror::Get(); mirror.Any())
+		mirror.OnUnmap(a_resource);
+}
+
+void DrawcallLimitFix::OnUpdateSubresource(ID3D11Resource* a_resource, const D3D11_BOX* a_box, const void* a_data)
+{
+	if (auto& mirror = DCLF::ConstantMirror::Get(); mirror.Any())
+		mirror.OnUpdateSubresource(a_resource, a_box, a_data);
+}
+
+bool DrawcallLimitFix::TargetDumpArmed()
+{
+	return DCLF::TargetDump::Armed();
+}
+
+void DrawcallLimitFix::TargetDumpPoint(const char* a_label, ID3D11Texture2D* a_extra)
+{
+	DCLF::TargetDump::Point(a_label, a_extra);
+}
+
+void DrawcallLimitFix::OnGraphFrameCompleted(std::uint64_t a_hostFrame)
+{
+	DCLF::FrameRetirement()->Advance(DCLF::RetirementPoint(a_hostFrame));
+}
+
+#else  // !CS_HAS_DCLF: built without the render graph or ORGModuleServices; nothing is installed and every entry point is inert.
+
+void DrawcallLimitFix::PostPostLoad()
+{
+	unavailableReason = "built without the render graph (CS_HAS_DCLF off)";
+	logger::info("[DCLF] {}; the game renders natively", unavailableReason);
+}
+void DrawcallLimitFix::SetupResources() {}
+void DrawcallLimitFix::Reset() {}
+void DrawcallLimitFix::Prepass() {}
+void DrawcallLimitFix::EarlyPrepass() {}
+void DrawcallLimitFix::DrawSettings()
+{
+	ImGui::TextWrapped("Unavailable: %s", unavailableReason.c_str());
+}
+void DrawcallLimitFix::BeforeOpaquePass() {}
+void DrawcallLimitFix::AfterOpaquePass() {}
+void DrawcallLimitFix::ProbeOpaqueTarget(std::uint32_t) {}
+void DrawcallLimitFix::BeforeShadowMaps() {}
+void DrawcallLimitFix::AfterShadowMaps() {}
+void DrawcallLimitFix::OnNativeLightingDraw(RE::BSRenderPass*, std::uint32_t) {}
+bool DrawcallLimitFix::OcclusionReady(OcclusionMap) { return false; }
+bool DrawcallLimitFix::OcclusionNeedsEngine(OcclusionMap) { return true; }
+void DrawcallLimitFix::OcclusionView(OcclusionMap) {}
+void DrawcallLimitFix::DrawOcclusion() {}
+bool DrawcallLimitFix::OcclusionReferenceFrame(OcclusionMap) { return false; }
+void DrawcallLimitFix::OcclusionReferenceRendered(OcclusionMap) {}
+void DrawcallLimitFix::NoteMaterialWritten(const RE::BSShaderMaterial*) {}
+void DrawcallLimitFix::PrecompileShader(const RE::BSShader&, bool, std::uint32_t) {}
+void DrawcallLimitFix::OnMap(ID3D11Resource*, void*) {}
+void DrawcallLimitFix::OnUnmap(ID3D11Resource*) {}
+void DrawcallLimitFix::OnUpdateSubresource(ID3D11Resource*, const D3D11_BOX*, const void*) {}
+bool DrawcallLimitFix::TargetDumpArmed() { return false; }
+void DrawcallLimitFix::TargetDumpPoint(const char*, ID3D11Texture2D*) {}
+void DrawcallLimitFix::OnGraphFrameCompleted(std::uint64_t) {}
+
+#endif

@@ -21,9 +21,7 @@
 #include "Features/InteriorSun.h"
 #include "Features/LODBlending.h"
 #include "Features/DrawcallLimitFix.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Scene/CaptureParity.h"
-#include "Features/DrawcallLimitFix/Engine/Capture/ConstantMirror.h"
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Utils/SwitchFile.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
@@ -304,10 +302,7 @@ namespace globals
 			if (hr == S_OK) {
 				if (*globals::game::perFrame.get() == pResource)
 					globals::game::mappedFrameBuffer = pMappedResource;
-				if (DCLF::CaptureParity::Enabled())
-					DCLF::CaptureParity::Get().OnMap(pResource, pMappedResource->pData);
-				if (auto& mirror = DCLF::ConstantMirror::Get(); mirror.Any())
-					mirror.OnMap(pResource, pMappedResource->pData);
+				DrawcallLimitFix::OnMap(pResource, pMappedResource->pData);
 			}
 			return hr;
 		}
@@ -326,10 +321,7 @@ namespace globals
 			if (*globals::game::perFrame.get() == pResource && globals::game::mappedFrameBuffer) {
 				CacheFramebuffer();
 			}
-			if (DCLF::CaptureParity::Enabled())
-				DCLF::CaptureParity::Get().OnUnmap(pResource);
-			if (auto& mirror = DCLF::ConstantMirror::Get(); mirror.Any())
-				mirror.OnUnmap(pResource);
+			DrawcallLimitFix::OnUnmap(pResource);
 			func(This, pResource, Subresource);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -341,8 +333,7 @@ namespace globals
 		static void thunk(ID3D11DeviceContext* This, ID3D11Resource* pDstResource, UINT DstSubresource, const D3D11_BOX* pDstBox, const void* pSrcData, UINT SrcRowPitch,
 			UINT SrcDepthPitch)
 		{
-			if (auto& mirror = DCLF::ConstantMirror::Get(); mirror.Any())
-				mirror.OnUpdateSubresource(pDstResource, pDstBox, pSrcData);
+			DrawcallLimitFix::OnUpdateSubresource(pDstResource, pDstBox, pSrcData);
 			func(This, pDstResource, DstSubresource, pDstBox, pSrcData, SrcRowPitch, SrcDepthPitch);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -518,7 +509,8 @@ namespace globals
 
 	void BeginDCLFDepthTrace(ID3D11Texture2D* a_depth)
 	{
-		if (!a_depth || !DCLF::SwitchEnabled(DCLF::Switch::DepthTrace) || depthTracedFrames >= 5 || ++depthCandidateFrames < 40)
+		static const bool depthTrace = Util::SwitchFile::Enabled("CS_DCLF_DEPTH_TRACE");
+		if (!a_depth || !depthTrace || depthTracedFrames >= 5 || ++depthCandidateFrames < 40)
 			return;
 		std::scoped_lock lock(depthTraceMutex);
 		depthTraceTarget = a_depth;
@@ -555,9 +547,11 @@ namespace globals
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
 		stl::detour_vfunc<48, ID3D11DeviceContext_UpdateSubresource>(a_context);
-		if (DCLF::SwitchEnabled(DCLF::Switch::DrawTrace) && !DCLF::SwitchEnabled(DCLF::Switch::DepthTrace))
+		// CS_DCLF_DRAW_TRACE / CS_DCLF_DEPTH_TRACE (Drawcall Limit Fix's diagnostics).
+		const bool depthTrace = Util::SwitchFile::Enabled("CS_DCLF_DEPTH_TRACE");
+		if (Util::SwitchFile::Enabled("CS_DCLF_DRAW_TRACE") && !depthTrace)
 			stl::detour_vfunc<12, ID3D11DeviceContext_DrawCallerTrace>(a_context);
-		if (DCLF::SwitchEnabled(DCLF::Switch::DepthTrace)) {
+		if (depthTrace) {
 			stl::detour_vfunc<53, ID3D11DeviceContext_DepthClearTrace>(a_context);
 			stl::detour_vfunc<47, ID3D11DeviceContext_DepthCopyTrace>(a_context);
 			stl::detour_vfunc<33, ID3D11DeviceContext_DepthBindTrace>(a_context);

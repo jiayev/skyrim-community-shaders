@@ -1,15 +1,14 @@
 // The main epochs' commit (render thread, inside the epoch): stream views, CommitMainPayload (the frame's values
 // into the selected revision's shape) and the depth commit's scene uploads; DecideTreeLod; and the fade write-back (armed by the
 // depth commit, judged on DCLF's executor by KickFadeWriteBack, its stores made on the main thread by WriteFadeStores).
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#	include "Features/TerrainBlending.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Reports/Draws.h"
+#include "Features/TerrainBlending.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Reports/Draws.h"
 
-#	include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
+#include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
 
 namespace DCLF
 {
@@ -613,7 +612,6 @@ namespace DCLF
 
 }
 
-#endif
 
 namespace DCLF
 {

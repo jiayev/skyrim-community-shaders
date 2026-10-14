@@ -1,10 +1,9 @@
 // CS_DCLF_PERSISTENT_PARITY: the stores the builds keep against a rebuild from the tables (the object records, the geometry table, the
 // extras rows as each payload backing holds them, the draw bound, the kept shadow build, the exclusions' reuse). Each runs on its store's thread.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "DrawsState.h"
-#	include "Events.h"
-#	include "Observers.h"
+#include "DrawsState.h"
+#include "Events.h"
+#include "Observers.h"
 
 namespace DCLF::Diagnostics
 {
@@ -202,5 +201,3 @@ namespace DCLF::Diagnostics
 		(a_rebuilt.parabolic ? kept.parabolicExclusion : kept.sunExclusion).Check(a_rebuilt.same);
 	}
 }
-
-#endif

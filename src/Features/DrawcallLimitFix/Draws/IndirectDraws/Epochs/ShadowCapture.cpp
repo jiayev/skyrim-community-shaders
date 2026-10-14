@@ -1,15 +1,14 @@
 // The shadow and occlusion views' captures (render thread): at the engine's shadow and occlusion hooks, each view's target,
 // viewport, camera and constants, DCLF's own where it has them; the views' coverage and the occlusion maps' predicted layout.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Epochs/ShadowEpochs.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Epochs/ShadowEpochs.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
-#	include "Features/DrawcallLimitFix/Engine/Views/FocusViews.h"
-#	include "Features/DrawcallLimitFix/Engine/Views/LightViews.h"
-#	include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Engine/Views/FocusViews.h"
+#include "Features/DrawcallLimitFix/Engine/Views/LightViews.h"
+#include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
 
 namespace DCLF
 {
@@ -461,5 +460,3 @@ namespace DCLF
 		return out;
 	}
 }
-
-#endif

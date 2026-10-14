@@ -2,11 +2,10 @@
 
 // DrawsState: the draw observers' state between hook points. Render thread unless noted.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
-#	include "DrawsView.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
+#include "DrawsView.h"
 
 namespace DCLF::Diagnostics
 {
@@ -340,4 +339,3 @@ namespace DCLF::Diagnostics
 		} capturePoint;
 	};
 }
-#endif

@@ -2,10 +2,9 @@
 // Shaders' (ShaderCache, which takes its lock and may start a compile: an observer only, never what the builds read), for every entry the
 // installed lookups resolved. Render thread; the report takes the counts.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "DrawsState.h"
-#	include "Observers.h"
-#	include "ShaderCache.h"
+#include "DrawsState.h"
+#include "Observers.h"
+#include "ShaderCache.h"
 
 namespace DCLF::Diagnostics
 {
@@ -61,5 +60,3 @@ namespace DCLF::Diagnostics
 		}
 	}
 }
-
-#endif

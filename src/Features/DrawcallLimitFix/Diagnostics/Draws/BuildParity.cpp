@@ -2,12 +2,11 @@
 // words) copied to staging and compared three main epochs later with the CPU's templates. The templates' row addresses are offsets into
 // the row tables; the epoch's payload (PayloadVersions) places them, recorded when the check is armed.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "DrawsState.h"
+#include "DrawsState.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#	include "DrawsView.h"
-#	include "Events.h"
-#	include "Observers.h"
+#include "DrawsView.h"
+#include "Events.h"
+#include "Observers.h"
 
 namespace DCLF::Diagnostics
 {
@@ -276,5 +275,3 @@ namespace DCLF::Diagnostics
 			parity = std::move(readback);
 	}
 }
-
-#endif

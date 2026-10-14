@@ -1,8 +1,7 @@
 // The GPU-to-host copies: tree LOD's list counts and the fade and visibility event rings.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/PassesInternal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/PassesInternal.h"
 
 namespace DCLF::Draws
 {
@@ -228,5 +227,3 @@ namespace DCLF::Draws
 		});
 	}
 }
-
-#endif
