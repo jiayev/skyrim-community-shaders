@@ -147,7 +147,8 @@ namespace SharedData
 
 		float WallRainWetness;
 		float WallRainDarkening;
-		float2 pad0;
+		bool EnableWallRain;
+		float WallRainTrailLength;
 	};
 
 	struct SkylightingSettings
