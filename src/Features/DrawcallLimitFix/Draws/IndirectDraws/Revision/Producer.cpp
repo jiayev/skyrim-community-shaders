@@ -2,10 +2,9 @@
 // revision's shapes and latches from a publication and the frame's posted RevisionInputs, then AssembleRevision seals them. Also the
 // main shape's plans (shared with the commits) and the scene lane's first-person and reflection slot checks.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF
 {
@@ -712,5 +711,3 @@ namespace DCLF
 		return p < tables.pipelines.size() && ViewForwardKey(ViewKind::Reflection, tables, p, key) && ForwardPipelineOf(a_catalog, key, targets).valid();
 	}
 }
-
-#endif

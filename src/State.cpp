@@ -14,7 +14,7 @@
 #include "EngineFixes/LODBlendRingFix.h"
 #include "EngineFixes/LandscapeSeamsFix.h"
 #include "EngineFixes/SunShadowMaskFix.h"
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Utils/SwitchFile.h"
 #include "Features/DrawcallLimitFix.h"
 #include "GpuEventTimers.h"
 #include "RenderGraph/NvPerfBridge.h"
@@ -1151,7 +1151,7 @@ std::shared_ptr<const std::vector<std::pair<std::string, std::string>>> State::G
 {
 	// CS_DCLF_SHADOW_DEBUG_OUTPUT (dclf-open-defects.md): Lighting.hlsl writes chosen intermediate values into the Diffuse
 	// target, native and DCLF alike (DCLF_SHADOW_DEBUG).
-	const bool shadowDebug = DCLF::SwitchEnabled(DCLF::Switch::ShadowDebugOutput);
+	static const bool shadowDebug = Util::SwitchFile::Enabled("CS_DCLF_SHADOW_DEBUG_OUTPUT");
 	std::scoped_lock lock(shaderDefinesMutex);
 	if (shadowDebug && std::ranges::none_of(*shaderDefines, [](const auto& a_define) { return a_define.first == "DCLF_SHADOW_DEBUG"; })) {
 		auto defines = std::make_shared<std::vector<std::pair<std::string, std::string>>>(*shaderDefines);

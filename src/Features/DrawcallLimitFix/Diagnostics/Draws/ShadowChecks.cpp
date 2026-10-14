@@ -2,15 +2,14 @@
 // view's draw, the predicted target, the occlusion maps' views, the sun's full-frustum processes), the sun entry test on the GPU against
 // the CPU's, and the index pool's ranges against the tables.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "DrawsState.h"
+#include "DrawsState.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
-#	include "Events.h"
-#	include "Observers.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Engine/ShadowViewTally.h"
+#include "Events.h"
+#include "Observers.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Engine/ShadowViewTally.h"
 // ShadowCapture.cpp's: the engine's rasterizer state id, and where and with which block the engine has just drawn a view.
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Epochs/ShadowEpochs.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Epochs/ShadowEpochs.h"
 
 namespace DCLF::Diagnostics
 {
@@ -259,5 +258,3 @@ namespace DCLF::Diagnostics
 		}
 	}
 }
-
-#endif

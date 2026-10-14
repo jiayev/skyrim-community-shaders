@@ -1,10 +1,10 @@
 #include "Streamline.h"
-#include "Features/DrawcallLimitFix/Diagnostics/Feature/TargetDump.h"
+#include "Features/DrawcallLimitFix.h"
 
 #include "DXVKInterop.h"
 
 #include "../../DxvkLoader.h"
-#include "../DrawcallLimitFix/Runtime/Switches.h"
+#include "Utils/SwitchFile.h"
 #include "../../Globals.h"
 #include "../../State.h"
 #include "../../Utils/Game.h"
@@ -462,7 +462,7 @@ bool Streamline::Initialize()
 
 	// Reflex and PCL make the interposer enable VK_NV_low_latency on DXVK's device, which Nsight Graphics refuses to capture. For
 	// now they load only on request, CS_STREAMLINE_REFLEX=1, and DLSS-G (which needs Reflex) with them.
-	const bool reflexRequested = DCLF::SwitchEnabled(DCLF::Switch::StreamlineReflex);
+	const bool reflexRequested = Util::SwitchFile::Enabled("CS_STREAMLINE_REFLEX");
 	std::vector<sl::Feature> featuresToLoad = { sl::kFeatureDLSS, sl::kFeatureFSR, sl::kFeatureFSR_G, sl::kFeatureXeSS };
 	if (reflexRequested) {
 		featuresToLoad.push_back(sl::kFeatureReflex);
@@ -916,7 +916,7 @@ static bool cs_BuildConstants(sl::Constants& a_consts, uint32_t a_outputWidth, u
 		}
 	}
 	// CS_DCLF_TARGET_DUMP's frames: the constants, to compare a good frame with a corrupt one (dclf-open-defects.md, the inn).
-	if (DCLF::TargetDump::Armed())
+	if (DrawcallLimitFix::TargetDumpArmed())
 		logger::info("[Streamline] dump constants: posAdj ({:.3f} {:.3f} {:.3f}) prev ({:.3f} {:.3f} {:.3f}); near {} far {} fov {}; viewToClip [{:.4f} {:.4f} {:.4f} {:.4f} | {:.4f} {:.4f}]; curVP r0 [{:.5f} {:.5f} {:.5f} {:.5f}] r3 [{:.5f} {:.5f} {:.5f} {:.5f}]; prevVP r0 [{:.5f} {:.5f} {:.5f} {:.5f}] r3 [{:.5f} {:.5f} {:.5f} {:.5f}]; clipToPrevClip diag [{:.5f} {:.5f} {:.5f} {:.5f}] row3 [{:.5f} {:.5f} {:.5f}]; jitter ({:.4f} {:.4f}); finite {}",
 			posAdj.x, posAdj.y, posAdj.z, prevPosAdj.x, prevPosAdj.y, prevPosAdj.z, a_consts.cameraNear, a_consts.cameraFar, a_consts.cameraFOV, cameraViewToClip._11, cameraViewToClip._22,
 			cameraViewToClip._33, cameraViewToClip._34, cameraViewToClip._43, cameraViewToClip._44, curVP._11, curVP._12, curVP._13, curVP._14, curVP._41, curVP._42, curVP._43, curVP._44,
@@ -1583,7 +1583,7 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 
 		// CS_DCLF_TARGET_DUMP frames: the inputs as this command buffer sees them, before the evaluate (InCbReadback).
 		static uint32_t s_dumpFrames = 0;
-		const bool readback = DCLF::TargetDump::Armed() && haveColor && s_dumpFrames < 3 && InCbReadback::Ensure(dxvk);
+		const bool readback = DrawcallLimitFix::TargetDumpArmed() && haveColor && s_dumpFrames < 3 && InCbReadback::Ensure(dxvk);
 		if (readback) {
 			InCbReadback::Record(cmd, colorInRes, fmt::format("f{}-in-color", s_dumpFrames + 1), a_renderWidth, a_renderHeight);
 			InCbReadback::Record(cmd, mvecRes, fmt::format("f{}-in-mvec", s_dumpFrames + 1), a_renderWidth, a_renderHeight);

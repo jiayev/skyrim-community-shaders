@@ -1,14 +1,12 @@
 // Switches: the registry (name, kind, description per switch), the switches file and environment read once, the startup summary.
 #include "Features/DrawcallLimitFix/Runtime/Switches.h"
 
-#include <ShlObj.h>
+#include "Utils/SwitchFile.h"
+
 #include <Windows.h>
 
 #include <array>
-#include <fstream>
 #include <string_view>
-
-#include <ankerl/unordered_dense.h>
 
 namespace DCLF
 {
@@ -161,51 +159,6 @@ namespace DCLF
 			return true;
 		}());
 
-		constexpr const char* kFileName = "CommunityShaders-DCLF.ini";
-
-		// NAME=value per line; blank lines and lines starting with ';' or '#' are ignored.
-		ankerl::unordered_dense::map<std::string, std::string> LoadFile()
-		{
-			ankerl::unordered_dense::map<std::string, std::string> values;
-			const auto directory = SwitchesDirectory();
-			if (directory.empty())
-				return values;
-			std::ifstream file(directory / kFileName);
-			if (!file)
-				return values;
-			std::string line;
-			while (std::getline(file, line)) {
-				while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
-					line.pop_back();
-				const auto first = line.find_first_not_of(" \t");
-				if (first == std::string::npos || line[first] == ';' || line[first] == '#')
-					continue;
-				const auto equals = line.find('=', first);
-				if (equals == std::string::npos)
-					continue;
-				auto name = line.substr(first, equals - first);
-				while (!name.empty() && (name.back() == ' ' || name.back() == '\t'))
-					name.pop_back();
-				values[name] = line.substr(equals + 1);
-			}
-			return values;
-		}
-
-		std::string Environment(std::string_view a_name)
-		{
-			// Whatever its length (a test command list can run to kilobytes): the size first, then the value.
-			const std::string name(a_name);
-			const DWORD size = GetEnvironmentVariableA(name.c_str(), nullptr, 0);
-			if (!size)
-				return {};
-			std::string value(size, char{});
-			const DWORD length = GetEnvironmentVariableA(name.c_str(), value.data(), size);
-			if (!length || length >= size)
-				return {};
-			value.resize(length);
-			return value;
-		}
-
 		struct Values
 		{
 			std::array<std::string, static_cast<std::size_t>(Switch::Count)> value;
@@ -217,13 +170,9 @@ namespace DCLF
 		{
 			static const Values values = [] {
 				Values v;
-				const auto file = LoadFile();
 				for (const auto& entry : kRegistry) {
 					auto& value = v.value[static_cast<std::size_t>(entry.id)];
-					value = Environment(entry.name);
-					if (value.empty() && !entry.environmentOnly)
-						if (const auto it = file.find(std::string(entry.name)); it != file.end())
-							value = it->second;
+					value = Util::SwitchFile::Value(entry.name, entry.environmentOnly);
 					v.enabled[static_cast<std::size_t>(entry.id)] = value == "1";
 				}
 				auto known = [](std::string_view a_name) {
@@ -232,7 +181,7 @@ namespace DCLF
 							return true;
 					return false;
 				};
-				for (const auto& [name, value] : file)
+				for (const auto& name : Util::SwitchFile::FileNames())
 					if (!known(name))
 						v.unknown.push_back(name);
 				if (auto* block = GetEnvironmentStringsW()) {
@@ -269,15 +218,7 @@ namespace DCLF
 		}
 	}
 
-	std::filesystem::path SwitchesDirectory()
-	{
-		PWSTR documents = nullptr;
-		if (FAILED(SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_DEFAULT, nullptr, &documents)))
-			return {};
-		std::filesystem::path path(documents);
-		CoTaskMemFree(documents);
-		return path / L"My Games" / L"Skyrim Special Edition" / L"SKSE";
-	}
+	std::filesystem::path SwitchesDirectory() { return Util::SwitchFile::Directory(); }
 
 	const std::string& SwitchValue(Switch a_switch)
 	{

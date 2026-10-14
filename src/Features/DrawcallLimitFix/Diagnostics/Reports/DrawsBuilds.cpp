@@ -1,8 +1,7 @@
 #include "Draws.h"
 #include "Schedule.h"
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
 
 // The draws' build lines (constant tables, pass statistics, the colour sun test), for the render thread's report (Frame.cpp).
 
@@ -38,11 +37,3 @@ namespace DCLF::Reports
 		logger::info("[DCLF] colour sun test: {} of {} frames without the sun's cascades{}", a_empty, kInterval, a_empty ? " <- NO CASCADES" : " <- OK");
 	}
 }
-#else
-namespace DCLF::Reports
-{
-	void ColourSunTestLine(std::uint32_t) {}
-	void ConstantTableLines() {}
-	void PassStatsLine(const std::array<std::array<std::uint64_t, 4>, 3>&, const std::array<std::uint32_t, 3>&) {}
-}
-#endif

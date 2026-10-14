@@ -20,12 +20,9 @@
 #include "Features/DrawcallLimitFix/Runtime/Switches.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 
-#if defined(CS_HAS_ORG_MODULE_SERVICES) && defined(ORG_MODULE_SERVICES_HAS_DXC)
-#	include <ORGModuleServices/ShaderCompiler.h>
+#include <ORGModuleServices/ShaderCompiler.h>
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
-#	define DCLF_HAS_SHADER_COMPILER 1
-#endif
 
 namespace DCLF
 {
@@ -230,7 +227,6 @@ namespace DCLF
 		}
 	}
 
-#if defined(DCLF_HAS_SHADER_COMPILER)
 	namespace
 	{
 		/**
@@ -262,14 +258,11 @@ namespace DCLF
 			std::uint64_t id = 0;
 		};
 	}
-#endif
 
 	template <class P, std::size_t N>
 	struct ShaderPrograms::ProgramEntry
 	{
-#if defined(DCLF_HAS_SHADER_COMPILER)
 		std::array<StagePtr, N> stages;
-#endif
 		std::uint8_t remaining = 0;  // stages not completed when requested (StageCache::waiting)
 		std::unique_ptr<P> program;
 		bool failed = false;
@@ -341,7 +334,6 @@ namespace DCLF
 			else
 				logger::warn("[DCLF] {} is missing; effect meshes stay native", kEffectSourcePath);
 		}
-#if defined(DCLF_HAS_SHADER_COMPILER)
 		if (auto* compiler = RenderGraphRuntime::Get().ShaderCompiler()) {
 			sourceFingerprint = compiler->FingerprintInputs(source, dependencies);
 			effectFingerprint = effectSource.empty() ? 0 : compiler->FingerprintInputs(effectSource, dependencies);
@@ -349,7 +341,6 @@ namespace DCLF
 			utilityFingerprint = utilitySource.empty() ? 0 : compiler->FingerprintInputs(utilitySource, dependencies);
 			distantTreeFingerprint = distantTreeSource.empty() ? 0 : compiler->FingerprintInputs(distantTreeSource, dependencies);
 		}
-#endif
 		sourcesLoaded = true;
 		logger::info("[DCLF] SPIR-V builds of {}: {} shader files tracked as dependencies", kSourcePath, dependencies.size());
 		if (ShaderDebug())
@@ -357,7 +348,6 @@ namespace DCLF
 		return true;
 	}
 
-#if defined(DCLF_HAS_SHADER_COMPILER)
 	namespace
 	{
 		// Requests a_stage's compile; the completion callback fills it and pushes its key to StageCompletions.
@@ -434,7 +424,6 @@ namespace DCLF
 			});
 		}
 	}
-#endif
 
 	struct ShaderPrograms::StageCache
 	{
@@ -443,7 +432,6 @@ namespace DCLF
 		bool started = false;
 		struct Pending { const RE::BSShader* shader; bool pixel; std::uint32_t descriptor; };
 		std::vector<Pending> pending;
-#if defined(DCLF_HAS_SHADER_COMPILER)
 		ankerl::unordered_dense::map<std::uint64_t, StagePtr> stages;
 		// The compiler Configure pointed at DCLF's build executor (requestMutex): the runtime's, which a restart replaces.
 		org::services::ShaderCompiler* configured = nullptr;
@@ -526,7 +514,6 @@ namespace DCLF
 				ready.push_back({ a_user, a_id });
 			return true;
 		}
-#endif
 	};
 
 	ShaderPrograms::ShaderPrograms() : stages(std::make_unique<StageCache>()) {}
@@ -534,7 +521,6 @@ namespace DCLF
 
 	void ShaderPrograms::Precompile(const RE::BSShader& a_shader, bool a_pixel, std::uint32_t a_descriptor)
 	{
-#if defined(DCLF_HAS_SHADER_COMPILER)
 		const bool enabled = SwitchValue(Switch::Precompile) != "0";
 		if (!enabled)
 			return;
@@ -568,7 +554,6 @@ namespace DCLF
 						a_pixel ? "PS" : "VS", a_descriptor, artifact.diagnostics.substr(0, 1500));
 			}
 		}
-#endif
 	}
 
 	void ShaderPrograms::StartPrecompile()
@@ -595,7 +580,6 @@ namespace DCLF
 	{
 		a_slot = std::make_unique<E>();
 		auto& entry = *a_slot;
-#if defined(DCLF_HAS_SHADER_COMPILER)
 		std::array<bool, std::tuple_size_v<decltype(entry.stages)>> created{};
 		entry.stages = a_makeStages(created.data());
 		if (!stages->Await(static_cast<StageUser>(a_user), a_id, entry.stages, entry.remaining)) {
@@ -605,9 +589,6 @@ namespace DCLF
 		for (std::size_t i = 0; i < created.size(); ++i)
 			entry.onDemand |= created[i] ? static_cast<std::uint8_t>(1u << i) : std::uint8_t(0);
 		entry.requested = std::chrono::steady_clock::now();
-#else
-		entry.failed = true;
-#endif
 		if (a_requested)
 			a_requested->fetch_add(1, std::memory_order_relaxed);
 		return entry;
@@ -635,13 +616,11 @@ namespace DCLF
 		auto& slot = entries[id];
 		if (!slot) {
 			MakeEntry(slot, static_cast<std::uint8_t>(StageUser::Lighting), id, &laneStats.requested, laneStats.failed, [&]([[maybe_unused]] bool* a_created) {
-#if defined(DCLF_HAS_SHADER_COMPILER)
 				return std::array<StagePtr, 5>{ stages->Request(*this, a_lighting, false, a_key.vertexDescriptor, false, &a_created[0]),
 					stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, false, &a_created[1]),
 					stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, true, &a_created[2]),
 					stages->Request(*this, a_lighting, false, a_key.vertexDescriptor, false, &a_created[3], true),
 					stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, true, &a_created[4], true) };
-#endif
 			});
 			if (a_onDemand)
 				*a_onDemand = slot->onDemand;
@@ -657,9 +636,7 @@ namespace DCLF
 		auto& slot = effectEntries[id];
 		if (!slot)
 			MakeEntry(slot, static_cast<std::uint8_t>(StageUser::Effect), id, &laneStats.requested, laneStats.failed, [&](bool*) {
-#if defined(DCLF_HAS_SHADER_COMPILER)
 				return std::array<StagePtr, 2>{ stages->Request(*this, a_effect, false, a_key.vertexDescriptor), stages->Request(*this, a_effect, true, a_key.pixelDescriptor) };
-#endif
 			});
 		return Found(slot.get(), a_failed);
 	}
@@ -678,10 +655,8 @@ namespace DCLF
 			// Both stages take the same technique: Utility's descriptor is the technique itself, not a pair of vertex and pixel
 			// descriptors as the Lighting shader's is.
 			MakeEntry(slot, static_cast<std::uint8_t>(StageUser::Shadow), a_technique, &laneStats.shadowRequested, laneStats.shadowFailed, [&]([[maybe_unused]] bool* a_created) {
-#if defined(DCLF_HAS_SHADER_COMPILER)
 				return std::array<StagePtr, 2>{ stages->Request(*this, a_utility, false, a_technique, false, &a_created[0]),
 					stages->Request(*this, a_utility, true, a_technique, false, &a_created[1]) };
-#endif
 			});
 			if (a_requested)
 				*a_requested = true;
@@ -697,11 +672,9 @@ namespace DCLF
 			return Found<TreeLodEntry>(nullptr, a_failed);
 		if (!treeLodEntry)
 			MakeEntry(treeLodEntry, static_cast<std::uint8_t>(StageUser::TreeLod), 0, nullptr, laneStats.failed, [&](bool*) {
-#if defined(DCLF_HAS_SHADER_COMPILER)
 				const std::uint32_t colour = kDistantTreeDeferred | kDistantTreeAlphaTest, depth = kDistantTreeDepth | kDistantTreeAlphaTest;
 				return std::array<StagePtr, 4>{ stages->Request(*this, a_distantTree, false, colour), stages->Request(*this, a_distantTree, true, colour),
 					stages->Request(*this, a_distantTree, false, depth), stages->Request(*this, a_distantTree, true, depth) };
-#endif
 			});
 		return Found(treeLodEntry.get(), a_failed);
 	}
@@ -715,11 +688,9 @@ namespace DCLF
 		auto& slot = forwardEntries[id];
 		if (!slot)
 			MakeEntry(slot, static_cast<std::uint8_t>(StageUser::Forward), id, nullptr, laneStats.failed, [&](bool*) {
-#if defined(DCLF_HAS_SHADER_COMPILER)
 				// The pulled vertex stage is the Z-prepass's (the stage cache's key is the descriptor's); the pixel stage the colour one.
 				return std::array<StagePtr, 2>{ stages->Request(*this, a_lighting, false, a_vertexDescriptor, false, nullptr, true),
 					stages->Request(*this, a_lighting, true, a_pixelDescriptor, false, nullptr, true) };
-#endif
 			});
 		return Found(slot.get(), a_failed);
 	}
@@ -730,15 +701,12 @@ namespace DCLF
 			return Found<ForwardEntry>(nullptr, a_failed);
 		if (!forwardTreeLodEntry)
 			MakeEntry(forwardTreeLodEntry, static_cast<std::uint8_t>(StageUser::ForwardTreeLod), 0, nullptr, laneStats.failed, [&](bool*) {
-#if defined(DCLF_HAS_SHADER_COMPILER)
 				return std::array<StagePtr, 2>{ stages->Request(*this, a_distantTree, false, kDistantTreeAlphaTest),
 					stages->Request(*this, a_distantTree, true, kDistantTreeAlphaTest) };
-#endif
 			});
 		return Found(forwardTreeLodEntry.get(), a_failed);
 	}
 
-#if defined(DCLF_HAS_SHADER_COMPILER)
 	namespace
 	{
 		const org::services::ShaderArtifact& ArtifactOf(const StagePtr& a_stage) { return *a_stage->artifact; }
@@ -780,9 +748,7 @@ namespace DCLF
 			});
 		}
 	}
-#endif
 
-#if defined(DCLF_HAS_SHADER_COMPILER)
 	template <class E, class LogFailure>
 	void ShaderPrograms::FinishEntry(E& a_entry, std::atomic<std::uint32_t>* a_ready, std::atomic<std::uint32_t>& a_failed, LogFailure&& a_logFailure)
 	{
@@ -805,11 +771,9 @@ namespace DCLF
 			a_ready->fetch_add(1, std::memory_order_relaxed);
 		laneStats.fromCache.fetch_add(cached, std::memory_order_relaxed);
 	}
-#endif
 
 	void ShaderPrograms::UpdateLane(Finished& a_finished)
 	{
-#if defined(DCLF_HAS_SHADER_COMPILER)
 		FanOut(stages->waiting, stages->ready, [&](const StageWaiter& a_waiter) -> std::uint8_t& {
 			switch (a_waiter.user) {
 			case StageUser::Shadow: return shadowEntries.find(static_cast<std::uint32_t>(a_waiter.id))->second->remaining;
@@ -889,8 +853,5 @@ namespace DCLF
 					logger::warn("[DCLF] SPIR-V build of Lighting {} {:08X} failed:\n{}", kStages[a_stage], a_stage == 0 || a_stage == 3 ? vertex : pixel, a_artifact.diagnostics.substr(0, 1500));
 			});
 		}
-#else
-		(void)a_finished;
-#endif
 	}
 }

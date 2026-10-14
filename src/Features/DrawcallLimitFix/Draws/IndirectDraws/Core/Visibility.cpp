@@ -3,11 +3,10 @@
 // executor, and written as kAccumulated by the main thread at Main::Update's entry on the roots DCLF lists and their geometry.
 // The <- ACCUMULATED observer against the engine's bit runs only under CS_DCLF_ACCUMULATED_PARITY.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
-#	include "Features/DrawcallLimitFix/Scene/Coordinator/CandidateTable.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/CandidateTable.h"
 
 namespace DCLF
 {
@@ -1283,5 +1282,3 @@ namespace DCLF
 	}
 
 }
-
-#endif

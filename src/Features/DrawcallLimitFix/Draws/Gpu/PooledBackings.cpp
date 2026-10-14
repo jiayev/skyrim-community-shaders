@@ -1,17 +1,16 @@
 // PooledBackings (see the header): DCLF's allocate and retire hooks for its backing pools.
 #include "PooledBackings.h"
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "RenderGraph/RenderGraphRuntime.h"
+#include "RenderGraph/RenderGraphRuntime.h"
 
-#	include <ORGModuleServices/BackingPool.h>
-#	include <OpenRenderGraph/PersistentGraphHost.h>
-#	include <Render/Runtime/ResourceCleanupQueue.h>
-#	include <Resources/Buffers/Buffer.h>
-#	include <rhi.h>
+#include <ORGModuleServices/BackingPool.h>
+#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <Render/Runtime/ResourceCleanupQueue.h>
+#include <Resources/Buffers/Buffer.h>
+#include <rhi.h>
 
-#	include <stdexcept>
-#	include <string>
+#include <stdexcept>
+#include <string>
 
 namespace DCLF::PooledBackings
 {
@@ -79,4 +78,3 @@ namespace DCLF::PooledBackings
 		return RenderGraphRuntime::kGameFramesInFlight - 1;
 	}
 }
-#endif

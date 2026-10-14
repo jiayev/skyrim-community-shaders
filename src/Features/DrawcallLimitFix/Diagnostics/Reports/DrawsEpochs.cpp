@@ -1,11 +1,10 @@
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
-#	include "Features/DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Scene/Residue.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Engine/Registrations.h"
-#	include "Engine.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
+#include "Features/DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Scene/Residue.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Engine/Registrations.h"
+#include "Engine.h"
 
 // The views' epochs' report lines (taken by IndirectDraws::AsyncReport): the forward epoch and the effects, the reflection faces, the
 // first-person view, the accumulated visibility, the shadow capability.
@@ -233,5 +232,3 @@ namespace DCLF
 			c.lastCause.empty() ? "" : " (last: " + c.lastCause + ")");
 	}
 }
-
-#endif

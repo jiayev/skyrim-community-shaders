@@ -1,9 +1,8 @@
 #include "Draws.h"
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
-#	include "Features/DrawcallLimitFix/Draws/Gpu/FrameData.h"
-#	include "Features/DrawcallLimitFix/Draws/Gpu/FrameValues.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
+#include "Features/DrawcallLimitFix/Draws/Gpu/FrameData.h"
+#include "Features/DrawcallLimitFix/Draws/Gpu/FrameValues.h"
 
 // The frame values' and the frame data's report lines.
 
@@ -68,10 +67,3 @@ namespace DCLF::Reports
 		return line;
 	}
 }
-#else
-namespace DCLF::Reports
-{
-	std::string FrameValuesLine() { return {}; }
-	std::string FrameDataLine() { return {}; }
-}
-#endif

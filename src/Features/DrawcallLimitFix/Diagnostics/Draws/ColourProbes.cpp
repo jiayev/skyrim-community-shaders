@@ -1,9 +1,8 @@
 // The colour epoch's probe: the objects whose bound covers a pixel (CS_DCLF_TARGET_PROBE).
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "DrawsState.h"
-#	include "Events.h"
-#	include "Observers.h"
+#include "DrawsState.h"
+#include "Events.h"
+#include "Observers.h"
 
 namespace DCLF::Diagnostics
 {
@@ -59,5 +58,3 @@ namespace DCLF::Diagnostics
 		}
 	}
 }
-
-#endif

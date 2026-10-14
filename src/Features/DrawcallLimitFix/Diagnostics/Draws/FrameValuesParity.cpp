@@ -1,8 +1,7 @@
 // CS_DCLF_PERSISTENT_PARITY: the frame values' rows and palettes against the engine's now.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "DrawsState.h"
-#	include "Observers.h"
+#include "DrawsState.h"
+#include "Observers.h"
 
 namespace DCLF::Diagnostics
 {
@@ -66,5 +65,3 @@ namespace DCLF::Diagnostics
 		}
 	}
 }
-
-#endif

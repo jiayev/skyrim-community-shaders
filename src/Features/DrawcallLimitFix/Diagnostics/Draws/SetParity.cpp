@@ -2,11 +2,10 @@
 // copied with the CPU's side that explains them, and read three frames later: a member drawn by nobody, an object drawn outside the
 // set, the depth and colour segments disagreeing, the registration hooks' claims against the set, and the gaps.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "DrawsState.h"
+#include "DrawsState.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#	include "Events.h"
-#	include "Observers.h"
+#include "Events.h"
+#include "Observers.h"
 
 namespace DCLF::Diagnostics
 {
@@ -434,6 +433,3 @@ namespace DCLF::Diagnostics
 		setParityFrames.push_back(std::move(snapshot));
 	}
 }
-
-#endif
-

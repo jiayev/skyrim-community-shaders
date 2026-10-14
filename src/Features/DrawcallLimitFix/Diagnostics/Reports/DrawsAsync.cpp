@@ -1,7 +1,6 @@
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
-#	include "Draws.h"
-#	include "Engine.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
+#include "Draws.h"
+#include "Engine.h"
 
 // IndirectDraws' report lines at the render thread's report (Reports::RenderThread): the async work, the views' epochs, the snapshots and
 // revisions (the payload's pools are the snapshot builder's: Impl::ProducerReport).
@@ -97,5 +96,3 @@ namespace DCLF
 		return text;
 	}
 }
-
-#endif

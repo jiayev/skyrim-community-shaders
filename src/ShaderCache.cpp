@@ -17,7 +17,7 @@
 
 #include "Features/DynamicCubemaps.h"
 #include "Features/RenderDoc.h"
-#include "Features/DrawcallLimitFix/Draws/Pipelines/ShaderPrograms.h"
+#include "Features/DrawcallLimitFix.h"
 
 #include "Plugin.h"
 
@@ -3962,7 +3962,7 @@ namespace SIE
 		}
 		if (shaderClass == ShaderClass::Vertex || shaderClass == ShaderClass::Pixel) {
 			try {
-				DCLF::ShaderPrograms::Get().Precompile(shader, shaderClass == ShaderClass::Pixel, descriptor);
+				DrawcallLimitFix::PrecompileShader(shader, shaderClass == ShaderClass::Pixel, descriptor);
 			} catch (const std::exception& e) {
 				// An optional ORG artifact must not turn a successful native compile into a failed task.
 				logger::warn("[DCLF] ORG shader precompile failed: {}", e.what());

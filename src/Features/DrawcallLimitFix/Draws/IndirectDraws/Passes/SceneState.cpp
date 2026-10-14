@@ -1,9 +1,8 @@
 // Next frame's scene state, on the compute queue beside the depth epoch: tree wind and fade states; and this frame's texture transforms
 // into the material rows, first in the depth epoch.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/PassesInternal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Passes/PassesInternal.h"
 
 namespace DCLF::Draws
 {
@@ -278,5 +277,3 @@ namespace DCLF::Draws
 		return std::make_shared<TextureTransformsPass>(std::move(a_resources));
 	}
 }
-
-#endif

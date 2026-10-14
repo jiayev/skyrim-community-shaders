@@ -1,6 +1,6 @@
 #include "BSLightingShaderMaterialPBRLandscape.h"
 
-#include "Features/DrawcallLimitFix/Engine/Capture/MaterialWrites.h"
+#include "Features/DrawcallLimitFix.h"
 
 BSLightingShaderMaterialPBRLandscape::BSLightingShaderMaterialPBRLandscape()
 {
@@ -37,7 +37,7 @@ RE::BSShaderMaterial* BSLightingShaderMaterialPBRLandscape::Create()
 void BSLightingShaderMaterialPBRLandscape::CopyMembers(RE::BSShaderMaterial* that)
 {
 	// DCLF's material records follow the material's writes (MaterialSources).
-	const DCLF::MaterialWrites::NoteWrittenOnExit written{ this };
+	const DrawcallLimitFix::MaterialWriteScope written{ this };
 	BSLightingShaderMaterialBase::CopyMembers(that);
 
 	auto* pbrThat = static_cast<BSLightingShaderMaterialPBRLandscape*>(that);
@@ -74,7 +74,7 @@ RE::BSShaderMaterial::Feature BSLightingShaderMaterialPBRLandscape::GetFeature()
 void BSLightingShaderMaterialPBRLandscape::ClearTextures()
 {
 	// DCLF's material records follow the material's writes (MaterialSources).
-	const DCLF::MaterialWrites::NoteWrittenOnExit written{ this };
+	const DrawcallLimitFix::MaterialWriteScope written{ this };
 	BSLightingShaderMaterialBase::ClearTextures();
 	for (auto& texture : landscapeBaseColorTextures) {
 		texture.reset();
@@ -95,7 +95,7 @@ void BSLightingShaderMaterialPBRLandscape::ClearTextures()
 void BSLightingShaderMaterialPBRLandscape::ReceiveValuesFromRootMaterial(bool skinned, bool rimLighting, bool softLighting, bool backLighting, bool MSN)
 {
 	// DCLF's material records follow the material's writes (MaterialSources).
-	const DCLF::MaterialWrites::NoteWrittenOnExit written{ this };
+	const DrawcallLimitFix::MaterialWriteScope written{ this };
 	BSLightingShaderMaterialBase::ReceiveValuesFromRootMaterial(skinned, rimLighting, softLighting, backLighting, MSN);
 	const auto& stateData = globals::game::graphicsState->GetRuntimeData();
 	if (terrainOverlayTexture == nullptr) {

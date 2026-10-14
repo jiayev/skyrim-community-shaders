@@ -1,12 +1,11 @@
 // The main epochs on the render thread: the Z-prepass's and colour pass's captures at their engine hooks, the forward and
 // refraction epoch, each epoch's commit of the installed publication's payload, and the frame blocks taken from the capture.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
-#	include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
-#	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF
 {
@@ -467,5 +466,3 @@ namespace DCLF
 		return in;
 	}
 }
-
-#endif

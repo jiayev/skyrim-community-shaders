@@ -1,40 +1,39 @@
 // DrawPipelines: the render thread's requests and frame inputs, the pipeline lane (passes on the coordinator executor: programs,
 // builds, set versions, the published catalog), and the indirect states the epochs bind.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 
 // volk must precede every Vulkan header in this translation unit.
-#	include <rhi_interop_vulkan.h>
+#include <rhi_interop_vulkan.h>
 
-#	include "Features/DrawcallLimitFix/Draws/Gpu/BuildExecutor.h"
-#	include "DrawPipelines.h"
-#	include "DrawPipelinesRhi.h"
-#	include "Features/DrawcallLimitFix/Draws/Pipelines/EngineStates.h"
-#	include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
-#	include "Features/DrawcallLimitFix/Runtime/LatestSlot.h"
-#	include "Features/DrawcallLimitFix/Runtime/SceneWake.h"
-#	include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Draws/Gpu/BuildExecutor.h"
+#include "DrawPipelines.h"
+#include "DrawPipelinesRhi.h"
+#include "Features/DrawcallLimitFix/Draws/Pipelines/EngineStates.h"
+#include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Runtime/LatestSlot.h"
+#include "Features/DrawcallLimitFix/Runtime/SceneWake.h"
+#include "Features/DrawcallLimitFix/Runtime/Switches.h"
 
-#	include "RenderGraph/RenderGraphRuntime.h"
-#	include "SpirvReflection.h"
-#	include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
-#	include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
-#	include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
-#	include "Features/DrawcallLimitFix/Scene/Model/Lookups.h"
-#	include "Features/DrawcallLimitFix/Scene/Ports/VertexInput.h"
-#	include "ShaderCache.h"
+#include "RenderGraph/RenderGraphRuntime.h"
+#include "SpirvReflection.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
+#include "Features/DrawcallLimitFix/Scene/Model/Lookups.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/VertexInput.h"
+#include "ShaderCache.h"
 
-#	include <Tracy/Tracy.hpp>
+#include <Tracy/Tracy.hpp>
 
-#	include <OpenRenderGraph/PersistentGraphHost.h>
-#	include <ORGModuleServices/PipelineService.h>
-#	include <rhi_helpers.h>
+#include <OpenRenderGraph/PersistentGraphHost.h>
+#include <ORGModuleServices/PipelineService.h>
+#include <rhi_helpers.h>
 
-#	include <algorithm>
-#	include <atomic>
-#	include <limits>
-#	include <stdexcept>
-#	include <string_view>
+#include <algorithm>
+#include <atomic>
+#include <limits>
+#include <stdexcept>
+#include <string_view>
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 
@@ -2617,40 +2616,3 @@ namespace DCLF
 	}
 }
 
-#else  // no render graph
-
-#	include "DrawPipelines.h"
-
-namespace DCLF
-{
-	struct DrawPipelines::Impl
-	{};
-
-	DrawPipelines::DrawPipelines() = default;
-	DrawPipelines::~DrawPipelines() = default;
-
-	DrawPipelines& DrawPipelines::Get()
-	{
-		static DrawPipelines pipelines;
-		return pipelines;
-	}
-
-	bool DrawPipelines::Enabled() const { return false; }
-	void DrawPipelines::SetTargetFormats(const TargetFormats& a_formats) { targets = a_formats; }
-	void DrawPipelines::RequestLighting(const PipelineKey&, std::uint32_t) {}
-	std::shared_ptr<const PipelineCatalog> DrawPipelines::TakeCatalog() { return nullptr; }
-	DrawPipelines::Stats DrawPipelines::GetStats() const { return stats; }
-	void DrawPipelines::RequestShadow(const ShadowPipelineKey&, const ShadowPipelineKey&, std::uint32_t) {}
-	void DrawPipelines::SetShadowInputs(DXGI_FORMAT, RE::BSShader&) {}
-	std::uint32_t DrawPipelines::ShadowRasterStateId(const D3D11_RASTERIZER_DESC&, std::uint32_t) { return 0; }
-	void DrawPipelines::RequestTreeLod() {}
-	void DrawPipelines::SetTreeLodInputs(RE::BSShader&) {}
-	void DrawPipelines::RequestRefraction() {}
-	void DrawPipelines::SetRefractionInputs(RE::BSShader&, DXGI_FORMAT, std::uint8_t) {}
-	void DrawPipelines::RequestForward(const ForwardPipelineKey&) {}
-	void DrawPipelines::SetForwardTargets(const ForwardTargets&) {}
-	void DrawPipelines::SetFirstPersonTargets(const ForwardTargets&) {}
-	void DrawPipelines::CaptureEngineStates() {}
-}
-
-#endif

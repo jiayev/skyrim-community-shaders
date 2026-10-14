@@ -1,8 +1,7 @@
 // The frame's side of the scene revisions, render thread: the build point, the revision inputs it posts (latest wins) and the coverage
 // it decides at FrameDriver::BeginFrame, before the engine draws: which epochs the adopted snapshot's revision covers.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
 namespace DCLF
@@ -191,4 +190,3 @@ namespace DCLF
 		return a_epoch < revisions.covered.size() && revisions.covered[a_epoch];
 	}
 }
-#endif

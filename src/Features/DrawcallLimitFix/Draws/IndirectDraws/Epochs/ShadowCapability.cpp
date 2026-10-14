@@ -1,11 +1,10 @@
 // The shadow phases' readiness (render thread): the rasterizer state catalog, the view placements, the capability the scene
 // lane reads, and a slot's readiness for a phase.
 
-#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
-#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Epochs/ShadowEpochs.h"
-#	include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
-#	include "Features/Skylighting.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Epochs/ShadowEpochs.h"
+#include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
+#include "Features/Skylighting.h"
 
 namespace DCLF
 {
@@ -250,5 +249,3 @@ namespace DCLF
 		return true;
 	}
 }
-
-#endif
