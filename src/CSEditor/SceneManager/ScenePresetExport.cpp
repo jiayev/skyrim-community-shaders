@@ -53,8 +53,7 @@ namespace
 	constexpr float kModListHeight = 120.0f;
 	constexpr float kModalWidth = 560.0f;
 	constexpr float kDescriptionLines = 3.0f;
-	constexpr float kPickerWidth = 420.0f;
-	constexpr float kPickerListHeight = 260.0f;
+	constexpr float kPickerListHeight = 200.0f;
 	/// Rows of the base settings list: the full dialog shares space with the scene options, the simplified one does not.
 	constexpr float kFeatureLines = 4.5f;
 	constexpr float kSimplifiedFeatureLines = 9.0f;
@@ -130,6 +129,8 @@ namespace
 			return T(TKEY("category_visual_effects"), "Visual Effects");
 		if (folder == Widget::kCellLightingFolderName)
 			return T(TKEY("category_cell_lighting"), "Cell Lighting");
+		if (folder == Widget::kLensFlareFolderName)
+			return T(TKEY("category_lens_flares"), "Lens Flares");
 		if (folder == Widget::kOtherEditorWidgetsFolderName)
 			return T(TKEY("category_other_widgets"), "Other Editor Widgets");
 		return T(TKEY("unknown"), "Unknown");
@@ -189,7 +190,7 @@ namespace
 				"Saves base settings as a Baseline preset, applied from the Presets page. Scene layers are left out.\n\n"
 				"Include Post Processing: adds your current Post Processing settings.\n"
 				"Base settings to include: each ticked feature's settings, and whether it loads at boot.\n"
-				"Preset name and Existing...: a new name makes a new pack; picking an installed one fills in its "
+				"Preset name and its dropdown arrow: a new name makes a new pack; picking an installed one fills in its "
 				"details and writes into it.\n\n"
 				"For a full preset with scene layers and edited forms, use Export Preset (Ctrl+Shift+S)."));
 			return;
@@ -201,7 +202,7 @@ namespace
 			"Include Post Processing: saves your current Post Processing settings in the pack.\n"
 			"Mods supplying values: scene settings from the active preset and installed mods, baked in with yours.\n"
 			"Base settings to include: each ticked feature's own settings, applied with the preset.\n"
-			"Preset name and Existing...: a new name makes a new pack; picking an installed one fills in its "
+			"Preset name and its dropdown arrow: a new name makes a new pack; picking an installed one fills in its "
 			"details and writes into it.\n"
 			"Version, artwork and Compatibility: shown on the Presets page, which warns when a required build, "
 			"feature or plugin is missing.\n\n"
@@ -396,38 +397,27 @@ namespace
 		return clicked;
 	}
 
-	/** @brief Button that opens the picker, disabled while no pack can be exported into. */
-	void DrawPickerButton(const char* label)
-	{
-		const auto& packs = UnifiedPresetCatalog::GetSingleton().GetPacks();
-		ImGui::BeginDisabled(std::ranges::none_of(packs, IsExportTarget));
-		if (ImGui::Button(label)) {
-			pickerSearch.clear();
-			ImGui::OpenPopup(kPickerPopupId);
-		}
-		ImGui::EndDisabled();
-		Util::AddTooltip(T(TKEY("scene_export_existing_tooltip"), "Export into an existing preset."),
-			Util::kTooltipWhenDisabled);
-	}
-
-	/** @brief Searchable list of the installed packs; picking one targets it as the export name. */
+	/** @brief Dropdown arrow after the name field, with a searchable list of the installed packs; picking one targets it as the export name. */
 	void DrawPresetPicker()
 	{
-		const float scale = Util::GetUIScale();
-		ImGui::SetNextWindowSize(ImVec2(kPickerWidth * scale, 0.0f), ImGuiCond_Always);
-		auto popup = Util::CenteredPopupModal(kPickerPopupId);
-		if (!popup || EditorWindow::ClosePopupOnEscape())
+		const auto& packs = UnifiedPresetCatalog::GetSingleton().GetPacks();
+		Util::DropdownArrowButton(kPickerPopupId, T(TKEY("scene_export_existing_tooltip"), "Export into an existing preset."),
+			std::ranges::none_of(packs, IsExportTarget));
+		if (!ImGui::BeginPopup(kPickerPopupId))
 			return;
+		const float scale = Util::GetUIScale();
 
-		if (ImGui::IsWindowAppearing())
+		if (ImGui::IsWindowAppearing()) {
+			pickerSearch.clear();
 			ImGui::SetKeyboardFocusHere();
+		}
 		ImGui::SetNextItemWidth(-1);
 		ImGui::InputTextWithHint("##ScenePresetExportPickerSearch", T("menu.presets.search", "Search presets..."), &pickerSearch);
 
 		auto& catalog = UnifiedPresetCatalog::GetSingleton();
 		const auto currentId = Util::FileHelpers::SanitizeFileName(form.name);
 		const UnifiedPresetCatalog::PackInfo* picked = nullptr;
-		if (ImGui::BeginChild("##ScenePresetExportPickerList", ImVec2(0.0f, kPickerListHeight * scale), ImGuiChildFlags_Borders)) {
+		if (ImGui::BeginChild("##ScenePresetExportPickerList", ImVec2(0.0f, kPickerListHeight * scale), ImGuiChildFlags_None)) {
 			bool anyShown = false;
 			for (const size_t index : catalog.Query(std::nullopt, pickerSearch)) {
 				const auto& pack = catalog.GetPacks()[index];
@@ -447,8 +437,7 @@ namespace
 			PrefillFromName();
 			ImGui::CloseCurrentPopup();
 		}
-		if (ImGui::Button(T(TKEY("cancel"), "Cancel")))
-			ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
 	}
 
 	/// Compact CS version + feature checklist, sized like the artwork column beside it.
@@ -813,16 +802,13 @@ namespace
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
 		ImGui::TextUnformatted(T(TKEY("scene_export_name"), "Preset name"));
-		const char* existingLabel = T(TKEY("scene_export_existing"), "Existing...");
-		ImGui::SetNextItemWidth(-(ImGui::CalcTextSize(existingLabel).x + style.FramePadding.x * 2.0f + style.ItemInnerSpacing.x));
+		ImGui::SetNextItemWidth(-ImGui::GetFrameHeight());
 		ImGui::InputText("##ScenePresetExportName", &form.name);
 		if (ImGui::IsItemDeactivatedAfterEdit())
 			PrefillFromName();
 		Util::AddTooltip(T(TKEY("scene_export_name_tooltip"),
 			"Folder name under Presets/. Naming an installed pack fills in its details and exports into it; the "
 			"confirmation lists any files that get replaced."));
-		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
-		DrawPickerButton(existingLabel);
 		DrawPresetPicker();
 
 		ImGui::TextUnformatted(T(TKEY("scene_export_version"), "Version"));

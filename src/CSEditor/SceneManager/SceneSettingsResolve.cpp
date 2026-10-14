@@ -41,6 +41,10 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 		return;
 	}
 
+	// The map has no weather of its own: keep the pre-map scene settings applied while it is open.
+	if (globals::state && globals::state->isMapMenuOpen)
+		return;
+
 	auto* player = RE::PlayerCharacter::GetSingleton();
 	auto* cell = player ? player->GetParentCell() : nullptr;
 	if (!player || !cell) {

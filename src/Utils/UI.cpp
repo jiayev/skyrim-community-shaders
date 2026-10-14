@@ -2133,6 +2133,22 @@ namespace Util
 		ShowSortedStringTableStrings(tableId, headers, rows, 0, true, sorters);
 	}
 
+	void DropdownArrowButton(const char* popupId, const char* tooltip, bool disabled, const char* disabledTooltip)
+	{
+		const ImVec2 fieldMin = ImGui::GetItemRectMin();
+		ImGui::SameLine(0.0f, 0.0f);
+		{
+			const DisableGuard disableGuard(disabled);
+			if (ImGui::ArrowButton(std::format("##Arrow{}", popupId).c_str(), ImGuiDir_Down))
+				ImGui::OpenPopup(popupId);
+		}
+		AddTooltip(disabled && disabledTooltip ? disabledTooltip : tooltip, kTooltipWhenDisabled);
+
+		const ImVec2 buttonMax = ImGui::GetItemRectMax();
+		ImGui::SetNextWindowPos(ImVec2(fieldMin.x, buttonMax.y + ImGui::GetStyle().ItemInnerSpacing.y));
+		ImGui::SetNextWindowSizeConstraints(ImVec2(buttonMax.x - fieldMin.x, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
+	}
+
 	// Theme-aware color accessor functions
 	namespace Colors
 	{
@@ -2467,6 +2483,14 @@ namespace Util
 			default:
 				return ImGuiKey_None;
 			};
+		}
+
+		bool IsRejectedByNumericTextEntry(uint32_t character)
+		{
+			const ImGuiContext& context = *ImGui::GetCurrentContext();
+			if (context.TempInputId == 0 || context.ActiveId != context.TempInputId)
+				return false;
+			return !(character >= '0' && character <= '9') && character != '.' && character != '-';
 		}
 
 		uint32_t DIKToVK(uint32_t dikKey)

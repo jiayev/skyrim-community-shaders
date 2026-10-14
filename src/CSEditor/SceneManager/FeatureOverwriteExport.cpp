@@ -279,8 +279,8 @@ namespace
 			"Writes feature settings to files of their own, without any scene layer values.\n\n"
 			"Save to: an Overrides file is loaded at every game start, so a mod can ship it as its defaults. A Baseline "
 			"preset pack only applies when picked on the Presets page.\n"
-			"Name and Existing...: one file per feature is written under this name; Existing... adds to a file exported "
-			"before.\n"
+			"Name and its dropdown arrow: one file per feature is written under this name; the arrow adds to a file "
+			"exported before.\n"
 			"Settings: tick what to write. With several features, pick each one on the left. In file shows what the "
 			"destination already holds.\n"
 			"Remove unticked settings: deletes the settings you left unticked from the file instead of keeping them.\n\n"
@@ -296,16 +296,9 @@ namespace
 		ImGui::SameLine();
 		ImGui::SetNextItemWidth(ImGui::GetFontSize() * kNameWidthEm);
 		ImGui::InputText("##name", target.name, sizeof(target.name));
-		ImGui::SameLine();
 		const auto& names = target.toPresetPack ? session.packNames : session.overrideNames;
-		{
-			const Util::DisableGuard none(names.empty());
-			if (ImGui::Button(T(TKEY("export.existing_button"), "Existing...")))
-				ImGui::OpenPopup(kPickerId);
-		}
-		Util::AddTooltip(names.empty() ? T(TKEY("export.existing_none_tooltip"), "Nothing exported under a name yet.") :
-										 T(TKEY("export.existing_tooltip"), "Pick a name already in use to add to its file."),
-			Util::kTooltipWhenDisabled);
+		Util::DropdownArrowButton(kPickerId, T(TKEY("export.existing_tooltip"), "Pick a name already in use to add to its file."),
+			names.empty(), T(TKEY("export.existing_none_tooltip"), "Nothing exported under a name yet."));
 		if (ImGui::BeginPopup(kPickerId)) {
 			for (const auto& name : names)
 				if (ImGui::Selectable(name.c_str(), name == target.name))

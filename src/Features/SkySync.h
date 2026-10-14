@@ -164,7 +164,6 @@ private:
 	static constexpr float AlignmentFadeStartAngle = 2.0f;
 	static constexpr float AlignmentFadeEndAngle = 15.0f;
 	static constexpr float MaxHorizonFadeHours = 1.5f;
-	static constexpr float HoursPerTimingUnit = 1.0f / 6.0f;
 	static constexpr float DefaultSunAlphaTransTime = 2.0f;
 	static constexpr float AlternateSunHorizonOffsetHours = 0.25f;
 	static constexpr float MaxHorizonFadeElevation = 45.0f;
@@ -244,9 +243,6 @@ private:
 
 	/** @brief Re-evaluates worldspaceDisabled; call whenever the current worldspace or the disabled list changes. */
 	void UpdateWorldspaceDisabled() { worldspaceDisabled = IsWorldspaceDisabled(currentCellWorldspace); }
-
-	/** @brief Midpoint hour of a climate sunrise or sunset interval, using the same float ops as Sun::Update. */
-	static float MiddleHour(const RE::TESClimate::Timing::Interval& interval);
 
 	/** @brief Hours at which the active sun path crosses the horizon, as { sunrise, sunset }. */
 	std::pair<float, float> GetSunHorizonHours(const RE::TESClimate::Timing& timing) const;

@@ -957,9 +957,9 @@ void Menu::DrawOverlay()
 	ImGuiContext* ctx = ImGui::GetCurrentContext();
 	bool canReload = ctx && !ctx->WithinFrameScope && ctx->WithinEndChildID == 0;
 
-	if (!IsEnabled && MenuFonts::GetAtlasState().wantsFontPreviewAtlas) {
-		MenuFonts::GetAtlasState().wantsFontPreviewAtlas = false;
-		MenuFonts::GetAtlasState().pendingFontReload = true;
+	if (auto& atlas = MenuFonts::GetAtlasState(); !IsEnabled && atlas.wantsFontPreviewAtlas) {
+		atlas.wantsFontPreviewAtlas = false;
+		atlas.pendingFontReload = true;
 	}
 
 	// Process deferred font reload BEFORE any ImGui operations
@@ -1047,7 +1047,8 @@ void Menu::ProcessInputEventQueue()
 	ImGuiIO& io = ImGui::GetIO();
 	for (auto& event : _keyEventQueue) {
 		if (event.eventType == RE::INPUT_EVENT_TYPE::kChar) {
-			io.AddInputCharacter(event.keyCode);
+			if (!Util::Input::IsRejectedByNumericTextEntry(event.keyCode))
+				io.AddInputCharacter(event.keyCode);
 			continue;
 		}
 		if (event.device == RE::INPUT_DEVICE::kMouse) {
@@ -1062,9 +1063,8 @@ void Menu::ProcessInputEventQueue()
 				// Right-click exits free-cam / play mode (alongside the CSEditorToggleKey combo).
 				if (event.keyCode == ImGuiMouseButton_Right && event.IsPressed())
 					ew->ExitPreviewMode();
-			} else {
-				if (static_cast<int>(event.keyCode) < ImGuiMouseButton_COUNT)
-					io.AddMouseButtonEvent(event.keyCode, event.IsPressed());
+			} else if (static_cast<int>(event.keyCode) < ImGuiMouseButton_COUNT) {
+				io.AddMouseButtonEvent(event.keyCode, event.IsPressed());
 			}
 		}
 
@@ -1244,7 +1244,10 @@ void Menu::ProcessInputEventQueue()
 						if (effects11Editor.ShouldHandleEscapeKey())
 							effects11Editor.Close();
 					} else if (IsEnabled && (!editorWindow || !editorWindow->open)) {
-						IsEnabled = false;
+						if (editorWindow && editorWindow->suppressNextEditorEscape)
+							editorWindow->suppressNextEditorEscape = false;
+						else
+							IsEnabled = false;
 					}
 				}
 			} else if (event.IsDown() && !wasCapturingHotkey) {

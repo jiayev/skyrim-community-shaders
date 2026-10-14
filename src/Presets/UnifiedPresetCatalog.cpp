@@ -724,15 +724,8 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 void UnifiedPresetCatalog::DisableActivePack()
 {
 	assert(!activePackId.empty());
-	if (const auto* pack = FindPack(activePackId); pack && pack->hasEffects11) {
-		auto& presetManager = PresetManager::GetSingleton();
-		const bool switchedToLegacy = pack->source != SourceKind::Effects11Legacy && presetManager.HasLegacyInstall() &&
-		                              presetManager.SwitchPreset(PresetManager::kLegacyPresetId, true);
-		if (switchedToLegacy)
-			globals::features::effects11.PersistActivePreset();
-		else
-			PostProcessingMode::Set(PostProcessingMode::Mode::PostProcessing);
-	}
+	if (const auto* pack = FindPack(activePackId); pack && pack->hasEffects11)
+		PostProcessingMode::Set(PostProcessingMode::Mode::Vanilla);
 	SetActivePackId("");
 	globals::features::sceneManager.ReloadOverwrites();
 	CSEditor::ReloadFormEdits();

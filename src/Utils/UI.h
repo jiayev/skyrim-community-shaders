@@ -1208,6 +1208,9 @@ namespace Util
 		 */
 		uint32_t DIKToVK(uint32_t dikKey);
 
+		/** @brief True when a typed character must be dropped because a slider/drag text entry is active and it isn't a digit, '.' or '-'. */
+		bool IsRejectedByNumericTextEntry(uint32_t character);
+
 		/**
 		 * @brief Converts key codes to human-readable string representations
 		 *
@@ -1705,4 +1708,11 @@ namespace Util
 		const wchar_t* pluginDir,
 		const std::vector<std::pair<std::string, std::string>>& dllVersions,
 		const char* tableId);
+
+	/**
+	 * @brief Down-arrow joined to the field just drawn that opens a popup anchored under both.
+	 * Call right after the field (leave GetFrameHeight() of room for the arrow), then BeginPopup(popupId) immediately.
+	 * @param disabledTooltip Shown instead of tooltip while disabled
+	 */
+	void DropdownArrowButton(const char* popupId, const char* tooltip, bool disabled = false, const char* disabledTooltip = nullptr);
 }  // namespace Util

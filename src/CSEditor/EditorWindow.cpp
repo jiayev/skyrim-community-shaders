@@ -53,8 +53,28 @@ namespace
 	constexpr float kMenuBarGameTimeWidthScale = 2.0f;
 	/// Help note wrap width in font sizes; a window-edge wrap (0) collapses on the popup's first auto-size frame.
 	constexpr float kHelpNoteWrapFontScale = 30.0f;
+	/// Slack when matching dock node edges, which are sums of split sizes and drift by float error.
+	constexpr float kDockEdgeTolerance = 1.0f;
 
 	Util::ConfirmationPopup deleteSceneChangesConfirmation;
+
+	/** @brief Bottom corner flags of the action bar that a docked node hangs off, so they can be drawn square. */
+	ImDrawFlags GetDockedBarCorners(const ImGuiDockNode* node, const ImRect& dockRect)
+	{
+		if (!node)
+			return ImDrawFlags_None;
+		if (!node->IsLeafNode())
+			return GetDockedBarCorners(node->ChildNodes[0], dockRect) | GetDockedBarCorners(node->ChildNodes[1], dockRect);
+		if (!node->IsVisible || node->IsCentralNode() || node->Windows.empty() || node->Pos.y > dockRect.Min.y + kDockEdgeTolerance)
+			return ImDrawFlags_None;
+
+		ImDrawFlags corners = ImDrawFlags_None;
+		if (node->Pos.x <= dockRect.Min.x + kDockEdgeTolerance)
+			corners |= ImDrawFlags_RoundCornersBottomLeft;
+		if (node->Pos.x + node->Size.x >= dockRect.Max.x - kDockEdgeTolerance)
+			corners |= ImDrawFlags_RoundCornersBottomRight;
+		return corners;
+	}
 
 	/** @brief MenuItem with a smaller right-aligned shortcut subtext. */
 	bool MenuItemWithShortcutSubtext(const char* label, const char* shortcut, bool enabled = true)
@@ -834,12 +854,24 @@ void EditorWindow::RenderUI()
 
 		ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + actionBarPad, viewport->Pos.y + actionBarPad));
 		ImGui::SetNextWindowSize(ImVec2(viewport->Size.x - actionBarPad * 2.0f, actionBarHeight));
+
+		// Shrink the work area to the bar's footprint so dock nodes sit flush under it, aligned to its edges.
+		auto* viewportP = static_cast<ImGuiViewportP*>(viewport);
+		viewportP->BuildWorkInsetMin.x += actionBarPad;
+		viewportP->BuildWorkInsetMin.y += actionBarBottom;
+		viewportP->BuildWorkInsetMax.x += actionBarPad;
+		viewportP->BuildWorkInsetMax.y += actionBarPad;
+
+		const ImGuiDockNode* dockRoot = ImGui::DockBuilderGetNode(dockSpaceId);
+		const ImDrawFlags barCorners = ImDrawFlags_RoundCornersAll & ~(dockRoot ? GetDockedBarCorners(dockRoot, dockRoot->Rect()) : ImDrawFlags_None);
+
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, rounding);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(style.FramePadding.x, yPad));
 		// Make action bar slightly more transparent
 		barBg.w = ThemeManager::Constants::OVERLAP_MIN_ALPHA * 0.7f;
-		ImGui::PushStyleColor(ImGuiCol_WindowBg, barBg);
+		// Background is drawn by hand below: window rounding can't square individual corners.
+		ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32_BLACK_TRANS);
 
 		constexpr ImGuiWindowFlags kActionBarFlags =
 			ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
@@ -854,6 +886,8 @@ void EditorWindow::RenderUI()
 			// MenuBarAppending must also be set: otherwise FindBestWindowPosForPopup treats the
 			// dropdown as a side-child menu and parks it over this bar instead of below it.
 			ImGuiWindow* barWindow = ImGui::GetCurrentWindow();
+			const ImRect barRect = barWindow->Rect();
+			barWindow->DrawList->AddRectFilled(barRect.Min, barRect.Max, ImGui::GetColorU32(barBg), rounding, barCorners);
 			const ImGuiLayoutType barLayoutBackup = barWindow->DC.LayoutType;
 			const bool menuBarAppendingBackup = barWindow->DC.MenuBarAppending;
 			barWindow->DC.LayoutType = ImGuiLayoutType_Horizontal;
@@ -1323,7 +1357,7 @@ void EditorWindow::RenderUI()
 	}
 
 	// Establish a viewport-wide DockSpace so all editor windows are snappable and dockable
-	ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
+	dockSpaceId = ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
 
 	const float pad = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
 	auto width = ImGui::GetIO().DisplaySize.x;
@@ -2503,8 +2537,12 @@ void EditorWindow::ExitPreviewMode()
 
 	// Only restore cursor if exiting from a flying state; FreeCameraLocked already has the cursor active
 	if (wasFlying) {
-		ImGui::GetIO().MousePos = savedMousePos;
-		ImGui::GetIO().WantSetMousePos = true;
+		ImGuiIO& io = ImGui::GetIO();
+		io.MousePos = savedMousePos;
+		io.WantSetMousePos = true;
+		// Mouse events are swallowed while flying, so ImGui may have missed button releases.
+		for (int button = 0; button < ImGuiMouseButton_COUNT; ++button)
+			io.AddMouseButtonEvent(button, false);
 	}
 }
 
@@ -2544,9 +2582,8 @@ bool EditorWindow::ClosePopupOnEscape()
 {
 	if (!ImGui::IsKeyPressed(ImGuiKey_Escape))
 		return false;
-	// The editor ignores Escape only while a popup is open, which this close is about to end.
-	if (auto* editor = GetSingleton(); editor->open)
-		editor->suppressNextEditorEscape = true;
+	// The menu or editor ignores Escape only while a popup is open, which this close is about to end.
+	GetSingleton()->suppressNextEditorEscape = true;
 	ImGui::CloseCurrentPopup();
 	return true;
 }
