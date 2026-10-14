@@ -29,8 +29,8 @@ namespace DCLF::Draws
 	 */
 	inline std::uint64_t NamedSerial(const org::PassPrepareContext& a_preparation, const Versioned& a_buffer)
 	{
-		const auto* named = a_preparation.preparationData ? a_preparation.preparationData->Get<NamedVersions>() : nullptr;
-		return named && a_buffer && named->Names(*a_buffer) ? named->Of(*a_buffer).serial : 0;
+		const auto* sealed = a_preparation.preparationData ? a_preparation.preparationData->Get<NamedVersions>() : nullptr;
+		return sealed && a_buffer && sealed->Names(*a_buffer) ? sealed->Of(*a_buffer).serial : 0;
 	}
 	/**
 	 * @brief The units of a_buffer's version a_preparation's revision names (0: none): what its passes size their dispatches and
@@ -38,8 +38,8 @@ namespace DCLF::Draws
 	 */
 	inline std::uint64_t NamedUnitsOf(const org::PassPrepareContext& a_preparation, const Versioned& a_buffer)
 	{
-		const auto* named = a_preparation.preparationData ? a_preparation.preparationData->Get<NamedVersions>() : nullptr;
-		return named ? NamedUnits(*named, a_buffer) : 0;
+		const auto* sealed = a_preparation.preparationData ? a_preparation.preparationData->Get<NamedVersions>() : nullptr;
+		return sealed ? NamedUnits(*sealed, a_buffer) : 0;
 	}
 	/** @brief The shape a_preparation prepares the segment's passes for: its revision's, null without one or for a segment that does not draw. */
 	inline std::shared_ptr<const PassFrame> CurrentFrame(const org::PassPrepareContext& a_preparation, RenderGraphRuntime::Segment a_segment)

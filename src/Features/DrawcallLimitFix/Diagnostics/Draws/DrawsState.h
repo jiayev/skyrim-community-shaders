@@ -11,6 +11,28 @@
 namespace DCLF::Diagnostics
 {
 	/**
+	 * @brief CS_DCLF_PERSISTENT_PARITY: one backing pool's lease-leak watch, a report window at a time. The leases out at once are
+	 * the frames in flight's (each holds its snapshot, and so its payload, until its GPU work retires) and two more (the installed
+	 * version and the one being built); a lease that never returns stays out for good, so the leased count stays past that. Flagged
+	 * once it has for kWindows windows in a row. The live count is no measure: a pool keeps free backings warm
+	 * (PooledBackings::PerFrameSpares) up to its high-water mark.
+	 */
+	struct PoolLeakWatch
+	{
+		static constexpr std::uint64_t kFramesInFlight = RenderGraphRuntime::kGameFramesInFlight;
+		static constexpr std::uint64_t kSlack = 2;
+		static constexpr std::uint32_t kWindows = 3;
+		std::uint32_t over = 0;  // consecutive windows past the bound
+
+		/** @brief This window's leased count: the verdict's flag (empty: within the bound, or not yet for long enough). */
+		const char* Window(std::uint64_t a_leased)
+		{
+			over = a_leased > kFramesInFlight + kSlack ? over + 1 : 0;
+			return over >= kWindows ? " <- POOL LEAK" : "";
+		}
+	};
+
+	/**
 	 * @brief A D3D11 view of a versioned buffer's current version, as 32-bit words over the whole version, for immediate-context
 	 * readbacks; made again when the version is not the one it wraps. It holds the version it wraps, so the view never outlives
 	 * its backing.
@@ -20,9 +42,11 @@ namespace DCLF::Diagnostics
 		std::shared_ptr<const org::BufferVersion> wrapped;
 		winrt::com_ptr<ID3D11Buffer> view;
 
-		ID3D11Buffer* Of(const Draws::Versioned& a_buffer)
+		ID3D11Buffer* Of(const Draws::Versioned& a_buffer) { return Of(a_buffer ? a_buffer->Current() : nullptr); }
+		/** @brief A given version (one a revision names, which need not be the buffer's current one). */
+		ID3D11Buffer* Of(std::shared_ptr<const org::BufferVersion> a_version)
 		{
-			auto current = a_buffer ? a_buffer->Current() : nullptr;
+			auto current = std::move(a_version);
 			if (!current || !current->buffer)
 				return nullptr;
 			if (!view || wrapped != current) {
@@ -61,12 +85,28 @@ namespace DCLF::Diagnostics
 			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // the buffer's ranges when copied
 			std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
 			std::uint32_t framesLeft = 0;
+			// The row tables of the payload the epoch committed with (PayloadVersions' PipelineRows and MaterialRows): the bases the
+			// CPU's table-relative row offsets were placed at.
+			std::uint64_t pipelineRowsBase = 0, materialRowsBase = 0;
 			// By object: the CPU's local shadow light selection (kObjectLocalShadowMask); none on the Z-prepass.
 			ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> expectedLocalShadows;
+			// The sequences' version the adopted set names (what the epoch's recording wrote) and the buffer's current one, when copied.
+			std::uint64_t sequencesNamed = 0, sequencesCurrent = 0;
+			std::uint32_t armedEpoch = 0;  // parityEpochs when copied
 		};
 		std::optional<ParityReadback> parity;
 		std::uint32_t parityEpochs = 0;
 		WrappedVersion paritySequences;
+		// The main epochs' payloads, newest last (every main epoch while the build parity is on; epoch: the colour epochs counted
+		// then): where a sequence's row address outside its epoch's tables came from.
+		struct ParityPayloadSeen
+		{
+			std::uint64_t serial = 0;
+			std::uint32_t epoch = 0;  // parityEpochs when first seen
+			std::uint64_t materialBase = 0, materialBytes = 0, pipelineBase = 0, pipelineBytes = 0;
+		};
+		std::array<ParityPayloadSeen, 32> parityPayloads{};
+		std::uint32_t parityPayloadsSeen = 0;
 
 		// The culling counters, read back from the draw-count buffer a few frames later. Always on: the per-phase counts show
 		// whether culling does anything, and the buffer is two words.
@@ -225,22 +265,27 @@ namespace DCLF::Diagnostics
 			// Inputs the kept shadow build lacks, by reason, with the first of each.
 			std::map<std::string, std::uint64_t> shadowMissingBy;
 			std::map<std::string, std::string> shadowMissingFirst;
-			// Extras rows as each buffer holds them (scene buffers, payload ring entries), and the scene buffers' check.
-			std::vector<float> sceneExtras;
-			std::array<std::vector<float>, DrawsView::Impl::kPayloadRing> ringExtras;
-			ParityCounter extras;
-			std::string extrasFirst;
-			/**
-			 * @brief Payload ring checks (uploader thread). Lock-free: atomic counts; the first difference's text is written by the
-			 * producer that claims it (firstState 0 -> 1) and taken by the report once written (2 -> 0).
-			 */
-			struct Ring
+			// The payload's extras backings' rows as caught up (MirrorExtras, CheckExtras: the snapshot builder's thread, as the report),
+			// by Backing::generation; a released backing's mirror is dropped at the next catch-up.
+			struct ExtrasMirror
 			{
-				std::atomic<std::uint64_t> checks{ 0 }, mismatches{ 0 };
-				std::atomic<std::uint32_t> firstState{ 0 };  // 0 none, 1 being written, 2 written
-				std::string first;
-			} ring;
+				std::weak_ptr<org::services::Backing> backing;
+				std::vector<float> rows;
+			};
+			ankerl::unordered_dense::map<std::uint64_t, ExtrasMirror> extrasMirrors;
+			ParityCounter extras;
 		} kept;
+		// The main commits' log (CommitLog.cpp): unfilled frame buffers by register, tree LOD holes (the report's count), fade inputs
+		// varied, the culling setup logged, the epoch lines' periods.
+		std::array<std::uint32_t, kTextureRegisters> unfilledFrameBuffers{};
+		std::uint32_t treeLodMissed = 0, fadeInputsVaried = 0;
+		bool cullingSetupLogged = false;
+		std::array<std::uint32_t, 2> epochLines{};  // colour, Z-prepass
+
+		// CS_DCLF_PERSISTENT_PARITY: the payload's pools' leak watch, by part (the snapshot builder's ProducerReport).
+		std::array<PoolLeakWatch, Draws::kPayloadParts> payloadPools;
+		// ... and FrameValues' pools' (the render thread's FrameValuesLine).
+		std::array<PoolLeakWatch, FrameValues::kPools> frameValuesPools;
 
 		// CS_DCLF_PERSISTENT_PARITY: view masks (CheckViewMasks, in the builds), taken by the render thread's report.
 		struct ViewMasks

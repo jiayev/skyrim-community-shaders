@@ -311,7 +311,7 @@ namespace DCLF
 		// the same count buffer, and the Z-prepass builds from the far smaller set the colour epoch drew last frame - and the parities).
 		if (ok) {
 			const MainPayload* depth = !depthOnly && impl->committedFrame[kAsyncZPrepass] == Scene::FrameView::Get().GetFrame() ? impl->committedPayload[kAsyncZPrepass] : nullptr;
-			Diagnostics::Notify(Diagnostics::MainEpochDone{ resources, *committed, depth, depthOnly, stats });
+			Diagnostics::Notify(Diagnostics::MainEpochDone{ resources, *committed, depth, depthOnly, impl->InstalledPayload(), stats });
 		}
 
 		stats.cpuMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -322,24 +322,11 @@ namespace DCLF
 			logger::error("[DCLF] The main-pass epoch failed; the render graph is disabled");
 	}
 
-	void IndirectDraws::EndFrame()
-	{
-		// The ring entry the frame read: free again once what the frame submitted is done on the GPU.
-		if (impl->ringFrame.valid)
-			if (auto* host = RenderGraphRuntime::Get().Host())
-				impl->payloadRing[impl->ringFrame.entry].reuse = host->SubmittedPoint();
-		impl->ringFrame.draws.reset();
-		impl->ringShadow = {};
-		// Views made for the frame's tables hold its publication: let go.
-		impl->streamViews.reset();
-	}
-
 	void IndirectDraws::DrainAsync()
 	{
 		impl->WaitAhead();
 		impl->WaitFadeWriteBack();
 		impl->WaitVisibilityReadback();
-		impl->streamViews.reset();
 	}
 
 	void IndirectDraws::Impl::PackFrameBlocks(const Capture& a_capture, bool a_depthOnly, FrameBlocks& a_out)
@@ -467,7 +454,7 @@ namespace DCLF
 		in.vsFrameMask = a_vsMask;
 		in.psFrameMask = a_psMask;
 		// The versioned buffers' addresses, SRV indices and capacities, the fit and the decal range are the sealed set's and layout's,
-		// and what the buffers hold the ring's (BuildSnapshotDraws: AddressesOf; RunAhead).
+		// and what the buffers hold the installed payload's (BuildSnapshotDraws: AddressesOf; RunAhead).
 		in.addresses.frameConstants = a_resources.frameConstantsAddress;
 		in.addresses.placementsIndex = FrameValues::Get().PlacementsIndex();
 		in.addresses.palettesIndex = FrameValues::Get().PalettesIndex();

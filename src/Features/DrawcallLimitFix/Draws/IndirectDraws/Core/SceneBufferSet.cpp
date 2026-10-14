@@ -2,18 +2,23 @@
 // producer's requirements and seals.
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#	include "Features/DrawcallLimitFix/Draws/Gpu/PooledBackings.h"
 
 namespace DCLF::Draws
 {
 	namespace
 	{
-		std::uint64_t DeviceAddressOf(const org::Buffer& a_buffer)
+		std::uint64_t DeviceAddressOf(const org::Buffer& a_buffer) { return PooledBackings::DeviceAddressOf(a_buffer); }
+
+		/**
+		 * @brief The set's pool (D4): DCLF's pooled backings (PooledBackings: a backing made like the buffer it grows, without an ECS
+		 * entity; a released one destroyed on the graph host's cleanup lane). On DCLF's retirement clock, no caps. The growth producer
+		 * is its one acquirer (the set posts one batch at a time).
+		 */
+		std::shared_ptr<org::services::BackingPool> MakeGrowthPool()
 		{
-			auto* host = RenderGraphRuntime::Get().Host();
-			if (!host)
-				return 0;
-			auto device = host->GetDesc().device;
-			return device.GetBufferDeviceAddress({ const_cast<org::Buffer&>(a_buffer).GetAPIResource().GetHandle(), 0 });
+			auto hooks = PooledBackings::Hooks();
+			return org::services::BackingPool::Create(std::move(hooks), FrameRetirement(), { .name = "cs.dclf.scene-buffers", .maxPerClass = 0 });
 		}
 	}
 
@@ -32,6 +37,8 @@ namespace DCLF::Draws
 			hooks.wake = [] { WakeSnapshotBuilder(); };
 			hooks.uploads = [this] { return uploads.lock(); };
 			hooks.addressOf = [](const org::Buffer& a_buffer) { return DeviceAddressOf(a_buffer); };
+			// Every version is made into a pooled backing, kept from reuse until the frames that read it retired (BindAdopted).
+			hooks.pool = MakeGrowthPool();
 			hooks.grown = [](const org::services::GrowableRegistration& a_buffer, std::uint64_t a_from, std::uint64_t a_to, std::uint64_t a_bytes) {
 				logger::info("[DCLF] {}: {} grown to {} ({} KB), as graph work", a_buffer.name, a_from, a_to, a_bytes / 1024);
 			};

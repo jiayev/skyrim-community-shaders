@@ -9,6 +9,7 @@
 - **[DCLF architecture](./dclf-architecture.md)** - Drawcall Limit Fix as it is: the frame by thread, the data from engine events to GPU draws, ownership, the code's layout, switches and parity gates
 - **[DCLF status](./dclf-status.md)** - What DCLF draws, and what the engine still does on the render thread
 - **[DCLF open defects](./dclf-open-defects.md)** - Defects and failing parity checks under investigation, with their evidence
+- **[DCLF pool follow-ups](./dclf-pool-followups.md)** - What should move into the pooled versions next (latched values, staged commit uploads, animated material values), and what stays a frame-slot ring
 - **[Drawcall Limit Fix](./drawcall-limit-fix.md)** - The historical record of how DCLF was built, with the measurements behind each decision
 - **[Skyrim engine notes](./skyrim-engine-notes.md)** - What the decompiled game binary does, where features depend on it
 - **[Crash catalog](./crash-catalog.md)** - Crashes met during development, their stacks and what is known about each

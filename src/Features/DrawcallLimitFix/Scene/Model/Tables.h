@@ -97,7 +97,7 @@ namespace DCLF
 		ankerl::unordered_dense::map<const void*, std::uint32_t> treeIndex;
 		std::vector<std::uint32_t> objectTree;
 		std::vector<TreeObject> treeObjects;
-		std::uint64_t treesVersion = 0, treeObjectsVersion = 0;
+		std::uint64_t treesContentEpoch = 0, treeObjectsVersion = 0;
 		std::uint32_t treeGenerations = 0;
 		// Fade roots (Records.h, FadeRootStatic): a slot per fade node a member draws under, refcounted by members, its row
 		// rewritten when an input event arrives (a tree's LOD switch: fadeRootSwitch). A row's object is one of its members (whose
@@ -110,7 +110,7 @@ namespace DCLF
 		std::vector<std::uint32_t> objectFadeRoot;
 		// Root rows written since what the depth commit holds (FadeRootsSent trims it): it sends those runs, not the whole table.
 		ChangeJournal fadeRootsJournal;
-		std::uint64_t FadeRootsVersion() const { return fadeRootsJournal.Version(); }
+		std::uint64_t FadeRootsContentEpoch() const { return fadeRootsJournal.ContentEpoch(); }
 		void NoteFadeRoot(std::uint32_t a_root)
 		{
 			fadeRootsJournal.Mark(a_root);

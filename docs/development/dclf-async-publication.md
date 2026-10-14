@@ -704,7 +704,9 @@ block, is one set's (`SceneBufferSet`, over ORGModuleServices' `GrowableBufferSe
   `RegisterVersionGrowthProducer`. A batch the set's `Seal` posts (`SceneGraph::PostGrowth` -> `PostVersionGrowth`) is an exact
   request (its own address) and an `AwaitExact(GpuReady)` on the coordinator lane, both lock-free. The producer makes every version
   of the batch (`GrowVersions`), queues its fills on the dedicated uploader - zeros for a `Zero` registration, the producer's capture
-  for a `Capture` one (the main rows, laid out for the made version's own address from the rows the last commit posted) - and is
+  for a `Capture` one (the main rows, laid out for the made version's own address from the rows the last commit posted; since
+  2026-10-14 the main rows are payload parts and no DCLF buffer is a `Capture`, and every version is made into a pooled backing:
+  "The payload and frame values as pooled versions") - and is
   ready once those copies completed (`TokenForTickets`: the uploader notifies every ticket transition, so the graph needs no
   recovery polling). Its `done` wakes the snapshot builder.
 - **Requirement to sealed set.** The revision producer requires what the publication's tables, the frame's posted counts and the
@@ -1338,7 +1340,8 @@ resident-draw, set and fade parity; motion m28/m29).
     built at the epoch (the fallback) keeps today's buffers and uploads. The reflection reads the entry the last Z-prepass commit
     read (its depth inputs are the frame before's). y24: 7,426 sequences, set parity 0, 600 of 600 commits read the ring. m56: 0
     crashes, waits 0.03-0.17 ms/frame, the producer 0.7 ms a frame at most 1.8 (FrameValues' rows with it), 2.2-2.6 MB a frame.
-    (The m56 attribution of those bytes to the segments' own inputs was wrong: see E5.)
+    (The m56 attribution of those bytes to the segments' own inputs was wrong: see E5.) The ring was replaced on 2026-10-14 by
+    the payload's pooled versions: see "The payload and frame values as pooled versions (2026-10-14)".
   - *E5: the journals kept for the ring; cleanup* (y25, y26, m57-m60). The 2.2-2.6 MB a frame were whole resends: each publication's
     build trimmed its journals (ChangeJournal::BeginBuild) to the version the publication before predicted for today's buffers, while
     a ring entry, filled every fourth frame, holds an older one - below the floor, so sent everything (objects, extras, the regions).
@@ -2666,6 +2669,82 @@ present; this is the record.
 - **Open:** one GPU page fault (m169, a vertex shader reading an unmapped address; not reproduced in m170, m171); the
   `inputsDepth` buffer and the shadow build's own region stay for the parity builds that keep no shared list
   (`CS_DCLF_BINDLESS_PARITY`, `CS_DCLF_BUILD_PARITY`); the engine-culling roadmap (T1-T7) in the plan.
+
+## The payload and frame values as pooled versions (2026-10-14)
+
+This supersedes the payload ring (E2-E5, S2) and FrameValues' rings. dclf-architecture.md, "The payload" and "Pooled
+versions and the retirement clock", is the present; this is the record.
+
+**Why.** The scene payload had two sources of truth:
+- **The ring:** 4 per-frame copies of the objects, extras, geometries, main material and pipeline rows, inputs and shadow
+  rows. They were refilled every frame on the uploader, after a blocking wait for the GPU to finish with the entry
+  (`reuse.Wait`), so every change was sent four times (566 KB a frame, ~30 MB of memory).
+- **Dead named copies in the scene's set:** SceneBuffers' objects, extras and geometries, the main rows and inputs, and
+  the shadow rows and inputs. They were sized, grown, declared in the graph and embedded in the CPU templates and the
+  shadow frame record, but nothing wrote them.
+
+That split hid a latent bug: the shadow commit copied a ring entry without checking it was valid, then read unfilled named
+buffers. FrameValues kept five more rings of the same kind. BasicRenderer already did this better: it published versions
+only on a change, caught a free backing up from a journal, and reused a backing only after the frames that used it had
+retired.
+
+**What changed.**
+- **The pool, in ORGModuleServices** (`org::services`): `RetirementClock`, `BackingPool`, `BackingLease`,
+  `BufferJournal`, `BufferImage`, `VersionedBufferBuild`, `JournaledBufferSet`, and
+  `Async/VersionedBuffer{Producer,Family}.h`. Moved from BasicRenderer, which now uses them through an adapter.
+  - The pool is lock-free with a single acquirer.
+  - A backing is reused once the clock has reached the point it was bound to and no lease holds it.
+  - Acquire prefers the highest `contentEpoch` at or below the one asked for. `maxPerClass` 0 means no cap; `spareFree`
+    keeps warm spares.
+  - Hooks: allocate, tag, telemetry, env, exclusive, retire.
+- **GrowableBufferSet growth** allocates from a pool, and each version owns its lease. A frame binds the adopted set after its
+  last submission (`BindAdopted`, `SubmittedRetirementPoint()`).
+- **Deleted:** `TransportBuffer` (`EnsureTransport`, `ReplaceTransport`) and ORG's `Ownership::RetiredFrameRegion`.
+- **DCLF's clock** (`Runtime/FrameRetirement.h`) is advanced by the graph host's completed-frame callback, so retirement is
+  exact GPU completion.
+- **The DCLF payload** (`Core/PayloadVersions.{h,cpp}`).
+  - **Deleted:** the ring (`Core/PayloadRing.cpp`; `RingEntry`, `RingLatch`, `ShadowRingLatch`, `ringShadow`,
+    `RingHolders`, `KeptHolders`, `PrepareFrameUploads`), the named copies, their requirements, fit gates (`InputsFit`)
+    and root constants, and the shader's `payloadValid`.
+  - **PayloadBuilder.** The snapshot builder publishes one `PayloadVersions` per snapshot after the draws: a
+    `JournaledBufferSet` of seven parts, each caught up from its backing's `contentEpoch`. Rows are patched with the address
+    of the backing they go to.
+  - **Installed with the draws.** The epochs read `InstalledPayload()` by value: the BuildDraws latch's payload block (the
+    `BuildDrawsLatch` and `BuildDrawsConstants` layouts changed), the shadow and occlusion latches, and the frame record's
+    objects and extras registers. A covered frame always has a ready payload; there is no fallback.
+  - **Journals** trim to `PayloadBuilder::OldestContentEpoch(part)`.
+  - **Gone with the ring:** the row-capture back-flow (`committedRowsSlot`) and the shadow commit's latent bug.
+- **FrameValues.** The five rings became five pools. The render thread leases the frame's backings in `Kick`, the job catches
+  them up without a GPU wait, and `EndFrame` binds them. All DCLF pools share `Draws/Gpu/PooledBackings`: a released backing is
+  destroyed on ORG's resource cleanup lane, never on the render thread, and each pool keeps frames in flight minus one spares.
+- **Publication gate (V3).** A payload is published only when the frame took the last posted snapshot and that frame's scene
+  pass ended (`IndirectDraws::NoteScenePassDone`). A sealed but unpublished build is replaced by newer work, and a kept
+  publication uploads nothing. The Recordings stage posts only once the payload's uploads are ready; their completion wakes
+  the builder.
+- **Material rows are journalled in four 256-byte parts (V3).** Per-frame effect-shader values change only the VS part.
+- **Diagnostics.**
+  - The payload pools' report lines: publications, installed, held, replaced; catch-up per part; live, leased and MB; the
+    oldest content epoch. The frame values' pools have their own line.
+  - `<- POOL LEAK`, on the leased counts (persistent parity), and the extras' parity per payload backing.
+  - BuildDraws parity is armed on colour epochs only and resolved (dclf-open-defects.md).
+  - `Uploads.cpp`'s diagnostics moved to events (`CommitLog.cpp`, `TextureCommit.cpp`).
+- **Cleanup.**
+  - `Passes.cpp` split into `Passes/{Common,MainOpaque,Forward,Build,Occlusion,SceneState,Readbacks,Shadow,MainExtension}.cpp`,
+    with `IndexPoolPass.h` and `PassesInternal.h`.
+  - `ShadowEpochs.cpp` split into `ShadowEpochs`, `ShadowCapture`, `ShadowShape`, `ShadowIndexPool`, `ShadowCapability` and
+    `ShadowEpochs.h`.
+  - `ViewEpochRecord.cpp` split out of `ViewEpoch.cpp`.
+  - `Impl.h` became an umbrella over `Impl/{SnapshotBuilder,Producer,Views,Stats}.h`.
+  - Naming: `sealed` (the producer's set), `adopted` (the frame's), `serial`, `version`, `contentEpoch`.
+
+**Measured** (normal run, against the ring):
+- payload uploads 315 KB a frame (ring: 566 KB);
+- payload memory ~34.6 MB, with about 5 live backings per part (ring: ~30 MB);
+- publications equal installs, and adoption latency is unchanged;
+- first person drawn on 300 of 300 frames, and parity is clean (BuildDraws parity 0 mismatches).
+
+**Open:** dclf-open-defects.md, "Pooled payload: open items". What could move into the pools next is in
+[dclf-pool-followups.md](./dclf-pool-followups.md).
 
 ## Implemented foundations
 

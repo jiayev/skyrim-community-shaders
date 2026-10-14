@@ -16,6 +16,10 @@
 #include "State.h"
 
 #include <OpenRenderGraph/PersistentGraphHost.h>
+#if defined(CS_HAS_ORG_MODULE_SERVICES)
+#	include "Features/DrawcallLimitFix/Runtime/FrameRetirement.h"
+#	include <ORGModuleServices/BackingPool.h>
+#endif
 #if defined(CS_HAS_ORG_MODULE_SERVICES) && defined(ORG_MODULE_SERVICES_HAS_DXC)
 #	include <ORGModuleServices/ShaderCompiler.h>
 #endif
@@ -35,11 +39,6 @@
 
 namespace
 {
-	// Game frames the graph's work may run behind the render thread (PersistentGraphHost::Desc::framesInFlight). The host sizes its
-	// frame slot ring from it, a slot per epoch of every frame (FrameSlots), and each epoch's next slot waits for that slot's last
-	// GPU work: fewer frames than the CPU runs ahead of the GPU (DXVK's frame latency) would stall the render thread every few frames.
-	constexpr std::uint32_t kGameFramesInFlight = 4;
-
 	// Everything BasicRHI's Vulkan backend needs beyond what DXVK enables for itself.
 	// DXVK already requires the rest (timeline semaphores, buffer device address,
 	// descriptor indexing, scalar block layout, dynamic rendering, maintenance5).
@@ -404,6 +403,11 @@ struct RenderGraphRuntime::Impl
 
 	void OnCompletedFrame(std::uint64_t a_frameNumber, const org::runtime::IStatisticsService& a_stats)
 	{
+#if defined(CS_HAS_ORG_MODULE_SERVICES)
+		// The execution is complete on the GPU (the host reports them in submission order): DCLF's pooled versions bound up to it
+		// may be reused (FrameRetirement.h).
+		DCLF::FrameRetirement()->Advance(DCLF::RetirementPoint(a_frameNumber));
+#endif
 		CompletedEpoch epoch;
 		ReadCompletedEpoch(a_frameNumber, a_stats, epoch);
 		if (!asyncEpochs) {

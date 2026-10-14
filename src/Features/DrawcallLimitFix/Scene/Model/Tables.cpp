@@ -319,7 +319,7 @@ namespace DCLF
 		treeIndex.clear();
 		objectTree.clear();
 		treeObjects.clear();
-		++treesVersion;
+		++treesContentEpoch;
 		++treeObjectsVersion;
 		fadeRoots.clear();
 		fadeRootRefs.clear();

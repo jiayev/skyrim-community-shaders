@@ -41,16 +41,6 @@ namespace DCLF
 				SequenceLimitFailure(a_what, a_draws, kSortRankLimit);
 		}
 
-		/** @brief Producer: the row captures take a_rows when they are newer (Resources::rowCaptures). */
-		template <class Row>
-		void TakeRows(std::atomic<std::shared_ptr<const KeptView<Row>>>& a_capture, const KeptView<Row>& a_rows)
-		{
-			if (!a_rows.elements)
-				return;
-			if (const auto held = a_capture.load(std::memory_order_relaxed); held && held->Version() == a_rows.Version() && held->elements == a_rows.elements)
-				return;
-			a_capture.store(std::make_shared<const KeptView<Row>>(a_rows), std::memory_order_release);
-		}
 	}
 
 	void IndirectDraws::Impl::RequireSceneTables(GrowthBuild& a_build, SceneBuffers& a_scene, const SceneTables& a_tables)
@@ -58,24 +48,15 @@ namespace DCLF
 		auto& buffers = SceneBufferSet::Get();
 		const auto& inputs = producer.inputs;
 		auto& s = a_scene;
-		// An object slot of each: the records and every per-object buffer (the depth segment's verdicts, the frustum stamps, the
-		// reported verdicts).
+		// An object slot of every per-object buffer (the depth segment's verdicts, the frustum stamps, the reported verdicts). The
+		// payload's parts (records, extras, geometry rows, the scene list, the row tables) are not the set's: the payload holds them.
 		UnitGroup objects;
-		objects.Add(s.objects).Add(s.visibilityObjectReported);
+		objects.Add(s.visibilityObjectReported);
 		if (inputs.main)
 			objects.Add(inputs.main->visibility).Add(inputs.main->frustum);
 		if (inputs.shadow)
 			objects.Add(inputs.shadow->visibility);
 		objects.Require(a_build, a_tables.objects.size());
-		// The input buffers: an input per object, and every input the snapshot's payloads put there (the resident region's included:
-		// InputsFit).
-		if (inputs.main)
-			UnitGroup{}.Add(inputs.main->inputs).Add(inputs.main->inputsDepth).Require(a_build, std::max<std::uint64_t>(a_tables.objects.size(), producer.mainInputs));
-		if (inputs.shadow)
-			buffers.Require(a_build, inputs.shadow->inputs, std::max<std::uint64_t>(a_tables.objects.size(), producer.shadowInputs));
-		// The geometry slots, then a row per face stream.
-		buffers.Require(a_build, s.geometries, a_tables.geometries.size() + a_tables.faceStreams.size());
-		buffers.Require(a_build, s.extras, a_tables.extraRows.size() / 4);
 		std::uint64_t faceVertices = 0;
 		for (const auto& stream : a_tables.faceStreams)
 			if (stream.object != SceneTables::kNoFaceObject)
@@ -188,17 +169,6 @@ namespace DCLF
 			decals = std::max(decals, a_tables.decalCount[group]);
 		CheckSequenceLimits("the main pass", draws, true);
 		CheckSequenceLimits("a decal group", decals, false);
-		// One row per material and pipeline slot, plus a quarter, so the tables grow ahead of the scene. A new version is laid out from
-		// the rows the last commit posted (taken at the make's start, never the commit's live state), for its own address.
-		TakeRows(r.rowCaptures->materials, producer.committedRows.materials);
-		TakeRows(r.rowCaptures->pipelines, producer.committedRows.pipelines);
-		const auto materialSlots = static_cast<std::uint32_t>(a_tables.materials.size()), pipelineSlots = static_cast<std::uint32_t>(a_tables.pipelines.size());
-		// CS_DCLF_TEST_ROWS_GROWTH: forces both to grow at that frame, to test a mid-run growth's fill under claims.
-		std::uint64_t forced = 0;
-		if (const auto& at = SwitchValue(Switch::TestRowsGrowth); !at.empty() && producer.frame == static_cast<std::uint32_t>(std::strtoul(at.c_str(), nullptr, 10)))
-			forced = 1;
-		buffers.Require(a_build, r.materialRows.buffer, std::max<std::uint64_t>(materialSlots + materialSlots / 4, forced ? buffers.Units(a_build, r.materialRows.buffer) + 1 : 0));
-		buffers.Require(a_build, r.pipelineRows.buffer, std::max<std::uint64_t>(pipelineSlots + pipelineSlots / 4, forced ? buffers.Units(a_build, r.pipelineRows.buffer) + 1 : 0));
 		// The sequence ranges: doubled past the bound, the buffers sized to them exactly.
 		if (draws > layout.sequenceDraws || decals > layout.sequenceDecals) {
 			const std::uint32_t newDraws = org::services::GrowthPolicy::Doubling().NextAs(layout.sequenceDraws, draws),

@@ -3,8 +3,8 @@
 #	include "Draws.h"
 #	include "Engine.h"
 
-// IndirectDraws' report lines at the render thread's report (Reports::RenderThread): the async work, the views' epochs, the payload
-// ring, the snapshots and revisions.
+// IndirectDraws' report lines at the render thread's report (Reports::RenderThread): the async work, the views' epochs, the snapshots and
+// revisions (the payload's pools are the snapshot builder's: Impl::ProducerReport).
 
 namespace DCLF
 {
@@ -47,7 +47,7 @@ namespace DCLF
 								"withheld frame){}\n",
 				impl->treeLodOwned ? "DCLF's" : "the engine's", scene.treeLodUploads, scene.treeLodSlotsSent, NamedUnits(impl->Adopted(), scene.treeLodShapes),
 				NamedUnits(impl->Adopted(), scene.treeLodMeshes),
-				impl->treeLodMissed, impl->treeLodMissed ? " <- TREE LOD HOLES" : "");
+				Diagnostics::DrawsState::Get().treeLodMissed, Diagnostics::DrawsState::Get().treeLodMissed ? " <- TREE LOD HOLES" : "");
 			scene.treeLodUploads = scene.treeLodSlotsSent = 0;
 			// Its two-phase cull: in view, drawn by phase 1, occluded by the last frame's HZB, brought back by the rebuilt one.
 			if (auto& counts = scene.treeLodCounts) {
@@ -93,17 +93,6 @@ namespace DCLF
 				first == ~0ull ? std::string() :
 								 fmt::format("; first: {} input of object {}, mask {:#x}, expected {:#x}", kLists[std::min<std::size_t>(first >> 56, kLists.size() - 1)],
 									 (first >> 24) & 0xFFFFFFFFu, p.firstMask.load(std::memory_order_relaxed), first & 0xFFFFFFu));
-		}
-		{
-			auto& ring = impl->ringStats;
-			const auto frames = std::max<std::uint64_t>(ring.frames, 1);
-			text += fmt::format("[DCLF] payload ring (6e E4): {} frames filled by the producer ({} grew an entry), {} commits read it; {:.1f} KB in {:.1f} runs a frame\n",
-				ring.frames, ring.grown, ring.committed, impl->ringBytes.exchange(0) / 1024.0 / frames, double(impl->ringRuns.exchange(0)) / frames);
-			auto part = [&](std::size_t a_part) { return impl->ringPartBytes[a_part].exchange(0) / 1024.0 / frames; };
-			text += fmt::format("[DCLF] payload ring by buffer (KB a frame): objects {:.1f}, extras {:.1f}, geometries {:.1f}, material rows {:.1f}, pipeline rows {:.1f}, resident regions {:.1f}, frame inputs {:.1f}, shadow rows {:.1f}, shadow inputs {:.1f}; {} shadow commits read it (6e S2)\n",
-				part(Impl::kRingObjects), part(Impl::kRingExtras), part(Impl::kRingGeometries), part(Impl::kRingMaterialRows), part(Impl::kRingPipelineRows),
-				part(Impl::kRingResident), part(Impl::kRingFrameInputs), part(Impl::kRingShadowRows), part(Impl::kRingShadowInputs), ring.shadowCommitted);
-			ring = {};
 		}
 		return text;
 	}

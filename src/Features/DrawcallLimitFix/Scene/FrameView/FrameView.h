@@ -172,13 +172,13 @@ namespace DCLF::Scene
 		void HandOverAtFrameStart(std::shared_ptr<const void> a_adopted);
 		const std::shared_ptr<const Tables>& AcceptedTables() const { return acceptedTables; }
 		/**
-		 * @brief Render thread, depth commit: its fade root rows hold a_held (fadeRootsJournal's version), posted latest-wins; the
+		 * @brief Render thread, depth commit: its fade root rows are at a_contentEpoch (fadeRootsJournal's content epoch), posted latest-wins; the
 		 * coordinator's journal forgets what it has at its next pass.
 		 */
-		void FadeRootsSent(std::uint64_t a_held)
+		void FadeRootsSent(std::uint64_t a_contentEpoch)
 		{
 			// No wake: the frame's next pass takes it.
-			channels.fadeRootsSentPosted.store(a_held, std::memory_order_release);
+			channels.fadeRootsSentPosted.store(a_contentEpoch, std::memory_order_release);
 		}
 		/** @brief Render thread: the frame's capture (latched by every commit). */
 		const FrameCapture& GetFrameCapture() const { return frameCapture; }

@@ -83,7 +83,7 @@ validate: the `tree animation list` line's "loops given DCLF's verdicts" > 0 whe
 
 ## The fade write-back reads its events only on frames that record a revision (found by T7b1, 2026-10-11; fixed by T7b6, pending validation)
 
-`FadeEventReadbackPass` (`Draws/IndirectDraws/Passes/Passes.cpp`) reads its buffer in `Record`. The depth epoch is revision-driven
+`FadeEventReadbackPass` (`Draws/IndirectDraws/Passes/Readbacks.cpp`) reads its buffer in `Record`. The depth epoch is revision-driven
 (each ring slot recorded once per revision and replayed: `extern/OpenRenderGraph/docs/persistent-epochs.md`), so on replayed frames
 no fade events are read back and the write-back sees only the recording frames' events (T7b1's visibility readback had the same
 flaw: 59 of 300 frames in motion, none in interiors). Fix: T7b6, the fade events moved onto the visibility readback's scheme (a
@@ -144,6 +144,23 @@ Core validation at `coc RiverwoodSleepingGiantInn` (FP on), every run (i12vk, i1
 
 The sequences overrun and the invalid DGC address found with them are resolved (below: "Resolved: first-person and reflection
 draws read past their sequences").
+
+## Pooled payload: open items (2026-10-14)
+
+The payload ring was replaced by pooled versions published once per snapshot (dclf-architecture.md, "The payload"). These
+were left open:
+
+-   **No readback check of the material row bytes.** BuildDraws parity checks the rows' addresses. Nothing reads back a
+    backing's material rows and compares them with the kept rows. That would catch a part that the four-part journal
+    (`kMaterialRowParts`) failed to send, or that was patched with the wrong backing's address. The extras have this check
+    per backing; the rows do not.
+-   **Replaced builds cost builder CPU.** The publication gate (V3) lets newer work replace a sealed build that is not yet
+    published, so the builder abandons more revisions than before: sealed rose from 486 to 544 in a comparable window. Each
+    abandoned revision is a make and a draws build that is never published. GPU and upload costs fall; builder CPU rises.
+-   **The builder stalls if the coordinator's pump fails for good.** A payload is published only after the scene pass of the
+    frame that took the last snapshot has ended (`IndirectDraws::NoteScenePassDone`). If the coordinator's pump stops for
+    good (a thrown pass that never runs again), no pass ends. The builder then never publishes again, and every frame keeps
+    the last installed snapshot. Nothing detects or reports this case.
 
 ## Unattributed visual defects seen in first person (2026-10-11/12; not investigated)
 
@@ -347,8 +364,8 @@ frame's start sampled it"), and compares those draws with the engine's value now
 **Why it is accepted.** The user's decision (2026-10-06): a frame's delay on an animated emissive or fade is not
 visible. It keeps the render thread out of the shading entirely; the sample runs on the pool, and the GPU waits for it.
 
-**What would remove it.** Sampling the named slots again just before the colour epoch, on the pool, into the same ring
-entry (a second upload against the frame's timeline). That puts a pool job back on the colour epoch's critical path.
+**What would remove it.** Sampling the named slots again just before the colour epoch, on the pool, into the frame's
+shading backing (a second upload against the frame's timeline). That puts a pool job back on the colour epoch's critical path.
 
 ### Tree LOD instances the engine leaves hidden after `allVisible`
 
@@ -389,6 +406,32 @@ The canonical rule, the symptom signature and the tests are in `render-graph.md`
     -   The graph's last command buffer re-binding or resetting the descriptor-heap state.
     -   A capture with a tool that supports descriptor heaps.
     -   A standalone repro to report to NVIDIA.
+
+## Resolved: BuildDraws parity row-address MISMATCH (pre-existing; resolved 2026-10-14 with the pooled payload)
+
+**Symptom.** `CS_DCLF_BUILD_PARITY` reported `BuildDraws parity MISMATCH` lines whose first difference was the rows'
+addresses (for example `rows 0x26504a0000/0x26500a0000 vs 0x237aa3e100/0x26226f0000`). They were in the pre-refactor
+baseline (motion-pre0c) and in every run after it (p3gb, p5gb).
+
+**Cause.** Two causes, both in the check, not in the draws:
+-   **The check was also armed on Z-prepass epochs** (every 300th main epoch, whichever kind). The Z-prepass's draws go to
+    its pipeline slots' buckets, never to the plain range or the decal slots the check compares. When the check was armed on
+    one, it read what the last colour epoch had left there: another frame's output, drawn from another payload.
+-   **The two sides took the rows from different buffers.** The GPU's draws carried the payload ring's rows: the frame's own
+    buffers, whose addresses the commit wrote over the build's. The CPU templates carried the addresses of the dead named
+    row tables.
+
+**Fix.**
+-   The check is armed on colour epochs only.
+-   The CPU templates carry row offsets relative to their table. The check adds the bases of the epoch's `PayloadVersions`,
+    recorded when it is armed.
+-   Sequences are matched by (object, index buffer, first index): the partitions of a skin can share one index buffer.
+
+The ring and the named tables are both gone (dclf-async-publication.md, "The payload and frame values as pooled versions").
+A row address outside the epoch's tables now names the recent payload that held it.
+
+**Validated.** Growth and parity runs (`CS_DCLF_BUILD_PARITY`, `PERSISTENT_PARITY`, `TABLE_START=small`): 0 mismatches,
+with no sequence lacking a template.
 
 ## Resolved: first-person and reflection draws read past their sequences (found 2026-10-13; fixed by the scene's set)
 
@@ -672,13 +715,8 @@ Runs: `CS_DCLF_PERSISTENT_PARITY`, `WALK_PARITY`, `CHANGE_LOG_PARITY`, `RESIDENT
 `CS_DCLF_CAPTURE_PARITY=1` with `CS_DCLF_OWNERSHIP=off` on its own. 60 seconds each; counts are per report
 interval (300 frames). Every check not listed reports 0.
 
-### BuildDraws parity row-address MISMATCH (pre-existing: present before the growable-set work)
-
-`CS_DCLF_BUILD_PARITY` reports `BuildDraws parity MISMATCH` lines whose first difference is the rows' addresses (for example
-`rows 0x26504a0000/0x26500a0000 vs 0x237aa3e100/0x26226f0000`): the GPU's draws carry the payload ring's rows (the frame's own
-buffers, whose addresses the commit writes over the build's), the CPU templates the tables' rows. The same lines are in the
-pre-refactor baseline (motion-pre0c) and in every run since (p3gb, p5gb), so the growable-set work did not cause them; the check
-compares addresses the two sides legitimately take from different buffers. Not yet changed to compare the rows' contents.
+The BuildDraws parity row-address MISMATCH that was listed here is resolved: see "Resolved: BuildDraws parity row-address
+MISMATCH" above.
 
 ### Capture parity and draw parity MISMATCH under CAPTURE + PARITY_BOTH (2026-10-13; pre-existing, not a refactor regression)
 
@@ -892,7 +930,5 @@ for a NaN. The constant blocks are now compared bit for bit (`ConstantBlock::Sam
 -   The colour epoch's report now names frame textures a pipeline reads that the commit could not resolve.
 -   The scene report counts the objects whose pass descriptor carries the sun's shadow mask bits and the
     objects with derived descriptors.
--   **TEMP, still in the tree: the fetch guard** (against the pulled stages' vertex-stage fault): `Lighting.hlsl`'s
-    `DCLF_FETCH_GUARD` (`CS_DCLF_FETCH_GUARD`, default on), its push words `kZDrawPushPassTag` and `kZDrawPushPoolAddress`
-    (`DrawPipelines.h`), and `RecordBucketDraw`'s pass-tag and pool-address parameters (`PassHelpers.h`). Left in place: removing
-    the HLSL part changes the deployed `Lighting.hlsl`, which recompiles the whole shader cache. Removal awaits the user's call.
+-   The fetch guard (`CS_DCLF_FETCH_GUARD`, `Lighting.hlsl`'s `DCLF_FETCH_GUARD` and its push words) was removed on 2026-10-13. Both
+    faults it localised are fixed: the faces drawing before the frame's commit, and the index pool's empty grown `pool-firsts`.

@@ -9,8 +9,6 @@ namespace DCLF::Draws
 	constexpr const char* kShadowExtensionId = "cs.dclf.shadow";
 	constexpr const char* kReflectionExtensionId = "cs.dclf.reflection";
 	constexpr const char* kFirstPersonExtensionId = "cs.dclf.first-person";
-	// The shadow material rows (ShadowMaterialRow): row 0 for non-alpha-tested draws, then one per alpha-tested caster material.
-	constexpr std::uint32_t kShadowMaterialRowsInitial = 256;
 	// Render modes 0xD plain, 0xE clamped, 0xF paraboloid, then one per occlusion view (kOcclusionViews; render mode 0x1C both).
 	constexpr std::uint32_t kFirstOcclusionMode = 3;
 	constexpr std::uint32_t kShadowModeCount = kFirstOcclusionMode + kOcclusionViews;
@@ -54,12 +52,11 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kInitialDecalDraws = 2048;
 	constexpr std::uint64_t kConstantAlignment = 256;  // uniform buffer address alignment (conservative)
 	constexpr std::uint32_t kColorTargets = 8;
-	// The scene tables' first capacities, doubled by the scene's set to Impl::RequireSceneTables. The object capacity sizes every per-object buffer,
-	// draw inputs included (a segment or shadow mode has at most one input per object).
+	// The scene tables' first capacities, doubled by the scene's set to Impl::RequireSceneTables. The object capacity sizes every per-object
+	// buffer.
 	constexpr std::uint32_t kInitialObjects = 32768;
 	constexpr std::uint32_t kInitialGeometries = 16384;
 	constexpr std::uint32_t kInitialPoolIndices = 1u << 23;  // the shadow views' index pool (IndexPool): 16 MB
-	constexpr std::uint32_t kInitialExtraRows = 16384;
 	constexpr std::uint32_t kInitialFaceVertices = 1u << 18;
 	constexpr std::uint32_t kNoRecord = ~0u;
 	constexpr std::uint32_t kNoSkip = ~0u;
@@ -115,7 +112,7 @@ namespace DCLF::Draws
 	struct TreeWindFrameRow
 	{
 		std::uint32_t treeCount = 0, objectCount = 0, frame = 0;
-		std::uint32_t treeSeedsIndex = 0;  // FrameValues::TreeSeedsIndex (the frame's ring buffer)
+		std::uint32_t treeSeedsIndex = 0;  // FrameValues::TreeSeedsIndex (the frame's pooled backing)
 		TreeWindFrame inputs{};
 		std::uint32_t padding2[2]{};
 	};
@@ -344,14 +341,10 @@ namespace DCLF::Draws
 	struct BuildDrawsConstants
 	{
 		std::uint32_t latchIndex;        // the latch block's SRV
-		std::uint32_t inputsIndex;
-		std::uint32_t geometriesIndex;
 		std::uint32_t sequencesIndex;
 		std::uint32_t countIndex;
-		// The rows an input's y names (BuildDrawsCS.hlsl, RowsOf): the material rows (y's low 20 bits) and, below, the pipeline
-		// rows (its high 12; stride 0 for the shadow views).
-		std::uint32_t materialRowsAddressLo;
-		std::uint32_t materialRowsAddressHi;
+		// The strides of the rows an input's y names (BuildDrawsCS.hlsl, RowsOf): the material rows (y's low 20 bits) and, below,
+		// the pipeline rows (its high 12; stride 0 for the shadow views). Their addresses are the payload's, in the latch.
 		std::uint32_t materialRowStride;
 		std::uint32_t phaseBits;         // the culling phase in bits 4-7 (CullFlags' phase field)
 		std::uint32_t visibilityIndex;   // RWByteAddressBuffer: one uint per object in the tables
@@ -369,8 +362,6 @@ namespace DCLF::Draws
 		std::uint32_t decalBase;
 		std::uint32_t decalStride;
 		std::uint32_t pipelineRowStride;
-		std::uint32_t pipelineRowsAddressLo;
-		std::uint32_t pipelineRowsAddressHi;
 		// Depth phase 1 and shadow views: the fade roots' static rows. 0 elsewhere.
 		std::uint32_t fadeRootsIndex;
 		// Depth phase 1: the portal programs (kPortal*), tested after the frustum. 0 elsewhere.
@@ -386,7 +377,7 @@ namespace DCLF::Draws
 		// Colour segment: the refraction range's capacity (first slot forwardBase + 2 * forwardCapacity). 0 elsewhere.
 		std::uint32_t refractionCapacity;
 	};
-	static_assert(sizeof(BuildDrawsConstants) == 128);
+	static_assert(sizeof(BuildDrawsConstants) == 104);
 	constexpr std::uint32_t kBuildDrawsConstantWords = sizeof(BuildDrawsConstants) / 4;
 
 	/**
@@ -432,28 +423,30 @@ namespace DCLF::Draws
 		std::uint32_t phaseTwoBucketTableOffset;
 		// Depth phases: each pipeline slot's Z-prepass bucket (kNoBucket: none); a reflection face: each LOD slot's. 0 elsewhere.
 		std::uint32_t bucketMapOffset;
-		// The frame's placement rows (BindlessPlacement: bound, sun entry, fade node); a ring buffer descriptor.
+		// The frame's placement rows (BindlessPlacement: bound, sun entry, fade node): FrameValues' pooled backing (PlacementsIndex).
 		std::uint32_t placementsIndex;
-		// Nonzero when this execution reads a payload ring entry (the fields below); 0: the pass's own buffers.
-		std::uint32_t payloadValid;
+		// The installed publication's payload (PayloadVersions, PayloadLatch): the scene list, the geometry table, and the rows an
+		// input's y names (the shadow rows for a shadow or occlusion view, whose pipeline rows are 0).
 		std::uint32_t inputsIndex;
 		std::uint32_t geometriesIndex;
 		// The view types this dispatch draws (kView*): an input whose mask has none of them is not this view's. 0: no test.
 		std::uint32_t viewBits;
-		std::uint32_t materialRowsLo, materialRowsHi, pipelineRowsLo, pipelineRowsHi;
 		// A focus view: its target's fade root slot + 1, which an input's root word (+48) must name. 0: no test.
 		std::uint32_t focusRoot;
+		std::uint32_t materialRowsLo, materialRowsHi, pipelineRowsLo, pipelineRowsHi;
 		// The frame's fade seeds (FadeSeedRow): a root's node values and state until its first FadeStateCS update.
 		std::uint32_t fadeSeedsIndex;
 		// Colour segment: the terrain groups' capacities past phase 2's base. 0 elsewhere.
 		std::uint32_t terrainCapacity[2];
+		std::uint32_t padding;  // terrainNear's 16-byte alignment
 		// Depth segment under Terrain Blending: its eye and near distance in w. A terrain group 1 draw within it goes to its slot's
 		// twin bucket (kBucketTerrainPair), drawn into the terrain depth and, offset, the main depth. w 0: no test.
 		float terrainNear[4];
 	};
 	// BuildDrawsLatch::focusRoot for a target that is no listed root: no input's root word is its - 1.
 	constexpr std::uint32_t kFocusRootNone = 0xFFFFFFFFu;
-	static_assert(sizeof(BuildDrawsLatch) == 320 && offsetof(BuildDrawsLatch, terrainNear) == 304 && offsetof(BuildDrawsLatch, terrainCapacity) == 296 && offsetof(BuildDrawsLatch, focusRoot) == 288 && offsetof(BuildDrawsLatch, fadeSeedsIndex) == 292 && offsetof(BuildDrawsLatch, payloadValid) == 256 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
+	static_assert(sizeof(BuildDrawsLatch) == 320 && offsetof(BuildDrawsLatch, terrainNear) == 304 && offsetof(BuildDrawsLatch, terrainCapacity) == 292 && offsetof(BuildDrawsLatch, focusRoot) == 268 && offsetof(BuildDrawsLatch, fadeSeedsIndex) == 288 && offsetof(BuildDrawsLatch, inputsIndex) == 256 &&
+				  offsetof(BuildDrawsLatch, viewBits) == 264 && offsetof(BuildDrawsLatch, materialRowsLo) == 272 &&
 				  offsetof(BuildDrawsLatch, viewProj) == 32 && offsetof(BuildDrawsLatch, cullPlanes) == 96 &&
 				  offsetof(BuildDrawsLatch, pipelineMapOffset) == 192 && offsetof(BuildDrawsLatch, sunState) == 196 &&
 				  offsetof(BuildDrawsLatch, treeHeight) == 200 && offsetof(BuildDrawsLatch, fadeEye) == 208 &&

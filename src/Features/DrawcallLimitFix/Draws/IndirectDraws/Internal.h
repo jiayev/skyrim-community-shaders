@@ -75,7 +75,8 @@
 #	include <ORGModuleServices/GrowthPolicy.h>
 #	include <ORGModuleServices/GrowableBufferTypes.h>
 #	include <ORGModuleServices/GrowableBufferSet.h>
-#	include <ORGModuleServices/TransportBuffer.h>
+#	include <ORGModuleServices/BackingPool.h>
+#	include <ORGModuleServices/JournaledBufferSet.h>
 #	include <Resources/ExternalTextureResource.h>
 #	include <Resources/PixelBuffer.h>
 #	include <rhi_helpers.h>
@@ -91,6 +92,7 @@
 #	include <cstring>
 
 #	include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
+#	include "Features/DrawcallLimitFix/Runtime/FrameRetirement.h"
 #	include "Features/DrawcallLimitFix/Runtime/LatestSlot.h"
 #	include "Core/GpuLayouts.h"
 #	include "Core/Versioned.h"
@@ -110,6 +112,7 @@
 #	include "Builders/KeptStores.h"
 #	include "Builders/MainPayload.h"
 #	include "Builders/ShadowPayload.h"
+#	include "Core/PayloadVersions.h"
 #	include "Builders/Geometry.h"
 #	include "Builders/MainBuild.h"
 #	include "Builders/ShadowBuild.h"

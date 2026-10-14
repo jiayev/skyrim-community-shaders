@@ -6,9 +6,10 @@
 namespace DCLF::Draws
 {
 	/*
-	 * The views (ViewEpoch.cpp, with their captures in Reflection.cpp and FirstPerson.cpp): epochs that cull the frame's scene list
-	 * through BuildDraws' bucket path, frustum only, for faces with a camera of their own, and draw the buckets into the view's
-	 * targets. Each face's VS_PerFrame (b12) is its camera's (PerFrameBlock); the colour segment's frame constants otherwise.
+	 * The views (ViewEpoch.cpp and ViewEpochRecord.cpp, with their captures in Reflection.cpp and FirstPerson.cpp): epochs that
+	 * cull the frame's scene list through BuildDraws' bucket path, frustum only, for faces with a camera of their own, and draw the
+	 * buckets into the view's targets. Each face's VS_PerFrame (b12) is its camera's (PerFrameBlock); the colour segment's frame
+	 * constants otherwise.
 	 * - The water reflection's cube faces (dclf-lod.md, "Water reflections"): one epoch per reflection update, after the engine's
 	 *   face loop. Six faces, each drawing its LOD slots' forward pipelines into its slice of the engine's cube with DCLF's depth, and
 	 *   tree LOD from a list of its own. The shape always has all six faces, so the recordings hold across updates: a face the update
@@ -78,7 +79,6 @@ namespace DCLF::Draws
 		std::shared_ptr<const org::LatchBlock> latch;
 		std::uint32_t width = 0, height = 0;  // a face's render area
 		float depthRange = 1.0f;              // the viewport's maximum depth
-		std::uint64_t materialRows = 0, pipelineRows = 0;  // the main rows' tables (BuildDraws' RowsOf)
 		std::uint32_t sequenceDraws = 0;  // a face's range of the sequences
 		// A bucket: the pipeline slots of one pair of pipelines (the depth one: the Z-prepass group's, for a view with a depth pass),
 		// its range of a face's sequences.
@@ -110,8 +110,8 @@ namespace DCLF::Draws
 		bool SameShape(const ViewFrame& o) const
 		{
 			return latch == o.latch && latched == o.latched && SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) &&
-			       SameIndirect(indirect, o.indirect) && width == o.width && height == o.height && depthRange == o.depthRange && materialRows == o.materialRows &&
-			       pipelineRows == o.pipelineRows && sequenceDraws == o.sequenceDraws && buckets == o.buckets && push == o.push && forwardFirst == o.forwardFirst &&
+			       SameIndirect(indirect, o.indirect) && width == o.width && height == o.height && depthRange == o.depthRange &&
+			       sequenceDraws == o.sequenceDraws && buckets == o.buckets && push == o.push && forwardFirst == o.forwardFirst &&
 			       forwardCapacity == o.forwardCapacity && forwardEntry == o.forwardEntry && SameHandle(tree, o.tree) && SameHandle(treeSignature, o.treeSignature) &&
 			       treeGroups == o.treeGroups;
 		}
@@ -176,13 +176,12 @@ namespace DCLF::Draws
 		ViewLatchLayout layout;
 	};
 
-	/** @brief What a view's shape is made from (MakeViewShape): the plan, its sequences' named range, the main rows and the latches. */
+	/** @brief What a view's shape is made from (MakeViewShape): the plan, its sequences' named range and the latches. */
 	struct ViewShapeInputs
 	{
 		rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
 		IndirectState indirect{};
 		ViewPlan plan;
-		std::uint64_t materialRows = 0, pipelineRows = 0;
 		std::uint32_t sequenceDraws = 0;  // a face's range: the sequences' named units (the revision's set), at least plan.draws
 		const ViewLatches* latches = nullptr;
 		std::uint64_t frameConstantsAddress = 0;  // the colour segment's, which the push data names

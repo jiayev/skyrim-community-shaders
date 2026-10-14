@@ -168,8 +168,8 @@ namespace DCLF::Draws
 	/**
 	 * @brief One main segment's resident draws (drawcall-limit-fix.md, "Persistent resident draws"): the draw inputs of
 	 * the resident records (Coordinator's), dense, at the head of the segment's input buffer. Written by the main build only,
-	 * from the tables' change feed; the payloads share the inputs copy-on-write, and the commit uploads them when their version
-	 * is not the buffer's.
+	 * from the tables' change feed; the payloads share the inputs copy-on-write, and PayloadBuilder catches a backing up from
+	 * its content epoch.
 	 */
 	struct ResidentRegion : KeptRegion
 	{
@@ -240,10 +240,10 @@ namespace DCLF::Draws
 			return i != kNoRegion && (sideOf[i] & kSideMain);
 		}
 		/** @brief The publication's build of the inputs' journal, once whichever build writes first. */
-		void Begin(std::uint64_t a_oldestHeld)
+		void Begin(std::uint64_t a_oldestContentEpoch)
 		{
 			if (!begun)
-				inputs.BeginBuild(a_oldestHeld);
+				inputs.BeginBuild(a_oldestContentEpoch);
 			begun = true;
 		}
 		/** @brief A new entry holding a_side's part, its columns with it. */

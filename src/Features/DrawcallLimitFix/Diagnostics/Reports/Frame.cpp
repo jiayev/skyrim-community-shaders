@@ -145,7 +145,7 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 		if (!missing.empty())
 			skipped += " (missing" + missing + ")";
 		const auto& textures = DCLF::GpuTextures::Get().GetStats();
-		logger::info("[DCLF] indirect draws (last frame): {} candidates built from {} material rows, skipped:{}; {:.1f} MB uploaded, {:.3f} ms CPU; {} epochs, {} not ready; textures {} live in {} registry slots, {} cleanup pending, rejected {}/{}/{}, {} samplers; imports: {} made off the render thread; requests (the scene work's): {} answered, {} not answered yet",
+		logger::info("[DCLF] indirect draws (last frame): {} candidates built from {} material rows, skipped:{}; {:.1f} MB written by the build (the catch-up: payload pools), {:.3f} ms CPU; {} epochs, {} not ready; textures {} live in {} registry slots, {} cleanup pending, rejected {}/{}/{}, {} samplers; imports: {} made off the render thread; requests (the scene work's): {} answered, {} not answered yet",
 			draws.drawn, draws.records, skipped, draws.uploadBytes / 1048576.0,
 			draws.cpuMs, draws.epochs, draws.notReady, textures.cached, textures.registrySlots, textures.cleanupPending,
 			textures.rejected[1], textures.rejected[2], textures.rejected[3], textures.samplers, textures.importedAsync,
@@ -176,8 +176,6 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 			for (std::size_t i = 0; i < kCommitParts.size(); ++i)
 				commitParts += fmt::format("{}{} {:.1f}", commitParts.empty() ? "" : ", ", kCommitParts[i], draws.commitUs[i] / draws.commitEpochs);
 			logger::info("[DCLF] main epoch commit on the render thread, us per epoch over {} epochs: {}", draws.commitEpochs, commitParts);
-			if (const auto refused = DCLF::IndirectDraws::Get().TakeStreamsRefused())
-				logger::info("[DCLF] scene stream views a fallback wanted while the coordinator or the builds task ran (none made): {}", refused);
 			DCLF::IndirectDraws::Get().ResetCommitTimings();
 		}
 		std::istringstream reportLines(DCLF::IndirectDraws::Get().AsyncReport() + DCLF::Reports::SceneFrameLines());
@@ -256,7 +254,7 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 		if (draws.residentInputs || draws.residentResyncs)
 			logger::info("[DCLF] persistent draws (last frame, colour): {} kept inputs, {} sequences, {} pairs, {} not drawable; since the start {} region "
 						 "versions uploaded, {} resyncs (log {}, segment {}, shrunk {}, scope {}, fit {}), {} decal count moves",
-				draws.residentInputs, draws.residentDraws, draws.residentPairs, draws.residentUndrawable, draws.residentVersions, draws.residentResyncs,
+				draws.residentInputs, draws.residentDraws, draws.residentPairs, draws.residentUndrawable, draws.residentEpochs, draws.residentResyncs,
 				draws.residentResyncBy[0], draws.residentResyncBy[1], draws.residentResyncBy[2], draws.residentResyncBy[3], draws.residentResyncBy[4], draws.residentDecalRetakes);
 		if (draws.fadeTested)
 			logger::info("[DCLF] fade on the GPU (sampled frame): {} draws under a fade root in view, {} dropped by their root's fade; {} roots",

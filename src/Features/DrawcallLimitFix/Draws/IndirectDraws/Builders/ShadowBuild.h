@@ -170,7 +170,7 @@ namespace DCLF::Draws
 	 * resolved) becoming ready; the per-frame list is only the face shapes. The material rows (ShadowMaterialRow): the plain
 	 * one and one per alpha-tested material, at slots the materials keep, lowest free first, in one table every view reads
 	 * (ShadowResources::materialRows, which grows when the slots outnumber it: a slot past its capacity waits a frame). The
-	 * rows and each mode's inputs are KeptArrays: a buffer is sent what changed since the version it holds.
+	 * rows and each mode's inputs are KeptArrays: a buffer is sent what changed since the content epoch it holds.
 	 */
 	struct ShadowKept
 	{
@@ -197,7 +197,6 @@ namespace DCLF::Draws
 		std::vector<std::uint32_t> transformWatch;
 		std::vector<std::uint64_t> transformWatchBuild;  // per slot: the build of its last event, 0 unwatched
 		std::uint64_t lookupsGeneration = ~0ull;
-		std::uint32_t rowCapacity = 0;
 		// Every slot's owner, as one root for the payloads (bindingOwners), rebuilt when an owner changes.
 		std::shared_ptr<const std::vector<std::shared_ptr<const void>>> owners;
 		bool ownersChanged = true;

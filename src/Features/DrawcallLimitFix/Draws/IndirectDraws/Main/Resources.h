@@ -32,38 +32,16 @@ namespace DCLF::Draws
 	/** @brief The main layout's first sequence ranges (CS_DCLF_TABLE_START=small: a few draws, to test growth). */
 	MainLayout InitialMainLayout();
 
-	struct MainRowCaptures;
 	struct Resources
 	{
 		std::vector<FrameBuffer> frameBuffers;
-		// The main pass's rows (DrawPipelines.h), shared by both segments, by material and pipeline slot. *Filled: the kept rows'
-		// version the table version holds (a captured version: its capture's; else none, sent whole).
-		GrowableRows materialRows, pipelineRows;
-		org::services::FilledContents<> materialRowsFilled, pipelineRowsFilled;
-		// The rows the last main commit sent, as the revision producer took them at its make: what a new row table version is laid
-		// out from (its capture, on the preparation pool).
-		std::shared_ptr<MainRowCaptures> rowCaptures;
 		// Shared by every epoch.
 		std::shared_ptr<SceneBuffers> scene;
-		Versioned inputs, sequences;  // BuildDraws: in, out (and the scene's geometries)
+		// BuildDraws' out (its inputs, geometries and rows are the installed payload's: PayloadVersions).
+		Versioned sequences;
 		std::shared_ptr<org::Buffer> count;
 		std::array<Versioned, 2> zBucketCounts;
 		std::shared_ptr<IndexPool> pool;
-		// The Z-prepass's own draw inputs (different drawable bits). residentFilled: per segment (0 Z-prepass's inputsDepth, 1 the
-		// colour segment's inputs), the region version its buffer version holds.
-		Versioned inputsDepth;
-		std::array<org::services::FilledContents<>, 2> residentFilled;
-		/** @brief The segment's input buffer (inputsDepth for the Z-prepass when it has its own) and the residentFilled index. */
-		std::pair<const Versioned*, std::size_t> SegmentInputs(bool a_depthOnly) const
-		{
-			return a_depthOnly && inputsDepth ? std::pair{ &inputsDepth, std::size_t(0) } : std::pair{ &inputs, std::size_t(1) };
-		}
-		/** @brief The region version the segment's input buffer version a_named names holds (0: none, sent whole). */
-		std::uint64_t ResidentHeld(const NamedVersions& a_named, bool a_depthOnly) const
-		{
-			const auto [buffer, index] = SegmentInputs(a_depthOnly);
-			return residentFilled[index].Since(a_named.Of(*buffer)).value_or(0);
-		}
 		std::shared_ptr<const ComputeProgram> buildDraws;
 		winrt::com_ptr<ID3D11Buffer> countD3D11;  // the culling counters' readback
 		// The foliage record (Policy::RecordFoliagePixels): per frame parity, each pixel's object and colours, and the compare
@@ -126,7 +104,7 @@ namespace DCLF::Draws
 		struct Committed
 		{
 			std::uint32_t frame = ~0u, inputs = 0;
-			std::uint64_t named = 0;  // the adopted set's serial
+			std::uint64_t adoptedSerial = 0;  // the adopted set's serial
 		};
 		std::array<Committed, 2> committed;
 	};
@@ -189,7 +167,6 @@ namespace DCLF::Draws
 		std::array<std::uint32_t, kTerrainGroups> terrainCapacity{};
 		std::uint32_t forwardCapacity = 0;
 		std::uint32_t refractionCapacity = 0;
-		std::uint64_t materialRows = 0, pipelineRows = 0;     // the row tables' addresses
 		MainViewport viewport;
 		rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
 		IndirectState indirect{};
@@ -201,10 +178,10 @@ namespace DCLF::Draws
 		LatchedList latched;                           // MainLatchedLayout, in its reserved block
 	};
 	/**
-	 * @brief A segment's shape inputs from the layout and the rows' versions a_named names (ranges, rows, a_cullMode). The caller fills
+	 * @brief A segment's shape inputs from the layout and the versions a_sealed names (ranges, a_cullMode). The caller fills
 	 * the latch and the descriptor heaps.
 	 */
-	MainShapeInputs MainShapeInputsOf(const Resources& a_resources, const MainLayout& a_layout, const NamedVersions& a_named, bool a_depthOnly, std::uint32_t a_cullMode);
+	MainShapeInputs MainShapeInputsOf(const Resources& a_resources, const MainLayout& a_layout, const NamedVersions& a_sealed, bool a_depthOnly, std::uint32_t a_cullMode);
 	std::shared_ptr<PassFrame> MakeMainShape(const MainShapeInputs& a_in);
 
 

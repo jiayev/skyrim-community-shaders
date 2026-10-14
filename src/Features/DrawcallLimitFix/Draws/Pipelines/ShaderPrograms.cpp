@@ -399,9 +399,6 @@ namespace DCLF
 			// other inputs (PulledLightingSource).
 			if (a_pulled && a_sourceName == kSourcePath)
 				request.defines.push_back({ L"DCLF_PULLED_ROWS", L"1" });
-			// TEMP (against the pulled stages' GPU fault): CS_DCLF_FETCH_GUARD, default on (Lighting.hlsl, DCLF_FETCH_GUARD).
-			if (a_pulled && !a_pixel && a_sourceName == kSourcePath && SwitchValue(Switch::FetchGuard) != "0")
-				request.defines.push_back({ L"DCLF_FETCH_GUARD", L"1" });
 			// The foliage record (Policy::RecordFoliagePixels): the colour pass's alpha-tested draws write what each pixel shows, and the
 			// Z-prepass's which of them owns its depth (Lighting.hlsl); every colour draw records with CS_DCLF_FOLIAGE_PARITY=land.
 			if (a_pixel && a_depthOnly == a_pulled && a_sourceName == kSourcePath && Policy::RecordFoliagePixels()) {

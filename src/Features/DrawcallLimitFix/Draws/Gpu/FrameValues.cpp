@@ -22,6 +22,8 @@
 #include <limits>
 
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
+#	include "Features/DrawcallLimitFix/Draws/Gpu/PooledBackings.h"
+#	include "Features/DrawcallLimitFix/Runtime/FrameRetirement.h"
 #	include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
 #	include "Features/DrawcallLimitFix/Runtime/Switches.h"
 #	include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
@@ -29,8 +31,8 @@
 #	include <OpenRenderGraph/PersistentGraphHost.h>
 #	include <Render/Runtime/IUploadService.h>
 #	include <Resources/Buffers/Buffer.h>
+#	include <ORGModuleServices/BackingPool.h>
 #	include <ORGModuleServices/GrowthPolicy.h>
-#	include <ORGModuleServices/TransportBuffer.h>
 #	include <rhi.h>
 
 #	include <algorithm>
@@ -190,6 +192,20 @@ namespace DCLF
 			updateSkinInstance(a_skin, &a_world);
 		}
 
+		using FrameLeases = std::array<org::services::BackingLease, FrameValues::kPools>;
+
+		// Render thread: binds a frame's backings to everything submitted so far (the frame's last submission) and lets them go, so
+		// a backing is not reused before that frame completed on the GPU.
+		void BindFrameLeases(FrameLeases& a_leases)
+		{
+			const auto point = SubmittedRetirementPoint();
+			for (auto& lease : a_leases)
+				if (lease) {
+					lease.Bind(point);
+					lease.Reset();
+				}
+		}
+
 		void SampleItem(const Plan::Item& a_item, BindlessPlacement& a_row, BindlessPlacement& a_layer)
 		{
 			const auto& geometry = *a_item.geometry;
@@ -214,10 +230,41 @@ namespace DCLF
 
 	struct FrameValues::Impl
 	{
+		enum Part : std::size_t
+		{
+			kPlacements,
+			kPalettes,
+			kShading,
+			kFadeSeeds,
+			kTreeSeeds
+		};
+		static constexpr std::array<const char*, kPools> kPartNames{ "placements", "palettes", "shading", "fade-seeds", "tree-seeds" };
+		static constexpr std::array<std::uint32_t, kPools> kStrides{ sizeof(BindlessPlacement), sizeof(PaletteRow), sizeof(BindlessShading),
+			sizeof(FadeRootStatic), sizeof(TreeStatic) };
+
+		/**
+		 * @brief One row set's pool (D6), on DCLF's retirement clock, no caps: the render thread (Kick) its one acquirer, the
+		 * producers fill what they are handed. Released backings are destroyed on the graph host's cleanup lane (PooledBackings).
+		 */
+		struct Pool
+		{
+			std::shared_ptr<org::services::BackingPool> pool;  // made with Impl
+			std::uint64_t capacity = 0;                        // render thread: the class last asked (GrowthPolicy::Doubling(1024))
+			std::atomic<std::uint64_t> newestContentEpoch{ 0 };  // the content epoch the newest producer brought its backing to
+			std::atomic<std::uint64_t> floor{ 0 };            // the trim floor at the last Kick (diagnostics)
+			std::atomic<std::uint64_t> acquires{ 0 }, made{ 0 }, runs{ 0 }, bytes{ 0 };  // since the last take
+		};
+
+		Impl()
+		{
+			for (std::size_t part = 0; part < kPools; ++part)
+				pools[part].pool = org::services::BackingPool::Create(PooledBackings::Hooks(), FrameRetirement(),
+					{ .name = fmt::format("cs.dclf.frame-values.{}", kPartNames[part]), .maxPerClass = 0, .spareFree = PooledBackings::PerFrameSpares() });
+		}
+
 		// Render thread.
-		using RingBuffer = org::services::TransportBuffer;
-		std::array<RingBuffer, kRing> ring, paletteRing, shadingRing, seedRing, treeSeedRing;
-		std::array<org::PersistentGraphHost::GpuPoint, kRing> points;  // per ring entry: the last frame that read it
+		std::array<Pool, kPools> pools;
+		FrameLeases frameLeases;  // the kicked frame's backings, bound at EndFrame
 		std::shared_ptr<const Plan> plan;                              // the newest
 		std::vector<std::shared_ptr<const Plan>> unsampled;           // plans whose written slots no producer has sampled yet
 		std::vector<ShadingItem> unsampledShading;        // not yet taken by a producer
@@ -237,7 +284,6 @@ namespace DCLF
 		KeptArray<BindlessShading> shading;
 		KeptArray<FadeRootStatic> seeds;  // by FadeSeedRow
 		KeptArray<TreeStatic> treeSeeds;  // by 2 * tree slot + seedOdd
-		std::array<std::uint64_t, kRing> held{}, paletteHeld{}, shadingHeld{}, seedsHeld{}, treeSeedsHeld{};  // per ring entry: versions held
 		std::vector<std::uint8_t> listed;                       // dedup marks while listing items: per slot
 		std::vector<std::uint8_t> blockListed;                  // per palette block
 		std::vector<std::uint8_t> shadingListed;                // per slot, shading items
@@ -247,8 +293,8 @@ namespace DCLF
 
 		// Since the last report.
 		std::atomic<std::uint64_t> frames{ 0 }, sampled{ 0 }, rowsChanged{ 0 }, skins{ 0 }, paletteRowsChanged{ 0 }, shadingSampled{ 0 }, shadingChanged{ 0 },
-			wetnessChanged{ 0 }, defects{ 0 }, runs{ 0 }, bytes{ 0 }, refused{ 0 }, failures{ 0 }, pointWaits{ 0 }, settled{ 0 }, seeded{ 0 };
-		std::atomic<std::uint64_t> sampleUs{ 0 }, pointWaitUs{ 0 }, uploadUs{ 0 }, maxTotalUs{ 0 };
+			wetnessChanged{ 0 }, defects{ 0 }, runs{ 0 }, bytes{ 0 }, refused{ 0 }, failures{ 0 }, settled{ 0 }, seeded{ 0 };
+		std::atomic<std::uint64_t> sampleUs{ 0 }, uploadUs{ 0 }, maxTotalUs{ 0 };
 
 		/**
 		 * @brief A first-person member's rows and palettes, sampled by the render thread at Kick, before Main::Draw moves the
@@ -273,14 +319,12 @@ namespace DCLF
 			std::vector<std::pair<std::uint32_t, TreeStatic>> treeSeedValues;
 			std::uint32_t treeSeedRows = 0;
 			std::shared_ptr<const FrameGlobals> globals;  // the frame's engine globals (shading rows' tree wind)
-			std::uint32_t ringIndex = 0;
-			std::shared_ptr<org::Buffer> target, paletteTarget, shadingTarget, seedTarget, treeSeedTarget;
-			std::uint32_t capacity = 0, paletteCapacity = 0, shadingCapacity = 0, seedCapacity = 0, treeSeedCapacity = 0;  // in rows
-			bool fresh = false, paletteFresh = false, shadingFresh = false, seedFresh = false, treeSeedFresh = false;      // new buffer, holds nothing
-			org::PersistentGraphHost::GpuPoint reuse;
+			// Per part: the backing the frame's draws read (leased until the producer is done), and the journal's trim floor (the
+			// oldest content a backing in circulation held at Kick; nullopt: none holds any, the journal keeps nothing).
+			FrameLeases leases;
+			std::array<std::optional<std::uint64_t>, kPools> oldestContentEpochs;
 			std::shared_ptr<rhi::TimelinePtr> timeline;
 			std::shared_ptr<org::runtime::IUploadService> uploads;
-			FrameUploads more;  // the frame's other uploads (Kick's a_uploads)
 			std::vector<FirstPersonSample> firstPerson;  // the render thread's samples (Kick)
 			ParticleSnapshots::Camera particleCamera;    // the main camera particle quads face
 			// The camera first-person particle quads face: the main camera's rotation (the first-person camera's, FUN_1414cb020)
@@ -293,7 +337,13 @@ namespace DCLF
 		void SampleFadeSeeds(const Job& a_job);
 		void Upload(const Job& a_job);
 		template <class T>
-		void Send(const Job& a_job, const KeptArray<T>& a_rows, std::uint64_t& a_holds, bool a_fresh, const std::shared_ptr<org::Buffer>& a_target, std::uint32_t a_capacity);
+		void Send(const Job& a_job, Part a_part, const KeptArray<T>& a_rows);
+		/** @brief The producer's: a_rows' build opened at the job's floor for a_part (every change forgotten without one). */
+		template <class T>
+		static void BeginBuild(const Job& a_job, Part a_part, KeptArray<T>& a_rows)
+		{
+			a_rows.BeginBuild(a_job.oldestContentEpochs[a_part] ? *a_job.oldestContentEpochs[a_part] : a_rows.ContentEpoch());
+		}
 	};
 
 	void FrameValues::Impl::Run(const Job& a_job)
@@ -307,25 +357,8 @@ namespace DCLF
 			Sample(a_job);
 			const auto sampledAt = std::chrono::steady_clock::now();
 			sampleUs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(sampledAt - start).count());
-			// Wait for the buffers' last readers, kRing frames back (almost always done).
-			if (!a_job.reuse.Reached()) {
-				ZoneScopedN("CS.DCLF.FrameValues.WaitBuffer");
-				++pointWaits;
-				if (!a_job.reuse.Wait(10000))
-					throw std::runtime_error("the frame that last read its buffers did not complete on the GPU");
-			}
-			const auto reusable = std::chrono::steady_clock::now();
-			pointWaitUs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(reusable - sampledAt).count());
 			Upload(a_job);
-			if (a_job.more) {
-				try {
-					a_job.more(*a_job.uploads);
-				} catch (const std::exception& e) {
-					if (failures++ == 0)
-						logger::error("[DCLF] frame values {}: the frame's other uploads failed: {}", a_job.seq, e.what());
-				}
-			}
-			uploadUs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - reusable).count());
+			uploadUs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - sampledAt).count());
 		} catch (const std::exception& e) {
 			if (failures++ == 0)
 				logger::error("[DCLF] frame values {} failed: {}; the frame draws the rows its buffers held", a_job.seq, e.what());
@@ -344,9 +377,8 @@ namespace DCLF
 	{
 		ZoneScopedN("CS.DCLF.FrameValues.Sample");
 		const auto& work = *a_job.plan;
-		const auto oldestOf = [](const std::array<std::uint64_t, kRing>& a_held) { return *std::min_element(a_held.begin(), a_held.end()); };
-		rows.BeginBuild(oldestOf(held));
-		palettes.BeginBuild(oldestOf(paletteHeld));
+		BeginBuild(a_job, kPlacements, rows);
+		BeginBuild(a_job, kPalettes, palettes);
 		auto& out = rows.Mutable();
 		if (out.size() < work.slots) {
 			const std::size_t first = out.size();
@@ -597,7 +629,7 @@ namespace DCLF
 	void FrameValues::Impl::SampleFadeSeeds(const Job& a_job)
 	{
 		ZoneScopedN("CS.DCLF.FrameValues.FadeSeeds");
-		seeds.BeginBuild(*std::min_element(seedsHeld.begin(), seedsHeld.end()));
+		BeginBuild(a_job, kFadeSeeds, seeds);
 		auto& out = seeds.Mutable();
 		if (out.size() < a_job.seedRows) {
 			const std::size_t first = out.size();
@@ -612,7 +644,7 @@ namespace DCLF
 			seeds.Mark(at);
 			++seeded;
 		}
-		treeSeeds.BeginBuild(*std::min_element(treeSeedsHeld.begin(), treeSeedsHeld.end()));
+		BeginBuild(a_job, kTreeSeeds, treeSeeds);
 		auto& trees = treeSeeds.Mutable();
 		if (trees.size() < a_job.treeSeedRows) {
 			const std::size_t first = trees.size();
@@ -631,7 +663,7 @@ namespace DCLF
 	void FrameValues::Impl::SampleShadingRows(const Job& a_job, std::size_t a_slots)
 	{
 		ZoneScopedN("CS.DCLF.FrameValues.Shading");
-		shading.BeginBuild(*std::min_element(shadingHeld.begin(), shadingHeld.end()));
+		BeginBuild(a_job, kShading, shading);
 		auto& out = shading.Mutable();
 		if (out.size() < a_slots) {
 			const std::size_t first = out.size();
@@ -690,28 +722,33 @@ namespace DCLF
 			refused += refusals;
 	}
 
+	// The catch-up: the journal's runs since the backing's content (all of them for a backing that holds nothing, or less than the
+	// journal's floor), into the leased backing (PooledBackingLease: no frame reads it before the one that leased it, which waits for
+	// this producer's signal); then the backing is at the journal's content epoch.
 	template <class T>
-	void FrameValues::Impl::Send(const Job& a_job, const KeptArray<T>& a_rows, std::uint64_t& a_holds, bool a_fresh, const std::shared_ptr<org::Buffer>& a_target,
-		std::uint32_t a_capacity)
+	void FrameValues::Impl::Send(const Job& a_job, Part a_part, const KeptArray<T>& a_rows)
 	{
+		auto& backing = *a_job.leases[a_part];  // the lease holder fills it (contentEpoch is its)
 		auto view = a_rows.View();
-		const std::size_t count = std::min<std::size_t>(view.Count(), a_capacity);
-		if (view.Count() > count)
-			throw std::runtime_error(fmt::format("its buffer holds {} rows of {}", count, view.Count()));
-		if (a_fresh)
-			a_holds = 0;
+		if (view.Count() > backing.capacityClass)
+			throw std::runtime_error(fmt::format("its {} backing holds {} rows of {}", kPartNames[a_part], backing.capacityClass, view.Count()));
 		const auto* data = view.elements ? view.elements->data() : nullptr;
 		std::uint64_t sent = 0, sentBytes = 0;
-		view.changes.ForEachRun(a_holds, count, [&](std::uint64_t a_first, std::uint64_t a_count) {
+		view.changes.ForEachRun(backing.contentEpoch.load(std::memory_order_acquire), view.Count(), [&](std::uint64_t a_first, std::uint64_t a_count) {
 			const org::StreamingUploadSegment segment{ data + a_first, static_cast<std::size_t>(a_count * sizeof(T)) };
 			auto ticket = a_job.uploads->QueueTrackedStreamingUploadSegments({ &segment, 1 }, segment.size,
-				org::WorkerOwnedDestination{ a_target, org::WorkerOwnedDestination::Ownership::RetiredFrameRegion }, static_cast<std::size_t>(a_first * sizeof(T)));
+				org::WorkerOwnedDestination{ backing.buffer, org::WorkerOwnedDestination::Ownership::PooledBackingLease },
+				static_cast<std::size_t>(a_first * sizeof(T)));
 			if (!ticket || ticket->state.load(std::memory_order_acquire) == org::TrackedUploadTicketState::Cancelled)
 				throw std::runtime_error("the dedicated uploader refused its rows");
 			++sent;
 			sentBytes += segment.size;
 		});
-		a_holds = view.Version();
+		backing.contentEpoch.store(view.ContentEpoch(), std::memory_order_release);
+		auto& pool = pools[a_part];
+		pool.newestContentEpoch.store(view.ContentEpoch(), std::memory_order_release);
+		pool.runs += sent;
+		pool.bytes += sentBytes;
 		runs += sent;
 		bytes += sentBytes;
 	}
@@ -719,11 +756,11 @@ namespace DCLF
 	void FrameValues::Impl::Upload(const Job& a_job)
 	{
 		ZoneScopedN("CS.DCLF.FrameValues.Upload");
-		Send(a_job, rows, held[a_job.ringIndex], a_job.fresh, a_job.target, a_job.capacity);
-		Send(a_job, palettes, paletteHeld[a_job.ringIndex], a_job.paletteFresh, a_job.paletteTarget, a_job.paletteCapacity);
-		Send(a_job, shading, shadingHeld[a_job.ringIndex], a_job.shadingFresh, a_job.shadingTarget, a_job.shadingCapacity);
-		Send(a_job, seeds, seedsHeld[a_job.ringIndex], a_job.seedFresh, a_job.seedTarget, a_job.seedCapacity);
-		Send(a_job, treeSeeds, treeSeedsHeld[a_job.ringIndex], a_job.treeSeedFresh, a_job.treeSeedTarget, a_job.treeSeedCapacity);
+		Send(a_job, kPlacements, rows);
+		Send(a_job, kPalettes, palettes);
+		Send(a_job, kShading, shading);
+		Send(a_job, kFadeSeeds, seeds);
+		Send(a_job, kTreeSeeds, treeSeeds);
 	}
 
 	FrameValues::FrameValues() :
@@ -746,10 +783,12 @@ namespace DCLF
 
 	bool FrameValues::Kick(std::vector<std::shared_ptr<const PlacementPlan>> a_plans, std::vector<ShadingItem> a_shading,
 		std::vector<WetnessValue> a_wetness, std::vector<FadeSeedItem> a_seeds, std::vector<TreeSeedItem> a_treeSeeds,
-		std::shared_ptr<const FrameGlobals> a_globals, FrameUploads a_uploads)
+		std::shared_ptr<const FrameGlobals> a_globals)
 	{
 		auto& s = *impl;
 		s.kicked = false;
+		// A frame whose EndFrame did not come: its backings are bound to what was submitted so far.
+		BindFrameLeases(s.frameLeases);
 		// Fade seeds: read at the frame's start, before this frame's culls update the nodes (FadeStateCS's first update is this
 		// frame's), with the frame's globals (StaticOf's LOD scale).
 		{
@@ -789,6 +828,8 @@ namespace DCLF
 				}
 			if (host)
 				host->SetFrameWaitValue(0);
+			// No backing is leased for the frame: its draws have no rows (no index names a backing the pool may release).
+			frameIndex = paletteIndex = shadingIndex = seedsIndex = treeSeedsIndex = 0;
 			if (!s.unavailableLogged && s.seq) {
 				s.unavailableLogged = true;
 				logger::error("[DCLF] frame values unavailable ({}): DCLF's draws have no placements", !host ? "no render graph" : "no dedicated upload queue");
@@ -807,7 +848,6 @@ namespace DCLF
 			s.plans.pop_front();
 		static const Plan kEmpty{};
 		const std::uint64_t seq = ++s.seq;
-		const std::uint32_t r = static_cast<std::uint32_t>(seq % kRing);
 		Impl::Job job;
 		job.seq = seq;
 		job.plan = s.plan ? s.plan.get() : &kEmpty;
@@ -824,33 +864,30 @@ namespace DCLF
 		job.treeSeedValues = std::exchange(s.unsentTreeSeeds, {});
 		job.treeSeedRows = s.treeSeedRows;
 		job.globals = a_globals;
-		job.ringIndex = r;
-		// Grow by replacing the buffer; the old one retires with the frames reading it.
-		const auto retire = [](std::shared_ptr<org::Buffer>&& a_old) { Scene::FrameView::Get().RetireImport(std::move(a_old)); };
-		const auto ensure = [&](Impl::RingBuffer& a_entry, std::uint32_t a_needed, std::uint32_t a_stride, const char* a_name, bool& a_fresh) {
-			if (org::services::EnsureTransport(a_entry, a_needed, a_stride, org::services::GrowthPolicy::Doubling(1024),
-					[&] { return fmt::format("cs.dclf.frame-values.{}.{}", a_name, r); }, retire))
-				a_fresh = true;
-		};
-		ensure(s.ring[r], s.plan ? s.plan->slots : 0u, sizeof(BindlessPlacement), "placements", job.fresh);
-		ensure(s.paletteRing[r], s.plan ? 2 * s.plan->boneCapacity : 0u, sizeof(PaletteRow), "palettes", job.paletteFresh);
-		ensure(s.shadingRing[r], s.plan ? s.plan->slots : 0u, sizeof(BindlessShading), "shading", job.shadingFresh);
-		ensure(s.seedRing[r], s.seedRows, sizeof(FadeRootStatic), "fade-seeds", job.seedFresh);
-		ensure(s.treeSeedRing[r], s.treeSeedRows, sizeof(TreeStatic), "tree-seeds", job.treeSeedFresh);
-		job.target = s.ring[r].buffer;
-		job.capacity = static_cast<std::uint32_t>(s.ring[r].capacity);
-		job.paletteTarget = s.paletteRing[r].buffer;
-		job.paletteCapacity = static_cast<std::uint32_t>(s.paletteRing[r].capacity);
-		job.shadingTarget = s.shadingRing[r].buffer;
-		job.shadingCapacity = static_cast<std::uint32_t>(s.shadingRing[r].capacity);
-		job.seedTarget = s.seedRing[r].buffer;
-		job.seedCapacity = static_cast<std::uint32_t>(s.seedRing[r].capacity);
-		job.treeSeedTarget = s.treeSeedRing[r].buffer;
-		job.treeSeedCapacity = static_cast<std::uint32_t>(s.treeSeedRing[r].capacity);
-		job.reuse = s.points[r];
+		// Each part's backing, holding every row the producer leaves (a class of GrowthPolicy::Doubling(1024)), the one that holds
+		// most of the journal preferred; the floor (the oldest content in circulation, this lease's included) is what the
+		// producer's journal keeps.
+		const std::array<std::uint64_t, kPools> needed{ s.plan ? s.plan->slots : 0u, s.plan ? 2ull * s.plan->boneCapacity : 0u,
+			s.plan ? s.plan->slots : 0u, s.seedRows, s.treeSeedRows };
+		for (std::size_t part = 0; part < kPools; ++part) {
+			auto& pool = s.pools[part];
+			pool.capacity = org::services::GrowthPolicy::Doubling(1024).Next(pool.capacity, needed[part]);
+			const auto name = fmt::format("cs.dclf.frame-values.{}", Impl::kPartNames[part]);
+			org::services::BackingPool::AcquireInfo info;
+			auto lease = pool.pool->Acquire({ .capacityClass = pool.capacity, .stride = Impl::kStrides[part], .name = name },
+				pool.newestContentEpoch.load(std::memory_order_acquire), &info);
+			if (!lease)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: the frame values' {} pool returned no backing", Impl::kPartNames[part]));
+			++pool.acquires;
+			if (info.allocated)
+				++pool.made;
+			job.oldestContentEpochs[part] = pool.pool->OldestContentEpoch();
+			pool.floor.store(job.oldestContentEpochs[part].value_or(0), std::memory_order_relaxed);
+			s.frameLeases[part] = lease;
+			job.leases[part] = std::move(lease);
+		}
 		job.timeline = std::move(timeline);
 		job.uploads = std::move(uploads);
-		job.more = std::move(a_uploads);
 		job.particleCamera = ParticleSnapshots::Get().FrameCamera();
 		// The first-person eye (DrawWorld +0x00, filled by FUN_1406452c0 before FrameDriver::BeginFrame): where FUN_1414cb020 places
 		// the first-person camera, with the world camera's rotation.
@@ -896,17 +933,19 @@ namespace DCLF
 		}
 		if (s.plan)
 			s.plans.emplace_back(seq, s.plan);
-		frameIndex = s.ring[r].srvIndex;
-		paletteIndex = s.paletteRing[r].srvIndex;
-		shadingIndex = s.shadingRing[r].srvIndex;
-		seedsIndex = s.seedRing[r].srvIndex;
-		treeSeedsIndex = s.treeSeedRing[r].srvIndex;
+		frameIndex = s.frameLeases[Impl::kPlacements]->srvIndex;
+		paletteIndex = s.frameLeases[Impl::kPalettes]->srvIndex;
+		shadingIndex = s.frameLeases[Impl::kShading]->srvIndex;
+		seedsIndex = s.frameLeases[Impl::kFadeSeeds]->srvIndex;
+		treeSeedsIndex = s.frameLeases[Impl::kTreeSeeds]->srvIndex;
 		// Batches submitted from here wait for the frame's values; the producer always signals.
 		host->SetFrameWaitValue(seq);
 		s.kicked = true;
 		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu,
 				"frame values", [&s, job = std::move(job)](const auto&) mutable {
 					s.Run(job);
+					// The producer's leases go; the frame's (frameLeases) keep the backings until EndFrame binds them.
+					job.leases = {};
 					// Engine references go to the render thread (EngineReleases, at Present), never dropped on this worker.
 					for (auto& item : job.shadingItems)
 						EngineReleases::Push(RE::NiPointer<RE::NiRefObject>(std::move(item.property)));
@@ -918,6 +957,7 @@ namespace DCLF
 	void FrameValues::Skip()
 	{
 		impl->kicked = false;
+		BindFrameLeases(impl->frameLeases);
 		if (auto* host = RenderGraphRuntime::Get().Host())
 			host->SetFrameWaitValue(0);
 	}
@@ -928,8 +968,7 @@ namespace DCLF
 		if (!s.kicked)
 			return;
 		s.kicked = false;
-		if (auto* host = RenderGraphRuntime::Get().Host())
-			s.points[s.seq % kRing] = host->SubmittedPoint();
+		BindFrameLeases(s.frameLeases);
 	}
 
 	const std::vector<TreeStatic>* FrameValues::TreeSeedsIfDone(bool a_wait) const
@@ -1011,14 +1050,37 @@ namespace DCLF
 		c.runs = s.runs.exchange(0);
 		c.bytes = s.bytes.exchange(0);
 		c.sampleUs = s.sampleUs.exchange(0);
-		c.pointWaitUs = s.pointWaitUs.exchange(0);
-		c.pointWaits = s.pointWaits.exchange(0);
 		c.uploadUs = s.uploadUs.exchange(0);
 		c.maxTotalUs = s.maxTotalUs.exchange(0);
 		c.refused = s.refused.exchange(0);
 		c.defects = s.defects.exchange(0);
 		c.failures = s.failures.exchange(0);
 		return c;
+	}
+
+	std::array<FrameValues::PoolStats, FrameValues::kPools> FrameValues::TakePoolStats()
+	{
+		auto& s = *impl;
+		std::array<PoolStats, kPools> out;
+		for (std::size_t part = 0; part < kPools; ++part) {
+			auto& pool = s.pools[part];
+			auto& stats = out[part];
+			stats.name = Impl::kPartNames[part];
+			const auto census = pool.pool->Count();
+			stats.live = census.live;
+			stats.leased = census.leased;
+			stats.free = census.free;
+			stats.liveBytes = census.bytes;
+			stats.allocated = census.allocated;
+			stats.reused = census.reused;
+			stats.released = census.released;
+			stats.acquires = pool.acquires.exchange(0, std::memory_order_relaxed);
+			stats.made = pool.made.exchange(0, std::memory_order_relaxed);
+			stats.runs = pool.runs.exchange(0, std::memory_order_relaxed);
+			stats.bytes = pool.bytes.exchange(0, std::memory_order_relaxed);
+			stats.floor = pool.floor.load(std::memory_order_relaxed);
+		}
+		return out;
 	}
 #else
 	struct FrameValues::Impl
@@ -1032,7 +1094,7 @@ namespace DCLF
 	}
 	bool FrameValues::Available() const { return false; }
 	bool FrameValues::Kick(std::vector<std::shared_ptr<const PlacementPlan>>, std::vector<ShadingItem>, std::vector<WetnessValue>,
-		std::vector<FadeSeedItem>, std::vector<TreeSeedItem>, std::shared_ptr<const FrameGlobals>, FrameUploads) { return false; }
+		std::vector<FadeSeedItem>, std::vector<TreeSeedItem>, std::shared_ptr<const FrameGlobals>) { return false; }
 	const std::vector<TreeStatic>* FrameValues::TreeSeedsIfDone(bool) const { return nullptr; }
 	const std::vector<FadeRootStatic>* FrameValues::FadeSeedsIfDone(bool) const { return nullptr; }
 	void FrameValues::Skip() {}
@@ -1041,6 +1103,7 @@ namespace DCLF
 	const std::vector<FrameValues::PaletteRow>* FrameValues::PalettesIfDone(bool) const { return nullptr; }
 	const std::vector<BindlessShading>* FrameValues::ShadingIfDone(bool) const { return nullptr; }
 	FrameValues::Counters FrameValues::TakeCounters() { return {}; }
+	std::array<FrameValues::PoolStats, FrameValues::kPools> FrameValues::TakePoolStats() { return {}; }
 	bool FrameValues::SkinPalettes(const RE::BSGeometry&, std::uint32_t, const float*&, const float*&) { return false; }
 #endif
 }

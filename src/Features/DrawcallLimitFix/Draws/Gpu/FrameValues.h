@@ -9,14 +9,6 @@
 #include <string>
 #include <vector>
 
-
-#include <functional>
-
-namespace org::runtime
-{
-	class IUploadService;
-}
-
 namespace DCLF
 {
 	struct FrameGlobals;
@@ -35,17 +27,18 @@ namespace DCLF
 	 *   leases: a skin's palette after the engine's palette update (which the native draw's bone setter would have run), into the
 	 *   rows kept by object slot and the palette rows kept by block (journalled KeptArrays); and the shading of the slots the walk
 	 *   and the accumulate phase named (ShadingItem), with the wetness the frame's start captured;
-	 * - wait, on the worker, until the frame that last read their ring buffers is done on the GPU (the buffers' GPU point);
-	 * - send those buffers the runs they lack on the dedicated upload queue, then signal the frame-wait timeline to the frame's
+	 * - send the frame's buffers the runs they lack on the dedicated upload queue, then signal the frame-wait timeline to the frame's
 	 *   sequence number (always, also after a failure), which every batch of the frame waits for (PersistentGraphHost's frame wait).
 	 *
-	 * The rows go to a ring of buffers, one per frame in flight, each holding every row: frame n's draws read buffer n % kRing (the
-	 * frame record's t123, t122 and t121, and the culling's latches), which no producer writes while a frame reads it.
+	 * Each of the five row sets (placements, palettes, shading, fade seeds, tree seeds) is a pooled version (D6,
+	 * org::services::BackingPool on DCLF's retirement clock, the render thread its one acquirer): Kick leases a backing holding every
+	 * row, preferring the one that holds the most (its contentEpoch), and the producer sends it the journal's runs since then. The
+	 * frame's draws read those backings (the frame record's t123, t122 and t121, and the culling's latches); EndFrame binds them to the
+	 * frame's last submission, so no producer writes a backing while a frame reads it. No producer waits for the GPU.
 	 */
 	class FrameValues
 	{
 	public:
-		static constexpr std::uint32_t kRing = 4;
 		/** @brief One float4 of a palette (three a bone): DCLFPalettes' element. */
 		struct PaletteRow
 		{
@@ -66,11 +59,6 @@ namespace DCLF
 		static bool SkinPalettes(const RE::BSGeometry& a_geometry, std::uint32_t a_rows, const float*& a_current, const float*& a_previous);
 
 		/**
-		 * @brief What else the frame's producer uploads before it signals the frame's wait (the payload ring entry the frame's epochs
-		 * read), on the producer's thread and the dedicated uploader. A throw is logged; the signal always goes.
-		 */
-		using FrameUploads = std::function<void(org::runtime::IUploadService&)>;
-		/**
 		 * @brief Render thread, at the scene's start (the engine's update done, the window open): the frame's producer, from a_plans
 		 * (the walks' plans the publication log brought since the last frame, oldest first: each one's written slots sampled, the newest
 		 * drawn with; none: the newest before them), the slots named for their shading (a_shading, the newest last) and
@@ -80,7 +68,7 @@ namespace DCLF
 		 */
 		bool Kick(std::vector<std::shared_ptr<const PlacementPlan>> a_plans, std::vector<ShadingItem> a_shading,
 			std::vector<WetnessValue> a_wetness, std::vector<FadeSeedItem> a_seeds, std::vector<TreeSeedItem> a_treeSeeds,
-			std::shared_ptr<const FrameGlobals> a_globals, FrameUploads a_uploads = {});
+			std::shared_ptr<const FrameGlobals> a_globals);
 		/**
 		 * @brief Render thread, before Kick: the claims whose first-person members the frame draws (null: none, the first-person
 		 * epochs do not draw this frame). Kick samples those members' rows and skin palettes itself, before Main::Draw moves the
@@ -100,7 +88,7 @@ namespace DCLF
 		static FirstPersonParticleStats TakeFirstPersonParticleStats();
 		/** @brief Render thread: a frame with no producer (DCLF not running): no batch waits for one. */
 		void Skip();
-		/** @brief Render thread, at Present: the GPU point of everything the frame submitted (its ring buffers' readers). */
+		/** @brief Render thread, after the frame's last submission: binds the frame's backings to it (SubmittedRetirementPoint). */
 		void EndFrame();
 		/** @brief Render thread: the descriptor of the placement buffer the current frame's draws read (0 before the first frame). */
 		std::uint32_t PlacementsIndex() const { return frameIndex; }
@@ -133,11 +121,25 @@ namespace DCLF
 		struct Counters
 		{
 			std::uint64_t frames = 0, sampled = 0, settled = 0, seeded = 0, rowsChanged = 0, skins = 0, paletteRowsChanged = 0, shadingSampled = 0, shadingChanged = 0,
-						  wetnessChanged = 0, runs = 0, bytes = 0, sampleUs = 0, pointWaitUs = 0, pointWaits = 0, uploadUs = 0, maxTotalUs = 0, refused = 0, defects = 0,
+						  wetnessChanged = 0, runs = 0, bytes = 0, sampleUs = 0, uploadUs = 0, maxTotalUs = 0, refused = 0, defects = 0,
 						  failures = 0;
 		};
 		/** @brief The report's take (Reports/DrawsFrameValues.cpp): the counters, reset. */
 		Counters TakeCounters();
+		/** @brief One of the five row sets' pools (Pools). */
+		struct PoolStats
+		{
+			const char* name = "";
+			// The pool's census (BackingPool::Count): backings, leased, free, their bytes; allocated/reused/released since creation.
+			std::uint64_t live = 0, leased = 0, free = 0, liveBytes = 0, allocated = 0, reused = 0, released = 0;
+			// Since the last take: Kick's acquires, the backings it made new, the catch-up runs and bytes sent into the backings.
+			std::uint64_t acquires = 0, made = 0, runs = 0, bytes = 0;
+			// The journal's trim floor at the last Kick (the oldest content any backing holds; 0: none holds any).
+			std::uint64_t floor = 0;
+		};
+		static constexpr std::size_t kPools = 5;  // placements, palettes, shading, fade-seeds, tree-seeds
+		/** @brief Any thread (the report): the pools' stats, the since-last-take counts reset. */
+		std::array<PoolStats, kPools> TakePoolStats();
 
 	private:
 		FrameValues();

@@ -1,6 +1,6 @@
 // The water reflection's cube map faces drawn by DCLF (dclf-lod.md, "Water reflections"): the faces' capture, the forward
 // programs and pipelines of the LOD they draw, the reflection phase's readiness, and the faces' commit (their epoch is
-// ViewEpoch.cpp's). Render thread, but for ReflectionDrawable (the scene lane's commit).
+// ViewEpoch.cpp's, its passes ViewEpochRecord.cpp's). Render thread, but for ReflectionDrawable (the scene lane's commit).
 
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
@@ -216,19 +216,19 @@ namespace DCLF
 			return skip(0);
 		if (std::none_of(faces.begin(), faces.end(), [](const auto& a_face) { return a_face.captured; }))
 			return skip(2);
-		// What the faces draw from: the frame's scene list (its ring entry, as the shadow views': a member is the reflection's from
+		// What the faces draw from: the frame's scene list (the installed payload, as the shadow views': a member is the reflection's from
 		// the frame it joins) with this frame's depth commit's index pool, depth inputs, object records and geometry rows - the frame's
 		// publication whole - and the frame before's colour frame record, in the backing it was written to.
 		const std::uint32_t frameNumber = Scene::FrameView::Get().GetFrame();
 		const auto main = impl->resources;
 		const auto& depthCommit = main ? main->committed[kDepthShape] : Resources::Committed{};
 		const auto& colourCommit = main ? main->committed[kColourShape] : Resources::Committed{};
-		const std::uint64_t named = impl->Adopted().Serial();
-		if (!main || !main->inputsDepth || !impl->scene || depthCommit.frame != frameNumber || colourCommit.frame + 1 != frameNumber || depthCommit.named != named ||
-			colourCommit.named != named)
+		const std::uint64_t adoptedSerial = impl->Adopted().Serial();
+		if (!main || !impl->scene || depthCommit.frame != frameNumber || colourCommit.frame + 1 != frameNumber || depthCommit.adoptedSerial != adoptedSerial ||
+			colourCommit.adoptedSerial != adoptedSerial)
 			return skip(3);
-		const auto& ring = impl->ringFrame;
-		const MainPayload* listed = ring.valid && ring.draws ? ring.draws->payloads[kAsyncZPrepass].get() : nullptr;
+		const auto draws = impl->installedDraws;
+		const MainPayload* listed = impl->InstalledPayload() && draws ? draws->payloads[kAsyncZPrepass].get() : nullptr;
 		if (!listed)
 			return skip(3);
 		// The main part of the scene list: its region and the main frame inputs (the shadow frame inputs after them are no main input).
@@ -245,7 +245,7 @@ namespace DCLF
 		if (!revision)
 			return skip(1);
 		const auto shape = revision.shape->Value<ViewFrame>();
-		const auto payloads = ring.draws->payloads;
+		const auto& payloads = draws->payloads;
 		const std::array<const MainPayload*, 2> listedPayloads{ payloads[0].get(), payloads[1].get() };
 		auto owners = impl->EpochOwners(listedPayloads);
 		if (!owners)

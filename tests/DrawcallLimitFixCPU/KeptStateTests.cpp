@@ -82,18 +82,59 @@ namespace
             assert(index.Update([&](auto slot) { return inputs[groups[slot]]; }, apply).visited == 0);
         }
     }
-    // A ring of buffers (step 6e E): each brought up to date from its own held version, the journal trimmed to the oldest; every
-    // holder's mirror equals the array after its replay, whatever the order and gaps of the replays.
-    void TestRingHolders()
+    // Rows journalled by part (KeptArray::SetParts, the material rows): holders at different content epochs catch up only the parts that moved,
+    // and each holder's mirror equals the array after its replay, with untouched parts left as the holder had them.
+    void TestPartHolders()
     {
-        constexpr std::size_t kRing = 4;
+        constexpr std::size_t kParts = 4, kHolders = 5;
+        using Row = std::array<std::uint32_t, 8>;  // two words a part
+        constexpr std::size_t kPartWords = Row{}.size() / kParts;
+        DCLF::KeptArray<Row> rows;
+        std::array<std::uint64_t, kHolders> contentEpochs{};
+        std::array<std::vector<Row>, kHolders> mirrors;
+        std::mt19937 random(4242);
+        std::uint64_t partsSent = 0, partsMarked = 0;
+        for (unsigned frame = 0; frame < 3000; ++frame) {
+            rows.BeginBuild(*std::min_element(contentEpochs.begin(), contentEpochs.end()));
+            if (frame % 503 == 0) {
+                rows.Clear();
+                rows.Mutable().resize(16 + random() % 200);
+                rows.Resync();
+            }
+            for (unsigned n = random() % 30; n > 0 && !rows.Get().empty(); --n) {
+                const std::size_t r = random() % rows.Get().size();
+                Row row = rows.Get()[r];
+                row[(random() % kParts) * kPartWords + random() % kPartWords] = static_cast<std::uint32_t>(random());
+                if (random() % 4 == 0)
+                    row[random() % row.size()] = static_cast<std::uint32_t>(random());
+                partsMarked += rows.SetParts(r, row, kParts);
+            }
+            const auto view = rows.View();
+            auto& holder = random() % 3 ? contentEpochs[frame % kHolders] : contentEpochs[random() % kHolders];
+            auto& mirror = mirrors[&holder - contentEpochs.data()];
+            mirror.resize(view.Count());
+            partsSent += view.changes.ForEachRun(holder, view.Count() * kParts, [&](std::uint64_t a_first, std::uint64_t a_count) {
+                for (std::uint64_t part = a_first; part < a_first + a_count; ++part)
+                    std::memcpy(mirror[part / kParts].data() + (part % kParts) * kPartWords, (*view.elements)[part / kParts].data() + (part % kParts) * kPartWords,
+                        kPartWords * sizeof(std::uint32_t));
+            });
+            holder = view.ContentEpoch();
+            assert(mirror == *view.elements);
+        }
+        assert(partsMarked > 0 && partsSent > 0);
+    }
+    // Pooled backings (D6): each brought up to date from its own content epoch, the journal trimmed to the oldest; every
+    // holder's mirror equals the array after its replay, whatever the order and gaps of the replays.
+    void TestPooledHolders()
+    {
+        constexpr std::size_t kHolders = 4;
         DCLF::KeptArray<std::uint32_t> values;
-        DCLF::KeptHolders<kRing> holders;
-        std::array<std::vector<std::uint32_t>, kRing> mirrors;
+        std::array<std::uint64_t, kHolders> contentEpochs{};  // each holder's (a pooled backing's contentEpoch)
+        std::array<std::vector<std::uint32_t>, kHolders> mirrors;
         std::mt19937 random(911);
         std::vector<DCLF::KeptView<std::uint32_t>> outstanding;  // views a producer still replays
         for (unsigned frame = 0; frame < 4000; ++frame) {
-            values.BeginBuild(holders.Oldest());
+            values.BeginBuild(*std::min_element(contentEpochs.begin(), contentEpochs.end()));
             auto& elements = values.Mutable();
             if (frame % 97 == 0) {
                 elements.resize(64 + random() % 900);
@@ -119,13 +160,13 @@ namespace
             // The frame's holder replays the newest view; now and then a frame skips (its holder falls further behind).
             if (random() % 5 == 0)
                 continue;
-            const std::size_t r = frame % kRing;
+            const std::size_t r = frame % kHolders;
             auto& mirror = mirrors[r];
             mirror.resize(view.Count());
-            view.Emit(holders.Get(r), [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+            view.Emit(contentEpochs[r], [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
                 std::memcpy(reinterpret_cast<std::byte*>(mirror.data()) + a_offset, a_data, a_bytes);
             });
-            holders.Set(r, view.Version());
+            contentEpochs[r] = view.ContentEpoch();
             assert(mirror == *view.elements);
         }
         // Views a producer holds stay what they were while later builds write.
@@ -231,50 +272,51 @@ int main()
     std::vector<DCLF::KeptView<unsigned>> held;
     std::vector<std::vector<unsigned>> expected;
     std::vector<unsigned> gpu(2048);
-    std::uint64_t uploaded = 0;
+    std::uint64_t uploadedEpoch = 0;
     std::mt19937 random(1234);
     for (unsigned frame = 0; frame < 1000; ++frame) {
-        values.BeginBuild(uploaded);
+        values.BeginBuild(uploadedEpoch);
         if (!frame) { values.Mutable().resize(2048); values.Resync(); }
         for (unsigned n = 0; n < 173; ++n) {
             const auto index = random() % 2048;
             values.Set(index, random());
         }
         auto snapshot = values.View();
-        snapshot.Emit(uploaded, [&](const void* data, std::size_t bytes, std::size_t offset) {
+        snapshot.Emit(uploadedEpoch, [&](const void* data, std::size_t bytes, std::size_t offset) {
             std::memcpy(reinterpret_cast<std::byte*>(gpu.data()) + offset, data, bytes);
         });
         assert(gpu == values.Get());
-        if (frame % 3 == 0) uploaded = snapshot.Version();
+        if (frame % 3 == 0) uploadedEpoch = snapshot.ContentEpoch();
         for (std::size_t i = 0; i < held.size(); ++i) assert(*held[i].elements == expected[i]);
         held.push_back(snapshot);
         expected.push_back(*snapshot.elements);
         // Exercise both recycled storage and exhaustion with outstanding readers.
         if (held.size() > (frame % 13 < 7 ? 1u : 6u)) { held.erase(held.begin()); expected.erase(expected.begin()); }
     }
-    // An outstanding view is immutable even when the coordinator writes its next version.
+    // An outstanding view is immutable even when the coordinator writes its next content epoch.
     held.clear();
     auto patch = values.View();
     const auto before = *patch.elements;
-    values.BeginBuild(uploaded);
+    values.BeginBuild(uploadedEpoch);
     values.Set(0, 0x12345678);
     assert(*patch.elements == before);
     assert(values.Get()[0] == 0x12345678);
     TestReferenceDrivenMaterialRetirement();
     TestActorValueMembership();
-    TestRingHolders();
+    TestPooledHolders();
+    TestPartHolders();
     TestRetirementChain();
     for (unsigned trial = 0; trial < 1000; ++trial) {
         DCLF::ChangeJournal::Snapshot changes{10, 1, {}};
         const std::uint64_t count = 1 + random() % 8192;
         for (unsigned n = 0; n < 256; ++n)
             changes.entries.push_back({1 + random() % 10, random() % 9000, random() % 180});
-        const auto heldVersion = random() % 12;
+        const auto holderEpoch = random() % 12;
         std::vector<std::pair<std::uint64_t, std::uint64_t>> reference, actual;
         DCLF::reuseKeptStorage = false;
-        const auto referenceSent = changes.ForEachRun(heldVersion, count, [&](auto first, auto size) { reference.emplace_back(first, size); });
+        const auto referenceSent = changes.ForEachRun(holderEpoch, count, [&](auto first, auto size) { reference.emplace_back(first, size); });
         DCLF::reuseKeptStorage = true;
-        const auto actualSent = changes.ForEachRun(heldVersion, count, [&](auto first, auto size) { actual.emplace_back(first, size); });
+        const auto actualSent = changes.ForEachRun(holderEpoch, count, [&](auto first, auto size) { actual.emplace_back(first, size); });
         assert(actual == reference && actualSent == referenceSent);
     }
 }

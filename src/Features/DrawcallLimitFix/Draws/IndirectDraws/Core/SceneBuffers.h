@@ -1,6 +1,6 @@
 #pragma once
 
-// The scene's GPU tables shared by every epoch (SceneBuffers: object records, extras, geometry table, face positions, tree wind,
+// The scene's GPU tables shared by every epoch (SceneBuffers: face positions, tree wind,
 // fade roots and states, readback lists, tree LOD), and the commits' uploads into them (render thread). Included by Internal.h.
 
 namespace DCLF::Draws
@@ -18,37 +18,30 @@ namespace DCLF::Draws
 	 */
 	struct SceneBuffers
 	{
-		Versioned objects, extras, geometries, facePositions;
+		// The object records, extras and geometry table are the installed payload's (PayloadVersions).
+		Versioned facePositions;
 		// The index pool every plain indexed draw binds; kept current by every commit that draws from it (UpdateIndexPool).
 		std::shared_ptr<IndexPool> pool;
 		FaceUploads faceUploaded;
-		// The table versions the buffer versions hold, written by the uploading commit (a version it did not fill holds none).
-		org::services::FilledContents<> objectsFilled, extrasFilled, geometriesFilled;
-		/** @brief The table versions the versions a_named names hold (0: none, sent whole). */
-		TablesHeld Held(const NamedVersions& a_named) const
-		{
-			return { objectsFilled.Since(a_named.Of(objects)).value_or(0), extrasFilled.Since(a_named.Of(extras)).value_or(0),
-				geometriesFilled.Since(a_named.Of(geometries)).value_or(0) };
-		}
 		// Tree wind (TreeWindCS): tree rows (UploadTrees) and GPU-only clocks, by tree slot.
 		Versioned trees, treeClocks;
 		std::shared_ptr<org::Buffer> treeFrameBuffer;  // TreeWindFrameRow
 		// Wind output (kTreeWindEntryRows per entry: nodeless trees, then tree slot s at s + 1), one buffer per frame parity: the
 		// Z-prepass writes this frame's, draws read the other. Every version is zero-filled (a zero generation is never a listing's).
 		std::array<Versioned, 2> treeWindRows;
-		/** @brief The SRV index of the wind buffer a frame's draws read (the one the previous frame wrote), as a_named names it. */
-		std::uint32_t TreeWindReadIndex(const NamedVersions& a_named, std::uint32_t a_frame) const { return a_named.Of(treeWindRows[(a_frame + 1) & 1]).srvIndex; }
-		org::services::FilledContents<> treesFilled;  // the tree rows' version (SceneTables::treesVersion)
-		/** @brief The tree rows' version the trees version a_named names holds (~0: none). */
-		std::uint64_t TreesHeld(const NamedVersions& a_named) const { return treesFilled.Since(a_named.Of(trees)).value_or(~0ull); }
+		/** @brief The SRV index of the wind buffer a frame's draws read (the one the previous frame wrote), as a_sealed names it. */
+		std::uint32_t TreeWindReadIndex(const NamedVersions& a_sealed, std::uint32_t a_frame) const { return a_sealed.Of(treeWindRows[(a_frame + 1) & 1]).srvIndex; }
+		org::services::FilledContents<> treesFilled;  // the tree rows' content epoch (SceneTables::treesContentEpoch)
+		/** @brief The tree rows' content epoch the trees version a_sealed names holds (~0: none). */
+		std::uint64_t TreesContentEpoch(const NamedVersions& a_sealed) const { return treesFilled.Since(a_sealed.Of(trees)).value_or(~0ull); }
 		std::uint32_t treeCount = 0;
 		std::uint32_t treeFrame = 0;  // the scene frame of treeInputs
 		TreeWindFrame treeInputs{};
 		// The previous frame's, which wrote the buffer this frame's draws read. ~0u until a frame has run.
 		std::uint32_t previousTreeFrame = ~0u;
 		TreeWindFrame previousTreeInputs{};
-		std::uint64_t previousTreesHeld = ~0ull;  // the tree rows that frame's pass read
-		std::uint64_t frameTreesHeld = ~0ull;     // this frame's
+		std::uint64_t previousTreesContentEpoch = ~0ull;  // the tree rows that frame's pass read
+		std::uint64_t frameTreesContentEpoch = ~0ull;     // this frame's
 		std::shared_ptr<const ComputeProgram> treeWind;
 		// Fade roots (FadeStateCS): static rows by root slot, GPU state rows, the frame's inputs, and CS_DCLF_FADE_PARITY's log.
 		Versioned fadeRoots, fadeStates;
@@ -67,11 +60,11 @@ namespace DCLF::Draws
 		// FadeStateCS's published states per frame parity; builds read the previous frame's. Every version is zero-filled (builds
 		// then take the static row's state).
 		std::array<Versioned, 2> fadeStatesOut;
-		/** @brief The SRV index of the published states a frame's builds read (the previous frame's), as a_named names them. */
-		std::uint32_t FadeStatesReadIndex(const NamedVersions& a_named, std::uint32_t a_frame) const { return a_named.Of(fadeStatesOut[(a_frame + 1) & 1]).srvIndex; }
-		org::services::FilledContents<> fadeRootsFilled;  // the root rows' version (SceneTables::FadeRootsVersion)
-		/** @brief The root rows' version the fadeRoots version a_named names holds (~0: none). */
-		std::uint64_t FadeRootsHeld(const NamedVersions& a_named) const { return fadeRootsFilled.Since(a_named.Of(fadeRoots)).value_or(~0ull); }
+		/** @brief The SRV index of the published states a frame's builds read (the previous frame's), as a_sealed names them. */
+		std::uint32_t FadeStatesReadIndex(const NamedVersions& a_sealed, std::uint32_t a_frame) const { return a_sealed.Of(fadeStatesOut[(a_frame + 1) & 1]).srvIndex; }
+		org::services::FilledContents<> fadeRootsFilled;  // the root rows' content epoch (SceneTables::FadeRootsContentEpoch)
+		/** @brief The root rows' content epoch the fadeRoots version a_sealed names holds (~0: none). */
+		std::uint64_t FadeRootsContentEpoch(const NamedVersions& a_sealed) const { return fadeRootsFilled.Since(a_sealed.Of(fadeRoots)).value_or(~0ull); }
 		std::uint32_t fadeRootCount = 0;
 		std::uint32_t fadeFrameNumber = 0;  // the scene frame of fadeFrame
 		FadeFrame fadeFrame{};
@@ -138,11 +131,11 @@ namespace DCLF::Draws
 	}
 
 	/**
-	 * @brief The depth commit's tree LOD uploads, into the versions a_named (the adopted set) names: their capacities and the draw
+	 * @brief The depth commit's tree LOD uploads, into the versions a_sealed (the adopted set) names: their capacities and the draw
 	 * row's addresses are theirs. Retired mesh leases and bindings go to the execution (a_owners).
 	 */
 	template <class Uploads>
-	void UploadTreeLod(const NamedVersions& a_named, TreeLod::Mirror& a_mirror, SceneBuffers& a_scene, Uploads& a_uploads, std::vector<std::shared_ptr<const void>>& a_owners,
+	void UploadTreeLod(const NamedVersions& a_sealed, TreeLod::Mirror& a_mirror, SceneBuffers& a_scene, Uploads& a_uploads, std::vector<std::shared_ptr<const void>>& a_owners,
 		bool a_draw)
 	{
 		a_scene.treeLodReady.store(false, std::memory_order_release);
@@ -150,8 +143,8 @@ namespace DCLF::Draws
 			return;
 		for (auto& owner : a_mirror.TakeRetired())
 			a_owners.push_back(std::move(owner));
-		const auto &shapes = a_named.Of(a_scene.treeLodShapes), &records = a_named.Of(a_scene.treeLodInstances), &meshRows = a_named.Of(a_scene.treeLodMeshes),
-				   &visible = a_named.Of(a_scene.treeLodVisible);
+		const auto &shapes = a_sealed.Of(a_scene.treeLodShapes), &records = a_sealed.Of(a_scene.treeLodInstances), &meshRows = a_sealed.Of(a_scene.treeLodMeshes),
+				   &visible = a_sealed.Of(a_scene.treeLodVisible);
 		// The shape slots every shape-slot table holds (the visible list: its header, then a phase 1 and a retest entry per record).
 		const std::uint64_t visibleRecords = visible.bytes / 4 > TreeLod::kVisibleHeaderWords ? (visible.bytes / 4 - TreeLod::kVisibleHeaderWords) / 2 : 0;
 		const auto shapeSlots = static_cast<std::uint32_t>(std::min({ shapes.bytes / sizeof(TreeLod::ShapeRow),
@@ -220,26 +213,26 @@ namespace DCLF::Draws
 	}
 
 	/**
-	 * @brief The depth commit's fade uploads into the versions a_named (the adopted set) names: missing static rows, and once a frame
+	 * @brief The depth commit's fade uploads into the versions a_sealed (the adopted set) names: missing static rows, and once a frame
 	 * the inputs and changed portal program words.
 	 */
 	template <class Uploads>
-	void UploadFadeRoots(const NamedVersions& a_named, const SceneTables& a_tables, std::uint32_t a_frame, const FadeFrame& a_inputs, std::uint32_t a_logBase,
+	void UploadFadeRoots(const NamedVersions& a_sealed, const SceneTables& a_tables, std::uint32_t a_frame, const FadeFrame& a_inputs, std::uint32_t a_logBase,
 		SceneBuffers& a_scene, Uploads& a_uploads, const std::vector<std::uint32_t>& a_programs)
 	{
 		if (!a_scene.fadeState || !a_scene.fadeRoots)
 			return;
-		const std::uint64_t version = a_tables.FadeRootsVersion();
-		const auto& roots = a_named.Of(a_scene.fadeRoots);
-		const std::uint64_t held = a_scene.fadeRootsFilled.Since(roots).value_or(~0ull);
-		if (held != version && a_tables.fadeRoots.size() <= roots.units) {
+		const std::uint64_t current = a_tables.FadeRootsContentEpoch();
+		const auto& roots = a_sealed.Of(a_scene.fadeRoots);
+		const std::uint64_t contentEpoch = a_scene.fadeRootsFilled.Since(roots).value_or(~0ull);
+		if (contentEpoch != current && a_tables.fadeRoots.size() <= roots.units) {
 			const auto* rows = a_tables.fadeRoots.data();
-			a_tables.fadeRootsJournal.Take().ForEachRun(held, a_tables.fadeRoots.size(), [&](std::uint64_t a_first, std::uint64_t a_count) {
+			a_tables.fadeRootsJournal.Take().ForEachRun(contentEpoch, a_tables.fadeRoots.size(), [&](std::uint64_t a_first, std::uint64_t a_count) {
 				a_uploads(a_scene.fadeRoots, rows + a_first, static_cast<std::size_t>(a_count * sizeof(FadeRootStatic)), a_first * sizeof(FadeRootStatic));
 			});
-			a_scene.fadeRootsFilled.Filled(roots, version);
+			a_scene.fadeRootsFilled.Filled(roots, current);
 		}
-		a_scene.fadeRootCount = a_scene.FadeRootsHeld(a_named) == version ? static_cast<std::uint32_t>(a_tables.fadeRoots.size()) : 0u;
+		a_scene.fadeRootCount = a_scene.FadeRootsContentEpoch(a_sealed) == current ? static_cast<std::uint32_t>(a_tables.fadeRoots.size()) : 0u;
 		if (a_scene.fadeFrameNumber != a_frame) {
 			a_scene.fadeFrameNumber = a_frame;
 			a_scene.fadeFrame = a_inputs;
@@ -247,7 +240,7 @@ namespace DCLF::Draws
 			// the frustum alone that frame.
 			if (a_scene.portalPrograms) {
 				static const std::uint32_t kNone[kPortalHeaderBytes / 4]{};
-				const auto& programs = a_named.Of(a_scene.portalPrograms);
+				const auto& programs = a_sealed.Of(a_scene.portalPrograms);
 				const bool fits = a_programs.size() <= programs.units;
 				const auto* words = fits ? a_programs.data() : kNone;
 				const std::size_t count = fits ? a_programs.size() : std::size(kNone);
@@ -275,26 +268,26 @@ namespace DCLF::Draws
 	}
 
 	/**
-	 * @brief A commit's tree uploads into the versions a_named (the adopted set) names. a_frameRow: also the frame row (only the
+	 * @brief A commit's tree uploads into the versions a_sealed (the adopted set) names. a_frameRow: also the frame row (only the
 	 * Z-prepass's TreeWindPass reads it).
 	 */
 	template <class Uploads>
-	void UploadTrees(const NamedVersions& a_named, const SceneTables& a_tables, std::uint32_t a_frame, SceneBuffers& a_scene, Uploads& a_uploads, bool a_frameRow)
+	void UploadTrees(const NamedVersions& a_sealed, const SceneTables& a_tables, std::uint32_t a_frame, SceneBuffers& a_scene, Uploads& a_uploads, bool a_frameRow)
 	{
 		if (!a_scene.treeWind || !a_scene.trees)
 			return;
-		const auto& trees = a_named.Of(a_scene.trees);
-		if (a_scene.treesFilled.Since(trees) != a_tables.treesVersion && a_tables.trees.size() <= trees.units) {
+		const auto& trees = a_sealed.Of(a_scene.trees);
+		if (a_scene.treesFilled.Since(trees) != a_tables.treesContentEpoch && a_tables.trees.size() <= trees.units) {
 			if (!a_tables.trees.empty())
 				a_uploads(a_scene.trees, a_tables.trees.data(), a_tables.trees.size() * sizeof(TreeStatic), 0);
-			a_scene.treesFilled.Filled(trees, a_tables.treesVersion);
+			a_scene.treesFilled.Filled(trees, a_tables.treesContentEpoch);
 		}
-		a_scene.frameTreesHeld = a_scene.TreesHeld(a_named);
-		a_scene.treeCount = a_scene.frameTreesHeld == a_tables.treesVersion ? static_cast<std::uint32_t>(a_tables.trees.size()) : 0u;
+		a_scene.frameTreesContentEpoch = a_scene.TreesContentEpoch(a_sealed);
+		a_scene.treeCount = a_scene.frameTreesContentEpoch == a_tables.treesContentEpoch ? static_cast<std::uint32_t>(a_tables.trees.size()) : 0u;
 		if (a_scene.treeFrame != a_frame) {
 			a_scene.previousTreeFrame = a_scene.treeFrame;
 			a_scene.previousTreeInputs = a_scene.treeInputs;
-			a_scene.previousTreesHeld = a_scene.frameTreesHeld;
+			a_scene.previousTreesContentEpoch = a_scene.frameTreesContentEpoch;
 			a_scene.treeFrame = a_frame;
 			a_scene.treeInputs = SampleTreeWindFrame();
 			if (Policy::FreezeTreeWind())

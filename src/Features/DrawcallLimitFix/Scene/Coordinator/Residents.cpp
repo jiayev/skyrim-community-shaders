@@ -271,7 +271,7 @@ namespace DCLF::Scene
 			treeOwners[t] = std::move(owner);
 			treeSeedRequests.push_back({ treeOwners[t], t, row.generation, 2 * t + row.seedOdd });
 			it->second = t;
-			++tables.treesVersion;
+			++tables.treesContentEpoch;
 		}
 		++tables.treeRefs[it->second];
 		current = it->second;

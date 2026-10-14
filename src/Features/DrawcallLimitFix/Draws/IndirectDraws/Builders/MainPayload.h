@@ -17,19 +17,13 @@ namespace DCLF::Draws
 	};
 	using MaterialRow = RowBytes<kMaterialRowBytes>;
 	using PipelineRow = RowBytes<kPipelineRowBytes>;
-	/** @brief The main rows a row table's capture lays out (Resources::rowCaptures): immutable kept views, the producer's newest. */
-	struct MainRowCaptures
-	{
-		std::atomic<std::shared_ptr<const KeptView<MaterialRow>>> materials;
-		std::atomic<std::shared_ptr<const KeptView<PipelineRow>>> pipelines;
-	};
 	inline MaterialRowHeader& HeaderOf(MaterialRow& a_row) { return *reinterpret_cast<MaterialRowHeader*>(a_row.bytes.data() + kMaterialRowHeader); }
 	inline PipelineRowHeader& HeaderOf(PipelineRow& a_row) { return *reinterpret_cast<PipelineRowHeader*>(a_row.bytes.data() + kPipelineRowHeader); }
 
 	/**
 	 * @brief The main pass's rows, kept across frames and shared by the Z-prepass and colour segments (one build makes both):
 	 * a material row per material slot and a pipeline row per pipeline slot, each
-	 * written again only when what it is written from changed (its key), and sent as what changed since the version the
+	 * written again only when what it is written from changed (its key), and sent as what changed since the content epoch the
 	 * table holds. What a pair of them can draw is checked per build (MainBuild::AssembleRecord), from what each row holds.
 	 */
 	struct MainRows
@@ -70,19 +64,19 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief Rows a table at a_held lacks, each with its header's addresses made absolute (a_base plus the row's offset):
+	 * @brief Rows a table at a_contentEpoch lacks, each with its header's addresses made absolute (a_base plus the row's offset):
 	 * a_emit(data, bytes, offset). a_patch(row, rowAddress) fixes one row's header. Rows past a_capacity wait for the table's
 	 * growth: a captured version is filled with them, and the table then holds what it was filled with.
 	 */
 	template <class Row, class Patch, class Emit>
-	std::size_t EmitMainRows(const KeptView<Row>& a_rows, std::uint64_t a_held, std::uint64_t a_base, std::uint64_t a_capacity, Patch&& a_patch, Emit&& a_emit)
+	std::size_t EmitMainRows(const KeptView<Row>& a_rows, std::uint64_t a_contentEpoch, std::uint64_t a_base, std::uint64_t a_capacity, Patch&& a_patch, Emit&& a_emit)
 	{
 		if (!a_rows.elements)
 			return 0;
 		const auto& rows = *a_rows.elements;
 		std::vector<Row> run;
 		std::size_t sent = 0;
-		a_rows.changes.ForEachRun(a_held, rows.size(), [&](std::uint64_t a_first, std::uint64_t a_count) {
+		a_rows.changes.ForEachRun(a_contentEpoch, rows.size(), [&](std::uint64_t a_first, std::uint64_t a_count) {
 			if (a_first >= a_capacity)
 				return;
 			a_count = std::min(a_count, a_capacity - a_first);
@@ -95,16 +89,51 @@ namespace DCLF::Draws
 		return sent;
 	}
 	/**
-	 * @brief A build's inputs against its input buffer's named version, which the revision producer required to hold them (the
-	 * snapshot builder's input demand, Impl::InputDemand): past it is a defect, never data to drop.
+	 * @brief The parts a material row is journalled in (KeptArray::SetParts): its VS blocks, its PS blocks' two halves and its header,
+	 * 256 bytes each. An animated material (an effect's TexcoordOffset, falloff or base colour, which the engine's controllers move every
+	 * frame) moves one part, and a backing catches up that part alone.
 	 */
-	inline void CheckInputCapacity(std::size_t a_inputs, std::uint64_t a_capacity, const char* a_what)
-	{
-		if (a_inputs <= a_capacity)
-			return;
-		stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s build is past its tables: {} inputs of {}", a_what, a_inputs, a_capacity));
-	}
+	inline constexpr std::size_t kMaterialRowParts = 4;
+	static_assert(kMaterialRowBytes % kMaterialRowParts == 0 && kMaterialRowVS % (kMaterialRowBytes / kMaterialRowParts) == 0 &&
+				  kMaterialRowPS % (kMaterialRowBytes / kMaterialRowParts) == 0 && kMaterialRowHeader % (kMaterialRowBytes / kMaterialRowParts) == 0);
 
+	/**
+	 * @brief EmitMainRows for rows journalled by part (KeptArray::SetParts, a_parts a row): the parts a table at a_contentEpoch lacks, each
+	 * cut from its row with the header's addresses made absolute (a_base plus the row's offset): a_emit(data, bytes, offset). Rows past
+	 * a_capacity wait for the table's growth.
+	 */
+	template <class Row, class Patch, class Emit>
+	std::size_t EmitMainRowParts(const KeptView<Row>& a_rows, std::size_t a_parts, std::uint64_t a_contentEpoch, std::uint64_t a_base, std::uint64_t a_capacity, Patch&& a_patch,
+		Emit&& a_emit)
+	{
+		if (!a_rows.elements)
+			return 0;
+		const auto& rows = *a_rows.elements;
+		const std::size_t partBytes = sizeof(Row) / a_parts;
+		const std::uint64_t capacity = a_capacity * a_parts;
+		std::vector<std::byte> run;
+		std::size_t sent = 0;
+		a_rows.changes.ForEachRun(a_contentEpoch, rows.size() * a_parts, [&](std::uint64_t a_first, std::uint64_t a_count) {
+			if (a_first >= capacity)
+				return;
+			a_count = std::min(a_count, capacity - a_first);
+			run.resize(static_cast<std::size_t>(a_count * partBytes));
+			Row row;
+			std::uint64_t patched = ~std::uint64_t{ 0 };
+			for (std::uint64_t i = 0; i < a_count; ++i) {
+				const std::uint64_t part = a_first + i, r = part / a_parts;
+				if (r != patched) {
+					row = rows[static_cast<std::size_t>(r)];
+					a_patch(row, a_base + r * sizeof(Row));
+					patched = r;
+				}
+				std::memcpy(run.data() + i * partBytes, reinterpret_cast<const std::byte*>(&row) + (part % a_parts) * partBytes, partBytes);
+			}
+			a_emit(run.data(), run.size(), static_cast<std::size_t>(a_first * partBytes));
+			sent += static_cast<std::size_t>(a_count);
+		});
+		return sent;
+	}
 	inline void PatchRowAddresses(MaterialRow& a_row, std::uint64_t a_address)
 	{
 		auto& header = HeaderOf(a_row);
@@ -116,22 +145,6 @@ namespace DCLF::Draws
 		auto& header = HeaderOf(a_row);
 		for (auto* address : { &header.vsTechnique, &header.psTechnique, &header.vsGeometry, &header.psGeometry, &header.vsPermutation, &header.psPermutation })
 			*address += a_address;
-	}
-	/** @brief Every row of a_rows, laid out for a table at a_address (a row table's capture: SceneBufferSet). */
-	template <class Row>
-	std::vector<std::byte> CapturedMainRows(const KeptView<Row>& a_rows, std::uint64_t a_address)
-	{
-		std::vector<std::byte> bytes;
-		if (!a_rows.elements)
-			return bytes;
-		const auto& rows = *a_rows.elements;
-		bytes.resize(rows.size() * sizeof(Row));
-		for (std::size_t i = 0; i < rows.size(); ++i) {
-			Row row = rows[i];
-			PatchRowAddresses(row, a_address + i * sizeof(Row));
-			std::memcpy(bytes.data() + i * sizeof(Row), &row, sizeof(Row));
-		}
-		return bytes;
 	}
 	/** @brief An input's rows (BuildDrawsCS.hlsl, RowsOf): the pipeline slot in the high 12 bits, the material slot in the low 20. */
 	constexpr std::uint32_t kRowPipelineShift = 20;
@@ -152,13 +165,11 @@ namespace DCLF::Draws
 		std::vector<std::uint32_t> materialPatchedVSFloats;
 		ResourceAddresses addresses{};
 		std::uint32_t lookupGeneration = 0, tablesGeneration = 0;
-		// The resident region version the segment's input buffer holds (Resources::ResidentHeld): the region
-		// uploads only the entries changed since that one.
-		std::uint64_t residentUploaded = 0;
-		TablesHeld tablesHeld;  // likewise the kept tables (SceneBuffers::Held)
-		// The versions of the kept rows the tables hold (Resources::materialRowsFilled, pipelineRowsFilled): what the rows'
-		// journals keep changes for.
-		std::uint64_t materialRowsHeld = 0, pipelineRowsHeld = 0;
+		// What the region's, the kept tables' and the rows' journals keep changes back to: the oldest content epoch a backing of
+		// the payload's pools holds of each (PayloadBuilder::OldestContentEpoch; ~0: none, every change may go).
+		std::uint64_t inputsOldestContentEpoch = 0;
+		TablesContentEpochs tablesOldestContentEpochs;
+		std::uint64_t materialRowsOldestContentEpoch = 0, pipelineRowsOldestContentEpoch = 0;
 	};
 
 	struct MainPayload
@@ -170,7 +181,7 @@ namespace DCLF::Draws
 		std::vector<DrawInput> inputList;
 		GeometryDrawsOut geometryDraws;
 		std::vector<SceneTables::FaceStream> faceStreams;  // the tables', for the commit's uploads
-		// The rows (MainRows), kept across frames and shared by both segments: uploaded as the rows changed since the version
+		// The rows (MainRows), kept across frames and shared by both segments: uploaded as the rows changed since the content epoch
 		// the tables hold.
 		KeptView<MaterialRow> materialRows;
 		KeptView<PipelineRow> pipelineRows;
@@ -202,8 +213,8 @@ namespace DCLF::Draws
 			std::uint32_t object = ~0u;
 			std::uint64_t vertexNeeded = 0, indexNeeded = 0;
 		} shortBuffer;
-		// The segment's resident region (ResidentRegion): its inputs lead the input buffer, uploaded when residentVersion
-		// is not the one the buffer holds (Resources::ResidentHeld); inputList follows them.
+		// The segment's resident region (ResidentRegion): its inputs lead the payload's scene list (caught up from what its backing
+		// holds); inputList follows them.
 		KeptView<DrawInput> resident;
 		std::uint32_t residentDraws = 0, residentPairs = 0, residentUndrawable = 0, residentResyncs = 0;
 		std::uint32_t residentResyncReasons = 0;  // bit k: kResyncReasons' k

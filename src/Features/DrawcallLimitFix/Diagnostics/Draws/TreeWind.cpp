@@ -46,7 +46,7 @@ namespace DCLF::Diagnostics
 		using TreeReadback = DrawsState::TreeReadback;
 		auto* context = globals::d3d::context;
 		const auto& tables = Scene::FrameView::Get().GetTables();
-		const auto& named = DrawsView::Get().Adopted();
+		const auto& adopted = DrawsView::Get().Adopted();
 		if (treeReadback) {
 			if (--treeReadback->framesLeft)
 				return;
@@ -184,10 +184,10 @@ namespace DCLF::Diagnostics
 						whole->frame, whole->frame + 1, whole->nearCount, whole->nearListed, whole->nearLargestModel, text);
 					whole.reset();
 				}
-			} else if ((treeEpochs % 120) == 60 && buffers.treeWind && !tables.treeObjects.empty() && named.Names(buffers.trees) &&
-					   buffers.TreesHeld(named) == tables.treesVersion) {
+			} else if ((treeEpochs % 120) == 60 && buffers.treeWind && !tables.treeObjects.empty() && adopted.Names(buffers.trees) &&
+					   buffers.TreesContentEpoch(adopted) == tables.treesContentEpoch) {
 				WholeReadback next;
-				next.entries = static_cast<std::uint32_t>(named.Of(buffers.trees).units) + 1;
+				next.entries = static_cast<std::uint32_t>(adopted.Of(buffers.trees).units) + 1;
 				next.frame = buffers.treeFrame;
 				for (const auto& member : tables.treeObjects)
 					next.members.emplace_back(member.object, member.tree);
@@ -244,18 +244,18 @@ namespace DCLF::Diagnostics
 				whole = std::move(next);
 			}
 		}
-		if ((treeEpochs++ % 120) != 0 || !buffers.treeWind || tables.treeObjects.empty() || !named.Names(buffers.trees) || buffers.TreesHeld(named) != tables.treesVersion)
+		if ((treeEpochs++ % 120) != 0 || !buffers.treeWind || tables.treeObjects.empty() || !adopted.Names(buffers.trees) || buffers.TreesContentEpoch(adopted) != tables.treesContentEpoch)
 			return;
 		// The first 64 members, each one's tree entry (TreeParams and WindTimers, 32 bytes) of the wind buffer this frame's draws
 		// read (TreeWindReadIndex): the one the frame before wrote, from its inputs. Not this frame's own buffer: the compute
 		// queue writes that beside the epoch, and nothing orders a copy of it after the write. Only once a frame before this one
 		// has run the pass (the first frame's draws read the zeroed buffer).
-		if (buffers.previousTreeFrame + 1 != buffers.treeFrame || buffers.previousTreesHeld != tables.treesVersion)
+		if (buffers.previousTreeFrame + 1 != buffers.treeFrame || buffers.previousTreesContentEpoch != tables.treesContentEpoch)
 			return;
 		TreeReadback readback;
 		const std::size_t count = std::min<std::size_t>(64, tables.treeObjects.size());
 		D3D11_BUFFER_DESC sourceDesc{};
-		sourceDesc.ByteWidth = static_cast<UINT>((named.Of(buffers.trees).units + 1) * kTreeWindEntryRows * 16);
+		sourceDesc.ByteWidth = static_cast<UINT>((adopted.Of(buffers.trees).units + 1) * kTreeWindEntryRows * 16);
 		sourceDesc.Usage = D3D11_USAGE_DEFAULT;
 		sourceDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 		sourceDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;

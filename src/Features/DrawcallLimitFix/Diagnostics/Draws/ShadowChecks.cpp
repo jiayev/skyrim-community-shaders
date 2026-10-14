@@ -9,14 +9,8 @@
 #	include "Events.h"
 #	include "Observers.h"
 #	include "Features/DrawcallLimitFix/Diagnostics/Engine/ShadowViewTally.h"
-
-namespace DCLF::Draws
-{
-	// ShadowEpochs.cpp's: the engine's rasterizer state id, and where and with which block the engine has just drawn a view.
-	std::uint32_t EngineRasterStateId(std::uint32_t a_fill, std::uint32_t a_cull, std::uint32_t a_bias, std::uint32_t a_scissor, std::uint32_t a_renderMode);
-	void CaptureViewTarget(PendingView& a_view, std::uint32_t a_target);
-	void CapturePerFrame(PendingView& a_view);
-}
+// ShadowCapture.cpp's: the engine's rasterizer state id, and where and with which block the engine has just drawn a view.
+#	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Epochs/ShadowEpochs.h"
 
 namespace DCLF::Diagnostics
 {

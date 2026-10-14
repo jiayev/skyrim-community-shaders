@@ -64,10 +64,10 @@ namespace DCLF
 		// fragment of its own after a graph build (a recording is of the build it was made on, so every epoch is recorded again). The
 		// build as the frame posted it (RevisionInputs: BuildPoint's).
 		const std::uint64_t builds = producer.inputs.buildGeneration;
-		const auto& sealed = rv.named;
-		if (rv.versionsNamed != sealed.named || rv.graphBuilds != builds) {
-			rv.versionsFragment = rv.versionsNamed == sealed.named ? RevisionFragment::MakeReady(sealed.named) : sealed.fragment;
-			rv.versionsNamed = sealed.named;
+		const auto& seal = rv.sealed;
+		if (rv.versionsFragmentSet != seal.named || rv.graphBuilds != builds) {
+			rv.versionsFragment = rv.versionsFragmentSet == seal.named ? RevisionFragment::MakeReady(seal.named) : seal.fragment;
+			rv.versionsFragmentSet = seal.named;
 			rv.graphBuilds = builds;
 			++rv.versionSets;
 		}
@@ -267,9 +267,9 @@ namespace DCLF
 		// The frame adopts the revision's set with its selection (AdoptSnapshot: NamedVersions::AdoptAll).
 		try {
 			(void)rv.assembler.Seal(std::move(draft));
-			rv.sealedVersions = versions;
-			rv.sealedLayout = rv.layout;
-			++rv.sealed;
+			rv.revisionVersions = versions;
+			rv.revisionLayout = rv.layout;
+			++rv.seals;
 		} catch (const std::exception& error) {
 			if (rv.sealFailures++ < 4)
 				logger::error("[DCLF] scene revision of frame {} not sealed: {}", a_frame, error.what());

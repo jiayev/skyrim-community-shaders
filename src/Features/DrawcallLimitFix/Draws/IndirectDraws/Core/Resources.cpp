@@ -60,22 +60,10 @@ namespace DCLF::Draws
 			return buffer ? static_cast<std::uint32_t>(std::min<std::uint64_t>(buffer->GetSize() / a_unitBytes, UINT32_MAX)) : 0u;
 		}
 
-		/**
-		 * @brief A main row table's capture: every row the last main commit sent (as the revision producer took them), laid out for the
-		 * new version's address; their kept version is its contents stamp. None to lay out: a version that holds nothing (stamp 0).
-		 */
-		template <class Row>
-		std::uint64_t CaptureRows(const std::shared_ptr<const KeptView<Row>>& a_rows, std::uint64_t a_address, std::vector<org::services::VersionFill>& a_fills,
-			std::shared_ptr<const void>& a_contents)
+		/** @brief A per-object buffer's first units (CS_DCLF_TABLE_START=small: a few, to test growth); RequireSceneTables grows it. */
+		std::uint32_t InitialObjectUnits()
 		{
-			if (!a_rows || !a_rows->elements)
-				return 0;
-			auto bytes = std::make_shared<std::vector<std::byte>>(CapturedMainRows(*a_rows, a_address));
-			if (bytes->empty())
-				return 0;
-			a_fills.push_back({ 0, { { bytes->data(), bytes->size() } } });
-			a_contents = std::move(bytes);
-			return a_rows->Version();
+			return SwitchValue(Switch::TableStart) == "small" ? 64u : kInitialObjects;
 		}
 	}
 }
@@ -210,22 +198,6 @@ namespace DCLF
 
 		auto device = host->GetDesc().device;
 		auto state = std::make_shared<Resources>();
-		// The main rows, required to the scene's material and pipeline slots; a new version is laid out from the rows the last main
-		// commit sent (its capture).
-		const bool smallRows = SwitchValue(Switch::TableStart) == "small";
-		state->rowCaptures = std::make_shared<MainRowCaptures>();
-		const auto captures = state->rowCaptures;
-		auto captureMaterials = [captures](const org::BufferVersion&, std::uint64_t a_address, std::vector<org::services::VersionFill>& a_fills,
-									std::shared_ptr<const void>& a_contents) { return CaptureRows(captures->materials.load(std::memory_order_acquire), a_address, a_fills, a_contents); };
-		auto capturePipelines = [captures](const org::BufferVersion&, std::uint64_t a_address, std::vector<org::services::VersionFill>& a_fills,
-									std::shared_ptr<const void>& a_contents) { return CaptureRows(captures->pipelines.load(std::memory_order_acquire), a_address, a_fills, a_contents); };
-		if (!state->materialRows.Create(kMaterialRowBytes, smallRows ? 4u : 1024u, "cs.dclf.material-rows", org::services::GrowthPolicy::Doubling(),
-				org::services::GrowableContents::Capture, std::move(captureMaterials)) ||
-			!state->pipelineRows.Create(kPipelineRowBytes, smallRows ? 4u : 256u, "cs.dclf.pipeline-rows", org::services::GrowthPolicy::Doubling(),
-				org::services::GrowableContents::Capture, std::move(capturePipelines))) {
-			logger::error("[DCLF] The main rows have no device address");
-			return false;
-		}
 		if (!EnsureSceneBuffers(device)) {
 			logger::error("[DCLF] The face positions buffer has no device address");
 			return false;
@@ -240,7 +212,7 @@ namespace DCLF
 		state->count = CreateWords(kCountWords, true, "cs.dclf.draw-count");
 		// One word per object: the depth segment's culling verdict, so the colour segment draws exactly the same set. The per-object
 		// buffers start at the scene's objects (and grow with them: RequireSceneTables).
-		const std::uint32_t objects = CurrentUnits(scene->objects, sizeof(BindlessObject));
+		const std::uint32_t objects = InitialObjectUnits();
 		state->visibility = MakeVersioned(CreateWords(objects, true, "cs.dclf.visibility"), { .extent = { 0, 4, 4 } });
 		state->frustum = MakeVersioned(CreateWords(objects, true, "cs.dclf.frustum"), { .extent = { 0, 4, 4 } });
 		if (PassStats::Enabled()) {
@@ -265,8 +237,6 @@ namespace DCLF
 		state->preprocessMain = PreprocessStates::Create(device, host->FrameSlots(), "the main segment");
 		// The forward epoch records in its own epoch, so it needs its own state list.
 		state->preprocessForward = PreprocessStates::Create(device, host->FrameSlots(), "the forward epoch");
-		state->inputs = MakeVersioned(CreateWords(std::uint64_t(objects) * sizeof(DrawInput) / 4, false, "cs.dclf.draw-inputs"), { .extent = { 0, sizeof(DrawInput), 4 } });
-		state->inputsDepth = MakeVersioned(CreateWords(std::uint64_t(objects) * sizeof(DrawInput) / 4, false, "cs.dclf.draw-inputs-depth"), { .extent = { 0, sizeof(DrawInput), 4 } });
 		state->buildDraws = ComputeProgram::Load(device, { .source = kBuildDrawsShader, .constantWords = kBuildDrawsConstantWords });
 		if (!state->buildDraws)
 			return NotReady(7, "the BuildDraws program could not be created");
@@ -536,15 +506,10 @@ namespace DCLF
 		auto buffers = std::make_shared<SceneBuffers>();
 		const bool smallStart = SwitchValue(Switch::TableStart) == "small";
 		using org::services::GrowableContents;
-		const std::uint32_t objects = smallStart ? 64u : kInitialObjects;
-		// Objects and extras are structured (SRVs t127, t126); geometries are raw words; face positions are a vertex buffer. Their SRV
-		// indices, addresses and capacities are the named set's. Every table grows by doubling (RequireSceneTables).
+		const std::uint32_t objects = InitialObjectUnits();
+		// Face positions are a vertex buffer; its address and capacity are the sealed set's. Every table grows by doubling
+		// (RequireSceneTables). The object records, extras and geometry table are the payload's (PayloadVersions).
 		std::uint32_t unused = 0;
-		buffers->objects = MakeVersioned(StructuredBuffer(objects, sizeof(BindlessObject), "cs.dclf.objects", unused),
-			{ .extent = { 0, sizeof(BindlessObject), sizeof(BindlessObject) } });
-		buffers->extras = MakeVersioned(StructuredBuffer(smallStart ? 256u : kInitialExtraRows, 16, "cs.dclf.extras", unused), { .extent = { 0, 16, 16 } });
-		buffers->geometries = MakeVersioned(CreateWords(std::uint64_t(smallStart ? 64u : kInitialGeometries) * sizeof(GeometryDraw) / 4, false, "cs.dclf.geometries"),
-			{ .extent = { 0, sizeof(GeometryDraw), 4 } });
 		buffers->facePositions = MakeVersioned(DeviceBuffer(std::uint64_t(smallStart ? 1024u : kInitialFaceVertices) * 16, "cs.dclf.face-positions"), { .extent = { 0, 16, 0 } });
 		if (!AddressOf(a_device, *buffers->facePositions->Get()))
 			return false;
@@ -691,12 +656,6 @@ namespace DCLF
 		state->constants = DeviceBuffer(kShadowConstantBytes, "cs.dclf.shadow.constants");
 		// The shadow commit latches into the constants alone, known before any graph declares the pass.
 		state->latchedTargets.store(std::make_shared<const std::vector<const void*>>(1, state->constants.get()), std::memory_order_release);
-		// One material row table for every view, grown as the kept state needs.
-		const std::uint32_t initialRows = SwitchValue(Switch::TableStart) == "small" ? 4u : kShadowMaterialRowsInitial;
-		if (!state->materialRows.Create(sizeof(ShadowMaterialRow), initialRows, "cs.dclf.shadow.material-rows")) {
-			shadowSetupFailed = true;
-			return ShadowNotReady(2, "no device address for the shadow material rows");
-		}
 		if (!EnsureSceneBuffers(device)) {
 			shadowSetupFailed = true;
 			return ShadowNotReady(2, "no device address for the face positions");
@@ -713,9 +672,8 @@ namespace DCLF
 			return ShadowNotReady(2, "no device address for the shadow view blocks");
 		}
 		// At the scene's objects; they grow with them (RequireSceneTables).
-		const std::uint32_t objects = CurrentUnits(scene->objects, sizeof(BindlessObject));
+		const std::uint32_t objects = InitialObjectUnits();
 		state->visibility = MakeVersioned(CreateWords(objects, true, "cs.dclf.shadow.visibility"), { .extent = { 0, 4, 4 } });
-		state->inputs = MakeVersioned(CreateWords(std::uint64_t(objects) * sizeof(DrawInput) / 4, false, "cs.dclf.shadow.draw-inputs"), { .extent = { 0, sizeof(DrawInput), 4 } });
 		state->buildDraws = ComputeProgram::Load(device, { .source = kBuildDrawsShader, .constantWords = kBuildDrawsConstantWords });
 		if (!state->buildDraws) {
 			shadowSetupFailed = true;

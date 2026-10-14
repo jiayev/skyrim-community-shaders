@@ -36,8 +36,8 @@ namespace DCLF
 	 * Each DCLF draw point is an epoch (Revision/Epochs.h): Z-prepass (depth, HZB, two-phase occlusion culling), colour (EQUAL
 	 * against the Z-prepass), forward (blended, back to front), shadow views and occlusion maps, water reflection faces, first
 	 * person. An epoch submits the selected scene revision's recording; its commit writes only what the frame has (constant blocks,
-	 * frame textures, the latch) into the revision's shape, and its draws read the frame's payload ring entry. Nothing is built in
-	 * the frame.
+	 * frame textures, the latch) into the revision's shape, and its draws read the installed payload (PayloadVersions, by value).
+	 * Nothing is built in the frame.
 	 *
 	 * Threads:
 	 *   - the coordinator (scene lane): PhaseReady, FitsScene, the slot readiness checks, ResolveLookups, PostSnapshotWork;
@@ -146,6 +146,12 @@ namespace DCLF
 		 */
 		void PostSnapshotWork(std::shared_ptr<const void> a_publication);
 		/**
+		 * @brief Coordinator::ScenePass, at its end (whether it published or not): the pass of frame a_frame's inputs is done, so any
+		 * publication it made was posted (PostSnapshotWork comes first). The snapshot builder publishes a payload only for a snapshot the
+		 * frame will adopt: not before the pass of the frame that took the last one has ended (its publication supersedes a held one).
+		 */
+		void NoteScenePassDone(std::uint32_t a_frame);
+		/**
 		 * @brief Render thread, the frame's start (a publication installed): the age of the oldest event it and the skipped
 		 * publications carried (ms and frames), for the snapshot report.
 		 */
@@ -158,17 +164,16 @@ namespace DCLF
 		 */
 		std::shared_ptr<const void> AdoptSnapshot(std::uint32_t a_togglesGeneration);
 		/**
+		 * @brief Render thread, at Present (after the frame's last submission): binds the adopted set's pooled versions
+		 * (NamedVersions::Bind) and the installed payload's backings (PayloadVersions::Bind) to SubmittedRetirementPoint(), so no
+		 * backing the frame read is reused before its GPU work retires.
+		 */
+		void BindAdopted();
+		/**
 		 * @brief Render thread, the frame's start: posts what the next builds ahead take from the frame (resources, masks) and the
 		 * fits, through a latest-wins slot (TakeAheadContext).
 		 */
 		void PostAheadContext();
-		/**
-		 * @brief Render thread, the frame's start, after AdoptSnapshot: sizes the payload ring entry the frame's epochs read to the
-		 * adopted snapshot's payloads, and returns what fills it (FrameValues' job runs it before the frame's signal). Empty: none.
-		 */
-		std::function<void(org::runtime::IUploadService&)> PrepareFrameUploads();
-		/** @brief Render thread: the frame's producer did not run (FrameValues::Kick refused): its epochs read no ring entry. */
-		void DropFrameUploads();
 
 		/**
 		 * @brief Render thread, the frame's start: hands the fade events read back since the last kick to a task on DCLF's executor
@@ -273,11 +278,6 @@ namespace DCLF
 		bool DecideCoverage();
 		/** @brief Whether DCLF cannot draw (set once, by the render thread): the frame then has no claims. */
 		bool Failed() const { return failed.load(std::memory_order_relaxed); }
-		/** @brief Since the last call: the stream views a fallback wanted while the coordinator or the snapshot builder ran (none made). */
-		std::uint64_t TakeStreamsRefused();
-
-		/** @brief At Present: the frame's ring entry freed once the GPU is done with it; the frame's stream views let go. */
-		void EndFrame();
 
 		/** @brief Waits for the builds ahead, the fade write-back and the visibility decode; lets go of the frame's stream views. */
 		void DrainAsync();

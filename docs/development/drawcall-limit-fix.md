@@ -43,7 +43,7 @@ What the game binary does, as far as DCLF depends on it, is recorded in
 
 ## Code map
 
-This section describes the code as it is now (after the 2026-10-12/13 restructure); the phases below are its history.
+This section describes the code as it is now (after the 2026-10-12/13 restructure and the 2026-10-14 pooled versions); the phases below are its history.
 `src/Features/DrawcallLimitFix.{h,cpp}` is the feature: the hook thunks and their install, the lifecycle
 (PostPostLoad, SetupResources, Reset), the settings UI, and one-line forwards for the hooks other features call. The rest
 is under `src/Features/DrawcallLimitFix/`:
@@ -60,10 +60,10 @@ is under `src/Features/DrawcallLimitFix/`:
 | `Scene/FrameView/` | `Scene::FrameView`: the render thread's half: the installed publication, the publication log walked up to it, the frame's captures, tables, lookups and claims, and the requests it serves for the coordinator | render thread |
 | `Scene/Channels.h` | `Scene::Channels`: every message between the coordinator and the render thread (lock-free queues and slots); neither side reads the other's members | both |
 | `Draws/` | `FrameDriver` (the frame's DCLF work at each engine point), `IndirectDraws` (the public face of the draws), `IndirectDrawStats.h` | render thread |
-| `Draws/IndirectDraws/` | The draws' implementation behind the `Internal.h` umbrella and `Impl.h`: `Core/` (GPU layouts, the scene's set of growable buffers `SceneBufferSet`, growable rows, uploads, readbacks, the payload ring, frame slots, resources), `Builders/` (the kept stores and the main and shadow builds: pure functions from tables and lookups to payloads), `Revision/` (the epoch table, shapes, the revision producer and its requirements of the set `Requirements.cpp`, the revision's assembly, coverage, the snapshot builder), `Epochs/` (main, shadow, and the views: reflection and first person as one `ViewEpoch`), `Passes/` (the render graph passes), `Main/`, `Shadow/` | pool (builders, snapshot builder); render thread (adoption, commit, submit); GPU |
-| `Draws/Gpu/` | `FrameValues` (placements, palettes, shading per frame, made on the pool), `FrameData`, `GpuResources`, `GpuTextures`, `BuildExecutor` | render thread, pool |
+| `Draws/IndirectDraws/` | The draws' implementation behind the `Internal.h` umbrella and `Impl.h` (itself an umbrella over `Impl/{SnapshotBuilder,Producer,Views,Stats}.h`, one base of `Impl` each): `Core/` (GPU layouts, the scene's set of growable buffers `SceneBufferSet`, growable rows, uploads, readbacks, the payload's pooled versions `PayloadVersions`, frame slots, resources), `Builders/` (the kept stores and the main and shadow builds: pure functions from tables and lookups to payloads), `Revision/` (the epoch table, shapes, the revision producer and its requirements of the set `Requirements.cpp`, the revision's assembly, coverage, the snapshot builder), `Epochs/` (main; shadow and occlusion as `ShadowEpochs` (the commits), `ShadowCapture`, `ShadowShape`, `ShadowIndexPool` and `ShadowCapability`, sharing `ShadowEpochs.h`; the views: reflection and first person as one `ViewEpoch`, recorded in `ViewEpochRecord.cpp`), `Passes/` (the render graph passes, a file per pass group: `Common`, `MainOpaque`, `Forward`, `Build`, `Occlusion`, `SceneState`, `Readbacks`, `Shadow`, and `MainExtension`, which adds the passes `PassesInternal.h`'s `Make*Pass` factories make; `IndexPoolPass.h`), `Main/`, `Shadow/` | pool (builders, snapshot builder); render thread (adoption, commit, submit); GPU |
+| `Draws/Gpu/` | `FrameValues` (placements, palettes, shading, fade and tree seeds per frame, made on the pool into pooled backings), `PooledBackings` (DCLF's ties to ORGModuleServices' `BackingPool`: allocation, release on the cleanup lane, warm spares), `FrameData`, `GpuResources`, `GpuTextures`, `BuildExecutor` | render thread, pool |
 | `Draws/Pipelines/` | `DrawPipelines` (+ `Rhi`), `ShaderPrograms`, `SpirvReflection`, `EngineStates` | render thread, compile workers |
-| `Runtime/` | The building blocks: `SceneScheduler` (the scene lane and the pool), `SceneExecutor`, `SceneGraph`, `EventQueue`, `LatestSlot`, `PublicationLog`, `Retirement`, `SlotTable`, `KeptState`, `EngineReleases`, `SceneWake`, `RenderThreadBudget`, `Switches` (the switch registry), `Toggles` (the menu's live toggles), `Hash.h` | any |
+| `Runtime/` | The building blocks: `SceneScheduler` (the scene lane and the pool), `SceneExecutor`, `SceneGraph`, `EventQueue`, `LatestSlot`, `PublicationLog`, `Retirement`, `FrameRetirement` (the retirement clock every pooled backing is bound against), `SlotTable`, `KeptState`, `EngineReleases`, `SceneWake`, `RenderThreadBudget`, `Switches` (the switch registry), `Toggles` (the menu's live toggles), `Hash.h` | any |
 | `Diagnostics/` | Every parity check, probe and report (below) | the observed point's |
 
 The shaders are in `features/Drawcall Limit Fix/Shaders/DrawcallLimitFix/`; the layouts they read are in
@@ -86,10 +86,12 @@ The shaders are in `features/Drawcall Limit Fix/Shaders/DrawcallLimitFix/`; the 
    publication log (`Channels::publicationLog`), and the publication handed to the snapshot builder (`IndirectDraws::PostSnapshotWork`).
 3. The snapshot builder (`Revision/Snapshot.cpp`, on the pool) makes the publication's revision: it requires what the tables need of
    the scene's set (`Revision/Requirements.cpp`) and seals it (`Core/SceneBufferSet`: a growth batch as state-graph work while one is
-   unmet), builds the draws ahead (`Builders/`) against that sealed set, and posts the complete snapshot. The sealed set is the only
-   source of growable buffers and latch blocks: no recording binds a version it does not name.
+   unmet), builds the draws ahead (`Builders/`) against that sealed set, publishes their payload as pooled versions once the frame
+   will adopt the snapshot (`Core/PayloadVersions`), and posts the complete snapshot when the payload's uploads completed. The sealed
+   set is the only source of growable buffers and latch blocks: no recording binds a version it does not name.
 4. The frame's start (`FrameDriver::BeginFrame`) adopts the newest complete snapshot whole (`IndirectDraws::AdoptSnapshot`,
-   `FrameView::HandOverAtFrameStart`), installs its claims or withdraws the set, and kicks the frame values.
+   `FrameView::HandOverAtFrameStart`), installs its claims and payload or withdraws the set, and kicks the frame values. At Present
+   the frame binds the backings it read to its last submission (`IndirectDraws::BindAdopted`, `FrameValues::EndFrame`).
 5. The epochs (Z-prepass, colour, forward, shadow, occlusion, reflection, first person) commit the frame's values into the adopted
    revision's shapes and run its recordings; the engine is told not to draw what the claims cover (`PassCapture`, `SunAccumulation`,
    `PrimaryCull`). Before adding an epoch, or moving one late in the frame, read `render-graph.md`, "Hazard: external Vulkan work
@@ -9671,7 +9673,7 @@ faulting address, live or destroyed: not a freed buffer, an address past one.
 -   With `CS_DCLF_SHADER_DEBUG` on (now the default) the decoder (`aftermath-decode --spirv` over ORGModuleServices'
     cache) named the shader as DCLF's: the pulled Lighting vertex stage, built without `DCLF_DEPTH_ONLY`, that is the
     reflection faces' forward build.
--   A fetch guard (`CS_DCLF_FETCH_GUARD`, TEMP, default on: `Lighting.hlsl`, `DCLF_FETCH_GUARD`) checks the sequence and
+-   A fetch guard (`CS_DCLF_FETCH_GUARD`, `Lighting.hlsl`'s `DCLF_FETCH_GUARD`; removed 2026-10-13) checked the sequence and
     the fetch and, on a failure, reads a beacon address instead (`0x1D0000000000 + check << 36 + object << 12`), so the
     page fault names the check. The next fault: `0x1d4001f27000`, check 4 (the vertex index past the vertex buffer's
     size), object 7975.
@@ -10081,7 +10083,7 @@ So about 1 ms of the views was the generated commands, their preprocesses and th
 **How it works.**
 
 -   **Buckets.** A view rasterizer state's map row now names, per key slot, a *bucket*: the distinct pipelines the row uses,
-    the depth-only class first (`DrawPipelines::ShadowDiscards`), each in index order (`ShadowEpochs.cpp`, `BucketsOfRow`).
+    the depth-only class first (`DrawPipelines::ShadowDiscards`), each in index order (`ShadowShape.cpp`, `BucketsOfRow`).
     A plain call's argument offset is fixed on the CPU, so each view sizes its buckets (`SizeShadowBuckets`) from
     `ShadowPayload::keySlotDraws`, the draws each key slot's inputs can produce, counted in the same walk as `modeDraws`.
     A bucket keeps its capacity while its draws fit and grows to a power of two past it, so the recorded calls change only
