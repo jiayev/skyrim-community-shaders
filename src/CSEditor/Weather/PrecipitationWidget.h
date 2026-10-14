@@ -78,7 +78,7 @@ private:
 		uint32_t numSubtexturesX = 1;
 		uint32_t numSubtexturesY = 1;
 		uint32_t particleType = 0;  // 0 = Rain, 1 = Snow
-		float boxSize = 1.0f;
+		uint32_t boxSize = 1;
 		float particleDensity = 1.0f;
 		std::string particleTexture = "";
 		bool operator==(const Settings&) const = default;

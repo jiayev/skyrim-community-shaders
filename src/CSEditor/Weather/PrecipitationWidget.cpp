@@ -8,7 +8,9 @@
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 
+#include <cmath>
 #include <format>
+#include <limits>
 
 #define I18N_KEY_PREFIX "cs_editor."
 
@@ -93,7 +95,11 @@ void PrecipitationWidget::DrawWidget()
 				}
 				if (MatchesAnySearch({ PrecipitationSetting::kBoxSize, PrecipitationSetting::kParticleDensity })) {
 					ImGui::SeparatorText(T(TKEY("volume"), "Volume"));
-					changed |= WeatherUtils::DrawSliderFloat(PrecipitationSetting::kBoxSize, settings.boxSize, 0.0f, 1000.0f);
+					float boxSize = static_cast<float>(settings.boxSize);
+					if (WeatherUtils::DrawSliderFloat(PrecipitationSetting::kBoxSize, boxSize, 1.0f, 10000.0f, this, "%.0f") && std::isfinite(boxSize)) {
+						settings.boxSize = static_cast<uint32_t>(std::clamp(boxSize, 1.0f, 10000.0f));
+						changed = true;
+					}
 					changed |= WeatherUtils::DrawSliderFloat(PrecipitationSetting::kParticleDensity, settings.particleDensity, 0.0f, 1000.0f);
 				}
 				EndScrollableContent();
@@ -188,8 +194,19 @@ void PrecipitationWidget::LoadSettings()
 				settings.numSubtexturesY = js["numSubtexturesY"];
 			if (js.contains("particleType"))
 				settings.particleType = js["particleType"];
-			if (js.contains("boxSize"))
-				settings.boxSize = js["boxSize"];
+			if (js.contains("boxSize")) {
+				const double boxSize = js["boxSize"].get<double>();
+				if (std::isfinite(boxSize) && boxSize >= 1.0 && boxSize <= (std::numeric_limits<uint32_t>::max)()) {
+					settings.boxSize = static_cast<uint32_t>(boxSize);
+				} else if (boxSize > 0.0 && boxSize < (std::numeric_limits<float>::min)()) {
+					// Decode legacy subnormal values without the game's flush-to-zero mode.
+					const auto legacyBoxSize = static_cast<uint32_t>(std::round(std::ldexp(boxSize, 149)));
+					if (legacyBoxSize != 0)
+						settings.boxSize = legacyBoxSize;
+				} else {
+					logger::warn("Precipitation {}: invalid box size {}, using the original value", GetEditorID(), boxSize);
+				}
+			}
 			if (js.contains("particleDensity"))
 				settings.particleDensity = js["particleDensity"];
 			if (js.contains("particleTexture")) {
@@ -234,7 +251,7 @@ void PrecipitationWidget::LoadFromGameSettings()
 	settings.numSubtexturesX = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kNumSubtexturesX).i;
 	settings.numSubtexturesY = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kNumSubtexturesY).i;
 	settings.particleType = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleType).i;
-	settings.boxSize = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kBoxSize).f;
+	settings.boxSize = std::max(1u, precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kBoxSize).i);
 	settings.particleDensity = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleDensity).f;
 	auto& particleTexture = precipitation->GetRuntimeData().particleTexture;
 	settings.particleTexture = particleTexture.textureName.c_str();
@@ -275,7 +292,7 @@ void PrecipitationWidget::ApplyChanges()
 	precipitation->GetSettingRef(DataID::kNumSubtexturesX).i = settings.numSubtexturesX;
 	precipitation->GetSettingRef(DataID::kNumSubtexturesY).i = settings.numSubtexturesY;
 	precipitation->GetSettingRef(DataID::kParticleType).i = settings.particleType;
-	precipitation->GetSettingRef(DataID::kBoxSize).f = settings.boxSize;
+	precipitation->GetSettingRef(DataID::kBoxSize).i = settings.boxSize;
 	precipitation->GetSettingRef(DataID::kParticleDensity).f = settings.particleDensity;
 	auto& particleTexture = precipitation->GetRuntimeData().particleTexture;
 	particleTexture.textureName = settings.particleTexture.c_str();
