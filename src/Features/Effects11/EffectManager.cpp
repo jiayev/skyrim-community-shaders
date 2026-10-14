@@ -3,6 +3,7 @@
 #include "D3D11StateBackup.h"
 #include "Editor/Effects11Editor.h"
 #include "Features/Effects11.h"
+#include "Features/RainRefraction.h"
 #include "Globals.h"
 #include "Menu.h"
 #include "State.h"
@@ -115,7 +116,8 @@ void EffectManager::LogPresetStatus() const
 
 void EffectManager::Apply()
 {
-	globals::features::effects11.LoadRaindropTexture();
+	if (auto& rainRefraction = globals::features::rainRefraction; rainRefraction.loaded)
+		rainRefraction.LoadPresetRaindrops(PresetManager::GetSingleton().GetENBSeriesPath());
 
 	enbDepthOfField.Apply();
 	enbBloom.Apply();

@@ -26,6 +26,7 @@
 #include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
 #include "Features/PseudoSunBounce.h"
+#include "Features/RainRefraction.h"
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
@@ -82,6 +83,7 @@ namespace globals
 		InteriorSun interiorSun{};
 		NRD nrd{};
 		PhysicalSky physicalSky{};
+		RainRefraction rainRefraction{};
 		ScreenSpaceGI screenSpaceGI{};
 		ScreenSpaceReflections screenSpaceReflections{};
 		ScreenSpacePointLightShadows screenSpacePointLightShadows{};

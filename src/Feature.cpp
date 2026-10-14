@@ -26,6 +26,7 @@
 #include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
 #include "Features/PseudoSunBounce.h"
+#include "Features/RainRefraction.h"
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
@@ -274,6 +275,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::screenshotFeature,
 		&globals::features::linearLighting,
 		&globals::features::effects11,
+		&globals::features::rainRefraction,
 		&globals::features::unifiedWater,
 		&globals::features::horizonFix,
 		&globals::features::exponentialHeightFog,

@@ -59,9 +59,7 @@ public:
 		float FireIntensity;
 
 		float FireCurve;
-		uint EnableRain;
-		float RainMotionStretch;
-		float RainMotionTransparency;
+		float pad0[3];
 
 		float CloudsCurve;
 		float CloudsDesaturation;
@@ -194,17 +192,11 @@ public:
 	ID3D11ComputeShader* blurHCS = nullptr;
 	ID3D11ComputeShader* blurVCS = nullptr;
 	winrt::com_ptr<ID3D11BlendState> additiveBlendState;
-	winrt::com_ptr<ID3D11BlendState> alphaBlendState;
 
 	std::unique_ptr<Texture2D> vlTexA;
 	std::unique_ptr<Texture2D> vlTexB;
 	std::unique_ptr<Texture2D> vlDepthHalf;
 	std::unique_ptr<ConstantBuffer> vlBlurCB;
-
-	winrt::com_ptr<ID3D11Texture2D> raindropTexture;
-	winrt::com_ptr<ID3D11ShaderResourceView> raindropSRV;
-	std::string raindropStatus;
-	void LoadRaindropTexture();
 
 	/** @brief Sun color after the preset's sun desaturation and filter, normalized to a peak of 1; tints the sky scattering. */
 	float3 scatteringSunColor = { 1.0f, 1.0f, 1.0f };
@@ -246,9 +238,6 @@ public:
 	void OverrideAmbientLighting(DirectionalAmbientColors& DirectionalAmbientColors);
 
 	void ModifySky(RE::BSRenderPass* Pass);
-	__declspec(noinline) void ModifyParticle(RE::BSRenderPass* Pass);
-	void ParticleShaderHacks();
-
 	/**
 	 * @brief Whether Effects11 wants to replace the vanilla tonemap this frame.
 	 *
@@ -265,7 +254,6 @@ public:
 	 *         back to the vanilla pass.
 	 */
 	bool RenderTonemap(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output);
-	bool IsRainEnabled();
 
 	/** @brief True when the effect chain replaced ISHDR this frame, leaving an SDR scene for HDR Display to expand. */
 	bool ReplacedTonemapperThisFrame() const;

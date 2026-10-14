@@ -21,6 +21,7 @@
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PostProcessing.h"
+#include "Features/RainRefraction.h"
 #include "Features/RemoteControl/NvPerf.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
@@ -143,9 +144,9 @@ void State::Draw()
 			cloudShadows.SkyShaderHacks();
 		}
 
-		if (globals::features::effects11.loaded) {
-			ZoneScopedN("Effects11::ParticleShaderHacks");
-			globals::features::effects11.ParticleShaderHacks();
+		if (globals::features::rainRefraction.loaded) {
+			ZoneScopedN("RainRefraction::ParticleShaderHacks");
+			globals::features::rainRefraction.ParticleShaderHacks();
 		}
 
 		if (terrainHelper.loaded) {

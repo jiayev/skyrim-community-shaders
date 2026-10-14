@@ -276,9 +276,7 @@ namespace SharedData
 		float FireIntensity;
 
 		float FireCurve;
-		uint EnableRain;
-		float RainMotionStretch;
-		float RainMotionTransparency;
+		float3 pad0;
 
 		float CloudsCurve;
 		float CloudsDesaturation;
@@ -589,6 +587,14 @@ namespace SharedData
 		float windowWidth;
 	};
 
+	struct RainRefractionSettings
+	{
+		uint Enable;
+		float MotionStretch;
+		float MotionTransparency;
+		float pad0;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -617,6 +623,7 @@ namespace SharedData
 		HorizonFixSettings horizonFixSettings;
 		PhysSkyData physSkyData;
 		PseudoSunBounceSettings pseudoSunBounceSettings;
+		RainRefractionSettings rainRefractionSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);
