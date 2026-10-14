@@ -3,7 +3,7 @@
 
 #include "Internal.h"
 
-#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 
 #include <map>

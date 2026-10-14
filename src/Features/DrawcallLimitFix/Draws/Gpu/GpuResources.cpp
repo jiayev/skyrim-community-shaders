@@ -5,8 +5,8 @@
 #include <chrono>
 #include <exception>
 
-#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "RenderGraph/DxvkOrgInterop.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"

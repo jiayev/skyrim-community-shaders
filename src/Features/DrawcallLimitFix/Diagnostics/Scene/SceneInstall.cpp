@@ -8,7 +8,7 @@
 #include "MirrorWatch.h"
 #include "Events.h"
 #include "SceneObservers.h"
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 
 namespace DCLF::Diagnostics

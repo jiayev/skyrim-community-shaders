@@ -9,8 +9,8 @@
 #include <string>
 #include <vector>
 
-#include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneWake.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
 

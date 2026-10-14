@@ -3,10 +3,10 @@
 
 #include "Features/DrawcallLimitFix/Scene/Ports/TreeLod.h"
 
-#include "Features/DrawcallLimitFix/Runtime/KeptState.h"
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Draws/Gpu/GpuResources.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
 #include <cstring>
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"

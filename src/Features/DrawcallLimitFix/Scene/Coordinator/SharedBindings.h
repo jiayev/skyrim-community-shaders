@@ -16,7 +16,7 @@
 
 #include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
 #include "Features/DrawcallLimitFix/Draws/Gpu/GpuTextures.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneWake.h"
+#include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Lookups.h"
 
 namespace DCLF

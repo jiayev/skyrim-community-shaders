@@ -1,5 +1,5 @@
 // RenderThreadBudget: per-frame render-thread time by bucket and hook site, and its report line. Render thread only.
-#include "Features/DrawcallLimitFix/Runtime/RenderThreadBudget.h"
+#include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 
 #include "RenderGraph/RenderGraphRuntime.h"
 

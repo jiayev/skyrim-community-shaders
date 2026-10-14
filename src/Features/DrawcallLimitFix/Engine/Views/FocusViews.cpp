@@ -2,7 +2,7 @@
 
 #include "Features/DrawcallLimitFix/Engine/Views/FocusViews.h"
 
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 

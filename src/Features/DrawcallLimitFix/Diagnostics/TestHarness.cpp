@@ -1,10 +1,10 @@
 // The test harness: the CS_DCLF_TEST_* switches' scripted commands, toggles, turns, moves and exit, run every Present on the render
 // (main) thread, DCLF installed or not.
-#include "Features/DrawcallLimitFix/Runtime/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "TestHarness.h"
 
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Globals.h"
 #include "State.h"
 

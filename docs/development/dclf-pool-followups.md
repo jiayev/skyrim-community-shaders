@@ -154,7 +154,7 @@ the payload and the pooled rare values are not done.
     carrying the count and the backing's index.
 -   **Without them:** the gain is only memory: a backing sized to the frame's count, against the latch's
     `maxLights`-sized region in every slot.
--   **The clock.** It would need a retirement clock outside DCLF's (`Runtime/FrameRetirement.h` is DCLF's), for example
+-   **The clock.** It would need a retirement clock outside DCLF's (`Core/Runtime/FrameRetirement.h` is DCLF's), for example
     one owned by `RenderGraphRuntime`, which already advances DCLF's.
 
 ## 4. `CommitUploads`' staged batches

@@ -1,12 +1,12 @@
 // LodGates: the swap thunks and detours (on the engine's LOD threads, under the terrain manager's lock), the veto table HiddenStores'
 // stubs read lock-free, the render thread's Flip, and the outcomes posted to the coordinator.
 #include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneWake.h"
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 
 #include <Tracy/Tracy.hpp>
 #include <ankerl/unordered_dense.h>

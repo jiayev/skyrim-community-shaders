@@ -3,7 +3,7 @@
 
 #include "Internal.h"
 
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"

@@ -3,8 +3,8 @@
 // verdicts (ClassifyFrame, HiddenForWalk, billboards, first person).
 
 #include "Internal.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include <cassert>
 
 namespace DCLF::Scene

@@ -2,11 +2,11 @@
 
 #include "FrameValues.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
-#include "Features/DrawcallLimitFix/Runtime/EngineReleases.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 
-#include "Features/DrawcallLimitFix/Runtime/KeptState.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/Billboards.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"
@@ -26,10 +26,10 @@
 #include "Features/DrawcallLimitFix/Draws/Gpu/PooledBackings.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
-#include "Features/DrawcallLimitFix/Runtime/FrameRetirement.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/FrameRetirement.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include <OpenRenderGraph/PersistentGraphHost.h>
 #include <Render/Runtime/IUploadService.h>

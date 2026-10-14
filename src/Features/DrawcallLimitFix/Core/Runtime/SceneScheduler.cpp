@@ -1,8 +1,8 @@
 // SceneScheduler: DCLF's executor, scopes, state graph and lane pumps; thread names and priorities. Created on first use, never destroyed.
-#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 
 #include <ORGModuleServices/Async/SerializedTaskPump.h>
 

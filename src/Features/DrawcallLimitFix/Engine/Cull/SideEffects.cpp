@@ -1,7 +1,7 @@
 // SideEffects: the actors' animation stamp from DCLF's shadow views (main thread, Main::Update's entry). SideEffects.h describes it.
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
 
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Views/LightViews.h"
 #include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"

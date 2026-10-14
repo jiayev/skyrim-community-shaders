@@ -6,7 +6,7 @@
 #include "Events.h"
 #include "PrimaryCullView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 
 #include <ankerl/unordered_dense.h>

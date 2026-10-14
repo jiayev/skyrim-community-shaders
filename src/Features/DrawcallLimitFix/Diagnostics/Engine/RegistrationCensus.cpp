@@ -4,11 +4,11 @@
 #include "Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Census.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
 
-#include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Runtime/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"

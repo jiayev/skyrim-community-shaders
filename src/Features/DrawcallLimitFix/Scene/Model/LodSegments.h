@@ -5,7 +5,7 @@
 #include <cstring>
 #include <vector>
 
-#include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 
 namespace DCLF::LodSegments
 {

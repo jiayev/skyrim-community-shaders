@@ -10,8 +10,8 @@
 #include <d3d11.h>
 #include <winrt/base.h>
 
-#include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneWake.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPortFrame.h"
 

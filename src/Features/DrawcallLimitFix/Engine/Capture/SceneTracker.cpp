@@ -1,12 +1,12 @@
 // SceneTracker: the NiNode child-edit detours (on the editing thread) and the event stack they and the hooks push onto.
 
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
-#include "Features/DrawcallLimitFix/Engine/Access/Walkers.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
-#include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneWake.h"
+#include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
 
 #include <chrono>
 

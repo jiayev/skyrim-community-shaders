@@ -8,9 +8,9 @@
 #include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
 
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
-#include "Features/DrawcallLimitFix/Runtime/Toggles.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/TreeLod.h"
 
 #include <span>

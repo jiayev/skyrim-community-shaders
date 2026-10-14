@@ -1,14 +1,14 @@
 // LocalLightCull: the point lights' shadow culls without DCLF's entries (LocalLightCull.h describes it): the frame's exclusion and
 // category filter (render thread), the Process1 skip and NiNode::OnVisible filter inside the lights' culls, and the lights' bits.
 #include "Features/DrawcallLimitFix/Engine/Cull/LocalLightCull.h"
-#include "Features/DrawcallLimitFix/Engine/Access/Walkers.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
-#include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Runtime/KeptState.h"
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"

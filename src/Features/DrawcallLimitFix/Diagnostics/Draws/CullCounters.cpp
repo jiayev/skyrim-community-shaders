@@ -9,7 +9,7 @@
 #include "Observers.h"
 #include "CullCounters.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Registrations.h"
-#include "Features/DrawcallLimitFix/Runtime/EngineReleases.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 
 namespace DCLF::Diagnostics
 {

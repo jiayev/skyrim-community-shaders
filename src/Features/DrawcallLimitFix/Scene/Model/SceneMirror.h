@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Features/DrawcallLimitFix/Engine/Access/Walkers.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
 
 #include <ankerl/unordered_dense.h>

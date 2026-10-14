@@ -3,7 +3,7 @@
 // shading against the frame's rows.
 
 #include "SceneObservers.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "SceneState.h"
 

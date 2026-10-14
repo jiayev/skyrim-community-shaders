@@ -3,7 +3,7 @@
 #include "ReleaseGuard.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 
 #include <array>
 #include <cstring>

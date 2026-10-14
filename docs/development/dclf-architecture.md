@@ -8,6 +8,7 @@ describes the present only.
 -   [dclf-open-defects.md](./dclf-open-defects.md) lists the defects and failing checks under investigation.
 -   [drawcall-limit-fix.md](./drawcall-limit-fix.md) is the historical record of how DCLF got here, measurements
     included.
+-   [dclf-layout.md](./dclf-layout.md) is the code layout DCLF is moving to, and its rules.
 -   [dclf-pool-followups.md](./dclf-pool-followups.md) lists what should move into the pooled versions next.
 -   The engine behaviour everything below depends on is in [skyrim-engine-notes.md](./skyrim-engine-notes.md).
 
@@ -330,7 +331,7 @@ binds it, and the draws embed none of it.
 
 The payload's parts, the frame values' six row sets (placements, palettes, shading, fade seeds, tree seeds, texture
 transforms) and the set's growth all lease their backings from ORGModuleServices `BackingPool`s:
--   **The clock.** DCLF has one `RetirementClock` (`Runtime/FrameRetirement.h`), advanced from the graph host's
+-   **The clock.** DCLF has one `RetirementClock` (`Core/Runtime/FrameRetirement.h`), advanced from the graph host's
     completed-frame callback: the exact GPU completion of each host frame, not a frames-in-flight window. A frame binds
     what it read after its last submission (`SubmittedRetirementPoint()`); `BackingLease::Bind` keeps the latest point.
 -   **Reuse.** A backing is reused once the clock has reached its bound point and no lease holds it. The acquirer prefers
@@ -499,23 +500,28 @@ a frame happens to have.
     the per-object state the cull maintains (fades, LOD, the tree clock's bit), so the engine never traverses those
     references. The cut it stands in with is kept per candidate entry, planned again only for the entries that moved.
 
-The menu's toggles (`Runtime/Toggles`) change all of this live: a toggle withdraws the set until a publication committed
+The menu's toggles (`Core/Settings/Toggles`) change all of this live: a toggle withdraws the set until a publication committed
 under the new toggles is installed. Switching DCLF off clears every claim and bypasses the capture.
 
 ## Where the code is
 
 The module tree, the threads, a frame's data flow and the diagnostics contract are in the **Code map** of
 [drawcall-limit-fix.md](./drawcall-limit-fix.md#code-map). In short: `src/Features/DrawcallLimitFix.{h,cpp}` is the feature
-(its hooks, lifecycle and menu); under `src/Features/DrawcallLimitFix/`, `Engine/{Access,Capture,Cull,Views}` touch the
-engine, `Scene/{Model,Ports,Coordinator,FrameView}` and `Scene/Channels.h` keep the scene, `Draws/` draws it
-(`FrameDriver`, `IndirectDraws`, `Gpu/`, `Pipelines/`), `Runtime/` holds the building blocks, and `Diagnostics/` every
-parity check, probe and report.
+(its hooks, lifecycle and menu, and the one file that decides whether DCLF is built: `CS_HAS_DCLF`, set by
+`cmake/RenderGraph.cmake` when the render graph and ORGModuleServices are present; the rest of CS calls DCLF only through it).
+Under `src/Features/DrawcallLimitFix/`, `Core/` holds what every feature builds on (`Core/Runtime/`: the building blocks and
+the scene executor; `Core/Engine/`: engine access, the read window, the releases and the render-thread budget;
+`Core/Settings/`: the switches and toggles; `Core/Scene/`: the scene pump's wake). The layout is moving to `Core/` plus one
+folder per feature ([dclf-layout.md](./dclf-layout.md)); until each piece moves, `Engine/{Capture,Cull,Views}` touch the engine,
+`Scene/{Model,Ports,Coordinator,FrameView}` and `Scene/Channels.h` keep the scene, `Draws/` draws it (`FrameDriver`,
+`IndirectDraws`, `Gpu/`, `Pipelines/`), and `Diagnostics/` holds every parity check, probe and report.
+`tools/dclf-layout-check.py` checks the include rules.
 
 Inside `Scene/Coordinator/` and `Draws/IndirectDraws/`, `Internal.h` is shared by that folder's files only. The layouts the
 shaders read are in `Draws/IndirectDraws/Core/GpuLayouts.h`, and must match `BuildDrawsCS.hlsl` and `Lighting.hlsl`. The
 scene's set of growable buffers is `Draws/IndirectDraws/Core/SceneBufferSet.{h,cpp}`, and what a revision requires of it is
 `Draws/IndirectDraws/Revision/Requirements.cpp`. The payload's pooled versions are `Draws/IndirectDraws/Core/PayloadVersions.{h,cpp}`,
-DCLF's ties to the pools `Draws/Gpu/PooledBackings.{h,cpp}`, and its retirement clock `Runtime/FrameRetirement.{h,cpp}`.
+DCLF's ties to the pools `Draws/Gpu/PooledBackings.{h,cpp}`, and its retirement clock `Core/Runtime/FrameRetirement.{h,cpp}`.
 
 Includes within a folder use bare names. Includes across folders are rooted at `src/`
 (`Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h`).
@@ -567,7 +573,7 @@ normal run draws.
 
 ## Switches
 
-Every switch is a row of the registry in `Runtime/Switches.cpp`, with its kind and a one-line description:
+Every switch is a row of the registry in `Core/Settings/Switches.cpp`, with its kind and a one-line description:
 
 -   **Feature**: on by default. The row says which values reduce the featureset; a run that sets one logs
     `featureset: REDUCED by ...`.

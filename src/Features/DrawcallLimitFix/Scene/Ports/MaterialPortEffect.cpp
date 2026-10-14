@@ -1,7 +1,7 @@
 // MaterialPort's Effect part: BSEffectShader::SetupMaterial (the non-membrane half) on a snapshot. Pure.
 
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
 #include "Features/DrawcallLimitFix/Scene/Ports/EffectConstants.h"
 

@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 
 namespace DCLF::RegistrationCensus
 {

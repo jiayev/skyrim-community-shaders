@@ -1,5 +1,5 @@
 // Switches: the registry (name, kind, description per switch), the switches file and environment read once, the startup summary.
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 
 #include "Utils/SwitchFile.h"
 

@@ -4,7 +4,7 @@
 // the same hooks as the scene pass's MoveEvents and node events (SceneEvents.cpp) into a second pair of queues, whose one consumer is
 // FrameValues' producer (one at a time, in order). The scene pass keeps its own queues; neither drains the other's.
 
-#include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 
 namespace DCLF::FrameValueMoves
 {

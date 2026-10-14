@@ -3,13 +3,13 @@
 // accumulator latches. Render thread: everything here reads or writes live engine state.
 
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
-#include "Features/DrawcallLimitFix/Runtime/Hash.h"
-#include "Features/DrawcallLimitFix/Runtime/Toggles.h"
-#include "Features/DrawcallLimitFix/Engine/Access/Walkers.h"
-#include "Features/DrawcallLimitFix/Runtime/RenderThreadBudget.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/Hash.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
+#include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/Events.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
@@ -17,10 +17,10 @@
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
-#include "Features/DrawcallLimitFix/Runtime/EngineReleases.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneWake.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
 #include "Features/LightLimitFix.h"
 
 namespace DCLF::Scene

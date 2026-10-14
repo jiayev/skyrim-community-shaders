@@ -4,17 +4,17 @@
 // the shard and timing scopes. Coordinator thread (the scene lane) and the pass's pool workers.
 
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Engine/Access/Walkers.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
-#include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
-#include "Features/DrawcallLimitFix/Runtime/Hash.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/Hash.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialSources.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/MaterialWrites.h"
 #include "Features/DrawcallLimitFix/Draws/Pipelines/EngineStates.h"
-#include "Features/DrawcallLimitFix/Runtime/Switches.h"
-#include "Features/DrawcallLimitFix/Runtime/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Draws/Gpu/GpuResources.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
@@ -30,7 +30,7 @@
 #include <chrono>
 #include <exception>
 #include <optional>
-#include "Features/DrawcallLimitFix/Runtime/EngineReleases.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/ExtendedTranslucency.h"
 #include "Features/LightLimitFix.h"
 #include "Features/Skin.h"

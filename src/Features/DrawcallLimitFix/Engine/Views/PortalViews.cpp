@@ -4,7 +4,7 @@
 
 #include "Features/DrawcallLimitFix/Engine/Views/PortalViews.h"
 
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Views/PortalShapes.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/RoomVisibility.h"
 #include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"

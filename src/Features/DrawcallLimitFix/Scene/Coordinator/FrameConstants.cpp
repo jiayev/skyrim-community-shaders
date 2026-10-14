@@ -3,13 +3,13 @@
 // thread posts back.
 
 #include "Internal.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
 #include "Features/DrawcallLimitFix/Draws/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
-#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 
 #include <cmath>

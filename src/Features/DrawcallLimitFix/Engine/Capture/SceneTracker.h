@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
-#include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
 
 #include <atomic>
 #include <memory>

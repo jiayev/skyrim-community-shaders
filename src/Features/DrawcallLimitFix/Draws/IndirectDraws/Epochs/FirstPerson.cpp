@@ -5,7 +5,7 @@
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
-#include "Features/DrawcallLimitFix/Runtime/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
 #include "Features/DrawcallLimitFix/Engine/Views/SunViews.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"

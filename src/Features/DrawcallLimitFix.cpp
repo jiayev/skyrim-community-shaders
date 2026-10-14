@@ -5,8 +5,8 @@
 #if defined(CS_HAS_DCLF)
 
 #	include "Deferred.h"
-#	include "DrawcallLimitFix/Runtime/RenderThreadBudget.h"
-#	include "DrawcallLimitFix/Runtime/SceneScheduler.h"
+#	include "Features/DrawcallLimitFix/Core/Engine/RenderThreadBudget.h"
+#	include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #	include "DrawcallLimitFix/Engine/Capture/SceneEvents.h"
 #	include "DrawcallLimitFix/Diagnostics/Hooks.h"
 #	include "DrawcallLimitFix/Diagnostics/Policy.h"
@@ -14,7 +14,7 @@
 #	include "DrawcallLimitFix/Scene/Ports/MaterialSources.h"
 #	include "DrawcallLimitFix/Diagnostics/TestHarness.h"
 #	include "DrawcallLimitFix/Draws/Pipelines/DrawPipelines.h"
-#	include "DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#	include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #	include "DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
 #	include "DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
 #	include "DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
@@ -31,7 +31,7 @@
 #	include "DrawcallLimitFix/Draws/FrameDriver.h"
 #	include "DrawcallLimitFix/Draws/Pipelines/ShaderPrograms.h"
 #	include "DrawcallLimitFix/Engine/Views/ShadowViews.h"
-#	include "DrawcallLimitFix/Runtime/Toggles.h"
+#	include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #	include "DrawcallLimitFix/Engine/Cull/PassCapture.h"
 #	include "DrawcallLimitFix/Engine/Views/ReflectionFaces.h"
 #	include "DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
@@ -39,13 +39,13 @@
 #	include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #	include "DrawcallLimitFix/Scene/Ports/LightingDescriptors.h"
 #	include "DrawcallLimitFix/Engine/Capture/SceneTracker.h"
-#	include "DrawcallLimitFix/Runtime/Switches.h"
+#	include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
 #	include "RenderGraph/RenderGraphRuntime.h"
 #	include "State.h"
 #	include "DrawcallLimitFix/Engine/Capture/ConstantMirror.h"
 #	include "DrawcallLimitFix/Diagnostics/Scene/CaptureParity.h"
 #	include "DrawcallLimitFix/Diagnostics/Feature/TargetDump.h"
-#	include "DrawcallLimitFix/Runtime/FrameRetirement.h"
+#	include "Features/DrawcallLimitFix/Core/Runtime/FrameRetirement.h"
 
 #	include <ORGModuleServices/BackingPool.h>
 

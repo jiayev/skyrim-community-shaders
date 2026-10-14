@@ -2,14 +2,14 @@
 // start), inside the engine-read window or under the engine call that holds the objects; the drawn-roots set and the counters.
 
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
-#include "Features/DrawcallLimitFix/Engine/Access/Walkers.h"
+#include "Features/DrawcallLimitFix/Core/Engine/Walkers.h"
 
 #include "Features/DrawcallLimitFix/Engine/Capture/Billboards.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Scene/MirrorWatch.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
-#include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
-#include "Features/DrawcallLimitFix/Runtime/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EffectConstants.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/MaterialPort.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FadeState.h"

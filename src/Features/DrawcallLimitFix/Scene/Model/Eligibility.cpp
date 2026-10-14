@@ -3,7 +3,7 @@
 
 #include "Features/DrawcallLimitFix/Scene/Model/Eligibility.h"
 
-#include "Features/DrawcallLimitFix/Runtime/Toggles.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/FaceSnapshots.h"
 
 namespace DCLF::Eligibility
