@@ -44,6 +44,7 @@ namespace DCLF
 	void IndirectDraws::ResolveLookups(const void*, const PipelineCatalog*, Lookups&, LookupsResolveState&) {}
 	void IndirectDraws::PostSnapshotWork(std::shared_ptr<const void>) {}
 	void IndirectDraws::NoteScenePassDone(std::uint32_t) {}
+	std::uint64_t IndirectDraws::SnapshotWorkTaken() const { return ~0ull; }
 	void IndirectDraws::NoteEventAdoption(double, std::uint32_t) {}
 	std::shared_ptr<const void> IndirectDraws::AdoptSnapshot(std::uint32_t) { return nullptr; }
 	void IndirectDraws::BindAdopted() {}

@@ -182,31 +182,42 @@ namespace DCLF::Draws
 		struct Pair
 		{
 			std::uint32_t slot = 0;   // its rows (RowsOf), once it can draw
-			std::uint32_t count = 0;  // the entries using it
+			// The objects whose main entries use it (the entries Pairs.Inputs rewrites when its verdict moves), and its place in its
+			// material's and its pipeline's lists (materialPairs, pipelinePairs), for removal without a search.
+			std::vector<std::uint32_t> objects;
+			std::uint32_t materialAt = 0, pipelineAt = 0;
 			bool ok = true;           // this build found its rows can draw it
-			// What its resolution read (MainBuild::PairWitness): it is resolved again only when that changes. 0: never resolved.
+			// What its resolution read (its pipeline's witness and its material row's state): it is resolved again only when that changes.
+			// 0: never resolved.
 			std::uint64_t witness = 0;
 			std::uint32_t skip = 0;  // its skip reason when it cannot draw (the report counts it every build)
 			std::array<std::uint64_t, 2> frameRegisters{};  // the frame textures its resolution asked for
-			// The owners the region's bundle took for it (its material's binding block, its pipeline's shadow mask): a resolution
-			// that finds others makes the bundle again.
+			// The owners the region's bundle holds for it (its material's binding block, its pipeline's shadow mask), counted in
+			// ownerCounts: a resolution that finds others swaps them there.
 			const void* bindingSeen = nullptr;
 			const void* maskSeen = nullptr;
 		};
 		ankerl::unordered_dense::map<std::uint64_t, Pair> pairs;
 		// The build's own inputs the pairs' resolutions read (the frame slots bound, the segment), every pair's frame textures,
-		// and every pair's binding owners in one bundle, which each build's payload holds: made again when a pair is resolved.
+		// and every pair's binding owners in one bundle, which each build's payload holds. Kept by count as pairs are resolved,
+		// added and removed (frameRegisterCounts per register, ownerCounts per owner); the bundle's list is made again only when an
+		// owner joins or leaves.
 		std::uint64_t frameWitness = 0;
 		std::array<std::uint64_t, 2> frameRegisters{};
+		std::array<std::uint32_t, 128> frameRegisterCounts{};
+		ankerl::unordered_dense::map<const void*, std::pair<std::shared_ptr<const void>, std::uint32_t>> ownerCounts;
 		std::shared_ptr<const void> owners;
-		bool pairsChanged = true;
+		bool ownersChanged = true;
 		// Which pairs a build checks (UpdateRegionPairs): those of the materials the tables' and the lookups' material logs name
-		// since its last build, the pairs new since, and every pair of a pipeline whose half of the witness moved. A log it
+		// since its last build, the pairs new since, and the pairs of each pipeline whose witness moved (pipelinePairs). A log it
 		// cannot continue, or a frame witness that moved: every pair.
 		LogCursor materialCursor, lookupCursor;
 		ankerl::unordered_dense::map<std::uint32_t, std::vector<std::uint64_t>> materialPairs;  // material -> its pairs
+		ankerl::unordered_dense::map<std::uint32_t, std::vector<std::uint64_t>> pipelinePairs;  // pipeline -> its pairs
+		std::vector<std::uint32_t> pairObjectAt;  // per object slot: its place in its pair's objects
 		std::vector<std::uint64_t> freshPairs;
 		ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> pipelineWitness;  // the last build's, per pipeline
+		std::vector<std::uint64_t> pipelineWitnessNow;  // this build's, per pipeline slot (kept for its storage)
 		// The pairs that cannot draw, by skip reason: the report counts them every build without visiting them.
 		std::array<std::uint32_t, static_cast<std::size_t>(IndirectDraws::Skip::Count)> skipCounts{};
 		ankerl::unordered_dense::map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> pipelines;  // pipeline -> (set index, entries)
@@ -308,6 +319,26 @@ namespace DCLF::Draws
 	 */
 	void BuildMainPayloads(const std::array<const MainInputs*, 2>& a_in, const SceneTables& a_tables, const FrameTables& a_frame, const Lookups& a_lookups,
 		const std::array<MainPayload*, 2>& a_out, MainRows& a_rows, BuildCache* a_cache, std::shared_ptr<const StreamViews> a_streams);
+	/**
+	 * @brief BuildMainPayloads in two stages, so the stream views (MakeStreamViews) can be made beside it: Run is the whole build but
+	 * what reads the views, Finish takes them. The snapshot builder's (RunAhead); Run and Finish once each, in order, on any one thread at
+	 * a time. Nothing is built when neither segment has inputs.
+	 */
+	class MainBuildStages
+	{
+	public:
+		MainBuildStages(const std::array<const MainInputs*, 2>& a_in, const SceneTables& a_tables, const FrameTables& a_frame, const Lookups& a_lookups,
+			const std::array<MainPayload*, 2>& a_out, MainRows& a_rows, BuildCache* a_cache);
+		~MainBuildStages();
+		MainBuildStages(const MainBuildStages&) = delete;
+		MainBuildStages& operator=(const MainBuildStages&) = delete;
+		void Run();
+		void Finish(std::shared_ptr<const StreamViews> a_streams);
+
+	private:
+		struct State;
+		std::unique_ptr<State> state;
+	};
 
 	// The cascades' render mode (0xE, ShadowMapClamped) as an index of the shadow modes.
 	constexpr std::uint32_t kSunShadowMode = 0xE - PassCapture::kFirstShadowMode;

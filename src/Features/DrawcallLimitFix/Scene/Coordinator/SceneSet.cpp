@@ -115,12 +115,15 @@ namespace DCLF::Scene
 				const auto owner = setMemberSlot.find(geometry);
 				const bool owns = owner != setMemberSlot.end() && owner->second == a_slot;
 				if (setPhasesNext[a_slot]) {
-					if (owns)
+					if (owns) {
 						setBuilding->phases.insert_or_assign(geometry, setPhasesNext[a_slot]);
+						NoteSetPhases(geometry);
+					}
 				} else {
 					if (owns) {
 						setMemberSlot.erase(owner);
 						setBuilding->phases.erase(geometry);
+						NoteSetPhases(geometry);
 					}
 					setGeometry[a_slot] = nullptr;
 				}
@@ -162,16 +165,121 @@ namespace DCLF::Scene
 		setApplyMark[a_slot] = static_cast<std::uint32_t>(setApply.size());
 	}
 
-	void Coordinator::RefreshSetSnapshot()
+	std::size_t Coordinator::TakeClaimsEntry()
 	{
-		if ((!setSnapshotDirty && setSnapshot) || !setBuilding)
-			return;
-		auto snapshot = std::make_shared<SetSnapshot>(*setBuilding);
-		snapshot->frame = sceneFrame;
-		snapshot->drawn = static_cast<std::uint8_t>(setPhaseMask);
-		setSnapshot = std::move(snapshot);
+		// An entry only the pool holds (publications, frames and the claims' readers hold theirs).
+		for (std::size_t i = 0; i < claimsPool.size(); ++i)
+			if (claimsPool[i].snapshot.use_count() == 1) {
+				std::atomic_thread_fence(std::memory_order_acquire);  // after the last holder's release (use_count reads relaxed)
+				return i;
+			}
+		claimsPool.push_back({ std::make_shared<SetSnapshot>(), {}, {} });
+		return claimsPool.size() - 1;
+	}
+
+	void Coordinator::PublishClaims()
+	{
+		ZoneScopedN("CS.DCLF.Scene.PublishClaims");
+		// After ApplySet, before the revocation (whose LeaveSet writes are the next publication's): setBuilding is the last commit's set
+		// minus what left since.
+		if (!setBuilding)
+			setBuilding = std::make_shared<SetSnapshot>();
+		auto& pace = paceStats;
+		const std::uint8_t drawn = static_cast<std::uint8_t>(setPhaseMask);
+		claimsFresh = false;
+		// The paced parity's reference: the claims made whole, as an every-pass publication's were.
+		if (pacedCheckDue) {
+			// setBuilding's phases only: its frame and drawn are never set (the published claims take them here).
+			claimsReference = std::make_shared<SetSnapshot>(*setBuilding);
+			claimsReference->frame = sceneFrame;
+			claimsReference->drawn = drawn;
+		}
+		// Nothing changed since the last claims (setBuilding unwritten, no edit of the last): shared again.
+		if (claimsPublished < claimsPool.size() && publicationClaims == claimsPool[claimsPublished].snapshot && !setSnapshotDirty) {
+			const auto& last = claimsPool[claimsPublished];
+			if (last.edited.empty() && last.cursor.Continues(setPhaseLog, 0) && last.cursor.position == setPhaseLog.End() && last.snapshot->drawn == drawn) {
+				++pace.claimsShared;
+				return;
+			}
+		}
+		const std::size_t index = TakeClaimsEntry();
+		auto& entry = claimsPool[index];
+		auto& phases = entry.snapshot->phases;
+		// Caught up by the keys written since its last publication and the keys its revocations edited (each to setBuilding's value), or
+		// copied whole when the log no longer reaches it.
+		auto refresh = [&](const RE::BSGeometry* a_geometry) {
+			if (const auto it = setBuilding->phases.find(a_geometry); it != setBuilding->phases.end())
+				phases.insert_or_assign(a_geometry, it->second);
+			else
+				phases.erase(a_geometry);
+		};
+		if (entry.cursor.Continues(setPhaseLog, 0)) {
+			const auto unread = entry.cursor.Unread(setPhaseLog);
+			for (const auto* geometry : unread)
+				refresh(geometry);
+			for (const auto* geometry : entry.edited)
+				refresh(geometry);
+			++pace.claimsReplayed;
+			pace.claimsKeys += unread.size() + entry.edited.size();
+		} else {
+			phases = setBuilding->phases;
+			++pace.claimsWhole;
+		}
+		entry.edited.clear();
+		entry.cursor.Restart(0);
+		entry.cursor.Advance(setPhaseLog);
+		entry.snapshot->frame = sceneFrame;
+		entry.snapshot->drawn = drawn;
+		publicationClaims = entry.snapshot;
+		claimsPublished = index;
+		claimsFresh = true;
 		setSnapshotDirty = false;
 		++setStats.publications;
+		// The pool's readers are the entries alone; one behind the bound is copied whole.
+		setPhaseLog.Trim(1u << 16);
+	}
+
+	void Coordinator::RevokeFromClaims()
+	{
+		if (claimsReference)
+			for (const auto& [geometry, lost] : claimsRevoked)
+				if (const auto it = claimsReference->phases.find(geometry); it != claimsReference->phases.end()) {
+					it->second &= ~lost;
+					if (!it->second)
+						claimsReference->phases.erase(it);
+				}
+		if (claimsRevoked.empty() || claimsPublished >= claimsPool.size()) {
+			claimsRevoked.clear();
+			return;
+		}
+		// Claims shared from the last publication may be held: this one's are a copy of them (rare: a revocation with the set unchanged).
+		if (!claimsFresh) {
+			const std::size_t from = claimsPublished;
+			const std::size_t index = TakeClaimsEntry();
+			auto& entry = claimsPool[index];
+			const auto& source = claimsPool[from];
+			*entry.snapshot = *source.snapshot;
+			entry.cursor = source.cursor;
+			entry.edited = source.edited;
+			publicationClaims = entry.snapshot;
+			claimsPublished = index;
+			claimsFresh = true;
+			++paceStats.claimsWhole;
+		}
+		// Only the revoked claims: this publication's alone (setBuilding is the next commit's to settle; the notes requeue the slots).
+		auto& entry = claimsPool[claimsPublished];
+		auto& phases = entry.snapshot->phases;
+		for (const auto& [geometry, lost] : claimsRevoked) {
+			const auto it = phases.find(geometry);
+			if (it == phases.end())
+				continue;
+			entry.edited.push_back(geometry);
+			it->second &= ~lost;
+			if (!it->second)
+				phases.erase(it);
+		}
+		paceStats.claimsRevoked += claimsRevoked.size();
+		claimsRevoked.clear();
 	}
 
 	Coordinator::SlotDecision Coordinator::DecideSlot(std::uint32_t a_slot, bool a_live, std::uint32_t a_drawn) const
@@ -291,6 +399,8 @@ namespace DCLF::Scene
 			for (std::uint32_t slot = 0; slot < objects; ++slot)
 				markApply(slot);
 			setBuilding->phases.clear();
+			// Every pooled claims entry is copied whole at its next publication.
+			setPhaseLog.Invalidate();
 			setSnapshotDirty = true;
 			for (const std::uint32_t slot : setWaiting)
 				if (slot < setWaitingMark.size())
@@ -412,6 +522,7 @@ namespace DCLF::Scene
 				if (const auto owner = setMemberSlot.find(old); owner != setMemberSlot.end() && owner->second == a_slot) {
 					setMemberSlot.erase(owner);
 					setBuilding->phases.erase(old);
+					NoteSetPhases(old);
 				}
 				setGeometry[a_slot] = nullptr;
 			}
@@ -419,6 +530,7 @@ namespace DCLF::Scene
 				if (const auto* geometry = tables.objectGeometry[a_slot]) {
 					setMemberSlot.insert_or_assign(geometry, a_slot);
 					setBuilding->phases.insert_or_assign(geometry, a_phases);
+					NoteSetPhases(geometry);
 					setGeometry[a_slot] = geometry;
 				}
 			setSnapshotDirty = true;
@@ -479,8 +591,7 @@ namespace DCLF::Scene
 		setStats.partial += setPartialCount;
 		setStats.waiting += setWaiting.size();
 
-		RefreshSetSnapshot();
-		// ApplySet's revocation reads the log from here.
+		// The claims are made at the publication (PublishClaims), from setBuilding. ApplySet's revocation reads the log from here.
 		setCommitCursor.Restart(tablesGeneration);
 		setCommitCursor.Advance(tables.changeLog);
 	}
@@ -542,9 +653,7 @@ namespace DCLF::Scene
 			}
 		}
 		setApply.clear();
-		// The commit's snapshot, minus what left since (LeaveSet).
-		RefreshSetSnapshot();
-		publicationClaims = setSnapshot;
+		// The claims are the last commit's, minus what left since (LeaveSet) and what the revocation takes back: PublishClaims.
 		// RevokeUndrawnClaims checks what changed since the commit (this application's own notes).
 		if (setCommitCursor.Continues(tables.changeLog, tablesGeneration)) {
 			revokeCursor = setCommitCursor;
@@ -569,7 +678,9 @@ namespace DCLF::Scene
 	void Coordinator::RevokeUndrawnClaims()
 	{
 		ZoneScopedN("CS.DCLF.Scene.RevokeUndrawnClaims");
-		std::vector<std::pair<const RE::BSGeometry*, std::uint8_t>> revoked;
+		// Only the revoked claims are kept: RevokeFromClaims takes them out of this publication's claims (no copy of the set here).
+		auto& revoked = claimsRevoked;
+		revoked.clear();
 		auto check = [&](std::uint32_t a_slot, bool a_structure) {
 			if (a_slot >= setPhasesApplied.size() || a_slot >= setGeometryApplied.size())
 				return;
@@ -626,21 +737,6 @@ namespace DCLF::Scene
 		structureChanged.clear();
 		revokeCursor.Restart(tablesGeneration);
 		revokeCursor.Advance(tables.changeLog);
-		if (revoked.empty())
-			return;
-		// Remove them from the publication's claims (CommitSet's snapshot is untouched; the notes requeue the slots).
-		if (publicationClaims) {
-			auto snapshot = std::make_shared<SetSnapshot>(*publicationClaims);
-			for (const auto& [geometry, lost] : revoked) {
-				const auto it = snapshot->phases.find(geometry);
-				if (it == snapshot->phases.end())
-					continue;
-				it->second &= ~lost;
-				if (!it->second)
-					snapshot->phases.erase(it);
-			}
-			publicationClaims = std::move(snapshot);
-		}
 		for (const auto& [geometry, lost] : revoked) {
 			++revokedGeometries;
 			if (lost & kSetMain) {
@@ -648,6 +744,8 @@ namespace DCLF::Scene
 				publicationLeft.push_back(geometry);
 			}
 		}
+		// Out of the publication's claims (PublishClaims made them before the revocation's LeaveSet writes, which the next one replays).
+		RevokeFromClaims();
 	}
 
 	void Coordinator::PublishScene()
@@ -655,9 +753,10 @@ namespace DCLF::Scene
 		ZoneScopedN("CS.DCLF.Scene.PublishScene");
 		// Apply the committed set and revoke what cannot be drawn, so the publication draws exactly what it claims.
 		ApplySet();
+		PublishClaims();
 		RevokeUndrawnClaims();
-		// Lookups for these tables, against the newest catalog, published alongside them.
-		ResolveLookups();
+		// The lookups are the pass's (ResolveLookups before the commit judged readiness by them): a second resolve here could take a newer
+		// catalog or shadow inputs than the commit judged.
 		PublicationDeltas deltas;
 		TakeDeltas(deltas);
 		PublishTables();
@@ -743,6 +842,8 @@ namespace DCLF::Scene
 		// Latest wins; none keeps the last. Once a pass, at its start, so its globals and inputs are one frame's.
 		if (!channels.frameInputs.TakeInto(sceneInputs))
 			return;
+		// The frame's own pass: it publishes whatever it changed (publication pacing, NoteScenePassDone's gate).
+		passTookFrameInputs = true;
 		sceneFrame = sceneInputs.frame;
 		// A classification toggle or the feature coming back: drop every cached verdict before the pass reads one.
 		if (sceneInputs.verdictsGeneration != verdictsApplied) {
@@ -766,7 +867,8 @@ namespace DCLF::Scene
 
 	void Coordinator::RunSceneWork(bool a_task)
 	{
-		// One pass (events, walk, joins, commit, publication), so a record bound in it is committed and published in it. The pump runs
+		// One pass (events, walk, joins, commit, publication), so a record bound in it is committed in it and published with it or the next
+		// publishing pass (PublicationDue). The pump runs
 		// it whenever a producer wakes it, any number of times a frame; PrimaryCull notes its events drop are held (primaryNotes), and
 		// released references go back at Present.
 		inSceneTask = a_task;
@@ -805,8 +907,7 @@ namespace DCLF::Scene
 		// Technique rows to the pass's sample (a witness: a second pass of the frame finds nothing moved), before the joins use them.
 		RefreshTechniqueRows();
 		RefreshMaterialRecords();
-		UpdateMaterialBindings();
-		UpdateSharedBindings();
+		// The bindings are made once, after the joins (nothing before the commit reads them).
 		BuildFrame(Phase::Scene);
 		// The joins, in the same pass; members they drop from PrimaryCull are held until the publication.
 		holdLostMembers = true;
@@ -817,7 +918,7 @@ namespace DCLF::Scene
 			MakeNewPipelineConstants();
 			UpdateMaterialBindings();
 			UpdateSharedBindings();
-			// The lookups the commit judges readiness by.
+			// The lookups the commit judges readiness by, and the publication carries (one resolve a pass).
 			ResolveLookups();
 		}
 		{
@@ -826,11 +927,38 @@ namespace DCLF::Scene
 			CommitSet();
 		}
 		{
-			// Only when something changed; the snapshot builder coalesces publications made meanwhile (latest wins, deltas kept).
+			// Only when something changed, and paced by its consumer (PublicationDue): a publication the snapshot builder has not taken
+			// would only be replaced in its slot, so the pass defers, and its commit's applications, deltas and log entries ride the next.
 			DCLF_SCENE_PART(Publish, "CS.DCLF.Scene.Publish");
+			auto& pace = paceStats;
+			++pace.passes;
+			if (sceneFrame != pace.lastFrame) {
+				pace.lastFrame = sceneFrame;
+				++pace.frames;
+				pace.passesThisFrame = pace.publishedThisFrame = 0;
+			}
+			pace.maxPasses = (std::max)(pace.maxPasses, ++pace.passesThisFrame);
 			if (PublicationNeeded()) {
-				PublishScene();
-				NotePublished();
+				if (PublishReason why{}; PublicationDue(a_task, why)) {
+					const std::uint32_t folded = std::exchange(passesDeferred, 0u);
+					// The paced parity: a publication that folded deferred passes in, against the coordinator's whole (claims copied whole
+					// and revoked as before the replay, the tables themselves).
+					pacedCheckDue = folded && Policy::CheckPacedPublication(pacedPublications + 1);
+					pacedPublications += folded ? 1u : 0u;
+					PublishScene();
+					NotePublished();
+					++pace.published;
+					++pace.byReason[static_cast<std::size_t>(why)];
+					pace.folded += folded;
+					pace.maxPublished = (std::max)(pace.maxPublished, ++pace.publishedThisFrame);
+					if (std::exchange(pacedCheckDue, false) && publishedTables && publicationClaims)
+						CheckPacedPublication(*publishedTables, *publicationClaims);
+					claimsReference.reset();
+				} else {
+					++passesDeferred;
+					passDeferred = true;
+					++pace.deferred;
+				}
 			}
 		}
 		holdLostMembers = false;
@@ -1039,10 +1167,27 @@ namespace DCLF::Scene
 			a_column(a_left.layerBase, a_right.layerBase, kNoObjectSlot);
 			a_column(a_left.layerOf, a_right.layerOf, kNoObjectSlot);
 		};
-		// Not published: the coordinator's alone.
+		// Not published: the coordinator's alone - its walk stamps and templates, the slot tables' reference counts and free lists, the
+		// writers' scratch (shadow texture transitions, freed face streams, the wetness index the frame keeps from the log's changes), and
+		// what is retiring. No reader of a publication reads them; a publication's stay as they were made (empty).
 		auto unpublished = [](Tables& a_left, Tables& a_right, auto&& a_column) {
 			a_column(a_left.objectSeen, a_right.objectSeen);
 			a_column(a_left.geometryTemplate, a_right.geometryTemplate);
+			a_column(a_left.geometrySlots, a_right.geometrySlots);
+			a_column(a_left.pipelineSlots, a_right.pipelineSlots);
+			a_column(a_left.materialSlots, a_right.materialSlots);
+			a_column(a_left.geometryLastUsed, a_right.geometryLastUsed);
+			a_column(a_left.objectFree, a_right.objectFree);
+			a_column(a_left.boneFree, a_right.boneFree);
+			a_column(a_left.boneFreeOther, a_right.boneFreeOther);
+			a_column(a_left.extraFree, a_right.extraFree);
+			a_column(a_left.faceStreamFree, a_right.faceStreamFree);
+			a_column(a_left.faceStreamsReleased, a_right.faceStreamsReleased);
+			a_column(a_left.actorWetness, a_right.actorWetness);
+			a_column(a_left.actorWetnessChanges, a_right.actorWetnessChanges);
+			a_column(a_left.shadowTextureSeen, a_right.shadowTextureSeen);
+			a_column(a_left.shadowTextureChanges, a_right.shadowTextureChanges);
+			a_column(a_left.retiring, a_right.retiring);
 		};
 		// Covered by the geometry log (geometryLastUsed is copied whole).
 		auto geometryColumns = [](Tables& a_left, Tables& a_right, auto&& a_column) {
@@ -1062,7 +1207,7 @@ namespace DCLF::Scene
 		auto heldOut = [&](Tables& a_left, Tables& a_right) {
 			loggedColumns(a_left, a_right, [](auto& a_x, auto& a_y) { a_x.swap(a_y); });
 			sidedColumns(a_left, a_right, [](auto& a_x, auto& a_y, auto) { a_x.swap(a_y); });
-			unpublished(a_left, a_right, [](auto& a_x, auto& a_y) { a_x.swap(a_y); });
+			unpublished(a_left, a_right, [](auto& a_x, auto& a_y) { std::swap(a_x, a_y); });
 			pipelineFamily(a_left, a_right, [](auto& a_x, auto& a_y) { a_x.swap(a_y); });
 			constantsFamily(a_left, a_right, [](auto& a_x, auto& a_y) { std::swap(a_x, a_y); });
 			treeFamily(a_left, a_right, [](auto& a_x, auto& a_y) { std::swap(a_x, a_y); });
@@ -1070,6 +1215,8 @@ namespace DCLF::Scene
 			geometryColumns(a_left, a_right, [](auto& a_x, auto& a_y) { a_x.swap(a_y); });
 			a_left.extraRows.swap(a_right.extraRows);
 			a_left.materials.swap(a_right.materials);
+			a_left.materialVersion.swap(a_right.materialVersion);
+			a_left.materialFrameVersion.swap(a_right.materialFrameVersion);
 			std::swap(a_left.changeLog, a_right.changeLog);
 			std::swap(a_left.geometryLog, a_right.geometryLog);
 			std::swap(a_left.materialLog, a_right.materialLog);
@@ -1095,9 +1242,9 @@ namespace DCLF::Scene
 		const bool keepFadeRoots = tablesPoolReplayable[index] && snapshot.fadeRootsStamp == tables.fadeRootsStamp;
 		const bool keepConstants = tablesPoolReplayable[index] && snapshot.constantsStamp == tables.constantsStamp;
 		const bool keepPipelines = tablesPoolReplayable[index] && snapshot.pipelinesStamp == tables.pipelinesStamp;
-		std::vector<std::uint32_t> recordVersions, recordFrameVersions;
-		recordVersions.swap(snapshot.materialVersion);
-		recordFrameVersions.swap(snapshot.materialFrameVersion);
+		// The material versions are held out with the records (replayed by the material log, or compared below); none are trusted after
+		// a whole copy of the objects.
+		bool versionsKnown = tablesPoolReplayable[index] != 0;
 		{
 			// Swap the held-out members aside on both (restored however the copy ends), copy the rest whole.
 			Tables snapshotHeld, tablesHeld;
@@ -1112,7 +1259,9 @@ namespace DCLF::Scene
 			heldOut(snapshot, snapshotHeld);
 		}
 		const auto restEnd = std::chrono::steady_clock::now();
-		publication.restMs += std::chrono::duration<double, std::milli>(restEnd - start).count();
+		const double restMs = std::chrono::duration<double, std::milli>(restEnd - start).count();
+		publication.restMs += restMs;
+		paceStats.restMs += restMs;
 
 		const std::size_t objectSlots = tables.objects.size();
 		publication.objectSlots += objectSlots;
@@ -1173,8 +1322,7 @@ namespace DCLF::Scene
 			snapshot.publicationLog = tables.publicationLog;
 			snapshot.geometryLog = tables.geometryLog;
 			snapshot.materialLog = tables.materialLog;
-			recordVersions.clear();
-			recordFrameVersions.clear();
+			versionsKnown = false;
 		}
 		// Extras rows by the blocks the block log names.
 		if (replayExtras) {
@@ -1226,21 +1374,30 @@ namespace DCLF::Scene
 		const std::size_t slots = tables.materials.size();
 		snapshot.materials.resize(slots);
 		if (replayMaterials) {
+			// The versions with their records (a grown slot's are 0 until its first write, which the log names).
+			snapshot.materialVersion.resize(slots, 0);
+			snapshot.materialFrameVersion.resize(slots, 0);
 			std::vector<std::uint8_t> marks(slots, 0);
 			for (const std::uint32_t slot : tables.materialLog.From(materialPosition)) {
 				if (slot >= slots || std::exchange(marks[slot], std::uint8_t{ 1 }))
 					continue;
 				snapshot.materials[slot] = tables.materials[slot];
+				snapshot.materialVersion[slot] = tables.materialVersion[slot];
+				snapshot.materialFrameVersion[slot] = tables.materialFrameVersion[slot];
 				++publication.materialsReplayed;
 			}
 		} else {
+			const auto& recordVersions = snapshot.materialVersion;
+			const auto& recordFrameVersions = snapshot.materialFrameVersion;
 			for (std::size_t slot = 0; slot < slots; ++slot) {
-				if (slot < recordVersions.size() && recordVersions[slot] == tables.materialVersion[slot] && slot < recordFrameVersions.size() &&
+				if (versionsKnown && slot < recordVersions.size() && recordVersions[slot] == tables.materialVersion[slot] && slot < recordFrameVersions.size() &&
 					recordFrameVersions[slot] == tables.materialFrameVersion[slot])
 					continue;
 				snapshot.materials[slot] = tables.materials[slot];
 				++publication.materialsReplayed;
 			}
+			snapshot.materialVersion = tables.materialVersion;
+			snapshot.materialFrameVersion = tables.materialFrameVersion;
 		}
 		publication.materialSlots += slots;
 
@@ -1254,5 +1411,74 @@ namespace DCLF::Scene
 		const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		publication.ms += ms;
 		publication.maxMs = std::max(publication.maxMs, ms);
+	}
+
+	void Coordinator::CheckPacedPublication(const Tables& a_published, const SetSnapshot& a_claims)
+	{
+		// A publication that folded deferred passes in must equal the one an every-pass publication would have made at this pass: its
+		// tables the coordinator's (by the columns every reader builds from, the log ends and the families' stamps), its claims the set
+		// copied whole and revoked (claimsReference).
+		auto& p = paceStats;
+		++p.parityChecks;
+		std::string first;
+		const auto& t = tables;
+		auto differ = [&](std::string a_what) {
+			if (first.empty())
+				first = std::move(a_what);
+		};
+		if (a_published.objects.size() != t.objects.size())
+			differ(fmt::format("{} object slots against {}", a_published.objects.size(), t.objects.size()));
+		else
+			for (std::uint32_t slot = 0; slot < t.objects.size() && first.empty(); ++slot)
+				if (const auto causes = SceneTables::CausesBetween(a_published.ColumnsOf(slot), t.ColumnsOf(slot)))
+					differ(fmt::format("object slot {} (causes {:#x})", slot, causes));
+		if (a_published.setPhases != t.setPhases || a_published.decalOrdinal != t.decalOrdinal || a_published.layerBase != t.layerBase || a_published.layerOf != t.layerOf)
+			differ("a column replayed by slot (set phases, decal ordinals, layer links)");
+		if (a_published.materials.size() != t.materials.size() || a_published.materialVersion != t.materialVersion || a_published.materialFrameVersion != t.materialFrameVersion)
+			differ("the material versions");
+		else
+			for (std::size_t slot = 0; slot < t.materials.size() && first.empty(); ++slot)
+				if (!(a_published.materials[slot] == t.materials[slot]))
+					differ(fmt::format("material slot {}", slot));
+		if (a_published.geometries.size() != t.geometries.size())
+			differ("the geometry slots' count");
+		else
+			for (std::size_t slot = 0; slot < t.geometries.size() && first.empty(); ++slot)
+				if (std::memcmp(&a_published.geometries[slot], &t.geometries[slot], sizeof(GeometryBuffers)) != 0 || a_published.geometrySlotKey[slot] != t.geometrySlotKey[slot])
+					differ(fmt::format("geometry slot {}", slot));
+		if (a_published.pipelines != t.pipelines || a_published.pipelineBindingVersion != t.pipelineBindingVersion)
+			differ("the pipeline family");
+		if (a_published.changeLog.End() != t.changeLog.End() || a_published.geometryLog.End() != t.geometryLog.End() || a_published.materialLog.End() != t.materialLog.End() ||
+			a_published.extrasBlockLog.End() != t.extrasBlockLog.End() || a_published.treesStamp != t.treesStamp || a_published.fadeRootsStamp != t.fadeRootsStamp ||
+			a_published.constantsStamp != t.constantsStamp || a_published.pipelinesStamp != t.pipelinesStamp || a_published.extraRows != t.extraRows)
+			differ("a log's end, a family's stamp or the extras rows");
+		if (!first.empty()) {
+			++p.parityTables;
+			if (p.parityFirst.empty())
+				p.parityFirst = fmt::format("tables: {} (publication {})", first, publicationSequence);
+		}
+		if (!claimsReference)
+			return;
+		// The first difference by key, both ways (a member only one side holds shows 0 on the other), then the drawn phases.
+		std::string claimsFirst;
+		for (const auto& [geometry, phases] : claimsReference->phases)
+			if (const std::uint8_t published = a_claims.PhasesOf(geometry); published != phases) {
+				claimsFirst = fmt::format("geometry {} published {:#x}, made whole {:#x}", static_cast<const void*>(geometry), published, phases);
+				break;
+			}
+		if (claimsFirst.empty())
+			for (const auto& [geometry, phases] : a_claims.phases)
+				if (claimsReference->phases.find(geometry) == claimsReference->phases.end()) {
+					claimsFirst = fmt::format("geometry {} published {:#x}, made whole 0x0", static_cast<const void*>(geometry), phases);
+					break;
+				}
+		if (claimsFirst.empty() && claimsReference->drawn != a_claims.drawn)
+			claimsFirst = fmt::format("drawn phases published {:#x}, made whole {:#x}", a_claims.drawn, claimsReference->drawn);
+		if (!claimsFirst.empty()) {
+			++p.parityClaims;
+			if (p.parityFirst.empty())
+				p.parityFirst = fmt::format("claims: {} ({} members against {} made whole; publication {})", claimsFirst, a_claims.phases.size(),
+					claimsReference->phases.size(), publicationSequence);
+		}
 	}
 }

@@ -9,6 +9,8 @@
 #include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
+#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 
 #include <cmath>
 #include <optional>
@@ -30,6 +32,56 @@ namespace DCLF::Scene
 		} signatureWitness;
 		constexpr std::uint32_t kSignatureParityOffset = 31;
 		constexpr std::uint64_t kSignatureReportPasses = 600;
+
+		/**
+		 * @brief DrainMaterialCaptures' deduplication's parity (CS_DCLF_PERSISTENT_PARITY, on its passes, kMaterialDedupParityOffset): the
+		 * slots of every material whose capture was deduplicated, evaluated as a rewrite would; a record that rewrite would change is a
+		 * capture the deduplication lost. Diagnostics only (scene lane).
+		 */
+		Diagnostics::ParityCounter materialDedupParity;
+	}
+
+	bool Coordinator::PrepareMaterials(std::string_view a_zone, std::size_t a_count, const std::function<void(std::size_t, std::size_t)>& a_body)
+	{
+		// Pure chunks over frozen inputs (the held captures, the pass's sources passed in, the records read-only or each chunk's own
+		// slots); the lane applies their results after, in order.
+		const bool pool = FanoutMode(a_count) == 2;
+		auto chunk = [&](std::size_t a_begin, std::size_t a_end, bool a_worker) {
+			ShardScope scope(*this, a_worker);
+			a_body(a_begin, a_end);
+		};
+		if (pool) {
+			SceneScheduler::Executor().ParallelFor(a_zone, a_count, kFanoutGrain, [&](std::size_t a_begin, std::size_t a_end) { chunk(a_begin, a_end, true); });
+			return true;
+		}
+		for (std::size_t begin = 0; begin < a_count; begin += kFanoutGrain)
+			chunk(begin, std::min(a_count, begin + kFanoutGrain), false);
+		return false;
+	}
+
+	void Coordinator::EvaluateMaterial(const MaterialPort::MaterialSnapshot& a_snapshot, std::uint32_t a_pass, const MaterialPort::MaterialFrame& a_sources,
+		std::uint32_t a_slot, MaterialEvaluation& a_out) const
+	{
+		using Outcome = MaterialEvaluation::Outcome;
+		a_out.record = MaterialRecord{};
+		a_out.same = false;
+		if (!MaterialPort::Evaluate(a_snapshot, a_pass, a_sources, a_out.record)) {
+			// An input the frame's sources do not have yet (Advanced Skin's textures for a key it has not set up): again with a later
+			// pass's. Else a class the port does not cover.
+			a_out.outcome = !MaterialPort::FeatureHooksCovered(a_snapshot, a_sources.feature) ? Outcome::Retry : Outcome::Uncovered;
+			return;
+		}
+		a_out.outcome = Outcome::Made;
+		// The character light's t11 view is the frame's, never the record's.
+		MaterialSources::StripFrameViews(a_out.record, a_pass);
+		if (a_slot == kNoMaterialSlot)
+			return;
+		// A rewrite: its frame parts (the frame components, TexcoordOffset) are kept by the signature's and the transform watch's writes,
+		// so only the material's own values are compared and rewritten.
+		const auto& held = tables.materials[a_slot];
+		MaterialSources::CopyFrameComponents(held, a_out.record, a_pass);
+		MaterialSources::KeepUnreadFloats(held, a_out.record);
+		a_out.same = a_out.record == held;
 	}
 
 	void Coordinator::RefreshMaterialRecords()
@@ -43,66 +95,131 @@ namespace DCLF::Scene
 		RewriteCapturedMaterials();
 		RefreshMaterialSignatures();
 		RefreshMaterialTransforms();
+		// The captures' deduplication and the pool's share (CS_DCLF_STATS), with the parities where they ran: once per report window (the
+		// pass's frame in a later one; the coordinator's clock may skip frame numbers), whatever the passes a frame.
+		auto& r = materialRecordStats;
+		auto& s = materialSnapshotStats;
+		const std::uint32_t window = sceneFrame / Reports::kInterval;
+		const bool parityRan = materialDedupParity.checks || sharedBindings.work.parity.checks || lookupsResolve.pipelineParity.checks;
+		if (window != materialReportWindow && (Diagnostics::Observe().stats || parityRan)) {
+			materialReportWindow = window;
+			logger::info("[DCLF] material captures: {} deduplicated ({} transforms only), {} relisted; evaluations pooled {} in {} rounds, joins' {} prepared "
+						 "{} inline; watches skipped {} dropped {}; applications pooled {}; dedup parity {} checks, {} differ{}",
+				s.deduped, s.transformsOnly, s.relisted, r.evaluationsPooled, r.poolRounds, r.joinPrepared, r.joinInline, r.watchesSkipped, r.watchesDropped,
+				r.appliedPooled, materialDedupParity.checks, materialDedupParity.mismatches, materialDedupParity.Verdict(true));
+			// The bindings' and lookups' change sets: owner blocks sealed or shared, waiters deduplicated, masks looked up of those checked
+			// (and full sweeps), Lighting pipeline entries resolved of those witnessed, shadow resolutions skipped; their parities.
+			auto& mw = materialBindings.work;
+			auto& sw = sharedBindings.work;
+			auto& lr = lookupsResolve;
+			logger::info("[DCLF] material bindings: owner blocks sealed {} shared {}, waiters deduplicated {}; masks resolved {} of {} checked, {} sweeps, parity {} "
+						 "checks, {} differ{}; pipeline lookups resolved {} of {} witnessed, {} sweeps, parity {} checks, {} differ{}; shadow lookups resolved {} skipped {}",
+				mw.sealed, mw.sealShared, mw.waitersDeduped, sw.masksResolved, sw.masksChecked, sw.maskSweeps, sw.parity.checks, sw.parity.mismatches,
+				sw.parity.Verdict(true), lr.pipelinesResolved, lr.pipelinesChecked, lr.pipelineSweeps, lr.pipelineParity.checks, lr.pipelineParity.mismatches,
+				lr.pipelineParity.Verdict(true), lr.shadowResolved, lr.shadowSkipped);
+			s.deduped = s.transformsOnly = s.relisted = 0;
+			r.evaluationsPooled = r.poolRounds = r.joinPrepared = r.joinInline = r.watchesSkipped = r.watchesDropped = r.appliedPooled = 0;
+			materialDedupParity.Reset();
+			mw = {};
+			sw.masksChecked = sw.masksResolved = sw.maskSweeps = 0;
+			sw.parity.Reset();
+			lr.pipelinesChecked = lr.pipelinesResolved = lr.pipelineSweeps = lr.shadowResolved = lr.shadowSkipped = 0;
+			lr.pipelineParity.Reset();
+		}
 	}
 
 	void Coordinator::RewriteCapturedMaterials()
 	{
+		// The lane gathers (slot, held capture) for the materials captured since the last pass; the pool evaluates each slot's record and
+		// compares it with the slot's (read-only); the lane stores the changed ones in slot order.
 		auto& r = materialRecordStats;
 		std::vector<const RE::BSShaderMaterial*> materials = std::exchange(materialsCaptured, {});
 		const std::size_t captured = materials.size();
 		materials.insert(materials.end(), materialRewritesPending.begin(), materialRewritesPending.end());
 		materialRewritesPending.clear();
-		if (materials.empty())
+		std::vector<const RE::BSShaderMaterial*> deduped = std::exchange(materialsDeduped, {});
+		if (materials.empty() && deduped.empty())
 			return;
 		std::sort(materials.begin(), materials.end());
 		materials.erase(std::unique(materials.begin(), materials.end()), materials.end());
 		r.captured += captured;
 		stats.materialWrites = static_cast<std::uint32_t>(captured);
 		const auto& sources = FrameGlobals::Current().material;
-		for (const auto* material : materials) {
-			const auto dependents = materialDependents.find(material);
+		auto& items = materialRewriteItems;
+		items.clear();
+		auto gather = [&](const RE::BSShaderMaterial* a_material, bool a_parity) {
+			const auto held = materialSnapshots.find(a_material);
+			if (held != materialSnapshots.end())
+				held->second.listed = false;
+			const auto dependents = materialDependents.find(a_material);
 			if (dependents == materialDependents.end())
-				continue;  // no slot holds it: a join makes its record from the capture
-			const auto held = materialSnapshots.find(material);
+				return;  // no slot holds it: a join makes its record from the capture
 			if (held == materialSnapshots.end() || !held->second.held)
-				continue;  // let go: no slot has used it for kMaterialSnapshotFrames, and its next capture comes with its next write
-			held->second.frame = sceneFrame;
+				return;  // let go: no slot has used it for kMaterialSnapshotFrames, and its next capture comes with its next write
 			const auto& snapshot = held->second.held->snapshot;
-			WatchMaterialTransforms(material, snapshot);
-			bool retry = false;
-			for (const std::uint32_t slot : dependents->second) {
-				if (slot >= tables.materials.size() || !tables.materialSlots.Alive(slot) || tables.materialSlotKey[slot].first != material)
-					continue;
-				const std::uint32_t pass = tables.materialSlotKey[slot].second;
-				MaterialRecord record;
-				if (!MaterialPort::Evaluate(snapshot, pass, sources, record)) {
-					// An input the frame's sources do not have yet (Advanced Skin's textures for a key it has not set up): again with a
-					// later pass's, the slot keeping its record meanwhile. Else a class the port does not cover (counted).
-					if (!MaterialPort::FeatureHooksCovered(snapshot, sources.feature))
-						retry = true;
-					else
-						++r.uncovered;
-					continue;
+			if (!a_parity) {
+				held->second.frame = sceneFrame;
+				WatchMaterialTransforms(a_material, snapshot);
+			}
+			for (const std::uint32_t slot : dependents->second)
+				if (slot < tables.materials.size() && tables.materialSlots.Alive(slot) && tables.materialSlotKey[slot].first == a_material)
+					items.push_back({ a_material, &snapshot, slot, a_parity });
+		};
+		for (const auto* material : materials)
+			gather(material, false);
+		// The parity's: the deduplicated materials no rewrite covers, evaluated as one would (nothing stored).
+		std::sort(deduped.begin(), deduped.end());
+		deduped.erase(std::unique(deduped.begin(), deduped.end()), deduped.end());
+		for (const auto* material : deduped)
+			if (!std::binary_search(materials.begin(), materials.end(), material))
+				gather(material, true);
+		if (items.empty())
+			return;
+		auto& results = materialRewriteResults;
+		results.resize(items.size());
+		// Each slot once (a slot is one material's), so every result reads a record no other chunk writes, and none is written before the apply.
+		if (PrepareMaterials("CS.DCLF.Scene.MaterialRewritesShards", items.size(), [&](std::size_t a_begin, std::size_t a_end) {
+				for (std::size_t i = a_begin; i < a_end; ++i)
+					EvaluateMaterial(*items[i].snapshot, tables.materialSlotKey[items[i].slot].second, sources, items[i].slot, results[i]);
+			})) {
+			r.evaluationsPooled += items.size();
+			++r.poolRounds;
+		}
+		using Outcome = MaterialEvaluation::Outcome;
+		const RE::BSShaderMaterial* retried = nullptr;  // a material's items are contiguous: retried once
+		for (std::size_t i = 0; i < items.size(); ++i) {
+			const auto& item = items[i];
+			auto& result = results[i];
+			if (item.parity) {
+				if (result.outcome == Outcome::Made)
+					materialDedupParity.Check(result.same, [&] {
+						return fmt::format("material {} slot {} (pass {:#x}): a deduplicated capture's rewrite would change the record", static_cast<const void*>(item.material),
+							item.slot, tables.materialSlotKey[item.slot].second);
+					});
+				continue;
+			}
+			if (result.outcome == Outcome::Retry) {
+				// The slot keeps its record meanwhile; the material is evaluated again with a later pass's sources.
+				if (retried != item.material) {
+					retried = item.material;
+					materialRewritesPending.push_back(item.material);
+					++r.retried;
+					++stats.materialsHeld;
 				}
-				// A record holds no view of the character light's t11; its frame parts (the frame components, TexcoordOffset) are kept
-				// by the signature's and the transform watch's writes: only the material's own values are compared and rewritten.
-				MaterialSources::StripFrameViews(record, pass);
-				MaterialSources::CopyFrameComponents(tables.materials[slot], record, pass);
-				MaterialSources::KeepUnreadFloats(tables.materials[slot], record);
-				NoteMaterialRecord(slot, snapshot);
-				if (record == tables.materials[slot])
-					continue;
-				tables.materials[slot] = record;
-				tables.materialVersion[slot] = ++materialVersions;
-				tables.NoteMaterial(slot);
-				++r.rewritten;
-				++stats.materialsRewritten;
+				continue;
 			}
-			if (retry) {
-				materialRewritesPending.push_back(material);
-				++r.retried;
-				++stats.materialsHeld;
+			if (result.outcome == Outcome::Uncovered) {
+				++r.uncovered;
+				continue;
 			}
+			NoteMaterialRecord(item.slot, *item.snapshot);
+			if (result.same)
+				continue;
+			tables.materials[item.slot] = std::move(result.record);
+			tables.materialVersion[item.slot] = ++materialVersions;
+			tables.NoteMaterial(item.slot);
+			++r.rewritten;
+			++stats.materialsRewritten;
 		}
 	}
 
@@ -185,17 +302,29 @@ namespace DCLF::Scene
 					slots.pop_back();
 					continue;
 				}
-				bool floatsChanged = false;
-				const bool recordChanged = MaterialSources::ApplyFrameComponents(live, tables.materials[slot], tables.materialSlotKey[slot].second, &floatsChanged);
-				if (recordChanged)
-					tables.materialVersion[slot] = ++materialVersions;
-				if (floatsChanged)
-					tables.materialFrameVersion[slot] = ++materialVersions;
-				if (recordChanged || floatsChanged)
-					tables.NoteMaterial(slot);
-				++r.slotsApplied;
 				++i;
 			}
+			// Written in place by chunks (a slot is on one signature's list once), versioned after in list order.
+			auto& items = materialApplyItems;
+			items.resize(slots.size());
+			if (PrepareMaterials("CS.DCLF.Scene.MaterialSignaturesShards", slots.size(), [&](std::size_t a_begin, std::size_t a_end) {
+					for (std::size_t i = a_begin; i < a_end; ++i) {
+						const std::uint32_t slot = slots[i];
+						bool floatsChanged = false;
+						const bool recordChanged = MaterialSources::ApplyFrameComponents(live, tables.materials[slot], tables.materialSlotKey[slot].second, &floatsChanged);
+						items[i] = { slot, 0, static_cast<std::uint8_t>((recordChanged ? 1u : 0u) | (floatsChanged ? 2u : 0u)) };
+					}
+				}))
+				r.appliedPooled += slots.size();
+			for (const auto& item : items) {
+				if (item.changed & 1)
+					tables.materialVersion[item.slot] = ++materialVersions;
+				if (item.changed & 2)
+					tables.materialFrameVersion[item.slot] = ++materialVersions;
+				if (item.changed)
+					tables.NoteMaterial(item.slot);
+			}
+			r.slotsApplied += slots.size();
 		}
 		// The witness's line (CS_DCLF_STATS), with its parity's verdict where it ran.
 		if (w.passes >= kSignatureReportPasses && Diagnostics::Observe().stats) {
@@ -209,38 +338,52 @@ namespace DCLF::Scene
 	void Coordinator::RefreshMaterialTransforms()
 	{
 		// TexcoordOffset: the frame reads one of a material's two buffers (FrameGlobals' textureTransformBuffer, flipped every frame by
-		// Main::Update), and a controller's write captures it (MaterialSources). A material is watched from its capture or keying until two
-		// frames have gone (frames, not passes: the buffer flips once a frame) and both buffers agree; meanwhile its slots take the
-		// frame's buffer.
+		// Main::Update), and a controller's write captures it (MaterialSources). A material is watched from a capture its records may lack
+		// (WatchMaterialTransforms); meanwhile its slots take the frame's buffer. Once both buffers agree, the flip moves nothing: after this
+		// application every slot holds the value, and the watch lets it go (a later capture watches it again).
 		auto& r = materialRecordStats;
 		const std::uint32_t buffer = FrameGlobals::Current().material.vanilla.textureTransformBuffer & 1;
 		r.transformsWatched += transformWatch.size();
-		for (auto it = transformWatch.begin(); it != transformWatch.end();) {
-			const auto* material = it->first;
-			const auto& watch = it->second;
+		if (transformWatch.empty())
+			return;
+		// Each watched material's slots (disjoint: a slot is one material's), written in place by chunks and versioned after, in order.
+		auto& items = materialApplyItems;
+		items.clear();
+		std::vector<const RE::BSShaderMaterial*> dropped;
+		for (std::uint32_t w = 0; w < transformWatch.size(); ++w) {
+			const auto& [material, watch] = *(transformWatch.begin() + w);
 			const auto dependents = materialDependents.find(material);
 			if (dependents == materialDependents.end()) {
-				it = transformWatch.erase(it);
+				dropped.push_back(material);
 				continue;
 			}
-			for (const std::uint32_t slot : dependents->second) {
-				if (slot >= tables.materials.size() || !tables.materialSlots.Alive(slot) || tables.materialSlotKey[slot].first != material)
-					continue;
-				if (MaterialSources::ApplyTextureTransform(watch.transforms, buffer, tables.materials[slot])) {
-					tables.materialFrameVersion[slot] = ++materialVersions;
-					tables.NoteMaterial(slot);
-					++r.transformsWritten;
-				}
-			}
-			if (sceneFrame - watch.frame > 2 && watch.transforms.Agree())
-				it = transformWatch.erase(it);
-			else
-				++it;
+			for (const std::uint32_t slot : dependents->second)
+				if (slot < tables.materials.size() && tables.materialSlots.Alive(slot) && tables.materialSlotKey[slot].first == material)
+					items.push_back({ slot, w, 0 });
+			if (watch.transforms.Agree())
+				dropped.push_back(material);
 		}
+		if (PrepareMaterials("CS.DCLF.Scene.MaterialTransformsShards", items.size(), [&](std::size_t a_begin, std::size_t a_end) {
+				for (std::size_t i = a_begin; i < a_end; ++i) {
+					const auto& watch = (transformWatch.begin() + items[i].signature)->second;
+					items[i].changed = static_cast<std::uint8_t>(MaterialSources::ApplyTextureTransform(watch.transforms, buffer, tables.materials[items[i].slot]) ? 2u : 0u);
+				}
+			}))
+			r.appliedPooled += items.size();
+		for (const auto& item : items)
+			if (item.changed) {
+				tables.materialFrameVersion[item.slot] = ++materialVersions;
+				tables.NoteMaterial(item.slot);
+				++r.transformsWritten;
+			}
+		for (const auto* material : dropped)
+			transformWatch.erase(material);
+		r.watchesDropped += dropped.size();
 	}
 
 	void Coordinator::NoteMaterialRecord(std::uint32_t a_slot, const MaterialPort::MaterialSnapshot& a_snapshot)
 	{
+		// The material's transforms are its writer's (WatchMaterialTransforms, once per material).
 		if (a_slot >= tables.materialSlotKey.size())
 			return;
 		const auto [material, pass] = tables.materialSlotKey[a_slot];
@@ -248,10 +391,8 @@ namespace DCLF::Scene
 			return;
 		// The Effect port: an effect record has no signature-sourced component (its pass descriptor's bits are not Lighting's), only its
 		// texture transforms.
-		if (a_slot < tables.materials.size() && tables.materials[a_slot].kind == kMaterialKindEffect) {
-			WatchMaterialTransforms(material, a_snapshot);
+		if (a_slot < tables.materials.size() && tables.materials[a_slot].kind == kMaterialKindEffect)
 			return;
-		}
 		const std::uint32_t signature = MaterialSources::Signature(pass);
 		auto& entry = materialSignatures[signature];
 		if (materialSignatureListed.size() <= a_slot)
@@ -276,14 +417,21 @@ namespace DCLF::Scene
 			entry.probeValid = true;
 			entry.probeFailed = false;
 		}
-		WatchMaterialTransforms(material, a_snapshot);
 	}
 
-	void Coordinator::WatchMaterialTransforms(const RE::BSShaderMaterial* a_material, const MaterialPort::MaterialSnapshot& a_snapshot)
+	void Coordinator::WatchMaterialTransforms(const RE::BSShaderMaterial* a_material, const MaterialPort::MaterialSnapshot& a_snapshot, bool a_recordsCurrent)
 	{
-		auto& watch = transformWatch[a_material];
-		watch.transforms = MaterialSources::TextureTransformsOf(a_snapshot);
-		watch.frame = sceneFrame;
+		const auto transforms = MaterialSources::TextureTransformsOf(a_snapshot);
+		auto it = transformWatch.find(a_material);
+		// A join's new record holds this frame's buffer, and with the two agreeing the flip never moves it: nothing to follow.
+		if (it == transformWatch.end() && a_recordsCurrent && transforms.Agree()) {
+			++materialRecordStats.watchesSkipped;
+			return;
+		}
+		if (it == transformWatch.end())
+			it = transformWatch.try_emplace(a_material).first;
+		it->second.transforms = transforms;
+		it->second.frame = sceneFrame;
 	}
 
 	void Coordinator::ResetMaterialRecords()

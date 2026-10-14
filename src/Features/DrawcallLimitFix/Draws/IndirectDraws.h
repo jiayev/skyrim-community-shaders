@@ -152,6 +152,12 @@ namespace DCLF
 		 */
 		void NoteScenePassDone(std::uint32_t a_frame);
 		/**
+		 * @brief Any thread: the sequence of the newest publication the snapshot builder has taken from its work slot (0: none; ~0 without a
+		 * builder). The coordinator publishes again only once the last is taken, or for the frame's pass (publication pacing): one posted
+		 * meanwhile would only replace it in the slot.
+		 */
+		std::uint64_t SnapshotWorkTaken() const;
+		/**
 		 * @brief Render thread, the frame's start (a publication installed): the age of the oldest event it and the skipped
 		 * publications carried (ms and frames), for the snapshot report.
 		 */

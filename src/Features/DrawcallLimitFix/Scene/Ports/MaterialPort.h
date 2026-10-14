@@ -111,6 +111,19 @@ namespace DCLF
 		 */
 		void PushCapture(const RE::BSShaderMaterial* a_material);
 
+		/** @brief What separates two captures of one material (SnapshotChangeOf). */
+		enum class SnapshotChange : std::uint8_t
+		{
+			None,        // the same fields and views (the reference count aside)
+			Transforms,  // only the two texture-transform buffers (BSShaderMaterial +0xc..+0x2c, TextureTransformsOf's fields)
+			Fields,      // anything else
+		};
+		/**
+		 * @brief Pure: how a_new differs from a_held, two captures of the same material. The reference count (+0x8) is left out: every
+		 * capture moves it. A record's only input from the transform buffers is TexcoordOffset, the transform watch's.
+		 */
+		SnapshotChange SnapshotChangeOf(const MaterialSnapshot& a_held, const MaterialSnapshot& a_new);
+
 		/** @brief Render thread, the frame's start: the frame's sources. */
 		MaterialFrame SampleFrame();
 

@@ -28,4 +28,6 @@ add_executable(DclfKeptStateTests KeptStateTests.cpp ../../src/Features/Drawcall
 target_compile_features(DclfKeptStateTests PRIVATE cxx_std_20)
 target_sources(DclfKeptStateTests PRIVATE ../../src/Features/DrawcallLimitFix/Scene/Model/ActorValueIndex.h)
 target_include_directories(DclfKeptStateTests PRIVATE ../../src)
+find_package(Threads REQUIRED)
+target_link_libraries(DclfKeptStateTests PRIVATE Threads::Threads)  # the concurrent writes after PrepareWrites
 add_test(NAME DclfKeptStateTests COMMAND DclfKeptStateTests)

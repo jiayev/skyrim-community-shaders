@@ -1,6 +1,7 @@
 // The coordinator's scene pump: the scene passes run on the scene lane, one at a time, whenever a producer wakes the pump
 // (WakeScenePass, any thread); the frame never kicks or joins them, and the render thread serves what they ask of it at the frame's
-// start. Also the pass's bookkeeping and whether a pass publishes (PublicationNeeded).
+// start. Also the pass's bookkeeping, whether a pass publishes (PublicationNeeded) and when (PublicationDue: paced by the snapshot builder's
+// take, and the frame's own pass).
 
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
@@ -189,6 +190,10 @@ namespace DCLF::Scene
 		// A wake from here on is the next pass's: the sources taken before anything is (WakeScenePassBits' fence pairs with this one).
 		const std::uint32_t sources = scenePassReasons.exchange(0, std::memory_order_acq_rel);
 		std::atomic_thread_fence(std::memory_order_seq_cst);
+		// What the pass's publication pacing reads (PublicationDue): its sources, and whether it takes new frame inputs.
+		passSources = sources;
+		passTookFrameInputs = false;
+		passDeferred = false;
 		const std::uint64_t publishedBefore = pumpStats.published;
 		const auto start = std::chrono::steady_clock::now();
 		const std::uint64_t eventsOnlyBefore = pumpStats.eventsOnly;
@@ -222,7 +227,7 @@ namespace DCLF::Scene
 		++ps.passes;
 		ps.inlinePasses += a_inline ? 1 : 0;
 		// The passes each source woke, and those of them that published nothing (a pass counts under every source it took).
-		const bool changed = ps.published != publishedBefore;
+		const bool changed = ps.published != publishedBefore || passDeferred;
 		for (std::uint32_t s = 0; s < static_cast<std::uint32_t>(SceneWake::Count); ++s)
 			if ((sources >> s) & 1u) {
 				++ps.bySource[s];
@@ -251,6 +256,51 @@ namespace DCLF::Scene
 		// The coordinator's report lines, when its frame crossed into a new window.
 		Reports::ScenePassEnd(*this, sceneFrame);
 		ReportMoverGate();
+		ReportPublicationPacing();
+	}
+
+	void Coordinator::ReportPublicationPacing()
+	{
+		// Once the pass's frame is in a later report window, as the mover gate's.
+		const std::uint32_t window = sceneFrame / Reports::kInterval;
+		if (window == paceWindow)
+			return;
+		paceWindow = window;
+		auto& p = paceStats;
+		if (p.passes) {
+			const double frames = static_cast<double>((std::max)(p.frames, 1u));
+			const double publications = static_cast<double>((std::max)(p.published, std::uint64_t(1)));
+			const auto reason = [&](PublishReason a_why) { return p.byReason[static_cast<std::size_t>(a_why)]; };
+			logger::info("[DCLF] publication pacing (W3: a publication only once the snapshot builder took the last, or for the frame's pass): {} full passes over {} frames "
+						 "({:.2f} a frame, max {}), {} publications ({:.2f} a frame, max {}; {} the frame's pass, {} the last taken, {} inline, {} the first), {} passes deferred "
+						 "({} folded into a later publication); claims {} replayed ({:.1f} keys each), {} copied whole, {} shared again, {} revoked; tables' whole-copied rest "
+						 "{:.3f} ms a publication; paced parity {} checks, {} tables differ, {} claims differ{}{}",
+				p.passes, p.frames, static_cast<double>(p.passes) / frames, p.maxPasses, p.published, static_cast<double>(p.published) / frames, p.maxPublished,
+				reason(PublishReason::Frame), reason(PublishReason::Taken), reason(PublishReason::Inline), reason(PublishReason::First), p.deferred, p.folded,
+				p.claimsReplayed, static_cast<double>(p.claimsKeys) / static_cast<double>((std::max)(p.claimsReplayed, std::uint64_t(1))), p.claimsWhole,
+				p.claimsShared, p.claimsRevoked, p.restMs / publications, p.parityChecks, p.parityTables, p.parityClaims,
+				!p.parityChecks ? "" : (p.parityTables || p.parityClaims) ? " <- PACED PUBLICATION DIFFERS; first: " : " <- OK", p.parityFirst);
+		}
+		const std::uint32_t lastFrame = p.lastFrame;
+		p = {};
+		p.lastFrame = lastFrame;
+	}
+
+	bool Coordinator::PublicationDue(bool a_task, PublishReason& a_why) const
+	{
+		// The first publication; the parities' inline pass (once a frame, where its observers read); the frame's own pass, whose
+		// publication the builder waits for (NoteScenePassDone: PublishPayload holds a sealed snapshot until the pass of the frame that
+		// took the last one has ended); or the builder took the last one. Otherwise one posted now would only replace the last in the work
+		// slot: the pass defers, and everything it changed stays pending (the set's applications, the deltas, the logs the snapshot replays).
+		if (!publishedKeyValid || !publicationSequence)
+			return a_why = PublishReason::First, true;
+		if (!a_task)
+			return a_why = PublishReason::Inline, true;
+		if (passTookFrameInputs || (passSources & (1u << static_cast<std::uint32_t>(SceneWake::FrameInput))))
+			return a_why = PublishReason::Frame, true;
+		if (IndirectDraws::Get().SnapshotWorkTaken() >= publicationSequence)
+			return a_why = PublishReason::Taken, true;
+		return false;
 	}
 
 	void Coordinator::ReportMoverGate()

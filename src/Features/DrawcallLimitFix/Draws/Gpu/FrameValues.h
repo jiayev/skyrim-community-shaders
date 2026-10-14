@@ -21,15 +21,16 @@ namespace DCLF
 	 * DCLF's pool while the frame runs, and waited for by the GPU, never by the render thread. The scene's tables hold none of
 	 * them: these are the only ones drawn with.
 	 *
-	 * Each frame the render thread kicks one producer (Kick, at the scene's start) with the newest placement plan the walk made
-	 * (PlacementPlan: the whole placement set, made only when it changes). The producers run one after another on the preparation pool:
-	 * - they sample the plan's movers and roots that moved, and the slots its walk wrote in full (once), across the pool, under
+	 * Each frame the render thread kicks one producer (Kick, at the scene's start) with the placement plans the walks made since the last
+	 * (PlacementPlan: a delta of the placement set, made only when it changes), which the producer applies in order onto the set it keeps
+	 * (its movers and roots at stable indices). The producers run one after another on the preparation pool:
+	 * - they sample the kept movers and roots that moved, and the slots the walks wrote in full (once), across the pool, under
 	 *   engine-read leases: a skin's palette after the engine's palette update (which the native draw's bone setter would have run),
 	 *   into the rows kept by object slot and the palette rows kept by block (journalled KeptArrays); and the shading of the slots the
 	 *   walk and the accumulate phase named (ShadingItem), with the wetness the frame's start captured;
 	 * - what moved is what the move writers pushed (FrameValueMoves, the producer the queues' one consumer), looked up in an index from
-	 *   move key to the plan's movers and roots built when a producer first takes the plan: a mover or root is sampled when one of its
-	 *   keys moved this frame or the last, when it is new to the plan, and on the frame after a sample of it changed a row or palette
+	 *   move key to the kept movers and roots, patched as plans add, change and remove them: a mover or root is sampled when one of its
+	 *   keys moved this frame or the last, when a plan added or changed it, and on the frame after a sample of it changed a row or palette
 	 *   (so a skin's previous palette and a placement's previous world settle once its motion stops); particle systems every frame (their
 	 *   quads face the camera);
 	 * - send the frame's buffers the runs they lack on the dedicated upload queue, then signal the frame-wait timeline to the frame's
@@ -65,8 +66,8 @@ namespace DCLF
 
 		/**
 		 * @brief Render thread, at the scene's start (the engine's update done, the window open): the frame's producer, from a_plans
-		 * (the walks' plans the publication log brought since the last frame, oldest first: each one's written slots sampled, the newest
-		 * drawn with; none: the newest before them), the slots named for their shading (a_shading, the newest last) and
+		 * (the walks' plans the publication log brought since the last frame, oldest first: each applied onto the kept set in order and its
+		 * written slots sampled; none: the set as it was), the slots named for their shading (a_shading, the newest last) and
 		 * the wetness captured (a_wetness). Sets the host's frame wait to its sequence number. False when it cannot run (no render
 		 * graph, no dedicated upload queue): the frame waits for nothing, and its draws have no rows; what it was handed waits for the
 		 * first producer.
@@ -128,8 +129,10 @@ namespace DCLF
 			std::uint64_t frames = 0, sampled = 0, settled = 0, seeded = 0, rowsChanged = 0, skins = 0, paletteRowsChanged = 0, shadingSampled = 0, shadingChanged = 0,
 						  wetnessChanged = 0, runs = 0, bytes = 0, sampleUs = 0, uploadUs = 0, maxTotalUs = 0, refused = 0, defects = 0,
 						  failures = 0;
-			// The moved-only sampling: the plans' movers and roots, those due (sampled), the move keys and node events drained.
+			// The moved-only sampling: the kept set's movers and roots, those due (sampled), the move keys and node events drained.
 			std::uint64_t movers = 0, moversDue = 0, roots = 0, rootsDue = 0, moveKeys = 0, moveNodes = 0;
+			// The placement plans applied onto the kept set, those that reset it, and their items (joined, changed and left).
+			std::uint64_t plans = 0, planResets = 0, planItems = 0;
 		};
 		/** @brief The report's take (Reports/DrawsFrameValues.cpp): the counters, reset. */
 		Counters TakeCounters();

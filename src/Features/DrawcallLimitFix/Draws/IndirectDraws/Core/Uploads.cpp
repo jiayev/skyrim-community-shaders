@@ -27,10 +27,32 @@ namespace DCLF
 			auto views = std::make_shared<StreamViews>();
 			views->tables = std::move(a_hold);
 			views->generation = a_generation;
-			UpdateObjectRecords(&a_objects, a_oldest.objects, a_tables, a_generation, a_frame, views->objects);
-			UpdateExtras(&a_extras, a_oldest.extras, a_tables, a_generation, views->extras);
+			// The three stores are independent (each its own journal, all reading the immutable tables): pool tasks, unless the parity
+			// keeps the fan-outs on the builder's thread (Policy::SerialFanout).
 			GeometryDrawsOut geometries;
-			UpdateGeometryDraws(&a_geometries, a_oldest.geometries, a_tables, a_generation, a_frame, geometries);
+			const auto store = [&](std::size_t a_store) {
+				switch (a_store) {
+				case 0:
+					UpdateObjectRecords(&a_objects, a_oldest.objects, a_tables, a_generation, a_frame, views->objects);
+					break;
+				case 1:
+					UpdateExtras(&a_extras, a_oldest.extras, a_tables, a_generation, views->extras);
+					break;
+				default:
+					UpdateGeometryDraws(&a_geometries, a_oldest.geometries, a_tables, a_generation, a_frame, geometries);
+					break;
+				}
+			};
+			if (Policy::SerialFanout()) {
+				for (std::size_t s = 0; s < 3; ++s)
+					store(s);
+			} else {
+				SceneScheduler::Executor().ParallelFor("CS.DCLF.MakeStreamViews.Stores", 3, 1, [&](std::size_t a_begin, std::size_t a_end) {
+					ZoneScopedN("CS.DCLF.MakeStreamViews.StoresShards");
+					for (std::size_t s = a_begin; s < a_end; ++s)
+						store(s);
+				});
+			}
 			views->geometries = std::move(geometries.slots);
 			return views;
 		}

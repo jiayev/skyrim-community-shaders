@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
 
+#include <algorithm>
 #include <bit>
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
@@ -77,6 +78,27 @@ namespace DCLF::MaterialPort
 		for (std::uint32_t i = 0; i < held->snapshot.textureCount; ++i)
 			held->views[i].copy_from(held->snapshot.textures[i].view);
 		captures.Push(std::move(held));
+	}
+
+	SnapshotChange SnapshotChangeOf(const MaterialSnapshot& a_held, const MaterialSnapshot& a_new)
+	{
+		// BSIntrusiveRefCounted's count (+0x8, 4 bytes), then BSShaderMaterial's texCoordOffset/texCoordScale (+0xc, two buffers of 8 bytes
+		// each: +0xc..+0x2c, MaterialSources::TextureTransformsOf).
+		constexpr std::size_t kCount = 0x8, kTransforms = 0xc, kTransformsEnd = 0x2c;
+		if (a_held.key != a_new.key || a_held.vtable != a_new.vtable || a_held.feature != a_new.feature || a_held.pbr != a_new.pbr ||
+			a_held.effect != a_new.effect || a_held.size != a_new.size || a_held.textureCount != a_new.textureCount)
+			return SnapshotChange::Fields;
+		for (std::uint32_t i = 0; i < a_new.textureCount && i < kMaxTextureFields; ++i)
+			if (a_held.textures[i].offset != a_new.textures[i].offset || a_held.textures[i].view != a_new.textures[i].view)
+				return SnapshotChange::Fields;
+		const std::size_t size = std::min<std::size_t>(a_new.size, kMaxMaterialBytes);
+		auto same = [&](std::size_t a_begin, std::size_t a_end) {
+			a_end = std::min(a_end, size);
+			return a_begin >= a_end || std::memcmp(a_held.bytes.data() + a_begin, a_new.bytes.data() + a_begin, a_end - a_begin) == 0;
+		};
+		if (!same(0, kCount) || !same(kTransformsEnd, size))
+			return SnapshotChange::Fields;
+		return same(kTransforms, kTransformsEnd) ? SnapshotChange::None : SnapshotChange::Transforms;
 	}
 
 	FrameComponentsWitness WitnessOf(const VanillaFrame& a_vanilla, const FeatureFrame& a_feature)

@@ -896,11 +896,16 @@ namespace DCLF::Draws
 
 	namespace
 	{
+		// CountModeDraws goes to the pool past this many inputs, in chunks of this many.
+		constexpr std::size_t kCountFanoutMin = 8192;
+		constexpr std::size_t kCountGrain = 4096;
+
 		/** @brief Per used mode, the draws its inputs can produce (a skin once per partition), total and per key slot (bucket sizes). */
 		void CountModeDraws(ShadowPayload& a_out)
 		{
-			// One pass for every used mode (each input's mask names its modes).
-			std::array<std::uint64_t, kShadowModeCount> draws{};
+			ZoneScopedN("CS.DCLF.BuildShadow.CountModeDraws");
+			// One pass for every used mode (each input's mask names its modes): a reduce, each chunk counting into its own totals, summed
+			// in chunk order.
 			std::uint32_t used = 0, usedBits = 0;
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
 				a_out.keySlotDraws[m].clear();
@@ -910,24 +915,56 @@ namespace DCLF::Draws
 					usedBits |= a_out.modeBits[m];
 				}
 			}
-			a_out.ForEachInput([&](const DrawInput& a_input) {
-				if (!(a_input.view.mask & usedBits))
-					return;
-				const std::uint32_t inputDraws = PartitionDraws(a_input.partitions);
-				for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
-					if (!((used >> m) & 1) || !(a_input.view.mask & a_out.modeBits[m]))
+			struct Counts
+			{
+				std::array<std::uint64_t, kShadowModeCount> draws{};
+				std::array<std::uint32_t, kShadowModeCount> inputs{};
+				std::array<std::vector<std::uint32_t>, kShadowModeCount> keySlots;
+			};
+			const std::size_t regionCount = a_out.regionInputs.elements ? a_out.regionInputs.elements->size() : 0;
+			const std::size_t count = regionCount + a_out.inputList.size();
+			auto countRange = [&](std::size_t a_begin, std::size_t a_end, Counts& a_counts) {
+				for (std::size_t n = a_begin; n < a_end; ++n) {
+					const DrawInput& input = n < regionCount ? (*a_out.regionInputs.elements)[n] : a_out.inputList[n - regionCount];
+					if (!(input.view.mask & usedBits))
 						continue;
-					const std::uint32_t key = ShadowKeyOf(m, a_input);
-					if (key == ~0u)
-						continue;
-					++a_out.modeInputs[m];
-					draws[m] += inputDraws;
-					auto& slots = a_out.keySlotDraws[m];
-					if (key >= slots.size())
-						slots.resize(std::size_t(key) + 1, 0u);
-					slots[key] += inputDraws;
+					const std::uint32_t inputDraws = PartitionDraws(input.partitions);
+					for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+						if (!((used >> m) & 1) || !(input.view.mask & a_out.modeBits[m]))
+							continue;
+						const std::uint32_t key = ShadowKeyOf(m, input);
+						if (key == ~0u)
+							continue;
+						++a_counts.inputs[m];
+						a_counts.draws[m] += inputDraws;
+						auto& slots = a_counts.keySlots[m];
+						if (key >= slots.size())
+							slots.resize(std::size_t(key) + 1, 0u);
+						slots[key] += inputDraws;
+					}
 				}
-			});
+			};
+			std::vector<Counts> chunks((std::max<std::size_t>(count, 1) + kCountGrain - 1) / kCountGrain);
+			if (count >= kCountFanoutMin && !Policy::SerialFanout()) {
+				SceneScheduler::Executor().ParallelFor("CS.DCLF.BuildShadow.CountModeDraws", count, kCountGrain, [&](std::size_t a_begin, std::size_t a_end) {
+					ZoneScopedN("CS.DCLF.BuildShadow.CountModeDrawsShards");
+					countRange(a_begin, a_end, chunks[a_begin / kCountGrain]);
+				});
+			} else {
+				chunks.resize(1);
+				countRange(0, count, chunks[0]);
+			}
+			std::array<std::uint64_t, kShadowModeCount> draws{};
+			for (const auto& chunk : chunks)
+				for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+					draws[m] += chunk.draws[m];
+					a_out.modeInputs[m] += chunk.inputs[m];
+					auto& slots = a_out.keySlotDraws[m];
+					if (slots.size() < chunk.keySlots[m].size())
+						slots.resize(chunk.keySlots[m].size(), 0u);
+					for (std::size_t key = 0; key < chunk.keySlots[m].size(); ++key)
+						slots[key] += chunk.keySlots[m][key];
+				}
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 				a_out.modeDraws[m] = static_cast<std::uint32_t>(std::min<std::uint64_t>(draws[m], UINT32_MAX));
 		}

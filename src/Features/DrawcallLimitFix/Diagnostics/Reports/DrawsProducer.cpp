@@ -152,7 +152,15 @@ namespace DCLF
 				rows.keyMoved[0], rows.keyMoved[1], rows.keyMoved[2], rows.keyMoved[3], rows.keyMoved[4], rows.keyMoved[5], rows.keyMoved[6] + rows.keyMoved[7]);
 			rows.builds = rows.materialsWritten = rows.pipelinesWritten = rows.resyncs = 0;
 			rows.keyMoved = {};
+			// The material rows' copies since the last report (KeptArray copies only the chunks a held view shares).
+			static KeptCopyStats lastCopies;
+			const KeptCopyStats copies = rows.material.CopyStats();
+			text += fmt::format("[DCLF] material rows copied: {} tables, {} chunks ({:.1f} KB), {} chunks reused, {} allocated\n", copies.tableCopies - lastCopies.tableCopies,
+				copies.chunkCopies - lastCopies.chunkCopies, double(copies.bytesCopied - lastCopies.bytesCopied) / 1024.0, copies.chunkReuses - lastCopies.chunkReuses,
+				copies.chunkAllocations - lastCopies.chunkAllocations);
+			lastCopies = copies;
 		}
+		text += Draws::MainPairsReport(mainRows);
 		{
 			// The payload's pools (PayloadBuilder, D5): what each publication caught up per part, the backings made, the live census and
 			// the journal floor; under CS_DCLF_PERSISTENT_PARITY, the leased count against the lease-leak bound.

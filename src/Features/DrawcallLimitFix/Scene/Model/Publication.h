@@ -75,6 +75,10 @@ namespace DCLF
 	 * full - each an object's slot and the engine objects its row is read from, held. Made by the walk on the scene task, taken
 	 * by the render thread at the next frame's start (FrameView::TakePlacementPlans) and released there: its references are the engine's to
 	 * drop. The tables hold no placement or palette: these are the only rows the frames draw with.
+	 *
+	 * A plan is a delta of the placement set (the movers, and the listed roots with their dependents): what joined or changed, with
+	 * references, and what left, by key. FrameValues applies every plan in order onto the set it keeps (a reset plan clears it first and
+	 * carries the set whole), so none may be skipped: the publication log carries every plan since the last frame (TakeDeltas).
 	 */
 	struct PlacementPlan
 	{
@@ -96,17 +100,43 @@ namespace DCLF
 			// producer expands its newest snapshot there, and its placement row is the snapshot's.
 			bool particles = false;
 		};
+		/** @brief An item as compared (raw pointers, never dereferenced): the coordinator's planned set, the parity's, FrameValues' kept one. */
+		struct Key
+		{
+			const void* object = nullptr;
+			std::uint32_t slot = kNoObjectSlot, layerSlot = kNoObjectSlot, boneOffset = 0, boneRows = 0;
+			const void* sunEntry = nullptr;
+			bool firstPerson = false, particles = false;
+			bool operator==(const Key&) const = default;
+			static Key Of(const Item& a_item)
+			{
+				return { a_item.geometry.get(), a_item.slot, a_item.layerSlot, a_item.boneOffset, a_item.boneRows, a_item.sunEntryNode.get(), a_item.firstPerson,
+					a_item.particles };
+			}
+		};
 		struct Root
 		{
 			RE::NiPointer<RE::NiAVObject> root;
-			std::vector<Item> dependents;  // their sun entry is the root's bound (sunEntryNode unused)
+			std::vector<Item> dependents;  // joined or changed (by geometry); their sun entry is the root's bound (sunEntryNode unused)
 		};
-		std::vector<Item> movers;   // every frame until the next plan
+		/** @brief Parity (the coordinator's full rebuild of the set after this plan): movers by object, roots by node with their dependents, sorted. */
+		struct Check
+		{
+			std::vector<Key> movers;
+			std::vector<std::pair<const void*, std::vector<Key>>> roots;
+		};
+		// The set's changes, applied in this order: what left (movers, whole roots, single dependents), then what joined or changed.
+		std::vector<const void*> moversLeft;                             // by geometry
+		std::vector<const void*> rootsLeft;                              // by node, with every dependent
+		std::vector<std::pair<const void*, const void*>> dependentsLeft;  // (root node, geometry) of a root that stays
+		std::vector<Item> movers;                                        // joined or changed (by geometry)
+		std::vector<Root> roots;                                         // listed, or whose dependents joined or changed (by node)
+		bool reset = false;                                              // the kept set is cleared first (the plan carries it whole)
 		std::vector<Item> written;  // once, by the frame that takes the plan
-		std::vector<Root> roots;    // every frame until the next plan
 		std::uint32_t slots = 0;         // the object slots the tables held
 		std::uint32_t boneCapacity = 0;  // the palette rows their blocks span (SceneTables::BoneCapacity)
 		std::uint64_t walk = 0;          // the walk that made it
+		std::shared_ptr<const Check> check;  // parity only (the set after this plan, rebuilt whole): FrameValues compares its kept set
 	};
 
 	/**

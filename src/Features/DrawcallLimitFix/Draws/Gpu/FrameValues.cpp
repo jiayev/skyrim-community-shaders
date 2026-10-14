@@ -330,11 +330,11 @@ namespace DCLF
 		// Render thread.
 		std::array<Pool, kPools> pools;
 		FrameLeases frameLeases;  // the kicked frame's backings, bound at EndFrame
-		std::shared_ptr<const Plan> plan;                              // the newest
-		std::uint64_t planSerial = 0;                                  // bumped with every newest plan (the producers' index follows it)
-		std::vector<const Plan::Item*> firstPersonMovers;              // the newest plan's first-person movers (Kick's samples)
-		std::uint64_t firstPersonSerial = 0;                           // the plan serial firstPersonMovers is of
-		std::vector<std::shared_ptr<const Plan>> unsampled;           // plans whose written slots no producer has sampled yet
+		std::shared_ptr<const Plan> plan;                              // the newest (its slots and palette capacity)
+		std::uint64_t planSerial = 0;                                  // bumped with every newest plan
+		// The kept set's first-person movers (Kick's samples): every plan applied in order as Kick receives it, as the producers apply it.
+		ankerl::unordered_dense::map<const void*, Plan::Item> firstPersonMovers;
+		std::vector<std::shared_ptr<const Plan>> unsampled;           // plans no producer has applied (and sampled the written slots of) yet
 		std::vector<ShadingItem> unsampledShading;        // not yet taken by a producer
 		std::vector<WetnessValue> unsampledWetness;
 		std::vector<SeedCopy> unsentSeeds;  // not yet taken by a producer, in request order
@@ -347,11 +347,11 @@ namespace DCLF
 		bool unavailableLogged = false;
 
 		// The producers', one at a time in sequence order.
-		KeptArray<BindlessPlacement> rows;
-		KeptArray<PaletteRow> palettes;
-		KeptArray<BindlessShading> shading;
-		KeptArray<FadeRootStatic> seeds;  // by FadeSeedRow
-		KeptArray<TreeStatic> treeSeeds;  // by 2 * tree slot + seedOdd
+		KeptWholeArray<BindlessPlacement> rows;
+		KeptWholeArray<PaletteRow> palettes;
+		KeptWholeArray<BindlessShading> shading;
+		KeptWholeArray<FadeRootStatic> seeds;  // by FadeSeedRow
+		KeptWholeArray<TreeStatic> treeSeeds;  // by 2 * tree slot + seedOdd
 		std::vector<std::uint8_t> listed;                       // dedup marks while listing items: per slot
 		std::vector<std::uint8_t> blockListed;                  // per palette block
 		std::vector<std::uint8_t> shadingListed;                // per slot, shading items
@@ -359,34 +359,58 @@ namespace DCLF
 		std::vector<Plan::Item> settling;
 		std::vector<std::uint32_t> listedSlots, listedBlocks;  // the marks set in listed and blockListed (cleared alone)
 
-		// The moved-only sampling (dclf B). The index from move key to the plan's movers and roots (KeysOf), built when a producer
-		// first takes a plan: each plan is the whole set, so it is built again, never patched.
+		// The moved-only sampling (dclf B) over the kept placement set: the plans applied in order (ApplyPlans), each a delta, onto movers
+		// and roots kept at stable indices (a freed one reused), and the index from move key to them (KeysOf) patched as they join,
+		// change and leave. The references are the kept items' copies, handed to the render thread when they leave (EngineReleases).
+		struct KeptMover
+		{
+			Plan::Item item;
+			std::vector<const void*> keys;  // its entries in keyIndex
+			bool live = false, keyed = false, particle = false;
+		};
+		struct KeptRoot
+		{
+			RE::NiPointer<RE::NiAVObject> root;
+			std::vector<Plan::Item> dependents;
+			ankerl::unordered_dense::map<const void*, std::uint32_t> dependentAt;  // by geometry: its index in dependents
+			std::vector<const void*> keys;
+			bool live = false, keyed = false;
+		};
+		std::vector<KeptMover> keptMovers;
+		std::vector<KeptRoot> keptRoots;
+		std::vector<std::uint32_t> freeMovers, freeRoots;
+		ankerl::unordered_dense::map<const void*, std::uint32_t> moverAt, rootAt;  // by geometry, by root node
+		std::size_t liveMovers = 0, liveRoots = 0;
 		struct Keyed
 		{
-			std::vector<std::uint32_t> movers, roots;  // indices into the plan's
+			std::vector<std::uint32_t> movers, roots;  // indices into keptMovers, keptRoots
 		};
 		ankerl::unordered_dense::map<const void*, Keyed> keyIndex;
 		ankerl::unordered_dense::map<std::uint32_t, std::vector<std::uint32_t>> slotRoots;  // a dependent's slot (and its layer's): its roots
-		std::uint64_t indexedPlan = 0;  // the plan serial keyIndex is of (0: none)
-		// Movers and roots whose keys a refused lease left unread, and particle systems: due every frame of the plan.
+		// Movers and roots whose keys a refused lease left unread (checked live and unkeyed when taken), and particle systems: due every frame.
 		std::vector<std::uint32_t> unkeyedMovers, unkeyedRoots, particleMovers;
-		// What the indexed plan's items name, to tell what a new plan adds or changes (raw pointers, compared, never dereferenced).
-		struct ItemRecord
+		std::vector<std::uint32_t> newMovers, newRoots;  // what the applied plans added or changed: due once
+		// The plans applied since the last take, their resets and items; the kept set's parity (a plan's check) since its last line.
+		std::atomic<std::uint64_t> plansApplied{ 0 }, planResets{ 0 }, planItems{ 0 };
+		struct KeptParity
 		{
-			const void* geometry = nullptr;
-			const void* sunEntry = nullptr;
-			std::uint32_t slot = kNoObjectSlot, layerSlot = kNoObjectSlot, boneOffset = 0, boneRows = 0;
-			bool firstPerson = false, particles = false;
-			bool operator==(const ItemRecord&) const = default;
-		};
-		static ItemRecord RecordOf(const Plan::Item& a_item)
-		{
-			return { a_item.geometry.get(), a_item.sunEntryNode.get(), a_item.slot, a_item.layerSlot, a_item.boneOffset, a_item.boneRows, a_item.firstPerson,
-				a_item.particles };
-		}
-		ankerl::unordered_dense::map<const void*, ItemRecord> moverRecords;              // by geometry
-		ankerl::unordered_dense::map<const void*, std::vector<ItemRecord>> rootRecords;  // by root node: its dependents
-		std::vector<std::uint32_t> newMovers, newRoots;  // what the newly indexed plan adds or changes: due once
+			std::uint64_t checks = 0, differ = 0;
+			std::string first;
+		} keptParity;
+		void ApplyPlan(const Plan& a_plan);
+		void ClearKept();
+		void KeyMover(std::uint32_t a_mover);
+		void UnkeyMover(std::uint32_t a_mover);
+		void KeyRoot(std::uint32_t a_root);
+		void UnkeyRoot(std::uint32_t a_root);
+		void UpsertMover(const Plan::Item& a_item);
+		void RemoveMover(const void* a_geometry);
+		void UpsertRoot(const Plan::Root& a_root);
+		void RemoveRoot(const void* a_node);
+		void RemoveDependent(const void* a_node, const void* a_geometry);
+		void ListSlotRoot(const Plan::Item& a_item, std::uint32_t a_root);
+		void UnlistSlotRoot(const Plan::Item& a_item, std::uint32_t a_root);
+		void CheckKept(const Plan::Check& a_check);
 		std::vector<const void*> drainedKeys;  // this producer's keys (scratch)
 		std::vector<const void*> lastKeys;     // the previous producer's: the gate is "this frame or the last"
 		// Keys due at the next producer: a mover's geometry or a root's node whose sample changed a row or palette (so it settles: a skin's
@@ -450,7 +474,7 @@ namespace DCLF
 		};
 		void Run(const Job& a_job);
 		void Sample(const Job& a_job);
-		void IndexPlan(const Job& a_job);
+		void ApplyPlans(const Job& a_job);
 		void MarkMover(std::uint32_t a_mover);
 		void MarkRoot(std::uint32_t a_root);
 		void MarkDue(const Job& a_job);
@@ -459,10 +483,10 @@ namespace DCLF
 		void SampleFadeSeeds(const Job& a_job);
 		void Upload(const Job& a_job);
 		template <class T>
-		void Send(const Job& a_job, Part a_part, const KeptArray<T>& a_rows);
+		void Send(const Job& a_job, Part a_part, const KeptWholeArray<T>& a_rows);
 		/** @brief The producer's: a_rows' build opened at the job's floor for a_part (every change forgotten without one). */
 		template <class T>
-		static void BeginBuild(const Job& a_job, Part a_part, KeptArray<T>& a_rows)
+		static void BeginBuild(const Job& a_job, Part a_part, KeptWholeArray<T>& a_rows)
 		{
 			a_rows.BeginBuild(a_job.oldestContentEpochs[a_part] ? *a_job.oldestContentEpochs[a_part] : a_rows.ContentEpoch());
 		}
@@ -495,11 +519,71 @@ namespace DCLF
 		done.notify_all();
 	}
 
-	void FrameValues::Impl::IndexPlan(const Job& a_job)
+	namespace
 	{
-		ZoneScopedN("CS.DCLF.FrameValues.Index");
-		const auto& work = *a_job.plan;
-		indexedPlan = a_job.planSerial;
+		// An item's references to the render thread (EngineReleases, at Present): a producer never drops one.
+		void ReleaseItem(Plan::Item& a_item)
+		{
+			ReleaseLater(a_item.geometry);
+			ReleaseLater(a_item.sunEntryNode);
+		}
+
+		template <class Index>
+		void EraseIndex(std::vector<Index>& a_list, Index a_index)
+		{
+			if (const auto at = std::find(a_list.begin(), a_list.end(), a_index); at != a_list.end()) {
+				*at = a_list.back();
+				a_list.pop_back();
+			}
+		}
+	}
+
+	void FrameValues::Impl::ApplyPlans(const Job& a_job)
+	{
+		ZoneScopedN("CS.DCLF.FrameValues.ApplyPlans");
+		// Every plan since the last producer, oldest first: each a delta of the set the one before left.
+		for (const auto* written : a_job.written)
+			ApplyPlan(*written);
+	}
+
+	void FrameValues::Impl::ApplyPlan(const Plan& a_plan)
+	{
+		++plansApplied;
+		if (a_plan.reset) {
+			++planResets;
+			ClearKept();
+		}
+		planItems += a_plan.moversLeft.size() + a_plan.rootsLeft.size() + a_plan.dependentsLeft.size() + a_plan.movers.size() + a_plan.roots.size();
+		for (const void* geometry : a_plan.moversLeft)
+			RemoveMover(geometry);
+		for (const void* node : a_plan.rootsLeft)
+			RemoveRoot(node);
+		for (const auto& [node, geometry] : a_plan.dependentsLeft)
+			RemoveDependent(node, geometry);
+		for (const auto& item : a_plan.movers)
+			UpsertMover(item);
+		for (const auto& root : a_plan.roots)
+			UpsertRoot(root);
+		if (a_plan.check)
+			CheckKept(*a_plan.check);
+	}
+
+	void FrameValues::Impl::ClearKept()
+	{
+		for (auto& mover : keptMovers)
+			ReleaseItem(mover.item);
+		for (auto& root : keptRoots) {
+			ReleaseLater(root.root);
+			for (auto& dependent : root.dependents)
+				ReleaseItem(dependent);
+		}
+		keptMovers.clear();
+		keptRoots.clear();
+		freeMovers.clear();
+		freeRoots.clear();
+		moverAt.clear();
+		rootAt.clear();
+		liveMovers = liveRoots = 0;
 		keyIndex.clear();
 		slotRoots.clear();
 		unkeyedMovers.clear();
@@ -507,76 +591,278 @@ namespace DCLF
 		particleMovers.clear();
 		newMovers.clear();
 		newRoots.clear();
-		// The marks name the previous plan's indices.
-		moverDue.assign(work.movers.size(), 0);
-		rootDue.assign(work.roots.size(), 0);
-		dueMovers.clear();
-		dueRoots.clear();
-		std::vector<const void*> keys;
-		decltype(moverRecords) records;
-		records.reserve(work.movers.size());
-		for (std::uint32_t m = 0; m < work.movers.size(); ++m) {
-			const auto& item = work.movers[m];
-			if (!item.geometry)
-				continue;
-			const auto record = RecordOf(item);
-			records.insert_or_assign(item.geometry.get(), record);
-			if (const auto previous = moverRecords.find(item.geometry.get()); previous == moverRecords.end() || !(previous->second == record))
-				newMovers.push_back(m);
-			if (item.particles) {
-				particleMovers.push_back(m);
-				continue;
-			}
-			// A first-person member is the render thread's (Kick).
-			if (item.firstPerson)
-				continue;
-			EngineReadWindow::Lease lease;
-			if (!lease) {
-				unkeyedMovers.push_back(m);
-				continue;
-			}
-			KeysOf(*item.geometry, keys);
-			for (const void* key : keys)
-				keyIndex[key].movers.push_back(m);
+	}
+
+	void FrameValues::Impl::KeyMover(std::uint32_t a_mover)
+	{
+		auto& mover = keptMovers[a_mover];
+		// Particle quads face the camera: due every frame, no keys. A first-person member is the render thread's (Kick).
+		if (mover.item.particles) {
+			mover.particle = true;
+			particleMovers.push_back(a_mover);
+			return;
 		}
-		moverRecords = std::move(records);
-		decltype(rootRecords) byNode;
-		byNode.reserve(work.roots.size());
-		for (std::uint32_t r = 0; r < work.roots.size(); ++r) {
-			const auto& root = work.roots[r];
-			if (!root.root)
-				continue;
-			std::vector<ItemRecord> dependents;
-			dependents.reserve(root.dependents.size());
-			for (const auto& dependent : root.dependents) {
-				dependents.push_back(RecordOf(dependent));
-				for (const std::uint32_t slot : { dependent.slot, dependent.layerSlot })
-					if (slot != kNoObjectSlot)
-						slotRoots[slot].push_back(r);
-			}
-			if (const auto previous = rootRecords.find(root.root.get()); previous == rootRecords.end() || previous->second != dependents)
-				newRoots.push_back(r);
-			byNode.insert_or_assign(root.root.get(), std::move(dependents));
-			EngineReadWindow::Lease lease;
-			if (!lease) {
-				unkeyedRoots.push_back(r);
-				continue;
-			}
-			KeysOf(*root.root, keys);
-			for (const void* key : keys)
-				keyIndex[key].roots.push_back(r);
+		if (mover.item.firstPerson)
+			return;
+		EngineReadWindow::Lease lease;
+		if (!lease) {
+			unkeyedMovers.push_back(a_mover);
+			return;
 		}
-		rootRecords = std::move(byNode);
+		KeysOf(*mover.item.geometry, mover.keys);
+		for (const void* key : mover.keys)
+			keyIndex[key].movers.push_back(a_mover);
+		mover.keyed = true;
+	}
+
+	void FrameValues::Impl::UnkeyMover(std::uint32_t a_mover)
+	{
+		auto& mover = keptMovers[a_mover];
+		if (std::exchange(mover.particle, false))
+			EraseIndex(particleMovers, a_mover);
+		if (std::exchange(mover.keyed, false))
+			for (const void* key : mover.keys)
+				if (const auto it = keyIndex.find(key); it != keyIndex.end()) {
+					EraseIndex(it->second.movers, a_mover);
+					if (it->second.movers.empty() && it->second.roots.empty())
+						keyIndex.erase(it);
+				}
+		mover.keys.clear();
+	}
+
+	void FrameValues::Impl::KeyRoot(std::uint32_t a_root)
+	{
+		auto& root = keptRoots[a_root];
+		EngineReadWindow::Lease lease;
+		if (!lease) {
+			unkeyedRoots.push_back(a_root);
+			return;
+		}
+		KeysOf(*root.root, root.keys);
+		for (const void* key : root.keys)
+			keyIndex[key].roots.push_back(a_root);
+		root.keyed = true;
+	}
+
+	void FrameValues::Impl::UnkeyRoot(std::uint32_t a_root)
+	{
+		auto& root = keptRoots[a_root];
+		if (std::exchange(root.keyed, false))
+			for (const void* key : root.keys)
+				if (const auto it = keyIndex.find(key); it != keyIndex.end()) {
+					EraseIndex(it->second.roots, a_root);
+					if (it->second.movers.empty() && it->second.roots.empty())
+						keyIndex.erase(it);
+				}
+		root.keys.clear();
+	}
+
+	void FrameValues::Impl::UpsertMover(const Plan::Item& a_item)
+	{
+		if (!a_item.geometry)
+			return;
+		std::uint32_t m;
+		if (const auto it = moverAt.find(a_item.geometry.get()); it != moverAt.end()) {
+			// Changed: keyed again (its chain is read anew, as a new plan's was).
+			m = it->second;
+			UnkeyMover(m);
+			ReleaseItem(keptMovers[m].item);
+		} else {
+			if (!freeMovers.empty()) {
+				m = freeMovers.back();
+				freeMovers.pop_back();
+			} else {
+				m = static_cast<std::uint32_t>(keptMovers.size());
+				keptMovers.emplace_back();
+			}
+			moverAt.emplace(a_item.geometry.get(), m);
+			keptMovers[m].live = true;
+			++liveMovers;
+		}
+		keptMovers[m].item = a_item;
+		if (moverDue.size() < keptMovers.size())
+			moverDue.resize(keptMovers.size(), 0);
+		KeyMover(m);
+		newMovers.push_back(m);
+	}
+
+	void FrameValues::Impl::RemoveMover(const void* a_geometry)
+	{
+		const auto it = moverAt.find(a_geometry);
+		if (it == moverAt.end())
+			return;
+		const std::uint32_t m = it->second;
+		moverAt.erase(it);
+		UnkeyMover(m);
+		auto& mover = keptMovers[m];
+		ReleaseItem(mover.item);
+		mover.item = {};
+		mover.live = false;
+		freeMovers.push_back(m);
+		--liveMovers;
+	}
+
+	void FrameValues::Impl::ListSlotRoot(const Plan::Item& a_item, std::uint32_t a_root)
+	{
+		for (const std::uint32_t slot : { a_item.slot, a_item.layerSlot })
+			if (slot != kNoObjectSlot) {
+				auto& rootsOf = slotRoots[slot];
+				if (std::find(rootsOf.begin(), rootsOf.end(), a_root) == rootsOf.end())
+					rootsOf.push_back(a_root);
+			}
+	}
+
+	void FrameValues::Impl::UnlistSlotRoot(const Plan::Item& a_item, std::uint32_t a_root)
+	{
+		for (const std::uint32_t slot : { a_item.slot, a_item.layerSlot })
+			if (const auto it = slot != kNoObjectSlot ? slotRoots.find(slot) : slotRoots.end(); it != slotRoots.end()) {
+				EraseIndex(it->second, a_root);
+				if (it->second.empty())
+					slotRoots.erase(it);
+			}
+	}
+
+	void FrameValues::Impl::UpsertRoot(const Plan::Root& a_root)
+	{
+		std::uint32_t r;
+		if (const auto it = rootAt.find(a_root.root.get()); it != rootAt.end()) {
+			r = it->second;
+		} else {
+			// A root handed out without its reference (the coordinator's defect, counted there) is left out with its dependents.
+			if (!a_root.root)
+				return;
+			if (!freeRoots.empty()) {
+				r = freeRoots.back();
+				freeRoots.pop_back();
+			} else {
+				r = static_cast<std::uint32_t>(keptRoots.size());
+				keptRoots.emplace_back();
+			}
+			rootAt.emplace(a_root.root.get(), r);
+			auto& root = keptRoots[r];
+			root.root = a_root.root;
+			root.live = true;
+			++liveRoots;
+			if (rootDue.size() < keptRoots.size())
+				rootDue.resize(keptRoots.size(), 0);
+			KeyRoot(r);
+		}
+		auto& root = keptRoots[r];
+		for (const auto& dependent : a_root.dependents) {
+			if (!dependent.geometry)
+				continue;
+			if (const auto at = root.dependentAt.find(dependent.geometry.get()); at != root.dependentAt.end()) {
+				auto& kept = root.dependents[at->second];
+				UnlistSlotRoot(kept, r);
+				ReleaseItem(kept);
+				kept = dependent;
+			} else {
+				root.dependentAt.emplace(dependent.geometry.get(), static_cast<std::uint32_t>(root.dependents.size()));
+				root.dependents.push_back(dependent);
+			}
+			ListSlotRoot(dependent, r);
+		}
+		newRoots.push_back(r);
+	}
+
+	void FrameValues::Impl::RemoveDependent(const void* a_node, const void* a_geometry)
+	{
+		const auto it = rootAt.find(a_node);
+		if (it == rootAt.end())
+			return;
+		const std::uint32_t r = it->second;
+		auto& root = keptRoots[r];
+		const auto at = root.dependentAt.find(a_geometry);
+		if (at == root.dependentAt.end())
+			return;
+		const std::uint32_t index = at->second;
+		root.dependentAt.erase(at);
+		UnlistSlotRoot(root.dependents[index], r);
+		ReleaseItem(root.dependents[index]);
+		if (index + 1 != root.dependents.size()) {
+			root.dependents[index] = std::move(root.dependents.back());
+			root.dependentAt.insert_or_assign(root.dependents[index].geometry.get(), index);
+		}
+		root.dependents.pop_back();
+		// Its remaining dependents' rows are sampled again (a changed root was due once before as well).
+		newRoots.push_back(r);
+	}
+
+	void FrameValues::Impl::RemoveRoot(const void* a_node)
+	{
+		const auto it = rootAt.find(a_node);
+		if (it == rootAt.end())
+			return;
+		const std::uint32_t r = it->second;
+		rootAt.erase(it);
+		UnkeyRoot(r);
+		auto& root = keptRoots[r];
+		for (auto& dependent : root.dependents) {
+			UnlistSlotRoot(dependent, r);
+			ReleaseItem(dependent);
+		}
+		ReleaseLater(root.root);
+		root = {};
+		freeRoots.push_back(r);
+		--liveRoots;
+	}
+
+	void FrameValues::Impl::CheckKept(const Plan::Check& a_check)
+	{
+		// Parity: the kept set (every plan applied in order) against the coordinator's whole rebuild after the same plan.
+		ZoneScopedN("CS.DCLF.FrameValues.KeptParity");
+		using Key = Plan::Key;
+		auto byObject = [](const Key& a_left, const Key& a_right) { return a_left.object < a_right.object; };
+		Plan::Check kept;
+		for (const auto& mover : keptMovers)
+			if (mover.live)
+				kept.movers.push_back(Key::Of(mover.item));
+		std::sort(kept.movers.begin(), kept.movers.end(), byObject);
+		for (const auto& root : keptRoots) {
+			if (!root.live)
+				continue;
+			auto& [node, keys] = kept.roots.emplace_back(root.root.get(), std::vector<Key>{});
+			for (const auto& dependent : root.dependents)
+				keys.push_back(Key::Of(dependent));
+			std::sort(keys.begin(), keys.end(), byObject);
+		}
+		std::sort(kept.roots.begin(), kept.roots.end(), [](const auto& a_left, const auto& a_right) { return a_left.first < a_right.first; });
+		auto& p = keptParity;
+		++p.checks;
+		const bool differs = kept.movers != a_check.movers || kept.roots != a_check.roots;
+		if (differs) {
+			++p.differ;
+			if (p.first.empty()) {
+				std::size_t m = 0;
+				while (m < kept.movers.size() && m < a_check.movers.size() && kept.movers[m] == a_check.movers[m])
+					++m;
+				std::size_t r = 0;
+				while (r < kept.roots.size() && r < a_check.roots.size() && kept.roots[r] == a_check.roots[r])
+					++r;
+				p.first = fmt::format("movers {} kept / {} rebuilt (first difference at {}), roots {} kept / {} rebuilt (first difference at {}: {} vs {})", kept.movers.size(),
+					a_check.movers.size(), m, kept.roots.size(), a_check.roots.size(), r, r < kept.roots.size() ? kept.roots[r].first : nullptr,
+					r < a_check.roots.size() ? a_check.roots[r].first : nullptr);
+			}
+		}
+		if (p.checks < 8 && !differs)
+			return;
+		logger::info("[DCLF] frame values' kept placement set (parity): {} checks, {} differ{}{}", p.checks, p.differ, p.differ ? " <- KEPT SET DIFFERS; first: " : " <- OK",
+			p.first);
+		p = {};
 	}
 
 	void FrameValues::Impl::MarkMover(std::uint32_t a_mover)
 	{
+		if (a_mover >= keptMovers.size() || !keptMovers[a_mover].live)
+			return;
 		if (!std::exchange(moverDue[a_mover], 1))
 			dueMovers.push_back(a_mover);
 	}
 
 	void FrameValues::Impl::MarkRoot(std::uint32_t a_root)
 	{
+		if (a_root >= keptRoots.size() || !keptRoots[a_root].live)
+			return;
 		if (!std::exchange(rootDue[a_root], 1))
 			dueRoots.push_back(a_root);
 	}
@@ -584,15 +870,14 @@ namespace DCLF
 	void FrameValues::Impl::MarkDue(const Job& a_job)
 	{
 		ZoneScopedN("CS.DCLF.FrameValues.Due");
-		const auto& work = *a_job.plan;
 		for (const auto m : dueMovers)
 			moverDue[m] = 0;
 		for (const auto r : dueRoots)
 			rootDue[r] = 0;
 		dueMovers.clear();
 		dueRoots.clear();
-		if (a_job.planSerial != indexedPlan)
-			IndexPlan(a_job);
+		// The plans since the last producer onto the kept set (their joined and changed items due once, below).
+		ApplyPlans(a_job);
 		const auto markKey = [&](const void* a_key) {
 			const auto it = keyIndex.find(a_key);
 			if (it == keyIndex.end())
@@ -643,7 +928,7 @@ namespace DCLF
 			markKey(key);
 		owedKeys.clear();
 		std::swap(lastKeys, drainedKeys);
-		// New to the plan (or changed by it): once.
+		// New to the set (or changed by a plan): once.
 		for (const auto m : newMovers)
 			MarkMover(m);
 		for (const auto r : newRoots)
@@ -651,25 +936,33 @@ namespace DCLF
 		newMovers.clear();
 		newRoots.clear();
 		// Keys a refused lease left unread: due until read (then by their keys).
-		std::vector<const void*> keys;
+		// An entry freed, or keyed since (a later upsert), is dropped.
 		std::erase_if(unkeyedMovers, [&](std::uint32_t a_mover) {
+			auto& mover = keptMovers[a_mover];
+			if (!mover.live || mover.keyed)
+				return true;
 			MarkMover(a_mover);
 			EngineReadWindow::Lease lease;
 			if (!lease)
 				return false;
-			KeysOf(*work.movers[a_mover].geometry, keys);
-			for (const void* key : keys)
+			KeysOf(*mover.item.geometry, mover.keys);
+			for (const void* key : mover.keys)
 				keyIndex[key].movers.push_back(a_mover);
+			mover.keyed = true;
 			return true;
 		});
 		std::erase_if(unkeyedRoots, [&](std::uint32_t a_root) {
+			auto& root = keptRoots[a_root];
+			if (!root.live || root.keyed)
+				return true;
 			MarkRoot(a_root);
 			EngineReadWindow::Lease lease;
 			if (!lease)
 				return false;
-			KeysOf(*work.roots[a_root].root, keys);
-			for (const void* key : keys)
+			KeysOf(*root.root, root.keys);
+			for (const void* key : root.keys)
 				keyIndex[key].roots.push_back(a_root);
+			root.keyed = true;
 			return true;
 		});
 		// Particle quads face the camera: every frame.
@@ -677,9 +970,9 @@ namespace DCLF
 			MarkMover(m);
 		// Without the move writers' hooks (not installed, or their install failed) nothing says what moved: everything is due.
 		if (!Scene::MoveEventsLive()) {
-			for (std::uint32_t m = 0; m < work.movers.size(); ++m)
+			for (std::uint32_t m = 0; m < keptMovers.size(); ++m)
 				MarkMover(m);
-			for (std::uint32_t r = 0; r < work.roots.size(); ++r)
+			for (std::uint32_t r = 0; r < keptRoots.size(); ++r)
 				MarkRoot(r);
 		}
 	}
@@ -735,7 +1028,7 @@ namespace DCLF
 			items.push_back({ &a_item, palette, a_settles, a_mover });
 		};
 		for (const auto m : dueMovers)
-			list(work.movers[m], false, true);
+			list(keptMovers[m].item, false, true);
 		for (auto it = a_job.written.rbegin(); it != a_job.written.rend(); ++it)
 			for (const auto& item : (*it)->written)
 				list(item, true, false);
@@ -912,7 +1205,7 @@ namespace DCLF
 		executor.ParallelFor("CS.DCLF.FrameValues.Roots", dueRoots.size(), 16, [&](std::size_t a_begin, std::size_t a_end) {
 			ZoneScopedN("CS.DCLF.FrameValues.Roots");
 			for (std::size_t r = a_begin; r < a_end; ++r) {
-				const auto& root = work.roots[dueRoots[r]];
+				const auto& root = keptRoots[dueRoots[r]];
 				EngineReadWindow::Lease lease;
 				if (!lease) {
 					++refusedHere;
@@ -964,14 +1257,14 @@ namespace DCLF
 			marked += rootChanged[r].size();
 			// Likewise a root whose sample changed a row (or was refused) is due next frame.
 			if (rootRefused[r] || !rootChanged[r].empty())
-				owedKeys.push_back(work.roots[dueRoots[r]].root.get());
+				owedKeys.push_back(keptRoots[dueRoots[r]].root.get());
 		}
 		sampled += static_cast<std::uint64_t>(items.size() + a_job.firstPerson.size());
 		rowsChanged += marked + firstPersonMarked;
 		paletteRowsChanged += paletteMarked + firstPersonPaletteMarked;
-		movers += work.movers.size();
+		movers += liveMovers;
 		moversDue += dueMovers.size();
-		roots += work.roots.size();
+		roots += liveRoots;
 		rootsDue += dueRoots.size();
 		if (const auto refusals = refusedHere.load())
 			refused += refusals;
@@ -996,7 +1289,7 @@ namespace DCLF
 		// them (nothing written), against the rows the producers left. A difference is a move no event named (a frozen row). Particle
 		// systems (sampled every frame) and first-person members (the render thread's) are not checked. A skin's palette update is
 		// idempotent per frame (a due skin's runs again for nothing); a skin not due runs it here as the native bone setter would.
-		const auto& work = *a_job.plan;
+		(void)a_job;
 		const auto& out = rows.Get();
 		const auto& paletteOut = palettes.Get();
 		struct Fresh
@@ -1004,11 +1297,11 @@ namespace DCLF
 			BindlessPlacement row{}, layer{};
 			bool sampled = false;
 		};
-		std::vector<Fresh> fresh(work.movers.size());
+		std::vector<Fresh> fresh(keptMovers.size());
 		ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> slotMover;  // a checked mover's slot and its layer's: its index
-		for (std::uint32_t m = 0; m < work.movers.size(); ++m) {
-			const auto& item = work.movers[m];
-			if (item.firstPerson || item.particles || !item.geometry || item.slot >= out.size())
+		for (std::uint32_t m = 0; m < keptMovers.size(); ++m) {
+			const auto& item = keptMovers[m].item;
+			if (!keptMovers[m].live || item.firstPerson || item.particles || !item.geometry || item.slot >= out.size())
 				continue;
 			slotMover.insert_or_assign(item.slot, m);
 			if (item.layerSlot != kNoObjectSlot && item.layerSlot < out.size())
@@ -1017,10 +1310,10 @@ namespace DCLF
 		std::atomic<std::uint64_t> palettesChecked{ 0 }, palettesDiffer{ 0 };
 		std::string firstPalette;
 		std::atomic_flag firstPaletteTaken;
-		SceneScheduler::Executor().ParallelFor("CS.DCLF.FrameValues.MovedParity", work.movers.size(), 64, [&](std::size_t a_begin, std::size_t a_end) {
+		SceneScheduler::Executor().ParallelFor("CS.DCLF.FrameValues.MovedParity", keptMovers.size(), 64, [&](std::size_t a_begin, std::size_t a_end) {
 			for (std::size_t m = a_begin; m < a_end; ++m) {
-				const auto& item = work.movers[m];
-				if (item.firstPerson || item.particles || !item.geometry || item.slot >= out.size())
+				const auto& item = keptMovers[m].item;
+				if (!keptMovers[m].live || item.firstPerson || item.particles || !item.geometry || item.slot >= out.size())
 					continue;
 				EngineReadWindow::Lease lease;
 				if (!lease)
@@ -1052,10 +1345,10 @@ namespace DCLF
 		// checked mover is compared on the two values the root writes.
 		auto& p = movedParity;
 		std::string firstRoot;
-		for (std::uint32_t r = 0; r < work.roots.size(); ++r) {
-			const auto& root = work.roots[r];
+		for (std::uint32_t r = 0; r < keptRoots.size(); ++r) {
+			const auto& root = keptRoots[r];
 			EngineReadWindow::Lease lease;
-			if (!lease || !root.root)
+			if (!lease || !root.live || !root.root)
 				continue;
 			float entry[4];
 			StoreSunEntry(root.root.get(), entry);
@@ -1066,7 +1359,7 @@ namespace DCLF
 					float fade[4];
 					StoreFadeNode(a_property, fade);
 					if (const auto it = slotMover.find(a_slot); it != slotMover.end() && fresh[it->second].sampled) {
-						auto& target = a_slot == work.movers[it->second].slot ? fresh[it->second].row : fresh[it->second].layer;
+						auto& target = a_slot == keptMovers[it->second].item.slot ? fresh[it->second].row : fresh[it->second].layer;
 						std::memcpy(target.sunEntry, entry, sizeof(entry));
 						std::memcpy(target.lodFadeNode, fade, sizeof(fade));
 						return;
@@ -1085,10 +1378,10 @@ namespace DCLF
 			}
 		}
 		std::string firstRow;
-		for (std::uint32_t m = 0; m < work.movers.size(); ++m) {
+		for (std::uint32_t m = 0; m < keptMovers.size(); ++m) {
 			if (!fresh[m].sampled)
 				continue;
-			const auto& item = work.movers[m];
+			const auto& item = keptMovers[m].item;
 			const auto compare = [&](std::uint32_t a_slot, const BindlessPlacement& a_fresh) {
 				++p.rows;
 				if (std::memcmp(&out[a_slot], &a_fresh, sizeof(a_fresh)) == 0)
@@ -1107,9 +1400,9 @@ namespace DCLF
 		p.palettes += palettesChecked.load();
 		p.palettesDiffer += palettesDiffer.load();
 		++p.checks;
-		p.movers += work.movers.size();
+		p.movers += liveMovers;
 		p.moversDue += dueMovers.size();
-		p.roots += work.roots.size();
+		p.roots += liveRoots;
 		p.rootsDue += dueRoots.size();
 		if (p.first.empty())
 			p.first = !firstRow.empty() ? firstRow : !firstPalette.empty() ? firstPalette : firstRoot;
@@ -1248,19 +1541,17 @@ namespace DCLF
 	// journal's floor), into the leased backing (PooledBackingLease: no frame reads it before the one that leased it, which waits for
 	// this producer's signal); then the backing is at the journal's content epoch.
 	template <class T>
-	void FrameValues::Impl::Send(const Job& a_job, Part a_part, const KeptArray<T>& a_rows)
+	void FrameValues::Impl::Send(const Job& a_job, Part a_part, const KeptWholeArray<T>& a_rows)
 	{
 		auto& backing = *a_job.leases[a_part];  // the lease holder fills it (contentEpoch is its)
 		auto view = a_rows.View();
 		if (view.Count() > backing.capacityClass)
 			throw std::runtime_error(fmt::format("its {} backing holds {} rows of {}", kPartNames[a_part], backing.capacityClass, view.Count()));
-		const auto* data = view.elements ? view.elements->data() : nullptr;
 		std::uint64_t sent = 0, sentBytes = 0;
-		view.changes.ForEachRun(backing.contentEpoch.load(std::memory_order_acquire), view.Count(), [&](std::uint64_t a_first, std::uint64_t a_count) {
-			const org::StreamingUploadSegment segment{ data + a_first, static_cast<std::size_t>(a_count * sizeof(T)) };
+		view.Emit(backing.contentEpoch.load(std::memory_order_acquire), [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+			const org::StreamingUploadSegment segment{ a_data, a_bytes };
 			auto ticket = a_job.uploads->QueueTrackedStreamingUploadSegments({ &segment, 1 }, segment.size,
-				org::WorkerOwnedDestination{ backing.buffer, org::WorkerOwnedDestination::Ownership::PooledBackingLease },
-				static_cast<std::size_t>(a_first * sizeof(T)));
+				org::WorkerOwnedDestination{ backing.buffer, org::WorkerOwnedDestination::Ownership::PooledBackingLease }, a_offset);
 			if (!ticket || ticket->state.load(std::memory_order_acquire) == org::TrackedUploadTicketState::Cancelled)
 				throw std::runtime_error("the dedicated uploader refused its rows");
 			++sent;
@@ -1342,6 +1633,39 @@ namespace DCLF
 		// Appended after any not yet taken (newest last).
 		s.unsampledShading.insert(s.unsampledShading.end(), std::make_move_iterator(a_shading.begin()), std::make_move_iterator(a_shading.end()));
 		s.unsampledWetness.insert(s.unsampledWetness.end(), a_wetness.begin(), a_wetness.end());
+		// The kept set's first-person movers, every plan applied in order (the producers apply the same plans to the whole set).
+		for (const auto& plan : a_plans) {
+			if (!plan)
+				continue;
+			auto release = [](Plan::Item& a_item) {
+				ReleaseLater(a_item.geometry);
+				ReleaseLater(a_item.sunEntryNode);
+			};
+			if (plan->reset) {
+				for (auto& [geometry, item] : s.firstPersonMovers)
+					release(item);
+				s.firstPersonMovers.clear();
+			}
+			for (const void* geometry : plan->moversLeft)
+				if (const auto it = s.firstPersonMovers.find(geometry); it != s.firstPersonMovers.end()) {
+					release(it->second);
+					s.firstPersonMovers.erase(it);
+				}
+			for (const auto& item : plan->movers) {
+				if (!item.geometry)
+					continue;
+				const auto it = s.firstPersonMovers.find(item.geometry.get());
+				if (it != s.firstPersonMovers.end()) {
+					release(it->second);
+					if (item.firstPerson)
+						it->second = item;
+					else
+						s.firstPersonMovers.erase(it);
+				} else if (item.firstPerson) {
+					s.firstPersonMovers.emplace(item.geometry.get(), item);
+				}
+			}
+		}
 		auto* host = RenderGraphRuntime::Get().Host();
 		auto timeline = RenderGraphRuntime::Get().FrameWaitTimeline();
 		auto uploads = host ? host->RetainUploads() : nullptr;
@@ -1363,7 +1687,7 @@ namespace DCLF
 			}
 			return false;
 		}
-		// Every plan since the last frame: all written slots are sampled, the newest is drawn with.
+		// Every plan since the last frame, in order: the producer applies each onto its kept set and samples its written slots.
 		for (auto& plan : a_plans)
 			if (plan) {
 				s.unsampled.push_back(plan);
@@ -1426,14 +1750,6 @@ namespace DCLF
 			std::memcpy(job.firstPersonParticleCamera.eye, eye, sizeof(job.firstPersonParticleCamera.eye));
 		// Claimed first-person members, sampled after the engine's update and before Main::Draw's first-person shift
 		// (FUN_1414cb020), palettes included: the engine draws none of them, so none of its reads see a world-space palette.
-		if (s.firstPersonSerial != job.planSerial) {
-			// The newest plan's first-person movers, listed once a plan (Kick visits them alone).
-			s.firstPersonSerial = job.planSerial;
-			s.firstPersonMovers.clear();
-			for (const auto& item : job.plan->movers)
-				if (item.firstPerson)
-					s.firstPersonMovers.push_back(&item);
-		}
 		if (const auto claims = std::exchange(firstPersonClaims, nullptr)) {
 			std::vector<std::uint8_t> taken;
 			auto take = [&](const Plan::Item& a_item) {
@@ -1463,8 +1779,8 @@ namespace DCLF
 				sample.current.assign(currentRows, currentRows + a_item.boneRows);
 				sample.previous.assign(previousRows, previousRows + a_item.boneRows);
 			};
-			for (const auto* item : s.firstPersonMovers)
-				take(*item);
+			for (const auto& [geometry, item] : s.firstPersonMovers)
+				take(item);
 			for (auto it = job.written.rbegin(); it != job.written.rend(); ++it)
 				for (const auto& item : (*it)->written)
 					take(item);
@@ -1595,6 +1911,9 @@ namespace DCLF
 		c.refused = s.refused.exchange(0);
 		c.defects = s.defects.exchange(0);
 		c.failures = s.failures.exchange(0);
+		c.plans = s.plansApplied.exchange(0);
+		c.planResets = s.planResets.exchange(0);
+		c.planItems = s.planItems.exchange(0);
 		c.movers = s.movers.exchange(0);
 		c.moversDue = s.moversDue.exchange(0);
 		c.roots = s.roots.exchange(0);

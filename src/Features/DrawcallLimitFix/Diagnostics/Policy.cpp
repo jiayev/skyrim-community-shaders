@@ -125,4 +125,43 @@ namespace DCLF::Policy
 		// The persistent parity's slot check (the normal path trusts the reference counts).
 		return Diagnostics::Observe().scene && (a_slotsFreed || Diagnostics::ParityDue(a_pass));
 	}
+
+	// ---- W4 (the snapshot builder's main build).
+	bool CheckBuilderPairs(std::uint64_t a_build)
+	{
+		// The persistent parity's check of the region's narrowed pair checks (the build parity builds no region).
+		return Diagnostics::Observe().scene && Diagnostics::ParityDue(a_build, 29);
+	}
+
+	bool CheckRowPacking(std::uint64_t a_build)
+	{
+		// The build parity's whole builds check every build; the persistent parity's region builds on a schedule.
+		return Diagnostics::Observe().builds || (Diagnostics::Observe().scene && Diagnostics::ParityDue(a_build, 31));
+	}
+
+	bool CheckRegionResync()
+	{
+		// The persistent parity's check of the region's parallel resync.
+		return Diagnostics::Observe().scene;
+	}
+
+	// ---- W3 (publication pacing).
+	bool CheckPacedPublication(std::uint64_t a_publication)
+	{
+		// The set parity's: its passes run on the lane (the persistent parity's run inline, and every inline pass publishes).
+		return Diagnostics::Observe().claims && Diagnostics::ParityDue(a_publication, 7);
+	}
+
+	// ---- W1 (placement deltas and walk scheduling).
+	bool WitnessRootSchedule(std::uint64_t)
+	{
+		// The persistent parity's: every pass with a dirty root (they come with attaches and detaches, so a cadence would miss most).
+		return Diagnostics::Observe().scene;
+	}
+
+	bool CheckGeometryScan()
+	{
+		// The persistent parity's: stale and refreshed slots are rare, so every scan that has any.
+		return Diagnostics::Observe().scene;
+	}
 }
