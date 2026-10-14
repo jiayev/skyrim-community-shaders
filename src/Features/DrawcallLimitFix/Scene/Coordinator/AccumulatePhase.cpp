@@ -296,7 +296,7 @@ namespace DCLF::Scene
 				key = derived.key;
 				tables.MarkMaterialUsed(materialSlot);
 				joinMarkedMaterials.push_back(materialSlot);
-				// A pipeline's template is always a member's property (KeepResidentsAlive refreshes it every frame), so a slot never
+				// A pipeline's template is always a member's property (KeepResidentsAlive refreshes it whenever the pipeline's first member or its held property changes), so a slot never
 				// points at a freed property. Its constants are evaluated from it at Prepass (RefreshFrameConstants).
 				if (!tables.PipelineUsed(pipelineSlot)) {
 					tables.MarkPipelineUsed(pipelineSlot);

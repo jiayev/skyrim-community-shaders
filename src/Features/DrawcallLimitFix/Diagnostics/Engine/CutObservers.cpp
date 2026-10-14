@@ -38,6 +38,8 @@ namespace DCLF::Diagnostics::CutObservers
 		const ankerl::unordered_dense::set<const RE::NiAVObject*>* dryRoots = nullptr;
 		bool checkLists = false;
 
+		// The cut parity: the roots of the entries that differed from the whole plan at the last check (CheckCut).
+		ankerl::unordered_dense::set<const RE::NiAVObject*> cutDiffering;
 		std::uint32_t sunBits = 0;  // the sun's cascade bits as the list jobs ended (the light masks')
 		std::uint64_t frames = 0;   // PrepareFrame's frames (the fade port's every 30th)
 		std::uint32_t fadePortCursor = 0;
@@ -57,22 +59,43 @@ namespace DCLF::Diagnostics::CutObservers
 			++counts.cutChecks;
 			std::string first;
 			std::uint32_t differ = 0;
+			// The whole plan walks the subtrees as they are now; the kept one as they were when planned. An engine change under a root
+			// reaches the cut with the snapshot that follows it, so an entry differing at one check only is the snapshot's lag behind the
+			// engine (counted); one whose root differs at two checks in a row (a second apart) is a finding.
+			ankerl::unordered_dense::set<const RE::NiAVObject*> differing;
+			std::uint32_t lagging = 0;
+			std::string firstLagging;
 			auto note = [&](std::uint32_t a_e, const char* a_what) {
+				const auto* root = a_e < cut.roots.size() ? cut.roots[a_e] : nullptr;
+				const bool entry = a_e < cut.roots.size() && root;
+				if (entry) {
+					const bool added = differing.insert(root).second;
+					if (!cutDiffering.contains(root)) {
+						if (added && !lagging++)
+							firstLagging = fmt::format("entry {} ({}): {}", a_e, static_cast<const void*>(root), a_what);
+						return false;
+					}
+				}
 				if (!differ++)
-					first = fmt::format("entry {} ({}): {}", a_e, static_cast<const void*>(a_e < cut.roots.size() ? cut.roots[a_e] : nullptr), a_what);
+					first = fmt::format("entry {} ({}): {}", a_e, static_cast<const void*>(root), a_what);
+				return true;
 			};
-			if (whole.roots.size() != cut.roots.size())
-				note(0, "the index space");
+			if (whole.roots.size() != cut.roots.size() && !differ++)
+				first = "the index space";
+			// Entries waiting for their plan from the pool are Rejected meanwhile (the engine culls them): not compared.
+			std::size_t awaitingEligible = 0;
 			for (std::uint32_t e = 0; e < std::min(whole.roots.size(), cut.roots.size()); ++e) {
+				if (e < cut.awaiting.size() && cut.awaiting[e]) {
+					awaitingEligible += !PrimaryCullView::RejectedPlan(whole.plans[e]) ? 1 : 0;
+					continue;
+				}
 				if (whole.roots[e] != cut.roots[e] || whole.plans[e] != cut.plans[e]) {
-					if (!differ) {
+					const bool finding = note(e, "root or plan");
+					if (finding ? differ == 1 : lagging == 1) {
 						const auto* root = cut.roots[e];
-						note(e, "");
-						first += fmt::format("root {} / {}, plan {} kept, {} whole; members {} kept, {} whole; '{}' {}", static_cast<const void*>(cut.roots[e]),
+						(finding ? first : firstLagging) += fmt::format(": root {} / {}, plan {} kept, {} whole; members {} kept, {} whole; '{}' {}", static_cast<const void*>(cut.roots[e]),
 							static_cast<const void*>(whole.roots[e]), static_cast<int>(cut.plans[e]), static_cast<int>(whole.plans[e]), cut.memberEnd[e] - cut.memberBegin[e],
 							whole.memberEnd[e] - whole.memberBegin[e], root && root->name.c_str() ? root->name.c_str() : "?", root ? root->GetRTTI() ? root->GetRTTI()->name : "?" : "");
-					} else {
-						note(e, "root or plan");
 					}
 					continue;
 				}
@@ -97,8 +120,18 @@ namespace DCLF::Diagnostics::CutObservers
 						whole.switches.begin() + whole.switchEnd[e]))
 					note(e, "switches");
 			}
-			if (whole.eligible.size() != cut.eligible.size())
-				note(0, "the eligible roots");
+			// The eligible count follows the plans: a finding only when no entry is lagging.
+			if (!lagging && whole.eligible.size() != cut.eligible.size() + awaitingEligible && !differ++)
+				first = "the eligible roots";
+			cutDiffering = std::move(differing);
+			counts.cutLagging += lagging;
+			if (lagging) {
+				static std::uint32_t loggedLagging = 0;
+				if (loggedLagging++ < 8)
+					logger::info("[DCLF] cut parity at frame {}: {} entries differ from a whole plan once (the engine moved under them since their snapshot; "
+								 "a finding if they still differ at the next check); first {}",
+						Scene::Coordinator::Get().GetFrame(), lagging, firstLagging);
+			}
 			if (differ) {
 				++counts.cutMismatches;
 				static std::uint32_t logged = 0;
@@ -303,6 +336,44 @@ namespace DCLF::Diagnostics::CutObservers
 			if (!first.empty() && counts.listFirst.empty())
 				counts.listFirst = first;
 		}
+
+		/** @brief The build's job, a kept frame: the kept lists hold exactly what RebuildSceneLists would list (hidden roots included). */
+		void CheckKeptLists(const KeptSceneListsBuilt& a_event)
+		{
+			const RE::NiAVObject* objectRoot = nullptr;
+			std::vector<const RE::NiAVObject*> roots;
+			auto* lists = Global<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>*>(Engine::Address::kSceneLists);
+			if (!lists || !PrimaryCullView::ListRoots(objectRoot, roots))
+				return;
+			ankerl::unordered_dense::set<const RE::NiAVObject*> kept;
+			for (std::uint32_t l = 0; l < a_event.count; ++l)
+				for (std::uint32_t r = 0; r < a_event.kept[l] && r < lists[l].size(); ++r)
+					if (const auto* entry = lists[l][r].get(); entry && entry->parent)  // the sentinels have no parent
+						kept.insert(entry);
+			std::uint64_t missing = 0, extra = 0;
+			std::string first;
+			const auto note = [&](const RE::NiAVObject* a_root, const char* a_what) {
+				if (first.empty())
+					first = fmt::format("{} '{}'", a_what, a_root && a_root->name.c_str() ? a_root->name.c_str() : "?");
+			};
+			for (const auto* root : roots) {
+				if (a_event.filter && a_event.filter->contains(root))
+					continue;
+				if (!kept.erase(root)) {
+					++missing;
+					note(root, "a rebuild's, not kept:");
+				}
+			}
+			for (const auto* root : kept) {
+				++extra;
+				note(root, "kept, not a rebuild's:");
+			}
+			++counts.keptChecks;
+			counts.keptMissing += missing;
+			counts.keptExtra += extra;
+			if (!first.empty() && counts.keptFirst.empty())
+				counts.keptFirst = first;
+		}
 	}
 
 	void Install(bool a_scene, bool a_fade)
@@ -312,9 +383,11 @@ namespace DCLF::Diagnostics::CutObservers
 			Subscribe<StandInEntry>(EntryReached);
 			Subscribe<StandInHandedOver>(HandedOver);
 			Subscribe<FramePoint::RegistrationsDone>(CheckLightMasks);
+			PrimaryCullView::CollectVisible();
 			Subscribe<EnginePoint::SceneListsPublishing>(ListsPublishing);
 			Subscribe<SceneListsWhole>(ListsWhole);
 			Subscribe<EnginePoint::EngineSceneListsBuilt>(CheckLists);
+			Subscribe<KeptSceneListsBuilt>(CheckKeptLists);
 		}
 		if (a_fade) {
 			Subscribe<CutFrameBegin>(CountFrame);

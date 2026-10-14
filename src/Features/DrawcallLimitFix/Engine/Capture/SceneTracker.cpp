@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
 #include "Features/DrawcallLimitFix/Engine/Access/Walkers.h"
 
+#include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Runtime/SceneWake.h"
@@ -149,6 +150,34 @@ namespace DCLF
 			stl::detour_thunk<T>(target);
 		}
 
+		// The watched subtree's root (WatchSubtree): compared by the hooks, never dereferenced but for its descendants' parent chains.
+		std::atomic<const RE::NiAVObject*> watchedRoot{ nullptr };
+
+		/** @brief Whether a_object is a_root or under it (the hook's thread, the chain alive: the engine edits or stores under it). */
+		bool Under(const RE::NiAVObject* a_object, const RE::NiAVObject* a_root)
+		{
+			for (std::uint32_t depth = 0; a_object && depth <= Engine::kMaxParentDepth; ++depth, a_object = a_object->parent)
+				if (a_object == a_root)
+					return true;
+			return false;
+		}
+
+		// The watched category nodes (WatchCategoryNodes): an immutable sorted set the hooks read lock-free. A hook counts itself in
+		// (categoryReaders) around its read; a replaced set is freed by the render thread once it sees no reader in (RetireCategoryNodes).
+		std::atomic<const std::vector<const void*>*> categoryNodes{ nullptr };
+		std::atomic<std::uint32_t> categoryReaders{ 0 };  // also counts the hidden stores' reads of subtreeMembers
+		// The watched subtree's members (WatchSubtreeMembers): an immutable sorted set, read and retired like categoryNodes.
+		std::atomic<const std::vector<const void*>*> subtreeMembers{ nullptr };
+		std::unique_ptr<const std::vector<const void*>> subtreeCurrent;
+		std::atomic<std::uint64_t> categoryEdits{ 0 };
+		std::unique_ptr<const std::vector<const void*>> categoryCurrent;                // render thread: the published set's owner
+		std::vector<std::unique_ptr<const std::vector<const void*>>> categoryRetired;  // render thread: replaced, maybe still read
+		std::atomic<std::uint32_t> renderThread{ 0 };
+
+		// The window premise's counters (TakeWindowEdits).
+		std::atomic<std::uint64_t> windowEditsRender{ 0 }, windowEditsOther{ 0 };
+		std::atomic<std::uint32_t> windowEditFirst{ 0 };
+
 		template <int N>
 		void DetourOverrides(const REL::VariantID& a_vtable, std::vector<std::uintptr_t>& a_done)
 		{
@@ -275,6 +304,10 @@ namespace DCLF
 		CollectAncestors(a_child, event->ancestors);
 		// The mirror's records, on this thread after the engine's attach: only what is in the world.
 		event->captured = SceneCapture::CaptureAttached(*a_child);
+		// After the engine's attach: the child's parent is the node it went under.
+		NoteEdit(a_child, event->captured != nullptr);
+		if (const auto* root = watchedRoot.load(std::memory_order_acquire); root && a_child != root && Under(a_child, root))
+			SubtreeEvents().Push(SubtreeEvent{ a_child, SubtreeEvent::Kind::Attached });
 		Push(event);
 	}
 
@@ -282,11 +315,16 @@ namespace DCLF
 	{
 		if (!a_child || stopped.load(std::memory_order_acquire))
 			return;
+		// Before the engine's detach (which follows the hook): the child's parent is still the node it leaves.
+		const bool inWorld = SceneCapture::InWorld(a_child);
+		NoteEdit(a_child, inWorld);
+		// The watched subtree's keys it takes away, each named (pushed before the engine can free any of them).
+		if (const auto* root = watchedRoot.load(std::memory_order_acquire); root && a_child != root && Under(a_child, root))
+			Engine::ForEachLive(a_child, [](RE::NiAVObject& a_object, std::uint32_t) { SubtreeEvents().Push(SubtreeEvent{ &a_object, SubtreeEvent::Kind::Removed }); });
 		auto* event = new Event{};
 		event->type = EventType::Detached;
 		CollectAncestors(a_child, event->ancestors);
-		// In the world (before the engine's detach, which follows the hook): the mirror drops every record under it.
-		const bool inWorld = SceneCapture::InWorld(a_child);
+		// In the world: the mirror drops every record under it.
 		CollectGeometry(a_child, event->removed, inWorld ? &event->removedNodes : nullptr);
 		if (inWorld)
 			event->detachedRoot = a_child;
@@ -324,6 +362,19 @@ namespace DCLF
 	{
 		if (!installed || stopped.load(std::memory_order_acquire))
 			return;
+		// A hidden store under the watched subtree: its new bit, for the subtree's bits (FrameGlobals), in order with its edits.
+		if (a_update.hiddenSite != ~0u)
+			if (watchedRoot.load(std::memory_order_acquire))
+				if (const auto* record = std::get_if<SceneCapture::NodeRecord>(&a_update.record)) {
+					// A member by lookup: the stored object may be under construction, its parent not yet written.
+					const auto* node = static_cast<const RE::NiAVObject*>(record->key);
+					categoryReaders.fetch_add(1, std::memory_order_seq_cst);
+					const auto* members = subtreeMembers.load(std::memory_order_seq_cst);
+					const bool member = node && members && std::ranges::binary_search(*members, static_cast<const void*>(node));
+					categoryReaders.fetch_sub(1, std::memory_order_seq_cst);
+					if (member)
+						SubtreeEvents().Push(SubtreeEvent{ node, (record->flags & 1u) ? SubtreeEvent::Kind::Hidden : SubtreeEvent::Kind::Shown });
+				}
 		auto* event = new Event{};
 		event->type = EventType::Updated;
 		event->update = std::move(a_update);
@@ -368,6 +419,85 @@ namespace DCLF
 			else if (auto* node = a_object.AsNode(); node && a_nodes)
 				a_nodes->push_back(node);
 		});
+	}
+
+	void SceneTracker::NoteEdit(const RE::NiAVObject* a_child, bool a_inWorld)
+	{
+		// A watched category node attached or detached, or a child of one (the hook's thread: the child and its parent alive).
+		categoryReaders.fetch_add(1, std::memory_order_seq_cst);
+		if (const auto* set = categoryNodes.load(std::memory_order_seq_cst))
+			if (std::ranges::binary_search(*set, static_cast<const void*>(a_child)) ||
+				(a_child->parent && std::ranges::binary_search(*set, static_cast<const void*>(a_child->parent))))
+				categoryEdits.fetch_add(1, std::memory_order_release);
+		categoryReaders.fetch_sub(1, std::memory_order_seq_cst);
+		// The frame start's leased captures push in order with the hooks only while nothing in the world is attached or detached inside
+		// the window: what breaks that premise is counted.
+		if (a_inWorld && EngineReadWindow::IsOpen()) {
+			const auto thread = static_cast<std::uint32_t>(::GetCurrentThreadId());
+			(thread == renderThread.load(std::memory_order_relaxed) ? windowEditsRender : windowEditsOther).fetch_add(1, std::memory_order_relaxed);
+			std::uint32_t none = 0;
+			windowEditFirst.compare_exchange_strong(none, thread, std::memory_order_relaxed);
+		}
+	}
+
+	void SceneTracker::WatchSubtree(const RE::NiAVObject* a_root)
+	{
+		watchedRoot.store(a_root, std::memory_order_release);
+	}
+
+	void SceneTracker::WatchSubtreeMembers(std::vector<const void*> a_members)
+	{
+		std::erase(a_members, nullptr);
+		std::ranges::sort(a_members);
+		if (subtreeCurrent && *subtreeCurrent == a_members)
+			return;
+		auto set = std::make_unique<const std::vector<const void*>>(std::move(a_members));
+		subtreeMembers.store(set.get(), std::memory_order_seq_cst);
+		if (subtreeCurrent)
+			categoryRetired.push_back(std::move(subtreeCurrent));
+		subtreeCurrent = std::move(set);
+	}
+
+	EventQueue<SceneTracker::SubtreeEvent>& SceneTracker::SubtreeEvents()
+	{
+		static EventQueue<SubtreeEvent> queue;
+		return queue;
+	}
+
+	void SceneTracker::WatchCategoryNodes(std::vector<const void*> a_nodes)
+	{
+		renderThread.store(static_cast<std::uint32_t>(::GetCurrentThreadId()), std::memory_order_relaxed);
+		std::erase(a_nodes, nullptr);
+		std::ranges::sort(a_nodes);
+		a_nodes.erase(std::unique(a_nodes.begin(), a_nodes.end()), a_nodes.end());
+		if (categoryCurrent && *categoryCurrent == a_nodes)
+			return;
+		auto set = std::make_unique<const std::vector<const void*>>(std::move(a_nodes));
+		categoryNodes.store(set.get(), std::memory_order_seq_cst);
+		if (categoryCurrent)
+			categoryRetired.push_back(std::move(categoryCurrent));
+		categoryCurrent = std::move(set);
+	}
+
+	std::uint64_t SceneTracker::CategoryEdits()
+	{
+		return categoryEdits.load(std::memory_order_acquire);
+	}
+
+	void SceneTracker::RetireCategoryNodes()
+	{
+		// Every set replaced before this load is unreachable once no hook is in: a hook that loaded one counted itself in first.
+		if (!categoryRetired.empty() && categoryReaders.load(std::memory_order_seq_cst) == 0)
+			categoryRetired.clear();
+	}
+
+	SceneTracker::WindowEdits SceneTracker::TakeWindowEdits()
+	{
+		WindowEdits edits;
+		edits.renderThread = windowEditsRender.exchange(0, std::memory_order_relaxed);
+		edits.otherThreads = windowEditsOther.exchange(0, std::memory_order_relaxed);
+		edits.firstThread = windowEditFirst.exchange(0, std::memory_order_relaxed);
+		return edits;
 	}
 
 	namespace LodGates

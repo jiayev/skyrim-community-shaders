@@ -3,6 +3,7 @@
 #include "Features/DrawcallLimitFix/Engine/Cull/TreeAnimation.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Runtime/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Runtime/EventQueue.h"
 #include "Features/DrawcallLimitFix/Runtime/Switches.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
@@ -51,9 +52,15 @@ namespace DCLF::TreeAnimation
 		// detached.size(), for the report, which takes no lock.
 		std::atomic<std::uint32_t> held{ 0 };
 
-		// The tree list (main thread): the stood-in BSTreeNodes, whether DCLF runs this frame, and the results written for the loop now
-		// running (each tree held, its shape and the engine's value to put back).
-		ankerl::unordered_dense::set<const RE::NiAVObject*> ownedTrees;
+		// The tree list (main thread): the stood-in BSTreeNodes, each held while stood in (so BeforeListLoop visits them alone, not the
+		// whole list; let go through EngineReleases), whether DCLF runs this frame, and the results written for the loop now running
+		// (each tree held, its shape and the engine's value to put back).
+		ankerl::unordered_dense::map<const RE::NiAVObject*, RE::NiPointer<RE::NiAVObject>> ownedTrees;
+		void ReleaseTree(RE::NiPointer<RE::NiAVObject>& a_tree)
+		{
+			if (a_tree)
+				EngineReleases::Push(RE::NiPointer<RE::NiRefObject>(std::move(a_tree)));
+		}
 		bool running = false;
 		struct WrittenResult
 		{
@@ -200,7 +207,14 @@ namespace DCLF::TreeAnimation
 	{
 		if (!installed)
 			return;
-		ownedTrees = ankerl::unordered_dense::set<const RE::NiAVObject*>(a_trees.begin(), a_trees.end());
+		ankerl::unordered_dense::map<const RE::NiAVObject*, RE::NiPointer<RE::NiAVObject>> trees;
+		for (const auto* tree : a_trees) {
+			const auto it = ownedTrees.find(tree);
+			trees.try_emplace(tree, it != ownedTrees.end() ? std::move(it->second) : RE::NiPointer<RE::NiAVObject>(const_cast<RE::NiAVObject*>(tree)));
+		}
+		for (auto& [tree, tracked] : ownedTrees)
+			ReleaseTree(tracked);
+		ownedTrees = std::move(trees);
 		auto* manager = Manager();
 		DrainAdds(manager);
 		ankerl::unordered_dense::set<const RE::NiAVObject*> next(a_roots.begin(), a_roots.end());
@@ -230,6 +244,48 @@ namespace DCLF::TreeAnimation
 		owned = std::move(next);
 	}
 
+	void UpdateOwned(const std::vector<const RE::NiAVObject*>& a_left, const std::vector<const RE::NiAVObject*>& a_joined,
+		const std::vector<const RE::NiAVObject*>& a_treesLeft, const std::vector<const RE::NiAVObject*>& a_treesJoined)
+	{
+		if (!installed)
+			return;
+		for (const auto* tree : a_treesLeft)
+			if (const auto it = ownedTrees.find(tree); it != ownedTrees.end()) {
+				ReleaseTree(it->second);
+				ownedTrees.erase(it);
+			}
+		// A joining root is alive: the cut's snapshot holds it.
+		for (const auto* tree : a_treesJoined)
+			ownedTrees.try_emplace(tree, RE::NiPointer<RE::NiAVObject>(const_cast<RE::NiAVObject*>(tree)));
+		for (const auto* root : a_left)
+			owned.erase(root);
+		for (const auto* root : a_joined)
+			owned.insert(root);
+		auto* manager = Manager();
+		// The engine's adds since, judged by the owned set as it is now.
+		DrainAdds(manager);
+		++stats.syncs;
+		if (!manager)
+			return;
+		std::vector<RE::NiAVObject*> putBack;
+		ankerl::unordered_dense::set<const RE::NiAVObject*> take(a_joined.begin(), a_joined.end());
+		auto& lock = Lock(manager);
+		lock.Lock();
+		auto& list = AnimationList(manager);
+		// Back on the list, with the reference DCLF held: the roots no longer owned.
+		for (const auto* root : a_left)
+			if (const auto it = owned.contains(root) ? detached.end() : detached.find(root); it != detached.end()) {
+				list.push_back(it->second);
+				putBack.push_back(it->second);
+				detached.erase(it);
+			}
+		held.store(static_cast<std::uint32_t>(detached.size()), std::memory_order_relaxed);
+		if (!take.empty())
+			stats.takenOff += TakeOff(list, take);
+		lock.Unlock();
+		stats.putBack += putBack.size();
+	}
+
 	void AtUpdateEntry(bool a_running)
 	{
 		running = a_running;
@@ -249,42 +305,47 @@ namespace DCLF::TreeAnimation
 		// AfterListLoop, whatever another thread removes meanwhile.
 		auto& lock = Lock(a_manager, kTreeLock);
 		lock.Lock();
-		const auto& list = *reinterpret_cast<const List*>(a_manager + kTreeList);
-		for (std::uint32_t i = 0; i < list.size(); ++i) {
-			auto* tree = list[i];
-			if (!tree)
-				continue;
-			const bool stoodIn = ownedTrees.contains(tree);
+		const auto write = [&](RE::NiAVObject* a_tree, bool a_stoodIn) {
 			bool visible = true;
-			if (stoodIn) {
-				visible = draws.AccumulatedVerdict(tree);
-			} else if (!all) {
-				continue;
-			} else if (!draws.AccumulatedVerdictOf(tree, visible)) {
+			if (a_stoodIn) {
+				visible = draws.AccumulatedVerdict(a_tree);
+			} else if (!draws.AccumulatedVerdictOf(a_tree, visible)) {
 				++stats.wideNoVerdict;
-				continue;
+				return;
 			}
-			auto* multiBound = firstMultiBound(tree);
+			auto* multiBound = firstMultiBound(a_tree);
 			auto* bound = multiBound ? At<std::byte*>(multiBound, kMultiBound) : nullptr;
 			auto* shape = bound ? At<std::byte*>(bound, kMultiBoundShape) : nullptr;
 			if (!shape) {
-				++(stoodIn ? stats.noMultiBound : stats.wideNoMultiBound);
-				continue;
+				++(a_stoodIn ? stats.noMultiBound : stats.wideNoMultiBound);
+				return;
 			}
 			auto* result = &At<std::int32_t>(shape, kShapeResult);
-			if (!stoodIn) {
+			if (!a_stoodIn) {
 				// The comparison before the write: the engine's result is the last scene frame's cull, DCLF's the conservative rule's (a
 				// frame or more behind it).
 				const std::int32_t engine = *result;
 				++(engine == 0 ? stats.dryStale : (engine == 1) == visible ? stats.drySame : visible ? stats.dryInOut : stats.dryOutIn);
 			}
-			written.push_back({ RE::NiPointer<RE::NiAVObject>(tree), result, *result });
-			++(stoodIn ? stats.replaced : stats.wideReplaced)[std::clamp<std::int32_t>(*result, 0, 2)];
-			if (stoodIn)
+			written.push_back({ RE::NiPointer<RE::NiAVObject>(a_tree), result, *result });
+			++(a_stoodIn ? stats.replaced : stats.wideReplaced)[std::clamp<std::int32_t>(*result, 0, 2)];
+			if (a_stoodIn)
 				++(visible ? stats.treesIn : stats.treesOut);
 			else
 				++(visible ? stats.wideIn : stats.wideOut);
 			*result = visible ? 1 : 2;
+		};
+		if (!all) {
+			// The stood-in trees alone, held (a tree the engine took off the list meanwhile is not visited by the loop: its write is
+			// put back unread).
+			for (const auto& [tree, reference] : ownedTrees)
+				if (reference)
+					write(reference.get(), true);
+		} else {
+			const auto& list = *reinterpret_cast<const List*>(a_manager + kTreeList);
+			for (std::uint32_t i = 0; i < list.size(); ++i)
+				if (auto* tree = list[i])
+					write(tree, ownedTrees.contains(tree));
 		}
 		lock.Unlock();
 		stats.treeLoops += written.empty() ? 0 : 1;

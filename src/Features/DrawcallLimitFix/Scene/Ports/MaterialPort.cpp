@@ -6,6 +6,8 @@
 #include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
 
+#include <bit>
+
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
 namespace DCLF::MaterialPort
@@ -77,9 +79,44 @@ namespace DCLF::MaterialPort
 		captures.Push(std::move(held));
 	}
 
+	FrameComponentsWitness WitnessOf(const VanillaFrame& a_vanilla, const FeatureFrame& a_feature)
+	{
+		// Each value as the port reads it: a byte tested for non-zero as a bit, a float by its bits, and a value the port writes only
+		// under a flag (the character light's params, PS 6) zero while the flag is off. The character light's target is its class (none,
+		// in the array, outside it: unbound, bound, a failed evaluation for vanilla), not its index, which alternates frame to frame.
+		FrameComponentsWitness w;
+		std::size_t at = 0;
+		auto put = [&](std::uint32_t a_word) { w.words[at++] = a_word; };
+		auto bits = [](float a_value) { return std::bit_cast<std::uint32_t>(a_value); };
+		auto targetClass = [](std::int32_t a_target, std::uint32_t a_count) { return a_target < 0 ? 0u : static_cast<std::uint32_t>(a_target) < a_count ? 1u : 2u; };
+		const auto& v = a_vanilla;
+		put(std::uint32_t(v.sampled) | std::uint32_t(v.shaderKnown) << 1 | std::uint32_t(v.lodTexParamsZ != 0) << 2 | std::uint32_t(v.landSnowZ != 0) << 3 |
+			std::uint32_t(v.ambientSpecularWritten) << 4 | std::uint32_t(v.snowRimW != 0) << 5 | std::uint32_t(v.fullBright != 0) << 6 |
+			targetClass(v.characterLightTarget, kVanillaRenderTargets) << 8 | std::uint32_t(v.techniqueByte12) << 16 | std::uint32_t(v.techniqueByte7) << 24);
+		put(static_cast<std::uint32_t>(v.landSnowDivisor));
+		for (const float c : v.ambientSpecular)
+			put(v.ambientSpecularWritten ? bits(c) : 0u);
+		for (const float c : v.snowRim)
+			put(bits(c));
+		for (const float c : v.characterLight)
+			put(v.fullBright ? bits(c) : 0u);
+		const auto& f = a_feature;
+		put(std::uint32_t(f.truePBR) | std::uint32_t(f.skin) << 1 | std::uint32_t(f.characterLightEnabled) << 2 | targetClass(f.characterLightTarget, kFeatureRenderTargets) << 4 |
+			std::uint32_t(f.techniqueByte12) << 16 | std::uint32_t(f.techniqueByte7) << 24);
+		for (const float c : f.characterLightParams)
+			put(f.characterLightEnabled ? bits(c) : 0u);
+		// Advanced Skin's keys (FeatureHooksCovered): the table is shared between frames while unchanged, so its identity is the witness.
+		const auto table = reinterpret_cast<std::uintptr_t>(f.skinTextures.get());
+		put(static_cast<std::uint32_t>(table));
+		put(static_cast<std::uint32_t>(static_cast<std::uint64_t>(table) >> 32));
+		return w;
+	}
+
 	MaterialFrame SampleFrame()
 	{
-		return { SampleVanillaFrame(), SampleFeatureFrame() };
+		MaterialFrame frame{ SampleVanillaFrame(), SampleFeatureFrame() };
+		frame.components = WitnessOf(frame.vanilla, frame.feature);
+		return frame;
 	}
 
 	bool Evaluate(const MaterialSnapshot& a_snapshot, std::uint32_t a_passDescriptor, const MaterialFrame& a_frame, MaterialRecord& a_out)

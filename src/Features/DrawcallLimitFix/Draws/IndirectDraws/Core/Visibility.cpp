@@ -7,6 +7,7 @@
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #	include "Features/DrawcallLimitFix/Diagnostics/Engine/Accumulated.h"
+#	include "Features/DrawcallLimitFix/Scene/Coordinator/CandidateTable.h"
 
 namespace DCLF
 {
@@ -16,22 +17,83 @@ namespace DCLF
 	{
 		using Readback = VisibilityReadback;
 
+		inline constexpr std::uint32_t kUnlisted = ~0u;
+		// An object's share in its plain entry (VisibilityDecode::objectShare): counted (listed), in view, an engine residue.
+		inline constexpr std::uint8_t kShareListed = 1, kShareVisible = 2, kShareResidue = 4;
+
+		/**
+		 * @brief PrepareWrites' own state (Readback::decodeState). A pass visits only what can have changed: the slots the batches'
+		 * events name, the verdicts whose out-of-view window has passed (expiries, by frame), the object slots the tables' change log
+		 * names, the root rows the fade-root journal marked since the rows the classes were judged from, and the plain entries the
+		 * candidates moved; plus the objects a root's or an entry's change reaches, through the indexes kept here. Only a reset, a
+		 * camera cut and a refresh (and a log or journal it cannot read on) visit everything.
+		 */
+		struct VisibilityDecode
+		{
+			struct Expiry
+			{
+				std::uint32_t frame = 0;  // the frame the slot went out of view: judged again once the window reaches it
+				std::uint32_t slot = 0;
+				bool root = false;
+				bool operator>(const Expiry& a_other) const { return frame > a_other.frame; }
+			};
+			MarkedList roots, objects, entries;  // this pass's visits
+			std::vector<Expiry> expiries;        // a min-heap by frame
+			LogCursor changes;                   // tables.changeLog
+			std::uint64_t rootEpoch = 0;         // fadeRootsJournal's content epoch the root classes were judged at
+			bool rootsHeld = false;
+			std::uint32_t cutVisited = 0;        // the cut whose pending pass visited everything
+			std::shared_ptr<const SunCandidates> candidates;  // the snapshot whose indices entryMembers are in
+			// Per root slot: its class as last judged (0 not written, 1 stood in, 2 wide), its node, the object slots under it.
+			std::vector<std::uint8_t> rootClass;
+			std::vector<const void*> rootNode;
+			std::vector<std::vector<std::uint32_t>> rootMembers;
+			// Per object slot: the root and the plain entry it is listed under (kUnlisted) with its place in their lists, its share
+			// in the entry, and its occupant as last judged (the occupants' slots find an entry's new geometries).
+			std::vector<std::uint32_t> objectRoot, objectRootAt, objectEntry, objectEntryAt;
+			std::vector<std::uint8_t> objectShare;
+			std::vector<const void*> objectGeometry;
+			ankerl::unordered_dense::map<const void*, std::uint32_t> geometrySlot;
+			// Per plain entry: its object slots, and how many of them count listed, in view, as an engine residue.
+			std::vector<std::vector<std::uint32_t>> entryMembers;
+			std::vector<std::uint32_t> entryListed, entryVisible, entryResidue;
+			// Since the last line (CS_DCLF_STATS): passes, their time, slots visited and whole passes; the parity observer's.
+			std::uint64_t serial = 0, passes = 0, prepareNs = 0, visits = 0, wholePasses = 0, parityFrames = 0, parityDiffs = 0;
+		};
+
+		/** @brief The decode task's state (Readback::decodeState), made on its first use. Only the decode task touches it. */
+		VisibilityDecode& DecodeOf(Readback& a_readback)
+		{
+			if (!a_readback.decodeState)
+				a_readback.decodeState = std::make_shared<VisibilityDecode>();
+			return *static_cast<VisibilityDecode*>(a_readback.decodeState.get());
+		}
+
 		/** @brief Clears the decoder's verdicts (a reset frame: the reported words have a new, empty backing). */
-		void StartAgain(Readback& a_readback)
+		void StartAgain(Readback& a_readback, VisibilityDecode& a_decode)
 		{
 			a_readback.roots.assign(a_readback.roots.size(), {});
 			a_readback.objects.assign(a_readback.objects.size(), {});
 			a_readback.rootApplied.assign(a_readback.rootApplied.size(), 0u);
 			a_readback.objectApplied.assign(a_readback.objectApplied.size(), 0u);
 			a_readback.decodedFrame = a_readback.previousDecodedFrame = 0;
+			// The reset's pass visits everything.
+			a_decode.expiries.clear();
 		}
 
-		/** @brief Decode task: applies one batch to the verdicts, against its frame's tables. */
-		void Apply(Readback& a_readback, const Readback::Batch& a_batch)
+		/** @brief A slot to judge again once the window reaches a_frame (it went out of view then). */
+		void Expire(VisibilityDecode& a_decode, std::uint32_t a_frame, std::uint32_t a_slot, bool a_root)
+		{
+			a_decode.expiries.push_back({ a_frame, a_slot, a_root });
+			std::push_heap(a_decode.expiries.begin(), a_decode.expiries.end(), std::greater<>{});
+		}
+
+		/** @brief Decode task: applies one batch to the verdicts, against its frame's tables. Each slot it takes is visited. */
+		void Apply(Readback& a_readback, VisibilityDecode& a_decode, const Readback::Batch& a_batch)
 		{
 			const auto& tables = *a_batch.tables;
 			if (a_batch.reset)
-				StartAgain(a_readback);
+				StartAgain(a_readback, a_decode);
 			if (a_readback.roots.size() < tables.fadeRoots.size()) {
 				a_readback.roots.resize(tables.fadeRoots.size());
 				a_readback.rootApplied.resize(tables.fadeRoots.size(), 0u);
@@ -55,11 +117,14 @@ namespace DCLF
 					auto& root = a_readback.roots[event.slot];
 					root.generation = event.generation;
 					root.known = (event.bits & kVisibilityBitVerdict) != 0;
-					if (root.visible && !visible)
+					if (root.visible && !visible) {
 						root.outFrame = frame;
+						Expire(a_decode, frame, event.slot, true);
+					}
 					root.visible = visible;
 					if (visible)
 						root.lastFrame = frame;
+					a_decode.roots.Add(event.slot);
 				} else {
 					if (event.slot >= tables.objects.size() || !tables.objectGeometry[event.slot] || frame < a_readback.objectApplied[event.slot]) {
 						++stale;
@@ -67,11 +132,14 @@ namespace DCLF
 					}
 					a_readback.objectApplied[event.slot] = frame;
 					auto& object = a_readback.objects[event.slot];
-					if (object.visible && !visible)
+					if (object.visible && !visible) {
 						object.outFrame = frame;
+						Expire(a_decode, frame, event.slot, false);
+					}
 					object.visible = visible;
 					if (visible)
 						object.lastFrame = frame;
+					a_decode.objects.Add(event.slot);
 				}
 			}
 			if (frame > a_readback.decodedFrame) {
@@ -83,6 +151,469 @@ namespace DCLF
 			a_readback.stale.fetch_add(stale, std::memory_order_relaxed);
 		}
 
+		/** @brief The asks PrepareWrites compares with, copied for the parity observer's reference pass. */
+		struct Asked
+		{
+			std::vector<std::uint32_t> rootWrittenGeneration;
+			std::vector<std::uint8_t> rootWritten, objectWritten;
+			std::vector<const void*> objectWrittenGeometry;
+			std::vector<std::uint8_t> rootWrittenWide, objectWrittenWide, entryWritten;
+			std::vector<std::uint32_t> entryWrittenVersion;
+			const SunCandidates* entryCandidates = nullptr;
+			std::vector<std::uint32_t> objectEntry;
+			std::vector<const void*> objectEntryGeometry;
+
+			explicit Asked(const Readback& a_readback) :
+				rootWrittenGeneration(a_readback.rootWrittenGeneration), rootWritten(a_readback.rootWritten), objectWritten(a_readback.objectWritten),
+				objectWrittenGeometry(a_readback.objectWrittenGeometry), rootWrittenWide(a_readback.rootWrittenWide), objectWrittenWide(a_readback.objectWrittenWide),
+				entryWritten(a_readback.entryWritten), entryWrittenVersion(a_readback.entryWrittenVersion), entryCandidates(a_readback.entryCandidates),
+				objectEntry(a_readback.objectEntry), objectEntryGeometry(a_readback.objectEntryGeometry)
+			{}
+		};
+
+		/**
+		 * @brief The parity observer's reference: every listed root, object and plain entry judged against a_asked (the asks before
+		 * the pass), as PrepareWrites did before it visited only changes. Reads no engine memory.
+		 */
+		std::vector<Readback::Writes::Write> ReferenceWrites(const Readback& a_readback, Asked& a_asked, const Readback::Batch& a_newest, bool a_full, bool a_cutPending)
+		{
+			const auto& tables = *a_newest.tables;
+			const bool full = a_full, cutPending = a_cutPending;
+			const std::size_t roots = tables.fadeRootNode.size(), objects = tables.objectGeometry.size();
+			if (a_asked.rootWritten.size() < roots) {
+				a_asked.rootWritten.resize(roots, Readback::kWrittenNone);
+				a_asked.rootWrittenGeneration.resize(roots, 0u);
+				a_asked.rootWrittenWide.resize(roots, 0u);
+			}
+			if (a_asked.objectWritten.size() < objects) {
+				a_asked.objectWritten.resize(objects, Readback::kWrittenNone);
+				a_asked.objectWrittenGeometry.resize(objects, nullptr);
+				a_asked.objectWrittenWide.resize(objects, 0u);
+			}
+			const std::uint32_t window = a_readback.previousDecodedFrame;
+			std::vector<Readback::Writes::Write> writes;
+			// Per root slot: 1 stood in, 2 wide (its geometry takes the same class).
+			std::vector<std::uint8_t> rootClass(roots, 0u);
+			for (std::size_t r = 0; r < roots; ++r) {
+				const void* node = tables.fadeRootNode[r];
+				const bool stoodIn = node && r < tables.fadeRoots.size() && (tables.fadeRoots[r].bits & kFadeRootStoodIn);
+				if (!node || r >= tables.fadeRoots.size()) {
+					a_asked.rootWritten[r] = Readback::kWrittenNone;
+					continue;
+				}
+				const auto& row = tables.fadeRoots[r];
+				rootClass[r] = stoodIn ? 1 : 2;
+				bool visible = cutPending;
+				const bool listed = r < a_readback.roots.size() && a_readback.roots[r].generation == row.generation && a_readback.roots[r].known;
+				if (!visible)
+					visible = !listed || a_readback.roots[r].visible || a_readback.roots[r].outFrame > window;
+				const std::uint8_t wanted = visible ? Readback::kWrittenSet : Readback::kWrittenClear;
+				const std::uint8_t wideBit = stoodIn ? 0 : 1;
+				if (!full && a_asked.rootWritten[r] == wanted && a_asked.rootWrittenGeneration[r] == row.generation && a_asked.rootWrittenWide[r] == wideBit)
+					continue;
+				a_asked.rootWritten[r] = wanted;
+				a_asked.rootWrittenGeneration[r] = row.generation;
+				a_asked.rootWrittenWide[r] = wideBit;
+				writes.push_back({ const_cast<void*>(node), node, visible, Readback::kWriteRoot, !stoodIn });
+			}
+			const SunCandidates* candidates = a_newest.candidates.get();
+			if (candidates != a_asked.entryCandidates) {
+				a_asked.entryCandidates = candidates;
+				a_asked.objectEntry.assign(a_asked.objectEntry.size(), SunCandidates::kNone);
+				a_asked.objectEntryGeometry.assign(a_asked.objectEntryGeometry.size(), nullptr);
+			}
+			if (a_asked.objectEntry.size() < objects) {
+				a_asked.objectEntry.resize(objects, SunCandidates::kNone);
+				a_asked.objectEntryGeometry.resize(objects, nullptr);
+			}
+			const std::uint32_t entries = candidates ? candidates->Capacity() : 0u;
+			// Per entry: 1 listed, 2 visible; an entry with an engine-residue geometry keeps the engine's bit.
+			std::vector<std::uint8_t> entryState(entries, 0u), entryResidue(entries, 0u);
+			for (std::size_t o = 0; o < objects; ++o) {
+				auto* geometry = tables.objectGeometry[o];
+				const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
+				std::uint8_t objectClass = 0;
+				const void* rootNode = nullptr;
+				std::uint32_t entry = SunCandidates::kNone;
+				if (geometry && !tables.IsLayer(static_cast<std::uint32_t>(o))) {
+					if (root != kNoFadeRoot && root < roots && rootClass[root]) {
+						objectClass = rootClass[root];
+						rootNode = tables.fadeRootNode[root];
+					} else if (root == kNoFadeRoot && candidates) {
+						if (a_asked.objectEntryGeometry[o] != geometry) {
+							a_asked.objectEntryGeometry[o] = geometry;
+							a_asked.objectEntry[o] = SunCandidates::kNone;
+							if (const auto it = candidates->geometries.find(geometry); it != candidates->geometries.end() && it->second < candidates->geometryEntry.size())
+								a_asked.objectEntry[o] = candidates->geometryEntry[it->second];
+						}
+						entry = a_asked.objectEntry[o];
+						const bool entryIsRoot = entry < entries && candidates->entryNodes[entry] && tables.fadeRootIndex.contains(candidates->entryNodes[entry]);
+						if (entry < entries && candidates->entryNodes[entry] && !entryIsRoot) {
+							objectClass = 2;
+							rootNode = candidates->entryNodes[entry];
+						} else {
+							entry = SunCandidates::kNone;
+						}
+					}
+				}
+				if (objectClass == 2 && o < tables.objects.size() &&
+					(!(tables.objects[o].flags & kObjectMember) || (tables.objects[o].flags & (kObjectNoBindings | kObjectShadowOnly | kObjectFree)))) {
+					if (entry != SunCandidates::kNone)
+						entryResidue[entry] = 1;
+					objectClass = 0;
+				}
+				if (!objectClass) {
+					a_asked.objectWrittenGeometry[o] = nullptr;
+					continue;
+				}
+				bool visible = cutPending;
+				if (!visible && o < a_readback.objects.size())
+					visible = a_readback.objects[o].visible || a_readback.objects[o].outFrame > window;
+				if (entry != SunCandidates::kNone)
+					entryState[entry] = std::max<std::uint8_t>(entryState[entry], visible ? 2 : 1);
+				const std::uint8_t wideBit = objectClass == 2 ? 1 : 0;
+				const std::uint8_t wanted = visible ? Readback::kWrittenSet : Readback::kWrittenClear;
+				if (!full && a_asked.objectWritten[o] == wanted && a_asked.objectWrittenGeometry[o] == geometry && a_asked.objectWrittenWide[o] == wideBit)
+					continue;
+				a_asked.objectWritten[o] = wanted;
+				a_asked.objectWrittenGeometry[o] = geometry;
+				a_asked.objectWrittenWide[o] = wideBit;
+				writes.push_back({ geometry, rootNode, visible, Readback::kWriteGeometry, wideBit != 0 });
+			}
+			if (a_asked.entryWritten.size() < entries) {
+				a_asked.entryWritten.resize(entries, Readback::kWrittenNone);
+				a_asked.entryWrittenVersion.resize(entries, 0u);
+			}
+			for (std::uint32_t e = 0; e < entries; ++e) {
+				if (!entryState[e] || entryResidue[e]) {
+					a_asked.entryWritten[e] = Readback::kWrittenNone;
+					continue;
+				}
+				const bool visible = cutPending || entryState[e] == 2;
+				const std::uint8_t wanted = visible ? Readback::kWrittenSet : Readback::kWrittenClear;
+				const std::uint32_t version = e < candidates->entryVersion.size() ? candidates->entryVersion[e] : 0u;
+				if (!full && a_asked.entryWritten[e] == wanted && a_asked.entryWrittenVersion[e] == version)
+					continue;
+				a_asked.entryWritten[e] = wanted;
+				a_asked.entryWrittenVersion[e] = version;
+				const void* node = candidates->entryNodes[e];
+				writes.push_back({ const_cast<void*>(node), node, visible, Readback::kWriteEntry, true });
+			}
+			return writes;
+		}
+
+		/** @brief One PrepareWrites pass's inputs and output. */
+		struct Pass
+		{
+			Readback& readback;
+			VisibilityDecode& decode;
+			const SceneTables& tables;
+			const SunCandidates* candidates;
+			std::uint32_t entries;      // the candidates' index space
+			std::size_t roots, objects;  // the tables'
+			std::uint32_t window;        // the conservative rule's: the older of the last two decoded frames
+			bool cutPending, full;
+			Readback::Writes& list;
+		};
+
+		/** @brief Takes a_slot out of its owner's list (a_of: per slot its owner, a_at: its place there). */
+		void Unlist(std::vector<std::vector<std::uint32_t>>& a_lists, std::vector<std::uint32_t>& a_of, std::vector<std::uint32_t>& a_at, std::uint32_t a_slot)
+		{
+			const std::uint32_t owner = a_of[a_slot];
+			if (owner == kUnlisted)
+				return;
+			auto& list = a_lists[owner];
+			const std::uint32_t at = a_at[a_slot];
+			list[at] = list.back();
+			a_at[list[at]] = at;
+			list.pop_back();
+			a_of[a_slot] = kUnlisted;
+		}
+
+		void List(std::vector<std::vector<std::uint32_t>>& a_lists, std::vector<std::uint32_t>& a_of, std::vector<std::uint32_t>& a_at, std::uint32_t a_slot,
+			std::uint32_t a_owner)
+		{
+			if (a_lists.size() <= a_owner)
+				a_lists.resize(std::size_t(a_owner) + 1);
+			a_of[a_slot] = a_owner;
+			a_at[a_slot] = static_cast<std::uint32_t>(a_lists[a_owner].size());
+			a_lists[a_owner].push_back(a_slot);
+		}
+
+		void SizeRoots(VisibilityDecode& a_decode, std::size_t a_count)
+		{
+			if (a_decode.rootClass.size() >= a_count)
+				return;
+			a_decode.rootClass.resize(a_count, 0u);
+			a_decode.rootNode.resize(a_count, nullptr);
+			if (a_decode.rootMembers.size() < a_count)
+				a_decode.rootMembers.resize(a_count);
+		}
+
+		void SizeObjects(VisibilityDecode& a_decode, std::size_t a_count)
+		{
+			if (a_decode.objectRoot.size() >= a_count)
+				return;
+			a_decode.objectRoot.resize(a_count, kUnlisted);
+			a_decode.objectRootAt.resize(a_count, 0u);
+			a_decode.objectEntry.resize(a_count, kUnlisted);
+			a_decode.objectEntryAt.resize(a_count, 0u);
+			a_decode.objectShare.resize(a_count, 0u);
+			a_decode.objectGeometry.resize(a_count, nullptr);
+		}
+
+		void SizeEntries(VisibilityDecode& a_decode, std::size_t a_count)
+		{
+			if (a_decode.entryListed.size() >= a_count)
+				return;
+			a_decode.entryListed.resize(a_count, 0u);
+			a_decode.entryVisible.resize(a_count, 0u);
+			a_decode.entryResidue.resize(a_count, 0u);
+			if (a_decode.entryMembers.size() < a_count)
+				a_decode.entryMembers.resize(a_count);
+		}
+
+		/** @brief An object's share in its plain entry; the entry is visited when its counts move. */
+		void Share(VisibilityDecode& a_decode, std::uint32_t a_object, std::uint8_t a_share)
+		{
+			const std::uint8_t previous = a_decode.objectShare[a_object];
+			if (previous == a_share)
+				return;
+			a_decode.objectShare[a_object] = a_share;
+			const std::uint32_t entry = a_decode.objectEntry[a_object];
+			if (entry == kUnlisted)
+				return;
+			const auto count = [&](std::uint8_t a_bits, bool a_add) {
+				const auto step = [&](std::uint32_t& a_counter) { a_counter = a_add ? a_counter + 1 : a_counter - 1; };
+				if (a_bits & kShareListed)
+					step(a_decode.entryListed[entry]);
+				if (a_bits & kShareVisible)
+					step(a_decode.entryVisible[entry]);
+				if (a_bits & kShareResidue)
+					step(a_decode.entryResidue[entry]);
+			};
+			count(previous, false);
+			count(a_share, true);
+			a_decode.entries.Add(entry);
+		}
+
+		/** @brief A root slot: its write when it differs from the last asked; a changed class or node visits the objects under it. */
+		void JudgeRoot(Pass& a_pass, std::uint32_t a_root)
+		{
+			auto& readback = a_pass.readback;
+			auto& decode = a_pass.decode;
+			const auto& tables = a_pass.tables;
+			SizeRoots(decode, std::size_t(a_root) + 1);
+			const void* node = a_root < a_pass.roots ? tables.fadeRootNode[a_root] : nullptr;
+			std::uint8_t rootClass = 0;
+			if (!node || a_root >= tables.fadeRoots.size()) {
+				// Not written: forget the last write so a return writes again.
+				node = nullptr;
+				if (a_root < readback.rootWritten.size())
+					readback.rootWritten[a_root] = Readback::kWrittenNone;
+			} else {
+				const auto& row = tables.fadeRoots[a_root];
+				const bool stoodIn = (row.bits & kFadeRootStoodIn) != 0;
+				rootClass = stoodIn ? 1 : 2;
+				bool visible = a_pass.cutPending;
+				const bool listed = a_root < readback.roots.size() && readback.roots[a_root].generation == row.generation && readback.roots[a_root].known;
+				if (!visible)
+					visible = !listed || readback.roots[a_root].visible || readback.roots[a_root].outFrame > a_pass.window;
+				const std::uint8_t wanted = visible ? Readback::kWrittenSet : Readback::kWrittenClear;
+				const std::uint8_t wideBit = stoodIn ? 0 : 1;
+				if (a_pass.full || readback.rootWritten[a_root] != wanted || readback.rootWrittenGeneration[a_root] != row.generation ||
+					readback.rootWrittenWide[a_root] != wideBit) {
+					readback.rootWritten[a_root] = wanted;
+					readback.rootWrittenGeneration[a_root] = row.generation;
+					readback.rootWrittenWide[a_root] = wideBit;
+					a_pass.list.writes.push_back({ const_cast<void*>(node), node, visible, Readback::kWriteRoot, !stoodIn });
+				}
+			}
+			if (rootClass == decode.rootClass[a_root] && node == decode.rootNode[a_root])
+				return;
+			// Its geometry takes its class; a node listed or unlisted as a fade root also turns its plain entry's geometry off or on.
+			for (const std::uint32_t object : decode.rootMembers[a_root])
+				decode.objects.Add(object);
+			if (a_pass.candidates)
+				for (const void* changed : { decode.rootNode[a_root], node })
+					if (const auto it = changed ? a_pass.candidates->entries.find(static_cast<const RE::NiAVObject*>(changed)) : a_pass.candidates->entries.end();
+						it != a_pass.candidates->entries.end() && it->second < decode.entryMembers.size())
+						for (const std::uint32_t object : decode.entryMembers[it->second])
+							decode.objects.Add(object);
+			decode.rootClass[a_root] = rootClass;
+			decode.rootNode[a_root] = node;
+		}
+
+		/** @brief An object slot: its write when it differs from the last asked, its place under its root and its plain entry. */
+		void JudgeObject(Pass& a_pass, std::uint32_t a_object)
+		{
+			auto& readback = a_pass.readback;
+			auto& decode = a_pass.decode;
+			const auto& tables = a_pass.tables;
+			SizeObjects(decode, std::size_t(a_object) + 1);
+			const bool held = a_object < a_pass.objects;
+			auto* geometry = held ? tables.objectGeometry[a_object] : nullptr;
+			const bool drawn = geometry && !tables.IsLayer(a_object);
+			const std::uint32_t root = held && a_object < tables.objectFadeRoot.size() ? tables.objectFadeRoot[a_object] : kNoFadeRoot;
+			if (decode.objectGeometry[a_object] != geometry) {
+				if (const auto it = decode.geometrySlot.find(decode.objectGeometry[a_object]); it != decode.geometrySlot.end() && it->second == a_object)
+					decode.geometrySlot.erase(it);
+				if (geometry)
+					decode.geometrySlot.insert_or_assign(geometry, a_object);
+				decode.objectGeometry[a_object] = geometry;
+			}
+			if (const std::uint32_t memberOf = drawn && root != kNoFadeRoot ? root : kUnlisted; memberOf != decode.objectRoot[a_object]) {
+				Unlist(decode.rootMembers, decode.objectRoot, decode.objectRootAt, a_object);
+				if (memberOf != kUnlisted) {
+					SizeRoots(decode, std::size_t(memberOf) + 1);
+					List(decode.rootMembers, decode.objectRoot, decode.objectRootAt, a_object, memberOf);
+				}
+			}
+			std::uint8_t objectClass = 0;
+			const void* rootNode = nullptr;
+			std::uint32_t entry = SunCandidates::kNone, entryOf = kUnlisted;
+			const auto* candidates = a_pass.candidates;
+			if (drawn) {
+				if (root != kNoFadeRoot && root < a_pass.roots && root < decode.rootClass.size() && decode.rootClass[root]) {
+					objectClass = decode.rootClass[root];
+					rootNode = tables.fadeRootNode[root];
+				} else if (root == kNoFadeRoot && candidates) {
+					if (readback.objectEntryGeometry[a_object] != geometry) {
+						readback.objectEntryGeometry[a_object] = geometry;
+						readback.objectEntry[a_object] = SunCandidates::kNone;
+						if (const auto it = candidates->geometries.find(geometry); it != candidates->geometries.end() && it->second < candidates->geometryEntry.size())
+							readback.objectEntry[a_object] = candidates->geometryEntry[it->second];
+					}
+					entry = readback.objectEntry[a_object];
+					if (entry < a_pass.entries && candidates->entryNodes[entry]) {
+						entryOf = entry;
+						if (!tables.fadeRootIndex.contains(candidates->entryNodes[entry])) {
+							objectClass = 2;
+							rootNode = candidates->entryNodes[entry];
+						} else {
+							entry = SunCandidates::kNone;
+						}
+					} else {
+						entry = SunCandidates::kNone;
+					}
+				}
+			}
+			// The cached entry holds only while the object is listed under it (an entry's move visits its members alone).
+			if (entryOf == kUnlisted && a_object < readback.objectEntryGeometry.size())
+				readback.objectEntryGeometry[a_object] = nullptr;
+			if (entryOf != decode.objectEntry[a_object]) {
+				Share(decode, a_object, 0);
+				Unlist(decode.entryMembers, decode.objectEntry, decode.objectEntryAt, a_object);
+				if (entryOf != kUnlisted) {
+					SizeEntries(decode, std::size_t(entryOf) + 1);
+					List(decode.entryMembers, decode.objectEntry, decode.objectEntryAt, a_object, entryOf);
+				}
+			}
+			// A wide geometry DCLF does not draw in the main view (engine residue, shadow-only) has no verdict: its bit stays the
+			// engine cull's (and its plain entry's too).
+			std::uint8_t share = 0;
+			if (objectClass == 2 && a_object < tables.objects.size() &&
+				(!(tables.objects[a_object].flags & kObjectMember) || (tables.objects[a_object].flags & (kObjectNoBindings | kObjectShadowOnly | kObjectFree)))) {
+				if (entry != SunCandidates::kNone)
+					share = kShareResidue;
+				objectClass = 0;
+			}
+			if (!objectClass) {
+				Share(decode, a_object, share);
+				if (a_object < readback.objectWrittenGeometry.size())
+					readback.objectWrittenGeometry[a_object] = nullptr;
+				return;
+			}
+			bool visible = a_pass.cutPending;
+			if (!visible && a_object < readback.objects.size())
+				visible = readback.objects[a_object].visible || readback.objects[a_object].outFrame > a_pass.window;
+			if (entry != SunCandidates::kNone)
+				share = visible ? kShareListed | kShareVisible : kShareListed;
+			Share(decode, a_object, share);
+			const std::uint8_t wideBit = objectClass == 2 ? 1 : 0;
+			const std::uint8_t wanted = visible ? Readback::kWrittenSet : Readback::kWrittenClear;
+			if (!a_pass.full && readback.objectWritten[a_object] == wanted && readback.objectWrittenGeometry[a_object] == geometry &&
+				readback.objectWrittenWide[a_object] == wideBit)
+				return;
+			readback.objectWritten[a_object] = wanted;
+			readback.objectWrittenGeometry[a_object] = geometry;
+			readback.objectWrittenWide[a_object] = wideBit;
+			a_pass.list.writes.push_back({ geometry, rootNode, visible, Readback::kWriteGeometry, wideBit != 0 });
+		}
+
+		/** @brief A plain entry root: visible when any of its counted geometries is, unwritten while one is an engine residue. */
+		void JudgeEntry(Pass& a_pass, std::uint32_t a_entry)
+		{
+			if (a_entry >= a_pass.entries)
+				return;
+			auto& readback = a_pass.readback;
+			const auto& decode = a_pass.decode;
+			const bool counted = a_entry < decode.entryListed.size();
+			const std::uint32_t listed = counted ? decode.entryListed[a_entry] : 0u, inView = counted ? decode.entryVisible[a_entry] : 0u;
+			if (!listed || (counted && decode.entryResidue[a_entry])) {
+				readback.entryWritten[a_entry] = Readback::kWrittenNone;
+				return;
+			}
+			const bool visible = a_pass.cutPending || inView;
+			const std::uint8_t wanted = visible ? Readback::kWrittenSet : Readback::kWrittenClear;
+			const auto* candidates = a_pass.candidates;
+			const std::uint32_t version = a_entry < candidates->entryVersion.size() ? candidates->entryVersion[a_entry] : 0u;
+			if (!a_pass.full && readback.entryWritten[a_entry] == wanted && readback.entryWrittenVersion[a_entry] == version)
+				return;
+			readback.entryWritten[a_entry] = wanted;
+			readback.entryWrittenVersion[a_entry] = version;
+			const void* node = candidates->entryNodes[a_entry];
+			a_pass.list.writes.push_back({ const_cast<void*>(node), node, visible, Readback::kWriteEntry, true });
+		}
+
+		/**
+		 * @brief The parity observer (CS_DCLF_PERSISTENT_PARITY): a pass's writes against the reference's from the same asks, as
+		 * sets. A write only one side makes is a difference (<- WRITES DIFFER, with the first ones by slot).
+		 */
+		void CompareWrites(VisibilityDecode& a_decode, const Pass& a_pass, std::uint32_t a_frame, std::vector<Readback::Writes::Write> a_reference)
+		{
+			using Write = Readback::Writes::Write;
+			const auto key = [](const Write& a_write) { return std::tuple(a_write.kind, a_write.node, a_write.set, a_write.wide, a_write.root); };
+			const auto less = [&](const Write& a_left, const Write& a_right) { return key(a_left) < key(a_right); };
+			auto made = a_pass.list.writes;
+			std::sort(made.begin(), made.end(), less);
+			std::sort(a_reference.begin(), a_reference.end(), less);
+			std::uint64_t diffs = 0;
+			std::string first;
+			const auto note = [&](const Write& a_write, bool a_referenceOnly) {
+				if (++diffs > 8)
+					return;
+				static constexpr std::array<const char*, 3> kKinds{ "root", "entry", "geometry" };
+				std::uint32_t slot = ~0u;
+				if (a_write.kind == Readback::kWriteRoot) {
+					if (const auto it = a_pass.tables.fadeRootIndex.find(a_write.node); it != a_pass.tables.fadeRootIndex.end())
+						slot = it->second;
+				} else if (a_write.kind == Readback::kWriteEntry) {
+					if (a_pass.candidates)
+						if (const auto it = a_pass.candidates->entries.find(static_cast<const RE::NiAVObject*>(a_write.node)); it != a_pass.candidates->entries.end())
+							slot = it->second;
+				} else if (const auto it = a_decode.geometrySlot.find(a_write.node); it != a_decode.geometrySlot.end()) {
+					slot = it->second;
+				}
+				first += fmt::format("{}{} {} {}{} ({})", first.empty() ? "" : ", ", kKinds[std::min<std::size_t>(a_write.kind, 2)], static_cast<std::int64_t>(slot == ~0u ? -1 : slot),
+					a_write.set ? "set" : "clear", a_write.wide ? " wide" : "", a_referenceOnly ? "reference's alone" : "pass's alone");
+			};
+			std::size_t i = 0, j = 0;
+			while (i < made.size() || j < a_reference.size()) {
+				if (j == a_reference.size() || (i < made.size() && less(made[i], a_reference[j])))
+					note(made[i++], false);
+				else if (i == made.size() || less(a_reference[j], made[i]))
+					note(a_reference[j++], true);
+				else
+					++i, ++j;
+			}
+			++a_decode.parityFrames;
+			a_decode.parityDiffs += diffs;
+			if (diffs)
+				logger::info("[DCLF] accumulated writes parity (A5): frame {}, {} writes, the reference's {}, {} differ <- WRITES DIFFER; first: {}", a_frame, made.size(),
+					a_reference.size(), diffs, first);
+		}
+
 		/**
 		 * @brief Decode task: the kAccumulated writes that differ from the last asked (all on a full write). Reads no engine
 		 * memory. Null when there is nothing to write.
@@ -92,10 +623,13 @@ namespace DCLF
 		 * later.
 		 *
 		 * Stood-in roots and their geometry, plus wide writes: every other listed fade root and non-layer geometry under one, and
-		 * each plain entry root (visible when any of its geometries is). A slot changing class is rewritten.
+		 * each plain entry root (visible when any of its geometries is). A slot changing class is rewritten. Only the slots that
+		 * can have changed are visited (VisibilityDecode).
 		 */
-		Readback::Writes* PrepareWrites(Readback& a_readback, const Readback::Batch& a_newest, bool a_reset)
+		Readback::Writes* PrepareWrites(Readback& a_readback, VisibilityDecode& a_decode, const Readback::Batch& a_newest, bool a_reset)
 		{
+			ZoneScopedN("CS.DCLF.VisibilityPrepare");
+			const auto start = std::chrono::steady_clock::now();
 			const auto& tables = *a_newest.tables;
 			const std::uint32_t cut = a_readback.cutFrame.load(std::memory_order_acquire);
 			const bool cutPending = cut && a_readback.decodedFrame < cut;
@@ -116,120 +650,127 @@ namespace DCLF
 				a_readback.objectWrittenGeometry.resize(objects, nullptr);
 				a_readback.objectWrittenWide.resize(objects, 0u);
 			}
-			const std::uint32_t window = a_readback.previousDecodedFrame;
-			auto* list = new Readback::Writes();
-			list->frame = a_newest.frame;
-			list->full = full;
-			// Per root slot: 1 stood in, 2 wide (its geometry takes the same class).
-			std::vector<std::uint8_t> rootClass(roots, 0u);
-			for (std::size_t r = 0; r < roots; ++r) {
-				const void* node = tables.fadeRootNode[r];
-				const bool stoodIn = node && r < tables.fadeRoots.size() && (tables.fadeRoots[r].bits & kFadeRootStoodIn);
-				if (!node || r >= tables.fadeRoots.size()) {
-					// Not written: forget the last write so a return writes again.
-					a_readback.rootWritten[r] = Readback::kWrittenNone;
-					continue;
-				}
-				const auto& row = tables.fadeRoots[r];
-				rootClass[r] = stoodIn ? 1 : 2;
-				bool visible = cutPending;
-				const bool listed = r < a_readback.roots.size() && a_readback.roots[r].generation == row.generation && a_readback.roots[r].known;
-				if (!visible)
-					visible = !listed || a_readback.roots[r].visible || a_readback.roots[r].outFrame > window;
-				const std::uint8_t wanted = visible ? Readback::kWrittenSet : Readback::kWrittenClear;
-				const std::uint8_t wideBit = stoodIn ? 0 : 1;
-				if (!full && a_readback.rootWritten[r] == wanted && a_readback.rootWrittenGeneration[r] == row.generation && a_readback.rootWrittenWide[r] == wideBit)
-					continue;
-				a_readback.rootWritten[r] = wanted;
-				a_readback.rootWrittenGeneration[r] = row.generation;
-				a_readback.rootWrittenWide[r] = wideBit;
-				list->writes.push_back({ const_cast<void*>(node), node, visible, Readback::kWriteRoot, !stoodIn });
-			}
-			// Plain entry roots (wide): each object slot's entry, cached per occupant for this candidates snapshot.
 			const SunCandidates* candidates = a_newest.candidates.get();
+			const std::uint32_t entries = candidates ? candidates->Capacity() : 0u;
+			// The parity observer's reference starts from the asks before this pass.
+			std::optional<Asked> asked;
+			if (Diagnostics::Observe().scene && Diagnostics::ParityDue(a_decode.serial, 23))
+				asked.emplace(a_readback);
+			++a_decode.serial;
+			// Everything on a forced write, on tables or a log the cursor cannot read on, and when a cut starts (every slot visible
+			// until it is answered).
+			bool everything = full;
+			// The log is invalidated whenever the slots are cleared (SceneTables::Clear); a generation InvalidateVerdicts alone moves
+			// leaves the columns, whose rewrites the log carries: the cursor follows the log alone.
+			if (!a_decode.changes.Continues(tables.changeLog, 0u)) {
+				everything = true;
+				a_decode.changes.Restart(0u);
+			} else {
+				for (const auto& change : a_decode.changes.Unread(tables.changeLog))
+					a_decode.objects.Add(change.slot);
+			}
+			a_decode.changes.Advance(tables.changeLog);
+			if (cutPending && a_decode.cutVisited != cut) {
+				a_decode.cutVisited = cut;
+				everything = true;
+			}
+			// The plain entries the candidates moved: their members before and after (the cached entry of each is looked up again).
 			if (candidates != a_readback.entryCandidates) {
 				a_readback.entryCandidates = candidates;
-				a_readback.objectEntry.assign(a_readback.objectEntry.size(), SunCandidates::kNone);
-				a_readback.objectEntryGeometry.assign(a_readback.objectEntryGeometry.size(), nullptr);
+				if (!candidates || !a_decode.candidates) {
+					everything = true;
+				} else if (!everything) {
+					std::vector<std::uint32_t> moved;
+					ChangedEntriesByLog(a_decode.candidates.get(), *candidates, moved);
+					const auto forget = [&](std::uint32_t a_object) {
+						a_decode.objects.Add(a_object);
+						if (a_object < a_readback.objectEntryGeometry.size())
+							a_readback.objectEntryGeometry[a_object] = nullptr;
+					};
+					for (const std::uint32_t e : moved) {
+						a_decode.entries.Add(e);
+						if (e < a_decode.entryMembers.size())
+							for (const std::uint32_t object : a_decode.entryMembers[e])
+								forget(object);
+						if (e < entries)
+							for (const std::uint32_t g : candidates->entryGeometries[e]) {
+								if (g < candidates->geometrySlot.size() && candidates->geometrySlot[g] >= 0)
+									forget(static_cast<std::uint32_t>(candidates->geometrySlot[g]));
+								if (const auto it = g < candidates->geometryNodes.size() ? a_decode.geometrySlot.find(candidates->geometryNodes[g]) : a_decode.geometrySlot.end();
+									it != a_decode.geometrySlot.end())
+									forget(it->second);
+							}
+					}
+				}
+				if (everything) {
+					a_readback.objectEntry.assign(a_readback.objectEntry.size(), SunCandidates::kNone);
+					a_readback.objectEntryGeometry.assign(a_readback.objectEntryGeometry.size(), nullptr);
+				}
+				a_decode.candidates = a_newest.candidates;
 			}
 			if (a_readback.objectEntry.size() < objects) {
 				a_readback.objectEntry.resize(objects, SunCandidates::kNone);
 				a_readback.objectEntryGeometry.resize(objects, nullptr);
 			}
-			const std::uint32_t entries = candidates ? candidates->Capacity() : 0u;
-			// Per entry: 1 listed, 2 visible; an entry with an engine-residue geometry keeps the engine's bit.
-			std::vector<std::uint8_t> entryState(entries, 0u), entryResidue(entries, 0u);
-			for (std::size_t o = 0; o < objects; ++o) {
-				auto* geometry = tables.objectGeometry[o];
-				const std::uint32_t root = o < tables.objectFadeRoot.size() ? tables.objectFadeRoot[o] : kNoFadeRoot;
-				std::uint8_t objectClass = 0;
-				const void* rootNode = nullptr;
-				std::uint32_t entry = SunCandidates::kNone;
-				if (geometry && !tables.IsLayer(static_cast<std::uint32_t>(o))) {
-					if (root != kNoFadeRoot && root < roots && rootClass[root]) {
-						objectClass = rootClass[root];
-						rootNode = tables.fadeRootNode[root];
-					} else if (root == kNoFadeRoot && candidates) {
-						if (a_readback.objectEntryGeometry[o] != geometry) {
-							a_readback.objectEntryGeometry[o] = geometry;
-							a_readback.objectEntry[o] = SunCandidates::kNone;
-							if (const auto it = candidates->geometries.find(geometry); it != candidates->geometries.end() && it->second < candidates->geometryEntry.size())
-								a_readback.objectEntry[o] = candidates->geometryEntry[it->second];
-						}
-						entry = a_readback.objectEntry[o];
-						const bool entryIsRoot = entry < entries && candidates->entryNodes[entry] && tables.fadeRootIndex.contains(candidates->entryNodes[entry]);
-						if (entry < entries && candidates->entryNodes[entry] && !entryIsRoot) {
-							objectClass = 2;
-							rootNode = candidates->entryNodes[entry];
-						} else {
-							entry = SunCandidates::kNone;
-						}
-					}
-				}
-				// A wide geometry DCLF does not draw in the main view (engine residue, shadow-only) has no verdict: its bit stays
-				// the engine cull's.
-				if (objectClass == 2 && o < tables.objects.size() &&
-					(!(tables.objects[o].flags & kObjectMember) || (tables.objects[o].flags & (kObjectNoBindings | kObjectShadowOnly | kObjectFree)))) {
-					if (entry != SunCandidates::kNone)
-						entryResidue[entry] = 1;
-					objectClass = 0;
-				}
-				if (!objectClass) {
-					a_readback.objectWrittenGeometry[o] = nullptr;
-					continue;
-				}
-				bool visible = cutPending;
-				if (!visible && o < a_readback.objects.size())
-					visible = a_readback.objects[o].visible || a_readback.objects[o].outFrame > window;
-				if (entry != SunCandidates::kNone)
-					entryState[entry] = std::max<std::uint8_t>(entryState[entry], visible ? 2 : 1);
-				const std::uint8_t wideBit = objectClass == 2 ? 1 : 0;
-				const std::uint8_t wanted = visible ? Readback::kWrittenSet : Readback::kWrittenClear;
-				if (!full && a_readback.objectWritten[o] == wanted && a_readback.objectWrittenGeometry[o] == geometry && a_readback.objectWrittenWide[o] == wideBit)
-					continue;
-				a_readback.objectWritten[o] = wanted;
-				a_readback.objectWrittenGeometry[o] = geometry;
-				a_readback.objectWrittenWide[o] = wideBit;
-				list->writes.push_back({ geometry, rootNode, visible, Readback::kWriteGeometry, wideBit != 0 });
-			}
 			if (a_readback.entryWritten.size() < entries) {
 				a_readback.entryWritten.resize(entries, Readback::kWrittenNone);
 				a_readback.entryWrittenVersion.resize(entries, 0u);
 			}
-			for (std::uint32_t e = 0; e < entries; ++e) {
-				if (!entryState[e] || entryResidue[e]) {
-					a_readback.entryWritten[e] = Readback::kWrittenNone;
-					continue;
-				}
-				const bool visible = cutPending || entryState[e] == 2;
-				const std::uint8_t wanted = visible ? Readback::kWrittenSet : Readback::kWrittenClear;
-				const std::uint32_t version = e < candidates->entryVersion.size() ? candidates->entryVersion[e] : 0u;
-				if (!full && a_readback.entryWritten[e] == wanted && a_readback.entryWrittenVersion[e] == version)
-					continue;
-				a_readback.entryWritten[e] = wanted;
-				a_readback.entryWrittenVersion[e] = version;
-				const void* node = candidates->entryNodes[e];
-				list->writes.push_back({ const_cast<void*>(node), node, visible, Readback::kWriteEntry, true });
+			// The root rows the journal marked since the classes were judged (all of them for a holder behind its floor).
+			if (everything || !a_decode.rootsHeld) {
+				everything = true;
+			} else {
+				tables.fadeRootsJournal.Take().ForEachRun(a_decode.rootEpoch, roots, [&](std::uint64_t a_first, std::uint64_t a_count) {
+					for (std::uint64_t r = a_first; r < a_first + a_count; ++r)
+						a_decode.roots.Add(static_cast<std::uint32_t>(r));
+				});
+			}
+			a_decode.rootEpoch = tables.fadeRootsJournal.ContentEpoch();
+			a_decode.rootsHeld = true;
+			// The verdicts whose out-of-view frame the window has reached.
+			const std::uint32_t window = a_readback.previousDecodedFrame;
+			while (!a_decode.expiries.empty() && a_decode.expiries.front().frame <= window) {
+				std::pop_heap(a_decode.expiries.begin(), a_decode.expiries.end(), std::greater<>{});
+				const auto expiry = a_decode.expiries.back();
+				a_decode.expiries.pop_back();
+				(expiry.root ? a_decode.roots : a_decode.objects).Add(expiry.slot);
+			}
+			if (everything) {
+				for (std::size_t r = 0, end = std::max(roots, a_decode.rootClass.size()); r < end; ++r)
+					a_decode.roots.Add(static_cast<std::uint32_t>(r));
+				for (std::size_t o = 0, end = std::max(objects, a_decode.objectRoot.size()); o < end; ++o)
+					a_decode.objects.Add(static_cast<std::uint32_t>(o));
+				for (std::size_t e = 0, end = std::max<std::size_t>(entries, a_decode.entryListed.size()); e < end; ++e)
+					a_decode.entries.Add(static_cast<std::uint32_t>(e));
+			}
+			auto* list = new Readback::Writes();
+			list->frame = a_newest.frame;
+			list->full = full;
+			Pass pass{ a_readback, a_decode, tables, candidates, entries, roots, objects, window, cutPending, full, *list };
+			// Roots first (their classes are their objects'), objects next (their shares are their entries' counts).
+			for (const std::uint32_t r : a_decode.roots.list)
+				JudgeRoot(pass, r);
+			for (std::size_t k = 0; k < a_decode.objects.list.size(); ++k)
+				JudgeObject(pass, a_decode.objects.list[k]);
+			for (const std::uint32_t e : a_decode.entries.list)
+				JudgeEntry(pass, e);
+			a_decode.visits += a_decode.roots.Size() + a_decode.objects.Size() + a_decode.entries.Size();
+			a_decode.wholePasses += everything ? 1 : 0;
+			a_decode.roots.Clear();
+			a_decode.objects.Clear();
+			a_decode.entries.Clear();
+			a_decode.prepareNs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+			if (asked)
+				CompareWrites(a_decode, pass, a_newest.frame, ReferenceWrites(a_readback, *asked, a_newest, full, cutPending));
+			if (++a_decode.passes >= 300) {
+				if (Diagnostics::Observe().stats)
+					logger::info("[DCLF] accumulated writes decode (A5): {} passes, {:.1f} us preparing ({:.2f} us a pass), {} slots visited ({:.1f} a pass), {} whole{}",
+						a_decode.passes, double(a_decode.prepareNs) / 1000.0, double(a_decode.prepareNs) / 1000.0 / double(a_decode.passes), a_decode.visits,
+						double(a_decode.visits) / double(a_decode.passes), a_decode.wholePasses,
+						Diagnostics::Observe().scene ? fmt::format("; parity {} frames, {} write differences{}", a_decode.parityFrames, a_decode.parityDiffs,
+														   !a_decode.parityFrames ? " <- NOT COMPARED" : a_decode.parityDiffs ? " <- WRITES DIFFER" : " <- OK") :
+													   std::string());
+				a_decode.passes = a_decode.prepareNs = a_decode.visits = a_decode.wholePasses = a_decode.parityFrames = a_decode.parityDiffs = 0;
 			}
 			if (list->writes.empty()) {
 				delete list;
@@ -502,12 +1043,13 @@ namespace DCLF
 			auto decode = [readback = a_readback, batches = std::move(batches), holder = std::move(samples)] {
 				ZoneScopedN("CS.DCLF.VisibilityDecode");
 				const auto& samples = *holder;
+				auto& state = DecodeOf(*readback);
 				const auto start = std::chrono::steady_clock::now();
 				std::size_t next = 0;
 				bool reset = false;
 				for (auto* batch : batches) {
 					reset = reset || batch->reset;
-					Apply(*readback, *batch);
+					Apply(*readback, state, *batch);
 					// Earlier samples had no batch; this frame's is compared only if the batch is complete.
 					for (; next < samples.size() && samples[next]->frame < batch->frame; ++next)
 						readback->samplesUnmatched.fetch_add(1, std::memory_order_relaxed);
@@ -520,7 +1062,7 @@ namespace DCLF
 					}
 				}
 				readback->samplesUnmatched.fetch_add(samples.size() - next, std::memory_order_relaxed);
-				if (auto* writes = PrepareWrites(*readback, *batches.back(), reset)) {
+				if (auto* writes = PrepareWrites(*readback, state, *batches.back(), reset)) {
 					writes->next = readback->writes.load(std::memory_order_relaxed);
 					while (!readback->writes.compare_exchange_weak(writes->next, writes, std::memory_order_release, std::memory_order_relaxed)) {}
 				}

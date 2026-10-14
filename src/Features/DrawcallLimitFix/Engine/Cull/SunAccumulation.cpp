@@ -11,6 +11,7 @@
 #include "Features/DrawcallLimitFix/Runtime/Switches.h"
 #include "Features/DrawcallLimitFix/Runtime/Toggles.h"
 #include "Features/DrawcallLimitFix/Runtime/KeptState.h"
+#include "Features/DrawcallLimitFix/Scene/Coordinator/CandidateTable.h"
 
 #include <array>
 #include <cstring>
@@ -21,60 +22,103 @@
 #include "Features/Skylighting.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/Events.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Hooks.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
 
 namespace DCLF
 {
 	void SunAccumulation::BeginFrame(const std::shared_ptr<const SunCandidates>& a_candidates)
 	{
-		if (pendingExclusion && a_candidates)
-			pendingExclusion = TranslateExclusion(pendingExclusion, a_candidates, true, false);
+		// The builder translated each verdict it built to the candidates of every later build (ForwardExclusion): the frame takes the
+		// one for its candidates, a swap. None (a snapshot the builder made no exclusion for): the pending one stays, a verdict on other
+		// candidates, which the full-frustum cull does not apply (exclusionStale).
+		if (!pendingExclusion || !a_candidates || pendingExclusion->candidates == a_candidates)
+			return;
+		if (auto forwarded = ForwardExclusion(pendingExclusion, a_candidates)) {
+			pendingExclusion = std::move(forwarded);
+			++stats.exclusionForwarded;
+		} else {
+			++stats.exclusionUnforwarded;
+		}
 	}
 
 	void ChangedEntries(const SunCandidates* a_from, const SunCandidates& a_to, std::vector<std::uint32_t>& a_out)
 	{
-		if (a_from == &a_to)
-			return;
-		const std::uint32_t to = a_to.Capacity(), from = a_from ? a_from->Capacity() : 0u;
-		for (std::uint32_t e = 0, end = std::max(to, from); e < end; ++e) {
-			const bool inFrom = e < from && a_from->entryNodes[e];
-			const bool inTo = e < to && a_to.entryNodes[e];
-			if ((inFrom || inTo) && (inFrom != inTo || a_from->entryVersion[e] != a_to.entryVersion[e]))
-				a_out.push_back(e);
-		}
+		ChangedEntriesByScan(a_from, a_to, a_out);
 	}
 
 	std::shared_ptr<SunExclusion> TranslateExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const SunCandidates>& a_to,
-		bool a_newVersion, bool a_lightReach, std::vector<std::uint32_t>* a_changed)
+		bool a_newVersion, bool a_lightReach, std::vector<std::uint32_t>* a_changed, const SunExclusion* a_stamps)
 	{
 		if (!a_exclusion || !a_to || a_exclusion->candidates == a_to)
 			return a_exclusion;
 		std::vector<std::uint32_t> local;
 		auto& changed = a_changed ? *a_changed : local;
 		changed.clear();
-		ChangedEntries(a_exclusion->candidates.get(), *a_to, changed);
+		ChangedEntriesByLog(a_exclusion->candidates.get(), *a_to, changed);
 		auto out = std::make_shared<SunExclusion>();
 		out->candidates = a_to;
 		const std::uint32_t capacity = a_to->Capacity();
+		const std::uint32_t geometries = a_to->GeometryCapacity();
 		out->excluded.assign(capacity, 0);
-		std::copy_n(a_exclusion->excluded.begin(), std::min<std::size_t>(capacity, a_exclusion->excluded.size()), out->excluded.begin());
+		const std::size_t kept = std::min<std::size_t>(capacity, a_exclusion->excluded.size());
+		std::copy_n(a_exclusion->excluded.begin(), kept, out->excluded.begin());
+		// Indices past the original's are new entries (changed), not excluded; ones the original had past a_to's capacity are gone.
+		std::uint32_t count = a_exclusion->excludedCount;
+		if (kept < a_exclusion->excluded.size())
+			count -= static_cast<std::uint32_t>(std::count(a_exclusion->excluded.begin() + kept, a_exclusion->excluded.end(), std::uint8_t(1)));
 		bool flipped = false;
 		for (const std::uint32_t e : changed)
 			if (e < capacity && out->excluded[e]) {
 				out->excluded[e] = 0;
+				--count;
 				flipped = true;
 			}
-		out->excludedCount = static_cast<std::uint32_t>(std::count(out->excluded.begin(), out->excluded.end(), std::uint8_t(1)));
+		out->excludedCount = count;
 		// Versions of translated copies are apart from the builds' (ShadowBuild.cpp counts from 1).
 		static std::atomic<std::uint64_t> translatedVersions{ 0 };
 		out->version = a_newVersion && flipped ? (1ull << 63) | (translatedVersions.fetch_add(1, std::memory_order_relaxed) + 1) : a_exclusion->version;
 		out->builtFrame = a_exclusion->builtFrame;
 		out->reused = a_exclusion->reused;
-		out->removed = std::make_unique<std::atomic<std::uint32_t>[]>(capacity);
-		out->cleared = std::make_unique<std::atomic<std::uint32_t>[]>(a_to->GeometryCapacity());
-		if (a_lightReach)
-			out->lightReach = std::make_unique<std::atomic<std::uint64_t>[]>(std::size_t(capacity) * 3);
+		// The stamped words, shared where long enough (SunExclusion: no version but the frame's is stamped).
+		const auto fits = [&](const SunExclusion* a_from) {
+			return a_from && a_from->removed && a_from->cleared && (!a_lightReach || a_from->lightReach) && a_from->removedCount >= capacity &&
+			       a_from->clearedCount >= geometries;
+		};
+		if (const SunExclusion* from = fits(a_stamps) ? a_stamps : fits(a_exclusion.get()) ? a_exclusion.get() : nullptr) {
+			out->removed = from->removed;
+			out->cleared = from->cleared;
+			out->lightReach = a_lightReach ? from->lightReach : nullptr;
+			out->removedCount = from->removedCount;
+			out->clearedCount = from->clearedCount;
+		} else {
+			out->removed = std::make_shared<std::atomic<std::uint32_t>[]>(capacity);
+			out->cleared = std::make_shared<std::atomic<std::uint32_t>[]>(geometries);
+			if (a_lightReach)
+				out->lightReach = std::make_shared<std::atomic<std::uint64_t>[]>(std::size_t(capacity) * 3);
+			out->removedCount = capacity;
+			out->clearedCount = geometries;
+		}
 		return out;
+	}
+
+	std::shared_ptr<SunExclusion> ForwardExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const SunCandidates>& a_to,
+		std::vector<std::uint32_t>* a_changed)
+	{
+		if (!a_exclusion || !a_to)
+			return nullptr;
+		// Each link is held by the one before it (forwardOwned, written before forward is released and never again).
+		const SunExclusion* node = a_exclusion.get();
+		if (node->candidates == a_to)
+			return a_exclusion;
+		while (const SunExclusion* next = node->forward.load(std::memory_order_acquire)) {
+			if (a_changed)
+				a_changed->insert(a_changed->end(), next->forwardChanged.begin(), next->forwardChanged.end());
+			if (next->candidates == a_to)
+				return node->forwardOwned;
+			node = next;
+		}
+		return nullptr;
 	}
 
 	namespace
@@ -92,6 +136,9 @@ namespace DCLF
 		constexpr std::uintptr_t kCascadeCull = 0xe305c0;
 		constexpr std::uintptr_t kMaskClearCallSite = 0x644d7e;  // Main::Draw -> FUN_1414cb640, the activeLightMask clear
 		constexpr std::uintptr_t kMaskClear = 0x14cb640;
+		constexpr std::uintptr_t kAppendNonAccum = 0xe30520;  // BSGeometryListCullingProcess::AppendNonAccum, vtable slot 0x19
+		// The engine's AppendNonAccum (Hooks::AppendNonAccum's original), for an entry the veto gives back.
+		void (*appendNonAccum)(void*, RE::NiAVObject*, std::uint64_t, std::uint64_t) = nullptr;
 		constexpr std::size_t kDescriptorAccumulator = 0x48;  // ShadowmapDescriptor::shaderAccumulator
 
 		// BSShaderAccumulator fields the sun's Accumulate sets per cascade (FUN_1414b2140 reads them).
@@ -188,11 +235,12 @@ namespace DCLF
 		return instance;
 	}
 
-	void SunAccumulation::ExcludeEntries(RE::BSShadowDirectionalLight* a_light)
+	void SunAccumulation::ArmExclusion(RE::BSShadowDirectionalLight* a_light)
 	{
 		auto exclusion = std::move(pendingExclusion);
 		previousExclusion = std::move(frameState.exclusion);
 		frameState.exclusion.reset();
+		armedExclusion.reset();
 		const auto toggles = ActiveToggles();
 		if (!toggles.excludeSunEntries || !M1Active(toggles) || !a_light)
 			return;
@@ -203,54 +251,57 @@ namespace DCLF
 			++stats.exclusionMissing;
 			return;
 		}
-		// Not a verdict on the frame's candidates (BeginFrame translates it at the frame's start; none then): an entry may hold a
-		// caster no epoch has drawn yet. The engine culls everything this frame.
+		// Not a verdict on the frame's candidates (BeginFrame takes the builder's translation at the frame's start; none then): an entry
+		// may hold a caster no epoch has drawn yet. The engine culls everything this frame.
 		if (exclusion->candidates != Scene::FrameView::Get().GetSunCandidates()) {
 			++stats.exclusionStale;
 			return;
 		}
+		// The processes are the light's, made once with it; the cull's jobs append to them (each its own) only once it is armed.
+		vetoProcesses.clear();
+		for (auto& process : a_light->GetShadowDirectionalLightRuntimeData().fullFrustumCullingProcessArray)
+			if (process)
+				vetoProcesses.push_back({ process.get() });
+		vetoStamp = stampCounter.fetch_add(1, std::memory_order_relaxed) + 1;
+		armedExclusion = std::move(exclusion);
+		vetoExclusion.store(armedExclusion.get(), std::memory_order_release);
+	}
+
+	void SunAccumulation::ExcludeEntries()
+	{
+		// The cull's jobs are done (JobList::Finish): their appends and counts are visible here.
+		if (!vetoExclusion.exchange(nullptr, std::memory_order_acq_rel))
+			return;
 		const std::int64_t start = Now();
-		const std::uint32_t stamp = stampCounter.fetch_add(1, std::memory_order_relaxed) + 1;
+		auto exclusion = std::move(armedExclusion);
+		const std::uint32_t stamp = vetoStamp;
 		const auto& candidates = *exclusion->candidates;
-		for (auto& process : a_light->GetShadowDirectionalLightRuntimeData().fullFrustumCullingProcessArray) {
-			if (!process)
-				continue;
-			auto& array = process->objectArray;
-			const std::uint32_t size = array.size();
-			if (!size)
-				continue;
-			removeScratch.assign(size, 0);
-			std::uint32_t removable = 0;
-			for (std::uint32_t r = 0; r < size; ++r) {
-				const auto* object = array[r].get();
-				if (!object)
-					continue;
-				const auto it = candidates.entries.find(object);
-				if (it != candidates.entries.end() && exclusion->excluded[it->second]) {
-					removeScratch[r] = it->second + 1;
-					++removable;
-				}
+		for (auto& p : vetoProcesses) {
+			stats.entriesSeen += p.seen;
+			// A process left empty by the veto gets its first entry back: the cascade cull sets its planes up from the first.
+			if (p.vetoed && p.vetoed == p.seen) {
+				exclusion->removed[p.firstEntry].store(0, std::memory_order_relaxed);
+				appendNonAccum(const_cast<void*>(p.process), p.firstVetoed, 0, 0);
+				--p.vetoed;
+				p.givenBack = true;
 			}
-			if (removable == size) {
-				removeScratch[0] = 0;
-				--removable;
+			stats.entriesRemoved += p.vetoed;
+		}
+		// CS_DCLF_PERSISTENT_PARITY: no excluded entry in the arrays but one given back (the veto saw every append).
+		if (Diagnostics::Observe().scene && Diagnostics::ParityDue(stamp)) {
+			std::uint32_t left = 0, givenBack = 0;
+			for (const auto& p : vetoProcesses) {
+				const auto& array = static_cast<const RE::BSCullingProcess*>(p.process)->objectArray;
+				for (std::uint32_t r = 0; r < array.size(); ++r)
+					if (const auto it = candidates.entries.find(array[r].get()); it != candidates.entries.end() && exclusion->excluded[it->second])
+						++left;
+				givenBack += p.givenBack ? 1 : 0;
 			}
-			stats.entriesSeen += size;
-			stats.entriesRemoved += removable;
-			if (!removable)
-				continue;
-			std::uint32_t kept = 0;
-			for (std::uint32_t r = 0; r < size; ++r) {
-				if (removeScratch[r]) {
-					exclusion->removed[removeScratch[r] - 1].store(stamp, std::memory_order_relaxed);
-					array[r].reset();
-					continue;
-				}
-				if (kept != r)
-					array[kept] = std::move(array[r]);
-				++kept;
+			if (left > givenBack) {
+				static std::atomic<std::uint32_t> logged{ 0 };
+				if (logged++ < 8)
+					logger::warn("[DCLF] sun entry exclusion: {} excluded entries in the full-frustum arrays after the veto ({} given back) <- VETO", left, givenBack);
 			}
-			array.resize(kept);
 		}
 		++stats.exclusionFrames;
 		stats.candidates += candidates.Count();
@@ -518,13 +569,48 @@ namespace DCLF
 				auto& self = SunAccumulation::Get();
 				self.ResetFrameSun();
 				self.fullFrustumRan = true;
+				self.ArmExclusion(static_cast<RE::BSShadowDirectionalLight*>(a_light));
 				const std::int64_t start = Now();
 				func(a_light, a_lists, a_arg);
 				const std::int64_t ticks = Now() - start;
 				auto& stats = self.stats;
 				stats.fullFrustumTicks += ticks;
 				stats.fullFrustumMax = std::max(stats.fullFrustumMax, ticks);
-				self.ExcludeEntries(static_cast<RE::BSShadowDirectionalLight*>(a_light));
+				self.ExcludeEntries();
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		/**
+		 * @brief BSGeometryListCullingProcess::AppendNonAccum (vtable slot 0x19, AE 0x140e30520): the only push into a full-frustum
+		 * process's objectArray (Process1 -> AppendVirtual -> here, for every entry its cull passes; the sun's processes do not recurse,
+		 * so the entry is the list's own). While the exclusion is armed, an excluded entry appended to one of the light's processes is
+		 * stamped removed and not pushed: the veto at insertion, on the cull's job threads, instead of a walk of the arrays after it.
+		 * The other processes of the class (the scene lists', precipitation's) pass through.
+		 */
+		struct AppendNonAccum
+		{
+			static void thunk(void* a_process, RE::NiAVObject* a_object, std::uint64_t a_2, std::uint64_t a_3)
+			{
+				auto& self = SunAccumulation::Get();
+				if (const auto* exclusion = self.vetoExclusion.load(std::memory_order_acquire); exclusion && a_object) {
+					for (auto& p : self.vetoProcesses) {
+						if (p.process != a_process)
+							continue;
+						++p.seen;
+						const auto& entries = exclusion->candidates->entries;
+						if (const auto it = entries.find(a_object); it != entries.end() && exclusion->excluded[it->second]) {
+							exclusion->removed[it->second].store(self.vetoStamp, std::memory_order_relaxed);
+							if (!p.vetoed++) {
+								p.firstVetoed = a_object;
+								p.firstEntry = it->second;
+							}
+							return;
+						}
+						break;
+					}
+				}
+				func(a_process, a_object, a_2, a_3);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -621,11 +707,16 @@ namespace DCLF
 		const auto cascadeCall = base + kCascadeCallSite;
 		const auto cascadeCull = base + kCascadeCullCallSite;
 		const auto maskClear = base + kMaskClearCallSite;
+		REL::Relocation<std::uintptr_t> listVtable{ RE::VTABLE_BSGeometryListCullingProcess[0] };
 		if (!CallsTo(fullFrustum, base + kFullFrustumCull) || !CallsTo(registerA, base + kRegister) || !CallsTo(registerB, base + kRegister) ||
-			!CallsTo(cascadeCall, base + kCascade) || !CallsTo(cascadeCull, base + kCascadeCull) || !CallsTo(maskClear, base + kMaskClear)) {
+			!CallsTo(cascadeCall, base + kCascade) || !CallsTo(cascadeCull, base + kCascadeCull) || !CallsTo(maskClear, base + kMaskClear) ||
+			reinterpret_cast<const std::uintptr_t*>(listVtable.address())[0x19] != base + kAppendNonAccum) {
 			logger::warn("[DCLF] sun accumulation: the calls are not where expected; the engine keeps the sun's accumulation");
 			return;
 		}
+		// The entry exclusion's veto, at the full-frustum processes' only push.
+		stl::write_vfunc<0x19, Hooks::AppendNonAccum>(RE::VTABLE_BSGeometryListCullingProcess[0]);
+		appendNonAccum = reinterpret_cast<decltype(appendNonAccum)>(Hooks::AppendNonAccum::func.address());
 		stl::write_vfunc<0x9, Hooks::Accumulate>(RE::VTABLE_BSShadowDirectionalLight[0]);
 		stl::write_thunk_call<Hooks::Register<0>>(registerA);
 		stl::write_thunk_call<Hooks::Register<1>>(registerB);

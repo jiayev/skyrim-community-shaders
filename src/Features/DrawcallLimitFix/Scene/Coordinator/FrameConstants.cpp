@@ -8,10 +8,30 @@
 #include "Features/DrawcallLimitFix/Draws/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
 
+#include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
+
 #include <cmath>
+#include <optional>
 
 namespace DCLF::Scene
 {
+	namespace
+	{
+		/**
+		 * @brief RefreshMaterialSignatures' witness (scene lane only; the coordinator is one, Coordinator::Get): the frame's sources every
+		 * applied signature was last evaluated against, and what it saved. The parity (CS_DCLF_PERSISTENT_PARITY, every 60 passes while it
+		 * holds) evaluates every held signature as every pass did, and counts a component the witness would have missed.
+		 */
+		struct SignatureWitness
+		{
+			std::optional<MaterialPort::FrameComponentsWitness> applied;
+			std::uint64_t passes = 0, moved = 0, held = 0;
+			Diagnostics::ParityCounter parity;
+		} signatureWitness;
+		constexpr std::uint32_t kSignatureParityOffset = 31;
+		constexpr std::uint64_t kSignatureReportPasses = 600;
+	}
+
 	void Coordinator::RefreshMaterialRecords()
 	{
 		// The scene work, its frame's FrameGlobals bound, the captures drained (ApplyEvents): the written materials' records,
@@ -91,8 +111,19 @@ namespace DCLF::Scene
 		// The frame-sourced components (MaterialSources): the same for every record of a signature, so one port evaluation of the
 		// signature's probe against the frame's sources gives them; written into every slot of the signature only when they moved
 		// since the last application. A slot keyed since was made from the same sources (the joins evaluate with them).
+		// The frame's witness (MaterialPort::FrameComponentsWitness, what of the sources the components read): while it is the one the
+		// signatures were last evaluated against, every applied signature already holds this frame's components, and only a signature
+		// not applied yet or whose probe failed (a new probe, or the same one again) is evaluated.
+		ZoneScopedN("CS.DCLF.Scene.MaterialSignatures");
 		auto& r = materialRecordStats;
 		const auto& sources = FrameGlobals::Current().material;
+		auto& w = signatureWitness;
+		const bool moved = !w.applied || !(*w.applied == sources.components);
+		if (moved)
+			w.applied = sources.components;
+		++w.passes;
+		w.moved += moved ? 1 : 0;
+		const bool parity = !moved && Diagnostics::Observe().scene && Diagnostics::ParityDue(passSerial, kSignatureParityOffset);
 		auto keyed = [&](std::uint32_t a_slot, std::uint32_t a_signature) {
 			return a_slot < tables.materials.size() && tables.materialSlots.Alive(a_slot) && tables.materialSlotKey[a_slot].first &&
 			       MaterialSources::Signature(tables.materialSlotKey[a_slot].second) == a_signature;
@@ -100,11 +131,34 @@ namespace DCLF::Scene
 		for (auto& [signature, entry] : materialSignatures) {
 			if (!entry.probeValid)
 				continue;
+			const bool held = !moved && entry.appliedValid && !entry.probeFailed;
+			if (held && !parity) {
+				++w.held;
+				continue;
+			}
 			MaterialRecord live;
 			if (!MaterialPort::Evaluate(entry.probe, entry.probePass, sources, live)) {
+				if (held) {
+					// The parity's: a held probe these sources no longer evaluate (a gate the witness leaves out).
+					w.parity.Check(false, [&] { return fmt::format("signature {:#x}: its probe no longer evaluates", signature); });
+					continue;
+				}
 				// Not evaluable with these sources (an Advanced Skin key not set up yet): tried again next pass, unless a slot noted
-				// meanwhile gives another probe.
+				// meanwhile gives another probe. Its slots keep components of an older witness: not applied at this one, so the probe
+				// that replaces it is evaluated under any witness (NoteMaterialRecord clears probeFailed).
 				entry.probeFailed = true;
+				entry.appliedValid = false;
+				continue;
+			}
+			if (held) {
+				// The parity's: the components every pass's evaluation would apply against those the witness kept. Changes nothing.
+				MaterialRecord probe = entry.applied;
+				bool floatsChanged = false;
+				const bool texturesChanged = MaterialSources::ApplyFrameComponents(live, probe, entry.probePass, &floatsChanged);
+				w.parity.Check(!texturesChanged && !floatsChanged, [&] {
+					return fmt::format("signature {:#x} (pass {:#x}): {} moved under an unchanged witness", signature, entry.probePass,
+						texturesChanged ? "t11" : "a frame float");
+				});
 				continue;
 			}
 			entry.probeFailed = false;
@@ -116,7 +170,9 @@ namespace DCLF::Scene
 				if (!MaterialSources::ApplyFrameComponents(live, probe, entry.probePass, &floatsChanged) && !floatsChanged)
 					continue;
 			}
+			// Kept as records hold it (no t11 view: the frame's), so the next comparison sees only what a record would take.
 			entry.applied = live;
+			MaterialSources::StripFrameViews(entry.applied, entry.probePass);
 			entry.appliedValid = true;
 			++r.applications;
 			auto& slots = entry.slots;
@@ -140,6 +196,13 @@ namespace DCLF::Scene
 				++r.slotsApplied;
 				++i;
 			}
+		}
+		// The witness's line (CS_DCLF_STATS), with its parity's verdict where it ran.
+		if (w.passes >= kSignatureReportPasses && Diagnostics::Observe().stats) {
+			logger::info("[DCLF] material signature witness: moved on {} of {} passes, {} signature evaluations held; parity {} checks, {} differ{}", w.moved,
+				w.passes, w.held, w.parity.checks, w.parity.mismatches, w.parity.Verdict(true));
+			w.passes = w.moved = w.held = 0;
+			w.parity.Reset();
 		}
 	}
 
@@ -194,6 +257,16 @@ namespace DCLF::Scene
 		if (materialSignatureListed.size() <= a_slot)
 			materialSignatureListed.resize(std::size_t(a_slot) + 1, 0);
 		if (materialSignatureListed[a_slot] != signature + 1) {
+			// Listed under another signature (the slot keyed again): out of that list first, as a list is walked only when its signature
+			// applies (the witness moved), so a slot cycling between two would otherwise gather duplicates.
+			if (const std::uint32_t was = materialSignatureListed[a_slot]; was != 0)
+				if (const auto old = materialSignatures.find(was - 1); old != materialSignatures.end()) {
+					auto& slots = old->second.slots;
+					if (const auto at = std::find(slots.begin(), slots.end(), a_slot); at != slots.end()) {
+						*at = slots.back();
+						slots.pop_back();
+					}
+				}
 			materialSignatureListed[a_slot] = signature + 1;
 			entry.slots.push_back(a_slot);
 		}

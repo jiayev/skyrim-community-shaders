@@ -314,6 +314,8 @@ namespace DCLF::Draws
 					.Epoch(epoch));
 			AddPass(a_out, PassKind::Compute, "cs.dclf.shadow.build-draws", std::make_shared<ShadowBuildDrawsPass>(resources, false), epoch);
 			AddPass(a_out, PassKind::Render, "cs.dclf.shadow.view", std::make_shared<ShadowViewPass>(resources, false), epoch);
+			// The views' culling counters, to the host (IndirectDraws::Impl::ReadShadowCullCounters).
+			AddPass(a_out, PassKind::Copy, "cs.dclf.shadow.cull-counters", MakeShadowCullCounterPass(resources), epoch, PassQueue::None);
 			// Skylighting's occlusion map: the same passes in its own epoch after RenderMask.
 			const auto skyEpoch = RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::SkyOcclusion);
 			AddPass(a_out, PassKind::Copy, "cs.dclf.sky.latched-copies", ShadowLatchedCopies(true), skyEpoch);

@@ -18,6 +18,8 @@ namespace DCLF::Diagnostics
 
 namespace DCLF
 {
+	struct CandidateChanges;  // Scene/Coordinator/CandidateTable.h
+
 	/**
 	 * @brief The sun entries DCLF could take out of the engine's cascade culls (Coordinator::UpdateSunCandidates); immutable once
 	 * published. An entry (a static reference's root, or a terrain block's multibound node) is a candidate when every tracked
@@ -54,6 +56,9 @@ namespace DCLF
 		// Per geometry (Eligibility::PrimaryVerdict): 1, a table object PrimaryCull can give a synthetic pass; 2, a hidden static's,
 		// drawn by nobody; 0, the engine's (under a left-out entry, handed over as its cull would).
 		std::vector<std::uint8_t> primaryGeometry;
+		// The table's change log as published with this snapshot: which indices moved since earlier generations
+		// (CandidateTable.h, ChangedEntriesByLog). Null for a snapshot no table published.
+		std::shared_ptr<const CandidateChanges> changes;
 
 		static constexpr std::uint32_t kNone = ~0u;
 		/** @brief The index space: entry indices are below it (free ones among them). */
@@ -63,40 +68,75 @@ namespace DCLF
 		std::uint32_t Count() const { return static_cast<std::uint32_t>(entries.size()); }
 	};
 
-	/** @brief Appends, in order, the entry indices whose versions differ between a_from and a_to (null a_from: every index). */
+	/**
+	 * @brief Appends, in order, the entry indices whose versions differ between a_from and a_to (null a_from: every index), by comparing
+	 * every index: ChangedEntriesByScan. Readers that update by the change follow ChangedEntriesByLog instead (O(changes)).
+	 */
 	void ChangedEntries(const SunCandidates* a_from, const SunCandidates& a_to, std::vector<std::uint32_t>& a_out);
+	// Defined with the candidate table (Scene/Coordinator/CandidateTable.h, which documents them); declared here for the readers of
+	// SunCandidates.
+	bool ChangedEntriesByLog(const SunCandidates* a_from, const SunCandidates& a_to, std::vector<std::uint32_t>& a_out);
+	void ChangedEntriesByScan(const SunCandidates* a_from, const SunCandidates& a_to, std::vector<std::uint32_t>& a_out);
 
 	/**
 	 * @brief One shadow epoch's verdict: the entries whose casters it all drew, which the next frame's full-frustum cull leaves out of
-	 * the cascade culls. Built by the shadow build, used once.
+	 * the cascade culls. Built by the shadow build; immutable once published (but for its stamped words and its forward link), and
+	 * the same one is published again while nothing it was judged from moved.
 	 */
 	struct SunExclusion
 	{
+		SunExclusion() = default;
+		SunExclusion(const SunExclusion&) = delete;
+		SunExclusion& operator=(const SunExclusion&) = delete;
+
 		std::shared_ptr<const SunCandidates> candidates;
 		std::vector<std::uint8_t> excluded;  // per candidate index
 		std::uint32_t excludedCount = 0;
 		// Changes only when excluded does: the scene lists' filter compares it.
 		std::uint64_t version = 0;
+		// The stamped words: pooled, shared by the versions of one mode's exclusions (the builder's, and their translations) and never
+		// reset. Every word holds the stamp of the frame (or cull) that wrote it, which only that frame's own readers compare with, and
+		// one version per mode is stamped a frame (the frame's), so a word another version wrote never reads as this frame's. Grown by
+		// replacing them: a version holds what it was made with, at least removedCount and clearedCount long.
 		// Per candidate, the stamp of the full-frustum cull that took it out: the registration thunks' test. Written on the render
 		// thread, read by the registration jobs.
-		std::unique_ptr<std::atomic<std::uint32_t>[]> removed;
+		std::shared_ptr<std::atomic<std::uint32_t>[]> removed;
 		// Per geometry, the stamp of the frame whose main registration cleared its mask (+0x160 = 0xFFFF: reads, then zeroes it), so
 		// DCLF's sun bits are not written again that frame.
-		std::unique_ptr<std::atomic<std::uint32_t>[]> cleared;
+		std::shared_ptr<std::atomic<std::uint32_t>[]> cleared;
 		// Paraboloid mode (LocalLightCull): per candidate, three stamped words (reach kinds) of the point lights whose cull reached and
 		// skipped the entry this frame. Null for the sun's.
-		std::unique_ptr<std::atomic<std::uint64_t>[]> lightReach;
+		std::shared_ptr<std::atomic<std::uint64_t>[]> lightReach;
+		std::uint32_t removedCount = 0;  // entries removed and lightReach (times 3) hold
+		std::uint32_t clearedCount = 0;  // geometries cleared holds
 		// The scene frame of the shadow build it came from, and whether it reused that cache's verdict (diagnostics).
 		std::uint32_t builtFrame = 0;
 		bool reused = false;
+
+		// The forward link (ForwardExclusion): this verdict translated to the next candidates the builder judged with, made by the
+		// builder once it built for them. Written once (forwardOwned, then forward released); read by any thread after forward.
+		std::shared_ptr<SunExclusion> forwardOwned;
+		std::atomic<const SunExclusion*> forward{ nullptr };
+		// A forward translation's: the entries changed between its predecessor's candidates and its own, which it does not exclude.
+		std::vector<std::uint32_t> forwardChanged;
 	};
 
 	/**
 	 * @brief a_exclusion (made for an earlier snapshot) as a verdict on a_to: changed entries are not excluded, the rest keep theirs.
 	 * a_newVersion: a new version when the content differs, else the original's. a_lightReach: with the paraboloid reach words.
+	 * a_stamps: an exclusion for a_to whose stamped words the translation shares (else a_exclusion's when long enough, else new ones).
+	 * The builder makes them (ForwardExclusion follows what it made); a reader translating itself pays O(changes + candidates).
 	 */
 	std::shared_ptr<SunExclusion> TranslateExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const SunCandidates>& a_to,
-		bool a_newVersion, bool a_lightReach, std::vector<std::uint32_t>* a_changed = nullptr);
+		bool a_newVersion, bool a_lightReach, std::vector<std::uint32_t>* a_changed = nullptr, const SunExclusion* a_stamps = nullptr);
+
+	/**
+	 * @brief a_exclusion as a verdict on a_to, as the builder translated it (its forward links, made when it built for a_to: the same
+	 * verdict TranslateExclusion gives); a_exclusion itself when it is for a_to. Null when the builder made none for a_to (it did not
+	 * build that mode's exclusion for those candidates). a_changed: appends each link's changed entries. O(links), any thread.
+	 */
+	std::shared_ptr<SunExclusion> ForwardExclusion(const std::shared_ptr<SunExclusion>& a_exclusion, const std::shared_ptr<const SunCandidates>& a_to,
+		std::vector<std::uint32_t>* a_changed = nullptr);
 
 	/**
 	 * @brief The engine's work for the sun's cascades, removed where DCLF already draws the result (skyrim-engine-notes.md, "The
@@ -126,7 +166,11 @@ namespace DCLF
 		void PublishExclusion(std::shared_ptr<SunExclusion> a_exclusion) { pendingExclusion = std::move(a_exclusion); }
 		/** @brief Render thread: the exclusion the next full-frustum cull will apply (null: none published). */
 		std::shared_ptr<const SunExclusion> PendingExclusion() const { return pendingExclusion; }
-		/** @brief Render thread, frame start (before the scene lists' filter): the pending exclusion translated to a_candidates. */
+		/**
+		 * @brief Render thread, frame start (before the scene lists' filter): the pending exclusion as the builder translated it to
+		 * a_candidates (ForwardExclusion: a pointer swap). None made (the builder did not build the mode for them): the pending one stays
+		 * as it is, a verdict on other candidates, which the full-frustum cull does not apply (stale).
+		 */
 		void BeginFrame(const std::shared_ptr<const SunCandidates>& a_candidates);
 
 		/** @brief One cascade as BuildDraws tests it (GpuLayouts.h): plane masks (custom 0: none), 6 planes and 6 custom planes. */
@@ -168,6 +212,8 @@ namespace DCLF
 			std::uint32_t exclusionFrames = 0;        // full-frustum culls that applied one
 			std::uint32_t exclusionStale = 0;         // ... built for other candidates
 			std::uint32_t exclusionMissing = 0;       // ... with none published
+			std::uint32_t exclusionForwarded = 0;     // frame starts that took the builder's translation (BeginFrame)
+			std::uint32_t exclusionUnforwarded = 0;   // ... that found none for the frame's candidates
 			std::uint64_t entriesSeen = 0;            // objectArray entries the applied culls found
 			std::uint64_t entriesRemoved = 0;         // ... and took out
 			std::uint64_t candidates = 0;             // candidates, and excluded ones, of the applied exclusions
@@ -207,10 +253,16 @@ namespace DCLF
 		friend struct Diagnostics::SunAccumulationView;
 
 		/**
-		 * @brief Render thread, after the full-frustum cull: removes the published exclusion's entries from the processes' objectArray.
-		 * Each process keeps at least one entry: the cascade cull sets its planes up from the first.
+		 * @brief Render thread, before the full-frustum cull: arms the published exclusion's veto (Hooks::AppendNonAccum), which keeps
+		 * its excluded entries out of the full-frustum processes' objectArray as the cull appends them (on the cull's job threads).
 		 */
-		void ExcludeEntries(RE::BSShadowDirectionalLight* a_light);
+		void ArmExclusion(RE::BSShadowDirectionalLight* a_light);
+		/**
+		 * @brief Render thread, after the full-frustum cull: disarms the veto and makes its result the frame's exclusion. Each process
+		 * keeps at least one entry (the cascade cull sets its planes up from the first): one whose every append was vetoed gets its
+		 * first back.
+		 */
+		void ExcludeEntries();
 		/** @brief Any thread: the candidate geometry index if under an entry this frame's cull removed (or would have), else ~0u. */
 		std::uint32_t RemovedGeometryIndex(const RE::BSGeometry* a_geometry) const;
 		bool UnderRemovedEntry(const RE::BSGeometry* a_geometry) const { return RemovedGeometryIndex(a_geometry) != ~0u; }
@@ -260,7 +312,22 @@ namespace DCLF
 		};
 		std::shared_ptr<SunExclusion> pendingExclusion;  // render thread
 		std::shared_ptr<SunExclusion> previousExclusion;  // the last frame's, kept alive for a straggling registration
-		std::vector<std::uint32_t> removeScratch;         // render thread: per objectArray entry, candidate index + 1 when removed
+		/**
+		 * @brief One full-frustum process while the veto is armed. Its appends come from the one job culling it (and, after the jobs,
+		 * the render thread's), so its counts have one writer at a time; the render thread reads them after the cull.
+		 */
+		struct VetoProcess
+		{
+			const void* process = nullptr;
+			std::uint32_t seen = 0, vetoed = 0;
+			RE::NiAVObject* firstVetoed = nullptr;  // given back when nothing else was appended
+			std::uint32_t firstEntry = 0;
+			bool givenBack = false;
+		};
+		std::vector<VetoProcess> vetoProcesses;          // written on the render thread before the veto is armed
+		std::shared_ptr<SunExclusion> armedExclusion;     // render thread: the exclusion the armed veto applies
+		std::atomic<const SunExclusion*> vetoExclusion{ nullptr };  // the appends' view of it (null: disarmed)
+		std::uint32_t vetoStamp = 0;                      // written before the veto is armed
 		FrameState frameState;                           // written on the render thread before bitsReady
 		// Set at the end of the sun's Accumulate, cleared when Main::Draw's mask clear returns and at the full-frustum cull: while set,
 		// a removed-entry geometry's registration takes DCLF's bits.

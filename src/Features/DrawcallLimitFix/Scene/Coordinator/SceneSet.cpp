@@ -537,6 +537,8 @@ namespace DCLF::Scene
 				auto& object = tables.objects[slot];
 				object.flags = (phases & kSetMain) ? (object.flags | kObjectMember) : (object.flags & ~kObjectMember);
 				tables.NoteChange(slot, kChangeBindings);
+			} else {
+				tables.NotePublished(slot);
 			}
 		}
 		setApply.clear();
@@ -1000,8 +1002,10 @@ namespace DCLF::Scene
 		Tables& snapshot = *target;
 
 		// The snapshot equals the tables at its change log's end (WriteBoth keeps frame-start writes alike). Since then, replay: the
-		// logged per-object columns by the slots the log names; the logs by appending what they gained; materials by version
-		// (session-unique per write). Everything else is copied whole. A new snapshot, or one the log no longer reaches, is copied whole.
+		// logged per-object columns by the slots the change and publication logs name (a layer link's other end with them); the logs
+		// by appending what they gained; materials by the slots the material log names. The families whose stamps stood are kept.
+		// Everything else is copied whole. A new snapshot, or one a log no longer reaches, is copied whole. The coordinator's own
+		// columns (objectSeen, geometryTemplate) are not published.
 		auto loggedColumns = [](Tables& a_left, Tables& a_right, auto&& a_column) {
 			a_column(a_left.objects, a_right.objects);
 			a_column(a_left.draws, a_right.draws);
@@ -1028,6 +1032,18 @@ namespace DCLF::Scene
 			a_column(a_left.shadowReject, a_right.shadowReject);
 			a_column(a_left.residentSlot, a_right.residentSlot);
 		};
+		// Logged per-object columns sized apart from the objects (resized to the tables', then replayed by slot).
+		auto sidedColumns = [](Tables& a_left, Tables& a_right, auto&& a_column) {
+			a_column(a_left.setPhases, a_right.setPhases, std::uint8_t{ 0 });
+			a_column(a_left.decalOrdinal, a_right.decalOrdinal, ~0u);
+			a_column(a_left.layerBase, a_right.layerBase, kNoObjectSlot);
+			a_column(a_left.layerOf, a_right.layerOf, kNoObjectSlot);
+		};
+		// Not published: the coordinator's alone.
+		auto unpublished = [](Tables& a_left, Tables& a_right, auto&& a_column) {
+			a_column(a_left.objectSeen, a_right.objectSeen);
+			a_column(a_left.geometryTemplate, a_right.geometryTemplate);
+		};
 		// Covered by the geometry log (geometryLastUsed is copied whole).
 		auto geometryColumns = [](Tables& a_left, Tables& a_right, auto&& a_column) {
 			a_column(a_left.geometries, a_right.geometries);
@@ -1038,12 +1054,16 @@ namespace DCLF::Scene
 		// The families copied only when their write stamp moved.
 		auto treeFamily = [](Tables& a_left, Tables& a_right, auto&& a_member) { Tables::TreeFamily(a_left, a_right, a_member); };
 		auto fadeRootFamily = [](Tables& a_left, Tables& a_right, auto&& a_member) { Tables::FadeRootFamily(a_left, a_right, a_member); };
+		auto pipelineFamily = [](Tables& a_left, Tables& a_right, auto&& a_member) { Tables::PipelineFamily(a_left, a_right, a_member); };
 		auto constantsFamily = [](Tables& a_left, Tables& a_right, auto&& a_member) {
 			a_member(a_left.pipelineConstants, a_right.pipelineConstants);
 			a_member(a_left.techniqueConstants, a_right.techniqueConstants);
 		};
 		auto heldOut = [&](Tables& a_left, Tables& a_right) {
 			loggedColumns(a_left, a_right, [](auto& a_x, auto& a_y) { a_x.swap(a_y); });
+			sidedColumns(a_left, a_right, [](auto& a_x, auto& a_y, auto) { a_x.swap(a_y); });
+			unpublished(a_left, a_right, [](auto& a_x, auto& a_y) { a_x.swap(a_y); });
+			pipelineFamily(a_left, a_right, [](auto& a_x, auto& a_y) { a_x.swap(a_y); });
 			constantsFamily(a_left, a_right, [](auto& a_x, auto& a_y) { std::swap(a_x, a_y); });
 			treeFamily(a_left, a_right, [](auto& a_x, auto& a_y) { std::swap(a_x, a_y); });
 			fadeRootFamily(a_left, a_right, [](auto& a_x, auto& a_y) { std::swap(a_x, a_y); });
@@ -1054,8 +1074,11 @@ namespace DCLF::Scene
 			std::swap(a_left.geometryLog, a_right.geometryLog);
 			std::swap(a_left.materialLog, a_right.materialLog);
 			std::swap(a_left.extrasBlockLog, a_right.extrasBlockLog);
+			std::swap(a_left.publicationLog, a_right.publicationLog);
 		};
 		const std::uint64_t position = snapshot.changeLog.End();
+		const std::uint64_t publicationPosition = snapshot.publicationLog.End();
+		const std::uint64_t materialPosition = snapshot.materialLog.End();
 		const std::uint64_t geometryPosition = snapshot.geometryLog.End();
 		const std::uint64_t extrasPosition = snapshot.extrasBlockLog.End();
 		const bool replayExtras = tablesPoolReplayable[index] && tables.extrasBlockLog.Readable(extrasPosition) &&
@@ -1063,11 +1086,15 @@ namespace DCLF::Scene
 		const bool replayGeometry = tablesPoolReplayable[index] && tables.geometryLog.Readable(geometryPosition) &&
 		                            snapshot.geometryLog.base <= tables.geometryLog.base && snapshot.geometries.size() <= tables.geometries.size();
 		const bool replay = tablesPoolReplayable[index] && tables.changeLog.Readable(position) && snapshot.changeLog.base <= tables.changeLog.base &&
+		                    tables.publicationLog.Readable(publicationPosition) && snapshot.publicationLog.base <= tables.publicationLog.base &&
 		                    snapshot.objects.size() <= tables.objects.size();
+		const bool replayMaterials = tablesPoolReplayable[index] && tables.materialLog.Readable(materialPosition) && snapshot.materialLog.base <= tables.materialLog.base &&
+		                             snapshot.materials.size() <= tables.materials.size();
 		// Read before the copy writes the snapshot's stamps.
 		const bool keepTrees = tablesPoolReplayable[index] && snapshot.treesStamp == tables.treesStamp;
 		const bool keepFadeRoots = tablesPoolReplayable[index] && snapshot.fadeRootsStamp == tables.fadeRootsStamp;
 		const bool keepConstants = tablesPoolReplayable[index] && snapshot.constantsStamp == tables.constantsStamp;
+		const bool keepPipelines = tablesPoolReplayable[index] && snapshot.pipelinesStamp == tables.pipelinesStamp;
 		std::vector<std::uint32_t> recordVersions, recordFrameVersions;
 		recordVersions.swap(snapshot.materialVersion);
 		recordFrameVersions.swap(snapshot.materialFrameVersion);
@@ -1091,14 +1118,32 @@ namespace DCLF::Scene
 		publication.objectSlots += objectSlots;
 		if (replay) {
 			snapshot.GrowObjects(objectSlots);
+			sidedColumns(snapshot, tables, [](auto& a_to, auto& a_from, auto a_initial) { a_to.resize(a_from.size(), a_initial); });
 			replaySlotMarks.resize(std::max(replaySlotMarks.size(), objectSlots), 0);
 			std::vector<std::uint32_t> copied;
-			for (const auto& change : tables.changeLog.From(position)) {
-				const std::uint32_t slot = change.slot;
-				if (slot >= objectSlots || std::exchange(replaySlotMarks[slot], std::uint8_t{ 1 }))
-					continue;
-				copied.push_back(slot);
-				loggedColumns(snapshot, tables, [slot](auto& a_to, auto& a_from) { a_to[slot] = a_from[slot]; });
+			auto copySlot = [&](std::uint32_t a_slot) {
+				if (a_slot >= objectSlots || std::exchange(replaySlotMarks[a_slot], std::uint8_t{ 1 }))
+					return;
+				copied.push_back(a_slot);
+				loggedColumns(snapshot, tables, [a_slot](auto& a_to, auto& a_from) { a_to[a_slot] = a_from[a_slot]; });
+				sidedColumns(snapshot, tables, [a_slot](auto& a_to, auto& a_from, auto) {
+					if (a_slot < a_from.size())
+						a_to[a_slot] = a_from[a_slot];
+				});
+			};
+			for (const auto& change : tables.changeLog.From(position))
+				copySlot(change.slot);
+			for (const std::uint32_t slot : tables.publicationLog.From(publicationPosition))
+				copySlot(slot);
+			// A layer link's other end: the layer's write notes only the layer.
+			const std::size_t named = copied.size();
+			for (std::size_t i = 0; i < named; ++i) {
+				const std::uint32_t slot = copied[i];
+				for (const std::uint32_t end : { tables.layerBase[slot], tables.layerOf[slot] })
+					if (end < objectSlots && !replaySlotMarks[end]) {
+						snapshot.layerBase[end] = tables.layerBase[end];
+						snapshot.layerOf[end] = tables.layerOf[end];
+					}
 			}
 			for (const std::uint32_t slot : copied)
 				replaySlotMarks[slot] = 0;
@@ -1117,12 +1162,15 @@ namespace DCLF::Scene
 				a_to.entries.insert(a_to.entries.end(), gained.begin(), gained.end());
 			};
 			replayLog(snapshot.changeLog, tables.changeLog);
+			replayLog(snapshot.publicationLog, tables.publicationLog);
 			replayLog(snapshot.geometryLog, tables.geometryLog);
 			replayLog(snapshot.materialLog, tables.materialLog);
 		} else {
 			++publication.wholeCopies;
 			loggedColumns(snapshot, tables, [](auto& a_to, auto& a_from) { a_to = a_from; });
+			sidedColumns(snapshot, tables, [](auto& a_to, auto& a_from, auto) { a_to = a_from; });
 			snapshot.changeLog = tables.changeLog;
+			snapshot.publicationLog = tables.publicationLog;
 			snapshot.geometryLog = tables.geometryLog;
 			snapshot.materialLog = tables.materialLog;
 			recordVersions.clear();
@@ -1154,6 +1202,8 @@ namespace DCLF::Scene
 			fadeRootFamily(snapshot, tables, assign);
 		if (!keepConstants)
 			constantsFamily(snapshot, tables, assign);
+		if (!keepPipelines)
+			pipelineFamily(snapshot, tables, assign);
 		const std::size_t geometrySlots = tables.geometries.size();
 		publication.geometrySlots += geometrySlots;
 		if (replayGeometry) {
@@ -1171,18 +1221,32 @@ namespace DCLF::Scene
 		}
 		tablesPoolReplayable[index] = 1;
 
+		// Material records by the slots the material log names (every write of a record notes its slot); a snapshot the log no longer
+		// reaches by version (session-unique per write; none kept after a whole copy).
 		const std::size_t slots = tables.materials.size();
 		snapshot.materials.resize(slots);
-		for (std::size_t slot = 0; slot < slots; ++slot) {
-			if (slot < recordVersions.size() && recordVersions[slot] == tables.materialVersion[slot] && slot < recordFrameVersions.size() &&
-				recordFrameVersions[slot] == tables.materialFrameVersion[slot])
-				continue;
-			snapshot.materials[slot] = tables.materials[slot];
-			++publication.materialsReplayed;
+		if (replayMaterials) {
+			std::vector<std::uint8_t> marks(slots, 0);
+			for (const std::uint32_t slot : tables.materialLog.From(materialPosition)) {
+				if (slot >= slots || std::exchange(marks[slot], std::uint8_t{ 1 }))
+					continue;
+				snapshot.materials[slot] = tables.materials[slot];
+				++publication.materialsReplayed;
+			}
+		} else {
+			for (std::size_t slot = 0; slot < slots; ++slot) {
+				if (slot < recordVersions.size() && recordVersions[slot] == tables.materialVersion[slot] && slot < recordFrameVersions.size() &&
+					recordFrameVersions[slot] == tables.materialFrameVersion[slot])
+					continue;
+				snapshot.materials[slot] = tables.materials[slot];
+				++publication.materialsReplayed;
+			}
 		}
 		publication.materialSlots += slots;
 
 		Diagnostics::Notify(Diagnostics::TablesReplayed{ *this, snapshot, publication.published, position, geometryPosition, keepTrees, keepFadeRoots, keepConstants });
+		// The publication log's readers are the snapshots alone (one behind the bound is copied whole).
+		tables.publicationLog.Trim(1u << 16);
 		// Its node collects what is freed after it.
 		snapshot.retirementHold = retirement.Publish();
 		publishedTables = target;

@@ -35,10 +35,10 @@ Riverwood, ms per frame:
 
 | Work | Cost | Where it could go |
 | --- | --- | --- |
-| Waiting on the main camera's list and registration jobs | 0.30 | Shrinks with coverage; the rest is [dclf-cull-job-elimination.md](./dclf-cull-job-elimination.md) |
+| Waiting on the main camera's list and registration jobs (`CS.DCLF.ListJobsWait`: the engine's own `JobList::Finish`, not a DCLF lock) | 0.30 | Shrinks with coverage; it ends only when DCLF owns the residue the jobs cull ([dclf-cull-job-elimination.md](./dclf-cull-job-elimination.md)) |
 | DCLF's accumulate phase: the membership joins' table patch | about 0.35 | Per-object state from events, the sun's bits on the GPU |
 | DCLF's late per-object constants (`RefreshFrameConstants`: shading, extras, wetness) | not split out | Per-frame globals on the GPU (projected-UV matrix, land blend, wind); events for the rest |
-| DCLF's prologue (`GpuResources::Touch`, `UpdateSkin`) | 0.14-0.18 | Bone palettes on the GPU |
+| DCLF's frame-start captures and frame values' kick (`FrameValues::Kick`: leases, first-person samples, fade nodes' bytes, tree seeds; the mirror's portal-root captures) | not split out | Tree seeds need this frame's multibound cull result; `UpdateSkin` already runs on FrameValues' producer, for moved skins only |
 | DCLF's epochs (Z-prepass, colour, shadow, LLF) | 0.12 + 0.69 + 0.09-0.25 + 0.02 | The colour epoch's join on its build ("Epochs that only submit") |
 | The water cube-map reflection | about 0.5, mostly draws (LOD and sky) | A DCLF-native cube map, once DCLF draws LOD and the sky |
 | The precipitation mask, when it rains | about 0.37 | The same |
@@ -46,6 +46,11 @@ Riverwood, ms per frame:
 | DCLF's share of the primary's stand-in | 0.02 | Already small |
 
 The scene walk (about 0.5 ms) and the table builds run on DCLF's worker.
+
+Since the polls became events (2026-10-14, dclf-architecture.md, "Events, not polls"), DCLF's render-thread time in a
+normal run is about 1.06-1.14 ms a frame (was 1.19-1.28), and the scene evaluates 245-303 entries a frame (was 620-820).
+The rows above predate that pass. What still polls or stays on the render thread is in
+[dclf-open-defects.md](./dclf-open-defects.md), "Polls and render-thread work left (2026-10-14)".
 
 ## Decals and the primary's stand-in
 

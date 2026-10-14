@@ -30,14 +30,7 @@ namespace DCLF
 		// The shadow views (CS_DCLF_SHADOWS): their own resources, apart from the main epochs'.
 		std::shared_ptr<ShadowResources> shadow;
 		bool shadowSetupFailed = false;
-		// One view's culling counters, sampled every so many epochs and mapped a few frames later.
-		struct ShadowCullReadback
-		{
-			winrt::com_ptr<ID3D11Buffer> count;
-			std::uint32_t copiedFrame = 0;
-			std::uint32_t view = 0, mode = 0;
-		};
-		std::optional<ShadowCullReadback> shadowCullReadback;
+		// The shadow epochs counted for the culling counters' samples (ReadShadowCullCounters: one in 127).
 		std::uint32_t shadowCullEpochs = 0;
 		std::uint32_t shadowLoggedTargets = 0;
 		void ReadShadowCullCounters(std::uint32_t a_frame, IndirectDraws::ShadowStats& a_stats);

@@ -42,6 +42,12 @@ namespace DCLF::TreeAnimation
 	 * the BSTreeNodes among them (a_trees: the tree list's, whose multibound result DCLF gives the loop). Render (main) thread.
 	 */
 	void SetOwned(const std::vector<const RE::NiAVObject*>& a_roots, const std::vector<const RE::NiAVObject*>& a_trees);
+	/**
+	 * @brief SetOwned by delta: the roots that left and joined the owned set, and the BSTreeNodes among them. Left first, then joined (a
+	 * root in both stays owned). Render (main) thread; the animation list is scanned only when a root joined.
+	 */
+	void UpdateOwned(const std::vector<const RE::NiAVObject*>& a_left, const std::vector<const RE::NiAVObject*>& a_joined,
+		const std::vector<const RE::NiAVObject*>& a_treesLeft, const std::vector<const RE::NiAVObject*>& a_treesJoined);
 	/** @brief The main thread at Main::Update's entry (PrimaryCull::AtUpdateEntry): whether DCLF runs this frame (off: no tree is written). */
 	void AtUpdateEntry(bool a_running);
 	/**

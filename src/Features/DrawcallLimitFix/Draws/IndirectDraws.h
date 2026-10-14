@@ -224,7 +224,7 @@ namespace DCLF
 		/**
 		 * @brief The water reflection's faces (dclf-lod.md, "Water reflections"), render thread. CaptureReflectionFace: at a face's
 		 * accumulator render's end, its targets. PrepareReflection: once a frame after DecideTreeLod, the LOD slots' and tree LOD's
-		 * forward pipelines. ExecuteReflection: at BeforeShadowMaps, after the frame's updates (TESWaterReflections::Update runs twice
+		 * forward pipelines. ExecuteReflection: in the depth hook right after the Z-prepass epoch (its commit), after the frame's updates (TESWaterReflections::Update runs twice
 		 * a frame, a face each): one epoch drawing the faces' members and tree LOD into the cube target.
 		 */
 		void CaptureReflectionFace();

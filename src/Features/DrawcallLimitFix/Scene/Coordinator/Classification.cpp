@@ -415,9 +415,12 @@ namespace DCLF::Scene
 	void Coordinator::HoldProperties(Tracked& a_entry)
 	{
 		const auto* record = mirror.Geometry(a_entry.geometry.get());
-		auto hold = [&](RE::NiPointer<RE::BSShaderProperty>& a_held, const void* a_key) {
+		auto hold = [&](RE::NiPointer<RE::BSShaderProperty>& a_held, const void* a_key, std::uint32_t a_slot) {
 			if (a_held.get() == a_key)
 				return;
+			// A resident's pipeline template is its first member's held property (KeepResidentsAlive): recounted, so it takes the new one.
+			if (a_slot != kNoObjectSlot)
+				NoteResidentTouched(a_slot);
 			// The batch's pin, from the event that named it.
 			auto next = a_key ? Pinned(static_cast<const RE::BSShaderProperty*>(a_key)) : nullptr;
 			if (a_key && !next) {
@@ -430,8 +433,8 @@ namespace DCLF::Scene
 			HandBack(std::move(a_held));
 			a_held = std::move(next);
 		};
-		hold(a_entry.property, record ? record->property : nullptr);
-		hold(a_entry.layerProperty, record ? record->Layer() : nullptr);
+		hold(a_entry.property, record ? record->property : nullptr, a_entry.slot);
+		hold(a_entry.layerProperty, record ? record->Layer() : nullptr, a_entry.layerSlot);
 		// The property's fade node, for the tree and fade-root owners (an attach's capture pins every ancestor).
 		const auto* property = record && record->property ? mirror.Property(record->property) : nullptr;
 		const void* fadeNode = property ? property->fadeNode : nullptr;

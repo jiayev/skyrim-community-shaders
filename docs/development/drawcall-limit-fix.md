@@ -43,7 +43,8 @@ What the game binary does, as far as DCLF depends on it, is recorded in
 
 ## Code map
 
-This section describes the code as it is now (after the 2026-10-12/13 restructure and the 2026-10-14 pooled versions); the phases below are its history.
+This section describes the code as it is now (after the 2026-10-12/13 restructure, the 2026-10-14 pooled versions and the 2026-10-14
+polls-to-events pass, dclf-async-publication.md, "Polls become events"); the phases below are its history.
 `src/Features/DrawcallLimitFix.{h,cpp}` is the feature: the hook thunks and their install, the lifecycle
 (PostPostLoad, SetupResources, Reset), the settings UI, and one-line forwards for the hooks other features call. The rest
 is under `src/Features/DrawcallLimitFix/`:
@@ -75,7 +76,8 @@ The shaders are in `features/Drawcall Limit Fix/Shaders/DrawcallLimitFix/`; the 
 - **Engine threads** (cull jobs, loaders, Havok): run the hooked writers, which push events, and the list jobs `PrimaryCull` stands in for.
 - **Coordinator**: the scene lane (`SceneScheduler`), a serialized pump woken by its producers, running one scene pass at a time
   (`Coordinator::ScenePass`), its heavy stages sharded on DCLF's pool.
-- **Pool**: the pass's shards, the frame values, and the snapshot builder (one at a time).
+- **Pool**: the pass's shards, the frame values, and the snapshot builder (one at a time); leased jobs for the frame start's pins
+  walk and fade nodes' answers (`FrameStartJob`), the cut's planning and the local lights' filter, and the visibility decode.
 - **GPU**: the epochs' recordings on DXVK's Vulkan device through the render graph. Engine references are never released on DCLF's
   threads (`EngineReleases` hands them back to the render thread).
 

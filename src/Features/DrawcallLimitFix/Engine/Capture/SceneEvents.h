@@ -170,8 +170,10 @@ namespace DCLF::Scene
 
 	/**
 	 * @brief MoveEvents: keys of a reference whose 3D an update pass moved, or a category node whose subtree one did
-	 * (dclf-event-driven-tables.md, "Movers by event"); a mover is placed only with an event this frame or the last
-	 * (Coordinator::MovedRecently). Pushed after the write from the animation and cell jobs.
+	 * (dclf-event-driven-tables.md, "Movers by event"), or a particle system that took a new snapshot. Movers are placed every
+	 * frame regardless (FrameValues samples every mover of the newest placement plan); what the keys gate is the scene pass's light
+	 * path (a per-frame entry is evaluated only with an event naming one of its keys this frame or the last: Coordinator::MoverDue)
+	 * and which still roots the plan lists (QueueRoots). Pushed after the write from the animation and cell jobs.
 	 * - Actors: FUN_14066afa0 (start of every animation path: RunOneActorAnimationUpdateJob, Actor::UpdateAnimation,
 	 *   PlayerCharacter::UpdateAnimation, Actor::FinishLoadGame); TESObjectREFR::Update3DPosition (0x1402d9800, called by
 	 *   Actor::Update3DPosition); Actor::UpdateActor3DPosition (0x14069eb80); the sky cell's skin job (FUN_140663430); the
@@ -180,13 +182,15 @@ namespace DCLF::Scene
 	 *   or fading), the cell's dynamic node's (FUN_1402b3ae0, keyed by the node), graph-animated references' (FUN_1402f75a0,
 	 *   from UpdateAnimationJob).
 	 * - Node events (Havok writes, controller additions) name the reference above the node.
+	 * - Particle systems: ParticleSnapshots' NiParticleSystem update thunks (vtable 0x2C, 0x2D), keyed by the system (the geometry),
+	 *   when a capture took a new snapshot of a followed system (the particles toggle on).
 	 */
 	// Per-frame: no wake (thousands a frame); the next frame input's pass drains them.
 	inline EventQueue<const void*> moveEvents;
 	// Calls per writer (the order of kMoveWriterNames), for the report.
 	inline std::array<std::atomic<std::uint64_t>, 8> moveWriterCalls{};
 	constexpr std::array<const char*, 8> kMoveWriterNames{ "animation", "reference 3D position", "actor 3D position", "sky cell skin", "ragdoll",
-		"graph animation", "update pass", "" };
+		"graph animation", "update pass", "particle update" };
 	inline void CountMove(std::size_t a_writer) { moveWriterCalls[a_writer].fetch_add(1, std::memory_order_relaxed); }
 
 	/**

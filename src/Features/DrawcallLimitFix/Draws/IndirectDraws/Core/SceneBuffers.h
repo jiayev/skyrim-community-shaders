@@ -55,8 +55,14 @@ namespace DCLF::Draws
 		org::services::FilledVersion fadeAnimatedFilled;
 		// CPU mirrors: only differing runs go up.
 		std::vector<std::uint32_t> fadeAnimatedMirror;
+		std::vector<std::uint32_t> fadeAnimatedCounts;  // per root slot: the batch's updates while it is counted, else 0
 		std::vector<std::uint32_t> fadeRootProgramsMirror;
 		org::services::FilledContents<> fadeRootProgramsFilled;  // the root and program versions it holds
+		// What the programs mirror was judged against: its key (as filled), the roots' content epoch and PortalViews::ProgramsVersion.
+		struct ProgramsMirrorOf
+		{
+			std::uint64_t key = 0, rootsEpoch = 0, portals = 0;
+		} fadeRootProgramsMirrorOf;
 		// FadeStateCS's published states per frame parity; builds read the previous frame's. Every version is zero-filled (builds
 		// then take the static row's state).
 		std::array<Versioned, 2> fadeStatesOut;

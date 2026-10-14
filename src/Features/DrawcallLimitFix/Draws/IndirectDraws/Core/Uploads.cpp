@@ -35,6 +35,12 @@ namespace DCLF
 			return views;
 		}
 
+	namespace
+	{
+		// The main latch's regions the depth commits wrote the snapshot's bucket map and tables into (render thread).
+		Draws::LatchRegionsHeld mainBucketRegions;
+	}
+
 	bool IndirectDraws::Impl::CommitMainPayload(const Capture& a_capture, const FrameBlocks& a_blocks, const MainInputs& a_frame, MainPayload& a_payload,
 		const std::shared_ptr<Resources>& a_resources, IndirectDraws::Stats& a_stats,
 		std::vector<std::shared_ptr<const void>>& a_bindingOwners, const EpochRevision& a_revision)
@@ -279,27 +285,36 @@ namespace DCLF
 				std::copy_n(eye.data(), 3, inputs.eye);
 				inputs.lodAdjust = eye[3];
 				// The animation job's updates since the last cull: roots stamped with this frame, inputs in the frame row.
-				std::vector<const void*> nodes;
+				std::vector<PrimaryCull::AnimatedFadeRoot> roots;
 				AnimatedFadeInputs anim{};
-				PrimaryCull::Get().TakeAnimatedBatch(nodes, anim);
+				PrimaryCull::Get().TakeAnimatedBatch(roots, anim);
 				std::copy_n(anim.eye, 3, inputs.animEye);
 				inputs.animLodAdjust = anim.lodAdjust;
 				inputs.animCounter = anim.counter;
 				inputs.animDeltaTime = anim.deltaTime;
-				const auto& index = Scene::FrameView::Get().GetTables().fadeRootIndex;
-				ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> counts;
-				if (buffers.fadeAnimated && anim.valid)
-					for (const auto* node : nodes)
-						if (const auto it = index.find(node); it != index.end() && it->second < rootSlots)
-							++counts[it->second];
+				// Each root's updates counted in a dense array kept across frames (only the roots this batch names are touched, and
+				// cleared again). The batch names root slots resolved by the animation job against the writer tables; the frame's tables
+				// may be newer, so a slot counts only where they still list that node at that generation (no lookup, no hashing).
+				const auto& batchTables = Scene::FrameView::Get().GetTables();
+				auto& counts = buffers.fadeAnimatedCounts;
+				if (counts.size() < rootSlots)
+					counts.resize(rootSlots, 0u);
+				std::vector<std::uint32_t> stamped;
+				if (buffers.fadeAnimated && anim.valid) {
+					for (const auto& root : roots) {
+						if (root.slot >= rootSlots || root.slot >= batchTables.fadeRoots.size() || root.slot >= batchTables.fadeRootNode.size() ||
+							batchTables.fadeRootNode[root.slot] != root.node || batchTables.fadeRoots[root.slot].generation != root.generation)
+							continue;
+						if (counts[root.slot]++ == 0)
+							stamped.push_back(root.slot);
+					}
+				}
 				auto& animatedWords = buffers.fadeAnimatedMirror;
 				if (animatedWords.size() < rootSlots)
 					animatedWords.resize(rootSlots, 0u);
-				std::vector<std::uint32_t> stamped;
-				stamped.reserve(counts.size());
-				for (const auto& [root, count] : counts) {
-					animatedWords[root] = FadeAnimatedWord(Scene::FrameView::Get().GetFrame(), count);
-					stamped.push_back(root);
+				for (const std::uint32_t root : stamped) {
+					animatedWords[root] = FadeAnimatedWord(Scene::FrameView::Get().GetFrame(), counts[root]);
+					counts[root] = 0;
 				}
 				std::sort(stamped.begin(), stamped.end());
 				// A version not filled is sent the whole mirror.
@@ -322,30 +337,54 @@ namespace DCLF
 			// The fade events' header and readback slot (its last execution harvested first).
 			ArmFadeReadback(buffers, uploads);
 			ArmVisibilityReadback(buffers, uploads);
-			// Each root's portal program (its room's), when the roots, a room's children or the portal graph changed.
+			// Each root's portal program (its room's), when the roots, a room's children or the portal graph changed. With the portals
+			// unchanged and the version holding the mirror, only the roots written since the mirror's content epoch (the roots' journal)
+			// and the new ones are judged again; a portal change, or a version the mirror is not of, judges every root.
 			const auto& rootTables = Scene::FrameView::Get().GetTables();
 			auto& portals = PortalViews::Get();
-			const std::uint64_t programsKey = rootTables.FadeRootsContentEpoch() * 0x9E3779B97F4A7C15ull ^ portals.ProgramsVersion();
+			const std::uint64_t rootsEpoch = rootTables.FadeRootsContentEpoch(), portalsVersion = portals.ProgramsVersion();
+			const std::uint64_t programsKey = rootsEpoch * 0x9E3779B97F4A7C15ull ^ portalsVersion;
 			const auto& programsVersion = adopted.Of(buffers.fadeRootPrograms);
 			const auto programsFilledKey = buffers.fadeRootProgramsFilled.Since(programsVersion);
-			if (programsFilledKey != programsKey && rootTables.fadeRootNode.size() <= programsVersion.units) {
-				std::vector<std::uint32_t> programs(rootTables.fadeRootNode.size(), kPortalNoProgram);
-				for (std::size_t r = 0; r < programs.size(); ++r)
-					if (const auto* node = static_cast<const RE::NiAVObject*>(rootTables.fadeRootNode[r]))
-						programs[r] = portals.ProgramOf(node);
-				// Only words that differ (all of them for a version not filled).
+			const std::size_t rootCount = rootTables.fadeRootNode.size();
+			if (programsFilledKey != programsKey && rootCount <= programsVersion.units) {
 				auto& sent = buffers.fadeRootProgramsMirror;
+				const auto judged = buffers.fadeRootProgramsMirrorOf;
+				const bool incremental = programsFilledKey && *programsFilledKey == judged.key && judged.portals == portalsVersion && sent.size() <= rootCount;
 				if (!programsFilledKey)
 					sent.clear();
+				// Only words that differ (all of them for a version not filled); the mirror takes the new words.
 				std::vector<std::uint32_t> differing;
-				for (std::uint32_t r = 0; r < programs.size(); ++r)
-					if (r >= sent.size() || sent[r] != programs[r])
-						differing.push_back(r);
+				const auto judge = [&](std::size_t a_root) {
+					const auto* node = static_cast<const RE::NiAVObject*>(rootTables.fadeRootNode[a_root]);
+					const std::uint32_t program = node ? portals.ProgramOf(node) : kPortalNoProgram;
+					if (a_root < sent.size() && sent[a_root] == program)
+						return;
+					if (a_root >= sent.size())
+						sent.resize(a_root + 1, ~program);
+					sent[a_root] = program;
+					differing.push_back(static_cast<std::uint32_t>(a_root));
+				};
+				if (incremental) {
+					const std::size_t before = sent.size();
+					rootTables.fadeRootsJournal.Take().ForEachRun(judged.rootsEpoch, before, [&](std::uint64_t a_first, std::uint64_t a_count) {
+						for (std::uint64_t r = a_first; r < a_first + a_count && r < before; ++r)
+							judge(static_cast<std::size_t>(r));
+					});
+					for (std::size_t r = before; r < rootCount; ++r)
+						judge(r);
+					std::sort(differing.begin(), differing.end());
+					differing.erase(std::unique(differing.begin(), differing.end()), differing.end());
+				} else {
+					sent.resize(std::min(sent.size(), rootCount));
+					for (std::size_t r = 0; r < rootCount; ++r)
+						judge(r);
+				}
 				SendWordRuns(differing, [&](std::uint32_t a_first, std::uint32_t a_count) {
-					uploads(buffers.fadeRootPrograms, programs.data() + a_first, std::size_t(a_count) * sizeof(std::uint32_t), std::uint64_t(a_first) * sizeof(std::uint32_t));
+					uploads(buffers.fadeRootPrograms, sent.data() + a_first, std::size_t(a_count) * sizeof(std::uint32_t), std::uint64_t(a_first) * sizeof(std::uint32_t));
 				});
-				sent = std::move(programs);
 				buffers.fadeRootProgramsFilled.Filled(programsVersion, programsKey);
+				buffers.fadeRootProgramsMirrorOf = { programsKey, rootsEpoch, portalsVersion };
 			}
 		}
 		// The depth segment clears every counter; the colour segment only its own draw word, or it would erase the depth phases'
@@ -501,11 +540,18 @@ namespace DCLF
 			if (slots > layout.buckets)
 				slots = layout.buckets;
 			const std::uint32_t buckets = writePlan.Buckets();
-			WriteBucketMap(latchBlock, "main bucket map", latchSlot, layout.BucketMapOffset(), writePlan.map, slots);
+			// The map and the tables are the snapshot's (its revision's plan and latch, the installed publication's pipeline slots):
+			// written into this frame slot's region only when it holds another snapshot's.
+			auto& held = mainBucketRegions.Of(latchSlot, shape.latch, revisionShape, slots);
+			if (!Draws::LatchRegionsHeld::Hold(held, 0)) {
+				WriteBucketMap(latchBlock, "main bucket map", latchSlot, layout.BucketMapOffset(), writePlan.map, slots);
+				if (buckets) {
+					const std::size_t words = std::size_t(buckets) * 2;
+					LatchWrite(latchBlock, "main bucket tables", latchSlot, layout.BucketTableOffset(), std::as_bytes(std::span(writePlan.table.data(), words)));
+					LatchWrite(latchBlock, "main bucket tables", latchSlot, layout.PhaseTwoBucketTableOffset(), std::as_bytes(std::span(writePlan.table.data() + words, words)));
+				}
+			}
 			if (buckets) {
-				const std::size_t words = std::size_t(buckets) * 2;
-				LatchWrite(latchBlock, "main bucket tables", latchSlot, layout.BucketTableOffset(), std::as_bytes(std::span(writePlan.table.data(), words)));
-				LatchWrite(latchBlock, "main bucket tables", latchSlot, layout.PhaseTwoBucketTableOffset(), std::as_bytes(std::span(writePlan.table.data() + words, words)));
 				zBucketZeros.assign(buckets, 0u);
 				for (const auto& counts : a_resources->zBucketCounts)
 					latched(counts, zBucketZeros.data(), std::size_t(buckets) * sizeof(std::uint32_t), 0);

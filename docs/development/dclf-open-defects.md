@@ -162,6 +162,33 @@ were left open:
     good (a thrown pass that never runs again), no pass ends. The builder then never publishes again, and every frame keeps
     the last installed snapshot. Nothing detects or reports this case.
 
+## Polls and render-thread work left (2026-10-14)
+
+Left open by the polls-to-events pass (dclf-async-publication.md, "Polls become events"):
+
+-   **`CS.DCLF.ListJobsWait` remains.** The zone is the engine's own fork-join (`JobList::Finish` over the main camera's
+    scene-list cull jobs, `ListJobsFinish` in `Engine/Cull/PrimaryCull.cpp`), not a DCLF lock: the render thread waits while
+    engine job threads cull the residue left in the lists (about 193 entries per DCLF build in the motion run; 0.17 ms in
+    median frames, 0.5 ms on average and 1.6 ms at most in the worst). The per-reason counters of entries kept in the lists
+    say what to shrink next. The wait ends only when DCLF owns that residue (dclf-cull-job-elimination.md).
+-   **DXVK's `context->Flush()` stalls.** The worst remaining frames are `CS.ORG.FlushNativeProducer` (35-57 ms flushes
+    inside DXVK), then Upscaling and `GrassOptimizations::ApplyPending` spikes and engine time Tracy does not see. Outside
+    DCLF; not investigated.
+-   **The mirror's capture races other threads' attaches.** Other threads attach and detach in the world inside the engine-read
+    window (73-277 per 600 frames, `SceneTracker::TakeWindowEdits`, reported by the C2 parity line). The mirror-only
+    portal-root pushes and `CaptureMirrorRequests` therefore stay on the render thread at the frame's start, read and pushed
+    at once: a pool job's pushes could not be ordered with those hooks' events. The race is the baseline's, unchanged.
+-   **`CellRoots` runs every frame.** The visibility decode (`Draws/IndirectDraws/Core/Visibility.cpp`) walks the object
+    root's children each frame (about 26 nodes; one container's bit is set again every frame because the main camera's
+    list cull clears it). An object-root edit counter in `PrimaryCull` (attach/detach under the object root, a hidden store
+    on a child, a new object root) would let it walk only on an edit.
+-   **`UpdateActorRate` stays on the render thread** (`Engine/Cull/SideEffects.cpp`, about 19 actors' plane tests a frame).
+    Its bound tests need the frame's last shadow view made and must finish before `EngineReadWindow::Close` at Present, and no
+    hook sits between the two. A kick after the shadow epoch's commit (where `LocalLightCull::Publish` runs) would let a
+    leased task do them.
+-   **BasicRHI's present still holds `timelinesMutex`.** `q_submit` no longer does, but `sc_present` holds it across the
+    present (SARP and BasicRenderer only). CS's upload queue may not need DXVK's `LockSubmissionQueue` either.
+
 ## Unattributed visual defects seen in first person (2026-10-11/12; not investigated)
 
 -   **Flickering fog-coloured bands** (user report): full-width horizontal bands of broken geometry, flickering all over the

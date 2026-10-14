@@ -536,25 +536,39 @@ namespace DCLF
 		std::shared_ptr<PlacementPlan> placementPlan, placementPlanReady;
 		// Plans no publication took yet, oldest first; the next publication carries them all.
 		std::vector<std::shared_ptr<PlacementPlan>> placementPlansHeld;
-		// Per-frame entries are walked once per frame input: the last such frame, whether this walk took them, and its movers and roots
-		// (carried by later walks of that frame).
+		// Per-frame entries are walked once per frame input: the last such frame, and whether this walk took them.
 		std::uint32_t perFrameFrame = ~0u;
 		bool perFrameWalked = true;
-		// Keys and slots only: a held reference dropped by a later pass would be released on the lane, where engine destructors must not
-		// run.
-		struct CarriedItem
+		/**
+		 * @brief The placement set the plans carry (a plan is the whole set, made only when it changes: PublishPlacementPlan): every
+		 * recorded per-frame mover (IsPlacedMover), every moving root (movingRoots) and every still root that had a move event since it
+		 * was listed (stillRoots, until its last dependent goes). Keys only: a held reference dropped by a later pass would be released
+		 * on the lane, so the references are copied from the entries and the root owners when a plan is made.
+		 */
+		ankerl::unordered_dense::set<RE::BSGeometry*> moverSet;
+		ankerl::unordered_dense::set<const RE::NiAVObject*> stillRoots;
+		// Something a plan carries may have changed since the last plan (a member joined or left, a root found or forgotten, a planned
+		// slot's palette block or identity changed): the next PublishPlacementPlan makes a candidate and compares it with the last.
+		bool placementDirty = true;
+		/** @brief One plan row as compared: movers by geometry, then each root's marker (slot kRootMarker) and its dependents. */
+		struct PlannedKey
 		{
-			const RE::BSGeometry* geometry = nullptr;
-			std::uint32_t slot = kNoObjectSlot;
+			const void* object = nullptr;
+			std::uint32_t slot = kNoObjectSlot, layerSlot = kNoObjectSlot, boneOffset = 0, boneRows = 0;
+			const void* sunEntry = nullptr;
+			bool firstPerson = false, particles = false;
+			bool operator==(const PlannedKey&) const = default;
 		};
-		std::vector<CarriedItem> lastMovers;
-		// The roots that walk listed (QueueRoots), carried likewise with their dependents.
-		struct CarriedRoot
-		{
-			const RE::NiAVObject* root = nullptr;
-			std::vector<CarriedItem> dependents;
-		};
-		std::vector<CarriedRoot> lastRoots;
+		static constexpr std::uint32_t kRootMarker = kNoObjectSlot - 1;
+		std::vector<PlannedKey> plannedKeys;                       // the last plan's
+		ankerl::unordered_dense::set<std::uint32_t> plannedSlots;  // the slots and layer slots it names
+		std::uint32_t plannedObjectSlots = 0, plannedBoneCapacity = 0;
+		LogCursor placementCursor;  // the change log, read for the planned slots
+		// Mirror updates that change an entry's traits or skin (a node's kBody or kControllers, a geometry's kDismember or kSkin), keys
+		// only, for the next delta walk (ApplyMotionUpdate, Reclassify).
+		ankerl::unordered_dense::set<const void*> mirrorMotionNodes, mirrorSkinGeometries;
+		/** @brief A node whose controllers or rigid body changed: every entry under it reclassified, every root above it scheduled. A key. */
+		void ApplyMotionUpdate(const void* a_node);
 		struct Tracked
 		{
 			RE::NiPointer<RE::BSGeometry> geometry;
@@ -672,22 +686,22 @@ namespace DCLF
 			// scheduledWalk: the walk that last scheduled it. bucket: its histogram bucket (kNoBucket: none).
 			bool perFrame = false;
 			bool perFrameListed = false;
-			// lightTraits: per frame only because it moves, follows a switch, has animated shading or is skinned: while its classification
-			// stands the light path retakes only the switch verdict and shading inputs and lists it for FrameValues. 0 otherwise.
-			// movedWalk: the walk that took this path.
+			// lightTraits: per frame only because it moves, is skinned or is an actor's: while its classification stands the light path
+			// retakes only an actor's verdict and a skin's partitions, and only when an event names it (MoverDue); its placement is the
+			// plan's (moverSet). 0 otherwise. movedWalk: the walk that took this path.
 			std::uint32_t lightTraits = 0;
 			std::uint32_t movedWalk = 0;
-			// Its move events' key (MoveKeyOf): the one reference on its chain, or null (the light path then places it every frame).
+			// Its move events' keys (MoveKeysOf): the one reference on its chain (MoveKeyOf); with several, the innermost here and the
+			// outermost in moveKeyOuter; with none, its category node. The light path takes it when one of them moved (MoverDue).
 			const void* moveKey = nullptr;
+			const void* moveKeyOuter = nullptr;
+			// The witness walk that evaluated it though no event named it (parity: the gate's check, MergeEntry).
+			std::uint32_t gateWitnessWalk = 0;
 			// An actor's light-path entry: the nodes up to its category node (in hiddenDependents), and whether one had a hidden event
 			// since its last evaluation. Owed to the next per-frame walk, not the draining event walk, which skips per-frame entries (else
 			// the first-person switch's hide of the third-person skeleton is lost).
 			std::vector<const RE::NiAVObject*> hiddenChain;
 			bool hiddenEventOwed = false;
-			// kTraitSwitch: the one switch node on its chain and its child on the leaf's path, found at classification (null: none or
-			// several).
-			RE::NiSwitchNode* switchNode = nullptr;
-			const RE::NiAVObject* switchChild = nullptr;
 			// The keys it is listed under: its shader and alpha properties in propertyDependents (the last evaluation's), its sun entry
 			// node in rootDependents (while tracked).
 			const void* listedProperty = nullptr;
@@ -699,6 +713,32 @@ namespace DCLF
 			std::uint32_t scheduledWalk = 0;
 			static constexpr std::uint8_t kNoBucket = 0xFF;
 		};
+		/** @brief Whether an entry is a recorded per-frame mover (moverSet's: every plan lists it, FrameValues samples it every frame). */
+		bool IsPlacedMover(const Tracked& a_tracked) const;
+		/** @brief After an entry's merge: it joins or leaves moverSet as IsPlacedMover says; true when that changed the set. */
+		bool NoteMover(RE::BSGeometry* a_geometry, const Tracked& a_tracked);
+		/** @brief Before the plan: the change log's entries naming planned slots, and the tables' sizes against the last plan's. */
+		void SyncPlacementSet();
+		/**
+		 * @brief Whether a per-frame walk takes a per-frame entry (the light path's gate): an event names it (one of its move keys or its
+		 * geometry moved this frame or the last; a hidden event is owed), or it has none to wait on (no light path; a first-person actor's).
+		 * a_why: 1 moved, 2 hidden event owed, 3 first person, 4 no light path.
+		 */
+		bool MoverDue(const Tracked& a_tracked, const RE::BSGeometry* a_geometry, std::uint32_t& a_why) const;
+		/** @brief The light path's gate and the plans since the last report (the mover gate line, from ScenePass). */
+		struct MoverGateStats
+		{
+			std::uint64_t perFrameWalks = 0, ungatedWalks = 0, due = 0, moved = 0, owed = 0, firstPerson = 0, fullEveryFrame = 0, skipped = 0;
+			std::uint64_t plans = 0, plansWritten = 0, plansChanged = 0, candidatesSame = 0, perFrameWithoutPlan = 0;
+			std::uint64_t mirrorNodes = 0, mirrorGeometries = 0;
+			// Parity (witness walks, Policy::HiddenWitness): per-frame entries no event named, evaluated anyway, and those whose
+			// evaluation changed something the gate would have left (the light path missed, a skin's partitions, the mover set).
+			std::uint64_t witnessChecks = 0, witnessDiffer = 0;
+			std::string firstDiffer;
+		} moverGateStats;
+		/** @brief The mover gate's report line, once its window turned (ScenePass). */
+		void ReportMoverGate();
+		std::uint32_t moverGateWindow = 0;
 		/**
 		 * @brief The object's entry bound for the sun's cascade culls: the cascade cull (FUN_140e305c0) walks only the objectArray entries
 		 * the full-frustum cull (FUN_141511f30) passed. A static reference's is its reference root (the topmost ancestor with the
@@ -1362,10 +1402,10 @@ namespace DCLF
 		{
 			kTraitFace = 1u << 0,
 			kTraitActor = 1u << 1,
-			kTraitSwitch = 1u << 2,
+			// 1u << 2 unused (the report names the bits).
 			kTraitSkin = 1u << 3,
-			kTraitAnimatedShading = 1u << 4,  // its reference root's subtree moves
-			kTraitMoves = 1u << 5,            // a controller or a non-fixed rigid body on its chain
+			kTraitAnimatedShading = 1u << 4,  // a controller on its shader or alpha property: its shading is named by events, never per frame
+			kTraitMoves = 1u << 5,            // a controller or a non-fixed rigid body on its chain, or a particle system (the toggle on)
 			kTraitRootMoves = 1u << 6,        // its reference root's subtree moves (RootMoves)
 		};
 		std::uint32_t PerFrameTraits(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const;
@@ -1403,18 +1443,19 @@ namespace DCLF
 		void UnlistFaceShape(RE::BSGeometry* a_geometry, Tracked& a_tracked);
 		void ClearFaceShapes();
 		/**
-		 * @brief A root whose bound is an entry's only motion (kTraitRootMoves alone) is listed in the placement plan instead of the entry,
-		 * when it had a move event this frame or the last (QueueRoots).
+		 * @brief A root whose bound is an entry's only motion (kTraitRootMoves alone) is listed in the placement plan instead of the entry:
+		 * every moving root, and a still root once its reference had a move event (QueueRoots, stillRoots).
 		 */
 		struct MovingRoot
 		{
 			const void* key = nullptr;  // its reference
 			const RE::NiNode* categoryNode = nullptr;
 		};
-		// Every root RootMoves found moving, until ScheduleRoot or its last dependent forgets it.
+		// Every root RootMoves found moving, until ScheduleRoot or its last dependent forgets it (each change marks the plan dirty).
 		ankerl::unordered_dense::map<const RE::NiAVObject*, MovingRoot> movingRoots;
-		std::vector<const RE::NiAVObject*> rootPlacements;  // the roots the plan lists
+		/** @brief The still roots this frame's move keys name (movedKeys[0] from movedKeysQueued on), into stillRoots. */
 		void QueueRoots();
+		std::size_t movedKeysQueued = 0;
 		struct PlacementStats
 		{
 			std::uint64_t roots = 0, stillRoots = 0, rootsGated = 0;
@@ -1422,13 +1463,13 @@ namespace DCLF
 		} placementStats;
 		/** @brief The walk's plan item for a recorded entry (slot, layer row, sun entry, palette block). */
 		PlacementPlan::Item PlanItemOf(RE::BSGeometry* a_geometry, Tracked& a_tracked);
-		/** @brief The walk's plan, opened by its first round. */
+		/** @brief The walk's plan, opened by its first write (or by PublishPlacementPlan when the placement set changed). */
 		PlacementPlan& WalkPlan();
-		/** @brief After the walk: the roots it takes into the plan (QueueRoots), and the plan made ready. */
+		/** @brief After the walk: the still roots it lists (QueueRoots), and a plan made ready when the placement set changed or a slot was written. */
 		void PublishPlacementPlan();
 		/** @brief The frame each key last had a move event (drained at the delta walk). */
 		ankerl::unordered_dense::map<const void*, std::uint32_t> movedFrame;
-		// Keys with a move event this frame and the last: QueueRoots takes those roots' bounds whatever RootMoves says (cell updates
+		// Keys with a move event this frame and the last: QueueRoots lists those references' roots whatever RootMoves says (cell updates
 		// recompute a still root's bound).
 		std::array<std::vector<const void*>, 2> movedKeys;
 		// movedKeys turn over once a frame (a burst's passes add to this frame's); movedFrame is pruned every 256 frames.
@@ -1483,6 +1524,8 @@ namespace DCLF
 		void ScheduleRoot(const RE::NiAVObject* a_root);
 		/** @brief A node Havok moved or gave a controller: the entries under it and the dependents of every node above it. */
 		void ApplyNodeEvent(RE::NiAVObject* a_node);
+		/** @brief MoveKeyOf, else its fallbacks (Tracked::moveKey, moveKeyOuter): the innermost and outermost references, or the category node. */
+		std::pair<const void*, const void*> MoveKeysOf(const RE::BSGeometry& a_geometry, const RE::NiNode* a_categoryNode) const;
 		/**
 		 * @brief Before the first round: drained switch events whose selection changed, each caught up (CatchUpSwitch) and, in a delta
 		 * walk, its entries reclassified.
@@ -1695,6 +1738,7 @@ namespace DCLF
 			const RE::NiAVObject* rootCandidate = nullptr;
 			bool rootMovesNow = false;
 			const void* moveKey = nullptr;
+			const void* moveKeyOuter = nullptr;
 		};
 		/** @brief Entry a_index evaluated (a_light: the first round, trying the light path). Pure. */
 		void EvaluateEntry(std::size_t a_index, bool a_light, EvalCounters& a_counters, EvalResult& a_out, PartTimer& a_timer) const;

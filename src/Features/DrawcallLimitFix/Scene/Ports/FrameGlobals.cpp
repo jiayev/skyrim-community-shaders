@@ -9,6 +9,8 @@
 #include "Features/DrawcallLimitFix/Draws/Pipelines/EngineStates.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneCapture.h"
+#include "Features/DrawcallLimitFix/Engine/Capture/SceneTracker.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Utils/Game.h"
 
@@ -58,67 +60,224 @@ namespace DCLF
 		bool Hidden(const RE::NiAVObject* a_object) { return Engine::IsHidden(a_object); }
 
 		/**
-		 * @brief One node of the first-person subtree as a walk of the live tree found it (render thread): its key (an identity,
-		 * never dereferenced after the walk), its hidden bit, whether it is a geometry and its name (the diagnostic's, and an identity
-		 * check against an address the engine reused for another node).
+		 * @brief One node of the first-person subtree (render thread): its key (an identity, dereferenced only right after a walk of the
+		 * live tree found it), whether it is a geometry, its hidden bit now (the hidden events applied) and, saved when an event changed it
+		 * after the engine's last first-person culls, its bit at those culls.
 		 */
-		struct SubtreeBit
+		struct SubtreeNode
 		{
 			const RE::NiAVObject* key = nullptr;
-			bool hidden = false, geometry = false;
-			std::string name;
+			bool geometry = false, hidden = false, culled = false, saved = false;
 		};
 
-		// The subtree's bits at the engine's first-person culls (NoteFirstPersonCulled), by key; render thread. Copies only: an entry's key
-		// may be freed by the next frame (an equipment change), so it is only looked up for a node the next frame's live walk found.
-		ankerl::unordered_dense::map<const RE::NiAVObject*, SubtreeBit> firstPersonCulled;
-		const RE::NiAVObject* firstPersonCulledRoot = nullptr;  // compared, never dereferenced
+		/**
+		 * @brief The first-person subtree's bits, kept by its events (SceneTracker::SubtreeEvents: hidden stores, detached keys, attaches)
+		 * and applied at the two engine moments (the frame's start, the first-person culls); render thread. The live tree is walked only
+		 * when its membership changed (an attach, a detached key, a new root): a key still indexed keeps its bits, a new one takes its live
+		 * bit. A detached key leaves at once, so an address the engine frees and reuses is a new node.
+		 */
+		struct Subtree
+		{
+			const RE::NiAVObject* root = nullptr;  // compared; dereferenced only on the render thread inside the frame
+			std::vector<SubtreeNode> nodes;        // by key: an entry's index is stable until the next walk
+			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> index;
+			std::vector<const RE::NiAVObject*> geometry;  // the geometry keys, sorted (FrameGlobals::firstPersonGeometry)
+			std::vector<std::uint32_t> saved;             // entries whose culled bit is saved since the last culls
+			bool edited = false;                          // an attach or a detached key since the last walk
+			bool culled = false;                          // the culls were seen for this root
+			std::uint64_t changes = 0;                    // bits or membership changed (the diagnostic's trigger)
+			std::uint64_t walks = 0;
+		} subtree;
 
-		/** @brief Every node and geometry under a_root (not a_root), walked now (the tree alive: the render thread, inside the frame). */
-		void SubtreeBits(const RE::NiAVObject* a_root, std::vector<SubtreeBit>& a_out)
+		/** @brief The node's bit at the last culls, else now. */
+		bool CulledBit(const SubtreeNode& a_node) { return subtree.culled && a_node.saved ? a_node.culled : a_node.hidden; }
+
+		/** @brief Every node and geometry under a_root (not a_root) as it is now (the tree alive: the render thread, inside the frame). */
+		void LiveSubtree(const RE::NiAVObject* a_root, std::vector<SubtreeNode>& a_out)
 		{
 			a_out.clear();
 			if (!const_cast<RE::NiAVObject*>(a_root)->AsNode())
 				return;
 			Engine::ForEachLive(a_root, [&](RE::NiAVObject& a_object, std::uint32_t a_depth) {
 				if (a_depth)
-					a_out.push_back({ &a_object, Hidden(&a_object), a_object.AsGeometry() != nullptr, a_object.name.c_str() ? a_object.name.c_str() : "" });
+					a_out.push_back({ &a_object, a_object.AsGeometry() != nullptr, Hidden(&a_object) });
 			});
+			std::ranges::sort(a_out, {}, &SubtreeNode::key);
+		}
+
+		/** @brief The membership walked again: keys still indexed keep their bits, new ones take the live bit. */
+		void WalkSubtree()
+		{
+			std::vector<SubtreeNode> next;
+			LiveSubtree(subtree.root, next);
+			std::vector<std::uint32_t> added;  // keys new to the members: their stores had no event until the members are published
+			for (std::uint32_t i = 0; i < next.size(); ++i) {
+				auto& node = next[i];
+				if (const auto it = subtree.index.find(node.key); it != subtree.index.end()) {
+					const auto& kept = subtree.nodes[it->second];
+					node.hidden = kept.hidden;
+					node.culled = kept.culled;
+					node.saved = kept.saved;
+				} else
+					added.push_back(i);
+			}
+			subtree.nodes = std::move(next);
+			subtree.index.clear();
+			subtree.geometry.clear();
+			subtree.saved.clear();
+			for (std::uint32_t i = 0; i < subtree.nodes.size(); ++i) {
+				const auto& node = subtree.nodes[i];
+				subtree.index.emplace(node.key, i);
+				if (node.geometry)
+					subtree.geometry.push_back(node.key);
+				if (node.saved)
+					subtree.saved.push_back(i);
+			}
+			subtree.edited = false;
+			++subtree.changes;
+			++subtree.walks;
+			// The members the hidden stores look up (their objects' parents are not read on the hooks' threads).
+			std::vector<const void*> members;
+			members.reserve(subtree.nodes.size());
+			for (const auto& node : subtree.nodes)
+				members.push_back(node.key);
+			SceneTracker::WatchSubtreeMembers(std::move(members));
+			// A new key's bit read again after its publication: a store before it is in this read, one after it has an event.
+			for (const std::uint32_t i : added)
+				subtree.nodes[i].hidden = Hidden(subtree.nodes[i].key);
 		}
 
 		/**
-		 * @brief The first-person diagnostic (render thread): the geometry of the first-person subtree hidden at the frame's start, and at the last
-		 * frame's culls (of the nodes still in the tree), logged when the two lists change (at most 24 times). Reads the copies alone.
+		 * @brief At an engine moment (render thread, the tree alive): the subtree under a_root brought up to now - the events since the last
+		 * moment applied, the membership walked again when it changed. A new root (or none) starts over.
 		 */
-		void NoteFirstPersonDifference(const std::vector<SubtreeBit>& a_live, bool a_culled)
+		void SyncSubtree(const RE::NiAVObject* a_root)
+		{
+			auto& events = SceneTracker::SubtreeEvents();
+			if (a_root != subtree.root) {
+				// The old root's events dropped, then the new root watched before its walk: a store after the watch has an event, one before
+				// it is in the walk's bits.
+				events.Discard();
+				SceneTracker::WatchSubtree(a_root);
+				SceneTracker::WatchSubtreeMembers({});
+				subtree = {};
+				subtree.root = a_root;
+				if (a_root)
+					WalkSubtree();
+				return;
+			}
+			if (!a_root)
+				return;
+			events.Drain([](SceneTracker::SubtreeEvent&& a_event) {
+				using Kind = SceneTracker::SubtreeEvent::Kind;
+				if (a_event.kind == Kind::Attached) {
+					subtree.edited = true;
+					return;
+				}
+				const auto it = subtree.index.find(a_event.node);
+				if (it == subtree.index.end())
+					return;  // not walked yet: the next walk reads its bit
+				auto& node = subtree.nodes[it->second];
+				if (a_event.kind == Kind::Removed) {
+					node.key = nullptr;
+					subtree.index.erase(it);
+					subtree.edited = true;
+					return;
+				}
+				const bool hidden = a_event.kind == Kind::Hidden;
+				if (node.hidden == hidden)
+					return;
+				if (subtree.culled && !node.saved) {
+					node.culled = node.hidden;
+					node.saved = true;
+					subtree.saved.push_back(it->second);
+				}
+				node.hidden = hidden;
+				++subtree.changes;
+			});
+			if (subtree.edited)
+				WalkSubtree();
+		}
+
+		/**
+		 * @brief CS_DCLF_PERSISTENT_PARITY: the subtree's bits by events against a walk of the live tree now (render thread, at an engine
+		 * moment, right after SyncSubtree): membership and each node's bit. A periodic line, and the first differences named.
+		 */
+		struct SubtreeParity
+		{
+			std::uint64_t checks = 0, compared = 0, membership = 0, bits = 0, walks = 0;
+			std::string first;
+			std::vector<SubtreeNode> live;
+		} subtreeParity;
+
+		void CheckSubtree(const char* a_moment)
+		{
+			auto& p = subtreeParity;
+			++p.checks;
+			LiveSubtree(subtree.root, p.live);
+			std::size_t i = 0, j = 0;
+			auto note = [&](const RE::NiAVObject* a_key, const char* a_what) {
+				if (std::ranges::count(p.first, ';') < 6)
+					p.first += fmt::format("{}{} '{}' {} ({})", p.first.empty() ? "" : "; ", a_what, a_key->name.c_str() ? a_key->name.c_str() : "", static_cast<const void*>(a_key), a_moment);
+			};
+			std::vector<SubtreeNode> kept;
+			for (const auto& node : subtree.nodes)
+				if (node.key)
+					kept.push_back(node);
+			while (i < p.live.size() || j < kept.size()) {
+				if (j == kept.size() || (i < p.live.size() && p.live[i].key < kept[j].key)) {
+					++p.membership;
+					note(p.live[i].key, "not kept");
+					++i;
+				} else if (i == p.live.size() || kept[j].key < p.live[i].key) {
+					++p.membership;
+					++j;  // gone from the tree: not dereferenced
+				} else {
+					++p.compared;
+					if (p.live[i].hidden != kept[j].hidden) {
+						++p.bits;
+						note(p.live[i].key, p.live[i].hidden ? "hidden, kept shown" : "shown, kept hidden");
+					}
+					++i;
+					++j;
+				}
+			}
+			if (p.checks % 600)
+				return;
+			logger::info("[DCLF] first-person bits by events (C3 parity): {} checks, {} nodes compared, {} membership and {} bit differences against the live walk; {} walks{}{}",
+				p.checks, p.compared, p.membership, p.bits, subtree.walks - std::exchange(p.walks, subtree.walks), p.membership || p.bits ? " <- FLAG" : " <- OK",
+				p.first.empty() ? "" : "; first: " + p.first);
+			p.compared = p.membership = p.bits = 0;
+			p.first.clear();
+		}
+
+		/**
+		 * @brief The first-person diagnostic (render thread, the frame's start): the geometry of the first-person subtree hidden now and at the
+		 * last culls, logged when the two lists change (at most 24 times). Evaluated only when the bits or the membership changed.
+		 */
+		void NoteFirstPersonDifference()
 		{
 			static std::string last;
 			static std::uint32_t logged = 0;
-			if (logged >= 24)
+			static std::uint64_t seen = ~0ull;
+			if (logged >= 24 || std::exchange(seen, subtree.changes) == subtree.changes)
 				return;
 			auto names = [&](bool a_atCull) {
 				std::string text;
 				std::uint32_t geometry = 0, hidden = 0;
-				for (const auto& bit : a_live) {
-					if (!bit.geometry)
+				for (const auto& node : subtree.nodes) {
+					if (!node.key || !node.geometry)
 						continue;
 					++geometry;
-					bool isHidden = bit.hidden;
-					if (a_atCull) {
-						const auto it = firstPersonCulled.find(bit.key);
-						if (it == firstPersonCulled.end() || it->second.name != bit.name)
-							continue;
-						isHidden = it->second.hidden;
-					}
-					if (!isHidden)
+					if (!(a_atCull ? CulledBit(node) : node.hidden))
 						continue;
 					++hidden;
 					if (hidden <= 12)
-						text += fmt::format("{}'{}'", text.empty() ? "" : ", ", bit.name);
+						text += fmt::format("{}'{}'", text.empty() ? "" : ", ", node.key->name.c_str() ? node.key->name.c_str() : "");
 				}
 				return fmt::format("{} geometries, {} hidden{}{}", geometry, hidden, text.empty() ? "" : ": ", text);
 			};
-			std::string now = "at the frame's start " + names(false) + (a_culled ? "; at the last first-person culls " + names(true) : std::string("; no first-person cull seen"));
+			std::string now = "at the frame's start " + names(false) + (subtree.culled ? "; at the last first-person culls " + names(true) : std::string("; no first-person cull seen"));
 			if (now == last)
 				return;
 			last = now;
@@ -138,15 +297,17 @@ namespace DCLF
 
 	void FrameGlobals::NoteFirstPersonCulled(const RE::NiAVObject* a_root)
 	{
-		// The render thread, at RenderDepth's first-person draw: the tree alive. Copies taken; the keys are compared next frame, never read.
-		firstPersonCulledRoot = a_root;
-		firstPersonCulled.clear();
-		if (!a_root)
-			return;
-		std::vector<SubtreeBit> bits;
-		SubtreeBits(a_root, bits);
-		for (auto& bit : bits)
-			firstPersonCulled.insert_or_assign(bit.key, std::move(bit));
+		// The render thread, at RenderDepth's first-person draw: the tree alive. The events since the frame's start applied; the bits now are
+		// the culls', saved from here only for the nodes an event changes before the next culls.
+		SyncSubtree(a_root);
+		if (!subtree.saved.empty() || subtree.culled != (a_root != nullptr))
+			++subtree.changes;
+		for (const std::uint32_t i : subtree.saved)
+			subtree.nodes[i].saved = false;
+		subtree.saved.clear();
+		subtree.culled = a_root != nullptr;
+		if (a_root && Diagnostics::Observe().scene)
+			CheckSubtree("at the culls");
 	}
 
 	std::shared_ptr<const FrameGlobals> FrameGlobals::Capture()
@@ -209,6 +370,7 @@ namespace DCLF
 				if (graph->portalSharedNode)
 					g->cullHidden.emplace_back(graph->portalSharedNode.get(), Hidden(graph->portalSharedNode.get()));
 			}
+			const RE::NiAVObject* subtreeRoot = nullptr;
 			if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 				// The third-person skeleton as it is now. TESWaterReflections::Update (AE 0x140520570), on the frames a cube-map
 				// reflection updates, hides the player's 3D while it renders the faces and then restores it; Main::Draw calls it
@@ -222,42 +384,8 @@ namespace DCLF
 				const RE::NiAVObject* firstPerson = player->Get3D(true);
 				if (firstPerson && firstPerson != thirdPerson)
 					g->cullHidden.emplace_back(firstPerson, true);
-				// CS_DCLF_FIRST_PERSON: every node and geometry under the first-person root, with the bit the engine's first-person
-				// culls saw last frame (NoteFirstPersonCulled), else as it is now (this thread, before Main::Draw touches the skeleton). Not
-				// every store to them has an event, and the frame start's bits are not the culls' (the arms are hidden at the frame's start
-				// while the engine draws them), so the first-person members' chains read their bits from here.
-				if (firstPerson && firstPerson != thirdPerson && ActiveToggles().firstPerson) {
-					// The live walk proves each key alive; a culled bit is taken for a key found here with the same name (an address the
-					// engine freed and reused for another node since is not the same node), else the live bit.
-					std::vector<SubtreeBit> live;
-					SubtreeBits(firstPerson, live);
-					const bool culled = firstPersonCulledRoot == firstPerson && !firstPersonCulled.empty();
-					// The live chain of the first geometry, once (render thread: the tree alive): where the skeleton hangs.
-					static bool chainLogged = false;
-					if (!chainLogged)
-						for (const auto& bit : live)
-							if (bit.geometry && !bit.hidden) {
-								chainLogged = true;
-								std::string chain;
-								std::uint32_t at = 0;
-								for (const RE::NiAVObject* node = bit.key; node && at < 24; node = node->parent, ++at)
-									chain += fmt::format("{}'{}' {}", at ? " <- " : "", node->name.c_str() ? node->name.c_str() : "", static_cast<const void*>(node));
-								logger::info("[DCLF] first-person subtree (T7e): the root {} (parent {}); a geometry's live chain: {}", static_cast<const void*>(firstPerson),
-									static_cast<const void*>(firstPerson->parent), chain);
-								break;
-							}
-					for (const auto& bit : live) {
-						if (bit.geometry)
-							g->firstPersonGeometry.push_back(bit.key);
-						bool hidden = bit.hidden;
-						if (culled)
-							if (const auto it = firstPersonCulled.find(bit.key); it != firstPersonCulled.end() && it->second.name == bit.name)
-								hidden = it->second.hidden;
-						g->cullHidden.emplace_back(bit.key, hidden);
-					}
-					NoteFirstPersonDifference(live, culled);
-					std::sort(g->firstPersonGeometry.begin(), g->firstPersonGeometry.end());
-				}
+				if (firstPerson && firstPerson != thirdPerson && ActiveToggles().firstPerson)
+					subtreeRoot = firstPerson;
 			}
 			// The water objects' shapes as they are now: TESWaterReflections::Update hides them around the cube map's faces too, and
 			// restores them after.
@@ -266,6 +394,38 @@ namespace DCLF
 					if (object && object->shape)
 						g->cullHidden.emplace_back(object->shape.get(), Hidden(object->shape.get()));
 			std::sort(g->cullHidden.begin(), g->cullHidden.end());
+			// CS_DCLF_FIRST_PERSON: every node and geometry under the first-person root, with the bit the engine's first-person culls saw
+			// last frame (NoteFirstPersonCulled), else as it is now (this thread, before Main::Draw touches the skeleton). The frame start's
+			// bits are not the culls' (the arms are hidden at the frame's start while the engine draws them), so the first-person members'
+			// chains read their bits from here. Kept by the subtree's events (SyncSubtree), not walked; merged in key order.
+			SyncSubtree(subtreeRoot);
+			if (subtreeRoot) {
+				if (Diagnostics::Observe().scene)
+					CheckSubtree("at the frame's start");
+				// The live chain of the first geometry, once (render thread: the tree alive, its membership just synced): where the
+				// skeleton hangs.
+				static bool chainLogged = false;
+				if (!chainLogged)
+					for (const auto& node : subtree.nodes)
+						if (node.key && node.geometry && !node.hidden) {
+							chainLogged = true;
+							std::string chain;
+							std::uint32_t at = 0;
+							for (const RE::NiAVObject* object = node.key; object && at < 24; object = object->parent, ++at)
+								chain += fmt::format("{}'{}' {}", at ? " <- " : "", object->name.c_str() ? object->name.c_str() : "", static_cast<const void*>(object));
+							logger::info("[DCLF] first-person subtree (T7e): the root {} (parent {}); a geometry's live chain: {}", static_cast<const void*>(subtreeRoot),
+								static_cast<const void*>(subtreeRoot->parent), chain);
+							break;
+						}
+				const auto listed = static_cast<std::ptrdiff_t>(g->cullHidden.size());
+				g->cullHidden.reserve(g->cullHidden.size() + subtree.nodes.size());
+				for (const auto& node : subtree.nodes)
+					if (node.key)
+						g->cullHidden.emplace_back(node.key, CulledBit(node));
+				std::inplace_merge(g->cullHidden.begin(), g->cullHidden.begin() + listed, g->cullHidden.end());
+				g->firstPersonGeometry = subtree.geometry;
+				NoteFirstPersonDifference();
+			}
 		}
 		g->membershipWitness = PrimaryCull::MembershipWitness(*g);
 		g->technique = SampleTechniqueInputs();

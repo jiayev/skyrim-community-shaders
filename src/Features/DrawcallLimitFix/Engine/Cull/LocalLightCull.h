@@ -52,7 +52,8 @@ namespace DCLF
 			std::uint64_t frames = 0, live = 0, noExclusion = 0, noClaims = 0, stale = 0, masked = 0, visited = 0, skipped = 0;
 			// The category filter.
 			std::uint64_t lights = 0, filtered = 0, walkedNotLive = 0, nodes = 0, children = 0, cut = 0, dirtyNodes = 0, builds = 0, nodesRebuilt = 0;
-			std::int64_t buildTicks = 0;
+			std::int64_t buildTicks = 0;  // on the pool
+			std::uint64_t buildsStale = 0, buildsRefused = 0;  // builds landed for an older verdict, or refused a lease
 			std::size_t filterNodes = 0;
 			// The lights' bits.
 			std::uint64_t bitLights = 0, overflow = 0, given = 0, withBits = 0;

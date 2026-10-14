@@ -888,7 +888,9 @@ namespace DCLF::Scene
 		if (memberDecals.contains(slot))
 			NoteDecalChanged(slot);
 		tables.layerBase[slot] = a_base;
-		tables.layerOf[a_base] = slot;
+		// The base's own column: replayed by slot only when noted (the base's write may note no change).
+		if (std::exchange(tables.layerOf[a_base], slot) != slot)
+			tables.NotePublished(a_base);
 		const std::uint32_t keptPipeline = tables.draws[slot].pipelineIndex;
 		if (keepMember) {
 			const auto& kept = tables.objects[slot];
@@ -1152,7 +1154,9 @@ namespace DCLF::Scene
 
 	bool Coordinator::KeepSkin(RE::BSGeometry* a_geometry, Tracked& a_tracked, const EvalResult& a_result)
 	{
-		// The slot half of the light path's skin check (EvaluateEntry did the record half); FrameValues checks the palette later.
+		// The slot half of the light path's skin check (EvaluateEntry did the record half), taken when an event names the entry (MoverDue);
+		// a skin, dismember or rigid-body change reclassifies it instead (mirrorSkinGeometries, ApplyMotionUpdate). FrameValues checks the
+		// palette.
 		const std::uint32_t slot = a_tracked.slot;
 		const std::uint32_t rows = a_result.skinRows;
 		if (!(tables.objects[slot].flags & kObjectSkinned) || rows != tables.boneRows[slot])
@@ -1183,8 +1187,8 @@ namespace DCLF::Scene
 		if (inserted) {
 			motion->second = a_now ? *a_now : RootMovesNow(a_root);
 			// The root pass (QueueRoots) takes its bound, keyed by its reference's move events.
-			if (motion->second)
-				movingRoots.try_emplace(a_root, MovingRoot{ static_cast<const RE::TESObjectREFR*>(record->userData), FindCategoryNode(const_cast<RE::NiAVObject*>(a_root), nullptr) });
+			if (motion->second && movingRoots.try_emplace(a_root, MovingRoot{ static_cast<const RE::TESObjectREFR*>(record->userData), FindCategoryNode(const_cast<RE::NiAVObject*>(a_root), nullptr) }).second)
+				placementDirty = true;
 		}
 		return motion->second;
 	}
@@ -1279,12 +1283,16 @@ namespace DCLF::Scene
 		}
 		if (a_root && a_tracked.listedRoot) {
 			MarkSunEntryDirty(a_tracked.listedRoot);
+			// A listed root's dependents are a plan's.
+			if (movingRoots.contains(a_tracked.listedRoot) || stillRoots.contains(a_tracked.listedRoot))
+				placementDirty = true;
 			// The root's bound drops this one. The node is only a key here; it may be gone.
 			if (Unlist(rootDependents, a_tracked.listedRoot, a_geometry)) {
 				dirtyRoots.push_back(a_tracked.listedRoot);
 			} else {
 				rootMotion.erase(a_tracked.listedRoot);
 				movingRoots.erase(a_tracked.listedRoot);
+				stillRoots.erase(a_tracked.listedRoot);
 				if (const auto reference = rootReference.find(a_tracked.listedRoot); reference != rootReference.end()) {
 					if (const auto back = referenceRoot.find(reference->second); back != referenceRoot.end() && back->second == a_tracked.listedRoot)
 						referenceRoot.erase(back);
@@ -1357,7 +1365,8 @@ namespace DCLF::Scene
 	void Coordinator::ScheduleRoot(const RE::NiAVObject* a_root)
 	{
 		rootMotion.erase(a_root);
-		movingRoots.erase(a_root);
+		if (movingRoots.erase(a_root))
+			placementDirty = true;
 		const auto it = rootDependents.find(a_root);
 		if (it == rootDependents.end())
 			return;
@@ -1386,14 +1395,15 @@ namespace DCLF::Scene
 	std::uint32_t Coordinator::PerFrameTraitsOf(bool a_faceShape, bool a_actorOwned, const RE::NiNode* a_categoryNode, const RE::BSGeometry& a_geometry) const
 	{
 		// The movable set (dclf-event-driven-tables.md): a static reference never moves in place, so what moves is actor-owned,
-		// controller-animated or Havok-simulated. Skin palettes, face snapshots and switch selections change without moving. A
-		// controller on the shader or alpha property animates the material alpha the shadow verdict reads.
+		// controller-animated or Havok-simulated. Skin palettes and face snapshots change without moving. A controller on the shader or
+		// alpha property animates the material alpha the shadow verdict reads (kTraitAnimatedShading: its events name it, never per frame).
 		std::uint32_t traits = 0;
 		traits |= a_faceShape ? kTraitFace : 0u;
 		traits |= a_actorOwned ? kTraitActor : 0u;
 		const auto leaf = mirror.Leaf(&a_geometry);
 		traits |= leaf.Skinned() ? kTraitSkin : 0u;
-		// A particle system's bound and quads change with each update, invisibly to the walk: FrameValues places it every frame.
+		// A particle system's bound and quads change with each update, invisibly to the walk: a mover (FrameValues places it every frame),
+		// its own update its move event (ParticleSnapshots' capture pushes it).
 		if (ActiveToggles().particles && leaf.geometry && leaf.geometry->type == static_cast<std::uint8_t>(RE::BSGeometry::Type::kParticles))
 			traits |= kTraitMoves;
 		if (leaf.property && leaf.property->controllers)
@@ -1439,15 +1449,17 @@ namespace DCLF::Scene
 	{
 		// Per frame when a frame can change its record. A movable chain is re-read whatever its verdict: an actor's equipment is shown,
 		// hidden and swapped with no event, and a visibility controller toggles its node. Root-bound-only motion is not per frame: the
-		// root pass takes it (QueueRoots).
+		// root pass takes it (QueueRoots). Animated shading is not either: its shading events name it (MaterialWrites, NameShadingEvents).
 		const std::uint32_t traits = a_traits;
+		const std::uint32_t moving = traits & ~kTraitAnimatedShading;
 		const bool frameVerdict = a_reason == Ineligible::Hidden || a_reason == Ineligible::Switch || a_reason == Ineligible::Actor;
-		const bool perFrame = (a_mayRecord && traits && traits != kTraitRootMoves && traits != kTraitFace) || (traits & kTraitActor) ||
+		const bool perFrame = (a_mayRecord && moving && moving != kTraitRootMoves && moving != kTraitFace) || (traits & kTraitActor) ||
 		                      (frameVerdict && (traits & kTraitMoves));
-		// The light path takes only placement, palette, switch selection, shading and an actor's verdict recheck (ActorRecordKept); face
-		// positions follow the head's publications. An entry that cannot have a record is written in full.
+		// The light path takes only an actor's verdict recheck (ActorRecordKept) and a skin's partitions (KeepSkin), when an event names
+		// the entry (MoverDue); placement and palette are the plan's (moverSet), face positions follow the head's publications. An entry
+		// that cannot have a record is written in full.
 		const std::uint32_t light = perFrame && a_mayRecord &&
-		                                    !(traits & ~(kTraitSwitch | kTraitMoves | kTraitRootMoves | kTraitAnimatedShading | kTraitSkin | kTraitActor | kTraitFace)) ?
+		                                    !(traits & ~(kTraitMoves | kTraitRootMoves | kTraitAnimatedShading | kTraitSkin | kTraitActor | kTraitFace)) ?
 		                                traits :
 		                                0u;
 		return { perFrame, light };
@@ -1537,24 +1549,14 @@ namespace DCLF::Scene
 					counters->evaluateKindMs[static_cast<std::size_t>(kind)] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 			}
 		} kindSample{ profileKinds ? &a_counters : nullptr, r.kind, profileKinds ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{} };
-		// The light path: a classified entry that only moves, follows a switch, or is an actor's; the full write is skipped if kept.
+		// The light path: a classified entry that only moves, is skinned, or is an actor's; the full write is skipped if kept.
 		if (a_light && entry.lightTraits && entry.perFrame && entry.fullWalk != walkSerial && entry.candidateFrame != 0) {
 			const bool recorded = entry.slot != kNoObjectSlot && entry.objectStamp == objectStamp;
 			bool kept = true;
-			if (entry.lightTraits & kTraitActor) {
+			if (entry.lightTraits & kTraitActor)
 				kept = recorded && ActorRecordKept(entry, a_counters, r);
-			} else if (entry.lightTraits & kTraitSwitch) {
-				// Only the selection changes (a harvested plant, a tree's LOD); the rest of the chain is static.
-				const bool verdictKept = (entry.candidateReason == Ineligible::None || entry.candidateReason == Ineligible::Switch) &&
-				                         (entry.candidateReason == Ineligible::None) == recorded;
-				const auto* switchRecord = entry.switchNode ? mirror.Node(entry.switchNode) : nullptr;
-				if (verdictKept && switchRecord && ActiveToggles().switchNodes)
-					kept = SwitchSelects(*switchRecord, entry.switchChild) == (entry.candidateReason == Ineligible::None);
-				else
-					kept = verdictKept && ClassifyFrame(entry) == entry.candidateReason;
-			} else {
+			else
 				kept = recorded;
-			}
 			// Last, only for a kept record: KeepSkin's record half (its slot half is the merge's).
 			if (kept && recorded && (entry.lightTraits & kTraitSkin)) {
 				const auto* record = mirror.Geometry(geometry);
@@ -1603,7 +1605,7 @@ namespace DCLF::Scene
 					a_out.rootMovesNow = motion->second;
 				}
 			}
-			a_out.moveKey = MoveKeyOf(*geometry, entry.categoryNode);
+			std::tie(a_out.moveKey, a_out.moveKeyOuter) = MoveKeysOf(*geometry, entry.categoryNode);
 		}
 	}
 
@@ -1629,26 +1631,50 @@ namespace DCLF::Scene
 		entry.hiddenEventOwed = false;
 		if (r.verdictUnannounced)
 			Diagnostics::Notify(Diagnostics::ActorVerdictUnannounced{ entry.hiddenChain });
+		// Parity (a witness walk): evaluated though no event named it (MoverDue); whatever its evaluation changes, the gate would have
+		// left as it was. Not one an event scheduled in full this walk anyway.
+		const bool witnessed = entry.gateWitnessWalk == walkSerial && entry.fullWalk != walkSerial;
+		const char* missed = witnessed && !r.light ? "the light path missed" : nullptr;
+		auto witness = [&](bool a_moverChanged) {
+			if (!witnessed)
+				return;
+			auto& g = moverGateStats;
+			++g.witnessChecks;
+			missed = missed ? missed : a_moverChanged ? "the mover set" : nullptr;
+			if (!missed)
+				return;
+			++g.witnessDiffer;
+			if (g.firstDiffer.empty())
+				g.firstDiffer = fmt::format("{} on '{}' (traits {:X}, move keys {} {})", missed, entry.geometry && entry.geometry->name.c_str() ? entry.geometry->name.c_str() : "?",
+					entry.lightTraits, entry.moveKey, entry.moveKeyOuter);
+		};
 		if (r.light) {
+			const bool slotted = entry.slot < tables.skinPartitions.size();
+			const auto partitions = slotted ? tables.skinPartitions[entry.slot] : decltype(tables.skinPartitions)::value_type{};
+			const auto lodPartitions = slotted ? tables.skinLodPartitions[entry.slot] : decltype(tables.skinLodPartitions)::value_type{};
 			if (!r.lightSkin || KeepSkin(geometry, entry, r)) {
+				if (witnessed && r.lightSkin && (tables.skinPartitions[entry.slot] != partitions || tables.skinLodPartitions[entry.slot] != lodPartitions))
+					missed = "a skin's partitions";
 				for (std::uint32_t bit = 0; bit < stats.lightByTrait.size(); ++bit)
 					stats.lightByTrait[bit] += (entry.lightTraits >> bit) & 1u;
 				const bool recorded = r.lightRecorded;
-				// Tables::actorObjects is rebuilt every walk.
+				// Tables::actorObjects: kept across walks, this walk's evaluations added (DeltaWalk).
 				if (recorded && entry.actorOwned)
 					tables.actorObjects.push_back(entry.slot);
 				// An actor's skeleton moves with no controller or body on its chain (Havok's behaviour graph). FrameValues places
-				// every recorded mover each frame.
+				// every recorded mover each frame from the newest plan (moverSet).
 				if (recorded && (entry.lightTraits & (kTraitMoves | kTraitRootMoves | kTraitSkin | kTraitActor))) {
-					WalkPlan().movers.push_back(PlanItemOf(geometry, entry));
 					++stats.lightPlaced;
 					++delta.moved;
 				} else {
 					++delta.kept;
 				}
 				entry.movedWalk = walkSerial;  // not written in full: a later round may still write it
+				witness(NoteMover(geometry, entry));
 				return;
 			}
+			if (witnessed)
+				missed = "a skin's slot (KeepSkin)";
 			// The slot's flags or palette rows disagree: evaluate and write in full here.
 			++fanoutStats.lightMissed;
 			r.light = false;
@@ -1699,35 +1725,16 @@ namespace DCLF::Scene
 			assert(r.classified);
 			std::tie(entry.perFrame, entry.lightTraits) = PerFrameMerge(entry, r);
 			entry.moveKey = r.moveKey;
+			entry.moveKeyOuter = r.moveKeyOuter;
 			// Every entry's hidden chain is followed by events, a static's as an actor's.
 			ListHiddenChain(geometry, entry);
-			entry.switchNode = nullptr;
-			entry.switchChild = nullptr;
-			if (entry.lightTraits & kTraitSwitch) {
-				std::uint32_t switches = 0;
-				// ClassifyFrame's walk: every node below the category node.
-				const void* child = geometry;
-				const auto* leafRecord = mirror.Node(geometry);
-				for (const void* key = leafRecord ? leafRecord->parent : nullptr; key && key != entry.categoryNode;) {
-					const auto* record = mirror.Node(key);
-					if (!record)
-						break;
-					if (record->kind & SceneCapture::kKindSwitch) {
-						++switches;
-						entry.switchNode = static_cast<RE::NiSwitchNode*>(const_cast<void*>(key));
-						entry.switchChild = static_cast<const RE::NiAVObject*>(child);
-					}
-					child = key;
-					key = record->parent;
-				}
-				if (switches != 1)
-					entry.switchNode = nullptr;
-			}
 		}
 		if (entry.perFrame && !entry.perFrameListed) {
 			entry.perFrameListed = true;
 			perFrameSet.push_back({ geometry, &entry });
 		}
+		// Into or out of the placement set (a new record, a slot released, traits gained or lost).
+		witness(NoteMover(geometry, entry));
 	}
 
 	void Coordinator::MergeCounters(EvalCounters& a_counters)
@@ -1927,7 +1934,7 @@ namespace DCLF::Scene
 		TracyCZoneN(scheduleZone, "CS.DCLF.Scene.Schedule", true);
 		const bool full = fullEvaluation;
 		// Per-frame entries are walked once per frame input: a second pass of the same frame would rewrite the same records. Such a pass
-		// takes only what its events schedule; the movers stay the last per-frame walk's (PublishPlacementPlan).
+		// takes only what its events schedule. The movers are the placement set's either way (moverSet, PublishPlacementPlan).
 		perFrameWalked = full || perFrameFrame != sceneFrame;
 		if (perFrameWalked) {
 			perFrameFrame = sceneFrame;
@@ -1935,10 +1942,8 @@ namespace DCLF::Scene
 		} else {
 			++pumpStats.eventWalks;
 		}
-		// The last per-frame walk's actors, kept through a walk that does not take them.
-		std::vector<std::uint32_t> keptActors;
-		if (!perFrameWalked)
-			keptActors = std::move(tables.actorObjects);
+		// The actors' slots, kept through the walk (the light path takes only the actors an event names); its evaluations add theirs.
+		std::vector<std::uint32_t> keptActors = std::move(tables.actorObjects);
 		// Before a full evaluation drops the node events, which name movers too.
 		DrainMoveEvents(full);
 		DrainHiddenEvents();
@@ -1968,6 +1973,12 @@ namespace DCLF::Scene
 			propertyDependents.clear();
 			rootMotion.clear();
 			movingRoots.clear();
+			// The placement set is the full walk's anew; the mirror's trait updates are its too.
+			moverSet.clear();
+			stillRoots.clear();
+			placementDirty = true;
+			mirrorMotionNodes.clear();
+			mirrorSkinGeometries.clear();
 			hiddenDependents.clear();
 			tables.InvalidateChangeLog();
 			buckets = {};
@@ -1990,6 +2001,15 @@ namespace DCLF::Scene
 			const bool addressesHold = perFrameLayout == trackedLayout;
 			if (perFrameWalked)
 				stats.perFrameRelookups += addressesHold ? 0 : 1;
+			// The light path's gate (MoverDue): a per-frame entry is taken when an event names it, all of them while the move events are not
+			// gating (not installed, or the frame after a full evaluation). A witness walk (parity) takes every one and checks the ones no
+			// event named (MergeEntry).
+			auto& gate = moverGateStats;
+			const bool gating = moveGating;
+			if (perFrameWalked) {
+				++gate.perFrameWalks;
+				gate.ungatedWalks += gating ? 0u : 1u;
+			}
 			for (std::size_t i = 0; perFrameWalked && i < perFrameSet.size();) {
 				auto& item = perFrameSet[i];
 				if (!addressesHold) {
@@ -2004,6 +2024,21 @@ namespace DCLF::Scene
 					item = perFrameSet.back();
 					perFrameSet.pop_back();
 					continue;
+				}
+				std::uint32_t why = 0;
+				if (gating && !MoverDue(*entry, item.geometry, why)) {
+					if (!hiddenWitness) {
+						++gate.skipped;
+						++i;
+						continue;
+					}
+					entry->gateWitnessWalk = walkSerial;
+				} else if (gating) {
+					++gate.due;
+					gate.moved += why == 1 || why == 5 ? 1u : 0u;
+					gate.owed += why == 2 ? 1u : 0u;
+					gate.firstPerson += why == 3 ? 1u : 0u;
+					gate.fullEveryFrame += why == 4 ? 1u : 0u;
 				}
 				Schedule(item.geometry, *entry, false);
 				++i;
@@ -2029,6 +2064,16 @@ namespace DCLF::Scene
 			}
 			propertyChanged.clear();
 			count(delta.property);
+			// Mirror updates of a trait's or a skin's inputs (ApplyMirrorEvents): the entries they name classified again.
+			gate.mirrorNodes += mirrorMotionNodes.size();
+			gate.mirrorGeometries += mirrorSkinGeometries.size();
+			for (const void* node : mirrorMotionNodes)
+				ApplyMotionUpdate(node);
+			mirrorMotionNodes.clear();
+			for (const void* key : mirrorSkinGeometries)
+				if (const auto it = tracked.find(static_cast<RE::BSGeometry*>(const_cast<void*>(key))); it != tracked.end())
+					Reclassify(it->first, it->second);
+			mirrorSkinGeometries.clear();
 			std::sort(nodeChanged.begin(), nodeChanged.end(), [](const auto& a_left, const auto& a_right) { return a_left.get() < a_right.get(); });
 			nodeChanged.erase(std::unique(nodeChanged.begin(), nodeChanged.end()), nodeChanged.end());
 			for (auto& node : nodeChanged)
@@ -2062,9 +2107,14 @@ namespace DCLF::Scene
 		}
 		FinishDeltaWalk(timer);
 		if (!keptActors.empty()) {
-			for (const std::uint32_t o : keptActors)
-				if (o < tables.objects.size() && tables.objectGeometry[o] && !(tables.objects[o].flags & kObjectFree))
+			// Still an actor-owned entry's record in that slot.
+			for (const std::uint32_t o : keptActors) {
+				if (o >= tables.objects.size() || !tables.objectGeometry[o] || (tables.objects[o].flags & kObjectFree))
+					continue;
+				const auto it = tracked.find(const_cast<RE::BSGeometry*>(tables.objectGeometry[o]));
+				if (it != tracked.end() && it->second.actorOwned && it->second.slot == o && it->second.objectStamp == objectStamp)
 					tables.actorObjects.push_back(o);
+			}
 			std::sort(tables.actorObjects.begin(), tables.actorObjects.end());
 			tables.actorObjects.erase(std::unique(tables.actorObjects.begin(), tables.actorObjects.end()), tables.actorObjects.end());
 		}

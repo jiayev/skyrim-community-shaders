@@ -2,6 +2,7 @@
 // pushing the mirror's update and the scene pass's event on the writer's thread (SceneEvents.h).
 
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
+#include "Features/DrawcallLimitFix/Draws/Gpu/FrameValueMoves.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/TreeLod.h"
@@ -510,6 +511,7 @@ namespace DCLF::Scene
 				return;
 			if (auto* object = netimmerse_cast<RE::NiAVObject*>(a_target)) {
 				PushNode(object);
+				FrameValueMoves::PushNode(object);
 				PushNodeUpdate(object, SceneCapture::NodeRecord::kControllers);
 			} else {
 				PushProperty(a_target);
@@ -525,17 +527,24 @@ namespace DCLF::Scene
 		{
 			func(a_this, a_transform);
 			PushNode(a_this->sceneObject);
+			FrameValueMoves::PushNode(a_this->sceneObject);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// MoveEvents' writers (SceneEvents.h).
+	// MoveEvents' writers (SceneEvents.h), each pushing its key to the scene pass and to FrameValues' producer (FrameValueMoves).
+	inline void PushMoved(const void* a_key)
+	{
+		PushMove(a_key);
+		FrameValueMoves::PushKey(a_key);
+	}
+
 	struct AnimationGraphPlace
 	{
 		static bool thunk(RE::TESObjectREFR* a_reference)
 		{
 			const bool result = func(a_reference);
-			PushMove(a_reference);
+			PushMoved(a_reference);
 			CountMove(0);
 			return result;
 		}
@@ -547,7 +556,7 @@ namespace DCLF::Scene
 		static void thunk(RE::TESObjectREFR* a_reference, bool a_warp)
 		{
 			func(a_reference, a_warp);
-			PushMove(a_reference);
+			PushMoved(a_reference);
 			CountMove(1);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -558,7 +567,7 @@ namespace DCLF::Scene
 		static void thunk(RE::Actor* a_actor)
 		{
 			func(a_actor);
-			PushMove(a_actor);
+			PushMoved(a_actor);
 			CountMove(2);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -569,7 +578,7 @@ namespace DCLF::Scene
 		static std::uint64_t thunk(RE::Actor* a_actor)
 		{
 			const auto result = func(a_actor);
-			PushMove(a_actor);
+			PushMoved(a_actor);
 			CountMove(3);
 			return result;
 		}
@@ -587,7 +596,7 @@ namespace DCLF::Scene
 			for (std::uint32_t i = 0; handles && i < count; ++i) {
 				RE::NiPointer<RE::TESObjectREFR> reference;
 				if (RE::LookupReferenceByHandle(handles[i], reference))
-					PushMove(reference.get());
+					PushMoved(reference.get());
 				CountMove(4);
 			}
 		}
@@ -599,7 +608,7 @@ namespace DCLF::Scene
 		static void thunk(RE::TESObjectREFR* a_reference)
 		{
 			func(a_reference);
-			PushMove(a_reference);
+			PushMoved(a_reference);
 			CountMove(5);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -613,9 +622,9 @@ namespace DCLF::Scene
 			using UpdateSelectedDownwardPass = void (*)(RE::NiAVObject*, void*, std::uint32_t);
 			(*reinterpret_cast<UpdateSelectedDownwardPass* const*>(a_node))[0x2D](a_node, a_data, a_arg);
 			if (const auto* reference = a_node->GetUserData())
-				PushMove(reference);
+				PushMoved(reference);
 			else
-				PushMove(a_node);
+				PushMoved(a_node);
 			CountMove(6);
 		}
 	};

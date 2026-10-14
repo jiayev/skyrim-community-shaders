@@ -1,5 +1,6 @@
 // CS_DCLF_PERSISTENT_PARITY: every 60th publication, the snapshot the replay brought up to date against the tables it was made from: the
-// material records, the object and geometry slots, the kept families and the logs.
+// material records, the object and geometry slots (with the per-object columns replayed by slot beside them: set phases, decal ordinals,
+// layer links), the kept families (the pipeline family whether kept or copied) and the logs.
 
 #include "SceneObservers.h"
 #include "SceneState.h"
@@ -89,11 +90,29 @@ namespace DCLF::Diagnostics
 				}
 				if (keepFadeRoots && !sameFamily([](auto& a_x, auto& a_y, auto&& a_member) { SceneTables::FadeRootFamily(a_x, a_y, a_member); }) && replay.parityFamiliesDiffer++ == 0)
 					logger::error("[DCLF] tables replay (6d): the fade roots were kept (stamp {}) but differ from the tables'", tables.fadeRootsStamp);
+				if (!sameFamily([](auto& a_x, auto& a_y, auto&& a_member) { SceneTables::PipelineFamily(a_x, a_y, a_member); }) && replay.parityFamiliesDiffer++ == 0)
+					logger::error("[DCLF] tables replay (6d): the pipeline family (stamp {}, the snapshot's {}) differs from the tables'", tables.pipelinesStamp, snapshot.pipelinesStamp);
+				// The per-object columns replayed by slot beside the logged ones, against the tables' whole.
+				auto sameColumn = [&](const char* a_name, const auto& a_left, const auto& a_right) {
+					if (sameMember(a_left, a_right))
+						return;
+					std::size_t at = 0;
+					while (at < a_left.size() && at < a_right.size() && a_left[at] == a_right[at])
+						++at;
+					if (replay.parityObjectsDiffer++ == 0)
+						logger::error("[DCLF] tables replay (6d): {} differs from the tables' ({} slots against {}; first at slot {}; replayed from log {}, now {})", a_name,
+							a_left.size(), a_right.size(), at, position, tables.changeLog.End());
+				};
+				sameColumn("setPhases", snapshot.setPhases, tables.setPhases);
+				sameColumn("decalOrdinal", snapshot.decalOrdinal, tables.decalOrdinal);
+				sameColumn("layerBase", snapshot.layerBase, tables.layerBase);
+				sameColumn("layerOf", snapshot.layerOf, tables.layerOf);
 				auto sameLog = [](const auto& a_left, const auto& a_right) {
 					return a_left.base == a_right.base && a_left.entries.size() == a_right.entries.size() &&
 					       (a_left.entries.empty() || std::memcmp(a_left.entries.data(), a_right.entries.data(), a_left.entries.size() * sizeof(a_left.entries[0])) == 0);
 				};
 				if (!sameLog(snapshot.changeLog, tables.changeLog) || !sameLog(snapshot.geometryLog, tables.geometryLog) || !sameLog(snapshot.materialLog, tables.materialLog) ||
+					!sameLog(snapshot.publicationLog, tables.publicationLog) ||
 					!sameLog(snapshot.extrasBlockLog, tables.extrasBlockLog) || snapshot.extraRows.size() != tables.extraRows.size() ||
 					(!tables.extraRows.empty() && std::memcmp(snapshot.extraRows.data(), tables.extraRows.data(), tables.extraRows.size() * sizeof(float)) != 0))
 					if (replay.parityLogsDiffer++ == 0)

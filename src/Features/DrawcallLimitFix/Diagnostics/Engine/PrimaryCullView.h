@@ -5,6 +5,18 @@
 namespace DCLF::Diagnostics
 {
 	/**
+	 * @brief Hook point (Hooks.h), DrawWorld_BuildSceneLists' job: the kept lists (ListMode::Keep) brought up to this frame - events
+	 * and the filter's delta applied - before the engine's build adds its own entries; `kept[l]` entries of list l are DCLF's, `filter`
+	 * the roots they leave out. The observer compares them with a rebuild's.
+	 */
+	struct KeptSceneListsBuilt
+	{
+		const ankerl::unordered_dense::set<const RE::NiAVObject*>* filter;
+		const std::uint32_t* kept;
+		std::uint32_t count;
+	};
+
+	/**
 	 * @brief The engine observers' read-only view of PrimaryCull's private state (PrimaryCull befriends it). Render thread unless a
 	 * function says otherwise, at the observer's hook point; a list job reads the cut only between PrepareFrame and the jobs' Finish.
 	 */
@@ -20,6 +32,12 @@ namespace DCLF::Diagnostics
 			return plan == PrimaryCull::EntryPlan::FadeRoot || plan == PrimaryCull::EntryPlan::LeafRoot || plan == PrimaryCull::EntryPlan::TreeRoot;
 		}
 		static bool Rejected(std::uint32_t a_entry) { return Self().cut.plans[a_entry] == PrimaryCull::EntryPlan::Rejected; }
+		/** @brief Whether a plan (of the cut or of PlanWholeCut's) is Rejected. */
+		template <class Plan>
+		static bool RejectedPlan(Plan a_plan)
+		{
+			return a_plan == PrimaryCull::EntryPlan::Rejected;
+		}
 		/** @brief The cut planned whole for its snapshot, the cut itself left as it was (PrimaryCull::PlanWholeCut). */
 		static auto PlanWholeCut() { return PrimaryCull::Get().PlanWholeCut(); }
 		/** @brief DCLF's enumeration of the object root's roots (PrimaryCull::ListRoots). The build's job. */
@@ -30,7 +48,9 @@ namespace DCLF::Diagnostics
 		static bool StandInLive() { return Self().standInLive; }
 		/** @brief Every entry walked this frame (Policy::WalkEveryEntry). */
 		static bool WalkEverything() { return Self().walkEverything; }
-		/** @brief This frame's members in view under stood-in entries (AfterListJobs). */
+		/** @brief Install only, the one write: the list jobs list the members in view for FrameVisible (the light masks' parity). */
+		static void CollectVisible() { PrimaryCull::Get().collectVisible = true; }
+		/** @brief This frame's members in view under stood-in entries (AfterListJobs; only after CollectVisible). */
 		static const auto& FrameVisible() { return Self().frameVisible; }
 		/** @brief The frame's set (PrepareFrame), or null. */
 		static const auto& FrameSet() { return Self().frameSet; }

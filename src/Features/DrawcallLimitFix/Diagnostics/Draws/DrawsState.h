@@ -108,24 +108,6 @@ namespace DCLF::Diagnostics
 		std::array<ParityPayloadSeen, 32> parityPayloads{};
 		std::uint32_t parityPayloadsSeen = 0;
 
-		// The culling counters, read back from the draw-count buffer a few frames later. Always on: the per-phase counts show
-		// whether culling does anything, and the buffer is two words.
-		struct CullReadback
-		{
-			winrt::com_ptr<ID3D11Buffer> count;
-			std::uint32_t framesLeft = 0;
-			std::uint32_t sunCpuTested = 0, sunCpuMissed = 0;
-			// CS_DCLF_SET_PARITY, against the same frame: the CPU's terrain near test (<- TB NEAR), the engine's blended passes of
-			// registered members (<- FORWARD) and its refraction passes, hint 4 (<- REFRACTION).
-			std::uint32_t terrainCpuTested = 0, terrainCpuNear = 0;
-			bool terrainCpu = false;
-			std::uint32_t forwardEngine = 0;
-			bool forwardObserved = false;
-			std::uint32_t refractionEngine = 0;
-			bool refractionObserved = false;
-		};
-		std::optional<CullReadback> cullReadback;
-		std::uint32_t cullEpochs = 0;
 		// The colour commit's last culling latch (sun test), and the depth commit's last terrain near test.
 		BuildDrawsLatch sunUpload{};
 		std::array<float, 4> terrainNearUpload{};

@@ -132,7 +132,7 @@ namespace DCLF::Scene
 		void SyncFrameTables()
 		{
 			const Tables& view = View();
-			frameTables.SyncPipelines(view.pipelines, view.pipelineBindingVersion, frameTablesGeneration);
+			frameTables.SyncPipelines(view.pipelines, view.pipelineBindingVersion, frameTablesGeneration, view.pipelinesStamp);
 		}
 		/**
 		 * @brief Render thread, EarlyPrepass: posts the accumulate phase's inputs (PostRoomMap), drains the capture (DrainCapture) and

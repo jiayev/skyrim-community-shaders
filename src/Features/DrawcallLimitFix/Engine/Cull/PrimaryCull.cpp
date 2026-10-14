@@ -9,6 +9,8 @@
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Engine/Access/EngineReadWindow.h"
+#include "Features/DrawcallLimitFix/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
@@ -264,14 +266,10 @@ namespace DCLF
 		       a_node->worldBound.center.z - Global<float>(kTreeHeightBase) > Global<float>(kTreeHeightLimit);
 	}
 
-	PrimaryCull::EntryPlan PrimaryCull::PlanOf(std::uint32_t a_entry, const RE::NiAVObject* a_root)
+	PrimaryCull::EntryPlan PrimaryCull::PlanEntry(const SunCandidates& a_candidates, const RE::NiAVObject* a_root, PlannedEntry& a_out) const
 	{
-		const auto& candidates = *cut.candidates;
 		// Each node and geometry is judged by its OnVisible slot (wideOnVisible), not its RTTI. A geometry the snapshot has as DCLF's
 		// (Eligibility::PrimaryVerdict) is a member; a hidden static's is left out; any other is the engine's and makes the entry mixed.
-		const std::size_t first = cut.members.size();
-		const std::size_t firstPath = cut.switchPaths.size();
-		const std::size_t firstSwitch = cut.switches.size();
 		std::vector<std::pair<const RE::NiSwitchNode*, std::int32_t>> path;
 		const char* rejected = nullptr;
 		const RE::BSGeometry* mixedBy = nullptr;
@@ -291,17 +289,19 @@ namespace DCLF
 					rejected = nameOf(a_object);
 					return;
 				}
-				const auto it = candidates.geometries.find(geometry);
-				const std::uint8_t verdict = it != candidates.geometries.end() && it->second < candidates.primaryGeometry.size() ? candidates.primaryGeometry[it->second] : Eligibility::kPrimaryEngine;
+				const auto it = a_candidates.geometries.find(geometry);
+				const std::uint8_t verdict = it != a_candidates.geometries.end() && it->second < a_candidates.primaryGeometry.size() ? a_candidates.primaryGeometry[it->second] : Eligibility::kPrimaryEngine;
 				// A hidden static's geometry: neither; unhiding changes the verdict and replans the entry.
 				if (verdict == Eligibility::kPrimaryHiddenStatic) {
 					++hidden;
 					return;
 				}
 				const bool mine = verdict == Eligibility::kPrimaryMember;
-				const auto begin = static_cast<std::uint32_t>(cut.switchPaths.size());
-				cut.switchPaths.insert(cut.switchPaths.end(), path.begin(), path.end());
-				cut.members.push_back({ geometry, !mine, begin, static_cast<std::uint32_t>(cut.switchPaths.size()) });
+				const auto begin = static_cast<std::uint32_t>(a_out.switchPaths.size());
+				a_out.switchPaths.insert(a_out.switchPaths.end(), path.begin(), path.end());
+				a_out.members.push_back({ geometry, !mine, begin, static_cast<std::uint32_t>(a_out.switchPaths.size()) });
+				// The object the snapshot's walk had (the frame reads no tracked set).
+				a_out.memberObject.push_back(mine && it != a_candidates.geometries.end() && it->second < a_candidates.geometrySlot.size() ? a_candidates.geometrySlot[it->second] : -1);
 				ours += mine ? 1 : 0;
 				if (!mine && !mixedBy)
 					mixedBy = geometry;
@@ -310,7 +310,7 @@ namespace DCLF
 			auto* node = const_cast<RE::NiAVObject*>(a_object)->AsNode();
 			if (node && !a_isRoot && onVisible == wideOnVisible.switchNode) {
 				const auto* switchNode = static_cast<const RE::NiSwitchNode*>(node);
-				cut.switches.push_back(switchNode);
+				a_out.switches.push_back(switchNode);
 				const auto& children = node->GetChildren();
 				for (std::uint16_t c = 0; c < children.free_idx(); ++c) {
 					path.emplace_back(switchNode, static_cast<std::int32_t>(c));
@@ -332,13 +332,14 @@ namespace DCLF
 		visit(visit, a_root, true);
 		// Nothing of DCLF's: the engine's, unless it holds only hidden statics (a marker), which nobody draws until unhidden.
 		const bool empty = !ours && !(hidden && !mixedBy);
-		cut.rejectReason[a_entry] = rejected ? rejected : empty ? "no DCLF geometry" : nullptr;
-		cut.mixedBy[a_entry] = rejected || empty || !mixedBy ? std::string() :
-		                                                                    fmt::format("'{}' ({})", mixedBy->name.c_str() ? mixedBy->name.c_str() : "", nameOf(mixedBy));
+		a_out.rejectReason = rejected ? rejected : empty ? "no DCLF geometry" : nullptr;
+		a_out.mixedBy = rejected || empty || !mixedBy ? std::string() :
+		                                                fmt::format("'{}' ({})", mixedBy->name.c_str() ? mixedBy->name.c_str() : "", nameOf(mixedBy));
 		if (rejected || empty) {
-			cut.members.resize(first);
-			cut.switchPaths.resize(firstPath);
-			cut.switches.resize(firstSwitch);
+			a_out.members.clear();
+			a_out.memberObject.clear();
+			a_out.switchPaths.clear();
+			a_out.switches.clear();
 			return EntryPlan::Rejected;
 		}
 		return RttiIs(a_root, "BSFadeNode") ? EntryPlan::FadeRoot :
@@ -410,13 +411,8 @@ namespace DCLF
 		Diagnostics::Notify(Diagnostics::CutSlotsReset{ count });
 		// The stand-in needs a current snapshot; otherwise the engine culls every entry (less the leaf exclusion).
 		if (!ActiveToggles().excludePrimaryEntries) {
-			if (!ownedFadeRoots.empty()) {
-				ownedFadeRoots.clear();
-				standInRoots.clear();
-				standInList.clear();
-						Scene::FrameView::Get().SetFadeRootsOwned({});
-				TreeAnimation::SetOwned({}, {});
-			}
+			if (!ownedFade.empty() || !standInRoots.empty())
+				ClearFadeOwnership();
 			frameLive.store(true, std::memory_order_release);
 			return;
 		}
@@ -426,17 +422,19 @@ namespace DCLF
 			++(candidates ? cutStats.skippedPreconditions : cutStats.skippedStale);
 			liveStale = true;
 			// The engine culls the stood-in roots and writes their kAccumulated this frame; the next decode writes them all.
-			if (!ownedFadeRoots.empty())
+			if (!ownedFade.empty())
 				IndirectDraws::Get().RequestAccumulatedRefresh();
 			frameLive.store(true, std::memory_order_release);
 			return;
 		}
 		const std::int64_t start = Now();
+		// The plans the pool made since, spliced in first.
+		TakePlans();
 		// Entries whose versions moved since the last snapshot are planned again (SyncCut); the rest stand.
 		const bool newSnapshot = cut.candidates != candidates;
 		std::vector<std::uint32_t> changedEntries;
 		if (newSnapshot) {
-			ChangedEntries(cut.candidates.get(), *candidates, changedEntries);
+			ChangedEntriesByLog(cut.candidates.get(), *candidates, changedEntries);
 			SyncCut(candidates, changedEntries);
 		}
 		Diagnostics::Notify<Diagnostics::EnginePoint::CutSynced>();
@@ -460,6 +458,9 @@ namespace DCLF
 			liveStale = false;
 		}
 		cutStats.entriesPlanned += changedEntries.size();
+		// Entries refused a lease, or queued by the list filter's sync: sent again.
+		KickPlans();
+		cutStats.awaiting += cut.planQueue.size() + plansOutstanding;
 		standInLive = true;
 		walkEverything = Policy::WalkEveryEntry();
 		// Walk flags for entries planned again (once memberLive is current) and entries a member joined or left.
@@ -467,8 +468,8 @@ namespace DCLF
 			RefreshWalk(e);
 		// Entries whose members are all in the set leave the engine's cull from this frame.
 		RunAdmission();
-		// Fade roots: a new snapshot's, and all again after frames the engine culled them (its OnVisible ran meanwhile).
-		if (!changedEntries.empty())
+		// Fade roots: the entries a new snapshot planned again or admission admitted.
+		if (!ownDirty.empty())
 			SyncFadeOwnership();
 		++cutStats.appliedFrames;
 		cutStats.prepareTicks += Now() - start;
@@ -477,25 +478,43 @@ namespace DCLF
 		gpuSunFrame = true;
 	}
 
-	void PrimaryCull::NoteAnimatedFade(const void* a_node, const float* a_camera)
+	bool PrimaryCull::NoteAnimatedFade(const void* a_node, const float* a_camera)
 	{
-		std::scoped_lock lock(animatedMutex);
-		animatedNodes.push_back(a_node);
+		// One lookup in the writer tables (FadeWrittenByDclf's): the root's slot for the batch, and whether DCLF writes it. A node they
+		// do not list is no root of DCLF's this update (one listed later is seeded from the node, this update included).
+		bool written = false;
+		if (const auto* tables = static_cast<const SceneTables*>(fadeWriterTables.load(std::memory_order_acquire))) {
+			if (const auto it = tables->fadeRootIndex.find(a_node); it != tables->fadeRootIndex.end() && it->second < tables->fadeRoots.size()) {
+				const auto& row = tables->fadeRoots[it->second];
+				written = (row.bits & kFadeRootWritten) != 0;
+				animatedNodes.Push({ a_node, it->second, row.generation });
+			}
+		}
 		// FUN_14147a160's inputs: the camera FUN_1402cff60 passes (world root camera's position, lodAdjust) and the fade globals;
 		// the same for every call of one animation update.
-		if (a_camera) {
-			const AnimatedFadeInputs inputs{ { a_camera[0], a_camera[1], a_camera[2] }, a_camera[3], Global<std::int32_t>(Engine::Address::kFadeFrameCounter), Global<float>(Engine::Address::kFadeStepTime), 1u };
-			if (!animatedInputs.valid)
-				animatedInputs = inputs;
-			else if (std::memcmp(&inputs, &animatedInputs, offsetof(AnimatedFadeInputs, valid)) != 0)
-				animatedInputs.varied = 1;
+		if (!a_camera)
+			return written;
+		const AnimatedFadeInputs inputs{ { a_camera[0], a_camera[1], a_camera[2] }, a_camera[3], Global<std::int32_t>(Engine::Address::kFadeFrameCounter), Global<float>(Engine::Address::kFadeStepTime), 1u };
+		std::uint32_t state = animatedState.load(std::memory_order_acquire);
+		if (state == kAnimatedEmpty && animatedState.compare_exchange_strong(state, kAnimatedWriting, std::memory_order_acquire)) {
+			animatedInputs = inputs;
+			animatedState.store(kAnimatedPublished, std::memory_order_release);
+			return written;
 		}
+		if (state == kAnimatedPublished) {
+			if (std::memcmp(&inputs, &animatedInputs, offsetof(AnimatedFadeInputs, valid)) != 0)
+				animatedVaried.store(1, std::memory_order_relaxed);
+			return written;
+		}
+		// Claimed, not yet published: compared once the jobs are done.
+		animatedUnpublished.Push(inputs);
+		return written;
 	}
 
-	void PrimaryCull::TakeAnimatedBatch(std::vector<const void*>& a_nodes, AnimatedFadeInputs& a_inputs)
+	void PrimaryCull::TakeAnimatedBatch(std::vector<AnimatedFadeRoot>& a_roots, AnimatedFadeInputs& a_inputs)
 	{
-		std::scoped_lock lock(animatedMutex);
-		a_nodes.swap(animatedBatch);
+		// Render thread, as AfterListJobs, which made the batch.
+		a_roots.swap(animatedBatch);
 		animatedBatch.clear();
 		a_inputs = std::exchange(batchInputs, {});
 	}
@@ -527,7 +546,7 @@ namespace DCLF
 			}
 	}
 
-	void PrimaryCull::SyncCut(const std::shared_ptr<const SunCandidates>& a_candidates, std::span<const std::uint32_t> a_changed)
+	void PrimaryCull::SyncCut(const std::shared_ptr<const SunCandidates>& a_candidates, std::span<const std::uint32_t> a_changed, bool a_inline)
 	{
 		cut.candidates = a_candidates;
 		const auto& candidates = *a_candidates;
@@ -548,6 +567,8 @@ namespace DCLF
 		grow(cut.walk, std::uint8_t(0));
 		grow(cut.rejectReason, static_cast<const char*>(nullptr));
 		grow(cut.mixedBy, std::string());
+		grow(cut.awaiting, std::uint8_t(kPlanNone));
+		grow(cut.ticket, std::uint64_t(0));
 		for (const std::uint32_t e : a_changed) {
 			// Let go of the old entry; its member ranges become garbage.
 			if (const auto* old = cut.roots[e]) {
@@ -566,35 +587,24 @@ namespace DCLF
 			cut.admitted[e] = cut.mixed[e] = cut.walk[e] = 0;
 			cut.rejectReason[e] = nullptr;
 			cut.mixedBy[e].clear();
+			NoteFilterEntry(e);
+			ownDirty.push_back(e);
 			const auto* root = e < capacity ? candidates.entryNodes[e] : nullptr;
 			cut.roots[e] = root;
+			// A plan in flight for the old entry is stale from here.
+			cut.ticket[e] = ++planTickets;
+			cut.awaiting[e] = kPlanNone;
 			if (!root)
 				continue;
-			// Planned again: members and switches appended (PlanOf), their objects, their switch selection.
-			cut.plans[e] = PlanOf(e, root);
-			cut.memberEnd[e] = static_cast<std::uint32_t>(cut.members.size());
-			cut.switchEnd[e] = static_cast<std::uint32_t>(cut.switches.size());
-			if (cut.plans[e] == EntryPlan::Rejected)
+			// Planned again (PlanEntry): on the pool, Rejected until spliced in, or here.
+			if (!a_inline) {
+				cut.awaiting[e] = kPlanQueued;
+				cut.planQueue.push_back(e);
 				continue;
-			cut.memberObject.resize(cut.members.size(), -1);
-			cut.memberLive.resize(cut.members.size(), 1);
-			for (std::uint32_t m = cut.memberBegin[e]; m < cut.memberEnd[e]; ++m) {
-				cut.mixed[e] |= cut.members[m].engine ? 1 : 0;
-				// The object the snapshot's walk had (the frame reads no tracked set).
-				const auto it = cut.members[m].engine ? candidates.geometries.end() : candidates.geometries.find(cut.members[m].geometry);
-				cut.memberObject[m] = it != candidates.geometries.end() && it->second < candidates.geometrySlot.size() ? candidates.geometrySlot[it->second] : -1;
 			}
-			for (std::uint32_t w = cut.switchBegin[e]; w < cut.switchEnd[e]; ++w)
-				cut.switchEntry.insert_or_assign(cut.switches[w], e);
-			RefreshLive(e);
-			cut.eligible.insert_or_assign(root, e);
-			// Admitted again if its DCLF members are unchanged; otherwise queued for RunAdmission.
-			if (const auto it = cut.admittedRoots.find(root); it != cut.admittedRoots.end() && it->second == MemberSignature(e))
-				cut.admitted[e] = 1;
-			else
-				cut.pendingAdmission.push_back(e);
-			cut.walk[e] = 1;
-			walkRefresh.push_back(e);
+			PlannedEntry planned;
+			planned.plan = PlanEntry(candidates, root, planned);
+			SplicePlan(e, planned);
 		}
 		for (auto* column : { &cut.roots })
 			column->resize(capacity);
@@ -608,12 +618,126 @@ namespace DCLF
 		cut.walk.resize(capacity);
 		cut.rejectReason.resize(capacity);
 		cut.mixedBy.resize(capacity);
+		cut.awaiting.resize(capacity);
+		cut.ticket.resize(capacity);
 		std::erase_if(cut.pendingAdmission, [capacity](std::uint32_t a_e) { return a_e >= capacity; });
 		std::erase_if(walkRefresh, [capacity](std::uint32_t a_e) { return a_e >= capacity; });
+		std::erase_if(cut.planQueue, [&](std::uint32_t a_e) { return a_e >= capacity || cut.awaiting[a_e] != kPlanQueued; });
 		// Repack once garbage exceeds live members (amortised: one copy per member let go).
 		if (cutGarbage > cut.members.size() / 2)
 			CompactCut();
-		++cutVersion;
+		// Frames that sync the cut but stop before SyncFadeOwnership: the entries to judge kept once each.
+		if (ownDirty.size() > 2 * std::size_t(capacity) + 1024) {
+			std::sort(ownDirty.begin(), ownDirty.end());
+			ownDirty.erase(std::unique(ownDirty.begin(), ownDirty.end()), ownDirty.end());
+		}
+		if (!a_inline)
+			KickPlans();
+	}
+
+	void PrimaryCull::SplicePlan(std::uint32_t a_e, PlannedEntry& a_planned)
+	{
+		const std::uint32_t e = a_e;
+		const auto* root = cut.roots[e];
+		cut.plans[e] = a_planned.plan;
+		cut.rejectReason[e] = a_planned.rejectReason;
+		cut.mixedBy[e] = std::move(a_planned.mixedBy);
+		cut.memberBegin[e] = cut.memberEnd[e] = static_cast<std::uint32_t>(cut.members.size());
+		cut.switchBegin[e] = cut.switchEnd[e] = static_cast<std::uint32_t>(cut.switches.size());
+		NoteFilterEntry(e);
+		ownDirty.push_back(e);
+		if (cut.plans[e] == EntryPlan::Rejected)
+			return;
+		// Its members and switches appended to the pools, their switch paths rebased.
+		const auto pathBase = static_cast<std::uint32_t>(cut.switchPaths.size());
+		cut.switchPaths.insert(cut.switchPaths.end(), a_planned.switchPaths.begin(), a_planned.switchPaths.end());
+		for (auto member : a_planned.members) {
+			member.switchBegin += pathBase;
+			member.switchEnd += pathBase;
+			cut.members.push_back(member);
+		}
+		cut.switches.insert(cut.switches.end(), a_planned.switches.begin(), a_planned.switches.end());
+		cut.memberEnd[e] = static_cast<std::uint32_t>(cut.members.size());
+		cut.switchEnd[e] = static_cast<std::uint32_t>(cut.switches.size());
+		cut.memberObject.resize(cut.memberBegin[e], -1);
+		cut.memberObject.insert(cut.memberObject.end(), a_planned.memberObject.begin(), a_planned.memberObject.end());
+		cut.memberLive.resize(cut.members.size(), 1);
+		for (std::uint32_t m = cut.memberBegin[e]; m < cut.memberEnd[e]; ++m)
+			cut.mixed[e] |= cut.members[m].engine ? 1 : 0;
+		for (std::uint32_t w = cut.switchBegin[e]; w < cut.switchEnd[e]; ++w)
+			cut.switchEntry.insert_or_assign(cut.switches[w], e);
+		RefreshLive(e);
+		cut.eligible.insert_or_assign(root, e);
+		// Admitted again if its DCLF members are unchanged; otherwise queued for RunAdmission.
+		if (const auto it = cut.admittedRoots.find(root); it != cut.admittedRoots.end() && it->second == MemberSignature(e))
+			cut.admitted[e] = 1;
+		else
+			cut.pendingAdmission.push_back(e);
+		cut.walk[e] = 1;
+		walkRefresh.push_back(e);
+	}
+
+	void PrimaryCull::TakePlans()
+	{
+		plansReady.Drain([&](PlanBatch*&& a_batch) {
+			std::unique_ptr<PlanBatch> batch(a_batch);
+			plansOutstanding -= batch->entries.size();
+			for (auto& planned : batch->entries) {
+				const std::uint32_t e = planned.entry;
+				// Still the let-go it was made for: same ticket, so the same root and an unchanged entry since (its members' objects stand).
+				if (e >= cut.ticket.size() || cut.ticket[e] != planned.ticket || cut.awaiting[e] != kPlanInFlight) {
+					++cutStats.plansStale;
+					continue;
+				}
+				if (!planned.planned) {
+					++cutStats.plansRefused;
+					cut.awaiting[e] = kPlanQueued;
+					cut.planQueue.push_back(e);
+					continue;
+				}
+				cut.awaiting[e] = kPlanNone;
+				SplicePlan(e, planned);
+				++cutStats.plansSpliced;
+			}
+			// The batch's snapshot (and the roots it holds) is let go of here, on the render thread.
+		});
+	}
+
+	void PrimaryCull::KickPlans()
+	{
+		if (cut.planQueue.empty() || !cut.candidates)
+			return;
+		auto batch = std::make_unique<PlanBatch>();
+		batch->candidates = cut.candidates;
+		batch->entries.reserve(cut.planQueue.size());
+		for (const std::uint32_t e : std::exchange(cut.planQueue, {})) {
+			if (e >= cut.awaiting.size() || cut.awaiting[e] != kPlanQueued)
+				continue;
+			cut.awaiting[e] = kPlanInFlight;
+			auto& planned = batch->entries.emplace_back();
+			planned.entry = e;
+			planned.ticket = cut.ticket[e];
+			planned.root = cut.roots[e];
+		}
+		if (batch->entries.empty())
+			return;
+		cutStats.plansKicked += batch->entries.size();
+		plansOutstanding += batch->entries.size();
+		// The subtree walks read engine memory: a lease per entry, so the window's Close waits on one entry at most. A refused one is
+		// sent back unplanned and kicked again. The batch goes back whole to the render thread, which drops its snapshot.
+		if (!SceneScheduler::Executor().Dispatch(SceneScheduler::Scope(), SceneExecutor::Preparation, org::async::TaskDispatch::Cpu, "CS.DCLF.CutPlans",
+				[this, batch = batch.release()](const auto&) {
+					ZoneScopedN("CS.DCLF.CutPlans");
+					for (auto& planned : batch->entries) {
+						const EngineReadWindow::Lease lease;
+						if (!lease)
+							continue;
+						planned.plan = PlanEntry(*batch->candidates, planned.root, planned);
+						planned.planned = true;
+					}
+					plansReady.Push(batch);
+				}))
+			stl::report_and_fail("Drawcall Limit Fix: the cut's plans were refused by DCLF's executor");
 	}
 
 	PrimaryCull::Cut PrimaryCull::PlanWholeCut()
@@ -624,19 +748,23 @@ namespace DCLF
 		Cut kept = std::move(cut);
 		const auto keptWalkRefresh = walkRefresh;
 		const auto keptGarbage = cutGarbage;
-		const auto keptVersion = cutVersion;
+		const auto keptDirty = filterDirty;
+		const bool keptDirtyAll = filterDirtyAll;
+		const auto keptOwnDirty = ownDirty;
 		cut = Cut{};
 		cut.processes = kept.processes;
 		cut.processCount = kept.processCount;
 		cut.admittedRoots = kept.admittedRoots;
 		std::vector<std::uint32_t> all;
 		ChangedEntries(nullptr, *kept.candidates, all);
-		SyncCut(kept.candidates, all);
+		SyncCut(kept.candidates, all, true);
 		Cut whole = std::move(cut);
 		cut = std::move(kept);
 		walkRefresh = keptWalkRefresh;
 		cutGarbage = keptGarbage;
-		cutVersion = keptVersion;
+		filterDirty = keptDirty;
+		filterDirtyAll = keptDirtyAll;
+		ownDirty = keptOwnDirty;
 		return whole;
 	}
 
@@ -680,7 +808,6 @@ namespace DCLF
 		if (!cut.candidates)
 			return;
 		const auto& candidates = *cut.candidates;
-		bool admittedAny = false;
 		// Admission by readiness on events, never by engine verdict.
 		std::vector<std::uint32_t> retry;
 		for (const std::uint32_t e : cut.pendingAdmission) {
@@ -701,15 +828,12 @@ namespace DCLF
 			if (all) {
 				cut.admitted[e] = 1;
 				cut.admittedRoots.insert_or_assign(cut.roots[e], MemberSignature(e));
+				NoteFilterEntry(e);
+				ownDirty.push_back(e);
 				++cutStats.admittedNow;
-				admittedAny = true;
 			}
 		}
 		cut.pendingAdmission = std::move(retry);
-		if (admittedAny) {
-			SyncFadeOwnership();
-			++cutVersion;
-		}
 	}
 
 	void PrimaryCull::RefreshWalk(std::uint32_t a_e)
@@ -724,7 +848,8 @@ namespace DCLF
 		for (std::uint32_t m = cut.memberBegin[a_e]; m < cut.memberEnd[a_e] && !walk; ++m)
 			if (!cut.members[m].engine && !MemberDrawable(cut.memberObject[m]) && geometries.contains(cut.members[m].geometry))
 				walk = true;
-		cutVersion += cut.walk[a_e] != (walk ? 1 : 0) ? 1 : 0;
+		if (cut.walk[a_e] != (walk ? 1 : 0))
+			NoteFilterEntry(a_e);
 		cut.walk[a_e] = walk ? 1 : 0;
 	}
 
@@ -736,7 +861,8 @@ namespace DCLF
 		if (const auto it = candidates.geometries.find(a_geometry); it != candidates.geometries.end() && it->second < candidates.geometryEntry.size()) {
 			const std::uint32_t e = candidates.geometryEntry[it->second];
 			if (e < cut.walk.size()) {
-				cutVersion += cut.walk[e] ? 0 : 1;
+				if (!cut.walk[e])
+					NoteFilterEntry(e);
 				cut.walk[e] = 1;
 				walkRefresh.push_back(e);
 				// Out of this frame's lists: handed to nobody until the next frame's filter keeps the root.
@@ -762,9 +888,26 @@ namespace DCLF
 	void PrimaryCull::NoteAllMembersLost()
 	{
 		std::fill(cut.walk.begin(), cut.walk.end(), std::uint8_t(1));
-		++cutVersion;
+		filterDirtyAll = true;
 		for (std::uint32_t e = 0; e < cut.walk.size(); ++e)
 			walkRefresh.push_back(e);
+	}
+
+	std::uint8_t PrimaryCull::OwnStateOf(std::uint32_t a_e) const
+	{
+		if (a_e >= cut.plans.size() || !cut.roots[a_e] || !cut.admitted[a_e])
+			return kOwnNone;
+		switch (cut.plans[a_e]) {
+		case EntryPlan::Plain:
+			return cut.mixed[a_e] ? kOwnNone : kOwnPlain;
+		case EntryPlan::FadeRoot:
+		case EntryPlan::LeafRoot:
+			return cut.mixed[a_e] ? kOwnMixedFade : kOwnFade;
+		case EntryPlan::TreeRoot:
+			return cut.mixed[a_e] ? kOwnMixedFade : kOwnTree;
+		default:
+			return kOwnNone;
+		}
 	}
 
 	void PrimaryCull::SyncFadeOwnership()
@@ -774,32 +917,98 @@ namespace DCLF
 		// (TreeAnimation: TreeWindCS animates its trees; the tree clock reads BSLeafAnimNode's kAccumulated). Its kAccumulated is
 		// DCLF's, written at Main::Update's entry (AtUpdateEntry); clearing it would stop FUN_1402cff60 animating a stood-in
 		// reference that never fades. Until its first write it keeps the engine's last bit (a new listing is written visible).
-		ownedFadeRoots.clear();
+		// A stood-in plain entry has no engine cull either: its kAccumulated is DCLF's. A stood-in BSTreeNode stays on the tree
+		// manager's tree list, its loop given DCLF's verdict (TreeAnimation).
+		// By delta: only the entries planned again or admitted (ownDirty) are judged; those whose state moved leave their old state's
+		// sets first, then join their new one (a root that moved to another index within the delta stays).
+		std::sort(ownDirty.begin(), ownDirty.end());
+		ownDirty.erase(std::unique(ownDirty.begin(), ownDirty.end()), ownDirty.end());
+		std::vector<std::uint32_t> joined;
+		std::vector<const RE::NiAVObject*> animatedLeft, animatedJoined, treesLeft, treesJoined;
+		bool ownedMoved = false;
+		const auto erase = [](auto& a_list, auto& a_position, const void* a_root) {
+			const auto it = a_position.find(a_root);
+			if (it == a_position.end())
+				return;
+			const std::uint32_t at = it->second;
+			a_position.erase(it);
+			if (at + 1 != a_list.size()) {
+				a_list[at] = std::move(a_list.back());
+				a_position.insert_or_assign(KeyOf(a_list[at]), at);
+			}
+			a_list.pop_back();
+		};
+		for (const std::uint32_t e : std::exchange(ownDirty, {})) {
+			if (ownState.size() <= e) {
+				ownState.resize(e + 1, kOwnNone);
+				ownRoot.resize(e + 1, nullptr);
+			}
+			const std::uint8_t state = OwnStateOf(e);
+			const auto* root = state != kOwnNone ? cut.roots[e] : nullptr;
+			if (state == ownState[e] && root == ownRoot[e])
+				continue;
+			if (const auto* old = ownRoot[e]) {
+				const std::uint8_t was = ownState[e];
+				if (was == kOwnPlain || was == kOwnFade || was == kOwnTree)
+					standInRoots.erase(old);
+				if (was == kOwnMixedFade || was == kOwnFade || was == kOwnTree) {
+					erase(ownedFade, ownedFadePosition, old);
+					ownedMoved = true;
+				}
+				if (was == kOwnFade || was == kOwnTree) {
+					erase(standInList, standInPosition, old);
+					animatedLeft.push_back(old);
+				}
+				if (was == kOwnTree)
+					treesLeft.push_back(old);
+			}
+			ownState[e] = state;
+			ownRoot[e] = root;
+			if (root)
+				joined.push_back(e);
+		}
+		for (const std::uint32_t e : joined) {
+			const std::uint8_t state = ownState[e];
+			const auto* root = ownRoot[e];
+			if (state == kOwnPlain || state == kOwnFade || state == kOwnTree)
+				standInRoots.insert(root);
+			if (state == kOwnMixedFade || state == kOwnFade || state == kOwnTree) {
+				if (const auto [it, added] = ownedFadePosition.try_emplace(root, static_cast<std::uint32_t>(ownedFade.size())); added)
+					ownedFade.push_back({ root, state != kOwnMixedFade });
+				else
+					ownedFade[it->second].standIn = state != kOwnMixedFade;
+				ownedMoved = true;
+			}
+			if (state == kOwnFade || state == kOwnTree) {
+				if (standInPosition.try_emplace(root, static_cast<std::uint32_t>(standInList.size())).second)
+					standInList.push_back(root);
+				animatedJoined.push_back(root);
+			}
+			if (state == kOwnTree)
+				treesJoined.push_back(root);
+		}
+		// The coordinator takes the owned set whole (latest wins, applied by its scene pass).
+		if (ownedMoved)
+			Scene::FrameView::Get().SetFadeRootsOwned(ownedFade);
+		if (!animatedLeft.empty() || !animatedJoined.empty() || !treesLeft.empty() || !treesJoined.empty())
+			TreeAnimation::UpdateOwned(animatedLeft, animatedJoined, treesLeft, treesJoined);
+	}
+
+	void PrimaryCull::ClearFadeOwnership()
+	{
+		ownedFade.clear();
+		ownedFadePosition.clear();
 		standInRoots.clear();
 		standInList.clear();
-		std::vector<Scene::OwnedFadeRoot> owned;
-		std::vector<const RE::NiAVObject*> animated, trees;
-		for (std::uint32_t e = 0; e < cut.plans.size(); ++e) {
-			const auto plan = cut.plans[e];
-			const bool fade = plan == EntryPlan::FadeRoot || plan == EntryPlan::LeafRoot || plan == EntryPlan::TreeRoot;
-			// A stood-in plain entry has no engine cull either: its kAccumulated is DCLF's.
-			if (plan == EntryPlan::Plain && cut.admitted[e] && !cut.mixed[e])
-				standInRoots.insert(cut.roots[e]);
-			if (!cut.admitted[e] || !fade)
-				continue;
-			ownedFadeRoots.push_back(cut.roots[e]);
-			owned.push_back({ cut.roots[e], !cut.mixed[e] });
-			if (!cut.mixed[e]) {
-				standInRoots.insert(cut.roots[e]);
-				standInList.push_back(cut.roots[e]);
-				animated.push_back(cut.roots[e]);
-				// A stood-in BSTreeNode stays on the tree manager's tree list, its loop given DCLF's verdict (TreeAnimation).
-				if (plan == EntryPlan::TreeRoot)
-					trees.push_back(cut.roots[e]);
-			}
-		}
-		Scene::FrameView::Get().SetFadeRootsOwned(owned);
-		TreeAnimation::SetOwned(animated, trees);
+		standInPosition.clear();
+		Scene::FrameView::Get().SetFadeRootsOwned({});
+		TreeAnimation::SetOwned({}, {});
+		// Judged again whole when the stand-in comes back.
+		std::fill(ownState.begin(), ownState.end(), kOwnNone);
+		std::fill(ownRoot.begin(), ownRoot.end(), nullptr);
+		ownDirty.clear();
+		for (std::uint32_t e = 0; e < cut.plans.size(); ++e)
+			ownDirty.push_back(e);
 	}
 
 	void PrimaryCull::AtUpdateEntry(bool a_running)
@@ -918,7 +1127,9 @@ namespace DCLF
 			}
 			// In the frame's set: the GPU draws it. Otherwise (not ready, rebinding) the engine registers it.
 			if (!member.engine && MemberDrawable(cut.memberObject[m])) {
-				out.visible.push_back(geometry);
+				++out.inView;
+				if (collectVisible)
+					out.visible.push_back(geometry);
 				continue;
 			}
 			if (!member.engine && Scene::FrameView::Get().IsMember(cut.memberObject[m]))
@@ -941,13 +1152,21 @@ namespace DCLF
 
 	void PrimaryCull::AfterListJobs()
 	{
-		// The animation job runs between two culls, so its updates are complete now.
-		{
-			std::scoped_lock lock(animatedMutex);
-			animatedBatch.swap(animatedNodes);
-			animatedNodes.clear();
-			batchInputs = std::exchange(animatedInputs, {});
+		// The animation job runs between two culls, so its updates are complete now: its queued nodes and published inputs become
+		// the batch, and the record is free for the next update.
+		animatedBatch.clear();
+		animatedNodes.Drain([&](AnimatedFadeRoot&& a_root) { animatedBatch.push_back(a_root); });
+		batchInputs = {};
+		if (animatedState.load(std::memory_order_acquire) == kAnimatedPublished) {
+			batchInputs = animatedInputs;
+			batchInputs.varied = animatedVaried.load(std::memory_order_relaxed);
 		}
+		animatedUnpublished.Drain([&](AnimatedFadeInputs&& a_inputs) {
+			if (batchInputs.valid && std::memcmp(&a_inputs, &batchInputs, offsetof(AnimatedFadeInputs, valid)) != 0)
+				batchInputs.varied = 1;
+		});
+		animatedVaried.store(0, std::memory_order_relaxed);
+		animatedState.store(kAnimatedEmpty, std::memory_order_release);
 		Diagnostics::Notify<Diagnostics::EnginePoint::ListJobsDone>();
 		if (!frameLive.exchange(false, std::memory_order_acq_rel))
 			return;
@@ -955,8 +1174,10 @@ namespace DCLF
 		frameVisible.clear();
 		for (std::uint32_t i = 0; i < cut.processCount; ++i) {
 			auto& out = jobOut[i];
-			frameVisible.insert(frameVisible.end(), out.visible.begin(), out.visible.end());
+			if (collectVisible)
+				frameVisible.insert(frameVisible.end(), out.visible.begin(), out.visible.end());
 			auto& s = cutStats;
+			s.members += out.inView;
 			s.seen += out.seen, s.skipped += out.skipped, s.visibleEntries += out.visibleEntries, s.notSettled += out.notSettled;
 			s.walked += out.walked;
 			s.notAdmitted += out.notAdmitted;
@@ -969,7 +1190,6 @@ namespace DCLF
 			s.switchStale += out.switchStale;
 			s.unselected += out.unselected;
 		}
-		cutStats.members += frameVisible.size();
 		// No activeLightMask clear: the shadow lights' registrations leave an owned geometry's 0 (SunAccumulation, ClearOwnedMask).
 		Diagnostics::Notify<Diagnostics::EnginePoint::ListJobsMerged>();
 		cutStats.afterTicks += Now() - start;
@@ -1089,7 +1309,9 @@ namespace DCLF
 				if (self.frameLive.load(std::memory_order_acquire))
 					if (const int slot = self.SlotOf(a_process); slot >= 0 && self.Owned(a_geometry)) {
 						auto& out = self.jobOut[slot];
-						out.visible.push_back(&a_geometry);
+						++out.inView;
+						if (self.collectVisible)
+							out.visible.push_back(&a_geometry);
 						++out.excluded;
 						return;
 					}
@@ -1108,9 +1330,8 @@ namespace DCLF
 			{
 				auto& cull = PrimaryCull::Get();
 				// FadeStateCS makes the same update on the GPU (the animated batch), for every root.
-				cull.NoteAnimatedFade(a_node, a_camera);
 				// One writer: the root keeps the write-back's state; the gate reads its currentFade.
-				if (cull.FadeWrittenByDclf(a_node)) {
+				if (cull.NoteAnimatedFade(a_node, a_camera)) {
 					cull.gateFadeSkipped.fetch_add(1, std::memory_order_relaxed);
 					return;
 				}

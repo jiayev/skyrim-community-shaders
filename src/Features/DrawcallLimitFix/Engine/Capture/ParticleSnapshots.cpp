@@ -4,6 +4,7 @@
 #include "Features/DrawcallLimitFix/Engine/Capture/ParticleSnapshots.h"
 
 #include "Features/DrawcallLimitFix/Engine/Access/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Engine/Capture/SceneEvents.h"
 #include "Features/DrawcallLimitFix/Runtime/Switches.h"
 #include "Features/DrawcallLimitFix/Runtime/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EffectConstants.h"
@@ -390,6 +391,11 @@ namespace DCLF
 				record->writeSlot = previous & kSlotMask;
 				record->writing.store(false, std::memory_order_release);
 				captures.fetch_add(1, std::memory_order_relaxed);
+				// The system's move event (MoveEvents, keyed by the geometry): the scene pass's light path takes it then, not every frame.
+				if (ActiveToggles().particles) {
+					Scene::PushMove(&a_system);
+					Scene::CountMove(7);
+				}
 			}
 		}
 		writersInside.fetch_sub(1, std::memory_order_seq_cst);

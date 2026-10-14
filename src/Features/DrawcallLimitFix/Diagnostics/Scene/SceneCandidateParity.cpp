@@ -1,5 +1,6 @@
 // CS_DCLF_PERSISTENT_PARITY: the sun and light candidate tables (kept by changes) against the candidate sets and the dependents as they
-// are, every 60 passes, after each table's update.
+// are, every 60 passes, after each table's update. Also each table's last snapshot (caught up by the table's log) against the table
+// index by index, and the indices its published log names since the snapshot of the last check against a comparison of the two.
 
 #include "SceneObservers.h"
 #include "SceneState.h"
@@ -49,16 +50,69 @@ namespace DCLF::Diagnostics
 			return {};
 		}
 
+		/**
+		 * @brief An earlier snapshot of a table, by reference and generation: pooled snapshots are reused, so it is read only while it
+		 * still is that generation (never held: the pool reuses what only it holds, and a held one would outlive the session).
+		 */
+		struct EarlierSnapshot
+		{
+			std::weak_ptr<const SunCandidates> snapshot;
+			std::uint32_t generation = 0;
+
+			std::shared_ptr<const SunCandidates> Get() const
+			{
+				auto held = snapshot.lock();
+				return held && held->generation == generation ? held : nullptr;
+			}
+			void Set(const std::shared_ptr<const SunCandidates>& a_snapshot)
+			{
+				snapshot = a_snapshot;
+				generation = a_snapshot ? a_snapshot->generation : 0;
+			}
+		};
+		struct EarlierSnapshots
+		{
+			EarlierSnapshot event, check;  // the last pass's (one publication back at most), the last check's
+		};
+
+		/** @brief The indices a_to's log names since a_from against a comparison of the two; the first difference, or empty. */
+		std::string CheckCandidateLog(const std::shared_ptr<const SunCandidates>& a_from, const SunCandidates& a_to)
+		{
+			if (!a_from || a_from.get() == &a_to)
+				return {};
+			std::vector<std::uint32_t> logged, scanned;
+			ChangedEntriesByLog(a_from.get(), a_to, logged);
+			ChangedEntriesByScan(a_from.get(), a_to, scanned);
+			if (logged == scanned)
+				return {};
+			return fmt::format("snapshot: the log names {} indices from generation {} to {}, a comparison {}", logged.size(), a_from->generation, a_to.generation, scanned.size());
+		}
+
 		void OnCandidatesUpdated(const CandidatesUpdated& a_event)
 		{
 			const auto& store = a_event.store;
+			static EarlierSnapshots sun, light;
+			auto& earlier = a_event.sun ? sun : light;
+			const auto& table = a_event.sun ? V::sunTable(store) : V::lightTable(store);
+			const auto snapshot = table.last;
+			const auto previous = earlier.event.Get();
+			earlier.event.Set(snapshot);
 			if (!ParityDue(V::passSerial(store), 7))
 				return;
 			auto& parity = SceneDiagnostics().candidates;
 			++parity.checks;
-			if (auto why = a_event.sun ? CheckCandidateTable(store, V::sunTable(store), V::sunCandidateSet(store), true) :
-			                             CheckCandidateTable(store, V::lightTable(store), V::lightCandidateSet(store), false);
-				!why.empty() && parity.mismatches++ < 8)
+			auto why = a_event.sun ? CheckCandidateTable(store, V::sunTable(store), V::sunCandidateSet(store), true) :
+			                         CheckCandidateTable(store, V::lightTable(store), V::lightCandidateSet(store), false);
+			// The last snapshot (caught up by the log) against the table, and its log against comparisons with earlier snapshots.
+			if (why.empty() && snapshot && !table.changed)
+				if (auto differ = table.CheckSnapshot(*snapshot); !differ.empty())
+					why = "snapshot: " + differ;
+			if (why.empty() && snapshot)
+				why = CheckCandidateLog(previous, *snapshot);
+			if (why.empty() && snapshot)
+				why = CheckCandidateLog(earlier.check.Get(), *snapshot);
+			earlier.check.Set(snapshot);
+			if (!why.empty() && parity.mismatches++ < 8)
 				logger::warn("[DCLF] {} candidates parity at frame {}: {} <- CANDIDATES", a_event.sun ? "sun" : "light", V::sceneFrame(store), why);
 		}
 	}
