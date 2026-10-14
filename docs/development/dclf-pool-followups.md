@@ -33,7 +33,7 @@ GPU a publication late, while FrameValues' shading reaches it in the same frame.
 **Done for `TexcoordOffset` (2026-10-14), another way.** The sketch below adds a row the draws read; that changes
 `package/Shaders`. Instead the texture transforms are patched into the material rows themselves
 (dclf-architecture.md, "Texture transforms"):
--   the main build lists every packed row carrying one (`TextureTransformList`, `Draws/Gpu/TextureTransforms.h`), and the
+-   the main build lists every packed row carrying one (`TextureTransformList`, `Core/Gpu/TextureTransforms.h`), and the
     payload carries it;
 -   FrameValues' sixth pool (`texture-transforms`) samples each entry's current buffer every frame and sends the rows that
     moved;
@@ -75,7 +75,7 @@ build packs with the record (a frame's move writes one row per signature), or co
 -   The capture and refresh: `Scene/Ports/MaterialSources.{h,cpp}`; `Scene/Coordinator/FrameConstants.cpp`
     (`RefreshMaterialSignatures`); and `Scene/Ports/MaterialPortEffect.cpp` (`kFalloff` 0x38, `kBaseColor` 0x48).
 -   The row: `Builders/MainBuild.cpp` (`WriteMaterialRow`) and `Builders/MainPayload.h` (`kMaterialRowParts`).
--   The pools: `Draws/Gpu/FrameValues.{h,cpp}` (six pools, `kPools`).
+-   The pools: `Core/Gpu/FrameValues.{h,cpp}` (six pools, `kPools`).
 
 **Sketch** (for the effect values; the texture transforms' patch is the other way, and needs no shader change).
 -   **The pool.** Add a FrameValues row set, the material frame values: one row per material slot holding only the

@@ -4,7 +4,7 @@
 #include "CaptureParity.h"
 
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
-#include "Features/DrawcallLimitFix/Draws/Gpu/FrameValues.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/LightingConstants.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/PassCapture.h"
 

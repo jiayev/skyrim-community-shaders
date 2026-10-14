@@ -5,8 +5,8 @@
 
 #include "Features/DrawcallLimitFix/Engine/Cull/LodGates.h"
 
-#include "Features/DrawcallLimitFix/Draws/Pipelines/DrawPipelines.h"
-#include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/DrawPipelines.h"
+#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReleases.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Toggles.h"

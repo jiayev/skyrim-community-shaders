@@ -9,7 +9,7 @@
 #include "Observers.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Engine/ShadowViewTally.h"
 // ShadowCapture.cpp's: the engine's rasterizer state id, and where and with which block the engine has just drawn a view.
-#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Epochs/ShadowEpochs.h"
+#include "Features/DrawcallLimitFix/Core/Render/Shadow/ShadowEpochs.h"
 
 namespace DCLF::Diagnostics
 {

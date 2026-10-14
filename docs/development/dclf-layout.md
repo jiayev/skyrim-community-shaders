@@ -54,7 +54,7 @@ overlap.
    - An integration includes `Api/` and `Core/`.
    - `Diagnostics/` may be included from anywhere. Production code reaches it only through its observer contract (`Hooks.h`,
      `Observation`, `Policy`), which the parity rework will redefine.
-4. **Old includes may only shrink.** Includes into the folders that haven't moved yet (`Engine/`, `Scene/`, `Draws/`) are
+4. **Old includes may only shrink.** Includes into the folders that haven't moved yet (`Engine/`, `Scene/`) are
    counted against a baseline total, which each step lowers. The same goes for the functions over the complexity thresholds
    (120 lines or cyclomatic complexity 40).
 

@@ -11,7 +11,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Core/Scene/SceneWake.h"
-#include "Features/DrawcallLimitFix/Draws/Gpu/GpuTextures.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Scene/Model/Lookups.h"
 
 struct ID3D11ShaderResourceView;

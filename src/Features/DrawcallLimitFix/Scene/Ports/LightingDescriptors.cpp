@@ -10,7 +10,7 @@
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "Features/LightLimitFix.h"
 #include "Features/TerrainBlending.h"
-#include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
 #include "Features/DrawcallLimitFix/Engine/Views/ShadowViews.h"

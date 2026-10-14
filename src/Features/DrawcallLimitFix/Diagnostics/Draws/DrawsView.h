@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 
 namespace DCLF::Diagnostics
 {

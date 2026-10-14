@@ -5,7 +5,7 @@
 #include "Internal.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
-#include "Features/DrawcallLimitFix/Draws/Gpu/FrameValues.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/EngineShaders.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"

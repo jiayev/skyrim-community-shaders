@@ -1,0 +1,857 @@
+// ShaderPrograms: the stage cache, the compile requests and the pipeline lane's entries (see the header).
+
+#include "Features/DrawcallLimitFix/Core/Gpu/Pipelines/ShaderPrograms.h"
+
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <fstream>
+#include <iterator>
+#include <mutex>
+#include <regex>
+#include <sstream>
+
+#include <Tracy/Tracy.hpp>
+
+#include "Features/DrawcallLimitFix/Core/Gpu/BuildExecutor.h"
+#include "RenderGraph/RenderGraphRuntime.h"
+#include "ShaderCache.h"
+#include "Features/DrawcallLimitFix/Core/Runtime/EventQueue.h"
+#include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
+#include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
+
+#include <ORGModuleServices/ShaderCompiler.h>
+#include "Features/DrawcallLimitFix/Diagnostics/Observation.h"
+#include "Features/DrawcallLimitFix/Diagnostics/Policy.h"
+
+namespace DCLF
+{
+	namespace
+	{
+		/** @brief A program entry waiting for stages (StageCache::waiting): its kind and its key in that kind's map. */
+		enum class StageUser : std::uint8_t
+		{
+			Lighting,
+			Shadow,
+			TreeLod,
+			Forward,
+			ForwardTreeLod,
+			Effect  // FindEffect
+		};
+	}
+
+	namespace
+	{
+		constexpr const char* kSourcePath = "Data/Shaders/Lighting.hlsl";
+		constexpr const char* kUtilitySourcePath = "Data/Shaders/Utility.hlsl";
+		constexpr const char* kDistantTreeSourcePath = "Data/Shaders/DistantTree.hlsl";
+		constexpr const char* kEffectSourcePath = "Data/Shaders/Effect.hlsl";  // FindEffect
+		// DistantTree's descriptors (ShaderCache.h, DistantTreeShaderTechniques and DistantTreeShaderFlags): the technique in bit 0
+		// (1: Depth), Deferred and AlphaTest, as the engine's main view draws tree LOD (BSDistantTreeShader::SetupTechnique).
+		constexpr std::uint32_t kDistantTreeDepth = 1, kDistantTreeDeferred = 1u << 8, kDistantTreeAlphaTest = 1u << 16;
+		constexpr const char* kShaderDirectory = RenderGraphRuntime::kShaderDirectory;
+		constexpr std::size_t kMaxLoggedFailures = 8;
+
+		std::wstring Widen(const std::string& a_value)
+		{
+			return std::wstring(a_value.begin(), a_value.end());
+		}
+
+		// The SPIR-V is built with source-level debug info by default (CS_DCLF_SHADER_DEBUG=0: without), so a GPU crash dump names the
+		// shader (Aftermath; and for Nsight and RenderDoc; the source is embedded, and SnapshotSources' copy is there for editing), still
+		// optimized. Part of the compile key, so the debug builds are cached beside the release ones. There is deliberately no -Od form:
+		// unoptimized code reads per-frame constant buffers (VS b6, PS b7) that the epochs do not supply, so every candidate is skipped
+		// and DCLF draws nothing.
+		bool ShaderDebug()
+		{
+			return SwitchValue(Switch::ShaderDebug) != "0";
+		}
+
+		// The shader tree as the game sees it through MO2's virtual file system, copied to a real
+		// directory a debugger outside the VFS can use as a source search path. The debug info names
+		// files relative to the game directory (Data/Shaders/...), so the copy keeps that layout.
+		void SnapshotSources(const std::vector<std::filesystem::path>& a_files)
+		{
+			auto root = std::filesystem::path(SwitchValue(Switch::ShaderSourceDir));
+			if (root.empty()) {
+				root = SwitchesDirectory();
+				if (root.empty())
+					return;
+				root /= L"CommunityShaders-ShaderSource";
+			}
+			std::size_t copied = 0;
+			for (const auto& file : a_files) {
+				std::error_code ec;
+				const auto destination = root / file.lexically_normal();
+				std::filesystem::create_directories(destination.parent_path(), ec);
+				if (!ec && std::filesystem::copy_file(file, destination, std::filesystem::copy_options::overwrite_existing, ec))
+					++copied;
+			}
+			logger::info("[DCLF] Shader debug info on; {} of {} shader files copied to {}", copied, a_files.size(), root.string());
+		}
+	}
+
+	namespace
+	{
+		/**
+		 * @brief Lighting.hlsl for a pulled build (DCLF_PULLED): its rows' inputs, which a device-generated draw's layout maps from
+		 * the rows' addresses in its push data (DrawPipelines.cpp, the main layout), read from the rows its sequence names instead
+		 * (Common/DCLFObjects.hlsli, DCLFMaterialRowAddress and DCLFPipelineRowAddress). A plain draw call binds once for draws
+		 * of many pipeline slots (the Z-prepass's buckets are its depth pipelines'), so nothing it binds may be a row's:
+		 * - the material row's: the PerMaterial blocks (b1), the material textures (t0-t15 but t14, and the features' t71, t74
+		 *   and t80-t91) and their samplers (s0-s15 but s14);
+		 * - the pipeline row's: the PerTechnique blocks (b0), the PerGeometry template (b2) and the shadow mask (t14, s14); its
+		 *   permutation block (b4) is Permutation.hlsli's (DCLF_PULLED_ROWS).
+		 * A block's members become statics, which its function (DCLFPer<Block>Statics) assigns from the row; a texture or sampler
+		 * a function of its own, behind a macro of its name. Line by line, so each declaration's replacement stays in its #if
+		 * branch. Empty, logged, when a block's line is not one it knows.
+		 */
+		std::vector<std::byte> PulledLightingSource(std::span<const std::byte> a_source)
+		{
+			const std::string text(reinterpret_cast<const char*>(a_source.data()), a_source.size());
+			static const std::regex texture(R"(^(\s*)((?:Texture2D|TextureCube|Texture2DArray|Texture3D)(?:\s*<[^>]*>)?)\s+(\w+)\s*:\s*register\(\s*t(\d+)\s*\)\s*;(.*)$)");
+			static const std::regex sampler(R"(^(\s*)(SamplerState|SamplerComparisonState)\s+(\w+)\s*:\s*register\(\s*s(\d+)\s*\)\s*;(.*)$)");
+			static const std::regex cbuffer(R"(^\s*cbuffer\s+(PerTechnique|PerMaterial|PerGeometry)\s*:\s*register\(\s*b([012])\s*\).*$)");
+			static const std::regex member(
+				R"(^(\s*)(row_major\s+)?(float|float2|float3|float4|uint|int|float3x3|float3x4|float4x4)\s+(\w+)\s*(?:\[\s*(\d+)\s*\])?\s*:\s*packoffset\(\s*c(\d+)(?:\.([xyzw]))?\s*\)\s*;(.*)$)");
+			auto materialTexture = [](std::uint32_t a_register) {
+				return (a_register < kPixelTextureSlots && a_register != kShadowMaskSlot) || FeatureMaterialSlot(a_register) >= 0;
+			};
+			// A block's row and its stage's place in it (DCLFObjects.hlsli).
+			struct Block
+			{
+				const char* row = nullptr;
+				const char* offset = nullptr;
+			};
+			auto blockOf = [](const std::string& a_name) {
+				return a_name == "PerTechnique" ? Block{ "DCLFPipelineRowAddress", "kDCLFTechniqueBlock" } :
+				       a_name == "PerMaterial"  ? Block{ "DCLFMaterialRowAddress", "kDCLFMaterialBlock" } :
+				                                  Block{ "DCLFPipelineRowAddress", "kDCLFGeometryBlock" };
+			};
+			auto load = [](const std::string& a_type) -> const char* {
+				return a_type == "float4"   ? "DCLFRowFloat4" :
+				       a_type == "float3"   ? "DCLFRowFloat3" :
+				       a_type == "float2"   ? "DCLFRowFloat2" :
+				       a_type == "float"    ? "DCLFRowFloat" :
+				       a_type == "uint"     ? "DCLFRowUint" :
+				       a_type == "int"      ? "(int)DCLFRowUint" :
+				       a_type == "float3x3" ? "DCLFRowFloat3x3" :
+				       a_type == "float3x4" ? "DCLFRowFloat3x4" :
+				                              "DCLFRowFloat4x4";
+			};
+			std::istringstream in(text);
+			std::ostringstream out;
+			std::string line, blockName;
+			Block block{};
+			bool inBlock = false, opened = false;
+			std::ostringstream assignments;  // the block's DCLFPer<Block>Statics body, its #if lines with it
+			std::uint32_t textures = 0, samplers = 0, members = 0;
+			auto fail = [&](const std::string& a_line) {
+				logger::error("[DCLF] Pulled Lighting source: {} line not understood: {}", blockName, a_line);
+				return std::vector<std::byte>{};
+			};
+			while (std::getline(in, line)) {
+				if (!line.empty() && line.back() == '\r')
+					line.pop_back();
+				std::smatch m;
+				if (inBlock) {
+					const auto first = line.find_first_not_of(" \t");
+					const std::string trimmed = first == std::string::npos ? std::string{} : line.substr(first);
+					if (!opened && trimmed == "{") {
+						opened = true;
+						out << "\n";
+					} else if (trimmed.rfind("};", 0) == 0) {
+						// The block's members as statics, assigned from the row by the pulled entry points (Lighting.hlsl,
+						// DCLFRowStatics) once the row's address is known: a member's name is one other code reuses (a struct
+						// field), so not a macro.
+						inBlock = false;
+						out << "void DCLF" << blockName << "Statics()\n{\n" << assignments.str() << "}\n";
+					} else if (trimmed.empty() || trimmed[0] == '#' || trimmed.rfind("//", 0) == 0) {
+						out << line << "\n";
+						if (!trimmed.empty() && trimmed[0] == '#')
+							assignments << line << "\n";
+					} else if (std::regex_match(line, m, member)) {
+						const std::string type = m[3].str(), name = m[4].str();
+						const bool matrix = type.find('x') != std::string::npos;
+						// A column-major matrix's registers are its columns, and an array of matrices is none the shader has.
+						if (matrix && (!m[2].matched || m[5].matched))
+							return fail(line);
+						const std::uint32_t component = m[7].matched ? static_cast<std::uint32_t>(std::string("xyzw").find(m[7].str()[0])) : 0u;
+						const std::uint32_t offset = static_cast<std::uint32_t>(std::stoul(m[6].str())) * 16 + component * 4;
+						const auto source = [&](std::uint32_t a_offset) { return fmt::format("{}({}, {} + {})", load(type), block.row, block.offset, a_offset); };
+						out << m[1].str() << "static " << m[2].str() << type << " " << name << (m[5].matched ? "[" + m[5].str() + "]" : std::string{}) << ";" << m[8].str()
+							<< "\n";
+						if (m[5].matched) {
+							// An array's elements: a register each.
+							const auto count = static_cast<std::uint32_t>(std::stoul(m[5].str()));
+							for (std::uint32_t e = 0; e < count; ++e)
+								assignments << "\t" << name << "[" << e << "] = " << source(offset + 16 * e) << ";\n";
+						} else {
+							assignments << "\t" << name << " = " << source(offset) << ";\n";
+						}
+						++members;
+					} else {
+						return fail(line);
+					}
+					continue;
+				}
+				if (std::regex_match(line, m, cbuffer)) {
+					inBlock = true;
+					opened = false;
+					blockName = m[1].str();
+					block = blockOf(blockName);
+					assignments.str({});
+					out << "// " << blockName << ": the draw's " << (blockName == "PerMaterial" ? "material" : "pipeline") << " row's (DCLF_PULLED)\n";
+				} else if (std::regex_match(line, m, texture) &&
+						   (materialTexture(static_cast<std::uint32_t>(std::stoul(m[4].str()))) || std::stoul(m[4].str()) == kShadowMaskSlot)) {
+					const std::string type = m[2].str(), name = m[3].str(), slot = m[4].str();
+					const std::string index = std::stoul(slot) == kShadowMaskSlot ? std::string("DCLFPipelineTextureIndex()") : "DCLFMaterialTextureIndex(" + slot + ")";
+					out << m[1].str() << type << " DCLFRow_" << name << "() { " << type << " r = ResourceDescriptorHeap[" << index << "]; return r; }\n#define " << name
+						<< " DCLFRow_" << name << "()" << m[5].str() << "\n";
+					++textures;
+				} else if (std::regex_match(line, m, sampler) && std::stoul(m[4].str()) < 16) {  // s0-s15
+					const std::string type = m[2].str(), name = m[3].str(), slot = m[4].str();
+					const std::string index = std::stoul(slot) == kShadowMaskSlot ? std::string("DCLFPipelineSamplerIndex()") : "DCLFMaterialSamplerIndex(" + slot + ")";
+					out << m[1].str() << type << " DCLFRow_" << name << "() { " << type << " r = SamplerDescriptorHeap[" << index << "]; return r; }\n#define " << name
+						<< " DCLFRow_" << name << "()" << m[5].str() << "\n";
+					++samplers;
+				} else {
+					out << line << "\n";
+				}
+			}
+			const std::string result = out.str();
+			logger::info("[DCLF] Pulled Lighting source: {} texture, {} sampler and {} block member declarations read from the draw's rows", textures, samplers, members);
+			std::vector<std::byte> bytes(result.size());
+			std::memcpy(bytes.data(), result.data(), result.size());
+			return bytes;
+		}
+	}
+
+	namespace
+	{
+		/**
+		 * @brief One stage's compile (StageCache): its artifact once the compiler's completion callback ran, which then pushes the
+		 * stage's key to StageCompletions. Kept for the process, as the programs are.
+		 */
+		struct Stage
+		{
+			std::uint64_t key = 0;
+			std::shared_ptr<const org::services::ShaderArtifact> artifact;  // written once, before done
+			std::atomic<bool> done{ false };
+		};
+		using StagePtr = std::shared_ptr<Stage>;
+
+		/**
+		 * @brief The stages whose compile completed, by key: pushed by the completion callbacks (any thread), drained by the one
+		 * consumer, the pipeline lane (UpdateLane).
+		 */
+		EventQueue<std::uint64_t>& StageCompletions()
+		{
+			// Never destroyed: a compile may complete while the process tears down.
+			static auto* queue = new EventQueue<std::uint64_t>;
+			return *queue;
+		}
+
+		struct StageWaiter
+		{
+			StageUser user = StageUser::Lighting;
+			std::uint64_t id = 0;
+		};
+	}
+
+	template <class P, std::size_t N>
+	struct ShaderPrograms::ProgramEntry
+	{
+		std::array<StagePtr, N> stages;
+		std::uint8_t remaining = 0;  // stages not completed when requested (StageCache::waiting)
+		std::unique_ptr<P> program;
+		bool failed = false;
+		std::uint8_t onDemand = 0;  // kOnDemand*, by stage index: the stages no precompile had asked for
+		std::chrono::steady_clock::time_point requested;
+	};
+
+	std::string ShaderPrograms::OnDemandStages(std::uint8_t a_stages)
+	{
+		std::string text;
+		for (const auto& [bit, name] : { std::pair{ kOnDemandVertex, "VS" }, std::pair{ kOnDemandPixel, "PS" }, std::pair{ kOnDemandDepthPixel, "depth PS" },
+				 std::pair{ kOnDemandPulledVertex, "pulled VS" }, std::pair{ kOnDemandPulledDepthPixel, "pulled depth PS" } })
+			if (a_stages & bit)
+				text += fmt::format("{}{}", text.empty() ? "" : ", ", name);
+		return text;
+	}
+
+	ShaderPrograms& ShaderPrograms::Get()
+	{
+		static ShaderPrograms programs;
+		return programs;
+	}
+
+	bool ShaderPrograms::Enabled() const
+	{
+		return !sourcesMissing && RenderGraphRuntime::Get().ShaderCompiler() != nullptr;
+	}
+
+	bool ShaderPrograms::LoadSources()
+	{
+		if (sourcesLoaded)
+			return true;
+		std::ifstream file(kSourcePath, std::ios::binary);
+		std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+		if (bytes.empty()) {
+			logger::error("[DCLF] {} is missing; no SPIR-V builds", kSourcePath);
+			sourcesMissing = true;
+			return false;
+		}
+		source.resize(bytes.size());
+		std::memcpy(source.data(), bytes.data(), bytes.size());
+		pulledSource = PulledLightingSource(source);
+		// Every shader file is a potential include; the compiler re-hashes one only when it changes.
+		dependencies = RenderGraphRuntime::ShaderSourceFiles();
+		{
+			std::ifstream utility(kUtilitySourcePath, std::ios::binary);
+			std::vector<char> utilityBytes((std::istreambuf_iterator<char>(utility)), std::istreambuf_iterator<char>());
+			utilitySource.resize(utilityBytes.size());
+			if (!utilityBytes.empty())
+				std::memcpy(utilitySource.data(), utilityBytes.data(), utilityBytes.size());
+			else
+				logger::warn("[DCLF] {} is missing; the shadow views stay native", kUtilitySourcePath);
+		}
+		{
+			std::ifstream distantTree(kDistantTreeSourcePath, std::ios::binary);
+			std::vector<char> treeBytes((std::istreambuf_iterator<char>(distantTree)), std::istreambuf_iterator<char>());
+			distantTreeSource.resize(treeBytes.size());
+			if (!treeBytes.empty())
+				std::memcpy(distantTreeSource.data(), treeBytes.data(), treeBytes.size());
+			else
+				logger::warn("[DCLF] {} is missing; tree LOD stays native", kDistantTreeSourcePath);
+		}
+		{
+			std::ifstream effect(kEffectSourcePath, std::ios::binary);
+			std::vector<char> effectBytes((std::istreambuf_iterator<char>(effect)), std::istreambuf_iterator<char>());
+			effectSource.resize(effectBytes.size());
+			if (!effectBytes.empty())
+				std::memcpy(effectSource.data(), effectBytes.data(), effectBytes.size());
+			else
+				logger::warn("[DCLF] {} is missing; effect meshes stay native", kEffectSourcePath);
+		}
+		if (auto* compiler = RenderGraphRuntime::Get().ShaderCompiler()) {
+			sourceFingerprint = compiler->FingerprintInputs(source, dependencies);
+			effectFingerprint = effectSource.empty() ? 0 : compiler->FingerprintInputs(effectSource, dependencies);
+			pulledFingerprint = pulledSource.empty() ? 0 : compiler->FingerprintInputs(pulledSource, dependencies);
+			utilityFingerprint = utilitySource.empty() ? 0 : compiler->FingerprintInputs(utilitySource, dependencies);
+			distantTreeFingerprint = distantTreeSource.empty() ? 0 : compiler->FingerprintInputs(distantTreeSource, dependencies);
+		}
+		sourcesLoaded = true;
+		logger::info("[DCLF] SPIR-V builds of {}: {} shader files tracked as dependencies", kSourcePath, dependencies.size());
+		if (ShaderDebug())
+			SnapshotSources(dependencies);
+		return true;
+	}
+
+	namespace
+	{
+		// Requests a_stage's compile; the completion callback fills it and pushes its key to StageCompletions.
+		void RequestStage(org::services::ShaderCompiler& a_compiler, const StagePtr& a_stage, std::span<const std::byte> a_source,
+			const std::vector<std::filesystem::path>& a_dependencies, std::uint64_t a_fingerprint, const RE::BSShader& a_lighting, bool a_pixel, std::uint32_t a_descriptor,
+			bool a_depthOnly, bool a_pulled, const char* a_sourceName)
+		{
+			org::services::ShaderCompileRequest request{};
+			request.inputsFingerprint = a_fingerprint;
+			ZoneScopedN("CS.DCLF.Shaders.RequestStage");
+			request.sourceName = a_sourceName;
+			request.source = a_source;
+			request.entryPoint = L"main";
+			request.target = a_pixel ? L"ps_6_6" : L"vs_6_6";
+			request.format = org::services::ShaderBinaryFormat::Spirv;
+			request.warningsAsErrors = false;
+			request.debugInfo = ShaderDebug();
+			request.languageVersion = L"2018";  // CS's shaders are written for FXC's semantics
+			request.includeDirectories = { kShaderDirectory };
+			request.dependencyFiles = a_dependencies;
+			for (const auto& [name, value] : SIE::ShaderCache::GetCompileDefines(a_lighting, a_pixel ? SIE::ShaderClass::Pixel : SIE::ShaderClass::Vertex, a_descriptor))
+				request.defines.push_back({ Widen(name), Widen(value) });
+			request.defines.push_back({ L"DCLF_ORG", L"1" });
+			// The Z-prepass build of the pixel stage: everything past the alpha test is compiled away, so it
+			// reads only what the discard needs and none of the per-frame pixel bindings.
+			if (a_depthOnly)
+				request.defines.push_back({ L"DCLF_DEPTH_ONLY", L"1" });
+			// The five per-object PerGeometry variables come from a GPU-resident table indexed by the draw's
+			// own object index instead of from its constant buffer (DCLF_BINDLESS), and so do the three registers
+			// that would otherwise make the binding record per-object (DCLF_BINDLESS_DRAW): the alpha test
+			// reference, the emissive multiplier, and Light Limit Fix's room index and shadow bit mask.
+			request.defines.push_back({ L"DCLF_BINDLESS", L"1" });
+			request.defines.push_back({ L"DCLF_BINDLESS_DRAW", L"1" });
+			// The shadow views' Utility stages and the Z-prepass's Lighting ones draw with plain indirect draws (ShadowViewPass,
+			// MainOpaquePass) and fetch their own indices, vertices and per-draw words (Utility.hlsl, Lighting.hlsl).
+			if (a_pulled)
+				request.defines.push_back({ L"DCLF_PULLED", L"1" });
+			// A pulled Lighting stage reads its pipeline row's permutation block itself (Permutation.hlsli), as it does the rows'
+			// other inputs (PulledLightingSource).
+			if (a_pulled && a_sourceName == kSourcePath)
+				request.defines.push_back({ L"DCLF_PULLED_ROWS", L"1" });
+			// The foliage record (Policy::RecordFoliagePixels): the colour pass's alpha-tested draws write what each pixel shows, and the
+			// Z-prepass's which of them owns its depth (Lighting.hlsl); every colour draw records with CS_DCLF_FOLIAGE_PARITY=land.
+			if (a_pixel && a_depthOnly == a_pulled && a_sourceName == kSourcePath && Policy::RecordFoliagePixels()) {
+				request.defines.push_back({ L"DCLF_FOLIAGE_PARITY", L"1" });
+				if (Diagnostics::Observe().foliageLand)
+					request.defines.push_back({ L"DCLF_FOLIAGE_PARITY_ALL", L"1" });
+			}
+			// The first few define sets, to reproduce builds with the DXC command line.
+			static std::atomic<std::uint32_t> logged = 0;
+			if (logged.fetch_add(1) < 4) {
+				std::string text;
+				for (const auto& define : request.defines)
+					text += fmt::format(" -D {}{}{}", Util::WStringToString(define.name), define.value.empty() ? "" : "=", Util::WStringToString(define.value));
+				logger::info("[DCLF] SPIR-V build of {} {}{} {:08X} defines:{}",
+					a_sourceName == kSourcePath ? "Lighting" : a_sourceName == kUtilitySourcePath ? "Utility" : a_sourceName == kEffectSourcePath ? "Effect" : "DistantTree",
+					a_pixel ? (a_depthOnly ? "PS (depth)" : "PS") : "VS", a_pulled ? " (pulled)" : "", a_descriptor, text);
+			}
+			const auto shift = [&](const wchar_t* a_flag, std::uint32_t a_value) {
+				request.arguments.insert(request.arguments.end(), { a_flag, std::to_wstring(a_value), L"0" });
+			};
+			shift(L"-fvk-b-shift", kBindingShiftB);
+			shift(L"-fvk-t-shift", kBindingShiftT);
+			shift(L"-fvk-s-shift", kBindingShiftS);
+			shift(L"-fvk-u-shift", kBindingShiftU);
+			// The future is not kept: the stage holds the artifact, and nothing waits on the compile but Precompile (on the stage).
+			(void)a_compiler.CompileAsync(std::move(request), [a_stage](const org::services::ShaderArtifact& a_artifact) {
+				a_stage->artifact = std::make_shared<const org::services::ShaderArtifact>(a_artifact);
+				a_stage->done.store(true, std::memory_order_release);
+				a_stage->done.notify_all();
+				// The consumer told, and woken (a stage two kinds share is waited on by both: UpdateLane tells each).
+				StageCompletions().Push(a_stage->key);
+				WakePipelineLane();
+			});
+		}
+	}
+
+	struct ShaderPrograms::StageCache
+	{
+		std::mutex mutex;
+		std::mutex requestMutex;
+		bool started = false;
+		struct Pending { const RE::BSShader* shader; bool pixel; std::uint32_t descriptor; };
+		std::vector<Pending> pending;
+		ankerl::unordered_dense::map<std::uint64_t, StagePtr> stages;
+		// The compiler Configure pointed at DCLF's build executor (requestMutex): the runtime's, which a restart replaces.
+		org::services::ShaderCompiler* configured = nullptr;
+		// The consumer's (the pipeline lane's): the program entries waiting for each stage, by stage key, and the entries whose
+		// stages have all completed, for UpdateLane to admit.
+		ankerl::unordered_dense::map<std::uint64_t, std::vector<StageWaiter>> waiting;
+		std::vector<StageWaiter> ready;
+
+		// a_created: set when this call made the request (no earlier request, precompile or runtime, had).
+		// pulled: a Lighting stage's pulled build (Program::pulledVertex, pulledDepthPixel); a Utility stage's always is.
+		// Null when the stage's source is missing.
+		StagePtr Request(ShaderPrograms& owner, const RE::BSShader& shader, bool pixel, std::uint32_t descriptor, bool depth = false, bool* a_created = nullptr,
+			bool pulled = false)
+		{
+			const bool utility = shader.shaderType.get() == RE::BSShader::Type::Utility;
+			const bool distantTree = shader.shaderType.get() == RE::BSShader::Type::DistantTree;
+			// Effect.hlsl's builds, never pulled (FindEffect).
+			const bool effect = shader.shaderType.get() == RE::BSShader::Type::Effect;
+			pulled = !effect && (pulled || utility || distantTree);
+			const std::uint64_t key = descriptor | (std::uint64_t(pixel) << 32) | (std::uint64_t(depth) << 33) | (std::uint64_t(utility) << 34) |
+			                          (std::uint64_t(pulled) << 35) | (std::uint64_t(distantTree) << 36) | (std::uint64_t(effect) << 37);
+			{
+				std::lock_guard lock(mutex);
+				if (const auto found = stages.find(key); found != stages.end())
+					return found->second;
+			}
+			// Cache hits must not wait behind another permutation's filesystem key construction.
+			std::lock_guard requestLock(requestMutex);
+			{
+				std::lock_guard lock(mutex);
+				if (const auto found = stages.find(key); found != stages.end())
+					return found->second;
+			}
+			if (!owner.Enabled() || !owner.LoadSources() || (utility && owner.utilitySource.empty()) || (distantTree && owner.distantTreeSource.empty()) ||
+				(effect && owner.effectSource.empty()) || (pulled && !utility && !distantTree && owner.pulledSource.empty()))
+				return {};
+			auto* compiler = RenderGraphRuntime::Get().ShaderCompiler();
+			if (configured != compiler) {
+				// The compiles run on DCLF's preparation pool (BuildExecutor.h), not a thread each. Every DCLF request takes
+				// requestMutex, so none is submitted before this.
+				compiler->Configure(BuildSubmitter());
+				configured = compiler;
+			}
+			// Like the program entries, stages live for this source set's lifetime.
+			// A VS shared by several PS permutations must not rescan the shader tree each time.
+			auto stage = std::make_shared<Stage>();
+			stage->key = key;
+			RequestStage(*compiler, stage,
+				utility ? owner.utilitySource : distantTree ? owner.distantTreeSource : effect ? owner.effectSource : pulled ? owner.pulledSource : owner.source,
+				owner.dependencies,
+				utility ? owner.utilityFingerprint : distantTree ? owner.distantTreeFingerprint : effect ? owner.effectFingerprint : pulled ? owner.pulledFingerprint : owner.sourceFingerprint,
+				shader, pixel, descriptor, depth, pulled, utility ? kUtilitySourcePath : distantTree ? kDistantTreeSourcePath : effect ? kEffectSourcePath : kSourcePath);
+			{
+				std::lock_guard lock(mutex);
+				stages.emplace(key, stage);
+			}
+			if (a_created)
+				*a_created = true;
+			return stage;
+		}
+
+		/**
+		 * @brief The pipeline lane: registers a new entry's stages, counting in a_remaining those not completed yet. Ready at once (all
+		 * completed) goes straight to ready. False when a stage could not be requested (a missing source): the entry fails. A stage's
+		 * done is set before its key is pushed, so a stage read as not done has a completion still to drain.
+		 */
+		template <std::size_t N>
+		bool Await(StageUser a_user, std::uint64_t a_id, const std::array<StagePtr, N>& a_stages, std::uint8_t& a_remaining)
+		{
+			for (const auto& stage : a_stages)
+				if (!stage)
+					return false;
+			for (const auto& stage : a_stages) {
+				if (stage->done.load(std::memory_order_acquire))
+					continue;
+				waiting[stage->key].push_back({ a_user, a_id });
+				++a_remaining;
+			}
+			if (!a_remaining)
+				ready.push_back({ a_user, a_id });
+			return true;
+		}
+	};
+
+	ShaderPrograms::ShaderPrograms() : stages(std::make_unique<StageCache>()) {}
+	ShaderPrograms::~ShaderPrograms() = default;
+
+	void ShaderPrograms::Precompile(const RE::BSShader& a_shader, bool a_pixel, std::uint32_t a_descriptor)
+	{
+		const bool enabled = SwitchValue(Switch::Precompile) != "0";
+		if (!enabled)
+			return;
+		const auto type = a_shader.shaderType.get();
+		if (type != RE::BSShader::Type::Lighting && type != RE::BSShader::Type::Utility)
+			return;
+		{
+			std::lock_guard lock(stages->mutex);
+			if (!stages->started) {
+				stages->pending.push_back({ &a_shader, a_pixel, a_descriptor });
+				return;
+			}
+		}
+		ZoneScopedN("CS.DCLF.Shaders.Precompile");
+
+		auto stage = stages->Request(*this, a_shader, a_pixel, a_descriptor);
+		const bool lighting = type == RE::BSShader::Type::Lighting;
+		auto depth = a_pixel && lighting ? stages->Request(*this, a_shader, true, a_descriptor, true) : StagePtr{};
+		// The Z-prepass's pulled builds: the vertex stage, and the depth pixel stage.
+		auto pulled = lighting ? stages->Request(*this, a_shader, a_pixel, a_descriptor, a_pixel, nullptr, true) : StagePtr{};
+		// Stay inside CS's bounded compilation workers until this task is done, including cache hits. CS's workers, not
+		// DCLF's: the compiles run on DCLF's pool, which never waits on these.
+		for (const auto* requested : { &stage, &depth, &pulled }) {
+			if (!*requested) continue;
+			(*requested)->done.wait(false, std::memory_order_acquire);
+			const auto& artifact = *(*requested)->artifact;
+			if (!artifact) {
+				static std::atomic<std::uint32_t> failures{ 0 };
+				if (failures.fetch_add(1) < kMaxLoggedFailures)
+					logger::warn("[DCLF] ORG precompile {} {} {:08X} failed: {}", type == RE::BSShader::Type::Lighting ? "Lighting" : "Utility",
+						a_pixel ? "PS" : "VS", a_descriptor, artifact.diagnostics.substr(0, 1500));
+			}
+		}
+	}
+
+	void ShaderPrograms::StartPrecompile()
+	{
+		std::vector<StageCache::Pending> pending;
+		{
+			std::lock_guard lock(stages->mutex);
+			if (stages->started) return;
+			stages->started = true;
+			pending.swap(stages->pending);
+		}
+		for (const auto request : pending)
+			SIE::ShaderCache::Instance().compilationPool.detach_task([this, request] {
+				try { Precompile(*request.shader, request.pixel, request.descriptor); }
+				catch (const std::exception& e) { logger::warn("[DCLF] ORG shader precompile failed: {}", e.what()); }
+
+				SIE::ShaderCache::Instance().NotifyPoolProgress();
+			});
+	}
+
+	template <class E, class MakeStages>
+	E& ShaderPrograms::MakeEntry(std::unique_ptr<E>& a_slot, [[maybe_unused]] std::uint8_t a_user, [[maybe_unused]] std::uint64_t a_id, std::atomic<std::uint32_t>* a_requested,
+		[[maybe_unused]] std::atomic<std::uint32_t>& a_failed, [[maybe_unused]] MakeStages&& a_makeStages)
+	{
+		a_slot = std::make_unique<E>();
+		auto& entry = *a_slot;
+		std::array<bool, std::tuple_size_v<decltype(entry.stages)>> created{};
+		entry.stages = a_makeStages(created.data());
+		if (!stages->Await(static_cast<StageUser>(a_user), a_id, entry.stages, entry.remaining)) {
+			entry.failed = true;
+			a_failed.fetch_add(1, std::memory_order_relaxed);
+		}
+		for (std::size_t i = 0; i < created.size(); ++i)
+			entry.onDemand |= created[i] ? static_cast<std::uint8_t>(1u << i) : std::uint8_t(0);
+		entry.requested = std::chrono::steady_clock::now();
+		if (a_requested)
+			a_requested->fetch_add(1, std::memory_order_relaxed);
+		return entry;
+	}
+
+	namespace
+	{
+		/** @brief An entry's program, and whether it failed for good (a Find's a_failed). */
+		template <class E>
+		auto Found(const E* a_entry, bool* a_failed) -> decltype(a_entry->program.get())
+		{
+			if (a_failed)
+				*a_failed = a_entry && a_entry->failed;
+			return a_entry ? a_entry->program.get() : nullptr;
+		}
+	}
+
+	const ShaderPrograms::Program* ShaderPrograms::Find(const PipelineKey& a_key, RE::BSShader& a_lighting, std::uint8_t* a_onDemand, bool* a_failed)
+	{
+		if (a_onDemand)
+			*a_onDemand = 0;
+		if (!Enabled())
+			return Found<Entry>(nullptr, a_failed);
+		const std::uint64_t id = LightingProgramId(a_key);
+		auto& slot = entries[id];
+		if (!slot) {
+			MakeEntry(slot, static_cast<std::uint8_t>(StageUser::Lighting), id, &laneStats.requested, laneStats.failed, [&]([[maybe_unused]] bool* a_created) {
+				return std::array<StagePtr, 5>{ stages->Request(*this, a_lighting, false, a_key.vertexDescriptor, false, &a_created[0]),
+					stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, false, &a_created[1]),
+					stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, true, &a_created[2]),
+					stages->Request(*this, a_lighting, false, a_key.vertexDescriptor, false, &a_created[3], true),
+					stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, true, &a_created[4], true) };
+			});
+			if (a_onDemand)
+				*a_onDemand = slot->onDemand;
+		}
+		return Found(slot.get(), a_failed);
+	}
+
+	const ShaderPrograms::Program* ShaderPrograms::FindEffect(const PipelineKey& a_key, RE::BSShader& a_effect, bool* a_failed)
+	{
+		if (!Enabled())
+			return Found<EffectEntry>(nullptr, a_failed);
+		const std::uint64_t id = EffectProgramId(a_key);
+		auto& slot = effectEntries[id];
+		if (!slot)
+			MakeEntry(slot, static_cast<std::uint8_t>(StageUser::Effect), id, &laneStats.requested, laneStats.failed, [&](bool*) {
+				return std::array<StagePtr, 2>{ stages->Request(*this, a_effect, false, a_key.vertexDescriptor), stages->Request(*this, a_effect, true, a_key.pixelDescriptor) };
+			});
+		return Found(slot.get(), a_failed);
+	}
+
+	const ShaderPrograms::ShadowProgram* ShaderPrograms::FindShadow(std::uint32_t a_technique, RE::BSShader& a_utility, bool a_allowRequest, bool* a_requested,
+		std::uint8_t* a_onDemand, bool* a_failed)
+	{
+		if (a_requested)
+			*a_requested = false;
+		if (a_onDemand)
+			*a_onDemand = 0;
+		if (!Enabled() || (!a_allowRequest && !shadowEntries.contains(a_technique)))
+			return Found<ShadowEntry>(nullptr, a_failed);
+		auto& slot = shadowEntries[a_technique];
+		if (!slot) {
+			// Both stages take the same technique: Utility's descriptor is the technique itself, not a pair of vertex and pixel
+			// descriptors as the Lighting shader's is.
+			MakeEntry(slot, static_cast<std::uint8_t>(StageUser::Shadow), a_technique, &laneStats.shadowRequested, laneStats.shadowFailed, [&]([[maybe_unused]] bool* a_created) {
+				return std::array<StagePtr, 2>{ stages->Request(*this, a_utility, false, a_technique, false, &a_created[0]),
+					stages->Request(*this, a_utility, true, a_technique, false, &a_created[1]) };
+			});
+			if (a_requested)
+				*a_requested = true;
+			if (a_onDemand)
+				*a_onDemand = slot->onDemand;
+		}
+		return Found(slot.get(), a_failed);
+	}
+
+	const ShaderPrograms::TreeLodProgram* ShaderPrograms::FindTreeLod(RE::BSShader& a_distantTree, bool* a_failed)
+	{
+		if (!Enabled())
+			return Found<TreeLodEntry>(nullptr, a_failed);
+		if (!treeLodEntry)
+			MakeEntry(treeLodEntry, static_cast<std::uint8_t>(StageUser::TreeLod), 0, nullptr, laneStats.failed, [&](bool*) {
+				const std::uint32_t colour = kDistantTreeDeferred | kDistantTreeAlphaTest, depth = kDistantTreeDepth | kDistantTreeAlphaTest;
+				return std::array<StagePtr, 4>{ stages->Request(*this, a_distantTree, false, colour), stages->Request(*this, a_distantTree, true, colour),
+					stages->Request(*this, a_distantTree, false, depth), stages->Request(*this, a_distantTree, true, depth) };
+			});
+		return Found(treeLodEntry.get(), a_failed);
+	}
+
+	const ShaderPrograms::ForwardProgram* ShaderPrograms::FindForward(std::uint32_t a_vertexDescriptor, std::uint32_t a_pixelDescriptor, RE::BSShader& a_lighting,
+		bool* a_failed)
+	{
+		if (!Enabled())
+			return Found<ForwardEntry>(nullptr, a_failed);
+		const std::uint64_t id = ForwardProgramId(a_vertexDescriptor, a_pixelDescriptor);
+		auto& slot = forwardEntries[id];
+		if (!slot)
+			MakeEntry(slot, static_cast<std::uint8_t>(StageUser::Forward), id, nullptr, laneStats.failed, [&](bool*) {
+				// The pulled vertex stage is the Z-prepass's (the stage cache's key is the descriptor's); the pixel stage the colour one.
+				return std::array<StagePtr, 2>{ stages->Request(*this, a_lighting, false, a_vertexDescriptor, false, nullptr, true),
+					stages->Request(*this, a_lighting, true, a_pixelDescriptor, false, nullptr, true) };
+			});
+		return Found(slot.get(), a_failed);
+	}
+
+	const ShaderPrograms::ForwardProgram* ShaderPrograms::FindForwardTreeLod(RE::BSShader& a_distantTree, bool* a_failed)
+	{
+		if (!Enabled())
+			return Found<ForwardEntry>(nullptr, a_failed);
+		if (!forwardTreeLodEntry)
+			MakeEntry(forwardTreeLodEntry, static_cast<std::uint8_t>(StageUser::ForwardTreeLod), 0, nullptr, laneStats.failed, [&](bool*) {
+				return std::array<StagePtr, 2>{ stages->Request(*this, a_distantTree, false, kDistantTreeAlphaTest),
+					stages->Request(*this, a_distantTree, true, kDistantTreeAlphaTest) };
+			});
+		return Found(forwardTreeLodEntry.get(), a_failed);
+	}
+
+	namespace
+	{
+		const org::services::ShaderArtifact& ArtifactOf(const StagePtr& a_stage) { return *a_stage->artifact; }
+
+		// The outcome of a stage no precompile had asked for (logged with its reason when it was requested): compiled, or
+		// found in the disk cache, which a precompile run before would also have filled.
+		void OnDemandOutcome(const char* a_what, std::uint8_t a_stages, std::chrono::steady_clock::time_point a_requested,
+			std::initializer_list<std::pair<std::uint8_t, const org::services::ShaderArtifact*>> a_artifacts)
+		{
+			if (!a_stages)
+				return;
+			std::uint8_t compiled = 0, cached = 0, failed = 0;
+			for (const auto& [bit, artifact] : a_artifacts) {
+				if (!(a_stages & bit))
+					continue;
+				(!*artifact ? failed : artifact->fromCache ? cached : compiled) |= bit;
+			}
+			const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a_requested).count();
+			logger::warn("[DCLF] on-demand SPIR-V {} done after {:.0f} ms: compiled now [{}], from the disk cache [{}], failed [{}]", a_what, ms,
+				ShaderPrograms::OnDemandStages(compiled), ShaderPrograms::OnDemandStages(cached), ShaderPrograms::OnDemandStages(failed));
+		}
+
+		/**
+		 * @brief The completed stages (the queue), fanned out to the entries waiting for them: an entry whose last stage completed is
+		 * ready. a_remaining(waiter) names the waiter's count.
+		 */
+		template <class Remaining>
+		void FanOut(ankerl::unordered_dense::map<std::uint64_t, std::vector<StageWaiter>>& a_waiting, std::vector<StageWaiter>& a_ready, Remaining&& a_remaining)
+		{
+			StageCompletions().Drain([&](std::uint64_t&& a_key) {
+				const auto found = a_waiting.find(a_key);
+				if (found == a_waiting.end())
+					return;  // no entry waits (a precompile's stage, or one found completed)
+				const auto waiters = std::move(found->second);
+				a_waiting.erase(found);
+				for (const auto& waiter : waiters)
+					if (--a_remaining(waiter) == 0)
+						a_ready.push_back(waiter);
+			});
+		}
+	}
+
+	template <class E, class LogFailure>
+	void ShaderPrograms::FinishEntry(E& a_entry, std::atomic<std::uint32_t>* a_ready, std::atomic<std::uint32_t>& a_failed, LogFailure&& a_logFailure)
+	{
+		std::uint32_t cached = 0;
+		for (std::size_t i = 0; i < a_entry.stages.size(); ++i) {
+			const auto& artifact = ArtifactOf(a_entry.stages[i]);
+			if (!artifact) {
+				a_entry.failed = true;
+				a_failed.fetch_add(1, std::memory_order_relaxed);
+				a_logFailure(i, artifact);
+				return;
+			}
+			cached += artifact.fromCache ? 1u : 0u;
+		}
+		[&]<std::size_t... I>(std::index_sequence<I...>) {
+			a_entry.program = std::make_unique<std::remove_reference_t<decltype(*a_entry.program)>>(
+				std::remove_reference_t<decltype(*a_entry.program)>{ ArtifactOf(a_entry.stages[I]).binary... });
+		}(std::make_index_sequence<std::tuple_size_v<decltype(a_entry.stages)>>{});
+		if (a_ready)
+			a_ready->fetch_add(1, std::memory_order_relaxed);
+		laneStats.fromCache.fetch_add(cached, std::memory_order_relaxed);
+	}
+
+	void ShaderPrograms::UpdateLane(Finished& a_finished)
+	{
+		FanOut(stages->waiting, stages->ready, [&](const StageWaiter& a_waiter) -> std::uint8_t& {
+			switch (a_waiter.user) {
+			case StageUser::Shadow: return shadowEntries.find(static_cast<std::uint32_t>(a_waiter.id))->second->remaining;
+			case StageUser::TreeLod: return treeLodEntry->remaining;
+			case StageUser::Forward: return forwardEntries.find(a_waiter.id)->second->remaining;
+			case StageUser::ForwardTreeLod: return forwardTreeLodEntry->remaining;
+			case StageUser::Effect: return effectEntries.find(a_waiter.id)->second->remaining;
+			case StageUser::Lighting: break;
+			}
+			return entries.find(a_waiter.id)->second->remaining;
+		});
+		for (const auto& waiter : std::exchange(stages->ready, {})) {
+			const std::uint64_t id = waiter.id;
+			const auto vertex = static_cast<std::uint32_t>(id >> 32), pixel = static_cast<std::uint32_t>(id);
+			switch (waiter.user) {
+			case StageUser::Shadow:
+				{
+					// The shadow views' programs: a Utility technique's two stages.
+					const auto technique = static_cast<std::uint32_t>(id);
+					auto& entry = *shadowEntries.find(technique)->second;
+					OnDemandOutcome(fmt::format("Utility technique {:08X}", technique).c_str(), entry.onDemand, entry.requested,
+						{ { kOnDemandVertex, &ArtifactOf(entry.stages[0]) }, { kOnDemandPixel, &ArtifactOf(entry.stages[1]) } });
+					FinishEntry(entry, &laneStats.shadowReady, laneStats.shadowFailed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
+						if (loggedFailures++ < kMaxLoggedFailures)
+							logger::warn("[DCLF] SPIR-V build of Utility {} {:08X} failed:\n{}", a_stage ? "PS" : "VS", technique, a_artifact.diagnostics.substr(0, 1500));
+					});
+					a_finished.shadow.push_back(technique);
+				}
+				continue;
+			case StageUser::TreeLod:
+				// Tree LOD's programs: DistantTree's four stages.
+				FinishEntry(*treeLodEntry, nullptr, laneStats.failed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
+					static constexpr const char* kStages[] = { "VS", "PS", "VS (depth)", "PS (depth)" };
+					logger::warn("[DCLF] SPIR-V build of DistantTree {} failed; tree LOD stays native:\n{}", kStages[a_stage], a_artifact.diagnostics.substr(0, 1500));
+				});
+				if (treeLodEntry->program)
+					logger::info("[DCLF] tree LOD programs ready (DistantTree, pulled)");
+				a_finished.treeLod = true;
+				continue;
+			case StageUser::Forward:
+			case StageUser::ForwardTreeLod:
+				{
+					// The forward views' programs: a Lighting pair, or tree LOD's.
+					const bool tree = waiter.user == StageUser::ForwardTreeLod;
+					FinishEntry(tree ? *forwardTreeLodEntry : *forwardEntries.find(id)->second, nullptr, laneStats.failed,
+						[&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
+							if (loggedFailures++ < kMaxLoggedFailures)
+								logger::warn("[DCLF] SPIR-V build of the forward {} {} failed:\n{}", tree ? std::string("DistantTree") : fmt::format("Lighting VS {:08X} PS {:08X}", vertex, pixel),
+								a_stage ? "PS" : "VS", a_artifact.diagnostics.substr(0, 1500));
+						});
+					if (tree)
+						a_finished.forwardTreeLod = true;
+					else
+						a_finished.forward.push_back(id);
+				}
+				continue;
+			case StageUser::Effect:
+				// Effect.hlsl's vertex and pixel stages, a Program of those two alone.
+				FinishEntry(*effectEntries.find(id)->second, &laneStats.ready, laneStats.failed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
+					if (loggedFailures++ < kMaxLoggedFailures)
+						logger::warn("[DCLF] SPIR-V build of Effect {} {:08X} failed; its effect meshes stay native:\n{}", a_stage ? "PS" : "VS", a_stage ? pixel : vertex & 0x7FFFFFFFu,
+						a_artifact.diagnostics.substr(0, 1500));
+				});
+				a_finished.effect.push_back(id);
+				continue;
+			case StageUser::Lighting:
+				break;
+			}
+			auto& entry = *entries.find(id)->second;
+			a_finished.lighting.push_back(id);
+			OnDemandOutcome(fmt::format("Lighting VS {:08X} PS {:08X}", vertex, pixel).c_str(), entry.onDemand, entry.requested,
+				{ { kOnDemandVertex, &ArtifactOf(entry.stages[0]) }, { kOnDemandPixel, &ArtifactOf(entry.stages[1]) }, { kOnDemandDepthPixel, &ArtifactOf(entry.stages[2]) },
+					{ kOnDemandPulledVertex, &ArtifactOf(entry.stages[3]) }, { kOnDemandPulledDepthPixel, &ArtifactOf(entry.stages[4]) } });
+			FinishEntry(entry, &laneStats.ready, laneStats.failed, [&](std::size_t a_stage, const org::services::ShaderArtifact& a_artifact) {
+				static constexpr const char* kStages[] = { "VS", "PS", "PS (depth)", "VS (pulled)", "PS (pulled depth)" };
+				if (loggedFailures++ < kMaxLoggedFailures)
+					logger::warn("[DCLF] SPIR-V build of Lighting {} {:08X} failed:\n{}", kStages[a_stage], a_stage == 0 || a_stage == 3 ? vertex : pixel, a_artifact.diagnostics.substr(0, 1500));
+			});
+		}
+	}
+}
