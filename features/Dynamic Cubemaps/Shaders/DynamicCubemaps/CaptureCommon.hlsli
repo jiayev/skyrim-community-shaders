@@ -86,7 +86,7 @@ bool SampleCapture(uint3 texel, out float3 position, out float3 color, out float
 
 	float2 sampleUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(uv);
 #if defined(REFLECTIONS)
-	bool excludeSky = SharedData::PostWaterComposite != 0;
+	bool excludeSky = false;
 #else
 	bool excludeSky = true;
 #endif
