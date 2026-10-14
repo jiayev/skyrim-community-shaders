@@ -2,7 +2,7 @@
 
 // DrawsState: the draw observers' state between hook points. Render thread unless noted.
 
-#include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
+#include "Features/DrawcallLimitFix/Core/Render/Internal.h"
 #include "Features/DrawcallLimitFix/Diagnostics/ParityCounter.h"
 #include "Features/DrawcallLimitFix/Diagnostics/Reports/Schedule.h"
 #include "DrawsView.h"

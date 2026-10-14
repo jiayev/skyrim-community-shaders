@@ -7,7 +7,7 @@
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
 #include "SceneState.h"
 
-#include "Features/DrawcallLimitFix/Draws/Gpu/FrameValues.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Scene/Coordinator/Internal.h"
 

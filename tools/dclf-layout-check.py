@@ -109,8 +109,7 @@ def complexity():
             continue
         nloc, ccn = int(cols[0]), int(cols[1])
         if nloc > MAX_NLOC or ccn > MAX_CCN:
-            file = Path(cols[6]).resolve()
-            over[f"{file.relative_to(SRC).as_posix()}::{cols[7]}"] = [nloc, ccn]
+            over[cols[7]] = [nloc, ccn]  # by qualified name, so a moved file keeps its baseline
     return over
 
 

@@ -942,7 +942,7 @@ and persistent parity; motion m18 with persistent parity, m19 without).
   - Tests: CopyQueueUploadServiceTests (a consumer submitted before the copies waits for the signal), PersistentVulkanHostTests
     (sync, async, reuse: a frame waits on the GPU until its value is signalled from the dedicated uploader). The hardware run of
     CopyQueueUploadServiceTests fails in its first test before and after these changes (WARP, what ctest runs, passes).
-- *DCLF* (`Draws/FrameValues`).
+- *DCLF* (`Core/Gpu/FrameValues`).
   - The walk publishes a `PlacementPlan` (per-frame movers, gated or not; the roots it takes; the slots it wrote in full),
     holding its engine objects, taken at the next frame's start and released on the render thread once no producer reads it.
   - `BeginSceneFrame` kicks one producer a frame on the preparation pool and sets the frame wait to its sequence number; the
@@ -999,7 +999,7 @@ fv3 with set, resident-draw and persistent parity; motion m20 with persistent pa
 
 **Step 3, first part: the frame data through the render thread traced; the extras rows' frame parts out of the tables**
 (2026-10-06; motion m22 before, m23 after; bridge x3 with set, resident-draw and persistent parity).
-- *Frame data through the render thread* (`Draws/FrameData`): every byte a commit writes for the GPU, counted at the three
+- *Frame data through the render thread* (`Core/Gpu/FrameData`): every byte a commit writes for the GPU, counted at the three
   ways it can: a latched copy (`LatchedUploads`, "latched: <buffer>", the frame-constants buffer by slot and part), a staged
   upload (`CommitUploads`, "staged: <buffer>") and a latch block's write (`LatchWrite`, "latch: <what>"). What a worker or the
   pool sends (the streams job, FrameValues) is not counted. Reported every 300 frames, largest first. Motion (m22/m23):
@@ -1727,7 +1727,7 @@ resident-draw, set and fade parity; motion m28/m29).
       the frame values refreshed in place, the frame lighting merged from the port's frame; sampled at Prepass, the one point the
       current accumulator is the main camera's). The engine's evaluation is the parity only.
     - **Compiles as events.** ORG's ShaderCompiler and PipelineService take completion callbacks and a submitter (the prepared
-      patch, applied); both submit onto DCLF's preparation pool (`Draws/BuildExecutor`: at most half its workers, one task a dispatch,
+      patch, applied); both submit onto DCLF's preparation pool (`Core/Gpu/BuildExecutor`: at most half its workers, one task a dispatch,
       never refused). Completions go into lock-free queues `ShaderPrograms::Update`/`DrawPipelines::Update` drain (no future polled);
       `kMaxInFlight` and the one-Utility-technique-a-frame limit are gone.
     - **The Lighting programs and pipelines on the pipeline lane** (T6b2c step 4): requested, admitted and published by a
@@ -2715,7 +2715,7 @@ retired.
   - **Journals** trim to `PayloadBuilder::OldestContentEpoch(part)`.
   - **Gone with the ring:** the row-capture back-flow (`committedRowsSlot`) and the shadow commit's latent bug.
 - **FrameValues.** The five rings became five pools. The render thread leases the frame's backings in `Kick`, the job catches
-  them up without a GPU wait, and `EndFrame` binds them. All DCLF pools share `Draws/Gpu/PooledBackings`: a released backing is
+  them up without a GPU wait, and `EndFrame` binds them. All DCLF pools share `Core/Gpu/PooledBackings`: a released backing is
   destroyed on ORG's resource cleanup lane, never on the render thread, and each pool keeps frames in flight minus one spares.
 - **Publication gate (V3).** A payload is published only when the frame took the last posted snapshot and that frame's scene
   pass ended (`IndirectDraws::NoteScenePassDone`). A sealed but unpublished build is replaced by newer work, and a kept

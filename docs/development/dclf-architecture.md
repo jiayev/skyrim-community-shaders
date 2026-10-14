@@ -70,7 +70,7 @@ installed publication's claims.
 
 ```
 engine writers ──events──▶ Coordinator tables ──change log──▶ kept stores ──▶ payload ──commit──▶ epoch (GPU)
- (hooks)                    (Scene/, coordinator)            (Draws/)        (pool)    (render thread)
+ (hooks)                    (Scene/, coordinator)          (Core/Render/)    (pool)    (render thread)
 ```
 
 1.  **Events.** Hooks on the engine's writers push events from whatever thread makes the change:
@@ -101,7 +101,7 @@ engine writers ──events──▶ Coordinator tables ──change log──�
     -   the drawn set (`DrawnMarks`);
     -   the shadow state (which modes hold each object, what waits) and the shadow material rows (`ShadowKept`).
 5.  **Payload.** A build is a pure function from the tables and lookups to a payload: the rows it wrote, the draw
-    inputs and the kept stores' changes. `BuildMainPayloads` (`Draws/IndirectDraws/Builders/MainBuild.cpp`, both main segments
+    inputs and the kept stores' changes. `BuildMainPayloads` (`Core/Render/Payload/MainBuild.cpp`, both main segments
     in one build) and `BuildShadowPayload` are the two builders. They run on the pool with each publication
     (`IndirectDraws::PostSnapshotWork`), the main build first; the snapshot builder then publishes the payloads as pooled
     versions (`PayloadBuilder`, "The payload" below).
@@ -302,7 +302,7 @@ the sealed set (`NamedVersions::Latch`).
 
 ### The payload
 
-The scene payload of a snapshot is one immutable `PayloadVersions` (`Draws/IndirectDraws/Core/PayloadVersions.{h,cpp}`):
+The scene payload of a snapshot is one immutable `PayloadVersions` (`Core/Render/Payload/PayloadVersions.{h,cpp}`):
 seven parts, each a backing leased from its own pool, with its SRV index, device address (the row parts) and units:
 objects, extras, geometries, material rows, pipeline rows, inputs (the scene list, below) and shadow rows. No recording
 binds it, and the draws embed none of it.
@@ -511,17 +511,18 @@ The module tree, the threads, a frame's data flow and the diagnostics contract a
 `cmake/RenderGraph.cmake` when the render graph and ORGModuleServices are present; the rest of CS calls DCLF only through it).
 Under `src/Features/DrawcallLimitFix/`, `Core/` holds what every feature builds on (`Core/Runtime/`: the building blocks and
 the scene executor; `Core/Engine/`: engine access, the read window, the releases and the render-thread budget;
-`Core/Settings/`: the switches and toggles; `Core/Scene/`: the scene pump's wake). The layout is moving to `Core/` plus one
+`Core/Settings/`: the switches and toggles; `Core/Scene/`: the scene pump's wake; `Core/Gpu/`: frame values, pooled backings,
+GPU resources and textures, pipelines; `Core/Render/`: `IndirectDraws` and `FrameDriver`, with the snapshot builder, revisions,
+payloads, resources, readbacks, epochs and passes, the shadow views' among them until they move to their feature). The layout is moving to `Core/` plus one
 folder per feature ([dclf-layout.md](./dclf-layout.md)); until each piece moves, `Engine/{Capture,Cull,Views}` touch the engine,
-`Scene/{Model,Ports,Coordinator,FrameView}` and `Scene/Channels.h` keep the scene, `Draws/` draws it (`FrameDriver`,
-`IndirectDraws`, `Gpu/`, `Pipelines/`), and `Diagnostics/` holds every parity check, probe and report.
+`Scene/{Model,Ports,Coordinator,FrameView}` and `Scene/Channels.h` keep the scene, and `Diagnostics/` holds every parity check, probe and report.
 `tools/dclf-layout-check.py` checks the include rules.
 
-Inside `Scene/Coordinator/` and `Draws/IndirectDraws/`, `Internal.h` is shared by that folder's files only. The layouts the
-shaders read are in `Draws/IndirectDraws/Core/GpuLayouts.h`, and must match `BuildDrawsCS.hlsl` and `Lighting.hlsl`. The
-scene's set of growable buffers is `Draws/IndirectDraws/Core/SceneBufferSet.{h,cpp}`, and what a revision requires of it is
-`Draws/IndirectDraws/Revision/Requirements.cpp`. The payload's pooled versions are `Draws/IndirectDraws/Core/PayloadVersions.{h,cpp}`,
-DCLF's ties to the pools `Draws/Gpu/PooledBackings.{h,cpp}`, and its retirement clock `Core/Runtime/FrameRetirement.{h,cpp}`.
+Inside `Scene/Coordinator/` and `Core/Render/`, `Internal.h` is shared by that folder's files only. The layouts the
+shaders read are in `Core/Render/Resources/GpuLayouts.h`, and must match `BuildDrawsCS.hlsl` and `Lighting.hlsl`. The
+scene's set of growable buffers is `Core/Render/Resources/SceneBufferSet.{h,cpp}`, and what a revision requires of it is
+`Core/Render/Revision/Requirements.cpp`. The payload's pooled versions are `Core/Render/Payload/PayloadVersions.{h,cpp}`,
+DCLF's ties to the pools `Core/Gpu/PooledBackings.{h,cpp}`, and its retirement clock `Core/Runtime/FrameRetirement.{h,cpp}`.
 
 Includes within a folder use bare names. Includes across folders are rooted at `src/`
 (`Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h`).

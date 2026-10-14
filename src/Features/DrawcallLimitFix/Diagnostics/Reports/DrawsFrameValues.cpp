@@ -1,8 +1,8 @@
 #include "Draws.h"
 
 #include "Features/DrawcallLimitFix/Diagnostics/Draws/DrawsState.h"
-#include "Features/DrawcallLimitFix/Draws/Gpu/FrameData.h"
-#include "Features/DrawcallLimitFix/Draws/Gpu/FrameValues.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/FrameData.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/FrameValues.h"
 
 // The frame values' and the frame data's report lines.
 

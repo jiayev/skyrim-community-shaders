@@ -83,7 +83,7 @@ validate: the `tree animation list` line's "loops given DCLF's verdicts" > 0 whe
 
 ## The fade write-back reads its events only on frames that record a revision (found by T7b1, 2026-10-11; fixed by T7b6, pending validation)
 
-`FadeEventReadbackPass` (`Draws/IndirectDraws/Passes/Readbacks.cpp`) reads its buffer in `Record`. The depth epoch is revision-driven
+`FadeEventReadbackPass` (`Core/Render/Passes/Readbacks.cpp`) reads its buffer in `Record`. The depth epoch is revision-driven
 (each ring slot recorded once per revision and replayed: `extern/OpenRenderGraph/docs/persistent-epochs.md`), so on replayed frames
 no fade events are read back and the write-back sees only the recording frames' events (T7b1's visibility readback had the same
 flaw: 59 of 300 frames in motion, none in interiors). Fix: T7b6, the fade events moved onto the visibility readback's scheme (a
@@ -178,7 +178,7 @@ Left open by the polls-to-events pass (dclf-async-publication.md, "Polls become 
     window (73-277 per 600 frames, `SceneTracker::TakeWindowEdits`, reported by the C2 parity line). The mirror-only
     portal-root pushes and `CaptureMirrorRequests` therefore stay on the render thread at the frame's start, read and pushed
     at once: a pool job's pushes could not be ordered with those hooks' events. The race is the baseline's, unchanged.
--   **`CellRoots` runs every frame.** The visibility decode (`Draws/IndirectDraws/Core/Visibility.cpp`) walks the object
+-   **`CellRoots` runs every frame.** The visibility decode (`Core/Render/Readback/Visibility.cpp`) walks the object
     root's children each frame (about 26 nodes; one container's bit is set again every frame because the main camera's
     list cull clears it). An object-root edit counter in `PrimaryCull` (attach/detach under the object root, a hidden store
     on a child, a new object root) would let it walk only on an edit.

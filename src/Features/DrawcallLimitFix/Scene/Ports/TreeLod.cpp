@@ -5,7 +5,7 @@
 
 #include "Features/DrawcallLimitFix/Core/Runtime/KeptState.h"
 #include "Features/DrawcallLimitFix/Core/Settings/Switches.h"
-#include "Features/DrawcallLimitFix/Draws/Gpu/GpuResources.h"
+#include "Features/DrawcallLimitFix/Core/Gpu/GpuResources.h"
 #include "Features/DrawcallLimitFix/Core/Engine/EngineAccess.h"
 
 #include <cstring>

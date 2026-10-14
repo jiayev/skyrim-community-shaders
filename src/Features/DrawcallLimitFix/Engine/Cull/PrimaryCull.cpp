@@ -12,7 +12,7 @@
 #include "Features/DrawcallLimitFix/Core/Engine/EngineReadWindow.h"
 #include "Features/DrawcallLimitFix/Core/Runtime/SceneScheduler.h"
 #include "Features/DrawcallLimitFix/Scene/Ports/FrameGlobals.h"
-#include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Core/Render/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SunAccumulation.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/TreeAnimation.h"
 #include "Features/DrawcallLimitFix/Engine/Cull/SideEffects.h"
