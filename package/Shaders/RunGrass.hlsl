@@ -518,7 +518,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #					else
 	float wetnessOcclusion = 1.0;
 #					endif
-	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessWorldPosition, wetnessWorldPosition, normal, normalize(input.VertexNormal.xyz), waterHeight, wetnessOcclusion, nearFactor, -1.0, 0.0, false, false);
+	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessWorldPosition, wetnessWorldPosition, normal, vertexNormal, waterHeight, wetnessOcclusion, nearFactor, -1.0, 0.0, false, false);
 #				endif
 
 #				if defined(WETNESS_EFFECTS)
@@ -693,7 +693,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.MotionVectors = MotionBlur::GetSSMotionVector(float4(input.WorldPosition, 1), float4(input.PreviousWorldPosition, 1));
 
 	float3 viewDirection = -normalize(input.WorldPosition.xyz);
-	float3 normal = normalize(input.VertexNormal.xyz);
+	float3 vertexNormal = normalize(input.VertexNormal.xyz);
 
 	float3 viewPosition = mul(FrameBuffer::CameraView, float4(input.WorldPosition.xyz, 1)).xyz;
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition);
@@ -702,8 +702,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// Swaps direction of the backfaces otherwise they seem to get lit from the wrong direction.
 	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GrassSphereNormal))
 		if (!frontFace)
-			normal = -normal;
+			vertexNormal = -vertexNormal;
 
+	float3 normal = vertexNormal;
 	float3x3 tbn = 0;
 
 #				ifdef GRASS_OPTIMIZATIONS
@@ -753,7 +754,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #					else
 	float wetnessOcclusion = 1.0;
 #					endif
-	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessWorldPosition, wetnessWorldPosition, normal, normalize(input.VertexNormal.xyz), waterHeight, wetnessOcclusion, nearFactor, -1.0, 0.0, false, false);
+	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessWorldPosition, wetnessWorldPosition, normal, vertexNormal, waterHeight, wetnessOcclusion, nearFactor, -1.0, 0.0, false, false);
 #				endif
 
 #				if defined(WETNESS_EFFECTS)
@@ -825,7 +826,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				else
 	if (complex)
 #				endif
-		dirSpecularColor = dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, SharedData::grassLightingSettings.Glossiness) * Color::VanillaNormalization();
+		dirSpecularColor = dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, SharedData::grassLightingSettings.Glossiness);
 #				if defined(WETNESS_EFFECTS)
 	WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDirection, SharedData::DirLightDirection.xyz, dirLightColor, dirDetailedShadow * Color::PBRLightingCompensation * Color::PBRLightingScale, dirDiffuseColor, dirSpecularColor, wetnessDirectSpecularColor);
 #				endif
@@ -887,7 +888,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #					else
 				if (complex)
 #					endif
-					lightSpecularColor = GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, SharedData::grassLightingSettings.Glossiness) * Color::VanillaNormalization();
+					lightSpecularColor = GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, SharedData::grassLightingSettings.Glossiness);
 #					if defined(WETNESS_EFFECTS)
 				WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDirection, normalizedLightDirection, pointLightColor, lightShadow * Color::PBRLightingCompensation * Color::PBRLightingScale, lightDiffuseColor, lightSpecularColor, wetnessDirectSpecularColor);
 #					endif
@@ -908,17 +909,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				endif
 
 	float3 reflectance = 0;
+	float3 diffuseLobeWeight = albedo;
 #				if defined(WETNESS_EFFECTS)
-	float3 wetnessReflectance = WetnessEffects::ApplySurfaceWetnessIndirectLobeWeights(albedo, reflectance, wetnessState, viewDirection);
+	float3 wetnessReflectance = WetnessEffects::ApplySurfaceWetnessIndirectLobeWeights(diffuseLobeWeight, reflectance, wetnessState, viewDirection);
 #				endif
 
-	diffuseColor += directionalAmbientColor;
 	diffuseColor *= albedo;
 
-	directionalAmbientColor *= albedo;
+	directionalAmbientColor *= diffuseLobeWeight;
+	diffuseColor += directionalAmbientColor;
 
 #				if defined(SKYLIGHTING)
-	Skylighting::ApplySkylighting(diffuseColor, directionalAmbientColor, albedo, skylightingDiffuse);
+	Skylighting::ApplySkylighting(diffuseColor, directionalAmbientColor, diffuseLobeWeight, skylightingDiffuse);
 #				endif
 
 	diffuseColor += transmissionRadiance * transmissionTint;
@@ -956,7 +958,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				else
 	psout.Reflectance = float4(reflectance, 1);
 #				endif
-	psout.Albedo = float4(albedo, 1);
+	psout.Albedo = float4(diffuseLobeWeight, 1);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(normalVS), 1.0 - outputRoughness, 1);
 
 	psout.Specular = float4(specularColor, 1);
