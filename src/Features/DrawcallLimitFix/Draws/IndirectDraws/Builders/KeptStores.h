@@ -6,8 +6,8 @@
 namespace DCLF::Draws
 {
 	/**
-	 * @brief What the scene's buffers hold now (SceneSizing, the per-object buffers' objects): an object past them - its record,
-	 * a geometry row it draws, its palettes or extras, its face positions - waits for their growth (Growths), drawing nothing and
+	 * @brief What the named versions of the scene's buffers hold (the per-object buffers' objects too): an object past them - its record,
+	 * a geometry row it draws, its palettes or extras, its face positions - waits for the requirement that grows them, drawing nothing and
 	 * culling nothing (ObjectFits).
 	 */
 	struct SceneFit
@@ -17,7 +17,8 @@ namespace DCLF::Draws
 		bool operator==(const SceneFit&) const = default;
 	};
 
-	// What a build addresses in an epoch's buffers; a change means the resources were recreated under it.
+	// What a build addresses in an epoch's buffers (a versioned buffer's address, SRV index and capacity: the sealed set's,
+	// IndirectDraws::Impl::AddressesOf); a change means the resources were recreated under it.
 	struct ResourceAddresses
 	{
 		// records: the material rows' table (the shadow views' ShadowMaterialRow, the main pass's MaterialRow); pipelineRows: the
@@ -31,7 +32,7 @@ namespace DCLF::Draws
 		std::uint32_t treeWindIndex = 0;  // the wind buffer the frame's draws read (SceneBuffers::TreeWindReadIndex)
 		std::uint32_t recordCapacity = 0;  // the material rows' table's rows (a row past it waits for the table to grow)
 		std::uint32_t pipelineCapacity = 0;  // the main pipeline rows' likewise
-		std::uint32_t sequenceDecals = 0;    // the sequences' decal range per group (MainSizing): a decal past it waits for their growth
+		std::uint32_t sequenceDecals = 0;    // the sequences' decal range per group (MainLayout): a decal past it waits for their growth
 		SceneFit fit;                        // what the scene's buffers hold (an object past them waits)
 		const void* identity = nullptr;
 

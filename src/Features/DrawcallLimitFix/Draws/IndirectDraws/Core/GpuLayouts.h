@@ -54,7 +54,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kInitialDecalDraws = 2048;
 	constexpr std::uint64_t kConstantAlignment = 256;  // uniform buffer address alignment (conservative)
 	constexpr std::uint32_t kColorTargets = 8;
-	// The scene tables' first capacities, doubled by Impl::ReserveSceneTables. The object capacity sizes every per-object buffer,
+	// The scene tables' first capacities, doubled by the scene's set to Impl::RequireSceneTables. The object capacity sizes every per-object buffer,
 	// draw inputs included (a segment or shadow mode has at most one input per object).
 	constexpr std::uint32_t kInitialObjects = 32768;
 	constexpr std::uint32_t kInitialGeometries = 16384;
@@ -313,10 +313,10 @@ namespace DCLF::Draws
 	/** @brief The main sequence buffer's slots for a_draws per draw range and a_decals per decal group. */
 	constexpr std::uint64_t SequenceSlots(std::uint32_t a_draws, std::uint32_t a_decals) { return 2ull * a_draws + std::uint64_t(kDecalGroups) * a_decals; }
 	// The terrain groups' colour draws reuse phase 2's range (the depth segment is done with it): group 1 from its start, group 2
-	// after group 1's capacity (MainSizing::terrainCapacity).
+	// after group 1's capacity (MainLayout::terrainCapacity).
 	constexpr std::uint32_t kTerrainGroups = 2;
 	// The forward range, after the terrain ranges: a staging half BuildDraws appends visible forward draws to (view depth in the
-	// unexecuted firstInstance word), then a sorted half ForwardSortCS fills back to front. Each MainSizing::forwardCapacity.
+	// unexecuted firstInstance word), then a sorted half ForwardSortCS fills back to front. Each MainLayout::forwardCapacity.
 	constexpr const char* kForwardSortShader = "DrawcallLimitFix/ForwardSortCS.hlsl";
 	// The refraction range, after the forward halves: pooled sequences (StoreShadowSequence's) drawn into the refraction normals by
 	// RefractionDrawPass with one plain indexed indirect draw.

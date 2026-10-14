@@ -1,6 +1,6 @@
 #pragma once
 
-// What a scene revision is made from (RevisionInputs, RevisionLatches) and what it holds (versions, shapes, recordings).
+// What a scene revision is made from (RevisionInputs, RevisionLatchLayouts) and what it holds (versions, shapes, recordings).
 // Part of IndirectDraws' implementation: included by Internal.h, in its order.
 
 namespace DCLF::Draws
@@ -62,38 +62,64 @@ namespace DCLF::Draws
 		// The views' (ViewKind): their resources, the targets their pipelines are resolved for from the request's catalog, a face's
 		// size (the reflection cube's import, the main colour viewport) and the depth range (first person's).
 		std::array<ViewInputs, kViews> views;
-		// What the scene tables' reserve sizes by besides the tables (ReserveSceneTables): the portal programs' words a frame's
+		// What the scene tables' requirements size by besides the tables (RequireSceneTables): the portal programs' words a frame's
 		// encoding takes (PortalViews::Encoded), and tree LOD's mirror's shape and mesh slots. The shadow material rows the last
-		// shadow build wanted (ReserveShadowRows).
+		// shadow build wanted (MakeRevision).
 		std::uint32_t portalWords = 0, treeLodShapeSlots = 0, treeLodMeshSlots = 0;
 		std::uint32_t shadowRowsWanted = 0;
 		// The shadow view slots' buffers (made by the frame: ServeRevisionRequests, SetupShadow).
 		std::shared_ptr<const ShadowSlotBuffers> shadowSlots;
 		// The host's owner-thread state the revision code needs: whether async (revision-driven) epochs run (AssembleRevision records
-		// for them), and its uploader (a growth's fills: Growths::uploads; weak, so no post outlives a graph).
+		// for them), and its uploader (a growth's fills: SceneBufferSet::SetUploads; weak, so no post outlives a graph).
 		bool asyncEpochs = false;
 		std::weak_ptr<org::runtime::IUploadService> uploads;
 	};
 
+	/** @brief A latch layout's key for the scene's set (GrowthBuild::Require of a latch): another layout, another block. */
+	template <class Layout>
+	std::uint64_t LatchLayoutKey(const Layout& a_layout)
+	{
+		static_assert(std::is_trivially_copyable_v<Layout> && sizeof(Layout) % sizeof(std::uint32_t) == 0);
+		std::array<std::uint32_t, sizeof(Layout) / sizeof(std::uint32_t)> words;
+		std::memcpy(words.data(), &a_layout, sizeof(Layout));
+		std::uint64_t key = 0xcbf29ce484222325ull;
+		for (const std::uint32_t word : words)
+			key = (key ^ word) * 0x100000001b3ull;
+		return key;
+	}
+
 	/**
-	 * @brief The revision producer's latches (made by the revision code alone, Create'd off the host's world so its thread may make
-	 * them; ReserveMainLatch, ReserveShadowLatch, ReserveView, ReserveLatchedBlock), held by the shapes it makes: a
-	 * commit writes into the selected revision's shape's latch, and its parity names that shape's. A frame in flight keeps the block
-	 * its shape holds; one replaced here drops with the last shape holding it.
+	 * @brief The revision producer's latch blocks, as the scene's set has them (SceneBufferSet::Register of a latch, once, at the
+	 * first make): the blocks are the sealed set's (NamedVersions::Latch), required at every make (RequireLatches) and replaced by
+	 * the seal when a layout changes, so a frame in flight keeps the block the set it adopted names.
 	 */
-	struct RevisionLatches
+	struct RevisionLatchHandles
 	{
 		// The main epochs': the latch (a BuildDrawsLatch, the bucket map and tables, the cascades and shadow volumes), and per segment
 		// (kDepthShape, kColourShape) the latched copies' block.
-		std::shared_ptr<org::LatchBlock> main;
-		MainLatchLayout mainLayout;
-		std::array<std::shared_ptr<org::LatchBlock>, 2> mainLatched;
-		// The shadow and occlusion epochs': the latch, its layout (made with the shadow resources' first slots: SetupShadow), the
-		// counters' zeros and the shadow commit's latched values' block.
-		std::shared_ptr<org::LatchBlock> shadow, shadowZeros, shadowLatched;
-		ShadowLatchLayout shadowLayout;
-		// The views' (ViewKind).
-		std::array<ViewLatches, kViews> views;
+		LatchHandle main;
+		std::array<LatchHandle, 2> mainLatched;
+		// The shadow and occlusion epochs': the latch, the counters' zeros and the shadow commit's latched values' block.
+		LatchHandle shadow, shadowZeros, shadowLatched;
+		// The views' (ViewKind): the latch and the zeros its latched copies take.
+		std::array<LatchHandle, kViews> views, viewZeros;
+		[[nodiscard]] explicit operator bool() const { return static_cast<bool>(main); }
+	};
+
+	/**
+	 * @brief The revision producer's latch layouts: laid out at the first make that has their resources (EnsureRevisionLatches), grown
+	 * by the reserves (ReserveMainLatch, ReserveShadowLatch, RequireView), and required of the scene's set as they stand
+	 * (RequireLatches). The blocks themselves are the sealed set's alone.
+	 */
+	struct RevisionLatchLayouts
+	{
+		MainLatchLayout main;
+		bool mainLaidOut = false;
+		// Made with the shadow resources' first slots (SetupShadow).
+		ShadowLatchLayout shadow;
+		bool shadowLaidOut = false;
+		std::array<ViewLatchLayout, kViews> views;
+		std::array<bool, kViews> viewsLaidOut{};
 	};
 
 	/** @brief The shapes the revision producer made last (MakeRevision): what AssembleRevision assembles from. */
@@ -117,34 +143,17 @@ namespace DCLF::Draws
 		std::array<std::vector<std::optional<RowBuckets>>, kShadowModeCount> rows;  // by mode, then state
 	};
 
-	/**
-	 * @brief The versions of every versioned buffer (VersionRegistry) as a scene revision names them: a preparation for the
-	 * revision resolves each buffer to its version here (org::IResourceVersions), whatever is current when it runs.
-	 */
-	struct VersionSet final : org::IResourceVersions
-	{
-		std::vector<std::pair<const void*, std::shared_ptr<const org::BufferVersion>>> versions;  // by VersionedBuffer::Key
-		std::vector<std::weak_ptr<org::VersionedBuffer>> buffers;  // by versions' order: what Current compares (the frame's)
-		std::uint64_t changes = 0;  // VersionRegistry::changes when it was taken: the versions are current while that holds
-		std::shared_ptr<const org::BufferVersion> Find(const org::VersionedBuffer& a_buffer) const noexcept override;
-		/**
-		 * @brief The revision code: the registry's buffers' current versions, but a ready growth's where it has one (Growths::Ready):
-		 * such a set is not current until its selection adopts them, so it takes a value of its own (VersionRegistry::Next).
-		 */
-		static std::shared_ptr<const VersionSet> Snapshot();
-		/** @brief The frame: whether these are the set's buffers' current versions, every one. */
-		bool Current() const;
-	};
-
 	/** @brief A scene revision's recording of one epoch prepares for this (host data): the revision's versions and its epoch's shape. */
 	struct EpochRevisionData final : org::IHostExecutionData
 	{
-		std::shared_ptr<const VersionSet> versions;
+		std::shared_ptr<const NamedVersions> versions;
 		RevisionShapes shapes;
 		const void* TryGet(std::type_index a_type) const noexcept override
 		{
 			if (a_type == typeid(RevisionShapes))
 				return &shapes;
+			if (a_type == typeid(NamedVersions))
+				return versions.get();
 			if (a_type == typeid(org::IResourceVersions))
 				return static_cast<const org::IResourceVersions*>(versions.get());
 			return nullptr;

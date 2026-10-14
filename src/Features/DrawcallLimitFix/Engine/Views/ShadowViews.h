@@ -186,7 +186,7 @@ namespace DCLF
 			/**
 			 * @brief DCLF's this frame: a shadow mode's view (not a focus one, its mode known) within the view slots DCLF's
 			 * buffers hold this frame (SetViewCapacity), in the engine's order. Only these are withheld (the registration hook's renderers)
-			 * and captured; the rest the engine draws alone, while DCLF's slots grow (Growths) for them.
+			 * and captured; the rest the engine draws alone, while DCLF's slots grow (SceneBufferSet) for them.
 			 */
 			bool covered = false;
 			/**

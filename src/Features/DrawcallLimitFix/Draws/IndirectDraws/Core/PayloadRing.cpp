@@ -34,21 +34,11 @@ namespace DCLF
 		const std::uint64_t inputs = (newest ? newest->resident.Count() + newest->inputList.size() : shadow ? shadow->RegionCount() : 0) +
 		                             (shadow ? shadow->inputList.size() : 0);
 		bool grown = false;
+		const auto retire = [](std::shared_ptr<org::Buffer>&& a_old) { Scene::FrameView::Get().RetireImport(std::move(a_old)); };  // when the frames that read it retire
 		auto ensure = [&](Impl::RingPart& a_part, std::uint64_t a_elements, std::uint32_t a_stride, const char* a_name, bool a_address) {
-			if (a_part.buffer && a_part.capacity >= a_elements)
+			if (!org::services::EnsureTransport(a_part, a_elements, a_stride, org::services::GrowthPolicy::Doubling(64),
+				    [&] { return fmt::format("cs.dclf.payload-ring.{}.{}", a_name, r); }, retire))
 				return;
-			std::uint64_t capacity = std::max<std::uint64_t>(a_part.capacity, 64);
-			while (capacity < a_elements)
-				capacity *= 2;
-			auto buffer = org::Buffer::CreateUnmaterializedStructuredBuffer(static_cast<std::uint32_t>(capacity), a_stride, false);
-			buffer->SetName(fmt::format("cs.dclf.payload-ring.{}.{}", a_name, r).c_str());
-			buffer->Materialize();
-			// The old one goes when the frames that read it retire.
-			if (a_part.buffer)
-				Scene::FrameView::Get().RetireImport(std::move(a_part.buffer));
-			a_part.buffer = std::move(buffer);
-			a_part.capacity = capacity;
-			a_part.srvIndex = a_part.buffer->GetSRVInfo(0).slot.index;
 			a_part.address = a_address ? device.GetBufferDeviceAddress({ a_part.buffer->GetAPIResource().GetHandle(), 0 }) : 0;
 			a_part.held = 0;  // holds nothing yet
 			grown = true;

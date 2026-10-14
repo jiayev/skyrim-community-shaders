@@ -19,15 +19,6 @@ namespace org::runtime
 
 namespace DCLF
 {
-	/** @brief Room for a_needed, doubling from a_current (at least 1). */
-	inline std::uint32_t Doubled(std::uint32_t a_current, std::uint32_t a_needed)
-	{
-		std::uint64_t capacity = std::max(a_current, 1u);
-		while (capacity < a_needed)
-			capacity *= 2;
-		return static_cast<std::uint32_t>(std::min<std::uint64_t>(capacity, UINT32_MAX));
-	}
-
 	struct FrameGlobals;
 	struct BindlessPlacement;
 	struct BindlessShading;

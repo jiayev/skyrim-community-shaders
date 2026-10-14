@@ -464,27 +464,14 @@ namespace DCLF
 		MainInputs in;
 		in.frameNumber = Scene::FrameView::Get().GetFrame();
 		in.depthOnly = a_depthOnly;
-		in.residentUploaded = a_resources.residentUploaded[a_depthOnly && a_resources.inputsDepth ? 0 : 1];
-		in.tablesHeld = a_resources.scene->held;
 		in.vsFrameMask = a_vsMask;
 		in.psFrameMask = a_psMask;
-		// The rows both segments share, and the versions of them the tables hold.
-		in.addresses.records = a_resources.materialRows.address;
-		in.addresses.pipelineRows = a_resources.pipelineRows.address;
-		in.addresses.recordCapacity = a_resources.materialRows.capacity;
-		in.addresses.pipelineCapacity = a_resources.pipelineRows.capacity;
-		in.addresses.sequenceDecals = a_resources.sequenceDecals;
-		in.materialRowsHeld = a_resources.materialRowsHeld;
-		in.pipelineRowsHeld = a_resources.pipelineRowsHeld;
+		// The versioned buffers' addresses, SRV indices and capacities, the fit and the decal range are the sealed set's and layout's,
+		// and what the buffers hold the ring's (BuildSnapshotDraws: AddressesOf; RunAhead).
 		in.addresses.frameConstants = a_resources.frameConstantsAddress;
-		in.addresses.objectsIndex = a_resources.scene->objectsIndex;
-		in.addresses.extrasIndex = a_resources.scene->extrasIndex;
 		in.addresses.placementsIndex = FrameValues::Get().PlacementsIndex();
 		in.addresses.palettesIndex = FrameValues::Get().PalettesIndex();
 		in.addresses.shadingIndex = FrameValues::Get().ShadingIndex();
-		in.addresses.treeWindIndex = a_resources.scene->TreeWindReadIndex(Scene::FrameView::Get().GetFrame());
-		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.scene->facePositionsAddress : 0;
-		in.addresses.fit = SceneFitOf(*a_resources.scene, a_resources.objectCapacity);
 		in.addresses.identity = &a_resources;
 		in.tablesGeneration = Scene::FrameView::Get().GetTablesGeneration();
 		in.lookupGeneration = Scene::FrameView::Get().GetLookups().generation;

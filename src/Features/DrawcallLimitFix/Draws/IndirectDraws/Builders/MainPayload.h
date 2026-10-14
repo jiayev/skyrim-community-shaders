@@ -17,6 +17,12 @@ namespace DCLF::Draws
 	};
 	using MaterialRow = RowBytes<kMaterialRowBytes>;
 	using PipelineRow = RowBytes<kPipelineRowBytes>;
+	/** @brief The main rows a row table's capture lays out (Resources::rowCaptures): immutable kept views, the producer's newest. */
+	struct MainRowCaptures
+	{
+		std::atomic<std::shared_ptr<const KeptView<MaterialRow>>> materials;
+		std::atomic<std::shared_ptr<const KeptView<PipelineRow>>> pipelines;
+	};
 	inline MaterialRowHeader& HeaderOf(MaterialRow& a_row) { return *reinterpret_cast<MaterialRowHeader*>(a_row.bytes.data() + kMaterialRowHeader); }
 	inline PipelineRowHeader& HeaderOf(PipelineRow& a_row) { return *reinterpret_cast<PipelineRowHeader*>(a_row.bytes.data() + kPipelineRowHeader); }
 
@@ -66,7 +72,7 @@ namespace DCLF::Draws
 	/**
 	 * @brief Rows a table at a_held lacks, each with its header's addresses made absolute (a_base plus the row's offset):
 	 * a_emit(data, bytes, offset). a_patch(row, rowAddress) fixes one row's header. Rows past a_capacity wait for the table's
-	 * growth (Growths): its version is filled with them, and the table then holds what it was filled with.
+	 * growth: a captured version is filled with them, and the table then holds what it was filled with.
 	 */
 	template <class Row, class Patch, class Emit>
 	std::size_t EmitMainRows(const KeptView<Row>& a_rows, std::uint64_t a_held, std::uint64_t a_base, std::uint64_t a_capacity, Patch&& a_patch, Emit&& a_emit)
@@ -89,16 +95,14 @@ namespace DCLF::Draws
 		return sent;
 	}
 	/**
-	 * @brief A build's scene rows and inputs against the capacities reserved before its inputs were taken (ReserveSceneTables):
-	 * past them is a defect of that reserve, never data to drop.
+	 * @brief A build's inputs against its input buffer's named version, which the revision producer required to hold them (the
+	 * snapshot builder's input demand, Impl::InputDemand): past it is a defect, never data to drop.
 	 */
-	inline void CheckSceneCapacity(const SceneBuffers& a_scene, std::size_t a_objects, std::size_t a_geometries, std::size_t a_extraRows, std::size_t a_inputs,
-		std::uint32_t a_inputCapacity, const char* a_what)
+	inline void CheckInputCapacity(std::size_t a_inputs, std::uint64_t a_capacity, const char* a_what)
 	{
-		if (a_objects <= a_scene.objectCapacity && a_geometries <= a_scene.geometryRows && a_extraRows <= a_scene.extraRows && a_inputs <= a_inputCapacity)
+		if (a_inputs <= a_capacity)
 			return;
-		stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s build is past its tables: {} objects of {}, {} geometry rows of {}, {} extras rows of {}, {} inputs of {}",
-			a_what, a_objects, a_scene.objectCapacity, a_geometries, a_scene.geometryRows, a_extraRows, a_scene.extraRows, a_inputs, a_inputCapacity));
+		stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s build is past its tables: {} inputs of {}", a_what, a_inputs, a_capacity));
 	}
 
 	inline void PatchRowAddresses(MaterialRow& a_row, std::uint64_t a_address)
@@ -113,7 +117,7 @@ namespace DCLF::Draws
 		for (auto* address : { &header.vsTechnique, &header.psTechnique, &header.vsGeometry, &header.psGeometry, &header.vsPermutation, &header.psPermutation })
 			*address += a_address;
 	}
-	/** @brief Every row of a_rows, laid out for a table at a_address (a growth's fill: Growths, GrowableRows::Reserve). */
+	/** @brief Every row of a_rows, laid out for a table at a_address (a row table's capture: SceneBufferSet). */
 	template <class Row>
 	std::vector<std::byte> CapturedMainRows(const KeptView<Row>& a_rows, std::uint64_t a_address)
 	{
@@ -148,11 +152,11 @@ namespace DCLF::Draws
 		std::vector<std::uint32_t> materialPatchedVSFloats;
 		ResourceAddresses addresses{};
 		std::uint32_t lookupGeneration = 0, tablesGeneration = 0;
-		// The resident region version the segment's input buffer holds (Resources::residentUploaded): the region
+		// The resident region version the segment's input buffer holds (Resources::ResidentHeld): the region
 		// uploads only the entries changed since that one.
 		std::uint64_t residentUploaded = 0;
-		TablesHeld tablesHeld;  // likewise the kept tables (Resources::tablesHeld)
-		// The versions of the kept rows the tables hold (Resources::materialRowsHeld, pipelineRowsHeld): what the rows'
+		TablesHeld tablesHeld;  // likewise the kept tables (SceneBuffers::Held)
+		// The versions of the kept rows the tables hold (Resources::materialRowsFilled, pipelineRowsFilled): what the rows'
 		// journals keep changes for.
 		std::uint64_t materialRowsHeld = 0, pipelineRowsHeld = 0;
 	};
@@ -199,7 +203,7 @@ namespace DCLF::Draws
 			std::uint64_t vertexNeeded = 0, indexNeeded = 0;
 		} shortBuffer;
 		// The segment's resident region (ResidentRegion): its inputs lead the input buffer, uploaded when residentVersion
-		// is not the one the buffer holds (Resources::residentUploaded); inputList follows them.
+		// is not the one the buffer holds (Resources::ResidentHeld); inputList follows them.
 		KeptView<DrawInput> resident;
 		std::uint32_t residentDraws = 0, residentPairs = 0, residentUndrawable = 0, residentResyncs = 0;
 		std::uint32_t residentResyncReasons = 0;  // bit k: kResyncReasons' k

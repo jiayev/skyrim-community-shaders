@@ -1905,6 +1905,8 @@ bool Streamline::EvaluateFSRFrameGen(ID3D11Resource* a_depth, ID3D11Resource* a_
 	float a_jitterX, float a_jitterY)
 {
 	// Isolate FSR frame-generation preparation from viewport 0 upscaling tags and constants.
+	// Not separated from render-graph epochs (Upscaling::SeparateFromGraphEpochs): if a graph epoch is the last GPU work before this
+	// evaluate, its output can be corrupt (docs/development/render-graph.md, "Hazard: external Vulkan work directly after a graph epoch").
 	if (!initialized || !featureFSRFG)
 		return false;
 	if (!a_depth || !a_motionVectors || !a_hudlessColor)
@@ -2205,6 +2207,9 @@ ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 	ID3D11Resource* a_hudlessColor, uint32_t a_renderWidth, uint32_t a_renderHeight,
 	uint32_t a_displayWidth, uint32_t a_displayHeight)
 {
+	// DLSS-G interpolates from these tags at present, through Streamline's present hook. It is not separated from render-graph epochs:
+	// if a graph epoch is the last GPU work before it, its output can be corrupt (docs/development/render-graph.md, "Hazard: external
+	// Vulkan work directly after a graph epoch").
 	if (!initialized || !featureDLSSG) {
 		cs_NoteDlssgTagSkip("DLSS-G unavailable");
 		return;

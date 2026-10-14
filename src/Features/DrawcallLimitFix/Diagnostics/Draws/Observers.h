@@ -16,6 +16,9 @@ namespace DCLF::Diagnostics
 	struct ShadowBuilt;
 	struct ExclusionRebuilt;
 	struct DrawsBuiltAhead;
+	struct SnapshotSealed;
+	struct CommitTargetStaged;
+	struct RevisionShapesMade;
 	struct IndexPoolUpdated;
 	struct ShadowTargetPredicted;
 	struct OwnShadowViewport;
@@ -55,6 +58,13 @@ namespace DCLF::Diagnostics
 	void CheckKeptShadow(const ShadowBuilt& a_built);
 	void CheckExclusionReuse(const ExclusionRebuilt& a_rebuilt);
 	void CheckViewMasks(const DrawsBuiltAhead& a_built);
+	// CS_DCLF_PERSISTENT_PARITY: the named set (NamedParity.cpp): every address a snapshot's draws embed against its sealed set; the
+	// commits' targets named and current in the adopted set; the recordings' resolves of buffers their set does not name; and every
+	// shape's ranges and counts within the named versions of the buffers it indexes.
+	void CheckSnapshotAddresses(const SnapshotSealed& a_sealed);
+	void CheckCommitTarget(const CommitTargetStaged& a_staged);
+	void CheckShapeCapacities(const RevisionShapesMade& a_made);
+	void CheckNamedResolves();
 	// The shadow epochs' checks (ShadowChecks.cpp): CS_DCLF_BUILD_PARITY's index pool; the views against the engine's (CS_DCLF_SET_PARITY
 	// or CS_DCLF_PERSISTENT_PARITY); the sun entry (CS_DCLF_PERSISTENT_PARITY).
 	void CheckIndexPool(const IndexPoolUpdated& a_updated);

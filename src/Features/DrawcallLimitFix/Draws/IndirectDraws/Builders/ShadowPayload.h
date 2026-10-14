@@ -68,9 +68,9 @@ namespace DCLF::Draws
 		// Community Shaders' SharedData (b5) and FeatureData (b6), copied from the structs CS keeps.
 		std::vector<std::byte> sharedData, featureData;
 		std::uint32_t lookupGeneration = 0, tablesGeneration = 0;
-		TablesHeld tablesHeld;  // ShadowResources::tablesHeld
-		// The versions of the kept shadow state the buffers hold (ShadowResources::inputsUploaded, materialRowsHeld): what the
-		// journals keep changes for.
+		TablesHeld tablesHeld;  // SceneBuffers::Held
+		// The versions of the kept shadow state the buffers hold (a build ahead's: the ring entries' oldest; else 0, sent whole):
+		// what the journals keep changes for.
 		std::uint64_t inputsHeld = 0;  // the shadow list's
 		std::uint64_t materialRowsHeld = 0;
 	};
@@ -216,14 +216,13 @@ namespace DCLF::Draws
 		const ShadowPayload* payload = nullptr;
 		// What the capacities are sized for, with the payload's draws: the scene's (the revision's draws stay within them).
 		const ShadowBounds* bounds = nullptr;
-		// The sizing, the material rows and the view blocks the shape is for: a revision's (Growths::RevisionSizing,
-		// GrowableRows::RevisionAddress), else the resources' own.
-		const ShadowSizing* sizing = nullptr;
+		// What the shadow buffers' named versions hold, and the material rows' and view blocks' addresses (the revision's set).
+		ShadowCapacity capacity;
 		std::uint64_t materialRows = 0, viewBlocks = 0;
 		std::shared_ptr<const ShadowFrame> previous;  // the last published shape: its slots' capacities only grow
 		LatchedList latched;
-		// The latch block, its layout and the counters' zeros (the revision producer's, RevisionLatches; a commit's parity names its
-		// revision's).
+		// The latch block, its layout and the counters' zeros (the blocks the revision's set names: NamedVersions::Latch; a commit's
+		// parity names its revision's).
 		std::shared_ptr<const org::LatchBlock> latch, zeros;
 		ShadowLatchLayout latchLayout;
 	};

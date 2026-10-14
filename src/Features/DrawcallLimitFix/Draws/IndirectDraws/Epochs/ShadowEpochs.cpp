@@ -36,9 +36,9 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief a_row within a_words buckets (a growth outstanding): the buckets a_draws (the claims, by key slot) need first,
-		 * then as many others as fit. The claims' sizing holds their pipelines, so a dropped bucket with claimed draws is a
-		 * defect, counted in a_lost.
+		 * @brief a_row within a_words buckets (the named count words): the buckets a_draws (the claims, by key slot) need first,
+		 * then as many others as fit. The set the claims were made under holds their pipelines, so a dropped bucket with claimed
+		 * draws is a defect, counted in a_lost.
 		 */
 		RowBuckets TrimmedRow(const RowBuckets& a_row, std::uint32_t a_words, std::span<const std::uint32_t> a_draws, std::uint64_t& a_lost)
 		{
@@ -91,7 +91,7 @@ namespace DCLF
 		/**
 		 * @brief A view's buckets, back to back in the slot's sequences, each sized for its key slots' draws. A bucket keeps its
 		 * previous capacity while the draws fit and grows to a power of two past it, so recordings change only on growth. The
-		 * slot holds twice the scene's draw bound (ReserveShadowSequences); past that, exact sizes fit.
+		 * slot holds twice the scene's draw bound (RequireShadowSequences); past that, exact sizes fit.
 		 */
 		std::vector<ShadowBucket> SizeShadowBuckets(const RowBuckets& a_row, std::span<const std::uint32_t> a_slotDraws, const ShadowFrameView* a_previous,
 			std::uint64_t a_slotSequences)
@@ -158,15 +158,14 @@ namespace DCLF
 				logger::warn("[DCLF] The index pool's copy program could not be created");
 				return nullptr;
 			}
-			pool->capacity = a_small ? 4096u : kInitialPoolIndices;
-			pool->indices = MakeVersioned(CreateWords(pool->capacity / 2, true, "cs.dclf.index-pool"));
-			pool->firstsCapacity = a_small ? 64u : kInitialGeometries;
-			pool->firsts = MakeVersioned(CreateWords(pool->firstsCapacity, false, "cs.dclf.pool-firsts"));
-			pool->copiesCapacity = a_small ? 16u : 1024u;
-			auto copies = org::Buffer::CreateUnmaterializedStructuredBuffer(pool->copiesCapacity, 4 * sizeof(std::uint32_t), false);
+			// 16-bit indices (a unit: an index), grown to twice what the ranges hold; a first index per geometry slot; a copy per range.
+			pool->indices = MakeVersioned(CreateWords((a_small ? 4096u : kInitialPoolIndices) / 2, true, "cs.dclf.index-pool"),
+				{ .extent = { 0, sizeof(std::uint16_t), 4 }, .policy = org::services::GrowthPolicy::Doubling(2) });
+			pool->firsts = MakeVersioned(CreateWords(a_small ? 64u : kInitialGeometries, false, "cs.dclf.pool-firsts"), { .extent = { 0, 4, 4 } });
+			auto copies = org::Buffer::CreateUnmaterializedStructuredBuffer(a_small ? 16u : 1024u, 4 * sizeof(std::uint32_t), false);
 			copies->SetName("cs.dclf.pool-copies");
 			copies->Materialize();
-			pool->copies = MakeVersioned(std::move(copies));
+			pool->copies = MakeVersioned(std::move(copies), { .extent = { 0, 4 * sizeof(std::uint32_t), 4 * sizeof(std::uint32_t) } });
 			a_scene.pool = pool;
 			return pool;
 		}
@@ -181,18 +180,20 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief Brings the index pool up to the tables: slots the geometry log named since the last read (every slot when it
-		 * cannot read on) release their ranges and take new ones with a copy. Uploads the first indices and copies and writes
-		 * the copy dispatch into the latch; IndexPoolPass runs it before the views draw.
+		 * @brief Brings the index pool up to the tables, in the versions a_named (the adopted set) names: slots the geometry log named
+		 * since the last read (every slot when it cannot read on) release their ranges and take new ones with a copy. Uploads the first
+		 * indices and copies and writes the copy dispatch into the latch; IndexPoolPass runs it before the views draw.
 		 */
-		void UpdateIndexPool(IndexPool& a_pool, const SceneTables& a_tables, std::uint32_t a_generation, const org::LatchBlock& a_latch,
+		void UpdateIndexPool(const NamedVersions& a_named, IndexPool& a_pool, const SceneTables& a_tables, std::uint32_t a_generation, const org::LatchBlock& a_latch,
 			std::uint32_t a_latchSlot, std::uint32_t a_poolOffset, CommitUploads& a_uploads)
 		{
 			auto& p = a_pool;
 			const auto count = static_cast<std::uint32_t>(a_tables.geometries.size());
-			// Revision mode: the pool grows with the producer (Impl::ReserveIndexPool) and is adopted with its revision; a range that
-			// does not fit waits (only unclaimed geometry can: the claims' room was reserved). Else it grows here.
-			const bool deferred = Growths::OwnerDeferred();
+			// The capacities the revision producer required (Impl::RequireIndexPool), named by the adopted set: a range that does not
+			// fit waits (only unclaimed geometry can: the claims' room was required).
+			const auto& indices = a_named.Of(p.indices);
+			const auto& firsts = a_named.Of(p.firsts);
+			const std::uint64_t capacity = indices.units, firstsCapacity = firsts.units, copiesCapacity = a_named.Of(p.copies).units;
 			std::vector<std::array<std::uint32_t, 4>> copies;
 			std::vector<std::uint32_t> changed;
 			bool allFirsts = false;
@@ -228,7 +229,7 @@ namespace DCLF
 						p.free.emplace(first + a_count, rest);
 					return first;
 				}
-				if (std::uint64_t(p.end) + a_count > p.capacity)
+				if (std::uint64_t(p.end) + a_count > capacity)
 					return IndexPool::kNoRange;
 				const std::uint32_t first = p.end;
 				p.end += a_count;
@@ -241,7 +242,6 @@ namespace DCLF
 			// Lays every range out again in a new indices version (frames in flight read the old one) and copies it. Only between the
 			// releases and the acquires, so every held range matches the tables.
 			auto relayout = [&] {
-				++p.layout;
 				p.free.clear();
 				p.end = 0;
 				copies.clear();
@@ -256,51 +256,31 @@ namespace DCLF
 					p.slotFirst[g] = p.slots[g].first;
 				allFirsts = true;
 			};
-			// Without revisions: grow to twice what it must hold.
-			auto grow = [&](std::uint32_t a_more) {
-				std::uint64_t needed = std::uint64_t(p.indicesHeld) + a_more;
-				std::uint64_t capacity = std::max<std::uint64_t>(p.capacity, 2);
-				while (capacity < needed * 2)
-					capacity *= 2;
-				logger::info("[DCLF] index pool: {} indices grown to {} ({} MB)", p.capacity, capacity, capacity * 2 >> 20);
-				p.capacity = static_cast<std::uint32_t>(std::min<std::uint64_t>(capacity, UINT32_MAX & ~1u));
-				Adopt(std::move(Growth{}.Structured(p.indices, p.capacity / 2)), relayout);
-			};
-			auto reserveFor = [&](auto&& a_slots) {
-				if (deferred)
-					return;
-				std::uint64_t more = 0;
-				for (const std::uint32_t g : a_slots)
-					more += PoolIndicesOf(a_tables, g);
-				if (more && (std::uint64_t(p.indicesHeld) + more) * 2 > p.capacity)
-					grow(static_cast<std::uint32_t>(std::min<std::uint64_t>(more, UINT32_MAX)));
-			};
 			// Each slot owns its range, copied whenever the log names it. Never shared by address: the device reuses a freed
 			// buffer's address for the next one, which a cell load does while the unloaded cell's slots still hold theirs.
 			auto acquire = [&](std::uint32_t a_slot) {
 				const auto& geometry = a_tables.geometries[a_slot];
-				const std::uint32_t indices = PoolIndicesOf(a_tables, a_slot);
-				if (!indices)
+				const std::uint32_t slotIndices = PoolIndicesOf(a_tables, a_slot);
+				if (!slotIndices)
 					return;
-				// Revision mode: past the first-index table or this commit's copies, it waits.
-				if (deferred && (a_slot >= p.firstsCapacity || copies.size() >= p.copiesCapacity)) {
+				// Past the first-index table or this commit's copies, it waits.
+				if (a_slot >= firstsCapacity || copies.size() >= copiesCapacity) {
 					p.waiting.push_back(a_slot);
 					return;
 				}
-				std::uint32_t first = allocate(indices);
+				const std::uint32_t first = allocate(slotIndices);
 				if (first == IndexPool::kNoRange) {
-					if (deferred) {
-						p.fragmented = p.fragmented || (std::uint64_t(p.indicesHeld) + indices) * 2 <= p.capacity;
-						p.waiting.push_back(a_slot);
-						return;
-					}
-					grow(indices);
-					first = allocate(indices);
+					// No room though the version holds twice what the ranges do: fragmented. The producer requires a newer version
+					// (laid out again whole by the update that first writes it).
+					if ((std::uint64_t(p.indicesHeld) + slotIndices) * 2 <= capacity)
+						p.fragmentedAt.store(indices.serial, std::memory_order_relaxed);
+					p.waiting.push_back(a_slot);
+					return;
 				}
 				auto& range = p.slots[a_slot];
-				range = { first, indices, geometry.indexAddress, geometry.indexBytes };
+				range = { first, slotIndices, geometry.indexAddress, geometry.indexBytes };
 				p.slotFirst[a_slot] = first;
-				p.indicesHeld += indices;
+				p.indicesHeld += slotIndices;
 				copyOf(range);
 			};
 
@@ -309,11 +289,9 @@ namespace DCLF
 				p.free.clear();
 				p.end = 0;
 				p.indicesHeld = 0;
-				p.relayout = false;
 				p.waiting.clear();
 				p.slots.assign(count, {});
 				p.slotFirst.assign(count, IndexPool::kNoRange);
-				reserveFor(std::views::iota(0u, count));
 				for (std::uint32_t g = 0; g < count; ++g)
 					acquire(g);
 				p.cursor.Restart(a_generation);
@@ -334,31 +312,24 @@ namespace DCLF
 				p.waiting.clear();
 				std::sort(changed.begin(), changed.end());
 				changed.erase(std::unique(changed.begin(), changed.end()), changed.end());
-				// Every release before any acquire; an adopted indices version is laid out in between.
+				// Every release before any acquire; an indices version this update did not lay out is laid out in between.
 				for (const std::uint32_t g : changed)
 					release(g);
-				if (std::exchange(p.relayout, false))
+				if (!p.indicesFilled.Holds(indices))
 					relayout();
-				reserveFor(changed);
 				for (const std::uint32_t g : changed)
 					acquire(g);
 			}
 			p.cursor.Advance(a_tables.geometryLog);
+			p.indicesFilled.Filled(indices);
 			Diagnostics::Notify(Diagnostics::IndexPoolUpdated{ p, a_tables, count });
 
-			// First indices: all of them into a new backing, else only the changed slots.
-			if (count > p.firstsCapacity && !deferred) {
-				while (p.firstsCapacity < count)
-					p.firstsCapacity *= 2;
-				Adopt(std::move(Growth{}.Structured(p.firsts, p.firstsCapacity)), [&] {
-					++p.layout;
-					allFirsts = true;
-				});
-			}
-			// Revision mode: a firsts version the producer grew (ReserveIndexPool) holds nothing once adopted.
-			if (std::exchange(p.firstsWhole, false))
+			// First indices: all of them into a version this update did not fill (a new version holds nothing), else only the changed
+			// slots.
+			if (!p.firstsFilled.Holds(firsts))
 				allFirsts = true;
-			const std::uint32_t held = std::min(count, p.firstsCapacity);
+			p.firstsFilled.Filled(firsts);
+			const auto held = static_cast<std::uint32_t>(std::min<std::uint64_t>(count, firstsCapacity));
 			if (allFirsts) {
 				if (held)
 					a_uploads(p.firsts, p.slotFirst.data(), std::size_t(held) * sizeof(std::uint32_t), 0);
@@ -371,18 +342,12 @@ namespace DCLF
 					i = j;
 				}
 			}
-			auto copyCount = static_cast<std::uint32_t>(copies.size());
-			if (copyCount > p.copiesCapacity) {
-				if (deferred) {
-					// More copies than the producer reserved for this relayout: a defect of that reserve.
-					logger::error("[DCLF] index pool: {} copies past the {} its buffer holds", copyCount, p.copiesCapacity);
-					copyCount = p.copiesCapacity;
-				} else {
-					while (p.copiesCapacity < copyCount)
-						p.copiesCapacity *= 2;
-					Adopt(std::move(Growth{}.Structured(p.copies, p.copiesCapacity)), [&] { ++p.layout; });
-				}
-			}
+			// A copy per range, every range a slot of the tables the revision required the copies for: past them is a defect of that
+			// requirement, never copies to drop.
+			const auto copyCount = static_cast<std::uint32_t>(copies.size());
+			if (copyCount > copiesCapacity)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: the index pool's {} copies past the {} its buffer holds (the requirement missed them)", copyCount,
+					copiesCapacity));
 			if (copyCount)
 				a_uploads(p.copies, copies.data(), std::size_t(copyCount) * sizeof(copies[0]), 0);
 			const std::uint32_t dispatch[4] = { std::min(copyCount, kIndexPoolGroupsX), (copyCount + kIndexPoolGroupsX - 1) / kIndexPoolGroupsX, 1, copyCount };
@@ -455,7 +420,7 @@ namespace DCLF
 		 * @brief Where a view draws: its slot, viewport in its target's slice, and push data (kShadowPushWords): the frame record,
 		 * its view blocks and the arena's fixed blocks (ShadowArenaBlocksOf).
 		 */
-		ShadowFrameView FrameViewOf(const ShadowViewLayout& a_view, std::uint32_t a_capacity, const ShadowResources& a_resources, const ShadowSizing& a_sizing,
+		ShadowFrameView FrameViewOf(const ShadowViewLayout& a_view, std::uint32_t a_capacity, const ShadowResources& a_resources, const ShadowCapacity& a_sizing,
 			std::uint64_t a_materialRows, std::uint64_t a_viewBlocks)
 		{
 			const std::uint32_t a_slot = a_view.slot;
@@ -491,7 +456,7 @@ namespace DCLF
 			return out;
 		}
 
-		/** @brief A view's max count. The slot holds the scene's draw bound (ReserveShadowSequences): past it is a defect, not a drop. */
+		/** @brief A view's max count. The slot holds the scene's draw bound (RequireShadowSequences): past it is a defect, not a drop. */
 		std::uint32_t ShadowViewCapacity(std::uint32_t a_previous, std::uint32_t a_draws, std::uint32_t a_slotDraws)
 		{
 			if (a_draws > a_slotDraws)
@@ -574,8 +539,8 @@ namespace DCLF
 		frame->indirect = a_in.indirect;
 		frame->latch = a_in.latch;
 		frame->latchLayout = a_in.latchLayout;
-		const ShadowSizing& sizing = a_in.sizing ? *a_in.sizing : a_resources;
-		// Each view's row within the sizing's bucket counts.
+		const ShadowCapacity& sizing = a_in.capacity;
+		// Each view's row within the bucket counts' words.
 		std::vector<RowBuckets> rows;
 		rows.reserve(a_in.rows.size());
 		std::uint64_t lost = 0;
@@ -587,12 +552,11 @@ namespace DCLF
 		if (lost) {
 			static std::uint32_t reported = 0;
 			if (reported++ < 8)
-				logger::error("[DCLF] {} claimed shadow draws past the bucket counts' {} words: a claim past the sizing it was sealed with", lost,
+				logger::error("[DCLF] {} claimed shadow draws past the bucket counts' {} words: a claim past the set it was sealed with", lost,
 					sizing.bucketCountWords);
 		}
 		frame->rows = std::make_shared<const std::vector<RowBuckets>>(rows);
-		const std::uint64_t materialRows = a_in.materialRows ? a_in.materialRows : a_resources.materialRows.address;
-		const std::uint64_t viewBlocks = a_in.viewBlocks ? a_in.viewBlocks : a_resources.viewBlocks.address;
+		const std::uint64_t materialRows = a_in.materialRows, viewBlocks = a_in.viewBlocks;
 		std::vector<std::uint32_t> slotDraws;
 		for (std::size_t v = 0; v < a_in.views.size(); ++v) {
 			const auto& view = a_in.views[v];
@@ -603,8 +567,7 @@ namespace DCLF
 			const auto& own = payload.keySlotDraws[m];
 			slotDraws.assign(own.begin(), own.end());
 			std::uint32_t draws = payload.modeDraws[m];
-			// The bound sizes ahead when it fits the slot; else (a growth outstanding) the payload's own draws, which fit the
-			// sizing the claims were made under.
+			// The bound sizes ahead when it fits the slot; else the payload's own draws, which fit the set the claims were made under.
 			if (a_in.bounds) {
 				const auto& bound = a_in.bounds->keySlotDraws[m];
 				std::vector<std::uint32_t> merged(slotDraws);
@@ -1222,7 +1185,7 @@ namespace DCLF
 				static const REL::Relocation<const std::uint8_t*> fadesOn{ REL::Offset(Engine::Address::kFadesOn) };
 				latch.cullFlags = 1u | kCullMinRadius | (*fadesOn.get() ? kCullFadeOnVisible : 0u) | KeyWordOf(mode);
 				latch.viewBits = ShadowViewBits(mode, false);
-				latch.fadeStatesIndex = scene.FadeStatesReadIndex(frameNumber);
+				latch.fadeStatesIndex = scene.FadeStatesReadIndex(impl->Adopted(), frameNumber);
 				Impl::ShadowRingLatch(impl->ringShadow, mode, latch);
 				UseShadowMapRow(latchBlock, latchLayout, buckets, latchSlot, mode, view.rasterState, true, latch);
 				WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, shapeView.buckets, latch);
@@ -1365,18 +1328,19 @@ namespace DCLF
 			prepareMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - prepareStart).count();
 			TracyCZoneEnd(shadowPrepareZone);
 
-			CommitUploads uploads(impl->commitStagedPool);
+			// The adopted set: the versions the commit writes into, and the SRV indices it writes.
+			const auto& named = impl->Adopted();
+			CommitUploads uploads(impl->commitStagedPool, named);
 			auto& arena = payload.arena;
 			TracyCZoneN(shadowCommitZone, "CS.DCLF.ShadowInputs.CommitShared", true);
 			const auto inputsStart = std::chrono::steady_clock::now();
-			// A revision input: the producer grows the rows for it (ReserveShadowRows).
+			// A revision input: the producer requires the rows for it (MakeRevision).
 			if (std::exchange(impl->shadowRowsWanted, payload.rowsWanted) != payload.rowsWanted)
 				impl->PostRevisionInputs();
 			shadowStats.waitingRows = payload.waitingRows;
 			auto& scene = *resources->scene;
-			shadowStats.faceUploads += UploadFaceStreams(payload.faceStreams, scene.facePositions, scene.faceUploaded, uploads, scene.faceVertices);
-			ZeroFrameAheadOutputs(scene, uploads);
-			UploadTrees(Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), scene, uploads, false);
+			shadowStats.faceUploads += UploadFaceStreams(named, payload.faceStreams, scene.facePositions, scene.faceUploaded, uploads);
+			UploadTrees(named, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetFrame(), scene, uploads, false);
 			shadowStats.records = static_cast<std::uint32_t>(payload.materialRows.Count());
 			shadowStats.skippedTexture = payload.skippedTexture;
 			shadowStats.skippedPipeline = payload.skippedPipeline;
@@ -1399,7 +1363,8 @@ namespace DCLF
 			// The index pool both this epoch and the occlusion epoch draw from.
 			{
 				ZoneScopedN("CS.DCLF.ShadowInputs.IndexPool");
-				UpdateIndexPool(*resources->pool, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetTablesGeneration(), latchBlock, latchSlot, latchLayout.PoolOffset(), uploads);
+				UpdateIndexPool(named, *resources->pool, Scene::FrameView::Get().GetTables(), Scene::FrameView::Get().GetTablesGeneration(), latchBlock, latchSlot,
+					latchLayout.PoolOffset(), uploads);
 			}
 			std::vector<bool> mapRowsWritten(latchLayout.MapRows());  // per mode and state (MapRowOf): its row is in the latch
 			std::uint32_t sunEntryOffset = 0;  // the slot's sun entry region, once written
@@ -1426,7 +1391,7 @@ namespace DCLF
 				}
 				latch.cullPlaneMask = view.cullPlaneMask;
 				std::memcpy(latch.cullPlanes, view.cullPlanes, sizeof(latch.cullPlanes));
-				latch.fadeStatesIndex = resources->scene->FadeStatesReadIndex(frameNumber);
+				latch.fadeStatesIndex = resources->scene->FadeStatesReadIndex(named, frameNumber);
 				Impl::ShadowRingLatch(impl->ringShadow, view.modeIndex, latch);
 				// Sun entry rule: BuildDraws tests each input's entry sphere against the full-frustum processes (written once per frame).
 				if (view.sunView) {
@@ -1460,7 +1425,7 @@ namespace DCLF
 				record.textures[kPlacementBufferRegister] = in.addresses.placementsIndex;
 				record.textures[kPaletteBufferRegister] = in.addresses.palettesIndex;
 				record.textures[kShadingBufferRegister] = in.addresses.shadingIndex;
-				record.textures[kTreeWindRegister] = in.addresses.treeWindIndex;
+				record.textures[kTreeWindRegister] = resources->scene->TreeWindReadIndex(named, frameNumber);
 				constexpr std::size_t recordEnd = kShadowFrameRecordOffset + sizeof(DrawBindings);
 				if (bytes.size() < recordEnd)
 					stl::report_and_fail("Drawcall Limit Fix: a shadow arena without its frame record");
@@ -1498,7 +1463,7 @@ namespace DCLF
 				}
 				logger::info("[DCLF] shadow epoch: {} views ({} without a pipeline, {} without a texture), {} material rows ({} waiting for the table to grow, {} held): {}",
 					target.views.size(), shadowStats.skippedPipeline, shadowStats.skippedTexture, shadowStats.records, payload.waitingRows,
-					resources->materialRows.capacity, views);
+					resources->materialRows.RowsIn(named), views);
 			}
 			TracyCZoneEnd(shadowViewsZone);
 		}, frameOwners);
@@ -1563,7 +1528,7 @@ namespace DCLF
 		return *row;
 	}
 
-	void IndirectDraws::Impl::ReserveIndexPool(SceneBuffers& a_scene, const SceneTables& a_tables, std::uint32_t a_generation)
+	void IndirectDraws::Impl::RequireIndexPool(GrowthBuild& a_build, SceneBuffers& a_scene, const SceneTables& a_tables, std::uint32_t a_generation)
 	{
 		if (!a_scene.pool)
 			return;
@@ -1592,59 +1557,12 @@ namespace DCLF
 					take(g);
 		}
 		b.cursor.Advance(a_tables.geometryLog);
-		// Room for twice the indices (a relayout needs no more), a first index per slot and a copy per range: one change, adopted
-		// with the revision that names it, so together with the claims.
-		auto& growths = Growths::Get();
-		const PoolSizing& base = growths.LatestSizing<PoolSizing>(p);
-		PoolSizing next = base;
-		std::vector<Growths::Part> parts;
-		bool indices = false;
-		if (b.total * 2 > base.capacity || std::exchange(p.fragmented, false)) {
-			std::uint64_t capacity = std::max<std::uint64_t>(base.capacity, 2);
-			while (capacity < b.total * 2)
-				capacity *= 2;
-			next.capacity = static_cast<std::uint32_t>(std::min<std::uint64_t>(capacity, UINT32_MAX & ~1u));
-			if (next.capacity == base.capacity)
-				++next.relayouts;  // fragmented: laid out again in a new version of the same size
-			parts.push_back({ p.indices, next.capacity / 2 });
-			indices = true;
-		}
-		const std::uint32_t slots = std::max(count, 1u);
-		bool firsts = false;
-		if (slots > next.firstsCapacity) {
-			next.firstsCapacity = std::max(next.firstsCapacity, 1u);
-			while (next.firstsCapacity < slots)
-				next.firstsCapacity *= 2;
-			parts.push_back({ p.firsts, next.firstsCapacity });
-			firsts = true;
-		}
-		if (slots > next.copiesCapacity) {
-			next.copiesCapacity = std::max(next.copiesCapacity, 1u);
-			while (next.copiesCapacity < slots)
-				next.copiesCapacity *= 2;
-			parts.push_back({ p.copies, next.copiesCapacity });
-		}
-		if (next == base)
-			return;
-		logger::info("[DCLF] index pool: {} indices, {} slots and {} copies grown to {}, {} and {} ({} MB){}", base.capacity, base.firstsCapacity, base.copiesCapacity,
-			next.capacity, next.firstsCapacity, next.copiesCapacity, std::uint64_t(next.capacity) * 2 >> 20, Growths::Deferred() ? ", as graph work" : "");
-		growths.Change<PoolSizing>(p, a_scene.pool, std::move(next), std::move(parts), [&p, indices, firsts] {
-			++p.layout;
-			p.relayout = p.relayout || indices;
-			// A new firsts version holds nothing: every slot's first index is sent again (a relayout sends them too).
-			p.firstsWhole = p.firstsWhole || firsts;
-		});
-	}
-
-	void IndirectDraws::Impl::ReserveShadowRows(ShadowResources& a_shadow, std::uint32_t a_wanted)
-	{
-		// What the last build wanted plus a quarter, so the table grows ahead of the scene.
-		if (!a_wanted)
-			return;
-		// A new version holds no rows: the commit after adoption sends the whole table (materialRowsHeld 0). Until then rows past
-		// the capacity wait.
-		const RowsCapture whole;
-		a_shadow.materialRows.Reserve(a_wanted + a_wanted / 4, [state = &a_shadow](std::uint64_t) { state->materialRowsHeld = 0; }, &whole);
+		// Room for twice the indices (a relayout needs no more), a first index per slot and a copy per range, so together with the
+		// claims; and a version newer than one the frame found fragmented (laid out again at the same size).
+		auto& buffers = SceneBufferSet::Get();
+		buffers.Require(a_build, p.indices, std::uint64_t(b.total) * 2);
+		buffers.RequireNewer(a_build, p.indices, p.fragmentedAt.load(std::memory_order_relaxed));
+		UnitGroup{}.Add(p.firsts).Add(p.copies).Require(a_build, std::max(count, 1u));
 	}
 
 	ShadowInputs IndirectDraws::Impl::PrepareShadowInputs(const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
@@ -1672,23 +1590,14 @@ namespace DCLF
 		}
 		in.sunCandidates = Scene::FrameView::Get().GetSunCandidates();
 		in.lightCandidates = Scene::FrameView::Get().GetLightCandidates();
+		// The versioned buffers' addresses and SRV indices are the sealed set's (BuildSnapshotDraws: AddressesOf).
 		in.addresses.constants = a_resources.constantsAddress;
-		in.addresses.records = a_resources.materialRows.address;
-		in.addresses.objectsIndex = a_resources.scene->objectsIndex;
-		in.addresses.extrasIndex = a_resources.scene->extrasIndex;
 		in.addresses.placementsIndex = FrameValues::Get().PlacementsIndex();
 		in.addresses.palettesIndex = FrameValues::Get().PalettesIndex();
 		in.addresses.shadingIndex = FrameValues::Get().ShadingIndex();
-		in.addresses.treeWindIndex = a_resources.scene->TreeWindReadIndex(Scene::FrameView::Get().GetFrame());
-		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.scene->facePositionsAddress : 0;
-		in.addresses.recordCapacity = a_resources.materialRows.capacity;
-		in.addresses.fit = SceneFitOf(*a_resources.scene, a_resources.objectCapacity);
 		in.addresses.identity = &a_resources;
 		in.tablesGeneration = Scene::FrameView::Get().GetTablesGeneration();
 		in.lookupGeneration = Scene::FrameView::Get().GetLookups().shadowGeneration;
-		in.tablesHeld = a_resources.scene->held;
-		in.inputsHeld = a_resources.inputsUploaded;
-		in.materialRowsHeld = a_resources.materialRowsHeld;
 		if (auto* csState = globals::state) {
 			const auto* shared = reinterpret_cast<const std::byte*>(&csState->lastSharedData);
 			in.sharedData.assign(shared, shared + sizeof(State::SharedDataCB));

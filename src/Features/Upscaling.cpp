@@ -1638,8 +1638,9 @@ void Upscaling::SeparateFromGraphEpochs()
 	// The upscalers run through Streamline on the descriptor heap path (a Streamline plugin asks for VK_EXT_descriptor_heap, which the
 	// render graph has enabled on DXVK's device). Their command buffer must not run directly after a render-graph epoch's command buffer,
 	// which binds the graph's descriptor heaps: on NVIDIA's driver the evaluate then computes from the wrong descriptors whenever the two
-	// run back to back on the GPU, and writes black or garbage output (dclf-open-defects.md, the Sleeping Giant Inn; Drawcall Limit Fix's
-	// first-person colour epoch is the last epoch before the upscaler). DXVK work that binds image descriptors in between avoids it: a UAV
+	// run back to back on the GPU, and writes black or garbage output (docs/development/render-graph.md, "Hazard: external Vulkan work
+	// directly after a graph epoch"; found at the Sleeping Giant Inn, where Drawcall Limit Fix's first-person colour epoch is the last epoch
+	// before the upscaler). Frame generation's evaluates do not call this yet. DXVK work that binds image descriptors in between avoids it: a UAV
 	// clear of a small typed texture, which DXVK runs as a compute shader. A plain flush, an empty submission or a buffer fill does not.
 	if (!RenderGraphRuntime::Get().IsActive())
 		return;

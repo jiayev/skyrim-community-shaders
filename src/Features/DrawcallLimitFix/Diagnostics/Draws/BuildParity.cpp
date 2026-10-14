@@ -136,7 +136,10 @@ namespace DCLF::Diagnostics
 			parity.reset();
 			return;
 		}
-		if ((parityEpochs++ % 300) != 0 || !a_resources->sequencesD3D11 || !a_resources->countD3D11)
+		if ((parityEpochs++ % 300) != 0 || !a_resources->countD3D11)
+			return;
+		auto* const sequencesView = state.paritySequences.Of(a_resources->sequences);
+		if (!sequencesView)
 			return;
 		// After the epoch in D3D11 stream order: the copies see what BuildDraws wrote.
 		auto staging = [&](ID3D11Buffer* a_source) {
@@ -154,11 +157,16 @@ namespace DCLF::Diagnostics
 			return buffer;
 		};
 		ParityReadback readback;
-		readback.sequences = staging(a_resources->sequencesD3D11.get());
+		readback.sequences = staging(sequencesView);
 		readback.count = staging(a_resources->countD3D11.get());
-		readback.sequenceDraws = a_resources->sequenceDraws;
-		readback.sequenceDecals = a_resources->sequenceDecals;
-		readback.terrainCapacity = a_resources->terrainCapacity;
+		// The ranges of the shape the epoch was committed into (the adopted revision's).
+		const auto& active = DrawsView::Get().revisions.active;
+		const auto shape = active ? active->Get<PassFrame>(DrawsView::Impl::SceneRevisions::kShapeSlot + (a_epoch.depthOnly ? kDepthShape : kColourShape)) : nullptr;
+		if (!shape)
+			return;
+		readback.sequenceDraws = shape->sequenceDraws;
+		readback.sequenceDecals = shape->sequenceDecals;
+		readback.terrainCapacity = shape->terrainCapacity;
 		// The templates cover every candidate; the gate drops the ones the engine culled before BuildDraws
 		// writes a sequence for them, and it is a pure per-object flag test, so the expectation can apply it
 		// exactly. Frustum culling cannot be predicted here, which is why parity and culling are separate

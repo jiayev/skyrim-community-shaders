@@ -312,11 +312,15 @@ namespace DCLF::Diagnostics
 
 		// This frame: the words as the colour epoch left them, and the CPU side that explains them. Only when
 		// the depth build is this frame's too.
-		if (!a_resources->visibilityD3D11 || &a_depth == &a_colour || setParityFrames.size() >= 8)
+		if (&a_depth == &a_colour || setParityFrames.size() >= 8)
 			return;
+		auto* const visibilityView = diagnostics.setParityVisibility.Of(a_resources->visibility);
+		if (!visibilityView)
+			return;
+		auto* const frustumView = diagnostics.setParityFrustum.Of(a_resources->frustum);
 		SetParityFrame snapshot;
 		D3D11_BUFFER_DESC desc{};
-		a_resources->visibilityD3D11->GetDesc(&desc);
+		visibilityView->GetDesc(&desc);
 		// A released staging of another size (the visibility buffer grew since) is dropped.
 		while (!setParityStaging.empty() && !snapshot.staging) {
 			D3D11_BUFFER_DESC held{};
@@ -334,8 +338,8 @@ namespace DCLF::Diagnostics
 			if (FAILED(globals::d3d::device->CreateBuffer(&desc, nullptr, snapshot.staging.put())))
 				return;
 		}
-		context->CopyResource(snapshot.staging.get(), a_resources->visibilityD3D11.get());
-		if (a_resources->frustumD3D11) {
+		context->CopyResource(snapshot.staging.get(), visibilityView);
+		if (frustumView) {
 			while (!setParityStaging.empty() && !snapshot.frustumStaging) {
 				D3D11_BUFFER_DESC held{};
 				setParityStaging.back()->GetDesc(&held);
@@ -350,7 +354,7 @@ namespace DCLF::Diagnostics
 			staging.StructureByteStride = 0;
 			staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 			if (snapshot.frustumStaging || SUCCEEDED(globals::d3d::device->CreateBuffer(&staging, nullptr, snapshot.frustumStaging.put())))
-				context->CopyResource(snapshot.frustumStaging.get(), a_resources->frustumD3D11.get());
+				context->CopyResource(snapshot.frustumStaging.get(), frustumView);
 		}
 		// The frame the epochs drew (their visibility stamps), not the one the payloads were built in (ahead).
 		snapshot.frame = Scene::FrameView::Get().GetFrame();

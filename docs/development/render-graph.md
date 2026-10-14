@@ -49,6 +49,77 @@ With a DXVK build that lacks the export (or `CS_ORG_SUBMIT=flush`), each epoch i
 waits for DXVK, then submits under the queue lock. This is undesirable, and will likely be downgraded 
 to a failure in the future.
 
+## Hazard: external Vulkan work directly after a graph epoch
+
+**Rule.** No third-party Vulkan command buffer that goes through DXVK's interop may run on the GPU directly behind a graph
+epoch's command buffer. That covers Streamline's DLSS, FSR, XeSS, DLSS-G and FSR-FG, and any future FidelityFX, NRD or vendor SDK.
+DXVK work that binds image descriptors must sit between them. Today that is `Upscaling::SeparateFromGraphEpochs()`
+(`src/Features/Upscaling.cpp`): call it, or a shared helper if it ever moves, immediately before such work. Found at the Sleeping
+Giant Inn, 2026-10-12/13; the investigation record is in `dclf-open-defects.md` ("the Sleeping Giant Inn's black or garbage
+upscaler output").
+
+**Mechanism, as far as it is known.** This is inferred from black-box experiments, not proven.
+
+-   A Streamline plugin requests `VK_EXT_descriptor_heap`; the log says "requested by a plugin(s) added".
+-   The render graph enables that extension on DXVK's device anyway, through `DxvkLoader`'s `dxvkRequestDeviceFeatures` (see
+    Device features above). So Streamline's features run on the descriptor-heap path.
+-   DXVK itself stays on descriptor buffers.
+-   Graph epochs bind the graph's descriptor heaps.
+-   When a heap-path consumer's command buffer executes right behind an epoch's, NVIDIA's driver computes it from the wrong
+    descriptors.
+-   Unknown: whether this is a driver defect, or state or heap memory the graph leaves behind that the consumer relies on.
+
+**Symptom signature** (to recognise it quickly):
+
+-   The consumer's output alternates frame to frame: black (zeros), then garbage, then right. The garbage is values of ±65504 with
+    alpha intact, which means the consumer's own arithmetic, not memory written by something else.
+-   Its inputs and constants are correct. A readback inside the consumer's own command buffer proves this.
+-   Identical with DLSS and FSR.
+-   Goes away with a device idle immediately before or after the consumer, or with any DXVK descriptor-binding work in between.
+-   Unaffected by queue choice, the consumer's in-flight depth, resource lifetimes and ORG's deletion depth.
+-   Appears only when an epoch is the last GPU work before the consumer. In practice that means after adding an epoch, or after
+    moving a pass late in the frame.
+
+**What separates them and what does not** (all tested):
+
+| Separates | Does not separate |
+| --- | --- |
+| A D3D11 UAV clear of a small typed texture (DXVK runs it as a compute shader that binds image descriptors) | A D3D11 flush |
+| A device idle before or after the consumer | An empty interop submission |
+| | A typed-buffer UAV clear (a buffer fill) |
+| | Waiting for the epoch's completion |
+| | Bounding the consumer's frames in flight (1 or 2) |
+| | Idling only the upload or compute queue |
+
+**Where it applies today.**
+
+-   **The upscaler evaluate:** covered. `Upscaling::Upscale` calls `SeparateFromGraphEpochs()` before `EvaluateDLSS`/`EvaluateFSR`/XeSS.
+-   **Frame generation:** *not covered*. That is `Streamline::EvaluateFSRFrameGen` (`Upscaling/Streamline.cpp`) and the DLSS-G path.
+    Frame generation was off in every run of the investigation.
+-   **Epochs that can end up last before the upscaler or Present.**
+    -   DCLF's first-person colour epoch (`RenderFirstPersonView`) is the one that triggered this. It is the only epoch with no DXVK
+        work after it before the upscaler.
+    -   The forward epoch would be exposed too without the engine's textured draws that follow it.
+    -   A new epoch, or one moved late in the frame, must be checked against this rule.
+
+**How to check a change.**
+
+-   The repro: `coc RiverwoodSleepingGiantInn` with DCLF and first person on, about 16 s and 5 screenshots. Without the separator,
+    every run reproduced it.
+-   `CS_DCLF_TARGET_DUMP` stages the upscaler output at every dump point, including "before upscale" and "after evaluate", and writes
+    raw texels.
+-   The in-command-buffer readback (`InCbReadback` in `Upscaling/Streamline.cpp`) copies the consumer's inputs and output inside its
+    own command buffer. It runs on dump frames only: it allocates 512 MB host-visible and idles the device once.
+
+**Open questions; the workaround stays until one of these resolves the cause:**
+
+-   Run Streamline without `VK_EXT_descriptor_heap` (do not grant the plugin's request), or give it heap state separate from the
+    graph's.
+-   Have the graph's last command buffer re-bind or reset descriptor-heap state.
+-   Check with a capture tool that supports `VK_EXT_descriptor_heap`. RenderDoc 1.46 does not; with RenderDoc loaded the graph turns
+    itself off.
+-   If it reproduces in isolation, report it to NVIDIA.
+
 ## Resources crossing the boundary
 
 -   **Graph outputs** (LLF's `lightIndexList`, `lightGrid`) are graph-owned buffers. D3D11 reads them

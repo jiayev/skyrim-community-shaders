@@ -74,10 +74,12 @@ namespace DCLF
 
 	void IndirectDraws::Impl::PostFit()
 	{
-		// What the commit's set may claim (FitsScene): the buffers as reserved now.
-		const std::array<SceneFit, 2> fit{ SceneFitOf(*resources->scene, resources->objectCapacity),
-			shadow && shadow->scene ? SceneFitOf(*shadow->scene, shadow->objectCapacity) : SceneFit{} };
-		const std::array<std::uint32_t, 2> rows{ static_cast<std::uint32_t>(resources->materialRows.capacity), static_cast<std::uint32_t>(resources->pipelineRows.capacity) };
+		// What the commit's set may claim (FitsScene): the buffers' versions the adopted set names (none before the first adoption).
+		const auto& named = Adopted();
+		const auto units = [&](const Versioned& a_buffer) { return static_cast<std::uint32_t>(std::min<std::uint64_t>(NamedUnits(named, a_buffer), UINT32_MAX)); };
+		const std::array<SceneFit, 2> fit{ SceneFitOf(named, *resources->scene, std::min(units(resources->visibility), units(resources->frustum))),
+			shadow && shadow->scene ? SceneFitOf(named, *shadow->scene, units(shadow->visibility)) : SceneFit{} };
+		const std::array<std::uint32_t, 2> rows{ units(resources->materialRows.buffer), units(resources->pipelineRows.buffer) };
 		if (fit != postedFit || rows != postedRows) {
 			postedFit = fit;
 			postedRows = rows;
@@ -135,47 +137,78 @@ namespace DCLF
 		WakeSnapshotBuilder();
 	}
 
-	std::uint64_t IndirectDraws::Impl::NamedVersionAddress(const VersionSet* a_versions, const Versioned& a_buffer)
+	namespace
 	{
-		auto* host = RenderGraphRuntime::Get().Host();
-		if (!host || !a_buffer)
-			return 0;
-		auto version = a_versions ? a_versions->Find(*a_buffer) : nullptr;
-		if (!version)
-			version = a_buffer->Current();
-		if (!version || !version->buffer)
-			return 0;
-		auto device = host->GetDesc().device;
-		return device.GetBufferDeviceAddress({ version->buffer->GetAPIResource().GetHandle(), 0 });
+		template <class Resources>
+		void NamedAddressesOf(const NamedVersions& a_named, const Resources& a_resources, std::uint32_t a_frame, ResourceAddresses& a_out)
+		{
+			const auto& scene = *a_resources.scene;
+			a_out.records = a_named.Of(a_resources.materialRows.buffer).deviceAddress;
+			a_out.recordCapacity = a_resources.materialRows.RowsIn(a_named);
+			std::uint64_t objects = a_named.Of(a_resources.visibility).units;
+			if constexpr (requires { a_resources.pipelineRows; }) {
+				a_out.pipelineRows = a_named.Of(a_resources.pipelineRows.buffer).deviceAddress;
+				a_out.pipelineCapacity = a_resources.pipelineRows.RowsIn(a_named);
+				objects = std::min(objects, a_named.Of(a_resources.frustum).units);
+			}
+			a_out.objectsIndex = a_named.Of(scene.objects).srvIndex;
+			a_out.extrasIndex = a_named.Of(scene.extras).srvIndex;
+			a_out.treeWindIndex = scene.TreeWindReadIndex(a_named, a_frame);
+			a_out.facePositions = FaceSnapshots::Enabled() ? a_named.Of(scene.facePositions).deviceAddress : 0;
+			a_out.fit = SceneFitOf(a_named, scene, objects);
+		}
 	}
 
-	bool IndirectDraws::Impl::DrawsEmbedFacePositions(const DrawPublication& a_draws, std::uint64_t a_address)
+	void IndirectDraws::Impl::AddressesOf(const NamedVersions& a_named, const MainLayout& a_layout, const Resources& a_resources, std::uint32_t a_frame, ResourceAddresses& a_out)
 	{
-		const auto embeds = [a_address](std::uint64_t a_embedded) { return !a_embedded || a_embedded == a_address; };
-		for (const auto& payload : a_draws.payloads)
-			if (payload && !embeds(payload->inputs.addresses.facePositions))
-				return false;
-		return !a_draws.shadow || embeds(a_draws.shadow->inputs.addresses.facePositions);
+		NamedAddressesOf(a_named, a_resources, a_frame, a_out);
+		a_out.sequenceDecals = a_layout.sequenceDecals;
 	}
 
-	void IndirectDraws::Impl::BuildSnapshotDraws(const VersionSet* a_versions)
+	void IndirectDraws::Impl::AddressesOf(const NamedVersions& a_named, const ShadowResources& a_resources, std::uint32_t a_frame, ResourceAddresses& a_out)
+	{
+		NamedAddressesOf(a_named, a_resources, a_frame, a_out);
+	}
+
+	bool IndirectDraws::Impl::InputsFit(const DrawPublication& a_draws, const NamedVersions& a_named)
+	{
+		// The inputs each payload's commit puts in its input buffer: the resident region, then its own (the main pass's); the whole
+		// shadow list (the shadow views'). A payload for other resources than the producer's draws nothing (its snapshot is incomplete).
+		const auto& inputs = producer.inputs;
+		bool fits = true;
+		for (const std::size_t j : { kAsyncZPrepass, kAsyncColour })
+			if (const auto& payload = a_draws.payloads[j]; payload && inputs.main && payload->inputs.addresses.identity == inputs.main.get()) {
+				const std::uint64_t count = payload->resident.Count() + payload->inputList.size();
+				producer.mainInputs = std::max(producer.mainInputs, count);
+				fits = fits && count <= a_named.Of(*inputs.main->SegmentInputs(payload->inputs.depthOnly).first).units;
+			}
+		if (const auto& payload = a_draws.shadow; payload && inputs.shadow && payload->inputs.addresses.identity == inputs.shadow.get()) {
+			const std::uint64_t count = payload->Inputs();
+			producer.shadowInputs = std::max(producer.shadowInputs, count);
+			fits = fits && count <= a_named.Of(inputs.shadow->inputs).units;
+		}
+		return fits;
+	}
+
+	void IndirectDraws::Impl::BuildSnapshotDraws(const NamedVersions* a_versions, const MainLayout* a_layout)
 	{
 		auto& b = snapshotBuilder;
 		auto& work = *b.work;
 		const auto start = std::chrono::steady_clock::now();
 		const auto& publication = *work.publication;
-		// The draws embed the face positions' address, and a snapshot's draws must embed the version its revision names - the one its
-		// adoption makes current - never the one the frame's context had when it was posted (a ready growth's version replaces it at that
-		// adoption, and the old one is released once its last holder goes: a vertex shader reading it loses the device). Taken from the
-		// sealed set, so draws and revision are one consistent build.
+		// The draws embed versioned buffers' addresses and SRV indices, and a snapshot's draws must embed the versions its revision names -
+		// the ones its adoption makes current - never what the frame had when it posted the context (a grown version replaces it at that
+		// adoption, and the old one is released once its last holder goes: a shader reading it loses the device). Every one is taken from
+		// the sealed set, so draws and revision are one consistent build.
 		AheadContext context = work.context;
-		if (a_versions) {
+		if (a_versions && a_layout) {
 			for (const std::size_t j : { kAsyncZPrepass, kAsyncColour })
-				if (auto& addresses = context.inputs[j].addresses; context.build[j] && addresses.facePositions && context.target && context.target->scene)
-					addresses.facePositions = NamedVersionAddress(a_versions, context.target->scene->facePositions);
-			if (auto& addresses = context.shadowInputs.addresses; context.shadow && addresses.facePositions && context.shadowTarget && context.shadowTarget->scene)
-				addresses.facePositions = NamedVersionAddress(a_versions, context.shadowTarget->scene->facePositions);
+				if (context.build[j] && context.target && context.target->scene)
+					AddressesOf(*a_versions, *a_layout, *context.target, context.inputs[j].frameNumber, context.inputs[j].addresses);
+			if (context.shadow && context.shadowTarget && context.shadowTarget->scene)
+				AddressesOf(*a_versions, *context.shadowTarget, context.shadowInputs.frameNumber, context.shadowInputs.addresses);
 		}
+		b.drawsNamed = a_versions ? a_versions->Serial() : 0;
 		std::shared_ptr<const DrawPublication> built;
 		aheadRunning.store(true, std::memory_order_release);
 		if (publication.tables && publication.lookups) {
@@ -396,16 +429,20 @@ namespace DCLF
 					b.sealed = rv.assembler.LatestSequence();
 					b.sealedAt = std::chrono::steady_clock::now();
 					// The draws, for exactly the versions the sealed revision names (its adoption makes them current): built now, while its
-					// recordings are made, or again after a make that names other versions than the ones they embed (a growth became ready
-					// meanwhile). One consistent build: a snapshot never pairs draws and a revision of different versions.
-					const auto* versions = rv.sealedVersions.get();
-					const Versioned* positions = nullptr;
-					if (const auto& target = b.work->context.target; target && target->scene)
-						positions = &target->scene->facePositions;
-					else if (const auto& shadowTarget = b.work->context.shadowTarget; shadowTarget && shadowTarget->scene)
-						positions = &shadowTarget->scene->facePositions;
-					if (!b.draws || (positions && !DrawsEmbedFacePositions(*b.draws, NamedVersionAddress(versions, *positions))))
-						BuildSnapshotDraws(versions);
+					// recordings are made, or again after a make whose set names other versions than the ones they embed (a growth became
+					// ready meanwhile). One consistent build: a snapshot never pairs draws and a revision of different versions.
+					const auto& versions = rv.sealedVersions;
+					if (!b.draws || b.drawsNamed != versions->Serial())
+						BuildSnapshotDraws(versions.get(), rv.sealedLayout.get());
+					// Draws whose inputs the set does not hold (a resident region past the per-object buffers): the revision is made
+					// again, requiring them, and the snapshot is posted with a set that holds them (never with these).
+					if (b.draws && !InputsFit(*b.draws, *versions)) {
+						++rv.inputWaits;
+						b.stage = Stage::Make;
+						continue;
+					}
+					if (b.draws)
+						Diagnostics::Notify(Diagnostics::SnapshotSealed{ *versions, *b.draws, b.work->context });
 					b.stage = Stage::Recordings;
 					continue;
 				}
@@ -414,7 +451,7 @@ namespace DCLF
 				// DecideCoverage). Else a growth or a build it asked for is pending: made again when woken.
 				if (!producer.inputs.claims || !producer.inputs.main) {
 					if (!b.draws)
-						BuildSnapshotDraws(nullptr);
+						BuildSnapshotDraws(nullptr, nullptr);
 					PostSnapshot(nullptr);
 					b.stage = Stage::Idle;
 					return;
@@ -500,17 +537,18 @@ namespace DCLF
 			WakeSnapshotBuilder();
 			return adoptedPublication();
 		}
-		// Adopted whole: the growths its revision names become current, then its versions (the registry takes the set's value when they are
-		// every buffer's current ones), its revision the frame's epochs', its draws theirs.
+		// Adopted whole: the versions its revision's set names become current (the graph host told of new ones), its revision the frame's
+		// epochs', its draws theirs.
 		std::shared_ptr<const Impl::SceneSnapshot> snapshot(std::move(taken));
-		if (const auto& lease = snapshot->revision) {
-			if (const auto named = lease->Get<Growths::NamedChanges>(Impl::SceneRevisions::kGrowthsSlot))
-				if (Growths::Get().AdoptNamed(*named) && s.growthAdoptedFrame == ~0u)
-					s.growthAdoptedFrame = Scene::FrameView::Get().GetFrame();
-			if (const auto versions = lease->Get<VersionSet>(Impl::SceneRevisions::kVersionsSlot); versions && versions->Current())
-				VersionRegistry::Get().SetChanges(versions->changes);
+		const auto versions = snapshot->revision ? snapshot->revision->Get<NamedVersions>(Impl::SceneRevisions::kVersionsSlot) : nullptr;
+		if (versions && versions->AdoptAll()) {
+			if (auto* host = RenderGraphRuntime::Get().Host())
+				host->NoteNewVersions();
+			if (s.growthAdoptedFrame == ~0u)
+				s.growthAdoptedFrame = Scene::FrameView::Get().GetFrame();
 		}
 		s.revisions.active = snapshot->revision;
+		s.adoptedVersions = versions.get();
 		s.installedDraws = snapshot->draws;
 		s.snapshotStale = false;
 		++s.snapshotsAdopted;

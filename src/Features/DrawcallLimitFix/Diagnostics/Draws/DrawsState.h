@@ -11,6 +11,35 @@
 namespace DCLF::Diagnostics
 {
 	/**
+	 * @brief A D3D11 view of a versioned buffer's current version, as 32-bit words over the whole version, for immediate-context
+	 * readbacks; made again when the version is not the one it wraps. It holds the version it wraps, so the view never outlives
+	 * its backing.
+	 */
+	struct WrappedVersion
+	{
+		std::shared_ptr<const org::BufferVersion> wrapped;
+		winrt::com_ptr<ID3D11Buffer> view;
+
+		ID3D11Buffer* Of(const Draws::Versioned& a_buffer)
+		{
+			auto current = a_buffer ? a_buffer->Current() : nullptr;
+			if (!current || !current->buffer)
+				return nullptr;
+			if (!view || wrapped != current) {
+				D3D11_BUFFER_DESC desc{};
+				desc.ByteWidth = static_cast<UINT>(current->buffer->GetSize());
+				desc.Usage = D3D11_USAGE_DEFAULT;
+				desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+				desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+				desc.StructureByteStride = sizeof(std::uint32_t);
+				view = RenderGraphRuntime::Get().WrapBuffer(*current->buffer, desc);
+				wrapped = std::move(current);
+			}
+			return view.get();
+		}
+	};
+
+	/**
 	 * @brief The draws area's diagnostics state (readbacks in flight, counters, histories). The main path never reads it.
 	 */
 	struct DrawsState
@@ -37,6 +66,7 @@ namespace DCLF::Diagnostics
 		};
 		std::optional<ParityReadback> parity;
 		std::uint32_t parityEpochs = 0;
+		WrappedVersion paritySequences;
 
 		// The culling counters, read back from the draw-count buffer a few frames later. Always on: the per-phase counts show
 		// whether culling does anything, and the buffer is two words.
@@ -145,6 +175,7 @@ namespace DCLF::Diagnostics
 		};
 		std::deque<SetParityFrame> setParityFrames;
 		std::vector<winrt::com_ptr<ID3D11Buffer>> setParityStaging;  // released stagings, reused
+		WrappedVersion setParityVisibility, setParityFrustum;
 		struct SetParityCounts
 		{
 			std::uint32_t frames = 0, framesWithDamage = 0, skipped = 0;

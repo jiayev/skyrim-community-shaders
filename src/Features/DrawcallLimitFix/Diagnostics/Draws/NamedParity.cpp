@@ -1,0 +1,253 @@
+// CS_DCLF_PERSISTENT_PARITY: the named set, the only source of a versioned buffer's address, SRV index and capacity. Every address and SRV
+// index a snapshot's draws embed against the set its revision was sealed with, and every shape's ranges and counts against the named
+// versions of the buffers it indexes (the snapshot builder); every commit target named and current in the adopted set, and the
+// recordings' resolves of buffers their set does not name (render thread).
+
+#if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
+#	include "DrawsState.h"
+#	include "Events.h"
+#	include "Observers.h"
+
+namespace DCLF::Diagnostics
+{
+	namespace
+	{
+		// The snapshot builder's (one pass at a time); the counts read by the render thread's report line.
+		struct SealedChecks
+		{
+			std::atomic<std::uint64_t> snapshots{ 0 }, payloads{ 0 }, differ{ 0 }, unnamed{ 0 };
+			std::uint32_t logged = 0;
+		} sealedChecks;
+
+		// The snapshot builder's; the counts read by the render thread's report line.
+		struct ShapeChecks
+		{
+			std::atomic<std::uint64_t> revisions{ 0 }, shapes{ 0 }, findings{ 0 };
+			std::uint32_t logged = 0;
+		} shapeChecks;
+
+		// The render thread's.
+		struct CommitChecks
+		{
+			std::uint64_t targets = 0, unnamed = 0, notCurrent = 0, resolves = 0;
+			std::uint32_t logged = 0;
+			const Draws::NamedVersions* set = nullptr;  // the adopted set whose misses were last read, and their count
+			std::uint64_t setSerial = 0, setMisses = 0;
+			std::uint32_t frames = 0;
+		} commitChecks;
+
+		constexpr std::uint32_t kLogged = 16;
+
+		/** @brief The fields a build embeds of the versioned buffers both its kinds of resources hold (Impl::AddressesOf). */
+		template <class Resources>
+		void CheckAddresses(const char* a_payload, const Draws::NamedVersions& a_named, const Resources& a_resources, const Draws::ResourceAddresses& a_embedded)
+		{
+			auto& c = sealedChecks;
+			++c.payloads;
+			// An unnamed buffer's entry is empty (check reports it unnamed first).
+			const auto entry = [&](const Draws::Versioned& a_buffer) -> const org::services::NamedEntry& {
+				static const org::services::NamedEntry kUnnamed;
+				return a_buffer && a_named.Names(*a_buffer) ? a_named.Of(*a_buffer) : kUnnamed;
+			};
+			const auto& scene = *a_resources.scene;
+			const auto check = [&](const char* a_field, const Draws::Versioned& a_buffer, std::uint64_t a_value, std::uint64_t a_expected) {
+				if (a_buffer && !a_named.Names(a_buffer)) {
+					++c.unnamed;
+					if (c.logged++ < kLogged)
+						logger::warn("[DCLF] snapshot draws (set {}): the {} payload's {} is of {}, which the sealed set does not name <- NAMED ADDRESS", a_named.Serial(),
+							a_payload, a_field, a_buffer->Get()->GetName());
+					return;
+				}
+				if (a_value == a_expected)
+					return;
+				++c.differ;
+				if (c.logged++ < kLogged)
+					logger::warn("[DCLF] snapshot draws (set {}): the {} payload's {} is {:#x}, the sealed set names {:#x} <- NAMED ADDRESS", a_named.Serial(), a_payload,
+						a_field, a_value, a_expected);
+			};
+			check("material rows", a_resources.materialRows.buffer, a_embedded.records, entry(a_resources.materialRows.buffer).deviceAddress);
+			check("material row capacity", a_resources.materialRows.buffer, a_embedded.recordCapacity, entry(a_resources.materialRows.buffer).units);
+			if constexpr (requires { a_resources.pipelineRows; }) {
+				check("pipeline rows", a_resources.pipelineRows.buffer, a_embedded.pipelineRows, entry(a_resources.pipelineRows.buffer).deviceAddress);
+				check("pipeline row capacity", a_resources.pipelineRows.buffer, a_embedded.pipelineCapacity, entry(a_resources.pipelineRows.buffer).units);
+			}
+			check("objects' SRV", scene.objects, a_embedded.objectsIndex, entry(scene.objects).srvIndex);
+			check("extras' SRV", scene.extras, a_embedded.extrasIndex, entry(scene.extras).srvIndex);
+			if (a_embedded.facePositions || FaceSnapshots::Enabled())
+				check("face positions", scene.facePositions, a_embedded.facePositions, entry(scene.facePositions).deviceAddress);
+			// The wind read by the frame the context was posted at: the one the frame before wrote, either parity's.
+			const std::uint64_t wind = a_embedded.treeWindIndex;
+			const std::uint64_t even = entry(scene.treeWindRows[0]).srvIndex, odd = entry(scene.treeWindRows[1]).srvIndex;
+			check("tree wind SRV", scene.treeWindRows[0], wind, wind == odd ? odd : even);
+		}
+	}
+
+	void CheckSnapshotAddresses(const SnapshotSealed& a_sealed)
+	{
+		auto& c = sealedChecks;
+		++c.snapshots;
+		const auto& context = a_sealed.context;
+		const auto& draws = a_sealed.draws;
+		// A payload built for other resources than the context's names theirs (the frame does not submit it: identity).
+		for (const std::size_t j : { Draws::kAsyncZPrepass, Draws::kAsyncColour })
+			if (const auto& payload = draws.payloads[j]; payload && context.build[j] && context.target && context.target->scene &&
+														 payload->inputs.addresses.identity == context.target.get())
+				CheckAddresses(j == Draws::kAsyncZPrepass ? "Z-prepass" : "colour", a_sealed.named, *context.target, payload->inputs.addresses);
+		if (const auto& shadow = draws.shadow; shadow && context.shadow && context.shadowTarget && context.shadowTarget->scene &&
+											   shadow->inputs.addresses.identity == context.shadowTarget.get())
+			CheckAddresses("shadow", a_sealed.named, *context.shadowTarget, shadow->inputs.addresses);
+	}
+
+	void CheckCommitTarget(const CommitTargetStaged& a_staged)
+	{
+		auto& c = commitChecks;
+		++c.targets;
+		if (!a_staged.named.Names(a_staged.target)) {
+			++c.unnamed;
+			if (c.logged++ < kLogged)
+				logger::warn("[DCLF] frame {}: a commit staged bytes into {}, which the adopted set (set {}) does not name: nothing staged <- NAMED PARITY",
+					Scene::FrameView::Get().GetFrame(), a_staged.target->Get()->GetName(), a_staged.named.Serial());
+		} else if (const auto& entry = a_staged.named.Of(a_staged.target); entry.version != a_staged.target->Current()) {
+			++c.notCurrent;
+			if (c.logged++ < kLogged)
+				logger::warn("[DCLF] frame {}: a commit staged bytes into {} through the adopted set (set {}), whose version {} is not the current {} <- NAMED PARITY",
+					Scene::FrameView::Get().GetFrame(), a_staged.target->Get()->GetName(), a_staged.named.Serial(), entry.version->number,
+					a_staged.target->Current() ? a_staged.target->Current()->number : 0);
+		}
+	}
+
+	void CheckShapeCapacities(const RevisionShapesMade& a_made)
+	{
+		auto& c = shapeChecks;
+		++c.revisions;
+		const auto& named = a_made.named;
+		const auto& inputs = a_made.inputs;
+		const auto finding = [&](const std::string& a_what) {
+			++c.findings;
+			if (c.logged++ < kLogged)
+				logger::warn("[DCLF] revision shapes (set {}): {} <- SHAPE CAPACITY", named.Serial(), a_what);
+		};
+		const auto units = [&](const Draws::Versioned& a_buffer) { return Draws::NamedUnits(named, a_buffer); };
+		const auto bytes = [&](const Draws::Versioned& a_buffer) -> std::uint64_t { return a_buffer && named.Names(*a_buffer) ? named.Of(*a_buffer).bytes : 0; };
+		constexpr std::uint64_t kSequence = sizeof(DrawSequence);
+		// The views: every face's range within the sequences, the plan (its buckets and forward range) within a face's range, its buckets'
+		// count words within each face's bucket counts.
+		for (std::size_t v = 0; v < Draws::kViews; ++v) {
+			const auto& frame = a_made.made.views[v];
+			const auto& view = inputs.views[v].resources;
+			if (!frame || !view)
+				continue;
+			++c.shapes;
+			const auto& traits = *view->traits;
+			if (std::uint64_t(traits.faces) * frame->sequenceDraws * kSequence > bytes(view->sequences))
+				finding(fmt::format("the {} view's {} faces of {} draws past its sequences' {} bytes", traits.name, traits.faces, frame->sequenceDraws, bytes(view->sequences)));
+			std::uint64_t planned = 0;
+			for (const auto& bucket : frame->buckets)
+				planned = std::max<std::uint64_t>(planned, std::uint64_t(bucket.first) + bucket.capacity);
+			if (frame->forwardCapacity)
+				planned = std::max<std::uint64_t>(planned, std::uint64_t(frame->forwardFirst) + 2ull * frame->forwardCapacity);
+			if (planned > frame->sequenceDraws)
+				finding(fmt::format("the {} view's plan reaches {} draws past a face's {}", traits.name, planned, frame->sequenceDraws));
+			const std::uint64_t words = frame->buckets.size() + (frame->forwardCapacity ? 1 : 0);
+			for (std::uint32_t f = 0; f < traits.faces; ++f)
+				if (words > units(view->bucketCounts[f]))
+					finding(fmt::format("the {} view's {} bucket words past face {}'s {}", traits.name, words, f, units(view->bucketCounts[f])));
+		}
+		// The main segments: their ranges within the sequences, the Z-prepass buckets' table within phase 1's range and their count
+		// words within the counts, the terrain, forward and refraction ranges within phase 2's.
+		if (const auto& main = inputs.main) {
+			for (const auto& frame : a_made.made.main) {
+				if (!frame)
+					continue;
+				++c.shapes;
+				if (Draws::SequenceSlots(frame->sequenceDraws, frame->sequenceDecals) * kSequence > bytes(main->sequences))
+					finding(fmt::format("the main ranges of {} draws and {} decals past the sequences' {} bytes", frame->sequenceDraws, frame->sequenceDecals, bytes(main->sequences)));
+				if (frame->zPlan) {
+					std::uint64_t end = 0;
+					for (const auto& call : frame->zPlan->calls)
+						end = std::max<std::uint64_t>(end, std::uint64_t(call.first) + call.capacity);
+					if (end > frame->sequenceDraws)
+						finding(fmt::format("the Z-prepass buckets' table reaches {} draws past the range's {}", end, frame->sequenceDraws));
+					for (const auto& counts : main->zBucketCounts)
+						if (frame->zPlan->Buckets() > units(counts))
+							finding(fmt::format("{} Z-prepass buckets past the count words' {}", frame->zPlan->Buckets(), units(counts)));
+				}
+				const std::uint64_t phaseTwo = Draws::ForwardStagingSlot(*frame) + 2ull * frame->forwardCapacity + frame->refractionCapacity;
+				if (phaseTwo > 2ull * frame->sequenceDraws)
+					finding(fmt::format("the terrain, forward and refraction ranges reach {} past phase 2's end {}", phaseTwo, 2ull * frame->sequenceDraws));
+			}
+		}
+		// The shadow and occlusion shapes: each view's slot within the slots made, its classes' ranges within the slot's sequences, its
+		// buckets within the ranges and the slot's count words, its slot within the view blocks.
+		if (const auto& shadow = inputs.shadow) {
+			const auto& slots = inputs.shadowSlots;
+			for (const auto& kind : a_made.made.shadow)
+				for (const auto& frame : kind) {
+					if (!frame)
+						continue;
+					++c.shapes;
+					for (const auto& view : frame->views) {
+						if (!slots || view.slot >= slots->sequences.size() || view.slot >= slots->bucketCounts.size()) {
+							finding(fmt::format("a shadow view at slot {} past the slots made", view.slot));
+							continue;
+						}
+						const std::uint64_t range = std::uint64_t(kShadowClasses) * view.sequenceDraws;
+						if (range * kSequence > bytes(slots->sequences[view.slot]))
+							finding(fmt::format("shadow slot {}'s {} draws a class past its sequences' {} bytes", view.slot, view.sequenceDraws, bytes(slots->sequences[view.slot])));
+						if (view.capacity > view.sequenceDraws)
+							finding(fmt::format("shadow slot {}'s max count {} past its {} draws", view.slot, view.capacity, view.sequenceDraws));
+						std::uint64_t end = 0;
+						for (const auto& bucket : view.buckets)
+							end = std::max<std::uint64_t>(end, std::uint64_t(bucket.first) + bucket.capacity);
+						if (end > range)
+							finding(fmt::format("shadow slot {}'s buckets reach {} past its {} sequences", view.slot, end, range));
+						if (view.buckets.size() > units(slots->bucketCounts[view.slot]))
+							finding(fmt::format("shadow slot {}'s {} buckets past its count words' {}", view.slot, view.buckets.size(), units(slots->bucketCounts[view.slot])));
+						if (view.slot >= units(shadow->viewBlocks.buffer))
+							finding(fmt::format("shadow slot {} past the view blocks' {} slots", view.slot, units(shadow->viewBlocks.buffer)));
+					}
+				}
+		}
+		// The index pool: a first index and a copy for every geometry slot of the tables.
+		if (const auto& scene = inputs.scene; scene && scene->pool) {
+			const auto& pool = *scene->pool;
+			if (units(pool.firsts) < a_made.geometries || units(pool.copies) < a_made.geometries)
+				finding(fmt::format("{} geometry slots past the index pool's {} first indices or {} copies", a_made.geometries, units(pool.firsts), units(pool.copies)));
+		}
+	}
+
+	void CheckNamedResolves()
+	{
+		const auto* draws = DrawsView::Find();
+		if (!draws)
+			return;
+		auto& c = commitChecks;
+		// The recordings of the adopted revision resolved every buffer they bind from its set: Find's misses, counted by the set.
+		const auto& named = draws->Adopted();
+		if (&named != c.set || named.Serial() != c.setSerial) {
+			c.set = &named;
+			c.setSerial = named.Serial();
+			c.setMisses = 0;
+		}
+		if (const std::uint64_t misses = named.Misses(); misses > c.setMisses) {
+			c.resolves += misses - c.setMisses;
+			if (c.logged++ < kLogged)
+				logger::warn("[DCLF] frame {}: the adopted set (set {}) was asked {} times for a buffer it does not name: a recording resolved an unnamed buffer <- NAMED PARITY",
+					Scene::FrameView::Get().GetFrame(), named.Serial(), misses - c.setMisses);
+			c.setMisses = misses;
+		}
+		if (++c.frames % 600 == 0) {
+			logger::info("[DCLF] named parity: {} commit targets checked ({} unnamed, {} not current), {} resolves of unnamed buffers{}", c.targets, c.unnamed, c.notCurrent,
+				c.resolves, c.unnamed || c.notCurrent || c.resolves ? " <- NAMED PARITY" : "");
+			const auto& s = sealedChecks;
+			const std::uint64_t differ = s.differ.load(std::memory_order_relaxed), unnamed = s.unnamed.load(std::memory_order_relaxed);
+			logger::info("[DCLF] named addresses: {} snapshots, {} payloads checked against their sealed sets: {} fields differ, {} of unnamed buffers{}",
+				s.snapshots.load(std::memory_order_relaxed), s.payloads.load(std::memory_order_relaxed), differ, unnamed, differ || unnamed ? " <- NAMED ADDRESS" : "");
+			const auto& shapes = shapeChecks;
+			const std::uint64_t findings = shapes.findings.load(std::memory_order_relaxed);
+			logger::info("[DCLF] shape capacities: {} revisions, {} shapes checked against their sets' buffers: {} findings{}", shapes.revisions.load(std::memory_order_relaxed),
+				shapes.shapes.load(std::memory_order_relaxed), findings, findings ? " <- SHAPE CAPACITY" : " <- OK");
+		}
+	}
+}
+#endif

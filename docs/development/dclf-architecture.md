@@ -55,6 +55,10 @@ Each epoch is submitted from the selected scene revision's recording (ORG's revi
 frame's values into the revision's shape (its latch, bucket plan and latched copies) and reads its payload from the
 frame's ring entry. Nothing is built, prepared or checked in the frame.
 
+An epoch's position in the frame matters to the work after it. Streamline's upscalers and frame generation must not run on the GPU
+directly behind an epoch: see `render-graph.md`, "Hazard: external Vulkan work directly after a graph epoch". Check that before adding
+an epoch or moving one late in the frame.
+
 A frame's set is **withdrawn** (the engine draws everything, and the next covered frame installs the whole set again) only
 when no publication applies: startup until the first one, a toggle until a publication committed under the new toggles
 is installed, a load, or `failed`. Every other frame draws the
@@ -106,12 +110,92 @@ engine writers ──events──▶ Coordinator tables ──change log──�
 
 ## Growable tables
 
-The GPU tables DCLF keeps are moving from compile-time capacities (`GpuLayouts.h`), whose overflow skipped or waited,
-to tables that grow, the way BasicRenderer's are (a slot allocator with a free list, a capacity that doubles, the old
-buffer released after the GPU is done with it). Each table holds one copy of its data, indexed by what the data depends
-on, and every row is a constant-buffer block (256-byte aligned), so a table can be read as an array of constant buffers.
+No GPU table DCLF keeps has a compile-time capacity: every one grows, and nothing past a capacity is dropped or falls back.
+Each table holds one copy of its data, indexed by what the data depends on, and every row is a constant-buffer block
+(256-byte aligned), so a table can be read as an array of constant buffers.
 
-**Shadow views (done).** A draw's binding is split three ways (`DrawPipelines.h`, `kShadowPushWords`):
+### The scene's set: requirement, batch, sealed set
+
+Every versioned buffer DCLF makes is a buffer of one set (`SceneBufferSet`, over ORGModuleServices'
+`GrowableBufferSet`), and so is every latch block. The scene snapshot is the only source of growable buffers: no
+recording binds a version its snapshot's set does not name.
+
+1.  **Requirement.** Each revision make (`MakeRevision`, on the snapshot builder) starts a build and requires what the
+    publication's tables, the frame's posted counts and the builds ahead need (`Revision/Requirements.cpp`):
+    `RequireSceneTables`, `RequireMain` (which updates the one `MainLayout`), `RequireIndexPool`, the shadow rows,
+    `RequireShadowSequences`, `ReserveShadowLatch`, each view's `RequireView`, the latched copies' blocks, and last
+    `RequireLatches`. Buffers indexed alike are one `UnitGroup`: one requirement fans out to every member, and the group
+    holds the least any member's named version holds.
+2.  **One batch, as state-graph work.** `Seal` names the newest ready versions when they meet every requirement. When one
+    does not, it posts one growth batch for every unmet buffer on DCLF's state graph (`SceneGraph::PostGrowth`, the
+    `BufferVersion` artifact: `PostVersionGrowth`), and the make waits; the batch's completion wakes the builder, which
+    makes the revision again.
+3.  **Sealed set.** A sealed set (`NamedVersions`) is immutable: every buffer's version, units, bytes, device address and
+    SRV index, and every latch block. While nothing changed, `Seal` returns the very same set (its `Serial` and fragment),
+    so every recording made against it stands; the shapes key (`RevisionShapesKey`) mixes that serial and the layouts.
+4.  **Adoption.** The frame adopts the snapshot it selects (`AdoptSnapshot`: `named->AdoptAll()` and the revision). Commits
+    and latch writes read the adopted set (`Impl::Adopted()`); builds ahead fill every address they embed from the sealed
+    set (`AddressesOf`). Nothing flows from the frame back to the producer.
+
+A requirement a set cannot meet is never sealed. A bound past the device's max sequence count or the sort's 2^20 ranks is a
+hard failure (`CheckSequenceLimits`). `CS_DCLF_TABLE_START=small` starts the tables, slots and latch layouts small, to
+exercise every growth.
+
+### Contents
+
+A new version holds what its registration says (`GrowableContents`):
+-   **Fresh:** nothing; its writers write it whole.
+-   **Zero:** zero-filled through the uploader before it turns ready (the fade states, the reported words, the tree wind).
+-   **Capture:** laid out from immutable state by the producer, with that state's contents stamp (the main material and
+    pipeline rows, from the rows the last commit posted).
+
+Every writer of a growable buffer keeps a `FilledVersion` or `FilledContents` for it. Before it writes, it compares the
+version it filled with the one the set names: on a mismatch it writes whole (or from the Capture stamp), then records it.
+No adoption callback resets anything. The index pool is one instance: its indices are laid out again, and its first
+indices sent whole, into any version the update did not fill (`IndexPool::indicesFilled`, `firstsFilled`).
+
+### Capacities
+
+Every capacity a shape or a commit uses is read from the named units, never from an owner's field: the shadow slots'
+sequences and bucket counts, the view blocks, the views' sequences, the index pool and the row tables. The views are
+planned from the one `MainLayout` (`PlanViewBuckets`), and the plan's draws are a requirement on the very entry the view's
+recording resolves, so a shape can never index past its buffer.
+
+The input buffers are required to hold every input the snapshot's payloads put there. After a make sealed, its draws are
+checked against the set (`InputsFit`): draws whose inputs the set does not hold make the revision again, requiring them
+(`producer.mainInputs`, `shadowInputs`), and the snapshot is posted with a set that holds them.
+
+The index pool's room is twice the geometry indices. A pool the frame found fragmented publishes that version's serial
+(`IndexPool::fragmentedAt`), and the next make requires a version newer than it (`RequireNewer`): laid out again at the same
+size.
+
+### Latch blocks
+
+Every latch block is the set's (`SceneBufferSet::RegisterLatch`, once): the main latch, the main segments' two
+latched-copies blocks, the shadow latch, zeros and latched-copies block, and each view's latch and zeros. The producer
+keeps only their layouts (`RevisionLatchLayouts`); the reserves grow them (`ReserveMainLatch`, `ReserveShadowLatch`,
+`RequireView`), and `RequireLatches` requires each block at its layout (`LatchLayoutKey`). Another layout is a new block,
+so a frame in flight never reads one laid out anew; a replaced block moves the set's serial. Shapes take the blocks from
+the sealed set (`NamedVersions::Latch`).
+
+### Frame transport
+
+The payload ring, the frame values' rings and the readback staging are frame transport, outside the set: no recording
+binds them, and the epochs are handed them by value through the latches. The rings grow with the same policy
+(`EnsureTransport`, `GrowthPolicy`), a replaced buffer retired off the render thread once the frames reading it completed;
+the readbacks' staging follows the event lists' named units (`AddSet`).
+
+### Observers
+
+With `CS_DCLF_PERSISTENT_PARITY`, observers check the set; the normal path is unaware of them:
+-   `CheckSnapshotAddresses`: every address and SRV index a snapshot's draws embed is the sealed set's;
+-   `CheckCommitTarget`: every commit target is named, and current, in the adopted set;
+-   `CheckNamedResolves`: no recording resolved a buffer its set does not name (`NamedVersions::Misses`);
+-   `CheckShapeCapacities`: every shape's ranges and counts lie within the named versions of the buffers it indexes.
+
+### Bindings
+
+**Shadow views.** A draw's binding is split three ways (`DrawPipelines.h`, `kShadowPushWords`):
 -   **per draw:** the draw's words name its material row (`ShadowMaterialRow`: the Utility vertex shader's
     `PerMaterial` block, `b1`, which the pushed address names directly, and the diffuse's index for `t0`);
 -   **per view:** pushed once per view: the view's `PerTechnique` (`b0`) and `VS_PerFrame` (`b12`) blocks, the zero
@@ -119,22 +203,15 @@ on, and every row is a constant-buffer block (256-byte aligned), so a table can 
     sampler, and the object and bone tables);
 -   **per material:** the rows, one table for every view (`ShadowResources::materialRows`, a `GrowableRows`).
 
-The table grows on the render thread before the shadow build is taken, to what the last build wanted plus a quarter
-(`IndirectDraws::Impl::ReserveShadowRows`), through `Buffer::ResizeBytes`: the graph resource stays the same, and the
-old backing goes through ORG's deletion queue. Every resize runs inside `MutateBackings` (`GrowableRows.h`), which keeps
-it apart from ORG's host thread while that thread prepares tickets (ORG's `persistent-epochs.md`, "Backing changes").
-A new backing holds nothing, so every row is sent again. A material
-past the capacity waits one frame and its casters stay the engine's meanwhile. `CS_DCLF_TABLE_START=small` starts the
-table at 4 rows, to exercise the growth.
+The rows table is required at what the last shadow build wanted plus a quarter. A material past the named capacity waits
+for that requirement (`ShadowPayload::rowsWanted`), and its casters stay the engine's meanwhile.
 
-**Draw outputs (done).** No sequence buffer has a fixed draw capacity: each is grown before its epoch to hold every draw
-the scene's tracked objects can produce (`SceneDrawBound`), through `Buffer::ResizeStructured`
-(`Impl::ReserveMainSequences`, `ReserveShadowSequences`). The main buffer's ranges (phase 1 and colour, phase 2, one per
-decal group) travel to `BuildDrawsCS` and `SortSequencesCS` in their constants (`BuildDrawsConstants::phaseTwoBase`,
-`decalBase`, `decalStride`). Each indirect draw's max count is its epoch's own draws, grown as a power of two so the
-recording settles. A bound past the device's max sequence count, or the sort's 2^20 ranks, is a hard failure.
+**Draw outputs.** Every sequence buffer is required to hold every draw the scene's tracked objects can produce
+(`SceneDrawBound`). The main buffer's ranges (phase 1 and colour, phase 2, one per decal group) travel to `BuildDrawsCS`
+and `SortSequencesCS` in their constants (`BuildDrawsConstants::phaseTwoBase`, `decalBase`, `decalStride`). Each indirect
+draw's max count is its epoch's own draws, grown as a power of two so the recording settles.
 
-**Main pass (done).** The same split, with a pipeline row as well (`DrawPipelines.h`, `kDrawPush*`):
+**Main pass.** The same split, with a pipeline row as well (`DrawPipelines.h`, `kDrawPush*`):
 -   **per draw:** six words of push data: the pipeline row's address (words 0-1), the material row's (2-3) and the object
     (4). `BuildDrawsCS` computes both addresses from the input's `y` (`RowsOf`: the pipeline slot in the high 12 bits, the
     material slot in the low 20) and the tables' bases in its constants;
@@ -147,71 +224,54 @@ recording settles. A bound past the device's max sequence count, or the sort's 2
     from t16, and the object and bone tables).
 
 The rows are kept across frames (`MainRows`, a `KeptArray` each): a row is written again only when its key changes, and
-the tables are sent what changed since the version they hold. Each row's header holds its blocks' offsets until the
-upload adds the row's own address (`EmitMainRows`), so a table that grows is simply sent again. Both tables
-(`Resources::materialRows`, `pipelineRows`) are `GrowableRows`, grown before each epoch to the scene's slot counts plus a
-quarter (`Impl::ReserveMainSequences`). Whether a (material, pipeline) pair can draw - a texture, sampler or constant
-block the pipeline reads that the row lacks - is checked per build, from what each row holds (`MainBuild::AssembleRecord`).
+the tables are sent what changed since the stamp the named version holds (`FilledContents`). Each row's header holds its
+blocks' offsets until the upload adds the row's own address (`EmitMainRows`). Both tables (`Resources::materialRows`,
+`pipelineRows`) are `GrowableRows`, required at the scene's slot counts plus a quarter (`RequireMain`). Whether a
+(material, pipeline) pair can draw - a texture, sampler or constant block the pipeline reads that the row lacks - is
+checked per build, from what each row holds (`MainBuild::AssembleRecord`).
 
 The DGC push-data token of a `Constant` argument is at most 16 bytes on NVIDIA; BasicRHI splits larger ones, so the
 six-word draw push is two tokens (BasicRHI `README.md`, and "Resolved: device loss in every DCLF draw pass" in
 `dclf-open-defects.md`).
 
-**Scene tables (done).** One set of object records (`t127`), bone rows (`t126`), geometry rows and face positions serves
+**Scene tables.** One set of object records (`t127`), bone rows (`t126`), geometry rows and face positions serves
 every epoch - the shadow views', Skylighting's, the Z-prepass's and the colour segment's (`SceneBuffers`, shared by
-`Resources` and `ShadowResources`). One store keeps each (`Impl::objectStore`, `boneStore`, `geometryStore`). Their builds
-run in frame order - the shadow build (kicked at `BeforeShadowMaps`, joined at `AfterShadowMaps`), then the Z-prepass's
-(kicked at `EarlyPrepass`), then the colour build's - and each kick drops a job still outstanding, so no two builds write a
-store at once. Each commit sends what changed since the version the buffers hold (`SceneBuffers::held`), which the commit
-before it wrote. Object slots are fixed from the scene phase on, so Skylighting's epoch, which draws the shadow build's
-inputs after the Z-prepass commit, reads the same objects' records.
+`Resources` and `ShadowResources`). One store keeps each (`Impl::objectStore`, `boneStore`, `geometryStore`). They are
+required at the objects, the geometry slots plus one row per face stream, the extras and the highest face region
+(`RequireSceneTables`). The per-object buffers - the visibility and frustum words, the reported verdicts - are one unit
+group with the records, so a segment or a mode never has more inputs than its buffers hold.
 
-Every scene table grows (`Impl::ReserveSceneTables`, on the render thread before any build's inputs are taken): to the
-objects, the geometry slots plus one row per face stream, every palette current and previous plus the extras, and the
-highest face region, doubling. A growth gives the buffer a new SRV slot or address (the old ones are retired once the GPU
-is done with them), resets its held version so the next commit sends it whole, and counts in `SceneBuffers::generation`,
-so a batch staged before it is not submitted after it. The per-object buffers - the visibility and frustum words, the
-draw inputs of both segments and every shadow mode, the feedback slots - follow the object capacity
-(`ReserveObjectBuffers`): a segment or a mode has at most one input per object, so no input share or loop reserve is
-needed. A build past a reserved capacity is a hard failure at its commit (`CheckSceneCapacity`), never data dropped.
+**Shadow view and key slots.** Skylighting's map draws through view slot 0 and the frame's shadow views through the
+slots after it. A slot is a sequence buffer, a count buffer and a row of the view blocks (`ShadowResources::viewBlocks`:
+the view's `b0` and `b12`). More slots are more buffers the passes declare, so the render thread makes them
+(`ShadowSlotsRequest`) and builds the graph with them; no revision is sealed before that build. The pipeline map rows
+hold every key slot the epoch can name. Either growth is a new shadow latch layout (`ShadowLatchLayout`), so a new
+block of the next set. A view is never left native for want of a slot.
 
-**Shadow view and key slots (done).** Skylighting's map draws through view slot 0 and the frame's shadow views through the
-slots after it, as many as the frame has (`Impl::ReserveShadowViews`, before the epoch). A slot is a sequence buffer, a
-count buffer and a row of the view blocks (`ShadowResources::viewBlocks`: the view's `b0` and `b12`, out of the constants
-arena, so the worker's staged arena does not depend on the view count). More slots are more buffers the passes declare,
-so the shadow extension is added again and the graph is built with them; the kick hands the worker the count buffers it
-zeroes, because slots are added while it runs. The pipeline map rows hold every key slot the epoch can name: the lookups'
-keys plus every key a used mode may add when the epoch body refreshes them. Either growth is a new latch block
-(`ShadowLatchLayout`), which the passes take from the published frame (`ShadowFrame::latch`), never from the resources,
-since async epochs prepare them on the host thread. A view is never left native for want of a slot.
-
-**The sun's plane sets and the view rasterizer states (done, 2026-09-29).** Nothing in the shadow path is capped any more:
+**The sun's plane sets and the view rasterizer states.** Nothing in the shadow path is capped:
 - **The sun's full-frustum processes** (the engine culls the scene once per `fullFrustumCullingProcessArray` entry before
-  the cascades, and a cascade only walks entries some process kept; 6 at the exterior save). They were copied into every
-  sun view's latch, at most 8; past 8 the entry rule went to the CPU and the kept shadow state was bypassed. Now they are
-  written once per frame slot into a region of the shadow latch block (`ShadowLatchLayout::SunEntryOffset`, a count and
-  112-byte `SunEntryProcess` records), which every sun view's latch names (`BuildDrawsLatch::sunEntryOffset`). The input
-  always carries its entry sphere, and the kept state is always used.
-- **The sun's cascades** for the colour pass's sun test. They were at most 4 (`SunAccumulation::kMaxCascades`, the
-  latch's `sunMasks/sunPlanes[4]`), and a fifth was silently dropped. The engine has no bound: the count is `iNumSplits`,
-  the shadow map array's slices (Ghidra: `ShadowSceneNode` constructor to `BSShadowDirectionalLight::SetShadowMapCount`,
-  a `BSTArray` resize). Now `SunAccumulation` keeps them in a vector, grown at the sun's `Accumulate` while `bitsReady` is
+  the cascades, and a cascade only walks entries some process kept; 6 at the exterior save) are written once per frame
+  slot into a region of the shadow latch block (`ShadowLatchLayout::SunEntryOffset`, a count and 112-byte
+  `SunEntryProcess` records), which every sun view's latch names (`BuildDrawsLatch::sunEntryOffset`). The input always
+  carries its entry sphere, and the kept state is always used.
+- **The sun's cascades** for the colour pass's sun test. The engine has no bound: the count is `iNumSplits`, the shadow
+  map array's slices (Ghidra: `ShadowSceneNode` constructor to `BSShadowDirectionalLight::SetShadowMapCount`, a
+  `BSTArray` resize). `SunAccumulation` keeps them in a vector, grown at the sun's `Accumulate` while `bitsReady` is
   clear, and the colour epoch writes them into a region after the main latch (`MainLatchLayout`, 208-byte
-  `SunAccumulation::GpuCascade` records), growing the block when it needs to (`ReserveMainLatch`; a `PassFrame` keeps
-  its own block).
-- **View rasterizer states.** A state id was 4 bits of the shadow key and a bit of 16-bit masks: the 16th distinct state
-  left its view native. Now the id is a field of `ShadowPipelineKey` (`viewState`, also in the pipeline recipe id), a
+  `SunAccumulation::GpuCascade` records), whose layout grows when it needs to (`ReserveMainLatch`: a new block of the next
+  set; a `PassFrame` keeps its own).
+- **View rasterizer states.** The id is a field of `ShadowPipelineKey` (`viewState`, also in the pipeline recipe id), a
   mode's states are sorted lists (`ModeRasterStates`: casters and volumetric-only), the lookups' map rows are a vector,
   and the latch's map rows are a grown dimension (`ShadowLatchLayout::rasterStates`).
 
-`BuildDrawsLatch` shrank from 2,048 to 256 bytes. `Impl::ReserveShadowLatch` grows view slots, key slots, state rows and
-processes before the epoch (the sky epoch reserves too, for a state first seen by its capture), and
-`CS_DCLF_TABLE_START=small` starts states and processes at 1 and the main latch at 1 cascade.
+`BuildDrawsLatch` is 256 bytes. The revision producer's `ReserveShadowLatch` grows view slots, key slots, state rows and
+processes to what the frame's epochs can name, and `CS_DCLF_TABLE_START=small` starts states and processes at 1 and the
+main latch at 1 cascade.
 
 Still native, by design rather than capacity: focus shadows (an actor's own shadow; DCLF has no caster set for them)
 and views whose rasterizer state no pipeline can express (wireframe, no depth clip).
 
-**Object rows (measured, 2026-09-29).** An object's row (`BindlessObject`, `DCLFObjectRecord`) is 256 bytes, padded from
+**Object rows (measured).** An object's row (`BindlessObject`, `DCLFObjectRecord`) is 256 bytes, padded from
 208 so the table stays viewable as an array of constant-buffer blocks. The shaders read it as the structured buffer at
 `t127`, indexed by the draw's object word. Reading it as a constant buffer instead (a per-draw push address, `b189`,
 written by `BuildDrawsCS`; 8 push words and a 100-byte `DrawSequence`) was built and A/B'd on the RTX 3090 Ti, with the
@@ -277,7 +337,9 @@ engine, `Scene/{Model,Ports,Coordinator,FrameView}` and `Scene/Channels.h` keep 
 parity check, probe and report.
 
 Inside `Scene/Coordinator/` and `Draws/IndirectDraws/`, `Internal.h` is shared by that folder's files only. The layouts the
-shaders read are in `Draws/IndirectDraws/Core/GpuLayouts.h`, and must match `BuildDrawsCS.hlsl` and `Lighting.hlsl`.
+shaders read are in `Draws/IndirectDraws/Core/GpuLayouts.h`, and must match `BuildDrawsCS.hlsl` and `Lighting.hlsl`. The
+scene's set of growable buffers is `Draws/IndirectDraws/Core/SceneBufferSet.{h,cpp}`, and what a revision requires of it is
+`Draws/IndirectDraws/Revision/Requirements.cpp`.
 
 Includes within a folder use bare names. Includes across folders are rooted at `src/`
 (`Features/DrawcallLimitFix/Scene/Coordinator/Coordinator.h`).

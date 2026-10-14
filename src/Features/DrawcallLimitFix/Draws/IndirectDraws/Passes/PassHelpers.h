@@ -55,10 +55,11 @@ namespace DCLF::Draws
 	std::shared_ptr<IndexPool> EnsureIndexPool(SceneBuffers& a_scene, rhi::Device a_device, bool a_small);
 
 	/**
-	 * @brief Brings the index pool up to the tables (ShadowEpochs.cpp): whichever commit draws from it first in a frame gives the
-	 * ranges out and writes their copies' dispatch at a_poolOffset of its latch slot; a later commit finds nothing to copy.
+	 * @brief Brings the index pool up to the tables in the versions a_named (the adopted set) names (ShadowEpochs.cpp): whichever
+	 * commit draws from it first in a frame gives the ranges out and writes their copies' dispatch at a_poolOffset of its latch slot;
+	 * a later commit finds nothing to copy.
 	 */
-	void UpdateIndexPool(IndexPool& a_pool, const SceneTables& a_tables, std::uint32_t a_generation, const org::LatchBlock& a_latch,
+	void UpdateIndexPool(const NamedVersions& a_named, IndexPool& a_pool, const SceneTables& a_tables, std::uint32_t a_generation, const org::LatchBlock& a_latch,
 		std::uint32_t a_latchSlot, std::uint32_t a_poolOffset, CommitUploads& a_uploads);
 
 	// The graph extensions that add DCLF's passes (Passes.cpp).

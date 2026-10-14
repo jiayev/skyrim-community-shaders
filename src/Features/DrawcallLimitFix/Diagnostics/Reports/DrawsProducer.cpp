@@ -48,13 +48,10 @@ namespace DCLF
 			eventAdoptionMs.clear();
 			eventAdoptionFrames.clear();
 		}
-		// The guard's (DecideCoverage) and the growths' adoption to the first draws embedding their versions.
+		// The growths' adoption to the first draws embedding their versions (DecideCoverage).
 		std::sort(growthToDraws.begin(), growthToDraws.end());
-		text += fmt::format("[DCLF] snapshot draws: {} frames withdrawn for draws embedding another face positions version than the current one{}; growth adoption "
-							"to draws embedding it (frames): {} growths, p50 {}, max {}\n",
-			staleDraws, staleDraws ? " <- STALE DRAWS" : "", growthToDraws.size(), growthToDraws.empty() ? 0u : growthToDraws[growthToDraws.size() / 2],
-			growthToDraws.empty() ? 0u : growthToDraws.back());
-		staleDraws = 0;
+		text += fmt::format("[DCLF] snapshot draws: growth adoption to draws embedding it (frames): {} growths, p50 {}, max {}\n", growthToDraws.size(),
+			growthToDraws.empty() ? 0u : growthToDraws[growthToDraws.size() / 2], growthToDraws.empty() ? 0u : growthToDraws.back());
 		growthToDraws.clear();
 		snapshotsAdopted = snapshotFramesKept = 0;
 		snapshotsStale = {};
@@ -81,7 +78,7 @@ namespace DCLF
 			s.changed = s.requested = s.refused = 0;
 		}
 		const auto& assembled = rv.assembler.GetStats();
-		const auto growths = Growths::Get().Report();
+		const auto growths = SceneBufferSet::Get().Report();
 		std::string madeBy;
 		for (std::size_t g = 0; g < kKeyGroups; ++g)
 			if (const auto made = std::exchange(shapesMadeBy[g], 0))
@@ -94,9 +91,10 @@ namespace DCLF
 			rv.sealed, rv.versionSets, rv.assembler.Pending(), assembled.published, assembled.failed, assembled.superseded, assembled.abandoned, epochs,
 			rv.sealFailures ? fmt::format(" <- {} NOT SEALED", rv.sealFailures) : std::string());
 		rv.sealed = rv.versionSets = 0;
-		if (!growths.empty() || rv.growthWaits || rv.buildWaits)
-			text += fmt::format("{}[DCLF] {} makes sealed no revision for a pending growth, {} for a graph build asked of the frame\n", growths,
-				std::exchange(rv.growthWaits, 0), std::exchange(rv.buildWaits, 0));
+		if (!growths.empty() || rv.growthWaits || rv.buildWaits || rv.inputWaits)
+			text += fmt::format("[DCLF] scene buffers: {}; {} makes sealed no revision for a pending growth, {} for a graph build asked of the frame, {} revisions made "
+								"again for their draws' inputs\n",
+				growths.empty() ? std::string("no seal") : growths, std::exchange(rv.growthWaits, 0), std::exchange(rv.buildWaits, 0), std::exchange(rv.inputWaits, 0));
 		if (auto& bound = producer.drawBound; bound.updates) {
 			auto& parity = Diagnostics::DrawsState::Get().kept.drawBound;
 			text += fmt::format("[DCLF] scene draw bound: {} updates, {:.1f} slots changed an update, {} draws over {} slots, {} resyncs; parity {} checked, {} differ{}\n",
@@ -142,34 +140,13 @@ namespace DCLF
 		return text;
 	}
 
-	std::string Growths::Report()
-	{
-		const auto outstanding = std::count_if(entries.begin(), entries.end(), [](const auto& a_entry) { return !a_entry->adoptedSeen; });
-		const std::uint64_t adoptedCount = adopted.exchange(0, std::memory_order_relaxed);
-		if (!requested && !adoptedCount && !failed && !outstanding && atOnce.empty())
-			return {};
-		auto text = fmt::format("[DCLF] growths as graph work: {} requested, {} adopted, {} failed, {} outstanding", requested, adoptedCount, failed, outstanding);
-		if (!atOnce.empty()) {
-			text += "; adopted at once:";
-			for (const auto& [name, count] : atOnce)
-				text += fmt::format(" {} {},", name, count);
-			text.pop_back();
-		}
-		text += '\n';
-		requested = failed = 0;
-		atOnce.clear();
-		return text;
-	}
-
 	std::string IndirectDraws::Impl::StoresReport()
 	{
 		// The snapshot builder's (its pass, with ProducerReport): the stores RunAhead writes, read and reset here alone - the render thread's
-		// report never touches them. The tables' capacities as the producer knows them (Growths::Held: never the capacity the frame's
-		// adoption writes), else their first backing's.
+		// report never touches them. The tables' capacities as the last sealed set names them (never the frame's adopted one).
 		std::string text;
-		const auto rowsOf = [](const GrowableRows& a_rows) {
-			const std::uint64_t held = a_rows.buffer && a_rows.stride ? Growths::Get().Held(a_rows.buffer) : 0;
-			return held ? static_cast<std::uint32_t>(held / a_rows.stride) : a_rows.capacity;
+		const auto rowsOf = [this](const GrowableRows& a_rows) {
+			return revisions.sealedVersions ? static_cast<std::uint32_t>(NamedUnits(*revisions.sealedVersions, a_rows.buffer)) : 0u;
 		};
 		const auto& mainState = producer.inputs.main;
 		const auto& shadowState = producer.inputs.shadow;
@@ -206,12 +183,9 @@ namespace DCLF
 			const auto* rowsTable = shadowState ? &shadowState->materialRows : nullptr;
 			text += fmt::format(
 				"[DCLF] persistent shadow state: {} builds, {:.1f} entries and {:.1f} material rows written a build, {} entries and {} material rows held "
-				"(table {} rows, grown {} times), {} resyncs; parity {} inputs checked, {} differ{}\n",
+				"(table {} rows), {} resyncs; parity {} inputs checked, {} differ{}\n",
 				k.builds, static_cast<double>(k.entriesWritten) / k.builds, static_cast<double>(k.rowsWritten) / k.builds, entries, k.rows.Size(),
-				rowsTable ? rowsOf(*rowsTable) : 0u, rowsTable ? rowsTable->growths : 0u, k.resyncs, kept.shadow.checks, kept.shadow.mismatches, kept.shadow.Verdict(true));
-			// Counted by its reserves (the producer's: ReserveShadowRows).
-			if (shadowState)
-				shadowState->materialRows.growths = 0;
+				rowsTable ? rowsOf(*rowsTable) : 0u, k.resyncs, kept.shadow.checks, kept.shadow.mismatches, kept.shadow.Verdict(true));
 			if (!kept.shadowMissingBy.empty()) {
 				std::string why;
 				for (const auto& [reason, count] : kept.shadowMissingBy)

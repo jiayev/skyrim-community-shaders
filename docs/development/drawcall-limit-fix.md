@@ -60,7 +60,7 @@ is under `src/Features/DrawcallLimitFix/`:
 | `Scene/FrameView/` | `Scene::FrameView`: the render thread's half: the installed publication, the publication log walked up to it, the frame's captures, tables, lookups and claims, and the requests it serves for the coordinator | render thread |
 | `Scene/Channels.h` | `Scene::Channels`: every message between the coordinator and the render thread (lock-free queues and slots); neither side reads the other's members | both |
 | `Draws/` | `FrameDriver` (the frame's DCLF work at each engine point), `IndirectDraws` (the public face of the draws), `IndirectDrawStats.h` | render thread |
-| `Draws/IndirectDraws/` | The draws' implementation behind the `Internal.h` umbrella and `Impl.h`: `Core/` (GPU layouts, growable rows, uploads, readbacks, the payload ring, frame slots, resources), `Builders/` (the kept stores and the main and shadow builds: pure functions from tables and lookups to payloads), `Revision/` (the epoch table, shapes, the revision's assembly, coverage, the snapshot builder), `Epochs/` (main, shadow, and the views: reflection and first person as one `ViewEpoch`), `Passes/` (the render graph passes), `Main/`, `Shadow/` | pool (builders, snapshot builder); render thread (adoption, commit, submit); GPU |
+| `Draws/IndirectDraws/` | The draws' implementation behind the `Internal.h` umbrella and `Impl.h`: `Core/` (GPU layouts, the scene's set of growable buffers `SceneBufferSet`, growable rows, uploads, readbacks, the payload ring, frame slots, resources), `Builders/` (the kept stores and the main and shadow builds: pure functions from tables and lookups to payloads), `Revision/` (the epoch table, shapes, the revision producer and its requirements of the set `Requirements.cpp`, the revision's assembly, coverage, the snapshot builder), `Epochs/` (main, shadow, and the views: reflection and first person as one `ViewEpoch`), `Passes/` (the render graph passes), `Main/`, `Shadow/` | pool (builders, snapshot builder); render thread (adoption, commit, submit); GPU |
 | `Draws/Gpu/` | `FrameValues` (placements, palettes, shading per frame, made on the pool), `FrameData`, `GpuResources`, `GpuTextures`, `BuildExecutor` | render thread, pool |
 | `Draws/Pipelines/` | `DrawPipelines` (+ `Rhi`), `ShaderPrograms`, `SpirvReflection`, `EngineStates` | render thread, compile workers |
 | `Runtime/` | The building blocks: `SceneScheduler` (the scene lane and the pool), `SceneExecutor`, `SceneGraph`, `EventQueue`, `LatestSlot`, `PublicationLog`, `Retirement`, `SlotTable`, `KeptState`, `EngineReleases`, `SceneWake`, `RenderThreadBudget`, `Switches` (the switch registry), `Toggles` (the menu's live toggles), `Hash.h` | any |
@@ -84,13 +84,17 @@ The shaders are in `features/Drawcall Limit Fix/Shaders/DrawcallLimitFix/`; the 
 2. The coordinator's pass (`Coordinator::RunSceneWork`) applies the events, classifies, walks, joins the accumulate phase's inputs,
    commits the set and, when anything changed, publishes (`PublishScene`): the tables, lookups and claims as a publication appended to the
    publication log (`Channels::publicationLog`), and the publication handed to the snapshot builder (`IndirectDraws::PostSnapshotWork`).
-3. The snapshot builder (`Revision/Snapshot.cpp`, on the pool) builds the publication's draws ahead (`Builders/`), makes and seals its
-   revision (`Revision/`), and posts the complete snapshot.
+3. The snapshot builder (`Revision/Snapshot.cpp`, on the pool) makes the publication's revision: it requires what the tables need of
+   the scene's set (`Revision/Requirements.cpp`) and seals it (`Core/SceneBufferSet`: a growth batch as state-graph work while one is
+   unmet), builds the draws ahead (`Builders/`) against that sealed set, and posts the complete snapshot. The sealed set is the only
+   source of growable buffers and latch blocks: no recording binds a version it does not name.
 4. The frame's start (`FrameDriver::BeginFrame`) adopts the newest complete snapshot whole (`IndirectDraws::AdoptSnapshot`,
    `FrameView::HandOverAtFrameStart`), installs its claims or withdraws the set, and kicks the frame values.
 5. The epochs (Z-prepass, colour, forward, shadow, occlusion, reflection, first person) commit the frame's values into the adopted
    revision's shapes and run its recordings; the engine is told not to draw what the claims cover (`PassCapture`, `SunAccumulation`,
-   `PrimaryCull`).
+   `PrimaryCull`). Before adding an epoch, or moving one late in the frame, read `render-graph.md`, "Hazard: external Vulkan work
+   directly after a graph epoch". An epoch that ends up as the last GPU work before the upscaler or frame generation corrupts their
+   output; the first-person colour epoch did this at the Sleeping Giant Inn.
 
 **The diagnostics contract.** The main path knows diagnostics only through three narrow calls, and never reads a parity switch itself:
 - `Diagnostics::Observe()` (`Observation.h`): the run's subject flags, read once from the switches (what a main-path site must keep or
@@ -2571,14 +2575,14 @@ off restores the old classification exactly: MTLand `technique`, the meshes `ter
     per-view list: membership is still the view mask, and the near test is per draw on the GPU.
 -   **Colour.** The colour segment appends each group's draws, outside the sort, to its own range of phase 2's (which the
     colour segment does not otherwise use), through its own count word (28, 29, zeroed by the colour commit). The ranges
-    are `MainSizing::terrainCapacity`, grown to a power of two past every draw the groups' slots can produce, and the shape
+    are `MainLayout::terrainCapacity`, grown to a power of two past every draw the groups' slots can produce, and the shape
     records them (`PassFrame::terrainCapacity`, compared as a capacity). The second pass draws them after the opaque decals
     and the layers and before the blended decals: terrain, then the no-blend meshes. t55 is named in the frame record (the
     colour commit resolves Terrain Blending's terrain depth view there, rather than whatever was bound at the capture).
 -   **Terrain Blending itself is unchanged** but for its distance constant: DCLF withholds its members' passes at
     registration (`PassCapture`), so its hooks never see them, and its replay draws only what is left native.
 -   **Sizing.** The depth twins add their capacity to the phase ranges and a word each to the bucket counts and tables
-    (`ReserveMainSequences` counts a twin per group 1 slot); the terrain ranges' sum is held within `sequenceDraws`.
+    (`RequireMain` counts a twin per group 1 slot); the terrain ranges' sum is held within `sequenceDraws`.
 
 **TruePBR's landscape layers.** A TRUE_PBR landscape permutation also samples each tile's displacement (t80-t85) and
 RMAOS (t86-t91), which TruePBR's `SetupMaterial` binds through its own `extendedRendererState`. They are material
@@ -2653,8 +2657,8 @@ attachments are masked off, as the engine has them unbound).
 -   **Pipelines** (`DrawPipelines.cpp`, `Build`): a forward key's colour variant takes the engine's blend for its modes on the first
     attachment, the others disabled with write mask 0, depth LESS_EQUAL when tested, written with `kZBufferWrite` (ALWAYS for a write
     without a test); its depth variant writes nothing (never drawn).
--   **The range** (`GpuLayouts.h`, `ReserveMainSequences`): after the terrain ranges in phase 2's, two halves of
-    `MainSizing::forwardCapacity` each (every draw the forward pipeline slots can produce, grown to a power of two; held within
+-   **The range** (`GpuLayouts.h`, `RequireMain`): after the terrain ranges in phase 2's, two halves of
+    `MainLayout::forwardCapacity` each (every draw the forward pipeline slots can produce, grown to a power of two; held within
     `sequenceDraws`): the staging half and the sorted half. `PassFrame::forwardCapacity` is the colour shape's.
 -   **BuildDrawsCS**: a forward input (colour phase only) is culled and its visibility word written as a decal's, then each draw is
     appended to the staging half through count word 32 with its view depth (the bound centre's clip w) in the unexecuted firstInstance
@@ -2774,7 +2778,7 @@ the begun flag would newly let the engine draw there, and it never draws group 6
     variants (falloff, clamp, no normals, vertex colours, two-sided). The shading row (`SampleShading`) holds the property's `+0x104`
     in `MaterialData.x`, used where the LOD fades do not apply, and the material's `refractionPower` in `MaterialData.w`. Neither
     is in `written`, so no engine Lighting constant is compared with them.
--   **The range** (`GpuLayouts.h`, `ReserveMainSequences`): after the forward range's two halves, `MainSizing::refractionCapacity`
+-   **The range** (`GpuLayouts.h`, `RequireMain`): after the forward range's two halves, `MainLayout::refractionCapacity`
     holds every draw the refraction slots can produce, grown to a power of two (`RefractionSlot`). Refraction slots no longer count
     toward the forward capacity. Count words 36-39 (`kCountRefractionWord`): the draws, then the inputs tested, in the frustum, and
     occluded or under a faded root. The colour commit zeroes them.
@@ -3205,7 +3209,7 @@ the engine still culls. It writes nothing into the engine (T7b2 does, at `Main::
     A root's word is keyed by its listing's generation (a new listing reports when in view); an object slot has no GPU
     generation, so its word is the slot's and the host resolves the occupant with the frame's tables. A change that does not
     fit leaves its word, so it is appended again next frame, and the count past the capacity grows the list
-    (`ReserveSceneTables`, "visibility events"). Nothing is dropped and nothing is capped. No camera (`lodAdjust` 0) or no
+    (`RequireSceneTables`, "visibility events"). Nothing is dropped and nothing is capped. No camera (`lodAdjust` 0) or no
     depth build: the words stand.
 -   **The readback** (`VisibilityReadback`, `VisibilityReadbackPass`, `Draws/IndirectDraws/Visibility.cpp`). The depth epoch is
     revision-driven (`persistent-epochs.md`), so its passes are recorded once per ring slot for each revision and the
@@ -4790,7 +4794,7 @@ property's threshold (`FUN_1414ab770`); `BSEffectShader::SetupGeometry` writes t
     the sorted half (new `CountOffset`/`Options`: the range's bucket count word); `ForwardPass` (`Draws/IndirectDraws/FirstPerson.cpp`) draws
     the sorted half through the main colour signature with an explicit preprocess, the first-person frame push data (VS/PS b12 its block) and
     depth range, on the main pass's attachments with `kPOST_ZPREPASS_COPY` as depth. The range holds every draw the forward slots can produce
-    (`MainSizing::forwardCapacity`); no cap. A forward slot's readiness (`FirstPersonSlotReady`) is its main readiness plus the depth formats
+    (`MainLayout::forwardCapacity`); no cap. A forward slot's readiness (`FirstPersonSlotReady`) is its main readiness plus the depth formats
     matching (`FirstPersonState::forwardCompatible`, logged once: 45 and 45 in every run).
 -   **First-person particles.** `ClassifyFrame` no longer keeps a first-person particle system the engine's. The render thread samples its row
     at `Kick` as any first-person member's; FrameValues' producer lists the item anyway (it reads no engine memory for it: no lease, never
@@ -6096,7 +6100,7 @@ knows goes into a buffer the commit uploads.
 -   **FadeState** reads the root count, scene frame, log base and write-all flag from its `FadeFrame` row, which the
     depth commit now uploads on every commit.
 -   **Both** dispatch every slot the buffers hold, and the shaders stop at the row's count. Their revisions are the
-    scene buffers' layout (`SceneBuffers::layout`, bumped by every growth, since a growth gives the buffers new views),
+    named versions' serials (`NamedEntry::serial`, moved by every growth, since a growth gives the buffers new views),
     plus the depth shape for FadeState.
 -   **The feedback copy** claims a free slot in its own preparation, on the host thread, and so does each ticket
     prepared again. Its revision is the segment and the layout.
@@ -8726,8 +8730,8 @@ the sun's full-frustum culling processes.
     -   what waited (a pipeline, or a diffuse texture) becoming ready. The waiting list is read again every build.
 -   **The frame's own list** is only the face shapes (their positions are the walk's).
 -   **Uploads.** Every entry and record carries the version it last changed at. A mode's input buffer and each view
-    slot's copy of the records receive what is newer than the version they hold (`ShadowResources::inputsUploaded`,
-    `recordsUploaded`): the four view slots' 115 records are no longer staged every frame.
+    slot's copy of the records receive what is newer than the version they hold, and a version they did not fill is
+    written whole (`FilledContents`): the four view slots' 115 records are no longer staged every frame.
 -   **Claims.** Each mode's claims are kept with the region, each geometry with the object that owns its claim: a
     geometry that moves between slots is claimed by its new slot before its old one's entry goes. The first version
     dropped such a claim, 2-5 geometries in Whiterun. A new set is published only when the claims or the faces
@@ -9201,7 +9205,7 @@ value of the step where it started fading.
     (`FadeWriteBack`).
 -   The job writes the batches in frame order. A root never takes an event older than the last one written to it,
     whatever order the recordings finish in.
--   The list grows to the largest count a readback saw past it (`wanted`, `ReserveSceneTables`). Each slot takes its
+-   The list grows to the largest count a readback saw past it (`wanted`, `RequireSceneTables`). Each slot takes its
     larger host buffer at its next recording, after reading the old one. The shader appends at most the fewest any slot
     holds (`capacity`), so no execution's events are lost to a growth.
 -   **The "fade write-back" job** (`IndirectDraws::KickFadeWriteBack`, at the end of the scene tables) writes them onto
@@ -9440,7 +9444,7 @@ FadeStateCS tested a root against its block. Two gaps followed:
     DCLF's own scratch: nothing is written to an engine object.
 -   **The programs on the GPU** (`Records.h`, `kPortal*`; `PortalPrograms.hlsli`): one buffer a frame with the view planes, a
     directory (unbound space, then each of the graph's rooms with its cull mode) and the records; it grows with the encoding
-    (`ReserveSceneTables`). Each fade root's program is its nearest room ancestor's (`PortalViews::ProgramOf`), sent when the
+    (`RequireSceneTables`). Each fade root's program is its nearest room ancestor's (`PortalViews::ProgramOf`), sent when the
     roots change or a room's children do (the attach and detach detours, `NoteStructure`).
 -   **FadeStateCS** tests a root through its program (`EngineInView` -> `PortalTest`). **BuildDraws' first phase** (the main
     camera) rejects a member whose root's program culls its bound, as the frustum does (an object with no fade root: the
@@ -10295,8 +10299,8 @@ the frame's output of two (`SceneBuffers::fadeStatesOut`, by the scene frame's p
 that read the state (the Z-prepass's phase 1, an owned root's members; the shadow views, a stood-in root's casters) read
 the other output, the frame before's: its descriptor depends on the frame, so it is the latch's
 (`BuildDrawsLatch::fadeStatesIndex`, at +240; `FadeStatesReadIndex`), and the builds no longer declare the states. Both
-already took a state only when its generation was the root's, so a zeroed output (a new backing, zeroed by whichever epoch
-commits first: `ZeroFrameAheadOutputs`) reads as the root's listed state. The verdicts lag a frame: an owned root's members
+already took a state only when its generation was the root's, so a zeroed output (a new version, zero-filled before it turns
+ready: `GrowableContents::Zero`) reads as the root's listed state. The verdicts lag a frame: an owned root's members
 follow its OnVisible of the frame before.
 
 **ORG: two reads of a buffer need no order.** The first measurement lost 0.09 ms in the depth segment (1.068 against 0.976):
@@ -10367,7 +10371,7 @@ pipeline slot (a bucket), so device-generated commands are left to the colour se
     (`input.y >> 20`). The slot is the draw's instance.
     -   Each phase has its own table in the main latch, and its own counts (`Resources::zBucketCounts[2]`). Phase 2's
         table follows phase 1's sequences (`BuildDrawsLatch::phaseTwoBucketTableOffset`, +244).
-    -   `ReserveMainSequences` sizes a bucket for every draw its slot's objects can produce (`SceneDrawBound`, per
+    -   `RequireMain` sizes a bucket for every draw its slot's objects can produce (`SceneDrawBound`, per
         pipeline). The capacity is sticky, at a power of two.
     -   The draws need no order, so the Z-prepass's sort is gone.
 -   **The index pool is the scene's.** The pool the shadow views built (`IndexPool`: each geometry's indices copied into

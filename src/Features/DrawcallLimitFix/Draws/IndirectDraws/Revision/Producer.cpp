@@ -5,14 +5,15 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws/Internal.h"
 #include "Features/DrawcallLimitFix/Scene/FrameView/FrameView.h"
+#	include "Features/DrawcallLimitFix/Diagnostics/Draws/Events.h"
 
 namespace DCLF
 {
 	namespace Draws
 	{
-		void PlanZBuckets(const MainSizing& a_resources, const Lookups& a_lookups, const SceneTables& a_tables, const IndirectState& a_indirect, ZBucketPlan& a_out)
+		void PlanZBuckets(const MainLayout& a_layout, const Lookups& a_lookups, const SceneTables& a_tables, const IndirectState& a_indirect, ZBucketPlan& a_out)
 		{
-			const auto slots = static_cast<std::uint32_t>(a_resources.zBucketCapacity.size());
+			const auto slots = static_cast<std::uint32_t>(a_layout.zBucketCapacity.size());
 			const auto& groups = a_indirect.zGroups;
 			const auto& keys = a_tables.pipelines;
 			a_out.map.assign(slots, kNoBucket);
@@ -20,7 +21,7 @@ namespace DCLF
 			// Per group, its bucket.
 			std::vector<std::uint32_t> groupBucket(a_indirect.zPipelines.size(), kNoBucket);
 			for (std::uint32_t p = 0; p < slots; ++p) {
-				if (!a_resources.zBucketCapacity[p] || p >= a_lookups.pipelines.size() || p >= keys.size())
+				if (!a_layout.zBucketCapacity[p] || p >= a_lookups.pipelines.size() || p >= keys.size())
 					continue;
 				const auto& entry = a_lookups.pipelines[p];
 				if (entry.setIndex == Lookups::kNone || !(entry.key == keys[p]) || entry.setIndex >= groups.size())
@@ -39,9 +40,9 @@ namespace DCLF
 					if (terrain)
 						a_out.calls.push_back({ bucket + 1, 0u, 0u, a_indirect.zPipelines[group], true });
 				}
-				a_out.calls[bucket].capacity += a_resources.zBucketCapacity[p];
+				a_out.calls[bucket].capacity += a_layout.zBucketCapacity[p];
 				if (terrain)
-					a_out.calls[bucket + 1].capacity += a_resources.zBucketCapacity[p];
+					a_out.calls[bucket + 1].capacity += a_layout.zBucketCapacity[p];
 				a_out.map[p] = terrain ? (bucket | kBucketTerrainPair) : bucket;
 			}
 			const std::uint32_t buckets = a_out.Buckets();
@@ -53,7 +54,7 @@ namespace DCLF
 				a_out.table[2 * b] = first;
 				a_out.table[2 * b + 1] = call.capacity;
 				// Phase 2's ranges are the same past the sequences' first draw range.
-				a_out.table[2 * (buckets + b)] = first + a_resources.sequenceDraws;
+				a_out.table[2 * (buckets + b)] = first + a_layout.sequenceDraws;
 				a_out.table[2 * (buckets + b) + 1] = call.capacity;
 				first += call.capacity;
 			}
@@ -117,27 +118,24 @@ namespace DCLF
 			return a_copies.empty() ? 0 : std::size_t(a_copies.back().latchOffset) + a_copies.back().bytes;
 		}
 
-		void ReserveLatchedBlock(std::shared_ptr<org::LatchBlock>& a_block, std::size_t a_bytes, std::uint32_t a_slots)
+		/** @brief Producer: a latched-copies block holding a_copies (none: nothing asked). */
+		void RequireLatchedBlock(GrowthBuild& a_build, LatchHandle a_latch, const std::vector<LatchedCopy>& a_copies)
 		{
-			if (!a_bytes || (a_block && a_block->Stride() >= a_bytes))
-				return;
-			// Frames in flight keep the old one (LatchedList::latch). Made off the host's world: the revision code's thread may make it.
-			a_block = org::LatchBlock::Create("cs.dclf.latched-copies", static_cast<std::uint32_t>(std::bit_ceil(std::max<std::size_t>(2 * a_bytes, 4096))), a_slots);
+			if (const std::size_t bytes = LatchedBytes(a_copies))
+				SceneBufferSet::Require(a_build, a_latch, static_cast<std::uint32_t>(bytes), 0);
 		}
 
-		// a_revision: a revision's (the rows' addresses it names: a ready growth's), else the commit's (the current versions').
-		MainShapeInputs MainShapeInputsOf(const Resources& a_resources, bool a_depthOnly, std::uint32_t a_cullMode, bool a_revision)
+		MainShapeInputs MainShapeInputsOf(const Resources& a_resources, const MainLayout& a_layout, const NamedVersions& a_named, bool a_depthOnly, std::uint32_t a_cullMode)
 		{
 			MainShapeInputs in;
 			in.depthOnly = a_depthOnly;
-			const MainSizing& sizing = a_revision ? Growths::Get().RevisionSizing<MainSizing>(a_resources) : a_resources;
-			in.sequenceDraws = sizing.sequenceDraws;
-			in.sequenceDecals = sizing.sequenceDecals;
-			in.terrainCapacity = sizing.terrainCapacity;
-			in.forwardCapacity = sizing.forwardCapacity;
-			in.refractionCapacity = sizing.refractionCapacity;
-			in.materialRows = a_revision ? a_resources.materialRows.RevisionAddress() : a_resources.materialRows.address;
-			in.pipelineRows = a_revision ? a_resources.pipelineRows.RevisionAddress() : a_resources.pipelineRows.address;
+			in.sequenceDraws = a_layout.sequenceDraws;
+			in.sequenceDecals = a_layout.sequenceDecals;
+			in.terrainCapacity = a_layout.terrainCapacity;
+			in.forwardCapacity = a_layout.forwardCapacity;
+			in.refractionCapacity = a_layout.refractionCapacity;
+			in.materialRows = a_named.Of(a_resources.materialRows.buffer).deviceAddress;
+			in.pipelineRows = a_named.Of(a_resources.pipelineRows.buffer).deviceAddress;
 			in.cullMode = a_cullMode;
 			return in;
 		}
@@ -149,10 +147,10 @@ namespace DCLF
 			frame->sequenceDecals = a_in.sequenceDecals;
 			frame->materialRows = a_in.materialRows;
 			frame->pipelineRows = a_in.pipelineRows;
-			// The max counts: the sequence buffer's ranges, which hold every draw the scene can produce (ReserveMainSequences). Not the
-			// counts of the tables the shape was made from: a publication a revision covers may hold newer tables (a decal group's
-			// first decal, more draws), and its commit would find the shape short. They change with the buffer's growth alone, which
-			// a revision adopts. The depth segment is given no decals (BuildDrawsCS).
+			// The max counts: the sequence buffer's ranges, which hold every draw the scene can produce (RequireMain). Not the counts of
+			// the tables the shape was made from: a publication a revision covers may hold newer tables (a decal group's first decal,
+			// more draws), and its commit would find the shape short. They change with the layout alone, whose buffers the revision's set
+			// holds. The depth segment is given no decals (BuildDrawsCS).
 			frame->drawCapacity = a_in.sequenceDraws;
 			for (std::uint32_t group = 0; group < kDecalGroups; ++group)
 				frame->decalCapacity[group] = a_in.depthOnly ? 0u : a_in.sequenceDecals;
@@ -186,24 +184,43 @@ namespace DCLF
 		if (!host)
 			return;
 		auto& latches = producer.latches;
+		auto& handles = producer.latchHandles;
 		const auto& inputs = producer.inputs;
+		// The blocks' handles in the scene's set, once: the seals make the blocks (off the host's world, on the producer's thread).
+		if (!handles) {
+			auto& buffers = SceneBufferSet::Get();
+			const std::uint32_t slots = host->FrameSlots();
+			// The latched copies' blocks grow with headroom past what a layout lists (a commit's frame blocks change size).
+			const auto latched = org::services::GrowthPolicy::Headroom(100, 4096);
+			handles.main = buffers.RegisterLatch("cs.dclf.latch", slots);
+			for (auto& block : handles.mainLatched)
+				block = buffers.RegisterLatch("cs.dclf.latched-copies", slots, latched);
+			handles.shadow = buffers.RegisterLatch("cs.dclf.shadow.latch", slots);
+			handles.shadowZeros = buffers.RegisterLatch("cs.dclf.shadow.zeros", 1);
+			handles.shadowLatched = buffers.RegisterLatch("cs.dclf.latched-copies", slots, latched);
+			for (const auto kind : { ViewKind::Reflection, ViewKind::FirstPerson }) {
+				const std::size_t v = ViewIndex(kind);
+				handles.views[v] = buffers.RegisterLatch(fmt::format("{}.latch", TraitsOf(kind).prefix), slots);
+				handles.viewZeros[v] = buffers.RegisterLatch(fmt::format("{}.zeros", TraitsOf(kind).prefix), 1);
+			}
+		}
 		const bool smallTables = SwitchValue(Switch::TableStart) == "small";
 		// The main latch at the first sizes Setup's resources had (it is no resource of theirs: one block for every main resources made).
-		if (!latches.main && inputs.main) {
-			latches.mainLayout = {};
-			latches.mainLayout.cascades = smallTables ? 1u : kInitialSunCascades;
-			latches.mainLayout.shadowVolumes = smallTables ? 1u : kInitialShadowVolumes;
-			latches.main = org::LatchBlock::Create("cs.dclf.latch", latches.mainLayout.Bytes(), host->FrameSlots());
+		if (!latches.mainLaidOut && inputs.main) {
+			latches.main = {};
+			latches.main.cascades = smallTables ? 1u : kInitialSunCascades;
+			latches.main.shadowVolumes = smallTables ? 1u : kInitialShadowVolumes;
+			latches.mainLaidOut = true;
 		}
 		// The shadow latch at the layout the shadow resources' first slots were made for (SetupShadow).
-		if (!latches.shadow && inputs.shadow) {
-			latches.shadowLayout = InitialShadowLatchLayout();
-			latches.shadow = org::LatchBlock::Create("cs.dclf.shadow.latch", latches.shadowLayout.Bytes(), host->FrameSlots());
+		if (!latches.shadowLaidOut && inputs.shadow) {
+			latches.shadow = InitialShadowLatchLayout();
+			latches.shadowLaidOut = true;
 		}
 		for (const auto kind : { ViewKind::Reflection, ViewKind::FirstPerson })
-			if (auto& view = latches.views[ViewIndex(kind)]; !view.latch && inputs.views[ViewIndex(kind)].resources) {
-				view.layout = ViewLatchLayout::Initial(TraitsOf(kind));
-				view.latch = org::LatchBlock::Create(fmt::format("{}.latch", TraitsOf(kind).prefix), view.layout.Bytes(), host->FrameSlots());
+			if (const std::size_t v = ViewIndex(kind); !latches.viewsLaidOut[v] && inputs.views[v].resources) {
+				latches.views[v] = ViewLatchLayout::Initial(TraitsOf(kind));
+				latches.viewsLaidOut[v] = true;
 			}
 	}
 
@@ -216,11 +233,9 @@ namespace DCLF
 		revisionInputsSlot.TakeInto(producer.inputs);
 		committedRowsSlot.TakeInto(producer.committedRows);
 		producer.frame = a_frame;
+		auto& buffers = SceneBufferSet::Get();
 		// The uploader a growth's fills go through, as posted.
-		Growths::Get().uploads = producer.inputs.uploads;
-		// What the frame adopted since the last make (its records, and the stamp): first, so nothing below names an adopted change as
-		// pending or reads an owner's sizing the frame wrote.
-		Growths::Get().Prune();
+		buffers.SetUploads(producer.inputs.uploads);
 		const auto& inputs = producer.inputs;
 		auto* host = RenderGraphRuntime::Get().Host();
 		if (!inputs.claims || !inputs.main || !inputs.main->scene || !host || !a_publication.tables)
@@ -236,27 +251,26 @@ namespace DCLF
 		auto& r = *inputs.main;
 		EnsureRevisionLatches();
 		auto& latches = producer.latches;
-		// The capacities for the tables as the publication holds them: a growth here is one the frame's epochs would make.
+		// What the set must hold for the tables as the publication holds them (Begin, the requirements, Seal): the shapes are made from
+		// a set that holds every one.
+		auto build = buffers.Begin();
 		if (inputs.scene)
-			ReserveSceneTables(*inputs.scene, tables);
-		ReserveMainSequences(r, tables, a_publication.tablesGeneration);
+			RequireSceneTables(build, *inputs.scene, tables);
+		RequireMain(build, r, tables, a_publication.tablesGeneration);
 		if (inputs.scene)
-			ReserveIndexPool(*inputs.scene, tables, a_publication.tablesGeneration);
-		// The shadow material rows the last shadow build wanted.
-		if (inputs.shadow)
-			ReserveShadowRows(*inputs.shadow, inputs.shadowRowsWanted);
+			RequireIndexPool(build, *inputs.scene, tables, a_publication.tablesGeneration);
+		// The shadow material rows the last shadow build wanted, and a quarter more, so the table grows ahead of the scene.
+		if (inputs.shadow && inputs.shadowRowsWanted)
+			buffers.Require(build, inputs.shadow->materialRows.buffer, std::uint64_t(inputs.shadowRowsWanted) + inputs.shadowRowsWanted / 4);
 		// The colour commit's sun cascades and local shadow light volumes, a shadow view each (the last Rebuild's candidates): the latch
 		// a revision names holds them from its make on, not from a colour commit's growth (which a frame without claims never runs).
 		{
 			const std::uint32_t views = inputs.shadowCandidates;
 			// And the Z-prepass's bucket map for every pipeline slot the tables have: a publication a revision made now covers holds no more
 			// (its commit is this make's or older), and a commit past the map draws nothing for the slots it lacks.
-			const auto& layout = latches.mainLayout;
+			const auto& layout = latches.main;
 			ReserveMainLatch(std::max(views, layout.cascades), std::max(views, layout.shadowVolumes), std::max(layout.buckets, request.pipelines));
 		}
-		// The growths the graph finished: what the revision made now names, its shapes' addresses included. One still pending
-		// keeps the revision from being sealed (AssembleRevision).
-		revisions.growthPending = Growths::Get().Settle();
 		const auto indirect = catalog ? GetIndirectState(*catalog, inputs.targetsGeneration) : IndirectState{};
 		// The heaps every recording binds: the graph's own, as built (posted at the build point).
 		const rhi::DescriptorHeapHandle resourceHeap = inputs.resourceHeap, samplerHeap = inputs.samplerHeap;
@@ -273,30 +287,23 @@ namespace DCLF
 					recent.resize(Impl::kRecentOcclusionLayouts);
 			}
 		}
-		// The shadow and reflection buffers for what the revisions' shapes name, reserved at every make (a growth asked for here is one
-		// a revision adopts).
+		// The shadow and view buffers for what the revisions' shapes name, required at every make.
 		const auto shadowState = inputs.shadow;
 		if (shadowState && shadowIndirect.valid) {
-			// The slots the layouts name hold every draw the scene can produce, as the epochs reserve them.
-			std::uint32_t slots = 0;
-			for (const auto& view : inputs.shadowPlacements)
-				slots = std::max(slots, view.slot + 1);
-			for (const auto& layouts : producer.recentOcclusionLayouts)
-				for (const auto& view : layouts)
-					slots = std::max(slots, view.slot + 1);
-			ReserveShadowSequences(*shadowState, tables, a_publication.tablesGeneration, slots, 0);
+			// The slots hold every draw the scene can produce.
+			RequireShadowSequences(build, tables, a_publication.tablesGeneration);
 			// The latch for what the frame's epochs can name (over every mode): its views, key slots, the states registered and the
 			// sun's processes, a view's each at most. The key slots of the publication's lookups (the scene lane resolved
 			// the slots of these tables' keys already; append-only per instance), and the keys its casters and occluders use.
 			const std::size_t slotKeys = std::max(lookups.shadowSlotKeys.size(), request.shadowSlotKeys);
 			const std::size_t keys = slotKeys + request.shadowKeys;
 			const auto views = static_cast<std::uint32_t>(inputs.shadowPlacements.size());
-			ReserveShadowLatch(*shadowState, views, static_cast<std::uint32_t>(keys), inputs.shadowRasterStates, std::max(views, latches.shadowLayout.sunProcesses));
+			ReserveShadowLatch(build, *shadowState, views, static_cast<std::uint32_t>(keys), inputs.shadowRasterStates, std::max(views, latches.shadow.sunProcesses));
 		}
-		// The views' forward pipelines (and the faces' tree LOD's), as the request's catalog has them for its tables, and their buffers for
-		// the main sizing's newest change, at the make it is asked for: the changes are adopted with the same revision (none is sealed
-		// while either is pending), so a commit's plan from the main sizing always fits them. Their maps for every pipeline slot the tables
-		// have, as the Z-prepass's (above).
+		// The views' forward pipelines (and the faces' tree LOD's), as the request's catalog has them for its tables, and each view's plan
+		// from the one main layout, its buffers required to hold that plan: the shape made below from the same layout and the set sealed
+		// with those requirements can never index past its buffers. Their maps for every pipeline slot the tables have, as the
+		// Z-prepass's (above).
 		TreeLodPipelines treeLodPipelines;
 		const bool treeLod = TreeLodPipelinesOf(catalog, inputs.targetsGeneration, treeLodPipelines);
 		std::array<bool, kViews> viewOn{};
@@ -314,12 +321,51 @@ namespace DCLF
 				                                                          rhi::PipelineHandle{};
 			if (!view.resources || (traits.depthPass && !viewOn[v]))
 				continue;
-			ViewPlan latest;
-			PlanViewBuckets(traits, Growths::Get().LatestSizing<MainSizing>(r), &lookups, indirect, viewRevisionPipelines[v], traits.forwardPart ? std::span<const std::uint8_t>(viewForwardSlots) : std::span<const std::uint8_t>{}, latest);
+			ViewPlan plan;
+			PlanViewBuckets(traits, producer.mainLayout, &lookups, indirect, viewRevisionPipelines[v], traits.forwardPart ? std::span<const std::uint8_t>(viewForwardSlots) : std::span<const std::uint8_t>{}, plan);
 			// The forward range's table entry and count word after the buckets'.
-			ReserveView(*view.resources, inputs.scene.get(), static_cast<std::uint32_t>(std::max<std::size_t>(latest.map.size(), request.pipelines)),
-				static_cast<std::uint32_t>(latest.buckets.size() + (latest.forwardCapacity ? 1 : 0)), latest.draws);
+			RequireView(build, *view.resources, static_cast<std::uint32_t>(std::max<std::size_t>(plan.map.size(), request.pipelines)),
+				static_cast<std::uint32_t>(plan.buckets.size() + (plan.forwardCapacity ? 1 : 0)), plan.draws);
 		}
+		// The main segments' Z plans and latched copies, and the shadow commit's, from what the shapes below are made of: the set holds
+		// their latched blocks, then every latch at its layout as the reserves left it.
+		std::array<ZBucketPlan, 2> zPlans;
+		std::array<std::vector<LatchedCopy>, 2> mainLatched;
+		for (const std::size_t shape : { kDepthShape, kColourShape }) {
+			if (!inputs.mainKnown[shape] || !indirect.valid)
+				continue;
+			const bool depthOnly = shape == kDepthShape;
+			if (depthOnly && r.pool)
+				PlanZBuckets(producer.mainLayout, lookups, tables, indirect, zPlans[shape]);
+			mainLatched[shape] = MainLatchedLayout(r, depthOnly, inputs.blockSizes[shape], static_cast<std::uint32_t>(zPlans[shape].calls.size()));
+			RequireLatchedBlock(build, producer.latchHandles.mainLatched[shape], mainLatched[shape]);
+		}
+		std::vector<LatchedCopy> shadowLatched;
+		if (shadowState && shadowIndirect.valid) {
+			shadowLatched = ShadowLatchedLayout(*shadowState);
+			RequireLatchedBlock(build, producer.latchHandles.shadowLatched, shadowLatched);
+		}
+		RequireLatches(build);
+		// The set: sealed once it holds every requirement; else a growth batch is in flight and the builder makes the revision again when
+		// it settles (it wakes the builder). The same set (its serial, its fragment) while nothing changed.
+		auto sealed = buffers.Seal(std::move(build));
+		if (!sealed) {
+			++revisions.growthWaits;
+			return;
+		}
+		const auto& named = *sealed.named;
+		const auto& handles = producer.latchHandles;
+		// The event lists' staging sets for the capacities the set names, before any shape of it.
+		if (const auto& s = inputs.scene) {
+			if (s->fadeEvents && s->fadeWriteBack)
+				s->fadeWriteBack->AddSet(static_cast<std::uint32_t>(named.Of(s->fadeEvents).units));
+			if (s->visibilityEvents && s->visibilityReadback)
+				s->visibilityReadback->AddSet(static_cast<std::uint32_t>(named.Of(s->visibilityEvents).units));
+		}
+		if (!revisions.layout || !(*revisions.layout == producer.mainLayout))
+			revisions.layout = std::make_shared<const MainLayout>(producer.mainLayout);
+		revisions.named = std::move(sealed);
+		const MainLayout& mainLayout = *revisions.layout;
 		// The shapes are made again only when what they are made from moved (RevisionShapesKey): otherwise the revision sealed at this
 		// make keeps the last ones.
 		if (producer.drawBound.shadowVersion != shadowBoundChecked) {
@@ -327,7 +373,7 @@ namespace DCLF
 			if (!ShadowShapesHold(ShadowBoundsOf(producer.drawBound, lookups)))
 				++shadowBoundOutgrown;
 		}
-		const auto key = RevisionShapesKey(indirect, shadowIndirect, lookups, request.pipelines, treeLod ? &treeLodPipelines : nullptr);
+		const auto key = RevisionShapesKey(named, indirect, shadowIndirect, lookups, request.pipelines, treeLod ? &treeLodPipelines : nullptr);
 		if (key == revisionShapesKey) {
 			++shapesKept;
 			AssembleRevision(frameNumber);
@@ -344,22 +390,18 @@ namespace DCLF
 			if (!inputs.mainKnown[shape] || !indirect.valid)
 				continue;
 			const bool depthOnly = shape == kDepthShape;
-			auto in = MainShapeInputsOf(r, depthOnly, inputs.toggles.cullMode, true);
-			in.latch = latches.main;
-			in.latchLayout = latches.mainLayout;
+			auto in = MainShapeInputsOf(r, mainLayout, named, depthOnly, inputs.toggles.cullMode);
+			in.latch = named.Latch(handles.main);
+			in.latchLayout = latches.main;
 			in.viewport = inputs.viewport[shape];
 			in.resourceHeap = resourceHeap;
 			in.samplerHeap = samplerHeap;
 			in.indirect = indirect;
-			ZBucketPlan plan;
-			if (depthOnly && r.pool)
-				PlanZBuckets(Growths::Get().RevisionSizing<MainSizing>(r), lookups, tables, indirect, plan);
-			in.zCalls = plan.calls;
-			in.zPlan = std::make_shared<const ZBucketPlan>(std::move(plan));
-			in.latched.copies = MainLatchedLayout(r, depthOnly, inputs.blockSizes[shape], static_cast<std::uint32_t>(in.zCalls.size()));
-			ReserveLatchedBlock(latches.mainLatched[shape], LatchedBytes(in.latched.copies), host->FrameSlots());
+			in.zCalls = zPlans[shape].calls;
+			in.zPlan = std::make_shared<const ZBucketPlan>(std::move(zPlans[shape]));
+			in.latched.copies = std::move(mainLatched[shape]);
 			if (!in.latched.copies.empty())
-				in.latched.latch = latches.mainLatched[shape];
+				in.latched.latch = named.Latch(handles.mainLatched[shape]);
 			mainShape = MakeMainShape(in);
 		}
 		// The shadow and occlusion epochs': a shape for the placements and for each occlusion layout drawn lately. The last make's
@@ -371,8 +413,23 @@ namespace DCLF
 		const std::size_t shadowSlotCount = inputs.shadowSlots ? inputs.shadowSlots->sequences.size() : 0;
 		if ((!inputs.shadowPlacements.empty() || !producer.recentOcclusionLayouts.empty()) && shadowState && shadowIndirect.valid) {
 			// Sized from the scene's casting bound alone (ShadowBounds), not a payload: the shapes move with the scene's objects, not
-			// with the frame's casters or publications.
+			// with the frame's casters or publications. Indexed by what the named versions of the slots' buffers hold, the least slot's.
 			const auto bounds = std::make_shared<const ShadowBounds>(ShadowBoundsOf(producer.drawBound, lookups));
+			ShadowCapacity capacity;
+			{
+				UnitGroup sequences, counts;
+				if (const auto& slotBuffers = inputs.shadowSlots) {
+					for (const auto& buffer : slotBuffers->sequences)
+						sequences.Add(buffer);
+					for (const auto& buffer : slotBuffers->bucketCounts)
+						counts.Add(buffer);
+				}
+				capacity.sequenceDraws = static_cast<std::uint32_t>(std::min<std::uint64_t>(sequences.Units(named), UINT32_MAX));
+				capacity.bucketCountWords = static_cast<std::uint32_t>(std::min<std::uint64_t>(counts.Units(named), UINT32_MAX));
+				capacity.viewSlots = static_cast<std::uint32_t>(std::min<std::uint64_t>(named.Of(shadowState->viewBlocks.buffer).units, UINT32_MAX));
+			}
+			producer.shadowBucketWords = capacity.bucketCountWords;
+			const std::uint64_t shadowRows = named.Of(shadowState->materialRows.buffer).deviceAddress, viewBlocks = named.Of(shadowState->viewBlocks.buffer).deviceAddress;
 			for (std::size_t kind = 0; kind < 2; ++kind) {
 				const bool occlusionKind = kind == 1;
 				// The layouts the epoch may draw: the shadow views' placements (all of them: DecideShadowCoverage) and the occlusion maps'
@@ -384,9 +441,8 @@ namespace DCLF
 					sources.push_back(inputs.shadowPlacements);
 				std::vector<std::vector<ShadowViewLayout>> seen;
 				for (auto& layouts : sources) {
-					const ShadowSizing& sizing = Growths::Get().RevisionSizing<ShadowSizing>(*shadowState);
 					if (std::find(seen.begin(), seen.end(), layouts) != seen.end() ||
-						std::any_of(layouts.begin(), layouts.end(), [&](const auto& a_view) { return a_view.slot >= shadowSlotCount || a_view.slot >= sizing.viewSlots; }))
+						std::any_of(layouts.begin(), layouts.end(), [&](const auto& a_view) { return a_view.slot >= shadowSlotCount || a_view.slot >= capacity.viewSlots; }))
 						continue;
 					ShadowShapeInputs in;
 					in.resourceHeap = resourceHeap;
@@ -396,67 +452,80 @@ namespace DCLF
 						in.rows.push_back(ShadowRowBuckets(producer.rowBuckets, layout.modeIndex, layout.rasterState, lookups, shadowIndirect));
 					in.views = layouts;
 					in.bounds = bounds.get();
-					in.sizing = &sizing;
-					in.materialRows = shadowState->materialRows.RevisionAddress();
-					in.viewBlocks = shadowState->viewBlocks.RevisionAddress();
-					in.latch = latches.shadow;
-					in.latchLayout = latches.shadowLayout;
-					in.zeros = latches.shadowZeros;
+					in.capacity = capacity;
+					in.materialRows = shadowRows;
+					in.viewBlocks = viewBlocks;
+					in.latch = named.Latch(handles.shadow);
+					in.latchLayout = latches.shadow;
+					in.zeros = named.Latch(handles.shadowZeros);
 					// The last shape made for the layout: its slots' capacities only grow.
 					for (const auto& candidate : previousShadow[kind])
 						if (candidate && LayoutOf(*candidate) == layouts)
 							in.previous = candidate;
 					if (!occlusionKind) {
-						in.latched.copies = ShadowLatchedLayout(*shadowState);
-						ReserveLatchedBlock(latches.shadowLatched, LatchedBytes(in.latched.copies), host->FrameSlots());
+						in.latched.copies = shadowLatched;
 						if (!in.latched.copies.empty())
-							in.latched.latch = latches.shadowLatched;
+							in.latched.latch = named.Latch(handles.shadowLatched);
 					}
 					made.shadow[kind].push_back(MakeShadowShape(*shadowState, in));
 					seen.push_back(std::move(layouts));
 				}
 			}
 		}
-		// The views', from their resources and the main sizing (the heaps the graph's); first person's render area is the colour commit's
-		// viewport. The faces' lists hold the scene's tree slots when the sizings the revision names agree.
+		// The views', from their resources and the main layout (the heaps the graph's); first person's render area is the colour commit's
+		// viewport. The faces' lists hold the scene's tree shape slots (one unit group: the least any of them holds).
+		std::uint32_t treeShapes = 0;
+		if (const auto& s = inputs.scene; s && s->treeLodCull) {
+			UnitGroup shapes;
+			shapes.Add(s->treeLodShapes).Add(s->treeLodInstances).Add(s->treeLodVisible);
+			for (const auto& view : inputs.views)
+				if (view.resources)
+					for (const auto& visible : view.resources->treeVisible)
+						shapes.Add(visible);
+			treeShapes = static_cast<std::uint32_t>(std::min<std::uint64_t>(shapes.Units(named), UINT32_MAX));
+		}
 		for (const auto kind : { ViewKind::Reflection, ViewKind::FirstPerson }) {
 			const std::size_t v = ViewIndex(kind);
 			const auto& traits = TraitsOf(kind);
 			const auto& view = inputs.views[v];
 			auto& shape = made.views[v];
 			shape = nullptr;
-			const auto& viewLatches = latches.views[v];
+			// The view's latch and zeros as the set names them, at the layout they were required at.
+			ViewLatches viewLatches;
+			if (latches.viewsLaidOut[v])
+				viewLatches = { named.Latch(handles.views[v]), named.Latch(handles.viewZeros[v]), latches.views[v] };
 			const bool ready = traits.depthPass ? viewOn[v] && inputs.mainKnown[kColourShape] && viewLatches.latch : inputs.claims && inputs.scene;
 			if (!view.resources || !indirect.valid || !ready)
 				continue;
 			ViewShapeInputs in;
-			PlanViewBuckets(traits, Growths::Get().RevisionSizing<MainSizing>(r), &lookups, indirect, viewRevisionPipelines[v], traits.forwardPart ? std::span<const std::uint8_t>(viewForwardSlots) : std::span<const std::uint8_t>{}, in.plan);
+			PlanViewBuckets(traits, mainLayout, &lookups, indirect, viewRevisionPipelines[v], traits.forwardPart ? std::span<const std::uint8_t>(viewForwardSlots) : std::span<const std::uint8_t>{}, in.plan);
 			in.resourceHeap = resourceHeap;
 			in.samplerHeap = samplerHeap;
 			in.indirect = indirect;
-			in.materialRows = r.materialRows.RevisionAddress();
-			in.pipelineRows = r.pipelineRows.RevisionAddress();
+			in.materialRows = named.Of(r.materialRows.buffer).deviceAddress;
+			in.pipelineRows = named.Of(r.pipelineRows.buffer).deviceAddress;
 			in.latches = &viewLatches;
 			in.frameConstantsAddress = r.frameConstantsAddress;
 			in.width = view.width;
 			in.height = view.height;
 			in.depthRange = view.depthRange;
-			in.sizing = &Growths::Get().RevisionSizing<ViewSizing>(*view.resources);
-			if (traits.trees && viewRevisionTree.valid() && treeLod && inputs.scene->treeLodCull &&
-				in.sizing->treeShapeCapacity == Growths::Get().RevisionSizing<SceneSizing>(*inputs.scene).treeLodShapeCapacity) {
+			// The range the named version holds: the set holds this plan's draws (RequireView), so the plan never reaches past it.
+			in.sequenceDraws = static_cast<std::uint32_t>(std::min<std::uint64_t>(named.Of(view.resources->sequences).units, UINT32_MAX));
+			if (traits.trees && viewRevisionTree.valid() && treeLod && treeShapes) {
 				in.tree = viewRevisionTree;
 				in.treeSignature = treeLodPipelines.drawSignature;
-				in.treeShapes = in.sizing->treeShapeCapacity;
+				in.treeShapes = treeShapes;
 			}
 			if (!traits.depthPass || ((!in.plan.buckets.empty() || in.plan.forwardCapacity) && viewLatches.zeros))
 				shape = MakeViewShape(*view.resources, in);
 		}
+		Diagnostics::Notify(Diagnostics::RevisionShapesMade{ named, mainLayout, made, inputs, tables.geometries.size() });
 		// The revision of these shapes: assembled, its changed epochs recorded for it.
 		AssembleRevision(frameNumber);
 	}
 
-	IndirectDraws::Impl::ShapesKey IndirectDraws::Impl::RevisionShapesKey(const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect, const Lookups& a_lookups,
-		std::size_t a_pipelines, const TreeLodPipelines* a_treeLod) const
+	IndirectDraws::Impl::ShapesKey IndirectDraws::Impl::RevisionShapesKey(const NamedVersions& a_named, const IndirectState& a_indirect, const ShadowIndirectState& a_shadowIndirect,
+		const Lookups& a_lookups, std::size_t a_pipelines, const TreeLodPipelines* a_treeLod) const
 	{
 		ShapesKey key;
 		key.fill(0xcbf29ce484222325ull);
@@ -477,15 +546,20 @@ namespace DCLF
 				mix(word);
 			}
 		};
-		// The revision's inputs (RevisionInputs) and latches (the producer's): what its shapes are made from besides the request.
+		// The revision's inputs (RevisionInputs) and latch layouts (the producer's): what its shapes are made from besides the request.
 		const auto& inputs = producer.inputs;
 		const auto& latches = producer.latches;
 		// The request's lookups (the publication's, which the shapes are made from).
 		const auto& lookups = a_lookups;
-		// What every shape names: the growths a revision adopts (sizings, rows' addresses), the pipeline sets, the heaps, the toggles.
-		group = kKeyGrowths;
-		mix(Growths::Get().stamp);
-		mix(VersionRegistry::Get().Published());
+		// What every shape names: the sealed set (its versions' addresses and capacities, and its latch blocks: a replaced block moves
+		// its serial; the same serial while nothing changed) and the main layout, the pipeline sets, the heaps, the toggles.
+		group = kKeyVersions;
+		mix(a_named.Serial());
+		if (const auto& layout = revisions.layout) {
+			mix(layout->zBucketsLayout);
+			raw(std::array<std::uint32_t, 6>{ layout->sequenceDraws, layout->sequenceDecals, layout->terrainCapacity[0], layout->terrainCapacity[1], layout->forwardCapacity,
+				layout->refractionCapacity });
+		}
 		group = kKeyPipelines;
 		ptr(a_indirect.version.get());
 		mix(a_indirect.valid);
@@ -502,28 +576,24 @@ namespace DCLF
 		mix(lookups.versionCounter);
 		mix(lookups.shadowGeneration);
 		mix(a_pipelines);  // the request's pipeline slots (the publication's tables, not the coordinator's)
-		// The main segments': their latch, latched blocks and targets, and what their commits captured (viewport, frame blocks).
+		// The main segments': their latch's layout, latched targets, and what their commits captured (viewport, frame blocks). The
+		// blocks are the set's (its serial).
 		group = kKeyMain;
 		const auto& r = *inputs.main;
 		ptr(&r);
-		ptr(latches.main.get());
-		raw(latches.mainLayout);
+		raw(latches.main);
 		ptr(r.latchedTargets.load(std::memory_order_acquire).get());
 		ptr(r.pool.get());
 		for (const std::size_t shape : { kDepthShape, kColourShape }) {
-			ptr(latches.mainLatched[shape].get());
 			mix(inputs.mainKnown[shape]);
 			raw(inputs.viewport[shape]);
 			raw(inputs.blockSizes[shape]);
 		}
-		// The shadow and occlusion epochs': the placements, the occlusion maps' layouts, the scene's casting bound, their latch.
+		// The shadow and occlusion epochs': the placements, the occlusion maps' layouts, the scene's casting bound, their latch's layout.
 		group = kKeyShadow;
 		if (const auto& s = inputs.shadow) {
 			ptr(s.get());
-			ptr(latches.shadow.get());
-			raw(latches.shadowLayout);
-			ptr(latches.shadowZeros.get());
-			ptr(latches.shadowLatched.get());
+			raw(latches.shadow);
 			ptr(s->latchedTargets.load(std::memory_order_acquire).get());
 			mix(inputs.shadowSlots ? inputs.shadowSlots->sequences.size() : 0);
 		}
@@ -536,7 +606,7 @@ namespace DCLF
 		}
 		group = kKeyBound;
 		mix(shadowBoundOutgrown);
-		// The views': their resources, latches, targets, render area and depth range, the slots' pipelines, first person's forward slots,
+		// The views': their resources, latch layouts, targets, render area and depth range, the slots' pipelines, first person's forward slots,
 		// the faces' tree LOD's (the request's catalog's).
 		for (const auto kind : { ViewKind::Reflection, ViewKind::FirstPerson }) {
 			const std::size_t v = ViewIndex(kind);
@@ -545,9 +615,8 @@ namespace DCLF
 			if (!view.resources)
 				continue;
 			ptr(view.resources.get());
-			ptr(latches.views[v].latch.get());
-			raw(latches.views[v].layout);
-			ptr(latches.views[v].zeros.get());
+			mix(latches.viewsLaidOut[v]);
+			raw(latches.views[v]);
 			raw(view.targets);
 			mix(view.width);
 			mix(view.height);
@@ -584,7 +653,7 @@ namespace DCLF
 		const auto& shadowState = producer.inputs.shadow;
 		if (!shadowState)
 			return true;
-		const std::uint32_t words = Growths::Get().RevisionSizing<ShadowSizing>(*shadowState).bucketCountWords;
+		const std::uint32_t words = producer.shadowBucketWords;
 		std::vector<std::uint64_t> need;
 		for (std::size_t kind = 0; kind < 2; ++kind)
 			for (const auto& shape : producer.made.shadow[kind]) {

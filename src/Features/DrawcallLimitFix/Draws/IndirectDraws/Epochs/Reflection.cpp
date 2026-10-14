@@ -223,9 +223,9 @@ namespace DCLF
 		const auto main = impl->resources;
 		const auto& depthCommit = main ? main->committed[kDepthShape] : Resources::Committed{};
 		const auto& colourCommit = main ? main->committed[kColourShape] : Resources::Committed{};
-		if (!main || !main->inputsDepth || !impl->scene || depthCommit.frame != frameNumber || colourCommit.frame + 1 != frameNumber ||
-			depthCommit.sceneGeneration != impl->scene->generation || depthCommit.objectCapacity != main->objectCapacity ||
-			depthCommit.rowsGeneration != main->MainRowsGeneration() || colourCommit.rowsGeneration != main->MainRowsGeneration())
+		const std::uint64_t named = impl->Adopted().Serial();
+		if (!main || !main->inputsDepth || !impl->scene || depthCommit.frame != frameNumber || colourCommit.frame + 1 != frameNumber || depthCommit.named != named ||
+			colourCommit.named != named)
 			return skip(3);
 		const auto& ring = impl->ringFrame;
 		const MainPayload* listed = ring.valid && ring.draws ? ring.draws->payloads[kAsyncZPrepass].get() : nullptr;
@@ -253,10 +253,9 @@ namespace DCLF
 		auto& scene = *impl->scene;
 		const auto treeLod = scene.treeLodPipelines.load(std::memory_order_acquire);
 		// Tree LOD's row as the last depth commit uploaded it, its texture bound again for this execution, when the revision's faces have
-		// tree LOD, the faces' tree LOD is DCLF's and the scene's tables are the ones they were sized for.
+		// tree LOD (their lists hold the scene's shape slots: one unit group) and the faces' tree LOD is DCLF's.
 		TreeLod::DrawRow treeRow = scene.treeLodRow;
-		const bool trees = shape->tree.valid() && reflection.treePipeline.valid() && treeLod && scene.treeLodCull &&
-		                   reflection.resources->treeShapeCapacity == scene.treeLodShapeCapacity;
+		const bool trees = shape->tree.valid() && reflection.treePipeline.valid() && treeLod && scene.treeLodCull;
 		if (!(trees && reflection.treeOwned && treeRow.shapeSlots && TreeLodTextureBinding(treeRow, *owners)))
 			treeRow.shapeSlots = 0;
 		std::array<ViewFace, kReflectionFaces> views{};

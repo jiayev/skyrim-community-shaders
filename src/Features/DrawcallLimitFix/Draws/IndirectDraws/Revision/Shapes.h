@@ -18,20 +18,28 @@ namespace DCLF::Draws
 		std::shared_ptr<const ShadowFrame> shadow, occlusion;
 		// The views' (ViewKind; first person's two epochs record against its one shape).
 		std::array<std::shared_ptr<const ViewFrame>, kViews> views;
-		// The scene's sizing the revision names (Growths::RevisionSizing): what its passes size their dispatches and lists by, for
-		// the versions it binds - never the live one, which moves only when the revision's growths are adopted.
-		std::shared_ptr<const SceneSizing> scene;
 	};
 	inline const RevisionShapes* RevisionShapesOf(const org::PassPrepareContext& a_preparation)
 	{
 		return a_preparation.preparationData ? a_preparation.preparationData->Get<RevisionShapes>() : nullptr;
 	}
-	/** @brief The scene sizing a_preparation's buffers have: its revision's, else the current one (a commit's own preparation). */
-	inline const SceneSizing& SceneSizingOf(const org::PassPrepareContext& a_preparation, const SceneBuffers& a_scene)
+	/**
+	 * @brief The serial of the version of a_buffer a_preparation's revision names (0: none): what a pass's invocation revision
+	 * takes for each versioned buffer it binds.
+	 */
+	inline std::uint64_t NamedSerial(const org::PassPrepareContext& a_preparation, const Versioned& a_buffer)
 	{
-		if (const auto* shapes = RevisionShapesOf(a_preparation); shapes && shapes->scene)
-			return *shapes->scene;
-		return a_scene;
+		const auto* named = a_preparation.preparationData ? a_preparation.preparationData->Get<NamedVersions>() : nullptr;
+		return named && a_buffer && named->Names(*a_buffer) ? named->Of(*a_buffer).serial : 0;
+	}
+	/**
+	 * @brief The units of a_buffer's version a_preparation's revision names (0: none): what its passes size their dispatches and
+	 * lists by, for the versions it binds.
+	 */
+	inline std::uint64_t NamedUnitsOf(const org::PassPrepareContext& a_preparation, const Versioned& a_buffer)
+	{
+		const auto* named = a_preparation.preparationData ? a_preparation.preparationData->Get<NamedVersions>() : nullptr;
+		return named ? NamedUnits(*named, a_buffer) : 0;
 	}
 	/** @brief The shape a_preparation prepares the segment's passes for: its revision's, null without one or for a segment that does not draw. */
 	inline std::shared_ptr<const PassFrame> CurrentFrame(const org::PassPrepareContext& a_preparation, RenderGraphRuntime::Segment a_segment)

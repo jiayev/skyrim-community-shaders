@@ -203,5 +203,35 @@ namespace DCLF::Diagnostics
 		const SceneTables& tables;
 		std::uint32_t frame;
 	};
+
+	// ---- The named set (the snapshot is the only source of a versioned buffer's address and SRV index).
+
+	/** @brief A scene revision sealed (snapshot builder), with the draws its snapshot pairs with it, built from `context`. */
+	struct SnapshotSealed
+	{
+		const Draws::NamedVersions& named;
+		const DrawsView::Impl::DrawPublication& draws;
+		const DrawsView::Impl::AheadContext& context;
+	};
+
+	/** @brief A commit staged bytes into a versioned buffer (CommitUploads, render thread), through the adopted set `named`. */
+	struct CommitTargetStaged
+	{
+		const Draws::NamedVersions& named;
+		const Draws::Versioned& target;
+	};
+
+	/**
+	 * @brief The revision producer made shapes (MakeRevision, snapshot builder) from the sealed set `named`, the main layout and its
+	 * inputs, for tables of `geometries` geometry slots.
+	 */
+	struct RevisionShapesMade
+	{
+		const Draws::NamedVersions& named;
+		const Draws::MainLayout& layout;
+		const Draws::MadeShapes& made;
+		const Draws::RevisionInputs& inputs;
+		std::size_t geometries;
+	};
 }
 #endif

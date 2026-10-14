@@ -61,11 +61,13 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		// The recording depends on the tables' layout (growth changes views and dispatch) and the depth segment's shape.
+		// The recording depends on the tables' versions (a growth changes views and dispatch) and the depth segment's shape.
 		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
 			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
-			a_out.push_back(resources->scene->layout.load(std::memory_order_acquire));
+			const auto& scene = *resources->scene;
+			for (const auto* table : { &scene.treeLodShapes, &scene.treeLodInstances, &scene.treeLodVisible })
+				a_out.push_back(NamedSerial(a_preparation, *table));
 			a_out.push_back(frame ? frame->generation : 0);
 		}
 
@@ -74,8 +76,10 @@ namespace DCLF::Draws
 			TreeLodCullPrepared prepared{};
 			const auto& scene = *resources->scene;
 			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
-			const auto& sizing = SceneSizingOf(a_preparation, scene);
-			if (!scene.treeLodCull || !sizing.treeLodShapeCapacity || !frame || !frame->latch)
+			// The shape slots every table the cull reads holds (the revision's versions).
+			const std::uint64_t shapes = std::min({ NamedUnitsOf(a_preparation, scene.treeLodShapes), NamedUnitsOf(a_preparation, scene.treeLodInstances),
+				NamedUnitsOf(a_preparation, scene.treeLodVisible) });
+			if (!scene.treeLodCull || !shapes || !frame || !frame->latch)
 				return prepared;
 			prepared.program = scene.treeLodCull;
 			prepared.latch = frame->latch;
@@ -86,7 +90,7 @@ namespace DCLF::Draws
 			constants.visibleIndex = CaptureViewIndex(a_preparation, a_bindings.visible);
 			constants.latchIndex = frame->latch->SrvIndex();
 			constants.phase = phase;
-			const std::uint64_t records = std::uint64_t(sizing.treeLodShapeCapacity) * TreeLod::kMaxGroupInstances;
+			const std::uint64_t records = shapes * TreeLod::kMaxGroupInstances;
 			constants.retestOffset = static_cast<std::uint32_t>(sizeof(TreeLod::VisibleHeader) + records * sizeof(std::uint32_t));
 			if (resources->hzb && frame->cullMode >= 2 && frame->width && frame->height) {
 				constants.hzbIndex = CaptureViewIndex(a_preparation, a_bindings.hzb);
@@ -141,7 +145,7 @@ namespace DCLF::Draws
 
 		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			a_out.push_back(scene->layout.load(std::memory_order_acquire));
+			a_out.push_back(NamedSerial(a_preparation, scene->treeLodVisible));
 		}
 
 		TreeLodReadbackPrepared Prepare(const TreeLodReadbackBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
@@ -242,7 +246,7 @@ namespace DCLF::Draws
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(static_cast<std::uint64_t>(now));
 			a_out.push_back(phaseTwo ? 1 : 0);
-			a_out.push_back(resources->pool ? resources->pool->layout : 0);
+			a_out.push_back(resources->pool ? NamedSerial(a_preparation, resources->pool->indices) : 0);
 			// Tree LOD's pipelines (built late, rebuilt on a target change).
 			a_out.push_back(reinterpret_cast<std::uintptr_t>(resources->scene->treeLodPipelines.load(std::memory_order_acquire).get()));
 		}
@@ -709,7 +713,7 @@ namespace DCLF::Draws
 		{
 			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::MainOpaque);
 			a_out.push_back(frame ? frame->generation : 0);
-			a_out.push_back(resources->pool ? resources->pool->layout : 0);
+			a_out.push_back(resources->pool ? NamedSerial(a_preparation, resources->pool->indices) : 0);
 		}
 
 		RefractionPrepared Prepare(const RefractionBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
@@ -882,7 +886,7 @@ namespace DCLF::Draws
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(static_cast<std::uint64_t>(now));
 			a_out.push_back(fixedPhase);
-			a_out.push_back(resources->pool ? resources->pool->layout : 0);
+			a_out.push_back(resources->pool ? NamedSerial(a_preparation, resources->pool->firsts) : 0);
 		}
 
 		BuildDrawsFrame Prepare(const BuildDrawsBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
@@ -1089,10 +1093,11 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		// The recording depends on the buffers' layout; count and frame inputs are in the uploaded frame row.
+		// The recording depends on the buffers' versions; count and frame inputs are in the uploaded frame row.
 		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
-			a_out.push_back(scene->layout.load(std::memory_order_acquire));
+			for (const auto* buffer : { &scene->trees, &scene->treeClocks, &scene->treeWindRows[0], &scene->treeWindRows[1] })
+				a_out.push_back(NamedSerial(a_preparation, *buffer));
 		}
 
 		TreeWindFramePrepared Prepare(const TreeWindBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
@@ -1108,7 +1113,9 @@ namespace DCLF::Draws
 			for (std::uint32_t h = 0; h < 2; ++h)
 				constants.windIndices[h] = CaptureViewIndex(a_preparation, a_bindings.wind[h]);
 			// Full capacity (the nodeless entry, then the tree slots); the shader stops at the count.
-			prepared.groups = (SceneSizingOf(a_preparation, *scene).treeCapacity + 1 + kTreeWindGroup - 1) / kTreeWindGroup;
+			const std::uint64_t trees = std::min({ NamedUnitsOf(a_preparation, scene->trees), NamedUnitsOf(a_preparation, scene->treeClocks),
+				NamedUnitsOf(a_preparation, scene->treeWindRows[0]), NamedUnitsOf(a_preparation, scene->treeWindRows[1]) });
+			prepared.groups = static_cast<std::uint32_t>((trees + 1 + kTreeWindGroup - 1) / kTreeWindGroup);
 			return prepared;
 		}
 
@@ -1169,11 +1176,14 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		// The recording depends on the buffers' layout and the depth shape; counts are in the uploaded FadeFrame row.
+		// The recording depends on the buffers' versions and the depth shape; counts are in the uploaded FadeFrame row.
 		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
 			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
-			a_out.push_back(resources->scene->layout.load(std::memory_order_acquire));
+			const auto& scene = *resources->scene;
+			for (const auto* buffer : { &scene.fadeRoots, &scene.fadeStates, &scene.fadeStatesOut[0], &scene.fadeStatesOut[1], &scene.portalPrograms, &scene.fadeRootPrograms,
+					 &scene.fadeAnimated, &scene.fadeEvents, &scene.fadeReported })
+				a_out.push_back(NamedSerial(a_preparation, *buffer));
 			a_out.push_back(frame ? frame->generation : 0);
 		}
 
@@ -1182,8 +1192,13 @@ namespace DCLF::Draws
 			FadeStatePrepared prepared{};
 			const auto& scene = *resources->scene;
 			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
-			const auto& sizing = SceneSizingOf(a_preparation, scene);
-			if (!scene.fadeState || !sizing.fadeRootCapacity || !frame || !frame->latch)
+			// The root slots every buffer the pass reads or writes by root holds (the revision's versions: one unit group).
+			std::uint64_t roots = ~0ull;
+			for (const auto* buffer : { &scene.fadeRoots, &scene.fadeStates, &scene.fadeStatesOut[0], &scene.fadeStatesOut[1], &scene.fadeRootPrograms, &scene.fadeAnimated })
+				roots = std::min(roots, NamedUnitsOf(a_preparation, *buffer));
+			if (scene.fadeReported)
+				roots = std::min(roots, NamedUnitsOf(a_preparation, scene.fadeReported));
+			if (!scene.fadeState || !roots || !frame || !frame->latch)
 				return prepared;
 			prepared.program = scene.fadeState;
 			prepared.latch = frame->latch;
@@ -1198,14 +1213,15 @@ namespace DCLF::Draws
 			for (std::uint32_t h = 0; h < 2; ++h)
 				constants.outIndices[h] = CaptureViewIndex(a_preparation, a_bindings.published[h]);
 			// Only with a staging set that holds the whole bound list.
-			if (scene.fadeEvents && scene.fadeWriteBack && scene.fadeWriteBack->SetFor(sizing.fadeEventCapacity)) {
+			if (const auto events = static_cast<std::uint32_t>(NamedUnitsOf(a_preparation, scene.fadeEvents));
+				scene.fadeEvents && scene.fadeWriteBack && scene.fadeWriteBack->SetFor(events)) {
 				constants.eventsIndex = CaptureViewIndex(a_preparation, a_bindings.events);
 				constants.reportedIndex = CaptureViewIndex(a_preparation, a_bindings.reported);
-				constants.eventCapacity = sizing.fadeEventCapacity;
+				constants.eventCapacity = events;
 			}
 			constants.latchIndex = frame->latch->SrvIndex();
 			// Full capacity; the shader stops at the count.
-			prepared.groups = (sizing.fadeRootCapacity + kFadeStateGroup - 1) / kFadeStateGroup;
+			prepared.groups = static_cast<std::uint32_t>((roots + kFadeStateGroup - 1) / kFadeStateGroup);
 			return prepared;
 		}
 
@@ -1234,7 +1250,7 @@ namespace DCLF::Draws
 	struct EventReadbackPrepared
 	{
 		std::shared_ptr<HostEventRing> ring;              // holds the staging set
-		const HostEventRing::StagingSet* set = nullptr;  // the bound list's (the preparation's scene sizing)
+		const HostEventRing::StagingSet* set = nullptr;  // the bound list's (its version the preparation's revision names)
 	};
 
 	/**
@@ -1244,16 +1260,16 @@ namespace DCLF::Draws
 	class EventReadbackPass final : public org::TypedRenderGraphPass<EventReadbackPass, EventReadbackPrepared, EventReadbackBindings>
 	{
 	public:
-		EventReadbackPass(std::shared_ptr<SceneBuffers> a_scene, Versioned a_events, std::shared_ptr<HostEventRing> a_ring, std::uint32_t SceneSizing::* a_capacity) :
-			scene(std::move(a_scene)), events(std::move(a_events)), ring(std::move(a_ring)), capacity(a_capacity) {}
+		EventReadbackPass(std::shared_ptr<SceneBuffers> a_scene, Versioned a_events, std::shared_ptr<HostEventRing> a_ring) :
+			scene(std::move(a_scene)), events(std::move(a_events)), ring(std::move(a_ring)) {}
 
 		EventReadbackBindings Declare(org::PassBuilder& a_builder) { return { a_builder.CopySource(*events) }; }
 
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const { a_out.push_back(scene->layout.load(std::memory_order_acquire)); }
+		void InvocationRevision(const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const { a_out.push_back(NamedSerial(a_preparation, events)); }
 
 		EventReadbackPrepared Prepare(const EventReadbackBindings&, const org::PassPrepareContext& a_preparation) const
 		{
-			return { ring, ring->SetFor(SceneSizingOf(a_preparation, *scene).*capacity) };
+			return { ring, ring->SetFor(static_cast<std::uint32_t>(NamedUnitsOf(a_preparation, events))) };
 		}
 
 		static void Record(const EventReadbackBindings& a_bindings, const EventReadbackPrepared& a_prepared, org::PassRecordContext& a_recording)
@@ -1270,7 +1286,6 @@ namespace DCLF::Draws
 		std::shared_ptr<SceneBuffers> scene;
 		Versioned events;
 		std::shared_ptr<HostEventRing> ring;
-		std::uint32_t SceneSizing::* capacity;
 	};
 
 	struct VisibilityEventsBindings
@@ -1310,11 +1325,15 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
-		// The buffers' layout and the depth shape; frame, counts and camera are in the uploaded fade frame row.
+		// The buffers' versions and the depth shape; frame, counts and camera are in the uploaded fade frame row.
 		void InvocationRevision([[maybe_unused]] const org::PassPrepareContext& a_preparation, std::vector<std::uint64_t>& a_out) const
 		{
 			const auto frame = CurrentFrame(a_preparation, RenderGraphRuntime::Segment::ZPrepass);
-			a_out.push_back(resources->scene->layout.load(std::memory_order_acquire));
+			const auto& main = *resources;
+			const auto& scene = *main.scene;
+			for (const auto* buffer : { &scene.fadeRoots, &scene.fadeStates, &main.frustum, &scene.visibilityRootReported, &scene.visibilityObjectReported,
+					 &scene.visibilityEvents })
+				a_out.push_back(NamedSerial(a_preparation, *buffer));
 			a_out.push_back(frame ? frame->generation : 0);
 		}
 
@@ -1322,9 +1341,9 @@ namespace DCLF::Draws
 		{
 			VisibilityEventsPrepared prepared{};
 			const auto& scene = *resources->scene;
-			const auto& sizing = SceneSizingOf(a_preparation, scene);
+			const auto events = static_cast<std::uint32_t>(NamedUnitsOf(a_preparation, scene.visibilityEvents));
 			// Only with a staging set that holds the whole list, so the copy misses nothing.
-			if (!scene.visibilityEventsProgram || !scene.visibilityReadback || !sizing.visibilityEventCapacity || !scene.visibilityReadback->SetFor(sizing.visibilityEventCapacity))
+			if (!scene.visibilityEventsProgram || !scene.visibilityReadback || !events || !scene.visibilityReadback->SetFor(events))
 				return prepared;
 			prepared.program = scene.visibilityEventsProgram;
 			auto& constants = prepared.constants;
@@ -1335,10 +1354,14 @@ namespace DCLF::Draws
 			constants.rootReportedIndex = CaptureViewIndex(a_preparation, a_bindings.rootReported);
 			constants.objectReportedIndex = CaptureViewIndex(a_preparation, a_bindings.objectReported);
 			constants.eventsIndex = CaptureViewIndex(a_preparation, a_bindings.events);
-			constants.eventCapacity = sizing.visibilityEventCapacity;
-			// Every root slot, then every object slot while the segment builds (without depth phase 1 no stamp is this frame's).
-			constants.rootSlots = sizing.fadeRootCapacity;
-			constants.objectSlots = BuildsDraws(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass) ? sizing.objectCapacity : 0u;
+			constants.eventCapacity = events;
+			// Every root slot, then every object slot while the segment builds (without depth phase 1 no stamp is this frame's): what the
+			// revision's versions of the buffers read and written by slot hold.
+			constants.rootSlots = static_cast<std::uint32_t>(std::min({ NamedUnitsOf(a_preparation, scene.fadeRoots), NamedUnitsOf(a_preparation, scene.fadeStates),
+				NamedUnitsOf(a_preparation, scene.visibilityRootReported) }));
+			constants.objectSlots = BuildsDraws(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass) ?
+			                            static_cast<std::uint32_t>(std::min(NamedUnitsOf(a_preparation, resources->frustum), NamedUnitsOf(a_preparation, scene.visibilityObjectReported))) :
+			                            0u;
 			prepared.groups = (constants.rootSlots + constants.objectSlots + kVisibilityEventsGroup - 1) / kVisibilityEventsGroup;
 			return prepared;
 		}
@@ -1589,7 +1612,7 @@ namespace DCLF::Draws
 			const auto frame = CurrentShadowFrame(a_preparation, sky);
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(FadeRows() ? 1u : 0u);
-			a_out.push_back(resources->pool->layout);
+			a_out.push_back(NamedSerial(a_preparation, resources->pool->firsts));
 		}
 
 		ShadowBuildPrepared Prepare(const ShadowBuildBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
@@ -1694,7 +1717,8 @@ namespace DCLF::Draws
 			const auto latch = latchOf(a_preparation);
 			a_out.push_back(latch.generation);
 			a_out.push_back(latch.poolOffset);
-			a_out.push_back(pool->layout);
+			a_out.push_back(NamedSerial(a_preparation, pool->copies));
+			a_out.push_back(NamedSerial(a_preparation, pool->indices));
 		}
 
 		IndexPoolPrepared Prepare(const IndexPoolBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
@@ -1793,7 +1817,7 @@ namespace DCLF::Draws
 		{
 			const auto frame = CurrentShadowFrame(a_preparation, sky);
 			a_out.push_back(frame ? frame->generation : 0);
-			a_out.push_back(resources->pool->layout);
+			a_out.push_back(NamedSerial(a_preparation, resources->pool->indices));
 		}
 
 		ShadowPrepared Prepare(const ShadowPassBindings& a_bindings, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
@@ -2205,7 +2229,7 @@ namespace DCLF::Draws
 				AddPass(a_out, PassKind::Compute, "cs.dclf.z.fade-state", std::make_shared<FadeStatePass>(resources), depth, PassQueue::Compute);
 			// Its write-back events, to the host.
 			if (resources->scene->fadeState && resources->scene->fadeRoots && resources->scene->fadeEvents && resources->scene->fadeWriteBack)
-				AddPass(a_out, PassKind::Copy, "cs.dclf.z.fade-events", std::make_shared<EventReadbackPass>(resources->scene, resources->scene->fadeEvents, resources->scene->fadeWriteBack, &SceneSizing::fadeEventCapacity), depth, PassQueue::None);
+				AddPass(a_out, PassKind::Copy, "cs.dclf.z.fade-events", std::make_shared<EventReadbackPass>(resources->scene, resources->scene->fadeEvents, resources->scene->fadeWriteBack), depth, PassQueue::None);
 			AddPass(a_out, PassKind::Compute, "cs.dclf.z.build-draws", std::make_shared<BuildDrawsPass>(resources, depthSegment), depth);
 			// The pool copies the depth commit gave out (when the shadow epoch has not), before the draws read them.
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.index-pool",
@@ -2255,7 +2279,7 @@ namespace DCLF::Draws
 			const auto& sceneBuffers = *resources->scene;
 			if (sceneBuffers.visibilityEventsProgram && sceneBuffers.visibilityReadback && sceneBuffers.fadeState && sceneBuffers.fadeRoots && resources->frustum) {
 				AddPass(a_out, PassKind::Compute, "cs.dclf.z.visibility-events", std::make_shared<VisibilityEventsPass>(resources), depth);
-				AddPass(a_out, PassKind::Copy, "cs.dclf.z.visibility-readback", std::make_shared<EventReadbackPass>(resources->scene, resources->scene->visibilityEvents, resources->scene->visibilityReadback, &SceneSizing::visibilityEventCapacity), depth, PassQueue::None);
+				AddPass(a_out, PassKind::Copy, "cs.dclf.z.visibility-readback", std::make_shared<EventReadbackPass>(resources->scene, resources->scene->visibilityEvents, resources->scene->visibilityReadback), depth, PassQueue::None);
 			}
 			Diagnostics::Notify(Diagnostics::MainGraphPasses{ Diagnostics::MainGraphPasses::kAfterDepth, resources, depth, a_out });
 		}

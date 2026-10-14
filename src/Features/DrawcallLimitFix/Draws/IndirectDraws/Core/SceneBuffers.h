@@ -5,47 +5,42 @@
 
 namespace DCLF::Draws
 {
-	/**
-	 * @brief The scene tables' capacities (ReserveSceneTables), changed as one with their buffers' growth; commits and builds
-	 * stay within them (SceneFit).
-	 */
-	struct SceneSizing
+	/** @brief The face regions a face positions version holds (render thread): region -> snapshot generation, for the version filled. */
+	struct FaceUploads
 	{
-		std::uint32_t objectCapacity = 0, geometryRows = 0, extraRows = 0, faceVertices = 0;
-		std::uint32_t treeCapacity = 0, fadeRootCapacity = 0, fadeEventCapacity = 0;
-		std::uint32_t visibilityEventCapacity = 0;  // the visibility events' list (0: no visibility readback)
-		std::uint32_t portalWords = 0;  // the portal programs' words (PortalViews::Encoded)
-		std::uint32_t treeLodShapeCapacity = 0, treeLodMeshCapacity = 0;
-		bool operator==(const SceneSizing&) const = default;
+		org::services::FilledVersion version;
+		ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> regions;
 	};
 
-	struct SceneBuffers : SceneSizing
+	/**
+	 * @brief The scene's tables, each a buffer of the scene's set (SceneBufferSet): every capacity a commit, build or pass reads is
+	 * its named version's units, which the revision producer requires to hold the tables (RequireSceneTables).
+	 */
+	struct SceneBuffers
 	{
 		Versioned objects, extras, geometries, facePositions;
 		// The index pool every plain indexed draw binds; kept current by every commit that draws from it (UpdateIndexPool).
 		std::shared_ptr<IndexPool> pool;
-		// A growth gives new SRV indices and addresses: builds read them here after ReserveSceneTables.
-		std::uint32_t objectsIndex = 0, extrasIndex = 0;
-		std::uint64_t facePositionsAddress = 0;
-		// Counts the growths, so a batch staged before one is not submitted after it.
-		std::uint64_t generation = 0;
-		// The same count for pass invocation revisions (read on the graph host's thread, which prepares ahead of commits).
-		std::atomic<std::uint64_t> layout{ 0 };
-		std::uint32_t growths = 0;  // since the last report
-		ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> faceUploaded;  // region -> generation (render thread)
-		// The table versions the buffers hold, written by the uploading commit.
-		TablesHeld held;
+		FaceUploads faceUploaded;
+		// The table versions the buffer versions hold, written by the uploading commit (a version it did not fill holds none).
+		org::services::FilledContents<> objectsFilled, extrasFilled, geometriesFilled;
+		/** @brief The table versions the versions a_named names hold (0: none, sent whole). */
+		TablesHeld Held(const NamedVersions& a_named) const
+		{
+			return { objectsFilled.Since(a_named.Of(objects)).value_or(0), extrasFilled.Since(a_named.Of(extras)).value_or(0),
+				geometriesFilled.Since(a_named.Of(geometries)).value_or(0) };
+		}
 		// Tree wind (TreeWindCS): tree rows (UploadTrees) and GPU-only clocks, by tree slot.
 		Versioned trees, treeClocks;
 		std::shared_ptr<org::Buffer> treeFrameBuffer;  // TreeWindFrameRow
 		// Wind output (kTreeWindEntryRows per entry: nodeless trees, then tree slot s at s + 1), one buffer per frame parity: the
-		// Z-prepass writes this frame's, draws read the other. Zeroed per backing: a zero generation is never a listing's.
+		// Z-prepass writes this frame's, draws read the other. Every version is zero-filled (a zero generation is never a listing's).
 		std::array<Versioned, 2> treeWindRows;
-		std::array<std::uint32_t, 2> treeWindIndex{};
-		bool treeWindZeroed = false;
-		/** @brief The wind buffer a frame's draws read: the one the previous frame wrote. */
-		std::uint32_t TreeWindReadIndex(std::uint32_t a_frame) const { return treeWindIndex[(a_frame + 1) & 1]; }
-		std::uint64_t treesHeld = ~0ull;
+		/** @brief The SRV index of the wind buffer a frame's draws read (the one the previous frame wrote), as a_named names it. */
+		std::uint32_t TreeWindReadIndex(const NamedVersions& a_named, std::uint32_t a_frame) const { return a_named.Of(treeWindRows[(a_frame + 1) & 1]).srvIndex; }
+		org::services::FilledContents<> treesFilled;  // the tree rows' version (SceneTables::treesVersion)
+		/** @brief The tree rows' version the trees version a_named names holds (~0: none). */
+		std::uint64_t TreesHeld(const NamedVersions& a_named) const { return treesFilled.Since(a_named.Of(trees)).value_or(~0ull); }
 		std::uint32_t treeCount = 0;
 		std::uint32_t treeFrame = 0;  // the scene frame of treeInputs
 		TreeWindFrame treeInputs{};
@@ -58,44 +53,48 @@ namespace DCLF::Draws
 		// Fade roots (FadeStateCS): static rows by root slot, GPU state rows, the frame's inputs, and CS_DCLF_FADE_PARITY's log.
 		Versioned fadeRoots, fadeStates;
 		std::shared_ptr<org::Buffer> fadeFrameBuffer, fadeLog;
-		// The main camera's portal programs (PortalViews::Encoded) and a mirror of what was sent.
+		// The main camera's portal programs (PortalViews::Encoded) and a mirror of what was sent into the version filled.
 		Versioned portalPrograms;
+		org::services::FilledVersion portalProgramsFilled;
 		std::vector<std::uint32_t> portalProgramsSent;
 		Versioned fadeRootPrograms;  // per root slot: its program (PortalViews::ProgramOf)
 		Versioned fadeAnimated;    // per root slot: the scene frame whose animation batch updated it
+		org::services::FilledVersion fadeAnimatedFilled;
 		// CPU mirrors: only differing runs go up.
 		std::vector<std::uint32_t> fadeAnimatedMirror;
 		std::vector<std::uint32_t> fadeRootProgramsMirror;
-		std::uint64_t fadeRootProgramsHeld = ~0ull;  // the root and program versions it holds
-		// FadeStateCS's published states per frame parity; builds read the previous frame's. Zeroed per backing (builds then
-		// take the static row's state).
+		org::services::FilledContents<> fadeRootProgramsFilled;  // the root and program versions it holds
+		// FadeStateCS's published states per frame parity; builds read the previous frame's. Every version is zero-filled (builds
+		// then take the static row's state).
 		std::array<Versioned, 2> fadeStatesOut;
-		std::array<std::uint32_t, 2> fadeStatesOutIndex{};
-		std::uint32_t fadeRootsIndex = 0;  // fadeRoots' descriptor (the frame record's t119: kFadeRootsRegister)
-		bool fadeStatesOutZeroed = false;
-		/** @brief The published states a frame's builds read: the previous frame's. */
-		std::uint32_t FadeStatesReadIndex(std::uint32_t a_frame) const { return fadeStatesOutIndex[(a_frame + 1) & 1]; }
-		std::uint64_t fadeRootsHeld = ~0ull;
+		/** @brief The SRV index of the published states a frame's builds read (the previous frame's), as a_named names them. */
+		std::uint32_t FadeStatesReadIndex(const NamedVersions& a_named, std::uint32_t a_frame) const { return a_named.Of(fadeStatesOut[(a_frame + 1) & 1]).srvIndex; }
+		org::services::FilledContents<> fadeRootsFilled;  // the root rows' version (SceneTables::FadeRootsVersion)
+		/** @brief The root rows' version the fadeRoots version a_named names holds (~0: none). */
+		std::uint64_t FadeRootsHeld(const NamedVersions& a_named) const { return fadeRootsFilled.Since(a_named.Of(fadeRoots)).value_or(~0ull); }
 		std::uint32_t fadeRootCount = 0;
 		std::uint32_t fadeFrameNumber = 0;  // the scene frame of fadeFrame
 		FadeFrame fadeFrame{};
 		std::uint32_t fadeLogBase = ~0u;
 		std::shared_ptr<const ComputeProgram> fadeState;
-		// Fade write-back: event list (count zeroed by every depth commit), each root's last reported generation and milestone.
+		// Fade write-back: event list (count zeroed by every depth commit), each root's last reported generation and milestone
+		// (every version zero-filled: no root reported yet, as a zero generation is never a listing's).
 		Versioned fadeEvents, fadeReported;
-		bool fadeReportedZeroed = false;
 		std::shared_ptr<FadeWriteBack> fadeWriteBack;
 		// Visibility readback (null without its program): events (count zeroed by every depth commit), and each root's and
-		// object's last reported verdict (zeroing restarts the decoder).
+		// object's last reported verdict. Every version is zero-filled; the decoder restarts with the first batch of a version it
+		// has not followed (visibilityReportedFollowed: root, object).
 		Versioned visibilityEvents, visibilityRootReported, visibilityObjectReported;
-		bool visibilityReportedZeroed = false;
+		std::array<org::services::FilledVersion, 2> visibilityReportedFollowed;
 		std::shared_ptr<const ComputeProgram> visibilityEventsProgram;
 		std::shared_ptr<VisibilityReadback> visibilityReadback;
 		// Tree LOD (dclf-lod.md): shape rows, instance records (75 per shape slot), mesh rows, draw row and visible list, read by
-		// address in the vertex stage. TreeLodCullPass fills the list in the depth epoch. treeLodReady: the row names its slots.
+		// address in the vertex stage (the draw row's names the adopted set's versions). TreeLodCullPass fills the list in the depth
+		// epoch. treeLodReady: the row names its slots.
 		Versioned treeLodShapes, treeLodInstances, treeLodMeshes, treeLodVisible;
+		std::array<org::services::FilledVersion, 3> treeLodFilled;  // shapes, instances, meshes
 		std::shared_ptr<org::Buffer> treeLodDraw;
-		std::uint64_t treeLodInstancesAddress = 0, treeLodShapesAddress = 0, treeLodMeshesAddress = 0, treeLodDrawAddress = 0, treeLodVisibleAddress = 0;
+		std::uint64_t treeLodDrawAddress = 0;
 		std::shared_ptr<const ComputeProgram> treeLodCull;
 		// Published by the depth commit once built; read on the graph host's thread.
 		std::atomic<std::shared_ptr<const TreeLodPipelines>> treeLodPipelines;
@@ -139,23 +138,40 @@ namespace DCLF::Draws
 	}
 
 	/**
-	 * @brief The depth commit's tree LOD uploads. Retired mesh leases and bindings go to the execution (a_owners).
+	 * @brief The depth commit's tree LOD uploads, into the versions a_named (the adopted set) names: their capacities and the draw
+	 * row's addresses are theirs. Retired mesh leases and bindings go to the execution (a_owners).
 	 */
 	template <class Uploads>
-	void UploadTreeLod(TreeLod::Mirror& a_mirror, SceneBuffers& a_scene, Uploads& a_uploads, std::vector<std::shared_ptr<const void>>& a_owners, bool a_draw)
+	void UploadTreeLod(const NamedVersions& a_named, TreeLod::Mirror& a_mirror, SceneBuffers& a_scene, Uploads& a_uploads, std::vector<std::shared_ptr<const void>>& a_owners,
+		bool a_draw)
 	{
 		a_scene.treeLodReady.store(false, std::memory_order_release);
 		if (!a_scene.treeLodCull || !a_scene.treeLodShapes)
 			return;
 		for (auto& owner : a_mirror.TakeRetired())
 			a_owners.push_back(std::move(owner));
-		// Capacities are reserved before the epoch; a mirror past them keeps its changes and draws nothing this commit.
+		const auto &shapes = a_named.Of(a_scene.treeLodShapes), &records = a_named.Of(a_scene.treeLodInstances), &meshRows = a_named.Of(a_scene.treeLodMeshes),
+				   &visible = a_named.Of(a_scene.treeLodVisible);
+		// The shape slots every shape-slot table holds (the visible list: its header, then a phase 1 and a retest entry per record).
+		const std::uint64_t visibleRecords = visible.bytes / 4 > TreeLod::kVisibleHeaderWords ? (visible.bytes / 4 - TreeLod::kVisibleHeaderWords) / 2 : 0;
+		const auto shapeSlots = static_cast<std::uint32_t>(std::min({ shapes.bytes / sizeof(TreeLod::ShapeRow),
+			records.bytes / (TreeLod::kMaxGroupInstances * sizeof(TreeLod::Instance)), visibleRecords / TreeLod::kMaxGroupInstances }));
+		const auto meshSlots = static_cast<std::uint32_t>(meshRows.bytes / sizeof(TreeLod::MeshRow));
+		// Capacities are reserved before the epoch; a mirror past them keeps its changes and draws nothing this commit. Versions this
+		// commit did not fill (a new backing holds nothing) are sent every slot and mesh.
 		std::vector<std::uint32_t> slots, meshes;
-		const bool fits = a_mirror.ShapeSlots() <= a_scene.treeLodShapeCapacity && a_mirror.MeshSlots() <= a_scene.treeLodMeshCapacity;
-		if (!fits)
+		const bool fits = a_mirror.ShapeSlots() <= shapeSlots && a_mirror.MeshSlots() <= meshSlots;
+		if (!fits) {
 			a_draw = false;
-		else
+		} else {
+			auto& filled = a_scene.treeLodFilled;
+			if (!filled[0].Holds(shapes) || !filled[1].Holds(records) || !filled[2].Holds(meshRows))
+				a_mirror.MarkAllChanged();
 			a_mirror.TakeChanges(slots, meshes);
+			filled[0].Filled(shapes);
+			filled[1].Filled(records);
+			filled[2].Filled(meshRows);
+		}
 		for (const std::uint32_t slot : slots) {
 			const auto& row = a_mirror.SlotRow(slot);
 			a_uploads(a_scene.treeLodShapes, &row, sizeof(row), std::uint64_t(slot) * sizeof(TreeLod::ShapeRow));
@@ -171,15 +187,15 @@ namespace DCLF::Draws
 		++a_scene.treeLodUploads;
 		// The cull appends only while the row names shape slots, so both passes skip tree LOD together.
 		TreeLod::DrawRow row{};
-		row.instances = a_scene.treeLodInstancesAddress;
-		row.shapes = a_scene.treeLodShapesAddress;
-		row.meshes = a_scene.treeLodMeshesAddress;
-		row.visible = a_scene.treeLodVisibleAddress + TreeLod::kVisibleHeaderWords * sizeof(std::uint32_t);
+		row.instances = records.deviceAddress;
+		row.shapes = shapes.deviceAddress;
+		row.meshes = meshRows.deviceAddress;
+		row.visible = visible.deviceAddress + TreeLod::kVisibleHeaderWords * sizeof(std::uint32_t);
 		row.alphaRef = 128.0f / 255.0f;
 		row.maxIndices = std::max(a_mirror.MaxIndices(), 1u);
 		// The engine's tree LOD draws use the worldspace's atlas and alpha reference 128/255 (dclf-lod.md).
 		if (a_draw && a_mirror.MaxIndices() && TreeLodTextureBinding(row, a_owners))
-			row.shapeSlots = a_scene.treeLodShapeCapacity;
+			row.shapeSlots = shapeSlots;
 		a_uploads(a_scene.treeLodDraw, &row, sizeof(row), 0);
 		a_scene.treeLodRow = row;
 		TreeLod::VisibleHeader header{};
@@ -204,33 +220,42 @@ namespace DCLF::Draws
 	}
 
 	/**
-	 * @brief The depth commit's fade uploads: missing static rows, and once a frame the inputs and changed portal program words.
+	 * @brief The depth commit's fade uploads into the versions a_named (the adopted set) names: missing static rows, and once a frame
+	 * the inputs and changed portal program words.
 	 */
 	template <class Uploads>
-	void UploadFadeRoots(const SceneTables& a_tables, std::uint32_t a_frame, const FadeFrame& a_inputs, std::uint32_t a_logBase, SceneBuffers& a_scene,
-		Uploads& a_uploads, const std::vector<std::uint32_t>& a_programs)
+	void UploadFadeRoots(const NamedVersions& a_named, const SceneTables& a_tables, std::uint32_t a_frame, const FadeFrame& a_inputs, std::uint32_t a_logBase,
+		SceneBuffers& a_scene, Uploads& a_uploads, const std::vector<std::uint32_t>& a_programs)
 	{
 		if (!a_scene.fadeState || !a_scene.fadeRoots)
 			return;
 		const std::uint64_t version = a_tables.FadeRootsVersion();
-		if (a_scene.fadeRootsHeld != version && a_tables.fadeRoots.size() <= a_scene.fadeRootCapacity) {
+		const auto& roots = a_named.Of(a_scene.fadeRoots);
+		const std::uint64_t held = a_scene.fadeRootsFilled.Since(roots).value_or(~0ull);
+		if (held != version && a_tables.fadeRoots.size() <= roots.units) {
 			const auto* rows = a_tables.fadeRoots.data();
-			a_tables.fadeRootsJournal.Take().ForEachRun(a_scene.fadeRootsHeld, a_tables.fadeRoots.size(), [&](std::uint64_t a_first, std::uint64_t a_count) {
+			a_tables.fadeRootsJournal.Take().ForEachRun(held, a_tables.fadeRoots.size(), [&](std::uint64_t a_first, std::uint64_t a_count) {
 				a_uploads(a_scene.fadeRoots, rows + a_first, static_cast<std::size_t>(a_count * sizeof(FadeRootStatic)), a_first * sizeof(FadeRootStatic));
 			});
-			a_scene.fadeRootsHeld = version;
+			a_scene.fadeRootsFilled.Filled(roots, version);
 		}
-		a_scene.fadeRootCount = a_scene.fadeRootsHeld == version ? static_cast<std::uint32_t>(a_tables.fadeRoots.size()) : 0u;
+		a_scene.fadeRootCount = a_scene.FadeRootsHeld(a_named) == version ? static_cast<std::uint32_t>(a_tables.fadeRoots.size()) : 0u;
 		if (a_scene.fadeFrameNumber != a_frame) {
 			a_scene.fadeFrameNumber = a_frame;
 			a_scene.fadeFrame = a_inputs;
-			// Past the buffer's words (growth in flight), send an empty header: roots take the frustum alone that frame.
+			// Past the named version's words (an encoding newer than the revision's requirement), send an empty header: roots take
+			// the frustum alone that frame.
 			if (a_scene.portalPrograms) {
 				static const std::uint32_t kNone[kPortalHeaderBytes / 4]{};
-				const bool fits = a_programs.size() <= a_scene.portalWords;
+				const auto& programs = a_named.Of(a_scene.portalPrograms);
+				const bool fits = a_programs.size() <= programs.units;
 				const auto* words = fits ? a_programs.data() : kNone;
 				const std::size_t count = fits ? a_programs.size() : std::size(kNone);
 				auto& sent = a_scene.portalProgramsSent;
+				if (!a_scene.portalProgramsFilled.Holds(programs)) {
+					sent.clear();
+					a_scene.portalProgramsFilled.Filled(programs);
+				}
 				std::vector<std::uint32_t> differing;
 				for (std::uint32_t w = 0; w < count; ++w)
 					if (w >= sent.size() || sent[w] != words[w])
@@ -249,45 +274,23 @@ namespace DCLF::Draws
 		// The write-back's header is ArmFadeReadback's.
 	}
 
-	/** @brief Zeroes the frame-ahead outputs in a new backing; done by whichever epoch commits first after a growth. */
-	template <class Uploads>
-	void ZeroFrameAheadOutputs(SceneBuffers& a_scene, Uploads& a_uploads)
-	{
-		if (!a_scene.treeWindZeroed && a_scene.treeWindRows[0]) {
-			const std::vector<std::byte> zeros(std::size_t(a_scene.treeCapacity + 1) * kTreeWindEntryRows * 16);
-			for (const auto& rows : a_scene.treeWindRows)
-				a_uploads(rows, zeros.data(), zeros.size(), 0);
-			a_scene.treeWindZeroed = true;
-		}
-		if (!a_scene.fadeStatesOutZeroed && a_scene.fadeStatesOut[0]) {
-			const std::vector<std::byte> zeros(std::size_t(a_scene.fadeRootCapacity) * sizeof(FadeNodeState));
-			for (const auto& states : a_scene.fadeStatesOut)
-				a_uploads(states, zeros.data(), zeros.size(), 0);
-			a_scene.fadeStatesOutZeroed = true;
-		}
-		// No root reported yet: a zero generation is never a listing's.
-		if (!a_scene.fadeReportedZeroed && a_scene.fadeReported) {
-			const std::vector<std::byte> zeros(std::size_t(a_scene.fadeRootCapacity) * 2 * sizeof(std::uint32_t));
-			a_uploads(a_scene.fadeReported, zeros.data(), zeros.size(), 0);
-			a_scene.fadeReportedZeroed = true;
-		}
-	}
-
 	/**
-	 * @brief A commit's tree uploads. a_frameRow: also the frame row (only the Z-prepass's TreeWindPass reads it).
+	 * @brief A commit's tree uploads into the versions a_named (the adopted set) names. a_frameRow: also the frame row (only the
+	 * Z-prepass's TreeWindPass reads it).
 	 */
 	template <class Uploads>
-	void UploadTrees(const SceneTables& a_tables, std::uint32_t a_frame, SceneBuffers& a_scene, Uploads& a_uploads, bool a_frameRow)
+	void UploadTrees(const NamedVersions& a_named, const SceneTables& a_tables, std::uint32_t a_frame, SceneBuffers& a_scene, Uploads& a_uploads, bool a_frameRow)
 	{
 		if (!a_scene.treeWind || !a_scene.trees)
 			return;
-		if (a_scene.treesHeld != a_tables.treesVersion && a_tables.trees.size() <= a_scene.treeCapacity) {
+		const auto& trees = a_named.Of(a_scene.trees);
+		if (a_scene.treesFilled.Since(trees) != a_tables.treesVersion && a_tables.trees.size() <= trees.units) {
 			if (!a_tables.trees.empty())
 				a_uploads(a_scene.trees, a_tables.trees.data(), a_tables.trees.size() * sizeof(TreeStatic), 0);
-			a_scene.treesHeld = a_tables.treesVersion;
+			a_scene.treesFilled.Filled(trees, a_tables.treesVersion);
 		}
-		a_scene.treeCount = a_scene.treesHeld == a_tables.treesVersion ? static_cast<std::uint32_t>(a_tables.trees.size()) : 0u;
-		a_scene.frameTreesHeld = a_scene.treesHeld;
+		a_scene.frameTreesHeld = a_scene.TreesHeld(a_named);
+		a_scene.treeCount = a_scene.frameTreesHeld == a_tables.treesVersion ? static_cast<std::uint32_t>(a_tables.trees.size()) : 0u;
 		if (a_scene.treeFrame != a_frame) {
 			a_scene.previousTreeFrame = a_scene.treeFrame;
 			a_scene.previousTreeInputs = a_scene.treeInputs;

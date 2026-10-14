@@ -437,7 +437,7 @@ namespace DCLF
 			if (!armed.armed)
 				return;
 			armed.armed = false;
-			// Events past the list's end are appended again next frame; the list grows (ReserveSceneTables).
+			// Events past the list's end are appended again next frame; the list grows (RequireSceneTables).
 			const bool found = a_readback.Harvest(a_frameSlot, armed.frame, [&](const std::uint32_t* a_words, std::uint32_t a_count, std::uint32_t a_capacity) {
 				auto* batch = new Readback::Batch();
 				batch->frame = armed.frame;
@@ -556,14 +556,14 @@ namespace DCLF
 		// Reset the header for this execution's VisibilityEventsCS.
 		static constexpr std::uint32_t kZeroHeader[kVisibilityEventHeaderWords]{};
 		a_uploads(a_scene.visibilityEvents, kZeroHeader, sizeof(kZeroHeader), 0);
-		// A new backing of the reported words is zeroed, and the decoder restarts with this frame's batch.
+		// A reported-words version the decoder has not followed holds zeros (zero-filled at growth): it restarts with this frame's
+		// batch.
 		bool reset = false;
-		if (!a_scene.visibilityReportedZeroed) {
-			const std::vector<std::byte> roots(std::size_t(a_scene.fadeRootCapacity) * 2 * sizeof(std::uint32_t));
-			a_uploads(a_scene.visibilityRootReported, roots.data(), roots.size(), 0);
-			const std::vector<std::byte> objects(std::size_t(a_scene.objectCapacity) * sizeof(std::uint32_t));
-			a_uploads(a_scene.visibilityObjectReported, objects.data(), objects.size(), 0);
-			a_scene.visibilityReportedZeroed = true;
+		auto& followed = a_scene.visibilityReportedFollowed;
+		const auto &roots = Adopted().Of(a_scene.visibilityRootReported), &objects = Adopted().Of(a_scene.visibilityObjectReported);
+		if (!followed[0].Holds(roots) || !followed[1].Holds(objects)) {
+			followed[0].Filled(roots);
+			followed[1].Filled(objects);
 			reset = true;
 		}
 		auto& armed = readback.armed[frameSlot];

@@ -16,6 +16,8 @@ namespace DCLF::Diagnostics
 		using Impl = IndirectDraws::Impl;
 
 		static const Impl& Get() { return *IndirectDraws::Get().impl; }
+		/** @brief The implementation, or null before it is made (a hook point every frame, DCLF running or not). */
+		static const Impl* Find() { return IndirectDraws::Get().impl.get(); }
 	};
 }
 #endif

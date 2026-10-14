@@ -53,6 +53,10 @@ namespace DCLF::Diagnostics
 			Subscribe<ShadowBuilt>(&CheckKeptShadow);
 			Subscribe<ExclusionRebuilt>(&CheckExclusionReuse);
 			Subscribe<DrawsBuiltAhead>(&CheckViewMasks);
+			Subscribe<SnapshotSealed>(&CheckSnapshotAddresses);
+			Subscribe<CommitTargetStaged>(&CheckCommitTarget);
+			Subscribe<RevisionShapesMade>(&CheckShapeCapacities);
+			Subscribe<FramePoint::Present>([](const On<FramePoint::Present>&) { CheckNamedResolves(); });
 		}
 		if (o.builds)
 			Subscribe<IndexPoolUpdated>(&CheckIndexPool);

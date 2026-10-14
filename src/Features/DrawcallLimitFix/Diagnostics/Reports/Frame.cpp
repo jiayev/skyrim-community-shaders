@@ -261,8 +261,6 @@ void DCLF::Reports::Stats(std::uint32_t frame, FrameDriver::Counters& c)
 		if (draws.fadeTested)
 			logger::info("[DCLF] fade on the GPU (sampled frame): {} draws under a fade root in view, {} dropped by their root's fade; {} roots",
 				draws.fadeTested, draws.fadeHidden, draws.fadeRoots);
-		if (draws.drawsWaiting)
-			logger::info("[DCLF] {} draws so far waited for the sequences' growth (past the current ones, dropped by BuildDraws)", draws.drawsWaiting);
 		if (draws.shortBuffers)
 			logger::warn("[DCLF] {} draws of the last epoch reach past their vertex or index buffer slice", draws.shortBuffers);
 		// The scene work's registry and the render thread's (tree LOD's meshes), each its owner's; their counters read here.

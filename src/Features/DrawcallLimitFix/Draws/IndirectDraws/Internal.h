@@ -72,6 +72,10 @@
 #	include <Resources/Buffers/Buffer.h>
 #	include <Resources/Buffers/VersionedBuffer.h>
 #	include <ORGModuleServices/VersionedBufferGrowth.h>
+#	include <ORGModuleServices/GrowthPolicy.h>
+#	include <ORGModuleServices/GrowableBufferTypes.h>
+#	include <ORGModuleServices/GrowableBufferSet.h>
+#	include <ORGModuleServices/TransportBuffer.h>
 #	include <Resources/ExternalTextureResource.h>
 #	include <Resources/PixelBuffer.h>
 #	include <rhi_helpers.h>
@@ -90,6 +94,7 @@
 #	include "Features/DrawcallLimitFix/Runtime/LatestSlot.h"
 #	include "Core/GpuLayouts.h"
 #	include "Core/Versioned.h"
+#	include "Core/SceneBufferSet.h"
 #	include "Core/GrowableRows.h"
 
 #	include "Core/Helpers.h"

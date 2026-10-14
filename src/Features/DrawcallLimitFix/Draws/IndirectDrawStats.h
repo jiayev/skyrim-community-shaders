@@ -45,7 +45,6 @@ namespace DCLF
 		std::uint32_t commitEpochs = 0;
 		std::uint32_t notReady = 0;            // epochs skipped (mirrors, targets or pipelines not ready)
 		std::uint32_t shortBuffers = 0;        // draws whose vertex or index slice does not cover them
-		std::uint64_t drawsWaiting = 0;        // draws past the sequences that waited for their growth (Growths), since the start
 		// Draws skipped because a material's textures were not in the lookups yet (Lookups.h): resolved
 		// by this epoch's commit, they land next frame. Steady state 0.
 		std::uint32_t deferredTextures = 0;

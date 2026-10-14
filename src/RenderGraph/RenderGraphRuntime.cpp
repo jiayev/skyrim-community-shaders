@@ -1187,6 +1187,8 @@ bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<voi
 	ZoneScopedN("CS.ORG.ExecuteEpoch");
 	if (!IsActive())
 		return false;
+	// An epoch must not be the last GPU work before a third-party Vulkan consumer (Streamline's upscalers, frame generation): their
+	// evaluate then reads the wrong descriptors. docs/development/render-graph.md, "Hazard: external Vulkan work directly after a graph epoch".
 	// Read by passes while the frame prepares and records, all before ExecuteFrame returns.
 	segment = a_segment;
 	ZoneText(Impl::SegmentLabel(a_segment), std::strlen(Impl::SegmentLabel(a_segment)));

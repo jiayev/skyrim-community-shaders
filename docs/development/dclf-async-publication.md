@@ -568,9 +568,8 @@ draw the commits' shapes; the revision is made and recorded beside them, counts 
 - **Passes prepare for a revision.** Every DCLF pass reads its shape through its preparation (`CurrentFrame`,
   `CurrentShadowFrame`, `CurrentReflectionFrame`, and the index pool's latch, all with the `PassPrepareContext`). A
   preparation whose host data carries `RevisionShapes` gets the revision's shape; a live ticket gets the published one.
-- **Versions.** Every versioned buffer registers itself (`VersionRegistry`), and an adoption counts as a change. A
-  revision's `VersionSet` snapshots the current versions only when the count moved, and is the recordings'
-  `IResourceVersions`.
+- **Versions.** A revision's versions are a set the recordings resolve through (`IResourceVersions`); today it is the scene's
+  sealed set (`NamedVersions`, below: "Growth as graph work").
 - **Assembly** (`SceneRevision.cpp`, `AssembleRevision`, at the scene work's join). It uses an `org::async::RevisionAssembler`
   with eleven slots: the versions, a shape per epoch (Z-prepass, colour, shadow variants, occlusion variants, reflection),
   and a recording per epoch.
@@ -591,8 +590,7 @@ draw the commits' shapes; the revision is made and recorded beside them, counts 
 `CS_DCLF_REVISIONS` (on unless 0) lets each epoch's commit, its shape made, submit the selected revision's recording
 instead of its own ticket's preparation (`ChooseRevisionRecording`; ORG's `UseEpochRecording`). The revision covers the
 epoch when:
-- its version set is still current (`VersionSet::changes` against `VersionRegistry`), so every buffer its recording reads
-  is the one the commit wrote;
+- its version set is the one the frame adopted, so every buffer its recording reads is the one the commit wrote;
 - it has the epoch's recording;
 - its shape for the epoch, or one of its shadow variants, is the commit's shape (`SameShape`), so the latch blocks,
   layouts and addresses the commit wrote are the ones the recording reads.
@@ -637,7 +635,7 @@ decided from what the values must fit, at the start of the commit:
   power of two (the revision's payload sizes them), and a layout the revision has not seen when a retained view expires.
   No value was staged for lack of a copy; the image, members and draws are as before.
 - **Next (part 2).** Strict revision-driven epochs. The commit writes its values into the revision's shape instead of
-  making its own. Growths are adopted when their revision is selected. Structural stamps revoke a changed member's claim.
+  making its own. A growth's versions are adopted with the snapshot that names them. Structural stamps revoke a changed member's claim.
   What the revision does not cover is decided before the engine draws. Then the epochs' own preparations go.
 
 **Phase 6b, R3c (c), part 2b: shadow capacities from the scene, claims that follow the revision** (2026-10-05, r3cd1–r3cd4).
@@ -699,90 +697,45 @@ revision naming it is selected. The shared pieces:
 - In game (r3cg1): `[ORG] Queues: graphics 0:0, compute 2:0, upload 1:1`; the graph's copy queue stays 0:0; every epoch from the
   revision in steady play, no errors.
 
-**G2, first slice: the main rows' growth as graph work** (2026-10-06, r3cg4). The main material and pipeline rows
-(`GrowableRows`, `ReserveMainSequences`) grow on the scene graph in revision mode; every other growth still adopts at once.
-- **The producer**: `SceneArtifact::BufferVersion`, registered by `Published::SceneGraph` on the preparation pool.
-  `SceneGraph::PostGrowth` posts an exact request (its own address, fingerprinted) and an `AwaitExact(GpuReady)` on the
-  coordinator lane, both lock-free. The producer calls `GrowVersion`, whose new `contentsOf` lays the rows out for the made
-  version's own address (`CapturedMainRows`, the patch `EmitMainRows` applies). `TokenForTickets` marks its token
-  authoritative: the uploader notifies every ticket transition, so the graph needs no recovery polling.
-- **`Growths`** (render thread): the outstanding growths. `Settle` (at the join, before the shapes) takes in what the graph
-  finished. A ready growth's version is what a revision made then names: `VersionSet::Snapshot` overlays it, taking a
-  version-registry value of its own (`VersionRegistry::next`), and `GrowableRows::RevisionAddress` gives the shapes its address.
-  While one is pending, no revision is sealed (`growthPending`), so the commit's claims wait (`SetApplicable`).
-  `SelectRevision` adopts the growths the selected revision names (`AdoptNamed`): the version becomes current, the table's
-  capacity, address and generation move, and it holds the captured rows' version (`held`), so only rows changed since are sent.
-  When the selection makes exactly the set's versions current, the registry takes the set's value: no "versions moved" miss.
-- **Rows past the current version wait**: the build skips a pair past either table (`Skip::Capacity`), and the emission stops
-  at the tables' capacity without advancing `held`, until the adoption. The resident region's cached verdicts include the
-  capacities (`PipelineWitness`), so they resolve again after a growth. The commit's hard failure on rows past the tables is
-  gone.
-- In game (r3cg4, small tables): both growths requested, filled on the upload queue and adopted at selection (`growths as graph
-  work: 2 requested, 2 adopted`). No join had to wait. Steady play is 300/300 on every epoch except one interval with 4 shadow
-  frames (a first-sighting layout, as before). No capacity skips; image normal. Startup still has 3–5 "versions moved" per
-  epoch from the growths that still adopt at once.
-- Next: the other growth sites (scene tables, sequences, latches, index pool, shadow rows and buckets) as requests. A fill comes
-  from a kept capture, or there is none for buffers rewritten whole; their writers and per-object dispatches are bounded by the
-  current version (G3).
-
-**G2/G3: the main sequences, the scene tables and the object buffers as graph work** (2026-10-06). A change is an owner's
-sizing (`MainSizing`, `SceneSizing`, `ShadowSizing`) and the buffers that grow with it (`Growths::Change`), adopted with the
-revision that names it; revision shapes take the revision's sizing (`RevisionShapes::scene`, `SceneSizingOf`). The writers
-and per-object work are bounded by the current version (`SceneFit`, `ObjectFits`; bounded emission whose `held` waits), and
-passes size dispatches and copies by the sizing their recording was made for, never the live one.
-
-*The device loss this exposed, and its cause (ORG).* Deferred, the main sequences lost the device within ~200 ms of their
-first growth, every run (and the scene tables, intermittently, through the bone rows); every change adopted at once never did.
-Not the deletion queue (8x its retirement depth still lost it) and not where versions are made. A probe of the main pass found
-the Z-prepass recording of a revision binding the **old** 64-draw sequences while drawing by the **new** layout (16384 draws,
-512 per decal group): an indirect fetch ~190x past the buffer, with no shader active. ORG lowers a pass's resolvers as groups,
-re-resolved by every preparation under its capture context (a revision's versions), or as direct entries, bound to the set
-resolved when the pass was lowered. A pass declaring one resolver two ways (the Z-prepass's sequences: indirect arguments and
-an address read) failed the patch recipe (its two declared templates merge into one requirement) and was lowered direct, so a
-revision's recording took the revision's layout with the live version. Fixed in ORG:
-- `PrepareIncrementalResolverPatchRecipe`: the members' merged requirements are the recipe when the declared templates merged,
-  so such a pass is a group (z.depth, depth-phase2, shadow.view, sky.view and reflection.faces were the direct ones).
-- Fail loudly: `PersistentGraph` records the resolvers each pass binds directly with the set they resolved to, and every
-  preparation checks them under its own context; one that resolves another set throws ("binds a resolver's resources
-  directly ... this preparation resolves another set"), never a GPU fault. With the fix disabled it fired on the first
-  recording after the growth (r3cv1) and the graph stopped cleanly.
-- Test (`PersistentVulkanHostTests revision`): a pass declaring a versioned buffer two ways, recorded for a revision naming a
-  pending (unadopted) version, copies that version. Without the fix the test fails at the check.
-- In game, every growth deferred (main rows, sequences, scene tables, object buffers): 0 device losses and 0 check failures in
-  r3cf1-5 and r3cz1-3 (before the fix: 3 of 3 lost with the sequences deferred); 6-7 growths requested and adopted per run;
-  steady play submits every epoch by the revision (300/300 Z-prepass, colour, shadow, occlusion, reflection).
-- Versions are made by the producer again (`GrowVersions` on the preparation pool; render-thread making was a guess at this
-  loss): r3cw1-2 clean, 7 growths per run. `VersionGrowthRequest::version` and `Growths::Post`'s `a_deferrable` are gone.
-- What still grows at once in revision mode is reported by buffer ("adopted at once: ..." on the growth line). At startup (r3cg4b):
-  the shadow sequences, bucket counts, material rows and view blocks, the reflection sequences, counts and tree-visible lists,
-  and the index pool (indices, firsts, copies) - once each, the cause of the 2-3 "versions moved" per epoch left at startup.
-
-**G4: every growth a request; per-view coverage** (2026-10-06). In revision mode nothing grows at once any more ("adopted at
-once" is empty; small tables r3cp3-4: 0 "versions moved" at startup, every epoch 300/300 in steady play, screenshots normal).
-- *Shadow* (`ShadowSizing`): the slots' sequences (one size for every slot; a slot added while a growth is pending is made at the
-  size asked for), the bucket counts (a shape's rows are trimmed to the sizing's words, keeping every bucket the payload's own
-  draws need: `TrimmedRow`; a claimed draw past them is logged as a defect), the material rows (deferred with nothing to fill: a
-  new version is sent whole after its adoption; a worker-staged batch is used only if the rows' generation has not moved), and
-  the view blocks (`viewSlots`). Live shapes size by the current sizing, revision shapes by the revision's (`ShadowShapeInputs::
-  sizing`, `materialRows`, `viewBlocks`); the scene bound only sizes ahead within the slot.
-- *Per-view coverage*: `ShadowViews::Rebuild` marks DCLF's views (`covered`): its candidates in the engine's order within the slots
-  its buffers hold now (`IndirectDraws::ShadowViewCapacity`, which also asks for the slots the last frame's candidates need). Only
-  they are withheld and captured; the rest the engine draws whole (`uncovered`, counted: 30 at startup with small tables, 0 after).
-- *Reflection* (`ReflectionSizing`): sequences, bucket counts and tree lists, asked for at every join from the main sizing's
-  newest change, so both are adopted with the same revision; the faces' buffers are made at the plan's size; a commit past them
-  is a logged skip. The graph rebuild after new tree lists stays in the reflection epoch (`rebuildPending`).
-- *Index pool* (`PoolSizing`): room for every geometry the tables have (a bound kept from the geometry log at the join), a first
-  index per slot and a copy per range; adoption lays every range out again in the new version (`relayout`). A range that does not
-  fit until then waits (`waiting`; unclaimed geometry: the claims' was asked room for); a fragmented pool asks for a relayout.
-- *Graph builds* (ORG): a recording is of the build it was made on. `PersistentGraphHost::BuildGeneration` moves with every build,
-  and a revision's version set (and so its recordings) is made again when it moves; buffer creation no longer counts as a version
-  change (no revision before names the buffer). `PersistentGraphHost::CanUseEpochRecording` (RenderGraph::
-  CanBindPersistentTicketRecording: the bind's rules, the ticket unchanged), asked inside the commit before it writes into a
-  revision's shape: a recording the ticket would not take is a miss ("not its ticket's"), never SubmitEpoch's throw. Found when the
-  reflection cube's import rebuilt the graph between a shadow epoch's choice and its submission. Test: `PersistentVulkanHostTests
-  revision` (a live epoch's recording refused after its graph is built again).
-- Left at startup: frames before the first revision, "not its ticket's" after the startup builds (new view slots, the reflection
-  extension), and with default tables one "versions moved" from growths made before the async epochs start.
+**Growth as graph work: the `BufferVersion` artifact and the scene's set.** Every growable buffer DCLF keeps, and every latch
+block, is one set's (`SceneBufferSet`, over ORGModuleServices' `GrowableBufferSet`); the current design is in
+[dclf-architecture.md](./dclf-architecture.md), "Growable tables". How growth runs as graph work:
+- **The artifact.** `SceneArtifact::BufferVersion`, registered by `SceneGraph` on the preparation pool through ORGModuleServices'
+  `RegisterVersionGrowthProducer`. A batch the set's `Seal` posts (`SceneGraph::PostGrowth` -> `PostVersionGrowth`) is an exact
+  request (its own address) and an `AwaitExact(GpuReady)` on the coordinator lane, both lock-free. The producer makes every version
+  of the batch (`GrowVersions`), queues its fills on the dedicated uploader - zeros for a `Zero` registration, the producer's capture
+  for a `Capture` one (the main rows, laid out for the made version's own address from the rows the last commit posted) - and is
+  ready once those copies completed (`TokenForTickets`: the uploader notifies every ticket transition, so the graph needs no
+  recovery polling). Its `done` wakes the snapshot builder.
+- **Requirement to sealed set.** The revision producer requires what the publication's tables, the frame's posted counts and the
+  builds ahead need (`Revision/Requirements.cpp`); `Seal` names the newest ready versions when they meet every requirement, else
+  posts one batch for every unmet buffer and the make waits (counted as growth waits). A sealed set (`NamedVersions`) is immutable
+  and is the recordings' `IResourceVersions`; while nothing changed `Seal` returns the very same set, serial and fragment, so the
+  revision's version slot (`kVersionsSlot`) and every recording inherit.
+- **Adoption.** The frame adopts the snapshot it selects (`AdoptSnapshot`: `named->AdoptAll()`), and commits and latch writes read
+  the adopted set. Builds ahead embed every versioned address from the sealed set (`AddressesOf`), and are built again when the set's
+  serial moves. Nothing flows from the frame back to the producer.
+- **Contents.** A writer compares the version it filled with the one the set names (`FilledVersion`, `FilledContents`) and writes
+  whole on a mismatch; no adoption callback resets anything.
+- **Capacities** are the named units: the views' sequences hold the plan made from the one `MainLayout`, the shadow slots' buffers
+  the scene's draw bound, the index pool twice its indices (and a version newer than one the frame found fragmented:
+  `RequireNewer`), and the input buffers every input the snapshot's payloads put there (`InputsFit`: draws that do not fit make the
+  revision again).
+- **ORG rule found on the way: a pass's resolvers are re-resolved by every preparation.** A recording of a revision once bound an
+  old 64-draw sequence buffer while drawing by the new layout (a device loss within ~200 ms of the first growth): a pass declaring
+  one resolver two ways (indirect arguments and an address read) failed the patch recipe and was lowered direct, bound to the set
+  resolved when the pass was lowered. `PrepareIncrementalResolverPatchRecipe` takes the members' merged requirements as the recipe,
+  so such a pass is a group; and `PersistentGraph` records the resolvers each pass binds directly with the set they resolved to,
+  and every preparation checks them under its own context (one that resolves another set throws, never a GPU fault). Test:
+  `PersistentVulkanHostTests revision`.
+- **Graph builds** (ORG): a recording is of the build it was made on. `PersistentGraphHost::BuildGeneration` moves with every build,
+  and the revision's version fragment (and so its recordings) is made again when it moves. `PersistentGraphHost::
+  CanUseEpochRecording`, asked inside the commit before it writes into a revision's shape: a recording the ticket would not take is
+  a miss ("not its ticket's"), never SubmitEpoch's throw.
+- **Per-view coverage**: `ShadowViews::Rebuild` marks DCLF's views (`covered`): its candidates in the engine's order within the slots
+  its buffers hold (`IndirectDraws::ShadowViewCapacity`, which also asks for the slots the last frame's candidates need). Only they
+  are withheld and captured; the rest the engine draws whole. New slots are made by the render thread (`ShadowSlotsRequest`), and
+  no revision is sealed before the graph build that declares them.
 
 **R3b structural stamps; strict epochs: a frame's claims always within a revision of the graph that runs** (2026-10-06; small
 tables r3se2-3, default r3sd1: no losses, steady play 300/300 by the revision, every report "<- OK", screenshots normal).
@@ -829,8 +782,8 @@ tables r4v1-3 with a forced mid-run growth and spawned NPCs, default r4d1: no lo
   colour commit's growth. So a frame without claims submits no main epoch (it has nothing to draw), and the main epochs have no
   own preparation left: the first report's Z-prepass and colour are all "by the revision", the withdrawn frames not submitted.
 - *Reflection.* Its faces draw from the frame before's main commits, whose inputs name the main rows by address. They are covered
-  only when those commits exist, are of the current scene buffers, and no growth of the rows was adopted since
-  (`Committed::rowsGeneration`, `Resources::MainRowsGeneration`); else the engine renders them, decided before it does.
+  only when those commits exist, are of the current scene buffers, and no growth of the rows was adopted since (the rows' named
+  serial, `NamedEntry::serial`); else the engine renders them, decided before it does.
 - *Device loss on a mid-run growth of the main rows* (found here, older than this step: the committed state lost the device too).
   A spawned NPC's pipelines grew the pipeline rows 128 -> 256 as graph work; the GPU faulted at VA 0 about 10 ms after the request,
   before any adoption, and only with the growth's fill (no fill, no loss; revisions off, no loss). The fill's copy runs on the
@@ -2049,8 +2002,8 @@ resident-draw, set and fade parity; motion m28/m29).
       `HoldCatalog` swap and `CatalogRestore` in the revision are gone: it names its request's catalog. The faces' forward pipelines
       come from it too (`ReflectionPipelinesOf`, PrepareReflection's rule without its requests).
     - **The producer's latches.** The main latch and its latched-copies blocks, the shadow latch, its zeros and latched block, and the
-      reflection's latch and zeros left the resources for `RevisionLatches` (the producer's), made with ORG's new
-      `LatchBlock::Create` (ECS registration suppressed, as `VersionedBuffer::MakeStructured`: any thread). The shapes hold them; a
+      reflection's latch and zeros left the resources for the revision producer (the scene's set's latch blocks, made with ORG's
+      `LatchBlock::Create`: ECS registration suppressed, as `VersionedBuffer::MakeStructured`: any thread). The shapes hold them; a
       commit's parity names the revision's shape's (`CheckMainRevision`, `CheckShadowRevision`, `CheckReflectionRevision`), and the
       index pool passes take `PoolOffset` from the shape's layout instead of the resources' (a race with the reserve before). The main
       latch is no longer remade per main resources. `BuildShadowPlacements` no longer reserves the shadow latch (the revision does).
@@ -2060,8 +2013,7 @@ resident-draw, set and fade parity; motion m28/m29).
       count, the shadow candidates, the occlusion layouts (`PredictedOcclusion`), the placements, the main epochs' viewport, block
       sizes and `known`, the shadow and reflection parities' `known`, the faces' targets and size, the portal words, tree LOD's mirror
       slots, the shadow rows wanted, the shadow slots' buffers, and the host's owner-thread state the revision used to read
-      (whether async epochs run, its uploader, weakly). `Growths::Deferred` reads a flag the posts set (the commits' index pool
-      asks the host itself: `OwnerDeferred`). `PostRevisionInputs` gathers and posts it when anything moved, at
+      (whether async epochs run, its uploader, weakly). `PostRevisionInputs` gathers and posts it when anything moved, at
       `BuildPoint`, `Setup`, `SetupShadow`, `SetupReflection`, `ImportReflectionCube`, after `ShadowViews::Rebuild` (`NoteRevisionInputs`), `OcclusionView`,
       `BuildShadowPlacements`, the main epochs' capture, the parities' first commits, `PrepareReflection`, a new `rowsWanted`, and,
       while the make is the render thread's, before each make (which keeps b2a's inputs the frame's of that moment).
@@ -2073,19 +2025,9 @@ resident-draw, set and fade parity; motion m28/m29).
       shapes made are the producer's (`RevisionProducer`); the parity has its own row-buckets cache and compares with the shapes the
       producer posts (`madeSlot`: each post holds its last two makes, so the lag-0/lag-1 matching is unchanged), the shadow parity's
       commit shape sized from the bound the producer's shapes were (`MadeShapes::bounds`).
-    - **Growths.** Producer side: `Post` (with the owner's life), `Settle`, `Prune`, `RevisionSizing`, `LatestSizing`, `Ready`,
-      `Named`, `Asked`, `Held`, `Naming`. A sealed revision carries the ready changes it names by value (a growths fragment,
-      `kGrowthsSlot`); the frame adopts the ones it has not (`AdoptNamed`: versions, sizing, consequences, `Changed`,
-      `NoteNewVersions`) and publishes how far (`adoptedPublished`), which the next make takes in first (`Prune`: the stamp, and the
-      last adopted change per owner or buffer kept as the producer's record, so it never reads an owner's sizing or a table's
-      capacity or address the frame writes at adoption). A change whose owner is gone is dropped and never adopted (before, its
-      consequence could write into a freed owner). `GrowableRows::Reserve` sizes from `Held`; `ReserveShadowRows` is the revision's
-      (the shadow rows wanted posted); the last main commit's rows are posted (`committedRowsSlot`); the commit checks its draws
-      against `Resources::askedSequenceDraws` (the newest asked, an atomic the reserve sets) instead of `LatestSizing`.
-      `SetupReflection` sizes from the adopted main sizing and makes the first tree lists itself.
-    - **VersionRegistry.** Buffers register from any thread on an MPSC queue (`registered`), which `Snapshot` drains into its own
-      list; a set carries its buffers, so `Current` (the frame's) reads only the set. `changes` stays the frame's (`Changed`,
-      `SetChanges`), published for the revision code (`Published`); `next` is an atomic.
+    - **Growth and versions.** Producer side alone: the scene's set (`SceneBufferSet`; "Growth as graph work" above) is required,
+      sealed and named by the revision code, the shadow rows wanted and the last main commit's rows posted to it
+      (`committedRowsSlot`); the frame only adopts what a snapshot names.
     - **The owner thread's work.** New shadow view slots are asked of the frame (`ShadowSlotsRequest`, sized at the newest sizing),
       which makes their buffers and adds the extension (`ServeRevisionRequests`, after the make and at `BuildPoint`); no revision is
       sealed until the inputs carry the build (`buildWanted`, counted in the growth line as `for a graph build asked of the frame`),
@@ -2100,7 +2042,7 @@ resident-draw, set and fade parity; motion m28/m29).
       atomic the completions count down) is non-zero, not while the assembler has pending revisions.
     - **Left for b2b.** The assembler's `Begin`/`Seal` stay with the revision code and `Collect`/`TrySelect`/`AcquireActive` with the
       frame (`SelectRevision`): `Collect` is documented coordinator-only and must move with the make (the frame then only selects).
-      The report reads the producer's counters (`Growths::Report`, the draw bound, the shapes made) from the render thread. Slots a
+      The report reads the producer's counters (`SceneBufferSet::Report`, the draw bound, the shapes made) from the render thread. Slots a
       later growth reaches before the frame serves their request would be made at the request's size. `GetFrame()` outside the
       revision code is unchanged.
     b2a was validated (w116 motion, w117 interiors: w114's counts, set parity clean, 1 recording dropped by a graph build, 10 makes
@@ -2125,7 +2067,7 @@ resident-draw, set and fade parity; motion m28/m29).
       frame-start make's place. Shadow slots and the graph's build are asked of the frame as in b2a (`ServeRevisionRequests`, now at
       `BuildPoint` alone); the builder waits for the build, never the frame.
     - **Adoption.** At the frame's start, after `BuildPoint` and `BeginFrame`: `AdoptSnapshot` takes the newest snapshot and adopts it -
-      `AdoptNamed` for its growths, `SetChanges` when its version set is every buffer's current versions, `rv.active` its revision,
+      its set's versions made current (`named->AdoptAll()`), `rv.active` its revision,
       `installedDraws` its draws - and `HandOverAtFrameStart(publication)` installs its publication when newer (the log walked to it, the
       claims' notes, its tables, lookups and catalog the frame's, `HoldCatalog`, the replaced one back to the coordinator), then the
       candidates. The one check is the generation compare: the graph's build (its recordings'), the targets, the shadow format, the main
@@ -2139,7 +2081,7 @@ resident-draw, set and fade parity; motion m28/m29).
       compare against the snapshot's own revision), `MakeRevisionShapes` with its post-before-make and immediate serve, `rv.madeAt`,
       `sealedPublication`, `claimsPublication`, `setsHeld`, `published`/`selections`/`selectedAge`, and the `publication waits` line.
     - **Reports.** The builder's lines (revision shapes, scene revisions, growths, the draw bound) are composed in its pass when the
-      report asks and printed by the next (a report behind); `Growths::adopted` is atomic. New: `[DCLF] scene snapshots (T6b3b): N
+      report asks and printed by the next (a report behind). New: `[DCLF] scene snapshots (T6b3b): N
       built, N publications coalesced by the builder, N adopted, N frames adopting nothing new; passed over as stale: build N, targets N,
       shadow format N, toggles N, main resources N; built without draws for the main resources N` and `[DCLF] snapshot builds (ms,
       avg/p95/max): draws ahead A/P/M (N built), shapes ..., recordings wait ...; commit to adoption (frames): p50 N, p95 N, max N`;
@@ -2150,17 +2092,17 @@ resident-draw, set and fade parity; motion m28/m29).
       wait included.
     - **Finding: a snapshot was not self-consistent** (2026-10-10; the fix written, not built or run yet). About one run in 13 lost the
       Vulkan device (Aftermath: `Error_DMA_PageFault`, a read, a VA with no resource, a vertex shader active). The builder built the
-      draws first, from the ahead context, then made the revision; the revision's `VersionSet` names ready, unadopted growth versions,
+      draws first, from the ahead context, then made the revision; the revision's version set names ready, unadopted growth versions,
       but the draws embedded the context's face positions address (`AppendFaceStreams`' face-stream rows in the geometry table,
-      `SetSequenceStream`), of the version current when the frame posted the context. Adoption (`AdoptNamed`) made the growth's
+      `SetSequenceStream`), of the version current when the frame posted the context. Adoption made the growth's
       version current, and the frame committed draws still naming the old one. Only payload identity was checked (the face positions
       compare of `AheadUsable` runs under `CS_DCLF_REVISION_PARITY` alone). Once the old version's holders went (the previous
       snapshot's set, the growth records `Prune` drops, older recordings), the deletion queue freed it about 24 submissions later,
       while corrected draws took 4-8 frames: the windows overlapped now and then, and a vertex shader read face positions from freed
       memory. The fix, in the spirit of "the snapshot is complete and self-consistent":
       - *(a) One consistent build.* The builder makes the revision first, then builds the draws (while the recordings are made) with
-        every embedded address of a versioned buffer taken from the sealed set (`rv.sealedVersions`, `NamedVersionAddress`: the version
-        the set names, else the current one). A later make that names other versions builds them again (`DrawsEmbedFacePositions`);
+        every embedded address of a versioned buffer taken from the sealed set (`rv.sealedVersions`, `AddressesOf`). A later make whose
+        set has another serial builds them again (`drawsNamed`), and `CheckSnapshotAddresses` (persistent parity) checks every address;
         the publication-only snapshot builds them from the context. The audit of what the draws embed: the face positions (main and
         shadow geometry tables' face rows, the CPU templates' second stream) are the only versioned address. The rows' tables, the
         objects and extras descriptors are the payload ring's (the frame's own buffers: the commits write the ring entry's addresses
@@ -2490,7 +2432,7 @@ resident-draw, set and fade parity; motion m28/m29).
       owner's `BeginFrame` (Frame's runs at each `TakeChanges`); generations come from one shared atomic; the counters are relaxed
       atomics the owner writes and the report reads (`GetStats` by value; the report's line gains tree LOD's). The stopgap null guard
       is gone. Tree LOD's mirror is the render thread's throughout (`Drain` in `ServeFrameRequests`, `DecideTreeLod`, `TakeChanges`
-      and the rows at the depth commit, `MarkAllChanged` at the adoption, the slot counts in `PostRevisionInputs`, its report).
+      and the rows at the depth commit, every row sent into a version the commit did not fill, the slot counts in `PostRevisionInputs`, its report).
     - **The release guard** (`CS_DCLF_RELEASE_GUARD=1`, `ReleaseGuard` in EngineReadWindow.h/.cpp): `NiRefObject::DeleteThis` (AE
       0x140d27520, `RELOCATION_ID(69177, 70538)`: the refcount-zero path of every class that keeps the base's) is replaced, its bytes
       checked, by the same call with a count when the thread is the scene lane (`EngineReadWindow::sceneWork`) or one of DCLF's executor

@@ -133,26 +133,17 @@ console command switches the camera. To check:
     `changed with no event` 0;
 -   screenshots after each switch: no body in first person, a whole body in third.
 
-## Validation errors in the first-person and reflection views (found 2026-10-13 by syncval at the inn; not fixed)
+## Validation errors in DCLF's indirect execution sets (found 2026-10-13 by core validation at the inn; not fixed)
 
-Core validation and syncval at `coc RiverwoodSleepingGiantInn` (FP on, i12vk/i16sync, transient around the views' growth):
+Core validation at `coc RiverwoodSleepingGiantInn` (FP on), every run (i12vk, i16sync, p4vk, p5vk, p6vk):
 
--   **Indirect draws past `cs.dclf.first-person.sequences`** (`VUID-vkCmdDrawIndexedIndirectCount-maxDrawCount-03143`, 32 messages):
-    stride 92 x (521 - 1) + 72 + 20 = 47,932 bytes from a 5,888-byte buffer (the initial 64 draws a face). The view's bucket capacities
-    come from a sizing whose sequences growth ("first-person sequences: 8192 draws a face, as graph work") the recording does not yet
-    bind, so the draws read their arguments from the next buffer in the heap (syncval reports it as a read-after-write against the view's
-    latched copies). `DrawPass::InvocationRevision` (`Epochs/ViewEpoch.cpp`) names the frame's generation and the pool's layout, not
-    the sequences' version.
--   **DGC with an invalid indirect address** (`VUID-VkDeviceAddress-size-11364`, 16): `vkCmdPreprocessGeneratedCommandsEXT` /
-    `vkCmdExecuteGeneratedCommandsEXT` read arguments at 0x...6a1b4, inside no buffer (between `cs.dclf.reflection.bucket-counts2` and
-    its neighbour): the same view-sizing mismatch in the first-person forward part (`arguments = (forwardFirst + forwardCapacity) * 92`).
 -   **Main indirect set mixes fragment output interfaces** (`VUID-vkUpdateIndirectExecutionSetPipelineEXT-initialPipeline-11147`):
     pipelines writing locations 0-2 (forward) are added to a set whose initial pipeline writes 0-7 (deferred).
--   Also seen every run: `VUID-VkGeneratedCommandsInfoEXT-indirectCommandsLayout-11079` (a vertex-buffer token with a pipeline lacking
-    `VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE`).
+-   `VUID-VkGeneratedCommandsInfoEXT-indirectCommandsLayout-11079`: a vertex-buffer token with a pipeline lacking
+    `VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE`.
 
-They are not the inn's upscaler corruption (that persists with every first-person draw skipped, see its resolved entry), but the first
-two read arbitrary memory as draw arguments and may relate to the intermittent device loss in the pulled Lighting VS.
+The sequences overrun and the invalid DGC address found with them are resolved (below: "Resolved: first-person and reflection
+draws read past their sequences").
 
 ## Unattributed visual defects seen in first person (2026-10-11/12; not investigated)
 
@@ -221,6 +212,13 @@ Found in validation runs and left for a cleanup pass once the structure is in pl
 -   **Intermittent vertex-stage page faults at load (2026-10-11):** two device losses a few seconds after a load, both Aftermath
     `vertex_01`, not reproduced in the next runs: w167 at the main menu ("Shader Instruction Error", DCLF idle), and still-fix-on
     5 s into gameplay (MMU fault reading VA 0, fingerprint 5766533646317074780). Unattributed (shader debug info not written).
+    -   **Index-pool firsts: likely resolved, pending a longer motion soak.** One device loss of this signature was traced to the
+        index pool: `cs.dclf.pool-firsts` grew to a new, empty version, and the update re-uploaded only the slots that changed, so
+        draws took another geometry's first index from the unfilled rows and fetched past their indices. Today's rule is
+        structural, for every growable buffer: a writer keeps the version it filled (`FilledVersion`) and writes whole into any
+        version the set names that it did not fill; the pool lays its indices out again and sends every first index into such a
+        version (`IndexPool::indicesFilled`, `firstsFilled`). No device loss in the runs since (60 s or less, motion and inn),
+        which are too short to close it.
 -   **Capture parity indexed the tables by a lookup from another snapshot** (`OnFaceLightingDraw`, a CPU crash under
     `CS_DCLF_CAPTURE_PARITY`): now skipped when the index is past the tables (face and native paths).
 
@@ -379,7 +377,46 @@ full trees have since unloaded, which DCLF does not reproduce.
     the LOD forest where trees were loaded, lasting until the block is refilled for another reason. Then compare with
     DCLF's tree LOD on.
 
+## External Vulkan work right after a graph epoch: workaround in place, cause unproven, frame generation not covered (2026-10-13)
+
+The canonical rule, the symptom signature and the tests are in `render-graph.md`, "Hazard: external Vulkan work directly after a graph epoch".
+
+-   **Frame generation is not separated.** `Streamline::EvaluateFSRFrameGen` and the DLSS-G path do not call
+    `Upscaling::SeparateFromGraphEpochs()`. Frame generation was off in every inn run. Next: call it before those evaluates, and run the inn
+    repro with frame generation on.
+-   **The cause is unproven.** The workaround (a small D3D11 typed UAV clear before the evaluate) stays until one of these resolves it:
+    -   Streamline without `VK_EXT_descriptor_heap`, or with heap state separate from the graph's.
+    -   The graph's last command buffer re-binding or resetting the descriptor-heap state.
+    -   A capture with a tool that supports descriptor heaps.
+    -   A standalone repro to report to NVIDIA.
+
+## Resolved: first-person and reflection draws read past their sequences (found 2026-10-13; fixed by the scene's set)
+
+**Symptom.** Core validation and syncval at the inn, around the views' growth (i12vk, i16sync):
+-   indirect draws past `cs.dclf.first-person.sequences` (`VUID-vkCmdDrawIndexedIndirectCount-maxDrawCount-03143`): stride 92 x
+    (521 - 1) + 72 + 20 = 47,932 bytes from a 5,888-byte buffer (the initial 64 draws a face), the arguments read from the next
+    buffer in the heap (syncval: a read-after-write against the view's latched copies);
+-   DGC with an indirect address inside no buffer (`VUID-VkDeviceAddress-size-11364`): the first-person forward part's arguments
+    (`(forwardFirst + forwardCapacity) * 92`) past the same buffer.
+
+**Cause.** The view's plan and its buffer were sized by two independent sizings: the plan from the main sizing, the sequences
+from the view's, each named by a revision when its own growth was ready. A revision could name the main sizing's growth before
+the view's, so its shape planned 521 draws a face against the 64-draw version its recording bound.
+
+**Fix (structural).** One requirement-driven set (`SceneBufferSet`; `dclf-architecture.md`, "Growable tables"). Each view is
+planned from the one `MainLayout`, the plan's draws (its buckets and forward range) are a requirement on the very sequences entry
+the view's recording resolves (`RequireView`), and the shape's range is that entry's named units. `Seal` refuses any set that does
+not hold the requirement, so no shape can index past its buffer. `CheckShapeCapacities` (persistent parity) checks every shape's
+ranges against the named versions.
+
+**Validated.** p5vk and p6vk (inn, method 3, core validation): no 03143 and no 11364. p6inn: `cs.dclf.first-person.sequences: 64
+grown to 8192` before the first first-person seal, every first-person epoch drawn (300 of 300). p6g (`CS_DCLF_TABLE_START=small`,
+persistent and set parity): `shape capacities: 617 revisions, 3690 shapes checked against their sets' buffers: 0 findings`.
+
 ## Resolved: the Sleeping Giant Inn's black or garbage upscaler output (found 2026-10-12; fixed 2026-10-13, outside DCLF)
+
+This entry is the investigation record. The rule that came out of it, and where it applies, is in `render-graph.md`, "Hazard: external
+Vulkan work directly after a graph epoch".
 
 **Symptom.** At `coc RiverwoodSleepingGiantInn` with DCLF on, frames were black, or white and magenta in the top third, or right,
 changing frame to frame. Every DCLF-on run reproduced it (about 25 runs; nearly every screenshot black or garbage, and consecutive
@@ -635,6 +672,14 @@ Runs: `CS_DCLF_PERSISTENT_PARITY`, `WALK_PARITY`, `CHANGE_LOG_PARITY`, `RESIDENT
 `CS_DCLF_CAPTURE_PARITY=1` with `CS_DCLF_OWNERSHIP=off` on its own. 60 seconds each; counts are per report
 interval (300 frames). Every check not listed reports 0.
 
+### BuildDraws parity row-address MISMATCH (pre-existing: present before the growable-set work)
+
+`CS_DCLF_BUILD_PARITY` reports `BuildDraws parity MISMATCH` lines whose first difference is the rows' addresses (for example
+`rows 0x26504a0000/0x26500a0000 vs 0x237aa3e100/0x26226f0000`): the GPU's draws carry the payload ring's rows (the frame's own
+buffers, whose addresses the commit writes over the build's), the CPU templates the tables' rows. The same lines are in the
+pre-refactor baseline (motion-pre0c) and in every run since (p3gb, p5gb), so the growable-set work did not cause them; the check
+compares addresses the two sides legitimately take from different buffers. Not yet changed to compare the rows' contents.
+
 ### Capture parity and draw parity MISMATCH under CAPTURE + PARITY_BOTH (2026-10-13; pre-existing, not a refactor regression)
 
 **Runs.** Motion (60 s, the worldspace flight) with `CS_DCLF_CAPTURE_PARITY`, `PARITY_BOTH`, `CAPTURE_POINT_PARITY` and
@@ -847,3 +892,7 @@ for a NaN. The constant blocks are now compared bit for bit (`ConstantBlock::Sam
 -   The colour epoch's report now names frame textures a pipeline reads that the commit could not resolve.
 -   The scene report counts the objects whose pass descriptor carries the sun's shadow mask bits and the
     objects with derived descriptors.
+-   **TEMP, still in the tree: the fetch guard** (against the pulled stages' vertex-stage fault): `Lighting.hlsl`'s
+    `DCLF_FETCH_GUARD` (`CS_DCLF_FETCH_GUARD`, default on), its push words `kZDrawPushPassTag` and `kZDrawPushPoolAddress`
+    (`DrawPipelines.h`), and `RecordBucketDraw`'s pass-tag and pool-address parameters (`PassHelpers.h`). Left in place: removing
+    the HLSL part changes the deployed `Lighting.hlsl`, which recompiles the whole shader cache. Removal awaits the user's call.

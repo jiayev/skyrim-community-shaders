@@ -198,8 +198,7 @@ namespace DCLF
 		// records and geometry rows - the frame's publication whole.
 		const auto main = impl->resources;
 		const auto& depthCommit = main ? main->committed[kDepthShape] : Resources::Committed{};
-		if (!main || !main->inputsDepth || !impl->scene || depthCommit.frame != frameNumber || depthCommit.sceneGeneration != impl->scene->generation ||
-			depthCommit.objectCapacity != main->objectCapacity || depthCommit.rowsGeneration != main->MainRowsGeneration())
+		if (!main || !main->inputsDepth || !impl->scene || depthCommit.frame != frameNumber || depthCommit.named != impl->Adopted().Serial())
 			return skip(3);
 		const auto& ring = impl->ringFrame;
 		const MainPayload* listed = ring.valid && ring.draws ? ring.draws->payloads[kAsyncZPrepass].get() : nullptr;
